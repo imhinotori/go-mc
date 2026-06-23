@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: verifying
-stopped_at: Completed 01-01-PLAN.md
-last_updated: "2026-06-23T15:15:19.282Z"
+status: executing
+stopped_at: Completed 02-01-PLAN.md
+last_updated: "2026-06-23T17:13:44.834Z"
 last_activity: 2026-06-23
 progress:
   total_phases: 9
   completed_phases: 1
-  total_plans: 3
-  completed_plans: 3
-  percent: 100
+  total_plans: 7
+  completed_plans: 4
+  percent: 57
 ---
 
 # Project State
@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-06-23)
 
 ## Current Position
 
-Phase: 1 of 9 (Foundation — Fork & Codegen)
-Plan: 3 of 3 in current phase
-Status: Phase complete — ready for verification
+Phase: 2 of 9 (Net & Protocol State Machine)
+Plan: 1 of 4 complete in current phase (02-01 done)
+Status: In progress — Wave 1 plumbing/seam landed
 Last activity: 2026-06-23
 
-Progress: [██████████] 100%
+Progress: [██████░░░░] 57%
 
 ## Performance Metrics
 
@@ -55,6 +55,7 @@ Progress: [██████████] 100%
 | Phase 01 P01 | 8min | 3 tasks | 343 files |
 | Phase 01 P02 | 12m | 3 tasks | 265 files |
 | Phase 01 P03 | 10min | 3 tasks | 4 files |
+| Phase 02 P01 | 70min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -74,6 +75,10 @@ Recent decisions affecting current work:
 - [Phase ?]: Added Mojang-manifest sha1 gate to download.go (T-1-01); jar verified before extraction, abort on mismatch
 - [Phase 01]: Enumerated 774->776 via set-deltas (comm on identifier sets) to isolate true additions from iota/ID reindex noise
 - [Phase 01]: sulfur_cube_archetype registry + sulfur_cube_hot damage type are datapack/dynamic registries outside the codegen surface (absent by design, not dropped)
+- [Phase ?]: [Phase 2]: NET-05 backpressure = bounded ChannelQueue + disconnect-on-full for Phase 2; revisit when the tick owns flush timing (Phase 3)
+- [Phase ?]: [Phase 2]: chan Intent (Intent{*Client, pk.Packet}) is the stable network->tick seam; stubTickConsumer is the Phase 3 attach point with no API change
+- [Phase ?]: [Phase 2]: Fixed fork bug — chat.Message.MarshalNBT double-encoded the compound tag header, corrupting every chat.Message Field on the wire (incl. disconnect reasons)
+- [Phase ?]: [Phase 2]: -race needs cgo; host has no C compiler (CGO_ENABLED=0) so the server/net race gate runs in golang:1.26 Docker — NET-05 seam proven race-clean
 
 ### Pending Todos
 
@@ -98,6 +103,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-23T15:15:03.018Z
-Stopped at: Completed 01-01-PLAN.md
+Last session: 2026-06-23T17:13:34.541Z
+Stopped at: Completed 02-01-PLAN.md
 Resume file: None

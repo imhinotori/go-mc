@@ -20,9 +20,9 @@ Requirements for the initial release. The "user" is an unmodified vanilla 26.2 (
 - [ ] **NET-02**: Server answers Status (server-list ping) with version, MOTD, and player count
 - [ ] **NET-03**: Server completes offline-mode Login and negotiates packet compression
 - [ ] **NET-04**: Server completes the full Configuration sequence (Known Packs, Registry Data, Update Tags, Feature Flags, Finish Configuration) and transitions to Play without silent disconnect
-- [ ] **NET-05**: Each connection has exactly one writer goroutine; inbound packets enqueue intents to the tick via channels (no game-state access from network goroutines)
-- [ ] **NET-06**: VarInt/VarLong framing, compression threshold, and the 2²¹−1 max-packet cap are enforced correctly
-- [ ] **NET-07**: Server sends a proper Disconnect packet with a readable reason
+- [x] **NET-05**: Each connection has exactly one writer goroutine; inbound packets enqueue intents to the tick via channels (no game-state access from network goroutines)
+- [x] **NET-06**: VarInt/VarLong framing, compression threshold, and the 2²¹−1 max-packet cap are enforced correctly
+- [x] **NET-07**: Server sends a proper Disconnect packet with a readable reason
 
 ### Tick Loop & Timing
 
@@ -123,9 +123,9 @@ Which phases cover which requirements. Populated during roadmap creation.
 | NET-02 | Phase 2 | Pending |
 | NET-03 | Phase 2 | Pending |
 | NET-04 | Phase 2 | Pending |
-| NET-05 | Phase 2 | Pending |
-| NET-06 | Phase 2 | Pending |
-| NET-07 | Phase 2 | Pending |
+| NET-05 | Phase 2 | Complete |
+| NET-06 | Phase 2 | Complete |
+| NET-07 | Phase 2 | Complete |
 | TICK-01 | Phase 3 | Pending |
 | TICK-02 | Phase 3 | Pending |
 | TICK-03 | Phase 3 | Pending |

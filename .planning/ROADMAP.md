@@ -50,7 +50,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Each connection has exactly one writer goroutine; inbound packets enqueue intents to the tick via channels with no game-state access from network goroutines
   4. VarInt/VarLong framing, the compression threshold, and the 2²¹−1 max-packet cap are enforced; an explicit Disconnect packet carries a readable reason
 **Plans**: 4 plans
-- [ ] 02-01-PLAN.md — NET-05 concurrency seam (one writer goroutine, intent inbound channel + stub consumer, bounded disconnect-on-full backpressure), NET-06 cap/threshold assertions, NET-07 state-aware Disconnect helper, shared net.Pipe harness
+- [x] 02-01-PLAN.md — NET-05 concurrency seam (one writer goroutine, intent inbound channel + stub consumer, bounded disconnect-on-full backpressure), NET-06 cap/threshold assertions, NET-07 state-aware Disconnect helper, shared net.Pipe harness
 - [ ] 02-02-PLAN.md — NET-01 handshake assert-776 (readable Login Disconnect on mismatch), NET-02 Status ping (version 26.2/proto 776/MOTD/players), NET-03 offline Login + compression, cmd/ender assembly
 - [ ] 02-03-PLAN.md — NET-04 payload: extract + embed (//go:embed) the real 26.2 registry NBT (dimension_type, biome incl. plains, damage_type, chat_type), WriteRegistryData/WriteTags send helpers (defuses the stale-schema trap)
 - [ ] 02-04-PLAN.md — NET-04 sequence: rewrite AcceptConfig as the full ordered Configuration flow (Known Packs → Feature Flags → Registry Data → Update Tags → Finish → read Acknowledge), reach Play; vanilla-26.2 capture-diff + human sign-off
