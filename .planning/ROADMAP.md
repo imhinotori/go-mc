@@ -33,7 +33,10 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. `cd tools && go run . --version 26.2` against the official unobfuscated 26.2 server jar (JDK-25 + Docker extractor) produces 776 data without manual transcription
   3. Generated 776 packets, registries, blocks/states, items, entities, components, and sounds exist as committed Go source files
   4. The 774→776 diff is enumerated and reviewed, so every changed byte layout traces to the jar rather than memory
-**Plans**: TBD
+**Plans**: 3 plans
+- [ ] 01-01-PLAN.md — Fork go-mc at pinned commit, apply #294-296, capture 774 baseline, retarget extractor to JDK 25
+- [ ] 01-02-PLAN.md — Run codegen at 26.2 (sha1-verified jar), fix any extractor rename, commit generated 776 Go source
+- [ ] 01-03-PLAN.md — Enumerate the 774->776 diff, correct protocol/version constants, assert Go-only build + human sign-off
 **Research**: Needs deeper per-phase research — retargeting draft #294-296 from 1.21.11→26.2 is real engineering with expected schema/rebase drift; the 774→776 diff must be derived against the jar.
 
 ### Phase 2: Net & Protocol State Machine
@@ -141,7 +144,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation — Fork & Codegen | 0/TBD | Not started | - |
+| 1. Foundation — Fork & Codegen | 0/3 | Planned | - |
 | 2. Net & Protocol State Machine | 0/TBD | Not started | - |
 | 3. Authoritative Tick Loop | 0/TBD | Not started | - |
 | 4. World & Chunk System | 0/TBD | Not started | - |
