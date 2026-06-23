@@ -4,7 +4,7 @@ package component
 import (
 	"io"
 
-	"github.com/Tnze/go-mc/chat"
+	"github.com/imhinotori/go-mc/chat"
 )
 
 var _ DataComponent = (*ItemName)(nil)

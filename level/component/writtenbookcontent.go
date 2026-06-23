@@ -4,9 +4,9 @@ package component
 import (
 	"io"
 
-	"github.com/Tnze/go-mc/chat"
-	"github.com/Tnze/go-mc/nbt/dynbt"
-	pk "github.com/Tnze/go-mc/net/packet"
+	"github.com/imhinotori/go-mc/chat"
+	"github.com/imhinotori/go-mc/nbt/dynbt"
+	pk "github.com/imhinotori/go-mc/net/packet"
 )
 
 type WrittenPage struct {

@@ -4,7 +4,7 @@ package component
 import (
 	"io"
 
-	pk "github.com/Tnze/go-mc/net/packet"
+	pk "github.com/imhinotori/go-mc/net/packet"
 )
 
 var _ DataComponent = (*EnchantmentGlintOverride)(nil)

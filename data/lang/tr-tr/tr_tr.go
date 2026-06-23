@@ -2,7 +2,7 @@
 
 package tr_tr
 
-import "github.com/Tnze/go-mc/chat"
+import "github.com/imhinotori/go-mc/chat"
 
 func init() { chat.SetLanguage(Map) }
 

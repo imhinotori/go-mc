@@ -1,11 +1,11 @@
 package server
 
 import (
-	"github.com/Tnze/go-mc/chat"
-	"github.com/Tnze/go-mc/data/packetid"
-	"github.com/Tnze/go-mc/net"
-	pk "github.com/Tnze/go-mc/net/packet"
-	"github.com/Tnze/go-mc/registry"
+	"github.com/imhinotori/go-mc/chat"
+	"github.com/imhinotori/go-mc/data/packetid"
+	"github.com/imhinotori/go-mc/net"
+	pk "github.com/imhinotori/go-mc/net/packet"
+	"github.com/imhinotori/go-mc/registry"
 )
 
 type ConfigHandler interface {

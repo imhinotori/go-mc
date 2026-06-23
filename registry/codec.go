@@ -4,9 +4,9 @@ import (
 	"io"
 	"reflect"
 
-	"github.com/Tnze/go-mc/chat"
-	"github.com/Tnze/go-mc/nbt"
-	pk "github.com/Tnze/go-mc/net/packet"
+	"github.com/imhinotori/go-mc/chat"
+	"github.com/imhinotori/go-mc/nbt"
+	pk "github.com/imhinotori/go-mc/net/packet"
 )
 
 type Registries struct {

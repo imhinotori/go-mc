@@ -16,16 +16,16 @@ import (
 
 	//"github.com/mattn/go-colorable"
 
-	"github.com/Tnze/go-mc/bot"
-	"github.com/Tnze/go-mc/bot/basic"
-	"github.com/Tnze/go-mc/bot/msg"
-	"github.com/Tnze/go-mc/bot/playerlist"
-	"github.com/Tnze/go-mc/bot/screen"
-	"github.com/Tnze/go-mc/bot/world"
-	"github.com/Tnze/go-mc/chat"
-	_ "github.com/Tnze/go-mc/data/lang/zh-cn"
-	"github.com/Tnze/go-mc/data/registryid"
-	"github.com/Tnze/go-mc/level"
+	"github.com/imhinotori/go-mc/bot"
+	"github.com/imhinotori/go-mc/bot/basic"
+	"github.com/imhinotori/go-mc/bot/msg"
+	"github.com/imhinotori/go-mc/bot/playerlist"
+	"github.com/imhinotori/go-mc/bot/screen"
+	"github.com/imhinotori/go-mc/bot/world"
+	"github.com/imhinotori/go-mc/chat"
+	_ "github.com/imhinotori/go-mc/data/lang/zh-cn"
+	"github.com/imhinotori/go-mc/data/registryid"
+	"github.com/imhinotori/go-mc/level"
 )
 
 var (

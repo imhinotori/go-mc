@@ -3,7 +3,7 @@ package save
 import (
 	"io"
 
-	"github.com/Tnze/go-mc/nbt"
+	"github.com/imhinotori/go-mc/nbt"
 )
 
 type Level struct {

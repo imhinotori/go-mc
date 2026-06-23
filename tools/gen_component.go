@@ -50,7 +50,7 @@ func genComponent(jsonDir, goMCRoot string) error {
 	buf.WriteString(generatedHeader("gen_component.go", "components.json"))
 	buf.WriteString(`package component
 
-import pk "github.com/Tnze/go-mc/net/packet"
+import pk "github.com/imhinotori/go-mc/net/packet"
 
 type DataComponent interface {
 	pk.Field

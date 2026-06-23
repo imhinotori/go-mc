@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Tnze/go-mc/nbt"
-	"github.com/Tnze/go-mc/nbt/dynbt"
+	"github.com/imhinotori/go-mc/nbt"
+	"github.com/imhinotori/go-mc/nbt/dynbt"
 	"github.com/google/uuid"
 )
 

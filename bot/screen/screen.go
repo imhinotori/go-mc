@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/Tnze/go-mc/bot"
-	"github.com/Tnze/go-mc/chat"
-	"github.com/Tnze/go-mc/data/packetid"
-	"github.com/Tnze/go-mc/level/component"
-	pk "github.com/Tnze/go-mc/net/packet"
+	"github.com/imhinotori/go-mc/bot"
+	"github.com/imhinotori/go-mc/chat"
+	"github.com/imhinotori/go-mc/data/packetid"
+	"github.com/imhinotori/go-mc/level/component"
+	pk "github.com/imhinotori/go-mc/net/packet"
 )
 
 type Manager struct {

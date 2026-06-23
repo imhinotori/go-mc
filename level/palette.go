@@ -4,9 +4,9 @@ import (
 	"io"
 	"strconv"
 
-	"github.com/Tnze/go-mc/level/biome"
-	"github.com/Tnze/go-mc/level/block"
-	pk "github.com/Tnze/go-mc/net/packet"
+	"github.com/imhinotori/go-mc/level/biome"
+	"github.com/imhinotori/go-mc/level/block"
+	pk "github.com/imhinotori/go-mc/net/packet"
 )
 
 type State interface {
