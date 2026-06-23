@@ -94,18 +94,45 @@ type TickLoop struct {
 	// do NOT use xsync here (that is Phase 8). Empty until players join (Wave 2/3).
 	players []*tickPlayer
 
+	// clientIndex maps a connection handle to its tick-owned player so dispatch can
+	// route an inbound packet to the right per-player subtick buffer in O(1). It is a
+	// plain map owned by the tick goroutine (single-owner; not xsync). Nil until
+	// players join; dispatch treats a missing client as a cheap no-op (T-3-02).
+	clientIndex map[*Client]*tickPlayer
+
+	// applyInputHook is a test-only observability seam: when non-nil, applyInput
+	// invokes it with each resolved input so a test can assert chronological apply
+	// order without depending on Phase-6 physics. In production it stays nil and costs
+	// one nil-check per input.
+	applyInputHook func(*tickPlayer, SubtickInput)
+
 	// phaseTrace, when non-nil, records the name of each phase as it runs. It is a
 	// test-only observability hook (set by tests via traceTo) used to assert the
 	// fixed phase order; in production it stays nil and costs nothing.
 	phaseTrace *[]string
 }
 
-// tickPlayer is the per-player game state owned by the tick goroutine. It is an
-// empty placeholder in Phase 3; Wave 2/3 and later phases fill it (subtick buffer,
-// position, the *Client handle for flush). Defined here so players has a concrete
-// element type and the ownership boundary is explicit.
+// tickPlayer is the per-player game state owned by the tick goroutine. Wave 2 adds
+// the subtick input buffer (TICK-03); Wave 3 threads the keep-alive adapter and
+// later phases add position/inventory. Every field is mutated ONLY by the tick
+// goroutine — the ownership boundary is the structural -race guarantee (TICK-05).
 type tickPlayer struct {
 	client *Client // the Phase-2 connection handle; flushOutbound enqueues via client.Send
+
+	// subtick is this player's bounded µs-timestamped input buffer (TICK-03). dispatch
+	// appends server-stamped inputs on arrival; resolveSubtickInputs drains it in
+	// chronological order each tick. Owned by the tick goroutine — never touched off it.
+	subtick subtickBuffer
+
+	// lastInputAt is the arrival stamp of the most recent input resolved through the
+	// applyInput stub — the Phase-3 observable that an input was "resolved". Phase 6
+	// replaces the stub with real movement/collision state.
+	lastInputAt time.Time
+
+	// sawTickEnd records that a ServerboundClientTickEnd boundary marker has been seen
+	// for this player (new in 1.21.2 / present in 776). Phase 3 only records the
+	// boundary; reading its payload is deferred to Phase 6.
+	sawTickEnd bool
 }
 
 // NewTickLoop constructs a TickLoop over the given injectable clock with a
@@ -224,20 +251,44 @@ func (t *TickLoop) drainInbound(inbound <-chan Intent) {
 
 // dispatch routes one inbound packet on the tick goroutine. It is total and cheap:
 // every path is a no-op-or-cheap action, never blocks on IO, never panics on an
-// unknown/malformed ID (T-3-02). Phase 3 handles only the boundary marker; full
-// subtick wiring is 03-02 and keep-alive forwarding is 03-03.
+// unknown/malformed ID or unknown client (T-3-02). Movement/use/attack packets are
+// stamped with the SERVER arrival time and appended to the player's bounded subtick
+// buffer (TICK-03 / T-3-07); ServerboundClientTickEnd is recorded as a boundary
+// marker only. Keep-alive forwarding to the independent timer lands in 03-03.
 func (t *TickLoop) dispatch(c *Client, p pk.Packet) {
+	// Resolve the tick-owned player for this connection. A missing/nil client is a
+	// cheap no-op — dispatch must never deref an unknown handle (T-3-02).
+	player := t.clientIndex[c]
+
 	switch packetid.ServerboundPacketID(p.ID) {
+	case packetid.ServerboundMovePlayerPos,
+		packetid.ServerboundMovePlayerPosRot,
+		packetid.ServerboundMovePlayerRot,
+		packetid.ServerboundMovePlayerStatusOnly,
+		packetid.ServerboundPlayerInput,
+		packetid.ServerboundAttack,
+		packetid.ServerboundInteract,
+		packetid.ServerboundSwing,
+		packetid.ServerboundUseItem,
+		packetid.ServerboundUseItemOn:
+		// A subtick-relevant input: stamp it with the SERVER clock (never a client-
+		// supplied timestamp — T-3-07) and append to the bounded per-player buffer.
+		// resolveSubtickInputs drains it in chronological order this tick.
+		if player != nil {
+			player.subtick.append(SubtickInput{At: t.clock.Now(), Packet: p})
+		}
 	case packetid.ServerboundClientTickEnd:
-		// Client input-batch boundary marker (new in 1.21.2 / present in 776).
-		// Phase 3 may record it; full subtick use is Phase 6. No-op for now.
+		// Client input-batch boundary marker (new in 1.21.2 / present in 776). Phase 3
+		// records the boundary only; its payload is NOT decoded (deferred to Phase 6).
+		if player != nil {
+			player.sawTickEnd = true
+		}
 	case packetid.ServerboundKeepAlive:
 		// Keep-alive responses are forwarded to the independent KeepAlive timer in
 		// 03-03; nothing to do on the tick goroutine here.
 	default:
 		// Unknown / not-yet-handled IDs are cheap no-ops: never block, never panic.
 	}
-	_ = c // *Client is unused until per-player dispatch lands (Wave 2/3)
 }
 
 // recordMSPT writes one tick's duration into the ring and republishes the read-only

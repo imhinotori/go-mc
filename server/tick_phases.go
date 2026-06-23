@@ -42,9 +42,22 @@ func (t *TickLoop) applyAsyncResults() {
 	}
 }
 
-// resolveSubtickInputs drains per-player chronologically-ordered inputs (TICK-03).
-// A no-op slot in this plan; 03-02 fills the subtick buffer and 03-03 wires drain.
-func (t *TickLoop) resolveSubtickInputs() { t.trace("resolveSubtickInputs") }
+// resolveSubtickInputs drains each player's bounded subtick buffer in CHRONOLOGICAL
+// order (by server-arrival stamp) and resolves each input through the stub applyInput
+// (TICK-03). This is the CS2-style separation of input RESOLUTION (subtick-precise,
+// here) from broadcast RATE (the vanilla 20/s flush, in flushOutbound): rapid input
+// sequences resolve in the order they arrived rather than collapsing to one tick. The
+// real movement/collision/hit-detection math behind applyInput is deferred to Phase 6
+// — Phase 3 proves only the timestamped, chronological, vanilla-rate contract. Runs on
+// the owner goroutine over tick-owned state, so it is -race clean by construction.
+func (t *TickLoop) resolveSubtickInputs() {
+	t.trace("resolveSubtickInputs")
+	for _, p := range t.players {
+		for _, in := range p.subtick.drain() { // chronological, then emptied
+			t.applyInput(p, in)
+		}
+	}
+}
 
 // tickWorld advances world/block-tick state. Phase 4 fills it.
 func (t *TickLoop) tickWorld() { t.trace("tickWorld") }
