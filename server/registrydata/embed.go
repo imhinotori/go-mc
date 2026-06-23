@@ -150,12 +150,49 @@ func jsonToNBT(data []byte) (*dynbt.Value, error) {
 	if err := dec.Decode(&raw); err != nil {
 		return nil, err
 	}
-	return valueToNBT(raw)
+	return valueToNBT(raw, "")
+}
+
+// floatFields names the registry-entry fields whose VANILLA wire type is
+// TAG_Float (Codec.FLOAT / Codec.floatRange), not TAG_Double. This is the
+// "carry the vanilla type schema" override (plan option c) for the one case the
+// lexical int-vs-decimal heuristic cannot resolve: Gson serializes both float
+// and double identically (e.g. "0.1"), so a decimal token alone cannot tell
+// TAG_Float from TAG_Double. Without this override, vanilla float fields would
+// serialize as TAG_Double — which the fork's typed decoder rejects (DamageType
+// .Exhaustion is float32) AND the real 26.2 client rejects.
+//
+// Sources for the float typing (vanilla codecs / fork registry/codec.go):
+//   - damage_type:  exhaustion                 (DamageType.Exhaustion float32)
+//   - biome climate: temperature, downfall     (Biome.ClimateSettings, Codec.FLOAT)
+//   - biome:        creature_spawn_probability  (MobSpawnSettings, Codec.floatRange)
+//   - biome visual: probability                 (AmbientParticleSettings, Codec.FLOAT)
+//
+// Fields deliberately NOT listed (they are vanilla TAG_Double and so fall
+// through to the default decimal->Double path):
+//   - dimension audio mood:  offset             (AmbientMoodSettings, Codec.DOUBLE)
+//   - dimension audio adds:  tick_chance         (AmbientAdditionsSettings, Codec.DOUBLE)
+//   - dimension:             ambient_light, coordinate_scale (Codec.DOUBLE)
+//   - biome spawn_costs:     charge, energy_budget (MobSpawnCost, Codec.DOUBLE)
+//
+// NOTE: the 26.2 attribute system introduces new visual modifier fields (e.g.
+// water_fog_end_distance.argument) whose wire type is not yet documented; they
+// default to TAG_Double here. Final byte-correctness against vanilla is the
+// 02-04 capture-diff (threat T-2-06); the Wave-2 tag-type guard covers the
+// well-established integer/byte/float fields.
+var floatFields = map[string]bool{
+	"exhaustion":                 true,
+	"temperature":                true,
+	"downfall":                   true,
+	"creature_spawn_probability": true,
+	"probability":                true,
 }
 
 // valueToNBT converts a decoded JSON value (using json.Number for numbers) into
-// a dynbt.Value with the correct concrete NBT tag type.
-func valueToNBT(v any) (*dynbt.Value, error) {
+// a dynbt.Value with the correct concrete NBT tag type. fieldName is the key the
+// value is stored under in its parent compound ("" for the root / list elements),
+// used to apply the floatFields type override.
+func valueToNBT(v any, fieldName string) (*dynbt.Value, error) {
 	switch t := v.(type) {
 	case nil:
 		// No NBT null tag exists; registry entries never contain JSON null in
@@ -171,7 +208,7 @@ func valueToNBT(v any) (*dynbt.Value, error) {
 		return dynbt.NewString(t), nil
 
 	case json.Number:
-		return numberToNBT(t)
+		return numberToNBT(t, fieldName)
 
 	case map[string]any:
 		comp := dynbt.NewCompound()
@@ -184,7 +221,7 @@ func valueToNBT(v any) (*dynbt.Value, error) {
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			child, err := valueToNBT(t[k])
+			child, err := valueToNBT(t[k], k)
 			if err != nil {
 				return nil, err
 			}
@@ -195,7 +232,9 @@ func valueToNBT(v any) (*dynbt.Value, error) {
 	case []any:
 		elems := make([]*dynbt.Value, 0, len(t))
 		for _, e := range t {
-			child, err := valueToNBT(e)
+			// List elements inherit the parent field name so that, e.g., a list
+			// of probabilities keeps the float override.
+			child, err := valueToNBT(e, fieldName)
 			if err != nil {
 				return nil, err
 			}
@@ -208,17 +247,22 @@ func valueToNBT(v any) (*dynbt.Value, error) {
 	}
 }
 
-// numberToNBT chooses TagInt vs TagDouble (vs TagLong for out-of-range ints)
-// from the LEXICAL form of the JSON number token. A token containing '.', 'e'
-// or 'E' is a float/double in Minecraft's type-faithful serialization; an
-// integral token is a TagInt (TagLong only if it overflows int32, which does
-// not occur in the four embedded registries but is handled defensively).
-func numberToNBT(n json.Number) (*dynbt.Value, error) {
+// numberToNBT chooses the concrete numeric NBT tag for a JSON number token:
+//   - a decimal-form token (contains '.', 'e' or 'E') is a floating-point value.
+//     It is TagFloat if its field name is in floatFields (vanilla Codec.FLOAT),
+//     otherwise TagDouble. This is the only place the lexical heuristic needs the
+//     schema override, since Gson cannot distinguish float from double textually.
+//   - an integral token is TagInt (TagLong only if it overflows int32, which does
+//     not occur in the four embedded registries but is handled defensively).
+func numberToNBT(n json.Number, fieldName string) (*dynbt.Value, error) {
 	s := n.String()
 	if strings.ContainsAny(s, ".eE") {
 		f, err := n.Float64()
 		if err != nil {
 			return nil, fmt.Errorf("bad float token %q: %w", s, err)
+		}
+		if floatFields[fieldName] {
+			return dynbt.NewFloat(float32(f)), nil
 		}
 		return dynbt.NewDouble(f), nil
 	}
