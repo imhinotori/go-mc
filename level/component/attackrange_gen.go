@@ -10,10 +10,10 @@ import (
 var _ DataComponent = (*AttackRange)(nil)
 
 type AttackRange struct {
-	MinRange         pk.Float
-	MaxRange         pk.Float
-	MinCreativeRange pk.Float
-	MaxCreativeRange pk.Float
+	MinReach         pk.Float
+	MaxReach         pk.Float
+	MinCreativeReach pk.Float
+	MaxCreativeReach pk.Float
 	HitboxMargin     pk.Float
 	MobFactor        pk.Float
 }
@@ -22,10 +22,10 @@ func (AttackRange) ID() string { return "minecraft:attack_range" }
 
 func (a *AttackRange) ReadFrom(r io.Reader) (int64, error) {
 	return pk.Tuple{
-		&a.MinRange,
-		&a.MaxRange,
-		&a.MinCreativeRange,
-		&a.MaxCreativeRange,
+		&a.MinReach,
+		&a.MaxReach,
+		&a.MinCreativeReach,
+		&a.MaxCreativeReach,
 		&a.HitboxMargin,
 		&a.MobFactor,
 	}.ReadFrom(r)
@@ -33,10 +33,10 @@ func (a *AttackRange) ReadFrom(r io.Reader) (int64, error) {
 
 func (a *AttackRange) WriteTo(w io.Writer) (int64, error) {
 	return pk.Tuple{
-		&a.MinRange,
-		&a.MaxRange,
-		&a.MinCreativeRange,
-		&a.MaxCreativeRange,
+		&a.MinReach,
+		&a.MaxReach,
+		&a.MinCreativeReach,
+		&a.MaxCreativeReach,
 		&a.HitboxMargin,
 		&a.MobFactor,
 	}.WriteTo(w)

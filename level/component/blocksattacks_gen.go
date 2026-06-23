@@ -14,7 +14,7 @@ type BlocksAttacks struct {
 	DisableCooldownScale pk.Float
 	DamageReductions     []DamageReduction
 	ItemDamage           ItemDamageFunction
-	BypassedBy           pk.Option[pk.String, *pk.String]
+	BypassedBy           pk.Option[IDSet, *IDSet]
 	BlockSound           pk.Option[SoundEvent, *SoundEvent]
 	DisableSound         pk.Option[SoundEvent, *SoundEvent]
 }
