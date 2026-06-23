@@ -191,6 +191,53 @@ public class ExtractAll {
             Files.copy(schema, outputDir.resolve("json-rpc-api-schema.json"),
                        StandardCopyOption.REPLACE_EXISTING);
         }
+
+        // 26.2+: the consolidated reports/items.json was split into per-item
+        // component files under reports/minecraft/components/item/<id>.json.
+        // The Go generators still expect a single items.json (map of
+        // "minecraft:<id>" -> { "components": {...} }), so synthesize it when
+        // the consolidated report is absent but the per-item directory exists.
+        if (!Files.exists(outputDir.resolve("items.json"))) {
+            aggregateItemComponents(reportsDir, outputDir);
+        }
+    }
+
+    /**
+     * Builds items.json from the 26.2+ per-item component files. Each source
+     * file already has the shape { "components": {...} }; we map filename →
+     * "minecraft:<filename>" and copy the body verbatim so no re-encoding (and
+     * thus no precision loss) occurs.
+     */
+    static void aggregateItemComponents(Path reportsDir, Path outputDir) throws Exception {
+        Path itemDir = reportsDir.resolve("minecraft").resolve("components").resolve("item");
+        if (!Files.isDirectory(itemDir)) {
+            log("  WARNING: no items.json and no per-item component dir at %s", itemDir);
+            return;
+        }
+
+        List<Path> itemFiles = new ArrayList<>();
+        try (var stream = Files.list(itemDir)) {
+            stream.filter(p -> p.toString().endsWith(".json")).forEach(itemFiles::add);
+        }
+        itemFiles.sort(Comparator.comparing(p -> p.getFileName().toString()));
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("{\n");
+        for (int i = 0; i < itemFiles.size(); i++) {
+            Path f = itemFiles.get(i);
+            String fileName = f.getFileName().toString();
+            String id = fileName.substring(0, fileName.length() - ".json".length());
+            String body = Files.readString(f).trim();
+            sb.append("  \"minecraft:").append(id).append("\": ").append(body);
+            if (i < itemFiles.size() - 1) sb.append(',');
+            sb.append('\n');
+        }
+        sb.append("}\n");
+
+        Path out = outputDir.resolve("items.json");
+        Files.writeString(out, sb.toString());
+        log("  %-25s %s (synthesized from %d per-item files)",
+            "items.json", humanSize(Files.size(out)), itemFiles.size());
     }
 
     // --- Step 5: Custom extractors ---

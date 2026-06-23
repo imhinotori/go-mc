@@ -11,7 +11,6 @@ import net.minecraft.server.Bootstrap;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.tags.TagKey;
 import net.minecraft.util.Unit;
-import net.minecraft.world.item.EitherHolder;
 import net.minecraft.world.item.ItemStack;
 
 import java.io.*;
@@ -77,6 +76,10 @@ public class GenComponentSchema {
             if (Identifier.class.isAssignableFrom(cls)) return "pk.String";
             if (cls.getName().equals("net.minecraft.network.chat.Component")) return "chat.Message";
             if (ItemStack.class.isAssignableFrom(cls)) return "SlotData";
+            // 26.2: ItemStackTemplate (net.minecraft.world.item) is a record with
+            // the same wire shape as ItemStack — Holder<Item> + VarInt count +
+            // DataComponentPatch — so it encodes identically as SlotData.
+            if (cls.getSimpleName().equals("ItemStackTemplate")) return "SlotData";
             if (SoundEvent.class.isAssignableFrom(cls)) return "SoundEvent";
             if (cls.getSimpleName().equals("CompoundTag")) return "dynbt.Value";
 
@@ -84,7 +87,10 @@ public class GenComponentSchema {
             // (handled below in ParameterizedType)
 
             // EitherHolder<X> as a field type.
-            if (EitherHolder.class.isAssignableFrom(cls)) return "EitherHolder";
+            // NOTE: net.minecraft.world.item.EitherHolder was removed in 26.2;
+            // variant/damage components now encode as plain Holder<X> (VarInt).
+            // Match by simple name so this stays valid if the type ever returns.
+            if (cls.getSimpleName().equals("EitherHolder")) return "EitherHolder";
 
             // Enum → VarInt on wire.
             if (cls.isEnum()) return "pk.VarInt";
@@ -140,8 +146,8 @@ public class GenComponentSchema {
                     return "IDSet";
                 }
 
-                // EitherHolder<X>
-                if (EitherHolder.class.isAssignableFrom(rawCls)) {
+                // EitherHolder<X> (removed in 26.2; see note above)
+                if (rawCls.getSimpleName().equals("EitherHolder")) {
                     return "EitherHolder";
                 }
 
@@ -539,8 +545,8 @@ public class GenComponentSchema {
             return customEntry(name);
         }
 
-        // 8. Direct EitherHolder<X> → eitherholder
-        if (EitherHolder.class.isAssignableFrom(valueClass)) {
+        // 8. Direct EitherHolder<X> → eitherholder (removed in 26.2; see note above)
+        if (valueClass.getSimpleName().equals("EitherHolder")) {
             return eitherHolderEntry(name);
         }
 

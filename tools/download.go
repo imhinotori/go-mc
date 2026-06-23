@@ -10,6 +10,8 @@ package main
 //   - Language files: all ~137 languages from Mojang asset index CDN
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -68,14 +70,19 @@ type unobfuscatedEntry struct {
 func downloadServerJar(cacheDir, goMCRoot, version string) (string, error) {
 	jarPath := filepath.Join(cacheDir, version+"-server.jar")
 
-	if fi, err := os.Stat(jarPath); err == nil && fi.Size() > 0 {
-		logf("  Server jar cached: %s (%s)", jarPath, humanSize(fi.Size()))
-		return jarPath, nil
-	}
-
-	url, err := resolveServerJarURL(goMCRoot, version)
+	url, expectedSHA1, err := resolveServerJarURL(goMCRoot, version)
 	if err != nil {
 		return "", err
+	}
+
+	if fi, err := os.Stat(jarPath); err == nil && fi.Size() > 0 {
+		logf("  Server jar cached: %s (%s)", jarPath, humanSize(fi.Size()))
+		// T-1-01: verify integrity of the cached jar before reuse so a stale or
+		// tampered cache can never reach the extractor.
+		if err := verifyJarSHA1(jarPath, expectedSHA1); err != nil {
+			return "", err
+		}
+		return jarPath, nil
 	}
 
 	logf("Downloading server jar for %s...", version)
@@ -83,11 +90,46 @@ func downloadServerJar(cacheDir, goMCRoot, version string) (string, error) {
 		return "", fmt.Errorf("downloading server jar: %v", err)
 	}
 
+	// T-1-01: verify the downloaded jar's sha1 BEFORE any extractor runs over it.
+	// Abort and remove the bad file on mismatch so it is never executed.
+	if err := verifyJarSHA1(jarPath, expectedSHA1); err != nil {
+		os.Remove(jarPath)
+		return "", err
+	}
+
 	return jarPath, nil
 }
 
-// resolveServerJarURL returns the download URL for the MC server jar.
-func resolveServerJarURL(goMCRoot, version string) (string, error) {
+// verifyJarSHA1 checks that the jar at jarPath matches expectedSHA1 (T-1-01).
+// If expectedSHA1 is empty (no checksum available from the source), it logs a
+// warning and proceeds — the manifest path always supplies one for 26.x.
+func verifyJarSHA1(jarPath, expectedSHA1 string) error {
+	if expectedSHA1 == "" {
+		logf("  WARNING: no expected sha1 available for %s; skipping integrity check", jarPath)
+		return nil
+	}
+	f, err := os.Open(jarPath)
+	if err != nil {
+		return fmt.Errorf("opening jar for sha1 verification: %v", err)
+	}
+	defer f.Close()
+
+	h := sha1.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return fmt.Errorf("hashing jar: %v", err)
+	}
+	got := hex.EncodeToString(h.Sum(nil))
+	if !strings.EqualFold(got, expectedSHA1) {
+		return fmt.Errorf("server jar sha1 mismatch: got %s, expected %s (aborting extraction; jar may be tampered or wrong version)", got, expectedSHA1)
+	}
+	logf("  Server jar sha1 verified: %s", got)
+	return nil
+}
+
+// resolveServerJarURL returns the download URL and expected sha1 for the MC
+// server jar. The sha1 gates integrity verification (T-1-01); it may be empty
+// only for legacy unobfuscated entries that omit a checksum.
+func resolveServerJarURL(goMCRoot, version string) (url, sha1Hex string, err error) {
 	// Check unobfuscated_versions.json for hardcoded entries (pre-26.x).
 	jsonFile := filepath.Join(goMCRoot, "tools", "unobfuscated_versions.json")
 	if data, err := os.ReadFile(jsonFile); err == nil {
@@ -95,7 +137,7 @@ func resolveServerJarURL(goMCRoot, version string) (string, error) {
 		if err := json.Unmarshal(data, &versions); err == nil {
 			if entry, ok := versions[version]; ok {
 				logf("  Using unobfuscated URL from unobfuscated_versions.json")
-				return entry.ServerURL, nil
+				return entry.ServerURL, entry.ServerSHA1, nil
 			}
 		}
 	}
@@ -104,14 +146,14 @@ func resolveServerJarURL(goMCRoot, version string) (string, error) {
 	logf("  Fetching Mojang version manifest...")
 	detail, err := fetchVersionDetail(version)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	if detail.Downloads.Server.URL == "" {
-		return "", fmt.Errorf("no server download URL for version %s", version)
+		return "", "", fmt.Errorf("no server download URL for version %s", version)
 	}
 
-	return detail.Downloads.Server.URL, nil
+	return detail.Downloads.Server.URL, detail.Downloads.Server.SHA1, nil
 }
 
 // --- Language file download ---
