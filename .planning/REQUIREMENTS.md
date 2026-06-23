@@ -26,12 +26,12 @@ Requirements for the initial release. The "user" is an unmodified vanilla 26.2 (
 
 ### Tick Loop & Timing
 
-- [ ] **TICK-01**: An authoritative tick loop drives all game state through deterministic ordered phases (drain inbound → world → chunk → entity → AI → physics → apply async results → tracking → flush outbound)
-- [ ] **TICK-02**: Game-time is anchored to 50ms / MC-tick — day = 20 minutes, redstone/crops/weather/time never accelerate or slow regardless of internal scheduling
+- [x] **TICK-01**: An authoritative tick loop drives all game state through deterministic ordered phases (drain inbound → world → chunk → entity → AI → physics → apply async results → tracking → flush outbound)
+- [x] **TICK-02**: Game-time is anchored to 50ms / MC-tick — day = 20 minutes, redstone/crops/weather/time never accelerate or slow regardless of internal scheduling
 - [ ] **TICK-03**: A CS2-style subtick layer resolves player movement, collisions, hit detection, and projectiles by microsecond-timestamped input in chronological order, broadcasting to the client at the vanilla protocol rate
 - [ ] **TICK-04**: Keep Alive runs on an independent timer; no mystery ~20s disconnects
-- [ ] **TICK-05**: All game state is mutated only by the tick-owning goroutine (ownership-based synchronization); an `applyAsyncResults` rejoin seam exists as a no-op from day one
-- [ ] **TICK-06**: MSPT budget is tracked and observable
+- [x] **TICK-05**: All game state is mutated only by the tick-owning goroutine (ownership-based synchronization); an `applyAsyncResults` rejoin seam exists as a no-op from day one
+- [x] **TICK-06**: MSPT budget is tracked and observable
 
 ### World & Chunks
 
@@ -126,12 +126,12 @@ Which phases cover which requirements. Populated during roadmap creation.
 | NET-05 | Phase 2 | Complete |
 | NET-06 | Phase 2 | Complete |
 | NET-07 | Phase 2 | Complete |
-| TICK-01 | Phase 3 | Pending |
-| TICK-02 | Phase 3 | Pending |
+| TICK-01 | Phase 3 | Complete |
+| TICK-02 | Phase 3 | Complete |
 | TICK-03 | Phase 3 | Pending |
 | TICK-04 | Phase 3 | Pending |
-| TICK-05 | Phase 3 | Pending |
-| TICK-06 | Phase 3 | Pending |
+| TICK-05 | Phase 3 | Complete |
+| TICK-06 | Phase 3 | Complete |
 | WORLD-01 | Phase 4 | Pending |
 | WORLD-02 | Phase 4 | Pending |
 | WORLD-03 | Phase 4 | Pending |

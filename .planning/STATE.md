@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: planning
-stopped_at: Completed 02-04-PLAN.md (Phase 2 complete)
-last_updated: "2026-06-23T20:38:14.738Z"
+status: verifying
+stopped_at: Completed 02-04-PLAN.md (Phase 2 complete; real vanilla 26.2 client reaches Play)
+last_updated: "2026-06-23T21:52:00.220Z"
 last_activity: 2026-06-23
 progress:
   total_phases: 9
   completed_phases: 2
-  total_plans: 7
-  completed_plans: 7
-  percent: 100
+  total_plans: 10
+  completed_plans: 8
+  percent: 80
 ---
 
 # Project State
@@ -21,19 +21,21 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-23)
 
 **Core value:** A Go server that an unmodified vanilla Minecraft 26.2 client can connect to, log into, and play in a persistent, ticking world — architected from day one for Leaf-style async optimizations.
-**Current focus:** Phase 2 complete — a real vanilla 26.2 client reaches Play. Next: Phase 3 — Tick & World State.
+**Current focus:** Phase 3 (Authoritative Tick Loop) underway — Wave 1 (tick spine core) complete. Next: 03-02 (subtick input buffer) and 03-03 (GamePlay wiring).
 
 ## Current Position
 
-Phase: 2 of 9 (Net & Protocol State Machine) — COMPLETE
-Plan: 4 of 4 complete (02-01, 02-02, 02-03, 02-04 done)
-Status: Phase 2 complete; ready to plan Phase 3
+Phase: 3 of 9 (Authoritative Tick Loop) — IN PROGRESS
+Plan: 1 of 3 complete (03-01 done; 03-02, 03-03 pending)
+Status: Wave 1 (tick spine core) complete — TICK-01/02/05/06 landed, -race clean
 Last activity: 2026-06-23
 
-Milestone proof point reached: a real vanilla 26.2 (PrismLauncher) client connects
-to cmd/ender and reaches Play (readable Phase-2 kick), with NET-01..07 all complete.
+Wave-1 proof point: a single-owner TickLoop with a fixed-timestep accumulator over an
+injectable clock anchors game-time to exactly 1200 ticks/60s (TICK-02), runs the fixed
+ordered phase pipeline with no-op applyAsyncResults/tracker seams (TICK-01/05), publishes
+an atomic MSPT/TPS/gametime snapshot (TICK-06), and is Docker -race -count=10 clean.
 
-Progress: [██████████] 100%
+Progress: [████████░░] 80%
 
 ## Performance Metrics
 
@@ -62,6 +64,7 @@ Progress: [██████████] 100%
 | Phase 02 P02 | 5m | 3 tasks | 5 files |
 | Phase 02 P03 | 55 min | 2 tasks | 131 files |
 | Phase 02 P04 | 178min | 3 tasks | 701 files |
+| Phase 03 P01 | 18 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -91,6 +94,7 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 2]: Empty Update Tags was a confirmed HARD BLOCKER (not optional) — a real 26.2 client crashes at Registry Loading with 'Unbound tags'/'Failed to parse value' because registry entries reference tags; fix = send the real vanilla 15-registry tag set (dfb4af04)
 - [Phase ?]: [Phase 2]: proto-776 ClientboundLoginFinishedPacket needs a trailing sessionId UUID (GAME_PROFILE + UUIDUtil.STREAM_CODEC); the fork omitted it and net.Pipe missed it (bot scans only UUID+name) — only a real client surfaced it (e283886c)
 - [Phase ?]: [Phase 2]: NET-04 correctness gate is a real-client capture-diff, not self-consistent tests — the net.Pipe bot's lax decoder tolerated both the login_finished and empty-tags bugs a real client rejects
+- [Phase ?]: [Phase 3]: TickLoop single-owner spine over injectable Clock; gametime++ inside for acc>=step anchors TICK-02 (1200/60s); 250ms spiral clamp; applyAsyncResults/tracker no-op seams for Phase 8; MSPT via atomic.Pointer[TickStats]
 
 ### Pending Todos
 
@@ -115,7 +119,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-23T20:37:08.303Z
+Last session: 2026-06-23T21:51:54.562Z
 Stopped at: Completed 02-04-PLAN.md (Phase 2 complete; real vanilla 26.2 client reaches Play)
 Resume file: None
 Next: plan Phase 3 (Tick & World State). Deferred at Phase 2 close: Ender → Sulfur rename (see Deferred Items).
