@@ -81,7 +81,7 @@ Requirements for the initial release. The "user" is an unmodified vanilla 26.2 (
 
 ## v2 Requirements
 
-Deferred to a future release. Tracked but not in the current roadmap.
+Deferred to a future release. Tracked but not in the current roadmap. Mapped to Phase 9 (stretch).
 
 ### Online Mode
 
@@ -115,13 +115,64 @@ Which phases cover which requirements. Populated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| (to be filled by roadmapper) | — | Pending |
+| GEN-01 | Phase 1 | Pending |
+| GEN-02 | Phase 1 | Pending |
+| GEN-03 | Phase 1 | Pending |
+| GEN-04 | Phase 1 | Pending |
+| NET-01 | Phase 2 | Pending |
+| NET-02 | Phase 2 | Pending |
+| NET-03 | Phase 2 | Pending |
+| NET-04 | Phase 2 | Pending |
+| NET-05 | Phase 2 | Pending |
+| NET-06 | Phase 2 | Pending |
+| NET-07 | Phase 2 | Pending |
+| TICK-01 | Phase 3 | Pending |
+| TICK-02 | Phase 3 | Pending |
+| TICK-03 | Phase 3 | Pending |
+| TICK-04 | Phase 3 | Pending |
+| TICK-05 | Phase 3 | Pending |
+| TICK-06 | Phase 3 | Pending |
+| WORLD-01 | Phase 4 | Pending |
+| WORLD-02 | Phase 4 | Pending |
+| WORLD-03 | Phase 4 | Pending |
+| WORLD-04 | Phase 4 | Pending |
+| WORLD-05 | Phase 4 | Pending |
+| PLAY-01 | Phase 5 | Pending |
+| PLAY-02 | Phase 5 | Pending |
+| PLAY-03 | Phase 5 | Pending |
+| PLAY-04 | Phase 5 | Pending |
+| PLAY-05 | Phase 5 | Pending |
+| PLAY-06 | Phase 5 | Pending |
+| ENT-01 | Phase 6 | Pending |
+| ENT-02 | Phase 6 | Pending |
+| ENT-03 | Phase 6 | Pending |
+| ENT-04 | Phase 6 | Pending |
+| ENT-05 | Phase 6 | Pending |
+| ENT-06 | Phase 6 | Pending |
+| AI-01 | Phase 7 | Pending |
+| AI-02 | Phase 7 | Pending |
+| AI-03 | Phase 7 | Pending |
+| CMD-01 | Phase 7 | Pending |
+| CMD-02 | Phase 7 | Pending |
+| OPT-01 | Phase 8 | Pending |
+| OPT-02 | Phase 8 | Pending |
+| OPT-03 | Phase 8 | Pending |
+| OPT-04 | Phase 8 | Pending |
+| OPT-05 | Phase 8 | Pending |
+| OPT-06 | Phase 8 | Pending |
+| ONLINE-01 (v2) | Phase 9 | Pending |
+| ONLINE-02 (v2) | Phase 9 | Pending |
+| PARITY-01 (v2) | Phase 9 | Pending |
+| REGION-01 (v2) | Phase 9 | Pending |
 
 **Coverage:**
-- v1 requirements: 41 total
-- Mapped to phases: 0 (pending roadmap)
-- Unmapped: 41 ⚠️
+- v1 requirements: 45 total (GEN 4 + NET 7 + TICK 6 + WORLD 5 + PLAY 6 + ENT 6 + AI 3 + CMD 2 + OPT 6)
+- Mapped to phases: 45 (100%) ✓
+- Unmapped: 0 ✓
+- v2 stretch requirements: 4 (ONLINE-01, ONLINE-02, PARITY-01, REGION-01) → all mapped to Phase 9
+
+> Note: the prior "41 total" count was a stale tally; counting the actual REQ-IDs yields 45 v1 requirements. All 45 are mapped to exactly one phase with no orphans or duplicates.
 
 ---
 *Requirements defined: 2026-06-23*
-*Last updated: 2026-06-23 after initial definition*
+*Last updated: 2026-06-23 after roadmap creation (traceability populated, coverage 45/45)*
