@@ -111,7 +111,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 | Category | Item | Status | Deferred At |
 |----------|------|--------|-------------|
-| Rename | Project rename Ender → **Sulfur**: Go module `imhinotori/go-mc` → `imhinotori/sulfur`, rewrite ~340 import paths, `cmd/ender` → `cmd/sulfur`, user-facing strings (binary/log/MOTD). Repo is already `github.com/imhinotori/sulfur`. Do as one clean dedicated commit at Phase 2 close, NOT mixed with feature work. | Pending | Phase 2 (NET-04) |
+| Rename | Project rename Ender → **Sulfur**: module `imhinotori/go-mc` → `imhinotori/sulfur` (367 .go + both go.mod), `cmd/ender` → `cmd/sulfur`, user-facing strings. MC entity names + frozen 774 baseline left as-is. | ✅ Done (630f90e3) | Phase 2 (NET-04) |
 
 ## Session Continuity
 
