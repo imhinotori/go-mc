@@ -15,7 +15,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Foundation — Fork & Codegen** - Fork go-mc, retarget #294-296 codegen to proto 776, commit generated data as Go source
  (completed 2026-06-23)
 - [x] **Phase 2: Net & Protocol State Machine** - Handshake → Status → Login → Configuration → Play transitions with the network/tick channel boundary (completed 2026-06-23)
-- [ ] **Phase 3: Authoritative Tick Loop** - 20-TPS ordered tick spine, ownership-based sync, game-time anchor, subtick layer, keepalive
+- [x] **Phase 3: Authoritative Tick Loop** - 20-TPS ordered tick spine, ownership-based sync, game-time anchor, subtick layer, keepalive
 - [ ] **Phase 4: World & Chunk System** - Paletted-container chunk encode/decode, heightmaps/light, deterministic worldgen, view-distance streaming
 - [ ] **Phase 5: Player Session In-World (FIRST PLAYABLE)** - Vanilla client logs in and stands in a solid, visible, ticking world it can walk around
 - [ ] **Phase 6: Entities, Physics & Interaction** - Entity store/tracker, gravity/AABB collision, block place/break, component inventory, health/respawn, persistence
@@ -68,7 +68,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 3 plans
 - [x] 03-01-PLAN.md — Tick spine core: injectable clock, single-owner Run loop consuming chan Intent, fixed-order phase pipeline, 50ms game-time accumulator + spiral clamp, no-op applyAsyncResults + tracker.Tick seams, MSPT atomic snapshot (TICK-01/02/05/06)
 - [x] 03-02-PLAN.md — Minimal subtick seam: bounded per-player us-timestamped input buffer + chronological in-tick drain + stub applyInput (TICK-03); prove KeepAlive independence (stalled tick fires no timeout, TICK-04)
-- [ ] 03-03-PLAN.md — Wire the real tick-driven gameTick GamePlay + cmd/sulfur/main.go (replace stubGamePlay), start tick + keepalive goroutines; end-to-end connection-stands-in-a-ticking-world assertion (TICK-01/04/05/06)
+- [x] 03-03-PLAN.md — Wire the real tick-driven gameTick GamePlay + cmd/sulfur/main.go (replace stubGamePlay), start tick + keepalive goroutines; end-to-end connection-stands-in-a-ticking-world assertion (TICK-01/04/05/06)
 **Research**: Standard pattern (lighter research) — the single-threaded loop + compute-off/apply-on design is well-documented across Paper/Folia/Leaf and is settled.
 
 ### Phase 4: World & Chunk System
@@ -154,7 +154,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 |-------|----------------|--------|-----------|
 | 1. Foundation — Fork & Codegen | 3/3 | Complete   | 2026-06-23 |
 | 2. Net & Protocol State Machine | 4/4 | Complete   | 2026-06-23 |
-| 3. Authoritative Tick Loop | 1/3 | In Progress|  |
+| 3. Authoritative Tick Loop | 3/3 | Complete   | 2026-06-23 |
 | 4. World & Chunk System | 0/TBD | Not started | - |
 | 5. Player Session In-World (FIRST PLAYABLE) | 0/TBD | Not started | - |
 | 6. Entities, Physics & Interaction | 0/TBD | Not started | - |

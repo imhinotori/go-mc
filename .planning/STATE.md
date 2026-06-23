@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 02-04-PLAN.md (Phase 2 complete; real vanilla 26.2 client reaches Play)
-last_updated: "2026-06-23T22:00:33.678Z"
+stopped_at: Completed 03-03-PLAN.md (Phase 3 complete; a connection stands in a live ticking world)
+last_updated: "2026-06-23T22:12:05.886Z"
 last_activity: 2026-06-23
 progress:
   total_phases: 9
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 10
-  completed_plans: 9
-  percent: 90
+  completed_plans: 10
+  percent: 100
 ---
 
 # Project State
@@ -21,21 +21,26 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-23)
 
 **Core value:** A Go server that an unmodified vanilla Minecraft 26.2 client can connect to, log into, and play in a persistent, ticking world — architected from day one for Leaf-style async optimizations.
-**Current focus:** Phase 3 (Authoritative Tick Loop) underway — Wave 1 (tick spine core) complete. Next: 03-02 (subtick input buffer) and 03-03 (GamePlay wiring).
+**Current focus:** Phase 3 (Authoritative Tick Loop) COMPLETE — TICK-01..06 integrated on a runnable server. Next: plan Phase 4 (World & Chunk System) — fill tickWorld/tickChunks and flushOutbound (per-player chunk packets) onto the existing player/clientIndex/registration seams.
 
 ## Current Position
 
-Phase: 3 of 9 (Authoritative Tick Loop) — IN PROGRESS
-Plan: 2 of 3 complete (03-01 done; 03-02, 03-03 pending)
-Status: Ready to execute
+Phase: 3 of 9 (Authoritative Tick Loop) — COMPLETE
+Plan: 3 of 3 complete (03-01, 03-02, 03-03 all done)
+Status: Phase complete — ready to plan Phase 4
 Last activity: 2026-06-23
 
-Wave-1 proof point: a single-owner TickLoop with a fixed-timestep accumulator over an
-injectable clock anchors game-time to exactly 1200 ticks/60s (TICK-02), runs the fixed
-ordered phase pipeline with no-op applyAsyncResults/tracker seams (TICK-01/05), publishes
-an atomic MSPT/TPS/gametime snapshot (TICK-06), and is Docker -race -count=10 clean.
+Phase-3 milestone: the internal tick spine is now a server a connection lives in.
+`gameTick` replaces `stubGamePlay`; `cmd/sulfur/main.go` starts the single tick goroutine
+(`go tick.Run`) and the independent keep-alive goroutine (`go keep.Run`); a piped
+connection stands in a live, empty, ticking world — no disconnect, `Stats()` MSPT/TPS
+live (TICK-01/06), keep-alive holds on its own goroutine while a returning
+`ServerboundKeepAlive` routes through `dispatch -> ClientTick` (TICK-04), and player
+join/leave crosses to the tick owner as a message (register/unregister + drainRegistrations,
+TICK-05). Docker `-race -count=10` clean; `go run ./cmd/sulfur` listens on proto 776.
+Zero new dependencies.
 
-Progress: [█████████░] 90%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -66,6 +71,7 @@ Progress: [█████████░] 90%
 | Phase 02 P04 | 178min | 3 tasks | 701 files |
 | Phase 03 P01 | 18 | 2 tasks | 4 files |
 | Phase 03 P02 | 18min | 2 tasks | 5 files |
+| Phase 03 P03 | 22min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -97,6 +103,8 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 2]: NET-04 correctness gate is a real-client capture-diff, not self-consistent tests — the net.Pipe bot's lax decoder tolerated both the login_finished and empty-tags bugs a real client rejects
 - [Phase ?]: [Phase 3]: TickLoop single-owner spine over injectable Clock; gametime++ inside for acc>=step anchors TICK-02 (1200/60s); 250ms spiral clamp; applyAsyncResults/tracker no-op seams for Phase 8; MSPT via atomic.Pointer[TickStats]
 - [Phase ?]: [Phase 3]: TICK-03 subtick seam = bounded (cap 256, drop-oldest) per-player buffer, server-stamped At=clock.Now() (never client time), chronological drain (stable sort) through STUB applyInput; physics deferred to Phase 6. TICK-04 proven: KeepAlive on own goroutine fires no timeout under a stalled tick. Zero new deps; -race clean.
+- [Phase ?]: [Phase 3]: gameTick replaces stubGamePlay — AcceptPlayer registers the player with the tick as a buffered-channel MESSAGE (register/unregister + drainRegistrations on the owner goroutine), never a cross-goroutine mutation; Docker -race -count=10 clean proves TICK-05 across the real network boundary
+- [Phase ?]: [Phase 3]: Phase 3 COMPLETE — a piped connection stands in a live empty ticking world: no disconnect, Stats() MSPT/TPS live (TICK-01/06), keep-alive holds on its own goroutine while a returning ServerboundKeepAlive routes through dispatch->ClientTick (TICK-04). go run ./cmd/sulfur listens on proto 776. Zero new deps.
 
 ### Pending Todos
 
@@ -118,10 +126,11 @@ Items acknowledged and carried forward from previous milestone close:
 | Category | Item | Status | Deferred At |
 |----------|------|--------|-------------|
 | Rename | Project rename Ender → **Sulfur**: module `imhinotori/go-mc` → `imhinotori/sulfur` (367 .go + both go.mod), `cmd/ender` → `cmd/sulfur`, user-facing strings. MC entity names + frozen 774 baseline left as-is. | ✅ Done (630f90e3) | Phase 2 (NET-04) |
+| Robustness | `KeepAlive.removePlayer` (verbatim fork component) derefs `listIndex[c]` and would panic if `ClientLeft` is called for a player the keep-alive already kicked on a real 30s timeout. Cannot trigger in Phase 3 (no timeout in the milestone window); `keepalive.go` is consumed verbatim by mandate. Harden against a double-leave in the phase that adds real timeout-driven disconnects. | ⏳ Deferred | Phase 3 (03-03) |
 
 ## Session Continuity
 
-Last session: 2026-06-23T22:00:24.878Z
-Stopped at: Completed 02-04-PLAN.md (Phase 2 complete; real vanilla 26.2 client reaches Play)
+Last session: 2026-06-23T22:11:44.472Z
+Stopped at: Completed 03-03-PLAN.md (Phase 3 complete; a connection stands in a live ticking world)
 Resume file: None
-Next: plan Phase 3 (Tick & World State). Deferred at Phase 2 close: Ender → Sulfur rename (see Deferred Items).
+Next: plan Phase 4 (World & Chunk System) — fill tickWorld/tickChunks + flushOutbound (per-player chunk packets) onto the player/clientIndex/registration seams. Deferred: KeepAlive double-leave hardening (see Deferred Items).
