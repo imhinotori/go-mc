@@ -25,11 +25,31 @@ func (m Message) TagType() byte {
 }
 
 func (m Message) MarshalNBT(w io.Writer) error {
+	// The nbt.Marshaler contract is to write only the tag BODY: the outer encoder
+	// has already written the compound tag byte (see Message.TagType). Encoding a
+	// full document here would double the tag header (e.g. 0A 0A 00 00 ...), which
+	// the network-format decoder then fails to parse. We therefore encode the chosen
+	// struct in network format (which prefixes a single tag byte and no name) and
+	// strip that one leading tag byte so only the compound body reaches w.
+	var v any
 	if m.Translate != "" {
-		return nbt.NewEncoder(w).Encode(translateMsg(m), "")
+		v = translateMsg(m)
 	} else {
-		return nbt.NewEncoder(w).Encode(rawMsgStruct(m), "")
+		v = rawMsgStruct(m)
 	}
+
+	var buf bytes.Buffer
+	enc := nbt.NewEncoder(&buf)
+	enc.NetworkFormat(true) // writes [tagByte][body...], no name
+	if err := enc.Encode(v, ""); err != nil {
+		return err
+	}
+	body := buf.Bytes()
+	if len(body) == 0 {
+		return errors.New("chat: empty nbt encoding for message")
+	}
+	_, err := w.Write(body[1:]) // drop the duplicate leading tag byte; keep the body
+	return err
 }
 
 func (m *Message) UnmarshalNBT(tagType byte, r nbt.DecoderReader) error {
