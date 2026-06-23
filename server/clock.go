@@ -20,3 +20,9 @@ type systemClock struct{}
 
 // Now returns the current monotonic instant.
 func (systemClock) Now() time.Time { return time.Now() }
+
+// SystemClock returns the production Clock backing a running server (time.Now() with
+// its monotonic reading). main() passes it to NewTickLoop; tests inject a fakeClock
+// instead. It is the only exported way to obtain the real clock — the systemClock type
+// stays unexported so the wall-clock source cannot be mistaken for an injectable one.
+func SystemClock() Clock { return systemClock{} }

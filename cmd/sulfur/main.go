@@ -1,26 +1,28 @@
 // Command sulfur is the runnable Sulfur server entrypoint. It assembles the Phase-2
-// protocol gate over the fork's existing primitives:
+// protocol gate over the fork's existing primitives and wires in the Phase-3
+// authoritative tick loop:
 //
 //   - a proto-776 ListPingHandler (NET-02): version 26.2 / protocol 776 / MOTD / players
 //   - an offline MojangLoginHandler with a compression threshold (NET-03)
-//   - the Configurations handler (the registry-data body is finished in Plan 02-04)
-//   - a Phase-2 stub GamePlay that does NOT start a tick loop or touch game state
+//   - the Configurations handler (registry data sourced from embedded real 26.2 NBT)
+//   - the real tick-driven GamePlay (gameTick): a single tick goroutine owns the game
+//     loop, and an independent KeepAlive goroutine runs the 15s-ping/30s-timeout
+//     liveness — replacing the Phase-2 stub GamePlay
 //
 // The NET-01 proto-776 assertion lives in server.AcceptConn (the login path rejects a
-// mismatched protocol with a readable Login Disconnect). This binary just wires the
-// handlers and listens; the tick loop and a real GamePlay arrive in Phase 3.
+// mismatched protocol with a readable Login Disconnect). main() starts the single tick
+// goroutine and the independent keep-alive goroutine, then listens: a logged-in
+// connection is handed to gameTick.AcceptPlayer, which attaches it to the ticking world
+// (Phase-3 milestone — the player stands in a live, empty, ticking server).
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 
 	"github.com/imhinotori/sulfur/chat"
-	"github.com/imhinotori/sulfur/net"
 	"github.com/imhinotori/sulfur/server"
-	"github.com/imhinotori/sulfur/yggdrasil/user"
-
-	"github.com/google/uuid"
 )
 
 const (
@@ -31,6 +33,13 @@ const (
 	compressionThreshold = 256
 	// maxPlayers is the advertised player cap.
 	maxPlayers = 20
+	// inboundCap bounds the network->tick seam (the shared chan Intent). Every
+	// connection's readLoop produces Intents onto this one channel; the tick goroutine
+	// drains it non-blockingly each wake (drainInbound). Bounded per the Phase-2
+	// bounded-queue discipline (T-2-04): a flood backpressures the read goroutines
+	// rather than growing server memory without limit. 1024 is ample headroom for the
+	// drain cadence (the tick wakes every 5ms) while staying a trivial fixed buffer.
+	inboundCap = 1024
 )
 
 // pingHandler composes the version/MOTD reporting of PingInfo (Protocol fixed to 776,
@@ -41,26 +50,11 @@ type pingHandler struct {
 	*server.PlayerList
 }
 
-// stubGamePlay is the Phase-2 GamePlay seam. The login/config gate hands off here once
-// a player has logged in and finished configuration. Phase 2 has no tick loop yet, so
-// this stub only proves the gate reaches the Play handoff: it sends a readable Play
-// Disconnect and returns. It starts no goroutines and accesses no game state. Phase 3
-// replaces it with the NET-05 Client read/write loops and the real tick.
-type stubGamePlay struct{}
-
-func (stubGamePlay) AcceptPlayer(
-	name string,
-	id uuid.UUID,
-	profilePubKey *user.PublicKey,
-	properties []user.Property,
-	protocol int32,
-	conn *net.Conn,
-) {
-	_ = server.Disconnect(conn, server.StatePlay,
-		chat.Text("Server is not yet playable — gameplay arrives in Phase 3."))
-}
-
-func newServer() *server.Server {
+// newServer assembles the Phase-2 gate handlers and the real Phase-3 GamePlay. The
+// shared runtime (the inbound seam, the single tick loop, the independent keep-alive)
+// is constructed and started by the caller and handed in here as the GamePlay, so the
+// server's goroutines are running before the listener accepts a connection.
+func newServer(gameplay server.GamePlay) *server.Server {
 	return &server.Server{
 		Logger: log.Default(),
 		ListPingHandler: &pingHandler{
@@ -79,9 +73,9 @@ func newServer() *server.Server {
 		// The Configuration sequence (Known Packs → Feature Flags → Registry Data →
 		// Update Tags → Finish → Acknowledge) is implemented in AcceptConfig; the
 		// registry payload is sourced from the embedded real 26.2 NBT in
-		// server/registrydata, so Configurations needs no fields (Plan 02-04).
+		// server/registrydata, so Configurations needs no fields.
 		ConfigHandler: &server.Configurations{},
-		GamePlay: stubGamePlay{},
+		GamePlay:      gameplay,
 	}
 }
 
@@ -89,7 +83,25 @@ func main() {
 	addr := flag.String("addr", ":25565", "address to listen on")
 	flag.Parse()
 
-	srv := newServer()
+	// Construct the single-owner runtime: the network->tick seam (one bounded chan
+	// Intent), the authoritative tick loop over the real system clock, and the
+	// independent keep-alive component.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	inbound := make(chan server.Intent, inboundCap)
+	tick := server.NewTickLoop(server.SystemClock())
+	keep := server.NewKeepAlive()
+
+	// Start the TWO long-lived server goroutines: exactly one tick goroutine (the sole
+	// owner/mutator of game state, consuming inbound) and one independent keep-alive
+	// goroutine (its own 15s/30s timers, never gated on tick cadence — TICK-04).
+	go tick.Run(ctx, inbound)
+	go keep.Run(ctx)
+
+	// The real GamePlay bridges an accepted connection to the running tick + keep-alive.
+	srv := newServer(server.NewGameTick(inbound, tick, keep))
+
 	srv.Logger.Printf("Sulfur listening on %s (protocol %d, %s)",
 		*addr, server.ProtocolVersion, server.ProtocolName)
 	log.Fatal(srv.Listen(*addr))
