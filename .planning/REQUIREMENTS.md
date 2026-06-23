@@ -9,8 +9,8 @@ Requirements for the initial release. The "user" is an unmodified vanilla 26.2 (
 
 ### Foundation & Codegen
 
-- [ ] **GEN-01**: A forked `Tnze/go-mc` (pinned master commit + #294-296 cherry-picks) builds with Go alone, no JVM at runtime
-- [ ] **GEN-02**: A JDK-25 + Docker extractor produces 26.2 data from the official unobfuscated server jar via `cd tools && go run . --version 26.2`
+- [x] **GEN-01**: A forked `Tnze/go-mc` (pinned master commit + #294-296 cherry-picks) builds with Go alone, no JVM at runtime
+- [x] **GEN-02**: A JDK-25 + Docker extractor produces 26.2 data from the official unobfuscated server jar via `cd tools && go run . --version 26.2`
 - [ ] **GEN-03**: Generated 776 data (packets, registries, blocks/states, items, entities, components, sounds) is committed as Go source
 - [ ] **GEN-04**: The 774→776 diff is enumerated and reviewed so every byte layout traces to the jar, not memory
 
@@ -115,8 +115,8 @@ Which phases cover which requirements. Populated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| GEN-01 | Phase 1 | Pending |
-| GEN-02 | Phase 1 | Pending |
+| GEN-01 | Phase 1 | Complete |
+| GEN-02 | Phase 1 | Complete |
 | GEN-03 | Phase 1 | Pending |
 | GEN-04 | Phase 1 | Pending |
 | NET-01 | Phase 2 | Pending |
