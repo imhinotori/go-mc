@@ -67,7 +67,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. All game state is mutated only by the tick-owning goroutine; Keep Alive runs on an independent timer (no ~20s mystery disconnects); MSPT budget is tracked and observable
 **Plans**: 3 plans
 - [x] 03-01-PLAN.md — Tick spine core: injectable clock, single-owner Run loop consuming chan Intent, fixed-order phase pipeline, 50ms game-time accumulator + spiral clamp, no-op applyAsyncResults + tracker.Tick seams, MSPT atomic snapshot (TICK-01/02/05/06)
-- [ ] 03-02-PLAN.md — Minimal subtick seam: bounded per-player us-timestamped input buffer + chronological in-tick drain + stub applyInput (TICK-03); prove KeepAlive independence (stalled tick fires no timeout, TICK-04)
+- [x] 03-02-PLAN.md — Minimal subtick seam: bounded per-player us-timestamped input buffer + chronological in-tick drain + stub applyInput (TICK-03); prove KeepAlive independence (stalled tick fires no timeout, TICK-04)
 - [ ] 03-03-PLAN.md — Wire the real tick-driven gameTick GamePlay + cmd/sulfur/main.go (replace stubGamePlay), start tick + keepalive goroutines; end-to-end connection-stands-in-a-ticking-world assertion (TICK-01/04/05/06)
 **Research**: Standard pattern (lighter research) — the single-threaded loop + compute-off/apply-on design is well-documented across Paper/Folia/Leaf and is settled.
 
