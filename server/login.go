@@ -58,6 +58,29 @@ type MojangLoginHandler struct {
 	// PrivateKey is the key used by encrypt the connection.
 	privateKey     atomic.Pointer[rsa.PrivateKey]
 	lockPrivateKey sync.Mutex
+
+	// sessionID is a per-server-instance session token sent in the proto-776
+	// Login Finished packet (ClientboundLoginFinishedPacket carries
+	// GameProfile + sessionId; vanilla sources it from
+	// ServerConnectionListener.getSessionId(), one random UUID per process).
+	sessionID     atomic.Pointer[uuid.UUID]
+	lockSessionID sync.Mutex
+}
+
+// getSessionID lazily generates a stable per-handler session UUID, matching
+// vanilla's one-sessionId-per-server-instance behavior.
+func (d *MojangLoginHandler) getSessionID() uuid.UUID {
+	if s := d.sessionID.Load(); s != nil {
+		return *s
+	}
+	d.lockSessionID.Lock()
+	defer d.lockSessionID.Unlock()
+	if s := d.sessionID.Load(); s != nil {
+		return *s
+	}
+	s := uuid.New()
+	d.sessionID.Store(&s)
+	return s
 }
 
 func (d *MojangLoginHandler) getPrivateKey() (key *rsa.PrivateKey, err error) {
@@ -150,12 +173,16 @@ func (d *MojangLoginHandler) AcceptLogin(conn *net.Conn, protocol int32) (name s
 			return
 		}
 	}
-	// send login success
+	// send login success — proto 776 ClientboundLoginFinishedPacket is
+	// GameProfile(UUID, name, properties) followed by a trailing sessionId UUID
+	// (ByteBufCodecs.GAME_PROFILE then UUIDUtil.STREAM_CODEC). Omitting the
+	// sessionId makes a real 26.2 client fail to decode login_finished.
 	err = conn.WritePacket(pk.Marshal(
 		packetid.ClientboundLoginLoginFinished,
 		pk.UUID(id),
 		pk.String(name),
 		pk.Array(properties),
+		pk.UUID(d.getSessionID()),
 	))
 	if err != nil {
 		return
