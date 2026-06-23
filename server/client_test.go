@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/imhinotori/go-mc/chat"
+	"github.com/imhinotori/go-mc/data/packetid"
 	netmc "github.com/imhinotori/go-mc/net"
 	pk "github.com/imhinotori/go-mc/net/packet"
 )
@@ -170,6 +172,56 @@ func TestInboundSeam(t *testing.T) {
 	}
 
 	c.Close()
+}
+
+// TestDisconnectReason verifies the NET-07 state-aware Disconnect helper: for each
+// state (Login, Config, Play) it writes a packet whose ID is that state's Disconnect
+// id and whose payload round-trips back to the given chat.Message reason text. A
+// reason is always present — never a silent close. (NET-07 / T-2-05)
+func TestDisconnectReason(t *testing.T) {
+	cases := []struct {
+		name   string
+		state  ConnState
+		wantID packetid.ClientboundPacketID
+		reason string
+	}{
+		{"login", StateLogin, packetid.ClientboundLoginLoginDisconnect, "login refused: bad protocol"},
+		{"config", StateConfig, packetid.ClientboundConfigDisconnect, "config refused: missing pack"},
+		{"play", StatePlay, packetid.ClientboundDisconnect, "kicked: you have been removed"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server, client := newPipe(t)
+
+			// Write the disconnect from the server side; read the raw packet on the
+			// client side and assert id + reason.
+			writeErr := make(chan error, 1)
+			go func() {
+				writeErr <- Disconnect(server, tc.state, chat.Text(tc.reason))
+			}()
+
+			var p pk.Packet
+			if err := client.ReadPacket(&p); err != nil {
+				t.Fatalf("read disconnect packet: %v", err)
+			}
+			if err := <-writeErr; err != nil {
+				t.Fatalf("Disconnect write: %v", err)
+			}
+
+			if p.ID != int32(tc.wantID) {
+				t.Fatalf("packet id = %d, want %d (%v)", p.ID, int32(tc.wantID), tc.wantID)
+			}
+
+			var got chat.Message
+			if err := p.Scan(&got); err != nil {
+				t.Fatalf("scan reason: %v", err)
+			}
+			if got.Text != tc.reason {
+				t.Fatalf("reason text = %q, want %q", got.Text, tc.reason)
+			}
+		})
+	}
 }
 
 // TestStubConsumerSeam wires the full Phase-2 shape: Start launches the single
