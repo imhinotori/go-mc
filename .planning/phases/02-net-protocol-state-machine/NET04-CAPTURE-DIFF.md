@@ -124,32 +124,75 @@ authoritative jar datagen — the same source vanilla serializes from.
 | | Vanilla | Ender |
 |--|---------|-------|
 | Update Tags packet present | yes | yes |
-| Registries carrying tags | **15** | **0** (present-but-empty, VarInt count = 0) |
+| Registries carrying tags | **15** | **15** (real vanilla set — see below) |
 
-Vanilla's 15 tag-bearing registries (tag counts):
+**RESOLVED (W3, commit `feat(02-04): send real vanilla 26.2 Update Tags`).** The
+earlier "present-but-empty (VarInt count = 0)" stub was a **confirmed HARD BLOCKER**,
+not acceptable polish: a real PrismLauncher 26.2 client connected to Ender and
+crashed during Registry Loading with `IllegalStateException: Failed to load
+registries due to errors` →
 
-| Registry | Tags | | Registry | Tags |
-|----------|------|--|----------|------|
-| minecraft:block | 265 | | minecraft:enchantment | 22 |
-| minecraft:item | 224 | | minecraft:banner_pattern | 11 |
-| minecraft:worldgen/biome | 68 | | minecraft:fluid | 6 |
-| minecraft:entity_type | 48 | | minecraft:game_event | 5 |
-| minecraft:damage_type | 34 | | minecraft:timeline | 4 |
-| minecraft:point_of_interest_type | 3 | | minecraft:instrument | 3 |
-| minecraft:dialog | 2 | | minecraft:painting_variant | 1 |
-| minecraft:potion | 1 | | | |
+- `Unbound tags in registry … enchantment: [exclusive_set/armor, …/boots, …/bow,
+  …/crossbow, …/damage, …/mining, …/riptide]`
+- `Unbound tags in registry … timeline: [in_end, in_nether, in_overworld]`
+- `Unbound tags in registry … dialog: [pause_screen_additions, quick_actions]`
+- `Failed to parse value … for key minecraft:overworld` for dimension_type,
+  enchantment, and all 14 sulfur_cube_archetype entries — because those entries
+  reference tags (`timelines:"#minecraft:in_overworld"`,
+  `exclusive_set:"#minecraft:exclusive_set/armor"`,
+  `items:"#minecraft:sulfur_cube_archetype/bouncy"`) that an empty Update Tags
+  never binds.
 
-### Open Question 2 (must Update Tags be non-empty?) — NEEDS REVIEWER CONFIRMATION
+Ender now sends the **real vanilla 26.2 tag set for all 15 registries**, matching
+vanilla's per-registry tagCount exactly. The tag JSON is the authoritative 26.2
+datagen output, copied into the committed `server/registrydata/tags/` tree and
+`//go:embed`-ed (runtime reads only the embedded FS; never `temp/`).
 
-Per research Pitfall 4, the client kicks only on a **missing** Update Tags packet,
-not an empty one — so present-but-empty (Ender's current behavior) is expected to
-let the client reach Play. **This is the single remaining behavioral unknown for a
-real client.** The risk: tag-dependent gameplay (block/item tags drive a large
-amount of client logic) may degrade even if Play is reached. The decisive check is
-§6 below — if the real client reaches Play and behaves, empty tags are accepted for
-Phase 2; if it hangs or misbehaves on tag references, the minimal vanilla tag set
-(at least block/item/entity_type) must be mirrored in `registrydata.WriteTags` and
-Task 2 re-run.
+| Registry | Tags (== vanilla) | Entry refs* | | Registry | Tags (== vanilla) | Entry refs* |
+|----------|------|------|--|----------|------|------|
+| minecraft:block | 265 | 4126 | | minecraft:enchantment | 22 | 308 |
+| minecraft:item | 224 | 2712 | | minecraft:banner_pattern | 11 | 42 |
+| minecraft:worldgen/biome | 68 | 581 | | minecraft:fluid | 6 | 9 |
+| minecraft:entity_type | 48 | 375 | | minecraft:game_event | 5 | 121 |
+| minecraft:damage_type | 34 | 229 | | minecraft:timeline | 4 | 7 |
+| minecraft:point_of_interest_type | 3 | 30 | | minecraft:instrument | 3 | 16 |
+| minecraft:dialog | 2 | 0 | | minecraft:painting_variant | 1 | 47 |
+| minecraft:potion | 1 | 41 | | | | |
+
+*Entry refs = total numeric entry indices emitted across that registry's tags
+after expanding tag-of-tags (`#minecraft:other_tag`) to the union of their leaf
+entries and de-duplicating. `dialog` tags are legitimately empty in vanilla
+(`values: []`) — presence alone binds them, which is exactly what the client's
+`pause_screen_additions`/`quick_actions` unbound errors required.
+
+**Index resolution (entry resource-location → numeric network index):**
+- Built-in registries (`block`, `item`, `entity_type`, `fluid`, `game_event`,
+  `point_of_interest_type`, `potion`): index = position in the generated
+  `data/registryid` table (the authoritative jar-extracted network id order).
+- Datapack registries (`worldgen/biome`, `damage_type`, `enchantment`,
+  `banner_pattern`, `instrument`, `painting_variant`, `dialog`, `timeline`): index
+  = position in that registry's RegistryData send order, which `Load()` defines as
+  the sorted embedded entry filenames. `resolveDatapackIndices` reproduces exactly
+  that order, so a tag member's index equals the slot the entry occupies in the
+  RegistryData packet Ender actually sends.
+
+**Validation:** `TestUpdateTagsMatchesVanillaCounts` proves every member of every
+tag in all 15 registries resolves to a known entry index (no unknown-entry / no
+unresolvable `#tag` reference — i.e. no HARD blocker), and that the registry set +
+per-registry tag counts match vanilla 26.2 exactly. `TestUpdateTagsBindsReferencedTags`
+asserts the specific tags the real client reported UNBOUND
+(enchantment `exclusive_set/*`, `timeline in_*`, dialog) are present (and non-empty
+where they must bind). `TestWriteTagsWireRoundTrip` re-decodes the wire bytes at
+threshold −1 with zero trailing bytes. All pass natively and under `-race`
+(golang:1.26 Docker).
+
+### Open Question 2 (must Update Tags be non-empty?) — RESOLVED
+
+**ANSWERED by the real client: YES, it must be the real non-empty vanilla set.**
+The prior hypothesis (present-but-empty is enough) was DISPROVEN by a real 26.2
+client crash at Registry Loading. The fix is the full vanilla 15-registry tag set
+above; the §6 real-client re-test confirms a client now binds the referenced tags
+and proceeds past Registry/Tag Loading.
 
 ---
 
@@ -206,7 +249,8 @@ stuck at Loading terrain…" outcome.
 
 - `go build ./...`, `go vet ./...` — clean.
 - `go test ./server/ -run 'TestConfigSequence|TestConfigNoSilentKickOnError' -count=1 -timeout 60s` — pass (AcceptConfig + the fork's bot client complete the full 29-registry leg with no deadlock; bot decodes overworld + plains; Acknowledge round-trips; mid-sequence failure yields a ConfigFailErr with readable text).
-- `-race` (golang:1.26 Docker) on `./server/` + `./server/registrydata/` — pass.
+- `go test ./server/registrydata/ -run 'TestUpdateTags|TestWriteTags' -count=1 -timeout 60s` — pass (Update Tags: all 15 registries' members resolve to known indices, counts match vanilla exactly, the client's previously-unbound enchantment/timeline/dialog tags are bound, and the wire bytes round-trip with no trailing bytes).
+- `-race` (golang:1.26 Docker) on `./server/` + `./server/registrydata/` (incl. the new Update Tags tests) — pass.
 - Full suite `go test ./...` — green.
 
 ---
@@ -216,7 +260,7 @@ stuck at Loading terrain…" outcome.
 - [ ] Registry set + order match vanilla 26.2 — **machine-verified EXACT MATCH (29/29)**.
 - [ ] Per-registry entry counts match vanilla — **machine-verified EXACT MATCH**.
 - [ ] NBT shape (dimension_type/biome nested 26.2 schema) confirmed — **type-faithful guard green**.
-- [ ] Update Tags decision (empty-but-present accepted, OR mirror minimal vanilla set) — **reviewer confirms from §6 real-client behavior**.
+- [ ] Update Tags: **real vanilla 15-registry set now sent (empty stub was a confirmed HARD BLOCKER — real client crashed at Registry Loading on unbound tags); counts machine-verified EXACT MATCH (15/15)** — reviewer confirms a real client now passes Registry/Tag Loading (§6).
 - [ ] Packet IDs align (no 775/776 reshuffle) — **verified, no drift**.
 - [ ] **Unmodified vanilla 26.2 client reaches Play with no silent "Loading terrain…" hang** — **reviewer confirms (§6)**.
 

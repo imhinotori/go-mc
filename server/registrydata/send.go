@@ -46,17 +46,23 @@ func WriteRegistryData(conn PacketWriter) error {
 	return nil
 }
 
-// WriteTags sends a present (empty-but-valid for v1) ClientboundConfigUpdateTags.
-// Tags are never pack-sourced; the client only requires that a tags packet is
-// PRESENT so it does not kick on a tag reference. The minimal valid body is a
-// VarInt count of 0 — present but with no per-registry tag sets. When the 02-04
-// capture-diff reveals the minimal real set vanilla sends in config, this is
-// where that set gets mirrored.
+// WriteTags sends the real vanilla 26.2 ClientboundConfigUpdateTags: the 15
+// registries' tag sets (block, item, worldgen/biome, entity_type, damage_type,
+// enchantment, banner_pattern, fluid, game_event, timeline, instrument,
+// point_of_interest_type, dialog, painting_variant, potion) with the exact
+// vanilla tag counts and per-tag entry indices.
+//
+// This is NOT optional: an empty Update Tags leaves the tags referenced by the
+// RegistryData entries (enchantment exclusive_set/*, dimension_type/timeline
+// in_*, dialog quick_actions, sulfur_cube_archetype item tags) UNBOUND, and a
+// real 26.2 client aborts Registry Loading with "Unbound tags in registry …".
+// The tag content and index resolution live in tags.go (the wire format and the
+// built-in-vs-datapack index sourcing are documented there).
 func WriteTags(conn PacketWriter) error {
-	p := pk.Marshal(
-		packetid.ClientboundConfigUpdateTags,
-		pk.VarInt(0), // present body, zero per-registry tag sets
-	)
+	p, _, err := buildUpdateTagsPacket()
+	if err != nil {
+		return fmt.Errorf("registrydata: build update tags: %w", err)
+	}
 	if err := conn.WritePacket(p); err != nil {
 		return fmt.Errorf("registrydata: write update tags: %w", err)
 	}
