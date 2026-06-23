@@ -65,17 +65,51 @@ var registryFS embed.FS
 // registryDirs maps an on-disk directory under registries/ to the Minecraft
 // registry identifier sent in the RegistryData packet. The send order is the
 // slice order below; entries within each registry are sorted alphabetically by
-// key. This order is reproducible from the embedded tree — the 02-04 capture-diff
-// confirms the exact set/order vanilla emits (worldgen/biome is the only nested
-// directory, hence the explicit relative paths).
+// key.
+//
+// The set AND order below are the EXACT 29-registry sequence a real vanilla 26.2
+// server emits in the Configuration state, captured byte-for-byte by the 02-04
+// capture-diff (temp/captureclient against the cached 26.2 jar; see
+// NET04-CAPTURE-DIFF.md). The earlier 4-registry subset (chat_type, damage_type,
+// dimension_type, worldgen/biome) is NOT sufficient: the 26.2 client builds its
+// registry set from what the server sends after Select Known Packs, and a real
+// client hangs at "Loading terrain…" when the variant / painting / enchantment /
+// instrument / dialog / timeline registries it references are absent. Sending the
+// full vanilla set is the only path that matches vanilla and lets an unmodified
+// client reach Play (NET-04). worldgen/biome is the only nested directory.
 var registryDirs = []struct {
 	dir string // relative path under registries/
 	id  string // minecraft registry id
 }{
-	{"chat_type", "minecraft:chat_type"},
-	{"damage_type", "minecraft:damage_type"},
-	{"dimension_type", "minecraft:dimension_type"},
 	{"worldgen/biome", "minecraft:worldgen/biome"},
+	{"chat_type", "minecraft:chat_type"},
+	{"trim_pattern", "minecraft:trim_pattern"},
+	{"trim_material", "minecraft:trim_material"},
+	{"wolf_variant", "minecraft:wolf_variant"},
+	{"wolf_sound_variant", "minecraft:wolf_sound_variant"},
+	{"pig_variant", "minecraft:pig_variant"},
+	{"pig_sound_variant", "minecraft:pig_sound_variant"},
+	{"frog_variant", "minecraft:frog_variant"},
+	{"cat_variant", "minecraft:cat_variant"},
+	{"cat_sound_variant", "minecraft:cat_sound_variant"},
+	{"cow_sound_variant", "minecraft:cow_sound_variant"},
+	{"cow_variant", "minecraft:cow_variant"},
+	{"chicken_sound_variant", "minecraft:chicken_sound_variant"},
+	{"chicken_variant", "minecraft:chicken_variant"},
+	{"zombie_nautilus_variant", "minecraft:zombie_nautilus_variant"},
+	{"painting_variant", "minecraft:painting_variant"},
+	{"sulfur_cube_archetype", "minecraft:sulfur_cube_archetype"},
+	{"dimension_type", "minecraft:dimension_type"},
+	{"damage_type", "minecraft:damage_type"},
+	{"banner_pattern", "minecraft:banner_pattern"},
+	{"enchantment", "minecraft:enchantment"},
+	{"jukebox_song", "minecraft:jukebox_song"},
+	{"instrument", "minecraft:instrument"},
+	{"test_environment", "minecraft:test_environment"},
+	{"test_instance", "minecraft:test_instance"},
+	{"dialog", "minecraft:dialog"},
+	{"world_clock", "minecraft:world_clock"},
+	{"timeline", "minecraft:timeline"},
 }
 
 // Entry is one registry entry: its key (e.g. "minecraft:plains") and its
