@@ -100,6 +100,16 @@ type TickLoop struct {
 	// players join; dispatch treats a missing client as a cheap no-op (T-3-02).
 	clientIndex map[*Client]*tickPlayer
 
+	// register / unregister are the player join/leave seams (TICK-05). AcceptPlayer
+	// runs on the network-accept goroutine and MUST NOT mutate players/clientIndex
+	// directly — it sends the new tickPlayer on register (join) and the *Client on
+	// unregister (leave). The tick goroutine drains both non-blockingly in
+	// drainRegistrations and performs the actual map/slice mutation on-thread, so the
+	// per-player collection is only ever touched by its owner. Buffered so a join/leave
+	// never parks the accept goroutine on a busy tick (T-3-03).
+	register   chan *tickPlayer
+	unregister chan *Client
+
 	// applyInputHook is a test-only observability seam: when non-nil, applyInput
 	// invokes it with each resolved input so a test can assert chronological apply
 	// order without depending on Phase-6 physics. In production it stays nil and costs
@@ -133,15 +143,31 @@ type tickPlayer struct {
 	// for this player (new in 1.21.2 / present in 776). Phase 3 only records the
 	// boundary; reading its payload is deferred to Phase 6.
 	sawTickEnd bool
+
+	// keep is the independent keep-alive component (TICK-04); keepalive is this
+	// player's KeepAliveClient adapter. dispatch forwards a returning
+	// ServerboundKeepAlive to keep.ClientTick(keepalive) so the keep-alive bookkeeping
+	// is driven off the tick yet the timers stay on KeepAlive's OWN goroutine. Both are
+	// set by the tick goroutine at registration; nil for a player joined without
+	// keep-alive (dispatch guards the nil).
+	keep      *KeepAlive
+	keepalive KeepAliveClient
 }
 
 // NewTickLoop constructs a TickLoop over the given injectable clock with a
 // synchronous no-op tracker and a nil async channel (so applyAsyncResults is a
 // no-op). asyncIn and a real tracker are wired in Phase 8 with no pipeline change.
+// registerBuffer bounds the join/leave channels. Player joins/leaves are rare
+// relative to the 5ms wake, so a small buffer is ample; it exists only so a burst of
+// connects/disconnects never parks an accept goroutine waiting on a busy tick (T-3-03).
+const registerBuffer = 64
+
 func NewTickLoop(clock Clock) *TickLoop {
 	return &TickLoop{
-		clock:   clock,
-		tracker: noopTracker{},
+		clock:      clock,
+		tracker:    noopTracker{},
+		register:   make(chan *tickPlayer, registerBuffer),
+		unregister: make(chan *Client, registerBuffer),
 		// asyncIn stays nil (no-op seam); ring is zero-valued; gametime starts at 0.
 	}
 }
@@ -201,6 +227,11 @@ func (t *TickLoop) advanceDraining(now time.Time, inbound <-chan Intent) int {
 
 	steps := 0
 	for t.acc >= tickStep {
+		// Apply queued player joins/leaves on the owner goroutine BEFORE draining
+		// inbound, so a just-joined player's clientIndex entry exists when its first
+		// inbound packets are dispatched (TICK-05). Always drained (channels are nil-
+		// safe to select on; an empty channel falls straight through the default).
+		t.drainRegistrations()
 		if inbound != nil {
 			t.drainInbound(inbound) // non-blocking drain on the OWNER goroutine
 		}
@@ -226,6 +257,10 @@ func (t *TickLoop) Run(ctx context.Context, inbound <-chan Intent) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// Drain joins/leaves every wake (not only on a full step) so a player that
+			// joins between steps is registered promptly and its inbound packets route
+			// to a live clientIndex entry. drainRegistrations is non-blocking.
+			t.drainRegistrations()
 			t.advanceDraining(t.clock.Now(), inbound)
 		}
 	}
@@ -245,6 +280,52 @@ func (t *TickLoop) drainInbound(inbound <-chan Intent) {
 			t.dispatch(it.Client, it.Packet) // decode + route on the owner goroutine
 		default:
 			return // nothing queued: return immediately, never block
+		}
+	}
+}
+
+// drainRegistrations applies every queued player join/leave on the OWNER goroutine,
+// then returns immediately when both channels are empty (select-default) — it NEVER
+// parks the tick. A join inserts the tickPlayer into the tick-owned players slice and
+// clientIndex; a leave removes it. Because the actual mutation happens here (not in
+// AcceptPlayer's accept goroutine), the per-player collection is single-owner and the
+// boundary stays -race clean (T-3-03 / TICK-05).
+func (t *TickLoop) drainRegistrations() {
+	for {
+		select {
+		case p := <-t.register:
+			if t.clientIndex == nil {
+				t.clientIndex = make(map[*Client]*tickPlayer)
+			}
+			if _, exists := t.clientIndex[p.client]; !exists {
+				t.players = append(t.players, p)
+				t.clientIndex[p.client] = p
+			}
+		case c := <-t.unregister:
+			t.removePlayer(c)
+		default:
+			return // nothing queued: return immediately, never block
+		}
+	}
+}
+
+// removePlayer deletes the tick-owned player for c from clientIndex and the players
+// slice. Owner-goroutine only (called from drainRegistrations). A missing client is a
+// cheap no-op so a double-leave can never panic.
+func (t *TickLoop) removePlayer(c *Client) {
+	p, ok := t.clientIndex[c]
+	if !ok {
+		return
+	}
+	delete(t.clientIndex, c)
+	for i, pl := range t.players {
+		if pl == p {
+			// swap-remove: order in the players slice is not significant.
+			last := len(t.players) - 1
+			t.players[i] = t.players[last]
+			t.players[last] = nil
+			t.players = t.players[:last]
+			break
 		}
 	}
 }
@@ -284,8 +365,15 @@ func (t *TickLoop) dispatch(c *Client, p pk.Packet) {
 			player.sawTickEnd = true
 		}
 	case packetid.ServerboundKeepAlive:
-		// Keep-alive responses are forwarded to the independent KeepAlive timer in
-		// 03-03; nothing to do on the tick goroutine here.
+		// Forward a returning keep-alive to the independent KeepAlive component so it
+		// can move the player back to the ping list and reset the wait timer (TICK-04).
+		// The bookkeeping is DRIVEN off the tick (we route the response here) but the
+		// timers live on KeepAlive's OWN goroutine: ClientTick sends on KeepAlive.tick,
+		// which KeepAlive.Run selects on — never gated on tick cadence (T-3-05). A
+		// player without a wired adapter is a cheap no-op.
+		if player != nil && player.keep != nil && player.keepalive != nil {
+			player.keep.ClientTick(player.keepalive)
+		}
 	default:
 		// Unknown / not-yet-handled IDs are cheap no-ops: never block, never panic.
 	}
