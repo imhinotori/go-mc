@@ -17,7 +17,6 @@ import (
 
 	"github.com/imhinotori/go-mc/chat"
 	"github.com/imhinotori/go-mc/net"
-	"github.com/imhinotori/go-mc/registry"
 	"github.com/imhinotori/go-mc/server"
 	"github.com/imhinotori/go-mc/yggdrasil/user"
 
@@ -77,11 +76,11 @@ func newServer() *server.Server {
 			OnlineMode: false,                // offline: UUID derived from username
 			Threshold:  compressionThreshold, // Set Compression negotiated before LoginSuccess
 		},
-		ConfigHandler: &server.Configurations{
-			// Registry data is populated by Plan 02-03/02-04; an empty network codec
-			// keeps the assembly buildable for the Phase-2 gate.
-			Registries: registry.NewNetworkCodec(),
-		},
+		// The Configuration sequence (Known Packs → Feature Flags → Registry Data →
+		// Update Tags → Finish → Acknowledge) is implemented in AcceptConfig; the
+		// registry payload is sourced from the embedded real 26.2 NBT in
+		// server/registrydata, so Configurations needs no fields (Plan 02-04).
+		ConfigHandler: &server.Configurations{},
 		GamePlay: stubGamePlay{},
 	}
 }
