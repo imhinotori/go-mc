@@ -90,7 +90,7 @@ func (s *Server) AcceptConn(conn *net.Conn) {
 			}
 			return
 		}
-		s.AcceptConfig(conn)
+		err = s.AcceptConfig(conn)
 		if err != nil {
 			var configErr ConfigFailErr
 			if errors.As(err, &configErr) {

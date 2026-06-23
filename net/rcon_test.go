@@ -141,14 +141,11 @@ func ExampleDialRCON() {
 		panic(err)
 	}
 
-	for {
-		// Server may send the result in more(or less) than one packet.
-		// See: https://wiki.vg/RCON#Fragmentation
-		resp, err := conn.Resp()
-		if err != nil {
-			fmt.Print(err)
-		}
-		fmt.Printf("Server response: %q", resp)
-		break
+	// Server may send the result in more(or less) than one packet.
+	// See: https://wiki.vg/RCON#Fragmentation
+	resp, err := conn.Resp()
+	if err != nil {
+		fmt.Print(err)
 	}
+	fmt.Printf("Server response: %q", resp)
 }
