@@ -7,11 +7,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/imhinotori/go-mc/chat"
-	"github.com/imhinotori/go-mc/data/packetid"
-	netmc "github.com/imhinotori/go-mc/net"
-	pk "github.com/imhinotori/go-mc/net/packet"
-	"github.com/imhinotori/go-mc/yggdrasil/user"
+	"github.com/imhinotori/sulfur/chat"
+	"github.com/imhinotori/sulfur/data/packetid"
+	netmc "github.com/imhinotori/sulfur/net"
+	pk "github.com/imhinotori/sulfur/net/packet"
+	"github.com/imhinotori/sulfur/yggdrasil/user"
 )
 
 // sendHandshake writes a handshake packet (id 0x00) on the client end of the pipe

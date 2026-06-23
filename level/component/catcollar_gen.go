@@ -2,7 +2,7 @@
 package component
 
 import (
-	pk "github.com/imhinotori/go-mc/net/packet"
+	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
 var _ DataComponent = (*CatCollar)(nil)

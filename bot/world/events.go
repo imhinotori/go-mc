@@ -1,6 +1,6 @@
 package world
 
-import "github.com/imhinotori/go-mc/level"
+import "github.com/imhinotori/sulfur/level"
 
 type EventsListener struct {
 	LoadChunk   func(pos level.ChunkPos) error

@@ -144,11 +144,11 @@ func detectGoMCRoot() (string, error) {
 		if err != nil {
 			continue
 		}
-		if strings.Contains(string(data), "module github.com/imhinotori/go-mc\n") {
+		if strings.Contains(string(data), "module github.com/imhinotori/sulfur\n") {
 			return d, nil
 		}
 	}
-	return "", fmt.Errorf("cannot find go-mc root from %s (need go.mod with module github.com/imhinotori/go-mc)", wd)
+	return "", fmt.Errorf("cannot find go-mc root from %s (need go.mod with module github.com/imhinotori/sulfur)", wd)
 }
 
 func printUsage() {

@@ -3,9 +3,9 @@ package component
 import (
 	"io"
 
-	"github.com/imhinotori/go-mc/chat"
-	"github.com/imhinotori/go-mc/nbt/dynbt"
-	pk "github.com/imhinotori/go-mc/net/packet"
+	"github.com/imhinotori/sulfur/chat"
+	"github.com/imhinotori/sulfur/nbt/dynbt"
+	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
 // IDSet represents a registryEntryHolderSet.

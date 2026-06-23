@@ -10,9 +10,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/imhinotori/go-mc/nbt"
-	"github.com/imhinotori/go-mc/nbt/dynbt"
-	"github.com/imhinotori/go-mc/save/region"
+	"github.com/imhinotori/sulfur/nbt"
+	"github.com/imhinotori/sulfur/nbt/dynbt"
+	"github.com/imhinotori/sulfur/save/region"
 	"github.com/google/uuid"
 )
 

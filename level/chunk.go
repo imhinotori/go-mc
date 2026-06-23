@@ -9,10 +9,10 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/imhinotori/go-mc/level/block"
-	"github.com/imhinotori/go-mc/nbt"
-	pk "github.com/imhinotori/go-mc/net/packet"
-	"github.com/imhinotori/go-mc/save"
+	"github.com/imhinotori/sulfur/level/block"
+	"github.com/imhinotori/sulfur/nbt"
+	pk "github.com/imhinotori/sulfur/net/packet"
+	"github.com/imhinotori/sulfur/save"
 )
 
 type ChunkPos [2]int32

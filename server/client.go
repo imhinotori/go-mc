@@ -5,9 +5,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/imhinotori/go-mc/net"
-	pk "github.com/imhinotori/go-mc/net/packet"
-	"github.com/imhinotori/go-mc/net/queue"
+	"github.com/imhinotori/sulfur/net"
+	pk "github.com/imhinotori/sulfur/net/packet"
+	"github.com/imhinotori/sulfur/net/queue"
 )
 
 // Packet758 is a packet in protocol 757.

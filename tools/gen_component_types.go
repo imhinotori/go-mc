@@ -218,10 +218,10 @@ func newImportSet() *importSet {
 }
 
 func (is *importSet) addIO()    { is.entries["io"] = "" }
-func (is *importSet) addPk()    { is.entries["github.com/imhinotori/go-mc/net/packet"] = "pk" }
-func (is *importSet) addDynbt() { is.entries["github.com/imhinotori/go-mc/nbt/dynbt"] = "" }
-func (is *importSet) addChat()  { is.entries["github.com/imhinotori/go-mc/chat"] = "" }
-func (is *importSet) addBlock() { is.entries["github.com/imhinotori/go-mc/level/block"] = "" }
+func (is *importSet) addPk()    { is.entries["github.com/imhinotori/sulfur/net/packet"] = "pk" }
+func (is *importSet) addDynbt() { is.entries["github.com/imhinotori/sulfur/nbt/dynbt"] = "" }
+func (is *importSet) addChat()  { is.entries["github.com/imhinotori/sulfur/chat"] = "" }
+func (is *importSet) addBlock() { is.entries["github.com/imhinotori/sulfur/level/block"] = "" }
 
 // addForType adds imports required for a given type string.
 func (is *importSet) addForType(typ string) {

@@ -1,10 +1,10 @@
 package server
 
 import (
-	"github.com/imhinotori/go-mc/chat"
-	"github.com/imhinotori/go-mc/data/packetid"
-	"github.com/imhinotori/go-mc/net"
-	pk "github.com/imhinotori/go-mc/net/packet"
+	"github.com/imhinotori/sulfur/chat"
+	"github.com/imhinotori/sulfur/data/packetid"
+	"github.com/imhinotori/sulfur/net"
+	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
 // ConnState identifies which protocol state a connection is in when it must be

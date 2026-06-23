@@ -1,4 +1,4 @@
-// Command ender is the runnable Ender server entrypoint. It assembles the Phase-2
+// Command sulfur is the runnable Sulfur server entrypoint. It assembles the Phase-2
 // protocol gate over the fork's existing primitives:
 //
 //   - a proto-776 ListPingHandler (NET-02): version 26.2 / protocol 776 / MOTD / players
@@ -15,17 +15,17 @@ import (
 	"flag"
 	"log"
 
-	"github.com/imhinotori/go-mc/chat"
-	"github.com/imhinotori/go-mc/net"
-	"github.com/imhinotori/go-mc/server"
-	"github.com/imhinotori/go-mc/yggdrasil/user"
+	"github.com/imhinotori/sulfur/chat"
+	"github.com/imhinotori/sulfur/net"
+	"github.com/imhinotori/sulfur/server"
+	"github.com/imhinotori/sulfur/yggdrasil/user"
 
 	"github.com/google/uuid"
 )
 
 const (
 	// defaultMOTD is the server-list description shown to clients (NET-02).
-	defaultMOTD = "Ender — a Minecraft 26.2 server in Go"
+	defaultMOTD = "Sulfur — a Minecraft 26.2 server in Go"
 	// compressionThreshold is the Set Compression threshold negotiated during login
 	// (NET-03). 256 is the vanilla default; any value >= 0 enables compression.
 	compressionThreshold = 256
@@ -90,7 +90,7 @@ func main() {
 	flag.Parse()
 
 	srv := newServer()
-	srv.Logger.Printf("Ender listening on %s (protocol %d, %s)",
+	srv.Logger.Printf("Sulfur listening on %s (protocol %d, %s)",
 		*addr, server.ProtocolVersion, server.ProtocolName)
 	log.Fatal(srv.Listen(*addr))
 }

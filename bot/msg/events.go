@@ -1,6 +1,6 @@
 package msg
 
-import "github.com/imhinotori/go-mc/chat"
+import "github.com/imhinotori/sulfur/chat"
 
 // EventsHandler is a collection of event handlers.
 // Fill the fields with your handler functions and pass this struct to [New] to create the msg manager.

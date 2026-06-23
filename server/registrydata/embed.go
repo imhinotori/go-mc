@@ -22,7 +22,7 @@
 //
 // CONVERSION APPROACH (plan option "c" — carry the vanilla type schema, applied
 // lexically): we decode the JSON with json.Decoder + UseNumber() so every number
-// keeps its original textual token, then build a github.com/imhinotori/go-mc/nbt/dynbt
+// keeps its original textual token, then build a github.com/imhinotori/sulfur/nbt/dynbt
 // tree where we choose the concrete NBT tag type per value:
 //
 //	JSON bool            -> TagByte   (Minecraft booleans are NBT bytes)
@@ -56,7 +56,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/imhinotori/go-mc/nbt/dynbt"
+	"github.com/imhinotori/sulfur/nbt/dynbt"
 )
 
 //go:embed registries

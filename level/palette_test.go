@@ -4,7 +4,7 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/imhinotori/go-mc/level/block"
+	"github.com/imhinotori/sulfur/level/block"
 )
 
 func TestPaletteContainer_seq(t *testing.T) {

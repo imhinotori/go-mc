@@ -7,9 +7,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/imhinotori/go-mc/chat"
-	pk "github.com/imhinotori/go-mc/net/packet"
-	"github.com/imhinotori/go-mc/yggdrasil/user"
+	"github.com/imhinotori/sulfur/chat"
+	pk "github.com/imhinotori/sulfur/net/packet"
+	"github.com/imhinotori/sulfur/yggdrasil/user"
 )
 
 type Message struct {

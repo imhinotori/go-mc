@@ -3,7 +3,7 @@ package component
 import (
 	"io"
 
-	pk "github.com/imhinotori/go-mc/net/packet"
+	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
 // EitherHolder represents a value that is either a registry holder reference (VarInt)

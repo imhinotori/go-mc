@@ -15,8 +15,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/imhinotori/go-mc/bot"
-	"github.com/imhinotori/go-mc/chat"
+	"github.com/imhinotori/sulfur/bot"
+	"github.com/imhinotori/sulfur/chat"
 )
 
 var (

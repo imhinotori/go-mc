@@ -3,9 +3,9 @@ package chat_test
 import (
 	"testing"
 
-	"github.com/imhinotori/go-mc/chat"
-	en_us "github.com/imhinotori/go-mc/data/lang/en-us"
-	"github.com/imhinotori/go-mc/nbt"
+	"github.com/imhinotori/sulfur/chat"
+	en_us "github.com/imhinotori/sulfur/data/lang/en-us"
+	"github.com/imhinotori/sulfur/nbt"
 )
 
 func TestMessage_UnmarshalJSON_string(t *testing.T) {

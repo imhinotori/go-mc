@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/imhinotori/go-mc/chat"
-	"github.com/imhinotori/go-mc/data/packetid"
-	pk "github.com/imhinotori/go-mc/net/packet"
+	"github.com/imhinotori/sulfur/chat"
+	"github.com/imhinotori/sulfur/data/packetid"
+	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
 // pingHandler776 is the concrete ListPingHandler used by the assembled server. It

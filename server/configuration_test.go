@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/imhinotori/go-mc/bot"
+	"github.com/imhinotori/sulfur/bot"
 )
 
 // configuration_test.go is the NET-04 self-consistency integration test: it runs

@@ -3,8 +3,8 @@ package component
 import (
 	"io"
 
-	"github.com/imhinotori/go-mc/nbt/dynbt"
-	pk "github.com/imhinotori/go-mc/net/packet"
+	"github.com/imhinotori/sulfur/nbt/dynbt"
+	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
 var _ DataComponent = (*AttributeModifiers)(nil)

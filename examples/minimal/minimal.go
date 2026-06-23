@@ -7,10 +7,10 @@ import (
 	"flag"
 	"log"
 
-	"github.com/imhinotori/go-mc/bot"
-	"github.com/imhinotori/go-mc/bot/basic"
-	"github.com/imhinotori/go-mc/chat"
-	//_ "github.com/imhinotori/go-mc/data/lang/zh-cn"
+	"github.com/imhinotori/sulfur/bot"
+	"github.com/imhinotori/sulfur/bot/basic"
+	"github.com/imhinotori/sulfur/chat"
+	//_ "github.com/imhinotori/sulfur/data/lang/zh-cn"
 )
 
 var (

@@ -1,4 +1,4 @@
-module github.com/imhinotori/go-mc
+module github.com/imhinotori/sulfur
 
 go 1.22
 

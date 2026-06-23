@@ -5,11 +5,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/imhinotori/go-mc/data/packetid"
-	netmc "github.com/imhinotori/go-mc/net"
-	pk "github.com/imhinotori/go-mc/net/packet"
-	"github.com/imhinotori/go-mc/offline"
-	"github.com/imhinotori/go-mc/yggdrasil/user"
+	"github.com/imhinotori/sulfur/data/packetid"
+	netmc "github.com/imhinotori/sulfur/net"
+	pk "github.com/imhinotori/sulfur/net/packet"
+	"github.com/imhinotori/sulfur/offline"
+	"github.com/imhinotori/sulfur/yggdrasil/user"
 )
 
 // reachConfig is a ConfigHandler stub that records that AcceptConfig was reached —

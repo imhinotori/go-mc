@@ -4,7 +4,7 @@ import (
 	"errors"
 	"io"
 
-	"github.com/imhinotori/go-mc/nbt"
+	"github.com/imhinotori/sulfur/nbt"
 )
 
 func (v *Value) TagType() byte { return v.tag }

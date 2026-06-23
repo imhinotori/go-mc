@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	pk "github.com/imhinotori/go-mc/net/packet"
+	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
 func ExampleAry_WriteTo() {

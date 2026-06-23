@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"time"
 
-	pk "github.com/imhinotori/go-mc/net/packet"
+	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
 const DefaultPort = 25565

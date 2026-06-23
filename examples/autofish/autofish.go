@@ -6,14 +6,14 @@ import (
 
 	//"github.com/mattn/go-colorable"
 
-	"github.com/imhinotori/go-mc/bot"
-	"github.com/imhinotori/go-mc/bot/basic"
-	"github.com/imhinotori/go-mc/bot/msg"
-	"github.com/imhinotori/go-mc/bot/playerlist"
-	"github.com/imhinotori/go-mc/chat"
-	_ "github.com/imhinotori/go-mc/data/lang/en-us"
-	"github.com/imhinotori/go-mc/data/packetid"
-	pk "github.com/imhinotori/go-mc/net/packet"
+	"github.com/imhinotori/sulfur/bot"
+	"github.com/imhinotori/sulfur/bot/basic"
+	"github.com/imhinotori/sulfur/bot/msg"
+	"github.com/imhinotori/sulfur/bot/playerlist"
+	"github.com/imhinotori/sulfur/chat"
+	_ "github.com/imhinotori/sulfur/data/lang/en-us"
+	"github.com/imhinotori/sulfur/data/packetid"
+	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
 const timeout = 45

@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/imhinotori/go-mc/chat"
-	"github.com/imhinotori/go-mc/data/packetid"
-	netmc "github.com/imhinotori/go-mc/net"
-	pk "github.com/imhinotori/go-mc/net/packet"
+	"github.com/imhinotori/sulfur/chat"
+	"github.com/imhinotori/sulfur/data/packetid"
+	netmc "github.com/imhinotori/sulfur/net"
+	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
 // concWriter is an io.Writer that (a) detects any concurrent Write call (the

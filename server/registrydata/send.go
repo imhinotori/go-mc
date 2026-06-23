@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/imhinotori/go-mc/data/packetid"
-	pk "github.com/imhinotori/go-mc/net/packet"
+	"github.com/imhinotori/sulfur/data/packetid"
+	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
 // PacketWriter is the minimal subset of *net.Conn the send helpers need.
-// *github.com/imhinotori/go-mc/net.Conn satisfies it, and tests can supply an
+// *github.com/imhinotori/sulfur/net.Conn satisfies it, and tests can supply an
 // in-memory recorder. Keeping the dependency at this interface lets the
 // registrydata package stay free of a hard *net.Conn import and be round-tripped
 // through the fork's bot/ client decoder in isolation.

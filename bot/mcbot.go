@@ -10,11 +10,11 @@ import (
 	"net"
 	"strconv"
 
-	"github.com/imhinotori/go-mc/chat"
-	mcnet "github.com/imhinotori/go-mc/net"
-	pk "github.com/imhinotori/go-mc/net/packet"
-	"github.com/imhinotori/go-mc/net/queue"
-	"github.com/imhinotori/go-mc/yggdrasil/user"
+	"github.com/imhinotori/sulfur/chat"
+	mcnet "github.com/imhinotori/sulfur/net"
+	pk "github.com/imhinotori/sulfur/net/packet"
+	"github.com/imhinotori/sulfur/net/queue"
+	"github.com/imhinotori/sulfur/yggdrasil/user"
 )
 
 // ProtocolVersion is the protocol version number of minecraft net protocol

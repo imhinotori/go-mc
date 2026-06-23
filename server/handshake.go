@@ -1,8 +1,8 @@
 package server
 
 import (
-	"github.com/imhinotori/go-mc/net"
-	pk "github.com/imhinotori/go-mc/net/packet"
+	"github.com/imhinotori/sulfur/net"
+	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
 func (s *Server) handshake(conn *net.Conn) (protocol int32, intention int32, err error) {

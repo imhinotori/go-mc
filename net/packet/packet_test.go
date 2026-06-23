@@ -7,7 +7,7 @@ import (
 	"io"
 	"testing"
 
-	pk "github.com/imhinotori/go-mc/net/packet"
+	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
 // TestMaxDataLength proves the 2^21 (MaxDataLength) cap rejects oversized frames on

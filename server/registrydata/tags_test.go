@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/imhinotori/go-mc/data/packetid"
-	pk "github.com/imhinotori/go-mc/net/packet"
+	"github.com/imhinotori/sulfur/data/packetid"
+	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
 // wantTagCounts is the EXACT per-registry tagCount a real vanilla 26.2 server

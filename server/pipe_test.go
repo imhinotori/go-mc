@@ -4,7 +4,7 @@ import (
 	stdnet "net"
 	"testing"
 
-	netmc "github.com/imhinotori/go-mc/net"
+	netmc "github.com/imhinotori/sulfur/net"
 )
 
 // pipe_test.go provides the shared in-memory connection harness reused by every

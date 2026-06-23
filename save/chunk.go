@@ -7,7 +7,7 @@ import (
 	"errors"
 	"io"
 
-	"github.com/imhinotori/go-mc/nbt"
+	"github.com/imhinotori/sulfur/nbt"
 )
 
 // Chunk is 16* chunk

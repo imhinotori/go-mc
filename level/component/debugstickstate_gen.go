@@ -4,8 +4,8 @@ package component
 import (
 	"io"
 
-	"github.com/imhinotori/go-mc/level/block"
-	pk "github.com/imhinotori/go-mc/net/packet"
+	"github.com/imhinotori/sulfur/level/block"
+	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
 var _ DataComponent = (*DebugStickState)(nil)

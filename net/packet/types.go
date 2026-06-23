@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/imhinotori/go-mc/nbt"
+	"github.com/imhinotori/sulfur/nbt"
 )
 
 // A Field is both FieldEncoder and FieldDecoder

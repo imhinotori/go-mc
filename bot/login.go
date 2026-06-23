@@ -17,11 +17,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/imhinotori/go-mc/chat"
-	"github.com/imhinotori/go-mc/data/packetid"
-	"github.com/imhinotori/go-mc/net"
-	"github.com/imhinotori/go-mc/net/CFB8"
-	pk "github.com/imhinotori/go-mc/net/packet"
+	"github.com/imhinotori/sulfur/chat"
+	"github.com/imhinotori/sulfur/data/packetid"
+	"github.com/imhinotori/sulfur/net"
+	"github.com/imhinotori/sulfur/net/CFB8"
+	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
 type LoginErr struct {

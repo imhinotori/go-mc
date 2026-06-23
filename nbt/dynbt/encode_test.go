@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/imhinotori/go-mc/nbt"
+	"github.com/imhinotori/sulfur/nbt"
 )
 
 func TestValue_new(t *testing.T) {

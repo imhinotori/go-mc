@@ -11,12 +11,12 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/imhinotori/go-mc/bot"
-	"github.com/imhinotori/go-mc/chat"
-	"github.com/imhinotori/go-mc/chat/sign"
-	"github.com/imhinotori/go-mc/data/packetid"
-	pk "github.com/imhinotori/go-mc/net/packet"
-	"github.com/imhinotori/go-mc/yggdrasil/user"
+	"github.com/imhinotori/sulfur/bot"
+	"github.com/imhinotori/sulfur/chat"
+	"github.com/imhinotori/sulfur/chat/sign"
+	"github.com/imhinotori/sulfur/data/packetid"
+	pk "github.com/imhinotori/sulfur/net/packet"
+	"github.com/imhinotori/sulfur/yggdrasil/user"
 )
 
 type PlayerList struct {

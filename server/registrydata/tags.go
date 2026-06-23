@@ -68,9 +68,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/imhinotori/go-mc/data/packetid"
-	"github.com/imhinotori/go-mc/data/registryid"
-	pk "github.com/imhinotori/go-mc/net/packet"
+	"github.com/imhinotori/sulfur/data/packetid"
+	"github.com/imhinotori/sulfur/data/registryid"
+	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
 //go:embed tags

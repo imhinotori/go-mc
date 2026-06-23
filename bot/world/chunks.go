@@ -3,11 +3,11 @@ package world
 import (
 	"fmt"
 
-	"github.com/imhinotori/go-mc/bot"
-	"github.com/imhinotori/go-mc/bot/basic"
-	"github.com/imhinotori/go-mc/data/packetid"
-	"github.com/imhinotori/go-mc/level"
-	pk "github.com/imhinotori/go-mc/net/packet"
+	"github.com/imhinotori/sulfur/bot"
+	"github.com/imhinotori/sulfur/bot/basic"
+	"github.com/imhinotori/sulfur/data/packetid"
+	"github.com/imhinotori/sulfur/level"
+	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
 type World struct {

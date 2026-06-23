@@ -12,7 +12,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/imhinotori/go-mc/save/region"
+	"github.com/imhinotori/sulfur/save/region"
 )
 
 var (

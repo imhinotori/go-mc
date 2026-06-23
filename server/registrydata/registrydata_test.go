@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/imhinotori/go-mc/data/packetid"
-	"github.com/imhinotori/go-mc/nbt"
-	"github.com/imhinotori/go-mc/nbt/dynbt"
-	pk "github.com/imhinotori/go-mc/net/packet"
-	"github.com/imhinotori/go-mc/registry"
+	"github.com/imhinotori/sulfur/data/packetid"
+	"github.com/imhinotori/sulfur/nbt"
+	"github.com/imhinotori/sulfur/nbt/dynbt"
+	pk "github.com/imhinotori/sulfur/net/packet"
+	"github.com/imhinotori/sulfur/registry"
 )
 
 // bufConn is a minimal sink/source that records the packets WriteRegistryData /

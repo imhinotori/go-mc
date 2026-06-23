@@ -96,7 +96,7 @@ func genOneLang(langJsonDir, goMCRoot, name string) error {
 
 	// Non-English languages register themselves via init().
 	if name != "en_us" {
-		buf.WriteString("\nimport \"github.com/imhinotori/go-mc/chat\"\n\nfunc init() { chat.SetLanguage(Map) }\n")
+		buf.WriteString("\nimport \"github.com/imhinotori/sulfur/chat\"\n\nfunc init() { chat.SetLanguage(Map) }\n")
 	}
 
 	buf.WriteString("\nvar Map = map[string]string{\n")

@@ -3,7 +3,7 @@ package basic
 import (
 	"bytes"
 
-	pk "github.com/imhinotori/go-mc/net/packet"
+	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
 func (p *Player) handleUpdateTags(packet pk.Packet) error {

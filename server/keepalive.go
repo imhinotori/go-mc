@@ -6,7 +6,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/imhinotori/go-mc/chat"
+	"github.com/imhinotori/sulfur/chat"
 )
 
 // keepAliveInterval represents the interval when the server sends keep alive
