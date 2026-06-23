@@ -6,8 +6,9 @@ package server
 // step. Each phase is an empty stub today (later phases fill them); the call ORDER
 // is the load-bearing contract asserted by TestTickPhaseOrder.
 //
-// The gametime++ and recordMSPT accounting are appended to this method in Task 2.
 func (t *TickLoop) tickOnce() {
+	start := t.clock.Now() // capture via the injectable clock for MSPT (TICK-06)
+
 	t.resolveSubtickInputs() // no-op slot in this plan; 03-02 fills the subtick buffer
 	t.tickWorld()            // Phase 4 fills
 	t.tickChunks()           // Phase 4 fills
@@ -18,6 +19,9 @@ func (t *TickLoop) tickOnce() {
 	t.trace("tracker.Tick")  // record the tracking phase at its call site
 	t.tracker.Tick()         // synchronous stub today; Phase 8 swaps the executor
 	t.flushOutbound()        // enqueue clientbound via Client.Send (no-op until players join)
+
+	t.gametime++                          // EXACTLY once per logical tick — anchors TICK-02
+	t.recordMSPT(t.clock.Now().Sub(start)) // publish the read-only telemetry snapshot (TICK-06)
 }
 
 // applyAsyncResults is the async rejoin seam (TICK-05). It is a genuine no-op today
