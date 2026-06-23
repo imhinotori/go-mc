@@ -1,12 +1,47 @@
 package registry
 
 import (
-	"errors"
 	"io"
-	"strconv"
 
 	pk "github.com/Tnze/go-mc/net/packet"
 )
+
+func (reg *Registry[E]) WriteTo(w io.Writer) (int64, error) {
+	length := pk.VarInt(len(reg.values))
+	n, err := length.WriteTo(w)
+	if err != nil {
+		return n, err
+	}
+
+	// Build reverse map: index → key name.
+	names := make([]string, len(reg.values))
+	for name, idx := range reg.keys {
+		names[idx] = name
+	}
+
+	for i := range reg.values {
+		key := pk.Identifier(names[i])
+		n1, err := key.WriteTo(w)
+		n += n1
+		if err != nil {
+			return n, err
+		}
+
+		hasData := pk.Boolean(true)
+		n2, err := hasData.WriteTo(w)
+		n += n2
+		if err != nil {
+			return n, err
+		}
+
+		n3, err := pk.NBTField{V: &reg.values[i]}.WriteTo(w)
+		n += n3
+		if err != nil {
+			return n, err
+		}
+	}
+	return n, nil
+}
 
 func (reg *Registry[E]) ReadFrom(r io.Reader) (int64, error) {
 	var length pk.VarInt
@@ -38,8 +73,12 @@ func (reg *Registry[E]) ReadFrom(r io.Reader) (int64, error) {
 			if err != nil {
 				return n + n1 + n2 + n3, err
 			}
-			reg.Put(string(key), data)
 		}
+
+		// Always register the entry (even without data) so that numeric
+		// IDs match the server's ordering. Tags reference entries by index,
+		// and skipping data-less entries would cause ID mismatches.
+		reg.Put(string(key), data)
 
 		n += n1 + n2 + n3
 	}
@@ -78,12 +117,12 @@ func (reg *Registry[E]) ReadTagsFrom(r io.Reader) (int64, error) {
 				return n + n3, err
 			}
 
-			if id < 0 || int(id) >= len(reg.values) {
-				err = errors.New("invalid id: " + strconv.Itoa(int(id)))
-				return n + n3, err
+			if id >= 0 && int(id) < len(reg.values) {
+				values[i] = &reg.values[id]
 			}
-
-			values[i] = &reg.values[id]
+			// Tags may reference entries from "known packs" registries
+			// (e.g. minecraft:block, minecraft:item) that the client
+			// doesn't have populated via RegistryData. Skip gracefully.
 			n += n3
 		}
 

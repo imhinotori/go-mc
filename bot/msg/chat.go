@@ -68,6 +68,7 @@ func (m *Manager) handleSystemChat(p pk.Packet) error {
 
 func (m *Manager) handlePlayerChat(packet pk.Packet) error {
 	var (
+		globalIndex     pk.VarInt
 		sender          pk.UUID
 		index           pk.VarInt
 		signature       pk.Option[sign.Signature, *sign.Signature]
@@ -76,7 +77,7 @@ func (m *Manager) handlePlayerChat(packet pk.Packet) error {
 		filter          sign.FilterMask
 		chatType        chat.Type
 	)
-	if err := packet.Scan(&sender, &index, &signature, &body, &unsignedContent, &filter, &chatType); err != nil {
+	if err := packet.Scan(&globalIndex, &sender, &index, &signature, &body, &unsignedContent, &filter, &chatType); err != nil {
 		return err
 	}
 

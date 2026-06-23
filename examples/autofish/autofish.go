@@ -81,15 +81,18 @@ var soundListener = bot.PacketHandler{
 	Priority: 0,
 	F: func(p pk.Packet) error {
 		var (
-			SoundID       pk.VarInt
+			SoundID       pk.VarInt // Wire value is registry_id + 1 (0 means inline sound event)
 			SoundCategory pk.VarInt
 			X, Y, Z       pk.Int
 			Volume, Pitch pk.Float
+			Seed          pk.Long
 		)
-		if err := p.Scan(&SoundID, &SoundCategory, &X, &Y, &Z, &Volume, &Pitch); err != nil {
+		if err := p.Scan(&SoundID, &SoundCategory, &X, &Y, &Z, &Volume, &Pitch, &Seed); err != nil {
 			return err
 		}
-		return onSound(int(SoundID), int(SoundCategory), float64(X)/8, float64(Y)/8, float64(Z)/8, float32(Volume), float32(Pitch))
+		// Convert from wire format (registry_id + 1) to actual sound ID
+		actualID := int(SoundID) - 1
+		return onSound(actualID, int(SoundCategory), float64(X)/8, float64(Y)/8, float64(Z)/8, float32(Volume), float32(Pitch))
 	},
 }
 
@@ -97,12 +100,15 @@ func UseItem(hand int32) error {
 	return c.Conn.WritePacket(pk.Marshal(
 		packetid.ServerboundUseItem,
 		pk.VarInt(hand),
+		pk.VarInt(0), // Sequence
+		pk.Float(0),  // Yaw
+		pk.Float(0),  // Pitch
 	))
 }
 
 //goland:noinspection SpellCheckingInspection
 func onSound(id int, category int, x, y, z float64, volume, pitch float32) error {
-	if id == 369 {
+	if id == 609 { // entity.fishing_bobber.splash
 		if err := UseItem(0); err != nil { // retrieve
 			return err
 		}

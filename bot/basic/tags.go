@@ -2,7 +2,6 @@ package basic
 
 import (
 	"bytes"
-	"errors"
 
 	pk "github.com/Tnze/go-mc/net/packet"
 )
@@ -24,10 +23,6 @@ func (p *Player) handleUpdateTags(packet pk.Packet) error {
 		}
 
 		registry := p.c.Registries.Registry(string(registryID))
-		if registry == nil {
-			return Error{errors.New("unknown registry: " + string(registryID))}
-		}
-
 		_, err = registry.ReadTagsFrom(r)
 		if err != nil {
 			return Error{err}

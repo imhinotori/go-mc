@@ -2,7 +2,6 @@ package bot
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
 
@@ -150,9 +149,6 @@ func (c *Client) joinConfiguration(conn *net.Conn) error {
 			}
 
 			registry := c.Registries.Registry(string(registryID))
-			if registry == nil {
-				return ConfigErr{ErrStage, errors.New("unknown registry: " + string(registryID))}
-			}
 
 			_, err = registry.ReadFrom(r)
 			if err != nil {

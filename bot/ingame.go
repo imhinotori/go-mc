@@ -18,7 +18,7 @@ func (c *Client) HandleGame() error {
 			return err
 		}
 
-		if p.ID == int32(packetid.BundleDelimiter) {
+		if p.ID == int32(packetid.ClientboundBundleDelimiter) {
 			err := c.handleBundlePackets()
 			if err != nil {
 				return err
@@ -58,7 +58,7 @@ func (c *Client) handleBundlePackets() (err error) {
 			return err
 		}
 
-		if p.ID == int32(packetid.BundleDelimiter) {
+		if p.ID == int32(packetid.ClientboundBundleDelimiter) {
 			// bundle finished
 			goto handlePackets
 		}

@@ -14,6 +14,11 @@ type Settings struct {
 	EnableTextFiltering bool
 	AllowListing        bool
 
+	// ParticleStatus controls which particles are shown.
+	// 0 = all, 1 = decreased, 2 = minimal.
+	// Added in 1.21.4 (protocol 769).
+	ParticleStatus int
+
 	// The brand string presented to the server.
 	Brand string
 }
@@ -40,6 +45,7 @@ var DefaultSettings = Settings{
 
 	EnableTextFiltering: false,
 	AllowListing:        true,
+	ParticleStatus:      0, // all
 
 	Brand: "vanilla",
 }

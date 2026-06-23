@@ -2,12 +2,13 @@ package screen
 
 import (
 	"errors"
+	"fmt"
 	"io"
 
 	"github.com/Tnze/go-mc/bot"
 	"github.com/Tnze/go-mc/chat"
 	"github.com/Tnze/go-mc/data/packetid"
-	"github.com/Tnze/go-mc/nbt"
+	"github.com/Tnze/go-mc/level/component"
 	pk "github.com/Tnze/go-mc/net/packet"
 )
 
@@ -34,6 +35,7 @@ func NewManager(c *bot.Client, e EventsListener) *Manager {
 		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundContainerSetContent, F: m.onSetContentPacket},
 		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundContainerClose, F: m.onCloseScreen},
 		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundContainerSetSlot, F: m.onSetSlot},
+		bot.PacketHandler{Priority: 0, ID: packetid.ClientboundSetPlayerInventory, F: m.onSetPlayerInventory},
 	)
 	return m
 }
@@ -189,37 +191,101 @@ func (m *Manager) onSetSlot(p pk.Packet) (err error) {
 	return nil
 }
 
+// onSetPlayerInventory handles ClientboundSetPlayerInventory (1.20.5+).
+// Wire: VarInt(slotIndex) + Slot(data). Updates the player inventory directly.
+func (m *Manager) onSetPlayerInventory(p pk.Packet) error {
+	var (
+		SlotID   pk.VarInt
+		SlotData Slot
+	)
+	if err := p.Scan(&SlotID, &SlotData); err != nil {
+		return Error{err}
+	}
+	if err := m.Inventory.onSetSlot(int(SlotID), SlotData); err != nil {
+		return Error{err}
+	}
+	if m.events.SetSlot != nil {
+		if err := m.events.SetSlot(0, int(SlotID)); err != nil {
+			return Error{err}
+		}
+	}
+	return nil
+}
+
 type Slot struct {
-	ID    pk.VarInt
-	Count pk.VarInt
-	NBT   nbt.RawMessage
+	ID               pk.VarInt
+	Count            pk.VarInt
+	ComponentsAdd    int32 // number of component patches to add (informational)
+	ComponentsRemove int32 // number of component patches to remove (informational)
 }
 
 func (s *Slot) WriteTo(w io.Writer) (n int64, err error) {
-	var present pk.Boolean = s != nil
-	return pk.Tuple{
-		present, pk.Opt{
-			Has: present,
-			Field: pk.Tuple{
-				&s.ID, &s.Count, pk.NBT(&s.NBT),
-			},
-		},
+	// Post-1.20.5 format: Count (VarInt, 0=empty) → ItemID → ComponentsAdd → ComponentsRemove → data
+	n, err = s.Count.WriteTo(w)
+	if err != nil || s.Count <= 0 {
+		return
+	}
+	var n2 int64
+	n2, err = pk.Tuple{
+		s.ID,
+		pk.VarInt(s.ComponentsAdd),
+		pk.VarInt(s.ComponentsRemove),
+		// Component data not supported yet — only items with 0 components can be sent
 	}.WriteTo(w)
+	return n + n2, err
 }
 
 func (s *Slot) ReadFrom(r io.Reader) (n int64, err error) {
 	var componentsAdd, componentsRemove pk.VarInt
-	return pk.Tuple{
+	n, err = pk.Tuple{
 		&s.Count, pk.Opt{
 			Has: func() bool { return s.Count > 0 },
 			Field: pk.Tuple{
 				&s.ID,
 				&componentsAdd,
 				&componentsRemove,
-				// TODO: Components Ignored
 			},
 		},
 	}.ReadFrom(r)
+	if err != nil {
+		return
+	}
+	s.ComponentsAdd = int32(componentsAdd)
+	s.ComponentsRemove = int32(componentsRemove)
+
+	// Read component data for added components
+	for i := int32(0); i < s.ComponentsAdd; i++ {
+		var componentType pk.VarInt
+		var n2 int64
+		n2, err = componentType.ReadFrom(r)
+		n += n2
+		if err != nil {
+			return
+		}
+		comp := component.NewComponent(int32(componentType))
+		if comp == nil {
+			err = fmt.Errorf("unsupported component type %d in slot item %d", componentType, s.ID)
+			return
+		}
+		n2, err = comp.ReadFrom(r)
+		n += n2
+		if err != nil {
+			return
+		}
+	}
+
+	// Read component IDs for removed components (just VarInt type IDs, no data)
+	for i := int32(0); i < s.ComponentsRemove; i++ {
+		var componentType pk.VarInt
+		var n2 int64
+		n2, err = componentType.ReadFrom(r)
+		n += n2
+		if err != nil {
+			return
+		}
+	}
+
+	return
 }
 
 type Container interface {

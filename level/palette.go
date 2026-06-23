@@ -142,20 +142,43 @@ func (p *PaletteContainer[T]) ReadFrom(r io.Reader) (n int64, err error) {
 		return n, err
 	}
 
-	nn, err = p.data.ReadFrom(r)
-	n += nn
-	if err != nil {
-		return n, err
+	// Protocol 770+ (MC 1.21.5+): data array has no VarInt length prefix.
+	// Compute expected long count from bits and container capacity.
+	dataLen := calcBitStorageSize(p.bits, p.data.length)
+	if cap(p.data.data) >= dataLen {
+		p.data.data = p.data.data[:dataLen]
+	} else {
+		p.data.data = make([]uint64, dataLen)
+	}
+	var v pk.Long
+	for i := range p.data.data {
+		nn, err = v.ReadFrom(r)
+		n += nn
+		if err != nil {
+			return n, err
+		}
+		p.data.data[i] = uint64(v)
 	}
 	return n, p.data.Fix(p.bits)
 }
 
 func (p *PaletteContainer[T]) WriteTo(w io.Writer) (n int64, err error) {
-	return pk.Tuple{
+	n, err = pk.Tuple{
 		pk.UnsignedByte(p.bits),
 		p.palette,
-		p.data,
 	}.WriteTo(w)
+	if err != nil {
+		return n, err
+	}
+	// Protocol 770+ (MC 1.21.5+): write data longs without VarInt length prefix.
+	for _, v := range p.data.Raw() {
+		nn, err := pk.Long(v).WriteTo(w)
+		n += nn
+		if err != nil {
+			return n, err
+		}
+	}
+	return n, nil
 }
 
 // Palette export the raw palette values for @maxsupermanhd.

@@ -89,14 +89,15 @@ func (p HistoryMessage) WriteTo(w io.Writer) (n int64, err error) {
 type HistoryUpdate struct {
 	Offset       pk.VarInt
 	Acknowledged pk.FixedBitSet // n == 20
+	Checksum     pk.Byte        // 0 = ignore checksum
 }
 
 func (h HistoryUpdate) WriteTo(w io.Writer) (n int64, err error) {
-	return pk.Tuple{h.Offset, h.Acknowledged}.WriteTo(w)
+	return pk.Tuple{h.Offset, h.Acknowledged, h.Checksum}.WriteTo(w)
 }
 
 func (h *HistoryUpdate) ReadFrom(r io.Reader) (n int64, err error) {
-	return pk.Tuple{&h.Offset, &h.Acknowledged}.ReadFrom(r)
+	return pk.Tuple{&h.Offset, &h.Acknowledged, &h.Checksum}.ReadFrom(r)
 }
 
 type Signature [256]byte
@@ -128,17 +129,19 @@ func (p PackedSignature) WriteTo(w io.Writer) (n int64, err error) {
 	return n1, err
 }
 
-func (p PackedSignature) ReadFrom(r io.Reader) (n int64, err error) {
-	n1, err := (*pk.VarInt)(&p.ID).ReadFrom(r)
+func (p *PackedSignature) ReadFrom(r io.Reader) (n int64, err error) {
+	var raw pk.VarInt
+	n1, err := raw.ReadFrom(r)
 	if err != nil {
 		return n1, err
 	}
+	p.ID = int32(raw) - 1
 
 	if p.ID == -1 {
 		if p.Signature == nil {
 			p.Signature = new(Signature)
 		}
-		n2, err := r.Read(p.Signature[:])
+		n2, err := io.ReadFull(r, p.Signature[:])
 		return n1 + int64(n2), err
 	} else {
 		p.Signature = nil

@@ -36,8 +36,8 @@ type Section struct {
 	Y           int8
 	BlockStates PaletteContainer[BlockState] `nbt:"block_states"`
 	Biomes      PaletteContainer[BiomeState] `nbt:"biomes"`
-	SkyLight    []byte
-	BlockLight  []byte
+	SkyLight    []byte                       `nbt:"SkyLight,omitempty"`
+	BlockLight  []byte                       `nbt:"BlockLight,omitempty"`
 }
 
 type PaletteContainer[T any] struct {

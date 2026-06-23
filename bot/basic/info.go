@@ -72,6 +72,7 @@ func (p *Player) handleLoginPacket(packet pk.Packet) error {
 		pk.VarInt(p.Settings.MainHand),
 		pk.Boolean(p.Settings.EnableTextFiltering),
 		pk.Boolean(p.Settings.AllowListing),
+		pk.VarInt(p.Settings.ParticleStatus), // 1.21.4+: 0=all, 1=decreased, 2=minimal
 	))
 	if err != nil {
 		return Error{err}

@@ -17,10 +17,13 @@ type Configurations struct {
 }
 
 func (c *Configurations) AcceptConfig(conn *net.Conn) error {
-	err := conn.WritePacket(pk.Marshal(
-		packetid.ClientboundConfigRegistryData,
-		pk.NBT(c.Registries),
-	))
+	err := c.Registries.EachRegistry(func(id string, reg pk.FieldEncoder) error {
+		return conn.WritePacket(pk.Marshal(
+			packetid.ClientboundConfigRegistryData,
+			pk.Identifier(id),
+			reg,
+		))
+	})
 	if err != nil {
 		return err
 	}

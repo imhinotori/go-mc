@@ -8,13 +8,13 @@ package packetid
 const (
 	LoginDisconnect        = ClientboundLoginLoginDisconnect
 	LoginEncryptionRequest = ClientboundLoginHello
-	LoginSuccess           = ClientboundLoginGameProfile
+	LoginSuccess           = ClientboundLoginLoginFinished
 	LoginCompression       = ClientboundLoginLoginCompression
 	LoginPluginRequest     = ClientboundLoginCustomQuery
 
 	ClientboundLoginDisconnect        = ClientboundLoginLoginDisconnect
 	ClientboundLoginEncryptionRequest = ClientboundLoginHello
-	ClientboundLoginSuccess           = ClientboundLoginGameProfile
+	ClientboundLoginSuccess           = ClientboundLoginLoginFinished
 	ClientboundLoginCompression       = ClientboundLoginLoginCompression
 	ClientboundLoginPluginRequest     = ClientboundLoginCustomQuery
 )

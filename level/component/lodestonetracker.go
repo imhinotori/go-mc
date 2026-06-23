@@ -1,3 +1,4 @@
+// lodestonetracker.go contains helper types for the LodestoneTracker data component.
 package component
 
 import (
@@ -6,36 +7,15 @@ import (
 	pk "github.com/Tnze/go-mc/net/packet"
 )
 
-var _ DataComponent = (*LodestoneTracker)(nil)
-
-type LodestoneTracker struct {
-	HasGlobalPosition pk.Boolean
-	Dimension         pk.Identifier
-	Position          pk.Position
-	Tracked           pk.Boolean
+type GlobalPos struct {
+	DimensionName pk.Identifier
+	Location      pk.Position
 }
 
-// ID implements DataComponent.
-func (LodestoneTracker) ID() string {
-	return "minecraft:lodestone_tracker"
+func (g *GlobalPos) ReadFrom(r io.Reader) (int64, error) {
+	return pk.Tuple{&g.DimensionName, &g.Location}.ReadFrom(r)
 }
 
-// ReadFrom implements DataComponent.
-func (l *LodestoneTracker) ReadFrom(r io.Reader) (n int64, err error) {
-	return pk.Tuple{
-		&l.HasGlobalPosition,
-		&l.Dimension,
-		&l.Position,
-		&l.Tracked,
-	}.ReadFrom(r)
-}
-
-// WriteTo implements DataComponent.
-func (l *LodestoneTracker) WriteTo(w io.Writer) (n int64, err error) {
-	return pk.Tuple{
-		&l.HasGlobalPosition,
-		&l.Dimension,
-		&l.Position,
-		&l.Tracked,
-	}.WriteTo(w)
+func (g GlobalPos) WriteTo(w io.Writer) (int64, error) {
+	return pk.Tuple{&g.DimensionName, &g.Location}.WriteTo(w)
 }

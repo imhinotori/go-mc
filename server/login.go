@@ -152,7 +152,7 @@ func (d *MojangLoginHandler) AcceptLogin(conn *net.Conn, protocol int32) (name s
 	}
 	// send login success
 	err = conn.WritePacket(pk.Marshal(
-		packetid.ClientboundLoginGameProfile,
+		packetid.ClientboundLoginLoginFinished,
 		pk.UUID(id),
 		pk.String(name),
 		pk.Array(properties),

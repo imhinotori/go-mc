@@ -168,7 +168,7 @@ func onScreenSlotChange(id, index int) error {
 				if slot.ID >= 0 && int(slot.ID) < len(registryid.Item) {
 					itemName = registryid.Item[slot.ID]
 				}
-				log.Printf("Slot: Screen[%d].Slot[%d]: [%v] * %d | NBT: %v", id, index, itemName, slot.Count, slot.NBT)
+				log.Printf("Slot: Screen[%d].Slot[%d]: [%v] * %d | Components: +%d/-%d", id, index, itemName, slot.Count, slot.ComponentsAdd, slot.ComponentsRemove)
 			}
 		}
 	}

@@ -1,22 +1,22 @@
+// tool.go contains helper types for the Tool data component.
 package component
 
-import "io"
+import (
+	"io"
 
-var _ DataComponent = (*Tool)(nil)
+	pk "github.com/Tnze/go-mc/net/packet"
+)
 
-type Tool struct{}
-
-// ID implements DataComponent.
-func (Tool) ID() string {
-	return "minecraft:tool"
+type ToolRule struct {
+	Blocks               IDSet
+	Speed                pk.Option[pk.Float, *pk.Float]
+	CorrectDropForBlocks pk.Option[pk.Boolean, *pk.Boolean]
 }
 
-// ReadFrom implements DataComponent.
-func (t *Tool) ReadFrom(r io.Reader) (n int64, err error) {
-	panic("unimplemented")
+func (r *ToolRule) ReadFrom(rd io.Reader) (n int64, err error) {
+	return pk.Tuple{&r.Blocks, &r.Speed, &r.CorrectDropForBlocks}.ReadFrom(rd)
 }
 
-// WriteTo implements DataComponent.
-func (t *Tool) WriteTo(w io.Writer) (n int64, err error) {
-	panic("unimplemented")
+func (r ToolRule) WriteTo(w io.Writer) (n int64, err error) {
+	return pk.Tuple{&r.Blocks, &r.Speed, &r.CorrectDropForBlocks}.WriteTo(w)
 }

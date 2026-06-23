@@ -77,7 +77,7 @@ func (c *Client) joinLogin(conn *net.Conn) error {
 			}
 			receiving = "set compression"
 
-		case packetid.ClientboundLoginGameProfile: // Login Success
+		case packetid.ClientboundLoginLoginFinished: // Login Success
 			err := p.Scan(
 				(*pk.UUID)(&c.UUID),
 				(*pk.String)(&c.Name),

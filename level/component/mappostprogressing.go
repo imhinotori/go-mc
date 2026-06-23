@@ -11,8 +11,8 @@ var _ DataComponent = (*MapPostProcessing)(nil)
 type MapPostProcessing int32
 
 const (
-	Lock MapPostProcessing = iota
-	Scale
+	MapLock MapPostProcessing = iota
+	MapScale
 )
 
 // ID implements DataComponent.
