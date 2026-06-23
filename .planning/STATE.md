@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 02-03-PLAN.md
-last_updated: "2026-06-23T17:28:36.407Z"
+status: planning
+stopped_at: Completed 02-04-PLAN.md (Phase 2 complete)
+last_updated: "2026-06-23T20:38:14.738Z"
 last_activity: 2026-06-23
 progress:
   total_phases: 9
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 7
-  completed_plans: 6
-  percent: 86
+  completed_plans: 7
+  percent: 100
 ---
 
 # Project State
@@ -21,16 +21,19 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-23)
 
 **Core value:** A Go server that an unmodified vanilla Minecraft 26.2 client can connect to, log into, and play in a persistent, ticking world — architected from day one for Leaf-style async optimizations.
-**Current focus:** Phase 1 — Foundation: Fork & Codegen (proto 776 data)
+**Current focus:** Phase 2 complete — a real vanilla 26.2 client reaches Play. Next: Phase 3 — Tick & World State.
 
 ## Current Position
 
-Phase: 2 of 9 (Net & Protocol State Machine)
-Plan: 3 of 4 complete in current phase (02-01 done)
-Status: Ready to execute
+Phase: 2 of 9 (Net & Protocol State Machine) — COMPLETE
+Plan: 4 of 4 complete (02-01, 02-02, 02-03, 02-04 done)
+Status: Phase 2 complete; ready to plan Phase 3
 Last activity: 2026-06-23
 
-Progress: [█████████░] 86%
+Milestone proof point reached: a real vanilla 26.2 (PrismLauncher) client connects
+to cmd/ender and reaches Play (readable Phase-2 kick), with NET-01..07 all complete.
+
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -58,6 +61,7 @@ Progress: [█████████░] 86%
 | Phase 02 P01 | 70min | 3 tasks | 6 files |
 | Phase 02 P02 | 5m | 3 tasks | 5 files |
 | Phase 02 P03 | 55 min | 2 tasks | 131 files |
+| Phase 02 P04 | 178min | 3 tasks | 701 files |
 
 ## Accumulated Context
 
@@ -84,6 +88,9 @@ Recent decisions affecting current work:
 - [Phase ?]: NET-01 reuses the Wave-1 Disconnect helper for the proto-776 login rejection
 - [Phase ?]: cmd/ender ListPingHandler embeds PingInfo+PlayerList; PingInfo alone lacks player-count methods
 - [Phase 02]: Registry send path uses type-faithful JSON->nbt/dynbt conversion (not json->map[string]any), with a floatFields override for vanilla Codec.FLOAT fields — encoding/json maps all numbers to float64->TagDouble; dynbt lets us assign TagInt/TagByte/TagFloat explicitly so the 26.2 client does not silently reject the registry
+- [Phase ?]: [Phase 2]: Empty Update Tags was a confirmed HARD BLOCKER (not optional) — a real 26.2 client crashes at Registry Loading with 'Unbound tags'/'Failed to parse value' because registry entries reference tags; fix = send the real vanilla 15-registry tag set (dfb4af04)
+- [Phase ?]: [Phase 2]: proto-776 ClientboundLoginFinishedPacket needs a trailing sessionId UUID (GAME_PROFILE + UUIDUtil.STREAM_CODEC); the fork omitted it and net.Pipe missed it (bot scans only UUID+name) — only a real client surfaced it (e283886c)
+- [Phase ?]: [Phase 2]: NET-04 correctness gate is a real-client capture-diff, not self-consistent tests — the net.Pipe bot's lax decoder tolerated both the login_finished and empty-tags bugs a real client rejects
 
 ### Pending Todos
 
@@ -108,6 +115,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-23T17:28:36.394Z
-Stopped at: Completed 02-03-PLAN.md
+Last session: 2026-06-23T20:37:08.303Z
+Stopped at: Completed 02-04-PLAN.md (Phase 2 complete; real vanilla 26.2 client reaches Play)
 Resume file: None
+Next: plan Phase 3 (Tick & World State). Deferred at Phase 2 close: Ender → Sulfur rename (see Deferred Items).

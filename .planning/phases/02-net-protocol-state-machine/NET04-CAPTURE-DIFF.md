@@ -1,9 +1,19 @@
 # NET-04 Capture-Diff: Ender vs. Vanilla 26.2 Configuration Stream
 
-**Status:** AWAITING HUMAN SIGN-OFF (Task 3, blocking checkpoint)
+**Status:** APPROVED — real-client test passed (Task 3 blocking checkpoint signed off 2026-06-23)
 **Phase / Plan:** 02-net-protocol-state-machine / 02-04
 **Requirement:** NET-04 (Configuration → Play, no silent kick), NET-07 (readable disconnects)
 **Date captured:** 2026-06-23
+**Date signed off:** 2026-06-23
+
+> **REAL-CLIENT RESULT:** A real vanilla 26.2 (PrismLauncher) client connected to
+> `cmd/ender` and reached **Play** — it received the readable Phase-2 kick
+> "Server not yet playable — gameplay arrives in Phase 3" with NO "Unbound tags"
+> crash, NO "Failed to parse value", NO "Loading terrain…" hang, and NO
+> login_finished decode error. The full chain works end-to-end: Handshake → Status
+> → Login (sessionId fix `e283886c`) → Configuration (29 registries + the
+> 15-registry Update Tags `dfb4af04`) → Play. NET-04 and NET-07 are proven against
+> a real client.
 
 This document records a byte-level comparison of the Configuration-state packet
 stream emitted by a **real vanilla 26.2 server** versus **Ender**, for the same
@@ -257,19 +267,31 @@ stuck at Loading terrain…" outcome.
 
 ## 8. Sign-Off
 
-- [ ] Registry set + order match vanilla 26.2 — **machine-verified EXACT MATCH (29/29)**.
-- [ ] Per-registry entry counts match vanilla — **machine-verified EXACT MATCH**.
-- [ ] NBT shape (dimension_type/biome nested 26.2 schema) confirmed — **type-faithful guard green**.
-- [ ] Update Tags: **real vanilla 15-registry set now sent (empty stub was a confirmed HARD BLOCKER — real client crashed at Registry Loading on unbound tags); counts machine-verified EXACT MATCH (15/15)** — reviewer confirms a real client now passes Registry/Tag Loading (§6).
-- [ ] Packet IDs align (no 775/776 reshuffle) — **verified, no drift**.
-- [ ] **Unmodified vanilla 26.2 client reaches Play with no silent "Loading terrain…" hang** — **reviewer confirms (§6)**.
+- [x] Registry set + order match vanilla 26.2 — **machine-verified EXACT MATCH (29/29)**.
+- [x] Per-registry entry counts match vanilla — **machine-verified EXACT MATCH**.
+- [x] NBT shape (dimension_type/biome nested 26.2 schema) confirmed — **type-faithful guard green**.
+- [x] Update Tags: **real vanilla 15-registry set now sent (empty stub was a confirmed HARD BLOCKER — real client crashed at Registry Loading on unbound tags); counts machine-verified EXACT MATCH (15/15)** — real client now passes Registry/Tag Loading (§6).
+- [x] Packet IDs align (no 775/776 reshuffle) — **verified, no drift**.
+- [x] **Unmodified vanilla 26.2 client reaches Play with no silent "Loading terrain…" hang** — **CONFIRMED (§6, real-client test)**.
 
-**Resume signal:** type `approved` if a real client reaches Play and the diff
-matches; otherwise describe the divergence (missing registry, NBT-shape mismatch,
-required non-empty tag set, packet-ID drift) so it can be fixed and Task 2 re-run.
+**Sign-off:** `approved` — real-client test passed (2026-06-23).
 
 _Reviewer notes:_
 
 ```
-(record the real-client result here)
+Real vanilla 26.2 (PrismLauncher) client → cmd/ender → reached Play.
+Received the readable Phase-2 kick "Server not yet playable - gameplay arrives in
+Phase 3". NO "Unbound tags" crash, NO "Failed to parse value", NO "Loading terrain"
+hang, NO login_finished decode error.
+
+Two real bugs found & fixed during the test:
+  - e283886c: proto-776 login_finished needed a trailing sessionId UUID
+    (GAME_PROFILE + UUIDUtil.STREAM_CODEC); fork omitted it; net.Pipe missed it
+    (bot scans only UUID+name).
+  - dfb4af04: empty Update Tags → "Unbound tags in registry" (enchantment
+    exclusive_sets / timeline / dialog) + "Failed to parse value"
+    (dimension_type / enchantment / sulfur_cube_archetype); fixed by sending the
+    real 15-registry vanilla tag set.
+
+NET-04 and NET-07 proven against a real client.
 ```
