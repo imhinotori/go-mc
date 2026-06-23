@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 02-01-PLAN.md
-last_updated: "2026-06-23T17:24:40.081Z"
+stopped_at: Completed 02-03-PLAN.md
+last_updated: "2026-06-23T17:28:36.407Z"
 last_activity: 2026-06-23
 progress:
   total_phases: 9
   completed_phases: 1
   total_plans: 7
-  completed_plans: 5
-  percent: 71
+  completed_plans: 6
+  percent: 86
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-06-23)
 ## Current Position
 
 Phase: 2 of 9 (Net & Protocol State Machine)
-Plan: 2 of 4 complete in current phase (02-01 done)
+Plan: 3 of 4 complete in current phase (02-01 done)
 Status: Ready to execute
 Last activity: 2026-06-23
 
-Progress: [███████░░░] 71%
+Progress: [█████████░] 86%
 
 ## Performance Metrics
 
@@ -57,6 +57,7 @@ Progress: [███████░░░] 71%
 | Phase 01 P03 | 10min | 3 tasks | 4 files |
 | Phase 02 P01 | 70min | 3 tasks | 6 files |
 | Phase 02 P02 | 5m | 3 tasks | 5 files |
+| Phase 02 P03 | 55 min | 2 tasks | 131 files |
 
 ## Accumulated Context
 
@@ -82,6 +83,7 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 2]: -race needs cgo; host has no C compiler (CGO_ENABLED=0) so the server/net race gate runs in golang:1.26 Docker — NET-05 seam proven race-clean
 - [Phase ?]: NET-01 reuses the Wave-1 Disconnect helper for the proto-776 login rejection
 - [Phase ?]: cmd/ender ListPingHandler embeds PingInfo+PlayerList; PingInfo alone lacks player-count methods
+- [Phase 02]: Registry send path uses type-faithful JSON->nbt/dynbt conversion (not json->map[string]any), with a floatFields override for vanilla Codec.FLOAT fields — encoding/json maps all numbers to float64->TagDouble; dynbt lets us assign TagInt/TagByte/TagFloat explicitly so the 26.2 client does not silently reject the registry
 
 ### Pending Todos
 
@@ -106,6 +108,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-23T17:21:51.421Z
-Stopped at: Completed 02-01-PLAN.md
+Last session: 2026-06-23T17:28:36.394Z
+Stopped at: Completed 02-03-PLAN.md
 Resume file: None
