@@ -16,9 +16,9 @@ Requirements for the initial release. The "user" is an unmodified vanilla 26.2 (
 
 ### Networking & Protocol State Machine
 
-- [ ] **NET-01**: Server completes the Handshake state and asserts protocol 776
-- [ ] **NET-02**: Server answers Status (server-list ping) with version, MOTD, and player count
-- [ ] **NET-03**: Server completes offline-mode Login and negotiates packet compression
+- [x] **NET-01**: Server completes the Handshake state and asserts protocol 776
+- [x] **NET-02**: Server answers Status (server-list ping) with version, MOTD, and player count
+- [x] **NET-03**: Server completes offline-mode Login and negotiates packet compression
 - [ ] **NET-04**: Server completes the full Configuration sequence (Known Packs, Registry Data, Update Tags, Feature Flags, Finish Configuration) and transitions to Play without silent disconnect
 - [x] **NET-05**: Each connection has exactly one writer goroutine; inbound packets enqueue intents to the tick via channels (no game-state access from network goroutines)
 - [x] **NET-06**: VarInt/VarLong framing, compression threshold, and the 2²¹−1 max-packet cap are enforced correctly
@@ -119,9 +119,9 @@ Which phases cover which requirements. Populated during roadmap creation.
 | GEN-02 | Phase 1 | Complete |
 | GEN-03 | Phase 1 | Complete |
 | GEN-04 | Phase 1 | Complete |
-| NET-01 | Phase 2 | Pending |
-| NET-02 | Phase 2 | Pending |
-| NET-03 | Phase 2 | Pending |
+| NET-01 | Phase 2 | Complete |
+| NET-02 | Phase 2 | Complete |
+| NET-03 | Phase 2 | Complete |
 | NET-04 | Phase 2 | Pending |
 | NET-05 | Phase 2 | Complete |
 | NET-06 | Phase 2 | Complete |

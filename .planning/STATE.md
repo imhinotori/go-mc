@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: Completed 02-01-PLAN.md
-last_updated: "2026-06-23T17:13:44.834Z"
+last_updated: "2026-06-23T17:24:40.081Z"
 last_activity: 2026-06-23
 progress:
   total_phases: 9
   completed_phases: 1
   total_plans: 7
-  completed_plans: 4
-  percent: 57
+  completed_plans: 5
+  percent: 71
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-06-23)
 ## Current Position
 
 Phase: 2 of 9 (Net & Protocol State Machine)
-Plan: 1 of 4 complete in current phase (02-01 done)
-Status: In progress — Wave 1 plumbing/seam landed
+Plan: 2 of 4 complete in current phase (02-01 done)
+Status: Ready to execute
 Last activity: 2026-06-23
 
-Progress: [██████░░░░] 57%
+Progress: [███████░░░] 71%
 
 ## Performance Metrics
 
@@ -56,6 +56,7 @@ Progress: [██████░░░░] 57%
 | Phase 01 P02 | 12m | 3 tasks | 265 files |
 | Phase 01 P03 | 10min | 3 tasks | 4 files |
 | Phase 02 P01 | 70min | 3 tasks | 6 files |
+| Phase 02 P02 | 5m | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -79,6 +80,8 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 2]: chan Intent (Intent{*Client, pk.Packet}) is the stable network->tick seam; stubTickConsumer is the Phase 3 attach point with no API change
 - [Phase ?]: [Phase 2]: Fixed fork bug — chat.Message.MarshalNBT double-encoded the compound tag header, corrupting every chat.Message Field on the wire (incl. disconnect reasons)
 - [Phase ?]: [Phase 2]: -race needs cgo; host has no C compiler (CGO_ENABLED=0) so the server/net race gate runs in golang:1.26 Docker — NET-05 seam proven race-clean
+- [Phase ?]: NET-01 reuses the Wave-1 Disconnect helper for the proto-776 login rejection
+- [Phase ?]: cmd/ender ListPingHandler embeds PingInfo+PlayerList; PingInfo alone lacks player-count methods
 
 ### Pending Todos
 
@@ -103,6 +106,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-23T17:13:34.541Z
+Last session: 2026-06-23T17:21:51.421Z
 Stopped at: Completed 02-01-PLAN.md
 Resume file: None
