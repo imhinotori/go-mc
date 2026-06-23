@@ -42,6 +42,17 @@ func (l ConfigErr) Unwrap() error {
 	return l.Err
 }
 
+// JoinConfiguration drives the client side of the Configuration protocol state
+// over conn: it reads server config packets, answers KeepAlive/Ping, echoes the
+// Select Known Packs list, decodes Registry Data and Update Tags into c.Registries,
+// and on Finish Configuration sends the Acknowledge and returns nil. It is the
+// exported entry point used by integration harnesses (e.g. the server-side
+// TestConfigSequence over net.Pipe) to exercise a server's AcceptConfig against the
+// fork's authoritative client decoder without a full JoinServer dial.
+func (c *Client) JoinConfiguration(conn *net.Conn) error {
+	return c.joinConfiguration(conn)
+}
+
 func (c *Client) joinConfiguration(conn *net.Conn) error {
 	for {
 		var p pk.Packet
