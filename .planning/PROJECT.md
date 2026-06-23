@@ -19,7 +19,7 @@ A Go server that a vanilla Minecraft 26.2 client can connect to, log into, and p
 - [ ] Server accepts a vanilla 26.2 client through handshake → login → configuration → play state transitions (protocol 776)
 - [ ] Protocol/data layer is code-generated from the official 26.2 server jar (packets, registries, blocks, items, entities, components) via the go-mc PR #294-296 pipeline approach
 - [ ] Component-based slot/item format (post-1.20.5), correct BitStorage and heightmap encoding
-- [ ] Authoritative server tick loop (20 TPS) driving world and entity updates
+- [ ] Authoritative server tick loop driving world and entity updates, with game-time anchored to 50ms/MC-tick (vanilla-parity: day = 20 min, redstone/crops/weather never accelerate or slow), plus a CS2-style subtick precision layer for player movement, collisions, hit detection, and projectiles (microsecond-timestamped inputs resolved in chronological order; broadcast to client at vanilla protocol rate)
 - [ ] World + chunk management: load/generate/store chunks, send to clients, persist via region/save format
 - [ ] World generation (at minimum a deterministic generator; vanilla-parity generation a stretch goal)
 - [ ] Player session lifecycle: spawn, move, view chunks, see other players, keepalive
@@ -61,6 +61,7 @@ A Go server that a vanilla Minecraft 26.2 client can connect to, log into, and p
 | Build vanilla logic first, Leaf optimizations last | Async-optimizing nonexistent logic is impossible; correctness before performance | — Pending |
 | No plugin system | User-specified scope boundary; keeps focus on server core | — Pending |
 | Offline-mode first | Removes auth/encryption from the critical path to first playable connection | — Pending |
+| Game-time anchored to 50ms; subtick layer (CS2-style) for player movement/combat only | MC defines game-time by tick count, not real seconds — raising TPS naively accelerates the world (shorter day, faster crops/redstone), violating vanilla-parity. Anchoring game-time to 50ms keeps the world correct; a subtick layer adds µs-precise resolution for movement/hit-reg/projectiles without touching world simulation speed (same pattern as CS2 subtick over a fixed broadcast rate). | — Pending |
 
 ## Evolution
 
