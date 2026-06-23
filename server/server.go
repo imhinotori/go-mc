@@ -31,7 +31,9 @@ package server
 import (
 	"errors"
 	"log"
+	"strconv"
 
+	"github.com/imhinotori/go-mc/chat"
 	"github.com/imhinotori/go-mc/data/packetid"
 	"github.com/imhinotori/go-mc/net"
 	pk "github.com/imhinotori/go-mc/net/packet"
@@ -74,8 +76,23 @@ func (s *Server) AcceptConn(conn *net.Conn) {
 
 	switch intention {
 	case 1: // list ping
+		// Status is intentionally ungated: a version-mismatched client must still
+		// be able to read the server-list version label (T-2-01). acceptListPing
+		// answers with ProtocolVersion regardless of the client's protocol.
 		s.acceptListPing(conn, protocol)
 	case 2: // login
+		// NET-01 / T-2-01: assert the client speaks protocol 776 on the login path.
+		// On mismatch, send a readable Login Disconnect (never a silent drop) and
+		// return so the connection closes via the deferred conn.Close().
+		if protocol != ProtocolVersion {
+			_ = Disconnect(conn, StateLogin, chat.Text(
+				"Unsupported protocol: server is "+ProtocolName+" ("+strconv.Itoa(ProtocolVersion)+")"))
+			if s.Logger != nil {
+				s.Logger.Printf("client %v rejected: protocol %d != %d",
+					conn.Socket.RemoteAddr(), protocol, ProtocolVersion)
+			}
+			return
+		}
 		name, id, profilePubKey, properties, err := s.AcceptLogin(conn, protocol)
 		if err != nil {
 			var loginErr LoginFailErr
