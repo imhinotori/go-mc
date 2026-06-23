@@ -20,7 +20,7 @@ import (
 	"strings"
 )
 
-const jdkImage = "docker.io/library/eclipse-temurin:21-jdk"
+const jdkImage = "docker.io/library/eclipse-temurin:25-jdk"
 
 // runExtract runs the MC data extraction pipeline.
 // Phase 1: Download server jar + language files (Go host).
