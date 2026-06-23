@@ -12,7 +12,7 @@ Ender is built dependency-first: the protocol-state sequence (Handshake → Stat
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Foundation — Fork & Codegen** - Fork go-mc, retarget #294-296 codegen to proto 776, commit generated data as Go source
+- [x] **Phase 1: Foundation — Fork & Codegen** - Fork go-mc, retarget #294-296 codegen to proto 776, commit generated data as Go source (completed 2026-06-23)
 - [ ] **Phase 2: Net & Protocol State Machine** - Handshake → Status → Login → Configuration → Play transitions with the network/tick channel boundary
 - [ ] **Phase 3: Authoritative Tick Loop** - 20-TPS ordered tick spine, ownership-based sync, game-time anchor, subtick layer, keepalive
 - [ ] **Phase 4: World & Chunk System** - Paletted-container chunk encode/decode, heightmaps/light, deterministic worldgen, view-distance streaming
@@ -36,7 +36,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 3 plans
 - [x] 01-01-PLAN.md — Fork go-mc at pinned commit, apply #294-296, capture 774 baseline, retarget extractor to JDK 25
 - [x] 01-02-PLAN.md — Run codegen at 26.2 (sha1-verified jar), fix any extractor rename, commit generated 776 Go source
-- [ ] 01-03-PLAN.md — Enumerate the 774->776 diff, correct protocol/version constants, assert Go-only build + human sign-off
+- [x] 01-03-PLAN.md — Enumerate the 774->776 diff, correct protocol/version constants, assert Go-only build + human sign-off
 **Research**: Needs deeper per-phase research — retargeting draft #294-296 from 1.21.11→26.2 is real engineering with expected schema/rebase drift; the 774→776 diff must be derived against the jar.
 
 ### Phase 2: Net & Protocol State Machine
@@ -144,7 +144,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation — Fork & Codegen | 1/3 | In Progress|  |
+| 1. Foundation — Fork & Codegen | 3/3 | Complete   | 2026-06-23 |
 | 2. Net & Protocol State Machine | 0/TBD | Not started | - |
 | 3. Authoritative Tick Loop | 0/TBD | Not started | - |
 | 4. World & Chunk System | 0/TBD | Not started | - |
