@@ -12,7 +12,8 @@ Ender is built dependency-first: the protocol-state sequence (Handshake → Stat
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [x] **Phase 1: Foundation — Fork & Codegen** - Fork go-mc, retarget #294-296 codegen to proto 776, commit generated data as Go source (completed 2026-06-23)
+- [x] **Phase 1: Foundation — Fork & Codegen** - Fork go-mc, retarget #294-296 codegen to proto 776, commit generated data as Go source
+ (completed 2026-06-23)
 - [ ] **Phase 2: Net & Protocol State Machine** - Handshake → Status → Login → Configuration → Play transitions with the network/tick channel boundary
 - [ ] **Phase 3: Authoritative Tick Loop** - 20-TPS ordered tick spine, ownership-based sync, game-time anchor, subtick layer, keepalive
 - [ ] **Phase 4: World & Chunk System** - Paletted-container chunk encode/decode, heightmaps/light, deterministic worldgen, view-distance streaming
@@ -48,7 +49,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. The server completes offline-mode Login with compression negotiated, then completes the full Configuration sequence (Known Packs, Registry Data, Update Tags, Feature Flags, Finish Configuration) and reaches Play with no silent kick / "Loading terrain…" hang
   3. Each connection has exactly one writer goroutine; inbound packets enqueue intents to the tick via channels with no game-state access from network goroutines
   4. VarInt/VarLong framing, the compression threshold, and the 2²¹−1 max-packet cap are enforced; an explicit Disconnect packet carries a readable reason
-**Plans**: TBD
+**Plans**: 4 plans
+- [ ] 02-01-PLAN.md — NET-05 concurrency seam (one writer goroutine, intent inbound channel + stub consumer, bounded disconnect-on-full backpressure), NET-06 cap/threshold assertions, NET-07 state-aware Disconnect helper, shared net.Pipe harness
+- [ ] 02-02-PLAN.md — NET-01 handshake assert-776 (readable Login Disconnect on mismatch), NET-02 Status ping (version 26.2/proto 776/MOTD/players), NET-03 offline Login + compression, cmd/ender assembly
+- [ ] 02-03-PLAN.md — NET-04 payload: extract + embed (//go:embed) the real 26.2 registry NBT (dimension_type, biome incl. plains, damage_type, chat_type), WriteRegistryData/WriteTags send helpers (defuses the stale-schema trap)
+- [ ] 02-04-PLAN.md — NET-04 sequence: rewrite AcceptConfig as the full ordered Configuration flow (Known Packs → Feature Flags → Registry Data → Update Tags → Finish → read Acknowledge), reach Play; vanilla-26.2 capture-diff + human sign-off
 **Research**: Needs deeper per-phase research — the exact 776 registry set, order, and network-NBT encoding for Configuration is the highest-risk single area and must be jar-derived/capture-diffed (the wiki documents only ≤773).
 
 ### Phase 3: Authoritative Tick Loop
@@ -145,7 +150,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation — Fork & Codegen | 3/3 | Complete   | 2026-06-23 |
-| 2. Net & Protocol State Machine | 0/TBD | Not started | - |
+| 2. Net & Protocol State Machine | 0/4 | Not started | - |
 | 3. Authoritative Tick Loop | 0/TBD | Not started | - |
 | 4. World & Chunk System | 0/TBD | Not started | - |
 | 5. Player Session In-World (FIRST PLAYABLE) | 0/TBD | Not started | - |
