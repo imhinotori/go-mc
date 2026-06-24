@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 status: verifying
 stopped_at: "Completed 05-03-PLAN.md — capture-diff sealed the 3 MEDIUM-confidence Play encoders byte-identical to vanilla 26.2 + fixed a net/queue close-vs-send race; PLAY-06 first-playable walk-around APPROVED ("si, funciona :)"). **Phase 5 COMPLETE / FIRST PLAYABLE.**"
-last_updated: "2026-06-24T05:23:11.198Z"
+last_updated: "2026-06-24T06:03:24.316Z"
 last_activity: 2026-06-24
 progress:
   total_phases: 9
   completed_phases: 5
   total_plans: 24
-  completed_plans: 19
-  percent: 79
+  completed_plans: 21
+  percent: 88
 ---
 
 # Project State
@@ -74,7 +74,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [████████░░] 79%
+Progress: [█████████░] 88%
 
 ## Performance Metrics
 
@@ -193,7 +193,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-24T05:21:38.556Z
+Last session: 2026-06-24T06:03:24.303Z
 Stopped at: Completed 05-03-PLAN.md — capture-diff sealed the 3 MEDIUM-confidence Play encoders byte-identical to vanilla 26.2 + fixed a net/queue close-vs-send race; PLAY-06 first-playable walk-around APPROVED ("si, funciona :)"). **Phase 5 COMPLETE / FIRST PLAYABLE.**
 Resume file: None
 Next: plan Phase 6 (entities / inventory / persistence) — the first-playable Player Session seam (movement, tick-owned position, the following ring, the tab list) is in place to build on. Deferred: KeepAlive double-leave hardening (Phase 3, surfaces when real timeout-driven disconnects land). The pulled-forward bootstrap deferred-row is now CLOSED.
