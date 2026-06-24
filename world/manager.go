@@ -60,6 +60,16 @@ func (m *ChunkManager) State(pos level.ChunkPos) loadState {
 	return h.state
 }
 
+// IsEmpty reports whether pos is unrequested (no holder, or a holder still in the
+// Empty state). The streamer (Plan 04-03) uses it to decide whether to issue exactly
+// one worker request per column — an exported predicate so the loadState enum stays
+// package-private (the tick never needs the Loading/Ready distinction here, only
+// "should I request this column").
+func (m *ChunkManager) IsEmpty(pos level.ChunkPos) bool {
+	h := m.columns[pos]
+	return h == nil || h.state == stateEmpty
+}
+
 // MarkLoading transitions Empty -> Loading so the tick issues exactly one
 // worker request for pos. A no-op if pos is already Loading or Ready.
 func (m *ChunkManager) MarkLoading(pos level.ChunkPos) {
@@ -97,3 +107,8 @@ func (m *ChunkManager) MarkEmpty(pos level.ChunkPos) {
 func (m *ChunkManager) Remove(pos level.ChunkPos) {
 	delete(m.columns, pos)
 }
+
+// Len reports the number of tracked columns (any state). The streamer uses it to
+// assert the needed-ring stays bounded under position spam (threat T-4-06); it is a
+// pure read over the tick-owned map.
+func (m *ChunkManager) Len() int { return len(m.columns) }

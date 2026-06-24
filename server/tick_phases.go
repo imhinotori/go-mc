@@ -1,5 +1,11 @@
 package server
 
+import (
+	"github.com/imhinotori/sulfur/level"
+	pk "github.com/imhinotori/sulfur/net/packet"
+	"github.com/imhinotori/sulfur/world"
+)
+
 // tickOnce runs ONE logical tick: the explicit, fixed-order phase pipeline (TICK-01).
 // drainInbound is intentionally NOT here — Run drains inbound once per wake before
 // calling tickOnce, kept separate so input is drained per wake, not per catch-up
@@ -62,8 +68,29 @@ func (t *TickLoop) resolveSubtickInputs() {
 // tickWorld advances world/block-tick state. Phase 4 fills it.
 func (t *TickLoop) tickWorld() { t.trace("tickWorld") }
 
-// tickChunks advances chunk loading/section state. Phase 4 fills it.
-func (t *TickLoop) tickChunks() { t.trace("tickChunks") }
+// tickChunks issues the per-player chunk requests for this tick (WORLD-05). For each
+// player it walks the center-out needed ring out to the player's CLAMPED view distance
+// and, for every column still Empty, marks it Loading and issues exactly one
+// worker.Request. It NEVER re-requests a Loading/Ready column, so re-walking the same
+// bounded ring every tick (position spam, threat T-4-06) issues no duplicate work; the
+// worker's singleflight collapses any cross-player overlap (threat T-4-02). The whole
+// ring is bounded by the server clamp, so an untrusted client cannot make the request
+// set unbounded (threat T-4-01). Runs on the owner goroutine over tick-owned state.
+func (t *TickLoop) tickChunks() {
+	t.trace("tickChunks")
+	if t.world == nil || t.worker == nil {
+		return // no world wired (Phase-3-style tests / pre-SetWorld): cheap no-op
+	}
+	for _, p := range t.players {
+		ring := centerOutRing(p.center, p.viewDist)
+		for _, pos := range ring {
+			if t.world.IsEmpty(pos) {
+				t.world.MarkLoading(pos) // Empty -> Loading: this tick owns the single request
+				t.worker.Request(pos)    // non-blocking; drops if the bounded queue is full
+			}
+		}
+	}
+}
 
 // tickEntities advances entity state. Phase 6 fills it.
 func (t *TickLoop) tickEntities() { t.trace("tickEntities") }
@@ -74,10 +101,60 @@ func (t *TickLoop) tickAI() { t.trace("tickAI") }
 // tickPhysics resolves movement/collision. Phase 6 fills it.
 func (t *TickLoop) tickPhysics() { t.trace("tickPhysics") }
 
-// flushOutbound enqueues this tick's clientbound packets via Client.Send. A no-op
-// until players join (the writeLoop remains the sole socket writer — the tick never
-// writes the socket directly).
+// flushOutbound enqueues this tick's clientbound chunk stream per player (WORLD-05).
+// For each player it first sends the chunk-cache framing once per center
+// (SetChunkCacheCenter + SetChunkCacheRadius), then collects the player's center-out
+// ring columns that are Ready AND not yet sent and, if any, brackets them in
+// ChunkBatchStart -> N x ClientboundLevelChunkWithLight (center-out order) ->
+// ChunkBatchFinished(N). Each column is added to the player's sent-set so it is sent at
+// most once; re-flushing the same center sends nothing new (idempotent — threat T-4-06).
+// All sends go through the bounded Client.Send queue (the writeLoop stays the SOLE
+// socket writer); the tick never writes the socket directly. Runs on the owner.
 func (t *TickLoop) flushOutbound() {
 	t.trace("flushOutbound")
-	// No players yet; nothing to flush. Wave 2/3 enqueues per-player packets here.
+	if t.world == nil {
+		return // no world wired: cheap no-op (Phase-3-style tests / pre-SetWorld)
+	}
+	for _, p := range t.players {
+		if p.client == nil {
+			continue
+		}
+		if p.sentChunks == nil {
+			p.sentChunks = make(map[level.ChunkPos]bool) // lazy-init: keep registration minimal
+		}
+
+		// Send the chunk-cache framing once per center so the client knows where its
+		// streaming window is centered and how wide it is before the chunks arrive.
+		if !p.centerSent {
+			p.client.Send(world.SetChunkCacheCenter(p.center[0], p.center[1]))
+			p.client.Send(world.SetChunkCacheRadius(int32(p.viewDist)))
+			p.centerSent = true
+		}
+
+		ring := centerOutRing(p.center, p.viewDist)
+		var batch []pk.Packet
+		for _, pos := range ring {
+			if p.sentChunks[pos] {
+				continue // already streamed to this player — send at most once
+			}
+			ch, ok := t.world.Get(pos)
+			if !ok {
+				continue // not Ready yet — a later tick will send it once the worker rejoins
+			}
+			pkt, err := world.WriteLevelChunkWithLight(pos[0], pos[1], ch)
+			if err != nil {
+				continue // encoding failure for this column: skip, do not poison the batch
+			}
+			batch = append(batch, pkt)
+			p.sentChunks[pos] = true
+		}
+
+		if len(batch) > 0 {
+			p.client.Send(world.ChunkBatchStart())
+			for _, pkt := range batch {
+				p.client.Send(pkt)
+			}
+			p.client.Send(world.ChunkBatchFinished(int32(len(batch))))
+		}
+	}
 }
