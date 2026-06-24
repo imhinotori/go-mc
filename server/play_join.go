@@ -6,6 +6,8 @@ import (
 	"github.com/imhinotori/sulfur/data/packetid"
 	"github.com/imhinotori/sulfur/level"
 	pk "github.com/imhinotori/sulfur/net/packet"
+
+	"github.com/google/uuid"
 )
 
 // play_join.go is the MINIMAL Play-state bootstrap (a tightly-scoped slice of
@@ -237,6 +239,210 @@ func writePlayerPositionPacket(teleportID int, x, y, z float64, yaw, pitch float
 		pk.Float(yaw), pk.Float(pitch),
 		pk.Int(0), // relative flags: 0 == all absolute
 	)
+}
+
+// --- Early-Play tail builders (Plan 05-02, PLAY-01/05) ---------------------------
+//
+// These four packets are APPENDED to the bootstrap after Login/GameEvent/PlayerPosition
+// (and still before loop.register) so a joining client becomes a real, listed player
+// rather than just a camera on solid ground. All four wire layouts are jar-derived
+// (decompiled from the unobfuscated 26.2 inner jar). PlayerAbilities and SetHeldSlot are
+// simple/fully-confirmed; the PlayerInfoUpdate entry sub-encoding and the
+// SetDefaultSpawnPosition RespawnData bytes are flagged below as Plan-05-03 capture-diff
+// candidates (the FIELD COUNT/TYPES come from the jar now; the exact bytes are sealed by
+// the capture-diff against a real vanilla server).
+
+// PlayerInfoUpdate action-mask bits. The 776 ClientboundPlayerInfoUpdatePacket encodes
+// its EnumSet<Action> via RegistryFriendlyByteBuf.writeEnumSet(actions, Action.class).
+// The Action enum has exactly 8 values (ADD_PLAYER, INITIALIZE_CHAT, UPDATE_GAME_MODE,
+// UPDATE_LISTED, UPDATE_LATENCY, UPDATE_DISPLAY_NAME, UPDATE_LIST_ORDER, UPDATE_HAT — the
+// last two added vs the old 6), so writeEnumSet emits a fixed 1-byte bitset where bit i
+// is set iff the i-th enum constant is present. A plain pk.Byte(mask) is byte-identical to
+// that single-byte FixedBitSet (Assumption A3, sealed by the Plan-05-03 capture-diff).
+const (
+	piuAddPlayer      = 0x01 // bit 0: ADD_PLAYER
+	piuUpdateGameMode = 0x04 // bit 2: UPDATE_GAME_MODE
+	piuUpdateListed   = 0x08 // bit 3: UPDATE_LISTED
+)
+
+// playerAbilitiesFlags packs the four ability booleans into the jar-verified bit layout
+// (ClientboundPlayerAbilitiesPacket.write: invulnerable=0x01, isFlying=0x02, canFly=0x04,
+// instabuild=0x08). Survival default is all-false -> 0x00.
+const (
+	abilityInvulnerable = 0x01
+	abilityFlying       = 0x02
+	abilityCanFly       = 0x04
+	abilityInstabuild   = 0x08
+)
+
+// defaultFlyingSpeed / defaultWalkingSpeed are the Abilities speeds for a fresh survival
+// player (Abilities.getFlyingSpeed / getWalkingSpeed defaults). Sent as Floats after the
+// flags byte.
+const (
+	defaultFlyingSpeed  = 0.05
+	defaultWalkingSpeed = 0.1
+)
+
+// defaultHeldSlot is the hotbar slot the player starts holding (slot 0). Sent as a single
+// VarInt by ClientboundSetHeldSlot.
+const defaultHeldSlot = 0
+
+// writePlayerAbilities builds ClientboundPlayerAbilities. Wire order is jar-derived from
+// ClientboundPlayerAbilitiesPacket.write: a single Byte of flags followed by Float
+// flyingSpeed and Float walkingSpeed. The survival join sends all-false flags (0x00) so
+// the client is a normal, non-flying, non-creative player.
+func writePlayerAbilities(invuln, flying, canFly, instabuild bool, flySpeed, walkSpeed float32) pk.Packet {
+	var flags int8
+	if invuln {
+		flags |= abilityInvulnerable
+	}
+	if flying {
+		flags |= abilityFlying
+	}
+	if canFly {
+		flags |= abilityCanFly
+	}
+	if instabuild {
+		flags |= abilityInstabuild
+	}
+	return pk.Marshal(
+		int32(packetid.ClientboundPlayerAbilities),
+		pk.Byte(flags),
+		pk.Float(flySpeed),
+		pk.Float(walkSpeed),
+	)
+}
+
+// writeSetHeldSlot builds ClientboundSetHeldSlot — a single VarInt hotbar slot index
+// (jar-verified STREAM_CODEC over ByteBufCodecs.VAR_INT).
+func writeSetHeldSlot(slot int32) pk.Packet {
+	return pk.Marshal(
+		int32(packetid.ClientboundSetHeldSlot),
+		pk.VarInt(slot),
+	)
+}
+
+// writePlayerInfoUpdateAdd builds a single-entry ClientboundPlayerInfoUpdate that adds the
+// joining player to its OWN tab list (PLAY-05). Wire order is jar-derived from
+// ClientboundPlayerInfoUpdatePacket.write:
+//
+//	Byte                 actions        (writeEnumSet over the 8-action enum -> 1-byte mask)
+//	playerInfoEntriesEncoder            (writeCollection: VarInt(count) + per-entry body)
+//
+// The self entry uses the minimal listed set ADD_PLAYER|UPDATE_GAME_MODE|UPDATE_LISTED
+// (0x0D). Within the entry the body is UUID first, then each present action's writer runs
+// in ENUM ORDER (ADD_PLAYER before UPDATE_GAME_MODE before UPDATE_LISTED). The ADD_PLAYER
+// property list (GAME_PROFILE_PROPERTIES) is a count-prefixed list; the offline server
+// sends 0 properties. The entry sub-encoding (property-list shape, listed Boolean) is a
+// Plan-05-03 capture-diff candidate — the framing here matches the jar; the exact bytes
+// are sealed by the capture-diff.
+func writePlayerInfoUpdateAdd(id uuid.UUID, name string, gameMode int32) pk.Packet {
+	mask := int8(piuAddPlayer | piuUpdateGameMode | piuUpdateListed)
+	return pk.Marshal(
+		int32(packetid.ClientboundPlayerInfoUpdate),
+		pk.Byte(mask),
+		playerInfoEntriesEncoder{id: id, name: name, gameMode: gameMode},
+	)
+}
+
+// playerInfoEntriesEncoder writes the PlayerInfoUpdate entries collection for the single
+// self-entry: VarInt(1) count, then the entry. The entry begins with the profile UUID,
+// then the present actions are written in enum order:
+//
+//	[ADD_PLAYER]       String name, VarInt(0) property count (no signed properties offline)
+//	[UPDATE_GAME_MODE] VarInt gameMode (GameType.getId)
+//	[UPDATE_LISTED]    Boolean listed (true — the player appears in its own list)
+//
+// CAPTURE-DIFF CANDIDATE (Plan 05-03): the property-list sub-encoding and the listed
+// Boolean are pinned to the jar's framing here; the capture-diff seals the exact bytes.
+type playerInfoEntriesEncoder struct {
+	id       uuid.UUID
+	name     string
+	gameMode int32
+}
+
+func (e playerInfoEntriesEncoder) WriteTo(w io.Writer) (int64, error) {
+	var n int64
+	write := func(f pk.FieldEncoder) error {
+		m, err := f.WriteTo(w)
+		n += m
+		return err
+	}
+	if err := write(pk.VarInt(1)); err != nil { // entry count
+		return n, err
+	}
+	if err := write(pk.UUID(e.id)); err != nil { // profileId (UUID, 16 raw bytes)
+		return n, err
+	}
+	// ADD_PLAYER: profile name + property count (0 properties offline).
+	if err := write(pk.String(e.name)); err != nil {
+		return n, err
+	}
+	if err := write(pk.VarInt(0)); err != nil { // GAME_PROFILE_PROPERTIES count
+		return n, err
+	}
+	// UPDATE_GAME_MODE: GameType.getId as VarInt.
+	if err := write(pk.VarInt(e.gameMode)); err != nil {
+		return n, err
+	}
+	// UPDATE_LISTED: listed Boolean.
+	if err := write(pk.Boolean(true)); err != nil {
+		return n, err
+	}
+	return n, nil
+}
+
+// writeSetDefaultSpawnPosition builds ClientboundSetDefaultSpawnPosition. The 26.x packet
+// wraps a LevelData.RespawnData record whose STREAM_CODEC is composite(GlobalPos, FLOAT,
+// FLOAT), and GlobalPos is composite(ResourceKey<Level> dimension, BlockPos). On the wire
+// that is, in order:
+//
+//	Identifier dimension   (ResourceKey<Level>.streamCodec == a plain ResourceLocation)
+//	Long       blockPos    (BlockPos.STREAM_CODEC == the packed x/z/y long; pk.Position)
+//	Float      yaw
+//	Float      pitch
+//
+// CAPTURE-DIFF CANDIDATE (Plan 05-03): the RespawnData/GlobalPos restructure is new in
+// 26.x; the FIELD COUNT/TYPES are jar-confirmed here, the exact bytes are sealed by the
+// capture-diff against a real vanilla 26.2 server. Its absence likely does not kick (A5);
+// it is sent for compass/respawn correctness.
+func writeSetDefaultSpawnPosition(dimension string, pos pk.Position, yaw, pitch float32) pk.Packet {
+	return pk.Marshal(
+		int32(packetid.ClientboundSetDefaultSpawnPosition),
+		respawnDataEncoder{dimension: dimension, pos: pos, yaw: yaw, pitch: pitch},
+	)
+}
+
+// respawnDataEncoder writes the nested RespawnData record (GlobalPos + yaw + pitch),
+// mirroring commonPlayerSpawnInfoEncoder's custom-FieldEncoder style. GlobalPos is the
+// dimension Identifier followed by the packed BlockPos long.
+type respawnDataEncoder struct {
+	dimension string
+	pos       pk.Position
+	yaw       float32
+	pitch     float32
+}
+
+func (e respawnDataEncoder) WriteTo(w io.Writer) (int64, error) {
+	var n int64
+	write := func(f pk.FieldEncoder) error {
+		m, err := f.WriteTo(w)
+		n += m
+		return err
+	}
+	if err := write(pk.Identifier(e.dimension)); err != nil { // GlobalPos.dimension
+		return n, err
+	}
+	if err := write(e.pos); err != nil { // GlobalPos.pos (packed BlockPos long)
+		return n, err
+	}
+	if err := write(pk.Float(e.yaw)); err != nil {
+		return n, err
+	}
+	if err := write(pk.Float(e.pitch)); err != nil {
+		return n, err
+	}
+	return n, nil
 }
 
 // sendPlayBootstrap enqueues the three Play-state bootstrap packets on the

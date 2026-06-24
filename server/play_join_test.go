@@ -283,6 +283,151 @@ func TestJoinSequenceOrdering(t *testing.T) {
 	}
 }
 
+// TestPlayerAbilitiesWire decodes the early-Play ClientboundPlayerAbilities packet and
+// asserts the jar-verified layout: Byte flags (bit0 invuln, bit1 flying, bit2 canFly,
+// bit3 instabuild) + Float flyingSpeed + Float walkingSpeed. The survival default sends
+// all-false flags, so the flags byte is 0x00.
+func TestPlayerAbilitiesWire(t *testing.T) {
+	p := writePlayerAbilities(false, false, false, false, 0.05, 0.1)
+	if packetid.ClientboundPacketID(p.ID) != packetid.ClientboundPlayerAbilities {
+		t.Fatalf("Abilities id = %d, want ClientboundPlayerAbilities (%d)", p.ID, packetid.ClientboundPlayerAbilities)
+	}
+	var (
+		flags     pk.Byte
+		flySpeed  pk.Float
+		walkSpeed pk.Float
+	)
+	if err := p.Scan(&flags, &flySpeed, &walkSpeed); err != nil {
+		t.Fatalf("Abilities scan failed (wire layout mismatch): %v", err)
+	}
+	if flags != 0x00 {
+		t.Errorf("flags = 0x%02x, want 0x00 (all survival defaults false)", byte(flags))
+	}
+	if flySpeed != 0.05 {
+		t.Errorf("flyingSpeed = %v, want 0.05", flySpeed)
+	}
+	if walkSpeed != 0.1 {
+		t.Errorf("walkingSpeed = %v, want 0.1", walkSpeed)
+	}
+	if used := decodedLen(t, p.Data, &flags, &flySpeed, &walkSpeed); used != len(p.Data) {
+		t.Errorf("Abilities decoded %d of %d bytes — field set mismatch", used, len(p.Data))
+	}
+
+	// A non-default flag set must pack into the correct bits (invuln|canFly == 0x05).
+	p2 := writePlayerAbilities(true, false, true, false, 0.05, 0.1)
+	var flags2 pk.Byte
+	if err := p2.Scan(&flags2); err != nil {
+		t.Fatalf("Abilities(flagged) scan failed: %v", err)
+	}
+	if flags2 != 0x05 {
+		t.Errorf("flags = 0x%02x, want 0x05 (invuln|canFly)", byte(flags2))
+	}
+}
+
+// TestSetHeldSlotWire asserts the early-Play ClientboundSetHeldSlot packet encodes as a
+// single VarInt slot index (jar-verified STREAM_CODEC over VAR_INT).
+func TestSetHeldSlotWire(t *testing.T) {
+	p := writeSetHeldSlot(0)
+	if packetid.ClientboundPacketID(p.ID) != packetid.ClientboundSetHeldSlot {
+		t.Fatalf("SetHeldSlot id = %d, want ClientboundSetHeldSlot (%d)", p.ID, packetid.ClientboundSetHeldSlot)
+	}
+	var slot pk.VarInt
+	if err := p.Scan(&slot); err != nil {
+		t.Fatalf("SetHeldSlot scan failed: %v", err)
+	}
+	if slot != 0 {
+		t.Errorf("slot = %d, want 0", slot)
+	}
+	if used := decodedLen(t, p.Data, &slot); used != len(p.Data) {
+		t.Errorf("SetHeldSlot decoded %d of %d bytes — field set mismatch", used, len(p.Data))
+	}
+}
+
+// TestPlayerInfoUpdateWire decodes the self tab-list entry and asserts the jar-verified
+// 776 layout: a 1-byte action mask (writeEnumSet over the 8-action enum), then a
+// count-prefixed entry list. The self entry uses ADD_PLAYER|UPDATE_GAME_MODE|UPDATE_LISTED
+// (0x01|0x04|0x08 == 0x0D); the entry body is UUID, then — in enum order — [ADD_PLAYER]
+// String name + VarInt(0) propertyCount, [UPDATE_GAME_MODE] VarInt gameMode, [UPDATE_LISTED]
+// Boolean listed. The entry sub-encoding is a Plan-05-03 capture-diff candidate; this test
+// pins the framing the capture-diff seals to exact bytes.
+func TestPlayerInfoUpdateWire(t *testing.T) {
+	id := uuid.New()
+	p := writePlayerInfoUpdateAdd(id, "Steve", gameModeSurvival)
+	if packetid.ClientboundPacketID(p.ID) != packetid.ClientboundPlayerInfoUpdate {
+		t.Fatalf("PlayerInfoUpdate id = %d, want ClientboundPlayerInfoUpdate (%d)", p.ID, packetid.ClientboundPlayerInfoUpdate)
+	}
+	var (
+		mask       pk.Byte
+		count      pk.VarInt
+		entryUUID  pk.UUID
+		name       pk.String
+		propCount  pk.VarInt
+		gameMode   pk.VarInt
+		listed     pk.Boolean
+	)
+	if err := p.Scan(&mask, &count, &entryUUID, &name, &propCount, &gameMode, &listed); err != nil {
+		t.Fatalf("PlayerInfoUpdate scan failed (wire layout mismatch): %v", err)
+	}
+	if byte(mask) != 0x0D {
+		t.Errorf("action mask = 0x%02x, want 0x0D (ADD_PLAYER|UPDATE_GAME_MODE|UPDATE_LISTED)", byte(mask))
+	}
+	if count != 1 {
+		t.Errorf("entry count = %d, want 1 (single self-entry)", count)
+	}
+	if uuid.UUID(entryUUID) != id {
+		t.Errorf("entry uuid = %s, want %s", uuid.UUID(entryUUID), id)
+	}
+	if string(name) != "Steve" {
+		t.Errorf("entry name = %q, want %q", string(name), "Steve")
+	}
+	if propCount != 0 {
+		t.Errorf("property count = %d, want 0 (offline server sends no properties)", propCount)
+	}
+	if gameMode != gameModeSurvival {
+		t.Errorf("gameMode = %d, want %d (survival)", gameMode, gameModeSurvival)
+	}
+	if !listed {
+		t.Errorf("listed = false, want true (player appears in its own tab list)")
+	}
+	if used := decodedLen(t, p.Data, &mask, &count, &entryUUID, &name, &propCount, &gameMode, &listed); used != len(p.Data) {
+		t.Errorf("PlayerInfoUpdate decoded %d of %d bytes — field set mismatch", used, len(p.Data))
+	}
+}
+
+// TestSetDefaultSpawnPositionWire asserts the 26.x-restructured layout. The packet wraps
+// a LevelData.RespawnData record whose STREAM_CODEC is composite(GlobalPos, FLOAT, FLOAT),
+// and GlobalPos is composite(ResourceKey<Level> dimension, BlockPos). On the wire that is:
+// Identifier dimension, Long (packed BlockPos), Float yaw, Float pitch. The exact bytes are
+// a Plan-05-03 capture-diff candidate; this test pins the field count/types from the jar so
+// the capture-diff asserts the SAME framing.
+func TestSetDefaultSpawnPositionWire(t *testing.T) {
+	p := writeSetDefaultSpawnPosition(overworldDimensionName, pk.Position{X: 8, Y: -46, Z: 8}, 0, 0)
+	if packetid.ClientboundPacketID(p.ID) != packetid.ClientboundSetDefaultSpawnPosition {
+		t.Fatalf("SetDefaultSpawnPosition id = %d, want ClientboundSetDefaultSpawnPosition (%d)", p.ID, packetid.ClientboundSetDefaultSpawnPosition)
+	}
+	var (
+		dimension pk.Identifier
+		pos       pk.Position
+		yaw       pk.Float
+		pitch     pk.Float
+	)
+	if err := p.Scan(&dimension, &pos, &yaw, &pitch); err != nil {
+		t.Fatalf("SetDefaultSpawnPosition scan failed (wire layout mismatch): %v", err)
+	}
+	if string(dimension) != overworldDimensionName {
+		t.Errorf("dimension = %q, want %q", string(dimension), overworldDimensionName)
+	}
+	if pos.X != 8 || pos.Y != -46 || pos.Z != 8 {
+		t.Errorf("blockpos = (%d,%d,%d), want (8,-46,8)", pos.X, pos.Y, pos.Z)
+	}
+	if yaw != 0 || pitch != 0 {
+		t.Errorf("yaw/pitch = (%v,%v), want (0,0)", yaw, pitch)
+	}
+	if used := decodedLen(t, p.Data, &dimension, &pos, &yaw, &pitch); used != len(p.Data) {
+		t.Errorf("SetDefaultSpawnPosition decoded %d of %d bytes — field set mismatch", used, len(p.Data))
+	}
+}
+
 // decodedLen re-decodes fields from data and returns how many bytes were consumed, so
 // a test can assert the packet body has no trailing/short bytes beyond the known field
 // set. It re-reads into the provided decoders (their values are overwritten).
