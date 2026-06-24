@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: verifying
-stopped_at: Completed 07-01-PLAN.md
-last_updated: "2026-06-24T15:37:36.221Z"
+stopped_at: Completed 07-02-PLAN.md
+last_updated: "2026-06-24T15:43:29.988Z"
 last_activity: 2026-06-24
 progress:
   total_phases: 9
   completed_phases: 6
   total_plans: 30
-  completed_plans: 27
-  percent: 90
+  completed_plans: 28
+  percent: 93
 ---
 
 # Project State
@@ -74,7 +74,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [█████████░] 90%
+Progress: [█████████░] 93%
 
 ## Performance Metrics
 
@@ -118,6 +118,7 @@ Progress: [█████████░] 90%
 | Phase 06 P06 | 35 min | 2 tasks | 7 files |
 | Phase 07 P01 | 38min | 2 tasks | 6 files |
 | Phase 07 P05 | 35 min | 2 tasks | 5 files |
+| Phase 07-ai-pathfinding-commands-chat P02 | 41min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -179,6 +180,7 @@ Recent decisions affecting current work:
 - [Phase 06]: ENT-06 save-on-leave snapshots on the owner (removePlayer) and runs disk IO off-tick (RunSaveLoop) — the Phase-4 chunk-result discipline (TICK-05/T-6-15)
 - [Phase 06]: ENT-06 disk inventory persists as save.Item via the item registry; the wire component SlotData is never written to disk (Pitfall 6)
 - [Phase 07]: AI-01 GoalSelector ported from javap: flag-lock arbitration (canBeReplacedBy = isInterruptable && other.priority<this.priority; smaller priority = higher precedence; per-flag lockedFlags map + NO_GOAL maxInt holder) + passive Pig goal set at exact registerGoals priorities (stroll@6 MOVE, lookAtPlayer@7 LOOK, lookAround@8 MOVE|LOOK) + serverAiStep-order driver. A goal SETS wantTarget/headYaw, never moves the mob (07-02). Tick-owned, zero deps, -race clean.
+- [Phase 07-ai-pathfinding-commands-chat]: 07-02: computePath is PURE over an immutable pathRegion snapshot (the Phase-8 hinge); A* ported from PathFinder.findPath bytecode with a maxVisited budget (16*16*0.5=128) as the DoS guard; path-following via the existing moveEntity — Structuring AI-02 as the request->snapshot->result seam vanilla uses makes OPT-01 a swap of the executor, not a rewrite; the budget bounds an unreachable-target A* (Pitfall 6 / T-7-04)
 
 ### Pending Todos
 
@@ -205,7 +207,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-24T15:37:31.871Z
-Stopped at: Completed 07-01-PLAN.md
+Last session: 2026-06-24T15:43:22.110Z
+Stopped at: Completed 07-02-PLAN.md
 Resume file: None
 Next: plan Phase 6 (entities / inventory / persistence) — the first-playable Player Session seam (movement, tick-owned position, the following ring, the tab list) is in place to build on. Deferred: KeepAlive double-leave hardening (Phase 3, surfaces when real timeout-driven disconnects land). The pulled-forward bootstrap deferred-row is now CLOSED.
