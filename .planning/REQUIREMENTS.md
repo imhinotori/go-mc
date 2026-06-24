@@ -76,7 +76,7 @@ Requirements for the initial release. The "user" is an unmodified vanilla 26.2 (
 - [ ] **OPT-02**: Async entity tracker runs visibility updates off the main tick and rejoins via the apply-async seam
 - [ ] **OPT-03**: Async mob spawning scans candidate locations off-thread
 - [x] **OPT-04**: Hot-path collections use lock-free/specialized variants (xsync/v4); worker pools use ants/v2
-- [ ] **OPT-05**: Linear region file format reduces disk I/O and footprint
+- [x] **OPT-05**: Linear region file format reduces disk I/O and footprint
 - [x] **OPT-06**: The server passes `-race` clean on every async subsystem
 
 ## v2 Requirements
@@ -158,7 +158,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | OPT-02 | Phase 8 | Pending |
 | OPT-03 | Phase 8 | Pending |
 | OPT-04 | Phase 8 | Complete |
-| OPT-05 | Phase 8 | Pending |
+| OPT-05 | Phase 8 | Complete |
 | OPT-06 | Phase 8 | Complete |
 | ONLINE-01 (v2) | Phase 9 | Pending |
 | ONLINE-02 (v2) | Phase 9 | Pending |
