@@ -59,25 +59,53 @@ func (p *LinkedListQueue[T]) Close() {
 }
 
 func NewChannelQueue[T any](n int) (q Queue[T]) {
-	return make(ChannelQueue[T], n)
+	return &ChannelQueue[T]{ch: make(chan T, n)}
 }
 
-type ChannelQueue[T any] chan T
+// ChannelQueue is a bounded, non-blocking MPSC queue backed by a buffered channel.
+// Push is a non-blocking try-send (drops when full); Pull blocks until an item is
+// available or the queue is closed.
+//
+// CONCURRENCY: a bare `close(ch)` racing a `ch <- v` is a data race (and panics with
+// "send on closed channel"). Multiple producers (e.g. the tick's flushOutbound and a
+// readLoop-triggered Close) touch this queue, so Close and Push are serialized by a
+// mutex + a `closed` flag. Once closed, Push is a no-op returning false (the connection
+// is going away) and Close is idempotent. Pull still reads the channel without the lock:
+// the buffered channel is itself safe for a single concurrent reader, and a closed
+// channel drains its buffer then reports ok=false — which is exactly the writeLoop's
+// stop signal. This makes -race clean under concurrent Close/Push (the Phase-5 join-seam
+// race the capture-diff load surfaced).
+type ChannelQueue[T any] struct {
+	ch     chan T
+	mu     sync.Mutex
+	closed bool
+}
 
-func (c ChannelQueue[T]) Push(v T) bool {
+func (c *ChannelQueue[T]) Push(v T) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return false // queue going away: drop, never send on a closed channel
+	}
 	select {
-	case c <- v:
+	case c.ch <- v:
 		return true
 	default:
-		return false
+		return false // full: caller's bounded drop-and-disconnect policy applies
 	}
 }
 
-func (c ChannelQueue[T]) Pull() (v T, ok bool) {
-	v, ok = <-c
+func (c *ChannelQueue[T]) Pull() (v T, ok bool) {
+	v, ok = <-c.ch
 	return
 }
 
-func (c ChannelQueue[T]) Close() {
-	close(c)
+func (c *ChannelQueue[T]) Close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return // idempotent
+	}
+	c.closed = true
+	close(c.ch)
 }
