@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"runtime"
 	"sort"
 	"sync/atomic"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/imhinotori/sulfur/world"
 
 	"github.com/google/uuid"
+	"github.com/panjf2000/ants/v2"
 )
 
 // msptRingSize is the number of recent tick durations kept for the rolling
@@ -124,6 +126,28 @@ type TickLoop struct {
 	// this channel; applyAsyncResults drains it on the owner. The adapter touches NO
 	// tick state — it only re-wraps the immutable ChunkResult — so it adds no race.
 	asyncBridge chan asyncResult
+
+	// asyncIn2 is the Phase-8 compute-pool rejoin channel (OPT-04/OPT-06), the SECOND result
+	// channel alongside asyncIn. It is a BOUNDED buffered channel (asyncIn2Buffer): the per-
+	// subsystem ants pools below send their immutable asyncResult on it from off-tick workers,
+	// and applyAsyncResults drains it NON-BLOCKINGLY on the OWNER each tick (take what's queued,
+	// never park the tick — threat T-8-03 / mirrors asyncBridge's bounded buffer). Kept SEPARATE
+	// from asyncIn so the Phase-4 chunkReady wiring (SetWorld/asyncBridge, which tests depend on)
+	// is untouched — this is purely additive. Always constructed in NewTickLoop (non-nil in
+	// production and tests); OPT-01/02/03 fill the pool-submit sites that feed it.
+	asyncIn2 chan asyncResult
+
+	// pathPool, trackerPool, spawnPool are the per-subsystem bounded, non-blocking ants pools
+	// (08-RESEARCH Pattern 1 — ONE pool per async subsystem). They are constructed in NewTickLoop
+	// (cheap and idle until a subsystem submits) and released by Close() on shutdown. A worker
+	// runs a PURE computation over an immutable snapshot copied on the owner and rejoins by
+	// sending an asyncResult on asyncIn2 — it NEVER touches tick-owned state (TICK-05). pathPool
+	// is CPU-sized (pathfinding is the heavy, frequent compute); trackerPool/spawnPool are small
+	// (their submits are sparse). They are idle no-ops in this Wave-0 plan; OPT-01 (08-02) submits
+	// to pathPool, OPT-02 (08-04) to trackerPool, OPT-03 (08-05) to spawnPool.
+	pathPool    *ants.Pool
+	trackerPool *ants.Pool
+	spawnPool   *ants.Pool
 
 	// tracker is the (synchronous stub) tracking executor; Phase 8 swaps it.
 	tracker tracker
@@ -405,7 +429,19 @@ func NewTickLoop(clock Clock) *TickLoop {
 		unregister: make(chan *Client, registerBuffer),
 		entities:   newEntityStore(),     // ENT-01: tick-owned entity store, non-nil from construction
 		idAlloc:    &EntityIDAllocator{}, // ENT-01: monotonic id allocator (first AllocID()==1)
-		// asyncIn stays nil (no-op seam); ring is zero-valued; gametime starts at 0.
+		// asyncIn stays nil (no-op Phase-4 seam until SetWorld); ring is zero-valued; gametime 0.
+
+		// Phase-8 async substrate (OPT-04): the SECOND rejoin channel + the per-subsystem
+		// non-blocking ants pools, constructed here (cheap and idle) so applyAsyncResults drains
+		// asyncIn2 from day one and OPT-01/02/03 inherit live pools. asyncIn2 is bounded so a
+		// burst of worker results never blocks a worker's send (T-8-03); the pools are bounded +
+		// non-blocking so a saturated Submit drops rather than stalls the tick (T-8-02 / Pitfall
+		// 4). Released by Close() on shutdown. pathPool is CPU-sized (the heavy, frequent path
+		// compute); trackerPool/spawnPool are small (sparse submits).
+		asyncIn2:    make(chan asyncResult, asyncIn2Buffer),
+		pathPool:    newAsyncPool(runtime.NumCPU()),
+		trackerPool: newAsyncPool(asyncSmallPoolSize),
+		spawnPool:   newAsyncPool(asyncSmallPoolSize),
 	}
 	// ENT-01: assign the REAL synchronous entityTracker behind the unchanged tracker.Tick()
 	// seam (replacing the Phase-3 noopTracker). The interface (tracker{ Tick() }) and the
@@ -416,6 +452,36 @@ func NewTickLoop(clock Clock) *TickLoop {
 	// is the Phase-8 swap-point: replace &entityTracker{loop: t} with the async executor.
 	t.tracker = &entityTracker{loop: t}
 	return t
+}
+
+// asyncIn2Buffer bounds the Phase-8 compute-pool rejoin channel (asyncIn2). It mirrors
+// asyncBridgeBuffer: generously above the per-tick async-result burst (the pools are themselves
+// bounded), so an off-tick worker's send never parks; if it ever filled, the bound caps memory
+// growth (threat T-8-03) rather than letting the result channel grow without limit.
+const asyncIn2Buffer = 256
+
+// asyncSmallPoolSize is the worker cap for the sparse-submit subsystems (tracker, spawner): a
+// small pool is ample because their submits are infrequent relative to pathfinding's per-mob
+// cadence (08-RESEARCH Pitfall 4 — size each pool to its subsystem's steady state). pathPool is
+// CPU-sized separately (runtime.NumCPU()).
+const asyncSmallPoolSize = 2
+
+// Close releases the Phase-8 async pools (OPT-04), returning their workers to the runtime. It is
+// idempotent and nil-safe — a TickLoop constructed by NewTickLoop always has the pools, but a
+// double Close or a partially-constructed loop never panics — so main() and tests can tear down
+// cleanly on shutdown. It does NOT close asyncIn2: the channel is left to be garbage-collected
+// with the loop, avoiding a send-on-closed race if a worker is still in flight when Close runs
+// (the bounded buffer absorbs any final sends; the drained-or-not results are simply discarded).
+func (t *TickLoop) Close() {
+	if t.pathPool != nil {
+		t.pathPool.Release()
+	}
+	if t.trackerPool != nil {
+		t.trackerPool.Release()
+	}
+	if t.spawnPool != nil {
+		t.spawnPool.Release()
+	}
 }
 
 // asyncBridgeBuffer bounds the internal worker-results -> asyncResult bridge channel.

@@ -29,18 +29,48 @@ func (t *TickLoop) tickOnce() {
 	t.recordMSPT(t.clock.Now().Sub(start)) // publish the read-only telemetry snapshot (TICK-06)
 }
 
-// applyAsyncResults is the async rejoin seam (TICK-05). It is a genuine no-op today
-// because asyncIn is nil; Phase 8 wires worker result channels here and applies each
-// immutable result on the owner goroutine — without reordering the pipeline.
+// applyAsyncResults is the async rejoin seam (TICK-05). It drains BOTH result channels on the
+// OWNER goroutine, NON-BLOCKINGLY, applying each immutable result via applyTo — WITHOUT reordering
+// the pipeline (its slot and the surrounding phase order are UNCHANGED, so TestTickPhaseOrder
+// still passes):
+//
+//   - asyncIn  is the Phase-4 chunkReady bridge (nil until SetWorld; a nil channel makes its
+//     drain a genuine no-op — the seam just EXISTS in the right slot before a world is wired).
+//   - asyncIn2 is the Phase-8 compute-pool rejoin channel (OPT-04/OPT-06), always non-nil from
+//     NewTickLoop; the per-subsystem ants-pool workers send their immutable asyncResult here and
+//     the owner applies it. This is the SECOND channel — kept separate so the Phase-4 wiring is
+//     untouched (purely additive).
+//
+// Both drains are select-with-default loops: take everything currently queued, then return —
+// NEVER park the tick on either channel (T-8-03). The worker only COMPUTED an immutable result;
+// the OWNER performs the only mutation, here, inside applyTo (the chunkReady discipline,
+// generalized).
 func (t *TickLoop) applyAsyncResults() {
 	t.trace("applyAsyncResults")
-	if t.asyncIn == nil {
-		return // Phase 3: the seam just EXISTS; nothing to apply
+
+	// Drain the Phase-4 chunkReady bridge (skipped cheaply when no world is wired).
+	if t.asyncIn != nil {
+		for {
+			select {
+			case r := <-t.asyncIn:
+				r.applyTo(t) // applied by the owner; the worker only computed an immutable result
+			default:
+				goto phase8 // nothing queued on asyncIn: move to the Phase-8 channel
+			}
+		}
+	}
+
+phase8:
+	// Drain the Phase-8 compute-pool results (OPT-01/02/03 feed this; idle until a subsystem is
+	// swapped, but always present so the drain is live from day one). A nil asyncIn2 is defensive
+	// only — NewTickLoop always constructs it, so it is non-nil in production and tests.
+	if t.asyncIn2 == nil {
+		return
 	}
 	for {
 		select {
-		case r := <-t.asyncIn:
-			r.applyTo(t) // applied by the owner; the worker only computed an immutable result
+		case r := <-t.asyncIn2:
+			r.applyTo(t) // owner applies the immutable Phase-8 result; no async state mutation
 		default:
 			return // non-blocking drain: take what's queued, never park the tick
 		}
