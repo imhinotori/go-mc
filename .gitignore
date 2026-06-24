@@ -25,4 +25,6 @@ temp//world/
 
 # Runtime artifacts (never committed)
 /temp/
-/world/
+# NOTE: do NOT ignore /world/ — it is the Go world subsystem package, not a
+# runtime save dir. Runtime world saves live under /temp/ (regionDir is empty
+# by default). Ignoring /world/ shadows new source files in the package.
