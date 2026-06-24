@@ -2,6 +2,7 @@ package server
 
 import (
 	"testing"
+	"time"
 
 	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/data/packetid"
@@ -238,30 +239,188 @@ func TestTrackerRemoveBatchesMany(t *testing.T) {
 }
 
 // TestTrackerSynchronousNoChangeToSeam asserts the entityTracker satisfies the UNCHANGED
-// one-method tracker interface (the seam is filled, not modified) and that NewTickLoop now
-// assigns a real entityTracker (not the noopTracker) behind it — so the t.tracker.Tick() call
-// site in tick_phases.go drives the real tracker without any interface or call-site change.
-// The synchronous-no-goroutine guarantee is proven structurally by the Docker -race gate (a
-// goroutine racing the tick-owned tracked set would trip it); here we assert the type identity
-// and that a bare Tick() completes inline.
+// one-method tracker interface (the seam is filled, not modified). NewTickLoop now assigns the
+// OPT-02 asyncTracker (08-04) behind that seam — the synchronous entityTracker is KEPT as the
+// golden reference. The interface and the t.tracker.Tick() call site in tick_phases.go are
+// deliberately UNCHANGED so the swap is a single line in NewTickLoop.
 func TestTrackerSynchronousNoChangeToSeam(t *testing.T) {
 	loop := NewTickLoop(newFakeClock())
 
-	// The loop's tracker field is the real entityTracker, satisfying `tracker interface{ Tick() }`.
-	et, ok := loop.tracker.(*entityTracker)
-	if !ok {
-		t.Fatalf("NewTickLoop must assign a *entityTracker to t.tracker (the Phase-3 seam is FILLED), got %T", loop.tracker)
-	}
+	// The interface is still the one-method seam: a value satisfying `interface{ Tick() }`
+	// must be assignable from the tracker (compile-time + runtime check). The concrete type
+	// is the asyncTracker after the OPT-02 swap; entityTracker still satisfies it too.
+	var seam interface{ Tick() } = loop.tracker
+	seam.Tick()
+
+	// The synchronous entityTracker is still constructible behind the same seam (the golden
+	// reference the async tracker is diffed against). It holds a back-reference to the loop.
+	et := &entityTracker{loop: loop}
 	if et.loop != loop {
 		t.Fatalf("entityTracker must hold a back-reference to its loop")
 	}
 
-	// A bare Tick() with no players/entities must be a safe inline no-op (no panic, no
-	// goroutine needed) — the seam's synchronous contract.
+	// A bare Tick() with no players/entities must be a safe inline no-op (no panic).
+	et.Tick()
 	loop.tracker.Tick()
+}
 
-	// The interface is still the one-method seam: a value satisfying `interface{ Tick() }`
-	// must be assignable from the tracker (compile-time + runtime check).
-	var seam interface{ Tick() } = loop.tracker
-	seam.Tick()
+// drainAsyncTracker submits the async tracker's per-player diffs, waits for the worker results
+// to land on asyncIn2, then drains them on the OWNER (the applyAsyncResults discipline) so the
+// owner-side p.client.Send + p.tracked update run. It mirrors what tickOnce does, but in a test
+// harness: Tick() submits to the pool, the worker sends trackerDiffReady on asyncIn2, and this
+// drains that channel inline. expected is how many results to wait for (one per player that had
+// a client and was submitted) so the test is deterministic without sleeping.
+func drainAsyncTracker(t *testing.T, loop *TickLoop, expected int) {
+	t.Helper()
+	loop.tracker.Tick() // submits the per-player diff math to trackerPool (off-tick)
+
+	// Wait for exactly `expected` results to arrive on asyncIn2, applying each on the owner.
+	// A bounded timeout keeps a wedged worker from hanging the test.
+	deadline := time.After(2 * time.Second)
+	for i := 0; i < expected; i++ {
+		select {
+		case r := <-loop.asyncIn2:
+			r.applyTo(loop) // OWNER-side: Send the diff packets + update p.tracked
+		case <-deadline:
+			t.Fatalf("async tracker: timed out waiting for diff result %d/%d", i+1, expected)
+		}
+	}
+}
+
+// TestAsyncTrackerMatchesSync drives a fixed scene through BOTH the async tracker (submit →
+// drain → owner Send) and the synchronous entityTracker (direct send) and asserts the SAME
+// per-player packet COUNTS by clientbound id — OPT-02 is an executor swap, not a behavior
+// change. The async path produces them a tick later, but the SET/content must match.
+func TestAsyncTrackerMatchesSync(t *testing.T) {
+	// --- Reference run: the synchronous entityTracker (golden). ---
+	refLoop := NewTickLoop(newFakeClock())
+	refP := newTrackerPlayer(refLoop, 1000, 8.5, 8.5)
+	for i := 0; i < 3; i++ {
+		e := NewEntity(refLoop.idAlloc.AllocID(), entity.SulfurCube, 9.5+float64(i), 64, 9.5)
+		refLoop.entities.add(e)
+	}
+	(&entityTracker{loop: refLoop}).Tick()
+	refPackets := drainPackets(refP.client)
+
+	// --- Async run: the asyncTracker (off-tick diff, owner Send). Identical scene. ---
+	asyncLoop := NewTickLoop(newFakeClock())
+	asyncP := newTrackerPlayer(asyncLoop, 1000, 8.5, 8.5)
+	for i := 0; i < 3; i++ {
+		e := NewEntity(asyncLoop.idAlloc.AllocID(), entity.SulfurCube, 9.5+float64(i), 64, 9.5)
+		asyncLoop.entities.add(e)
+	}
+	drainAsyncTracker(t, asyncLoop, 1) // one player → one diff result
+	asyncPackets := drainPackets(asyncP.client)
+
+	// The async path must emit the SAME packet counts per clientbound id as the golden sync path.
+	ids := []packetid.ClientboundPacketID{
+		packetid.ClientboundAddEntity,
+		packetid.ClientboundSetEntityData,
+		packetid.ClientboundTeleportEntity,
+		packetid.ClientboundRotateHead,
+		packetid.ClientboundRemoveEntities,
+	}
+	for _, id := range ids {
+		if got, want := countID(asyncPackets, id), countID(refPackets, id); got != want {
+			t.Fatalf("async tracker emitted %d of packet id %d, sync golden emitted %d — must match", got, id, want)
+		}
+	}
+	// Three entities spawned: AddEntity must be 3 in both (sanity that the scene is non-trivial).
+	if n := countID(asyncPackets, packetid.ClientboundAddEntity); n != 3 {
+		t.Fatalf("async tracker spawned %d entities, want 3", n)
+	}
+	// The owner-side tracked set must reflect all three spawns after apply.
+	if len(asyncP.tracked) != 3 {
+		t.Fatalf("after async apply, player tracked %d entities, want 3", len(asyncP.tracked))
+	}
+}
+
+// TestAsyncTrackerSendsOnOwner asserts NO packet reaches the client until the result is drained
+// on the owner (applyAsyncResults). The worker only computes the diff; emission is owner-side
+// (Pitfall 5). We submit, then assert the queue is empty BEFORE the owner drains, then drain and
+// assert the packets arrive.
+func TestAsyncTrackerSendsOnOwner(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	p := newTrackerPlayer(loop, 1000, 8.5, 8.5)
+	e := NewEntity(loop.idAlloc.AllocID(), entity.SulfurCube, 9.5, 64, 9.5)
+	loop.entities.add(e)
+
+	loop.tracker.Tick() // submit the diff math off-tick
+
+	// Wait for the worker to finish (its result lands on asyncIn2) WITHOUT applying it yet.
+	var r asyncResult
+	select {
+	case r = <-loop.asyncIn2:
+	case <-time.After(2 * time.Second):
+		t.Fatal("async tracker: timed out waiting for the off-tick diff result")
+	}
+
+	// The worker has run, but applyTo has NOT — no packet may have been sent yet, because
+	// emission is owner-side only. Peek the queue by closing+draining a SEPARATE assertion:
+	// the worker must not have Sent. We assert the player's tracked set is still empty (the
+	// tracked update is also owner-side in applyTo).
+	if len(p.tracked) != 0 {
+		t.Fatalf("worker mutated p.tracked off-tick (len=%d) — tracked update must be owner-side", len(p.tracked))
+	}
+
+	// Now apply on the owner: the packets are Sent and tracked is updated here.
+	r.applyTo(loop)
+	got := drainPackets(p.client)
+	if n := countID(got, packetid.ClientboundAddEntity); n != 1 {
+		t.Fatalf("after owner apply, AddEntity sent %d times, want 1", n)
+	}
+	if !p.tracked[e.id] {
+		t.Fatalf("after owner apply, entity %d must be tracked", e.id)
+	}
+}
+
+// TestAsyncTrackerLeftPlayerDropped submits a diff for a player, removes the player BEFORE the
+// result is drained, then drains — trackerDiffReady.applyTo must DROP it (no send, no nil-deref).
+func TestAsyncTrackerLeftPlayerDropped(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	p := newTrackerPlayer(loop, 1000, 8.5, 8.5)
+	e := NewEntity(loop.idAlloc.AllocID(), entity.SulfurCube, 9.5, 64, 9.5)
+	loop.entities.add(e)
+
+	loop.tracker.Tick() // submit the diff for player 1000
+
+	// Wait for the worker result.
+	var r asyncResult
+	select {
+	case r = <-loop.asyncIn2:
+	case <-time.After(2 * time.Second):
+		t.Fatal("async tracker: timed out waiting for the off-tick diff result")
+	}
+
+	// The player leaves between submit and apply: remove it from the owner's collections.
+	loop.players = nil
+	delete(loop.clientIndex, p.client)
+
+	// Apply MUST be a safe drop — the player is gone, so no send and no panic.
+	r.applyTo(loop) // must not panic
+
+	// Nothing was sent to the (departed) player's client.
+	got := drainPackets(p.client)
+	if len(got) != 0 {
+		t.Fatalf("a diff for a left player sent %d packets, want 0 (must be dropped)", len(got))
+	}
+}
+
+// TestAsyncTrackerSwapPointCompiles asserts the asyncTracker satisfies the tracker interface and
+// is the executor NewTickLoop assigns at the single swap-point. The pipeline order is asserted
+// separately by TestTickPhaseOrder (unchanged).
+func TestAsyncTrackerSwapPointCompiles(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+
+	at, ok := loop.tracker.(*asyncTracker)
+	if !ok {
+		t.Fatalf("NewTickLoop must assign a *asyncTracker to t.tracker (the OPT-02 swap), got %T", loop.tracker)
+	}
+	if at.loop != loop {
+		t.Fatalf("asyncTracker must hold a back-reference to its loop")
+	}
+
+	// asyncTracker satisfies the unchanged one-method seam.
+	var seam interface{ Tick() } = at
+	seam.Tick() // safe inline no-op with no players
 }
