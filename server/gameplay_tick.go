@@ -162,6 +162,15 @@ func (g *gameTick) AcceptPlayer(
 	// register, so no tick-owned state is mutated across the boundary.
 	teleportID := g.nextTeleportID()
 
+	// Claim the player's server-issued ENTITY id from the tick's monotonic allocator
+	// (ENT-01). Like teleportID, this is computed OFF-tick here: the allocator's only state
+	// is an atomic counter, so the claim crosses no tick-owned game state (exactly the
+	// teleportSeq discipline) and stays -race clean by construction (T-6-08). The id is
+	// carried into the bootstrap as the ClientboundLogin playerId — replacing the old
+	// hard-coded joinEntityID=1 — and recorded on the tickPlayer below so players and
+	// entities draw from one id space with no collision (06-RESEARCH Pitfall 7 / T-6-07).
+	entityID := g.loop.idAlloc.AllocID()
+
 	// Full early-Play bootstrap (PLAY-01/02/05). Enqueue Login(JoinGame) ->
 	// GameEvent(LEVEL_CHUNKS_LOAD_START) -> PlayerPosition -> PlayerAbilities ->
 	// SetHeldSlot -> PlayerInfoUpdate(self tab list) -> SetDefaultSpawnPosition on the
@@ -178,6 +187,7 @@ func (g *gameTick) AcceptPlayer(
 		id:         id,
 		teleportID: teleportID,
 		gameMode:   gameModeSurvival,
+		entityID:   entityID,
 	})
 
 	player := &tickPlayer{
@@ -189,6 +199,7 @@ func (g *gameTick) AcceptPlayer(
 		sentChunks:       make(map[level.ChunkPos]bool),
 		secs:             overworldSections,
 		awaitingTeleport: teleportID,
+		entityID:         entityID,
 	}
 	g.loop.register <- player
 

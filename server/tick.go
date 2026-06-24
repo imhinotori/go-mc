@@ -150,6 +150,21 @@ type TickLoop struct {
 	register   chan *tickPlayer
 	unregister chan *Client
 
+	// entities is the tick-owned entity store (ENT-01). The by-id map + per-section grid
+	// buckets are mutated ONLY by the tick goroutine (TICK-05) — entity spawning (Plan
+	// 06-02), movement/re-bucketing (Plan 06-03), and the tracker's near() broad-phase all
+	// run on-thread over this store. A plain map (not xsync; that is Phase 8).
+	entities *entityStore
+
+	// idAlloc is the monotonic entity-ID allocator (ENT-01). It REPLACES the hard-coded
+	// joinEntityID=1: every player AND every entity draws a unique, never-reused id from
+	// this single space (06-RESEARCH Pitfall 7 / threat T-6-07). Although it is a tick-owned
+	// field, its only state is an atomic counter, so AcceptPlayer claims a player's id
+	// OFF-tick from the accept goroutine without racing the tick — exactly like
+	// gameTick.teleportSeq (T-6-08). The tick goroutine claims entity ids from the same
+	// allocator when it spawns entities (Plans 06-02+).
+	idAlloc *EntityIDAllocator
+
 	// applyInputHook is a test-only observability seam: when non-nil, applyInput
 	// invokes it with each resolved input so a test can assert chronological apply
 	// order without depending on Phase-6 physics. In production it stays nil and costs
@@ -168,6 +183,14 @@ type TickLoop struct {
 // goroutine — the ownership boundary is the structural -race guarantee (TICK-05).
 type tickPlayer struct {
 	client *Client // the Phase-2 connection handle; flushOutbound enqueues via client.Send
+
+	// entityID is this player's server-issued entity id, claimed off-tick from the loop's
+	// EntityIDAllocator at AcceptPlayer (like awaitingTeleport) and threaded into the
+	// bootstrap ClientboundLogin playerId — the replacement for the old hard-coded
+	// joinEntityID=1 (06-RESEARCH Pitfall 7). Players and entities share the allocator's id
+	// space so no id ever collides. Recorded here so a later plan (entity tracker /
+	// the player's own Entity instance) can reference it. Tick-owned once registered.
+	entityID int32
 
 	// subtick is this player's bounded µs-timestamped input buffer (TICK-03). dispatch
 	// appends server-stamped inputs on arrival; resolveSubtickInputs drains it in
@@ -274,6 +297,8 @@ func NewTickLoop(clock Clock) *TickLoop {
 		tracker:    noopTracker{},
 		register:   make(chan *tickPlayer, registerBuffer),
 		unregister: make(chan *Client, registerBuffer),
+		entities:   newEntityStore(),     // ENT-01: tick-owned entity store, non-nil from construction
+		idAlloc:    &EntityIDAllocator{}, // ENT-01: monotonic id allocator (first AllocID()==1)
 		// asyncIn stays nil (no-op seam); ring is zero-valued; gametime starts at 0.
 	}
 }

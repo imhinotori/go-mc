@@ -44,11 +44,6 @@ import (
 // field count/types here and sealed to exact bytes by Plan 05-03's capture-diff. Real
 // inventory, multi-player tab broadcast, and a real spawn from world data remain Phase 5+.
 
-// joinEntityID is the player's server-assigned entity id for the bootstrap. For the
-// single-player Phase-4 milestone a fixed non-zero id is sufficient; Phase 5 assigns
-// real per-player entity ids from the entity manager.
-const joinEntityID = 1
-
 // overworldDimensionTypeID is the registry index of minecraft:overworld within the
 // dimension_type registry sent in the Configuration state (server/registrydata).
 // Entries are sorted alphabetically by filename: overworld(0), overworld_caves(1),
@@ -97,10 +92,15 @@ const overworldSeaLevel = 63
 // isFlat (inside CommonPlayerSpawnInfo) is set TRUE so the client renders the world as
 // a superflat (matching the Superflat generator), giving the correct void-fog and a
 // flat horizon rather than normal-terrain rendering.
-func writeLoginPacket(viewDist int) pk.Packet {
+//
+// entityID is the player's server-issued entity id, allocated per-join from the tick's
+// monotonic EntityIDAllocator (ENT-01) — the replacement for the old hard-coded
+// joinEntityID=1 const, so a second player or a spawned entity can never collide the
+// playerId (06-RESEARCH Pitfall 7 / threat T-6-07).
+func writeLoginPacket(entityID int32, viewDist int) pk.Packet {
 	return pk.Marshal(
 		int32(packetid.ClientboundLogin),
-		pk.Int(joinEntityID),                  // playerId
+		pk.Int(entityID),                      // playerId (allocated, not the old const 1)
 		pk.Boolean(false),                     // hardcore
 		levelsEncoder{overworldDimensionName}, // levels: Set<ResourceKey<Level>>
 		pk.VarInt(maxPlayersJoin),             // maxPlayers
@@ -453,6 +453,10 @@ type bootstrapParams struct {
 	id         uuid.UUID
 	teleportID int
 	gameMode   int32
+	// entityID is the player's server-issued entity id, claimed off-tick by AcceptPlayer
+	// from the tick's EntityIDAllocator (ENT-01) and used as the ClientboundLogin playerId
+	// — the replacement for the hard-coded joinEntityID=1 (06-RESEARCH Pitfall 7).
+	entityID int32
 }
 
 // sendPlayBootstrap enqueues the full early-Play bootstrap on the connection's outbound
@@ -481,8 +485,9 @@ func sendPlayBootstrap(c *Client, viewDist int, center level.ChunkPos, surfaceY 
 	spawnZ := float64(int(center[1])<<4) + 8.5
 	spawnY := float64(surfaceY + 2)
 
-	// The original three (Login -> GameEvent -> PlayerPosition).
-	c.Send(writeLoginPacket(viewDist))
+	// The original three (Login -> GameEvent -> PlayerPosition). The Login playerId is the
+	// per-join allocated entity id (ENT-01), not the old const.
+	c.Send(writeLoginPacket(params.entityID, viewDist))
 	c.Send(writeGameEventPacket(gameEventLevelChunksLoadStart, 0))
 	c.Send(writePlayerPositionPacket(params.teleportID, spawnX, spawnY, spawnZ, 0, 0))
 

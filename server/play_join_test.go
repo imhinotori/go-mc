@@ -27,7 +27,8 @@ import (
 // client NPE.
 func TestLoginPacketWireLayout(t *testing.T) {
 	const viewDist = 2
-	p := writeLoginPacket(viewDist)
+	const testEntityID = 1 // ENT-01: playerId is now an allocated id (not a const); use 1 here
+	p := writeLoginPacket(testEntityID, viewDist)
 	if packetid.ClientboundPacketID(p.ID) != packetid.ClientboundLogin {
 		t.Fatalf("Login packet id = %d, want ClientboundLogin (%d)", p.ID, packetid.ClientboundLogin)
 	}
@@ -71,8 +72,8 @@ func TestLoginPacketWireLayout(t *testing.T) {
 		t.Fatalf("Login scan failed (wire layout mismatch): %v", err)
 	}
 
-	if playerID != joinEntityID {
-		t.Errorf("playerId = %d, want %d", playerID, joinEntityID)
+	if playerID != testEntityID {
+		t.Errorf("playerId = %d, want %d", playerID, testEntityID)
 	}
 	if hardcore {
 		t.Errorf("hardcore = true, want false")
@@ -551,6 +552,47 @@ func TestBootstrapTeleportID(t *testing.T) {
 	loop.dispatch(p.client, match)
 	if !p.confirmedTeleport {
 		t.Fatal("the issued incrementing teleport id must confirm the gate (PLAY-02)")
+	}
+}
+
+// TestBootstrapEntityID covers the ENT-01 producer side: AcceptPlayer claims each player's
+// entity id from the tick's monotonic EntityIDAllocator (not the old hard-coded
+// joinEntityID=1), so two successive joins get DIFFERENT, non-zero player entity ids, and
+// the id used for the ClientboundLogin playerId equals the allocated id. It also asserts
+// NewTickLoop wires a non-nil entityStore + EntityIDAllocator (06-RESEARCH Pitfall 7 /
+// threat T-6-07).
+func TestBootstrapEntityID(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+
+	// NewTickLoop must wire both ENT-01 fields non-nil from construction.
+	if loop.entities == nil {
+		t.Fatal("NewTickLoop must wire a non-nil entityStore")
+	}
+	if loop.idAlloc == nil {
+		t.Fatal("NewTickLoop must wire a non-nil EntityIDAllocator")
+	}
+
+	// Two successive allocations (the per-join claim AcceptPlayer makes) must differ and be
+	// non-zero — proving the hard-coded id=1 is gone and players draw distinct ids.
+	id1 := loop.idAlloc.AllocID()
+	id2 := loop.idAlloc.AllocID()
+	if id1 == id2 {
+		t.Fatalf("successive player entity ids must differ: id1=%d id2=%d (joinEntityID=1 must be gone)", id1, id2)
+	}
+	if id1 == 0 || id2 == 0 {
+		t.Fatalf("player entity ids must be non-zero: id1=%d id2=%d", id1, id2)
+	}
+
+	// The id allocated for a join must be the value the bootstrap Login carries as playerId:
+	// decode it back out of the produced packet for a representative allocated id.
+	allocated := loop.idAlloc.AllocID()
+	p := writeLoginPacket(allocated, 2)
+	var playerID pk.Int
+	if err := p.Scan(&playerID); err != nil {
+		t.Fatalf("Login scan failed: %v", err)
+	}
+	if int32(playerID) != allocated {
+		t.Fatalf("Login playerId = %d, want %d (must equal the allocated entity id)", playerID, allocated)
 	}
 }
 
