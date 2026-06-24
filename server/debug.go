@@ -48,13 +48,11 @@ type debugConfig struct {
 	spawnSurfaceY int
 
 	// pigSpawned marks that the per-session debug pig has been spawned (one pig for the
-	// session, near origin spawn). Its id lets the move logic find it each tick.
+	// session, near origin spawn). Its id is recorded for reference; the pig's MOTION is now
+	// driven by the real ported AI (tickAI -> serverAiStep), not by any per-tick logic here
+	// (the sinusoidal mover was retired in 07-03 / AI-03).
 	pigSpawned bool
 	pigID      int32
-
-	// pigPhase advances each tick; the pig's X oscillates with it so it visibly paces back
-	// and forth in front of the player (the tracker emits TeleportEntity for the move).
-	pigPhase float64
 
 	// damageEvery is the tick interval between debug damage applications; damageTick counts
 	// ticks toward the next hit. A non-zero interval drives the health bar down so the
@@ -93,12 +91,20 @@ func (t *TickLoop) tickDebug() {
 	// (1) Spawn ONE visible, vanilla-renderable pig near origin spawn, once per session, as
 	// soon as a player is present to see it. The pig stands on the surface a few blocks north
 	// of the origin column center so it is in front of a spawning player and inside trackRange.
+	//
+	// AI-03 (the STANDING MANDATE): the debug pig's MOTION now comes from the REAL ported AI —
+	// it is given a newPigAI() (07-01 GoalSelector + 07-02 A* navigation), so tickAI's
+	// serverAiStep drives it to WANDER and NAVIGATE exactly like a naturally-spawned mob. The
+	// throwaway sinusoidal pacing (sinApprox/cosApprox) that used to move it is RETIRED (see
+	// note below). The SULFUR_DEBUG spawn trigger remains only to GUARANTEE a visible mob near
+	// spawn for the 07-06 interactive check — the behavior it shows is vanilla AI, not a sine.
 	if !d.pigSpawned && len(t.players) > 0 {
 		id := t.idAlloc.AllocID()
 		px := 8.5            // origin column center X
 		pz := 4.5            // a few blocks toward -Z from the player's 8.5 spawn Z
 		py := float64(d.spawnSurfaceY + 1)
 		pig := NewEntity(id, entity.Pig, px, py, pz)
+		pig.ai = newPigAI() // REAL ported AI: tickAI's serverAiStep wanders + navigates it
 		t.entities.add(pig)
 		d.pigID = id
 		d.pigSpawned = true
@@ -120,31 +126,13 @@ func (t *TickLoop) tickDebug() {
 		p.debugGaveItems = true
 	}
 
-	// (2) Move the pig every tick so the operator SEES it pace (the tracker emits an absolute
-	// TeleportEntity for a moved, tracked entity). Oscillate X around the spawn column center;
-	// route the position change through entities.move so the per-section bucket stays consistent
-	// for the tracker's near() (the bucket-consistency contract).
-	if d.pigSpawned {
-		if pig, ok := t.entities.get(d.pigID); ok {
-			// Slow pace: 0.03 rad/tick (~0.6 rad/s at 20 TPS) so the pig ambles ±3 blocks over
-			// ~5s rather than darting. x = center + 3·sin(phase); the per-tick step is small
-			// enough to read as a walk, not a teleport-jitter.
-			d.pigPhase += 0.03
-			newX := 8.5 + 3.0*sinApprox(d.pigPhase)
-
-			// Face the direction of travel. The pig walks along X; dx/dt ∝ cos(phase). In MC's
-			// yaw convention 0°=+Z(south), 90°=-X(west), 270°(=-90°)=+X(east). Moving toward +X
-			// (cos>0) faces east (270°); toward -X faces west (90°). Setting yaw to MATCH the
-			// motion direction stops the "walking backwards" look (the old code set yaw 90/270
-			// perpendicular to the X-axis motion, so the pig faced sideways while sliding).
-			if cosApprox(d.pigPhase) >= 0 {
-				pig.yaw, pig.headYaw = 270, 270 // moving +X (east)
-			} else {
-				pig.yaw, pig.headYaw = 90, 90 // moving -X (west)
-			}
-			t.entities.move(pig, newX, pig.y, pig.z)
-		}
-	}
+	// (2) The pig's MOTION is RETIRED here and delegated to the REAL AI: tickAI's serverAiStep
+	// (07-01 goals + 07-02 A* navigation) drives the debug pig's wander/navigation each tick,
+	// the same as any naturally-spawned mob (AI-03 / the STANDING MANDATE). The old throwaway
+	// sinusoidal pacing (d.pigPhase + sinApprox/cosApprox) is GONE — the debug pig now shows
+	// VANILLA behavior (amble + obstacle navigation), not a cosmetic sine oscillation, so the
+	// 07-06 interactive check observes the real ported AI. No motion code lives here anymore;
+	// the move + the tracker broadcast happen inside tickAI/moveEntity on the tick goroutine.
 
 	// (3) Periodically bite every living player so the health bar drops and, after enough
 	// bites, the death screen appears (a subsequent client Respawn request runs performRespawn).
@@ -161,36 +149,11 @@ func (t *TickLoop) tickDebug() {
 	}
 }
 
-// sinApprox / cosApprox are tiny wire-irrelevant trig helpers for the debug pig's pacing.
-// They avoid importing math into the hot path for a debug-only oscillation; a low-order
-// polynomial is plenty for a visible back-and-forth. (Range-reduced to [-pi, pi].)
-func sinApprox(x float64) float64 {
-	const twoPi = 6.283185307179586
-	const pi = 3.141592653589793
-	// reduce to [-pi, pi]
-	for x > pi {
-		x -= twoPi
-	}
-	for x < -pi {
-		x += twoPi
-	}
-	// Bhaskara I's sine approximation (good to ~0.2% over [0,pi]); odd-extend for negatives.
-	neg := false
-	if x < 0 {
-		x = -x
-		neg = true
-	}
-	y := 16 * x * (pi - x) / (5*pi*pi - 4*x*(pi-x))
-	if neg {
-		return -y
-	}
-	return y
-}
-
-func cosApprox(x float64) float64 {
-	const halfPi = 1.5707963267948966
-	return sinApprox(x + halfPi)
-}
+// NOTE: the sinApprox/cosApprox sinusoidal-mover helpers that used to pace the debug pig were
+// REMOVED in 07-03 (AI-03): the debug pig is now driven by the real ported GoalSelector + A*
+// navigation (tickAI -> serverAiStep), so there is no cosmetic oscillation to compute. If a
+// future debug trigger needs trig it should use math.Sin/Cos directly rather than reviving a
+// throwaway approximation.
 
 // ensure level import is used even if a future edit drops the only reference; the debug
 // spawn uses level.ChunkPos indirectly via entities.add/move bucketing semantics.

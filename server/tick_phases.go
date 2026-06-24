@@ -118,8 +118,52 @@ func (t *TickLoop) tickEntities() {
 	t.tickDebug()
 }
 
-// tickAI advances mob AI / pathfinding decisions. Phase 7 fills it.
-func (t *TickLoop) tickAI() { t.trace("tickAI") }
+// tickAI drives mob AI for every AI mob in the tick-owned store, then runs the throttled
+// natural spawner — the AI-03 fill of the Phase-7 stub, in its FIXED pipeline slot
+// (tickEntities -> tickAI -> tickPhysics -> applyAsyncResults -> tracker.Tick -> flushOutbound).
+// The pipeline ORDER is unchanged (TestTickPhaseOrder); this only fills the body.
+//
+// Per AI mob (a stable snapshot, mirroring tickPhysics's copy-then-range): call
+// e.ai.serverAiStep (07-01 goal arbitration + 07-02 navigation) — which advances the mob's
+// goals, (re)computes its A* path, and steps it via moveEntity (the per-axis swept collision +
+// the entities.move re-bucket). A moved mob re-buckets on the owner so the tracker's near()
+// stays correct; the tracker (after tickPhysics) auto-broadcasts the moved/turned mob via the
+// unchanged AddEntity/TeleportEntity/RotateHead encoders — NO new entity packet.
+//
+// THEN the throttled naturalSpawn (every spawnInterval ticks): it counts live mobs by
+// MobCategory from the tick-owned store and, under the CREATURE cap, attempts ONE ON_GROUND
+// placement of a Pig near a player (the Pitfall-3 anti-flood gate). Spawning AFTER the per-mob
+// AI keeps a freshly spawned mob from being driven on the very tick it appears — it begins
+// wandering next tick. tickPhysics runs AFTER this so gravity settles each post-AI-move Y.
+//
+// SINGLE-OWNER (TICK-05): the serverAiStep walk, the spawn count, and the entityStore.add all
+// run on the tick goroutine over tick-owned state — no goroutine, no xsync/ants/conc (the
+// off-tick candidate scan is Phase 8 / OPT-03). The snapshot makes spawning a mob mid-range
+// safe (it cannot corrupt the iteration we are driving).
+func (t *TickLoop) tickAI() {
+	t.trace("tickAI")
+	if t.entities == nil {
+		return // defensive: store is non-nil from NewTickLoop, but never panic if absent
+	}
+
+	// Snapshot the AI mobs so the loop is stable even if a spawn (below) or a move re-buckets
+	// mid-range — exactly the discipline tickPhysics uses (copy the byID values, then range).
+	snapshot := make([]*Entity, 0, len(t.entities.byID))
+	for _, e := range t.entities.byID {
+		if e.ai != nil {
+			snapshot = append(snapshot, e)
+		}
+	}
+	for _, e := range snapshot {
+		e.ai.serverAiStep(t, e) // 07-01 goals + 07-02 navigation: the real ported AI walk
+	}
+
+	// Throttled natural spawner: vanilla attempts every tick (most no-op under cap); v1 runs the
+	// bounded one-placement attempt every spawnInterval ticks to keep the per-tick cost trivial.
+	if t.gametime%spawnInterval == 0 {
+		t.naturalSpawn()
+	}
+}
 
 // tickPhysics simulates gravity + per-axis swept-AABB collision for every entity in the
 // tick-owned store (ENT-02). It runs on the tick goroutine in its FIXED pipeline slot
