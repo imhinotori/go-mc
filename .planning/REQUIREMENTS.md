@@ -56,8 +56,8 @@ Requirements for the initial release. The "user" is an unmodified vanilla 26.2 (
 - [ ] **ENT-02**: Gravity and AABB collision are simulated for entities and players
 - [x] **ENT-03**: Players can place and break blocks with Block Update reconciliation
 - [x] **ENT-04**: Inventory uses the component-based slot format (post-1.20.5, no NBT in slots)
-- [ ] **ENT-05**: Health, damage, and respawn work; player death and respawn flow completes
-- [ ] **ENT-06**: Entity and player state persists to the Anvil format and reloads correctly
+- [x] **ENT-05**: Health, damage, and respawn work; player death and respawn flow completes
+- [x] **ENT-06**: Entity and player state persists to the Anvil format and reloads correctly
 
 ### AI & Pathfinding
 
@@ -147,8 +147,8 @@ Which phases cover which requirements. Populated during roadmap creation.
 | ENT-02 | Phase 6 | Pending |
 | ENT-03 | Phase 6 | Complete |
 | ENT-04 | Phase 6 | Complete |
-| ENT-05 | Phase 6 | Pending |
-| ENT-06 | Phase 6 | Pending |
+| ENT-05 | Phase 6 | Complete |
+| ENT-06 | Phase 6 | Complete |
 | AI-01 | Phase 7 | Pending |
 | AI-02 | Phase 7 | Pending |
 | AI-03 | Phase 7 | Pending |

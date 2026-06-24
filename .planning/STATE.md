@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 status: verifying
 stopped_at: "Completed 06-05-PLAN.md — component-based slot inventory (ENT-04): SlotData.WriteTo round-trips real components, container packets routed into the subtick buffer, server-authoritative ContainerSetContent + HashedStack ContainerClick decoded without mis-framing (jar-derived). -race clean."
-last_updated: "2026-06-24T06:18:49.123Z"
+last_updated: "2026-06-24T06:36:56.781Z"
 last_activity: 2026-06-24
 progress:
   total_phases: 9
   completed_phases: 5
   total_plans: 24
-  completed_plans: 22
-  percent: 92
+  completed_plans: 23
+  percent: 96
 ---
 
 # Project State
@@ -74,7 +74,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [█████████░] 92%
+Progress: [██████████] 96%
 
 ## Performance Metrics
 
@@ -115,6 +115,7 @@ Progress: [█████████░] 92%
 | Phase 06 P01 | 7min | 2 tasks | 7 files |
 | Phase 06 P02 | 32min | 3 tasks | 8 files |
 | Phase 06 P05 | 24 min | 2 tasks | 8 files |
+| Phase 06 P06 | 35 min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -169,6 +170,9 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 06]: 06-02: ENT-01 synchronous entityTracker fills the tracker.Tick() seam unchanged (noopTracker removed); per-player visibility diff over near() emits AddEntity(+SetEntityData 0xFF)/TeleportEntity(+RotateHead)/batched RemoveEntities; player never tracks itself; -race clean.
 - [Phase ?]: [Phase 06]: 06-02: 26.2 AddEntity/SetEntityMotion movement = NEW Vec3.LP_STREAM_CODEC -> LpVec3 quantizer (15-bit pack, NOT legacy *8000 short); stationary entity = single 0x00 byte. AddEntity typeId is field 3 (after UUID, before x/y/z). SetEntityData always ends with a single 0xFF (EOF_MARKER=255). v1 uses TeleportEntity (absolute) over the 4096-scaled MoveEntity* short deltas. Jar-derived (javap); byte-seal deferred to 06-07.
 - [Phase 06]: 06-05: ENT-04 component-slot inventory — SlotData.WriteTo EXTENDED to round-trip real components (ReadFrom tees the component byte span into RawComponents, WriteTo re-emits it, provably inverse); the 4 container packets routed into the subtick buffer (were dropped at default no-op); server-authoritative Inventory re-sends ContainerSetContent and DISCARDS the client's HashedStack hashes. HashedStack jar-derived = optional(ActualItem): Boolean present + VarInt id + VarInt count + HashedPatchMap whose added VALUE is a FIXED 4-byte CRC int (NOT a component body) — the mis-framing risk. Byte-seal deferred to 06-07. — ENT-04 highest wire-risk surface; jar-derived not guessed; -race clean; zero new deps
+- [Phase 06]: ENT-05 Respawn reuses the Phase-5-sealed commonPlayerSpawnInfoEncoder + a trailing dataToKeep byte (0=full reset v1); no spawn-info re-derivation
+- [Phase 06]: ENT-06 save-on-leave snapshots on the owner (removePlayer) and runs disk IO off-tick (RunSaveLoop) — the Phase-4 chunk-result discipline (TICK-05/T-6-15)
+- [Phase 06]: ENT-06 disk inventory persists as save.Item via the item registry; the wire component SlotData is never written to disk (Pitfall 6)
 
 ### Pending Todos
 
@@ -195,7 +199,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-24T06:18:48.669Z
+Last session: 2026-06-24T06:36:34.633Z
 Stopped at: Completed 06-05-PLAN.md — component-based slot inventory (ENT-04): SlotData.WriteTo round-trips real components, container packets routed into the subtick buffer, server-authoritative ContainerSetContent + HashedStack ContainerClick decoded without mis-framing (jar-derived). -race clean.
 Resume file: None
 Next: plan Phase 6 (entities / inventory / persistence) — the first-playable Player Session seam (movement, tick-owned position, the following ring, the tab list) is in place to build on. Deferred: KeepAlive double-leave hardening (Phase 3, surfaces when real timeout-driven disconnects land). The pulled-forward bootstrap deferred-row is now CLOSED.
