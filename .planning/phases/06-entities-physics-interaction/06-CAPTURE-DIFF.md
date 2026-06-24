@@ -196,3 +196,118 @@ the existing Play-state precedent.
    confidence, but the visual seals it).
 
 Until 06-07 signs off, these three surfaces are jar-shape-correct but NOT byte-proven.
+
+---
+
+# ENT-04 Capture-Diff: Component-Slot ItemStack + HashedStack ContainerClick (Plan 06-05)
+
+**Phase 6, Plan 06-05 — the jar-derived record for the inventory wire; byte-level seal deferred to Plan 06-07.**
+
+This section records the jar-derived (`javap -p -c -classpath temp/cache/26.2-inner.jar`)
+wire layouts for the component-based slot inventory (ENT-04): the **clientbound
+component-slot `ItemStack`** (`ContainerSetContent`/`ContainerSetSlot`), and — the
+load-bearing mis-framing risk (1.21.5+) — the **serverbound `HashedStack`** form used by
+`ServerboundContainerClick`. The `HashedStack` is a CRC digest, NOT a full `ItemStack`;
+decoding it as a full stack mis-frames the entire packet. The server is AUTHORITATIVE and
+DISCARDS the hashes — it only needs to consume the bytes correctly and re-send authoritative
+content.
+
+## 1. Clientbound component-slot `ItemStack` (`SlotData`) — sealed shape, REUSED
+
+The wire `ItemStack` (the same `level/component.SlotData`):
+
+```
+VarInt count            (count <= 0 => empty stack, STOP — nothing else follows)
+VarInt itemId           (registry id; holderRegistry(Registries.ITEM) => plain VarInt)
+VarInt addedCount
+VarInt removedCount
+addedCount   × ( VarInt componentTypeId + <component value> )
+removedCount × ( VarInt componentTypeId )
+```
+
+`SlotData.WriteTo` was EXTENDED from the old `count+id+0+0` minimal form to be provably
+inverse to `ReadFrom`: `ReadFrom` now tees the added+removed component byte span verbatim
+into `RawComponents`, and `WriteTo` re-emits `count, id, addedCount, removedCount,
+RawComponents`. A component-free stack (`RawComponents` empty, counts 0) still writes
+exactly `count+id+0+0`. Proven by `TestSlotEncode` (empty / component-free / one-added all
+round-trip byte-exact). Not the wiki — derived from the vanilla `ItemStack` StreamCodec.
+
+## 2. Serverbound `HashedStack` — JAR-DERIVED (the mis-framing risk)
+
+`net.minecraft.network.HashedStack.STREAM_CODEC = ByteBufCodecs.optional(ActualItem.STREAM_CODEC)`.
+On the wire `optional(X)` is a **Boolean present-flag**, then if present the `X` body:
+
+```
+HashedStack:
+  Boolean present
+  if present:
+    VarInt   itemId         (ActualItem.item: holderRegistry(Registries.ITEM) => VarInt)
+    VarInt   count          (ActualItem.count: ByteBufCodecs.VAR_INT)
+    HashedPatchMap components
+```
+
+`HashedStack$ActualItem.STREAM_CODEC` is a 3-field `StreamCodec.composite`:
+`holderRegistry(Registries.ITEM)` (VarInt) + `ByteBufCodecs.VAR_INT` (count) +
+`HashedPatchMap.STREAM_CODEC`.
+
+`net.minecraft.network.HashedPatchMap.STREAM_CODEC` is a 2-field composite:
+
+```
+HashedPatchMap:
+  addedComponents:   ByteBufCodecs.map(  key=registry(DATA_COMPONENT_TYPE) [VarInt],
+                                         value=ByteBufCodecs.INT [FIXED 4-byte BE int = the CRC hash],
+                                         maxSize=256 )
+                     => VarInt count, then count × ( VarInt componentTypeId + Int32 hash )
+  removedComponents: ByteBufCodecs.collection( element=registry(DATA_COMPONENT_TYPE) [VarInt],
+                                               maxSize=256 )
+                     => VarInt count, then count × ( VarInt componentTypeId )
+```
+
+**THE LOAD-BEARING FACT:** the added-component *value* is `ByteBufCodecs.INT` — a **fixed
+4-byte big-endian int** (the component's CRC32 hash), NOT a component value. This is exactly
+what distinguishes `HashedStack` from a full `ItemStack` (whose added value is the real
+component payload). Decoding the added value as a component body (the old/full-stack shape)
+mis-frames every subsequent byte. The minimum correct decode: for each added component,
+consume `VarInt typeId + 4 raw bytes` and DISCARD them.
+
+## 3. `ServerboundContainerClickPacket` — JAR-DERIVED 7-field composite
+
+`STREAM_CODEC` is a `StreamCodec.composite` of 7 fields, in this exact order:
+
+```
+ServerboundContainerClick:
+  1. containerId   ByteBufCodecs.CONTAINER_ID   (alias of VAR_INT => VarInt)
+  2. stateId       ByteBufCodecs.VAR_INT        (VarInt)
+  3. slotNum       ByteBufCodecs.SHORT          (Short, big-endian int16)
+  4. buttonNum     ByteBufCodecs.BYTE           (Byte)
+  5. containerInput ContainerInput.STREAM_CODEC  (idMapper => VarInt, enum 0..6)
+  6. changedSlots  SLOTS_STREAM_CODEC           (map<Short slot -> HashedStack>, max 128)
+                   => VarInt count, then count × ( Short slot + HashedStack )
+  7. carriedItem   HashedStack.STREAM_CODEC     (HashedStack as in §2)
+```
+
+CONFIRMED CORRECTIONS vs. the research/wiki guess:
+- field 5 is **`ContainerInput`** (a VarInt-encoded enum, jar name for the click-type),
+  not a bare "clickType VarInt" — same VarInt on the wire, but jar-confirmed semantics.
+- the changedSlots map key is a **Short** (`SLOTS_STREAM_CODEC` maps `ByteBufCodecs.SHORT`
+  into the int key), NOT a VarInt slot — this is the easy-to-get-wrong framing.
+- the map/collection length prefixes are **VarInt** counts (standard `ByteBufCodecs.map`/
+  `.collection`).
+
+Sulfur's `decodeHashedStack` / `handleContainerClick` consume exactly this layout and
+discard the hashes; the server re-sends authoritative `ContainerSetContent` over `SlotData`.
+
+## 4. Status / deferred to 06-07
+
+JAR-DERIVED (this plan). The byte-level seal — a capture-diff of `ContainerSetContent`
+against a real vanilla 26.2 inventory + a real `ServerboundContainerClick` round-trip from
+a vanilla client — is deferred to Plan 06-07. The MEDIUM-confidence surfaces are:
+
+1. The component-slot added-component *value* codecs (the 111 schemas) in `ContainerSetContent`
+   — Sulfur captures/re-emits raw bytes (byte-exact by construction), but the per-schema
+   value layout is only seal-proven when a real component-carrying stack is diffed.
+2. The `HashedStack` `ByteBufCodecs.INT` fixed-4-byte hash width — jar-confirmed here;
+   06-07 confirms a real client's click decodes without leftover/short bytes.
+
+Until 06-07 signs off, the inventory wire is jar-shape-correct (no mis-framing) but the
+component-value bytes are NOT yet byte-proven against a live client.
