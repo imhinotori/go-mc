@@ -362,6 +362,17 @@ func (a *Aquifer) computeSubstance(blockX, blockY, blockZ int, dens float64) (bl
 	return a.fluidResult(sub1)
 }
 
+// CarveFluid is the Wave-8 carver seam: it answers "what fluid (if any) does the aquifer
+// place at this carved position?" by running computeSubstance at density 0 — the same
+// query NoiseBasedChunkGenerator.applyCarvers feeds the WorldCarver's getCarveState
+// (Aquifer.computeSubstance(pos, 0)) so a carve below the local water table floods (water/
+// lava) and a carve above it is air. It satisfies carver.FluidSource so the Generator can
+// wire the real Wave-5 aquifer into the Wave-6 carve pass (vs the test FluidSource doubles).
+// ok=false means air (no fluid); ok=true with water/lava floods the carved block.
+func (a *Aquifer) CarveFluid(blockX, blockY, blockZ int) (block.StateID, bool) {
+	return a.computeSubstance(blockX, blockY, blockZ, 0)
+}
+
 // fluidResult maps a substance state id to the (state, isFluid) the fill consumes: a real
 // fluid (water/lava) -> (state, true); air (or the 0 marker) -> (0, false) so the caller
 // keeps default air. computeSubstance internally passes 0 to mean "air wins".
