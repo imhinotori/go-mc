@@ -164,6 +164,23 @@ func NewRandomState(seed int64) *RandomState {
 	}
 }
 
+// AquiferRandom returns the Aquifer's per-position random factory. Vanilla
+// RandomState.<init> forks it as base.fromHashOf("minecraft:aquifer").forkPositional()
+// (the base = Xoroshiro(seed).forkPositional()); the Wave-5 Aquifer seeds its per-cell
+// fluid-pick random from it via At(x,y,z). Ported constant-for-constant so the aquifer
+// draws match vanilla bit-for-bit (Pitfall 7: all randomness flows from the world seed).
+func (s *RandomState) AquiferRandom() levelgen.PositionalRandomFactory {
+	return s.factory.FromHashOf("minecraft:aquifer").ForkPositional()
+}
+
+// OreRandom returns the OreVeinifier's per-position random factory. Vanilla forks it as
+// base.fromHashOf("minecraft:ore").forkPositional(); the Wave-5 OreVeinifier seeds its
+// per-block ore-vs-raw-vs-filler random from it via At(x,y,z). Ported constant-for-
+// constant (Pitfall 7).
+func (s *RandomState) OreRandom() levelgen.PositionalRandomFactory {
+	return s.factory.FromHashOf("minecraft:ore").ForkPositional()
+}
+
 // NormalNoise returns the seeded NormalNoise for a noise registry id, caching it
 // (RandomState.getOrCreateNoise -> Noises.instantiate -> NormalNoise.create(
 // factory.fromHashOf(id.identifier()), params)). The params come from the Wave-1
