@@ -134,7 +134,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. The server dispatches server-side commands
   5. Chat messages are received and broadcast with the PlayerChat globalIndex prefix handled
 **Plans**: 6 plans (4 waves)
-- [ ] 07-01-PLAN.md — AI-01: port GoalSelector + Goal/Goal$Flag/WrappedGoal + the passive Pig goal set + the serverAiStep-order driver (wave 1)
+- [x] 07-01-PLAN.md — AI-01: port GoalSelector + Goal/Goal$Flag/WrappedGoal + the passive Pig goal set + the serverAiStep-order driver (wave 1)
 - [ ] 07-02-PLAN.md — AI-02: port the request→snapshot→result A* (PathNavigationRegion snapshot + PathFinder + WalkNodeEvaluator + GroundPathNavigation), the pure computePath seam, wired into serverAiStep (wave 2)
 - [ ] 07-03-PLAN.md — AI-03: port the faithful-minimal NaturalSpawner + MobCategory cap accounting, fill tickAI() (drive serverAiStep + spawner), retire the sinusoidal debug pig (wave 3)
 - [ ] 07-04-PLAN.md — CMD-01: wire the fork command.Graph (build + send ClientboundCommands at join + route ServerboundChatCommand → Execute on the tick) (wave 1)

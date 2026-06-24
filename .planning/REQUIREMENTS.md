@@ -61,7 +61,7 @@ Requirements for the initial release. The "user" is an unmodified vanilla 26.2 (
 
 ### AI & Pathfinding
 
-- [ ] **AI-01**: Mobs have a goal-selector/brain behavior model driven by the tick
+- [x] **AI-01**: Mobs have a goal-selector/brain behavior model driven by the tick
 - [ ] **AI-02**: Synchronous A* navigation moves mobs around the world, built as request→snapshot→result executed inline (seam ready for async)
 - [ ] **AI-03**: Mob spawning populates the world by vanilla-style rules
 
@@ -149,7 +149,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | ENT-04 | Phase 6 | Complete |
 | ENT-05 | Phase 6 | Complete |
 | ENT-06 | Phase 6 | Complete |
-| AI-01 | Phase 7 | Pending |
+| AI-01 | Phase 7 | Complete |
 | AI-02 | Phase 7 | Pending |
 | AI-03 | Phase 7 | Pending |
 | CMD-01 | Phase 7 | Pending |
