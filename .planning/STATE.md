@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 status: verifying
 stopped_at: "Completed 09-06-PLAN.md (PARITY-01 Wave 5: WorldCarver pass — CaveWorldCarver tunnels + CanyonWorldCarver ravines, aquifer-aware, cross-chunk, seeded)"
-last_updated: "2026-06-24T21:50:00.106Z"
+last_updated: "2026-06-24T22:31:16.825Z"
 last_activity: 2026-06-24
 progress:
   total_phases: 9
   completed_phases: 8
   total_plans: 46
-  completed_plans: 43
-  percent: 93
+  completed_plans: 45
+  percent: 98
 ---
 
 # Project State
@@ -74,7 +74,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [█████████░] 93%
+Progress: [██████████] 98%
 
 ## Performance Metrics
 
@@ -130,6 +130,7 @@ Progress: [█████████░] 93%
 | Phase 09 P04 | 27 min | 2 tasks | 3 files |
 | Phase 09 P05 | 20min | 3 tasks | 8 files |
 | Phase 09 P06 | 30 min | 2 tasks | 6 files |
+| Phase 09 P08 | 35 min | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -202,6 +203,7 @@ Recent decisions affecting current work:
 - [Phase 09]: 09-03: router lives in package router (world/levelgen/router/) not package levelgen — a composition root importing density cycles levelgen->density->synth->levelgen; RandomState seeds each noise via Xoroshiro(seed).forkPositional().fromHashOf(id) (the determinism hinge), implements density.NoiseBinder; NewRouter(seed) is pure, Docker -race clean
 - [Phase 09]: 09-04: NoiseChunk (Tier-E) ported to package world/levelgen/noisechunk (NOT package levelgen) to break the density->synth->levelgen import cycle (same relocation as 09-03 router). Samples bound final_density on the coarse 5x5x49 cell-corner grid (cellWidth=4/cellHeight=8) via the ported NoiseInterpolator (Mth.lerp trilerp in doFill order) -> per-block density field (~1225 corner samples not 98K). Caves come free as negative density. Drives ONE interpolator over the WHOLE final_density (RESEARCH Pattern 2) since density has no mapAll and the plan forbids modifying it — corner-EXACT + sparse. Provisional stone/deepslate/water/air+bedrock fill (Wave 5 Aquifer replaces). Pure, zero deps, -race clean. — PARITY-01 Wave 3: the cell-sample+trilerp is the parity+perf hinge; package placement forced by the import cycle; whole-final_density sampling is the sanctioned RESEARCH approach given density's API surface.
 - [Phase 09]: 09-06: WorldCarver pass ported — CaveWorldCarver (extra tunnel caves) + CanyonWorldCarver (RAVINES) run on top of the noise terrain, aquifer-aware (carve below the fluid level floods), replaceables-gated, cross-chunk-continuous ([-8,8] source-chunk range), deterministic via a ported java.util.Random LCG seeded by setLargeFeatureSeed(worldSeed+carverIdx, srcX, srcZ). The carver consumes the Wave-5 Aquifer through a FluidSource interface (computeSubstance is unexported in noisechunk) — the Generator wires it. Mineshafts-as-STRUCTURES remain DEFERRED (separate subsystem); ravines+caves (the carver class) are IN. Zero new deps.
+- [Phase 09]: 09-08: NoiseGenerator assembles fill->carve->surface->heightmaps->biomes into a pure drop-in world.Generator — Carve runs BEFORE surface (block sense) so carved tops get a correct surface; the 3 client heightmaps are written LAST from the final blocks (truthful render). Cited against ChunkStatusTasks (vanilla STATUS order is surface-before-carvers; the single-shot block dependency is the reverse). Generate is PURE (same seed+pos->identical bytes); worker/tick/Generator-interface/level.Chunk wire UNTOUCHED. Added Aquifer.CarveFluid as the exported carver.FluidSource seam. Zero new deps, CGO=0 clean, -race clean.
 
 ### Pending Todos
 
@@ -228,7 +230,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-24T21:49:50.771Z
+Last session: 2026-06-24T22:30:54.174Z
 Stopped at: Completed 09-06-PLAN.md (PARITY-01 Wave 5: WorldCarver pass — CaveWorldCarver tunnels + CanyonWorldCarver ravines, aquifer-aware, cross-chunk, seeded)
 Resume file: None
 Next: plan Phase 6 (entities / inventory / persistence) — the first-playable Player Session seam (movement, tick-owned position, the following ring, the tab list) is in place to build on. Deferred: KeepAlive double-leave hardening (Phase 3, surfaces when real timeout-driven disconnects land). The pulled-forward bootstrap deferred-row is now CLOSED.
