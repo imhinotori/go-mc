@@ -69,17 +69,13 @@ func (r chunkReady) applyTo(t *TickLoop) {
 	t.world.Insert(r.res.Pos, r.res.Chunk)
 }
 
-// tracker is the entity/chunk tracking executor. Today it is a synchronous stub
-// (noopTracker); Phase 8 swaps the executor behind this interface without changing
-// the tickOnce call site.
+// tracker is the entity/chunk tracking executor seam (TICK-05). Phase 3 shipped it with a
+// synchronous no-op stub; Plan 06-02 FILLS it with the real synchronous entityTracker
+// (tracker.go) assigned in NewTickLoop. The interface and the t.tracker.Tick() call site in
+// tick_phases.go are deliberately UNCHANGED so Phase 8 (OPT-02) can swap the EXECUTOR
+// off-tick behind this exact one-method seam without touching the pipeline. Any executor —
+// the synchronous entityTracker now, an async one later, or a test double — satisfies it.
 type tracker interface{ Tick() }
-
-// noopTracker is the Phase-3 synchronous stub: Tick() does nothing, spawns no
-// goroutine, never panics.
-type noopTracker struct{}
-
-// Tick is the synchronous no-op tracking step.
-func (noopTracker) Tick() {}
 
 // TickLoop is the single-owner authoritative game loop. Exactly one goroutine —
 // the one running Run — owns and mutates every field below. The only legal crossing
@@ -281,6 +277,15 @@ type tickPlayer struct {
 	// secs is the dimension's section count (overworld 24), derived at registration for
 	// chunk generation/empty sizing — never hard-coded deeper in the pipeline.
 	secs int
+
+	// tracked is the per-player set of entity ids currently visible to (and spawned on) this
+	// client — the entityTracker's tick-owned bookkeeping (ENT-01). Each tick the tracker
+	// diffs the store's near() broad-phase against this set: an id newly in range is spawned
+	// (AddEntity) and added here; an id that left range is batched into one RemoveEntities and
+	// deleted. A player never tracks itself, so its own entityID is never inserted. Lazily
+	// initialized by the tracker; mutated ONLY on the tick goroutine (TICK-05), so it is
+	// -race clean by the same single-owner discipline as the rest of tickPlayer.
+	tracked map[int32]bool
 }
 
 // NewTickLoop constructs a TickLoop over the given injectable clock with a
@@ -292,15 +297,23 @@ type tickPlayer struct {
 const registerBuffer = 64
 
 func NewTickLoop(clock Clock) *TickLoop {
-	return &TickLoop{
+	t := &TickLoop{
 		clock:      clock,
-		tracker:    noopTracker{},
 		register:   make(chan *tickPlayer, registerBuffer),
 		unregister: make(chan *Client, registerBuffer),
 		entities:   newEntityStore(),     // ENT-01: tick-owned entity store, non-nil from construction
 		idAlloc:    &EntityIDAllocator{}, // ENT-01: monotonic id allocator (first AllocID()==1)
 		// asyncIn stays nil (no-op seam); ring is zero-valued; gametime starts at 0.
 	}
+	// ENT-01: assign the REAL synchronous entityTracker behind the unchanged tracker.Tick()
+	// seam (replacing the Phase-3 noopTracker). The interface (tracker{ Tick() }) and the
+	// t.tracker.Tick() call site at tick_phases.go are UNCHANGED — Phase 8 (OPT-02) swaps the
+	// EXECUTOR off-tick behind this exact seam (applyAsyncResults), so the seam must not
+	// change shape here. The tracker holds a back-reference to the loop so Tick() can read the
+	// tick-owned store (loop.entities.near) and players, all on the tick goroutine. THIS LINE
+	// is the Phase-8 swap-point: replace &entityTracker{loop: t} with the async executor.
+	t.tracker = &entityTracker{loop: t}
+	return t
 }
 
 // asyncBridgeBuffer bounds the internal worker-results -> asyncResult bridge channel.

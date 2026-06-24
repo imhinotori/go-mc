@@ -210,12 +210,22 @@ func (b rawBytes) WriteTo(w io.Writer) (int64, error) {
 	return int64(n), err
 }
 
-// encodeSetEntityData builds ClientboundSetEntityData (06-CAPTURE-DIFF §4): VarInt id,
-// then each entry's DataValue.write body, then the mandatory 0xFF terminator. For v1 the
-// entries list is empty, so the body is just VarInt id + 0xFF — the minimum framing that
-// keeps the stream aligned with no serializer-codec surface to get wrong (threat T-6-04).
+// encodeSetEntityData builds ClientboundSetEntityData (06-CAPTURE-DIFF §4): VarInt id, then
+// the packed-items body, then the mandatory 0xFF terminator. The body is, in order: any
+// PRE-BUILT entry bytes carried on the entity's metadata slot (Entity.metadata — a snapshot-
+// friendly []byte holding already-encoded DataValue entries, the slot 06-01 reserved for the
+// tracker), then any explicit entries passed here. For v1 both are empty, so the body is just
+// VarInt id + 0xFF — the minimum framing that keeps the stream aligned with no serializer-
+// codec surface to get wrong (threat T-6-04). A future plan (or a spawn helper) fills
+// Entity.metadata with the entity's default SynchedEntityData entries and they flow through
+// here unchanged; 06-07 confirms which entries the client requires.
 func encodeSetEntityData(e *Entity, entries ...entityDataEntry) pk.Packet {
 	var body bytes.Buffer
+	// Pre-built metadata entry bytes (if the entity carries any) are spliced verbatim — they
+	// are already in DataValue.write framing (Byte index, VarInt serializerId, value).
+	if len(e.metadata) > 0 {
+		body.Write(e.metadata)
+	}
 	for _, entry := range entries {
 		// Errors writing to a bytes.Buffer are impossible; ignore for the in-memory build.
 		_, _ = entry.WriteTo(&body)

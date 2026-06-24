@@ -100,16 +100,22 @@ type countingTracker struct {
 func (c *countingTracker) Tick() { c.calls++ }
 
 // TestTrackerTickStub asserts tracker.Tick() is called exactly once per tick and is
-// a synchronous stub (the call returns before tickOnce continues; no goroutine).
+// synchronous (the call returns before tickOnce continues; no goroutine). The seam shape
+// (one-method interface, fixed call site) is the load-bearing contract; the EXECUTOR behind
+// it is swappable.
 func TestTrackerTickStub(t *testing.T) {
 	loop := NewTickLoop(newFakeClock())
 
-	// The default tracker must be the synchronous no-op stub.
-	if _, ok := loop.tracker.(noopTracker); !ok {
-		t.Fatalf("default tracker must be noopTracker, got %T", loop.tracker)
+	// Plan 06-02 FILLED the Phase-3 seam: NewTickLoop now assigns the real synchronous
+	// entityTracker (replacing the noopTracker) WITHOUT changing the interface or the
+	// t.tracker.Tick() call site. The default must therefore be the real *entityTracker, and
+	// it must still satisfy the unchanged one-method `tracker interface{ Tick() }`.
+	if _, ok := loop.tracker.(*entityTracker); !ok {
+		t.Fatalf("default tracker must be the real *entityTracker (the seam is FILLED), got %T", loop.tracker)
 	}
 
-	// Swap in a counting tracker to prove synchronous, once-per-tick invocation.
+	// Swap in a counting tracker to prove synchronous, once-per-tick invocation through the
+	// unchanged seam (exactly the swap Phase 8 performs to move the executor off-tick).
 	ct := &countingTracker{}
 	loop.tracker = ct
 

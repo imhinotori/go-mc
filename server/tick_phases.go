@@ -11,7 +11,6 @@ import (
 // calling tickOnce, kept separate so input is drained per wake, not per catch-up
 // step. Each phase is an empty stub today (later phases fill them); the call ORDER
 // is the load-bearing contract asserted by TestTickPhaseOrder.
-//
 func (t *TickLoop) tickOnce() {
 	start := t.clock.Now() // capture via the injectable clock for MSPT (TICK-06)
 
@@ -26,7 +25,7 @@ func (t *TickLoop) tickOnce() {
 	t.tracker.Tick()         // synchronous stub today; Phase 8 swaps the executor
 	t.flushOutbound()        // enqueue clientbound via Client.Send (no-op until players join)
 
-	t.gametime++                          // EXACTLY once per logical tick — anchors TICK-02
+	t.gametime++                           // EXACTLY once per logical tick — anchors TICK-02
 	t.recordMSPT(t.clock.Now().Sub(start)) // publish the read-only telemetry snapshot (TICK-06)
 }
 
@@ -92,8 +91,26 @@ func (t *TickLoop) tickChunks() {
 	}
 }
 
-// tickEntities advances entity state. Phase 6 fills it.
-func (t *TickLoop) tickEntities() { t.trace("tickEntities") }
+// tickEntities is the per-tick entity step the tracker reads (ENT-01 / TICK-05). It runs on
+// the tick goroutine over the tick-owned store, AFTER tickChunks and BEFORE the tracker, so
+// the tracker's near() broad-phase sees this tick's entity positions.
+//
+// THE BUCKET-CONSISTENCY CONTRACT (must_have): any code that changes an entity's position
+// MUST route the change through entityStore.move, which re-buckets on a column cross so
+// near() never returns a stale bucket. In THIS plan no subsystem moves an entity inside the
+// tick — entities do not yet self-propel (the physics that integrates velocity into position
+// is Plan 06-03) — so there is no position to re-bucket here and the step is intentionally a
+// minimal trace marker. The contract is enforced at the store boundary (move()), so when
+// Plan 06-03 adds velocity integration AT THIS SEAM it will call store.move and the bucket
+// invariant the tracker depends on is preserved by construction. Ageing/other per-tick
+// entity bookkeeping lands alongside that physics in 06-03.
+func (t *TickLoop) tickEntities() {
+	t.trace("tickEntities")
+	// No entity self-propulsion in this plan: positions are unchanged within the tick, so the
+	// store's per-section buckets are already consistent for the tracker's near() read that
+	// follows. Plan 06-03 fills this with velocity integration via t.entities.move (the
+	// bucket-consistent mutation path), keeping near() stale-free.
+}
 
 // tickAI advances mob AI / pathfinding decisions. Phase 7 fills it.
 func (t *TickLoop) tickAI() { t.trace("tickAI") }

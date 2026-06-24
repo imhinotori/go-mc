@@ -154,6 +154,28 @@ func TestSetEntityDataWire(t *testing.T) {
 	}
 }
 
+// TestSetEntityDataMetadataSplice asserts pre-built metadata bytes carried on Entity.metadata
+// (the 06-01 snapshot-friendly slot) are spliced verbatim into the SetEntityData body before
+// the mandatory 0xFF terminator — the path a future plan / spawn helper uses to ship an
+// entity's default SynchedEntityData without re-encoding it each tick.
+func TestSetEntityDataMetadataSplice(t *testing.T) {
+	e := &Entity{id: 12, metadata: []byte{0x00, 0x07, 0x42}} // a fake pre-encoded entry blob
+	p := encodeSetEntityData(e)
+
+	r := bytes.NewReader(p.Data)
+	var id pk.VarInt
+	if _, err := id.ReadFrom(r); err != nil {
+		t.Fatalf("scan id failed: %v", err)
+	}
+	rest := make([]byte, r.Len())
+	_, _ = r.Read(rest)
+	// Body after the id must be the metadata bytes verbatim, then the 0xFF terminator.
+	want := []byte{0x00, 0x07, 0x42, 0xFF}
+	if !bytes.Equal(rest, want) {
+		t.Fatalf("SetEntityData body = %v, want metadata spliced then 0xFF: %v", rest, want)
+	}
+}
+
 // TestMoveAndRemoveWire asserts the move/teleport/rotate/remove encoders match the jar
 // layout (06-CAPTURE-DIFF §5): TeleportEntity round-trips absolute position+rotation;
 // RotateHead is VarInt id + byte angle; RemoveEntities is a VarInt-count-prefixed id list.
@@ -246,5 +268,56 @@ func TestMoveDeltaShort(t *testing.T) {
 	}
 	if int32(id) != 5 || xa != 4096 || ya != -4096 || za != 0 || !bool(onGround) {
 		t.Fatalf("MoveEntityPos = (id=%d,xa=%d,ya=%d,za=%d,og=%v), want (5,4096,-4096,0,true)", id, xa, ya, za, onGround)
+	}
+}
+
+// TestMoveEntityPosRotAndRotWire asserts the PosRot and Rot delta-move encoders match the jar
+// field order (06-CAPTURE-DIFF §5): PosRot = VarInt id, Short xa/ya/za, Byte yRot, Byte xRot
+// (yaw BEFORE pitch), Boolean onGround; Rot = VarInt id, Byte yRot, Byte xRot, Boolean
+// onGround. These encoders exist for the later delta-move bandwidth optimization (v1 favors
+// TeleportEntity); the test keeps their jar-derived layout under regression.
+func TestMoveEntityPosRotAndRotWire(t *testing.T) {
+	// PosRot: shorts then yaw(=yRot) then pitch(=xRot).
+	pr := encodeMoveEntityPosRot(7, 4096, 0, -4096, 90, 0, true)
+	if pr.ID != int32(packetid.ClientboundMoveEntityPosRot) {
+		t.Fatalf("MoveEntityPosRot id = %d, want %d", pr.ID, packetid.ClientboundMoveEntityPosRot)
+	}
+	var (
+		id         pk.VarInt
+		xa, ya, za pk.Short
+		yRot, xRot pk.Angle
+		onGround   pk.Boolean
+	)
+	if err := pr.Scan(&id, &xa, &ya, &za, &yRot, &xRot, &onGround); err != nil {
+		t.Fatalf("MoveEntityPosRot scan failed: %v", err)
+	}
+	if int32(id) != 7 || xa != 4096 || ya != 0 || za != -4096 || !bool(onGround) {
+		t.Fatalf("MoveEntityPosRot id/shorts = (%d,%d,%d,%d,og=%v), want (7,4096,0,-4096,true)", id, xa, ya, za, onGround)
+	}
+	if got := yRot.ToDeg(); got < 88 || got > 92 {
+		t.Errorf("MoveEntityPosRot yRot deg = %v, want ~90 (yaw written before pitch)", got)
+	}
+	if got := xRot.ToDeg(); got < -2 || got > 2 {
+		t.Errorf("MoveEntityPosRot xRot deg = %v, want ~0", got)
+	}
+
+	// Rot: id, yRot, xRot, onGround (no position shorts).
+	r := encodeMoveEntityRot(7, 45, -10, false)
+	if r.ID != int32(packetid.ClientboundMoveEntityRot) {
+		t.Fatalf("MoveEntityRot id = %d, want %d", r.ID, packetid.ClientboundMoveEntityRot)
+	}
+	var (
+		rid          pk.VarInt
+		rYaw, rPitch pk.Angle
+		rOnGround    pk.Boolean
+	)
+	if err := r.Scan(&rid, &rYaw, &rPitch, &rOnGround); err != nil {
+		t.Fatalf("MoveEntityRot scan failed: %v", err)
+	}
+	if int32(rid) != 7 || bool(rOnGround) {
+		t.Fatalf("MoveEntityRot id/onGround = (%d,%v), want (7,false)", rid, rOnGround)
+	}
+	if got := rYaw.ToDeg(); got < 43 || got > 47 {
+		t.Errorf("MoveEntityRot yRot deg = %v, want ~45", got)
 	}
 }
