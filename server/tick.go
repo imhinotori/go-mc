@@ -782,6 +782,28 @@ func (t *TickLoop) dispatch(c *Client, p pk.Packet) {
 		// leading string then ignoring the signing buys nothing until the chat-signing path
 		// lands). Routed here EXPLICITLY (rather than the default no-op) so the choice is
 		// visible and the capture-diff in 07-06 can confirm the client never takes this path.
+	case packetid.ServerboundChat:
+		// The client's chat message (CMD-02). ServerboundChatPacket is jar-verified (javap'd
+		// from the 26.2 inner jar this session) as readUtf(256) message -> readInstant
+		// timeStamp -> readLong salt -> readNullable(MessageSignature) -> LastSeenMessages$Update.
+		// Resolve it INLINE on the tick goroutine — like ServerboundChatCommand/ClientCommand
+		// above — NOT via the subtick buffer: chat is not a timestamped movement input, and the
+		// broadcast fan-out touches the tick-owned players slice + the bounded outbound queues,
+		// which must run on the owner (TICK-05). handleChat decodes DEFENSIVELY (a Scan error is
+		// a silent no-op, T-3-02), keeps ONLY the message string (the signature/lastSeen are
+		// ignored — offline/server-authoritative), bounds it at 256, and broadcasts a
+		// server-attributed ClientboundSystemChat ("<name> msg") to every player. A nil player
+		// (unknown connection) is a cheap no-op.
+		if player != nil {
+			t.handleChat(player, p)
+		}
+	case packetid.ServerboundChatAck, packetid.ServerboundChatSessionUpdate:
+		// The chat acknowledgement (A6) and the chat-session update (a public-key session the
+		// client establishes for SIGNED chat). v1 runs offline + broadcasts via SystemChat (it
+		// never sends signed PlayerChat), so neither is needed: they are DECODE-AND-IGNORE
+		// no-ops. Routed here EXPLICITLY (rather than the silent default) so the choice is
+		// visible and the 07-06 capture-diff can confirm the SystemChat round-trip does not
+		// depend on acking. The payload is never read; never panics (T-3-02).
 	default:
 		// Unknown / not-yet-handled IDs are cheap no-ops: never block, never panic.
 	}

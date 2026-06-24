@@ -226,6 +226,10 @@ func (g *gameTick) AcceptPlayer(
 		awaitingTeleport: teleportID,
 		entityID:         entityID,
 		uuid:             id,
+		// CMD-02: the login-profile name is the SERVER-authoritative chat attribution
+		// ("<name> message"). It was accepted at AcceptPlayer but unstored before this plan;
+		// threaded here as a value (crosses no tick-owned state), exactly like entityID/uuid.
+		name: name,
 		// ENT-05: a fresh player spawns at full survival health/food/saturation (the
 		// server-owned defaults). These tick-owned fields drive the damage->death->respawn
 		// loop; the client never sets them (T-6-05). A loaded .dat (ENT-06) overrides them

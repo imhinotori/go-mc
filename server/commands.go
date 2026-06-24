@@ -14,11 +14,11 @@ import (
 // ClientboundCommands (so the client tab-completes), and routes a decoded
 // ServerboundChatCommand to Graph.Execute on the tick goroutine (TICK-05).
 //
-// The reply path (telling the player a command failed) is a DOCUMENTED v1 no-op: the
-// command still RUNS (a future /say broadcasts via the chat path), and Plan 07-05 lands the
-// SystemChat reply helper that runCommand will reuse for command output. For v1 an Execute
-// error is logged on the server side only; the unprivileged-client and malformed paths are
-// already silent no-ops by construction (the permission gate + the defensive decode).
+// The reply path (telling the player a command failed) is delivered via the SystemChat helper
+// from chat.go (07-05): an Execute parse/dispatch error replies to the issuing player as a
+// ClientboundSystemChat, consolidating the reply 07-04 left as a documented stub. The
+// unprivileged-client and malformed paths are silent no-ops by construction (the permission
+// gate + the defensive decode).
 
 // maxCommandLen bounds a command string before Execute (T-7-03, ASVS V5). The wire decode
 // (FriendlyByteBuf.readUtf, jar-verified) caps at 32767, but a real Minecraft command never
@@ -173,13 +173,15 @@ func (t *TickLoop) runCommand(p *tickPlayer, cmd string) {
 		return playerHasPermission(p, node)
 	})
 
-	// Execute runs the fork dispatcher on the tick goroutine. A parse error is reported
-	// back (v1: documented no-op until 07-05 lands the SystemChat reply); never a panic.
+	// Execute runs the fork dispatcher on the tick goroutine. A parse/dispatch error is now
+	// reported back to the issuing player via the SystemChat reply helper (07-05 consolidates
+	// the reply 07-04 left as a documented stub). Never a panic (T-3-02).
 	if err := executeCommand(ctx, cmd); err != nil {
-		// v1 reply path: the command failed to parse/dispatch. Plan 07-05 lands the
-		// SystemChat reply helper; until then this is a documented silent no-op (the
-		// player simply sees nothing). We intentionally do NOT panic or block the tick.
-		_ = err
+		// CMD-02 reply path: the command failed to parse/dispatch. Deliver the outcome to the
+		// issuing player as a server-attributed ClientboundSystemChat (the shared helper on the
+		// tick goroutine — TICK-05). The error text is the fork dispatcher's own message; we do
+		// NOT panic or block the tick.
+		t.sendSystemChat(p, "Unknown or invalid command: "+err.Error())
 	}
 }
 
