@@ -91,17 +91,34 @@ const debugNavEvery = 120
 const debugNavReach = 12.0
 
 // SetDebug arms the OFF-by-default debug triggers (the Plan 06-07 interactive gate). main()
-// calls it before Run only when SULFUR_DEBUG=1: it spawns a visible, moving pig near spawn and
-// periodically damages players so the operator can SEE entity movement, the health bar drop,
-// and the death/respawn loop. surfaceY is the world spawn surface (the same value handed to
-// the generator + SetSpawn). Set-once at setup; the debug state is read/written only on the
-// tick goroutine (TICK-05). With debug off (the default) every debug hook is a nil-check no-op.
+// calls it before Run only when SULFUR_DEBUG=1: it spawns a visible, AI-driven pig near spawn so
+// the operator can SEE entity movement + the ported AI. surfaceY is the world spawn surface (the
+// same value handed to the generator + SetSpawn). Set-once at setup; the debug state is
+// read/written only on the tick goroutine (TICK-05). With debug off (the default) every debug
+// hook is a nil-check no-op.
+//
+// NOTE: the periodic player DAMAGE trigger is NOT armed here — it is opt-in via SetDebugDamage
+// (SULFUR_DEBUG_DAMAGE=1). Without it, the operator can move/explore/observe the mob freely
+// without being killed every ~20s (which would drop the death screen and freeze movement). Arm
+// the damage only when specifically testing the health-bar / death / respawn loop.
 func (t *TickLoop) SetDebug(surfaceY int) {
 	t.debug = &debugConfig{
 		spawnSurfaceY: surfaceY,
-		damageEvery:   40,  // ~2s at 20 TPS between bites
-		damageAmount:  2.0, // 1 heart per bite: 10 bites (~20s) from full to death
+		// damageEvery defaults to 0 (no periodic damage) — opt in via SetDebugDamage.
 	}
+}
+
+// SetDebugDamage arms the OFF-by-default periodic player-damage trigger (SULFUR_DEBUG_DAMAGE=1,
+// in addition to SULFUR_DEBUG=1). It bites every living player ~1 heart / 2s so the operator can
+// SEE the health bar drop and the death -> respawn loop. Left OFF by default so normal interactive
+// testing (movement, mob observation, building) is not interrupted by death. A no-op if debug is
+// off. Tick-owned.
+func (t *TickLoop) SetDebugDamage() {
+	if t.debug == nil {
+		return
+	}
+	t.debug.damageEvery = 40   // ~2s at 20 TPS between bites
+	t.debug.damageAmount = 2.0 // 1 heart per bite
 }
 
 // SetDebugNavObservable arms the OFF-by-default fixed-point navigation trigger (07-06

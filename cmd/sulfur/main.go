@@ -137,7 +137,7 @@ func main() {
 	// normal `sulfur` run is unaffected; armed only for the interactive check.
 	if os.Getenv("SULFUR_DEBUG") == "1" {
 		tick.SetDebug(overworldSurfaceY)
-		log.Printf("SULFUR_DEBUG=1: debug entity-spawn + periodic damage triggers ARMED (interactive gate)")
+		log.Printf("SULFUR_DEBUG=1: debug AI-driven entity-spawn ARMED (interactive gate)")
 		// Plan 07-06 interactive gate (AI-02): SULFUR_DEBUG_NAV=1 additionally makes the debug
 		// pig deterministically pace a fixed line near spawn via the REAL ported A* navigation,
 		// so an operator can wall the line and reliably SEE the pathfinder route around the
@@ -145,6 +145,13 @@ func main() {
 		if os.Getenv("SULFUR_DEBUG_NAV") == "1" {
 			tick.SetDebugNavObservable()
 			log.Printf("SULFUR_DEBUG_NAV=1: observable fixed-point A* navigation ARMED (the pig paces a known line — wall it to watch A* route around)")
+		}
+		// SULFUR_DEBUG_DAMAGE=1 (opt-in) arms the periodic player-damage trigger for testing the
+		// health-bar / death / respawn loop. OFF by default so normal movement/observation is not
+		// interrupted by being killed every ~20s (which freezes the client on the death screen).
+		if os.Getenv("SULFUR_DEBUG_DAMAGE") == "1" {
+			tick.SetDebugDamage()
+			log.Printf("SULFUR_DEBUG_DAMAGE=1: periodic player damage ARMED (health-bar/death/respawn test)")
 		}
 	}
 
