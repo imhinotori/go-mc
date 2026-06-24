@@ -104,7 +104,7 @@ Phase 6 adds **zero new third-party dependencies.** Everything is the fork's own
                                                     └──────────────────┘
 ```
 
-Entry: serverbound packets → `dispatch` (already routes `UseItemOn`/`PlayerAction`/`Swing`/`ContainerClick` into the subtick buffer — see `server/tick.go:479-490`). Processing: the fixed `tickOnce` pipeline. Block edits mutate the tick-owned `ChunkManager`; the tracker and flush emit clientbound packets through the single writer.
+Entry: serverbound packets → `dispatch` (routes `UseItemOn`/`UseItem`/`Swing` into the subtick buffer today — see `server/tick.go:479-490`; note `ServerboundPlayerAction` and `ServerboundContainerClick` are NOT routed yet — they hit the `default:` no-op at tick.go:532 and the ENT-03/ENT-04 plans must add them to the dispatch case set). Processing: the fixed `tickOnce` pipeline. Block edits mutate the tick-owned `ChunkManager`; the tracker and flush emit clientbound packets through the single writer.
 
 ### Recommended Project Structure
 ```
