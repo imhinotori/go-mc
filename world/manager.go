@@ -1,6 +1,10 @@
 package world
 
-import "github.com/imhinotori/sulfur/level"
+import (
+	"github.com/imhinotori/sulfur/level"
+	"github.com/imhinotori/sulfur/level/block"
+	pk "github.com/imhinotori/sulfur/net/packet"
+)
 
 // loadState is the per-holder load lifecycle. The tick goroutine (Plan 04-03)
 // drives the transitions: Empty -> Loading (request issued) -> Ready (worker
@@ -112,3 +116,74 @@ func (m *ChunkManager) Remove(pos level.ChunkPos) {
 // assert the needed-ring stays bounded under position spam (threat T-4-06); it is a
 // pure read over the tick-owned map.
 func (m *ChunkManager) Len() int { return len(m.columns) }
+
+// floorDiv16 is arithmetic floor-division by 16 (chunk width) that is correct for
+// negative coordinates (Go's / truncates toward zero, which is wrong west/north of 0,
+// e.g. -1/16 == 0 but the column is -1). A right-shift on a signed int is the
+// arithmetic (sign-extending) shift, so this is the single negative-correct world
+// block-x/z -> chunk-column mapping the block-edit API uses. The world package CANNOT
+// import server (import cycle), so the same logic the server's floorDiv provides lives
+// here locally — one mapping per package, not two competing definitions.
+func floorDiv16(v int) int { return v >> 4 }
+
+// sectionLocal maps a world block (x,y,z) plus the dimension floor minY to the section
+// index and the in-section y-major local index. It MIRRORS world/generator.go's
+// Superflat.sectionLocal EXACTLY (the single authoritative mapping): sec = (y-minY)>>4;
+// local = (y&15)<<8 | (z&15)<<4 | (x&15). Go's >> on a signed int is arithmetic and y&15
+// is correct for negatives (e.g. (-1)&15 == 15), so the bit-masked local is negative-safe
+// without any extra correction; only the COLUMN needs the floor-div helper above.
+func sectionLocal(x, y, z, minY int) (sec, local int) {
+	sec = (y - minY) >> 4
+	local = (y&15)<<8 | (z&15)<<4 | (x & 15)
+	return
+}
+
+// columnAndSection resolves the ready chunk, section index, and local index for a world
+// block pos, or ok=false when the column is not loaded/ready or the y falls outside the
+// chunk's section range. It is the shared lookup behind GetBlock and SetBlock so the two
+// can never drift in their pos->(column,section,local) mapping.
+func (m *ChunkManager) columnAndSection(pos pk.Position, minY int) (ch *level.Chunk, sec, local int, ok bool) {
+	col := level.ChunkPos{int32(floorDiv16(pos.X)), int32(floorDiv16(pos.Z))}
+	ch, loaded := m.Get(col)
+	if !loaded {
+		return nil, 0, 0, false // unloaded/not-ready column: never mutate, never read
+	}
+	sec, local = sectionLocal(pos.X, pos.Y, pos.Z, minY)
+	if sec < 0 || sec >= len(ch.Sections) {
+		return nil, 0, 0, false // y outside the dimension's section range
+	}
+	return ch, sec, local, true
+}
+
+// GetBlock reads the block state at a world block pos via the generator's section/local
+// mapping. ok is false when the target column is not loaded/ready or y is outside the
+// section range (treated as "no block here" — physics reads it as non-solid air). Threaded
+// the dimension floor minY (overworld -64) so the y->section mapping is correct. Pure read;
+// runs on the tick goroutine over the tick-owned manager (TICK-05).
+func (m *ChunkManager) GetBlock(pos pk.Position, minY int) (block.StateID, bool) {
+	ch, sec, local, ok := m.columnAndSection(pos, minY)
+	if !ok {
+		return 0, false
+	}
+	return ch.Sections[sec].GetBlock(local), true
+}
+
+// SetBlock writes state at a world block pos and reports whether it CHANGED the world
+// (false when the new state equals the existing one, or — the server-authoritative reject
+// path — when the target column is not loaded/ready or y is out of range, in which case
+// NOTHING is mutated and there is no panic). It delegates to level.Section.SetBlock, which
+// maintains the section's non-air BlockCount, so the count never goes stale. minY is the
+// dimension floor (overworld -64). The SOLE block mutator; runs on the tick goroutine over
+// the tick-owned manager (TICK-05 / T-6-08) — no off-tick caller writes the world.
+func (m *ChunkManager) SetBlock(pos pk.Position, state block.StateID, minY int) (changed bool) {
+	ch, sec, local, ok := m.columnAndSection(pos, minY)
+	if !ok {
+		return false // unloaded column / out-of-range y: no mutation (server-authoritative reject)
+	}
+	old := ch.Sections[sec].GetBlock(local)
+	if old == state {
+		return false // already this state: a no-op, do not re-broadcast an unchanged edit
+	}
+	ch.Sections[sec].SetBlock(local, state)
+	return true
+}
