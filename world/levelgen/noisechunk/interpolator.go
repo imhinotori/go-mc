@@ -42,7 +42,7 @@ type interpolator struct {
 	cellCountY    int
 	cellWidth     int
 	cellHeight    int
-	cellNoiseMinY int // world Y of the cy=0 corner row (set by the owner before filling)
+	cellNoiseMinY int // floorDiv(minY, cellHeight): the cy=0 corner row in CELL units
 
 	slice0 [][]float64 // X=0 face: [cz][cy]
 	slice1 [][]float64 // X=1 face: [cz][cy]
@@ -74,6 +74,11 @@ func newInterpolator(noiseFiller density.Function, cellCountXZ, cellCountY, cell
 	}
 }
 
+// setCellNoiseMinY sets the cy=0 corner row (in cell units, = floorDiv(minY,
+// cellHeight)) used by fillSlice to offset corner rows into world Y. Defaults to 0
+// (the Task-1 unit tests drive corners directly at a zero base).
+func (ip *interpolator) setCellNoiseMinY(c int) { ip.cellNoiseMinY = c }
+
 // allocateSlice mirrors NoiseChunk$NoiseInterpolator.allocateSlice(cellY, cellXZ):
 // a [cellXZ+1][cellY+1] grid (outer = XZ corners, inner = Y corners).
 func allocateSlice(cellY, cellXZ int) [][]float64 {
@@ -101,7 +106,9 @@ func (ip *interpolator) fillSlice(onSlice0 bool, blockX, firstNoiseZ int) {
 		blockZ := (firstNoiseZ + cz) * ip.cellWidth
 		col := slice[cz]
 		for cy := 0; cy <= ip.cellCountY; cy++ {
-			blockY := ip.cellNoiseMinY + cy*ip.cellHeight
+			// Corner world Y for cell row cy (NoiseBasedChunkGenerator.iterateNoiseColumn:
+			// blockY = (cellNoiseMinY + cellY) * cellHeight, inCellY=0 at the corner).
+			blockY := (ip.cellNoiseMinY + cy) * ip.cellHeight
 			col[cy] = ip.noiseFiller.Compute(density.Context{X: blockX, Y: blockY, Z: blockZ})
 		}
 	}
