@@ -152,7 +152,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Hot-path collections use lock-free/specialized variants (xsync/v4) and worker pools use ants/v2; the linear region file format reduces disk I/O and footprint
   4. The server passes `-race` clean on every async subsystem
 **Plans**: 7 plans (6 waves)
-- [ ] 08-01-PLAN.md — Async substrate (Wave 0): add ants/v2 + xsync/v4 to go.mod; server/async.go (non-blocking pool factory + pathReady/trackerDiffReady/spawnCandidatesReady contracts); the asyncIn2 rejoin behind the unchanged applyAsyncResults seam; the -race stress scaffold (OPT-04/06)
+- [x] 08-01-PLAN.md — Async substrate (Wave 0): add ants/v2 + xsync/v4 to go.mod; server/async.go (non-blocking pool factory + pathReady/trackerDiffReady/spawnCandidatesReady contracts); the asyncIn2 rejoin behind the unchanged applyAsyncResults seam; the -race stress scaffold (OPT-04/06)
 - [ ] 08-02-PLAN.md — OPT-01 async pathfinding (Wave 1): requestPath submits computePath to the pathPool and continues; pathReady rejoins with despawn/retarget validation; navigation tolerates a 1+-tick-late path (OPT-01/06)
 - [ ] 08-03-PLAN.md — OPT-05 linear region format (Wave 1): save/region/linear.go (whole-region zstd, pure-Go klauspost/compress) alongside .mca; format-aware opt-in loadOrGenerate; round-trip + bomb/corrupt guards (OPT-05/06)
 - [ ] 08-04-PLAN.md — OPT-02 async tracker (Wave 2): asyncTracker behind the unchanged tracker.Tick() seam (one swap-point line); diff math off-tick over a snapshot; owner-side packet emission; golden equivalence vs entityTracker (OPT-02/06)
