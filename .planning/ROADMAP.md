@@ -136,7 +136,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 6 plans (4 waves)
 - [x] 07-01-PLAN.md — AI-01: port GoalSelector + Goal/Goal$Flag/WrappedGoal + the passive Pig goal set + the serverAiStep-order driver (wave 1)
 - [x] 07-02-PLAN.md — AI-02: port the request→snapshot→result A* (PathNavigationRegion snapshot + PathFinder + WalkNodeEvaluator + GroundPathNavigation), the pure computePath seam, wired into serverAiStep (wave 2)
-- [ ] 07-03-PLAN.md — AI-03: port the faithful-minimal NaturalSpawner + MobCategory cap accounting, fill tickAI() (drive serverAiStep + spawner), retire the sinusoidal debug pig (wave 3)
+- [x] 07-03-PLAN.md — AI-03: port the faithful-minimal NaturalSpawner + MobCategory cap accounting, fill tickAI() (drive serverAiStep + spawner), retire the sinusoidal debug pig (wave 3)
 - [x] 07-04-PLAN.md — CMD-01: wire the fork command.Graph (build + send ClientboundCommands at join + route ServerboundChatCommand → Execute on the tick) (wave 1)
 - [x] 07-05-PLAN.md — CMD-02: decode ServerboundChat defensively + broadcast via SystemChat + document the PlayerChat globalIndex + thread tickPlayer.name (wave 2)
 - [ ] 07-06-PLAN.md — capture-diff (ClientboundCommands / SystemChat / ServerboundChat) + BLOCKING real-client interactive sign-off: a mob wanders/navigates an obstacle, a command replies, chat broadcasts (autonomous:false; AI-01/02/03 + CMD-01/02 gate) (wave 4)
