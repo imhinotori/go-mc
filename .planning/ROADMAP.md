@@ -18,7 +18,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 3: Authoritative Tick Loop** - 20-TPS ordered tick spine, ownership-based sync, game-time anchor, subtick layer, keepalive
 - [x] **Phase 4: World & Chunk System** - Paletted-container chunk encode/decode, heightmaps/light, deterministic worldgen, view-distance streaming (completed 2026-06-24)
 - [x] **Phase 5: Player Session In-World (FIRST PLAYABLE)** - ✅ Vanilla 26.2 client logs in and WALKS AROUND a solid, visible, ticking world whose ring follows it; listed in tab, no kick — FIRST PLAYABLE achieved
-- [ ] **Phase 6: Entities, Physics & Interaction** - Entity store/tracker, gravity/AABB collision, block place/break, component inventory, health/respawn, persistence
+- [x] **Phase 6: Entities, Physics & Interaction** - Entity store/tracker, gravity/AABB collision, block place/break, component inventory, health/respawn, persistence
 - [ ] **Phase 7: AI, Pathfinding, Commands & Chat** - Goal-selector brain, synchronous A* navigation, mob spawning, command dispatch, chat broadcast
 - [ ] **Phase 8: Leaf Concurrency Optimizations** - Swap synchronous executors for goroutine pools behind pre-built seams; lock-free collections; linear region format; `-race` clean
 - [ ] **Phase 9: Stretch — Online Mode, Vanilla-Parity Worldgen, Regionization** - v2 optional add-ons enabled by the ownership-isolated core
@@ -171,7 +171,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 3. Authoritative Tick Loop | 3/3 | Complete   | 2026-06-23 |
 | 4. World & Chunk System | 4/4 | Complete   | 2026-06-24 |
 | 5. Player Session In-World (FIRST PLAYABLE) | 3/3 | ✅ Complete | FIRST PLAYABLE — real client walks around a following world |
-| 6. Entities, Physics & Interaction | 6/7 | In Progress|  |
+| 6. Entities, Physics & Interaction | 7/7 | Complete | Real-client interactive milestone signed off (entity visible, place/break, damage, death→respawn); 3 real-client bugs fixed |
 | 7. AI, Pathfinding, Commands & Chat | 0/TBD | Not started | - |
 | 8. Leaf Concurrency Optimizations | 0/TBD | Not started | - |
 | 9. Stretch — Online / Parity / Regionization | 0/TBD | Not started | - |
