@@ -20,6 +20,7 @@ import (
 	"context"
 	"flag"
 	"log"
+	"os"
 
 	"github.com/imhinotori/sulfur/chat"
 	"github.com/imhinotori/sulfur/server"
@@ -127,6 +128,17 @@ func main() {
 	// re-teleports a player two blocks above it — the same placement the join bootstrap
 	// uses (NewGameTick is handed the same overworldSurfaceY below).
 	tick.SetSpawn(overworldSurfaceY)
+
+	// Plan 06-07 interactive gate: when SULFUR_DEBUG=1, arm the OFF-by-default debug triggers
+	// so an operator running an unmodified vanilla 26.2 client can SEE the Phase-6 milestone —
+	// a visible, vanilla-renderable pig spawns near spawn and PACES (the entityTracker's
+	// Add/Teleport/Remove, ENT-01/02), and players take periodic damage so the on-screen health
+	// bar drops and the death-screen -> respawn loop runs (ENT-05/06). Off by default, so a
+	// normal `sulfur` run is unaffected; armed only for the interactive check.
+	if os.Getenv("SULFUR_DEBUG") == "1" {
+		tick.SetDebug(overworldSurfaceY)
+		log.Printf("SULFUR_DEBUG=1: debug entity-spawn + periodic damage triggers ARMED (interactive gate)")
+	}
 
 	// Start the long-lived server goroutines: exactly one tick goroutine (the sole
 	// owner/mutator of game state, consuming inbound), one independent keep-alive

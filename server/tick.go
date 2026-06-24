@@ -165,6 +165,13 @@ type TickLoop struct {
 	// run on-thread over this store. A plain map (not xsync; that is Phase 8).
 	entities *entityStore
 
+	// debug holds the OPTIONAL, off-by-default debug triggers for the Plan 06-07 interactive
+	// human-verify gate (a visible moving pig + periodic damage so the operator can SEE entity
+	// movement and the health/death/respawn loop). nil in production AND in every test, so the
+	// fixed tick-phase pipeline and the -race gate are unaffected; armed only by SetDebug when
+	// cmd/sulfur is started with SULFUR_DEBUG=1. Read/written only on the tick goroutine.
+	debug *debugConfig
+
 	// idAlloc is the monotonic entity-ID allocator (ENT-01). It REPLACES the hard-coded
 	// joinEntityID=1: every player AND every entity draws a unique, never-reused id from
 	// this single space (06-RESEARCH Pitfall 7 / threat T-6-07). Although it is a tick-owned

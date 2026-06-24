@@ -110,6 +110,12 @@ func (t *TickLoop) tickEntities() {
 	// store's per-section buckets are already consistent for the tracker's near() read that
 	// follows. Plan 06-03 fills this with velocity integration via t.entities.move (the
 	// bucket-consistent mutation path), keeping near() stale-free.
+
+	// Plan 06-07 interactive gate: the OFF-by-default debug triggers (a visible moving pig +
+	// periodic damage) run here, INSIDE this existing phase, so no new phase is added to the
+	// fixed tick order (TestTickPhaseOrder is preserved). tickDebug is a nil-check no-op when
+	// debug is off (production / every test).
+	t.tickDebug()
 }
 
 // tickAI advances mob AI / pathfinding decisions. Phase 7 fills it.
