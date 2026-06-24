@@ -44,6 +44,15 @@ type TickStats struct {
 	MSPTp99  float64 // rolling p99 tick duration, milliseconds
 	TPS      float64 // effective ticks per second (capped at 20)
 	GameTime int64   // current game-time counter (age of the world in ticks)
+
+	// AsyncDrops is the cumulative async-pool overload count (asyncSubmitDrops.Value()) republished
+	// each tick. It is the OPT-04 read half of the ONE justified xsync.Counter (collections_audit.go):
+	// the off-tick submit paths Inc() the counter via submitOrDrop, and the TICK goroutine reads it
+	// here for telemetry — a genuine multi-writer/cross-boundary value where xsync.Counter is the
+	// correct lock-free primitive (a plain int64 would race the read against the increments). It lets
+	// an operator SEE how often the async substrate is degrading to "compute a tick later" under
+	// saturation (08-RESEARCH Pitfall 4 backpressure observability).
+	AsyncDrops int64
 }
 
 // asyncResult is the immutable message an async worker returns to the tick goroutine,
@@ -926,5 +935,10 @@ func (t *TickLoop) recordMSPT(d time.Duration) {
 		MSPTp99:  float64(p99) / float64(time.Millisecond),
 		TPS:      tps,
 		GameTime: t.gametime,
+		// OPT-04: the tick-goroutine READ of the one justified xsync.Counter. The submit paths
+		// (submitOrDrop, off-tick / any goroutine) Inc() asyncSubmitDrops; here the owner reads its
+		// Value() to publish it. This concurrent inc-vs-read is exactly why the counter is an
+		// xsync.Counter and not a plain int64 (collections_audit.go).
+		AsyncDrops: asyncSubmitDrops.Value(),
 	})
 }

@@ -36,14 +36,20 @@ import (
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
-// asyncSubmitDrops is a tick-owned counter of pool-Submit overflows (ErrPoolOverload), shared
-// across the per-subsystem pools so the operator/telemetry can see how often the async substrate
-// is degrading to "compute a tick later" under saturation. It is an xsync.Counter — a striped,
-// contention-friendly counter the off-tick submit paths increment from any goroutine without a
-// mutex (08-RESEARCH Pitfall 4 backpressure observability). This is the JUSTIFIED-PER-USE
-// introduction of xsync for Wave 0: a value genuinely written across the async boundary, not a
-// tick-only collection (which stays a plain map per Pitfall 1). OPT-04 (08-06) extends the xsync
-// surface where profiling/contention warrants; until then this is the only xsync use.
+// asyncSubmitDrops is the counter of pool-Submit overflows (ErrPoolOverload), shared across the
+// per-subsystem pools so the operator/telemetry can see how often the async substrate is degrading
+// to "compute a tick later" under saturation. It is an xsync.Counter — a striped, contention-
+// friendly counter the submit paths increment from any goroutine without a mutex (08-RESEARCH
+// Pitfall 4 backpressure observability).
+//
+// This is the ONE JUSTIFIED xsync/v4 usage the OPT-04 audit (08-06, collections_audit.go) keeps: a
+// value GENUINELY crossing the async boundary in BOTH directions — the submit paths (any goroutine)
+// Inc() it, and the TICK goroutine reads its Value() each tick (recordMSPT -> TickStats.AsyncDrops,
+// surfaced by TickLoop.AsyncDrops). A plain int64 would race that concurrent inc-vs-read; the
+// xsync.Counter is the correct lock-free primitive. It is NOT a tick-only collection (those stay
+// plain maps per Pitfall 1 — see the audit table). The OPT-04 audit concluded NO tick-owned map
+// needs converting (snapshot-and-stay-plain), so this remains the only xsync map/counter use; the
+// other half of OPT-04 ("worker pools use ants/v2") is the pathPool/trackerPool/spawnPool trio.
 var asyncSubmitDrops = xsync.NewCounter()
 
 // newAsyncPool constructs one per-subsystem ants goroutine pool sized to `size`. It is
