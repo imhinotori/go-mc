@@ -52,49 +52,59 @@ func TestAquiferSeaLevelWater(t *testing.T) {
 	}
 }
 
-// TestAquiferPerchedAndLava: deep below (the lava band) the aquifer resolves at least one
-// non-solid block to lava (the deep lava table), and somewhere a non-sea-level fluid
-// surface appears in a carved region (a perched water table / dry pocket). We assert lava
-// appears deep down and that not every non-solid block below sea level is water (i.e. the
-// noise-driven fluid level genuinely varies, not a flat sea everywhere).
+// TestAquiferPerchedAndLava: the aquifer is genuinely noise-driven below sea level — caves
+// below the local water table flood with water, deep pockets get lava (the deep lava
+// table), and dry pockets above the local table are air. We scan a grid of chunks (deep
+// lava lakes are intentionally rare, exactly as in vanilla) and assert all three substances
+// appear AND that the below-sea fill is not a flat water sheet (water, air, and lava all
+// occur — the perched/dry variation the floodedness/spread noise produces).
 func TestAquiferPerchedAndLava(t *testing.T) {
 	water := block.ToStateID[block.Water{Level: 0}]
 	lava := block.ToStateID[block.Lava{Level: 0}]
 
 	sawLava := false
-	sawNonWaterBelowSea := false
-	// Scan several chunks to reliably hit a deep lava table + a perched/dry region.
-	for _, cc := range [][2]int32{{0, 0}, {1, 0}, {0, 1}, {3, 3}, {-2, 5}} {
-		_, nc, aq := buildAquifer(t, cc[0], cc[1])
-		for lx := 0; lx < 16; lx++ {
-			for lz := 0; lz < 16; lz++ {
-				for y := nc.MinY() + 1; y < nc.SeaLevel(); y++ {
-					d := nc.FinalDensity(lx, y, lz)
-					if d > 0 {
-						continue
-					}
-					st, isFluid := aq.computeSubstance(nc.WorldX(lx), y, nc.WorldZ(lz), d)
-					if !isFluid {
-						continue // air (placement keeps default air)
-					}
-					if st == lava {
-						sawLava = true
-					}
-					if st != water {
-						sawNonWaterBelowSea = true
+	sawWater := false
+	sawAir := false
+	// Scan a 9x9 chunk area: enough to reliably hit a deep lava table (vanilla lava lakes
+	// are sparse, ~50 lava blocks across ~80 chunks).
+scan:
+	for cx := int32(-4); cx <= 4; cx++ {
+		for cz := int32(-4); cz <= 4; cz++ {
+			_, nc, aq := buildAquifer(t, cx, cz)
+			for lx := 0; lx < 16; lx++ {
+				for lz := 0; lz < 16; lz++ {
+					for y := nc.MinY() + 1; y < nc.SeaLevel(); y++ {
+						d := nc.FinalDensity(lx, y, lz)
+						if d > 0 {
+							continue
+						}
+						st, isFluid := aq.computeSubstance(nc.WorldX(lx), y, nc.WorldZ(lz), d)
+						if !isFluid {
+							sawAir = true // air pocket above the local table
+							continue
+						}
+						switch st {
+						case lava:
+							sawLava = true
+						case water:
+							sawWater = true
+						}
 					}
 				}
 			}
+			if sawLava && sawWater && sawAir {
+				break scan
+			}
 		}
-		if sawLava && sawNonWaterBelowSea {
-			break
-		}
+	}
+	if !sawWater {
+		t.Errorf("no water found below sea level (expected flooded caves/oceans)")
+	}
+	if !sawAir {
+		t.Errorf("no air pockets below sea level (expected dry cave pockets above the table)")
 	}
 	if !sawLava {
-		t.Errorf("no lava found in the deep band across scanned chunks (expected deep lava tables)")
-	}
-	if !sawNonWaterBelowSea {
-		t.Errorf("every non-solid block below sea was water (expected perched/dry aquifer variation)")
+		t.Errorf("no lava found across the scanned area (expected deep lava tables)")
 	}
 }
 

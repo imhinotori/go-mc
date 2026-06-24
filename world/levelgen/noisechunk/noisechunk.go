@@ -43,7 +43,9 @@ func floorDiv(a, b int) int {
 // a heightmap capture-diff demands. The interpolator machinery (the parity hinge) is
 // fully exercised.
 type NoiseChunk struct {
-	pos      level.ChunkPos
+	pos    level.ChunkPos
+	router *router.Router // the bound graph (the Wave-5 Aquifer reads preliminary_surface_level)
+
 	seaLevel int
 	minY     int
 	height   int
@@ -89,6 +91,7 @@ func NewNoiseChunk(r *router.Router, pos level.ChunkPos) *NoiseChunk {
 
 	nc := &NoiseChunk{
 		pos:           pos,
+		router:        r,
 		seaLevel:      r.Settings.SeaLevel,
 		minY:          ns.MinY,
 		height:        ns.Height,
@@ -191,6 +194,67 @@ func (nc *NoiseChunk) FinalDensity(localX, worldY, localZ int) float64 {
 		return 0
 	}
 	return nc.density[nc.densityIndex(localX, worldY, localZ)]
+}
+
+// MinY returns the world floor (NoiseSettings.min_y, -64 for the overworld).
+func (nc *NoiseChunk) MinY() int { return nc.minY }
+
+// Height returns the build height (NoiseSettings.height, 384 for the overworld).
+func (nc *NoiseChunk) Height() int { return nc.height }
+
+// SeaLevel returns the settings sea level (63 for the overworld) — the global water
+// table the Aquifer's default FluidStatus floods up to.
+func (nc *NoiseChunk) SeaLevel() int { return nc.seaLevel }
+
+// Router returns the bound router (the Wave-5 Aquifer + OreVeinifier read its
+// barrier/fluid_level/lava + vein_* functions through it).
+func (nc *NoiseChunk) Router() *router.Router { return nc.router }
+
+// WorldX maps a chunk-local X in [0,16) to its absolute block X.
+func (nc *NoiseChunk) WorldX(localX int) int { return int(nc.pos[0])*16 + localX }
+
+// WorldZ maps a chunk-local Z in [0,16) to its absolute block Z.
+func (nc *NoiseChunk) WorldZ(localZ int) int { return int(nc.pos[1])*16 + localZ }
+
+// preliminarySurfaceLevel ports NoiseChunk.preliminarySurfaceLevel(x,z): the x,z are
+// snapped to quart resolution (QuartPos.toBlock(QuartPos.fromBlock)) and the bound
+// preliminary_surface_level density function is sampled at (x,0,z), floored. The Aquifer
+// uses this to find where the terrain surface roughly is so it can place fluid below it.
+// No per-column cache here (the Aquifer samples a bounded set of columns; correctness is
+// identical, only the FastUtil Long2IntMap memoization is dropped — a perf refinement).
+func (nc *NoiseChunk) preliminarySurfaceLevel(x, z int) int {
+	qx := (x >> 2) << 2 // QuartPos.toBlock(QuartPos.fromBlock(x))
+	qz := (z >> 2) << 2
+	d := nc.router.NoiseRouter.PreliminarySurfaceLevel.Compute(density.Context{X: qx, Y: 0, Z: qz})
+	return int(mthFloor(d))
+}
+
+// maxPreliminarySurfaceLevel ports NoiseChunk.maxPreliminarySurfaceLevel(x1,z1,x2,z2):
+// the max preliminarySurfaceLevel over the quart-stepped grid in [x1..x2]x[z1..z2]. The
+// Aquifer ctor uses it (over the chunk's grid span) to bound skipSamplingAboveY.
+func (nc *NoiseChunk) maxPreliminarySurfaceLevel(x1, z1, x2, z2 int) int {
+	maxLevel := minInt32 // Integer.MIN_VALUE
+	for z := z1; z <= z2; z += 4 {
+		for x := x1; x <= x2; x += 4 {
+			lvl := nc.preliminarySurfaceLevel(x, z)
+			if lvl > maxLevel {
+				maxLevel = lvl
+			}
+		}
+	}
+	return maxLevel
+}
+
+// minInt32 is Integer.MIN_VALUE (the maxPreliminarySurfaceLevel seed).
+const minInt32 = -2147483648
+
+// mthFloor ports net.minecraft.util.Mth.floor(double) = (int)Math.floor(d).
+func mthFloor(d float64) int {
+	i := int(d)
+	if float64(i) > d {
+		i--
+	}
+	return i
 }
 
 // blockAt is the PROVISIONAL block classification for (localX, worldY, localZ) — the
