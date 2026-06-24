@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: verifying
-stopped_at: Completed 05-01-PLAN.md (PLAY-04 movement decode + ring-follows + PLAY-02 teleport gate; Docker -race clean)
-last_updated: "2026-06-24T03:26:19.429Z"
+status: executing
+stopped_at: Completed 05-02-PLAN.md (early-Play tail + incrementing teleport-id producer; PLAY-01/05/02; Docker -race clean)
+last_updated: "2026-06-24T03:41:08.463Z"
 last_activity: 2026-06-24
 progress:
   total_phases: 9
   completed_phases: 4
   total_plans: 17
-  completed_plans: 15
-  percent: 88
+  completed_plans: 16
+  percent: 94
 ---
 
 # Project State
@@ -26,8 +26,8 @@ See: .planning/PROJECT.md (updated 2026-06-23)
 ## Current Position
 
 Phase: 5 of 9 (Player Session in World / First Playable) — IN PROGRESS
-Plan: 1 of 3 complete (05-01 done; 05-02, 05-03 remaining)
-Status: 05-01 complete — ready for verification
+Plan: 2 of 3 complete (05-01 done; 05-02, 05-03 remaining)
+Status: Ready to execute
 Last activity: 2026-06-24
 
 05-01 milestone (PLAY-04 + PLAY-02): the player WALKS AROUND a world that follows it.
@@ -51,7 +51,7 @@ worker loads/generates a deterministic superflat and rejoins via `applyAsyncResu
 (WORLD-01); chunks encode byte-identical to vanilla 26.2 (04-04 capture-diff) and stream
 as a clamped center-out ring with batch framing (WORLD-05).
 
-Progress: [█████████░] 88%
+Progress: [█████████░] 94%
 
 ## Performance Metrics
 
@@ -88,6 +88,7 @@ Progress: [█████████░] 88%
 | Phase 04 P03 | 7m | 2 tasks | 7 files |
 | Phase 04 P04 | 70min | 2 tasks | 5 files |
 | Phase 05 P01 | 18min | 3 tasks | 7 files |
+| Phase Phase 05 PP02 | 20min | 2 tasks tasks | 3 files files |
 
 ## Accumulated Context
 
@@ -131,6 +132,9 @@ Recent decisions affecting current work:
 - [Phase ?]: ClientboundForgetLevelChunk 26.2 wire = single packed Long (ChunkPos.pack: x low 32 bits, z high 32 bits), jar-derived via javap — not the wiki VarInt z,x
 - [Phase ?]: ServerboundMovePlayer* trailing field is a packed flags UnsignedByte (&1 onGround, &2 horizontalCollision), never a Boolean (1.21.3+ shift)
 - [Phase ?]: applyInput hook fires BEFORE the teleport gate so existing subtick-ordering tests survive; re-center gated on a real chunk-column crossing
+- [Phase ?]: [Phase 05]: 05-02: SetDefaultSpawnPosition pinned to jar RespawnData = composite(GlobalPos, Float yaw, Float pitch); GlobalPos = composite(ResourceKey<Level> dimension, BlockPos) -> wire Identifier + packed-Long BlockPos + Float + Float (W1)
+- [Phase ?]: [Phase 05]: 05-02: PlayerInfoUpdate self-entry = 1-byte 8-action mask 0x0D + writeCollection(VarInt(1)+UUID+enum-order String name/VarInt(0) props/VarInt gameMode/Boolean listed); writeEnumSet over 8 actions == single pk.Byte mask
+- [Phase ?]: [Phase 05]: 05-02: incrementing teleport id = per-gameTick atomic.Uint64 (first id 1, never 0), threaded into bootstrap PlayerPosition AND tickPlayer.awaitingTeleport so the 05-01 gate matches the client echo; const initialTeleportID removed
 
 ### Pending Todos
 
@@ -157,7 +161,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-24T03:26:19.415Z
-Stopped at: Completed 05-01-PLAN.md (PLAY-04 movement decode + ring-follows + PLAY-02 teleport gate; Docker -race clean)
+Last session: 2026-06-24T03:41:08.447Z
+Stopped at: Completed 05-02-PLAN.md (early-Play tail + incrementing teleport-id producer; PLAY-01/05/02; Docker -race clean)
 Resume file: None
 Next: plan Phase 5 (Player Session, PLAY-01/02/03+) — EXTEND the minimal Join Game bootstrap (`server/play_join.go`, 0fd96850) pulled forward in 04-04 into the full player session; do not duplicate the Login/spawn/position scaffolding. Deferred: KeepAlive double-leave hardening + the pulled-forward bootstrap extension (see Deferred Items).
