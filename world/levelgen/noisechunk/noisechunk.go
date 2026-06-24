@@ -286,10 +286,13 @@ func (nc *NoiseChunk) blockAt(localX, worldY, localZ int) block.StateID {
 }
 
 // FillProvisional builds a *level.Chunk from the per-block density via the provisional
-// classification (blockAt). It is the PLACEHOLDER fill that makes the cell machinery
-// testable end-to-end; Wave 5's Aquifer REPLACES the water rule with the real fluid
-// table. Sets plains biome + full sky light + the CLIENT heightmaps (matching the
-// Superflat finishing so a client can render the column).
+// classification (blockAt).
+//
+// Deprecated: superseded by FillChunk (fill.go), which runs the real Aquifer +
+// OreVeinifier rule chain (the ported NoiseBasedChunkGenerator.doFill) — caves flood with
+// water/lava/air and the rock carries ore veins, instead of this placeholder's flat
+// sea-level water rule. Kept only so the Wave-4 cell-machinery tests that predate the
+// aquifer keep a self-contained fixture; the Wave-8 Generator wires FillChunk, not this.
 func (nc *NoiseChunk) FillProvisional() *level.Chunk {
 	secs := nc.height / 16
 	ch := level.EmptyChunk(secs)

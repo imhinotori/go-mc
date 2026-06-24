@@ -80,12 +80,12 @@ func TestFillStoneDeepslateBedrock(t *testing.T) {
 // and assert at least one vein block (copper or iron family) appears among solid blocks.
 func TestFillSolidUsesVein(t *testing.T) {
 	veinFamily := map[block.StateID]bool{
-		block.ToStateID[block.CopperOre{}]:         true,
-		block.ToStateID[block.RawCopperBlock{}]:    true,
-		block.ToStateID[block.Granite{}]:           true,
-		block.ToStateID[block.DeepslateIronOre{}]:  true,
-		block.ToStateID[block.RawIronBlock{}]:      true,
-		block.ToStateID[block.Tuff{}]:              true,
+		block.ToStateID[block.CopperOre{}]:        true,
+		block.ToStateID[block.RawCopperBlock{}]:   true,
+		block.ToStateID[block.Granite{}]:          true,
+		block.ToStateID[block.DeepslateIronOre{}]: true,
+		block.ToStateID[block.RawIronBlock{}]:     true,
+		block.ToStateID[block.Tuff{}]:             true,
 	}
 	sawVein := false
 	for cx := int32(-3); cx <= 3 && !sawVein; cx++ {
