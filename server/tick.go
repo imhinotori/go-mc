@@ -236,6 +236,15 @@ type tickPlayer struct {
 	// registration; tick-owned thereafter.
 	uuid uuid.UUID
 
+	// name is the player's login-profile name (the username from AcceptPlayer). It is the
+	// SERVER-authoritative chat attribution: handleChat renders "<name> message" from it
+	// (CMD-02), never trusting any client-supplied sender field (T-7-07). The name is
+	// accepted at AcceptPlayer (gameplay_tick.go) and threaded onto the tickPlayer at
+	// registration — exactly as entityID/uuid are claimed off-tick and recorded here. It is
+	// a value (crosses no tick-owned state across the register boundary). Tick-owned
+	// thereafter.
+	name string
+
 	// subtick is this player's bounded µs-timestamped input buffer (TICK-03). dispatch
 	// appends server-stamped inputs on arrival; resolveSubtickInputs drains it in
 	// chronological order each tick. Owned by the tick goroutine — never touched off it.
