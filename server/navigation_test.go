@@ -41,12 +41,17 @@ func TestNavigationFollow(t *testing.T) {
 	fillFloor(ch, floorY) // top surface at floorY+1 = 65
 
 	e := testEntity(1, entity.Pig, 1.5, float64(floorY+1), 1.5)
+	e.ai = &mobAI{} // the nav lives on the mob's AI so the async rejoin (applyTo) can reach it
 	loop.entities.add(e)
 
-	var nav groundNavigation
+	nav := &e.ai.navigation
 	nav.speed = 0.2
-	nav.requestPath(loop, e, 10, floorY+1, 1) // path east along the floor
+	nav.requestPath(loop, e, 10, floorY+1, 1) // path east along the floor (now computed OFF-tick)
 
+	// OPT-01: the path is computed off-tick and rejoins via applyAsyncResults — drain until it lands.
+	if !drainAsyncPath(loop, nav, 1000) {
+		t.Fatalf("the async path never rejoined")
+	}
 	if nav.path == nil || len(nav.path.nodes) == 0 {
 		t.Fatalf("requestPath produced no path on a flat floor")
 	}
@@ -75,11 +80,17 @@ func TestNavigationMovesViaMoveEntity(t *testing.T) {
 	fillFloor(ch2, floorY)
 
 	e := testEntity(1, entity.Pig, 14.5, float64(floorY+1), 8.5)
+	e.ai = &mobAI{} // the nav lives on the mob's AI so the async rejoin (applyTo) can reach it
 	loop.entities.add(e)
 
-	var nav groundNavigation
+	nav := &e.ai.navigation
 	nav.speed = 0.25
 	nav.requestPath(loop, e, 20, floorY+1, 8) // walk east across the chunk boundary (x=16)
+
+	// OPT-01: the path rejoins off-tick via applyAsyncResults — drain until it lands before walking.
+	if !drainAsyncPath(loop, nav, 1000) {
+		t.Fatalf("the async path never rejoined")
+	}
 
 	startCol := columnOf(e.x, e.z)
 	for i := 0; i < 400 && !nav.path.done(); i++ {
@@ -114,11 +125,16 @@ func TestRequestPathBuildsSnapshot(t *testing.T) {
 	fillFloor(ch, floorY)
 
 	e := testEntity(1, entity.Pig, 2.5, float64(floorY+1), 2.5)
+	e.ai = &mobAI{} // the nav lives on the mob's AI so the async rejoin (applyTo) can reach it
 	loop.entities.add(e)
 
-	var nav groundNavigation
+	nav := &e.ai.navigation
 	nav.speed = 0.2
 	nav.requestPath(loop, e, 9, floorY+1, 2)
+	// OPT-01: the path is built off-tick and rejoins via applyAsyncResults — drain until it lands.
+	if !drainAsyncPath(loop, nav, 1000) {
+		t.Fatalf("the async path never rejoined")
+	}
 	if nav.path == nil || len(nav.path.nodes) == 0 {
 		t.Fatalf("requestPath did not set a path for a reachable target")
 	}
@@ -169,6 +185,10 @@ func TestServerAiStepWalksToGoalTarget(t *testing.T) {
 	for i := 0; i < 400; i++ {
 		ai.serverAiStep(loop, e)
 		loop.tickPhysics()
+		// OPT-01: serverAiStep now SUBMITS the path off-tick; applyAsyncResults is the pipeline
+		// phase that rejoins it (it runs after tickAI/tickPhysics each tick in the live loop). The
+		// test drives it here so the late path lands and the mob follows it (paths 1+ ticks late).
+		loop.applyAsyncResults()
 	}
 
 	if e.x <= startX+2.0 {

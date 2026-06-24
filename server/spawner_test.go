@@ -194,6 +194,10 @@ func TestTickAIDrivesMobs(t *testing.T) {
 	for i := 0; i < 400; i++ {
 		loop.tickAI() // the SLOT under test: it must drive serverAiStep for the mob
 		loop.tickPhysics()
+		// OPT-01: tickAI's serverAiStep now SUBMITS the path off-tick; applyAsyncResults is the
+		// pipeline phase that rejoins it (it runs after tickAI/tickPhysics each tick in the live
+		// loop). Drive it here so the late path lands and the mob walks (paths 1+ ticks late).
+		loop.applyAsyncResults()
 	}
 	if e.x <= startX+2.0 {
 		t.Fatalf("tickAI did not drive the mob's serverAiStep toward its goal: x=%v (start %v)", e.x, startX)

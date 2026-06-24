@@ -130,22 +130,40 @@ type pathReady struct {
 	path   *Path  // the immutable result computed off-tick by computePath (may be nil = no path)
 }
 
-// applyTo runs on the OWNER goroutine inside applyAsyncResults. STUB for Wave 0: it performs the
-// Pitfall-2 validity re-check (mob still exists) and then no-ops. 08-02 (OPT-01) fills the body
-// after the check with `nav := e.ai.nav; if nav.pendingTarget == r.target { nav.path = r.path;
-// nav.pending = false }` — assigning the late path on the owner so the mob starts following next
-// tick. Carrying r.mobID + r.target (not a live *Entity) is what makes that late apply safe.
+// applyTo runs on the OWNER goroutine inside applyAsyncResults — the OPT-01 (08-02) implementation
+// of the Wave-0 contract. It re-validates the late result before adopting it (08-RESEARCH Pitfall
+// 2, the load-bearing safety: a path 1+ ticks late may arrive after the mob despawned or
+// retargeted):
+//
+//  1. The mob must still exist in the authoritative store (r.mobID re-resolves to a live Entity)
+//     and carry an AI handle. A despawned mob → DROP (no nil-deref). e.ai.navigation is a struct
+//     VALUE on mobAI, never nil — only e.ai (the pointer) is guarded; testing e.ai.navigation==nil
+//     would be a compile error on a struct value.
+//  2. The navigation must still want EXACTLY this goal: its tracked target (lastTX/Y/Z) must equal
+//     r.target and it must still have a target. The mob retargeting mid-flight (a new requestPath
+//     reset lastT* to a different goal) → DROP the stale result via the EXISTING target tracking —
+//     no separate timeout (08-RESEARCH Open Question 4). This is also the safety net for the
+//     single-in-flight gate: even if a retarget submitted a second compute, the first (stale)
+//     result is dropped here.
+//
+// Only a still-valid result is adopted: nav.path = r.path (the late path the mob follows next tick)
+// and nav.pending = false (the in-flight gate clears, so shouldRecomputePath may submit again).
+// Carrying r.mobID + r.target (plain values, NOT a live *Entity) is what makes this late apply safe.
 func (r pathReady) applyTo(t *TickLoop) {
 	if t.entities == nil {
 		return // defensive: store is non-nil from NewTickLoop; never panic if absent
 	}
-	if _, ok := t.entities.get(r.mobID); !ok {
-		return // mob despawned while the path computed (Pitfall 2): DROP the stale result
+	e, ok := t.entities.get(r.mobID)
+	if !ok || e.ai == nil {
+		return // mob despawned (or has no AI) while the path computed (Pitfall 2): DROP the result
 	}
-	// 08-02 (OPT-01) fills here: re-resolve the mob's navigation, confirm its pending target
-	// still equals r.target (goal unchanged mid-flight), then adopt r.path on the owner
-	// (nav.path = r.path; nav.pending = false). For THIS plan the body after the existence
-	// re-check is a documented no-op placeholder — no nav state exists to mutate yet.
+	nav := &e.ai.navigation
+	if !nav.hasTarget || nav.lastTX != r.target[0] || nav.lastTY != r.target[1] || nav.lastTZ != r.target[2] {
+		return // the mob retargeted mid-flight: this path is for a stale goal — DROP it
+	}
+	// Still-valid: adopt the late path on the owner; the mob starts following it next tick.
+	nav.path = r.path
+	nav.pending = false
 }
 
 // trackerDiffReady is the OPT-02 (async entity tracker, 08-04) rejoin message. The off-tick

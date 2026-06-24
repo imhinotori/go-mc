@@ -77,6 +77,14 @@ type groundNavigation struct {
 
 	// cooldown counts ticks since the last recompute (the MAX_TIME_RECOMPUTE throttle).
 	cooldown int
+
+	// pending is set when an async path compute is in flight (OPT-01, 08-02): requestPath
+	// SUBMITS computePath to the off-tick pathPool and sets pending=true, then pathReady.applyTo
+	// clears it on the owner when the late path lands (or it is left false on a dropped/overloaded
+	// submit). While pending, navigation.tick keeps following the mob's CURRENT path (or idles) —
+	// it never blocks on the result — and shouldRecomputePath gates a NEW submit on !pending so a
+	// mob never races two outstanding path computes (one in-flight request per mob).
+	pending bool
 }
 
 // maxVisitedBudget computes the A* visited-node budget — ported from createPathFinder's
@@ -86,10 +94,24 @@ func maxVisitedBudget() int {
 	return int(float64(navFollowRange) * 16.0 * navMaxVisitedMultiplier)
 }
 
-// requestPath ports GroundPathNavigation.createPath + moveTo: build the IMMUTABLE snapshot region
-// ON the tick (snapshotRegion reads the tick-owned ChunkManager), then call the PURE computePath
-// over ONLY the copy (the Phase-8 hinge). The resulting Path becomes the active path the mob
-// walks. Runs on the tick goroutine, INLINE (TICK-05). Resets the recompute cooldown.
+// requestPath ports GroundPathNavigation.createPath + moveTo and, for OPT-01 (08-02), SWAPS the
+// EXECUTOR from inline to off-tick: it still builds the IMMUTABLE snapshot region ON the tick
+// (snapshotRegion reads the tick-owned ChunkManager — owner-only), still builds the same immutable
+// pathRequest ON the tick, then SUBMITS the PURE computePath(req) to the Wave-0 pathPool (an ants
+// pool) and RETURNS IMMEDIATELY — the mob keeps its current action while the A* runs off-tick
+// (paths tolerated 1+ ticks late). computePath is UNCHANGED (its purity is the contract that makes
+// this a swap not a rewrite); only WHERE it runs moved.
+//
+// The submit closure captures ONLY immutable values — req (the snapshot copy), the mob's id, and
+// the target ints — NEVER the live *Entity or *TickLoop game state (08-RESEARCH Pitfall 3). It
+// computes off-tick and rejoins by sending a pathReady on asyncIn2; pathReady.applyTo (async.go)
+// re-validates the mob still exists + the target is unchanged on the OWNER before adopting the late
+// path. On a successful submit pending=true (so shouldRecomputePath gates a second submit). On a
+// DROPPED submit (the non-blocking pool is saturated — submitOrDrop returns false) pending is left
+// false and n.path is UNTOUCHED: the mob keeps its last path and shouldRecomputePath re-requests on
+// a later tick (08-RESEARCH Pitfall 4, world.Worker.Request's drop-on-full discipline). The target
+// tracking + recompute cooldown (the A* DoS guards) are reset exactly as before — they SURVIVE the
+// swap. Runs on the tick goroutine (TICK-05).
 func (n *groundNavigation) requestPath(t *TickLoop, e *Entity, tx, ty, tz int) {
 	region := snapshotRegion(t.world, e, tx, ty, tz, navFollowRange, navReachRange) // COPY (on the tick)
 	req := pathRequest{
@@ -102,20 +124,48 @@ func (n *groundNavigation) requestPath(t *TickLoop, e *Entity, tx, ty, tz int) {
 		reachRange:  navReachRange,
 		maxVisited:  maxVisitedBudget(),
 	}
-	n.path = computePath(req) // PURE: reads ONLY req (no live world) — Phase 8 swaps the executor
+
+	// Capture ONLY immutable values for the off-tick worker (NEVER e or t.world — Pitfall 3): the
+	// mob id (re-resolved on apply) and the goal target (re-checked on apply), both plain values.
+	mobID := e.id
+	tgt := [3]int{tx, ty, tz}
+	accepted := submitOrDrop(t.pathPool, func() {
+		// Off-tick: the PURE A* over the immutable snapshot. The result rejoins on asyncIn2; the
+		// OWNER (pathReady.applyTo) performs the only state mutation. No tick-owned state is read
+		// or written here.
+		p := computePath(req)
+		t.asyncIn2 <- pathReady{mobID: mobID, target: tgt, path: p}
+	})
+
+	// The target tracking + cooldown are updated regardless (the throttle anchors on the requested
+	// target, accepted or dropped, so a saturated pool still respects MAX_TIME_RECOMPUTE).
 	n.lastTX, n.lastTY, n.lastTZ = tx, ty, tz
 	n.hasTarget = true
 	n.cooldown = navRecomputeCooldown
+
+	// pending only reflects an ACCEPTED submit: a dropped submit must leave pending=false so the mob
+	// keeps its last path and a later tick re-requests (Pitfall 4). Do NOT touch n.path here — the
+	// path (if any) arrives via applyAsyncResults, 1+ ticks late.
+	n.pending = accepted
 }
 
 // shouldRecomputePath ports PathNavigation.shouldRecomputePath + the recompute throttle: a fresh
 // path is wanted iff there is no active path / it is done, OR the target changed; and recompute
 // is rate-limited by the cooldown unless the target changed (so an unreachable-target flood
 // cannot blow the budget — Pitfall 6 / T-7-04). Returns whether requestPath should run this tick.
+//
+// OPT-01 single-in-flight gate (08-02): while a SAME-target submit is pending (the async compute
+// has not yet rejoined), no new submit fires — a mob never races two outstanding path computes,
+// so a saturated/slow pool cannot accumulate duplicate work for one mob. A target CHANGE still
+// supersedes a pending compute (the old result will be dropped by applyTo's retarget check), so a
+// retarget is never blocked by an in-flight request for the previous goal.
 func (n *groundNavigation) shouldRecomputePath(tx, ty, tz int) bool {
 	targetChanged := !n.hasTarget || tx != n.lastTX || ty != n.lastTY || tz != n.lastTZ
 	if targetChanged {
-		return true // a new destination always justifies a recompute
+		return true // a new destination always justifies a recompute (it supersedes any pending one)
+	}
+	if n.pending {
+		return false // a same-target compute is already in flight — one request per mob (OPT-01)
 	}
 	if n.path == nil || n.path.done() {
 		// Same target but no usable path: throttle the retry so a stuck/unreachable target does
@@ -131,6 +181,13 @@ func (n *groundNavigation) shouldRecomputePath(tx, ty, tz int) bool {
 // collision/landing/re-bucket). Sets e.yaw toward the heading and jumps when the next node is one
 // block up. The moved mob is auto-broadcast by the unchanged tracker (NO new encoder). Runs on
 // the tick goroutine, INLINE.
+//
+// OPT-01 (08-02) late-path tolerance: tick NEVER blocks on a pending async compute. While n.pending
+// is true and no path has landed yet, the path==nil/done early return simply keeps the mob doing
+// its last action (following its previous path if any, else idle) — the freshly-computed path is
+// adopted by pathReady.applyTo on a later tick (paths tolerated 1+ ticks late) and tick starts
+// following it the next tick it runs. No change to the follow logic is needed: pending is purely a
+// submit-side gate, and the existing path==nil no-op IS the tolerance.
 func (n *groundNavigation) tick(t *TickLoop, e *Entity) {
 	if n.cooldown > 0 {
 		n.cooldown--
