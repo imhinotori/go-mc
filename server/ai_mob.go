@@ -30,12 +30,17 @@ type mobAI struct {
 	// goals is the mob's ported GoalSelector (ai_goal.go). serverAiStep drives it.
 	goals goalSelector
 
+	// navigation is the mob's ported GroundPathNavigation (navigation.go, Plan 07-02): the per-
+	// mob path follower. serverAiStep CONSUMES wantTarget below — when a MOVE goal sets a new
+	// wantTarget, it calls navigation.requestPath (snapshot -> computePath -> Path), then
+	// navigation.tick advances the active path and steps the mob via moveEntity. Tick-owned.
+	navigation groundNavigation
+
 	// wantX/wantY/wantZ are the navigation target a MOVE goal (randomStrollGoal) sets via the
 	// goal's start() — the analogue of vanilla navigation.moveTo(wantedX,Y,Z). hasTarget is
 	// the "a path is wanted" flag (the navigation.isDone() analogue: a stroll keeps running
 	// while hasTarget is set). Plan 07-02's groundNavigation reads wantX/Y/Z + hasTarget,
-	// computes a path, steps the mob, and clears hasTarget on arrival. THIS plan only SETS
-	// them; nothing consumes them yet.
+	// computes a path, steps the mob, and clears hasTarget on arrival.
 	wantX, wantY, wantZ float64
 	hasTarget           bool
 }
@@ -64,10 +69,23 @@ func (m *mobAI) clearWantTarget() { m.hasTarget = false }
 func (m *mobAI) serverAiStep(t *TickLoop, e *Entity) {
 	// (sensing.tick — skipped: the v1 goals probe the world directly in their canUse.)
 	// (targetSelector.tick + tickRunningGoals — skipped: no attack targets for a passive Pig.)
-	m.goals.tick(t, e)                      // start/stop goals by priority + per-flag locking
-	m.goals.tickRunningGoals(t, e, true)    // tick every running goal (canSimulate = true)
-	// (navigation.tick — Plan 07-02 consumes wantTarget and steps the mob via moveEntity.)
-	// (moveControl/lookControl/jumpControl.tick — Plan 07-02.)
+	m.goals.tick(t, e)                   // start/stop goals by priority + per-flag locking
+	m.goals.tickRunningGoals(t, e, true) // tick every running goal (canSimulate = true)
+
+	// navigation (Plan 07-02): consume the wantTarget a MOVE goal set this/last tick. When the
+	// goal wants a (new) target, ask the navigation to (re)compute a path — throttled by
+	// shouldRecomputePath so an unreachable target cannot flood the A* (Pitfall 6 / T-7-04).
+	// The target is the floor block under the wanted position (the A* works in block coords).
+	if m.hasTarget {
+		tx, ty, tz := floorI(m.wantX), floorI(m.wantY), floorI(m.wantZ)
+		if m.navigation.shouldRecomputePath(tx, ty, tz) {
+			m.navigation.requestPath(t, e, tx, ty, tz) // snapshot -> computePath -> Path (the seam)
+		}
+	}
+	// Advance the active path one step (Pattern 3: desired Δ -> the EXISTING moveEntity, which
+	// re-buckets; the unchanged tracker auto-broadcasts). Runs inline on the tick (TICK-05).
+	m.navigation.tick(t, e)
+	// (moveControl/lookControl/jumpControl.tick — folded into navigation.tick's yaw + moveEntity.)
 }
 
 // newPigAI builds the v1 passive Pig AI: the three "visibly alive" goals registered at the
@@ -83,8 +101,17 @@ func (m *mobAI) serverAiStep(t *TickLoop, e *Entity) {
 // faithful PASSIVE-AMBIENT subset that makes a Pig amble + look around exactly like vanilla.
 func newPigAI() *mobAI {
 	m := &mobAI{}
+	// navigation.speed is the mob's walk speed in blocks/tick (the stroll speedModifier 1.0
+	// scaled to a vanilla-ish ground speed). A Pig's movement speed attribute ≈ 0.25, walk pace
+	// ≈ 0.1-0.2 blocks/tick; v1 uses 0.15 for a visibly-alive amble (the tunable knob, like the
+	// physics constants — wire-irrelevant, gated by the real-client visual check).
+	m.navigation.speed = pigWalkSpeed
 	m.goals.addGoal(6, newWaterAvoidingRandomStrollGoal(1.0))
 	m.goals.addGoal(7, newLookAtPlayerGoal(6.0))
 	m.goals.addGoal(8, newRandomLookAroundGoal())
 	return m
 }
+
+// pigWalkSpeed is the v1 Pig's path-following speed in blocks/tick (a tunable, wire-irrelevant
+// value — the stroll goal's speedModifier 1.0 mapped to a vanilla-ish ground pace).
+const pigWalkSpeed = 0.15
