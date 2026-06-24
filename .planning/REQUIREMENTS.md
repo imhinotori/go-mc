@@ -67,7 +67,7 @@ Requirements for the initial release. The "user" is an unmodified vanilla 26.2 (
 
 ### Commands & Chat
 
-- [ ] **CMD-01**: Server dispatches server-side commands
+- [x] **CMD-01**: Server dispatches server-side commands
 - [ ] **CMD-02**: Chat messages are received and broadcast (with the PlayerChat globalIndex prefix handled)
 
 ### Leaf Concurrency Optimizations
@@ -152,7 +152,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | AI-01 | Phase 7 | Complete |
 | AI-02 | Phase 7 | Pending |
 | AI-03 | Phase 7 | Pending |
-| CMD-01 | Phase 7 | Pending |
+| CMD-01 | Phase 7 | Complete |
 | CMD-02 | Phase 7 | Pending |
 | OPT-01 | Phase 8 | Pending |
 | OPT-02 | Phase 8 | Pending |
