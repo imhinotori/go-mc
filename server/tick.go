@@ -187,9 +187,42 @@ type tickPlayer struct {
 	// confirmedTeleport records that the client echoed back the bootstrap
 	// PlayerPosition's teleport id via ServerboundAcceptTeleportation (Play bootstrap,
 	// forward slice of PLAY-03). The minimal Phase-4 milestone only RECORDS the confirm
-	// (the client renders regardless once Login lands); Phase 5 tracks an incrementing
-	// per-player teleport id and gates movement acceptance on the matching confirm.
+	// (the client renders regardless once Login lands); Phase 5 gates movement
+	// acceptance on the matching confirm: applyInput drops movement while this is false,
+	// and dispatch sets it true ONLY when the echoed id matches awaitingTeleport (T-5-01).
 	confirmedTeleport bool
+
+	// awaitingTeleport is the outstanding bootstrap teleport id the confirm gate must
+	// match (PLAY-02 / T-5-01). dispatch's AcceptTeleportation case sets confirmedTeleport
+	// true ONLY when the client's echoed VarInt == awaitingTeleport, so a forged/wrong id
+	// leaves the gate closed. Plan 05-02 sets it from the incrementing bootstrap id; this
+	// plan adds the field and the gate that reads it. Tick-owned (set/read only on the
+	// tick goroutine).
+	awaitingTeleport int
+
+	// loaded records that the client sent ServerboundPlayerLoaded (its "world loaded"
+	// signal, 1.21.4+). Routed as a no-op for v1 — streaming is NOT gated on it (Open
+	// Question 2). Tick-owned.
+	loaded bool
+
+	// --- Player position (PLAY-04). ALL tick-owned: decoded and updated only by
+	// applyInput on the tick goroutine, so the position is -race clean by the same
+	// single-owner discipline as the rest of tickPlayer (TICK-05 / T-5-06). The four
+	// ServerboundMovePlayer* layouts feed these; the trailing wire field is a packed
+	// flags Byte (bit0=onGround, bit1=horizontalCollision), NEVER a Boolean. ---
+
+	// x, y, z are the player's block-space position (Double on the wire). Updated by the
+	// Pos and PosRot movement variants; Rot/StatusOnly leave them unchanged.
+	x, y, z float64
+
+	// yaw, pitch are the player's look angles in degrees (Float on the wire). Updated by
+	// the PosRot and Rot variants; Pos/StatusOnly leave them unchanged.
+	yaw, pitch float32
+
+	// onGround is the masked bit0 of the trailing movement flags byte; horizontalCollision
+	// (bit1) is decoded but not yet retained (movement physics is Phase 6). Every movement
+	// variant updates onGround.
+	onGround bool
 
 	// keep is the independent keep-alive component (TICK-04); keepalive is this
 	// player's KeepAliveClient adapter. dispatch forwards a returning
@@ -468,13 +501,23 @@ func (t *TickLoop) dispatch(c *Client, p pk.Packet) {
 		}
 	case packetid.ServerboundAcceptTeleportation:
 		// Confirm Teleportation: the client echoes the bootstrap PlayerPosition's
-		// teleport id (Play bootstrap, forward slice of PLAY-03). Record the confirm on
-		// the owner goroutine; the minimal Phase-4 milestone does not yet validate the id
-		// or gate movement on it (Phase 5). Never blocks, never panics on an unknown
-		// client (T-3-02). The single-field VarInt payload is not decoded here — the
-		// confirm's arrival is the observable; Phase 5 reads and matches the id.
+		// teleport id (PLAY-02 gate). Phase 5 VALIDATES the id: decode the single VarInt
+		// and set confirmedTeleport true ONLY when it matches the outstanding
+		// awaitingTeleport (T-5-01). A forged/wrong id leaves the gate closed, so
+		// applyInput keeps dropping movement (no spawn rubber-band, T-5-03). A malformed
+		// payload (Scan error) is ignored — the gate stays closed; never panics (T-3-02).
 		if player != nil {
-			player.confirmedTeleport = true
+			var id pk.VarInt
+			if err := p.Scan(&id); err == nil && int(id) == player.awaitingTeleport {
+				player.confirmedTeleport = true
+			}
+		}
+	case packetid.ServerboundPlayerLoaded:
+		// The client's "world loaded" signal (UNIT/empty payload, 1.21.4+). Routed as a
+		// no-op for v1: streaming is NOT gated on it (Open Question 2). We only record
+		// that it arrived; its (empty) payload is never read. Never panics (T-3-02).
+		if player != nil {
+			player.loaded = true
 		}
 	case packetid.ServerboundKeepAlive:
 		// Forward a returning keep-alive to the independent KeepAlive component so it

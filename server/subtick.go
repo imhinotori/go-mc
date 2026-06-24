@@ -1,9 +1,11 @@
 package server
 
 import (
+	"math"
 	"sort"
 	"time"
 
+	"github.com/imhinotori/sulfur/data/packetid"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
@@ -73,18 +75,101 @@ func (b *subtickBuffer) drain() []SubtickInput {
 // len reports the current buffered input count (test/observability helper).
 func (b *subtickBuffer) len() int { return len(b.inputs) }
 
-// applyInput is the MINIMAL Phase-3 resolution of one subtick input. It does NOT run
-// movement/collision/hit-detection/projectile math — that is Phase 6 (ENT-02). Today
-// it is a documented STUB: it records the player's last-seen input stamp so the seam
-// observably "resolves" each input in chronological order, proving TICK-03's contract
-// (timestamped capture, chronological in-tick resolution, vanilla broadcast rate)
-// without any physics. The applyInputHook test seam lets tests observe apply order
-// without depending on physics that does not exist yet.
+// movementFlagOnGround / movementFlagHorizontalCollision are the bit masks of the
+// PACKED FLAGS BYTE that terminates every ServerboundMovePlayer* packet in 26.2 — NOT a
+// Boolean onGround (the ≤773 wiki is wrong; this is a 1.21.3+ shift). Jar-verified:
+// ServerboundMovePlayerPacket.unpackOnGround masks &1 and unpackHorizontalCollision
+// masks &2; all four subclasses end their read() in readUnsignedByte. Decoding the
+// trailing field as a Boolean would mis-frame the stream (rubber-band / Scan EOF).
+const (
+	movementFlagOnGround            = 0x01
+	movementFlagHorizontalCollision = 0x02
+)
+
+// applyInput resolves one subtick movement input on the tick goroutine (PLAY-04). It
+// decodes the four jar-confirmed ServerboundMovePlayer* layouts into tick-owned position
+// and, on a chunk-column crossing, re-centers the view ring so the world follows the
+// player. The applyInputHook test seam runs FIRST (before the teleport gate) so the
+// Phase-3 subtick-ordering tests — which drive an unconfirmed player and assert the hook
+// fires for every input — keep observing apply order. Movement is then GATED on the
+// confirmed teleport (PLAY-02 / T-5-03): an unconfirmed player's movement is dropped.
+//
+// Every Scan returns on error WITHOUT mutating position (T-5-02): a malformed/short
+// payload is a no-op, never a panic. Runs only on the owner goroutine over tick-owned
+// state (TICK-05 / T-5-06).
 func (t *TickLoop) applyInput(p *tickPlayer, in SubtickInput) {
+	// Hook FIRST (before the gate): preserves the Phase-3 subtick-ordering observability
+	// for unconfirmed players (the existing TestSubtickOrdering/TestSubtickBufferCap rely
+	// on the hook firing for every input regardless of confirmedTeleport).
 	if t.applyInputHook != nil {
 		t.applyInputHook(p, in)
 	}
-	// Phase-3 stub: record the last input we resolved for this player. Phase 6 replaces
-	// this body with real movement/collision/hit-detection against in.Packet's body.
 	p.lastInputAt = in.At
+
+	// Teleport gate (PLAY-02): drop movement until the client has acknowledged the
+	// bootstrap spawn teleport, so pre-confirm packets cannot fight the authoritative
+	// spawn (no rubber-band — T-5-03).
+	if !p.confirmedTeleport {
+		return
+	}
+
+	switch packetid.ServerboundPacketID(in.Packet.ID) {
+	case packetid.ServerboundMovePlayerPos:
+		// Double x,y,z + UnsignedByte flags.
+		var x, y, z pk.Double
+		var flags pk.UnsignedByte
+		if err := in.Packet.Scan(&x, &y, &z, &flags); err != nil {
+			return // malformed/short: no mutation (T-5-02)
+		}
+		p.x, p.y, p.z = float64(x), float64(y), float64(z)
+		p.onGround = flags&movementFlagOnGround != 0
+		t.maybeRecenter(p)
+
+	case packetid.ServerboundMovePlayerPosRot:
+		// Double x,y,z + Float yaw,pitch + UnsignedByte flags.
+		var x, y, z pk.Double
+		var yaw, pitch pk.Float
+		var flags pk.UnsignedByte
+		if err := in.Packet.Scan(&x, &y, &z, &yaw, &pitch, &flags); err != nil {
+			return
+		}
+		p.x, p.y, p.z = float64(x), float64(y), float64(z)
+		p.yaw, p.pitch = float32(yaw), float32(pitch)
+		p.onGround = flags&movementFlagOnGround != 0
+		t.maybeRecenter(p)
+
+	case packetid.ServerboundMovePlayerRot:
+		// Float yaw,pitch + UnsignedByte flags. No position change → no re-center.
+		var yaw, pitch pk.Float
+		var flags pk.UnsignedByte
+		if err := in.Packet.Scan(&yaw, &pitch, &flags); err != nil {
+			return
+		}
+		p.yaw, p.pitch = float32(yaw), float32(pitch)
+		p.onGround = flags&movementFlagOnGround != 0
+
+	case packetid.ServerboundMovePlayerStatusOnly:
+		// UnsignedByte flags only. No position change → no re-center.
+		var flags pk.UnsignedByte
+		if err := in.Packet.Scan(&flags); err != nil {
+			return
+		}
+		p.onGround = flags&movementFlagOnGround != 0
+
+	default:
+		// Non-movement subtick input (attack/use/etc.): no movement resolution yet
+		// (Phase 6). The hook already observed it; nothing to apply here.
+	}
+}
+
+// maybeRecenter re-centers the player's view ring when a position update crosses a
+// chunk-column boundary (PLAY-04). The crossing test (newC != p.center) is the thrash
+// control (T-5-05): within-column jitter is a cheap no-op, so a flood of movement
+// packets re-centers at most once per real boundary crossing. math.Floor makes the
+// block→chunk mapping negative-correct.
+func (t *TickLoop) maybeRecenter(p *tickPlayer) {
+	newC := chunkCenterOf(int32(math.Floor(p.x)), int32(math.Floor(p.z)))
+	if newC != p.center {
+		t.recenterRing(p, newC)
+	}
 }
