@@ -269,19 +269,14 @@ func (c *Chunk) WriteTo(w io.Writer) (int64, error) {
 		}
 	}
 
-	// Protocol 774+: heightmaps are serialized as VarInt-typed array entries
+	// Protocol 774+: heightmaps are serialized as VarInt-typed array entries.
+	// Vanilla sends ONLY the 3 Usage.CLIENT (sendToClient) heightmaps —
+	// WORLD_SURFACE (1), MOTION_BLOCKING (4), MOTION_BLOCKING_NO_LEAVES (5).
+	// The WORLDGEN/LIVE_WORLD ids — WORLD_SURFACE_WG (0), OCEAN_FLOOR_WG (2),
+	// OCEAN_FLOOR (3) — are NOT sendToClient and must be dropped from the wire.
 	var hmEntries []heightMapEntry
-	if bs := c.HeightMaps.WorldSurfaceWG; bs != nil {
-		hmEntries = append(hmEntries, heightMapEntry{Type: 0, Data: bs.Raw()})
-	}
 	if bs := c.HeightMaps.WorldSurface; bs != nil {
 		hmEntries = append(hmEntries, heightMapEntry{Type: 1, Data: bs.Raw()})
-	}
-	if bs := c.HeightMaps.OceanFloorWG; bs != nil {
-		hmEntries = append(hmEntries, heightMapEntry{Type: 2, Data: bs.Raw()})
-	}
-	if bs := c.HeightMaps.OceanFloor; bs != nil {
-		hmEntries = append(hmEntries, heightMapEntry{Type: 3, Data: bs.Raw()})
 	}
 	if bs := c.HeightMaps.MotionBlocking; bs != nil {
 		hmEntries = append(hmEntries, heightMapEntry{Type: 4, Data: bs.Raw()})
