@@ -166,6 +166,169 @@ func TestNoiseGenChunkComplete(t *testing.T) {
 	}
 }
 
+// TestTerrainSanity is the Plan 09-09 (PARITY-01) automatable gate: across a sampling of
+// generated chunks it asserts the FULL-PARITY terrain invariants AND the load-bearing
+// spawn-standable property (T-9-26) that the visual gate depends on:
+//
+//   - the spawn column (chunk (0,0), block-center x=8 z=8) is STANDABLE: the derived
+//     SpawnSurfaceY block is solid-or-water and the block two above (where the player is
+//     placed) is air — the player lands on the terrain, not buried in a hill or in void;
+//   - the WorldSurface heightmap VARIES across columns (hills/valleys, not flat);
+//   - water sits at sea level in low columns (oceans/lakes, not dry basins);
+//   - more than one biome appears across chunks (biome-varied, not single-plains);
+//   - underground cave_air + air pockets exist (noise caves + carved tunnels/ravines);
+//   - ore-vein blocks appear in the rock (OreVeinifier ran);
+//   - a perched/deep aquifer fluid (water/lava away from sea level) appears;
+//   - the 3 CLIENT heightmaps are present, in range, and the chunk encodes non-empty.
+//
+// It is keyed off the fixed noiseGenSeed, so it is fully reproducible.
+func TestTerrainSanity(t *testing.T) {
+	g := NewNoiseGenerator(noiseGenSeed, testSecs, testMinY)
+	minY := testMinY
+	maxY := testMinY + testSecs*16
+	seaLevel := 63
+
+	air := block.ToStateID[block.Air{}]
+	caveAir := block.ToStateID[block.CaveAir{}]
+	water := block.ToStateID[block.Water{Level: 0}]
+	lava := block.ToStateID[block.Lava{Level: 0}]
+	stone := block.ToStateID[block.Stone{}]
+	deepslate := block.ToStateID[block.Deepslate{Axis: block.Y}]
+
+	isRock := func(st block.StateID) bool { return st == stone || st == deepslate }
+	isStandableTop := func(st block.StateID) bool {
+		// A standable spawn surface is solid OR water (an ocean spawn floats on the
+		// surface, not in void): anything that is not an air variant.
+		return st != air && st != caveAir
+	}
+
+	// --- Spawn-standable check on the (0,0) spawn column (T-9-26). ---
+	spawnY := g.SpawnSurfaceY(level.ChunkPos{0, 0})
+	if spawnY <= minY || spawnY >= maxY {
+		t.Fatalf("spawn surface y=%d out of world range [%d,%d)", spawnY, minY, maxY)
+	}
+	spawnCh := g.Generate(level.ChunkPos{0, 0})
+	const sx, sz = 8, 8
+	topBlock := blockAtWorld(spawnCh, sx, spawnY, sz, minY)
+	playerFeet := blockAtWorld(spawnCh, sx, spawnY+2, sz, minY) // sendPlayBootstrap places feet here
+	if !isStandableTop(topBlock) {
+		t.Errorf("spawn surface block at y=%d is %q (air) — player would spawn in void/buried", spawnY, stateNameOf(topBlock))
+	}
+	if playerFeet != air && playerFeet != caveAir && playerFeet != water {
+		t.Errorf("block at the spawn feet y=%d is %q (solid) — player would spawn inside terrain", spawnY+2, stateNameOf(playerFeet))
+	}
+
+	// --- Full-parity feature scan across a span of chunks. ---
+	heightSet := map[int]bool{}
+	biomes := map[biome.Type]bool{}
+	anyWaterAtSea := false
+	undergroundAirPocket := false
+	carvedCaveAir := false
+	oreVein := false
+	perchedFluid := false
+
+	oreVeinStates := map[block.StateID]bool{
+		block.ToStateID[block.CopperOre{}]:        true,
+		block.ToStateID[block.RawCopperBlock{}]:   true,
+		block.ToStateID[block.Granite{}]:          true,
+		block.ToStateID[block.DeepslateIronOre{}]: true,
+		block.ToStateID[block.RawIronBlock{}]:     true,
+		block.ToStateID[block.Tuff{}]:             true,
+	}
+
+	for cx := int32(-1); cx <= 2; cx++ {
+		for cz := int32(-1); cz <= 2; cz++ {
+			ch := g.Generate(level.ChunkPos{cx, cz})
+
+			if ch.HeightMaps.WorldSurface == nil || ch.HeightMaps.MotionBlocking == nil || ch.HeightMaps.MotionBlockingNoLeaves == nil {
+				t.Fatalf("chunk %v,%v missing a client heightmap", cx, cz)
+			}
+			for col := 0; col < 16*16; col++ {
+				h := ch.HeightMaps.WorldSurface.Get(col) + minY
+				if h < minY || h > maxY {
+					t.Fatalf("chunk %v,%v col %d heightmap %d out of [%d,%d]", cx, cz, col, h, minY, maxY)
+				}
+			}
+
+			for si := range ch.Sections {
+				bc := ch.Sections[si].Biomes
+				if bc == nil {
+					t.Fatalf("chunk %v,%v section %d has nil biome container", cx, cz, si)
+				}
+				for i := 0; i < 4*4*4; i++ {
+					biomes[bc.Get(i)] = true
+				}
+			}
+
+			for lx := 0; lx < 16; lx++ {
+				for lz := 0; lz < 16; lz++ {
+					heightSet[ch.HeightMaps.WorldSurface.Get(lz<<4|lx)] = true
+
+					surfaceTop := minY
+					for y := maxY - 1; y >= minY; y-- {
+						st := blockAtWorld(ch, lx, y, lz, minY)
+						if st != air && st != caveAir && st != water {
+							surfaceTop = y
+							break
+						}
+					}
+
+					for y := minY + 1; y < maxY; y++ {
+						st := blockAtWorld(ch, lx, y, lz, minY)
+						if st == water && y >= seaLevel-2 && y <= seaLevel {
+							anyWaterAtSea = true
+						}
+						if oreVeinStates[st] {
+							oreVein = true
+						}
+						if st == caveAir {
+							carvedCaveAir = true
+						}
+						if (st == air || st == caveAir) && y < surfaceTop-3 {
+							if isRock(blockAtWorld(ch, lx, y+1, lz, minY)) {
+								undergroundAirPocket = true
+							}
+						}
+						if st == lava || (st == water && y < seaLevel-6) {
+							perchedFluid = true
+						}
+					}
+				}
+			}
+
+			var buf bytes.Buffer
+			if _, err := ch.WriteTo(&buf); err != nil {
+				t.Fatalf("chunk %v,%v WriteTo: %v", cx, cz, err)
+			}
+			if buf.Len() == 0 {
+				t.Fatalf("chunk %v,%v encoded to 0 bytes", cx, cz)
+			}
+		}
+	}
+
+	if len(heightSet) < 2 {
+		t.Errorf("WorldSurface heightmap is flat (only %d distinct heights); terrain has no hills/valleys", len(heightSet))
+	}
+	if len(biomes) < 2 {
+		t.Errorf("biome containers carry only %d biome(s); want >= 2 (varied, not single-plains)", len(biomes))
+	}
+	if !anyWaterAtSea {
+		t.Error("no water near sea level across the sampled chunks (terrain never dips to ocean)")
+	}
+	if !undergroundAirPocket {
+		t.Error("no underground air pocket found (noise caves / carved tunnels missing)")
+	}
+	if !carvedCaveAir {
+		t.Error("no cave_air found (the carve pass never ran or never reached the sampled chunks)")
+	}
+	if !oreVein {
+		t.Error("no ore-vein blocks found in the rock (OreVeinifier did not run)")
+	}
+	if !perchedFluid {
+		t.Error("no perched/deep aquifer fluid found (the aquifer placed no water/lava away from sea level)")
+	}
+}
+
 // TestNoiseGenFullParityFeatures: across a sampling of columns the chunk shows the
 // full-parity features proving the whole pipeline ran:
 //   - the WorldSurface heightmap VARIES across columns (hills/valleys, not flat),
