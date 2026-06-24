@@ -216,6 +216,19 @@ func (nc *NoiseChunk) WorldX(localX int) int { return int(nc.pos[0])*16 + localX
 // WorldZ maps a chunk-local Z in [0,16) to its absolute block Z.
 func (nc *NoiseChunk) WorldZ(localZ int) int { return int(nc.pos[1])*16 + localZ }
 
+// Pos returns the chunk position (the Wave-7 surface system needs the chunk origin
+// to map local↔world coords for the SurfaceRules$Context).
+func (nc *NoiseChunk) Pos() level.ChunkPos { return nc.pos }
+
+// PreliminarySurfaceLevel exposes NoiseChunk.preliminarySurfaceLevel(x,z) for the
+// Wave-7 surface system: the SurfaceRules$Context.getMinSurfaceLevel bilinear-lerps
+// the preliminary surface level over the 4-block surface cell to drive the
+// above_preliminary_surface condition. (Internally it snaps x,z to quart resolution
+// and samples the bound preliminary_surface_level density function.)
+func (nc *NoiseChunk) PreliminarySurfaceLevel(x, z int) int {
+	return nc.preliminarySurfaceLevel(x, z)
+}
+
 // preliminarySurfaceLevel ports NoiseChunk.preliminarySurfaceLevel(x,z): the x,z are
 // snapped to quart resolution (QuartPos.toBlock(QuartPos.fromBlock)) and the bound
 // preliminary_surface_level density function is sampled at (x,0,z), floored. The Aquifer

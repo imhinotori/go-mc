@@ -181,6 +181,18 @@ func (s *RandomState) OreRandom() levelgen.PositionalRandomFactory {
 	return s.factory.FromHashOf("minecraft:ore").ForkPositional()
 }
 
+// BaseFactory returns the per-world base positional random factory
+// (Xoroshiro(seed).forkPositional()). Vanilla RandomState passes THIS factory
+// (its `random` field) straight to `new SurfaceSystem(..., random)` as the
+// surfaceSystem's `noiseRandom` — the factory the Wave-7 SurfaceSystem.getSurfaceDepth
+// jitter (random.at(x,0,z).nextDouble()) and the vertical_gradient surface rule
+// (randomName.at(x,y,z).nextFloat()) draw from. Exposed so the surface package can
+// mirror that wiring constant-for-constant (Pitfall 7: all surface randomness flows
+// from the world seed).
+func (s *RandomState) BaseFactory() levelgen.PositionalRandomFactory {
+	return s.factory
+}
+
 // NormalNoise returns the seeded NormalNoise for a noise registry id, caching it
 // (RandomState.getOrCreateNoise -> Noises.instantiate -> NormalNoise.create(
 // factory.fromHashOf(id.identifier()), params)). The params come from the Wave-1
