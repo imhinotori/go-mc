@@ -160,6 +160,29 @@ func (g *NoiseGenerator) Generate(pos level.ChunkPos) *level.Chunk {
 	return ch
 }
 
+// SpawnSurfaceY derives the world-Y of the highest solid/fluid surface block for the
+// spawn column (the block-center of chunk (cx,cz) at local x=8, z=8) from a freshly
+// generated chunk's WorldSurface client heightmap. main.go feeds the returned value to
+// tick.SetSpawn / NewGameTick exactly as it fed Superflat's fixed SurfaceY, so the join
+// bootstrap (sendPlayBootstrap) places the player two blocks ABOVE this — standing on the
+// generated terrain instead of inside a hill or in the void over an ocean (T-9-26).
+//
+// The WorldSurface heightmap stores, per column, the Y of the first block ABOVE the
+// highest non-air block, encoded relative to MinY. So the top solid/fluid block's world-Y
+// is (WorldSurface.Get(col) + MinY) - 1 — the same "top solid block world-Y" semantics
+// Superflat's SurfaceY carried. Pure over (seed, pos): it reuses Generate.
+func (g *NoiseGenerator) SpawnSurfaceY(pos level.ChunkPos) int {
+	ch := g.Generate(pos)
+	// Block-center column of the chunk: local x=8, z=8 (the (8.5, _, 8.5) spawn point
+	// sendPlayBootstrap uses). Column index is (z&15)<<4 | (x&15) — matching the heightmap
+	// column order written by BuildSurface.
+	const spawnLocalX, spawnLocalZ = 8, 8
+	col := (spawnLocalZ << 4) | spawnLocalX
+	// first-air-above-top relative to MinY -> top solid/fluid block world-Y.
+	topAir := ch.HeightMaps.WorldSurface.Get(col) + g.minY
+	return topAir - 1
+}
+
 // carveChunk adapts a *level.Chunk to carver.CarveChunk: world-coord Get/Set bounded to
 // the target chunk's 16x16 footprint (Set drops out-of-footprint writes so a carve
 // started in a neighbor source chunk only edits THIS chunk's blocks). MinY/Height bound

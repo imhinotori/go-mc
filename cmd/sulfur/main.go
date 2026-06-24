@@ -23,6 +23,7 @@ import (
 	"os"
 
 	"github.com/imhinotori/sulfur/chat"
+	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/server"
 	"github.com/imhinotori/sulfur/world"
 )
@@ -43,13 +44,20 @@ const (
 	// drain cadence (the tick wakes every 5ms) while staying a trivial fixed buffer.
 	inboundCap = 1024
 
-	// Overworld superflat shape (Plan 04-03 / WORLD-04 stub). secs = height/16 (384/16
-	// = 24), minY = -64, surfaceY = the top solid (stone) block world-Y. A surface at
-	// y=-48 gives a 16-block-thick lit floor above the bedrock layer — a stable square a
-	// client can stand on without falling through void (the real terrain is Phase 9).
+	// Overworld dimension shape. secs = height/16 (384/16 = 24), minY = -64. These feed
+	// BOTH generators (the noise generator carries them for chunk geometry + the carve
+	// bounds; sea level lives in the router settings). overworldSurfaceY is the Superflat
+	// fallback's flat stone top (a 16-block lit floor above bedrock) — the noise generator
+	// does NOT use it (its spawn surface is derived per-column from the generated terrain).
 	overworldSecs     = 24
 	overworldMinY     = -64
 	overworldSurfaceY = -48
+
+	// worldSeed is the fixed default overworld seed (WORLD-04). A fixed documented seed
+	// makes the generated world fully reproducible run-to-run (Generate is pure over
+	// (seed, pos) — TestNoiseGenDeterministic). Override with -seed; SULFUR_SUPERFLAT=1
+	// falls back to the deterministic Superflat stub (which ignores the seed).
+	worldSeed = int64(0x5EED_C0DE)
 
 	// workerBuf sizes the off-tick worker's bounded request + results channels. It is
 	// comfortably above the small clamped view ring ((2*serverViewDistance+1)^2 columns)
@@ -103,6 +111,7 @@ func newServer(gameplay server.GamePlay) *server.Server {
 
 func main() {
 	addr := flag.String("addr", ":25565", "address to listen on")
+	seed := flag.Int64("seed", worldSeed, "overworld world seed (default is the fixed reproducible worldSeed; ignored when SULFUR_SUPERFLAT=1)")
 	flag.Parse()
 
 	// Construct the single-owner runtime: the network->tick seam (one bounded chan
@@ -115,19 +124,43 @@ func main() {
 	tick := server.NewTickLoop(server.SystemClock())
 	keep := server.NewKeepAlive()
 
-	// Build the off-tick world subsystem (Plan 04-03): a deterministic superflat
+	// Build the off-tick world subsystem (Plan 04-03 / Plan 09-09 PARITY-01): the column
 	// generator, the off-tick load/generate worker (regionDir "" => always generate for
-	// v1), and the tick-owned chunk manager. SetWorld wires the worker's immutable
-	// results into the tick's applyAsyncResults rejoin (WORLD-01) and must run BEFORE
-	// tick.Run so asyncIn is non-nil when the loop starts.
-	gen := world.NewSuperflat(overworldSecs, overworldMinY, overworldSurfaceY)
+	// v1), and the tick-owned chunk manager. SetWorld wires the worker's immutable results
+	// into the tick's applyAsyncResults rejoin (WORLD-01) and must run BEFORE tick.Run so
+	// asyncIn is non-nil when the loop starts.
+	//
+	// PARITY-01: the default generator is the full-parity NoiseGenerator (ported Mojang
+	// 26.2 density-function pipeline — hills, noise caves, carved tunnels + ravines,
+	// aquifers, ore veins, biome-varied surfaces) behind the UNCHANGED off-tick worker (the
+	// worker is generator-agnostic — a pure "better Generate" swap, no concurrency/seam
+	// work). SULFUR_SUPERFLAT=1 is the escape hatch back to the deterministic Superflat stub
+	// (kept as a fallback + the determinism reference), mirroring the SULFUR_DEBUG pattern.
+	//
+	// spawnSurfaceY is the top solid/fluid block world-Y for the (0,0) spawn column. The
+	// noise terrain's spawn surface VARIES per column, so it is derived from the GENERATED
+	// spawn chunk's WorldSurface heightmap (NoiseGenerator.SpawnSurfaceY) — feeding the
+	// fixed Superflat top would bury the player in a hill or float them in void over an
+	// ocean (T-9-26). The Superflat fallback keeps its fixed flat top.
+	var gen world.Generator
+	spawnSurfaceY := overworldSurfaceY
+	if os.Getenv("SULFUR_SUPERFLAT") == "1" {
+		gen = world.NewSuperflat(overworldSecs, overworldMinY, overworldSurfaceY)
+		log.Printf("SULFUR_SUPERFLAT=1: Superflat stub generator (flat top y=%d) — noise terrain disabled", overworldSurfaceY)
+	} else {
+		ng := world.NewNoiseGenerator(*seed, overworldSecs, overworldMinY)
+		spawnSurfaceY = ng.SpawnSurfaceY(level.ChunkPos{0, 0})
+		gen = ng
+		log.Printf("full-parity NoiseGenerator armed (seed=%d): spawn-column surface y=%d", *seed, spawnSurfaceY)
+	}
 	worker := world.NewWorker(gen, "", workerBuf)
 	mgr := world.NewChunkManager()
 	tick.SetWorld(mgr, worker)
 	// ENT-05: tell the tick where the world spawn surface is so an in-game respawn
 	// re-teleports a player two blocks above it — the same placement the join bootstrap
-	// uses (NewGameTick is handed the same overworldSurfaceY below).
-	tick.SetSpawn(overworldSurfaceY)
+	// uses (NewGameTick is handed the same spawnSurfaceY below). For the noise generator
+	// this is the per-column derived surface, not the fixed Superflat top.
+	tick.SetSpawn(spawnSurfaceY)
 
 	// Plan 06-07 interactive gate: when SULFUR_DEBUG=1, arm the OFF-by-default debug triggers
 	// so an operator running an unmodified vanilla 26.2 client can SEE the Phase-6 milestone —
@@ -136,7 +169,9 @@ func main() {
 	// bar drops and the death-screen -> respawn loop runs (ENT-05/06). Off by default, so a
 	// normal `sulfur` run is unaffected; armed only for the interactive check.
 	if os.Getenv("SULFUR_DEBUG") == "1" {
-		tick.SetDebug(overworldSurfaceY)
+		// Spawn the debug entity at the real spawn surface so it sits ON the terrain (the
+		// derived noise surface, or the Superflat fixed top), not buried under a noise hill.
+		tick.SetDebug(spawnSurfaceY)
 		log.Printf("SULFUR_DEBUG=1: debug AI-driven entity-spawn ARMED (interactive gate)")
 		// Plan 07-06 interactive gate (AI-02): SULFUR_DEBUG_NAV=1 additionally makes the debug
 		// pig deterministically pace a fixed line near spawn via the REAL ported A* navigation,
@@ -172,7 +207,9 @@ func main() {
 	go worker.Run(ctx)
 
 	// The real GamePlay bridges an accepted connection to the running tick + keep-alive.
-	gp := server.NewGameTick(inbound, tick, keep, overworldSurfaceY)
+	// spawnSurfaceY is the derived noise spawn surface (or the Superflat fixed top under
+	// SULFUR_SUPERFLAT) so the join bootstrap places the player ON solid ground (T-9-26).
+	gp := server.NewGameTick(inbound, tick, keep, spawnSurfaceY)
 	gp.SetWorldDir(worldDir) // ENT-06: load/save player .dat under worldDir
 	srv := newServer(gp)
 
