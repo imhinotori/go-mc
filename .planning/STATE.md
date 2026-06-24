@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: verifying
-stopped_at: Completed 08-06-PLAN.md (OPT-04 collections audit)
-last_updated: "2026-06-24T18:22:51.336Z"
+stopped_at: Completed 08-07-PLAN.md (OPT-06 final -race + behavior gate)
+last_updated: "2026-06-24T18:33:18.325Z"
 last_activity: 2026-06-24
 progress:
   total_phases: 9
-  completed_phases: 7
+  completed_phases: 8
   total_plans: 37
-  completed_plans: 36
-  percent: 97
+  completed_plans: 37
+  percent: 100
 ---
 
 # Project State
@@ -74,7 +74,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [██████████] 97%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -123,6 +123,7 @@ Progress: [██████████] 97%
 | Phase 08 P01 | 25min | 2 tasks | 6 files |
 | Phase 08 P04 | 18 min | 1 tasks | 5 files |
 | Phase 08 P06 | 5 min | 2 tasks | 4 files |
+| Phase 08 P07 | 14min | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -188,6 +189,7 @@ Recent decisions affecting current work:
 - [Phase 08]: 08-01: Phase-8 async substrate (Wave 0) — newAsyncPool (non-blocking bounded ants/v2 pool, drop-on-overload via WithNonblocking mirroring world.Worker.Request) + the 3 asyncResult contracts (pathReady/trackerDiffReady/spawnCandidatesReady, each carries an id/value not a live pointer + re-validates on the owner + ships a validate-then-no-op applyTo stub for OPT-01/02/03) + asyncIn2 (SECOND rejoin channel, additive behind the UNCHANGED applyAsyncResults seam — no pipeline reorder, TestTickPhaseOrder passes). ants/v2 v2.12.1 + xsync/v4 v4.5.0 introduced for the first time (xsync justified-per-use only: asyncSubmitDrops Counter, NOT a blanket map swap). Docker -race clean. OPT-04/OPT-06 begin.
 - [Phase 08]: OPT-02 async tracker carries a tracked DELTA (added/removed ids) in trackerDiffReady, not the whole set; applyTo updates p.tracked O(delta) on the owner so the map stays plain (Pitfall 1). — Mirrors the chunkReady rejoin: worker computes off-tick over an immutable snapshot, owner performs the only mutation in applyTo.
 - [Phase 08]: OPT-04: snapshot-and-stay-plain — no tick-owned map converted to xsync; the OPT-01/02/03 owner-snapshot discipline means no worker reads a live collection (single-owner is faster). idAlloc stays atomic; asyncSubmitDrops (xsync.Counter, now tick-read) is the one justified xsync use; an AST gate enforces no live cross-boundary capture.
+- [Phase 08]: 08-07: OPT-06 combined -race -count=10 gate over ./server/... ./world/... ./save/... is GREEN — every async subsystem (OPT-01 pathfinding, OPT-02 tracker, OPT-03 spawner) race-clean by construction under combined load; behavior regression proves the swaps are additive (paths arrive 1+ ticks late + followed, tracker emits spawn/move/despawn, mobs spawn under cap, .linear round-trips). OPT-06 is AUTOMATABLE (no Phase-8 plan touched an encoder/packet file — grep-confirmed — so the capture-diff goldens stay the wire authority and stay green), not a human-verify/capture-diff. Phase 8 COMPLETE.
 
 ### Pending Todos
 
@@ -214,7 +216,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-24T18:22:41.864Z
-Stopped at: Completed 08-06-PLAN.md (OPT-04 collections audit)
+Last session: 2026-06-24T18:33:18.312Z
+Stopped at: Completed 08-07-PLAN.md (OPT-06 final -race + behavior gate)
 Resume file: None
 Next: plan Phase 6 (entities / inventory / persistence) — the first-playable Player Session seam (movement, tick-owned position, the following ring, the tab list) is in place to build on. Deferred: KeepAlive double-leave hardening (Phase 3, surfaces when real timeout-driven disconnects land). The pulled-forward bootstrap deferred-row is now CLOSED.
