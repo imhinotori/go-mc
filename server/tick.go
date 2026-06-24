@@ -524,7 +524,13 @@ func (t *TickLoop) dispatch(c *Client, p pk.Packet) {
 		packetid.ServerboundInteract,
 		packetid.ServerboundSwing,
 		packetid.ServerboundUseItem,
-		packetid.ServerboundUseItemOn:
+		packetid.ServerboundUseItemOn,
+		// ServerboundPlayerAction (dig: START/STOP/ABORT_DESTROY_BLOCK + ...) drives BREAK.
+		// It was NOT in this set before 06-04 — it fell through to the default no-op, so the
+		// break action never reached the subtick buffer and was a silent dead feature. Routing
+		// it here (server-stamped, appended to the bounded buffer like UseItemOn) is the
+		// load-bearing 06-04 fix; applyInput resolves it on-tick into handlePlayerAction.
+		packetid.ServerboundPlayerAction:
 		// A subtick-relevant input: stamp it with the SERVER clock (never a client-
 		// supplied timestamp — T-3-07) and append to the bounded per-player buffer.
 		// resolveSubtickInputs drains it in chronological order this tick.

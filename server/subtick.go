@@ -163,6 +163,20 @@ func (t *TickLoop) applyInput(p *tickPlayer, in SubtickInput) {
 		}
 		p.onGround = flags&movementFlagOnGround != 0
 
+	case packetid.ServerboundPlayerAction:
+		// BREAK (ENT-03): resolved on-tick, sequence-ordered. The handler decodes
+		// defensively, validates reach + loaded column, mutates the tick-owned chunk to
+		// air, then acks + broadcasts (the reconciliation contract). It sits AFTER the
+		// teleport gate — a legitimately-editing player is confirmed, and a malformed or
+		// out-of-reach action is a silent no-op inside the handler (T-6-01 / T-6-04).
+		t.handlePlayerAction(p, in.Packet)
+
+	case packetid.ServerboundUseItemOn:
+		// PLACE (ENT-03): resolved on-tick, sequence-ordered. Same defensive/validated
+		// path as the break handler; sets the v1 place-state at the adjacent face and
+		// acks + broadcasts.
+		t.handleUseItemOn(p, in.Packet)
+
 	default:
 		// Non-movement subtick input (attack/use/etc.): no movement resolution yet
 		// (Phase 6). The hook already observed it; nothing to apply here.
