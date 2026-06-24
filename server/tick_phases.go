@@ -1,6 +1,9 @@
 package server
 
 import (
+	"log"
+	"runtime/debug"
+
 	"github.com/imhinotori/sulfur/level"
 	pk "github.com/imhinotori/sulfur/net/packet"
 	"github.com/imhinotori/sulfur/world"
@@ -13,6 +16,18 @@ import (
 // is the load-bearing contract asserted by TestTickPhaseOrder.
 func (t *TickLoop) tickOnce() {
 	start := t.clock.Now() // capture via the injectable clock for MSPT (TICK-06)
+
+	// Resilience guard: a panic in any phase (a malformed mob, a bad packet build, a nil deref in
+	// new AI/spawn code) must NOT kill the tick goroutine — that would freeze the whole world and
+	// disconnect EVERY player (keepalive stops). Recover, log the stack, and let the loop continue
+	// to the next tick. This is a safety net, not a license to ignore panics: a logged panic is a
+	// real bug to fix, but one bad mob should never take down the server.
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("tick panic recovered (gametime=%d): %v\n%s", t.gametime, r, debug.Stack())
+			t.gametime++ // still advance time so the anchor (TICK-02) does not stall on a bad tick
+		}
+	}()
 
 	t.resolveSubtickInputs() // no-op slot in this plan; 03-02 fills the subtick buffer
 	t.tickWorld()            // Phase 4 fills
