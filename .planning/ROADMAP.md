@@ -14,7 +14,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Foundation — Fork & Codegen** - Fork go-mc, retarget #294-296 codegen to proto 776, commit generated data as Go source
  (completed 2026-06-23)
-- [x] **Phase 2: Net & Protocol State Machine** - Handshake → Status → Login → Configuration → Play transitions with the network/tick channel boundary (completed 2026-06-23)
+- [x] **Phase 2: Net & Protocol State Machine** - Handshake → Status → Login → Configuration → Play transitions with the network/tick channel boundary (completed 2026-06-23)
 - [x] **Phase 3: Authoritative Tick Loop** - 20-TPS ordered tick spine, ownership-based sync, game-time anchor, subtick layer, keepalive
 - [ ] **Phase 4: World & Chunk System** - Paletted-container chunk encode/decode, heightmaps/light, deterministic worldgen, view-distance streaming
 - [ ] **Phase 5: Player Session In-World (FIRST PLAYABLE)** - Vanilla client logs in and stands in a solid, visible, ticking world it can walk around
@@ -80,8 +80,12 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. Paletted-container chunk sections round-trip encode/decode correctly (bits-per-entry → palette format, LSB long-packing, no length prefix per 1.21.5+, fluid-count short per 26.1+); heightmaps encode as typed long arrays with block light and sky light sent
   3. A deterministic minimal worldgen (superflat/noise stub) produces a stable, reproducible world
   4. A vanilla 26.2 client stands on an all-stone flat chunk: chunks stream by view distance with the neighbor-ring requirement satisfied — the client renders and does not fall through the void
-**Plans**: TBD
-**Research**: Needs deeper per-phase research — the exact 776 section layout (fluid-count short, no length prefix, heightmap bits-per-entry) must be confirmed against the jar; go-mc may lag.
+**Plans**: 4 plans
+- [ ] 04-01-PLAN.md — Fix the two confirmed 776 wire bugs in level/chunk.go (fluid-count short on Section, trim heightmaps to the 3 CLIENT ids) + self-round-trip/byte-length regression (WORLD-02 partial, WORLD-03 heightmaps)
+- [ ] 04-02-PLAN.md — New world/ package: deterministic superflat generator, tick-owned chunk manager, off-tick singleflight worker (region-load-or-generate), ClientboundLevelChunkWithLight assembly (WORLD-01 worker side, WORLD-02 full, WORLD-04)
+- [ ] 04-03-PLAN.md — Wire the off-tick chunkReady rejoin into the Phase-3 applyAsyncResults seam + fill tickChunks/flushOutbound: clamped center-out view-distance ring streaming with ChunkBatchStart/Finished (WORLD-01 tick side, WORLD-05)
+- [ ] 04-04-PLAN.md — Capture-diff Sulfur's chunk+light bytes vs a real vanilla 26.2 superflat chunk + BLOCKING human-verify real-client visual check (autonomous:false; WORLD-02/03/05 authoritative gate)
+**Research**: Needs deeper per-phase research — the exact 776 section layout (fluid-count short, no length prefix, heightmap bits-per-entry) must be confirmed against the jar; go-mc may lag. [DONE — see 04-RESEARCH.md: both wire bugs jar-confirmed against temp/cache/26.2-server.jar.]
 
 ### Phase 5: Player Session In-World (FIRST PLAYABLE)
 **Goal**: The atomic first-playable bundle — an unmodified vanilla 26.2 client connects, logs in, and stands in a solid, visible, ticking world it can walk around.
@@ -93,7 +97,6 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. A filled chunk square (radius ≥ 2) plus the "start waiting for chunks" Game Event makes the world visible; Player Info Update places the player in the tab list
   4. Player movement is handled and the view-distance chunk ring follows the player
   5. An unmodified vanilla 26.2 client connects, logs in, and stands in a solid, visible, ticking world it can walk around (the milestone verifier)
-**Plans**: TBD
 **Research**: Needs deeper per-phase research — confirm the 769-era position-sync layout (Teleport ID, DX/DY/DZ in 1/8000-block units, Int32 flags) survived to 776 against the jar/capture.
 
 ### Phase 6: Entities, Physics & Interaction
@@ -155,7 +158,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 1. Foundation — Fork & Codegen | 3/3 | Complete   | 2026-06-23 |
 | 2. Net & Protocol State Machine | 4/4 | Complete   | 2026-06-23 |
 | 3. Authoritative Tick Loop | 3/3 | Complete   | 2026-06-23 |
-| 4. World & Chunk System | 0/TBD | Not started | - |
+| 4. World & Chunk System | 0/4 | Planned | - |
 | 5. Player Session In-World (FIRST PLAYABLE) | 0/TBD | Not started | - |
 | 6. Entities, Physics & Interaction | 0/TBD | Not started | - |
 | 7. AI, Pathfinding, Commands & Chat | 0/TBD | Not started | - |
