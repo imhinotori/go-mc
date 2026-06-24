@@ -147,6 +147,8 @@ The graph is data, but the **node evaluators** are logic. Port the concrete `Den
 | `old_blended_noise` | `DensityFunctions$BlendedNoise` wrapper | Wraps `BlendedNoise` (`base_3d_noise`) `[VERIFIED]` |
 | `blend_density` / `blend_alpha` / `blend_offset` | `DensityFunctions$BlendDensity/BlendAlpha/BlendOffset` | Blending (used in `final_density`); for T0 with blending disabled they pass through `[VERIFIED: final_density uses blend_density]` |
 
+> **⚠ SUPERSEDED → FULL PARITY (see ROADMAP + the 09-0N plans).** This Tier-C defer list is STALE — it is the T0 defer guidance that produced the node-set blocker. Under FULL parity the cave functions ARE ported (built from `noise`/`shifted_noise`/`range_choice`/`spline`, NOT `weird_scaled_sampler`). The AUTHORITATIVE node set is the 29-type jar-walk in 09-03 (`find_top_surface` + `invert` IN; `weird_scaled_sampler`/`beardifier`/`cache_all_in_cell` NOT in the overworld graph). Only `end_islands` is genuinely deferred. Do NOT defer nodes per the line below.
+
 **Defer (cave/aquifer/end-only nodes):** `weird_scaled_sampler`, `noodle`/`spaghetti` helpers, `end_islands`, `beardifier`/`marker` for structures, `interpolated` cave nodes. They appear only in the deferred `caves/*` and aquifer branches.
 
 ### Tier D — The router / settings loader (port FOURTH — mostly a DATA parser)
@@ -184,6 +186,8 @@ The graph is data, but the **node evaluators** are logic. Port the concrete `Den
 ## Scope Tiers
 
 > **The crux. PARITY-01 has tiers of "parity." Recommend T0 for v2; be explicit about what each tier shows a real client and what it defers.**
+
+> **⚠ SUPERSEDED → FULL PARITY (see ROADMAP + the 09-0N plans).** This tiering recommended **T0** (surface-only; caves/aquifers/ore-veins/carvers DEFERRED). The phase was subsequently scoped to **FULL PARITY** — the executing 09-01…09-08 plans port the WHOLE overworld graph (caves, aquifers, ore veins, carvers, multi-noise biomes). Read this section for tier *context* only; the binding scope is the ROADMAP + the 09-0N plans, NOT T0. Do NOT use the T0 defer guidance to drop nodes.
 
 ### T0 — Faithful overworld surface (✅ RECOMMENDED for this phase)
 **What a real 26.2 client sees:** Recognizable Minecraft terrain. Rolling hills, valleys, plains, mountains, and oceans/lakes filled with water at sea level (y=63). The *shape* matches vanilla's terrain character because it comes from the real `final_density` graph fed by the real seed-matched noises. Solid ground, walkable, lit, renders without void.
