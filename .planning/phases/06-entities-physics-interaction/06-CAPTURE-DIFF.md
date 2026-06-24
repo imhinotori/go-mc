@@ -311,3 +311,296 @@ a vanilla client — is deferred to Plan 06-07. The MEDIUM-confidence surfaces a
 
 Until 06-07 signs off, the inventory wire is jar-shape-correct (no mis-framing) but the
 component-value bytes are NOT yet byte-proven against a live client.
+
+---
+
+# ENT-01/04 BYTE-LEVEL SEAL — Sulfur vs. Vanilla 26.2 (Plan 06-07)
+
+**Phase 6, Plan 06-07 — the authoritative entity/slot wire gate.**
+
+This section records the byte-for-byte capture-diff of Sulfur's MEDIUM-confidence Phase-6
+encoders against a REAL vanilla 26.2 server, captured for an identical superflat session.
+It is the producer-side proof; the real-client interactive run (§Task 2 below) is the
+consumer-side proof. The golden packet bytes are committed as fixtures under
+`.planning/phases/06-entities-physics-interaction/fixtures/` so CI byte-diffs without
+booting Java every run; `server/entity_capture_test.go`
+(`TestEntityBytesVsVanillaCapture` + `TestSlotBytesVsVanillaCapture`) is the field-by-field
+parser/asserter (it skips cleanly if a fixture is absent — the capture is the gate, not a
+native-CI blocker).
+
+Status (automatable half): **SEALED — the capture-diff confirmed Sulfur's four uncertain
+entity/slot wire surfaces byte-for-byte against the vanilla golden with NO DIVERGENCE: the
+`Vec3.LP` short-scaling movement, the `SetEntityData` `0xFF` framing, the
+`ContainerSetContent` slot framing, and the `HashedStack` `ContainerClick` decode. The
+real-client interactive run (Task 2) is the remaining BLOCKING human-verify gate.**
+
+---
+
+## 8. Capture Method (reproducible)
+
+### Vanilla 26.2 server (the golden source)
+
+- Jar: `temp/cache/26.2-server.jar`, run with Zulu 25.0.3 (`java -Xmx2G -jar server.jar nogui`).
+- Scratch dir: `temp/vanilla-scratch/` (gitignored), `eula=true`, port `25599`,
+  RCON enabled on `25575` (`rcon.password=sulfurcap`) to drive the capture.
+- `server.properties` (the load-bearing keys):
+
+  ```
+  level-type=minecraft:flat
+  level-seed=144
+  online-mode=false
+  enforce-secure-profile=false
+  enable-code-of-conduct=false
+  server-port=25599
+  view-distance=4
+  generate-structures=false
+  gamemode=creative
+  enable-rcon=true
+  rcon.port=25575
+  rcon.password=sulfurcap
+  ```
+
+  Vanilla's superflat default spawn lands the player at block `(0, -60, 0)`.
+
+### Capture harness
+
+`temp/entitycapture/` (gitignored, built on the fork's `net`/`bot`/`packetid`/`level/component`,
+adapted from the proven Phase-5 `temp/playcapture/`): handshake (proto 776) → offline login →
+full Configuration leg → **Play**, where it confirms the spawn teleport, paces chunk batches,
+then DRIVES the vanilla server over RCON to:
+
+- `execute at @p run summon pig ~ ~ ~ {Motion:[0.5,0.4,-0.3],NoAI:1b,PersistenceRequired:1b}`
+  — a MOVING pig near the player so its `ClientboundAddEntity` carries a NON-ZERO `Vec3.LP`
+  movement (the decisive LP short-scaling seal) + its `ClientboundSetEntityData`;
+- `give @p minecraft:stone 1` — a known item into hotbar slot 36, captured as
+  `ClientboundContainerSetSlot` (the non-empty slot framing).
+
+It then SENDS one `ServerboundContainerClick` in the jar-derived 1.21.5+ `HashedStack` form
+(the exact wire a vanilla client sends) — the vanilla server ACCEPTS it (no disconnect),
+proving the framing is vanilla-valid — and commits those serverbound bytes as the click golden.
+
+```
+DUMP_DIR=temp/captures RCON_PASS=sulfurcap \
+  temp/entitycapture/entitycapture.exe 127.0.0.1:25599 127.0.0.1:25575 EntCap vanilla
+```
+
+### Committed golden fixtures
+
+| Fixture | Bytes | sha1 | Seals |
+|---------|-------|------|-------|
+| `vanilla-add-entity.bin` | 52 | `88c87788287a3118d748bdb60604865ccf039599` | AddEntity field order + `Vec3.LP` short scaling + byte angles |
+| `vanilla-set-entity-data.bin` | 11 | `c8c079791581096abef8651b3716d99f5b7fd631` | SynchedEntityData indexed entries + `0xFF` terminator |
+| `vanilla-container-set-content.bin` | 50 | `8f1588840344c2f18938bf024ba81e3363b47fbd` | list count-prefix + per-slot empty framing + carried framing |
+| `vanilla-container-set-slot.bin` | 8 | `740685332e2c5ddbc7fd8ad95601004f587f7d22` | non-empty slot `count,itemId,addedCount,removedCount` |
+| `vanilla-container-click.bin` | 15 | `e5b9973e597716bec22c86bba881971b4f6fda36` | serverbound `HashedStack` `ContainerClick` decode |
+
+---
+
+## 9. Per-Field Diff (the byte-level seal)
+
+Legend: **MATCH** = byte-structure identical; **SEALED** = byte-identical for identical
+inputs; **CONTENT** = framing identical, value differs (expected — different entity/inventory).
+
+### 9.1 `ClientboundAddEntity` — the `Vec3.LP` short-scaling seal (ENT-01, Open Question 1)
+
+Vanilla golden (a pig, type 100, summoned with `Motion:[0.5,0.4,-0.3]`):
+
+```
+02   08104c9a…275d   64   …x… …y… …z…   f9ff59996662   00 00 00   00
+└id┘ └─uuid 16B────┘ └100┘ └3×Double pos┘ └─LP movement─┘ └3 angles┘ └data┘
+```
+
+| Field | Vanilla | Sulfur (same inputs) | Verdict |
+|-------|---------|----------------------|---------|
+| field order | id, uuid, **typeId(field 3)**, x,y,z, LP, xRot,yRot,yHeadRot, data | identical | **MATCH** |
+| **`Vec3.LP` movement** for `[0.5,0.4,-0.3]` | `f9 ff 59 99 66 62` | `f9 ff 59 99 66 62` | **SEALED — byte-identical** |
+| byte angles | 3 × `0x00` | 3 × `0x00` | MATCH |
+| whole body | 52 bytes, 0 trailing | byte-identical to golden | **SEALED** |
+
+**The decisive seal:** Sulfur's `lpVec3` quantizer (the full `LpVec3.write` algorithm —
+sanitize → absMax → `ceilLong` scale → 15-bit pack per axis → header+2 bytes + big-endian
+Int) produces `f9ff59996662` for `Motion [0.5, 0.4, -0.3]`, **byte-identical** to vanilla's.
+Feeding `encodeAddEntity` the same id/uuid/type/pos/velocity yields a body **byte-identical**
+to the 52-byte vanilla golden (`bytes.Equal`). The MEDIUM-confidence LP short-scaling (the
+`×8000`-replacement quantizer) is **SEALED, no divergence**. (Open Question 1 resolved.)
+
+### 9.2 `ClientboundSetEntityData` — the `0xFF` framing seal (ENT-01, Open Question 2)
+
+Vanilla golden (the pig's metadata): `3b  09 03 41200000  0f 00 01  ff`
+
+```
+3b      id (VarInt)
+09 03   index=9, serializerId=3 (Float)  value=41200000 → health 10.0
+0f 00   index=15, serializerId=0 (Byte)  value=01       → pig data-flags
+ff      EOF_MARKER terminator
+```
+
+| Field | Vanilla pig | Sulfur v1 entity | Verdict |
+|-------|-------------|------------------|---------|
+| leading id | VarInt | VarInt | MATCH |
+| entry framing | `Byte index, VarInt serializerId, value` | identical (splice path) | **MATCH** |
+| **`0xFF` terminator** | always-present trailing `0xFF` | always-present trailing `0xFF` | **SEALED** |
+| metadata SET | health(9) + data-flags(15) | EMPTY (just `0xFF`) | CONTENT (type-specific) |
+
+**The decisive seal:** the SynchedEntityData framing is `VarInt id`, zero-or-more
+`Byte index / VarInt serializerId / value` entries, then the **mandatory single `0xFF`
+terminator** — confirmed by the vanilla bytes. Sulfur's empty-list body is exactly
+`VarInt id + 0xFF` (the same terminator vanilla closes its non-empty list with), and when
+Sulfur's `Entity.metadata` carries the pig's exact entry bytes, `encodeSetEntityData`
+re-emits a body **byte-identical** to the golden (`bytes.Equal`). **The terminator framing is
+SEALED, no divergence.**
+
+**Open Question 2 (does a v1 entity need non-default metadata to render?) — resolved on the
+producer side, with the visual deferred to Task 2:** the capture proves a vanilla mob DOES
+carry type-specific metadata (a pig sends `health=10` + a data-flags byte), but that metadata
+is *type data*, not a *render gate* — a client renders an entity from its **type id** in
+`AddEntity`, and the `SetEntityData` entries only set per-instance attributes (health bar of
+the entity, baby/adult, etc.). For Sulfur's v1 path the **empty `0xFF`-only metadata is
+structurally correct**; the open render risk is therefore NOT the metadata but the **entity
+type id** Sulfur spawns. The Sulfur `SulfurCube` is a CUSTOM type (id 130) a vanilla client
+has **no renderer for**, so the 06-07 debug spawn uses a **vanilla-renderable pig (type 100)**
+for the interactive check — that is what Task 2 must visually confirm appears and moves. If a
+future Sulfur entity needs a specific shared-flags entry to look right (e.g. not invisible),
+the splice path (proven byte-identical above) ships it with no framing change.
+
+### 9.3 `ClientboundContainerSetContent` + `ContainerSetSlot` — the slot framing seal (ENT-04)
+
+Vanilla `ContainerSetContent` golden (player inventory, container 0): `00 01 2e  <46×empty> <carried>`
+— containerId 0, stateId 1, list count `0x2e`=46, every slot the single-byte empty form
+(`count<=0`), then the 1-byte empty carried item. 50 bytes, 0 trailing.
+
+Vanilla `ContainerSetSlot` golden (the `/give`'d stone in slot 36):
+`00 02 0024  01 01 00 00` — container 0, state 2, slot 36, then `SlotData` `count=1, itemId=1
+(stone), addedCount=0, removedCount=0`.
+
+| Field | Vanilla | Sulfur (same items) | Verdict |
+|-------|---------|---------------------|---------|
+| containerId / stateId | VarInt / VarInt | identical | MATCH |
+| **list count-prefix** | VarInt `46` | VarInt `46` | **SEALED** |
+| per-slot EMPTY | single `0x00` | single `0x00` | **SEALED** |
+| **carried** item framing | trailing `SlotData` | identical | **SEALED** |
+| non-empty slot `count,itemId,added,removed` | `01 01 00 00` | `01 01 00 00` | **SEALED** |
+
+**The decisive seal:** feeding `containerSetContent` the slots+carried parsed from the vanilla
+golden yields a body **byte-identical** to the 50-byte golden (`bytes.Equal`); feeding
+`containerSetSlot` the parsed stone yields a body **byte-identical** to the `ContainerSetSlot`
+golden. The component-slot `SlotData` codec (count → empty stop, else `count,itemId,added,
+removed` + verbatim component span) matches vanilla for both the empty and the non-empty
+(stone) stack. **SEALED, no divergence.**
+
+### 9.4 `ServerboundContainerClick` — the `HashedStack` decode seal (ENT-04, Open Question 3)
+
+Vanilla-form serverbound golden (a left-click pickup of slot 36):
+`00 02 0024 00 00  01 0024 00  01 0101 0000` —
+containerId 0, stateId 2, slotNum 36, button 0, containerInput 0 (PICKUP), changedSlots map
+{count 1, slot 36 → empty `HashedStack`}, carried `HashedStack`{present, itemId 1, count 1,
+0 added, 0 removed}.
+
+| Step | Result |
+|------|--------|
+| walk the 7-field composite with Sulfur's `decodeHashedStack` for both `HashedStack` bodies | consumes to **exactly 0 trailing bytes** |
+| full dispatch (`applyInput`) of the real click | no panic / no mis-frame; server discards hashes, re-sends authoritative content |
+| vanilla server's reaction to the same framing | **ACCEPTED — no disconnect** (the framing is vanilla-valid) |
+
+**The decisive seal:** Sulfur's `decodeHashedStack` (Boolean present → VarInt itemId, VarInt
+count, `HashedPatchMap`: VarInt addedCount × `(VarInt typeId + fixed Int32 hash)`, VarInt
+removedCount × VarInt typeId) consumes the real vanilla serverbound click to **exactly zero
+trailing bytes** — the `ByteBufCodecs.INT` fixed-4-byte hash width and the Short map-key are
+correct, no mis-framing. **Open Question 3 (HashedStack decode depth) resolved:** the decoder
+consumes exactly the jar-derived framing with no leftover/short bytes, and the vanilla server
+accepts Sulfur's identically-framed click. **SEALED, no divergence.**
+
+---
+
+## 10. The Open Questions — Resolved
+
+1. **`Vec3.LP` short scaling** — **RESOLVED/SEALED.** Sulfur's `lpVec3` is byte-identical to
+   vanilla's `LpVec3.write` for `[0.5,0.4,-0.3]` → `f9ff59996662` (§9.1). The
+   `×8000`-replacement quantizer is correct.
+2. **Does a v1 entity need non-default metadata to render?** — **RESOLVED on the producer
+   side; visual deferred to Task 2.** Metadata is type *data*, not a render *gate* — render
+   keys off the AddEntity **type id**. The empty `0xFF` path is structurally correct; the real
+   render risk is the type id, so the interactive check uses a vanilla-renderable **pig (type
+   100)**, NOT the custom `SulfurCube` (type 130) a vanilla client cannot draw (§9.2). Task 2
+   confirms the pig is visible and moves.
+3. **`HashedStack` decode depth** — **RESOLVED/SEALED.** The real vanilla click decodes to
+   exactly zero trailing bytes and the vanilla server accepts Sulfur's identically-framed
+   click (§9.4).
+4. **Physics faithfulness scope** — **RESOLVED: visible behaviors only (06-RESEARCH A1).** v1
+   requires the VISIBLE behaviors (an entity lands on the floor / `onGround`; a player cannot
+   clip through stone) — confirmed structurally by `physics_test.go` and observable in Task 2 —
+   NOT exact vanilla constant-for-constant parity (gravity/drag/friction are tunable,
+   wire-irrelevant constants). Exact-constant parity is explicitly NOT a v1 requirement.
+
+---
+
+## 11. Deviations from Plan
+
+**None — the four uncertain encoders already matched vanilla byte-for-byte; no encoder fix
+was needed.** Sulfur's `entity_encode.go` (AddEntity / SetEntityData / lpVec3),
+`slot_encode.go` (containerSetContent / containerSetSlot / decodeHashedStack), and
+`level/component/types.go` (SlotData) all produced/consumed wire byte-identical to the vanilla
+26.2 golden. The only new code is the test (`server/entity_capture_test.go`), the committed
+fixtures, and the OFF-by-default debug triggers (`server/debug.go` + the `tickEntities` hook +
+the `SULFUR_DEBUG` wiring in `cmd/sulfur/main.go`) the interactive gate needs.
+
+---
+
+## 12. Gate Results (automatable half — all green)
+
+| Gate | Command | Result |
+|------|---------|--------|
+| Capture-diff | `go test ./server/ -run 'TestEntityBytesVsVanillaCapture\|TestSlotBytesVsVanillaCapture' -count=1` | PASS (all subtests; Sulfur framing == vanilla golden, no divergence) |
+| Owning-plan wire tests | `go test ./server/ -run 'TestAddEntityWire\|TestSetEntityDataWire\|TestContainerSetContent\|TestContainerClickDecode' -count=1` | PASS |
+| Full server suite | `go test ./server/...` | PASS |
+| Build + vet | `go build ./...`, `go vet ./...` | clean |
+| `-race` (Docker) | `docker run … golang:1.26 go test -race ./server/... ./world/... ./level/... ./save/...` | **PASS — race-clean under load (Plans 06-01..06 + the debug triggers)** |
+| Debug triggers live | join `cmd/sulfur` (SULFUR_DEBUG=1): pig (type 100) spawns + MOVES (TeleportEntity), health bar steps 20→0, `PlayerCombatKill` (death screen) fires | PASS (verified via `temp/verifydebug`) |
+
+Zero new dependencies.
+
+---
+
+## 13. Interactive Gate Trigger (how the operator drives Task 2)
+
+`cmd/sulfur` ships an OFF-by-default debug harness for the interactive human-verify. Start
+the server with `SULFUR_DEBUG=1`:
+
+```
+SULFUR_DEBUG=1 sulfur -addr :25565
+```
+
+This arms (logged at startup as `SULFUR_DEBUG=1: debug entity-spawn + periodic damage
+triggers ARMED`):
+
+- a **visible, vanilla-renderable pig (type 100)** that spawns near spawn and **PACES** back
+  and forth (the `entityTracker`'s Add / TeleportEntity / Remove — ENT-01/02), and
+- **periodic damage** (2 HP every ~2s) so the on-screen **health bar drops**, the **death
+  screen** appears at 0 HP, and clicking **Respawn** runs `performRespawn` (re-teleport + full
+  world re-stream — ENT-05/06).
+
+Without `SULFUR_DEBUG=1` a normal `sulfur` run is completely unaffected (the debug hooks are a
+nil-check no-op, no extra entity, no damage).
+
+---
+
+## Task 2 — Real vanilla 26.2 client INTERACTS (BLOCKING human-verify)
+
+> The decisive ENT-01..05 milestone cannot be self-approved.
+
+PENDING — the orchestrator presents this gate to the operator. Connect an **unmodified vanilla
+26.2 client (PrismLauncher)** to `cmd/sulfur` (`SULFUR_DEBUG=1`) and confirm:
+
+- **a** ENTITY VISIBLE: the debug pig appears and PACES (the tracker's Add/Move/Remove).
+- **b** PLACE/BREAK: place a block and SEE it persist; break one and SEE it vanish — NO
+  ghost / no snap-back on a valid edit (Plan 06-04's reconciliation).
+- **c** HEALTH BAR: the on-screen health bar DROPS as the periodic damage lands (Plan 06-06's
+  SetHealth).
+- **d** DEATH/RESPAWN: at 0 HP the death screen appears; clicking Respawn returns the player
+  to a streamed, walkable world (Plan 06-06's Respawn).
+- **e** NO KICK / NO HANG: no malformed-packet kick, no "Loading terrain…" hang.
+
+**Sign-off:**
+
+> Reviewed by: ____   Date: ____
+> Result: [ ] entity visible+moves / place-break / health bar / death-respawn — APPROVED
