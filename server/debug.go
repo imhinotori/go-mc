@@ -63,7 +63,32 @@ type debugConfig struct {
 	// damageAmount is the HP removed per debug hit (a small bite so the health bar visibly
 	// steps down over several seconds before death).
 	damageAmount float32
+
+	// navObservable arms the OFF-by-default "navigate toward a fixed point" trigger (07-06
+	// interactive gate, SULFUR_DEBUG_NAV=1). With random strolling alone the pig's wander
+	// target is unpredictable, so an operator cannot RELIABLY place a wall across its path to
+	// watch the A* route around it. When armed, tickDebug periodically OVERRIDES the pig's
+	// navigation target with a deterministic fixed point a fixed distance from spawn
+	// (alternating between two anchors), forcing it to repeatedly traverse a known line — so
+	// the operator walls that line off and SEES the ported A* (07-02) route around the
+	// obstacle. It uses the SAME setWantTarget seam the real randomStrollGoal uses, so the
+	// path that runs is the production navigation, only the destination is deterministic.
+	navObservable bool
+	// navTick counts ticks toward the next fixed-point retarget; navToggle alternates the
+	// anchor so the pig paces a known segment back and forth.
+	navTick   int
+	navToggle bool
 }
+
+// debugNavEvery is the tick interval between fixed-point retargets when SULFUR_DEBUG_NAV is
+// armed (~6s at 20 TPS — long enough for the pig to walk a ~12-block leg and for the operator
+// to place/adjust a wall, short enough that the demo loops promptly).
+const debugNavEvery = 120
+
+// debugNavReach is the distance (blocks) from the pig's spawn column to each fixed nav anchor.
+// The two anchors sit on opposite sides along +Z/-Z so the pig paces a straight ~2*reach line
+// through its spawn — the operator walls that line to watch A* route around.
+const debugNavReach = 12.0
 
 // SetDebug arms the OFF-by-default debug triggers (the Plan 06-07 interactive gate). main()
 // calls it before Run only when SULFUR_DEBUG=1: it spawns a visible, moving pig near spawn and
@@ -77,6 +102,18 @@ func (t *TickLoop) SetDebug(surfaceY int) {
 		damageEvery:   40,  // ~2s at 20 TPS between bites
 		damageAmount:  2.0, // 1 heart per bite: 10 bites (~20s) from full to death
 	}
+}
+
+// SetDebugNavObservable arms the OFF-by-default fixed-point navigation trigger (07-06
+// interactive gate). main() calls it only when SULFUR_DEBUG_NAV=1 (in addition to
+// SULFUR_DEBUG=1). It makes the debug pig deterministically pace a known straight line near
+// spawn via the REAL ported navigation (setWantTarget -> A*), so an operator can wall the line
+// and reliably OBSERVE the A* route around the obstacle (AI-02). A no-op if debug is off.
+func (t *TickLoop) SetDebugNavObservable() {
+	if t.debug == nil {
+		return
+	}
+	t.debug.navObservable = true
 }
 
 // tickDebug runs the debug spawn/move/damage triggers when debug is armed. It is called from
@@ -133,6 +170,33 @@ func (t *TickLoop) tickDebug() {
 	// VANILLA behavior (amble + obstacle navigation), not a cosmetic sine oscillation, so the
 	// 07-06 interactive check observes the real ported AI. No motion code lives here anymore;
 	// the move + the tracker broadcast happen inside tickAI/moveEntity on the tick goroutine.
+
+	// (2b) OBSERVABLE NAVIGATION (07-06 AI-02, SULFUR_DEBUG_NAV=1): deterministically retarget
+	// the debug pig to a fixed point a known distance from its spawn column, alternating between
+	// two anchors so it paces a straight ~2*reach line. This drives the SAME ported navigation
+	// the randomStrollGoal uses (setWantTarget -> serverAiStep's A* requestPath), only with a
+	// DETERMINISTIC destination — so the operator walls the known line and reliably watches the
+	// A* route around it (random strolling alone rarely crosses a placed wall predictably). The
+	// retarget only sets the want-target; the path computation + the move + the tracker
+	// broadcast all run in tickAI/moveEntity on the tick goroutine (TICK-05), exactly as for a
+	// natural mob.
+	if d.navObservable && d.pigSpawned && t.entities != nil {
+		d.navTick++
+		if d.navTick >= debugNavEvery {
+			d.navTick = 0
+			if pig, ok := t.entities.get(d.pigID); ok && pig != nil && pig.ai != nil {
+				// The two anchors sit along ±Z from the pig's spawn Z (4.5), at the same X/Y, so
+				// the pig walks a known straight segment the operator can wall off.
+				const spawnX, spawnZ = 8.5, 4.5
+				tz := spawnZ + debugNavReach
+				if d.navToggle {
+					tz = spawnZ - debugNavReach
+				}
+				d.navToggle = !d.navToggle
+				pig.ai.setWantTarget(spawnX, float64(d.spawnSurfaceY+1), tz)
+			}
+		}
+	}
 
 	// (3) Periodically bite every living player so the health bar drops and, after enough
 	// bites, the death screen appears (a subsequent client Respawn request runs performRespawn).

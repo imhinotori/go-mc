@@ -138,6 +138,14 @@ func main() {
 	if os.Getenv("SULFUR_DEBUG") == "1" {
 		tick.SetDebug(overworldSurfaceY)
 		log.Printf("SULFUR_DEBUG=1: debug entity-spawn + periodic damage triggers ARMED (interactive gate)")
+		// Plan 07-06 interactive gate (AI-02): SULFUR_DEBUG_NAV=1 additionally makes the debug
+		// pig deterministically pace a fixed line near spawn via the REAL ported A* navigation,
+		// so an operator can wall the line and reliably SEE the pathfinder route around the
+		// obstacle (random strolling alone rarely crosses a placed wall predictably).
+		if os.Getenv("SULFUR_DEBUG_NAV") == "1" {
+			tick.SetDebugNavObservable()
+			log.Printf("SULFUR_DEBUG_NAV=1: observable fixed-point A* navigation ARMED (the pig paces a known line — wall it to watch A* route around)")
+		}
 	}
 
 	// Start the long-lived server goroutines: exactly one tick goroutine (the sole
