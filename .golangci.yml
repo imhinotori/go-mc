@@ -1,0 +1,28 @@
+# golangci-lint configuration for Sulfur (schema v2 — required by golangci-lint-action@v9).
+# The goal: keep the linter useful for NEW Sulfur code (server/world/level/cmd) while not
+# failing CI on idiomatic patterns and on code inherited verbatim from the upstream go-mc fork.
+version: "2"
+
+run:
+  # The codegen module under tools/ is a separate Go module with its own go.mod; it is built
+  # + vetted in its own CI job, not linted here.
+  build-tags: []
+
+linters:
+  default: standard
+  exclusions:
+    rules:
+      # `defer x.Close()` / SetDeadline-in-test are the idiomatic Go pattern: the deferred
+      # Close on a read path carries no actionable error, and checking it everywhere adds noise
+      # without catching real bugs. errcheck stays ON for non-deferred error returns.
+      - linters: [errcheck]
+        source: "^\\s*defer .*\\.Close\\(\\)$"
+      # Tests routinely ignore Close() on listeners/conns they tear down — not a real-code bug.
+      - linters: [errcheck]
+        path: _test\.go
+      # Code inherited verbatim from the upstream Tnze/go-mc fork (not part of the Sulfur core
+      # this project authored). These subtrees are the fork's own and are not Sulfur's surface;
+      # linting them would gate Sulfur CI on upstream style. Sulfur's authored code
+      # (server/, world/, level/, cmd/) is fully linted.
+      - linters: [errcheck]
+        path: ^(examples|realms|yggdrasil|bot)/
