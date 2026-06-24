@@ -1,0 +1,213 @@
+package server
+
+// async.go is the Phase-8 ASYNC SUBSTRATE (Wave 0, OPT-04/OPT-06). It introduces the
+// verified concurrency stack (ants/v2 + xsync/v4) and the contract-first scaffolding every
+// later Phase-8 wave (OPT-01/02/03) fills:
+//
+//   - newAsyncPool: the per-subsystem bounded, NON-BLOCKING ants goroutine-pool factory. A
+//     saturated Submit returns ants.ErrPoolOverload and the caller DROPS the work (keeping its
+//     last action and re-requesting next tick), never a blocking Submit that would stall the
+//     tick — mirroring world.Worker.Request's drop-on-full backpressure (08-RESEARCH Pitfall 4).
+//
+//   - pathReady / trackerDiffReady / spawnCandidatesReady: the three concrete asyncResult
+//     CONTRACTS the OPT-01/02/03 plans implement. Each satisfies the EXISTING, UNCHANGED
+//     asyncResult interface{ applyTo(*TickLoop) } (tick.go), carries an id/value for the
+//     on-apply validity re-check (NOT a live *Entity/*tickPlayer pointer — 08-RESEARCH
+//     Pitfall 2/3), and ships a documented applyTo STUB the owning plan fills.
+//
+// THE REJOIN DISCIPLINE (the load-bearing invariant): a pool worker computes PURE over an
+// IMMUTABLE snapshot copied ON the owner before Submit, then rejoins by sending an asyncResult
+// on TickLoop.asyncIn2; applyAsyncResults drains it on the OWNER goroutine and the ONLY mutation
+// happens there, inside applyTo (TICK-05). This is the Phase-4 chunkReady flow generalized
+// (tick.go chunkReady / SetWorld), the PROVEN reference these contracts copy verbatim.
+//
+// xsync/v4 is added to go.mod HERE so the Phase-8 stack lands in one place, but it is
+// JUSTIFIED-PER-USE only in OPT-04: the default is snapshot-on-owner + plain map (single-owner =
+// faster), and a collection becomes xsync ONLY where an off-tick worker reads the LIVE
+// collection concurrently with a tick write (08-RESEARCH Pitfall 1 / Open Question 1). This
+// file imports it for the substrate work-queue/counter primitives the pools draw on; a blanket
+// map swap is NOT done here.
+
+import (
+	"github.com/panjf2000/ants/v2"
+	"github.com/puzpuzpuz/xsync/v4"
+
+	pk "github.com/imhinotori/sulfur/net/packet"
+)
+
+// asyncSubmitDrops is a tick-owned counter of pool-Submit overflows (ErrPoolOverload), shared
+// across the per-subsystem pools so the operator/telemetry can see how often the async substrate
+// is degrading to "compute a tick later" under saturation. It is an xsync.Counter — a striped,
+// contention-friendly counter the off-tick submit paths increment from any goroutine without a
+// mutex (08-RESEARCH Pitfall 4 backpressure observability). This is the JUSTIFIED-PER-USE
+// introduction of xsync for Wave 0: a value genuinely written across the async boundary, not a
+// tick-only collection (which stays a plain map per Pitfall 1). OPT-04 (08-06) extends the xsync
+// surface where profiling/contention warrants; until then this is the only xsync use.
+var asyncSubmitDrops = xsync.NewCounter()
+
+// newAsyncPool constructs one per-subsystem ants goroutine pool sized to `size`. It is
+// NON-BLOCKING (ants.WithNonblocking(true)): when every worker is busy a Submit returns
+// ants.ErrPoolOverload rather than parking the caller, so a saturated pool DROPS the request and
+// the subsystem keeps its last action / re-requests next tick — NEVER a blocking Submit that
+// would stall the owner goroutine (08-RESEARCH Pitfall 4; the in-process analogue of
+// world.Worker.Request's `select { case w.requests <- pos: default: }` drop-on-full).
+//
+// The pool caps goroutine count and recycles workers, so a burst of submits (e.g. many mobs
+// pathing at once) can never blow the goroutine count up. ants.NewPool only errors for an
+// invalid size (size <= 0 with the default options), which is a programming error at
+// construction, not a runtime condition — so we panic on it (it can never fire for the positive
+// sizes NewTickLoop passes). Callers Release() the pool on shutdown (TickLoop.Close).
+func newAsyncPool(size int) *ants.Pool {
+	p, err := ants.NewPool(size, ants.WithNonblocking(true))
+	if err != nil {
+		// size <= 0 is the only failure mode and is a construction-time programming error;
+		// every NewTickLoop call site passes a positive size, so this is unreachable in practice.
+		panic("server: newAsyncPool: " + err.Error())
+	}
+	return p
+}
+
+// submitOrDrop submits work to a non-blocking ants pool with the drop-on-overload discipline,
+// centralizing the Pitfall-4 backpressure so every OPT-01/02/03 submit site behaves identically.
+// It returns true if the work was accepted by the pool, false if the pool was saturated (the
+// caller then keeps its last action and re-requests next tick). On a drop it bumps
+// asyncSubmitDrops for observability. A nil pool (a Phase-3-style TickLoop that never wired the
+// Phase-8 setup) is treated as saturated — a safe no-op drop — so the substrate is robust even
+// before a real subsystem is swapped in.
+func submitOrDrop(pool *ants.Pool, work func()) bool {
+	if pool == nil {
+		asyncSubmitDrops.Inc()
+		return false
+	}
+	if err := pool.Submit(work); err != nil {
+		// ants.ErrPoolOverload (the non-blocking pool is full): DROP the work rather than block
+		// the tick. The subsystem keeps its last state and re-requests on a later tick.
+		asyncSubmitDrops.Inc()
+		return false
+	}
+	return true
+}
+
+// playerByEntityID re-resolves the tick-owned player carrying entityID by scanning the players
+// slice on the OWNER goroutine, returning nil if no such player is currently registered (it left
+// between an async Submit and its applyTo — Pitfall 3). It is the on-apply existence re-check
+// trackerDiffReady.applyTo uses: the result carries the player's entity id (a value), never a
+// live *tickPlayer pointer, so a late diff to a departed player is dropped, not crashed. A linear
+// scan is correct here — player counts are small and applyTo runs at most once per result on the
+// owner; a despawned id simply finds no match. Tick-owned (called only on the tick goroutine).
+func (t *TickLoop) playerByEntityID(id int32) *tickPlayer {
+	for _, p := range t.players {
+		if p.entityID == id {
+			return p
+		}
+	}
+	return nil
+}
+
+// --- The three asyncResult CONTRACTS (OPT-01/02/03 implement applyTo) ---------------------
+//
+// Each type below satisfies the EXISTING asyncResult interface{ applyTo(*TickLoop) } (tick.go,
+// UNCHANGED). They are the immutable messages a pool worker hands back to the owner via
+// asyncIn2. The cardinal rule (08-RESEARCH Pitfall 2/3): a result carries an ID/VALUE for an
+// on-apply existence/validity RE-CHECK — never a live *Entity/*tickPlayer pointer — because the
+// world moves on between Submit (off-tick) and applyTo (1+ ticks later, on the owner). applyTo
+// re-resolves the target on the owner and DROPS the result if the target is gone or has changed.
+//
+// For THIS Wave-0 plan every applyTo is a validate-then-no-op STUB: it performs the owner-side
+// validity re-check (proving the contract + the despawn/retarget drop path) and then leaves a
+// documented placeholder where the owning plan inserts the real mutation. NO executor is swapped
+// here — these are the blueprints the OPT plans build against.
+
+// pathReady is the OPT-01 (async pathfinding, 08-02) rejoin message. A pool worker ran the PURE
+// computePath over an immutable pathRequest snapshot and hands back the resulting *Path. It
+// carries the mob's id and the goal target (NOT a live *Entity — Pitfall 2/3) so applyTo can,
+// on the owner, confirm the mob still exists and still wants exactly this path before adopting
+// it. A path tolerated 1+ ticks late may arrive after the mob despawned or retargeted; applyTo
+// drops it in that case and navigation re-requests next tick (OPT-01 "tolerated 1+ ticks late").
+type pathReady struct {
+	mobID  int32  // the entity to re-resolve on apply (existence re-check); never a live pointer
+	target [3]int // the goal this path was computed for; dropped on apply if the goal changed
+	path   *Path  // the immutable result computed off-tick by computePath (may be nil = no path)
+}
+
+// applyTo runs on the OWNER goroutine inside applyAsyncResults. STUB for Wave 0: it performs the
+// Pitfall-2 validity re-check (mob still exists) and then no-ops. 08-02 (OPT-01) fills the body
+// after the check with `nav := e.ai.nav; if nav.pendingTarget == r.target { nav.path = r.path;
+// nav.pending = false }` — assigning the late path on the owner so the mob starts following next
+// tick. Carrying r.mobID + r.target (not a live *Entity) is what makes that late apply safe.
+func (r pathReady) applyTo(t *TickLoop) {
+	if t.entities == nil {
+		return // defensive: store is non-nil from NewTickLoop; never panic if absent
+	}
+	if _, ok := t.entities.get(r.mobID); !ok {
+		return // mob despawned while the path computed (Pitfall 2): DROP the stale result
+	}
+	// 08-02 (OPT-01) fills here: re-resolve the mob's navigation, confirm its pending target
+	// still equals r.target (goal unchanged mid-flight), then adopt r.path on the owner
+	// (nav.path = r.path; nav.pending = false). For THIS plan the body after the existence
+	// re-check is a documented no-op placeholder — no nav state exists to mutate yet.
+}
+
+// trackerDiffReady is the OPT-02 (async entity tracker, 08-04) rejoin message. The off-tick
+// worker computed the per-player visibility DIFF (spawn/teleport/remove decision math) over an
+// immutable position+tracked-set snapshot and hands back the resulting clientbound packets. It
+// carries the player's entity id (NOT a live *tickPlayer — Pitfall 3) so applyTo can re-resolve
+// the player on the owner and SEND the packets there. Packet emission MUST stay owner-side: it
+// enqueues onto the bounded per-player outbound queue the writeLoop owns (Pitfall 5 / the
+// Phase-5 ChannelQueue close-vs-send race) — only the diff MATH goes off-tick.
+type trackerDiffReady struct {
+	playerID int32       // the player to re-resolve on apply; never a live *tickPlayer pointer
+	packets  []pk.Packet // the immutable visibility-diff packets to Send on the owner
+}
+
+// applyTo runs on the OWNER goroutine inside applyAsyncResults. STUB for Wave 0: it re-resolves
+// the player by entity id (existence re-check — the player may have left between Submit and
+// apply) and then no-ops. 08-04 (OPT-02) fills the body with `for _, pkt := range r.packets {
+// p.client.Send(pkt) }` on the owner, plus the p.tracked bookkeeping update — both single-owner.
+func (r trackerDiffReady) applyTo(t *TickLoop) {
+	p := t.playerByEntityID(r.playerID)
+	if p == nil {
+		return // player left while the diff computed (Pitfall 3): DROP the stale packets
+	}
+	// 08-04 (OPT-02) fills here: for each pkt in r.packets call p.client.Send(pkt) on the OWNER
+	// (Pitfall 5 — sends stay owner-side so the bounded outbound queue / writeLoop stay the sole
+	// socket writer) and update p.tracked. For THIS plan the body after the existence re-check is
+	// a documented no-op placeholder.
+}
+
+// spawnCandidate is one standable spawn location the OPT-03 (08-05) off-tick scan produced. It
+// is a plain value (the immutable result of the column/Y scan over a world snapshot), carrying
+// only the block coordinates — no live world or entity reference (Pitfall 3). applyTo re-checks
+// the mob cap on the owner and adds at most one candidate, so a scan computed against a stale
+// world snapshot can never over-spawn past the authoritative cap.
+type spawnCandidate struct {
+	x, y, z int // the standable block position the off-tick scan found (immutable value)
+}
+
+// spawnCandidatesReady is the OPT-03 (async mob spawning, 08-05) rejoin message. The off-tick
+// worker scanned candidate spawn columns + standable Y over an immutable world snapshot and
+// hands back the candidates. applyTo re-checks the live mob cap on the OWNER (the count over the
+// authoritative store) before any entityStore.add, so the spawn MUTATION + the id allocation
+// stay single-owner even though the read-only scan ran off-tick.
+type spawnCandidatesReady struct {
+	candidates []spawnCandidate // the immutable scan result; applyTo adds at most one under the cap
+}
+
+// applyTo runs on the OWNER goroutine inside applyAsyncResults. STUB for Wave 0: it validates the
+// result is non-empty and then no-ops. 08-05 (OPT-03) fills the body with the owner-side cap
+// re-check (countByCategory over the authoritative entityStore) followed by entityStore.add for
+// ONE candidate (drawing a fresh id from idAlloc) — the spawn mutation stays single-owner even
+// though the candidate scan ran off-tick over a snapshot.
+func (r spawnCandidatesReady) applyTo(t *TickLoop) {
+	if len(r.candidates) == 0 {
+		return // nothing to place (the scan found no standable spot): DROP, nothing to apply
+	}
+	if t.entities == nil {
+		return // defensive: store is non-nil from NewTickLoop; never panic if absent
+	}
+	// 08-05 (OPT-03) fills here: re-check the live mob cap on the owner (countByCategory over the
+	// authoritative store — a stale snapshot must NOT over-spawn) and, if under the cap, draw a
+	// fresh id from t.idAlloc and entityStore.add ONE candidate. For THIS plan the body after the
+	// non-empty/store re-check is a documented no-op placeholder — the spawner mutation lands in
+	// 08-05.
+}
