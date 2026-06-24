@@ -55,9 +55,6 @@ func (f constantFn) Compute(Context) float64 { return f.v }
 func (f constantFn) MinValue() float64       { return f.v }
 func (f constantFn) MaxValue() float64       { return f.v }
 
-// zeroFn is the shared zero constant (DensityFunctions.zero()).
-var zeroFn = constantFn{0}
-
 // ---- y_clamped_gradient ----
 
 // yClampedGradient is DensityFunctions$YClampedGradient:
