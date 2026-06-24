@@ -44,6 +44,8 @@
 package biome
 
 import (
+	"sync"
+
 	levelbiome "github.com/imhinotori/sulfur/level/biome"
 	"github.com/imhinotori/sulfur/world/levelgen/density"
 )
@@ -145,13 +147,20 @@ func (b *ParameterPoint) fitness(t TargetPoint) int64 {
 }
 
 // ParameterList ports Climate$ParameterList<Holder<Biome>>: the list of climate boxes +
-// the linear nearest-match search. Vanilla also builds an RTree (findValueIndex) over
-// the boxes for speed; the LINEAR findValueBruteForce is CORRECTNESS-EQUIVALENT (same
-// nearest-box result, same first-match-wins tiebreak) and is what this port uses for v1.
-// The RTree is a documented perf refinement (see NOTE on findValue) — not required for
-// the same-seed-same-world correctness this plan asserts.
+// the nearest-match search. Vanilla's findValue dispatches to findValueIndex, an RTree
+// (Climate$RTree) over the boxes that prunes the search to O(log n)-ish instead of O(n);
+// the linear findValueBruteForce is CORRECTNESS-EQUIVALENT (same nearest box, same
+// first-match-wins tiebreak). findValue here uses the ported RTree (rtree.go) and is
+// guarded by TestRTreeMatchesLinearScan to prove it returns the identical box as the
+// brute-force scan for any target.
+//
+// The RTree is built lazily on the first lookup (and only once) so NewParameterList stays
+// cheap and the build cost is paid by the first chunk, not every construction. tree+once
+// give a data-race-free single build under the off-tick worker's concurrent Generate.
 type ParameterList struct {
 	boxes []ParameterPoint
+	once  sync.Once
+	tree  *rtreeNode
 }
 
 // NewParameterList wraps the parsed boxes. The slice order is the embedded JSON order
@@ -163,17 +172,37 @@ func NewParameterList(boxes []ParameterPoint) *ParameterList {
 // Boxes returns the underlying box list (read-only; tests inspect it).
 func (l *ParameterList) Boxes() []ParameterPoint { return l.boxes }
 
-// findValue ports Climate$ParameterList.findValueBruteForce(TargetPoint): a single
-// linear pass keeping the box with the minimum fitness, where a later box must be
-// STRICTLY closer (fitness < best) to displace an earlier one — so equal-fitness ties
-// resolve to the earliest box (deterministic, matching the bytecode's `ifge` keep).
-//
-// NOTE (RTree perf refinement): vanilla's findValue dispatches to findValueIndex, an
-// RTree over the 6-D boxes that prunes the search to O(log n)-ish instead of O(n). The
-// RTree returns the SAME nearest box; porting it is purely a throughput optimization for
-// the ~7594-box overworld list and is deferred. The biome is sampled per quart cell
-// (4×4×4 columns), not per block, so the linear cost is bounded (T-9-19).
+// index lazily builds (once) and returns the RTree over the boxes. Built from the box
+// list order so the nearest-leaf tiebreak matches findValueBruteForce's first-match-wins.
+func (l *ParameterList) index() *rtreeNode {
+	l.once.Do(func() {
+		l.tree = buildRTree(l.boxes)
+	})
+	return l.tree
+}
+
+// findValue ports Climate$ParameterList.findValue → findValueIndex(TargetPoint): an RTree
+// search that returns the box with the minimum fitness, pruning subtrees whose bounding-box
+// lower bound cannot beat the best-so-far. It is behavior-identical to the brute-force scan
+// (findValueBruteForce / findValueLinear below): same nearest box, same earliest-wins tie.
 func (l *ParameterList) findValue(t TargetPoint) (levelbiome.Type, bool) {
+	if len(l.boxes) == 0 {
+		return 0, false
+	}
+	point := toParameterArray(t)
+	leaf := l.index().search(&point, nil)
+	if leaf == nil {
+		return 0, false
+	}
+	return leaf.biome, true
+}
+
+// findValueLinear ports Climate$ParameterList.findValueBruteForce(TargetPoint): a single
+// linear pass keeping the box with the minimum fitness, where a later box must be STRICTLY
+// closer (fitness < best) to displace an earlier one — so equal-fitness ties resolve to the
+// earliest box (deterministic, matching the bytecode's `ifge` keep). Retained as the
+// correctness oracle for TestRTreeMatchesLinearScan (the RTree must agree with it exactly).
+func (l *ParameterList) findValueLinear(t TargetPoint) (levelbiome.Type, bool) {
 	if len(l.boxes) == 0 {
 		return 0, false
 	}
@@ -188,6 +217,21 @@ func (l *ParameterList) findValue(t TargetPoint) (levelbiome.Type, bool) {
 		}
 	}
 	return best.Biome, true
+}
+
+// toParameterArray ports Climate$TargetPoint.toParameterArray: the 6 quantized climate
+// coords followed by a trailing 0 for the offset axis — the 7-element point the RTree's
+// per-node distance is computed against.
+func toParameterArray(t TargetPoint) [rtreeAxes]int64 {
+	return [rtreeAxes]int64{
+		t.Temperature,
+		t.Humidity,
+		t.Continentalness,
+		t.Erosion,
+		t.Depth,
+		t.Weirdness,
+		0,
+	}
 }
 
 // Sampler ports Climate$Sampler: the six bound climate density functions. sample(x,y,z)

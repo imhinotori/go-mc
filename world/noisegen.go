@@ -142,7 +142,17 @@ func (g *NoiseGenerator) Generate(pos level.ChunkPos) *level.Chunk {
 
 	// (3) SURFACE — biome-correct surface on the carved tops + the 3 CLIENT heightmaps,
 	// then the varied per-section biome containers.
-	biomeOf := func(x, y, z int) levelbiome.Type { return g.biomes.GetBiome(x, y, z) }
+	//
+	// The biome is defined per QUART cell (4×4×4: GetBiome converts block→quart via >>2), but
+	// BuildSurface samples it per-block along each column's surface AND FillBiomes samples it
+	// again per quart cell — both repeatedly hit the SAME quart cells, and each sample runs the
+	// six climate density functions + an RTree search (the post-RTree hotspot is exactly this
+	// re-sampling, ~60% cum in the profile). A per-quart-cell cache over ONE chunk's generation
+	// is behavior-identical (same quart key → same biome by construction) and collapses the
+	// duplicate samples to one per distinct cell. Scoped to this Generate call (no shared state),
+	// so Generate stays pure over (seed, pos).
+	bc := newBiomeCache(g.biomes)
+	biomeOf := bc.get
 	surface.BuildSurface(g.surface, g.rule, ch, nc, biomeOf)
 	surface.FillBiomes(ch, nc, biomeOf)
 
@@ -181,6 +191,41 @@ func (g *NoiseGenerator) SpawnSurfaceY(pos level.ChunkPos) int {
 	// first-air-above-top relative to MinY -> top solid/fluid block world-Y.
 	topAir := ch.HeightMaps.WorldSurface.Get(col) + g.minY
 	return topAir - 1
+}
+
+// biomeCache memoizes the multi-noise biome source per QUART cell for the lifetime of a single
+// Generate call. The multi-noise biome is constant across a 4×4×4 block quart cell (GetBiome maps
+// block→quart via >>2 before any sampling), so caching on the quart key (qx,qy,qz) returns the
+// EXACT same biome the uncached source would — it removes only redundant work, not any variation.
+// This is the per-chunk biome cache the perf fix layers on top of the RTree: BuildSurface (per
+// surface block) and FillBiomes (per quart cell) both sample overlapping cells, and each sample
+// is six climate density-function evaluations + an RTree search; the cache collapses those to one
+// evaluation per distinct quart cell.
+//
+// NOT shared across chunks (a fresh cache per Generate) so Generate stays pure over (seed, pos)
+// and the map needs no synchronization — it is touched only by the single goroutine running this
+// Generate.
+type biomeCache struct {
+	src   *biome.MultiNoiseBiomeSource
+	cache map[[3]int]levelbiome.Type
+}
+
+// newBiomeCache builds an empty per-chunk cache over the biome source.
+func newBiomeCache(src *biome.MultiNoiseBiomeSource) *biomeCache {
+	return &biomeCache{src: src, cache: make(map[[3]int]levelbiome.Type, 256)}
+}
+
+// get returns the biome at a BLOCK position, memoized by its quart cell. The key is the quart
+// triple (x>>2, y>>2, z>>2) — the same conversion GetBiome does internally — so a hit returns the
+// identical value GetBiome would compute for any block in that cell.
+func (b *biomeCache) get(x, y, z int) levelbiome.Type {
+	key := [3]int{x >> 2, y >> 2, z >> 2}
+	if v, ok := b.cache[key]; ok {
+		return v
+	}
+	v := b.src.GetBiome(x, y, z)
+	b.cache[key] = v
+	return v
 }
 
 // carveChunk adapts a *level.Chunk to carver.CarveChunk: world-coord Get/Set bounded to
