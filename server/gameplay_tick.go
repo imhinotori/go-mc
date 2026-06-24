@@ -204,6 +204,17 @@ func (g *gameTick) AcceptPlayer(
 		entityID:   entityID,
 	})
 
+	// CMD-01 join-time send: serialize the shared command graph to THIS client as
+	// ClientboundCommands so it tab-completes the registered commands. cmdGraph.ClientJoin
+	// writes the packet to the command.Client adapter, which forwards to the connection's
+	// bounded outbound queue (commandClientAdapter -> Client.Send); the single writeLoop is
+	// still the sole socket writer, so this sends ON the accept goroutine without mutating any
+	// tick-owned state (TICK-05) — exactly like the bootstrap above. The graph is built ONCE
+	// (package-level cmdGraph) and read-only after build, so concurrent joins share one
+	// immutable tree with no lock (proven -race clean). It is enqueued AFTER the play
+	// bootstrap so Login (which creates the client's ClientLevel) lands first.
+	cmdGraph.ClientJoin(commandClientAdapter{c})
+
 	player := &tickPlayer{
 		client:           c,
 		keep:             g.keep,

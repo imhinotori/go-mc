@@ -752,6 +752,27 @@ func (t *TickLoop) dispatch(c *Client, p pk.Packet) {
 				}
 			}
 		}
+	case packetid.ServerboundChatCommand:
+		// The client's slash command (CMD-01). ServerboundChatCommandPacket is jar-verified
+		// (javap'd from the 26.2 inner jar) as a record with a SINGLE `command:String` field
+		// (FriendlyByteBuf.readUtf, NO signing/salt/timestamp). Resolve it INLINE on the tick
+		// goroutine — like ServerboundClientCommand above — NOT via the subtick buffer: a
+		// command is not a timestamped movement input, it mutates authoritative game state and
+		// must run on the owner (TICK-05). runChatCommand decodes defensively (a Scan error is a
+		// silent no-op, T-3-02), length-bounds the string before Execute (T-7-03), and routes it
+		// to the fork Graph.Execute through the permission gate (ASVS V4). A nil player (unknown
+		// connection) is a cheap no-op.
+		if player != nil {
+			t.runChatCommand(player, p)
+		}
+	case packetid.ServerboundChatCommandSigned:
+		// The SIGNED command variant drags a salt + per-argument signatures + a last-seen
+		// acknowledgement. For v1 the server runs in offline mode and the unmodified client
+		// sends the UNSIGNED ServerboundChatCommand for /commands, so the signed variant is a
+		// documented no-op (we do NOT verify or trust client signatures, and decoding the
+		// leading string then ignoring the signing buys nothing until the chat-signing path
+		// lands). Routed here EXPLICITLY (rather than the default no-op) so the choice is
+		// visible and the capture-diff in 07-06 can confirm the client never takes this path.
 	default:
 		// Unknown / not-yet-handled IDs are cheap no-ops: never block, never panic.
 	}
