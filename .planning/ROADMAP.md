@@ -113,7 +113,14 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Inventory uses the component-based slot format (post-1.20.5, no NBT in slots)
   4. Health, damage, and respawn work — the player death and respawn flow completes
   5. Entity and player state persists to the Anvil format and reloads correctly
-**Plans**: TBD
+**Plans**: 7 plans
+- [ ] 06-01-PLAN.md — Entity store + monotonic entity-ID allocator (replaces hard-coded joinEntityID=1) + per-section grid bucketing (ENT-01 foundation)
+- [ ] 06-02-PLAN.md — Synchronous entityTracker behind tracker.Tick() + jar-derived AddEntity/SetEntityData/Move/Remove encoders + tickEntities (ENT-01)
+- [ ] 06-03-PLAN.md — Per-axis swept-AABB physics: gravity + collision (entity lands/blocked, no tunnel) + authoritative player anti-clip-through (ENT-02)
+- [ ] 06-04-PLAN.md — Block place/break: new world.ChunkManager.SetBlock + PlayerAction/UseItemOn handlers + BlockChangedAck/BlockUpdate reconciliation (ENT-03)
+- [ ] 06-05-PLAN.md — Component-slot inventory: extended SlotData encoder + ContainerSetContent/SetSlot + HashedStack ContainerClick decode (ENT-04)
+- [ ] 06-06-PLAN.md — Health/damage/respawn (reusing the sealed spawn-info encoder) + Anvil persistence of player .dat + entities region (ENT-05, ENT-06)
+- [ ] 06-07-PLAN.md — Capture-diff (AddEntity LP / SetEntityData 0xFF / ContainerSetContent / ContainerClick) + BLOCKING real-client interactive sign-off (autonomous:false; ENT-01..05 gate)
 **Research**: Standard pattern (lighter research) — keep entity hot-fields snapshot-friendly and start with per-section grid bucketing for the broad phase.
 
 ### Phase 7: AI, Pathfinding, Commands & Chat
@@ -164,7 +171,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 3. Authoritative Tick Loop | 3/3 | Complete   | 2026-06-23 |
 | 4. World & Chunk System | 4/4 | Complete   | 2026-06-24 |
 | 5. Player Session In-World (FIRST PLAYABLE) | 3/3 | ✅ Complete | FIRST PLAYABLE — real client walks around a following world |
-| 6. Entities, Physics & Interaction | 0/TBD | Not started | - |
+| 6. Entities, Physics & Interaction | 0/7 | Not started | - |
 | 7. AI, Pathfinding, Commands & Chat | 0/TBD | Not started | - |
 | 8. Leaf Concurrency Optimizations | 0/TBD | Not started | - |
 | 9. Stretch — Online / Parity / Regionization | 0/TBD | Not started | - |
