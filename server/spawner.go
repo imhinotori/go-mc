@@ -1,6 +1,8 @@
 package server
 
 import (
+	"math/rand/v2"
+
 	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/level"
 	pk "github.com/imhinotori/sulfur/net/packet"
@@ -178,14 +180,26 @@ func (t *TickLoop) naturalSpawn() {
 	// Reference Y for the column scan: a player's feet (the surface a near-player spawn sits on).
 	refY := t.spawnRefY()
 
-	// Walk the eligible columns deterministically; place at the first valid ON_GROUND block.
-	for _, col := range cols {
-		// Probe the column-center block coords (a single candidate per column for v1; vanilla
-		// rolls a random (x,z) within the chunk — deferred with the full per-chunk attempt loop).
-		bx := int(col[0])*16 + 8
-		bz := int(col[1])*16 + 8
+	// Try a RANDOM eligible column with a RANDOM (x,z) inside it (vanilla NaturalSpawner picks a
+	// random chunk and getRandomPosWithin rolls a random block in the chunk). Walking the columns
+	// in a fixed order and always taking the first valid one piled every mob on the same block —
+	// so the world looked like it had a single pig. Shuffling the start + jittering the in-chunk
+	// position spreads spawns across the loaded area like vanilla. We try up to a bounded number
+	// of random candidates per cycle and place at the first standable one (still ONE placement per
+	// cycle — the throttle).
+	const spawnAttemptsPerCycle = 8
+	for attempt := 0; attempt < spawnAttemptsPerCycle; attempt++ {
+		col := cols[rand.IntN(len(cols))]
+		bx := int(col[0])*16 + rand.IntN(16)
+		bz := int(col[1])*16 + rand.IntN(16)
 		y, ok := t.findStandableY(bx, bz, refY)
 		if !ok {
+			continue
+		}
+		// Packing guard: skip if a mob is already close to this candidate, so spawns spread out
+		// instead of stacking (a minimal stand-in for vanilla's isRightDistanceToPlayerAndSpawnPoint
+		// + per-chunk density packing). Within ~6 blocks counts as "occupied".
+		if t.mobNear(float64(bx)+0.5, float64(bz)+0.5, 6.0) {
 			continue
 		}
 		pig := NewEntity(t.idAlloc.AllocID(), entity.Pig, float64(bx)+0.5, float64(y), float64(bz)+0.5)
@@ -204,6 +218,25 @@ func (t *TickLoop) spawnRefY() int {
 		}
 	}
 	return dimMinY + 1
+}
+
+// mobNear reports whether any entity sits within rangeBlocks horizontal distance of (x,z). Used
+// by the spawner's packing guard to avoid stacking mobs on one block. It uses the store's
+// per-column broad phase (near) so the scan is bounded to the candidate's column neighborhood,
+// not the whole world. Tick-owned.
+func (t *TickLoop) mobNear(x, z, rangeBlocks float64) bool {
+	if t.entities == nil {
+		return false
+	}
+	r2 := rangeBlocks * rangeBlocks
+	for _, e := range t.entities.near(x, z, 1) {
+		dx := e.x - x
+		dz := e.z - z
+		if dx*dx+dz*dz <= r2 {
+			return true
+		}
+	}
+	return false
 }
 
 // (compile guard) — keep the pk import wired for the world block reads naturalSpawn relies on
