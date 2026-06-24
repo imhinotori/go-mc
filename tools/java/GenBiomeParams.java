@@ -75,7 +75,7 @@ public class GenBiomeParams {
             for (int i = 0; i < values.size(); i++) {
                 var pair = values.get(i);
                 Climate.ParameterPoint p = pair.getFirst();
-                String biome = pair.getSecond().location().toString();
+                String biome = pair.getSecond().identifier().toString();
 
                 pw.print("  {\"biome\": ");
                 pw.print(jsonStr(biome));
