@@ -48,13 +48,23 @@ type gameTick struct {
 	// in main()). AcceptPlayer calls ClientJoin on entry and ClientLeft on exit; a
 	// returning ServerboundKeepAlive is forwarded to ClientTick by the tick's dispatch.
 	keep *KeepAlive
+
+	// spawnSurfaceY is the superflat top-solid block world-Y (the generator's SurfaceY).
+	// The Play bootstrap (sendPlayBootstrap) places the joining player two blocks above
+	// it so the client spawns on solid ground rather than inside the floor or in the
+	// void. Sourced from the same value cmd/sulfur hands the Superflat generator, so the
+	// spawn height and the streamed terrain agree. Phase 5 derives the spawn from a real
+	// spawn position / world data.
+	spawnSurfaceY int
 }
 
 // NewGameTick constructs the real GamePlay over the shared inbound seam, the single
-// tick loop, and the independent keep-alive. main() builds these three, starts the
-// tick and keep-alive goroutines, then sets srv.GamePlay = NewGameTick(...).
-func NewGameTick(inbound chan Intent, loop *TickLoop, keep *KeepAlive) *gameTick {
-	return &gameTick{inbound: inbound, loop: loop, keep: keep}
+// tick loop, and the independent keep-alive. spawnSurfaceY is the superflat surface
+// world-Y the Play bootstrap spawns the player above (the same value cmd/sulfur hands
+// the Superflat generator). main() builds these, starts the tick and keep-alive
+// goroutines, then sets srv.GamePlay = NewGameTick(...).
+func NewGameTick(inbound chan Intent, loop *TickLoop, keep *KeepAlive, spawnSurfaceY int) *gameTick {
+	return &gameTick{inbound: inbound, loop: loop, keep: keep, spawnSurfaceY: spawnSurfaceY}
 }
 
 // keepAliveClient adapts a *Client to the fork's KeepAliveClient interface
@@ -119,12 +129,26 @@ func (g *gameTick) AcceptPlayer(
 	// against an untrusted client — threat T-4-01), the sent-set starts empty, and secs
 	// is the overworld section count. Phase 5 (PLAY-01/03) overwrites center from the
 	// real spawn. All fields are tick-owned; the tick goroutine performs the insert.
+	spawnCenter := level.ChunkPos{0, 0}
+	viewDist := clampViewDistance(serverViewDistance)
+
+	// MINIMAL Play-state bootstrap (a forward slice of PLAY-01/02/03 for the Phase-4
+	// visual milestone). Enqueue Login(JoinGame) -> GameEvent(LEVEL_CHUNKS_LOAD_START)
+	// -> PlayerPosition on the connection's outbound queue BEFORE registering the
+	// player with the tick. The single writeLoop drains the queue FIFO, so these land
+	// on the wire ahead of any SetChunkCacheCenter / LevelChunkWithLight the tick later
+	// enqueues for this player — the load-bearing invariant that Login (which creates
+	// the client's ClientLevel) precedes the chunk stream. Without it a real 26.2 client
+	// NPEs in handleSetChunkCacheCenter ("this.level is null"). Sending here mutates no
+	// tick-owned state (only the connection's own queue), preserving TICK-05.
+	sendPlayBootstrap(c, viewDist, spawnCenter, g.spawnSurfaceY)
+
 	player := &tickPlayer{
 		client:     c,
 		keep:       g.keep,
 		keepalive:  ka,
-		center:     level.ChunkPos{0, 0},
-		viewDist:   clampViewDistance(serverViewDistance),
+		center:     spawnCenter,
+		viewDist:   viewDist,
 		sentChunks: make(map[level.ChunkPos]bool),
 		secs:       overworldSections,
 	}

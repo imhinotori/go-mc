@@ -128,7 +128,7 @@ func main() {
 	go worker.Run(ctx)
 
 	// The real GamePlay bridges an accepted connection to the running tick + keep-alive.
-	srv := newServer(server.NewGameTick(inbound, tick, keep))
+	srv := newServer(server.NewGameTick(inbound, tick, keep, overworldSurfaceY))
 
 	srv.Logger.Printf("Sulfur listening on %s (protocol %d, %s)",
 		*addr, server.ProtocolVersion, server.ProtocolName)

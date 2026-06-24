@@ -42,7 +42,7 @@ func TestPlayerStandsInTickingWorld(t *testing.T) {
 	go loop.Run(ctx, inbound)
 	go keep.Run(ctx)
 
-	g := NewGameTick(inbound, loop, keep)
+	g := NewGameTick(inbound, loop, keep, -48)
 
 	// A piped connection: the server end is handed to AcceptPlayer; the client end is
 	// driven by this test as a (minimal) live client would be.

@@ -1,0 +1,264 @@
+package server
+
+import (
+	"io"
+
+	"github.com/imhinotori/sulfur/data/packetid"
+	"github.com/imhinotori/sulfur/level"
+	pk "github.com/imhinotori/sulfur/net/packet"
+)
+
+// play_join.go is the MINIMAL Play-state bootstrap (a tightly-scoped slice of
+// PLAY-01/02/03 pulled forward for the Phase-4 visual milestone). It sends the
+// three packets a vanilla 26.2 client needs in order to build its ClientLevel and
+// render the already-correct superflat chunks the streamer (world_stream.go /
+// tick_phases.flushOutbound) produces:
+//
+//  1. ClientboundLogin (Join Game) — CREATES the client's ClientLevel. Without it
+//     the client receives chunk packets with no level and NPEs in
+//     handleSetChunkCacheCenter ("this.level is null"). This is the bug a real
+//     PrismLauncher 26.2 client proved.
+//  2. ClientboundGameEvent LEVEL_CHUNKS_LOAD_START (event id 13) — tells the client
+//     to show terrain instead of hanging on the loading screen.
+//  3. ClientboundPlayerPosition (Synchronize Player Position) — places the player on
+//     solid ground above the superflat surface so it does not fall through void.
+//
+// CRITICAL ORDERING INVARIANT: Login MUST reach the wire before any
+// SetChunkCacheCenter / LevelChunkWithLight. AcceptPlayer enqueues these bootstrap
+// packets through the per-connection bounded outbound queue (Client.Send) BEFORE it
+// registers the player with the tick (loop.register). The single writeLoop drains
+// that queue strictly FIFO, so a bootstrap packet enqueued before registration is
+// guaranteed to land on the wire before any chunk packet the tick later enqueues for
+// this player. Sending the per-connection bootstrap off-tick at AcceptPlayer mutates
+// NO tick-owned state — it only moves bytes through the connection's own queue — so it
+// keeps the single-owner tick discipline (TICK-05) intact.
+//
+// ALL THREE WIRE LAYOUTS ARE JAR-DERIVED (decompiled from the unobfuscated 26.2
+// inner jar, net.minecraft.network.protocol.game.*), NOT guessed from the
+// (<=773) community wiki. The full Player Session (login profile, abilities,
+// inventory, spawn from a real position, teleport-id tracking) is Phase 5.
+
+// joinEntityID is the player's server-assigned entity id for the bootstrap. For the
+// single-player Phase-4 milestone a fixed non-zero id is sufficient; Phase 5 assigns
+// real per-player entity ids from the entity manager.
+const joinEntityID = 1
+
+// initialTeleportID is the teleport id carried by the bootstrap PlayerPosition. The
+// client echoes it back in ServerboundAcceptTeleportation; the tick records the
+// confirmation (dispatch). Phase 5 tracks an incrementing per-player teleport id and
+// gates movement on the matching confirm.
+const initialTeleportID = 1
+
+// overworldDimensionTypeID is the registry index of minecraft:overworld within the
+// dimension_type registry sent in the Configuration state (server/registrydata).
+// Entries are sorted alphabetically by filename: overworld(0), overworld_caves(1),
+// the_end(2), the_nether(3). The Holder<DimensionType> in CommonPlayerSpawnInfo
+// encodes as a registry reference VarInt(id+1) — for overworld that is VarInt(1).
+const overworldDimensionTypeID = 0
+
+// overworldDimensionName is the dimension's level ResourceKey (writeResourceKey ==
+// an Identifier on the wire), distinct from the dimension TYPE holder above.
+const overworldDimensionName = "minecraft:overworld"
+
+// gameEventLevelChunksLoadStart is the ClientboundGameEvent Type.id for
+// LEVEL_CHUNKS_LOAD_START — jar-verified id 13 (bipush 13 in the packet's static
+// initializer). Its float param is unused (0) for this event.
+const gameEventLevelChunksLoadStart = 13
+
+// gameModeSurvival / noPreviousGameMode are the GameType byte encodings in
+// CommonPlayerSpawnInfo. gameType is GameType.getId (survival == 0); previousGameType
+// is GameType.getNullableId, which encodes "no previous mode" as -1 (0xFF byte).
+const (
+	gameModeSurvival   = 0
+	noPreviousGameMode = -1
+)
+
+// overworldSeaLevel is the sea level reported in CommonPlayerSpawnInfo. The superflat
+// floor sits below this; the value only affects client-side ambient/fog cues, not the
+// rendered chunks. 63 is the vanilla overworld sea level.
+const overworldSeaLevel = 63
+
+// writeLoginPacket builds the proto-776 ClientboundLogin (Join Game). Wire order is
+// jar-derived from ClientboundLoginPacket's RegistryFriendlyByteBuf constructor:
+//
+//	Int      playerId
+//	Boolean  hardcore
+//	Set      levels            (writeCollection: VarInt count, then N Identifiers)
+//	VarInt   maxPlayers
+//	VarInt   chunkRadius        (view distance)
+//	VarInt   simulationDistance
+//	Boolean  reducedDebugInfo
+//	Boolean  showDeathScreen    (enableRespawnScreen)
+//	Boolean  doLimitedCrafting
+//	CommonPlayerSpawnInfo commonPlayerSpawnInfo  (nested, see writeCommonPlayerSpawnInfo)
+//	Boolean  onlineMode         (enforcesSecureChat's sibling — "online mode" / secure)
+//	Boolean  enforcesSecureChat
+//
+// isFlat (inside CommonPlayerSpawnInfo) is set TRUE so the client renders the world as
+// a superflat (matching the Superflat generator), giving the correct void-fog and a
+// flat horizon rather than normal-terrain rendering.
+func writeLoginPacket(viewDist int) pk.Packet {
+	return pk.Marshal(
+		int32(packetid.ClientboundLogin),
+		pk.Int(joinEntityID),                  // playerId
+		pk.Boolean(false),                     // hardcore
+		levelsEncoder{overworldDimensionName}, // levels: Set<ResourceKey<Level>>
+		pk.VarInt(maxPlayersJoin),             // maxPlayers
+		pk.VarInt(int32(viewDist)),            // chunkRadius (server-clamped view distance)
+		pk.VarInt(int32(viewDist)),            // simulationDistance
+		pk.Boolean(false),                     // reducedDebugInfo
+		pk.Boolean(true),                      // showDeathScreen (enableRespawnScreen)
+		pk.Boolean(false),                     // doLimitedCrafting
+		commonPlayerSpawnInfoEncoder{},        // commonPlayerSpawnInfo (nested record)
+		pk.Boolean(false),                     // onlineMode (offline server — NET-03)
+		pk.Boolean(false),                     // enforcesSecureChat
+	)
+}
+
+// maxPlayersJoin is the maxPlayers field reported in the Login packet. It mirrors the
+// advertised server cap (cmd/sulfur maxPlayers == 20); kept here as a Play-state
+// constant so the bootstrap has no cross-package dependency.
+const maxPlayersJoin = 20
+
+// levelsEncoder writes the Login packet's levels field — a Set<ResourceKey<Level>>
+// encoded as readCollection/writeCollection: VarInt(count) followed by count
+// Identifiers (each ResourceKey<Level> is a plain identifier on the wire). The set is
+// the list of dimension names the world exposes; for the single-overworld Phase-4
+// server that is exactly {minecraft:overworld}.
+type levelsEncoder []string
+
+func (l levelsEncoder) WriteTo(w io.Writer) (int64, error) {
+	var n int64
+	cnt, err := pk.VarInt(len(l)).WriteTo(w)
+	n += cnt
+	if err != nil {
+		return n, err
+	}
+	for _, id := range l {
+		m, err := pk.Identifier(id).WriteTo(w)
+		n += m
+		if err != nil {
+			return n, err
+		}
+	}
+	return n, nil
+}
+
+// commonPlayerSpawnInfoEncoder writes the nested CommonPlayerSpawnInfo record. Wire
+// order is jar-derived from CommonPlayerSpawnInfo.write:
+//
+//	Holder<DimensionType> dimensionType  (registry ref: VarInt(id+1))
+//	ResourceKey<Level>    dimension      (writeResourceKey == Identifier)
+//	Long                  seed
+//	Byte                  gameType       (GameType.getId; survival == 0)
+//	Byte                  previousGameType (GameType.getNullableId; none == -1 == 0xFF)
+//	Boolean               isDebug
+//	Boolean               isFlat
+//	Optional<GlobalPos>   lastDeathLocation (empty == Boolean(false))
+//	VarInt                portalCooldown
+//	VarInt                seaLevel
+type commonPlayerSpawnInfoEncoder struct{}
+
+func (commonPlayerSpawnInfoEncoder) WriteTo(w io.Writer) (int64, error) {
+	var n int64
+	write := func(f pk.FieldEncoder) error {
+		m, err := f.WriteTo(w)
+		n += m
+		return err
+	}
+	// dimensionType: Holder<DimensionType> as a registry reference. The vanilla
+	// holder-registry codec writes VarInt(registryId + 1) for a referenced entry
+	// (0 is reserved for an inline/direct holder, which a registry-backed dimension
+	// type never is). overworld is index 0 -> VarInt(1).
+	if err := write(pk.VarInt(overworldDimensionTypeID + 1)); err != nil {
+		return n, err
+	}
+	if err := write(pk.Identifier(overworldDimensionName)); err != nil { // dimension (level key)
+		return n, err
+	}
+	if err := write(pk.Long(0)); err != nil { // seed (hashed seed; 0 for the stub world)
+		return n, err
+	}
+	if err := write(pk.Byte(gameModeSurvival)); err != nil { // gameType
+		return n, err
+	}
+	if err := write(pk.Byte(noPreviousGameMode)); err != nil { // previousGameType (-1 == 0xFF)
+		return n, err
+	}
+	if err := write(pk.Boolean(false)); err != nil { // isDebug
+		return n, err
+	}
+	if err := write(pk.Boolean(true)); err != nil { // isFlat (superflat rendering)
+		return n, err
+	}
+	if err := write(pk.Boolean(false)); err != nil { // lastDeathLocation: empty Optional
+		return n, err
+	}
+	if err := write(pk.VarInt(0)); err != nil { // portalCooldown
+		return n, err
+	}
+	if err := write(pk.VarInt(overworldSeaLevel)); err != nil { // seaLevel
+		return n, err
+	}
+	return n, nil
+}
+
+// writeGameEventPacket builds ClientboundGameEvent. Wire order (jar-derived from
+// ClientboundGameEventPacket.write): Byte(event.id) then Float(param). For
+// LEVEL_CHUNKS_LOAD_START (id 13) the param is unused (0).
+func writeGameEventPacket(eventID int, param float32) pk.Packet {
+	return pk.Marshal(
+		int32(packetid.ClientboundGameEvent),
+		pk.UnsignedByte(eventID),
+		pk.Float(param),
+	)
+}
+
+// writePlayerPositionPacket builds the proto-776 ClientboundPlayerPosition
+// (Synchronize Player Position). Wire order is jar-derived from
+// ClientboundPlayerPositionPacket's STREAM_CODEC composite over (VAR_INT id,
+// PositionMoveRotation.STREAM_CODEC change, Relative.SET_STREAM_CODEC relatives):
+//
+//	VarInt  id (teleport id)
+//	Double  x, Double y, Double z            (PositionMoveRotation.position)
+//	Double  dx, Double dy, Double dz          (PositionMoveRotation.deltaMovement)
+//	Float   yaw, Float pitch                  (PositionMoveRotation.yRot/xRot)
+//	Int     relativeFlags                     (Relative.SET_STREAM_CODEC == ByteBufCodecs.INT, big-endian)
+//
+// This is the proto-769+ layout (teleport id FIRST, Int32 relative-flags LAST — the
+// PROJECT.md "restructured Teleport / Int32 flags" known shift), confirmed against the
+// 26.2 jar. relativeFlags == 0 means every component is ABSOLUTE.
+func writePlayerPositionPacket(teleportID int, x, y, z float64, yaw, pitch float32) pk.Packet {
+	return pk.Marshal(
+		int32(packetid.ClientboundPlayerPosition),
+		pk.VarInt(int32(teleportID)),
+		pk.Double(x), pk.Double(y), pk.Double(z),
+		pk.Double(0), pk.Double(0), pk.Double(0), // deltaMovement (no velocity)
+		pk.Float(yaw), pk.Float(pitch),
+		pk.Int(0), // relative flags: 0 == all absolute
+	)
+}
+
+// sendPlayBootstrap enqueues the three Play-state bootstrap packets on the
+// connection's outbound queue IN ORDER (Login -> GameEvent -> PlayerPosition). It is
+// called by AcceptPlayer BEFORE loop.register so the single writeLoop drains them
+// (FIFO) ahead of any chunk packet the tick later enqueues for this player — the
+// load-bearing invariant that Login (ClientLevel creation) precedes
+// SetChunkCacheCenter/LevelChunkWithLight.
+//
+// The player is placed at chunk (0,0), block center (8.5, surfaceY+2, 8.5), so it
+// stands two blocks above the superflat stone surface rather than inside it or in the
+// void. viewDist is the server-clamped value the streamer uses, reported as the Login
+// chunkRadius so the client's view window matches what the tick streams.
+func sendPlayBootstrap(c *Client, viewDist int, center level.ChunkPos, surfaceY int) {
+	// Block center of the player's spawn column: the middle of chunk (center) at two
+	// blocks above the solid surface. center is {0,0} for Phase 4, so this is (8.5,
+	// surfaceY+2, 8.5).
+	spawnX := float64(int(center[0])<<4) + 8.5
+	spawnZ := float64(int(center[1])<<4) + 8.5
+	spawnY := float64(surfaceY + 2)
+
+	c.Send(writeLoginPacket(viewDist))
+	c.Send(writeGameEventPacket(gameEventLevelChunksLoadStart, 0))
+	c.Send(writePlayerPositionPacket(initialTeleportID, spawnX, spawnY, spawnZ, 0, 0))
+}

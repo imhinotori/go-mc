@@ -184,6 +184,13 @@ type tickPlayer struct {
 	// boundary; reading its payload is deferred to Phase 6.
 	sawTickEnd bool
 
+	// confirmedTeleport records that the client echoed back the bootstrap
+	// PlayerPosition's teleport id via ServerboundAcceptTeleportation (Play bootstrap,
+	// forward slice of PLAY-03). The minimal Phase-4 milestone only RECORDS the confirm
+	// (the client renders regardless once Login lands); Phase 5 tracks an incrementing
+	// per-player teleport id and gates movement acceptance on the matching confirm.
+	confirmedTeleport bool
+
 	// keep is the independent keep-alive component (TICK-04); keepalive is this
 	// player's KeepAliveClient adapter. dispatch forwards a returning
 	// ServerboundKeepAlive to keep.ClientTick(keepalive) so the keep-alive bookkeeping
@@ -458,6 +465,16 @@ func (t *TickLoop) dispatch(c *Client, p pk.Packet) {
 		// records the boundary only; its payload is NOT decoded (deferred to Phase 6).
 		if player != nil {
 			player.sawTickEnd = true
+		}
+	case packetid.ServerboundAcceptTeleportation:
+		// Confirm Teleportation: the client echoes the bootstrap PlayerPosition's
+		// teleport id (Play bootstrap, forward slice of PLAY-03). Record the confirm on
+		// the owner goroutine; the minimal Phase-4 milestone does not yet validate the id
+		// or gate movement on it (Phase 5). Never blocks, never panics on an unknown
+		// client (T-3-02). The single-field VarInt payload is not decoded here — the
+		// confirm's arrival is the observable; Phase 5 reads and matches the id.
+		if player != nil {
+			player.confirmedTeleport = true
 		}
 	case packetid.ServerboundKeepAlive:
 		// Forward a returning keep-alive to the independent KeepAlive component so it
