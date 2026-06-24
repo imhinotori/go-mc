@@ -1,6 +1,7 @@
 package biome
 
 import (
+	"math/rand"
 	"testing"
 
 	levelbiome "github.com/imhinotori/sulfur/level/biome"
@@ -117,6 +118,64 @@ func TestBiomeDeterministic(t *testing.T) {
 		bb := b.GetBiome(p[0], p[1], p[2])
 		if ba != bb {
 			t.Fatalf("non-deterministic biome at %v: %s vs %s", p, ba, bb)
+		}
+	}
+}
+
+// TestRTreeMatchesLinearScan is the SAFETY GATE for the Climate RTree port: for a large set
+// of pseudo-random target points spanning the quantized climate space (and the boundary
+// values), the RTree search (findValue) must return the EXACT same biome as the linear
+// brute-force scan (findValueLinear). A faster-but-wrong biome lookup would silently change
+// the generated world, so this asserts the RTree is a pure throughput swap — behavior-identical
+// nearest box, identical first-match-wins tiebreak. Run against the real ~7594-box overworld
+// list so the tree is deep enough to exercise pruning across many subtree levels.
+func TestRTreeMatchesLinearScan(t *testing.T) {
+	src := newSource(t)
+	pl := src.Params()
+	if len(pl.Boxes()) < 1000 {
+		t.Fatalf("expected the full overworld box list, got %d", len(pl.Boxes()))
+	}
+
+	// Deterministic RNG so a failure is reproducible. The quantized climate coords live in
+	// roughly [-2*10000, 2*10000] (climate floats in ~[-2,2] times the 10000 factor); sample
+	// a wider band plus the extreme boundaries so out-of-all-boxes targets are exercised too.
+	rng := rand.New(rand.NewSource(0xA11CE))
+	randCoord := func() int64 {
+		// span ~[-30000, 30000] to cover inside, near-edge, and far-outside targets.
+		return int64(rng.Intn(60001) - 30000)
+	}
+
+	const iterations = 50000
+	for i := 0; i < iterations; i++ {
+		tp := TargetPoint{
+			Temperature:     randCoord(),
+			Humidity:        randCoord(),
+			Continentalness: randCoord(),
+			Erosion:         randCoord(),
+			Depth:           randCoord(),
+			Weirdness:       randCoord(),
+		}
+		want, okWant := pl.findValueLinear(tp)
+		got, okGot := pl.findValue(tp)
+		if okWant != okGot || want != got {
+			t.Fatalf("RTree/linear mismatch at %+v: rtree=(%s,%v) linear=(%s,%v)",
+				tp, got, okGot, want, okWant)
+		}
+	}
+
+	// Also pin a handful of extreme/edge targets explicitly (all-min, all-max, all-zero).
+	edges := []TargetPoint{
+		{},
+		{Temperature: 30000, Humidity: 30000, Continentalness: 30000, Erosion: 30000, Depth: 30000, Weirdness: 30000},
+		{Temperature: -30000, Humidity: -30000, Continentalness: -30000, Erosion: -30000, Depth: -30000, Weirdness: -30000},
+		{Temperature: 1, Humidity: -1, Continentalness: 9999, Erosion: -9999, Depth: 5000, Weirdness: -5000},
+	}
+	for _, tp := range edges {
+		want, okWant := pl.findValueLinear(tp)
+		got, okGot := pl.findValue(tp)
+		if okWant != okGot || want != got {
+			t.Fatalf("RTree/linear mismatch at edge %+v: rtree=(%s,%v) linear=(%s,%v)",
+				tp, got, okGot, want, okWant)
 		}
 	}
 }
