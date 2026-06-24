@@ -1,6 +1,9 @@
 package server
 
-import "github.com/imhinotori/sulfur/level"
+import (
+	"github.com/imhinotori/sulfur/level"
+	"github.com/imhinotori/sulfur/world"
+)
 
 // world_stream.go is the per-player view-distance chunk streaming (Plan 04-03,
 // WORLD-05): a center-out neighbor-ring computation, the server view-distance clamp
@@ -84,4 +87,46 @@ func chunkCenterOf(blockX, blockZ int32) level.ChunkPos {
 // negative coordinates (Go's / truncates toward zero, which is wrong west/north of 0).
 func floorDiv16(v int32) int32 {
 	return int32(int(v) >> 4)
+}
+
+// recenterRing makes the Phase-4 view-distance ring FOLLOW the player after a
+// chunk-column crossing (PLAY-04). The streamer (tickChunks/flushOutbound) already keys
+// on p.center and is idempotent, so re-centering is small and does NOT rebuild it:
+//
+//  1. p.center = newCenter — the next tickChunks requests the new ring center-out.
+//  2. p.centerSent = false — flushOutbound re-emits SetChunkCacheCenter once for the
+//     new center (it sends the framing under !centerSent).
+//  3. Prune p.sentChunks of every column that left the new window, sending one
+//     world.ForgetLevelChunk per dropped column so the client frees it (closing the
+//     void-on-walk failure mode; the column re-streams if the player walks back).
+//
+// Bounded by the server clamp: the needed-ring is centerOutRing(newCenter, viewDist),
+// so a wild coordinate cannot enlarge the send/forget set (T-5-04). Runs on the tick
+// owner over tick-owned state; p.client.Send goes through the bounded outbound queue,
+// keeping the writeLoop the sole socket writer (TICK-05 / T-5-06). Nil-guards p.client
+// and p.sentChunks so unit tests can omit either.
+func (t *TickLoop) recenterRing(p *tickPlayer, newCenter level.ChunkPos) {
+	p.center = newCenter
+	p.centerSent = false
+
+	if p.sentChunks == nil {
+		return // nothing streamed yet: just the center move + framing re-emit
+	}
+
+	// Build the new needed-set (server-clamped ring around the new center).
+	needed := make(map[level.ChunkPos]bool, len(p.sentChunks))
+	for _, pos := range centerOutRing(newCenter, p.viewDist) {
+		needed[pos] = true
+	}
+
+	// Forget + drop every previously-sent column no longer in the window.
+	for pos := range p.sentChunks {
+		if needed[pos] {
+			continue
+		}
+		delete(p.sentChunks, pos)
+		if p.client != nil {
+			p.client.Send(world.ForgetLevelChunk(pos[0], pos[1]))
+		}
+	}
 }

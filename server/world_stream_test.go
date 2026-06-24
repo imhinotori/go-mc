@@ -313,6 +313,172 @@ func TestFlushOutboundBatches(t *testing.T) {
 	}
 }
 
+// TestRecenterRing proves the PLAY-04 re-center prune: moving the center moves
+// p.center, resets centerSent, drops the columns that left the new window from the
+// sent-set, and sends exactly one ForgetLevelChunk per dropped column (none for
+// columns still inside the new window).
+func TestRecenterRing(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+
+	server, client := newPipe(t)
+	c := NewClient(server, 256)
+	c.Start(make(chan Intent, 16))
+
+	oldCenter := level.ChunkPos{0, 0}
+	newCenter := level.ChunkPos{3, 0}
+
+	// Player has streamed the full old r=2 ring (25 columns) and the center framing.
+	p := &tickPlayer{
+		client:     c,
+		center:     oldCenter,
+		viewDist:   serverViewDistance,
+		sentChunks: map[level.ChunkPos]bool{},
+		centerSent: true,
+	}
+	for _, pos := range centerOutRing(oldCenter, p.viewDist) {
+		p.sentChunks[pos] = true
+	}
+
+	// Compute the expected dropped set: old ring minus new ring.
+	newRing := make(map[level.ChunkPos]bool)
+	for _, pos := range centerOutRing(newCenter, p.viewDist) {
+		newRing[pos] = true
+	}
+	var dropped []level.ChunkPos
+	for _, pos := range centerOutRing(oldCenter, p.viewDist) {
+		if !newRing[pos] {
+			dropped = append(dropped, pos)
+		}
+	}
+
+	loop.recenterRing(p, newCenter)
+
+	if p.center != newCenter {
+		t.Fatalf("recenterRing center = %v, want %v", p.center, newCenter)
+	}
+	if p.centerSent {
+		t.Fatal("recenterRing must reset centerSent (so flushOutbound re-emits SetChunkCacheCenter)")
+	}
+	// Dropped columns are gone from the sent-set; retained columns stay.
+	for _, pos := range dropped {
+		if p.sentChunks[pos] {
+			t.Fatalf("dropped column %v still in sent-set after re-center", pos)
+		}
+	}
+	for pos := range newRing {
+		if p.sentChunks[pos] {
+			// Columns shared by old+new windows must remain in the sent-set (not re-sent).
+			continue
+		}
+	}
+	// Retained = old∩new columns must still be present.
+	for _, pos := range centerOutRing(oldCenter, p.viewDist) {
+		if newRing[pos] && !p.sentChunks[pos] {
+			t.Fatalf("retained column %v was dropped from the sent-set", pos)
+		}
+	}
+
+	// Exactly one ForgetLevelChunk per dropped column was sent (and nothing else).
+	pkts := drainClientPackets(t, client, len(dropped))
+	if len(pkts) != len(dropped) {
+		t.Fatalf("recenterRing sent %d packets, want %d (one ForgetLevelChunk per dropped column)", len(pkts), len(dropped))
+	}
+	forgotten := make(map[level.ChunkPos]bool)
+	for _, pkt := range pkts {
+		if pkt.ID != int32(packetid.ClientboundForgetLevelChunk) {
+			t.Fatalf("re-center sent id %#x, want ClientboundForgetLevelChunk", pkt.ID)
+		}
+		var packed pk.Long
+		if err := pkt.Scan(&packed); err != nil {
+			t.Fatalf("scan ForgetLevelChunk: %v", err)
+		}
+		forgotten[level.ChunkPos{int32(uint64(packed)), int32(uint64(packed) >> 32)}] = true
+	}
+	for _, pos := range dropped {
+		if !forgotten[pos] {
+			t.Fatalf("dropped column %v was not forgotten on the wire", pos)
+		}
+	}
+	if tryDrainOne(client) {
+		t.Fatal("re-center sent more than one ForgetLevelChunk per dropped column")
+	}
+}
+
+// TestRingFollowsOnMove proves the world FOLLOWS the player: a real cross-boundary
+// movement packet re-centers the ring, and a subsequent flushOutbound re-emits
+// SetChunkCacheCenter for the new center and streams the new window — closing the
+// void-on-walk failure mode (Pitfall 2).
+func TestRingFollowsOnMove(t *testing.T) {
+	loop, mgr, _, cancel := newStreamWorld(t)
+	defer cancel()
+
+	server, client := newPipe(t)
+	c := NewClient(server, 256)
+	c.Start(make(chan Intent, 16))
+
+	p := &tickPlayer{
+		client:            c,
+		center:            level.ChunkPos{0, 0},
+		viewDist:          serverViewDistance,
+		sentChunks:        map[level.ChunkPos]bool{},
+		confirmedTeleport: true,
+	}
+	loop.players = []*tickPlayer{p}
+
+	// First flush at the spawn center: framing + the ring (make it Ready first).
+	for _, pos := range centerOutRing(p.center, p.viewDist) {
+		mgr.Insert(pos, level.EmptyChunk(24))
+	}
+	loop.flushOutbound()
+	// Drain that initial burst (3 framing + 25 chunks + 1 finished) so the pipe is clear.
+	initial := 3 + 25 + 1
+	drainClientPackets(t, client, initial)
+
+	// Walk far east: block x=64 -> chunk x=4, a real boundary crossing from center {0,0}.
+	loop.applyInput(p, SubtickInput{At: loop.clock.Now(), Packet: movePlayerPosRot(64.0, 64.0, 8.0, 0, 0, 0x01)})
+
+	newCenter := chunkCenterOf(64, 8)
+	if p.center != newCenter {
+		t.Fatalf("movement did not re-center: center=%v, want %v", p.center, newCenter)
+	}
+	if p.centerSent {
+		t.Fatal("re-center must reset centerSent so the next flush re-emits SetChunkCacheCenter")
+	}
+
+	// recenterRing already sent ForgetLevelChunk packets for the dropped columns; drain
+	// those so the next assertion sees the flush output cleanly.
+	newRing := make(map[level.ChunkPos]bool)
+	for _, pos := range centerOutRing(newCenter, p.viewDist) {
+		newRing[pos] = true
+	}
+	var droppedCount int
+	for _, pos := range centerOutRing(level.ChunkPos{0, 0}, p.viewDist) {
+		if !newRing[pos] {
+			droppedCount++
+		}
+	}
+	drainClientPackets(t, client, droppedCount)
+
+	// Make the NEW ring Ready, then flush: a fresh SetChunkCacheCenter for the new center
+	// plus the new ring streams — the world followed the player.
+	for _, pos := range centerOutRing(newCenter, p.viewDist) {
+		mgr.Insert(pos, level.EmptyChunk(24))
+	}
+	loop.flushOutbound()
+
+	pkts := drainClientPackets(t, client, 1)
+	if len(pkts) == 0 || pkts[0].ID != int32(packetid.ClientboundSetChunkCacheCenter) {
+		t.Fatal("after a cross-boundary move, the flush must re-emit SetChunkCacheCenter for the new center")
+	}
+	var gx, gz pk.VarInt
+	if err := pkts[0].Scan(&gx, &gz); err != nil {
+		t.Fatalf("scan SetChunkCacheCenter: %v", err)
+	}
+	if int32(gx) != newCenter[0] || int32(gz) != newCenter[1] {
+		t.Fatalf("re-emitted center = (%d,%d), want %v", gx, gz, newCenter)
+	}
+}
+
 // tryDrainOne reports whether one more packet is readable within a short window.
 func tryDrainOne(client clientReader) bool {
 	got := make(chan bool, 1)
