@@ -1,11 +1,29 @@
 package server
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/level"
 )
+
+// drainAsyncPath spins the OWNER's applyAsyncResults drain until the off-tick pathPool worker has
+// sent its pathReady onto asyncIn2 and the owner has applied it (nav.pending cleared) — or the
+// bound is exhausted. The pool worker is a real goroutine, so we yield between drains to let it
+// run and enqueue its result; the drain itself stays on this (owner) goroutine, mirroring how
+// applyAsyncResults runs in the real pipeline. Returns true if pending cleared within the bound.
+func drainAsyncPath(loop *TickLoop, nav *groundNavigation, bound int) bool {
+	for i := 0; i < bound; i++ {
+		loop.applyAsyncResults()
+		if !nav.pending {
+			return true
+		}
+		runtime.Gosched()
+	}
+	loop.applyAsyncResults()
+	return !nav.pending
+}
 
 // navigation_test.go — AI-02: the ported GroundPathNavigation path-following + the serverAiStep
 // wiring. The mob WALKS its A* path via the EXISTING moveEntity (per-axis swept collision +
@@ -155,5 +173,192 @@ func TestServerAiStepWalksToGoalTarget(t *testing.T) {
 
 	if e.x <= startX+2.0 {
 		t.Fatalf("serverAiStep did not walk the mob toward the goal's wantTarget: x=%v (start %v)", e.x, startX)
+	}
+}
+
+// --- OPT-01: the async pathfinding swap (08-02) ---------------------------------------------
+//
+// requestPath now SUBMITS the pure computePath to the Wave-0 pathPool and returns immediately —
+// the mob keeps its action while the A* runs off-tick. The result rejoins as pathReady via the
+// UNCHANGED applyAsyncResults seam, where pathReady.applyTo re-validates the mob still exists and
+// the target is unchanged before adopting the late path. These tests pin that behavior: a path
+// rejoins and is followed, a despawned/retargeted late path is DROPPED (no crash, no wrong walk),
+// a pool-overload submit leaves the mob on its last action, and the recompute cooldown survives.
+
+// TestAsyncPathRejoins: requestPath submits the path compute off-tick and returns immediately
+// (pending=true, path NOT set inline). After the pool worker runs and applyAsyncResults drains the
+// result on the owner, the mob's nav.path is the valid computed path (the same computePath would
+// have produced inline) and pending is cleared. The mob then follows it across ticks.
+func TestAsyncPathRejoins(t *testing.T) {
+	loop, mgr := newPhysicsLoop()
+	ch := putChunk(mgr, level.ChunkPos{0, 0})
+	const floorY = 64
+	fillFloor(ch, floorY)
+
+	e := testEntity(1, entity.Pig, 1.5, float64(floorY+1), 1.5)
+	e.ai = &mobAI{}
+	e.ai.navigation.speed = 0.2
+	loop.entities.add(e)
+
+	nav := &e.ai.navigation
+	nav.requestPath(loop, e, 10, floorY+1, 1) // path east along the floor
+
+	// The compute moved OFF-tick: requestPath returned immediately with pending set and NO inline
+	// path. (A nil path here is the contract — the path arrives via applyAsyncResults, 1+ ticks late.)
+	if !nav.pending {
+		t.Fatalf("requestPath must set pending=true after submitting the async compute")
+	}
+	if nav.path != nil {
+		t.Fatalf("requestPath must NOT set the path inline (the executor moved off-tick); got a path")
+	}
+
+	if !drainAsyncPath(loop, nav, 1000) {
+		t.Fatalf("the async path never rejoined (pending still true after draining)")
+	}
+	if nav.path == nil || len(nav.path.nodes) == 0 {
+		t.Fatalf("after rejoin the mob has no path (the async compute produced nothing)")
+	}
+	if nav.path.nodes[0].x != 1 || nav.path.nodes[0].z != 1 {
+		t.Fatalf("rejoined path must start at the mob block (1,1); got (%d,%d)", nav.path.nodes[0].x, nav.path.nodes[0].z)
+	}
+
+	// The mob follows the late path: walk it across ticks and assert it moves east.
+	for i := 0; i < 400 && !nav.path.done(); i++ {
+		nav.tick(loop, e)
+		loop.tickPhysics()
+	}
+	if e.x < 8.0 {
+		t.Fatalf("mob did not follow the rejoined async path east: x=%v (want ~10)", e.x)
+	}
+}
+
+// TestAsyncPathDespawnedDropped: submit a path for a mob, then REMOVE the mob from the store, then
+// drain the late result — pathReady.applyTo must DROP it (no panic / nil-deref) because the mob no
+// longer exists. A path is never assigned to a despawned mob.
+func TestAsyncPathDespawnedDropped(t *testing.T) {
+	loop, mgr := newPhysicsLoop()
+	ch := putChunk(mgr, level.ChunkPos{0, 0})
+	const floorY = 64
+	fillFloor(ch, floorY)
+
+	e := testEntity(7, entity.Pig, 1.5, float64(floorY+1), 1.5)
+	e.ai = &mobAI{}
+	e.ai.navigation.speed = 0.2
+	loop.entities.add(e)
+
+	nav := &e.ai.navigation
+	nav.requestPath(loop, e, 10, floorY+1, 1)
+
+	// The mob despawns while the path computes — remove it BEFORE the result lands.
+	loop.entities.remove(e.id)
+
+	// Drain: applyTo must take the despawn-drop path. No panic, and the (now-orphaned) nav.path
+	// must remain nil (nothing was adopted onto a non-existent mob).
+	for i := 0; i < 200; i++ {
+		loop.applyAsyncResults()
+		runtime.Gosched()
+	}
+	if nav.path != nil {
+		t.Fatalf("a path for a despawned mob must be DROPPED, not adopted; got a path")
+	}
+}
+
+// TestAsyncPathRetargetedDropped: submit a path for target A, then RETARGET the nav to B (a new
+// requestPath), then drain the stale A result — applyTo must DROP it (target mismatch). The mob
+// keeps the B request, never the stale A path.
+func TestAsyncPathRetargetedDropped(t *testing.T) {
+	loop, mgr := newPhysicsLoop()
+	ch := putChunk(mgr, level.ChunkPos{0, 0})
+	const floorY = 64
+	fillFloor(ch, floorY)
+
+	e := testEntity(3, entity.Pig, 1.5, float64(floorY+1), 1.5)
+	e.ai = &mobAI{}
+	e.ai.navigation.speed = 0.2
+	loop.entities.add(e)
+
+	nav := &e.ai.navigation
+
+	// Manually craft a stale result for an OLD target A (10,_,1) and enqueue it directly, then set
+	// the nav's current target to B (5,_,5) via the tracking fields. applyTo must drop the A result
+	// because nav.lastT* now points at B.
+	nav.lastTX, nav.lastTY, nav.lastTZ = 5, floorY+1, 5
+	nav.hasTarget = true
+	nav.pending = true
+	staleA := &Path{nodes: []*node{newNode(1, floorY+1, 1)}, idx: 0}
+	loop.asyncIn2 <- pathReady{mobID: e.id, target: [3]int{10, floorY + 1, 1}, path: staleA}
+
+	loop.applyAsyncResults()
+
+	if nav.path == staleA {
+		t.Fatalf("a path for a stale (retargeted) goal must be DROPPED; the mob adopted the stale A path")
+	}
+	if nav.path != nil {
+		t.Fatalf("retargeted-drop must not assign any path; got a non-nil path")
+	}
+}
+
+// TestAsyncPathPoolOverloadDrops: with a SATURATED pathPool, requestPath leaves pending=false and
+// does not touch the mob's existing path (the request is dropped, re-requested next tick) — and it
+// never blocks. Mirrors world.Worker.Request's drop-on-full backpressure (Pitfall 4).
+func TestAsyncPathPoolOverloadDrops(t *testing.T) {
+	loop, mgr := newPhysicsLoop()
+	ch := putChunk(mgr, level.ChunkPos{0, 0})
+	const floorY = 64
+	fillFloor(ch, floorY)
+
+	// Replace the path pool with a single-worker pool we can saturate deterministically.
+	loop.pathPool.Release()
+	loop.pathPool = newAsyncPool(1)
+	block := make(chan struct{})
+	started := make(chan struct{})
+	if !submitOrDrop(loop.pathPool, func() { close(started); <-block }) {
+		t.Fatal("priming submit into the empty single-worker pool should be accepted")
+	}
+	<-started // the only worker is now occupied; the pool is saturated
+
+	e := testEntity(4, entity.Pig, 1.5, float64(floorY+1), 1.5)
+	e.ai = &mobAI{}
+	e.ai.navigation.speed = 0.2
+	loop.entities.add(e)
+
+	nav := &e.ai.navigation
+	existing := &Path{nodes: []*node{newNode(1, floorY+1, 1)}, idx: 0}
+	nav.path = existing // the mob's last path
+
+	nav.requestPath(loop, e, 10, floorY+1, 1) // pool saturated → must DROP
+
+	if nav.pending {
+		t.Fatalf("a dropped (pool-overloaded) submit must leave pending=false; got pending=true")
+	}
+	if nav.path != existing {
+		t.Fatalf("a dropped submit must NOT touch the mob's existing path; it was replaced")
+	}
+
+	close(block) // release the occupying worker so Release drains cleanly
+}
+
+// TestAsyncPathCooldownPreserved: the recompute cooldown still throttles re-requests for the same
+// unchanged target (the DoS guard survived the executor swap). Immediately after a submit, the
+// same-target request is throttled (no new submit fires while the cooldown is hot / a request is
+// in flight).
+func TestAsyncPathCooldownPreserved(t *testing.T) {
+	loop, mgr := newPhysicsLoop()
+	ch := putChunk(mgr, level.ChunkPos{0, 0})
+	const floorY = 64
+	fillFloor(ch, floorY)
+
+	e := testEntity(5, entity.Pig, 1.5, float64(floorY+1), 1.5)
+	e.ai = &mobAI{}
+	e.ai.navigation.speed = 0.2
+	loop.entities.add(e)
+
+	nav := &e.ai.navigation
+	nav.requestPath(loop, e, 10, floorY+1, 1)
+
+	// Same target, immediately after: the cooldown is hot AND a request is pending — shouldRecompute
+	// must return false so the A* is not flooded for an unchanged (possibly unreachable) target.
+	if nav.shouldRecomputePath(10, floorY+1, 1) {
+		t.Fatalf("the recompute cooldown/pending gate must throttle a same-target re-request right after a submit")
 	}
 }
