@@ -1,6 +1,8 @@
 package server
 
 import (
+	"sync/atomic"
+
 	"github.com/imhinotori/sulfur/chat"
 	"github.com/imhinotori/sulfur/data/packetid"
 	"github.com/imhinotori/sulfur/level"
@@ -56,6 +58,15 @@ type gameTick struct {
 	// spawn height and the streamed terrain agree. Phase 5 derives the spawn from a real
 	// spawn position / world data.
 	spawnSurfaceY int
+
+	// teleportSeq is the server-issued teleport-id producer (PLAY-02 / T-5-01). Each join
+	// claims a fresh incrementing id via nextTeleportID(), threaded into the bootstrap
+	// PlayerPosition AND the new tickPlayer.awaitingTeleport so the Plan-05-01 dispatch
+	// gate confirms only on the client's matching Confirm Teleportation echo. The id is
+	// SERVER-chosen and incrementing (never client-supplied), so it is spoof-resistant.
+	// Atomic because AcceptPlayer runs on a per-connection accept goroutine — multiple
+	// joins issue ids concurrently without crossing into tick-owned state.
+	teleportSeq atomic.Uint64
 }
 
 // NewGameTick constructs the real GamePlay over the shared inbound seam, the single
@@ -65,6 +76,17 @@ type gameTick struct {
 // goroutines, then sets srv.GamePlay = NewGameTick(...).
 func NewGameTick(inbound chan Intent, loop *TickLoop, keep *KeepAlive, spawnSurfaceY int) *gameTick {
 	return &gameTick{inbound: inbound, loop: loop, keep: keep, spawnSurfaceY: spawnSurfaceY}
+}
+
+// nextTeleportID claims a fresh, non-zero, incrementing teleport id for a joining player
+// (PLAY-02). It is the producer side of the Plan-05-01 confirm gate: the returned id is
+// carried by the bootstrap PlayerPosition and stored in tickPlayer.awaitingTeleport, so a
+// client's Confirm Teleportation echo confirms the gate only on an exact match. The first
+// issued id is 1 (the counter is pre-incremented), so the id is never 0 — distinguishing
+// "no outstanding teleport" from a real one if that ever matters. Atomic so concurrent
+// joins on separate accept goroutines never collide (T-5-01).
+func (g *gameTick) nextTeleportID() int {
+	return int(g.teleportSeq.Add(1))
 }
 
 // keepAliveClient adapts a *Client to the fork's KeepAliveClient interface
@@ -132,25 +154,41 @@ func (g *gameTick) AcceptPlayer(
 	spawnCenter := level.ChunkPos{0, 0}
 	viewDist := clampViewDistance(serverViewDistance)
 
-	// MINIMAL Play-state bootstrap (a forward slice of PLAY-01/02/03 for the Phase-4
-	// visual milestone). Enqueue Login(JoinGame) -> GameEvent(LEVEL_CHUNKS_LOAD_START)
-	// -> PlayerPosition on the connection's outbound queue BEFORE registering the
-	// player with the tick. The single writeLoop drains the queue FIFO, so these land
-	// on the wire ahead of any SetChunkCacheCenter / LevelChunkWithLight the tick later
-	// enqueues for this player — the load-bearing invariant that Login (which creates
-	// the client's ClientLevel) precedes the chunk stream. Without it a real 26.2 client
-	// NPEs in handleSetChunkCacheCenter ("this.level is null"). Sending here mutates no
+	// Claim the server-issued incrementing teleport id for this join (PLAY-02). It is
+	// carried by the bootstrap PlayerPosition AND stored in tickPlayer.awaitingTeleport
+	// below, so the Plan-05-01 dispatch gate confirms only on the client's matching
+	// Confirm Teleportation echo (T-5-01). The id is computed off-tick here; the
+	// tickPlayer that records it is constructed off-tick and handed to the owner via
+	// register, so no tick-owned state is mutated across the boundary.
+	teleportID := g.nextTeleportID()
+
+	// Full early-Play bootstrap (PLAY-01/02/05). Enqueue Login(JoinGame) ->
+	// GameEvent(LEVEL_CHUNKS_LOAD_START) -> PlayerPosition -> PlayerAbilities ->
+	// SetHeldSlot -> PlayerInfoUpdate(self tab list) -> SetDefaultSpawnPosition on the
+	// connection's outbound queue BEFORE registering the player with the tick. The single
+	// writeLoop drains the queue FIFO, so the WHOLE sequence lands on the wire ahead of any
+	// SetChunkCacheCenter / LevelChunkWithLight the tick later enqueues for this player —
+	// the load-bearing invariant that Login (which creates the client's ClientLevel)
+	// precedes the chunk stream, now extended so the tail precedes it too. Without Login a
+	// real 26.2 client NPEs in handleSetChunkCacheCenter ("this.level is null"). The real
+	// login name/id feed the self tab-list entry (PLAY-05). Sending here mutates no
 	// tick-owned state (only the connection's own queue), preserving TICK-05.
-	sendPlayBootstrap(c, viewDist, spawnCenter, g.spawnSurfaceY)
+	sendPlayBootstrap(c, viewDist, spawnCenter, g.spawnSurfaceY, bootstrapParams{
+		name:       name,
+		id:         id,
+		teleportID: teleportID,
+		gameMode:   gameModeSurvival,
+	})
 
 	player := &tickPlayer{
-		client:     c,
-		keep:       g.keep,
-		keepalive:  ka,
-		center:     spawnCenter,
-		viewDist:   viewDist,
-		sentChunks: make(map[level.ChunkPos]bool),
-		secs:       overworldSections,
+		client:           c,
+		keep:             g.keep,
+		keepalive:        ka,
+		center:           spawnCenter,
+		viewDist:         viewDist,
+		sentChunks:       make(map[level.ChunkPos]bool),
+		secs:             overworldSections,
+		awaitingTeleport: teleportID,
 	}
 	g.loop.register <- player
 

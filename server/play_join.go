@@ -10,11 +10,13 @@ import (
 	"github.com/google/uuid"
 )
 
-// play_join.go is the MINIMAL Play-state bootstrap (a tightly-scoped slice of
-// PLAY-01/02/03 pulled forward for the Phase-4 visual milestone). It sends the
+// play_join.go is the Play-state join bootstrap. Its original Phase-4 core sends the
 // three packets a vanilla 26.2 client needs in order to build its ClientLevel and
 // render the already-correct superflat chunks the streamer (world_stream.go /
-// tick_phases.flushOutbound) produces:
+// tick_phases.flushOutbound) produces; Plan 05-02 APPENDS the early-Play tail
+// (PlayerAbilities -> SetHeldSlot -> PlayerInfoUpdate(self) -> SetDefaultSpawnPosition)
+// after those three so the joining client becomes a real, listed player (PLAY-01/05).
+// The three core packets are:
 //
 //  1. ClientboundLogin (Join Game) — CREATES the client's ClientLevel. Without it
 //     the client receives chunk packets with no level and NPEs in
@@ -35,21 +37,17 @@ import (
 // NO tick-owned state — it only moves bytes through the connection's own queue — so it
 // keeps the single-owner tick discipline (TICK-05) intact.
 //
-// ALL THREE WIRE LAYOUTS ARE JAR-DERIVED (decompiled from the unobfuscated 26.2
-// inner jar, net.minecraft.network.protocol.game.*), NOT guessed from the
-// (<=773) community wiki. The full Player Session (login profile, abilities,
-// inventory, spawn from a real position, teleport-id tracking) is Phase 5.
+// ALL WIRE LAYOUTS ARE JAR-DERIVED (decompiled from the unobfuscated 26.2 inner jar,
+// net.minecraft.network.protocol.game.*), NOT guessed from the (<=773) community wiki.
+// The early-Play tail's two MEDIUM-confidence encoders (the PlayerInfoUpdate entry
+// sub-encoding and the SetDefaultSpawnPosition RespawnData bytes) are pinned to the jar's
+// field count/types here and sealed to exact bytes by Plan 05-03's capture-diff. Real
+// inventory, multi-player tab broadcast, and a real spawn from world data remain Phase 5+.
 
 // joinEntityID is the player's server-assigned entity id for the bootstrap. For the
 // single-player Phase-4 milestone a fixed non-zero id is sufficient; Phase 5 assigns
 // real per-player entity ids from the entity manager.
 const joinEntityID = 1
-
-// initialTeleportID is the teleport id carried by the bootstrap PlayerPosition. The
-// client echoes it back in ServerboundAcceptTeleportation; the tick records the
-// confirmation (dispatch). Phase 5 tracks an incrementing per-player teleport id and
-// gates movement on the matching confirm.
-const initialTeleportID = 1
 
 // overworldDimensionTypeID is the registry index of minecraft:overworld within the
 // dimension_type registry sent in the Configuration state (server/registrydata).
@@ -445,18 +443,37 @@ func (e respawnDataEncoder) WriteTo(w io.Writer) (int64, error) {
 	return n, nil
 }
 
-// sendPlayBootstrap enqueues the three Play-state bootstrap packets on the
-// connection's outbound queue IN ORDER (Login -> GameEvent -> PlayerPosition). It is
-// called by AcceptPlayer BEFORE loop.register so the single writeLoop drains them
-// (FIFO) ahead of any chunk packet the tick later enqueues for this player — the
-// load-bearing invariant that Login (ClientLevel creation) precedes
-// SetChunkCacheCenter/LevelChunkWithLight.
+// bootstrapParams carries the per-player identity + issued teleport id into the Play
+// bootstrap. AcceptPlayer fills it from the login profile (name/id) and the per-gameTick
+// teleport-id counter, so the bootstrap can build a real, listed player rather than the
+// const placeholders. teleportID is the SAME id stored in tickPlayer.awaitingTeleport, so
+// the Plan-05-01 gate matches the client's Confirm Teleportation echo (PLAY-02).
+type bootstrapParams struct {
+	name       string
+	id         uuid.UUID
+	teleportID int
+	gameMode   int32
+}
+
+// sendPlayBootstrap enqueues the full early-Play bootstrap on the connection's outbound
+// queue IN ORDER: Login -> GameEvent -> PlayerPosition (the original three) followed by
+// the Plan-05-02 tail PlayerAbilities -> SetHeldSlot -> PlayerInfoUpdate(self) ->
+// SetDefaultSpawnPosition. It is called by AcceptPlayer BEFORE loop.register so the single
+// writeLoop drains them (FIFO) ahead of any chunk packet the tick later enqueues for this
+// player — the load-bearing invariant that Login (ClientLevel creation) precedes
+// SetChunkCacheCenter/LevelChunkWithLight, now extended so the entire tail also precedes
+// the chunk stream.
 //
-// The player is placed at chunk (0,0), block center (8.5, surfaceY+2, 8.5), so it
-// stands two blocks above the superflat stone surface rather than inside it or in the
-// void. viewDist is the server-clamped value the streamer uses, reported as the Login
-// chunkRadius so the client's view window matches what the tick streams.
-func sendPlayBootstrap(c *Client, viewDist int, center level.ChunkPos, surfaceY int) {
+// The player is placed at chunk (0,0), block center (8.5, surfaceY+2, 8.5), so it stands
+// two blocks above the superflat stone surface rather than inside it or in the void.
+// viewDist is the server-clamped value the streamer uses, reported as the Login chunkRadius
+// so the client's view window matches what the tick streams. The PlayerPosition carries the
+// issued incrementing teleport id (params.teleportID), not the const placeholder.
+//
+// Sending here mutates NO tick-owned state — it only moves bytes through the connection's
+// own bounded queue (exactly like the original three packets) — so the single-owner tick
+// discipline (TICK-05) is intact.
+func sendPlayBootstrap(c *Client, viewDist int, center level.ChunkPos, surfaceY int, params bootstrapParams) {
 	// Block center of the player's spawn column: the middle of chunk (center) at two
 	// blocks above the solid surface. center is {0,0} for Phase 4, so this is (8.5,
 	// surfaceY+2, 8.5).
@@ -464,7 +481,17 @@ func sendPlayBootstrap(c *Client, viewDist int, center level.ChunkPos, surfaceY 
 	spawnZ := float64(int(center[1])<<4) + 8.5
 	spawnY := float64(surfaceY + 2)
 
+	// The original three (Login -> GameEvent -> PlayerPosition).
 	c.Send(writeLoginPacket(viewDist))
 	c.Send(writeGameEventPacket(gameEventLevelChunksLoadStart, 0))
-	c.Send(writePlayerPositionPacket(initialTeleportID, spawnX, spawnY, spawnZ, 0, 0))
+	c.Send(writePlayerPositionPacket(params.teleportID, spawnX, spawnY, spawnZ, 0, 0))
+
+	// The Plan-05-02 early-Play tail, appended after PlayerPosition and still before
+	// register. The block spawn position fed to SetDefaultSpawnPosition is the integer
+	// block under the player's spawn column.
+	spawnPos := pk.Position{X: int(center[0]) << 4, Y: surfaceY, Z: int(center[1]) << 4}
+	c.Send(writePlayerAbilities(false, false, false, false, defaultFlyingSpeed, defaultWalkingSpeed))
+	c.Send(writeSetHeldSlot(defaultHeldSlot))
+	c.Send(writePlayerInfoUpdateAdd(params.id, params.name, params.gameMode))
+	c.Send(writeSetDefaultSpawnPosition(overworldDimensionName, spawnPos, 0, 0))
 }

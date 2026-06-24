@@ -428,6 +428,132 @@ func TestSetDefaultSpawnPositionWire(t *testing.T) {
 	}
 }
 
+// TestBootstrapTailOrdering asserts that sendPlayBootstrap enqueues the FULL early-Play
+// sequence in order over a real piped connection: Login -> GameEvent -> PlayerPosition ->
+// PlayerAbilities -> SetHeldSlot -> PlayerInfoUpdate -> SetDefaultSpawnPosition, all before
+// any chunk packet. The tail must land AFTER PlayerPosition and the whole set must precede
+// the chunk stream (the FIFO-before-register invariant the appended tail must not break).
+func TestBootstrapTailOrdering(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	loop := NewTickLoop(SystemClock())
+	keep := NewKeepAlive()
+
+	gen := world.NewSuperflat(24, -64, -48)
+	worker := world.NewWorker(gen, "", 256)
+	mgr := world.NewChunkManager()
+	loop.SetWorld(mgr, worker)
+
+	inbound := make(chan Intent, 64)
+	go loop.Run(ctx, inbound)
+	go keep.Run(ctx)
+	go worker.Run(ctx)
+
+	g := NewGameTick(inbound, loop, keep, -48)
+
+	server, client := newPipe(t)
+
+	accepted := make(chan struct{})
+	go func() {
+		defer close(accepted)
+		g.AcceptPlayer("joiner", uuid.New(), nil, nil, ProtocolVersion, server)
+	}()
+
+	type seen struct {
+		id  packetid.ClientboundPacketID
+		err error
+	}
+	got := make(chan seen, 1)
+	go func() {
+		for {
+			var p pk.Packet
+			if err := client.ReadPacket(&p); err != nil {
+				got <- seen{err: err}
+				return
+			}
+			got <- seen{id: packetid.ClientboundPacketID(p.ID)}
+		}
+	}()
+
+	want := []packetid.ClientboundPacketID{
+		packetid.ClientboundLogin,
+		packetid.ClientboundGameEvent,
+		packetid.ClientboundPlayerPosition,
+		packetid.ClientboundPlayerAbilities,
+		packetid.ClientboundSetHeldSlot,
+		packetid.ClientboundPlayerInfoUpdate,
+		packetid.ClientboundSetDefaultSpawnPosition,
+	}
+	for i := 0; i < len(want); i++ {
+		select {
+		case s := <-got:
+			if s.err != nil {
+				t.Fatalf("client read failed at bootstrap packet %d: %v", i, s.err)
+			}
+			// No chunk packet may appear before the full bootstrap tail.
+			if s.id == packetid.ClientboundSetChunkCacheCenter ||
+				s.id == packetid.ClientboundLevelChunkWithLight ||
+				s.id == packetid.ClientboundChunkBatchStart {
+				t.Fatalf("chunk packet id=%d arrived before bootstrap packet %d (%v) — tail ordering broken", s.id, i, want[i])
+			}
+			if s.id != want[i] {
+				t.Fatalf("bootstrap packet %d = %d, want %d (%v)", i, s.id, want[i], want[i])
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for bootstrap packet %d (%v)", i, want[i])
+		}
+	}
+}
+
+// TestBootstrapTeleportID covers the PLAY-02 producer side: AcceptPlayer issues an
+// INCREMENTING per-player teleport id (not the const 1), threads it into the bootstrap
+// PlayerPosition AND into tickPlayer.awaitingTeleport, so the Plan-05-01 dispatch gate
+// confirms only on a matching echo. Two successive joins must issue DISTINCT ids.
+func TestBootstrapTeleportID(t *testing.T) {
+	g := NewGameTick(nil, NewTickLoop(newFakeClock()), nil, -48)
+
+	id1 := g.nextTeleportID()
+	id2 := g.nextTeleportID()
+	if id1 == id2 {
+		t.Fatalf("successive teleport ids must differ: id1=%d id2=%d", id1, id2)
+	}
+	if id1 == 0 || id2 == 0 {
+		t.Fatalf("teleport ids must be non-zero (incrementing producer): id1=%d id2=%d", id1, id2)
+	}
+
+	// The id issued into the bootstrap PlayerPosition must equal the id stored in
+	// awaitingTeleport, and the Plan-05-01 dispatch gate must confirm only on that exact id.
+	loop := NewTickLoop(newFakeClock())
+	tpID := g.nextTeleportID()
+	p := &tickPlayer{client: &Client{}, awaitingTeleport: tpID}
+	loop.players = append(loop.players, p)
+	loop.clientIndex = map[*Client]*tickPlayer{p.client: p}
+
+	// The PlayerPosition the bootstrap sends carries tpID; assert that is the value the
+	// gate matches (decode the id back out of the produced packet).
+	pos := writePlayerPositionPacket(tpID, 8.5, -46, 8.5, 0, 0)
+	var sentID pk.VarInt
+	if err := pos.Scan(&sentID); err != nil {
+		t.Fatalf("PlayerPosition scan failed: %v", err)
+	}
+	if int(sentID) != tpID {
+		t.Fatalf("PlayerPosition teleport id = %d, want %d (must equal awaitingTeleport)", sentID, tpID)
+	}
+
+	// A wrong echo does not confirm; the exact issued id does (drives the 05-01 gate).
+	wrong := pk.Marshal(int32(packetid.ServerboundAcceptTeleportation), pk.VarInt(tpID+999))
+	loop.dispatch(p.client, wrong)
+	if p.confirmedTeleport {
+		t.Fatal("a non-matching echo must not confirm the gate")
+	}
+	match := pk.Marshal(int32(packetid.ServerboundAcceptTeleportation), pk.VarInt(int32(tpID)))
+	loop.dispatch(p.client, match)
+	if !p.confirmedTeleport {
+		t.Fatal("the issued incrementing teleport id must confirm the gate (PLAY-02)")
+	}
+}
+
 // decodedLen re-decodes fields from data and returns how many bytes were consumed, so
 // a test can assert the packet body has no trailing/short bytes beyond the known field
 // set. It re-reads into the provided decoders (their values are overwritten).
