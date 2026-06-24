@@ -114,7 +114,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. Health, damage, and respawn work — the player death and respawn flow completes
   5. Entity and player state persists to the Anvil format and reloads correctly
 **Plans**: 7 plans
-- [ ] 06-01-PLAN.md — Entity store + monotonic entity-ID allocator (replaces hard-coded joinEntityID=1) + per-section grid bucketing (ENT-01 foundation)
+- [x] 06-01-PLAN.md — Entity store + monotonic entity-ID allocator (replaces hard-coded joinEntityID=1) + per-section grid bucketing (ENT-01 foundation)
 - [ ] 06-02-PLAN.md — Synchronous entityTracker behind tracker.Tick() + jar-derived AddEntity/SetEntityData/Move/Remove encoders + tickEntities (ENT-01)
 - [ ] 06-03-PLAN.md — Per-axis swept-AABB physics: gravity + collision (entity lands/blocked, no tunnel) + authoritative player anti-clip-through (ENT-02)
 - [ ] 06-04-PLAN.md — Block place/break: new world.ChunkManager.SetBlock + PlayerAction/UseItemOn handlers + BlockChangedAck/BlockUpdate reconciliation (ENT-03)

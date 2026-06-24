@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 05-02-PLAN.md (early-Play tail + incrementing teleport-id producer; PLAY-01/05/02; Docker -race clean)
-last_updated: "2026-06-24T04:04:52.498Z"
+status: verifying
+stopped_at: "Completed 05-03-PLAN.md — capture-diff sealed the 3 MEDIUM-confidence Play encoders byte-identical to vanilla 26.2 + fixed a net/queue close-vs-send race; PLAY-06 first-playable walk-around APPROVED ("si, funciona :)"). **Phase 5 COMPLETE / FIRST PLAYABLE.**"
+last_updated: "2026-06-24T05:01:19.196Z"
 last_activity: 2026-06-24
 progress:
   total_phases: 9
   completed_phases: 5
-  total_plans: 17
-  completed_plans: 17
-  percent: 100
+  total_plans: 24
+  completed_plans: 18
+  percent: 75
 ---
 
 # Project State
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-06-23)
 
 Phase: 5 of 9 (Player Session in World / First Playable) — ✅ COMPLETE
 Plan: 3 of 3 complete (05-01, 05-02, 05-03 all done)
-Status: Phase complete — ready to plan Phase 6
+Status: Phase complete — ready for verification
 Last activity: 2026-06-24
 
 ### 🎮 FIRST-PLAYABLE MILESTONE (Phase 5 — PLAY-01..06)
@@ -74,7 +74,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [██████████] 100%
+Progress: [████████░░] 75%
 
 ## Performance Metrics
 
@@ -112,6 +112,7 @@ Progress: [██████████] 100%
 | Phase 04 P04 | 70min | 2 tasks | 5 files |
 | Phase 05 P01 | 18min | 3 tasks | 7 files |
 | Phase Phase 05 PP02 | 20min | 2 tasks tasks | 3 files files |
+| Phase 06 P01 | 7min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -162,6 +163,7 @@ Recent decisions affecting current work:
 - [Phase 05]: 05-03: SetTime NOT needed for v1 — vanilla sends ClientboundSetTime (31-byte WorldClock+ClockNetworkState) but the real-client walk-around confirmed no kick/hang without it; the layout is documented in 05-CAPTURE-DIFF.md for a later day/night phase.
 - [Phase 05]: 05-03: fixed a real net/queue.ChannelQueue close-vs-send DATA RACE (latent send-on-closed panic) surfaced under the capture-diff load — converted the bare `chan T` to a mutex+closed-flag struct (Close serialized vs Push, Pull lock-free); Client.Send's recover() masked the panic but not the race. -race clean at -count=10 over the join seam.
 - [Phase 05]: PHASE 5 COMPLETE / FIRST PLAYABLE — a real vanilla 26.2 client (PrismLauncher) connects, logs in, and WALKS AROUND a following ticking world (ring follows, no void, tab list shows the player, no kick); PLAY-01..06 all proven. The project is playable end-to-end ("si, funciona :)").
+- [Phase ?]: [Phase 06]: 06-01: ENT-01 entity foundation — EntityIDAllocator (atomic.Int32 pre-increment, first id 1, claimed off-tick like teleportSeq) REPLACES the hard-coded joinEntityID=1 so players AND entities share one collision-free id space (Pitfall 7 / T-6-07, race-clean T-6-08); tick-owned entityStore (by-id map + per-chunk-column grid buckets, NOT a quadtree) exposes near(x,z,range) broad-phase + move() re-bucketing; Entity instance has snapshot-friendly plain-value hot fields + AABB() from data/entity dims (reused, not rebuilt). Docker -race over ./server/... clean; zero new deps.
 
 ### Pending Todos
 
@@ -188,7 +190,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-24T04:30:00.000Z
+Last session: 2026-06-24T04:56:22.074Z
 Stopped at: Completed 05-03-PLAN.md — capture-diff sealed the 3 MEDIUM-confidence Play encoders byte-identical to vanilla 26.2 + fixed a net/queue close-vs-send race; PLAY-06 first-playable walk-around APPROVED ("si, funciona :)"). **Phase 5 COMPLETE / FIRST PLAYABLE.**
 Resume file: None
 Next: plan Phase 6 (entities / inventory / persistence) — the first-playable Player Session seam (movement, tick-owned position, the following ring, the tab list) is in place to build on. Deferred: KeepAlive double-leave hardening (Phase 3, surfaces when real timeout-driven disconnects land). The pulled-forward bootstrap deferred-row is now CLOSED.

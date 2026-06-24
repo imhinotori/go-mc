@@ -52,7 +52,7 @@ Requirements for the initial release. The "user" is an unmodified vanilla 26.2 (
 
 ### Entities, Physics & Interaction
 
-- [ ] **ENT-01**: Entities spawn, carry metadata, and move; a synchronous entity tracker sends spawn/move/despawn to nearby players behind an async-shaped `tracker.Tick()` interface
+- [x] **ENT-01**: Entities spawn, carry metadata, and move; a synchronous entity tracker sends spawn/move/despawn to nearby players behind an async-shaped `tracker.Tick()` interface
 - [ ] **ENT-02**: Gravity and AABB collision are simulated for entities and players
 - [ ] **ENT-03**: Players can place and break blocks with Block Update reconciliation
 - [ ] **ENT-04**: Inventory uses the component-based slot format (post-1.20.5, no NBT in slots)
@@ -143,7 +143,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | PLAY-04 | Phase 5 | Complete |
 | PLAY-05 | Phase 5 | Complete |
 | PLAY-06 | Phase 5 | Complete |
-| ENT-01 | Phase 6 | Pending |
+| ENT-01 | Phase 6 | Complete |
 | ENT-02 | Phase 6 | Pending |
 | ENT-03 | Phase 6 | Pending |
 | ENT-04 | Phase 6 | Pending |
