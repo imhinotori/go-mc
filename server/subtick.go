@@ -121,7 +121,11 @@ func (t *TickLoop) applyInput(p *tickPlayer, in SubtickInput) {
 		if err := in.Packet.Scan(&x, &y, &z, &flags); err != nil {
 			return // malformed/short: no mutation (T-5-02)
 		}
-		p.x, p.y, p.z = float64(x), float64(y), float64(z)
+		// Authoritative anti-clip-through (ENT-02 / T-6-06): collide the client-CLAIMED
+		// position per-axis against solid world blocks BEFORE accepting it. The server
+		// corrects a clip-through claim rather than trusting the raw position. In an empty
+		// world (no solid blocks in the path) the claim is returned verbatim.
+		p.x, p.y, p.z = t.collidePlayer(p, float64(x), float64(y), float64(z))
 		p.onGround = flags&movementFlagOnGround != 0
 		t.maybeRecenter(p)
 
@@ -133,7 +137,10 @@ func (t *TickLoop) applyInput(p *tickPlayer, in SubtickInput) {
 		if err := in.Packet.Scan(&x, &y, &z, &yaw, &pitch, &flags); err != nil {
 			return
 		}
-		p.x, p.y, p.z = float64(x), float64(y), float64(z)
+		// Authoritative anti-clip-through (ENT-02 / T-6-06): collide the claimed position
+		// per-axis before accepting it (same as the Pos variant). Look angles are accepted
+		// as sent — only the POSITION is collided.
+		p.x, p.y, p.z = t.collidePlayer(p, float64(x), float64(y), float64(z))
 		p.yaw, p.pitch = float32(yaw), float32(pitch)
 		p.onGround = flags&movementFlagOnGround != 0
 		t.maybeRecenter(p)

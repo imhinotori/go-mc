@@ -115,8 +115,51 @@ func (t *TickLoop) tickEntities() {
 // tickAI advances mob AI / pathfinding decisions. Phase 7 fills it.
 func (t *TickLoop) tickAI() { t.trace("tickAI") }
 
-// tickPhysics resolves movement/collision. Phase 6 fills it.
-func (t *TickLoop) tickPhysics() { t.trace("tickPhysics") }
+// tickPhysics simulates gravity + per-axis swept-AABB collision for every entity in the
+// tick-owned store (ENT-02). It runs on the tick goroutine in its FIXED pipeline slot
+// (after tickEntities/tickAI, before applyAsyncResults/tracker.Tick) — do NOT reorder it,
+// so the tracker that follows emits this tick's post-physics positions.
+//
+// Per entity, per tick: apply downward gravity then air drag to the vertical velocity,
+// apply horizontal friction, then integrate the velocity into the position via moveEntity —
+// which resolves each axis INDEPENDENTLY (clip Δy, Δx, Δz) against solid world blocks so the
+// entity LANDS on the floor (onGround) and is BLOCKED by walls without tunneling, and routes
+// the position change through entities.move so the per-section bucket stays consistent for
+// the tracker's near() (TICK-05). With no world wired (Phase-3-style tests) blockSolidAt
+// treats everything as air, so entities simply free-fall and never collide — harmless.
+//
+// Iterating a snapshot of the store's by-id values is safe: moveEntity re-buckets via
+// entities.move, which only mutates the per-column bucket slices, never the byID map we are
+// ranging — but we copy to a local slice first so the iteration order is stable and immune
+// to any future in-loop add/remove.
+func (t *TickLoop) tickPhysics() {
+	t.trace("tickPhysics")
+	if t.entities == nil {
+		return // defensive: store is non-nil from NewTickLoop, but never panic if absent
+	}
+
+	// Snapshot the live entities so the loop is stable even if a move re-buckets mid-range.
+	snapshot := make([]*Entity, 0, len(t.entities.byID))
+	for _, e := range t.entities.byID {
+		snapshot = append(snapshot, e)
+	}
+
+	for _, e := range snapshot {
+		// Gravity: accelerate downward, then air drag so vertical speed converges to a
+		// terminal velocity (06-RESEARCH A1 — tunable, wire-irrelevant constants).
+		e.vy -= gravityPerTick
+		e.vy *= airDrag
+
+		// Horizontal friction: a moving entity slows instead of sliding forever.
+		e.vx *= horizontalFriction
+		e.vz *= horizontalFriction
+
+		// Integrate via the per-axis swept resolver (the anti-tunneling discipline). This
+		// also re-buckets through entities.move and updates onGround / zeroes blocked
+		// velocity components.
+		t.moveEntity(e, e.vx, e.vy, e.vz)
+	}
+}
 
 // flushOutbound enqueues this tick's clientbound chunk stream per player (WORLD-05).
 // For each player it first sends the chunk-cache framing once per center
