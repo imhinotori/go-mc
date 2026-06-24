@@ -152,16 +152,23 @@ func (t *TickLoop) tickDebug() {
 	// throwaway sinusoidal pacing (sinApprox/cosApprox) that used to move it is RETIRED (see
 	// note below). The SULFUR_DEBUG spawn trigger remains only to GUARANTEE a visible mob near
 	// spawn for the 07-06 interactive check — the behavior it shows is vanilla AI, not a sine.
-	if !d.pigSpawned && len(t.players) > 0 {
-		id := t.idAlloc.AllocID()
-		px := 8.5            // origin column center X
-		pz := 4.5            // a few blocks toward -Z from the player's 8.5 spawn Z
-		py := float64(d.spawnSurfaceY + 1)
-		pig := NewEntity(id, entity.Pig, px, py, pz)
-		pig.ai = newPigAI() // REAL ported AI: tickAI's serverAiStep wanders + navigates it
-		t.entities.add(pig)
-		d.pigID = id
-		d.pigSpawned = true
+	// Spawn ONLY once the pig's column (0,0) is actually LOADED — the chunk is generated
+	// off-tick (async worker), so spawning the instant a player joins can place the pig before
+	// its floor exists: the navigation snapshot would read all-air (no path → the pig stands
+	// still) and gravity would drop it through the un-generated floor. Gating on the loaded
+	// column guarantees solid ground under the pig and a non-degenerate A* snapshot.
+	if !d.pigSpawned && len(t.players) > 0 && t.world != nil {
+		if _, loaded := t.world.Get(level.ChunkPos{0, 0}); loaded {
+			id := t.idAlloc.AllocID()
+			px := 8.5 // origin column center X
+			pz := 4.5 // a few blocks toward -Z from the player's 8.5 spawn Z
+			py := float64(d.spawnSurfaceY + 1)
+			pig := NewEntity(id, entity.Pig, px, py, pz)
+			pig.ai = newPigAI() // REAL ported AI: tickAI's serverAiStep wanders + navigates it
+			t.entities.add(pig)
+			d.pigID = id
+			d.pigSpawned = true
+		}
 	}
 
 	// (1b) Give every player a stack of stone in the first hotbar slot once, so the operator

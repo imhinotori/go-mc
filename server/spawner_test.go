@@ -257,7 +257,11 @@ func TestTickPhaseOrderUnchanged(t *testing.T) {
 // comes from the AI path, NOT a sinusoidal mover — i.e. with NO floor (so the AI cannot move
 // it) and no sine code, the pig does not drift along X by a cosmetic oscillation.
 func TestDebugPigUsesRealAI(t *testing.T) {
-	loop := NewTickLoop(newFakeClock())
+	loop, mgr := newPhysicsLoop()
+	// The debug pig now spawns only once its column (0,0) is LOADED (the runtime async-chunk
+	// guard). Load an EMPTY (all-air) column so the spawn fires but the AI still cannot move the
+	// pig (no floor → no path) — exactly the no-sine assertion this test makes.
+	putChunk(mgr, level.ChunkPos{0, 0})
 	loop.SetDebug(64)          // arm the off-by-default debug trigger
 	loop.debug.damageEvery = 0 // disable the damage bite (it needs a real Client.Send)
 	// debugGaveItems=true skips the give-stone branch (which needs a real Client.Send); this
