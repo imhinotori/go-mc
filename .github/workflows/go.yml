@@ -1,39 +1,121 @@
 name: Go
-on: [ push, pull_request ]
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
 jobs:
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Build all packages
+        run: go build ./...
+
+      - name: Build static binary (CGO disabled)
+        env:
+          CGO_ENABLED: 0
+        run: go build ./...
+
+      - name: Build server binary
+        env:
+          CGO_ENABLED: 0
+        run: go build -o sulfur ./cmd/sulfur
+
+      - name: Upload server binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: sulfur-linux-amd64
+          path: sulfur
+          if-no-files-found: error
 
   test:
     name: Test
     runs-on: ubuntu-latest
-
-    strategy:
-      fail-fast: false
-      matrix:
-        # match the minimum supported and the latest Go versions
-        go_version: [ '1.22', '^1.22' ]
-
     steps:
+      - name: Check out code
+        uses: actions/checkout@v7
 
-      - name: Check out code into the Go module directory
-        uses: actions/checkout@v4
-
-      - name: Setup Go
-        uses: actions/setup-go@v4
+      - name: Set up Go
+        uses: actions/setup-go@v6
         with:
-          go-version: ${{ matrix.go_version }}
-          check-latest: true
+          go-version-file: go.mod
 
       - name: Test
         run: go test ./...
 
-      - run: mkdir -p ./bin/tools
+      - name: Test with race detector
+        # ubuntu-latest ships a C compiler, so -race (which needs CGO) works
+        # natively here even though the local Windows host cannot run it.
+        env:
+          CGO_ENABLED: 1
+        run: go test -race ./...
 
-      - name: Build tools
-        run: go build -o ./bin/tools ./examples/...
+  vet:
+    name: Vet
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
 
-      - name: Upload tools
-        if: ${{ startsWith(matrix.go_version, '^') }}
-        uses: actions/upload-artifact@v3
+      - name: Set up Go
+        uses: actions/setup-go@v6
         with:
-          name: tools
-          path: ./bin/tools
+          go-version-file: go.mod
+
+      - name: Vet
+        run: go vet ./...
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+
+  tools:
+    name: Tools module (codegen)
+    runs-on: ubuntu-latest
+    # The tools/ directory is a separate Go module used for build-time codegen.
+    # It needs Java/Docker to run the jar extraction, which CI does not do here:
+    # we only build + vet the Go side to keep it compiling.
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: tools/go.mod
+
+      - name: Build tools module
+        working-directory: tools
+        run: go build ./...
+
+      - name: Vet tools module
+        working-directory: tools
+        run: go vet ./...
