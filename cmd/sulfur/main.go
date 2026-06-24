@@ -23,6 +23,7 @@ import (
 
 	"github.com/imhinotori/sulfur/chat"
 	"github.com/imhinotori/sulfur/server"
+	"github.com/imhinotori/sulfur/world"
 )
 
 const (
@@ -40,6 +41,20 @@ const (
 	// rather than growing server memory without limit. 1024 is ample headroom for the
 	// drain cadence (the tick wakes every 5ms) while staying a trivial fixed buffer.
 	inboundCap = 1024
+
+	// Overworld superflat shape (Plan 04-03 / WORLD-04 stub). secs = height/16 (384/16
+	// = 24), minY = -64, surfaceY = the top solid (stone) block world-Y. A surface at
+	// y=-48 gives a 16-block-thick lit floor above the bedrock layer — a stable square a
+	// client can stand on without falling through void (the real terrain is Phase 9).
+	overworldSecs     = 24
+	overworldMinY     = -64
+	overworldSurfaceY = -48
+
+	// workerBuf sizes the off-tick worker's bounded request + results channels. It is
+	// comfortably above the small clamped view ring ((2*serverViewDistance+1)^2 columns)
+	// so a single player's first-tick request burst is absorbed without dropping; a
+	// flood beyond it backpressures (Request drops) rather than growing memory.
+	workerBuf = 256
 )
 
 // pingHandler composes the version/MOTD reporting of PingInfo (Protocol fixed to 776,
@@ -93,11 +108,24 @@ func main() {
 	tick := server.NewTickLoop(server.SystemClock())
 	keep := server.NewKeepAlive()
 
-	// Start the TWO long-lived server goroutines: exactly one tick goroutine (the sole
-	// owner/mutator of game state, consuming inbound) and one independent keep-alive
-	// goroutine (its own 15s/30s timers, never gated on tick cadence — TICK-04).
+	// Build the off-tick world subsystem (Plan 04-03): a deterministic superflat
+	// generator, the off-tick load/generate worker (regionDir "" => always generate for
+	// v1), and the tick-owned chunk manager. SetWorld wires the worker's immutable
+	// results into the tick's applyAsyncResults rejoin (WORLD-01) and must run BEFORE
+	// tick.Run so asyncIn is non-nil when the loop starts.
+	gen := world.NewSuperflat(overworldSecs, overworldMinY, overworldSurfaceY)
+	worker := world.NewWorker(gen, "", workerBuf)
+	mgr := world.NewChunkManager()
+	tick.SetWorld(mgr, worker)
+
+	// Start the long-lived server goroutines: exactly one tick goroutine (the sole
+	// owner/mutator of game state, consuming inbound), one independent keep-alive
+	// goroutine (its own 15s/30s timers, never gated on tick cadence — TICK-04), and the
+	// off-tick chunk worker (computes immutable ChunkResults; the tick is the sole
+	// mutator of the manager — TICK-05 / T-4-05).
 	go tick.Run(ctx, inbound)
 	go keep.Run(ctx)
+	go worker.Run(ctx)
 
 	// The real GamePlay bridges an accepted connection to the running tick + keep-alive.
 	srv := newServer(server.NewGameTick(inbound, tick, keep))

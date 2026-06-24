@@ -3,6 +3,7 @@ package server
 import (
 	"github.com/imhinotori/sulfur/chat"
 	"github.com/imhinotori/sulfur/data/packetid"
+	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/net"
 	pk "github.com/imhinotori/sulfur/net/packet"
 	"github.com/imhinotori/sulfur/yggdrasil/user"
@@ -17,6 +18,12 @@ import (
 // for the empty Phase-3 world (chunks/entities, which inflate the burst, arrive in
 // Phases 4-6) while staying a trivial fixed allocation.
 const outboundCap = 256
+
+// overworldSections is the overworld dimension's section count (height 384 / 16 = 24).
+// It seeds each player's secs for chunk generation/empty sizing (Plan 04-03). Derived
+// here rather than hard-coded deeper in the pipeline (04-RESEARCH anti-pattern); Phase 5
+// will source it from the joined dimension type when multi-dimension support lands.
+const overworldSections = 24
 
 // gameTick is the real, tick-driven GamePlay that replaces the Phase-2 stubGamePlay.
 // It owns no game state itself — it is the thin bridge between the network-accept
@@ -106,7 +113,21 @@ func (g *gameTick) AcceptPlayer(
 	// — AcceptPlayer never mutates that collection itself (TICK-05 / T-3-03). The
 	// keep/keepalive fields let the tick's dispatch forward a returning keep-alive to
 	// ClientTick for THIS player.
-	player := &tickPlayer{client: c, keep: g.keep, keepalive: ka}
+	// The chunk-streaming fields (Plan 04-03, WORLD-05) default sensibly for Phase 4:
+	// the center is {0,0} (a chunk square exists around origin so the player stands on
+	// solid ground), the view distance is the SERVER clamp (bounds the needed ring
+	// against an untrusted client — threat T-4-01), the sent-set starts empty, and secs
+	// is the overworld section count. Phase 5 (PLAY-01/03) overwrites center from the
+	// real spawn. All fields are tick-owned; the tick goroutine performs the insert.
+	player := &tickPlayer{
+		client:     c,
+		keep:       g.keep,
+		keepalive:  ka,
+		center:     level.ChunkPos{0, 0},
+		viewDist:   clampViewDistance(serverViewDistance),
+		sentChunks: make(map[level.ChunkPos]bool),
+		secs:       overworldSections,
+	}
 	g.loop.register <- player
 
 	// Block until the connection closes (the player is playing). The conn is torn down

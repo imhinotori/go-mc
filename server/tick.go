@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/imhinotori/sulfur/data/packetid"
+	"github.com/imhinotori/sulfur/level"
 	pk "github.com/imhinotori/sulfur/net/packet"
+	"github.com/imhinotori/sulfur/world"
 )
 
 // msptRingSize is the number of recent tick durations kept for the rolling
@@ -39,10 +41,33 @@ type TickStats struct {
 	GameTime int64   // current game-time counter (age of the world in ticks)
 }
 
-// asyncResult is the immutable message an async worker (Phase 8) returns to the
-// tick goroutine, applied on-thread inside applyAsyncResults. The seam exists from
-// day one so Phase 8 attaches concrete result types without reordering the pipeline.
+// asyncResult is the immutable message an async worker returns to the tick goroutine,
+// applied on-thread inside applyAsyncResults. The seam exists from day one (Phase 3)
+// so concrete result types attach without reordering the pipeline; Plan 04-03 is the
+// first to feed it (chunkReady).
 type asyncResult interface{ applyTo(*TickLoop) }
+
+// chunkReady is the off-tick chunk worker's rejoin message (WORLD-01). It wraps an
+// IMMUTABLE world.ChunkResult: the worker computed the chunk off-thread and now hands
+// sole ownership to the tick. applyTo runs on the OWNER goroutine inside
+// applyAsyncResults — the single insert that crosses the off-tick boundary — keeping
+// the rejoin -race clean by construction (threat T-4-05).
+type chunkReady struct{ res world.ChunkResult }
+
+// applyTo inserts the worker-produced chunk into the tick-owned ChunkManager. On a
+// generation/region error it reverts the holder to Empty so tickChunks can re-request
+// the column on a later tick (threat W1 retry) — it NEVER inserts a nil chunk. This is
+// the ONLY mutation that crosses the off-tick boundary, and it runs on the owner.
+func (r chunkReady) applyTo(t *TickLoop) {
+	if t.world == nil {
+		return // no world wired (defensive; SetWorld always sets it before feeding asyncIn)
+	}
+	if r.res.Err != nil {
+		t.world.MarkEmpty(r.res.Pos) // un-strand the Loading holder so the tick retries
+		return
+	}
+	t.world.Insert(r.res.Pos, r.res.Chunk)
+}
 
 // tracker is the entity/chunk tracking executor. Today it is a synchronous stub
 // (noopTracker); Phase 8 swaps the executor behind this interface without changing
@@ -82,9 +107,24 @@ type TickLoop struct {
 	// critical path and -race clean.
 	stats atomic.Pointer[TickStats]
 
-	// asyncIn is the Phase-8 async-result rejoin channel. It is nil in Phase 3, so
-	// applyAsyncResults is a genuine no-op — the seam just EXISTS in the right slot.
+	// asyncIn is the async-result rejoin channel. It is nil until SetWorld wires it
+	// (Phase 3: nil => applyAsyncResults is a genuine no-op — the seam just EXISTS in
+	// the right slot). Plan 04-03 sets it to asyncBridge, fed by the world worker.
 	asyncIn <-chan asyncResult
+
+	// world is the tick-owned chunk manager and worker is the off-tick load/generate
+	// worker (Plan 04-03, WORLD-01/05). Both are nil until SetWorld; the streaming
+	// phases (tickChunks/flushOutbound) treat a nil world as a no-op so Phase-3-style
+	// tests still run. The manager is a PLAIN map mutated ONLY by the tick goroutine —
+	// the worker emits immutable ChunkResults and never touches it (TICK-05 / T-4-05).
+	world  *world.ChunkManager
+	worker *world.Worker
+
+	// asyncBridge is the internal channel SetWorld assigns to asyncIn. A small adapter
+	// goroutine ranges the worker's Results() and forwards each as a chunkReady onto
+	// this channel; applyAsyncResults drains it on the owner. The adapter touches NO
+	// tick state — it only re-wraps the immutable ChunkResult — so it adds no race.
+	asyncBridge chan asyncResult
 
 	// tracker is the (synchronous stub) tracking executor; Phase 8 swaps it.
 	tracker tracker
@@ -152,6 +192,32 @@ type tickPlayer struct {
 	// keep-alive (dispatch guards the nil).
 	keep      *KeepAlive
 	keepalive KeepAliveClient
+
+	// --- Chunk streaming state (Plan 04-03, WORLD-05). ALL tick-owned: mutated only by
+	// the tick goroutine in tickChunks/flushOutbound, so the per-player sent-set is
+	// -race clean by the same single-owner discipline as the players slice. ---
+
+	// center is the player's current chunk-column center. Phase 4 defaults it to {0,0}
+	// (a chunk square exists around origin); Phase 5 (PLAY-01/03) sets the real spawn
+	// center and updates it on movement, re-issuing SetChunkCacheCenter.
+	center level.ChunkPos
+
+	// viewDist is the SERVER-CLAMPED view distance in chunks (the DoS control, T-4-01).
+	// The needed-ring is (2*viewDist+1)^2 — bounded by the server, never by an untrusted
+	// client. Defaulted to serverViewDistance at registration.
+	viewDist int
+
+	// sentChunks is the per-player set of columns already streamed, so each chunk is
+	// sent to a player at most once. Lazily initialized; tick-owned.
+	sentChunks map[level.ChunkPos]bool
+
+	// centerSent records whether SetChunkCacheCenter (+ radius) has been sent for the
+	// current center this session, so the flush sends the cache framing once per center.
+	centerSent bool
+
+	// secs is the dimension's section count (overworld 24), derived at registration for
+	// chunk generation/empty sizing — never hard-coded deeper in the pipeline.
+	secs int
 }
 
 // NewTickLoop constructs a TickLoop over the given injectable clock with a
@@ -170,6 +236,35 @@ func NewTickLoop(clock Clock) *TickLoop {
 		unregister: make(chan *Client, registerBuffer),
 		// asyncIn stays nil (no-op seam); ring is zero-valued; gametime starts at 0.
 	}
+}
+
+// asyncBridgeBuffer bounds the internal worker-results -> asyncResult bridge channel.
+// It is generously above the per-tick chunk-result burst for the small clamped view
+// ring (the worker itself is bounded), so the adapter never parks; if it ever filled,
+// the worker's send would backpressure rather than grow memory.
+const asyncBridgeBuffer = 256
+
+// SetWorld wires the off-tick chunk subsystem into the tick (WORLD-01). It stores the
+// tick-owned manager and the worker, then starts a small adapter goroutine that ranges
+// the worker's immutable Results() and forwards each as a chunkReady onto the internal
+// asyncBridge — which it assigns to asyncIn so applyAsyncResults (UNCHANGED Phase-3
+// seam) now drains chunk results on the owner goroutine. MUST be called before Run so
+// asyncIn is non-nil. The adapter touches NO tick state (only re-wraps the immutable
+// result), so it introduces no data race; the manager is mutated solely by the tick.
+func (t *TickLoop) SetWorld(mgr *world.ChunkManager, worker *world.Worker) {
+	t.world = mgr
+	t.worker = worker
+	bridge := make(chan asyncResult, asyncBridgeBuffer)
+	t.asyncBridge = bridge
+	t.asyncIn = bridge
+	go func() {
+		// Adapter: immutable world.ChunkResult -> chunkReady (asyncResult). Ranges until
+		// the worker's results channel closes (it stays open for the worker's lifetime);
+		// it never reads or writes tick-owned state.
+		for res := range worker.Results() {
+			bridge <- chunkReady{res: res}
+		}
+	}()
 }
 
 // Stats returns the latest published telemetry snapshot, readable off the tick
