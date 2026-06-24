@@ -443,14 +443,17 @@ func NewTickLoop(clock Clock) *TickLoop {
 		trackerPool: newAsyncPool(asyncSmallPoolSize),
 		spawnPool:   newAsyncPool(asyncSmallPoolSize),
 	}
-	// ENT-01: assign the REAL synchronous entityTracker behind the unchanged tracker.Tick()
-	// seam (replacing the Phase-3 noopTracker). The interface (tracker{ Tick() }) and the
-	// t.tracker.Tick() call site at tick_phases.go are UNCHANGED — Phase 8 (OPT-02) swaps the
-	// EXECUTOR off-tick behind this exact seam (applyAsyncResults), so the seam must not
-	// change shape here. The tracker holds a back-reference to the loop so Tick() can read the
-	// tick-owned store (loop.entities.near) and players, all on the tick goroutine. THIS LINE
-	// is the Phase-8 swap-point: replace &entityTracker{loop: t} with the async executor.
-	t.tracker = &entityTracker{loop: t}
+	// OPT-02 (08-04) SWAP-POINT — the single line that swaps the tracker EXECUTOR off-tick behind
+	// the UNCHANGED tracker.Tick() seam. ENT-01 filled this with the synchronous &entityTracker{};
+	// Phase 8 replaces it with &asyncTracker{}, whose Tick() builds a per-player snapshot ON the
+	// owner, submits the visibility-diff MATH to trackerPool (off-tick), and rejoins via
+	// trackerDiffReady on asyncIn2 — applyAsyncResults (the UNCHANGED seam) emits the packets +
+	// updates p.tracked owner-side. The interface (tracker{ Tick() }), the t.tracker.Tick() call
+	// site at tick_phases.go, and the pipeline order are ALL unchanged (TestTickPhaseOrder passes).
+	// The synchronous entityTracker stays in tracker.go as the golden reference the async tracker
+	// is diffed against (TestAsyncTrackerMatchesSync). The async executor holds a back-reference to
+	// the loop so Tick() can read the tick-owned store (loop.entities.near) + players on the owner.
+	t.tracker = &asyncTracker{loop: t}
 	return t
 }
 

@@ -71,6 +71,14 @@ func newTrackerPlayer(loop *TickLoop, entityID int32, x, z float64) *tickPlayer 
 	return p
 }
 
+// syncTrackerTick drives the SYNCHRONOUS golden entityTracker directly (not loop.tracker, which
+// is the OPT-02 asyncTracker after the swap). The Phase-6 tracker tests below assert the golden
+// diff LOGIC — newly-visible/moved/gone packet emission and the tracked-set bookkeeping — which
+// the synchronous entityTracker still implements unchanged. The async equivalence is covered
+// separately by TestAsyncTrackerMatchesSync, so these tests keep driving the golden reference
+// inline (a harness change, not an assertion change).
+func syncTrackerTick(loop *TickLoop) { (&entityTracker{loop: loop}).Tick() }
+
 // TestVisibilityDiff asserts the FIRST Tick spawns an in-range entity (AddEntity +
 // SetEntityData) and records it, and a SECOND Tick with the entity unmoved sends NO new
 // AddEntity (no duplicate spawn). The player does not track itself.
@@ -83,13 +91,13 @@ func TestVisibilityDiff(t *testing.T) {
 	loop.entities.add(e)
 
 	// First Tick: the entity is newly visible → AddEntity + SetEntityData, and tracked.
-	loop.tracker.Tick()
+	syncTrackerTick(loop)
 	if !p.tracked[e.id] {
 		t.Fatalf("after first Tick, entity %d must be in the player's tracked set", e.id)
 	}
 
 	// Second Tick (entity unmoved): no NEW AddEntity may be sent (no duplicate spawn).
-	loop.tracker.Tick()
+	syncTrackerTick(loop)
 
 	got := drainPackets(p.client)
 	if n := countID(got, packetid.ClientboundAddEntity); n != 1 {
@@ -117,7 +125,7 @@ func TestTrackerSelfNotTracked(t *testing.T) {
 	self := NewEntity(selfID, entity.SulfurCube, 8.5, 64, 8.5)
 	loop.entities.add(self)
 
-	loop.tracker.Tick()
+	syncTrackerTick(loop)
 	got := drainPackets(p.client)
 	if n := countID(got, packetid.ClientboundAddEntity); n != 0 {
 		t.Fatalf("player was spawned its own entity (%d AddEntity), want 0 — a player never tracks itself", n)
@@ -136,7 +144,7 @@ func TestTrackerMove(t *testing.T) {
 	e := NewEntity(loop.idAlloc.AllocID(), entity.SulfurCube, 9.5, 64, 9.5)
 	loop.entities.add(e)
 
-	loop.tracker.Tick()            // spawn
+	syncTrackerTick(loop)            // spawn
 	_ = drainPackets(p.client)     // discard the spawn packets
 	p.client = captureClient(64)   // fresh capture for the move tick
 	loop.clientIndex[p.client] = p // keep the index consistent (not strictly needed here)
@@ -144,7 +152,7 @@ func TestTrackerMove(t *testing.T) {
 	// Move the entity a few blocks (still in range) via the store's bucket-consistent move.
 	loop.entities.move(e, 14.5, 64, 14.5)
 
-	loop.tracker.Tick()
+	syncTrackerTick(loop)
 	got := drainPackets(p.client)
 	if n := countID(got, packetid.ClientboundAddEntity); n != 0 {
 		t.Fatalf("a moved-but-still-tracked entity sent %d AddEntity, want 0 (must not re-spawn)", n)
@@ -167,7 +175,7 @@ func TestTrackerRemove(t *testing.T) {
 	e := NewEntity(loop.idAlloc.AllocID(), entity.SulfurCube, 9.5, 64, 9.5)
 	loop.entities.add(e)
 
-	loop.tracker.Tick()          // spawn
+	syncTrackerTick(loop)          // spawn
 	_ = drainPackets(p.client)   // discard spawn
 	p.client = captureClient(64) // fresh capture
 	loop.clientIndex[p.client] = p
@@ -175,7 +183,7 @@ func TestTrackerRemove(t *testing.T) {
 	// Move the entity FAR away (out of trackRange ≈ 6 columns ≈ 96 blocks): column 100.
 	loop.entities.move(e, 1600, 64, 1600)
 
-	loop.tracker.Tick()
+	syncTrackerTick(loop)
 	got := drainPackets(p.client)
 	if n := countID(got, packetid.ClientboundRemoveEntities); n != 1 {
 		t.Fatalf("an out-of-range entity sent %d RemoveEntities, want exactly 1 (batched)", n)
@@ -188,7 +196,7 @@ func TestTrackerRemove(t *testing.T) {
 	p.client = captureClient(64)
 	loop.clientIndex[p.client] = p
 	loop.entities.move(e, 9.5, 64, 9.5)
-	loop.tracker.Tick()
+	syncTrackerTick(loop)
 	got2 := drainPackets(p.client)
 	if n := countID(got2, packetid.ClientboundAddEntity); n != 1 {
 		t.Fatalf("a re-entering entity sent %d AddEntity, want exactly 1 (clean re-spawn)", n)
@@ -208,7 +216,7 @@ func TestTrackerRemoveBatchesMany(t *testing.T) {
 		es = append(es, e)
 	}
 
-	loop.tracker.Tick()          // spawn all three
+	syncTrackerTick(loop)          // spawn all three
 	_ = drainPackets(p.client)   // discard spawns
 	p.client = captureClient(64) // fresh capture
 	loop.clientIndex[p.client] = p
@@ -218,7 +226,7 @@ func TestTrackerRemoveBatchesMany(t *testing.T) {
 		loop.entities.move(e, 1600, 64, 1600)
 	}
 
-	loop.tracker.Tick()
+	syncTrackerTick(loop)
 	got := drainPackets(p.client)
 	if n := countID(got, packetid.ClientboundRemoveEntities); n != 1 {
 		t.Fatalf("3 entities leaving range sent %d RemoveEntities, want exactly 1 (single batch)", n)

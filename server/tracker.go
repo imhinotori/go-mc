@@ -1,5 +1,7 @@
 package server
 
+import pk "github.com/imhinotori/sulfur/net/packet"
+
 // tracker.go is the ENT-01 headline: a SYNCHRONOUS entity tracker that makes spawned
 // entities visible to nearby players. It FILLS the Phase-3 tracker.Tick() seam (the
 // noopTracker is replaced by &entityTracker{loop} in NewTickLoop) WITHOUT changing the
@@ -103,4 +105,157 @@ func (et *entityTracker) Tick() {
 			}
 		}
 	}
+}
+
+// --- OPT-02: the async tracker (off-tick diff, owner-side emission) --------------------------
+//
+// asyncTracker is the OPT-02 (08-04) executor swapped in behind the UNCHANGED
+// `tracker interface{ Tick() }` seam at the single swap-point in NewTickLoop. It computes the
+// SAME per-player visibility diff entityTracker does, but the diff MATH runs OFF the tick (in
+// the trackerPool ants pool) over an IMMUTABLE snapshot copied on the owner; only the packet
+// EMISSION + the p.tracked bookkeeping stay owner-side (in trackerDiffReady.applyTo). The
+// synchronous entityTracker above is KEPT as the golden reference the async path is diffed
+// against (TestAsyncTrackerMatchesSync).
+//
+// THE DISCIPLINE (08-RESEARCH Pitfall 3/5): asyncTracker.Tick() does only CHEAP owner work per
+// player — it copies near()'s in-range entities into VALUE Entity structs (no live *Entity
+// pointer crosses the boundary) and copies p.tracked into a fresh set — then submits the diff
+// closure to trackerPool. The worker diffs the snapshot, builds the []pk.Packet + the tracked
+// delta, and rejoins via trackerDiffReady on asyncIn2; applyAsyncResults drains it on the owner.
+// The worker NEVER reads the live store, NEVER touches p.tracked, and NEVER calls p.client.Send.
+type asyncTracker struct {
+	loop *TickLoop
+}
+
+// Tick is the OWNER-side cheap half of the async tracker (it satisfies the unchanged tracker
+// seam). For each connected player it builds an immutable snapshot (value copies of the in-range
+// entities + a copy of the player's tracked set + the player's id) and submits the visibility-
+// diff MATH to trackerPool. On pool overload (Pitfall 4) the player is skipped this tick — the
+// diff recomputes next tick (a one-tick-late visibility update is harmless, the OPT-01 rationale).
+// It performs NO send and NO p.tracked mutation: those happen owner-side in trackerDiffReady.applyTo
+// after the worker's result is drained.
+func (at *asyncTracker) Tick() {
+	t := at.loop
+	if t == nil || t.entities == nil {
+		return // defensive: a loop without a store has nothing to track
+	}
+
+	for _, p := range t.players {
+		if p == nil || p.client == nil {
+			continue // a player mid-registration / without a connection: skip
+		}
+
+		// Broad-phase ON THE OWNER: near() returns a fresh slice of live *Entity. We immediately
+		// copy out ONLY the value fields the diff + encoders need into worker-owned Entity values,
+		// so the closure holds NO pointer into the live store (Pitfall 3). The player's own id is
+		// skipped here so the snapshot never contains the player's own entity.
+		visible := t.entities.near(p.x, p.z, trackRange)
+		snap := make([]Entity, 0, len(visible))
+		for _, e := range visible {
+			if e == nil || e.id == p.entityID {
+				continue // a player never tracks itself
+			}
+			snap = append(snap, snapshotEntity(e))
+		}
+
+		// Copy p.tracked into a fresh set the worker reads; p.tracked itself is mutated ONLY on
+		// the owner (in applyTo), so it stays a plain map (Pitfall 1).
+		trackedCopy := make(map[int32]bool, len(p.tracked))
+		for id := range p.tracked {
+			trackedCopy[id] = true
+		}
+
+		playerID := p.entityID
+
+		// Submit the diff MATH off-tick. On overload, skip this player (recomputes next tick).
+		submitOrDrop(t.trackerPool, func() {
+			packets, added, removed := computeTrackerDiff(snap, trackedCopy)
+			// Nothing changed AND nothing to send → still rejoin with an empty result so the
+			// owner-side drain count is predictable; applyTo is a cheap no-op for an empty diff.
+			t.asyncIn2 <- trackerDiffReady{
+				playerID: playerID,
+				packets:  packets,
+				added:    added,
+				removed:  removed,
+			}
+		})
+	}
+}
+
+// snapshotEntity copies the value fields the tracker diff + the entity encoders read into a
+// detached Entity value (08-RESEARCH Pitfall 3). It deliberately copies the plain hot fields and
+// the metadata byte slice; it does NOT copy the ai pointer (the encoders never touch it, and a
+// live *mobAI must not cross the boundary). The result is owner-built and worker-owned — the
+// closure that captures it holds no alias into the live store.
+func snapshotEntity(e *Entity) Entity {
+	cp := Entity{
+		id:       e.id,
+		typ:      e.typ,
+		uuid:     e.uuid,
+		x:        e.x,
+		y:        e.y,
+		z:        e.z,
+		vx:       e.vx,
+		vy:       e.vy,
+		vz:       e.vz,
+		yaw:      e.yaw,
+		pitch:    e.pitch,
+		headYaw:  e.headYaw,
+		onGround: e.onGround,
+		width:    e.width,
+		height:   e.height,
+	}
+	if len(e.metadata) > 0 {
+		// Deep-copy the metadata bytes so the worker never aliases the live slot.
+		cp.metadata = make([]byte, len(e.metadata))
+		copy(cp.metadata, e.metadata)
+	}
+	return cp
+}
+
+// computeTrackerDiff is the PURE diff math, lifted verbatim from entityTracker.Tick to operate
+// over a snapshot value slice instead of the live store. It runs OFF the tick (in the worker).
+// It produces the same packet sequence the synchronous tracker emits — newly-in-range →
+// AddEntity(+SetEntityData(+SetEntityMotion if moving)); still-in-range+tracked → TeleportEntity
+// + RotateHead; gone → ONE batched RemoveEntities — plus the tracked DELTA (added/removed ids)
+// the owner applies to p.tracked in applyTo. The encoders are PURE over their *Entity arg, so
+// taking the address of a worker-owned snapshot value is safe (no live-store alias).
+func computeTrackerDiff(snap []Entity, tracked map[int32]bool) (packets []pk.Packet, added, removed []int32) {
+	// seen marks which currently-tracked ids are still in range this diff; any tracked id NOT
+	// seen has left range and is batched into the single RemoveEntities below.
+	seen := make(map[int32]bool, len(snap))
+
+	for i := range snap {
+		e := &snap[i] // worker-owned value; the encoders read it but never retain it
+		seen[e.id] = true
+
+		if !tracked[e.id] {
+			// Newly visible: spawn it (AddEntity, then SetEntityData always, then SetEntityMotion
+			// only if moving) and record the add in the delta.
+			packets = append(packets, encodeAddEntity(e))
+			packets = append(packets, encodeSetEntityData(e))
+			if e.vx != 0 || e.vy != 0 || e.vz != 0 {
+				packets = append(packets, encodeSetEntityMotion(e))
+			}
+			added = append(added, e.id)
+			continue
+		}
+
+		// Already tracked and still visible: absolute teleport (+ head rotation). Membership is
+		// unchanged, so the id appears in neither delta list.
+		packets = append(packets, encodeTeleportEntity(e))
+		packets = append(packets, encodeRotateHead(e.id, e.headYaw))
+	}
+
+	// Anything tracked but no longer in range left the player's view: batch ALL such ids into ONE
+	// RemoveEntities (the same single-batch the sync tracker emits) and record them as removed.
+	for id := range tracked {
+		if !seen[id] {
+			removed = append(removed, id)
+		}
+	}
+	if len(removed) > 0 {
+		packets = append(packets, encodeRemoveEntities(removed))
+	}
+	return packets, added, removed
 }

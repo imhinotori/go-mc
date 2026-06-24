@@ -176,21 +176,57 @@ func (r pathReady) applyTo(t *TickLoop) {
 type trackerDiffReady struct {
 	playerID int32       // the player to re-resolve on apply; never a live *tickPlayer pointer
 	packets  []pk.Packet // the immutable visibility-diff packets to Send on the owner
+	// added / removed are the per-player tracked-set DELTA the off-tick diff computed: `added`
+	// are the ids newly-in-range this diff spawned (an AddEntity is in `packets`), `removed` are
+	// the ids that left range (a single RemoveEntities is in `packets`). They are plain value
+	// slices so the owner can update p.tracked deterministically in applyTo WITHOUT the worker
+	// ever touching the live tracked map (08-RESEARCH Pitfall 1: p.tracked stays a plain map
+	// mutated only on the owner). Carrying the delta — not the whole new set — keeps the message
+	// small and makes the apply an O(delta) owner-side bookkeeping step that exactly mirrors what
+	// the packets did. A still-in-range, already-tracked entity appears in NEITHER list (its
+	// TeleportEntity/RotateHead is in `packets` but the tracked membership is unchanged).
+	added   []int32
+	removed []int32
 }
 
-// applyTo runs on the OWNER goroutine inside applyAsyncResults. STUB for Wave 0: it re-resolves
-// the player by entity id (existence re-check — the player may have left between Submit and
-// apply) and then no-ops. 08-04 (OPT-02) fills the body with `for _, pkt := range r.packets {
-// p.client.Send(pkt) }` on the owner, plus the p.tracked bookkeeping update — both single-owner.
+// applyTo runs on the OWNER goroutine inside applyAsyncResults — the OPT-02 (08-04)
+// implementation of the Wave-0 contract. The off-tick worker computed the per-player visibility
+// diff over an immutable snapshot; this re-resolves the player on the owner and performs the ONLY
+// two owner-side mutations:
+//
+//  1. Existence re-check (08-RESEARCH Pitfall 2/3): r.playerID re-resolves over the live players
+//     slice. A player who LEFT between Submit and apply finds no match → DROP the whole result
+//     (no send to a gone player, no nil-deref). The id is a plain value, never a live pointer.
+//  2. Owner-side emission + bookkeeping (08-RESEARCH Pitfall 5 — the load-bearing invariant):
+//     each diff packet is p.client.Send(pkt) HERE, on the owner, because Send enqueues onto the
+//     bounded per-player outbound queue the writeLoop solely owns (sending off-tick would race
+//     the queue / the Phase-5 ChannelQueue close-vs-send fix). Then p.tracked is updated from the
+//     carried delta — newly-spawned ids added, departed ids deleted — so the NEXT tick's diff
+//     sees the correct tracked set. The worker NEVER did either of these; only the diff MATH ran
+//     off-tick.
 func (r trackerDiffReady) applyTo(t *TickLoop) {
 	p := t.playerByEntityID(r.playerID)
 	if p == nil {
 		return // player left while the diff computed (Pitfall 3): DROP the stale packets
 	}
-	// 08-04 (OPT-02) fills here: for each pkt in r.packets call p.client.Send(pkt) on the OWNER
-	// (Pitfall 5 — sends stay owner-side so the bounded outbound queue / writeLoop stay the sole
-	// socket writer) and update p.tracked. For THIS plan the body after the existence re-check is
-	// a documented no-op placeholder.
+	if p.client == nil {
+		return // a player mid-registration / without a connection: nothing to emit onto
+	}
+	if p.tracked == nil {
+		p.tracked = make(map[int32]bool) // lazy-init mirrors entityTracker (owner-side only)
+	}
+	// Owner-side emission: the bounded outbound queue / writeLoop stay the sole socket writer.
+	for _, pkt := range r.packets {
+		p.client.Send(pkt)
+	}
+	// Owner-side bookkeeping: apply the tracked delta so the next diff is computed against the
+	// set that actually reflects what was just Sent (added spawns, removed despawns).
+	for _, id := range r.added {
+		p.tracked[id] = true
+	}
+	for _, id := range r.removed {
+		delete(p.tracked, id)
+	}
 }
 
 // spawnCandidate is one standable spawn location the OPT-03 (08-05) off-tick scan produced. It

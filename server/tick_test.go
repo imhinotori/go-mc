@@ -106,12 +106,13 @@ func (c *countingTracker) Tick() { c.calls++ }
 func TestTrackerTickStub(t *testing.T) {
 	loop := NewTickLoop(newFakeClock())
 
-	// Plan 06-02 FILLED the Phase-3 seam: NewTickLoop now assigns the real synchronous
-	// entityTracker (replacing the noopTracker) WITHOUT changing the interface or the
-	// t.tracker.Tick() call site. The default must therefore be the real *entityTracker, and
-	// it must still satisfy the unchanged one-method `tracker interface{ Tick() }`.
-	if _, ok := loop.tracker.(*entityTracker); !ok {
-		t.Fatalf("default tracker must be the real *entityTracker (the seam is FILLED), got %T", loop.tracker)
+	// Plan 06-02 FILLED the Phase-3 seam with the synchronous entityTracker; OPT-02 (08-04) then
+	// SWAPPED the executor to the async tracker behind the UNCHANGED interface + call site. The
+	// default is therefore now the *asyncTracker, and it must still satisfy the unchanged
+	// one-method `tracker interface{ Tick() }` (the load-bearing seam contract — the executor
+	// behind it is swappable, which is exactly what this test proves below).
+	if _, ok := loop.tracker.(*asyncTracker); !ok {
+		t.Fatalf("default tracker must be the *asyncTracker (the OPT-02 swap), got %T", loop.tracker)
 	}
 
 	// Swap in a counting tracker to prove synchronous, once-per-tick invocation through the
