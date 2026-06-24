@@ -149,17 +149,17 @@ func degToByteAngle(deg float32) pk.Angle {
 func encodeAddEntity(e *Entity) pk.Packet {
 	return pk.Marshal(
 		int32(packetid.ClientboundAddEntity),
-		pk.VarInt(e.id),             // 1: entity id
-		pk.UUID(e.uuid),             // 2: object UUID
-		pk.VarInt(int32(e.typ)),     // 3: entity type id (registry index)
-		pk.Double(e.x),              // 4: x
-		pk.Double(e.y),              // 5: y
-		pk.Double(e.z),              // 6: z
-		lpVec3{e.vx, e.vy, e.vz},    // 7: movement (LP_STREAM_CODEC)
-		degToByteAngle(e.pitch),     // 8: xRot
-		degToByteAngle(e.yaw),       // 9: yRot
-		degToByteAngle(e.headYaw),   // 10: yHeadRot
-		pk.VarInt(0),                // 11: data (object-specific; 0 for a plain mob)
+		pk.VarInt(e.id),           // 1: entity id
+		pk.UUID(e.uuid),           // 2: object UUID
+		pk.VarInt(int32(e.typ)),   // 3: entity type id (registry index)
+		pk.Double(e.x),            // 4: x
+		pk.Double(e.y),            // 5: y
+		pk.Double(e.z),            // 6: z
+		lpVec3{e.vx, e.vy, e.vz},  // 7: movement (LP_STREAM_CODEC)
+		degToByteAngle(e.pitch),   // 8: xRot
+		degToByteAngle(e.yaw),     // 9: yRot
+		degToByteAngle(e.headYaw), // 10: yHeadRot
+		pk.VarInt(0),              // 11: data (object-specific; 0 for a plain mob)
 	)
 }
 
