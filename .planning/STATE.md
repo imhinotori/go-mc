@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
+status: verifying
 stopped_at: Completed 03-03-PLAN.md (Phase 3 complete; a connection stands in a live ticking world)
-last_updated: "2026-06-23T22:12:05.886Z"
-last_activity: 2026-06-23
+last_updated: "2026-06-24T01:19:41.223Z"
+last_activity: 2026-06-24
 progress:
   total_phases: 9
   completed_phases: 3
-  total_plans: 10
-  completed_plans: 10
-  percent: 100
+  total_plans: 14
+  completed_plans: 11
+  percent: 79
 ---
 
 # Project State
@@ -27,8 +27,8 @@ See: .planning/PROJECT.md (updated 2026-06-23)
 
 Phase: 3 of 9 (Authoritative Tick Loop) — COMPLETE
 Plan: 3 of 3 complete (03-01, 03-02, 03-03 all done)
-Status: Phase complete — ready to plan Phase 4
-Last activity: 2026-06-23
+Status: Phase complete — ready for verification
+Last activity: 2026-06-24
 
 Phase-3 milestone: the internal tick spine is now a server a connection lives in.
 `gameTick` replaces `stubGamePlay`; `cmd/sulfur/main.go` starts the single tick goroutine
@@ -40,7 +40,7 @@ join/leave crosses to the tick owner as a message (register/unregister + drainRe
 TICK-05). Docker `-race -count=10` clean; `go run ./cmd/sulfur` listens on proto 776.
 Zero new dependencies.
 
-Progress: [██████████] 100%
+Progress: [████████░░] 79%
 
 ## Performance Metrics
 
@@ -72,6 +72,7 @@ Progress: [██████████] 100%
 | Phase 03 P01 | 18 | 2 tasks | 4 files |
 | Phase 03 P02 | 18min | 2 tasks | 5 files |
 | Phase 03 P03 | 22min | 3 tasks | 5 files |
+| Phase 04 P01 | 12min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -105,6 +106,9 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 3]: TICK-03 subtick seam = bounded (cap 256, drop-oldest) per-player buffer, server-stamped At=clock.Now() (never client time), chronological drain (stable sort) through STUB applyInput; physics deferred to Phase 6. TICK-04 proven: KeepAlive on own goroutine fires no timeout under a stalled tick. Zero new deps; -race clean.
 - [Phase ?]: [Phase 3]: gameTick replaces stubGamePlay — AcceptPlayer registers the player with the tick as a buffered-channel MESSAGE (register/unregister + drainRegistrations on the owner goroutine), never a cross-goroutine mutation; Docker -race -count=10 clean proves TICK-05 across the real network boundary
 - [Phase ?]: [Phase 3]: Phase 3 COMPLETE — a piped connection stands in a live empty ticking world: no disconnect, Stats() MSPT/TPS live (TICK-01/06), keep-alive holds on its own goroutine while a returning ServerboundKeepAlive routes through dispatch->ClientTick (TICK-04). go run ./cmd/sulfur listens on proto 776. Zero new deps.
+- [Phase ?]: 04-01: Section carries a per-section fluid-count short (two-short LevelChunkSection.write header); FluidCount defaults 0 for fluid-free chunks — presence of the short is the byte-alignment fix
+- [Phase ?]: 04-01: Chunk.WriteTo sends only the 3 Usage.CLIENT heightmaps (ids 1/4/5); ReadFrom left permissive to ids 0..5
+- [Phase ?]: 04-01: self-round-trip + golden byte-length are cheap regression only; authoritative WORLD-02/03 proof deferred to the 04-04 vanilla capture-diff
 
 ### Pending Todos
 
@@ -130,7 +134,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-23T22:11:44.472Z
+Last session: 2026-06-24T01:16:35.068Z
 Stopped at: Completed 03-03-PLAN.md (Phase 3 complete; a connection stands in a live ticking world)
 Resume file: None
 Next: plan Phase 4 (World & Chunk System) — fill tickWorld/tickChunks + flushOutbound (per-player chunk packets) onto the player/clientIndex/registration seams. Deferred: KeepAlive double-leave hardening (see Deferred Items).

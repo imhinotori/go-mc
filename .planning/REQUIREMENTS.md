@@ -36,8 +36,8 @@ Requirements for the initial release. The "user" is an unmodified vanilla 26.2 (
 ### World & Chunks
 
 - [ ] **WORLD-01**: Chunks load, generate, and store via the region/Anvil save format off the tick goroutine, with results channeled into the tick
-- [ ] **WORLD-02**: Paletted-container chunk sections encode and decode correctly (bits-per-entry → palette format, LSB long-packing, no length prefix per 1.21.5+, fluid-count short per 26.1+) — round-trip tested
-- [ ] **WORLD-03**: Heightmaps encode as typed long arrays; block light and sky light are sent
+- [x] **WORLD-02**: Paletted-container chunk sections encode and decode correctly (bits-per-entry → palette format, LSB long-packing, no length prefix per 1.21.5+, fluid-count short per 26.1+) — round-trip tested
+- [x] **WORLD-03**: Heightmaps encode as typed long arrays; block light and sky light are sent
 - [ ] **WORLD-04**: A deterministic minimal world generator produces a stable world (superflat/noise stub for v1)
 - [ ] **WORLD-05**: Chunks stream to the client by view distance with the neighbor-ring requirement satisfied (client renders, does not fall through void)
 
@@ -133,8 +133,8 @@ Which phases cover which requirements. Populated during roadmap creation.
 | TICK-05 | Phase 3 | Complete |
 | TICK-06 | Phase 3 | Complete |
 | WORLD-01 | Phase 4 | Pending |
-| WORLD-02 | Phase 4 | Pending |
-| WORLD-03 | Phase 4 | Pending |
+| WORLD-02 | Phase 4 | Complete |
+| WORLD-03 | Phase 4 | Complete |
 | WORLD-04 | Phase 4 | Pending |
 | WORLD-05 | Phase 4 | Pending |
 | PLAY-01 | Phase 5 | Pending |
