@@ -110,9 +110,27 @@ func TestRequestPathBuildsSnapshot(t *testing.T) {
 	}
 }
 
-// TestServerAiStepWalksToGoalTarget: given a mobAI whose stroll goal set a wantTarget (07-01),
-// the serverAiStep driver calls navigation.requestPath then navigation.tick so the mob WALKS
-// toward the wantTarget over several ticks (goal + navigation integrated).
+// fixedTargetGoal is a deterministic MOVE goal for the serverAiStep integration test: on start
+// it sets a CONCRETE wantTarget and never changes it, so the goal→navigation→moveEntity chain can
+// be asserted without the randomStrollGoal's random destination (which is non-deterministic and
+// would otherwise overwrite a manually-set target each time it (re)starts). It mirrors what a real
+// MOVE goal does — start() sets mobAI.wantTarget — but with a fixed, reachable point.
+type fixedTargetGoal struct {
+	baseGoal
+	tx, ty, tz float64
+}
+
+func (g *fixedTargetGoal) canUse(_ *TickLoop, _ *Entity) bool { return true }
+func (g *fixedTargetGoal) start(_ *TickLoop, e *Entity) {
+	e.ai.setWantTarget(g.tx, g.ty, g.tz)
+}
+
+// TestServerAiStepWalksToGoalTarget: a mobAI whose (deterministic) MOVE goal sets a wantTarget
+// drives serverAiStep to call navigation.requestPath then navigation.tick, so the mob WALKS toward
+// the wantTarget over several ticks (goal + navigation integrated). A real Pig's stroll goal is
+// random; this test uses fixedTargetGoal so the destination — and thus the assertion — is
+// deterministic. The full chain under test is serverAiStep → goalSelector → setWantTarget →
+// requestPath (snapshot→computePath) → navigation.tick → moveEntity.
 func TestServerAiStepWalksToGoalTarget(t *testing.T) {
 	loop, mgr := newPhysicsLoop()
 	ch := putChunk(mgr, level.ChunkPos{0, 0})
@@ -120,14 +138,14 @@ func TestServerAiStepWalksToGoalTarget(t *testing.T) {
 	fillFloor(ch, floorY)
 
 	e := testEntity(1, entity.Pig, 2.5, float64(floorY+1), 8.5)
-	ai := newPigAI()
+	ai := &mobAI{}
 	ai.navigation.speed = 0.2
+	ai.goals.addGoal(0, &fixedTargetGoal{
+		baseGoal: newBaseGoal(flagMove),
+		tx:       11.5, ty: float64(floorY + 1), tz: 8.5, // reachable point east along the floor
+	})
 	e.ai = ai
 	loop.entities.add(e)
-
-	// Force the stroll goal to set a concrete reachable wantTarget east along the floor (the
-	// 07-01 seam: a MOVE goal's start() sets mobAI.wantTarget; navigation consumes it).
-	ai.setWantTarget(11.5, float64(floorY+1), 8.5)
 
 	startX := e.x
 	for i := 0; i < 400; i++ {
