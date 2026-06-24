@@ -111,9 +111,11 @@ func seedFromHashOf(name string) (lo, hi uint64) {
 
 // mthGetSeed mirrors net.minecraft.util.Mth.getSeed(int,int,int).
 // Java:
-//   long l = (long)(x * 3129871) ^ (long)z * 116129781L ^ (long)y;
-//   l = l * l * 42317861L + l * 11L;
-//   return l >> 16;
+//
+//	long l = (long)(x * 3129871) ^ (long)z * 116129781L ^ (long)y;
+//	l = l * l * 42317861L + l * 11L;
+//	return l >> 16;
+//
 // NOTE: x*3129871 is INT multiplication (wraps in 32 bits) before widening; the
 // final `>> 16` is a SIGNED shift.
 func mthGetSeed(x, y, z int) int64 {
@@ -142,12 +144,13 @@ func newXoroshiro128pp(lo, hi uint64) xoroshiro128pp {
 
 // nextLong is the xoroshiro128++ step (Xoroshiro128PlusPlus.nextLong).
 // Java:
-//   long lo = seedLo, hi = seedHi;
-//   long result = Long.rotateLeft(lo + hi, 17) + lo;
-//   hi ^= lo;
-//   seedLo = Long.rotateLeft(lo, 49) ^ hi ^ (hi << 21);
-//   seedHi = Long.rotateLeft(hi, 28);
-//   return result;
+//
+//	long lo = seedLo, hi = seedHi;
+//	long result = Long.rotateLeft(lo + hi, 17) + lo;
+//	hi ^= lo;
+//	seedLo = Long.rotateLeft(lo, 49) ^ hi ^ (hi << 21);
+//	seedHi = Long.rotateLeft(hi, 28);
+//	return result;
 func (x *xoroshiro128pp) nextLong() uint64 {
 	lo := x.seedLo
 	hi := x.seedHi
