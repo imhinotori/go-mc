@@ -3,8 +3,8 @@ package server
 import (
 	"math"
 
-	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/block"
+	pk "github.com/imhinotori/sulfur/net/packet"
 	"github.com/imhinotori/sulfur/server/internal/bvh"
 )
 
@@ -77,17 +77,17 @@ func (t *TickLoop) blockSolidAt(x, y, z int) bool {
 	if t.world == nil {
 		return false // no world: nothing to collide with (world-less unit tests)
 	}
-	col := level.ChunkPos{int32(floorDiv(x, 16)), int32(floorDiv(z, 16))}
-	ch, ok := t.world.Get(col)
+	// One mapping: the read goes through world.ChunkManager.GetBlock (Plan 06-04), which
+	// owns the single pos->(column,section,local) mapping mirrored from the generator. An
+	// unloaded column / out-of-range y returns ok=false -> treated as non-solid air (do not
+	// collide / never block), exactly as the old inline read did. This is the READ side of
+	// the same API the place/break handlers WRITE through, so physics and edits can never
+	// disagree on where a block lives.
+	s, ok := t.world.GetBlock(pk.Position{X: x, Y: y, Z: z}, dimMinY)
 	if !ok {
-		return false // column not loaded/ready: treat as air (do not collide / never block)
+		return false
 	}
-	sec := (y - dimMinY) >> 4
-	if sec < 0 || sec >= len(ch.Sections) {
-		return false // outside the dimension's section range: air
-	}
-	local := (y&15)<<8 | (z&15)<<4 | (x & 15)
-	return !block.IsAir(ch.Sections[sec].GetBlock(local))
+	return !block.IsAir(s)
 }
 
 // floorDiv is a negative-correct integer floor-division (Go's / truncates toward zero, so
