@@ -16,7 +16,7 @@ Decimal phases appear between their surrounding integers in numeric order.
  (completed 2026-06-23)
 - [x] **Phase 2: Net & Protocol State Machine** - Handshake → Status → Login → Configuration → Play transitions with the network/tick channel boundary (completed 2026-06-23)
 - [x] **Phase 3: Authoritative Tick Loop** - 20-TPS ordered tick spine, ownership-based sync, game-time anchor, subtick layer, keepalive
-- [ ] **Phase 4: World & Chunk System** - Paletted-container chunk encode/decode, heightmaps/light, deterministic worldgen, view-distance streaming
+- [x] **Phase 4: World & Chunk System** - Paletted-container chunk encode/decode, heightmaps/light, deterministic worldgen, view-distance streaming (completed 2026-06-24)
 - [ ] **Phase 5: Player Session In-World (FIRST PLAYABLE)** - Vanilla client logs in and stands in a solid, visible, ticking world it can walk around
 - [ ] **Phase 6: Entities, Physics & Interaction** - Entity store/tracker, gravity/AABB collision, block place/break, component inventory, health/respawn, persistence
 - [ ] **Phase 7: AI, Pathfinding, Commands & Chat** - Goal-selector brain, synchronous A* navigation, mob spawning, command dispatch, chat broadcast
@@ -84,7 +84,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] 04-01-PLAN.md — Fix the two confirmed 776 wire bugs in level/chunk.go (fluid-count short on Section, trim heightmaps to the 3 CLIENT ids) + self-round-trip/byte-length regression (WORLD-02 partial, WORLD-03 heightmaps)
 - [x] 04-02-PLAN.md — New world/ package: deterministic superflat generator, tick-owned chunk manager, off-tick singleflight worker (region-load-or-generate), ClientboundLevelChunkWithLight assembly (WORLD-01 worker side, WORLD-02 full, WORLD-04)
 - [x] 04-03-PLAN.md — Wire the off-tick chunkReady rejoin into the Phase-3 applyAsyncResults seam + fill tickChunks/flushOutbound: clamped center-out view-distance ring streaming with ChunkBatchStart/Finished (WORLD-01 tick side, WORLD-05)
-- [ ] 04-04-PLAN.md — Capture-diff Sulfur's chunk+light bytes vs a real vanilla 26.2 superflat chunk + BLOCKING human-verify real-client visual check (autonomous:false; WORLD-02/03/05 authoritative gate)
+- [x] 04-04-PLAN.md — Capture-diff Sulfur's chunk+light bytes vs a real vanilla 26.2 superflat chunk + BLOCKING human-verify real-client visual check (autonomous:false; WORLD-02/03/05 authoritative gate)
 **Research**: Needs deeper per-phase research — the exact 776 section layout (fluid-count short, no length prefix, heightmap bits-per-entry) must be confirmed against the jar; go-mc may lag. [DONE — see 04-RESEARCH.md: both wire bugs jar-confirmed against temp/cache/26.2-server.jar.]
 
 ### Phase 5: Player Session In-World (FIRST PLAYABLE)
@@ -158,7 +158,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 1. Foundation — Fork & Codegen | 3/3 | Complete   | 2026-06-23 |
 | 2. Net & Protocol State Machine | 4/4 | Complete   | 2026-06-23 |
 | 3. Authoritative Tick Loop | 3/3 | Complete   | 2026-06-23 |
-| 4. World & Chunk System | 0/4 | Planned | - |
+| 4. World & Chunk System | 4/4 | Complete   | 2026-06-24 |
 | 5. Player Session In-World (FIRST PLAYABLE) | 0/TBD | Not started | - |
 | 6. Entities, Physics & Interaction | 0/TBD | Not started | - |
 | 7. AI, Pathfinding, Commands & Chat | 0/TBD | Not started | - |

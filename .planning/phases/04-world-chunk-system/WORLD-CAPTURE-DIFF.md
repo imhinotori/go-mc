@@ -11,8 +11,8 @@ self-round-trip test in Plans 04-01/02/03 passes even on a wire a real client
 rejects. The capture-diff exposed exactly such a hidden divergence (see
 **Wire Fixes** below).
 
-Status: **automatable capture/diff COMPLETE. Awaiting human real-client sign-off
-(Task 2).**
+Status: **APPROVED — capture-diff byte-identical to the vanilla golden AND a real
+vanilla 26.2 client renders solid, walkable ground (Task 2 signed off).**
 
 ---
 
@@ -245,16 +245,28 @@ and `world/generator.go` (the generator); no generated files were hand-edited.
 
 ---
 
-## 6. Real-Client Smoke (Task 2 — PENDING human sign-off)
+## 6. Real-Client Smoke (Task 2 — APPROVED)
 
-The decisive WORLD-02/03/05 check cannot be self-approved: an **unmodified vanilla
-26.2 client** must connect to `cmd/sulfur` (`localhost:25565`) and stand on solid,
-visible ground — no void (does not fall through), no stripes (no misaligned
-palette), not stuck at "Loading terrain…". `cmd/sulfur` builds, listens on proto
-776, streams the center-out superflat ring with batch framing (Plan 04-03), and is
-`-race` clean.
+The decisive WORLD-02/03/05 check cannot be self-approved. An **unmodified vanilla
+26.2 client (PrismLauncher)** connected to `cmd/sulfur` (`localhost:25565`), built
+its `ClientLevel`, and the user confirmed — *"veo y puedo pisar"* — they **see and
+stand on** solid superflat ground: **no void** (does not fall through), **no
+stripes** (no misaligned palette), **no "Loading terrain" hang**, no NPE.
+WORLD-02/03/05 are proven both ways — the capture-diff is byte-identical to the
+vanilla golden AND a real client renders solid ground end-to-end.
 
-**Sign-off line (filled in after the real-client test):**
+**Enabling fix (Play-state sequencing, not a chunk bug):** the first live client hit
+an NPE in `handleSetChunkCacheCenter` (`this.level == null`) because the server
+streamed `SetChunkCacheCenter` before any Join Game packet, so the client never
+built its `ClientLevel`. A separately-committed **minimal Play-state join
+bootstrap** (commit `0fd96850`) sends, in order, jar-verified `ClientboundLogin`
+(id 49, isFlat=true, `Holder<DimensionType>` overworld=VarInt(1)) → `ClientboundGameEvent`
+LEVEL_CHUNKS_LOAD_START (id 38 / event 13) → `ClientboundPlayerPosition` (id 72,
+proto-769+ teleport-id-first layout) **before** the chunk stream. This pulls a
+MINIMAL slice of PLAY-01/02/03 forward to enable the Phase-4 visual milestone; the
+full Player Session is Phase 5 (extend `server/play_join.go`, do not duplicate).
 
-> _Reviewed by: ____________  Date: __________
-> Result: [ ] solid ground, no void/stripes (APPROVED)  [ ] divergence: _________
+**Sign-off:**
+
+> Reviewed by: user (real vanilla 26.2 / PrismLauncher client)  Date: 2026-06-24
+> Result: **[x] solid ground, no void/stripes — APPROVED**

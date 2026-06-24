@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: verifying
-stopped_at: Completed 03-03-PLAN.md (Phase 3 complete; a connection stands in a live ticking world)
-last_updated: "2026-06-24T01:41:43.720Z"
+stopped_at: Completed 04-04-PLAN.md (Phase 4 COMPLETE; real vanilla 26.2 client renders solid superflat ground — WORLD-01..05 done)
+last_updated: "2026-06-24T02:52:27.949Z"
 last_activity: 2026-06-24
 progress:
   total_phases: 9
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 14
-  completed_plans: 13
-  percent: 93
+  completed_plans: 14
+  percent: 100
 ---
 
 # Project State
@@ -21,26 +21,27 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-23)
 
 **Core value:** A Go server that an unmodified vanilla Minecraft 26.2 client can connect to, log into, and play in a persistent, ticking world — architected from day one for Leaf-style async optimizations.
-**Current focus:** Phase 3 (Authoritative Tick Loop) COMPLETE — TICK-01..06 integrated on a runnable server. Next: plan Phase 4 (World & Chunk System) — fill tickWorld/tickChunks and flushOutbound (per-player chunk packets) onto the existing player/clientIndex/registration seams.
+**Current focus:** Phase 4 (World & Chunk System) COMPLETE — WORLD-01..05 done; a real vanilla 26.2 client renders solid, walkable superflat ground. Next: plan Phase 5 (Player Session) — EXTEND the minimal Join Game bootstrap pulled forward in 04-04 (`server/play_join.go`) into the full player session; do not duplicate it.
 
 ## Current Position
 
-Phase: 3 of 9 (Authoritative Tick Loop) — COMPLETE
-Plan: 3 of 3 complete (03-01, 03-02, 03-03 all done)
+Phase: 4 of 9 (World & Chunk System) — COMPLETE
+Plan: 4 of 4 complete (04-01, 04-02, 04-03, 04-04 all done)
 Status: Phase complete — ready for verification
 Last activity: 2026-06-24
 
-Phase-3 milestone: the internal tick spine is now a server a connection lives in.
-`gameTick` replaces `stubGamePlay`; `cmd/sulfur/main.go` starts the single tick goroutine
-(`go tick.Run`) and the independent keep-alive goroutine (`go keep.Run`); a piped
-connection stands in a live, empty, ticking world — no disconnect, `Stats()` MSPT/TPS
-live (TICK-01/06), keep-alive holds on its own goroutine while a returning
-`ServerboundKeepAlive` routes through `dispatch -> ClientTick` (TICK-04), and player
-join/leave crosses to the tick owner as a message (register/unregister + drainRegistrations,
-TICK-05). Docker `-race -count=10` clean; `go run ./cmd/sulfur` listens on proto 776.
-Zero new dependencies.
+Phase-4 milestone: a real client stands in a streamed world. The off-tick chunk worker
+loads/generates a deterministic superflat off the tick and rejoins via the unchanged
+`applyAsyncResults` seam (WORLD-01); `level`/`world` encode `ClientboundLevelChunkWithLight`
+byte-identical to vanilla 26.2 — the 04-04 capture-diff against a committed golden fixture
+proved WORLD-02/03 and caught two paletted-container wire bugs the symmetric read/write hid
+(header bits-per-entry vs packed width; superflat biome phantom palette). Chunks stream as a
+clamped center-out ring with batch framing (WORLD-05), and an unmodified vanilla 26.2
+(PrismLauncher) client connected to `cmd/sulfur` SEES and STANDS ON solid ground — no void,
+no stripes. A minimal Play-state Join Game bootstrap was pulled forward (commit 0fd96850) to
+enable the visual milestone. Docker `-race` clean; zero new dependencies.
 
-Progress: [█████████░] 93%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -75,6 +76,7 @@ Progress: [█████████░] 93%
 | Phase 04 P01 | 12min | 2 tasks | 2 files |
 | Phase 04 P02 | 6m | 3 tasks | 10 files |
 | Phase 04 P03 | 7m | 2 tasks | 7 files |
+| Phase 04 P04 | 70min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -113,6 +115,8 @@ Recent decisions affecting current work:
 - [Phase ?]: 04-01: self-round-trip + golden byte-length are cheap regression only; authoritative WORLD-02/03 proof deferred to the 04-04 vanilla capture-diff
 - [Phase ?]: Plan 04-03: off-tick chunk worker rejoins the tick via a concrete chunkReady asyncResult through the UNCHANGED applyAsyncResults seam (adapter re-wraps the immutable ChunkResult onto asyncIn); the tick is the sole manager mutator, -race clean.
 - [Phase ?]: Plan 04-03: chunks stream as a server-clamped (serverViewDistance=2) center-out Chebyshev ring with SetChunkCacheCenter/Radius + ChunkBatchStart/Finished framing; the clamp bounds the needed-ring to (2r+1)^2 against an untrusted client (T-4-01/T-4-06).
+- [Phase 04]: 04-04: the vanilla capture-diff (not a self-round-trip) is the authoritative WORLD-02/03 gate — it caught two paletted-container wire bugs the symmetric read/write hid: PaletteContainer.Set wrote the requested bits-per-entry as the wire header while packing floored-width data (1-bit header over 4-bit/256-long data = stripes/void), and the superflat biome carried a phantom default-biome palette entry vs vanilla's single-valued container. Both fixed (34f7cc45), re-diffed byte-identical, real client renders solid ground.
+- [Phase 04]: 04-04: a MINIMAL Play-state Join Game bootstrap (ClientboundLogin id49 isFlat + GameEvent LEVEL_CHUNKS_LOAD_START + ClientboundPlayerPosition id72 teleport-id-first) was PULLED FORWARD into Phase 4 (commit 0fd96850) to fix the handleSetChunkCacheCenter NPE and enable the real-client visual milestone. It is server/play_join.go. Phase 5 must EXTEND this (full profile/abilities/inventory/real spawn/teleport validation/movement), NOT duplicate it.
 
 ### Pending Todos
 
@@ -135,10 +139,11 @@ Items acknowledged and carried forward from previous milestone close:
 |----------|------|--------|-------------|
 | Rename | Project rename Ender → **Sulfur**: module `imhinotori/go-mc` → `imhinotori/sulfur` (367 .go + both go.mod), `cmd/ender` → `cmd/sulfur`, user-facing strings. MC entity names + frozen 774 baseline left as-is. | ✅ Done (630f90e3) | Phase 2 (NET-04) |
 | Robustness | `KeepAlive.removePlayer` (verbatim fork component) derefs `listIndex[c]` and would panic if `ClientLeft` is called for a player the keep-alive already kicked on a real 30s timeout. Cannot trigger in Phase 3 (no timeout in the milestone window); `keepalive.go` is consumed verbatim by mandate. Harden against a double-leave in the phase that adds real timeout-driven disconnects. | ⏳ Deferred | Phase 3 (03-03) |
+| Pulled-forward | A MINIMAL Play-state Join Game bootstrap (`server/play_join.go`, commit 0fd96850) was pulled forward in 04-04 to enable the real-client visual milestone: `ClientboundLogin` (id 49, isFlat) → `ClientboundGameEvent` LEVEL_CHUNKS_LOAD_START (id 38/event 13) → `ClientboundPlayerPosition` (id 72, teleport-id-first). Phase 5 (Player Session, PLAY-01/02/03) must **EXTEND** this slice — full profile/abilities/inventory/real spawn/teleport-id validation/movement — **not duplicate** the Login/spawn/position scaffolding. | ⏳ Carry to Phase 5 | Phase 4 (04-04) |
 
 ## Session Continuity
 
-Last session: 2026-06-24T01:41:33.953Z
-Stopped at: Completed 03-03-PLAN.md (Phase 3 complete; a connection stands in a live ticking world)
+Last session: 2026-06-24T02:52:27.935Z
+Stopped at: Completed 04-04-PLAN.md (Phase 4 COMPLETE; real vanilla 26.2 client renders solid superflat ground — WORLD-01..05 done)
 Resume file: None
-Next: plan Phase 4 (World & Chunk System) — fill tickWorld/tickChunks + flushOutbound (per-player chunk packets) onto the player/clientIndex/registration seams. Deferred: KeepAlive double-leave hardening (see Deferred Items).
+Next: plan Phase 5 (Player Session, PLAY-01/02/03+) — EXTEND the minimal Join Game bootstrap (`server/play_join.go`, 0fd96850) pulled forward in 04-04 into the full player session; do not duplicate the Login/spawn/position scaffolding. Deferred: KeepAlive double-leave hardening + the pulled-forward bootstrap extension (see Deferred Items).
