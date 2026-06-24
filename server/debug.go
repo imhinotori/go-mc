@@ -3,7 +3,23 @@ package server
 import (
 	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/level"
+	"github.com/imhinotori/sulfur/level/component"
 )
+
+// debugHotbarSlot0 is the player-inventory WINDOW slot for hotbar position 0: the 46-slot
+// window lays out 1 craft-result + 4 craft-grid (slots 0-4) + 4 armor (5-8) + 1 offhand?...
+// the standard mapping places the 9 hotbar slots at window indices 36-44, so hotbar 0 == 36.
+const debugHotbarSlot0 = 36
+
+// debugStoneItemID is minecraft:stone's protocol item id (data/item.Stone.ID == 1). Used to
+// hand the operator a placeable block for the interactive place check.
+const debugStoneItemID = 1
+
+// debugStoneStack builds a component-free ItemStack of 64 stone (count + id, no added/removed
+// components) — the minimal SlotData form the wire encoder already round-trips.
+func debugStoneStack() component.SlotData {
+	return component.SlotData{Count: 64, ItemID: debugStoneItemID}
+}
 
 // debug.go wires the OPTIONAL, off-by-default debug triggers the Plan 06-07 interactive
 // human-verify gate needs to OBSERVE the Phase-6 milestone in a real vanilla 26.2 client:
@@ -86,6 +102,22 @@ func (t *TickLoop) tickDebug() {
 		t.entities.add(pig)
 		d.pigID = id
 		d.pigSpawned = true
+	}
+
+	// (1b) Give every player a stack of stone in the first hotbar slot once, so the operator
+	// has a placeable block in hand (the v1 inventory is otherwise empty, and a survival client
+	// will not emit ServerboundUseItemOn — the place packet — without a placeable item held).
+	// Hotbar slot 0 maps to inventory window slot 36 (4 craft + 4 armor + 27 main precede it).
+	// The set + authoritative ContainerSetContent run on the tick goroutine over tick-owned
+	// inventory state (TICK-05); marking it per-player keeps it idempotent across reconnects.
+	for _, p := range t.players {
+		if p == nil || p.debugGaveItems {
+			continue
+		}
+		inv := ensureInventory(p)
+		inv.set(debugHotbarSlot0, debugStoneStack())
+		t.sendContent(p)
+		p.debugGaveItems = true
 	}
 
 	// (2) Move the pig every tick so the operator SEES it pace (the tracker emits an absolute

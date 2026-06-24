@@ -24,7 +24,7 @@ import (
 // PlayerAction.Action enum ordinals (jar: ServerboundPlayerActionPacket$Action, read as a
 // VarInt enum index). Only the destroy stages matter for v1.
 const (
-	actionStartDestroyBlock = 0 // creative instant-break (and the survival dig start)
+	actionStartDestroyBlock = 0 // survival dig BEGIN (button pressed) — NOT a break; no-op for v1
 	actionAbortDestroyBlock = 1 // dig cancelled — no-op for v1
 	actionStopDestroyBlock  = 2 // survival dig FINISH — the break trigger
 )
@@ -87,12 +87,15 @@ func (t *TickLoop) handlePlayerAction(p *tickPlayer, pkt pk.Packet) {
 		return // malformed/short payload: no-op, never panic (defensive decode)
 	}
 
-	// v1 break stages: STOP_DESTROY_BLOCK (survival dig finish) and START_DESTROY_BLOCK
-	// (creative instant). ABORT and any other action are no-ops (intermediate stages).
-	switch int(action) {
-	case actionStartDestroyBlock, actionStopDestroyBlock:
-		// break = set air below
-	default:
+	// v1 break stage: STOP_DESTROY_BLOCK (action 2) is the survival dig FINISH — the moment the
+	// block actually breaks. START_DESTROY_BLOCK (action 0) is the dig BEGIN: in survival the
+	// client sends it the instant the player presses the attack button, BEFORE the block is
+	// mined. Breaking on START makes every block shatter instantly on first click — the
+	// "creative instant-break" the operator saw in a survival session. So v1 breaks ONLY on
+	// STOP; START and ABORT (and every other action) are no-ops here. (A future survival dig
+	// model would time the START→STOP interval against the block's hardness; v1 trusts the
+	// client's FINISH, which is acceptable for an offline single-player-style world.)
+	if int(action) != actionStopDestroyBlock {
 		return
 	}
 

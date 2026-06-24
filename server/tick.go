@@ -364,6 +364,11 @@ type tickPlayer struct {
 	// cleared by performRespawn. While dead, a respawn request is honored (and a living-player
 	// request is ignored). Tick-owned.
 	dead bool
+
+	// debugGaveItems marks that the off-by-default debug trigger (SULFUR_DEBUG=1) has already
+	// handed this player the placeable test stack, so the give runs once per session. Tick-owned;
+	// untouched in production (debug off) and in tests.
+	debugGaveItems bool
 }
 
 // Health constants for a fresh survival player (the ENT-05 defaults). maxHealth is the vanilla

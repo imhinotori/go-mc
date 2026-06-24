@@ -129,13 +129,25 @@ func respawnPacket(dataToKeep byte) pk.Packet {
 // bounded outbound queue so the writeLoop stays the sole socket writer (T-5-06).
 func (t *TickLoop) performRespawn(p *tickPlayer) {
 	// (1) Respawn: rebuild the client's world. dataToKeep=0 → a full reset (v1 death respawn).
+	// ClientboundRespawn tears down the old ClientLevel and builds a fresh, EMPTY one — so the
+	// client now waits for the SAME bootstrap framing the join used before it will render the
+	// world: a GameEvent(LEVEL_CHUNKS_LOAD_START) that tells the client "chunks are coming"
+	// (without it the client sits on "Loading terrain…" indefinitely after a respawn), the
+	// PlayerPosition teleport, and the early-Play tail (abilities + held slot). Mirroring the
+	// bootstrap here is the load-bearing fix: a respawn is, to the client, a second join into a
+	// fresh ClientLevel.
 	p.client.Send(respawnPacket(respawnDataKeepNone))
+	p.client.Send(writeGameEventPacket(gameEventLevelChunksLoadStart, 0))
 
-	// (2) Restore a full survival player.
+	// (2) Restore a full survival player AND push the authoritative SetHealth. Resetting the
+	// tick-owned health alone is NOT enough — the client's HUD still shows 0 HP (and keeps the
+	// death screen up) until it receives a ClientboundSetHealth with the restored value. Send it
+	// so the client clears the death overlay and shows full hearts.
 	p.health = maxHealth
 	p.food = maxFood
 	p.saturation = defaultSaturation
 	p.dead = false
+	p.client.Send(setHealth(p.health, p.food, p.saturation))
 
 	// (3) Re-teleport to the world spawn with a fresh, tick-allocated teleport id, re-arming the
 	// confirm gate. The spawn is the world origin column center, two blocks above the surface —
@@ -149,7 +161,12 @@ func (t *TickLoop) performRespawn(p *tickPlayer) {
 	p.confirmedTeleport = false
 	p.client.Send(writePlayerPositionPacket(teleportID, spawnX, spawnY, spawnZ, 0, 0))
 
-	// (4) Reset the streamer so the fresh ClientLevel re-streams the full ring. flushOutbound
+	// (4) Re-send the early-Play tail (abilities + held slot) the join bootstrap sends, so the
+	// fresh ClientLevel has the player's movement abilities + hotbar selection restored.
+	p.client.Send(writePlayerAbilities(false, false, false, false, defaultFlyingSpeed, defaultWalkingSpeed))
+	p.client.Send(writeSetHeldSlot(defaultHeldSlot))
+
+	// (5) Reset the streamer so the fresh ClientLevel re-streams the full ring. flushOutbound
 	// re-emits SetChunkCacheCenter under !centerSent and re-sends every column under the cleared
 	// sent-set.
 	p.centerSent = false
