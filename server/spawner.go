@@ -3,7 +3,6 @@ package server
 import (
 	"math/rand/v2"
 
-	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/level"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
@@ -145,68 +144,182 @@ func (t *TickLoop) findStandableY(x, z, refY int) (int, bool) {
 	return 0, false
 }
 
-// naturalSpawn is the faithful-but-minimal NaturalSpawner cycle (ported, v1 subset). It:
-//  1. computes the spawnable columns near players + the spawnableChunkCount,
-//  2. counts the live CREATURE mobs from the tick-owned store (countByCategory),
-//  3. if CREATURE is UNDER its cap (maxInstancesPerChunk * spawnableChunkCount — the Pitfall 3
-//     anti-flood gate), scans the spawnable columns for the first valid ON_GROUND standable
-//     block and adds ONE Pig there via entityStore.add, with a real mobAI (newPigAI) attached
-//     so tickAI's serverAiStep drives it (the tracker then spawns it on clients via the
-//     unchanged AddEntity).
+// spawnAttemptsPerCycle bounds how many random candidate (x,z) positions a single spawn cycle
+// probes for a standable block. Vanilla NaturalSpawner picks a random chunk + getRandomPosWithin;
+// v1 rolls this many random in-column positions and (off-tick) keeps the standable ones, so a
+// cycle's scan is O(constant). The owner then places at most one (the throttle) from those.
+const spawnAttemptsPerCycle = 8
+
+// spawnCandidatePick is one random in-column position the OWNER rolls before submitting the
+// off-tick scan. The (x,z) is chosen on the owner (a trivial rand); the EXPENSIVE part — whether
+// that column has a standable ON_GROUND block — is what the off-tick worker computes over the
+// solidity snapshot. Keeping the random pick on the owner means the snapshot copies only the
+// exact candidate columns' Y-windows (a tight copy), not the whole spawnable area.
+type spawnCandidatePick struct{ x, z int }
+
+// spawnSnapshot is the IMMUTABLE solidity copy the off-tick spawn scan reads — the OPT-03 analogue
+// of pathRegion (path_region.go). It mirrors the load-bearing seam discipline (07-RESEARCH Pitfall
+// 1 / 08-RESEARCH Pitfall 1): the candidate columns' block solidity is COPIED on the OWNER before
+// the scan is submitted, so the worker reads this frozen value and NEVER the live ChunkManager
+// (which the tick mutates via tickChunks/SetBlock). It is keyed by the candidate (x,z) column the
+// owner pre-picked, storing the solid bits over [minY..maxY] for each, so the off-tick
+// findStandableYIn is a pure lookup. The map is built once on the owner and read-only thereafter.
+type spawnSnapshot struct {
+	refY       int            // the scan center Y (player feet) carried into the worker
+	minY, maxY int            // the snapshot's inclusive Y-window (refY ± spawnScanYRange, padded)
+	columns    map[[2]int]map[int]bool // (x,z) -> y -> solid; out-of-snapshot reads treated as non-solid
+}
+
+// solidAt reports whether (x,y,z) was solid in the frozen snapshot. A position outside the copied
+// window or column is reported NON-solid (air): the scan only probes the exact picked columns over
+// the bounded window, so an out-of-window read is never a real spawn-relevant block — treating it
+// as air keeps the ON_GROUND check (solid-below + clear feet/head) faithful within the window. This
+// is the spawn analogue of pathRegion.solidAt (whose out-of-box policy is solid, for the A* frontier
+// containment; here air is correct because the scan never needs blocks beyond its own window).
+func (s *spawnSnapshot) solidAt(x, y, z int) bool {
+	col, ok := s.columns[[2]int{x, z}]
+	if !ok {
+		return false
+	}
+	return col[y]
+}
+
+// findStandableYIn ports findStandableY's ON_GROUND scan over the SNAPSHOT instead of the live
+// world: scan the bounded Y window for the first Y whose block below is solid and whose feet+head
+// are clear air, reading s.solidAt (the frozen copy) — NEVER t.blockSolidAt. This is the pure,
+// off-tick-safe twin of findStandableY (they share the identical below/feet/head logic; only the
+// solidity source differs), so a candidate found here is exactly one the synchronous scan would
+// have found against the same blocks. Returns the feet Y and true, or (0,false) if no standable
+// block exists in the window.
+func findStandableYIn(s *spawnSnapshot, x, z int) (int, bool) {
+	for y := s.refY + spawnScanYRange; y >= s.refY-spawnScanYRange; y-- {
+		below := s.solidAt(x, y-1, z)
+		feet := s.solidAt(x, y, z)
+		head := s.solidAt(x, y+1, z)
+		if below && !feet && !head {
+			return y, true
+		}
+	}
+	return 0, false
+}
+
+// snapshotSpawnColumns COPIES the block solidity of the pre-picked candidate columns over the
+// scan Y-window into an IMMUTABLE spawnSnapshot, ON the owner goroutine — the OPT-03 mirror of
+// snapshotRegion. It reads through the SAME blockSolidAt the synchronous scan used (so the off-tick
+// result can never disagree with the live world about where a block is), but only for the exact
+// (x,z) columns the owner rolled, over [refY-range-1 .. refY+range+1] (the extra ±1 covers the
+// below/head reads at the window edges). The returned value is frozen here; the off-tick worker
+// consumes it with no race (08-RESEARCH Pitfall 1). Tick-owned (called only on the owner).
+func (t *TickLoop) snapshotSpawnColumns(picks []spawnCandidatePick, refY int) *spawnSnapshot {
+	minY := refY - spawnScanYRange - 1
+	maxY := refY + spawnScanYRange + 1
+	s := &spawnSnapshot{
+		refY:    refY,
+		minY:    minY,
+		maxY:    maxY,
+		columns: make(map[[2]int]map[int]bool, len(picks)),
+	}
+	for _, p := range picks {
+		key := [2]int{p.x, p.z}
+		if _, done := s.columns[key]; done {
+			continue // a duplicate random pick: its solidity is already copied
+		}
+		col := make(map[int]bool, maxY-minY+1)
+		for y := minY; y <= maxY; y++ {
+			if t.blockSolidAt(p.x, y, p.z) { // the SAME live read physics uses — copied here, frozen after
+				col[y] = true
+			}
+		}
+		s.columns[key] = col
+	}
+	return s
+}
+
+// naturalSpawn is the faithful-but-minimal NaturalSpawner cycle (ported, v1 subset) — OPT-03 SPLITS
+// it so the read-only candidate SCAN runs OFF-TICK while the spawn MUTATION rejoins on the owner.
+// ON the tick (here) it:
+//  1. gates single-in-flight (one scan at a time, like OPT-01's !pending gate) — if a scan is
+//     already pending it returns,
+//  2. computes the spawnable columns near players + the spawnableChunkCount,
+//  3. counts the live CREATURE mobs from the tick-owned store (countByCategory) and, if CREATURE is
+//     AT/OVER its cap (maxInstancesPerChunk * spawnableChunkCount — the Pitfall 3 anti-flood gate),
+//     attempts NO scan (no submit),
+//  4. otherwise rolls spawnAttemptsPerCycle random in-column candidate (x,z) picks, COPIES those
+//     columns' solidity into an immutable spawnSnapshot (mirroring snapshotRegion), and SUBMITS the
+//     standable-Y scan over the SNAPSHOT to spawnPool. On a successful submit it sets
+//     spawnScanPending; on pool overload it leaves the flag clear and simply skips this cycle
+//     (retrying next spawnInterval — 08-RESEARCH Pitfall 4).
 //
-// It attempts ONE placement per call (the THROTTLE keeps the per-tick cost bounded). When the
-// cap is reached, or there is no valid block / no spawnable column, it is a no-op — no flood,
-// no starvation. Tick-owned (TICK-05). Deferred vs vanilla (all documented): the full
-// multi-category density model + PotentialCalculator, the LocalMobCapCalculator per-player
-// distance weighting, the per-position MIN_SPAWN_DISTANCE check, biome spawn lists + the
-// creature-probability roll, structure spawns, and light-level rules.
+// The scan worker reads ONLY the snapshot (no live world/store — 08-RESEARCH Pitfall 3) and hands
+// back the standable candidates as spawnCandidatesReady on asyncIn2; the OWNER re-checks the cap +
+// the mobNear packing guard and adds ONE Pig in spawnCandidatesReady.applyTo (async.go). The
+// MUTATION (entityStore.add + idAlloc) stays single-owner (TICK-05); only the column/Y scan moved
+// off-tick. Every existing guard survives: the spawnInterval throttle (still gated in tickAI), the
+// CREATURE cap (gated here AND re-checked on apply), the mobNear packing guard (re-checked on
+// apply), and the bounded findStandableY window (the snapshot is sized to it). Deferred vs vanilla
+// (all documented): the full multi-category density model + PotentialCalculator, the
+// LocalMobCapCalculator per-player distance weighting, the per-position MIN_SPAWN_DISTANCE check,
+// biome spawn lists + the creature-probability roll, structure spawns, and light-level rules.
 func (t *TickLoop) naturalSpawn() {
 	if t.entities == nil || t.world == nil {
 		return
+	}
+	if t.spawnScanPending {
+		return // a scan is already in flight: single-in-flight gate (Pitfall 4 / OPT-01 !pending)
 	}
 	cols := t.spawnableColumns()
 	if len(cols) == 0 {
 		return // no loaded columns near a player: nothing to populate
 	}
 
-	// The CREATURE cap scales with the spawnable-chunk count, exactly as vanilla derives it
-	// from state.spawnableChunkCount * maxInstancesPerChunk (getFilteredSpawningCategories).
-	cap := categoryCreature.maxInstancesPerChunk() * len(cols)
+	// The CREATURE cap scales with the spawnable-chunk count, exactly as vanilla derives it from
+	// state.spawnableChunkCount * maxInstancesPerChunk (getFilteredSpawningCategories). Gate it on
+	// the owner BEFORE submitting (don't burn an off-tick scan when already at cap); the count is a
+	// snapshot, so applyTo RE-CHECKS it before the add (the load-bearing anti-flood, Pitfall 3).
+	spawnableChunkCount := len(cols)
+	cap := categoryCreature.maxInstancesPerChunk() * spawnableChunkCount
 	live := t.countByCategory()[categoryCreature]
 	if live >= cap {
-		return // AT or OVER cap: the anti-flood gate (Pitfall 3) — attempt no spawn
+		return // AT or OVER cap: the anti-flood gate (Pitfall 3) — submit no scan
 	}
 
 	// Reference Y for the column scan: a player's feet (the surface a near-player spawn sits on).
 	refY := t.spawnRefY()
 
-	// Try a RANDOM eligible column with a RANDOM (x,z) inside it (vanilla NaturalSpawner picks a
-	// random chunk and getRandomPosWithin rolls a random block in the chunk). Walking the columns
-	// in a fixed order and always taking the first valid one piled every mob on the same block —
-	// so the world looked like it had a single pig. Shuffling the start + jittering the in-chunk
-	// position spreads spawns across the loaded area like vanilla. We try up to a bounded number
-	// of random candidates per cycle and place at the first standable one (still ONE placement per
-	// cycle — the throttle).
-	const spawnAttemptsPerCycle = 8
-	for attempt := 0; attempt < spawnAttemptsPerCycle; attempt++ {
+	// Roll the random in-column candidate positions ON the owner (trivial rand). Vanilla picks a
+	// random chunk + getRandomPosWithin; the random pick spreads spawns across the loaded area so
+	// they don't pile on one block. The EXPENSIVE part (is this column standable?) goes off-tick.
+	picks := make([]spawnCandidatePick, 0, spawnAttemptsPerCycle)
+	for i := 0; i < spawnAttemptsPerCycle; i++ {
 		col := cols[rand.IntN(len(cols))]
-		bx := int(col[0])*16 + rand.IntN(16)
-		bz := int(col[1])*16 + rand.IntN(16)
-		y, ok := t.findStandableY(bx, bz, refY)
-		if !ok {
-			continue
-		}
-		// Packing guard: skip if a mob is already close to this candidate, so spawns spread out
-		// instead of stacking (a minimal stand-in for vanilla's isRightDistanceToPlayerAndSpawnPoint
-		// + per-chunk density packing). Within ~6 blocks counts as "occupied".
-		if t.mobNear(float64(bx)+0.5, float64(bz)+0.5, 6.0) {
-			continue
-		}
-		pig := NewEntity(t.idAlloc.AllocID(), entity.Pig, float64(bx)+0.5, float64(y), float64(bz)+0.5)
-		pig.ai = newPigAI() // the real ported AI: tickAI's serverAiStep drives wander + A* nav
-		t.entities.add(pig) // the unchanged tracker spawns it on clients next tick (AddEntity)
-		return              // one placement per cycle (the throttle)
+		picks = append(picks, spawnCandidatePick{
+			x: int(col[0])*16 + rand.IntN(16),
+			z: int(col[1])*16 + rand.IntN(16),
+		})
 	}
+
+	// COPY the candidate columns' solidity into an immutable snapshot on the owner (snapshotRegion
+	// discipline), then SUBMIT the standable-Y scan over the SNAPSHOT to spawnPool. The worker reads
+	// only the snapshot + the carried spawnableChunkCount (immutable ints) — no live world/store
+	// (Pitfall 3) — and sends the standable candidates back on asyncIn2.
+	snap := t.snapshotSpawnColumns(picks, refY)
+	submitted := submitOrDrop(t.spawnPool, func() {
+		candidates := make([]spawnCandidate, 0, len(picks))
+		for _, p := range picks {
+			if y, ok := findStandableYIn(snap, p.x, p.z); ok {
+				candidates = append(candidates, spawnCandidate{x: p.x, y: y, z: p.z})
+			}
+		}
+		// Rejoin on the owner: applyTo re-checks the cap + mobNear and adds at most one Pig. Always
+		// send (even an empty candidate set) so applyTo clears the in-flight gate — otherwise a
+		// cycle that found nothing would wedge spawnScanPending forever.
+		t.asyncIn2 <- spawnCandidatesReady{candidates: candidates, spawnableChunkCount: spawnableChunkCount}
+	})
+	if submitted {
+		t.spawnScanPending = true // one scan in flight; cleared by spawnCandidatesReady.applyTo
+	}
+	// On overload (submitted == false) the gate stays clear and the cycle is a no-op — it retries
+	// next spawnInterval (Pitfall 4). No spawn, no block.
 }
 
 // spawnRefY returns the world-Y the column scan centers on — the first player's feet, or the

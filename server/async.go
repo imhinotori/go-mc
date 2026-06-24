@@ -32,6 +32,7 @@ import (
 	"github.com/panjf2000/ants/v2"
 	"github.com/puzpuzpuz/xsync/v4"
 
+	"github.com/imhinotori/sulfur/data/entity"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
@@ -245,23 +246,65 @@ type spawnCandidate struct {
 // stay single-owner even though the read-only scan ran off-tick.
 type spawnCandidatesReady struct {
 	candidates []spawnCandidate // the immutable scan result; applyTo adds at most one under the cap
+
+	// spawnableChunkCount is the eligible-column count the OWNER captured at submit time (len of
+	// spawnableColumns()), carried as a plain int so applyTo can recompute the CREATURE cap
+	// (maxInstancesPerChunk * spawnableChunkCount) on the owner without re-walking the columns. It
+	// is the same scaling vanilla's getFilteredSpawningCategories uses; carrying it (a value, not a
+	// live reference — Pitfall 3) keeps the apply-time cap derivation consistent with the gate the
+	// scan was submitted under, while the live COUNT is re-read from the authoritative store.
+	spawnableChunkCount int
 }
 
-// applyTo runs on the OWNER goroutine inside applyAsyncResults. STUB for Wave 0: it validates the
-// result is non-empty and then no-ops. 08-05 (OPT-03) fills the body with the owner-side cap
-// re-check (countByCategory over the authoritative entityStore) followed by entityStore.add for
-// ONE candidate (drawing a fresh id from idAlloc) — the spawn mutation stays single-owner even
-// though the candidate scan ran off-tick over a snapshot.
+// applyTo runs on the OWNER goroutine inside applyAsyncResults — the OPT-03 (08-05) implementation
+// of the Wave-0 contract. The off-tick worker scanned standable candidates over an immutable
+// solidity snapshot; this re-validates on the authoritative store and performs the ONLY owner-side
+// mutation (the spawn add). It is the load-bearing anti-flood/anti-piling re-check (08-RESEARCH
+// Pitfall 3): the scan's mob count was a snapshot, so the owner re-reads the live state before
+// adding.
+//
+//  1. Clear the single-in-flight gate (t.spawnScanPending) FIRST and unconditionally, so the next
+//     spawnInterval cycle can submit again even when this result places nothing (an empty candidate
+//     set, an over-cap drop, or an occupied drop must never wedge the gate — Pitfall 4).
+//  2. CAP RE-CHECK (the load-bearing safety): re-read the live CREATURE count over the authoritative
+//     store (countByCategory) and compare to maxInstancesPerChunk * the carried spawnableChunkCount.
+//     If AT/OVER cap now (mobs may have spawned since the scan), DROP — the stale scan never
+//     over-spawns past the anti-flood cap (T-8-17).
+//  3. Place ONE candidate: the FIRST whose position is not now occupied (the mobNear packing guard
+//     re-checked against the LIVE store — a candidate a mob moved onto since the snapshot is dropped,
+//     T-8-20). entityStore.add the Pig (fresh id from idAlloc, newPigAI attached). At most one per
+//     apply (the throttle). The mutation (add + idAlloc) is owner-only (TICK-05 / T-8-18).
 func (r spawnCandidatesReady) applyTo(t *TickLoop) {
+	// Always clear the in-flight gate on apply, regardless of whether anything is placed below —
+	// otherwise a cycle that scanned to nothing (or got dropped here) would block all future scans.
+	t.spawnScanPending = false
+
 	if len(r.candidates) == 0 {
-		return // nothing to place (the scan found no standable spot): DROP, nothing to apply
+		return // the scan found no standable spot: nothing to apply (the gate is already cleared)
 	}
 	if t.entities == nil {
 		return // defensive: store is non-nil from NewTickLoop; never panic if absent
 	}
-	// 08-05 (OPT-03) fills here: re-check the live mob cap on the owner (countByCategory over the
-	// authoritative store — a stale snapshot must NOT over-spawn) and, if under the cap, draw a
-	// fresh id from t.idAlloc and entityStore.add ONE candidate. For THIS plan the body after the
-	// non-empty/store re-check is a documented no-op placeholder — the spawner mutation lands in
-	// 08-05.
+
+	// CAP RE-CHECK on the AUTHORITATIVE store (Pitfall 3 anti-flood): the off-tick scan counted a
+	// stale snapshot, so re-validate the live count before mutating. A creature spawned/added since
+	// the scan can push us to cap — drop rather than over-spawn.
+	cap := categoryCreature.maxInstancesPerChunk() * r.spawnableChunkCount
+	live := t.countByCategory()[categoryCreature]
+	if live >= cap {
+		return // now AT/OVER cap: DROP the stale candidates (no over-cap add)
+	}
+
+	// Place ONE candidate: the first still-unoccupied position (the mobNear packing guard re-checked
+	// against the LIVE store — the anti-piling guard survives the swap). A candidate now occupied is
+	// skipped, not piled on.
+	for _, c := range r.candidates {
+		if t.mobNear(float64(c.x)+0.5, float64(c.z)+0.5, 6.0) {
+			continue // a mob moved/spawned onto this candidate since the snapshot: DROP it
+		}
+		pig := NewEntity(t.idAlloc.AllocID(), entity.Pig, float64(c.x)+0.5, float64(c.y), float64(c.z)+0.5)
+		pig.ai = newPigAI() // the real ported AI: tickAI's serverAiStep drives wander + A* nav
+		t.entities.add(pig) // the unchanged tracker spawns it on clients next tick (AddEntity)
+		return              // one placement per apply (the throttle)
+	}
 }

@@ -149,6 +149,15 @@ type TickLoop struct {
 	trackerPool *ants.Pool
 	spawnPool   *ants.Pool
 
+	// spawnScanPending is the OPT-03 (08-05) single-in-flight gate for the async natural-spawn
+	// scan: naturalSpawn sets it true when it SUBMITS a candidate scan to spawnPool, and
+	// spawnCandidatesReady.applyTo clears it on rejoin (always — even when the scan placed nothing).
+	// While true, naturalSpawn submits no new scan, so at most ONE spawn scan is ever in flight (the
+	// 08-RESEARCH Pitfall 4 / OPT-01 !pending discipline — never a pile-up of redundant scans). It
+	// is a plain bool touched ONLY on the tick goroutine (set in naturalSpawn, cleared in applyTo,
+	// both owner-side — TICK-05), so it needs no atomic.
+	spawnScanPending bool
+
 	// tracker is the (synchronous stub) tracking executor; Phase 8 swaps it.
 	tracker tracker
 
