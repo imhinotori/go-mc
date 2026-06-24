@@ -77,6 +77,17 @@ type Entity struct {
 	// packets. A nil/empty slot is a freshly spawned entity with default metadata. Kept as a
 	// plain []byte (not a map) so an Entity snapshot stays cheap.
 	metadata []byte
+
+	// ai is the per-mob AI handle (AI-01, Plan 07-01): the mob's goalSelector + the
+	// navigation/look targets a goal writes (server/ai_mob.go). nil for a non-mob entity (a
+	// dropped item, a player's instance) and for a mob with no AI registered. Hung off the
+	// Entity (not a side map) so a snapshot/move carries it with the instance; it is tick-owned
+	// game state mutated ONLY by the tick goroutine (TICK-05) via serverAiStep. Plan 07-03
+	// wires the tickAI() call site that drives it; this plan builds the machinery + the hook.
+	// NOTE: unlike the plain-value hot fields above, ai is a pointer to mutable tick-owned
+	// state — it is NOT part of the snapshot-friendly value set the async tracker copies (the
+	// tracker only ever reads the pos/angle/dims), so it does not break the snapshot contract.
+	ai *mobAI
 }
 
 // NewEntity constructs a live entity instance from a data/entity TABLE record at the given
