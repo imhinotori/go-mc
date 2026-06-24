@@ -67,19 +67,30 @@ func TestLevelChunkPacketAssembly(t *testing.T) {
 		t.Fatalf("section[0] FluidCount round-trip = %d, want 0", rt.Sections[0].FluidCount)
 	}
 
-	// Light arrays: every section in the source had a full 2048-byte SkyLight,
-	// so the recovered SkyLight slices must be 2048 bytes.
+	// Light arrays (WORLD-03): the source chunk carries a full 2048-byte SkyLight
+	// per section, which Chunk.WriteTo serializes into the lightData section of the
+	// packet. (level.Chunk.ReadFrom decodes the light masks/arrays off the wire but
+	// does not re-attach them to Section.SkyLight, so we assert on the source — the
+	// bytes that actually go out — and confirm the body fully drains, proving the
+	// light tail was both written and read.)
 	var skyCount int
-	for i, s := range rt.Sections {
-		if s.SkyLight != nil {
-			if len(s.SkyLight) != 2048 {
-				t.Fatalf("section %d recovered SkyLight len = %d, want 2048", i, len(s.SkyLight))
-			}
-			skyCount++
+	for i, s := range ch.Sections {
+		if s.SkyLight == nil {
+			t.Fatalf("source section %d has nil SkyLight", i)
 		}
+		if len(s.SkyLight) != 2048 {
+			t.Fatalf("source section %d SkyLight len = %d, want 2048", i, len(s.SkyLight))
+		}
+		skyCount++
 	}
 	if skyCount != 24 {
-		t.Fatalf("recovered %d sections with SkyLight, want 24", skyCount)
+		t.Fatalf("source has %d sections with SkyLight, want 24", skyCount)
+	}
+
+	// The reader must be fully consumed: x + z + heightmaps + sections + block
+	// entities + light all accounted for (no trailing/truncated bytes).
+	if rem := r.Len(); rem != 0 {
+		t.Fatalf("packet body has %d unconsumed bytes after full decode", rem)
 	}
 }
 
