@@ -72,9 +72,9 @@ Requirements for the initial release. The "user" is an unmodified vanilla 26.2 (
 
 ### Leaf Concurrency Optimizations
 
-- [ ] **OPT-01**: Async pathfinding swaps the synchronous A* executor for a goroutine pool behind the Phase-7 seam, with paths tolerated 1+ ticks late
+- [x] **OPT-01**: Async pathfinding swaps the synchronous A* executor for a goroutine pool behind the Phase-7 seam, with paths tolerated 1+ ticks late
 - [x] **OPT-02**: Async entity tracker runs visibility updates off the main tick and rejoins via the apply-async seam
-- [ ] **OPT-03**: Async mob spawning scans candidate locations off-thread
+- [x] **OPT-03**: Async mob spawning scans candidate locations off-thread
 - [x] **OPT-04**: Hot-path collections use lock-free/specialized variants (xsync/v4); worker pools use ants/v2
 - [x] **OPT-05**: Linear region file format reduces disk I/O and footprint
 - [x] **OPT-06**: The server passes `-race` clean on every async subsystem
@@ -154,9 +154,9 @@ Which phases cover which requirements. Populated during roadmap creation.
 | AI-03 | Phase 7 | Complete |
 | CMD-01 | Phase 7 | Complete |
 | CMD-02 | Phase 7 | Complete |
-| OPT-01 | Phase 8 | Pending |
+| OPT-01 | Phase 8 | Complete |
 | OPT-02 | Phase 8 | Complete |
-| OPT-03 | Phase 8 | Pending |
+| OPT-03 | Phase 8 | Complete |
 | OPT-04 | Phase 8 | Complete |
 | OPT-05 | Phase 8 | Complete |
 | OPT-06 | Phase 8 | Complete |
