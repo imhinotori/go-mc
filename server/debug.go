@@ -126,14 +126,21 @@ func (t *TickLoop) tickDebug() {
 	// for the tracker's near() (the bucket-consistency contract).
 	if d.pigSpawned {
 		if pig, ok := t.entities.get(d.pigID); ok {
-			d.pigPhase += 0.15
-			// Pace ±3 blocks along X; keep Y on the surface and Z fixed.
+			// Slow pace: 0.03 rad/tick (~0.6 rad/s at 20 TPS) so the pig ambles ±3 blocks over
+			// ~5s rather than darting. x = center + 3·sin(phase); the per-tick step is small
+			// enough to read as a walk, not a teleport-jitter.
+			d.pigPhase += 0.03
 			newX := 8.5 + 3.0*sinApprox(d.pigPhase)
-			// Face the direction of travel so the head visibly turns.
+
+			// Face the direction of travel. The pig walks along X; dx/dt ∝ cos(phase). In MC's
+			// yaw convention 0°=+Z(south), 90°=-X(west), 270°(=-90°)=+X(east). Moving toward +X
+			// (cos>0) faces east (270°); toward -X faces west (90°). Setting yaw to MATCH the
+			// motion direction stops the "walking backwards" look (the old code set yaw 90/270
+			// perpendicular to the X-axis motion, so the pig faced sideways while sliding).
 			if cosApprox(d.pigPhase) >= 0 {
-				pig.yaw, pig.headYaw = 90, 90
+				pig.yaw, pig.headYaw = 270, 270 // moving +X (east)
 			} else {
-				pig.yaw, pig.headYaw = 270, 270
+				pig.yaw, pig.headYaw = 90, 90 // moving -X (west)
 			}
 			t.entities.move(pig, newX, pig.y, pig.z)
 		}
