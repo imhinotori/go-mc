@@ -28,3 +28,6 @@ temp//world/
 # NOTE: do NOT ignore /world/ — it is the Go world subsystem package, not a
 # runtime save dir. Runtime world saves live under /temp/ (regionDir is empty
 # by default). Ignoring /world/ shadows new source files in the package.
+# Runtime player saves (ENT-06 save-on-leave) land in /world/playerdata/ when a
+# server is run from the repo root; that is runtime output, not source.
+/world/playerdata/

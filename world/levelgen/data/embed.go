@@ -1,0 +1,159 @@
+// Package data embeds the FULL vanilla Minecraft 26.2 worldgen graph as DATA and
+// exposes typed accessors that resolve a registry id (e.g. "minecraft:overworld"
+// or "minecraft:overworld/caves/entrances") to the embedded JSON bytes.
+//
+// WHY THIS PACKAGE EXISTS (PARITY-01, the DATA half of full worldgen parity):
+//
+// The single highest-leverage finding of 09-RESEARCH: the WHOLE wired overworld
+// terrain graph is DATA the 26.2 jar already ships as JSON, not logic to be
+// hand-written. That includes:
+//
+//   - noise_settings/overworld.json (120KB): the wired noise_router (final_density,
+//     barrier, fluid_level_floodedness/spread, lava, vein_toggle/ridged/gap, ...),
+//     aquifers_enabled:true, ore_veins_enabled:true, and the full surface_rule.
+//   - the ENTIRE density_function/ tree (35 files) — INCLUDING the cave functions
+//     under overworld/caves/ (entrances, noodle, pillars, spaghetti_2d, ...). CAVES
+//     ARE IN THE GRAPH: final_density references those functions, so caves are
+//     produced as negative-density regions by the SAME graph the surface uses, not
+//     a bolted-on system. This is why caves come "free" once the Wave-3 evaluator
+//     parses + evaluates the whole graph.
+//   - the noise/ octave params, the configured_carver/ configs (the legacy
+//     ravine/cave WorldCarver pass, Wave 5), the overworld_carver_replaceables tag.
+//   - biome_parameters.json: the overworld multi-noise biome climate boxes (the
+//     6-D ParameterPoint per biome), extracted from the BAKED OverworldBiomes by
+//     tools/java/GenBiomeParams.java (the one Java extractor — those params are not
+//     loose JSON). Consumed by the Wave-7 multi-noise biome source.
+//
+// HOW IT IS PRODUCED: tools/extract_worldgen.go pure-unzips the JSON trees out of
+// the sha1-gated pinned 26.2 jar (temp/cache/26.2-inner.jar) and copies the
+// Java-extracted biome params alongside them — all build-time-trusted DATA. The
+// runtime reads ONLY this embedded FS: pure Go, stdlib embed + encoding/json, no
+// JVM and no jar at runtime (CGO_ENABLED=0 stays clean, zero new runtime deps).
+//
+// HOW IT IS CONSUMED: the graph is NEVER hand-transcribed into Go literals (the
+// 120KB router + the 60KB offset/factor splines + the cave functions are extracted
+// + embedded, not typed). The Wave-3 density-function router parser, the Wave-5
+// carver, and the Wave-7 biome source PARSE these bytes. Only the ~15 noise
+// primitives + the ~30 density-function node TYPES + Aquifer + OreVeinifier +
+// SurfaceRules + Climate are hand-ported (Waves 2-7) — the logic half of the split.
+package data
+
+import (
+	"embed"
+	"fmt"
+	"io/fs"
+	"path"
+	"strings"
+)
+
+// FS is the embedded worldgen graph. The directories below are the extracted
+// vanilla JSON trees (tools/extract_worldgen.go); biome_parameters.json is the
+// Java-extracted baked biome climate boxes.
+//
+//go:embed noise_settings density_function noise configured_carver tags biome_parameters.json
+var FS embed.FS
+
+// resolveID splits a "namespace:path" registry id into its path component,
+// stripping the minecraft: namespace. A bare id with no namespace is taken as-is.
+// The path may itself be nested (e.g. "overworld/caves/entrances") — that nesting
+// is preserved so it maps onto the embedded sub-directory structure.
+func resolveID(id string) string {
+	if i := strings.IndexByte(id, ':'); i >= 0 {
+		return id[i+1:]
+	}
+	return id
+}
+
+// readEmbedded reads subdir/<path(id)>.json from the embedded FS, returning a
+// clear error for a missing id.
+func readEmbedded(subdir, id string) ([]byte, error) {
+	rel := resolveID(id)
+	if rel == "" {
+		return nil, fmt.Errorf("worldgen data: empty id for %s", subdir)
+	}
+	p := path.Join(subdir, rel+".json")
+	b, err := FS.ReadFile(p)
+	if err != nil {
+		return nil, fmt.Errorf("worldgen data: %s not found (id %q -> %s): %w", subdir, id, p, err)
+	}
+	return b, nil
+}
+
+// NoiseSettings returns the embedded noise_settings JSON for a registry id.
+// e.g. "minecraft:overworld" -> noise_settings/overworld.json. This is the wired
+// router the Wave-3 parser consumes (final_density + the aquifer/ore-vein inputs +
+// the surface_rule sequence).
+func NoiseSettings(id string) ([]byte, error) {
+	return readEmbedded("noise_settings", id)
+}
+
+// DensityFunction returns the embedded density-function JSON for a registry id.
+// The id may be nested: "minecraft:overworld/offset" -> density_function/overworld/
+// offset.json; "minecraft:overworld/caves/entrances" ->
+// density_function/overworld/caves/entrances.json (the cave functions — caves are
+// in the graph). Fed to the Wave-3 router parser as it walks the graph.
+func DensityFunction(id string) ([]byte, error) {
+	return readEmbedded("density_function", id)
+}
+
+// Noise returns the embedded noise octave-param JSON for a registry id.
+// e.g. "minecraft:temperature" -> noise/temperature.json. Fed to the Wave-2 noise
+// primitives.
+func Noise(id string) ([]byte, error) {
+	return readEmbedded("noise", id)
+}
+
+// ConfiguredCarver returns the embedded configured-carver JSON for a registry id.
+// e.g. "minecraft:canyon" -> configured_carver/canyon.json. The legacy ravine/cave
+// WorldCarver pass (Wave 5) reads these configs as DATA.
+func ConfiguredCarver(id string) ([]byte, error) {
+	return readEmbedded("configured_carver", id)
+}
+
+// CarverReplaceables returns the embedded overworld_carver_replaceables block tag
+// bytes — the set of blocks the legacy carver pass may replace (Wave 5).
+func CarverReplaceables() ([]byte, error) {
+	b, err := FS.ReadFile("tags/block/overworld_carver_replaceables.json")
+	if err != nil {
+		return nil, fmt.Errorf("worldgen data: overworld_carver_replaceables tag not found: %w", err)
+	}
+	return b, nil
+}
+
+// BiomeParameters returns the embedded overworld multi-noise biome parameter list
+// (the 6-D climate boxes -> biome ids, extracted from the baked OverworldBiomes).
+// The Wave-7 multi-noise biome source parses this for real biome diversity.
+func BiomeParameters() ([]byte, error) {
+	b, err := FS.ReadFile("biome_parameters.json")
+	if err != nil {
+		return nil, fmt.Errorf("worldgen data: biome_parameters.json not found: %w", err)
+	}
+	return b, nil
+}
+
+// list returns the .json entry names directly under an embedded sub-directory,
+// for callers (later waves) that enumerate a tree rather than resolving by id.
+func list(subdir string) ([]string, error) {
+	ents, err := fs.ReadDir(FS, subdir)
+	if err != nil {
+		return nil, fmt.Errorf("worldgen data: listing %s: %w", subdir, err)
+	}
+	var names []string
+	for _, e := range ents {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		names = append(names, strings.TrimSuffix(e.Name(), ".json"))
+	}
+	return names, nil
+}
+
+// NoiseSettingsIDs lists the noise-settings ids available in the embed (without
+// the minecraft: namespace), e.g. ["overworld", "nether", ...].
+func NoiseSettingsIDs() ([]string, error) { return list("noise_settings") }
+
+// NoiseIDs lists the noise octave-param ids available in the embed.
+func NoiseIDs() ([]string, error) { return list("noise") }
+
+// ConfiguredCarverIDs lists the configured-carver ids available in the embed.
+func ConfiguredCarverIDs() ([]string, error) { return list("configured_carver") }
