@@ -133,7 +133,13 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Mob spawning populates the world by vanilla-style rules
   4. The server dispatches server-side commands
   5. Chat messages are received and broadcast with the PlayerChat globalIndex prefix handled
-**Plans**: TBD
+**Plans**: 6 plans (4 waves)
+- [ ] 07-01-PLAN.md — AI-01: port GoalSelector + Goal/Goal$Flag/WrappedGoal + the passive Pig goal set + the serverAiStep-order driver (wave 1)
+- [ ] 07-02-PLAN.md — AI-02: port the request→snapshot→result A* (PathNavigationRegion snapshot + PathFinder + WalkNodeEvaluator + GroundPathNavigation), the pure computePath seam, wired into serverAiStep (wave 2)
+- [ ] 07-03-PLAN.md — AI-03: port the faithful-minimal NaturalSpawner + MobCategory cap accounting, fill tickAI() (drive serverAiStep + spawner), retire the sinusoidal debug pig (wave 3)
+- [ ] 07-04-PLAN.md — CMD-01: wire the fork command.Graph (build + send ClientboundCommands at join + route ServerboundChatCommand → Execute on the tick) (wave 1)
+- [ ] 07-05-PLAN.md — CMD-02: decode ServerboundChat defensively + broadcast via SystemChat + document the PlayerChat globalIndex + thread tickPlayer.name (wave 2)
+- [ ] 07-06-PLAN.md — capture-diff (ClientboundCommands / SystemChat / ServerboundChat) + BLOCKING real-client interactive sign-off: a mob wanders/navigates an obstacle, a command replies, chat broadcasts (autonomous:false; AI-01/02/03 + CMD-01/02 gate) (wave 4)
 **Research**: Standard pattern (lighter research) — the brain/goal-selector and A* designs follow established vanilla behavior; the load-bearing concern is a clean async-ready seam.
 
 ### Phase 8: Leaf Concurrency Optimizations
@@ -172,6 +178,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 4. World & Chunk System | 4/4 | Complete   | 2026-06-24 |
 | 5. Player Session In-World (FIRST PLAYABLE) | 3/3 | ✅ Complete | FIRST PLAYABLE — real client walks around a following world |
 | 6. Entities, Physics & Interaction | 7/7 | Complete | Real-client interactive milestone signed off (entity visible, place/break, damage, death→respawn); 3 real-client bugs fixed |
-| 7. AI, Pathfinding, Commands & Chat | 0/TBD | Not started | - |
+| 7. AI, Pathfinding, Commands & Chat | 0/6 | Planned | - |
 | 8. Leaf Concurrency Optimizations | 0/TBD | Not started | - |
 | 9. Stretch — Online / Parity / Regionization | 0/TBD | Not started | - |
