@@ -7,4 +7,8 @@ require (
 	golang.org/x/exp v0.0.0-20230321023759-10a507213a29
 )
 
-require golang.org/x/sync v0.21.0
+require (
+	github.com/panjf2000/ants/v2 v2.12.1
+	github.com/puzpuzpuz/xsync/v4 v4.5.0
+	golang.org/x/sync v0.21.0
+)
