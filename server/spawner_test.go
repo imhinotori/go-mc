@@ -10,10 +10,35 @@ package server
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/level"
+	"github.com/imhinotori/sulfur/level/block"
 )
+
+// runSpawnCycle drives ONE full OPT-03 natural-spawn cycle end-to-end for a test: it submits the
+// off-tick candidate scan via naturalSpawn (the owner side), then — if a scan was actually
+// submitted (under cap, columns available, pool not overloaded) — deterministically receives the
+// single worker result off asyncIn2 and applies it on the test goroutine (standing in for the
+// owner's applyAsyncResults drain). This makes the now-async spawner synchronous for assertions
+// WITHOUT changing the production flow: in production applyAsyncResults drains asyncIn2 and calls
+// applyTo exactly the same way. When naturalSpawn submits nothing (at cap / no spawnable column /
+// overloaded), spawnScanPending stays false and the helper returns immediately — no spawn, as
+// expected.
+func runSpawnCycle(t *testing.T, loop *TickLoop) {
+	t.Helper()
+	loop.naturalSpawn()
+	if !loop.spawnScanPending {
+		return // no scan submitted this cycle (at cap, no eligible column, or pool overloaded)
+	}
+	select {
+	case r := <-loop.asyncIn2:
+		r.applyTo(loop) // the owner re-checks the cap + mobNear and adds at most one (async.go)
+	case <-time.After(2 * time.Second):
+		t.Fatal("spawn scan result never arrived on asyncIn2 (the off-tick worker did not rejoin)")
+	}
+}
 
 // newSpawnLoop builds a tick loop with one ready chunk at column (0,0), a solid floor at
 // floorY, and a player standing on it — the minimal eligible spawn environment. Returns the
@@ -68,7 +93,7 @@ func TestSpawnCapAccounting(t *testing.T) {
 		loop.entities.add(NewEntity(loop.idAlloc.AllocID(), entity.Pig, 8.5, float64(floorY+1), 8.5))
 	}
 	before := loop.entities.len()
-	loop.naturalSpawn()
+	runSpawnCycle(t, loop)
 	if loop.entities.len() != before {
 		t.Fatalf("at cap, naturalSpawn must not spawn: count %d -> %d", before, loop.entities.len())
 	}
@@ -79,7 +104,7 @@ func TestSpawnCapAccounting(t *testing.T) {
 		break
 	}
 	below := loop.entities.len()
-	loop.naturalSpawn()
+	runSpawnCycle(t, loop)
 	if loop.entities.len() != below+1 {
 		t.Fatalf("below cap, naturalSpawn should add exactly one mob: count %d -> %d", below, loop.entities.len())
 	}
@@ -92,7 +117,7 @@ func TestSpawnPlacementOnGround(t *testing.T) {
 	loop, ch, floorY := newSpawnLoop(t)
 
 	// (a) Valid floor: a spawn lands on the surface (feet at floorY+1, solid floorY below).
-	loop.naturalSpawn()
+	runSpawnCycle(t, loop)
 	var spawned *Entity
 	for _, e := range loop.entities.byID {
 		if e.typ == entity.Pig.ID {
@@ -122,7 +147,7 @@ func TestSpawnPlacementOnGround(t *testing.T) {
 	_ = ch // keep ch referenced (floor world built above)
 	loop2.players = append(loop2.players, &tickPlayer{x: 8.5, y: float64(floorY + 1), z: 8.5})
 	before := loop2.entities.len()
-	loop2.naturalSpawn()
+	runSpawnCycle(t, loop2)
 	if loop2.entities.len() != before {
 		t.Fatalf("a fully-blocked column must not spawn (no ON_GROUND clearance): %d -> %d", before, loop2.entities.len())
 	}
@@ -136,7 +161,7 @@ func TestSpawnAddsToStore(t *testing.T) {
 	loop, _, _ := newSpawnLoop(t)
 
 	before := loop.entities.len()
-	loop.naturalSpawn()
+	runSpawnCycle(t, loop)
 	if loop.entities.len() != before+1 {
 		t.Fatalf("a valid spawn must add exactly one entity: %d -> %d", before, loop.entities.len())
 	}
@@ -212,10 +237,25 @@ func TestTickAISpawns(t *testing.T) {
 
 	before := loop.entities.len()
 	// Drive enough ticks that gametime crosses at least one spawnInterval boundary. gametime is
-	// 0 on the first tickAI call, so the very first call already attempts a spawn.
+	// 0 on the first tickAI call, so the very first call already submits a spawn scan. OPT-03: the
+	// scan is off-tick — tickAI SUBMITS to spawnPool and applyAsyncResults (the pipeline phase that
+	// runs after tickAI each tick in the live loop) rejoins it on the owner. Drive applyAsyncResults
+	// here so the off-tick candidate scan lands and the owner adds the mob (the spawn arrives a tick
+	// or two later, as designed).
 	for i := 0; i < spawnInterval+1; i++ {
 		loop.tickAI()
-		loop.gametime++ // mirror tickOnce's per-tick increment (tickAI does not bump it itself)
+		loop.applyAsyncResults() // drain asyncIn2: the owner re-checks the cap + adds (async.go)
+		loop.gametime++          // mirror tickOnce's per-tick increment (tickAI does not bump it itself)
+	}
+	// The off-tick worker may not have finished within the loop above (the pool runs concurrently);
+	// give the pending scan a final bounded chance to rejoin so the assertion is deterministic.
+	if loop.spawnScanPending {
+		select {
+		case r := <-loop.asyncIn2:
+			r.applyTo(loop)
+		case <-time.After(2 * time.Second):
+			t.Fatal("tickAI's off-tick spawn scan never rejoined on asyncIn2")
+		}
 	}
 	if loop.entities.len() <= before {
 		t.Fatalf("tickAI's throttled naturalSpawn should have added a mob over %d ticks: %d -> %d",
@@ -294,5 +334,203 @@ func TestDebugPigUsesRealAI(t *testing.T) {
 	if pig.x != startX {
 		t.Fatalf("tickDebug still moves the pig with a sinusoidal mover (x %v -> %v); the sine mover must be retired",
 			startX, pig.x)
+	}
+}
+
+// --- OPT-03 (08-05): async mob spawning — off-tick scan, owner-side cap-checked add ----------
+
+// TestAsyncSpawnRejoinsAndAdds: under cap with a standable column, naturalSpawn SUBMITS the
+// candidate scan off-tick (spawnScanPending set) and, after the pool runs and the owner applies the
+// rejoin, exactly ONE Pig is added at a standable position with a real mobAI attached. This is the
+// happy path of the off-tick scan -> owner add swap.
+func TestAsyncSpawnRejoinsAndAdds(t *testing.T) {
+	loop, _, floorY := newSpawnLoop(t)
+
+	before := loop.entities.len()
+	loop.naturalSpawn()
+	if !loop.spawnScanPending {
+		t.Fatal("under cap with a standable column, naturalSpawn must SUBMIT an off-tick scan (spawnScanPending)")
+	}
+	// Rejoin the off-tick result on the owner (the production applyAsyncResults drain).
+	select {
+	case r := <-loop.asyncIn2:
+		r.applyTo(loop)
+	case <-time.After(2 * time.Second):
+		t.Fatal("the off-tick spawn scan never rejoined on asyncIn2")
+	}
+	if loop.spawnScanPending {
+		t.Fatal("applyTo must CLEAR the single-in-flight gate so the next cycle can submit")
+	}
+	if loop.entities.len() != before+1 {
+		t.Fatalf("the async scan + owner add must add exactly one mob: %d -> %d", before, loop.entities.len())
+	}
+	var pig *Entity
+	for _, e := range loop.entities.byID {
+		if e.typ == entity.Pig.ID {
+			pig = e
+		}
+	}
+	if pig == nil {
+		t.Fatal("the rejoined spawn must add a Pig")
+	}
+	if pig.ai == nil {
+		t.Fatal("an async-spawned Pig must have a real mobAI attached (the owner add path mirrors the sync spawn)")
+	}
+	if int(pig.y) != floorY+1 {
+		t.Fatalf("the Pig must stand on the floor surface (feet Y=%d), got y=%v", floorY+1, pig.y)
+	}
+	// The add ran on the OWNER (in applyTo), so the bucket index is consistent for near().
+	found := false
+	for _, e := range loop.entities.near(pig.x, pig.z, 0) {
+		if e.id == pig.id {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("the async-spawned Pig must be bucketed (the owner add re-buckets it)")
+	}
+}
+
+// TestAsyncSpawnCapRecheck: the cap is RE-CHECKED on apply against the AUTHORITATIVE store (Pitfall
+// 3 anti-flood). naturalSpawn submits a scan while UNDER cap; then, BEFORE the rejoin is applied,
+// the store is filled to the cap (simulating other spawns landing between the off-tick scan and its
+// apply). applyTo must re-check and DROP — no over-cap add — because the scan's count was stale.
+func TestAsyncSpawnCapRecheck(t *testing.T) {
+	loop, _, floorY := newSpawnLoop(t)
+
+	cols := loop.spawnableColumns()
+	if len(cols) == 0 {
+		t.Fatal("expected at least one spawnable column near the player")
+	}
+	cap := categoryCreature.maxInstancesPerChunk() * len(cols)
+
+	// Submit the scan while the store is EMPTY (well under cap).
+	loop.naturalSpawn()
+	if !loop.spawnScanPending {
+		t.Fatal("under cap, naturalSpawn must submit an off-tick scan")
+	}
+	// Receive the scan result but DO NOT apply it yet.
+	var result asyncResult
+	select {
+	case result = <-loop.asyncIn2:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the off-tick spawn scan never rejoined on asyncIn2")
+	}
+
+	// Now flood the store to EXACTLY the cap BEFORE applying — the world filled up since the scan.
+	for i := 0; i < cap; i++ {
+		loop.entities.add(NewEntity(loop.idAlloc.AllocID(), entity.Pig, 8.5, float64(floorY+1), 8.5))
+	}
+	atCap := loop.entities.len()
+
+	// Apply the STALE scan result on the owner: the cap re-check must DROP it (no over-cap add).
+	result.applyTo(loop)
+	if loop.entities.len() != atCap {
+		t.Fatalf("a stale scan must NOT over-spawn past the re-checked cap: %d -> %d (cap=%d)",
+			atCap, loop.entities.len(), cap)
+	}
+	if loop.spawnScanPending {
+		t.Fatal("applyTo must clear the in-flight gate even when it drops the spawn (no wedge)")
+	}
+}
+
+// TestAsyncSpawnOccupiedDropped: the mobNear anti-piling guard is RE-CHECKED on apply against the
+// LIVE store. A candidate whose position is already occupied (a mob within the packing radius at
+// apply time) is DROPPED — the owner never piles a mob onto an occupied spot, even though the
+// off-tick scan (over a stale snapshot) proposed it.
+func TestAsyncSpawnOccupiedDropped(t *testing.T) {
+	loop, _, floorY := newSpawnLoop(t)
+
+	// Pre-place a mob at the exact candidate position so mobNear is true there at apply time.
+	const cx, cz = 8, 8
+	occupier := NewEntity(loop.idAlloc.AllocID(), entity.Pig, float64(cx)+0.5, float64(floorY+1), float64(cz)+0.5)
+	loop.entities.add(occupier)
+	before := loop.entities.len()
+
+	// A scan result proposing ONLY the occupied candidate. spawnableChunkCount is large so the cap
+	// re-check passes (live=1 << cap) and the ONLY drop reason under test is the mobNear guard.
+	result := spawnCandidatesReady{
+		candidates:          []spawnCandidate{{x: cx, y: floorY + 1, z: cz}},
+		spawnableChunkCount: 100,
+	}
+	result.applyTo(loop)
+
+	if loop.entities.len() != before {
+		t.Fatalf("an occupied candidate must be DROPPED (anti-piling guard re-checked on the owner): %d -> %d",
+			before, loop.entities.len())
+	}
+}
+
+// TestAsyncSpawnPoolOverloadSkips: a saturated spawnPool makes the cycle a no-op (Pitfall 4). With
+// every spawnPool worker busy, naturalSpawn's submit is DROPPED: no scan is in flight, no mob is
+// added, and the cycle simply retries next spawnInterval. The single-in-flight gate stays clear so
+// a later cycle (when the pool frees up) can submit again.
+func TestAsyncSpawnPoolOverloadSkips(t *testing.T) {
+	loop, _, _ := newSpawnLoop(t)
+
+	// Saturate the spawnPool: occupy all asyncSmallPoolSize workers with a blocking task each, so
+	// the next Submit returns ErrPoolOverload (the pool is non-blocking).
+	release := make(chan struct{})
+	busy := make(chan struct{}, asyncSmallPoolSize)
+	for i := 0; i < asyncSmallPoolSize; i++ {
+		if !submitOrDrop(loop.spawnPool, func() {
+			busy <- struct{}{}
+			<-release // hold the worker until the test releases it
+		}) {
+			t.Fatal("failed to saturate the spawnPool for the overload test")
+		}
+	}
+	// Wait until every worker is actually occupied (not merely queued) before the overload submit.
+	for i := 0; i < asyncSmallPoolSize; i++ {
+		select {
+		case <-busy:
+		case <-time.After(2 * time.Second):
+			t.Fatal("the saturating tasks never started")
+		}
+	}
+
+	before := loop.entities.len()
+	loop.naturalSpawn() // the candidate-scan submit must be DROPPED on the saturated pool
+	if loop.spawnScanPending {
+		t.Fatal("on pool overload naturalSpawn must NOT mark a scan in flight (the cycle is skipped)")
+	}
+	if loop.entities.len() != before {
+		t.Fatalf("an overloaded cycle must add no mob (it retries next interval): %d -> %d",
+			before, loop.entities.len())
+	}
+	close(release) // free the saturating workers
+}
+
+// TestAsyncSpawnScanReadsSnapshot: the off-tick scan reads the IMMUTABLE solidity SNAPSHOT copied on
+// the owner, NOT the live world. We build the snapshot over a standable column, then MUTATE the live
+// world (clear the floor) — the snapshot's findStandableYIn still finds the standable Y (proving it
+// reads the frozen copy), while the live findStandableY no longer does (proving the world actually
+// changed). This is the load-bearing -race safety: the worker can never read a block the tick is
+// concurrently mutating, because it reads only the copy (08-RESEARCH Pitfall 1).
+func TestAsyncSpawnScanReadsSnapshot(t *testing.T) {
+	loop, ch, floorY := newSpawnLoop(t)
+
+	const px, pz = 8, 8
+	// Copy the candidate column's solidity into the snapshot ON the owner (the production path).
+	snap := loop.snapshotSpawnColumns([]spawnCandidatePick{{x: px, z: pz}}, floorY+1)
+
+	// Sanity: against the snapshot the column is standable (solid below floorY+1, clear feet/head).
+	if _, ok := findStandableYIn(snap, px, pz); !ok {
+		t.Fatal("the snapshot of a floored column must report a standable Y")
+	}
+
+	// Now MUTATE the live world: clear the floor block under the candidate. The snapshot is frozen,
+	// so it must be unaffected; the LIVE read must now reflect the change.
+	ch.Sections[(floorY-dimMinY)>>4].SetBlock((floorY&15)<<8|(pz&15)<<4|(px&15), block.ToStateID[block.Air{}])
+
+	// The live world no longer has a standable surface there (the floor block is gone).
+	if _, ok := loop.findStandableY(px, pz, floorY+1); ok {
+		t.Fatal("the live world should NOT be standable after clearing the floor block (test setup check)")
+	}
+	// But the SNAPSHOT — the value the off-tick worker reads — is unchanged: still standable. This
+	// is what makes the off-tick scan -race clean: it reads the copy, never the mutated live world.
+	if y, ok := findStandableYIn(snap, px, pz); !ok || y != floorY+1 {
+		t.Fatalf("the snapshot must be IMMUTABLE: the off-tick scan still finds the standable Y (=%d) after the live world changed (got y=%d ok=%v)",
+			floorY+1, y, ok)
 	}
 }
