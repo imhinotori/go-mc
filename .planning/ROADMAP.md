@@ -82,7 +82,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. A vanilla 26.2 client stands on an all-stone flat chunk: chunks stream by view distance with the neighbor-ring requirement satisfied — the client renders and does not fall through the void
 **Plans**: 4 plans
 - [x] 04-01-PLAN.md — Fix the two confirmed 776 wire bugs in level/chunk.go (fluid-count short on Section, trim heightmaps to the 3 CLIENT ids) + self-round-trip/byte-length regression (WORLD-02 partial, WORLD-03 heightmaps)
-- [ ] 04-02-PLAN.md — New world/ package: deterministic superflat generator, tick-owned chunk manager, off-tick singleflight worker (region-load-or-generate), ClientboundLevelChunkWithLight assembly (WORLD-01 worker side, WORLD-02 full, WORLD-04)
+- [x] 04-02-PLAN.md — New world/ package: deterministic superflat generator, tick-owned chunk manager, off-tick singleflight worker (region-load-or-generate), ClientboundLevelChunkWithLight assembly (WORLD-01 worker side, WORLD-02 full, WORLD-04)
 - [ ] 04-03-PLAN.md — Wire the off-tick chunkReady rejoin into the Phase-3 applyAsyncResults seam + fill tickChunks/flushOutbound: clamped center-out view-distance ring streaming with ChunkBatchStart/Finished (WORLD-01 tick side, WORLD-05)
 - [ ] 04-04-PLAN.md — Capture-diff Sulfur's chunk+light bytes vs a real vanilla 26.2 superflat chunk + BLOCKING human-verify real-client visual check (autonomous:false; WORLD-02/03/05 authoritative gate)
 **Research**: Needs deeper per-phase research — the exact 776 section layout (fluid-count short, no length prefix, heightmap bits-per-entry) must be confirmed against the jar; go-mc may lag. [DONE — see 04-RESEARCH.md: both wire bugs jar-confirmed against temp/cache/26.2-server.jar.]
