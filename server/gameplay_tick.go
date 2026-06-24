@@ -67,6 +67,14 @@ type gameTick struct {
 	// Atomic because AcceptPlayer runs on a per-connection accept goroutine — multiple
 	// joins issue ids concurrently without crossing into tick-owned state.
 	teleportSeq atomic.Uint64
+
+	// worldDir is the persistent world directory (ENT-06): AcceptPlayer loads the joining
+	// player's world/playerdata/<uuid>.dat from here BEFORE the bootstrap (or spawn defaults
+	// if absent/corrupt — T-6-16). An empty worldDir disables persistence (loadPlayer just
+	// returns defaults), so a stateless v1 deployment still works. Read-only after
+	// construction; the load runs off-tick on the accept goroutine (disk IO before the player
+	// is registered with the tick), so it crosses no tick-owned state.
+	worldDir string
 }
 
 // NewGameTick constructs the real GamePlay over the shared inbound seam, the single
@@ -77,6 +85,12 @@ type gameTick struct {
 func NewGameTick(inbound chan Intent, loop *TickLoop, keep *KeepAlive, spawnSurfaceY int) *gameTick {
 	return &gameTick{inbound: inbound, loop: loop, keep: keep, spawnSurfaceY: spawnSurfaceY}
 }
+
+// SetWorldDir wires the persistent world directory (ENT-06) so AcceptPlayer loads/saves each
+// player's world/playerdata/<uuid>.dat. main() calls it after NewGameTick when a persistent
+// world is configured; leaving it unset (empty) keeps the v1 stateless behavior (loadPlayer
+// returns spawn defaults, no save). Set-once at setup.
+func (g *gameTick) SetWorldDir(dir string) { g.worldDir = dir }
 
 // nextTeleportID claims a fresh, non-zero, incrementing teleport id for a joining player
 // (PLAY-02). It is the producer side of the Plan-05-01 confirm gate: the returned id is
@@ -200,14 +214,33 @@ func (g *gameTick) AcceptPlayer(
 		secs:             overworldSections,
 		awaitingTeleport: teleportID,
 		entityID:         entityID,
+		uuid:             id,
 		// ENT-05: a fresh player spawns at full survival health/food/saturation (the
 		// server-owned defaults). These tick-owned fields drive the damage->death->respawn
 		// loop; the client never sets them (T-6-05). A loaded .dat (ENT-06) overrides them
-		// below when persistence is wired into the join.
+		// just below when a persisted player rejoins.
 		health:     maxHealth,
 		food:       maxFood,
 		saturation: defaultSaturation,
 	}
+
+	// ENT-06 load-on-join: if a persistent world is configured, read the player's
+	// world/playerdata/<uuid>.dat and apply the persisted health/food/saturation (a missing or
+	// corrupt .dat returns spawn defaults with ok=false — never crashes the join, T-6-16). The
+	// disk IO runs HERE, on the accept goroutine, BEFORE the player is registered with the tick,
+	// so it crosses no tick-owned state. Position is NOT applied to the live player for v1: the
+	// bootstrap already teleported the client to the spawn column above, and re-placing it at a
+	// persisted position would require re-issuing the bootstrap teleport — deferred. Health/food
+	// are the v1 persisted-state restore; the persisted position round-trips on disk (proven by
+	// TestPlayerDataRoundTrip) and a later plan applies it to the spawn teleport.
+	if g.worldDir != "" {
+		if data, ok := loadPlayer(g.worldDir, id); ok {
+			player.health = data.Health
+			player.food = data.FoodLevel
+			player.saturation = data.FoodSaturationLevel
+		}
+	}
+
 	g.loop.register <- player
 
 	// Block until the connection closes (the player is playing). The conn is torn down

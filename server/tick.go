@@ -9,7 +9,10 @@ import (
 	"github.com/imhinotori/sulfur/data/packetid"
 	"github.com/imhinotori/sulfur/level"
 	pk "github.com/imhinotori/sulfur/net/packet"
+	"github.com/imhinotori/sulfur/save"
 	"github.com/imhinotori/sulfur/world"
+
+	"github.com/google/uuid"
 )
 
 // msptRingSize is the number of recent tick durations kept for the rolling
@@ -146,6 +149,16 @@ type TickLoop struct {
 	register   chan *tickPlayer
 	unregister chan *Client
 
+	// leaveSnapshots carries the immutable per-player save snapshot OUT of the tick on leave
+	// (ENT-06 / TICK-05 / T-6-15). removePlayer runs on the OWNER goroutine; before it drops a
+	// leaving player it takes an immutable snapshotPlayer (a value copy — no live tick-owned
+	// pointer crosses) and sends it here. An off-tick consumer (main's save loop, wired via
+	// LeaveSnapshots) drains the channel and does the disk IO, so the snapshot is taken on the
+	// owner and the IO runs OFF the tick — the Phase-4 chunk-result discipline. nil until
+	// SetSaveSink wires it (tests that never leave a player leave it nil); a nil channel makes
+	// the leave-snapshot send a cheap skipped no-op. Buffered so a leave never parks the tick.
+	leaveSnapshots chan playerLeaveSnapshot
+
 	// entities is the tick-owned entity store (ENT-01). The by-id map + per-section grid
 	// buckets are mutated ONLY by the tick goroutine (TICK-05) — entity spawning (Plan
 	// 06-02), movement/re-bucketing (Plan 06-03), and the tracker's near() broad-phase all
@@ -209,6 +222,12 @@ type tickPlayer struct {
 	// space so no id ever collides. Recorded here so a later plan (entity tracker /
 	// the player's own Entity instance) can reference it. Tick-owned once registered.
 	entityID int32
+
+	// uuid is the player's network/profile UUID (the login id). It is the key for the
+	// player's persisted world/playerdata/<uuid>.dat (ENT-06): removePlayer pairs it with the
+	// owner-taken snapshot so the off-tick save path knows which file to write. Set at
+	// registration; tick-owned thereafter.
+	uuid uuid.UUID
 
 	// subtick is this player's bounded µs-timestamped input buffer (TICK-03). dispatch
 	// appends server-stamped inputs on arrival; resolveSubtickInputs drains it in
@@ -437,6 +456,29 @@ func (t *TickLoop) nextTeleportID() int {
 	return t.respawnTeleportSeq
 }
 
+// playerLeaveSnapshot pairs a leaving player's UUID with the IMMUTABLE save snapshot taken on
+// the owner goroutine (ENT-06 / T-6-15). It is the only player value that crosses the tick
+// boundary on leave; the off-tick save consumer writes save/<uuid>.dat from it without ever
+// touching live tick-owned state.
+type playerLeaveSnapshot struct {
+	uuid uuid.UUID
+	data save.PlayerData
+}
+
+// leaveSnapshotBuffer bounds the leave-snapshot channel. Leaves are rare relative to the tick
+// rate; a small buffer ensures removePlayer's owner-side send never parks the tick even if the
+// off-tick save consumer is briefly busy with disk IO.
+const leaveSnapshotBuffer = 64
+
+// SetSaveSink wires the off-tick persistence consumer (ENT-06). main() calls it before Run; it
+// allocates the leaveSnapshots channel so removePlayer emits a snapshot per leave, and returns
+// the receive end for the caller's save loop to drain off the tick. Tests that never persist a
+// leaving player simply never call it (the nil channel makes the leave-snapshot send a no-op).
+func (t *TickLoop) SetSaveSink() <-chan playerLeaveSnapshot {
+	t.leaveSnapshots = make(chan playerLeaveSnapshot, leaveSnapshotBuffer)
+	return t.leaveSnapshots
+}
+
 // traceTo installs a test-only phase-order recorder. Each phase appends its name to
 // *dst as it runs, letting TestTickPhaseOrder assert the fixed pipeline order. Pass
 // nil to disable. Not used in production.
@@ -573,6 +615,21 @@ func (t *TickLoop) removePlayer(c *Client) {
 	if !ok {
 		return
 	}
+
+	// ENT-06 save-on-leave (TICK-05 / T-6-15): take the IMMUTABLE snapshot HERE, on the owner
+	// goroutine, while the player is still a live tick-owned value, then hand only that value
+	// copy to the off-tick save consumer. No live tick-owned pointer crosses the boundary, so
+	// the off-tick disk IO is -race clean by construction (the Phase-4 chunk-result discipline).
+	// A nil channel (no save sink wired) or a full buffer is a cheap skipped no-op — a leave
+	// never parks the tick on persistence.
+	if t.leaveSnapshots != nil {
+		snap := playerLeaveSnapshot{uuid: p.uuid, data: snapshotPlayer(p)}
+		select {
+		case t.leaveSnapshots <- snap:
+		default: // buffer full: drop this save rather than stall the tick (rare; leaves are sparse)
+		}
+	}
+
 	delete(t.clientIndex, c)
 	for i, pl := range t.players {
 		if pl == p {

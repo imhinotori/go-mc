@@ -55,6 +55,12 @@ const (
 	// so a single player's first-tick request burst is absorbed without dropping; a
 	// flood beyond it backpressures (Request drops) rather than growing memory.
 	workerBuf = 256
+
+	// worldDir is the persistent world directory (ENT-06). Player .dat files live under
+	// worldDir/playerdata/<uuid>.dat and the entities region under worldDir/entities/. It is
+	// the v1 persistent world root; the off-tick save loop writes player snapshots here on
+	// leave, and AcceptPlayer loads them on join.
+	worldDir = "world"
 )
 
 // pingHandler composes the version/MOTD reporting of PingInfo (Protocol fixed to 776,
@@ -127,12 +133,21 @@ func main() {
 	// goroutine (its own 15s/30s timers, never gated on tick cadence — TICK-04), and the
 	// off-tick chunk worker (computes immutable ChunkResults; the tick is the sole
 	// mutator of the manager — TICK-05 / T-4-05).
+	// ENT-06: wire the off-tick player-save consumer. SetSaveSink arms removePlayer to emit an
+	// immutable per-player snapshot on leave (taken on the owner goroutine — TICK-05 / T-6-15);
+	// RunSaveLoop drains those snapshots and does the disk IO OFF the tick, so a leave never
+	// blocks the tick on persistence and no live tick-owned state is read off-thread.
+	tick.SetSaveSink()
+	go tick.RunSaveLoop(ctx, worldDir)
+
 	go tick.Run(ctx, inbound)
 	go keep.Run(ctx)
 	go worker.Run(ctx)
 
 	// The real GamePlay bridges an accepted connection to the running tick + keep-alive.
-	srv := newServer(server.NewGameTick(inbound, tick, keep, overworldSurfaceY))
+	gp := server.NewGameTick(inbound, tick, keep, overworldSurfaceY)
+	gp.SetWorldDir(worldDir) // ENT-06: load/save player .dat under worldDir
+	srv := newServer(gp)
 
 	srv.Logger.Printf("Sulfur listening on %s (protocol %d, %s)",
 		*addr, server.ProtocolVersion, server.ProtocolName)
