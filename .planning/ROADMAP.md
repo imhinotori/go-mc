@@ -151,8 +151,15 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. The async entity tracker runs visibility updates off the main tick and rejoins via the apply-async seam; async mob spawning scans candidate locations off-thread
   3. Hot-path collections use lock-free/specialized variants (xsync/v4) and worker pools use ants/v2; the linear region file format reduces disk I/O and footprint
   4. The server passes `-race` clean on every async subsystem
-**Plans**: TBD
-**Research**: Standard pattern (lighter research) — the seam-swap pattern and the Go concurrency stack (xsync/ants/conc) are verified; this is applying a known pattern.
+**Plans**: 7 plans (6 waves)
+- [ ] 08-01-PLAN.md — Async substrate (Wave 0): add ants/v2 + xsync/v4 to go.mod; server/async.go (non-blocking pool factory + pathReady/trackerDiffReady/spawnCandidatesReady contracts); the asyncIn2 rejoin behind the unchanged applyAsyncResults seam; the -race stress scaffold (OPT-04/06)
+- [ ] 08-02-PLAN.md — OPT-01 async pathfinding (Wave 1): requestPath submits computePath to the pathPool and continues; pathReady rejoins with despawn/retarget validation; navigation tolerates a 1+-tick-late path (OPT-01/06)
+- [ ] 08-03-PLAN.md — OPT-05 linear region format (Wave 1): save/region/linear.go (whole-region zstd, pure-Go klauspost/compress) alongside .mca; format-aware opt-in loadOrGenerate; round-trip + bomb/corrupt guards (OPT-05/06)
+- [ ] 08-04-PLAN.md — OPT-02 async tracker (Wave 2): asyncTracker behind the unchanged tracker.Tick() seam (one swap-point line); diff math off-tick over a snapshot; owner-side packet emission; golden equivalence vs entityTracker (OPT-02/06)
+- [ ] 08-05-PLAN.md — OPT-03 async mob spawning (Wave 3): naturalSpawn scan off-tick over a solidity snapshot; spawnCandidatesReady re-checks the cap on the owner before entityStore.add; every anti-flood/anti-piling guard survives (OPT-03/06)
+- [ ] 08-06-PLAN.md — OPT-04 collections contention audit (Wave 4): snapshot-and-stay-plain per collection (justified); ants pools confirmed; one justified xsync/v4 usage; the no-live-capture discipline gate (OPT-04/06)
+- [ ] 08-07-PLAN.md — OPT-06 final gate (Wave 5): combined all-subsystems concurrent stress + behavior-regression (paths arrive / tracker sends / mobs spawn / .linear round-trips); the Docker -race -count=10 phase gate green; automatable, no new wire surface (OPT-06)
+**Research**: Standard pattern (lighter research) — the seam-swap pattern and the Go concurrency stack (xsync/ants/conc) are verified; this is applying a known pattern. [DONE — see 08-RESEARCH.md: the Seam Map maps each OPT to its exact existing seam/snapshot/rejoin; the .linear binary spec + the -race strategy are grounded in the live source.]
 
 ### Phase 9: Stretch — Online Mode, Vanilla-Parity Worldgen, Regionization
 **Goal**: Optional v2 add-ons enabled by the ownership-isolated core — online-mode auth/encryption, Mojang density-function worldgen, and Folia-style per-region tick threading. Each is independent and optional.
@@ -162,7 +169,6 @@ Decimal phases appear between their surrounding integers in numeric order.
   1. Mojang/Microsoft account authentication and protocol encryption work for online-mode connections (ONLINE-01, ONLINE-02)
   2. Mojang density-function world generation (improved-Perlin/OctaveSimplex) produces terrain with vanilla parity (PARITY-01)
   3. Folia-style per-region tick threading runs on top of the ownership-isolated core without a rewrite (REGION-01)
-**Plans**: TBD
 **Research**: Needs deeper per-phase research — which `levelgen` density-function subset to target for vanilla-parity worldgen is bespoke and phase-specific.
 
 ## Progress
@@ -179,5 +185,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 5. Player Session In-World (FIRST PLAYABLE) | 3/3 | ✅ Complete | FIRST PLAYABLE — real client walks around a following world |
 | 6. Entities, Physics & Interaction | 7/7 | Complete | Real-client interactive milestone signed off (entity visible, place/break, damage, death→respawn); 3 real-client bugs fixed |
 | 7. AI, Pathfinding, Commands & Chat | 6/6 | Complete | Real-client signed off; ported from decompiled Java per user mandate; 4 real-client bugs fixed (commands parser-id, pig-spawn-timing, spawner-piling, debug-damage) |
-| 8. Leaf Concurrency Optimizations | 0/TBD | Not started | - |
+| 8. Leaf Concurrency Optimizations | 0/7 | Planned (7 plans, 6 waves) | - |
 | 9. Stretch — Online / Parity / Regionization | 0/TBD | Not started | - |
+</content>
