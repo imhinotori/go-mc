@@ -104,10 +104,15 @@ func (g *Superflat) Generate(_ level.ChunkPos) *level.Chunk {
 	for i := range ch.Sections {
 		s := &ch.Sections[i]
 		s.FluidCount = 0
-		// Set the whole 4x4x4 biome grid to plains.
-		for bi := 0; bi < 4*4*4; bi++ {
-			s.Biomes.Set(bi, g.plains)
-		}
+		// Biome is uniform plains across the whole 4x4x4 grid. Construct the
+		// container as SINGLE-VALUED plains directly rather than Set-ing all 64
+		// cells: a per-cell Set on the fresh single-value (default) container
+		// resizes to a 2-entry linear palette carrying the stale default biome
+		// (id 0) as a phantom entry, and emits a data long. Vanilla emits a
+		// single-valued biome container (bits=0, one palette id, zero longs) for
+		// a uniform section — matching it (NewBiomesPaletteContainer with plains
+		// as the default value) keeps the wire byte-identical to vanilla here.
+		s.Biomes = level.NewBiomesPaletteContainer(4*4*4, g.plains)
 		s.SkyLight = fullSkyLight()
 	}
 

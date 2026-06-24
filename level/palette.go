@@ -106,12 +106,19 @@ func (p *PaletteContainer[T]) Set(i int, v T) {
 		p.data.Set(i, vv)
 	} else {
 		length := p.data.Len()
-		// resize
+		// resize. The palette.id() miss returns the *requested* bit width (vv);
+		// the actual stored width is config.bits(vv) (e.g. states floor 1..4 -> 4,
+		// >=9 -> the global-palette width). The container's bits field, the data
+		// BitStorage, AND the wire header must all use that floored width — writing
+		// the raw vv as the header bits-per-entry while packing config.bits(vv)-wide
+		// longs misframes the section for a vanilla client (the 776 stripes/void
+		// bug the capture-diff caught: header said 1 bit, data was 4-bit/256 longs).
+		storedBits := p.config.bits(vv)
 		newContainer := PaletteContainer[T]{
-			bits:    vv,
+			bits:    storedBits,
 			config:  p.config,
 			palette: p.config.create(vv),
-			data:    NewBitStorage(p.config.bits(vv), length, nil),
+			data:    NewBitStorage(storedBits, length, nil),
 		}
 		// copy
 		for i := 0; i < length; i++ {
