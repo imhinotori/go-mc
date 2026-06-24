@@ -116,31 +116,27 @@ func walkCommandGraphBody(t *testing.T, body []byte) (nodeCount, rootIndex int) 
 			read(&name, "node name")
 		}
 		if kind == nodeKindArgument {
-			// Parser: an Identifier (the parser id, e.g. "brigadier:string") then parser
-			// properties. The captured vanilla graph and Sulfur both use brigadier:string for
-			// the message/action args (a single VarInt behavior). Other vanilla parsers carry
-			// their own property encodings; we read the parser id Identifier and then the
-			// brigadier:string behavior VarInt for those, and tolerate any other parser by
-			// consuming the rest of THIS node's known-width fields. To stay robust across the
-			// full vanilla parser set, we parse only the parser id Identifier here and let the
-			// node boundary be re-established by the next node's flags — but since arbitrary
-			// parser properties are variable-width, we instead assert the Sulfur-relevant
-			// brigadier:string nodes precisely and accept that the vanilla graph's exotic
-			// parsers are validated by the zero-trailing-bytes whole-body check below only for
-			// graphs composed of brigadier:string args (Sulfur's). For the vanilla golden we
-			// stop strict per-node parsing once we hit a non-brigadier:string parser.
-			var parserID pk.Identifier
+			// Parser: a VarInt parser-registry id (since 1.19 / proto 759+ the parser is a
+			// VarInt INDEX into ArgumentTypeInfos' registration order, NOT an Identifier string —
+			// jar-confirmed: bool=0, float=1, double=2, integer=3, long=4, string=5), then the
+			// parser-specific properties. Sulfur uses ONLY brigadier:string (id 5), whose
+			// properties are a single VarInt behavior (0 word / 1 phrase / 2 greedy). The vanilla
+			// golden graph carries other parsers with variable-width properties we cannot
+			// generically walk, so we strictly walk brigadier:string nodes and stop the strict
+			// walk (returning rootIndex -1) the moment we hit any other parser id. The Sulfur
+			// graph (the encoder under test) is all-brigadier:string, so ITS walk always
+			// completes to zero trailing bytes and a real root index (asserted below).
+			const parserIDBrigadierString = 5
+			var parserID pk.VarInt
 			read(&parserID, "parser id")
-			switch string(parserID) {
-			case "brigadier:string":
+			switch int32(parserID) {
+			case parserIDBrigadierString:
 				var behavior pk.VarInt
 				read(&behavior, "brigadier:string behavior")
 			default:
 				// A non-brigadier:string parser carries parser-specific properties of unknown
-				// width. We cannot generically walk every vanilla parser, so we record that the
-				// node framing up to the parser id is correct and stop the strict walk here.
-				// The Sulfur graph (the encoder under test) uses ONLY brigadier:string, so its
-				// walk always completes to zero trailing bytes (asserted below).
+				// width; cannot generically walk every vanilla parser, so stop the strict walk
+				// here (the framing up to the parser id is validated).
 				return int(count), -1
 			}
 		}

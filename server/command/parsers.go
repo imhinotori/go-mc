@@ -14,10 +14,20 @@ type Parser interface {
 
 type StringParser int32
 
+// parserIDBrigadierString is the ClientboundCommands argument-parser registry id for
+// brigadier:string. Since 1.19 (proto 759+) the parser in a command-graph ArgumentNode is a
+// VarInt INDEX into net.minecraft.commands.synchronization.ArgumentTypeInfos' registration
+// order, NOT an Identifier string (the pre-1.19 wire). Registration order (javap'd from
+// temp/cache/26.2-inner.jar, ArgumentTypeInfos.bootstrap): bool=0, float=1, double=2,
+// integer=3, long=4, string=5. Emitting the old Identifier here made a real 26.2 client
+// "Failed to decode packet clientbound/minecraft:commands" — the client read the string bytes
+// where it expected the VarInt id and mis-framed the rest of the graph.
+const parserIDBrigadierString = 5
+
 func (s StringParser) WriteTo(w io.Writer) (int64, error) {
 	return pk.Tuple{
-		pk.Identifier("brigadier:string"),
-		pk.VarInt(s),
+		pk.VarInt(parserIDBrigadierString), // parser registry id (NOT an Identifier — proto 759+)
+		pk.VarInt(s),                       // StringArgumentType behavior: 0 word, 1 phrase, 2 greedy
 	}.WriteTo(w)
 }
 
