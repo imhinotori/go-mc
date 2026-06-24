@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: verifying
-stopped_at: "Completed 09-04-PLAN.md (PARITY-01 Wave 3: NoiseChunk cell-sample + trilerp -> per-block density field, caves as negative density)"
-last_updated: "2026-06-24T21:09:14.402Z"
+stopped_at: "Completed 09-05-PLAN.md (PARITY-01 Wave 4: Aquifer + OreVeinifier + the real doFill -> cave-complete terrain, water/lava/air + ore veins)"
+last_updated: "2026-06-24T21:32:42.989Z"
 last_activity: 2026-06-24
 progress:
   total_phases: 9
   completed_phases: 8
   total_plans: 46
-  completed_plans: 41
-  percent: 89
+  completed_plans: 42
+  percent: 91
 ---
 
 # Project State
@@ -74,7 +74,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [█████████░] 89%
+Progress: [█████████░] 91%
 
 ## Performance Metrics
 
@@ -128,6 +128,7 @@ Progress: [█████████░] 89%
 | Phase 09-stretch-online-worldgen-regions P02 | 38min | 2 tasks | 8 files |
 | Phase 09-stretch-online-worldgen-regions P03 | 10min | 2 tasks | 7 files |
 | Phase 09 P04 | 27 min | 2 tasks | 3 files |
+| Phase 09 P05 | 20min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -225,7 +226,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-24T21:09:05.429Z
-Stopped at: Completed 09-04-PLAN.md (PARITY-01 Wave 3: NoiseChunk cell-sample + trilerp -> per-block density field, caves as negative density)
+Last session: 2026-06-24T21:32:42.975Z
+Stopped at: Completed 09-05-PLAN.md (PARITY-01 Wave 4: Aquifer + OreVeinifier + the real doFill -> cave-complete terrain, water/lava/air + ore veins)
 Resume file: None
 Next: plan Phase 6 (entities / inventory / persistence) — the first-playable Player Session seam (movement, tick-owned position, the following ring, the tab list) is in place to build on. Deferred: KeepAlive double-leave hardening (Phase 3, surfaces when real timeout-driven disconnects land). The pulled-forward bootstrap deferred-row is now CLOSED.

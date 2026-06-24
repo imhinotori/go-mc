@@ -176,7 +176,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] 09-02-PLAN.md — Wave 1: Tier A Xoroshiro seeding chain + Tier B noise primitives — the determinism hinge, ported + golden-tested first
 - [x] 09-03-PLAN.md — Wave 2: the FULL 29 density-function node-type set (caves via noise/shifted_noise/range_choice/spline + the cave functions, NOT weird_scaled_sampler — which is NOT in the overworld graph) + the JSON graph parser + RandomState → the WHOLE overworld graph (hills + caves) evaluable; the Aquifer/OreVein router functions bound
 - [x] 09-04-PLAN.md — Wave 3: Tier E NoiseChunk cell-sample + the NoiseInterpolator trilerp → a per-block density field where caves appear as negative density (provisional fill for testing)
-- [ ] 09-05-PLAN.md — Wave 4: the Aquifer (water/lava/air in carved regions) + the OreVeinifier (copper/iron veins) + the real doFill — cave-complete (aquifers_enabled + ore_veins_enabled are true)
+- [x] 09-05-PLAN.md — Wave 4: the Aquifer (water/lava/air in carved regions) + the OreVeinifier (copper/iron veins) + the real doFill — cave-complete (aquifers_enabled + ore_veins_enabled are true)
 - [ ] 09-06-PLAN.md — Wave 5: the legacy WorldCarver pass — CanyonWorldCarver (RAVINES) + CaveWorldCarver (tunnels), aquifer-aware, cross-chunk-continuous (the carvers verified still run in 26.2)
 - [ ] 09-07-PLAN.md — Wave 5: the FULL SurfaceSystem/SurfaceRules (biome-correct surfaces) + the multi-noise Climate biome source (real biome diversity)
 - [ ] 09-08-PLAN.md — Wave 6: NoiseGenerator implementing world.Generator — drives noise→fill(aquifer/ore)→carve→surface(biome+heightmaps) into the reused level.Chunk, pure
