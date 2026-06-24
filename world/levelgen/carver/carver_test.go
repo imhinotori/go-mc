@@ -97,6 +97,78 @@ func (f floodBelow) CarveFluid(wx, wy, wz int) (block.StateID, bool) {
 
 const testSeed = int64(123456789)
 
+// carveBox is the bounding box of the carved positions in a solidChunk.
+type carveBox struct {
+	minX, maxX, minY, maxY, minZ, maxZ int
+	count                              int
+}
+
+func boundingBox(c *solidChunk) carveBox {
+	bb := carveBox{minX: 1 << 30, minY: 1 << 30, minZ: 1 << 30, maxX: -(1 << 30), maxY: -(1 << 30), maxZ: -(1 << 30)}
+	for k := range c.blocks {
+		x, y, z := k[0], k[1], k[2]
+		if x < bb.minX {
+			bb.minX = x
+		}
+		if x > bb.maxX {
+			bb.maxX = x
+		}
+		if y < bb.minY {
+			bb.minY = y
+		}
+		if y > bb.maxY {
+			bb.maxY = y
+		}
+		if z < bb.minZ {
+			bb.minZ = z
+		}
+		if z > bb.maxZ {
+			bb.maxZ = z
+		}
+		bb.count++
+	}
+	return bb
+}
+
+// runCarverDirect drives one carver's carve() over a target chunk from a source
+// chunk, seeded directly (bypassing the probability roll so the carve is forced for
+// the shape tests). Returns the chunk for inspection.
+func runCarverDirect(t *testing.T, conf *ConfiguredCarver, seed int64, target, src level.ChunkPos, fluid FluidSource) *solidChunk {
+	t.Helper()
+	rep, err := ParseReplaceables()
+	if err != nil {
+		t.Fatalf("parse replaceables: %v", err)
+	}
+	ch := newSolidChunk(target, -64, 384)
+	mask := newCarvingMask(ch.MinY(), ch.Height())
+	cc := &carveContext{
+		chunk: ch, mask: mask, rep: rep, fluid: fluid,
+		air:     block.ToStateID[block.Air{}],
+		caveAir: block.ToStateID[block.CaveAir{}],
+		water:   block.ToStateID[block.Water{Level: 0}],
+		lava:    block.ToStateID[block.Lava{Level: 0}],
+		minGenY: ch.MinY(),
+	}
+	rng := newLegacyRandom(0)
+	rng.setLargeFeatureSeed(seed, int(src[0]), int(src[1]))
+	conf.carver.carve(conf.cfg, cc, rng, src)
+	return ch
+}
+
+// findCarvingSeed searches seeds 0..limit for one where the carver carves at least
+// minBlocks into the target chunk from src.
+func findCarvingSeed(t *testing.T, conf *ConfiguredCarver, target, src level.ChunkPos, fluid FluidSource, minBlocks, limit int) (int64, *solidChunk) {
+	t.Helper()
+	for s := int64(0); s < int64(limit); s++ {
+		ch := runCarverDirect(t, conf, s, target, src, fluid)
+		if len(ch.blocks) >= minBlocks {
+			return s, ch
+		}
+	}
+	t.Fatalf("no carving seed found in 0..%d (min %d blocks)", limit, minBlocks)
+	return 0, nil
+}
+
 // --- Task 1 tests ---
 
 func TestParseCarverConfigs(t *testing.T) {
@@ -234,5 +306,115 @@ func TestCarverAquiferAware(t *testing.T) {
 	}
 	if got := ch.Get(5, 40, 5); got != caveAir {
 		t.Errorf("y=40 above water table: got %v, want cave_air %v", got, caveAir)
+	}
+}
+
+// --- Task 2 tests ---
+
+// caveConf / canyonConf load a single ConfiguredCarver for the shape tests.
+func caveConf(t *testing.T) *ConfiguredCarver {
+	t.Helper()
+	cfg, err := ParseCarverConfig("minecraft:cave")
+	if err != nil {
+		t.Fatalf("parse cave: %v", err)
+	}
+	return NewConfiguredCarver(cfg)
+}
+
+func canyonConf(t *testing.T) *ConfiguredCarver {
+	t.Helper()
+	cfg, err := ParseCarverConfig("minecraft:canyon")
+	if err != nil {
+		t.Fatalf("parse canyon: %v", err)
+	}
+	return NewConfiguredCarver(cfg)
+}
+
+func TestCaveCarves(t *testing.T) {
+	conf := caveConf(t)
+	target := level.ChunkPos{0, 0}
+	// The cave starts in the target chunk itself; force-carve and require a
+	// non-trivial connected tunnel of air.
+	_, ch := findCarvingSeed(t, conf, target, target, dryFluid{}, 50, 5000)
+
+	caveAir := block.ToStateID[block.CaveAir{}]
+	if n := ch.countCarvedTo(caveAir); n < 50 {
+		t.Fatalf("cave carved %d cave_air blocks, want >= 50", n)
+	}
+	// Bedrock floor (y=minY) must never be carved.
+	for k := range ch.blocks {
+		if k[1] == ch.MinY() {
+			t.Fatalf("cave carved the bedrock floor at %v", k)
+		}
+	}
+}
+
+func TestCanyonCarvesRavine(t *testing.T) {
+	conf := canyonConf(t)
+	target := level.ChunkPos{0, 0}
+	_, ch := findCarvingSeed(t, conf, target, target, dryFluid{}, 80, 20000)
+
+	bb := boundingBox(ch)
+	height := bb.maxY - bb.minY + 1
+	widthX := bb.maxX - bb.minX + 1
+	widthZ := bb.maxZ - bb.minZ + 1
+	width := widthX
+	if widthZ > width {
+		width = widthZ
+	}
+	// The ravine signature: it is TALLER than it is WIDE within a chunk footprint.
+	if height <= width {
+		t.Fatalf("canyon not ravine-shaped: height %d, width %d (want height > width)", height, width)
+	}
+	t.Logf("ravine bbox: height=%d widthX=%d widthZ=%d count=%d", height, widthX, widthZ, bb.count)
+}
+
+func TestCarveDeterministic(t *testing.T) {
+	conf := caveConf(t)
+	target := level.ChunkPos{0, 0}
+	seed, _ := findCarvingSeed(t, conf, target, target, dryFluid{}, 50, 5000)
+
+	a := runCarverDirect(t, conf, seed, target, target, dryFluid{})
+	b := runCarverDirect(t, conf, seed, target, target, dryFluid{})
+	if len(a.blocks) != len(b.blocks) {
+		t.Fatalf("non-deterministic: %d vs %d blocks", len(a.blocks), len(b.blocks))
+	}
+	for k, v := range a.blocks {
+		if b.blocks[k] != v {
+			t.Fatalf("non-deterministic at %v: %v vs %v", k, v, b.blocks[k])
+		}
+	}
+
+	// Canyon determinism too.
+	cn := canyonConf(t)
+	cseed, _ := findCarvingSeed(t, cn, target, target, dryFluid{}, 80, 20000)
+	ca := runCarverDirect(t, cn, cseed, target, target, dryFluid{})
+	cb := runCarverDirect(t, cn, cseed, target, target, dryFluid{})
+	for k, v := range ca.blocks {
+		if cb.blocks[k] != v {
+			t.Fatalf("canyon non-deterministic at %v: %v vs %v", k, v, cb.blocks[k])
+		}
+	}
+}
+
+func TestCarveContinuousAcrossChunks(t *testing.T) {
+	conf := caveConf(t)
+	target := level.ChunkPos{0, 0}
+	// A carve seeded in a NEIGHBOR source chunk must still reach into the target
+	// chunk (the [-8,8] carving range). Search for a seed where the cave, started in
+	// neighbor (1,0), carves blocks that land inside target (0,0)'s footprint.
+	src := level.ChunkPos{1, 0}
+	found := false
+	for s := int64(0); s < 30000 && !found; s++ {
+		ch := runCarverDirect(t, conf, s, target, src, dryFluid{})
+		if len(ch.blocks) > 0 {
+			// All recorded blocks are in the target footprint (Set drops others), so
+			// any carve from the neighbor source proves cross-chunk reach.
+			found = true
+			t.Logf("cross-chunk carve from src %v into target %v: %d blocks (seed %d)", src, target, len(ch.blocks), s)
+		}
+	}
+	if !found {
+		t.Fatal("no cross-chunk carve found: a carve seeded in a neighbor chunk never reached the target (chunk-edge seam bug)")
 	}
 }
