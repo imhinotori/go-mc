@@ -118,7 +118,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] 06-02-PLAN.md — Synchronous entityTracker behind tracker.Tick() + jar-derived AddEntity/SetEntityData/Move/Remove encoders + tickEntities (ENT-01)
 - [x] 06-03-PLAN.md — Per-axis swept-AABB physics: gravity + collision (entity lands/blocked, no tunnel) + authoritative player anti-clip-through (ENT-02)
 - [x] 06-04-PLAN.md — Block place/break: new world.ChunkManager.SetBlock + PlayerAction/UseItemOn handlers + BlockChangedAck/BlockUpdate reconciliation (ENT-03)
-- [ ] 06-05-PLAN.md — Component-slot inventory: extended SlotData encoder + ContainerSetContent/SetSlot + HashedStack ContainerClick decode (ENT-04)
+- [x] 06-05-PLAN.md — Component-slot inventory: extended SlotData encoder + ContainerSetContent/SetSlot + HashedStack ContainerClick decode (ENT-04)
 - [ ] 06-06-PLAN.md — Health/damage/respawn (reusing the sealed spawn-info encoder) + Anvil persistence of player .dat + entities region (ENT-05, ENT-06)
 - [ ] 06-07-PLAN.md — Capture-diff (AddEntity LP / SetEntityData 0xFF / ContainerSetContent / ContainerClick) + BLOCKING real-client interactive sign-off (autonomous:false; ENT-01..05 gate)
 **Research**: Standard pattern (lighter research) — keep entity hot-fields snapshot-friendly and start with per-section grid bucketing for the broad phase.

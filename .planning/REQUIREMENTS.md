@@ -55,7 +55,7 @@ Requirements for the initial release. The "user" is an unmodified vanilla 26.2 (
 - [x] **ENT-01**: Entities spawn, carry metadata, and move; a synchronous entity tracker sends spawn/move/despawn to nearby players behind an async-shaped `tracker.Tick()` interface
 - [ ] **ENT-02**: Gravity and AABB collision are simulated for entities and players
 - [x] **ENT-03**: Players can place and break blocks with Block Update reconciliation
-- [ ] **ENT-04**: Inventory uses the component-based slot format (post-1.20.5, no NBT in slots)
+- [x] **ENT-04**: Inventory uses the component-based slot format (post-1.20.5, no NBT in slots)
 - [ ] **ENT-05**: Health, damage, and respawn work; player death and respawn flow completes
 - [ ] **ENT-06**: Entity and player state persists to the Anvil format and reloads correctly
 
@@ -146,7 +146,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | ENT-01 | Phase 6 | Complete |
 | ENT-02 | Phase 6 | Pending |
 | ENT-03 | Phase 6 | Complete |
-| ENT-04 | Phase 6 | Pending |
+| ENT-04 | Phase 6 | Complete |
 | ENT-05 | Phase 6 | Pending |
 | ENT-06 | Phase 6 | Pending |
 | AI-01 | Phase 7 | Pending |
