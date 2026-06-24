@@ -21,4 +21,8 @@ data/packetid/generate.go
 .idea/
 .vscode/
 
-temp/
+temp//world/
+
+# Runtime artifacts (never committed)
+/temp/
+/world/
