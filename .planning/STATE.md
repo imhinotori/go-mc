@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 status: verifying
 stopped_at: Completed 03-03-PLAN.md (Phase 3 complete; a connection stands in a live ticking world)
-last_updated: "2026-06-24T01:29:39.287Z"
+last_updated: "2026-06-24T01:41:43.720Z"
 last_activity: 2026-06-24
 progress:
   total_phases: 9
   completed_phases: 3
   total_plans: 14
-  completed_plans: 12
-  percent: 86
+  completed_plans: 13
+  percent: 93
 ---
 
 # Project State
@@ -40,7 +40,7 @@ join/leave crosses to the tick owner as a message (register/unregister + drainRe
 TICK-05). Docker `-race -count=10` clean; `go run ./cmd/sulfur` listens on proto 776.
 Zero new dependencies.
 
-Progress: [█████████░] 86%
+Progress: [█████████░] 93%
 
 ## Performance Metrics
 
@@ -74,6 +74,7 @@ Progress: [█████████░] 86%
 | Phase 03 P03 | 22min | 3 tasks | 5 files |
 | Phase 04 P01 | 12min | 2 tasks | 2 files |
 | Phase 04 P02 | 6m | 3 tasks | 10 files |
+| Phase 04 P03 | 7m | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -110,6 +111,8 @@ Recent decisions affecting current work:
 - [Phase ?]: 04-01: Section carries a per-section fluid-count short (two-short LevelChunkSection.write header); FluidCount defaults 0 for fluid-free chunks — presence of the short is the byte-alignment fix
 - [Phase ?]: 04-01: Chunk.WriteTo sends only the 3 Usage.CLIENT heightmaps (ids 1/4/5); ReadFrom left permissive to ids 0..5
 - [Phase ?]: 04-01: self-round-trip + golden byte-length are cheap regression only; authoritative WORLD-02/03 proof deferred to the 04-04 vanilla capture-diff
+- [Phase ?]: Plan 04-03: off-tick chunk worker rejoins the tick via a concrete chunkReady asyncResult through the UNCHANGED applyAsyncResults seam (adapter re-wraps the immutable ChunkResult onto asyncIn); the tick is the sole manager mutator, -race clean.
+- [Phase ?]: Plan 04-03: chunks stream as a server-clamped (serverViewDistance=2) center-out Chebyshev ring with SetChunkCacheCenter/Radius + ChunkBatchStart/Finished framing; the clamp bounds the needed-ring to (2r+1)^2 against an untrusted client (T-4-01/T-4-06).
 
 ### Pending Todos
 
@@ -135,7 +138,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-24T01:29:33.423Z
+Last session: 2026-06-24T01:41:33.953Z
 Stopped at: Completed 03-03-PLAN.md (Phase 3 complete; a connection stands in a live ticking world)
 Resume file: None
 Next: plan Phase 4 (World & Chunk System) — fill tickWorld/tickChunks + flushOutbound (per-player chunk packets) onto the player/clientIndex/registration seams. Deferred: KeepAlive double-leave hardening (see Deferred Items).
