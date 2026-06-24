@@ -44,9 +44,9 @@ Requirements for the initial release. The "user" is an unmodified vanilla 26.2 (
 ### Player Session (First Playable)
 
 - [ ] **PLAY-01**: Server sends Join Game referencing valid registries and the player enters the Play state
-- [ ] **PLAY-02**: Synchronize Player Position uses the proto 769+ layout (Teleport ID first, DX/DY/DZ velocity in 1/8000-block units, Int32 flags) and handles Confirm Teleportation
+- [x] **PLAY-02**: Synchronize Player Position uses the proto 769+ layout (Teleport ID first, DX/DY/DZ velocity in 1/8000-block units, Int32 flags) and handles Confirm Teleportation
 - [ ] **PLAY-03**: Server sends a filled chunk square (radius ≥ 2) plus the "start waiting for chunks" Game Event so the world becomes visible
-- [ ] **PLAY-04**: Player movement is handled and the view-distance chunk ring follows the player
+- [x] **PLAY-04**: Player movement is handled and the view-distance chunk ring follows the player
 - [ ] **PLAY-05**: Player Info Update is sent so the player exists in the tab list
 - [ ] **PLAY-06**: An unmodified vanilla 26.2 client connects, logs in, and stands in a solid, visible, ticking world it can walk around
 
@@ -138,9 +138,9 @@ Which phases cover which requirements. Populated during roadmap creation.
 | WORLD-04 | Phase 4 | Complete |
 | WORLD-05 | Phase 4 | Complete |
 | PLAY-01 | Phase 5 | Pending |
-| PLAY-02 | Phase 5 | Pending |
+| PLAY-02 | Phase 5 | Complete |
 | PLAY-03 | Phase 5 | Pending |
-| PLAY-04 | Phase 5 | Pending |
+| PLAY-04 | Phase 5 | Complete |
 | PLAY-05 | Phase 5 | Pending |
 | PLAY-06 | Phase 5 | Pending |
 | ENT-01 | Phase 6 | Pending |

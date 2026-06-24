@@ -98,7 +98,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. Player movement is handled and the view-distance chunk ring follows the player
   5. An unmodified vanilla 26.2 client connects, logs in, and stands in a solid, visible, ticking world it can walk around (the milestone verifier)
 **Plans**: 3 plans
-- [ ] 05-01-PLAN.md — Movement decode (4 ServerboundMovePlayer* layouts, packed flags-byte) into tick-owned position + recenterRing so the view-distance ring follows the player + teleport-id gate + jar-derived ForgetLevelChunk (PLAY-04/02)
+- [x] 05-01-PLAN.md — Movement decode (4 ServerboundMovePlayer* layouts, packed flags-byte) into tick-owned position + recenterRing so the view-distance ring follows the player + teleport-id gate + jar-derived ForgetLevelChunk (PLAY-04/02)
 - [ ] 05-02-PLAN.md — Early-Play tail (PlayerAbilities -> SetHeldSlot -> PlayerInfoUpdate self tab-list -> SetDefaultSpawnPosition) appended before register + incrementing teleport id threaded into awaitingTeleport (PLAY-01/05/02)
 - [ ] 05-03-PLAN.md — Capture-diff the uncertain Play encoders vs vanilla 26.2 + BLOCKING human-verify real-client walk-around (ring follows / tab list / no kick) (autonomous:false; PLAY-01/02/05/06 gate)
 **Research**: Needs deeper per-phase research — confirm the 769-era position-sync layout (Teleport ID, DX/DY/DZ in 1/8000-block units, Int32 flags) survived to 776 against the jar/capture.

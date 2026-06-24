@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: verifying
-stopped_at: Completed 04-04-PLAN.md (Phase 4 COMPLETE; real vanilla 26.2 client renders solid superflat ground — WORLD-01..05 done)
-last_updated: "2026-06-24T02:52:27.949Z"
+stopped_at: Completed 05-01-PLAN.md (PLAY-04 movement decode + ring-follows + PLAY-02 teleport gate; Docker -race clean)
+last_updated: "2026-06-24T03:26:19.429Z"
 last_activity: 2026-06-24
 progress:
   total_phases: 9
   completed_phases: 4
-  total_plans: 14
-  completed_plans: 14
-  percent: 100
+  total_plans: 17
+  completed_plans: 15
+  percent: 88
 ---
 
 # Project State
@@ -21,27 +21,37 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-23)
 
 **Core value:** A Go server that an unmodified vanilla Minecraft 26.2 client can connect to, log into, and play in a persistent, ticking world — architected from day one for Leaf-style async optimizations.
-**Current focus:** Phase 4 (World & Chunk System) COMPLETE — WORLD-01..05 done; a real vanilla 26.2 client renders solid, walkable superflat ground. Next: plan Phase 5 (Player Session) — EXTEND the minimal Join Game bootstrap pulled forward in 04-04 (`server/play_join.go`) into the full player session; do not duplicate it.
+**Current focus:** Phase 5 (Player Session / First Playable) IN PROGRESS — 05-01 done (PLAY-04 movement + PLAY-02 teleport gate). Next: 05-02 (early-Play tail + incrementing teleport-id producer into `awaitingTeleport`), then 05-03 (capture-diff + human-verify walk-around).
 
 ## Current Position
 
-Phase: 4 of 9 (World & Chunk System) — COMPLETE
-Plan: 4 of 4 complete (04-01, 04-02, 04-03, 04-04 all done)
-Status: Phase complete — ready for verification
+Phase: 5 of 9 (Player Session in World / First Playable) — IN PROGRESS
+Plan: 1 of 3 complete (05-01 done; 05-02, 05-03 remaining)
+Status: 05-01 complete — ready for verification
 Last activity: 2026-06-24
 
-Phase-4 milestone: a real client stands in a streamed world. The off-tick chunk worker
-loads/generates a deterministic superflat off the tick and rejoins via the unchanged
-`applyAsyncResults` seam (WORLD-01); `level`/`world` encode `ClientboundLevelChunkWithLight`
-byte-identical to vanilla 26.2 — the 04-04 capture-diff against a committed golden fixture
-proved WORLD-02/03 and caught two paletted-container wire bugs the symmetric read/write hid
-(header bits-per-entry vs packed width; superflat biome phantom palette). Chunks stream as a
-clamped center-out ring with batch framing (WORLD-05), and an unmodified vanilla 26.2
-(PrismLauncher) client connected to `cmd/sulfur` SEES and STANDS ON solid ground — no void,
-no stripes. A minimal Play-state Join Game bootstrap was pulled forward (commit 0fd96850) to
-enable the visual milestone. Docker `-race` clean; zero new dependencies.
+05-01 milestone (PLAY-04 + PLAY-02): the player WALKS AROUND a world that follows it.
+`applyInput` (server/subtick.go) fills the Phase-3 stub — it decodes all four
+`ServerboundMovePlayer*` layouts with the jar-confirmed field order, reading the trailing
+field as a PACKED FLAGS BYTE (`&1` onGround, `&2` horizontalCollision), never a Boolean
+(the 1.21.3+ shift), and updates tick-owned `x/y/z/yaw/pitch/onGround`. On a real
+chunk-column crossing, `recenterRing` (server/world_stream.go) moves `p.center`, resets
+`centerSent` so `flushOutbound` re-emits `SetChunkCacheCenter`, prunes `sentChunks`, and
+sends one `world.ForgetLevelChunk` per dropped column — the view ring FOLLOWS the player
+(void-on-walk closed). `world.ForgetLevelChunk` encodes the jar-derived 26.2 layout (a
+single packed Long, x low / z high — NOT the wiki VarInt z,x). Movement is gated on the
+teleport confirm: `applyInput` drops movement until `confirmedTeleport`, and dispatch
+confirms ONLY when the echoed `ServerboundAcceptTeleportation` VarInt matches
+`awaitingTeleport` (a forged id leaves the gate closed). `ServerboundPlayerLoaded` routes
+as a no-op. Hook-before-gate ordering preserved the existing subtick tests. Docker
+`-race` over `./server/... ./world/...` clean; zero new dependencies.
 
-Progress: [██████████] 100%
+Phase-4 milestone (prior): a real client stands in a streamed world — the off-tick chunk
+worker loads/generates a deterministic superflat and rejoins via `applyAsyncResults`
+(WORLD-01); chunks encode byte-identical to vanilla 26.2 (04-04 capture-diff) and stream
+as a clamped center-out ring with batch framing (WORLD-05).
+
+Progress: [█████████░] 88%
 
 ## Performance Metrics
 
@@ -77,6 +87,7 @@ Progress: [██████████] 100%
 | Phase 04 P02 | 6m | 3 tasks | 10 files |
 | Phase 04 P03 | 7m | 2 tasks | 7 files |
 | Phase 04 P04 | 70min | 2 tasks | 5 files |
+| Phase 05 P01 | 18min | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -117,6 +128,9 @@ Recent decisions affecting current work:
 - [Phase ?]: Plan 04-03: chunks stream as a server-clamped (serverViewDistance=2) center-out Chebyshev ring with SetChunkCacheCenter/Radius + ChunkBatchStart/Finished framing; the clamp bounds the needed-ring to (2r+1)^2 against an untrusted client (T-4-01/T-4-06).
 - [Phase 04]: 04-04: the vanilla capture-diff (not a self-round-trip) is the authoritative WORLD-02/03 gate — it caught two paletted-container wire bugs the symmetric read/write hid: PaletteContainer.Set wrote the requested bits-per-entry as the wire header while packing floored-width data (1-bit header over 4-bit/256-long data = stripes/void), and the superflat biome carried a phantom default-biome palette entry vs vanilla's single-valued container. Both fixed (34f7cc45), re-diffed byte-identical, real client renders solid ground.
 - [Phase 04]: 04-04: a MINIMAL Play-state Join Game bootstrap (ClientboundLogin id49 isFlat + GameEvent LEVEL_CHUNKS_LOAD_START + ClientboundPlayerPosition id72 teleport-id-first) was PULLED FORWARD into Phase 4 (commit 0fd96850) to fix the handleSetChunkCacheCenter NPE and enable the real-client visual milestone. It is server/play_join.go. Phase 5 must EXTEND this (full profile/abilities/inventory/real spawn/teleport validation/movement), NOT duplicate it.
+- [Phase ?]: ClientboundForgetLevelChunk 26.2 wire = single packed Long (ChunkPos.pack: x low 32 bits, z high 32 bits), jar-derived via javap — not the wiki VarInt z,x
+- [Phase ?]: ServerboundMovePlayer* trailing field is a packed flags UnsignedByte (&1 onGround, &2 horizontalCollision), never a Boolean (1.21.3+ shift)
+- [Phase ?]: applyInput hook fires BEFORE the teleport gate so existing subtick-ordering tests survive; re-center gated on a real chunk-column crossing
 
 ### Pending Todos
 
@@ -143,7 +157,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-24T02:52:27.935Z
-Stopped at: Completed 04-04-PLAN.md (Phase 4 COMPLETE; real vanilla 26.2 client renders solid superflat ground — WORLD-01..05 done)
+Last session: 2026-06-24T03:26:19.415Z
+Stopped at: Completed 05-01-PLAN.md (PLAY-04 movement decode + ring-follows + PLAY-02 teleport gate; Docker -race clean)
 Resume file: None
 Next: plan Phase 5 (Player Session, PLAY-01/02/03+) — EXTEND the minimal Join Game bootstrap (`server/play_join.go`, 0fd96850) pulled forward in 04-04 into the full player session; do not duplicate the Login/spawn/position scaffolding. Deferred: KeepAlive double-leave hardening + the pulled-forward bootstrap extension (see Deferred Items).
