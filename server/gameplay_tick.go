@@ -200,6 +200,13 @@ func (g *gameTick) AcceptPlayer(
 		secs:             overworldSections,
 		awaitingTeleport: teleportID,
 		entityID:         entityID,
+		// ENT-05: a fresh player spawns at full survival health/food/saturation (the
+		// server-owned defaults). These tick-owned fields drive the damage->death->respawn
+		// loop; the client never sets them (T-6-05). A loaded .dat (ENT-06) overrides them
+		// below when persistence is wired into the join.
+		health:     maxHealth,
+		food:       maxFood,
+		saturation: defaultSaturation,
 	}
 	g.loop.register <- player
 

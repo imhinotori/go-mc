@@ -171,7 +171,29 @@ type TickLoop struct {
 	// test-only observability hook (set by tests via traceTo) used to assert the
 	// fixed phase order; in production it stays nil and costs nothing.
 	phaseTrace *[]string
+
+	// spawnSurfaceY is the world spawn column's top-solid block world-Y (the superflat
+	// generator's SurfaceY — the same value gameTick threads into the join bootstrap). It
+	// is set once before Run via SetSpawn and read only on the tick goroutine by
+	// performRespawn (ENT-05) to place a respawning player two blocks above the surface,
+	// matching the join placement. Tick-owned; written once at setup, never during a tick.
+	spawnSurfaceY int
+
+	// respawnTeleportSeq is the tick-owned producer of fresh teleport ids for in-game
+	// re-teleports (ENT-05 respawn). It is the on-tick analogue of gameTick.teleportSeq
+	// (which serves the off-tick join): performRespawn allocates a fresh id from it via
+	// nextTeleportID and re-arms the player's confirm gate, mirroring the bootstrap. It is
+	// seeded high (respawnTeleportBase) so a respawn id can never collide a join id issued
+	// by gameTick.teleportSeq for the same player. Touched ONLY on the tick goroutine
+	// (TICK-05), so no atomic is needed.
+	respawnTeleportSeq int
 }
+
+// respawnTeleportBase seeds the tick-owned respawn teleport-id counter well above any join id
+// gameTick.teleportSeq is likely to issue, so a respawn's fresh teleport id never collides the
+// outstanding join id space. nextTeleportID pre-increments, so the first respawn id is
+// respawnTeleportBase+1.
+const respawnTeleportBase = 1 << 30
 
 // tickPlayer is the per-player game state owned by the tick goroutine. Wave 2 adds
 // the subtick input buffer (TICK-03); Wave 3 threads the keep-alive adapter and
@@ -293,7 +315,40 @@ type tickPlayer struct {
 	// SetSlot from here. Lazily initialized by the inventory handlers; mutated ONLY on the tick
 	// goroutine (TICK-05 / T-6-08), so it is -race clean by the single-owner discipline.
 	inventory *Inventory
+
+	// --- Health / food / death (ENT-05). ALL tick-owned and SERVER-owned: the client has NO
+	// health-setting packet (T-6-05) — it only REQUESTS a respawn via ServerboundClientCommand.
+	// The server drives damage -> SetHealth -> death (PlayerCombatKill) -> respawn entirely from
+	// these fields, mutated ONLY on the tick goroutine (TICK-05). Defaulted to a full survival
+	// player (maxHealth / maxFood / defaultSaturation) at registration. ---
+
+	// health is the player's current hit points (Float on the wire, 0..maxHealth). applyDamage
+	// lowers it (clamped at 0) and sends SetHealth; performRespawn restores it to maxHealth.
+	health float32
+
+	// food is the player's current food level (VarInt on the wire, 0..maxFood). Carried in the
+	// SetHealth packet alongside health/saturation; v1 does not yet drain it over time.
+	food int32
+
+	// saturation is the player's current food saturation (Float on the wire). Carried in the
+	// SetHealth packet; reset with food/health on respawn.
+	saturation float32
+
+	// dead records that the player's health reached 0 (the death screen is up). Set by die();
+	// cleared by performRespawn. While dead, a respawn request is honored (and a living-player
+	// request is ignored). Tick-owned.
+	dead bool
 }
+
+// Health constants for a fresh survival player (the ENT-05 defaults). maxHealth is the vanilla
+// 20 HP (10 hearts); maxFood is the full 20-point hunger bar; defaultSaturation is the spawn
+// saturation. They seed tickPlayer.health/food/saturation at registration and the values
+// performRespawn restores on respawn.
+const (
+	maxHealth         float32 = 20
+	maxFood           int32   = 20
+	defaultSaturation float32 = 5
+)
 
 // NewTickLoop constructs a TickLoop over the given injectable clock with a
 // synchronous no-op tracker and a nil async channel (so applyAsyncResults is a
@@ -360,6 +415,27 @@ func (t *TickLoop) Stats() *TickStats { return t.stats.Load() }
 // GameTime returns the current game-time counter. Intended for the tick goroutine
 // and tests; off-thread observers should read Stats().GameTime.
 func (t *TickLoop) GameTime() int64 { return t.gametime }
+
+// SetSpawn records the world spawn column's surface world-Y for in-game re-teleports (ENT-05
+// respawn). main() calls it before Run with the same SurfaceY it hands the Superflat generator
+// and the join bootstrap, so a respawning player lands two blocks above the surface exactly
+// like a joining one. Set-once at setup; read only on the tick goroutine (TICK-05).
+func (t *TickLoop) SetSpawn(surfaceY int) { t.spawnSurfaceY = surfaceY }
+
+// nextTeleportID claims a fresh, never-zero, monotonically increasing teleport id for an
+// in-game re-teleport (ENT-05 respawn). It is the on-tick producer mirroring
+// gameTick.nextTeleportID (the off-tick join producer): performRespawn allocates an id here,
+// stores it in tickPlayer.awaitingTeleport, and re-arms the confirm gate so movement is gated
+// until the client echoes the new id (PLAY-02 / T-5-01). Seeded at respawnTeleportBase so a
+// respawn id never collides a join id. Tick-owned (called only on the owner goroutine), so no
+// atomic is needed.
+func (t *TickLoop) nextTeleportID() int {
+	if t.respawnTeleportSeq < respawnTeleportBase {
+		t.respawnTeleportSeq = respawnTeleportBase
+	}
+	t.respawnTeleportSeq++
+	return t.respawnTeleportSeq
+}
 
 // traceTo installs a test-only phase-order recorder. Each phase appends its name to
 // *dst as it runs, letting TestTickPhaseOrder assert the fixed pipeline order. Pass
@@ -590,6 +666,22 @@ func (t *TickLoop) dispatch(c *Client, p pk.Packet) {
 		// player without a wired adapter is a cheap no-op.
 		if player != nil && player.keep != nil && player.keepalive != nil {
 			player.keep.ClientTick(player.keepalive)
+		}
+	case packetid.ServerboundClientCommand:
+		// The client's Client Command (ENT-05 / T-6-05). It carries a single VarInt action
+		// enum: 0 = PERFORM_RESPAWN, 1 = REQUEST_STATS. Health is SERVER-owned — this is the
+		// ONLY way a client influences its health, and it can only REQUEST a respawn, never
+		// set health or claim "I'm not dead". Resolved on-tick: route PERFORM_RESPAWN to the
+		// respawn flow ONLY when the player is actually dead (a forged request for a living
+		// player is ignored); REQUEST_STATS is a v1 no-op. Decode defensively — a Scan error
+		// or an out-of-range enum is a silent no-op, never a panic (T-6-04 / T-3-02).
+		if player != nil {
+			var action pk.VarInt
+			if err := p.Scan(&action); err == nil {
+				if int32(action) == clientCommandPerformRespawn && player.dead {
+					t.performRespawn(player)
+				}
+			}
 		}
 	default:
 		// Unknown / not-yet-handled IDs are cheap no-ops: never block, never panic.

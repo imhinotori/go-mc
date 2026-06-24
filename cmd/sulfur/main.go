@@ -117,6 +117,10 @@ func main() {
 	worker := world.NewWorker(gen, "", workerBuf)
 	mgr := world.NewChunkManager()
 	tick.SetWorld(mgr, worker)
+	// ENT-05: tell the tick where the world spawn surface is so an in-game respawn
+	// re-teleports a player two blocks above it — the same placement the join bootstrap
+	// uses (NewGameTick is handed the same overworldSurfaceY below).
+	tick.SetSpawn(overworldSurfaceY)
 
 	// Start the long-lived server goroutines: exactly one tick goroutine (the sole
 	// owner/mutator of game state, consuming inbound), one independent keep-alive
