@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: verifying
-stopped_at: Completed 09-01-PLAN.md (PARITY-01 DATA half — FULL worldgen graph extracted + embedded)
-last_updated: "2026-06-24T20:16:12.054Z"
+stopped_at: Completed 09-02-PLAN.md (PARITY-01 Tier-A seeding + Tier-B noise primitives)
+last_updated: "2026-06-24T20:19:09.434Z"
 last_activity: 2026-06-24
 progress:
   total_phases: 9
   completed_phases: 8
   total_plans: 46
-  completed_plans: 38
-  percent: 83
+  completed_plans: 39
+  percent: 85
 ---
 
 # Project State
@@ -74,7 +74,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [████████░░] 83%
+Progress: [█████████░] 85%
 
 ## Performance Metrics
 
@@ -125,6 +125,7 @@ Progress: [████████░░] 83%
 | Phase 08 P06 | 5 min | 2 tasks | 4 files |
 | Phase 08 P07 | 14min | 1 tasks | 2 files |
 | Phase 09 P01 | 35min | 2 tasks | 114 files |
+| Phase 09-stretch-online-worldgen-regions P02 | 38min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -218,7 +219,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-24T20:16:03.578Z
-Stopped at: Completed 09-01-PLAN.md (PARITY-01 DATA half — FULL worldgen graph extracted + embedded)
+Last session: 2026-06-24T20:19:09.422Z
+Stopped at: Completed 09-02-PLAN.md (PARITY-01 Tier-A seeding + Tier-B noise primitives)
 Resume file: None
 Next: plan Phase 6 (entities / inventory / persistence) — the first-playable Player Session seam (movement, tick-owned position, the following ring, the tab list) is in place to build on. Deferred: KeepAlive double-leave hardening (Phase 3, surfaces when real timeout-driven disconnects land). The pulled-forward bootstrap deferred-row is now CLOSED.
