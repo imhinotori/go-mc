@@ -174,7 +174,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans (PARITY-01):** 9 plans in 7 waves
 - [x] 09-01-PLAN.md — Wave 1: extract+embed the FULL worldgen DATA (noise_settings + ALL density_function incl. the cave functions + noise + configured_carver + carver-replaceables tag + the baked biome params) — the DATA half (caves are in the graph)
 - [x] 09-02-PLAN.md — Wave 1: Tier A Xoroshiro seeding chain + Tier B noise primitives — the determinism hinge, ported + golden-tested first
-- [ ] 09-03-PLAN.md — Wave 2: the FULL ~30 density-function node-type set (incl. weird_scaled_sampler for caves) + the JSON graph parser + RandomState → the WHOLE overworld graph (hills + caves) evaluable; the Aquifer/OreVein router functions bound
+- [x] 09-03-PLAN.md — Wave 2: the FULL 29 density-function node-type set (caves via noise/shifted_noise/range_choice/spline + the cave functions, NOT weird_scaled_sampler — which is NOT in the overworld graph) + the JSON graph parser + RandomState → the WHOLE overworld graph (hills + caves) evaluable; the Aquifer/OreVein router functions bound
 - [ ] 09-04-PLAN.md — Wave 3: Tier E NoiseChunk cell-sample + the NoiseInterpolator trilerp → a per-block density field where caves appear as negative density (provisional fill for testing)
 - [ ] 09-05-PLAN.md — Wave 4: the Aquifer (water/lava/air in carved regions) + the OreVeinifier (copper/iron veins) + the real doFill — cave-complete (aquifers_enabled + ore_veins_enabled are true)
 - [ ] 09-06-PLAN.md — Wave 5: the legacy WorldCarver pass — CanyonWorldCarver (RAVINES) + CaveWorldCarver (tunnels), aquifer-aware, cross-chunk-continuous (the carvers verified still run in 26.2)

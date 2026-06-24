@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: verifying
-stopped_at: Completed 09-02-PLAN.md (PARITY-01 Tier-A seeding + Tier-B noise primitives)
-last_updated: "2026-06-24T20:19:09.434Z"
+stopped_at: "Completed 09-03-PLAN.md (PARITY-01 Wave 2: full density-function node set + parser + RandomState/router)"
+last_updated: "2026-06-24T20:39:40.914Z"
 last_activity: 2026-06-24
 progress:
   total_phases: 9
   completed_phases: 8
   total_plans: 46
-  completed_plans: 39
-  percent: 85
+  completed_plans: 40
+  percent: 87
 ---
 
 # Project State
@@ -74,7 +74,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [█████████░] 85%
+Progress: [█████████░] 87%
 
 ## Performance Metrics
 
@@ -126,6 +126,7 @@ Progress: [█████████░] 85%
 | Phase 08 P07 | 14min | 1 tasks | 2 files |
 | Phase 09 P01 | 35min | 2 tasks | 114 files |
 | Phase 09-stretch-online-worldgen-regions P02 | 38min | 2 tasks | 8 files |
+| Phase 09-stretch-online-worldgen-regions P03 | 10min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -193,6 +194,9 @@ Recent decisions affecting current work:
 - [Phase 08]: OPT-04: snapshot-and-stay-plain — no tick-owned map converted to xsync; the OPT-01/02/03 owner-snapshot discipline means no worker reads a live collection (single-owner is faster). idAlloc stays atomic; asyncSubmitDrops (xsync.Counter, now tick-read) is the one justified xsync use; an AST gate enforces no live cross-boundary capture.
 - [Phase 08]: 08-07: OPT-06 combined -race -count=10 gate over ./server/... ./world/... ./save/... is GREEN — every async subsystem (OPT-01 pathfinding, OPT-02 tracker, OPT-03 spawner) race-clean by construction under combined load; behavior regression proves the swaps are additive (paths arrive 1+ ticks late + followed, tracker emits spawn/move/despawn, mobs spawn under cap, .linear round-trips). OPT-06 is AUTOMATABLE (no Phase-8 plan touched an encoder/packet file — grep-confirmed — so the capture-diff goldens stay the wire authority and stay green), not a human-verify/capture-diff. Phase 8 COMPLETE.
 - [Phase 09]: [Phase 9 / 09-01]: PARITY-01 DATA half — the FULL wired vanilla 26.2 overworld worldgen graph (120KB noise_router with aquifers/ore-veins enabled + the 35-file density_function tree INCLUDING the 6 cave functions + noise params + carver configs + 7594 baked biome climate boxes) is extracted offline from the pinned jar (pure-unzip + GenBiomeParams.java) and //go:embed-ed as DATA the later waves PARSE — never hand-transcribed. CAVES ARE IN THE GRAPH (final_density references overworld/caves/*). 26.2 renamed ResourceKey.location()->identifier(). Zero new runtime deps; pure Go; CGO_ENABLED=0 clean.
+- [Phase 09]: 09-03: invert density node = 1.0/x (bytecode-verified DensityFunctions$Mapped INVERT), NOT -x as the plan/assumed-list stated — PORT-EXACT mandate overrode the prose; would have silently broken preliminary_surface_level.upper_bound
+- [Phase 09]: 09-03: the 29-type overworld density node set ported constant-for-constant; CAVES come free as negative final_density from noise/shifted_noise/range_choice/spline cave functions (NOT weird_scaled_sampler, which is NOT in the overworld graph); only end_islands deferred; Parse errors loudly on unsupported types (T-9-07); TestParseFullGraphEndToEnd binds all 15 router functions
+- [Phase 09]: 09-03: router lives in package router (world/levelgen/router/) not package levelgen — a composition root importing density cycles levelgen->density->synth->levelgen; RandomState seeds each noise via Xoroshiro(seed).forkPositional().fromHashOf(id) (the determinism hinge), implements density.NoiseBinder; NewRouter(seed) is pure, Docker -race clean
 
 ### Pending Todos
 
@@ -219,7 +223,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-24T20:19:09.422Z
-Stopped at: Completed 09-02-PLAN.md (PARITY-01 Tier-A seeding + Tier-B noise primitives)
+Last session: 2026-06-24T20:39:39.572Z
+Stopped at: Completed 09-03-PLAN.md (PARITY-01 Wave 2: full density-function node set + parser + RandomState/router)
 Resume file: None
 Next: plan Phase 6 (entities / inventory / persistence) — the first-playable Player Session seam (movement, tick-owned position, the following ring, the tab list) is in place to build on. Deferred: KeepAlive double-leave hardening (Phase 3, surfaces when real timeout-driven disconnects land). The pulled-forward bootstrap deferred-row is now CLOSED.
