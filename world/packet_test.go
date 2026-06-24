@@ -94,6 +94,33 @@ func TestLevelChunkPacketAssembly(t *testing.T) {
 	}
 }
 
+func TestForgetLevelChunkWire(t *testing.T) {
+	const cx, cz = int32(7), int32(-3)
+
+	p := ForgetLevelChunk(cx, cz)
+	if p.ID != int32(packetid.ClientboundForgetLevelChunk) {
+		t.Fatalf("ForgetLevelChunk ID = %d, want %d", p.ID, int32(packetid.ClientboundForgetLevelChunk))
+	}
+
+	// Jar-derived layout: a single packed Long, x in the low 32 bits, z in the
+	// high 32 bits (ChunkPos.pack). Decode it back the way the client's
+	// ChunkPos.unpack does: x = (int)L, z = (int)(L>>32).
+	var packed pk.Long
+	if err := p.Scan(&packed); err != nil {
+		t.Fatalf("scan ForgetLevelChunk: %v", err)
+	}
+	gotX := int32(uint64(packed))        // low 32 bits
+	gotZ := int32(uint64(packed) >> 32)  // high 32 bits, sign-extended on cast
+	if gotX != cx || gotZ != cz {
+		t.Fatalf("decoded (x,z) = (%d,%d), want (%d,%d)", gotX, gotZ, cx, cz)
+	}
+
+	// Body must be exactly 8 bytes (one Long), no VarInt framing.
+	if len(p.Data) != 8 {
+		t.Fatalf("ForgetLevelChunk body = %d bytes, want 8 (packed Long)", len(p.Data))
+	}
+}
+
 func TestCachePackets(t *testing.T) {
 	const cx, cz, radius, batch = int32(5), int32(-9), int32(10), int32(42)
 

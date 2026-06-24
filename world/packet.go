@@ -57,3 +57,25 @@ func ChunkBatchStart() pk.Packet {
 func ChunkBatchFinished(n int32) pk.Packet {
 	return pk.Marshal(int32(packetid.ClientboundChunkBatchFinished), pk.VarInt(n))
 }
+
+// ForgetLevelChunk tells the client to drop a chunk column from its cache — the
+// re-center prune (PLAY-04): when the view-ring follows the player, columns that
+// leave the window are forgotten so the client frees them and re-requests on a
+// later approach.
+//
+// JAR-DERIVED 26.2 wire layout (NOT the ≤773 wiki's "VarInt z, VarInt x"):
+// ClientboundForgetLevelChunkPacket.write -> FriendlyByteBuf.writeChunkPos ->
+// ChunkPos.pack() -> a single big-endian Long. The pack is:
+//
+//	pack(x, z) = (x & 0xFFFFFFFF) | ((z & 0xFFFFFFFF) << 32)
+//
+// i.e. x occupies the LOW 32 bits, z the HIGH 32 bits. unpack(L) does
+// x = (int)L, z = (int)(L >> 32) (arithmetic shift, so signs round-trip). The
+// client reads it via readChunkPos -> readLong -> ChunkPos.unpack. Verified by
+// `javap -p -c net.minecraft.network.protocol.game.ClientboundForgetLevelChunkPacket`
+// and `javap -p -c net.minecraft.world.level.ChunkPos` (pack/unpack) against the
+// 26.2 inner jar (recorded for 05-CAPTURE-DIFF.md).
+func ForgetLevelChunk(cx, cz int32) pk.Packet {
+	packed := int64(uint32(cx)) | int64(uint32(cz))<<32
+	return pk.Marshal(int32(packetid.ClientboundForgetLevelChunk), pk.Long(packed))
+}
