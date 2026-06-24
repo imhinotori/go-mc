@@ -1,6 +1,7 @@
 package component
 
 import (
+	"bytes"
 	"io"
 
 	"github.com/imhinotori/sulfur/chat"
@@ -236,14 +237,33 @@ func (p ItemBlockProperty) WriteTo(w io.Writer) (n int64, err error) {
 	return n + n2, err
 }
 
-// SlotData is a minimal Slot representation for use in components that reference Slot
-// without importing bot/screen. Wire format is the same as Slot.
+// SlotData is the component-slot ItemStack representation (post-1.20.5, NO NBT-in-slot)
+// for use in components that reference Slot without importing bot/screen. Wire format is
+// the same as the vanilla ItemStack StreamCodec:
+//
+//	VarInt count          (count <= 0 => empty stack, nothing else follows)
+//	VarInt itemId
+//	VarInt addedCount
+//	VarInt removedCount
+//	addedCount   × (VarInt componentTypeId + component value)
+//	removedCount × VarInt componentTypeId
+//
+// RawComponents holds the EXACT wire bytes of the added+removed component lists (everything
+// after removedCount), captured verbatim by ReadFrom and re-emitted verbatim by WriteTo so
+// that ReadFrom∘WriteTo is provably inverse for any stack — component-free (RawComponents
+// nil/empty) or component-carrying. The server is authoritative and never needs to interpret
+// the component values, so capturing the raw span avoids re-serializing 111 component schemas
+// while staying byte-exact. The AddedCount/RemovedCount headers are written from the struct
+// fields; RawComponents must be the consistent payload for those counts (it is, when produced
+// by ReadFrom).
 type SlotData struct {
 	Count        pk.VarInt
 	ItemID       pk.VarInt
 	AddedCount   pk.VarInt
 	RemovedCount pk.VarInt
-	// We store the raw bytes for component data to avoid circular imports
+	// RawComponents is the verbatim wire bytes of the added+removed component lists
+	// (after the removedCount header). Captured by ReadFrom, re-emitted by WriteTo.
+	// Stored raw to avoid importing every component schema here.
 	RawComponents []byte
 }
 
@@ -258,20 +278,27 @@ func (s *SlotData) ReadFrom(r io.Reader) (n int64, err error) {
 	if err != nil {
 		return
 	}
+	// Capture the exact bytes consumed for the added+removed component lists so WriteTo
+	// can re-emit them verbatim (provably inverse, byte-exact). We tee the reader through
+	// a buffer for the duration of the component decode.
+	var buf bytes.Buffer
+	tee := io.TeeReader(r, &buf)
 	// Read added components
 	for i := int32(0); i < int32(s.AddedCount); i++ {
 		var compType pk.VarInt
-		n2, err = compType.ReadFrom(r)
+		n2, err = compType.ReadFrom(tee)
 		n += n2
 		if err != nil {
 			return
 		}
 		comp := NewComponent(int32(compType))
 		if comp == nil {
-			// Skip unknown component - can't continue safely
+			// Unknown component: cannot safely consume the rest of the value. Record what
+			// we captured so far and stop. (Capture-diff / Plan 06-07 surfaces gaps.)
+			s.RawComponents = buf.Bytes()
 			return n, nil
 		}
-		n2, err = comp.ReadFrom(r)
+		n2, err = comp.ReadFrom(tee)
 		n += n2
 		if err != nil {
 			return
@@ -280,26 +307,37 @@ func (s *SlotData) ReadFrom(r io.Reader) (n int64, err error) {
 	// Read removed component IDs
 	for i := int32(0); i < int32(s.RemovedCount); i++ {
 		var compType pk.VarInt
-		n2, err = compType.ReadFrom(r)
+		n2, err = compType.ReadFrom(tee)
 		n += n2
 		if err != nil {
 			return
 		}
 	}
+	s.RawComponents = buf.Bytes()
 	return
 }
 
 func (s *SlotData) WriteTo(w io.Writer) (n int64, err error) {
 	n, err = s.Count.WriteTo(w)
 	if err != nil || s.Count <= 0 {
+		// Empty stack: only the count is on the wire (inverse to ReadFrom's count<=0 early return).
 		return
 	}
-	n2, err := pk.Tuple{
-		s.ItemID,
-		pk.VarInt(0), // 0 added components
-		pk.VarInt(0), // 0 removed components
-	}.WriteTo(w)
-	return n + n2, err
+	// Write the ItemStack header: itemId, addedCount, removedCount.
+	n2, err := pk.Tuple{s.ItemID, s.AddedCount, s.RemovedCount}.WriteTo(w)
+	n += n2
+	if err != nil {
+		return
+	}
+	// Emit the verbatim added+removed component lists captured by ReadFrom. For a
+	// component-free stack (the common v1 case) RawComponents is empty AND AddedCount/
+	// RemovedCount are 0, so this writes nothing — exactly count+id+0+0.
+	if len(s.RawComponents) > 0 {
+		var m int
+		m, err = w.Write(s.RawComponents)
+		n += int64(m)
+	}
+	return
 }
 
 // ItemBlockPredicate represents a block predicate for can_place_on / can_break.
