@@ -177,6 +177,29 @@ func (t *TickLoop) applyInput(p *tickPlayer, in SubtickInput) {
 		// acks + broadcasts.
 		t.handleUseItemOn(p, in.Packet)
 
+	case packetid.ServerboundContainerClick:
+		// INVENTORY (ENT-04): resolved on-tick. The 1.21.5+ HashedStack click is decoded
+		// WITHOUT mis-framing (jar-derived framing); the server is AUTHORITATIVE — it
+		// DISCARDS the client's hashes and re-sends authoritative ContainerSetContent. A
+		// malformed/truncated click is a silent no-op inside the handler (T-6-04), never a
+		// panic. Sits after the teleport gate — an editing player is confirmed.
+		t.handleContainerClick(p, in.Packet)
+
+	case packetid.ServerboundSetCreativeModeSlot:
+		// INVENTORY (ENT-04): a creative player sets a slot directly (full component-slot
+		// ItemStack, server-bound). The simple path to a visible item; decoded defensively
+		// and stored into the tick-owned inventory.
+		t.handleSetCreativeModeSlot(p, in.Packet)
+
+	case packetid.ServerboundSetCarriedItem:
+		// INVENTORY (ENT-04): the player's selected hotbar slot (held item). Decoded
+		// defensively; updates the tick-owned held slot.
+		t.handleSetCarriedItem(p, in.Packet)
+
+	case packetid.ServerboundContainerClose:
+		// INVENTORY (ENT-04): the client closed a container window. v1 cleanup/no-op.
+		t.handleContainerClose(p, in.Packet)
+
 	default:
 		// Non-movement subtick input (attack/use/etc.): no movement resolution yet
 		// (Phase 6). The hook already observed it; nothing to apply here.

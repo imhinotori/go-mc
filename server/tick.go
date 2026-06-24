@@ -286,6 +286,13 @@ type tickPlayer struct {
 	// initialized by the tracker; mutated ONLY on the tick goroutine (TICK-05), so it is
 	// -race clean by the same single-owner discipline as the rest of tickPlayer.
 	tracked map[int32]bool
+
+	// inventory is this player's server-owned, tick-owned component-slot inventory (ENT-04).
+	// It is the AUTHORITATIVE source of truth: ContainerClick hashes are decoded-and-discarded,
+	// SetCreativeModeSlot writes a slot directly, and the server re-sends ContainerSetContent/
+	// SetSlot from here. Lazily initialized by the inventory handlers; mutated ONLY on the tick
+	// goroutine (TICK-05 / T-6-08), so it is -race clean by the single-owner discipline.
+	inventory *Inventory
 }
 
 // NewTickLoop constructs a TickLoop over the given injectable clock with a
@@ -530,7 +537,18 @@ func (t *TickLoop) dispatch(c *Client, p pk.Packet) {
 		// break action never reached the subtick buffer and was a silent dead feature. Routing
 		// it here (server-stamped, appended to the bounded buffer like UseItemOn) is the
 		// load-bearing 06-04 fix; applyInput resolves it on-tick into handlePlayerAction.
-		packetid.ServerboundPlayerAction:
+		packetid.ServerboundPlayerAction,
+		// The container/inventory packets (ENT-04, 06-05). They were NOT in this set before —
+		// they fell through to the default no-op, so a ContainerClick/creative-set never
+		// reached the subtick buffer and the inventory was a silent dead feature (06-07's
+		// interactive check does NOT exercise inventory). Routing them here (server-stamped,
+		// appended to the bounded buffer like UseItemOn) is the load-bearing 06-05 fix;
+		// applyInput resolves them on-tick into the inventory handlers. The server is
+		// AUTHORITATIVE: the click's HashedStack hashes are decoded-and-discarded.
+		packetid.ServerboundContainerClick,
+		packetid.ServerboundSetCreativeModeSlot,
+		packetid.ServerboundContainerClose,
+		packetid.ServerboundSetCarriedItem:
 		// A subtick-relevant input: stamp it with the SERVER clock (never a client-
 		// supplied timestamp — T-3-07) and append to the bounded per-player buffer.
 		// resolveSubtickInputs drains it in chronological order this tick.
