@@ -42,6 +42,7 @@ var generators = []generator{
 	{"registryid", genRegistryID},
 	{"biome", genBiome},
 	{"lang", genLang},
+	{"worldgen", genWorldgen},
 }
 
 func main() {
