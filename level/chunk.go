@@ -456,6 +456,12 @@ func (b *BlockEntity) ReadFrom(r io.Reader) (n int64, err error) {
 
 type Section struct {
 	BlockCount int16
+	// FluidCount is the per-section fluid-block count. It is 0 for an
+	// all-stone superflat, but the SHORT must ALWAYS be present on the wire:
+	// vanilla LevelChunkSection.write emits two shorts (nonEmptyBlockCount
+	// then fluidCount) before the states container. The fork previously wrote
+	// only one short — the confirmed proto-776 stripes/void byte-misalignment.
+	FluidCount int16
 	States     *PaletteContainer[BlocksState]
 	Biomes     *PaletteContainer[BiomesState]
 	// Half a byte per light value.
@@ -481,6 +487,7 @@ func (s *Section) SetBlock(i int, v BlocksState) {
 func (s *Section) WriteTo(w io.Writer) (int64, error) {
 	return pk.Tuple{
 		pk.Short(s.BlockCount),
+		pk.Short(s.FluidCount), // second short — vanilla LevelChunkSection.write
 		s.States,
 		s.Biomes,
 	}.WriteTo(w)
@@ -489,6 +496,7 @@ func (s *Section) WriteTo(w io.Writer) (int64, error) {
 func (s *Section) ReadFrom(r io.Reader) (int64, error) {
 	return pk.Tuple{
 		(*pk.Short)(&s.BlockCount),
+		(*pk.Short)(&s.FluidCount), // symmetric read of the second short
 		s.States,
 		s.Biomes,
 	}.ReadFrom(r)
