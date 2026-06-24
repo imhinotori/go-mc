@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: Completed 05-02-PLAN.md (early-Play tail + incrementing teleport-id producer; PLAY-01/05/02; Docker -race clean)
-last_updated: "2026-06-24T03:41:08.463Z"
+last_updated: "2026-06-24T04:04:52.498Z"
 last_activity: 2026-06-24
 progress:
   total_phases: 9
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 17
-  completed_plans: 16
-  percent: 94
+  completed_plans: 17
+  percent: 100
 ---
 
 # Project State
@@ -21,14 +21,35 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-23)
 
 **Core value:** A Go server that an unmodified vanilla Minecraft 26.2 client can connect to, log into, and play in a persistent, ticking world — architected from day one for Leaf-style async optimizations.
-**Current focus:** Phase 5 (Player Session / First Playable) IN PROGRESS — 05-01 done (PLAY-04 movement + PLAY-02 teleport gate). Next: 05-02 (early-Play tail + incrementing teleport-id producer into `awaitingTeleport`), then 05-03 (capture-diff + human-verify walk-around).
+**Current focus:** **FIRST PLAYABLE ACHIEVED.** Phase 5 (Player Session / First Playable) COMPLETE — a real vanilla 26.2 client connects, logs in, and WALKS AROUND a following, ticking world; it is listed in the tab list and is not kicked. **The project is now playable end-to-end.** Next: Phase 6 (entities / inventory / persistence) — to be planned.
 
 ## Current Position
 
-Phase: 5 of 9 (Player Session in World / First Playable) — IN PROGRESS
-Plan: 2 of 3 complete (05-01 done; 05-02, 05-03 remaining)
-Status: Ready to execute
+Phase: 5 of 9 (Player Session in World / First Playable) — ✅ COMPLETE
+Plan: 3 of 3 complete (05-01, 05-02, 05-03 all done)
+Status: Phase complete — ready to plan Phase 6
 Last activity: 2026-06-24
+
+### 🎮 FIRST-PLAYABLE MILESTONE (Phase 5 — PLAY-01..06)
+
+An unmodified vanilla 26.2 client (PrismLauncher) connects to `cmd/sulfur` on
+`localhost:25565` and PLAYS: it logs in (Join Game → Play), is placed on solid
+ground, and WALKS AROUND a world whose view-distance ring FOLLOWS it (new chunks at
+the moving edges, no void, no falling off the world), appears in its own tab list,
+and is not kicked. User-confirmed: *"si, funciona :)"*. This is the project's
+first-playable threshold — the full handshake→login→config→play→movement loop works
+against a real client over proto 776.
+
+05-03 (the seal): the capture-diff byte-diffed Sulfur's three MEDIUM-confidence Play
+encoders against a REAL vanilla 26.2 server — `PlayerInfoUpdate` self-entry (1-byte
+8-action mask framing + `VarInt(0)` property count-prefix), `SetDefaultSpawnPosition`
+(RespawnData = Identifier dimension + packed-Long BlockPos + Float yaw + Float pitch),
+and `ForgetLevelChunk` (jar-derived packed Long) — all byte-identical to vanilla with
+NO encoder bug. The diff's load surfaced and fixed a real `net/queue.ChannelQueue`
+close-vs-send data race (mutex+closed-flag serializes Close against Push). `SetTime`
+is NOT needed for v1 (vanilla sends it but the client does not kick without it; the
+31-byte layout is documented). Golden fixtures committed; `TestPlayBytesVsVanillaCapture`
+is the CI gate. Docker `-race` over `./server/... ./world/... ./net/...` clean.
 
 05-01 milestone (PLAY-04 + PLAY-02): the player WALKS AROUND a world that follows it.
 `applyInput` (server/subtick.go) fills the Phase-3 stub — it decodes all four
@@ -38,20 +59,22 @@ field as a PACKED FLAGS BYTE (`&1` onGround, `&2` horizontalCollision), never a 
 chunk-column crossing, `recenterRing` (server/world_stream.go) moves `p.center`, resets
 `centerSent` so `flushOutbound` re-emits `SetChunkCacheCenter`, prunes `sentChunks`, and
 sends one `world.ForgetLevelChunk` per dropped column — the view ring FOLLOWS the player
-(void-on-walk closed). `world.ForgetLevelChunk` encodes the jar-derived 26.2 layout (a
-single packed Long, x low / z high — NOT the wiki VarInt z,x). Movement is gated on the
-teleport confirm: `applyInput` drops movement until `confirmedTeleport`, and dispatch
-confirms ONLY when the echoed `ServerboundAcceptTeleportation` VarInt matches
-`awaitingTeleport` (a forged id leaves the gate closed). `ServerboundPlayerLoaded` routes
-as a no-op. Hook-before-gate ordering preserved the existing subtick tests. Docker
-`-race` over `./server/... ./world/...` clean; zero new dependencies.
+(void-on-walk closed). Movement is gated on the teleport confirm: `applyInput` drops
+movement until `confirmedTeleport`, and dispatch confirms ONLY when the echoed
+`ServerboundAcceptTeleportation` VarInt matches `awaitingTeleport` (a forged id leaves
+the gate closed). `ServerboundPlayerLoaded` routes as a no-op.
 
-Phase-4 milestone (prior): a real client stands in a streamed world — the off-tick chunk
-worker loads/generates a deterministic superflat and rejoins via `applyAsyncResults`
-(WORLD-01); chunks encode byte-identical to vanilla 26.2 (04-04 capture-diff) and stream
-as a clamped center-out ring with batch framing (WORLD-05).
+05-02 milestone (PLAY-01 + PLAY-05): the early-Play tail (PlayerAbilities → SetHeldSlot
+→ PlayerInfoUpdate self-entry → SetDefaultSpawnPosition) is appended to the bootstrap
+before `loop.register`, with an incrementing per-gameTick teleport id threaded into both
+the PlayerPosition and `tickPlayer.awaitingTeleport` — the joining client becomes a real,
+listed player.
 
-Progress: [█████████░] 94%
+Phase-4 milestone (prior): a real client stands in a streamed world — chunks encode
+byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
+ring with batch framing (WORLD-05).
+
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -135,6 +158,10 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 05]: 05-02: SetDefaultSpawnPosition pinned to jar RespawnData = composite(GlobalPos, Float yaw, Float pitch); GlobalPos = composite(ResourceKey<Level> dimension, BlockPos) -> wire Identifier + packed-Long BlockPos + Float + Float (W1)
 - [Phase ?]: [Phase 05]: 05-02: PlayerInfoUpdate self-entry = 1-byte 8-action mask 0x0D + writeCollection(VarInt(1)+UUID+enum-order String name/VarInt(0) props/VarInt gameMode/Boolean listed); writeEnumSet over 8 actions == single pk.Byte mask
 - [Phase ?]: [Phase 05]: 05-02: incrementing teleport id = per-gameTick atomic.Uint64 (first id 1, never 0), threaded into bootstrap PlayerPosition AND tickPlayer.awaitingTeleport so the 05-01 gate matches the client echo; const initialTeleportID removed
+- [Phase 05]: 05-03: capture-diff sealed the 3 MEDIUM-confidence Play encoders byte-identical to vanilla 26.2 (PlayerInfoUpdate self-entry 1-byte mask + VarInt(0) prop count; SetDefaultSpawnPosition RespawnData Identifier+packed-Long+Float+Float; ForgetLevelChunk packed Long) — NO encoder bug. Vanilla's 8-action creative entry vs Sulfur's 3-action survival, and the spawn Y (-60 vs -48), are content not framing. TestPlayBytesVsVanillaCapture + golden fixtures are the CI gate.
+- [Phase 05]: 05-03: SetTime NOT needed for v1 — vanilla sends ClientboundSetTime (31-byte WorldClock+ClockNetworkState) but the real-client walk-around confirmed no kick/hang without it; the layout is documented in 05-CAPTURE-DIFF.md for a later day/night phase.
+- [Phase 05]: 05-03: fixed a real net/queue.ChannelQueue close-vs-send DATA RACE (latent send-on-closed panic) surfaced under the capture-diff load — converted the bare `chan T` to a mutex+closed-flag struct (Close serialized vs Push, Pull lock-free); Client.Send's recover() masked the panic but not the race. -race clean at -count=10 over the join seam.
+- [Phase 05]: PHASE 5 COMPLETE / FIRST PLAYABLE — a real vanilla 26.2 client (PrismLauncher) connects, logs in, and WALKS AROUND a following ticking world (ring follows, no void, tab list shows the player, no kick); PLAY-01..06 all proven. The project is playable end-to-end ("si, funciona :)").
 
 ### Pending Todos
 
@@ -157,11 +184,11 @@ Items acknowledged and carried forward from previous milestone close:
 |----------|------|--------|-------------|
 | Rename | Project rename Ender → **Sulfur**: module `imhinotori/go-mc` → `imhinotori/sulfur` (367 .go + both go.mod), `cmd/ender` → `cmd/sulfur`, user-facing strings. MC entity names + frozen 774 baseline left as-is. | ✅ Done (630f90e3) | Phase 2 (NET-04) |
 | Robustness | `KeepAlive.removePlayer` (verbatim fork component) derefs `listIndex[c]` and would panic if `ClientLeft` is called for a player the keep-alive already kicked on a real 30s timeout. Cannot trigger in Phase 3 (no timeout in the milestone window); `keepalive.go` is consumed verbatim by mandate. Harden against a double-leave in the phase that adds real timeout-driven disconnects. | ⏳ Deferred | Phase 3 (03-03) |
-| Pulled-forward | A MINIMAL Play-state Join Game bootstrap (`server/play_join.go`, commit 0fd96850) was pulled forward in 04-04 to enable the real-client visual milestone: `ClientboundLogin` (id 49, isFlat) → `ClientboundGameEvent` LEVEL_CHUNKS_LOAD_START (id 38/event 13) → `ClientboundPlayerPosition` (id 72, teleport-id-first). Phase 5 (Player Session, PLAY-01/02/03) must **EXTEND** this slice — full profile/abilities/inventory/real spawn/teleport-id validation/movement — **not duplicate** the Login/spawn/position scaffolding. | ⏳ Carry to Phase 5 | Phase 4 (04-04) |
+| Pulled-forward | A MINIMAL Play-state Join Game bootstrap (`server/play_join.go`, 0fd96850) was pulled forward in 04-04 to enable the real-client visual milestone. Phase 5 was to **EXTEND** it (full profile/abilities/spawn/teleport-validation/movement) not duplicate it. | ✅ Done — Phase 5 (05-01/02/03) completed the full Player Session: movement + following ring, the early-Play tail (abilities/held-slot/PlayerInfoUpdate-self/spawn-pos), incrementing teleport-id validation, and the capture-diff-sealed encoders. Bootstrap extended, not duplicated. (Real inventory still belongs to Phase 6.) | Phase 4 (04-04) → closed Phase 5 (05-03) |
 
 ## Session Continuity
 
-Last session: 2026-06-24T03:41:08.447Z
-Stopped at: Completed 05-02-PLAN.md (early-Play tail + incrementing teleport-id producer; PLAY-01/05/02; Docker -race clean)
+Last session: 2026-06-24T04:30:00.000Z
+Stopped at: Completed 05-03-PLAN.md — capture-diff sealed the 3 MEDIUM-confidence Play encoders byte-identical to vanilla 26.2 + fixed a net/queue close-vs-send race; PLAY-06 first-playable walk-around APPROVED ("si, funciona :)"). **Phase 5 COMPLETE / FIRST PLAYABLE.**
 Resume file: None
-Next: plan Phase 5 (Player Session, PLAY-01/02/03+) — EXTEND the minimal Join Game bootstrap (`server/play_join.go`, 0fd96850) pulled forward in 04-04 into the full player session; do not duplicate the Login/spawn/position scaffolding. Deferred: KeepAlive double-leave hardening + the pulled-forward bootstrap extension (see Deferred Items).
+Next: plan Phase 6 (entities / inventory / persistence) — the first-playable Player Session seam (movement, tick-owned position, the following ring, the tab list) is in place to build on. Deferred: KeepAlive double-leave hardening (Phase 3, surfaces when real timeout-driven disconnects land). The pulled-forward bootstrap deferred-row is now CLOSED.

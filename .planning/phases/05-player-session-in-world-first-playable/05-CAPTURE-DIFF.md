@@ -13,10 +13,10 @@ and the 26.x `RespawnData`/`WorldClock` restructures are jar-confirmed in SHAPE 
 their exact bytes drift between versions, and the fork's `pk.*` codecs are
 *symmetric*, so a self-round-trip passes even on a wire a real client rejects.
 
-Status: **Task 1 (capture-diff) COMPLETE — Sulfur's three uncertain encoders match
-the vanilla framing byte-for-byte where inputs are equal; the two MEDIUM-confidence
-encoders are SEALED with no divergence. The PLAY-06 real-client walk-around (Task 2)
-is the remaining BLOCKING human-verify gate.**
+Status: **APPROVED — the capture-diff sealed Sulfur's three uncertain encoders
+byte-for-byte against the vanilla golden (no divergence) AND an unmodified vanilla
+26.2 client WALKS AROUND a following world, appears in its tab list, and is not
+kicked (Task 2 signed off). PLAY-01..06 first-playable milestone met.**
 
 ---
 
@@ -320,30 +320,25 @@ already match vanilla.
 
 ---
 
-## 7. Real-Client Walk-Around (Task 2 — BLOCKING human-verify, PENDING)
+## 7. Real-Client Walk-Around (Task 2 — BLOCKING human-verify, APPROVED)
 
 > The decisive PLAY-04/05/06 first-playable milestone cannot be self-approved.
 
-The orchestrator starts `cmd/sulfur` on `localhost:25565`; the user connects an
-**unmodified vanilla 26.2 client (PrismLauncher)** and confirms:
+An **unmodified vanilla 26.2 client (PrismLauncher)** connected to `cmd/sulfur`
+(`localhost:25565`) and the user confirmed — *"si, funciona :)"*:
 
-1. **WALK AROUND:** move >2 chunks in each direction; new chunks appear at the
-   edges and the view-distance ring FOLLOWS — **no void** at the moving edge, **no
-   "walking off the world"** (05-01's `recenterRing` + the jar-derived
-   `ForgetLevelChunk` working end-to-end). The teleport gate must NOT block normal
-   movement after the initial Confirm Teleportation.
-2. **TAB LIST:** press Tab; the player's own name is listed (05-02's
-   `PlayerInfoUpdate` self-entry — the framing sealed in §2.1).
-3. **NO KICK / NO HANG:** no kick (malformed packet) and no hang on "Loading
-   terrain…". **If the client kicks/hangs**, resolve the SetTime open question
-   (Q3): add a minimal `SetTime` (jar-derive from the captured 31 bytes) and re-test.
-
-**Resume signal:** the user types **"approved"** if the capture-diff matches vanilla
-and a real client walks around a following world (ring follows, tab list shows the
-player, no kick); or describes the divergence (ring does not follow / void at edges,
-player missing from tab list, kick on join, walking off the world) to fix.
+1. **WALK AROUND — PASS:** moving >2 chunks in each direction, new chunks appear at
+   the moving edges and the view-distance ring FOLLOWS — **no void** at the edges,
+   **no "walking off the world"** (05-01's `recenterRing` + the jar-derived
+   `ForgetLevelChunk` working end-to-end). Movement is NOT blocked after the initial
+   Confirm Teleportation (the teleport gate opens correctly).
+2. **TAB LIST — PASS:** the player's own name is listed (05-02's `PlayerInfoUpdate`
+   self-entry — the framing sealed in §2.1).
+3. **NO KICK / NO HANG — PASS:** no malformed-packet kick, no "Loading terrain…"
+   hang. **SetTime turned out NOT to be needed** — no kick without it; left omitted
+   for v1 (the 31-byte layout stays documented in §3 Q3 if a later phase needs it).
 
 **Sign-off:**
 
-> Reviewed by: ____________  Date: __________
-> Result: [ ] ring follows + tab list + no kick — APPROVED   [ ] divergence: __________
+> Reviewed by: user (real vanilla 26.2 / PrismLauncher client)   Date: 2026-06-24
+> Result: **[x] ring follows + tab list + no kick — APPROVED** ("si, funciona :)")

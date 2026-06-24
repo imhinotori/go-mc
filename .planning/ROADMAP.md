@@ -17,7 +17,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 2: Net & Protocol State Machine** - Handshake → Status → Login → Configuration → Play transitions with the network/tick channel boundary (completed 2026-06-23)
 - [x] **Phase 3: Authoritative Tick Loop** - 20-TPS ordered tick spine, ownership-based sync, game-time anchor, subtick layer, keepalive
 - [x] **Phase 4: World & Chunk System** - Paletted-container chunk encode/decode, heightmaps/light, deterministic worldgen, view-distance streaming (completed 2026-06-24)
-- [ ] **Phase 5: Player Session In-World (FIRST PLAYABLE)** - Vanilla client logs in and stands in a solid, visible, ticking world it can walk around
+- [x] **Phase 5: Player Session In-World (FIRST PLAYABLE)** - ✅ Vanilla 26.2 client logs in and WALKS AROUND a solid, visible, ticking world whose ring follows it; listed in tab, no kick — FIRST PLAYABLE achieved
 - [ ] **Phase 6: Entities, Physics & Interaction** - Entity store/tracker, gravity/AABB collision, block place/break, component inventory, health/respawn, persistence
 - [ ] **Phase 7: AI, Pathfinding, Commands & Chat** - Goal-selector brain, synchronous A* navigation, mob spawning, command dispatch, chat broadcast
 - [ ] **Phase 8: Leaf Concurrency Optimizations** - Swap synchronous executors for goroutine pools behind pre-built seams; lock-free collections; linear region format; `-race` clean
@@ -100,7 +100,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 3 plans
 - [x] 05-01-PLAN.md — Movement decode (4 ServerboundMovePlayer* layouts, packed flags-byte) into tick-owned position + recenterRing so the view-distance ring follows the player + teleport-id gate + jar-derived ForgetLevelChunk (PLAY-04/02)
 - [x] 05-02-PLAN.md — Early-Play tail (PlayerAbilities -> SetHeldSlot -> PlayerInfoUpdate self tab-list -> SetDefaultSpawnPosition) appended before register + incrementing teleport id threaded into awaitingTeleport (PLAY-01/05/02)
-- [ ] 05-03-PLAN.md — Capture-diff the uncertain Play encoders vs vanilla 26.2 + BLOCKING human-verify real-client walk-around (ring follows / tab list / no kick) (autonomous:false; PLAY-01/02/05/06 gate)
+- [x] 05-03-PLAN.md — Capture-diff sealed the uncertain Play encoders byte-identical to vanilla 26.2 (no encoder bug; fixed a net/queue close-vs-send race) + BLOCKING human-verify real-client walk-around APPROVED (ring follows / tab list / no kick — "si, funciona :)") (autonomous:false; PLAY-01/02/03/05/06 gate)
 **Research**: Needs deeper per-phase research — confirm the 769-era position-sync layout (Teleport ID, DX/DY/DZ in 1/8000-block units, Int32 flags) survived to 776 against the jar/capture.
 
 ### Phase 6: Entities, Physics & Interaction
@@ -163,7 +163,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 2. Net & Protocol State Machine | 4/4 | Complete   | 2026-06-23 |
 | 3. Authoritative Tick Loop | 3/3 | Complete   | 2026-06-23 |
 | 4. World & Chunk System | 4/4 | Complete   | 2026-06-24 |
-| 5. Player Session In-World (FIRST PLAYABLE) | 2/3 | In Progress|  |
+| 5. Player Session In-World (FIRST PLAYABLE) | 3/3 | ✅ Complete | FIRST PLAYABLE — real client walks around a following world |
 | 6. Entities, Physics & Interaction | 0/TBD | Not started | - |
 | 7. AI, Pathfinding, Commands & Chat | 0/TBD | Not started | - |
 | 8. Leaf Concurrency Optimizations | 0/TBD | Not started | - |
