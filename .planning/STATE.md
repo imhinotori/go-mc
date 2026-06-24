@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 status: verifying
 stopped_at: "Completed 05-03-PLAN.md — capture-diff sealed the 3 MEDIUM-confidence Play encoders byte-identical to vanilla 26.2 + fixed a net/queue close-vs-send race; PLAY-06 first-playable walk-around APPROVED ("si, funciona :)"). **Phase 5 COMPLETE / FIRST PLAYABLE.**"
-last_updated: "2026-06-24T05:01:19.196Z"
+last_updated: "2026-06-24T05:23:11.198Z"
 last_activity: 2026-06-24
 progress:
   total_phases: 9
   completed_phases: 5
   total_plans: 24
-  completed_plans: 18
-  percent: 75
+  completed_plans: 19
+  percent: 79
 ---
 
 # Project State
@@ -74,7 +74,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [████████░░] 75%
+Progress: [████████░░] 79%
 
 ## Performance Metrics
 
@@ -113,6 +113,7 @@ Progress: [████████░░] 75%
 | Phase 05 P01 | 18min | 3 tasks | 7 files |
 | Phase Phase 05 PP02 | 20min | 2 tasks tasks | 3 files files |
 | Phase 06 P01 | 7min | 2 tasks | 7 files |
+| Phase 06 P02 | 32min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -164,6 +165,8 @@ Recent decisions affecting current work:
 - [Phase 05]: 05-03: fixed a real net/queue.ChannelQueue close-vs-send DATA RACE (latent send-on-closed panic) surfaced under the capture-diff load — converted the bare `chan T` to a mutex+closed-flag struct (Close serialized vs Push, Pull lock-free); Client.Send's recover() masked the panic but not the race. -race clean at -count=10 over the join seam.
 - [Phase 05]: PHASE 5 COMPLETE / FIRST PLAYABLE — a real vanilla 26.2 client (PrismLauncher) connects, logs in, and WALKS AROUND a following ticking world (ring follows, no void, tab list shows the player, no kick); PLAY-01..06 all proven. The project is playable end-to-end ("si, funciona :)").
 - [Phase ?]: [Phase 06]: 06-01: ENT-01 entity foundation — EntityIDAllocator (atomic.Int32 pre-increment, first id 1, claimed off-tick like teleportSeq) REPLACES the hard-coded joinEntityID=1 so players AND entities share one collision-free id space (Pitfall 7 / T-6-07, race-clean T-6-08); tick-owned entityStore (by-id map + per-chunk-column grid buckets, NOT a quadtree) exposes near(x,z,range) broad-phase + move() re-bucketing; Entity instance has snapshot-friendly plain-value hot fields + AABB() from data/entity dims (reused, not rebuilt). Docker -race over ./server/... clean; zero new deps.
+- [Phase ?]: [Phase 06]: 06-02: ENT-01 synchronous entityTracker fills the tracker.Tick() seam unchanged (noopTracker removed); per-player visibility diff over near() emits AddEntity(+SetEntityData 0xFF)/TeleportEntity(+RotateHead)/batched RemoveEntities; player never tracks itself; -race clean.
+- [Phase ?]: [Phase 06]: 06-02: 26.2 AddEntity/SetEntityMotion movement = NEW Vec3.LP_STREAM_CODEC -> LpVec3 quantizer (15-bit pack, NOT legacy *8000 short); stationary entity = single 0x00 byte. AddEntity typeId is field 3 (after UUID, before x/y/z). SetEntityData always ends with a single 0xFF (EOF_MARKER=255). v1 uses TeleportEntity (absolute) over the 4096-scaled MoveEntity* short deltas. Jar-derived (javap); byte-seal deferred to 06-07.
 
 ### Pending Todos
 
@@ -190,7 +193,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-24T04:56:22.074Z
+Last session: 2026-06-24T05:21:38.556Z
 Stopped at: Completed 05-03-PLAN.md — capture-diff sealed the 3 MEDIUM-confidence Play encoders byte-identical to vanilla 26.2 + fixed a net/queue close-vs-send race; PLAY-06 first-playable walk-around APPROVED ("si, funciona :)"). **Phase 5 COMPLETE / FIRST PLAYABLE.**
 Resume file: None
 Next: plan Phase 6 (entities / inventory / persistence) — the first-playable Player Session seam (movement, tick-owned position, the following ring, the tab list) is in place to build on. Deferred: KeepAlive double-leave hardening (Phase 3, surfaces when real timeout-driven disconnects land). The pulled-forward bootstrap deferred-row is now CLOSED.
