@@ -12,6 +12,7 @@ import (
 	"github.com/imhinotori/sulfur/world/levelgen/placement"
 	"github.com/imhinotori/sulfur/world/levelgen/router"
 	"github.com/imhinotori/sulfur/world/levelgen/surface"
+	"github.com/imhinotori/sulfur/world/structure"
 )
 
 // NoiseGenerator is the full-parity world.Generator: it drives the whole ported
@@ -62,6 +63,16 @@ type NoiseGenerator struct {
 	// feature lists + the biome allowance), built ONCE here (memoized). applyBiomeDecoration
 	// reads it; it is immutable at decoration time so Decorate stays pure over (seed, pos).
 	deco *decorationData
+
+	// STRUCT-01: the two-phase structure pipeline. structCache is the per-world
+	// StructureStart cache (a pure, singleflight-deduped memoization keyed by packed
+	// chunk pos — the ONLY cross-goroutine structure state). structGen is the
+	// StartGenerator (an INERT no-op set this plan — 14-02 registers the desert pyramid),
+	// fed the router-backed SurfaceSampler (heightmap-at-STARTS) + the real GetBiome seam
+	// so 14-02/14-03 gate temples on a real biome test (no accept-by-default). Built ONCE
+	// here so Decorate stays pure over (seed, pos).
+	structCache *structure.Cache
+	structGen   structure.StartGenerator
 
 	// air state id, reused by the carve adapter's out-of-range Get (resolved once).
 	air block.StateID
@@ -114,18 +125,31 @@ func NewNoiseGenerator(seed int64, secs, minY int) *NoiseGenerator {
 		panic("world: NoiseGenerator: build feature/decoration data: " + err.Error())
 	}
 
+	// STRUCT-01: build the structure cache over a router-backed surface sampler (the
+	// heightmap-at-STARTS column query — one PreliminarySurfaceLevel compute per quart
+	// cell, NO chunk fill) and the REAL biome lookup (g.biomes.GetBiome, the load-bearing
+	// half of "vanilla positions"). The StartGenerator is INERT this plan (NoopStartGenerator
+	// owns zero structures), so STARTS/REFERENCES run but produce zero starts and the
+	// placeStructures hook writes NOTHING — the chunk bytes stay identical to Phase 13.
+	// 14-02 swaps in the desert-pyramid set.
+	sampler := structure.NewRouterSurfaceSampler(r)
+	biomeAt := func(wx, wy, wz int) levelbiome.Type { return bs.GetBiome(wx, wy, wz) }
+	structCache := structure.NewCache(sampler, biomeAt)
+
 	return &NoiseGenerator{
-		seed:    seed,
-		secs:    secs,
-		minY:    minY,
-		router:  r,
-		biomes:  bs,
-		surface: ss,
-		rule:    rule,
-		carvers: carvers,
-		rep:     rep,
-		deco:    deco,
-		air:     block.ToStateID[block.Air{}],
+		seed:        seed,
+		secs:        secs,
+		minY:        minY,
+		router:      r,
+		biomes:      bs,
+		surface:     ss,
+		rule:        rule,
+		carvers:     carvers,
+		rep:         rep,
+		deco:        deco,
+		structCache: structCache,
+		structGen:   structure.NoopStartGenerator(),
+		air:         block.ToStateID[block.Air{}],
 	}
 }
 
@@ -252,6 +276,24 @@ func (g *NoiseGenerator) Decorate(view *Neighborhood) {
 	}
 	applyBiomeDecoration(view, biomes, g.deco, ctx, wg, g.seed, makePlacer, nil)
 
+	// STRUCT-01: the two-pass structure seam runs HERE — at the END of Decorate, AFTER
+	// applyBiomeDecoration (vanilla's FEATURES order) so structures overwrite terrain +
+	// features. The pipeline is fill->surface->carve->[STARTS(C)]->[REFERENCES(C)]->
+	// [PLACE(C)]->finish:
+	//
+	//   (a) STARTS(C): compute + cache the structure starts OWNED by C. Pure geometry over
+	//       (seed, C) (the surface sampler reads the router, NOT the chunk), singleflight-
+	//       deduped, NO block writes — so it does not disturb the fill/surface/carve order.
+	//   (b) REFERENCES(C): the +-8 bbox-intersect scan that on-demand-computes STARTS for
+	//       every cell in C's +-8 window (each pure (seed,pos) + singleflight-deduped, so
+	//       the radius-8 references read radius-8 data, not a radius-1 ring — no neighbor
+	//       chunk GENERATION is triggered, only pure start geometry).
+	//   (c) PLACE(C): the placeStructures hook — EMPTY this plan (14-02 fills it: gather
+	//       StartsForChunk(C) + clip each piece to C's writable column). With the inert
+	//       StartGenerator + the empty hook, ZERO blocks are written, so the emitted chunk
+	//       bytes are IDENTICAL to Phase 13 (the 5x5 reorder + emit-once gates stay green).
+	g.placeStructures(view)
+
 	// Sky light for rendering (mirrors Superflat / FillChunk finishing). FillChunk set
 	// FluidCount/biome defaults and BuildSurface rewrote the CLIENT heightmaps; sky light is
 	// applied here defensively so every present section is lit regardless of the fill path.
@@ -262,6 +304,40 @@ func (g *NoiseGenerator) Decorate(view *Neighborhood) {
 		}
 	}
 	ch.Status = level.StatusFull
+}
+
+// placeStructures runs the STRUCT-01 two-pass structure seam for the center chunk C of
+// view: (a) ComputeStarts(seed, C) caches C's owned starts (pure geometry, no blocks),
+// (b) ComputeReferences(seed, C) runs the +-8 compute-on-demand scan recording which
+// neighbor starts reach into C, and (c) the PLACE pass — EMPTY this plan.
+//
+// 14-02 fills the PLACE pass: gather g.structCache.StartsForChunk(C) (C's own + the
+// referenced neighbor starts) and clip each piece to C's writable column via the
+// Neighborhood proxy. This plan lands (a)+(b)+the empty hook, so with the inert
+// StartGenerator the chunk bytes stay byte-identical to Phase 13 (ZERO blocks placed).
+//
+// Runs on the scheduler goroutine (called from Decorate via tryDecorate). The cache's
+// xsync.Map is the ONLY cross-goroutine state and a pure memoization; the +-8 on-demand
+// ComputeStarts are pure (seed,pos) geometry (the surface sampler reads the router, NOT
+// the chunk) so they NEVER trigger neighbor chunk generation.
+func (g *NoiseGenerator) placeStructures(view *Neighborhood) {
+	center := view.center
+	minY, height := g.minY, g.secs*16
+
+	// (a) STARTS for C — pure geometry, singleflight-deduped, no block writes.
+	g.structCache.ComputeStarts(g.seed, center, g.structGen)
+
+	// (b) REFERENCES for C — the +-8 scan that on-demand-computes STARTS per cell, so a
+	// start owned up to 8 chunks out reaching C is found (not a radius-1 truncation).
+	g.structCache.ComputeReferences(g.seed, center, g.structGen, minY, height)
+
+	// (c) PLACE — EMPTY hook (14-02 fills it). With the inert StartGenerator there are no
+	// starts to gather and nothing to write, so the chunk bytes are unchanged.
+	//
+	// 14-02 will be:
+	//   for _, st := range g.structCache.StartsForChunk(center) {
+	//       placeInChunk(view, st, structure.WritableArea(center, minY, height))
+	//   }
 }
 
 // Dims returns the generator's (minY, height) so the worker can size the Neighborhood

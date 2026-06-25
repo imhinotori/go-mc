@@ -173,6 +173,18 @@ func (c *Cache) StartsForChunk(center level.ChunkPos) []*StructureStart {
 	return out
 }
 
+// StartsCachedFor reports whether pos's STARTS have been computed + cached (used by the
+// worker-seam tests to prove the +-8 scan computed-on-demand reached a given cell). It
+// is a pure read of the cache state.
+func (c *Cache) StartsCachedFor(pos level.ChunkPos) ([]*StructureStart, bool) {
+	return c.starts.Load(packPos(pos))
+}
+
+// ReferencesCachedFor reports whether pos's REFERENCES list has been computed + cached.
+func (c *Cache) ReferencesCachedFor(pos level.ChunkPos) ([]int64, bool) {
+	return c.references.Load(packPos(pos))
+}
+
 // noopStartGenerator is the STRUCT-01 inert generator: it owns NO structures, so every
 // chunk's starts are empty and the pipeline runs end-to-end with ZERO blocks placed
 // (proving the worker seam is byte-stable before any geometry). 14-02 replaces it with
