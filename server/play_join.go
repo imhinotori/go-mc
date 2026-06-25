@@ -2,6 +2,7 @@ package server
 
 import (
 	"io"
+	"math"
 
 	"github.com/imhinotori/sulfur/data/packetid"
 	"github.com/imhinotori/sulfur/level"
@@ -390,6 +391,47 @@ func (e playerInfoEntriesEncoder) WriteTo(w io.Writer) (int64, error) {
 	return n, nil
 }
 
+// writePlayerInfoUpdateRemove builds a ClientboundPlayerInfoRemove that drops the given
+// players' tab-list entries (GAMEPLAY-01 leave broadcast, Plan 17-01). It is a SEPARATE packet
+// id from ClientboundPlayerInfoUpdate.
+//
+// Wire layout is jar-derived from net.minecraft.network.protocol.game.
+// ClientboundPlayerInfoRemovePacket.write (decompiled this session): a single
+// writeCollection(profileIds, UUIDUtil.STREAM_CODEC) — i.e. a VarInt count followed by that
+// many raw 16-byte UUIDs, no per-entry framing. pk.UUID writes the raw 16 bytes, matching
+// UUIDUtil.STREAM_CODEC.
+func writePlayerInfoUpdateRemove(ids ...uuid.UUID) pk.Packet {
+	return pk.Marshal(
+		int32(packetid.ClientboundPlayerInfoRemove),
+		playerInfoRemoveEncoder{ids: ids},
+	)
+}
+
+// playerInfoRemoveEncoder writes the ClientboundPlayerInfoRemove body: VarInt(count) + raw
+// UUIDs (UUIDUtil.STREAM_CODEC, 16 bytes each). Mirrors playerInfoEntriesEncoder's
+// custom-FieldEncoder style.
+type playerInfoRemoveEncoder struct {
+	ids []uuid.UUID
+}
+
+func (e playerInfoRemoveEncoder) WriteTo(w io.Writer) (int64, error) {
+	var n int64
+	write := func(f pk.FieldEncoder) error {
+		m, err := f.WriteTo(w)
+		n += m
+		return err
+	}
+	if err := write(pk.VarInt(len(e.ids))); err != nil { // profileIds count
+		return n, err
+	}
+	for _, id := range e.ids {
+		if err := write(pk.UUID(id)); err != nil { // raw 16-byte UUID
+			return n, err
+		}
+	}
+	return n, nil
+}
+
 // writeSetDefaultSpawnPosition builds ClientboundSetDefaultSpawnPosition. The 26.x packet
 // wraps a LevelData.RespawnData record whose STREAM_CODEC is composite(GlobalPos, FLOAT,
 // FLOAT), and GlobalPos is composite(ResourceKey<Level> dimension, BlockPos). On the wire
@@ -457,6 +499,14 @@ type bootstrapParams struct {
 	// from the tick's EntityIDAllocator (ENT-01) and used as the ClientboundLogin playerId
 	// — the replacement for the hard-coded joinEntityID=1 (06-RESEARCH Pitfall 7).
 	entityID int32
+
+	// spawnX, spawnY, spawnZ + hasSpawn carry the GAMEPLAY-02 persisted spawn position (Plan
+	// 17-01). When hasSpawn is true, sendPlayBootstrap teleports the SINGLE bootstrap
+	// PlayerPosition to these coords (and points SetDefaultSpawnPosition at them) instead of the
+	// center-derived hardcoded spawn — so a reconnecting player lands at its saved location with
+	// the same teleport id (no second teleport, Pitfall 3). hasSpawn=false keeps the v1 spawn.
+	spawnX, spawnY, spawnZ float64
+	hasSpawn               bool
 }
 
 // sendPlayBootstrap enqueues the full early-Play bootstrap on the connection's outbound
@@ -485,6 +535,13 @@ func sendPlayBootstrap(c *Client, viewDist int, center level.ChunkPos, surfaceY 
 	spawnZ := float64(int(center[1])<<4) + 8.5
 	spawnY := float64(surfaceY + 2)
 
+	// GAMEPLAY-02 (Plan 17-01): a reconnecting player's persisted position overrides the
+	// hardcoded spawn for the SINGLE bootstrap teleport (and the default spawn point), so it
+	// lands at its saved location with the same teleport id — no second post-register teleport.
+	if params.hasSpawn {
+		spawnX, spawnY, spawnZ = params.spawnX, params.spawnY, params.spawnZ
+	}
+
 	// The original three (Login -> GameEvent -> PlayerPosition). The Login playerId is the
 	// per-join allocated entity id (ENT-01), not the old const.
 	c.Send(writeLoginPacket(params.entityID, viewDist))
@@ -492,9 +549,13 @@ func sendPlayBootstrap(c *Client, viewDist int, center level.ChunkPos, surfaceY 
 	c.Send(writePlayerPositionPacket(params.teleportID, spawnX, spawnY, spawnZ, 0, 0))
 
 	// The Plan-05-02 early-Play tail, appended after PlayerPosition and still before
-	// register. The block spawn position fed to SetDefaultSpawnPosition is the integer
-	// block under the player's spawn column.
+	// register. The block spawn position fed to SetDefaultSpawnPosition is the integer block
+	// under the player's spawn position (the persisted block when reconnecting — GAMEPLAY-02 —
+	// else the spawn column floor).
 	spawnPos := pk.Position{X: int(center[0]) << 4, Y: surfaceY, Z: int(center[1]) << 4}
+	if params.hasSpawn {
+		spawnPos = pk.Position{X: int(math.Floor(spawnX)), Y: int(math.Floor(spawnY)), Z: int(math.Floor(spawnZ))}
+	}
 	c.Send(writePlayerAbilities(false, false, false, false, defaultFlyingSpeed, defaultWalkingSpeed))
 	c.Send(writeSetHeldSlot(defaultHeldSlot))
 	c.Send(writePlayerInfoUpdateAdd(params.id, params.name, params.gameMode))
