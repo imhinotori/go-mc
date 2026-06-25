@@ -295,21 +295,32 @@ func (t *StructureTemplate) BoundingBoxAt(origin Pos, rot Rotation, mir Mirror, 
 // orientation (from the jigsaw block-entity nbt). 16-02 consumes this to grow the jigsaw.
 type JigsawBlockInfo struct {
 	WorldPos    Pos
+	LocalPos    Pos    // the template-LOCAL block pos (CFR StructureBlockInfo.pos) — 16-02
 	Name        string // this jigsaw's name
 	Pool        string // the target pool to expand into
 	Target      string // the target jigsaw name to join against
 	FinalState  string // the block to leave once connected (LegacySinglePool leaves air)
 	Joint       string // "aligned" | "rollable"
 	FrontFacing block.Direction
+	TopFacing   block.Direction // the jigsaw's TOP face (CFR JigsawBlock.getTopFacing) — canAttach
+	// PlacementPriority / SelectionPriority are the JigsawBlockEntity priority ints (CFR
+	// JigsawBlockInfo.placementPriority/selectionPriority, default 0): SelectionPriority
+	// orders the jigsaw blocks within a piece (sortBySelectionPriority, highest first);
+	// PlacementPriority is the SequencedPriorityIterator key (highest processed first).
+	// 16-02 consumes both; all villages use 0, so they are the queue-FIFO defaults.
+	PlacementPriority int
+	SelectionPriority int
 }
 
 // jigsawNBT is the jigsaw block-entity nbt schema (CFR JigsawBlockEntity tags).
 type jigsawNBT struct {
-	Name       string `nbt:"name"`
-	Pool       string `nbt:"pool"`
-	Target     string `nbt:"target"`
-	FinalState string `nbt:"final_state"`
-	Joint      string `nbt:"joint"`
+	Name              string `nbt:"name"`
+	Pool              string `nbt:"pool"`
+	Target            string `nbt:"target"`
+	FinalState        string `nbt:"final_state"`
+	Joint             string `nbt:"joint"`
+	PlacementPriority int    `nbt:"placement_priority"`
+	SelectionPriority int    `nbt:"selection_priority"`
 }
 
 // Jigsaws ports StructureTemplate.getJigsaws: extract every jigsaw block's world position
@@ -327,6 +338,7 @@ func (t *StructureTemplate) Jigsaws(origin Pos, rot Rotation, mir Mirror, pivotX
 		rx, ry, rz := calculateRelativePosition(blk.Pos[0], blk.Pos[1], blk.Pos[2], rot, mir, pivotX, pivotZ)
 		info := JigsawBlockInfo{
 			WorldPos: Pos{origin.X + rx, origin.Y + ry, origin.Z + rz},
+			LocalPos: Pos{rx, ry, rz}, // the rotated LOCAL pos (CFR getJigsaws StructureBlockInfo.pos)
 		}
 		if blk.NBT.Type == nbt.TagCompound {
 			var jn jigsawNBT
@@ -338,13 +350,17 @@ func (t *StructureTemplate) Jigsaws(origin Pos, rot Rotation, mir Mirror, pivotX
 			info.Target = jn.Target
 			info.FinalState = jn.FinalState
 			info.Joint = jn.Joint
+			info.PlacementPriority = jn.PlacementPriority
+			info.SelectionPriority = jn.SelectionPriority
 		}
-		// The jigsaw's front face = the orientation prop on its palette state, rotated.
-		// The orientation prop (e.g. "north_up") encodes a front direction; we derive the
-		// front from the resolved block's Jigsaw orientation and rotate it. 16-02 uses the
-		// front face to align the next pool element. The base facing is read from the block.
-		front := jigsawFrontFacing(t.palette[blk.State])
+		// The jigsaw's front + top faces = the orientation prop (a FrontAndTop, e.g.
+		// "north_up" = front North, top Up) on its palette state, mirror-then-rotated
+		// (CFR JigsawBlock.getFrontFacing/getTopFacing + the place-time orientation
+		// transform). 16-02 aligns the next pool element to the front face and tests the
+		// top face in canAttach.
+		front, top := jigsawOrientation(t.palette[blk.State])
 		info.FrontFacing = rot.rotateDirection(mir.mirrorDirection(front))
+		info.TopFacing = rot.rotateDirection(mir.mirrorDirection(top))
 		out = append(out, info)
 	}
 	return out, nil
@@ -386,4 +402,19 @@ func jigsawFrontFacing(st block.StateID) block.Direction {
 		return jigsawOrientationFront(jb.Orientation)
 	}
 	return block.North
+}
+
+// jigsawOrientation returns BOTH the front + top directions encoded in a jigsaw block's
+// FrontAndTop orientation property (CFR JigsawBlock.getFrontFacing + getTopFacing, both
+// reading the ORIENTATION FrontAndTop and returning its .front()/.top()). 16-02's Placer
+// aligns the child to the front face and tests the top face in canAttach. Defaults to
+// (North, Up) if the state is not a jigsaw (defensive — only called for jigsaw states).
+func jigsawOrientation(st block.StateID) (front, top block.Direction) {
+	if st < 0 || int(st) >= len(block.StateList) {
+		return block.North, block.Up
+	}
+	if jb, ok := block.StateList[st].(block.Jigsaw); ok {
+		return jb.Orientation.Directions()
+	}
+	return block.North, block.Up
 }
