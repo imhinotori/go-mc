@@ -1,8 +1,6 @@
 package structure
 
 import (
-	"math"
-
 	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/world/levelgen"
@@ -658,6 +656,7 @@ func (s *StrongholdStairsDown) PostProcess(view WorldGenView, box BoundingBox, _
 type StrongholdFiveCrossing struct {
 	strongholdPiece
 	leftLow, leftHigh, rightLow, rightHigh bool
+	lootChests                             []LootChest
 }
 
 func fiveCrossBBox(x, y, z int, dir block.Direction) BoundingBox {
@@ -703,6 +702,8 @@ func (c *StrongholdFiveCrossing) AddChildren(ctx *strongholdContext) {
 func (c *StrongholdFiveCrossing) PostProcess(view WorldGenView, box BoundingBox, _ level.ChunkPos, rng levelgen.RandomSource) {
 	c.fillShell(view, box, rng, 0, 0, 0, 9, 7, 8)
 	c.placeDoor(view, box, c.entryDoor, 5, 4, 0)
+	// A crossing chest (block + loot tag minecraft:chests/stronghold_crossing; loot deferred v3).
+	c.createChest(view, box, 3, 1, 3, strongholdCrossingLoot, &c.lootChests)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -998,6 +999,3 @@ func forcePortalRoom(ctx *strongholdContext, builder *strongholdBuilder) {
 		}
 	}
 }
-
-// roundCoord is a small helper for any rounding needs (kept for parity with the jar's round).
-func roundCoord(v float64) int { return int(math.Round(v)) }
