@@ -207,6 +207,13 @@ type TickLoop struct {
 	// run on-thread over this store. A plain map (not xsync; that is Phase 8).
 	entities *entityStore
 
+	// fluidSchedule is the GAMEPLAY-05 scheduled-fluid-tick queue (Plan 17-02 fills it). It is
+	// DECLARED here by 17-01 so the shared TickLoop struct is never edited by a Wave-2 plan;
+	// the concrete fluidScheduleQueue type lives in fluid.go (a 17-01 stub 17-02 overwrites).
+	// 17-02 lazily constructs the queue inside tickFluids (a nil queue drains to nothing), so
+	// SetWorld — which lives in this shared file (tick.go) — is NOT touched by 17-02.
+	fluidSchedule *fluidScheduleQueue
+
 	// debug holds the OPTIONAL, off-by-default debug triggers for the Plan 06-07 interactive
 	// human-verify gate (a visible moving pig + periodic damage so the operator can SEE entity
 	// movement and the health/death/respawn loop). nil in production AND in every test, so the
@@ -420,6 +427,41 @@ type tickPlayer struct {
 	// handed this player the placeable test stack, so the give runs once per session. Tick-owned;
 	// untouched in production (debug off) and in tests.
 	debugGaveItems bool
+
+	// --- Phase 17 gameplay seams (Plan 17-01). ALL tick-owned (TICK-05). ---
+
+	// playerEntity is this player's instance in the tick-owned entityStore (GAMEPLAY-01).
+	// Constructed in drainRegistrations with id==entityID and uuid==uuid so the tracker's
+	// self-skip works and the joiner's tab-list entry matches; syncPlayerEntities re-syncs
+	// its pos/angles from these authoritative fields each tick BEFORE tracker.Tick. nil for
+	// a player mid-registration. Set by Plan 17-01 (player_visibility.go).
+	playerEntity *Entity
+
+	// headYaw is the player's head rotation (degrees), synced onto playerEntity each tick so
+	// the tracker's RotateHead reflects where the player is looking. v1 mirrors yaw (no
+	// independent head turn decoded yet). Set by Plan 17-01.
+	headYaw float32
+
+	// bootstrapped is the GAMEPLAY-03 first-tick guard: syncJoinInventories sends the
+	// authoritative ContainerSetContent exactly once (on the first tick after register) then
+	// sets this true so the window is never re-sent on subsequent ticks. Set by Plan 17-01.
+	bootstrapped bool
+
+	// fallDistance is the accumulated airborne descent used for fall damage (GAMEPLAY-04 /
+	// Plan 17-03): it grows by the per-tick downward delta while airborne and resets on
+	// landing, where floor(fallDistance-3) half-hearts of damage are applied. DECLARED here
+	// by 17-01 so 17-03 never edits tick.go; USED by 17-03 (fall_damage.go).
+	fallDistance float64
+
+	// wasOnGround is the previous tick's onGround state — the landing-edge detector for fall
+	// damage (false->true transition triggers the damage check). DECLARED by 17-01, USED by
+	// 17-03 (fall_damage.go).
+	wasOnGround bool
+
+	// lastY is the player's y at the end of the previous tick, used to compute the per-tick
+	// descent delta that accumulates into fallDistance. DECLARED by 17-01, USED by 17-03
+	// (fall_damage.go).
+	lastY float64
 }
 
 // Health constants for a fresh survival player (the ENT-05 defaults). maxHealth is the vanilla
@@ -706,6 +748,17 @@ func (t *TickLoop) drainRegistrations() {
 			if _, exists := t.clientIndex[p.client]; !exists {
 				t.players = append(t.players, p)
 				t.clientIndex[p.client] = p
+
+				// GAMEPLAY-01 (Plan 17-01) join seam — added EXACTLY ONCE here on the owner
+				// (never in AcceptPlayer, which crosses the tick boundary). Insert the player's
+				// store Entity (id==entityID so the tracker self-skips), then sync the tab list
+				// bidirectionally BEFORE the tracker's next AddEntity: broadcast the joiner's
+				// ADD_PLAYER entry to every OTHER player and send all existing players' entries to
+				// the joiner (a Notchian client drops AddEntity without the tab entry — Pitfall 1).
+				p.playerEntity = newPlayerEntity(p)
+				t.entities.add(p.playerEntity)
+				t.broadcastPlayerInfoAdd(p)
+				t.sendExistingPlayersTo(p)
 			}
 		case c := <-t.unregister:
 			t.removePlayer(c)
@@ -749,6 +802,14 @@ func (t *TickLoop) removePlayer(c *Client) {
 			break
 		}
 	}
+
+	// GAMEPLAY-01 (Plan 17-01) leave seam — drop the player's store Entity (so the tracker
+	// batches a RemoveEntities for it on the next tick) and broadcast a PlayerInfoRemove for
+	// its UUID to every REMAINING player so their clients drop the tab entry + avatar. Done
+	// AFTER the swap-remove so the leaving player is not re-sent its own removal. remove() is a
+	// no-op for a missing id, so a leave before the join seam ran never panics.
+	t.entities.remove(p.entityID)
+	t.broadcastPlayerInfoRemove(p.uuid)
 }
 
 // dispatch routes one inbound packet on the tick goroutine. It is total and cheap:

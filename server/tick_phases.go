@@ -109,8 +109,15 @@ func (t *TickLoop) resolveSubtickInputs() {
 	}
 }
 
-// tickWorld advances world/block-tick state. Phase 4 fills it.
-func (t *TickLoop) tickWorld() { t.trace("tickWorld") }
+// tickWorld advances world/block-tick state. Plan 17-01 wires the GAMEPLAY-05 fluid pass
+// (tickFluids) here, INSIDE this existing phase, so no new phase is added to the fixed tick
+// order (TestTickPhaseOrder stays green). tickFluids lives in fluid.go — a 17-01 stub that
+// 17-02 (GAMEPLAY-05) overwrites with the real FlowingFluid port; this call site stays
+// Wave-1-owned and is NOT edited by 17-02.
+func (t *TickLoop) tickWorld() {
+	t.trace("tickWorld")
+	t.tickFluids()
+}
 
 // tickChunks issues the per-player chunk requests for this tick (WORLD-05). For each
 // player it walks the center-out needed ring out to the player's CLAMPED view distance
@@ -161,6 +168,17 @@ func (t *TickLoop) tickEntities() {
 	// fixed tick order (TestTickPhaseOrder is preserved). tickDebug is a nil-check no-op when
 	// debug is off (production / every test).
 	t.tickDebug()
+
+	// Plan 17-01 gameplay seams, all INSIDE this existing phase (no phase reorder — the fixed
+	// tick order is preserved, TestTickPhaseOrder stays green) and BEFORE tracker.Tick so the
+	// tracker's near() broad-phase reads this tick's synced player positions:
+	//   - syncPlayerEntities: pos-sync each player's store Entity from the tickPlayer (GAMEPLAY-01)
+	//   - syncJoinInventories: first-tick ContainerSetContent join-sync (GAMEPLAY-03)
+	//   - tickFallDamage: the fall-damage dispatcher; its body lives in fall_damage.go (a 17-01
+	//     stub 17-03 overwrites — this call site stays Wave-1-owned, NOT edited by 17-03).
+	t.syncPlayerEntities()
+	t.syncJoinInventories()
+	t.tickFallDamage()
 }
 
 // tickAI drives mob AI for every AI mob in the tick-owned store, then runs the throttled
