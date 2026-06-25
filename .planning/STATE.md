@@ -4,14 +4,14 @@ milestone: v2
 milestone_name: worldgen-features-structures
 status: verifying
 stopped_at: Completed 14-02-PLAN.md
-last_updated: "2026-06-25T13:48:52.283Z"
+last_updated: "2026-06-25T14:34:41.449Z"
 last_activity: 2026-06-25
 progress:
   total_phases: 7
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 16
-  completed_plans: 15
-  percent: 94
+  completed_plans: 16
+  percent: 100
 ---
 
 # Project State
@@ -95,7 +95,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [█████████░] 94%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -166,6 +166,7 @@ Progress: [█████████░] 94%
 | Phase 13 P04 | ~30min | 3 tasks | 4 files |
 | Phase 14 P01 | 70 | 3 tasks | 97 files |
 | Phase 14 P02 | 28min | 2 tasks | 10 files |
+| Phase 14 P03 | 95min | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -267,6 +268,7 @@ Recent decisions affecting current work:
 - [Phase ?]: 14-02: desert pyramid is the first true structure - StructurePiece machinery (placeBlock cross-chunk clip) + placeInChunk + full hardcoded postProcess, fingerprint-pinned
 - [Phase ?]: 14-02: PostProcess takes a WorldGenView interface (Neighborhood satisfies it) - world->world/structure one-way, no import cycle
 - [Phase ?]: 14-02: loot/redstone/suspicious-sand deferred v3 - chest BLOCK + loot tag, tnt + pressure-plate BLOCKS placed
+- [Phase ?]: 14-03: jungle temple + swamp hut ported javap-c; salts 14357619/14357620 cross-checked, REAL biome gates, MossStoneSelector per-cell draws; igloo is the first addChildren multi-piece (dome always + nextDouble<0.5 basement), geometry extracted OFFLINE from the .nbt templates (0 .nbt runtime, deviation documented); STRUCT-02 closed, 4-temple acceptance + Docker -race green
 
 ### Pending Todos
 
@@ -293,7 +295,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-25T13:48:52.267Z
+Last session: 2026-06-25T14:34:10.964Z
 Stopped at: Completed 14-02-PLAN.md
 Resume file: None
 Next: the STRUCTURES half of v2 — Phase 14 (Structures STARTS/REFERENCES/PLACE pipeline + StructurePiece machinery, shaken down on the single-piece desert pyramid), then Phase 15 (mineshaft recursion + stronghold concentric-rings placement), then Phase 16 (the village .nbt/template_pool/Placer jigsaw + the second VISUAL GATE). Research: .planning/research/v2-structures.md (the two-phase pipeline, the LegacyRandomSource seed hinge, the easy→hard tier order). Deferred-still-open: dungeon loot/spawner-mob + BeehiveDecorator occupant + pale_garden PaleMoss (all v3, cosmetic, in 13-04-SUMMARY); KeepAlive double-leave hardening (Phase 3, surfaces when real timeout-driven disconnects land).

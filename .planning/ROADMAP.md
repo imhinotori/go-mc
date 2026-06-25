@@ -27,7 +27,7 @@ Decimal phases appear between their surrounding integers in numeric order.
  (completed 2026-06-25)
 - [x] **Phase 12: Core Feature Types** - Port `OreFeature`, `RandomPatchFeature`/`SimpleBlockFeature`, the random selectors, and `BlockPile`/`FallenTree`/`VegetationPatch` so a biome's full ground-cover + decoration-ore set generates (completed 2026-06-25)
 - [x] **Phase 13: Trees, Dungeon & Features Visual Gate** - Port `TreeFeature` (trunk/foliage placers + tree decorators + `BlockStateProvider` hierarchy) + the `MonsterRoomFeature` dungeon; close the block with the real-client VISUAL GATE (full per-biome vegetation, deterministic per seed) (completed 2026-06-25 — visual gate approved: trees + vines confirmed on a real client)
-- [ ] **Phase 14: Structure Pipeline & Temples** - Port the STARTS/REFERENCES/PLACE two-phase pipeline + the `StructurePiece` bounding-box-tree machinery; the desert pyramid (+ jungle temple/igloo/swamp hut) generates in vanilla positions as the pipeline shakedown
+- [x] **Phase 14: Structure Pipeline & Temples** - Port the STARTS/REFERENCES/PLACE two-phase pipeline + the `StructurePiece` bounding-box-tree machinery; the desert pyramid (+ jungle temple/igloo/swamp hut) generates in vanilla positions as the pipeline shakedown (completed 2026-06-25)
 - [ ] **Phase 15: Mineshaft & Stronghold** - Port the multi-piece recursive mineshaft (`legacy_type_3` frequency-reduction placement) and the stronghold (concentric-rings placement + recursive piece set reusing the piece machinery)
 - [ ] **Phase 16: Village Jigsaw & Structures Visual Gate** - Port the `.nbt` `StructureTemplate` system + template_pool/processor data + the bounded-BFS `JigsawPlacement.Placer` so villages generate per biome variant; close the milestone with the real-client structures VISUAL GATE
 
@@ -107,7 +107,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 3 plans
   - [x] 14-01-PLAN.md — The structure PIPELINE: the placement math (getPotentialStructureChunk floorDiv+salt-in-seed + spread types + the 4 probabilityReducers + isStructureChunk) + the `world/structure` StructureStart cache (pure-memoized, singleflight-deduped) + the 8-radius REFERENCES scan + the heightmap-at-STARTS column sampler (router preliminary-surface) + the two-pass worker seam (STARTS/REFERENCES/PLACE-hook), ZERO blocks placed (STRUCT-01)
   - [x] 14-02-PLAN.md — The StructurePiece machinery (Piece tree + placeBlock-with-clip/generateBox/fillColumnDown/createChest/addChildren + rotation/mirror) + StructureStart.placeInChunk + the DESERT PYRAMID shakedown (single-piece hardcoded geometry, the first structure end-to-end: STARTS→cache→REFERENCES→PLACE→postProcess, cross-chunk idempotent, 5x5 determinism green with blocks placing) (STRUCT-02)
-  - [ ] 14-03-PLAN.md — The cheap temple follow-ons: jungle temple + igloo (the first addChildren multi-piece — dome + probabilistic basement) + swamp hut + the automated structures-pipeline acceptance (all 4 temples at expected chunks per-salt + cross-chunk idempotence + STARTS purity + 5x5/emit-once byte-identity + Docker -race) — NO visual gate (Phase 16) (STRUCT-02)
+  - [x] 14-03-PLAN.md — The cheap temple follow-ons: jungle temple + igloo (the first addChildren multi-piece — dome + probabilistic basement) + swamp hut + the automated structures-pipeline acceptance (all 4 temples at expected chunks per-salt + cross-chunk idempotence + STARTS purity + 5x5/emit-once byte-identity + Docker -race) — NO visual gate (Phase 16) (STRUCT-02)
 **Research**: `.planning/research/v2-structures.md` (Tier 1 — Desert Pyramid…; "Architecture Patterns → the two-phase pipeline", "the StructurePiece bounding-box tree", "the structure-start cache", "Brownfield: how STARTS + PLACE slot into the worker"; "Common Pitfalls #1–3").
 
 ### Phase 15: Mineshaft & Stronghold
@@ -145,6 +145,6 @@ Phases execute in numeric order: 10 → 11 → 12 → 13 → 14 → 15 → 16
 | 11. Feature Pipeline & Decoration Orchestration | 3/3 | Complete   | 2026-06-25 |
 | 12. Core Feature Types | 3/3 | Complete | 2026-06-25 |
 | 13. Trees, Dungeon & Features Visual Gate | 4/4 | Complete   | 2026-06-25 |
-| 14. Structure Pipeline & Temples | 2/3 | In Progress|  |
+| 14. Structure Pipeline & Temples | 3/3 | Complete   | 2026-06-25 |
 | 15. Mineshaft & Stronghold | 0/0 | Not started | - |
 | 16. Village Jigsaw & Structures Visual Gate | 0/0 | Not started | - |
