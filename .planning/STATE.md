@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2
 milestone_name: worldgen-features-structures
-status: verifying
-stopped_at: Completed 11-01-PLAN.md
-last_updated: "2026-06-25T07:29:40.043Z"
+status: executing
+stopped_at: "Phase 12 COMPLETE (3/3 plans): FEAT-03 core feature bodies — OreFeature blob (distinct from v1 OreVeinifier), SimpleBlock/RandomPatch, the composite selectors + placeSubFeature recursion (Pitfall #9), BlockPile/FallenTree/VegetationPatch, the BlockStateProvider hierarchy + NextGaussian/NextBoolean + TrapezoidalInt + random_offset/block_predicate_filter. Live applyBiomeDecoration writes ~5219 feature blocks/chunk over plains; 5×5-reorder + emit-once + Docker -race (478s) green. Trees+dungeon = Phase 13. Autonomous 13→16. Next: plan→plan-check→execute Phase 13 (Trees, Dungeon & Features VISUAL GATE — will PAUSE for the user's real-client visual check)."
+last_updated: "2026-06-25T07:35:00.000Z"
 last_activity: 2026-06-25
 progress:
   total_phases: 7
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 9
-  completed_plans: 8
-  percent: 89
+  completed_plans: 9
+  percent: 100
 ---
 
 # Project State

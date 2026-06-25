@@ -25,7 +25,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 10: Worldgen Foundation — LCG, Cross-Chunk Seam & Live Heightmap** - Port the legacy `java.util.Random` LCG + `WorldgenRandom` seed methods, the neighborhood-ready 3×3 worker seam (hold-at-carved → decorate), and the live mutable worldgen heightmap — the shared substrate both features and structures depend on (completed 2026-06-25)
 - [x] **Phase 11: Feature Pipeline & Decoration Orchestration** - Port the placement-modifier layer + the `ConfiguredFeature`/`PlacedFeature` model + the polymorphic JSON parser + `FeatureSorter` + `applyBiomeDecoration` driving the 11 decoration steps over the 3×3 biome set
  (completed 2026-06-25)
-- [ ] **Phase 12: Core Feature Types** - Port `OreFeature`, `RandomPatchFeature`/`SimpleBlockFeature`, the random selectors, and `BlockPile`/`FallenTree`/`VegetationPatch` so a biome's full ground-cover + decoration-ore set generates
+- [x] **Phase 12: Core Feature Types** - Port `OreFeature`, `RandomPatchFeature`/`SimpleBlockFeature`, the random selectors, and `BlockPile`/`FallenTree`/`VegetationPatch` so a biome's full ground-cover + decoration-ore set generates (completed 2026-06-25)
 - [ ] **Phase 13: Trees, Dungeon & Features Visual Gate** - Port `TreeFeature` (trunk/foliage placers + tree decorators + `BlockStateProvider` hierarchy) + the `MonsterRoomFeature` dungeon; close the block with the real-client VISUAL GATE (full per-biome vegetation, deterministic per seed)
 - [ ] **Phase 14: Structure Pipeline & Temples** - Port the STARTS/REFERENCES/PLACE two-phase pipeline + the `StructurePiece` bounding-box-tree machinery; the desert pyramid (+ jungle temple/igloo/swamp hut) generates in vanilla positions as the pipeline shakedown
 - [ ] **Phase 15: Mineshaft & Stronghold** - Port the multi-piece recursive mineshaft (`legacy_type_3` frequency-reduction placement) and the stronghold (concentric-rings placement + recursive piece set reusing the piece machinery)
@@ -136,7 +136,7 @@ Phases execute in numeric order: 10 → 11 → 12 → 13 → 14 → 15 → 16
 |-------|----------------|--------|-----------|
 | 10. Worldgen Foundation — LCG, Cross-Chunk Seam & Live Heightmap | 3/3 | Complete   | 2026-06-25 |
 | 11. Feature Pipeline & Decoration Orchestration | 3/3 | Complete   | 2026-06-25 |
-| 12. Core Feature Types | 2/3 | In Progress|  |
+| 12. Core Feature Types | 3/3 | Complete | 2026-06-25 |
 | 13. Trees, Dungeon & Features Visual Gate | 0/0 | Not started | - |
 | 14. Structure Pipeline & Temples | 0/0 | Not started | - |
 | 15. Mineshaft & Stronghold | 0/0 | Not started | - |
