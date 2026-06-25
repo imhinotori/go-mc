@@ -136,14 +136,25 @@ func NewNoiseGenerator(seed int64, secs, minY int) *NoiseGenerator {
 	biomeAt := func(wx, wy, wz int) levelbiome.Type { return bs.GetBiome(wx, wy, wz) }
 	structCache := structure.NewCache(sampler, biomeAt)
 
-	// STRUCT-02: register the desert_pyramid StartGenerator (the first true structure). It
-	// loads the embedded structure_set (salt 14357617 placement) + has_structure biome tag
-	// ({desert}); a build-data error is an asset bug (panic, like the loads above). 14-03 adds
-	// the remaining temples to a composite StartGenerator.
+	// STRUCT-02 + STRUCT-02 (14-03): register the four scattered-temple StartGenerators into a
+	// CompositeStartGenerator (desert pyramid + jungle temple + igloo + swamp hut). Each loads
+	// its embedded structure_set (cross-checked salt) + has_structure biome tag; a build-data
+	// error is an asset bug (panic, like the loads above). The composite dispatches a chunk's
+	// start decision to all four (each runs its own biome gate, no accept-by-default).
 	desertGen, err := structure.NewDesertPyramidStartGen()
 	if err != nil {
 		panic("world: NoiseGenerator: build desert pyramid start generator: " + err.Error())
 	}
+	jungleGen, err := structure.NewJungleTempleStartGen()
+	if err != nil {
+		panic("world: NoiseGenerator: build jungle temple start generator: " + err.Error())
+	}
+	swampGen, err := structure.NewSwampHutStartGen()
+	if err != nil {
+		panic("world: NoiseGenerator: build swamp hut start generator: " + err.Error())
+	}
+	// The igloo (NewIglooStartGen) is added to the composite in 14-03 Task 2.
+	structGen := structure.NewCompositeStartGenerator(desertGen, jungleGen, swampGen)
 
 	return &NoiseGenerator{
 		seed:        seed,
@@ -157,7 +168,7 @@ func NewNoiseGenerator(seed int64, secs, minY int) *NoiseGenerator {
 		rep:         rep,
 		deco:        deco,
 		structCache: structCache,
-		structGen:   desertGen,
+		structGen:   structGen,
 		air:         block.ToStateID[block.Air{}],
 	}
 }

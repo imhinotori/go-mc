@@ -181,6 +181,31 @@ func transformState(st block.StateID, mirror Mirror, rotation Rotation) block.St
 		return st
 	}
 	b := block.StateList[st]
+
+	// Stairs carry a SHAPE that StairBlock.mirror transforms (inner/outer left<->right + a
+	// 180 facing flip on the matching axis) — FACING-only is NOT enough for L-shaped stairs.
+	// The jar applies mirror THEN rotate to the whole state; do the same for stairs.
+	if sb, ok := stairOf(b); ok {
+		sb = mirrorStair(sb, mirror)
+		sb = rotateStair(sb, rotation)
+		if id, ok := block.ToStateID[withStair(b, sb)]; ok {
+			return id
+		}
+		return st
+	}
+
+	// Multi-face blocks (vine, redstone wire, tripwire) carry per-compass-direction props
+	// (N/E/S/W) that their jar rotate/mirror permute around the compass. Port that permutation.
+	if nb, ok := transformFaces(b, mirror, rotation); ok {
+		if id, ok := block.ToStateID[nb]; ok {
+			return id
+		}
+		return st
+	}
+
+	// Generic horizontal-facing blocks (chest, dispenser, lever, piston, tripwire-hook,
+	// repeater): mirror flips the facing on its axis, rotate steps it. Up/Down facings (the
+	// upward sticky piston) are axis-invariant under the horizontal mirror/rotate.
 	facing, ok := facingOf(b)
 	if !ok {
 		return st // no Facing prop -> rotation/mirror is the identity (BlockBehaviour default)
@@ -198,14 +223,191 @@ func transformState(st block.StateID, mirror Mirror, rotation Rotation) block.St
 	return st
 }
 
-// facingOf returns a block's horizontal Facing prop if it carries one (stairs, chest).
-// Implemented as an explicit type switch (NOT reflection) over the blocks the structure
-// pieces place, so the transform is allocation-free + exact.
-func facingOf(b block.Block) (block.Direction, bool) {
+// transformFaces ports the rotate/mirror of the multi-compass-face blocks the jungle temple
+// places (Vine, RedstoneWire, Tripwire). Each carries an independent value per compass
+// direction (a Boolean for vine/tripwire, a RedstoneSide for wire); rotate/mirror PERMUTE the
+// (N,E,S,W) slots around the compass, leaving any non-directional prop (Up, attached, power)
+// in place. The mirror is applied first (matching placeBlock's state.mirror().rotate()).
+//
+// The face permutation (from javap -c VineBlock/RedStoneWireBlock/TripWireBlock rotate/mirror):
+//
+//	CW90  : new.N=old.E, new.E=old.S, new.S=old.W, new.W=old.N
+//	CW180 : new.N=old.S, new.E=old.W, new.S=old.N, new.W=old.E
+//	CCW90 : new.N=old.W, new.E=old.N, new.S=old.E, new.W=old.S
+//	LEFT_RIGHT : swap N<->S
+//	FRONT_BACK : swap E<->W
+//
+// Returns (transformed, true) for those blocks, (b, false) otherwise.
+func transformFaces(b block.Block, mirror Mirror, rotation Rotation) (block.Block, bool) {
+	switch v := b.(type) {
+	case block.Vine:
+		n, e, s, w := boolFaces(bool(v.North), bool(v.East), bool(v.South), bool(v.West), mirror, rotation)
+		v.North, v.East, v.South, v.West = block.Boolean(n), block.Boolean(e), block.Boolean(s), block.Boolean(w)
+		return v, true
+	case block.Tripwire:
+		n, e, s, w := boolFaces(bool(v.North), bool(v.East), bool(v.South), bool(v.West), mirror, rotation)
+		v.North, v.East, v.South, v.West = block.Boolean(n), block.Boolean(e), block.Boolean(s), block.Boolean(w)
+		return v, true
+	case block.RedstoneWire:
+		n, e, s, w := sideFaces(v.North, v.East, v.South, v.West, mirror, rotation)
+		v.North, v.East, v.South, v.West = n, e, s, w
+		return v, true
+	}
+	return b, false
+}
+
+// permuteFaces applies the mirror-then-rotate compass permutation to 4 generic face values
+// (indexed [N,E,S,W]=[0,1,2,3]) and returns the new [N,E,S,W].
+func permuteFaces(n, e, s, w any, mirror Mirror, rotation Rotation) (any, any, any, any) {
+	// Mirror first.
+	switch mirror {
+	case MirrorLeftRight:
+		n, s = s, n
+	case MirrorFrontBack:
+		e, w = w, e
+	}
+	// Then rotate (new value at a slot = old value of the slot it rotated FROM).
+	switch rotation {
+	case RotClockwise90:
+		return e, s, w, n
+	case RotClockwise180:
+		return s, w, n, e
+	case RotCounterclockwise90:
+		return w, n, e, s
+	default:
+		return n, e, s, w
+	}
+}
+
+func boolFaces(n, e, s, w bool, mirror Mirror, rotation Rotation) (bool, bool, bool, bool) {
+	an, ae, as, aw := permuteFaces(n, e, s, w, mirror, rotation)
+	return an.(bool), ae.(bool), as.(bool), aw.(bool)
+}
+
+func sideFaces(n, e, s, w block.RedstoneSide, mirror Mirror, rotation Rotation) (block.RedstoneSide, block.RedstoneSide, block.RedstoneSide, block.RedstoneSide) {
+	an, ae, as, aw := permuteFaces(n, e, s, w, mirror, rotation)
+	return an.(block.RedstoneSide), ae.(block.RedstoneSide), as.(block.RedstoneSide), aw.(block.RedstoneSide)
+}
+
+// stairState is the (facing, shape) pair a stair-shape transform operates on.
+type stairState struct {
+	facing block.Direction
+	shape  block.StairsShape
+}
+
+// rotateStair ports StairBlock.rotate: FACING = rotation.rotate(FACING); SHAPE unchanged.
+func rotateStair(s stairState, rotation Rotation) stairState {
+	if rotation != RotNone {
+		s.facing = rotation.rotateDirection(s.facing)
+	}
+	return s
+}
+
+// mirrorStair ports StairBlock.mirror: if the FACING axis matches the mirror's flip axis
+// (LEFT_RIGHT flips Z-axis facings, FRONT_BACK flips X-axis facings) then apply a
+// CLOCKWISE_180 facing flip and swap the L-shape's handedness per the jar switch:
+//
+//	LEFT_RIGHT (facing axis Z) / FRONT_BACK (facing axis X):
+//	  INNER_LEFT -> INNER_RIGHT (LR) | INNER_RIGHT (FB swaps the other way) ...
+//
+// The jar's StairBlock.mirror table (canonical): for the matching axis,
+//	LEFT_RIGHT:  STRAIGHT->180 only; INNER_LEFT<->INNER_RIGHT swapped to RIGHT/LEFT; OUTER ditto
+//	FRONT_BACK:  the opposite handedness swap.
+// We port the exact jar table below.
+func mirrorStair(s stairState, mirror Mirror) stairState {
+	if mirror == MirrorNone {
+		return s
+	}
+	axisZ := s.facing == block.North || s.facing == block.South
+	axisX := s.facing == block.West || s.facing == block.East
+	switch mirror {
+	case MirrorLeftRight:
+		if !axisZ {
+			return s // facing axis X: LEFT_RIGHT does not affect it
+		}
+		s.facing = directionOpposite(s.facing) // CLOCKWISE_180 on a horizontal facing
+		switch s.shape {
+		case block.StairsShapeInnerLeft:
+			s.shape = block.StairsShapeInnerRight
+		case block.StairsShapeInnerRight:
+			s.shape = block.StairsShapeInnerLeft
+		case block.StairsShapeOuterLeft:
+			s.shape = block.StairsShapeOuterRight
+		case block.StairsShapeOuterRight:
+			s.shape = block.StairsShapeOuterLeft
+		}
+	case MirrorFrontBack:
+		if !axisX {
+			return s // facing axis Z: FRONT_BACK does not affect it
+		}
+		s.facing = directionOpposite(s.facing)
+		switch s.shape {
+		case block.StairsShapeInnerLeft:
+			s.shape = block.StairsShapeInnerRight
+		case block.StairsShapeInnerRight:
+			s.shape = block.StairsShapeInnerLeft
+		case block.StairsShapeOuterLeft:
+			s.shape = block.StairsShapeOuterRight
+		case block.StairsShapeOuterRight:
+			s.shape = block.StairsShapeOuterLeft
+		}
+	}
+	return s
+}
+
+// stairOf returns a stair block's (facing, shape) if b is a stair the pieces place
+// (sandstone/cobblestone/spruce). Routed through the full StairBlock mirror/rotate transform
+// (which also flips SHAPE), unlike the generic facing-only path.
+func stairOf(b block.Block) (stairState, bool) {
 	switch v := b.(type) {
 	case block.SandstoneStairs:
-		return v.Facing, true
+		return stairState{v.Facing, v.Shape}, true
+	case block.CobblestoneStairs:
+		return stairState{v.Facing, v.Shape}, true
+	case block.SpruceStairs:
+		return stairState{v.Facing, v.Shape}, true
+	}
+	return stairState{}, false
+}
+
+// withStair returns a copy of b with its (facing, shape) replaced (the inverse of stairOf).
+// Half + Waterlogged are preserved (the pieces place BOTTOM, non-waterlogged stairs).
+func withStair(b block.Block, s stairState) block.Block {
+	switch v := b.(type) {
+	case block.SandstoneStairs:
+		v.Facing, v.Shape = s.facing, s.shape
+		return v
+	case block.CobblestoneStairs:
+		v.Facing, v.Shape = s.facing, s.shape
+		return v
+	case block.SpruceStairs:
+		v.Facing, v.Shape = s.facing, s.shape
+		return v
+	}
+	return b
+}
+
+// facingOf returns a block's horizontal Facing prop if it carries one (chest, dispenser,
+// lever, piston, tripwire-hook, repeater, furnace, ladder). Implemented as an explicit type
+// switch (NOT reflection) over the blocks the structure pieces place, so the transform is
+// allocation-free + exact. Stairs are handled separately by stairOf (they need a SHAPE flip).
+func facingOf(b block.Block) (block.Direction, bool) {
+	switch v := b.(type) {
 	case block.Chest:
+		return v.Facing, true
+	case block.Dispenser:
+		return v.Facing, true
+	case block.Lever:
+		return v.Facing, true
+	case block.StickyPiston:
+		return v.Facing, true
+	case block.TripwireHook:
+		return v.Facing, true
+	case block.Repeater:
+		return v.Facing, true
+	case block.Furnace:
+		return v.Facing, true
+	case block.Ladder:
 		return v.Facing, true
 	}
 	return block.North, false
@@ -214,10 +416,28 @@ func facingOf(b block.Block) (block.Direction, bool) {
 // withFacing returns a copy of b with its Facing prop set to dir (the inverse of facingOf).
 func withFacing(b block.Block, dir block.Direction) block.Block {
 	switch v := b.(type) {
-	case block.SandstoneStairs:
+	case block.Chest:
 		v.Facing = dir
 		return v
-	case block.Chest:
+	case block.Dispenser:
+		v.Facing = dir
+		return v
+	case block.Lever:
+		v.Facing = dir
+		return v
+	case block.StickyPiston:
+		v.Facing = dir
+		return v
+	case block.TripwireHook:
+		v.Facing = dir
+		return v
+	case block.Repeater:
+		v.Facing = dir
+		return v
+	case block.Furnace:
+		v.Facing = dir
+		return v
+	case block.Ladder:
 		v.Facing = dir
 		return v
 	}
@@ -377,6 +597,45 @@ func (p *StructurePiece) generateBox(view WorldGenView, box BoundingBox, x0, y0,
 				} else {
 					p.placeBlock(view, fill, x, y, z, box)
 				}
+			}
+		}
+	}
+}
+
+// BlockSelector ports StructurePiece.BlockSelector: a per-cell block chooser the
+// generateBox BlockSelector overload consults. next(rng, x, y, z, isEdge) advances the
+// piece RNG and returns the chosen state; the jungle temple's MossStoneSelector draws
+// nextFloat() per cell to pick cobblestone vs mossy cobblestone (a load-bearing RNG draw —
+// the per-cell draw order is part of the determinism contract, Pitfall #3).
+type BlockSelector interface {
+	next(rng levelgen.RandomSource, x, y, z int, isEdge bool) block.StateID
+}
+
+// generateBoxSelector ports StructurePiece.generateBox(... boolean alwaysReplace,
+// RandomSource, BlockSelector): fill the local sub-box, choosing each cell's state via
+// selector.next (which draws from the piece RNG). The iteration order is y -> x -> z
+// (jar-exact, matching the BlockState generateBox), so the per-cell nextFloat draws happen
+// in the same order vanilla makes them — the placement is RNG-faithful.
+//
+// JAR-EXACT GATE (Pitfall #3): the selector's next() draw + the placeBlock happen ONLY when
+// `alwaysReplace || getBlock(x,y,z).isAir()`. The selector is NOT consulted (no RNG draw) for
+// a cell that already holds a non-air block when alwaysReplace=false — so the per-cell draw
+// COUNT depends on what is already placed. The jungle temple passes alwaysReplace=false; in a
+// fresh preliminary-surface view the interior cells are air, so the draws fire as vanilla.
+//
+// Source: javap -c StructurePiece.generateBox(...,Z,RandomSource,BlockSelector)
+// (if (alwaysReplace || getBlock(..).isAir()) { selector.next(..); placeBlock(getNext(),..) }) +
+// JungleTemplePiece$MossStoneSelector.next.
+func (p *StructurePiece) generateBoxSelector(view WorldGenView, box BoundingBox, x0, y0, z0, x1, y1, z1 int, alwaysReplace bool, rng levelgen.RandomSource, sel BlockSelector) {
+	for y := y0; y <= y1; y++ {
+		for x := x0; x <= x1; x++ {
+			for z := z0; z <= z1; z++ {
+				if !alwaysReplace && !block.IsAir(p.getBlock(view, x, y, z, box)) {
+					continue
+				}
+				isEdge := y == y0 || y == y1 || x == x0 || x == x1 || z == z0 || z == z1
+				st := sel.next(rng, x, y, z, isEdge)
+				p.placeBlock(view, st, x, y, z, box)
 			}
 		}
 	}
