@@ -215,3 +215,139 @@ func TestNoGlobalRNG(t *testing.T) {
 		}
 	}
 }
+
+// ---- LegacyRandomSource (LCG) golden vectors ----
+//
+// The golden values below are the CANONICAL java.util.Random(0) sequence — the
+// fixed output every JVM produces for seed 0 (MULTIPLIER 0x5DEECE66D, INCREMENT
+// 0xB, 48-bit mask). They are reproduced bit-exactly by the ported LCG, pinning
+// each primitive (nextLong / nextInt(bound) / nextFloat / nextDouble) as jar-exact
+// and ALGORITHMICALLY DISTINCT from the Xoroshiro bodies above (Pitfall 1). See
+// random.go for the bytecode cites (LegacyRandomSource / BitRandomSource).
+
+func TestLegacyRandomNextLongGolden(t *testing.T) {
+	// java.util.Random(0).nextLong() — the canonical seed-0 long sequence.
+	src := NewLegacyRandomSource(0)
+	want := []int64{
+		-4962768465676381896,
+		4437113781045784766,
+		-6688467811848818630,
+		-8292973307042192125,
+	}
+	for i, w := range want {
+		if got := src.NextLong(); got != w {
+			t.Fatalf("seed=0 nextLong[%d] = %d, want %d", i, got, w)
+		}
+	}
+}
+
+func TestLegacyRandomNextIntNGolden(t *testing.T) {
+	// java.util.Random(0).nextInt(100) — exercises the next(31)%bound rejection loop.
+	src := NewLegacyRandomSource(0)
+	want100 := []int32{60, 48, 29, 47, 15}
+	for i, w := range want100 {
+		if got := src.NextIntN(100); got != w {
+			t.Fatalf("seed=0 nextInt(100)[%d] = %d, want %d", i, got, w)
+		}
+	}
+	// java.util.Random(0).nextInt(16) — power-of-two: exercises the fast path.
+	src = NewLegacyRandomSource(0)
+	want16 := []int32{11, 13, 3, 9, 10}
+	for i, w := range want16 {
+		if got := src.NextIntN(16); got != w {
+			t.Fatalf("seed=0 nextInt(16)[%d] = %d, want %d", i, got, w)
+		}
+	}
+	// Every result is in range.
+	src = NewLegacyRandomSource(12345)
+	for i := 0; i < 1000; i++ {
+		if v := src.NextIntN(37); v < 0 || v >= 37 {
+			t.Fatalf("nextInt(37)[%d] = %d out of [0,37)", i, v)
+		}
+	}
+}
+
+func TestLegacyRandomNextDoubleFloatGolden(t *testing.T) {
+	// java.util.Random(0).nextDouble() first value.
+	d := NewLegacyRandomSource(0).NextDouble()
+	wantD := 0.730967787376657
+	if math.Abs(d-wantD) > 1e-15 {
+		t.Fatalf("seed=0 nextDouble[0] = %.17g, want %.17g", d, wantD)
+	}
+	if d < 0 || d >= 1 {
+		t.Fatalf("seed=0 nextDouble[0] = %.17g out of [0,1)", d)
+	}
+	// java.util.Random(0).nextFloat() first value.
+	f := NewLegacyRandomSource(0).NextFloat()
+	wantF := float32(0.7309677)
+	if math.Abs(float64(f-wantF)) > 1e-6 {
+		t.Fatalf("seed=0 nextFloat[0] = %.10g, want %.10g", f, wantF)
+	}
+	if f < 0 || f >= 1 {
+		t.Fatalf("seed=0 nextFloat[0] = %.10g out of [0,1)", f)
+	}
+}
+
+func TestLegacyRandomNextIntNPanic(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatalf("NextIntN(0) did not panic")
+		}
+	}()
+	NewLegacyRandomSource(0).NextIntN(0)
+}
+
+func TestWorldgenRandomDecorationSeed(t *testing.T) {
+	// SetDecorationSeed is a PURE function of (worldSeed, blockX, blockZ): two
+	// independent wrappers with the same inputs return the same seed.
+	a := NewWorldgenRandom(0).SetDecorationSeed(12345, 16, 32)
+	b := NewWorldgenRandom(0).SetDecorationSeed(12345, 16, 32)
+	if a != b {
+		t.Fatalf("setDecorationSeed not pure: %d != %d", a, b)
+	}
+	// Captured value from the ported algorithm (worldSeed=12345, origin (16,32)).
+	if want := int64(-6555216214193597943); a != want {
+		t.Fatalf("setDecorationSeed(12345,16,32) = %d, want %d", a, want)
+	}
+	// At origin (0,0) the block-offset term vanishes -> seed == worldSeed.
+	if got := NewWorldgenRandom(0).SetDecorationSeed(0, 0, 0); got != 0 {
+		t.Fatalf("setDecorationSeed(0,0,0) = %d, want 0", got)
+	}
+	// Different origins diverge.
+	c := NewWorldgenRandom(0).SetDecorationSeed(12345, 0, 0)
+	d := NewWorldgenRandom(0).SetDecorationSeed(12345, 16, 32)
+	if c == d {
+		t.Fatalf("distinct decoration origins produced identical seed %d", c)
+	}
+}
+
+func TestWorldgenRandomFeatureSeed(t *testing.T) {
+	// SetFeatureSeed seeds to decoSeed + index + 10000*step with NO draws. Verify by
+	// comparing the post-seed draw to a from-scratch LCG seeded with that exact value.
+	const decoSeed = int64(987654321)
+	const index, step = 3, 5
+	w := NewWorldgenRandom(0)
+	w.SetFeatureSeed(decoSeed, index, step)
+	ref := NewLegacyRandomSource(decoSeed + int64(index) + int64(10000*step))
+	for i := 0; i < 8; i++ {
+		if x, y := w.NextLong(), ref.NextLong(); x != y {
+			t.Fatalf("setFeatureSeed draw[%d]: %d != %d", i, x, y)
+		}
+	}
+	// Pure function of inputs.
+	p := NewWorldgenRandom(0)
+	p.SetFeatureSeed(decoSeed, index, step)
+	q := NewWorldgenRandom(0)
+	q.SetFeatureSeed(decoSeed, index, step)
+	if p.NextLong() != q.NextLong() {
+		t.Fatalf("setFeatureSeed not pure")
+	}
+}
+
+func TestLegacyImplementsRandomSource(t *testing.T) {
+	// Both the LCG and the WorldgenRandom wrapper are usable as a RandomSource.
+	var rs RandomSource = NewLegacyRandomSource(1)
+	_ = rs.NextLong()
+	var ws RandomSource = NewWorldgenRandom(1)
+	_ = ws.NextLong()
+}
