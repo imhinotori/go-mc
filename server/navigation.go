@@ -137,11 +137,23 @@ func (n *groundNavigation) requestPath(t *TickLoop, e *Entity, tx, ty, tz int) {
 		t.asyncIn2 <- pathReady{mobID: mobID, target: tgt, path: p}
 	})
 
-	// The target tracking + cooldown are updated regardless (the throttle anchors on the requested
-	// target, accepted or dropped, so a saturated pool still respects MAX_TIME_RECOMPUTE).
+	// The target tracking is updated regardless (so shouldRecomputePath sees this as the same
+	// target next tick).
 	n.lastTX, n.lastTY, n.lastTZ = tx, ty, tz
 	n.hasTarget = true
-	n.cooldown = navRecomputeCooldown
+
+	// The recompute cooldown anchors ONLY on an ACCEPTED submit. A DROPPED submit (the
+	// non-blocking pool was saturated) must NOT arm the cooldown: if it did, a mob with no
+	// usable path whose every submit drops under sustained pool contention (e.g. heavy
+	// concurrent worldgen) would be throttled forever and never acquire a path (it would
+	// sit motionless). Leaving the cooldown at 0 lets the very next tick retry until a submit
+	// lands. An accepted submit still rate-limits the retry so a stuck/unreachable target does
+	// not recompute every tick (Pitfall 6 / T-7-04).
+	if accepted {
+		n.cooldown = navRecomputeCooldown
+	} else {
+		n.cooldown = 0
+	}
 
 	// pending only reflects an ACCEPTED submit: a dropped submit must leave pending=false so the mob
 	// keeps its last path and a later tick re-requests (Pitfall 4). Do NOT touch n.path here — the
