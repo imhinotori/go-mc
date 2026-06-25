@@ -268,3 +268,219 @@ func (f *xoroshiroPositionalFactory) FromSeed(seed int64) RandomSource {
 }
 
 var _ PositionalRandomFactory = (*xoroshiroPositionalFactory)(nil)
+
+// ---- LegacyRandomSource: the java.util.Random LCG (LegacyRandomSource.class) ----
+//
+// This is a SECOND RandomSource implementation beside the Xoroshiro above. It is
+// the linear-congruential generator behind java.util.Random, which Minecraft uses
+// for worldgen DECORATION and STRUCTURE seeding (LegacyRandomSource extends the
+// shared BitRandomSource defaults). Its primitive bodies are ALGORITHMICALLY
+// DISTINCT from Xoroshiro's (Pitfall 1): nextInt(bound) is a power-of-two fast
+// path or a next(31)%bound rejection loop; nextLong is two 32-bit draws with a
+// SIGNED low term; nextDouble draws next(26)<<27+next(27). Do NOT copy the
+// Xoroshiro bodies.
+//
+// Sources (javap -c, 26.2-inner.jar):
+//   - net.minecraft.world.level.levelgen.LegacyRandomSource (setSeed, next, fork, forkPositional)
+//   - net.minecraft.world.level.levelgen.BitRandomSource     (nextInt(int)/nextLong/nextFloat/nextDouble defaults)
+//   - net.minecraft.world.level.levelgen.WorldgenRandom      (setDecorationSeed/setFeatureSeed/setLargeFeature*)
+
+// LCG constants, read from the bytecode (LegacyRandomSource / java.util.Random).
+const (
+	// MULTIPLIER = 0x5DEECE66D (decimal 25214903917).
+	lcgMultiplier = uint64(0x5DEECE66D)
+	// INCREMENT = 0xB (decimal 11).
+	lcgIncrement = uint64(0xB)
+	// MODULUS_MASK = (1<<48)-1 (decimal 281474976710655); MODULUS_BITS = 48.
+	lcgMask = uint64(1)<<48 - 1
+)
+
+// LegacyRandomSource is the ported java.util.Random LCG (LegacyRandomSource.class).
+// It implements the SAME world/levelgen.RandomSource interface as Xoroshiro, but
+// its primitive bodies DIFFER (Pitfall 1) — they are the BitRandomSource defaults,
+// not the xoroshiro128++ extractions. The 48-bit state is held in a uint64 and
+// masked to 48 bits on every step (Java >>> on the unsigned state, then truncate).
+type LegacyRandomSource struct {
+	seed uint64 // 48-bit state
+}
+
+// NewLegacyRandomSource constructs an LCG seeded like java.util.Random(long).
+func NewLegacyRandomSource(seed int64) *LegacyRandomSource {
+	r := &LegacyRandomSource{}
+	r.SetSeed(seed)
+	return r
+}
+
+// SetSeed mirrors java.util.Random.setSeed / LegacyRandomSource.setSeed:
+// seed = (seed ^ MULTIPLIER) & MODULUS_MASK. It does NOT draw.
+func (r *LegacyRandomSource) SetSeed(seed int64) {
+	r.seed = (uint64(seed) ^ lcgMultiplier) & lcgMask
+}
+
+// next advances the LCG and returns the top `bits` bits of the state as a SIGNED
+// int32 (Java BitRandomSource.next: seed = (seed*MULT + INCR) & MASK; return
+// (int)(seed >>> (48 - bits))). The shift is logical over the 48-bit state, THEN
+// the result is truncated to int32.
+func (r *LegacyRandomSource) next(bits int) int32 {
+	r.seed = (r.seed*lcgMultiplier + lcgIncrement) & lcgMask
+	return int32(r.seed >> (48 - bits))
+}
+
+// NextInt returns next(32) — the full 32-bit signed draw (java.util.Random.nextInt()).
+func (r *LegacyRandomSource) NextInt() int32 { return r.next(32) }
+
+// NextIntN mirrors java.util.Random.nextInt(bound) / BitRandomSource.nextInt(int):
+// a power-of-two fast path, else a next(31)%bound rejection loop that discards the
+// last incomplete block to remove modulo bias. Panics on bound<=0 (matches the
+// Xoroshiro NextIntN guard).
+func (r *LegacyRandomSource) NextIntN(bound int32) int32 {
+	if bound <= 0 {
+		panic("levelgen: NextIntN bound must be positive")
+	}
+	if bound&(bound-1) == 0 { // power of two
+		return int32((int64(bound) * int64(r.next(31))) >> 31)
+	}
+	for {
+		bits := r.next(31)
+		val := bits % bound
+		if bits-val+(bound-1) >= 0 { // no signed overflow -> accept
+			return val
+		}
+	}
+}
+
+// NextLong mirrors java.util.Random.nextLong / BitRandomSource.nextLong:
+// ((long)next(32) << 32) + next(32). The LOW term is a SIGNED int (a set high bit
+// makes it negative) — it is NOT masked to unsigned.
+func (r *LegacyRandomSource) NextLong() int64 {
+	hi := int64(r.next(32))
+	lo := int64(r.next(32))
+	return hi<<32 + lo
+}
+
+// NextFloat mirrors BitRandomSource.nextFloat: next(24) * 0x1.0p-24
+// (the same 2^-24 scale as Xoroshiro — floatUnit is reused).
+func (r *LegacyRandomSource) NextFloat() float32 { return float32(r.next(24)) * floatUnit }
+
+// NextDouble mirrors BitRandomSource.nextDouble:
+// ((long)next(26)<<27 + next(27)) * 0x1.0p-53 — TWO draws (distinct from
+// Xoroshiro's single 53-bit draw). doubleUnit is the shared 2^-53 scale.
+func (r *LegacyRandomSource) NextDouble() float64 {
+	hi := int64(r.next(26))
+	lo := int64(r.next(27))
+	return float64(hi<<27+lo) * doubleUnit
+}
+
+// ConsumeCount advances the state by n draws (java.util.Random consumeCount draws
+// next(32) each time).
+func (r *LegacyRandomSource) ConsumeCount(n int) {
+	for i := 0; i < n; i++ {
+		r.next(32)
+	}
+}
+
+// Fork mirrors LegacyRandomSource.fork(): a new LCG seeded from one fresh nextLong().
+func (r *LegacyRandomSource) Fork() RandomSource {
+	return NewLegacyRandomSource(r.NextLong())
+}
+
+// ForkPositional mirrors LegacyRandomSource.forkPositional(): a positional factory
+// seeded from one fresh nextLong().
+func (r *LegacyRandomSource) ForkPositional() PositionalRandomFactory {
+	return &legacyPositionalFactory{seed: r.NextLong()}
+}
+
+var _ RandomSource = (*LegacyRandomSource)(nil)
+
+// ---- LegacyPositionalRandomFactory (LegacyRandomSource$LegacyPositionalRandomFactory) ----
+
+// legacyPositionalFactory mirrors LegacyRandomSource's inner positional factory: a
+// per-position / per-name source of LCGs derived by XORing the factory seed. The
+// LCG features use the WorldgenRandom seed helpers directly; this factory exists
+// only to satisfy the RandomSource interface.
+type legacyPositionalFactory struct {
+	seed int64
+}
+
+// At mirrors at(int,int,int): new LegacyRandomSource(Mth.getSeed(x,y,z) ^ seed)
+// (mthGetSeed is reused from the Xoroshiro section above).
+func (f *legacyPositionalFactory) At(x, y, z int) RandomSource {
+	return NewLegacyRandomSource(mthGetSeed(x, y, z) ^ f.seed)
+}
+
+// FromHashOf mirrors fromHashOf(String): new LegacyRandomSource(name.hashCode() ^ seed),
+// where name.hashCode() is java.lang.String.hashCode widened to a long.
+func (f *legacyPositionalFactory) FromHashOf(name string) RandomSource {
+	return NewLegacyRandomSource(int64(javaStringHash(name)) ^ f.seed)
+}
+
+// FromSeed mirrors fromSeed(long): new LegacyRandomSource(seed).
+func (f *legacyPositionalFactory) FromSeed(seed int64) RandomSource {
+	return NewLegacyRandomSource(seed)
+}
+
+var _ PositionalRandomFactory = (*legacyPositionalFactory)(nil)
+
+// javaStringHash mirrors java.lang.String.hashCode: h = 31*h + c over the UTF-16
+// code units. Go strings are UTF-8; for the ASCII registry names used here a range
+// over runes is code-unit-equivalent. The int32 wrap reproduces Java's overflow.
+func javaStringHash(s string) int32 {
+	var h int32
+	for _, c := range s {
+		h = 31*h + int32(c)
+	}
+	return h
+}
+
+// ---- WorldgenRandom: the worldgen seed-derivation wrapper (WorldgenRandom.class) ----
+
+// WorldgenRandom wraps an LCG and adds the worldgen seed-derivation helpers
+// (WorldgenRandom.class extends LegacyRandomSource). It embeds *LegacyRandomSource
+// so it IS a RandomSource and additionally exposes setDecorationSeed/setFeatureSeed
+// (features) and setLargeFeatureSeed/setLargeFeatureWithSalt (structures).
+type WorldgenRandom struct {
+	*LegacyRandomSource
+}
+
+// NewWorldgenRandom constructs a WorldgenRandom over a fresh LCG seeded with seed.
+func NewWorldgenRandom(seed int64) *WorldgenRandom {
+	return &WorldgenRandom{LegacyRandomSource: NewLegacyRandomSource(seed)}
+}
+
+// SetDecorationSeed mirrors WorldgenRandom.setDecorationSeed(worldSeed, blockX, blockZ):
+// the per-chunk decoration base seed. It re-seeds to worldSeed, draws two odd longs,
+// mixes in the block origin, re-seeds to the result, and returns it.
+func (w *WorldgenRandom) SetDecorationSeed(worldSeed int64, blockX, blockZ int) int64 {
+	w.SetSeed(worldSeed)
+	a := w.NextLong() | 1
+	b := w.NextLong() | 1
+	seed := (int64(blockX)*a + int64(blockZ)*b) ^ worldSeed
+	w.SetSeed(seed)
+	return seed
+}
+
+// SetFeatureSeed mirrors WorldgenRandom.setFeatureSeed(decoSeed, index, step):
+// the per-feature seed. PURE arithmetic, NO draws — seeds to
+// decoSeed + index + 10000*step.
+func (w *WorldgenRandom) SetFeatureSeed(decoSeed int64, index, step int) {
+	w.SetSeed(decoSeed + int64(index) + int64(10000*step))
+}
+
+// SetLargeFeatureSeed mirrors WorldgenRandom.setLargeFeatureSeed(worldSeed, chunkX, chunkZ):
+// the per-chunk structure-piece RNG seed. (GEN3 / structures, Phase 14+; ported now
+// since it shares the wrapper and avoids re-touching this file.) Draws two longs.
+func (w *WorldgenRandom) SetLargeFeatureSeed(worldSeed int64, chunkX, chunkZ int) {
+	w.SetSeed(worldSeed)
+	a := w.NextLong()
+	b := w.NextLong()
+	w.SetSeed((int64(chunkX)*a)^(int64(chunkZ)*b)^worldSeed)
+}
+
+// SetLargeFeatureWithSalt mirrors WorldgenRandom.setLargeFeatureWithSalt(worldSeed, x, z, salt):
+// the structure placement seed. PURE arithmetic, NO draws — the constants are the
+// vanilla region-salt magics. (GEN3 / structures, Phase 14+.)
+func (w *WorldgenRandom) SetLargeFeatureWithSalt(worldSeed int64, x, z, salt int) {
+	w.SetSeed(int64(x)*341873128712 + int64(z)*132897987541 + worldSeed + int64(salt))
+}
+
+var _ RandomSource = (*WorldgenRandom)(nil)
