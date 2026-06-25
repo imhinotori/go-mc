@@ -1,0 +1,15 @@
+# Keep the build context small + reproducible.
+.git
+.github
+.planning
+.claude
+.serena
+web
+temp
+*.exe
+*.test
+*.out
+*.prof
+Dockerfile
+.dockerignore
+README*.md
