@@ -311,8 +311,10 @@ func rotateStair(s stairState, rotation Rotation) stairState {
 //	  INNER_LEFT -> INNER_RIGHT (LR) | INNER_RIGHT (FB swaps the other way) ...
 //
 // The jar's StairBlock.mirror table (canonical): for the matching axis,
+//
 //	LEFT_RIGHT:  STRAIGHT->180 only; INNER_LEFT<->INNER_RIGHT swapped to RIGHT/LEFT; OUTER ditto
 //	FRONT_BACK:  the opposite handedness swap.
+//
 // We port the exact jar table below.
 func mirrorStair(s stairState, mirror Mirror) stairState {
 	if mirror == MirrorNone {

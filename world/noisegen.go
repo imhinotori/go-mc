@@ -149,12 +149,15 @@ func NewNoiseGenerator(seed int64, secs, minY int) *NoiseGenerator {
 	if err != nil {
 		panic("world: NoiseGenerator: build jungle temple start generator: " + err.Error())
 	}
+	iglooGen, err := structure.NewIglooStartGen()
+	if err != nil {
+		panic("world: NoiseGenerator: build igloo start generator: " + err.Error())
+	}
 	swampGen, err := structure.NewSwampHutStartGen()
 	if err != nil {
 		panic("world: NoiseGenerator: build swamp hut start generator: " + err.Error())
 	}
-	// The igloo (NewIglooStartGen) is added to the composite in 14-03 Task 2.
-	structGen := structure.NewCompositeStartGenerator(desertGen, jungleGen, swampGen)
+	structGen := structure.NewCompositeStartGenerator(desertGen, jungleGen, iglooGen, swampGen)
 
 	return &NoiseGenerator{
 		seed:        seed,

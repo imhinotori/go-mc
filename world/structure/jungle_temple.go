@@ -27,8 +27,8 @@ const (
 	// (BuiltInLootTables.JUNGLE_TEMPLE / JUNGLE_TEMPLE_DISPENSER for the dispensers). LOOT
 	// DEFERRED v3: the chest/dispenser BLOCKS are placed + the table id recorded; no loot is
 	// rolled and the dispensers hold no arrows (block entities / loot are a v3 subsystem).
-	jungleTempleMainLoot       = "minecraft:chests/jungle_temple"
-	jungleTempleDispenserLoot  = "minecraft:chests/jungle_temple_dispenser"
+	jungleTempleMainLoot      = "minecraft:chests/jungle_temple"
+	jungleTempleDispenserLoot = "minecraft:chests/jungle_temple_dispenser"
 )
 
 // jungleTempleStartGen is the jungle_temple StartGenerator (mirrors desertPyramidStartGen):
