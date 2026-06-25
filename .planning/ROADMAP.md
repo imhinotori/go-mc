@@ -135,8 +135,8 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Villages generate in vanilla positions per biome variant, deterministic per seed
   4. **VISUAL GATE (autonomous:false)**: a real vanilla 26.2 client exploring the world finds vanilla-positioned, structurally-correct mineshafts, desert pyramids/jungle temples/igloos/swamp huts, strongholds, and villages — and the same seed reproduces the same structures (human-verified visual determinism, no capture-diff — worldgen adds no new wire surface)
 **Plans**: 3 plans
-  - [ ] 16-01-PLAN.md — The .nbt StructureTemplate system: binary .nbt + template_pool + processor_list embed (copyZipEntry verbatim) + runtime gzip+NBT parse (the existing nbt package) + palette->StateID resolution + placeInWorld (rotation/mirror at place time + the block-replace processors + LegacySingle jigsaw-blocks-as-air) (STRUCT-05)
-  - [ ] 16-02-PLAN.md — The bounded-BFS JigsawPlacement.Placer (SequencedPriorityIterator queue + tryPlacingChildren + the 5 pool element types + maxDepth/max_distance/VoxelShape bounds) + the village StartGenerator (random_spread salt 10387312 + the 5 biome variants + the Placer-built start) (STRUCT-05)
+  - [x] 16-01-PLAN.md — The .nbt StructureTemplate system: binary .nbt + template_pool + processor_list embed (copyZipEntry verbatim) + runtime gzip+NBT parse (the existing nbt package) + palette->StateID resolution + placeInWorld (rotation/mirror at place time + the block-replace processors + LegacySingle jigsaw-blocks-as-air) (STRUCT-05)
+  - [x] 16-02-PLAN.md — The bounded-BFS JigsawPlacement.Placer (SequencedPriorityIterator queue + tryPlacingChildren + the 5 pool element types + maxDepth/max_distance/VoxelShape bounds) + the village StartGenerator (random_spread salt 10387312 + the 5 biome variants + the Placer-built start) (STRUCT-05)
   - [ ] 16-03-PLAN.md — The full structures acceptance (every criterion + all v2 structures place) + THE autonomous:false real-client VISUAL GATE that closes v2 (STRUCT-06)
 **Research**: `.planning/research/v2-structures.md` (Tier 4 — Village; "Architecture Patterns → JigsawPlacement"; "Common Pitfalls #6 jigsaw recursion bounds, #7 .nbt parsing details"; "Don't Hand-Roll" for the embed set; "Deferrals" — loot/afterPlace-beard/NBT-persistence pushed to v3).
 
@@ -153,4 +153,4 @@ Phases execute in numeric order: 10 → 11 → 12 → 13 → 14 → 15 → 16
 | 13. Trees, Dungeon & Features Visual Gate | 4/4 | Complete   | 2026-06-25 |
 | 14. Structure Pipeline & Temples | 3/3 | Complete   | 2026-06-25 |
 | 15. Mineshaft & Stronghold | 3/3 | Complete   | 2026-06-25 |
-| 16. Village Jigsaw & Structures Visual Gate | 0/3 | Not started | - |
+| 16. Village Jigsaw & Structures Visual Gate | 2/3 | In Progress|  |
