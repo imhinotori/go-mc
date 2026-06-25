@@ -23,7 +23,8 @@ Worldgen adds **no new wire surface** (the chunk format was sealed in v1 Phase 4
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 10: Worldgen Foundation — LCG, Cross-Chunk Seam & Live Heightmap** - Port the legacy `java.util.Random` LCG + `WorldgenRandom` seed methods, the neighborhood-ready 3×3 worker seam (hold-at-carved → decorate), and the live mutable worldgen heightmap — the shared substrate both features and structures depend on (completed 2026-06-25)
-- [x] **Phase 11: Feature Pipeline & Decoration Orchestration** - Port the placement-modifier layer + the `ConfiguredFeature`/`PlacedFeature` model + the polymorphic JSON parser + `FeatureSorter` + `applyBiomeDecoration` driving the 11 decoration steps over the 3×3 biome set (completed 2026-06-25)
+- [x] **Phase 11: Feature Pipeline & Decoration Orchestration** - Port the placement-modifier layer + the `ConfiguredFeature`/`PlacedFeature` model + the polymorphic JSON parser + `FeatureSorter` + `applyBiomeDecoration` driving the 11 decoration steps over the 3×3 biome set
+ (completed 2026-06-25)
 - [ ] **Phase 12: Core Feature Types** - Port `OreFeature`, `RandomPatchFeature`/`SimpleBlockFeature`, the random selectors, and `BlockPile`/`FallenTree`/`VegetationPatch` so a biome's full ground-cover + decoration-ore set generates
 - [ ] **Phase 13: Trees, Dungeon & Features Visual Gate** - Port `TreeFeature` (trunk/foliage placers + tree decorators + `BlockStateProvider` hierarchy) + the `MonsterRoomFeature` dungeon; close the block with the real-client VISUAL GATE (full per-biome vegetation, deterministic per seed)
 - [ ] **Phase 14: Structure Pipeline & Temples** - Port the STARTS/REFERENCES/PLACE two-phase pipeline + the `StructurePiece` bounding-box-tree machinery; the desert pyramid (+ jungle temple/igloo/swamp hut) generates in vanilla positions as the pipeline shakedown
@@ -71,8 +72,12 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. `RandomPatchFeature` + `SimpleBlockFeature` place grass/flowers/dead-bushes/ground-cover via an inner `PlacedFeature` with jar-exact tries/spread draw order
   3. The `RandomSelector`/`SimpleRandomSelector`/`RandomBooleanSelector` composites resolve nested sub-features with the rng threaded through (so a biome's weighted feature choice works)
   4. `BlockPile`/`FallenTree`/`VegetationPatch` features place, so a biome's full non-tree ground cover + ore set generates deterministically per seed
-**Plans**: TBD
-**Research**: `.planning/research/v2-features-decoration.md` (Wave C — the core Feature types; "Common Pitfalls #7 feature-vs-noise ore double-placement, #9 composite/selector recursion").
+**Plans**: 3 plans
+  - [ ] 12-01-PLAN.md — The BlockStateProvider hierarchy (Simple/Weighted/RuleBased + Noise/DualNoise) + the deferred-modifier completion (random_offset + block_predicate_filter & its BlockPredicate set — the vegetation tries/spread + ground gate 11-02 left) + the featureBody-registry dispatch refactor so the body plans run parallel (FEAT-03 prerequisites)
+  - [ ] 12-02-PLAN.md — OreFeature (UNDERGROUND_ORES blob via OreConfiguration + tag_match/block_match rule_test targets, distinct from v1's noise OreVeinifier) + SimpleBlockFeature + RandomPatchFeature bodies, deterministic-placement + cross-chunk-spill tested (FEAT-03 ore + ground-cover bulk)
+  - [ ] 12-03-PLAN.md — The composite selectors (random_selector/simple_random_selector/random_boolean_selector) + the placeSubFeature recursion (Pitfall #9, the rng threaded through nested sub-features) + BlockPile/FallenTree/VegetationPatch bodies + the final 5x5 determinism/emit-once/Docker -race acceptance gate with real bodies live (FEAT-03 selectors + remaining types)
+**Research**: `.planning/research/v2-features-decoration.md` (Wave C — the core Feature types; Wave D — BlockStateProvider hierarchy; "Common Pitfalls #7 feature-vs-noise ore double-placement, #9 composite/selector recursion").
+**Planning note**: 26.2 has ZERO top-level `random_patch` configured_features — grass/flowers/dead-bush are `simple_block` configured_features whose placed_features scatter via `count` + `random_offset` + `block_predicate_filter` (modifiers 11-02 deferred). So the vegetation "tries/spread" (criterion 2) lives in the `random_offset` PLACEMENT modifier, closed in 12-01; `RandomPatchFeature` is still ported for jar completeness.
 
 ### Phase 13: Trees, Dungeon & Features Visual Gate
 **Goal**: Every overworld biome grows its correct vanilla tree set and the dungeon places — and a real vanilla 26.2 client exploring the world confirms the full per-biome vegetation + decoration ores generate, deterministic per seed.
@@ -131,7 +136,7 @@ Phases execute in numeric order: 10 → 11 → 12 → 13 → 14 → 15 → 16
 |-------|----------------|--------|-----------|
 | 10. Worldgen Foundation — LCG, Cross-Chunk Seam & Live Heightmap | 3/3 | Complete   | 2026-06-25 |
 | 11. Feature Pipeline & Decoration Orchestration | 3/3 | Complete   | 2026-06-25 |
-| 12. Core Feature Types | 0/0 | Not started | - |
+| 12. Core Feature Types | 0/3 | Planned | - |
 | 13. Trees, Dungeon & Features Visual Gate | 0/0 | Not started | - |
 | 14. Structure Pipeline & Temples | 0/0 | Not started | - |
 | 15. Mineshaft & Stronghold | 0/0 | Not started | - |
