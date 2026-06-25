@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2
 milestone_name: worldgen-features-structures
-status: executing
-stopped_at: "Phase 10 COMPLETE (3/3 plans): GEN2-01 LCG+WorldgenRandom (java.util.Random golden-exact), GEN2-03 HeightmapUpdate+WG heightmaps, GEN2-02 cross-chunk worker seam (split Generate, staging scheduler, Neighborhood 3×3 proxy, no-op Decorate, emit-once; -race -count=10 Docker green). Autonomous 11→16 (no pauses except blockers; server runs in bg). Next: plan→plan-check→execute Phase 11 (Feature Pipeline & Decoration Orchestration, FEAT-01/02)."
-last_updated: "2026-06-25T05:05:00.000Z"
+status: verifying
+stopped_at: "Completed 11-02-PLAN.md (FEAT-01: 8 placement modifiers + PlacedFeature.place ordered fold)"
+last_updated: "2026-06-25T05:30:17.400Z"
 last_activity: 2026-06-25
 progress:
   total_phases: 7
   completed_phases: 1
-  total_plans: 3
-  completed_plans: 3
-  percent: 100
+  total_plans: 6
+  completed_plans: 5
+  percent: 83
 ---
 
 # Project State
@@ -74,7 +74,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [██████████] 100%
+Progress: [████████░░] 83%
 
 ## Performance Metrics
 
@@ -134,6 +134,7 @@ Progress: [██████████] 100%
 | Phase 10 P01 | 12m | 2 tasks | 3 files |
 | Phase 10 P02 | 10m | 2 tasks | 6 files |
 | Phase 10 P03 | 75min | 4 tasks | 7 files |
+| Phase 11 P02 | 1session | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -212,6 +213,8 @@ Recent decisions affecting current work:
 - [Phase ?]: level.HeightmapUpdate ported jar-exact from Heightmap.update — pure/allocation-free/chunk-free (BitStorage + opaqueAt closure); built+tested now, wired by 10-03 + the feature phase (Phase 10 Decorate is a no-op)
 - [Phase ?]: GEN2-02 seam = Split-Generate (staging map + single scheduler goroutine), not a write-buffer; Decorate is a no-op promote-to-full for Phase 10 with the late-write-after-emit rule deferred to Phase 11+
 - [Phase ?]: handleTerrain routes region-hit vs generated on load provenance (fromRegion), not chunk Status, because the scheduler mutates a singleflight-shared staged chunk's Status to StatusFull (would otherwise double-emit)
+- [Phase ?]: 11-02: SurfaceWaterDepthFilter ported as the JAR heightmap-difference (WORLD_SURFACE-OCEAN_FLOOR), not a block scan
+- [Phase ?]: 11-02: VerticalAnchor below_top ported in full (added PlacementContext.Height gen-depth); ore height_range data requires it
 
 ### Pending Todos
 
@@ -238,7 +241,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-25T04:55:30.973Z
-Stopped at: Completed 10-02-PLAN.md (GEN2-03: HeightmapUpdate primitive + OCEAN_FLOOR_WG/MOTION_BLOCKING post-carve build)
+Last session: 2026-06-25T05:30:10.127Z
+Stopped at: Completed 11-02-PLAN.md (FEAT-01: 8 placement modifiers + PlacedFeature.place ordered fold)
 Resume file: None
 Next: v1 is done end-to-end (login → biome-varied noise world with caves/ravines/aquifers/ore-veins → entities/AI/inventory/combat → async-optimized, -race clean). The next milestone is DEEPER GAMEPLAY (user-flagged, deferred): items/crafting, more mobs + their ported AI, block mechanics (redstone/farming/fluids), and the Phase-9 v2 deferrals (ONLINE-01/02 auth+encryption, REGION-01 Folia-style regionization, trees/vegetation/structures as feature+structure subsystems). Run /gsd-new-milestone to scope it. Deferred-still-open: KeepAlive double-leave hardening (Phase 3, surfaces when real timeout-driven disconnects land).
