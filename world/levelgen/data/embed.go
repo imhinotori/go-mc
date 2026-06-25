@@ -222,3 +222,21 @@ func HasStructureBiomeTag(id string) ([]byte, error) {
 	}
 	return b, nil
 }
+
+// BiomeCategoryTag returns the embedded worldgen/biome/<id>.json category tag (the is_*
+// biome tags: is_ocean, is_badlands, is_taiga, ...). The has_structure tags nest these via
+// "#minecraft:is_*" references; HasStructureBiomes resolves them recursively through here so
+// the mineshaft's biome allow-set (which is expressed almost entirely as nested category
+// refs) flattens to concrete biome ids. The id is taken bare (namespace stripped).
+func BiomeCategoryTag(id string) ([]byte, error) {
+	rel := resolveID(id)
+	if rel == "" {
+		return nil, fmt.Errorf("worldgen data: empty biome category tag id")
+	}
+	p := path.Join("tags", "worldgen", "biome", rel+".json")
+	b, err := FS.ReadFile(p)
+	if err != nil {
+		return nil, fmt.Errorf("worldgen data: biome category tag not found (id %q -> %s): %w", id, p, err)
+	}
+	return b, nil
+}

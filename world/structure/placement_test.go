@@ -204,6 +204,138 @@ func TestProbabilityReducers(t *testing.T) {
 	}
 }
 
+// TestFrequencyReductionMethod pins ALL FOUR jar-correct enum-string -> reducer bindings
+// (the Phase-14 table was MIS-PORTED with legacy_type_1 <-> legacy_type_3 swapped, and
+// legacyProbabilityReducerWithDouble mis-seeded (z,salt) instead of (chunkX,chunkZ)). The
+// pin is INDEPENDENT of the dispatch: for each method the test re-derives the reducer's
+// EXACT draw from the jar algorithm by hand and asserts ApplyFrequencyReducer agrees at a
+// probed (seed,chunk) that straddles the gate boundary — so a regression to the swapped
+// table or the (z,salt) seeding flips a pinned result.
+//
+// JAR GROUND TRUTH (StructurePlacement$FrequencyReductionMethod):
+//
+//	default       -> setLargeFeatureWithSalt(seed,x,z,salt); nextFloat()<freq
+//	legacy_type_1 -> i=x>>4,j=z>>4; setSeed((i^(j<<4))^seed); nextInt(); nextInt(1/freq)==0   (pillager outpost)
+//	legacy_type_2 -> setLargeFeatureWithSalt(seed,z,salt,10387320); nextFloat()<freq
+//	legacy_type_3 -> setLargeFeatureSeed(seed,chunkX,chunkZ); nextDouble()<(double)freq        (mineshaft)
+func TestFrequencyReductionMethod(t *testing.T) {
+	const seed = int64(0x5DEECE66D)
+	const cx, cz = 7, -3
+
+	// Independent oracles: each re-runs the jar reducer math by hand (NOT via the
+	// dispatch under test), returning the pass/fail for the given frequency.
+	oracleDefault := func(freq float32, salt int) bool {
+		r := levelgen.NewWorldgenRandom(0)
+		r.SetLargeFeatureWithSalt(seed, cx, cz, salt)
+		return r.NextFloat() < freq
+	}
+	oraclePillager := func(freq float32) bool {
+		i, j := cx>>4, cz>>4
+		r := levelgen.NewWorldgenRandom(0)
+		r.SetSeed(int64(i^(j<<4)) ^ seed)
+		r.NextInt()
+		return r.NextIntN(int32(float32(1.0)/freq)) == 0
+	}
+	oracleArbitrary := func(freq float32, salt int) bool {
+		r := levelgen.NewWorldgenRandom(0)
+		r.SetLargeFeatureWithSalt(seed, cz, salt, 10387320)
+		return r.NextFloat() < freq
+	}
+	oracleDouble := func(freq float32) bool {
+		r := levelgen.NewWorldgenRandom(0)
+		r.SetLargeFeatureSeed(seed, cx, cz)
+		return r.NextDouble() < float64(freq)
+	}
+
+	// Bind each enum string to its jar-correct oracle. The dispatch (frequencyReducer)
+	// MUST agree with the oracle for the SAME inputs, proving the enum->reducer wiring.
+	cases := []struct {
+		name   string
+		method FrequencyReductionMethod
+		freq   float32
+		salt   int
+		oracle func() bool
+	}{
+		{"default", FreqDefault, 0.5, 14357617, func() bool { return oracleDefault(0.5, 14357617) }},
+		{"legacy_type_1=pillager", FreqLegacyType1, 0.2, 165745296, func() bool { return oraclePillager(0.2) }},
+		{"legacy_type_2=arbitrary", FreqLegacyType2, 0.5, 14357617, func() bool { return oracleArbitrary(0.5, 14357617) }},
+		{"legacy_type_3=double", FreqLegacyType3, 0.004, 0, func() bool { return oracleDouble(0.004) }},
+	}
+	for _, c := range cases {
+		// The string parse must land on the right enum.
+		strs := map[FrequencyReductionMethod]string{
+			FreqDefault: "default", FreqLegacyType1: "legacy_type_1",
+			FreqLegacyType2: "legacy_type_2", FreqLegacyType3: "legacy_type_3",
+		}
+		if ParseFrequencyReductionMethod(strs[c.method]) != c.method {
+			t.Errorf("%s: ParseFrequencyReductionMethod(%q) != %d", c.name, strs[c.method], c.method)
+		}
+		got := frequencyReducer(c.method, seed, c.salt, cx, cz, c.freq)
+		if want := c.oracle(); got != want {
+			t.Errorf("%s: frequencyReducer = %v, jar oracle = %v (enum->reducer wiring wrong)", c.name, got, want)
+		}
+	}
+
+	// Pin the legacy_type_3 SEEDING explicitly: the corrected (chunkX,chunkZ) seed yields a
+	// DIFFERENT nextDouble than the old (z,salt) mis-seeding would, so the exact draw is the
+	// regression tripwire. Assert the corrected draw and that the mis-seeded draw differs.
+	corrected := levelgen.NewWorldgenRandom(0)
+	corrected.SetLargeFeatureSeed(seed, cx, cz)
+	wantDouble := corrected.NextDouble()
+	misSeeded := levelgen.NewWorldgenRandom(0)
+	misSeeded.SetLargeFeatureSeed(seed, cz, 0) // the OLD (z,salt) seeding
+	if got := misSeeded.NextDouble(); got == wantDouble {
+		t.Fatalf("legacy_type_3 seeding: (chunkX,chunkZ) and (z,salt) draws coincide at this probe — pick a probe that distinguishes them")
+	}
+	// And the dispatched reducer's pass/fail must follow the CORRECTED draw.
+	if (wantDouble < 0.004) != frequencyReducer(FreqLegacyType3, seed, 0, cx, cz, 0.004) {
+		t.Fatalf("legacy_type_3 dispatch does not follow the corrected (chunkX,chunkZ) nextDouble draw")
+	}
+}
+
+// TestMineshaftFrequencyReducerBindings pins the mineshafts.json (legacy_type_3) +
+// pillager_outposts.json (legacy_type_1) sets to their jar-correct reducers via the loaded
+// structure_set placement (the disambiguating on-disk fixtures), so the un-swap is verified
+// end-to-end through the real embedded data, not just synthetic enum values.
+func TestMineshaftFrequencyReducerBindings(t *testing.T) {
+	mine, err := LoadStructureSet("minecraft:mineshafts")
+	if err != nil {
+		t.Fatalf("LoadStructureSet(mineshafts): %v", err)
+	}
+	if mine.Placement.FrequencyMethod != FreqLegacyType3 {
+		t.Fatalf("mineshafts: frequency_reduction_method = %d, want FreqLegacyType3", mine.Placement.FrequencyMethod)
+	}
+	if mine.Placement.Spacing != 1 || mine.Placement.Frequency != 0.004 {
+		t.Fatalf("mineshafts: spacing=%d freq=%v, want 1 / 0.004", mine.Placement.Spacing, mine.Placement.Frequency)
+	}
+	out, err := LoadStructureSet("minecraft:pillager_outposts")
+	if err != nil {
+		t.Fatalf("LoadStructureSet(pillager_outposts): %v", err)
+	}
+	if out.Placement.FrequencyMethod != FreqLegacyType1 {
+		t.Fatalf("pillager_outposts: frequency_reduction_method = %d, want FreqLegacyType1", out.Placement.FrequencyMethod)
+	}
+
+	const seed = int64(987654321)
+	// mineshafts legacy_type_3 -> the double reducer (setLargeFeatureSeed(seed,cx,cz)).
+	for _, cc := range []struct{ cx, cz int }{{0, 0}, {12, -8}, {-40, 70}} {
+		r := levelgen.NewWorldgenRandom(0)
+		r.SetLargeFeatureSeed(seed, cc.cx, cc.cz)
+		want := r.NextDouble() < 0.004
+		got := mine.Placement.ApplyFrequencyReducer(seed, cc.cx, cc.cz)
+		if got != want {
+			t.Fatalf("mineshafts ApplyFrequencyReducer(%d,%d) = %v, jar double-reducer oracle = %v", cc.cx, cc.cz, got, want)
+		}
+	}
+	// spacing 1 makes IsStructureChunk ALWAYS true (floorDiv(cx,1)=cx, nextInt(1)=0 -> start==chunk):
+	// the decisive gate is ApplyFrequencyReducer, NOT IsStructureChunk (Pitfall #4).
+	for _, cc := range []struct{ cx, cz int }{{0, 0}, {12, -8}, {-40, 70}, {999, -999}} {
+		if !mine.Placement.IsStructureChunk(seed, cc.cx, cc.cz) {
+			t.Fatalf("mineshafts spacing-1 IsStructureChunk(%d,%d) must be true (every chunk a candidate)", cc.cx, cc.cz)
+		}
+	}
+}
+
 // TestStructureSetJSONMatchesConstants loads the four temple structure_sets from the
 // embedded FS and asserts their spacing/separation/salt match the jar-confirmed
 // constants AND that the absent spread_type field defaults to LINEAR + the absent

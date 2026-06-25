@@ -126,15 +126,47 @@ func HasStructureBiomes(structureID string) (map[string]bool, error) {
 	if err != nil {
 		return nil, err
 	}
+	set := make(map[string]bool)
+	visited := make(map[string]bool)
+	if err := resolveBiomeTagValues(raw, set, visited, structureID); err != nil {
+		return nil, err
+	}
+	return set, nil
+}
+
+// resolveBiomeTagValues flattens a worldgen/biome tag's "values" into the concrete-biome set,
+// resolving nested "#minecraft:is_*" category references recursively (the mineshaft + mesa
+// has_structure tags are expressed almost entirely as nested category refs — e.g. mineshaft
+// references #is_ocean/#is_river/#is_badlands/..., and is_ocean nests #is_deep_ocean). A flat
+// "minecraft:<biome>" value is added directly; a "#minecraft:<tag>" value loads that biome
+// category tag (BiomeCategoryTag) and recurses. The visited set guards against tag cycles.
+//
+// Source: the vanilla TagLoader semantics (a tag's # entries are unioned in). The Phase-14
+// temples had FLAT has_structure tags (no nested refs), so this path is first exercised here.
+func resolveBiomeTagValues(raw []byte, set, visited map[string]bool, fromTag string) error {
 	var tag struct {
 		Values []string `json:"values"`
 	}
 	if err := json.Unmarshal(raw, &tag); err != nil {
-		return nil, fmt.Errorf("structure: parsing has_structure tag %q: %w", structureID, err)
+		return fmt.Errorf("structure: parsing biome tag %q: %w", fromTag, err)
 	}
-	set := make(map[string]bool, len(tag.Values))
 	for _, v := range tag.Values {
+		if len(v) > 0 && v[0] == '#' {
+			ref := v[1:] // strip the leading '#'
+			if visited[ref] {
+				continue
+			}
+			visited[ref] = true
+			nested, err := data.BiomeCategoryTag(ref)
+			if err != nil {
+				return fmt.Errorf("structure: resolving nested biome tag %q (from %q): %w", ref, fromTag, err)
+			}
+			if err := resolveBiomeTagValues(nested, set, visited, ref); err != nil {
+				return err
+			}
+			continue
+		}
 		set[v] = true
 	}
-	return set, nil
+	return nil
 }

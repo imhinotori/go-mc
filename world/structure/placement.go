@@ -88,14 +88,25 @@ func (t RandomSpreadType) evaluate(rng levelgen.RandomSource, bound int) int {
 // reuse). The enum order matches the jar's $values bootstrap.
 type FrequencyReductionMethod int
 
+// JAR GROUND TRUTH (decompiled from StructurePlacement$FrequencyReductionMethod's
+// BootstrapMethods, cross-checked against the embedded structure_set JSONs):
+//
+//	default       -> probabilityReducer                   (setLargeFeatureWithSalt(seed,x,z,salt), nextFloat()<freq)
+//	legacy_type_1 -> legacyPillagerOutpostReducer          (i=x>>4,j=z>>4; setSeed((i^(j<<4))^seed); discard nextInt; nextInt(1/freq)==0)
+//	legacy_type_2 -> legacyArbitrarySaltProbabilityReducer (setLargeFeatureWithSalt(seed,z,salt,10387320), nextFloat()<freq)
+//	legacy_type_3 -> legacyProbabilityReducerWithDouble    (setLargeFeatureSeed(seed,chunkX,chunkZ), nextDouble()<(double)freq)
+//
+// Disambiguating fixtures (on disk): pillager_outposts.json declares legacy_type_1 and IS
+// the structure legacyPillagerOutpostReducer is named for; mineshafts.json declares
+// legacy_type_3 and resolves to legacyProbabilityReducerWithDouble (the mineshaft path).
 const (
 	// FreqDefault ("default"): probabilityReducer (setLargeFeatureWithSalt + nextFloat).
 	FreqDefault FrequencyReductionMethod = iota
-	// FreqLegacyType1 ("legacy_type_1"): legacyProbabilityReducerWithDouble.
+	// FreqLegacyType1 ("legacy_type_1"): legacyPillagerOutpostReducer (pillager outpost).
 	FreqLegacyType1
 	// FreqLegacyType2 ("legacy_type_2"): legacyArbitrarySaltProbabilityReducer.
 	FreqLegacyType2
-	// FreqLegacyType3 ("legacy_type_3"): legacyPillagerOutpostReducer.
+	// FreqLegacyType3 ("legacy_type_3"): legacyProbabilityReducerWithDouble (mineshaft).
 	FreqLegacyType3
 )
 
@@ -197,11 +208,11 @@ func frequencyReducer(m FrequencyReductionMethod, worldSeed int64, salt, chunkX,
 	case FreqDefault:
 		return probabilityReducer(worldSeed, chunkX, chunkZ, salt, frequency)
 	case FreqLegacyType1:
-		return legacyProbabilityReducerWithDouble(worldSeed, chunkX, chunkZ, salt, frequency)
+		return legacyPillagerOutpostReducer(worldSeed, chunkX, chunkZ, salt, frequency)
 	case FreqLegacyType2:
 		return legacyArbitrarySaltProbabilityReducer(worldSeed, chunkX, chunkZ, salt, frequency)
 	case FreqLegacyType3:
-		return legacyPillagerOutpostReducer(worldSeed, chunkX, chunkZ, salt, frequency)
+		return legacyProbabilityReducerWithDouble(worldSeed, chunkX, chunkZ, salt, frequency)
 	default:
 		return probabilityReducer(worldSeed, chunkX, chunkZ, salt, frequency)
 	}
@@ -217,13 +228,13 @@ func probabilityReducer(worldSeed int64, x, z, salt int, frequency float32) bool
 }
 
 // legacyProbabilityReducerWithDouble ports StructurePlacement.legacyProbabilityReducerWithDouble
-// ("legacy_type_1"): seed via setLargeFeatureSeed(worldSeed, z, salt) (NOTE: this
-// variant passes (z, salt) into the chunkX/chunkZ slots of the two-draw
-// setLargeFeatureSeed, matching the bytecode iload_3=z, iload_4=salt), then
-// generate iff nextDouble() < (double)frequency.
-func legacyProbabilityReducerWithDouble(worldSeed int64, _, z, salt int, frequency float32) bool {
+// ("legacy_type_3", the MINESHAFT path): seed via setLargeFeatureSeed(worldSeed, chunkX,
+// chunkZ) — the jar bytecode loads iload_3=chunkX, iload_4=chunkZ (NOT (z,salt); the salt is
+// 0 for the mineshaft set anyway, but the slot is the chunk coords) — then generate iff
+// nextDouble() < (double)frequency. Source: javap -c StructurePlacement$FrequencyReductionMethod.
+func legacyProbabilityReducerWithDouble(worldSeed int64, chunkX, chunkZ, _ int, frequency float32) bool {
 	rng := levelgen.NewWorldgenRandom(0)
-	rng.SetLargeFeatureSeed(worldSeed, z, salt)
+	rng.SetLargeFeatureSeed(worldSeed, chunkX, chunkZ)
 	return rng.NextDouble() < float64(frequency)
 }
 
