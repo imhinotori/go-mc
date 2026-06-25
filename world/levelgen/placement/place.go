@@ -25,6 +25,23 @@ type ConfiguredFeaturePlacer interface {
 	place(ctx PlacementContext, rng levelgen.RandomSource, pos BlockPos) bool
 }
 
+// PlacerFunc adapts an exported function to the (unexported-method)
+// ConfiguredFeaturePlacer interface so a DIFFERENT package (11-03's world package) can
+// supply the configured-feature body. The fold calls place() at each anchor; this
+// forwards to f. It is the cross-package seam: ConfiguredFeaturePlacer's method is
+// unexported (so only this package may implement the interface directly), and PlacerFunc
+// is the sanctioned exported bridge for the real dispatch + Phase-12 bodies that live
+// outside this package.
+type PlacerFunc func(ctx PlacementContext, rng levelgen.RandomSource, pos BlockPos) bool
+
+// place satisfies ConfiguredFeaturePlacer by forwarding to the wrapped function.
+func (f PlacerFunc) place(ctx PlacementContext, rng levelgen.RandomSource, pos BlockPos) bool {
+	return f(ctx, rng, pos)
+}
+
+// compile-time assertion: PlacerFunc is a ConfiguredFeaturePlacer.
+var _ ConfiguredFeaturePlacer = PlacerFunc(nil)
+
 // BoundPlacedFeature is a placed_feature with its modifier chain bound to real
 // PlacementModifier bodies + its configured feature bound to a placer. It is the
 // runtime form 11-03's applyBiomeDecoration calls place() on per feature (after
