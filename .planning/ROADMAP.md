@@ -50,7 +50,7 @@ Full phase details: [milestones/v2-ROADMAP.md](milestones/v2-ROADMAP.md).
   6. After a block break sets air, the block's drop is looked up, an `Item` entity (ID 71) is spawned + tracked, and GAMEPLAY-01's broadcast path sends AddEntity so the drop is pickable (GAMEPLAY-06)
   7. **VISUAL GATE (autonomous:false)**: a real vanilla 26.2 client (two players) confirms players see each other move, positions/inventory survive a reconnect, attacks deal damage + death/respawn, water flows + affects movement, and broken blocks drop pickable items (GAMEPLAY-07)
 **Plans**: 5 plans in 3 waves
-- [ ] 17-01-PLAN.md — GAMEPLAY-01/02/03: player visibility + tab-list broadcast (keystone), persisted-position load, inventory join-sync (wave 1)
+- [x] 17-01-PLAN.md — GAMEPLAY-01/02/03: player visibility + tab-list broadcast (keystone), persisted-position load, inventory join-sync (wave 1)
 - [ ] 17-02-PLAN.md — GAMEPLAY-05: vanilla FlowingFluid sim + scheduled-tick queue + player fluid physics (wave 2)
 - [ ] 17-03-PLAN.md — GAMEPLAY-04: Attack/Interact damage dispatch + fall damage (wave 2)
 - [ ] 17-04-PLAN.md — GAMEPLAY-06: block-break Item drops + ITEM metadata (wave 2)
@@ -104,7 +104,7 @@ Full phase details: [milestones/v2-ROADMAP.md](milestones/v2-ROADMAP.md).
 | 14. Structure Pipeline & Temples | v2.0 | 3/3 | Complete | 2026-06-25 |
 | 15. Mineshaft & Stronghold | v2.0 | 3/3 | Complete | 2026-06-25 |
 | 16. Village Jigsaw & Structures Visual Gate | v2.0 | 3/3 | Complete | 2026-06-25 |
-| 17. Gameplay Completion — the six unwired seams | v3 | 0/5 | Planned | — |
+| 17. Gameplay Completion — the six unwired seams | v3 | 1/5 | In Progress|  |
 | 18. Online-mode — auth + protocol encryption | v3 | 0/? | Not started | — |
 | 19. Operator UX — TUI console + disconnect logging | v3 | 0/? | Not started | — |
 | 20. Structure polish — loot, inhabitants, beard, persistence | v3 | 0/? | Not started | — |

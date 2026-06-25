@@ -2,15 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3
 milestone_name: Online-mode + Operator UX + Structure polish
-status: ready
-last_updated: "2026-06-25T21:40:00.000Z"
-last_activity: 2026-06-25
+status: Phase 17 keystone (17-01) executed — GAMEPLAY-01/02/03 wired; Wave-2 seams (fluid.go/fall_damage.go) shipped
+stopped_at: Completed 17-01-PLAN.md
+last_updated: "2026-06-25T22:32:59.899Z"
+last_activity: "2026-06-25 — v3 milestone scoped (REQUIREMENTS.md + ROADMAP.md): GAMEPLAY-01..07 (Phase 17, first) + ONLINE-01/02 (18) + TUI-01/02 (19) + STRUCT-POLISH-01..04 (20); REGION-01 deferred to v4."
 progress:
   total_phases: 4
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  total_plans: 5
+  completed_plans: 1
+  percent: 20
 ---
 
 # Project State
@@ -24,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-06-23)
 
 ## Current Position
 
-Phase: 17 — Gameplay Completion (the six unwired seams) — NOT YET PLANNED
-Plan: —
-Status: v3 requirements + roadmap defined; ready for `/gsd-plan-phase 17`
-Last activity: 2026-06-25 — v3 milestone scoped (REQUIREMENTS.md + ROADMAP.md): GAMEPLAY-01..07 (Phase 17, first) + ONLINE-01/02 (18) + TUI-01/02 (19) + STRUCT-POLISH-01..04 (20); REGION-01 deferred to v4.
+Phase: 17 — Gameplay Completion (the six unwired seams) — IN PROGRESS
+Plan: 17-01 COMPLETE (keystone) — next: Wave 2 (17-02 fluid GAMEPLAY-05, 17-03 damage GAMEPLAY-04)
+Status: Phase 17 keystone (17-01) executed — GAMEPLAY-01/02/03 wired; Wave-2 seam files shipped as disjoint stubs
+Last activity: 2026-06-25 — 17-01 keystone landed: players enter the entity store + bidirectional tab-list broadcast (GAMEPLAY-01), persisted position drives the single bootstrap teleport (GAMEPLAY-02), inventory join-sync fires first-tick (GAMEPLAY-03). Wave-2 handoff (struct fields, dispatcher hooks, fluid.go/fall_damage.go stubs) recorded in 17-01-SUMMARY.md.
 
 ### ⚠️ v1 "fully playable" was half-done — Phase 17 reconnects the seams
 
@@ -104,7 +105,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [██████████] 95%
+Progress: [██░░░░░░░░] 20%
 
 ## Performance Metrics
 
@@ -180,6 +181,7 @@ Progress: [██████████] 95%
 | Phase 15 P02 | 75 | 2 tasks | 6 files |
 | Phase 15 P03 | 95 | 2 tasks | 6 files |
 | Phase 16 P02 | 95 | 2 tasks | 8 files |
+| Phase 17 P01 | 9min | 4 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -312,7 +314,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-25T20:26:51.938Z
-Stopped at: Completed 14-02-PLAN.md
+Last session: 2026-06-25T22:32:54.231Z
+Stopped at: Completed 17-01-PLAN.md
 Resume file: None
-Next: the STRUCTURES half of v2 — Phase 14 (Structures STARTS/REFERENCES/PLACE pipeline + StructurePiece machinery, shaken down on the single-piece desert pyramid), then Phase 15 (mineshaft recursion + stronghold concentric-rings placement), then Phase 16 (the village .nbt/template_pool/Placer jigsaw + the second VISUAL GATE). Research: .planning/research/v2-structures.md (the two-phase pipeline, the LegacyRandomSource seed hinge, the easy→hard tier order). Deferred-still-open: dungeon loot/spawner-mob + BeehiveDecorator occupant + pale_garden PaleMoss (all v3, cosmetic, in 13-04-SUMMARY); KeepAlive double-leave hardening (Phase 3, surfaces when real timeout-driven disconnects land).
+Next: Phase 17 Wave 2 — 17-02 (GAMEPLAY-05 fluid simulation: OVERWRITE server/fluid.go with the FlowingFluid port + scheduled-tick queue; lazy-init t.fluidSchedule inside tickFluids, do NOT edit tick.go/tick_phases.go) and 17-03 (GAMEPLAY-04 fall damage + PvP dispatch: OVERWRITE server/fall_damage.go using the tickPlayer fallDistance/wasOnGround/lastY fields + the lookupPlayerByEntityID reverse lookup, do NOT edit tick.go/tick_phases.go). The exact Wave-2 seam surface (field names, init point, call sites, stub signatures) is in 17-01-SUMMARY.md "WAVE-2 HANDOFF". Deferred-still-open: dungeon loot/spawner-mob + BeehiveDecorator occupant + pale_garden PaleMoss (all v3, cosmetic, in 13-04-SUMMARY); KeepAlive double-leave hardening (Phase 3). KNOWN PRE-EXISTING FLAKE: TestTickAIDrivesMobs (OPT-01 async-pool timing, not caused by 17-01) intermittently fails under full-suite load; passes in isolation + 3× under -race.
