@@ -4,14 +4,14 @@ milestone: v2
 milestone_name: worldgen-features-structures
 status: verifying
 stopped_at: Completed 11-01-PLAN.md
-last_updated: "2026-06-25T06:56:34.332Z"
+last_updated: "2026-06-25T07:29:40.043Z"
 last_activity: 2026-06-25
 progress:
   total_phases: 7
   completed_phases: 2
   total_plans: 9
-  completed_plans: 7
-  percent: 78
+  completed_plans: 8
+  percent: 89
 ---
 
 # Project State
@@ -74,7 +74,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [████████░░] 78%
+Progress: [█████████░] 89%
 
 ## Performance Metrics
 
@@ -138,6 +138,7 @@ Progress: [████████░░] 78%
 | Phase 11 P01 | ~40min | 3 tasks | 12 files |
 | Phase 11 P03 | 1 session | 5 tasks | 10 files |
 | Phase 12-core-feature-types P01 | 73min | 3 tasks | 14 files |
+| Phase 12 P02 | 58 min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -226,6 +227,8 @@ Recent decisions affecting current work:
 - [Phase ?]: 12-01: NextBoolean/NextGaussian kept LegacyRandomSource-only (type-asserted), not on the RandomSource interface — lower churn
 - [Phase ?]: 12-01: featureBody dispatch is an init()-populated registry from disjoint files (panics on duplicate); bodyContext plumbs g.deco.registry for nested sub-feature resolution
 - [Phase ?]: 12-01: ClampedNormalInt confirmed jar-exact as f2i truncation (not round); would_survive/solid/replaceable are documented conservative ports
+- [Phase ?]: OreFeature place->doPlace transcribed jar-exact from 26.2-inner.jar; the angle/y-jitter/per-step-radius/discard-on-air draw order is the FEAT-03 determinism contract
+- [Phase ?]: RandomPatchFeature class removed from 26.2 (vegetation routes through simple_block + random_offset); body ported from the stable version-invariant algorithm, parser still recognizes random_patch
 
 ### Pending Todos
 
@@ -252,7 +255,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-25T06:56:22.379Z
+Last session: 2026-06-25T07:24:40.519Z
 Stopped at: Completed 11-01-PLAN.md
 Resume file: None
 Next: v1 is done end-to-end (login → biome-varied noise world with caves/ravines/aquifers/ore-veins → entities/AI/inventory/combat → async-optimized, -race clean). The next milestone is DEEPER GAMEPLAY (user-flagged, deferred): items/crafting, more mobs + their ported AI, block mechanics (redstone/farming/fluids), and the Phase-9 v2 deferrals (ONLINE-01/02 auth+encryption, REGION-01 Folia-style regionization, trees/vegetation/structures as feature+structure subsystems). Run /gsd-new-milestone to scope it. Deferred-still-open: KeepAlive double-leave hardening (Phase 3, surfaces when real timeout-driven disconnects land).
