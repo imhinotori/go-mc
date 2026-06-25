@@ -72,6 +72,19 @@ var worldgenZipPrefixes = []struct {
 	{"data/minecraft/worldgen/configured_feature/", "configured_feature"}, // 226
 	{"data/minecraft/worldgen/placed_feature/", "placed_feature"},         // 262
 	{"data/minecraft/worldgen/biome/", "biome"},                           // 66
+	// STRUCT-01 (Phase 14): the structure PIPELINE data half. structure (the
+	// per-structure type+config — 34 entries) and structure_set (the placement
+	// machinery: spacing/separation/salt/spread_type per set — 20 entries) are
+	// PURE-UNZIPPED JSON (the temples ship 0 .nbt — they are code-assembled, so
+	// NO binary extraction this phase). Embedded + parsed by world/structure,
+	// never hand-transcribed. Both trees are FLAT in the jar.
+	{"data/minecraft/worldgen/structure/", "structure"},         // 34
+	{"data/minecraft/worldgen/structure_set/", "structure_set"}, // 20
+	// The has_structure biome-tag allow-lists (the load-bearing half of "vanilla
+	// positions"): desert_pyramid->[desert], igloo->[snowy_taiga,snowy_plains,
+	// snowy_slopes], jungle_temple->[bamboo_jungle,jungle], swamp_hut->[swamp].
+	// 14-02/14-03 gate each temple's start on GetBiome-at-origin in its allow-set.
+	{"data/minecraft/tags/worldgen/biome/has_structure/", "tags/worldgen/biome/has_structure"},
 }
 
 // worldgenSingleFiles names individual jar resources (not whole trees) to copy,

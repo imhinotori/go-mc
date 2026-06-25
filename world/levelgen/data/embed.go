@@ -52,6 +52,7 @@ import (
 //
 //go:embed noise_settings density_function noise configured_carver tags biome_parameters.json
 //go:embed configured_feature placed_feature biome
+//go:embed structure structure_set
 var FS embed.FS
 
 // resolveID splits a "namespace:path" registry id into its path component,
@@ -186,3 +187,38 @@ func NoiseIDs() ([]string, error) { return list("noise") }
 
 // ConfiguredCarverIDs lists the configured-carver ids available in the embed.
 func ConfiguredCarverIDs() ([]string, error) { return list("configured_carver") }
+
+// StructureSetJSON returns the embedded structure_set JSON for a registry id.
+// e.g. "minecraft:desert_pyramids" -> structure_set/desert_pyramids.json. The
+// world/structure placement loader parses the random_spread placement body
+// (spacing/separation/salt/spread_type/frequency_reduction_method) — STRUCT-01.
+func StructureSetJSON(id string) ([]byte, error) { return readEmbedded("structure_set", id) }
+
+// StructureSetIDs lists the structure_set ids available in the embed (20 entries).
+func StructureSetIDs() ([]string, error) { return list("structure_set") }
+
+// StructureJSON returns the embedded structure JSON for a registry id.
+// e.g. "minecraft:desert_pyramid" -> structure/desert_pyramid.json. 14-02/14-03
+// read the structure body (type + biomes ref + step) when they assemble pieces.
+func StructureJSON(id string) ([]byte, error) { return readEmbedded("structure", id) }
+
+// StructureIDs lists the structure ids available in the embed (34 entries).
+func StructureIDs() ([]string, error) { return list("structure") }
+
+// HasStructureBiomeTag returns the embedded worldgen/biome/has_structure tag JSON
+// for a structure id, e.g. "desert_pyramid" -> tags/worldgen/biome/has_structure/
+// desert_pyramid.json (the {"values":[...]} biome allow-list). The 14-02/14-03
+// temple placement gates each start on GetBiome-at-origin in this set (STRUCT-01
+// biome-check seam). The id is taken bare (namespace stripped).
+func HasStructureBiomeTag(id string) ([]byte, error) {
+	rel := resolveID(id)
+	if rel == "" {
+		return nil, fmt.Errorf("worldgen data: empty has_structure tag id")
+	}
+	p := path.Join("tags", "worldgen", "biome", "has_structure", rel+".json")
+	b, err := FS.ReadFile(p)
+	if err != nil {
+		return nil, fmt.Errorf("worldgen data: has_structure tag not found (id %q -> %s): %w", id, p, err)
+	}
+	return b, nil
+}
