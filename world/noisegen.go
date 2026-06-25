@@ -163,7 +163,20 @@ func NewNoiseGenerator(seed int64, secs, minY int) *NoiseGenerator {
 	if err != nil {
 		panic("world: NoiseGenerator: build mineshaft start generator: " + err.Error())
 	}
-	structGen := structure.NewCompositeStartGenerator(desertGen, jungleGen, iglooGen, swampGen, mineshaftGen)
+	// STRUCT-04 (15-02): the stronghold — the UNIQUE concentric_rings placement (Pitfall #5).
+	// Its ~128 ring positions are GLOBAL (precomputed once for the world, NOT a per-chunk
+	// decision). The StrongholdRingState is OWNED here (constructed ONCE, fed the world seed +
+	// the biomeAt seam + the embedded #stronghold_biased_to preferred set); the expensive
+	// biome-validated spiral runs a SINGLE time via sync.Once, never per chunk/per worker. The
+	// dependency stays one-directional (world -> world/structure). The placement-half generator
+	// gates on isPlacementChunk; its pieces are STUBBED (byte-inert) this plan — 15-03 fills them.
+	strongholdBiased, err := structure.LoadStrongholdBiasedTo()
+	if err != nil {
+		panic("world: NoiseGenerator: load stronghold_biased_to biome set: " + err.Error())
+	}
+	ringState := structure.NewStrongholdRingState(seed, biomeAt, strongholdBiased)
+	strongholdGen := structure.NewStrongholdStartGen(ringState)
+	structGen := structure.NewCompositeStartGenerator(desertGen, jungleGen, iglooGen, swampGen, mineshaftGen, strongholdGen)
 
 	return &NoiseGenerator{
 		seed:        seed,
