@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/imhinotori/sulfur/level/block"
+	"github.com/imhinotori/sulfur/world/levelgen/data"
 )
 
 // mapSource is an in-memory DataSource for the synthetic-error / cycle / unit cases,
@@ -208,6 +209,53 @@ func TestCyclicRefRejected(t *testing.T) {
 	_, err = r.ResolvePlaced("minecraft:loop")
 	if err == nil || !strings.Contains(err.Error(), "cyclic") {
 		t.Fatalf("ResolvePlaced under an in-progress parse = %v; want a cyclic-reference error", err)
+	}
+}
+
+// TestLoadAll is the FEAT-02 acceptance: the polymorphic parser loads the FULL real
+// embed — all 226 configured_feature + 262 placed_feature entries parse clean (no
+// genuinely-unknown type, no unresolvable block-state ref), and every placed_feature's
+// configured ref resolves to a non-nil ConfiguredFeature. A build-data mismatch (a
+// missing referenced file, a new feature type, a bad block-state) fails LOUDLY here,
+// at generator-construction time, not mid-decoration (T-11-01/T-11-02).
+func TestLoadAll(t *testing.T) {
+	r := NewEmbeddedRegistry()
+	if err := r.LoadAllEmbedded(); err != nil {
+		t.Fatalf("LoadAllEmbedded() over the full real embed: %v", err)
+	}
+
+	// Assert the embedded counts were all parsed + cached.
+	configuredIDs, err := data.ConfiguredFeatureIDs()
+	if err != nil {
+		t.Fatalf("ConfiguredFeatureIDs: %v", err)
+	}
+	placedIDs, err := data.PlacedFeatureIDs()
+	if err != nil {
+		t.Fatalf("PlacedFeatureIDs: %v", err)
+	}
+	if len(configuredIDs) != 226 {
+		t.Errorf("configured_feature count = %d; want 226", len(configuredIDs))
+	}
+	if len(placedIDs) != 262 {
+		t.Errorf("placed_feature count = %d; want 262", len(placedIDs))
+	}
+
+	// Every configured_feature parsed to a cached node.
+	for _, id := range configuredIDs {
+		if cf := r.ConfiguredByID("minecraft:" + id); cf == nil {
+			t.Errorf("configured_feature %q not cached after LoadAll", id)
+		}
+	}
+	// Every placed_feature parsed AND resolved its configured ref to non-nil.
+	for _, id := range placedIDs {
+		pf := r.PlacedByID("minecraft:" + id)
+		if pf == nil {
+			t.Errorf("placed_feature %q not cached after LoadAll", id)
+			continue
+		}
+		if pf.Feature == nil {
+			t.Errorf("placed_feature %q has a nil configured ref", id)
+		}
 	}
 }
 
