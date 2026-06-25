@@ -2,11 +2,11 @@
 gsd_state_version: 1.0
 milestone: v3
 milestone_name: Online-mode + Operator UX + Structure polish
-status: planning
-last_updated: "2026-06-25T21:24:47.941Z"
+status: ready
+last_updated: "2026-06-25T21:40:00.000Z"
 last_activity: 2026-06-25
 progress:
-  total_phases: 0
+  total_phases: 4
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -24,10 +24,20 @@ See: .planning/PROJECT.md (updated 2026-06-23)
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 17 — Gameplay Completion (the six unwired seams) — NOT YET PLANNED
 Plan: —
-Status: Defining requirements
-Last activity: 2026-06-25 — Milestone v3 started
+Status: v3 requirements + roadmap defined; ready for `/gsd-plan-phase 17`
+Last activity: 2026-06-25 — v3 milestone scoped (REQUIREMENTS.md + ROADMAP.md): GAMEPLAY-01..07 (Phase 17, first) + ONLINE-01/02 (18) + TUI-01/02 (19) + STRUCT-POLISH-01..04 (20); REGION-01 deferred to v4.
+
+### ⚠️ v1 "fully playable" was half-done — Phase 17 reconnects the seams
+
+A real vanilla 26.2 client found six gameplay defects. All share one pattern: core
+logic exists + is unit-tested, but the final wiring seam was never connected (v1 closed
+on isolated-function tests). Evidence (file:line) in HANDOFF.md. Build order: GAMEPLAY-01
+(player-entity-in-tracker broadcast) is the keystone — GAMEPLAY-06 (item drops) + visible
+entities depend on it; GAMEPLAY-05 (fluid sim) is the one large net-new port; 02/03/04
+are small high-value seam-reconnects. Phase 17 lands FIRST (online-mode is pointless on a
+non-playable server).
 
 ### 🌳 FEATURES-MILESTONE GATE (Phase 13 — FEAT-04/05/06)
 

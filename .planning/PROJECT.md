@@ -58,12 +58,13 @@ commands + chat — all `-race` clean with Leaf-style async optimizations. 9 pha
 - [x] Full vanilla per-biome vegetation (trees/grass/flowers/ores) via the ported ConfiguredFeature/PlacedFeature pipeline — Phase 10–13 (GEN2-01..03, FEAT-01..06) — v2.0
 - [x] Vanilla structures (temples, mineshafts, strongholds, villages) in vanilla positions, deterministic per seed — Phase 14–16 (STRUCT-01..06) — v2.0
 
-### Active (v3 — pending /gsd-new-milestone)
+### Active (v3 — Phases 17–20, see REQUIREMENTS.md)
 
-- [ ] Online-mode: Mojang auth + protocol encryption (ONLINE-01/02)
-- [ ] Folia-style per-region tick threading (REGION-01)
-- [ ] TUI (bubbletea + bubbles) + disconnect-reason logs
-- [ ] Structure polish: loot tables, structure entities, afterPlace beard, NBT persistence
+- [ ] Gameplay completion: the six unwired seams — player-visibility broadcast, position-load apply, inventory join-sync, damage dispatch + fall damage, fluid simulation + player fluid physics, block-break item drops (GAMEPLAY-01..07) — Phase 17
+- [ ] Online-mode: Mojang/Yggdrasil auth + AES-128/CFB8 protocol encryption (ONLINE-01/02) — Phase 18
+- [ ] TUI (bubbletea + bubbles) console + disconnect-reason logs (TUI-01/02) — Phase 19
+- [ ] Structure polish: loot tables, structure entities, afterPlace beard, NBT persistence (STRUCT-POLISH-01..04) — Phase 20
+- [ ] Folia-style per-region tick threading (REGION-01) — **deferred to v4**
 
 ### Out of Scope
 
