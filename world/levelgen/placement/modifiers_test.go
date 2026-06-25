@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/imhinotori/sulfur/level/biome"
+	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/world/levelgen"
 )
 
@@ -220,6 +221,8 @@ func TestBindModifier(t *testing.T) {
 		{"minecraft:biome", `{}`},
 		{"minecraft:height_range", `{"height":{"type":"minecraft:uniform","min_inclusive":{"absolute":136},"max_inclusive":{"below_top":0}}}`},
 		{"minecraft:surface_water_depth_filter", `{"max_water_depth":0}`},
+		{"minecraft:random_offset", `{"xz_spread":{"type":"minecraft:trapezoid","min":-7,"max":7,"plateau":0},"y_spread":{"type":"minecraft:trapezoid","min":-3,"max":3,"plateau":0}}`},
+		{"minecraft:block_predicate_filter", `{"predicate":{"type":"minecraft:matching_block_tag","tag":"minecraft:air"}}`},
 	}
 	for _, c := range cases {
 		m, err := BindModifier(c.typ, []byte(c.raw), deps)
@@ -239,3 +242,85 @@ func TestBindModifier(t *testing.T) {
 }
 
 var _ levelgen.RandomSource = (*drawCounter)(nil)
+
+// TestRandomOffsetXYZOrder pins the JAR draw order: xz_spread for X, y_spread for Y,
+// xz_spread for Z (3 draws, x then y then z). Using simple uniform spreads so the
+// draws are individually attributable.
+func TestRandomOffsetXYZOrder(t *testing.T) {
+	// xz_spread = uniform[10,10] (a 1-wide range still draws once: nextInt(1)=0 -> 10);
+	// y_spread = uniform[20,20]. Distinct constants make the axis assignment visible.
+	raw := []byte(`{"xz_spread":{"type":"minecraft:uniform","min_inclusive":10,"max_inclusive":10},"y_spread":{"type":"minecraft:uniform","min_inclusive":20,"max_inclusive":20}}`)
+	m, err := BindModifier("minecraft:random_offset", raw, ModifierDeps{})
+	if err != nil {
+		t.Fatalf("BindModifier random_offset: %v", err)
+	}
+	ctx := newFakeContext(-64, 384)
+	rng := newCounter(7)
+	p := BlockPos{X: 100, Y: 64, Z: 200}
+	got := m.getPositions(ctx, rng, p)
+	if len(got) != 1 {
+		t.Fatalf("random_offset emitted %d positions, want 1", len(got))
+	}
+	want := BlockPos{X: 110, Y: 84, Z: 210}
+	if got[0] != want {
+		t.Fatalf("random_offset xyz = %v, want %v", got[0], want)
+	}
+	if rng.draws != 3 {
+		t.Fatalf("random_offset consumed %d draws, want 3 (x,y,z)", rng.draws)
+	}
+}
+
+// TestRandomOffsetTrapezoid pins the REAL flower_default spreads (xz trapezoid
+// {-7,7,0}, y trapezoid {-3,3,0}) over a fixed origin + seed, with the post-draw rng
+// state fingerprinted — the determinism contract (T-12-02).
+func TestRandomOffsetTrapezoid(t *testing.T) {
+	raw := []byte(`{
+		"xz_spread":{"type":"minecraft:trapezoid","min":-7,"max":7,"plateau":0},
+		"y_spread":{"type":"minecraft:trapezoid","min":-3,"max":3,"plateau":0}
+	}`)
+	m, err := BindModifier("minecraft:random_offset", raw, ModifierDeps{})
+	if err != nil {
+		t.Fatalf("BindModifier random_offset trapezoid: %v", err)
+	}
+	ctx := newFakeContext(-64, 384)
+	rng := levelgen.NewLegacyRandomSource(2024)
+	p := BlockPos{X: 100, Y: 64, Z: 200}
+	got := m.getPositions(ctx, rng, p)
+	// Oracle (hand-traced): dx=2, dy=0, dz=5 -> (102,64,205).
+	want := BlockPos{X: 102, Y: 64, Z: 205}
+	if got[0] != want {
+		t.Fatalf("random_offset trapezoid = %v, want %v", got[0], want)
+	}
+	// Post-draw fingerprint: the trapezoid samples consumed 6 nextInt draws total
+	// (2 per trapezoid x3); the next raw int must match the oracle (404437318).
+	if fp := rng.NextInt(); fp != 404437318 {
+		t.Fatalf("random_offset post-draw fingerprint = %d, want 404437318", fp)
+	}
+}
+
+// TestBlockPredicateFilterKeepsDrops: block_predicate_filter keeps p iff the bound
+// predicate holds. matching_block_tag air keeps over air, drops over stone.
+func TestBlockPredicateFilterKeepsDrops(t *testing.T) {
+	raw := []byte(`{"predicate":{"type":"minecraft:matching_block_tag","tag":"minecraft:air"}}`)
+	m, err := BindModifier("minecraft:block_predicate_filter", raw, ModifierDeps{})
+	if err != nil {
+		t.Fatalf("BindModifier block_predicate_filter: %v", err)
+	}
+	ctx := newFakeContext(-64, 384)
+	rng := newCounter(1)
+	p := BlockPos{X: 3, Y: 10, Z: 7}
+
+	// Air position -> keep.
+	if got := m.getPositions(ctx, rng, p); len(got) != 1 || got[0] != p {
+		t.Fatalf("block_predicate_filter air: got %v, want [%v]", got, p)
+	}
+	// Stone position -> drop.
+	ctx.blocks[[3]int{3, 10, 7}] = stateOf(t, block.Stone{})
+	if got := m.getPositions(ctx, rng, p); len(got) != 0 {
+		t.Fatalf("block_predicate_filter over stone: got %v, want empty", got)
+	}
+	// The filter draws 0 rng (predicates are positional).
+	if rng.draws != 0 {
+		t.Fatalf("block_predicate_filter consumed %d rng draws, want 0", rng.draws)
+	}
+}

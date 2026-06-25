@@ -162,6 +162,50 @@ func newSurfaceWaterDepthFilter(maxWaterDepth int) *SurfaceWaterDepthFilter {
 	return s
 }
 
+// ---- random_offset ----
+
+// RandomOffset ports RandomOffsetPlacement (JAR-CONFIRMED javap -c getPositions):
+// it scatters the input pos by sampling two IntProviders —
+//
+//	x = p.X + xzSpread.Sample(rng)   (draw 1)
+//	y = p.Y + ySpread.Sample(rng)    (draw 2)
+//	z = p.Z + xzSpread.Sample(rng)   (draw 3)
+//
+// THREE draws in order x, y, z; xz_spread is sampled TWICE (x then z), y_spread once.
+// The spreads are IntProviders, dominantly the trapezoid (62/75 random_offset
+// occurrences). It emits exactly one offset position (never empty).
+type RandomOffset struct {
+	xzSpread *intProvider
+	ySpread  *intProvider
+}
+
+func (r RandomOffset) getPositions(_ PlacementContext, rng levelgen.RandomSource, p BlockPos) []BlockPos {
+	x := p.X + r.xzSpread.Sample(rng)
+	y := p.Y + r.ySpread.Sample(rng)
+	z := p.Z + r.xzSpread.Sample(rng)
+	return []BlockPos{{X: x, Y: y, Z: z}}
+}
+
+// ---- block_predicate_filter ----
+
+// BlockPredicateFilter ports BlockPredicateFilter (extends PlacementFilter): keep p
+// iff the bound BlockPredicate holds at p (BlockPredicateFilter.shouldPlace evaluates
+// predicate.test(level, pos)). 0 rng draws (predicates are positional).
+type BlockPredicateFilter struct {
+	placementFilter
+	predicateImpl BlockPredicate
+}
+
+func (b *BlockPredicateFilter) shouldPlace(ctx PlacementContext, _ levelgen.RandomSource, p BlockPos) bool {
+	return b.predicateImpl.Test(ctx, p.X, p.Y, p.Z)
+}
+
+func newBlockPredicateFilter(pred BlockPredicate) *BlockPredicateFilter {
+	f := &BlockPredicateFilter{predicateImpl: pred}
+	f.placementFilter.predicate = f
+	return f
+}
+
 // ---- compile-time interface assertions ----
 
 var (
@@ -172,6 +216,8 @@ var (
 	_ PlacementModifier = (*BiomeFilter)(nil)
 	_ PlacementModifier = HeightRange{}
 	_ PlacementModifier = (*SurfaceWaterDepthFilter)(nil)
+	_ PlacementModifier = RandomOffset{}
+	_ PlacementModifier = (*BlockPredicateFilter)(nil)
 )
 
 // ---- JSON binding ----
@@ -274,6 +320,39 @@ func BindModifier(modType string, raw json.RawMessage, deps ModifierDeps) (Place
 			return nil, fmt.Errorf("placement: surface_water_depth_filter modifier: %w", err)
 		}
 		return newSurfaceWaterDepthFilter(cfg.MaxWaterDepth), nil
+
+	case "minecraft:random_offset", "random_offset":
+		// 11-02 deferred random_offset (its xz/y spreads needed the trapezoid
+		// IntProvider, ported in this plan). RandomOffsetPlacement draws x,y,z.
+		var cfg struct {
+			XZSpread json.RawMessage `json:"xz_spread"`
+			YSpread  json.RawMessage `json:"y_spread"`
+		}
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			return nil, fmt.Errorf("placement: random_offset modifier: %w", err)
+		}
+		xz, err := parseIntProvider(cfg.XZSpread)
+		if err != nil {
+			return nil, fmt.Errorf("placement: random_offset xz_spread: %w", err)
+		}
+		y, err := parseIntProvider(cfg.YSpread)
+		if err != nil {
+			return nil, fmt.Errorf("placement: random_offset y_spread: %w", err)
+		}
+		return RandomOffset{xzSpread: xz, ySpread: y}, nil
+
+	case "minecraft:block_predicate_filter", "block_predicate_filter":
+		var cfg struct {
+			Predicate json.RawMessage `json:"predicate"`
+		}
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			return nil, fmt.Errorf("placement: block_predicate_filter modifier: %w", err)
+		}
+		pred, err := ParsePredicate(cfg.Predicate)
+		if err != nil {
+			return nil, fmt.Errorf("placement: block_predicate_filter predicate: %w", err)
+		}
+		return newBlockPredicateFilter(pred), nil
 
 	default:
 		return nil, fmt.Errorf("placement: unported placement modifier type %q (defer the Nether/cave set per research)", modType)

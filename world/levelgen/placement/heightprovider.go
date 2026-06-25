@@ -111,6 +111,26 @@ func mthNextInt(rng levelgen.RandomSource, lo, hi int) int {
 	return lo + int(rng.NextIntN(int32(hi-lo+1)))
 }
 
+// gaussianSource is the subset a clamped_normal IntProvider needs beyond the
+// RandomSource interface: the java.util.Random nextGaussian draw, which lives only on
+// LegacyRandomSource (kept off the RandomSource interface — lower churn, per 12-01's
+// decision). The decoration chain is always a *WorldgenRandom (embeds
+// *LegacyRandomSource), so the assertion holds at every real call site.
+type gaussianSource interface {
+	NextGaussian() float64
+}
+
+// gaussian returns rng.NextGaussian(), panicking loudly if the source is not a
+// LegacyRandomSource-backed rng (a clamped_normal sampled off the legacy decoration
+// chain is a programming error — never silently substitute a different draw).
+func gaussian(rng levelgen.RandomSource) float64 {
+	g, ok := rng.(gaussianSource)
+	if !ok {
+		panic("placement: clamped_normal IntProvider sampled with a non-Gaussian RandomSource")
+	}
+	return g.NextGaussian()
+}
+
 // sample ports HeightProvider.sample(rng, WorldGenerationContext) for the 3 kinds.
 func (hp heightProvider) sample(rng levelgen.RandomSource, ctx PlacementContext) int {
 	minY, genDepth := ctx.MinY(), ctx.Height()
@@ -254,6 +274,16 @@ const (
 	intClamped
 	intBiasedToBottom
 	intWeightedList
+	// intTrapezoid is the PLAIN-INT TrapezoidalInt (min/max/plateau plain ints) —
+	// the PRIMARY random_offset spread (62/75 occurrences). It is DISTINCT from the
+	// HeightProvider trapezoid (heightTrapezoid), which uses VerticalAnchor
+	// min_inclusive/max_inclusive and is parsed by parseHeightProvider — a different
+	// function, so there is no name collision despite the shared "trapezoid" JSON tag.
+	intTrapezoid
+	// intClampedNormal is ClampedNormalInt (mean/deviation/min/max via NextGaussian).
+	intClampedNormal
+	// intVeryBiasedToBottom is VeryBiasedToBottomInt (the three-nextInt biased pick).
+	intVeryBiasedToBottom
 )
 
 // weightedIntEntry is one (provider, weight) pair of a WeightedListInt.
@@ -262,10 +292,10 @@ type weightedIntEntry struct {
 	weight   int
 }
 
-// intProvider ports the IntProvider subset count uses.
+// intProvider ports the IntProvider subset count + random_offset use.
 type intProvider struct {
 	kind intProviderKind
-	// constant: value; uniform/clamped/biased: minVal/maxVal.
+	// constant: value; uniform/clamped/biased/trapezoid/very_biased: minVal/maxVal.
 	value          int
 	minVal, maxVal int
 	// clamped: the inner source whose sample is clamped to [minVal,maxVal].
@@ -273,6 +303,11 @@ type intProvider struct {
 	// weighted_list: the distribution + its precomputed total weight.
 	entries     []weightedIntEntry
 	totalWeight int
+	// trapezoid (TrapezoidalInt): the flat-top width.
+	plateau int
+	// clamped_normal (ClampedNormalInt): the Gaussian mean + deviation (float32 to
+	// match the jar's float arithmetic exactly).
+	mean, deviation float32
 }
 
 // Sample ports IntProvider.sample(RandomSource). The draw count per kind is
@@ -318,6 +353,46 @@ func (ip intProvider) Sample(rng levelgen.RandomSource) int {
 			}
 		}
 		return chosen.Sample(rng)
+	case intTrapezoid:
+		// TrapezoidalInt.sample (net.minecraft.util.valueproviders.TrapezoidalInt):
+		//   range = max - min
+		//   if plateau >= range: return Mth.randomBetweenInclusive(rng, min, max)  (1 draw)
+		//   base = (range - plateau) / 2; rangeMinusBase = range - base
+		//   return min + nextInt(rangeMinusBase+1) + nextInt(base+1)  (TWO draws)
+		// PLAIN-INT fields (distinct from the HeightProvider trapezoid's anchors).
+		rng2 := ip.maxVal - ip.minVal
+		if ip.plateau >= rng2 {
+			return mthRandomBetweenInclusive(rng, ip.minVal, ip.maxVal)
+		}
+		base := (rng2 - ip.plateau) / 2
+		rangeMinusBase := rng2 - base
+		return ip.minVal + int(rng.NextIntN(int32(rangeMinusBase+1))) + int(rng.NextIntN(int32(base+1)))
+	case intClampedNormal:
+		// ClampedNormalInt.sample (JAR-CONFIRMED javap -c):
+		//   v = Mth.normal(rng, mean, deviation) = mean + (float)rng.nextGaussian()*deviation
+		//   return (int) Mth.clamp(v, (float)min, (float)max)   // f2i = truncate toward zero
+		// nextGaussian lives only on LegacyRandomSource; the decoration rng is always
+		// a *WorldgenRandom (embeds *LegacyRandomSource), so the assertion holds. A
+		// non-LegacyRandomSource rng (test xoroshiro) panics loudly — clamped_normal
+		// must not be sampled off the legacy chain.
+		g := float32(gaussian(rng))
+		v := ip.mean + g*ip.deviation
+		lo, hi := float32(ip.minVal), float32(ip.maxVal)
+		if v < lo {
+			v = lo
+		} else if v > hi {
+			v = hi
+		}
+		return int(v) // f2i truncation toward zero
+	case intVeryBiasedToBottom:
+		// VeryBiasedToBottomInt.sample (net.minecraft.util.valueproviders.
+		// VeryBiasedToBottomInt): THREE Mth.nextInt draws, each biasing lower:
+		//   i = Mth.nextInt(rng, min + 1, max)        (draw 1)
+		//   j = Mth.nextInt(rng, min, i - 1)          (draw 2)
+		//   return Mth.nextInt(rng, min, j - 1 + 1)   (draw 3) == Mth.nextInt(rng, min, j)
+		i := mthNextInt(rng, ip.minVal+1, ip.maxVal)
+		j := mthNextInt(rng, ip.minVal, i-1)
+		return mthNextInt(rng, ip.minVal, j)
 	default:
 		panic(fmt.Sprintf("placement: invalid int provider kind %d", ip.kind))
 	}
@@ -334,6 +409,13 @@ type jsonIntProvider struct {
 		Data   json.RawMessage `json:"data"`
 		Weight int             `json:"weight"`
 	} `json:"distribution"`
+	// trapezoid (TrapezoidalInt) uses PLAIN-INT min/max/plateau (NOT min_inclusive).
+	Min     *int `json:"min"`
+	Max     *int `json:"max"`
+	Plateau *int `json:"plateau"`
+	// clamped_normal (ClampedNormalInt) uses float mean/deviation + int bounds.
+	Mean      *float32 `json:"mean"`
+	Deviation *float32 `json:"deviation"`
 }
 
 // parseIntProvider decodes an IntProvider, erroring loudly on an unported type.
@@ -392,7 +474,40 @@ func parseIntProvider(raw json.RawMessage) (*intProvider, error) {
 			return nil, fmt.Errorf("placement: weighted_list int provider has non-positive total weight")
 		}
 		return ip, nil
+	case "minecraft:trapezoid", "trapezoid":
+		// TrapezoidalInt: PLAIN-INT min/max/plateau. This is the PRIMARY random_offset
+		// spread (62/75 occurrences, e.g. flower_default xz_spread {min:-7,max:7,plateau:0}).
+		// DISTINCT from the HeightProvider trapezoid (parseHeightProvider, anchors).
+		if j.Min == nil || j.Max == nil {
+			return nil, fmt.Errorf("placement: trapezoid int provider missing min/max")
+		}
+		plateau := 0
+		if j.Plateau != nil {
+			plateau = *j.Plateau
+		}
+		if *j.Max < *j.Min {
+			return nil, fmt.Errorf("placement: trapezoid int provider max<min")
+		}
+		return &intProvider{kind: intTrapezoid, minVal: *j.Min, maxVal: *j.Max, plateau: plateau}, nil
+	case "minecraft:clamped_normal", "clamped_normal":
+		// ClampedNormalInt: mean/deviation (float) clamped to [min_inclusive,max_inclusive].
+		if j.Mean == nil || j.Deviation == nil || j.MinInclusive == nil || j.MaxInclusive == nil {
+			return nil, fmt.Errorf("placement: clamped_normal int provider missing mean/deviation/bounds")
+		}
+		return &intProvider{
+			kind:      intClampedNormal,
+			mean:      *j.Mean,
+			deviation: *j.Deviation,
+			minVal:    *j.MinInclusive,
+			maxVal:    *j.MaxInclusive,
+		}, nil
+	case "minecraft:very_biased_to_bottom", "very_biased_to_bottom":
+		// VeryBiasedToBottomInt: three-draw biased pick over [min_inclusive,max_inclusive].
+		if j.MinInclusive == nil || j.MaxInclusive == nil {
+			return nil, fmt.Errorf("placement: very_biased_to_bottom int provider missing bounds")
+		}
+		return &intProvider{kind: intVeryBiasedToBottom, minVal: *j.MinInclusive, maxVal: *j.MaxInclusive}, nil
 	default:
-		return nil, fmt.Errorf("placement: unsupported int provider type %q (clamped_normal/very_biased only appear in deferred random_offset)", j.Type)
+		return nil, fmt.Errorf("placement: unsupported int provider type %q", j.Type)
 	}
 }
