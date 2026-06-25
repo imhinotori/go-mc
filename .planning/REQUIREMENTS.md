@@ -19,7 +19,7 @@ The "user" is an unmodified vanilla 26.2 (protocol 776) client exploring the wor
 ### Features & Decoration
 
 - [x] **FEAT-01**: The placement-modifier layer is ported (`in_square`, `heightmap`, `count`/`RepeatingPlacement`, `rarity_filter`, `biome` filter, `height_range`, `surface_water_depth_filter`, the `PlacementFilter` base) with the exact RNG-draw order; `PlacedFeature.place` runs the modifier chain as a single-threaded ordered flatMap fold.
-- [ ] **FEAT-02**: The `ConfiguredFeature`/`PlacedFeature` model + the polymorphic JSON parser is ported, and the embedded data (226 configured_feature + 262 placed_feature + the 66 biome feature-lists) loads + binds; `FeatureSorter.buildFeaturesPerStep` produces the deduped per-step global ordering and `applyBiomeDecoration` drives the 11 GenerationStep.Decoration steps over the 3×3 biome set with `setFeatureSeed` per feature and `placeWithBiomeCheck`.
+- [x] **FEAT-02**: The `ConfiguredFeature`/`PlacedFeature` model + the polymorphic JSON parser is ported, and the embedded data (226 configured_feature + 262 placed_feature + the 66 biome feature-lists) loads + binds; `FeatureSorter.buildFeaturesPerStep` produces the deduped per-step global ordering and `applyBiomeDecoration` drives the 11 GenerationStep.Decoration steps over the 3×3 biome set with `setFeatureSeed` per feature and `placeWithBiomeCheck`.
 - [ ] **FEAT-03**: The core overworld feature types are ported: `OreFeature` (decoration ores, distinct from v1's noise OreVeinifier), `RandomPatchFeature` + `SimpleBlockFeature` (grass/flowers/ground cover), the `RandomSelector`/`SimpleRandomSelector`/`RandomBooleanSelector` composites, `BlockPile`/`FallenTree`/`VegetationPatch` — so a biome's full vanilla ground-cover + ore set generates.
 - [ ] **FEAT-04**: The `TreeFeature` is ported with its trunk placers (Straight/Forking/Fancy/DarkOak/MegaJungle/...), foliage placers (Blob/Spruce/Pine/Acacia/Bush/Fancy/DarkOak/...), tree decorators, and the `BlockStateProvider` hierarchy (Simple/Weighted/RuleBased/Noise) — so each overworld biome grows its correct vanilla tree set (oak/birch/spruce/jungle/acacia/dark_oak/etc.).
 - [ ] **FEAT-05**: The dungeon (`MonsterRoomFeature`, a feature not a structure) is ported and places via its placed_feature.
@@ -59,7 +59,7 @@ The "user" is an unmodified vanilla 26.2 (protocol 776) client exploring the wor
 | GEN2-02 | Phase 10 | Complete |
 | GEN2-03 | Phase 10 | Complete |
 | FEAT-01 | Phase 11 | Complete |
-| FEAT-02 | Phase 11 | Pending |
+| FEAT-02 | Phase 11 | Complete |
 | FEAT-03 | Phase 12 | Pending |
 | FEAT-04 | Phase 13 | Pending |
 | FEAT-05 | Phase 13 | Pending |

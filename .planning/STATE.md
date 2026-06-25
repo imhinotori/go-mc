@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2
 milestone_name: worldgen-features-structures
 status: verifying
-stopped_at: "Completed 11-02-PLAN.md (FEAT-01: 8 placement modifiers + PlacedFeature.place ordered fold)"
-last_updated: "2026-06-25T05:30:17.400Z"
+stopped_at: Completed 11-01-PLAN.md
+last_updated: "2026-06-25T05:30:47.727Z"
 last_activity: 2026-06-25
 progress:
   total_phases: 7
@@ -135,6 +135,7 @@ Progress: [████████░░] 83%
 | Phase 10 P02 | 10m | 2 tasks | 6 files |
 | Phase 10 P03 | 75min | 4 tasks | 7 files |
 | Phase 11 P02 | 1session | 3 tasks | 8 files |
+| Phase 11 P01 | ~40min | 3 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -215,6 +216,8 @@ Recent decisions affecting current work:
 - [Phase ?]: handleTerrain routes region-hit vs generated on load provenance (fromRegion), not chunk Status, because the scheduler mutates a singleflight-shared staged chunk's Status to StatusFull (would otherwise double-emit)
 - [Phase ?]: 11-02: SurfaceWaterDepthFilter ported as the JAR heightmap-difference (WORLD_SURFACE-OCEAN_FLOOR), not a block scan
 - [Phase ?]: 11-02: VerticalAnchor below_top ported in full (added PlacementContext.Height gen-depth); ore height_range data requires it
+- [Phase 11]: feature is its own package (acyclic, must NOT import placement); the placement modifier list is captured as PlacementModifierRaw for plan 11-02 to bind
+- [Phase 11]: recognized-feature-type SET (54 types) derived from the distinct configured_feature type values; a genuinely-unknown type errors loudly (T-11-01)
 
 ### Pending Todos
 
@@ -241,7 +244,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-25T05:30:10.127Z
-Stopped at: Completed 11-02-PLAN.md (FEAT-01: 8 placement modifiers + PlacedFeature.place ordered fold)
+Last session: 2026-06-25T05:30:47.716Z
+Stopped at: Completed 11-01-PLAN.md
 Resume file: None
 Next: v1 is done end-to-end (login → biome-varied noise world with caves/ravines/aquifers/ore-veins → entities/AI/inventory/combat → async-optimized, -race clean). The next milestone is DEEPER GAMEPLAY (user-flagged, deferred): items/crafting, more mobs + their ported AI, block mechanics (redstone/farming/fluids), and the Phase-9 v2 deferrals (ONLINE-01/02 auth+encryption, REGION-01 Folia-style regionization, trees/vegetation/structures as feature+structure subsystems). Run /gsd-new-milestone to scope it. Deferred-still-open: KeepAlive double-leave hardening (Phase 3, surfaces when real timeout-driven disconnects land).
