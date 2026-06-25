@@ -326,3 +326,172 @@ func TestSelectorResolvesToRealTree(t *testing.T) {
 		t.Fatalf("selector-grown oak has no leaves (foliage not placed through the recursion)")
 	}
 }
+
+// growTree is a small helper: build a 3x3 dirt-floored view, run the named tree config's
+// body at the center anchor with the given seed, and return the view for inspection.
+func growTree(t *testing.T, reg *feature.Registry, id string, seed int64) (*Neighborhood, placement.BlockPos) {
+	t.Helper()
+	const minY, height = -64, 384
+	const floorY = 63
+	center := [2]int{0, 0}
+	cf := bodyCF(t, reg, id)
+	view := build3x3(center, minY, height)
+	fillTreeFloor(view, center, minY, floorY)
+	pos := placement.BlockPos{X: 8, Y: floorY + 1, Z: 8}
+	bctx := &bodyContext{view: view, reg: reg}
+	ctx := newPlacementContext(view, minY, height, nil)
+	if !treeBody(bctx, cf, ctx, levelgen.NewWorldgenRandom(seed), pos) {
+		t.Fatalf("%s treeBody placed nothing", id)
+	}
+	return view, pos
+}
+
+// countBlock counts how many cells of state `st` exist in a box around the anchor.
+func countBlock(view *Neighborhood, pos placement.BlockPos, st block.StateID, dyLo, dyHi, r int) int {
+	n := 0
+	for dy := dyLo; dy <= dyHi; dy++ {
+		for dx := -r; dx <= r; dx++ {
+			for dz := -r; dz <= r; dz++ {
+				if view.GetBlock(pos.X+dx, pos.Y+dy, pos.Z+dz) == st {
+					n++
+				}
+			}
+		}
+	}
+	return n
+}
+
+// hasBlockFamily reports whether any cell in the box is a block with the given ID (any state).
+func hasBlockFamily(view *Neighborhood, pos placement.BlockPos, id string, dyLo, dyHi, r int) bool {
+	for dy := dyLo; dy <= dyHi; dy++ {
+		for dx := -r; dx <= r; dx++ {
+			for dz := -r; dz <= r; dz++ {
+				st := view.GetBlock(pos.X+dx, pos.Y+dy, pos.Z+dz)
+				if b := block.StateList[st]; b != nil && b.ID() == id {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// TestSpruceWithPodzol: a taiga spruce (spruce.json -> spruce cone) and a mega_pine (the
+// alter_ground podzol disk under the 2x2 trunk).
+func TestSpruceWithPodzol(t *testing.T) {
+	reg := feature.NewEmbeddedRegistry()
+
+	// spruce: the cone foliage renders (spruce_log + spruce_leaves).
+	view, pos := growTree(t, reg, "minecraft:spruce", 0x59E0)
+	spruceLog := block.ToStateID[block.SpruceLog{Axis: block.Y}]
+	spruceLeaves := block.ToStateID[block.SpruceLeaves{Distance: 7, Persistent: false, Waterlogged: false}]
+	if view.GetBlock(pos.X, pos.Y, pos.Z) != spruceLog {
+		t.Fatalf("spruce trunk base is not spruce_log")
+	}
+	if countBlock(view, pos, spruceLeaves, 1, 12, 4) == 0 {
+		t.Fatalf("spruce grew no cone leaves")
+	}
+
+	// mega_pine: the alter_ground decorator lays a podzol disk under the trunk base.
+	mview, mpos := growTree(t, reg, "minecraft:mega_pine", 0x4E64)
+	// podzol appears at/near the floor (y in [-2,0] relative to the anchor, over the 5x5 disc).
+	if !hasBlockFamily(mview, mpos, "minecraft:podzol", -2, 0, 3) {
+		t.Fatalf("mega_pine alter_ground placed no podzol under the trunk")
+	}
+}
+
+// TestOakBeesNest: super_birch_bees / birch_bees grows a tree; with a seed where the
+// p=0.02 (birch) probability fires we get a bee_nest. We search a few seeds to land one.
+func TestOakBeesNest(t *testing.T) {
+	reg := feature.NewEmbeddedRegistry()
+	beeNest := false
+	for seed := int64(0); seed < 400 && !beeNest; seed++ {
+		view, pos := growTree(t, reg, "minecraft:super_birch_bees", seed)
+		if hasBlockFamily(view, pos, "minecraft:bee_nest", 1, 14, 3) {
+			beeNest = true
+		}
+	}
+	if !beeNest {
+		t.Fatalf("super_birch_bees grew no bee_nest across 400 seeds (beehive decorator not wired)")
+	}
+}
+
+// TestJungleCocoaVines: a jungle_tree grows jungle_log/leaves and (across seeds) cocoa pods
+// and/or vines from the cocoa+trunk_vine+leave_vine decorators.
+func TestJungleCocoaVines(t *testing.T) {
+	reg := feature.NewEmbeddedRegistry()
+	jungleLog := block.ToStateID[block.JungleLog{Axis: block.Y}]
+	cocoa, vine := false, false
+	for seed := int64(0); seed < 200 && (!cocoa || !vine); seed++ {
+		view, pos := growTree(t, reg, "minecraft:jungle_tree", seed)
+		if view.GetBlock(pos.X, pos.Y, pos.Z) != jungleLog {
+			t.Fatalf("jungle_tree base is not jungle_log (seed %d)", seed)
+		}
+		if hasBlockFamily(view, pos, "minecraft:cocoa", 0, 4, 2) {
+			cocoa = true
+		}
+		if hasBlockFamily(view, pos, "minecraft:vine", 0, 14, 3) {
+			vine = true
+		}
+	}
+	if !cocoa {
+		t.Fatalf("jungle_tree grew no cocoa across 200 seeds (cocoa decorator not wired)")
+	}
+	if !vine {
+		t.Fatalf("jungle_tree grew no vines across 200 seeds (vine decorators not wired)")
+	}
+}
+
+// TestPerBiomeTreeSmoke: each common overworld tree config grows its correct trunk+canopy
+// through the body — taiga->spruce, savanna->acacia, dark_forest->dark_oak, jungle->jungle.
+func TestPerBiomeTreeSmoke(t *testing.T) {
+	reg := feature.NewEmbeddedRegistry()
+	cases := []struct {
+		id      string
+		logID   string
+		leafID  string
+	}{
+		{"minecraft:spruce", "minecraft:spruce_log", "minecraft:spruce_leaves"},
+		{"minecraft:acacia", "minecraft:acacia_log", "minecraft:acacia_leaves"},
+		{"minecraft:dark_oak", "minecraft:dark_oak_log", "minecraft:dark_oak_leaves"},
+		{"minecraft:jungle_tree", "minecraft:jungle_log", "minecraft:jungle_leaves"},
+		{"minecraft:pine", "minecraft:spruce_log", "minecraft:spruce_leaves"},
+		{"minecraft:fancy_oak", "minecraft:oak_log", "minecraft:oak_leaves"},
+		{"minecraft:mega_jungle_tree", "minecraft:jungle_log", "minecraft:jungle_leaves"},
+	}
+	for _, c := range cases {
+		// search a couple of seeds so a validity-tight config still lands.
+		grew := false
+		for seed := int64(1); seed <= 8 && !grew; seed++ {
+			view, pos := growTreeMaybe(t, reg, c.id, seed)
+			if view == nil {
+				continue
+			}
+			if hasBlockFamily(view, pos, c.logID, 0, 18, 3) && hasBlockFamily(view, pos, c.leafID, 0, 22, 6) {
+				grew = true
+			}
+		}
+		if !grew {
+			t.Fatalf("%s did not grow its %s + %s through the body", c.id, c.logID, c.leafID)
+		}
+	}
+}
+
+// growTreeMaybe is growTree that returns (nil, _) when the body declines (validity) instead
+// of failing — the per-biome smoke searches seeds.
+func growTreeMaybe(t *testing.T, reg *feature.Registry, id string, seed int64) (*Neighborhood, placement.BlockPos) {
+	t.Helper()
+	const minY, height = -64, 384
+	const floorY = 63
+	center := [2]int{0, 0}
+	cf := bodyCF(t, reg, id)
+	view := build3x3(center, minY, height)
+	fillTreeFloor(view, center, minY, floorY)
+	pos := placement.BlockPos{X: 8, Y: floorY + 1, Z: 8}
+	bctx := &bodyContext{view: view, reg: reg}
+	ctx := newPlacementContext(view, minY, height, nil)
+	if !treeBody(bctx, cf, ctx, levelgen.NewWorldgenRandom(seed), pos) {
+		return nil, pos
+	}
+	return view, pos
+}
