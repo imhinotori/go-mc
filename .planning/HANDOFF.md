@@ -1,64 +1,65 @@
-# Sulfur — Session Handoff (2026-06-24, late)
+# Sulfur — Session Handoff (2026-06-25)
 
-> Minecraft Java 26.2 (protocol 776) server in Go. GSD autonomous build. Branch `ender-776`, pushes to `main` (`git push origin ender-776:main`). Remote `git@github.com:imhinotori/sulfur`. Module `github.com/imhinotori/sulfur`. Dir on disk is `D:\ender`. Last pushed: `3aebc557`.
+> Minecraft Java 26.2 (protocol 776) server in Go. GSD autonomous build. **Branch `ender-776`.** NEW push target since the CI/CD work: **`development`** (= GHCR `:latest`), NOT `main`. `git push origin ender-776:development`. Remote `git@github.com:imhinotori/sulfur`. Module `github.com/imhinotori/sulfur`. Dir `D:\ender`.
 
-## Where we are
+## RESUME HERE — execute Phase 16 (the LAST v2 phase), then close milestone v2
 
-**8/9 phases COMPLETE (v1 server) + Phase 9 (vanilla worldgen) at 99% — terrain generates, but 2 structural port divergences vs 1:1 vanilla remain (audited, see below).**
+Milestone **v2 (worldgen features + structures)** is **6/7 phases done**. Only **Phase 16 (Village Jigsaw + Structures Visual Gate)** remains. Its 3 plans are **written + plan-checked + committed + pushed** (commit `fc58840e`) — NOT executed. Execute them, then the visual gate closes v2.
+
+**Why this was paused, not executed:** the prior session hit 72% context. Phase 16 has the 3 HEAVIEST executors of v2 (483 village `.nbt` files + the jigsaw BFS Placer + the visual gate) — running them at high context risked splitting the work. The compact is the clean handoff point: plans committed, nothing half-done.
+
+**Execute order (sequential, each depends on the prior):**
+- **16-01** — the `.nbt` StructureTemplate system: binary `.nbt` embed (incl. the `empty.json` terminator pool — the plan-check caught it was outside the `village/` prefix) + runtime gzip+nbt parse (REUSE the existing `nbt` package, no 2nd lib) + `placeInWorld` rotation/mirror (reuse `transformState(st, mirror, rotation)` at `world/structure/piece.go:176` — mirror 2nd, rotation 3rd) + the processors. **62** village template_pools (NOT 74 — that was stale pre-26.2), 483 `.nbt`, 40 processor_lists.
+- **16-02** — the bounded-BFS `JigsawPlacement.Placer` (SequencedPriorityIterator work queue, NOT stack recursion; bounded SIMULTANEOUSLY by maxDepth 6 + max_distance 80 + VoxelShape collision; depth-0 → `minecraft:empty` fallback terminator) + the village `random_spread` StartGenerator (salt 10387312 / spacing 34 / sep 8 / 5 biome variants as one `villages.json` structure_set, each gated by `has_structure/village_*`, biome-gated NO accept-by-default, registered into `CompositeStartGenerator`).
+- **16-03** — full structures acceptance + **THE autonomous:false VISUAL GATE** (the v2-closing gate): a real client finds villages (5 variants) + temples + mineshafts + strongholds, deterministic per seed. This is a BLOCKING human-verify — PAUSE for the user's real-client check. The executor prints the salt-10387312-derived village chunk for the fixed seed so the user can find one.
+
+**How to run each plan:** spawn a `gsd-executor` agent per plan (the prior session delegated every executor to keep the orchestrator lean). After each: verify `go build ./...` exit 0 + `go vet ./...` + `go test ./world/... ./world/structure/`, then the Docker `-race` gate **with `-timeout 1800s`** (the structures `./world` suite hits ~834s with structures live — a timeout dump, NOT a race; 15-03 found this). Commit atomically, push to `development`, then the next plan. At 16-03's visual gate, STOP and present the checklist to the user.
+
+## Milestone v2 progress (Phases 10-16; v1 = Phases 1-9, shipped + tagged v1.0)
 
 | Phase | Status |
 |-------|--------|
-| 1 Foundation/Codegen | ✅ |
-| 2 Net & Protocol | ✅ |
-| 3 Tick Loop | ✅ |
-| 4 World & Chunks | ✅ |
-| 5 Player Session / FIRST PLAYABLE | ✅ |
-| 6 Entities/Physics/Interaction | ✅ |
-| 7 AI/Pathfinding/Commands/Chat | ✅ (ported mob logic from decompiled jar per user mandate) |
-| 8 Leaf Async Optimizations | ✅ (async path/tracker/spawn behind seams; -race clean) |
-| **9 Stretch — Vanilla Worldgen (PARITY-01 only)** | 🔄 **9/9 plans + perf fix + both fidelity fixes DONE (aa619b81); awaiting visual real-client gate** |
+| 10 Worldgen Foundation (LCG + cross-chunk seam + live heightmap) | ✅ |
+| 11 Feature Pipeline & Decoration Orchestration | ✅ |
+| 12 Core Feature Types (ore/patch/selectors/...) | ✅ |
+| 13 Trees + Dungeon + Features VISUAL GATE | ✅ (gate APPROVED — "árboles y vines" on a real client) |
+| 14 Structure Pipeline & Temples (desert pyramid/jungle/igloo/swamp hut) | ✅ |
+| 15 Mineshaft & Stronghold | ✅ |
+| **16 Village Jigsaw & Structures VISUAL GATE** | 🔄 **planned + plan-checked + pushed; NOT executed (RESUME HERE)** |
 
-ONLINE-01/02 + REGION-01 are deferred v2 (user chose PARITY-01 only for Phase 9).
+After 16's visual gate approves → run `/gsd-complete-milestone` for v2 (archive roadmap/requirements, tag, like v1.0 was).
 
-## RESUME HERE — Phase 9 worldgen fidelity DONE (2 fixes applied), VISUAL GATE pending
+## CI/CD + PRODUCTION DEPLOY (done this session — live)
 
-Both audited fidelity fixes are **applied + committed + pushed** (`aa619b81`). The worldgen MATH was already bit-exact; these closed the 2 structural port divergences. What remains is the **VISUAL real-client gate** (the user reconnects, walks the world, confirms sharper cliffs + noodle caves present + bare-stone cave rims). No more code work is queued unless the visual check surfaces something.
+- **GHCR image** `ghcr.io/imhinotori/sulfur` (PUBLIC). `Dockerfile` = pure-Go CGO=0 static → distroless, EXPOSE 25565. `.github/workflows/docker-publish.yml`: **development → `:latest`**, **main → `:stable`**, + immutable `:sha-<commit>`; a prune step keeps the 3 newest versions.
+- **Branch model (NEW):** `development` = latest (THIS is where work goes now — the user said "post-CI trabajás sobre development, no main"), `main` = stable (currently at `34915b1a` = v2-features+Phase-14; promote to it when something is stable).
+- **Production server:** `151.242.242.206` / `demo.trysulfur.net` (Debian 13, root SSH). Docker 29 + **Watchtower** (the maintained `ghcr.io/nicholas-fedor/watchtower` fork — the `containrrr` one crash-looped on Docker 29) auto-updates `:latest` every 5min (pull+recreate+cleanup). Sulfur runs on **:25565**, volume `sulfur-world:/app` persists the world, `--restart unless-stopped`. Idempotent redeploy script at `/root/deploy-sulfur.sh`. Every push to `development` → CI builds `:latest` → Watchtower deploys to prod in ≤5min.
+- ⚠️ **USER MUST ROTATE THE ROOT PASSWORD** — it was sent in plaintext in the chat (exposed). Recommend SSH-key auth + disable password login. The deploy used it only in ephemeral SSH askpass (never persisted to disk/repo). NEVER commit it.
 
-**FIX #1 DONE — per-marker interpolation (terrain SHAPE):** `world/levelgen/density/mapall.go` (NEW — ports `DensityFunction.mapAll(Visitor)`: bottom-up tree rewrite, identity-memoized for the shared DAG) + `world/levelgen/noisechunk/interpolator.go` (the interpolator is now `*interpolatedFn`, a `density.Function` that `MapAll` substitutes for each `Marker(Interpolated)`; `Compute` returns the trilerped value inside the cell loop via a shared `fillState.filling` flag, samples its inner filler directly outside it — porting `NoiseInterpolator.compute`'s `ctx==this$0` discriminant) + `world/levelgen/noisechunk/noisechunk.go` (`wrapFinalDensity` collects all **5** overworld interpolators = main density `mul` + 4 cave branches; `fill` drives every interpolator on the cell grid then evaluates the rewritten `final_density` PER BLOCK). `TestNoiseChunkCornerExact` still passes (corner-exact preserved); `TestDensityFieldHasCaves` passes. Per-block compute raised gen cost ~70ms→~116ms/chunk — vanilla's real cost, absorbed off-tick by the Phase-8 async-gen seams.
+## Performance fixes (done this session — the user reported "muuy lenta")
 
-**FIX #2 DONE — surface before carvers (APPEARANCE):** `world/noisegen.go` Generate swapped to `FillChunk → BuildSurface → ApplyCarvers` (was fill→carve→surface), mirroring vanilla ChunkStatus `NOISE → SURFACE → CARVERS`. Carved cave/ravine openings now expose bare stone instead of grass/dirt/sand rims.
+Per-chunk gen was ~296ms (real streaming); fixed to ~88ms (~3.3×). Two fixes, both committed+pushed:
+1. `world/feature_ore.go` — cache the decoded `OreConfiguration` per `*ConfiguredFeature` (`sync.Map`). `decodeOreConfig`→`resolveOreTagSet` scanned all ~30K block states PER ore placement. ~20%.
+2. `world/decoration.go` `retainedBiomes` — READ the biomes from each chunk's per-section 4×4×4 palette container (FillBiomes wrote them) instead of RE-SAMPLING the multi-noise climate (6 density fns + RTree) over the whole 96-level vertical column × 16 cols × 9 neighborhood chunks (~13800 climate evals/chunk = ~79% of Decorate). Decorate 216ms→52ms.
+- The "Connection reset / packet handling error" the user hit was a STALE binary running in bg — a rebuild fixed it; NOT a real wire bug (heightmaps + StateIDs verified in-range).
+- `server/navigation.go` — fixed a latent pathfinding bug: `requestPath` armed the recompute cooldown on a DROPPED async submit, so under sustained CPU contention (heavy worldgen) every submit dropped + the cooldown throttled the retry forever → mob sat motionless. Now arms cooldown ONLY on an accepted submit. (Surfaced as flaky `TestTickAIDrivesMobs` under concurrent world load.)
 
-**FIX #3 (skipped — cosmetic, measure-zero):** RTree tiebreak order; only matters on exact-equal-fitness biome boundaries. Not worth it.
+## CRITICAL GOTCHAS (unchanged + new)
 
-DEFERRED (NOT bugs — do not "fix"): trees/vegetation/ores-as-features/structures (separate feature/decoration + structure subsystems, deliberately out of PARITY-01 scope). `temperatureCondition` stubbed false (surface/rules.go:314). These are why the world lacks trees — scope, not a port bug. They are the natural next milestone if the user wants deeper gameplay (the user already flagged: items/crafting, more mobs, block mechanics — explicitly a FUTURE milestone).
-
-Verification done: `go build ./...`, `go test ./...` (all green), `go test -race` in Docker golang:1.26 on `./world/...` + `./world/levelgen/noisechunk/` (clean), binary builds. The ONLY thing left for Phase 9 is the user's visual confirmation on a real client.
-
-## What just happened this session (Phase 9 + the disconnect fix)
-
-- Phase 9 planned (9 plans, 7 waves) + plan-checked (caught 1 blocker: the density node-set was assumed-not-jar-walked, missing `find_top_surface`+`invert`, inventing `weird_scaled_sampler` — fixed). All 9 executed:
-  - 09-01 extract+embed 111 worldgen JSON (2.8MB) from the jar. 09-02 Xoroshiro seeding BIT-EXACT + noise primitives (caught `getOctaveNoise` reversed-index from bytecode). 09-03 the 29 density node types + data-driven graph parser (caves are in the graph = negative density). 09-04 NoiseChunk cell-sample + trilerp (THE per-marker interpolation shortcut = FIX #1). 09-05 Aquifer + OreVeinifier + doFill. 09-06 carvers (ravines + tunnels). 09-07 surface rules + multi-noise biomes. 09-08 NoiseGenerator assembly. 09-09 wire into cmd/sulfur + spawn-Y from real surface.
-- DISCONNECT BUG (real client kept disconnecting): root cause was **985ms/chunk** — `biome.ParameterList.findValue` did a linear O(7594) scan per quart-cell. FIXED by porting vanilla's Climate RTree (O(log n), behavior-identical: `TestRTreeMatchesLinearScan` = 50000 points, same biome exactly) + a per-chunk biome cache → **70ms/chunk (14×)**. Commits `77a60d31`/`3aebc557`. The disconnect should be gone (user to re-confirm) but the 1:1 divergence (#1/#2 above) is separate.
-- Also fixed CI/CD this session (was the go-mc fork's stale workflows): rewrote `.github/workflows/{go.yml,codeql-analysis.yml}` for Sulfur — current action versions (checkout@v7, setup-go@v6, upload-artifact@v7, codeql@v4), `go-version-file: go.mod` (reads the real `go 1.25.0`), main branch, -race + CGO=0 jobs, tools/ module job. + `.golangci.yml` (lint Sulfur core, exclude fork-inherited + test Close noise). The Go CI build/test/-race/vet/tools jobs pass; lint passes with the config. (Note: `gh` CLI defaults to the upstream `Tnze/go-mc` remote — use `gh ... --repo imhinotori/sulfur`.)
-
-## How to run / test the worldgen
-- `go run ./cmd/sulfur` → noise terrain, seed 0x5EEDC0DE (1592639710), listens :25565 proto 776. `-seed N` overrides. `SULFUR_SUPERFLAT=1` falls back to the flat stub. `SULFUR_DEBUG=1`/`SULFUR_DEBUG_NAV=1`/`SULFUR_DEBUG_DAMAGE=1` are the debug triggers (pig + obstacle nav + damage).
-- Build the binary to test (don't `go run` in background — port-conflict if an old one lingers; `taskkill //F //IM sulfur.exe` first).
-- Bench: `BenchmarkGenerateOneChunk` in `world/noisegen_bench_test.go` (~70ms/chunk now).
-
-## CRITICAL GOTCHAS (unchanged from prior sessions — still true)
-1. **STALE LSP** — gopls floods FALSE diagnostics after every wave (`could not import go-mc`, `undefined: <new symbol>`, `*server.gameTick does not implement server.GamePlay`, `packetid.ServerboundAttack undefined`, `entity.SulfurCube undefined`, import-cycle-in-test for the moved levelgen sub-packages). ALL FALSE — gopls hasn't re-indexed. Trust `go build ./...` (exits 0) + `go test`. NEVER revert imports or re-declare symbols.
-2. **`-race` needs Docker** (host CGO_ENABLED=0). `MSYS_NO_PATHCONV=1 docker run --rm -v //d/ender://src -w //src golang:1.26 go test -race ./world/...` (or ./server/...). Plain go build/vet/test native.
-3. **Import-cycle discipline for levelgen**: a `package levelgen` file importing `density`/`router`/`biome`/`synth` CYCLES. Every levelgen sub-component lives in its OWN package (`density/`, `router/`, `noisechunk/`, `biome/`, `surface/`, `carver/`, `synth/`, `data/`). FIX #1's tree-rewrite must respect this.
-4. **Port-from-jar mandate** (user, standing): worldgen + mob LOGIC ported DIRECTLY from the decompiled jar (javap), translated faithfully (idiomatic Go, no GPL paste, cite bytecode). The math is bit-exact BECAUSE of this discipline — keep it for FIX #1.
-5. **Capture-diff / real-client is the only 776 wire truth** — but worldgen adds NO wire surface (fills the Phase-4-sealed chunk format), so its gate is the VISUAL real-client check + determinism, not a capture-diff.
-6. **`CGO_ENABLED=0` must stay clean** (pure-Go static binary, no JVM — the value prop). The one external dep added in Phase 8/9 is `klauspost/compress` (pure-Go zstd, OPT-05 linear region). No cgo.
+1. **STALE LSP/gopls** floods FALSE diagnostics after every wave (`undefined: X`, `redeclared`, `does not implement`, `tools/ undefined logf`, syntax errors in test files). ALL FALSE — trust `go build ./...` (exit 0) + `go vet` + `go test`. NEVER revert based on gopls. `tools/` is a SEPARATE Go module (gopls confuses it).
+2. **`-race` needs Docker** (host CGO_ENABLED=0): `MSYS_NO_PATHCONV=1 docker run --rm -v //d/ender://src -w //src golang:1.26 go test -race -timeout 1800s ./world/...`. The `-timeout 1800s` is REQUIRED now (structures push ./world to ~834s).
+3. **Push target is `development` now**, not `main` (CI: development→latest deploys to prod).
+4. **Port-from-jar mandate** (user, standing): worldgen + structure LOGIC ported DIRECTLY from the decompiled jar (`temp/cache/26.2-inner.jar`, javap -c / CFR), idiomatic Go, no GPL paste, cite the class. The plan-checker DECOMPILES the jar to verify — it caught a real Phase-14 bug this session: the `FrequencyReductionMethod` enum had `legacy_type_1`↔`legacy_type_3` SWAPPED + `legacyProbabilityReducerWithDouble` mis-seeded `(z,salt)` instead of `(chunkX,chunkZ)` — fixed in 15-01.
+5. **CGO_ENABLED=0 must stay clean** (pure-Go static binary, no JVM — the value prop + the Docker image). No new deps in v2 (reuse nbt/xsync/ants/singleflight/klauspost-compress).
+6. **Determinism is the contract**: every structure/feature is pure over (seed, pos); the 5×5-region-two-request-orders byte-identity test (`TestDecorationReorderIdentical`) + `TestEmitOnce` must STAY green after every plan. The worldgen adds NO new wire surface (chunk format sealed in v1 Phase 4) — gates are VISUAL, not capture-diff.
+7. **The cross-chunk seam** (Phase 10): a chunk decorates/places-structures into its 3×3 neighborhood; the worker holds-at-carved + the single scheduler goroutine owns staging (no locks, -race clean). Structures use the ±8 compute-on-demand REFERENCES (a structure owned ≤8 chunks away is found) + placeInChunk clips each piece to the target chunk's writable box (idempotent once-per-overlapping-chunk).
 
 ## Key paths
-- Worldgen: `world/levelgen/` (the 8 sub-packages) + `world/noisegen.go` (assembly) + `world/levelgen/data/` (embedded JSON). Plans: `.planning/phases/09-stretch-online-worldgen-regions/09-0{1..9}-*.md`.
-- The Generator seam: `world/generator.go` (`Generator interface { Generate(level.ChunkPos) *level.Chunk }`). NoiseGenerator + Superflat both implement it. Swapped in `cmd/sulfur/main.go`.
-- Vanilla jar (capture-diff/javap, gitignored): `temp/cache/26.2-inner.jar` (unobfuscated) + `26.2-server.jar`. Java 25 + Docker available.
-- Audit detail: the full fidelity-audit report is in this session's transcript (the 2 fixes above are its top findings).
+- Structures: `world/structure/` (the pipeline + StructurePiece machinery + temples/mineshaft/stronghold; Phase 16 adds the templatesystem + jigsaw Placer + village here). Pieces write through `world/neighborhood.go` (the WorldGenView).
+- Features: `world/levelgen/feature/` + `world/levelgen/placement/` + `world/feature_*.go` (the bodies in package `world`, registered via `registerFeatureBody`). `world/decoration.go` = applyBiomeDecoration. `world/noisegen.go` = the Generator (GenerateTerrain + Decorate split).
+- Embedded data: `world/levelgen/data/` (//go:embed) + `tools/extract_worldgen.go` (the extractor — extend `worldgenZipPrefixes`/`worldgenSingleFiles` for new data). Jar: `temp/cache/26.2-inner.jar` (gitignored, unobfuscated).
+- Plans: `.planning/phases/16-village-jigsaw-structures-gate/16-0{1,2,3}-PLAN.md`. Research: `.planning/research/v2-structures.md` (Tier 4 = village jigsaw).
+- Infra: `Dockerfile`, `.dockerignore`, `.github/workflows/docker-publish.yml`.
 
-## v1 status (separate from the worldgen polish)
-The v1 server (Phases 1-8) is COMPLETE + playable: a real vanilla 26.2 client logs in, walks a ticking world (now noise terrain), places/breaks blocks, has inventory, takes damage/dies/respawns, persists, sees mobs that spawn/wander/navigate with ported vanilla AI, runs commands, chats — all -race clean with Leaf-style async optimizations. Phase 9 is the stretch polish (worldgen 1:1); the 2 fixes above are the remaining gap to true parity.
+## Deferred (NOT bugs — v3, documented)
+Loot tables (chests = block + loot tag, no contents), structure entities (villagers/witch/cat/silverfish — spawner is block-only), `afterPlace` terrain-beard, structure NBT persistence (starts recompute on demand — pure over seed+pos). ONLINE-01/02 auth+encryption, REGION-01 Folia. **TUI (bubbletea + bubbles) + disconnect-reason logs** — the user requested these mid-session; deferred to AFTER v2 closes (their explicit choice: "terminar v2 primero").
