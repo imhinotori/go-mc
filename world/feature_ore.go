@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sync"
 
 	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/world/levelgen"
@@ -83,6 +84,28 @@ type jsonRuleTest struct {
 // JSON, resolving each target.state to a StateID (via resolveOreState) and each
 // target.target RuleTest to an oreRuleTest. An unported predicate_type errors LOUDLY
 // (never a silent mis-target — T-12-07).
+// oreConfigCache memoizes the decoded oreConfig per ConfiguredFeature. decodeOreConfig
+// re-resolves the replaceable tag set by scanning all ~30K block states (resolveOreTagSet),
+// which is far too expensive to run per ore placement (a chunk places many ore blobs, and
+// the 3x3 decoration neighborhood multiplies it). Keying by the *ConfiguredFeature pointer
+// is sound: the parser DAG returns one stable instance per feature id (registry dedup), and
+// its config is immutable after parse. A sync.Map keeps it -race clean regardless of caller.
+var oreConfigCache sync.Map // map[*feature.ConfiguredFeature]*oreConfig
+
+// decodeOreConfigCached returns the memoized decoded config for cf, decoding (and caching)
+// it on first use. The decode is pure over the config bytes, so the cached value is shared.
+func decodeOreConfigCached(cf *feature.ConfiguredFeature) (*oreConfig, error) {
+	if v, ok := oreConfigCache.Load(cf); ok {
+		return v.(*oreConfig), nil
+	}
+	cfg, err := decodeOreConfig(configRaw(cf))
+	if err != nil {
+		return nil, err
+	}
+	oreConfigCache.Store(cf, cfg)
+	return cfg, nil
+}
+
 func decodeOreConfig(raw json.RawMessage) (*oreConfig, error) {
 	if len(raw) == 0 {
 		return nil, fmt.Errorf("world: ore config is empty")
@@ -299,7 +322,7 @@ func oreBody(
 	rng levelgen.RandomSource,
 	pos placement.BlockPos,
 ) bool {
-	cfg, err := decodeOreConfig(configRaw(cf))
+	cfg, err := decodeOreConfigCached(cf)
 	if err != nil {
 		// A config decode failure is a build-data error; loudly panic so it surfaces in
 		// generation rather than silently placing nothing (T-12-07).
