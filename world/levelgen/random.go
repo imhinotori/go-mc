@@ -21,6 +21,7 @@ package levelgen
 
 import (
 	"crypto/md5"
+	"math"
 	"math/bits"
 )
 
@@ -302,6 +303,12 @@ const (
 // masked to 48 bits on every step (Java >>> on the unsigned state, then truncate).
 type LegacyRandomSource struct {
 	seed uint64 // 48-bit state
+	// haveNextNextGaussian + nextNextGaussian are the java.util.Random Gaussian
+	// cache: nextGaussian draws TWO uniforms (the Marsaglia polar method) and
+	// produces TWO normals; the first is returned, the second cached for the next
+	// call (which then draws NOTHING). These fields hold that cache.
+	haveNextNextGaussian bool
+	nextNextGaussian     float64
 }
 
 // NewLegacyRandomSource constructs an LCG seeded like java.util.Random(long).
@@ -315,6 +322,11 @@ func NewLegacyRandomSource(seed int64) *LegacyRandomSource {
 // seed = (seed ^ MULTIPLIER) & MODULUS_MASK. It does NOT draw.
 func (r *LegacyRandomSource) SetSeed(seed int64) {
 	r.seed = (uint64(seed) ^ lcgMultiplier) & lcgMask
+	// java.util.Random.setSeed clears the Gaussian cache (haveNextNextGaussian =
+	// false). LegacyRandomSource.setSeed does NOT carry a Gaussian cache itself, but
+	// java.util.Random — which it mirrors for nextGaussian — does; reseeding must
+	// drop a stale cached normal so a re-seed is a clean restart.
+	r.haveNextNextGaussian = false
 }
 
 // next advances the LCG and returns the top `bits` bits of the state as a SIGNED
@@ -369,6 +381,55 @@ func (r *LegacyRandomSource) NextDouble() float64 {
 	hi := int64(r.next(26))
 	lo := int64(r.next(27))
 	return float64(hi<<27+lo) * doubleUnit
+}
+
+// NextBoolean mirrors java.util.Random.nextBoolean / BitRandomSource.nextBoolean:
+// next(1) != 0 — a SINGLE bit draw. This is DISTINCT from NextIntN(2): nextInt(2)
+// is the power-of-two fast path returning (2*next(31))>>31, a different bit extract
+// over a different draw width. 12-03's random_boolean_selector needs exactly this
+// one-bit form, and because next() is unexported it must live here on
+// LegacyRandomSource (a world-package helper cannot reach next).
+//
+// Source: javap -c java.util.Random.nextBoolean / BitRandomSource.nextBoolean.
+func (r *LegacyRandomSource) NextBoolean() bool { return r.next(1) != 0 }
+
+// NextGaussian mirrors java.util.Random.nextGaussian — the Marsaglia polar method
+// with the cached second value. java.util.Random:
+//
+//	if (haveNextNextGaussian) { haveNextNextGaussian = false; return nextNextGaussian; }
+//	do {
+//	    v1 = 2 * nextDouble() - 1;
+//	    v2 = 2 * nextDouble() - 1;
+//	    s  = v1*v1 + v2*v2;
+//	} while (s >= 1 || s == 0);
+//	multiplier = StrictMath.sqrt(-2 * StrictMath.log(s) / s);
+//	nextNextGaussian = v2 * multiplier;
+//	haveNextNextGaussian = true;
+//	return v1 * multiplier;
+//
+// The FIRST call draws (in the common s<1 case) 2*nextDouble() = FOUR next() draws
+// (nextDouble is two draws each) and caches the second normal; the SECOND call
+// returns the cache with ZERO new draws. ClampedNormalInt consumes this.
+//
+// Source: javap -c java.util.Random.nextGaussian.
+func (r *LegacyRandomSource) NextGaussian() float64 {
+	if r.haveNextNextGaussian {
+		r.haveNextNextGaussian = false
+		return r.nextNextGaussian
+	}
+	var v1, v2, s float64
+	for {
+		v1 = 2*r.NextDouble() - 1
+		v2 = 2*r.NextDouble() - 1
+		s = v1*v1 + v2*v2
+		if s < 1 && s != 0 {
+			break
+		}
+	}
+	multiplier := math.Sqrt(-2 * math.Log(s) / s)
+	r.nextNextGaussian = v2 * multiplier
+	r.haveNextNextGaussian = true
+	return v1 * multiplier
 }
 
 // ConsumeCount advances the state by n draws (java.util.Random consumeCount draws
