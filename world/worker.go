@@ -60,15 +60,28 @@ type carvedChunk struct {
 	ch  *level.Chunk
 }
 
-// stagedChunk is a chunk held by the scheduler until its 3x3 neighborhood is carved.
-// carved=true once GenerateTerrain has produced its blocks; decorated=true after the
-// (no-op in Phase 10) Decorate pass promotes it to StatusFull and it is emitted. The
-// decorated flag guards double-decoration / double-emit.
+// stagedChunk is a chunk held by the scheduler until its 3x3 neighborhood is carved
+// and (D2 Option Y) every wanted neighbor that holds it is decorated. The three flags
+// are the Option-Y lifecycle:
+//
+//	carved=true    once GenerateTerrain has produced its blocks.
+//	decorated=true once the LIVE Decorate pass has run over its 3x3 (writing features
+//	               into THIS center AND into its neighbors). A decorated center may still
+//	               be written into by a neighbor center that has not yet decorated.
+//	emitted=true   once it is decorated AND every WANTED neighbor (a wanted center that
+//	               holds this center in its 3x3) is decorated — so NO further write can
+//	               land. Emit happens exactly once; after emit the chunk is the immutable
+//	               single-owner copy the tick holds and is never mutated again.
+//
+// Splitting decorated from emitted is the whole of Option Y (hold-until-neighborhood-
+// complete, complete-on-first-send, no re-send): the INVARIANT is a staged chunk is
+// written (decorated-into) only while decorated && !emitted.
 type stagedChunk struct {
 	pos       level.ChunkPos
 	chunk     *level.Chunk
 	carved    bool
 	decorated bool
+	emitted   bool
 }
 
 // NewWorker builds a worker. buf sizes both the bounded request channel and the
@@ -186,11 +199,12 @@ type loadResult struct {
 	fromRegion bool
 }
 
-// runScheduler is the NEW single goroutine that owns staging + requested + all
-// decoration (no locks -> -race clean by construction; threat T-10-05). It drains
-// w.carved: stages each carved chunk, auto-requests its 8 neighbors (guarded by the
-// requested set so a single Request(C) pulls C's 3x3 into existence exactly once),
-// and scans the up-to-9 centers this chunk could newly complete, decorating each.
+// runScheduler is the single goroutine that owns staging + requested + wanted + all
+// decoration AND the Option-Y emit gate (no locks -> -race clean by construction; threats
+// T-10-05 / T-11-07). It drains w.carved: stages each carved chunk, auto-requests its 8
+// neighbors (guarded by the requested set so a single Request(C) pulls C's 3x3 into
+// existence exactly once), and runs processRing — decorating the up-to-9 centers this chunk
+// could newly complete and emitting each only once all its wanted neighbors are decorated.
 func (w *Worker) runScheduler(ctx context.Context) {
 	for {
 		select {
@@ -207,7 +221,9 @@ func (w *Worker) runScheduler(ctx context.Context) {
 				w.wanted[key] = true
 				w.requestNeighbors(pos)
 			}
-			w.tryDecorate(ctx, pos)
+			// pos becoming wanted can both let it decorate AND change the emit-gate of its
+			// neighbors (it is now a wanted neighbor they must wait on), so process the ring.
+			w.processRing(ctx, pos)
 
 		case cc := <-w.carved:
 			key := packPos(cc.pos)
@@ -239,12 +255,42 @@ func (w *Worker) runScheduler(ctx context.Context) {
 			// Scan the up-to-9 centers this newly carved chunk could have completed, but only
 			// decorate WANTED centers (the tick asked for them); ring chunks are generated
 			// solely to satisfy a wanted center's 3x3 and are never decorated/emitted.
-			for dx := -1; dx <= 1; dx++ {
-				for dz := -1; dz <= 1; dz++ {
-					cp := level.ChunkPos{cc.pos[0] + int32(dx), cc.pos[1] + int32(dz)}
-					if w.wanted[packPos(cp)] {
-						w.tryDecorate(ctx, cp)
-					}
+			w.processRing(ctx, cc.pos)
+		}
+	}
+}
+
+// processRing tries to decorate every WANTED center in the 3x3 ring around pos (the
+// up-to-9 centers a newly-carved-or-wanted pos could have completed the 3x3 of), then runs
+// the emit gate over every center a decoration this turn could have unblocked. It is the
+// Option-Y driver: decorate-as-soon-as-carved, emit-once-all-wanted-neighbors-decorated.
+//
+// A decoration of center D unblocks the emit gate of D AND of D's wanted neighbors (D is a
+// wanted neighbor THEY were waiting on). So the emit pass must scan D's OWN 3x3 ring — which
+// reaches up to pos±2, beyond the decorate ring. tryDecorate records which centers newly
+// decorated this turn; the emit pass then scans each newly-decorated center's 3x3 (a
+// superset that includes the centers it could unblock). Both passes are idempotent (guarded
+// by the decorated/emitted flags). Scheduler-goroutine-only (no locks).
+func (w *Worker) processRing(ctx context.Context, pos level.ChunkPos) {
+	var newlyDecorated []level.ChunkPos
+	// Decorate pass: a wanted center whose own 3x3 is fully carved decorates now (writing
+	// features into its neighbors). Ring chunks are never decorated.
+	for dx := -1; dx <= 1; dx++ {
+		for dz := -1; dz <= 1; dz++ {
+			cp := level.ChunkPos{pos[0] + int32(dx), pos[1] + int32(dz)}
+			if w.wanted[packPos(cp)] && w.tryDecorate(cp) {
+				newlyDecorated = append(newlyDecorated, cp)
+			}
+		}
+	}
+	// Emit pass: for each center that decorated this turn, re-check the emit gate of it AND
+	// its wanted neighbors (its decoration may have been the last write they were waiting on).
+	for _, d := range newlyDecorated {
+		for dx := -1; dx <= 1; dx++ {
+			for dz := -1; dz <= 1; dz++ {
+				cp := level.ChunkPos{d[0] + int32(dx), d[1] + int32(dz)}
+				if w.wanted[packPos(cp)] {
+					w.tryEmit(ctx, cp)
 				}
 			}
 		}
@@ -273,16 +319,28 @@ func (w *Worker) requestNeighbors(pos level.ChunkPos) {
 
 // tryDecorate decorates `center` iff it is staged + carved + NOT decorated AND all 9 of
 // its neighborhood are staged + carved. It builds a Neighborhood (sized by w.gen.Dims())
-// over the 9 chunks, runs Decorate (Phase 10 no-op: promote-to-full, no writes), marks
-// the center decorated, and emits it EXACTLY ONCE. Order-independent (a SCAN, not a
-// counter), so the same seed produces identical seam results regardless of request order.
+// over the 9 chunks, runs the LIVE Decorate (which WRITES features into the center AND its
+// neighbors via the 3x3 proxy), and marks the center decorated. It does NOT emit — the
+// emit is gated separately by tryEmit (Option Y hold-until-neighborhood-complete).
 //
-// Runs ONLY on the scheduler goroutine (threat T-10-05 / Pitfall 2: decoration touches 9
-// chunks and must never run from a handle goroutine).
-func (w *Worker) tryDecorate(ctx context.Context, center level.ChunkPos) {
+// D2 RESOLVED — Option Y: a center decorates as soon as its own 3x3 is carved, so it can
+// write into its neighbors, but it is HELD (not emitted) until every wanted neighbor that
+// holds it is also decorated. Splitting decorate from emit is what makes the hold work;
+// the decorated && !emitted window is the only time a chunk is mutated. (See the objective:
+// each feature's rng is pure over (seed,origin,idx,step), so decorate order does not affect
+// the bytes — hold-then-emit is byte-deterministic regardless of which center decorated
+// first; the 5x5 reorder test pins it.)
+//
+// Order-independent (a SCAN, not a counter). Runs ONLY on the scheduler goroutine (threat
+// T-10-05 / Pitfall 2: decoration touches 9 chunks and must never run from a handle
+// goroutine).
+// It returns true iff it decorated center THIS call (so processRing can run the emit gate
+// over the centers this decoration could unblock); false if center was not ready or was
+// already decorated.
+func (w *Worker) tryDecorate(center level.ChunkPos) bool {
 	cs := w.staging[packPos(center)]
 	if cs == nil || !cs.carved || cs.decorated {
-		return
+		return false
 	}
 
 	chunks := make(map[int64]*level.Chunk, 9)
@@ -291,7 +349,7 @@ func (w *Worker) tryDecorate(ctx context.Context, center level.ChunkPos) {
 			np := level.ChunkPos{center[0] + int32(dx), center[1] + int32(dz)}
 			ns := w.staging[packPos(np)]
 			if ns == nil || !ns.carved {
-				return // neighborhood incomplete -> wait for the missing neighbor to carve
+				return false // neighborhood incomplete -> wait for the missing neighbor to carve
 			}
 			chunks[packPos(np)] = ns.chunk
 		}
@@ -299,15 +357,53 @@ func (w *Worker) tryDecorate(ctx context.Context, center level.ChunkPos) {
 
 	minY, height := w.gen.Dims()
 	view := newNeighborhood(center, chunks, minY, height)
-	w.gen.Decorate(view) // Phase 10: NO-OP body that promotes the center to StatusFull
+	w.gen.Decorate(view) // LIVE: writes features into the 3x3, promotes the center to StatusFull
 	cs.decorated = true
 	cs.chunk.Status = level.StatusFull
-	w.emit(ctx, ChunkResult{Pos: center, Chunk: cs.chunk})
+	// Do NOT emit here — the emit is gated by tryEmit until every wanted neighbor that holds
+	// this center is also decorated (no write lands after the immutable handoff).
+	return true
+}
 
-	// Keep cs in staging — center is still a neighbor of un-decorated centers. Phase 10's
-	// no-op Decorate writes nothing, so emit-and-keep is safe by construction (T-10-06).
-	// The feature phase (Phase 11+) MUST revisit the late-neighbor-write-after-emit rule
-	// (vanilla re-sends; Sulfur will choose resend-vs-hold) — Open Decision 2, DEFERRED.
+// tryEmit emits `center` iff it is decorated, NOT yet emitted, and every WANTED neighbor
+// of center (a wanted center in center's |dx|<=1,|dz|<=1 ring) is also decorated — meaning
+// no further wanted center will write into center (Option Y's hold-until-complete gate).
+// It emits EXACTLY ONCE (the emitted flag) and after emit the chunk is the immutable
+// single-owner copy the tick holds — never mutated again (the decorated && !emitted
+// invariant from stagedChunk).
+//
+// A center with NO wanted neighbors (an isolated request) emits as soon as it is itself
+// decorated. A non-wanted ring chunk never decorates, so it never gates any emit — the hold
+// cannot wedge on an un-requested chunk (threat T-11-09: no hold deadlock). Scheduler-only.
+func (w *Worker) tryEmit(ctx context.Context, center level.ChunkPos) {
+	cs := w.staging[packPos(center)]
+	if cs == nil || !cs.decorated || cs.emitted {
+		return
+	}
+	// Hold until every WANTED neighbor that holds this center in its 3x3 is decorated.
+	for dx := -1; dx <= 1; dx++ {
+		for dz := -1; dz <= 1; dz++ {
+			if dx == 0 && dz == 0 {
+				continue
+			}
+			np := level.ChunkPos{center[0] + int32(dx), center[1] + int32(dz)}
+			nk := packPos(np)
+			if !w.wanted[nk] {
+				continue // a non-wanted ring chunk never decorates -> never gates emit
+			}
+			ns := w.staging[nk]
+			if ns == nil || !ns.decorated {
+				return // a wanted neighbor still owes us its cross-border writes -> hold
+			}
+		}
+	}
+	cs.emitted = true
+	w.emit(ctx, ChunkResult{Pos: center, Chunk: cs.chunk})
+	// Keep cs in staging so it still serves as a carved/decorated neighbor for the remaining
+	// held centers' tryDecorate/tryEmit scans. It is emitted (immutable) now — never written
+	// again: every wanted neighbor that could write into it is already decorated (the gate
+	// above), and a non-wanted neighbor never decorates. This is the Option-Y no-write-after-
+	// emit guarantee (threat T-11-07).
 }
 
 // emit is the ctx-guarded send to w.results (the immutable single-owner handoff to the

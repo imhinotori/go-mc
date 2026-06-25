@@ -37,9 +37,12 @@ type Generator interface {
 	// target chunk, so terrain stays parallel + single-chunk.
 	GenerateTerrain(pos level.ChunkPos) *level.Chunk
 	// Decorate runs the post-carve pass over a 3x3 view, once all 8 neighbors of the
-	// view's center are carved. For Phase 10 this is a NO-OP body that only promotes the
-	// center to StatusFull (it writes NO blocks); the seam (staging/scheduler/proxy) is
-	// the deliverable and the late-neighbor-write-after-emit rule is DEFERRED to Phase 11+.
+	// view's center are carved. For NoiseGenerator it is the LIVE feature decoration
+	// (applyBiomeDecoration writes feature placements into the 3x3 + promotes the center to
+	// StatusFull); for Superflat it is a no-op (no features). The late-neighbor-write-after-
+	// emit rule is RESOLVED in the worker with Option Y (hold-until-neighborhood-complete):
+	// a center decorates as soon as its 3x3 is carved but is emitted only once every wanted
+	// neighbor that holds it is decorated, so no write lands after the immutable handoff.
 	Decorate(view *Neighborhood)
 	// Dims returns the generator's (minY, height) so the scheduler can size the
 	// Neighborhood proxy without re-deriving the chunk geometry.
