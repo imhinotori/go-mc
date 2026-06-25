@@ -6,6 +6,7 @@ import (
 
 	"github.com/imhinotori/sulfur/level"
 	levelbiome "github.com/imhinotori/sulfur/level/biome"
+	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/world/levelgen"
 	"github.com/imhinotori/sulfur/world/structure"
 )
@@ -110,6 +111,84 @@ func TestStructurePipelineNoBlocksYet(t *testing.T) {
 	// it just did not place).
 	if _, ok := g2.structCache.StartsCachedFor(center); !ok {
 		t.Fatalf("the structure pipeline did not run (no cached starts) for the emitting generator")
+	}
+}
+
+// desertPyramidSeed/Chunk: the world seed + owning chunk where the production NoiseGenerator
+// (real router + real GetBiome) places a desert pyramid (derived from the placement algorithm
+// + the desert-biome gate; see world/structure desert_pyramid_test). The pyramid's 21x21
+// footprint spans chunk (-58,32) + its +x/+z neighbors.
+const (
+	desertPyramidSeed   = int64(38)
+	desertPyramidChunkX = -58
+	desertPyramidChunkZ = 32
+)
+
+// countSandstone counts the sandstone-family blocks in a chunk (the pyramid's dominant
+// material) — a cheap "did a pyramid land here" probe over the real pipeline output.
+func countSandstone(ch *level.Chunk) int {
+	ids := map[block.StateID]bool{
+		block.ToStateID[block.Sandstone{}]:         true,
+		block.ToStateID[block.CutSandstone{}]:      true,
+		block.ToStateID[block.ChiseledSandstone{}]: true,
+	}
+	n := 0
+	for si := range ch.Sections {
+		s := &ch.Sections[si]
+		for i := 0; i < 4096; i++ {
+			if ids[s.GetBlock(i)] {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// TestDesertPyramidPlacesInPipeline: the FULL production pipeline (real router/biome/STARTS/
+// REFERENCES/PLACE) places the seed-38 desert pyramid into its owning chunk — the decorated
+// chunk holds a large sandstone mass that an adjacent non-structure chunk does not. Proves the
+// PLACE hook is wired end-to-end (STRUCT-01 + STRUCT-02 shaken down on one real structure).
+func TestDesertPyramidPlacesInPipeline(t *testing.T) {
+	g := NewNoiseGenerator(desertPyramidSeed, testSecs, testMinY)
+	owner := decorateChunkVia(g, level.ChunkPos{desertPyramidChunkX, desertPyramidChunkZ})
+
+	got := countSandstone(owner)
+	if got < 200 {
+		t.Fatalf("owning chunk (%d,%d) holds only %d sandstone blocks — the pyramid did not place via the pipeline", desertPyramidChunkX, desertPyramidChunkZ, got)
+	}
+
+	// A chunk far from the pyramid (and not a structure chunk) holds essentially no sandstone
+	// shell — confirming the mass above is the pyramid, not ambient terrain.
+	far := countSandstone(decorateChunkVia(NewNoiseGenerator(desertPyramidSeed, testSecs, testMinY), level.ChunkPos{desertPyramidChunkX + 4, desertPyramidChunkZ + 4}))
+	if far >= got {
+		t.Fatalf("far chunk sandstone (%d) >= pyramid chunk (%d): the mass is not the pyramid", far, got)
+	}
+}
+
+// TestDesertPyramidCrossChunkIdempotent: the seed-38 pyramid spans multiple chunks. Decorating
+// the SAME owning chunk twice through the real pipeline yields byte-identical output (the
+// re-derivable piece RNG + position-clipped writes make the placement order-independent and
+// non-duplicating, Pitfall #2). Also decorate an overlapping neighbor and confirm it receives
+// its own slice of the pyramid (sandstone present there too) without disturbing determinism.
+func TestDesertPyramidCrossChunkIdempotent(t *testing.T) {
+	owner := level.ChunkPos{desertPyramidChunkX, desertPyramidChunkZ}
+
+	var a, b bytes.Buffer
+	if _, err := decorateChunkVia(NewNoiseGenerator(desertPyramidSeed, testSecs, testMinY), owner).WriteTo(&a); err != nil {
+		t.Fatalf("decorate run A: %v", err)
+	}
+	if _, err := decorateChunkVia(NewNoiseGenerator(desertPyramidSeed, testSecs, testMinY), owner).WriteTo(&b); err != nil {
+		t.Fatalf("decorate run B: %v", err)
+	}
+	if !bytes.Equal(a.Bytes(), b.Bytes()) {
+		t.Fatalf("re-decorating the pyramid owner produced different bytes (%d vs %d) — placement not idempotent", a.Len(), b.Len())
+	}
+
+	// The +x neighbor (-57,32) overlaps the pyramid footprint (bbox x reaches -908, i.e. chunk
+	// -57); it must receive its own sandstone slice via the REFERENCES+clip, not the owner's.
+	neighbor := decorateChunkVia(NewNoiseGenerator(desertPyramidSeed, testSecs, testMinY), level.ChunkPos{desertPyramidChunkX + 1, desertPyramidChunkZ})
+	if countSandstone(neighbor) == 0 {
+		t.Fatalf("overlapping neighbor (%d,%d) received no pyramid slice — cross-chunk references+clip failed", desertPyramidChunkX+1, desertPyramidChunkZ)
 	}
 }
 

@@ -136,6 +136,15 @@ func NewNoiseGenerator(seed int64, secs, minY int) *NoiseGenerator {
 	biomeAt := func(wx, wy, wz int) levelbiome.Type { return bs.GetBiome(wx, wy, wz) }
 	structCache := structure.NewCache(sampler, biomeAt)
 
+	// STRUCT-02: register the desert_pyramid StartGenerator (the first true structure). It
+	// loads the embedded structure_set (salt 14357617 placement) + has_structure biome tag
+	// ({desert}); a build-data error is an asset bug (panic, like the loads above). 14-03 adds
+	// the remaining temples to a composite StartGenerator.
+	desertGen, err := structure.NewDesertPyramidStartGen()
+	if err != nil {
+		panic("world: NoiseGenerator: build desert pyramid start generator: " + err.Error())
+	}
+
 	return &NoiseGenerator{
 		seed:        seed,
 		secs:        secs,
@@ -148,7 +157,7 @@ func NewNoiseGenerator(seed int64, secs, minY int) *NoiseGenerator {
 		rep:         rep,
 		deco:        deco,
 		structCache: structCache,
-		structGen:   structure.NoopStartGenerator(),
+		structGen:   desertGen,
 		air:         block.ToStateID[block.Air{}],
 	}
 }
@@ -331,13 +340,13 @@ func (g *NoiseGenerator) placeStructures(view *Neighborhood) {
 	// start owned up to 8 chunks out reaching C is found (not a radius-1 truncation).
 	g.structCache.ComputeReferences(g.seed, center, g.structGen, minY, height)
 
-	// (c) PLACE — EMPTY hook (14-02 fills it). With the inert StartGenerator there are no
-	// starts to gather and nothing to write, so the chunk bytes are unchanged.
-	//
-	// 14-02 will be:
-	//   for _, st := range g.structCache.StartsForChunk(center) {
-	//       placeInChunk(view, st, structure.WritableArea(center, minY, height))
-	//   }
+	// (c) PLACE (14-02, FILLED): gather C's own + referenced starts (StartsForChunk) and
+	// placeInChunk each into C's writable column. Each piece is written CLIPPED to C's 16x16
+	// slice (placeBlock's box.IsInside guard) AND to the 3x3 Neighborhood window (the
+	// Neighborhood drops out-of-3x3 writes) — so a chunk-spanning pyramid is placed once per
+	// overlapping chunk, idempotently (the piece RNG is re-derivable over (seed,ownerChunk),
+	// Pitfall #2). Structures overwrite terrain + features (vanilla FEATURES order).
+	g.structCache.PlaceStructures(view, center, g.seed, minY, height)
 }
 
 // Dims returns the generator's (minY, height) so the worker can size the Neighborhood
