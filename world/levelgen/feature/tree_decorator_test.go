@@ -169,15 +169,18 @@ func TestTrunkVineDecorator(t *testing.T) {
 	assertMapWorldsEqual(t, mw, mw2)
 }
 
-// TestParseTreeDecoratorUnported asserts the special-biome decorators STILL error -> 13-03.
+// TestParseTreeDecoratorUnported asserts the special-biome decorators are now PORTED (13-03
+// closed the deferred path): attached_to_leaves/pale_moss/creaking_heart all decode. The name
+// is retained from 13-02; there is no remaining unported tree-decorator arm for any
+// generatable overworld config.
 func TestParseTreeDecoratorUnported(t *testing.T) {
 	for _, raw := range []string{
-		`{"type":"minecraft:attached_to_leaves","probability":0.1,"exclusion_radius_xz":1,"exclusion_radius_y":1,"required_empty_blocks":2,"block_provider":{"type":"minecraft:simple_state_provider","state":{"Name":"minecraft:mangrove_propagule"}},"directions":["down"]}`,
-		`{"type":"minecraft:pale_moss"}`,
-		`{"type":"minecraft:creaking_heart"}`,
+		`{"type":"minecraft:attached_to_leaves","probability":0.14,"exclusion_radius_xz":1,"exclusion_radius_y":0,"required_empty_blocks":2,"block_provider":{"type":"minecraft:randomized_int_state_provider","property":"age","source":{"type":"minecraft:simple_state_provider","state":{"Name":"minecraft:mangrove_propagule","Properties":{"age":"0","hanging":"true","stage":"0","waterlogged":"false"}}},"values":{"type":"minecraft:uniform","min_inclusive":0,"max_inclusive":4}},"directions":["down"]}`,
+		`{"type":"minecraft:pale_moss","ground_probability":0.8,"leaves_probability":0.15,"trunk_probability":0.4}`,
+		`{"type":"minecraft:creaking_heart","probability":1.0}`,
 	} {
-		if _, err := ParseTreeDecorator(json.RawMessage(raw)); err == nil || !contains(err.Error(), "13-03") {
-			t.Fatalf("ParseTreeDecorator(%s) = %v, want loud unported error -> 13-03", raw, err)
+		if _, err := ParseTreeDecorator(json.RawMessage(raw)); err != nil {
+			t.Fatalf("ParseTreeDecorator(%s) = %v, want a PORTED special decorator (13-03)", raw, err)
 		}
 	}
 }

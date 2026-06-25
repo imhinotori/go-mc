@@ -69,20 +69,15 @@ func treeBody(
 
 	origin := feature.TreePos{X: pos.X, Y: pos.Y, Z: pos.Z}
 
-	// TreeFeature.place: draw the trunk height (getTreeHeight — the TWO nextInt draws),
-	// then clamp it to the free space the footprint scan finds (getMaxFreeTreeHeight). The
-	// height draw happens BEFORE the scan (jar order) so the rng sequence is correct even
-	// when the scan aborts.
+	// TreeFeature.place: draw the trunk height (getTreeHeight — the TWO nextInt draws), then
+	// hand off to PlaceTree, which runs the EXACT jar doPlace order — foliageHeight,
+	// foliageRadius, trunk_offset_y (root placer), the footprint scan (getMaxFreeTreeHeight),
+	// then roots -> trunk -> foliage -> decorators. PlaceTree internalises the scan so the
+	// trunk_offset_y draw sits between foliageRadius and the scan (the jar order); it aborts
+	// (no blocks placed) when the clamped free height is below minTreeHeight — the draws have
+	// already happened (jar-faithful), so the selector's per-feature seed is unaffected.
 	treeHeight := cfg.TrunkHeight(rng)
-	freeHeight := maxFreeTreeHeight(read, cfg, origin, treeHeight)
-	if freeHeight < minTreeHeight {
-		// Not enough vertical room for even a stub tree — abort the whole tree (no partial
-		// placement). The height draw already happened (jar-faithful); the selector's
-		// per-feature seed is unaffected.
-		return false
-	}
-
-	return feature.PlaceTree(set, read, rng, cfg, treeHeight, freeHeight, origin)
+	return feature.PlaceTree(set, read, rng, cfg, treeHeight, minTreeHeight, origin)
 }
 
 // minTreeHeight is the conservative floor below which the body declines to place a tree
@@ -90,31 +85,3 @@ func treeBody(
 // for the strict case; the overworld trees always have full room on flat ground, so this
 // floor only triggers against a ceiling/overhang — where a no-tree is the right outcome.
 const minTreeHeight = 2
-
-// maxFreeTreeHeight ports TreeFeature.getMaxFreeTreeHeight: scan from the base up to
-// treeHeight+1 layers; at each layer the trunk footprint is a (2*size+1)^2 square where
-// size = minimum_size.getSizeAtLayer(treeHeight, depth). The scan returns the number of
-// free layers below the FIRST blocked one (capped at treeHeight). A position is "free" if
-// the existing block is air-or-replaceable (the conservative validTreePos test, 12-02
-// precedent — never a false-positive over solid ground). The scan reads the live view
-// only (NO rng — it is a pure read scan, matching the jar).
-func maxFreeTreeHeight(read feature.ReadFn, cfg *feature.TreeConfiguration, origin feature.TreePos, treeHeight int) int {
-	for depth := 0; depth <= treeHeight+1; depth++ {
-		size := cfg.SizeAtLayer(treeHeight, depth)
-		baseY := origin.Y + depth
-		for dx := -size; dx <= size; dx++ {
-			for dz := -size; dz <= size; dz++ {
-				if !cfg.PosFree(read, feature.TreePos{X: origin.X + dx, Y: baseY, Z: origin.Z + dz}) {
-					// The first blocked layer caps the free height at `depth` (the layers
-					// below it). TreeFeature returns depth-1 as the usable trunk height
-					// when depth < treeHeight, else treeHeight.
-					if depth >= treeHeight {
-						return treeHeight
-					}
-					return depth - 1
-				}
-			}
-		}
-	}
-	return treeHeight
-}

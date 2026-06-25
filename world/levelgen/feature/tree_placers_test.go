@@ -53,14 +53,15 @@ func TestCommonOverworldTreeConfigsDecode(t *testing.T) {
 			t.Fatalf("COMMON tree %s must decode, got: %v", id, err)
 		}
 	}
-	// the special-biome trees STILL error -> 13-03 (their placers are not ported here).
+	// The special-biome trees are now ALSO ported (13-03) — the full guard is
+	// TestAllOverworldTreeConfigsDecode (tree_special_test.go). Spot-check the four here.
 	for _, id := range []string{"cherry", "mangrove", "tall_mangrove", "azalea_tree"} {
 		cf, err := reg.ResolveConfigured("minecraft:" + id)
 		if err != nil {
-			continue // not all may be embedded; the ones that are must error
+			t.Fatalf("resolve special %s: %v", id, err)
 		}
-		if _, err := ParseTreeConfiguration(cf.Config.Raw); err == nil {
-			t.Fatalf("SPECIAL tree %s must STILL error (-> 13-03), but decoded", id)
+		if _, err := ParseTreeConfiguration(cf.Config.Raw); err != nil {
+			t.Fatalf("SPECIAL tree %s must now decode (13-03 ported it), got: %v", id, err)
 		}
 	}
 }

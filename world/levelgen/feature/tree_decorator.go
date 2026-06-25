@@ -107,8 +107,12 @@ func ParseTreeDecorator(raw json.RawMessage) (TreeDecorator, error) {
 		return LeaveVineDecorator{probability: float32(*j.Probability)}, nil
 	case "trunk_vine":
 		return TrunkVineDecorator{}, nil
-	case "attached_to_leaves", "pale_moss", "creaking_heart":
-		return nil, fmt.Errorf("feature: unported tree decorator type %q (ported in 13-03)", j.Type)
+	case "attached_to_leaves":
+		return parseAttachedToLeavesDecorator(raw)
+	case "pale_moss":
+		return parsePaleMossDecorator(raw)
+	case "creaking_heart":
+		return parseCreakingHeartDecorator(raw)
 	default:
 		return nil, fmt.Errorf("feature: unknown tree decorator type %q", j.Type)
 	}

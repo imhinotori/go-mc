@@ -138,6 +138,69 @@ func (p RuleBasedStateProvider) GetState(rng levelgen.RandomSource, x, y, z int)
 	return p.fallback.GetState(rng, x, y, z)
 }
 
+// ---- RandomizedIntStateProvider (randomized_int_state_provider) ----
+
+// RandomizedIntStateProvider is RandomizedIntStateProvider: it draws the source provider's
+// state, then randomizes ONE int property (e.g. mangrove_propagule `age` 0..4) via an
+// IntProvider draw. getState = source.getState(rng) (its draws) then values.sample(rng) then
+// state.setValue(property, value). The two-stage draw order is the determinism contract
+// (T-13-15). Setting the property re-resolves {Name, sourceProps + property=value}; the source
+// is a simple_state_provider in the data, so we keep its literal {Name,Properties} for the
+// re-resolution.
+//
+// Source: javap -c RandomizedIntStateProvider.getState.
+type RandomizedIntStateProvider struct {
+	source      BlockStateProvider
+	property    string
+	values      intProvider // the in-package IntProvider (tree.go: constant/uniform/weighted_list)
+	sourceName  string
+	sourceProps map[string]string
+}
+
+// GetState ports RandomizedIntStateProvider.getState: draw the source state (for its draw
+// count), draw the int value, then re-resolve the source {Name,Properties} with `property`
+// overridden. The source-state draw is consumed even though the re-resolution rebuilds from
+// the literal source name/props (the draws must stay in lockstep).
+func (p RandomizedIntStateProvider) GetState(rng levelgen.RandomSource, x, y, z int) block.StateID {
+	_ = p.source.GetState(rng, x, y, z) // consume the source draw (jar order)
+	v := p.values.sample(rng)
+	props := make(map[string]string, len(p.sourceProps)+1)
+	for k, val := range p.sourceProps {
+		props[k] = val
+	}
+	props[p.property] = intToString(v)
+	sid, err := resolveBlockState(blockStateJSON{Name: p.sourceName, Properties: props})
+	if err != nil {
+		// An out-of-range property value re-resolution failing is a build-data corruption;
+		// fall back to the un-randomized source state (never panics mid-decoration).
+		return p.source.GetState(rng, x, y, z)
+	}
+	return sid
+}
+
+// intToString is a tiny non-negative int -> decimal string (property values; age 0..4).
+func intToString(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	var b [12]byte
+	i := len(b)
+	for n > 0 {
+		i--
+		b[i] = byte('0' + n%10)
+		n /= 10
+	}
+	if neg {
+		i--
+		b[i] = '-'
+	}
+	return string(b[i:])
+}
+
 // identityStateProvider is the implicit fallback for a rule_based provider with NO
 // `fallback` field (the 26.2 tree below_trunk_providers): it yields the EXISTING block
 // (a no-change). Its GetState is unreachable when bound via RuleBasedStateProvider (which
@@ -418,10 +481,61 @@ func ParseProvider(raw json.RawMessage) (BlockStateProvider, error) {
 		}
 		return dp, nil
 
+	case "randomized_int_state_provider":
+		return parseRandomizedIntStateProvider(raw)
+
 	default:
 		return nil, fmt.Errorf("feature: unported block state provider type %q "+
-			"(noise_threshold_provider/rotated_block_provider/randomized_int_state_provider deferred to Phase 13)", j.Type)
+			"(noise_threshold_provider/rotated_block_provider deferred)", j.Type)
 	}
+}
+
+// parseRandomizedIntStateProvider decodes a randomized_int_state_provider envelope: the
+// inner `source` provider (a simple_state_provider in the data), the `property` to randomize,
+// and the `values` IntProvider. It captures the source's literal {Name,Properties} so GetState
+// can re-resolve with the property overridden.
+func parseRandomizedIntStateProvider(raw json.RawMessage) (BlockStateProvider, error) {
+	var j struct {
+		Property string          `json:"property"`
+		Source   json.RawMessage `json:"source"`
+		Values   json.RawMessage `json:"values"`
+	}
+	if err := json.Unmarshal(raw, &j); err != nil {
+		return nil, fmt.Errorf("feature: randomized_int_state_provider: %w", err)
+	}
+	if j.Property == "" {
+		return nil, fmt.Errorf("feature: randomized_int_state_provider missing property")
+	}
+	src, err := ParseProvider(j.Source)
+	if err != nil {
+		return nil, fmt.Errorf("feature: randomized_int_state_provider source: %w", err)
+	}
+	// Capture the source's literal {Name,Properties} (the source is simple_state_provider).
+	var srcEnv struct {
+		Type  string         `json:"type"`
+		State blockStateJSON `json:"state"`
+	}
+	if err := json.Unmarshal(j.Source, &srcEnv); err != nil {
+		return nil, fmt.Errorf("feature: randomized_int_state_provider source state: %w", err)
+	}
+	if stripNS(srcEnv.Type) != "simple_state_provider" {
+		return nil, fmt.Errorf("feature: randomized_int_state_provider source must be simple_state_provider, got %q", srcEnv.Type)
+	}
+	vals, err := parseIntProvider(j.Values)
+	if err != nil {
+		return nil, fmt.Errorf("feature: randomized_int_state_provider values: %w", err)
+	}
+	props := map[string]string{}
+	for k, v := range srcEnv.State.Properties {
+		props[k] = v
+	}
+	return RandomizedIntStateProvider{
+		source:      src,
+		property:    j.Property,
+		values:      vals,
+		sourceName:  srcEnv.State.Name,
+		sourceProps: props,
+	}, nil
 }
 
 // parseNoiseProvider builds the shared NoiseProvider core (noise + scale + states)

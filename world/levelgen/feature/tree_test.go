@@ -267,36 +267,30 @@ func TestParseTreeConfigurationBirch(t *testing.T) {
 	}
 }
 
-// TestParseTrunkPlacerUnported asserts the SPECIAL-biome placers STILL error LOUDLY pointing
-// at 13-03 (the common roster — fancy/forking/dark_oak/giant/mega_jungle + their foliage —
-// is now ported and asserted by the per-placer tests). cherry/bending/upwards trunk +
-// random_spread/cherry foliage stay routed to 13-03.
+// TestParseTrunkPlacerUnported asserts the special-biome placers are now PORTED (13-03 closed
+// the deferred path): cherry/bending/upwards trunk + random_spread/cherry foliage decode with
+// their full embedded configs, and the common roster (fancy/forking/dark_oak/giant/mega_jungle
+// + their foliage) still resolves. The name is retained from 13-02; there is no remaining
+// unported tree-placer arm for any generatable overworld config.
 func TestParseTrunkPlacerUnported(t *testing.T) {
-	cases := []struct {
-		raw  string
-		want string // substring the error must mention
-	}{
-		{`{"type":"minecraft:cherry_trunk_placer","base_height":7,"height_rand_a":1,"height_rand_b":0}`, "13-03"},
-		{`{"type":"minecraft:bending_trunk_placer","base_height":7,"height_rand_a":1,"height_rand_b":0}`, "13-03"},
-		{`{"type":"minecraft:upwards_branching_trunk_placer","base_height":7,"height_rand_a":1,"height_rand_b":0}`, "13-03"},
-	}
-	for _, c := range cases {
-		_, err := parseTrunkPlacer(json.RawMessage(c.raw))
-		if err == nil {
-			t.Fatalf("parseTrunkPlacer(%s) = nil error, want loud unported error", c.raw)
-		}
-		if !contains(err.Error(), c.want) {
-			t.Fatalf("parseTrunkPlacer(%s) error %q does not mention %q", c.raw, err.Error(), c.want)
+	// the special-biome trunk placers now DECODE with their full configs (13-03 ported them).
+	for _, raw := range []string{
+		`{"type":"minecraft:cherry_trunk_placer","base_height":7,"height_rand_a":1,"height_rand_b":0,"branch_count":{"type":"minecraft:weighted_list","distribution":[{"data":1,"weight":1},{"data":2,"weight":1},{"data":3,"weight":1}]},"branch_horizontal_length":{"type":"minecraft:uniform","min_inclusive":2,"max_inclusive":4},"branch_start_offset_from_top":{"min_inclusive":-4,"max_inclusive":-3},"branch_end_offset_from_top":{"type":"minecraft:uniform","min_inclusive":-1,"max_inclusive":0}}`,
+		`{"type":"minecraft:bending_trunk_placer","base_height":4,"height_rand_a":2,"height_rand_b":0,"min_height_for_leaves":3,"bend_length":{"type":"minecraft:uniform","min_inclusive":1,"max_inclusive":2}}`,
+		`{"type":"minecraft:upwards_branching_trunk_placer","base_height":2,"height_rand_a":1,"height_rand_b":4,"extra_branch_steps":{"type":"minecraft:uniform","min_inclusive":1,"max_inclusive":4},"extra_branch_length":{"type":"minecraft:uniform","min_inclusive":0,"max_inclusive":1},"place_branch_per_log_probability":0.5,"can_grow_through":"#minecraft:mangrove_logs_can_grow_through"}`,
+	} {
+		if _, err := parseTrunkPlacer(json.RawMessage(raw)); err != nil {
+			t.Fatalf("parseTrunkPlacer(%s) = %v, want a PORTED special placer (13-03)", raw, err)
 		}
 	}
 
-	// the special-biome foliage placers STILL error -> 13-03.
+	// the special-biome foliage placers now DECODE (13-03 ported them).
 	for _, raw := range []string{
-		`{"type":"minecraft:random_spread_foliage_placer","radius":3,"offset":1,"foliage_height":3}`,
-		`{"type":"minecraft:cherry_foliage_placer","radius":4,"offset":0,"height":5}`,
+		`{"type":"minecraft:random_spread_foliage_placer","radius":3,"offset":0,"foliage_height":2,"leaf_placement_attempts":70}`,
+		`{"type":"minecraft:cherry_foliage_placer","radius":4,"offset":0,"height":5,"wide_bottom_layer_hole_chance":0.25,"corner_hole_chance":0.25,"hanging_leaves_chance":0.16666667,"hanging_leaves_extension_chance":0.33333334}`,
 	} {
-		if _, err := parseFoliagePlacer(json.RawMessage(raw)); err == nil || !contains(err.Error(), "13-03") {
-			t.Fatalf("parseFoliagePlacer(%s) = %v, want loud unported error -> 13-03", raw, err)
+		if _, err := parseFoliagePlacer(json.RawMessage(raw)); err != nil {
+			t.Fatalf("parseFoliagePlacer(%s) = %v, want a PORTED special placer (13-03)", raw, err)
 		}
 	}
 
@@ -318,42 +312,44 @@ func TestParseTrunkPlacerUnported(t *testing.T) {
 }
 
 // TestRootPlacerFieldOptional asserts a config WITHOUT root_placer decodes with rootPlacer
-// nil, and ParseRootPlacer on mangrove_root_placer errors loudly (the field + hook are
-// wired here; 13-03 fills the body).
+// nil, and the mangrove_root_placer now decodes to a real MangroveRootPlacer (13-03 ported the
+// RootPlacer subsystem; the optional field + hook from 13-01 are now filled).
 func TestRootPlacerFieldOptional(t *testing.T) {
 	// Absent -> nil, no error.
 	rp, err := parseRootPlacer(nil)
 	if err != nil || rp != nil {
 		t.Fatalf("parseRootPlacer(absent) = (%v, %v), want (nil, nil)", rp, err)
 	}
-	// mangrove_root_placer -> loud unported error pointing at 13-03.
-	_, err = parseRootPlacer(json.RawMessage(`{"type":"minecraft:mangrove_root_placer"}`))
-	if err == nil {
-		t.Fatalf("parseRootPlacer(mangrove) = nil error, want loud unported error")
+	// mangrove_root_placer -> a real MangroveRootPlacer (from the embedded mangrove config).
+	mr, err := parseRootPlacer(rawRootPlacer(t, "mangrove"))
+	if err != nil {
+		t.Fatalf("parseRootPlacer(mangrove) = %v, want a ported MangroveRootPlacer", err)
 	}
-	if !contains(err.Error(), "13-03") {
-		t.Fatalf("parseRootPlacer(mangrove) error %q does not mention 13-03", err.Error())
+	if _, ok := mr.(*MangroveRootPlacer); !ok {
+		t.Fatalf("parseRootPlacer(mangrove) = %T, want *MangroveRootPlacer", mr)
 	}
 }
 
 // PlaceTree must no-op the root placer when nil (oak/birch) and place the trunk+foliage.
-// It also proves PlaceTree's freeHeight<=0 guard (no room -> nothing placed).
+// It also proves PlaceTree's minFree floor (no room -> nothing placed). PlaceTree now runs
+// the footprint scan internally; a minFree above the achievable free height aborts (the
+// jar doPlace order: foliage draws -> trunk_offset_y -> scan -> roots -> trunk).
 func TestPlaceTreeRootHookNoOp(t *testing.T) {
 	cfg := oakConfig(t)
 	mw := newMapWorld()
 	cfg = cfg.BelowTrunkWithExisting(mw.read)
 	origin := TreePos{X: 4, Y: 64, Z: 4}
 
-	// freeHeight 0 -> nothing.
-	if PlaceTree(mw.set, mw.read, levelgen.NewWorldgenRandom(1), cfg, 5, 0, origin) {
-		t.Fatalf("PlaceTree with freeHeight 0 placed something")
+	// minFree above the clear-world free height (treeHeight 5) -> nothing placed.
+	if PlaceTree(mw.set, mw.read, levelgen.NewWorldgenRandom(1), cfg, 5, 100, origin) {
+		t.Fatalf("PlaceTree with minFree above the achievable height placed something")
 	}
 	if len(mw.blocks) != 0 {
-		t.Fatalf("PlaceTree with freeHeight 0 wrote %d blocks", len(mw.blocks))
+		t.Fatalf("PlaceTree with unmet minFree wrote %d blocks", len(mw.blocks))
 	}
 
-	// freeHeight 5 -> trunk + foliage; rootPlacer nil means no root blocks / no panic.
-	if !PlaceTree(mw.set, mw.read, levelgen.NewWorldgenRandom(1), cfg, 5, 5, origin) {
+	// minFree 2 -> trunk + foliage; rootPlacer nil means no root blocks / no panic.
+	if !PlaceTree(mw.set, mw.read, levelgen.NewWorldgenRandom(1), cfg, 5, 2, origin) {
 		t.Fatalf("PlaceTree placed nothing for a valid tree")
 	}
 	oakLog := block.ToStateID[block.OakLog{Axis: block.Y}]

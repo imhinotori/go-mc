@@ -305,8 +305,12 @@ func parseTrunkPlacer(raw json.RawMessage) (TrunkPlacer, error) {
 		return GiantTrunkPlacer{trunkPlacerBase: base}, nil
 	case "mega_jungle_trunk_placer":
 		return MegaJungleTrunkPlacer{GiantTrunkPlacer{trunkPlacerBase: base}}, nil
-	case "bending_trunk_placer", "cherry_trunk_placer", "upwards_branching_trunk_placer":
-		return nil, fmt.Errorf("feature: unported trunk_placer type %q (ported in 13-03)", j.Type)
+	case "cherry_trunk_placer":
+		return parseCherryTrunkPlacer(base, raw)
+	case "upwards_branching_trunk_placer":
+		return parseUpwardsBranchingTrunkPlacer(base, raw)
+	case "bending_trunk_placer":
+		return parseBendingTrunkPlacer(base, raw)
 	default:
 		return nil, fmt.Errorf("feature: unknown trunk_placer type %q", j.Type)
 	}
@@ -569,9 +573,9 @@ func parseFoliagePlacer(raw json.RawMessage) (FoliagePlacer, error) {
 		}
 		return MegaPineFoliagePlacer{foliagePlacerBase: base, crownHeight: ch}, nil
 	case "random_spread_foliage_placer":
-		return nil, fmt.Errorf("feature: unported foliage_placer type %q (ported in 13-03)", j.Type)
+		return parseRandomSpreadFoliagePlacer(base, raw)
 	case "cherry_foliage_placer":
-		return nil, fmt.Errorf("feature: unported foliage_placer type %q (ported in 13-03)", j.Type)
+		return parseCherryFoliagePlacer(base, raw)
 	default:
 		return nil, fmt.Errorf("feature: unknown foliage_placer type %q", j.Type)
 	}
@@ -616,6 +620,37 @@ func (p uniformIntProvider) sample(rng levelgen.RandomSource) int {
 	return p.min + int(rng.NextIntN(int32(p.max-p.min+1)))
 }
 
+// weightedListIntEntry is one (provider, weight) of a WeightedListInt's distribution.
+type weightedListIntEntry struct {
+	provider intProvider
+	weight   int
+}
+
+// weightedListIntProvider is WeightedListInt (cherry's branch_count): sample draws ONCE
+// (WeightedList.getRandom -> nextInt(totalWeight) + cumulative walk in ENTRY ORDER) to pick
+// an inner IntProvider, then samples it. The cherry branch_count entries are bare ints
+// (constant -> 0 inner draws), so the net draw is one nextInt(totalWeight). The entry order
+// + the single-draw cumulative walk are the determinism contract.
+//
+// Source: javap -c WeightedListInt.sample -> WeightedList.getRandom.
+type weightedListIntProvider struct {
+	entries     []weightedListIntEntry
+	totalWeight int
+}
+
+// sample ports WeightedListInt.sample: nextInt(totalWeight), walk the cumulative weight in
+// entry order, then sample the chosen inner provider.
+func (p weightedListIntProvider) sample(rng levelgen.RandomSource) int {
+	i := int(rng.NextIntN(int32(p.totalWeight)))
+	for _, e := range p.entries {
+		i -= e.weight
+		if i < 0 {
+			return e.provider.sample(rng)
+		}
+	}
+	return p.entries[len(p.entries)-1].provider.sample(rng)
+}
+
 // parseIntProvider decodes the bare-int OR {type:constant,value} OR
 // {type:uniform,min_inclusive,max_inclusive} IntProvider forms. A bare int -> constant.
 // Other provider types (biased_to_bottom/clamped/weighted_list) are not used by the common
@@ -633,6 +668,10 @@ func parseIntProvider(raw json.RawMessage) (intProvider, error) {
 		Value        *int   `json:"value"`
 		MinInclusive *int   `json:"min_inclusive"`
 		MaxInclusive *int   `json:"max_inclusive"`
+		Distribution []struct {
+			Data   json.RawMessage `json:"data"`
+			Weight int             `json:"weight"`
+		} `json:"distribution"`
 	}
 	if err := json.Unmarshal(raw, &obj); err != nil {
 		return nil, fmt.Errorf("not a bare int or int provider: %w", err)
@@ -648,6 +687,25 @@ func parseIntProvider(raw json.RawMessage) (intProvider, error) {
 			return nil, fmt.Errorf("uniform int provider missing min/max_inclusive")
 		}
 		return uniformIntProvider{min: *obj.MinInclusive, max: *obj.MaxInclusive}, nil
+	case "weighted_list":
+		// cherry's branch_count: a weighted list of inner IntProviders (here bare-int
+		// constants). One draw to pick + the inner provider's draws.
+		if len(obj.Distribution) == 0 {
+			return nil, fmt.Errorf("weighted_list int provider has no distribution")
+		}
+		wp := weightedListIntProvider{}
+		for _, e := range obj.Distribution {
+			inner, err := parseIntProvider(e.Data)
+			if err != nil {
+				return nil, fmt.Errorf("weighted_list int provider entry: %w", err)
+			}
+			if e.Weight <= 0 {
+				return nil, fmt.Errorf("weighted_list int provider entry has non-positive weight %d", e.Weight)
+			}
+			wp.entries = append(wp.entries, weightedListIntEntry{provider: inner, weight: e.Weight})
+			wp.totalWeight += e.Weight
+		}
+		return wp, nil
 	default:
 		return nil, fmt.Errorf("unported int provider type %q", obj.Type)
 	}
@@ -661,9 +719,14 @@ func parseIntProvider(raw json.RawMessage) (intProvider, error) {
 // the struct. placeRoots places the roots and returns the (possibly shifted) trunk origin
 // + whether placement may continue.
 type RootPlacer interface {
-	// placeRoots places the root system at origin and returns the trunk origin (shifted
-	// up by trunk_offset_y for mangrove) + whether the tree may continue.
-	placeRoots(set SetBlockFn, read ReadFn, rng levelgen.RandomSource, origin TreePos, cfg *TreeConfiguration) (TreePos, bool)
+	// getTrunkOrigin ports RootPlacer.getTrunkOrigin: pos.above(trunk_offset_y.sample(rng)).
+	// The jar samples this BEFORE the validity scan (the trunk grows from the shifted
+	// origin); placeRoots then runs AFTER the scan at the ORIGINAL pos. ONE IntProvider draw.
+	getTrunkOrigin(rng levelgen.RandomSource, pos TreePos) TreePos
+	// placeRoots places the root system growing DOWN from `pos` (the original anchor, NOT
+	// the shifted trunk origin) and returns whether the tree may continue. Called AFTER the
+	// validity scan (jar doPlace order). Draws per the root simulation.
+	placeRoots(set SetBlockFn, read ReadFn, rng levelgen.RandomSource, pos, trunkOrigin TreePos, cfg *TreeConfiguration) bool
 }
 
 // parseRootPlacer decodes an OPTIONAL root_placer envelope. Returns (nil, nil) when the
@@ -681,7 +744,7 @@ func parseRootPlacer(raw json.RawMessage) (RootPlacer, error) {
 	}
 	switch stripNS(j.Type) {
 	case "mangrove_root_placer":
-		return nil, fmt.Errorf("feature: unported root_placer type %q (ported in 13-03)", j.Type)
+		return parseMangroveRootPlacer(raw)
 	default:
 		return nil, fmt.Errorf("feature: unknown root_placer type %q", j.Type)
 	}
@@ -867,25 +930,25 @@ func (cfg *TreeConfiguration) BelowTrunkWithExisting(read ReadFn) *TreeConfigura
 // rng draw order — getTreeHeight, (root placer), placeTrunk, createFoliage — is the
 // determinism contract.
 
-// PlaceTree assembles the tree at origin following the EXACT 26.2 TreeFeature.doPlace rng
-// draw order (the determinism contract):
+// PlaceTree assembles the tree at the anchor `pos` following the EXACT 26.2
+// TreeFeature.doPlace rng draw order (the determinism contract):
 //
 //  1. getTreeHeight(rng)                         (already done by the caller -> treeHeight)
 //  2. foliageHeight(rng, treeHeight)             (DRAWS for spruce/pine/megapine)
 //  3. foliageRadius(rng, treeHeight-foliageHt)   (DRAWS; pine adds an extra draw)
-//  4. (root placer)                              (nil for the common overworld trees)
-//  5. placeTrunk(rng) -> attachments             (DRAWS per trunk placer)
-//  6. for each attachment: createFoliage         (offset(rng) draw + the per-placer rows)
-//  7. decorators[].place(rng)                    (AlterGround/Beehive/Cocoa/vines)
+//  4. trunkOrigin = rootPlacer.getTrunkOrigin    (DRAWS trunk_offset_y for mangrove; else pos)
+//  5. getMaxFreeTreeHeight(treeHeight, trunkOrigin)  (NO rng — the read scan)
+//  6. rootPlacer.placeRoots(pos, trunkOrigin)    (DRAWS the root simulation; mangrove only)
+//  7. placeTrunk(rng, freeHeight, trunkOrigin)   (DRAWS per trunk placer)
+//  8. for each attachment: createFoliage         (offset(rng) draw + the per-placer rows)
+//  9. decorators[].place(rng)                    (AlterGround/Beehive/Cocoa/vines/special)
 //
-// NOTE the foliageHeight/foliageRadius draws happen BEFORE the trunk — a divergence from
-// 13-01's order, but the JAR truth (TreeFeature.doPlace). For oak/birch (constant providers)
-// these are 0-draw so the oak sequence is unchanged. freeHeight is the validity-clamped
-// trunk height; when <= 0 nothing is placed. Returns whether any block landed.
-func PlaceTree(set SetBlockFn, read ReadFn, rng levelgen.RandomSource, cfg *TreeConfiguration, treeHeight, freeHeight int, origin TreePos) bool {
-	if freeHeight <= 0 {
-		return false
-	}
+// NOTE the foliageHeight/foliageRadius/trunk_offset_y draws happen BEFORE the scan — the JAR
+// truth (TreeFeature.doPlace). For oak/birch (constant providers, no root) these are 0-draw
+// so the oak sequence is unchanged. `minFree` is the body's stub floor: when the clamped
+// free height is below it nothing is placed (the draws already happened — jar-faithful).
+// Returns whether any block landed.
+func PlaceTree(set SetBlockFn, read ReadFn, rng levelgen.RandomSource, cfg *TreeConfiguration, treeHeight, minFree int, pos TreePos) bool {
 	// Collect placed log/leaf positions for the decorators (a per-call accum on a copy so
 	// the shared cfg stays immutable).
 	c := *cfg
@@ -896,17 +959,27 @@ func PlaceTree(set SetBlockFn, read ReadFn, rng levelgen.RandomSource, cfg *Tree
 	foliageHeight := cfg.foliagePlacer.foliageHeightOf(rng, treeHeight, cfg)
 	foliageRadius := cfg.foliagePlacer.foliageRadiusOf(rng, treeHeight-foliageHeight)
 
-	trunkOrigin := origin
-	// (4) root placer: present -> runs BEFORE the trunk, may shift the origin up. nil for
-	// the common overworld trees (no-op).
+	// (4) trunk origin: the root placer samples trunk_offset_y here (BEFORE the scan); the
+	// trunk grows from the shifted origin. Absent root placer -> the anchor pos.
+	trunkOrigin := pos
 	if cfg.rootPlacer != nil {
-		shifted, ok := cfg.rootPlacer.placeRoots(set, read, rng, origin, cfg)
-		if !ok {
+		trunkOrigin = cfg.rootPlacer.getTrunkOrigin(rng, pos)
+	}
+
+	// (5) the validity scan from the trunk origin (NO rng).
+	freeHeight := maxFreeTreeHeight(read, cfg, trunkOrigin, treeHeight)
+	if freeHeight < minFree {
+		return false
+	}
+
+	// (6) root placer: present -> runs AFTER the scan, growing roots DOWN from the anchor
+	// pos (NOT the shifted trunk origin). nil for the common overworld trees.
+	if cfg.rootPlacer != nil {
+		if !cfg.rootPlacer.placeRoots(set, read, rng, pos, trunkOrigin, cfg) {
 			return false
 		}
-		trunkOrigin = shifted
 	}
-	// (5) trunk.
+	// (7) trunk.
 	attachments := cfg.trunkPlacer.placeTrunk(set, read, rng, freeHeight, trunkOrigin, cfg)
 	// (6) foliage: the public createFoliage wrapper samples offset(rng) then calls the
 	// protected createFoliage(radius, foliageHeight, offset).
@@ -930,6 +1003,31 @@ func PlaceTree(set SetBlockFn, read ReadFn, rng levelgen.RandomSource, cfg *Tree
 		}
 	}
 	return true
+}
+
+// maxFreeTreeHeight ports TreeFeature.getMaxFreeTreeHeight: scan from the base up to
+// treeHeight+1 layers; at each layer the trunk footprint is a (2*size+1)^2 square where
+// size = minimum_size.getSizeAtLayer(treeHeight, depth). The scan returns the number of free
+// layers below the FIRST blocked one (capped at treeHeight). A position is "free" if the
+// existing block is air-or-replaceable (the conservative validTreePos test). NO rng — a pure
+// read scan, matching the jar. Lives here (not in `world`) so the trunk_offset_y draw can
+// sit BETWEEN foliageRadius and the scan (the jar doPlace order).
+func maxFreeTreeHeight(read ReadFn, cfg *TreeConfiguration, origin TreePos, treeHeight int) int {
+	for depth := 0; depth <= treeHeight+1; depth++ {
+		size := cfg.SizeAtLayer(treeHeight, depth)
+		baseY := origin.Y + depth
+		for dx := -size; dx <= size; dx++ {
+			for dz := -size; dz <= size; dz++ {
+				if !cfg.PosFree(read, TreePos{X: origin.X + dx, Y: baseY, Z: origin.Z + dz}) {
+					if depth >= treeHeight {
+						return treeHeight
+					}
+					return depth - 1
+				}
+			}
+		}
+	}
+	return treeHeight
 }
 
 // ---- shared helpers ----
