@@ -235,6 +235,44 @@ func TestParseRealWeightedProvider(t *testing.T) {
 	}
 }
 
+// TestRandomizedIntStateProvider pins the 12-01-deferred randomized_int_state_provider (now
+// ported): it draws the source state, then randomizes the configured int property
+// (mangrove_propagule `age` via uniform{0,4}). The two-stage draw order + the exact resolved
+// age are the determinism contract (T-13-15).
+func TestRandomizedIntStateProvider(t *testing.T) {
+	raw := `{"type":"minecraft:randomized_int_state_provider","property":"age","source":{"type":"minecraft:simple_state_provider","state":{"Name":"minecraft:mangrove_propagule","Properties":{"age":"0","hanging":"true","stage":"0","waterlogged":"false"}}},"values":{"type":"minecraft:uniform","min_inclusive":0,"max_inclusive":4}}`
+	p, err := ParseProvider(json.RawMessage(raw))
+	if err != nil {
+		t.Fatalf("ParseProvider(randomized_int_state_provider): %v", err)
+	}
+	const seed = int64(0xA6E0)
+	rng := levelgen.NewWorldgenRandom(seed)
+	got := p.GetState(rng, 0, 0, 0)
+
+	// Oracle: the source draws 0 (simple), then values.sample = nextInt(5). The result is the
+	// mangrove_propagule with that age.
+	oracle := levelgen.NewWorldgenRandom(seed)
+	wantAge := int(oracle.NextIntN(5)) // the source simple provider draws nothing
+	wantState, err := resolveBlockState(blockStateJSON{
+		Name:       "minecraft:mangrove_propagule",
+		Properties: map[string]string{"age": intToString(wantAge), "hanging": "true", "stage": "0", "waterlogged": "false"},
+	})
+	if err != nil {
+		t.Fatalf("resolve oracle propagule: %v", err)
+	}
+	if got != wantState {
+		t.Fatalf("randomized_int_state_provider state = %v, want propagule age %d (%v)", got, wantAge, wantState)
+	}
+	// The result must be a mangrove_propagule (the source block, re-resolved with the new age).
+	if b := block.StateList[got]; b == nil || b.ID() != "minecraft:mangrove_propagule" {
+		t.Fatalf("randomized_int_state_provider yielded %v, not a mangrove_propagule", got)
+	}
+	// Determinism: a re-run yields the identical state.
+	if p.GetState(levelgen.NewWorldgenRandom(seed), 0, 0, 0) != got {
+		t.Fatalf("randomized_int_state_provider non-deterministic")
+	}
+}
+
 // readConfigToPlace pulls a configured_feature's config.to_place raw JSON from the
 // embedded registry data source (the real 26.2 embed).
 func readConfigToPlace(t *testing.T, id string) (json.RawMessage, error) {

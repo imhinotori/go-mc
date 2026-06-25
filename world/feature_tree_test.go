@@ -495,3 +495,178 @@ func growTreeMaybe(t *testing.T, reg *feature.Registry, id string, seed int64) (
 	}
 	return view, pos
 }
+
+// fillMudFloor lays a realistic mangrove floor: stone bedrock up to floorY-2, then a 2-deep
+// mud cap (floorY-1, floorY). The roots grow down from the trunk through the mud and stop at
+// the stone (NOT in #mangrove_roots_can_grow_through) — so the root simulation terminates
+// instead of exceeding max_root_length over an infinite mud column.
+func fillMudFloor(view *Neighborhood, center [2]int, minY, floorY int) {
+	stone := block.ToStateID[block.Stone{}]
+	mud := block.ToStateID[block.Mud{}]
+	for dx := -1; dx <= 1; dx++ {
+		for dz := -1; dz <= 1; dz++ {
+			bx, bz := (center[0]+dx)*16, (center[1]+dz)*16
+			for lx := 0; lx < 16; lx++ {
+				for lz := 0; lz < 16; lz++ {
+					for y := minY; y <= floorY; y++ {
+						if y >= floorY-1 {
+							view.SetBlock(bx+lx, y, bz+lz, mud)
+						} else {
+							view.SetBlock(bx+lx, y, bz+lz, stone)
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// growSpecialTree grows a special-biome tree, searching a few seeds so a validity-tight or
+// probability-gated config still lands a recognizable trunk. floorKind selects dirt or mud.
+func growSpecialTree(t *testing.T, reg *feature.Registry, id string, mud bool, logID string, dyHi int) (*Neighborhood, placement.BlockPos, bool) {
+	t.Helper()
+	const minY, height = -64, 384
+	const floorY = 63
+	center := [2]int{0, 0}
+	cf := bodyCF(t, reg, id)
+	for seed := int64(1); seed <= 40; seed++ {
+		view := build3x3(center, minY, height)
+		if mud {
+			fillMudFloor(view, center, minY, floorY)
+		} else {
+			fillTreeFloor(view, center, minY, floorY)
+		}
+		pos := placement.BlockPos{X: 8, Y: floorY + 1, Z: 8}
+		bctx := &bodyContext{view: view, reg: reg}
+		ctx := newPlacementContext(view, minY, height, nil)
+		if !treeBody(bctx, cf, ctx, levelgen.NewWorldgenRandom(seed), pos) {
+			continue
+		}
+		if hasBlockFamily(view, pos, logID, 0, dyHi, 4) {
+			return view, pos, true
+		}
+	}
+	return nil, placement.BlockPos{}, false
+}
+
+// TestCherryTree: cherry_grove's cherry tree grows cherry_log + cherry_leaves through the body.
+func TestCherryTree(t *testing.T) {
+	reg := feature.NewEmbeddedRegistry()
+	view, pos, ok := growSpecialTree(t, reg, "minecraft:cherry", false, "minecraft:cherry_log", 14)
+	if !ok {
+		t.Fatalf("cherry grew no cherry_log through the body across 40 seeds")
+	}
+	if !hasBlockFamily(view, pos, "minecraft:cherry_leaves", 2, 18, 6) {
+		t.Fatalf("cherry grew no cherry_leaves canopy")
+	}
+}
+
+// TestMangroveTreeWithRoots: mangrove_swamp's mangrove grows mangrove_log + mangrove_leaves,
+// the root system (mangrove_roots / muddy_mangrove_roots), and (across seeds) propagules.
+func TestMangroveTreeWithRoots(t *testing.T) {
+	reg := feature.NewEmbeddedRegistry()
+	const minY, height = -64, 384
+	const floorY = 63
+	center := [2]int{0, 0}
+	cf := bodyCF(t, reg, "minecraft:mangrove")
+	grew, roots, propagule := false, false, false
+	for seed := int64(1); seed <= 80 && (!grew || !roots || !propagule); seed++ {
+		view := build3x3(center, minY, height)
+		fillMudFloor(view, center, minY, floorY)
+		pos := placement.BlockPos{X: 8, Y: floorY + 1, Z: 8}
+		bctx := &bodyContext{view: view, reg: reg}
+		ctx := newPlacementContext(view, minY, height, nil)
+		if !treeBody(bctx, cf, ctx, levelgen.NewWorldgenRandom(seed), pos) {
+			continue
+		}
+		if hasBlockFamily(view, pos, "minecraft:mangrove_log", 0, 18, 4) {
+			grew = true
+		}
+		if hasBlockFamily(view, pos, "minecraft:mangrove_roots", -4, 6, 4) ||
+			hasBlockFamily(view, pos, "minecraft:muddy_mangrove_roots", -4, 6, 4) {
+			roots = true
+		}
+		if hasBlockFamily(view, pos, "minecraft:mangrove_propagule", 0, 18, 6) {
+			propagule = true
+		}
+	}
+	if !grew {
+		t.Fatalf("mangrove grew no mangrove_log through the body")
+	}
+	if !roots {
+		t.Fatalf("mangrove grew no roots (the RootPlacer subsystem did not run)")
+	}
+	if !propagule {
+		t.Fatalf("mangrove grew no propagules across 80 seeds (attached_to_leaves not wired)")
+	}
+}
+
+// TestPaleOakWithPaleMoss: pale_garden's pale_oak grows pale_oak_log + pale_oak_leaves and
+// (across seeds) the pale_moss decorator's pale_hanging_moss.
+func TestPaleOakWithPaleMoss(t *testing.T) {
+	reg := feature.NewEmbeddedRegistry()
+	const minY, height = -64, 384
+	const floorY = 63
+	center := [2]int{0, 0}
+	cf := bodyCF(t, reg, "minecraft:pale_oak")
+	grew, moss := false, false
+	for seed := int64(1); seed <= 60 && (!grew || !moss); seed++ {
+		view := build3x3(center, minY, height)
+		fillTreeFloor(view, center, minY, floorY)
+		pos := placement.BlockPos{X: 8, Y: floorY + 1, Z: 8}
+		bctx := &bodyContext{view: view, reg: reg}
+		ctx := newPlacementContext(view, minY, height, nil)
+		if !treeBody(bctx, cf, ctx, levelgen.NewWorldgenRandom(seed), pos) {
+			continue
+		}
+		if hasBlockFamily(view, pos, "minecraft:pale_oak_log", 0, 14, 3) {
+			grew = true
+		}
+		if hasBlockFamily(view, pos, "minecraft:pale_hanging_moss", -2, 14, 4) {
+			moss = true
+		}
+	}
+	if !grew {
+		t.Fatalf("pale_oak grew no pale_oak_log through the body")
+	}
+	if !moss {
+		t.Fatalf("pale_oak grew no pale_hanging_moss across 60 seeds (pale_moss decorator not wired)")
+	}
+}
+
+// TestAzaleaTree: lush_caves's rooted azalea grows oak_log (the bending trunk) + azalea_leaves
+// (the random-spread canopy) over rooted_dirt.
+func TestAzaleaTree(t *testing.T) {
+	reg := feature.NewEmbeddedRegistry()
+	view, pos, ok := growSpecialTree(t, reg, "minecraft:azalea_tree", false, "minecraft:oak_log", 12)
+	if !ok {
+		t.Fatalf("azalea grew no oak_log (bending trunk) through the body across 40 seeds")
+	}
+	if !hasBlockFamily(view, pos, "minecraft:azalea_leaves", 0, 14, 5) &&
+		!hasBlockFamily(view, pos, "minecraft:flowering_azalea_leaves", 0, 14, 5) {
+		t.Fatalf("azalea grew no azalea/flowering_azalea leaves (random-spread foliage)")
+	}
+}
+
+// TestPerSpecialBiomeSmoke: the four special biomes each resolve through the body to their
+// real tree — cherry_grove->cherry, mangrove_swamp->mangrove, pale_garden->pale_oak,
+// lush_caves->azalea.
+func TestPerSpecialBiomeSmoke(t *testing.T) {
+	reg := feature.NewEmbeddedRegistry()
+	cases := []struct {
+		id    string
+		mud   bool
+		logID string
+		dyHi  int
+	}{
+		{"minecraft:cherry", false, "minecraft:cherry_log", 14},
+		{"minecraft:mangrove", true, "minecraft:mangrove_log", 18},
+		{"minecraft:pale_oak", false, "minecraft:pale_oak_log", 14},
+		{"minecraft:azalea_tree", false, "minecraft:oak_log", 12},
+	}
+	for _, c := range cases {
+		if _, _, ok := growSpecialTree(t, reg, c.id, c.mud, c.logID, c.dyHi); !ok {
+			t.Fatalf("%s did not resolve to its %s through the body", c.id, c.logID)
+		}
+	}
+}
