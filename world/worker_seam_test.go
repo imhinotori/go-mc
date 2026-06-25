@@ -175,6 +175,67 @@ drain:
 	}
 }
 
+// TestEmitOnceUnderHold pins the D2 Option-Y rule under MAXIMALLY adjacent wanted centers:
+// a 3x3 block of wanted centers (every center has up to 8 wanted neighbors). The hold gate
+// (emit a center only once every wanted neighbor is decorated) must STILL emit each wanted
+// center exactly once — no double-emit (the hold re-checks an already-emitted center), no
+// hold-deadlock (a center's wanted neighbors are all requested, so they all decorate). It
+// also confirms every emitted center is StatusFull (decorated before emit).
+func TestEmitOnceUnderHold(t *testing.T) {
+	// A 3x3 block of wanted centers (-1..1, -1..1) — the densest adjacency.
+	var region []level.ChunkPos
+	for x := int32(-1); x <= 1; x++ {
+		for z := int32(-1); z <= 1; z++ {
+			region = append(region, level.ChunkPos{x, z})
+		}
+	}
+
+	w := NewWorker(seamTestGen(), "", 512)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go w.Run(ctx)
+
+	want := make(map[level.ChunkPos]bool, len(region))
+	for _, p := range region {
+		want[p] = true
+		w.Request(p)
+	}
+
+	counts := make(map[level.ChunkPos]int)
+	got := 0
+	deadline := time.After(30 * time.Second)
+drain:
+	for {
+		select {
+		case res := <-w.Results():
+			if res.Err != nil {
+				t.Fatalf("ChunkResult.Err = %v", res.Err)
+			}
+			if want[res.Pos] {
+				if res.Chunk == nil || res.Chunk.Status != level.StatusFull {
+					t.Fatalf("wanted center %v emitted not-StatusFull (decorated-before-emit violated)", res.Pos)
+				}
+			}
+			counts[res.Pos]++
+			if want[res.Pos] && counts[res.Pos] == 1 {
+				got++
+			}
+		case <-time.After(500 * time.Millisecond):
+			if got >= len(want) {
+				break drain
+			}
+		case <-deadline:
+			t.Fatalf("hold-deadlock: only %d of %d adjacent wanted centers emitted", got, len(want))
+		}
+	}
+
+	for p, n := range counts {
+		if want[p] && n != 1 {
+			t.Fatalf("wanted center %v emitted %d times under the hold rule, want exactly 1", p, n)
+		}
+	}
+}
+
 // TestNeighborhoodCompletion asserts a SINGLE Request(C) with nothing else converges to C
 // emitted: the scheduler auto-requests C's 8 neighbors, carves them, and decorates C only
 // once all 8 are carved (the hold-until-neighbors-carved + auto-request path). Proves the
