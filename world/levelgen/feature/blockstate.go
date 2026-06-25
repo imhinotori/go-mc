@@ -1,11 +1,28 @@
 package feature
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/nbt"
 )
+
+// ResolveBlockStateJSON decodes a {Name, Properties} block-state object from raw JSON
+// and resolves it to a StateID via the shared resolveBlockState path. It is the
+// EXPORTED entry point the Phase-12 feature bodies (OreFeature target states, etc.)
+// use to resolve config block refs without re-deriving the {Name,Properties} shape.
+// An empty payload, unknown block, or unknown property errors LOUDLY (FEAT-02).
+func ResolveBlockStateJSON(raw json.RawMessage) (block.StateID, error) {
+	if len(raw) == 0 {
+		return 0, fmt.Errorf("block state ref is empty")
+	}
+	var ref blockStateJSON
+	if err := json.Unmarshal(raw, &ref); err != nil {
+		return 0, fmt.Errorf("decoding block state ref: %w", err)
+	}
+	return resolveBlockState(ref)
+}
 
 // blockStateJSON is a {Name, Properties} block reference as it appears in the
 // feature config JSON (e.g. {"Name":"minecraft:oak_log","Properties":{"axis":"y"}}).
