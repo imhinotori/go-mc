@@ -29,13 +29,16 @@ AI) + block place/break + component-slot inventory + damage/death/respawn + pers
 commands + chat — all `-race` clean with Leaf-style async optimizations. 9 phases, 46 plans,
 45/45 v1 requirements + PARITY-01.
 
-## Next Milestone Goals (v3 — Online-mode + regionization + TUI)
+## Current Milestone: v3 — Online-mode + Operator UX + Structure polish
 
-User-chosen direction for the next milestone:
-- **ONLINE-01 / ONLINE-02** — Mojang/Microsoft account authentication + protocol encryption for online-mode.
-- **REGION-01** — Folia-style per-region tick threading on top of the ownership-isolated core.
-- **TUI (bubbletea + bubbles)** — a prettier terminal with a command-input zone + live logs; disconnect-reason logging (why a player dropped). (User-requested mid-v2, deferred to v3.)
-- **Structure polish** — loot tables, structure entities (villagers/witch/cat/silverfish), `afterPlace` terrain-beard, structure-start NBT persistence (the documented v2 deferrals).
+**Goal:** Make Sulfur a real online-mode server an operator can run + watch — Mojang/Microsoft authenticated logins with encrypted protocol, a proper TUI console (commands + live logs + disconnect reasons), and the structures finished (loot, inhabitants, terrain-fit, persistence).
+
+**Target features:**
+- **ONLINE-01 / ONLINE-02** — Mojang/Microsoft account authentication (Yggdrasil session join) + protocol encryption (AES/CFB8 + the encryption-request/response handshake), so the server runs in online-mode (real UUIDs, skins, ownership verification).
+- **TUI (bubbletea + bubbles)** — a terminal console with a command-input zone + live scrolling logs; disconnect-reason logging (why each player dropped: kick/timeout/protocol error/quit).
+- **Structure polish** — loot tables (chest contents), structure entities (villagers/witch/cat/silverfish spawns), `afterPlace` terrain-beard (structures adapt to terrain), structure-start NBT persistence (the documented v2 deferrals).
+
+**Out of this milestone:** REGION-01 (Folia-style per-region tick threading) — deferred to v4.
 
 ## Requirements
 
