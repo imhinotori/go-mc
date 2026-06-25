@@ -129,8 +129,26 @@ func (p RuleBasedStateProvider) GetState(rng levelgen.RandomSource, x, y, z int)
 				return r.then.GetState(rng, x, y, z)
 			}
 		}
+		// No rule matched: the identity fallback (absent `fallback` in the 26.2 tree
+		// data) keeps the EXISTING block; a concrete fallback yields its own state.
+		if _, ident := p.fallback.(identityStateProvider); ident {
+			return existing
+		}
 	}
 	return p.fallback.GetState(rng, x, y, z)
+}
+
+// identityStateProvider is the implicit fallback for a rule_based provider with NO
+// `fallback` field (the 26.2 tree below_trunk_providers): it yields the EXISTING block
+// (a no-change). Its GetState is unreachable when bound via RuleBasedStateProvider (which
+// special-cases it against existingAt); the 0-state return is the safe air default for an
+// unbound use (no existingAt — the rules cannot match anyway, so the provider is inert).
+type identityStateProvider struct{}
+
+// GetState returns 0 (air) for the unbound case; the bound rule_based path returns the
+// existing block before reaching here.
+func (identityStateProvider) GetState(_ levelgen.RandomSource, _, _, _ int) block.StateID {
+	return 0
 }
 
 // withExisting returns a copy of the rule-based provider bound to an existing-block
@@ -313,9 +331,22 @@ func ParseProvider(raw json.RawMessage) (BlockStateProvider, error) {
 		return p, nil
 
 	case "rule_based_state_provider":
-		fb, err := ParseProvider(j.Fallback)
-		if err != nil {
-			return nil, fmt.Errorf("feature: rule_based_state_provider fallback: %w", err)
+		// The 26.2 tree below_trunk_providers (verified oak.json/birch.json) carry ONLY
+		// `rules` and OMIT `fallback`. An absent fallback is the identity provider — it
+		// yields the EXISTING block at the position (the rule_based provider only writes
+		// when a rule matches; with no fallback a non-matching position keeps its block).
+		// This is the faithful semantics for the dirt-under-trunk rule, whose "not in
+		// cannot_replace_below_tree_trunk" predicate matches every non-trunk ground block,
+		// so the fallback is reached only over an existing trunk (a no-change identity).
+		var fb BlockStateProvider
+		if len(j.Fallback) == 0 {
+			fb = identityStateProvider{}
+		} else {
+			parsed, err := ParseProvider(j.Fallback)
+			if err != nil {
+				return nil, fmt.Errorf("feature: rule_based_state_provider fallback: %w", err)
+			}
+			fb = parsed
 		}
 		p := RuleBasedStateProvider{fallback: fb}
 		for i, r := range j.Rules {
@@ -605,4 +636,5 @@ var (
 	_ BlockStateProvider = RuleBasedStateProvider{}
 	_ BlockStateProvider = NoiseProvider{}
 	_ BlockStateProvider = DualNoiseProvider{}
+	_ BlockStateProvider = identityStateProvider{}
 )
