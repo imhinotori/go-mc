@@ -1,17 +1,17 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
-status: archived
-stopped_at: "Milestone v1.0 ARCHIVED + tagged. Audit passed (45/45 v1 reqs + PARITY-01, all cross-phase seams CONNECTED, build/test/-race green). Roadmap + requirements archived to milestones/. Next: /gsd-new-milestone for v2 (worldgen deferrals + auth + regionization)."
-last_updated: "2026-06-24T23:05:00.000Z"
+milestone: v2
+milestone_name: worldgen-features-structures
+status: planning
+stopped_at: "Milestone v2 scoped: ROADMAP (7 phases, 10-16) + REQUIREMENTS (15 reqs) created from 2 research files (features + structures). User chose: research Phase 10 (cross-chunk seam) dedicated BEFORE autonomous execution. Next: /gsd-research-phase 10."
+last_updated: "2026-06-24T23:40:00.000Z"
 last_activity: 2026-06-24
 progress:
-  total_phases: 9
-  completed_phases: 9
-  total_plans: 46
-  completed_plans: 46
-  percent: 100
+  total_phases: 7
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
