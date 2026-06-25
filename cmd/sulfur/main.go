@@ -148,10 +148,20 @@ func main() {
 		gen = world.NewSuperflat(overworldSecs, overworldMinY, overworldSurfaceY)
 		log.Printf("SULFUR_SUPERFLAT=1: Superflat stub generator (flat top y=%d) — noise terrain disabled", overworldSurfaceY)
 	} else {
+		// The NoiseGenerator builds its decorationData ONCE (buildDecorationData) — the
+		// parsed feature registry + FeatureSorter + per-biome feature lists with ALL
+		// feature bodies registered via init(): ores + ground cover (Phase 12), the full
+		// tree set incl. special biomes (13-01/02/03), and the monster_room dungeon
+		// (13-04). The worker's tryDecorate runs Decorate(view) -> applyBiomeDecoration on
+		// the carved 3x3 before sealing each streamed chunk, so the chunks a real client
+		// receives are FULLY decorated (per-biome vegetation + decoration ores + occasional
+		// dungeons), deterministically per *seed. This is the streamed-chunk path the
+		// FEAT-06 visual gate evaluates — NO new wire surface, the v1-sealed chunk format
+		// is unchanged (registering the dungeon body went live with no worker/wire rewire).
 		ng := world.NewNoiseGenerator(*seed, overworldSecs, overworldMinY)
 		spawnSurfaceY = ng.SpawnSurfaceY(level.ChunkPos{0, 0})
 		gen = ng
-		log.Printf("full-parity NoiseGenerator armed (seed=%d): spawn-column surface y=%d", *seed, spawnSurfaceY)
+		log.Printf("full-parity NoiseGenerator armed (seed=%d): spawn-column surface y=%d; full feature pipeline live (per-biome trees + ground cover + decoration ores + dungeons)", *seed, spawnSurfaceY)
 	}
 	worker := world.NewWorker(gen, "", workerBuf)
 	mgr := world.NewChunkManager()

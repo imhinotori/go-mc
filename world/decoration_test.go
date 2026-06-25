@@ -376,3 +376,143 @@ func TestFeatureBodiesProduceBlocks(t *testing.T) {
 	}
 	t.Logf("live decoration wrote %d non-stone feature blocks into the center chunk", changed)
 }
+
+// TestFullFeaturesAcceptance is the FEAT-05/06 AUTOMATED backstop the BLOCKING visual gate
+// stands on: with the FULL tree set (13-01/02/03) + the dungeon (this plan) now LIVE, it
+// re-asserts the determinism contract end-to-end —
+//  1. biome-correct TREES place (each representative biome's configured tree grows its
+//     biome-correct log + leaves through the live treeBody);
+//  2. a biome's tree random_selector resolves to a REAL tree (the trees_plains selector ->
+//     oak via the placeSubFeature recursion, NOT a no-op);
+//  3. the DUNGEON places (the live monster_room body carves a cobble room + spawner);
+//  4. the bodies are PURE over (rng, view) — a re-run is bit-identical (determinism).
+//
+// The 5x5 reorder-determinism (TestDecorationReorderIdentical) + emit-once
+// (TestEmitOnce/TestEmitOnceUnderHold) gates in worker_seam_test.go run the REAL worker
+// pipeline with ALL bodies live (the dungeon registers via init(), so it is already in the
+// dispatch) and stay byte-identical — this test focuses on the body-level coverage those
+// seam tests do not exercise (which biome grows which tree, the selector->real-tree
+// recursion, the dungeon).
+func TestFullFeaturesAcceptance(t *testing.T) {
+	const minY, height = -64, 384
+	const floorY = 63
+	center := [2]int{0, 0}
+	reg := feature.NewEmbeddedRegistry()
+
+	// ---- 1. biome-correct trees ----
+	// Each representative biome's configured tree must grow its biome-correct log + leaves
+	// through the LIVE tree body. A seed search lets a validity/probability-gated config land.
+	type treeCase struct {
+		id     string
+		logID  string
+		leafID string
+	}
+	trees := []treeCase{
+		{"minecraft:oak", "minecraft:oak_log", "minecraft:oak_leaves"},          // plains/forest
+		{"minecraft:birch", "minecraft:birch_log", "minecraft:birch_leaves"},    // forest/birch_forest
+		{"minecraft:spruce", "minecraft:spruce_log", "minecraft:spruce_leaves"}, // taiga
+		{"minecraft:acacia", "minecraft:acacia_log", "minecraft:acacia_leaves"}, // savanna
+		{"minecraft:jungle_tree", "minecraft:jungle_log", "minecraft:jungle_leaves"},
+		{"minecraft:dark_oak", "minecraft:dark_oak_log", "minecraft:dark_oak_leaves"}, // dark forest
+	}
+	for _, tc := range trees {
+		cf := bodyCF(t, reg, tc.id)
+		grew := false
+		for seed := int64(1); seed <= 16 && !grew; seed++ {
+			view := build3x3(center, minY, height)
+			fillTreeFloor(view, center, minY, floorY)
+			pos := placement.BlockPos{X: 8, Y: floorY + 1, Z: 8}
+			bctx := &bodyContext{view: view, reg: reg}
+			ctx := newPlacementContext(view, minY, height, nil)
+			if !treeBody(bctx, cf, ctx, levelgen.NewWorldgenRandom(seed), pos) {
+				continue
+			}
+			if hasBlockFamily(view, pos, tc.logID, 0, 20, 4) && hasBlockFamily(view, pos, tc.leafID, 0, 24, 6) {
+				grew = true
+			}
+		}
+		if !grew {
+			t.Fatalf("biome-correct tree %s did not grow its %s + %s through the live body", tc.id, tc.logID, tc.leafID)
+		}
+	}
+
+	// ---- 2. the forest tree selector resolves to a REAL tree ----
+	// trees_plains is a random_selector whose default is oak_bees_005 (an oak). Running its
+	// body must grow a real oak trunk (the "tree" no-op is gone; the selector recursion
+	// dispatches the live tree body).
+	{
+		selCF := bodyCF(t, reg, "minecraft:trees_plains")
+		body := lookupFeatureBody(selCF.Type)
+		if body == nil {
+			t.Fatalf("trees_plains selector body (%s) not registered", selCF.Type)
+		}
+		grew := false
+		for seed := int64(1); seed <= 16 && !grew; seed++ {
+			view := build3x3(center, minY, height)
+			fillTreeFloor(view, center, minY, floorY)
+			pos := placement.BlockPos{X: 8, Y: floorY + 1, Z: 8}
+			bctx := &bodyContext{view: view, reg: reg}
+			ctx := newPlacementContext(view, minY, height, nil)
+			if !body(bctx, selCF, ctx, levelgen.NewWorldgenRandom(seed), pos) {
+				continue
+			}
+			// The selector resolves to an oak (or fancy_oak) — assert a real oak log grew.
+			if hasBlockFamily(view, pos, "minecraft:oak_log", 0, 22, 5) {
+				grew = true
+			}
+		}
+		if !grew {
+			t.Fatalf("trees_plains selector did not resolve to a real oak tree (no_op still wired?)")
+		}
+	}
+
+	// ---- 3. the dungeon places through the live monster_room body ----
+	{
+		cf := newDungeonCF(t)
+		origin := placement.BlockPos{X: 8, Y: 20, Z: 8}
+		build := func() *Neighborhood {
+			view := build3x3(center, minY, height)
+			fillSolidStone(view, center, minY, origin.Y+8)
+			for x := 3; x <= 5; x++ {
+				carveAirColumn(view, x, origin.Z, origin.Y, origin.Y+2)
+			}
+			return view
+		}
+		const seed = int64(0xDECA0)
+		view := build()
+		bctx := &bodyContext{view: view, reg: reg}
+		if !monsterRoomBody(bctx, cf, nil, levelgen.NewWorldgenRandom(seed), origin) {
+			t.Fatalf("dungeon did not place on a valid candidate through the live body")
+		}
+		if view.GetBlock(origin.X, origin.Y, origin.Z) != dungeonSpawner {
+			t.Fatalf("dungeon center is not a spawner")
+		}
+		cobble := 0
+		for dx := -4; dx <= 4; dx++ {
+			for dz := -4; dz <= 4; dz++ {
+				st := view.GetBlock(origin.X+dx, origin.Y-1, origin.Z+dz)
+				if st == dungeonCobble || st == dungeonMossyCobble {
+					cobble++
+				}
+			}
+		}
+		if cobble == 0 {
+			t.Fatalf("dungeon placed no cobblestone floor")
+		}
+
+		// ---- 4. determinism: a re-run with all bodies live is bit-identical ----
+		view2 := build()
+		bctx2 := &bodyContext{view: view2, reg: reg}
+		monsterRoomBody(bctx2, cf, nil, levelgen.NewWorldgenRandom(seed), origin)
+		for dx := -6; dx <= 6; dx++ {
+			for dy := -2; dy <= 6; dy++ {
+				for dz := -6; dz <= 6; dz++ {
+					if view.GetBlock(origin.X+dx, origin.Y+dy, origin.Z+dz) !=
+						view2.GetBlock(origin.X+dx, origin.Y+dy, origin.Z+dz) {
+						t.Fatalf("dungeon non-deterministic at (%d,%d,%d)", origin.X+dx, origin.Y+dy, origin.Z+dz)
+					}
+				}
+			}
+		}
+	}
+}
