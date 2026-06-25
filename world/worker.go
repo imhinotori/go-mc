@@ -40,6 +40,33 @@ type Worker struct {
 	requests  chan level.ChunkPos // BOUNDED -> backpressure, never unbounded goroutines
 	results   chan ChunkResult    // buffered; drained by the tick (Plan 04-03)
 	sf        singleflight.Group
+
+	// GEN2-02 cross-chunk seam. carved is the parallel->serial handoff: handleTerrain
+	// goroutines send carved chunks here and the SINGLE scheduler goroutine
+	// (runScheduler) drains it. staging + requested are OWNED EXCLUSIVELY by the
+	// scheduler goroutine — NO lock, -race clean by construction (the same single-owner
+	// discipline as the tick-owned manager). Never touch them off the scheduler goroutine.
+	carved    chan *carvedChunk
+	staging   map[int64]*stagedChunk // carved-but-(maybe)-not-decorated chunks, packPos keyed
+	requested map[int64]bool         // neighbor auto-request dedup (scheduler-owned)
+}
+
+// carvedChunk is the handleTerrain -> scheduler handoff: a freshly carved chunk
+// (StatusCarvers) plus its pos. It crosses goroutines exactly once, over w.carved.
+type carvedChunk struct {
+	pos level.ChunkPos
+	ch  *level.Chunk
+}
+
+// stagedChunk is a chunk held by the scheduler until its 3x3 neighborhood is carved.
+// carved=true once GenerateTerrain has produced its blocks; decorated=true after the
+// (no-op in Phase 10) Decorate pass promotes it to StatusFull and it is emitted. The
+// decorated flag guards double-decoration / double-emit.
+type stagedChunk struct {
+	pos       level.ChunkPos
+	chunk     *level.Chunk
+	carved    bool
+	decorated bool
 }
 
 // NewWorker builds a worker. buf sizes both the bounded request channel and the
@@ -53,6 +80,9 @@ func NewWorker(gen Generator, regionDir string, buf int) *Worker {
 		regionDir: regionDir,
 		requests:  make(chan level.ChunkPos, buf),
 		results:   make(chan ChunkResult, buf),
+		carved:    make(chan *carvedChunk, buf),
+		staging:   make(map[int64]*stagedChunk),
+		requested: make(map[int64]bool),
 	}
 }
 
@@ -73,30 +103,142 @@ func (w *Worker) Request(pos level.ChunkPos) {
 // load in its own goroutine so the reader stays responsive and concurrent
 // same-key loads collapse inside singleflight. It returns when ctx is cancelled.
 func (w *Worker) Run(ctx context.Context) {
+	// The scheduler is the SINGLE owner of staging/requested + all decoration.
+	go w.runScheduler(ctx)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case pos := <-w.requests:
-			go w.handle(ctx, pos)
+			go w.handleTerrain(ctx, pos)
 		}
 	}
 }
 
-// handle runs one load through singleflight and emits the result.
-func (w *Worker) handle(ctx context.Context, pos level.ChunkPos) {
+// handleTerrain runs one load/terrain-generation through singleflight (so concurrent
+// same-key requests collapse to one GenerateTerrain — threat T-4-02) and hands the
+// result to the scheduler. A region-loaded chunk is already StatusFull -> it bypasses
+// staging and is emitted directly (do not re-decorate a saved world). A region MISS
+// produces a carved (StatusCarvers) chunk -> it is sent to the scheduler for staging.
+//
+// This is the parallel half of the seam: terrain stays parallel + footprint-guarded;
+// the parallel->serial handoff is the w.carved channel.
+func (w *Worker) handleTerrain(ctx context.Context, pos level.ChunkPos) {
 	key := chunkKey(pos)
 	v, err, _ := w.sf.Do(key, func() (any, error) {
 		return w.loadOrGenerate(pos)
 	})
 
-	var res ChunkResult
 	if err != nil {
-		res = ChunkResult{Pos: pos, Err: err}
-	} else {
-		res = ChunkResult{Pos: pos, Chunk: v.(*level.Chunk)}
+		w.emit(ctx, ChunkResult{Pos: pos, Err: err})
+		return
 	}
 
+	ch := v.(*level.Chunk)
+	if ch.Status == level.StatusFull {
+		// Region hit (already decorated/saved): emit directly, never stage.
+		w.emit(ctx, ChunkResult{Pos: pos, Chunk: ch})
+		return
+	}
+
+	// Region miss -> carved chunk -> hand to the scheduler for staging + decoration.
+	select {
+	case <-ctx.Done():
+	case w.carved <- &carvedChunk{pos: pos, ch: ch}:
+	}
+}
+
+// runScheduler is the NEW single goroutine that owns staging + requested + all
+// decoration (no locks -> -race clean by construction; threat T-10-05). It drains
+// w.carved: stages each carved chunk, auto-requests its 8 neighbors (guarded by the
+// requested set so a single Request(C) pulls C's 3x3 into existence exactly once),
+// and scans the up-to-9 centers this chunk could newly complete, decorating each.
+func (w *Worker) runScheduler(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case cc := <-w.carved:
+			key := packPos(cc.pos)
+			s := w.staging[key]
+			if s == nil {
+				s = &stagedChunk{pos: cc.pos}
+				w.staging[key] = s
+			}
+			s.chunk, s.carved = cc.ch, true
+
+			// Auto-request the 8 neighbors so a single Request(C) pulls C's neighborhood
+			// in. The requested set makes each neighbor request once; the bounded requests
+			// channel + singleflight dedup the terrain gen (threat T-10-07: convergence is
+			// validated by the 5x5 region test completing).
+			for dx := -1; dx <= 1; dx++ {
+				for dz := -1; dz <= 1; dz++ {
+					if dx == 0 && dz == 0 {
+						continue
+					}
+					np := level.ChunkPos{cc.pos[0] + int32(dx), cc.pos[1] + int32(dz)}
+					nk := packPos(np)
+					if !w.requested[nk] && w.staging[nk] == nil {
+						w.requested[nk] = true
+						w.Request(np)
+					}
+				}
+			}
+
+			// Scan the up-to-9 centers this newly carved chunk could have completed.
+			for dx := -1; dx <= 1; dx++ {
+				for dz := -1; dz <= 1; dz++ {
+					cp := level.ChunkPos{cc.pos[0] + int32(dx), cc.pos[1] + int32(dz)}
+					w.tryDecorate(ctx, cp)
+				}
+			}
+		}
+	}
+}
+
+// tryDecorate decorates `center` iff it is staged + carved + NOT decorated AND all 9 of
+// its neighborhood are staged + carved. It builds a Neighborhood (sized by w.gen.Dims())
+// over the 9 chunks, runs Decorate (Phase 10 no-op: promote-to-full, no writes), marks
+// the center decorated, and emits it EXACTLY ONCE. Order-independent (a SCAN, not a
+// counter), so the same seed produces identical seam results regardless of request order.
+//
+// Runs ONLY on the scheduler goroutine (threat T-10-05 / Pitfall 2: decoration touches 9
+// chunks and must never run from a handle goroutine).
+func (w *Worker) tryDecorate(ctx context.Context, center level.ChunkPos) {
+	cs := w.staging[packPos(center)]
+	if cs == nil || !cs.carved || cs.decorated {
+		return
+	}
+
+	chunks := make(map[int64]*level.Chunk, 9)
+	for dx := -1; dx <= 1; dx++ {
+		for dz := -1; dz <= 1; dz++ {
+			np := level.ChunkPos{center[0] + int32(dx), center[1] + int32(dz)}
+			ns := w.staging[packPos(np)]
+			if ns == nil || !ns.carved {
+				return // neighborhood incomplete -> wait for the missing neighbor to carve
+			}
+			chunks[packPos(np)] = ns.chunk
+		}
+	}
+
+	minY, height := w.gen.Dims()
+	view := newNeighborhood(center, chunks, minY, height)
+	w.gen.Decorate(view) // Phase 10: NO-OP body that promotes the center to StatusFull
+	cs.decorated = true
+	cs.chunk.Status = level.StatusFull
+	w.emit(ctx, ChunkResult{Pos: center, Chunk: cs.chunk})
+
+	// Keep cs in staging — center is still a neighbor of un-decorated centers. Phase 10's
+	// no-op Decorate writes nothing, so emit-and-keep is safe by construction (T-10-06).
+	// The feature phase (Phase 11+) MUST revisit the late-neighbor-write-after-emit rule
+	// (vanilla re-sends; Sulfur will choose resend-vs-hold) — Open Decision 2, DEFERRED.
+}
+
+// emit is the ctx-guarded send to w.results (the immutable single-owner handoff to the
+// tick). Once a chunk is emitted, the worker mutates it no further (Phase 10's no-op
+// Decorate keeps emit-and-keep safe).
+func (w *Worker) emit(ctx context.Context, res ChunkResult) {
 	select {
 	case <-ctx.Done():
 	case w.results <- res:
