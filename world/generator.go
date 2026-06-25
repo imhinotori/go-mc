@@ -15,11 +15,61 @@ import (
 	"github.com/imhinotori/sulfur/world/levelgen/surface"
 )
 
-// Generator produces a chunk for a given column position. Implementations must
-// be PURE: the same pos yields a chunk that serializes to identical bytes every
-// call (no RNG, or seed-derived only).
+// Generator is the SPLIT cross-chunk generation contract (GEN2-02). It is the
+// two-phase lifecycle vanilla uses: a PURE single-chunk terrain pass that leaves
+// the chunk at "carvers" status, followed by a decoration pass that runs ONCE all
+// 8 neighbors are carved, over a 3x3 read/write proxy. The off-tick Worker drives
+// the lifecycle: it stages carved chunks on a single scheduler goroutine and
+// decorates each center once its neighborhood is complete.
+//
+// Implementations must be PURE: GenerateTerrain(pos) yields a chunk that serializes
+// to identical bytes every call (seed-derived only, no RNG drift); Decorate is pure
+// over (seed, center.pos) given a fully-carved neighborhood — never let the SET or
+// ORDER of decorated centers affect a single center's output.
+//
+// Generate(pos) is NOT on this interface: it stays a CONCRETE method on each impl
+// (= GenerateTerrain then Decorate over a freshly-terrain-generated 3x3) for the
+// single-chunk / test / SpawnSurfaceY path. This preserves the ~13 existing concrete
+// g.Generate(pos) call sites unchanged.
 type Generator interface {
-	Generate(pos level.ChunkPos) *level.Chunk
+	// GenerateTerrain runs the PURE single-chunk pipeline (fill -> surface -> carve)
+	// and returns a chunk left at StatusCarvers. The carve is footprint-guarded to the
+	// target chunk, so terrain stays parallel + single-chunk.
+	GenerateTerrain(pos level.ChunkPos) *level.Chunk
+	// Decorate runs the post-carve pass over a 3x3 view, once all 8 neighbors of the
+	// view's center are carved. For Phase 10 this is a NO-OP body that only promotes the
+	// center to StatusFull (it writes NO blocks); the seam (staging/scheduler/proxy) is
+	// the deliverable and the late-neighbor-write-after-emit rule is DEFERRED to Phase 11+.
+	Decorate(view *Neighborhood)
+	// Dims returns the generator's (minY, height) so the scheduler can size the
+	// Neighborhood proxy without re-deriving the chunk geometry.
+	Dims() (minY, height int)
+}
+
+// decorateSingle runs the concrete single-chunk Generate path shared by every
+// generator: terrain-generate the center + its 8 neighbors into a 3x3 Neighborhood,
+// then Decorate the center over that view (promoting it to StatusFull). The neighbors
+// are freshly terrain-generated only to satisfy the decoration contract's 3x3 read
+// window; for Phase 10's no-op Decorate they are discarded after promotion. Used by
+// *Superflat.Generate and *NoiseGenerator.Generate so the single-chunk path mirrors
+// the worker's two-phase lifecycle byte-for-byte.
+func decorateSingle(g Generator, pos level.ChunkPos) *level.Chunk {
+	center := g.GenerateTerrain(pos)
+	minY, height := g.Dims()
+	chunks := make(map[int64]*level.Chunk, 9)
+	for dx := -1; dx <= 1; dx++ {
+		for dz := -1; dz <= 1; dz++ {
+			np := level.ChunkPos{pos[0] + int32(dx), pos[1] + int32(dz)}
+			if dx == 0 && dz == 0 {
+				chunks[packPos(np)] = center
+				continue
+			}
+			chunks[packPos(np)] = g.GenerateTerrain(np)
+		}
+	}
+	view := newNeighborhood(pos, chunks, minY, height)
+	g.Decorate(view)
+	return center
 }
 
 // fullSkyLight is a full-brightness (level 15) sky-light array for one section:
@@ -78,8 +128,12 @@ func (g *Superflat) sectionLocal(x, y, z int) (sec, local int) {
 	return
 }
 
-// Generate builds the deterministic superflat chunk for pos. Pure: no RNG.
-func (g *Superflat) Generate(_ level.ChunkPos) *level.Chunk {
+// GenerateTerrain builds the deterministic superflat chunk for pos, left at
+// StatusCarvers (the pre-decoration status the worker stages). Pure: no RNG.
+// Superflat has no carve and no decoration, so GenerateTerrain produces the
+// complete block content; only the status differs from the old single-shot
+// Generate (carvers vs full).
+func (g *Superflat) GenerateTerrain(_ level.ChunkPos) *level.Chunk {
 	ch := level.EmptyChunk(g.Secs)
 
 	// Fill every column identically — the superflat profile is position-independent,
@@ -145,6 +199,34 @@ func (g *Superflat) Generate(_ level.ChunkPos) *level.Chunk {
 	// remain the wire authority.
 	surface.BuildWorldgenHeightmaps(ch, g.MinY, g.MinY+g.Secs*16)
 
-	ch.Status = level.StatusFull
+	// GEN2-02: leave the chunk at StatusCarvers — the worker stages carved chunks and
+	// promotes them to StatusFull during the (no-op) Decorate pass once the 3x3 is carved.
+	ch.Status = level.StatusCarvers
 	return ch
 }
+
+// Decorate is the Phase-10 NO-OP decoration pass: it writes NOTHING (superflat has
+// no features) and only promotes the view's center to StatusFull. The Neighborhood
+// proxy + heightmap-update wiring is built for the feature phase (Phase 11+), but
+// superflat will never use it. The late-neighbor-write-after-emit rule is DEFERRED.
+func (g *Superflat) Decorate(view *Neighborhood) {
+	center := view.chunks[packPos(view.center)]
+	if center != nil {
+		center.Status = level.StatusFull
+	}
+}
+
+// Dims returns the superflat (minY, height) so the worker can size the Neighborhood.
+func (g *Superflat) Dims() (minY, height int) { return g.MinY, g.Secs * 16 }
+
+// Generate builds the deterministic superflat chunk for pos at StatusFull. Pure: no
+// RNG. It is the concrete single-chunk path (= GenerateTerrain then Decorate over a
+// 3x3) retained for tests / SpawnSurfaceY / single-chunk callers; it is NOT on the
+// Generator interface. For superflat this is byte-identical to the old single-shot
+// Generate (the no-op Decorate only flips status carvers->full).
+func (g *Superflat) Generate(pos level.ChunkPos) *level.Chunk {
+	return decorateSingle(g, pos)
+}
+
+// compile-time assertion: *Superflat satisfies the split Generator interface.
+var _ Generator = (*Superflat)(nil)

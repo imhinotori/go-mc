@@ -110,8 +110,8 @@ func NewNoiseGenerator(seed int64, secs, minY int) *NoiseGenerator {
 	}
 }
 
-// Generate drives the full pipeline into a fresh capture-diff-sealed level.Chunk and
-// returns it. PURE over (seed, pos).
+// GenerateTerrain drives the PURE single-chunk terrain pipeline into a fresh
+// capture-diff-sealed level.Chunk and returns it at StatusCarvers. PURE over (seed, pos).
 //
 // Order mirrors vanilla's ChunkStatus pipeline NOISE -> SURFACE -> CARVERS:
 //
@@ -123,10 +123,12 @@ func NewNoiseGenerator(seed int64, secs, minY int) *NoiseGenerator {
 //     containers from the multi-noise source (varied, not single-plains).
 //  3. carve  : ApplyCarvers runs the ravines + extra tunnel caves over the surfaced
 //     terrain, aquifer-aware (a carve below the water table floods); carved openings
-//     expose bare stone, matching vanilla.
-//  4. finish: per-section sky light (mirroring Superflat's renderable finishing); the
-//     FluidCount + biome container were set by the fill/biome steps. Status full.
-func (g *NoiseGenerator) Generate(pos level.ChunkPos) *level.Chunk {
+//     expose bare stone, matching vanilla. The carve footprint guard stays — terrain
+//     is still single-chunk.
+//
+// The chunk is left at StatusCarvers; the worker stages it and the Decorate pass
+// (below) promotes it to StatusFull once the 3x3 is carved (GEN2-02 seam).
+func (g *NoiseGenerator) GenerateTerrain(pos level.ChunkPos) *level.Chunk {
 	// (1) FILL — cell-sample + aquifer/ore doFill into a renderable chunk.
 	nc := noisechunk.NewNoiseChunk(g.router, pos)
 	aq := noisechunk.NewAquifer(g.router, nc, pos)
@@ -164,23 +166,45 @@ func (g *NoiseGenerator) Generate(pos level.ChunkPos) *level.Chunk {
 	cc := &carveChunk{chunk: ch, pos: pos, minY: g.minY, height: g.secs * 16, air: g.air}
 	carver.ApplyCarvers(g.seed, cc, aq, g.carvers, g.rep)
 
-	// (4) FINISH — the pre-decoration WORLDGEN heightmaps + sky light.
-	//
-	// GEN2-03: build all 3 worldgen heightmaps (WORLD_SURFACE_WG / OCEAN_FLOOR_WG /
-	// MOTION_BLOCKING) from the FINAL post-carve terrain, here in the finish step (after
-	// ApplyCarvers) so they reflect carved openings and are live + correct before the
-	// first feature would read them (Phase 11+ decoration does heightmap-relative
-	// placement). This is the bulk pre-decoration build; the incremental
-	// level.HeightmapUpdate keeps them live on each subsequent worldgen block write. The
-	// 3 CLIENT heightmaps stay finalized by BuildSurface's writeClientHeightmaps (the wire
-	// authority) and are not touched here. Pure top-down scan → Generate stays
-	// deterministic over (seed, pos).
+	// GEN2-02: leave the chunk at StatusCarvers — the FINISH tail (worldgen heightmaps,
+	// sky light, promote-to-full) now lives in Decorate, which the worker runs once the
+	// 3x3 neighborhood is carved. GenerateTerrain stays pure over (seed, pos).
+	ch.Status = level.StatusCarvers
+	return ch
+}
+
+// Decorate is the post-carve decoration pass over a 3x3 view, run by the worker once
+// all 8 neighbors of view.center are carved. For Phase 10 it writes NO blocks — it only
+// FINISHES the center (the bulk pre-decoration worldgen-heightmap build, sky light, and
+// the promote-to-StatusFull) so a fully-carved chunk becomes a complete renderable chunk.
+//
+// The 3x3 Neighborhood proxy + its per-write level.HeightmapUpdate wiring is BUILT (so the
+// feature phase inherits a correct WorldGenLevel-like view) but Decorate does not CALL
+// view.SetBlock yet — no features exist in Phase 10. The late-neighbor-write-after-emit
+// question (a feature in a neighbor center writing into this already-emitted center) is
+// DEFERRED to Phase 11+ (Open Decision 2): for the no-op body, emit-on-own-decoration is
+// safe by construction because nothing is ever written after emit.
+//
+// Pure over (seed, center.pos) given the fully-carved neighborhood: the worldgen-heightmap
+// build is a deterministic top-down scan of the center's own (post-carve) blocks, so the
+// SET or ORDER of decorated centers cannot affect this center's output.
+func (g *NoiseGenerator) Decorate(view *Neighborhood) {
+	ch := view.chunks[packPos(view.center)]
+	if ch == nil {
+		return
+	}
+
+	// Build all 3 worldgen heightmaps (WORLD_SURFACE_WG / OCEAN_FLOOR_WG / MOTION_BLOCKING)
+	// from the FINAL post-carve terrain so they reflect carved openings and are live before
+	// the first feature would read them (Phase 11+ heightmap-relative placement). The
+	// incremental level.HeightmapUpdate (wired into Neighborhood.SetBlock) keeps them live on
+	// each subsequent worldgen block write. The 3 CLIENT heightmaps stay finalized by
+	// BuildSurface's writeClientHeightmaps (the wire authority) during GenerateTerrain.
 	surface.BuildWorldgenHeightmaps(ch, g.minY, g.minY+g.secs*16)
 
-	// Sky light for rendering (mirrors Superflat / FillChunk finishing). FillChunk already
-	// set FluidCount/biome defaults and the CLIENT heightmaps were rewritten by
-	// BuildSurface; sky light is re-applied here defensively so every present section is
-	// lit regardless of the fill path's finishing.
+	// Sky light for rendering (mirrors Superflat / FillChunk finishing). FillChunk set
+	// FluidCount/biome defaults and BuildSurface rewrote the CLIENT heightmaps; sky light is
+	// applied here defensively so every present section is lit regardless of the fill path.
 	for i := range ch.Sections {
 		s := &ch.Sections[i]
 		if len(s.SkyLight) != 2048 {
@@ -188,7 +212,19 @@ func (g *NoiseGenerator) Generate(pos level.ChunkPos) *level.Chunk {
 		}
 	}
 	ch.Status = level.StatusFull
-	return ch
+}
+
+// Dims returns the generator's (minY, height) so the worker can size the Neighborhood
+// proxy without re-deriving the chunk geometry.
+func (g *NoiseGenerator) Dims() (minY, height int) { return g.minY, g.secs * 16 }
+
+// Generate drives the full pipeline into a StatusFull level.Chunk via the concrete
+// single-chunk path (= GenerateTerrain then Decorate over a freshly-terrain-generated
+// 3x3). PURE over (seed, pos). It is NOT on the Generator interface — it is retained for
+// tests / SpawnSurfaceY / single-chunk callers and is byte-identical to the old single-shot
+// Generate (the no-op Decorate runs the same FINISH tail that used to live inline).
+func (g *NoiseGenerator) Generate(pos level.ChunkPos) *level.Chunk {
+	return decorateSingle(g, pos)
 }
 
 // SpawnSurfaceY derives the world-Y of the highest solid/fluid surface block for the
@@ -201,9 +237,12 @@ func (g *NoiseGenerator) Generate(pos level.ChunkPos) *level.Chunk {
 // The WorldSurface heightmap stores, per column, the Y of the first block ABOVE the
 // highest non-air block, encoded relative to MinY. So the top solid/fluid block's world-Y
 // is (WorldSurface.Get(col) + MinY) - 1 — the same "top solid block world-Y" semantics
-// Superflat's SurfaceY carried. Pure over (seed, pos): it reuses Generate.
+// Superflat's SurfaceY carried. Pure over (seed, pos): it reuses GenerateTerrain (the
+// WorldSurface CLIENT heightmap is finalized by BuildSurface's writeClientHeightmaps
+// during GenerateTerrain's SURFACE step, so the spawn read needs only terrain, not
+// decoration — avoiding the redundant 3x3 neighbor generation a full Generate would do).
 func (g *NoiseGenerator) SpawnSurfaceY(pos level.ChunkPos) int {
-	ch := g.Generate(pos)
+	ch := g.GenerateTerrain(pos)
 	// Block-center column of the chunk: local x=8, z=8 (the (8.5, _, 8.5) spawn point
 	// sendPlayBootstrap uses). Column index is (z&15)<<4 | (x&15) — matching the heightmap
 	// column order written by BuildSurface.

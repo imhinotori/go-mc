@@ -116,7 +116,7 @@ func (w *Worker) loadOrGenerate(pos level.ChunkPos) (*level.Chunk, error) {
 			return ch, nil
 		}
 	}
-	return w.gen.Generate(pos), nil // region miss -> deterministic superflat
+	return w.gen.GenerateTerrain(pos), nil // region miss -> carved chunk (staged by the scheduler)
 }
 
 // tryRegion attempts to read pos from disk, format-aware and OPT-IN: it PREFERS
@@ -218,5 +218,12 @@ func decodeChunk(data []byte) (*level.Chunk, bool, error) {
 // chunkKey packs (cx,cz) into a stable singleflight key. Two callers with the
 // same pos share one Do invocation (the dedup'd caller sees shared=true).
 func chunkKey(pos level.ChunkPos) string {
-	return strconv.FormatInt(int64(pos[0])<<32|int64(uint32(pos[1])), 10)
+	return strconv.FormatInt(packPos(pos), 10)
+}
+
+// packPos packs (cx,cz) into a stable int64 staging/neighborhood key — the SAME
+// packing chunkKey uses, but as the int64 itself (not its decimal string). The
+// staging map + the Neighborhood's 3x3 lookup are both keyed by this.
+func packPos(p level.ChunkPos) int64 {
+	return int64(p[0])<<32 | int64(uint32(p[1]))
 }
