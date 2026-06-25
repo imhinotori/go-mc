@@ -145,6 +145,6 @@ Phases execute in numeric order: 10 → 11 → 12 → 13 → 14 → 15 → 16
 | 11. Feature Pipeline & Decoration Orchestration | 3/3 | Complete   | 2026-06-25 |
 | 12. Core Feature Types | 3/3 | Complete | 2026-06-25 |
 | 13. Trees, Dungeon & Features Visual Gate | 4/4 | Complete   | 2026-06-25 |
-| 14. Structure Pipeline & Temples | 0/3 | Planned | - |
+| 14. Structure Pipeline & Temples | 0/3 | Planned    |  |
 | 15. Mineshaft & Stronghold | 0/0 | Not started | - |
 | 16. Village Jigsaw & Structures Visual Gate | 0/0 | Not started | - |

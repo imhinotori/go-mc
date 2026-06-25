@@ -27,7 +27,7 @@ The "user" is an unmodified vanilla 26.2 (protocol 776) client exploring the wor
 
 ### Structures
 
-- [ ] **STRUCT-01**: The two-phase structure pipeline is ported: STRUCTURE_STARTS (decide WHERE per chunk, cache a `StructureStart` keyed by packed chunk pos in a `world/structure` cache), STRUCTURE_REFERENCES (8-chunk-radius bbox-intersect scan), and PLACE (`placeInChunk` clipping each piece write to the target chunk's writable box). Placement math ported bit-exact: `getPotentialStructureChunk` (floorDiv + salt-in-seed), the spread types, the four `probabilityReducer` variants, `isStructureChunk`.
+- [x] **STRUCT-01**: The two-phase structure pipeline is ported: STRUCTURE_STARTS (decide WHERE per chunk, cache a `StructureStart` keyed by packed chunk pos in a `world/structure` cache), STRUCTURE_REFERENCES (8-chunk-radius bbox-intersect scan), and PLACE (`placeInChunk` clipping each piece write to the target chunk's writable box). Placement math ported bit-exact: `getPotentialStructureChunk` (floorDiv + salt-in-seed), the spread types, the four `probabilityReducer` variants, `isStructureChunk`.
 - [ ] **STRUCT-02**: The `StructurePiece` bounding-box-tree machinery is ported (`addChildren` recursion, `findCollisionPiece`, `postProcess`, `placeBlock`/`generateBox`/`fillColumnDown` with rotation/mirror) and the first true structure — the **desert pyramid** (single-piece, hardcoded geometry, 0 .nbt) — generates in vanilla positions as the pipeline shakedown. Jungle temple / igloo / swamp hut follow as cheap single-piece add-ons.
 - [ ] **STRUCT-03**: The **mineshaft** is ported (multi-piece recursive corridor/crossing/room assembly, hardcoded geometry, the `legacy_type_3` frequency-reduction placement path); chests place as block + tag (loot deferred to v3).
 - [ ] **STRUCT-04**: The **stronghold** is ported — the unique `concentric_rings` placement (the ~128 biome-validated ring positions precomputed once at worldgen-state init, `isPlacementChunk` = ring-list contains) + the recursive piece set reusing the STRUCT-02 machinery.
@@ -64,7 +64,7 @@ The "user" is an unmodified vanilla 26.2 (protocol 776) client exploring the wor
 | FEAT-04 | Phase 13 | Complete |
 | FEAT-05 | Phase 13 | Complete |
 | FEAT-06 | Phase 13 | Complete |
-| STRUCT-01 | Phase 14 | Pending |
+| STRUCT-01 | Phase 14 | Complete |
 | STRUCT-02 | Phase 14 | Pending |
 | STRUCT-03 | Phase 15 | Pending |
 | STRUCT-04 | Phase 15 | Pending |
