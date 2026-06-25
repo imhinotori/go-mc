@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2
 milestone_name: worldgen-features-structures
 status: verifying
-stopped_at: "Phase 13 COMPLETE (4/4 plans) — the FEATURES half of v2 (Phases 10-13) is closed; FEAT-04/05/06 met; the autonomous:false real-client VISUAL GATE is APPROVED (trees + vines confirmed on a real vanilla 26.2 client)."
-last_updated: "2026-06-25T13:02:23.253Z"
+stopped_at: Completed 14-02-PLAN.md
+last_updated: "2026-06-25T13:48:52.283Z"
 last_activity: 2026-06-25
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 16
-  completed_plans: 13
-  percent: 81
+  completed_plans: 15
+  percent: 94
 ---
 
 # Project State
@@ -95,7 +95,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [████████░░] 81%
+Progress: [█████████░] 94%
 
 ## Performance Metrics
 
@@ -165,6 +165,7 @@ Progress: [████████░░] 81%
 | Phase 13 P03 | 2h | 2 tasks | 8 files |
 | Phase 13 P04 | ~30min | 3 tasks | 4 files |
 | Phase 14 P01 | 70 | 3 tasks | 97 files |
+| Phase 14 P02 | 28min | 2 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -263,6 +264,9 @@ Recent decisions affecting current work:
 - [Phase 13]: 13-03: randomized_int_state_provider sets the int property by re-resolving the source {Name,Properties} with the property overridden (the source is always simple_state_provider in the data)
 - [Phase 13]: 13-03: PaleMoss ground pale_moss_patch is a nested vegetation feature needing the chunk generator; the gate nextFloat is consumed but the patch is not placed (Known Stub); the trunk/leaves pale_hanging_moss drape is faithful
 - [Phase ?]: STRUCT-01 structure pipeline (placement math + StructureStart cache + 8-radius compute-on-demand REFERENCES + heightmap-at-STARTS sampler + two-pass worker seam, zero blocks)
+- [Phase ?]: 14-02: desert pyramid is the first true structure - StructurePiece machinery (placeBlock cross-chunk clip) + placeInChunk + full hardcoded postProcess, fingerprint-pinned
+- [Phase ?]: 14-02: PostProcess takes a WorldGenView interface (Neighborhood satisfies it) - world->world/structure one-way, no import cycle
+- [Phase ?]: 14-02: loot/redstone/suspicious-sand deferred v3 - chest BLOCK + loot tag, tnt + pressure-plate BLOCKS placed
 
 ### Pending Todos
 
@@ -289,7 +293,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-25T13:02:01.931Z
-Stopped at: Phase 13 COMPLETE (4/4 plans) — the FEATURES half of v2 (Phases 10-13) is closed; FEAT-04/05/06 met; the autonomous:false real-client VISUAL GATE is APPROVED (trees + vines confirmed on a real vanilla 26.2 client).
+Last session: 2026-06-25T13:48:52.267Z
+Stopped at: Completed 14-02-PLAN.md
 Resume file: None
 Next: the STRUCTURES half of v2 — Phase 14 (Structures STARTS/REFERENCES/PLACE pipeline + StructurePiece machinery, shaken down on the single-piece desert pyramid), then Phase 15 (mineshaft recursion + stronghold concentric-rings placement), then Phase 16 (the village .nbt/template_pool/Placer jigsaw + the second VISUAL GATE). Research: .planning/research/v2-structures.md (the two-phase pipeline, the LegacyRandomSource seed hinge, the easy→hard tier order). Deferred-still-open: dungeon loot/spawner-mob + BeehiveDecorator occupant + pale_garden PaleMoss (all v3, cosmetic, in 13-04-SUMMARY); KeepAlive double-leave hardening (Phase 3, surfaces when real timeout-driven disconnects land).

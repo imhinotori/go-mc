@@ -105,8 +105,8 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. The `StructurePiece` bounding-box-tree machinery is ported (`addChildren` recursion, `findCollisionPiece`, `postProcess`, `placeBlock`/`generateBox`/`fillColumnDown` with rotation/mirror)
   4. The desert pyramid (single-piece, hardcoded geometry, 0 .nbt) generates in vanilla positions as the pipeline shakedown; jungle temple / igloo / swamp hut follow as cheap single-piece add-ons
 **Plans**: 3 plans
-  - [ ] 14-01-PLAN.md — The structure PIPELINE: the placement math (getPotentialStructureChunk floorDiv+salt-in-seed + spread types + the 4 probabilityReducers + isStructureChunk) + the `world/structure` StructureStart cache (pure-memoized, singleflight-deduped) + the 8-radius REFERENCES scan + the heightmap-at-STARTS column sampler (router preliminary-surface) + the two-pass worker seam (STARTS/REFERENCES/PLACE-hook), ZERO blocks placed (STRUCT-01)
-  - [ ] 14-02-PLAN.md — The StructurePiece machinery (Piece tree + placeBlock-with-clip/generateBox/fillColumnDown/createChest/addChildren + rotation/mirror) + StructureStart.placeInChunk + the DESERT PYRAMID shakedown (single-piece hardcoded geometry, the first structure end-to-end: STARTS→cache→REFERENCES→PLACE→postProcess, cross-chunk idempotent, 5x5 determinism green with blocks placing) (STRUCT-02)
+  - [x] 14-01-PLAN.md — The structure PIPELINE: the placement math (getPotentialStructureChunk floorDiv+salt-in-seed + spread types + the 4 probabilityReducers + isStructureChunk) + the `world/structure` StructureStart cache (pure-memoized, singleflight-deduped) + the 8-radius REFERENCES scan + the heightmap-at-STARTS column sampler (router preliminary-surface) + the two-pass worker seam (STARTS/REFERENCES/PLACE-hook), ZERO blocks placed (STRUCT-01)
+  - [x] 14-02-PLAN.md — The StructurePiece machinery (Piece tree + placeBlock-with-clip/generateBox/fillColumnDown/createChest/addChildren + rotation/mirror) + StructureStart.placeInChunk + the DESERT PYRAMID shakedown (single-piece hardcoded geometry, the first structure end-to-end: STARTS→cache→REFERENCES→PLACE→postProcess, cross-chunk idempotent, 5x5 determinism green with blocks placing) (STRUCT-02)
   - [ ] 14-03-PLAN.md — The cheap temple follow-ons: jungle temple + igloo (the first addChildren multi-piece — dome + probabilistic basement) + swamp hut + the automated structures-pipeline acceptance (all 4 temples at expected chunks per-salt + cross-chunk idempotence + STARTS purity + 5x5/emit-once byte-identity + Docker -race) — NO visual gate (Phase 16) (STRUCT-02)
 **Research**: `.planning/research/v2-structures.md` (Tier 1 — Desert Pyramid…; "Architecture Patterns → the two-phase pipeline", "the StructurePiece bounding-box tree", "the structure-start cache", "Brownfield: how STARTS + PLACE slot into the worker"; "Common Pitfalls #1–3").
 
@@ -145,6 +145,6 @@ Phases execute in numeric order: 10 → 11 → 12 → 13 → 14 → 15 → 16
 | 11. Feature Pipeline & Decoration Orchestration | 3/3 | Complete   | 2026-06-25 |
 | 12. Core Feature Types | 3/3 | Complete | 2026-06-25 |
 | 13. Trees, Dungeon & Features Visual Gate | 4/4 | Complete   | 2026-06-25 |
-| 14. Structure Pipeline & Temples | 0/3 | Planned    |  |
+| 14. Structure Pipeline & Temples | 2/3 | In Progress|  |
 | 15. Mineshaft & Stronghold | 0/0 | Not started | - |
 | 16. Village Jigsaw & Structures Visual Gate | 0/0 | Not started | - |
