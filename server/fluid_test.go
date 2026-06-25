@@ -214,3 +214,81 @@ func TestFlowDownColumn(t *testing.T) {
 		t.Fatalf("source spread sideways while it could still fall (should flow down first)")
 	}
 }
+
+// --- Task 3: player fluid physics (EntityFluidInteraction port) ---
+
+// fluidTestPlayer makes a tickPlayer at (x,y,z) with no client (physics is position-only).
+func fluidTestPlayer(x, y, z float64) *tickPlayer {
+	return &tickPlayer{x: x, y: y, z: z}
+}
+
+// TestInWaterDetection: a player whose AABB overlaps a water block is in water; a dry player is
+// not.
+func TestInWaterDetection(t *testing.T) {
+	loop, mgr := newFluidLoop()
+
+	// Water at the player's feet position.
+	setWater(mgr, pk.Position{X: 8, Y: 64, Z: 8}, 0)
+
+	wet := fluidTestPlayer(8.5, 64.0, 8.5) // feet at y=64, inside the water block
+	if !loop.playerInWater(wet) {
+		t.Fatalf("player standing in a water block should be in water")
+	}
+
+	dry := fluidTestPlayer(2.5, 64.0, 2.5) // far from any water
+	if loop.playerInWater(dry) {
+		t.Fatalf("player on dry land should not be in water")
+	}
+}
+
+// TestWaterSlowdown: a horizontal movement delta applied through the in-water path is scaled by
+// getWaterSlowDown (0.8); a dry player's delta is unchanged.
+func TestWaterSlowdown(t *testing.T) {
+	loop, mgr := newFluidLoop()
+	setWater(mgr, pk.Position{X: 8, Y: 64, Z: 8}, 0)
+
+	wet := fluidTestPlayer(8.5, 64.0, 8.5)
+	dx, dy, dz := loop.applyFluidPhysics(wet, 1.0, -0.5, 0.0)
+	if !floatNear(dx, 0.8, 1e-9) {
+		t.Fatalf("in-water horizontal dx = %v, want 0.8 (getWaterSlowDown)", dx)
+	}
+	if !floatNear(dz, 0.0, 1e-9) {
+		t.Fatalf("in-water horizontal dz = %v, want 0.0", dz)
+	}
+	_ = dy
+
+	dry := fluidTestPlayer(2.5, 64.0, 2.5)
+	ddx, _, ddz := loop.applyFluidPhysics(dry, 1.0, -0.5, 0.3)
+	if !floatNear(ddx, 1.0, 1e-9) || !floatNear(ddz, 0.3, 1e-9) {
+		t.Fatalf("dry player horizontal delta changed: dx=%v dz=%v, want 1.0/0.3", ddx, ddz)
+	}
+}
+
+// TestBuoyancy: a submerged player's downward movement is reduced (buoyant push) vs a dry
+// player whose vertical delta is unchanged.
+func TestBuoyancy(t *testing.T) {
+	loop, mgr := newFluidLoop()
+	setWater(mgr, pk.Position{X: 8, Y: 64, Z: 8}, 0)
+
+	wet := fluidTestPlayer(8.5, 64.0, 8.5)
+	_, wetDy, _ := loop.applyFluidPhysics(wet, 0.0, -0.5, 0.0)
+	// Buoyancy adds an upward (positive) component, so the net downward delta is LESS negative.
+	if !(wetDy > -0.5) {
+		t.Fatalf("submerged player dy = %v, want > -0.5 (buoyant reduction)", wetDy)
+	}
+
+	dry := fluidTestPlayer(2.5, 64.0, 2.5)
+	_, dryDy, _ := loop.applyFluidPhysics(dry, 0.0, -0.5, 0.0)
+	if !floatNear(dryDy, -0.5, 1e-9) {
+		t.Fatalf("dry player dy = %v, want -0.5 (unchanged)", dryDy)
+	}
+}
+
+// floatNear reports |a-b| <= eps.
+func floatNear(a, b, eps float64) bool {
+	d := a - b
+	if d < 0 {
+		d = -d
+	}
+	return d <= eps
+}
