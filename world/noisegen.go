@@ -176,7 +176,16 @@ func NewNoiseGenerator(seed int64, secs, minY int) *NoiseGenerator {
 	}
 	ringState := structure.NewStrongholdRingState(seed, biomeAt, strongholdBiased)
 	strongholdGen := structure.NewStrongholdStartGen(ringState)
-	structGen := structure.NewCompositeStartGenerator(desertGen, jungleGen, iglooGen, swampGen, mineshaftGen, strongholdGen)
+	// STRUCT-05 (16-02): villages — the data-driven jigsaw structure (the bounded-BFS Placer).
+	// A standard random_spread StartGenerator (salt 10387312 / spacing 34 / separation 8), pure
+	// over (seed,pos) — NO new worldgen-state plumbing (unlike the stronghold's ring state). The
+	// 5 biome variants (plains/desert/savanna/snowy/taiga) are weight-picked + biome-gated per
+	// chunk. Registered at the SAME composite site the temples + mineshaft + stronghold use.
+	villageGen, err := structure.NewVillageStartGen()
+	if err != nil {
+		panic("world: NoiseGenerator: build village start generator: " + err.Error())
+	}
+	structGen := structure.NewCompositeStartGenerator(desertGen, jungleGen, iglooGen, swampGen, mineshaftGen, strongholdGen, villageGen)
 
 	return &NoiseGenerator{
 		seed:        seed,
