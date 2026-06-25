@@ -559,6 +559,26 @@ func ParseTreeConfiguration(raw json.RawMessage) (*TreeConfiguration, error) {
 	}, nil
 }
 
+// TrunkHeight draws the trunk column height via the trunk placer's getTreeHeight
+// (base + nextInt(a+1) + nextInt(b+1)) — the TWO nextInt draws are the determinism
+// contract. Exported for the live body (the placer + the height draw stay in this package).
+func (cfg *TreeConfiguration) TrunkHeight(rng levelgen.RandomSource) int {
+	return cfg.trunkPlacer.getTreeHeight(rng)
+}
+
+// SizeAtLayer exposes minimum_size.getSizeAtLayer(height, depth) for the live body's
+// validity scan (the per-layer trunk-footprint radius).
+func (cfg *TreeConfiguration) SizeAtLayer(height, depth int) int {
+	return cfg.minimumSize.getSizeAtLayer(height, depth)
+}
+
+// PosFree exposes the conservative validTreePos test (air-or-replaceable) for the live
+// body's footprint scan, so the scan logic lives in `world` while the pure free-test stays
+// here (one source of truth for "a tree may grow through this block").
+func (cfg *TreeConfiguration) PosFree(read ReadFn, pos TreePos) bool {
+	return treePosFree(read, pos)
+}
+
 // BelowTrunkWithExisting returns a copy of cfg whose below_trunk_provider is bound to the
 // live existing-block read (so its rule_based rules evaluate). The live body calls this
 // before placeTrunk; a SimpleStateProvider below-trunk provider is unaffected.
