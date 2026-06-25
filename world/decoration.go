@@ -225,29 +225,26 @@ func buildDecorationData() (*decorationData, error) {
 }
 
 // retainedBiomes returns the DISTINCT biomes across the center + its 8 neighbors — the
-// "retained possible biome set" applyBiomeDecoration iterates. It samples each chunk's
-// 4x4x4 biome grid via the per-Decorate biome lookup (the quart-cell cache), in a
-// deterministic order (ascending chunk dx/dz, then quart cell), and dedups. The result is
-// sorted by biome id so the IntSet gather order is reproducible (it does not affect the
-// final sorted-index fold, but keeps the gather deterministic).
-func retainedBiomes(centerPos [2]int, minY, height int, biomeAt func(x, y, z int) levelbiome.Type) []levelbiome.Type {
+// "retained possible biome set" applyBiomeDecoration iterates. It reads the biomes ALREADY
+// stored in each chunk's per-section 4×4×4 biome palette containers (FillBiomes wrote them
+// during terrain gen from the same multi-noise source), so it does NOT re-evaluate the
+// climate density functions + the RTree per quart cell — that re-sampling of the whole
+// 96-level vertical column × 16 columns × 9 chunks was the dominant decoration cost
+// (~79% of Decorate). Reading the palettes is the identical SET (the palette holds exactly
+// the biomes FillBiomes placed) at a fraction of the cost. The result is sorted by biome id
+// so the gather order is reproducible.
+func retainedBiomes(view *Neighborhood) []levelbiome.Type {
 	seen := make(map[levelbiome.Type]bool)
 	var out []levelbiome.Type
-	for dx := -1; dx <= 1; dx++ {
-		for dz := -1; dz <= 1; dz++ {
-			baseX := (centerPos[0] + dx) * 16
-			baseZ := (centerPos[1] + dz) * 16
-			// Sample the chunk's quart grid (4x4 columns x the vertical quart cells). The
-			// biomeAt cache collapses these to one evaluation per distinct quart cell.
-			for qx := 0; qx < 16; qx += 4 {
-				for qz := 0; qz < 16; qz += 4 {
-					for y := minY; y < minY+height; y += 4 {
-						b := biomeAt(baseX+qx, y, baseZ+qz)
-						if !seen[b] {
-							seen[b] = true
-							out = append(out, b)
-						}
-					}
+	for _, ch := range view.chunks {
+		if ch == nil {
+			continue
+		}
+		for si := range ch.Sections {
+			for _, b := range ch.Sections[si].Biomes.Palette() {
+				if !seen[b] {
+					seen[b] = true
+					out = append(out, b)
 				}
 			}
 		}

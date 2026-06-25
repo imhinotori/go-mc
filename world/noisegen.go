@@ -284,7 +284,7 @@ func (g *NoiseGenerator) Decorate(view *Neighborhood) {
 	biomeAt := bc.get
 	height := g.secs * 16
 	ctx := newPlacementContext(view, g.minY, height, biomeAt)
-	biomes := retainedBiomes([2]int{int(view.center[0]), int(view.center[1])}, g.minY, height, biomeAt)
+	biomes := retainedBiomes(view)
 
 	wg := levelgen.NewWorldgenRandom(g.seed)
 	makePlacer := func(pf *feature.PlacedFeature) placement.PlacerFunc {
