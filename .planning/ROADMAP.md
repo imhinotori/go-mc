@@ -73,7 +73,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. The `RandomSelector`/`SimpleRandomSelector`/`RandomBooleanSelector` composites resolve nested sub-features with the rng threaded through (so a biome's weighted feature choice works)
   4. `BlockPile`/`FallenTree`/`VegetationPatch` features place, so a biome's full non-tree ground cover + ore set generates deterministically per seed
 **Plans**: 3 plans
-  - [ ] 12-01-PLAN.md — The BlockStateProvider hierarchy (Simple/Weighted/RuleBased + Noise/DualNoise) + the deferred-modifier completion (random_offset + block_predicate_filter & its BlockPredicate set — the vegetation tries/spread + ground gate 11-02 left) + the featureBody-registry dispatch refactor so the body plans run parallel (FEAT-03 prerequisites)
+  - [x] 12-01-PLAN.md — The BlockStateProvider hierarchy (Simple/Weighted/RuleBased + Noise/DualNoise) + the deferred-modifier completion (random_offset + block_predicate_filter & its BlockPredicate set — the vegetation tries/spread + ground gate 11-02 left) + the featureBody-registry dispatch refactor so the body plans run parallel (FEAT-03 prerequisites)
   - [ ] 12-02-PLAN.md — OreFeature (UNDERGROUND_ORES blob via OreConfiguration + tag_match/block_match rule_test targets, distinct from v1's noise OreVeinifier) + SimpleBlockFeature + RandomPatchFeature bodies, deterministic-placement + cross-chunk-spill tested (FEAT-03 ore + ground-cover bulk)
   - [ ] 12-03-PLAN.md — The composite selectors (random_selector/simple_random_selector/random_boolean_selector) + the placeSubFeature recursion (Pitfall #9, the rng threaded through nested sub-features) + BlockPile/FallenTree/VegetationPatch bodies + the final 5x5 determinism/emit-once/Docker -race acceptance gate with real bodies live (FEAT-03 selectors + remaining types)
 **Research**: `.planning/research/v2-features-decoration.md` (Wave C — the core Feature types; Wave D — BlockStateProvider hierarchy; "Common Pitfalls #7 feature-vs-noise ore double-placement, #9 composite/selector recursion").
@@ -136,7 +136,7 @@ Phases execute in numeric order: 10 → 11 → 12 → 13 → 14 → 15 → 16
 |-------|----------------|--------|-----------|
 | 10. Worldgen Foundation — LCG, Cross-Chunk Seam & Live Heightmap | 3/3 | Complete   | 2026-06-25 |
 | 11. Feature Pipeline & Decoration Orchestration | 3/3 | Complete   | 2026-06-25 |
-| 12. Core Feature Types | 0/3 | Planned | - |
+| 12. Core Feature Types | 1/3 | In Progress|  |
 | 13. Trees, Dungeon & Features Visual Gate | 0/0 | Not started | - |
 | 14. Structure Pipeline & Temples | 0/0 | Not started | - |
 | 15. Mineshaft & Stronghold | 0/0 | Not started | - |
