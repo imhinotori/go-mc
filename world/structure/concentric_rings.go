@@ -322,24 +322,36 @@ func (g *strongholdStartGen) GenerateStarts(seed int64, pos level.ChunkPos, samp
 
 	cx, cz := int(pos[0]), int(pos[1])
 
-	// The start RNG = SetLargeFeatureSeed(seed,cx,cz) (re-derivable per (seed,ownerChunk)).
-	// 15-03 drives the recursive piece assembly off this; this plan only proves the anchor.
+	// The piece RNG = SetLargeFeatureSeed(seed,cx,cz) (re-derivable per (seed,ownerChunk)), so
+	// placeInChunk from ANY overlapping chunk redraws the SAME graph + clips to that chunk (the
+	// cross-chunk idempotence seam — a stronghold spans MANY chunks deep underground).
 	rng := levelgen.NewWorldgenRandom(0)
 	rng.SetLargeFeatureSeed(seed, cx, cz)
-	_ = rng // consumed by 15-03's piece assembly; held here so the seam is exercised.
 
-	// Sample the surface Y at the chunk-center column (the anchor Y the pieces hang from).
+	// Sample the surface Y at the chunk-center column. Vanilla buries the stronghold well below
+	// the surface; the StartPiece anchors its spiral StairsDown a fixed depth under it. Clamp to
+	// a sane underground band so the recursive Y bound (10..200) admits the graph.
 	centerX := cx*16 + 8
 	centerZ := cz*16 + 8
-	_ = sampler.SampleSurfaceY(centerX, centerZ)
+	surfaceY := sampler.SampleSurfaceY(centerX, centerZ)
+	anchorY := surfaceY - 24
+	if anchorY < 20 {
+		anchorY = 20
+	}
+
+	// 15-03: build the REAL recursive stronghold piece tree (the StartPiece spiral + the
+	// twisting corridors/stairs/crossings + exactly one PortalRoom + the Library), reusing the
+	// 15-01 mineshaft addChildren/FindCollisionPiece/genDepth-bounded recursion verbatim.
+	pieces := assembleStronghold(rng, centerX, anchorY, centerZ)
+	if len(pieces) == 0 {
+		return nil
+	}
 
 	start := &StructureStart{
 		Structure: "minecraft:stronghold",
 		ChunkPos:  pos,
-		// Pieces: STUBBED (empty) — 15-03 fills the recursive stronghold pieces. An empty
-		// piece set is byte-inert (IsValid() is false), so the placement registers without
-		// writing any blocks — the same discipline 14-01 used for the empty PLACE hook.
-		Pieces: nil,
+		Pieces:    pieces,
 	}
+	start.RecomputeBBox()
 	return []*StructureStart{start}
 }

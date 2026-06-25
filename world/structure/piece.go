@@ -368,6 +368,8 @@ func stairOf(b block.Block) (stairState, bool) {
 		return stairState{v.Facing, v.Shape}, true
 	case block.SpruceStairs:
 		return stairState{v.Facing, v.Shape}, true
+	case block.StoneBrickStairs:
+		return stairState{v.Facing, v.Shape}, true
 	}
 	return stairState{}, false
 }
@@ -383,6 +385,9 @@ func withStair(b block.Block, s stairState) block.Block {
 		v.Facing, v.Shape = s.facing, s.shape
 		return v
 	case block.SpruceStairs:
+		v.Facing, v.Shape = s.facing, s.shape
+		return v
+	case block.StoneBrickStairs:
 		v.Facing, v.Shape = s.facing, s.shape
 		return v
 	}

@@ -282,9 +282,9 @@ func TestIsPlacementChunk(t *testing.T) {
 	}
 }
 
-// TestStrongholdStart pins the placement-half generator: a ring chunk yields one anchor
-// start (Structure minecraft:stronghold, ChunkPos==pos, EMPTY pieces — byte-inert); a
-// non-ring chunk yields nil; pure over (seed,pos).
+// TestStrongholdStart pins the placement-half generator: a ring chunk yields one start
+// (Structure minecraft:stronghold, ChunkPos==pos) — now with the REAL recursive piece tree
+// filled (15-03 replaced 15-02's byte-inert stub); a non-ring chunk yields nil.
 func TestStrongholdStart(t *testing.T) {
 	const seed int64 = 808
 	preferred, err := LoadStrongholdBiasedTo()
@@ -309,8 +309,11 @@ func TestStrongholdStart(t *testing.T) {
 	if st.ChunkPos != ringPos {
 		t.Errorf("anchor ChunkPos = %v, want %v", st.ChunkPos, ringPos)
 	}
-	if len(st.Pieces) != 0 {
-		t.Errorf("pieces = %d, want 0 (byte-inert stub this plan)", len(st.Pieces))
+	if len(st.Pieces) == 0 {
+		t.Errorf("pieces = 0, want >=1 (15-03 fills the recursive stronghold tree)")
+	}
+	if st.BBox.IsEmpty() {
+		t.Errorf("BBox empty, want the encapsulated piece-tree bbox")
 	}
 
 	// A non-ring chunk -> nil.
