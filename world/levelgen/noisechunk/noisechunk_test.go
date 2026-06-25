@@ -69,7 +69,7 @@ func TestTrilerpCorners(t *testing.T) {
 	n000, n100, n010, n110 := 1.0, 2.0, 3.0, 5.0
 	n001, n101, n011, n111 := 8.0, 13.0, 21.0, 34.0
 
-	ip := newInterpolator(constFn(0), 1, 1, cellWidth, cellHeight)
+	ip := newInterpolatedFn(constFn(0), &fillState{}, 1, 1, cellWidth, cellHeight, 0)
 	// Load the single cell's corners directly into the 2x2x2 slice grid.
 	// slice0 = X=0 face, slice1 = X=1 face; first index = Z (xz), second = Y.
 	ip.slice0[0][0], ip.slice0[0][1] = n000, n010
@@ -87,7 +87,7 @@ func TestTrilerpCorners(t *testing.T) {
 			for iz := 0; iz < cellWidth; iz++ {
 				dz := float64(iz) / float64(cellWidth)
 				ip.updateForZ(dz)
-				got := ip.value()
+				got := ip.val
 				want := trilerpRef(dx, dy, dz, n000, n100, n010, n110, n001, n101, n011, n111)
 				if math.Abs(got-want) > 1e-12 {
 					t.Fatalf("trilerp(ix=%d iy=%d iz=%d): got %v want %v", ix, iy, iz, got, want)
@@ -102,7 +102,7 @@ func TestTrilerpCorners(t *testing.T) {
 func TestInterpolatorDeterministic(t *testing.T) {
 	const cellWidth, cellHeight = 4, 8
 	run := func() []float64 {
-		ip := newInterpolator(constFn(0), 1, 1, cellWidth, cellHeight)
+		ip := newInterpolatedFn(constFn(0), &fillState{}, 1, 1, cellWidth, cellHeight, 0)
 		ip.slice0[0][0], ip.slice0[0][1] = 0.1, 0.9
 		ip.slice0[1][0], ip.slice0[1][1] = 0.2, 0.8
 		ip.slice1[0][0], ip.slice1[0][1] = 0.3, 0.7
@@ -115,7 +115,7 @@ func TestInterpolatorDeterministic(t *testing.T) {
 				ip.updateForX(float64(ix) / cellWidth)
 				for iz := 0; iz < cellWidth; iz++ {
 					ip.updateForZ(float64(iz) / cellWidth)
-					out = append(out, ip.value())
+					out = append(out, ip.val)
 				}
 			}
 		}
@@ -146,7 +146,7 @@ func TestCellFillOrder(t *testing.T) {
 	const firstNoiseX, firstNoiseZ = 3, 7
 	field := rampFn{ax: 0.5, ay: -0.25, az: 0.125, b: 1.0}
 
-	ip := newInterpolator(field, cellCountXZ, cellCountY, cellWidth, cellHeight)
+	ip := newInterpolatedFn(field, &fillState{}, cellCountXZ, cellCountY, cellWidth, cellHeight, 0)
 
 	// Drive the slice fill exactly as NoiseChunk.fillSlice would for a 1x1 cell grid:
 	// slice0 = the X=0 face (cellX=0), slice1 = the X=1 face (cellX=1); each holds a
@@ -172,7 +172,7 @@ func TestCellFillOrder(t *testing.T) {
 			ip.updateForX(float64(ix) / cellWidth)
 			for iz := 0; iz < cellWidth; iz++ {
 				ip.updateForZ(float64(iz) / cellWidth)
-				got := ip.value()
+				got := ip.val
 				wx := firstNoiseX*cellWidth + ix
 				wy := iy
 				wz := firstNoiseZ*cellWidth + iz
@@ -193,15 +193,20 @@ func TestCellFillOrder(t *testing.T) {
 func TestCellSampleNotPerBlock(t *testing.T) {
 	_, nc := buildNC(t, 0, 0)
 
+	// With per-marker interpolation, EACH interpolated marker fills its own corner grid,
+	// so the total is (#interpolators) * the coarse-grid corner count. The overworld
+	// final_density has 5 interpolated markers (the main density mul + 4 cave branches).
 	cornerGrid := (nc.cellCountXZ + 1) * (nc.cellCountXZ + 1) * (nc.cellCountY + 1)
+	wantTotal := len(nc.interps) * cornerGrid
 	perBlock := 16 * nc.height * 16
-	if nc.cornerSamples != cornerGrid {
-		t.Fatalf("corner sample count = %d, want coarse-grid %d", nc.cornerSamples, cornerGrid)
+	if nc.cornerSamples != wantTotal {
+		t.Fatalf("corner sample count = %d, want %d interpolators * %d coarse-grid = %d",
+			nc.cornerSamples, len(nc.interps), cornerGrid, wantTotal)
 	}
 	if nc.cornerSamples >= perBlock {
 		t.Fatalf("corner samples %d not sparse vs per-block %d (Pitfall 5)", nc.cornerSamples, perBlock)
 	}
-	// Sanity: the overworld coarse grid is the ~768-corner ballpark from the plan.
+	// Sanity: the per-interpolator coarse grid is the ~768-corner ballpark from the plan.
 	if cornerGrid > 4000 {
 		t.Fatalf("coarse grid %d unexpectedly large (cellWidth/cellHeight wrong?)", cornerGrid)
 	}

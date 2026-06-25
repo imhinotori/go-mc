@@ -58,11 +58,18 @@ type NoiseChunk struct {
 	firstNoiseX   int // QuartPos.fromBlock(chunkX*16) = chunk origin in cell units
 	firstNoiseZ   int
 
-	// density is the per-block trilerped final_density, flat-indexed by densityIndex
-	// (localX, worldY, localZ). Computed once at construction.
+	// density is the per-block final_density, flat-indexed by densityIndex (localX,
+	// worldY, localZ). Computed once at construction by evaluating the rewritten
+	// final_density per block while the interpolators feed their trilerped corner values.
 	density []float64
 
-	cornerSamples int // count of final_density corner evaluations (the sparse-sample gate)
+	// wrappedFinalDensity is final_density after density.MapAll(wrap): each interpolated
+	// marker is now an *interpolatedFn (in interps), everything else per-block.
+	wrappedFinalDensity density.Function
+	interps             []*interpolatedFn // every interpolator the rewrite produced
+	fillState           *fillState        // toggles interps between trilerp + direct sampling
+
+	cornerSamples int // count of interpolated-filler corner evaluations (the sparse-sample gate)
 
 	// Provisional fill block ids (resolved once; the placeholder Wave 5's Aquifer
 	// replaces the water rule).
@@ -104,8 +111,30 @@ func NewNoiseChunk(r *router.Router, pos level.ChunkPos) *NoiseChunk {
 		firstNoiseZ:   blockZ >> 2,                     // QuartPos.fromBlock(blockZ)
 	}
 	nc.resolveBlocks()
-	nc.fill(r.NoiseRouter.FinalDensity)
+	nc.wrapFinalDensity(r.NoiseRouter.FinalDensity)
+	nc.fill()
 	return nc
+}
+
+// wrapFinalDensity ports the interpolated-marker half of NoiseChunk's
+// noiseRouter.mapAll(this::wrap): it rewrites final_density so each MarkerInterpolated
+// node becomes an *interpolatedFn (collected in nc.interps), leaving every surrounding
+// op per-block. The cache markers (flat_cache/cache_2d/cache_once) stay transparent
+// pass-throughs (MapAll preserves them; correctness-identical). The other NoiseRouter
+// functions (preliminary_surface_level, aquifer inputs) are NOT wrapped: they are
+// sampled off the cell loop, where interpolators fall back to direct sampling anyway, so
+// wrapping them would be a no-op for correctness.
+func (nc *NoiseChunk) wrapFinalDensity(finalDensity density.Function) {
+	nc.fillState = &fillState{}
+	nc.wrappedFinalDensity = density.MapAll(finalDensity, func(fn density.Function) density.Function {
+		if m, ok := fn.(density.Marked); ok && m.Kind() == density.MarkerInterpolated {
+			ip := newInterpolatedFn(m.Wrapped(), nc.fillState,
+				nc.cellCountXZ, nc.cellCountY, nc.cellWidth, nc.cellHeight, nc.cellNoiseMinY)
+			nc.interps = append(nc.interps, ip)
+			return ip
+		}
+		return fn
+	})
 }
 
 // resolveBlocks resolves the provisional fill block-state ids + the plains biome once.
@@ -126,64 +155,87 @@ func (nc *NoiseChunk) densityIndex(lx, y, lz int) int {
 	return ((lx*16)+lz)*nc.height + (y - nc.minY)
 }
 
-// fill samples final_density on the cell-corner grid (driving the interpolator) and
-// trilerps to every block, storing the result in nc.density. It mirrors
-// NoiseBasedChunkGenerator.doFill's cell nesting order:
+// fill drives EVERY interpolator (one per interpolated marker) on the cell-corner grid
+// and, for each block, evaluates the rewritten final_density — the interpolators return
+// their trilerped value while every surrounding op (squeeze/min/the noodle cave graph)
+// computes per-block. It mirrors NoiseBasedChunkGenerator.doFill's cell nesting order
+// (NoiseChunk.initializeForFirstCellX / advanceCellX / selectCellYZ / updateForY/X/Z):
 //
-//	for cellX in [0,cellCountXZ): advanceCellX (fill far X face)
+//	for cellX in [0,cellCountXZ): advanceCellX (fill far X face of every interpolator)
 //	  for cellZ in [0,cellCountXZ):
-//	    for cellY in [cellCountY-1 .. 0]: selectCellYZ(cellY, cellZ)
+//	    for cellY in [cellCountY-1 .. 0]: selectCellYZ(cellY, cellZ) on each interpolator
 //	      for inCellY in [cellHeight-1 .. 0]: updateForY(dy)
 //	        for inCellX in [0,cellWidth): updateForX(dx)
-//	          for inCellZ in [0,cellWidth): updateForZ(dz) -> store value()
-func (nc *NoiseChunk) fill(finalDensity density.Function) {
+//	          for inCellZ in [0,cellWidth): updateForZ(dz); filling=true;
+//	                                        density = wrappedFinalDensity.Compute(ctx)
+//
+// If the graph has NO interpolated marker (degenerate), the per-block compute still runs
+// correctly (no interpolator to drive).
+func (nc *NoiseChunk) fill() {
 	nc.density = make([]float64, 16*nc.height*16)
 
-	ip := newInterpolator(finalDensity, nc.cellCountXZ, nc.cellCountY, nc.cellWidth, nc.cellHeight)
-	ip.setCellNoiseMinY(nc.cellNoiseMinY)
-
-	// initializeForFirstCellX: fill slice0 at cellX = firstNoiseX (the chunk's first
-	// X-cell column). The corner count is (cellCountXZ+1) Z-columns * (cellCountY+1)
-	// Y-rows per X face; we tally every final_density Compute below.
-	nc.fillSlice(ip, true, nc.firstNoiseX)
+	// initializeForFirstCellX: fill slice0 of every interpolator at cellX = firstNoiseX.
+	// state.filling stays false here so the inner fillers sample directly at corners.
+	nc.fillState.filling = false
+	nc.fillSlices(true, nc.firstNoiseX)
 
 	for cellX := 0; cellX < nc.cellCountXZ; cellX++ {
-		// advanceCellX: fill slice1 at the next X face (firstNoiseX + cellX + 1).
-		nc.fillSlice(ip, false, nc.firstNoiseX+cellX+1)
+		// advanceCellX: fill slice1 of every interpolator at the next X face.
+		nc.fillState.filling = false
+		nc.fillSlices(false, nc.firstNoiseX+cellX+1)
 
 		for cellZ := 0; cellZ < nc.cellCountXZ; cellZ++ {
 			for cellY := nc.cellCountY - 1; cellY >= 0; cellY-- {
-				ip.selectCellYZ(cellY, cellZ)
+				for _, ip := range nc.interps {
+					ip.selectCellYZ(cellY, cellZ)
+				}
 				for inY := nc.cellHeight - 1; inY >= 0; inY-- {
 					dy := float64(inY) / float64(nc.cellHeight)
-					ip.updateForY(dy)
+					for _, ip := range nc.interps {
+						ip.updateForY(dy)
+					}
 					worldY := (nc.cellNoiseMinY+cellY)*nc.cellHeight + inY
 					for inX := 0; inX < nc.cellWidth; inX++ {
 						dx := float64(inX) / float64(nc.cellWidth)
-						ip.updateForX(dx)
+						for _, ip := range nc.interps {
+							ip.updateForX(dx)
+						}
 						localX := cellX*nc.cellWidth + inX
 						for inZ := 0; inZ < nc.cellWidth; inZ++ {
 							dz := float64(inZ) / float64(nc.cellWidth)
-							ip.updateForZ(dz)
+							for _, ip := range nc.interps {
+								ip.updateForZ(dz)
+							}
 							localZ := cellZ*nc.cellWidth + inZ
-							nc.density[nc.densityIndex(localX, worldY, localZ)] = ip.value()
+							worldX := nc.WorldX(localX)
+							worldZ := nc.WorldZ(localZ)
+							// filling=true: interpolated nodes return their trilerped value,
+							// every other op computes per-block at the exact block coords.
+							nc.fillState.filling = true
+							v := nc.wrappedFinalDensity.Compute(density.Context{X: worldX, Y: worldY, Z: worldZ})
+							nc.fillState.filling = false
+							nc.density[nc.densityIndex(localX, worldY, localZ)] = v
 						}
 					}
 				}
 			}
 		}
 		// swapSlices: roll the just-filled far face into slice0 for the next cellX.
-		ip.swapSlices()
+		for _, ip := range nc.interps {
+			ip.swapSlices()
+		}
 	}
 }
 
-// fillSlice fills one X face of the interpolator's corner buffers, counting each
-// final_density corner evaluation so TestCellSampleNotPerBlock can assert sparse
-// sampling. cellX is the absolute X cell index (in noise-cell units).
-func (nc *NoiseChunk) fillSlice(ip *interpolator, onSlice0 bool, cellX int) {
-	blockX := cellX * nc.cellWidth
-	ip.fillSlice(onSlice0, blockX, nc.firstNoiseZ)
-	nc.cornerSamples += (nc.cellCountXZ + 1) * (nc.cellCountY + 1)
+// fillSlices fills one X face of EVERY interpolator's corner buffers (NoiseChunk.fillSlice
+// loops over interpolators), counting each interpolated-filler corner evaluation so
+// TestCellSampleNotPerBlock can assert sparse sampling. cellX is the absolute X cell index
+// (in noise-cell units).
+func (nc *NoiseChunk) fillSlices(onSlice0 bool, cellX int) {
+	for _, ip := range nc.interps {
+		ip.fillSlice(onSlice0, cellX, nc.firstNoiseZ)
+		nc.cornerSamples += (nc.cellCountXZ + 1) * (nc.cellCountY + 1)
+	}
 }
 
 // FinalDensity returns the trilerped final_density at (localX, worldY, localZ). >0 means

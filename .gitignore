@@ -31,3 +31,6 @@ temp//world/
 # Runtime player saves (ENT-06 save-on-leave) land in /world/playerdata/ when a
 # server is run from the repo root; that is runtime output, not source.
 /world/playerdata/
+
+# Serena project cache
+.serena/

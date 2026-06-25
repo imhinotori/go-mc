@@ -113,14 +113,17 @@ func NewNoiseGenerator(seed int64, secs, minY int) *NoiseGenerator {
 // Generate drives the full pipeline into a fresh capture-diff-sealed level.Chunk and
 // returns it. PURE over (seed, pos).
 //
+// Order mirrors vanilla's ChunkStatus pipeline NOISE -> SURFACE -> CARVERS:
+//
 //  1. fill   : NoiseChunk cell-sample final_density -> Aquifer/OreVeinifier doFill
 //     (FillChunk) places stone/deepslate/water/lava/air/ore into the sections.
-//  2. carve  : ApplyCarvers runs the ravines + extra tunnel caves over the filled
-//     blocks, aquifer-aware (a carve below the water table floods).
-//  3. surface: BuildSurface applies the biome-correct surface rules to each column's
-//     stone top (grass/dirt/sand/gravel/...) and rewrites the 3 CLIENT
-//     heightmaps from the FINAL blocks; FillBiomes fills the per-section 4x4x4
-//     biome containers from the multi-noise source (varied, not single-plains).
+//  2. surface: BuildSurface applies the biome-correct surface rules to each column's
+//     stone top (grass/dirt/sand/gravel/...) on the UN-CARVED terrain and rewrites
+//     the 3 CLIENT heightmaps; FillBiomes fills the per-section 4x4x4 biome
+//     containers from the multi-noise source (varied, not single-plains).
+//  3. carve  : ApplyCarvers runs the ravines + extra tunnel caves over the surfaced
+//     terrain, aquifer-aware (a carve below the water table floods); carved openings
+//     expose bare stone, matching vanilla.
 //  4. finish: per-section sky light (mirroring Superflat's renderable finishing); the
 //     FluidCount + biome container were set by the fill/biome steps. Status full.
 func (g *NoiseGenerator) Generate(pos level.ChunkPos) *level.Chunk {
@@ -135,13 +138,12 @@ func (g *NoiseGenerator) Generate(pos level.ChunkPos) *level.Chunk {
 	)
 	ch := noisechunk.FillChunk(nc, aq, ov)
 
-	// (2) CARVE — ravines + tunnel caves over the filled stone, aquifer-aware via the
-	// Wave-5 aquifer's CarveFluid seam (computeSubstance at density 0).
-	cc := &carveChunk{chunk: ch, pos: pos, minY: g.minY, height: g.secs * 16, air: g.air}
-	carver.ApplyCarvers(g.seed, cc, aq, g.carvers, g.rep)
-
-	// (3) SURFACE — biome-correct surface on the carved tops + the 3 CLIENT heightmaps,
-	// then the varied per-section biome containers.
+	// (2) SURFACE — biome-correct surface on the UN-CARVED terrain top + the 3 CLIENT
+	// heightmaps, then the varied per-section biome containers. This mirrors vanilla's
+	// ChunkStatus order NOISE -> SURFACE -> CARVERS: the surface rules cap the solid
+	// terrain BEFORE carvers cut through it, so caves/ravines later expose BARE STONE
+	// (carvers only convert the single block under a carved grass column to dirt) instead
+	// of leaving grass/dirt/sand rims on every cave mouth.
 	//
 	// The biome is defined per QUART cell (4×4×4: GetBiome converts block→quart via >>2), but
 	// BuildSurface samples it per-block along each column's surface AND FillBiomes samples it
@@ -155,6 +157,12 @@ func (g *NoiseGenerator) Generate(pos level.ChunkPos) *level.Chunk {
 	biomeOf := bc.get
 	surface.BuildSurface(g.surface, g.rule, ch, nc, biomeOf)
 	surface.FillBiomes(ch, nc, biomeOf)
+
+	// (3) CARVE — ravines + tunnel caves cut through the surfaced terrain, aquifer-aware
+	// via the Wave-5 aquifer's CarveFluid seam (computeSubstance at density 0). Running
+	// AFTER surface means carved openings reveal raw stone, matching vanilla.
+	cc := &carveChunk{chunk: ch, pos: pos, minY: g.minY, height: g.secs * 16, air: g.air}
+	carver.ApplyCarvers(g.seed, cc, aq, g.carvers, g.rep)
 
 	// (4) FINISH — sky light for rendering (mirrors Superflat / FillChunk finishing).
 	// FillChunk already set FluidCount/biome defaults and the heightmaps were rewritten
