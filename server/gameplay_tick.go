@@ -1,6 +1,7 @@
 package server
 
 import (
+	"math"
 	"sync/atomic"
 
 	"github.com/imhinotori/sulfur/chat"
@@ -8,6 +9,7 @@ import (
 	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/net"
 	pk "github.com/imhinotori/sulfur/net/packet"
+	"github.com/imhinotori/sulfur/save"
 	"github.com/imhinotori/sulfur/yggdrasil/user"
 
 	"github.com/google/uuid"
@@ -185,6 +187,26 @@ func (g *gameTick) AcceptPlayer(
 	// entities draw from one id space with no collision (06-RESEARCH Pitfall 7 / T-6-07).
 	entityID := g.loop.idAlloc.AllocID()
 
+	// GAMEPLAY-02 (Plan 17-01) position load: read the persisted .dat ONCE here, before the
+	// bootstrap, so a reconnecting player's saved position drives the SINGLE bootstrap teleport
+	// (Pitfall 3 — never a second post-register teleport that would re-arm the confirm gate).
+	// Default to the hardcoded spawn column (chunk (center) block center, surfaceY+2). A missing
+	// or corrupt .dat returns ok=false and the defaults stand (T-6-16). The loaded value is also
+	// reused below to restore health/food/saturation and seed the live player's pos/center.
+	spawnX := float64(int(spawnCenter[0])<<4) + 8.5
+	spawnZ := float64(int(spawnCenter[1])<<4) + 8.5
+	spawnY := float64(g.spawnSurfaceY + 2)
+	var (
+		loaded     save.PlayerData
+		haveLoaded bool
+	)
+	if g.worldDir != "" {
+		if data, ok := loadPlayer(g.worldDir, id); ok {
+			loaded, haveLoaded = data, true
+			spawnX, spawnY, spawnZ = data.Pos[0], data.Pos[1], data.Pos[2]
+		}
+	}
+
 	// Full early-Play bootstrap (PLAY-01/02/05). Enqueue Login(JoinGame) ->
 	// GameEvent(LEVEL_CHUNKS_LOAD_START) -> PlayerPosition -> PlayerAbilities ->
 	// SetHeldSlot -> PlayerInfoUpdate(self tab list) -> SetDefaultSpawnPosition on the
@@ -202,6 +224,13 @@ func (g *gameTick) AcceptPlayer(
 		teleportID: teleportID,
 		gameMode:   gameModeSurvival,
 		entityID:   entityID,
+		// GAMEPLAY-02: when a persisted position was loaded, feed it into the SINGLE bootstrap
+		// teleport so the client spawns at its saved location with the same teleport id (no
+		// second teleport). hasSpawn=false falls back to the center-derived spawn.
+		spawnX:   spawnX,
+		spawnY:   spawnY,
+		spawnZ:   spawnZ,
+		hasSpawn: haveLoaded,
 	})
 
 	// CMD-01 join-time send: serialize the shared command graph to THIS client as
@@ -215,11 +244,20 @@ func (g *gameTick) AcceptPlayer(
 	// bootstrap so Login (which creates the client's ClientLevel) lands first.
 	cmdGraph.ClientJoin(commandClientAdapter{c})
 
+	// GAMEPLAY-02: seed the live player's position + view-ring center from the (possibly
+	// persisted) spawn coords so flushOutbound streams the correct ring around the saved
+	// location. center is the chunk column of the spawn block; for a fresh player this resolves
+	// to chunk (0,0) (the hardcoded spawn), matching the prior behavior.
+	playerCenter := chunkCenterOf(int32(math.Floor(spawnX)), int32(math.Floor(spawnZ)))
+
 	player := &tickPlayer{
 		client:           c,
 		keep:             g.keep,
 		keepalive:        ka,
-		center:           spawnCenter,
+		x:                spawnX,
+		y:                spawnY,
+		z:                spawnZ,
+		center:           playerCenter,
 		viewDist:         viewDist,
 		sentChunks:       make(map[level.ChunkPos]bool),
 		secs:             overworldSections,
@@ -239,21 +277,19 @@ func (g *gameTick) AcceptPlayer(
 		saturation: defaultSaturation,
 	}
 
-	// ENT-06 load-on-join: if a persistent world is configured, read the player's
-	// world/playerdata/<uuid>.dat and apply the persisted health/food/saturation (a missing or
-	// corrupt .dat returns spawn defaults with ok=false — never crashes the join, T-6-16). The
-	// disk IO runs HERE, on the accept goroutine, BEFORE the player is registered with the tick,
-	// so it crosses no tick-owned state. Position is NOT applied to the live player for v1: the
-	// bootstrap already teleported the client to the spawn column above, and re-placing it at a
-	// persisted position would require re-issuing the bootstrap teleport — deferred. Health/food
-	// are the v1 persisted-state restore; the persisted position round-trips on disk (proven by
-	// TestPlayerDataRoundTrip) and a later plan applies it to the spawn teleport.
-	if g.worldDir != "" {
-		if data, ok := loadPlayer(g.worldDir, id); ok {
-			player.health = data.Health
-			player.food = data.FoodLevel
-			player.saturation = data.FoodSaturationLevel
-		}
+	// ENT-06 + GAMEPLAY-02 load-on-join: apply the persisted snapshot loaded above (the disk IO
+	// already ran on this accept goroutine, BEFORE register, so it crosses no tick-owned state —
+	// T-6-16). Health/food/saturation restore the survival state; the persisted ROTATION is
+	// applied here, and the persisted POSITION was already fed into the single bootstrap teleport
+	// (spawnX/Y/Z above) and the live player's x/y/z/center, so a reconnecting player spawns at
+	// its saved location with no second teleport (Pitfall 3). A first join (haveLoaded=false)
+	// keeps the spawn defaults.
+	if haveLoaded {
+		player.health = loaded.Health
+		player.food = loaded.FoodLevel
+		player.saturation = loaded.FoodSaturationLevel
+		player.yaw = loaded.Rotation[0]
+		player.pitch = loaded.Rotation[1]
 	}
 
 	g.loop.register <- player
