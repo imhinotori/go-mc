@@ -4,14 +4,14 @@ milestone: v3
 milestone_name: Online-mode + Operator UX + Structure polish
 status: Phase 17 keystone (17-01) executed — GAMEPLAY-01/02/03 wired; Wave-2 seam files shipped as disjoint stubs
 stopped_at: Completed 17-04-PLAN.md (GAMEPLAY-06)
-last_updated: "2026-06-25T22:50:48.929Z"
+last_updated: "2026-06-25T22:57:18.800Z"
 last_activity: "2026-06-25 — 17-01 keystone landed: players enter the entity store + bidirectional tab-list broadcast (GAMEPLAY-01), persisted position drives the single bootstrap teleport (GAMEPLAY-02), inventory join-sync fires first-tick (GAMEPLAY-03). Wave-2 handoff (struct fields, dispatcher hooks, fluid.go/fall_damage.go stubs) recorded in 17-01-SUMMARY.md."
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 5
-  completed_plans: 3
-  percent: 60
+  completed_plans: 4
+  percent: 80
 ---
 
 # Project State
@@ -105,7 +105,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [██████░░░░] 60%
+Progress: [████████░░] 80%
 
 ## Performance Metrics
 
@@ -183,6 +183,7 @@ Progress: [██████░░░░] 60%
 | Phase 16 P02 | 95 | 2 tasks | 8 files |
 | Phase 17 P01 | 9min | 4 tasks | 11 files |
 | Phase 17 P04 | 11min | 2 tasks | 4 files |
+| Phase 17 P02 | 35min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -291,6 +292,9 @@ Recent decisions affecting current work:
 - [Phase ?]: 16-02: village jigsaw Placer is bounded-BFS via SequencedPriorityIterator (NOT recursion); 3 bounds (maxDepth + max_distance 80 + VoxelShape collision) + 1000-piece cap; villages deterministic per (seed,pos), salt 10387312 verified from villages.json
 - [Phase ?]: GAMEPLAY-06: ItemEntity.DATA_ITEM is SynchedEntityData index 8 + EntityDataSerializers.ITEM_STACK serializer id 7 (javap-confirmed); ITEM value reuses component.SlotData ItemStack.OPTIONAL_STREAM_CODEC
 - [Phase ?]: GAMEPLAY-06 drops use a v1 1:1 block->item map (blockDropFor), superseded by STRUCT-POLISH-01 loot evaluator
+- [Phase 17]: 17-02 (GAMEPLAY-05): fluid scheduled-tick queue = per-gametime bucket map with deterministic packed-pos drain (the ServerLevel.scheduleTick analogue); schedule-on-change so worldgen oceans stay static until disturbed (Open Question 3)
+- [Phase 17]: 17-02: canBeReplacedWith guard (never overwrite a source / downgrade a flow) is what terminates the FlowingFluid spread deterministically (Pitfall 2); isHole requires the cell itself passable so a flat floor spreads sideways
+- [Phase 17]: 17-02: player fluid physics (0.8 getWaterSlowDown + 0.014 updateFluidInteraction push) ported + unit-tested, but the subtick.go call-site is DEFERRED (subtick.go is 17-03-owned this parallel wave)
 
 ### Pending Todos
 
@@ -317,7 +321,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-25T22:50:42.511Z
+Last session: 2026-06-25T22:56:21.556Z
 Stopped at: Completed 17-04-PLAN.md (GAMEPLAY-06)
 Resume file: None
 Next: Phase 17 Wave 2 — 17-02 (GAMEPLAY-05 fluid simulation: OVERWRITE server/fluid.go with the FlowingFluid port + scheduled-tick queue; lazy-init t.fluidSchedule inside tickFluids, do NOT edit tick.go/tick_phases.go) and 17-03 (GAMEPLAY-04 fall damage + PvP dispatch: OVERWRITE server/fall_damage.go using the tickPlayer fallDistance/wasOnGround/lastY fields + the lookupPlayerByEntityID reverse lookup, do NOT edit tick.go/tick_phases.go). The exact Wave-2 seam surface (field names, init point, call sites, stub signatures) is in 17-01-SUMMARY.md "WAVE-2 HANDOFF". Deferred-still-open: dungeon loot/spawner-mob + BeehiveDecorator occupant + pale_garden PaleMoss (all v3, cosmetic, in 13-04-SUMMARY); KeepAlive double-leave hardening (Phase 3). KNOWN PRE-EXISTING FLAKE: TestTickAIDrivesMobs (OPT-01 async-pool timing, not caused by 17-01) intermittently fails under full-suite load; passes in isolation + 3× under -race.
