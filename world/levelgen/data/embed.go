@@ -223,6 +223,21 @@ func HasStructureBiomeTag(id string) ([]byte, error) {
 	return b, nil
 }
 
+// StrongholdBiasedTo returns the embedded worldgen/biome/stronghold_biased_to tag
+// JSON (the ~38-biome preferred set the stronghold's concentric_rings placement
+// biome-validates each ring position against — Pitfall #5). It is a BARE biome tag
+// at tags/worldgen/biome/stronghold_biased_to.json (NOT under has_structure/);
+// STRUCT-04 extended the extractor to pull it. The loader in world/structure parses
+// the {"values":[...]} list into the preferred-biome name set.
+func StrongholdBiasedTo() ([]byte, error) {
+	p := path.Join("tags", "worldgen", "biome", "stronghold_biased_to.json")
+	b, err := FS.ReadFile(p)
+	if err != nil {
+		return nil, fmt.Errorf("worldgen data: stronghold_biased_to tag not found (%s): %w", p, err)
+	}
+	return b, nil
+}
+
 // BiomeCategoryTag returns the embedded worldgen/biome/<id>.json category tag (the is_*
 // biome tags: is_ocean, is_badlands, is_taiga, ...). The has_structure tags nest these via
 // "#minecraft:is_*" references; HasStructureBiomes resolves them recursively through here so

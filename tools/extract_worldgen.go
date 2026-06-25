@@ -85,6 +85,14 @@ var worldgenZipPrefixes = []struct {
 	// snowy_slopes], jungle_temple->[bamboo_jungle,jungle], swamp_hut->[swamp].
 	// 14-02/14-03 gate each temple's start on GetBiome-at-origin in its allow-set.
 	{"data/minecraft/tags/worldgen/biome/has_structure/", "tags/worldgen/biome/has_structure"},
+	// STRUCT-04 (Phase 15): the BARE worldgen/biome tags (is_* category tags AND
+	// stronghold_biased_to). The stronghold's concentric_rings placement biome-
+	// validates each ring position against #minecraft:stronghold_biased_to (the
+	// ~38-biome preferred set); the is_* category tags back the mineshaft/mesa
+	// has_structure nested #-refs. This parent prefix re-lands the has_structure/
+	// sub-tree at the same dest (idempotent) and additionally pulls every flat
+	// biome tag at this level — stronghold_biased_to.json included.
+	{"data/minecraft/tags/worldgen/biome/", "tags/worldgen/biome"},
 }
 
 // worldgenSingleFiles names individual jar resources (not whole trees) to copy,
