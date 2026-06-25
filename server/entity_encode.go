@@ -6,6 +6,7 @@ import (
 	"math"
 
 	"github.com/imhinotori/sulfur/data/packetid"
+	"github.com/imhinotori/sulfur/level/component"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
@@ -193,6 +194,50 @@ func (e entityDataEntry) WriteTo(w io.Writer) (int64, error) {
 		}
 	}
 	return n, nil
+}
+
+// --- GAMEPLAY-06: the Item entity ITEM data-value -------------------------------------
+//
+// A dropped Item entity renders NOTHING unless its SynchedEntityData carries the ITEM
+// stack value (06-RESEARCH Pitfall 5). Unlike a mob (which renders with an empty metadata
+// body), the client reads ItemEntity.DATA_ITEM to know WHICH item model to draw — an empty
+// body spawns an invisible entity. The two wire numbers below are JAR-DERIVED (javap'd this
+// session from temp/cache/26.2-inner.jar), NOT guessed.
+
+// dataItemIndex is the SynchedEntityData accessor index for ItemEntity.DATA_ITEM.
+// SynchedEntityData.defineId assigns indices sequentially per class hierarchy starting at
+// the superclass count. ItemEntity extends net.minecraft.world.entity.Entity DIRECTLY, and
+// Entity defines 8 base accessors (indices 0..7: BYTE flags, INT air, OPTIONAL_COMPONENT
+// custom-name, BOOLEAN name-visible, BOOLEAN silent, BOOLEAN no-gravity, POSE, INT ticks-
+// frozen). So ItemEntity.DATA_ITEM — the FIRST (and only) accessor ItemEntity defines — is
+// index 8.
+//   [VERIFIED: javap -c -p net.minecraft.world.entity.item.ItemEntity →
+//     static{}: getstatic EntityDataSerializers.ITEM_STACK; SynchedEntityData.defineId(...)
+//     → putstatic DATA_ITEM; defineSynchedData defines ONLY DATA_ITEM.
+//    javap -c -p net.minecraft.world.entity.Entity → 8 SynchedEntityData.defineId calls.]
+const dataItemIndex uint8 = 8
+
+// itemStackSerializerID is the registry id of EntityDataSerializers.ITEM_STACK — the VarInt
+// serializerId the DataValue carries. The id is the registration order in the
+// EntityDataSerializers static initializer: 0=BYTE, 1=INT, 2=LONG, 3=FLOAT, 4=STRING,
+// 5=COMPONENT, 6=OPTIONAL_COMPONENT, 7=ITEM_STACK. The ITEM_STACK serializer's codec is
+// ItemStack.OPTIONAL_STREAM_CODEC — the SAME stream codec ContainerSetContent's carried item
+// uses, so component.SlotData's WriteTo is the correct value encoder (no new item codec).
+//   [VERIFIED: javap -c -p net.minecraft.network.syncher.EntityDataSerializers → static{}
+//     registerSerializer order; EntityDataSerializers$1.codec() = ItemStack.OPTIONAL_STREAM_CODEC.]
+const itemStackSerializerID int32 = 7
+
+// itemDataEntry builds the single SynchedEntityData$DataValue entry that carries a dropped
+// item's stack, so the Item entity renders its model instead of spawning invisible. The
+// value reuses the component.SlotData ItemStack codec (the same framing ContainerSetContent
+// emits) — NOT a hand-rolled item stream. The returned entry frames on the wire as
+// Byte(dataItemIndex) + VarInt(itemStackSerializerID) + the ItemStack body (entityDataEntry.WriteTo).
+func itemDataEntry(stack component.SlotData) entityDataEntry {
+	return entityDataEntry{
+		index:        dataItemIndex,
+		serializerID: itemStackSerializerID,
+		value:        &stack, // *SlotData implements pk.FieldEncoder (ItemStack.OPTIONAL_STREAM_CODEC)
+	}
 }
 
 // entityDataEOF is the SynchedEntityData EOF_MARKER (255 / 0xFF) — the MANDATORY single
