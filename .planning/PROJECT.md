@@ -8,25 +8,45 @@ A from-scratch Minecraft Java Edition server (version 26.2, protocol 776) writte
 
 A Go server that a vanilla Minecraft 26.2 client can connect to, log into, and play in a persistent, ticking world — with an architecture designed from day one for the concurrency-based optimizations Leaf pioneered (async pathfinding, async entity tracking, async mob spawning).
 
+## Current State
+
+**Shipped: v1.0 (2026-06-24).** A real unmodified vanilla 26.2 client connects, logs in,
+and PLAYS a persistent, ticking world: it walks a biome-varied **noise overworld**
+(hills/valleys/plains + caves/ravines/aquifers/ore-veins, water at sea level), sees mobs
+that spawn/wander/navigate with ported vanilla AI, places/breaks blocks, manages a
+component-slot inventory, takes damage/dies/respawns, persists, runs commands, and chats —
+all `-race` clean with Leaf-style async optimizations (async pathfinding/tracker/spawn,
+xsync/ants, linear region format). 9 phases, 46 plans, 45/45 v1 requirements + PARITY-01.
+The "no JVM" Go static binary value prop holds (Java is build-time-only jar extraction).
+
+## Next Milestone Goals (v2 — Worldgen deferrals + auth + regionization)
+
+User-chosen direction for the next milestone:
+- **Trees / vegetation** (the feature/decoration subsystem) and **structures** (mineshafts, villages) — the documented Phase-9 deferrals.
+- **ONLINE-01 / ONLINE-02** — Mojang/Microsoft account authentication + protocol encryption for online-mode.
+- **REGION-01** — Folia-style per-region tick threading on top of the ownership-isolated core.
+
 ## Requirements
 
-### Validated
+### Validated (shipped v1.0)
 
-(None yet — ship to validate)
+- [x] Vanilla 26.2 client handshake → login → configuration → play (protocol 776) — Phase 2 (NET-01..07)
+- [x] Protocol/data layer code-generated from the official 26.2 jar (#294-296 pipeline) — Phase 1 (GEN-01..04)
+- [x] Component-based slot/item format, correct BitStorage + heightmap encoding — Phase 4/6 (WORLD-02/03, ENT-04)
+- [x] Authoritative 50ms-anchored tick loop + CS2-style subtick layer — Phase 3 (TICK-01..06)
+- [x] World + chunk management: load/generate/store/stream/persist — Phase 4 (WORLD-01..05)
+- [x] World generation — deterministic stub (v1) AND full vanilla-parity noise worldgen — Phase 4/9 (WORLD-04, PARITY-01)
+- [x] Player session lifecycle: spawn, move, view chunks, tab list, keepalive — Phase 5 (PLAY-01..06)
+- [x] Entity system + tick-driven goal-selector AI for mobs — Phase 6/7 (ENT-01, AI-01..03)
+- [x] Basic physics: gravity, collision, block place/break — Phase 6 (ENT-02/03)
+- [x] Command system (dispatch + chat) — Phase 7 (CMD-01/02)
+- [x] Leaf-style async optimizations layered after vanilla logic — Phase 8 (OPT-01..06)
 
-### Active
+### Active (v2 — pending /gsd-new-milestone)
 
-- [ ] Server accepts a vanilla 26.2 client through handshake → login → configuration → play state transitions (protocol 776)
-- [ ] Protocol/data layer is code-generated from the official 26.2 server jar (packets, registries, blocks, items, entities, components) via the go-mc PR #294-296 pipeline approach
-- [ ] Component-based slot/item format (post-1.20.5), correct BitStorage and heightmap encoding
-- [ ] Authoritative server tick loop driving world and entity updates, with game-time anchored to 50ms/MC-tick (vanilla-parity: day = 20 min, redstone/crops/weather never accelerate or slow), plus a CS2-style subtick precision layer for player movement, collisions, hit detection, and projectiles (microsecond-timestamped inputs resolved in chronological order; broadcast to client at vanilla protocol rate)
-- [ ] World + chunk management: load/generate/store chunks, send to clients, persist via region/save format
-- [ ] World generation (at minimum a deterministic generator; vanilla-parity generation a stretch goal)
-- [ ] Player session lifecycle: spawn, move, view chunks, see other players, keepalive
-- [ ] Entity system with a tick-driven behavior/AI model (goal selectors / brain) for mobs
-- [ ] Basic physics: gravity, collision, block placement/breaking
-- [ ] Command system (server-side command dispatch + chat)
-- [ ] Leaf-style concurrency optimizations layered on AFTER vanilla logic exists: async pathfinding, async entity tracker, async mob spawning, lock-free/specialized collections, linear region format
+- [ ] Trees / vegetation features + structures (mineshafts, villages)
+- [ ] Online-mode: Mojang auth + protocol encryption (ONLINE-01/02)
+- [ ] Folia-style per-region tick threading (REGION-01)
 
 ### Out of Scope
 
@@ -56,12 +76,12 @@ A Go server that a vanilla Minecraft 26.2 client can connect to, log into, and p
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Use Tnze/go-mc as protocol/data base | Provides ~30% (codec, NBT, chunk/region, save) for free; avoids reimplementing the wire format | — Pending |
-| Code-generate data layer from official 26.2 jar (PR #294-296 approach) | Mojang ships unobfuscated jar; codegen yields authoritative packets/registries/blocks for 776 with no hand-transcription | — Pending |
-| Build vanilla logic first, Leaf optimizations last | Async-optimizing nonexistent logic is impossible; correctness before performance | — Pending |
-| No plugin system | User-specified scope boundary; keeps focus on server core | — Pending |
-| Offline-mode first | Removes auth/encryption from the critical path to first playable connection | — Pending |
-| Game-time anchored to 50ms; subtick layer (CS2-style) for player movement/combat only | MC defines game-time by tick count, not real seconds — raising TPS naively accelerates the world (shorter day, faster crops/redstone), violating vanilla-parity. Anchoring game-time to 50ms keeps the world correct; a subtick layer adds µs-precise resolution for movement/hit-reg/projectiles without touching world simulation speed (same pattern as CS2 subtick over a fixed broadcast rate). | — Pending |
+| Use Tnze/go-mc as protocol/data base | Provides ~30% (codec, NBT, chunk/region, save) for free; avoids reimplementing the wire format | ✅ Shipped v1.0 |
+| Code-generate data layer from official 26.2 jar (PR #294-296 approach) | Mojang ships unobfuscated jar; codegen yields authoritative packets/registries/blocks for 776 with no hand-transcription | ✅ Shipped v1.0 |
+| Build vanilla logic first, Leaf optimizations last | Async-optimizing nonexistent logic is impossible; correctness before performance | ✅ Shipped v1.0 |
+| No plugin system | User-specified scope boundary; keeps focus on server core | ✅ Shipped v1.0 |
+| Offline-mode first | Removes auth/encryption from the critical path to first playable connection | ✅ Shipped v1.0 |
+| Game-time anchored to 50ms; subtick layer (CS2-style) for player movement/combat only | MC defines game-time by tick count, not real seconds — raising TPS naively accelerates the world (shorter day, faster crops/redstone), violating vanilla-parity. Anchoring game-time to 50ms keeps the world correct; a subtick layer adds µs-precise resolution for movement/hit-reg/projectiles without touching world simulation speed (same pattern as CS2 subtick over a fixed broadcast rate). | ✅ Shipped v1.0 |
 
 ## Evolution
 
@@ -81,4 +101,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-23 after initialization*
+*Last updated: 2026-06-24 — v1.0 milestone shipped (all 45 v1 requirements + PARITY-01 validated; next milestone = v2 worldgen-deferrals/auth/regionization).*

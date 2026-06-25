@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: complete
-stopped_at: "Phase 9 COMPLETE — PARITY-01 worldgen visual gate APPROVED + 2 post-gate fidelity fixes applied (per-marker interpolation + surface-before-carve, aa619b81). Milestone v1 done."
+status: archived
+stopped_at: "Milestone v1.0 ARCHIVED + tagged. Audit passed (45/45 v1 reqs + PARITY-01, all cross-phase seams CONNECTED, build/test/-race green). Roadmap + requirements archived to milestones/. Next: /gsd-new-milestone for v2 (worldgen deferrals + auth + regionization)."
 last_updated: "2026-06-24T23:05:00.000Z"
 last_activity: 2026-06-24
 progress:
