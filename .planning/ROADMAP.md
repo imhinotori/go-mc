@@ -26,7 +26,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 11: Feature Pipeline & Decoration Orchestration** - Port the placement-modifier layer + the `ConfiguredFeature`/`PlacedFeature` model + the polymorphic JSON parser + `FeatureSorter` + `applyBiomeDecoration` driving the 11 decoration steps over the 3×3 biome set
  (completed 2026-06-25)
 - [x] **Phase 12: Core Feature Types** - Port `OreFeature`, `RandomPatchFeature`/`SimpleBlockFeature`, the random selectors, and `BlockPile`/`FallenTree`/`VegetationPatch` so a biome's full ground-cover + decoration-ore set generates (completed 2026-06-25)
-- [ ] **Phase 13: Trees, Dungeon & Features Visual Gate** - Port `TreeFeature` (trunk/foliage placers + tree decorators + `BlockStateProvider` hierarchy) + the `MonsterRoomFeature` dungeon; close the block with the real-client VISUAL GATE (full per-biome vegetation, deterministic per seed)
+- [x] **Phase 13: Trees, Dungeon & Features Visual Gate** - Port `TreeFeature` (trunk/foliage placers + tree decorators + `BlockStateProvider` hierarchy) + the `MonsterRoomFeature` dungeon; close the block with the real-client VISUAL GATE (full per-biome vegetation, deterministic per seed) (completed 2026-06-25 — visual gate approved: trees + vines confirmed on a real client)
 - [ ] **Phase 14: Structure Pipeline & Temples** - Port the STARTS/REFERENCES/PLACE two-phase pipeline + the `StructurePiece` bounding-box-tree machinery; the desert pyramid (+ jungle temple/igloo/swamp hut) generates in vanilla positions as the pipeline shakedown
 - [ ] **Phase 15: Mineshaft & Stronghold** - Port the multi-piece recursive mineshaft (`legacy_type_3` frequency-reduction placement) and the stronghold (concentric-rings placement + recursive piece set reusing the piece machinery)
 - [ ] **Phase 16: Village Jigsaw & Structures Visual Gate** - Port the `.nbt` `StructureTemplate` system + template_pool/processor data + the bounded-BFS `JigsawPlacement.Placer` so villages generate per biome variant; close the milestone with the real-client structures VISUAL GATE
@@ -91,7 +91,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   - [x] 13-01-PLAN.md — Port TreeFeature.place + StraightTrunkPlacer + BlobFoliagePlacer + TreeConfiguration parse (the REAL oak.json shape: below_trunk_provider rule_based, bare two_layers_feature_size, ignore_vines) + the OPTIONAL root_placer field/hook so oak/birch forests render, wired to the cross-chunk Neighborhood + the Phase-12 selector recursion (FEAT-04)
   - [x] 13-02-PLAN.md — Port the COMMON overworld trunk/foliage placers (Forking/Fancy/DarkOak/MegaJungle-trunk + Spruce/Pine/Acacia/Bush/jungle_foliage/...) + the common tree decorators (AlterGround/Beehive/Cocoa/vines) so the common biomes grow their correct tree set (FEAT-04)
   - [x] 13-03-PLAN.md — Port the SPECIAL-biome trees the 4 extra generatable biomes need — cherry, mangrove (+ the RootPlacer subsystem), azalea (bending trunk), pale_oak (pale_moss/creaking_heart) + randomized_int_state_provider — + THE all-overworld-tree-configs-decode completeness guard, so every generatable biome grows its vanilla tree 1:1 (FEAT-04)
-  - [ ] 13-04-PLAN.md — Port the MonsterRoomFeature dungeon (cobble room + spawner + chests as blocks, loot deferred) + the automated full-features acceptance (full tree set+dungeon+selector+5x5 determinism+Docker -race) + THE autonomous:false real-client VISUAL GATE (FEAT-05, FEAT-06)
+  - [x] 13-04-PLAN.md — Port the MonsterRoomFeature dungeon (cobble room + spawner + chests as blocks, loot deferred) + the automated full-features acceptance (full tree set+dungeon+selector+5x5 determinism+Docker -race) + THE autonomous:false real-client VISUAL GATE (FEAT-05, FEAT-06) — visual gate APPROVED 2026-06-25 (trees + vines confirmed on a real client)
 **Research**: `.planning/research/v2-features-decoration.md` (Wave D — tree placers + state providers; "StraightTrunkPlacer" code example); `.planning/research/v2-structures.md` ("Tier 0 — Dungeon … NOT a Structure" — the dungeon is `MonsterRoomFeature`, belongs here, not the structure pipeline).
 **UI hint**: yes
 
@@ -141,7 +141,7 @@ Phases execute in numeric order: 10 → 11 → 12 → 13 → 14 → 15 → 16
 | 10. Worldgen Foundation — LCG, Cross-Chunk Seam & Live Heightmap | 3/3 | Complete   | 2026-06-25 |
 | 11. Feature Pipeline & Decoration Orchestration | 3/3 | Complete   | 2026-06-25 |
 | 12. Core Feature Types | 3/3 | Complete | 2026-06-25 |
-| 13. Trees, Dungeon & Features Visual Gate | 3/4 | In Progress|  |
+| 13. Trees, Dungeon & Features Visual Gate | 4/4 | Complete   | 2026-06-25 |
 | 14. Structure Pipeline & Temples | 0/0 | Not started | - |
 | 15. Mineshaft & Stronghold | 0/0 | Not started | - |
 | 16. Village Jigsaw & Structures Visual Gate | 0/0 | Not started | - |

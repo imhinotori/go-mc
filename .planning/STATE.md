@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2
 milestone_name: worldgen-features-structures
 status: executing
-stopped_at: Completed 13-03-PLAN.md
-last_updated: "2026-06-25T09:40:53.811Z"
+stopped_at: Phase 13 COMPLETE (4/4 plans) — features half of v2 (Phases 10-13) done; FEAT-05/06 visual gate approved (trees + vines on a real client). Phase 14 (structures STARTS pipeline) next.
+last_updated: "2026-06-25T11:59:39.489Z"
 last_activity: 2026-06-25
 progress:
   total_phases: 7
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 13
-  completed_plans: 12
-  percent: 92
+  completed_plans: 13
+  percent: 100
 ---
 
 # Project State
@@ -25,10 +25,31 @@ See: .planning/PROJECT.md (updated 2026-06-23)
 
 ## Current Position
 
-Phase: 13 (Trees / Dungeon / Features Visual Gate) — IN PROGRESS
-Plan: 3 of 4 complete (13-01 done; 13-02 next)
-Status: Ready to execute
+Phase: 13 (Trees / Dungeon / Features Visual Gate) — ✅ COMPLETE (4/4 plans)
+Plan: 4 of 4 complete — 13-04 (the MonsterRoom dungeon + the full-features acceptance + the BLOCKING visual gate) done; the VISUAL GATE is APPROVED.
+Status: Phase complete — the FEATURES half of v2 (Phases 10-13) is closed. Next: Phase 14 (Structures STARTS/REFERENCES/PLACE pipeline + the desert-pyramid pipeline shakedown).
 Last activity: 2026-06-25
+
+### 🌳 FEATURES-MILESTONE GATE (Phase 13 — FEAT-04/05/06)
+
+The FEATURES half of v2 is CLOSED. A real unmodified vanilla 26.2 client (PrismLauncher)
+explored the running server's fully-decorated world and confirmed the ported pipeline
+renders — *"Hay árboles y vines"* (trees + vines render). End-to-end live: Phase 10's
+legacy-LCG + cross-chunk 3x3 seam + live worldgen heightmaps → Phase 11's
+ConfiguredFeature/PlacedFeature model + placement modifiers + FeatureSorter +
+applyBiomeDecoration → Phase 12's core bodies (OreFeature decoration ores, ground cover,
+the random/simple/boolean selectors, BlockPile/FallenTree/VegetationPatch) → Phase 13's
+TreeFeature (the full per-biome tree set incl. cherry/mangrove+RootPlacer/azalea/pale_oak)
+and the MonsterRoomFeature dungeon (13-04). The automated backstop is green: biome-correct
+trees place, the forest selector resolves to real trees, the dungeon places, the 5x5
+reorder-determinism + emit-once stay byte-identical with ALL bodies live, and the full
+Docker -race over ./world/... is clean. Worldgen added NO new wire surface (the chunk
+format was capture-diff-sealed in v1 Phase 4), so the gate was real-client VISUAL
+determinism, not a capture-diff — the Phase-4/5 wire goldens stay the authority and stay
+green. DEFERRED to v3 (cosmetic, non-blocking, documented in 13-04-SUMMARY): dungeon loot
+tables + spawner mob roll, BeehiveDecorator occupant, the pale_garden floor PaleMoss patch.
+NEXT: the STRUCTURES half of v2 (Phases 14-16 — desert pyramid → mineshaft → stronghold →
+village jigsaw, via the STARTS/REFERENCES/PLACE pipeline).
 
 ### 🎮 FIRST-PLAYABLE MILESTONE (Phase 5 — PLAY-01..06)
 
@@ -74,7 +95,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [█████████░] 92%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -142,6 +163,7 @@ Progress: [█████████░] 92%
 | Phase 13 P01 | 38min | 2 tasks | 5 files |
 | Phase 13 P02 | 2h | 2 tasks | 10 files |
 | Phase 13 P03 | 2h | 2 tasks | 8 files |
+| Phase 13 P04 | ~30min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -265,7 +287,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-25T09:39:19.438Z
-Stopped at: Completed 13-03-PLAN.md
+Last session: 2026-06-25T11:59:39.477Z
+Stopped at: Phase 13 COMPLETE (4/4 plans) — the FEATURES half of v2 (Phases 10-13) is closed; FEAT-04/05/06 met; the autonomous:false real-client VISUAL GATE is APPROVED (trees + vines confirmed on a real vanilla 26.2 client).
 Resume file: None
-Next: v1 is done end-to-end (login → biome-varied noise world with caves/ravines/aquifers/ore-veins → entities/AI/inventory/combat → async-optimized, -race clean). The next milestone is DEEPER GAMEPLAY (user-flagged, deferred): items/crafting, more mobs + their ported AI, block mechanics (redstone/farming/fluids), and the Phase-9 v2 deferrals (ONLINE-01/02 auth+encryption, REGION-01 Folia-style regionization, trees/vegetation/structures as feature+structure subsystems). Run /gsd-new-milestone to scope it. Deferred-still-open: KeepAlive double-leave hardening (Phase 3, surfaces when real timeout-driven disconnects land).
+Next: the STRUCTURES half of v2 — Phase 14 (Structures STARTS/REFERENCES/PLACE pipeline + StructurePiece machinery, shaken down on the single-piece desert pyramid), then Phase 15 (mineshaft recursion + stronghold concentric-rings placement), then Phase 16 (the village .nbt/template_pool/Placer jigsaw + the second VISUAL GATE). Research: .planning/research/v2-structures.md (the two-phase pipeline, the LegacyRandomSource seed hinge, the easy→hard tier order). Deferred-still-open: dungeon loot/spawner-mob + BeehiveDecorator occupant + pale_garden PaleMoss (all v3, cosmetic, in 13-04-SUMMARY); KeepAlive double-leave hardening (Phase 3, surfaces when real timeout-driven disconnects land).
