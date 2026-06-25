@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v2
 milestone_name: worldgen-features-structures
-status: verifying
-stopped_at: "Completed 10-02-PLAN.md (GEN2-03: HeightmapUpdate primitive + OCEAN_FLOOR_WG/MOTION_BLOCKING post-carve build)"
-last_updated: "2026-06-25T05:00:13.434Z"
+status: executing
+stopped_at: "Phase 10 COMPLETE (3/3 plans): GEN2-01 LCG+WorldgenRandom (java.util.Random golden-exact), GEN2-03 HeightmapUpdate+WG heightmaps, GEN2-02 cross-chunk worker seam (split Generate, staging scheduler, Neighborhood 3×3 proxy, no-op Decorate, emit-once; -race -count=10 Docker green). Autonomous 11→16 (no pauses except blockers; server runs in bg). Next: plan→plan-check→execute Phase 11 (Feature Pipeline & Decoration Orchestration, FEAT-01/02)."
+last_updated: "2026-06-25T05:05:00.000Z"
 last_activity: 2026-06-25
 progress:
   total_phases: 7
