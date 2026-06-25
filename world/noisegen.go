@@ -157,7 +157,13 @@ func NewNoiseGenerator(seed int64, secs, minY int) *NoiseGenerator {
 	if err != nil {
 		panic("world: NoiseGenerator: build swamp hut start generator: " + err.Error())
 	}
-	structGen := structure.NewCompositeStartGenerator(desertGen, jungleGen, iglooGen, swampGen)
+	// STRUCT-03 (15-01): the mineshaft — the FIRST true recursive multi-piece structure, on the
+	// legacy_type_3 frequency-reduction placement path (Pitfall #4, NOT the spacing-grid path).
+	mineshaftGen, err := structure.NewMineshaftStartGen()
+	if err != nil {
+		panic("world: NoiseGenerator: build mineshaft start generator: " + err.Error())
+	}
+	structGen := structure.NewCompositeStartGenerator(desertGen, jungleGen, iglooGen, swampGen, mineshaftGen)
 
 	return &NoiseGenerator{
 		seed:        seed,
