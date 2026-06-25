@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3
 milestone_name: Online-mode + Operator UX + Structure polish
-status: Phase 17 keystone (17-01) executed — GAMEPLAY-01/02/03 wired; Wave-2 seams (fluid.go/fall_damage.go) shipped
-stopped_at: Completed 17-01-PLAN.md
-last_updated: "2026-06-25T22:32:59.899Z"
-last_activity: "2026-06-25 — v3 milestone scoped (REQUIREMENTS.md + ROADMAP.md): GAMEPLAY-01..07 (Phase 17, first) + ONLINE-01/02 (18) + TUI-01/02 (19) + STRUCT-POLISH-01..04 (20); REGION-01 deferred to v4."
+status: Phase 17 keystone (17-01) executed — GAMEPLAY-01/02/03 wired; Wave-2 seam files shipped as disjoint stubs
+stopped_at: Completed 17-04-PLAN.md (GAMEPLAY-06)
+last_updated: "2026-06-25T22:50:48.929Z"
+last_activity: "2026-06-25 — 17-01 keystone landed: players enter the entity store + bidirectional tab-list broadcast (GAMEPLAY-01), persisted position drives the single bootstrap teleport (GAMEPLAY-02), inventory join-sync fires first-tick (GAMEPLAY-03). Wave-2 handoff (struct fields, dispatcher hooks, fluid.go/fall_damage.go stubs) recorded in 17-01-SUMMARY.md."
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 5
-  completed_plans: 1
-  percent: 20
+  completed_plans: 3
+  percent: 60
 ---
 
 # Project State
@@ -105,7 +105,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [██░░░░░░░░] 20%
+Progress: [██████░░░░] 60%
 
 ## Performance Metrics
 
@@ -182,6 +182,7 @@ Progress: [██░░░░░░░░] 20%
 | Phase 15 P03 | 95 | 2 tasks | 6 files |
 | Phase 16 P02 | 95 | 2 tasks | 8 files |
 | Phase 17 P01 | 9min | 4 tasks | 11 files |
+| Phase 17 P04 | 11min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -288,6 +289,8 @@ Recent decisions affecting current work:
 - [Phase ?]: Stronghold pieces reuse the 15-01 recursion verbatim (genDepth cap 50, weighted PieceWeight + maxPlaceCount, exactly one PortalRoom)
 - [Phase ?]: placeLocal bbox-clip guard + idempotent PostProcess make the many-chunk stronghold cross-chunk idempotent; Phase 15 closed (STRUCT-03/04)
 - [Phase ?]: 16-02: village jigsaw Placer is bounded-BFS via SequencedPriorityIterator (NOT recursion); 3 bounds (maxDepth + max_distance 80 + VoxelShape collision) + 1000-piece cap; villages deterministic per (seed,pos), salt 10387312 verified from villages.json
+- [Phase ?]: GAMEPLAY-06: ItemEntity.DATA_ITEM is SynchedEntityData index 8 + EntityDataSerializers.ITEM_STACK serializer id 7 (javap-confirmed); ITEM value reuses component.SlotData ItemStack.OPTIONAL_STREAM_CODEC
+- [Phase ?]: GAMEPLAY-06 drops use a v1 1:1 block->item map (blockDropFor), superseded by STRUCT-POLISH-01 loot evaluator
 
 ### Pending Todos
 
@@ -314,7 +317,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-25T22:32:54.231Z
-Stopped at: Completed 17-01-PLAN.md
+Last session: 2026-06-25T22:50:42.511Z
+Stopped at: Completed 17-04-PLAN.md (GAMEPLAY-06)
 Resume file: None
 Next: Phase 17 Wave 2 — 17-02 (GAMEPLAY-05 fluid simulation: OVERWRITE server/fluid.go with the FlowingFluid port + scheduled-tick queue; lazy-init t.fluidSchedule inside tickFluids, do NOT edit tick.go/tick_phases.go) and 17-03 (GAMEPLAY-04 fall damage + PvP dispatch: OVERWRITE server/fall_damage.go using the tickPlayer fallDistance/wasOnGround/lastY fields + the lookupPlayerByEntityID reverse lookup, do NOT edit tick.go/tick_phases.go). The exact Wave-2 seam surface (field names, init point, call sites, stub signatures) is in 17-01-SUMMARY.md "WAVE-2 HANDOFF". Deferred-still-open: dungeon loot/spawner-mob + BeehiveDecorator occupant + pale_garden PaleMoss (all v3, cosmetic, in 13-04-SUMMARY); KeepAlive double-leave hardening (Phase 3). KNOWN PRE-EXISTING FLAKE: TestTickAIDrivesMobs (OPT-01 async-pool timing, not caused by 17-01) intermittently fails under full-suite load; passes in isolation + 3× under -race.

@@ -19,7 +19,7 @@ The "user" is (a) an unmodified vanilla 26.2 (protocol 776) client playing the w
 - [x] **GAMEPLAY-03**: Inventory works end-to-end. The handlers (ContainerClick / SetCreativeModeSlot / SetCarriedItem) exist + are tested; the initial `ContainerSetContent` is sent on join so the client's window is populated. Fix seam: call `sendContent(p)` on the first tick after `AcceptPlayer`.
 - [x] **GAMEPLAY-04**: Damage works. `applyDamage`/`die`/`performRespawn`/`setHealth` exist + are tested but are only reachable via `SULFUR_DEBUG_DAMAGE`. `applyInput()` (`server/subtick.go`) gains real cases for ServerboundAttack/Interact that resolve the target + call `applyDamage` (currently they hit the no-op `default:`). Plus an environmental-damage tick (fall damage at minimum).
 - [ ] **GAMEPLAY-05**: Water simulates. `tickWorld()` (`server/tick_phases.go`) is an empty stub — port vanilla `FlowingFluid`/`LiquidBlock` flow propagation + fluid-level updates + waterlogged handling, and player fluid physics (swim/buoyancy, slower movement, breath). Largest of the six.
-- [ ] **GAMEPLAY-06**: Broken blocks drop items. After the break sets air (`server/block_interact.go`), look up the block's loot (block loot table), spawn an `Item` entity (ID 71) for the drop, and track it so GAMEPLAY-01's broadcast path sends AddEntity to clients. Overlaps STRUCT-POLISH loot-table work (block loot tables).
+- [x] **GAMEPLAY-06**: Broken blocks drop items. After the break sets air (`server/block_interact.go`), look up the block's loot (block loot table), spawn an `Item` entity (ID 71) for the drop, and track it so GAMEPLAY-01's broadcast path sends AddEntity to clients. Overlaps STRUCT-POLISH loot-table work (block loot tables).
 - [ ] **GAMEPLAY-07**: A real vanilla 26.2 client confirms two players see each other move, positions/inventory survive a reconnect, attacks deal damage + death/respawn, water flows + affects movement, and broken blocks drop pickable items (VISUAL GATE).
 
 ### Online-mode — authenticated, encrypted logins
@@ -61,7 +61,7 @@ Updated during roadmap creation (`/gsd-plan-phase`).
 | GAMEPLAY-03 | Phase 17 | Complete |
 | GAMEPLAY-04 | Phase 17 | Complete |
 | GAMEPLAY-05 | Phase 17 | Pending |
-| GAMEPLAY-06 | Phase 17 | Pending |
+| GAMEPLAY-06 | Phase 17 | Complete |
 | GAMEPLAY-07 | Phase 17 | Pending |
 | ONLINE-01 | TBD | Pending |
 | ONLINE-02 | TBD | Pending |
