@@ -4,14 +4,14 @@ milestone: v2
 milestone_name: worldgen-features-structures
 status: verifying
 stopped_at: Completed 14-02-PLAN.md
-last_updated: "2026-06-25T16:03:33.355Z"
+last_updated: "2026-06-25T16:38:43.060Z"
 last_activity: 2026-06-25
 progress:
   total_phases: 7
   completed_phases: 5
   total_plans: 19
-  completed_plans: 17
-  percent: 89
+  completed_plans: 18
+  percent: 95
 ---
 
 # Project State
@@ -95,7 +95,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [█████████░] 89%
+Progress: [██████████] 95%
 
 ## Performance Metrics
 
@@ -168,6 +168,7 @@ Progress: [█████████░] 89%
 | Phase 14 P02 | 28min | 2 tasks | 10 files |
 | Phase 14 P03 | 95min | 2 tasks | 11 files |
 | Phase 15 P01 | 55min | 2 tasks | 8 files |
+| Phase 15 P02 | 75 | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -297,7 +298,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-25T16:03:05.307Z
+Last session: 2026-06-25T16:38:30.597Z
 Stopped at: Completed 14-02-PLAN.md
 Resume file: None
 Next: the STRUCTURES half of v2 — Phase 14 (Structures STARTS/REFERENCES/PLACE pipeline + StructurePiece machinery, shaken down on the single-piece desert pyramid), then Phase 15 (mineshaft recursion + stronghold concentric-rings placement), then Phase 16 (the village .nbt/template_pool/Placer jigsaw + the second VISUAL GATE). Research: .planning/research/v2-structures.md (the two-phase pipeline, the LegacyRandomSource seed hinge, the easy→hard tier order). Deferred-still-open: dungeon loot/spawner-mob + BeehiveDecorator occupant + pale_garden PaleMoss (all v3, cosmetic, in 13-04-SUMMARY); KeepAlive double-leave hardening (Phase 3, surfaces when real timeout-driven disconnects land).
