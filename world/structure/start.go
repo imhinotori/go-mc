@@ -66,14 +66,9 @@ func WritableArea(pos level.ChunkPos, minY, height int) BoundingBox {
 	}
 }
 
-// Piece is the minimal structure-piece interface the cache compiles against. 14-02
-// defines the real piece types (the desert-pyramid template, the swamp-hut hut, ...)
-// and extends this; for STRUCT-01 the cache only needs each piece's bbox to compute
-// the StructureStart union, so the interface is intentionally narrow.
-type Piece interface {
-	// BoundingBox returns the piece's world-block AABB.
-	BoundingBox() BoundingBox
-}
+// Piece is the structure-piece interface (defined in piece.go, extended by 14-02 with
+// PostProcess). 14-01 declared a bbox-only placeholder here; 14-02 moves the canonical
+// declaration to piece.go and adds the PostProcess geometry-writing method.
 
 // StructureStart is the ported net.minecraft.world.level.levelgen.structure.StructureStart:
 // a structure DECISION owned by ChunkPos — the piece list (filled by 14-02), the union

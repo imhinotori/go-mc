@@ -6,6 +6,7 @@ import (
 
 	"github.com/imhinotori/sulfur/level"
 	levelbiome "github.com/imhinotori/sulfur/level/biome"
+	"github.com/imhinotori/sulfur/world/levelgen"
 	"github.com/imhinotori/sulfur/world/structure"
 )
 
@@ -122,10 +123,13 @@ func (stubSurfaceSampler) SampleSurfaceY(int, int) int { return 64 }
 // stubWorldBiomeAt returns a fixed biome.
 func stubWorldBiomeAt(int, int, int) levelbiome.Type { return 0 }
 
-// fixedStartPiece is a Piece with a fixed bbox.
+// fixedStartPiece is a Piece with a fixed bbox. PostProcess is a no-op (these fixtures only
+// exercise the STARTS/REFERENCES cache, never the PLACE pass).
 type fixedStartPiece struct{ bb structure.BoundingBox }
 
 func (p fixedStartPiece) BoundingBox() structure.BoundingBox { return p.bb }
+func (p fixedStartPiece) PostProcess(structure.WorldGenView, structure.BoundingBox, level.ChunkPos, levelgen.RandomSource) {
+}
 
 // fixedStartGenerator emits one fixed-bbox start at a designated owner chunk (for the
 // references / no-blocks tests). It writes nothing itself — the PLACE pass (14-02) would.

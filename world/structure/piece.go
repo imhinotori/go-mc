@@ -1,0 +1,537 @@
+package structure
+
+import (
+	"github.com/imhinotori/sulfur/level"
+	"github.com/imhinotori/sulfur/level/block"
+	"github.com/imhinotori/sulfur/world/levelgen"
+)
+
+// WorldGenView is the cross-chunk block read/write proxy a piece's PostProcess writes
+// through. *world.Neighborhood (package world) satisfies it STRUCTURALLY (SetBlock/
+// GetBlock with the exact signatures), so PostProcess takes this interface rather than
+// *world.Neighborhood — the dependency points world -> world/structure ONLY (the cache
+// already lives here), with NO import cycle (T-14-10). Writes are clipped to the 3x3
+// neighborhood by the Neighborhood itself (blockStateWriteRadius=1) AND to the piece
+// bbox + the chunk writable box by placeBlock's IsInside guard.
+type WorldGenView interface {
+	// SetBlock writes a block state at world (wx,wy,wz). Out-of-window writes are dropped.
+	SetBlock(wx, wy, wz int, st block.StateID)
+	// GetBlock returns the block state at world (wx,wy,wz); out-of-window reads return air.
+	GetBlock(wx, wy, wz int) block.StateID
+}
+
+// Rotation ports net.minecraft.world.level.block.Rotation: a horizontal rotation applied
+// to a placed block state's FACING. Ordinals match the jar ($values bootstrap):
+// NONE=0, CLOCKWISE_90=1, CLOCKWISE_180=2, COUNTERCLOCKWISE_90=3.
+//
+// Source: javap -c / CFR net.minecraft.world.level.block.Rotation.
+type Rotation int
+
+const (
+	RotNone Rotation = iota
+	RotClockwise90
+	RotClockwise180
+	RotCounterclockwise90
+)
+
+// Mirror ports net.minecraft.world.level.block.Mirror: NONE / LEFT_RIGHT (mirror Z-axis
+// facings) / FRONT_BACK (mirror X-axis facings).
+//
+// Source: CFR net.minecraft.world.level.block.Mirror.
+type Mirror int
+
+const (
+	MirrorNone Mirror = iota
+	MirrorLeftRight
+	MirrorFrontBack
+)
+
+// rotateDirection ports Rotation.rotate(Direction): Y-axis directions are unchanged;
+// horizontal directions step around the compass. CFR-exact:
+//
+//	CLOCKWISE_180        -> getOpposite
+//	COUNTERCLOCKWISE_90  -> getCounterClockWise
+//	CLOCKWISE_90         -> getClockWise
+//	NONE                 -> direction
+func (r Rotation) rotateDirection(d block.Direction) block.Direction {
+	if d == block.Up || d == block.Down {
+		return d
+	}
+	switch r {
+	case RotClockwise180:
+		return directionOpposite(d)
+	case RotCounterclockwise90:
+		return directionCounterClockWise(d)
+	case RotClockwise90:
+		return directionClockWise(d)
+	default:
+		return d
+	}
+}
+
+// mirrorDirection ports Mirror.mirror(Direction): FRONT_BACK flips X-axis facings,
+// LEFT_RIGHT flips Z-axis facings, all else unchanged.
+func (m Mirror) mirrorDirection(d block.Direction) block.Direction {
+	switch m {
+	case MirrorFrontBack:
+		if d == block.West || d == block.East {
+			return directionOpposite(d)
+		}
+	case MirrorLeftRight:
+		if d == block.North || d == block.South {
+			return directionOpposite(d)
+		}
+	}
+	return d
+}
+
+// directionOpposite/ClockWise/CounterClockWise port net.minecraft.core.Direction's
+// horizontal-compass helpers. The horizontal cycle is N -> E -> S -> W -> N (clockwise).
+// Verticals are returned unchanged (the structure pieces only carry horizontal facings).
+func directionOpposite(d block.Direction) block.Direction {
+	switch d {
+	case block.North:
+		return block.South
+	case block.South:
+		return block.North
+	case block.West:
+		return block.East
+	case block.East:
+		return block.West
+	case block.Up:
+		return block.Down
+	case block.Down:
+		return block.Up
+	}
+	return d
+}
+
+func directionClockWise(d block.Direction) block.Direction {
+	switch d {
+	case block.North:
+		return block.East
+	case block.East:
+		return block.South
+	case block.South:
+		return block.West
+	case block.West:
+		return block.North
+	}
+	return d
+}
+
+func directionCounterClockWise(d block.Direction) block.Direction {
+	switch d {
+	case block.North:
+		return block.West
+	case block.West:
+		return block.South
+	case block.South:
+		return block.East
+	case block.East:
+		return block.North
+	}
+	return d
+}
+
+// get2DDataValue ports Direction.get2DDataValue (the data2d field): SOUTH=0, WEST=1,
+// NORTH=2, EAST=3 — the index into Plane.HORIZONTAL's per-direction arrays (the desert
+// pyramid's hasPlacedChest[] is indexed by it).
+func get2DDataValue(d block.Direction) int {
+	switch d {
+	case block.South:
+		return 0
+	case block.West:
+		return 1
+	case block.North:
+		return 2
+	case block.East:
+		return 3
+	}
+	return 0
+}
+
+// horizontalPlane ports Direction.Plane.HORIZONTAL's faces array (the iteration +
+// getRandomHorizontalDirection order): [NORTH, EAST, SOUTH, WEST].
+var horizontalPlane = [4]block.Direction{block.North, block.East, block.South, block.West}
+
+// getRandomHorizontalDirection ports StructurePiece.getRandomHorizontalDirection =
+// Plane.HORIZONTAL.getRandomDirection(random) = faces[random.nextInt(4)] (Util.getRandom).
+// This is the orientation draw the desert pyramid piece makes at construction — a
+// load-bearing RNG draw (it advances the piece RNG stream before the height-offset draw).
+func getRandomHorizontalDirection(rng levelgen.RandomSource) block.Direction {
+	return horizontalPlane[rng.NextIntN(4)]
+}
+
+// transformState applies a piece's mirror THEN rotation to a placed block state's FACING,
+// mirroring placeBlock's order (mirror first, then rotate — StructurePiece.placeBlock).
+// Blocks without a Facing prop (sandstone, terracotta, tnt, ...) are returned unchanged.
+// Stairs/chest carry a Facing; the desert pyramid only ever places STRAIGHT stairs, whose
+// SHAPE is rotation/mirror-invariant, so transforming FACING alone is jar-faithful here
+// (StairBlock.rotate sets FACING=rotation.rotate(FACING); StairBlock.mirror on a STRAIGHT
+// shape == rotate(CLOCKWISE_180) i.e. FACING=opposite, matching mirrorDirection on the
+// stair's facing axis). NONE/NONE (orientation NORTH) is the identity path.
+//
+// Source: CFR StructurePiece.placeBlock + StairBlock.rotate/mirror.
+func transformState(st block.StateID, mirror Mirror, rotation Rotation) block.StateID {
+	if mirror == MirrorNone && rotation == RotNone {
+		return st
+	}
+	if st < 0 || int(st) >= len(block.StateList) {
+		return st
+	}
+	b := block.StateList[st]
+	facing, ok := facingOf(b)
+	if !ok {
+		return st // no Facing prop -> rotation/mirror is the identity (BlockBehaviour default)
+	}
+	if mirror != MirrorNone {
+		facing = mirror.mirrorDirection(facing)
+	}
+	if rotation != RotNone {
+		facing = rotation.rotateDirection(facing)
+	}
+	nb := withFacing(b, facing)
+	if id, ok := block.ToStateID[nb]; ok {
+		return id
+	}
+	return st
+}
+
+// facingOf returns a block's horizontal Facing prop if it carries one (stairs, chest).
+// Implemented as an explicit type switch (NOT reflection) over the blocks the structure
+// pieces place, so the transform is allocation-free + exact.
+func facingOf(b block.Block) (block.Direction, bool) {
+	switch v := b.(type) {
+	case block.SandstoneStairs:
+		return v.Facing, true
+	case block.Chest:
+		return v.Facing, true
+	}
+	return block.North, false
+}
+
+// withFacing returns a copy of b with its Facing prop set to dir (the inverse of facingOf).
+func withFacing(b block.Block, dir block.Direction) block.Block {
+	switch v := b.(type) {
+	case block.SandstoneStairs:
+		v.Facing = dir
+		return v
+	case block.Chest:
+		v.Facing = dir
+		return v
+	}
+	return b
+}
+
+// StructurePiece is the ported base net.minecraft.world.level.levelgen.structure.
+// StructurePiece: the world-block bbox, the orientation-derived rotation/mirror (set via
+// setOrientation), and genDepth. Concrete pieces (DesertPyramidPiece) embed it and use its
+// block helpers (placeBlock/generateBox/fillColumnDown/createChest), which clip every write
+// to the piece bbox AND the per-chunk writable box (the cross-chunk mechanism, Pitfall #2).
+//
+// Source: javap -c / CFR net.minecraft.world.level.levelgen.structure.StructurePiece.
+type StructurePiece struct {
+	bbox        BoundingBox
+	orientation block.Direction
+	hasOrient   bool
+	rotation    Rotation
+	mirror      Mirror
+	genDepth    int
+}
+
+// BoundingBox returns the piece's world-block AABB (satisfies the Piece interface).
+func (p *StructurePiece) BoundingBox() BoundingBox { return p.bbox }
+
+// GenDepth returns the piece's generation depth (the addChildren recursion bound).
+func (p *StructurePiece) GenDepth() int { return p.genDepth }
+
+// Move shifts the piece bbox by (dx,dy,dz) — ScatteredFeaturePiece's height adjustment
+// (StructurePiece.move) re-anchors the whole pyramid to terrain height.
+func (p *StructurePiece) Move(dx, dy, dz int) {
+	p.bbox.MinX += dx
+	p.bbox.MinY += dy
+	p.bbox.MinZ += dz
+	p.bbox.MaxX += dx
+	p.bbox.MaxY += dy
+	p.bbox.MaxZ += dz
+}
+
+// setOrientation ports StructurePiece.setOrientation: deriving (rotation, mirror) from the
+// piece orientation. NONE/NORTH -> identity; SOUTH -> mirror LEFT_RIGHT; WEST -> mirror
+// LEFT_RIGHT + rotate CW90; EAST -> rotate CW90.
+func (p *StructurePiece) setOrientation(dir block.Direction, has bool) {
+	p.hasOrient = has
+	p.orientation = dir
+	if !has {
+		p.rotation = RotNone
+		p.mirror = MirrorNone
+		return
+	}
+	switch dir {
+	case block.South:
+		p.mirror = MirrorLeftRight
+		p.rotation = RotNone
+	case block.West:
+		p.mirror = MirrorLeftRight
+		p.rotation = RotClockwise90
+	case block.East:
+		p.mirror = MirrorNone
+		p.rotation = RotClockwise90
+	default: // NORTH
+		p.mirror = MirrorNone
+		p.rotation = RotNone
+	}
+}
+
+// getWorldX/getWorldY/getWorldZ port StructurePiece.getWorldX/Y/Z: map the piece-LOCAL
+// (x,y,z) to WORLD coords via the orientation. With no orientation the local coords are
+// returned unchanged (the bbox is already in world coords); with an orientation the bbox
+// min/max + the orientation swap/flip place the local frame into the world.
+//
+// Source: CFR StructurePiece.getWorldX/getWorldY/getWorldZ (the switch on orientation).
+func (p *StructurePiece) getWorldX(x, z int) int {
+	if !p.hasOrient {
+		return x
+	}
+	switch p.orientation {
+	case block.North, block.South:
+		return p.bbox.MinX + x
+	case block.West:
+		return p.bbox.MaxX - z
+	case block.East:
+		return p.bbox.MinX + z
+	default:
+		return x
+	}
+}
+
+func (p *StructurePiece) getWorldY(y int) int {
+	if !p.hasOrient {
+		return y
+	}
+	return y + p.bbox.MinY
+}
+
+func (p *StructurePiece) getWorldZ(x, z int) int {
+	if !p.hasOrient {
+		return z
+	}
+	switch p.orientation {
+	case block.North:
+		return p.bbox.MaxZ - z
+	case block.South:
+		return p.bbox.MinZ + z
+	case block.West, block.East:
+		return p.bbox.MinZ + x
+	default:
+		return z
+	}
+}
+
+// placeBlock ports StructurePiece.placeBlock — the cross-chunk clip (Pitfall #2, jar-exact):
+//
+//  1. getWorldPos(x,y,z): local -> world via the orientation.
+//  2. if !box.IsInside(worldPos): the write is DROPPED (the clip to the chunk's writable
+//     box — THIS is what makes a chunk-spanning piece write ONLY the current chunk's slice).
+//  3. transformState: mirror THEN rotate the block state's facing.
+//  4. view.SetBlock.
+//
+// `box` IS the chunk's writableBox (passed into PostProcess). canBeReplaced is the jar's
+// always-true default for these pieces, so it is omitted.
+func (p *StructurePiece) placeBlock(view WorldGenView, st block.StateID, x, y, z int, box BoundingBox) {
+	wx := p.getWorldX(x, z)
+	wy := p.getWorldY(y)
+	wz := p.getWorldZ(x, z)
+	if !box.IsInside(wx, wy, wz) {
+		return
+	}
+	view.SetBlock(wx, wy, wz, transformState(st, p.mirror, p.rotation))
+}
+
+// getBlock ports StructurePiece.getBlock: read the world block at piece-local (x,y,z),
+// returning air when outside the chunk box (the WorldGenLevel "out-of-box reads as air").
+func (p *StructurePiece) getBlock(view WorldGenView, x, y, z int, box BoundingBox) block.StateID {
+	wx := p.getWorldX(x, z)
+	wy := p.getWorldY(y)
+	wz := p.getWorldZ(x, z)
+	if !box.IsInside(wx, wy, wz) {
+		return stateAir
+	}
+	return view.GetBlock(wx, wy, wz)
+}
+
+// generateBox ports StructurePiece.generateBox: fill the local sub-box [x0..x1]x[y0..y1]x
+// [z0..z1] with edgeBlock on the faces and fillBlock in the interior, each cell via
+// placeBlock (so every write is clipped). skipAir skips cells whose current world block is
+// air (used by the desert pyramid cellar — generateBox(..., true)).
+func (p *StructurePiece) generateBox(view WorldGenView, box BoundingBox, x0, y0, z0, x1, y1, z1 int, edge, fill block.StateID, skipAir bool) {
+	for y := y0; y <= y1; y++ {
+		for x := x0; x <= x1; x++ {
+			for z := z0; z <= z1; z++ {
+				if skipAir && block.IsAir(p.getBlock(view, x, y, z, box)) {
+					continue
+				}
+				if y == y0 || y == y1 || x == x0 || x == x1 || z == z0 || z == z1 {
+					p.placeBlock(view, edge, x, y, z, box)
+				} else {
+					p.placeBlock(view, fill, x, y, z, box)
+				}
+			}
+		}
+	}
+}
+
+// generateAirBox ports StructurePiece.generateAirBox: fill the local sub-box with air.
+func (p *StructurePiece) generateAirBox(view WorldGenView, box BoundingBox, x0, y0, z0, x1, y1, z1 int) {
+	for y := y0; y <= y1; y++ {
+		for x := x0; x <= x1; x++ {
+			for z := z0; z <= z1; z++ {
+				p.placeBlock(view, stateAir, x, y, z, box)
+			}
+		}
+	}
+}
+
+// generateMaybeBox ports StructurePiece.generateMaybeBox: like generateBox but each cell is
+// placed only if random.nextFloat() <= probability (a per-cell probability draw). skipAir
+// skips air cells; the hasToBeInside interior check is omitted (no porting piece needs it).
+func (p *StructurePiece) generateMaybeBox(view WorldGenView, box BoundingBox, rng levelgen.RandomSource, probability float32, x0, y0, z0, x1, y1, z1 int, edge, fill block.StateID, skipAir bool) {
+	for y := y0; y <= y1; y++ {
+		for x := x0; x <= x1; x++ {
+			for z := z0; z <= z1; z++ {
+				if rng.NextFloat() > probability {
+					continue
+				}
+				if skipAir && block.IsAir(p.getBlock(view, x, y, z, box)) {
+					continue
+				}
+				if y == y0 || y == y1 || x == x0 || x == x1 || z == z0 || z == z1 {
+					p.placeBlock(view, edge, x, y, z, box)
+				} else {
+					p.placeBlock(view, fill, x, y, z, box)
+				}
+			}
+		}
+	}
+}
+
+// maybeGenerateBlock ports StructurePiece.maybeGenerateBlock: place blockState at local
+// (x,y,z) iff random.nextFloat() < probability.
+func (p *StructurePiece) maybeGenerateBlock(view WorldGenView, box BoundingBox, rng levelgen.RandomSource, probability float32, x, y, z int, st block.StateID) {
+	if rng.NextFloat() < probability {
+		p.placeBlock(view, st, x, y, z, box)
+	}
+}
+
+// fillColumnDown ports StructurePiece.fillColumnDown: from local (x,startY,z), write
+// blockState downward while the existing world block is replaceable-by-structures (air or
+// liquid) and above the world floor (minY+1). Clipped to box (an out-of-box start is a no-op
+// — the column lives in a different chunk). The downward walk reads via GetBlock (live, so a
+// just-placed solid stops the fill).
+func (p *StructurePiece) fillColumnDown(view WorldGenView, st block.StateID, x, startY, z int, box BoundingBox, minY int) {
+	wx := p.getWorldX(x, z)
+	wz := p.getWorldZ(x, z)
+	wy := p.getWorldY(startY)
+	if !box.IsInside(wx, wy, wz) {
+		return
+	}
+	for wy > minY+1 && isReplaceableByStructures(view.GetBlock(wx, wy, wz)) {
+		view.SetBlock(wx, wy, wz, st)
+		wy--
+	}
+}
+
+// createChest ports StructurePiece.createChest: place a chest block at local (x,y,z) with a
+// loot-table TAG marker (LOOT DEFERRED to v3 — the chest is placed as the chest BLOCK with
+// the piece orientation's facing; the loot table is recorded on the start, NOT rolled here;
+// block entities / loot resolution are a v3 subsystem, matching the REQUIREMENTS.md chest
+// deferral + the Phase-13 dungeon precedent). Returns true on a successful in-box placement.
+//
+// Vanilla calls reorient() to face the chest away from a solid neighbor; that needs a
+// settled neighborhood + block-entity wiring (v3), so this places the chest with the piece's
+// default facing (NORTH transformed by the orientation) — the VISIBLE chest block is
+// delivered, only the loot/reorient is deferred. The lootTable id is appended to lootChests.
+func (p *StructurePiece) createChest(view WorldGenView, box BoundingBox, x, y, z int, lootTable string, lootChests *[]LootChest) bool {
+	wx := p.getWorldX(x, z)
+	wy := p.getWorldY(y)
+	wz := p.getWorldZ(x, z)
+	if !box.IsInside(wx, wy, wz) {
+		return false
+	}
+	chest := block.Chest{Facing: block.North, Type: block.ChestTypeSingle, Waterlogged: false}
+	st := transformState(block.ToStateID[chest], p.mirror, p.rotation)
+	view.SetBlock(wx, wy, wz, st)
+	if lootChests != nil {
+		*lootChests = append(*lootChests, LootChest{X: wx, Y: wy, Z: wz, LootTable: lootTable})
+	}
+	return true
+}
+
+// LootChest records a placed chest's world position + its loot-table id. v3's loot subsystem
+// resolves these into block-entity loot; this plan only places the chest BLOCK (loot
+// deferred). Tracked on the StructureStart so the deferred resolver can find every chest.
+type LootChest struct {
+	X, Y, Z   int
+	LootTable string
+}
+
+// addChildren is the recursion hook (StructurePiece.addChildren). Single-piece temples (the
+// desert pyramid) do NOT recurse — addChildren is a no-op here. It exists with the accessor +
+// findCollisionPiece collision check for Phase-15 mineshaft/stronghold reuse (multi-piece
+// trees that DO recurse). A concrete multi-piece base overrides it.
+func (p *StructurePiece) addChildren(_ Piece, _ PieceAccessor, _ levelgen.RandomSource) {}
+
+// PieceAccessor ports StructurePieceAccessor: the addChildren recursion sink (a piece adds
+// child pieces + queries collisions through it). Phase-15 multi-piece structures use it; the
+// single-piece temples never call it.
+type PieceAccessor interface {
+	// AddPiece appends a child piece to the in-progress tree.
+	AddPiece(p Piece)
+	// FindCollisionPiece returns the first existing piece whose bbox intersects box (nil if
+	// none) — the recursion's overlap guard.
+	FindCollisionPiece(box BoundingBox) Piece
+}
+
+// FindCollisionPiece ports StructurePiece.findCollisionPiece(List, box): the first piece in
+// the list whose bbox intersects box, else nil. Exported for the PieceAccessor + Phase-15.
+func FindCollisionPiece(pieces []Piece, box BoundingBox) Piece {
+	for _, pc := range pieces {
+		if pc.BoundingBox().Intersects(box) {
+			return pc
+		}
+	}
+	return nil
+}
+
+// isReplaceableByStructures ports StructurePiece.isReplaceableByStructures: air or liquid
+// (the glow-lichen/seagrass cases are omitted — the desert pyramid fillColumnDown only runs
+// over sandy desert terrain, never those plants). Used by fillColumnDown's downward walk.
+func isReplaceableByStructures(st block.StateID) bool {
+	return block.IsAir(st) || isLiquid(st)
+}
+
+// isLiquid reports whether a state is a water/lava fluid (the structure-replaceable liquids).
+func isLiquid(st block.StateID) bool {
+	return st == stateWater || st == stateLava
+}
+
+// Pre-resolved state ids the piece helpers reuse (air for generateAirBox/getBlock, water/lava
+// for isReplaceableByStructures). Resolved once at package init from the block registry.
+var (
+	stateAir   = block.ToStateID[block.Air{}]
+	stateWater = block.ToStateID[block.Water{Level: 0}]
+	stateLava  = block.ToStateID[block.Lava{Level: 0}]
+)
+
+// Piece is extended (vs 14-01's bbox-only placeholder) with PostProcess: a piece writes its
+// geometry into the chunk's writable box via the WorldGenView, clipped by placeBlock. The
+// rng is the per-piece WorldgenRandom (SetLargeFeatureSeed over (worldSeed,startChunkX,
+// startChunkZ)) — re-derivable, so placing the same piece from two overlapping chunks draws
+// the same stream + clips to each chunk's slice (idempotent, Pitfall #2).
+type Piece interface {
+	// BoundingBox returns the piece's world-block AABB.
+	BoundingBox() BoundingBox
+	// PostProcess writes the piece's blocks into box (the chunk's writable column), clipped.
+	PostProcess(view WorldGenView, box BoundingBox, chunkPos level.ChunkPos, rng levelgen.RandomSource)
+}

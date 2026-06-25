@@ -7,13 +7,16 @@ import (
 
 	"github.com/imhinotori/sulfur/level"
 	levelbiome "github.com/imhinotori/sulfur/level/biome"
+	"github.com/imhinotori/sulfur/world/levelgen"
 )
 
 // fakePiece is a minimal Piece with a fixed bbox for the cache tests (14-02 supplies
-// the real piece types).
+// the real piece types). PostProcess is a no-op (the cache tests never PLACE).
 type fakePiece struct{ bb BoundingBox }
 
 func (p fakePiece) BoundingBox() BoundingBox { return p.bb }
+func (p fakePiece) PostProcess(WorldGenView, BoundingBox, level.ChunkPos, levelgen.RandomSource) {
+}
 
 // fakeStartGenerator emits a single fixed-bbox start at a designated OWNER chunk and
 // nothing elsewhere — so the cache + references are testable WITHOUT 14-02's geometry.
