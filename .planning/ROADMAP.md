@@ -21,7 +21,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 6: Entities, Physics & Interaction** - Entity store/tracker, gravity/AABB collision, block place/break, component inventory, health/respawn, persistence
 - [x] **Phase 7: AI, Pathfinding, Commands & Chat** - Goal-selector brain, synchronous A* navigation, mob spawning, command dispatch, chat broadcast — ✅ real-client signed off (mobs spawn distributed + wander + jump + A* around obstacles; commands + chat work)
 - [x] **Phase 8: Leaf Concurrency Optimizations** - Swap synchronous executors for goroutine pools behind pre-built seams; lock-free collections; linear region format; `-race` clean — ✅ async pathfinding/tracker/spawn behind the no-op seams (additive, not a rewrite); snapshot-discipline kept collections plain; .linear (pure-Go zstd) 2.5% of .mca; -race clean under combined load
-- [ ] **Phase 9: Stretch — Online Mode, Vanilla-Parity Worldgen, Regionization** - v2 optional add-ons enabled by the ownership-isolated core
+- [x] **Phase 9: Stretch — Vanilla-Parity Worldgen (PARITY-01)** - ✅ Real client explores biome-varied noise terrain with caves/ravines/aquifers/ore-veins; per-marker interpolation + surface-before-carve fidelity fixes applied — visual gate APPROVED (ONLINE-01/02 + REGION-01 deferred v2)
 
 ## Phase Details
 
@@ -180,7 +180,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] 09-06-PLAN.md — Wave 5: the legacy WorldCarver pass — CanyonWorldCarver (RAVINES) + CaveWorldCarver (tunnels), aquifer-aware, cross-chunk-continuous (the carvers verified still run in 26.2)
 - [x] 09-07-PLAN.md — Wave 5: the FULL SurfaceSystem/SurfaceRules (biome-correct surfaces) + the multi-noise Climate biome source (real biome diversity)
 - [x] 09-08-PLAN.md — Wave 6: NoiseGenerator implementing world.Generator — drives noise→fill(aquifer/ore)→carve→surface(biome+heightmaps) into the reused level.Chunk, pure
-- [ ] 09-09-PLAN.md — Wave 7: swap into cmd/sulfur + determinism/full-parity-sanity/-race gate + the BLOCKING real-client visual gate (explorable caves/ravines/aquifers/ores; autonomous:false)
+- [x] 09-09-PLAN.md — Wave 7: swapped into cmd/sulfur + determinism/full-parity-sanity/-race gate + the BLOCKING real-client visual gate APPROVED (explorable caves/ravines/aquifers/ores). Post-gate fidelity audit vs the jar found + fixed 2 structural port divergences (per-marker interpolation: mapAll(wrap) tree-rewrite so only interpolated markers trilerp, parent ops per-block — sharper cliffs + noodle caves; surface-before-carve: Generate reordered to NOISE→SURFACE→CARVERS so carved openings expose bare stone) — commit aa619b81
 
 
 ## Progress
@@ -198,5 +198,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 6. Entities, Physics & Interaction | 7/7 | Complete | Real-client interactive milestone signed off (entity visible, place/break, damage, death→respawn); 3 real-client bugs fixed |
 | 7. AI, Pathfinding, Commands & Chat | 6/6 | Complete | Real-client signed off; ported from decompiled Java per user mandate; 4 real-client bugs fixed (commands parser-id, pig-spawn-timing, spawner-piling, debug-damage) |
 | 8. Leaf Concurrency Optimizations | 7/7 | Complete | Async swaps behind pre-built seams (additive); snapshot-discipline → collections stay plain; .linear region (pure-Go zstd); -race clean -count=10 under combined load |
-| 9. Stretch — FULL Vanilla-Parity Worldgen (PARITY-01) | 0/9 | Planned | - |
+| 9. Stretch — FULL Vanilla-Parity Worldgen (PARITY-01) | 9/9 | ✅ Complete | Real client explores biome-varied terrain + caves/ravines/aquifers/ore-veins; 2 post-gate fidelity fixes (per-marker interp + surface-before-carve) applied; visual gate approved |
 </content>

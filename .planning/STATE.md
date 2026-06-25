@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: verifying
-stopped_at: "Completed 09-06-PLAN.md (PARITY-01 Wave 5: WorldCarver pass — CaveWorldCarver tunnels + CanyonWorldCarver ravines, aquifer-aware, cross-chunk, seeded)"
-last_updated: "2026-06-24T22:31:16.825Z"
+status: complete
+stopped_at: "Phase 9 COMPLETE — PARITY-01 worldgen visual gate APPROVED + 2 post-gate fidelity fixes applied (per-marker interpolation + surface-before-carve, aa619b81). Milestone v1 done."
+last_updated: "2026-06-24T23:05:00.000Z"
 last_activity: 2026-06-24
 progress:
   total_phases: 9
-  completed_phases: 8
+  completed_phases: 9
   total_plans: 46
-  completed_plans: 45
-  percent: 98
+  completed_plans: 46
+  percent: 100
 ---
 
 # Project State
@@ -203,7 +203,8 @@ Recent decisions affecting current work:
 - [Phase 09]: 09-03: router lives in package router (world/levelgen/router/) not package levelgen — a composition root importing density cycles levelgen->density->synth->levelgen; RandomState seeds each noise via Xoroshiro(seed).forkPositional().fromHashOf(id) (the determinism hinge), implements density.NoiseBinder; NewRouter(seed) is pure, Docker -race clean
 - [Phase 09]: 09-04: NoiseChunk (Tier-E) ported to package world/levelgen/noisechunk (NOT package levelgen) to break the density->synth->levelgen import cycle (same relocation as 09-03 router). Samples bound final_density on the coarse 5x5x49 cell-corner grid (cellWidth=4/cellHeight=8) via the ported NoiseInterpolator (Mth.lerp trilerp in doFill order) -> per-block density field (~1225 corner samples not 98K). Caves come free as negative density. Drives ONE interpolator over the WHOLE final_density (RESEARCH Pattern 2) since density has no mapAll and the plan forbids modifying it — corner-EXACT + sparse. Provisional stone/deepslate/water/air+bedrock fill (Wave 5 Aquifer replaces). Pure, zero deps, -race clean. — PARITY-01 Wave 3: the cell-sample+trilerp is the parity+perf hinge; package placement forced by the import cycle; whole-final_density sampling is the sanctioned RESEARCH approach given density's API surface.
 - [Phase 09]: 09-06: WorldCarver pass ported — CaveWorldCarver (extra tunnel caves) + CanyonWorldCarver (RAVINES) run on top of the noise terrain, aquifer-aware (carve below the fluid level floods), replaceables-gated, cross-chunk-continuous ([-8,8] source-chunk range), deterministic via a ported java.util.Random LCG seeded by setLargeFeatureSeed(worldSeed+carverIdx, srcX, srcZ). The carver consumes the Wave-5 Aquifer through a FluidSource interface (computeSubstance is unexported in noisechunk) — the Generator wires it. Mineshafts-as-STRUCTURES remain DEFERRED (separate subsystem); ravines+caves (the carver class) are IN. Zero new deps.
-- [Phase 09]: 09-08: NoiseGenerator assembles fill->carve->surface->heightmaps->biomes into a pure drop-in world.Generator — Carve runs BEFORE surface (block sense) so carved tops get a correct surface; the 3 client heightmaps are written LAST from the final blocks (truthful render). Cited against ChunkStatusTasks (vanilla STATUS order is surface-before-carvers; the single-shot block dependency is the reverse). Generate is PURE (same seed+pos->identical bytes); worker/tick/Generator-interface/level.Chunk wire UNTOUCHED. Added Aquifer.CarveFluid as the exported carver.FluidSource seam. Zero new deps, CGO=0 clean, -race clean.
+- [Phase 09]: 09-08: NoiseGenerator assembles fill->surface->carve->heightmaps->biomes into a pure drop-in world.Generator. Generate is PURE (same seed+pos->identical bytes); worker/tick/Generator-interface/level.Chunk wire UNTOUCHED. Added Aquifer.CarveFluid as the exported carver.FluidSource seam. Zero new deps, CGO=0 clean, -race clean. (NOTE: the original 09-08 ran carve BEFORE surface; the post-gate fidelity fix (aa619b81) REVERSED this to NOISE->SURFACE->CARVERS to match vanilla ChunkStatus so carved openings expose bare stone — see the 09-09 fidelity decision below.)
+- [Phase 09]: 09-09 / FIDELITY FIX (aa619b81, post-visual-gate audit vs the jar): TWO structural port divergences closed. (1) PER-MARKER INTERPOLATION — NoiseChunk drove ONE interpolator over the WHOLE final_density; vanilla's ctor calls noiseRouter.mapAll(this::wrap) replacing ONLY each Marker(Interpolated) subtree with its own NoiseInterpolator, every surrounding op (squeeze/min/the noodle cave graph) per-block. Because those ops are non-linear, trilerp(F(corners)) != F(trilerp(inner)) → the old shortcut smoothed cliffs + erased noodle caves. Ported DensityFunction.mapAll (density/mapall.go, bottom-up tree rewrite, identity-memoized for the shared DAG); the interpolator is now *interpolatedFn (a density.Function MapAll substitutes per interpolated marker; Compute returns the trilerped value inside the cell loop via a shared fillState.filling flag, samples its inner filler direct outside it — porting NoiseInterpolator.compute's ctx==this$0 discriminant); the overworld final_density has 5 interpolated markers (main density mul + 4 cave branches), each its own interpolator. TestNoiseChunkCornerExact (corner-exact) preserved. Per-block compute raised gen ~70ms→~116ms/chunk (vanilla's real cost; off-tick via Phase-8 async seams). (2) SURFACE-BEFORE-CARVE — Generate reordered to NOISE->SURFACE->CARVERS (vanilla ChunkStatus); carved openings expose bare stone instead of grass/dirt rims. Both fixes -race clean (Docker golang:1.26). VISUAL GATE APPROVED by the user.
 
 ### Pending Todos
 
@@ -230,7 +231,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-24T22:30:54.174Z
-Stopped at: Completed 09-06-PLAN.md (PARITY-01 Wave 5: WorldCarver pass — CaveWorldCarver tunnels + CanyonWorldCarver ravines, aquifer-aware, cross-chunk, seeded)
+Last session: 2026-06-24T23:05:00.000Z
+Stopped at: Phase 9 COMPLETE — PARITY-01 worldgen visual gate APPROVED by the user; 2 post-gate fidelity fixes applied (per-marker interpolation + surface-before-carve, aa619b81). MILESTONE v1.0 COMPLETE (9/9 phases).
 Resume file: None
-Next: plan Phase 6 (entities / inventory / persistence) — the first-playable Player Session seam (movement, tick-owned position, the following ring, the tab list) is in place to build on. Deferred: KeepAlive double-leave hardening (Phase 3, surfaces when real timeout-driven disconnects land). The pulled-forward bootstrap deferred-row is now CLOSED.
+Next: v1 is done end-to-end (login → biome-varied noise world with caves/ravines/aquifers/ore-veins → entities/AI/inventory/combat → async-optimized, -race clean). The next milestone is DEEPER GAMEPLAY (user-flagged, deferred): items/crafting, more mobs + their ported AI, block mechanics (redstone/farming/fluids), and the Phase-9 v2 deferrals (ONLINE-01/02 auth+encryption, REGION-01 Folia-style regionization, trees/vegetation/structures as feature+structure subsystems). Run /gsd-new-milestone to scope it. Deferred-still-open: KeepAlive double-leave hardening (Phase 3, surfaces when real timeout-driven disconnects land).
