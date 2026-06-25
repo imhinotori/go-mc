@@ -1,65 +1,60 @@
-# Sulfur — Session Handoff (2026-06-25)
+# Sulfur — Session Handoff (2026-06-25, end of v2 / start of v3)
 
-> Minecraft Java 26.2 (protocol 776) server in Go. GSD autonomous build. **Branch `ender-776`.** NEW push target since the CI/CD work: **`development`** (= GHCR `:latest`), NOT `main`. `git push origin ender-776:development`. Remote `git@github.com:imhinotori/sulfur`. Module `github.com/imhinotori/sulfur`. Dir `D:\ender`.
+> Minecraft Java 26.2 (protocol 776) server in Go. GSD autonomous build. **Branch `ender-776`.** Push target: **`development`** (= GHCR `:latest`, auto-deploys to prod), NOT `main`. `git push origin ender-776:development`. Remote `git@github.com:imhinotori/sulfur`. Module `github.com/imhinotori/sulfur`. Dir `D:\ender`.
 
-## RESUME HERE — execute Phase 16 (the LAST v2 phase), then close milestone v2
+## WHERE WE ARE
 
-Milestone **v2 (worldgen features + structures)** is **6/7 phases done**. Only **Phase 16 (Village Jigsaw + Structures Visual Gate)** remains. Its 3 plans are **written + plan-checked + committed + pushed** (commit `fc58840e`) — NOT executed. Execute them, then the visual gate closes v2.
+- **v2.0 SHIPPED + TAGGED** (2026-06-25). Worldgen features + structures, all 15/15 reqs, two visual gates approved (the last on seed 25). Archived to `.planning/milestones/v2-*.md`, tag `v2.0` pushed. ROADMAP/PROJECT.md evolved, REQUIREMENTS.md removed (fresh for v3). The 16 old phase dirs were cleared by `phases.clear`.
+- **Render-distance fix shipped** (commit `a34db178`): `serverViewDistance` 2 → **10** (vanilla default). `server/world_stream.go`. Two framing tests pinned to `minViewDistance` (the 441-column ring overflows the synchronous test pipe — that's test infra, not prod). CI green → prod on radio 10.
+- **v3 milestone STARTED** (commit on `ender-776`): `state.milestone-switch v3`, PROJECT.md has the `## Current Milestone: v3` section. **Research dir has STALE v2 files** (STACK/FEATURES/ARCHITECTURE/PITFALLS/SUMMARY.md are v2's) — the v3 research spawn was NOT run yet (interrupted by the bug reports below).
 
-**Why this was paused, not executed:** the prior session hit 72% context. Phase 16 has the 3 HEAVIEST executors of v2 (483 village `.nbt` files + the jigsaw BFS Placer + the visual gate) — running them at high context risked splitting the work. The compact is the clean handoff point: plans committed, nothing half-done.
+## ⚠️ THE PIVOT — v3 scope changed mid-flight
 
-**Execute order (sequential, each depends on the prior):**
-- **16-01** — the `.nbt` StructureTemplate system: binary `.nbt` embed (incl. the `empty.json` terminator pool — the plan-check caught it was outside the `village/` prefix) + runtime gzip+nbt parse (REUSE the existing `nbt` package, no 2nd lib) + `placeInWorld` rotation/mirror (reuse `transformState(st, mirror, rotation)` at `world/structure/piece.go:176` — mirror 2nd, rotation 3rd) + the processors. **62** village template_pools (NOT 74 — that was stale pre-26.2), 483 `.nbt`, 40 processor_lists.
-- **16-02** — the bounded-BFS `JigsawPlacement.Placer` (SequencedPriorityIterator work queue, NOT stack recursion; bounded SIMULTANEOUSLY by maxDepth 6 + max_distance 80 + VoxelShape collision; depth-0 → `minecraft:empty` fallback terminator) + the village `random_spread` StartGenerator (salt 10387312 / spacing 34 / sep 8 / 5 biome variants as one `villages.json` structure_set, each gated by `has_structure/village_*`, biome-gated NO accept-by-default, registered into `CompositeStartGenerator`).
-- **16-03** — full structures acceptance + **THE autonomous:false VISUAL GATE** (the v2-closing gate): a real client finds villages (5 variants) + temples + mineshafts + strongholds, deterministic per seed. This is a BLOCKING human-verify — PAUSE for the user's real-client check. The executor prints the salt-10387312-derived village chunk for the fixed seed so the user can find one.
+The user connected with a real client and found **v1.0's "fully playable" claim is half-done**. Six gameplay bugs reported. I investigated each against the real code (3 Explore agents). **Decision (user-confirmed via AskUserQuestion): insert a "Phase 17 — gameplay completion" FIRST in v3, before online-mode/TUI/structures.** A non-playable server makes online-mode pointless.
 
-**How to run each plan:** spawn a `gsd-executor` agent per plan (the prior session delegated every executor to keep the orchestrator lean). After each: verify `go build ./...` exit 0 + `go vet ./...` + `go test ./world/... ./world/structure/`, then the Docker `-race` gate **with `-timeout 1800s`** (the structures `./world` suite hits ~834s with structures live — a timeout dump, NOT a race; 15-03 found this). Commit atomically, push to `development`, then the next plan. At 16-03's visual gate, STOP and present the checklist to the user.
+**v3 scope (user-chosen):** Phase 17 gameplay-completion (FIRST) → then ONLINE-01/02 (Mojang auth + AES/CFB8 encryption) + TUI (bubbletea+bubbles: command zone + live logs + disconnect-reason logging) + structure polish (loot tables, structure entities villagers/witch/cat/silverfish, afterPlace terrain-beard, structure-start NBT persistence). **REGION-01 Folia is OUT of v3 (→ v4).**
 
-## Milestone v2 progress (Phases 10-16; v1 = Phases 1-9, shipped + tagged v1.0)
+## THE SIX BUGS (investigated, file:line evidence) — Phase 17 work
 
-| Phase | Status |
-|-------|--------|
-| 10 Worldgen Foundation (LCG + cross-chunk seam + live heightmap) | ✅ |
-| 11 Feature Pipeline & Decoration Orchestration | ✅ |
-| 12 Core Feature Types (ore/patch/selectors/...) | ✅ |
-| 13 Trees + Dungeon + Features VISUAL GATE | ✅ (gate APPROVED — "árboles y vines" on a real client) |
-| 14 Structure Pipeline & Temples (desert pyramid/jungle/igloo/swamp hut) | ✅ |
-| 15 Mineshaft & Stronghold | ✅ |
-| **16 Village Jigsaw & Structures VISUAL GATE** | 🔄 **planned + plan-checked + pushed; NOT executed (RESUME HERE)** |
+**Pattern: core logic exists + is unit-tested, but the final SEAM (join-sync / input-dispatch / broadcast / tick-wiring) was never connected.** v1 closed on isolated-function tests, not end-to-end with a real client.
 
-After 16's visual gate approves → run `/gsd-complete-milestone` for v2 (archive roadmap/requirements, tag, like v1.0 was).
+| # | Bug | Class | Root cause + fix location |
+|---|-----|-------|---------------------------|
+| 1 | **Players invisible to each other** | NEVER IMPL | Players are never added to the entity store, so the tracker (which only handles MOBS) has no player data to broadcast. Fix: `server/tick.go:699-716` `drainRegistrations()` must `t.entities.add(p)` (create an `entity.Player` ID-156 Entity for the joining player) + sync its pos each tick. Tracker at `server/tracker.go:61` then finds them. `entity.Player` exists (`data/entity/entity.go:1424`). |
+| 2 | **Position not persisted** | SAVE ok, LOAD deferred | `snapshotPlayer`/`savePlayer` DO write x/y/z (`server/persistence.go:55-129`, round-trip tested). But `server/gameplay_tick.go:242-257` EXPLICITLY skips applying the loaded position ("NOT applied for v1 … would require re-issuing the bootstrap teleport — deferred"). Fix: apply the persisted pos to the spawn teleport in the join bootstrap (`play_join.go:480-502` hardcodes spawn 8.5/surfaceY+2/8.5). |
+| 3 | **Inventory doesn't work** | Handlers ok, JOIN-SYNC missing | All handlers exist + tested (`server/inventory.go:98-186`: ContainerClick/SetCreativeModeSlot/SetCarriedItem; `sendContent` pushes ContainerSetContent). BUT the initial `ContainerSetContent` is **never sent on join** (`play_join.go sendPlayBootstrap` / `gameplay_tick.go AcceptPlayer` don't call it) → client sees empty window → moves fail silently. Fix: call `sendContent(p)` on first tick after `AcceptPlayer`. |
+| 4 | **Damage doesn't work** | Core ok+tested, DISPATCH missing | `applyDamage`/`die`/`performRespawn`/`setHealth` all exist + tested (`server/combat.go:50-174`, `combat_test.go`). Attack/Interact packets ROUTE to the subtick buffer (`tick.go:771`) BUT `applyInput()` (`server/subtick.go:116-206`) has **no case for ServerboundAttack/Interact** → they hit the `default:` no-op. Only `SULFUR_DEBUG_DAMAGE=1` ever calls applyDamage (`debug.go:227`). Fix: add Attack/Interact cases in `applyInput` that resolve the target + call `t.applyDamage`. Also: NO fall/environmental damage tick exists. |
+| 5 | **Water doesn't work** | Render ok, SIM never impl | Water blocks render (chunks send them; worldgen places them at sea level via aquifer). BUT `tickWorld()` (`server/tick_phases.go:113`) is an **empty stub** — zero fluid simulation: no flow propagation, no fluid-level updates, no waterlogged updates, no player swim/buoyancy physics. Fix: implement the fluid tick (port vanilla `LiquidBlock`/`FlowingFluid` spread) + player fluid physics. Largest of the six. |
+| 6 | **Blocks drop nothing** | Break ok, ITEM-SPAWN missing | Break works: `server/block_interact.go:81-116` sets air + acks + broadcasts BlockUpdate. BUT after SetBlock it returns — never looks up the block's drop, never spawns an `Item` entity (`entity.go:659` exists, ID 71), never sends AddEntity. Fix: after SetBlock, spawn an Item entity for the drop + track it. Ties to bug #1 (entity broadcast) + the loot-table work (structure polish overlaps — block loot tables). |
 
-## CI/CD + PRODUCTION DEPLOY (done this session — live)
+**Build order note:** #1 (player entity in tracker + broadcast) is the keystone — #6 (item-drop entities) and any visible-entity work depend on the player/entity broadcast path working. #5 (water sim) is the biggest standalone. #2/#3/#4 are seam-reconnects (small, high-value). The plan-phase researcher/planner should sequence #1 first.
 
-- **GHCR image** `ghcr.io/imhinotori/sulfur` (PUBLIC). `Dockerfile` = pure-Go CGO=0 static → distroless, EXPOSE 25565. `.github/workflows/docker-publish.yml`: **development → `:latest`**, **main → `:stable`**, + immutable `:sha-<commit>`; a prune step keeps the 3 newest versions.
-- **Branch model (NEW):** `development` = latest (THIS is where work goes now — the user said "post-CI trabajás sobre development, no main"), `main` = stable (currently at `34915b1a` = v2-features+Phase-14; promote to it when something is stable).
-- **Production server:** `151.242.242.206` / `demo.trysulfur.net` (Debian 13, root SSH). Docker 29 + **Watchtower** (the maintained `ghcr.io/nicholas-fedor/watchtower` fork — the `containrrr` one crash-looped on Docker 29) auto-updates `:latest` every 5min (pull+recreate+cleanup). Sulfur runs on **:25565**, volume `sulfur-world:/app` persists the world, `--restart unless-stopped`. Idempotent redeploy script at `/root/deploy-sulfur.sh`. Every push to `development` → CI builds `:latest` → Watchtower deploys to prod in ≤5min.
-- ⚠️ **USER MUST ROTATE THE ROOT PASSWORD** — it was sent in plaintext in the chat (exposed). Recommend SSH-key auth + disable password login. The deploy used it only in ephemeral SSH askpass (never persisted to disk/repo). NEVER commit it.
+## RESUME HERE
 
-## Performance fixes (done this session — the user reported "muuy lenta")
+1. **Finish the v3 milestone setup** (we're mid-`/gsd-new-milestone`): the research spawn (4 parallel gsd-project-researchers: Stack/Features/Architecture/Pitfalls) was NOT run. Either run it (note: research should cover the NEW v3 surfaces — Yggdrasil auth flow + AES/CFB8 protocol encryption for 776, bubbletea/bubbles API, loot-table/structure-entity patterns — AND inform the Phase-17 fluid-sim port) OR skip-research and go straight to requirements. The stale v2 research files in `.planning/research/` must be overwritten or ignored.
+2. **Define v3 REQUIREMENTS.md**: a GAMEPLAY-xx category (the 6 bugs above, Phase 17) + ONLINE-xx + TUI-xx + STRUCT-POLISH-xx. Continue REQ numbering.
+3. **Roadmap**: Phase 17 = gameplay completion (FIRST), then the rest. Phases continue from 16 (so 17, 18, ...).
+4. Then `/gsd-plan-phase 17` and execute.
 
-Per-chunk gen was ~296ms (real streaming); fixed to ~88ms (~3.3×). Two fixes, both committed+pushed:
-1. `world/feature_ore.go` — cache the decoded `OreConfiguration` per `*ConfiguredFeature` (`sync.Map`). `decodeOreConfig`→`resolveOreTagSet` scanned all ~30K block states PER ore placement. ~20%.
-2. `world/decoration.go` `retainedBiomes` — READ the biomes from each chunk's per-section 4×4×4 palette container (FillBiomes wrote them) instead of RE-SAMPLING the multi-noise climate (6 density fns + RTree) over the whole 96-level vertical column × 16 cols × 9 neighborhood chunks (~13800 climate evals/chunk = ~79% of Decorate). Decorate 216ms→52ms.
-- The "Connection reset / packet handling error" the user hit was a STALE binary running in bg — a rebuild fixed it; NOT a real wire bug (heightmaps + StateIDs verified in-range).
-- `server/navigation.go` — fixed a latent pathfinding bug: `requestPath` armed the recompute cooldown on a DROPPED async submit, so under sustained CPU contention (heavy worldgen) every submit dropped + the cooldown throttled the retry forever → mob sat motionless. Now arms cooldown ONLY on an accepted submit. (Surfaced as flaky `TestTickAIDrivesMobs` under concurrent world load.)
+## STANDING CONSTRAINTS (unchanged, non-negotiable)
 
-## CRITICAL GOTCHAS (unchanged + new)
+1. **Port-from-jar mandate**: gameplay/worldgen/structure LOGIC ported DIRECTLY from the decompiled jar (`temp/cache/26.2-inner.jar`, javap -c / CFR). Idiomatic Go, NO GPL paste, cite the class. The plan-checker decompiles the jar to verify.
+2. **CGO_ENABLED=0 must stay clean** (pure-Go static binary, the "no JVM" value prop + the Docker image). New deps OK for v3 where justified (bubbletea/bubbles for the TUI; a crypto lib only if stdlib `crypto/aes`+`crypto/cipher` CFB8 isn't enough — but stdlib has AES; CFB8 may need a small hand-rolled mode since Go stdlib dropped CFB). Auth needs HTTP to sessionserver.mojang.com (stdlib net/http).
+3. **Push target is `development`** (CI: development→latest→prod via Watchtower on demo.trysulfur.net:25565). `main`→stable.
+4. **-race needs Docker** (host CGO=0): `MSYS_NO_PATHCONV=1 docker run --rm -v //d/ender://src -w //src golang:1.26 go test -race -timeout 1800s ./...`. The `-timeout 1800s` is required (structures push ./world to ~834-1008s).
+5. **STALE gopls/LSP** floods FALSE diagnostics (undefined X, redeclared, syntax errors in tests, `tools/ undefined`, shared-test-helper redeclare). ALL FALSE — `tools/` is a SEPARATE Go module. Trust `go build ./...` (exit 0) + `go vet` + `go test`. NEVER revert on gopls.
+6. **NO Co-Authored-By / no Claude attribution** in commits or PRs — user is sole author, absolute.
+7. **Determinism contract** (worldgen): `TestDecorationReorderIdentical` (5×5) + `TestEmitOnce` stay byte-identical. Phase-17 gameplay work shouldn't touch worldgen, but if it does, these gates hold.
+8. **USER MUST ROTATE the prod root password** (exposed in chat earlier this session). Still pending.
 
-1. **STALE LSP/gopls** floods FALSE diagnostics after every wave (`undefined: X`, `redeclared`, `does not implement`, `tools/ undefined logf`, syntax errors in test files). ALL FALSE — trust `go build ./...` (exit 0) + `go vet` + `go test`. NEVER revert based on gopls. `tools/` is a SEPARATE Go module (gopls confuses it).
-2. **`-race` needs Docker** (host CGO_ENABLED=0): `MSYS_NO_PATHCONV=1 docker run --rm -v //d/ender://src -w //src golang:1.26 go test -race -timeout 1800s ./world/...`. The `-timeout 1800s` is REQUIRED now (structures push ./world to ~834s).
-3. **Push target is `development` now**, not `main` (CI: development→latest deploys to prod).
-4. **Port-from-jar mandate** (user, standing): worldgen + structure LOGIC ported DIRECTLY from the decompiled jar (`temp/cache/26.2-inner.jar`, javap -c / CFR), idiomatic Go, no GPL paste, cite the class. The plan-checker DECOMPILES the jar to verify — it caught a real Phase-14 bug this session: the `FrequencyReductionMethod` enum had `legacy_type_1`↔`legacy_type_3` SWAPPED + `legacyProbabilityReducerWithDouble` mis-seeded `(z,salt)` instead of `(chunkX,chunkZ)` — fixed in 15-01.
-5. **CGO_ENABLED=0 must stay clean** (pure-Go static binary, no JVM — the value prop + the Docker image). No new deps in v2 (reuse nbt/xsync/ants/singleflight/klauspost-compress).
-6. **Determinism is the contract**: every structure/feature is pure over (seed, pos); the 5×5-region-two-request-orders byte-identity test (`TestDecorationReorderIdentical`) + `TestEmitOnce` must STAY green after every plan. The worldgen adds NO new wire surface (chunk format sealed in v1 Phase 4) — gates are VISUAL, not capture-diff.
-7. **The cross-chunk seam** (Phase 10): a chunk decorates/places-structures into its 3×3 neighborhood; the worker holds-at-carved + the single scheduler goroutine owns staging (no locks, -race clean). Structures use the ±8 compute-on-demand REFERENCES (a structure owned ≤8 chunks away is found) + placeInChunk clips each piece to the target chunk's writable box (idempotent once-per-overlapping-chunk).
+## INFRA (live)
 
-## Key paths
-- Structures: `world/structure/` (the pipeline + StructurePiece machinery + temples/mineshaft/stronghold; Phase 16 adds the templatesystem + jigsaw Placer + village here). Pieces write through `world/neighborhood.go` (the WorldGenView).
-- Features: `world/levelgen/feature/` + `world/levelgen/placement/` + `world/feature_*.go` (the bodies in package `world`, registered via `registerFeatureBody`). `world/decoration.go` = applyBiomeDecoration. `world/noisegen.go` = the Generator (GenerateTerrain + Decorate split).
-- Embedded data: `world/levelgen/data/` (//go:embed) + `tools/extract_worldgen.go` (the extractor — extend `worldgenZipPrefixes`/`worldgenSingleFiles` for new data). Jar: `temp/cache/26.2-inner.jar` (gitignored, unobfuscated).
-- Plans: `.planning/phases/16-village-jigsaw-structures-gate/16-0{1,2,3}-PLAN.md`. Research: `.planning/research/v2-structures.md` (Tier 4 = village jigsaw).
-- Infra: `Dockerfile`, `.dockerignore`, `.github/workflows/docker-publish.yml`.
+- GHCR `ghcr.io/imhinotori/sulfur` (public): development→`:latest`, main→`:stable`, +`:sha-<12>`, prune keeps 3. `Dockerfile` (CGO=0 distroless), `.github/workflows/docker-publish.yml`.
+- Prod: `151.242.242.206` / `demo.trysulfur.net:25565` (Debian 13). Watchtower (`ghcr.io/nicholas-fedor/watchtower` fork — the containrrr one crash-loops on Docker 29) auto-pulls `:latest` every 5min. Volume `sulfur-world:/app`. Deploy script `/root/deploy-sulfur.sh`.
+- Local: a radio-10 server is running in bg on `:25565` seed 25 (sulfur.exe, gitignored). Kill it before rebuilding (`Get-NetTCPConnection -LocalPort 25565 | Stop-Process`).
 
-## Deferred (NOT bugs — v3, documented)
-Loot tables (chests = block + loot tag, no contents), structure entities (villagers/witch/cat/silverfish — spawner is block-only), `afterPlace` terrain-beard, structure NBT persistence (starts recompute on demand — pure over seed+pos). ONLINE-01/02 auth+encryption, REGION-01 Folia. **TUI (bubbletea + bubbles) + disconnect-reason logs** — the user requested these mid-session; deferred to AFTER v2 closes (their explicit choice: "terminar v2 primero").
+## KEY PATHS
+
+- Gameplay (Phase 17): `server/tick.go` (drainRegistrations, dispatch), `server/tracker.go` (entity tracker — mobs-only), `server/subtick.go` (applyInput — the dispatch with the missing Attack cases), `server/combat.go` (damage, wired but uncalled), `server/inventory.go` (handlers, no join-sync), `server/block_interact.go` (break, no drop), `server/persistence.go` (save ok), `server/gameplay_tick.go` (AcceptPlayer / pos-load skip), `server/tick_phases.go:113` (tickWorld stub = no fluid), `server/entity.go` + `data/entity/entity.go` (NewEntity, entity.Player/Item types).
+- Structures: `world/structure/` (v2 — loot/entities/beard/persistence are the polish deferrals).
+- Planning: `.planning/PROJECT.md` (v3 current milestone), `.planning/ROADMAP.md` (collapsed to v1/v2 milestones), `.planning/MILESTONES.md`, `.planning/milestones/v2-*.md` (archives). NO REQUIREMENTS.md yet (mid-creation).
