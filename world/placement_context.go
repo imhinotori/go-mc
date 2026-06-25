@@ -105,17 +105,21 @@ type featureInvocation struct {
 // Phase 11 — every real type is a recordable no-op stub (the bodies are Phase 12+).
 const testSetBlockType = "test_set_block"
 
-// newConfiguredPlacer builds the Phase-11 ConfiguredFeaturePlacer for one configured
-// feature: a recordable NO-OP dispatch (via placement.PlacerFunc, the exported
-// cross-package bridge) that records each invocation and, for the single test-only type,
-// writes testBlock through the view. cf may be nil (an unresolved ref) — the placer then
-// records an empty type and no-ops.
+// newConfiguredPlacer builds the ConfiguredFeaturePlacer for one configured feature:
+// it records each invocation, and dispatches on the parsed feature type to a registered
+// featureBody (Phase 12+'s real bodies) — or, if none is registered, the recordable
+// NO-OP (plus the single test-only type that writes testBlock). cf may be nil (an
+// unresolved ref) — the placer then records an empty type and no-ops.
 //
-// The dispatch on cf.Type is where Phase 12+ swaps the no-op for the real feature body;
-// the orchestration (applyBiomeDecoration) is unchanged when that happens.
+// reg is the live *feature.Registry (g.deco.registry in production) threaded into the
+// bodyContext so a registered body (12-03's selectors) can resolve a nested
+// sub-PlacedFeature via reg.ResolvePlaced / reg.ParsePlacedFeature. CRITICAL: the REAL
+// ctx + rng are captured (NOT discarded as in Phase 11) and passed to the body, so the
+// body's draws continue the deterministic decoration sequence.
 func newConfiguredPlacer(
 	cf *feature.ConfiguredFeature,
 	view *Neighborhood,
+	reg *feature.Registry,
 	testBlock block.StateID,
 	hasTest bool,
 	invocations *[]featureInvocation,
@@ -124,16 +128,24 @@ func newConfiguredPlacer(
 	if cf != nil {
 		ftype = cf.Type
 	}
-	return func(_ placement.PlacementContext, _ levelgen.RandomSource, pos placement.BlockPos) bool {
+	bctx := &bodyContext{view: view, reg: reg}
+	return func(ctx placement.PlacementContext, rng levelgen.RandomSource, pos placement.BlockPos) bool {
 		if invocations != nil {
 			*invocations = append(*invocations, featureInvocation{featureType: ftype, pos: pos})
 		}
-		// Dispatch on the parsed feature type. Phase 11: every REAL type is a recordable
-		// no-op; only the test-only type writes. Phase 12+ replaces these cases with the
-		// real Feature.place bodies (threading the SAME rng, so the draw sequence continues).
+		// The test-only type writes through the view (proving SetBlock flows + updates
+		// the live worldgen heightmap). It takes precedence and is never a real type.
 		if hasTest && ftype == testSetBlockType && view != nil {
 			view.SetBlock(pos.X, pos.Y, pos.Z, testBlock)
 			return true
+		}
+		// Dispatch on the parsed feature type to a registered body (Phase 12+). The
+		// body receives the bodyContext (view + registry) + the REAL ctx + rng + cf,
+		// so its draws continue the deterministic sequence and it can resolve nested
+		// sub-features through bctx.reg. An unregistered real type stays a no-op (the
+		// tree/dungeon types Phase 13 owns).
+		if body := lookupFeatureBody(ftype); body != nil {
+			return body(bctx, cf, ctx, rng, pos)
 		}
 		return false
 	}
