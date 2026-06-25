@@ -107,12 +107,28 @@ func (t *TickLoop) handlePlayerAction(p *tickPlayer, pkt pk.Packet) {
 	// BREAK: set the target to air on the tick-owned chunk. SetBlock returns changed=false
 	// for an unloaded column / out-of-range y or an already-air target — in which case we
 	// neither ack nor broadcast (no ghost, nothing to reconcile).
+	//
 	air := block.ToStateID[block.Air{}]
+
+	// GAMEPLAY-06: capture the BROKEN block's state BEFORE SetBlock overwrites it with air, so
+	// spawnBlockDrop can look up the right drop (reading after SetBlock would always see air).
+	// A failed read leaves brokenState at air's id (no drop), which is the safe default.
+	brokenState := air
+	if t.world != nil {
+		if s, ok := t.world.GetBlock(pos, dimMinY); ok {
+			brokenState = s
+		}
+	}
+
 	if t.world == nil || !t.world.SetBlock(pos, air, dimMinY) {
 		return
 	}
 
 	t.reconcileEdit(p, pos, air, int32(sequence))
+
+	// GAMEPLAY-06: spawn the dropped Item entity for the broken block. Rides the GAMEPLAY-01
+	// tracker broadcast (the store-add path). A block with no v1 drop is a no-op inside.
+	t.spawnBlockDrop(pos, brokenState)
 }
 
 // handleUseItemOn resolves a ServerboundUseItemOn (the PLACE path) on-tick. Wire layout

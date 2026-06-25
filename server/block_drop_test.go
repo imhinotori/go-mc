@@ -147,8 +147,14 @@ func TestBlockDropTracked(t *testing.T) {
 	pa := playerActionPacket(2, target, 1, 5)
 	loop.applyInput(editor, SubtickInput{At: loop.clock.Now(), Packet: pa})
 
-	// Run the tracker — it should AddEntity + SetEntityData for the new item.
-	loop.tracker.Tick()
+	// Drive the SYNCHRONOUS golden-reference tracker (syncTrackerTick) so the emission is
+	// deterministic — the live loop.tracker is the async OPT-02 executor whose diff lands a
+	// tick later via applyAsyncResults; the sync tracker is the byte-identical reference the
+	// other tracker tests drive (TestAsyncTrackerMatchesSync proves they match). It should
+	// AddEntity + SetEntityData for the new item. NOTE: drainPackets CLOSES the queue, so we
+	// drain exactly ONCE after the tracker runs (the break's ack/BlockUpdate share the buffer
+	// but carry different ids, so they do not affect the AddEntity/SetEntityData counts).
+	syncTrackerTick(loop)
 
 	got := drainPackets(editor.client)
 	if n := countID(got, packetid.ClientboundAddEntity); n < 1 {
