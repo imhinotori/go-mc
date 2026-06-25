@@ -93,6 +93,25 @@ var worldgenZipPrefixes = []struct {
 	// sub-tree at the same dest (idempotent) and additionally pulls every flat
 	// biome tag at this level — stronghold_biased_to.json included.
 	{"data/minecraft/tags/worldgen/biome/", "tags/worldgen/biome"},
+	// STRUCT-05 (Phase 16): the .nbt StructureTemplate system DATA half — the
+	// data-driven geometry layer villages need. THREE new trees, all pure-unzip:
+	//
+	//  1. The BINARY village .nbt StructureTemplates (483 files, gzip-wrapped). The
+	//     existing copyZipEntry streams bytes VERBATIM (no JSON transform), so the
+	//     binary path needs only this prefix entry, NOT new logic (D-RESEARCH "Don't
+	//     Hand-Roll": binary .nbt = copyZipEntry verbatim). Scoped to village/ to keep
+	//     the embed small per STRUCT-05 — bastion/mansion/etc .nbt are v3 deferrals.
+	//     The .nbt files nest under structure/village/...; they do NOT collide with the
+	//     flat structure/*.json (different extension + nested path).
+	{"data/minecraft/structure/village/", "structure/village"}, // 483 binary .nbt
+	// 2. The 62 village template_pool JSONs (common 6 + desert 12 + plains 11 +
+	//    savanna 12 + snowy 11 + taiga 10). The 16-02 jigsaw Placer parses these
+	//    (the weighted element list + the fallback chain). Scoped to village/ — other
+	//    structures' pools are v3.
+	{"data/minecraft/worldgen/template_pool/village/", "template_pool/village"}, // 62
+	// 3. The 40 processor_list JSONs (small, take all). The block-replace processors
+	//    villages apply at place time (mossify/zombie/street/farm rule lists).
+	{"data/minecraft/worldgen/processor_list/", "processor_list"}, // 40
 }
 
 // worldgenSingleFiles names individual jar resources (not whole trees) to copy,
@@ -102,6 +121,13 @@ var worldgenSingleFiles = []struct {
 	dest    string // destination path under world/levelgen/data/ (slash-separated)
 }{
 	{"data/minecraft/tags/block/overworld_carver_replaceables.json", "tags/block/overworld_carver_replaceables.json"},
+	// STRUCT-05 (Phase 16): the minecraft:empty terminator pool. It lives at the
+	// TOP level (data/minecraft/worldgen/template_pool/empty.json — OUTSIDE village/),
+	// so the village-only prefix above never copies it. 42 of the 62 village pools
+	// reference it as the fallback-chain terminator (Pitfall #6 depth-0 -> empty);
+	// without it the 16-02 Placer's data.TemplatePoolJSON("empty") returns not-found
+	// and the jigsaw never terminates correctly.
+	{"data/minecraft/worldgen/template_pool/empty.json", "template_pool/empty.json"},
 }
 
 // genWorldgen is the wired generator entry: it pure-unzips the worldgen JSON

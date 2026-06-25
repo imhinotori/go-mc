@@ -53,6 +53,7 @@ import (
 //go:embed noise_settings density_function noise configured_carver tags biome_parameters.json
 //go:embed configured_feature placed_feature biome
 //go:embed structure structure_set
+//go:embed template_pool processor_list
 var FS embed.FS
 
 // resolveID splits a "namespace:path" registry id into its path component,
@@ -236,6 +237,68 @@ func StrongholdBiasedTo() ([]byte, error) {
 		return nil, fmt.Errorf("worldgen data: stronghold_biased_to tag not found (%s): %w", p, err)
 	}
 	return b, nil
+}
+
+// StructureTemplateNBT returns the embedded binary .nbt StructureTemplate bytes
+// for a structure id (the gzip-wrapped NBT geometry — STRUCT-05). The id is the path
+// under structure/ WITHOUT the .nbt suffix, e.g. "village/plains/houses/
+// plains_small_house_1" -> structure/village/plains/houses/plains_small_house_1.nbt.
+// The world/structure ParseTemplate gunzips + NBT-decodes these at runtime. The
+// namespace (minecraft:) is stripped if present.
+func StructureTemplateNBT(id string) ([]byte, error) {
+	rel := resolveID(id)
+	if rel == "" {
+		return nil, fmt.Errorf("worldgen data: empty structure template id")
+	}
+	p := path.Join("structure", rel+".nbt")
+	b, err := FS.ReadFile(p)
+	if err != nil {
+		return nil, fmt.Errorf("worldgen data: structure template not found (id %q -> %s): %w", id, p, err)
+	}
+	return b, nil
+}
+
+// TemplatePoolJSON returns the embedded template_pool JSON for a registry id
+// (STRUCT-05). The id resolves to template_pool/<path>.json: a nested village id like
+// "village/plains/houses" -> template_pool/village/plains/houses.json, AND the bare
+// terminator "empty" -> template_pool/empty.json (the minecraft:empty fallback-chain
+// terminator — a not-found here breaks 16-02 jigsaw termination). The 16-02 Placer
+// parses the weighted element list + fallback. Namespace stripped if present.
+func TemplatePoolJSON(id string) ([]byte, error) { return readEmbedded("template_pool", id) }
+
+// ProcessorListJSON returns the embedded processor_list JSON for a registry id
+// (STRUCT-05). e.g. "minecraft:mossify_10_percent" -> processor_list/
+// mossify_10_percent.json. The world/structure processor loader parses the rule list.
+func ProcessorListJSON(id string) ([]byte, error) { return readEmbedded("processor_list", id) }
+
+// TemplatePoolIDs lists the village template_pool ids available in the embed
+// (the nested village/<biome>/<group> paths). STRUCT-05 expects 62 village pools.
+func TemplatePoolIDs() ([]string, error) { return listNested("template_pool/village") }
+
+// ProcessorListIDs lists the processor_list ids available in the embed (flat).
+// STRUCT-05 expects 40 entries.
+func ProcessorListIDs() ([]string, error) { return list("processor_list") }
+
+// listNested walks an embedded sub-tree recursively and returns every .json entry's
+// id relative to subdir (slash-separated, .json suffix trimmed). Unlike list (which
+// reads a single flat directory), the template_pool/village tree is nested by biome.
+func listNested(subdir string) ([]string, error) {
+	var names []string
+	err := fs.WalkDir(FS, subdir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(p, ".json") {
+			return nil
+		}
+		rel := strings.TrimPrefix(p, subdir+"/")
+		names = append(names, strings.TrimSuffix(rel, ".json"))
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("worldgen data: walking %s: %w", subdir, err)
+	}
+	return names, nil
 }
 
 // BiomeCategoryTag returns the embedded worldgen/biome/<id>.json category tag (the is_*
