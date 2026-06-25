@@ -22,7 +22,7 @@ Worldgen adds **no new wire surface** (the chunk format was sealed in v1 Phase 4
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 10: Worldgen Foundation — LCG, Cross-Chunk Seam & Live Heightmap** - Port the legacy `java.util.Random` LCG + `WorldgenRandom` seed methods, the neighborhood-ready 3×3 worker seam (hold-at-carved → decorate), and the live mutable worldgen heightmap — the shared substrate both features and structures depend on
+- [x] **Phase 10: Worldgen Foundation — LCG, Cross-Chunk Seam & Live Heightmap** - Port the legacy `java.util.Random` LCG + `WorldgenRandom` seed methods, the neighborhood-ready 3×3 worker seam (hold-at-carved → decorate), and the live mutable worldgen heightmap — the shared substrate both features and structures depend on (completed 2026-06-25)
 - [ ] **Phase 11: Feature Pipeline & Decoration Orchestration** - Port the placement-modifier layer + the `ConfiguredFeature`/`PlacedFeature` model + the polymorphic JSON parser + `FeatureSorter` + `applyBiomeDecoration` driving the 11 decoration steps over the 3×3 biome set
 - [ ] **Phase 12: Core Feature Types** - Port `OreFeature`, `RandomPatchFeature`/`SimpleBlockFeature`, the random selectors, and `BlockPile`/`FallenTree`/`VegetationPatch` so a biome's full ground-cover + decoration-ore set generates
 - [ ] **Phase 13: Trees, Dungeon & Features Visual Gate** - Port `TreeFeature` (trunk/foliage placers + tree decorators + `BlockStateProvider` hierarchy) + the `MonsterRoomFeature` dungeon; close the block with the real-client VISUAL GATE (full per-biome vegetation, deterministic per seed)
@@ -44,7 +44,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 3 plans
   - [x] 10-01-PLAN.md — Port the legacy java.util.Random LCG (LegacyRandomSource) + the WorldgenRandom seed-derivation wrapper, jar-exact, with golden-vector tests (GEN2-01)
   - [x] 10-02-PLAN.md — Add the incremental HeightmapUpdate primitive + build OCEAN_FLOOR_WG/MOTION_BLOCKING from post-carve terrain (GEN2-03)
-  - [ ] 10-03-PLAN.md — Split Generator into GenerateTerrain/Decorate + the staging-scheduler worker seam + the 3x3 Neighborhood proxy (no-op Decorate), proven by the determinism/-race/emit-once suite (GEN2-02)
+  - [x] 10-03-PLAN.md — Split Generator into GenerateTerrain/Decorate + the staging-scheduler worker seam + the 3x3 Neighborhood proxy (no-op Decorate), proven by the determinism/-race/emit-once suite (GEN2-02)
 **Research**: `.planning/research/v2-features-decoration.md` (Wave A — RNG + pipeline seam; "Architecture Patterns → the neighbor-aware placement seam, Option 1"; "Heightmap timing"); `.planning/research/v2-structures.md` ("the determinism hinge" + "Brownfield: how STARTS + PLACE slot into the worker"). The cross-chunk worker-lifecycle change is the central architectural cost of v2 — give it real weight.
 
 ### Phase 11: Feature Pipeline & Decoration Orchestration
@@ -126,7 +126,7 @@ Phases execute in numeric order: 10 → 11 → 12 → 13 → 14 → 15 → 16
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 10. Worldgen Foundation — LCG, Cross-Chunk Seam & Live Heightmap | 2/3 | In Progress|  |
+| 10. Worldgen Foundation — LCG, Cross-Chunk Seam & Live Heightmap | 3/3 | Complete   | 2026-06-25 |
 | 11. Feature Pipeline & Decoration Orchestration | 0/0 | Not started | - |
 | 12. Core Feature Types | 0/0 | Not started | - |
 | 13. Trees, Dungeon & Features Visual Gate | 0/0 | Not started | - |

@@ -4,14 +4,14 @@ milestone: v2
 milestone_name: worldgen-features-structures
 status: verifying
 stopped_at: "Completed 10-02-PLAN.md (GEN2-03: HeightmapUpdate primitive + OCEAN_FLOOR_WG/MOTION_BLOCKING post-carve build)"
-last_updated: "2026-06-25T04:15:34.180Z"
+last_updated: "2026-06-25T05:00:13.434Z"
 last_activity: 2026-06-25
 progress:
   total_phases: 7
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 3
-  completed_plans: 2
-  percent: 67
+  completed_plans: 3
+  percent: 100
 ---
 
 # Project State
@@ -74,7 +74,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [███████░░░] 67%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -133,6 +133,7 @@ Progress: [███████░░░] 67%
 | Phase 09 P08 | 35 min | 1 tasks | 2 files |
 | Phase 10 P01 | 12m | 2 tasks | 3 files |
 | Phase 10 P02 | 10m | 2 tasks | 6 files |
+| Phase 10 P03 | 75min | 4 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -209,6 +210,8 @@ Recent decisions affecting current work:
 - [Phase 09]: 09-09 / FIDELITY FIX (aa619b81, post-visual-gate audit vs the jar): TWO structural port divergences closed. (1) PER-MARKER INTERPOLATION — NoiseChunk drove ONE interpolator over the WHOLE final_density; vanilla's ctor calls noiseRouter.mapAll(this::wrap) replacing ONLY each Marker(Interpolated) subtree with its own NoiseInterpolator, every surrounding op (squeeze/min/the noodle cave graph) per-block. Because those ops are non-linear, trilerp(F(corners)) != F(trilerp(inner)) → the old shortcut smoothed cliffs + erased noodle caves. Ported DensityFunction.mapAll (density/mapall.go, bottom-up tree rewrite, identity-memoized for the shared DAG); the interpolator is now *interpolatedFn (a density.Function MapAll substitutes per interpolated marker; Compute returns the trilerped value inside the cell loop via a shared fillState.filling flag, samples its inner filler direct outside it — porting NoiseInterpolator.compute's ctx==this$0 discriminant); the overworld final_density has 5 interpolated markers (main density mul + 4 cave branches), each its own interpolator. TestNoiseChunkCornerExact (corner-exact) preserved. Per-block compute raised gen ~70ms→~116ms/chunk (vanilla's real cost; off-tick via Phase-8 async seams). (2) SURFACE-BEFORE-CARVE — Generate reordered to NOISE->SURFACE->CARVERS (vanilla ChunkStatus); carved openings expose bare stone instead of grass/dirt rims. Both fixes -race clean (Docker golang:1.26). VISUAL GATE APPROVED by the user.
 - [Phase ?]: GEN2-03: built all 3 worldgen heightmaps (WORLD_SURFACE_WG/OCEAN_FLOOR_WG/MOTION_BLOCKING) from POST-CARVE terrain in the generator FINISH step (after ApplyCarvers)
 - [Phase ?]: level.HeightmapUpdate ported jar-exact from Heightmap.update — pure/allocation-free/chunk-free (BitStorage + opaqueAt closure); built+tested now, wired by 10-03 + the feature phase (Phase 10 Decorate is a no-op)
+- [Phase ?]: GEN2-02 seam = Split-Generate (staging map + single scheduler goroutine), not a write-buffer; Decorate is a no-op promote-to-full for Phase 10 with the late-write-after-emit rule deferred to Phase 11+
+- [Phase ?]: handleTerrain routes region-hit vs generated on load provenance (fromRegion), not chunk Status, because the scheduler mutates a singleflight-shared staged chunk's Status to StatusFull (would otherwise double-emit)
 
 ### Pending Todos
 
@@ -235,7 +238,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-25T04:15:34.129Z
+Last session: 2026-06-25T04:55:30.973Z
 Stopped at: Completed 10-02-PLAN.md (GEN2-03: HeightmapUpdate primitive + OCEAN_FLOOR_WG/MOTION_BLOCKING post-carve build)
 Resume file: None
 Next: v1 is done end-to-end (login → biome-varied noise world with caves/ravines/aquifers/ore-veins → entities/AI/inventory/combat → async-optimized, -race clean). The next milestone is DEEPER GAMEPLAY (user-flagged, deferred): items/crafting, more mobs + their ported AI, block mechanics (redstone/farming/fluids), and the Phase-9 v2 deferrals (ONLINE-01/02 auth+encryption, REGION-01 Folia-style regionization, trees/vegetation/structures as feature+structure subsystems). Run /gsd-new-milestone to scope it. Deferred-still-open: KeepAlive double-leave hardening (Phase 3, surfaces when real timeout-driven disconnects land).
