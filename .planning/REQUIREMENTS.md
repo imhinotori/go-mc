@@ -29,7 +29,7 @@ The "user" is an unmodified vanilla 26.2 (protocol 776) client exploring the wor
 
 - [x] **STRUCT-01**: The two-phase structure pipeline is ported: STRUCTURE_STARTS (decide WHERE per chunk, cache a `StructureStart` keyed by packed chunk pos in a `world/structure` cache), STRUCTURE_REFERENCES (8-chunk-radius bbox-intersect scan), and PLACE (`placeInChunk` clipping each piece write to the target chunk's writable box). Placement math ported bit-exact: `getPotentialStructureChunk` (floorDiv + salt-in-seed), the spread types, the four `probabilityReducer` variants, `isStructureChunk`.
 - [x] **STRUCT-02**: The `StructurePiece` bounding-box-tree machinery is ported (`addChildren` recursion, `findCollisionPiece`, `postProcess`, `placeBlock`/`generateBox`/`fillColumnDown` with rotation/mirror) and the first true structure — the **desert pyramid** (single-piece, hardcoded geometry, 0 .nbt) — generates in vanilla positions as the pipeline shakedown. Jungle temple / igloo / swamp hut follow as cheap single-piece add-ons.
-- [ ] **STRUCT-03**: The **mineshaft** is ported (multi-piece recursive corridor/crossing/room assembly, hardcoded geometry, the `legacy_type_3` frequency-reduction placement path); chests place as block + tag (loot deferred to v3).
+- [x] **STRUCT-03**: The **mineshaft** is ported (multi-piece recursive corridor/crossing/room assembly, hardcoded geometry, the `legacy_type_3` frequency-reduction placement path); chests place as block + tag (loot deferred to v3).
 - [ ] **STRUCT-04**: The **stronghold** is ported — the unique `concentric_rings` placement (the ~128 biome-validated ring positions precomputed once at worldgen-state init, `isPlacementChunk` = ring-list contains) + the recursive piece set reusing the STRUCT-02 machinery.
 - [ ] **STRUCT-05**: The **village** jigsaw is ported — `.nbt` `StructureTemplate` parsing (gzip+NBT via the existing nbt package, rotation/mirror at place time, processor application), the embedded 483 village .nbt + 74 template_pool JSON + processor lists, and the bounded BFS `JigsawPlacement.Placer` (max-depth + max-distance + VoxelShape collision); villages generate in vanilla positions per biome variant.
 - [ ] **STRUCT-06**: A real client exploring the world finds vanilla-positioned, structurally-correct mineshafts, desert pyramids/jungle temples/igloos/swamp huts, strongholds, and villages — deterministic per seed (VISUAL GATE).
@@ -66,7 +66,7 @@ The "user" is an unmodified vanilla 26.2 (protocol 776) client exploring the wor
 | FEAT-06 | Phase 13 | Complete |
 | STRUCT-01 | Phase 14 | Complete |
 | STRUCT-02 | Phase 14 | Complete |
-| STRUCT-03 | Phase 15 | Pending |
+| STRUCT-03 | Phase 15 | Complete |
 | STRUCT-04 | Phase 15 | Pending |
 | STRUCT-05 | Phase 16 | Pending |
 | STRUCT-06 | Phase 16 | Pending |

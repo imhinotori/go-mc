@@ -120,7 +120,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. The stronghold's recursive piece set (corridors/stairs/portal room/library) is ported reusing the Phase 14 `StructurePiece`/`addChildren` machinery
   4. Both structures generate in vanilla positions and shapes, deterministic per seed (verified against a known-seed reference)
 **Plans**: 3 plans
-- [ ] 15-01-PLAN.md — The mineshaft (STRUCT-03): the legacy frequency-reduction placement path (Pitfall #4 — spacing 1 + 0.004 + ApplyFrequencyReducer, NOT the spacing grid; FIX the mis-ported reducer table: legacy_type_3 -> legacyProbabilityReducerWithDouble, un-swap legacy_type_1<->legacy_type_3, re-seed (chunkX,chunkZ) per jar) + MineshaftStructure.findGenerationPoint + the FIRST true recursive piece graph (corridor/crossing/room/stairs via addChildren + FindCollisionPiece, genDepth-bounded) + the normal/mesa per-type geometry + the chest block+tag
+- [x] 15-01-PLAN.md — The mineshaft (STRUCT-03): the legacy frequency-reduction placement path (Pitfall #4 — spacing 1 + 0.004 + ApplyFrequencyReducer, NOT the spacing grid; FIX the mis-ported reducer table: legacy_type_3 -> legacyProbabilityReducerWithDouble, un-swap legacy_type_1<->legacy_type_3, re-seed (chunkX,chunkZ) per jar) + MineshaftStructure.findGenerationPoint + the FIRST true recursive piece graph (corridor/crossing/room/stairs via addChildren + FindCollisionPiece, genDepth-bounded) + the normal/mesa per-type geometry + the chest block+tag
 - [ ] 15-02-PLAN.md — The stronghold PLACEMENT (STRUCT-04, the architectural risk, isolated): the concentric_rings global ring computation (generateRingPositions, the dedicated ring seed, biome-validated against #stronghold_biased_to — a NEW embed) + the StrongholdRingState worldgen-state home (sync.Once per-world cache, owned by the NoiseGenerator) + isPlacementChunk = ring-list contains + the placement-half StartGenerator (pieces stubbed, byte-inert)
 - [ ] 15-03-PLAN.md — The stronghold PIECES (STRUCT-04) + the full Phase-15 acceptance: the recursive StrongholdPieces (corridors/stairs/PortalRoom-end_portal_frame/Library-bookshelves) reusing the 15-01-proven addChildren machinery, genDepth-50 + maxPlaceCount bounded, hung on 15-02 ring anchor; closes Phase 15 with every STRUCT-03/04 success criterion as an automated assertion (no visual gate — Phase 16 owns that)
 **Research**: `.planning/research/v2-structures.md` (Tier 2 — Mineshaft; Tier 3 — Stronghold; "Common Pitfalls #4 mineshaft special placement, #5 stronghold rings are global"; the four `probabilityReducer` variants).
@@ -149,5 +149,5 @@ Phases execute in numeric order: 10 → 11 → 12 → 13 → 14 → 15 → 16
 | 12. Core Feature Types | 3/3 | Complete | 2026-06-25 |
 | 13. Trees, Dungeon & Features Visual Gate | 4/4 | Complete   | 2026-06-25 |
 | 14. Structure Pipeline & Temples | 3/3 | Complete   | 2026-06-25 |
-| 15. Mineshaft & Stronghold | 0/0 | Not started | - |
+| 15. Mineshaft & Stronghold | 1/3 | In Progress|  |
 | 16. Village Jigsaw & Structures Visual Gate | 0/0 | Not started | - |
