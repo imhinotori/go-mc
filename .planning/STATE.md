@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v2
 milestone_name: worldgen-features-structures
-status: verifying
-stopped_at: Completed 11-01-PLAN.md
-last_updated: "2026-06-25T06:02:52.433Z"
+status: executing
+stopped_at: "Phase 11 COMPLETE (3/3 plans): FEAT-01 placement modifiers + PlacedFeature.place fold, FEAT-02 polymorphic feature/biome parser (488 entries) + FeatureSorter + applyBiomeDecoration wired into live Decorate + D2=Option-Y (hold-until-neighborhood-complete emit). Feature BODIES are no-op stubs (Phase 12). Seed-trace + 5×5-reorder-with-live-Decorate + emit-once + Docker -race green. Autonomous 12→16. Next: plan→plan-check→execute Phase 12 (Core Feature Types, FEAT-03)."
+last_updated: "2026-06-25T06:30:00.000Z"
 last_activity: 2026-06-25
 progress:
   total_phases: 7
