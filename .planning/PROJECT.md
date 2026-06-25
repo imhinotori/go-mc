@@ -10,21 +10,32 @@ A Go server that a vanilla Minecraft 26.2 client can connect to, log into, and p
 
 ## Current State
 
-**Shipped: v1.0 (2026-06-24).** A real unmodified vanilla 26.2 client connects, logs in,
-and PLAYS a persistent, ticking world: it walks a biome-varied **noise overworld**
-(hills/valleys/plains + caves/ravines/aquifers/ore-veins, water at sea level), sees mobs
-that spawn/wander/navigate with ported vanilla AI, places/breaks blocks, manages a
-component-slot inventory, takes damage/dies/respawns, persists, runs commands, and chats —
-all `-race` clean with Leaf-style async optimizations (async pathfinding/tracker/spawn,
-xsync/ants, linear region format). 9 phases, 46 plans, 45/45 v1 requirements + PARITY-01.
-The "no JVM" Go static binary value prop holds (Java is build-time-only jar extraction).
+**Shipped: v2.0 (2026-06-25).** On top of the v1.0 playable server, the overworld now
+**looks + reads like vanilla 26.2**: every biome grows its correct vanilla tree set + full
+ground cover (grass/flowers/cactus/cane/mushrooms) + decoration ores, and the emblematic
+structures generate in their exact vanilla positions — desert pyramids/jungle temples/
+igloos/swamp huts, mineshafts, strongholds (concentric-rings + end-portal room), and
+data-driven **villages** (5 biome variants via the `.nbt`/template_pool/jigsaw `Placer`
+system) — all ported 1:1 from the unobfuscated jar, deterministic per seed, `-race` clean.
+7 phases (10–16), 22 plans, 15/15 v2 requirements, two real-client VISUAL GATES approved.
+Worldgen added NO new wire surface (chunk format sealed in v1 Phase 4). CI/CD live: a public
+GHCR image (`ghcr.io/imhinotori/sulfur`, development→`:latest`, main→`:stable`) auto-deploys
+to a production demo server (demo.trysulfur.net:25565) via Watchtower. Per-player view
+distance is the vanilla default (radius 10). The "no JVM" Go static binary value prop holds.
 
-## Next Milestone Goals (v2 — Worldgen deferrals + auth + regionization)
+**Shipped: v1.0 (2026-06-24).** A real unmodified vanilla 26.2 client connects, logs in,
+and PLAYS a persistent, ticking world: biome-varied noise overworld + mobs (ported vanilla
+AI) + block place/break + component-slot inventory + damage/death/respawn + persistence +
+commands + chat — all `-race` clean with Leaf-style async optimizations. 9 phases, 46 plans,
+45/45 v1 requirements + PARITY-01.
+
+## Next Milestone Goals (v3 — Online-mode + regionization + TUI)
 
 User-chosen direction for the next milestone:
-- **Trees / vegetation** (the feature/decoration subsystem) and **structures** (mineshafts, villages) — the documented Phase-9 deferrals.
 - **ONLINE-01 / ONLINE-02** — Mojang/Microsoft account authentication + protocol encryption for online-mode.
 - **REGION-01** — Folia-style per-region tick threading on top of the ownership-isolated core.
+- **TUI (bubbletea + bubbles)** — a prettier terminal with a command-input zone + live logs; disconnect-reason logging (why a player dropped). (User-requested mid-v2, deferred to v3.)
+- **Structure polish** — loot tables, structure entities (villagers/witch/cat/silverfish), `afterPlace` terrain-beard, structure-start NBT persistence (the documented v2 deferrals).
 
 ## Requirements
 
@@ -41,12 +52,15 @@ User-chosen direction for the next milestone:
 - [x] Basic physics: gravity, collision, block place/break — Phase 6 (ENT-02/03)
 - [x] Command system (dispatch + chat) — Phase 7 (CMD-01/02)
 - [x] Leaf-style async optimizations layered after vanilla logic — Phase 8 (OPT-01..06)
+- [x] Full vanilla per-biome vegetation (trees/grass/flowers/ores) via the ported ConfiguredFeature/PlacedFeature pipeline — Phase 10–13 (GEN2-01..03, FEAT-01..06) — v2.0
+- [x] Vanilla structures (temples, mineshafts, strongholds, villages) in vanilla positions, deterministic per seed — Phase 14–16 (STRUCT-01..06) — v2.0
 
-### Active (v2 — pending /gsd-new-milestone)
+### Active (v3 — pending /gsd-new-milestone)
 
-- [ ] Trees / vegetation features + structures (mineshafts, villages)
 - [ ] Online-mode: Mojang auth + protocol encryption (ONLINE-01/02)
 - [ ] Folia-style per-region tick threading (REGION-01)
+- [ ] TUI (bubbletea + bubbles) + disconnect-reason logs
+- [ ] Structure polish: loot tables, structure entities, afterPlace beard, NBT persistence
 
 ### Out of Scope
 
@@ -82,6 +96,10 @@ User-chosen direction for the next milestone:
 | No plugin system | User-specified scope boundary; keeps focus on server core | ✅ Shipped v1.0 |
 | Offline-mode first | Removes auth/encryption from the critical path to first playable connection | ✅ Shipped v1.0 |
 | Game-time anchored to 50ms; subtick layer (CS2-style) for player movement/combat only | MC defines game-time by tick count, not real seconds — raising TPS naively accelerates the world (shorter day, faster crops/redstone), violating vanilla-parity. Anchoring game-time to 50ms keeps the world correct; a subtick layer adds µs-precise resolution for movement/hit-reg/projectiles without touching world simulation speed (same pattern as CS2 subtick over a fixed broadcast rate). | ✅ Shipped v1.0 |
+| Cross-chunk worldgen seam: hold-at-carved until 8 neighbors carve, then decorate/place into a 3×3 Neighborhood via a single lock-free scheduler goroutine (emit-once) | Features + structures write across chunk boundaries; a per-chunk footprint guard can't express that. The hold-until-neighborhood-complete seam makes decoration/placement pure over (seed, pos) regardless of generation order — the determinism contract the whole milestone rests on. | ✅ Shipped v2.0 (`-race` clean, 5×5 reorder byte-identical) |
+| Port worldgen + structure LOGIC directly from the decompiled jar (javap/CFR), embed the DATA the jar ships (//go:embed) | Hand-transcribing 488 feature JSONs / 483 village .nbt / the jigsaw algorithm is infeasible + error-prone; the plan-checker decompiles the jar to verify port fidelity (caught a real frequency-reducer enum swap in Phase 14). Idiomatic Go, no GPL paste, cite the class. | ✅ Shipped v2.0 |
+| Structure starts recompute on demand (pure over seed+pos via the ±8 REFERENCES scan), NOT persisted to NBT | A structure owned ≤8 chunks away is found by the bbox-intersect scan; placeInChunk clips each piece to the target chunk's writable box (idempotent). No start-cache persistence needed — the cache is a pure memoization, not state. | ✅ Shipped v2.0 (NBT persistence deferred to v3) |
+| Server view distance = vanilla default (radius 10), not the v1 radius-2 placeholder | v1 Phase 4 capped the view at radius 2 (25 columns) as a load-bearing DoS floor before worldgen was profiled; a real client saw a 5×5 window. With the pipeline at ~88ms/chunk, raise to the vanilla 10 (441 columns); the clamp still bounds the ring by the server, never the client. | ✅ Shipped v2.0 |
 
 ## Evolution
 
@@ -101,4 +119,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-24 — v1.0 milestone shipped (all 45 v1 requirements + PARITY-01 validated; next milestone = v2 worldgen-deferrals/auth/regionization).*
+*Last updated: 2026-06-25 — v2.0 milestone shipped (all 15 v2 worldgen-features+structures requirements validated, two real-client visual gates approved, CI/CD + prod deploy live; next milestone = v3 online-mode/regionization/TUI).*

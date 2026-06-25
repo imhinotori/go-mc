@@ -1,3 +1,12 @@
+# Requirements Archive: v2 Worldgen Features + Structures
+
+**Archived:** 2026-06-25
+**Status:** SHIPPED
+
+For current requirements, see `.planning/REQUIREMENTS.md`.
+
+---
+
 # Requirements: Sulfur v2 — Worldgen Features + Structures
 
 **Defined:** 2026-06-24

@@ -4,14 +4,14 @@ milestone: v2
 milestone_name: worldgen-features-structures
 status: verifying
 stopped_at: Completed 14-02-PLAN.md
-last_updated: "2026-06-25T20:26:57.067Z"
+last_updated: "2026-06-25T21:18:12.663Z"
 last_activity: 2026-06-25
 progress:
   total_phases: 7
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 22
-  completed_plans: 21
-  percent: 95
+  completed_plans: 22
+  percent: 100
 ---
 
 # Project State

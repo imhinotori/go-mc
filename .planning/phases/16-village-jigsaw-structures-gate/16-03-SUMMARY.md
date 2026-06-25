@@ -45,7 +45,7 @@ key-decisions:
 patterns-established:
   - "fold-back-aware piece-overlap assertion for any jigsaw structure: assert no INDEPENDENT-sibling strict-overlap, allow XZ-containment fold-backs (the localFree case) — the correct jar-faithful reading of the VoxelShape collision contract"
 
-requirements-completed: []  # STRUCT-05 was completed by 16-01+16-02; STRUCT-06 completes only when the Task-2 VISUAL GATE is human-approved (PENDING — see below).
+requirements-completed: [STRUCT-06]  # STRUCT-05 completed by 16-01+16-02; STRUCT-06 VISUAL GATE APPROVED 2026-06-25 (seed 25, real client confirmed villages + temples + mineshafts + strongholds reproduce per seed).
 
 # Metrics
 metrics:
@@ -60,7 +60,7 @@ metrics:
 
 **The automated v2-closing acceptance lands: TestPhase16Acceptance pins every STRUCT-05/06 criterion as an algorithm-derived assertion, TestAllStructuresPlace asserts ALL 11 v2 structures place at their algorithm-derived chunks in one pass, and the real-pipeline village tests prove the data-driven jigsaw village generates through the full production Decorate path — all 7 verification gates green, with the Task-2 VISUAL GATE staged (coords printed) and PENDING human-verify.**
 
-> STATUS: Task 1 (the automated acceptance) is COMPLETE and committed. Task 2 (the `autonomous:false`, blocking VISUAL GATE) is PENDING — the orchestrator presents it to the human. STRUCT-06 and milestone v2 CLOSE only on the human "approved".
+> STATUS: COMPLETE. Task 1 (automated acceptance) committed. Task 2 (the `autonomous:false`, blocking VISUAL GATE) APPROVED by the user 2026-06-25 on seed 25 — a real vanilla 26.2 client confirmed the snowy village + temples + mineshafts + strongholds generate in vanilla positions and reproduce per seed. STRUCT-06 met; milestone v2 CLOSED.
 
 ## Performance
 
