@@ -66,6 +66,7 @@ func (d *drawCounter) NextInt() int32         { d.draws++; return d.inner.NextIn
 func (d *drawCounter) NextIntN(b int32) int32 { d.draws++; return d.inner.NextIntN(b) }
 func (d *drawCounter) NextDouble() float64    { d.draws++; return d.inner.NextDouble() }
 func (d *drawCounter) NextFloat() float32     { d.draws++; return d.inner.NextFloat() }
+func (d *drawCounter) NextBoolean() bool      { d.draws++; return d.inner.NextBoolean() }
 func (d *drawCounter) ConsumeCount(n int)     { d.draws += n; d.inner.ConsumeCount(n) }
 func (d *drawCounter) Fork() levelgen.RandomSource {
 	d.draws++

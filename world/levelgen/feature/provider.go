@@ -158,6 +158,32 @@ func (p RuleBasedStateProvider) withExisting(existingAt func(x, y, z int) block.
 	return p
 }
 
+// getOptionalState ports RuleBasedBlockStateProvider.getOptionalState: returns (state, true)
+// for the FIRST matching rule, else (0, false) — NO identity fallback. AlterGroundDecorator
+// uses this to skip non-podzol-replaceable ground (the rule's tag predicate gates it).
+func (p RuleBasedStateProvider) getOptionalState(rng levelgen.RandomSource, x, y, z int) (block.StateID, bool) {
+	if p.existingAt == nil {
+		return 0, false
+	}
+	existing := p.existingAt(x, y, z)
+	for _, r := range p.rules {
+		if r.matches != nil && r.matches(existing) {
+			return r.then.GetState(rng, x, y, z), true
+		}
+	}
+	return 0, false
+}
+
+// OptionalState is the provider-side optional-state seam the AlterGround decorator needs
+// (BlockStateProvider.getOptionalState). For a rule_based provider it gates on the rule tag;
+// for any other provider it always yields its state.
+func OptionalState(p BlockStateProvider, rng levelgen.RandomSource, x, y, z int) (block.StateID, bool) {
+	if rb, ok := p.(RuleBasedStateProvider); ok {
+		return rb.getOptionalState(rng, x, y, z)
+	}
+	return p.GetState(rng, x, y, z), true
+}
+
 // ---- NoiseProvider / DualNoiseProvider (noise_provider / dual_noise_provider) ----
 //
 // NoiseBasedStateProvider samples a NormalNoise at the SCALED position and maps the
@@ -593,6 +619,16 @@ var ruleProviderTags = map[string][]string{
 		"minecraft:cherry_log", "minecraft:cherry_leaves",
 		"minecraft:pale_oak_log", "minecraft:pale_oak_leaves",
 		"minecraft:mangrove_log", "minecraft:mangrove_leaves", "minecraft:mangrove_roots",
+	},
+	// #minecraft:beneath_tree_podzol_replaceable (alter_ground decorator's rule gate). It
+	// flattens #substrate_overworld -> #dirt + #mud + #moss_blocks + #grass_blocks (jar tag
+	// chain, verified constant-for-constant): the ground a spruce/mega-spruce podzol disk
+	// may replace.
+	"minecraft:beneath_tree_podzol_replaceable": {
+		"minecraft:dirt", "minecraft:coarse_dirt", "minecraft:rooted_dirt",
+		"minecraft:mud", "minecraft:muddy_mangrove_roots",
+		"minecraft:moss_block", "minecraft:pale_moss_block",
+		"minecraft:grass_block", "minecraft:podzol", "minecraft:mycelium",
 	},
 }
 

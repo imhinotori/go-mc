@@ -56,6 +56,9 @@ type RandomSource interface {
 	NextDouble() float64
 	// NextFloat returns a value in [0,1) (Java nextBits(24)*0x1.0p-24).
 	NextFloat() float32
+	// NextBoolean returns a uniform bool (Java RandomSource.nextBoolean). The Xoroshiro
+	// source returns (nextLong() & 1) != 0; the legacy source returns next(1) != 0.
+	NextBoolean() bool
 	// ConsumeCount advances the rng by n draws (Java consumeCount(int)).
 	ConsumeCount(n int)
 	// Fork returns a new independent RandomSource seeded from two fresh draws.
@@ -218,6 +221,9 @@ func (x *Xoroshiro) NextDouble() float64 { return float64(x.nextBits(53)) * doub
 
 // NextFloat returns nextBits(24) * 0x1.0p-24 in [0,1).
 func (x *Xoroshiro) NextFloat() float32 { return float32(x.nextBits(24)) * floatUnit }
+
+// NextBoolean mirrors XoroshiroRandomSource.nextBoolean: (nextLong() & 1) != 0.
+func (x *Xoroshiro) NextBoolean() bool { return x.rng.nextLong()&1 != 0 }
 
 // ConsumeCount advances the rng by n draws.
 func (x *Xoroshiro) ConsumeCount(n int) {

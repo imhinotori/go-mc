@@ -104,14 +104,37 @@ type twoLayersFeatureSize struct {
 	// oak/birch — left 0/disabled.
 }
 
-// getSizeAtLayer ports TwoLayersFeatureSize.getSizeAtLayer: depth < limit -> lowerSize,
+// getSizeAtLayer ports TwoLayersFeatureSize.getSizeAtHeight: depth < limit -> lowerSize,
 // else upperSize. (TwoLayersFeatureSize counts `depth` UP from the base; the first
 // `limit` layers are "lower".)
-func (s twoLayersFeatureSize) getSizeAtLayer(_ , depth int) int {
+func (s twoLayersFeatureSize) getSizeAtLayer(_, depth int) int {
 	if depth < s.limit {
 		return s.lowerSize
 	}
 	return s.upperSize
+}
+
+// threeLayersFeatureSize ports ThreeLayersFeatureSize: lowerSize for the first `limit`
+// layers, upperSize for the top `upperLimit` layers (depth >= height - upperLimit), and
+// middleSize between. dark_oak/mega use it.
+type threeLayersFeatureSize struct {
+	limit      int
+	upperLimit int
+	lowerSize  int
+	middleSize int
+	upperSize  int
+}
+
+// getSizeAtLayer ports ThreeLayersFeatureSize.getSizeAtHeight: depth < limit -> lowerSize;
+// depth >= height - upperLimit -> upperSize; else middleSize.
+func (s threeLayersFeatureSize) getSizeAtLayer(height, depth int) int {
+	if depth < s.limit {
+		return s.lowerSize
+	}
+	if depth >= height-s.upperLimit {
+		return s.upperSize
+	}
+	return s.middleSize
 }
 
 // parseFeatureSize decodes a minimum_size envelope. Only two_layers_feature_size (the
@@ -122,10 +145,12 @@ func parseFeatureSize(raw json.RawMessage) (featureSize, error) {
 		return nil, fmt.Errorf("feature: empty minimum_size")
 	}
 	var j struct {
-		Type      string `json:"type"`
-		Limit     *int   `json:"limit"`
-		LowerSize *int   `json:"lower_size"`
-		UpperSize *int   `json:"upper_size"`
+		Type       string `json:"type"`
+		Limit      *int   `json:"limit"`
+		UpperLimit *int   `json:"upper_limit"`
+		LowerSize  *int   `json:"lower_size"`
+		MiddleSize *int   `json:"middle_size"`
+		UpperSize  *int   `json:"upper_size"`
 	}
 	if err := json.Unmarshal(raw, &j); err != nil {
 		return nil, fmt.Errorf("feature: minimum_size: %w", err)
@@ -145,9 +170,28 @@ func parseFeatureSize(raw json.RawMessage) (featureSize, error) {
 			s.upperSize = *j.UpperSize
 		}
 		return s, nil
+	case "three_layers_feature_size":
+		// ThreeLayersFeatureSize default field values (jar codec): limit 1, upperLimit 1,
+		// lowerSize 0, middleSize 1, upperSize 1. dark_oak overrides upper_size=2.
+		s := threeLayersFeatureSize{limit: 1, upperLimit: 1, lowerSize: 0, middleSize: 1, upperSize: 1}
+		if j.Limit != nil {
+			s.limit = *j.Limit
+		}
+		if j.UpperLimit != nil {
+			s.upperLimit = *j.UpperLimit
+		}
+		if j.LowerSize != nil {
+			s.lowerSize = *j.LowerSize
+		}
+		if j.MiddleSize != nil {
+			s.middleSize = *j.MiddleSize
+		}
+		if j.UpperSize != nil {
+			s.upperSize = *j.UpperSize
+		}
+		return s, nil
 	default:
-		return nil, fmt.Errorf("feature: unported minimum_size type %q "+
-			"(three_layers_feature_size ported in 13-02)", j.Type)
+		return nil, fmt.Errorf("feature: unported minimum_size type %q", j.Type)
 	}
 }
 
@@ -190,6 +234,9 @@ func placeLog(set SetBlockFn, read ReadFn, rng levelgen.RandomSource, pos TreePo
 	}
 	st := cfg.trunkProvider.GetState(rng, pos.X, pos.Y, pos.Z)
 	set(pos.X, pos.Y, pos.Z, st)
+	if cfg.accum != nil {
+		cfg.accum.addLog(pos)
+	}
 	return true
 }
 
@@ -248,10 +295,17 @@ func parseTrunkPlacer(raw json.RawMessage) (TrunkPlacer, error) {
 	switch stripNS(j.Type) {
 	case "straight_trunk_placer":
 		return StraightTrunkPlacer{trunkPlacerBase: base}, nil
-	case "forking_trunk_placer", "fancy_trunk_placer", "dark_oak_trunk_placer",
-		"mega_jungle_trunk_placer", "giant_trunk_placer", "bending_trunk_placer":
-		return nil, fmt.Errorf("feature: unported trunk_placer type %q (ported in 13-02)", j.Type)
-	case "cherry_trunk_placer", "upwards_branching_trunk_placer":
+	case "forking_trunk_placer":
+		return ForkingTrunkPlacer{trunkPlacerBase: base}, nil
+	case "fancy_trunk_placer":
+		return FancyTrunkPlacer{trunkPlacerBase: base}, nil
+	case "dark_oak_trunk_placer":
+		return DarkOakTrunkPlacer{trunkPlacerBase: base}, nil
+	case "giant_trunk_placer":
+		return GiantTrunkPlacer{trunkPlacerBase: base}, nil
+	case "mega_jungle_trunk_placer":
+		return MegaJungleTrunkPlacer{GiantTrunkPlacer{trunkPlacerBase: base}}, nil
+	case "bending_trunk_placer", "cherry_trunk_placer", "upwards_branching_trunk_placer":
 		return nil, fmt.Errorf("feature: unported trunk_placer type %q (ported in 13-03)", j.Type)
 	default:
 		return nil, fmt.Errorf("feature: unknown trunk_placer type %q", j.Type)
@@ -263,19 +317,45 @@ func parseTrunkPlacer(raw json.RawMessage) (TrunkPlacer, error) {
 // FoliagePlacer is the foliage-placer interface a TreeConfiguration carries. createFoliage
 // places the leaf blobs at one attachment; foliageHeight reports the blob's vertical
 // extent the validity scan uses.
+//
+// The 26.2 FoliagePlacer.doPlace call shape (TreeFeature.doPlace) samples foliageHeight
+// and foliageRadius BEFORE the trunk, then passes them (+ a per-placer `offset` draw) into
+// createFoliage. So the interface carries those as explicit params (the determinism
+// contract — the draw order getTreeHeight -> foliageHeight -> foliageRadius -> placeTrunk
+// -> offset(in createFoliage) is what PlaceTree replays).
 type FoliagePlacer interface {
-	// createFoliage places the leaf blob at the attachment, consuming rng jar-exact.
-	createFoliage(set SetBlockFn, read ReadFn, rng levelgen.RandomSource, cfg *TreeConfiguration, maxFreeHeight int, attachment FoliageAttachment)
-	// foliageHeight reports the blob's vertical extent (FoliagePlacer.foliageHeight),
-	// consumed by the free-tree-height scan.
-	foliageHeight(rng levelgen.RandomSource, height, freeHeight int) int
+	// createFoliage places the leaf shape at the attachment. foliageRadius/foliageHeight
+	// are the (already-sampled) values; `offset` is this placer's offset(rng) draw the
+	// public wrapper made. The protected createFoliage(...,radius,foliageHeight,offset).
+	createFoliage(set SetBlockFn, read ReadFn, rng levelgen.RandomSource, cfg *TreeConfiguration, attachment FoliageAttachment, foliageRadius, foliageHeight, offset int)
+	// foliageHeightOf reports the blob's vertical extent (FoliagePlacer.foliageHeight),
+	// drawing rng for the placers whose height is an IntProvider (spruce/pine/megapine).
+	foliageHeightOf(rng levelgen.RandomSource, treeHeight int, cfg *TreeConfiguration) int
+	// foliageRadiusOf reports the radius (FoliagePlacer.foliageRadius); pine overrides it
+	// with an extra draw. The base samples the radius IntProvider.
+	foliageRadiusOf(rng levelgen.RandomSource, depth int) int
+	// offsetOf samples the offset IntProvider (FoliagePlacer.offset) — the draw the public
+	// createFoliage wrapper makes just before the protected createFoliage.
+	offsetOf(rng levelgen.RandomSource) int
 }
 
-// foliagePlacerBase holds the shared radius/offset IntProvider VALUES (oak/birch use bare
-// ints, not full IntProviders) + the placeLeavesRow helper.
+// foliagePlacerBase holds the shared radius/offset IntProviders (FoliagePlacer.radius /
+// .offset) + the placeLeavesRow helper. oak/birch carry constant providers (0 draws);
+// spruce/pine/megapine carry uniform providers that draw.
 type foliagePlacerBase struct {
-	radius int
-	offset int
+	radius intProvider
+	offset intProvider
+}
+
+// foliageRadiusOf ports FoliagePlacer.foliageRadius: sample the radius IntProvider.
+func (b foliagePlacerBase) foliageRadiusOf(rng levelgen.RandomSource, _ int) int {
+	return b.radius.sample(rng)
+}
+
+// offsetOf ports FoliagePlacer.offset: sample the offset IntProvider (the draw the public
+// createFoliage wrapper makes before the protected createFoliage).
+func (b foliagePlacerBase) offsetOf(rng levelgen.RandomSource) int {
+	return b.offset.sample(rng)
 }
 
 // placeLeaf ports FoliagePlacer.placeLeaf -> tryPlaceLeaf: if the existing block is
@@ -287,24 +367,73 @@ func placeLeaf(set SetBlockFn, read ReadFn, rng levelgen.RandomSource, pos TreeP
 	}
 	st := cfg.foliageProvider.GetState(rng, pos.X, pos.Y, pos.Z)
 	set(pos.X, pos.Y, pos.Z, st)
+	if cfg.accum != nil {
+		cfg.accum.addLeaf(pos)
+	}
 	return true
 }
 
-// placeLeavesRow ports FoliagePlacer.placeLeavesRow: iterate the (2*range+1)^2 square in
-// the jar's x-major then z order, skip the cells shouldSkip flags, and place a leaf at
-// (centerX+dx, centerY, centerZ+dz). The `center` already carries the row's Y (the
-// caller passes attachment.pos().below(i)); `localY` is the row's vertical INDEX passed
-// to shouldSkip (BlobFoliagePlacer ignores it; spruce/pine use it for the cone taper).
-// The square iteration order + the per-cell shouldSkip evaluation are the determinism
-// contract.
+// skipFn is FoliagePlacer.shouldSkipLocation(rng, localX, localY, localZ, range, large):
+// each placer supplies its own corner/cone/disc trim rule on the FOLDED non-negative coords.
+type skipFn func(rng levelgen.RandomSource, localX, localY, localZ, rangeR int, large bool) bool
+
+// signedSkipFn is FoliagePlacer.shouldSkipLocationSigned(rng, dx, localY, dz, range, large):
+// it receives the SIGNED dx/dz. The default (signedFromSkip) folds them and calls a skipFn;
+// DarkOak overrides it directly (it needs the signed coords).
+type signedSkipFn func(rng levelgen.RandomSource, dx, localY, dz, rangeR int, large bool) bool
+
+// shouldSkipLocationSigned ports FoliagePlacer.shouldSkipLocationSigned: fold the signed
+// (dx,dz) to the non-negative coords the per-placer shouldSkipLocation expects. For a
+// doubleTrunk (large) row the fold is min(|c|, |c-1|) (the 2x2 trunk's two centers); else
+// |c|. Then call the placer's shouldSkipLocation.
+func shouldSkipLocationSigned(skip skipFn, rng levelgen.RandomSource, dx, localY, dz, rangeR int, large bool) bool {
+	var lx, lz int
+	if large {
+		lx = min2(abs(dx), abs(dx-1))
+		lz = min2(abs(dz), abs(dz-1))
+	} else {
+		lx = abs(dx)
+		lz = abs(dz)
+	}
+	return skip(rng, lx, localY, lz, rangeR, large)
+}
+
+// signedFromSkip wraps a folded skipFn into the signed seam (the default for every placer
+// except DarkOak).
+func signedFromSkip(skip skipFn) signedSkipFn {
+	return func(rng levelgen.RandomSource, dx, localY, dz, rangeR int, large bool) bool {
+		return shouldSkipLocationSigned(skip, rng, dx, localY, dz, rangeR, large)
+	}
+}
+
+// placeLeavesRow ports FoliagePlacer.placeLeavesRow: iterate the square from dx=-range to
+// range+(large?1:0) (z the same), in x-major then z order, skip the cells the signed-skip
+// rule flags, and place a leaf at (center + (dx,0,dz)). `center` already carries the row's
+// Y; `localY` is the row's vertical INDEX (passed to the skip rule). The square iteration
+// order + the per-cell skip evaluation are the determinism contract. The upper bound is
+// `range + extra` (extra = large?1:0) — the 2x2-trunk rows are one wider on +x/+z.
 func placeLeavesRow(
 	set SetBlockFn, read ReadFn, rng levelgen.RandomSource,
-	cfg *TreeConfiguration, center TreePos, rangeR, localY, offset int,
-	shouldSkip func(localY, dx, dz, rangeR, offset int) bool,
+	cfg *TreeConfiguration, center TreePos, rangeR, localY int, large bool,
+	skip skipFn,
 ) {
-	for dx := -rangeR; dx <= rangeR; dx++ {
-		for dz := -rangeR; dz <= rangeR; dz++ {
-			if shouldSkip(localY, dx, dz, rangeR, offset) {
+	placeLeavesRowSigned(set, read, rng, cfg, center, rangeR, localY, large, signedFromSkip(skip))
+}
+
+// placeLeavesRowSigned is placeLeavesRow with an explicit signed-skip seam (DarkOak routes
+// through here with its own shouldSkipLocationSigned).
+func placeLeavesRowSigned(
+	set SetBlockFn, read ReadFn, rng levelgen.RandomSource,
+	cfg *TreeConfiguration, center TreePos, rangeR, localY int, large bool,
+	skip signedSkipFn,
+) {
+	extra := 0
+	if large {
+		extra = 1
+	}
+	for dx := -rangeR; dx <= rangeR+extra; dx++ {
+		for dz := -rangeR; dz <= rangeR+extra; dz++ {
+			if skip(rng, dx, localY, dz, rangeR, large) {
 				continue
 			}
 			placeLeaf(set, read, rng, center.offset(dx, 0, dz), cfg)
@@ -319,55 +448,47 @@ type BlobFoliagePlacer struct {
 	height int // BlobFoliagePlacer.height (max vertical foliage offset from the top)
 }
 
-// foliageHeight ports BlobFoliagePlacer.foliageHeight: just the configured height
+// foliageHeightOf ports BlobFoliagePlacer.foliageHeight: just the configured height
 // (BlobFoliagePlacer returns `this.height` — 3 for oak/birch). 0 rng draws.
-func (p BlobFoliagePlacer) foliageHeight(_ levelgen.RandomSource, _, _ int) int {
+func (p BlobFoliagePlacer) foliageHeightOf(_ levelgen.RandomSource, _ int, _ *TreeConfiguration) int {
 	return p.height
 }
 
-// createFoliage ports BlobFoliagePlacer.createFoliage: place leaf rows from i = offset
-// (top, above the attachment) down to i = -foliageHeight, each row a square of radius
-// (radius + radiusOffset - localRadiusShrink), with the corner trim on the widest rows.
-// BlobFoliagePlacer.createFoliage:
+// createFoliage ports BlobFoliagePlacer.createFoliage (the 26.2 protected shape):
 //
 //	for (int i = offset; i >= -foliageHeight; --i) {
-//	    int j = Math.max(localRadius + attachment.radiusOffset() - 1 - i/2, 0);
-//	    placeLeavesRow(..., attachment.pos().below(i), j, i, attachment.doubleTrunk());
+//	    int j = Math.max(radius + att.radiusOffset() - 1 - i/2, 0);
+//	    placeLeavesRow(pos.below(i), j, i, att.doubleTrunk());
 //	}
 //
-// where localRadius = radius (the bare int for oak/birch; FoliagePlacer.foliageRadius adds
-// the radiusOffset). The +0.5D-trim corner rule is shouldSkipLocation below. The row walk
-// (top-down) + the per-row radius math + the corner trim are the determinism contract.
-func (p BlobFoliagePlacer) createFoliage(set SetBlockFn, read ReadFn, rng levelgen.RandomSource, cfg *TreeConfiguration, _ int, attachment FoliageAttachment) {
-	foliageHeight := p.height
-	for i := p.offset; i >= -foliageHeight; i-- {
-		// FoliagePlacer.placeLeavesRowAndAddContinuation row radius:
-		// j = max(radius + radiusOffset - 1 - i/2, 0). Java integer i/2 truncates toward
-		// zero; for the i values here (>= -foliageHeight) this is the jar's `i / 2`.
-		j := p.radius + attachment.RadiusOffset - 1 - javaDiv(i, 2)
+// `radius` here is the already-sampled foliageRadius; `i` (NOT -i) is the localY passed to
+// the skip rule. The row walk (top-down) + the per-row radius math + the corner trim are
+// the determinism contract.
+func (p BlobFoliagePlacer) createFoliage(set SetBlockFn, read ReadFn, rng levelgen.RandomSource, cfg *TreeConfiguration, attachment FoliageAttachment, foliageRadius, foliageHeight, offset int) {
+	for i := offset; i >= -foliageHeight; i-- {
+		j := foliageRadius + attachment.RadiusOffset - 1 - javaDiv(i, 2)
 		if j < 0 {
 			j = 0
 		}
-		placeLeavesRow(set, read, rng, cfg, attachment.Pos.below(i), j, -i, attachment.RadiusOffset,
+		placeLeavesRow(set, read, rng, cfg, attachment.Pos.below(i), j, i, attachment.DoubleTrunk,
 			p.shouldSkip)
 	}
 }
 
-// shouldSkip ports BlobFoliagePlacer.shouldSkipLocation: trim the 4 outer corners on the
-// widest rows. The jar condition is:
+// shouldSkip ports BlobFoliagePlacer.shouldSkipLocation: trim the 4 corners of the widest
+// rows. The jar condition (javap -c):
 //
-//	|dx| == range && |dz| == range && (range > 0 && rand or top/bottom rows)
+//	localX == range && localZ == range && (rng.nextInt(2) != 0 || localY == 0)
 //
-// For BlobFoliagePlacer specifically (javap -c shouldSkipLocation):
-//
-//	return dx == range && dz == range && (range > 0);
-//
-// i.e. skip ONLY the single far +x,+z corner cell? No — vanilla uses absolute values:
-// skip when |dx| == range AND |dz| == range AND range > 0 (all 4 corners of the widest
-// rows). The `range` here is the row's `j`. localY/offset are unused by Blob's rule but
-// kept in the signature for the shared placeLeavesRow contract.
-func (p BlobFoliagePlacer) shouldSkip(_ , dx, dz, rangeR, _ int) bool {
-	return abs(dx) == rangeR && abs(dz) == rangeR && rangeR > 0
+// i.e. on a corner cell: ALWAYS skip the top/bottom rows (localY==0), and on the middle
+// rows skip 50% of the time (nextInt(2)!=0). The args are the FOLDED non-negative coords
+// (shouldSkipLocationSigned already applied the fold), so compare against `range` directly.
+// The nextInt(2) draw on every corner-of-widest-row cell IS a determinism contract.
+func (p BlobFoliagePlacer) shouldSkip(rng levelgen.RandomSource, lx, localY, lz, rangeR int, _ bool) bool {
+	if lx == rangeR && lz == rangeR {
+		return rng.NextIntN(2) != 0 || localY == 0
+	}
+	return false
 }
 
 // parseFoliagePlacer dispatches a foliage_placer envelope. Only blob_foliage_placer (the
@@ -376,33 +497,79 @@ func parseFoliagePlacer(raw json.RawMessage) (FoliagePlacer, error) {
 	if len(raw) == 0 {
 		return nil, fmt.Errorf("feature: empty foliage_placer")
 	}
-	// radius/offset are vanilla IntProviders, but oak/birch carry bare ints; decode both
-	// the bare-int and the {min_inclusive,max_inclusive} constant forms.
+	// radius/offset are vanilla IntProviders (oak/birch carry bare ints -> constant).
 	var j struct {
-		Type   string          `json:"type"`
-		Radius json.RawMessage `json:"radius"`
-		Offset json.RawMessage `json:"offset"`
-		Height int             `json:"height"`
+		Type        string          `json:"type"`
+		Radius      json.RawMessage `json:"radius"`
+		Offset      json.RawMessage `json:"offset"`
+		Height      json.RawMessage `json:"height"`
+		TrunkHeight json.RawMessage `json:"trunk_height"`
+		CrownHeight json.RawMessage `json:"crown_height"`
 	}
 	if err := json.Unmarshal(raw, &j); err != nil {
 		return nil, fmt.Errorf("feature: foliage_placer: %w", err)
 	}
-	radius, err := constIntProvider(j.Radius)
+	radius, err := parseIntProvider(j.Radius)
 	if err != nil {
 		return nil, fmt.Errorf("feature: foliage_placer radius: %w", err)
 	}
-	offset, err := constIntProvider(j.Offset)
+	offset, err := parseIntProvider(j.Offset)
 	if err != nil {
 		return nil, fmt.Errorf("feature: foliage_placer offset: %w", err)
 	}
 	base := foliagePlacerBase{radius: radius, offset: offset}
 	switch stripNS(j.Type) {
 	case "blob_foliage_placer":
-		return BlobFoliagePlacer{foliagePlacerBase: base, height: j.Height}, nil
-	case "spruce_foliage_placer", "pine_foliage_placer", "acacia_foliage_placer",
-		"bush_foliage_placer", "fancy_foliage_placer", "dark_oak_foliage_placer",
-		"mega_pine_foliage_placer", "mega_jungle_foliage_placer", "random_spread_foliage_placer":
-		return nil, fmt.Errorf("feature: unported foliage_placer type %q (ported in 13-02)", j.Type)
+		h, err := intFromHeight(j.Height)
+		if err != nil {
+			return nil, fmt.Errorf("feature: blob_foliage_placer height: %w", err)
+		}
+		return BlobFoliagePlacer{foliagePlacerBase: base, height: h}, nil
+	case "bush_foliage_placer":
+		h, err := intFromHeight(j.Height)
+		if err != nil {
+			return nil, fmt.Errorf("feature: bush_foliage_placer height: %w", err)
+		}
+		return BushFoliagePlacer{BlobFoliagePlacer{foliagePlacerBase: base, height: h}}, nil
+	case "fancy_foliage_placer":
+		h, err := intFromHeight(j.Height)
+		if err != nil {
+			return nil, fmt.Errorf("feature: fancy_foliage_placer height: %w", err)
+		}
+		return FancyFoliagePlacer{BlobFoliagePlacer{foliagePlacerBase: base, height: h}}, nil
+	case "spruce_foliage_placer":
+		th, err := parseIntProvider(j.TrunkHeight)
+		if err != nil {
+			return nil, fmt.Errorf("feature: spruce_foliage_placer trunk_height: %w", err)
+		}
+		return SpruceFoliagePlacer{foliagePlacerBase: base, trunkHeight: th}, nil
+	case "pine_foliage_placer":
+		h, err := parseIntProvider(j.Height)
+		if err != nil {
+			return nil, fmt.Errorf("feature: pine_foliage_placer height: %w", err)
+		}
+		return PineFoliagePlacer{foliagePlacerBase: base, height: h}, nil
+	case "acacia_foliage_placer":
+		return AcaciaFoliagePlacer{foliagePlacerBase: base}, nil
+	case "dark_oak_foliage_placer":
+		return DarkOakFoliagePlacer{foliagePlacerBase: base}, nil
+	case "jungle_foliage_placer":
+		// The JSON id "jungle_foliage_placer" registers the MegaJungleFoliagePlacer class
+		// (used by mega_jungle_tree; NOT jungle_tree, which uses blob). Verified in
+		// FoliagePlacerType: the registered string is jungle_foliage_placer.
+		h, err := intFromHeight(j.Height)
+		if err != nil {
+			return nil, fmt.Errorf("feature: jungle_foliage_placer height: %w", err)
+		}
+		return JungleFoliagePlacer{foliagePlacerBase: base, height: h}, nil
+	case "mega_pine_foliage_placer":
+		ch, err := parseIntProvider(j.CrownHeight)
+		if err != nil {
+			return nil, fmt.Errorf("feature: mega_pine_foliage_placer crown_height: %w", err)
+		}
+		return MegaPineFoliagePlacer{foliagePlacerBase: base, crownHeight: ch}, nil
+	case "random_spread_foliage_placer":
+		return nil, fmt.Errorf("feature: unported foliage_placer type %q (ported in 13-03)", j.Type)
 	case "cherry_foliage_placer":
 		return nil, fmt.Errorf("feature: unported foliage_placer type %q (ported in 13-03)", j.Type)
 	default:
@@ -410,29 +577,80 @@ func parseFoliagePlacer(raw json.RawMessage) (FoliagePlacer, error) {
 	}
 }
 
-// constIntProvider decodes the bare-int OR constant int-provider form of a foliage
-// radius/offset. oak/birch carry a bare int (radius 2, offset 0). A full IntProvider
-// (uniform/etc.) is NOT exercised by the blob foliage data and errors loudly so a future
-// placer that needs it ports it rather than drifting.
-func constIntProvider(raw json.RawMessage) (int, error) {
+// intFromHeight decodes a foliage `height` field (a bare int for blob/bush/fancy/jungle)
+// into a plain int via the int-provider parse (constant only here).
+func intFromHeight(raw json.RawMessage) (int, error) {
+	p, err := parseIntProvider(raw)
+	if err != nil {
+		return 0, err
+	}
+	c, ok := p.(constantIntProvider)
+	if !ok {
+		return 0, fmt.Errorf("height must be a constant int")
+	}
+	return c.value, nil
+}
+
+// ---- IntProvider (net.minecraft.util.valueproviders.IntProvider) ----
+//
+// The foliage radius/offset/height + the spruce trunk_height + the mega-pine crown_height
+// are vanilla IntProviders. oak/birch carry bare ints (constant, 0 draws); spruce/pine/
+// megapine carry uniform providers that DRAW nextInt(max-min+1). The sample draw count IS
+// a determinism contract.
+
+// intProvider is the minimal IntProvider surface the tree placers need: sample(rng) -> int.
+type intProvider interface {
+	sample(rng levelgen.RandomSource) int
+}
+
+// constantIntProvider is ConstantInt: returns value, 0 draws.
+type constantIntProvider struct{ value int }
+
+func (p constantIntProvider) sample(_ levelgen.RandomSource) int { return p.value }
+
+// uniformIntProvider is UniformInt: nextInt(max-min+1) + min — ONE draw. (UniformInt.sample
+// = min + rng.nextInt(max - min + 1).)
+type uniformIntProvider struct{ min, max int }
+
+func (p uniformIntProvider) sample(rng levelgen.RandomSource) int {
+	return p.min + int(rng.NextIntN(int32(p.max-p.min+1)))
+}
+
+// parseIntProvider decodes the bare-int OR {type:constant,value} OR
+// {type:uniform,min_inclusive,max_inclusive} IntProvider forms. A bare int -> constant.
+// Other provider types (biased_to_bottom/clamped/weighted_list) are not used by the common
+// tree data and error loudly so a future placer ports them rather than drifting.
+func parseIntProvider(raw json.RawMessage) (intProvider, error) {
 	if len(raw) == 0 {
-		return 0, fmt.Errorf("missing int")
+		return nil, fmt.Errorf("missing int provider")
 	}
 	var n int
 	if err := json.Unmarshal(raw, &n); err == nil {
-		return n, nil
+		return constantIntProvider{value: n}, nil
 	}
 	var obj struct {
-		Type  string `json:"type"`
-		Value *int   `json:"value"`
+		Type         string `json:"type"`
+		Value        *int   `json:"value"`
+		MinInclusive *int   `json:"min_inclusive"`
+		MaxInclusive *int   `json:"max_inclusive"`
 	}
 	if err := json.Unmarshal(raw, &obj); err != nil {
-		return 0, fmt.Errorf("not a bare int or constant provider: %w", err)
+		return nil, fmt.Errorf("not a bare int or int provider: %w", err)
 	}
-	if stripNS(obj.Type) == "constant" && obj.Value != nil {
-		return *obj.Value, nil
+	switch stripNS(obj.Type) {
+	case "constant":
+		if obj.Value == nil {
+			return nil, fmt.Errorf("constant int provider missing value")
+		}
+		return constantIntProvider{value: *obj.Value}, nil
+	case "uniform":
+		if obj.MinInclusive == nil || obj.MaxInclusive == nil {
+			return nil, fmt.Errorf("uniform int provider missing min/max_inclusive")
+		}
+		return uniformIntProvider{min: *obj.MinInclusive, max: *obj.MaxInclusive}, nil
+	default:
+		return nil, fmt.Errorf("unported int provider type %q", obj.Type)
 	}
-	return 0, fmt.Errorf("non-constant int provider %q (constant only here)", obj.Type)
 }
 
 // ---- RootPlacer (optional) ----
@@ -485,10 +703,48 @@ type TreeConfiguration struct {
 	rootPlacer         RootPlacer // OPTIONAL — nil for oak/birch
 	minimumSize        featureSize
 	ignoreVines        bool
-	// decorators is the (empty for oak/birch) TreeDecorator list. Captured raw so 13-02
-	// can decode the common-overworld decorators without re-touching this struct; an
-	// empty array here means a no-op-decorator tree.
+	// decorators is the (empty for oak/birch) TreeDecorator list. Captured raw so the
+	// decode lands in ParseTreeConfiguration; an empty array means a no-op-decorator tree.
 	decoratorsRaw []json.RawMessage
+	// decorators is the PARSED common-overworld TreeDecorator list (AlterGround/Beehive/
+	// Cocoa/vines). Empty for oak/birch. Run AFTER trunk+foliage in PlaceTree.
+	decorators []TreeDecorator
+	// accum collects the placed log/leaf positions during placeLog/placeLeaf for the
+	// TreeDecorator.Context. Non-nil only during a single PlaceTree call (set on a copy).
+	accum *treeAccum
+}
+
+// treeAccum collects the placed log + leaf positions (insertion order, deduplicated) for
+// the TreeDecorator.Context — vanilla TreeFeature collects logsCollector/leavesCollector
+// Sets; we keep insertion order (the first log is the trunk base, which the decorators'
+// getFirst()/min-Y logic relies on — more faithful than HashSet iteration order). roots is
+// always empty for the common overworld trees (no root_placer).
+type treeAccum struct {
+	logs   []TreePos
+	leaves []TreePos
+	roots  []TreePos
+	logSet map[TreePos]bool
+	leafSet map[TreePos]bool
+}
+
+func newTreeAccum() *treeAccum {
+	return &treeAccum{logSet: map[TreePos]bool{}, leafSet: map[TreePos]bool{}}
+}
+
+func (a *treeAccum) addLog(p TreePos) {
+	if a.logSet[p] {
+		return
+	}
+	a.logSet[p] = true
+	a.logs = append(a.logs, p)
+}
+
+func (a *treeAccum) addLeaf(p TreePos) {
+	if a.leafSet[p] {
+		return
+	}
+	a.leafSet[p] = true
+	a.leaves = append(a.leaves, p)
 }
 
 // jsonTreeConfig is the on-disk TreeConfiguration "config" object shape (verified
@@ -546,6 +802,17 @@ func ParseTreeConfiguration(raw json.RawMessage) (*TreeConfiguration, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Decode the common-overworld decorators[] (AlterGround/Beehive/Cocoa/vines). An
+	// unported type a COMMON config references errors LOUDLY (-> port here); the special-
+	// biome decorators stay routed to 13-03 by ParseTreeDecorator.
+	decs := make([]TreeDecorator, 0, len(j.Decorators))
+	for i, draw := range j.Decorators {
+		d, err := ParseTreeDecorator(draw)
+		if err != nil {
+			return nil, fmt.Errorf("feature: tree decorators[%d]: %w", i, err)
+		}
+		decs = append(decs, d)
+	}
 	return &TreeConfiguration{
 		trunkProvider:      trunkP,
 		foliageProvider:    foliageP,
@@ -556,6 +823,7 @@ func ParseTreeConfiguration(raw json.RawMessage) (*TreeConfiguration, error) {
 		minimumSize:        size,
 		ignoreVines:        j.IgnoreVines,
 		decoratorsRaw:      j.Decorators,
+		decorators:         decs,
 	}, nil
 }
 
@@ -599,18 +867,38 @@ func (cfg *TreeConfiguration) BelowTrunkWithExisting(read ReadFn) *TreeConfigura
 // rng draw order — getTreeHeight, (root placer), placeTrunk, createFoliage — is the
 // determinism contract.
 
-// PlaceTree assembles the tree at origin: draw the trunk height, optionally place roots
-// (no-op when rootPlacer is nil — the hook 13-03 fills), place the trunk column (which
-// returns the foliage attachments), then place the foliage blob at each attachment.
-// freeHeight is the validity-clamped trunk height the live body computed from the scan;
-// when <= 0 (the scan found no room) nothing is placed. Returns whether any block landed.
+// PlaceTree assembles the tree at origin following the EXACT 26.2 TreeFeature.doPlace rng
+// draw order (the determinism contract):
+//
+//  1. getTreeHeight(rng)                         (already done by the caller -> treeHeight)
+//  2. foliageHeight(rng, treeHeight)             (DRAWS for spruce/pine/megapine)
+//  3. foliageRadius(rng, treeHeight-foliageHt)   (DRAWS; pine adds an extra draw)
+//  4. (root placer)                              (nil for the common overworld trees)
+//  5. placeTrunk(rng) -> attachments             (DRAWS per trunk placer)
+//  6. for each attachment: createFoliage         (offset(rng) draw + the per-placer rows)
+//  7. decorators[].place(rng)                    (AlterGround/Beehive/Cocoa/vines)
+//
+// NOTE the foliageHeight/foliageRadius draws happen BEFORE the trunk — a divergence from
+// 13-01's order, but the JAR truth (TreeFeature.doPlace). For oak/birch (constant providers)
+// these are 0-draw so the oak sequence is unchanged. freeHeight is the validity-clamped
+// trunk height; when <= 0 nothing is placed. Returns whether any block landed.
 func PlaceTree(set SetBlockFn, read ReadFn, rng levelgen.RandomSource, cfg *TreeConfiguration, treeHeight, freeHeight int, origin TreePos) bool {
 	if freeHeight <= 0 {
 		return false
 	}
+	// Collect placed log/leaf positions for the decorators (a per-call accum on a copy so
+	// the shared cfg stays immutable).
+	c := *cfg
+	c.accum = newTreeAccum()
+	cfg = &c
+
+	// (2) foliageHeight, (3) foliageRadius — the pre-trunk draws (jar order).
+	foliageHeight := cfg.foliagePlacer.foliageHeightOf(rng, treeHeight, cfg)
+	foliageRadius := cfg.foliagePlacer.foliageRadiusOf(rng, treeHeight-foliageHeight)
+
 	trunkOrigin := origin
-	// TreeFeature.place: when a root_placer is present it runs BEFORE the trunk and may
-	// shift the trunk origin up (mangrove trunk_offset_y). nil for oak/birch (no-op).
+	// (4) root placer: present -> runs BEFORE the trunk, may shift the origin up. nil for
+	// the common overworld trees (no-op).
 	if cfg.rootPlacer != nil {
 		shifted, ok := cfg.rootPlacer.placeRoots(set, read, rng, origin, cfg)
 		if !ok {
@@ -618,12 +906,29 @@ func PlaceTree(set SetBlockFn, read ReadFn, rng levelgen.RandomSource, cfg *Tree
 		}
 		trunkOrigin = shifted
 	}
+	// (5) trunk.
 	attachments := cfg.trunkPlacer.placeTrunk(set, read, rng, freeHeight, trunkOrigin, cfg)
+	// (6) foliage: the public createFoliage wrapper samples offset(rng) then calls the
+	// protected createFoliage(radius, foliageHeight, offset).
 	for _, att := range attachments {
-		cfg.foliagePlacer.createFoliage(set, read, rng, cfg, freeHeight, att)
+		offset := cfg.foliagePlacer.offsetOf(rng)
+		cfg.foliagePlacer.createFoliage(set, read, rng, cfg, att, foliageRadius, foliageHeight, offset)
 	}
-	// decorators are empty for oak/birch; the common-overworld TreeDecorator loop lands
-	// in 13-02 over cfg.decoratorsRaw. A no-op-decorator tree is fully rendered here.
+	// (7) decorators run AFTER trunk+foliage on the SAME threaded rng, fed the accumulated
+	// placed-log/placed-leaf positions (the TreeDecorator.Context). Empty for oak/birch.
+	if len(cfg.decorators) > 0 {
+		dctx := &DecoratorContext{
+			Logs:   cfg.accum.logs,
+			Leaves: cfg.accum.leaves,
+			Roots:  cfg.accum.roots,
+			Rng:    rng,
+			Set:    set,
+			Read:   read,
+		}
+		for _, d := range cfg.decorators {
+			d.place(dctx)
+		}
+	}
 	return true
 }
 
@@ -678,6 +983,14 @@ func abs(n int) int {
 	return n
 }
 
+// min2 is a tiny int min (for the doubleTrunk fold in shouldSkipLocationSigned).
+func min2(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // javaDiv ports Java integer division (truncate toward zero) for the i/2 in the blob row
 // radius. Go's `/` already truncates toward zero for ints, so this is `a / b`; named for
 // the jar-faithfulness intent at the call site (i can be negative).
@@ -688,4 +1001,5 @@ var (
 	_ TrunkPlacer   = StraightTrunkPlacer{}
 	_ FoliagePlacer = BlobFoliagePlacer{}
 	_ featureSize   = twoLayersFeatureSize{}
+	_ featureSize   = threeLayersFeatureSize{}
 )

@@ -130,30 +130,36 @@ func TestBlobFoliagePlacer(t *testing.T) {
 	cfg := oakConfig(t)
 	mw := newMapWorld()
 
-	bfp := BlobFoliagePlacer{foliagePlacerBase: foliagePlacerBase{radius: 2, offset: 0}, height: 3}
+	bfp := BlobFoliagePlacer{foliagePlacerBase: foliagePlacerBase{radius: constantIntProvider{2}, offset: constantIntProvider{0}}, height: 3}
 	att := FoliageAttachment{Pos: TreePos{X: 0, Y: 0, Z: 0}, RadiusOffset: 0, DoubleTrunk: false}
 
 	const seed = int64(0xF0)
+	const foliageRadius, foliageHeight, offset = 2, 3, 0
 	rng := levelgen.NewWorldgenRandom(seed)
-	bfp.createFoliage(mw.set, mw.read, rng, cfg, 5, att)
+	bfp.createFoliage(mw.set, mw.read, rng, cfg, att, foliageRadius, foliageHeight, offset)
 
 	oakLeaves := block.ToStateID[block.OakLeaves{Distance: 7, Persistent: false, Waterlogged: false}]
 
-	// Oracle: independently replicate the blob math.
-	//   for i = offset(0); i >= -height(3); i--:
-	//     j = radius(2) + radiusOffset(0) - 1 - i/2  (clamped >= 0)
-	//     row at y = -i, square radius j, skip |dx|==j && |dz|==j && j>0
+	// Oracle: independently replicate the 26.2 blob math + the corner nextInt(2) draw, on a
+	// FRESH rng with the SAME seed so the draw sequence matches cell-for-cell.
+	//   for i = offset(0); i >= -foliageHeight(3); i--:
+	//     j = max(radius(2) + radiusOffset(0) - 1 - i/2, 0)
+	//     row center y = -i (pos.below(i)); per cell |dx|<=j, |dz|<=j:
+	//       corner (|dx|==j && |dz|==j): skip = nextInt(2)!=0 || i==0
+	oracle := levelgen.NewWorldgenRandom(seed)
 	want := map[[3]int]bool{}
-	for i := 0; i >= -3; i-- {
-		j := 2 + 0 - 1 - (i / 2)
+	for i := 0; i >= -foliageHeight; i-- {
+		j := foliageRadius + 0 - 1 - (i / 2)
 		if j < 0 {
 			j = 0
 		}
-		y := -i
+		y := -i // pos.below(i).Y == -i (pos.Y is 0)
 		for dx := -j; dx <= j; dx++ {
 			for dz := -j; dz <= j; dz++ {
-				if abs(dx) == j && abs(dz) == j && j > 0 {
-					continue
+				if abs(dx) == j && abs(dz) == j {
+					if oracle.NextIntN(2) != 0 || i == 0 {
+						continue // skipped
+					}
 				}
 				want[[3]int{dx, y, dz}] = true
 			}
@@ -175,10 +181,10 @@ func TestBlobFoliagePlacer(t *testing.T) {
 		}
 	}
 
-	// Draw-pin: simple foliage provider draws ZERO rng over the whole blob.
-	oracle := levelgen.NewWorldgenRandom(seed)
+	// Draw-pin: the blob's ONLY draws are the corner nextInt(2) calls — the oracle replayed
+	// exactly those, so the two rng states must now match.
 	if rng.NextInt() != oracle.NextInt() {
-		t.Fatalf("createFoliage consumed rng (expected ZERO draws for a simple foliage provider)")
+		t.Fatalf("createFoliage draw count diverged from the oracle (corner nextInt(2) drift)")
 	}
 }
 
@@ -261,16 +267,18 @@ func TestParseTreeConfigurationBirch(t *testing.T) {
 	}
 }
 
-// TestParseTrunkPlacerUnported asserts unported placers error LOUDLY with the right phase
-// hint (T-13-03): fancy/forking -> 13-02; cherry -> 13-03; mangrove_root_placer -> 13-03.
+// TestParseTrunkPlacerUnported asserts the SPECIAL-biome placers STILL error LOUDLY pointing
+// at 13-03 (the common roster — fancy/forking/dark_oak/giant/mega_jungle + their foliage —
+// is now ported and asserted by the per-placer tests). cherry/bending/upwards trunk +
+// random_spread/cherry foliage stay routed to 13-03.
 func TestParseTrunkPlacerUnported(t *testing.T) {
 	cases := []struct {
 		raw  string
 		want string // substring the error must mention
 	}{
-		{`{"type":"minecraft:fancy_trunk_placer","base_height":3,"height_rand_a":11,"height_rand_b":0}`, "13-02"},
-		{`{"type":"minecraft:forking_trunk_placer","base_height":5,"height_rand_a":2,"height_rand_b":1}`, "13-02"},
 		{`{"type":"minecraft:cherry_trunk_placer","base_height":7,"height_rand_a":1,"height_rand_b":0}`, "13-03"},
+		{`{"type":"minecraft:bending_trunk_placer","base_height":7,"height_rand_a":1,"height_rand_b":0}`, "13-03"},
+		{`{"type":"minecraft:upwards_branching_trunk_placer","base_height":7,"height_rand_a":1,"height_rand_b":0}`, "13-03"},
 	}
 	for _, c := range cases {
 		_, err := parseTrunkPlacer(json.RawMessage(c.raw))
@@ -282,9 +290,30 @@ func TestParseTrunkPlacerUnported(t *testing.T) {
 		}
 	}
 
-	// foliage placers too.
-	if _, err := parseFoliagePlacer(json.RawMessage(`{"type":"minecraft:spruce_foliage_placer","radius":2,"offset":1,"trunk_height":2}`)); err == nil {
-		t.Fatalf("parseFoliagePlacer(spruce) = nil error, want loud unported error")
+	// the special-biome foliage placers STILL error -> 13-03.
+	for _, raw := range []string{
+		`{"type":"minecraft:random_spread_foliage_placer","radius":3,"offset":1,"foliage_height":3}`,
+		`{"type":"minecraft:cherry_foliage_placer","radius":4,"offset":0,"height":5}`,
+	} {
+		if _, err := parseFoliagePlacer(json.RawMessage(raw)); err == nil || !contains(err.Error(), "13-03") {
+			t.Fatalf("parseFoliagePlacer(%s) = %v, want loud unported error -> 13-03", raw, err)
+		}
+	}
+
+	// the now-ported common placers resolve (no error).
+	for _, raw := range []string{
+		`{"type":"minecraft:fancy_trunk_placer","base_height":3,"height_rand_a":11,"height_rand_b":0}`,
+		`{"type":"minecraft:forking_trunk_placer","base_height":5,"height_rand_a":2,"height_rand_b":2}`,
+		`{"type":"minecraft:dark_oak_trunk_placer","base_height":6,"height_rand_a":2,"height_rand_b":1}`,
+		`{"type":"minecraft:giant_trunk_placer","base_height":13,"height_rand_a":2,"height_rand_b":14}`,
+		`{"type":"minecraft:mega_jungle_trunk_placer","base_height":10,"height_rand_a":2,"height_rand_b":19}`,
+	} {
+		if _, err := parseTrunkPlacer(json.RawMessage(raw)); err != nil {
+			t.Fatalf("parseTrunkPlacer(%s) = %v, want a ported placer", raw, err)
+		}
+	}
+	if _, err := parseFoliagePlacer(json.RawMessage(`{"type":"minecraft:spruce_foliage_placer","radius":{"type":"uniform","min_inclusive":2,"max_inclusive":3},"offset":{"type":"uniform","min_inclusive":0,"max_inclusive":2},"trunk_height":{"type":"uniform","min_inclusive":1,"max_inclusive":2}}`)); err != nil {
+		t.Fatalf("parseFoliagePlacer(spruce) = %v, want a ported placer", err)
 	}
 }
 
