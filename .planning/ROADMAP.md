@@ -56,7 +56,10 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. The polymorphic `"type"`-tagged JSON parser loads the embedded 226 configured_feature + 262 placed_feature + 66 biome feature-lists and binds them (block-state refs resolved through the existing `level/block` `ToStateID`)
   3. `FeatureSorter.buildFeaturesPerStep` produces the deduped per-step global ordering (the IntSet+sort cross-biome dedup), built once at generator construction
   4. `applyBiomeDecoration` iterates the 11 `GenerationStep.Decoration` steps over the retained 3×3 biome set, calling `setFeatureSeed(decoSeed, globalIndex, step)` per feature and `placeWithBiomeCheck` — verifiable by tracing the per-feature seed/index for a known chunk
-**Plans**: TBD
+**Plans**: 3 plans
+  - [ ] 11-01-PLAN.md — Extend the codegen extract set + embed FS (226 configured_feature + 262 placed_feature + 66 biome JSONs) and build the polymorphic "type"-tagged ConfiguredFeature/PlacedFeature parser (typed-but-body-deferred AST, block-state refs via level/block ToStateID) (FEAT-02 data half)
+  - [ ] 11-02-PLAN.md — Port the 8 load-bearing placement modifiers + the 2 abstract bases + VerticalAnchor/HeightProvider/IntProvider + PlacedFeature.place as the single-threaded ordered flatMap fold, with JAR-exact draw-order tests (FEAT-01)
+  - [ ] 11-03-PLAN.md — FeatureSorter.buildFeaturesPerStep + applyBiomeDecoration wired into NoiseGenerator.Decorate + the D2 emit-rule resolution (Option Y: hold-until-neighborhood-complete) + the per-feature seed/index trace + live-Decorate determinism/emit-once suite (FEAT-02 orchestration half)
 **Research**: `.planning/research/v2-features-decoration.md` (Wave B — placement modifiers; Wave E — biome→feature wiring; "Architecture Patterns → ConfiguredFeature/PlacedFeature/PlacementModifier layering", "the decoration-seed RNG chain", "applyBiomeDecoration outer loop"; "Don't Hand-Roll" for the embed set).
 
 ### Phase 12: Core Feature Types
@@ -127,7 +130,7 @@ Phases execute in numeric order: 10 → 11 → 12 → 13 → 14 → 15 → 16
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 10. Worldgen Foundation — LCG, Cross-Chunk Seam & Live Heightmap | 3/3 | Complete   | 2026-06-25 |
-| 11. Feature Pipeline & Decoration Orchestration | 0/0 | Not started | - |
+| 11. Feature Pipeline & Decoration Orchestration | 0/3 | Not started | - |
 | 12. Core Feature Types | 0/0 | Not started | - |
 | 13. Trees, Dungeon & Features Visual Gate | 0/0 | Not started | - |
 | 14. Structure Pipeline & Temples | 0/0 | Not started | - |
