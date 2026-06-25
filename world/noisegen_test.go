@@ -40,9 +40,10 @@ func TestNoiseGenImplementsGenerator(t *testing.T) {
 	if g == nil {
 		t.Fatal("NewNoiseGenerator returned nil")
 	}
-	// It must be usable through the interface.
-	var gen Generator = g
-	ch := gen.Generate(level.ChunkPos{0, 0})
+	// It satisfies the split interface (asserted above); the concrete single-chunk
+	// Generate is what single-chunk callers use (Generate is NOT on the interface after
+	// the GEN2-02 split — it stays a concrete method = GenerateTerrain then Decorate).
+	ch := g.Generate(level.ChunkPos{0, 0})
 	if ch == nil {
 		t.Fatal("Generate returned nil chunk")
 	}
