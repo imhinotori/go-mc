@@ -16,32 +16,23 @@
 | 6 Entities/Physics/Interaction | ✅ |
 | 7 AI/Pathfinding/Commands/Chat | ✅ (ported mob logic from decompiled jar per user mandate) |
 | 8 Leaf Async Optimizations | ✅ (async path/tracker/spawn behind seams; -race clean) |
-| **9 Stretch — Vanilla Worldgen (PARITY-01 only)** | 🔄 **9/9 plans done + perf fix; 2 fidelity bugs remain (RESUME HERE)** |
+| **9 Stretch — Vanilla Worldgen (PARITY-01 only)** | 🔄 **9/9 plans + perf fix + both fidelity fixes DONE (aa619b81); awaiting visual real-client gate** |
 
 ONLINE-01/02 + REGION-01 are deferred v2 (user chose PARITY-01 only for Phase 9).
 
-## RESUME HERE — close the worldgen 1:1 gap (2 fixes, audited against real MC)
+## RESUME HERE — Phase 9 worldgen fidelity DONE (2 fixes applied), VISUAL GATE pending
 
-The worldgen WORKS (real client walks a noise world with caves/aquifers/ore-veins/biomes). The user wants it 1:1 with vanilla. An audit vs the decompiled jar (`temp/cache/26.2-inner.jar`, javap) found: **the math foundation is BIT-EXACT** (seeding, all noise primitives, all density nodes, all splines — constant-for-constant identical to the jar). The divergence is TWO structural port bugs (NOT the noise math, NOT the deferred features):
+Both audited fidelity fixes are **applied + committed + pushed** (`aa619b81`). The worldgen MATH was already bit-exact; these closed the 2 structural port divergences. What remains is the **VISUAL real-client gate** (the user reconnects, walks the world, confirms sharper cliffs + noodle caves present + bare-stone cave rims). No more code work is queued unless the visual check surfaces something.
 
-**FIX #1 (the big one — affects terrain SHAPE) — per-marker interpolation:**
-- Files: `world/levelgen/noisechunk/{noisechunk.go,interpolator.go,fill.go}` + `world/levelgen/density/{nodes.go:456,parse.go,df.go}`.
-- BUG: we build ONE `NoiseInterpolator` over the WHOLE `final_density` and trilerp everything. The `marker` node (`density/nodes.go:456`) is an inert pass-through.
-- VANILLA: `NoiseChunk` ctor calls `NoiseRouter.mapAll(wrap)` where `wrapNew` replaces ONLY `Marker(Interpolated)` subtrees with a trilerped NoiseInterpolator; everything else (`squeeze`, `min`, the whole `noodle` cave graph) is evaluated PER-BLOCK exactly. overworld `final_density` = `min(squeeze(interpolated(mul(0.64, blend_density(...)))), noodle)` — vanilla trilerps only the inner `mul`, then applies squeeze/min/noodle per block.
-- IMPACT: `squeeze`(d/2−d³/24), `min`, noodle are NON-LINEAR, so `trilerp(F(corners)) ≠ F(trilerp(inner))` → our cliffs/overhangs are SMOOTHER + our noodle (spaghetti) caves are BLURRED/ERASED. This is the #1 "feels off."
-- FIX: implement vanilla's `mapAll(wrap)` tree-rewrite — give each `interpolated`-marked subtree its OWN interpolator (trilerp at corners), evaluate parent ops per-block. The 09-04 executor SKIPPED this because the density package exposed no tree-rewrite — that's the work to do. javap `NoiseChunk` + `NoiseChunk$NoiseInterpolator` + `DensityFunctions$Marker`/`$Mapped` + `NoiseRouter.mapAll` for the exact shape.
+**FIX #1 DONE — per-marker interpolation (terrain SHAPE):** `world/levelgen/density/mapall.go` (NEW — ports `DensityFunction.mapAll(Visitor)`: bottom-up tree rewrite, identity-memoized for the shared DAG) + `world/levelgen/noisechunk/interpolator.go` (the interpolator is now `*interpolatedFn`, a `density.Function` that `MapAll` substitutes for each `Marker(Interpolated)`; `Compute` returns the trilerped value inside the cell loop via a shared `fillState.filling` flag, samples its inner filler directly outside it — porting `NoiseInterpolator.compute`'s `ctx==this$0` discriminant) + `world/levelgen/noisechunk/noisechunk.go` (`wrapFinalDensity` collects all **5** overworld interpolators = main density `mul` + 4 cave branches; `fill` drives every interpolator on the cell grid then evaluates the rewritten `final_density` PER BLOCK). `TestNoiseChunkCornerExact` still passes (corner-exact preserved); `TestDensityFieldHasCaves` passes. Per-block compute raised gen cost ~70ms→~116ms/chunk — vanilla's real cost, absorbed off-tick by the Phase-8 async-gen seams.
 
-**FIX #2 (easy — affects appearance) — surface-before-carve:**
-- File: `world/noisegen.go:127-157`.
-- BUG: order is `FillChunk → ApplyCarvers → BuildSurface` (surface runs on the CARVED top → grass/dirt/sand caps on cave/ravine rims).
-- VANILLA: ChunkStatus order is `NOISE → SURFACE → CARVERS` (surface on un-carved terrain; carvers cut through leaving BARE STONE; carveBlock only converts the single block under a carved grass block to dirt).
-- FIX: swap to `FillChunk → BuildSurface → ApplyCarvers`. ~1 structural change. Removes the grass-lined cave/ravine rims (vanilla shows exposed stone).
+**FIX #2 DONE — surface before carvers (APPEARANCE):** `world/noisegen.go` Generate swapped to `FillChunk → BuildSurface → ApplyCarvers` (was fill→carve→surface), mirroring vanilla ChunkStatus `NOISE → SURFACE → CARVERS`. Carved cave/ravine openings now expose bare stone instead of grass/dirt/sand rims.
 
-**FIX #3 (skip — cosmetic, measure-zero):** RTree tiebreak in `biome/rtree.go` uses brute-force order; vanilla's runtime RTree uses traversal-order. Only matters on exact-equal-fitness biome boundaries (measure-zero). Don't bother.
+**FIX #3 (skipped — cosmetic, measure-zero):** RTree tiebreak order; only matters on exact-equal-fitness biome boundaries. Not worth it.
 
-DEFERRED (NOT bugs — do not "fix"): trees/vegetation/ores-as-features/structures (separate feature/decoration + structure subsystems, deliberately out of PARITY-01 scope). `temperatureCondition` stubbed false (surface/rules.go:314). These are why the world lacks trees — that's scope, not a port bug.
+DEFERRED (NOT bugs — do not "fix"): trees/vegetation/ores-as-features/structures (separate feature/decoration + structure subsystems, deliberately out of PARITY-01 scope). `temperatureCondition` stubbed false (surface/rules.go:314). These are why the world lacks trees — scope, not a port bug. They are the natural next milestone if the user wants deeper gameplay (the user already flagged: items/crafting, more mobs, block mechanics — explicitly a FUTURE milestone).
 
-After #1+#2: re-test with a real client (the worldgen has NO new wire surface — chunk format sealed in Phase 4 — so the gate is VISUAL: sharper cliffs, noodle caves present, bare-stone cave rims).
+Verification done: `go build ./...`, `go test ./...` (all green), `go test -race` in Docker golang:1.26 on `./world/...` + `./world/levelgen/noisechunk/` (clean), binary builds. The ONLY thing left for Phase 9 is the user's visual confirmation on a real client.
 
 ## What just happened this session (Phase 9 + the disconnect fix)
 
