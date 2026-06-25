@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2
 milestone_name: worldgen-features-structures
-status: executing
-stopped_at: "Phase 10 planned (3 plans, 2 waves) + plan-checked (2 blockers found in 10-03: interface-split broke ~7 test files + dedup-test invalidated by neighbor auto-request; both fixed — Generate stays concrete method, Task 4 migrates tests). Autonomous 10→16. Next: execute Phase 10 (wave 1 = 10-01 LCG + 10-02 heightmap parallel, wave 2 = 10-03 worker seam)."
-last_updated: "2026-06-24T23:40:00.000Z"
-last_activity: 2026-06-24
+status: verifying
+stopped_at: Phase 9 COMPLETE — PARITY-01 worldgen visual gate APPROVED by the user; 2 post-gate fidelity fixes applied (per-marker interpolation + surface-before-carve, aa619b81). MILESTONE v1.0 COMPLETE (9/9 phases).
+last_updated: "2026-06-25T04:07:14.385Z"
+last_activity: 2026-06-25
 progress:
   total_phases: 7
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  total_plans: 3
+  completed_plans: 1
+  percent: 33
 ---
 
 # Project State
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-06-23)
 Phase: 5 of 9 (Player Session in World / First Playable) — ✅ COMPLETE
 Plan: 3 of 3 complete (05-01, 05-02, 05-03 all done)
 Status: Phase complete — ready for verification
-Last activity: 2026-06-24
+Last activity: 2026-06-25
 
 ### 🎮 FIRST-PLAYABLE MILESTONE (Phase 5 — PLAY-01..06)
 
@@ -74,7 +74,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [██████████] 98%
+Progress: [███░░░░░░░] 33%
 
 ## Performance Metrics
 
@@ -131,6 +131,7 @@ Progress: [██████████] 98%
 | Phase 09 P05 | 20min | 3 tasks | 8 files |
 | Phase 09 P06 | 30 min | 2 tasks | 6 files |
 | Phase 09 P08 | 35 min | 1 tasks | 2 files |
+| Phase 10 P01 | 12m | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -231,7 +232,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-24T23:05:00.000Z
+Last session: 2026-06-25T04:07:14.320Z
 Stopped at: Phase 9 COMPLETE — PARITY-01 worldgen visual gate APPROVED by the user; 2 post-gate fidelity fixes applied (per-marker interpolation + surface-before-carve, aa619b81). MILESTONE v1.0 COMPLETE (9/9 phases).
 Resume file: None
 Next: v1 is done end-to-end (login → biome-varied noise world with caves/ravines/aquifers/ore-veins → entities/AI/inventory/combat → async-optimized, -race clean). The next milestone is DEEPER GAMEPLAY (user-flagged, deferred): items/crafting, more mobs + their ported AI, block mechanics (redstone/farming/fluids), and the Phase-9 v2 deferrals (ONLINE-01/02 auth+encryption, REGION-01 Folia-style regionization, trees/vegetation/structures as feature+structure subsystems). Run /gsd-new-milestone to scope it. Deferred-still-open: KeepAlive double-leave hardening (Phase 3, surfaces when real timeout-driven disconnects land).

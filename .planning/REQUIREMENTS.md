@@ -12,7 +12,7 @@ The "user" is an unmodified vanilla 26.2 (protocol 776) client exploring the wor
 
 ### Foundation — shared worldgen primitives
 
-- [ ] **GEN2-01**: A `LegacyRandomSource` (java.util.Random LCG: multiplier `0x5DEECE66D`, addend `0xB`, 48-bit mask) is ported alongside the existing Xoroshiro, implementing the existing `RandomSource` interface with Java-exact `nextInt(bound)` (rejection loop), `nextLong`, `nextFloat`, `nextDouble`. A `WorldgenRandom` wrapper exposes `setDecorationSeed`/`setFeatureSeed` (features) and `setLargeFeatureSeed`/`setLargeFeatureWithSalt` (structures), each bit-exact to the jar.
+- [x] **GEN2-01**: A `LegacyRandomSource` (java.util.Random LCG: multiplier `0x5DEECE66D`, addend `0xB`, 48-bit mask) is ported alongside the existing Xoroshiro, implementing the existing `RandomSource` interface with Java-exact `nextInt(bound)` (rejection loop), `nextLong`, `nextFloat`, `nextDouble`. A `WorldgenRandom` wrapper exposes `setDecorationSeed`/`setFeatureSeed` (features) and `setLargeFeatureSeed`/`setLargeFeatureWithSalt` (structures), each bit-exact to the jar.
 - [ ] **GEN2-02**: The worker/generator pipeline supports cross-chunk writes via a neighborhood-ready seam: a chunk's decoration + structure placement runs only once its 8 neighbors have reached the carved status, with a `WorldGenLevel`-like view spanning the 3×3, replacing the single-chunk footprint guard. Deterministic regardless of generation order (the per-chunk decoration/structure seed fully determines the result).
 - [ ] **GEN2-03**: A live, mutable worldgen heightmap (`WORLD_SURFACE_WG`/`OCEAN_FLOOR_WG`/`MOTION_BLOCKING`) is maintained on the chunk during decoration — built from post-carve terrain before the first feature and updated on every feature/structure block write — so heightmap-relative placement sees prior placements.
 
@@ -55,7 +55,7 @@ The "user" is an unmodified vanilla 26.2 (protocol 776) client exploring the wor
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| GEN2-01 | Phase 10 | Pending |
+| GEN2-01 | Phase 10 | Complete |
 | GEN2-02 | Phase 10 | Pending |
 | GEN2-03 | Phase 10 | Pending |
 | FEAT-01 | Phase 11 | Pending |

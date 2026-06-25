@@ -42,7 +42,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. The worker holds a chunk at carved status until its 8 neighbors have reached carved, then runs a decoration/placement pass over a `WorldGenLevel`-like view spanning the 3×3 — replacing the single-chunk footprint guard; the same seed produces identical seam results regardless of chunk generation order
   4. A live, mutable worldgen heightmap (`WORLD_SURFACE_WG`/`OCEAN_FLOOR_WG`/`MOTION_BLOCKING`) is built from post-carve terrain before the first feature and updated on every worldgen block write, so heightmap-relative placement sees prior placements
 **Plans**: 3 plans
-  - [ ] 10-01-PLAN.md — Port the legacy java.util.Random LCG (LegacyRandomSource) + the WorldgenRandom seed-derivation wrapper, jar-exact, with golden-vector tests (GEN2-01)
+  - [x] 10-01-PLAN.md — Port the legacy java.util.Random LCG (LegacyRandomSource) + the WorldgenRandom seed-derivation wrapper, jar-exact, with golden-vector tests (GEN2-01)
   - [ ] 10-02-PLAN.md — Add the incremental HeightmapUpdate primitive + build OCEAN_FLOOR_WG/MOTION_BLOCKING from post-carve terrain (GEN2-03)
   - [ ] 10-03-PLAN.md — Split Generator into GenerateTerrain/Decorate + the staging-scheduler worker seam + the 3x3 Neighborhood proxy (no-op Decorate), proven by the determinism/-race/emit-once suite (GEN2-02)
 **Research**: `.planning/research/v2-features-decoration.md` (Wave A — RNG + pipeline seam; "Architecture Patterns → the neighbor-aware placement seam, Option 1"; "Heightmap timing"); `.planning/research/v2-structures.md` ("the determinism hinge" + "Brownfield: how STARTS + PLACE slot into the worker"). The cross-chunk worker-lifecycle change is the central architectural cost of v2 — give it real weight.
@@ -126,7 +126,7 @@ Phases execute in numeric order: 10 → 11 → 12 → 13 → 14 → 15 → 16
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 10. Worldgen Foundation — LCG, Cross-Chunk Seam & Live Heightmap | 0/3 | Not started | - |
+| 10. Worldgen Foundation — LCG, Cross-Chunk Seam & Live Heightmap | 1/3 | In Progress|  |
 | 11. Feature Pipeline & Decoration Orchestration | 0/0 | Not started | - |
 | 12. Core Feature Types | 0/0 | Not started | - |
 | 13. Trees, Dungeon & Features Visual Gate | 0/0 | Not started | - |
