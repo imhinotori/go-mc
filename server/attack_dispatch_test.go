@@ -36,7 +36,6 @@ func TestAttackDispatchDamages(t *testing.T) {
 	loop := NewTickLoop(newFakeClock())
 	attacker := placeAttackPlayer(loop, 1, 0, 64, 0)
 	victim := placeAttackPlayer(loop, 2, 1, 64, 0) // 1 block away, well within reach
-	_ = drainPackets(victim.client)
 
 	loop.applyInput(attacker, SubtickInput{At: loop.clock.Now(), Packet: attackPacket(victim.entityID)})
 
@@ -55,7 +54,6 @@ func TestAttackOutOfReach(t *testing.T) {
 	loop := NewTickLoop(newFakeClock())
 	attacker := placeAttackPlayer(loop, 1, 0, 64, 0)
 	victim := placeAttackPlayer(loop, 2, 100, 64, 0) // far away
-	_ = drainPackets(victim.client)
 
 	loop.applyInput(attacker, SubtickInput{At: loop.clock.Now(), Packet: attackPacket(victim.entityID)})
 
@@ -72,7 +70,6 @@ func TestAttackForgedTarget(t *testing.T) {
 	loop := NewTickLoop(newFakeClock())
 	attacker := placeAttackPlayer(loop, 1, 0, 64, 0)
 	victim := placeAttackPlayer(loop, 2, 1, 64, 0)
-	_ = drainPackets(victim.client)
 
 	// 9999 is not a registered entity id.
 	loop.applyInput(attacker, SubtickInput{At: loop.clock.Now(), Packet: attackPacket(9999)})
@@ -86,7 +83,6 @@ func TestAttackForgedTarget(t *testing.T) {
 func TestAttackSelf(t *testing.T) {
 	loop := NewTickLoop(newFakeClock())
 	attacker := placeAttackPlayer(loop, 1, 0, 64, 0)
-	_ = drainPackets(attacker.client)
 
 	loop.applyInput(attacker, SubtickInput{At: loop.clock.Now(), Packet: attackPacket(attacker.entityID)})
 
@@ -104,7 +100,6 @@ func TestAttackLethalDeath(t *testing.T) {
 	attacker := placeAttackPlayer(loop, 1, 0, 64, 0)
 	victim := placeAttackPlayer(loop, 2, 1, 64, 0)
 	victim.health = baseAttackDamage // exactly lethal with one bare-hand hit
-	_ = drainPackets(victim.client)
 
 	loop.applyInput(attacker, SubtickInput{At: loop.clock.Now(), Packet: attackPacket(victim.entityID)})
 

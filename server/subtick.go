@@ -200,9 +200,25 @@ func (t *TickLoop) applyInput(p *tickPlayer, in SubtickInput) {
 		// INVENTORY (ENT-04): the client closed a container window. v1 cleanup/no-op.
 		t.handleContainerClose(p, in.Packet)
 
+	case packetid.ServerboundAttack:
+		// COMBAT (GAMEPLAY-04): the entity ATTACK. In 26.2 the attack is its OWN packet —
+		// ServerboundAttackPacket = a single VarInt entityId (jar-verified) — split out of the
+		// old ServerboundInteract{Action} (where ATTACK used to live). The handler resolves the
+		// NAMED target to a tickPlayer, reach-gates it, and applies SERVER-supplied damage into
+		// the existing applyDamage->die flow; the client never claims a damage amount (T-6-05).
+		// A forged/out-of-reach/self/malformed input is a silent no-op inside the handler.
+		t.handleAttack(p, in.Packet)
+
+	case packetid.ServerboundInteract:
+		// COMBAT (GAMEPLAY-04): the RIGHT-CLICK entity interaction in 26.2 (entityId + hand +
+		// Vec3 location + Boolean — NO Action enum; ATTACK is the separate ServerboundAttack
+		// above). v1 has no entity right-click behavior, so this is a defensive no-op that
+		// NEVER deals damage (only the attack path does).
+		t.handleInteract(p, in.Packet)
+
 	default:
-		// Non-movement subtick input (attack/use/etc.): no movement resolution yet
-		// (Phase 6). The hook already observed it; nothing to apply here.
+		// Non-movement subtick input with no resolver yet: the hook already observed it;
+		// nothing to apply here.
 	}
 }
 
