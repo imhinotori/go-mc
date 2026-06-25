@@ -79,6 +79,14 @@ var recognizedFeatureTypes = map[string]struct{}{
 	"blue_ice":                       {},
 	"bonus_chest":                    {},
 	"chorus_plant":                   {},
+	// coral_claw/coral_mushroom/coral_tree appear ONLY inline inside the warm-ocean
+	// coral simple_random_selector sub-features. 11-01 never parsed selector
+	// sub-features (walkBlockStates resolved only block-state leaves), so these were
+	// latent until 12-03's selector recursion forced the inline parse — JAR-CONFIRMED
+	// real feature classes (CoralClaw/CoralMushroom/CoralTreeFeature.class).
+	"coral_claw":                     {},
+	"coral_mushroom":                 {},
+	"coral_tree":                     {},
 	"delta_feature":                  {},
 	"desert_well":                    {},
 	"disk":                           {},
@@ -115,9 +123,15 @@ var recognizedFeatureTypes = map[string]struct{}{
 	"sequence":                       {},
 	"simple_block":                   {},
 	"simple_random_selector":         {},
+	// speleothem appears inline inside pointed_dripstone's simple_random_selector
+	// sub-features (distinct from speleothem_cluster). JAR-CONFIRMED SpeleothemFeature.
+	"speleothem":                     {},
 	"speleothem_cluster":             {},
 	"spike":                          {},
 	"spring_feature":                 {},
+	// template appears inline inside selector sub-features (structure-template feature).
+	// JAR-CONFIRMED TemplateFeature.class / TemplateFeatureConfiguration.
+	"template":                       {},
 	"tree":                           {},
 	"twisting_vines":                 {},
 	"underwater_magma":               {},

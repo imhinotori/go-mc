@@ -47,6 +47,14 @@ type bodyContext struct {
 	// sub-PlacedFeature ref on (reg.ResolvePlaced / reg.ParsePlacedFeature). It is
 	// g.deco.registry in production (threaded through makePlacer → newConfiguredPlacer).
 	reg *feature.Registry
+	// subDepth is the selector→sub-feature recursion depth (12-03). The featureBody
+	// signature is fixed, so the composite selectors thread their recursion depth
+	// through this per-invocation counter rather than an added parameter:
+	// placeSubFeature sets it around the bound sub-feature Place and restores it, so a
+	// selector nested inside a selector sees the accumulated depth (a sanity backstop
+	// over the registry's own acyclic-by-construction cycle guard — T-12-11). It is 0
+	// for a top-level body and touched only on the single scheduler goroutine.
+	subDepth int
 }
 
 // featureBodies is the type→body registry. It is populated at init() time by the
