@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v2
 milestone_name: worldgen-features-structures
-status: planning
-stopped_at: "Milestone v2 scoped: ROADMAP (7 phases, 10-16) + REQUIREMENTS (15 reqs) created from 2 research files (features + structures). User chose: research Phase 10 (cross-chunk seam) dedicated BEFORE autonomous execution. Next: /gsd-research-phase 10."
+status: executing
+stopped_at: "Phase 10 planned (3 plans, 2 waves) + plan-checked (2 blockers found in 10-03: interface-split broke ~7 test files + dedup-test invalidated by neighbor auto-request; both fixed — Generate stays concrete method, Task 4 migrates tests). Autonomous 10→16. Next: execute Phase 10 (wave 1 = 10-01 LCG + 10-02 heightmap parallel, wave 2 = 10-03 worker seam)."
 last_updated: "2026-06-24T23:40:00.000Z"
 last_activity: 2026-06-24
 progress:
