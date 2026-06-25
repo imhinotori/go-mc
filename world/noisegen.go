@@ -164,10 +164,23 @@ func (g *NoiseGenerator) Generate(pos level.ChunkPos) *level.Chunk {
 	cc := &carveChunk{chunk: ch, pos: pos, minY: g.minY, height: g.secs * 16, air: g.air}
 	carver.ApplyCarvers(g.seed, cc, aq, g.carvers, g.rep)
 
-	// (4) FINISH — sky light for rendering (mirrors Superflat / FillChunk finishing).
-	// FillChunk already set FluidCount/biome defaults and the heightmaps were rewritten
-	// by BuildSurface; sky light is re-applied here defensively so every present section
-	// is lit regardless of the fill path's finishing.
+	// (4) FINISH — the pre-decoration WORLDGEN heightmaps + sky light.
+	//
+	// GEN2-03: build all 3 worldgen heightmaps (WORLD_SURFACE_WG / OCEAN_FLOOR_WG /
+	// MOTION_BLOCKING) from the FINAL post-carve terrain, here in the finish step (after
+	// ApplyCarvers) so they reflect carved openings and are live + correct before the
+	// first feature would read them (Phase 11+ decoration does heightmap-relative
+	// placement). This is the bulk pre-decoration build; the incremental
+	// level.HeightmapUpdate keeps them live on each subsequent worldgen block write. The
+	// 3 CLIENT heightmaps stay finalized by BuildSurface's writeClientHeightmaps (the wire
+	// authority) and are not touched here. Pure top-down scan → Generate stays
+	// deterministic over (seed, pos).
+	surface.BuildWorldgenHeightmaps(ch, g.minY, g.minY+g.secs*16)
+
+	// Sky light for rendering (mirrors Superflat / FillChunk finishing). FillChunk already
+	// set FluidCount/biome defaults and the CLIENT heightmaps were rewritten by
+	// BuildSurface; sky light is re-applied here defensively so every present section is
+	// lit regardless of the fill path's finishing.
 	for i := range ch.Sections {
 		s := &ch.Sections[i]
 		if len(s.SkyLight) != 2048 {

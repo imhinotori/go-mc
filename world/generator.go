@@ -12,6 +12,7 @@ import (
 	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/biome"
 	"github.com/imhinotori/sulfur/level/block"
+	"github.com/imhinotori/sulfur/world/levelgen/surface"
 )
 
 // Generator produces a chunk for a given column position. Implementations must
@@ -134,6 +135,15 @@ func (g *Superflat) Generate(_ level.ChunkPos) *level.Chunk {
 	ch.HeightMaps.WorldSurface = ws
 	ch.HeightMaps.MotionBlocking = mb
 	ch.HeightMaps.MotionBlockingNoLeaves = mbnl
+
+	// GEN2-03: also build the 3 WORLDGEN heightmaps (WORLD_SURFACE_WG / OCEAN_FLOOR_WG /
+	// MOTION_BLOCKING) from the final superflat blocks so a superflat world carries a
+	// complete, correct worldgen heightmap (matching the noise generator). Superflat has
+	// no carve and no fluid, so OCEAN_FLOOR_WG == WORLD_SURFACE_WG here. This overwrites
+	// the (zeroed) MotionBlocking BitStorage set above with the same surfaceVal, which is
+	// consistent (the column top is the stone surface). The CLIENT heightmaps set above
+	// remain the wire authority.
+	surface.BuildWorldgenHeightmaps(ch, g.MinY, g.MinY+g.Secs*16)
 
 	ch.Status = level.StatusFull
 	return ch

@@ -595,6 +595,92 @@ func recomputeWorldSurfaceWG(ch *level.Chunk, minY, maxY int, air, caveAir block
 	}
 }
 
+// BuildWorldgenHeightmaps populates the 3 WORLDGEN heightmaps (WORLD_SURFACE_WG,
+// OCEAN_FLOOR_WG, MOTION_BLOCKING) from the chunk's FINAL (post-carve) terrain, each
+// with its own jar-confirmed Heightmap$Types predicate:
+//
+//   - WORLD_SURFACE_WG = NOT_AIR                    (first Y above the highest non-air block)
+//   - OCEAN_FLOOR_WG   = motion-blocking AND NOT fluid (first Y above the highest solid below water)
+//   - MOTION_BLOCKING  = blocks-motion OR fluid     (first Y above the highest non-air-or-water)
+//
+// This is the pre-decoration worldgen-heightmap build GEN2-03 requires: it MUST run after
+// carving (so it reflects carved openings) and before the first feature would read the
+// worldgen heightmaps. The generator wires it into its FINISH step (after ApplyCarvers).
+// It resolves the air/caveAir/water StateIDs itself so callers need only pass the chunk
+// + its Y bounds. The 3 CLIENT heightmaps remain the job of writeClientHeightmaps.
+//
+// Pure: a deterministic top-down scan of the chunk's blocks, so it does not affect the
+// noise generator's pureness over (seed, pos).
+func BuildWorldgenHeightmaps(ch *level.Chunk, minY, maxY int) {
+	air := block.ToStateID[block.Air{}]
+	caveAir := block.ToStateID[block.CaveAir{}]
+	water := block.ToStateID[block.Water{Level: 0}]
+	recomputeWorldSurfaceWG(ch, minY, maxY, air, caveAir)
+	recomputeOceanFloorWG(ch, minY, maxY, air, caveAir, water)
+	recomputeMotionBlockingWG(ch, minY, maxY, air, caveAir, water)
+}
+
+// recomputeOceanFloorWG rewrites OCEAN_FLOOR_WG (first Y above the highest
+// motion-blocking-NO-FLUID block — i.e. the highest solid that is not water), mirroring
+// recomputeWorldSurfaceWG with the ocean-floor predicate. Y is stored relative to minY.
+func recomputeOceanFloorWG(ch *level.Chunk, minY, maxY int, air, caveAir, water block.StateID) {
+	for lx := 0; lx < 16; lx++ {
+		for lz := 0; lz < 16; lz++ {
+			top := minY
+			for y := maxY - 1; y >= minY; y-- {
+				sec := (y - minY) >> 4
+				if sec < 0 || sec >= len(ch.Sections) {
+					continue
+				}
+				local := (y&15)<<8 | (lz&15)<<4 | (lx & 15)
+				st := ch.Sections[sec].GetBlock(local)
+				// motion-blocking AND NOT fluid: non-air and not water.
+				if !isAirState(st, air, caveAir) && !isFluidState(st, water) {
+					top = y + 1
+					break
+				}
+			}
+			v := top - minY
+			if v < 0 {
+				v = 0
+			}
+			ch.HeightMaps.OceanFloorWG.Set(lz<<4|lx, v)
+		}
+	}
+}
+
+// recomputeMotionBlockingWG rewrites the WORLDGEN MOTION_BLOCKING heightmap (first Y above
+// the highest blocks-motion-OR-fluid block — non-air OR water, since for the noise terrain
+// water blocks motion), mirroring recomputeWorldSurfaceWG with the motion-blocking
+// predicate. Y is stored relative to minY. NOTE: this is the SERVER-ONLY worldgen
+// MOTION_BLOCKING; the CLIENT MOTION_BLOCKING (on the wire) is still finalized by
+// writeClientHeightmaps.
+func recomputeMotionBlockingWG(ch *level.Chunk, minY, maxY int, air, caveAir, water block.StateID) {
+	for lx := 0; lx < 16; lx++ {
+		for lz := 0; lz < 16; lz++ {
+			top := minY
+			for y := maxY - 1; y >= minY; y-- {
+				sec := (y - minY) >> 4
+				if sec < 0 || sec >= len(ch.Sections) {
+					continue
+				}
+				local := (y&15)<<8 | (lz&15)<<4 | (lx & 15)
+				st := ch.Sections[sec].GetBlock(local)
+				// blocks-motion OR fluid: non-air OR water → any non-air (water is non-air).
+				if !isAirState(st, air, caveAir) || isFluidState(st, water) {
+					top = y + 1
+					break
+				}
+			}
+			v := top - minY
+			if v < 0 {
+				v = 0
+			}
+			ch.HeightMaps.MotionBlocking.Set(lz<<4|lx, v)
+		}
+	}
+}
+
 // writeClientHeightmaps writes the 3 CLIENT heightmaps (WorldSurface, MotionBlocking,
 // MotionBlockingNoLeaves) from the post-surface column top. WorldSurface = first Y above
 // the highest non-air block; MotionBlocking(/NoLeaves) = first Y above the highest
