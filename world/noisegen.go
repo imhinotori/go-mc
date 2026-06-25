@@ -4,9 +4,12 @@ import (
 	"github.com/imhinotori/sulfur/level"
 	levelbiome "github.com/imhinotori/sulfur/level/biome"
 	"github.com/imhinotori/sulfur/level/block"
+	"github.com/imhinotori/sulfur/world/levelgen"
 	"github.com/imhinotori/sulfur/world/levelgen/biome"
 	"github.com/imhinotori/sulfur/world/levelgen/carver"
+	"github.com/imhinotori/sulfur/world/levelgen/feature"
 	"github.com/imhinotori/sulfur/world/levelgen/noisechunk"
+	"github.com/imhinotori/sulfur/world/levelgen/placement"
 	"github.com/imhinotori/sulfur/world/levelgen/router"
 	"github.com/imhinotori/sulfur/world/levelgen/surface"
 )
@@ -55,6 +58,11 @@ type NoiseGenerator struct {
 	carvers []*carver.ConfiguredCarver
 	rep     *carver.Replaceables
 
+	// deco is the per-world feature graph (parsed registry + FeatureSorter + per-biome
+	// feature lists + the biome allowance), built ONCE here (memoized). applyBiomeDecoration
+	// reads it; it is immutable at decoration time so Decorate stays pure over (seed, pos).
+	deco *decorationData
+
 	// air state id, reused by the carve adapter's out-of-range Get (resolved once).
 	air block.StateID
 }
@@ -95,6 +103,16 @@ func NewNoiseGenerator(seed int64, secs, minY int) *NoiseGenerator {
 	if err != nil {
 		panic("world: NoiseGenerator: parse carver replaceables: " + err.Error())
 	}
+	// FEAT-02: parse the full feature roster + build the FeatureSorter (cross-biome
+	// per-step global index ordering) ONCE, from the embedded biome `features` arrays.
+	// A build-data mismatch (unknown feature type, unresolvable block-state ref, a missing
+	// biome, or a cross-biome ordering cycle) is an asset bug, not runtime input, so it
+	// panics here exactly like the router/biome-source/carver construction above — the
+	// worker treats Decorate as infallible.
+	deco, err := buildDecorationData()
+	if err != nil {
+		panic("world: NoiseGenerator: build feature/decoration data: " + err.Error())
+	}
 
 	return &NoiseGenerator{
 		seed:    seed,
@@ -106,6 +124,7 @@ func NewNoiseGenerator(seed int64, secs, minY int) *NoiseGenerator {
 		rule:    rule,
 		carvers: carvers,
 		rep:     rep,
+		deco:    deco,
 		air:     block.ToStateID[block.Air{}],
 	}
 }
@@ -173,21 +192,29 @@ func (g *NoiseGenerator) GenerateTerrain(pos level.ChunkPos) *level.Chunk {
 	return ch
 }
 
-// Decorate is the post-carve decoration pass over a 3x3 view, run by the worker once
-// all 8 neighbors of view.center are carved. For Phase 10 it writes NO blocks — it only
-// FINISHES the center (the bulk pre-decoration worldgen-heightmap build, sky light, and
-// the promote-to-StatusFull) so a fully-carved chunk becomes a complete renderable chunk.
+// Decorate is the post-carve decoration pass over a 3x3 view, run by the worker once all
+// 8 neighbors of view.center are carved. It is now LIVE (FEAT-02): after building the
+// pre-decoration worldgen heightmaps it runs applyBiomeDecoration — the 11-step
+// GenerationStep.Decoration loop over the retained 3x3 biome set, seeding each feature via
+// WorldgenRandom.SetFeatureSeed(decoSeed, globalIndex, step) and placing it through the
+// 3x3 Neighborhood (which keeps the worldgen heightmaps live across feature writes).
 //
-// The 3x3 Neighborhood proxy + its per-write level.HeightmapUpdate wiring is BUILT (so the
-// feature phase inherits a correct WorldGenLevel-like view) but Decorate does not CALL
-// view.SetBlock yet — no features exist in Phase 10. The late-neighbor-write-after-emit
-// question (a feature in a neighbor center writing into this already-emitted center) is
-// DEFERRED to Phase 11+ (Open Decision 2): for the no-op body, emit-on-own-decoration is
-// safe by construction because nothing is ever written after emit.
+// Phase 11 ships the ORCHESTRATION without feature bodies: every parsed feature type
+// dispatches to a recordable no-op placer (the real Feature.place bodies are Phase 12+),
+// so production decoration writes NO blocks yet — but the per-feature seed/index discipline
+// is exercised + verifiable now (the trace test). Because no blocks are written, the
+// emitted chunk bytes are identical to Phase 10 here.
 //
-// Pure over (seed, center.pos) given the fully-carved neighborhood: the worldgen-heightmap
-// build is a deterministic top-down scan of the center's own (post-carve) blocks, so the
-// SET or ORDER of decorated centers cannot affect this center's output.
+// OPEN DECISION D2 (late-neighbor-write-after-emit) is RESOLVED in the worker with Option Y
+// (hold-until-neighborhood-complete, complete-on-first-send, no re-send): a center is
+// decorated as soon as its 3x3 is carved (writing features into its neighbors) but emitted
+// only once every WANTED neighbor that holds it is also decorated — so no write lands after
+// the immutable handoff. See world/worker.go tryDecorate/tryEmit.
+//
+// Pure over (seed, center.pos) given the fully-carved neighborhood: each feature's rng is
+// pure over (worldSeed, originX, originZ, globalIndex, stepIndex) — independent of WHICH
+// center decorated first, so the SET or ORDER of decorated centers cannot affect this
+// center's output (the determinism contract the 5x5 reorder test pins).
 func (g *NoiseGenerator) Decorate(view *Neighborhood) {
 	ch := view.chunks[packPos(view.center)]
 	if ch == nil {
@@ -196,11 +223,32 @@ func (g *NoiseGenerator) Decorate(view *Neighborhood) {
 
 	// Build all 3 worldgen heightmaps (WORLD_SURFACE_WG / OCEAN_FLOOR_WG / MOTION_BLOCKING)
 	// from the FINAL post-carve terrain so they reflect carved openings and are live before
-	// the first feature would read them (Phase 11+ heightmap-relative placement). The
-	// incremental level.HeightmapUpdate (wired into Neighborhood.SetBlock) keeps them live on
-	// each subsequent worldgen block write. The 3 CLIENT heightmaps stay finalized by
-	// BuildSurface's writeClientHeightmaps (the wire authority) during GenerateTerrain.
+	// the first feature reads them (heightmap-relative placement). The incremental
+	// level.HeightmapUpdate (wired into Neighborhood.SetBlock) keeps them live on each
+	// subsequent feature block write. The 3 CLIENT heightmaps stay finalized by BuildSurface's
+	// writeClientHeightmaps (the wire authority) during GenerateTerrain.
 	surface.BuildWorldgenHeightmaps(ch, g.minY, g.minY+g.secs*16)
+
+	// LIVE decoration over the 3x3. The biome lookup is the same per-Decorate quart-cell
+	// cache Generate uses (one evaluation per distinct quart cell, behavior-identical to the
+	// uncached source). The retained biome set is the distinct biomes across the center + 8
+	// neighbors. applyBiomeDecoration drives the 11 steps in seed/index order.
+	bc := newBiomeCache(g.biomes)
+	biomeAt := bc.get
+	height := g.secs * 16
+	ctx := newPlacementContext(view, g.minY, height, biomeAt)
+	biomes := retainedBiomes([2]int{int(view.center[0]), int(view.center[1])}, g.minY, height, biomeAt)
+
+	wg := levelgen.NewWorldgenRandom(g.seed)
+	makePlacer := func(pf *feature.PlacedFeature) placement.PlacerFunc {
+		var cf *feature.ConfiguredFeature
+		if pf != nil {
+			cf = pf.Feature
+		}
+		// Production: no test feature, no invocation recording — every real type is a no-op.
+		return newConfiguredPlacer(cf, view, g.air, false, nil)
+	}
+	applyBiomeDecoration(view, biomes, g.deco, ctx, wg, g.seed, makePlacer, nil)
 
 	// Sky light for rendering (mirrors Superflat / FillChunk finishing). FillChunk set
 	// FluidCount/biome defaults and BuildSurface rewrote the CLIENT heightmaps; sky light is
