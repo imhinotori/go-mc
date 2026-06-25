@@ -28,7 +28,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 12: Core Feature Types** - Port `OreFeature`, `RandomPatchFeature`/`SimpleBlockFeature`, the random selectors, and `BlockPile`/`FallenTree`/`VegetationPatch` so a biome's full ground-cover + decoration-ore set generates (completed 2026-06-25)
 - [x] **Phase 13: Trees, Dungeon & Features Visual Gate** - Port `TreeFeature` (trunk/foliage placers + tree decorators + `BlockStateProvider` hierarchy) + the `MonsterRoomFeature` dungeon; close the block with the real-client VISUAL GATE (full per-biome vegetation, deterministic per seed) (completed 2026-06-25 — visual gate approved: trees + vines confirmed on a real client)
 - [x] **Phase 14: Structure Pipeline & Temples** - Port the STARTS/REFERENCES/PLACE two-phase pipeline + the `StructurePiece` bounding-box-tree machinery; the desert pyramid (+ jungle temple/igloo/swamp hut) generates in vanilla positions as the pipeline shakedown (completed 2026-06-25)
-- [ ] **Phase 15: Mineshaft & Stronghold** - Port the multi-piece recursive mineshaft (`legacy_type_3` frequency-reduction placement) and the stronghold (concentric-rings placement + recursive piece set reusing the piece machinery)
+- [x] **Phase 15: Mineshaft & Stronghold** - Port the multi-piece recursive mineshaft (`legacy_type_3` frequency-reduction placement) and the stronghold (concentric-rings placement + recursive piece set reusing the piece machinery) (completed 2026-06-25)
 - [ ] **Phase 16: Village Jigsaw & Structures Visual Gate** - Port the `.nbt` `StructureTemplate` system + template_pool/processor data + the bounded-BFS `JigsawPlacement.Placer` so villages generate per biome variant; close the milestone with the real-client structures VISUAL GATE
 
 ## Phase Details
@@ -122,7 +122,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 3 plans
 - [x] 15-01-PLAN.md — The mineshaft (STRUCT-03): the legacy frequency-reduction placement path (Pitfall #4 — spacing 1 + 0.004 + ApplyFrequencyReducer, NOT the spacing grid; FIX the mis-ported reducer table: legacy_type_3 -> legacyProbabilityReducerWithDouble, un-swap legacy_type_1<->legacy_type_3, re-seed (chunkX,chunkZ) per jar) + MineshaftStructure.findGenerationPoint + the FIRST true recursive piece graph (corridor/crossing/room/stairs via addChildren + FindCollisionPiece, genDepth-bounded) + the normal/mesa per-type geometry + the chest block+tag
 - [x] 15-02-PLAN.md — The stronghold PLACEMENT (STRUCT-04, the architectural risk, isolated): the concentric_rings global ring computation (generateRingPositions, the dedicated ring seed, biome-validated against #stronghold_biased_to — a NEW embed) + the StrongholdRingState worldgen-state home (sync.Once per-world cache, owned by the NoiseGenerator) + isPlacementChunk = ring-list contains + the placement-half StartGenerator (pieces stubbed, byte-inert)
-- [ ] 15-03-PLAN.md — The stronghold PIECES (STRUCT-04) + the full Phase-15 acceptance: the recursive StrongholdPieces (corridors/stairs/PortalRoom-end_portal_frame/Library-bookshelves) reusing the 15-01-proven addChildren machinery, genDepth-50 + maxPlaceCount bounded, hung on 15-02 ring anchor; closes Phase 15 with every STRUCT-03/04 success criterion as an automated assertion (no visual gate — Phase 16 owns that)
+- [x] 15-03-PLAN.md — The stronghold PIECES (STRUCT-04) + the full Phase-15 acceptance: the recursive StrongholdPieces (corridors/stairs/PortalRoom-end_portal_frame/Library-bookshelves) reusing the 15-01-proven addChildren machinery, genDepth-50 + maxPlaceCount bounded, hung on 15-02 ring anchor; closes Phase 15 with every STRUCT-03/04 success criterion as an automated assertion (no visual gate — Phase 16 owns that)
 **Research**: `.planning/research/v2-structures.md` (Tier 2 — Mineshaft; Tier 3 — Stronghold; "Common Pitfalls #4 mineshaft special placement, #5 stronghold rings are global"; the four `probabilityReducer` variants).
 
 ### Phase 16: Village Jigsaw & Structures Visual Gate
@@ -149,5 +149,5 @@ Phases execute in numeric order: 10 → 11 → 12 → 13 → 14 → 15 → 16
 | 12. Core Feature Types | 3/3 | Complete | 2026-06-25 |
 | 13. Trees, Dungeon & Features Visual Gate | 4/4 | Complete   | 2026-06-25 |
 | 14. Structure Pipeline & Temples | 3/3 | Complete   | 2026-06-25 |
-| 15. Mineshaft & Stronghold | 2/3 | In Progress|  |
+| 15. Mineshaft & Stronghold | 3/3 | Complete   | 2026-06-25 |
 | 16. Village Jigsaw & Structures Visual Gate | 0/0 | Not started | - |

@@ -4,14 +4,14 @@ milestone: v2
 milestone_name: worldgen-features-structures
 status: verifying
 stopped_at: Completed 14-02-PLAN.md
-last_updated: "2026-06-25T16:38:43.060Z"
+last_updated: "2026-06-25T17:28:15.578Z"
 last_activity: 2026-06-25
 progress:
   total_phases: 7
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 19
-  completed_plans: 18
-  percent: 95
+  completed_plans: 19
+  percent: 100
 ---
 
 # Project State
@@ -95,7 +95,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [██████████] 95%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -169,6 +169,7 @@ Progress: [██████████] 95%
 | Phase 14 P03 | 95min | 2 tasks | 11 files |
 | Phase 15 P01 | 55min | 2 tasks | 8 files |
 | Phase 15 P02 | 75 | 2 tasks | 6 files |
+| Phase 15 P03 | 95 | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -272,6 +273,8 @@ Recent decisions affecting current work:
 - [Phase ?]: 14-02: loot/redstone/suspicious-sand deferred v3 - chest BLOCK + loot tag, tnt + pressure-plate BLOCKS placed
 - [Phase ?]: 14-03: jungle temple + swamp hut ported javap-c; salts 14357619/14357620 cross-checked, REAL biome gates, MossStoneSelector per-cell draws; igloo is the first addChildren multi-piece (dome always + nextDouble<0.5 basement), geometry extracted OFFLINE from the .nbt templates (0 .nbt runtime, deviation documented); STRUCT-02 closed, 4-temple acceptance + Docker -race green
 - [Phase ?]: [Phase 15] 15-01: FIXED the mis-ported placement.go reducer table — un-swapped legacy_type_1<->legacy_type_3 + re-seeded legacyProbabilityReducerWithDouble (seed,chunkX,chunkZ); 4 bindings pinned. Mineshaft = FIRST recursive structure (corridor/crossing/room/stairs on addChildren+FindCollisionPiece, genDepth cap 8); placement is Pitfall #4 (legacy_type_3 0.4%% draw, NOT spacing grid). HasStructureBiomes resolves nested #is_* refs (mesa=#is_badlands). Cross-chunk idempotence proven on first many-chunk structure; Docker -race clean.
+- [Phase ?]: Stronghold pieces reuse the 15-01 recursion verbatim (genDepth cap 50, weighted PieceWeight + maxPlaceCount, exactly one PortalRoom)
+- [Phase ?]: placeLocal bbox-clip guard + idempotent PostProcess make the many-chunk stronghold cross-chunk idempotent; Phase 15 closed (STRUCT-03/04)
 
 ### Pending Todos
 
@@ -298,7 +301,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-25T16:38:30.597Z
+Last session: 2026-06-25T17:27:51.826Z
 Stopped at: Completed 14-02-PLAN.md
 Resume file: None
 Next: the STRUCTURES half of v2 — Phase 14 (Structures STARTS/REFERENCES/PLACE pipeline + StructurePiece machinery, shaken down on the single-piece desert pyramid), then Phase 15 (mineshaft recursion + stronghold concentric-rings placement), then Phase 16 (the village .nbt/template_pool/Placer jigsaw + the second VISUAL GATE). Research: .planning/research/v2-structures.md (the two-phase pipeline, the LegacyRandomSource seed hinge, the easy→hard tier order). Deferred-still-open: dungeon loot/spawner-mob + BeehiveDecorator occupant + pale_garden PaleMoss (all v3, cosmetic, in 13-04-SUMMARY); KeepAlive double-leave hardening (Phase 3, surfaces when real timeout-driven disconnects land).
