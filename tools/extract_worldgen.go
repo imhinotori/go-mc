@@ -63,6 +63,15 @@ var worldgenZipPrefixes = []struct {
 	{"data/minecraft/worldgen/density_function/", "density_function"},
 	{"data/minecraft/worldgen/noise/", "noise"},
 	{"data/minecraft/worldgen/configured_carver/", "configured_carver"},
+	// FEAT-02 (Phase 11): the feature/decoration data half. configured_feature
+	// (the Feature type + full config), placed_feature (a configured ref + ordered
+	// placement modifier list), and biome (the 11-element features array per
+	// GenerationStep) are PURE-UNZIPPED here — same mechanism, embedded + parsed by
+	// the world/levelgen/feature package, never hand-transcribed. All three trees
+	// are FLAT (no nesting) in the jar.
+	{"data/minecraft/worldgen/configured_feature/", "configured_feature"}, // 226
+	{"data/minecraft/worldgen/placed_feature/", "placed_feature"},         // 262
+	{"data/minecraft/worldgen/biome/", "biome"},                           // 66
 }
 
 // worldgenSingleFiles names individual jar resources (not whole trees) to copy,

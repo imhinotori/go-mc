@@ -51,6 +51,7 @@ import (
 // Java-extracted baked biome climate boxes.
 //
 //go:embed noise_settings density_function noise configured_carver tags biome_parameters.json
+//go:embed configured_feature placed_feature biome
 var FS embed.FS
 
 // resolveID splits a "namespace:path" registry id into its path component,
@@ -130,6 +131,34 @@ func BiomeParameters() ([]byte, error) {
 	}
 	return b, nil
 }
+
+// ConfiguredFeatureJSON returns the embedded configured_feature JSON for a
+// registry id. e.g. "minecraft:oak" -> configured_feature/oak.json. The
+// world/levelgen/feature parser (FEAT-02) parses these polymorphic "type"-tagged
+// objects (the Feature type + its full config) into a typed-but-body-deferred AST.
+func ConfiguredFeatureJSON(id string) ([]byte, error) { return readEmbedded("configured_feature", id) }
+
+// PlacedFeatureJSON returns the embedded placed_feature JSON for a registry id.
+// e.g. "minecraft:oak" -> placed_feature/oak.json. Each is a configured_feature
+// ref + an ordered placement-modifier list (FEAT-02).
+func PlacedFeatureJSON(id string) ([]byte, error) { return readEmbedded("placed_feature", id) }
+
+// BiomeJSON returns the embedded biome JSON for a registry id.
+// e.g. "minecraft:plains" -> biome/plains.json. Carries the 11-element features
+// array (a placed_feature HolderSet per GenerationStep) the 11-03 orchestration
+// (applyBiomeDecoration) consumes.
+func BiomeJSON(id string) ([]byte, error) { return readEmbedded("biome", id) }
+
+// ConfiguredFeatureIDs lists the configured_feature ids available in the embed
+// (without the minecraft: namespace). FEAT-02 expects 226 entries.
+func ConfiguredFeatureIDs() ([]string, error) { return list("configured_feature") }
+
+// PlacedFeatureIDs lists the placed_feature ids available in the embed. FEAT-02
+// expects 262 entries.
+func PlacedFeatureIDs() ([]string, error) { return list("placed_feature") }
+
+// BiomeIDs lists the biome ids available in the embed. FEAT-02 expects 66 entries.
+func BiomeIDs() ([]string, error) { return list("biome") }
 
 // list returns the .json entry names directly under an embedded sub-directory,
 // for callers (later waves) that enumerate a tree rather than resolving by id.

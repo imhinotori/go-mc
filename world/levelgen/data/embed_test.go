@@ -206,6 +206,70 @@ func TestWorldgenEmbed(t *testing.T) {
 	})
 }
 
+// TestWorldgenFeatureEmbed proves the DATA half of FEAT-02 is wired: the full
+// vanilla feature/decoration data tree (226 configured_feature + 262 placed_feature
+// + 66 biome JSONs) is extracted, embedded, and resolves by id. These counts are
+// the FEAT-02 "embedded data loads" acceptance — a partial extraction (a missing
+// configured_feature a placed_feature references) would fail the Wave-11 parser, so
+// the count assertions catch a build-data mismatch here.
+func TestWorldgenFeatureEmbed(t *testing.T) {
+	cases := []struct {
+		name string
+		ids  func() ([]string, error)
+		want int
+	}{
+		{"configured_feature", ConfiguredFeatureIDs, 226},
+		{"placed_feature", PlacedFeatureIDs, 262},
+		{"biome", BiomeIDs, 66},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			ids, err := c.ids()
+			if err != nil {
+				t.Fatalf("%s ids: %v", c.name, err)
+			}
+			if len(ids) != c.want {
+				t.Errorf("%s count = %d; want %d", c.name, len(ids), c.want)
+			}
+		})
+	}
+
+	// Spot reads: a known configured_feature + biome resolve to non-empty bytes.
+	t.Run("spot_reads", func(t *testing.T) {
+		raw, err := ConfiguredFeatureJSON("minecraft:oak")
+		if err != nil || len(raw) == 0 {
+			t.Fatalf("ConfiguredFeatureJSON(oak) = %d bytes, %v; want non-empty", len(raw), err)
+		}
+		var cf struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(raw, &cf); err != nil {
+			t.Fatalf("oak configured_feature does not parse: %v", err)
+		}
+		if cf.Type != "minecraft:tree" {
+			t.Errorf("oak configured_feature type = %q; want minecraft:tree", cf.Type)
+		}
+
+		praw, err := PlacedFeatureJSON("minecraft:oak")
+		if err != nil || len(praw) == 0 {
+			t.Fatalf("PlacedFeatureJSON(oak) = %d bytes, %v; want non-empty", len(praw), err)
+		}
+
+		braw, err := BiomeJSON("minecraft:plains")
+		if err != nil || len(braw) == 0 {
+			t.Fatalf("BiomeJSON(plains) = %d bytes, %v; want non-empty", len(braw), err)
+		}
+	})
+
+	// A missing id errors clearly (the accessor contract).
+	t.Run("missing_id_errors", func(t *testing.T) {
+		if _, err := ConfiguredFeatureJSON("minecraft:does_not_exist"); err == nil {
+			t.Error("ConfiguredFeatureJSON(missing) returned nil error; want a clear error")
+		}
+	})
+}
+
 // containsCaveRef reports whether the density-function JSON references one of the
 // overworld cave functions (used to prove caves are wired into final_density).
 func containsCaveRef(raw json.RawMessage) bool {
