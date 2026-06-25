@@ -287,3 +287,92 @@ func TestTestSetBlockFlows(t *testing.T) {
 		t.Fatalf("worldgen heightmap not updated by the write: world Y = %d, want > 0", worldY)
 	}
 }
+
+// TestFeatureBodiesProduceBlocks is the FINAL Phase-12 live-decoration proof: with ALL
+// FEAT-03 bodies registered (ore/simple_block/random_patch from 12-02; selectors +
+// pile/fallen/vegetation_patch from 12-03), running the REAL applyBiomeDecoration over a
+// real overworld biome's full feature roster — on a stone-filled 3x3 — actually WRITES
+// feature blocks (ore blobs replacing stone, and/or vegetation/cover above the surface)
+// through the live pipeline, not just in unit tests. It proves the bodies are wired into
+// the dispatch and place real blocks end-to-end.
+func TestFeatureBodiesProduceBlocks(t *testing.T) {
+	const minY, height = -64, 384
+	center := [2]int{0, 0}
+
+	data, err := buildDecorationData()
+	if err != nil {
+		t.Fatalf("buildDecorationData: %v", err)
+	}
+
+	var plains levelbiome.Type
+	if err := plains.UnmarshalText([]byte("minecraft:plains")); err != nil {
+		t.Fatalf("plains: %v", err)
+	}
+	steps, ok := data.biomeFeatures[plains]
+	if !ok {
+		t.Fatalf("plains has no decoration features in the embed")
+	}
+	// Sanity: plains must reference at least one ore (UNDERGROUND_ORES) so the ore body
+	// has stone to replace — the live-write we assert.
+	foundOre := false
+	for _, stepList := range steps {
+		for _, pf := range stepList {
+			if pf != nil && pf.Feature != nil && pf.Feature.Type == "ore" {
+				foundOre = true
+			}
+		}
+	}
+	if !foundOre {
+		t.Fatalf("plains references no ore feature — cannot prove a live ore write")
+	}
+
+	// A 3x3 of stone-filled chunks: a solid column from minY up to y=64 in every chunk,
+	// so the ore body (which only replaces base-stone targets) and the heightmap-projected
+	// surface features have real ground to act on.
+	view := build3x3(center, minY, height)
+	stone := block.ToStateID[block.Stone{}]
+	for dx := -1; dx <= 1; dx++ {
+		for dz := -1; dz <= 1; dz++ {
+			bx, bz := (center[0]+dx)*16, (center[1]+dz)*16
+			for lx := 0; lx < 16; lx++ {
+				for lz := 0; lz < 16; lz++ {
+					for y := minY; y < 64; y++ {
+						view.SetBlock(bx+lx, y, bz+lz, stone)
+					}
+				}
+			}
+		}
+	}
+
+	ctx := newPlacementContext(view, minY, height, func(_, _, _ int) levelbiome.Type { return plains })
+	mk := func(pf *feature.PlacedFeature) placement.PlacerFunc {
+		var cf *feature.ConfiguredFeature
+		if pf != nil {
+			cf = pf.Feature
+		}
+		return newConfiguredPlacer(cf, view, data.registry, block.StateID(0), false, nil)
+	}
+	applyBiomeDecoration(view, []levelbiome.Type{plains}, data, ctx,
+		levelgen.NewWorldgenRandom(0x12345), 0x12345, mk, nil)
+
+	// Scan the center chunk's stone column: at least one cell must now be a NON-stone,
+	// NON-air block — an ore blob the ore body wrote by replacing base stone (or another
+	// feature block). If the bodies were not live (all no-ops), the column stays pure
+	// stone and this fails.
+	air := block.ToStateID[block.Air{}]
+	changed := 0
+	for lx := 0; lx < 16; lx++ {
+		for lz := 0; lz < 16; lz++ {
+			for y := minY; y < 64; y++ {
+				st := view.GetBlock(lx, y, lz)
+				if st != stone && st != air {
+					changed++
+				}
+			}
+		}
+	}
+	if changed == 0 {
+		t.Fatalf("no feature blocks written by the live decoration — the FEAT-03 bodies are not placing through applyBiomeDecoration")
+	}
+	t.Logf("live decoration wrote %d non-stone feature blocks into the center chunk", changed)
+}
