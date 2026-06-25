@@ -43,12 +43,14 @@ type Worker struct {
 
 	// GEN2-02 cross-chunk seam. carved is the parallel->serial handoff: handleTerrain
 	// goroutines send carved chunks here and the SINGLE scheduler goroutine
-	// (runScheduler) drains it. staging + requested are OWNED EXCLUSIVELY by the
+	// (runScheduler) drains it. staging + requested + wanted are OWNED EXCLUSIVELY by the
 	// scheduler goroutine — NO lock, -race clean by construction (the same single-owner
 	// discipline as the tick-owned manager). Never touch them off the scheduler goroutine.
 	carved    chan *carvedChunk
+	wantedCh  chan level.ChunkPos    // public Request -> scheduler: "this pos is externally wanted"
 	staging   map[int64]*stagedChunk // carved-but-(maybe)-not-decorated chunks, packPos keyed
 	requested map[int64]bool         // neighbor auto-request dedup (scheduler-owned)
+	wanted    map[int64]bool         // externally-requested centers (scheduler-owned)
 }
 
 // carvedChunk is the handleTerrain -> scheduler handoff: a freshly carved chunk
@@ -81,8 +83,10 @@ func NewWorker(gen Generator, regionDir string, buf int) *Worker {
 		requests:  make(chan level.ChunkPos, buf),
 		results:   make(chan ChunkResult, buf),
 		carved:    make(chan *carvedChunk, buf),
+		wantedCh:  make(chan level.ChunkPos, buf),
 		staging:   make(map[int64]*stagedChunk),
 		requested: make(map[int64]bool),
+		wanted:    make(map[int64]bool),
 	}
 }
 
@@ -92,7 +96,26 @@ func (w *Worker) Results() <-chan ChunkResult { return w.results }
 // Request enqueues pos for load/generation. Non-blocking: if the bounded request
 // channel is full it drops the request (the tick re-requests next tick), which
 // applies backpressure instead of spawning unbounded work.
+//
+// Request is the EXTERNAL (streamer/tick) entry point: it records pos as a "wanted"
+// center, so the scheduler auto-requests pos's 8 neighbors to decorate it. The
+// scheduler's own neighbor auto-requests use the internal requestInternal path, which
+// does NOT mark the neighbor wanted — this BOUNDS the auto-request frontier to one ring
+// around the externally-requested set (a neighbor-ring chunk does not recursively pull
+// in ITS neighbors), matching vanilla's "generate the 8 neighbors to decorate a wanted
+// chunk" gating instead of expanding outward forever.
 func (w *Worker) Request(pos level.ChunkPos) {
+	select {
+	case w.wantedCh <- pos:
+	default:
+	}
+	w.requestInternal(pos)
+}
+
+// requestInternal enqueues pos for terrain generation WITHOUT marking it wanted. Used by
+// the scheduler to pull in the neighbor ring of a wanted center. Non-blocking (bounded
+// backpressure, same as Request).
+func (w *Worker) requestInternal(pos level.ChunkPos) {
 	select {
 	case w.requests <- pos:
 	default:
@@ -126,7 +149,11 @@ func (w *Worker) Run(ctx context.Context) {
 func (w *Worker) handleTerrain(ctx context.Context, pos level.ChunkPos) {
 	key := chunkKey(pos)
 	v, err, _ := w.sf.Do(key, func() (any, error) {
-		return w.loadOrGenerate(pos)
+		ch, fromRegion, e := w.loadOrGenerateEx(pos)
+		if e != nil {
+			return nil, e
+		}
+		return loadResult{ch: ch, fromRegion: fromRegion}, nil
 	})
 
 	if err != nil {
@@ -134,18 +161,29 @@ func (w *Worker) handleTerrain(ctx context.Context, pos level.ChunkPos) {
 		return
 	}
 
-	ch := v.(*level.Chunk)
-	if ch.Status == level.StatusFull {
-		// Region hit (already decorated/saved): emit directly, never stage.
-		w.emit(ctx, ChunkResult{Pos: pos, Chunk: ch})
+	lr := v.(loadResult)
+	if lr.fromRegion {
+		// Region hit (already StatusFull / decorated / saved): emit directly, never stage,
+		// never re-decorate. The fromRegion provenance — not the chunk's Status — is the
+		// discriminator (see loadOrGenerateEx).
+		w.emit(ctx, ChunkResult{Pos: pos, Chunk: lr.ch})
 		return
 	}
 
 	// Region miss -> carved chunk -> hand to the scheduler for staging + decoration.
 	select {
 	case <-ctx.Done():
-	case w.carved <- &carvedChunk{pos: pos, ch: ch}:
+	case w.carved <- &carvedChunk{pos: pos, ch: lr.ch}:
 	}
+}
+
+// loadResult is the singleflight payload: the chunk plus its provenance (region load vs
+// terrain generation). It crosses concurrent same-key waiters, so it must carry the
+// provenance explicitly rather than letting waiters re-inspect the (scheduler-mutable)
+// chunk Status.
+type loadResult struct {
+	ch         *level.Chunk
+	fromRegion bool
 }
 
 // runScheduler is the NEW single goroutine that owns staging + requested + all
@@ -158,6 +196,19 @@ func (w *Worker) runScheduler(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+
+		case pos := <-w.wantedCh:
+			// An externally-requested center: record interest + auto-request its 8 neighbors
+			// so the 3x3 it needs to decorate gets generated. Bounded to one ring (neighbors
+			// are requested via requestInternal, which does NOT mark them wanted, so they do
+			// not recursively expand). If the center is already carved+staged, re-scan it.
+			key := packPos(pos)
+			if !w.wanted[key] {
+				w.wanted[key] = true
+				w.requestNeighbors(pos)
+			}
+			w.tryDecorate(ctx, pos)
+
 		case cc := <-w.carved:
 			key := packPos(cc.pos)
 			s := w.staging[key]
@@ -165,32 +216,56 @@ func (w *Worker) runScheduler(ctx context.Context) {
 				s = &stagedChunk{pos: cc.pos}
 				w.staging[key] = s
 			}
+			// A pos can be carved more than once: singleflight only dedups CONCURRENT
+			// same-key terrain gen, so a directly-requested pos that ALSO gets
+			// auto-requested after its first gen completed produces a second carved chunk.
+			// Once a chunk is decorated + emitted it is the immutable single-owner copy the
+			// tick holds — NEVER overwrite it (that would resurrect it at carvers status and
+			// let a later neighborhood-complete scan re-decorate + re-emit it, a double-emit;
+			// threat T-10-08). Drop the redundant re-carve. If not yet decorated, record the
+			// (deterministically identical) carved chunk and mark it carved.
+			if s.decorated {
+				break
+			}
 			s.chunk, s.carved = cc.ch, true
 
-			// Auto-request the 8 neighbors so a single Request(C) pulls C's neighborhood
-			// in. The requested set makes each neighbor request once; the bounded requests
-			// channel + singleflight dedup the terrain gen (threat T-10-07: convergence is
-			// validated by the 5x5 region test completing).
-			for dx := -1; dx <= 1; dx++ {
-				for dz := -1; dz <= 1; dz++ {
-					if dx == 0 && dz == 0 {
-						continue
-					}
-					np := level.ChunkPos{cc.pos[0] + int32(dx), cc.pos[1] + int32(dz)}
-					nk := packPos(np)
-					if !w.requested[nk] && w.staging[nk] == nil {
-						w.requested[nk] = true
-						w.Request(np)
-					}
-				}
+			// If this carved chunk is itself a WANTED center, auto-request its neighbor ring.
+			// Ring chunks are NOT wanted, so they do not expand further — the frontier is
+			// bounded to one ring around the externally-requested set (threat T-10-07).
+			if w.wanted[key] {
+				w.requestNeighbors(cc.pos)
 			}
 
-			// Scan the up-to-9 centers this newly carved chunk could have completed.
+			// Scan the up-to-9 centers this newly carved chunk could have completed, but only
+			// decorate WANTED centers (the tick asked for them); ring chunks are generated
+			// solely to satisfy a wanted center's 3x3 and are never decorated/emitted.
 			for dx := -1; dx <= 1; dx++ {
 				for dz := -1; dz <= 1; dz++ {
 					cp := level.ChunkPos{cc.pos[0] + int32(dx), cc.pos[1] + int32(dz)}
-					w.tryDecorate(ctx, cp)
+					if w.wanted[packPos(cp)] {
+						w.tryDecorate(ctx, cp)
+					}
 				}
+			}
+		}
+	}
+}
+
+// requestNeighbors auto-requests the 8 neighbors of pos (the ring needed to decorate it),
+// each once (the requested set dedups; the bounded requests channel + singleflight dedup
+// the terrain gen). Uses requestInternal so the neighbors are NOT marked wanted — this is
+// what bounds the auto-request frontier to a single ring. Scheduler-goroutine-only.
+func (w *Worker) requestNeighbors(pos level.ChunkPos) {
+	for dx := -1; dx <= 1; dx++ {
+		for dz := -1; dz <= 1; dz++ {
+			if dx == 0 && dz == 0 {
+				continue
+			}
+			np := level.ChunkPos{pos[0] + int32(dx), pos[1] + int32(dz)}
+			nk := packPos(np)
+			if !w.requested[nk] && w.staging[nk] == nil {
+				w.requested[nk] = true
+				w.requestInternal(np)
 			}
 		}
 	}
@@ -249,16 +324,31 @@ func (w *Worker) emit(ctx context.Context, res ChunkResult) {
 // through to generation on a miss. A corrupt-region error is surfaced (not
 // silently regenerated).
 func (w *Worker) loadOrGenerate(pos level.ChunkPos) (*level.Chunk, error) {
+	ch, _, err := w.loadOrGenerateEx(pos)
+	return ch, err
+}
+
+// loadOrGenerateEx is the discriminating form handleTerrain uses: it reports whether the
+// chunk came from a REGION load (fromRegion=true -> already StatusFull, emit directly) or
+// from terrain GENERATION (fromRegion=false -> StatusCarvers, stage for decoration).
+//
+// The fromRegion flag is the CORRECT discriminator — NOT the chunk's Status. The scheduler
+// mutates a STAGED (generated) chunk's Status to StatusFull during decoration, and that
+// chunk pointer is the one singleflight caches under the pos key. A concurrent same-key
+// handleTerrain waiter that read Status would therefore see Full on a GENERATED chunk and
+// wrongly emit it directly (a second, un-staged emit -> double-emit; threat T-10-08).
+// Keying on the load PROVENANCE instead of the (mutable) status closes that race.
+func (w *Worker) loadOrGenerateEx(pos level.ChunkPos) (*level.Chunk, bool, error) {
 	if w.regionDir != "" {
 		ch, ok, rerr := w.tryRegion(pos)
 		if rerr != nil {
-			return nil, rerr // corrupt region (threat T-4-03) — do not regenerate over it
+			return nil, false, rerr // corrupt region (threat T-4-03) — do not regenerate over it
 		}
 		if ok {
-			return ch, nil
+			return ch, true, nil // region hit -> already decorated/saved
 		}
 	}
-	return w.gen.GenerateTerrain(pos), nil // region miss -> carved chunk (staged by the scheduler)
+	return w.gen.GenerateTerrain(pos), false, nil // region miss -> carved chunk (staged by the scheduler)
 }
 
 // tryRegion attempts to read pos from disk, format-aware and OPT-IN: it PREFERS

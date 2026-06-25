@@ -90,7 +90,11 @@ func TestWorkerEmitsResult(t *testing.T) {
 		if got := len(res.Chunk.Sections); got != 24 {
 			t.Fatalf("generated chunk has %d sections, want 24", got)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
+		// Under the GEN2-02 seam a single Request(C) now requires C's 8 neighbors to be
+		// terrain-generated before C decorates + emits (9 generations, not 1). A generous
+		// timeout absorbs CPU starvation when this runs alongside the heavy noise-gen tests
+		// in the full -count=1 suite (the work itself completes in well under a second).
 		t.Fatal("timed out waiting for ChunkResult")
 	}
 }
