@@ -59,6 +59,12 @@ func (q *fluidScheduleQueue) drainDue(gametime int64) []scheduledFluidTick {
 	return bucket
 }
 
+// empty reports whether no ticks are scheduled (every bucket drained). Used by tests to drain
+// the queue to a fixed point and prove termination.
+func (q *fluidScheduleQueue) empty() bool {
+	return len(q.buckets) == 0
+}
+
 // packPos packs a block position into a single int64 for a deterministic, allocation-free sort
 // key (and a stable ordering across runs). The 26/12/26-bit field split mirrors the vanilla
 // BlockPos packing (net.minecraft.core.BlockPos.asLong) so the ordering is well-defined across
