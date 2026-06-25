@@ -268,7 +268,11 @@ func TestFlushOutboundBatches(t *testing.T) {
 	c := NewClient(server, 256)
 	c.Start(make(chan Intent, 16)) // start the writeLoop so enqueued packets reach the pipe
 
-	p := &tickPlayer{client: c, center: level.ChunkPos{0, 0}, viewDist: serverViewDistance, sentChunks: map[level.ChunkPos]bool{}}
+	// A small radius (minViewDistance) keeps this framing/batch test within the
+	// synchronous test pipe's capacity; the full serverViewDistance (10 => 441 columns)
+	// is throughput, not framing, and would overflow the unbuffered pipe. The batch
+	// shape (center-out, send-once) is identical at any radius.
+	p := &tickPlayer{client: c, center: level.ChunkPos{0, 0}, viewDist: minViewDistance, sentChunks: map[level.ChunkPos]bool{}}
 	loop.players = []*tickPlayer{p}
 
 	// Make the whole ring Ready directly on the manager (the owner) so the flush has
@@ -416,10 +420,12 @@ func TestRingFollowsOnMove(t *testing.T) {
 	c := NewClient(server, 256)
 	c.Start(make(chan Intent, 16))
 
+	// minViewDistance keeps the ring (25 columns) within the synchronous test pipe's
+	// capacity; this test asserts the re-center/follow framing, which is radius-independent.
 	p := &tickPlayer{
 		client:            c,
 		center:            level.ChunkPos{0, 0},
-		viewDist:          serverViewDistance,
+		viewDist:          minViewDistance,
 		sentChunks:        map[level.ChunkPos]bool{},
 		confirmedTeleport: true,
 	}

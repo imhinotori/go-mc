@@ -12,12 +12,12 @@ import (
 // chunks center-out, batched) live in tick_phases.go and call into these helpers. All
 // of it runs on the tick owner goroutine over tick-owned state.
 
-// serverViewDistance is the FIXED server clamp for v1 (radius 2 chunks). It bounds the
-// needed-ring to (2r+1)^2 = 25 columns regardless of what a client requests, so an
-// untrusted client cannot make the chunk-generation/send set unbounded (threat T-4-01).
-// Radius 2 satisfies "the player stands on solid ground with a surrounding ring"
-// (04-RESEARCH A4); a later phase can raise it once load is profiled.
-const serverViewDistance = 2
+// serverViewDistance is the FIXED server clamp (radius 10 chunks = the vanilla default
+// view-distance of 10). It bounds the needed-ring to (2r+1)^2 = 441 columns regardless
+// of what a client requests, so an untrusted client cannot make the chunk-generation/
+// send set unbounded (threat T-4-01). v1's radius-2 placeholder (04-RESEARCH A4) is
+// raised to the vanilla default now that the worldgen pipeline is profiled (~88ms/chunk).
+const serverViewDistance = 10
 
 // minViewDistance is the floor a (future) client-supplied view distance is raised to,
 // so a client asking for 0/1 still gets a usable square around itself.
