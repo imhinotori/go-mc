@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2
 milestone_name: worldgen-features-structures
 status: executing
-stopped_at: Completed 11-01-PLAN.md
-last_updated: "2026-06-25T09:02:45.097Z"
+stopped_at: Completed 13-03-PLAN.md
+last_updated: "2026-06-25T09:40:53.811Z"
 last_activity: 2026-06-25
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 13
-  completed_plans: 11
-  percent: 85
+  completed_plans: 12
+  percent: 92
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-06-23)
 ## Current Position
 
 Phase: 13 (Trees / Dungeon / Features Visual Gate) — IN PROGRESS
-Plan: 2 of 4 complete (13-01 done; 13-02 next)
+Plan: 3 of 4 complete (13-01 done; 13-02 next)
 Status: Ready to execute
 Last activity: 2026-06-25
 
@@ -74,7 +74,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [█████████░] 85%
+Progress: [█████████░] 92%
 
 ## Performance Metrics
 
@@ -141,6 +141,7 @@ Progress: [█████████░] 85%
 | Phase 12 P02 | 58 min | 2 tasks | 6 files |
 | Phase 13 P01 | 38min | 2 tasks | 5 files |
 | Phase 13 P02 | 2h | 2 tasks | 10 files |
+| Phase 13 P03 | 2h | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -235,6 +236,9 @@ Recent decisions affecting current work:
 - [Phase ?]: 13-01: TreeConfiguration carries an OPTIONAL nil root_placer field + PlaceTree hook so 13-03 plugs mangrove without re-touching the struct
 - [Phase ?]: 13-01: conservative validTreePos (air-or-leaves replaceable, logs not) — never a false placement over solid ground
 - [Phase ?]: 13-02: ported the common overworld trunk/foliage placer roster + the common TreeDecorator subsystem; corrected BlobFoliage to the jar-exact corner nextInt(2) draw and reworked PlaceTree to the 26.2 doPlace order
+- [Phase 13]: 13-03: PlaceTree reworked to the exact 26.2 doPlace order so trunk_offset_y (RootPlacer.getTrunkOrigin) sits between foliageRadius and the validity scan; the scan moved into PlaceTree
+- [Phase 13]: 13-03: randomized_int_state_provider sets the int property by re-resolving the source {Name,Properties} with the property overridden (the source is always simple_state_provider in the data)
+- [Phase 13]: 13-03: PaleMoss ground pale_moss_patch is a nested vegetation feature needing the chunk generator; the gate nextFloat is consumed but the patch is not placed (Known Stub); the trunk/leaves pale_hanging_moss drape is faithful
 
 ### Pending Todos
 
@@ -261,7 +265,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-25T09:02:16.983Z
-Stopped at: Completed 11-01-PLAN.md
+Last session: 2026-06-25T09:39:19.438Z
+Stopped at: Completed 13-03-PLAN.md
 Resume file: None
 Next: v1 is done end-to-end (login → biome-varied noise world with caves/ravines/aquifers/ore-veins → entities/AI/inventory/combat → async-optimized, -race clean). The next milestone is DEEPER GAMEPLAY (user-flagged, deferred): items/crafting, more mobs + their ported AI, block mechanics (redstone/farming/fluids), and the Phase-9 v2 deferrals (ONLINE-01/02 auth+encryption, REGION-01 Folia-style regionization, trees/vegetation/structures as feature+structure subsystems). Run /gsd-new-milestone to scope it. Deferred-still-open: KeepAlive double-leave hardening (Phase 3, surfaces when real timeout-driven disconnects land).
