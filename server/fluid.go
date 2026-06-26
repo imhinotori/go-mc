@@ -217,18 +217,36 @@ func (t *TickLoop) fluidTick(pos pk.Position) {
 		if !sameFluid(cur, next) {
 			if !next.isWater {
 				// drained to nothing -> air
-				t.world.SetBlock(pos, airStateID(), dimMinY)
+				t.setFluidBlock(pos, airStateID())
 				// neighbors may now need to re-flow into/around this newly-empty cell
 				t.scheduleNeighbors(pos)
 				return
 			}
-			t.world.SetBlock(pos, encodeFluid(next), dimMinY)
+			t.setFluidBlock(pos, encodeFluid(next))
 			t.scheduleFluidTick(pos)
 			cur = next
 		}
 	}
 
 	t.spread(pos, cur)
+}
+
+// setFluidBlock is the fluid sim's sole world-mutation primitive: it writes the new state AND
+// broadcasts a ClientboundBlockUpdate to every player watching the column. Vanilla's
+// Level.setBlock(pos, state, UPDATE_CLIENTS) does both — the fluid tick mutated the server world
+// but the CLIENT never saw it, so water that flowed (filled a gap, drained, changed level) was
+// invisible: the client kept rendering the chunk's load-time state. This made the fluid sim look
+// inert from the client even though the server was flowing correctly (and made flowing/falling
+// water never animate). Routing every fluid write through here keeps server and client in sync,
+// exactly as a break/place edit does via reconcileEdit→broadcastBlockUpdate. Cite:
+// net.minecraft.world.level.Level.setBlock with Block.UPDATE_CLIENTS. Returns whether the write
+// changed the cell (mirrors world.SetBlock) so callers can gate on a real change.
+func (t *TickLoop) setFluidBlock(pos pk.Position, state block.StateID) bool {
+	if !t.world.SetBlock(pos, state, dimMinY) {
+		return false // no change (already this state / unloaded): nothing to broadcast
+	}
+	t.broadcastBlockUpdate(pos, state)
+	return true
 }
 
 // sameFluid reports whether two fluid states encode the same wire block (so no write/reschedule
@@ -438,7 +456,7 @@ func (t *TickLoop) spreadTo(pos pk.Position, f fluidState) {
 	if sameFluid(cur, f) {
 		return // no change: do not re-schedule (prevents infinite oscillation)
 	}
-	if t.world.SetBlock(pos, encodeFluid(f), dimMinY) {
+	if t.setFluidBlock(pos, encodeFluid(f)) {
 		udebug("fluid", "spreadTo (%d,%d,%d) amount=%d falling=%v source=%v", pos.X, pos.Y, pos.Z, f.amount, f.falling, f.source)
 		t.scheduleFluidTick(pos)
 	}
