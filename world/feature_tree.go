@@ -72,16 +72,13 @@ func treeBody(
 	// TreeFeature.place: draw the trunk height (getTreeHeight — the TWO nextInt draws), then
 	// hand off to PlaceTree, which runs the EXACT jar doPlace order — foliageHeight,
 	// foliageRadius, trunk_offset_y (root placer), the footprint scan (getMaxFreeTreeHeight),
+	// then the doPlace abort (freeHeight >= treeHeight, else the minClippedHeight escape),
 	// then roots -> trunk -> foliage -> decorators. PlaceTree internalises the scan so the
-	// trunk_offset_y draw sits between foliageRadius and the scan (the jar order); it aborts
-	// (no blocks placed) when the clamped free height is below minTreeHeight — the draws have
-	// already happened (jar-faithful), so the selector's per-feature seed is unaffected.
+	// trunk_offset_y draw sits between foliageRadius and the scan (the jar order). On abort
+	// the draws have already happened (jar-faithful), so the selector's per-feature seed is
+	// unaffected. The abort is the literal vanilla guard: a column without full vertical
+	// room (blocked by solid ground or a vine) places NOTHING — never a partial / stacked
+	// tree.
 	treeHeight := cfg.TrunkHeight(rng)
-	return feature.PlaceTree(set, read, rng, cfg, treeHeight, minTreeHeight, origin)
+	return feature.PlaceTree(set, read, rng, cfg, treeHeight, origin)
 }
-
-// minTreeHeight is the conservative floor below which the body declines to place a tree
-// (a 1-log stub is not a tree). Vanilla aborts when getMaxFreeTreeHeight < treeHeight only
-// for the strict case; the overworld trees always have full room on flat ground, so this
-// floor only triggers against a ceiling/overhang — where a no-tree is the right outcome.
-const minTreeHeight = 2

@@ -407,30 +407,127 @@ func TestRootPlacerFieldOptional(t *testing.T) {
 }
 
 // PlaceTree must no-op the root placer when nil (oak/birch) and place the trunk+foliage.
-// It also proves PlaceTree's minFree floor (no room -> nothing placed). PlaceTree now runs
-// the footprint scan internally; a minFree above the achievable free height aborts (the
-// jar doPlace order: foliage draws -> trunk_offset_y -> scan -> roots -> trunk).
+// It also proves the EXACT TreeFeature.doPlace abort: a column WITHOUT full vertical room
+// (freeHeight < treeHeight, oak's minimum_size has no min_clipped_height) places NOTHING;
+// a clear column places. PlaceTree runs the footprint scan internally (the jar doPlace
+// order: foliage draws -> trunk_offset_y -> scan -> abort -> roots -> trunk).
 func TestPlaceTreeRootHookNoOp(t *testing.T) {
+	origin := TreePos{X: 4, Y: 64, Z: 4}
+
+	// Blocked above: a solid block (stone is NOT isFree) low in the trunk column makes
+	// getMaxFreeTreeHeight return i-2 < treeHeight -> oak (no min_clipped_height) aborts.
+	{
+		cfg := oakConfig(t)
+		mw := newMapWorld()
+		cfg = cfg.BelowTrunkWithExisting(mw.read)
+		// Place a stone ceiling 3 layers up — within the treeHeight column.
+		stone := block.ToStateID[block.Stone{}]
+		mw.set(origin.X, origin.Y+3, origin.Z, stone)
+		if PlaceTree(mw.set, mw.read, levelgen.NewWorldgenRandom(1), cfg, 5, origin) {
+			t.Fatalf("PlaceTree with a blocked column placed something (should abort)")
+		}
+		// Only the pre-placed stone may remain — no tree blocks written.
+		if len(mw.blocks) != 1 {
+			t.Fatalf("PlaceTree on a blocked column wrote %d blocks (want 0 tree blocks)", len(mw.blocks)-1)
+		}
+	}
+
+	// Clear column: full vertical room -> trunk + foliage; rootPlacer nil means no root
+	// blocks / no panic.
+	{
+		cfg := oakConfig(t)
+		mw := newMapWorld()
+		cfg = cfg.BelowTrunkWithExisting(mw.read)
+		if !PlaceTree(mw.set, mw.read, levelgen.NewWorldgenRandom(1), cfg, 5, origin) {
+			t.Fatalf("PlaceTree placed nothing for a valid (clear) tree")
+		}
+		oakLog := block.ToStateID[block.OakLog{Axis: block.Y}]
+		if mw.read(origin.X, origin.Y, origin.Z) != oakLog {
+			t.Fatalf("PlaceTree did not place the trunk base log")
+		}
+	}
+}
+
+// TestPlaceTreeNoStacking is the regression for the WORLDGEN free-space abort bug: two
+// trees attempted at overlapping positions — the SECOND, whose trunk column is now
+// obstructed by solid terrain (a stone block the first tree's footprint left no room
+// around), must ABORT (place NOTHING). The old minFree=2 floor let a 6-tall tree plant
+// through only 2 free layers, stacking trees through one another; the vanilla
+// `freeHeight >= treeHeight` abort forbids it.
+func TestPlaceTreeNoStacking(t *testing.T) {
+	origin := TreePos{X: 8, Y: 70, Z: 8}
+
 	cfg := oakConfig(t)
 	mw := newMapWorld()
 	cfg = cfg.BelowTrunkWithExisting(mw.read)
-	origin := TreePos{X: 4, Y: 64, Z: 4}
 
-	// minFree above the clear-world free height (treeHeight 5) -> nothing placed.
-	if PlaceTree(mw.set, mw.read, levelgen.NewWorldgenRandom(1), cfg, 5, 100, origin) {
-		t.Fatalf("PlaceTree with minFree above the achievable height placed something")
-	}
-	if len(mw.blocks) != 0 {
-		t.Fatalf("PlaceTree with unmet minFree wrote %d blocks", len(mw.blocks))
+	// First tree: a clear column -> a full oak places.
+	if !PlaceTree(mw.set, mw.read, levelgen.NewWorldgenRandom(7), cfg, 5, origin) {
+		t.Fatalf("first tree failed to place in a clear column")
 	}
 
-	// minFree 2 -> trunk + foliage; rootPlacer nil means no root blocks / no panic.
-	if !PlaceTree(mw.set, mw.read, levelgen.NewWorldgenRandom(1), cfg, 5, 2, origin) {
-		t.Fatalf("PlaceTree placed nothing for a valid tree")
+	// Second tree, overlapping the first but shifted, into a column now capped by solid
+	// stone (NOT isFree) two layers up: getMaxFreeTreeHeight returns i-2 = 0 < treeHeight,
+	// and oak has no min_clipped_height -> abort, nothing written.
+	cfg2 := oakConfig(t)
+	cfg2 = cfg2.BelowTrunkWithExisting(mw.read)
+	stackOrigin := TreePos{X: 9, Y: 70, Z: 9}
+	mw.set(stackOrigin.X, stackOrigin.Y+2, stackOrigin.Z, block.ToStateID[block.Stone{}])
+
+	blocksBefore := len(mw.blocks)
+	if PlaceTree(mw.set, mw.read, levelgen.NewWorldgenRandom(7), cfg2, 5, stackOrigin) {
+		t.Fatalf("second (stacking) tree placed — trees must not stack through occupied space")
 	}
-	oakLog := block.ToStateID[block.OakLog{Axis: block.Y}]
-	if mw.read(origin.X, origin.Y, origin.Z) != oakLog {
-		t.Fatalf("PlaceTree did not place the trunk base log")
+	if len(mw.blocks) != blocksBefore {
+		t.Fatalf("aborted stacking tree still wrote %d blocks", len(mw.blocks)-blocksBefore)
+	}
+}
+
+// TestMaxFreeTreeHeightIMinus2 pins the EXACT TreeFeature.getMaxFreeTreeHeight numerics:
+// the FIRST blocked layer returns i-2 (never i-1, no `i>=treeHeight` special case), and a
+// vine blocks the layer (when !ignoreVines) even though vine reads as isFree.
+func TestMaxFreeTreeHeightIMinus2(t *testing.T) {
+	cfg := oakConfig(t)
+	origin := TreePos{X: 0, Y: 64, Z: 0}
+
+	// (a) fully clear column -> returns treeHeight.
+	mw := newMapWorld()
+	if got := maxFreeTreeHeight(mw.read, cfg, origin, 5); got != 5 {
+		t.Fatalf("clear column: maxFreeTreeHeight = %d, want treeHeight 5", got)
+	}
+
+	// (b) solid stone at layer i=4 (origin.Y+4) -> first blocked layer is 4 -> i-2 = 2.
+	mw = newMapWorld()
+	mw.set(origin.X, origin.Y+4, origin.Z, block.ToStateID[block.Stone{}])
+	if got := maxFreeTreeHeight(mw.read, cfg, origin, 5); got != 2 {
+		t.Fatalf("stone at i=4: maxFreeTreeHeight = %d, want i-2 = 2", got)
+	}
+
+	// (c) solid stone at layer i=1 -> i-2 = -1 (negative is the literal jar result; the
+	// doPlace abort then fires since -1 < treeHeight). Proves NO `i>=treeHeight` clamp.
+	mw = newMapWorld()
+	mw.set(origin.X, origin.Y+1, origin.Z, block.ToStateID[block.Stone{}])
+	if got := maxFreeTreeHeight(mw.read, cfg, origin, 5); got != -1 {
+		t.Fatalf("stone at i=1: maxFreeTreeHeight = %d, want i-2 = -1", got)
+	}
+
+	// (d) vine at layer i=3 with !ignoreVines -> vine blocks -> i-2 = 1. Oak's real config
+	// has ignore_vines=true, so flip a copy to exercise the guard's blocking branch.
+	mw = newMapWorld()
+	mw.set(origin.X, origin.Y+3, origin.Z, block.ToStateID[block.Vine{}])
+	cfgVines := *cfg
+	cfgVines.ignoreVines = false
+	if got := maxFreeTreeHeight(mw.read, &cfgVines, origin, 5); got != 1 {
+		t.Fatalf("vine at i=3 (!ignoreVines): maxFreeTreeHeight = %d, want i-2 = 1", got)
+	}
+
+	// (e) same vine but ignoreVines=true (oak's real value) -> vine is isFree
+	// (REPLACEABLE_BY_TREES) and the vine guard is skipped -> not blocked -> treeHeight.
+	if !cfg.ignoreVines {
+		t.Fatalf("oak config unexpectedly has ignore_vines=false")
+	}
+	if got := maxFreeTreeHeight(mw.read, cfg, origin, 5); got != 5 {
+		t.Fatalf("vine at i=3 (ignoreVines): maxFreeTreeHeight = %d, want treeHeight 5", got)
 	}
 }
 

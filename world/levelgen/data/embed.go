@@ -40,6 +40,7 @@ package data
 
 import (
 	"embed"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"path"
@@ -121,6 +122,67 @@ func CarverReplaceables() ([]byte, error) {
 		return nil, fmt.Errorf("worldgen data: overworld_carver_replaceables tag not found: %w", err)
 	}
 	return b, nil
+}
+
+// BlockTag resolves a block tag id (with or without the "minecraft:" prefix, e.g.
+// "replaceable_by_trees" or "minecraft:logs") to its FLAT set of block ids,
+// recursively expanding nested "#minecraft:..." tag references the vanilla tag
+// JSONs use. It mirrors how the game resolves a TagKey<Block> to its member blocks
+// for predicates like TreeFeature.validTreePos (#minecraft:replaceable_by_trees) and
+// TrunkPlacer.isFree (#minecraft:logs). The tag JSONs are the same data/minecraft/
+// tags/block/*.json files the 26.2 jar ships (extracted + embedded), so the
+// membership is authoritative — never hand-transcribed.
+func BlockTag(id string) (map[string]bool, error) {
+	out := map[string]bool{}
+	if err := resolveBlockTag(id, out, map[string]bool{}); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// resolveBlockTag recursively expands a block tag into `out`. `seen` guards against
+// the (theoretically possible) cyclic tag reference so resolution always terminates.
+func resolveBlockTag(id string, out, seen map[string]bool) error {
+	name := stripTagNS(id)
+	if seen[name] {
+		return nil
+	}
+	seen[name] = true
+
+	b, err := FS.ReadFile("tags/block/" + name + ".json")
+	if err != nil {
+		return fmt.Errorf("worldgen data: block tag %q not found: %w", id, err)
+	}
+	var doc struct {
+		Values []string `json:"values"`
+	}
+	if err := json.Unmarshal(b, &doc); err != nil {
+		return fmt.Errorf("worldgen data: block tag %q decode: %w", id, err)
+	}
+	for _, v := range doc.Values {
+		if len(v) > 0 && v[0] == '#' {
+			// Nested tag reference (e.g. "#minecraft:leaves") — expand it.
+			if err := resolveBlockTag(v[1:], out, seen); err != nil {
+				return err
+			}
+			continue
+		}
+		// A plain block id — normalize to the "minecraft:" form the block roster uses.
+		if stripTagNS(v) == v {
+			v = "minecraft:" + v
+		}
+		out[v] = true
+	}
+	return nil
+}
+
+// stripTagNS drops a leading "minecraft:" namespace from a tag/block id.
+func stripTagNS(id string) string {
+	const ns = "minecraft:"
+	if len(id) >= len(ns) && id[:len(ns)] == ns {
+		return id[len(ns):]
+	}
+	return id
 }
 
 // BiomeParameters returns the embedded overworld multi-noise biome parameter list

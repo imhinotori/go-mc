@@ -35,6 +35,7 @@ import (
 
 	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/world/levelgen"
+	"github.com/imhinotori/sulfur/world/levelgen/data"
 )
 
 // ---- the pure placement callbacks ----
@@ -86,11 +87,17 @@ type FoliageAttachment struct {
 // validity scan column. oak/birch carry the BARE-DEFAULT two_layers_feature_size (no
 // limit/lower/upper params), so the defaults below apply.
 
-// featureSize is FeatureSize.getSizeAtLayer (the validity-scan radius at a given depth).
+// featureSize is FeatureSize (the validity-scan radius + the clipped-height escape).
 type featureSize interface {
 	// getSizeAtLayer returns the allowed horizontal radius at vertical `depth` from the
 	// trunk base, given the total tree `height`.
 	getSizeAtLayer(height, depth int) int
+	// minClippedHeight ports FeatureSize.minClippedHeight (Optional<Integer>): the
+	// minimum free height at which a tree taller than the scanned room may still place a
+	// clipped (shorter) tree. Returns (value, true) when present, (0, false) when empty.
+	// Empty for the common overworld two_layers_feature_size trees -> a too-short column
+	// aborts (the anti-stack guard); present only on the trees that allow clipping.
+	minClippedHeight() (int, bool)
 }
 
 // twoLayersFeatureSize ports TwoLayersFeatureSize: a `limit` rows from the top use
@@ -100,8 +107,10 @@ type twoLayersFeatureSize struct {
 	limit     int
 	lowerSize int
 	upperSize int
-	// minClippedHeight is FeatureSize.minClippedHeight (Optional<Integer>); absent for
-	// oak/birch — left 0/disabled.
+	// minClipped is FeatureSize.minClippedHeight (Optional<Integer>); absent for
+	// oak/birch — clippedSet=false.
+	minClipped    int
+	minClippedSet bool
 }
 
 // getSizeAtLayer ports TwoLayersFeatureSize.getSizeAtHeight: depth < limit -> lowerSize,
@@ -114,6 +123,8 @@ func (s twoLayersFeatureSize) getSizeAtLayer(_, depth int) int {
 	return s.upperSize
 }
 
+func (s twoLayersFeatureSize) minClippedHeight() (int, bool) { return s.minClipped, s.minClippedSet }
+
 // threeLayersFeatureSize ports ThreeLayersFeatureSize: lowerSize for the first `limit`
 // layers, upperSize for the top `upperLimit` layers (depth >= height - upperLimit), and
 // middleSize between. dark_oak/mega use it.
@@ -123,6 +134,9 @@ type threeLayersFeatureSize struct {
 	lowerSize  int
 	middleSize int
 	upperSize  int
+	// minClipped is FeatureSize.minClippedHeight (Optional<Integer>).
+	minClipped    int
+	minClippedSet bool
 }
 
 // getSizeAtLayer ports ThreeLayersFeatureSize.getSizeAtHeight: depth < limit -> lowerSize;
@@ -137,6 +151,8 @@ func (s threeLayersFeatureSize) getSizeAtLayer(height, depth int) int {
 	return s.middleSize
 }
 
+func (s threeLayersFeatureSize) minClippedHeight() (int, bool) { return s.minClipped, s.minClippedSet }
+
 // parseFeatureSize decodes a minimum_size envelope. Only two_layers_feature_size (the
 // oak/birch default) is ported here; three_layers_feature_size + the parameterized
 // variants land with 13-02's dark_oak/pale_oak placers. An unported size errors loudly.
@@ -145,12 +161,13 @@ func parseFeatureSize(raw json.RawMessage) (featureSize, error) {
 		return nil, fmt.Errorf("feature: empty minimum_size")
 	}
 	var j struct {
-		Type       string `json:"type"`
-		Limit      *int   `json:"limit"`
-		UpperLimit *int   `json:"upper_limit"`
-		LowerSize  *int   `json:"lower_size"`
-		MiddleSize *int   `json:"middle_size"`
-		UpperSize  *int   `json:"upper_size"`
+		Type             string `json:"type"`
+		Limit            *int   `json:"limit"`
+		UpperLimit       *int   `json:"upper_limit"`
+		LowerSize        *int   `json:"lower_size"`
+		MiddleSize       *int   `json:"middle_size"`
+		UpperSize        *int   `json:"upper_size"`
+		MinClippedHeight *int   `json:"min_clipped_height"`
 	}
 	if err := json.Unmarshal(raw, &j); err != nil {
 		return nil, fmt.Errorf("feature: minimum_size: %w", err)
@@ -168,6 +185,9 @@ func parseFeatureSize(raw json.RawMessage) (featureSize, error) {
 		}
 		if j.UpperSize != nil {
 			s.upperSize = *j.UpperSize
+		}
+		if j.MinClippedHeight != nil {
+			s.minClipped, s.minClippedSet = *j.MinClippedHeight, true
 		}
 		return s, nil
 	case "three_layers_feature_size":
@@ -188,6 +208,9 @@ func parseFeatureSize(raw json.RawMessage) (featureSize, error) {
 		}
 		if j.UpperSize != nil {
 			s.upperSize = *j.UpperSize
+		}
+		if j.MinClippedHeight != nil {
+			s.minClipped, s.minClippedSet = *j.MinClippedHeight, true
 		}
 		return s, nil
 	default:
@@ -950,10 +973,11 @@ func (cfg *TreeConfiguration) BelowTrunkWithExisting(read ReadFn) *TreeConfigura
 //
 // NOTE the foliageHeight/foliageRadius/trunk_offset_y draws happen BEFORE the scan — the JAR
 // truth (TreeFeature.doPlace). For oak/birch (constant providers, no root) these are 0-draw
-// so the oak sequence is unchanged. `minFree` is the body's stub floor: when the clamped
-// free height is below it nothing is placed (the draws already happened — jar-faithful).
+// so the oak sequence is unchanged. The abort uses the EXACT doPlace condition
+// (freeHeight >= treeHeight, else the minClippedHeight escape) — the draws have already
+// happened when an abort returns false, so the selector per-feature seed is unaffected.
 // Returns whether any block landed.
-func PlaceTree(set SetBlockFn, read ReadFn, rng levelgen.RandomSource, cfg *TreeConfiguration, treeHeight, minFree int, pos TreePos) bool {
+func PlaceTree(set SetBlockFn, read ReadFn, rng levelgen.RandomSource, cfg *TreeConfiguration, treeHeight int, pos TreePos) bool {
 	// Collect placed log/leaf positions for the decorators (a per-call accum on a copy so
 	// the shared cfg stays immutable).
 	c := *cfg
@@ -973,8 +997,22 @@ func PlaceTree(set SetBlockFn, read ReadFn, rng levelgen.RandomSource, cfg *Tree
 
 	// (5) the validity scan from the trunk origin (NO rng).
 	freeHeight := maxFreeTreeHeight(read, cfg, trunkOrigin, treeHeight)
-	if freeHeight < minFree {
-		return false
+
+	// EXACT TreeFeature.doPlace abort condition (javap, offsets 154-180):
+	//
+	//	if (freeHeight >= treeHeight) { place full-height }
+	//	else if (minClippedHeight.isEmpty() || freeHeight < minClippedHeight) return false;
+	//	// else: place a clipped (shorter) tree of height freeHeight
+	//
+	// For the common overworld trees minClippedHeight is EMPTY, so any freeHeight <
+	// treeHeight aborts — this is THE anti-stack guard: a column blocked above (by solid
+	// ground, or a vine without ignore_vines) yields freeHeight < treeHeight and places
+	// NOTHING, instead of stacking a partial tree.
+	if freeHeight < treeHeight {
+		clip, ok := cfg.minimumSize.minClippedHeight()
+		if !ok || freeHeight < clip {
+			return false
+		}
 	}
 
 	// (6) root placer: present -> runs AFTER the scan, growing roots DOWN from the anchor
@@ -1018,16 +1056,19 @@ func PlaceTree(set SetBlockFn, read ReadFn, rng levelgen.RandomSource, cfg *Tree
 // read scan, matching the jar. Lives here (not in `world`) so the trunk_offset_y draw can
 // sit BETWEEN foliageRadius and the scan (the jar doPlace order).
 func maxFreeTreeHeight(read ReadFn, cfg *TreeConfiguration, origin TreePos, treeHeight int) int {
+	// EXACT TreeFeature.getMaxFreeTreeHeight (javap): loop i = 0..treeHeight+1, scan the
+	// (2*size+1)^2 trunk footprint at each layer, and on the FIRST position that is not
+	// free — OR is a vine when !ignoreVines — return i-2 (always i-2: no `i>=treeHeight`
+	// special case). If nothing blocks through treeHeight+1, return treeHeight.
 	for depth := 0; depth <= treeHeight+1; depth++ {
 		size := cfg.SizeAtLayer(treeHeight, depth)
 		baseY := origin.Y + depth
 		for dx := -size; dx <= size; dx++ {
 			for dz := -size; dz <= size; dz++ {
-				if !cfg.PosFree(read, TreePos{X: origin.X + dx, Y: baseY, Z: origin.Z + dz}) {
-					if depth >= treeHeight {
-						return treeHeight
-					}
-					return depth - 1
+				p := TreePos{X: origin.X + dx, Y: baseY, Z: origin.Z + dz}
+				// !isFree(p) || (!ignoreVines && isVine(p)) -> blocked layer.
+				if !treeIsFree(read, p) || (!cfg.ignoreVines && isVine(read, p)) {
+					return depth - 2
 				}
 			}
 		}
@@ -1037,41 +1078,72 @@ func maxFreeTreeHeight(read ReadFn, cfg *TreeConfiguration, origin TreePos, tree
 
 // ---- shared helpers ----
 
-// treePosFree ports TreeFeature.isFree / validTreePos (the conservative readable-state
-// gate, 12-02 precedent): a position is free for a log/leaf write iff the existing block
-// is air or another leaf/log (replaceable worldgen surface). It never overwrites solid
-// ground — a documented-conservative test that never makes a false placement.
+// treePosFree ports TreeFeature.validTreePos (javap TreeFeature.lambda$validTreePos$0):
+//
+//	validTreePos(pos) = state.isAir() || state.is(BlockTags.REPLACEABLE_BY_TREES)
+//
+// This is the predicate placeLog / tryPlaceLeaf gate on (TrunkPlacer.placeLog calls
+// validTreePos; FoliagePlacer.tryPlaceLeaf calls validTreePos). It is NOT the scan's
+// isFree (that one ALSO allows logs — see treeIsFree). REPLACEABLE_BY_TREES is the
+// vanilla tag (leaves, small_flowers, grass/ferns, vine, water, ...) resolved from the
+// embedded data/minecraft/tags/block/replaceable_by_trees.json — authoritative, not
+// hand-transcribed.
 func treePosFree(read ReadFn, pos TreePos) bool {
 	st := read(pos.X, pos.Y, pos.Z)
-	return block.IsAir(st) || isReplaceableByTree(st)
+	return block.IsAir(st) || treeReplaceableStates[st]
 }
 
-// isReplaceableByTree reports whether an existing block may be overwritten by a tree's
-// logs/leaves: air-or-leaves (TreeFeature.validTreePos: air, leaves, replaceable plants).
-// Conservative — only air + the leaf set, the safe subset (a future widening adds the
-// replaceable-plant tag without changing a single existing placement).
-func isReplaceableByTree(st block.StateID) bool {
-	return treeReplaceableStates[st]
+// treeIsFree ports TrunkPlacer.isFree (javap TrunkPlacer.isFree):
+//
+//	isFree(pos) = validTreePos(pos) || state.is(BlockTags.LOGS)
+//
+// This is the predicate getMaxFreeTreeHeight uses for its column scan. It is strictly
+// WIDER than validTreePos: an existing log counts as free (so a trunk may grow up
+// alongside / through logs), but leaves are free only because REPLACEABLE_BY_TREES
+// contains #minecraft:leaves. Solid ground (dirt, stone, planks, ...) is NOT free, so a
+// column blocked by solid material short-circuits the scan -> i-2 -> abort.
+func treeIsFree(read ReadFn, pos TreePos) bool {
+	st := read(pos.X, pos.Y, pos.Z)
+	return block.IsAir(st) || treeReplaceableStates[st] || treeLogStates[st]
 }
 
-// treeReplaceableStates is the set of leaf state ids a tree may grow through (so two
-// trees' foliage may interpenetrate, matching vanilla validTreePos). Built lazily on
-// first use from the *_leaves blocks. Logs are NOT replaceable (a trunk does not grow
-// through another trunk).
-var treeReplaceableStates = buildTreeReplaceableStates()
+// isVine ports TreeFeature.isVine (javap TreeFeature.lambda$isVine$0):
+//
+//	isVine(pos) = state.is(Blocks.VINE)
+//
+// getMaxFreeTreeHeight treats a vine as BLOCKING (unless cfg.ignoreVines) even though
+// vine is in REPLACEABLE_BY_TREES and would otherwise read as free — the exact
+// `!isFree(pos) || (!ignoreVines && isVine(pos))` scan guard.
+func isVine(read ReadFn, pos TreePos) bool {
+	return treeVineStates[read(pos.X, pos.Y, pos.Z)]
+}
 
-func buildTreeReplaceableStates() map[block.StateID]bool {
-	leafBlocks := map[string]bool{
-		"minecraft:oak_leaves": true, "minecraft:birch_leaves": true,
-		"minecraft:spruce_leaves": true, "minecraft:jungle_leaves": true,
-		"minecraft:acacia_leaves": true, "minecraft:dark_oak_leaves": true,
-		"minecraft:cherry_leaves": true, "minecraft:pale_oak_leaves": true,
-		"minecraft:mangrove_leaves": true, "minecraft:azalea_leaves": true,
-		"minecraft:flowering_azalea_leaves": true,
+// treeReplaceableStates is the flat set of state ids in #minecraft:replaceable_by_trees,
+// treeLogStates the flat set in #minecraft:logs, treeVineStates the minecraft:vine
+// states. All three are built once from the embedded vanilla block tags so membership is
+// jar-authoritative (TreeFeature.validTreePos / TrunkPlacer.isFree / TreeFeature.isVine).
+var (
+	treeReplaceableStates = buildTagStateSet("replaceable_by_trees")
+	treeLogStates         = buildTagStateSet("logs")
+	treeVineStates        = buildBlockStateSet(map[string]bool{"minecraft:vine": true})
+)
+
+// buildTagStateSet resolves the named block tag (recursively, via the embedded tag
+// JSONs) to the set of every block-state id whose block id is a tag member. A missing
+// tag is a build-data corruption -> panic at init (loud, not a silent wrong placement).
+func buildTagStateSet(tag string) map[block.StateID]bool {
+	members, err := data.BlockTag(tag)
+	if err != nil {
+		panic("tree: resolve block tag " + tag + ": " + err.Error())
 	}
+	return buildBlockStateSet(members)
+}
+
+// buildBlockStateSet maps a set of block ids to the set of all their state ids.
+func buildBlockStateSet(blockIDs map[string]bool) map[block.StateID]bool {
 	set := map[block.StateID]bool{}
 	for sid, b := range block.StateList {
-		if leafBlocks[b.ID()] {
+		if blockIDs[b.ID()] {
 			set[block.StateID(sid)] = true
 		}
 	}
