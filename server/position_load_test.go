@@ -55,7 +55,7 @@ func TestPositionLoadApplied(t *testing.T) {
 			}
 		}
 	}()
-	g := NewGameTick(inbound, loop, keep, -48)
+	g := NewGameTick(inbound, loop, keep, -48, SpawnPoint{X: 8.5, Y: -46, Z: 8.5})
 	g.SetWorldDir(dir)
 
 	server, client := newPipe(t)

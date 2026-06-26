@@ -404,28 +404,34 @@ func (g *NoiseGenerator) Generate(pos level.ChunkPos) *level.Chunk {
 	return decorateSingle(g, pos)
 }
 
-// SpawnSurfaceY derives the world-Y of the highest solid/fluid surface block for the
-// spawn column (the block-center of chunk (cx,cz) at local x=8, z=8) from a freshly
-// generated chunk's WorldSurface client heightmap. main.go feeds the returned value to
-// tick.SetSpawn / NewGameTick exactly as it fed Superflat's fixed SurfaceY, so the join
-// bootstrap (sendPlayBootstrap) places the player two blocks ABOVE this — standing on the
-// generated terrain instead of inside a hill or in the void over an ocean (T-9-26).
+// SpawnSurfaceY derives the world-Y of the top standable block for the SAFE spawn column —
+// it is the feet-Y of SpawnPos minus 1 (the block the player stands ON). main.go now prefers
+// SpawnPos (the full safe x/y/z) for the join/respawn placement; SpawnSurfaceY is retained as
+// the scalar fallback the tick's SetSpawn carries (and for any legacy single-Y caller).
 //
-// The WorldSurface heightmap stores, per column, the Y of the first block ABOVE the
-// highest non-air block, encoded relative to MinY. So the top solid/fluid block's world-Y
-// is (WorldSurface.Get(col) + MinY) - 1 — the same "top solid block world-Y" semantics
-// Superflat's SurfaceY carried. Pure over (seed, pos): it reuses GenerateTerrain (the
-// WorldSurface CLIENT heightmap is finalized by BuildSurface's writeClientHeightmaps
-// during GenerateTerrain's SURFACE step, so the spawn read needs only terrain, not
-// decoration — avoiding the redundant 3x3 neighbor generation a full Generate would do).
+// HISTORY (17-06): the OLD SpawnSurfaceY sampled the TERRAIN-ONLY WorldSurface heightmap
+// (GenerateTerrain) at the fixed (8,8) column and returned (WorldSurface.Get-1) — computing
+// the spawn Y BEFORE worldgen decoration/structures placed blocks in the spawn column, so a
+// tree trunk / vine / village house at (8,8) buried the player. That terrain-only read was
+// the spawn-inside-a-block bug. It now delegates to SpawnPos (the ported vanilla
+// PlayerSpawnFinder over the FULLY-DECORATED chunk), so the returned Y is the safe standable
+// floor; sendPlayBootstrap's "+2" then lands the player's feet two air blocks above it.
+//
+// If the whole spawn chunk is void/ocean (SpawnPos.Found == false), it falls back to the old
+// terrain WorldSurface-top at (8,8) so callers always get a sane scalar (the player floats on
+// the ocean surface rather than dropping into a nil result).
 func (g *NoiseGenerator) SpawnSurfaceY(pos level.ChunkPos) int {
+	if sp := g.SpawnPos(pos); sp.Found {
+		// sp.Y is the FEET air cell; the standable floor block is one below. SetSpawn/+2 then
+		// re-add 2, landing the player at sp.Y+1 — one above the original feet. To preserve the
+		// "+2 above the surface block" contract exactly, return the floor block world-Y (feet-1).
+		return int(sp.Y) - 1
+	}
+	// Void/ocean spawn chunk: fall back to the terrain WorldSurface top at the (8,8) center so
+	// the scalar spawn-Y stays sane (player floats on the ocean surface, not a nil).
 	ch := g.GenerateTerrain(pos)
-	// Block-center column of the chunk: local x=8, z=8 (the (8.5, _, 8.5) spawn point
-	// sendPlayBootstrap uses). Column index is (z&15)<<4 | (x&15) — matching the heightmap
-	// column order written by BuildSurface.
 	const spawnLocalX, spawnLocalZ = 8, 8
 	col := (spawnLocalZ << 4) | spawnLocalX
-	// first-air-above-top relative to MinY -> top solid/fluid block world-Y.
 	topAir := ch.HeightMaps.WorldSurface.Get(col) + g.minY
 	return topAir - 1
 }

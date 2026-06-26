@@ -1,6 +1,8 @@
 package server
 
 import (
+	"math"
+
 	"github.com/imhinotori/sulfur/chat"
 	"github.com/imhinotori/sulfur/data/packetid"
 	"github.com/imhinotori/sulfur/level"
@@ -150,12 +152,18 @@ func (t *TickLoop) performRespawn(p *tickPlayer) {
 	p.client.Send(setHealth(p.health, p.food, p.saturation))
 
 	// (3) Re-teleport to the world spawn with a fresh, tick-allocated teleport id, re-arming the
-	// confirm gate. The spawn is the world origin column center, two blocks above the surface —
-	// the same placement the join bootstrap uses (sendPlayBootstrap).
-	p.center = level.ChunkPos{0, 0}
-	spawnX := float64(int(p.center[0])<<4) + 8.5
-	spawnZ := float64(int(p.center[1])<<4) + 8.5
+	// confirm gate. 17-06 spawn-inside-a-block fix: prefer the SAFE spawn point (the ported vanilla
+	// PlayerSpawnFinder column over the FULLY-DECORATED spawn chunk — the air cell ON a standable
+	// floor, which may NOT be the (8,8) center when a tree/structure occupies it), the SAME
+	// placement the join bootstrap uses. Only when no safe point was wired (SetSpawnPoint never
+	// called — e.g. a SetSpawn-only unit test) does it fall back to the blind center column.
+	spawnX := 8.5 // chunk (0,0) block center
+	spawnZ := 8.5
 	spawnY := float64(t.spawnSurfaceY + 2)
+	if t.hasSpawnPoint {
+		spawnX, spawnY, spawnZ = t.spawnPoint.X, t.spawnPoint.Y, t.spawnPoint.Z
+	}
+	p.center = chunkCenterOf(int32(math.Floor(spawnX)), int32(math.Floor(spawnZ)))
 	teleportID := t.nextTeleportID()
 	p.awaitingTeleport = teleportID
 	p.confirmedTeleport = false

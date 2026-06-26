@@ -209,7 +209,7 @@ func TestJoinSequenceOrdering(t *testing.T) {
 	go keep.Run(ctx)
 	go worker.Run(ctx)
 
-	g := NewGameTick(inbound, loop, keep, -48)
+	g := NewGameTick(inbound, loop, keep, -48, SpawnPoint{X: 8.5, Y: -46, Z: 8.5})
 
 	server, client := newPipe(t)
 
@@ -451,7 +451,7 @@ func TestBootstrapTailOrdering(t *testing.T) {
 	go keep.Run(ctx)
 	go worker.Run(ctx)
 
-	g := NewGameTick(inbound, loop, keep, -48)
+	g := NewGameTick(inbound, loop, keep, -48, SpawnPoint{X: 8.5, Y: -46, Z: 8.5})
 
 	server, client := newPipe(t)
 
@@ -512,7 +512,7 @@ func TestBootstrapTailOrdering(t *testing.T) {
 // PlayerPosition AND into tickPlayer.awaitingTeleport, so the Plan-05-01 dispatch gate
 // confirms only on a matching echo. Two successive joins must issue DISTINCT ids.
 func TestBootstrapTeleportID(t *testing.T) {
-	g := NewGameTick(nil, NewTickLoop(newFakeClock()), nil, -48)
+	g := NewGameTick(nil, NewTickLoop(newFakeClock()), nil, -48, SpawnPoint{X: 8.5, Y: -46, Z: 8.5})
 
 	id1 := g.nextTeleportID()
 	id2 := g.nextTeleportID()

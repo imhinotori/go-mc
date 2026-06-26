@@ -248,6 +248,16 @@ type TickLoop struct {
 	// matching the join placement. Tick-owned; written once at setup, never during a tick.
 	spawnSurfaceY int
 
+	// spawnPoint is the SAFE fresh-spawn world position (the air cell the player's feet occupy,
+	// ON a standable floor) the ported vanilla PlayerSpawnFinder found over the FULLY-DECORATED
+	// spawn chunk (17-06). performRespawn re-teleports a respawning player HERE (the same column
+	// the join bootstrap uses for a fresh spawn) instead of the blind (8.5, spawnSurfaceY+2, 8.5)
+	// center column — so a respawn never lands the player embedded in a tree/structure. Set once
+	// before Run via SetSpawnPoint; read only on the tick goroutine. hasSpawnPoint guards the
+	// fallback for setups that never wired it (e.g. NewTickLoop-only unit tests).
+	spawnPoint    SpawnPoint
+	hasSpawnPoint bool
+
 	// respawnTeleportSeq is the tick-owned producer of fresh teleport ids for in-game
 	// re-teleports (ENT-05 respawn). It is the on-tick analogue of gameTick.teleportSeq
 	// (which serves the off-tick join): performRespawn allocates a fresh id from it via
@@ -590,6 +600,15 @@ func (t *TickLoop) GameTime() int64 { return t.gametime }
 // and the join bootstrap, so a respawning player lands two blocks above the surface exactly
 // like a joining one. Set-once at setup; read only on the tick goroutine (TICK-05).
 func (t *TickLoop) SetSpawn(surfaceY int) { t.spawnSurfaceY = surfaceY }
+
+// SetSpawnPoint records the SAFE fresh-spawn world position (the ported PlayerSpawnFinder
+// column over the FULLY-DECORATED spawn chunk — 17-06) so an in-game respawn re-teleports the
+// player to the SAME safe column the join bootstrap uses, instead of the blind center column.
+// NewGameTick forwards the value cmd/sulfur computed. Set-once at setup; read only on the tick
+// goroutine (TICK-05). performRespawn prefers it when set; otherwise it falls back to the
+// (8.5, spawnSurfaceY+2, 8.5) center column (the pre-17-06 behavior, kept for tests that wire
+// only SetSpawn).
+func (t *TickLoop) SetSpawnPoint(p SpawnPoint) { t.spawnPoint, t.hasSpawnPoint = p, true }
 
 // nextTeleportID claims a fresh, never-zero, monotonically increasing teleport id for an
 // in-game re-teleport (ENT-05 respawn). It is the on-tick producer mirroring

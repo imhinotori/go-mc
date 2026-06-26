@@ -61,6 +61,15 @@ type gameTick struct {
 	// spawn position / world data.
 	spawnSurfaceY int
 
+	// spawnPoint is the SAFE fresh-spawn world position (the air cell the player's feet occupy,
+	// ON a standable floor block) computed once at startup by the generator's ported vanilla
+	// PlayerSpawnFinder (17-06 spawn-inside-a-block fix). Unlike the scalar spawnSurfaceY (which
+	// only carries a Y and forces the blind (8.5, _, 8.5) center column), this carries the full
+	// (x,y,z), so a FRESH join lands ON clear ground even when the (8,8) center is occupied by a
+	// tree or structure. A reconnecting player (GAMEPLAY-02 persisted .dat) still uses its saved
+	// position — only the fresh spawn consults spawnPoint.
+	spawnPoint SpawnPoint
+
 	// teleportSeq is the server-issued teleport-id producer (PLAY-02 / T-5-01). Each join
 	// claims a fresh incrementing id via nextTeleportID(), threaded into the bootstrap
 	// PlayerPosition AND the new tickPlayer.awaitingTeleport so the Plan-05-01 dispatch
@@ -79,13 +88,27 @@ type gameTick struct {
 	worldDir string
 }
 
-// NewGameTick constructs the real GamePlay over the shared inbound seam, the single
-// tick loop, and the independent keep-alive. spawnSurfaceY is the superflat surface
-// world-Y the Play bootstrap spawns the player above (the same value cmd/sulfur hands
-// the Superflat generator). main() builds these, starts the tick and keep-alive
-// goroutines, then sets srv.GamePlay = NewGameTick(...).
-func NewGameTick(inbound chan Intent, loop *TickLoop, keep *KeepAlive, spawnSurfaceY int) *gameTick {
-	return &gameTick{inbound: inbound, loop: loop, keep: keep, spawnSurfaceY: spawnSurfaceY}
+// SpawnPoint is the SAFE fresh-spawn world position (the air cell the player's feet occupy,
+// ON a standable floor block, never embedded in terrain/decoration). It is the server-side
+// mirror of world.NoiseGenerator.SpawnPos's result (the ported vanilla PlayerSpawnFinder over
+// the FULLY-DECORATED spawn chunk — 17-06). cmd/sulfur computes it once at startup and threads
+// it through NewGameTick; the join bootstrap and the in-game respawn both place a FRESH spawn
+// here. Keeping the type in the server package avoids a server->world dependency (main.go
+// converts the world.SpawnPoint into this).
+type SpawnPoint struct {
+	X, Y, Z float64
+}
+
+// NewGameTick constructs the real GamePlay over the shared inbound seam, the single tick loop,
+// and the independent keep-alive. spawnSurfaceY is the standable-floor block world-Y carried
+// for the legacy scalar spawn (and the Superflat fallback); spawnPoint is the full SAFE
+// fresh-spawn (x,y,z) the join bootstrap places a fresh player at (17-06 spawn-inside-a-block
+// fix). main() builds these, starts the tick and keep-alive goroutines, then sets
+// srv.GamePlay = NewGameTick(...). It also forwards spawnPoint into the tick so an in-game
+// respawn lands at the SAME safe column (SetSpawnPoint).
+func NewGameTick(inbound chan Intent, loop *TickLoop, keep *KeepAlive, spawnSurfaceY int, spawnPoint SpawnPoint) *gameTick {
+	loop.SetSpawnPoint(spawnPoint)
+	return &gameTick{inbound: inbound, loop: loop, keep: keep, spawnSurfaceY: spawnSurfaceY, spawnPoint: spawnPoint}
 }
 
 // SetWorldDir wires the persistent world directory (ENT-06) so AcceptPlayer loads/saves each
@@ -193,9 +216,14 @@ func (g *gameTick) AcceptPlayer(
 	// Default to the hardcoded spawn column (chunk (center) block center, surfaceY+2). A missing
 	// or corrupt .dat returns ok=false and the defaults stand (T-6-16). The loaded value is also
 	// reused below to restore health/food/saturation and seed the live player's pos/center.
-	spawnX := float64(int(spawnCenter[0])<<4) + 8.5
-	spawnZ := float64(int(spawnCenter[1])<<4) + 8.5
-	spawnY := float64(g.spawnSurfaceY + 2)
+	// 17-06 spawn-inside-a-block fix: a FRESH player spawns at the SAFE column the ported vanilla
+	// PlayerSpawnFinder found (the air cell ON a standable floor — may NOT be the (8,8) center when
+	// a tree/structure occupies it), instead of the blind center column. spawnPoint.Y is already
+	// the feet cell, so no "+2" is applied to it. A reconnecting player (persisted .dat below)
+	// overrides this with its saved position (GAMEPLAY-02) — only the fresh spawn uses spawnPoint.
+	spawnX := g.spawnPoint.X
+	spawnY := g.spawnPoint.Y
+	spawnZ := g.spawnPoint.Z
 	var (
 		loaded     save.PlayerData
 		haveLoaded bool
@@ -224,13 +252,15 @@ func (g *gameTick) AcceptPlayer(
 		teleportID: teleportID,
 		gameMode:   gameModeSurvival,
 		entityID:   entityID,
-		// GAMEPLAY-02: when a persisted position was loaded, feed it into the SINGLE bootstrap
-		// teleport so the client spawns at its saved location with the same teleport id (no
-		// second teleport). hasSpawn=false falls back to the center-derived spawn.
+		// spawnX/Y/Z is ALWAYS the authoritative spawn: the GAMEPLAY-02 persisted position when
+		// reconnecting, else the 17-06 SAFE fresh-spawn (the ported PlayerSpawnFinder column). Either
+		// way the bootstrap teleports the SINGLE PlayerPosition to it with the join teleport id (no
+		// second teleport), so hasSpawn is always true now — the old blind (8.5, surfaceY+2, 8.5)
+		// center-column recompute inside sendPlayBootstrap is no longer the fresh-spawn path.
 		spawnX:   spawnX,
 		spawnY:   spawnY,
 		spawnZ:   spawnZ,
-		hasSpawn: haveLoaded,
+		hasSpawn: true,
 	})
 
 	// CMD-01 join-time send: serialize the shared command graph to THIS client as

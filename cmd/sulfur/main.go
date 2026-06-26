@@ -144,6 +144,17 @@ func main() {
 	// ocean (T-9-26). The Superflat fallback keeps its fixed flat top.
 	var gen world.Generator
 	spawnSurfaceY := overworldSurfaceY
+	// spawnPoint is the SAFE fresh-spawn world position (the air cell the player's feet occupy,
+	// ON a standable floor). For the noise generator it is the ported vanilla PlayerSpawnFinder
+	// result over the FULLY-DECORATED spawn chunk (17-06 spawn-inside-a-block fix); for Superflat
+	// it stays the center column at spawnSurfaceY+2. It is threaded into NewGameTick so BOTH the
+	// join bootstrap and the in-game respawn place the player at the safe column (which may NOT be
+	// (8,8) when a tree/structure occupies the center), instead of a blind (8.5, surfaceY+2, 8.5).
+	spawnPoint := server.SpawnPoint{
+		X: 8.5, // chunk (0,0) block center
+		Y: float64(overworldSurfaceY + 2),
+		Z: 8.5,
+	}
 	if os.Getenv("SULFUR_SUPERFLAT") == "1" {
 		gen = world.NewSuperflat(overworldSecs, overworldMinY, overworldSurfaceY)
 		log.Printf("SULFUR_SUPERFLAT=1: Superflat stub generator (flat top y=%d) — noise terrain disabled", overworldSurfaceY)
@@ -159,9 +170,27 @@ func main() {
 		// FEAT-06 visual gate evaluates — NO new wire surface, the v1-sealed chunk format
 		// is unchanged (registering the dungeon body went live with no worker/wire rewire).
 		ng := world.NewNoiseGenerator(*seed, overworldSecs, overworldMinY)
-		spawnSurfaceY = ng.SpawnSurfaceY(level.ChunkPos{0, 0})
+		// 17-06 spawn-inside-a-block fix: SpawnPos runs the ported vanilla PlayerSpawnFinder over
+		// the FULLY-DECORATED spawn chunk (features + structures), returning the first STANDABLE
+		// column (the air cell ON a non-fluid floor), which may not be the (8,8) center when a tree
+		// or structure occupies it. We thread the full safe (x,y,z) into the bootstrap so the player
+		// lands ON clear ground instead of embedded in decoration. spawnSurfaceY (the scalar fed to
+		// the tick's SetSpawn for the legacy respawn-Y path) stays the standable floor block world-Y.
+		sp := ng.SpawnPos(level.ChunkPos{0, 0})
+		if sp.Found {
+			spawnPoint = server.SpawnPoint{X: sp.X, Y: sp.Y, Z: sp.Z}
+			spawnSurfaceY = int(sp.Y) - 1 // standable floor block (feet-1); SetSpawn/+2 lands feet above it
+		} else {
+			// Void/ocean spawn chunk: fall back to the terrain WorldSurface top at the center column.
+			spawnSurfaceY = ng.SpawnSurfaceY(level.ChunkPos{0, 0})
+			spawnPoint = server.SpawnPoint{
+				X: float64(0<<4) + 8.5,
+				Y: float64(spawnSurfaceY + 2),
+				Z: float64(0<<4) + 8.5,
+			}
+		}
 		gen = ng
-		log.Printf("full-parity NoiseGenerator armed (seed=%d): spawn-column surface y=%d; full feature pipeline live (per-biome trees + ground cover + decoration ores + dungeons)", *seed, spawnSurfaceY)
+		log.Printf("full-parity NoiseGenerator armed (seed=%d): SAFE spawn (%.1f, %.1f, %.1f) found=%v; full feature pipeline live (per-biome trees + ground cover + decoration ores + dungeons)", *seed, spawnPoint.X, spawnPoint.Y, spawnPoint.Z, sp.Found)
 	}
 	worker := world.NewWorker(gen, "", workerBuf)
 	mgr := world.NewChunkManager()
@@ -219,7 +248,7 @@ func main() {
 	// The real GamePlay bridges an accepted connection to the running tick + keep-alive.
 	// spawnSurfaceY is the derived noise spawn surface (or the Superflat fixed top under
 	// SULFUR_SUPERFLAT) so the join bootstrap places the player ON solid ground (T-9-26).
-	gp := server.NewGameTick(inbound, tick, keep, spawnSurfaceY)
+	gp := server.NewGameTick(inbound, tick, keep, spawnSurfaceY, spawnPoint)
 	gp.SetWorldDir(worldDir) // ENT-06: load/save player .dat under worldDir
 	srv := newServer(gp)
 
