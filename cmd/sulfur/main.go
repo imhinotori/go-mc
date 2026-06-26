@@ -84,7 +84,7 @@ type pingHandler struct {
 // shared runtime (the inbound seam, the single tick loop, the independent keep-alive)
 // is constructed and started by the caller and handed in here as the GamePlay, so the
 // server's goroutines are running before the listener accepts a connection.
-func newServer(gameplay server.GamePlay) *server.Server {
+func newServer(gameplay server.GamePlay, onlineMode bool) *server.Server {
 	return &server.Server{
 		Logger: log.Default(),
 		ListPingHandler: &pingHandler{
@@ -97,7 +97,10 @@ func newServer(gameplay server.GamePlay) *server.Server {
 			PlayerList: server.NewPlayerList(maxPlayers),
 		},
 		LoginHandler: &server.MojangLoginHandler{
-			OnlineMode: false,                // offline: UUID derived from username
+			// OnlineMode gates auth.Encrypt (RSA/CFB8 + Yggdrasil hasJoined) vs
+			// offline.NameToUUID in AcceptLogin. Threaded from the --online-mode operator
+			// flag; default false keeps offline local-dev the byte-identical default.
+			OnlineMode: onlineMode,
 			Threshold:  compressionThreshold, // Set Compression negotiated before LoginSuccess
 		},
 		// The Configuration sequence (Known Packs → Feature Flags → Registry Data →
@@ -112,7 +115,13 @@ func newServer(gameplay server.GamePlay) *server.Server {
 func main() {
 	addr := flag.String("addr", ":25565", "address to listen on")
 	seed := flag.Int64("seed", worldSeed, "overworld world seed (default is the fixed reproducible worldSeed; ignored when SULFUR_SUPERFLAT=1)")
+	onlineMode := flag.Bool("online-mode", false, "authenticate + encrypt logins against Mojang (default false = offline local-dev)")
 	flag.Parse()
+
+	// online-mode is controlled primarily by the --online-mode flag; SULFUR_ONLINE_MODE=1
+	// is an OR'd env escape hatch mirroring the SULFUR_SUPERFLAT/SULFUR_DEBUG pattern in
+	// this file. Default stays offline so a bare `sulfur` run is byte-identical to today.
+	online := *onlineMode || os.Getenv("SULFUR_ONLINE_MODE") == "1"
 
 	// Construct the single-owner runtime: the network->tick seam (one bounded chan
 	// Intent), the authoritative tick loop over the real system clock, and the
@@ -250,9 +259,9 @@ func main() {
 	// SULFUR_SUPERFLAT) so the join bootstrap places the player ON solid ground (T-9-26).
 	gp := server.NewGameTick(inbound, tick, keep, spawnSurfaceY, spawnPoint)
 	gp.SetWorldDir(worldDir) // ENT-06: load/save player .dat under worldDir
-	srv := newServer(gp)
+	srv := newServer(gp, online)
 
-	srv.Logger.Printf("Sulfur listening on %s (protocol %d, %s)",
-		*addr, server.ProtocolVersion, server.ProtocolName)
+	srv.Logger.Printf("Sulfur listening on %s (protocol %d, %s, online-mode=%v)",
+		*addr, server.ProtocolVersion, server.ProtocolName, online)
 	log.Fatal(srv.Listen(*addr))
 }
