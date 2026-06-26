@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/imhinotori/sulfur/data/packetid"
+	pk "github.com/imhinotori/sulfur/net/packet"
+	"github.com/imhinotori/sulfur/world"
 )
 
 // fall_damage_test.go covers GAMEPLAY-04 (the environmental half): tickFallDamage accumulates a
@@ -104,5 +106,79 @@ func TestStayGroundedNoDamage(t *testing.T) {
 	}
 	if p.health != maxHealth {
 		t.Fatalf("grounded player took damage, health = %v", p.health)
+	}
+}
+
+// --- 17-08 WATER GUARD ---
+//
+// Vanilla (Entity.checkFallDamage + Entity.updateFluidInteraction, javap-verified this session)
+// negates ALL fall damage in water: descent in water accumulates no fall distance, and touching
+// water resetFallDistance()s any distance built up before entering. These tests pin both halves.
+
+// waterFallLoop wires a fluid world (one ready, all-air chunk at column {0,0}) with a water
+// source column, and registers a combatPlayer (full health + capturing client) positioned over
+// that column. The player's x/z (8.5, 8.5) sit inside the {8,*,8} block so playerInWater is true
+// once its feet reach the water at y=64.
+func waterFallLoop(t *testing.T) (*TickLoop, *world.ChunkManager, *tickPlayer) {
+	t.Helper()
+	loop, mgr := newFluidLoop()
+	// A 3-block-deep water column at x=8,z=8 from y=64 up to y=66 (surface block top at y=67) so a
+	// player with feet at y>=67 is clearly above the pool and a player with feet at y<=66 is in it.
+	for y := 64; y <= 66; y++ {
+		setWater(mgr, pk.Position{X: 8, Y: y, Z: 8}, 0)
+	}
+	p := combatPlayer(loop, 1)
+	p.x, p.z = 8.5, 8.5
+	p.y, p.lastY = 80, 80
+	p.onGround, p.wasOnGround = false, false // already airborne above the pool
+	return loop, mgr, p
+}
+
+// TestFallIntoWaterNoDamage: a long fall that ends in water deals 0 damage — the headline 17-08
+// fix. Without the water guard the player would take floor(13-3)=10 damage on the water floor.
+func TestFallIntoWaterNoDamage(t *testing.T) {
+	loop, _, p := waterFallLoop(t)
+
+	// Fall from y=80 down to y=67 through air (13 blocks of descent, feet still ABOVE the water
+	// surface at y=67), then continue down to y=64 INSIDE the water column, then "land" on the
+	// submerged floor at y=64.
+	step(loop, p, 67, false) // descends 13 in air -> fallDistance 13 (dry above the pool)
+	if p.fallDistance == 0 {
+		t.Fatalf("dry airborne descent did not accumulate fallDistance (got 0)")
+	}
+	step(loop, p, 64, false) // now feet at y=64: in water -> reset, no accumulation
+	if p.fallDistance != 0 {
+		t.Fatalf("entering water did not reset fallDistance, got %v (want 0)", p.fallDistance)
+	}
+	step(loop, p, 64, true) // landing edge while submerged: must deal 0 damage
+
+	if p.health != maxHealth {
+		t.Fatalf("fall into water dealt damage: health = %v, want %v (vanilla negates fall damage in water)", p.health, float32(maxHealth))
+	}
+	if p.fallDistance != 0 {
+		t.Fatalf("fallDistance = %v after landing in water, want 0", p.fallDistance)
+	}
+	if n := countID(drainPackets(p.client), packetid.ClientboundSetHealth); n != 0 {
+		t.Fatalf("fall into water sent %d SetHealth, want 0 (no damage)", n)
+	}
+}
+
+// TestDescentInWaterNoAccumulation: a player sinking entirely within water never accumulates fall
+// distance (Entity.checkFallDamage's `!isInWater()` accumulation guard).
+func TestDescentInWaterNoAccumulation(t *testing.T) {
+	loop, _, p := waterFallLoop(t)
+	// Start the player already submerged (feet at y=66, inside the 64..67 water column).
+	p.y, p.lastY = 66, 66
+
+	// Sink within the water: 66 -> 65 -> 64. Every tick playerInWater is true, so no accumulation.
+	step(loop, p, 65, false)
+	step(loop, p, 64, false)
+
+	if p.fallDistance != 0 {
+		t.Fatalf("descent within water accumulated fallDistance = %v, want 0", p.fallDistance)
+	}
+	step(loop, p, 64, true) // surface to a submerged floor: still 0 damage
+	if p.health != maxHealth {
+		t.Fatalf("sinking-in-water player took damage: health = %v, want %v", p.health, float32(maxHealth))
 	}
 }
