@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"math/rand/v2"
 
 	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/data/item"
@@ -63,33 +64,102 @@ var blockDropTable = map[string]item.ID{
 	"minecraft:oak_planks":  item.OakPlanks.ID,
 }
 
+// itemEntityHalfHeight is Block.popResource's local `d`: EntityType.ITEM.getHeight() / 2.0.
+// entity.Item.Height is 0.25, so d == 0.125 — the Y offset popResource subtracts so the spawned
+// item sits centered on the block's lower-face rather than the block center. A var (not const)
+// because entity.Item.Height is a generated struct FIELD, not a compile-time constant.
+//   [VERIFIED javap: Block.popResource → ITEM.getHeight() f2d / 2.0; entity.Item.Height==0.25.]
+var itemEntityHalfHeight = entity.Item.Height / 2.0 // 0.125
+
+// itemSpawnJitter is the ±range Block.popResource applies to each spawn axis via
+// Mth.nextDouble(random, -0.25, 0.25). Decompiled verbatim (javap Block.popResource: ldc2_w
+// -0.25d / 0.25d on all three axes).
+const itemSpawnJitter = 0.25
+
+// itemTossVelocity is the per-axis toss magnitude in ItemEntity.<init>: each component is
+// random.nextDouble()*0.2 - 0.1, i.e. uniform in [-0.1, 0.1). Decompiled verbatim
+// (javap ItemEntity.<init>: nextDouble dmul 0.2d dsub 0.1d, three times).
+const itemTossVelocity = 0.1
+
+// mthNextDouble ports net.minecraft.util.Mth.nextDouble(RandomSource, double, double):
+// returns lo when lo >= hi (the degenerate guard), else rng.nextDouble()*(hi-lo) + lo. The Go
+// math/rand/v2 rand.Float64() is the RandomSource.nextDouble() analogue (uniform [0,1)).
+//   [VERIFIED javap Mth.nextDouble: dcmpl; iflt → return lo; else nextDouble * (hi-lo) + lo.]
+func mthNextDouble(lo, hi float64) float64 {
+	if lo >= hi {
+		return lo
+	}
+	return rand.Float64()*(hi-lo) + lo
+}
+
 // spawnBlockDrop spawns the dropped Item entity for a just-broken block and adds it to the
 // tick-owned store, where the GAMEPLAY-01 tracker broadcasts it next tick. brokenState is the
-// block state read BEFORE SetBlock wrote air (block_interact.go captures it). A block with no
-// v1 drop (air/unknown) is a no-op. Tick-owned (TICK-05): runs on the tick goroutine.
-func (t *TickLoop) spawnBlockDrop(pos pk.Position, brokenState block.StateID) {
+// block state read BEFORE SetBlock wrote air (block_interact.go captures it). Tick-owned
+// (TICK-05): runs on the tick goroutine.
+//
+// GATE (Plan 17-14 FIX E — ServerPlayerGameMode.destroyBlock): a CREATIVE player's break drops
+// NOTHING. v1 hardcodes survival so the gate always passes today, but the check is present and
+// correct so a future creative toggle drops nothing for free. A block with no v1 drop
+// (air/unknown) is likewise a no-op.
+//
+// POSITION + VELOCITY (Plan 17-14 FIX A/B — Block.popResource + ItemEntity.<init>, ported
+// verbatim from temp/cache/26.2-inner.jar):
+//
+//	double d = ITEM.getHeight()/2.0;                         // 0.125
+//	x = pos.getX()+0.5 + Mth.nextDouble(rng, -0.25, 0.25);
+//	y = pos.getY()+0.5 + Mth.nextDouble(rng, -0.25, 0.25) - d;
+//	z = pos.getZ()+0.5 + Mth.nextDouble(rng, -0.25, 0.25);
+//	setDeltaMovement(rng.nextDouble()*0.2-0.1, ...y, ...z);  // random toss in [-0.1,0.1)
+//	item.setDefaultPickUpDelay();                            // pickupDelay = 10
+func (t *TickLoop) spawnBlockDrop(p *tickPlayer, pos pk.Position, brokenState block.StateID) {
+	// FIX E — creative drops nothing (ServerPlayerGameMode.destroyBlock).
+	if p != nil && p.gameMode == gameModeCreative {
+		return
+	}
+
 	drop, ok := blockDropFor(brokenState)
 	if !ok {
 		return // no drop for this block (air/unknown)
 	}
 
-	// The Item sits at the block's lower-face center. Vanilla ItemEntity spawns at
-	// pos + 0.5 on X/Z and a small +0.25-ish Y nudge inside the block; v1 uses the block
-	// center on X/Z and the block's lower Y (good enough — the client renders the item on
-	// the ground at this column). Velocity stays zero for a deterministic v1 drop (no pop);
-	// a random pop is a later cosmetic and the tracker's motion encode already supports it.
-	cx := float64(pos.X) + 0.5
-	cy := float64(pos.Y)
-	cz := float64(pos.Z) + 0.5
+	// FIX A — Block.popResource spawn position: block center + per-axis ±0.25 jitter, with the
+	// Y additionally offset down by the item's half-height (d == 0.125) so it rests on the
+	// lower face. Each axis draws an INDEPENDENT Mth.nextDouble(-0.25, 0.25) (three draws).
+	x := float64(pos.X) + 0.5 + mthNextDouble(-itemSpawnJitter, itemSpawnJitter)
+	y := float64(pos.Y) + 0.5 + mthNextDouble(-itemSpawnJitter, itemSpawnJitter) - itemEntityHalfHeight
+	z := float64(pos.Z) + 0.5 + mthNextDouble(-itemSpawnJitter, itemSpawnJitter)
 
-	ie := NewEntity(t.idAlloc.AllocID(), entity.Item, cx, cy, cz)
+	ie := NewItemEntity(t.idAlloc.AllocID(), x, y, z, drop)
+
+	t.entities.add(ie) // store insert -> the tracker broadcasts AddEntity + SetEntityData
+}
+
+// NewItemEntity constructs a dropped Item entity at (x,y,z) carrying stack — the Go port of
+// net.minecraft.world.entity.item.ItemEntity.<init>(Level, double, double, double, ItemStack).
+// It mirrors the vanilla constructor's two side effects: a random toss velocity
+// (setDeltaMovement(nextDouble()*0.2-0.1, ...) per axis) and the ITEM render metadata, plus
+// Block.popResource's setDefaultPickUpDelay() (pickupDelay = 10). age starts at DEFAULT_AGE (0).
+// Tick-owned (called only on the tick goroutine).
+func NewItemEntity(id int32, x, y, z float64, stack component.SlotData) *Entity {
+	ie := NewEntity(id, entity.Item, x, y, z)
+	ie.isItem = true
+	ie.itemStack = stack
+
+	// FIX B — ItemEntity.<init> setDeltaMovement: a random toss in [-0.1, 0.1) per axis
+	// (rng.nextDouble()*0.2 - 0.1). Three independent draws.
+	ie.vx = rand.Float64()*2*itemTossVelocity - itemTossVelocity
+	ie.vy = rand.Float64()*2*itemTossVelocity - itemTossVelocity
+	ie.vz = rand.Float64()*2*itemTossVelocity - itemTossVelocity
+
+	// Block.popResource → item.setDefaultPickUpDelay() == 10 ticks (the freshly-dropped item is
+	// not pickable until the item tick counts this down to 0).
+	ie.pickupDelay = itemDefaultPickupDelay
 
 	// Populate the ITEM metadata (the Pitfall-5 fix). encodeSetEntityData splices
 	// Entity.metadata VERBATIM (already in DataValue framing) and appends the 0xFF
 	// terminator itself — so metadata must hold ONLY the entry bytes, no terminator.
-	ie.metadata = encodeItemMetadata(drop)
-
-	t.entities.add(ie) // store insert -> the tracker broadcasts AddEntity + SetEntityData
+	ie.metadata = encodeItemMetadata(stack)
+	return ie
 }
 
 // encodeItemMetadata builds the verbatim SynchedEntityData DataValue bytes for a dropped

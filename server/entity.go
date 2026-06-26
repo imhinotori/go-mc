@@ -2,6 +2,7 @@ package server
 
 import (
 	"github.com/imhinotori/sulfur/data/entity"
+	"github.com/imhinotori/sulfur/level/component"
 	"github.com/imhinotori/sulfur/server/internal/bvh"
 
 	"github.com/google/uuid"
@@ -77,6 +78,36 @@ type Entity struct {
 	// packets. A nil/empty slot is a freshly spawned entity with default metadata. Kept as a
 	// plain []byte (not a map) so an Entity snapshot stays cheap.
 	metadata []byte
+
+	// --- ITEM-PICKUP (Plan 17-14): dropped-item lifecycle state ----------------------
+	//
+	// These mirror net.minecraft.world.entity.item.ItemEntity's private int fields (decompiled
+	// from temp/cache/26.2-inner.jar this session). They are tick-owned plain ints, set ONLY
+	// for an Item entity (typ==entity.Item.ID); for every other entity they stay at the zero
+	// value and are never read (the item tick/pickup scan gate on isItem). Kept as plain values
+	// so the snapshot-friendly contract above is preserved.
+
+	// itemStack is the dropped stack this Item entity carries — the SAME component.SlotData the
+	// inventory holds, so pickup hands it straight to Inventory.add with no item-codec surface.
+	// Zero value (Count==0) for a non-item entity. The ITEM SynchedEntityData metadata (the
+	// render data-value) is built FROM this at spawn (encodeItemMetadata).
+	itemStack component.SlotData
+
+	// isItem marks this entity as a dropped Item (typ==entity.Item.ID). The item tick (gravity
+	// 0.04 + age + despawn) and the player pickup scan run ONLY for entities with this set, so a
+	// mob/player is never mistaken for a pickup. Set at spawn by spawnBlockDrop / NewItemEntity.
+	isItem bool
+
+	// pickupDelay is ItemEntity.pickupDelay: the ticks a fresh drop is NOT pickable
+	// (setDefaultPickUpDelay() == 10). The item tick decrements it toward 0 each tick; playerTouch
+	// refuses pickup while it is > 0. Vanilla's INFINITE sentinel (32767) is honored (never
+	// decremented, never pickable) for completeness.
+	pickupDelay int
+
+	// age is ItemEntity.age: ticks since spawn. The item tick increments it and DISCARDS the
+	// entity at LIFETIME (6000 == 5 minutes) — the vanilla despawn. The -32768 INFINITE_LIFETIME
+	// sentinel is honored (never aged, never despawns).
+	age int
 
 	// ai is the per-mob AI handle (AI-01, Plan 07-01): the mob's goalSelector + the
 	// navigation/look targets a goal writes (server/ai_mob.go). nil for a non-mob entity (a

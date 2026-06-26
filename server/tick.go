@@ -295,6 +295,13 @@ type tickPlayer struct {
 	// registration; tick-owned thereafter.
 	uuid uuid.UUID
 
+	// gameMode is the player's GameType byte (play_join.go: gameModeSurvival==0). It gates the
+	// block-drop path (Plan 17-14 / ServerPlayerGameMode.destroyBlock): a CREATIVE player's
+	// break drops NOTHING. v1 hardcodes survival at registration, so the gate always passes
+	// today — but the check is present and correct so a future creative toggle drops nothing
+	// without any further edit. Tick-owned (set at registration, read on the tick goroutine).
+	gameMode int32
+
 	// name is the player's login-profile name (the username from AcceptPlayer). It is the
 	// SERVER-authoritative chat attribution: handleChat renders "<name> message" from it
 	// (CMD-02), never trusting any client-supplied sender field (T-7-07). The name is

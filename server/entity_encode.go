@@ -373,6 +373,22 @@ func encodeRotateHead(id int32, headYaw float32) pk.Packet {
 	)
 }
 
+// encodeTakeItemEntity builds ClientboundTakeItemEntity (Plan 17-14 / ITEM-PICKUP): the
+// "item flies into the collector" pickup animation. JAR-DERIVED wire layout (javap'd this
+// session from temp/cache/26.2-inner.jar, ClientboundTakeItemEntityPacket.write): three
+// VarInts in order — itemId (the picked-up item entity), playerId (the collector), amount
+// (the count taken). LivingEntity.take broadcasts this to every player tracking the item.
+//
+//	[VERIFIED javap: write → writeVarInt(itemId), writeVarInt(playerId), writeVarInt(amount).]
+func encodeTakeItemEntity(itemID, collectorID int32, amount int) pk.Packet {
+	return pk.Marshal(
+		int32(packetid.ClientboundTakeItemEntity),
+		pk.VarInt(itemID),        // itemId: the item entity being collected
+		pk.VarInt(collectorID),   // playerId: the collecting player's entity id
+		pk.VarInt(int32(amount)), // amount: the stack count taken
+	)
+}
+
 // encodeRemoveEntities builds ClientboundRemoveEntities (06-CAPTURE-DIFF §5):
 // writeIntIdList == VarInt count followed by N VarInt ids. The tracker batches ALL of a
 // player's newly-out-of-range ids into ONE such packet per tick.

@@ -126,9 +126,10 @@ func (t *TickLoop) handlePlayerAction(p *tickPlayer, pkt pk.Packet) {
 
 	t.reconcileEdit(p, pos, air, int32(sequence))
 
-	// GAMEPLAY-06: spawn the dropped Item entity for the broken block. Rides the GAMEPLAY-01
-	// tracker broadcast (the store-add path). A block with no v1 drop is a no-op inside.
-	t.spawnBlockDrop(pos, brokenState)
+	// GAMEPLAY-06 / Plan 17-14: spawn the dropped Item entity for the broken block. Rides the
+	// GAMEPLAY-01 tracker broadcast (the store-add path). A block with no v1 drop — or a creative
+	// player (ServerPlayerGameMode.destroyBlock: creative drops nothing) — is a no-op inside.
+	t.spawnBlockDrop(p, pos, brokenState)
 }
 
 // handleUseItemOn resolves a ServerboundUseItemOn (the PLACE path) on-tick. Wire layout

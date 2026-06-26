@@ -65,7 +65,11 @@ const gameEventLevelChunksLoadStart = 13
 // CommonPlayerSpawnInfo. gameType is GameType.getId (survival == 0); previousGameType
 // is GameType.getNullableId, which encodes "no previous mode" as -1 (0xFF byte).
 const (
-	gameModeSurvival   = 0
+	gameModeSurvival = 0
+	// gameModeCreative is GameType.CREATIVE.getId() (==1). Used by the Plan 17-14 block-drop
+	// gate (ServerPlayerGameMode.destroyBlock: creative drops nothing). v1 never assigns it
+	// today, but the gate compares against it so a future creative player drops nothing.
+	gameModeCreative   = 1
 	noPreviousGameMode = -1
 )
 

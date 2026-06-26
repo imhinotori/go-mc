@@ -192,6 +192,15 @@ func (t *TickLoop) tickEntities() {
 	// green). Its body lives in combat.go; a single ADDITIVE call keeps tick.go/tick_phases.go edits
 	// minimal so the sibling Wave edits (subtick.go fluid, block_drop.go drops) do not conflict.
 	t.tickPlayerCombat()
+
+	// Plan 17-14 ITEM-PICKUP: the dropped-item lifecycle — ItemEntity.tick (0.04 gravity, age,
+	// 6000-tick despawn) for every ground item, then the Player.aiStep item-collection scan that
+	// picks up nearby pickable items (ItemEntity.playerTouch + Inventory.add + the take-item
+	// animation). A single ADDITIVE call inside this existing phase keeps the tick order unchanged
+	// (TestTickPhaseOrder stays green), mirroring the tickFallDamage / tickBreath seams above. Its
+	// body lives in item_entity.go. Runs BEFORE tracker.Tick so a pickup/despawn removal is
+	// reflected in this tick's near() and the tracker emits RemoveEntities promptly.
+	t.tickItems()
 }
 
 // tickAI drives mob AI for every AI mob in the tick-owned store, then runs the throttled

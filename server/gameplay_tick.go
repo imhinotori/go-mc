@@ -299,6 +299,10 @@ func (g *gameTick) AcceptPlayer(
 		awaitingTeleport: teleportID,
 		entityID:         entityID,
 		uuid:             id,
+		// Plan 17-14: the player's GameType gates block drops (creative drops nothing). Sulfur
+		// hardcodes survival today (matching the bootstrap gameMode above), so the drop gate
+		// always passes; the field exists so a future creative toggle drops nothing for free.
+		gameMode: gameModeSurvival,
 		// CMD-02: the login-profile name is the SERVER-authoritative chat attribution
 		// ("<name> message"). It was accepted at AcceptPlayer but unstored before this plan;
 		// threaded here as a value (crosses no tick-owned state), exactly like entityID/uuid.

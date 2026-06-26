@@ -99,7 +99,9 @@ func newDropLoop() (*TickLoop, *world.ChunkManager) {
 }
 
 // TestBlockDropSpawnsItem: breaking a stone block spawns an entity.Item (typ==71) in the
-// store at the block center (x+0.5, y, z+0.5) carrying non-empty ITEM metadata.
+// store, positioned with the vanilla Block.popResource jitter (block center ± 0.25 per axis,
+// Y additionally offset down by the item half-height 0.125), carrying a random toss velocity
+// in [-0.1, 0.1) per axis, the default 10-tick pickup delay, and non-empty ITEM metadata.
 func TestBlockDropSpawnsItem(t *testing.T) {
 	loop, mgr := newDropLoop()
 	p := blockPlayer(loop, 1.5, 65.0, 1.5)
@@ -126,8 +128,36 @@ func TestBlockDropSpawnsItem(t *testing.T) {
 	if drop == nil {
 		t.Fatalf("no Item entity (typ==%d) in the store after break", entity.Item.ID)
 	}
-	if drop.x != 1.5 || drop.z != 1.5 {
-		t.Fatalf("item pos = (%v,_,%v), want block center (1.5,_,1.5)", drop.x, drop.z)
+
+	// FIX A — position jitter: block center (1.5, 64.5, 1.5) ± 0.25 per axis, with Y offset down
+	// by the item half-height (0.125). So x/z ∈ [1.25, 1.75] and y ∈ [64.5-0.25-0.125, 64.5+0.25-0.125]
+	// = [64.125, 64.625]. The spawn must be inside these vanilla ranges (NOT a fixed center).
+	if drop.x < 1.25 || drop.x > 1.75 {
+		t.Fatalf("item x = %v, want block center 1.5 ± 0.25 jitter [1.25,1.75]", drop.x)
+	}
+	if drop.z < 1.25 || drop.z > 1.75 {
+		t.Fatalf("item z = %v, want block center 1.5 ± 0.25 jitter [1.25,1.75]", drop.z)
+	}
+	if drop.y < 64.125 || drop.y > 64.625 {
+		t.Fatalf("item y = %v, want 64.5 ± 0.25 - 0.125 half-height [64.125,64.625]", drop.y)
+	}
+
+	// FIX B — toss velocity: each axis is rng.nextDouble()*0.2 - 0.1 ∈ [-0.1, 0.1).
+	for _, vc := range []struct {
+		name string
+		v    float64
+	}{{"vx", drop.vx}, {"vy", drop.vy}, {"vz", drop.vz}} {
+		if vc.v < -0.1 || vc.v >= 0.1 {
+			t.Fatalf("item %s = %v, want vanilla toss [-0.1, 0.1)", vc.name, vc.v)
+		}
+	}
+
+	// Block.popResource → setDefaultPickUpDelay() == 10: a fresh drop is not pickable yet.
+	if drop.pickupDelay != itemDefaultPickupDelay {
+		t.Fatalf("item pickupDelay = %d, want %d (setDefaultPickUpDelay)", drop.pickupDelay, itemDefaultPickupDelay)
+	}
+	if !drop.isItem {
+		t.Fatalf("spawned drop not flagged isItem — the item tick/pickup scan would skip it")
 	}
 	if len(drop.metadata) == 0 {
 		t.Fatalf("item metadata empty — the Item would render INVISIBLE (Pitfall 5)")
