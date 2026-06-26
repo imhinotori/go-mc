@@ -41,6 +41,37 @@
   server-side. Decompile `net.minecraft.world.level.pathfinder.WalkNodeEvaluator` +
   `net.minecraft.world.entity.Mob.travel`.
 
+### Block survival — a broken support does NOT destroy the unsupported block above (gate finding, 17-05)
+
+- **Found during:** Phase 17 visual gate (real client). User: "rompe un bloque con flores arriba, las flores no se rompen".
+- **Symptom:** breaking a block that supports a plant/flower/torch/etc. leaves the unsupported block
+  floating instead of breaking + dropping it. Vanilla destroys it the instant its support is removed.
+- **Root cause:** Sulfur's edit path (`reconcileEdit` in `server/block_interact.go`) only runs the
+  FLUID neighbor notification (`scheduleFluidNeighborsOnEdit`) — it does NOT run the generic
+  `Level.updateNeighborsAt` → `BlockState.updateShape`/`neighborChanged` → `Block.updateOrDestroy`
+  chain. So a block that loses its required support is never told to re-check `canSurvive`.
+- **1:1 chain (jar-verified, ready to port):**
+  - `net.minecraft.world.level.Level.setBlock` → `updateNeighborsAt(pos)` notifies the 6 neighbors.
+  - A neighbor runs `BlockState.updateShape(state, ..., direction, neighborPos, neighborState, ...)`.
+    For vegetation: `VegetationBlock.updateShape` → `if (!state.canSurvive(level, pos)) return AIR.defaultBlockState()`.
+  - `VegetationBlock.canSurvive` = `mayPlaceOn(belowState, level, belowPos)` =
+    `belowState.is(BlockTags.SUPPORTS_VEGETATION)` (the tag = `#substrate_overworld` + `farmland`).
+  - `Block.updateOrDestroy(oldState, newState=AIR, level, pos, flags)` → since newState.isAir() and
+    !isClientSide → `level.destroyBlock(pos, dropBlock=(flags & 32)==0, null, recursionLeft)` →
+    drops the block (the same drop path GAMEPLAY-06 already has via `spawnBlockDrop`).
+- **Why not fixed in Phase 17:** it is a net-new SUBSYSTEM, not a quick wire-up — it needs (a) a
+  runtime block-tag lookup (the tag JSONs are currently send-to-client-only, not queried in Go),
+  (b) a block→survival-class mapping extracted from the jar (which of the 881 blocks are
+  `VegetationBlock` / need a support + their support predicate — flowers, saplings, grass, torches,
+  rails, redstone, doors, etc.), and (c) the `updateOrDestroy` + recursive `updateNeighborsAt` port.
+  Scoped OUT of Phase 17 (gameplay-completion of the SIX wired seams); the visual gate otherwise
+  PASSES. User chose to defer + proceed to Phase 18.
+- **Suggested handling (own plan/phase):** a "block survival" mini-phase — extract the needs-support
+  block set + support tags via the codegen pipeline, port `updateOrDestroy` + `VegetationBlock.canSurvive`
+  (+ the other common survival classes), and wire it into `reconcileEdit` alongside the existing fluid
+  neighbor notification. The drop path already exists (GAMEPLAY-06). Start with vegetation (the visible
+  80%), then torches/rails/redstone.
+
 ### New worldgen biome-tag JSONs emitted by the extractor re-run (17-21)
 
 - **Found during:** Plan 17-21 (block-break dig-time), when re-running the codegen pipeline
