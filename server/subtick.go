@@ -242,6 +242,13 @@ func (t *TickLoop) applyInput(p *tickPlayer, in SubtickInput) {
 		// NEVER deals damage (only the attack path does).
 		t.handleInteract(p, in.Packet)
 
+	case packetid.ServerboundSwing:
+		// SWING (GAMEPLAY-07): the arm-swing animation. ServerGamePacketListenerImpl.handleAnimate
+		// -> ServerPlayer.swing(hand) broadcasts ClientboundAnimate to the players TRACKING this
+		// player (NOT self — the client predicts its own swing). Without this, other players never
+		// see arm swings. Decoded defensively; a malformed payload is a silent no-op.
+		t.handleSwing(p, in.Packet)
+
 	default:
 		// Non-movement subtick input with no resolver yet: the hook already observed it;
 		// nothing to apply here.

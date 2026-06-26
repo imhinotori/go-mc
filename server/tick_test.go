@@ -38,6 +38,7 @@ var expectedPhaseOrder = []string{
 	"tickAI",
 	"tickPhysics",
 	"applyAsyncResults",
+	"tickEquipment",
 	"tracker.Tick",
 	"flushOutbound",
 }

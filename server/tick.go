@@ -419,6 +419,15 @@ type tickPlayer struct {
 	// goroutine (TICK-05 / T-6-08), so it is -race clean by the single-owner discipline.
 	inventory *Inventory
 
+	// lastMainHand is the snapshot of the player's MAINHAND item the last time tickEquipment
+	// broadcast it — the Sulfur analogue of LivingEntity.lastEquipmentItems (the per-slot last-
+	// sent equipment map). detectEquipmentUpdates compares the current mainhand against this and,
+	// on a change, broadcasts ClientboundSetEquipment to trackers + updates this snapshot. Set on
+	// the first tickEquipment (gated by equipInit) so the initial empty hand doesn't spuriously
+	// broadcast. Tick-owned.
+	lastMainHand component.SlotData
+	equipInit    bool
+
 	// --- Health / food / death (ENT-05). ALL tick-owned and SERVER-owned: the client has NO
 	// health-setting packet (T-6-05) — it only REQUESTS a respawn via ServerboundClientCommand.
 	// The server drives damage -> SetHealth -> death (PlayerCombatKill) -> respawn entirely from

@@ -413,6 +413,52 @@ func encodeRotateHead(id int32, headYaw float32) pk.Packet {
 	)
 }
 
+// animateActionMainHandSwing / animateActionOffHandSwing are the ClientboundAnimatePacket
+// `action` byte values for an arm swing. JAR-DERIVED (LivingEntity.swing): the action is
+// `hand == MAIN_HAND ? 0 : 3` (the bytecode's iconst_0 / iconst_3 branch). Values 1/2/5 are
+// hurt/wake/crit-other animations not driven by swing.
+//
+//	[VERIFIED javap: LivingEntity.swing(hand,boolean) -> new ClientboundAnimatePacket(this,
+//	 MAIN_HAND ? 0 : 3); ClientboundAnimatePacket.write -> writeVarInt(id), writeByte(action).]
+const (
+	animateActionMainHandSwing = 0
+	animateActionOffHandSwing  = 3
+)
+
+// encodeAnimate builds ClientboundAnimate (jar: ClientboundAnimatePacket.write): VarInt id +
+// UByte action. Broadcast to players TRACKING the entity (LivingEntity.swing ->
+// ServerChunkCache.sendToTrackingPlayers) so observers see the arm swing. The swinging player
+// is NOT included (swing(hand) passes updateSelf=false).
+func encodeAnimate(entityID int32, action int) pk.Packet {
+	return pk.Marshal(
+		int32(packetid.ClientboundAnimate),
+		pk.VarInt(entityID),
+		pk.UnsignedByte(action),
+	)
+}
+
+// equipmentSlotMainHand is EquipmentSlot.MAINHAND.ordinal() — 0 (the enum's first constant:
+// MAINHAND, OFFHAND, FEET, LEGS, CHEST, HEAD, BODY, SADDLE). The SetEquipment slot byte is the
+// ordinal, with bit 0x80 (continuation) set on every entry EXCEPT the last.
+//   [VERIFIED javap: ClientboundSetEquipmentPacket.write -> for each pair: writeByte(
+//    isLast ? ordinal : ordinal | 0x80), ItemStack.OPTIONAL_STREAM_CODEC.encode(stack).]
+const equipmentSlotMainHand = 0
+
+// encodeSetEquipment builds ClientboundSetEquipment for a SINGLE equipment slot (jar:
+// ClientboundSetEquipmentPacket.write): VarInt entityId, then a list of (Byte slotFlag,
+// ItemStack) pairs. The slot byte = slot.ordinal() with 0x80 set on all-but-last; a one-entry
+// list sets no continuation bit. The ItemStack is the OPTIONAL_STREAM_CODEC (component.SlotData
+// .WriteTo — the SAME codec ContainerSetContent's carried item uses). v1 syncs only MAINHAND
+// (no armor inventory yet — the other 7 slots stay empty/unsynced, the cited default).
+func encodeSetEquipment(entityID int32, slot int, item component.SlotData) pk.Packet {
+	return pk.Marshal(
+		int32(packetid.ClientboundSetEquipment),
+		pk.VarInt(entityID),
+		pk.Byte(slot), // single entry => no 0x80 continuation bit
+		&item,         // ItemStack.OPTIONAL_STREAM_CODEC
+	)
+}
+
 // encodeTakeItemEntity builds ClientboundTakeItemEntity (Plan 17-14 / ITEM-PICKUP): the
 // "item flies into the collector" pickup animation. JAR-DERIVED wire layout (javap'd this
 // session from temp/cache/26.2-inner.jar, ClientboundTakeItemEntityPacket.write): three
