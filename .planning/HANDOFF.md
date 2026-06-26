@@ -1,81 +1,95 @@
-# Sulfur — Session Handoff (2026-06-26, Phase 17 deep gap-closure)
+# Sulfur — Session Handoff (2026-06-26, Phase 17 real-client gameplay polish)
 
-> Minecraft Java 26.2 (protocol 776) server in Go. GSD autonomous build. **Branch `ender-776`.** Push target: **`development`** (= GHCR `:latest`, auto-deploys to prod), NOT `main`. `git push origin ender-776:development`. Remote `git@github.com:imhinotori/sulfur`. Module `github.com/imhinotori/sulfur`. Dir `D:\ender`.
+> Minecraft Java 26.2 (protocol 776) server in Go. GSD autonomous build. **Branch `ender-776`.** Push target: **`development`** (= GHCR `:latest`, watchtower auto-deploys to prod demo.trysulfur.net:25565), NOT `main`. `git push origin ender-776:development`. Remote `git@github.com:imhinotori/sulfur`. Module `github.com/imhinotori/sulfur`. Dir `D:\ender`.
 
 ## ⭐ THE ABSOLUTE MANDATE (read first, governs everything)
 
-**ALL GAMEPLAY LOGIC IS A LITERAL 1:1 PORT OF THE VANILLA JAVA JAR.** Now in `CLAUDE.md` (commit `c8c32f26`). Every piece of game logic (damage, fall, combat, fluids, mob AI, physics, drops, placement, growth) MUST be a method-for-method copy of `temp/cache/26.2-inner.jar` (read via `javap -c -p -classpath temp/cache/26.2-inner.jar <FQCN>`). Mirror the vanilla call chain + numeric ops EXACTLY — float casts (`float64(float32(x))`), epsilons (`1e-6`), attribute multipliers, RNG draw order, immune/guard checks. **NO paraphrase, NO simplify, NO "improve", NO change-behavior.** The ONLY permitted deviation is OPTIMIZATION that provably preserves identical observable gameplay. **Verify against the jar bytecode BEFORE writing — never from intuition** (the user caught two "como me tinque" mistakes this session: fall-damage paraphrase + the "client simulates its own air locally" false assumption). Re-express idiomatically in Go (no GPL paste), CITE the class/method. When a faithful port needs a missing subsystem (attributes, effects), stub it behind a cited constant = the vanilla default, structured to become a real read later — never bake the value away.
+**ALL GAMEPLAY LOGIC IS A LITERAL 1:1 PORT OF THE VANILLA JAVA JAR.** In `CLAUDE.md`. Every piece of game logic MUST be a method-for-method copy of `temp/cache/26.2-inner.jar` (read via `javap -c -p -classpath temp/cache/26.2-inner.jar <FQCN>`). Mirror the vanilla call chain + numeric ops EXACTLY. **NO paraphrase, NO simplify, NO "improve". Verify against the jar bytecode BEFORE writing — never from intuition.** The user caught multiple "como me tinque" mistakes this session — when stuck, decompile the jar.
 
 ## WHERE WE ARE
 
-- **v2.0 SHIPPED + TAGGED.** v3 milestone STARTED (PROJECT.md `## Current Milestone: v3`). Phases 17 (gameplay-completion, FIRST) → 18 (online-mode) → 19 (TUI) → 20 (structure-polish). REGION-01 Folia → v4.
-- **Phase 17 is the active phase.** Original plan: 5 plans (17-01..05) wiring the six unwired GAMEPLAY seams. The real-client visual gate (GAMEPLAY-07) then exposed **12 more 1:1 deviations**, each fixed as a gap-closure plan (17-06..18). All committed on `ender-776`.
-- **GAMEPLAY-07 visual gate is STILL PENDING the user's final clean real-client pass.** The server runs locally (see below). Each pass has found bugs; all fixed 1:1; next clean pass closes Phase 17.
+- **Phase 17 (gameplay-completion) is the active phase.** GAMEPLAY-01..06 all **Complete**. Only **GAMEPLAY-07 (real-client visual gate) is Pending** — but the user confirmed water-float, eating, hunger, combat, drops, block-break all WORK this session. The gate is essentially passed.
+- The user chose **"audit more before closing Phase 17"** — three 1:1 audits ran (below), all found MISSING surfaces. Those are the remaining 1:1 work before formally closing GAMEPLAY-07.
+- **65 commits ahead of `origin/development`, NONE pushed.** This is why prod (watchtower) is stale — the `:latest` image was never rebuilt. The user authorized the push, BUT it is **BLOCKED by an environment pre-push hook** (a gate sentinel for an UNRELATED repo `D:/tori-labs/attendly/attendly` — `gate-ok` stale). Not a Sulfur problem; the user must refresh attendly's gate or push from a terminal without that hook.
 
-## WHAT LANDED THIS SESSION (all 1:1 from the jar, committed)
+## WHAT LANDED THIS SESSION (committed on `ender-776`)
 
-| Plan | Commit | Fix (jar method cited) |
-|------|--------|------------------------|
-| 17-01..04 | (earlier) | GAMEPLAY-01..06 wired: player-in-store+tab-list broadcast, pos-load, inv join-sync, attack dispatch, fluid spread, item drops |
-| 17-06 | 4bdc1f7f | **Spawn** — `PlayerSpawnFinder.getLevelRespawnPos`/`getSpawnPosInChunk`: spawn on decorated solid ground (was spawning inside blocks/water). Also fixed `performRespawn` (same bug). |
-| 17-07 | 58e49fb5 | **Foliage upside-down** — `FoliagePlacer.placeLeavesRow` uses `setWithOffset(pos.Y + localY)`; Sulfur used `below(i)` (negated). Flipped 6 sites to `above(i)` + DarkOak fix + loop-bound `i-2`. |
-| 17-08 | 8e156a74 | **Fall damage water guard** — `Entity.checkFallDamage` `!isInWater()` guard. |
-| 17-09 | 5b7a6186 | **Connect/disconnect logging** (stderr) — foundation of TUI-02. reason=quit/timeout. |
-| 17-10 | 1be1f959 | **Fall damage literal 1:1 re-port** — separated `checkFallDamage`/`causeFallDamage`/`calculateFallDamage`/`calculateFallPower` with the `(float)` cast + attribute multipliers + FALL_DAMAGE_IMMUNE guard (the earlier version paraphrased). |
-| 17-11 | e8373fd5+3 | **Combat full 1:1** — `Player.attack`: ATTACK_DAMAGE attr, attack-strength ramp `0.2+s²·0.8`, crit ×1.5, knockback, sweep, exhaustion; `LivingEntity.hurtServer` i-frames (invulnerableTime/lastHurt — anti spam-click), `actuallyHurt` armor curve. New `server/attributes.go` (vanilla attribute bases). |
-| 17-12 | 8fbbb7e9 | **Trees stacking** — `TreeFeature.doPlace` aborts unless `freeHeight >= treeHeight`; Sulfur used `minFree=2`. + `getMaxFreeTreeHeight` returns `i-2` + isVine guard. |
-| 17-13 | 9cf9226a | **Fluid physics wire + breath/drowning** — wired `applyFluidPhysics`; `LivingEntity.baseTick` air (300/-20/2.0 drown). ⚠️ later partly corrected (see 17-15, 17-18). |
-| 17-14 | e64fa40e | **Drops + pickup vanilla-parity** — `Block.popResource` jitter ±0.25 + ItemEntity velocity ±0.1 + pickup delay 10 + despawn 6000 + gravity 0.04 + `ItemEntity.playerTouch` pickup + gamemode gate. |
-| 17-15 | 2635a8ad,2b74b801,55527bfa | **Water-disconnect** (`handleMovePlayer`: player movement is CLIENT-authoritative — server must NOT rewrite the submitted position; removed the server-side water re-apply that caused the client to drop). **Pickup-slot** (`Inventory.add`/`getFreeSlot`: pickups → main/hotbar storage 0-35 only, never crafting/armor). **SetSlot sync** (`broadcastChanges` → `ContainerSetSlot` after pickup). |
-| 17-16 | 414a72f4 | **Grass-on-water + flower-stacking** — `VegetationBlock.canSurvive`/`mayPlaceOn`: `#supports_vegetation` tag (water/plants excluded). |
-| 17-17 | 20e3795a | **Empty-hand places stone** — `ServerPlayerGameMode.useItemOn`→`BlockItem.place`: place the block FROM the held item; empty hand = nothing; survival shrinks stack 1; new `server/block_place.go` item→block map. |
-| 17-18 | 5b9c43ec | **Oxygen bar never shows** — `DATA_AIR_SUPPLY_ID` (index 1, INT serializer) synched via `ClientboundSetEntityData` (self + observers); corrects 17-13's wrong "client simulates air locally" assumption. |
+| Commit | Fix |
+|--------|-----|
+| 414a72f4..5b9c43ec | (prior session) 17-16..18 |
+| ab4b4490 / eb90b554 | **17-19 hunger 1:1** — FoodData.tick (exhaustion 4.0F drain, regen 10/80-tick, starvation, addExhaustion 40cap, eat/add, movement+attack+damage exhaustion call-sites). |
+| ed28b229 | **17-20 inventory click 1:1** — AbstractContainerMenu.clicked: PICKUP/QUICK_MOVE/SWAP/THROW/PICKUP_ALL/QUICK_CRAFT/CLONE + moveItemStackTo + quickMoveStack + Slot primitives. Was a no-op stub. |
+| 255e6aff / dfe3870f | **17-21 block-break dig-time 1:1** — ServerPlayerGameMode dig-time + per-hardness crack overlay + **jar-extracted hardness for all 1196 blocks** (new GenBlockHardness.java). Was instant-break. |
+| eb90b554 / 00bf1d03 | **17-22 eating 1:1** — startUsingItem→completeUsingItem→FoodData.eat + **jar-extracted per-item food/consumable** (GenItemFood.java). Closes the hunger loop. + GATE-ONLY `SULFUR_TEST_KIT=1` starter kit (food+blocks). |
+| 0edcae1b | **water is NOT a collision wall** — blockSolidAt excluded fluids (LiquidBlock.getCollisionShape==empty). You sink through water now. |
+| bf4277c9 | **flow fluids into freshly-edited cells** — reconcileEdit schedules neighbor fluids (Level.updateNeighborsAt→LiquidBlock.neighborChanged). Water flows into a broken-block gap. |
+| 82797bd9 | **SULFUR_ULTRA_DEBUG firehose** — opt-in full per-tick gameplay trace (packet/move/water/tick/fluid/edit/combat/eat/collide categories). THE diagnostic tool. `grep 'ULTRA\[water\]'`. |
+| fbc6b3d1 | **broadcast fluid block changes to clients** — setFluidBlock = SetBlock + broadcastBlockUpdate (Level.setBlock UPDATE_CLIENTS). |
+| **f3ce7b3e** | **⭐ THE water-float root cause** — section `nonEmptyFluidCount` (chunk packet 2nd short) was hardcoded 0, so the client treated generated water as inert (no float until a block update woke it). Now `level.CountFluidBlocks` recounts at the END of Generate (aquifer writes water AFTER FillChunk). **User confirmed: floating works.** New `block.IsFluid`. |
+| 994e2f8e | **deflake TestTickAIDrivesMobs** (user OK'd touching AI) — loop-until-advance + drain asyncIn2. Was ~1/3 flake that could fail CI -race + block the image publish. 15/15 + 4/4 suite green now. |
+| d9fccc0f / 5f798f8c / f88e4338 / eb197e0a | **cmd/testbot** — headless scripted client (login→config→play, offline, compression 256, teleport-confirm). `-cmd "tp x y z"`, `-probe "x z"` (decodes received chunks to verify client-side water), `-mode wander` (NPC random-walk + swing/select/use). THE tool to reproduce gameplay without the real client. |
+| 5f798f8c | **/tp command** — dev/gate teleport (reuses respawn re-teleport contract). New cmd-executor ctx key. |
 
-## RESUME HERE (after compact — continue autonomously)
+## ⚠️ TWO REVERTS — the fluid-cascade trap (DO NOT re-introduce naively)
 
-1. **The user said: define-GSD → prepare-compact → compact → continue autonomous.** Post-compact, CONTINUE AUTONOMOUSLY on Phase 17.
-2. **The local server is rebuilt + running for the GAMEPLAY-07 gate** (seed 777, `localhost:25565`). The user is doing real-client passes; when they report new bugs, fix each 1:1 from the jar (the established loop: javap → diagnose → executor with bytecode → rebuild → restart server). When the user reports a CLEAN pass, **close Phase 17** (`/gsd-complete` flow → audit → mark GAMEPLAY-07 done → advance to Phase 18).
-3. **If the user is away / no new bug:** the autonomous next step is to proactively AUDIT the remaining Phase-17 gameplay surfaces against the jar for 1:1 deviations (the gate keeps finding them — get ahead of it). Likely-unaudited surfaces: hunger/food (saturation/exhaustion tick), the actual inventory CLICK handlers (ContainerClick vs vanilla `AbstractContainerMenu.clicked` — quickmove/swap/drop), block-break TIME/progress (`ServerPlayerGameMode.destroyBlock` tick), entity tracking deltas, the carried-item/creative-set paths. Spawn Explore agents to diff each vs the jar, then fix 1:1.
-4. **Then Phase 18** (online-mode: Yggdrasil `hasJoined` auth + EncryptionRequest/Response RSA + AES-128/CFB8 — hand-rolled CFB8 over stdlib AES, no new dep) once Phase 17 closes.
+Twice this session a "flow generated cave/aquifer water on chunk load" fix (`7d5a0b90` reverted by `fb8a43aa`; `468f59a7` reverted by `761872cf`) caused a **runaway fluid cascade** (11386 then 25674 spreadTo events) that saturated the tick and disconnected every client (the bot AND a real client). Both reverted. The current tree has NO chunk-fluid scan.
 
-## KNOWN 1:1 DEBT (deferred-items.md — owned by the parallel MOB-AI track)
+**Symptom that REMAINS (the open bug):** generated cave/aquifer water bordering an air gap stays frozen — a player in an air pocket surrounded by water sees the gap stay dry. (You float fine now; this is the spread-into-gap bug only.)
 
-The user is running a SEPARATE agent in another chat porting the full mob set (passive + hostile) in an isolated worktree. Do NOT touch mob AI files (`server/ai_*.go`, `server/spawner*.go`) — they'll merge later. Two known 1:1 violations belong to that track:
-- **Mobs walk ON water** — `WalkNodeEvaluator.getPathType` (water nodes) + `Mob.travel`→`travelInFluid` server-side not ported. (Player fluid physics is client-authoritative and correct; MOB fluid physics IS server-side and missing.)
-- **`TestTickAIDrivesMobs` flaky** — mob nav RNG non-deterministic; needs a seeded source per the 1:1 mandate.
+**THE CORRECT FIX (jar-verified at end of session — implement this, NOT a scan-and-schedule):**
+- Vanilla `NoiseBasedChunkGenerator.fillFromNoise`: per fluid cell placed, `if (aquifer.shouldScheduleFluidUpdate() && !state.getFluidState().isEmpty()) chunk.markPosForPostProcessing(pos)`. It does NOT schedule a simulation tick — it MARKS the position.
+- Vanilla `LevelChunk.postProcessGeneration` (on chunk promote): for each marked pos, call `FluidState.tick(level, pos, state)` **ONCE** (+ `BlockState.tick` if LiquidBlock). **One tick per marked cell, not a recurring sim.**
+- Why no cascade: the aquifer only marks the UNSTABLE BORDER cells (`shouldScheduleFluidUpdate`), not all cave water, AND the post-process is one-shot.
+- **Sulfur's mistake (both reverts):** put cells into the continuous `scheduleFluidTick`→`tickFluids` (every 5 ticks → spread → more cells → cascade). The fix is: (a) in the generator, track which cells the aquifer flagged + are fluid (mark them), (b) a one-shot `postProcessGeneration` that runs `fluidTick` on each marked cell EXACTLY ONCE when the chunk goes live — NOT re-scheduled.
+- Sulfur's aquifer is in `world/levelgen/noisechunk/` (Aquifer / FillChunk / finishChunk). The `shouldScheduleFluidUpdate` equivalent + the marked-pos list need porting, then a one-time drain on chunk Ready (the `world.ChunkManager.Insert` / `tickChunks` Ready seam).
 
-## STANDING CONSTRAINTS (unchanged)
+## THE THREE 1:1 AUDITS (run this session — all MISSING, these close GAMEPLAY-07)
 
-1. **1:1 mandate** (above — the #1 rule now).
-2. **CGO_ENABLED=0 clean** (pure-Go static binary). New deps OK where justified (v3 TUI = bubbletea; encryption = stdlib AES + hand-rolled CFB8).
-3. **Push target `development`** (CI → :latest → prod via Watchtower on demo.trysulfur.net:25565). `main`→stable. (Note: nothing pushed yet this session — all commits are local on `ender-776`. Push when the user asks or at a milestone.)
-4. **-race needs Docker** (host CGO=0): `MSYS_NO_PATHCONV=1 docker run --rm -v //d/ender://src -w //src golang:1.26 go test -race -timeout 1800s ./server/`. The executors can't run -race (no gcc); the orchestrator runs it in Docker. `./world/...` is slow (~200-370s) — use `-timeout 600s`.
-5. **STALE gopls/LSP** floods FALSE diagnostics (undefined X, redeclared, `tools/ undefined`, packetid.ServerboundAttack) after EVERY executor. ALL FALSE — `tools/` is a SEPARATE module. Trust `go build ./...` (exit 0) + `go vet` + `go test`. NEVER revert on gopls.
-6. **NO Co-Authored-By / no Claude attribution** in commits/PRs — user is sole author, absolute.
-7. **Determinism gates** (worldgen): `TestDecorationReorderIdentical` + `TestEmitOnce` + `TestEmitOnceUnderHold` stay green. A worldgen fix that changes output regenerates the affected goldens (the gates assert reproducibility, not specific positions).
-8. **Pre-existing flake**: `TestTickAIDrivesMobs` fails ~1/3 full-suite runs (mob AI async-pool/RNG, NOT a regression — proven by stash-testing). Run the rest of `./server/` to confirm green; this one is the AI track's.
+1. **Swing + held-item visibility (MISSING).** `ServerboundSwing` falls to the applyInput `default:` no-op — other players never see arm swings (`ClientboundAnimate`, wire: VarInt entityId + UByte action; mainhand=0 offhand=3). `handleSetCarriedItem` updates the slot locally only — no `ClientboundSetEquipment` + no per-tick `detectEquipmentUpdates` (LivingEntity), so others never see held-item/armor changes. Encoders missing in `entity_encode.go`; tracker (`tracker.go`) emits no Animate/SetEquipment.
+2. **Player movement tracking (DEVIATION).** Tracker sends `TeleportEntity` (absolute, 32 bytes) EVERY tick instead of delta `MoveEntityPos/PosRot/Rot` (~6 bytes, 1/4096 fixed-point). The delta encoders EXIST in `entity_encode.go:352-414` but are NEVER called. Missing: ServerEntity.sendChanges (4096 delta scale, the |delta|<8-block→delta-else-teleport decision, the 400-tick forced teleport, the 1-byte-angle rotation threshold). RotateHead sent unconditionally every tick. Observable: other players STUTTER/warp instead of smooth-walk; 5-10× bandwidth.
+3. **Eat/pose animation 3rd-person (MISSING).** Eating logic ported (17-22) but `DATA_LIVING_ENTITY_FLAGS` (index 8, BYTE serializer id 0, bit 0 = IS_USING) NOT synced on startUsingItem/stopUsingItem → others don't see the eating pose. Also `DATA_SHARED_FLAGS_ID` (index 0, BYTE — sprint/sneak/swim pose) never synced. Proof-of-pattern: Sulfur already syncs `DATA_AIR_SUPPLY_ID` (index 1, INT id 1) in `entity_encode.go` (17-18) — extend that exact pattern.
 
-## RUNNING THE GATE SERVER (the established loop)
+## RESUME HERE (after compact)
+
+1. **The fluid-cave-gap fix** — implement the vanilla `markPosForPostProcessing` + one-shot `postProcessGeneration` (above). This is the safe replacement for the cascading scan. Decompile-verified; just needs porting. Test the cascade is GONE (the bot `-mode wander` near spawn, or the ULTRA_DEBUG `grep -c 'ULTRA\[fluid\]'` should stay LOW, not 25k).
+2. **The three audit fixes** (swing/equipment broadcast, delta-move tracking, eat/pose metadata) — these are the remaining 1:1 work that closes GAMEPLAY-07. The `-mode wander` NPC makes them VISIBLE to gate. Each is a clean port (cited above).
+3. **Then close GAMEPLAY-07** → audit → mark done → Phase 18 (online-mode: Yggdrasil auth + AES/CFB8).
+4. **The push to `development`** (deploys to prod, fixes watchtower) — authorized by user, BLOCKED by the attendly gate hook. Retry once that gate clears, or the user pushes manually.
+
+## TOOLS (built this session — use them)
+
+- **`./testbot.exe`** (build `go build -o testbot.exe ./cmd/testbot`): headless client. Flags: `-name`, `-mode hold|walk|swim|dive|goto|wander`, `-cmd "tp x y z"`, `-probe "x z"`, `-x -y -z`, `-ticks`, `-override-spawn`. The `-mode wander` is the roaming NPC (give it the kit via the server's `SULFUR_TEST_KIT=1`). NOTE: `-cmd tp` re-teleport sometimes drops the bot before the new chunk streams (pre-existing /tp re-teleport teardown — a known rough edge).
+- **`SULFUR_ULTRA_DEBUG=1`**: the firehose. `grep 'ULTRA\[<cat>\]' <log>`. Categories: packet/move/water/tick/fluid/edit/combat/eat/collide. `tick` shows vY + flags `[water,eyeWater,ground,digging,using]`.
+- **`SULFUR_TEST_KIT=1`**: gate-only starter kit (food + cobble/planks/torch/dirt) seeded at join. Default prod join = vanilla empty inventory (untouched).
+- **`/tp <x> <y> <z>`**: in-game dev teleport (breaks the underwater-.dat disconnect loop too).
+
+## RUNNING THE GATE SERVER
 
 ```bash
-# kill old, rebuild, restart (seed 777 has a clean dry spawn at 0.5,71,0.5):
 powershell -Command "Get-NetTCPConnection -LocalPort 25565 -ErrorAction SilentlyContinue | %% { Stop-Process -Id \$_.OwningProcess -Force }"
 CGO_ENABLED=0 go build -o sulfur.exe ./cmd/sulfur
-./sulfur.exe -seed 777 2>&1 | tee /tmp/sulfur-gate.log &   # run_in_background
+SULFUR_ULTRA_DEBUG=1 SULFUR_TEST_KIT=1 ./sulfur.exe -seed 777   # run_in_background
 ```
-The server logs connect/disconnect to stderr (`/tmp/sulfur-gate.log`) — grep it for `player joined`/`player left reason=...` when diagnosing a disconnect (reason=quit = client closed on a bad packet; reason=timeout = keep-alive). NOTE: `SULFUR_SEED` env var does NOT work — use the `-seed` flag.
+Seed 777 spawn = (0.5, 71, 0.5) dry. Player .dat files were DELETED this session (all respawn at spawn; backup in /tmp/sulfur-dat-backup/) — `world/playerdata/` is empty.
 
-## INFRA (live, unchanged)
+## STANDING CONSTRAINTS
 
-- GHCR `ghcr.io/imhinotori/sulfur` (public): development→`:latest`, main→`:stable`. Watchtower auto-deploys `:latest` to `demo.trysulfur.net:25565` (Debian 13). `Dockerfile` CGO=0 distroless.
-- ⚠️ **Prod root password was exposed in chat earlier — the USER must rotate it (still pending).**
+1. **1:1 mandate** (above — #1 rule).
+2. **CGO_ENABLED=0 clean** (pure-Go static binary).
+3. **Push target `development`** (CI→:latest→prod). 65 commits unpushed; push blocked by the attendly gate hook (not Sulfur's).
+4. **-race needs Docker** (host CGO=0): `MSYS_NO_PATHCONV=1 docker run --rm -v //d/ender://src -w //src golang:1.26 go test -race -timeout 1800s ./server/`.
+5. **STALE gopls** floods FALSE diagnostics (`packetid.ServerboundAttack`, `entity.SulfurCube`, `tools undefined`, `go-mc/nbt`) after EVERY edit. ALL FALSE — trust `go build ./...` (exit 0) + `go vet` + `go test`. `tools/` is a SEPARATE module.
+6. **NO Co-Authored-By / no Claude attribution** in commits — user is sole author, absolute.
+7. **DON'T re-introduce a scan-and-schedule for generated fluids** — it cascades (proven twice). Use the one-shot postProcessGeneration approach.
 
-## KEY PATHS (Phase 17 gameplay)
+## KEY PATHS
 
-- Combat: `server/combat.go` (hurtServer/i-frames/armor), `server/attack_dispatch.go` (Player.attack), `server/attributes.go` (NEW — attribute bases).
-- Fluid: `server/fluid.go` (spread — 1:1, don't touch), `server/fluid_physics.go` (player water phys — wired for player; reserved for mobs), `server/breath.go` (air/drowning), `server/fluid_schedule.go`.
-- Damage env: `server/fall_damage.go` (1:1 checkFallDamage chain).
-- Inventory/items: `server/inventory.go` (slots, click handlers — NOT YET AUDITED vs jar), `server/item_entity.go` (ItemEntity tick + pickup), `server/block_drop.go` (popResource), `server/block_place.go` (NEW — useItemOn/BlockItem.place), `server/block_interact.go` (break + place dispatch).
-- Player entity/sync: `server/player_visibility.go` (player Entity in store, tab-list), `server/entity_encode.go` (SetEntityData, air entry, item entry), `server/tracker.go`.
-- Worldgen: `world/levelgen/feature/tree.go` + `tree_placers.go` (foliage/trunk — 1:1 fixed), `world/feature_patch.go` (canSurvive — 1:1 fixed), `world/spawn.go` (PlayerSpawnFinder).
-- Planning: `.planning/STATE.md` (current — updated), `.planning/PROJECT.md` (v3 milestone), `.planning/ROADMAP.md` (Phases 17-20), `.planning/phases/17-gameplay-completion/` (17-01..18 SUMMARYs + deferred-items.md).
+- Fluid: `server/fluid.go` (sim — DON'T add a chunk scan), `server/fluid_physics.go`, `server/breath.go`. Generator fluid: `world/levelgen/noisechunk/` (FillChunk/finishChunk/Aquifer — where the markPosForPostProcessing port goes). FluidCount fix: `world/noisegen.go` (recount at end of Generate), `level/chunk.go` (CountFluidBlocks), `level/block/utilfuncs.go` (IsFluid).
+- Visibility (the 3 audits): `server/tracker.go` (delta-move + Animate + SetEquipment broadcast), `server/entity_encode.go` (SetEntityData/equipment/animate encoders + the metadata pattern — air at index 1 is the template), `server/subtick.go` (ServerboundSwing handler — currently default no-op), `server/inventory.go` (handleSetCarriedItem — needs equipment broadcast), `server/item_use.go` (startUsingItem/stopUsingItem — need DATA_LIVING_ENTITY_FLAGS sync).
+- Tools: `cmd/testbot/main.go` (the headless NPC client), `server/ultradebug.go` (firehose), `server/test_kit.go` (gate kit), `server/commands.go` (/tp).
+- Planning: `.planning/STATE.md`, `.planning/PROJECT.md`, `.planning/ROADMAP.md`, `.planning/phases/17-gameplay-completion/`.
+
+## INFRA
+
+- GHCR `ghcr.io/imhinotori/sulfur`: development→`:latest` (watchtower auto-deploys to demo.trysulfur.net:25565), main→`:stable`. CI `.github/workflows/docker-publish.yml` (push to development/main) + `go.yml` (build + `go test -race ./...`).
+- ⚠️ Prod root password exposed in chat earlier — user must rotate (still pending).

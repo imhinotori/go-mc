@@ -2,7 +2,7 @@
 gsd_state_version: 1.0
 milestone: v3
 milestone_name: Online-mode + Operator UX + Structure polish
-status: "GAMEPLAY-01..06 wired + 17 gap-closure 1:1 fixes landed (incl. proactive-audit ports 17-19 FoodData hunger, 17-20 container-click, 17-21 block-break dig-time + jar-extracted hardness, 17-22 item-use/eating + jar-extracted per-item food). Gate-only SULFUR_TEST_KIT=1 starter kit (food+blocks) for the visual gate. gameplay-1:1 mandate ABSOLUTE in CLAUDE.md. build/vet/full-server-tests green; -race clean except the known pre-existing TestTickAIDrivesMobs flake (mob-AI, deferred)."
+status: "GAMEPLAY-01..06 Complete; real-client gameplay confirmed working this session (float/eat/hunger/combat/drops/break). Landed: 17-19 hunger, 17-20 container-click, 17-21 block-break+hardness, 17-22 eating+food-data, water-no-collision, fluid-flow-on-edit+broadcast, ⭐FluidCount fix (THE float root cause — user confirmed floating works), ULTRA_DEBUG firehose, cmd/testbot (headless client + NPC wander), /tp, deflake TestTickAIDrivesMobs. TWO reverts of a cascading generated-fluid scan (DO NOT re-add — use vanilla markPosForPostProcessing one-shot). 65 commits unpushed (prod stale); push blocked by an unrelated env gate hook. gameplay-1:1 mandate ABSOLUTE."
 stopped_at: Completed 17-04-PLAN.md (GAMEPLAY-06)
 last_updated: "2026-06-26T13:12:01.509Z"
 progress:
@@ -28,7 +28,13 @@ Phase: 17 — Gameplay Completion — IN PROGRESS (21 plans: 5 original + 16 rea
 Plan: 17-21 COMPLETE (ServerPlayerGameMode block-break dig-time 1:1 + jar-extracted block hardness). NEXT: re-verify the GAMEPLAY-07 VISUAL GATE with a real client; if clean, close Phase 17 → Phase 18 (online-mode).
 Status: GAMEPLAY-01..06 wired + gap-closure 1:1 fixes landed (incl. 17-19 FoodData hunger, 17-20 container-click, 17-21 block-break dig-time + hardness extraction); gameplay-1:1 mandate ABSOLUTE in CLAUDE.md. build/vet/server-tests green; -race not runnable this session (no gcc/cgo) but dig state is tick-owned single-owner (race-clean by construction).
 
-### ⚠️ WHAT'S NEXT (resume here)
+### ⚠️ WHAT'S NEXT (resume here — see .planning/HANDOFF.md for the FULL detail)
+
+0. **Fluid cave-gap fix** (open bug — water bordering an air gap stays frozen): port vanilla `NoiseBasedChunkGenerator.fillFromNoise` markPosForPostProcessing (mark aquifer fluid cells) + `LevelChunk.postProcessGeneration` ONE-SHOT `FluidState.tick` per marked cell on chunk-load. DO NOT re-add a scan-and-schedule — it cascaded TWICE this session (11k/25k spreadTo, disconnected clients; both reverted).
+1. **Three 1:1 audit fixes that close GAMEPLAY-07** (all MISSING): (a) swing+held-item broadcast to observers (ClientboundAnimate + ClientboundSetEquipment + detectEquipmentUpdates), (b) delta-move tracking (tracker sends TeleportEntity every tick — should send MoveEntityPos/PosRot/Rot deltas; encoders exist, never called), (c) eat/pose metadata (DATA_LIVING_ENTITY_FLAGS index 8 + DATA_SHARED_FLAGS index 0 — extend the air-sync pattern). The `testbot -mode wander` NPC makes these visible to gate.
+2. **Push to development** (deploys to prod, fixes watchtower) — authorized, BLOCKED by the unrelated attendly env gate hook.
+
+### ⚠️ (legacy) WHAT'S NEXT
 
 1. **GAMEPLAY-07 visual gate (autonomous:false)** — pending the user's real-client pass on seed 777 (`localhost:25565`, server rebuilt + running with all fixes through 17-22 AND the test kit: start it with `SULFUR_TEST_KIT=1 ./sulfur.exe -seed 777`). Proactive jar-audit closed 4 more 1:1 gaps the gate hadn't yet reached: hunger now drains/regens/starves (17-19); the inventory CLICK handler now does real pickup/shift-click/swap/throw/double-click/drag/clone (17-20, was a no-op stub); block-break now has the per-hardness dig-time + crack-overlay model with jar-extracted hardness for all 1196 blocks (17-21, was instant-break); and EATING is wired (17-22, startUsingItem→completeUsingItem→FoodData.eat + jar-extracted per-item food/consumable) so the hunger loop is closed (drain + regain). The gate-only `SULFUR_TEST_KIT=1` join kit (food + cobble/planks/torch/dirt) lets the operator exercise eat + container-click + place/break without first mining a meal (default prod join is the vanilla empty inventory, untouched). If the next pass is clean → close Phase 17.
 2. **Known 1:1 DEBT (deferred-items.md, owned by the mob-AI track the user runs in parallel):**
