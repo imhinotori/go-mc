@@ -82,6 +82,7 @@ func (r chunkReady) applyTo(t *TickLoop) {
 		return
 	}
 	t.world.Insert(r.res.Pos, r.res.Chunk)
+	t.postProcessChunkFluids(r.res.Pos, r.res.Chunk)
 }
 
 // tracker is the entity/chunk tracking executor seam (TICK-05). Phase 3 shipped it with a

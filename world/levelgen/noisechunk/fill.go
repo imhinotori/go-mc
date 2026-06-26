@@ -31,7 +31,11 @@ import (
 //
 // It is an algorithmic port of the doFill loop + the block-state rule chain, NOT a copy of
 // Mojang source.
-func Fill(nc *NoiseChunk, aq *Aquifer, ov *OreVeinifier, set func(localX, worldY, localZ int, state block.StateID)) {
+// mark is the fill's post-process hook: it is called with (localX, worldY, localZ) for each
+// fluid cell the aquifer flagged shouldScheduleFluidUpdate during fill, mirroring
+// NoiseBasedChunkGenerator.fillFromNoise -> ChunkAccess.markPosForPostProcessing. nil is a
+// no-op (test/standalone callers that don't collect post-process marks).
+func Fill(nc *NoiseChunk, aq *Aquifer, ov *OreVeinifier, set func(localX, worldY, localZ int, state block.StateID), mark func(localX, worldY, localZ int)) {
 	stone := block.ToStateID[block.Stone{}]
 	deepslate := block.ToStateID[block.Deepslate{Axis: block.Y}]
 	bedrock := block.ToStateID[block.Bedrock{}]
@@ -44,7 +48,7 @@ func Fill(nc *NoiseChunk, aq *Aquifer, ov *OreVeinifier, set func(localX, worldY
 		for lz := 0; lz < 16; lz++ {
 			wz := nc.WorldZ(lz)
 			for y := minY; y < maxY; y++ {
-				set(lx, y, lz, blockState(nc, aq, ov, lx, y, lz, wx, wz, stone, deepslate, bedrock))
+				set(lx, y, lz, blockState(nc, aq, ov, lx, y, lz, wx, wz, stone, deepslate, bedrock, mark))
 			}
 		}
 	}
@@ -55,6 +59,7 @@ func blockState(
 	nc *NoiseChunk, aq *Aquifer, ov *OreVeinifier,
 	lx, y, lz, wx, wz int,
 	stone, deepslate, bedrock block.StateID,
+	mark func(localX, worldY, localZ int),
 ) block.StateID {
 	// Bedrock floor (provisional; the real RandomBedrockFloor is a Wave-7 surface concern).
 	if y == nc.MinY() {
@@ -66,6 +71,12 @@ func blockState(
 	// Rule 1: the aquifer base rule. For a non-solid block it returns a real fluid
 	// (water/lava) or "air" (reported as not-a-fluid here). A returned fluid wins.
 	if st, isFluid := aq.computeSubstance(wx, y, wz, d); isFluid {
+		// fillFromNoise marks the cell for post-processing when the aquifer flagged it as an
+		// unstable fluid border (shouldScheduleFluidUpdate) AND the placed state is a fluid —
+		// the one-shot FluidState.tick the chunk runs when it goes live.
+		if mark != nil && aq.ShouldScheduleFluidUpdate() {
+			mark(lx, y, lz)
+		}
 		return st
 	}
 
@@ -113,6 +124,12 @@ func FillChunk(nc *NoiseChunk, aq *Aquifer, ov *OreVeinifier) *level.Chunk {
 		if st != nc.water && y+1 > heights[lz<<4|lx] {
 			heights[lz<<4|lx] = y + 1
 		}
+	}, func(lx, y, lz int) {
+		// markPosForPostProcessing: pack the LOCAL position (localY = worldY - minY) onto the
+		// chunk's post-process list. The server runs FluidState.tick once per entry when the
+		// chunk goes live (LevelChunk.postProcessGeneration).
+		localY := y - nc.minY
+		ch.PostProcessFluids = append(ch.PostProcessFluids, uint32(localY)<<8|uint32(lz&15)<<4|uint32(lx&15))
 	})
 
 	nc.finishChunk(ch, heights)

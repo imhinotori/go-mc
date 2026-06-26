@@ -30,10 +30,12 @@ import (
 // above the table stay dry (air). The global FluidPicker still gives ocean water up to
 // sea level (63) and lava below y=-54 as the baseline each aquifer perturbs.
 //
-// shouldScheduleFluidUpdate (a flowing-water bookkeeping flag in vanilla) is irrelevant to
-// static block PLACEMENT (we don't schedule fluid ticks at gen time), so the flag's writes
-// are dropped; the substance RETURN value — the only thing the fill needs — is ported
-// faithfully, constant-for-constant. It is an algorithmic port, NOT a copy of Mojang source.
+// shouldScheduleFluidUpdate (a flowing-water bookkeeping flag) is now ported faithfully (it
+// was previously dropped): computeSubstance writes it on every return path exactly as the
+// bytecode does, and the fill pass reads it via ShouldScheduleFluidUpdate to decide which
+// fluid cells to markPosForPostProcessing — the one-shot FluidState.tick that lets generated
+// cave/aquifer water flow into a bordering air gap when the chunk goes live. It is an
+// algorithmic port, NOT a copy of Mojang source.
 //
 // Source (javap -c, 26.2-inner.jar):
 //   - net.minecraft.world.level.levelgen.Aquifer$NoiseBasedAquifer  (<init>, computeSubstance,
@@ -74,7 +76,22 @@ type Aquifer struct {
 	water block.StateID
 	lava  block.StateID
 	air   block.StateID
+
+	// shouldScheduleFluidUpdate ports NoiseBasedAquifer.shouldScheduleFluidUpdate — the
+	// flowing-water bookkeeping flag computeSubstance writes as a side effect of EVERY call
+	// (the bytecode sets it on each return path). It is true ONLY for the unstable BORDER
+	// cells of an aquifer (where the fluid status is discontinuous / flowing toward a hole),
+	// NOT for all cave water. fillFromNoise reads it after each placed fluid block to decide
+	// whether to markPosForPostProcessing(pos) — the one-shot FluidState.tick the chunk runs
+	// once when it goes live (LevelChunk.postProcessGeneration), which is what lets generated
+	// cave/aquifer water flow into a bordering air gap. Restored from the earlier "baked away"
+	// drop (the value is now a real read the fill pass consumes — never a hardcoded constant).
+	shouldScheduleFluidUpdate bool
 }
+
+// flowingUpdateSimilarity ports NoiseBasedAquifer.FLOWING_UPDATE_SIMULARITY =
+// similarity(Mth.square(10), Mth.square(12)) = similarity(100, 144) = 1 - 44/25 = -0.76.
+const flowingUpdateSimilarity = 1.0 - float64(144-100)/25.0
 
 // fluidStatus ports Aquifer$FluidStatus: a fluid level + a fluid type id. at(y) returns
 // the fluid type below the level, air at/above it.
@@ -125,9 +142,10 @@ func gridZ(z int) int { return z >> 4 }
 // fromGridZ ports fromGridZ(gz, off) = (gz << 4) + off.
 func fromGridZ(gz, off int) int { return (gz << 4) + off }
 
-// NOTE: vanilla's FLOWING_UPDATE_SIMULARITY = similarity(Mth.square(10), Mth.square(12))
-// only gates shouldScheduleFluidUpdate (a flowing-water flag), which does not affect static
-// block PLACEMENT — so it is intentionally omitted from this placement-only port.
+// ShouldScheduleFluidUpdate exposes the flag computeSubstance set on its LAST call (the fill
+// loop reads it immediately after each computeSubstance to mark border fluid cells for the
+// chunk's one-shot postProcessGeneration). Cite: NoiseBasedAquifer.shouldScheduleFluidUpdate().
+func (a *Aquifer) ShouldScheduleFluidUpdate() bool { return a.shouldScheduleFluidUpdate }
 
 // surfaceSamplingOffsetsInChunks ports SURFACE_SAMPLING_OFFSETS_IN_CHUNKS — the 13
 // section-offset probes computeFluid scans for a nearby exposed surface (the static block).
@@ -245,18 +263,21 @@ func (a *Aquifer) globalComputeFluid(y int) fluidStatus {
 // vanilla returning AIR vs a fluid BlockState (the fill writes AIR either way).
 func (a *Aquifer) computeSubstance(blockX, blockY, blockZ int, dens float64) (block.StateID, bool) {
 	if dens > 0 {
+		a.shouldScheduleFluidUpdate = false // bytecode 6-8
 		return 0, false
 	}
 
 	global := a.globalComputeFluid(blockY)
 
 	if blockY > a.skipSamplingAboveY {
-		// Above the surface: just the global status; no aquifer sampling.
+		// Above the surface: just the global status; no aquifer sampling. (bytecode 63-65)
+		a.shouldScheduleFluidUpdate = false
 		return a.fluidResult(a.statusAt(global, blockY))
 	}
 
-	// If the global status itself is lava at this y, it is lava (DEBUG off path).
+	// If the global status itself is lava at this y, it is lava (DEBUG off path). (bytecode 92-94)
 	if a.statusAt(global, blockY) == a.lava {
+		a.shouldScheduleFluidUpdate = false
 		return a.fluidResult(a.lava)
 	}
 
@@ -316,25 +337,38 @@ func (a *Aquifer) computeSubstance(blockX, blockY, blockZ int, dens float64) (bl
 	sub1 := a.statusAt(status1, blockY)
 
 	if sim12 <= 0 {
-		// The block is solidly inside aquifer-1's region — its status wins outright.
+		// The block is solidly inside aquifer-1's region — its status wins outright. The flag
+		// is set per the bytecode (563-616): if sim12 is BELOW the flowing threshold the cell
+		// is deep inside one aquifer (stable, no update); otherwise it is flagged when aquifer-1
+		// and aquifer-2 carry DIFFERENT statuses (a status boundary => flowing).
+		if sim12 < flowingUpdateSimilarity {
+			a.shouldScheduleFluidUpdate = false
+		} else {
+			status2 := a.getAquiferStatus(idx2)
+			a.shouldScheduleFluidUpdate = !statusEqual(status1, status2)
+		}
 		return a.fluidResult(sub1)
 	}
 
-	// Water-over-lava boundary: a water aquifer immediately above lava stays water.
+	// Water-over-lava boundary: a water aquifer immediately above lava stays water. (bytecode
+	// 617-666: this path forces the flag TRUE — water sitting on lava is an unstable border.)
 	if sub1 == a.water {
 		below := a.globalComputeFluid(blockY - 1)
 		if a.statusAt(below, blockY-1) == a.lava {
+			a.shouldScheduleFluidUpdate = true
 			return a.fluidResult(sub1)
 		}
 	}
 
-	// Otherwise interpolate the barrier pressure between the closest aquifers.
+	// Otherwise interpolate the barrier pressure between the closest aquifers. Each air-win
+	// branch clears the flag (bytecode 714/773/824 set it false before returning air).
 	var barrier mutableDouble
 	barrier.set(math.NaN())
 	status2 := a.getAquiferStatus(idx2)
 
 	pressure12 := sim12 * a.calculatePressure(blockX, blockY, blockZ, &barrier, status1, status2)
 	if dens+pressure12 > 0 {
+		a.shouldScheduleFluidUpdate = false
 		return a.fluidResult(0) // air wins (no fluid)
 	}
 
@@ -343,6 +377,7 @@ func (a *Aquifer) computeSubstance(blockX, blockY, blockZ int, dens float64) (bl
 	if sim13 > 0 {
 		pressure13 := sim12 * sim13 * a.calculatePressure(blockX, blockY, blockZ, &barrier, status1, status3)
 		if dens+pressure13 > 0 {
+			a.shouldScheduleFluidUpdate = false
 			return a.fluidResult(0)
 		}
 	}
@@ -351,15 +386,37 @@ func (a *Aquifer) computeSubstance(blockX, blockY, blockZ int, dens float64) (bl
 	if sim23 > 0 {
 		pressure23 := sim12 * sim23 * a.calculatePressure(blockX, blockY, blockZ, &barrier, status2, status3)
 		if dens+pressure23 > 0 {
+			a.shouldScheduleFluidUpdate = false
 			return a.fluidResult(0)
 		}
 	}
 
-	// idx4 (the 4th-closest aquifer cache index) is tracked by the grid search to keep the
-	// insertion faithful, but only feeds vanilla's shouldScheduleFluidUpdate flag (omitted
-	// here) — not the placement decision; explicitly discarded.
-	_ = idx4
+	// Final path (bytecode 831-966): the cell is a fluid carrying aquifer-1's status; the flag
+	// is the 3-way "is this a flowing border" test. Mirrors the bytecode's b33/b34/b35:
+	//   b33 = sim13 >= FLOWING && !status1.equals(status3)
+	//   b34 = sim23 >= FLOWING && !status2.equals(status3)
+	//   b35 = sim12 >= FLOWING && !status1.equals(status2)
+	// flag = b33||b34||b35 ? true
+	//        else (sim13 >= FLOWING && similarity(dist1,dist4) >= FLOWING && !status1.equals(status4))
+	// (idx4 = the 4th-closest aquifer — tracked by the grid search precisely for this.)
+	b35 := sim12 >= flowingUpdateSimilarity && !statusEqual(status1, status2)
+	b33 := sim13 >= flowingUpdateSimilarity && !statusEqual(status1, status3)
+	b34 := sim23 >= flowingUpdateSimilarity && !statusEqual(status2, status3)
+	if b33 || b34 || b35 {
+		a.shouldScheduleFluidUpdate = true
+	} else {
+		sim14 := similarity(dist1, dist4)
+		status4 := a.getAquiferStatus(idx4)
+		a.shouldScheduleFluidUpdate = sim13 >= flowingUpdateSimilarity &&
+			sim14 >= flowingUpdateSimilarity && !statusEqual(status1, status4)
+	}
 	return a.fluidResult(sub1)
+}
+
+// statusEqual ports Aquifer$FluidStatus.equals (the record equality used by the flag logic):
+// same fluid level AND same fluid type.
+func statusEqual(a, b fluidStatus) bool {
+	return a.fluidLevel == b.fluidLevel && a.fluidType == b.fluidType
 }
 
 // CarveFluid is the Wave-8 carver seam: it answers "what fluid (if any) does the aquifer

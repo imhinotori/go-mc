@@ -44,6 +44,16 @@ type Chunk struct {
 	HeightMaps  HeightMaps
 	BlockEntity []BlockEntity
 	Status      ChunkStatus
+
+	// PostProcessFluids holds the LOCAL packed positions the aquifer flagged as unstable
+	// fluid borders during fill (NoiseBasedChunkGenerator.fillFromNoise ->
+	// ChunkAccess.markPosForPostProcessing). Each entry packs (localY<<8)|(localZ<<4)|localX
+	// where localY = worldY - minY (0..secs*16-1; needs >16 bits, hence uint32). When the
+	// chunk goes live the server runs FluidState.tick ONCE per entry
+	// (LevelChunk.postProcessGeneration) — a one-shot kick that lets generated cave/aquifer
+	// water flow into a bordering air gap, NOT a recurring sim. This is the marked-positions
+	// equivalent of vanilla's per-section ShortList[] postProcessing array.
+	PostProcessFluids []uint32
 }
 
 func EmptyChunk(secs int) *Chunk {

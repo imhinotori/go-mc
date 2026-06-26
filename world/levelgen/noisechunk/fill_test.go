@@ -31,7 +31,7 @@ func collectFill(t *testing.T, cx, cz int32) (*NoiseChunk, map[[3]int]block.Stat
 	out := make(map[[3]int]block.StateID)
 	Fill(nc, aq, ov, func(lx, y, lz int, st block.StateID) {
 		out[[3]int{lx, y, lz}] = st
-	})
+	}, nil)
 	return nc, out
 }
 

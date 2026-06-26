@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/block"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
@@ -138,6 +139,37 @@ func (t *TickLoop) tickFluids() {
 	}
 	for _, st := range t.fluidSchedule.drainDue(t.gametime) {
 		t.fluidTick(st.pos)
+	}
+}
+
+// postProcessChunkFluids ports LevelChunk.postProcessGeneration's fluid step: when a freshly
+// generated chunk goes live, run FluidState.tick EXACTLY ONCE on each cell the aquifer flagged
+// for post-processing during fill (Chunk.PostProcessFluids = the markPosForPostProcessing list).
+//
+// This is the SAFE replacement for the cascading scan-and-schedule that was reverted twice. It
+// does NOT scan all fluid cells, and it does NOT put cells on the recurring scheduleFluidTick
+// queue at gen time — it kicks ONLY the small set of UNSTABLE BORDER cells the aquifer marked
+// (shouldScheduleFluidUpdate), exactly once. That one fluidTick recomputes each border cell's
+// liquid and spreads it (the normal getTickDelay-spaced queue takes over from there), which is
+// what lets generated cave/aquifer water flow into a bordering air gap on load — without the
+// runaway cascade (the aquifer only flags discontinuous borders, not entire flooded caves).
+// Cite: net.minecraft.world.level.chunk.LevelChunk.postProcessGeneration ->
+// FluidState.tick(level, pos, state) once per marked pos.
+func (t *TickLoop) postProcessChunkFluids(pos level.ChunkPos, ch *level.Chunk) {
+	if ch == nil || len(ch.PostProcessFluids) == 0 || t.world == nil {
+		return
+	}
+	if t.fluidSchedule == nil {
+		t.fluidSchedule = newFluidScheduleQueue()
+	}
+	baseX := int(pos[0]) * 16
+	baseZ := int(pos[1]) * 16
+	for _, packed := range ch.PostProcessFluids {
+		lx := int(packed & 0xF)
+		lz := int((packed >> 4) & 0xF)
+		localY := int(packed >> 8)
+		wp := pk.Position{X: baseX + lx, Y: dimMinY + localY, Z: baseZ + lz}
+		t.fluidTick(wp) // one-shot kick; spread() inside re-schedules onward flow normally
 	}
 }
 

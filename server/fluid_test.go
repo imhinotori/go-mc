@@ -340,3 +340,56 @@ func floatNear(a, b, eps float64) bool {
 	}
 	return d <= eps
 }
+
+// TestPostProcessChunkFluids gates the cave-gap fix: a generated chunk carries a
+// PostProcessFluids mark on an aquifer-border water source that sits beside an air gap; when
+// the chunk goes live, postProcessChunkFluids runs FluidState.tick ONCE on the marked cell,
+// which must kick the water into flowing toward the gap (the normal queue carries it onward).
+// This is the one-shot LevelChunk.postProcessGeneration behavior — NOT a recurring scan.
+func TestPostProcessChunkFluids(t *testing.T) {
+	loop, mgr := newFluidLoop()
+
+	// A water SOURCE at (4,64,4) boxed on a solid floor with walls on three sides, leaving the
+	// EAST cell (5,64,4) as the only open neighbor — an air gap over a solid floor. This is the
+	// cave-water-bordering-air-gap shape: the source must spread sideways into that one gap.
+	src := pk.Position{X: 4, Y: 64, Z: 4}
+	setSolid(mgr, pk.Position{X: 4, Y: 63, Z: 4}) // floor under the source
+	setSolid(mgr, pk.Position{X: 5, Y: 63, Z: 4}) // floor under the gap (so flow stays, spreads sideways)
+	setSolid(mgr, pk.Position{X: 3, Y: 64, Z: 4}) // wall west
+	setSolid(mgr, pk.Position{X: 4, Y: 64, Z: 3}) // wall north
+	setSolid(mgr, pk.Position{X: 4, Y: 64, Z: 5}) // wall south
+	setWater(mgr, src, 0)                         // the marked border source
+
+	// The gap is air pre-tick (no water flowed in yet — the inert-load symptom).
+	if _, isW := levelAt(mgr, pk.Position{X: 5, Y: 64, Z: 4}); isW {
+		t.Fatal("precondition: the gap must be air before post-processing")
+	}
+
+	// Build a chunk that marks the source cell for post-processing (local pack: y-(-64)=128).
+	ch := level.EmptyChunk(blockTestSecs)
+	localY := uint32(src.Y - dimMinY)
+	ch.PostProcessFluids = []uint32{localY<<8 | uint32(src.Z&15)<<4 | uint32(src.X&15)}
+
+	loop.postProcessChunkFluids(level.ChunkPos{0, 0}, ch)
+
+	// The one-shot tick must have scheduled flow; draining the queue must fill the gap.
+	if loop.scheduleEmpty() {
+		t.Fatal("postProcessChunkFluids must schedule onward flow from the marked border cell")
+	}
+	drainAll(loop)
+	if _, isW := levelAt(mgr, pk.Position{X: 5, Y: 64, Z: 4}); !isW {
+		t.Fatal("water must flow into the bordering air gap after post-processing")
+	}
+}
+
+// TestPostProcessChunkFluidsNoMarksIsNoop proves the fix is bounded: a chunk with NO marks (the
+// common case — most generated chunks have no unstable aquifer border) schedules nothing, so
+// there is no cascade and no wasted work on chunk load.
+func TestPostProcessChunkFluidsNoMarksIsNoop(t *testing.T) {
+	loop, _ := newFluidLoop()
+	ch := level.EmptyChunk(blockTestSecs) // no PostProcessFluids
+	loop.postProcessChunkFluids(level.ChunkPos{0, 0}, ch)
+	if !loop.scheduleEmpty() {
+		t.Fatal("a chunk with no marks must schedule no fluid ticks")
+	}
+}
