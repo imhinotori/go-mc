@@ -1,6 +1,7 @@
 package server
 
 import (
+	"math"
 	"testing"
 
 	"github.com/imhinotori/sulfur/data/packetid"
@@ -106,6 +107,57 @@ func TestStayGroundedNoDamage(t *testing.T) {
 	}
 	if p.health != maxHealth {
 		t.Fatalf("grounded player took damage, health = %v", p.health)
+	}
+}
+
+// TestCalculateFallDamageMatchesVanillaFormula pins the literal vanilla product against the
+// jar-verified expression Mth.floor((d + 1e-6 - 3.0) * mul * 1.0). This guards against anyone
+// re-collapsing or re-paraphrasing the formula: calculateFallDamage MUST equal the explicit
+// float-floor of (calculateFallPower(d) * damageMultiplier * FALL_DAMAGE_MULTIPLIER).
+func TestCalculateFallDamageMatchesVanillaFormula(t *testing.T) {
+	cases := []struct {
+		d   float64
+		mul float64
+	}{
+		{0, 1.0}, {2.0, 1.0}, {3.0, 1.0}, {3.5, 1.0}, {10.0, 1.0},
+		{12.0, 1.0}, {23.0, 1.0}, {255.0, 1.0}, {10.0, 0.5},
+	}
+	for _, c := range cases {
+		// The literal vanilla formula, written out independently of the implementation:
+		// LivingEntity.calculateFallDamage -> Mth.floor(calculateFallPower(d) * mul * FALL_DAMAGE_MULTIPLIER),
+		// calculateFallPower(d) = (d + 1.0E-6) - SAFE_FALL_DISTANCE(=3.0), FALL_DAMAGE_MULTIPLIER=1.0.
+		want := int(math.Floor((c.d + 1.0e-6 - 3.0) * c.mul * 1.0))
+		if got := calculateFallDamage(c.d, c.mul); got != want {
+			t.Fatalf("calculateFallDamage(%v, %v) = %d, want %d (floor((d+1e-6-3.0)*mul*1.0))",
+				c.d, c.mul, got, want)
+		}
+	}
+}
+
+// TestCheckFallDamageFloatCast pins the (float) narrowing cast in Entity.checkFallDamage:
+// fallDistance -= (double)(float) deltaY. A deltaY that is NOT exactly representable as a float32
+// must accumulate the float32-rounded magnitude, not the raw float64 — proving the d2f/f2d cast is
+// present. We pick deltaY = -0.1 (0.1 is not exactly representable; float32(0.1) != float64(0.1)).
+func TestCheckFallDamageFloatCast(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	defer loop.Close() // release the async pools so this test does not leak pathfinding workers
+	p := fallPlayer(loop, 1, 100)
+
+	// Airborne, dry, descending by exactly 0.1: deltaY = -0.1. With the (float) cast, fallDistance
+	// accumulates float64(float32(0.1)), NOT 0.1.
+	p.onGround, p.wasOnGround = false, false
+	p.lastY = 100
+	p.y = 100 - 0.1
+	loop.tickFallDamage()
+
+	wantCast := float64(float32(0.1)) // exactly what `fallDistance -= (float)deltaY` adds
+	if p.fallDistance != wantCast {
+		t.Fatalf("fallDistance = %v after a 0.1 drop, want %v (float32-cast magnitude); "+
+			"a raw float64 0.1 would be %v — the (float) cast is missing", p.fallDistance, wantCast, 0.1)
+	}
+	// And it must NOT equal the un-cast float64 value (the cast genuinely changes the bits).
+	if p.fallDistance == 0.1 {
+		t.Fatalf("fallDistance == raw float64 0.1: the (float) narrowing cast was skipped")
 	}
 }
 

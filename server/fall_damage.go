@@ -8,70 +8,143 @@ import "math"
 // touched here — this plan edits ONLY this file. Damage routes through the existing, tested
 // applyDamage->die flow (combat.go).
 //
-// PORTED FROM THE JAR (javap -c -p from temp/cache/26.2-inner.jar this session — idiomatic Go,
-// no GPL paste, structure cited):
+// ============================================================================================
+// LITERAL 1:1 PORT OF VANILLA JAVA 26.2 (protocol 776) — re-verified method-for-method against
+// temp/cache/26.2-inner.jar via `javap -c -p` this session. This is a STRUCTURE-PRESERVING port:
+// each vanilla method is mirrored by a dedicated Go function with the IDENTICAL numeric ops, in
+// the same order, so the port is auditable line-for-line against the bytecode. No GPL source is
+// pasted — the algorithm is re-expressed in Go — but the structure and arithmetic are identical.
 //
-//	net.minecraft.world.entity.Entity.checkFallDamage(double deltaY, boolean onGround, …):
-//	    if (!isInWater() && deltaY < 0) fallDistance -= (float) deltaY;   // accumulate descent
-//	    if (onGround) {                                                   // landing edge
-//	        if (fallDistance > 0) { block.fallOn(…) -> causeFallDamage(fallDistance, …); }
-//	        resetFallDistance();                                          // fallDistance = 0
-//	    }
-//	net.minecraft.world.entity.Entity.updateFluidInteraction()  (every tick, via baseTick):
-//	    boolean inWater = fluidInteraction.isInFluid(WATER);
-//	    if (inWater) { resetFallDistance(); … }      // water zeroes accumulated fall (line 4208)
-//	net.minecraft.world.entity.LivingEntity.calculateFallDamage(double d, float mul):
-//	    return Mth.floor(calculateFallPower(d) * mul * FALL_DAMAGE_MULTIPLIER);
-//	net.minecraft.world.entity.LivingEntity.calculateFallPower(double d):
-//	    return (d + 1.0E-6) - SAFE_FALL_DISTANCE;     // SAFE_FALL_DISTANCE attribute base = 3.0
+// The four vanilla methods, with the bytecode evidence that fixes each numeric op:
 //
-// With the default attributes (damageMul = 1.0, FALL_DAMAGE_MULTIPLIER = 1.0) the landing
-// damage is floor(fallDistance - 3.0) HP. The 1.0E-6 epsilon is the jar's float-equality guard;
-// it never changes the floored integer for whole-block falls, so it is omitted here.
+//	net.minecraft.world.entity.Entity.checkFallDamage(double deltaY, boolean onGround, BlockState, BlockPos)
+//	  bytecode:  isInWater ifne 25 | dload_1 dconst_0 dcmpg ifge 25 |
+//	             getfield fallDistance | dload_1 d2f f2d dsub | putfield fallDistance |
+//	             iload_3 ifeq 102 | getfield fallDistance dconst_0 dcmpl ifle 98 |
+//	             Block.fallOn(...) [-> causeFallDamage(fallDistance, 1.0F, FALL)] |
+//	             resetFallDistance()
+//	  => if (!isInWater() && deltaY < 0.0) fallDistance -= (double)(float) deltaY;   // d2f THEN f2d
+//	     if (onGround) { if (fallDistance > 0.0) causeFallDamage(fallDistance, 1.0F, FALL); resetFallDistance(); }
+//	  The `d2f f2d` pair is the (float) narrowing-then-widening cast — ported EXACTLY as
+//	  float64(float32(deltaY)); it is part of vanilla's numeric behavior and is NOT skipped.
 //
-// WATER GUARD (17-08 fix). Vanilla negates ALL fall damage in water via TWO cooperating guards:
+//	net.minecraft.world.entity.LivingEntity.causeFallDamage(double d, float mul, DamageSource src)
+//	  bytecode:  isIgnoringFallDamageFromCurrentImpulse ifeq 58 | <impulse branch> |
+//	             58: dload_1 dstore_5  (else: d passes through unchanged) |
+//	             Entity.causeFallDamage(d, mul, src) -> istore_7  (passenger propagation; false for a player) |
+//	             calculateFallDamage(d, mul) -> istore_8 (i) |
+//	             iload_8 ifle 117 | <sounds> | hurt(src, (float) i) i2f | iconst_1 ireturn |
+//	             117: iload_7 ireturn
+//	  => normal landing takes the ELSE path (d unchanged); if (i > 0) hurt(src, (float) i).
+//	  The currentImpulse/wind-charge branch is intentionally not modeled — a player landing
+//	  normally is NOT ignoring fall damage from an impulse, so the `else` path is the faithful one.
+//
+//	net.minecraft.world.entity.LivingEntity.calculateFallDamage(double d, float mul)
+//	  bytecode:  EntityTypeTags.FALL_DAMAGE_IMMUNE is(...) ifeq 12 | iconst_0 ireturn |
+//	             calculateFallPower(d) -> dstore_4 |
+//	             dload_4 fload_3 f2d dmul | getAttributeValue(FALL_DAMAGE_MULTIPLIER) dmul |
+//	             Mth.floor(...) ireturn
+//	  => if (FALL_DAMAGE_IMMUNE) return 0;
+//	     return Mth.floor(calculateFallPower(d) * (double)mul * getAttributeValue(FALL_DAMAGE_MULTIPLIER));
+//
+//	net.minecraft.world.entity.LivingEntity.calculateFallPower(double d)
+//	  bytecode:  dload_1 ldc2_w 1.0E-6 dadd | getAttributeValue(SAFE_FALL_DISTANCE) dsub | dreturn
+//	  => return (d + 1.0E-6) - getAttributeValue(SAFE_FALL_DISTANCE);
+//
+//	net.minecraft.util.Mth.floor(double)
+//	  bytecode:  Math.floor(d) d2i ireturn  => (int) Math.floor(d).  Ported as int(math.Floor(d)).
+//
+// ATTRIBUTE BASE VALUES (verified in net.minecraft.world.entity.ai.attributes.Attributes.<clinit>):
+//   SAFE_FALL_DISTANCE    = RangedAttribute("safe_fall_distance",    3.0, -1024.0, 1024.0) -> base 3.0
+//   FALL_DAMAGE_MULTIPLIER = RangedAttribute("fall_damage_multiplier", 1.0,     0.0,  100.0) -> base 1.0
+// Sulfur has no attribute system yet, so these are named constants set to the JAR'S ATTRIBUTE
+// BASE VALUES. They are kept as explicit factors in the formula (NOT baked away) so that when an
+// attribute system arrives, each becomes a `getAttributeValue(...)` read with no formula change.
+//
+// WATER GUARD (17-08 — IS vanilla). Vanilla negates ALL fall damage in water via TWO cooperating
+// guards, both reproduced here using the 17-02 in-water check (fluid_physics.go:playerInWater):
 //   (a) Entity.checkFallDamage accumulates ONLY when `!isInWater()` — descent in water adds no
 //       fall distance; and
 //   (b) Entity.updateFluidInteraction (run every tick, independent of the landing edge) calls
 //       resetFallDistance() whenever the entity is in water — so any fall distance accumulated
-//       BEFORE the entity entered the water is zeroed the moment it touches water, before the
-//       onGround landing edge in checkFallDamage could ever apply damage. (In vanilla a player
-//       in water is never `onGround` over solid ground, so the landing-damage branch is reached
-//       with fallDistance already 0.)
-// Sulfur previously omitted both, so a player falling into water still accumulated and took full
-// fall damage — the most visible "not like vanilla" symptom. We reuse the 17-02 in-water check
-// (fluid_physics.go:playerInWater, the AABB water-intersection test) for both guards.
-//
-// safeFallDistance is the SAFE_FALL_DISTANCE attribute base (3.0 blocks): a fall of 3 blocks or
-// less deals no damage. fallDamageEpsilon mirrors the jar's calculateFallPower 1.0E-6 guard.
+//       BEFORE entering the water is zeroed the instant the player touches water, before the
+//       onGround landing edge could apply damage.
+// ============================================================================================
+
+// Attribute base values from the 26.2 jar (Attributes.<clinit>, RangedAttribute defaults).
+// These stand in for getAttributeValue(...) until an attribute system exists; keeping them as
+// explicit factors preserves the literal vanilla product power*mul*fallDamageMultiplier.
 const (
-	safeFallDistance = 3.0
+	// safeFallDistanceAttr == getAttributeValue(Attributes.SAFE_FALL_DISTANCE), base 3.0.
+	safeFallDistanceAttr = 3.0
+	// fallDamageMultiplierAttr == getAttributeValue(Attributes.FALL_DAMAGE_MULTIPLIER), base 1.0.
+	fallDamageMultiplierAttr = 1.0
+	// fallDamageEpsilon mirrors calculateFallPower's literal 1.0E-6 addend (ldc2_w 1.0E-6d).
 	fallDamageEpsilon = 1.0e-6
 )
 
-// tickFallDamage is the GAMEPLAY-04 environmental-damage pass, called from tickEntities each
-// tick (the 17-01-wired call site; this file overwrites the 17-01 no-op stub — the SIGNATURE is
-// unchanged so the call site compiles untouched). For every connected player it:
+// mthFloor mirrors net.minecraft.util.Mth.floor(double): `(int) Math.floor(d)` (bytecode:
+// Math.floor d2i). Used so calculateFallDamage's flooring is the exact vanilla operation.
+func mthFloor(d float64) int {
+	return int(math.Floor(d))
+}
+
+// resetFallDistance mirrors net.minecraft.world.entity.Entity.resetFallDistance() (bytecode:
+// dconst_0 putfield fallDistance) — it sets fallDistance to 0. Defined as a method so the call
+// sites read like the vanilla chain (checkFallDamage's reset, updateFluidInteraction's water reset).
+func (p *tickPlayer) resetFallDistance() {
+	p.fallDistance = 0
+}
+
+// calculateFallPower mirrors LivingEntity.calculateFallPower(double d):
 //
-//  1. accumulates this tick's airborne descent into fallDistance (Entity.checkFallDamage: while
-//     not onGround, add the positive drop lastY-y);
-//  2. on the onGround false->true LANDING edge, applies floor(fallDistance - safeFallDistance)
-//     damage (when positive) through applyDamage — the same server-authoritative path attacks
-//     use — then resets fallDistance (resetFallDistance);
-//  3. records this tick's onGround/y into wasOnGround/lastY so the next tick's descent delta and
-//     landing edge are computed correctly.
+//	return (d + 1.0E-6) - getAttributeValue(SAFE_FALL_DISTANCE);
 //
-// Runs on the tick goroutine over tick-owned state (TICK-05) — no locking. A dead player is
-// skipped (applyDamage already no-ops a corpse, but skipping avoids spurious SetHealth churn);
-// a nil player is skipped defensively. NOTE: water/lava cushioning, slow-falling, and the
-// per-block fallOn multiplier (hay bales, etc.) are deferred — fall damage is the minimum
-// environmental damage for Phase 17 (A2); other environmental sources (fire, drowning, lava,
-// void) are explicitly out of scope for this plan.
+// safeFallDistanceAttr is the SAFE_FALL_DISTANCE attribute base (3.0).
+func calculateFallPower(d float64) float64 {
+	return (d + fallDamageEpsilon) - safeFallDistanceAttr
+}
+
+// calculateFallDamage mirrors LivingEntity.calculateFallDamage(double d, float damageMultiplier):
+//
+//	if (getType() in EntityTypeTags.FALL_DAMAGE_IMMUNE) return 0;
+//	return Mth.floor(calculateFallPower(d) * (double)damageMultiplier
+//	                 * getAttributeValue(FALL_DAMAGE_MULTIPLIER));
+//
+// The FALL_DAMAGE_IMMUNE guard is kept as a constant-false branch: players are NOT in the
+// FALL_DAMAGE_IMMUNE tag, so vanilla's `is(...)` returns false and falls through to the formula.
+// Modeling it as `if fallDamageImmune { return 0 }` preserves the method's structure so a future
+// per-entity tag lookup slots in here unchanged. The product keeps power, damageMultiplier and
+// the FALL_DAMAGE_MULTIPLIER attribute as three explicit factors, exactly as the bytecode's two
+// `dmul`s do.
+func calculateFallDamage(d float64, damageMultiplier float64) int {
+	const fallDamageImmune = false // players are not in the EntityTypeTags.FALL_DAMAGE_IMMUNE tag
+	if fallDamageImmune {
+		return 0
+	}
+	power := calculateFallPower(d)
+	return mthFloor(power * damageMultiplier * fallDamageMultiplierAttr)
+}
+
+// tickFallDamage is the GAMEPLAY-04 environmental-damage pass, called from tickEntities each tick
+// (the 17-01-wired call site; this file overwrites the 17-01 no-op stub, signature unchanged). It
+// drives, per connected player, the vanilla chain
+//
+//	Entity.checkFallDamage(deltaY, onGround) -> [landing] causeFallDamage(fallDistance, 1.0F)
+//	                                         -> calculateFallDamage(d, 1.0F) -> hurt(src, (float)i)
+//
+// deltaY: vanilla's deltaY is deltaMovement.y (vertical velocity). Sulfur is position-authoritative
+// (no velocity integrator), so deltaY = p.y - p.lastY (this tick's vertical position change) is the
+// faithful stand-in: a fall makes deltaY < 0, and `fallDistance -= (float)deltaY` adds the positive
+// drop, exactly as vanilla's velocity-based deltaY would.
+//
+// Runs on the tick goroutine over tick-owned state (TICK-05) — no locking. A dead/nil player is
+// skipped, but its bookkeeping (wasOnGround/lastY) is kept current so a respawn does not inherit a
+// stale landing edge. NOTE: per-block fallOn multipliers (hay bales etc.), slow-falling, and
+// lava/void are deferred — normal blocks use damageMultiplier = 1.0 (Block.fallOn default).
 func (t *TickLoop) tickFallDamage() {
 	for _, p := range t.players {
 		if p == nil || p.dead {
-			// A nil fixture or a corpse: still keep the bookkeeping current so a respawned
-			// player does not inherit a stale landing edge.
 			if p != nil {
 				p.wasOnGround = p.onGround
 				p.lastY = p.y
@@ -79,44 +152,69 @@ func (t *TickLoop) tickFallDamage() {
 			continue
 		}
 
-		// WATER GUARD (17-08). One in-water sample reused by both vanilla guards below
-		// (Entity.checkFallDamage accumulation guard + Entity.updateFluidInteraction reset).
-		// Reuses the 17-02 AABB water-intersection check (fluid_physics.go) — NOT reimplemented.
+		// One in-water sample reused by both vanilla guards (checkFallDamage's !isInWater()
+		// accumulation guard, and updateFluidInteraction's per-tick resetFallDistance()). Reuses
+		// the 17-02 AABB water-intersection check (fluid_physics.go) — NOT reimplemented.
 		inWater := t.playerInWater(p)
 
-		// (0) updateFluidInteraction water reset: vanilla calls resetFallDistance() every tick
-		// the entity is in water (Entity.updateFluidInteraction, line 4208), zeroing any fall
-		// distance accumulated BEFORE the player entered the water — with NO damage applied. This
-		// runs before the landing-edge branch so a player who falls INTO water (and may be flagged
-		// onGround on the bottom block the same tick) never takes the floored landing damage.
+		// Entity.updateFluidInteraction water reset: vanilla calls resetFallDistance() every tick
+		// the entity is in water, zeroing any distance accumulated before entering the water, with
+		// NO damage. Running it before the landing branch makes a fall INTO water deal 0 damage.
 		if inWater {
-			p.fallDistance = 0
+			p.resetFallDistance()
 		}
 
-		// (1) Accumulate airborne descent. lastY is the previous tick's y; a positive
-		// (lastY - y) is a drop. Only descent counts (an ascent does not reduce fallDistance —
-		// the jar guards deltaY < 0). math.Max(0, …) clamps an upward step to zero. The `!inWater`
-		// term is the jar's `!isInWater()` accumulation guard: descent through water adds no fall
-		// distance (Entity.checkFallDamage: `if (!isInWater() && deltaY < 0) fallDistance -= …`).
-		if !p.onGround && !inWater {
-			p.fallDistance += math.Max(0, p.lastY-p.y)
-		}
+		// Entity.checkFallDamage(deltaY, onGround): deltaY = p.y - p.lastY (position-authoritative
+		// stand-in for deltaMovement.y).
+		deltaY := p.y - p.lastY
+		t.checkFallDamage(p, deltaY, p.onGround, inWater)
 
-		// (2) Landing edge: onGround transitioned false->true this tick. Apply the floored
-		// damage past the safe distance, then reset the accumulator (resetFallDistance). When the
-		// player is in water this branch can still fire (onGround on a submerged floor), but the
-		// water reset in (0) has already zeroed fallDistance, so dmg <= 0 and no damage is dealt —
-		// matching vanilla's "fall into water => 0 damage".
-		if !p.wasOnGround && p.onGround {
-			dmg := math.Floor(p.fallDistance + fallDamageEpsilon - safeFallDistance)
-			if dmg > 0 {
-				t.applyDamage(p, float32(dmg))
-			}
-			p.fallDistance = 0
-		}
-
-		// (3) End-of-tick bookkeeping for the next tick's delta + edge detection.
+		// End-of-tick bookkeeping for the next tick's deltaY and landing-edge detection. (Vanilla
+		// reads deltaMovement.y directly; we derive deltaY from lastY, so we must advance lastY.)
 		p.wasOnGround = p.onGround
 		p.lastY = p.y
 	}
+}
+
+// checkFallDamage mirrors Entity.checkFallDamage(double deltaY, boolean onGround, BlockState, BlockPos):
+//
+//	if (!isInWater() && deltaY < 0.0) this.fallDistance -= (double)(float) deltaY;
+//	if (onGround) {
+//	    if (this.fallDistance > 0.0) causeFallDamage(this.fallDistance, 1.0F, DamageSource.FALL);
+//	    this.resetFallDistance();
+//	}
+//
+// inWater is t.playerInWater(p) (== !isInWater() guard). The BlockState/BlockPos args and the
+// HIT_GROUND game event are cosmetic/world-side and omitted; Block.fallOn's default forwards
+// damageMultiplier = 1.0 to causeFallDamage, which is passed literally here.
+func (t *TickLoop) checkFallDamage(p *tickPlayer, deltaY float64, onGround bool, inWater bool) {
+	if !inWater && deltaY < 0.0 {
+		// d2f then f2d: the (float) narrowing cast widened back to double, ported verbatim.
+		p.fallDistance -= float64(float32(deltaY))
+	}
+	if onGround {
+		if p.fallDistance > 0.0 {
+			t.causeFallDamage(p, p.fallDistance, 1.0)
+		}
+		p.resetFallDistance()
+	}
+}
+
+// causeFallDamage mirrors the ELSE (non-impulse) path of
+// LivingEntity.causeFallDamage(double d, float damageMultiplier, DamageSource src):
+//
+//	int i = calculateFallDamage(d, damageMultiplier);
+//	if (i > 0) { /* sounds */ this.hurt(src, (float) i); return true; }
+//	return false;
+//
+// d passes through unchanged (the impulse branch is not modeled). hurt(src, (float)i) is Sulfur's
+// applyDamage(p, float32(i)) — the same server-authoritative path attacks use. Sounds are skipped
+// server-side. Returns whether damage was dealt (mirrors the method's boolean result).
+func (t *TickLoop) causeFallDamage(p *tickPlayer, d float64, damageMultiplier float64) bool {
+	i := calculateFallDamage(d, damageMultiplier)
+	if i > 0 {
+		t.applyDamage(p, float32(i))
+		return true
+	}
+	return false
 }
