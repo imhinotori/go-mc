@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v3
 milestone_name: Online-mode + Operator UX + Structure polish
-status: verifying
+status: executing
 stopped_at: Completed 18-02-PLAN.md (ONLINE-01 skins)
-last_updated: "2026-06-26T22:34:47.502Z"
+last_updated: "2026-06-26T23:47:13.247Z"
 progress:
-  total_phases: 2
+  total_phases: 3
   completed_phases: 2
-  total_plans: 7
-  completed_plans: 23
+  total_plans: 10
+  completed_plans: 24
   percent: 100
 ---
 
@@ -20,13 +20,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-23)
 
 **Core value:** A Go server that an unmodified vanilla Minecraft 26.2 client can connect to, log into, and play in a persistent, ticking world — architected from day one for Leaf-style async optimizations.
-**Current focus:** Phase 18 — online-mode-auth-protocol-encryption
+**Current focus:** Phase 19 — operator-ux-tui-console-disconnect-logging
 
 ## Current Position
 
-Phase: 18 (online-mode-auth-protocol-encryption) — EXECUTING
-Plan: 2 of 2
-Status: Phase complete — ready for verification
+Phase: 19 (operator-ux-tui-console-disconnect-logging) — EXECUTING
+Plan: 2 of 3
+Status: Ready to execute
 
 ### ⚠️ WHAT'S NEXT (resume here — see .planning/HANDOFF.md for the FULL detail)
 
@@ -204,6 +204,7 @@ Progress: [██████████] 100%
 | Phase 17 P02 | 35min | 3 tasks | 5 files |
 | Phase 18 P01 | 18min | 3 tasks | 5 files |
 | Phase 18 P02 | 4min | 2 tasks | 6 files |
+| Phase 19 P01 | 18min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -343,7 +344,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-26T22:34:21.777Z
+Last session: 2026-06-26T23:47:06.023Z
 Stopped at: Completed 18-02-PLAN.md (ONLINE-01 skins)
 Resume file: None
 Next: Phase 17 Wave 2 — 17-02 (GAMEPLAY-05 fluid simulation: OVERWRITE server/fluid.go with the FlowingFluid port + scheduled-tick queue; lazy-init t.fluidSchedule inside tickFluids, do NOT edit tick.go/tick_phases.go) and 17-03 (GAMEPLAY-04 fall damage + PvP dispatch: OVERWRITE server/fall_damage.go using the tickPlayer fallDistance/wasOnGround/lastY fields + the lookupPlayerByEntityID reverse lookup, do NOT edit tick.go/tick_phases.go). The exact Wave-2 seam surface (field names, init point, call sites, stub signatures) is in 17-01-SUMMARY.md "WAVE-2 HANDOFF". Deferred-still-open: dungeon loot/spawner-mob + BeehiveDecorator occupant + pale_garden PaleMoss (all v3, cosmetic, in 13-04-SUMMARY); KeepAlive double-leave hardening (Phase 3). KNOWN PRE-EXISTING FLAKE: TestTickAIDrivesMobs (OPT-01 async-pool timing, not caused by 17-01) intermittently fails under full-suite load; passes in isolation + 3× under -race.
