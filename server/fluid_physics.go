@@ -16,14 +16,21 @@ import (
 //	net.minecraft.world.entity.LivingEntity.getWaterSlowDown:        0.8f  (freturn)
 //	net.minecraft.world.entity.EntityFluidInteraction:               update/applyCurrentTo/isInFluid
 //
-// INTEGRATION NOTE (the one MEDIUM-confidence sub-area, 17-RESEARCH Pattern 5 (F)): Sulfur's
-// player movement is currently position-authoritative (subtick.go applyInput accepts the
-// client's claimed position through collidePlayer; there is no server-side velocity integrator
-// yet). So applyFluidPhysics operates on the ACCEPTED MOVEMENT DELTA: it scales the horizontal
-// delta by getWaterSlowDown and adds the buoyant push to the vertical delta. The call site (one
-// line in subtick.go's collidePlayer/accept path) is owned by 17-03 in this wave (subtick.go is
-// 17-03's declared file), so the wiring is DEFERRED — this file ships the fully-unit-tested
-// physics function ready to be called. See 17-02-SUMMARY for the GAMEPLAY-07 feel note.
+// VANILLA AUTHORITY MODEL (BUG-1, 17-15): Minecraft player movement is CLIENT-authoritative.
+// In net.minecraft.server.network.ServerGamePacketListenerImpl.handleMovePlayer the server
+// applies the submitted delta via ServerPlayer.move(MoverType.PLAYER, Vec3) — which is PURE
+// COLLISION resolution, NOT travel()/travelInFluid() — and then absSnapTo(x,y,z), accepting the
+// client's submitted position verbatim (subject only to the "moved wrongly" anti-clip teleport
+// back). LivingEntity.travel/travelInFluid (the 0.8 getWaterSlowDown + 0.014 buoyant push) runs
+// CLIENT-side for the local player, so the client already sends its water-slowed position. The
+// server therefore MUST NOT re-apply that slowdown to the player — doing so produced a position
+// the client never predicted, and the client closed the connection (the water-jump disconnect).
+//
+// CONSEQUENCE: moveWithFluidPhysics/applyFluidPhysics are NOT called on the player movement path
+// (see server/subtick.go — it accepts the collided position directly). They are retained for the
+// SERVER-CONTROLLED entity path (mobs swimming in water), where the server IS authoritative and
+// DOES run travelInFluid; that wiring lands with the mob-AI tick. playerInWater stays in active
+// use by the fall-damage / breath systems.
 
 // Water physics constants (VERIFIED via javap, see file header).
 const (
@@ -85,25 +92,21 @@ func (t *TickLoop) applyFluidPhysics(p *tickPlayer, dx, dy, dz float64) (float64
 	return dx, dy, dz
 }
 
-// moveWithFluidPhysics is the movement-accept wire for the water physics (Plan 17-13 — wires the
-// 17-02 applyFluidPhysics that previously shipped untested-into-the-pipeline). It is the
-// accepted-delta application of LivingEntity.travelInWater's getWaterSlowDown (0.8 horizontal) plus
-// Entity.updateFluidInteraction's buoyant push (0.014 vertical), applied AFTER collidePlayer in the
-// subtick movement-accept path:
+// moveWithFluidPhysics applies LivingEntity.travelInFluid's getWaterSlowDown (0.8 horizontal) plus
+// Entity.updateFluidInteraction's buoyant push (0.014 vertical) to a proposed movement, returning
+// the adjusted target position:
 //
-//   - target = the collided (anti-clip-through) claimed position from collidePlayer.
-//   - delta  = target - current (p.x/p.y/p.z), the per-tick movement the client claims.
-//   - apply applyFluidPhysics(delta): out of water it is the identity (so the dry path is byte-for-
-//     byte the old `p.x,p.y,p.z = collide(...)` behavior); in water it scales horizontal by 0.8 and
-//     adds +0.014 buoyancy to vertical.
-//   - return current + adjustedDelta — the new accepted position.
+//   - target = the proposed (already collided) position.
+//   - delta  = target - current, the per-tick movement.
+//   - apply applyFluidPhysics(delta): out of water it is the identity; in water it scales
+//     horizontal by 0.8 and adds +0.014 buoyancy to vertical.
+//   - return current + adjustedDelta.
 //
-// CAVEAT (rubber-band, documented per the plan, NOT a blocker): Sulfur is position-authoritative
-// (the client also applies its own local water slowdown), so re-applying the same 0.8 server-side
-// can produce minor rubber-banding. The faithful 1:1 fix is the vanilla VELOCITY model (the server
-// integrates deltaMovement and is authoritative over position); that server-side velocity
-// integrator is a known architectural follow-up, NOT a logic change. The user explicitly chose to
-// wire the 1:1 factors (0.8 / 0.014) now over the accepted-delta model.
+// IT IS NOT CALLED ON THE PLAYER MOVEMENT PATH (BUG-1): the player is client-authoritative and the
+// client already applies its own water physics, so the server accepts the submitted position
+// verbatim (see the file header and server/subtick.go). This helper is RESERVED for the
+// SERVER-CONTROLLED entity path (mobs swimming), where the server runs travelInFluid itself; that
+// wiring lands with the mob-AI tick.
 func (t *TickLoop) moveWithFluidPhysics(p *tickPlayer, targetX, targetY, targetZ float64) (float64, float64, float64) {
 	dx := targetX - p.x
 	dy := targetY - p.y

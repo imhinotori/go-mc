@@ -1,8 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"testing"
+	"time"
 
+	"github.com/imhinotori/sulfur/data/packetid"
 	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/block"
 	pk "github.com/imhinotori/sulfur/net/packet"
@@ -220,6 +223,51 @@ func TestFlowDownColumn(t *testing.T) {
 // fluidTestPlayer makes a tickPlayer at (x,y,z) with no client (physics is position-only).
 func fluidTestPlayer(x, y, z float64) *tickPlayer {
 	return &tickPlayer{x: x, y: y, z: z}
+}
+
+// TestPlayerMovePathDoesNotRewritePositionInWater is the BUG-1 regression: the player movement
+// accept path must accept the client's submitted (collide-clamped) position VERBATIM and must NOT
+// re-apply water drag/buoyancy. In vanilla ServerGamePacketListenerImpl.handleMovePlayer the
+// server resolves collisions via ServerPlayer.move and then absSnapTo(x,y,z) — accepting the
+// client position. Re-applying the 0.8/0.014 water physics server-side produced a position the
+// client never predicted and disconnected it (jump-into-water quit). This test drives a confirmed
+// player INTO a water column via applyInput and asserts the accepted position equals the submitted
+// position (no 0.8 horizontal scale, no +0.014 buoyancy).
+func TestPlayerMovePathDoesNotRewritePositionInWater(t *testing.T) {
+	loop, mgr := newFluidLoop()
+	// Water at the player's CURRENT feet cell, so playerInWater(p) — which the OLD
+	// moveWithFluidPhysics gated on using the player's pre-move position — is TRUE. The OLD code
+	// would therefore re-apply the 0.8 horizontal scale + 0.014 buoyancy to the submitted delta.
+	setWater(mgr, pk.Position{X: 8, Y: 64, Z: 8}, 0)
+
+	p := blockPlayer(loop, 8.5, 64.0, 8.5)
+
+	// Submitted move: jump UP and slightly east (a jump-out-of-water arc). The destination box
+	// (feet at y=65.5) does not overlap the water cell at y=64, so collidePlayer accepts it
+	// verbatim — the accepted position must equal the submission exactly, proving no water rewrite
+	// (OLD code would have scaled x by 0.8 and added +0.014 to y).
+	const subX, subY, subZ = 8.7, 65.5, 8.5
+	var b bytes.Buffer
+	_, _ = pk.Double(subX).WriteTo(&b)
+	_, _ = pk.Double(subY).WriteTo(&b)
+	_, _ = pk.Double(subZ).WriteTo(&b)
+	_, _ = pk.UnsignedByte(0).WriteTo(&b) // flags: not on ground
+	in := SubtickInput{
+		At:     time.Unix(0, 0),
+		Packet: pk.Packet{ID: int32(packetid.ServerboundMovePlayerPos), Data: b.Bytes()},
+	}
+
+	loop.applyInput(p, in)
+
+	if !floatNear(p.x, subX, 1e-9) {
+		t.Fatalf("accepted x = %v, want %v (submitted verbatim — no 0.8 water scale)", p.x, subX)
+	}
+	if !floatNear(p.y, subY, 1e-9) {
+		t.Fatalf("accepted y = %v, want %v (submitted verbatim — no +0.014 buoyancy)", p.y, subY)
+	}
+	if !floatNear(p.z, subZ, 1e-9) {
+		t.Fatalf("accepted z = %v, want %v (submitted verbatim)", p.z, subZ)
+	}
 }
 
 // TestInWaterDetection: a player whose AABB overlaps a water block is in water; a dry player is

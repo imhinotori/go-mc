@@ -151,9 +151,9 @@ func TestAirRefillsOnLeavingWater(t *testing.T) {
 	}
 }
 
-// TestMoveWithFluidPhysicsWire: the subtick movement-accept wire (moveWithFluidPhysics) applies
-// 0.8 horizontal slowdown + 0.014 buoyancy to the ACCEPTED delta in water, and is the identity on
-// dry land (so the dry movement path is byte-for-byte the old collide-only behavior).
+// TestMoveWithFluidPhysicsWire: moveWithFluidPhysics (the mob-reserved fluid-travel helper, NOT
+// called on the client-authoritative player path — see BUG-1) applies 0.8 horizontal slowdown +
+// 0.014 buoyancy to the proposed delta in water, and is the identity on dry land.
 func TestMoveWithFluidPhysicsWire(t *testing.T) {
 	loop, mgr := newFluidLoop()
 	setWater(mgr, pk.Position{X: 8, Y: 64, Z: 8}, 0)

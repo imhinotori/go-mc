@@ -126,10 +126,16 @@ func (t *TickLoop) applyInput(p *tickPlayer, in SubtickInput) {
 		// corrects a clip-through claim rather than trusting the raw position. In an empty
 		// world (no solid blocks in the path) the claim is returned verbatim.
 		nx, ny, nz := t.collidePlayer(p, float64(x), float64(y), float64(z))
-		// Water physics (GAMEPLAY-05 / Plan 17-13): apply LivingEntity.travelInWater's
-		// getWaterSlowDown (0.8 horizontal) + Entity.updateFluidInteraction's buoyant push
-		// (0.014 vertical) to the ACCEPTED movement delta. See moveWithFluidPhysics.
-		p.x, p.y, p.z = t.moveWithFluidPhysics(p, nx, ny, nz)
+		// VANILLA AUTHORITY MODEL (BUG-1 fix): accept the client's submitted
+		// (collide-clamped) position VERBATIM — do NOT re-apply water drag/buoyancy.
+		// In ServerGamePacketListenerImpl.handleMovePlayer the server calls
+		// ServerPlayer.move(MoverType.PLAYER, Vec3(submitted - lastGood)) — pure COLLISION
+		// resolution — then absSnapTo(x,y,z), accepting the submitted position.
+		// LivingEntity.travel/travelInFluid (the 0.8 getWaterSlowDown + 0.014 buoyant push)
+		// runs CLIENT-side for the local player; the client already sends its slowed
+		// position. Re-applying that slowdown server-side produced an unpredicted position
+		// and the client closed the connection (the water-jump disconnect).
+		p.x, p.y, p.z = nx, ny, nz
 		p.onGround = flags&movementFlagOnGround != 0
 		t.maybeRecenter(p)
 
@@ -145,9 +151,10 @@ func (t *TickLoop) applyInput(p *tickPlayer, in SubtickInput) {
 		// per-axis before accepting it (same as the Pos variant). Look angles are accepted
 		// as sent — only the POSITION is collided.
 		nx, ny, nz := t.collidePlayer(p, float64(x), float64(y), float64(z))
-		// Water physics (GAMEPLAY-05 / Plan 17-13): same accepted-delta fluid pass as the
-		// Pos variant (0.8 horizontal slowdown + 0.014 buoyant push when in water).
-		p.x, p.y, p.z = t.moveWithFluidPhysics(p, nx, ny, nz)
+		// VANILLA AUTHORITY MODEL (BUG-1 fix): accept the client's submitted position
+		// verbatim (same as the Pos variant) — the server never re-applies water physics
+		// to a client-authoritative player; LivingEntity.travelInFluid runs client-side.
+		p.x, p.y, p.z = nx, ny, nz
 		p.yaw, p.pitch = float32(yaw), float32(pitch)
 		p.onGround = flags&movementFlagOnGround != 0
 		t.maybeRecenter(p)
