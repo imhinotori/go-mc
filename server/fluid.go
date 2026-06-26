@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/block"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
@@ -477,6 +478,53 @@ func (t *TickLoop) scheduleNeighbors(pos pk.Position) {
 	}
 	if t.fluidAt(above(pos)).isWater {
 		t.scheduleFluidTick(above(pos))
+	}
+}
+
+// scanChunkFluids seeds the schedule with the UNSTABLE fluid cells of a freshly-loaded column —
+// Sulfur's stand-in for vanilla's per-chunk generated fluid ticks (ProtoChunk.fluidTicks, populated
+// by the Aquifer when shouldScheduleFluidUpdate, fired on LevelChunk.postProcessGeneration). The
+// generator places terrain + aquifer water but Sulfur discarded the scheduled ticks, so generated
+// water that should flow (a flowing cell, or a water cell sitting over a passable cell) stayed
+// frozen — a cave/aquifer pocket left an air gap below standing water that never filled. This scan
+// walks the column's loaded Y range once and schedules every water cell that is UNSTABLE:
+//   - the cell below it is passable (air/non-fluid) -> it should fall, OR
+//   - it is a non-source flowing cell -> it should re-evaluate its level
+// A scheduled cell runs fluidTick (getNewLiquid + spread), so the water flows down/sideways exactly
+// as if a neighbor had changed. Stable, fully-supported source water (solid floor below, surrounded
+// by water) is NOT scheduled — it is a fixed point, matching vanilla leaving settled aquifers be.
+// Idempotent per column via fluidScannedChunks. Tick-owned (called from tickChunks on the owner).
+func (t *TickLoop) scanChunkFluids(cp level.ChunkPos) {
+	if t.world == nil {
+		return
+	}
+	if t.fluidScannedChunks == nil {
+		t.fluidScannedChunks = make(map[level.ChunkPos]bool)
+	}
+	if t.fluidScannedChunks[cp] {
+		return // already scanned this column
+	}
+	t.fluidScannedChunks[cp] = true
+
+	baseX := int(cp[0]) << 4
+	baseZ := int(cp[1]) << 4
+	for lx := 0; lx < 16; lx++ {
+		for lz := 0; lz < 16; lz++ {
+			wx := baseX + lx
+			wz := baseZ + lz
+			for y := maxBuildHeightY; y >= dimMinY; y-- {
+				pos := pk.Position{X: wx, Y: y, Z: wz}
+				cur := t.fluidAt(pos)
+				if !cur.isWater {
+					continue
+				}
+				// Unstable iff it can fall (passable cell below) or it is a flowing (non-source)
+				// cell that must re-evaluate. Either way scheduling it lets fluidTick resolve it.
+				if t.canReplace(below(pos)) || !cur.source {
+					t.scheduleFluidTick(pos)
+				}
+			}
+		}
 	}
 }
 
