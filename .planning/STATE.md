@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v3
 milestone_name: Online-mode + Operator UX + Structure polish
-status: executing
-stopped_at: Completed 17-04-PLAN.md (GAMEPLAY-06)
-last_updated: "2026-06-26T22:20:52.860Z"
+status: verifying
+stopped_at: Completed 18-02-PLAN.md (ONLINE-01 skins)
+last_updated: "2026-06-26T22:34:47.502Z"
 progress:
   total_phases: 2
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 7
-  completed_plans: 22
+  completed_plans: 23
   percent: 100
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-06-23)
 
 Phase: 18 (online-mode-auth-protocol-encryption) — EXECUTING
 Plan: 2 of 2
-Status: Ready to execute
+Status: Phase complete — ready for verification
 
 ### ⚠️ WHAT'S NEXT (resume here — see .planning/HANDOFF.md for the FULL detail)
 
@@ -203,6 +203,7 @@ Progress: [██████████] 100%
 | Phase 17 P04 | 11min | 2 tasks | 4 files |
 | Phase 17 P02 | 35min | 3 tasks | 5 files |
 | Phase 18 P01 | 18min | 3 tasks | 5 files |
+| Phase 18 P02 | 4min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -315,6 +316,7 @@ Recent decisions affecting current work:
 - [Phase 17]: 17-02: canBeReplacedWith guard (never overwrite a source / downgrade a flow) is what terminates the FlowingFluid spread deterministically (Pitfall 2); isHole requires the cell itself passable so a flat floor spreads sideways
 - [Phase 17]: 17-02: player fluid physics (0.8 getWaterSlowDown + 0.014 updateFluidInteraction push) ported + unit-tested, but the subtick.go call-site is DEFERRED (subtick.go is 17-03-owned this parallel wave)
 - [Phase 18]: 18-01: EncryptionRequest is now the jar-exact 4-field ClientboundHelloPacket wire (String serverId, ByteArray publicKey, ByteArray challenge, Boolean shouldAuthenticate=true) — the trailing boolean was the single hard blocker against a real 26.2 client; always true because the server only sends Hello in online-mode (handleHello iconst_1). Challenge is the strict 4-byte Ints.toByteArray(nextInt()); hasJoined query is net/url-encoded. RSA PKCS1v15/1024-bit + AES-128/CFB8 + authDigest + cipher-then-auth ordering left FAITHFUL (untouched). --online-mode flag (default false) + SULFUR_ONLINE_MODE env threaded via newServer(gameplay, onlineMode); offline stays byte-identical. authentication() gained an injectable sessionServerURL test seam so the online-handshake integration test stubs sessionserver (CI offline). Skins ADD_PLAYER propagation is owned by the parallel 18-02 on disjoint files.
+- [Phase 18]: 18-02 (ONLINE-01 skins): authenticated GameProfile properties (the hasJoined textures skin) now reach the ADD_PLAYER tab-list wire for SELF + every OTHER player. AcceptPlayer no longer DROPS them — tickPlayer + bootstrapParams gained a properties []user.Property field set at registration like name/uuid; playerInfoEntriesEncoder.WriteTo replaced the hardcoded VarInt(0) GAME_PROFILE_PROPERTIES count with a real count-prefixed loop via user.Property.WriteTo, which already == Property.STREAM_CODEC (String name/value/Optional<signature> = writeNullable, jar-verified vs ByteBufCodecs anon codec) so NO new per-property codec was written. Self-add passes params.properties (not empty) so the joiner sees its own skin. Offline -> nil -> count 0 (Steve/Alex, byte-identical). Strict round-trip test: count=1 signed online + count=0 offline. CGO=0 build/vet/test + Docker -race green.
 
 ### Pending Todos
 
@@ -341,7 +343,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-26T22:20:29.645Z
-Stopped at: Completed 17-04-PLAN.md (GAMEPLAY-06)
+Last session: 2026-06-26T22:34:21.777Z
+Stopped at: Completed 18-02-PLAN.md (ONLINE-01 skins)
 Resume file: None
 Next: Phase 17 Wave 2 — 17-02 (GAMEPLAY-05 fluid simulation: OVERWRITE server/fluid.go with the FlowingFluid port + scheduled-tick queue; lazy-init t.fluidSchedule inside tickFluids, do NOT edit tick.go/tick_phases.go) and 17-03 (GAMEPLAY-04 fall damage + PvP dispatch: OVERWRITE server/fall_damage.go using the tickPlayer fallDistance/wasOnGround/lastY fields + the lookupPlayerByEntityID reverse lookup, do NOT edit tick.go/tick_phases.go). The exact Wave-2 seam surface (field names, init point, call sites, stub signatures) is in 17-01-SUMMARY.md "WAVE-2 HANDOFF". Deferred-still-open: dungeon loot/spawner-mob + BeehiveDecorator occupant + pale_garden PaleMoss (all v3, cosmetic, in 13-04-SUMMARY); KeepAlive double-leave hardening (Phase 3). KNOWN PRE-EXISTING FLAKE: TestTickAIDrivesMobs (OPT-01 async-pool timing, not caused by 17-01) intermittently fails under full-suite load; passes in isolation + 3× under -race.
