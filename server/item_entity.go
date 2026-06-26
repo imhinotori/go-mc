@@ -221,8 +221,7 @@ func (t *TickLoop) playerTouchItem(p *tickPlayer, e *Entity) {
 	}
 
 	// player.take(this, count): broadcast the ClientboundTakeItemEntity animation (the item
-	// flies into the player) to every tracking player, then re-send the authoritative inventory
-	// so the picked-up stack appears in the client's slots.
+	// flies into the player), then re-send the authoritative inventory.
 	t.takeItem(p, e, count)
 	t.sendContent(p)
 
@@ -294,6 +293,43 @@ func (t *TickLoop) inventoryAdd(p *tickPlayer, inv *Inventory, stack *component.
 	return int(stack.Count) < outerStart
 }
 
+// VANILLA STORAGE-SLOT MAPPING (BUG-2). In 26.2 Inventory.items is the 36-entry
+// getNonEquipmentItems() list — items[0..8] = hotbar, items[9..35] = main storage. getFreeSlot()
+// and getSlotWithRemainingSpace() iterate items[0..35] ONLY; pickups never land in armor or the
+// crafting grid. getItem(40) is the offhand (via EQUIPMENT_SLOT_MAPPING). [VERIFIED javap
+// net.minecraft.world.entity.player.Inventory: getFreeSlot iterates items; getSlotWithRemainingSpace
+// checks getItem(selected), then getItem(40), then iterates items; getItem(i<size) returns items[i].]
+//
+// Sulfur's inv.slots is the 46-entry WINDOW array (0=craft-result, 1-4=craft-grid, 5-8=armor,
+// 9-35=main, 36-44=hotbar, 45=offhand) — the InventoryMenu slot layout. So vanilla's items-index
+// space maps onto window slots as: items[0..8] (hotbar) -> window 36..44; items[9..35] (main) ->
+// window 9..35; offhand (getItem(40)) -> window 45; selected (items index heldSlot) -> window
+// 36+heldSlot. storageWindowSlots lists the 36 window slots that back items[0..35] IN ITEMS-INDEX
+// ORDER (hotbar first, then main), so getFreeSlot / getSlotWithRemainingSpace iterate them in the
+// exact vanilla order. The previous code iterated ALL 46 window slots, so pickups leaked into the
+// crafting grid (slots 0-4) and armor (5-8) — the reported bug.
+const (
+	windowSlotOffhand = 45 // window slot for getItem(40) (offhand)
+	windowHotbarFirst = 36 // window slot for items[0] (hotbar slot 0)
+	windowMainFirst   = 9  // window slot for items[9] (main storage slot 0)
+	windowMainCount   = 27 // items[9..35] -> window 9..35 (main storage)
+	windowHotbarCount = 9  // items[0..8]  -> window 36..44 (hotbar)
+)
+
+// storageWindowSlots returns the 36 window-slot indices backing vanilla items[0..35], in
+// items-index order (hotbar items[0..8] -> window 36..44, then main items[9..35] -> window 9..35).
+// This is the precise iteration order of Inventory.getFreeSlot / getSlotWithRemainingSpace.
+func storageWindowSlots() []int16 {
+	out := make([]int16, 0, windowHotbarCount+windowMainCount)
+	for i := 0; i < windowHotbarCount; i++ { // items[0..8] (hotbar)
+		out = append(out, int16(windowHotbarFirst+i))
+	}
+	for i := 0; i < windowMainCount; i++ { // items[9..35] (main)
+		out = append(out, int16(windowMainFirst+i))
+	}
+	return out
+}
+
 // addResource ports Inventory.addResource(ItemStack) → addResource(int, ItemStack): find a slot
 // with remaining space for the stack's item (else the first free slot), deposit as much as the
 // slot's max-stack-size headroom allows, and return the COUNT STILL UNPLACED. The deposited
@@ -338,26 +374,62 @@ func (t *TickLoop) addResource(inv *Inventory, stack *component.SlotData) int {
 	return count - placed
 }
 
-// slotWithRemainingSpace ports Inventory.getSlotWithRemainingSpace(ItemStack): the index of the
-// first MAIN slot already holding the same item type with room below its max stack size, or -1.
-// v1 stacks by item id alone (component-aware stacking — e.g. enchanted tools never merging — is
-// a later refinement; a block drop is a plain stackable). Tick-owned.
+// hasRemainingSpaceForItem ports Inventory.hasRemainingSpaceForItem(existing, toAdd): the existing
+// slot can take more of toAdd iff it is non-empty, the same stackable item, and below its max
+// stack size. v1 stacks by item id alone (component-aware stacking — e.g. enchanted tools never
+// merging — is a later refinement; a block drop is a plain stackable). Tick-owned read.
+//
+// Vanilla (javap Inventory.hasRemainingSpaceForItem): !existing.isEmpty() &&
+// ItemStack.isSameItemSameComponents(existing, toAdd) && existing.isStackable() &&
+// existing.getCount() < getMaxStackSize(existing).
+func hasRemainingSpaceForItem(existing, toAdd component.SlotData) bool {
+	return existing.Count > 0 && existing.ItemID == toAdd.ItemID && int(existing.Count) < maxStackSize(existing)
+}
+
+// slotWithRemainingSpace ports Inventory.getSlotWithRemainingSpace(ItemStack) EXACTLY (BUG-2): it
+// checks the SELECTED hotbar slot first, then the OFFHAND, then iterates items[0..35] (the 36 main
+// + hotbar storage slots) IN ITEMS-INDEX ORDER. It NEVER returns a crafting (window 0-4) or armor
+// (window 5-8) slot. Returns the window-slot index of the first slot with room for the item, or -1.
+// Tick-owned read.
+//
+// Vanilla (javap Inventory.getSlotWithRemainingSpace):
+//
+//	if (hasRemainingSpaceForItem(getItem(selected), stack)) return selected;        // window 36+heldSlot
+//	if (hasRemainingSpaceForItem(getItem(40),       stack)) return 40;              // window 45 (offhand)
+//	for (i = 0; i < items.size(); i++)                                              // items[0..35]
+//	    if (hasRemainingSpaceForItem(items.get(i), stack)) return i;
+//	return -1;
 func slotWithRemainingSpace(inv *Inventory, stack component.SlotData) int {
-	for i := range inv.slots {
-		s := inv.slots[i]
-		if s.Count > 0 && s.ItemID == stack.ItemID && int(s.Count) < maxStackSize(s) {
-			return i
+	// 1) selected hotbar slot (vanilla items index heldSlot -> window 36+heldSlot).
+	selectedWindow := windowHotbarFirst + int(inv.heldSlot)
+	if inv.heldSlot >= 0 && inv.heldSlot < windowHotbarCount &&
+		hasRemainingSpaceForItem(inv.get(int16(selectedWindow)), stack) {
+		return selectedWindow
+	}
+	// 2) offhand (vanilla getItem(40) -> Sulfur window slot 45).
+	if hasRemainingSpaceForItem(inv.get(windowSlotOffhand), stack) {
+		return windowSlotOffhand
+	}
+	// 3) items[0..35] in items-index order (hotbar 36..44, then main 9..35).
+	for _, w := range storageWindowSlots() {
+		if hasRemainingSpaceForItem(inv.get(w), stack) {
+			return int(w)
 		}
 	}
 	return -1
 }
 
-// freeSlot ports Inventory.getFreeSlot(): the index of the first empty slot, or -1 when full.
-// Tick-owned.
+// freeSlot ports Inventory.getFreeSlot() EXACTLY (BUG-2): the window-slot index of the first EMPTY
+// items[0..35] storage slot (in items-index order: hotbar 36..44, then main 9..35), or -1 when the
+// 36 storage slots are full. It NEVER returns a crafting (0-4), armor (5-8), or offhand (45) slot —
+// a pickup overflow can only land in main/hotbar storage, matching vanilla. Tick-owned read.
+//
+// Vanilla (javap Inventory.getFreeSlot): for (i=0; i<items.size(); i++) if (items.get(i).isEmpty())
+// return i; return -1.
 func freeSlot(inv *Inventory) int {
-	for i := range inv.slots {
-		if inv.slots[i].Count <= 0 {
-			return i
+	for _, w := range storageWindowSlots() {
+		if inv.get(w).Count <= 0 {
+			return int(w)
 		}
 	}
 	return -1

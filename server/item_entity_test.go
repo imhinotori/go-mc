@@ -182,6 +182,79 @@ func TestInventoryAddStacksAndFree(t *testing.T) {
 	}
 }
 
+// TestPickupLandsInStorageNeverCraftingOrArmor is the BUG-2 regression: a picked-up item must
+// land ONLY in the main/hotbar storage window slots (9-44), NEVER in the crafting result/grid
+// (window 0-4), armor (5-8), or offhand (45). Vanilla Inventory.getFreeSlot / addResource iterate
+// items[0..35] only; the previous Sulfur code iterated all 46 window slots and leaked pickups into
+// the crafting grid.
+func TestPickupLandsInStorageNeverCraftingOrArmor(t *testing.T) {
+	loop, mgr := newDropLoop()
+	mgr.SetBlock(pk.Position{X: 8, Y: 63, Z: 8}, block.ToStateID[block.Stone{}], dimMinY)
+
+	p := blockPlayer(loop, 8.5, 64.0, 8.5)
+	p.entityID = 1000
+	inv := ensureInventory(p)
+
+	ie := NewItemEntity(loop.idAlloc.AllocID(), 8.5, 64.0, 8.5, dropStack())
+	ie.pickupDelay = 0
+	loop.entities.add(ie)
+	p.tracked = map[int32]bool{ie.id: true}
+
+	loop.scanItemPickup(p)
+
+	// The crafting slots (0-4) and armor slots (5-8) must remain empty.
+	for s := int16(0); s <= 8; s++ {
+		if inv.get(s).Count > 0 {
+			t.Fatalf("pickup landed in window slot %d (crafting/armor), want only storage 9-44", s)
+		}
+	}
+	// The offhand (45) must remain empty (getFreeSlot never targets it).
+	if inv.get(45).Count > 0 {
+		t.Fatalf("pickup landed in the offhand (window 45), want only storage 9-44")
+	}
+	// It must be somewhere in the storage range 9-44.
+	found := false
+	for s := int16(9); s <= 44; s++ {
+		if inv.get(s).Count > 0 {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("picked-up item not found in any storage slot 9-44")
+	}
+}
+
+// TestPickupPrefersSelectedHotbarSlot pins getSlotWithRemainingSpace's SELECTED-slot priority: a
+// partial stack of the same item in the selected hotbar slot (window 36+heldSlot) receives the
+// pickup before any other slot. Vanilla checks getItem(selected) first.
+func TestPickupPrefersSelectedHotbarSlot(t *testing.T) {
+	loop, mgr := newDropLoop()
+	mgr.SetBlock(pk.Position{X: 8, Y: 63, Z: 8}, block.ToStateID[block.Stone{}], dimMinY)
+
+	p := blockPlayer(loop, 8.5, 64.0, 8.5)
+	p.entityID = 1000
+	inv := ensureInventory(p)
+	inv.heldSlot = 2 // selected hotbar slot -> window 38
+	// Seed a partial cobblestone stack in BOTH the selected hotbar slot and a main slot.
+	inv.set(38, component.SlotData{Count: 10, ItemID: pk.VarInt(item.Cobblestone.ID)})
+	inv.set(9, component.SlotData{Count: 10, ItemID: pk.VarInt(item.Cobblestone.ID)})
+
+	ie := NewItemEntity(loop.idAlloc.AllocID(), 8.5, 64.0, 8.5, dropStack())
+	ie.pickupDelay = 0
+	loop.entities.add(ie)
+	p.tracked = map[int32]bool{ie.id: true}
+
+	loop.scanItemPickup(p)
+
+	if inv.get(38).Count != 11 {
+		t.Fatalf("selected hotbar slot 38 = %d, want 11 (pickup merges into selected first)", inv.get(38).Count)
+	}
+	if inv.get(9).Count != 10 {
+		t.Fatalf("main slot 9 = %d, want 10 (untouched — selected had priority)", inv.get(9).Count)
+	}
+}
+
 // totalInventoryCount sums the counts across all inventory slots — a test helper for asserting
 // "the inventory grew by N" without depending on which slot received the item.
 func totalInventoryCount(inv *Inventory) int {
