@@ -99,19 +99,22 @@ func TestPlayerActionRouted(t *testing.T) {
 	}
 }
 
-// TestBreakBlock: a PlayerAction (STOP_DESTROY_BLOCK) on a loaded, reachable solid block
-// sets it to air (world.GetBlock now air) and the editor receives BOTH
-// ClientboundBlockChangedAck(sequence) AND ClientboundBlockUpdate(pos, airState).
+// TestBreakBlock: Plan 17-21 — a CREATIVE START_DESTROY_BLOCK on a loaded, reachable solid block
+// breaks it instantly (ServerPlayerGameMode.handleBlockBreakAction: abilities.instabuild ->
+// destroyAndAck on START). The world block becomes air and the editor receives BOTH
+// ClientboundBlockChangedAck(sequence) AND ClientboundBlockUpdate(pos, airState). (Survival dig-time
+// — START begins a timer, no immediate break — is covered by the dig-time tests in block_break_test.go.)
 func TestBreakBlock(t *testing.T) {
 	loop, mgr := newBlockLoop()
 	p := blockPlayer(loop, 1.5, 65.0, 1.5)
+	p.gameMode = gameModeCreative // creative breaks on START
 
 	// Place a stone block at (1,64,1) so there is something to break.
 	target := pk.Position{X: 1, Y: 64, Z: 1}
 	mgr.SetBlock(target, block.ToStateID[block.Stone{}], dimMinY)
 
 	const seq = 42
-	pa := playerActionPacket(2 /*STOP_DESTROY_BLOCK*/, target, 1, seq)
+	pa := playerActionPacket(0 /*START_DESTROY_BLOCK*/, target, 1, seq)
 	loop.applyInput(p, SubtickInput{At: loop.clock.Now(), Packet: pa})
 
 	// The world block is now air.
@@ -329,16 +332,18 @@ func TestPlaceReplaceClicked(t *testing.T) {
 }
 
 // TestBlockBroadcastToTrackers: a second player tracking the edited chunk ALSO receives the
-// ClientboundBlockUpdate (broadcast hits every tracker, editor included).
+// ClientboundBlockUpdate (broadcast hits every tracker, editor included). Uses a creative START break
+// (Plan 17-21) so the break completes in a single applyInput, isolating the broadcast assertion.
 func TestBlockBroadcastToTrackers(t *testing.T) {
 	loop, mgr := newBlockLoop()
 	editor := blockPlayer(loop, 1.5, 65.0, 1.5)
+	editor.gameMode = gameModeCreative            // creative breaks on START
 	observer := blockPlayer(loop, 2.5, 65.0, 2.5) // also tracks {0,0}
 
 	target := pk.Position{X: 1, Y: 64, Z: 1}
 	mgr.SetBlock(target, block.ToStateID[block.Stone{}], dimMinY)
 
-	pa := playerActionPacket(2, target, 1, 5)
+	pa := playerActionPacket(0 /*START_DESTROY_BLOCK*/, target, 1, 5)
 	loop.applyInput(editor, SubtickInput{At: loop.clock.Now(), Packet: pa})
 
 	gotEditor := drainPackets(editor.client)

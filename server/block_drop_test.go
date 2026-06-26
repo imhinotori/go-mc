@@ -110,8 +110,9 @@ func TestBlockDropSpawnsItem(t *testing.T) {
 	mgr.SetBlock(target, block.ToStateID[block.Stone{}], dimMinY)
 
 	before := loop.entities.len()
-	pa := playerActionPacket(2 /*STOP_DESTROY_BLOCK*/, target, 1, 7)
-	loop.applyInput(p, SubtickInput{At: loop.clock.Now(), Packet: pa})
+	// Plan 17-21: a survival break is a dig-timer now (START -> elapse -> STOP at progress>=0.7),
+	// not an instant STOP. completeSurvivalDig drives the full dig so the block breaks and drops.
+	completeSurvivalDig(loop, p, target)
 
 	if got := loop.entities.len(); got != before+1 {
 		t.Fatalf("entity count = %d, want %d (one Item spawned)", got, before+1)
@@ -174,8 +175,8 @@ func TestBlockDropTracked(t *testing.T) {
 	target := pk.Position{X: 1, Y: 64, Z: 1}
 	mgr.SetBlock(target, block.ToStateID[block.Stone{}], dimMinY)
 
-	pa := playerActionPacket(2, target, 1, 5)
-	loop.applyInput(editor, SubtickInput{At: loop.clock.Now(), Packet: pa})
+	// Plan 17-21: complete a survival dig (START -> elapse -> STOP) so the block breaks and drops.
+	completeSurvivalDig(loop, editor, target)
 
 	// Drive the SYNCHRONOUS golden-reference tracker (syncTrackerTick) so the emission is
 	// deterministic — the live loop.tracker is the async OPT-02 executor whose diff lands a

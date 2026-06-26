@@ -76,9 +76,15 @@ func (t *TickLoop) withinReach(p *tickPlayer, pos pk.Position) bool {
 // handlePlayerAction resolves a ServerboundPlayerAction (the BREAK path) on-tick. Wire
 // layout (jar-derived): VarInt action + Position pos + UnsignedByte direction + VarInt
 // sequence. A Scan error is a silent no-op (T-3-02 / T-6-04: defensive decode, never panic).
-// Only the destroy-FINISH (STOP) and creative-instant (START) stages break; ABORT and the
-// non-destroy actions are no-ops. A valid in-reach break on a loaded column sets the target
-// to air and runs the reconciliation contract.
+//
+// Plan 17-21 REPLACED the old break-on-STOP-only stand-in with the server-authoritative dig-time
+// model: this method now decodes the packet and dispatches the destroy-stage ordinal
+// (START=0/ABORT=1/STOP=2) into handleBlockBreakAction (block_break.go), the 1:1 port of
+// ServerPlayerGameMode.handleBlockBreakAction. START begins a per-tick dig timer and streams the
+// crack overlay, instant/creative mines break on START, and STOP completes against the block's
+// hardness — so survival blocks no longer shatter instantly on first click. The non-destroy
+// player actions (drop item, swap hand, finish using, swing, etc.) are not dig stages, so they fall
+// through as no-ops, exactly as before.
 func (t *TickLoop) handlePlayerAction(p *tickPlayer, pkt pk.Packet) {
 	var action pk.VarInt
 	var pos pk.Position
@@ -88,49 +94,14 @@ func (t *TickLoop) handlePlayerAction(p *tickPlayer, pkt pk.Packet) {
 		return // malformed/short payload: no-op, never panic (defensive decode)
 	}
 
-	// v1 break stage: STOP_DESTROY_BLOCK (action 2) is the survival dig FINISH — the moment the
-	// block actually breaks. START_DESTROY_BLOCK (action 0) is the dig BEGIN: in survival the
-	// client sends it the instant the player presses the attack button, BEFORE the block is
-	// mined. Breaking on START makes every block shatter instantly on first click — the
-	// "creative instant-break" the operator saw in a survival session. So v1 breaks ONLY on
-	// STOP; START and ABORT (and every other action) are no-ops here. (A future survival dig
-	// model would time the START→STOP interval against the block's hardness; v1 trusts the
-	// client's FINISH, which is acceptable for an offline single-player-style world.)
-	if int(action) != actionStopDestroyBlock {
-		return
+	// Only the three destroy stages drive the dig-time model; any other player-action ordinal is not a
+	// break and is a no-op here (the reach/too-high pre-checks and the START/STOP/ABORT arms all live
+	// in handleBlockBreakAction). direction is decoded for wire correctness but unused by the break
+	// model (vanilla passes it through but the base getDestroyProgress ignores it).
+	switch int(action) {
+	case actionStartDestroyBlock, actionAbortDestroyBlock, actionStopDestroyBlock:
+		t.handleBlockBreakAction(p, pos, int(action), int32(sequence))
 	}
-
-	// Server-authoritative reach gate (T-6-01): reject an out-of-range target silently.
-	if !t.withinReach(p, pos) {
-		return
-	}
-
-	// BREAK: set the target to air on the tick-owned chunk. SetBlock returns changed=false
-	// for an unloaded column / out-of-range y or an already-air target — in which case we
-	// neither ack nor broadcast (no ghost, nothing to reconcile).
-	//
-	air := block.ToStateID[block.Air{}]
-
-	// GAMEPLAY-06: capture the BROKEN block's state BEFORE SetBlock overwrites it with air, so
-	// spawnBlockDrop can look up the right drop (reading after SetBlock would always see air).
-	// A failed read leaves brokenState at air's id (no drop), which is the safe default.
-	brokenState := air
-	if t.world != nil {
-		if s, ok := t.world.GetBlock(pos, dimMinY); ok {
-			brokenState = s
-		}
-	}
-
-	if t.world == nil || !t.world.SetBlock(pos, air, dimMinY) {
-		return
-	}
-
-	t.reconcileEdit(p, pos, air, int32(sequence))
-
-	// GAMEPLAY-06 / Plan 17-14: spawn the dropped Item entity for the broken block. Rides the
-	// GAMEPLAY-01 tracker broadcast (the store-add path). A block with no v1 drop — or a creative
-	// player (ServerPlayerGameMode.destroyBlock: creative drops nothing) — is a no-op inside.
-	t.spawnBlockDrop(p, pos, brokenState)
 }
 
 // handleUseItemOn resolves a ServerboundUseItemOn (the PLACE path) on-tick. Wire layout

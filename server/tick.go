@@ -595,6 +595,47 @@ type tickPlayer struct {
 	// packet is the carrier that keeps the HUD hearts in sync with natural regeneration. Seeded to
 	// the spawn health at registration so the first send fires only on a real change. Tick-owned.
 	lastHealthSent float32
+
+	// --- Server-authoritative block-break dig-time 1:1 port (Plan 17-21,
+	// net.minecraft.server.level.ServerPlayerGameMode). ALL tick-owned (TICK-05): the dig state is
+	// mutated only on the tick goroutine by handleBlockBreakAction (the START/STOP/ABORT dispatch)
+	// and tickBlockBreak (the per-tick crack-overlay + delayed-destroy step), so they are -race clean
+	// by the same single-owner discipline as the rest of tickPlayer. Each field is the Go mirror of
+	// the identically-named ServerPlayerGameMode field; the vanilla per-instance gameTicks counter is
+	// supplied by the loop's gametime (a per-tick counter), not duplicated per player. ---
+
+	// isDestroyingBlock is ServerPlayerGameMode.isDestroyingBlock: set true on START_DESTROY_BLOCK
+	// once a multi-tick dig begins (not instant-mine, not creative), and read by tickBlockBreak to
+	// keep refreshing the crack overlay. Cleared on completion, abort, or when the target turns to air.
+	isDestroyingBlock bool
+
+	// destroyPos is ServerPlayerGameMode.destroyPos: the block currently being dug (set on START to
+	// the immutable target). STOP only completes when its pos equals this; ABORT clears the overlay
+	// here. Defaults to {0,0,0} (vanilla seeds destroyPos to BlockPos.ZERO).
+	destroyPos pk.Position
+
+	// destroyProgressStart is ServerPlayerGameMode.destroyProgressStart: the gameTicks value captured
+	// when START arrived. incrementDestroyProgress / STOP compute elapsed = gameTicks - this to scale
+	// the per-tick getDestroyProgress into accumulated progress.
+	destroyProgressStart int32
+
+	// lastSentDestroyStage is ServerPlayerGameMode.lastSentState: the crack-overlay stage (0-9) last
+	// sent for the current dig, so destroyBlockProgress is sent only when the stage CHANGES (the
+	// vanilla dirty-send). Seeded to -1 at registration (the vanilla ctor `lastSentState = -1`).
+	lastSentDestroyStage int32
+
+	// hasDelayedDestroy is ServerPlayerGameMode.hasDelayedDestroy: set when a STOP arrives with
+	// progress < 0.7 (the block is not yet done) so tickBlockBreak finishes the break once the
+	// accumulated progress reaches 1.0. Cleared when the delayed block breaks or turns to air.
+	hasDelayedDestroy bool
+
+	// delayedDestroyPos is ServerPlayerGameMode.delayedDestroyPos: the block the delayed-destroy is
+	// finishing. Defaults to {0,0,0} (vanilla seeds delayedDestroyPos to BlockPos.ZERO).
+	delayedDestroyPos pk.Position
+
+	// delayedTickStart is ServerPlayerGameMode.delayedTickStart: the destroyProgressStart carried into
+	// the delayed-destroy so incrementDestroyProgress keeps scaling from the original dig start.
+	delayedTickStart int32
 }
 
 // Health constants for a fresh survival player (the ENT-05 defaults). maxHealth is the vanilla

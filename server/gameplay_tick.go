@@ -334,6 +334,11 @@ func (g *gameTick) AcceptPlayer(
 		lastFoodSent:       maxFood,
 		lastSaturationSent: defaultSaturation,
 		lastHealthSent:     maxHealth,
+		// Block-break dig-time (Plan 17-21): the crack-overlay dirty-tracker seeds to -1, matching the
+		// vanilla ServerPlayerGameMode ctor (`lastSentState = -1`) so the first stage send fires on a
+		// real stage change. All other dig fields default to their zero value (isDestroyingBlock=false,
+		// destroyPos/delayedDestroyPos={0,0,0} == vanilla BlockPos.ZERO, hasDelayedDestroy=false).
+		lastSentDestroyStage: -1,
 	}
 
 	// ENT-06 + GAMEPLAY-02 load-on-join: apply the persisted snapshot loaded above (the disk IO

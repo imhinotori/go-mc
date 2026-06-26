@@ -209,6 +209,14 @@ func (t *TickLoop) tickEntities() {
 	// body lives in item_entity.go. Runs BEFORE tracker.Tick so a pickup/despawn removal is
 	// reflected in this tick's near() and the tracker emits RemoveEntities promptly.
 	t.tickItems()
+
+	// Plan 17-21 block-break dig-time: the ServerPlayerGameMode.tick() port — advance any pending
+	// delayed-destroy (finish the break at progress>=1.0) and refresh the in-progress crack overlay
+	// for each digging player. A single ADDITIVE call inside this existing phase keeps the tick order
+	// unchanged (TestTickPhaseOrder stays green), mirroring the tickFallDamage / tickBreath / tickFood
+	// seams above. Its body lives in block_break.go. Placed AFTER tickItems so a block broken by the
+	// delayed-destroy this tick spawns its drop and the tracker reflects it in this tick's near().
+	t.tickBlockBreak()
 }
 
 // tickAI drives mob AI for every AI mob in the tick-owned store, then runs the throttled
