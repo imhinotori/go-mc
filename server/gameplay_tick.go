@@ -174,9 +174,11 @@ func (k keepAliveClient) SendDisconnect(reason chat.Message) {
 //  5. on exit, unregisters from the tick (loop.unregister) and from KeepAlive
 //     (ClientLeft), then returns so the gate closes the conn.
 //
-// The login profile (name/id/pub key/properties/protocol) is accepted but not yet
-// consumed — player identity/profile state is wired into the tick in Phase 4+; Phase 3
-// proves only that a connection LIVES in the ticking world.
+// The login profile (name/id/pub key/properties/protocol) is threaded onto the tickPlayer
+// at registration: name (chat attribution, CMD-02), id (uuid), and properties (the
+// authenticated `textures` skin from hasJoined, ONLINE-01) are recorded so the tab-list
+// ADD_PLAYER broadcasts and the self-add bootstrap carry the real online skin. The profile
+// public key is unused in 26.2 login (the signed-profile path is gone).
 func (g *gameTick) AcceptPlayer(
 	name string,
 	id uuid.UUID,
@@ -264,6 +266,10 @@ func (g *gameTick) AcceptPlayer(
 		teleportID: teleportID,
 		gameMode:   gameModeSurvival,
 		entityID:   entityID,
+		// ONLINE-01: carry the authenticated skin properties into the bootstrap so the SELF
+		// ADD_PLAYER (writePlayerInfoUpdateAdd at play_join.go) ships the joiner's OWN skin —
+		// not an empty list. Offline-mode -> nil -> count 0 (Steve/Alex, unchanged).
+		properties: properties,
 		// spawnX/Y/Z is ALWAYS the authoritative spawn: the GAMEPLAY-02 persisted position when
 		// reconnecting, else the 17-06 SAFE fresh-spawn (the ported PlayerSpawnFinder column). Either
 		// way the bootstrap teleports the SINGLE PlayerPosition to it with the join teleport id (no
@@ -314,6 +320,13 @@ func (g *gameTick) AcceptPlayer(
 		// ("<name> message"). It was accepted at AcceptPlayer but unstored before this plan;
 		// threaded here as a value (crosses no tick-owned state), exactly like entityID/uuid.
 		name: name,
+		// ONLINE-01: the authenticated GameProfile properties (the `textures` skin from the
+		// online-mode hasJoined response) were accepted at AcceptPlayer but DROPPED before this
+		// plan — never stored, so every tab-list ADD_PLAYER shipped 0 properties (Steve/Alex).
+		// Threaded here as a value (crosses no tick-owned state, exactly like name/uuid/entityID)
+		// so broadcastPlayerInfoAdd / sendExistingPlayersTo carry the real skin to other players,
+		// and the self-add bootstrap shows the joiner its own skin. Offline-mode -> nil -> count 0.
+		properties: properties,
 		// ENT-05: a fresh player spawns at full survival health/food/saturation (the
 		// server-owned defaults). These tick-owned fields drive the damage->death->respawn
 		// loop; the client never sets them (T-6-05). A loaded .dat (ENT-06) overrides them

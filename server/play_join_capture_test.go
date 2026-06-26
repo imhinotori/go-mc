@@ -194,7 +194,7 @@ func TestPlayBytesVsVanillaCapture(t *testing.T) {
 		//    SET differs (Sulfur sends the minimal 0x0d, vanilla 0xff) — that is documented and
 		//    expected; we assert the framing of the shared actions, not the extra vanilla ones.
 		id := uuid.New()
-		p := writePlayerInfoUpdateAdd(id, "SulCap", gameModeSurvival)
+		p := writePlayerInfoUpdateAdd(id, "SulCap", gameModeSurvival, nil) // ONLINE-01: offline -> no skin properties (count 0)
 		if packetid.ClientboundPacketID(p.ID) != packetid.ClientboundPlayerInfoUpdate {
 			t.Fatalf("Sulfur PlayerInfoUpdate id = %d, want %d", p.ID, packetid.ClientboundPlayerInfoUpdate)
 		}

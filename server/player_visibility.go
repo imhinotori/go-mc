@@ -86,7 +86,10 @@ func (t *TickLoop) lookupPlayerByEntityID(id int32) *tickPlayer {
 // profile (joiner.uuid / joiner.name), never a client-supplied field (threat T-17-01).
 // Tick-owned (called from drainRegistrations on the owner).
 func (t *TickLoop) broadcastPlayerInfoAdd(joiner *tickPlayer) {
-	pkt := writePlayerInfoUpdateAdd(joiner.uuid, joiner.name, gameModeSurvival)
+	// ONLINE-01: carry the joiner's authenticated skin properties so OTHER players render its real
+	// online skin (offline -> nil -> count 0, Steve/Alex). SERVER-authoritative (the hasJoined
+	// response stored on the tickPlayer at registration), never a client-supplied field (T-18-05).
+	pkt := writePlayerInfoUpdateAdd(joiner.uuid, joiner.name, gameModeSurvival, joiner.properties)
 	for _, other := range t.players {
 		if other == nil || other == joiner || other.client == nil {
 			continue
@@ -106,7 +109,9 @@ func (t *TickLoop) sendExistingPlayersTo(joiner *tickPlayer) {
 		if other == nil || other == joiner {
 			continue
 		}
-		joiner.client.Send(writePlayerInfoUpdateAdd(other.uuid, other.name, gameModeSurvival))
+		// ONLINE-01: carry each existing player's authenticated skin properties so the joiner
+		// renders their real online skins (offline -> nil -> count 0). SERVER-authoritative.
+		joiner.client.Send(writePlayerInfoUpdateAdd(other.uuid, other.name, gameModeSurvival, other.properties))
 	}
 }
 

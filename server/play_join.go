@@ -7,6 +7,7 @@ import (
 	"github.com/imhinotori/sulfur/data/packetid"
 	"github.com/imhinotori/sulfur/level"
 	pk "github.com/imhinotori/sulfur/net/packet"
+	"github.com/imhinotori/sulfur/yggdrasil/user"
 
 	"github.com/google/uuid"
 )
@@ -335,16 +336,16 @@ func writeSetHeldSlot(slot int32) pk.Packet {
 // The self entry uses the minimal listed set ADD_PLAYER|UPDATE_GAME_MODE|UPDATE_LISTED
 // (0x0D). Within the entry the body is UUID first, then each present action's writer runs
 // in ENUM ORDER (ADD_PLAYER before UPDATE_GAME_MODE before UPDATE_LISTED). The ADD_PLAYER
-// property list (GAME_PROFILE_PROPERTIES) is a count-prefixed list; the offline server
-// sends 0 properties. The entry sub-encoding (property-list shape, listed Boolean) is a
-// Plan-05-03 capture-diff candidate — the framing here matches the jar; the exact bytes
-// are sealed by the capture-diff.
-func writePlayerInfoUpdateAdd(id uuid.UUID, name string, gameMode int32) pk.Packet {
+// property list (GAME_PROFILE_PROPERTIES) is a count-prefixed list; in online-mode it carries
+// the authenticated `textures` skin property (ONLINE-01), in offline-mode it is empty (count 0
+// -> Steve/Alex). The per-property bytes come from user.Property.WriteTo (== Property's
+// STREAM_CODEC) — see playerInfoEntriesEncoder.WriteTo for the jar citation.
+func writePlayerInfoUpdateAdd(id uuid.UUID, name string, gameMode int32, properties []user.Property) pk.Packet {
 	mask := int8(piuAddPlayer | piuUpdateGameMode | piuUpdateListed)
 	return pk.Marshal(
 		int32(packetid.ClientboundPlayerInfoUpdate),
 		pk.Byte(mask),
-		playerInfoEntriesEncoder{id: id, name: name, gameMode: gameMode},
+		playerInfoEntriesEncoder{id: id, name: name, gameMode: gameMode, properties: properties},
 	)
 }
 
@@ -352,16 +353,25 @@ func writePlayerInfoUpdateAdd(id uuid.UUID, name string, gameMode int32) pk.Pack
 // self-entry: VarInt(1) count, then the entry. The entry begins with the profile UUID,
 // then the present actions are written in enum order:
 //
-//	[ADD_PLAYER]       String name, VarInt(0) property count (no signed properties offline)
+//	[ADD_PLAYER]       String name, then GAME_PROFILE_PROPERTIES: a count-prefixed property
+//	                   list — online-mode carries the signed `textures` property, offline
+//	                   sends count 0 (Steve/Alex)
 //	[UPDATE_GAME_MODE] VarInt gameMode (GameType.getId)
 //	[UPDATE_LISTED]    Boolean listed (true — the player appears in its own list)
 //
-// CAPTURE-DIFF CANDIDATE (Plan 05-03): the property-list sub-encoding and the listed
-// Boolean are pinned to the jar's framing here; the capture-diff seals the exact bytes.
+// The ADD_PLAYER body is jar-derived from ClientboundPlayerInfoUpdatePacket$Action.ADD_PLAYER
+// (decompiled: writes GameProfile.name() as a String, then ByteBufCodecs.GAME_PROFILE_PROPERTIES
+// over GameProfile.properties()). GAME_PROFILE_PROPERTIES (ByteBufCodecs$32.encode, decompiled)
+// writes PropertyMap.size() as the VarInt count, then per Property: Utf8String.write(name),
+// Utf8String.write(value), FriendlyByteBuf.writeNullable(signature) — i.e. a present-Boolean
+// then the signature String when non-null. user.Property.WriteTo (String name, String value,
+// Option[String]{Has: Signature != ""}) is exactly that == Property's STREAM_CODEC, so the loop
+// REUSES it rather than hand-writing the property bytes.
 type playerInfoEntriesEncoder struct {
-	id       uuid.UUID
-	name     string
-	gameMode int32
+	id         uuid.UUID
+	name       string
+	gameMode   int32
+	properties []user.Property
 }
 
 func (e playerInfoEntriesEncoder) WriteTo(w io.Writer) (int64, error) {
@@ -377,12 +387,20 @@ func (e playerInfoEntriesEncoder) WriteTo(w io.Writer) (int64, error) {
 	if err := write(pk.UUID(e.id)); err != nil { // profileId (UUID, 16 raw bytes)
 		return n, err
 	}
-	// ADD_PLAYER: profile name + property count (0 properties offline).
+	// ADD_PLAYER: profile name + the GAME_PROFILE_PROPERTIES count-prefixed list. Online-mode
+	// carries the authenticated `textures` property (name/value/optional signature); offline
+	// sends count 0 (Steve/Alex). The per-property bytes are written by user.Property.WriteTo
+	// (== ByteBufCodecs$32 / Property's STREAM_CODEC) — not hand-written here.
 	if err := write(pk.String(e.name)); err != nil {
 		return n, err
 	}
-	if err := write(pk.VarInt(0)); err != nil { // GAME_PROFILE_PROPERTIES count
+	if err := write(pk.VarInt(int32(len(e.properties)))); err != nil { // GAME_PROFILE_PROPERTIES count
 		return n, err
+	}
+	for _, prop := range e.properties {
+		if err := write(prop); err != nil { // user.Property == Property.STREAM_CODEC
+			return n, err
+		}
 	}
 	// UPDATE_GAME_MODE: GameType.getId as VarInt.
 	if err := write(pk.VarInt(e.gameMode)); err != nil {
@@ -511,6 +529,13 @@ type bootstrapParams struct {
 	// the same teleport id (no second teleport, Pitfall 3). hasSpawn=false keeps the v1 spawn.
 	spawnX, spawnY, spawnZ float64
 	hasSpawn               bool
+
+	// properties is the authenticated GameProfile properties (the `textures` skin from the
+	// online-mode hasJoined response, ONLINE-01). sendPlayBootstrap passes it into the SELF
+	// ADD_PLAYER (writePlayerInfoUpdateAdd) so the joining player's own tab-list entry carries
+	// its real skin — the joiner sees itself with the online skin, not Steve/Alex. Empty in
+	// offline-mode (nil -> property count 0, byte-identical to before).
+	properties []user.Property
 }
 
 // sendPlayBootstrap enqueues the full early-Play bootstrap on the connection's outbound
@@ -562,6 +587,9 @@ func sendPlayBootstrap(c *Client, viewDist int, center level.ChunkPos, surfaceY 
 	}
 	c.Send(writePlayerAbilities(false, false, false, false, defaultFlyingSpeed, defaultWalkingSpeed))
 	c.Send(writeSetHeldSlot(defaultHeldSlot))
-	c.Send(writePlayerInfoUpdateAdd(params.id, params.name, params.gameMode))
+	// ONLINE-01: pass params.properties (NOT an empty slice) so the SELF tab-list entry carries
+	// the joiner's own authenticated skin — an empty slice would ship count 0 and the player
+	// would see itself as Steve/Alex. Offline-mode params.properties is nil -> count 0 (unchanged).
+	c.Send(writePlayerInfoUpdateAdd(params.id, params.name, params.gameMode, params.properties))
 	c.Send(writeSetDefaultSpawnPosition(overworldDimensionName, spawnPos, 0, 0))
 }

@@ -13,6 +13,7 @@ import (
 	pk "github.com/imhinotori/sulfur/net/packet"
 	"github.com/imhinotori/sulfur/save"
 	"github.com/imhinotori/sulfur/world"
+	"github.com/imhinotori/sulfur/yggdrasil/user"
 
 	"github.com/google/uuid"
 	"github.com/panjf2000/ants/v2"
@@ -312,6 +313,16 @@ type tickPlayer struct {
 	// a value (crosses no tick-owned state across the register boundary). Tick-owned
 	// thereafter.
 	name string
+
+	// properties is the authenticated GameProfile properties (the `textures` skin from the
+	// online-mode hasJoined response). Set at registration from the value AcceptPlayer threads
+	// in (exactly like name/uuid/entityID), so it crosses no tick-owned state across the register
+	// boundary. It is empty in offline-mode (no skin -> Steve/Alex, byte-identical to before).
+	// Read by broadcastPlayerInfoAdd / sendExistingPlayersTo when building each ADD_PLAYER
+	// tab-list entry, and by the self-add bootstrap so the joiner sees its OWN skin (ONLINE-01).
+	// SERVER-authoritative (the hasJoined response, never a client-supplied field — T-18-05).
+	// Tick-owned once registered.
+	properties []user.Property
 
 	// subtick is this player's bounded µs-timestamped input buffer (TICK-03). dispatch
 	// appends server-stamped inputs on arrival; resolveSubtickInputs drains it in

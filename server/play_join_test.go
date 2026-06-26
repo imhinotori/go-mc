@@ -353,7 +353,7 @@ func TestSetHeldSlotWire(t *testing.T) {
 // pins the framing the capture-diff seals to exact bytes.
 func TestPlayerInfoUpdateWire(t *testing.T) {
 	id := uuid.New()
-	p := writePlayerInfoUpdateAdd(id, "Steve", gameModeSurvival)
+	p := writePlayerInfoUpdateAdd(id, "Steve", gameModeSurvival, nil) // ONLINE-01: offline -> no skin properties (count 0)
 	if packetid.ClientboundPacketID(p.ID) != packetid.ClientboundPlayerInfoUpdate {
 		t.Fatalf("PlayerInfoUpdate id = %d, want ClientboundPlayerInfoUpdate (%d)", p.ID, packetid.ClientboundPlayerInfoUpdate)
 	}
