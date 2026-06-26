@@ -104,6 +104,9 @@ func (t *TickLoop) applyInput(p *tickPlayer, in SubtickInput) {
 	if t.applyInputHook != nil {
 		t.applyInputHook(p, in)
 	}
+	// ULTRA_DEBUG firehose: record EVERY inbound packet (decoded label + byte length) before the
+	// teleport gate, so even pre-confirm traffic is in the trace. No-op unless SULFUR_ULTRA_DEBUG=1.
+	t.udebugInboundPacket(p, in)
 	p.lastInputAt = in.At
 
 	// Teleport gate (PLAY-02): drop movement until the client has acknowledged the

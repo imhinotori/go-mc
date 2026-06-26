@@ -438,6 +438,7 @@ func (t *TickLoop) spreadTo(pos pk.Position, f fluidState) {
 		return // no change: do not re-schedule (prevents infinite oscillation)
 	}
 	if t.world.SetBlock(pos, encodeFluid(f), dimMinY) {
+		udebug("fluid", "spreadTo (%d,%d,%d) amount=%d falling=%v source=%v", pos.X, pos.Y, pos.Z, f.amount, f.falling, f.source)
 		t.scheduleFluidTick(pos)
 	}
 }

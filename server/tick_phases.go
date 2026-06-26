@@ -226,6 +226,35 @@ func (t *TickLoop) tickEntities() {
 	// tickFood so the eat's FoodData.eat lands on the post-hunger-tick food value, and AFTER
 	// tickBlockBreak so it sits with the other ServerPlayerGameMode/LivingEntity per-tick seams.
 	t.tickUseItem()
+
+	// ULTRA_DEBUG firehose: a throttled per-player state snapshot (pos/vel/in-water/air/food/health/
+	// dig/use), emitted LAST in the per-player phase so it captures the post-tick state. No-op unless
+	// SULFUR_ULTRA_DEBUG=1. Placed here (not a new phase) so it never perturbs the fixed tick order.
+	t.tickUltraDebug()
+}
+
+// tickUltraDebug emits the SULFUR_ULTRA_DEBUG per-player state snapshot, throttled to one line per
+// udebugTickEvery ticks per player so a long session log stays readable. A no-op unless the env
+// toggle is on (the udebug* calls short-circuit on the cached bool). Tick-owned: reads tick-owned
+// player state on the tick goroutine, same as the sibling per-player seams.
+func (t *TickLoop) tickUltraDebug() {
+	if !udebugEnabled {
+		return
+	}
+	if t.gametime%udebugTickEvery != 0 {
+		return
+	}
+	for _, p := range t.players {
+		if p == nil {
+			continue
+		}
+		t.udebugTickSnapshot(p)
+		// When the player is touching water, also dump the fluid column (feet+eye) so an in-water
+		// physics report (no float / no drag / drowning) has the exact server-side water state.
+		if t.playerInWater(p) || t.eyeInWater(p) {
+			t.udebugWaterColumn(p)
+		}
+	}
 }
 
 // tickAI drives mob AI for every AI mob in the tick-owned store, then runs the throttled

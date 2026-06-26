@@ -298,6 +298,7 @@ func (t *TickLoop) actuallyHurt(p *tickPlayer, amount float32) {
 	if p.health < 0 {
 		p.health = 0
 	}
+	udebugPlayer(p, "combat", "damage=%.2f -> hp=%.2f", amount, p.health)
 	// setAbsorptionAmount(getAbsorptionAmount() - amount): with absorption 0 this stays 0; kept
 	// for fidelity (vanilla performs it unconditionally after the health subtraction).
 	p.setAbsorptionAmount(p.getAbsorptionAmount() - amount)

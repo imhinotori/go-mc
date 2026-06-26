@@ -317,6 +317,10 @@ func (t *TickLoop) collidePlayer(p *tickPlayer, newX, newY, newZ float64) (x, y,
 	x = clampPlayerAxis(t, 0, x, y, z, newX)
 	z = clampPlayerAxis(t, 2, x, y, z, newZ)
 	y = clampPlayerAxis(t, 1, x, y, z, newY)
+	// ULTRA_DEBUG: a clamp fired — the claimed position was inside a solid and got corrected. The
+	// most useful single line for a "stuck on water surface / can't swim up" report: it shows
+	// whether the server is overriding the client's submitted Y. No-op unless SULFUR_ULTRA_DEBUG=1.
+	udebugPlayer(p, "collide", "claimed=(%.3f,%.3f,%.3f) -> accepted=(%.3f,%.3f,%.3f)", newX, newY, newZ, x, y, z)
 	return x, y, z
 }
 

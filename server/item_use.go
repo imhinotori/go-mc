@@ -290,6 +290,7 @@ func (t *TickLoop) completeUsingItem(p *tickPlayer) {
 		// unconditionally is observably identical (the slot already held the same item).
 		inv.set(slot, result)
 		t.stopUsingItem(p)
+		udebugPlayer(p, "eat", "consumed item=%d -> food=%d sat=%.1f hp=%.1f", p.useItem.ItemID, p.food, p.saturation, p.health)
 		// SYNC: food/saturation changed (FoodData.eat) and the held slot shrank — push both to the
 		// client (the HUD reads food/saturation off SetHealth; the slot reads off SetSlot).
 		t.syncAfterEat(p, inv, slot, result)
