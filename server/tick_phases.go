@@ -138,16 +138,6 @@ func (t *TickLoop) tickChunks() {
 			if t.world.IsEmpty(pos) {
 				t.world.MarkLoading(pos) // Empty -> Loading: this tick owns the single request
 				t.worker.Request(pos)    // non-blocking; drops if the bounded queue is full
-				continue
-			}
-			// A Ready column whose generated EDGE fluids have not been seeded gets scanned once
-			// (LevelChunk.postProcessGeneration stand-in): water bordering an air gap flows in
-			// instead of staying frozen. Only edge water is scheduled (no runaway cascade), and
-			// the scan is idempotent + budget-capped, so re-walking the ring stays cheap.
-			if t.fluidScannedChunks == nil || !t.fluidScannedChunks[pos] {
-				if _, ok := t.world.Get(pos); ok {
-					t.scanChunkFluids(pos)
-				}
 			}
 		}
 	}
