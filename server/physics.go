@@ -87,7 +87,22 @@ func (t *TickLoop) blockSolidAt(x, y, z int) bool {
 	if !ok {
 		return false
 	}
-	return !block.IsAir(s)
+	if block.IsAir(s) {
+		return false
+	}
+	// FLUID is NOT a collision wall. Vanilla LiquidBlock.getCollisionShape returns
+	// Shapes.empty() for a normal entity (the alwaysCollideWithFluid branch is a boat-only
+	// CollisionContext, not a walking player), so water/lava never block movement — an entity
+	// falls THROUGH the surface and then swims/sinks via travelInFluid. Treating water as solid
+	// here made the anti-clip sweep clamp the player flush onto the ocean surface (Y=sea level),
+	// so a player who reached an ocean column stood ON the water as if it were ground (no sink,
+	// no oxygen, no float). Excluding fluids from the solid test restores the empty collision
+	// shape. (v1 ports water; lava is not yet extracted — waterLevelOf covers the water case,
+	// which is the only fluid the generator currently places. CITE: LiquidBlock.getCollisionShape.)
+	if _, isWater := waterLevelOf(s); isWater {
+		return false
+	}
+	return true
 }
 
 // floorDiv is a negative-correct integer floor-division (Go's / truncates toward zero, so
