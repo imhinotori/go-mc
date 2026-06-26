@@ -179,6 +179,13 @@ func (t *TickLoop) tickEntities() {
 	t.syncPlayerEntities()
 	t.syncJoinInventories()
 	t.tickFallDamage()
+
+	// Plan 17-11 melee-combat per-tick bookkeeping: the attack-strength ticker increment
+	// (Player.tick) and the invulnerableTime / hurtTime decrements (ServerPlayer.tick), inside this
+	// existing phase so no new phase is added to the fixed tick order (TestTickPhaseOrder stays
+	// green). Its body lives in combat.go; a single ADDITIVE call keeps tick.go/tick_phases.go edits
+	// minimal so the sibling Wave edits (subtick.go fluid, block_drop.go drops) do not conflict.
+	t.tickPlayerCombat()
 }
 
 // tickAI drives mob AI for every AI mob in the tick-owned store, then runs the throttled
