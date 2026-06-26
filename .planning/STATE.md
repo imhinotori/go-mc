@@ -2,7 +2,7 @@
 gsd_state_version: 1.0
 milestone: v3
 milestone_name: Online-mode + Operator UX + Structure polish
-status: "GAMEPLAY-01..06 Complete; real-client gameplay confirmed working this session (float/eat/hunger/combat/drops/break). Landed: 17-19 hunger, 17-20 container-click, 17-21 block-break+hardness, 17-22 eating+food-data, water-no-collision, fluid-flow-on-edit+broadcast, ⭐FluidCount fix (THE float root cause — user confirmed floating works), ULTRA_DEBUG firehose, cmd/testbot (headless client + NPC wander), /tp, deflake TestTickAIDrivesMobs. TWO reverts of a cascading generated-fluid scan (DO NOT re-add — use vanilla markPosForPostProcessing one-shot). 65 commits unpushed (prod stale); push blocked by an unrelated env gate hook. gameplay-1:1 mandate ABSOLUTE."
+status: "GAMEPLAY-01..06 Complete. GAMEPLAY-07 1:1 work DONE this session: cave-water-gap fix (markPosForPostProcessing + one-shot postProcessGeneration — the SAFE replacement for the cascading scan), + the THREE entity-visibility audits (swing→Animate, held-item→SetEquipment, eat/use pose→DATA_LIVING_ENTITY_FLAGS, delta-move→ServerEntity.sendChanges replacing the per-tick TeleportEntity). Fluid-cost instrumentation added (decide async off-tick WITH data). TestTickAIDrivesMobs flake fixed. Docker -race full server suite GREEN. Earlier this session: 17-19 hunger, 17-20 container-click, 17-21 block-break+hardness, 17-22 eating, water-no-collision, ⭐FluidCount fix (float root cause, user-confirmed). ~71 commits unpushed (prod stale); push blocked by an unrelated attendly env gate hook. gameplay-1:1 mandate ABSOLUTE."
 stopped_at: Completed 17-04-PLAN.md (GAMEPLAY-06)
 last_updated: "2026-06-26T13:12:01.509Z"
 progress:
@@ -30,9 +30,11 @@ Status: GAMEPLAY-01..06 wired + gap-closure 1:1 fixes landed (incl. 17-19 FoodDa
 
 ### ⚠️ WHAT'S NEXT (resume here — see .planning/HANDOFF.md for the FULL detail)
 
-0. **Fluid cave-gap fix** (open bug — water bordering an air gap stays frozen): port vanilla `NoiseBasedChunkGenerator.fillFromNoise` markPosForPostProcessing (mark aquifer fluid cells) + `LevelChunk.postProcessGeneration` ONE-SHOT `FluidState.tick` per marked cell on chunk-load. DO NOT re-add a scan-and-schedule — it cascaded TWICE this session (11k/25k spreadTo, disconnected clients; both reverted).
-1. **Three 1:1 audit fixes that close GAMEPLAY-07** (all MISSING): (a) swing+held-item broadcast to observers (ClientboundAnimate + ClientboundSetEquipment + detectEquipmentUpdates), (b) delta-move tracking (tracker sends TeleportEntity every tick — should send MoveEntityPos/PosRot/Rot deltas; encoders exist, never called), (c) eat/pose metadata (DATA_LIVING_ENTITY_FLAGS index 8 + DATA_SHARED_FLAGS index 0 — extend the air-sync pattern). The `testbot -mode wander` NPC makes these visible to gate.
-2. **Push to development** (deploys to prod, fixes watchtower) — authorized, BLOCKED by the unrelated attendly env gate hook.
+0. **DONE this session** — cave-water-gap fix (markPosForPostProcessing one-shot, NOT a scan) + ALL THREE GAMEPLAY-07 audits (swing→Animate, held-item→SetEquipment, eat/use pose→DATA_LIVING_ENTITY_FLAGS, delta-move→ServerEntity.sendChanges). All jar-verified, tested, Docker -race green.
+1. **GAMEPLAY-07 real-client visual gate (autonomous:false)** — the 1:1 work is complete; needs the user's real-client pass (two clients, or the `testbot -mode wander` NPC: another player should now see arm swings, held-item changes, the eat pose, and SMOOTH delta-based walking instead of stutter). If clean → close Phase 17 → Phase 18.
+2. **DATA_SHARED_FLAGS (sprint/sneak/swim pose)** — left deferred (cited, not baked): it needs server-side input-flag plumbing that doesn't exist yet. Pick up when that lands.
+3. **(optional, gated on data) async fluid sim** — the user asked about moving fluids off the main tick. Instrumented this session (`grep 'ULTRA[fluid] cost'`). Port to compute-off-tick/apply-on-tick (like pathReady) ONLY if the cost data shows it blocks — the optimization-only mandate.
+4. **Push to development** (deploys to prod, fixes watchtower) — authorized, BLOCKED by the unrelated attendly env gate hook.
 
 ### ⚠️ (legacy) WHAT'S NEXT
 
