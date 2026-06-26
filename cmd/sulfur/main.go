@@ -20,11 +20,15 @@ import (
 	"context"
 	"flag"
 	"log"
+	"log/slog"
 	"os"
+
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/imhinotori/sulfur/chat"
 	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/server"
+	"github.com/imhinotori/sulfur/server/tui"
 	"github.com/imhinotori/sulfur/world"
 )
 
@@ -261,7 +265,38 @@ func main() {
 	gp.SetWorldDir(worldDir) // ENT-06: load/save player .dat under worldDir
 	srv := newServer(gp, online)
 
+	// The "Sulfur listening" startup line is emitted via the embedded *log.Logger to stderr
+	// BEFORE the TTY fork installs the slog handler, so in TUI mode it does NOT appear in the
+	// viewport (the operator-checkpoint wording notes this is expected). It flows to stderr
+	// either way — both branches keep stderr live.
 	srv.Logger.Printf("Sulfur listening on %s (protocol %d, %s, online-mode=%v)",
 		*addr, server.ProtocolVersion, server.ProtocolName, online)
+
+	// TUI-01 fork (Plan 19-02): decide ONCE at boot whether stdout is an interactive terminal.
+	// term.IsTerminal is pure-Go (golang.org/x/term, anchored behind tui.StdoutIsTerminal) so
+	// CGO_ENABLED=0 stays clean. Do NOT rely on bubbletea to self-degrade on a non-TTY — the
+	// guard is OURS (Pitfall 3).
+	if tui.StdoutIsTerminal() {
+		// Interactive: run the bubbletea operator console on the MAIN goroutine and the server
+		// listener on a goroutine. The console's Enter dispatch hands each typed line to the
+		// tick via EnqueueConsoleCommand (a non-blocking tick message — TICK-05 / Pitfall 7),
+		// NEVER executing inline. slog now fans every record to BOTH the TUI viewport and stderr
+		// (tui.NewHandler(prog)). On tea.Quit / Ctrl-C, prog.Run returns → cancel() unwinds every
+		// server goroutine (tick/keepalive/worker/save) via the shared ctx.
+		model := tui.New(func(line string) { tick.EnqueueConsoleCommand(line) })
+		prog := tea.NewProgram(model, tea.WithContext(ctx))
+		slog.SetDefault(slog.New(tui.NewHandler(prog)))
+		go func() { _ = srv.Listen(*addr) }()
+		if _, err := prog.Run(); err != nil {
+			slog.Error("tui exited", "err", err)
+		}
+		cancel() // tea.Quit / Ctrl-C → stop every server goroutine
+		return
+	}
+
+	// Headless (Docker/CI/piped stdout): NO bubbletea program. Install the plain-stderr slog
+	// handler (tui.NewHandler(nil)) and keep the EXACT blocking log.Fatal(srv.Listen(*addr))
+	// behavior this binary has today (Pitfall 4 — byte-for-behavior unchanged).
+	slog.SetDefault(slog.New(tui.NewHandler(nil)))
 	log.Fatal(srv.Listen(*addr))
 }
