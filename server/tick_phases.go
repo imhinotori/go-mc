@@ -217,6 +217,15 @@ func (t *TickLoop) tickEntities() {
 	// seams above. Its body lives in block_break.go. Placed AFTER tickItems so a block broken by the
 	// delayed-destroy this tick spawns its drop and the tracker reflects it in this tick's near().
 	t.tickBlockBreak()
+
+	// Plan 17-22 item-use / EATING: the LivingEntity.updatingUsingItem port — for each player using
+	// an item (eating), decrement the use-duration and, on completion, refill the food bar
+	// (FoodData.eat(FoodProperties)) + shrink the held stack (ItemStack.consume). A single ADDITIVE
+	// call inside this existing phase keeps the tick order unchanged (TestTickPhaseOrder stays green),
+	// mirroring the tickFood / tickBlockBreak seams above. Its body lives in item_use.go. Placed AFTER
+	// tickFood so the eat's FoodData.eat lands on the post-hunger-tick food value, and AFTER
+	// tickBlockBreak so it sits with the other ServerPlayerGameMode/LivingEntity per-tick seams.
+	t.tickUseItem()
 }
 
 // tickAI drives mob AI for every AI mob in the tick-owned store, then runs the throttled

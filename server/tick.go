@@ -9,6 +9,7 @@ import (
 
 	"github.com/imhinotori/sulfur/data/packetid"
 	"github.com/imhinotori/sulfur/level"
+	"github.com/imhinotori/sulfur/level/component"
 	pk "github.com/imhinotori/sulfur/net/packet"
 	"github.com/imhinotori/sulfur/save"
 	"github.com/imhinotori/sulfur/world"
@@ -636,6 +637,28 @@ type tickPlayer struct {
 	// delayedTickStart is ServerPlayerGameMode.delayedTickStart: the destroyProgressStart carried into
 	// the delayed-destroy so incrementDestroyProgress keeps scaling from the original dig start.
 	delayedTickStart int32
+
+	// --- Item-use / EATING state (Plan 17-22, the LivingEntity.useItem / useItemRemaining /
+	// usedItemHand 1:1 port). ALL tick-owned (TICK-05): set on the tick goroutine by the
+	// ServerboundUseItem handler (startUsingItem) and advanced by tickUseItem (the per-tick
+	// updatingUsingItem → updateUsingItem → completeUsingItem step), so they are -race clean by the
+	// same single-owner discipline as the dig/food/breath state above. ---
+
+	// useItem is net.minecraft.world.entity.LivingEntity.useItem: the ItemStack currently being used
+	// (eaten). Empty (Count <= 0) == not using anything (the vanilla ItemStack.EMPTY sentinel). Seeded
+	// to the empty stack (zero value) at registration — a fresh player is not using an item.
+	useItem component.SlotData
+
+	// useItemRemaining is net.minecraft.world.entity.LivingEntity.useItemRemaining: the ticks left in
+	// the current use. Seeded from stack.getUseDuration (Consumable.consumeTicks == consumeSeconds*20,
+	// f2i) on startUsingItem; decremented each tick by updateUsingItem; completeUsingItem fires when it
+	// hits 0. Meaningful only while useItem is non-empty.
+	useItemRemaining int32
+
+	// useItemHand is net.minecraft.world.entity.LivingEntity.getUsedItemHand (the InteractionHand the
+	// use began on): 0 == MAIN_HAND, 1 == OFF_HAND. completeUsingItem writes the shrunk stack back to
+	// this hand. Meaningful only while useItem is non-empty.
+	useItemHand int32
 }
 
 // Health constants for a fresh survival player (the ENT-05 defaults). maxHealth is the vanilla

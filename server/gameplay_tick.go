@@ -367,6 +367,15 @@ func (g *gameTick) AcceptPlayer(
 		player.pitch = loaded.Rotation[1]
 	}
 
+	// GATE-ONLY starter kit (test_kit.go): a no-op unless SULFUR_TEST_KIT=1. Seeds food + blocks
+	// into the inventory so the operator can gate the eat/hunger loop (17-19), container-click
+	// (17-20), and place/break (17-21) on a real client without first mining a meal. Applied AFTER
+	// the persisted-snapshot restore (so a real .dat is never clobbered — the kit only fills slots
+	// the env-var opts into) and BEFORE register, so syncJoinInventories sends it with the first
+	// authoritative ContainerSetContent. Default (prod, no env var) join is the vanilla empty
+	// inventory, untouched.
+	applyTestKit(player)
+
 	g.loop.register <- player
 
 	// JOIN log (17-09 / TUI-02 foundation): the player is now accepted, bootstrapped, and

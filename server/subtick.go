@@ -191,6 +191,15 @@ func (t *TickLoop) applyInput(p *tickPlayer, in SubtickInput) {
 		// acks + broadcasts.
 		t.handleUseItemOn(p, in.Packet)
 
+	case packetid.ServerboundUseItem:
+		// USE/EAT (Plan 17-22): the right-click-with-item (no block target) path —
+		// ServerPlayer.useItem -> ItemStack.use -> Consumable.startConsuming. For a FOOD item
+		// it begins a timed use (startUsingItem); tickUseItem decrements the use-duration and
+		// completeUsingItem refills the food bar (FoodData.eat) + shrinks the stack. A malformed
+		// payload or a non-food held item is a silent no-op inside the handler. Sits after the
+		// teleport gate — an eating player is confirmed.
+		t.handleUseItem(p, in.Packet)
+
 	case packetid.ServerboundContainerClick:
 		// INVENTORY (ENT-04): resolved on-tick. The 1.21.5+ HashedStack click is decoded
 		// WITHOUT mis-framing (jar-derived framing); the server is AUTHORITATIVE — it
