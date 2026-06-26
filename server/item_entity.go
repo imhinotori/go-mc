@@ -214,6 +214,11 @@ func (t *TickLoop) playerTouchItem(p *tickPlayer, e *Entity) {
 	}
 
 	inv := ensureInventory(p)
+	// Snapshot BEFORE the add so we can diff the slots that actually changed and broadcast each
+	// one (vanilla AbstractContainerMenu.broadcastChanges → synchronizeSlotToRemote per changed
+	// slot). This is the authoritative slot update the client needs to render the pickup (BUG-3).
+	before := inv.snapshot()
+
 	// Inventory.add mutates the stack's Count in place to the LEFTOVER that did not fit. add
 	// returns true iff it absorbed at least one item (vanilla's `count < startCount`).
 	if !t.inventoryAdd(p, inv, &e.itemStack) {
@@ -221,9 +226,10 @@ func (t *TickLoop) playerTouchItem(p *tickPlayer, e *Entity) {
 	}
 
 	// player.take(this, count): broadcast the ClientboundTakeItemEntity animation (the item
-	// flies into the player), then re-send the authoritative inventory.
+	// flies into the player), then send the authoritative ClientboundContainerSetSlot for every
+	// slot the pickup changed so the client always reflects the picked-up stack (BUG-3).
 	t.takeItem(p, e, count)
-	t.sendContent(p)
+	t.broadcastInventoryChanges(p, inv, before)
 
 	// If the whole stack was absorbed (leftover empty), discard the item entity now — the
 	// tracker emits RemoveEntities next tick (it leaves near()). A partial pickup leaves the

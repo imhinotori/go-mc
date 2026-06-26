@@ -255,6 +255,31 @@ func TestPickupPrefersSelectedHotbarSlot(t *testing.T) {
 	}
 }
 
+// TestPickupSendsSetSlot is the BUG-3 regression: after a successful pickup the server must send an
+// authoritative ClientboundContainerSetSlot for the changed slot (vanilla broadcastChanges →
+// synchronizeSlotToRemote), so the client always reflects the picked-up stack. The packet targets
+// containerId 0 (the player inventory window).
+func TestPickupSendsSetSlot(t *testing.T) {
+	loop, mgr := newDropLoop()
+	mgr.SetBlock(pk.Position{X: 8, Y: 63, Z: 8}, block.ToStateID[block.Stone{}], dimMinY)
+
+	p := blockPlayer(loop, 8.5, 64.0, 8.5)
+	p.entityID = 1000
+	ensureInventory(p)
+
+	ie := NewItemEntity(loop.idAlloc.AllocID(), 8.5, 64.0, 8.5, dropStack())
+	ie.pickupDelay = 0
+	loop.entities.add(ie)
+	p.tracked = map[int32]bool{ie.id: true}
+
+	loop.scanItemPickup(p)
+
+	got := drainPackets(p.client)
+	if n := countID(got, packetid.ClientboundContainerSetSlot); n < 1 {
+		t.Fatalf("ClientboundContainerSetSlot emitted %d times, want >= 1 (authoritative slot update)", n)
+	}
+}
+
 // totalInventoryCount sums the counts across all inventory slots — a test helper for asserting
 // "the inventory grew by N" without depending on which slot received the item.
 func totalInventoryCount(inv *Inventory) int {

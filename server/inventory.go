@@ -84,6 +84,48 @@ func (t *TickLoop) sendContent(p *tickPlayer) {
 	p.client.Send(containerSetContent(playerContainerID, inv.stateID, inv.snapshot(), carried))
 }
 
+// slotDataEqual reports whether two slots are wire-identical (same emptiness, item, components).
+// An empty slot is Count <= 0 regardless of the other fields, so two empties always compare equal.
+func slotDataEqual(a, b component.SlotData) bool {
+	if a.Count <= 0 || b.Count <= 0 {
+		return a.Count <= 0 && b.Count <= 0
+	}
+	return a.Count == b.Count && a.ItemID == b.ItemID && bytes.Equal(a.RawComponents, b.RawComponents)
+}
+
+// broadcastInventoryChanges ports AbstractContainerMenu.broadcastChanges → synchronizeSlotToRemote
+// (BUG-3): it diffs the current inventory against `before` and sends an authoritative
+// ClientboundContainerSetSlot for EACH slot that changed, so the client always reflects the new
+// contents (e.g. a picked-up stack appearing in a main/hotbar slot). Vanilla iterates every menu
+// slot and, when the remote copy differs, sends a SetSlot(containerId, stateId, slot, item) where
+// stateId comes from incrementStateId() (`(stateId + 1) & 32767`) — bumped ONCE per broadcast and
+// reused for every changed slot. Mirrors that: one stateId bump, then one SetSlot per changed slot.
+// If nothing changed (shouldn't happen after a successful add), no packets are sent. Tick-owned.
+//
+// Vanilla (javap AbstractContainerMenu.broadcastChanges / synchronizeSlotToRemote / incrementStateId):
+//
+//	for (i = 0; i < slots.size(); i++) { item = slots.get(i).getItem();
+//	    synchronizeSlotToRemote(i, item, ...); }   // sends SetSlot when remoteSlots[i] != item
+//	... using getStateId(); the menu's stateId is bumped (incrementStateId) on the broadcast.
+func (t *TickLoop) broadcastInventoryChanges(p *tickPlayer, inv *Inventory, before []component.SlotData) {
+	if p.client == nil {
+		return
+	}
+	now := inv.slots
+	// incrementStateId(): (stateId + 1) & 32767, bumped once for the whole broadcast.
+	inv.stateID = (inv.stateID + 1) & 0x7FFF
+	for i := range now {
+		var prev component.SlotData
+		if i < len(before) {
+			prev = before[i]
+		}
+		if slotDataEqual(prev, now[i]) {
+			continue // remoteSlots[i] == item: synchronizeSlotToRemote sends nothing
+		}
+		p.client.Send(containerSetSlot(playerContainerID, inv.stateID, int16(i), now[i]))
+	}
+}
+
 // handleContainerClick resolves a ServerboundContainerClick on-tick (ENT-04). It decodes the
 // 1.21.5+ HashedStack form WITHOUT mis-framing (jar-derived framing, server/slot_encode.go),
 // DISCARDS the client's hashes (the server is authoritative — it never builds a slot from
