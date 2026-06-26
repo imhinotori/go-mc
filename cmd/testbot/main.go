@@ -44,6 +44,8 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
+	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -211,6 +213,17 @@ type bot struct {
 	probeActive      bool
 	probeX, probeZ   int32
 	probeCX, probeCZ int32
+
+	// wander* drive the NPC random-walk (-mode wander). centerX/Z is the spawn anchor the NPC
+	// roams around (set once on entering Play); tgtX/Z is the current wander target it drifts
+	// toward; rng is the NPC's randomness (seeded from the clock so each run differs). heldSlot
+	// is the hotbar slot it last selected. All mutated only on the writer goroutine inside the
+	// movement loop, so they need no lock beyond the existing position mu they sit next to.
+	wanderInit       bool
+	centerX, centerZ float64
+	tgtX, tgtZ       float64
+	rng              *rand.Rand
+	heldSlot         int32
 }
 
 func (b *bot) dial(addr string) error {
@@ -464,12 +477,37 @@ func (b *bot) runMovement(mode string, ticks int, onGround bool, gx, gy, gz floa
 			b.x = stepToward(b.x, gx, 0.2)
 			b.y = stepToward(b.y, gy, 0.2)
 			b.z = stepToward(b.z, gz, 0.2)
+		case "wander":
+			// Random-walk an "NPC" around its spawn center: drift toward a wander target, turning
+			// the yaw to face the heading, picking a NEW target when close. The random ACTIONS
+			// (swing / hotbar-select / place / break) are sent below so a real client sees the NPC
+			// do things with its kit items.
+			b.wanderStep()
 		default:
 			b.mu.Unlock()
-			return fmt.Errorf("unknown -mode %q (want hold|walk|swim|dive|goto)", mode)
+			return fmt.Errorf("unknown -mode %q (want hold|walk|swim|dive|goto|wander)", mode)
 		}
 		x, y, z := b.x, b.y, b.z
+		yaw, pitch := b.yaw, b.pitch
 		b.mu.Unlock()
+
+		if mode == "wander" {
+			// PosRot so the NPC's body/head turn as it walks (others see it look around).
+			if err := b.conn.WritePacket(pk.Marshal(
+				int32(packetid.ServerboundMovePlayerPosRot),
+				pk.Double(x), pk.Double(y), pk.Double(z),
+				pk.Float(yaw), pk.Float(pitch),
+				flags,
+			)); err != nil {
+				return fmt.Errorf("send MovePlayerPosRot: %w", err)
+			}
+			b.wanderActions(i)
+			if i%20 == 0 {
+				fmt.Printf("npc tick %d: pos=(%.2f, %.2f, %.2f) yaw=%.0f\n", i, x, y, z, yaw)
+			}
+			time.Sleep(tickInterval)
+			continue
+		}
 
 		// C->S MovePlayerPos: Double x,y,z + UnsignedByte flags.
 		if err := b.conn.WritePacket(pk.Marshal(
@@ -489,6 +527,69 @@ func (b *bot) runMovement(mode string, ticks int, onGround bool, gx, gy, gz floa
 	b.closed.Store(true)
 	b.conn.Close()
 	return nil
+}
+
+// wanderStep advances the NPC one tick of its random walk: lazily anchor the roam center at the
+// spawn, drift toward the current wander target, and pick a fresh target (within a radius of the
+// center) when close. The yaw is turned to face the heading so the body/head visibly track the
+// walk. Called under b.mu (the writer holds it across the position update), so it mutates the
+// position + wander state directly. The NPC stays near spawn (radius-bounded) so a watching player
+// can see it the whole time. Held under b.mu by the caller.
+func (b *bot) wanderStep() {
+	if b.rng == nil {
+		b.rng = rand.New(rand.NewSource(time.Now().UnixNano()))
+	}
+	if !b.wanderInit {
+		b.centerX, b.centerZ = b.x, b.z
+		b.tgtX, b.tgtZ = b.x, b.z
+		b.wanderInit = true
+	}
+	const wanderRadius = 8.0 // how far from the spawn anchor the NPC roams
+	const stepSpeed = 0.15   // blocks per tick (a calm stroll)
+	dx := b.tgtX - b.x
+	dz := b.tgtZ - b.z
+	dist := math.Hypot(dx, dz)
+	if dist < 0.5 {
+		// Reached the target — pick a new random point within the roam radius of the center.
+		ang := b.rng.Float64() * 2 * math.Pi
+		r := b.rng.Float64() * wanderRadius
+		b.tgtX = b.centerX + math.Cos(ang)*r
+		b.tgtZ = b.centerZ + math.Sin(ang)*r
+		return
+	}
+	b.x += dx / dist * stepSpeed
+	b.z += dz / dist * stepSpeed
+	// Face the heading: yaw is degrees, 0 = +Z, increasing clockwise (Minecraft convention:
+	// yaw = atan2(-dx, dz) in degrees).
+	b.yaw = float32(math.Atan2(-dx, dz) * 180 / math.Pi)
+}
+
+// wanderActions sends the NPC's random ACTIONS for tick i (outside the position lock): an arm
+// swing now and then, a hotbar reselect (so it visibly switches items), and an occasional
+// use/place + dig so a watching player sees it do things with its kit. All are best-effort: a
+// write error is swallowed (the movement loop's fatal check tears down on a real disconnect).
+func (b *bot) wanderActions(i int) {
+	if b.rng == nil {
+		return
+	}
+	// ~every 15 ticks: swing the main hand (ClientboundAnimate to observers, once that lands).
+	if i%15 == 0 {
+		_ = b.conn.WritePacket(pk.Marshal(int32(packetid.ServerboundSwing), pk.VarInt(0))) // 0 = main hand
+	}
+	// ~every 40 ticks: reselect a random hotbar slot (kit fills hotbar 0..6) so it switches items.
+	if i%40 == 7 {
+		b.heldSlot = int32(b.rng.Intn(7))
+		_ = b.conn.WritePacket(pk.Marshal(int32(packetid.ServerboundSetCarriedItem), pk.Short(b.heldSlot)))
+	}
+	// ~every 60 ticks: a "use item" (right-click in the air) — drinks/eats if the held slot is food.
+	if i%60 == 23 {
+		// ServerboundUseItem: VarInt hand, VarInt sequence, Float yaw, Float pitch.
+		b.mu.Lock()
+		yaw, pitch := b.yaw, b.pitch
+		b.mu.Unlock()
+		_ = b.conn.WritePacket(pk.Marshal(int32(packetid.ServerboundUseItem),
+			pk.VarInt(0), pk.VarInt(0), pk.Float(yaw), pk.Float(pitch)))
+	}
 }
 
 // movementFlagOnGround mirrors server/subtick.go: bit 0x01 of the trailing packed flags byte
