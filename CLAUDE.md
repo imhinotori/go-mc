@@ -9,6 +9,7 @@ A from-scratch Minecraft Java Edition server (version 26.2, protocol 776) writte
 
 ### Constraints
 
+- **GAMEPLAY IS A 1:1 PORT OF VANILLA JAVA — ABSOLUTE.** Every piece of game logic (damage, fall damage, combat, fluids, mob AI, physics, drops, redstone, growth, etc.) MUST be a literal, method-for-method copy of the unobfuscated 26.2 jar (`temp/cache/26.2-inner.jar`, read via `javap -c -p` / CFR). Mirror the vanilla call chain and numeric ops EXACTLY — including float casts, epsilons, attribute multipliers, RNG draw order, and immune/guard checks. DO NOT paraphrase, simplify, "improve", or change gameplay behavior, ever. Re-express in idiomatic Go (no GPL paste) and CITE the class/method, but the structure and the observable behavior must be identical to Java. **The ONLY permitted deviation is OPTIMIZATION** — a concurrency/perf change that provably preserves identical observable gameplay (Leaf-style async layered over the faithful logic). When a faithful port needs a not-yet-built subsystem (attributes, effects), stub it behind a clearly-cited constant that equals the vanilla default, structured so it becomes a real read later — never bake the value away. Verify every port against the jar bytecode before writing it.
 - **Tech stack**: Go 1.26.1 server; Java 25 only for offline jar data extraction (not a runtime dependency of the server).
 - **Compatibility**: Must speak protocol 776 to an unmodified vanilla 26.2 client.
 - **Dependencies**: Built on `Tnze/go-mc` (likely a fork to apply the #294-296 codegen approach and retarget 776).
