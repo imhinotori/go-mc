@@ -94,7 +94,10 @@ Full phase details: [milestones/v2-ROADMAP.md](milestones/v2-ROADMAP.md).
   1. A charmbracelet bubbletea+bubbles console renders a command-input zone (textinput) + a live log viewport; typed commands dispatch through the existing command system (TUI-01)
   2. The TUI degrades gracefully when stdout is not a TTY (headless/Docker → plain structured logging, no TUI) (TUI-01)
   3. Every player disconnect logs WHY (kick/timeout/protocol error/clean quit/login failure) with player identity + reason, surfaced in the TUI log stream + structured logs (TUI-02)
-**Plans**: TBD (set by /gsd-plan-phase)
+**Plans**: 3 plans in 2 waves (Wave 1: 19-01 foundation; Wave 2 parallel: 19-02 + 19-03, disjoint files)
+  - [ ] 19-01-PLAN.md — charm v2 deps + bubbletea Model (viewport+textinput) + slog.Handler log bridge (non-blocking, drop-on-full)
+  - [ ] 19-02-PLAN.md — console dispatch seam (runConsoleCommand via existing graph, no issuer) + main() TTY fork (TUI vs plain stderr)
+  - [ ] 19-03-PLAN.md — disconnect taxonomy (protocol_error/write_error/login/config/kick/timeout/quit) + slog join/leave + KeepAlive double-leave hardening
 **Research**: Phase research covers the bubbletea/bubbles API (textinput + viewport composition) + the TTY-detection degrade path.
 
 ### Phase 20: Structure polish — loot, inhabitants, beard, persistence
