@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/google/uuid"
@@ -31,7 +32,15 @@ type (
 	PublicKey = user.PublicKey
 )
 
-const verifyTokenLen = 16
+// verifyTokenLen is the EncryptionRequest challenge length. Vanilla derives the
+// challenge as Ints.toByteArray(RandomSource.create().nextInt()) = exactly 4 bytes
+// (one int's big-endian encoding). The client echoes back whatever length it received,
+// so this is observably harmless either way, but 4 is the strict 1:1 value. We keep the
+// existing rand.Read mechanism (4 cryptographically-random bytes is round-trip
+// equivalent to one nextInt's big-endian bytes).
+// [VERIFIED: javap net.minecraft.server.network.ServerLoginPacketListenerImpl
+//  <init> challenge = Ints.toByteArray(nextInt())]
+const verifyTokenLen = 4
 
 // Encrypt a connection, with authentication
 func Encrypt(conn *net.Conn, name string, serverKey *rsa.PrivateKey) (*Resp, error) {
@@ -78,11 +87,22 @@ func Encrypt(conn *net.Conn, name string, serverKey *rsa.PrivateKey) (*Resp, err
 }
 
 func encryptionRequest(conn *net.Conn, publicKey, verifyToken []byte) error {
+	// Wire order is the jar-exact ClientboundHelloPacket.write field sequence:
+	//   writeUtf(serverId), writeByteArray(publicKey), writeByteArray(challenge),
+	//   writeBoolean(shouldAuthenticate).
+	// The trailing shouldAuthenticate boolean (added in the 1.20.5 era) is the 4th
+	// field a real 26.2 client readBoolean()s; omitting it desyncs the decode. We send
+	// `true` unconditionally because the server only ever sends the EncryptionRequest in
+	// online-mode (MinecraftServer.usesAuthentication()), which is exactly when
+	// ServerLoginPacketListenerImpl.handleHello constructs the packet with iconst_1.
+	// [VERIFIED: javap net.minecraft.network.protocol.login.ClientboundHelloPacket.write
+	//  + net.minecraft.server.network.ServerLoginPacketListenerImpl.handleHello]
 	return conn.WritePacket(pk.Marshal(
 		packetid.ClientboundLoginHello,
 		pk.String(""),
 		pk.ByteArray(publicKey),
 		pk.ByteArray(verifyToken),
+		pk.Boolean(true),
 	))
 }
 
@@ -121,8 +141,22 @@ func encryptionResponse(conn *net.Conn, serverKey *rsa.PrivateKey, verifyToken [
 	return sharedSecret, nil
 }
 
+// sessionServerURL is the FAITHFUL Yggdrasil hasJoined base URL: authlib
+// YggdrasilEnvironment PROD session host + the hasJoinedServer path. It is a package
+// var (not a const) ONLY so tests can point it at an httptest stub and keep CI offline;
+// production never reassigns it, so the live endpoint is byte-identical to vanilla.
+// [VERIFIED: javap authlib YggdrasilMinecraftSessionService.hasJoinedServer
+//  + YggdrasilEnvironment PROD]
+var sessionServerURL = "https://sessionserver.mojang.com/session/minecraft/hasJoined"
+
 func authentication(name, hash string) (*Resp, error) {
-	resp, err := http.Get("https://sessionserver.mojang.com/session/minecraft/hasJoined?username=" + name + "&serverId=" + hash)
+	// Build the query with net/url so username/serverId are correctly percent-encoded
+	// (the serverId hash is hex/`-`-prefixed and safe, but valid usernames and the
+	// encoding are made correct here rather than string-concatenated). Base URL + path
+	// are FAITHFUL — only the query construction changes. The optional `ip` param
+	// (authlib preventProxyConnections) is intentionally omitted (out of scope).
+	q := url.Values{"username": {name}, "serverId": {hash}}
+	resp, err := http.Get(sessionServerURL + "?" + q.Encode())
 	if err != nil {
 		return nil, err
 	}
