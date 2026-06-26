@@ -137,8 +137,16 @@ func (t *TickLoop) tickFluids() {
 	if t.world == nil {
 		return
 	}
-	for _, st := range t.fluidSchedule.drainDue(t.gametime) {
+	due := t.fluidSchedule.drainDue(t.gametime)
+	for _, st := range due {
 		t.fluidTick(st.pos)
+	}
+	// Cost instrumentation for the "should the fluid sim move off-tick?" question: emit the
+	// per-gametick fluid work (cells processed this tick + the queue depth still pending) ONLY
+	// when there was work, so a busy session's fluid load is greppable (`grep 'ULTRA\[fluid\] cost'`)
+	// without deciding the async optimization blind. Zero cost when the firehose is off.
+	if len(due) > 0 {
+		udebug("fluid", "cost gametime=%d processed=%d pendingAfter=%d", t.gametime, len(due), t.fluidSchedule.pending())
 	}
 }
 

@@ -65,6 +65,17 @@ func (q *fluidScheduleQueue) empty() bool {
 	return len(q.buckets) == 0
 }
 
+// pending counts every scheduled tick still queued across all future buckets. Used only by the
+// fluid cost instrumentation (tickFluids) to report the backlog depth — it is O(buckets), called
+// at most once per gametick and only when the firehose is on.
+func (q *fluidScheduleQueue) pending() int {
+	n := 0
+	for _, b := range q.buckets {
+		n += len(b)
+	}
+	return n
+}
+
 // packPos packs a block position into a single int64 for a deterministic, allocation-free sort
 // key (and a stable ordering across runs). The 26/12/26-bit field split mirrors the vanilla
 // BlockPos packing (net.minecraft.core.BlockPos.asLong) so the ordering is well-defined across
