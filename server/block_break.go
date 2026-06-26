@@ -370,6 +370,7 @@ func (t *TickLoop) destroyBlock(p *tickPlayer, pos pk.Position, air block.StateI
 		t.reconcileEdit(p, pos, air, sequence) // BlockChangedAck(sequence) + tracking-column BlockUpdate
 	} else {
 		t.broadcastBlockUpdate(pos, air) // delayed-destroy: no sequence to ack, still broadcast the air
+		udebugPlayer(p, "edit", "break(delayed) pos=(%d,%d,%d) -> air (was state=%d)", pos.X, pos.Y, pos.Z, brokenState)
 	}
 
 	// Spawn the dropped Item entity (ServerPlayerGameMode.destroyBlock's loot path). Creative drops

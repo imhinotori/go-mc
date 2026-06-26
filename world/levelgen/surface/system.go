@@ -2,6 +2,7 @@ package surface
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/biome"
@@ -45,12 +46,25 @@ type SurfaceSystem struct {
 	// randomFactoryCache memoizes the per-name positional factory the
 	// vertical_gradient condition draws from (getOrCreateRandomFactory).
 	randomFactoryCache map[string]lgrandom.PositionalRandomFactory
+
+	// cacheMu guards noiseCache + randomFactoryCache. The SurfaceSystem is built ONCE per world
+	// (NewNoiseGenerator) and SHARED across the parallel chunk-gen worker goroutines
+	// (Worker.handleTerrain runs many chunks concurrently), which lazily populate these two maps
+	// — an unsynchronized map read+write across goroutines is a `fatal error: concurrent map read
+	// and map write` crash (observed in production). A plain mutex is correct here: the maps fill
+	// quickly (one entry per distinct noise id / factory name) then become read-mostly, so the
+	// lock is near-uncontended after warmup. The seeding itself (rstate.NormalNoise / fromHashOf)
+	// is pure over (seed, id), so two goroutines racing to fill the same key produce identical
+	// values — the lock only prevents the map-structure corruption, not a value divergence.
+	cacheMu sync.Mutex
 }
 
 // randomFactory ports RandomState.getOrCreateRandomFactory(id) =
 // base.fromHashOf(id).forkPositional(), memoized per name (the vertical_gradient
 // surface rule's seeded random).
 func (s *SurfaceSystem) randomFactory(name string) lgrandom.PositionalRandomFactory {
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
 	if f, ok := s.randomFactoryCache[name]; ok {
 		return f
 	}
@@ -147,15 +161,20 @@ func (s *SurfaceSystem) getBand(x, y, z int) block.StateID {
 // surfaceNoiseValue returns the named surface noise sampled 2-D at (x,0,z), seeding +
 // caching the NormalNoise on first use (SurfaceRules$Context.createNoiseSampler2d).
 func (s *SurfaceSystem) surfaceNoiseValue(noiseID string, x, z int) (float64, error) {
+	s.cacheMu.Lock()
 	n, ok := s.noiseCache[noiseID]
 	if !ok {
 		var err error
 		n, err = s.rstate.NormalNoise(noiseID)
 		if err != nil {
+			s.cacheMu.Unlock()
 			return 0, err
 		}
 		s.noiseCache[noiseID] = n
 	}
+	s.cacheMu.Unlock()
+	// GetValue is a pure read on the seeded noise (no shared mutable state), so it runs OUTSIDE
+	// the lock — only the map access needs protecting.
 	return n.GetValue(float64(x), 0, float64(z)), nil
 }
 
