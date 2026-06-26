@@ -40,6 +40,7 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"log"
@@ -48,6 +49,8 @@ import (
 	"time"
 
 	"github.com/imhinotori/sulfur/data/packetid"
+	"github.com/imhinotori/sulfur/level"
+	"github.com/imhinotori/sulfur/level/block"
 	mcnet "github.com/imhinotori/sulfur/net"
 	pk "github.com/imhinotori/sulfur/net/packet"
 	"github.com/imhinotori/sulfur/offline"
@@ -75,6 +78,7 @@ func main() {
 	overrideSpawn := flag.Bool("override-spawn", false, "use -x/-y/-z as the starting position instead of the server spawn")
 	onGroundFlag := flag.String("onground", "", "onGround flag to send: true|false (default: true for walk/hold, false for swim/dive)")
 	cmdStr := flag.String("cmd", "", "a ServerboundChatCommand to send once on entering Play, e.g. 'tp -23 58 17' (no leading slash)")
+	probe := flag.String("probe", "", "DIAGNOSTIC: world 'x z' column to watch; decodes received chunk + block-update packets and reports the WATER state at that column (e.g. -probe \"-23 17\")")
 	flag.Parse()
 
 	log.SetFlags(log.Ltime)
@@ -83,6 +87,21 @@ func main() {
 	b := &bot{
 		name: *name,
 		mode: *mode,
+	}
+
+	// -probe "x z" arms the client-side water DIAGNOSTIC: the reader decodes the chunk and
+	// block-update packets it receives and reports what the CLIENT actually holds at this
+	// world column. This is purely additive — it never alters movement or any send path.
+	if *probe != "" {
+		var px, pz int
+		if _, err := fmt.Sscanf(*probe, "%d %d", &px, &pz); err != nil {
+			log.Fatalf("invalid -probe %q (want \"x z\", e.g. \"-23 17\"): %v", *probe, err)
+		}
+		b.probeActive = true
+		b.probeX, b.probeZ = int32(px), int32(pz)
+		b.probeCX, b.probeCZ = int32(px)>>4, int32(pz)>>4
+		log.Printf("probe armed: world column (%d,%d) -> chunk (%d,%d), watching Y=56..64",
+			px, pz, b.probeCX, b.probeCZ)
 	}
 
 	if err := b.dial(*addr); err != nil {
@@ -183,6 +202,15 @@ type bot struct {
 	// writer loop can stop and report it. closed signals the reader to exit.
 	fatal  atomic.Pointer[error]
 	closed atomic.Bool
+
+	// probe* drive the client-side water DIAGNOSTIC (-probe "x z"). When probeActive, the
+	// reader decodes ClientboundLevelChunkWithLight + ClientboundBlockUpdate and reports the
+	// block state at the watched column. probeX/probeZ are the WORLD column; probeCX/probeCZ
+	// are its chunk coords (used to match the chunk packet's Int x, Int z header). These are
+	// set once before the reader starts and never mutated after, so they need no lock.
+	probeActive      bool
+	probeX, probeZ   int32
+	probeCX, probeCZ int32
 }
 
 func (b *bot) dial(addr string) error {
@@ -517,12 +545,102 @@ func (b *bot) readLoop() {
 			if err := p.Scan(&health, &food, &sat); err == nil {
 				log.Printf("health=%.1f food=%d saturation=%.1f", float32(health), int32(food), float32(sat))
 			}
+		case packetid.ClientboundLevelChunkWithLight:
+			// DIAGNOSTIC: decode the chunk the client just received and, if it is the probe
+			// column's chunk, dump the block state at the watched column for Y=56..64. This
+			// proves whether the water blocks actually arrive in the CLIENT's ClientLevel.
+			if b.probeActive {
+				b.probeChunk(p)
+			}
+		case packetid.ClientboundBlockUpdate:
+			// DIAGNOSTIC: a single-block change. If it lands in the probe column, report the new
+			// state — this catches the server OVERWRITING the water after the chunk was sent
+			// (the fluid-broadcast path setFluidBlock -> broadcastBlockUpdate).
+			if b.probeActive {
+				b.probeBlockUpdate(p)
+			}
 		case packetid.ClientboundDisconnect:
 			e := fmt.Errorf("server disconnected: %s", decodeText(p))
 			b.fatal.CompareAndSwap(nil, &e)
 			return
 		}
 	}
+}
+
+// probeChunk decodes a ClientboundLevelChunkWithLight and, if it is the probe column's chunk,
+// dumps the block at every Y from 56..64 of that column. The wire layout (world/packet.go
+// WriteLevelChunkWithLight) is: Int x, Int z, then exactly what level.Chunk.WriteTo emits
+// (heightmaps + section blob + block entities + light). So we read the two Int coords off the
+// front and feed the REMAINDER to level.Chunk.ReadFrom, which consumes the chunk body AND the
+// trailing light data symmetrically (it is the inverse of WriteTo) — no manual body/light split
+// is needed.
+func (b *bot) probeChunk(p pk.Packet) {
+	r := bytes.NewReader(p.Data)
+	var cx, cz pk.Int
+	if _, err := cx.ReadFrom(r); err != nil {
+		log.Printf("[chunk] probe: read x failed: %v", err)
+		return
+	}
+	if _, err := cz.ReadFrom(r); err != nil {
+		log.Printf("[chunk] probe: read z failed: %v", err)
+		return
+	}
+	if int32(cx) != b.probeCX || int32(cz) != b.probeCZ {
+		return // not the watched chunk
+	}
+
+	// 24 sections, minY=-64 — the overworld dimension shape this server serves.
+	ch := level.EmptyChunk(24)
+	if _, err := ch.ReadFrom(r); err != nil {
+		// The sections are parsed before the light, so block data is already populated even if
+		// a later (light) field trips. Report the error but still attempt the dump.
+		log.Printf("[chunk] probe: ReadFrom error (attempting dump anyway): %v", err)
+	}
+
+	lx := int(b.probeX & 15)
+	lz := int(b.probeZ & 15)
+	var sb bytes.Buffer
+	fmt.Fprintf(&sb, "[chunk] recv (cx=%d,cz=%d) column world(x=%d,z=%d):", int32(cx), int32(cz), b.probeX, b.probeZ)
+	for y := 64; y >= 56; y-- {
+		secIdx := (y + 64) >> 4
+		ly := (y + 64) & 15
+		name := "<out-of-range-section>"
+		if secIdx >= 0 && secIdx < len(ch.Sections) {
+			localIndex := ly*256 + lz*16 + lx
+			name = describeState(ch.Sections[secIdx].GetBlock(localIndex))
+		}
+		fmt.Fprintf(&sb, " Y=%d %s", y, name)
+	}
+	log.Print(sb.String())
+}
+
+// probeBlockUpdate decodes a ClientboundBlockUpdate (Position pos, VarInt stateId) and, if the
+// updated block is in the probe column, reports the new block name. This reveals a post-chunk
+// overwrite of the water.
+func (b *bot) probeBlockUpdate(p pk.Packet) {
+	var pos pk.Position
+	var stateID pk.VarInt
+	if err := p.Scan(&pos, &stateID); err != nil {
+		log.Printf("[blockupdate] probe: scan failed: %v", err)
+		return
+	}
+	if int32(pos.X) != b.probeX || int32(pos.Z) != b.probeZ {
+		return // not in the watched column
+	}
+	log.Printf("[blockupdate] (%d,%d,%d) -> %s", pos.X, pos.Y, pos.Z, describeState(block.StateID(stateID)))
+}
+
+// describeState maps a global block-state id to a human label, flagging water (with its fluid
+// level) explicitly so the diagnostic output reads at a glance. Out-of-range ids print raw.
+func describeState(s block.StateID) string {
+	if int(s) < 0 || int(s) >= len(block.StateList) {
+		return fmt.Sprintf("<state-id=%d out-of-range>", int(s))
+	}
+	blk := block.StateList[s]
+	if w, ok := blk.(block.Water); ok {
+		return fmt.Sprintf("water(level=%d)", int(w.Level))
+	}
+	return blk.ID()
 }
 
 // answerPlayKeepAlive echoes a play-state ClientboundKeepAlive (a single Long) back as
