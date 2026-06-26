@@ -472,6 +472,57 @@ type tickPlayer struct {
 	// descent delta that accumulates into fallDistance. DECLARED by 17-01, USED by 17-03
 	// (fall_damage.go).
 	lastY float64
+
+	// --- Melee combat 1:1 port (Plan 17-11). ALL tick-owned (TICK-05): mutated only on the tick
+	// goroutine by the attack/damage/tick-decrement paths, so they are -race clean by the same
+	// single-owner discipline as the rest of tickPlayer. ---
+
+	// attributes is the per-player attribute holder (attributes.go) — the Go stand-in for
+	// vanilla's AttributeMap. Lazily seeded with the player default base values on first access
+	// via playerAttributes(); getAttributeValue(attr) reads through it. The melee-combat formulas
+	// READ attributes (ATTACK_DAMAGE, ATTACK_SPEED, ATTACK_KNOCKBACK, ARMOR, ARMOR_TOUGHNESS, …)
+	// instead of hardcoding numbers, so item/effect modifiers compose here later with no formula
+	// change. nil until first read; self-initializing on the tick goroutine.
+	attributes *attributeHolder
+
+	// invulnerableTime is net.minecraft.world.entity.Entity.invulnerableTime: the post-hit damage
+	// grace window in ticks. Set to 20 on a fresh hit (hurtServer), and decremented by 1 each tick
+	// while > 0 (ServerPlayer.tick — the player path, not the LivingEntity.tick path which skips
+	// ServerPlayer). While > 10.0F a subsequent hit only applies the EXCESS over lastHurt (the
+	// anti-spam rate limit). Tick-owned.
+	invulnerableTime int32
+
+	// lastHurt is net.minecraft.world.entity.LivingEntity.lastHurt: the damage amount of the most
+	// recent hit, used by the invulnerableTime>10 window so a second hit within the grace period
+	// applies only (damage - lastHurt) and a non-greater hit applies nothing (returns false).
+	// Tick-owned.
+	lastHurt float32
+
+	// hurtTime / hurtDuration are net.minecraft.world.entity.LivingEntity.hurtTime/hurtDuration:
+	// the red-flash animation timer (set to hurtDuration=10 on a fresh hit, counted down each
+	// tick). Server-side they gate nothing in v1 (the flash is client visual), but they are ported
+	// and ticked for fidelity so the field semantics match vanilla. Tick-owned.
+	hurtTime     int32
+	hurtDuration int32
+
+	// attackStrengthTicker is net.minecraft.world.entity.player.Player.attackStrengthTicker: ticks
+	// since the last attack, incremented by 1 each tick (Player.tick) and reset to 0 on an attack
+	// (resetAttackStrengthTicker). getAttackStrengthScale reads it to ramp damage from 0.2x (just
+	// attacked) to 1.0x (fully recharged) over getCurrentItemAttackStrengthDelay ticks. Tick-owned.
+	attackStrengthTicker int32
+
+	// sprinting is net.minecraft.world.entity.Entity.isSprinting(): whether the player is sprinting,
+	// which adds knockback and forbids critical hits in the attack sequence. v1 has no sprint-state
+	// decode yet, so it is always false (a faithful stub — the field exists so the attack formula
+	// reads it and a future sprint-flag decode wires it with no formula change). Tick-owned.
+	sprinting bool
+
+	// absorptionAmount is net.minecraft.world.entity.LivingEntity.getAbsorptionAmount(): the
+	// current absorption (golden-apple "yellow heart") shield, folded into actuallyHurt before the
+	// health subtraction. v1 has no absorption source (MAX_ABSORPTION base 0), so it stays 0; the
+	// field exists so the absorption formula in actuallyHurt reads/writes it faithfully and a future
+	// effect slots in with no formula change. Tick-owned.
+	absorptionAmount float32
 }
 
 // Health constants for a fresh survival player (the ENT-05 defaults). maxHealth is the vanilla
