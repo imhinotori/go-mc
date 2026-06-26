@@ -39,6 +39,7 @@ var generators = []generator{
 	{"entity", genEntity},
 	{"component", genComponent},
 	{"blockentities", genBlockEntities},
+	{"blockhardness", genBlockHardness},
 	{"registryid", genRegistryID},
 	{"biome", genBiome},
 	{"lang", genLang},
