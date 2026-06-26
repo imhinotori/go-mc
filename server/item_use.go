@@ -212,6 +212,10 @@ func (t *TickLoop) useItemInHand(p *tickPlayer, hand int32) {
 	p.useItem = held
 	p.useItemRemaining = consumeTicks
 	p.useItemHand = hand
+	// setLivingEntityFlag(USING_ITEM, true) + (OFFHAND, hand==OFF_HAND): push the using pose to
+	// observers (LivingEntity.startUsingItem -> SynchedEntityData). The eater predicts its own
+	// first-person animation; this is the 3rd-person pose other players see.
+	t.broadcastUsingItem(p, true, hand)
 }
 
 // tickUseItem is the per-tick LivingEntity.updatingUsingItem step, run for every player inside
@@ -345,12 +349,18 @@ func (t *TickLoop) finishUsingItemNow(p *tickPlayer, hand int32, held component.
 }
 
 // stopUsingItem is net.minecraft.world.entity.LivingEntity.stopUsingItem(): clear the use state
-// (useItem = EMPTY, the SynchedEntityData using flag would clear here — v1 has no living-entity-flag
-// metadata wired, so the third-person eat animation is a cited deferred item; the gameplay is the
-// hunger restore + stack shrink). Tick-owned.
+// (useItem = EMPTY) and clear the SynchedEntityData USING flag for observers (DATA_LIVING_ENTITY_FLAGS
+// -> bit 0x01 false), so the 3rd-person eat pose ends. Tick-owned.
 func (t *TickLoop) stopUsingItem(p *tickPlayer) {
+	wasUsing := isUsingItem(p)
 	p.useItem = component.SlotData{Count: 0}
 	p.useItemRemaining = 0
+	// setLivingEntityFlag(USING_ITEM, false): clear the using pose for observers. Only broadcast
+	// when the player WAS using (avoids a spurious clear for a no-op stop). Cite:
+	// LivingEntity.stopUsingItem -> setLivingEntityFlag(1, false).
+	if wasUsing {
+		t.broadcastUsingItem(p, false, p.useItemHand)
+	}
 }
 
 // releaseUsingItem is net.minecraft.world.entity.LivingEntity.releaseUsingItem(): in vanilla it lets
@@ -363,11 +373,10 @@ func (t *TickLoop) releaseUsingItem(p *tickPlayer) {
 
 // syncAfterEat pushes the authoritative state the client needs after a completed eat: the food bar
 // (food/saturation changed by FoodData.eat — reuse the dirty-send SetHealth via syncFood) and the
-// shrunk held slot (ClientboundContainerSetSlot for the consumed item). The third-person eat
-// animation (the LIVING_ENTITY_FLAG_IS_USING SynchedEntityData bit observers read) is a cited
-// deferred item — v1 has no living-entity-flag metadata wired, so only the food restore + stack
-// shrink (the gameplay) are synced; the FIRST-person animation is the client's own prediction off
-// the ServerboundUseItem it sent. Tick-owned.
+// shrunk held slot (ClientboundContainerSetSlot for the consumed item). The 3rd-person eat pose
+// (the DATA_LIVING_ENTITY_FLAGS IS_USING bit observers read) is cleared by stopUsingItem, which
+// completeUsingItem calls right before this; the FIRST-person animation is the eater's own
+// prediction off the ServerboundUseItem it sent. Tick-owned.
 func (t *TickLoop) syncAfterEat(p *tickPlayer, inv *Inventory, slot int16, result component.SlotData) {
 	// Food/saturation/health dirty-send (reuses the same SetHealth carrier tickFood uses).
 	t.syncFood(p)

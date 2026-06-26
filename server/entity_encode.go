@@ -280,6 +280,47 @@ func airDataEntry(air int32) entityDataEntry {
 	}
 }
 
+// --- GAMEPLAY-07: the DATA_LIVING_ENTITY_FLAGS data-value (eat/use pose) -----------------
+//
+// The 3rd-person EATING/USING pose (the arm-raise-to-mouth animation observers see) is driven by
+// the player's synched DATA_LIVING_ENTITY_FLAGS byte: bit 0x01 = IS_USING_ITEM, bit 0x02 = the
+// active hand is the OFF_HAND, bit 0x04 = spin attack. startUsingItem sets bit 0x01 (+0x02 for
+// the off hand); stopUsingItem clears them. The server is authoritative and PUSHES the flag via
+// SetEntityData; without it observers never see the eat pose (the eater predicts it locally).
+//
+// dataLivingEntityFlagsIndex is the SynchedEntityData accessor index for LivingEntity
+// .DATA_LIVING_ENTITY_FLAGS. Entity defines indices 0..7 (0=SHARED_FLAGS, 1=AIR_SUPPLY, ...,
+// 7=TICKS_FROZEN); LivingEntity's FIRST defined field is DATA_LIVING_ENTITY_FLAGS, so it is
+// index 8 (a BYTE).
+//   [VERIFIED javap: net.minecraft.world.entity.LivingEntity static{} -> the first defineId is
+//    EntityDataSerializers.BYTE -> DATA_LIVING_ENTITY_FLAGS, after Entity's 8 fields (0..7).]
+const dataLivingEntityFlagsIndex uint8 = 8
+
+// byteSerializerID is the registry id of EntityDataSerializers.BYTE — 0 (the first
+// registerSerializer call). Its value codec is ByteBufCodecs.BYTE (a single signed byte).
+//   [VERIFIED javap: EntityDataSerializers static{} -> BYTE registered first (id 0).]
+const byteSerializerID int32 = 0
+
+// livingEntityFlag bit masks (LivingEntity.setLivingEntityFlag arg = the MASK, not a bit index):
+//   USING_ITEM = 0x01, OFFHAND active hand = 0x02, SPIN_ATTACK = 0x04 (v1 sets only 0x01/0x02).
+//   [VERIFIED javap: startUsingItem -> setLivingEntityFlag(1,true), setLivingEntityFlag(2,
+//    hand==OFF_HAND); the flag is OR'd/AND-NOT'd into the byte.]
+const (
+	livingFlagUsingItem  = 0x01
+	livingFlagOffHandUse = 0x02
+)
+
+// livingEntityFlagsEntry builds the SynchedEntityData$DataValue entry for
+// DATA_LIVING_ENTITY_FLAGS: Byte(index=8) + VarInt(byteSerializerID=0) + Byte(flags). The BYTE
+// serializer's value is a single signed byte (pk.Byte), mirroring airDataEntry's INT pattern.
+func livingEntityFlagsEntry(flags int8) entityDataEntry {
+	return entityDataEntry{
+		index:        dataLivingEntityFlagsIndex,
+		serializerID: byteSerializerID,
+		value:        pk.Byte(flags), // EntityDataSerializers.BYTE codec == ByteBufCodecs.BYTE
+	}
+}
+
 // entityDataEOF is the SynchedEntityData EOF_MARKER (255 / 0xFF) — the MANDATORY single
 // terminator byte that closes the packed-items list. It is ALWAYS written, even for an
 // empty list; omitting it desyncs the client's entity stream and the entity is dropped.
@@ -319,6 +360,24 @@ func encodeSetEntityData(e *Entity, entries ...entityDataEntry) pk.Packet {
 	return pk.Marshal(
 		int32(packetid.ClientboundSetEntityData),
 		pk.VarInt(e.id),
+		rawBytes(body.Bytes()),
+	)
+}
+
+// encodeSetEntityDataByID builds ClientboundSetEntityData for an entity referenced by id alone
+// (a player has no *Entity instance): VarInt id, the entries' DataValue bytes, then the
+// mandatory 0xFF terminator. Same framing as encodeSetEntityData, minus the e.metadata splice
+// (a player carries no pre-built metadata slot). Used to push a single live flag change (e.g.
+// DATA_LIVING_ENTITY_FLAGS on start/stop using an item) to observers.
+func encodeSetEntityDataByID(entityID int32, entries ...entityDataEntry) pk.Packet {
+	var body bytes.Buffer
+	for _, entry := range entries {
+		_, _ = entry.WriteTo(&body)
+	}
+	_, _ = pk.UnsignedByte(entityDataEOF).WriteTo(&body)
+	return pk.Marshal(
+		int32(packetid.ClientboundSetEntityData),
+		pk.VarInt(entityID),
 		rawBytes(body.Bytes()),
 	)
 }

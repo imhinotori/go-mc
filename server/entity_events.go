@@ -106,3 +106,21 @@ func (t *TickLoop) tickEquipment() {
 		t.broadcastToTrackers(p.entityID, encodeSetEquipment(p.entityID, equipmentSlotMainHand, cur))
 	}
 }
+
+// broadcastUsingItem syncs DATA_LIVING_ENTITY_FLAGS to the players tracking this player so the
+// 3rd-person eat/use pose appears (and clears). using=true sets bit 0x01 (IS_USING_ITEM) plus
+// 0x02 when the active hand is the OFF_HAND; using=false clears the flags (byte 0). Mirrors
+// LivingEntity.startUsingItem / stopUsingItem's setLivingEntityFlag, pushed via SetEntityData.
+// The eater is NOT included — it predicts its own first-person animation off the
+// ServerboundUseItem it sent (broadcastToTrackers already excludes the actor).
+func (t *TickLoop) broadcastUsingItem(p *tickPlayer, using bool, hand int32) {
+	var flags int8
+	if using {
+		flags = livingFlagUsingItem
+		if hand == interactionHandOff {
+			flags |= livingFlagOffHandUse
+		}
+	}
+	udebug("eat", "pose player=%d using=%v hand=%d flags=0x%02x", p.entityID, using, hand, byte(flags))
+	t.broadcastToTrackers(p.entityID, encodeSetEntityDataByID(p.entityID, livingEntityFlagsEntry(flags)))
+}

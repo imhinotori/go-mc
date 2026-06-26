@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/imhinotori/sulfur/data/packetid"
@@ -175,4 +176,100 @@ func TestEquipmentSlotIsMainHand(t *testing.T) {
 		return
 	}
 	t.Fatal("no SetEquipment packet emitted after held-item change")
+}
+
+// setEntityDataFlags scans a ClientboundSetEntityData packet and returns the
+// DATA_LIVING_ENTITY_FLAGS byte (index 8, serializer 0) if present. The body is a sequence of
+// (UByte index, VarInt serializerId, value...) ending in 0xFF; we only need to find index 8.
+func setEntityDataFlags(t *testing.T, p pk.Packet) (int8, bool) {
+	t.Helper()
+	var id pk.VarInt
+	r := bytes.NewReader(p.Data)
+	if _, err := id.ReadFrom(r); err != nil {
+		t.Fatalf("decode SetEntityData id: %v", err)
+	}
+	for {
+		var index pk.UnsignedByte
+		if _, err := index.ReadFrom(r); err != nil {
+			return 0, false
+		}
+		if index == 0xFF {
+			return 0, false // EOF marker, flags not present
+		}
+		var ser pk.VarInt
+		if _, err := ser.ReadFrom(r); err != nil {
+			return 0, false
+		}
+		// Only the BYTE serializer (id 0) entries we emit here carry a single byte value.
+		var b pk.Byte
+		if _, err := b.ReadFrom(r); err != nil {
+			return 0, false
+		}
+		if uint8(index) == dataLivingEntityFlagsIndex && int32(ser) == byteSerializerID {
+			return int8(b), true
+		}
+	}
+}
+
+// TestUsingItemPoseBroadcast: starting to eat broadcasts DATA_LIVING_ENTITY_FLAGS with the
+// IS_USING bit to a tracking observer; stopping clears it. Not echoed to the eater.
+func TestUsingItemPoseBroadcast(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	actor := newTrackerPlayer(loop, 1000, 8.5, 8.5)
+	observer := newTrackerPlayer(loop, 1001, 9.5, 8.5)
+	observer.tracked = map[int32]bool{actor.entityID: true}
+
+	loop.broadcastUsingItem(actor, true, interactionHandMain)
+	loop.broadcastUsingItem(actor, false, interactionHandMain)
+
+	got := drainPackets(observer.client)
+	var flagsSeen []int8
+	for _, p := range got {
+		if p.ID != int32(packetid.ClientboundSetEntityData) {
+			continue
+		}
+		if f, ok := setEntityDataFlags(t, p); ok {
+			flagsSeen = append(flagsSeen, f)
+		} else {
+			flagsSeen = append(flagsSeen, 0) // a flags entry that decoded to the clear (0) state
+		}
+	}
+	if len(flagsSeen) != 2 {
+		t.Fatalf("expected 2 SetEntityData (start+stop), got %d", len(flagsSeen))
+	}
+	if flagsSeen[0]&livingFlagUsingItem == 0 {
+		t.Fatalf("start: IS_USING bit must be set, got 0x%02x", byte(flagsSeen[0]))
+	}
+	if flagsSeen[1] != 0 {
+		t.Fatalf("stop: flags must clear to 0, got 0x%02x", byte(flagsSeen[1]))
+	}
+
+	if countID(drainPackets(actor.client), packetid.ClientboundSetEntityData) != 0 {
+		t.Fatal("the eater must NOT receive its own using-pose metadata")
+	}
+}
+
+// TestUsingItemPoseOffHandBit: starting with the OFF_HAND sets bit 0x02 alongside IS_USING.
+func TestUsingItemPoseOffHandBit(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	actor := newTrackerPlayer(loop, 1000, 8.5, 8.5)
+	observer := newTrackerPlayer(loop, 1001, 9.5, 8.5)
+	observer.tracked = map[int32]bool{actor.entityID: true}
+
+	loop.broadcastUsingItem(actor, true, interactionHandOff)
+
+	for _, p := range drainPackets(observer.client) {
+		if p.ID != int32(packetid.ClientboundSetEntityData) {
+			continue
+		}
+		f, ok := setEntityDataFlags(t, p)
+		if !ok {
+			t.Fatal("off-hand start must carry a flags entry")
+		}
+		if f&livingFlagUsingItem == 0 || f&livingFlagOffHandUse == 0 {
+			t.Fatalf("off-hand using flags = 0x%02x, want IS_USING|OFFHAND", byte(f))
+		}
+		return
+	}
+	t.Fatal("no SetEntityData emitted for off-hand use")
 }
