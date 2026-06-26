@@ -294,6 +294,11 @@ func (t *TickLoop) reconcileEdit(editor *tickPlayer, pos pk.Position, state bloc
 		editor.client.Send(blockChangedAck(sequence))
 	}
 	t.broadcastBlockUpdate(pos, state)
+	// Level.updateNeighborsAt → LiquidBlock.neighborChanged: a break/place re-schedules every
+	// neighboring fluid so adjacent water flows into the freshly-changed cell (e.g. breaking a
+	// block under standing water makes the water fall in). Without this the world mutated but the
+	// fluid sim never woke, leaving a permanent air gap next to water.
+	t.scheduleFluidNeighborsOnEdit(pos)
 }
 
 // broadcastBlockUpdate sends a ClientboundBlockUpdate(pos, state) to every player whose view

@@ -479,6 +479,35 @@ func (t *TickLoop) scheduleNeighbors(pos pk.Position) {
 	}
 }
 
+// scheduleFluidNeighborsOnEdit is the port of Level.updateNeighborsAt → LiquidBlock.neighborChanged
+// for a block EDIT (break or place). Vanilla: Level.setBlock notifies all 6 neighbors of the
+// changed position; each neighbor that is a LiquidBlock runs neighborChanged, and if
+// shouldSpreadLiquid it re-schedules its fluid tick (FlowingFluid.getTickDelay ticks out). Sulfur's
+// break/place path (reconcileEdit) mutated the world but never ran this neighbor notification, so a
+// block broken next to (or below) standing water left a permanent air gap — the adjacent water was
+// never re-scheduled and so never flowed into the new hole. Schedule the fluid in EACH of the 6
+// neighbors (the 4 horizontals + above + below); a scheduled water cell re-runs FlowingFluid.tick,
+// which spreads down into / sideways toward the freshly-opened air. The edited cell itself is also
+// scheduled if it is now water (e.g. placing water), so a placed source begins flowing immediately.
+// Cite: net.minecraft.world.level.block.LiquidBlock.neighborChanged / .onPlace -> scheduleTick.
+func (t *TickLoop) scheduleFluidNeighborsOnEdit(pos pk.Position) {
+	if t.fluidAt(pos).isWater {
+		t.scheduleFluidTick(pos) // a placed/edited water cell flows on its own delay
+	}
+	for _, d := range horizontalDirs {
+		np := plus(pos, d)
+		if t.fluidAt(np).isWater {
+			t.scheduleFluidTick(np)
+		}
+	}
+	if t.fluidAt(above(pos)).isWater {
+		t.scheduleFluidTick(above(pos)) // water above a freshly-broken block falls into it
+	}
+	if t.fluidAt(below(pos)).isWater {
+		t.scheduleFluidTick(below(pos))
+	}
+}
+
 // opposite returns the reverse of a horizontal direction (Direction.getOpposite).
 func opposite(d pk.Position) pk.Position {
 	return pk.Position{X: -d.X, Y: -d.Y, Z: -d.Z}
