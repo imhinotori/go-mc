@@ -17,3 +17,8 @@
   assert progress over a longer horizon), owned by the AI/spawner plan, not the drop/pickup work.
 - **Suggested fix (for the owning plan):** Inject a seeded `rand.Source` into `mobAI` navigation
   so the test is deterministic, or relax the assertion to "x strictly increased" over more ticks.
+- **Re-confirmed during 17-15** (water-disconnect + pickup-slot fixes): the same test still flakes
+  non-deterministically (fails ~1 in 3 full-suite runs, passes 5/5 in isolation and passes on the
+  stashed tree by luck) — caused by the async pathfinding pool not rejoining within 400 ticks under
+  CPU contention. Independent of the 17-15 fluid/inventory changes (those files are unrelated to the
+  AI/async path); all 17-15 tests pass 5/5 in isolation. Still owned by the AI/spawner plan.
