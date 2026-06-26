@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v3
 milestone_name: Online-mode + Operator UX + Structure polish
-status: "GAMEPLAY-01..06 Complete. GAMEPLAY-07 1:1 work DONE this session: cave-water-gap fix (markPosForPostProcessing + one-shot postProcessGeneration — the SAFE replacement for the cascading scan), + the THREE entity-visibility audits (swing→Animate, held-item→SetEquipment, eat/use pose→DATA_LIVING_ENTITY_FLAGS, delta-move→ServerEntity.sendChanges replacing the per-tick TeleportEntity). Fluid-cost instrumentation added (decide async off-tick WITH data). TestTickAIDrivesMobs flake fixed. Docker -race full server suite GREEN. Earlier this session: 17-19 hunger, 17-20 container-click, 17-21 block-break+hardness, 17-22 eating, water-no-collision, ⭐FluidCount fix (float root cause, user-confirmed). ~71 commits unpushed (prod stale); push blocked by an unrelated attendly env gate hook. gameplay-1:1 mandate ABSOLUTE."
-stopped_at: Phase 17 1:1 work COMPLETE — GAMEPLAY-07 gated ONLY on the operator's real-client visual sign-off (17-05-SUMMARY.md + 17-VERIFICATION.md written). Next phase = 18 (online-mode).
-last_updated: "2026-06-26T18:30:00.000Z"
+status: executing
+stopped_at: Completed 17-04-PLAN.md (GAMEPLAY-06)
+last_updated: "2026-06-26T22:20:52.860Z"
 progress:
-  total_phases: 4
+  total_phases: 2
   completed_phases: 1
-  total_plans: 5
-  completed_plans: 20
+  total_plans: 7
+  completed_plans: 22
   percent: 100
 ---
 
@@ -20,13 +20,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-23)
 
 **Core value:** A Go server that an unmodified vanilla Minecraft 26.2 client can connect to, log into, and play in a persistent, ticking world — architected from day one for Leaf-style async optimizations.
-**Current focus:** **FIRST PLAYABLE ACHIEVED.** Phase 5 (Player Session / First Playable) COMPLETE — a real vanilla 26.2 client connects, logs in, and WALKS AROUND a following, ticking world; it is listed in the tab list and is not kicked. **The project is now playable end-to-end.** Next: Phase 6 (entities / inventory / persistence) — to be planned.
+**Current focus:** Phase 18 — online-mode-auth-protocol-encryption
 
 ## Current Position
 
-Phase: 17 — Gameplay Completion — IN PROGRESS (21 plans: 5 original + 16 real-client gap-closure)
-Plan: 17-21 COMPLETE (ServerPlayerGameMode block-break dig-time 1:1 + jar-extracted block hardness). NEXT: re-verify the GAMEPLAY-07 VISUAL GATE with a real client; if clean, close Phase 17 → Phase 18 (online-mode).
-Status: GAMEPLAY-01..06 wired + gap-closure 1:1 fixes landed (incl. 17-19 FoodData hunger, 17-20 container-click, 17-21 block-break dig-time + hardness extraction); gameplay-1:1 mandate ABSOLUTE in CLAUDE.md. build/vet/server-tests green; -race not runnable this session (no gcc/cgo) but dig state is tick-owned single-owner (race-clean by construction).
+Phase: 18 (online-mode-auth-protocol-encryption) — EXECUTING
+Plan: 2 of 2
+Status: Ready to execute
 
 ### ⚠️ WHAT'S NEXT (resume here — see .planning/HANDOFF.md for the FULL detail)
 
@@ -123,7 +123,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [████████░░] 80%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -202,6 +202,7 @@ Progress: [████████░░] 80%
 | Phase 17 P01 | 9min | 4 tasks | 11 files |
 | Phase 17 P04 | 11min | 2 tasks | 4 files |
 | Phase 17 P02 | 35min | 3 tasks | 5 files |
+| Phase 18 P01 | 18min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -313,6 +314,7 @@ Recent decisions affecting current work:
 - [Phase 17]: 17-02 (GAMEPLAY-05): fluid scheduled-tick queue = per-gametime bucket map with deterministic packed-pos drain (the ServerLevel.scheduleTick analogue); schedule-on-change so worldgen oceans stay static until disturbed (Open Question 3)
 - [Phase 17]: 17-02: canBeReplacedWith guard (never overwrite a source / downgrade a flow) is what terminates the FlowingFluid spread deterministically (Pitfall 2); isHole requires the cell itself passable so a flat floor spreads sideways
 - [Phase 17]: 17-02: player fluid physics (0.8 getWaterSlowDown + 0.014 updateFluidInteraction push) ported + unit-tested, but the subtick.go call-site is DEFERRED (subtick.go is 17-03-owned this parallel wave)
+- [Phase 18]: 18-01: EncryptionRequest is now the jar-exact 4-field ClientboundHelloPacket wire (String serverId, ByteArray publicKey, ByteArray challenge, Boolean shouldAuthenticate=true) — the trailing boolean was the single hard blocker against a real 26.2 client; always true because the server only sends Hello in online-mode (handleHello iconst_1). Challenge is the strict 4-byte Ints.toByteArray(nextInt()); hasJoined query is net/url-encoded. RSA PKCS1v15/1024-bit + AES-128/CFB8 + authDigest + cipher-then-auth ordering left FAITHFUL (untouched). --online-mode flag (default false) + SULFUR_ONLINE_MODE env threaded via newServer(gameplay, onlineMode); offline stays byte-identical. authentication() gained an injectable sessionServerURL test seam so the online-handshake integration test stubs sessionserver (CI offline). Skins ADD_PLAYER propagation is owned by the parallel 18-02 on disjoint files.
 
 ### Pending Todos
 
@@ -339,7 +341,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-26T13:12:01.492Z
+Last session: 2026-06-26T22:20:29.645Z
 Stopped at: Completed 17-04-PLAN.md (GAMEPLAY-06)
 Resume file: None
 Next: Phase 17 Wave 2 — 17-02 (GAMEPLAY-05 fluid simulation: OVERWRITE server/fluid.go with the FlowingFluid port + scheduled-tick queue; lazy-init t.fluidSchedule inside tickFluids, do NOT edit tick.go/tick_phases.go) and 17-03 (GAMEPLAY-04 fall damage + PvP dispatch: OVERWRITE server/fall_damage.go using the tickPlayer fallDistance/wasOnGround/lastY fields + the lookupPlayerByEntityID reverse lookup, do NOT edit tick.go/tick_phases.go). The exact Wave-2 seam surface (field names, init point, call sites, stub signatures) is in 17-01-SUMMARY.md "WAVE-2 HANDOFF". Deferred-still-open: dungeon loot/spawner-mob + BeehiveDecorator occupant + pale_garden PaleMoss (all v3, cosmetic, in 13-04-SUMMARY); KeepAlive double-leave hardening (Phase 3). KNOWN PRE-EXISTING FLAKE: TestTickAIDrivesMobs (OPT-01 async-pool timing, not caused by 17-01) intermittently fails under full-suite load; passes in isolation + 3× under -race.

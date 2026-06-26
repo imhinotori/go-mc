@@ -77,12 +77,14 @@ Full phase details: [milestones/v2-ROADMAP.md](milestones/v2-ROADMAP.md).
 **Depends on**: Phase 17
 **Requirements**: ONLINE-01, ONLINE-02
 **Success Criteria** (what must be TRUE):
-  1. The EncryptionRequest/EncryptionResponse handshake is ported: RSA-OAEP key exchange of the 16-byte shared secret + verify token (ONLINE-02)
+  1. The EncryptionRequest/EncryptionResponse handshake is ported: RSA PKCS#1 v1.5 (`RSA/ECB/PKCS1Padding`, NOT OAEP — per `net.minecraft.util.Crypt`) key exchange of the 16-byte shared secret + 4-byte verify token, with the trailing `shouldAuthenticate` boolean on the 776 EncryptionRequest (ONLINE-02)
   2. AES-128/CFB8 stream encryption wraps the connection for all packets after the handshake — CFB8 hand-rolled over stdlib `crypto/aes` (Go stdlib dropped `cipher.CFB`), no new crypto dependency (ONLINE-02)
-  3. Yggdrasil `hasJoined` session-server verification: the server verifies the shared-secret-derived server hash against `sessionserver.mojang.com` → real UUID + skin properties (ONLINE-01)
+  3. Yggdrasil `hasJoined` session-server verification: the server verifies the shared-secret-derived server hash against `sessionserver.mojang.com` → real UUID + skin properties, and those skin properties propagate to OTHER players via the tab-list ADD_PLAYER (ONLINE-01)
   4. An `online-mode` config flag toggles auth/encryption; offline-mode (default) is unchanged
-**Plans**: TBD (set by /gsd-plan-phase)
-**Research**: Phase research covers the Yggdrasil auth flow + the protocol-776 encryption packet shapes + the CFB8 hand-roll.
+**Plans**: 2 plans in 1 wave (parallel, disjoint files)
+- [x] 18-01-PLAN.md — ONLINE-02 crypto/auth wire: shouldAuthenticate boolean + 4-byte challenge + url-encoded hasJoined, online-mode flag, authDigest vectors + offline handshake test (wave 1)
+- [ ] 18-02-PLAN.md — ONLINE-01 skins: propagate authenticated GameProfile properties to ADD_PLAYER so other players render the real skin, with a strict round-trip test (wave 1)
+**Research**: Phase research covers the Yggdrasil auth flow + the protocol-776 encryption packet shapes + the CFB8 hand-roll. It is a VERIFY-then-WIRE phase: ~90% of the crypto (CFB8, RSA PKCS1v15, authDigest, cipher ordering) is already FAITHFUL; the deltas are the missing EncryptionRequest boolean, the flag, and the dropped skin properties.
 
 ### Phase 19: Operator UX — TUI console + disconnect logging
 **Goal**: The operator runs + watches Sulfur from a proper terminal console — command input + live scrolling logs in one screen — with every player drop logged with its reason.
@@ -120,6 +122,6 @@ Full phase details: [milestones/v2-ROADMAP.md](milestones/v2-ROADMAP.md).
 | 15. Mineshaft & Stronghold | v2.0 | 3/3 | Complete | 2026-06-25 |
 | 16. Village Jigsaw & Structures Visual Gate | v2.0 | 3/3 | Complete | 2026-06-25 |
 | 17. Gameplay Completion — the six unwired seams | v3 | 4/5 | In Progress|  |
-| 18. Online-mode — auth + protocol encryption | v3 | 0/? | Not started | — |
+| 18. Online-mode — auth + protocol encryption | v3 | 1/2 | In Progress|  |
 | 19. Operator UX — TUI console + disconnect logging | v3 | 0/? | Not started | — |
 | 20. Structure polish — loot, inhabitants, beard, persistence | v3 | 0/? | Not started | — |

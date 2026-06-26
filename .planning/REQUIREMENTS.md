@@ -24,8 +24,8 @@ The "user" is (a) an unmodified vanilla 26.2 (protocol 776) client playing the w
 
 ### Online-mode — authenticated, encrypted logins
 
-- [ ] **ONLINE-01**: Mojang/Microsoft account authentication (Yggdrasil "hasJoined" session-server verification). On login the server sends the encryption request, the client authenticates against `sessionserver.mojang.com`, and the server verifies the shared-secret-derived server hash → real UUIDs, skins, ownership verification. Toggled by an `online-mode` config flag (offline remains the default for local dev).
-- [ ] **ONLINE-02**: Protocol encryption. The EncryptionRequest/EncryptionResponse handshake (RSA-OAEP key exchange of the 16-byte shared secret + verify token), then AES-128/CFB8 stream encryption on the connection for all subsequent packets. CFB8 implemented over stdlib `crypto/aes` (Go stdlib dropped `cipher.CFB`, so a small hand-rolled CFB8 mode) — no new crypto dependency.
+- [x] **ONLINE-01**: Mojang/Microsoft account authentication (Yggdrasil "hasJoined" session-server verification). On login the server sends the encryption request, the client authenticates against `sessionserver.mojang.com`, and the server verifies the shared-secret-derived server hash → real UUIDs, skins, ownership verification. The authenticated texture/skin properties must propagate to the tab-list `PlayerInfoUpdate(ADD_PLAYER)` so OTHER players render the real skin (not just the self profile). Toggled by an `online-mode` config flag (offline remains the default for local dev).
+- [x] **ONLINE-02**: Protocol encryption. The EncryptionRequest/EncryptionResponse handshake (RSA `RSA/ECB/PKCS1Padding` = PKCS#1 v1.5 key exchange of the 16-byte shared secret + 4-byte verify token, per `net.minecraft.util.Crypt` — NOT OAEP), then AES-128/CFB8 stream encryption on the connection for all subsequent packets. CFB8 implemented over stdlib `crypto/aes` (Go stdlib dropped `cipher.CFB`, so a small hand-rolled CFB8 mode) — no new crypto dependency. The 776 `ClientboundHelloPacket` carries a trailing `shouldAuthenticate` boolean after the verify token.
 
 ### Operator UX — TUI console + disconnect logging
 
@@ -63,8 +63,8 @@ Updated during roadmap creation (`/gsd-plan-phase`).
 | GAMEPLAY-05 | Phase 17 | Complete |
 | GAMEPLAY-06 | Phase 17 | Complete |
 | GAMEPLAY-07 | Phase 17 | Pending |
-| ONLINE-01 | TBD | Pending |
-| ONLINE-02 | TBD | Pending |
+| ONLINE-01 | TBD | Complete |
+| ONLINE-02 | TBD | Complete |
 | TUI-01 | TBD | Pending |
 | TUI-02 | TBD | Pending |
 | STRUCT-POLISH-01 | TBD | Pending |
