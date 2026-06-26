@@ -46,7 +46,7 @@ func hashedStackActual(itemID, count int32, addedTypeID int32, hash uint32) []by
 	_, _ = pk.VarInt(1).WriteTo(&b)
 	_, _ = pk.VarInt(addedTypeID).WriteTo(&b)
 	_, _ = pk.Int(int32(hash)).WriteTo(&b) // ByteBufCodecs.INT = fixed 4-byte BE int
-	_, _ = pk.VarInt(0).WriteTo(&b) // 0 removed
+	_, _ = pk.VarInt(0).WriteTo(&b)        // 0 removed
 	return b.Bytes()
 }
 
@@ -194,27 +194,45 @@ func TestContainerClickDecode(t *testing.T) {
 	loop.applyInput(p, SubtickInput{At: loop.clock.Now(), Packet: truncated}) // must not panic
 }
 
-// TestContainerClickAuthoritative: after a click, the server re-sends ContainerSetContent
-// (authoritative content); the client hashes are discarded and never build a slot.
+// TestContainerClickAuthoritative: the server is AUTHORITATIVE — it discards the client's HashedStack
+// claims (never builds a slot from them) and resolves the click against its OWN inventory state. A click
+// that produces a real change syncs back via the per-slot SetSlot diff / carried sync; the forged item
+// never lands.
 func TestContainerClickAuthoritative(t *testing.T) {
 	loop := NewTickLoop(newFakeClock())
 	p := invPlayer(loop)
+	p.gameMode = gameModeSurvival
 
-	// The client forges a HashedStack claiming a full stack of item 999 in slot 36 — the
-	// server must NOT build a slot from it; it re-sends its own (empty) authoritative content.
+	// Seed a real server-side stack so the click resolves to an observable change (pickup → cursor),
+	// which the authoritative sync must reflect via SetSlot — NOT from the forged hashes.
+	inv := ensureInventory(p)
+	inv.set(36, component.SlotData{Count: 16, ItemID: 1})
+
+	// The client forges a HashedStack claiming a full stack of item 999 in slot 36 — the server must
+	// NOT build a slot from it. PICKUP primary (button 0, input 0) on slot 36 picks up the REAL 16.
 	changed := hashedStackActual(999, 64, 1, 0xCAFEBABE)
 	click := containerClickPacket(0, 5, 36, 0, 0, 36, changed, hashedStackEmpty())
 	loop.applyInput(p, SubtickInput{At: loop.clock.Now(), Packet: click})
 
+	// The server synced the change authoritatively (a SetSlot for the emptied slot 36 and/or the
+	// carried sync) — the forged item 999 never appears.
 	got := drainPackets(p.client)
-	if n := countID(got, packetid.ClientboundContainerSetContent); n < 1 {
-		t.Fatalf("after click: ContainerSetContent sent %d times, want >=1 (authoritative re-send)", n)
+	if n := countID(got, packetid.ClientboundContainerSetSlot); n < 1 {
+		t.Fatalf("after click: ContainerSetSlot sent %d times, want >=1 (authoritative sync)", n)
 	}
-	// The server's inventory slot 36 must NOT hold the forged item 999.
-	if p.inventory != nil {
-		if s := p.inventory.get(36); s.ItemID == 999 {
-			t.Fatalf("server built slot from client-claimed item 999 (must discard hashes)")
-		}
+	// The forged item 999 must not be anywhere: not in slot 36, not on the cursor.
+	if s := inv.get(36); s.ItemID == 999 {
+		t.Fatalf("server built slot from client-claimed item 999 (must discard hashes)")
+	}
+	if c := inv.getCarried(); c.ItemID == 999 {
+		t.Fatalf("server built carried from client-claimed item 999 (must discard hashes)")
+	}
+	// The REAL stack was picked up: slot 36 emptied, cursor holds 16 of item 1.
+	if s := inv.get(36); s.Count != 0 {
+		t.Fatalf("authoritative pickup: slot 36 = %d, want 0", s.Count)
+	}
+	if c := inv.getCarried(); c.Count != 16 || c.ItemID != 1 {
+		t.Fatalf("authoritative pickup: carried = count=%d id=%d, want 16/1", c.Count, c.ItemID)
 	}
 }
 

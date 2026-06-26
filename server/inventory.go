@@ -34,6 +34,32 @@ type Inventory struct {
 	// stateId is the container state counter echoed in ContainerSetContent/SetSlot. It is
 	// incremented on each authoritative re-send so the client can detect desync.
 	stateID int32
+
+	// carried is the cursor (carried) ItemStack — AbstractContainerMenu.carried. It is the item the
+	// player is "holding" on the mouse between clicks: PICKUP moves items between it and a slot, THROW
+	// drops it, etc. Synced to the client via ClientboundContainerSetSlot(-1, stateId, -1, carried)
+	// (setRemoteCarried). Empty == Count <= 0. Tick-owned (mutated only by the click engine).
+	carried component.SlotData
+
+	// quickcraftStatus / quickcraftType / quickcraftSlots are the QUICK_CRAFT (mouse-drag) state
+	// machine fields — AbstractContainerMenu.quickcraftStatus (0=idle/end-bookkeeping, 1=dragging,
+	// 2=releasing), quickcraftType (0=spread-even, 1=single, 2=creative clone), and the set of menu-slot
+	// indices the drag has touched (the Set<Slot> as an index slice, dedup'd on add). Reset by
+	// resetQuickCraft. Tick-owned.
+	quickcraftStatus int
+	quickcraftType   int
+	quickcraftSlots  []int
+}
+
+// addQuickcraftSlot adds a menu-slot index to the quick-craft drag set if absent (the Set<Slot>.add
+// dedup). Tick-owned.
+func (inv *Inventory) addQuickcraftSlot(index int) {
+	for _, e := range inv.quickcraftSlots {
+		if e == index {
+			return
+		}
+	}
+	inv.quickcraftSlots = append(inv.quickcraftSlots, index)
 }
 
 // newInventory builds an empty player inventory (all slots empty, count 0).
@@ -80,8 +106,7 @@ func ensureInventory(p *tickPlayer) *Inventory {
 func (t *TickLoop) sendContent(p *tickPlayer) {
 	inv := ensureInventory(p)
 	inv.stateID++
-	carried := component.SlotData{Count: 0} // v1: nothing on the cursor
-	p.client.Send(containerSetContent(playerContainerID, inv.stateID, inv.snapshot(), carried))
+	p.client.Send(containerSetContent(playerContainerID, inv.stateID, inv.snapshot(), inv.getCarried()))
 }
 
 // slotDataEqual reports whether two slots are wire-identical (same emptiness, item, components).
@@ -129,9 +154,12 @@ func (t *TickLoop) broadcastInventoryChanges(p *tickPlayer, inv *Inventory, befo
 // handleContainerClick resolves a ServerboundContainerClick on-tick (ENT-04). It decodes the
 // 1.21.5+ HashedStack form WITHOUT mis-framing (jar-derived framing, server/slot_encode.go),
 // DISCARDS the client's hashes (the server is authoritative — it never builds a slot from
-// client-claimed item data, T-6-02), and re-sends the authoritative ContainerSetContent. A
-// malformed/truncated click Scan-errors to a silent no-op (no mutation, no re-send) and never
-// panics (T-6-04).
+// client-claimed item data, T-6-02), and APPLIES the click 1:1 via AbstractContainerMenu.clicked →
+// doClick (server/inventory_doclick.go), then broadcasts the changed slots + the carried item so the
+// client reflects the authoritative result. A malformed/truncated click Scan-errors to a silent no-op
+// (no mutation, no re-send) and never panics (T-6-04); a panic INSIDE the click logic is recovered to a
+// silent authoritative resend (the vanilla clicked() try/CrashReport equivalent — no partial mutation
+// leaks).
 //
 // Jar-derived field order (ServerboundContainerClickPacket.STREAM_CODEC, 7-field composite):
 //
@@ -176,11 +204,53 @@ func (t *TickLoop) handleContainerClick(p *tickPlayer, pkt pk.Packet) {
 		return
 	}
 
-	// The click decoded cleanly. The server is AUTHORITATIVE: it ignored the client's claimed
-	// slot contents (the hashes) entirely and re-sends its own inventory so the client's view
-	// is corrected. v1 applies no survival slot mechanics (crafting/shift-click) — the wire is
-	// the requirement.
-	t.sendContent(p)
+	// The click decoded cleanly and the client's claimed contents (the hashes) are discarded — the
+	// server is AUTHORITATIVE. Apply it.
+	t.clicked(p, int32(containerID), int16(slotNum), int(button), int32(containerInput))
+}
+
+// clicked ports AbstractContainerMenu.clicked(slotId, button, input, player) for the player inventory
+// window (containerId 0). Only window 0 exists in v1; a click on any other container id resends
+// authoritative content and returns (other menus unimplemented — CITE: no non-player menus in v1). It
+// snapshots the slots + carried, runs doClick inside a panic-recover (the vanilla clicked() try block
+// → on a throw, no partial mutation leaks; resend authoritative content — T-6-04), then broadcasts the
+// changed slots (broadcastInventoryChanges) and, when the carried item changed, syncs it to the client
+// (synchronizeCarriedToRemote).
+func (t *TickLoop) clicked(p *tickPlayer, containerID int32, slotNum int16, button int, input int32) {
+	inv := ensureInventory(p)
+
+	// Only the player inventory window exists in v1.
+	if containerID != playerContainerID {
+		t.sendContent(p) // resend authoritative content for the unknown window
+		return
+	}
+
+	before := inv.snapshot()
+	carriedBefore := inv.getCarried()
+
+	// Recover a panic inside doClick to a silent no-op + authoritative resend (T-6-04): the in-place
+	// mutations up to the panic point are discarded by restoring the pre-click snapshot, so no partial
+	// state leaks to the client.
+	func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				copy(inv.slots, before)
+				inv.setCarried(carriedBefore)
+				t.sendContent(p)
+			}
+		}()
+		t.doClick(p, inv, int(slotNum), button, int(input))
+	}()
+
+	// broadcastChanges: send a SetSlot for each changed slot (one stateId bump for the whole broadcast).
+	t.broadcastInventoryChanges(p, inv, before)
+
+	// synchronizeCarriedToRemote: when the carried item changed, sync it via
+	// ClientboundContainerSetSlot(-1, stateId, -1, carried) (containerId -1, slot -1). Reuses the stateId
+	// just bumped by broadcastInventoryChanges.
+	if !slotDataEqual(carriedBefore, inv.getCarried()) {
+		p.client.Send(containerSetSlot(-1, inv.stateID, -1, inv.getCarried()))
+	}
 }
 
 // handleSetCreativeModeSlot resolves a ServerboundSetCreativeModeSlot on-tick (ENT-04): a
