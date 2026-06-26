@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v3
 milestone_name: Online-mode + Operator UX + Structure polish
 status: "GAMEPLAY-01..06 Complete. GAMEPLAY-07 1:1 work DONE this session: cave-water-gap fix (markPosForPostProcessing + one-shot postProcessGeneration — the SAFE replacement for the cascading scan), + the THREE entity-visibility audits (swing→Animate, held-item→SetEquipment, eat/use pose→DATA_LIVING_ENTITY_FLAGS, delta-move→ServerEntity.sendChanges replacing the per-tick TeleportEntity). Fluid-cost instrumentation added (decide async off-tick WITH data). TestTickAIDrivesMobs flake fixed. Docker -race full server suite GREEN. Earlier this session: 17-19 hunger, 17-20 container-click, 17-21 block-break+hardness, 17-22 eating, water-no-collision, ⭐FluidCount fix (float root cause, user-confirmed). ~71 commits unpushed (prod stale); push blocked by an unrelated attendly env gate hook. gameplay-1:1 mandate ABSOLUTE."
-stopped_at: Completed 17-04-PLAN.md (GAMEPLAY-06)
-last_updated: "2026-06-26T13:12:01.509Z"
+stopped_at: Phase 17 1:1 work COMPLETE — GAMEPLAY-07 gated ONLY on the operator's real-client visual sign-off (17-05-SUMMARY.md + 17-VERIFICATION.md written). Next phase = 18 (online-mode).
+last_updated: "2026-06-26T18:30:00.000Z"
 progress:
   total_phases: 4
   completed_phases: 1
