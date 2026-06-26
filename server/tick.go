@@ -543,6 +543,17 @@ type tickPlayer struct {
 	// resets to 0 and the player takes 2.0 DROWN damage. Seeded to maxAirSupply at registration so a
 	// fresh player spawns with a full bubble bar. Tick-owned.
 	airSupply int32
+
+	// lastAirSent is the airSupply value last pushed to this player's own client via
+	// ClientboundSetEntityData (GAMEPLAY-17 / Plan 17-18). DATA_AIR_SUPPLY_ID is a SYNCHED entity
+	// field — the bubble bar reads it off the wire, the client does NOT locally simulate air in
+	// multiplayer — so tickBreath must push the value when it changes. This mirrors vanilla's
+	// SynchedEntityData dirty-tracking: only a CHANGED field is broadcast, never a per-tick resend.
+	// Seeded to maxAirSupply at registration to match the client's registered DATA_AIR_SUPPLY_ID
+	// default (Entity ctor define(DATA_AIR_SUPPLY_ID, getMaxAirSupply()==300)) so the first send
+	// fires only on a real change (the first underwater decrement), not redundantly on spawn.
+	// Tick-owned.
+	lastAirSent int32
 }
 
 // Health constants for a fresh survival player (the ENT-05 defaults). maxHealth is the vanilla

@@ -130,5 +130,57 @@ func (t *TickLoop) tickBreath() {
 			// setAirSupply(increaseAirSupply(getAirSupply())): min(air+4, 300).
 			p.airSupply = increaseAirSupply(p.airSupply)
 		}
+
+		// Push the synched DATA_AIR_SUPPLY_ID to the client(s) when it changed. The bubble bar is
+		// driven by this field — the client does NOT locally simulate air in multiplayer — so the
+		// authoritative server value MUST be sent or the bar never moves (the Plan 17-13 gap this
+		// plan closes). Only the DIRTY value is sent (vanilla's SynchedEntityData semantics): a
+		// resend every tick would be wire spam, and a no-change tick (full bar out of water) sends
+		// nothing.
+		t.syncAirSupply(p)
+	}
+}
+
+// syncAirSupply pushes the player's DATA_AIR_SUPPLY_ID to its observers when it changed since the
+// last send. The PRIMARY target is the player's OWN client — vanilla's ServerPlayer is a watcher
+// of its own SynchedEntityData, and the local bubble bar reads air off the wire, so the self-send
+// is what makes the bar deplete/refill for the player who is drowning. The SAME packet is also
+// broadcast through the tracker to every OTHER player tracking this one (broadcastSetEntityData),
+// so a second player sees the first's bubbles deplete. A no-change tick sends nothing (dirty-only).
+// Tick-owned: airSupply / lastAirSent / playerEntity are all single-owner tick state (TICK-05).
+func (t *TickLoop) syncAirSupply(p *tickPlayer) {
+	if p.airSupply == p.lastAirSent {
+		return // not dirty: nothing to broadcast (vanilla only sends CHANGED synched fields)
+	}
+	p.lastAirSent = p.airSupply
+	if p.playerEntity == nil {
+		return // no store Entity yet (pre-join seam): nothing to address the packet to
+	}
+	pkt := encodeSetEntityData(p.playerEntity, airDataEntry(p.airSupply))
+	// SELF send: the local bubble bar reads DATA_AIR_SUPPLY_ID off the wire for the player's own
+	// entity. The tracker self-skips (e.id == p.entityID), so the player never receives its own
+	// metadata via the tracker — this direct send is the only path for the local bar.
+	if p.client != nil {
+		p.client.Send(pkt)
+	}
+	// OBSERVER send: every OTHER player currently tracking this player's entity also needs the
+	// update so a remote viewer sees the bubbles deplete. The tracker already maintains who tracks
+	// whom; reuse it so this stays in-fence (no new visibility logic here).
+	t.broadcastSetEntityDataToTrackers(p, pkt)
+}
+
+// broadcastSetEntityDataToTrackers sends an already-built SetEntityData packet for player p's
+// entity to every OTHER player whose tracker currently has p's entity id in its tracked set — the
+// observers who have an AddEntity'd avatar for p and would otherwise see a stale (full) bubble bar.
+// It reuses the tracker's tick-owned `tracked` map (the authoritative who-sees-whom set) so no new
+// visibility/broad-phase logic is introduced. Tick-owned (called from tickBreath on the owner).
+func (t *TickLoop) broadcastSetEntityDataToTrackers(p *tickPlayer, pkt pk.Packet) {
+	for _, other := range t.players {
+		if other == nil || other == p || other.client == nil {
+			continue
+		}
+		if other.tracked[p.entityID] {
+			other.client.Send(pkt)
+		}
 	}
 }

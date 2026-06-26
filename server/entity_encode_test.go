@@ -154,6 +154,58 @@ func TestSetEntityDataWire(t *testing.T) {
 	}
 }
 
+// TestAirDataEntryWire asserts airDataEntry frames DATA_AIR_SUPPLY_ID exactly as the jar's
+// SynchedEntityData$DataValue: Byte(index=1) + VarInt(serializerId=1, the INT serializer) +
+// VarInt(air) — the INT serializer's value codec is ByteBufCodecs.VAR_INT, so the air value is a
+// VarInt, not a fixed Int. This is the wire piece the oxygen bubble bar reads (GAMEPLAY-17).
+func TestAirDataEntryWire(t *testing.T) {
+	const air int32 = 287
+	e := &Entity{id: 156}
+	p := encodeSetEntityData(e, airDataEntry(air))
+
+	r := bytes.NewReader(p.Data)
+	var gotID pk.VarInt
+	if _, err := gotID.ReadFrom(r); err != nil {
+		t.Fatalf("scan id failed: %v", err)
+	}
+	if int32(gotID) != e.id {
+		t.Fatalf("id = %d, want %d", gotID, e.id)
+	}
+
+	var index pk.UnsignedByte
+	var serID pk.VarInt
+	var val pk.VarInt
+	if _, err := index.ReadFrom(r); err != nil {
+		t.Fatalf("scan index failed: %v", err)
+	}
+	if _, err := serID.ReadFrom(r); err != nil {
+		t.Fatalf("scan serializerId failed: %v", err)
+	}
+	if _, err := val.ReadFrom(r); err != nil {
+		t.Fatalf("scan air value failed: %v", err)
+	}
+
+	// index 1 == Entity.DATA_AIR_SUPPLY_ID (defineId order: 0=flags, 1=air).
+	if index != 1 {
+		t.Errorf("air data entry index = %d, want 1 (DATA_AIR_SUPPLY_ID)", index)
+	}
+	// serializerId 1 == EntityDataSerializers.INT (registration order: 0=BYTE, 1=INT).
+	if serID != 1 {
+		t.Errorf("air data entry serializerId = %d, want 1 (INT)", serID)
+	}
+	// value is the air supply written as a VarInt (INT serializer codec == VAR_INT).
+	if int32(val) != air {
+		t.Errorf("air data entry value = %d, want %d", val, air)
+	}
+
+	// The mandatory 0xFF terminator closes the packed-items list.
+	tail := make([]byte, r.Len())
+	_, _ = r.Read(tail)
+	if len(tail) != 1 || tail[0] != 0xFF {
+		t.Fatalf("air SetEntityData trailing bytes = %v, want exactly [0xFF]", tail)
+	}
+}
+
 // TestSetEntityDataMetadataSplice asserts pre-built metadata bytes carried on Entity.metadata
 // (the 06-01 snapshot-friendly slot) are spliced verbatim into the SetEntityData body before
 // the mandatory 0xFF terminator — the path a future plan / spawn helper uses to ship an

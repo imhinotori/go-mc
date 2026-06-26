@@ -240,6 +240,46 @@ func itemDataEntry(stack component.SlotData) entityDataEntry {
 	}
 }
 
+// --- GAMEPLAY-17 (Plan 17-18): the DATA_AIR_SUPPLY_ID data-value -----------------------
+//
+// The OXYGEN BUBBLE BAR is driven ENTIRELY by the player's synched DATA_AIR_SUPPLY_ID field —
+// the server is authoritative for air and PUSHES it to the client via SetEntityData (the client
+// does NOT locally simulate air in multiplayer). Plan 17-13 decremented airSupply server-side but
+// never sent it, so the bar never moved. This entry is the missing wire piece. Both numbers below
+// are JAR-DERIVED (javap'd from temp/cache/26.2-inner.jar this session), NOT guessed.
+
+// dataAirSupplyIndex is the SynchedEntityData accessor index for Entity.DATA_AIR_SUPPLY_ID.
+// Entity.defineId assigns indices sequentially in static-init order: index 0 = DATA_SHARED_FLAGS_ID
+// (BYTE), index 1 = DATA_AIR_SUPPLY_ID (INT), 2 = DATA_CUSTOM_NAME, ... 7 = DATA_TICKS_FROZEN. So
+// air is index 1 — the SECOND accessor Entity defines and the first INT one.
+//   [VERIFIED: javap -c -p net.minecraft.world.entity.Entity → static{} defineId order:
+//     getstatic EntityDataSerializers.BYTE; defineId → DATA_SHARED_FLAGS_ID  (index 0)
+//     getstatic EntityDataSerializers.INT;  defineId → DATA_AIR_SUPPLY_ID    (index 1)]
+const dataAirSupplyIndex uint8 = 1
+
+// intSerializerID is the registry id of EntityDataSerializers.INT — the VarInt serializerId the
+// DataValue carries. The id is the registerSerializer() call order in the EntityDataSerializers
+// static initializer: 0=BYTE, 1=INT, 2=LONG, 3=FLOAT, 4=STRING, 5=COMPONENT, 6=OPTIONAL_COMPONENT,
+// 7=ITEM_STACK (the same order itemStackSerializerID==7 above is derived from). The INT serializer's
+// value codec is EntityDataSerializer.forValueType(ByteBufCodecs.VAR_INT), so the air value is
+// written as a VarInt (NOT a fixed big-endian Int).
+//   [VERIFIED: javap -c -p net.minecraft.network.syncher.EntityDataSerializers → static{}:
+//     getstatic BYTE; registerSerializer (id 0), getstatic INT; registerSerializer (id 1), ...
+//     and BYTE/INT = forValueType(ByteBufCodecs.BYTE / .VAR_INT).]
+const intSerializerID int32 = 1
+
+// airDataEntry builds the single SynchedEntityData$DataValue entry that carries a player's
+// DATA_AIR_SUPPLY_ID, the field the client's bubble bar reads. The value is the int air supply
+// written through the INT serializer's VAR_INT codec (pk.VarInt). It frames on the wire as
+// Byte(dataAirSupplyIndex=1) + VarInt(intSerializerID=1) + VarInt(air) (entityDataEntry.WriteTo).
+func airDataEntry(air int32) entityDataEntry {
+	return entityDataEntry{
+		index:        dataAirSupplyIndex,
+		serializerID: intSerializerID,
+		value:        pk.VarInt(air), // EntityDataSerializers.INT codec == ByteBufCodecs.VAR_INT
+	}
+}
+
 // entityDataEOF is the SynchedEntityData EOF_MARKER (255 / 0xFF) — the MANDATORY single
 // terminator byte that closes the packed-items list. It is ALWAYS written, even for an
 // empty list; omitting it desyncs the client's entity stream and the entity is dropped.

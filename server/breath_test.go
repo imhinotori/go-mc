@@ -1,8 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"testing"
 
+	"github.com/imhinotori/sulfur/data/packetid"
+	"github.com/imhinotori/sulfur/level/block"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
@@ -17,7 +20,7 @@ import (
 // actuallyHurt SetHealth send has a sink (it never touches a real socket). Eye height (1.62) lands
 // the eyes in the block at floor(y+1.62).
 func breathPlayer(x, y, z float64) *tickPlayer {
-	return &tickPlayer{x: x, y: y, z: z, airSupply: maxAirSupply, health: maxHealth, client: captureClient(64)}
+	return &tickPlayer{x: x, y: y, z: z, airSupply: maxAirSupply, lastAirSent: maxAirSupply, health: maxHealth, client: captureClient(64)}
 }
 
 // TestEyeInWaterGatesOnEyes: air drains only when the EYES are submerged (isEyeInFluid), not when
@@ -178,5 +181,93 @@ func TestMoveWithFluidPhysicsWire(t *testing.T) {
 	dx, dy, dz := loop.moveWithFluidPhysics(dry, 3.5, 64.0, 2.5)
 	if !floatNear(dx, 3.5, 1e-9) || !floatNear(dy, 64.0, 1e-9) || !floatNear(dz, 2.5, 1e-9) {
 		t.Fatalf("dry wire not identity: got (%v,%v,%v), want (3.5,64.0,2.5)", dx, dy, dz)
+	}
+}
+
+// TestTickBreathSendsAirOnChange: when airSupply changes (here: drains underwater), tickBreath
+// pushes a ClientboundSetEntityData carrying DATA_AIR_SUPPLY_ID to the player's OWN client — the
+// wire that drives the local bubble bar (the Plan 17-13 gap this plan closes). A subsequent
+// no-change tick (a full bar out of water) sends NOTHING (vanilla's dirty-only synched semantics).
+func TestTickBreathSendsAirOnChange(t *testing.T) {
+	loop, mgr := newFluidLoop()
+	setWater(mgr, pk.Position{X: 8, Y: 65, Z: 8}, 0)
+	p := breathPlayer(8.5, 64.0, 8.5)
+	p.entityID = 156
+	p.playerEntity = &Entity{id: p.entityID} // the store Entity the SetEntityData addresses
+	loop.players = append(loop.players, p)
+
+	// One underwater tick: air 300 -> 299 -> a SetEntityData for the player's own entity.
+	loop.tickBreath()
+	got := drainPackets(p.client)
+	if n := countID(got, packetid.ClientboundSetEntityData); n != 1 {
+		t.Fatalf("SetEntityData emitted %d times on air change, want exactly 1 (the bubble-bar sync)", n)
+	}
+	// The emitted packet must carry the new air value (299) at index 1 / serializer 1.
+	for _, pkt := range got {
+		if pkt.ID != int32(packetid.ClientboundSetEntityData) {
+			continue
+		}
+		assertAirPacket(t, pkt, p.entityID, 299)
+	}
+
+	// A no-change tick out of water with a full bar sends nothing (dirty-only).
+	full := breathPlayer(2.5, 64.0, 2.5) // far from water; air already at max
+	full.entityID = 157
+	full.playerEntity = &Entity{id: full.entityID}
+	loop2, _ := newFluidLoop()
+	loop2.players = append(loop2.players, full)
+	loop2.tickBreath()
+	if n := countID(drainPackets(full.client), packetid.ClientboundSetEntityData); n != 0 {
+		t.Fatalf("SetEntityData emitted %d times on a no-change full-bar tick, want 0 (dirty-only)", n)
+	}
+}
+
+// assertAirPacket parses a SetEntityData packet and asserts it is the air-supply entry for entID
+// carrying wantAir (index 1, serializer 1, VarInt value).
+func assertAirPacket(t *testing.T, pkt pk.Packet, entID int32, wantAir int32) {
+	t.Helper()
+	r := bytes.NewReader(pkt.Data)
+	var id, serID, val pk.VarInt
+	var index pk.UnsignedByte
+	if _, err := id.ReadFrom(r); err != nil {
+		t.Fatalf("scan id: %v", err)
+	}
+	if int32(id) != entID {
+		t.Fatalf("SetEntityData id = %d, want player entity id %d", id, entID)
+	}
+	if _, err := index.ReadFrom(r); err != nil {
+		t.Fatalf("scan index: %v", err)
+	}
+	if _, err := serID.ReadFrom(r); err != nil {
+		t.Fatalf("scan serializerId: %v", err)
+	}
+	if _, err := val.ReadFrom(r); err != nil {
+		t.Fatalf("scan air value: %v", err)
+	}
+	if index != 1 {
+		t.Errorf("air entry index = %d, want 1 (DATA_AIR_SUPPLY_ID)", index)
+	}
+	if serID != 1 {
+		t.Errorf("air entry serializerId = %d, want 1 (INT)", serID)
+	}
+	if int32(val) != wantAir {
+		t.Errorf("air entry value = %d, want %d", val, wantAir)
+	}
+}
+
+// TestDecodeFluidRecognizesWorldgenWater: the eyeInWater gate samples fluidAt -> decodeFluid; it
+// MUST recognize the EXACT source-water state worldgen places (block.Water{Level:0}) or the gate
+// never fires and air never drains. This pins decodeFluid against the worldgen-emitted state id.
+func TestDecodeFluidRecognizesWorldgenWater(t *testing.T) {
+	id := block.ToStateID[block.Water{Level: 0}]
+	f := decodeFluid(id)
+	if !f.isWater {
+		t.Fatalf("decodeFluid(Water{Level:0}).isWater = false, want true (worldgen ocean/aquifer water)")
+	}
+	if !f.source {
+		t.Fatalf("decodeFluid(Water{Level:0}).source = false, want true (level 0 == source)")
+	}
+	if f.amount != waterSourceAmount {
+		t.Fatalf("decodeFluid(Water{Level:0}).amount = %d, want %d (full source)", f.amount, waterSourceAmount)
 	}
 }

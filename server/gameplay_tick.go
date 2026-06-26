@@ -317,6 +317,9 @@ func (g *gameTick) AcceptPlayer(
 		// Breath (Plan 17-13): a fresh player spawns with a full bubble bar. Vanilla's Entity ctor
 		// seeds DATA_AIR_SUPPLY_ID to getMaxAirSupply()==maxAirSupply (300).
 		airSupply: maxAirSupply,
+		// GAMEPLAY-17 (Plan 17-18): seed the air dirty-tracker to the same full value so the first
+		// SetEntityData fires only on a real change (matching the client's registered air default).
+		lastAirSent: maxAirSupply,
 	}
 
 	// ENT-06 + GAMEPLAY-02 load-on-join: apply the persisted snapshot loaded above (the disk IO
