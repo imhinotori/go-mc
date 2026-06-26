@@ -233,13 +233,16 @@ func TestTickAIDrivesMobs(t *testing.T) {
 		loop.tickPhysics()
 		// Apply any path the off-tick worker has already delivered (non-blocking, like production).
 		loop.applyAsyncResults()
-		// If nothing was queued yet but the worker is still computing, give the pool a brief chance
-		// to deliver so a contended scheduler does not starve this test of its single path. A short
-		// blocking receive with a timeout drains a just-finished path without hanging if none comes.
+		// If nothing was queued yet but the worker is still computing, BLOCK BRIEFLY for the pool to
+		// deliver so a contended scheduler does not starve this test of its single path. The previous
+		// version used a non-blocking `default` here despite the comment claiming a timeout — under
+		// full-suite CPU contention that let the loop spin past the still-computing path and exhaust
+		// the budget without ever applying it (the residual flake). A real timed receive waits up to
+		// a few ms per iteration (×4000 budget = ample wall-clock for the single A*) without hanging.
 		select {
 		case r := <-loop.asyncIn2:
 			r.applyTo(loop)
-		default:
+		case <-time.After(2 * time.Millisecond):
 		}
 	}
 	if e.x <= startX+advanceThreshold {
