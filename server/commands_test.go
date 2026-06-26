@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/imhinotori/sulfur/data/packetid"
 	pk "github.com/imhinotori/sulfur/net/packet"
@@ -222,4 +223,108 @@ func TestChatCommandParseErrorNoPanic(t *testing.T) {
 	// No seam swap: drive the REAL cmdGraph.Execute so the parse error is genuine. A panic
 	// here fails the test (Go reports an unrecovered panic as a test failure).
 	loop.dispatch(p.client, chatCommandPacket("nope notacommand"))
+}
+
+// TestRunConsoleCommand asserts runConsoleCommand routes a typed console line through the
+// EXISTING command graph (executeCommand) exactly once with the line unaltered, under a ctx
+// whose permission resolver GRANTS any node (the console IS the operator) AND whose
+// executorFrom returns ok=false (NO *tickPlayer issuer — issuer-acting commands no-op). This
+// is the TUI-01 "typed commands dispatch through the EXISTING command system" seam with no
+// player reply (the reply goes to the slog log stream, not a SystemChat).
+func TestRunConsoleCommand(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+
+	var got string
+	called := 0
+	var grantsAll, hasIssuer bool
+	withExecuteCommand(t, func(ctx context.Context, cmd string) error {
+		called++
+		got = cmd
+		// The console resolver grants any node (operator). Probe an arbitrary node.
+		grantsAll = permissionResolverFrom(ctx)("command.anything")
+		// No executor is installed for a console source: issuer-acting commands (/tp) no-op.
+		_, hasIssuer = executorFrom(ctx)
+		return nil
+	})
+
+	loop.runConsoleCommand("say hi")
+
+	if called != 1 {
+		t.Fatalf("runConsoleCommand called executeCommand %d times, want 1", called)
+	}
+	if got != "say hi" {
+		t.Fatalf("executeCommand received %q, want %q", got, "say hi")
+	}
+	if !grantsAll {
+		t.Fatal("console permission resolver must GRANT any node (the console is the operator)")
+	}
+	if hasIssuer {
+		t.Fatal("console ctx must have NO executor (executorFrom ok=false) so issuer-acting commands no-op")
+	}
+}
+
+// TestRunConsoleCommandBounds asserts runConsoleCommand is a no-op for an empty line and for a
+// line beyond maxCommandLen — executeCommand is NOT called (T-19-05 / ASVS V5: the same bound
+// runCommand enforces, reused before any parsing work).
+func TestRunConsoleCommandBounds(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+
+	called := 0
+	withExecuteCommand(t, func(ctx context.Context, cmd string) error {
+		called++
+		return nil
+	})
+
+	loop.runConsoleCommand("")                                  // empty: no-op
+	loop.runConsoleCommand(strings.Repeat("a", maxCommandLen+1)) // over-long: no-op
+
+	if called != 0 {
+		t.Fatalf("runConsoleCommand reached executeCommand %d times for out-of-bounds input, want 0", called)
+	}
+}
+
+// TestEnqueueConsoleCommandNonBlocking asserts EnqueueConsoleCommand is non-blocking
+// drop-on-full (T-19-04 / Pitfall 7: the TUI goroutine NEVER executes inline and NEVER blocks
+// the tick). Filling consoleCmd to capacity then a further Enqueue does NOT block; draining the
+// channel through the tick's drainRegistrations delivers a queued line to runConsoleCommand on
+// the OWNER goroutine (the line crosses to the tick via the bounded message channel — TICK-05).
+func TestEnqueueConsoleCommandNonBlocking(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+
+	// Fill the consoleCmd channel to capacity, then one more Enqueue must return immediately
+	// (drop-on-full) rather than block. registerBuffer is the channel capacity.
+	for i := 0; i < registerBuffer; i++ {
+		loop.EnqueueConsoleCommand("filler")
+	}
+	done := make(chan struct{})
+	go func() {
+		loop.EnqueueConsoleCommand("overflow") // must NOT block on a full channel
+		close(done)
+	}()
+	select {
+	case <-done:
+		// good: returned without blocking
+	case <-time.After(time.Second):
+		t.Fatal("EnqueueConsoleCommand blocked on a full consoleCmd channel (must drop-on-full)")
+	}
+
+	// A FRESH loop: enqueue one line and prove drainRegistrations delivers it to
+	// runConsoleCommand on the owner goroutine (the tick drain executes the console line).
+	loop2 := NewTickLoop(newFakeClock())
+	var got string
+	called := 0
+	withExecuteCommand(t, func(ctx context.Context, cmd string) error {
+		called++
+		got = cmd
+		return nil
+	})
+	loop2.EnqueueConsoleCommand("me waves")
+	loop2.drainRegistrations() // owner-goroutine drain; the consoleCmd case runs the line
+
+	if called != 1 {
+		t.Fatalf("drainRegistrations ran the console line %d times, want 1", called)
+	}
+	if got != "me waves" {
+		t.Fatalf("the drained console line reached Execute as %q, want %q", got, "me waves")
+	}
 }

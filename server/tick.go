@@ -194,6 +194,15 @@ type TickLoop struct {
 	register   chan *tickPlayer
 	unregister chan *Client
 
+	// consoleCmd is the OPERATOR-CONSOLE command seam (TUI-01 / Plan 19-02). The TUI runs on
+	// its own goroutine; it MUST NOT execute command handlers off-thread (handlers mutate
+	// authoritative game state — TICK-05 / Pitfall 7). EnqueueConsoleCommand sends a typed line
+	// here (non-blocking, drop-on-full); the tick goroutine drains it in drainRegistrations and
+	// runs runConsoleCommand ON-THREAD, so a console command crosses to the tick exactly like a
+	// register/unregister message. Buffered (registerBuffer) so a busy tick never parks the TUI
+	// goroutine on Enqueue. nil-safe: a nil channel makes Enqueue's select hit default (drop).
+	consoleCmd chan string
+
 	// leaveSnapshots carries the immutable per-player save snapshot OUT of the tick on leave
 	// (ENT-06 / TICK-05 / T-6-15). removePlayer runs on the OWNER goroutine; before it drops a
 	// leaving player it takes an immutable snapshotPlayer (a value copy — no live tick-owned
@@ -705,7 +714,8 @@ func NewTickLoop(clock Clock) *TickLoop {
 		clock:      clock,
 		register:   make(chan *tickPlayer, registerBuffer),
 		unregister: make(chan *Client, registerBuffer),
-		entities:   newEntityStore(),     // ENT-01: tick-owned entity store, non-nil from construction
+		consoleCmd: make(chan string, registerBuffer), // TUI-01: operator-console line seam (Plan 19-02)
+		entities:   newEntityStore(),                  // ENT-01: tick-owned entity store, non-nil from construction
 		idAlloc:    &EntityIDAllocator{}, // ENT-01: monotonic id allocator (first AllocID()==1)
 		// asyncIn stays nil (no-op Phase-4 seam until SetWorld); ring is zero-valued; gametime 0.
 
@@ -989,6 +999,12 @@ func (t *TickLoop) drainRegistrations() {
 			}
 		case c := <-t.unregister:
 			t.removePlayer(c)
+		case line := <-t.consoleCmd:
+			// TUI-01 (Plan 19-02): an operator-console line crosses to the tick here and runs
+			// on the OWNER goroutine, exactly like register/unregister (TICK-05 / Pitfall 7).
+			// The select still falls through to default when consoleCmd is empty, so this case
+			// never parks the tick.
+			t.runConsoleCommand(line)
 		default:
 			return // nothing queued: return immediately, never block
 		}

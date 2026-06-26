@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"math"
 	"strconv"
 	"strings"
@@ -250,6 +251,53 @@ func (t *TickLoop) runCommand(p *tickPlayer, cmd string) {
 // automatically (ASVS V4 / T-7-02). Runs on the tick goroutine.
 func playerHasPermission(p *tickPlayer, node string) bool {
 	return true
+}
+
+// EnqueueConsoleCommand hands an operator-console line to the tick via the bounded consoleCmd
+// channel (mirrors the register/unregister discipline — TICK-05). It is called FROM THE TUI
+// goroutine (the bubbletea console's Enter dispatch in Plan 19-02 closes over this), so it
+// MUST NOT execute the command inline — that would mutate tick-owned game state off-thread
+// (T-19-04 / Pitfall 7). The send is NON-BLOCKING drop-on-full: a busy tick (the channel is
+// full) drops the line rather than parking the TUI goroutine — the console is best-effort,
+// exactly like the log bridge's drop-on-full discipline. A nil channel (a TickLoop built
+// without NewTickLoop) makes the select hit default → a cheap skipped no-op.
+func (t *TickLoop) EnqueueConsoleCommand(line string) {
+	select {
+	case t.consoleCmd <- line: // drained on the tick goroutine in drainRegistrations
+	default: // tick busy (channel full) → drop; the console is best-effort (T-19-04)
+	}
+}
+
+// runConsoleCommand executes an operator-console line through the EXISTING command graph ON
+// THE TICK goroutine (drained from consoleCmd in drainRegistrations — TICK-05). It is the
+// console parallel to runCommand, with two deliberate differences:
+//
+//   - NO *tickPlayer issuer: it installs the permission resolver (console = operator → grant
+//     every node) but NO executor, so executorFrom(ctx) returns ok=false and issuer-acting
+//     commands (/tp) no-op safely (commands.go:84,146). The console is implicitly the operator
+//     (local stdin) — the grant-all resolver is the structural hook a future ops-list model
+//     plugs into (T-19-06 / ASVS V4), not a security hole.
+//   - The reply goes to the LOG STREAM (slog) — which the Plan-19 handler fans to BOTH the TUI
+//     viewport and stderr — instead of a player-bound SystemChat (there is no issuing player).
+//
+// The length bound (maxCommandLen, reused) is asserted BEFORE any parsing work (T-19-05 / ASVS
+// V5). NEVER panics (executeCommand's error is logged, not propagated).
+func (t *TickLoop) runConsoleCommand(line string) {
+	// Length bound BEFORE any parsing work (T-19-05 / ASVS V5) — the same bound runCommand uses.
+	if len(line) == 0 || len(line) > maxCommandLen {
+		return
+	}
+
+	// Console = operator: grant every command node. NO withExecutor → executorFrom(ctx) ok=false
+	// → issuer-acting commands no-op (commands.go:146 "no issuer (console/test path)").
+	ctx := withPermissionResolver(context.Background(), func(string) bool { return true })
+
+	if err := executeCommand(ctx, line); err != nil {
+		// The reply path is the slog log stream (TUI + stderr), not a player SystemChat.
+		slog.Warn("console command failed", "cmd", line, "err", err)
+	} else {
+		slog.Info("console command", "cmd", line)
+	}
 }
 
 // runChatCommand decodes a ServerboundChatCommand packet and routes it to runCommand. The
