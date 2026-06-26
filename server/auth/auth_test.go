@@ -7,6 +7,34 @@ import (
 	"github.com/google/uuid"
 )
 
+// TestAuthDigest locks the Notchian server-hash vectors (the canonical wiki examples)
+// including the negative twos-complement path. authDigest mirrors vanilla
+// Crypt.digestData (SHA-1 over serverId.getBytes(ISO_8859_1) + secret.getEncoded() +
+// pubkey.getEncoded()) wrapped in new BigInteger(bytes).toString(16); the canonical
+// vectors are the SHA-1 of the serverId STRING alone, so we feed the name as serverId
+// with empty secret/pubkey. jeb_ exercises the leading-`-` (high-bit-set) branch —
+// a regression of the negative-hash rendering fails here.
+// [VERIFIED: javap net.minecraft.util.Crypt.digestData
+//  + net.minecraft.server.network.ServerLoginPacketListenerImpl.handleKey]
+func TestAuthDigest(t *testing.T) {
+	cases := []struct {
+		name string
+		want string
+	}{
+		{"Notch", "4ed1f46bbe04bc756bcb17c0c7ce3e4632f06a48"},
+		{"jeb_", "-7c9d5b0044c130109a5d7b5fb5c317c02b4e28c1"}, // negative path
+		{"simon", "88e16a1019277b15d58faf0541e11910eb756f6"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := authDigest(c.name, nil, nil)
+			if got != c.want {
+				t.Errorf("authDigest(%q) = %q, want %q", c.name, got, c.want)
+			}
+		})
+	}
+}
+
 func TestResp(t *testing.T) {
 	var resp Resp
 	err := json.Unmarshal([]byte(`{"id":"853c80ef3c3749fdaa49938b674adae6","name":"jeb_","properties":[{"name":"textures","value":"eyJ0aW1lc3RhbXAiOjE1NTk1NDM5MzMwMjUsInByb2ZpbGVJZCI6Ijg1M2M4MGVmM2MzNzQ5ZmRhYTQ5OTM4YjY3NGFkYWU2IiwicHJvZmlsZU5hbWUiOiJqZWJfIiwidGV4dHVyZXMiOnsiU0tJTiI6eyJ1cmwiOiJodHRwOi8vdGV4dHVyZXMubWluZWNyYWZ0Lm5ldC90ZXh0dXJlLzdmZDliYTQyYTdjODFlZWVhMjJmMTUyNDI3MWFlODVhOGUwNDVjZTBhZjVhNmFlMTZjNjQwNmFlOTE3ZTY4YjUifSwiQ0FQRSI6eyJ1cmwiOiJodHRwOi8vdGV4dHVyZXMubWluZWNyYWZ0Lm5ldC90ZXh0dXJlLzU3ODZmZTk5YmUzNzdkZmI2ODU4ODU5ZjkyNmM0ZGJjOTk1NzUxZTkxY2VlMzczNDY4YzVmYmY0ODY1ZTcxNTEifX19"}]}`), &resp)
