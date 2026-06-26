@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3
 milestone_name: Online-mode + Operator UX + Structure polish
-status: Phase 17 keystone (17-01) executed — GAMEPLAY-01/02/03 wired; Wave-2 seam files shipped as disjoint stubs
-stopped_at: Completed 17-04-PLAN.md (GAMEPLAY-06)
-last_updated: "2026-06-25T22:57:18.800Z"
-last_activity: "2026-06-25 — 17-01 keystone landed: players enter the entity store + bidirectional tab-list broadcast (GAMEPLAY-01), persisted position drives the single bootstrap teleport (GAMEPLAY-02), inventory join-sync fires first-tick (GAMEPLAY-03). Wave-2 handoff (struct fields, dispatcher hooks, fluid.go/fall_damage.go stubs) recorded in 17-01-SUMMARY.md."
+status: Phase 17 IN PROGRESS — GAMEPLAY-01..06 wired (17-01..04) + 12 real-client gap-closure 1:1 fixes (17-06..18); GAMEPLAY-07 visual gate pending final human approval
+stopped_at: Completed 17-18 (air-supply metadata sync); awaiting GAMEPLAY-07 gate
+last_updated: "2026-06-26T01:30:00.000Z"
+last_activity: "2026-06-26 — 12 gap-closure 1:1 fixes landed after the real-client gate exposed deviations: spawn-finder (06), foliage-flip (07), fall-damage water-guard + literal re-port (08/10), connect/disconnect logging (09), combat full-1:1 incl. attributes/i-frames/armor/crit/knockback (11), tree free-space abort=no-stacking (12), fluid-physics wire + breath/drowning (13), drops+pickup vanilla-parity (14), water-disconnect fix + pickup-slot + setslot-sync (15), VegetationBlock.canSurvive grass-on-water/flower-stacking (16), block-placement-from-held-item empty-hand fix (17), air-supply DATA_AIR_SUPPLY_ID client sync (18). Mandate now ABSOLUTE in CLAUDE.md: gameplay = literal 1:1 jar port, only optimization allowed."
 progress:
   total_phases: 4
   completed_phases: 0
-  total_plans: 5
-  completed_plans: 4
-  percent: 80
+  total_plans: 18
+  completed_plans: 17
+  percent: 25
 ---
 
 # Project State
@@ -25,10 +25,20 @@ See: .planning/PROJECT.md (updated 2026-06-23)
 
 ## Current Position
 
-Phase: 17 — Gameplay Completion (the six unwired seams) — IN PROGRESS
-Plan: 17-01 COMPLETE (keystone) — next: Wave 2 (17-02 fluid GAMEPLAY-05, 17-03 damage GAMEPLAY-04)
-Status: Phase 17 keystone (17-01) executed — GAMEPLAY-01/02/03 wired; Wave-2 seam files shipped as disjoint stubs
-Last activity: 2026-06-25 — 17-01 keystone landed: players enter the entity store + bidirectional tab-list broadcast (GAMEPLAY-01), persisted position drives the single bootstrap teleport (GAMEPLAY-02), inventory join-sync fires first-tick (GAMEPLAY-03). Wave-2 handoff (struct fields, dispatcher hooks, fluid.go/fall_damage.go stubs) recorded in 17-01-SUMMARY.md.
+Phase: 17 — Gameplay Completion — IN PROGRESS (18 plans: 5 original + 13 real-client gap-closure)
+Plan: 17-18 COMPLETE (air-supply sync). NEXT: re-verify the GAMEPLAY-07 VISUAL GATE with a real client; if clean, close Phase 17 → Phase 18 (online-mode).
+Status: GAMEPLAY-01..06 wired + 12 gap-closure 1:1 fixes landed; gameplay-1:1 mandate ABSOLUTE in CLAUDE.md. build/vet/server-tests/world-tests green; -race clean except the known pre-existing TestTickAIDrivesMobs flake (mob-AI, deferred).
+
+### ⚠️ WHAT'S NEXT (resume here)
+
+1. **GAMEPLAY-07 visual gate (autonomous:false)** — pending the user's final real-client pass on seed 777 (`localhost:25565`). The gate has surfaced 12 deviations so far, all fixed 1:1. If the next pass is clean → close Phase 17.
+2. **Known 1:1 DEBT (deferred-items.md, owned by the mob-AI track the user runs in parallel):**
+   - mobs walk ON water — mob nav not water-aware (`WalkNodeEvaluator.getPathType` + `Mob.travelInFluid` server-side not ported).
+   - `TestTickAIDrivesMobs` flaky — mob AI non-deterministic (RNG/async-pool), needs a seeded source per the 1:1 mandate.
+3. **After Phase 17:** Phase 18 (online-mode: Yggdrasil auth + AES/CFB8 encryption), 19 (TUI + disconnect logs — connect/disconnect logging already started in 17-09), 20 (structure polish).
+
+### 1:1 MANDATE (absolute, CLAUDE.md)
+All gameplay logic must be a literal method-for-method copy of the unobfuscated 26.2 jar (`temp/cache/26.2-inner.jar`, javap -c -p). Mirror call chains + numeric ops exactly (float casts, epsilons, attribute multipliers, RNG draw order, guard checks). NO paraphrase/simplify/change-behavior. ONLY optimization (that provably preserves identical observable gameplay) is permitted. Always verify against the jar bytecode before writing — never from intuition.
 
 ### ⚠️ v1 "fully playable" was half-done — Phase 17 reconnects the seams
 
