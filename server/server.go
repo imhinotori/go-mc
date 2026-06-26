@@ -74,6 +74,17 @@ func (s *Server) AcceptConn(conn *net.Conn) {
 		return
 	}
 
+	// Connection-level visibility (17-09 / TUI-02 foundation): log every handshaked
+	// connection BEFORE login so even status pings and pre-login attempts are visible
+	// (the join/leave lines in AcceptPlayer cover the post-login lifecycle). intention 1
+	// = list ping, 2 = login. Logged after the handshake (not on raw TCP accept) so the
+	// line carries the protocol + intention and malformed TCP probes that never complete
+	// a handshake stay out of the log. One greppable line per connection.
+	if s.Logger != nil {
+		s.Logger.Printf("connection from %v: protocol=%d intention=%d",
+			conn.Socket.RemoteAddr(), protocol, intention)
+	}
+
 	switch intention {
 	case 1: // list ping
 		// Status is intentionally ungated: a version-mismatched client must still

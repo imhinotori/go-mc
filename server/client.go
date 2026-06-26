@@ -55,7 +55,41 @@ type Client struct {
 	closeOne sync.Once     // makes Close idempotent (Send-on-full and writeLoop exit may both close)
 	closed   atomic.Bool   // set once on Close; gates Send so it never pushes on a closed queue
 	quit     chan struct{} // closed by Close; lets readLoop abandon an in-flight inbound send
+	// disconnectReason records WHY this connection is going away, for the leave log line
+	// (TUI-02 foundation, brought forward in 17-09). It is set BEFORE Close by the code
+	// path that decides the teardown (e.g. the keep-alive timeout kick sets "timeout" via
+	// SetDisconnectReason). If nothing sets it, the leave path reads the empty default and
+	// reports "quit" (a normal client-initiated close / read EOF). It is an atomic pointer
+	// so a kick on the keep-alive goroutine and a read on the accept goroutine never race.
+	disconnectReason atomic.Pointer[string]
 	// NOTE: deliberately no world/entity/game-state field here in Phase 2.
+}
+
+// SetDisconnectReason records the cause of an imminent disconnect so the leave log line
+// (AcceptPlayer, after <-c.quit) can attribute it. It is a best-effort hint: the FIRST
+// caller before Close wins for log attribution; later callers (the unavoidable cascade of
+// Close paths) do not clobber it. Safe to call from any goroutine. Pass a short, greppable
+// token like "timeout" or "kicked"; the absence of any reason is reported as "quit".
+func (c *Client) SetDisconnectReason(reason string) {
+	c.disconnectReason.CompareAndSwap(nil, &reason)
+}
+
+// DisconnectReason returns the recorded teardown cause, or "quit" if none was set (the
+// normal client-initiated close / read EOF path). Read by the leave log line.
+func (c *Client) DisconnectReason() string {
+	if r := c.disconnectReason.Load(); r != nil {
+		return *r
+	}
+	return "quit"
+}
+
+// RemoteAddr returns the connection's remote network address as a string for logging,
+// or "unknown" when the underlying socket is unavailable. Greppable and non-panicking.
+func (c *Client) RemoteAddr() string {
+	if c.conn != nil && c.conn.Socket != nil {
+		return c.conn.Socket.RemoteAddr().String()
+	}
+	return "unknown"
 }
 
 // NewClient builds a Client over conn with a bounded outbound queue of capacity

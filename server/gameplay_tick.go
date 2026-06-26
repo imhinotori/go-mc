@@ -1,6 +1,7 @@
 package server
 
 import (
+	"log"
 	"math"
 	"sync/atomic"
 
@@ -143,8 +144,12 @@ func (k keepAliveClient) SendKeepAlive(id int64) {
 }
 
 // SendDisconnect enqueues a readable Play Disconnect (never a silent close — NET-07 /
-// T-2-05). KeepAlive calls this on a timeout kick; the reason reaches the client.
+// T-2-05). KeepAlive calls this ONLY on a timeout kick (keepalive.go kickPlayer), so it
+// is the funnel where we record "timeout" as the disconnect reason BEFORE the connection
+// tears down — the leave log line (AcceptPlayer) then attributes the kick correctly
+// (17-09 / TUI-02 foundation). The reason reaches the client on the wire as well.
 func (k keepAliveClient) SendDisconnect(reason chat.Message) {
+	k.c.SetDisconnectReason("timeout")
 	k.c.Send(pk.Marshal(packetid.ClientboundDisconnect, reason))
 }
 
@@ -324,11 +329,29 @@ func (g *gameTick) AcceptPlayer(
 
 	g.loop.register <- player
 
+	// JOIN log (17-09 / TUI-02 foundation): the player is now accepted, bootstrapped, and
+	// handed to the tick — emit one greppable structured line so operators (and the Phase 17
+	// visual gate) can SEE the join the moment it lands. Goes to the same stderr as the rest
+	// of the server (log.Default()): AcceptPlayer holds no logger field, and threading one
+	// here would touch the tick struct that sibling agents are editing, so log.Printf is the
+	// non-invasive choice. name/id come from the login profile args, entityID/addr from the
+	// just-registered player and its connection.
+	log.Printf("player joined: name=%s uuid=%s entityID=%d addr=%s", name, id, entityID, c.RemoteAddr())
+
 	// Block until the connection closes (the player is playing). The conn is torn down
 	// when this returns, per the GamePlay contract; until then we keep the connection
 	// alive in the ticking world. c.quit is closed by Client.Close (read error, write
 	// error, or queue-full drop) — that is the player's leave signal.
 	<-c.quit
+
+	// LEAVE log (17-09 / TUI-02 foundation): c.quit unblocked, so the connection is gone.
+	// Read the best-known reason: the keep-alive timeout kick set "timeout" via
+	// SetDisconnectReason (keepAliveClient.SendDisconnect) BEFORE Close; any other teardown
+	// (client closed the socket / read or write EOF / queue-full drop) left it unset and
+	// DisconnectReason() reports "quit". This is the minimal viable taxonomy — the full
+	// kick/protocol-reason set is TUI-02 (Phase 19). Emitted before unregister so the line
+	// is greppable alongside the join even if a later step were to block.
+	log.Printf("player left: name=%s uuid=%s reason=%s", name, id, c.DisconnectReason())
 
 	// Leave: unregister from the tick (message; the owner removes it on-thread) and from
 	// the independent keep-alive. Order is not load-bearing — both are idempotent no-ops
