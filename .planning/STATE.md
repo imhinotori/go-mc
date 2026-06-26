@@ -2,7 +2,7 @@
 gsd_state_version: 1.0
 milestone: v3
 milestone_name: Online-mode + Operator UX + Structure polish
-status: "GAMEPLAY-01..06 wired + 15 gap-closure 1:1 fixes landed (incl. proactive-audit ports 17-19 FoodData hunger, 17-20 container-click, 17-21 block-break dig-time + jar-extracted hardness); gameplay-1:1 mandate ABSOLUTE in CLAUDE.md. build/vet/full-server-tests green; -race clean except the known pre-existing TestTickAIDrivesMobs flake (mob-AI, deferred)."
+status: "GAMEPLAY-01..06 wired + 17 gap-closure 1:1 fixes landed (incl. proactive-audit ports 17-19 FoodData hunger, 17-20 container-click, 17-21 block-break dig-time + jar-extracted hardness, 17-22 item-use/eating + jar-extracted per-item food). Gate-only SULFUR_TEST_KIT=1 starter kit (food+blocks) for the visual gate. gameplay-1:1 mandate ABSOLUTE in CLAUDE.md. build/vet/full-server-tests green; -race clean except the known pre-existing TestTickAIDrivesMobs flake (mob-AI, deferred)."
 stopped_at: Completed 17-04-PLAN.md (GAMEPLAY-06)
 last_updated: "2026-06-26T13:12:01.509Z"
 progress:
@@ -30,7 +30,7 @@ Status: GAMEPLAY-01..06 wired + gap-closure 1:1 fixes landed (incl. 17-19 FoodDa
 
 ### ⚠️ WHAT'S NEXT (resume here)
 
-1. **GAMEPLAY-07 visual gate (autonomous:false)** — pending the user's real-client pass on seed 777 (`localhost:25565`, server rebuilt + running with all fixes through 17-21). Proactive jar-audit closed 3 more 1:1 gaps the gate hadn't yet reached: hunger now drains/regens/starves (17-19), the inventory CLICK handler now does real pickup/shift-click/swap/throw/double-click/drag/clone (17-20, was a no-op stub), and block-break now has the per-hardness dig-time + crack-overlay model with jar-extracted hardness for all 1196 blocks (17-21, was instant-break). If the next pass is clean → close Phase 17.
+1. **GAMEPLAY-07 visual gate (autonomous:false)** — pending the user's real-client pass on seed 777 (`localhost:25565`, server rebuilt + running with all fixes through 17-22 AND the test kit: start it with `SULFUR_TEST_KIT=1 ./sulfur.exe -seed 777`). Proactive jar-audit closed 4 more 1:1 gaps the gate hadn't yet reached: hunger now drains/regens/starves (17-19); the inventory CLICK handler now does real pickup/shift-click/swap/throw/double-click/drag/clone (17-20, was a no-op stub); block-break now has the per-hardness dig-time + crack-overlay model with jar-extracted hardness for all 1196 blocks (17-21, was instant-break); and EATING is wired (17-22, startUsingItem→completeUsingItem→FoodData.eat + jar-extracted per-item food/consumable) so the hunger loop is closed (drain + regain). The gate-only `SULFUR_TEST_KIT=1` join kit (food + cobble/planks/torch/dirt) lets the operator exercise eat + container-click + place/break without first mining a meal (default prod join is the vanilla empty inventory, untouched). If the next pass is clean → close Phase 17.
 2. **Known 1:1 DEBT (deferred-items.md, owned by the mob-AI track the user runs in parallel):**
    - mobs walk ON water — mob nav not water-aware (`WalkNodeEvaluator.getPathType` + `Mob.travelInFluid` server-side not ported).
    - `TestTickAIDrivesMobs` flaky — mob AI non-deterministic (RNG/async-pool), needs a seeded source per the 1:1 mandate.
