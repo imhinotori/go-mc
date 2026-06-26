@@ -1,7 +1,7 @@
 # v4 — Plugin / Scripting System (PLANNED, not started)
 
 > **Status:** PLAN ONLY. Execution waits for v3 (Phases 17–20) to close. STATE.md stays on v3;
-> this doc is the adoptable plan for `/gsd-new-milestone v4` once v3 ships. Phases 21–27.
+> this doc is the adoptable plan for `/gsd-new-milestone v4` once v3 ships. Phases 21–28.
 >
 > **This inverts CLAUDE.md's "Server core only — no plugin/extension API" scope decision.** That
 > reversal is intentional and user-directed for v4. When v4 starts, update CLAUDE.md's Scope line.
@@ -10,9 +10,12 @@
 
 A **dual-runtime extension API** that makes Sulfur's gameplay scriptable without giving up the
 two things that define the project: the **pure-Go static binary** (CGO_ENABLED=0) and the
-**1:1-with-the-jar gameplay mandate**. The validation/dogfood target is to rewrite the vanilla
-mobs + entity logic AS PLUGINS that remain a literal 1:1 port of the 26.2 jar — proving the API
-is powerful enough for real vanilla AI — while the same API also enables fully-custom mobs.
+**1:1-with-the-jar gameplay mandate**. The validation/dogfood is TWO-DOMAIN: (1) rewrite the
+vanilla mobs + entity logic AS PLUGINS that remain a literal 1:1 port of the 26.2 jar — proving
+the API expresses real vanilla AI — and (2) build CRAFTING (recipes + the result/consume engine,
+which the core never implemented — only the empty grid slots exist) THROUGH the same plugin API,
+proving it generalizes to a SECOND, very different domain (menus/recipes, not AI). The same API
+also enables fully-custom mobs and custom recipes.
 
 ## Runtimes (user-decided)
 
@@ -69,7 +72,7 @@ mandate by definition.
 tick-owned state; the Go→Starlark bridge exposes entity/world/nav as FROZEN, tick-owned-safe handles.
 The Docker -race gate covers the plugin path exactly as it covers the async subsystems today.
 
-## Phases (21–27)
+## Phases (21–28)
 
 | Phase | Req | What | Gate |
 |-------|-----|------|------|
@@ -77,22 +80,29 @@ The Docker -race gate covers the plugin path exactly as it covers the async subs
 | 22 | PLUGIN-02 | **Plugin host + event bus** — plugin manager (discover/load/unload from a plugins dir), manifest, typed event system (tick, join/leave, break/place, spawn/death, damage), the register-hooks-once API, the Go→plugin dispatch seam kept off the per-entity hot path. | A plugin subscribes to events and its hook fires on the real tick, event-driven not per-tick-scan. |
 | 23 | PLUGIN-03 | **Entity/mob behavior API** — declarative mob-behavior interface (declare attributes/goals/AI once; Go runs the hot path calling hooks) + the FULL-OVERRIDE path; the Go-side bridge exposing entity/world/nav to Starlark as frozen tick-safe handles. | A trivial custom mob declared in Starlark spawns, ticks, and moves via the Go nav, -race clean. |
 | 24 | PLUGIN-04 | **Vanilla mobs AS plugins (1:1 dogfood)** — rewrite the existing Go mob/entity logic as Starlark plugins that stay a literal 1:1 jar port. Validates the API expresses real vanilla AI. | The plugin-driven vanilla mob is behavior-identical to the Go-native path it replaces; jar-verified; existing mob-AI tests green. |
-| 25 | PLUGIN-05 | **Opt-in Python runtime** — qur/gopy @ python3.14 behind a `python` build tag (default binary stays CGO=0 static); a bridge for HEAVY off-tick plugins only (never the per-tick path); same event/registration API as Starlark. | A Python plugin runs off-tick, rejoins via the async seam; the default (no-tag) build is still pure-Go static. |
-| 26 | REGION-01 | **Folia regionization** (folded from the v3 deferral) — independent-region tick threads so the world ticks in parallel regions; the plugin seam + entity API are region-aware (a hook runs on its region's thread). | The world ticks in parallel regions, -race clean, plugin hooks run on the correct region thread. |
-| 27 | PLUGIN-06 | **Plugin system visual + perf gate** (autonomous:false) — real-client confirm: a custom mob plugin works, vanilla-mobs-as-plugins is behavior-identical, events fire, and the plugin layer adds no measurable per-tick cost vs Go-native (Folia regions scale). | Human-verified on a real 26.2 client + a perf benchmark. Closes v4. |
+| 25 | PLUGIN-05 | **Crafting/recipes AS plugins (2nd-domain dogfood)** — build crafting THROUGH the plugin API (not a hardcoded Go subsystem): a recipe-provider plugin loads jar-extracted recipes (shaped/shapeless/smelting/…) and drives the crafting-grid result + ResultSlot.onTake consumption (today a no-op stub — `inventory_click.go`: "no recipes wired in v1"). Adds the crafting_table block + 3×3 menu. Proves the API generalizes to a SECOND domain (recipes/menus, not just AI). 1:1 mandate carries (RecipeManager/CraftingMenu jar port); custom recipes fall out free. | Vanilla recipes craft correctly through the plugin path (result + consume, jar-verified) + a custom recipe works. |
+| 26 | PLUGIN-06 | **Opt-in Python runtime** — qur/gopy @ python3.14 behind a `python` build tag (default binary stays CGO=0 static); a bridge for HEAVY off-tick plugins only (never the per-tick path); same event/registration API as Starlark. | A Python plugin runs off-tick, rejoins via the async seam; the default (no-tag) build is still pure-Go static. |
+| 27 | REGION-01 | **Folia regionization** (folded from the v3 deferral) — independent-region tick threads so the world ticks in parallel regions; the plugin seam + entity API are region-aware (a hook runs on its region's thread). | The world ticks in parallel regions, -race clean, plugin hooks run on the correct region thread. |
+| 28 | PLUGIN-07 | **Plugin system visual + perf gate** (autonomous:false) — real-client confirm: a custom mob plugin works, vanilla-mobs-as-plugins is behavior-identical, crafting (vanilla + custom recipe) works through the plugin path, events fire, and the plugin layer adds no measurable per-tick cost vs Go-native (Folia regions scale). | Human-verified on a real 26.2 client + a perf benchmark. Closes v4. |
 
 ## Build order rationale
 - 21 → 22: a runtime with no host is useless; a host with no runtime has nothing to load. Runtime first
   (the sandbox + CGO=0 proof is the riskiest single thing), then the host/event layer on top.
 - 23 needs 22's event bus + registration API to hang the behavior hooks on.
-- 24 is the dogfood — it can only run once 23's behavior API exists; it's also the real test that the
-  API is "ultra-powerful" (if vanilla AI doesn't fit, the API is wrong, caught here before Python).
-- 25 (Python) deliberately AFTER the Starlark path is proven end-to-end: Python is the riskier runtime
-  (cgo, GIL, build tag), and it reuses the SAME event/registration API, so it must land after that API
-  is validated by 22–24.
-- 26 (Folia) after the single-thread plugin path works, because regionization changes WHICH thread a
+- 24 is the FIRST dogfood — it can only run once 23's behavior API exists; it's also the real test that
+  the API is "ultra-powerful" (if vanilla AI doesn't fit, the API is wrong, caught here before Python).
+- 25 is the SECOND dogfood, deliberately a DIFFERENT domain (recipes/menus, not entity AI): it proves
+  the plugin API generalizes beyond mobs. Crafting was never built in the core (the InventoryMenu grid
+  slots exist but the result is a no-op stub), so building it through plugins is both a real feature AND
+  the cleanest possible API-generality test — nothing to un-hardcode. It needs 22's host + an item/menu
+  bridge; it does NOT depend on 24, but ordering it after 24 keeps the "prove API on domain 1, then
+  domain 2" story clean.
+- 26 (Python) deliberately AFTER the Starlark path is proven end-to-end on TWO domains (24 + 25): Python
+  is the riskier runtime (cgo, GIL, build tag), and it reuses the SAME event/registration API, so it
+  must land after that API is validated.
+- 27 (Folia) after the single-thread plugin path works, because regionization changes WHICH thread a
   hook runs on — you regionize a working seam, you don't design the seam around regions first.
-- 27 gates the whole thing on a real client + perf.
+- 28 gates the whole thing on a real client + perf.
 
 ## Open decisions to resolve at v4 kickoff (NOT now)
 - **Starlark fork-or-vendor:** go.starlark.net is stable upstream; likely a plain dep, not a fork
