@@ -221,6 +221,18 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 		}
 	}
 
+	// BlockItem.canPlace tail: Level.isUnobstructed(state, pos, placementContext(player)). For a
+	// full-cube block the collision shape is the 1×1×1 box at placePos; isUnobstructed REJECTS the
+	// placement if that box overlaps any non-removed, blocksBuilding entity's AABB (the entity arg
+	// is null in placementContext, so even the placer counts). Without this a player could place a
+	// block inside another player/mob. v1 subset: the full-cube shape + the blocksBuilding filter
+	// (players + mobs block; dropped items do NOT — ItemEntity.blocksBuilding is false). Cite:
+	// net.minecraft.world.item.BlockItem.canPlace -> Level.isUnobstructed ->
+	// EntityGetter.isUnobstructed(null, shape) [getEntities + !isRemoved && blocksBuilding && overlap].
+	if t.placementObstructedByEntity(placePos) {
+		return // obstructed by an entity -> !canPlace() -> FAIL, silent no-op
+	}
+
 	// placeBlock -> Level.setBlock(getClickedPos(), state). changed=false (unloaded / no-change)
 	// -> no ack, no broadcast (matches placeBlock returning false -> FAIL).
 	if t.world == nil || !t.world.SetBlock(placePos, placeState, dimMinY) {
@@ -283,6 +295,41 @@ func (t *TickLoop) shrinkHeldItem(p *tickPlayer, inv *Inventory) {
 	// AbstractContainerMenu.broadcastChanges -> synchronizeSlotToRemote: send a SetSlot for the
 	// changed slot only (the diff helper already does exactly this).
 	t.broadcastInventoryChanges(p, inv, before)
+}
+
+// placementObstructedByEntity is the v1 port of the entity half of Level.isUnobstructed(state,
+// pos, placementContext(player)) for a FULL-CUBE block: the block's collision shape is the 1×1×1
+// box at pos; the placement is obstructed if that box overlaps any non-removed, blocksBuilding
+// entity's AABB. Mirrors EntityGetter.isUnobstructed(null, shape): iterate the entities whose
+// bounding box intersects the shape and reject (return true = obstructed) on the first one that
+// blocksBuilding and actually overlaps. The entity arg is null in placementContext, so EVERY
+// blocksBuilding entity counts — including the placer (a player standing in the target cell
+// blocks their own placement, as in vanilla). blocksBuilding is true for players + mobs and
+// FALSE for dropped items (ItemEntity), so a drop lying in the cell does NOT block the place;
+// Sulfur reads that off Entity.isItem. The overlap is the half-open AABB intersection
+// (Shapes.joinIsNotEmpty with AND: interiors must overlap, edge-touching does not count).
+func (t *TickLoop) placementObstructedByEntity(pos pk.Position) bool {
+	if t.entities == nil {
+		return false
+	}
+	// The full-cube collision shape at pos: the unit box [pos, pos+1].
+	bx0, by0, bz0 := float64(pos.X), float64(pos.Y), float64(pos.Z)
+	bx1, by1, bz1 := bx0+1, by0+1, bz0+1
+	for _, e := range t.entities.all() {
+		if e == nil || e.isItem {
+			continue // dropped items have blocksBuilding=false: they never obstruct a placement
+		}
+		// e's feet-anchored AABB (centered on x/z, base at y, top at y+height).
+		hw := e.width / 2
+		ex0, ey0, ez0 := e.x-hw, e.y, e.z-hw
+		ex1, ey1, ez1 := e.x+hw, e.y+e.height, e.z+hw
+		// Half-open interior overlap on all three axes (AABB.intersects: lower < other.upper &&
+		// other.lower < upper). Edge-flush (a box exactly atop the cell face) does NOT overlap.
+		if bx0 < ex1 && ex0 < bx1 && by0 < ey1 && ey0 < by1 && bz0 < ez1 && ez0 < bz1 {
+			return true // a blocksBuilding entity occupies the cell -> obstructed
+		}
+	}
+	return false
 }
 
 // reconcileEdit runs the post-mutation reconciliation contract for a VALID edit: ack the

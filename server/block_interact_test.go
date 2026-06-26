@@ -3,6 +3,7 @@ package server
 import (
 	"testing"
 
+	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/data/item"
 	"github.com/imhinotori/sulfur/data/packetid"
 	"github.com/imhinotori/sulfur/level"
@@ -428,4 +429,80 @@ func findAckSequence(t *testing.T, ps []pk.Packet) int32 {
 	}
 	t.Fatalf("no BlockChangedAck packet found")
 	return 0
+}
+
+// TestPlaceBlockedByEntity: a placement whose target cell is occupied by a blocksBuilding entity
+// (a mob standing in the cell) is REJECTED — BlockItem.canPlace's Level.isUnobstructed gate. No
+// mutation, no ack. Without the entity-collision port a player could place a block inside another
+// entity/player.
+func TestPlaceBlockedByEntity(t *testing.T) {
+	loop, mgr := newBlockLoop()
+	p := blockPlayer(loop, 1.5, 66.0, 1.5)
+	setHeldItem(p, item.Stone.ID, 5)
+
+	hit := pk.Position{X: 1, Y: 64, Z: 1}
+	placed := pk.Position{X: 1, Y: 65, Z: 1}
+	mgr.SetBlock(hit, block.ToStateID[block.Stone{}], dimMinY)
+
+	// A mob standing IN the placement cell (feet at the cell's base): its AABB overlaps the
+	// full-cube collision shape, so the placement must be obstructed.
+	mob := NewEntity(loop.idAlloc.AllocID(), entity.Pig, float64(placed.X)+0.5, float64(placed.Y), float64(placed.Z)+0.5)
+	loop.entities.add(mob)
+
+	ui := useItemOnPacket(0, hit, 1 /*UP*/, 0.5, 1.0, 0.5, false, false, 99)
+	loop.applyInput(p, SubtickInput{At: loop.clock.Now(), Packet: ui})
+
+	if got, ok := mgr.GetBlock(placed, dimMinY); ok && got == block.ToStateID[block.Stone{}] {
+		t.Fatal("placement into an entity-occupied cell must be rejected, but the block was placed")
+	}
+	if n := countID(drainPackets(p.client), packetid.ClientboundBlockChangedAck); n != 0 {
+		t.Fatalf("obstructed placement must not ack, got %d acks", n)
+	}
+}
+
+// TestPlaceNotBlockedByDroppedItem: a dropped Item entity in the target cell does NOT block a
+// placement (ItemEntity.blocksBuilding is false). The block places normally.
+func TestPlaceNotBlockedByDroppedItem(t *testing.T) {
+	loop, mgr := newBlockLoop()
+	p := blockPlayer(loop, 1.5, 66.0, 1.5)
+	setHeldItem(p, item.Stone.ID, 5)
+
+	hit := pk.Position{X: 1, Y: 64, Z: 1}
+	placed := pk.Position{X: 1, Y: 65, Z: 1}
+	mgr.SetBlock(hit, block.ToStateID[block.Stone{}], dimMinY)
+
+	// A dropped item in the cell: blocksBuilding=false, must NOT obstruct.
+	it := NewEntity(loop.idAlloc.AllocID(), entity.Item, float64(placed.X)+0.5, float64(placed.Y), float64(placed.Z)+0.5)
+	it.isItem = true
+	loop.entities.add(it)
+
+	ui := useItemOnPacket(0, hit, 1 /*UP*/, 0.5, 1.0, 0.5, false, false, 99)
+	loop.applyInput(p, SubtickInput{At: loop.clock.Now(), Packet: ui})
+
+	if got, ok := mgr.GetBlock(placed, dimMinY); !ok || got != block.ToStateID[block.Stone{}] {
+		t.Fatal("placement should succeed over a dropped item (items don't block building)")
+	}
+}
+
+// TestPlaceClearOfEntity: an entity NEAR but NOT overlapping the target cell does not block the
+// placement (the half-open AABB intersection: an entity in the adjacent cell, edge-flush, is clear).
+func TestPlaceClearOfEntity(t *testing.T) {
+	loop, mgr := newBlockLoop()
+	p := blockPlayer(loop, 1.5, 66.0, 1.5)
+	setHeldItem(p, item.Stone.ID, 5)
+
+	hit := pk.Position{X: 1, Y: 64, Z: 1}
+	placed := pk.Position{X: 1, Y: 65, Z: 1}
+	mgr.SetBlock(hit, block.ToStateID[block.Stone{}], dimMinY)
+
+	// A mob two cells away in X: its AABB cannot reach the placement cell.
+	mob := NewEntity(loop.idAlloc.AllocID(), entity.Pig, float64(placed.X)+3.5, float64(placed.Y), float64(placed.Z)+0.5)
+	loop.entities.add(mob)
+
+	ui := useItemOnPacket(0, hit, 1 /*UP*/, 0.5, 1.0, 0.5, false, false, 99)
+	loop.applyInput(p, SubtickInput{At: loop.clock.Now(), Packet: ui})
+
+	if got, ok := mgr.GetBlock(placed, dimMinY); !ok || got != block.ToStateID[block.Stone{}] {
+		t.Fatal("placement clear of any entity should succeed")
+	}
 }
