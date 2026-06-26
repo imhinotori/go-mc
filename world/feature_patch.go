@@ -36,9 +36,11 @@ package world
 import (
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/world/levelgen"
+	"github.com/imhinotori/sulfur/world/levelgen/data"
 	"github.com/imhinotori/sulfur/world/levelgen/feature"
 	"github.com/imhinotori/sulfur/world/levelgen/placement"
 )
@@ -92,15 +94,17 @@ func simpleBlockBody(
 		return false
 	}
 
-	// canSurvive gate (SimpleBlockFeature checks state.canSurvive(level, origin)).
-	// Mid-worldgen the full BlockBehaviour.canSurvive state-shape is unavailable (12-01
-	// precedent for would_survive/solid/replaceable), so this is a CONSERVATIVE port:
-	// the placement requires (a) the origin itself is currently air/replaceable (we do
-	// not overwrite solid terrain) AND (b) a solid support exists directly below — the
-	// universal "a plant needs ground under it" rule that covers grass/flowers/mushrooms
-	// /the FEAT-03 set. It NEVER places a floating block over air. A feature whose real
-	// canSurvive is richer (e.g. waterlogged) is Phase-13 work; documented as
-	// conservative, never a false keep.
+	// canSurvive gate (SimpleBlockFeature.place checks state.canSurvive(level, origin)
+	// at bytecode offset 47 and returns false at 160 if it fails — javap-confirmed,
+	// net.minecraft.world.level.levelgen.feature.SimpleBlockFeature, 26.2-inner.jar).
+	// For the overworld vegetation set (grass/flowers/...) the to-place state's block is
+	// a VegetationBlock, whose canSurvive (VegetationBlock.canSurvive(state, level, pos))
+	// reads the block BELOW (pos.below()) and returns mayPlaceOn(belowState), and
+	// mayPlaceOn (VegetationBlock.mayPlaceOn) is exactly
+	//   belowState.is(BlockTags.SUPPORTS_VEGETATION).
+	// That sustaining-tag check is what rejects WATER below (BUG B: grass on water) AND
+	// a plant below (BUG A: flower on flower) — neither is in #supports_vegetation. See
+	// simpleBlockCanSurvive for the 1:1 port + the air-at-origin half of the gate.
 	if !simpleBlockCanSurvive(bctx, st, pos) {
 		return false
 	}
@@ -109,20 +113,78 @@ func simpleBlockBody(
 	return true
 }
 
-// simpleBlockCanSurvive is the conservative canSurvive gate (see simpleBlockBody). It
-// keeps a placement iff the target cell is air/water (not overwriting solid terrain)
-// and the block directly below is solid (a support). This is intentionally permissive
-// enough to place the FEAT-03 ground cover yet never a floating block.
+// simpleBlockCanSurvive is the canSurvive gate SimpleBlockFeature.place applies before
+// writing a plant. It is a 1:1 port of the vanilla path for the overworld vegetation
+// set (javap, 26.2-inner.jar):
+//
+//	SimpleBlockFeature.place  -> state.canSurvive(level, origin)
+//	BlockStateBase.canSurvive -> Block.canSurvive(state, level, pos)
+//	VegetationBlock.canSurvive(state, level, pos):
+//	    BlockPos below = pos.below();
+//	    return mayPlaceOn(level.getBlockState(below), level, below);
+//	VegetationBlock.mayPlaceOn(state, getter, pos):
+//	    return state.is(BlockTags.SUPPORTS_VEGETATION);
+//
+// So the keep condition is exactly: the block directly BELOW the origin is in the
+// #minecraft:supports_vegetation tag (resolved authoritatively from the embedded jar
+// tag JSONs via data.BlockTag — the same mechanism the 17-12 tree fix used for
+// #replaceable_by_trees, never hand-transcribed). WATER and an existing PLANT are NOT
+// in that tag, so both BUG A (flower-on-flower) and BUG B (grass-on-water) are
+// rejected here.
+//
+// The additional air-at-origin guard is the faithful counterpart of the vanilla
+// vegetation PIPELINE: the random_patch / simple_block placed_features each run a
+// block_predicate_filter with a matching_block_tag #minecraft:air predicate at the
+// origin BEFORE the inner feature places (see world/levelgen/placement/predicate.go),
+// so a non-air origin (e.g. an already-placed plant within the same patch) never
+// reaches a write. Keeping it here makes the leaf body self-consistent for the
+// synthetic/direct call paths (tests, random_patch inner) that do not route through a
+// filter. It is the air half of "BUG A" — a second flower cannot replace the first.
 func simpleBlockCanSurvive(bctx *bodyContext, _ block.StateID, pos placement.BlockPos) bool {
 	here := bctx.getState(pos)
 	if !block.IsAir(here) {
-		// Only place into air (the worldgen "empty block" the vanilla canSurvive +
-		// setBlock(flag 2) effectively requires for ground cover). Overwriting solid
-		// terrain mid-decoration is never correct for these leaves.
+		// The origin must be empty: vanilla's #air predicate gate, and the reason a
+		// second plant never stacks on the first (BUG A).
 		return false
 	}
 	below := bctx.getState(placement.BlockPos{X: pos.X, Y: pos.Y - 1, Z: pos.Z})
-	return !block.IsAir(below)
+	// mayPlaceOn: belowState.is(#minecraft:supports_vegetation). Water/plants are not in
+	// the tag, so grass-on-water (BUG B) and the flower-below case are rejected.
+	return supportsVegetation(below)
+}
+
+// supportsVegetationSet is the lazily-resolved StateID set of every block in
+// #minecraft:supports_vegetation (dirt/coarse_dirt/rooted_dirt + mud/muddy_mangrove_roots
+// + moss_block/pale_moss_block + grass_block/podzol/mycelium + farmland). It is built
+// once from data.BlockTag("supports_vegetation"), which recursively expands the nested
+// jar tag chain (#substrate_overworld -> #dirt/#mud/#moss_blocks/#grass_blocks) — so the
+// membership is the jar's, authoritative and never hand-listed.
+var (
+	supportsVegetationOnce sync.Once
+	supportsVegetationSet  map[block.StateID]bool
+)
+
+// supportsVegetation reports whether st is a block whose id is in
+// #minecraft:supports_vegetation — the VegetationBlock.mayPlaceOn predicate. Air is
+// never in the tag, so it also rejects a floating placement over air.
+func supportsVegetation(st block.StateID) bool {
+	supportsVegetationOnce.Do(func() {
+		ids, err := data.BlockTag("supports_vegetation")
+		if err != nil {
+			// The tag chain is embedded (tools/extract_worldgen.go); a failure here is a
+			// build/extraction regression, not a runtime condition — fail loudly rather
+			// than silently degrading the survival gate back to the old buggy behaviour.
+			panic(fmt.Errorf("world: resolving #minecraft:supports_vegetation: %w", err))
+		}
+		set := make(map[block.StateID]bool)
+		for sid, b := range block.StateList {
+			if ids[b.ID()] {
+				set[block.StateID(sid)] = true
+			}
+		}
+		supportsVegetationSet = set
+	})
+	return supportsVegetationSet[st]
 }
 
 // ---- RandomPatchFeature ----

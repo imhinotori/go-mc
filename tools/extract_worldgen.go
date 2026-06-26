@@ -121,6 +121,19 @@ var worldgenSingleFiles = []struct {
 	dest    string // destination path under world/levelgen/data/ (slash-separated)
 }{
 	{"data/minecraft/tags/block/overworld_carver_replaceables.json", "tags/block/overworld_carver_replaceables.json"},
+	// FEAT-17-16: the #minecraft:supports_vegetation tag chain — the sustaining-block
+	// set VegetationBlock.mayPlaceOn(state, level, pos) tests (state.is(SUPPORTS_VEGETATION))
+	// inside VegetationBlock.canSurvive, which SimpleBlockFeature.place gates on before
+	// placing a plant. Resolving it via data.BlockTag("supports_vegetation") needs the
+	// whole nested chain embedded: supports_vegetation -> #substrate_overworld + farmland,
+	// substrate_overworld -> #dirt + #mud + #moss_blocks + #grass_blocks. Each is copied
+	// verbatim from the jar so the membership is authoritative, never hand-transcribed.
+	{"data/minecraft/tags/block/supports_vegetation.json", "tags/block/supports_vegetation.json"},
+	{"data/minecraft/tags/block/substrate_overworld.json", "tags/block/substrate_overworld.json"},
+	{"data/minecraft/tags/block/dirt.json", "tags/block/dirt.json"},
+	{"data/minecraft/tags/block/mud.json", "tags/block/mud.json"},
+	{"data/minecraft/tags/block/moss_blocks.json", "tags/block/moss_blocks.json"},
+	{"data/minecraft/tags/block/grass_blocks.json", "tags/block/grass_blocks.json"},
 	// STRUCT-05 (Phase 16): the minecraft:empty terminator pool. It lives at the
 	// TOP level (data/minecraft/worldgen/template_pool/empty.json — OUTSIDE village/),
 	// so the village-only prefix above never copies it. 42 of the 62 village pools

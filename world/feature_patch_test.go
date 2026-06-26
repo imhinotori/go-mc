@@ -10,17 +10,20 @@ import (
 	"github.com/imhinotori/sulfur/world/levelgen/placement"
 )
 
-// fillFloor sets a solid stone floor at y=floorY across the whole 3x3 (so a ground-cover
-// block placed at floorY+1 has a support, satisfying the conservative canSurvive gate).
+// fillFloor sets a grass_block floor at y=floorY across the whole 3x3 (so a ground-cover
+// block placed at floorY+1 has a #minecraft:supports_vegetation sustaining block directly
+// below, satisfying the VegetationBlock.canSurvive / mayPlaceOn gate the canSurvive port
+// enforces). grass_block — not stone — because vanilla vegetation survives only on the
+// supports_vegetation tag (dirt/grass_block/podzol/...), never on stone.
 func fillFloor(view *Neighborhood, center [2]int, floorY int) {
-	stone := block.ToStateID[block.Stone{}]
+	ground := block.ToStateID[block.FromID["minecraft:grass_block"]]
 	for dx := -1; dx <= 1; dx++ {
 		for dz := -1; dz <= 1; dz++ {
 			baseX := (center[0] + dx) * 16
 			baseZ := (center[1] + dz) * 16
 			for lx := 0; lx < 16; lx++ {
 				for lz := 0; lz < 16; lz++ {
-					view.SetBlock(baseX+lx, floorY, baseZ+lz, stone)
+					view.SetBlock(baseX+lx, floorY, baseZ+lz, ground)
 				}
 			}
 		}
@@ -76,8 +79,8 @@ func TestSimpleBlockPlacesProviderState(t *testing.T) {
 	}
 }
 
-// TestSimpleBlockNoSupportNoPlace: with NO solid block below the anchor, the conservative
-// canSurvive gate drops the placement (never a floating block over air).
+// TestSimpleBlockNoSupportNoPlace: with NO block below the anchor (air), the canSurvive
+// gate drops the placement (air is not in #supports_vegetation — never a floating block).
 func TestSimpleBlockNoSupportNoPlace(t *testing.T) {
 	const minY, height = -64, 384
 	center := [2]int{0, 0}
@@ -166,6 +169,75 @@ func TestRandomPatchTries(t *testing.T) {
 	if !anyPlaced {
 		t.Fatalf("no jittered short_grass landed on the floor; patch placed nothing")
 	}
+}
+
+// placeOneSimpleBlock is a regression-test helper: it runs simpleBlockBody for a single
+// to_place id at pos over a fresh 3x3 view the caller has pre-seeded, returning whether a
+// block was placed.
+func placeOneSimpleBlock(t *testing.T, view *Neighborhood, id string, pos placement.BlockPos) bool {
+	t.Helper()
+	const minY, height = -64, 384
+	raw := json.RawMessage(`{"to_place":{"type":"minecraft:simple_state_provider","state":{"Name":"` + id + `"}}}`)
+	cf := &feature.ConfiguredFeature{Type: "simple_block", Config: &feature.ParsedConfig{Raw: raw}}
+	bctx := &bodyContext{view: view}
+	ctx := newPlacementContext(view, minY, height, nil)
+	return simpleBlockBody(bctx, cf, ctx, levelgen.NewLegacyRandomSource(1), pos)
+}
+
+// TestSimpleBlockCanSurviveSustainingBlock is the FEAT-17-16 regression suite for the
+// VegetationBlock.canSurvive / mayPlaceOn port. It locks in the three cases the two
+// worldgen bugs were about:
+//
+//	(BUG B) water directly below the origin  -> grass does NOT place (floating-on-water).
+//	(BUG A) a flower already at the origin    -> a second flower does NOT place (stacking).
+//	(OK)    dirt below + air at origin        -> the plant DOES place.
+//
+// #minecraft:supports_vegetation contains dirt but not water and not any plant, so the
+// sustaining-tag gate + the air-at-origin gate reject the two bug cases and keep the
+// valid one.
+func TestSimpleBlockCanSurviveSustainingBlock(t *testing.T) {
+	const minY, height = -64, 384
+	center := [2]int{0, 0}
+
+	dirt := block.ToStateID[block.FromID["minecraft:dirt"]]
+	water := block.ToStateID[block.FromID["minecraft:water"]]
+	dandelion := block.ToStateID[block.FromID["minecraft:dandelion"]]
+
+	t.Run("water_below_no_grass", func(t *testing.T) {
+		view := build3x3(center, minY, height) // all air
+		view.SetBlock(8, 39, 8, water)         // water directly below the origin (y=40)
+		if placeOneSimpleBlock(t, view, "minecraft:short_grass", placement.BlockPos{X: 8, Y: 40, Z: 8}) {
+			t.Fatalf("grass placed over water; want no placement (water is not in #supports_vegetation)")
+		}
+		if got := view.GetBlock(8, 40, 8); !block.IsAir(got) {
+			t.Fatalf("origin was written (state %d) over water; want it left air", got)
+		}
+	})
+
+	t.Run("flower_below_no_second_flower", func(t *testing.T) {
+		view := build3x3(center, minY, height)
+		view.SetBlock(8, 39, 8, dirt)          // valid ground for the FIRST flower
+		view.SetBlock(8, 40, 8, dandelion)     // a flower already occupies the origin
+		// A second flower at the SAME origin: the air-at-origin half of the gate rejects it.
+		if placeOneSimpleBlock(t, view, "minecraft:dandelion", placement.BlockPos{X: 8, Y: 40, Z: 8}) {
+			t.Fatalf("a second flower placed on top of an existing flower; want no placement")
+		}
+		if got := view.GetBlock(8, 40, 8); got != dandelion {
+			t.Fatalf("origin flower was overwritten (state %d); want the original dandelion preserved", got)
+		}
+	})
+
+	t.Run("dirt_below_air_places", func(t *testing.T) {
+		view := build3x3(center, minY, height)
+		view.SetBlock(8, 39, 8, dirt) // valid sustaining block; origin (y=40) is air
+		if !placeOneSimpleBlock(t, view, "minecraft:short_grass", placement.BlockPos{X: 8, Y: 40, Z: 8}) {
+			t.Fatalf("grass did not place on dirt+air; want a placement (dirt is in #supports_vegetation)")
+		}
+		want := block.ToStateID[block.FromID["minecraft:short_grass"]]
+		if got := view.GetBlock(8, 40, 8); got != want {
+			t.Fatalf("placed state %d, want short_grass (%d)", got, want)
+		}
+	})
 }
 
 // TestPatchCrossChunkEdge: an inner simple_block jittered past x=15 writes short_grass
