@@ -215,16 +215,6 @@ type TickLoop struct {
 	// SetWorld — which lives in this shared file (tick.go) — is NOT touched by 17-02.
 	fluidSchedule *fluidScheduleQueue
 
-	// fluidScannedChunks is the set of columns whose generated fluids have already been seeded into
-	// the schedule on first load. Vanilla's worldgen carries per-chunk scheduled fluid ticks
-	// (ProtoChunk.fluidTicks, populated by the Aquifer when shouldScheduleFluidUpdate) that fire on
-	// LevelChunk.postProcessGeneration — so unstable generated water (a flowing cell, or water over
-	// a passable cell) flows the moment the chunk goes live. Sulfur generates terrain but discards
-	// those scheduled ticks, so generated cave/aquifer water sat frozen (an air gap below standing
-	// water never filled). scanChunkFluids re-derives the unstable cells on first load; this set
-	// makes the scan idempotent (each column scanned once). Tick-owned (TICK-05).
-	fluidScannedChunks map[level.ChunkPos]bool
-
 	// debug holds the OPTIONAL, off-by-default debug triggers for the Plan 06-07 interactive
 	// human-verify gate (a visible moving pig + periodic damage so the operator can SEE entity
 	// movement and the health/death/respawn loop). nil in production AND in every test, so the
