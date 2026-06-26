@@ -554,6 +554,47 @@ type tickPlayer struct {
 	// fires only on a real change (the first underwater decrement), not redundantly on spawn.
 	// Tick-owned.
 	lastAirSent int32
+
+	// --- Food / hunger / exhaustion 1:1 port (Plan 17-19, net.minecraft.world.food.FoodData).
+	// Tick-owned (TICK-05): mutated only on the tick goroutine by tickFood, so it is -race clean by
+	// the same single-owner discipline as the rest of tickPlayer. The existing food/saturation
+	// fields above hold FoodData.foodLevel/saturationLevel; these add the rest of FoodData's state
+	// plus the movement-delta + dirty-send bookkeeping. ---
+
+	// exhaustion is net.minecraft.world.food.FoodData.exhaustionLevel (default 0.0f). Actions
+	// (movement, attacks, taking damage) add to it via addExhaustion (capped at 40.0f); FoodData.tick
+	// drains it 4.0 at a time, converting each drain into 1.0 saturation loss (or 1 food loss when
+	// saturation is empty). Seeded to 0 at registration (the vanilla FoodData ctor default).
+	exhaustion float32
+
+	// foodTickTimer is net.minecraft.world.food.FoodData.tickTimer (default 0): the shared counter
+	// that gates the fast-regen (>=10), slow-regen (>=80), and starvation (>=80) branches of
+	// FoodData.tick. Reset to 0 whenever a gated branch fires or none of the regen/starve conditions
+	// hold. Seeded to 0 at registration.
+	foodTickTimer int32
+
+	// prevX/prevY/prevZ are the player's position at the END of the previous tick — the v1 stand-in
+	// for vanilla's xo/yo/zo (the per-tick movement delta source ServerPlayer.checkMovementStatistics
+	// reads as getX()-xo etc.). tickFood computes (x-prevX, y-prevY, z-prevZ) at the TOP of the tick
+	// for the movement-exhaustion port, then writes the current x/y/z back here at the END, exactly
+	// like vanilla's xo=getX() at the tail of the tick. Tick-owned.
+	prevX, prevY, prevZ float64
+
+	// lastFoodSent / lastSaturationSent are the food/saturation values last pushed to this player's
+	// own client via ClientboundSetHealth — the dirty-send tracker (mirrors lastAirSent for the
+	// bubble bar). The hunger bar reads food/saturation off the SetHealth packet; the client does not
+	// locally simulate hunger, so tickFood must re-send SetHealth when food OR saturation OR health
+	// changes. Seeded to the spawn food/saturation at registration so the first send fires only on a
+	// real change. Tick-owned.
+	lastFoodSent       int32
+	lastSaturationSent float32
+
+	// lastHealthSent is the health value last carried to this player's own client via
+	// ClientboundSetHealth. tickFood folds health into the dirty-send because the regen path
+	// (heal()) changes health WITHOUT routing through applyDamage's own SetHealth — the food
+	// packet is the carrier that keeps the HUD hearts in sync with natural regeneration. Seeded to
+	// the spawn health at registration so the first send fires only on a real change. Tick-owned.
+	lastHealthSent float32
 }
 
 // Health constants for a fresh survival player (the ENT-05 defaults). maxHealth is the vanilla

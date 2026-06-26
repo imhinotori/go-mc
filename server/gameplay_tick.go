@@ -320,6 +320,20 @@ func (g *gameTick) AcceptPlayer(
 		// GAMEPLAY-17 (Plan 17-18): seed the air dirty-tracker to the same full value so the first
 		// SetEntityData fires only on a real change (matching the client's registered air default).
 		lastAirSent: maxAirSupply,
+		// Food/hunger (Plan 17-19): a fresh player spawns at FoodData's ctor defaults — exhaustion 0,
+		// tickTimer 0 (food/saturation already seeded above). prevX/Y/Z seed to the spawn position so
+		// the first tick's movement delta is 0 (no spurious spawn-tick exhaustion from the teleport).
+		// The food/saturation/health dirty-send trackers seed to the spawn values so the first
+		// SetHealth fires only on a real change (matching the bootstrap SetHealth the join already
+		// sent), mirroring the air dirty-tracker.
+		exhaustion:         0,
+		foodTickTimer:      0,
+		prevX:              spawnX,
+		prevY:              spawnY,
+		prevZ:              spawnZ,
+		lastFoodSent:       maxFood,
+		lastSaturationSent: defaultSaturation,
+		lastHealthSent:     maxHealth,
 	}
 
 	// ENT-06 + GAMEPLAY-02 load-on-join: apply the persisted snapshot loaded above (the disk IO
@@ -333,6 +347,17 @@ func (g *gameTick) AcceptPlayer(
 		player.health = loaded.Health
 		player.food = loaded.FoodLevel
 		player.saturation = loaded.FoodSaturationLevel
+		// Food/hunger (Plan 17-19): round-trip FoodData's exhaustionLevel/tickTimer so a reconnecting
+		// player resumes mid-drain/mid-regen exactly where it left off (vanilla FoodData
+		// readAdditionalSaveData: foodExhaustionLevel default 0.0, foodTickTimer default 0 — a
+		// pre-17-19 .dat without these keys decodes to those defaults, so an old save loads cleanly).
+		player.exhaustion = loaded.FoodExhaustionLevel
+		player.foodTickTimer = loaded.FoodTickTimer
+		// Re-seed the dirty-send trackers to the LOADED food/saturation/health so the first SetHealth
+		// fires only when the live value diverges (the bootstrap already sent the loaded values).
+		player.lastFoodSent = loaded.FoodLevel
+		player.lastSaturationSent = loaded.FoodSaturationLevel
+		player.lastHealthSent = loaded.Health
 		player.yaw = loaded.Rotation[0]
 		player.pitch = loaded.Rotation[1]
 	}

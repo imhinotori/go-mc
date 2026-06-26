@@ -504,24 +504,26 @@ func (t *TickLoop) doSweepAttack(attacker, primary *tickPlayer, damage, scale fl
 	}
 }
 
-// causeFoodExhaustion is the port of Player.causeFoodExhaustion(float exhaustion):
+// causeFoodExhaustion is the port of net.minecraft.world.entity.player.Player.causeFoodExhaustion(
+// float exhaustion):
 //
 //	if (abilities.invulnerable) return;
 //	if (!level.isClientSide()) foodData.addExhaustion(exhaustion);
 //
-// v1 has no exhaustion accumulator on FoodData yet (food drains over time is a later concern), so
-// addExhaustion is a faithful stub: the call site IS ported (the attack DOES cause exhaustion in
-// vanilla) and the invulnerable guard is preserved, but the accumulation is documented as deferred
-// until FoodData has an exhaustion field. This keeps the attack sequence structurally complete.
+// Plan 17-19 makes the accumulation REAL: FoodData now has an exhaustion accumulator
+// (tickPlayer.exhaustion / addExhaustion in food.go), so this routes the exhaustion into it. The
+// invulnerable guard is preserved (a CITED stub == false, creative/invuln abilities not wired in
+// v1). The server is NEVER client-side, so the `!level.isClientSide()` guard is always true — the
+// addExhaustion always runs. This is the single entry point for ALL exhaustion sources: the melee
+// attack (causeFoodExhaustion(0.1) in handleAttack), the actuallyHurt damage tail (combat.go), and
+// the movement ladder (checkMovementStatistics in food.go).
 func (t *TickLoop) causeFoodExhaustion(p *tickPlayer, exhaustion float32) {
-	const invulnerable = false // creative/invuln abilities not wired in v1
+	const invulnerable = false // Player.abilities.invulnerable: creative/invuln not wired in v1 (CITED stub)
 	if invulnerable {
 		return
 	}
-	// foodData.addExhaustion(exhaustion): v1 FoodData has no exhaustion field (saturation/food
-	// drain is deferred). The exhaustion value is computed faithfully; its accumulation is the
-	// single documented faithful-stub of the attack port — wired when FoodData gains exhaustion.
-	_ = exhaustion
+	// !level.isClientSide() is always true on the server: foodData.addExhaustion(exhaustion).
+	p.addExhaustion(exhaustion)
 }
 
 // withinAttackReach reports whether the victim is close enough to the attacker for a melee

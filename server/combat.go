@@ -148,6 +148,14 @@ const hurtInvulnerableTicks int32 = 20
 // (`this.hurtDuration = 10; this.hurtTime = this.hurtDuration`).
 const hurtDurationTicks int32 = 10
 
+// damageFoodExhaustion is the CITED stub for DamageSource.getFoodExhaustion() at the
+// Player.actuallyHurt food-exhaustion site (Plan 17-19): the vanilla DamageSource DEFAULT food
+// exhaustion is 0.1f (the value most sources carry). Taking damage drains hunger by this amount.
+// v1 has no per-source DamageType table wired into the damage path, so this default stands in for
+// every source; it is structured so a real `damageSource.getFoodExhaustion()` per-source read slots
+// in here later with no call-site change.
+const damageFoodExhaustion float32 = 0.1
+
 // applyDamage is the port of net.minecraft.world.entity.LivingEntity.hurtServer(ServerLevel,
 // DamageSource, float). It is the server-authoritative entry point for every damage source (fall,
 // attack, environment); the client cannot veto or claim its own health (T-6-05). Runs on the tick
@@ -274,6 +282,15 @@ func (t *TickLoop) actuallyHurt(p *tickPlayer, amount float32) {
 	if amount == 0.0 {
 		return
 	}
+
+	// Plan 17-19: causeFoodExhaustion(damageSource.getFoodExhaustion()) — taking damage costs
+	// hunger. In Player.actuallyHurt this sits AFTER the `amount == 0.0F` guard and BEFORE the
+	// setHealth subtraction (recordDamage in between is a v1 combat-log stub), so it runs ONLY when
+	// residual damage actually lands. getFoodExhaustion() is the per-source value; the vanilla
+	// DamageSource default is 0.1f (most sources). v1 has no per-source DamageType wired here, so the
+	// CITED constant damageFoodExhaustion (0.1f) stands in — structured so a per-source read slots in
+	// later. The exhaustion routes through causeFoodExhaustion (the invulnerable guard + addExhaustion).
+	t.causeFoodExhaustion(p, damageFoodExhaustion)
 
 	// setHealth(getHealth() - amount): the actual HP subtraction. Clamp at 0 (the wire never
 	// carries negative health) and push the authoritative SetHealth so the client HUD follows.

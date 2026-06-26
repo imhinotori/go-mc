@@ -60,6 +60,11 @@ func snapshotPlayer(p *tickPlayer) save.PlayerData {
 		Health:              p.health,
 		FoodLevel:           p.food,
 		FoodSaturationLevel: p.saturation,
+		// Food/hunger (Plan 17-19): persist FoodData's exhaustionLevel/tickTimer so a player resumes
+		// mid-drain/mid-regen on reconnect (vanilla FoodData.addAdditionalSaveData keys
+		// foodExhaustionLevel/foodTickTimer).
+		FoodExhaustionLevel: p.exhaustion,
+		FoodTickTimer:       p.foodTickTimer,
 		PlayerGameType:      gameModeSurvival,
 	}
 	if p.onGround {

@@ -186,6 +186,14 @@ func (t *TickLoop) tickEntities() {
 	// (TestTickPhaseOrder stays green), mirroring the tickFallDamage seam above.
 	t.tickBreath()
 
+	// Plan 17-19 food/hunger: the FoodData.tick port (exhaustion drains saturation then food, health
+	// regenerates from saturation while fed, starvation damage at food 0) plus the movement-exhaustion
+	// ladder (ServerPlayer.checkMovementStatistics). Its body lives in food.go; a single ADDITIVE call
+	// inside this existing phase keeps the tick order unchanged (TestTickPhaseOrder stays green),
+	// mirroring the tickBreath seam directly above. Placed AFTER tickBreath so a drowning hit this
+	// tick is reflected before the hunger step reads health for its regen gate.
+	t.tickFood()
+
 	// Plan 17-11 melee-combat per-tick bookkeeping: the attack-strength ticker increment
 	// (Player.tick) and the invulnerableTime / hurtTime decrements (ServerPlayer.tick), inside this
 	// existing phase so no new phase is added to the fixed tick order (TestTickPhaseOrder stays
