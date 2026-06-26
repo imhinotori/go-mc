@@ -36,6 +36,7 @@ func (t *TickLoop) tickOnce() {
 	t.tickAI()               // Phase 7 fills
 	t.tickPhysics()          // Phase 6 fills
 	t.applyAsyncResults()    // NO-OP today (asyncIn nil); Phase 8 drains result channels here
+	t.tickEntityMovement()   // GAMEPLAY-07: ServerEntity.sendChanges → delta move packets to trackers
 	t.tickEquipment()        // GAMEPLAY-07: detectEquipmentUpdates → SetEquipment to trackers
 	t.trace("tracker.Tick")  // record the tracking phase at its call site
 	t.tracker.Tick()         // synchronous stub today; Phase 8 swaps the executor

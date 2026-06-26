@@ -119,6 +119,29 @@ type Entity struct {
 	// state — it is NOT part of the snapshot-friendly value set the async tracker copies (the
 	// tracker only ever reads the pos/angle/dims), so it does not break the snapshot contract.
 	ai *mobAI
+
+	// --- GAMEPLAY-07: delta-move tracking state (ServerEntity.sendChanges) ----------------
+	//
+	// These mirror net.minecraft.server.level.ServerEntity's per-entity send state so the
+	// tracker can emit DELTA move packets (MoveEntityPos/PosRot/Rot, ~6 bytes) for small steps
+	// instead of an absolute teleport every tick (~32 bytes). One ServerEntity exists per
+	// tracked entity (NOT per observer), so this state is correctly per-Entity here. Tick-owned;
+	// the tracker reads+writes them on the owner goroutine. moveInit guards the first send (the
+	// VecDeltaCodec base + the lastSent* must be seeded from the spawn position before any delta
+	// is computed, exactly as ServerEntity's ctor sets positionCodec.setBase to the spawn pos).
+	moveInit             bool
+	lastSentX, lastSentY float64 // VecDeltaCodec base (the last absolute pos the client knows)
+	lastSentZ            float64
+	lastSentYRot         int8 // Mth.packDegrees(yaw) at last send (the byte-angle)
+	lastSentXRot         int8 // Mth.packDegrees(pitch) at last send
+	teleportDelay        int  // ServerEntity.teleportDelay: ticks since the last absolute sync (reset on sync)
+	wasOnGround          bool // ServerEntity.wasOnGround: onGround at the last send
+	// sendTickCount is ServerEntity.tickCount: a FREE-RUNNING per-entity counter (++ every
+	// sendChanges, NOT reset on a teleport). It drives the `tickCount % 60 == 0` idle re-anchor —
+	// distinct from teleportDelay (which resets on each absolute sync). Conflating them shifts the
+	// re-anchor cadence after a teleport, so they are kept separate (bytecode reads #139 tickCount
+	// for the %60, #257 teleportDelay for the 400 cap).
+	sendTickCount int
 }
 
 // NewEntity constructs a live entity instance from a data/entity TABLE record at the given

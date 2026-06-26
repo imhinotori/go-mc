@@ -140,6 +140,21 @@ func degToByteAngle(deg float32) pk.Angle {
 	return pk.Angle(int8(math.Round(float64(deg) * 256.0 / 360.0)))
 }
 
+// packDegrees is net.minecraft.util.Mth.packDegrees(float) = (byte)Mth.floor(deg * 256 / 360).
+// The delta-move tracking (ServerEntity.sendChanges) uses THIS (floor, not round) both for the
+// rotation-change threshold compare against lastSent*Rot AND for the byte written on the wire,
+// so the server's idea of "the angle the client has" matches what vanilla would send. (The
+// AddEntity/Teleport encoders keep degToByteAngle for backward compatibility; the move-delta
+// path is the one that must be floor-exact to track correctly tick-over-tick.)
+//   [VERIFIED javap: Mth.packDegrees -> fmul 256; fdiv 360; floor; i2b.]
+func packDegrees(deg float32) int8 {
+	return int8(mthFloorF(float64(deg) * 256.0 / 360.0))
+}
+
+// mthFloorF is Mth.floor for a float argument (Math.floor then cast). A small local to avoid a
+// dependency on the worldgen floor helper; matches `(int)Math.floor(d)`.
+func mthFloorF(d float64) int { return int(math.Floor(d)) }
+
 // --- Task 1 encoders ------------------------------------------------------------------
 
 // encodeAddEntity builds ClientboundAddEntity for a newly-visible entity. JAR-DERIVED
@@ -441,6 +456,52 @@ func encodeMoveEntityRot(id int32, yaw, pitch float32, onGround bool) pk.Packet 
 		degToByteAngle(yaw),
 		degToByteAngle(pitch),
 		pk.Boolean(onGround),
+	)
+}
+
+// encodeMoveEntityPosRotB / encodeMoveEntityRotB are the byte-angle delta encoders the
+// ServerEntity.sendChanges path uses: they take the ALREADY-PACKED yRot/xRot bytes (packDegrees,
+// floor) rather than re-packing a float with degToByteAngle (round). sendChanges packs the angle
+// once into b2/b3 (lastSentYRot/XRot), tests the change threshold on those bytes, and writes the
+// SAME bytes onto the wire — so the move encoders must consume the bytes verbatim. Wire layout is
+// identical to encodeMoveEntityPosRot / encodeMoveEntityRot (yRot before xRot).
+func encodeMoveEntityPosRotB(id int32, xa, ya, za pk.Short, yRot, xRot int8, onGround bool) pk.Packet {
+	return pk.Marshal(
+		int32(packetid.ClientboundMoveEntityPosRot),
+		pk.VarInt(id),
+		xa, ya, za,
+		pk.Angle(yRot), // yRot first (already packDegrees-floored)
+		pk.Angle(xRot), // xRot second
+		pk.Boolean(onGround),
+	)
+}
+
+func encodeMoveEntityRotB(id int32, yRot, xRot int8, onGround bool) pk.Packet {
+	return pk.Marshal(
+		int32(packetid.ClientboundMoveEntityRot),
+		pk.VarInt(id),
+		pk.Angle(yRot),
+		pk.Angle(xRot),
+		pk.Boolean(onGround),
+	)
+}
+
+// encodeEntityPositionSync builds ClientboundEntityPositionSync — the per-tick ABSOLUTE position
+// packet ServerEntity.sendChanges emits when a delta would overflow / 400 ticks elapse / onGround
+// flipped (NOT ClientboundTeleportEntity, which is for explicit teleports). Wire (jar:
+// ClientboundEntityPositionSyncPacket.STREAM_CODEC): VarInt id, PositionMoveRotation (pos 3×Double,
+// deltaMovement 3×Double, Float yRot, Float xRot), Boolean onGround.
+//   [VERIFIED javap: ClientboundEntityPositionSyncPacket.of -> id, PositionMoveRotation(
+//    trackingPosition, deltaMovement, yRot, xRot), onGround; PositionMoveRotation.STREAM_CODEC =
+//    Vec3 position, Vec3 deltaMovement, Float yRot, Float xRot.]
+func encodeEntityPositionSync(e *Entity) pk.Packet {
+	return pk.Marshal(
+		int32(packetid.ClientboundEntityPositionSync),
+		pk.VarInt(e.id),
+		pk.Double(e.x), pk.Double(e.y), pk.Double(e.z),
+		pk.Double(e.vx), pk.Double(e.vy), pk.Double(e.vz),
+		pk.Float(e.yaw), pk.Float(e.pitch),
+		pk.Boolean(e.onGround),
 	)
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/data/packetid"
 	"github.com/imhinotori/sulfur/level/component"
 	pk "github.com/imhinotori/sulfur/net/packet"
@@ -272,4 +273,98 @@ func TestUsingItemPoseOffHandBit(t *testing.T) {
 		return
 	}
 	t.Fatal("no SetEntityData emitted for off-hand use")
+}
+
+// newMoveEntity registers a tracked entity + an observer that sees it, and seeds the entity's
+// move base (one tickEntityMovement). Returns the entity, the observer, and the loop so a test
+// can mutate the entity and tick again.
+func newMoveEntity(t *testing.T) (*TickLoop, *Entity, *tickPlayer) {
+	t.Helper()
+	loop := NewTickLoop(newFakeClock())
+	observer := newTrackerPlayer(loop, 100000, 8.5, 8.5)
+	e := NewEntity(loop.idAlloc.AllocID(), entity.Pig, 9.5, 64, 9.5)
+	loop.entities.add(e)
+	observer.tracked = map[int32]bool{e.id: true}
+	loop.tickEntityMovement() // seed moveInit; no packet
+	_ = drainPackets(observer.client)
+	observer.client = captureClient(64)
+	loop.clientIndex[observer.client] = observer
+	return loop, e, observer
+}
+
+// TestDeltaMoveSmallStepIsPos: a small position change (fits a short delta) sends MoveEntityPos,
+// not an absolute sync.
+func TestDeltaMoveSmallStepIsPos(t *testing.T) {
+	loop, e, observer := newMoveEntity(t)
+	loop.entities.move(e, e.x+1.0, e.y, e.z) // 1 block → 4096 units, well within short range
+	loop.tickEntityMovement()
+	got := drainPackets(observer.client)
+	if countID(got, packetid.ClientboundMoveEntityPos) != 1 {
+		t.Fatalf("small step: want 1 MoveEntityPos, got %d", countID(got, packetid.ClientboundMoveEntityPos))
+	}
+	if countID(got, packetid.ClientboundEntityPositionSync) != 0 {
+		t.Fatalf("small step must not send EntityPositionSync, got %d", countID(got, packetid.ClientboundEntityPositionSync))
+	}
+}
+
+// TestDeltaMoveBigJumpIsPositionSync: a jump larger than ±8 blocks overflows the short delta and
+// must fall back to an absolute EntityPositionSync.
+func TestDeltaMoveBigJumpIsPositionSync(t *testing.T) {
+	loop, e, observer := newMoveEntity(t)
+	loop.entities.move(e, e.x+10.0, e.y, e.z) // 10 blocks → 40960 units > 32767: overflow
+	loop.tickEntityMovement()
+	got := drainPackets(observer.client)
+	if countID(got, packetid.ClientboundEntityPositionSync) != 1 {
+		t.Fatalf("big jump: want 1 EntityPositionSync, got %d", countID(got, packetid.ClientboundEntityPositionSync))
+	}
+	if countID(got, packetid.ClientboundMoveEntityPos) != 0 {
+		t.Fatalf("big jump must not send a delta MoveEntityPos, got %d", countID(got, packetid.ClientboundMoveEntityPos))
+	}
+}
+
+// TestDeltaMoveRotationOnlyIsRot: a pure look-angle change (no position change) sends
+// MoveEntityRot, not a Pos.
+func TestDeltaMoveRotationOnlyIsRot(t *testing.T) {
+	loop, e, observer := newMoveEntity(t)
+	e.yaw += 45 // big enough that packDegrees differs by >= 1
+	loop.tickEntityMovement()
+	got := drainPackets(observer.client)
+	if countID(got, packetid.ClientboundMoveEntityRot) != 1 {
+		t.Fatalf("rotation only: want 1 MoveEntityRot, got %d", countID(got, packetid.ClientboundMoveEntityRot))
+	}
+	if countID(got, packetid.ClientboundMoveEntityPos) != 0 {
+		t.Fatalf("rotation only must not send a Pos, got %d", countID(got, packetid.ClientboundMoveEntityPos))
+	}
+}
+
+// TestDeltaMoveIdleSendsNothing: a stationary, unrotated entity (between the 60-tick re-anchor
+// ticks) sends no move packet.
+func TestDeltaMoveIdleSendsNothing(t *testing.T) {
+	loop, _, observer := newMoveEntity(t)
+	loop.tickEntityMovement() // no move, no rotation, teleportDelay=2 (not %60)
+	got := drainPackets(observer.client)
+	for _, want := range []packetid.ClientboundPacketID{
+		packetid.ClientboundMoveEntityPos, packetid.ClientboundMoveEntityPosRot,
+		packetid.ClientboundMoveEntityRot, packetid.ClientboundEntityPositionSync,
+	} {
+		if n := countID(got, want); n != 0 {
+			t.Fatalf("idle entity sent %d of packet %d, want 0", n, int32(want))
+		}
+	}
+}
+
+// TestDeltaMovePosAndRotIsPosRot: a simultaneous position + rotation change sends a single
+// MoveEntityPosRot (not separate Pos and Rot).
+func TestDeltaMovePosAndRotIsPosRot(t *testing.T) {
+	loop, e, observer := newMoveEntity(t)
+	loop.entities.move(e, e.x+1.0, e.y, e.z)
+	e.yaw += 45
+	loop.tickEntityMovement()
+	got := drainPackets(observer.client)
+	if countID(got, packetid.ClientboundMoveEntityPosRot) != 1 {
+		t.Fatalf("pos+rot: want 1 MoveEntityPosRot, got %d", countID(got, packetid.ClientboundMoveEntityPosRot))
+	}
+	if countID(got, packetid.ClientboundMoveEntityPos)+countID(got, packetid.ClientboundMoveEntityRot) != 0 {
+		t.Fatal("pos+rot must be a single PosRot, not separate Pos/Rot")
+	}
 }

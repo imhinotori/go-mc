@@ -215,15 +215,19 @@ func TestBehaviorRegressionTrackerSends(t *testing.T) {
 			countID(got, packetid.ClientboundAddEntity))
 	}
 
-	// (2) Move within range: a tracked mob that moves → TeleportEntity (NOT a re-AddEntity).
+	// (2) Move within range: a tracked mob that moves → a DELTA move packet from
+	// tickEntityMovement (the per-entity ServerEntity.sendChanges port), NOT from the tracker
+	// (which now only spawns/despawns). Seed the move base first (moveInit), then move + tick.
+	loop.tickEntityMovement() // seed the mob's move base; no packet
 	p.client = captureClient(64)
 	loop.clientIndex[p.client] = p
 	loop.entities.move(e, 13.5, 64, 13.5)
-	drainAsyncTracker(t, loop, 1)
+	loop.tickEntityMovement()      // the 4-block delta → MoveEntityPos
+	drainAsyncTracker(t, loop, 1)  // tracker: no re-spawn
 	got = drainPackets(p.client)
-	if countID(got, packetid.ClientboundTeleportEntity) != 1 {
-		t.Fatalf("tracked mob moving: TeleportEntity sent %d times, want 1 (movement lifecycle lost)",
-			countID(got, packetid.ClientboundTeleportEntity))
+	if countID(got, packetid.ClientboundMoveEntityPos) != 1 {
+		t.Fatalf("tracked mob moving: MoveEntityPos sent %d times, want 1 (delta-move lifecycle lost)",
+			countID(got, packetid.ClientboundMoveEntityPos))
 	}
 	if countID(got, packetid.ClientboundAddEntity) != 0 {
 		t.Fatalf("a moved-but-tracked mob must NOT re-AddEntity; got %d", countID(got, packetid.ClientboundAddEntity))

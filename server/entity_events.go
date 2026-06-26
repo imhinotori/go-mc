@@ -107,6 +107,140 @@ func (t *TickLoop) tickEquipment() {
 	}
 }
 
+// sendChangesMoveThreshold is ServerEntity.sendChanges's "did it move enough to send a delta"
+// gate: delta.lengthSqr() >= 7.62939453125E-6 (== (1/128)^2 / 4... the LP precision floor). Below
+// it the position is treated as unchanged for the tick (a sub-pixel jitter sends nothing).
+const sendChangesMoveThreshold = 7.62939453125e-6
+
+// sendChangesForceSyncEvery is the % 60 cadence: even with no net movement, sendChanges sends a
+// position component every 60 ticks (var10 = moved || tickCount % 60 == 0) so a long-idle entity
+// stays anchored. tickEntityMovement uses teleportDelay as the per-entity tick counter.
+const sendChangesForceSyncEvery = 60
+
+// sendChangesTeleportDelayCap is the 400-tick guard: if teleportDelay (ticks since the last
+// absolute sync) exceeds 400, sendChanges sends an absolute EntityPositionSync instead of a delta
+// (re-anchoring against accumulated delta drift). Cite: ServerEntity.sendChanges `teleportDelay
+// <= 400` branch.
+const sendChangesTeleportDelayCap = 400
+
+// tickEntityMovement ports net.minecraft.server.level.ServerEntity.sendChanges's MOVEMENT half:
+// once per tracked entity, decide between a DELTA move packet (MoveEntityPos/PosRot/Rot, ~6 bytes)
+// and an absolute EntityPositionSync (~32 bytes), update the per-entity send state, and broadcast
+// to the players tracking the entity. This replaces the previous tracker behavior of sending an
+// absolute TeleportEntity to EVERY observer EVERY tick (the deviation: 5-10× bandwidth + remote
+// avatars stuttering). Runs ONCE per entity (the send decision is per-entity, not per-observer),
+// then broadcasts the chosen packet via broadcastToTrackers — exactly ServerEntity's
+// synchronizer.sendToTrackingPlayers fan-out.
+//
+// THE DECISION (decompiled from sendChanges, 26.2-inner.jar):
+//   - rotChanged = |packDegrees(yaw)-lastSentYRot| >= 1 || |packDegrees(pitch)-lastSentXRot| >= 1
+//   - teleportDelay++
+//   - delta = currentPos - base(lastSentPos); moved = delta.lengthSqr() >= 7.629e-6
+//   - sendPos = moved || teleportDelay % 60 == 0   (the long-idle re-anchor cadence)
+//   - encode delta via VecDeltaCodec (round(curr*4096) - round(base*4096)); overflow = any |d| > Short
+//   - if overflow OR teleportDelay > 400 OR wasOnGround != onGround → EntityPositionSync (absolute),
+//     reset teleportDelay=0, wasOnGround=onGround, re-base the codec to the current pos
+//   - else: (sendPos && rotChanged) → PosRot ; sendPos → Pos ; rotChanged → Rot
+//   - on a Pos/PosRot (a real position component) re-base the codec; on rotChanged update lastSent*Rot
+//
+// Runs on the tick goroutine over tick-owned Entity state, BEFORE tracker.Tick so a freshly-
+// visible entity (added by the tracker THIS tick) is not yet in any tracked set and so gets no
+// delta — its AddEntity already carries the absolute pos, and next tick the delta is from the
+// seeded base. moveInit seeds the base/angles for a never-sent entity (the ctor setBase analogue).
+func (t *TickLoop) tickEntityMovement() {
+	t.trace("tickEntityMovement")
+	if t.entities == nil {
+		return
+	}
+	for _, e := range t.entities.all() {
+		if e == nil {
+			continue
+		}
+		if !e.moveInit {
+			// ServerEntity ctor: positionCodec.setBase(spawnPos); lastSent*Rot = packDegrees(angle).
+			e.lastSentX, e.lastSentY, e.lastSentZ = e.x, e.y, e.z
+			e.lastSentYRot = packDegrees(e.yaw)
+			e.lastSentXRot = packDegrees(e.pitch)
+			e.wasOnGround = e.onGround
+			e.teleportDelay = 0
+			e.moveInit = true
+			continue
+		}
+		t.sendEntityMovementChanges(e)
+	}
+}
+
+// sendEntityMovementChanges is the per-entity body of tickEntityMovement (one ServerEntity
+// .sendChanges movement decision). Separated so a test can drive a single entity. Mutates the
+// entity's send state and broadcasts the chosen move packet to trackers.
+func (t *TickLoop) sendEntityMovementChanges(e *Entity) {
+	e.sendTickCount++ // ServerEntity.tickCount: free-running, drives the %60 idle re-anchor
+	yRot := packDegrees(e.yaw)
+	xRot := packDegrees(e.pitch)
+	rotChanged := absI8(yRot-e.lastSentYRot) >= 1 || absI8(xRot-e.lastSentXRot) >= 1
+
+	e.teleportDelay++
+
+	// VecDeltaCodec delta + overflow check (encode = round(d*4096); base = encode(lastSent*)).
+	dxL := encodeDelta(e.x) - encodeDelta(e.lastSentX)
+	dyL := encodeDelta(e.y) - encodeDelta(e.lastSentY)
+	dzL := encodeDelta(e.z) - encodeDelta(e.lastSentZ)
+	overflow := dxL < -32768 || dxL > 32767 || dyL < -32768 || dyL > 32767 || dzL < -32768 || dzL > 32767
+
+	ddx := e.x - e.lastSentX
+	ddy := e.y - e.lastSentY
+	ddz := e.z - e.lastSentZ
+	moved := (ddx*ddx + ddy*ddy + ddz*ddz) >= sendChangesMoveThreshold
+	sendPos := moved || e.sendTickCount%sendChangesForceSyncEvery == 0
+
+	// Absolute re-sync branch: overflow / 400-tick cap / onGround flip.
+	if overflow || e.teleportDelay > sendChangesTeleportDelayCap || e.wasOnGround != e.onGround {
+		e.wasOnGround = e.onGround
+		e.teleportDelay = 0
+		t.broadcastToTrackers(e.id, encodeEntityPositionSync(e))
+		// EntityPositionSync re-bases the codec to the current pos (positionCodec.setBase via the
+		// sync). lastSent*Rot are NOT updated here (vanilla sets them only on a Rot/PosRot send),
+		// but the next tick's rotChanged compares against them; the head/rot is re-sent then if
+		// still different — observably correct (the absolute sync already carried the float angle).
+		e.lastSentX, e.lastSentY, e.lastSentZ = e.x, e.y, e.z
+		t.broadcastToTrackers(e.id, encodeRotateHead(e.id, e.headYaw))
+		return
+	}
+
+	// Delta branch: PosRot / Pos / Rot per sendPos+rotChanged.
+	switch {
+	case sendPos && rotChanged:
+		t.broadcastToTrackers(e.id, encodeMoveEntityPosRotB(e.id,
+			pk.Short(int16(dxL)), pk.Short(int16(dyL)), pk.Short(int16(dzL)), yRot, xRot, e.onGround))
+		e.lastSentX, e.lastSentY, e.lastSentZ = e.x, e.y, e.z // re-base (a position component was sent)
+		e.lastSentYRot, e.lastSentXRot = yRot, xRot
+	case sendPos:
+		t.broadcastToTrackers(e.id, encodeMoveEntityPos(e.id,
+			pk.Short(int16(dxL)), pk.Short(int16(dyL)), pk.Short(int16(dzL)), e.onGround))
+		e.lastSentX, e.lastSentY, e.lastSentZ = e.x, e.y, e.z // re-base
+	case rotChanged:
+		t.broadcastToTrackers(e.id, encodeMoveEntityRotB(e.id, yRot, xRot, e.onGround))
+		e.lastSentYRot, e.lastSentXRot = yRot, xRot
+	}
+
+	// RotateHead (the body's head yaw) is sent alongside a move when the head turned. ServerEntity
+	// sends it whenever the entity moved/rotated; gate it on a position-or-rotation send so an idle
+	// entity emits nothing.
+	if sendPos || rotChanged {
+		t.broadcastToTrackers(e.id, encodeRotateHead(e.id, e.headYaw))
+	}
+}
+
+// absI8 is Math.abs over the int8 angle difference, computed in int to avoid int8 overflow on the
+// -128 edge (the bytecode does `isub; Math.abs(int)` on the byte values widened to int).
+func absI8(d int8) int {
+	v := int(d)
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
 // broadcastUsingItem syncs DATA_LIVING_ENTITY_FLAGS to the players tracking this player so the
 // 3rd-person eat/use pose appears (and clears). using=true sets bit 0x01 (IS_USING_ITEM) plus
 // 0x02 when the active hand is the OFF_HAND; using=false clears the flags (byte 0). Mirrors

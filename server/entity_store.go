@@ -2,6 +2,7 @@ package server
 
 import (
 	"math"
+	"sort"
 	"sync/atomic"
 
 	"github.com/imhinotori/sulfur/level"
@@ -143,6 +144,19 @@ func (s *entityStore) get(id int32) (*Entity, bool) {
 
 // len returns the live entity count. Tick-owned.
 func (s *entityStore) len() int { return len(s.byID) }
+
+// all returns every entity in the store in ASCENDING id order. The deterministic order matters
+// for the movement broadcast (tickEntityMovement) only for test reproducibility — each entity's
+// send decision is independent — but a stable order keeps a multi-entity trace comparable run to
+// run. Tick-owned; the returned slice is a fresh copy the caller may iterate freely.
+func (s *entityStore) all() []*Entity {
+	out := make([]*Entity, 0, len(s.byID))
+	for _, e := range s.byID {
+		out = append(out, e)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].id < out[j].id })
+	return out
+}
 
 // near is the broad-phase query the tracker (Plan 06-02) consumes: it returns every entity
 // whose chunk column is within rangeChunks columns (Chebyshev distance) of the column

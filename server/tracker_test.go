@@ -144,21 +144,28 @@ func TestTrackerMove(t *testing.T) {
 	e := NewEntity(loop.idAlloc.AllocID(), entity.SulfurCube, 9.5, 64, 9.5)
 	loop.entities.add(e)
 
-	syncTrackerTick(loop)            // spawn
+	syncTrackerTick(loop)          // spawn → p.tracked[e.id]=true
+	loop.tickEntityMovement()      // seed the entity's move base (moveInit) — no packet yet
 	_ = drainPackets(p.client)     // discard the spawn packets
 	p.client = captureClient(64)   // fresh capture for the move tick
 	loop.clientIndex[p.client] = p // keep the index consistent (not strictly needed here)
 
-	// Move the entity a few blocks (still in range) via the store's bucket-consistent move.
+	// Move the entity a few blocks (still in range, small enough for a delta) via the store's
+	// bucket-consistent move. The move is now broadcast by tickEntityMovement (a DELTA
+	// MoveEntityPos, not an absolute teleport — the ServerEntity.sendChanges port).
 	loop.entities.move(e, 14.5, 64, 14.5)
 
-	syncTrackerTick(loop)
+	loop.tickEntityMovement() // the per-entity sendChanges decision: a delta-fits move
+	syncTrackerTick(loop)     // tracker: no re-spawn (already tracked)
 	got := drainPackets(p.client)
 	if n := countID(got, packetid.ClientboundAddEntity); n != 0 {
 		t.Fatalf("a moved-but-still-tracked entity sent %d AddEntity, want 0 (must not re-spawn)", n)
 	}
-	if n := countID(got, packetid.ClientboundTeleportEntity); n != 1 {
-		t.Fatalf("a moved entity sent %d TeleportEntity, want exactly 1", n)
+	if n := countID(got, packetid.ClientboundMoveEntityPos); n != 1 {
+		t.Fatalf("a moved entity (5-block delta) sent %d MoveEntityPos, want exactly 1 (delta move)", n)
+	}
+	if n := countID(got, packetid.ClientboundTeleportEntity); n != 0 {
+		t.Fatalf("a small-delta move must NOT send TeleportEntity, got %d", n)
 	}
 	if n := countID(got, packetid.ClientboundRotateHead); n != 1 {
 		t.Fatalf("a moved entity sent %d RotateHead, want exactly 1", n)

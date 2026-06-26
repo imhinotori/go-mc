@@ -82,12 +82,11 @@ func (et *entityTracker) Tick() {
 				continue
 			}
 
-			// Already tracked and still visible: send an absolute teleport (+ head rotation).
-			// v1 uses TeleportEntity (absolute Doubles) for every moved entity so a large
-			// per-tick delta never overflows the MoveEntity* short. Switching to delta moves
-			// for small steps is a later bandwidth optimization (the encoders already exist).
-			p.client.Send(encodeTeleportEntity(e))
-			p.client.Send(encodeRotateHead(e.id, e.headYaw))
+			// Already tracked and still visible: movement is now handled ONCE per entity by
+			// tickEntityMovement (the ServerEntity.sendChanges port — delta MoveEntity* packets,
+			// or an EntityPositionSync when a delta would overflow / re-anchor). The tracker no
+			// longer sends an absolute teleport per observer per tick (the old 5-10× bandwidth
+			// deviation); it now only spawns/despawns.
 		}
 
 		// Anything tracked but no longer in range left the player's view: batch ALL such ids
@@ -241,10 +240,9 @@ func computeTrackerDiff(snap []Entity, tracked map[int32]bool) (packets []pk.Pac
 			continue
 		}
 
-		// Already tracked and still visible: absolute teleport (+ head rotation). Membership is
-		// unchanged, so the id appears in neither delta list.
-		packets = append(packets, encodeTeleportEntity(e))
-		packets = append(packets, encodeRotateHead(e.id, e.headYaw))
+		// Already tracked and still visible: movement is handled per-entity by tickEntityMovement
+		// (ServerEntity.sendChanges — delta MoveEntity* or EntityPositionSync), NOT here. The diff
+		// only spawns/despawns now. Membership is unchanged, so the id appears in neither delta list.
 	}
 
 	// Anything tracked but no longer in range left the player's view: batch ALL such ids into ONE
