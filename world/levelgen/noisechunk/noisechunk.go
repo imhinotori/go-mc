@@ -397,7 +397,11 @@ func (nc *NoiseChunk) FillProvisional() *level.Chunk {
 func (nc *NoiseChunk) finishChunk(ch *level.Chunk, heights []int) {
 	for i := range ch.Sections {
 		s := &ch.Sections[i]
-		s.FluidCount = 0
+		// Count the section's fluid blocks for the chunk packet's second short
+		// (LevelChunkSection.nonEmptyFluidCount). The client uses it to decide whether the section
+		// holds fluid it must SIMULATE — a hardcoded 0 made generated/aquifer water inert
+		// client-side, so a player would not float in it until a block update woke the cell.
+		s.FluidCount = level.CountFluidBlocks(s)
 		s.Biomes = level.NewBiomesPaletteContainer(4*4*4, nc.plains)
 		s.SkyLight = fullSkyLight()
 	}

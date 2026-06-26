@@ -157,11 +157,13 @@ func (g *Superflat) GenerateTerrain(_ level.ChunkPos) *level.Chunk {
 		}
 	}
 
-	// Per-section finishing: FluidCount=0 explicitly (exercises the 04-01 two-short
-	// layout), plains biome on every present section, full sky light for rendering.
+	// Per-section finishing: count the fluid blocks for the second wire short (the client uses
+	// nonEmptyFluidCount to decide whether the section has fluid to simulate — a hardcoded 0 made
+	// generated water inert client-side, so a player would not float in it until a block update
+	// woke the cell). plains biome on every present section, full sky light for rendering.
 	for i := range ch.Sections {
 		s := &ch.Sections[i]
-		s.FluidCount = 0
+		s.FluidCount = level.CountFluidBlocks(s)
 		// Biome is uniform plains across the whole 4x4x4 grid. Construct the
 		// container as SINGLE-VALUED plains directly rather than Set-ing all 64
 		// cells: a per-cell Set on the fresh single-value (default) container

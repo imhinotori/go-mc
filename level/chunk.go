@@ -170,6 +170,22 @@ func countNoneAirBlocks(sec *Section) (blockCount int16) {
 	return
 }
 
+// countFluidBlocks is the per-section fluid-block tally for the chunk packet's SECOND short
+// (LevelChunkSection.nonEmptyFluidCount). The client reads it to decide whether the section
+// holds fluid it must TICK/simulate; a section whose fluidCount is 0 is treated as fluid-free
+// even if its palette contains water, so a player will NOT float in that water until a block
+// update wakes the cell. Counting it here (mirroring countNoneAirBlocks for blocks) makes
+// generated/aquifer water behave as a real fluid on the client immediately. Cite:
+// net.minecraft.world.level.chunk.LevelChunkSection (recalcBlockCounts / write — the two shorts).
+func CountFluidBlocks(sec *Section) (fluidCount int16) {
+	for i := 0; i < 16*16*16; i++ {
+		if block.IsFluid(sec.GetBlock(i)) {
+			fluidCount++
+		}
+	}
+	return
+}
+
 // ChunkToSave convert level.Chunk to save.Chunk
 func ChunkToSave(c *Chunk, dst *save.Chunk) (err error) {
 	secs := len(c.Sections)

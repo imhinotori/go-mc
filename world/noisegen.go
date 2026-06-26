@@ -348,11 +348,20 @@ func (g *NoiseGenerator) Decorate(view *Neighborhood) {
 	// Sky light for rendering (mirrors Superflat / FillChunk finishing). FillChunk set
 	// FluidCount/biome defaults and BuildSurface rewrote the CLIENT heightmaps; sky light is
 	// applied here defensively so every present section is lit regardless of the fill path.
+	//
+	// RECOUNT FluidCount HERE, at the END of the full pipeline. finishChunk (inside FillChunk)
+	// counted fluids too early — the aquifer/carve/decoration passes write water AFTER FillChunk
+	// returns, so a count taken in finishChunk misses that water and the section ships
+	// FluidCount=0. The client uses nonEmptyFluidCount to decide whether a section has fluid to
+	// SIMULATE, so a 0 made generated/aquifer water inert client-side (a player would not float in
+	// it until a block update woke the cell). Recounting on the fully-built chunk fixes it.
+	// Cite: net.minecraft.world.level.chunk.LevelChunkSection.nonEmptyFluidCount.
 	for i := range ch.Sections {
 		s := &ch.Sections[i]
 		if len(s.SkyLight) != 2048 {
 			s.SkyLight = fullSkyLight()
 		}
+		s.FluidCount = level.CountFluidBlocks(s)
 	}
 	ch.Status = level.StatusFull
 }
