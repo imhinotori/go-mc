@@ -2,7 +2,12 @@ package server
 
 import (
 	"context"
+	"errors"
+	"math"
+	"strconv"
+	"strings"
 
+	"github.com/imhinotori/sulfur/level"
 	pk "github.com/imhinotori/sulfur/net/packet"
 	"github.com/imhinotori/sulfur/server/command"
 )
@@ -56,6 +61,31 @@ func permissionResolverFrom(ctx context.Context) permissionResolver {
 	return func(string) bool { return false }
 }
 
+// cmdExecutorKey carries the EXECUTING player + tick loop so a command that acts on the issuer
+// (e.g. /tp) can reach them. runCommand installs it before Execute; a handler reads it back via
+// executorFrom. Unexported struct key = collision-free, same pattern as permResolverKey.
+type cmdExecutorKey struct{}
+
+// cmdExecutor bundles the issuing player and the owning tick loop for a command handler that
+// mutates the issuer (teleport, etc.). Both are tick-owned and the handler runs on the tick
+// goroutine (runCommand → Execute is synchronous on the tick), so touching them is race-safe.
+type cmdExecutor struct {
+	t *TickLoop
+	p *tickPlayer
+}
+
+// withExecutor returns ctx carrying the issuing player + loop for issuer-acting commands.
+func withExecutor(ctx context.Context, t *TickLoop, p *tickPlayer) context.Context {
+	return context.WithValue(ctx, cmdExecutorKey{}, cmdExecutor{t: t, p: p})
+}
+
+// executorFrom extracts the issuing player + loop. Returns ok=false if absent (a handler that
+// needs the executor must no-op safely when called without one — e.g. a console/test path).
+func executorFrom(ctx context.Context) (cmdExecutor, bool) {
+	e, ok := ctx.Value(cmdExecutorKey{}).(cmdExecutor)
+	return e, ok && e.t != nil && e.p != nil
+}
+
 // permissionGated wraps a command.HandlerFunc so its body runs ONLY when the per-command
 // permission resolver (carried on the context) grants `node`. A denied permission returns
 // nil WITHOUT running the body (the command is a silent no-op for an unauthorized client —
@@ -103,6 +133,32 @@ func buildCommandGraph() *command.Graph {
 		}))
 	me := g.Literal("me").AppendArgument(meMsg).Unhandle()
 	g.AppendLiteral(me)
+
+	// /tp <x> <y> <z> — DEV/gate teleport: move the issuing player to the given coordinates. The
+	// args are a single greedy string ("x y z") parsed in the handler (v1 has only StringParser;
+	// a real Vec3Argument lands with the brigadier coord parsers later). Gated on command.tp; the
+	// v1 all-operator policy grants it. The handler re-uses the same authoritative re-teleport the
+	// respawn path uses (writePlayerPositionPacket + the confirm-gate re-arm), so the client snaps
+	// to the new position and the server gates movement until the client echoes the new teleport id.
+	tpArgs := g.Argument("coords", command.StringParser(2)).HandleFunc(permissionGated("command.tp",
+		func(ctx context.Context, args []command.ParsedData) error {
+			e, ok := executorFrom(ctx)
+			if !ok {
+				return nil // no issuer (console/test path): nothing to teleport
+			}
+			if len(args) == 0 {
+				return errTpUsage
+			}
+			raw, _ := args[len(args)-1].(string)
+			x, y, z, perr := parseTpCoords(raw)
+			if perr != nil {
+				return perr
+			}
+			e.t.teleportPlayer(e.p, x, y, z)
+			return nil
+		}))
+	tp := g.Literal("tp").AppendArgument(tpArgs).Unhandle()
+	g.AppendLiteral(tp)
 
 	return g
 }
@@ -172,6 +228,8 @@ func (t *TickLoop) runCommand(p *tickPlayer, cmd string) {
 	ctx := withPermissionResolver(context.Background(), func(node string) bool {
 		return playerHasPermission(p, node)
 	})
+	// Carry the issuer + loop so an issuer-acting command (/tp) can move this player.
+	ctx = withExecutor(ctx, t, p)
 
 	// Execute runs the fork dispatcher on the tick goroutine. A parse/dispatch error is now
 	// reported back to the issuing player via the SystemChat reply helper (07-05 consolidates
@@ -207,4 +265,53 @@ func (t *TickLoop) runChatCommand(p *tickPlayer, packet pk.Packet) {
 		return // malformed payload: silent no-op (T-3-02)
 	}
 	t.runCommand(p, string(s))
+}
+
+// errTpUsage is the /tp parse failure surfaced to the issuer (the runCommand reply path turns a
+// non-nil handler error into a SystemChat). Kept as a sentinel so the usage text is one place.
+var errTpUsage = errors.New("usage: /tp <x> <y> <z>")
+
+// parseTpCoords parses a "<x> <y> <z>" coordinate triple (whitespace-separated floats) for /tp.
+// It accepts extra surrounding whitespace and rejects a wrong arg count or a non-numeric field.
+// Relative (~) and local (^) coords are NOT supported in v1 (a real Vec3Argument with the
+// brigadier coord parsers lands later) — only absolute decimals.
+func parseTpCoords(raw string) (x, y, z float64, err error) {
+	f := strings.Fields(strings.TrimSpace(raw))
+	if len(f) != 3 {
+		return 0, 0, 0, errTpUsage
+	}
+	if x, err = strconv.ParseFloat(f[0], 64); err != nil {
+		return 0, 0, 0, errTpUsage
+	}
+	if y, err = strconv.ParseFloat(f[1], 64); err != nil {
+		return 0, 0, 0, errTpUsage
+	}
+	if z, err = strconv.ParseFloat(f[2], 64); err != nil {
+		return 0, 0, 0, errTpUsage
+	}
+	return x, y, z, nil
+}
+
+// teleportPlayer moves p to (x,y,z) authoritatively — the DEV/gate /tp body, re-using the exact
+// re-teleport contract performRespawn uses: set the tick-owned position, re-center the view ring,
+// allocate a fresh teleport id, re-arm the confirm gate (so movement is gated until the client
+// echoes the new id — no rubber-band, T-5-01), and send ClientboundPlayerPosition. The streamer
+// reset (centerSent=false + a cleared sentChunks) makes flushOutbound re-emit the chunk-cache
+// center and re-stream the ring around the destination so the client has the new area loaded.
+// Tick-owned (called from runCommand on the tick goroutine). prevX/Y/Z are snapped to the
+// destination so the next tick's movement-exhaustion delta is 0 (no spurious teleport exhaustion).
+func (t *TickLoop) teleportPlayer(p *tickPlayer, x, y, z float64) {
+	if p == nil || p.client == nil {
+		return
+	}
+	p.x, p.y, p.z = x, y, z
+	p.prevX, p.prevY, p.prevZ = x, y, z
+	p.lastY = y
+	p.center = chunkCenterOf(int32(math.Floor(x)), int32(math.Floor(z)))
+	teleportID := t.nextTeleportID()
+	p.awaitingTeleport = teleportID
+	p.confirmedTeleport = false
+	p.client.Send(writePlayerPositionPacket(teleportID, x, y, z, p.yaw, p.pitch))
+	p.centerSent = false
+	p.sentChunks = make(map[level.ChunkPos]bool)
 }

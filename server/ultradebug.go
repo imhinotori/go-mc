@@ -159,8 +159,15 @@ func (t *TickLoop) udebugTickSnapshot(p *tickPlayer) {
 	if p.dead {
 		flags = append(flags, "dead")
 	}
-	udebugPlayer(p, "tick", "pos=(%.3f,%.3f,%.3f) d=(%.3f,%.3f,%.3f) yaw=%.1f pitch=%.1f hp=%.1f food=%d sat=%.1f air=%d exh=%.2f [%s]",
-		p.x, p.y, p.z, dx, dy, dz, p.yaw, p.pitch, p.health, p.food, p.saturation, p.airSupply, p.exhaustion, strings.Join(flags, ","))
+	// vY is the per-tick vertical velocity from lastY (the fall-damage tracker's y-at-end-of-
+	// previous-tick, NOT prevX/Y/Z which tickFood overwrites before this snapshot). It is THE
+	// number for a "won't float / sinks like there's no water" report: in water vanilla caps the
+	// sink at a slow drag (≈ -0.02..-0.08 with the 0.8 multiplier + buoyancy), out of water gravity
+	// accelerates it toward terminal (≈ -0.08 and growing each tick). A fast/accelerating vY while
+	// playerInWater means the client is NOT applying water physics.
+	vY := p.y - p.lastY
+	udebugPlayer(p, "tick", "pos=(%.3f,%.3f,%.3f) vY=%.4f d=(%.3f,%.3f,%.3f) yaw=%.1f pitch=%.1f hp=%.1f food=%d sat=%.1f air=%d exh=%.2f [%s]",
+		p.x, p.y, p.z, vY, dx, dy, dz, p.yaw, p.pitch, p.health, p.food, p.saturation, p.airSupply, p.exhaustion, strings.Join(flags, ","))
 }
 
 // udebugTickEvery is the snapshot throttle: emit the `tick` snapshot every N ticks per player so a

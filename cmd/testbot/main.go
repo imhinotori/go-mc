@@ -74,6 +74,7 @@ func main() {
 	tz := flag.Float64("z", 0, "goto target Z (or spawn Z override)")
 	overrideSpawn := flag.Bool("override-spawn", false, "use -x/-y/-z as the starting position instead of the server spawn")
 	onGroundFlag := flag.String("onground", "", "onGround flag to send: true|false (default: true for walk/hold, false for swim/dive)")
+	cmdStr := flag.String("cmd", "", "a ServerboundChatCommand to send once on entering Play, e.g. 'tp -23 58 17' (no leading slash)")
 	flag.Parse()
 
 	log.SetFlags(log.Ltime)
@@ -104,6 +105,18 @@ func main() {
 	}
 
 	log.Printf("reached play, teleportId=%d, spawn=(%.3f, %.3f, %.3f)", b.teleportID, b.x, b.y, b.z)
+
+	// Send a one-shot ServerboundChatCommand (e.g. "tp -23 58 17") so the server-side /tp moves the
+	// bot to a water column for the physics repro WITHOUT walking there. After the command the
+	// server re-teleports the bot (ClientboundPlayerPosition); the background reader snaps b.x/y/z
+	// to that and re-arms the confirm, then the movement loop runs from the new position.
+	if *cmdStr != "" {
+		if err := b.conn.WritePacket(pk.Marshal(int32(packetid.ServerboundChatCommand), pk.String(*cmdStr))); err != nil {
+			log.Fatalf("send chat command: %v", err)
+		}
+		log.Printf("sent command: /%s", *cmdStr)
+		time.Sleep(500 * time.Millisecond) // let the server process + re-teleport before moving
+	}
 
 	// Override the starting position if requested (e.g., to start INSIDE a water column for
 	// the water-physics repro without walking there first).

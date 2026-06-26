@@ -241,19 +241,17 @@ func (t *TickLoop) tickUltraDebug() {
 	if !udebugEnabled {
 		return
 	}
-	if t.gametime%udebugTickEvery != 0 {
-		return
-	}
 	for _, p := range t.players {
 		if p == nil {
 			continue
 		}
-		t.udebugTickSnapshot(p)
-		// When the player is touching water, also dump the fluid column (feet+eye) so an in-water
-		// physics report (no float / no drag / drowning) has the exact server-side water state.
-		if t.playerInWater(p) || t.eyeInWater(p) {
-			t.udebugWaterColumn(p)
+		// In water, snapshot EVERY tick (the throttle hides the per-tick sink dynamics that a
+		// "won't float" report hinges on); otherwise throttle to keep the log readable.
+		inWater := t.playerInWater(p) || t.eyeInWater(p)
+		if !inWater && t.gametime%udebugTickEvery != 0 {
+			continue
 		}
+		t.udebugTickSnapshot(p)
 	}
 }
 
