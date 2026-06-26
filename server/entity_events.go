@@ -161,6 +161,7 @@ func (t *TickLoop) tickEntityMovement() {
 			e.lastSentX, e.lastSentY, e.lastSentZ = e.x, e.y, e.z
 			e.lastSentYRot = packDegrees(e.yaw)
 			e.lastSentXRot = packDegrees(e.pitch)
+			e.lastSentYHeadRot = packDegrees(e.headYaw)
 			e.wasOnGround = e.onGround
 			e.teleportDelay = 0
 			e.moveInit = true
@@ -193,41 +194,45 @@ func (t *TickLoop) sendEntityMovementChanges(e *Entity) {
 	moved := (ddx*ddx + ddy*ddy + ddz*ddz) >= sendChangesMoveThreshold
 	sendPos := moved || e.sendTickCount%sendChangesForceSyncEvery == 0
 
-	// Absolute re-sync branch: overflow / 400-tick cap / onGround flip.
+	// Absolute re-sync branch: overflow / 400-tick cap / onGround flip. Returns after the
+	// position sync but STILL falls through to the RotateHead block below in vanilla — so we
+	// don't early-return here; we use a flag to skip the delta branch.
+	sentAbsolute := false
 	if overflow || e.teleportDelay > sendChangesTeleportDelayCap || e.wasOnGround != e.onGround {
 		e.wasOnGround = e.onGround
 		e.teleportDelay = 0
 		t.broadcastToTrackers(e.id, encodeEntityPositionSync(e))
-		// EntityPositionSync re-bases the codec to the current pos (positionCodec.setBase via the
-		// sync). lastSent*Rot are NOT updated here (vanilla sets them only on a Rot/PosRot send),
-		// but the next tick's rotChanged compares against them; the head/rot is re-sent then if
-		// still different — observably correct (the absolute sync already carried the float angle).
-		e.lastSentX, e.lastSentY, e.lastSentZ = e.x, e.y, e.z
-		t.broadcastToTrackers(e.id, encodeRotateHead(e.id, e.headYaw))
-		return
+		e.lastSentX, e.lastSentY, e.lastSentZ = e.x, e.y, e.z // re-base the codec to the current pos
+		sentAbsolute = true
 	}
 
-	// Delta branch: PosRot / Pos / Rot per sendPos+rotChanged.
-	switch {
-	case sendPos && rotChanged:
-		t.broadcastToTrackers(e.id, encodeMoveEntityPosRotB(e.id,
-			pk.Short(int16(dxL)), pk.Short(int16(dyL)), pk.Short(int16(dzL)), yRot, xRot, e.onGround))
-		e.lastSentX, e.lastSentY, e.lastSentZ = e.x, e.y, e.z // re-base (a position component was sent)
-		e.lastSentYRot, e.lastSentXRot = yRot, xRot
-	case sendPos:
-		t.broadcastToTrackers(e.id, encodeMoveEntityPos(e.id,
-			pk.Short(int16(dxL)), pk.Short(int16(dyL)), pk.Short(int16(dzL)), e.onGround))
-		e.lastSentX, e.lastSentY, e.lastSentZ = e.x, e.y, e.z // re-base
-	case rotChanged:
-		t.broadcastToTrackers(e.id, encodeMoveEntityRotB(e.id, yRot, xRot, e.onGround))
-		e.lastSentYRot, e.lastSentXRot = yRot, xRot
+	// Delta branch: PosRot / Pos / Rot per sendPos+rotChanged (skipped when an absolute sync fired).
+	if !sentAbsolute {
+		switch {
+		case sendPos && rotChanged:
+			t.broadcastToTrackers(e.id, encodeMoveEntityPosRotB(e.id,
+				pk.Short(int16(dxL)), pk.Short(int16(dyL)), pk.Short(int16(dzL)), yRot, xRot, e.onGround))
+			e.lastSentX, e.lastSentY, e.lastSentZ = e.x, e.y, e.z // re-base (a position component was sent)
+			e.lastSentYRot, e.lastSentXRot = yRot, xRot
+		case sendPos:
+			t.broadcastToTrackers(e.id, encodeMoveEntityPos(e.id,
+				pk.Short(int16(dxL)), pk.Short(int16(dyL)), pk.Short(int16(dzL)), e.onGround))
+			e.lastSentX, e.lastSentY, e.lastSentZ = e.x, e.y, e.z // re-base
+		case rotChanged:
+			t.broadcastToTrackers(e.id, encodeMoveEntityRotB(e.id, yRot, xRot, e.onGround))
+			e.lastSentYRot, e.lastSentXRot = yRot, xRot
+		}
 	}
 
-	// RotateHead (the body's head yaw) is sent alongside a move when the head turned. ServerEntity
-	// sends it whenever the entity moved/rotated; gate it on a position-or-rotation send so an idle
-	// entity emits nothing.
-	if sendPos || rotChanged {
+	// RotateHead — sent at the END of sendChanges, gated ONLY on its OWN head-yaw threshold
+	// (|packDegrees(yHeadRot) - lastSentYHeadRot| >= 1), INDEPENDENT of whether a move/rot fired.
+	// This is the 1:1 vanilla behavior (sendChanges line 1130): the previous version sent it on
+	// every move/rot, which doubled the per-tick packet volume and overflowed the bounded outbound
+	// queue at join (chunk flood + per-tick head packets → drop-and-disconnect).
+	yHeadRot := packDegrees(e.headYaw)
+	if absI8(yHeadRot-e.lastSentYHeadRot) >= 1 {
 		t.broadcastToTrackers(e.id, encodeRotateHead(e.id, e.headYaw))
+		e.lastSentYHeadRot = yHeadRot
 	}
 }
 

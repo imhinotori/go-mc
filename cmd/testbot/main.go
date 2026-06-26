@@ -53,6 +53,7 @@ import (
 	"github.com/imhinotori/sulfur/data/packetid"
 	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/block"
+	"github.com/imhinotori/sulfur/level/component"
 	mcnet "github.com/imhinotori/sulfur/net"
 	pk "github.com/imhinotori/sulfur/net/packet"
 	"github.com/imhinotori/sulfur/offline"
@@ -660,12 +661,95 @@ func (b *bot) readLoop() {
 			if b.probeActive {
 				b.probeBlockUpdate(p)
 			}
+		case packetid.ClientboundSetEquipment:
+			// STRICT validate: VarInt id, then 1+ (Byte slotFlag, ItemStack) pairs. We decode the
+			// FULL body and assert no trailing bytes / no short read — a real Notchian client crashes
+			// on a malformed equipment body, so this catches the framing bug the lax logger misses.
+			if err := validateSetEquipment(p); err != nil {
+				log.Printf("[DECODE-FAIL] SetEquipment: %v (%d bytes)", err, len(p.Data))
+			}
+		case packetid.ClientboundSetEntityData:
+			if err := validateSetEntityData(p); err != nil {
+				log.Printf("[DECODE-FAIL] SetEntityData: %v (%d bytes)", err, len(p.Data))
+			}
 		case packetid.ClientboundDisconnect:
 			e := fmt.Errorf("server disconnected: %s", decodeText(p))
 			b.fatal.CompareAndSwap(nil, &e)
 			return
 		}
 	}
+}
+
+// validateSetEquipment strictly decodes a ClientboundSetEquipment body and verifies it consumes
+// EXACTLY the packet bytes (no short read, no trailing). Returns an error describing any mismatch.
+func validateSetEquipment(p pk.Packet) error {
+	r := bytes.NewReader(p.Data)
+	var id pk.VarInt
+	if _, err := id.ReadFrom(r); err != nil {
+		return fmt.Errorf("id: %w", err)
+	}
+	for i := 0; ; i++ {
+		var slot pk.Byte
+		if _, err := slot.ReadFrom(r); err != nil {
+			if i == 0 {
+				return fmt.Errorf("first slot byte: %w", err)
+			}
+			return fmt.Errorf("slot byte after %d entries: %w", i, err)
+		}
+		var item component.SlotData
+		if _, err := item.ReadFrom(r); err != nil {
+			return fmt.Errorf("itemstack entry %d (slotFlag=0x%02x): %w", i, byte(slot), err)
+		}
+		if byte(slot)&0x80 == 0 {
+			break // last entry (no continuation bit)
+		}
+	}
+	if r.Len() != 0 {
+		return fmt.Errorf("%d trailing bytes after the equipment list", r.Len())
+	}
+	return nil
+}
+
+// validateSetEntityData strictly decodes a ClientboundSetEntityData body: VarInt id, then a
+// sequence of (UByte index, VarInt serializerId, value...) ending in 0xFF. We only decode the
+// serializers we emit (BYTE id 0, INT id 1) and assert clean framing to the 0xFF terminator.
+func validateSetEntityData(p pk.Packet) error {
+	r := bytes.NewReader(p.Data)
+	var id pk.VarInt
+	if _, err := id.ReadFrom(r); err != nil {
+		return fmt.Errorf("id: %w", err)
+	}
+	for {
+		var index pk.UnsignedByte
+		if _, err := index.ReadFrom(r); err != nil {
+			return fmt.Errorf("index byte: %w", err)
+		}
+		if index == 0xFF {
+			break
+		}
+		var ser pk.VarInt
+		if _, err := ser.ReadFrom(r); err != nil {
+			return fmt.Errorf("serializerId at index %d: %w", index, err)
+		}
+		switch int32(ser) {
+		case 0: // BYTE
+			var v pk.Byte
+			if _, err := v.ReadFrom(r); err != nil {
+				return fmt.Errorf("BYTE value at index %d: %w", index, err)
+			}
+		case 1: // INT (VarInt)
+			var v pk.VarInt
+			if _, err := v.ReadFrom(r); err != nil {
+				return fmt.Errorf("INT value at index %d: %w", index, err)
+			}
+		default:
+			return fmt.Errorf("unhandled serializerId %d at index %d (testbot cannot validate)", int32(ser), index)
+		}
+	}
+	if r.Len() != 0 {
+		return fmt.Errorf("%d trailing bytes after the 0xFF terminator", r.Len())
+	}
+	return nil
 }
 
 // probeChunk decodes a ClientboundLevelChunkWithLight and, if it is the probe column's chunk,

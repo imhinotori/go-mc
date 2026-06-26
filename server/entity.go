@@ -134,6 +134,7 @@ type Entity struct {
 	lastSentZ            float64
 	lastSentYRot         int8 // Mth.packDegrees(yaw) at last send (the byte-angle)
 	lastSentXRot         int8 // Mth.packDegrees(pitch) at last send
+	lastSentYHeadRot     int8 // Mth.packDegrees(yHeadRot) at last RotateHead send (its OWN threshold)
 	teleportDelay        int  // ServerEntity.teleportDelay: ticks since the last absolute sync (reset on sync)
 	wasOnGround          bool // ServerEntity.wasOnGround: onGround at the last send
 	// sendTickCount is ServerEntity.tickCount: a FREE-RUNNING per-entity counter (++ every

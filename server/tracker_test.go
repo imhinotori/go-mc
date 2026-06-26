@@ -150,10 +150,11 @@ func TestTrackerMove(t *testing.T) {
 	p.client = captureClient(64)   // fresh capture for the move tick
 	loop.clientIndex[p.client] = p // keep the index consistent (not strictly needed here)
 
-	// Move the entity a few blocks (still in range, small enough for a delta) via the store's
-	// bucket-consistent move. The move is now broadcast by tickEntityMovement (a DELTA
-	// MoveEntityPos, not an absolute teleport — the ServerEntity.sendChanges port).
+	// Move the entity a few blocks (still in range, small enough for a delta) AND turn its head,
+	// so the move is broadcast as a DELTA MoveEntityPos and RotateHead fires on its OWN head-yaw
+	// threshold (ServerEntity.sendChanges sends RotateHead independently, gated on yHeadRot).
 	loop.entities.move(e, 14.5, 64, 14.5)
+	e.headYaw = 90 // turn the head so RotateHead's own threshold trips
 
 	loop.tickEntityMovement() // the per-entity sendChanges decision: a delta-fits move
 	syncTrackerTick(loop)     // tracker: no re-spawn (already tracked)
@@ -168,7 +169,33 @@ func TestTrackerMove(t *testing.T) {
 		t.Fatalf("a small-delta move must NOT send TeleportEntity, got %d", n)
 	}
 	if n := countID(got, packetid.ClientboundRotateHead); n != 1 {
-		t.Fatalf("a moved entity sent %d RotateHead, want exactly 1", n)
+		t.Fatalf("a head-turn sent %d RotateHead, want exactly 1", n)
+	}
+}
+
+// TestTrackerMoveNoHeadTurnNoRotateHead: a position move WITHOUT a head-yaw change sends the
+// delta Pos but NO RotateHead (the head packet is gated on its OWN threshold — the fix that
+// stopped the per-tick head flood that overflowed the outbound queue).
+func TestTrackerMoveNoHeadTurnNoRotateHead(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	p := newTrackerPlayer(loop, 1000, 8.5, 8.5)
+	e := NewEntity(loop.idAlloc.AllocID(), entity.SulfurCube, 9.5, 64, 9.5)
+	loop.entities.add(e)
+
+	syncTrackerTick(loop)
+	loop.tickEntityMovement() // seed
+	_ = drainPackets(p.client)
+	p.client = captureClient(64)
+	loop.clientIndex[p.client] = p
+
+	loop.entities.move(e, 10.5, 64, 9.5) // move position only; headYaw stays 0
+	loop.tickEntityMovement()
+	got := drainPackets(p.client)
+	if n := countID(got, packetid.ClientboundMoveEntityPos); n != 1 {
+		t.Fatalf("want 1 MoveEntityPos, got %d", n)
+	}
+	if n := countID(got, packetid.ClientboundRotateHead); n != 0 {
+		t.Fatalf("a move with no head turn must send 0 RotateHead, got %d", n)
 	}
 }
 

@@ -19,10 +19,17 @@ import (
 // outboundCap bounds each connection's clientbound queue (NewClient's bounded
 // NewChannelQueue, T-2-04). It mirrors the Phase-2 bounded-queue discipline: a slow
 // client can never grow server memory — Send drops-and-disconnects on overflow rather
-// than blocking the tick. 256 is generously above any single tick's clientbound burst
-// for the empty Phase-3 world (chunks/entities, which inflate the burst, arrive in
-// Phases 4-6) while staying a trivial fixed allocation.
-const outboundCap = 256
+// than blocking the tick.
+//
+// SIZED FOR THE JOIN CHUNK FLOOD: at join the server streams the full view-distance ring of
+// ClientboundLevelChunkWithLight packets (~120 columns × ~74 KB) into this queue in a tight
+// burst before the writeLoop has drained them. The old 256 (sized for the empty Phase-3 world,
+// pre-chunks) overflowed once per-tick entity-visibility traffic (delta moves + equipment) was
+// added on top of that flood — Send's drop-and-disconnect then closed the connection the moment
+// a second player came into view (the join→leave-same-second disconnect). 4096 absorbs the join
+// spike with headroom; it is still a trivial fixed per-connection allocation (a slice of packet
+// headers, the large chunk bodies are already-built []byte the queue only references).
+const outboundCap = 4096
 
 // overworldSections is the overworld dimension's section count (height 384 / 16 = 24).
 // It seeds each player's secs for chunk generation/empty sizing (Plan 04-03). Derived
