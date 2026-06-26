@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/block"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
@@ -495,6 +496,76 @@ func (t *TickLoop) scheduleNeighbors(pos pk.Position) {
 	}
 	if t.fluidAt(above(pos)).isWater {
 		t.scheduleFluidTick(above(pos))
+	}
+}
+
+// hasAirNeighborToFlowInto reports whether a water cell at pos has at least one neighbor it could
+// actually flow into — a horizontal neighbor OR the cell below that is passable (air / non-solid)
+// and NOT already water. This is the BORDER test: interior water (every neighbor is water or solid)
+// is a fixed point that never needs scheduling, while edge water (touching an air gap) is the only
+// water the generator left unstable. Gating the chunk scan on this is what prevents the runaway
+// cascade an earlier, over-broad version caused (it scheduled every non-source / every
+// water-over-passable cell, including deep cave columns that then spilled falling water across the
+// whole cave for thousands of events per tick). Only true edges get scheduled here.
+func (t *TickLoop) hasAirNeighborToFlowInto(pos pk.Position) bool {
+	bp := below(pos)
+	if t.canReplace(bp) && !t.fluidAt(bp).isWater {
+		return true // can fall straight down into an air gap
+	}
+	for _, d := range horizontalDirs {
+		np := plus(pos, d)
+		if t.canReplace(np) && !t.fluidAt(np).isWater {
+			return true // can spread sideways into an adjacent air gap
+		}
+	}
+	return false
+}
+
+// scanChunkFluids seeds the schedule with the UNSTABLE (edge) fluid cells of a freshly-loaded
+// column — Sulfur's stand-in for vanilla's per-chunk generated fluid ticks (ProtoChunk.fluidTicks,
+// populated by the Aquifer and fired on LevelChunk.postProcessGeneration). The generator places
+// aquifer/cave water but discards the scheduled ticks, so generated water that borders an air gap
+// stays frozen and never flows in (a player standing in an air pocket surrounded by water sees the
+// gap stay dry). This scans the column ONCE and schedules ONLY edge water — a water cell with an
+// air neighbor it could flow into (hasAirNeighborToFlowInto). Interior/fully-supported water is a
+// fixed point and is left alone, so the scan cannot start the runaway cascade the earlier
+// schedule-everything version did. A per-scan budget caps how many cells one column may schedule so
+// a pathological column can never flood the queue in a single tick. Idempotent via
+// fluidScannedChunks. Tick-owned (called from tickChunks on the owner).
+func (t *TickLoop) scanChunkFluids(cp level.ChunkPos) {
+	if t.world == nil {
+		return
+	}
+	if t.fluidScannedChunks == nil {
+		t.fluidScannedChunks = make(map[level.ChunkPos]bool)
+	}
+	if t.fluidScannedChunks[cp] {
+		return
+	}
+	t.fluidScannedChunks[cp] = true
+
+	const perChunkScheduleBudget = 512 // hard cap on edge cells one column may seed (anti-flood)
+	scheduled := 0
+	baseX := int(cp[0]) << 4
+	baseZ := int(cp[1]) << 4
+	for lx := 0; lx < 16 && scheduled < perChunkScheduleBudget; lx++ {
+		for lz := 0; lz < 16 && scheduled < perChunkScheduleBudget; lz++ {
+			wx := baseX + lx
+			wz := baseZ + lz
+			for y := maxBuildHeightY; y >= dimMinY; y-- {
+				if scheduled >= perChunkScheduleBudget {
+					break
+				}
+				pos := pk.Position{X: wx, Y: y, Z: wz}
+				if !t.fluidAt(pos).isWater {
+					continue
+				}
+				if t.hasAirNeighborToFlowInto(pos) {
+					t.scheduleFluidTick(pos)
+					scheduled++
+				}
+			}
+		}
 	}
 }
 

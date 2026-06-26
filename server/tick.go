@@ -215,6 +215,13 @@ type TickLoop struct {
 	// SetWorld — which lives in this shared file (tick.go) — is NOT touched by 17-02.
 	fluidSchedule *fluidScheduleQueue
 
+	// fluidScannedChunks marks columns whose generated EDGE fluids have already been seeded into
+	// the schedule on first load (scanChunkFluids). Vanilla carries per-chunk scheduled fluid ticks
+	// the Aquifer populates and LevelChunk.postProcessGeneration fires; Sulfur discards them, so
+	// generated water bordering an air gap sat frozen. This set makes the one-time per-column scan
+	// idempotent. Tick-owned (TICK-05).
+	fluidScannedChunks map[level.ChunkPos]bool
+
 	// debug holds the OPTIONAL, off-by-default debug triggers for the Plan 06-07 interactive
 	// human-verify gate (a visible moving pig + periodic damage so the operator can SEE entity
 	// movement and the health/death/respawn loop). nil in production AND in every test, so the
