@@ -2,6 +2,7 @@ package server
 
 import (
 	"github.com/imhinotori/sulfur/level/block"
+	"github.com/imhinotori/sulfur/level/component"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
@@ -137,9 +138,42 @@ func (t *TickLoop) handlePlayerAction(p *tickPlayer, pkt pk.Packet) {
 // Float cursorX/Y/Z + Boolean insideBlock + Boolean worldBorderHit] + VarInt sequence.
 // (FriendlyByteBuf.readBlockHitResult reads BlockPos, the Direction enum, three floats, then
 // TWO booleans; ServerboundUseItemOnPacket reads hand FIRST, then the hit result, then the
-// sequence.) A Scan error is a silent no-op. The placed block is a v1 STAND-IN (stone) since
-// real held-item -> block resolution lands with ENT-04 (06-05); the load-bearing behavior is
-// the WIRE handshake (ack + update at the adjacent face), not the exact block.
+// sequence.) A Scan error is a silent no-op.
+//
+// THE 1:1 PORT (Plan 17-17 — replaces the hardcoded-stone v1 stand-in). Decompiled this session
+// from temp/cache/26.2-inner.jar:
+//
+//	net.minecraft.server.level.ServerPlayerGameMode.useItemOn(player, level, stack, hand, hit):
+//	    // (1) BLOCK's own interaction first (chest open, lever toggle, ...). For v1 Sulfur has no
+//	    //     interactive blocks, so blockState.useItemOn is a faithful PASS hook (no-op). When it
+//	    //     consumesAction the method returns and NOTHING is placed.
+//	    InteractionResult r = blockState.useItemOn(...); if (r.consumesAction()) return r;   // hook
+//	    // (2) cooldown/empty short-circuit, then the ITEM's useOn:
+//	    if (stack.isEmpty() || cooldown(stack)) return PASS;
+//	    UseOnContext ctx = new UseOnContext(player, hand, hit);
+//	    if (player.hasInfiniteMaterials()) {                 // CREATIVE guard (the count save/restore)
+//	        int saved = stack.getCount();
+//	        r = stack.useOn(ctx);                            // BlockItem.useOn -> place (consume shrinks)
+//	        stack.setCount(saved);                           // restore: creative never loses the item
+//	    } else { r = stack.useOn(ctx); }                     // SURVIVAL: place's consume(1) sticks
+//
+//	net.minecraft.world.item.BlockItem.useOn(ctx) -> place(new BlockPlaceContext(ctx)):
+//	    if (!canPlace()) return FAIL;                        // target must be replaceable
+//	    state = getPlacementState(ctx);                      // Block.getStateForPlacement -> default
+//	    if (!placeBlock(ctx, state)) return FAIL;            // level.setBlock(getClickedPos, state)
+//	    ... setPlacedBy / sound / gameEvent ...
+//	    stack.consume(1, player);                            // ItemStack.consume: shrink(1) UNLESS
+//	                                                         //   player.hasInfiniteMaterials()
+//	    return SUCCESS;
+//
+//	net.minecraft.world.item.context.BlockPlaceContext:
+//	    replaceClicked = level.getBlockState(hitPos).canBeReplaced(this);  // is the CLICKED block replaceable?
+//	    getClickedPos() = replaceClicked ? hitPos : hitPos.relative(face); // replace-in-place vs adjacent
+//	    canPlace()      = replaceClicked || getBlockState(getClickedPos()).canBeReplaced(this);
+//
+// So the placed block comes from the HELD ITEM (not a hardcoded stone), an EMPTY hand places
+// nothing, the target must be replaceable (air/water/lava — never inside a solid), and in
+// SURVIVAL the stack shrinks by one (CREATIVE keeps it).
 func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 	var hand pk.VarInt
 	var pos pk.Position
@@ -153,23 +187,131 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 		return // malformed/short payload: no-op, never panic
 	}
 
-	// Placement lands on the block ADJACENT to the hit face (hit pos + the face normal).
-	dx, dy, dz := directionNormal(int(direction))
-	placePos := pk.Position{X: pos.X + dx, Y: pos.Y + dy, Z: pos.Z + dz}
+	// (1) ServerPlayerGameMode.useItemOn step 1 — the BLOCK's own interaction. v1 has no
+	// interactive blocks, so this is a faithful PASS hook: it never consumes the action, so we
+	// fall through to placement. (A later plan that adds chests/levers/doors returns a consuming
+	// result here and the early-return below skips placement.)
+	if t.useBlockInteraction(p, pos, int(direction)) {
+		// The block consumed the interaction (e.g. opened a menu) — NO block is placed. v1's hook
+		// always returns false, so this branch is currently never taken; kept for faithful
+		// structure so the interaction path lands without touching this method again.
+		return
+	}
 
-	// Reach is validated against the placement target.
+	// Read the held MAIN-HAND item: the selected hotbar slot maps to window slot 36+heldSlot
+	// (4 craft + 4 armor + 9..35 main + 36..44 hotbar). p.inventory is tick-owned.
+	inv := ensureInventory(p)
+	held := inv.get(heldWindowSlot(inv.heldSlot))
+
+	// (2) ItemStack.isEmpty() short-circuit + Block.byItem resolution. An EMPTY hand (or a
+	// non-block item like a tool) resolves to no block -> nothing is placed. THIS fixes the
+	// empty-hand-stone bug (the old code hardcoded stone regardless of the held item).
+	placeState, ok := blockStateForItem(held)
+	if !ok {
+		return // empty hand / non-block item: PASS, no placement
+	}
+
+	// BlockPlaceContext geometry (decompiled above). replaceClicked: is the CLICKED block itself
+	// replaceable? If so, placement REPLACES it in place (getClickedPos == hitPos); otherwise it
+	// lands on the ADJACENT face (hitPos + the face normal).
+	var clickedState block.StateID
+	clickedKnown := false
+	if t.world != nil {
+		if s, ok := t.world.GetBlock(pos, dimMinY); ok {
+			clickedState, clickedKnown = s, true
+		}
+	}
+	// BlockState.canBeReplaced(ctx): replaceable() && !held.is(this.asItem()). The self-replace
+	// guard (can't replace a block with the SAME block) is honored: placeState == clickedState
+	// means the held item IS this block, so it is not treated as replaceable.
+	replaceClicked := clickedKnown && isReplaceableState(clickedState) && placeState != clickedState
+
+	var placePos pk.Position
+	if replaceClicked {
+		placePos = pos // replace the clicked block in place
+	} else {
+		dx, dy, dz := directionNormal(int(direction))
+		placePos = pk.Position{X: pos.X + dx, Y: pos.Y + dy, Z: pos.Z + dz}
+	}
+
+	// Reach is validated against the resolved placement target (server-authoritative gate).
 	if !t.withinReach(p, placePos) {
 		return
 	}
 
-	// PLACE the v1 stand-in (stone). changed=false (unloaded/occupied/no-change) -> no ack,
-	// no broadcast.
-	placeState := block.ToStateID[block.Stone{}]
+	// BlockPlaceContext.canPlace(): replaceClicked || target.canBeReplaced(ctx). When NOT
+	// replacing the clicked block, the ADJACENT target must itself be replaceable (air/water/
+	// lava) — placement never overwrites a solid block. An unloaded/unreadable target is treated
+	// as not-replaceable (no-op), matching FAIL.
+	if !replaceClicked {
+		targetState, ok := t.world.GetBlock(placePos, dimMinY)
+		if !ok || !(isReplaceableState(targetState) && placeState != targetState) {
+			return // !canPlace() -> FAIL, silent no-op
+		}
+	}
+
+	// placeBlock -> Level.setBlock(getClickedPos(), state). changed=false (unloaded / no-change)
+	// -> no ack, no broadcast (matches placeBlock returning false -> FAIL).
 	if t.world == nil || !t.world.SetBlock(placePos, placeState, dimMinY) {
 		return
 	}
 
 	t.reconcileEdit(p, placePos, placeState, int32(sequence))
+
+	// BlockItem.place tail -> stack.consume(1, player). ItemStack.consume shrinks the stack by 1
+	// UNLESS player.hasInfiniteMaterials() (CREATIVE). ServerPlayerGameMode.useItemOn's creative
+	// count save/restore wraps the same guard; both collapse to "shrink in survival, keep in
+	// creative". v1's gameMode is the hasInfiniteMaterials() source.
+	if p.gameMode != gameModeCreative {
+		t.shrinkHeldItem(p, inv)
+	}
+}
+
+// useBlockInteraction is the faithful v1 hook for ServerPlayerGameMode.useItemOn step 1 —
+// blockState.useItemOn(...) (the BLOCK's own right-click behavior: opening a chest, toggling a
+// lever, opening a door). It returns true when the block CONSUMES the interaction, in which case
+// the caller places NOTHING. v1 Sulfur has no interactive blocks, so this is a structural no-op
+// that always returns false (InteractionResult.PASS) — the placement path always runs. A later
+// plan replaces the body with real per-block interaction dispatch without touching handleUseItemOn.
+func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direction int) bool {
+	_ = p
+	_ = hitPos
+	_ = direction
+	return false // PASS: no interactive blocks in v1
+}
+
+// heldWindowSlot maps a hotbar index (0..8) to its player-inventory WINDOW slot. The vanilla
+// player inventory window lays out 4 craft + 4 armor + 27 main (9..35) + 9 hotbar (36..44), so the
+// selected hotbar slot's window index is 36+heldSlot (verified against inventory.go's 46-slot /
+// 36..44 hotbar layout). An out-of-range hotbar index falls back to slot 36 — harmless, since
+// handleSetCarriedItem already bounds heldSlot to 0..8.
+func heldWindowSlot(heldSlot int16) int16 {
+	if heldSlot < 0 || heldSlot > 8 {
+		return 36
+	}
+	return 36 + heldSlot
+}
+
+// shrinkHeldItem ports BlockItem.place's stack.consume(1, player) for the SURVIVAL path: it
+// decrements the held stack by one and sends the authoritative ClientboundContainerSetSlot for
+// the changed slot so the client reflects the new count (reusing the inventory.go diff/broadcast
+// machinery). A stack that reaches 0 becomes an empty slot. Tick-owned (called on the tick
+// goroutine via handleUseItemOn). The creative guard is the caller's responsibility (mirroring
+// ItemStack.consume's hasInfiniteMaterials() short-circuit).
+func (t *TickLoop) shrinkHeldItem(p *tickPlayer, inv *Inventory) {
+	slot := heldWindowSlot(inv.heldSlot)
+	before := inv.snapshot()
+
+	cur := inv.get(slot)
+	cur.Count--
+	if cur.Count <= 0 {
+		cur = component.SlotData{Count: 0} // ItemStack.shrink to 0 -> EMPTY
+	}
+	inv.set(slot, cur)
+
+	// AbstractContainerMenu.broadcastChanges -> synchronizeSlotToRemote: send a SetSlot for the
+	// changed slot only (the diff helper already does exactly this).
+	t.broadcastInventoryChanges(p, inv, before)
 }
 
 // reconcileEdit runs the post-mutation reconciliation contract for a VALID edit: ack the

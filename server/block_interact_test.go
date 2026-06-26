@@ -3,9 +3,11 @@ package server
 import (
 	"testing"
 
+	"github.com/imhinotori/sulfur/data/item"
 	"github.com/imhinotori/sulfur/data/packetid"
 	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/block"
+	"github.com/imhinotori/sulfur/level/component"
 	pk "github.com/imhinotori/sulfur/net/packet"
 	"github.com/imhinotori/sulfur/world"
 )
@@ -130,23 +132,38 @@ func TestBreakBlock(t *testing.T) {
 	}
 }
 
-// TestPlaceBlock: a UseItemOn on a loaded, reachable face places the v1 place-state at the
-// pos ADJACENT to the hit face (via the direction normal) and sends ack + BlockUpdate.
+// setHeldItem puts a stack of `count` of the given item into the player's selected hotbar
+// window slot (36+heldSlot) so handleUseItemOn's held-item resolution has something to place.
+// Mirrors a survival player holding a block item in the active hotbar slot.
+func setHeldItem(p *tickPlayer, itemID item.ID, count int) {
+	inv := ensureInventory(p)
+	inv.set(heldWindowSlot(inv.heldSlot), component.SlotData{
+		Count:  pk.VarInt(count),
+		ItemID: pk.VarInt(itemID),
+	})
+}
+
+// TestPlaceBlock: a UseItemOn while HOLDING a stone item, on a loaded reachable face, places the
+// HELD block (stone) at the pos ADJACENT to the hit face and sends ack + BlockUpdate. (Plan 17-17:
+// the placed block now comes from the held item, not a hardcoded stone.)
 func TestPlaceBlock(t *testing.T) {
 	loop, mgr := newBlockLoop()
 	p := blockPlayer(loop, 1.5, 66.0, 1.5)
+	setHeldItem(p, item.Stone.ID, 5) // holding a stack of 5 stone
 
 	// Hit the TOP face (direction UP = 1) of the block at (1,64,1); placement lands at (1,65,1).
 	hit := pk.Position{X: 1, Y: 64, Z: 1}
 	placed := pk.Position{X: 1, Y: 65, Z: 1}
+	// Give the hit block a solid (non-replaceable) stone so placement lands on the adjacent face.
+	mgr.SetBlock(hit, block.ToStateID[block.Stone{}], dimMinY)
 	const seq = 99
 	ui := useItemOnPacket(0 /*main hand*/, hit, 1 /*UP*/, 0.5, 1.0, 0.5, false, false, seq)
 	loop.applyInput(p, SubtickInput{At: loop.clock.Now(), Packet: ui})
 
-	// The adjacent position is now the place-state (non-air).
+	// The adjacent position is now stone (the held block).
 	got, ok := mgr.GetBlock(placed, dimMinY)
-	if !ok || block.IsAir(got) {
-		t.Fatalf("after place, GetBlock(adjacent) = (%v, ok=%v), want a non-air placed block", got, ok)
+	if !ok || got != block.ToStateID[block.Stone{}] {
+		t.Fatalf("after place, GetBlock(adjacent) = (%v, ok=%v), want stone %d", got, ok, block.ToStateID[block.Stone{}])
 	}
 
 	pkts := drainPackets(p.client)
@@ -155,6 +172,159 @@ func TestPlaceBlock(t *testing.T) {
 	}
 	if n := countID(pkts, packetid.ClientboundBlockUpdate); n != 1 {
 		t.Fatalf("place: BlockUpdate sent %d times, want 1", n)
+	}
+}
+
+// TestPlaceEmptyHandNoBlock: a UseItemOn with an EMPTY main hand places NOTHING (the core bugfix —
+// previously the server hardcoded a stone block regardless of the held item). No mutation, no ack.
+func TestPlaceEmptyHandNoBlock(t *testing.T) {
+	loop, mgr := newBlockLoop()
+	p := blockPlayer(loop, 1.5, 66.0, 1.5) // no setHeldItem -> empty hand
+
+	hit := pk.Position{X: 1, Y: 64, Z: 1}
+	placed := pk.Position{X: 1, Y: 65, Z: 1}
+	mgr.SetBlock(hit, block.ToStateID[block.Stone{}], dimMinY)
+	ui := useItemOnPacket(0, hit, 1 /*UP*/, 0.5, 1.0, 0.5, false, false, 1)
+	loop.applyInput(p, SubtickInput{At: loop.clock.Now(), Packet: ui})
+
+	// Nothing placed: the adjacent block is still air.
+	if got, ok := mgr.GetBlock(placed, dimMinY); !ok || !block.IsAir(got) {
+		t.Fatalf("empty-hand place mutated the world: GetBlock(adjacent) = (%v, ok=%v), want air", got, ok)
+	}
+	pkts := drainPackets(p.client)
+	if n := countID(pkts, packetid.ClientboundBlockChangedAck); n != 0 {
+		t.Fatalf("empty-hand place acked (%d), want 0 (no placement)", n)
+	}
+	if n := countID(pkts, packetid.ClientboundBlockUpdate); n != 0 {
+		t.Fatalf("empty-hand place broadcast (%d), want 0", n)
+	}
+}
+
+// TestPlaceSurvivalShrinksStack: placing a held block in SURVIVAL shrinks the held stack by 1 and
+// sends a ClientboundContainerSetSlot reflecting the new count (BlockItem.place -> stack.consume(1)).
+func TestPlaceSurvivalShrinksStack(t *testing.T) {
+	loop, mgr := newBlockLoop()
+	p := blockPlayer(loop, 1.5, 66.0, 1.5)
+	p.gameMode = gameModeSurvival
+	setHeldItem(p, item.Stone.ID, 3) // 3 stone
+
+	hit := pk.Position{X: 1, Y: 64, Z: 1}
+	mgr.SetBlock(hit, block.ToStateID[block.Stone{}], dimMinY)
+	ui := useItemOnPacket(0, hit, 1 /*UP*/, 0.5, 1.0, 0.5, false, false, 7)
+	loop.applyInput(p, SubtickInput{At: loop.clock.Now(), Packet: ui})
+
+	inv := ensureInventory(p)
+	if got := inv.get(heldWindowSlot(inv.heldSlot)); int(got.Count) != 2 {
+		t.Fatalf("survival place: held count = %d, want 2 (consume(1))", got.Count)
+	}
+	if n := countID(drainPackets(p.client), packetid.ClientboundContainerSetSlot); n < 1 {
+		t.Fatalf("survival place: ContainerSetSlot sent %d times, want >=1 (slot sync)", n)
+	}
+}
+
+// TestPlaceSurvivalLastItemEmptiesSlot: placing the LAST item in survival empties the slot.
+func TestPlaceSurvivalLastItemEmptiesSlot(t *testing.T) {
+	loop, mgr := newBlockLoop()
+	p := blockPlayer(loop, 1.5, 66.0, 1.5)
+	p.gameMode = gameModeSurvival
+	setHeldItem(p, item.Stone.ID, 1) // the last stone
+
+	hit := pk.Position{X: 1, Y: 64, Z: 1}
+	mgr.SetBlock(hit, block.ToStateID[block.Stone{}], dimMinY)
+	ui := useItemOnPacket(0, hit, 1, 0.5, 1.0, 0.5, false, false, 8)
+	loop.applyInput(p, SubtickInput{At: loop.clock.Now(), Packet: ui})
+
+	inv := ensureInventory(p)
+	if got := inv.get(heldWindowSlot(inv.heldSlot)); got.Count > 0 {
+		t.Fatalf("survival place of last item: held count = %d, want 0 (empty slot)", got.Count)
+	}
+}
+
+// TestPlaceCreativeNoShrink: placing a held block in CREATIVE places it but does NOT shrink the
+// stack (ItemStack.consume short-circuits on hasInfiniteMaterials()).
+func TestPlaceCreativeNoShrink(t *testing.T) {
+	loop, mgr := newBlockLoop()
+	p := blockPlayer(loop, 1.5, 66.0, 1.5)
+	p.gameMode = gameModeCreative
+	setHeldItem(p, item.Stone.ID, 64)
+
+	hit := pk.Position{X: 1, Y: 64, Z: 1}
+	placed := pk.Position{X: 1, Y: 65, Z: 1}
+	mgr.SetBlock(hit, block.ToStateID[block.Stone{}], dimMinY)
+	ui := useItemOnPacket(0, hit, 1, 0.5, 1.0, 0.5, false, false, 9)
+	loop.applyInput(p, SubtickInput{At: loop.clock.Now(), Packet: ui})
+
+	// Block placed.
+	if got, ok := mgr.GetBlock(placed, dimMinY); !ok || got != block.ToStateID[block.Stone{}] {
+		t.Fatalf("creative place: GetBlock(adjacent) = (%v, ok=%v), want stone", got, ok)
+	}
+	// Stack NOT shrunk.
+	inv := ensureInventory(p)
+	if got := inv.get(heldWindowSlot(inv.heldSlot)); int(got.Count) != 64 {
+		t.Fatalf("creative place: held count = %d, want 64 (no shrink)", got.Count)
+	}
+}
+
+// TestPlaceIntoSolidNoOp: a UseItemOn whose ADJACENT target is a SOLID (non-replaceable) block
+// places nothing (BlockPlaceContext.canPlace() is false). No mutation, no ack.
+func TestPlaceIntoSolidNoOp(t *testing.T) {
+	loop, mgr := newBlockLoop()
+	p := blockPlayer(loop, 1.5, 66.0, 1.5)
+	setHeldItem(p, item.Stone.ID, 5)
+
+	hit := pk.Position{X: 1, Y: 64, Z: 1}
+	placed := pk.Position{X: 1, Y: 65, Z: 1}
+	// Both the hit block AND the adjacent target are solid stone -> the target is not replaceable.
+	mgr.SetBlock(hit, block.ToStateID[block.Stone{}], dimMinY)
+	mgr.SetBlock(placed, block.ToStateID[block.Dirt{}], dimMinY) // a different solid so we can detect overwrite
+	ui := useItemOnPacket(0, hit, 1, 0.5, 1.0, 0.5, false, false, 10)
+	loop.applyInput(p, SubtickInput{At: loop.clock.Now(), Packet: ui})
+
+	// The solid adjacent target is untouched (still dirt, not overwritten by stone).
+	if got, ok := mgr.GetBlock(placed, dimMinY); !ok || got != block.ToStateID[block.Dirt{}] {
+		t.Fatalf("place into solid overwrote it: GetBlock = (%v, ok=%v), want unchanged dirt", got, ok)
+	}
+	if n := countID(drainPackets(p.client), packetid.ClientboundBlockChangedAck); n != 0 {
+		t.Fatalf("place into solid acked (%d), want 0 (canPlace false -> no-op)", n)
+	}
+}
+
+// TestPlaceNonBlockItemNoOp: holding a NON-block item (e.g. a wooden sword) places nothing
+// (Block.byItem -> Blocks.AIR for a non-BlockItem).
+func TestPlaceNonBlockItemNoOp(t *testing.T) {
+	loop, mgr := newBlockLoop()
+	p := blockPlayer(loop, 1.5, 66.0, 1.5)
+	setHeldItem(p, item.WoodenSword.ID, 1) // a tool, not a block item
+
+	hit := pk.Position{X: 1, Y: 64, Z: 1}
+	placed := pk.Position{X: 1, Y: 65, Z: 1}
+	mgr.SetBlock(hit, block.ToStateID[block.Stone{}], dimMinY)
+	ui := useItemOnPacket(0, hit, 1, 0.5, 1.0, 0.5, false, false, 11)
+	loop.applyInput(p, SubtickInput{At: loop.clock.Now(), Packet: ui})
+
+	if got, ok := mgr.GetBlock(placed, dimMinY); !ok || !block.IsAir(got) {
+		t.Fatalf("non-block item placed something: GetBlock(adjacent) = (%v, ok=%v), want air", got, ok)
+	}
+	if n := countID(drainPackets(p.client), packetid.ClientboundBlockChangedAck); n != 0 {
+		t.Fatalf("non-block item acked (%d), want 0", n)
+	}
+}
+
+// TestPlaceReplaceClicked: clicking a REPLACEABLE block (water) with a held block REPLACES it in
+// place (BlockPlaceContext.replaceClicked -> getClickedPos == hitPos), not on the adjacent face.
+func TestPlaceReplaceClicked(t *testing.T) {
+	loop, mgr := newBlockLoop()
+	p := blockPlayer(loop, 1.5, 65.0, 1.5)
+	setHeldItem(p, item.Stone.ID, 5)
+
+	hit := pk.Position{X: 1, Y: 64, Z: 1}
+	mgr.SetBlock(hit, block.ToStateID[block.Water{}], dimMinY) // clicked block is replaceable water
+	ui := useItemOnPacket(0, hit, 1 /*UP*/, 0.5, 1.0, 0.5, false, false, 12)
+	loop.applyInput(p, SubtickInput{At: loop.clock.Now(), Packet: ui})
+
+	// The CLICKED pos itself becomes stone (replaced in place), not the block above it.
+	if got, ok := mgr.GetBlock(hit, dimMinY); !ok || got != block.ToStateID[block.Stone{}] {
+		t.Fatalf("replace-clicked: GetBlock(hit) = (%v, ok=%v), want stone (replaced in place)", got, ok)
 	}
 }
 
