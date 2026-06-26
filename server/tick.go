@@ -523,6 +523,19 @@ type tickPlayer struct {
 	// field exists so the absorption formula in actuallyHurt reads/writes it faithfully and a future
 	// effect slots in with no formula change. Tick-owned.
 	absorptionAmount float32
+
+	// --- Breath / drowning 1:1 port (Plan 17-13). Tick-owned (TICK-05): mutated only on the tick
+	// goroutine by tickBreath, so it is -race clean by the same single-owner discipline as the rest
+	// of tickPlayer. ---
+
+	// airSupply is net.minecraft.world.entity.Entity's DATA_AIR_SUPPLY_ID value (the bubble bar).
+	// Vanilla seeds it to getMaxAirSupply()==300 (Entity ctor `define(DATA_AIR_SUPPLY_ID,
+	// getMaxAirSupply())`) and LivingEntity.baseTick decrements it while the eyes are submerged in
+	// water (decreaseAirSupply: air-1 for a bare player), refilling toward 300 (increaseAirSupply:
+	// min(air+4,300)) when not. When it reaches shouldTakeDrowningDamage()'s threshold (<= -20) it
+	// resets to 0 and the player takes 2.0 DROWN damage. Seeded to maxAirSupply at registration so a
+	// fresh player spawns with a full bubble bar. Tick-owned.
+	airSupply int32
 }
 
 // Health constants for a fresh survival player (the ENT-05 defaults). maxHealth is the vanilla

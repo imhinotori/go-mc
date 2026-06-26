@@ -310,6 +310,9 @@ func (g *gameTick) AcceptPlayer(
 		health:     maxHealth,
 		food:       maxFood,
 		saturation: defaultSaturation,
+		// Breath (Plan 17-13): a fresh player spawns with a full bubble bar. Vanilla's Entity ctor
+		// seeds DATA_AIR_SUPPLY_ID to getMaxAirSupply()==maxAirSupply (300).
+		airSupply: maxAirSupply,
 	}
 
 	// ENT-06 + GAMEPLAY-02 load-on-join: apply the persisted snapshot loaded above (the disk IO

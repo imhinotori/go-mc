@@ -84,3 +84,30 @@ func (t *TickLoop) applyFluidPhysics(p *tickPlayer, dx, dy, dz float64) (float64
 	dy += waterPushScale // buoyant upward component (reduces net descent)
 	return dx, dy, dz
 }
+
+// moveWithFluidPhysics is the movement-accept wire for the water physics (Plan 17-13 — wires the
+// 17-02 applyFluidPhysics that previously shipped untested-into-the-pipeline). It is the
+// accepted-delta application of LivingEntity.travelInWater's getWaterSlowDown (0.8 horizontal) plus
+// Entity.updateFluidInteraction's buoyant push (0.014 vertical), applied AFTER collidePlayer in the
+// subtick movement-accept path:
+//
+//   - target = the collided (anti-clip-through) claimed position from collidePlayer.
+//   - delta  = target - current (p.x/p.y/p.z), the per-tick movement the client claims.
+//   - apply applyFluidPhysics(delta): out of water it is the identity (so the dry path is byte-for-
+//     byte the old `p.x,p.y,p.z = collide(...)` behavior); in water it scales horizontal by 0.8 and
+//     adds +0.014 buoyancy to vertical.
+//   - return current + adjustedDelta — the new accepted position.
+//
+// CAVEAT (rubber-band, documented per the plan, NOT a blocker): Sulfur is position-authoritative
+// (the client also applies its own local water slowdown), so re-applying the same 0.8 server-side
+// can produce minor rubber-banding. The faithful 1:1 fix is the vanilla VELOCITY model (the server
+// integrates deltaMovement and is authoritative over position); that server-side velocity
+// integrator is a known architectural follow-up, NOT a logic change. The user explicitly chose to
+// wire the 1:1 factors (0.8 / 0.014) now over the accepted-delta model.
+func (t *TickLoop) moveWithFluidPhysics(p *tickPlayer, targetX, targetY, targetZ float64) (float64, float64, float64) {
+	dx := targetX - p.x
+	dy := targetY - p.y
+	dz := targetZ - p.z
+	dx, dy, dz = t.applyFluidPhysics(p, dx, dy, dz)
+	return p.x + dx, p.y + dy, p.z + dz
+}

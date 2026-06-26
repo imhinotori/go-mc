@@ -180,6 +180,12 @@ func (t *TickLoop) tickEntities() {
 	t.syncJoinInventories()
 	t.tickFallDamage()
 
+	// Plan 17-13 breath/drowning: the LivingEntity.baseTick air branch (air drains while the eyes
+	// are submerged, refills otherwise, 2.0 DROWN damage at the air<=-20 threshold). Its body lives
+	// in breath.go; a single ADDITIVE call inside this existing phase keeps the tick order unchanged
+	// (TestTickPhaseOrder stays green), mirroring the tickFallDamage seam above.
+	t.tickBreath()
+
 	// Plan 17-11 melee-combat per-tick bookkeeping: the attack-strength ticker increment
 	// (Player.tick) and the invulnerableTime / hurtTime decrements (ServerPlayer.tick), inside this
 	// existing phase so no new phase is added to the fixed tick order (TestTickPhaseOrder stays
