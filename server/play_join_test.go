@@ -9,6 +9,7 @@ import (
 	"github.com/imhinotori/sulfur/data/packetid"
 	pk "github.com/imhinotori/sulfur/net/packet"
 	"github.com/imhinotori/sulfur/world"
+	"github.com/imhinotori/sulfur/yggdrasil/user"
 
 	"github.com/google/uuid"
 )
@@ -392,6 +393,132 @@ func TestPlayerInfoUpdateWire(t *testing.T) {
 	}
 	if used := decodedLen(t, p.Data, &mask, &count, &entryUUID, &name, &propCount, &gameMode, &listed); used != len(p.Data) {
 		t.Errorf("PlayerInfoUpdate decoded %d of %d bytes — field set mismatch", used, len(p.Data))
+	}
+}
+
+// TestAddPlayerSkinProperties is the ONLINE-01 regression guard: a signed online texture
+// property must round-trip through the ADD_PLAYER tab-list entry. We build the packet with a
+// single `textures` property (value + Mojang signature) and STRICT-decode its bytes in the exact
+// jar wire order (ClientboundPlayerInfoUpdatePacket$Action.ADD_PLAYER -> GAME_PROFILE_PROPERTIES
+// == ByteBufCodecs$32: per Property a String name, String value, then writeNullable(signature) =
+// a present-Boolean + the signature String). Decoding the property fields EXPLICITLY (not via
+// user.Property.ReadFrom) is the regression guard — it pins the exact bytes, not a self-consistent
+// round-trip, so a future break of the property loop or the optional-signature encoding fails CI.
+func TestAddPlayerSkinProperties(t *testing.T) {
+	id := uuid.New()
+	const (
+		texValue = "eyJ0aW1lc3RhbXAiOjE2MDAwMDAwMDAwMDAsInRleHR1cmVzIjp7fX0=" // base64 JSON blob (online)
+		texSig   = "k9Lf0c2bSignatureBytesFromMojangSessionServerXYZ=="          // Mojang-issued signature
+	)
+	props := []user.Property{{Name: "textures", Value: texValue, Signature: texSig}}
+
+	p := writePlayerInfoUpdateAdd(id, "Notch", gameModeSurvival, props)
+	if packetid.ClientboundPacketID(p.ID) != packetid.ClientboundPlayerInfoUpdate {
+		t.Fatalf("PlayerInfoUpdate id = %d, want ClientboundPlayerInfoUpdate (%d)", p.ID, packetid.ClientboundPlayerInfoUpdate)
+	}
+
+	// Strict-decode in wire order: action mask, entry count, UUID, name, property count, then the
+	// single property [String name, String value, Bool hasSig, (String sig)], then gameMode, listed.
+	r := bytes.NewReader(p.Data)
+	var (
+		mask      pk.Byte
+		count     pk.VarInt
+		entryUUID pk.UUID
+		name      pk.String
+		propCount pk.VarInt
+		propName  pk.String
+		propValue pk.String
+		hasSig    pk.Boolean
+		propSig   pk.String
+		gameMode  pk.VarInt
+		listed    pk.Boolean
+	)
+	read := func(fields ...pk.FieldDecoder) {
+		t.Helper()
+		for i, f := range fields {
+			if _, err := f.ReadFrom(r); err != nil {
+				t.Fatalf("strict decode field[%d] failed (wire layout mismatch): %v", i, err)
+			}
+		}
+	}
+	read(&mask, &count, &entryUUID, &name, &propCount, &propName, &propValue, &hasSig, &propSig, &gameMode, &listed)
+
+	if byte(mask) != 0x0D {
+		t.Errorf("action mask = 0x%02x, want 0x0D", byte(mask))
+	}
+	if count != 1 {
+		t.Errorf("entry count = %d, want 1", count)
+	}
+	if uuid.UUID(entryUUID) != id {
+		t.Errorf("entry uuid = %s, want %s", uuid.UUID(entryUUID), id)
+	}
+	if string(name) != "Notch" {
+		t.Errorf("entry name = %q, want %q", string(name), "Notch")
+	}
+	if propCount != 1 {
+		t.Fatalf("property count = %d, want 1 (online signed texture)", propCount)
+	}
+	if string(propName) != "textures" {
+		t.Errorf("property name = %q, want %q", string(propName), "textures")
+	}
+	if string(propValue) != texValue {
+		t.Errorf("property value = %q, want %q", string(propValue), texValue)
+	}
+	if !hasSig {
+		t.Errorf("hasSignature = false, want true (signed online texture)")
+	}
+	if string(propSig) != texSig {
+		t.Errorf("property signature = %q, want %q", string(propSig), texSig)
+	}
+	if gameMode != gameModeSurvival {
+		t.Errorf("gameMode = %d, want %d (survival)", gameMode, gameModeSurvival)
+	}
+	if !listed {
+		t.Errorf("listed = false, want true")
+	}
+	// No trailing bytes: the property entry consumed exactly the bytes the encoder wrote.
+	if r.Len() != 0 {
+		t.Errorf("strict decode left %d trailing bytes — field set mismatch", r.Len())
+	}
+}
+
+// TestAddPlayerNoPropertiesOffline asserts the offline default path is byte-identical to before:
+// a nil/empty properties slice -> GAME_PROFILE_PROPERTIES count 0, and the trailing gameMode +
+// listed fields still decode (no signature bytes leak in). This locks the offline frame so the
+// ONLINE-01 property loop never regresses the Steve/Alex default.
+func TestAddPlayerNoPropertiesOffline(t *testing.T) {
+	id := uuid.New()
+	p := writePlayerInfoUpdateAdd(id, "Alex", gameModeSurvival, nil)
+
+	r := bytes.NewReader(p.Data)
+	var (
+		mask      pk.Byte
+		count     pk.VarInt
+		entryUUID pk.UUID
+		name      pk.String
+		propCount pk.VarInt
+		gameMode  pk.VarInt
+		listed    pk.Boolean
+	)
+	for i, f := range []pk.FieldDecoder{&mask, &count, &entryUUID, &name, &propCount, &gameMode, &listed} {
+		if _, err := f.ReadFrom(r); err != nil {
+			t.Fatalf("offline strict decode field[%d] failed: %v", i, err)
+		}
+	}
+	if propCount != 0 {
+		t.Errorf("property count = %d, want 0 (offline -> no skin properties)", propCount)
+	}
+	if string(name) != "Alex" {
+		t.Errorf("entry name = %q, want %q", string(name), "Alex")
+	}
+	if gameMode != gameModeSurvival {
+		t.Errorf("gameMode = %d, want %d", gameMode, gameModeSurvival)
+	}
+	if !listed {
+		t.Errorf("listed = false, want true")
+	}
+	if r.Len() != 0 {
+		t.Errorf("offline decode left %d trailing bytes (no property bytes should be present)", r.Len())
 	}
 }
 
