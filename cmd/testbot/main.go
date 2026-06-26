@@ -225,6 +225,14 @@ type bot struct {
 	tgtX, tgtZ       float64
 	rng              *rand.Rand
 	heldSlot         int32
+
+	// blockSeq is the predicted-block-change sequence the client increments on each break/place
+	// (ServerboundPlayerAction / ServerboundUseItemOn carry it; the server acks it back). digX/Y/Z
+	// is the cell the NPC is currently breaking so the place phase re-targets the same spot. broke
+	// gates the place: only re-place a cell we actually broke. Writer-goroutine only.
+	blockSeq         int32
+	digX, digY, digZ int
+	broke            bool
 }
 
 func (b *bot) dial(addr string) error {
@@ -591,6 +599,93 @@ func (b *bot) wanderActions(i int) {
 		_ = b.conn.WritePacket(pk.Marshal(int32(packetid.ServerboundUseItem),
 			pk.VarInt(0), pk.VarInt(0), pk.Float(yaw), pk.Float(pitch)))
 	}
+
+	// BREAK -> (auto-pickup) -> PLACE cycle on a 100-tick period so a watcher sees the full loop.
+	// START and STOP are SEPARATED by 15 ticks so the server's dig-time model accrues real
+	// destroy progress (a same-tick START+STOP only schedules a delayed-destroy; spacing them
+	// lets the block break cleanly and an observer sees the crack overlay advance):
+	//   %100 == 30: select a BLOCK hotbar slot (kit slots 4..7: cobble/planks/torch/dirt) + START
+	//               digging the cell one block under the NPC's feet (reachable, re-placeable).
+	//   %100 == 31..45: keep swinging (the dig continues server-side; the swing is the visible arm).
+	//   %100 == 45: STOP digging (completes the break for a low-hardness floor block).
+	//   %100 == 80: place a block back into the broken cell (the auto-picked-up drop is in hand).
+	switch i % 100 {
+	case 30:
+		// Hotbar slots 3..6 hold the kit's block items (cobble/planks/torch/dirt at menu 39..42);
+		// pick a placeable BLOCK so the re-place has something in hand. (Slots 0..2 are food, 7 is
+		// empty — both excluded.)
+		b.heldSlot = int32(3 + b.rng.Intn(4))
+		_ = b.conn.WritePacket(pk.Marshal(int32(packetid.ServerboundSetCarriedItem), pk.Short(b.heldSlot)))
+		b.startBreakBelow()
+	case 33, 36, 39, 42:
+		// Keep the arm swinging while the dig is in progress (cosmetic + matches a real client's
+		// continuous-swing while holding left-click).
+		_ = b.conn.WritePacket(pk.Marshal(int32(packetid.ServerboundSwing), pk.VarInt(0)))
+	case 45:
+		b.stopBreak()
+	case 80:
+		if b.broke {
+			b.placeBlockBack()
+		}
+	}
+}
+
+// startBreakBelow sends START_DESTROY for a HORIZONTAL-NEIGHBOR floor block (the cell one east
+// of where the NPC stands, at the same ground level — i.e. the block under the feet, offset +1
+// in X). Breaking a neighbor (not the cell under the feet) keeps the NPC from falling into the
+// hole AND keeps the broken cell clear of the player AABB so the re-place is not rejected for
+// intersecting the placer. The server begins dig-time accrual; stopBreak finishes it. Records
+// the cell so placeBlockBack re-fills it. ServerboundPlayerAction wire: VarInt action, Position
+// pos, UByte direction, VarInt sequence.
+func (b *bot) startBreakBelow() {
+	b.mu.Lock()
+	fx, fy, fz := b.x, b.y, b.z
+	b.mu.Unlock()
+	bx := int(math.Floor(fx)) + 1 // ONE EAST: a neighbor floor cell, not the one we stand on
+	by := int(math.Floor(fy)) - 1 // ground level (the block our feet rest on, shifted east)
+	bz := int(math.Floor(fz))
+	b.digX, b.digY, b.digZ = bx, by, bz
+	pos := pk.Position{X: bx, Y: by, Z: bz}
+	const faceUp = 1 // Direction.UP — hit the top face
+
+	_ = b.conn.WritePacket(pk.Marshal(int32(packetid.ServerboundSwing), pk.VarInt(0)))
+	b.blockSeq++
+	_ = b.conn.WritePacket(pk.Marshal(int32(packetid.ServerboundPlayerAction),
+		pk.VarInt(0), pos, pk.UnsignedByte(faceUp), pk.VarInt(b.blockSeq))) // START_DESTROY=0
+	b.broke = true
+	log.Printf("[npc] start breaking block at (%d,%d,%d)", bx, by, bz)
+}
+
+// stopBreak sends STOP_DESTROY for the cell startBreakBelow began digging, completing the break
+// for a low-hardness floor block (the server's getDestroyProgress * (elapsed+1) >= 0.7f gate).
+func (b *bot) stopBreak() {
+	if !b.broke {
+		return
+	}
+	pos := pk.Position{X: b.digX, Y: b.digY, Z: b.digZ}
+	const faceUp = 1
+	b.blockSeq++
+	_ = b.conn.WritePacket(pk.Marshal(int32(packetid.ServerboundPlayerAction),
+		pk.VarInt(2), pos, pk.UnsignedByte(faceUp), pk.VarInt(b.blockSeq))) // STOP_DESTROY=2
+	log.Printf("[npc] stop breaking block at (%d,%d,%d)", b.digX, b.digY, b.digZ)
+}
+
+// placeBlockBack re-places a block into the broken neighbor cell by clicking the floor one below
+// it (the block at digY-1) on its UP face, so the placement lands back in the now-air broken cell.
+// ServerboundUseItemOn wire: VarInt hand, Position pos, VarInt direction, Float cursorX/Y/Z,
+// Boolean insideBlock, Boolean worldBorderHit, VarInt sequence.
+func (b *bot) placeBlockBack() {
+	below := pk.Position{X: b.digX, Y: b.digY - 1, Z: b.digZ}
+	const faceUp = 1 // place onto the top face of the block beneath the hole -> fills the hole
+
+	_ = b.conn.WritePacket(pk.Marshal(int32(packetid.ServerboundSwing), pk.VarInt(0)))
+	b.blockSeq++
+	_ = b.conn.WritePacket(pk.Marshal(int32(packetid.ServerboundUseItemOn),
+		pk.VarInt(0), below, pk.VarInt(faceUp),
+		pk.Float(0.5), pk.Float(1.0), pk.Float(0.5), // cursor at the top-center of the clicked face
+		pk.Boolean(false), pk.Boolean(false), pk.VarInt(b.blockSeq)))
+	b.broke = false
+	log.Printf("[npc] place block back at (%d,%d,%d)", b.digX, b.digY, b.digZ)
 }
 
 // movementFlagOnGround mirrors server/subtick.go: bit 0x01 of the trailing packed flags byte
