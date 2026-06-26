@@ -55,6 +55,7 @@ Full phase details: [milestones/v2-ROADMAP.md](milestones/v2-ROADMAP.md).
 - [x] 17-03-PLAN.md — GAMEPLAY-04: Attack/Interact damage dispatch + fall damage (wave 2)
 - [x] 17-04-PLAN.md — GAMEPLAY-06: block-break Item drops + ITEM metadata (wave 2)
 - [ ] 17-05-PLAN.md — GAMEPLAY-07: real-client multiplayer VISUAL GATE (autonomous:false, wave 3)
+- [x] 17-06..21 — real-client gap-closure 1:1 fixes surfaced by the visual gate (spawn-finder, fall damage, combat, breath/air-supply sync, FoodData hunger 17-19, container-click 17-20, **block-break dig-time + jar-extracted block hardness 17-21**, …) — each a literal port of the 26.2 jar.
 **Research**: HANDOFF.md documents all six seams with file:line evidence + classification + build order (GAMEPLAY-01 keystone first; GAMEPLAY-05 fluid sim is the one large net-new jar port). Phase research deep-dives the `FlowingFluid` port.
 
 ### Phase 18: Online-mode — auth + protocol encryption

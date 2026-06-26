@@ -2,16 +2,15 @@
 gsd_state_version: 1.0
 milestone: v3
 milestone_name: Online-mode + Operator UX + Structure polish
-status: Phase 17 IN PROGRESS — GAMEPLAY-01..06 wired (17-01..04) + 12 real-client gap-closure 1:1 fixes (17-06..18); GAMEPLAY-07 visual gate pending final human approval
-stopped_at: Completed 17-18 (air-supply metadata sync); awaiting GAMEPLAY-07 gate
-last_updated: "2026-06-26T01:30:00.000Z"
-last_activity: "2026-06-26 — 12 gap-closure 1:1 fixes landed after the real-client gate exposed deviations: spawn-finder (06), foliage-flip (07), fall-damage water-guard + literal re-port (08/10), connect/disconnect logging (09), combat full-1:1 incl. attributes/i-frames/armor/crit/knockback (11), tree free-space abort=no-stacking (12), fluid-physics wire + breath/drowning (13), drops+pickup vanilla-parity (14), water-disconnect fix + pickup-slot + setslot-sync (15), VegetationBlock.canSurvive grass-on-water/flower-stacking (16), block-placement-from-held-item empty-hand fix (17), air-supply DATA_AIR_SUPPLY_ID client sync (18). Mandate now ABSOLUTE in CLAUDE.md: gameplay = literal 1:1 jar port, only optimization allowed."
+status: "GAMEPLAY-01..06 wired + 12 gap-closure 1:1 fixes landed; gameplay-1:1 mandate ABSOLUTE in CLAUDE.md. build/vet/server-tests/world-tests green; -race clean except the known pre-existing TestTickAIDrivesMobs flake (mob-AI, deferred)."
+stopped_at: Completed 17-04-PLAN.md (GAMEPLAY-06)
+last_updated: "2026-06-26T13:12:01.509Z"
 progress:
   total_phases: 4
-  completed_phases: 0
-  total_plans: 18
-  completed_plans: 17
-  percent: 25
+  completed_phases: 1
+  total_plans: 5
+  completed_plans: 20
+  percent: 100
 ---
 
 # Project State
@@ -25,9 +24,9 @@ See: .planning/PROJECT.md (updated 2026-06-23)
 
 ## Current Position
 
-Phase: 17 — Gameplay Completion — IN PROGRESS (18 plans: 5 original + 13 real-client gap-closure)
-Plan: 17-18 COMPLETE (air-supply sync). NEXT: re-verify the GAMEPLAY-07 VISUAL GATE with a real client; if clean, close Phase 17 → Phase 18 (online-mode).
-Status: GAMEPLAY-01..06 wired + 12 gap-closure 1:1 fixes landed; gameplay-1:1 mandate ABSOLUTE in CLAUDE.md. build/vet/server-tests/world-tests green; -race clean except the known pre-existing TestTickAIDrivesMobs flake (mob-AI, deferred).
+Phase: 17 — Gameplay Completion — IN PROGRESS (21 plans: 5 original + 16 real-client gap-closure)
+Plan: 17-21 COMPLETE (ServerPlayerGameMode block-break dig-time 1:1 + jar-extracted block hardness). NEXT: re-verify the GAMEPLAY-07 VISUAL GATE with a real client; if clean, close Phase 17 → Phase 18 (online-mode).
+Status: GAMEPLAY-01..06 wired + gap-closure 1:1 fixes landed (incl. 17-19 FoodData hunger, 17-20 container-click, 17-21 block-break dig-time + hardness extraction); gameplay-1:1 mandate ABSOLUTE in CLAUDE.md. build/vet/server-tests green; -race not runnable this session (no gcc/cgo) but dig state is tick-owned single-owner (race-clean by construction).
 
 ### ⚠️ WHAT'S NEXT (resume here)
 
@@ -38,6 +37,7 @@ Status: GAMEPLAY-01..06 wired + 12 gap-closure 1:1 fixes landed; gameplay-1:1 ma
 3. **After Phase 17:** Phase 18 (online-mode: Yggdrasil auth + AES/CFB8 encryption), 19 (TUI + disconnect logs — connect/disconnect logging already started in 17-09), 20 (structure polish).
 
 ### 1:1 MANDATE (absolute, CLAUDE.md)
+
 All gameplay logic must be a literal method-for-method copy of the unobfuscated 26.2 jar (`temp/cache/26.2-inner.jar`, javap -c -p). Mirror call chains + numeric ops exactly (float casts, epsilons, attribute multipliers, RNG draw order, guard checks). NO paraphrase/simplify/change-behavior. ONLY optimization (that provably preserves identical observable gameplay) is permitted. Always verify against the jar bytecode before writing — never from intuition.
 
 ### ⚠️ v1 "fully playable" was half-done — Phase 17 reconnects the seams
@@ -331,7 +331,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-25T22:56:21.556Z
+Last session: 2026-06-26T13:12:01.492Z
 Stopped at: Completed 17-04-PLAN.md (GAMEPLAY-06)
 Resume file: None
 Next: Phase 17 Wave 2 — 17-02 (GAMEPLAY-05 fluid simulation: OVERWRITE server/fluid.go with the FlowingFluid port + scheduled-tick queue; lazy-init t.fluidSchedule inside tickFluids, do NOT edit tick.go/tick_phases.go) and 17-03 (GAMEPLAY-04 fall damage + PvP dispatch: OVERWRITE server/fall_damage.go using the tickPlayer fallDistance/wasOnGround/lastY fields + the lookupPlayerByEntityID reverse lookup, do NOT edit tick.go/tick_phases.go). The exact Wave-2 seam surface (field names, init point, call sites, stub signatures) is in 17-01-SUMMARY.md "WAVE-2 HANDOFF". Deferred-still-open: dungeon loot/spawner-mob + BeehiveDecorator occupant + pale_garden PaleMoss (all v3, cosmetic, in 13-04-SUMMARY); KeepAlive double-leave hardening (Phase 3). KNOWN PRE-EXISTING FLAKE: TestTickAIDrivesMobs (OPT-01 async-pool timing, not caused by 17-01) intermittently fails under full-suite load; passes in isolation + 3× under -race.
