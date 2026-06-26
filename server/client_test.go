@@ -1,6 +1,8 @@
 package server
 
 import (
+	"errors"
+	"io"
 	stdnet "net"
 	"sync"
 	"sync/atomic"
@@ -12,6 +14,134 @@ import (
 	netmc "github.com/imhinotori/sulfur/net"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
+
+// errReader is an io.Reader that returns a fixed error on the first Read. It drives
+// readLoop's ReadPacket teardown classification (protocol_error vs clean-quit) by
+// controlling exactly what error the codec surfaces.
+type errReader struct{ err error }
+
+func (r errReader) Read([]byte) (int, error) { return 0, r.err }
+
+// newReaderConn builds a *netmc.Conn whose read side returns the given error and whose
+// Close routes to a nopSocket (so Client.Close is harmless). Threshold -1 (no
+// compression) so the first VarInt read surfaces the reader's error directly.
+func newReaderConn(readErr error) (*netmc.Conn, *nopSocket) {
+	sock := &nopSocket{}
+	conn := &netmc.Conn{
+		Socket: sock,
+		Reader: errReader{err: readErr},
+		Writer: &concWriter{},
+	}
+	conn.SetThreshold(-1)
+	return conn, sock
+}
+
+// errWriter is an io.Writer that returns a fixed error on every Write, driving
+// writeLoop's WritePacket teardown.
+type errWriter struct{ err error }
+
+func (w errWriter) Write([]byte) (int, error) { return 0, w.err }
+
+// TestReadLoopReason_CleanEOF: a readLoop whose ReadPacket surfaces io.EOF leaves the
+// default "quit" (a clean client-initiated close — not a protocol error).
+func TestReadLoopReason_CleanEOF(t *testing.T) {
+	conn, _ := newReaderConn(io.EOF)
+	c := NewClient(conn, 16)
+
+	inbound := make(chan Intent, 1)
+	done := make(chan struct{})
+	go func() { defer close(done); c.readLoop(inbound) }()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("readLoop did not return on a read error")
+	}
+	if got := c.DisconnectReason(); got != "quit" {
+		t.Fatalf("clean EOF should leave default %q, got %q", "quit", got)
+	}
+}
+
+// TestReadLoopReason_ErrClosed: a read error of net.ErrClosed (our own Close racing
+// the read) is treated as a clean teardown — leaves the default "quit".
+func TestReadLoopReason_ErrClosed(t *testing.T) {
+	conn, _ := newReaderConn(stdnet.ErrClosed)
+	c := NewClient(conn, 16)
+
+	inbound := make(chan Intent, 1)
+	done := make(chan struct{})
+	go func() { defer close(done); c.readLoop(inbound) }()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("readLoop did not return on a read error")
+	}
+	if got := c.DisconnectReason(); got != "quit" {
+		t.Fatalf("ErrClosed should leave default %q, got %q", "quit", got)
+	}
+}
+
+// TestReadLoopReason_DecodeError: a non-EOF/non-ErrClosed read or decode error tags
+// "protocol_error" before Close (first-writer-wins).
+func TestReadLoopReason_DecodeError(t *testing.T) {
+	conn, _ := newReaderConn(errors.New("malformed frame: bad varint"))
+	c := NewClient(conn, 16)
+
+	inbound := make(chan Intent, 1)
+	done := make(chan struct{})
+	go func() { defer close(done); c.readLoop(inbound) }()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("readLoop did not return on a read error")
+	}
+	if got := c.DisconnectReason(); got != "protocol_error" {
+		t.Fatalf("decode error should tag %q, got %q", "protocol_error", got)
+	}
+}
+
+// TestSendFull_Backpressure: a Send onto a full outbound queue (no draining writer)
+// tags "backpressure" before the drop-and-disconnect Close.
+func TestSendFull_Backpressure(t *testing.T) {
+	const capacity = 2
+	conn, _, _ := newFakeConn()
+	c := NewClient(conn, capacity)
+
+	// Do NOT start writeLoop: nothing drains, so the queue fills and the next Send
+	// finds it full → backpressure + Close.
+	for i := 0; i < capacity+1; i++ {
+		c.Send(pk.Marshal(0x01, pk.Byte(0)))
+	}
+	if got := c.DisconnectReason(); got != "backpressure" {
+		t.Fatalf("queue-full Send should tag %q, got %q", "backpressure", got)
+	}
+}
+
+// TestWriteLoop_WriteError: a writeLoop whose WritePacket errors tags "write_error"
+// before Close.
+func TestWriteLoop_WriteError(t *testing.T) {
+	sock := &nopSocket{}
+	conn := &netmc.Conn{Socket: sock, Reader: errReader{err: io.EOF}, Writer: errWriter{err: errors.New("broken pipe")}}
+	conn.SetThreshold(-1)
+	c := NewClient(conn, 16)
+
+	go c.writeLoop()
+	// Enqueue one packet; the writeLoop pulls it, WritePacket fails, it tags + closes.
+	c.Send(pk.Marshal(0x01, pk.Byte(0)))
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if c.closed.Load() {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if got := c.DisconnectReason(); got != "write_error" {
+		t.Fatalf("write failure should tag %q, got %q", "write_error", got)
+	}
+}
 
 // concWriter is an io.Writer that (a) detects any concurrent Write call (the
 // single-writer invariant: exactly one goroutine may ever call WritePacket) and

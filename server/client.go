@@ -1,6 +1,9 @@
 package server
 
 import (
+	"errors"
+	"io"
+	stdnet "net"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -123,7 +126,10 @@ func (c *Client) writeLoop() {
 			return // queue closed -> shut the writer down
 		}
 		if err := c.conn.WritePacket(p); err != nil {
-			// Write failed (conn gone). Tear the client down; do not spin.
+			// Write failed (conn gone). Tag the teardown cause (TUI-02 taxonomy #7)
+			// BEFORE Close so the leave log attributes it to a socket write failure
+			// rather than the default clean quit, then tear the client down; do not spin.
+			c.SetDisconnectReason("write_error")
 			c.Close()
 			return
 		}
@@ -138,6 +144,16 @@ func (c *Client) readLoop(inbound chan<- Intent) {
 	for {
 		var p pk.Packet
 		if err := c.conn.ReadPacket(&p); err != nil {
+			// Classify the teardown cause (TUI-02 taxonomy #6 vs #8) BEFORE Close,
+			// first-writer-wins. A clean EOF (the client closed the socket) or our own
+			// Close racing the read (stdnet.ErrClosed) is a normal quit — leave the
+			// default "quit". Any other read/decode error is a malformed-frame /
+			// protocol fault and is tagged "protocol_error" so the leave log attributes
+			// it. (stdnet is the STDLIB net package; the wrapped fork net is identifier
+			// `net` — see the import block.)
+			if !(errors.Is(err, io.EOF) || errors.Is(err, stdnet.ErrClosed)) {
+				c.SetDisconnectReason("protocol_error")
+			}
 			c.Close()
 			return
 		}
@@ -167,6 +183,10 @@ func (c *Client) Send(p pk.Packet) {
 	// away), so a racing Close never crashes a producer.
 	defer func() { _ = recover() }()
 	if !c.outbound.Push(p) {
+		// Queue full: a slow client whose outbound backed up past capacity. Tag the
+		// teardown cause (TUI-02 taxonomy #7) BEFORE the drop-and-disconnect Close so
+		// the leave log distinguishes a backpressure drop from a clean quit.
+		c.SetDisconnectReason("backpressure")
 		c.Close() // queue full -> drop-and-disconnect
 	}
 }
