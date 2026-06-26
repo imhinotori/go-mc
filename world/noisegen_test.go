@@ -203,20 +203,37 @@ func TestTerrainSanity(t *testing.T) {
 		return st != air && st != caveAir
 	}
 
-	// --- Spawn-standable check on the (0,0) spawn column (T-9-26). ---
+	// --- Spawn-standable check (T-9-26). ---
+	// Terrain sanity: the raw WorldSurface heightmap for the origin column is in range.
 	spawnY := g.SpawnSurfaceY(level.ChunkPos{0, 0})
 	if spawnY <= minY || spawnY >= maxY {
 		t.Fatalf("spawn surface y=%d out of world range [%d,%d)", spawnY, minY, maxY)
 	}
+	// Spawn-safety: the player is placed via SpawnPos (17-06 PlayerSpawnFinder), which reads
+	// the FULLY-DECORATED chunk and scans the WHOLE chunk for the first standable column —
+	// NOT the fixed (8,8) column. This is decoration-aware ON PURPOSE: a tree can grow over
+	// any single column (e.g. a jungle tree at (8,8) now correctly drapes its foliage DOWNWARD
+	// to within ~2 blocks of the ground after the upside-down-foliage fix), so the finder must
+	// pick a clear neighbor column. Assert the real finder lands the player on a standable
+	// floor with air at the feet and head — never inside terrain OR decoration (leaves/logs).
 	spawnCh := g.Generate(level.ChunkPos{0, 0})
-	const sx, sz = 8, 8
-	topBlock := blockAtWorld(spawnCh, sx, spawnY, sz, minY)
-	playerFeet := blockAtWorld(spawnCh, sx, spawnY+2, sz, minY) // sendPlayBootstrap places feet here
-	if !isStandableTop(topBlock) {
-		t.Errorf("spawn surface block at y=%d is %q (air) — player would spawn in void/buried", spawnY, stateNameOf(topBlock))
+	sp := g.SpawnPos(level.ChunkPos{0, 0})
+	if !sp.Found {
+		t.Fatalf("SpawnPos found no standable column in the origin chunk")
 	}
-	if playerFeet != air && playerFeet != caveAir && playerFeet != water {
-		t.Errorf("block at the spawn feet y=%d is %q (solid) — player would spawn inside terrain", spawnY+2, stateNameOf(playerFeet))
+	lx, lz := int(sp.X)&15, int(sp.Z)&15
+	feetY := int(sp.Y)
+	floorBlock := blockAtWorld(spawnCh, lx, feetY-1, lz, minY) // the block the feet stand ON
+	feetBlock := blockAtWorld(spawnCh, lx, feetY, lz, minY)    // feet cell (must be clear)
+	headBlock := blockAtWorld(spawnCh, lx, feetY+1, lz, minY)  // head cell (must be clear)
+	if !isStandableTop(floorBlock) {
+		t.Errorf("spawn floor block at y=%d is %q (air) — player would spawn in void", feetY-1, stateNameOf(floorBlock))
+	}
+	if feetBlock != air && feetBlock != caveAir && feetBlock != water {
+		t.Errorf("spawn feet cell y=%d is %q (solid) — player would spawn inside terrain/decoration", feetY, stateNameOf(feetBlock))
+	}
+	if headBlock != air && headBlock != caveAir && headBlock != water {
+		t.Errorf("spawn head cell y=%d is %q (solid) — player would spawn with head in terrain/decoration", feetY+1, stateNameOf(headBlock))
 	}
 
 	// --- Full-parity feature scan across a span of chunks. ---

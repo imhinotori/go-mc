@@ -142,18 +142,22 @@ func TestBlobFoliagePlacer(t *testing.T) {
 
 	// Oracle: independently replicate the 26.2 blob math + the corner nextInt(2) draw, on a
 	// FRESH rng with the SAME seed so the draw sequence matches cell-for-cell.
-	//   for i = offset(0); i >= -foliageHeight(3); i--:
+	//   for i = offset(0); i >= offset - foliageHeight(3); i--:
 	//     j = max(radius(2) + radiusOffset(0) - 1 - i/2, 0)
-	//     row center y = -i (pos.below(i)); per cell |dx|<=j, |dz|<=j:
+	//     row center y = i (pos.above(i) == pos.Y + i, vanilla setWithOffset(pos.Y+localY)).
+	//     per cell |dx|<=j, |dz|<=j:
 	//       corner (|dx|==j && |dz|==j): skip = nextInt(2)!=0 || i==0
+	// NOTE: the row Y is now +i (was -i, the upside-down bug). The widest rows (j=2 at
+	// i=-2,-3) therefore sit at the LOWEST Y (-2,-3) — wide-at-bottom, narrow-at-top, the
+	// correct vanilla blob orientation.
 	oracle := levelgen.NewWorldgenRandom(seed)
 	want := map[[3]int]bool{}
-	for i := 0; i >= -foliageHeight; i-- {
+	for i := 0; i >= offset-foliageHeight; i-- {
 		j := foliageRadius + 0 - 1 - (i / 2)
 		if j < 0 {
 			j = 0
 		}
-		y := -i // pos.below(i).Y == -i (pos.Y is 0)
+		y := i // pos.above(i).Y == i (pos.Y is 0); vanilla row.Y = pos.Y + localY
 		for dx := -j; dx <= j; dx++ {
 			for dz := -j; dz <= j; dz++ {
 				if abs(dx) == j && abs(dz) == j {
@@ -185,6 +189,78 @@ func TestBlobFoliagePlacer(t *testing.T) {
 	// exactly those, so the two rng states must now match.
 	if rng.NextInt() != oracle.NextInt() {
 		t.Fatalf("createFoliage draw count diverged from the oracle (corner nextInt(2) drift)")
+	}
+}
+
+// TestBlobFoliageWideAtBottom is the upside-down-foliage regression guard. Vanilla
+// FoliagePlacer.placeLeavesRow uses setWithOffset(pos, dx, localY, dz) => row.Y = pos.Y +
+// localY, and BlobFoliagePlacer walks i = offset .. offset-foliageHeight with j (the row
+// radius) WIDEST at the most-negative i. So the widest leaf row must sit at the LOWEST Y
+// (below the attachment / trunk top), the narrow rows at the top — a wide-bottom/narrow-top
+// blob. A previous bug used pos.below(i) (= pos.Y - i), mirroring the blob vertically so the
+// wide part grew ABOVE the trunk (a real client saw upside-down trees in the Phase 17 visual
+// gate). This test asserts the orientation invariant so that regression cannot return.
+func TestBlobFoliageWideAtBottom(t *testing.T) {
+	cfg := oakConfig(t)
+	mw := newMapWorld()
+
+	bfp := BlobFoliagePlacer{foliagePlacerBase: foliagePlacerBase{radius: constantIntProvider{2}, offset: constantIntProvider{0}}, height: 3}
+	// Attachment at Y=100 (the trunk top): rows must grow DOWNWARD from here.
+	att := FoliageAttachment{Pos: TreePos{X: 0, Y: 100, Z: 0}, RadiusOffset: 0, DoubleTrunk: false}
+
+	const seed = int64(0xF0)
+	const foliageRadius, foliageHeight, offset = 2, 3, 0
+	rng := levelgen.NewWorldgenRandom(seed)
+	bfp.createFoliage(mw.set, mw.read, rng, cfg, att, foliageRadius, foliageHeight, offset)
+
+	// Per row Y, find the half-width (max |dx| / |dz| of any written leaf) = that row's radius.
+	widthByY := map[int]int{}
+	minY, maxY := 1<<31, -(1 << 31)
+	for cell := range mw.blocks {
+		x, y, z := cell[0], cell[1], cell[2]
+		w := abs(x)
+		if abs(z) > w {
+			w = abs(z)
+		}
+		if w > widthByY[y] {
+			widthByY[y] = w
+		}
+		if y < minY {
+			minY = y
+		}
+		if y > maxY {
+			maxY = y
+		}
+	}
+	if len(widthByY) == 0 {
+		t.Fatalf("blob wrote no leaves")
+	}
+
+	// Invariant 1: every leaf row sits at or below the attachment Y (the blob grows DOWN from
+	// the trunk top, never above it). attachment.Y == 100, offset == 0 so the top row is Y=100.
+	if maxY > att.Pos.Y {
+		t.Fatalf("leaf row above the attachment Y=%d (maxY=%d): blob is upside-down", att.Pos.Y, maxY)
+	}
+
+	// Invariant 2: the WIDEST row is at the LOWEST Y. Compute the Y of the max width and assert
+	// it is strictly below the Y of the min (narrowest) width — wide-at-bottom, narrow-at-top.
+	widestW, widestY := -1, 0
+	narrowW, narrowY := 1<<31, 0
+	for y, w := range widthByY {
+		if w > widestW || (w == widestW && y < widestY) {
+			widestW, widestY = w, y
+		}
+		if w < narrowW || (w == narrowW && y > narrowY) {
+			narrowW, narrowY = w, y
+		}
+	}
+	if widestY >= narrowY {
+		t.Fatalf("widest row (w=%d) at Y=%d is not below the narrowest row (w=%d) at Y=%d: foliage not wide-at-bottom",
+			widestW, widestY, narrowW, narrowY)
+	}
+	// And the widest row must be the bottom-most row of the blob.
+	if widestY != minY {
+		t.Fatalf("widest row at Y=%d is not the bottom row (minY=%d): foliage not wide-at-bottom", widestY, minY)
 	}
 }
 

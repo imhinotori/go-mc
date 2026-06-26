@@ -523,7 +523,8 @@ func (p SpruceFoliagePlacer) createFoliage(set SetBlockFn, read ReadFn, rng leve
 	m := 1
 	n := 0
 	for k := offset; k >= -foliageHeight; k-- {
-		placeLeavesRow(set, read, rng, cfg, pos.below(k), l, k, att.DoubleTrunk, p.shouldSkip)
+		// row.Y = pos.Y + k (vanilla setWithOffset). Sulfur bakes localY into center, so above(k).
+		placeLeavesRow(set, read, rng, cfg, pos.above(k), l, k, att.DoubleTrunk, p.shouldSkip)
 		if l >= m {
 			l = n
 			n = 1
@@ -569,7 +570,8 @@ func (p PineFoliagePlacer) foliageHeightOf(rng levelgen.RandomSource, _ int, _ *
 func (p PineFoliagePlacer) createFoliage(set SetBlockFn, read ReadFn, rng levelgen.RandomSource, cfg *TreeConfiguration, att FoliageAttachment, foliageRadius, foliageHeight, offset int) {
 	k := 0
 	for l := offset; l >= offset-foliageHeight; l-- {
-		placeLeavesRow(set, read, rng, cfg, att.Pos.below(l), k, l, att.DoubleTrunk, p.shouldSkip)
+		// row.Y = pos.Y + l (vanilla setWithOffset). Sulfur bakes localY into center, so above(l).
+		placeLeavesRow(set, read, rng, cfg, att.Pos.above(l), k, l, att.DoubleTrunk, p.shouldSkip)
 		if k >= 1 && l == offset-foliageHeight+1 {
 			k--
 		} else if k < foliageRadius+att.RadiusOffset {
@@ -593,7 +595,8 @@ type BushFoliagePlacer struct {
 func (p BushFoliagePlacer) createFoliage(set SetBlockFn, read ReadFn, rng levelgen.RandomSource, cfg *TreeConfiguration, att FoliageAttachment, foliageRadius, foliageHeight, offset int) {
 	for k := offset; k >= offset-foliageHeight; k-- {
 		rangeR := foliageRadius + att.RadiusOffset - 1 - k
-		placeLeavesRow(set, read, rng, cfg, att.Pos.below(k), rangeR, k, att.DoubleTrunk, p.shouldSkip)
+		// row.Y = pos.Y + k (vanilla setWithOffset). Sulfur bakes localY into center, so above(k).
+		placeLeavesRow(set, read, rng, cfg, att.Pos.above(k), rangeR, k, att.DoubleTrunk, p.shouldSkip)
 	}
 }
 
@@ -616,7 +619,8 @@ func (p FancyFoliagePlacer) createFoliage(set SetBlockFn, read ReadFn, rng level
 		if k == offset || k == offset-foliageHeight {
 			rangeR = foliageRadius
 		}
-		placeLeavesRow(set, read, rng, cfg, att.Pos.below(k), rangeR, k, att.DoubleTrunk, p.shouldSkip)
+		// row.Y = pos.Y + k (vanilla setWithOffset). Sulfur bakes localY into center, so above(k).
+		placeLeavesRow(set, read, rng, cfg, att.Pos.above(k), rangeR, k, att.DoubleTrunk, p.shouldSkip)
 	}
 }
 
@@ -639,7 +643,14 @@ func (p DarkOakFoliagePlacer) foliageHeightOf(_ levelgen.RandomSource, _ int, _ 
 }
 
 // createFoliage ports DarkOakFoliagePlacer.createFoliage. Draw order (javap -c): a nextBoolean
-// draw on the large path decides the extra +radius row. center = pos.above(foliageHeight).
+// draw on the large path decides the extra +radius row. center = pos.above(offset) (the offset
+// arg, NOT foliageHeight — verified via javap: `iload 9` (offset) is passed to BlockPos.above).
+// Each row passes a SIGNED localY ∈ {-1,0,1,2} to vanilla placeLeavesRow, whose setWithOffset
+// makes the row's world-Y = center.Y + localY. Sulfur's placeLeavesRowSigned flattens the row
+// to dy=0 and ONLY forwards localY to the skip rule, so the per-row Y must be baked into the
+// position passed in: center.above(localY) (above accepts negatives: above(-1) == below(1)).
+// Without this every row collapsed onto center.Y (a flat 1-row canopy) — a second Y-mapping bug
+// in the same family as the below()->above() sign fix.
 //   large:
 //     row (radius+2, -1, large)
 //     row (radius+3,  0, large)
@@ -649,18 +660,18 @@ func (p DarkOakFoliagePlacer) foliageHeightOf(_ levelgen.RandomSource, _ int, _ 
 //     row (radius+2, -1, large)
 //     row (radius+1,  0, large)
 func (p DarkOakFoliagePlacer) createFoliage(set SetBlockFn, read ReadFn, rng levelgen.RandomSource, cfg *TreeConfiguration, att FoliageAttachment, foliageRadius, foliageHeight, offset int) {
-	center := att.Pos.above(foliageHeight)
+	center := att.Pos.above(offset)
 	large := att.DoubleTrunk
 	if large {
-		placeLeavesRowSigned(set, read, rng, cfg, center, foliageRadius+2, -1, large, p.shouldSkipSigned)
-		placeLeavesRowSigned(set, read, rng, cfg, center, foliageRadius+3, 0, large, p.shouldSkipSigned)
-		placeLeavesRowSigned(set, read, rng, cfg, center, foliageRadius+2, 1, large, p.shouldSkipSigned)
+		placeLeavesRowSigned(set, read, rng, cfg, center.above(-1), foliageRadius+2, -1, large, p.shouldSkipSigned)
+		placeLeavesRowSigned(set, read, rng, cfg, center.above(0), foliageRadius+3, 0, large, p.shouldSkipSigned)
+		placeLeavesRowSigned(set, read, rng, cfg, center.above(1), foliageRadius+2, 1, large, p.shouldSkipSigned)
 		if rng.NextBoolean() {
-			placeLeavesRowSigned(set, read, rng, cfg, center, foliageRadius, 2, large, p.shouldSkipSigned)
+			placeLeavesRowSigned(set, read, rng, cfg, center.above(2), foliageRadius, 2, large, p.shouldSkipSigned)
 		}
 	} else {
-		placeLeavesRowSigned(set, read, rng, cfg, center, foliageRadius+2, -1, large, p.shouldSkipSigned)
-		placeLeavesRowSigned(set, read, rng, cfg, center, foliageRadius+1, 0, large, p.shouldSkipSigned)
+		placeLeavesRowSigned(set, read, rng, cfg, center.above(-1), foliageRadius+2, -1, large, p.shouldSkipSigned)
+		placeLeavesRowSigned(set, read, rng, cfg, center.above(0), foliageRadius+1, 0, large, p.shouldSkipSigned)
 	}
 }
 
@@ -710,7 +721,8 @@ func (p JungleFoliagePlacer) createFoliage(set SetBlockFn, read ReadFn, rng leve
 	}
 	for k := offset; k >= offset-l; k-- {
 		rangeR := foliageRadius + att.RadiusOffset + 1 - k
-		placeLeavesRow(set, read, rng, cfg, att.Pos.below(k), rangeR, k, att.DoubleTrunk, p.shouldSkip)
+		// row.Y = pos.Y + k (vanilla setWithOffset). Sulfur bakes localY into center, so above(k).
+		placeLeavesRow(set, read, rng, cfg, att.Pos.above(k), rangeR, k, att.DoubleTrunk, p.shouldSkip)
 	}
 }
 

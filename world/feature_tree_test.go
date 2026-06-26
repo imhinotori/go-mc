@@ -400,19 +400,30 @@ func TestSpruceWithPodzol(t *testing.T) {
 	}
 }
 
-// TestOakBeesNest: super_birch_bees / birch_bees grows a tree; with a seed where the
-// p=0.02 (birch) probability fires we get a bee_nest. We search a few seeds to land one.
+// TestOakBeesNest: fancy_oak_bees grows a tree whose BeehiveDecorator (probability 1.0)
+// attaches a bee_nest to an EXPOSED trunk-side face at the canopy base.
+//
+// We use fancy_oak_bees, NOT super_birch_bees, on purpose: the BeehiveDecorator places the
+// nest on a trunk-adjacent cell (N/E/W of a log at targetY) whose own SOUTH face is air
+// (WORLDGEN_FACING = SOUTH). For the canonical tall STRAIGHT-trunk birch + tight
+// blob_foliage_placer (radius 2, height 3, offset 0), the corrected (vanilla-faithful)
+// foliage grows DOWNWARD from the attachment and fully encloses the trunk top with the j=1
+// row, leaving NO exposed face at targetY — so vanilla itself cannot attach a nest there.
+// (Before the upside-down-foliage fix, the blob grew UPWARD away from the trunk top, which
+// left the trunk exposed and let the nest attach — a side effect of the bug, not a contract.)
+// fancy_oak's branched canopy (FancyFoliagePlacer = small blobs per branch) genuinely leaves
+// trunk faces open, so it is the correct, vanilla-representative tree for the bee-nest path.
 func TestOakBeesNest(t *testing.T) {
 	reg := feature.NewEmbeddedRegistry()
 	beeNest := false
-	for seed := int64(0); seed < 400 && !beeNest; seed++ {
-		view, pos := growTree(t, reg, "minecraft:super_birch_bees", seed)
-		if hasBlockFamily(view, pos, "minecraft:bee_nest", 1, 14, 3) {
+	for seed := int64(0); seed < 64 && !beeNest; seed++ {
+		view, pos := growTree(t, reg, "minecraft:fancy_oak_bees", seed)
+		if hasBlockFamily(view, pos, "minecraft:bee_nest", 1, 20, 6) {
 			beeNest = true
 		}
 	}
 	if !beeNest {
-		t.Fatalf("super_birch_bees grew no bee_nest across 400 seeds (beehive decorator not wired)")
+		t.Fatalf("fancy_oak_bees grew no bee_nest across 64 seeds (beehive decorator not wired)")
 	}
 }
 

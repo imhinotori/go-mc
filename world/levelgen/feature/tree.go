@@ -460,21 +460,26 @@ func (p BlobFoliagePlacer) foliageHeightOf(_ levelgen.RandomSource, _ int, _ *Tr
 
 // createFoliage ports BlobFoliagePlacer.createFoliage (the 26.2 protected shape):
 //
-//	for (int i = offset; i >= -foliageHeight; --i) {
+//	for (int i = offset; i >= offset - foliageHeight; --i) {
 //	    int j = Math.max(radius + att.radiusOffset() - 1 - i/2, 0);
-//	    placeLeavesRow(pos.below(i), j, i, att.doubleTrunk());
+//	    placeLeavesRow(att.pos(), j, i, att.doubleTrunk());   // setWithOffset => row.Y = pos.Y + i
 //	}
 //
 // `radius` here is the already-sampled foliageRadius; `i` (NOT -i) is the localY passed to
-// the skip rule. The row walk (top-down) + the per-row radius math + the corner trim are
+// the skip rule. Vanilla FoliagePlacer.placeLeavesRow uses setWithOffset(pos, dx, localY, dz)
+// => the row's world-Y is pos.Y + localY (verified via javap -c on FoliagePlacer +
+// BlobFoliagePlacer). Sulfur's placeLeavesRow flattens the row to dy=0 (center.offset(dx,0,dz))
+// and bakes localY into `center`, so the caller MUST pass att.Pos.above(i) (= pos.Y + i),
+// NOT below(i) (= pos.Y - i) — below(i) is the negated mapping and produced an upside-down
+// (wide-at-top) blob. The row walk (top-down) + the per-row radius math + the corner trim are
 // the determinism contract.
 func (p BlobFoliagePlacer) createFoliage(set SetBlockFn, read ReadFn, rng levelgen.RandomSource, cfg *TreeConfiguration, attachment FoliageAttachment, foliageRadius, foliageHeight, offset int) {
-	for i := offset; i >= -foliageHeight; i-- {
+	for i := offset; i >= offset-foliageHeight; i-- {
 		j := foliageRadius + attachment.RadiusOffset - 1 - javaDiv(i, 2)
 		if j < 0 {
 			j = 0
 		}
-		placeLeavesRow(set, read, rng, cfg, attachment.Pos.below(i), j, i, attachment.DoubleTrunk,
+		placeLeavesRow(set, read, rng, cfg, attachment.Pos.above(i), j, i, attachment.DoubleTrunk,
 			p.shouldSkip)
 	}
 }
