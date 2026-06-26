@@ -22,3 +22,21 @@
   stashed tree by luck) — caused by the async pathfinding pool not rejoining within 400 ticks under
   CPU contention. Independent of the 17-15 fluid/inventory changes (those files are unrelated to the
   AI/async path); all 17-15 tests pass 5/5 in isolation. Still owned by the AI/spawner plan.
+
+### Mobs walk ON water — mob AI not 1:1 with the jar (gate finding, 17-15/16 era)
+
+- **Found during:** Phase 17 visual gate (real client).
+- **Symptom:** mobs (the Pig) walk across the water surface instead of swimming/sinking.
+- **Root cause (suspected):** the mob navigation/pathfinding does not consult fluid state —
+  vanilla `GroundPathNavigation`/`WalkNodeEvaluator` treats water as a penalized/blocked node
+  (`PathType.WATER`/`getPathTypeOfMob`), and a mob in water uses `travelInFluid` (the SAME 0.8
+  slowdown + buoyancy that, for SERVER-controlled entities, IS applied server-side — unlike the
+  client-authoritative player, see 17-15). Sulfur's mob movement/nav currently ignores fluids,
+  so mobs path straight over water as if it were solid.
+- **Why not fixed here:** owned by the AI/mob subsystem (the parallel mob-AI port the user is
+  running in another session). The player-side fluid physics (17-13) is wired correctly; the
+  MOB-side `travelInFluid` + water-aware pathfinding is the AI plan's responsibility.
+- **1:1 mandate note:** under the new absolute mandate (gameplay = literal jar copy), the mob
+  nav must port `WalkNodeEvaluator.getPathType` (water nodes) + `Mob.travel`→`travelInFluid`
+  server-side. Decompile `net.minecraft.world.level.pathfinder.WalkNodeEvaluator` +
+  `net.minecraft.world.entity.Mob.travel`.
