@@ -4,12 +4,12 @@ milestone: v3
 milestone_name: Online-mode + Operator UX + Structure polish
 status: executing
 stopped_at: 20-03 (STRUCT-POLISH-04 StructureStart NBT persistence) COMPLETE — all 3 tasks committed (f8c17b9b, 85f35998, 531a0c6f), Docker -race ./world/structure/ ./save/ green, SUMMARY written. Spawn-guard slots left in pieceExtraData for 20-04.
-last_updated: "2026-06-27T04:18:33.234Z"
+last_updated: "2026-06-27T04:51:04.221Z"
 progress:
   total_phases: 4
   completed_phases: 3
   total_plans: 15
-  completed_plans: 28
+  completed_plans: 30
   percent: 100
 ---
 
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-06-23)
 ## Current Position
 
 Phase: 20 (structure-polish-loot-inhabitants-beard-persistence) — EXECUTING
-Plan: 3 of 5
+Plan: 5 of 5
 Status: Ready to execute
 
 ### ⚠️ WHAT'S NEXT (resume here — see .planning/HANDOFF.md for the FULL detail)
@@ -208,6 +208,8 @@ Progress: [██████████] 100%
 | Phase 19 P03 | 22min | 3 tasks | 8 files |
 | Phase 20 P01 | 16min | 3 tasks | 14 files |
 | Phase 20 P03 | 35min | 3 tasks | 7 files |
+| Phase 20 P05 | 20min | 2 tasks | 7 files |
+| Phase 20 P02 | 25min | 3 tasks | 19 files |
 
 ## Accumulated Context
 
@@ -323,6 +325,7 @@ Recent decisions affecting current work:
 - [Phase 18]: 18-02 (ONLINE-01 skins): authenticated GameProfile properties (the hasJoined textures skin) now reach the ADD_PLAYER tab-list wire for SELF + every OTHER player. AcceptPlayer no longer DROPS them — tickPlayer + bootstrapParams gained a properties []user.Property field set at registration like name/uuid; playerInfoEntriesEncoder.WriteTo replaced the hardcoded VarInt(0) GAME_PROFILE_PROPERTIES count with a real count-prefixed loop via user.Property.WriteTo, which already == Property.STREAM_CODEC (String name/value/Optional<signature> = writeNullable, jar-verified vs ByteBufCodecs anon codec) so NO new per-property codec was written. Self-add passes params.properties (not empty) so the joiner sees its own skin. Offline -> nil -> count 0 (Steve/Alex, byte-identical). Strict round-trip test: count=1 signed online + count=0 offline. CGO=0 build/vet/test + Docker -race green.
 - [Phase ?]: [Phase 19 / 19-03]: TUI-02 disconnect taxonomy COMPLETE — every player-drop seam tags its reason token (login_failure/protocol_mismatch/config_failure as server.go slog attrs pre-*Client; timeout at keepAliveClient.SendDisconnect; kicked best-effort at playerlist server-full + slog.Warn; protocol_error/write_error/backpressure tagged before Close in client.go readLoop/writeLoop/Send, first-writer-wins). readLoop splits clean EOF/stdnet.ErrClosed (default quit) from a decode fault (protocol_error). join/leave log.Printf -> slog (name/uuid/addr/reason/detail); reasonHuman (disconnect_reason.go) is the single token->human map; unknown passes through. KeepAlive.removePlayer double-leave hardened (ok-guard on listIndex[c]) — the Phase-3 deferred-item CLOSED. Docker -race ./server/ green; disjoint from 19-02.
 - [Phase ?]: [Phase 20 / 20-03]: STRUCT-POLISH-04 StructureStart NBT persistence — ported createTag/loadStaticStart (flat {id,ChunkX,ChunkZ,references,Children}) + StructurePiece base {id,BB,O,GD}+addAdditionalSaveData per piece type (type-keyed LoadPiece). structures compound jar-exact {starts lowercase, References capital}. save/structure.go opaque per-start RawMessage (no cycle). Persistence is PURE optimization: absent/garbled tag -> recompute (A6/T-20-07), never panic; Children bounded 4096. Coherence proven: LoadStaticStart(CreateTag(s))==ComputeStarts. Spawn-guard slots left for 20-04. Docker -race green; CGO=0.
+- [Phase ?]: [Phase 20 / 20-02]: shared evaluator consumers wired (block drops via loot.Roll, blockDropTable deleted; createChest emits chest BE {LootTable,LootTableSeed} with unconditional nextLong; chest_loot.go unpackLootTable lazy roll; jungle_temple fingerprint re-sealed; W2 SPLIT chest-OPEN UI to follow-up). Docker -race green.
 
 ### Pending Todos
 
@@ -349,7 +352,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-27T04:18:33.222Z
+Last session: 2026-06-27T04:50:52.485Z
 Stopped at: 20-03 (STRUCT-POLISH-04 StructureStart NBT persistence) COMPLETE — all 3 tasks committed (f8c17b9b, 85f35998, 531a0c6f), Docker -race ./world/structure/ ./save/ green, SUMMARY written. Spawn-guard slots left in pieceExtraData for 20-04.
 Resume file: None
 Next: OPERATOR CHECKPOINT (19-02 Task 3) — build `CGO_ENABLED=0 go build -o sulfur.exe ./cmd/sulfur`, run `./sulfur.exe -seed 777` in a REAL terminal (expect alt-screen TUI: log viewport + command input), type `say hi`+Enter (expect a `console command cmd=say hi` viewport line), connect a vanilla 26.2 client (expect a join line), Ctrl-C (clean exit), then `./sulfur.exe -seed 777 | cat` (expect NO TUI, plain stderr — today's behavior). On "approved" → mark TUI-01 complete + advance the plan counter, then proceed to Plan 19-03 (gameplay_tick.go join/leave slog conversion + the full disconnect taxonomy). The console line routes TUI→tick (EnqueueConsoleCommand, cap 64, drop-on-full)→runConsoleCommand on the tick→existing graph (grant-all, no issuer), reply to slog. gameplay_tick.go is untouched (19-03 owns it). LEGACY: Phase 17 Wave 2 (17-02/17-03) — see prior continuity below. (GAMEPLAY-05 fluid simulation: OVERWRITE server/fluid.go with the FlowingFluid port + scheduled-tick queue; lazy-init t.fluidSchedule inside tickFluids, do NOT edit tick.go/tick_phases.go) and 17-03 (GAMEPLAY-04 fall damage + PvP dispatch: OVERWRITE server/fall_damage.go using the tickPlayer fallDistance/wasOnGround/lastY fields + the lookupPlayerByEntityID reverse lookup, do NOT edit tick.go/tick_phases.go). The exact Wave-2 seam surface (field names, init point, call sites, stub signatures) is in 17-01-SUMMARY.md "WAVE-2 HANDOFF". Deferred-still-open: dungeon loot/spawner-mob + BeehiveDecorator occupant + pale_garden PaleMoss (all v3, cosmetic, in 13-04-SUMMARY); KeepAlive double-leave hardening (Phase 3). KNOWN PRE-EXISTING FLAKE: TestTickAIDrivesMobs (OPT-01 async-pool timing, not caused by 17-01) intermittently fails under full-suite load; passes in isolation + 3× under -race.

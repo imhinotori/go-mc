@@ -36,7 +36,7 @@ The "user" is (a) an unmodified vanilla 26.2 (protocol 776) client playing the w
 
 - [x] **STRUCT-POLISH-01**: Loot tables. Port the loot-table system (the embedded loot-table JSON + the function/condition/number-provider evaluation) and populate structure + dungeon chests (mineshaft, temples, igloo basement, village, dungeon) — ties to GAMEPLAY-06's block loot tables (shared evaluator).
 - [ ] **STRUCT-POLISH-02**: Structure entities. The inhabitant spawns deferred in v2 — villagers (village), witch (swamp hut), cat (village/swamp), silverfish (stronghold) — spawn with the structure via the entity store.
-- [ ] **STRUCT-POLISH-03**: `afterPlace` terrain-beard. Structures adapt to terrain (the beard/terrain-adaptation pass) instead of floating/clipping — port the `afterPlace`/`BeardifierStructureBlock` adaptation.
+- [x] **STRUCT-POLISH-03**: `afterPlace` terrain-beard. Structures adapt to terrain (the beard/terrain-adaptation pass) instead of floating/clipping — port the `afterPlace`/`BeardifierStructureBlock` adaptation.
 - [x] **STRUCT-POLISH-04**: Structure-start NBT persistence. Persist computed `StructureStart`s to region NBT (the v2 "recompute-on-demand" decision is correct for correctness but persists nothing) — write/read the structure-start tags so starts survive without recompute.
 
 ## Out of Scope
@@ -69,7 +69,7 @@ Updated during roadmap creation (`/gsd-plan-phase`).
 | TUI-02 | TBD | Complete |
 | STRUCT-POLISH-01 | TBD | Complete |
 | STRUCT-POLISH-02 | TBD | Pending |
-| STRUCT-POLISH-03 | TBD | Pending |
+| STRUCT-POLISH-03 | TBD | Complete |
 | STRUCT-POLISH-04 | TBD | Complete |
 
 **Coverage:**
