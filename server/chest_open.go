@@ -136,7 +136,12 @@ func (t *TickLoop) openChest(p *tickPlayer, pos pk.Position) bool {
 	// Lazy one-shot roll on first access (RandomizableContainer.unpackLootTable). A re-open finds
 	// LootTable already cleared, so this is a no-op the second time. ensureContainer pads the rolled
 	// (packed) list to the full 27-slot backing so menu indices 0..26 always resolve.
-	cl.unpackLootTable()
+	if cl.unpackLootTable() {
+		// SUB-PERSIST: the roll CLEARED the LootTable and FILLED the container, a persistent state
+		// change (ChestBlockEntity now saves Items, not the loot table). Dirty the column so the
+		// rolled contents flush even if the player closes without clicking. No-op if persistence off.
+		t.markChestDirty(pos)
+	}
 	cl.ensureContainer()
 
 	// ServerPlayer.openMenu: close any previously-open chest window first (containerMenu !=

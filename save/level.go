@@ -96,3 +96,16 @@ func ReadLevel(r io.Reader) (data Level, err error) {
 	_, err = decoder.Decode(&data)
 	return
 }
+
+// WriteLevel writes the level.dat NBT to w as the vanilla root compound { "Data": <LevelData> }
+// (SUB-PERSIST). It is the inverse of ReadLevel: the Level struct's single "Data" field gives the
+// `Data` wrapper LevelStorageSource.saveDataTag emits (CompoundTag.put("Data", worldData.createTag)),
+// and the encoder writes the unnamed root compound the same NbtIo.writeCompressed reads back.
+//
+// The CALLER wraps w in gzip (NbtIo.writeCompressed is gzip) — WriteLevel writes RAW NBT so it is
+// reusable for the (rare) uncompressed level.dat and so the gzip framing lives in one place
+// (SaveLevel). CITE: LevelStorageSource$LevelStorageAccess.saveDataTag — put("Data", tag) then
+// saveLevelData -> NbtIo.writeCompressed.
+func WriteLevel(w io.Writer, data Level) error {
+	return nbt.NewEncoder(w).Encode(data, "")
+}

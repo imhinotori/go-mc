@@ -303,6 +303,21 @@ type TickLoop struct {
 	// (resolved/mutated only on the tick goroutine — TICK-05 — since the open/click/close path runs
 	// on-tick). A future plan flushes this back to the chunk BE NBT on unload/save.
 	openChests map[pk.Position]*chestLoot
+
+	// chunkSaver is the off-tick chunk-persistence consumer (SUB-PERSIST). It is nil until
+	// SetChunkSaver wires it (tests/ephemeral runs leave it nil → no chunk saves). The tick's save
+	// phase (tickChunkSave) drains the manager's dirty set, SERIALIZES each dirty/unloaded chunk ON
+	// the owner goroutine (folding any rolled openChests for that column into the chunk's BE Items
+	// NBT), and Enqueue's the IMMUTABLE bytes here; chunkSaver.RunChunkSaveLoop (its own goroutine)
+	// does the region IO. Only finished bytes cross the seam — no live tick-owned pointer — so the
+	// save IO is race-free by construction (the leaveSnapshots discipline applied to chunks).
+	chunkSaver *world.ChunkSaver
+
+	// chunkSaveTickCounter counts ticks toward the next periodic chunk-save pass (SUB-PERSIST). The
+	// save phase flushes dirty chunks every chunkSaveIntervalTicks rather than every tick, so a
+	// rapid edit stream coalesces into one save per interval (a chunk dirtied 20× in a second is
+	// serialized once). Tick-owned (incremented only on the owner goroutine).
+	chunkSaveTickCounter int
 }
 
 // respawnTeleportBase seeds the tick-owned respawn teleport-id counter well above any join id

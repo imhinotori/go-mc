@@ -22,6 +22,7 @@ import (
 	"log"
 	"log/slog"
 	"os"
+	"path/filepath"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -205,9 +206,25 @@ func main() {
 		gen = ng
 		log.Printf("full-parity NoiseGenerator armed (seed=%d): SAFE spawn (%.1f, %.1f, %.1f) found=%v; full feature pipeline live (per-biome trees + ground cover + decoration ores + dungeons)", *seed, spawnPoint.X, spawnPoint.Y, spawnPoint.Z, sp.Found)
 	}
-	worker := world.NewWorker(gen, "", workerBuf)
+	// SUB-PERSIST: chunk persistence is OPT-IN via SULFUR_PERSIST_CHUNKS=1 so the default run keeps
+	// the v1 always-generate behaviour (regionDir "" => the worker never region-loads, every chunk
+	// is freshly generated — the deterministic-MVP contract many tests rely on). When enabled, BOTH
+	// the worker (READ) and the ChunkSaver (WRITE) target worldDir/region, so a saved chunk reloads
+	// through the SAME tryRegion path with no extra wiring (load/save symmetric). The save loop is
+	// started below alongside the player save loop.
+	chunkRegionDir := ""
+	if os.Getenv("SULFUR_PERSIST_CHUNKS") == "1" {
+		chunkRegionDir = filepath.Join(worldDir, "region")
+		log.Printf("SULFUR_PERSIST_CHUNKS=1: chunk persistence ENABLED (region dir %q) — edited chunks flush to disk and reload on revisit", chunkRegionDir)
+	}
+	worker := world.NewWorker(gen, chunkRegionDir, workerBuf)
 	mgr := world.NewChunkManager()
 	tick.SetWorld(mgr, worker)
+	// SUB-PERSIST: wire the off-tick chunk-save consumer (a no-op disabled saver when chunkRegionDir
+	// is "" — the default). It writes to the SAME region dir the worker reads, so the round-trip
+	// closes through the existing load path. Started in its own goroutine below (RunChunkSaveLoop).
+	chunkSaver := world.NewChunkSaver(chunkRegionDir)
+	tick.SetChunkSaver(chunkSaver)
 	// ENT-05: tell the tick where the world spawn surface is so an in-game respawn
 	// re-teleports a player two blocks above it — the same placement the join bootstrap
 	// uses (NewGameTick is handed the same spawnSurfaceY below). For the noise generator
@@ -253,6 +270,10 @@ func main() {
 	// blocks the tick on persistence and no live tick-owned state is read off-thread.
 	tick.SetSaveSink()
 	go tick.RunSaveLoop(ctx, worldDir)
+	// SUB-PERSIST: the off-tick chunk-save consumer (its own goroutine, like the player save loop).
+	// Disabled (SULFUR_PERSIST_CHUNKS != 1) it just waits on ctx — no disk IO. Enabled it drains the
+	// tick's immutable chunk snapshots and writes them to region files OFF the tick.
+	go chunkSaver.RunChunkSaveLoop(ctx, log.Printf)
 
 	go tick.Run(ctx, inbound)
 	go keep.Run(ctx)

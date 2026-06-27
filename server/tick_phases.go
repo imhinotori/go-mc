@@ -119,6 +119,10 @@ func (t *TickLoop) resolveSubtickInputs() {
 func (t *TickLoop) tickWorld() {
 	t.trace("tickWorld")
 	t.tickFluids()
+	// SUB-PERSIST: the periodic chunk-save pass (every chunkSaveIntervalTicks). It lives INSIDE
+	// this existing phase so no new phase is added to the fixed tick order (TestTickPhaseOrder
+	// stays green). A nil/disabled chunkSaver makes it a cheap no-op (tests/ephemeral runs).
+	t.tickChunkSave()
 }
 
 // tickChunks issues the per-player chunk requests for this tick (WORLD-05). For each

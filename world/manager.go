@@ -40,10 +40,57 @@ type holder struct {
 // send-tracking live in the server package; this type is pure storage/query.
 type ChunkManager struct {
 	columns map[level.ChunkPos]*holder
+	// dirty is the SUB-PERSIST dirty-chunk set: a column is marked dirty the moment its
+	// blocks/block-entities change (SetBlock, or an explicit MarkDirty for BE/entity edits),
+	// and cleared when the save loop has snapshotted it (DrainDirty). It is part of the SAME
+	// tick-owned single-owner discipline as columns — touched ONLY on the tick goroutine
+	// (TICK-05), so it needs no lock. A dirty column that is later Remove'd (unload) is dropped
+	// from the set too, so an unloaded chunk is not spuriously re-saved from a stale flag.
+	dirty map[level.ChunkPos]struct{}
 }
 
 func NewChunkManager() *ChunkManager {
-	return &ChunkManager{columns: make(map[level.ChunkPos]*holder)}
+	return &ChunkManager{
+		columns: make(map[level.ChunkPos]*holder),
+		dirty:   make(map[level.ChunkPos]struct{}),
+	}
+}
+
+// MarkDirty flags pos as needing a save (SUB-PERSIST). The tick calls it for any chunk mutation
+// the block path does not itself capture — block-entity edits (a chest's items changing), entity
+// spawns/despawns persisted into the column, etc. SetBlock marks dirty itself, so a plain block
+// edit need not call this. A no-op for an unloaded/absent column (a chunk that is not Ready has
+// nothing to serialize). Tick-owned (TICK-05).
+func (m *ChunkManager) MarkDirty(pos level.ChunkPos) {
+	if h := m.columns[pos]; h == nil || h.state != stateReady {
+		return // not a live column: nothing to save
+	}
+	m.dirty[pos] = struct{}{}
+}
+
+// IsDirty reports whether pos is currently flagged dirty. A pure read for the save scheduler /
+// tests. Tick-owned.
+func (m *ChunkManager) IsDirty(pos level.ChunkPos) bool {
+	_, ok := m.dirty[pos]
+	return ok
+}
+
+// DrainDirty returns the current dirty columns (as a fresh slice) and CLEARS the dirty set, so a
+// chunk is snapshotted at most once per drain and a no-further-change chunk is not re-saved. The
+// caller (the tick's save phase) snapshots each returned column on the OWNER goroutine and hands
+// the immutable bytes off-tick — exactly the leaveSnapshots discipline. Returns a nil slice when
+// nothing is dirty (the common idle case). Tick-owned (TICK-05).
+func (m *ChunkManager) DrainDirty() []level.ChunkPos {
+	if len(m.dirty) == 0 {
+		return nil
+	}
+	out := make([]level.ChunkPos, 0, len(m.dirty))
+	for pos := range m.dirty {
+		out = append(out, pos)
+	}
+	// Clear the set in place (a fresh map keeps the allocation small after a burst).
+	m.dirty = make(map[level.ChunkPos]struct{})
+	return out
 }
 
 // Get returns the ready chunk for pos, or (nil,false) if absent or not yet ready.
@@ -105,11 +152,15 @@ func (m *ChunkManager) Insert(pos level.ChunkPos, ch *level.Chunk) {
 // Loading forever. Equivalent to Remove but named for the error path.
 func (m *ChunkManager) MarkEmpty(pos level.ChunkPos) {
 	delete(m.columns, pos)
+	delete(m.dirty, pos) // a dropped column has nothing to save (no stale-flag re-save)
 }
 
-// Remove unloads pos entirely.
+// Remove unloads pos entirely. The caller (the save scheduler) is responsible for FLUSHING a
+// dirty column BEFORE Remove (the on-unload save) — Remove itself just drops the holder + clears
+// the dirty flag so an unloaded chunk is never re-saved from a stale flag.
 func (m *ChunkManager) Remove(pos level.ChunkPos) {
 	delete(m.columns, pos)
+	delete(m.dirty, pos)
 }
 
 // Len reports the number of tracked columns (any state). The streamer uses it to
@@ -185,5 +236,11 @@ func (m *ChunkManager) SetBlock(pos pk.Position, state block.StateID, minY int) 
 		return false // already this state: a no-op, do not re-broadcast an unchanged edit
 	}
 	ch.Sections[sec].SetBlock(local, state)
+	// SUB-PERSIST: a CHANGED block dirties its column so the save loop flushes it. Marked here,
+	// at the SOLE block mutator, so every block edit (place/break/fluid/vegetation) is captured
+	// without each call site remembering to mark. The column is Ready (columnAndSection resolved
+	// it), so MarkDirty is never a no-op here. Tick-owned (SetBlock runs only on the owner).
+	col := level.ChunkPos{int32(floorDiv16(pos.X)), int32(floorDiv16(pos.Z))}
+	m.dirty[col] = struct{}{}
 	return true
 }

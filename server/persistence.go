@@ -9,10 +9,14 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"sync"
 
 	"github.com/imhinotori/sulfur/data/item"
 	"github.com/imhinotori/sulfur/level"
+	"github.com/imhinotori/sulfur/level/component"
 	"github.com/imhinotori/sulfur/nbt"
+	pk "github.com/imhinotori/sulfur/net/packet"
 	"github.com/imhinotori/sulfur/save"
 	"github.com/imhinotori/sulfur/save/region"
 
@@ -77,23 +81,31 @@ func snapshotPlayer(p *tickPlayer) save.PlayerData {
 	return data
 }
 
-// inventoryToItems translates the tick-owned component-slot inventory into the disk-NBT
-// []save.Item form (Pitfall 6: disk NBT, NOT the wire component codec). Only populated slots
-// (Count > 0) are persisted; the numeric wire item id is resolved to its "minecraft:<name>"
-// string id via the item registry (item.ByID). The wire component bytes (RawComponents) are
-// NOT written to disk — v1 persists Count/Slot/ID, which is enough to round-trip a visible item;
-// the legacy save.Item.Tag NBT slot is left empty (a later plan maps components to disk tags).
-func inventoryToItems(inv *Inventory) []save.Item {
-	var items []save.Item
+// inventoryToItems translates the tick-owned component-slot inventory into the modern disk-NBT
+// ItemStackWithSlot list (SUB-PERSIST: the 26.2 codec, NOT the legacy save.Item; NOT the wire
+// component codec — Pitfall 6). It builds a []save.DiskItem over the inventory slots (resolving the
+// numeric wire id → "minecraft:<name>" string id, flagging component-bearing stacks) and runs
+// save.SaveAllItems (skip-empty, Slot=index, the ContainerHelper port). keepEmptyTag=false so an
+// empty inventory writes no Items list. Component-bearing stacks persist {Slot,id,count} only
+// (Phase A drop, metered by dropped); a later Phase B transcodes their components to disk NBT.
+//
+// CITE: net.minecraft.world.entity.player.Inventory.save — for each non-empty slot, add
+// ItemStackWithSlot(i, stack) to the typed list (identical skip-empty + Slot=index to saveAllItems).
+func inventoryToItems(inv *Inventory) []save.ItemStackWithSlotDisk {
+	disk := make([]save.DiskItem, len(inv.slots))
 	for i, slot := range inv.slots {
 		if slot.Count <= 0 {
-			continue // empty slot: not persisted
+			continue // empty slot: zero DiskItem (skipped on save by index)
 		}
-		items = append(items, save.Item{
-			Slot:  byte(i),
-			Count: byte(slot.Count),
-			ID:    itemName(int32(slot.ItemID)),
-		})
+		disk[i] = save.DiskItem{
+			ID:            itemName(int32(slot.ItemID)),
+			Count:         int32(slot.Count),
+			HasComponents: len(slot.RawComponents) > 0, // Phase A: components dropped, metered
+		}
+	}
+	items, dropped := save.SaveAllItems(disk, false)
+	if dropped > 0 {
+		log.Printf("player inventory: %d component-bearing stacks persisted without components (SUB-ITEMNBT Phase A)", dropped)
 	}
 	return items
 }
@@ -106,6 +118,53 @@ func itemName(id int32) string {
 		return "minecraft:" + it.Name
 	}
 	return "minecraft:air"
+}
+
+// itemNameToID is the reverse of itemName: a "minecraft:<name>" (or bare "<name>") disk id → the
+// numeric wire item id, for restoring a loaded inventory/container into the tick-owned slot form.
+// It is the load-side registry resolver (SUB-PERSIST round-trip). The reverse map is built ONCE
+// lazily from item.ByID (data/item has no ByName), under a sync.Once so a join never races the
+// build. An unknown/forged id resolves to air (id 0) so a corrupt save never injects an invalid item.
+var (
+	itemIDByNameOnce sync.Once
+	itemIDByName     map[string]item.ID
+)
+
+func itemNameToID(name string) int32 {
+	itemIDByNameOnce.Do(func() {
+		itemIDByName = make(map[string]item.ID, len(item.ByID))
+		for id, it := range item.ByID {
+			itemIDByName[it.Name] = id
+		}
+	})
+	// Accept both "minecraft:stone" and bare "stone" (the registry stores the bare path).
+	name = strings.TrimPrefix(name, "minecraft:")
+	if id, ok := itemIDByName[name]; ok {
+		return int32(id)
+	}
+	return 0 // unknown id: air (never inject an invalid item from a corrupt save)
+}
+
+// itemsToInventory is the LOAD inverse of inventoryToItems (SUB-PERSIST round-trip): it places a
+// loaded ItemStackWithSlot list back into a fresh tick-owned []component.SlotData of size, via
+// save.LoadAllItems (bounds-checked, slot-keyed) then resolving each id string → numeric wire id.
+// A Phase-A-saved item has no components (RawComponents stays nil); a future Phase B decode would
+// re-attach them. Out-of-range slots are silently dropped (isValidInContainer). Returns the slot
+// array the join restore copies into the live inventory.
+func itemsToInventory(items []save.ItemStackWithSlotDisk, size int) []component.SlotData {
+	disk := save.LoadAllItems(items, size)
+	out := make([]component.SlotData, size)
+	for i, d := range disk {
+		if d.IsEmpty() {
+			continue
+		}
+		out[i] = component.SlotData{
+			Count:  pk.VarInt(d.Count),
+			ItemID: pk.VarInt(itemNameToID(d.ID)),
+			// RawComponents nil in Phase A (components were dropped on save).
+		}
+	}
+	return out
 }
 
 // savePlayer writes a player snapshot to world/playerdata/<uuid>.dat as gzip-wrapped NBT (the

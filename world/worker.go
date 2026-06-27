@@ -123,6 +123,27 @@ func NewWorker(gen Generator, regionDir string, buf int) *Worker {
 // Results is the read-only channel the tick drains for immutable ChunkResults.
 func (w *Worker) Results() <-chan ChunkResult { return w.results }
 
+// RegionDir returns the world region directory this worker reads from (and the save loop writes
+// to), or "" when persistence is disabled (always-generate). SUB-PERSIST: the server's save phase
+// reads it to build the ChunkSaver so the WRITE path targets the SAME directory tryRegion READS,
+// keeping load/save symmetric with no extra config. Set-once at construction; read-only.
+func (w *Worker) RegionDir() string { return w.regionDir }
+
+// MinY returns the generator's world-bottom (Dims().minY), the value SerializeChunkData needs to
+// map a chunk's bottom section to its YPos. SUB-PERSIST: the save phase threads it into
+// SerializeChunkData exactly as the worker's own decorate path does (w.gen.Dims()). Read-only.
+func (w *Worker) MinY() int {
+	minY, _ := w.gen.Dims()
+	return minY
+}
+
+// StructureCache exposes the generator's StructureStart cache (or nil for a structure-free
+// generator) so the save phase can pass it to SerializeChunkData — a saved structure chunk then
+// carries its starts (STRUCT-POLISH-04 write seam) and a reload seeds the cache instead of
+// recomputing. Delegates to the same structureCacheHolder assertion the worker's own seam uses, so
+// Superflat (no cache) yields nil and the save simply omits the `structures` tag. Read-only.
+func (w *Worker) StructureCache() *structure.Cache { return w.structureCache() }
+
 // Request enqueues pos for load/generation. Non-blocking: if the bounded request
 // channel is full it drops the request (the tick re-requests next tick), which
 // applies backpressure instead of spawning unbounded work.
