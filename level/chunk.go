@@ -227,7 +227,68 @@ func ChunkToSave(c *Chunk, dst *save.Chunk) (err error) {
 	dst.Heightmaps["MOTION_BLOCKING"] = c.HeightMaps.MotionBlocking.Raw()
 	dst.Heightmaps["MOTION_BLOCKING_NO_LEAVES"] = c.HeightMaps.MotionBlockingNoLeaves.Raw()
 	dst.Status = string(c.Status)
+
+	// block_entities: serialize each BlockEntity as a full-metadata compound (the inverse of
+	// ChunkFromSave's id/x/y/z decode). Ports BlockEntity.saveWithFullMetadata =
+	// saveWithoutMetadata (the BE's own Data payload) + saveMetadata (adds "id" = the block-entity
+	// type's registry id, and "x"/"y"/"z" ints = the ABSOLUTE world position). Without this,
+	// generated chests/spawners (their {LootTable,LootTableSeed} / {SpawnData} NBT) were dropped on
+	// every save and would not survive a chunk reload. CITE: net.minecraft.world.level.block.entity.
+	// BlockEntity.saveWithFullMetadata / saveMetadata / addEntityType ("id" string + x,y,z ints).
+	if n := len(c.BlockEntity); n > 0 {
+		dst.BlockEntities = make([]nbt.RawMessage, 0, n)
+		for i := range c.BlockEntity {
+			be := c.BlockEntity[i]
+			lx, lz := be.UnpackXZ()
+			wx := int(dst.XPos)<<4 + lx
+			wz := int(dst.ZPos)<<4 + lz
+			id := ""
+			if t := int(be.Type); t >= 0 && t < len(block.EntityList) {
+				id = block.EntityList[t].ID()
+			}
+			full, merrr := blockEntityFullMetadata(be.Data, id, wx, int(be.Y), wz)
+			if merrr != nil {
+				return merrr
+			}
+			dst.BlockEntities = append(dst.BlockEntities, full)
+		}
+	}
 	return
+}
+
+// blockEntityFullMetadata merges a block entity's bare Data compound payload (its
+// saveWithoutMetadata fields — e.g. {LootTable,LootTableSeed} for a chest) with the metadata keys
+// BlockEntity.saveMetadata writes ("id" string + "x","y","z" ints, absolute world coords), yielding
+// the full on-disk compound ChunkFromSave reads back. The merge is byte-level: a TagCompound payload
+// is a run of named tags terminated by a single TagEnd (0x00). The metadata tags are spliced in
+// before that terminating byte. CITE: BlockEntity.saveWithFullMetadata = saveWithoutMetadata +
+// saveMetadata (addEntityType "id" + putInt x/y/z).
+func blockEntityFullMetadata(data nbt.RawMessage, id string, x, y, z int) (nbt.RawMessage, error) {
+	// Marshal the metadata fields as their own compound document: [0x0A][0x00 0x00][fields...][0x00].
+	metaDoc, err := nbt.Marshal(struct {
+		ID string `nbt:"id"`
+		X  int32  `nbt:"x"`
+		Y  int32  `nbt:"y"`
+		Z  int32  `nbt:"z"`
+	}{ID: id, X: int32(x), Y: int32(y), Z: int32(z)})
+	if err != nil {
+		return nbt.RawMessage{}, fmt.Errorf("level: blockEntityFullMetadata: marshal metadata: %w", err)
+	}
+	// Strip the 3-byte root header ([0x0A][nameLen hi][nameLen lo]) -> [fields...][0x00].
+	metaFields := metaDoc[3:]
+
+	// The bare BE data payload is [fields...][0x00]; an empty/absent payload is just the terminator.
+	bare := data.Data
+	if len(bare) == 0 {
+		// No own fields: the full compound is exactly the metadata fields.
+		return nbt.RawMessage{Type: nbt.TagCompound, Data: append([]byte(nil), metaFields...)}, nil
+	}
+	// Drop the bare compound's terminating TagEnd, then append the metadata fields (which carry
+	// their own terminating TagEnd). Result: [bareFields...][metaFields...][0x00].
+	merged := make([]byte, 0, len(bare)-1+len(metaFields))
+	merged = append(merged, bare[:len(bare)-1]...)
+	merged = append(merged, metaFields...)
+	return nbt.RawMessage{Type: nbt.TagCompound, Data: merged}, nil
 }
 
 func writeStatesPalette(paletteData *PaletteContainer[BlocksState]) (palette []save.BlockState, data []uint64, err error) {

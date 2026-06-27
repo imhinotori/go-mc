@@ -64,12 +64,13 @@ func SerializeChunkData(cache *structure.Cache, pos level.ChunkPos, ch *level.Ch
 	// works around. The `structures` field is omitted when empty (TagEnd) so a structure-free
 	// chunk encodes cleanly.
 	minimal := chunkSaveShape{
-		Sections:   full.Sections,
-		Heightmaps: full.Heightmaps,
-		Status:     full.Status,
-		YPos:       full.YPos,
-		XPos:       full.XPos,
-		ZPos:       full.ZPos,
+		Sections:      full.Sections,
+		Heightmaps:    full.Heightmaps,
+		Status:        full.Status,
+		YPos:          full.YPos,
+		XPos:          full.XPos,
+		ZPos:          full.ZPos,
+		BlockEntities: full.BlockEntities,
 	}
 	if structures.Type != nbt.TagEnd && len(structures.Data) > 0 {
 		minimal.Structures = &structures
@@ -93,6 +94,9 @@ type chunkSaveShape struct {
 	YPos       int32               `nbt:"yPos"`
 	XPos       int32               `nbt:"xPos"`
 	ZPos       int32               `nbt:"zPos"`
+	// BlockEntities carries the chunk's block entities (chest loot tables, spawners) so a saved
+	// structure chunk round-trips them. omitempty so a BE-free chunk emits no (empty-list) tag.
+	BlockEntities []nbt.RawMessage `nbt:"block_entities,omitempty"`
 	// Structures is a POINTER so a structure-free chunk (nil) is dropped by omitempty — an
 	// empty nbt.RawMessage value would still try to encode (TagEnd) and the encoder rejects it.
 	Structures *nbt.RawMessage `nbt:"structures,omitempty"`

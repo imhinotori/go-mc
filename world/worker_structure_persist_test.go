@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/imhinotori/sulfur/level"
+	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/save/region"
 	"github.com/imhinotori/sulfur/world/structure"
 )
@@ -174,5 +175,78 @@ func TestStructureReloadMissingTagRecomputes(t *testing.T) {
 	}
 	if n := spy.recomps.Load(); n != 1 {
 		t.Fatalf("expected exactly 1 recompute for the owner after a tag-less reload, got %d", n)
+	}
+}
+
+// TestBlockEntitySurvivesReload proves a chunk's block entities (e.g. a generated chest's
+// {LootTable,LootTableSeed} NBT) survive the REAL save/load seam: SerializeChunkData (which now
+// emits the `block_entities` compound via ChunkToSave's full-metadata serialization) -> region .mca
+// -> a fresh Worker.loadOrGenerate (decodeChunk -> ChunkFromSave's id/x/y/z decode). Before the BE
+// serialization fix ChunkToSave dropped block_entities entirely, so a reloaded structure chunk lost
+// its chest loot tables / spawners. We inject a chest BE into the decorated owner chunk so the test
+// is independent of which structure happens to place a chest at this seed.
+func TestBlockEntitySurvivesReload(t *testing.T) {
+	owner := level.ChunkPos{desertPyramidChunkX, desertPyramidChunkZ}
+
+	src := NewNoiseGenerator(desertPyramidSeed, testSecs, testMinY)
+	ch := decorateChunkVia(src, owner)
+	minY, _ := src.Dims()
+
+	const (
+		localX, localZ = 3, 9
+		beY            = 70
+		table          = "minecraft:chests/desert_pyramid"
+		seed           = int64(-0x0102030405060708)
+	)
+	be := level.BlockEntity{Y: beY, Type: block.EntityTypes["minecraft:chest"]}
+	if !be.PackXZ(localX, localZ) {
+		t.Fatalf("PackXZ(%d,%d) failed", localX, localZ)
+	}
+	be.Data = chestLootNBT(table, seed)
+	ch.BlockEntity = append(ch.BlockEntity, be)
+
+	blob, err := SerializeChunkData(src.StructureCache(), owner, ch, minY)
+	if err != nil {
+		t.Fatalf("SerializeChunkData: %v", err)
+	}
+
+	dir := t.TempDir()
+	writeChunkBlobToMca(t, dir, owner, blob)
+
+	fresh := NewNoiseGenerator(desertPyramidSeed, testSecs, testMinY)
+	w := NewWorker(fresh, dir, 8)
+	loaded, err := w.loadOrGenerate(owner)
+	if err != nil {
+		t.Fatalf("worker loadOrGenerate: %v", err)
+	}
+	if loaded == nil {
+		t.Fatal("worker returned a nil chunk for a present region cell")
+	}
+
+	// Find the injected chest BE in the reloaded chunk and assert its loot fields survived.
+	found := false
+	for i := range loaded.BlockEntity {
+		lbe := loaded.BlockEntity[i]
+		gx, gz := lbe.UnpackXZ()
+		if gx != localX || gz != localZ || int(lbe.Y) != beY {
+			continue
+		}
+		found = true
+		if lbe.Type != block.EntityTypes["minecraft:chest"] {
+			t.Errorf("reloaded BE Type: got %d, want chest", lbe.Type)
+		}
+		var got struct {
+			LootTable     string `nbt:"LootTable"`
+			LootTableSeed int64  `nbt:"LootTableSeed"`
+		}
+		if err := lbe.Data.Unmarshal(&got); err != nil {
+			t.Fatalf("unmarshal reloaded BE data: %v", err)
+		}
+		if got.LootTable != table || got.LootTableSeed != seed {
+			t.Errorf("reloaded loot: got (%q,%#x), want (%q,%#x)", got.LootTable, got.LootTableSeed, table, seed)
+		}
+	}
+	if !found {
+		t.Fatalf("injected chest BE at local (%d,%d,%d) did not survive the reload", localX, beY, localZ)
 	}
 }

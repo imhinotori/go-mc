@@ -163,7 +163,11 @@ func (e *Encoder) writeValue(val reflect.Value, tagType byte) error {
 
 		for i := 0; i < val.Len(); i++ {
 			arrType, arrVal := getTagType(val.Index(i))
-			err := e.writeValue(arrVal, arrType)
+			// Route through marshal (not writeValue directly) so a list element that implements
+			// Marshaler (e.g. RawMessage) emits its own payload verbatim instead of being
+			// re-encoded as a struct. Without this, a []RawMessage list of compounds was written
+			// as a list of {Type,Data} structs (corrupting block_entities / structure NBT).
+			err := e.marshal(arrVal, arrType)
 			if err != nil {
 				return err
 			}
