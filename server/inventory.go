@@ -219,9 +219,17 @@ func (t *TickLoop) handleContainerClick(p *tickPlayer, pkt pk.Packet) {
 func (t *TickLoop) clicked(p *tickPlayer, containerID int32, slotNum int16, button int, input int32) {
 	inv := ensureInventory(p)
 
-	// Only the player inventory window exists in v1.
+	// An OPEN chest window (STRUCT-POLISH-01) routes to the chest click engine: the click moves
+	// items between the chest container and the player inventory over the shared cursor. The window
+	// id must match the player's currently-open container (a forged/stale id is rejected — resend).
 	if containerID != playerContainerID {
-		t.sendContent(p) // resend authoritative content for the unknown window
+		if p.openContainer != nil && containerID == int32(p.openContainer.windowID) {
+			if cl := t.resolveChest(p.openContainer.chestPos); cl != nil {
+				t.clickedChest(p, cl, slotNum, button, input)
+				return
+			}
+		}
+		t.sendContent(p) // unknown/stale window: resend authoritative player content
 		return
 	}
 
@@ -288,11 +296,25 @@ func (t *TickLoop) handleSetCarriedItem(p *tickPlayer, pkt pk.Packet) {
 	ensureInventory(p).heldSlot = int16(slot)
 }
 
-// handleContainerClose resolves a ServerboundContainerClose on-tick (ENT-04). v1 cleanup is a
-// no-op (the player inventory window stays open conceptually); a later plan tears down any
-// open container state. Defensive: never reads the (small) payload, never panics.
+// handleContainerClose resolves a ServerboundContainerClose on-tick (ENT-04 / STRUCT-POLISH-01).
+// When the player has an OPEN chest window, closing it ports ServerPlayer.closeContainer →
+// AbstractContainerMenu.removed: the chest container's contents are already authoritative in the
+// tick-owned chestLoot (every click mutated it in place and t.openChests retains it across opens),
+// so close just FREES the windowId (clears p.openContainer) — the chest items persist in
+// t.openChests and re-open serves them. The player-inventory window (id 0) close is a no-op (it
+// stays conceptually open). Defensive: a malformed/short payload is tolerated (never panics).
+//
+// Persistence note: the chest contents survive in t.openChests for the server's lifetime; flushing
+// them back to the chunk BlockEntity NBT on chunk-unload/world-save is a follow-up (the BE NBT
+// currently only carries {LootTable, LootTableSeed} — a future plan adds the item list on save).
 func (t *TickLoop) handleContainerClose(p *tickPlayer, pkt pk.Packet) {
-	// No-op for v1. The packet carries a single VarInt containerId; nothing to do yet.
-	_ = p
+	if p == nil {
+		return
+	}
+	// The chest's items live in the tick-owned chestLoot (t.openChests), already mutated by clicks —
+	// nothing to copy back here; freeing the window is the whole close. (A cursor item left on the
+	// mouse is dropped by vanilla in removed(); v1 leaves it on the player cursor — it is reconciled
+	// into the player inventory on the next inventory interaction. Cited refinement.)
+	p.openContainer = nil
 	_ = pkt
 }
