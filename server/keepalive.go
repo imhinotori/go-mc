@@ -86,7 +86,17 @@ func (k *KeepAlive) pushPlayer(c KeepAliveClient) {
 }
 
 func (k *KeepAlive) removePlayer(c KeepAliveClient) {
-	elem := k.listIndex[c]
+	// Double-leave hardening (STATE.md Deferred Items, deferred from Phase 3 to the phase
+	// that adds real timeout-driven disconnects = Phase 19 / TUI-02). A player the
+	// keep-alive already removed on a 30s-timeout kick, then ClientLeft again, calls
+	// removePlayer a SECOND time for a now-missing key. The old `elem := k.listIndex[c]`
+	// yielded a nil *list.Element and elem.Prev()/Remove(elem) panicked, crashing the
+	// keep-alive goroutine. Guard the map read with the ok form (mirrors the tickPlayer
+	// ok-guard at keepalive.go:118, but non-panicking): a missing key returns early.
+	elem, ok := k.listIndex[c]
+	if !ok {
+		return // already removed (timeout-kicked then ClientLeft) — no panic
+	}
 	delete(k.listIndex, c)
 	if elem.Prev() == nil {
 		// At present, it is difficult to distinguish

@@ -1,7 +1,7 @@
 package server
 
 import (
-	"log"
+	"log/slog"
 	"math"
 	"sync/atomic"
 
@@ -398,14 +398,14 @@ func (g *gameTick) AcceptPlayer(
 
 	g.loop.register <- player
 
-	// JOIN log (17-09 / TUI-02 foundation): the player is now accepted, bootstrapped, and
-	// handed to the tick — emit one greppable structured line so operators (and the Phase 17
-	// visual gate) can SEE the join the moment it lands. Goes to the same stderr as the rest
-	// of the server (log.Default()): AcceptPlayer holds no logger field, and threading one
-	// here would touch the tick struct that sibling agents are editing, so log.Printf is the
-	// non-invasive choice. name/id come from the login profile args, entityID/addr from the
-	// just-registered player and its connection.
-	log.Printf("player joined: name=%s uuid=%s entityID=%d addr=%s", name, id, entityID, c.RemoteAddr())
+	// JOIN log (TUI-02): the player is now accepted, bootstrapped, and handed to the tick —
+	// emit one greppable structured line so operators (and the Phase 17 visual gate) can SEE
+	// the join the moment it lands. Through slog (19-01) the line appears in BOTH the operator
+	// TUI viewport (TTY mode) and plain stderr (headless), with structured attrs. name/id come
+	// from the login profile args, entityID/addr from the just-registered player and its
+	// connection.
+	slog.Info("player joined",
+		"name", name, "uuid", id, "entityID", entityID, "addr", c.RemoteAddr())
 
 	// Block until the connection closes (the player is playing). The conn is torn down
 	// when this returns, per the GamePlay contract; until then we keep the connection
@@ -413,14 +413,18 @@ func (g *gameTick) AcceptPlayer(
 	// error, or queue-full drop) — that is the player's leave signal.
 	<-c.quit
 
-	// LEAVE log (17-09 / TUI-02 foundation): c.quit unblocked, so the connection is gone.
-	// Read the best-known reason: the keep-alive timeout kick set "timeout" via
-	// SetDisconnectReason (keepAliveClient.SendDisconnect) BEFORE Close; any other teardown
-	// (client closed the socket / read or write EOF / queue-full drop) left it unset and
-	// DisconnectReason() reports "quit". This is the minimal viable taxonomy — the full
-	// kick/protocol-reason set is TUI-02 (Phase 19). Emitted before unregister so the line
-	// is greppable alongside the join even if a later step were to block.
-	log.Printf("player left: name=%s uuid=%s reason=%s", name, id, c.DisconnectReason())
+	// LEAVE log (TUI-02): c.quit unblocked, so the connection is gone. Read the best-known
+	// reason from the full taxonomy (Phase 19): the keep-alive timeout kick set "timeout"; a
+	// decode/read fault set "protocol_error" (vs a clean EOF → the default "quit"); a write
+	// failure / backpressure drop set "write_error"/"backpressure"; a server-full kick set
+	// "kicked". reasonHuman maps the token to a one-line detail for the operator. Through slog
+	// (19-01) the line surfaces in BOTH the TUI viewport and stderr with structured attrs.
+	// Emitted before unregister so the line is greppable alongside the join even if a later
+	// step were to block.
+	reason := c.DisconnectReason()
+	slog.Info("player left",
+		"name", name, "uuid", id, "addr", c.RemoteAddr(),
+		"reason", reason, "detail", reasonHuman(reason))
 
 	// Leave: unregister from the tick (message; the owner removes it on-thread) and from
 	// the independent keep-alive. Order is not load-bearing — both are idempotent no-ops
