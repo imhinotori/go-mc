@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v3
 milestone_name: Online-mode + Operator UX + Structure polish
 status: verifying
-stopped_at: 20-03 (STRUCT-POLISH-04 StructureStart NBT persistence) COMPLETE — all 3 tasks committed (f8c17b9b, 85f35998, 531a0c6f), Docker -race ./world/structure/ ./save/ green, SUMMARY written. Spawn-guard slots left in pieceExtraData for 20-04.
+stopped_at: 20-03 (STRUCT-POLISH-04 StructureStart NBT persistence) COMPLETE + GAP-CLOSED — the persistence seam is now WIRED into the runtime: worker.go decodeAndSeed seeds the cache from sc.Structures on region load (ReadChunkStructures, via the structureCacheHolder interface NoiseGenerator satisfies), world/chunk_save.go SerializeChunkData emits the structures compound on save (WriteChunkStructures). Reload integration test (TestStructureStartsSurviveReloadWithoutRecompute) proves starts survive a reload WITHOUT recompute (recompute-spy = 0); tag-less reload recomputes (no panic). CGO=0 build/vet/test green, Docker -race green. SC4 now met in the running server. Original seam: f8c17b9b, 85f35998, 531a0c6f.
 last_updated: "2026-06-27T06:17:39.774Z"
 progress:
   total_phases: 4

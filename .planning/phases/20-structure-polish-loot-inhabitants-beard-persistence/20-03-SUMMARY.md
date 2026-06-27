@@ -123,8 +123,43 @@ None. The piece set is broad (30+ concrete piece types across mineshaft/strongho
 - The worker call-site wiring (`ReadChunkStructures`/`WriteChunkStructures`) is a documented one-line additive change for the integration step.
 - No new deps; CGO_ENABLED=0 clean; no `import "C"`.
 
+## Gap Closure (STRUCT-POLISH-04 SC4 — runtime wiring)
+
+The 20-VERIFICATION report found SC4 **partial**: the persistence seam (`WriteChunkStructures` /
+`ReadChunkStructures` / `Cache.StoreStarts`) was built + tested but had **zero production callers**,
+so at runtime starts were ALWAYS recomputed and the observable truth "starts survive WITHOUT
+recompute" was unmet. This was the documented "one-line additive integration step" that no plan in
+Phase 20 executed. It is now **wired** (surgical, no NBT-layout change):
+
+- **READ path** — `world/worker.go` `decodeAndSeed` (called from `tryRegion` on both the `.linear`
+  and `.mca` region-hit paths, replacing the bare `decodeChunk`) seeds the structure cache from the
+  loaded chunk's `sc.Structures` via `ReadChunkStructures`. The worker reaches the cache through a
+  new `structureCacheHolder` interface (`StructureCache() *structure.Cache`) that `*NoiseGenerator`
+  satisfies — Superflat/test generators own no cache and skip seeding. `decodeChunk` now also
+  returns the `*save.Chunk` so the caller can read `sc.Structures`. Absent/garbled tag → recompute
+  (the always-valid fallback), never a panic.
+- **WRITE path** — `world/chunk_save.go` `SerializeChunkData(cache, pos, ch, minY)` builds the
+  region-ready blob and populates the `structures` compound from `WriteChunkStructures`. Wired at
+  the `world` layer (not `level.ChunkToSave`) to keep the save layer free of a `world/structure`
+  import cycle. A nil cache (structure-free generator) writes no `structures` tag. This is the
+  function any future chunk-flush calls; the integration test exercises it end-to-end today.
+- **READ accessor** — `*NoiseGenerator.StructureCache()` + `WorldSeed()` (`world/noisegen.go`).
+
+**Reload integration test** (`world/worker_structure_persist_test.go`):
+`TestStructureStartsSurviveReloadWithoutRecompute` — decorate the seed-38 desert-pyramid owner
+(seeds the source cache) → `SerializeChunkData` (WRITE) → write region `.mca` → a FRESH
+`NoiseGenerator` (its `structGen` wrapped in a recompute-counter spy) + region-backed `Worker`
+loads it (READ → seed) → asserts the fresh cache is seeded from NBT AND the spy recorded **zero**
+recomputes for the owner (the "survive WITHOUT recompute" proof). `TestStructureReloadMissingTagRecomputes`
+proves the tag-less reload recomputes (spy fires exactly once), never wedges/panics.
+
+**Gates:** `CGO_ENABLED=0 go build ./...` exit 0; `go vet ./world/ ./world/structure/ ./save/...`
+clean; `go test ./world/ ./world/structure/ ./save/...` green; Docker `-race` green (full suite +
+focused new-wiring run). No new deps (`go.mod`/`go.sum` unchanged); no `import "C"`; loot/beard/
+spawn code untouched. SC4 is now met in the running server.
+
 ## Self-Check: PASSED
 
 ---
 *Phase: 20-structure-polish-loot-inhabitants-beard-persistence*
-*Completed: 2026-06-27*
+*Completed: 2026-06-27 (gap closure: STRUCT-POLISH-04 runtime wiring)*

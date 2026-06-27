@@ -70,7 +70,7 @@ Updated during roadmap creation (`/gsd-plan-phase`).
 | STRUCT-POLISH-01 | TBD | Complete |
 | STRUCT-POLISH-02 | TBD | Complete |
 | STRUCT-POLISH-03 | TBD | Complete |
-| STRUCT-POLISH-04 | TBD | Complete |
+| STRUCT-POLISH-04 | 20-03 (seam + tests); runtime-wired in the gap closure (worker.decodeAndSeed read / world.SerializeChunkData write + reload integration test) | Complete |
 
 **Coverage:**
 - v3 requirements: 15 total (7 GAMEPLAY + 2 ONLINE + 2 TUI + 4 STRUCT-POLISH)

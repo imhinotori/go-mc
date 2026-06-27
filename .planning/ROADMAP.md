@@ -114,7 +114,7 @@ Full phase details: [milestones/v2-ROADMAP.md](milestones/v2-ROADMAP.md).
 Plans:
 - [x] 20-01-PLAN.md — Shared loot evaluator (level/loot) + golden seed-reproduction (STRUCT-POLISH-01)
 - [x] 20-02-PLAN.md — Shared evaluator wired to block drops + lazy chest loot (STRUCT-POLISH-01)
-- [x] 20-03-PLAN.md — StructureStart NBT persistence + per-piece Save/Load (STRUCT-POLISH-04)
+- [x] 20-03-PLAN.md — StructureStart NBT persistence + per-piece Save/Load (STRUCT-POLISH-04) — seam WIRED into the runtime (gap closure): worker decodeAndSeed reads persisted starts on region load, world.SerializeChunkData writes them on save; reload integration test proves starts survive without recompute
 - [x] 20-04-PLAN.md — Structure inhabitant spawns via ChunkResult.Spawns + silverfish spawner (STRUCT-POLISH-02)
 - [x] 20-05-PLAN.md — Beardifier terrain adaptation: village beard_thin + stronghold bury (STRUCT-POLISH-03)
 **Research**: Phase research covers the loot-table evaluation model + the `afterPlace`/Beardifier adaptation + the structure-start NBT tag format.
