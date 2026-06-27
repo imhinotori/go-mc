@@ -26,6 +26,7 @@
 | (locate) | **cmd/locate** — structure locator tool + `NoiseGenerator.LocateStructures`. Coords saved `structure-coords-seed777.txt`. |
 | eaecde48 | **Deflake** TestBehaviorRegressionPathArrives (non-blocking ants pool drops paths under contention → assert "eventually navigates", 4000-tick cap). |
 | 8b799d42 | **Block-survival (vegetation)** — the "flores no se rompen" gate finding CLOSED for vegetation: breaking a support destroys+drops the plant above (VegetationBlock.canSurvive + updateOrDestroy + 2-tall cascade, recursion 512). Reuses IsVegetationGround + the GAMEPLAY-06 drop path. |
+| 10157c6b..3a20872e | **Chest-OPEN UI (20-06)** — right-click a chest → resolve BE → unpackLootTable lazy-roll (one-shot) → ClientboundOpenScreen(generic_9x3) + ContainerSetContent(27 chest + 36 player slots) → container clicks move items → close persists + frees windowId. ChestBlock.use/ServerPlayer.openMenu/ChestMenu 1:1. STRUCT-POLISH-01 chest-loot now user-visible. Deferred: random-slot shuffle (cosmetic), chest-item flush to BE NBT on save (in-memory this session), multi-viewer sync. Bot smoke: break/place/wander clean after the handleUseItemOn change. |
 
 ## BOT-VERIFIED LIVE (autonomous, seed 777, via testbot)
 - Server boots + ticks stable with all v3 code (0 crashes, 0 races).
@@ -37,8 +38,8 @@
 ## STILL OPEN
 - **Two human visual gates** (operator AFK): GAMEPLAY-07 (re-confirm) + Phase 20 real-client (open a chest → per-seed loot; villagers/witch/cat alive; structures fit terrain) + the deferred premium-login + cross-player skin render. NO code blocks them.
 - **Deferred debt (no scope/decision needed, pure code):**
-  - **chest-OPEN UI** (windowId allocator + ClientboundOpenScreen + a block-entity container menu) — the `unpackLootTable` roll seam is built+tested, no runtime caller. Biggest remaining item; gates STRUCT-POLISH-01's visual chest-loot proof.
-  - **block-survival non-vegetation classes** — torches/rails/redstone/doors/wall-mounts + plants on different ground predicates (DryVegetation/seagrass/lily_pad/mushrooms/crops). `destroyUnsupportedVegetationAbove` (server/block_survival.go) is the template to extend.
+  - ~~chest-OPEN UI~~ **DONE this session (20-06)** — only the on-disk chest-item flush (items persist in-memory per session; BE NBT carries only table+seed), random-slot shuffle (cosmetic), and multi-viewer sync remain as small follow-ups.
+  - **block-survival non-vegetation classes** — torches/rails/redstone/doors/wall-mounts + plants on different ground predicates (DryVegetation/seagrass/lily_pad/mushrooms/crops). `destroyUnsupportedVegetationAbove` (server/block_survival.go) is the template to extend. (Vegetation DONE.)
   - finalizeSpawn variant/profession stub (mobs spawn at vanilla defaults); mob_spawner runtime tick; a production chunk-FLUSH caller of SerializeChunkData (READ side live).
   - mob-water-nav (mobs walk on water — AI track); DATA_SHARED_FLAGS sprint/sneak pose; async-fluid (gated on cost data).
 - **v4 (Plugins)** is PLANNED in `.planning/v4-PLAN.md` (Phases 21-28, Starlark+Python) — NOT started, separate milestone, needs the new-milestone workflow + user scope confirm. Do NOT auto-start.
@@ -58,4 +59,4 @@
 ## RESUME HERE (when operator returns)
 1. **Run the v3 visual gates** on a real client (the only thing blocking milestone close): open a chest (loot once the chest-OPEN UI lands — OR confirm the gen-time store), see villagers/witch/cat, structures fit terrain, premium login + skins.
 2. If satisfied → `/gsd-complete-milestone v3` (archives v3, tags). Then v4 kickoff (`/gsd-new-milestone` — DESTRUCTIVE, resets STATE to v4; the v4-PLAN.md is ready).
-3. If autonomous work is wanted before then: the **chest-OPEN UI** is the highest-value pure-code item (unblocks the chest-loot visual proof); then **block-survival non-vegetation** classes.
+3. If autonomous work is wanted before then: the next pure-code items are **block-survival non-vegetation** classes (torches/rails/redstone/doors), the **chest-item on-disk flush** (small — write the rolled items into the BE NBT on save), and the **finalizeSpawn variant/profession** real read (needs the attribute subsystem). The chest-OPEN UI is DONE.
