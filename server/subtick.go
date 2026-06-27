@@ -159,6 +159,12 @@ func (t *TickLoop) applyInput(p *tickPlayer, in SubtickInput) {
 		// to a client-authoritative player; LivingEntity.travelInFluid runs client-side.
 		p.x, p.y, p.z = nx, ny, nz
 		p.yaw, p.pitch = float32(yaw), float32(pitch)
+		// A player's head follows its look: vanilla ServerGamePacketListenerImpl.handleMovePlayer
+		// → player.setYHeadRot(yRot) (a player has no independent head turn; yHeadRot == yRot).
+		// Mirror the inbound yaw onto headYaw so syncPlayerEntities propagates it and
+		// ServerEntity.sendChanges broadcasts ClientboundRotateHead to trackers (else headYaw
+		// stays 0 and the head never tracks the camera for other players).
+		p.headYaw = p.yaw
 		p.onGround = flags&movementFlagOnGround != 0
 		t.maybeRecenter(p)
 
@@ -170,6 +176,8 @@ func (t *TickLoop) applyInput(p *tickPlayer, in SubtickInput) {
 			return
 		}
 		p.yaw, p.pitch = float32(yaw), float32(pitch)
+		// Head follows look (see PosRot case): mirror yaw onto headYaw so RotateHead broadcasts.
+		p.headYaw = p.yaw
 		p.onGround = flags&movementFlagOnGround != 0
 
 	case packetid.ServerboundMovePlayerStatusOnly:

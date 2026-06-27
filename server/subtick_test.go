@@ -162,3 +162,31 @@ func TestDispatchAppendsSubtickInput(t *testing.T) {
 	// A nil/unknown client must not panic dispatch (total + cheap, T-3-02).
 	loop.dispatch(nil, pk.Packet{ID: int32(packetid.ServerboundMovePlayerPos)})
 }
+
+// TestMovePlayerRotUpdatesHeadYaw asserts the inbound look packets mirror the body yaw onto
+// the head yaw (vanilla: a player has no independent head turn — handleMovePlayer →
+// setYHeadRot(yRot)). Without this the entity headYaw stays 0 and ClientboundRotateHead never
+// fires, so other players never see the head track the camera.
+func TestMovePlayerRotUpdatesHeadYaw(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	p := &tickPlayer{client: &Client{}, confirmedTeleport: true} // past the teleport gate
+
+	// ServerboundMovePlayerRot: Float yaw, Float pitch, UnsignedByte flags.
+	rot := pk.Marshal(int32(packetid.ServerboundMovePlayerRot),
+		pk.Float(135.0), pk.Float(20.0), pk.UnsignedByte(1))
+	loop.applyInput(p, SubtickInput{Packet: rot})
+	if p.yaw != 135.0 {
+		t.Fatalf("body yaw = %v, want 135", p.yaw)
+	}
+	if p.headYaw != p.yaw {
+		t.Fatalf("headYaw = %v, want it mirrored to body yaw %v (head must follow the camera)", p.headYaw, p.yaw)
+	}
+
+	// ServerboundMovePlayerPosRot: Double x,y,z, Float yaw, Float pitch, UnsignedByte flags.
+	posrot := pk.Marshal(int32(packetid.ServerboundMovePlayerPosRot),
+		pk.Double(0), pk.Double(64), pk.Double(0), pk.Float(-90.0), pk.Float(0), pk.UnsignedByte(1))
+	loop.applyInput(p, SubtickInput{Packet: posrot})
+	if p.headYaw != -90.0 || p.headYaw != p.yaw {
+		t.Fatalf("after PosRot headYaw = %v, want -90 (mirrored to body yaw %v)", p.headYaw, p.yaw)
+	}
+}
