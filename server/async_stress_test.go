@@ -183,14 +183,26 @@ func TestBehaviorRegressionPathArrives(t *testing.T) {
 	startX := e.x
 	// Drive the AI + physics + async rejoin per tick exactly as the live pipeline does: serverAiStep
 	// SUBMITS the path off-tick, applyAsyncResults rejoins it (1+ ticks late), navigation.tick follows.
-	for i := 0; i < 400; i++ {
+	// The path pool is NON-BLOCKING (ants.WithNonblocking): under full-suite CPU contention a Submit
+	// can hit ErrPoolOverload and DROP that tick's request — which is the correct live behavior (the
+	// mob simply re-submits next tick). So the assertion is "eventually navigates", not "arrives in
+	// exactly 400 ticks": tick until the mob has progressed past the threshold, up to a generous cap
+	// that absorbs dropped-and-resubmitted paths (the live server has no fixed deadline either). This
+	// makes the test deterministic instead of flaky under contention.
+	const maxTicks = 4000
+	arrived := false
+	for i := 0; i < maxTicks; i++ {
 		loop.tickAI()
 		loop.tickPhysics()
 		loop.applyAsyncResults()
+		if e.x > startX+2.0 {
+			arrived = true
+			break
+		}
 	}
 
-	if e.x <= startX+2.0 {
-		t.Fatalf("the async path never arrived/was followed: mob x=%v (start %v) — OPT-01 changed behavior", e.x, startX)
+	if !arrived {
+		t.Fatalf("the async path never arrived/was followed after %d ticks: mob x=%v (start %v) — OPT-01 changed behavior", maxTicks, e.x, startX)
 	}
 }
 
