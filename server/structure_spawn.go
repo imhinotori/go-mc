@@ -2,8 +2,11 @@ package server
 
 import (
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/imhinotori/sulfur/data/entity"
+	"github.com/imhinotori/sulfur/level/attribute"
 	"github.com/imhinotori/sulfur/world"
 )
 
@@ -42,16 +45,59 @@ func (t *TickLoop) drainStructureSpawns(res world.ChunkResult) {
 		// lands. PersistenceRequired (the jar's setPersistenceRequired) is carried for the same
 		// reason — the entity never despawns once that flag is a real read.
 		e := NewEntity(t.idAlloc.AllocID(), rec, req.X, req.Y, req.Z)
-		// CITED STUB (CLAUDE.md): finalizeSpawn(ServerLevelAccessor, DifficultyInstance, STRUCTURE,
-		// null) initializes mob attributes + variants (cat variant, witch held item) + sets
-		// NoAI/persistence. The attribute/effect/variant subsystems are not built yet, so the mob
-		// spawns at its vanilla-default state (the value finalizeSpawn would leave for a default
-		// difficulty with no SpawnGroupData) — equal to the vanilla default, NOT baked away: when
-		// the attribute subsystem lands, finalizeSpawn becomes a real per-type call here.
-		// Source: Mob.finalizeSpawn / SwampHutPiece.postProcess (WITCH/CAT) / StructureTemplate
-		// .placeEntities (createEntityIgnoreException).
+		// finalizeSpawn (REAL, no longer a cited-constant stub): NewEntity already attached the mob's
+		// AttributeMap from its DefaultAttributes supplier (the per-type base values — Witch HP 26.0,
+		// Cat HP 10.0 / speed 0.30000001192092896 / atk 3.0, Villager speed 0.5). Here we run the
+		// ATTRIBUTE + RNG slice of Mob.finalizeSpawn on the tick-owned level random: the FOLLOW_RANGE
+		// random-spawn bonus (triangle(0.0, 0.11485) — two nextDouble() draws) + the left-handed roll
+		// (nextFloat() < 0.05F). The draw ORDER is the faithful Mob.finalizeSpawn order. The returned
+		// leftHanded flag has no metadata consumer yet (no left-handed SynchedEntityData bit), so it is
+		// applied to the entity field and CITED: the setLeftHanded metadata wire-out lands with mob
+		// metadata. The draw is performed regardless so the level RNG stream stays vanilla-faithful.
+		//
+		// STILL CITED STUBS (not part of the attribute subsystem, deferred to their own subsystems):
+		//   - VARIANT/PROFESSION: Cat variant (CatVariant registry roll) + Villager profession/type
+		//     depend on the variant/biome registries + tags NOT yet extracted; they are left at the
+		//     vanilla DEFAULT (the entity spawns variant-default), structured so a real variant roll
+		//     slots in here when the registry lands. Source: Cat.finalizeSpawn (variant roll),
+		//     Villager.finalizeSpawn (VillagerData type/profession).
+		//   - NoAI / setPersistenceRequired: req.PersistenceRequired carries the persistence flag; the
+		//     persistence/despawn consumer is not wired (mobs never despawn in v1 anyway), so it is
+		//     read-and-held below pending the despawn subsystem.
+		e.leftHanded = attribute.FinalizeSpawn(e.attributes, t.levelRandom)
 		_ = req.PersistenceRequired
 		t.entities.add(e) // the ONLY off-tick-boundary store mutation; tracker broadcasts AddEntity
+	}
+}
+
+// levelRandomSeedUniquifier is the port of net.minecraft.world.level.levelgen.RandomSupport's
+// seedUniquifier atomic — a process-global counter that, XORed with the wall clock, makes each
+// RandomSource.create() seed unique even when two are created in the same nanosecond. Vanilla:
+// `seedUniquifier = seedUniquifier * 1181783497276652981L; return seedUniquifier ^ nanoTime();`
+// (the same Knuth multiplier java.util.Random uses). It is touched only via atomic CAS, so creating
+// level randoms from multiple goroutines never races.
+var levelRandomSeedUniquifier atomic.Int64
+
+// seedUniquifierMul is the Knuth LCG multiplier RandomSupport.generateUniqueSeed uses
+// (1181783497276652981L), preserved exactly.
+const seedUniquifierMul = int64(1181783497276652981)
+
+func init() {
+	// RandomSupport seeds the uniquifier at 8682522807148012L initially.
+	levelRandomSeedUniquifier.Store(8682522807148012)
+}
+
+// uniqueLevelRandomSeed is the port of RandomSupport.generateUniqueSeed(): a nondeterministic unique
+// seed for a level's RandomSource, exactly as vanilla seeds Level.random (the level random is NOT
+// world-seed-derived — only worldgen RNG is). `uniquifier = uniquifier * MUL; return uniquifier ^
+// nanoTime();`, advanced via atomic CAS so concurrent creation is race-free.
+func uniqueLevelRandomSeed() int64 {
+	for {
+		old := levelRandomSeedUniquifier.Load()
+		next := old * seedUniquifierMul
+		if levelRandomSeedUniquifier.CompareAndSwap(old, next) {
+			return next ^ time.Now().UnixNano()
+		}
 	}
 }
 

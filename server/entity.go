@@ -2,6 +2,7 @@ package server
 
 import (
 	"github.com/imhinotori/sulfur/data/entity"
+	"github.com/imhinotori/sulfur/level/attribute"
 	"github.com/imhinotori/sulfur/level/component"
 	"github.com/imhinotori/sulfur/server/internal/bvh"
 
@@ -120,6 +121,26 @@ type Entity struct {
 	// tracker only ever reads the pos/angle/dims), so it does not break the snapshot contract.
 	ai *mobAI
 
+	// attributes is the live per-entity AttributeMap (level/attribute), the Go analogue of
+	// LivingEntity.attributes (the per-entity AttributeMap backed by its EntityType's
+	// DefaultAttributes supplier). nil for an entity type with NO registered supplier (a dropped
+	// Item, an unported mob) — every attribute read helper (getAttributeValue) falls back to the
+	// vanilla registration default for a nil map, so a nil-attributes entity behaves as a
+	// modifier-free default exactly as vanilla's AttributeSupplier default would. Seeded at spawn by
+	// NewEntity (attribute.NewMapForEntity(typeName)). Tick-owned (TICK-05): mutated ONLY on the tick
+	// goroutine (finalizeSpawn's permanent modifier, future item/effect modifiers). Like ai, it is a
+	// pointer to mutable tick-owned state and is NOT part of the snapshot-friendly value set the async
+	// tracker copies — the tracker only ever reads pos/angle/dims — so it does not break the snapshot
+	// contract.
+	attributes *attribute.Map
+
+	// leftHanded is Mob.isLeftHanded() — the 5% left-handed roll Mob.finalizeSpawn performs
+	// (nextFloat() < 0.05F). It is set at spawn by drainStructureSpawns via attribute.FinalizeSpawn.
+	// CITED: there is no left-handed SynchedEntityData (entity metadata) wire-out yet, so this flag is
+	// recorded but not yet broadcast to the client (it controls which hand the mob attacks/holds with
+	// — a visual the metadata subsystem surfaces). Tick-owned (TICK-05).
+	leftHanded bool
+
 	// --- GAMEPLAY-07: delta-move tracking state (ServerEntity.sendChanges) ----------------
 	//
 	// These mirror net.minecraft.server.level.ServerEntity's per-entity send state so the
@@ -161,7 +182,26 @@ func NewEntity(id int32, t entity.Entity, x, y, z float64) *Entity {
 		z:      z,
 		width:  t.Width,
 		height: t.Height,
+		// Attach the per-entity AttributeMap from this type's DefaultAttributes supplier (the Go
+		// analogue of LivingEntity's `this.attributes = new AttributeMap(DefaultAttributes.getSupplier(
+		// type))`). NewMapForEntity returns nil for a type with no registered supplier (a dropped Item,
+		// an unported mob) — a nil map is the faithful "no DefaultAttributes" state and every read
+		// helper degrades to the registration default. Keyed by the type's registry name (t.Name).
+		attributes: attribute.NewMapForEntity(t.Name),
 	}
+}
+
+// getAttributeValue is the port of LivingEntity.getAttributeValue(Holder<Attribute>) for a live
+// entity: the folded value of the entity's AttributeMap for the given attribute. For an entity with
+// NO attribute map (nil — a non-living entity / unported type) it falls back to the attribute's
+// registration DEFAULT (attr.DefaultValue()), which is exactly what a modifier-free AttributeSupplier
+// default would yield — so a read is always total and faithful. The caller applies any d2f narrowing
+// at the vanilla cast site. Tick-owned (TICK-05).
+func (e *Entity) getAttributeValue(attr *attribute.Attribute) float64 {
+	if e.attributes == nil {
+		return attr.DefaultValue()
+	}
+	return e.attributes.GetValue(attr.Name())
 }
 
 // AABB returns the entity's axis-aligned bounding box in world space, sourced from the
