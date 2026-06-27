@@ -164,14 +164,29 @@ func (t *TickLoop) openChest(p *tickPlayer, pos pk.Position) bool {
 	return true
 }
 
+// createBlockEntityOnPlace replicates LevelChunk.setBlockState's hasBlockEntity() branch for the
+// block-entity blocks Sulfur supports: when a chest is placed, create + register its empty
+// ChestBlockEntity in the chunk so the open path resolves it (a placed chest opens with 27 empty
+// slots, no loot table). The BE Data is an EMPTY compound (no LootTable -> unpackLootTable no-ops).
+// Extend the switch as more block-entity blocks land (furnace, etc). CITE: ChestBlock is an
+// EntityBlock; ChestBlock.newBlockEntity = new ChestBlockEntity(pos,state) (empty, on-place).
+func (t *TickLoop) createBlockEntityOnPlace(pos pk.Position, state block.StateID) {
+	if t.world == nil || !isChestBlock(state) {
+		return
+	}
+	// Empty bare compound: a placed chest has no LootTable and no Items yet.
+	empty := nbt.RawMessage{Type: nbt.TagCompound, Data: []byte{0x00}}
+	t.world.SetBlockEntityAt(pos, block.EntityTypes["minecraft:chest"], empty, dimMinY)
+}
+
 // resolveChest returns the tick-owned chestLoot container for pos, decoding it from the chunk's
 // BlockEntity list on first access and caching it in t.openChests so re-opens + item moves persist.
-// Returns nil only when there is no chest BlockEntity recorded at pos (a plain placed chest with no
-// BE, or an unloaded column) — the caller then treats the click as a non-open.
 //
-// The chest BE Data is the bare {LootTable, LootTableSeed} NBT compound createChest emitted
-// (world/neighborhood.go chestLootNBT). It is decoded ONCE; thereafter the runtime chestLoot is the
-// authoritative container (its items mutate as the player moves stacks). Tick-owned.
+// A PLAYER-PLACED chest carries no BlockEntity in the chunk list (Sulfur's place path writes only the
+// block state, not a BE — vanilla's ChestBlock.newBlockEntity would create an empty ChestBlockEntity
+// on place). So when decodeChestBE finds no BE but the block at pos IS a chest, we synthesize an EMPTY
+// container (no loot table -> opens empty, 27 slots) — the faithful equivalent of a freshly-placed
+// chest. Returns nil only when pos is not a chest at all (or the column is unloaded). Tick-owned.
 func (t *TickLoop) resolveChest(pos pk.Position) *chestLoot {
 	if t.openChests == nil {
 		t.openChests = make(map[pk.Position]*chestLoot)
@@ -181,7 +196,13 @@ func (t *TickLoop) resolveChest(pos pk.Position) *chestLoot {
 	}
 	cl := t.decodeChestBE(pos)
 	if cl == nil {
-		return nil
+		// No recorded BE: if the block is actually a chest (a player-placed plain chest), open an
+		// empty container; otherwise it is not a chest at all -> nil (the click is a non-open).
+		if state, ok := t.world.GetBlock(pos, dimMinY); ok && isChestBlock(state) {
+			cl = &chestLoot{} // empty: LootTable "" -> unpackLootTable is a no-op, 27 empty slots
+		} else {
+			return nil
+		}
 	}
 	cl.ensureContainer()
 	t.openChests[pos] = cl

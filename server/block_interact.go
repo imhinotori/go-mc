@@ -239,6 +239,12 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 		return
 	}
 
+	// LevelChunk.setBlockState hasBlockEntity() branch: a placed block that carries a BlockEntity
+	// (chest) gets its (empty) BlockEntity created + registered synchronously on place. Sulfur's
+	// SetBlock writes only the state, so we replicate the BE creation here — without it a placed
+	// chest has no BE and never opens. CITE: LevelChunk.setBlockState -> EntityBlock.newBlockEntity.
+	t.createBlockEntityOnPlace(placePos, placeState)
+
 	t.reconcileEdit(p, placePos, placeState, int32(sequence))
 
 	// BlockItem.place tail -> stack.consume(1, player). ItemStack.consume shrinks the stack by 1

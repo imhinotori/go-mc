@@ -3,6 +3,7 @@ package world
 import (
 	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/block"
+	"github.com/imhinotori/sulfur/nbt"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
@@ -270,4 +271,59 @@ func (m *ChunkManager) SetBlock(pos pk.Position, state block.StateID, minY int) 
 	col := level.ChunkPos{int32(floorDiv16(pos.X)), int32(floorDiv16(pos.Z))}
 	m.dirty[col] = struct{}{}
 	return true
+}
+
+// SetBlockEntityAt creates or replaces a block entity at the world pos in its owning chunk's
+// BlockEntity list — the runtime equivalent of LevelChunk.setBlockState's hasBlockEntity() branch
+// (newBlockEntity + addAndRegisterBlockEntity), which vanilla runs synchronously when a block with an
+// EntityBlock is placed. Sulfur's place path writes only the block state via SetBlock, so a placed
+// chest had no BlockEntity and never opened; calling this after SetBlock for a block-entity block
+// (e.g. chest) records the empty BE so the open path resolves it. data is the bare compound payload
+// (empty for a freshly-placed chest -> no LootTable -> opens empty). Marks the column dirty so the
+// BE persists. A no-op for an unloaded column. Tick-owned (TICK-05). CITE: LevelChunk.setBlockState
+// -> EntityBlock.newBlockEntity -> addAndRegisterBlockEntity.
+func (m *ChunkManager) SetBlockEntityAt(pos pk.Position, typ block.EntityType, data nbt.RawMessage, minY int) bool {
+	col := level.ChunkPos{int32(floorDiv16(pos.X)), int32(floorDiv16(pos.Z))}
+	ch, ok := m.Get(col)
+	if !ok {
+		return false
+	}
+	lx, lz := pos.X&15, pos.Z&15
+	be := level.BlockEntity{Y: int16(pos.Y), Type: typ, Data: data}
+	if !be.PackXZ(lx, lz) {
+		return false
+	}
+	// Replace any existing BE at this exact cell (re-place over an old one), else append.
+	for i := range ch.BlockEntity {
+		bx, bz := ch.BlockEntity[i].UnpackXZ()
+		if bx == lx && bz == lz && int(ch.BlockEntity[i].Y) == pos.Y {
+			ch.BlockEntity[i] = be
+			m.dirty[col] = struct{}{}
+			return true
+		}
+	}
+	ch.BlockEntity = append(ch.BlockEntity, be)
+	m.dirty[col] = struct{}{}
+	return true
+}
+
+// RemoveBlockEntityAt drops any block entity recorded at the world pos (used when a block-entity
+// block is broken, so a stale BE never lingers). A no-op when none exists / column unloaded.
+// Tick-owned. CITE: LevelChunk.setBlockState removeBlockEntity on a state losing its BlockEntity.
+func (m *ChunkManager) RemoveBlockEntityAt(pos pk.Position) bool {
+	col := level.ChunkPos{int32(floorDiv16(pos.X)), int32(floorDiv16(pos.Z))}
+	ch, ok := m.Get(col)
+	if !ok {
+		return false
+	}
+	lx, lz := pos.X&15, pos.Z&15
+	for i := range ch.BlockEntity {
+		bx, bz := ch.BlockEntity[i].UnpackXZ()
+		if bx == lx && bz == lz && int(ch.BlockEntity[i].Y) == pos.Y {
+			ch.BlockEntity = append(ch.BlockEntity[:i], ch.BlockEntity[i+1:]...)
+			m.dirty[col] = struct{}{}
+			return true
+		}
+	}
+	return false
 }
