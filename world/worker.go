@@ -501,7 +501,7 @@ func (w *Worker) tryRegion(pos level.ChunkPos) (*level.Chunk, bool, error) {
 			return nil, false, rerr // corrupt .linear — surface, do not regenerate over it
 		}
 		if ok {
-			return decodeChunk(data)
+			return w.decodeAndSeed(pos, data)
 		}
 		// .linear exists but this cell is absent -> miss (fall through to gen).
 		return nil, false, nil
@@ -526,7 +526,48 @@ func (w *Worker) tryRegion(pos level.ChunkPos) (*level.Chunk, bool, error) {
 		// ErrSectorNegativeLength / ErrTooLarge and any IO error: corrupt/real error.
 		return nil, false, err
 	}
-	return decodeChunk(data)
+	return w.decodeAndSeed(pos, data)
+}
+
+// decodeAndSeed decodes a region-loaded per-chunk blob (decodeChunk) and, on success, SEEDS the
+// structure cache from the chunk's persisted `structures` NBT (STRUCT-POLISH-04 read path). The
+// seeding is a PURE optimization: ReadChunkStructures short-circuits the generator's later
+// ComputeStarts(pos) so a reloaded structure chunk reads its starts from disk INSTEAD of
+// recomputing them. An absent/garbled `structures` tag seeds nothing (ReadChunkStructures returns
+// false) and the generator recomputes — recompute is the always-valid source of truth, never a
+// panic (T-20-07). A worker without a structure cache (Superflat, or no generator) skips seeding.
+//
+// This is the seam the 20-03 SUMMARY documented as the one-line additive call site: it does NOT
+// change the off-tick discipline (region IO is already off-tick) and does NOT alter the decoded
+// chunk's bytes — it only populates the cache the generator already consults.
+func (w *Worker) decodeAndSeed(pos level.ChunkPos, data []byte) (*level.Chunk, bool, error) {
+	ch, sc, ok, err := decodeChunk(data)
+	if err != nil || !ok {
+		return ch, ok, err
+	}
+	if cache := w.structureCache(); cache != nil {
+		// seeded=false on an absent/garbled tag -> the generator recomputes (the fallback).
+		structure.ReadChunkStructures(cache, pos, sc.Structures)
+	}
+	return ch, ok, nil
+}
+
+// structureCache returns the generator's StructureStart cache, or nil if the generator owns none
+// (Superflat) or does not expose one. The worker asserts the structureCacheHolder interface on its
+// generator rather than depending on a concrete *NoiseGenerator, so the Superflat/test generators
+// stay structure-free without a cache.
+func (w *Worker) structureCache() *structure.Cache {
+	if h, ok := w.gen.(structureCacheHolder); ok {
+		return h.StructureCache()
+	}
+	return nil
+}
+
+// structureCacheHolder is the optional capability a Generator implements to expose its per-world
+// StructureStart cache to the worker's persistence seam (STRUCT-POLISH-04). NoiseGenerator
+// satisfies it; Superflat does not (no structures), so the worker skips structure seeding for it.
+type structureCacheHolder interface {
+	StructureCache() *structure.Cache
 }
 
 // readLinearSector opens a .linear region file, decodes it, and returns the raw
@@ -553,17 +594,19 @@ func readLinearSector(name string, ix, iz int) ([]byte, bool, error) {
 
 // decodeChunk turns a raw per-chunk NBT blob (the SAME blob both codecs return)
 // into an in-memory chunk via the unchanged save.Chunk.Load -> ChunkFromSave
-// path.
-func decodeChunk(data []byte) (*level.Chunk, bool, error) {
+// path. It ALSO returns the decoded *save.Chunk so the caller can read the chunk's
+// persisted `structures` compound (sc.Structures) to seed the structure cache
+// (STRUCT-POLISH-04); the in-memory chunk's bytes are unaffected by that read.
+func decodeChunk(data []byte) (*level.Chunk, *save.Chunk, bool, error) {
 	var sc save.Chunk
 	if err := sc.Load(data); err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	ch, err := level.ChunkFromSave(&sc)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
-	return ch, true, nil
+	return ch, &sc, true, nil
 }
 
 // chunkKey packs (cx,cz) into a stable singleflight key. Two callers with the

@@ -443,6 +443,15 @@ func (g *NoiseGenerator) beardifierFor(pos level.ChunkPos) *structure.Beardifier
 // proxy without re-deriving the chunk geometry.
 func (g *NoiseGenerator) Dims() (minY, height int) { return g.minY, g.secs * 16 }
 
+// StructureCache exposes the per-world StructureStart cache so the worker can seed it from a
+// region-loaded chunk's persisted `structures` NBT (STRUCT-POLISH-04 read path) and serialize a
+// chunk's OWN starts back into the `structures` compound on save (the write path). It is the SAME
+// cache ComputeStarts/StartsForChunk read, so a start seeded here SHORT-CIRCUITS the recompute:
+// ComputeStarts(seed,pos) returns the seeded slice (a cache hit) instead of regenerating. This is
+// the accessor the worker's structureCacheHolder interface asserts; only NoiseGenerator carries a
+// cache (Superflat owns no structures and returns the zero value, so the worker skips seeding).
+func (g *NoiseGenerator) StructureCache() *structure.Cache { return g.structCache }
+
 // Generate drives the full pipeline into a StatusFull level.Chunk via the concrete
 // single-chunk path (= GenerateTerrain then Decorate over a freshly-terrain-generated
 // 3x3). PURE over (seed, pos). It is NOT on the Generator interface — it is retained for
