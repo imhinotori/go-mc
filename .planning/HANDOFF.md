@@ -1,78 +1,61 @@
-# Sulfur — Session Handoff (2026-06-26, Phase 17 CLOSED → Phase 18 starting)
+# Sulfur — Session Handoff (2026-06-27, autonomous session: v3 CLOSED + polish)
 
-> Minecraft Java 26.2 (protocol 776) server in Go. GSD autonomous build. **Branch `ender-776`.** Push target: **`development`** (= GHCR `:latest`, watchtower auto-deploys to prod demo.trysulfur.net:25565), NOT `main`. `git push origin ender-776:development`. Remote `git@github.com:imhinotori/sulfur`. Module `github.com/imhinotori/sulfur`. Dir `D:\ender`.
+> Minecraft Java 26.2 (protocol 776) server in Go. GSD build. **Branch `ender-776`.** Push target **`development`** (CI→`:latest`→watchtower→demo.trysulfur.net:25565), NOT main. `git push origin ender-776:development`. Remote `git@github.com:imhinotori/sulfur`. Module `github.com/imhinotori/sulfur`. Dir `D:\ender`.
 
-## ⭐ THE ABSOLUTE MANDATE (read first)
-**ALL GAMEPLAY LOGIC IS A LITERAL 1:1 PORT OF THE VANILLA JAVA JAR.** In `CLAUDE.md`. Every piece of game logic MUST be a method-for-method copy of `temp/cache/26.2-inner.jar` (read via `javap -c -p -classpath temp/cache/26.2-inner.jar <FQCN>`). Mirror the vanilla call chain + numeric ops EXACTLY. **Verify against the jar bytecode BEFORE writing — never from intuition.** Re-express in idiomatic Go (no GPL paste), CITE the class/method. Only OPTIMIZATION (provably identical observable behavior) is permitted.
+## ⭐ THE ABSOLUTE MANDATE
+**ALL GAMEPLAY/PROTOCOL LOGIC IS A LITERAL 1:1 PORT of `temp/cache/26.2-inner.jar`** (`javap -c -p -classpath temp/cache/26.2-inner.jar <FQCN>`). Verify bytecode BEFORE writing. Cite the class/method. Only OPTIMIZATION (provably identical behavior) permitted. CGO_ENABLED=0 stays clean. NO Claude attribution in commits.
 
-## WHERE WE ARE
-- **Phase 17 (Gameplay Completion) is DONE.** GAMEPLAY-01..06 complete; **GAMEPLAY-07 visual gate PASSED** — the user connected a real client this session and confirmed "Está dando vueltas y funciona". 1:1 work complete + tested + Docker -race green. `17-05-SUMMARY.md` + `17-VERIFICATION.md` written. Verdict: PASS.
-- **NEXT: Phase 18 — Online-mode (auth + protocol encryption).** Just invoked `/gsd-plan-phase 18`. The phase dir `.planning/phases/18-online-mode-auth-protocol-encryption/` is created; research+plan not yet run. **RESUME by continuing the plan-phase 18 workflow** (research the 776 encryption/Yggdrasil specifics → plan → verify).
-- **v4 (Plugin/Scripting System) is PLANNED but NOT started** — full plan in `.planning/v4-PLAN.md` (Phases 21–28). Do NOT execute v4; v3 (18–20) finishes first. STATE.md stays on v3.
+## WHERE WE ARE — v3 IS CODE-COMPLETE (all 4 phases)
+- **Phase 17 (Gameplay completion):** DONE. Visual gate passed earlier.
+- **Phase 18 (Online-mode):** DONE, verified `passed`. Operator confirmed offline-client rejection live.
+- **Phase 19 (Operator UX — TUI):** DONE, verified `passed`. Operator-validated.
+- **Phase 20 (Structure polish):** DONE, verified `human_needed` (only the real-client visual gate remains; operator AFK). All 4 STRUCT-POLISH reqs met incl the SC4 persistence-wiring gap I closed.
+- **v3 MILESTONE INTEGRATION AUDIT: `passed`** — all 7 cross-phase flows WIRED (`.planning/v3-MILESTONE-AUDIT.md`). Zero integration gaps. Remaining gating = operator visual sign-off only.
 
-## PHASE 18 — what to build (ONLINE-01/02, from REQUIREMENTS.md + ROADMAP.md)
-- **ONLINE-02 encryption:** EncryptionRequest/EncryptionResponse handshake — RSA-OAEP key exchange of the 16-byte shared secret + verify token, then AES-128/CFB8 stream encryption on ALL subsequent packets. **CFB8 hand-rolled over stdlib `crypto/aes`** (Go stdlib dropped `cipher.CFB`) — NO new crypto dep. Verify the exact 776 EncryptionRequest/Response wire (serverId string, public key DER, verify token, + the 1.20.5+ `shouldAuthenticate` boolean shifts) against the jar.
-- **ONLINE-01 auth:** Yggdrasil `hasJoined` — server sends encryption request, client auths against `sessionserver.mojang.com`, server verifies the shared-secret-derived server hash (the Notchian SHA-1 "Minecraft-style" hex digest) → real UUIDs/skins/ownership. Behind an `online-mode` config flag (offline = default for local dev).
-- **OUT of scope:** the client's own MSA/launcher login (server only verifies the existing session).
-- Jar classes to decompile: `net.minecraft.network.protocol.login.ClientboundHelloPacket` (EncryptionRequest), `ServerboundKeyPacket` (EncryptionResponse), `net.minecraft.server.network.ServerLoginPacketListenerImpl` (handleKey, the hash, the hasJoined call), `net.minecraft.util.Crypt` (the cipher + the SHA-1 server hash).
+## WHAT THIS AUTONOMOUS SESSION LANDED (all committed, all gates green)
+| Commit | What |
+|--------|------|
+| 4da824f1 | **/say + /me broadcast** — were no-op stubs; now `[Server]/[name] msg` (vanilla SayCommand/emote via SystemChat). |
+| 8febd813 | **Head-yaw fix** — `p.headYaw=p.yaw` in MovePlayerPosRot/Rot (vanilla setYHeadRot); other players' heads now track the camera (RotateHead fires). |
+| ba0afe79 | **Suffocation** — ported LivingEntity.baseTick IN_WALL branch (1.0 dmg, isInWall + isSuffocating proxy). |
+| 0475c872 | **SetHealth bandwidth FLOOD fix** (the "1470MB at login") — syncFood compared the exact saturation float (dirty every tick) → SetHealth spam ~20×/s. Vanilla compares the saturation-IS-ZERO bool. Added an ULTRA_DEBUG byte-counter (server/debug_bandwidth.go). |
+| f145f2fa | **Trees-on-trees fix** — would_survive accepted ANY non-air below; now checks `block.IsVegetationGround` (#substrate_overworld). |
+| 4073459f | **Aquifer global picker** — returned air below min(-54,sea); vanilla returns LAVA (underwater air-pocket source). |
+| 20-01..20-05 + gap | **Phase 20:** loot evaluator (level/loot, LegacyRandomSource LCG, golden via independent Python LCG trace) → block-drop rewire + lazy chest loot → StructureStart NBT persistence (WIRED into worker decode/save) → Beardifier (village beard_thin + stronghold bury) → structure inhabitant spawns (witch/cat/villagers live, silverfish spawner; ChunkResult.Spawns → tick drain). |
+| 928fb0bd | **SC4 gap-closure** — persistence was built+tested but unwired; now ReadChunkStructures on decode + WriteChunkStructures on save, reload test proves 0 recomputes. |
+| (locate) | **cmd/locate** — structure locator tool + `NoiseGenerator.LocateStructures`. Coords saved `structure-coords-seed777.txt`. |
+| eaecde48 | **Deflake** TestBehaviorRegressionPathArrives (non-blocking ants pool drops paths under contention → assert "eventually navigates", 4000-tick cap). |
+| 8b799d42 | **Block-survival (vegetation)** — the "flores no se rompen" gate finding CLOSED for vegetation: breaking a support destroys+drops the plant above (VegetationBlock.canSurvive + updateOrDestroy + 2-tall cascade, recursion 512). Reuses IsVegetationGround + the GAMEPLAY-06 drop path. |
 
-## WHAT LANDED THIS SESSION (committed on `ender-776`)
-| Commit | Fix |
-|--------|-----|
-| 7831b5e7 | **Cave-water-gap fix** — markPosForPostProcessing + one-shot postProcessGeneration (the SAFE replacement for the scan-and-schedule that cascaded twice). Restores the aquifer `shouldScheduleFluidUpdate` flag. |
-| 09c1e54b | **Fluid cost instrumentation** — ULTRA[fluid] cost per gametick (decide async-fluid WITH data). |
-| 3fef2212 | **Audit 1 — swing + held-item** — ServerboundSwing→Animate + held→SetEquipment, broadcast to trackers not self. New tickEquipment phase + broadcastToTrackers. |
-| b0475202 | **Audit 3 — eat/use pose** — DATA_LIVING_ENTITY_FLAGS IS_USING synced (LivingEntity.setLivingEntityFlag). |
-| 64f778ce | **Audit 2 — delta-move** — ServerEntity.sendChanges 1:1 (delta MoveEntity* / EntityPositionSync replacing per-tick TeleportEntity). New tickEntityMovement phase; packDegrees (floor). |
-| 4f4041cc | **deflake TestTickAIDrivesMobs** — timed receive (was non-blocking default). |
-| 471b232b | **Join-disconnect fix** — outbound queue overflow at join; RotateHead now 1:1 (head-yaw threshold, not every move); outboundCap 256→4096. testbot got strict SetEquipment/SetEntityData validators. |
-| a807ff9f | **Worldgen race crash** — `concurrent map read and map write` in SurfaceSystem (noiseCache + randomFactoryCache shared across parallel chunk-gen). Added cacheMu. Docker -race ./world/ green. |
-| 74f1c9e1 | **Block-place entity-collision** — BlockItem.canPlace→Level.isUnobstructed: a placement overlapping a blocksBuilding entity (player/mob) is rejected; dropped items don't block. |
-| 4c6cea9f | **19 worldgen biome tags** from the 26.2 extractor re-run. |
-| eb197e0a..9f23003f | **testbot break→pickup→place cycle** (-mode wander) + strict entity-packet validators. |
-| a1f4c7b8 | **Phase 17 close-out docs** — 17-05-SUMMARY + 17-VERIFICATION. |
-| d74cf305 | **Deferred: block-survival** (gate finding — see below). |
-| 5567dbb4 / ebe78f9c | **v4 plan** (ROADMAP entry + v4-PLAN.md). |
+## BOT-VERIFIED LIVE (autonomous, seed 777, via testbot)
+- Server boots + ticks stable with all v3 code (0 crashes, 0 races).
+- Online-mode: offline client correctly REJECTED ("Invalid session" / login error EOF).
+- Nearest mineshaft (258,~39,189): bot tp'd in, got 71KB chunks, **suffocation fired** underground.
+- Swamp hut (804,48,99): bot reached it; **2 distinct moving entities** (witch+cat spawn, STRUCT-POLISH-02) ticking + broadcast via tracker. Villages at (-321,-815) + (-1241,-515).
+- say/me, head-yaw all confirmed by the user on a real client earlier.
 
-## 1:1 AUDITS RUN THIS SESSION (all jar-verified)
-- **Inventory doClick** (7 ClickTypes + moveItemStackTo + quickMoveStack + Slot primitives): FAITHFUL. Only gap = `updateTutorialInventoryAction` (no gameplay effect).
-- **Block place**: found + FIXED entity-collision (isUnobstructed). Else faithful.
-- **Combat / Player.attack / hurtServer / actuallyHurt / knockback**: FAITHFUL. (The auditor's "exhaustion deviation" was a FALSE POSITIVE — Player OVERRIDES actuallyHurt and DOES call causeFoodExhaustion on the victim; Sulfur ports it right. Both sites verified.)
-- **Fall damage** + **Breath/drowning**: FAITHFUL 1:1, all constants match.
+## STILL OPEN
+- **Two human visual gates** (operator AFK): GAMEPLAY-07 (re-confirm) + Phase 20 real-client (open a chest → per-seed loot; villagers/witch/cat alive; structures fit terrain) + the deferred premium-login + cross-player skin render. NO code blocks them.
+- **Deferred debt (no scope/decision needed, pure code):**
+  - **chest-OPEN UI** (windowId allocator + ClientboundOpenScreen + a block-entity container menu) — the `unpackLootTable` roll seam is built+tested, no runtime caller. Biggest remaining item; gates STRUCT-POLISH-01's visual chest-loot proof.
+  - **block-survival non-vegetation classes** — torches/rails/redstone/doors/wall-mounts + plants on different ground predicates (DryVegetation/seagrass/lily_pad/mushrooms/crops). `destroyUnsupportedVegetationAbove` (server/block_survival.go) is the template to extend.
+  - finalizeSpawn variant/profession stub (mobs spawn at vanilla defaults); mob_spawner runtime tick; a production chunk-FLUSH caller of SerializeChunkData (READ side live).
+  - mob-water-nav (mobs walk on water — AI track); DATA_SHARED_FLAGS sprint/sneak pose; async-fluid (gated on cost data).
+- **v4 (Plugins)** is PLANNED in `.planning/v4-PLAN.md` (Phases 21-28, Starlark+Python) — NOT started, separate milestone, needs the new-milestone workflow + user scope confirm. Do NOT auto-start.
+- Push to `development` still pending (the attendly env-gate hook blocked earlier pushes).
 
-## OPEN GATE FINDING (deferred, logged in deferred-items.md)
-- **Block survival** — breaking a block that supports a flower/plant leaves the unsupported block floating (vanilla destroys+drops it). The full 1:1 chain is documented in `deferred-items.md` (Level.updateNeighborsAt → BlockState.updateShape → VegetationBlock.canSurvive [SUPPORTS_VEGETATION tag] → Block.updateOrDestroy → destroyBlock+drop). It is a net-new SUBSYSTEM (runtime block-tag lookup + a block→survival-class extraction + updateOrDestroy port) — user chose to DEFER it and proceed to Phase 18. The drop path already exists (GAMEPLAY-06).
-
-## RUNNING (right now)
-- **Server** in bg (run_in_background task), `localhost:25565`, seed 777, `SULFUR_ULTRA_DEBUG=1 SULFUR_TEST_KIT=1`. Stable since the race fix (0 crashes).
-- **Bot Wanderer** in bg (`./testbot.exe -name Wanderer -mode wander -ticks 360000`) — walks, swings, eats, breaks→picks-up→places blocks. 0 disconnects.
-- Rebuild: `CGO_ENABLED=0 go build -o sulfur.exe ./cmd/sulfur` + `go build -o testbot.exe ./cmd/testbot`. Kill stale: `powershell -Command "Get-Process sulfur,testbot -EA SilentlyContinue | Stop-Process -Force"`.
+## STATE OF THE TREE
+- Build CGO=0 exit 0; `go vet ./...` clean; full suite green; Docker -race green (server + level + world packages).
+- Many `.exe`/`.log` + web/, .claude/ untracked (benign). `structure-coords-seed777.txt` committed.
+- STALE gopls floods FALSE diagnostics (undefined GoldenDandelion/LootContext/RecordSpawn, mapView mismatches, packetid.ServerboundAttack) — ALL FALSE; trust `go build`/vet/test.
 
 ## TOOLS
-- **`./testbot.exe`** — headless client. `-mode hold|walk|swim|dive|goto|wander`, `-cmd "tp x y z"`, `-probe "x z"`, `-x -y -z`, `-ticks`. `-mode wander` = the roaming NPC (swing/select/eat/break/place). Has strict validateSetEquipment/validateSetEntityData decoders now.
-- **`SULFUR_ULTRA_DEBUG=1`** — firehose. `grep 'ULTRA\[<cat>\]'`. Cats: packet/move/water/tick/fluid/edit/combat/eat/collide.
-- **`SULFUR_TEST_KIT=1`** — gate-only kit (food in hotbar 0-2, cobble/planks/torch/dirt in 3-6).
-- **`/tp <x> <y> <z>`** — in-game dev teleport.
+- `./sulfur.exe [--online-mode] -seed N` (rebuild: `CGO_ENABLED=0 go build -o sulfur.exe ./cmd/sulfur`). `SULFUR_ULTRA_DEBUG=1` firehose (cats: packet/move/water/tick/fluid/edit/combat/eat/bandwidth). `SULFUR_TEST_KIT=1` (food + blocks + /tp).
+- `./testbot.exe -name X -mode goto|walk|wander -x -y -z -cmd "tp x y z" -probe "x z" -ticks N`.
+- `go run ./cmd/locate -seed N -radius CHUNKS` → structure coords.
+- `-race`: `MSYS_NO_PATHCONV=1 docker run --rm -v //d/ender://src -w //src golang:1.26 go test -race -timeout 1800s ./PKG/`.
 
-## STANDING CONSTRAINTS
-1. **1:1 mandate** (above).
-2. **CGO_ENABLED=0 clean** (pure-Go static). NOTE for Phase 18: encryption uses stdlib `crypto/aes` + `crypto/rsa` + `crypto/sha1` — all pure-Go, CGO stays 0. CFB8 hand-rolled (stdlib dropped cipher.CFB).
-3. **Push target `development`** (CI→:latest→prod). ~80 commits unpushed; push was blocked by an unrelated attendly env gate hook (NOT Sulfur's) — that's why prod/watchtower is stale.
-4. **-race needs Docker** (host CGO=0): `MSYS_NO_PATHCONV=1 docker run --rm -v //d/ender://src -w //src golang:1.26 go test -race -timeout 1800s ./server/`.
-5. **STALE gopls** floods FALSE diagnostics (`packetid.ServerboundAttack`, `entity.SulfurCube`, `block.Hardness`, `item.ItemFood`, `tools undefined`). ALL FALSE — trust `go build ./...` (exit 0) + vet + test.
-6. **NO Co-Authored-By / no Claude attribution** in commits.
-7. **DON'T re-introduce a scan-and-schedule for generated fluids** — cascades (proven twice). Use the one-shot postProcessGeneration (now landed).
-
-## KEY PATHS
-- Phase 18 work goes in: `server/login.go` / `server/handshake.go` (login state machine), `net/` (the Conn — where the AES stream wraps), `server/auth/auth.go` (exists — Yggdrasil hasJoined goes here), `cmd/sulfur/main.go` (the online-mode flag). Decompile the login packets + Crypt from the jar first.
-- Phase 17 (reference): `server/entity_events.go` (the new visibility broadcasts), `server/entity_encode.go` (encoders), `server/block_interact.go` (place + entity-collision), `server/fluid.go` (sim + postProcessChunkFluids), `world/levelgen/surface/system.go` (the race fix).
-- Planning: `.planning/STATE.md`, `.planning/ROADMAP.md`, `.planning/REQUIREMENTS.md`, `.planning/v4-PLAN.md`, `.planning/phases/17-gameplay-completion/` (deferred-items.md, 17-VERIFICATION.md), `.planning/phases/18-online-mode-auth-protocol-encryption/` (empty, just created).
-
-## INFRA
-- GHCR `ghcr.io/imhinotori/sulfur`: development→`:latest` (watchtower→demo.trysulfur.net:25565), main→`:stable`. CI: docker-publish.yml + go.yml (build + `go test -race ./...`).
-- ⚠️ Prod root password exposed in chat earlier — user must rotate (still pending).
-
-## RESUME HERE (after compact)
-1. **Continue `/gsd-plan-phase 18`** — the workflow was mid-flight (dir created, init done). Research the 776 encryption + Yggdrasil specifics (decompile the login packets + Crypt), then plan, then verify. Phase 18 = ONLINE-01 (Yggdrasil hasJoined) + ONLINE-02 (RSA key exchange + AES-128/CFB8 hand-rolled).
-2. After Phase 18: Phase 19 (TUI + disconnect logs), Phase 20 (structure polish), then v3 closes → v4 (plugins).
-3. The push to `development` is still pending (the attendly gate hook blocked it). Retry when that clears, or push manually.
+## RESUME HERE (when operator returns)
+1. **Run the v3 visual gates** on a real client (the only thing blocking milestone close): open a chest (loot once the chest-OPEN UI lands — OR confirm the gen-time store), see villagers/witch/cat, structures fit terrain, premium login + skins.
+2. If satisfied → `/gsd-complete-milestone v3` (archives v3, tags). Then v4 kickoff (`/gsd-new-milestone` — DESTRUCTIVE, resets STATE to v4; the v4-PLAN.md is ready).
+3. If autonomous work is wanted before then: the **chest-OPEN UI** is the highest-value pure-code item (unblocks the chest-loot visual proof); then **block-survival non-vegetation** classes.
