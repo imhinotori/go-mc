@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v3
 milestone_name: Online-mode + Operator UX + Structure polish
-status: paused
-stopped_at: 19-02 Tasks 1+2 committed (console dispatch seam + main() TTY fork); PAUSED at Task 3 operator human-verify checkpoint
-last_updated: "2026-06-27T00:07:02.359Z"
+status: executing
+stopped_at: 19-03 (TUI-02 disconnect taxonomy) COMPLETE — all 3 tasks committed (18e6db4a, 0afd0713, ed106fe3), Docker -race ./server/ green, SUMMARY written, TUI-02 marked done, the Phase-3 KeepAlive double-leave deferred-item CLOSED. 19-02 Task 3 still PAUSED at its operator human-verify checkpoint (TUI renders + console dispatch + headless stays plain) — TUI-01 not marked complete until it passes; Phase 19 closes after that gate.
+last_updated: "2026-06-27T04:02:11.239Z"
 progress:
-  total_phases: 3
+  total_phases: 4
   completed_phases: 3
-  total_plans: 10
-  completed_plans: 26
+  total_plans: 15
+  completed_plans: 27
   percent: 100
 ---
 
@@ -20,13 +20,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-23)
 
 **Core value:** A Go server that an unmodified vanilla Minecraft 26.2 client can connect to, log into, and play in a persistent, ticking world — architected from day one for Leaf-style async optimizations.
-**Current focus:** Phase 19 — operator-ux-tui-console-disconnect-logging
+**Current focus:** Phase 20 — structure-polish-loot-inhabitants-beard-persistence
 
 ## Current Position
 
-Phase: 19 (operator-ux-tui-console-disconnect-logging) — EXECUTING
-Plan: 3 of 3 (19-03 COMPLETE; 19-02 still PAUSED at its operator checkpoint)
-Status: 19-03 (TUI-02 disconnect taxonomy) COMPLETE — all 3 tasks committed (18e6db4a, 0afd0713, ed106fe3), Docker -race ./server/ green, TUI-02 marked done, the Phase-3 KeepAlive double-leave deferred-item CLOSED. 19-02 Task 3 REMAINS PAUSED at the operator human-verify checkpoint (TUI renders + console dispatch + headless stays plain); TUI-01 NOT marked complete until that checkpoint passes. Phase 19 closes once the 19-02 operator gate is approved.
+Phase: 20 (structure-polish-loot-inhabitants-beard-persistence) — EXECUTING
+Plan: 2 of 5
+Status: Ready to execute
 
 ### ⚠️ WHAT'S NEXT (resume here — see .planning/HANDOFF.md for the FULL detail)
 
@@ -206,6 +206,7 @@ Progress: [██████████] 100%
 | Phase 18 P02 | 4min | 2 tasks | 6 files |
 | Phase 19 P01 | 18min | 3 tasks | 8 files |
 | Phase 19 P03 | 22min | 3 tasks | 8 files |
+| Phase 20 P01 | 16min | 3 tasks | 14 files |
 
 ## Accumulated Context
 
@@ -346,7 +347,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-27T00:05:47.442Z
+Last session: 2026-06-27T04:02:11.225Z
 Stopped at: 19-03 (TUI-02 disconnect taxonomy) COMPLETE — all 3 tasks committed (18e6db4a, 0afd0713, ed106fe3), Docker -race ./server/ green, SUMMARY written, TUI-02 marked done, the Phase-3 KeepAlive double-leave deferred-item CLOSED. 19-02 Task 3 still PAUSED at its operator human-verify checkpoint (TUI renders + console dispatch + headless stays plain) — TUI-01 not marked complete until it passes; Phase 19 closes after that gate.
-Resume file: .planning/phases/19-operator-ux-tui-console-disconnect-logging/19-02-PLAN.md (Task 3 operator checkpoint)
+Resume file: None
 Next: OPERATOR CHECKPOINT (19-02 Task 3) — build `CGO_ENABLED=0 go build -o sulfur.exe ./cmd/sulfur`, run `./sulfur.exe -seed 777` in a REAL terminal (expect alt-screen TUI: log viewport + command input), type `say hi`+Enter (expect a `console command cmd=say hi` viewport line), connect a vanilla 26.2 client (expect a join line), Ctrl-C (clean exit), then `./sulfur.exe -seed 777 | cat` (expect NO TUI, plain stderr — today's behavior). On "approved" → mark TUI-01 complete + advance the plan counter, then proceed to Plan 19-03 (gameplay_tick.go join/leave slog conversion + the full disconnect taxonomy). The console line routes TUI→tick (EnqueueConsoleCommand, cap 64, drop-on-full)→runConsoleCommand on the tick→existing graph (grant-all, no issuer), reply to slog. gameplay_tick.go is untouched (19-03 owns it). LEGACY: Phase 17 Wave 2 (17-02/17-03) — see prior continuity below. (GAMEPLAY-05 fluid simulation: OVERWRITE server/fluid.go with the FlowingFluid port + scheduled-tick queue; lazy-init t.fluidSchedule inside tickFluids, do NOT edit tick.go/tick_phases.go) and 17-03 (GAMEPLAY-04 fall damage + PvP dispatch: OVERWRITE server/fall_damage.go using the tickPlayer fallDistance/wasOnGround/lastY fields + the lookupPlayerByEntityID reverse lookup, do NOT edit tick.go/tick_phases.go). The exact Wave-2 seam surface (field names, init point, call sites, stub signatures) is in 17-01-SUMMARY.md "WAVE-2 HANDOFF". Deferred-still-open: dungeon loot/spawner-mob + BeehiveDecorator occupant + pale_garden PaleMoss (all v3, cosmetic, in 13-04-SUMMARY); KeepAlive double-leave hardening (Phase 3). KNOWN PRE-EXISTING FLAKE: TestTickAIDrivesMobs (OPT-01 async-pool timing, not caused by 17-01) intermittently fails under full-suite load; passes in isolation + 3× under -race.
