@@ -35,7 +35,8 @@ Full phase details: [milestones/v2-ROADMAP.md](milestones/v2-ROADMAP.md).
 
 - [ ] **Phase 17: Gameplay Completion — the six unwired seams** (GAMEPLAY-01..07) — wire the existing-but-disconnected gameplay: player-entity-in-tracker broadcast (GAMEPLAY-01, the keystone), persisted-position apply (02), inventory join-sync (03), Attack/Interact damage dispatch + fall damage (04), fluid simulation + player fluid physics (05), block-break item drops (06), closed by a real-client multiplayer VISUAL GATE (07). Pattern: reconnect seams whose core logic already exists + is unit-tested; fluid sim is the one large net-new port.
 - [x] **Phase 18: Online-mode — auth + protocol encryption** (ONLINE-01/02) — EncryptionRequest/Response RSA key exchange + AES-128/CFB8 stream encryption (hand-rolled CFB8 over stdlib AES, no new dep) + Yggdrasil `hasJoined` session-server verification, behind an `online-mode` config flag. (completed 2026-06-26)
-- [x] **Phase 19: Operator UX — TUI console + disconnect logging** (TUI-01/02) — a bubbletea+bubbles terminal console (command-input + live log viewport) that degrades to plain logging when stdout is not a TTY, plus disconnect-reason logging (kick/timeout/protocol/quit/login-fail). Both complete + operator-validated; verified 3/3. (completed 2026-06-27)
+- [x] **Phase 19: Operator UX — TUI console + disconnect logging** (TUI-01/02) — a bubbletea+bubbles terminal console (command-input + live log viewport) that degrades to plain logging when stdout is not a TTY, plus disconnect-reason logging (kick/timeout/protocol/quit/login-fail).
+ Both complete + operator-validated; verified 3/3. (completed 2026-06-27)
 - [ ] **Phase 20: Structure polish — loot, inhabitants, beard, persistence** (STRUCT-POLISH-01..04) — the documented v2 deferrals: loot tables (chests + block drops, shared evaluator with GAMEPLAY-06), structure entities (villagers/witch/cat/silverfish), `afterPlace` terrain-beard, and structure-start NBT persistence.
 
 ### 📋 v4 Plugin / Scripting System (Phases 21–28) — PLANNED (execution waits for v3 to close)
@@ -109,7 +110,13 @@ Full phase details: [milestones/v2-ROADMAP.md](milestones/v2-ROADMAP.md).
   2. Structure inhabitants spawn with the structure: villagers (village), witch (swamp hut), cat (village/swamp), silverfish (stronghold) (STRUCT-POLISH-02)
   3. The `afterPlace` terrain-beard adaptation is ported so structures fit terrain instead of floating/clipping (STRUCT-POLISH-03)
   4. Computed `StructureStart`s persist to region NBT (write/read the structure-start tags) so starts survive without recompute (STRUCT-POLISH-04)
-**Plans**: TBD (set by /gsd-plan-phase)
+**Plans**: 5 plans in 2 waves
+Plans:
+- [ ] 20-01-PLAN.md — Shared loot evaluator (level/loot) + golden seed-reproduction (STRUCT-POLISH-01)
+- [ ] 20-02-PLAN.md — Shared evaluator wired to block drops + lazy chest loot (STRUCT-POLISH-01)
+- [ ] 20-03-PLAN.md — StructureStart NBT persistence + per-piece Save/Load (STRUCT-POLISH-04)
+- [ ] 20-04-PLAN.md — Structure inhabitant spawns via ChunkResult.Spawns + silverfish spawner (STRUCT-POLISH-02)
+- [ ] 20-05-PLAN.md — Beardifier terrain adaptation: village beard_thin + stronghold bury (STRUCT-POLISH-03)
 **Research**: Phase research covers the loot-table evaluation model + the `afterPlace`/Beardifier adaptation + the structure-start NBT tag format.
 
 ## Progress
