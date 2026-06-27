@@ -67,7 +67,7 @@ Updated during roadmap creation (`/gsd-plan-phase`).
 | ONLINE-02 | TBD | Complete |
 | TUI-01 | 19-01 (backbone), 19-02/03 (wiring) | Complete |
 | TUI-02 | TBD | Complete |
-| STRUCT-POLISH-01 | TBD | Complete |
+| STRUCT-POLISH-01 | 20-01 (evaluator), 20-02 (block drops + lazy chest store + unpackLootTable seam), 20-06 (chest-OPEN UI: right-click -> BE resolve -> lazy roll -> OpenScreen generic_9x3 + ContainerSetContent + clicks/close) | Complete |
 | STRUCT-POLISH-02 | TBD | Complete |
 | STRUCT-POLISH-03 | TBD | Complete |
 | STRUCT-POLISH-04 | 20-03 (seam + tests); runtime-wired in the gap closure (worker.decodeAndSeed read / world.SerializeChunkData write + reload integration test) | Complete |
