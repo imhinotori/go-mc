@@ -25,6 +25,19 @@ type WorldGenView interface {
 	// Out-of-window writes are dropped (same clip as SetBlock). 20-02 Task 2 (the chest BE
 	// carrier — RandomizableContainerBlockEntity's LootTable/LootTableSeed NBT keys).
 	SetBlockEntity(wx, wy, wz int, typ block.EntityType, lootTable string, lootSeed int64)
+	// SetSpawner records a mob_spawner BLOCK-ENTITY at world (wx,wy,wz) set to spawn entityID
+	// (e.g. "minecraft:silverfish") — the stronghold's silverfish trap. This is a BLOCK, NOT a
+	// live entity (Pitfall 5): the spawner block-entity carries SpawnData.entity.id, mirroring
+	// BaseSpawner.setEntityId (jar). Out-of-window writes are dropped (same clip as SetBlock).
+	// The SPAWNER block itself is placed by a preceding SetBlock; SetSpawner adds the BE. 20-04.
+	SetSpawner(wx, wy, wz int, entityID string)
+	// RecordSpawn buffers a structure-inhabitant spawn REQUEST (a witch/cat/villager) for the
+	// tick to drain onto the entity store — it NEVER spawns a live entity off-tick (TICK-05 /
+	// Pitfall 5). The recorder (the world.Neighborhood) appends the request; placeStructures
+	// forwards the buffer onto the emitted ChunkResult.Spawns, and the tick performs the only
+	// store add. STRUCT-POLISH-02. The silverfish SPAWNER is NOT recorded here — it is a block
+	// (SetBlock + SetSpawner). 20-04 (the spawn seam, alongside 20-02's SetBlockEntity).
+	RecordSpawn(req SpawnRequest)
 }
 
 // Rotation ports net.minecraft.world.level.block.Rotation: a horizontal rotation applied

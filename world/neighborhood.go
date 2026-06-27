@@ -4,6 +4,7 @@ import (
 	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/nbt"
+	"github.com/imhinotori/sulfur/world/structure"
 )
 
 // Neighborhood is a WorldGenLevel-like read/write view over a 3x3 of carved chunks,
@@ -32,7 +33,23 @@ type Neighborhood struct {
 	chunks map[int64]*level.Chunk // 9 entries: center + 8 neighbors, packed-pos keyed
 	air    block.StateID
 	water  block.StateID
+
+	// spawns buffers the structure-inhabitant SpawnRequests recorded during the PLACE pass
+	// (PostProcess -> RecordSpawn). It is the OFF-TICK half of the off-tick->tick seam
+	// (TICK-05 / Pitfall 5): the worker only RECORDS here; placeStructures drains it onto the
+	// emitted ChunkResult.Spawns, and the tick performs the only entity-store add. Owned by the
+	// single scheduler goroutine (same as chunks), so the append is race-free by construction.
+	// A defensive cap (spawnRequestCap) bounds the per-chunk count (T-20-12) — a faithful
+	// structure emits a tiny fixed set (witch+cat, a handful of villagers), never thousands.
+	spawns []structure.SpawnRequest
 }
+
+// spawnRequestCap bounds the per-chunk SpawnRequest count (T-20-12 DoS): a faithful structure
+// emits a small fixed set of inhabitants (swamp hut = witch+cat; a village house = a few
+// villagers), so a chunk legitimately records at most a few dozen. The cap backstops a
+// malformed template entity list from ballooning the buffer; excess requests are dropped
+// (never panic). 256 is far above any faithful per-chunk inhabitant count.
+const spawnRequestCap = 256
 
 // newNeighborhood builds the 3x3 view. chunks must hold the center + its 8 neighbors,
 // keyed by packPos. minY/height come from the generator's Dims(). The air/water
@@ -150,6 +167,78 @@ func (n *Neighborhood) SetBlockEntity(wx, wy, wz int, typ block.EntityType, loot
 	}
 	ch.BlockEntity = append(ch.BlockEntity, be)
 }
+
+// SetSpawner records a mob_spawner BLOCK-ENTITY at world (wx,wy,wz) set to spawn entityID
+// (the stronghold's silverfish). This is a BLOCK, not a live entity (Pitfall 5): the BE carries
+// SpawnData.entity.id, mirroring BaseSpawner.setEntityId (jar). The SPAWNER block itself is
+// placed by a preceding SetBlock; SetSpawner appends the mob_spawner BE. Out-of-window writes
+// are dropped (same clip as SetBlock/SetBlockEntity). Single-owner (the scheduler goroutine).
+func (n *Neighborhood) SetSpawner(wx, wy, wz int, entityID string) {
+	ch, ok := n.chunkAt(wx, wz)
+	if !ok {
+		return // outside the 3x3 -> dropped
+	}
+	if wy < n.minY || wy >= n.minY+n.height {
+		return // out of Y range -> dropped
+	}
+	be := level.BlockEntity{
+		Y:    int16(wy),
+		Type: block.EntityTypes["minecraft:mob_spawner"],
+		Data: spawnerNBT(entityID),
+	}
+	if !be.PackXZ(wx&15, wz&15) {
+		return
+	}
+	ch.BlockEntity = append(ch.BlockEntity, be)
+}
+
+// spawnerNBT builds the mob_spawner block-entity NBT carrying SpawnData.entity.id = entityID —
+// the ONLY field BaseSpawner.setEntityId writes at gen (the Delay/MinSpawnDelay/SpawnCount/...
+// fields are the spawner's runtime defaults, set when the spawner first ticks, never at gen).
+// The shape is {SpawnData: {entity: {id: "<entityID>"}}}, mirroring BaseSpawner.save's
+// "SpawnData" key + SpawnData's "entity" field + setEntityId's putString("id", ...). nbt.Marshal
+// emits a full document ([0x0A][nameLen=0][payload]); BlockEntity.Data wants the bare compound
+// payload, so the 3-byte root header is stripped (the chestLootNBT convention).
+//
+// Source: javap BaseSpawner.setEntityId (SpawnData.getEntityToSpawn().putString("id", key)) +
+// BaseSpawner.save (the "SpawnData" tag) + SpawnData codec ("entity" field).
+func spawnerNBT(entityID string) nbt.RawMessage {
+	doc, err := nbt.Marshal(struct {
+		SpawnData struct {
+			Entity struct {
+				ID string `nbt:"id"`
+			} `nbt:"entity"`
+		} `nbt:"SpawnData"`
+	}{SpawnData: struct {
+		Entity struct {
+			ID string `nbt:"id"`
+		} `nbt:"entity"`
+	}{Entity: struct {
+		ID string `nbt:"id"`
+	}{ID: entityID}}})
+	if err != nil {
+		return nbt.RawMessage{Type: nbt.TagCompound}
+	}
+	return nbt.RawMessage{Type: nbt.TagCompound, Data: doc[3:]}
+}
+
+// RecordSpawn buffers a structure-inhabitant SpawnRequest for the tick to drain (TICK-05 /
+// Pitfall 5): the worker NEVER spawns a live entity off-tick — it only RECORDS the request, and
+// placeStructures forwards the buffer onto ChunkResult.Spawns where the tick performs the only
+// store add. Single-owner (the scheduler goroutine). The per-chunk count is capped (T-20-12);
+// a request beyond the cap is dropped (a faithful structure never reaches it).
+func (n *Neighborhood) RecordSpawn(req structure.SpawnRequest) {
+	if len(n.spawns) >= spawnRequestCap {
+		return // T-20-12: bound the per-chunk spawn-request count (never panic)
+	}
+	n.spawns = append(n.spawns, req)
+}
+
+// Spawns returns the structure-inhabitant SpawnRequests recorded during the PLACE pass — the
+// off-tick buffer placeStructures attaches to the emitted ChunkResult.Spawns. The returned
+// slice aliases the buffer (read-only on the scheduler goroutine; the worker copies it into the
+// immutable ChunkResult before emit). Empty when no structure recorded an inhabitant.
+func (n *Neighborhood) Spawns() []structure.SpawnRequest { return n.spawns }
 
 // chestLootNBT builds the chest block-entity NBT compound carrying only {LootTable,
 // LootTableSeed} — the lazy-roll seam (no item list). The keys mirror

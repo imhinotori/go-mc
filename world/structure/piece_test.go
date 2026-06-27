@@ -13,8 +13,10 @@ import (
 // assert exactly which cells placeBlock's writable-box clip let through (isolating the clip
 // from the Neighborhood's own radius drop). Out-of-store reads return air.
 type mapView struct {
-	blocks map[[3]int]block.StateID
-	writes int
+	blocks   map[[3]int]block.StateID
+	writes   int
+	spawners map[[3]int]string // SetSpawner captures: world pos -> spawned entity id
+	spawns   []SpawnRequest    // RecordSpawn captures: the structure-inhabitant requests
 }
 
 func newMapView() *mapView { return &mapView{blocks: map[[3]int]block.StateID{}} }
@@ -34,6 +36,22 @@ func (m *mapView) GetBlock(wx, wy, wz int) block.StateID {
 // SetBlockEntity satisfies WorldGenView for the piece tests that don't care about block
 // entities (the recordingView in chest_be_test.go overrides this to capture chest BEs).
 func (m *mapView) SetBlockEntity(wx, wy, wz int, typ block.EntityType, lootTable string, lootSeed int64) {
+}
+
+// SetSpawner satisfies WorldGenView. The recordingView/spawnView override it to capture the
+// stronghold silverfish spawner BE; the base mapView records the spawner-set as a write so a
+// test can assert the spawner block landed without a dedicated capture.
+func (m *mapView) SetSpawner(wx, wy, wz int, entityID string) {
+	if m.spawners == nil {
+		m.spawners = map[[3]int]string{}
+	}
+	m.spawners[[3]int{wx, wy, wz}] = entityID
+}
+
+// RecordSpawn satisfies WorldGenView. The base mapView buffers the requests so a piece test can
+// assert the witch/cat/villager spawn records without a server-side store.
+func (m *mapView) RecordSpawn(req SpawnRequest) {
+	m.spawns = append(m.spawns, req)
 }
 
 func sandstoneID(t *testing.T) block.StateID {

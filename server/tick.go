@@ -84,6 +84,10 @@ func (r chunkReady) applyTo(t *TickLoop) {
 	}
 	t.world.Insert(r.res.Pos, r.res.Chunk)
 	t.postProcessChunkFluids(r.res.Pos, r.res.Chunk)
+	// STRUCT-POLISH-02: drain the structure-inhabitant SpawnRequests the worker recorded
+	// off-tick onto the entity store — on the owner (TICK-05 / Pitfall 5). The witch/cat/villager
+	// then ride GAMEPLAY-01's tracker (AddEntity broadcast) next tick. No-op when Spawns is empty.
+	t.drainStructureSpawns(r.res)
 }
 
 // tracker is the entity/chunk tracking executor seam (TICK-05). Phase 3 shipped it with a

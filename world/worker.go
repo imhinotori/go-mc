@@ -12,6 +12,7 @@ import (
 	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/save"
 	"github.com/imhinotori/sulfur/save/region"
+	"github.com/imhinotori/sulfur/world/structure"
 )
 
 // ChunkResult is the IMMUTABLE handoff from the off-tick worker to the tick
@@ -23,6 +24,15 @@ type ChunkResult struct {
 	Pos   level.ChunkPos
 	Chunk *level.Chunk
 	Err   error
+
+	// Spawns carries the structure-inhabitant SpawnRequests recorded off-tick during the PLACE
+	// pass (STRUCT-POLISH-02): a witch/cat (swamp hut) or villagers/cat (village). It rides the
+	// EXACT same immutable handoff as Chunk — populated by placeStructures (from the Neighborhood
+	// buffer) before emit, never mutated after. The TICK drains it onto the entity store
+	// (server/structure_spawn.go) where GAMEPLAY-01's tracker broadcasts AddEntity for free; the
+	// worker NEVER touches the store (TICK-05 / Pitfall 5). nil/empty for a chunk with no
+	// structure inhabitant (the common case). The silverfish SPAWNER is a BLOCK, not a Spawn.
+	Spawns []structure.SpawnRequest
 }
 
 // Worker loads-or-generates chunks off the tick. It reads bounded requests, runs
@@ -82,6 +92,13 @@ type stagedChunk struct {
 	carved    bool
 	decorated bool
 	emitted   bool
+
+	// spawns holds the structure-inhabitant SpawnRequests this center recorded during its OWN
+	// Decorate (placeStructures -> Neighborhood.RecordSpawn). Captured in tryDecorate (the only
+	// place this center's PLACE pass runs over its own writable box) and forwarded onto the
+	// emitted ChunkResult.Spawns in tryEmit — so the spawns ride the SAME immutable handoff as
+	// the chunk. STRUCT-POLISH-02. Empty for a chunk with no structure inhabitant.
+	spawns []structure.SpawnRequest
 }
 
 // NewWorker builds a worker. buf sizes both the bounded request channel and the
@@ -360,6 +377,12 @@ func (w *Worker) tryDecorate(center level.ChunkPos) bool {
 	w.gen.Decorate(view) // LIVE: writes features into the 3x3, promotes the center to StatusFull
 	cs.decorated = true
 	cs.chunk.Status = level.StatusFull
+	// Capture the structure-inhabitant SpawnRequests this center recorded during its PLACE pass
+	// (placeStructures -> Neighborhood.RecordSpawn). They are forwarded onto the emitted
+	// ChunkResult.Spawns in tryEmit so they ride the immutable handoff (STRUCT-POLISH-02 /
+	// Pitfall 5: the worker only RECORDS; the tick performs the only store add). A re-decorate
+	// cannot happen (the decorated guard above), so this captures the requests exactly once.
+	cs.spawns = view.Spawns()
 	// Do NOT emit here — the emit is gated by tryEmit until every wanted neighbor that holds
 	// this center is also decorated (no write lands after the immutable handoff).
 	return true
@@ -398,7 +421,7 @@ func (w *Worker) tryEmit(ctx context.Context, center level.ChunkPos) {
 		}
 	}
 	cs.emitted = true
-	w.emit(ctx, ChunkResult{Pos: center, Chunk: cs.chunk})
+	w.emit(ctx, ChunkResult{Pos: center, Chunk: cs.chunk, Spawns: cs.spawns})
 	// Keep cs in staging so it still serves as a carved/decorated neighbor for the remaining
 	// held centers' tryDecorate/tryEmit scans. It is emitted (immutable) now — never written
 	// again: every wanted neighbor that could write into it is already decorated (the gate
