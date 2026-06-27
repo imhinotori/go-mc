@@ -476,6 +476,18 @@ type tickPlayer struct {
 	// current center this session, so the flush sends the cache framing once per center.
 	centerSent bool
 
+	// --- PlayerChunkSender state (1:1 port of net.minecraft.server.network.PlayerChunkSender) ---
+	// Client-acknowledged flow control so the server never floods the connection (sending the whole
+	// ring every tick overran the bounded outbound queue → backpressure kick). desiredChunksPerTick
+	// starts at 9.0; the client's ServerboundChunkBatchReceived ack adjusts it (0.01..64) and raises
+	// maxUnacknowledgedBatches from 1 to 10. batchQuota accumulates fractional budget;
+	// unacknowledgedBatches gates sending.
+	chunkSenderInit          bool
+	desiredChunksPerTick     float32
+	batchQuota               float32
+	unacknowledgedBatches    int
+	maxUnacknowledgedBatches int
+
 	// secs is the dimension's section count (overworld 24), derived at registration for
 	// chunk generation/empty sizing — never hard-coded deeper in the pipeline.
 	secs int
@@ -1175,6 +1187,19 @@ func (t *TickLoop) dispatch(c *Client, p pk.Packet) {
 		// resolveSubtickInputs drains it in chronological order this tick.
 		if player != nil {
 			player.subtick.append(SubtickInput{At: t.clock.Now(), Packet: p})
+		}
+	case packetid.ServerboundChunkBatchReceived:
+		// The client's per-batch chunk ACK (ServerboundChunkBatchReceivedPacket = one Float
+		// desiredChunksPerTick). Handled DIRECTLY here (not via the subtick buffer / teleport gate)
+		// because chunk streaming runs BEFORE the teleport confirm — gating the ack would deadlock
+		// the PlayerChunkSender flow control (the server holds at maxUnacknowledgedBatches and never
+		// streams). 1:1 port of PlayerChunkSender.onChunkBatchReceivedByClient. T-3-07: the rate is
+		// clamped (0.01..64), so a malicious value cannot blow up the send budget.
+		if player != nil {
+			var rate pk.Float
+			if err := p.Scan(&rate); err == nil {
+				player.onChunkBatchReceivedByClient(float32(rate))
+			}
 		}
 	case packetid.ServerboundClientTickEnd:
 		// Client input-batch boundary marker (new in 1.21.2 / present in 776). Phase 3

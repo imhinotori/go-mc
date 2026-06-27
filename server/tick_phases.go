@@ -9,6 +9,12 @@ import (
 	"github.com/imhinotori/sulfur/world"
 )
 
+// chunkLoadGraceTicks is how long a column may sit in stateLoading (request issued, no result yet)
+// before tickChunks reverts it to Empty and re-requests it. At 20 TPS this is ~2s — far longer than
+// a healthy generate/region-load round-trip, so it only fires for a genuinely dropped/stranded
+// request, not for a chunk that is merely still generating.
+const chunkLoadGraceTicks = 200
+
 // tickOnce runs ONE logical tick: the explicit, fixed-order phase pipeline (TICK-01).
 // drainInbound is intentionally NOT here — Run drains inbound once per wake before
 // calling tickOnce, kept separate so input is drained per wake, not per catch-up
@@ -144,6 +150,13 @@ func (t *TickLoop) tickChunks() {
 	if t.world == nil || t.worker == nil {
 		return // no world wired (Phase-3-style tests / pre-SetWorld): cheap no-op
 	}
+	// Advance the manager clock, then revert any column stuck in Loading past the grace window
+	// back to Empty so the request below re-issues it. This recovers a worker request that was
+	// DROPPED under burst backpressure (worker.Request is non-blocking and silently drops when its
+	// bounded queue is full) or a center stranded by the scheduler's emit gate — without it a
+	// dropped request leaves the column transparent forever (the "invisible chunk" bug).
+	t.world.Tick()
+	t.world.RetryStale(chunkLoadGraceTicks)
 	for _, p := range t.players {
 		ring := centerOutRing(p.center, p.viewDist)
 		for _, pos := range ring {
@@ -397,30 +410,141 @@ func (t *TickLoop) flushOutbound() {
 			p.centerSent = true
 		}
 
-		ring := centerOutRing(p.center, p.viewDist)
-		var batch []pk.Packet
-		for _, pos := range ring {
-			if p.sentChunks[pos] {
-				continue // already streamed to this player — send at most once
-			}
-			ch, ok := t.world.Get(pos)
-			if !ok {
-				continue // not Ready yet — a later tick will send it once the worker rejoins
-			}
-			pkt, err := world.WriteLevelChunkWithLight(pos[0], pos[1], ch)
-			if err != nil {
-				continue // encoding failure for this column: skip, do not poison the batch
-			}
-			batch = append(batch, pkt)
-			p.sentChunks[pos] = true
-		}
-
-		if len(batch) > 0 {
-			p.client.Send(world.ChunkBatchStart())
-			for _, pkt := range batch {
-				p.client.Send(pkt)
-			}
-			p.client.Send(world.ChunkBatchFinished(int32(len(batch))))
-		}
+		t.sendNextChunks(p)
 	}
+}
+
+// sendNextChunks is the 1:1 port of net.minecraft.server.network.PlayerChunkSender.sendNextChunks:
+// the client-acknowledged flow control that paces chunk batches so the server never floods the
+// connection. Without it, sending the whole view ring every tick overran the bounded outbound queue
+// and the client was kicked for backpressure (the "invisible chunk" + disconnect bug).
+//
+// Vanilla:
+//
+//	if (unacknowledgedBatches >= maxUnacknowledgedBatches) return;        // throttle: wait for an ack
+//	float f = Math.max(1.0f, desiredChunksPerTick);
+//	batchQuota = Math.min(batchQuota + desiredChunksPerTick, f);
+//	if (batchQuota < 1.0f) return;                                        // not enough budget yet
+//	if (pendingChunks.isEmpty()) return;
+//	List<LevelChunk> list = collectChunksToSend(...);                     // up to floor(batchQuota), nearest-first
+//	if (list.isEmpty()) return;
+//	send(ChunkBatchStart); unacknowledgedBatches++;
+//	for (ch : list) sendChunk(ch);
+//	send(ChunkBatchFinished(list.size()));
+//	batchQuota -= list.size();
+//
+// CITE: PlayerChunkSender.sendNextChunks / collectChunksToSend / constructor (START_CHUNKS_PER_TICK
+// 9.0, maxUnacknowledgedBatches 1). "pendingChunks" here is the set of ring columns that are Ready
+// but not yet sent (computed from the live ring + sentChunks). Tick-owned.
+func (t *TickLoop) sendNextChunks(p *tickPlayer) {
+	if !p.chunkSenderInit {
+		// Constructor defaults: desiredChunksPerTick = START_CHUNKS_PER_TICK (9.0),
+		// maxUnacknowledgedBatches = 1 (raised to 10 on the first client ack).
+		p.desiredChunksPerTick = 9.0
+		p.maxUnacknowledgedBatches = 1
+		p.chunkSenderInit = true
+	}
+
+	// Throttle: hold until the client acknowledges outstanding batches.
+	if p.unacknowledgedBatches >= p.maxUnacknowledgedBatches {
+		return
+	}
+
+	f := p.desiredChunksPerTick
+	if f < 1.0 {
+		f = 1.0
+	}
+	p.batchQuota = minF32(p.batchQuota+p.desiredChunksPerTick, f)
+	if p.batchQuota < 1.0 {
+		return // not enough budget accumulated for even one chunk this tick
+	}
+
+	// collectChunksToSend: up to floor(batchQuota) Ready+unsent ring columns, NEAREST-FIRST
+	// (vanilla sorts pending by ChunkPos.distanceSquared to the player chunk). centerOutRing is
+	// already center-out (non-decreasing Chebyshev), which yields the same nearest-first order.
+	limit := int(p.batchQuota) // Mth.floor on a positive float
+	ring := centerOutRing(p.center, p.viewDist)
+	batch := make([]pk.Packet, 0, limit)
+	var sent []level.ChunkPos
+	for _, pos := range ring {
+		if len(batch) >= limit {
+			break
+		}
+		if p.sentChunks[pos] {
+			continue
+		}
+		ch, ok := t.world.Get(pos)
+		if !ok {
+			continue // not Ready yet (still generating) — a later tick sends it
+		}
+		pkt, err := world.WriteLevelChunkWithLight(pos[0], pos[1], ch)
+		if err != nil {
+			continue
+		}
+		batch = append(batch, pkt)
+		sent = append(sent, pos)
+	}
+	if len(batch) == 0 {
+		return // nothing Ready to send this tick
+	}
+
+	// Send exactly ONE batch and account it as unacknowledged until the client's
+	// ServerboundChunkBatchReceived ack (onChunkBatchReceivedByClient) clears it.
+	p.client.Send(world.ChunkBatchStart())
+	p.unacknowledgedBatches++
+	for i, pkt := range batch {
+		p.client.Send(pkt)
+		p.sentChunks[sent[i]] = true
+	}
+	p.client.Send(world.ChunkBatchFinished(int32(len(batch))))
+	p.batchQuota -= float32(len(batch))
+}
+
+// minF32 is Math.min for float32 (no generic builtin min on float in older style; explicit for the
+// faithful PlayerChunkSender port).
+func minF32(a, b float32) float32 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// onChunkBatchReceivedByClient is the 1:1 port of
+// net.minecraft.server.network.PlayerChunkSender.onChunkBatchReceivedByClient(float). The client
+// sends ServerboundChunkBatchReceived after it has processed a batch, carrying the rate it can
+// sustain. Vanilla:
+//
+//	this.unacknowledgedBatches--;
+//	if (this.unacknowledgedBatches < 0) { this.unacknowledgedBatches = 0; LOGGER.warn(...); }
+//	this.desiredChunksPerTick = Double.isNaN(rate) ? 0.01f : Mth.clamp(rate, 0.01f, 64.0f);
+//	if (this.unacknowledgedBatches == 0) this.batchQuota = 1.0f;
+//	this.maxUnacknowledgedBatches = 10;
+//
+// CITE: PlayerChunkSender.onChunkBatchReceivedByClient (MIN_CHUNKS_PER_TICK 0.01,
+// MAX_CHUNKS_PER_TICK 64.0, MAX_UNACKNOWLEDGED_BATCHES 10). Tick-owned.
+func (p *tickPlayer) onChunkBatchReceivedByClient(rate float32) {
+	p.unacknowledgedBatches--
+	if p.unacknowledgedBatches < 0 {
+		p.unacknowledgedBatches = 0
+	}
+	if rate != rate { // NaN
+		p.desiredChunksPerTick = 0.01
+	} else {
+		p.desiredChunksPerTick = clampF32(rate, 0.01, 64.0)
+	}
+	if p.unacknowledgedBatches == 0 {
+		p.batchQuota = 1.0
+	}
+	p.maxUnacknowledgedBatches = 10
+}
+
+// clampF32 is Mth.clamp for float32.
+func clampF32(v, lo, hi float32) float32 {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }

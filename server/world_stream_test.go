@@ -282,38 +282,20 @@ func TestFlushOutboundBatches(t *testing.T) {
 		mgr.Insert(pos, level.EmptyChunk(24))
 	}
 
-	loop.flushOutbound()
+	// The PlayerChunkSender flow control (1:1 port) paces chunks: each flush sends ONE batch of at
+	// most floor(batchQuota) columns (START_CHUNKS_PER_TICK=9 initially), then waits for the client's
+	// ServerboundChunkBatchReceived ack before sending more. So a 25-column ring drains over several
+	// flush+ack rounds. streamRingPaced drives flush -> read batch -> ack -> flush until the whole
+	// ring has streamed (each chunk exactly once) and asserts the count.
+	pktCh := startPipeReader(client)
+	streamRingPaced(t, loop, p, pktCh, len(ring))
 
-	// Expected: SetChunkCacheCenter, SetChunkCacheRadius, ChunkBatchStart, N chunks,
-	// ChunkBatchFinished => 3 framing + 1 + N.
-	want := 3 + len(ring) + 1
-	pkts := drainClientPackets(t, client, want)
-	if len(pkts) != want {
-		t.Fatalf("flushOutbound sent %d packets, want %d", len(pkts), want)
-	}
-	if pkts[0].ID != int32(packetid.ClientboundSetChunkCacheCenter) {
-		t.Fatalf("first packet = id %#x, want SetChunkCacheCenter", pkts[0].ID)
-	}
-	if pkts[1].ID != int32(packetid.ClientboundSetChunkCacheRadius) {
-		t.Fatalf("second packet = id %#x, want SetChunkCacheRadius", pkts[1].ID)
-	}
-	if pkts[2].ID != int32(packetid.ClientboundChunkBatchStart) {
-		t.Fatalf("third packet = id %#x, want ChunkBatchStart", pkts[2].ID)
-	}
-	for i := 0; i < len(ring); i++ {
-		if pkts[3+i].ID != int32(packetid.ClientboundLevelChunkWithLight) {
-			t.Fatalf("packet %d = id %#x, want LevelChunkWithLight", 3+i, pkts[3+i].ID)
-		}
-	}
-	if last := pkts[want-1]; last.ID != int32(packetid.ClientboundChunkBatchFinished) {
-		t.Fatalf("last packet = id %#x, want ChunkBatchFinished", last.ID)
-	}
-
-	// A second flush must send NOTHING (every ring chunk is already in the sent-set and
-	// the center was already sent). Drain with a short deadline expecting zero.
+	// A further flush must send NOTHING (every ring chunk is already in the sent-set).
 	loop.flushOutbound()
-	if extra := tryDrainOne(client); extra {
-		t.Fatal("second flushOutbound re-sent packets; each chunk must be sent at most once")
+	select {
+	case extra := <-pktCh:
+		t.Fatalf("an extra flushOutbound re-sent a packet (id %#x); each chunk must be sent at most once", extra.ID)
+	case <-time.After(150 * time.Millisecond):
 	}
 }
 
@@ -431,14 +413,14 @@ func TestRingFollowsOnMove(t *testing.T) {
 	}
 	loop.players = []*tickPlayer{p}
 
-	// First flush at the spawn center: framing + the ring (make it Ready first).
+	// First flush at the spawn center: framing + the ring (make it Ready first). The
+	// PlayerChunkSender flow control paces the ring over several flush+ack rounds, so drive
+	// flush -> ack -> flush until the whole spawn ring has streamed and the pipe is clear.
 	for _, pos := range centerOutRing(p.center, p.viewDist) {
 		mgr.Insert(pos, level.EmptyChunk(24))
 	}
-	loop.flushOutbound()
-	// Drain that initial burst (3 framing + 25 chunks + 1 finished) so the pipe is clear.
-	initial := 3 + 25 + 1
-	drainClientPackets(t, client, initial)
+	pktCh := startPipeReader(client)
+	streamRingPaced(t, loop, p, pktCh, len(centerOutRing(p.center, p.viewDist)))
 
 	// Walk far east: block x=64 -> chunk x=4, a real boundary crossing from center {0,0}.
 	loop.applyInput(p, SubtickInput{At: loop.clock.Now(), Packet: movePlayerPosRot(64.0, 64.0, 8.0, 0, 0, 0x01)})
@@ -463,7 +445,7 @@ func TestRingFollowsOnMove(t *testing.T) {
 			droppedCount++
 		}
 	}
-	drainClientPackets(t, client, droppedCount)
+	drainN(t, pktCh, droppedCount)
 
 	// Make the NEW ring Ready, then flush: a fresh SetChunkCacheCenter for the new center
 	// plus the new ring streams — the world followed the player.
@@ -472,7 +454,7 @@ func TestRingFollowsOnMove(t *testing.T) {
 	}
 	loop.flushOutbound()
 
-	pkts := drainClientPackets(t, client, 1)
+	pkts := drainN(t, pktCh, 1)
 	if len(pkts) == 0 || pkts[0].ID != int32(packetid.ClientboundSetChunkCacheCenter) {
 		t.Fatal("after a cross-boundary move, the flush must re-emit SetChunkCacheCenter for the new center")
 	}
@@ -482,6 +464,69 @@ func TestRingFollowsOnMove(t *testing.T) {
 	}
 	if int32(gx) != newCenter[0] || int32(gz) != newCenter[1] {
 		t.Fatalf("re-emitted center = (%d,%d), want %v", gx, gz, newCenter)
+	}
+}
+
+// startPipeReader spawns ONE reader goroutine that funnels every packet from the client pipe onto
+// the returned channel — a single reader the whole test shares (a per-call reader would leak on a
+// deadline and steal later packets). drainN reads exactly n packets from the channel with a
+// deadline (the fixed-count drains the framing/forget assertions use).
+func startPipeReader(client clientReader) <-chan pk.Packet {
+	pktCh := make(chan pk.Packet, 1024)
+	go func() {
+		for {
+			var pkt pk.Packet
+			if err := client.ReadPacket(&pkt); err != nil {
+				return
+			}
+			pktCh <- pkt
+		}
+	}()
+	return pktCh
+}
+
+func drainN(t *testing.T, pktCh <-chan pk.Packet, n int) []pk.Packet {
+	t.Helper()
+	got := make([]pk.Packet, 0, n)
+	for len(got) < n {
+		select {
+		case pkt := <-pktCh:
+			got = append(got, pkt)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out reading clientbound packets: got %d of %d", len(got), n)
+		}
+	}
+	return got
+}
+
+// streamRingPaced drives flushOutbound -> read batch -> ack -> flush until `wantChunks`
+// LevelChunkWithLight packets have streamed, asserting the PlayerChunkSender pacing (a variable
+// batch per flush, gated by the client's ServerboundChunkBatchReceived ack). It acks each
+// ChunkBatchFinished via onChunkBatchReceivedByClient so the flow control releases the next batch.
+// A SINGLE reader goroutine feeds pktCh (a fresh reader per round would leak on the deadline and
+// steal the next round's packets).
+func streamRingPaced(t *testing.T, loop *TickLoop, p *tickPlayer, pktCh <-chan pk.Packet, wantChunks int) {
+	t.Helper()
+	chunks := 0
+	for round := 0; round < 200 && chunks < wantChunks; round++ {
+		loop.flushOutbound()
+	drain:
+		for {
+			select {
+			case pkt := <-pktCh:
+				switch pkt.ID {
+				case int32(packetid.ClientboundLevelChunkWithLight):
+					chunks++
+				case int32(packetid.ClientboundChunkBatchFinished):
+					p.onChunkBatchReceivedByClient(64.0) // ack -> release the next batch
+				}
+			case <-time.After(150 * time.Millisecond):
+				break drain // this flush's output is drained; flush again
+			}
+		}
+	}
+	if chunks != wantChunks {
+		t.Fatalf("paced streaming sent %d chunks, want the full ring %d", chunks, wantChunks)
 	}
 }
 

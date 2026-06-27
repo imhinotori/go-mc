@@ -749,6 +749,13 @@ func (b *bot) readLoop() {
 			if b.probeActive {
 				b.probeChunk(p)
 			}
+		case packetid.ClientboundChunkBatchFinished:
+			// Acknowledge the batch so the server's PlayerChunkSender flow control releases the next
+			// one (without this the server holds at maxUnacknowledgedBatches and stops streaming
+			// after the first batch). ServerboundChunkBatchReceived = one Float desiredChunksPerTick;
+			// a real client reports its sustainable rate. We report a high rate so streaming runs at
+			// full speed in the test.
+			_ = b.conn.WritePacket(pk.Marshal(int32(packetid.ServerboundChunkBatchReceived), pk.Float(64.0)))
 		case packetid.ClientboundBlockUpdate:
 			// DIAGNOSTIC: a single-block change. If it lands in the probe column, report the new
 			// state — this catches the server OVERWRITING the water after the chunk was sent

@@ -68,6 +68,10 @@ type Worker struct {
 type carvedChunk struct {
 	pos level.ChunkPos
 	ch  *level.Chunk
+	// fromRegion marks a chunk loaded from disk (already StatusFull/decorated). The scheduler stages
+	// it carved+decorated (no re-decoration) and emits it, so it satisfies the 3x3 emit-gate of any
+	// GENERATED neighbor that needs it in staging — the fix for the mixed-provenance stall.
+	fromRegion bool
 }
 
 // stagedChunk is a chunk held by the scheduler until its 3x3 neighborhood is carved
@@ -213,18 +217,16 @@ func (w *Worker) handleTerrain(ctx context.Context, pos level.ChunkPos) {
 	}
 
 	lr := v.(loadResult)
-	if lr.fromRegion {
-		// Region hit (already StatusFull / decorated / saved): emit directly, never stage,
-		// never re-decorate. The fromRegion provenance — not the chunk's Status — is the
-		// discriminator (see loadOrGenerateEx).
-		w.emit(ctx, ChunkResult{Pos: pos, Chunk: lr.ch})
-		return
-	}
-
-	// Region miss -> carved chunk -> hand to the scheduler for staging + decoration.
+	// BOTH region hits and region misses go through the scheduler so STAGING always reflects every
+	// chunk a generated wanted center may need as a 3x3 neighbor. A region hit is staged
+	// carved+decorated (already StatusFull — never re-decorated) and emitted by the scheduler.
+	// Emitting region chunks DIRECTLY (bypassing staging) was the mixed-provenance bug: a GENERATED
+	// wanted center whose neighbor loaded from region never saw that neighbor in staging, so its 3x3
+	// emit gate never fired and it stayed Loading forever — the spawn chunk (0,0) rendered
+	// transparent under persistence once its neighbors had been saved+reloaded from region.
 	select {
 	case <-ctx.Done():
-	case w.carved <- &carvedChunk{pos: pos, ch: lr.ch}:
+	case w.carved <- &carvedChunk{pos: pos, ch: lr.ch, fromRegion: lr.fromRegion}:
 	}
 }
 
@@ -281,6 +283,22 @@ func (w *Worker) runScheduler(ctx context.Context) {
 			if s.decorated {
 				break
 			}
+
+			// A REGION chunk is already StatusFull/decorated/saved: stage it carved+decorated (it
+			// writes nothing into neighbors, so it neither gates nor is gated) and emit it. Staging
+			// it lets a GENERATED neighbor's tryDecorate/tryEmit see it complete and finish its own
+			// 3x3 — the mixed-provenance fix. Then scan the ring to unblock anything it completed.
+			if cc.fromRegion {
+				s.chunk, s.carved, s.decorated = cc.ch, true, true
+				s.chunk.Status = level.StatusFull
+				if !s.emitted {
+					s.emitted = true
+					w.emit(ctx, ChunkResult{Pos: cc.pos, Chunk: s.chunk})
+				}
+				w.processRing(ctx, cc.pos)
+				break
+			}
+
 			s.chunk, s.carved = cc.ch, true
 
 			// If this carved chunk is itself a WANTED center, auto-request its neighbor ring.

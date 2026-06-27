@@ -31,6 +31,12 @@ func (s loadState) String() string {
 type holder struct {
 	state loadState
 	chunk *level.Chunk // non-nil only when state == stateReady
+	// loadTick is the manager tick at which this holder entered stateLoading. RetryStale reverts a
+	// holder Loading too long back to Empty so the streamer re-requests it — recovery for a worker
+	// request DROPPED under burst backpressure (worker.Request is non-blocking and silently drops
+	// when its bounded queue is full). Without it a dropped request leaves the column Loading forever
+	// (IsEmpty=false → never re-requested → the chunk renders transparent permanently).
+	loadTick int64
 }
 
 // ChunkManager is a plain map of column position -> holder. It is OWNED by the
@@ -47,6 +53,9 @@ type ChunkManager struct {
 	// (TICK-05), so it needs no lock. A dirty column that is later Remove'd (unload) is dropped
 	// from the set too, so an unloaded chunk is not spuriously re-saved from a stale flag.
 	dirty map[level.ChunkPos]struct{}
+	// nowTick is a monotonic counter the streamer advances once per tick (Tick) so RetryStale can
+	// measure how long a column has been Loading.
+	nowTick int64
 }
 
 func NewChunkManager() *ChunkManager {
@@ -54,6 +63,23 @@ func NewChunkManager() *ChunkManager {
 		columns: make(map[level.ChunkPos]*holder),
 		dirty:   make(map[level.ChunkPos]struct{}),
 	}
+}
+
+// Tick advances the manager's monotonic tick counter (once per server tick) for RetryStale.
+func (m *ChunkManager) Tick() { m.nowTick++ }
+
+// RetryStale reverts to Empty every column stuck in stateLoading longer than graceTicks (a request
+// dropped under burst backpressure). Reverting lets the next tickChunks re-issue the worker request.
+// Ready columns are never touched. Returns the count reverted. Tick-owned.
+func (m *ChunkManager) RetryStale(graceTicks int64) int {
+	n := 0
+	for _, h := range m.columns {
+		if h.state == stateLoading && m.nowTick-h.loadTick > graceTicks {
+			h.state = stateEmpty
+			n++
+		}
+	}
+	return n
 }
 
 // MarkDirty flags pos as needing a save (SUB-PERSIST). The tick calls it for any chunk mutation
@@ -127,10 +153,11 @@ func (m *ChunkManager) MarkLoading(pos level.ChunkPos) {
 	if h := m.columns[pos]; h != nil {
 		if h.state == stateEmpty {
 			h.state = stateLoading
+			h.loadTick = m.nowTick
 		}
 		return
 	}
-	m.columns[pos] = &holder{state: stateLoading}
+	m.columns[pos] = &holder{state: stateLoading, loadTick: m.nowTick}
 }
 
 // Insert transitions a holder to Ready with the worker-produced chunk

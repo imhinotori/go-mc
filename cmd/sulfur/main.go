@@ -64,11 +64,17 @@ const (
 	// falls back to the deterministic Superflat stub (which ignores the seed).
 	worldSeed = int64(0x5EED_C0DE)
 
-	// workerBuf sizes the off-tick worker's bounded request + results channels. It is
-	// comfortably above the small clamped view ring ((2*serverViewDistance+1)^2 columns)
-	// so a single player's first-tick request burst is absorbed without dropping; a
-	// flood beyond it backpressures (Request drops) rather than growing memory.
-	workerBuf = 256
+	// workerBuf sizes the off-tick worker's bounded request + results channels. It MUST exceed
+	// the clamped view ring ((2*serverViewDistance+1)^2 columns) so a single player's first-tick
+	// request burst is absorbed WITHOUT dropping — at serverViewDistance=10 the ring is 21*21=441
+	// columns, so the old 256 dropped ~185 requests every join (the "invisible chunk" bug: a
+	// dropped request left its column Loading forever). 2048 covers a 21x21 ring with headroom for
+	// a few players' overlapping first-load bursts; the stale-Loading retry (tickChunks ->
+	// RetryStale) is the backstop for any drop beyond it, so a flood backpressures+recovers rather
+	// than stranding a column. The SEND side is separately paced by the PlayerChunkSender flow
+	// control (server/tick_phases.go sendNextChunks), so a large request buffer does NOT cause a
+	// send flood — chunks are generated ahead but streamed at the client's acknowledged rate.
+	workerBuf = 1024
 
 	// worldDir is the persistent world directory (ENT-06). Player .dat files live under
 	// worldDir/playerdata/<uuid>.dat and the entities region under worldDir/entities/. It is
