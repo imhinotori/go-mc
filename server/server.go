@@ -31,6 +31,7 @@ package server
 import (
 	"errors"
 	"log"
+	"log/slog"
 	"strconv"
 
 	"github.com/imhinotori/sulfur/chat"
@@ -80,10 +81,14 @@ func (s *Server) AcceptConn(conn *net.Conn) {
 	// = list ping, 2 = login. Logged after the handshake (not on raw TCP accept) so the
 	// line carries the protocol + intention and malformed TCP probes that never complete
 	// a handshake stay out of the log. One greppable line per connection.
-	if s.Logger != nil {
-		s.Logger.Printf("connection from %v: protocol=%d intention=%d",
-			conn.Socket.RemoteAddr(), protocol, intention)
-	}
+	//
+	// slog (TUI-02): emits through the default slog handler so the line appears in BOTH
+	// the operator TUI viewport (TTY mode, 19-01) and plain stderr (headless). At this
+	// pre-login stage the teardown is a raw conn (not yet a *Client with the atomic
+	// disconnectReason), so any reject reason is carried as a log attr, not via
+	// SetDisconnectReason. (Pitfall 6: this REPLACES the old s.Logger.Printf — no double-log.)
+	slog.Info("connection",
+		"addr", conn.Socket.RemoteAddr(), "protocol", protocol, "intention", intention)
 
 	switch intention {
 	case 1: // list ping
@@ -98,10 +103,11 @@ func (s *Server) AcceptConn(conn *net.Conn) {
 		if protocol != ProtocolVersion {
 			_ = Disconnect(conn, StateLogin, chat.Text(
 				"Unsupported protocol: server is "+ProtocolName+" ("+strconv.Itoa(ProtocolVersion)+")"))
-			if s.Logger != nil {
-				s.Logger.Printf("client %v rejected: protocol %d != %d",
-					conn.Socket.RemoteAddr(), protocol, ProtocolVersion)
-			}
+			// TUI-02 taxonomy #2 (protocol mismatch): a login-stage reject. Reason token
+			// carried as a log attr (pre-*Client raw conn).
+			slog.Warn("login rejected",
+				"addr", conn.Socket.RemoteAddr(), "reason", "protocol_mismatch",
+				"got", protocol, "want", ProtocolVersion)
 			return
 		}
 		name, id, profilePubKey, properties, err := s.AcceptLogin(conn, protocol)
@@ -113,9 +119,10 @@ func (s *Server) AcceptConn(conn *net.Conn) {
 					loginErr.reason,
 				))
 			}
-			if s.Logger != nil {
-				s.Logger.Printf("client %v login error: %v", conn.Socket.RemoteAddr(), err)
-			}
+			// TUI-02 taxonomy #1 (login failure): AcceptLogin returned an error (auth
+			// fail, EOF mid-login — the Phase 18 path). Reason token + the wrapped err.
+			slog.Warn("login failed",
+				"addr", conn.Socket.RemoteAddr(), "reason", "login_failure", "err", err)
 			return
 		}
 		err = s.AcceptConfig(conn)
@@ -127,9 +134,10 @@ func (s *Server) AcceptConn(conn *net.Conn) {
 					configErr.reason,
 				))
 			}
-			if s.Logger != nil {
-				s.Logger.Printf("client %v config error: %v", conn.Socket.RemoteAddr(), err)
-			}
+			// TUI-02 taxonomy #3 (config failure): the config sequence errored. Reason
+			// token + the wrapped err (the login name is known but not threaded here).
+			slog.Warn("config failed",
+				"addr", conn.Socket.RemoteAddr(), "reason", "config_failure", "err", err)
 			return
 		}
 		s.AcceptPlayer(name, id, profilePubKey, properties, protocol, conn)

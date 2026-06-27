@@ -1,12 +1,22 @@
 package server
 
 import (
+	"log/slog"
 	"sync"
 
 	"github.com/google/uuid"
 
 	"github.com/imhinotori/sulfur/chat"
 )
+
+// disconnectReasonSetter is the optional capability a PlayerListClient may expose so the
+// server-full kick can tag the teardown reason on the underlying *Client (first-writer-wins).
+// The PlayerListClient interface itself only requires SendDisconnect; the token is
+// best-effort, so the kick is ALSO logged via slog whether or not the assertion succeeds —
+// the log line is the TUI-02 deliverable (taxonomy #5).
+type disconnectReasonSetter interface {
+	SetDisconnectReason(reason string)
+}
 
 type PlayerListClient interface {
 	SendDisconnect(reason chat.Message)
@@ -35,6 +45,14 @@ func (p *PlayerList) ClientJoin(client PlayerListClient, player PlayerSample) {
 	defer p.playersLock.Unlock()
 
 	if len(p.players) >= p.maxPlayer {
+		// TUI-02 taxonomy #5 (explicit kick): the server is full at join. Tag the reason
+		// on the underlying *Client if it exposes the setter (best-effort, first-writer-
+		// wins), then ALWAYS log the kick so it is visible in the TUI + stderr even when
+		// the token cannot be set.
+		if s, ok := client.(disconnectReasonSetter); ok {
+			s.SetDisconnectReason("kicked")
+		}
+		slog.Warn("kicked", "reason", "server_full")
 		client.SendDisconnect(chat.TranslateMsg("multiplayer.disconnect.server_full"))
 		return
 	}
