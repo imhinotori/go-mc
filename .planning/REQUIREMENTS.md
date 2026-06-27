@@ -29,7 +29,7 @@ The "user" is (a) an unmodified vanilla 26.2 (protocol 776) client playing the w
 
 ### Operator UX — TUI console + disconnect logging
 
-- [ ] **TUI-01**: A terminal console (charmbracelet **bubbletea** + **bubbles**) with a command-input zone (textinput) + a live scrolling log viewport — the operator types server commands and watches structured live logs in one screen, instead of raw stdout. Degrades gracefully when stdout is not a TTY (headless/Docker → plain structured logging, no TUI). _(19-01 landed the backbone: Model + log bridge + deps; full end-to-end console needs 19-02 main() TTY fork + console dispatch.)_
+- [x] **TUI-01**: A terminal console (charmbracelet **bubbletea** + **bubbles**) with a command-input zone (textinput) + a live scrolling log viewport — the operator types server commands and watches structured live logs in one screen, instead of raw stdout. Degrades gracefully when stdout is not a TTY (headless/Docker → plain structured logging, no TUI). _(19-01 backbone: Model + log bridge + deps; 19-02 main() TTY fork + console dispatch. Operator-validated: TUI renders, typed commands route through the existing graph, join/leave lines stream, headless stays plain.)_
 - [x] **TUI-02**: Disconnect-reason logging. Every player drop logs WHY (kick / timeout / protocol error / clean quit / login failure) with player identity + reason, surfaced in the TUI log stream and the structured logs.
 
 ### Structure polish — the documented v2 deferrals
@@ -65,7 +65,7 @@ Updated during roadmap creation (`/gsd-plan-phase`).
 | GAMEPLAY-07 | Phase 17 | Pending |
 | ONLINE-01 | TBD | Complete |
 | ONLINE-02 | TBD | Complete |
-| TUI-01 | 19-01 (backbone), 19-02/03 (wiring) | In Progress |
+| TUI-01 | 19-01 (backbone), 19-02/03 (wiring) | Complete |
 | TUI-02 | TBD | Complete |
 | STRUCT-POLISH-01 | TBD | Pending |
 | STRUCT-POLISH-02 | TBD | Pending |
