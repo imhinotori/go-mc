@@ -161,3 +161,29 @@ func TestAquiferDeterministic(t *testing.T) {
 		}
 	}
 }
+
+// TestGlobalComputeFluidLavaBelowMinus54 pins the global FluidPicker lambda
+// (NoiseBasedChunkGenerator.createFluidPicker): `y < min(-54, seaLevel) ? lava : water`.
+// REGRESSION: the prior port returned AIR below the threshold instead of LAVA, leaving deep open
+// cells (and barrier-sampled carved-underwater cells) air where vanilla has the lava aquifer.
+func TestGlobalComputeFluidLavaBelowMinus54(t *testing.T) {
+	_, _, aq := buildAquifer(t, 0, 0)
+	// Overworld seaLevel is 63, so min(-54, 63) = -54.
+	// Below -54 -> the lava fluid status (level -54, lava).
+	below := aq.globalComputeFluid(-60)
+	if below.fluidType != aq.lava {
+		t.Fatalf("globalComputeFluid(-60).fluidType = %v, want lava (the below-threshold branch is LAVA, not air)", below.fluidType)
+	}
+	if below.fluidType == aq.air {
+		t.Fatal("globalComputeFluid below -54 returned AIR — the underwater-air-pocket bug")
+	}
+	// At/above the threshold -> water.
+	above := aq.globalComputeFluid(54)
+	if above.fluidType != aq.water {
+		t.Fatalf("globalComputeFluid(54).fluidType = %v, want water", above.fluidType)
+	}
+	atSea := aq.globalComputeFluid(0)
+	if atSea.fluidType != aq.water {
+		t.Fatalf("globalComputeFluid(0).fluidType = %v, want water (y=0 >= -54)", atSea.fluidType)
+	}
+}

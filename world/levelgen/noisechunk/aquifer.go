@@ -246,10 +246,19 @@ func (a *Aquifer) getIndex(gx, gy, gz int) int {
 // adjustSurfaceLevel ports adjustSurfaceLevel(y) = y + 8.
 func (a *Aquifer) adjustSurfaceLevel(y int) int { return y + 8 }
 
-// globalComputeFluid ports the global FluidPicker lambda: y < min(-54, seaLevel) ? air : water.
+// globalComputeFluid ports the global FluidPicker lambda (NoiseBasedChunkGenerator.createFluidPicker):
+//
+//	(x,y,z) -> y < Math.min(-54, seaLevel) ? lavaFluid : waterFluid
+//
+// JAR-VERIFIED (javap createFluidPicker$0, bytecode offsets 8-22): the compare is `if y >= min(-54,
+// seaLevel) return waterFluid else return lavaFluid` — the BELOW branch returns LAVA, never AIR.
+// The prior port returned airFluid below the threshold, so deep open cells (and, via the barrier
+// sampling that consults this global status, some carved-under-water cells) were left AIR where
+// vanilla has the lava aquifer — a source of underwater air pockets. lavaFluid = FluidStatus(-54,
+// LAVA); waterFluid = FluidStatus(seaLevel, WATER).
 func (a *Aquifer) globalComputeFluid(y int) fluidStatus {
 	if y < minInt(-54, a.seaLevel) {
-		return a.airFluid
+		return a.lavaFluid
 	}
 	return a.waterFluid
 }
