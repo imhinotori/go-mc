@@ -10,6 +10,7 @@ import (
 	"github.com/imhinotori/sulfur/data/packetid"
 	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/component"
+	"github.com/imhinotori/sulfur/level/ticks"
 	pk "github.com/imhinotori/sulfur/net/packet"
 	"github.com/imhinotori/sulfur/save"
 	"github.com/imhinotori/sulfur/world"
@@ -230,6 +231,22 @@ type TickLoop struct {
 	// 17-02 lazily constructs the queue inside tickFluids (a nil queue drains to nothing), so
 	// SetWorld — which lives in this shared file (tick.go) — is NOT touched by 17-02.
 	fluidSchedule *fluidScheduleQueue
+
+	// blockTicks is the SUB-BLOCKTICK level-wide scheduled-block-tick manager — the Go port of
+	// net.minecraft.server.level.ServerLevel.blockTicks (a LevelTicks<Block>). It holds every
+	// loaded chunk's per-chunk tick container and, each tick, drains the due ticks across chunks
+	// in the vanilla deterministic order (triggerTick, priority, subTickOrder) up to the 65536
+	// cap, dispatching each to tickBlock. Lazily constructed inside tickScheduledBlocks (a nil
+	// manager drains to nothing) so SetWorld is untouched; tick-owned (TICK-05). The existing
+	// fluid loop (fluid_schedule.go) is a SEPARATE one-off and is NOT migrated into this — they
+	// COEXIST in v1 (see block_ticks.go for the decision).
+	blockTicks *ticks.LevelTicks[blockTickType]
+
+	// blockTickSubCounter is the Go port of net.minecraft.world.level.Level.subTickCount — the
+	// monotonic per-schedule tiebreak (Level.nextSubTickCount post-increments it). It supplies
+	// each ScheduledTick's subTickOrder so two ticks scheduled at the same triggerTick + priority
+	// fire in schedule order. Tick-owned; advanced only on the owner goroutine via nextSubTick.
+	blockTickSubCounter int64
 
 	// debug holds the OPTIONAL, off-by-default debug triggers for the Plan 06-07 interactive
 	// human-verify gate (a visible moving pig + periodic damage so the operator can SEE entity

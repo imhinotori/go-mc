@@ -118,6 +118,12 @@ func (t *TickLoop) resolveSubtickInputs() {
 // Wave-1-owned and is NOT edited by 17-02.
 func (t *TickLoop) tickWorld() {
 	t.trace("tickWorld")
+	// SUB-BLOCKTICK: drain the general scheduled-BLOCK-tick queue (ServerLevel.blockTicks.tick)
+	// BEFORE the fluid pass, matching ServerLevel.tick which drains blockTicks then fluidTicks at
+	// the same game-time. It lives INSIDE this existing phase so no new phase is added to the
+	// fixed tick order (TestTickPhaseOrder stays green). A nil manager (no chunk container ever
+	// registered) is a cheap no-op.
+	t.tickScheduledBlocks()
 	t.tickFluids()
 	// SUB-PERSIST: the periodic chunk-save pass (every chunkSaveIntervalTicks). It lives INSIDE
 	// this existing phase so no new phase is added to the fixed tick order (TestTickPhaseOrder
