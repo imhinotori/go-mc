@@ -69,6 +69,14 @@ type NoiseChunk struct {
 	interps             []*interpolatedFn // every interpolator the rewrite produced
 	fillState           *fillState        // toggles interps between trilerp + direct sampling
 
+	// beard is the STRUCT-POLISH-03 terrain-adaptation contribution (the structure
+	// Beardifier). It is the ADDITIVE, NON-interpolated per-block term vanilla's NoiseChunk
+	// substitutes for DensityFunctions$BeardifierMarker — added to final_density AFTER the
+	// trilerp at the exact block coords (A5). nil means no adapting structure influences
+	// this chunk -> the fill is byte-identical (the NONE regression guard). Cite:
+	// NoiseChunk ctor's beardifier wrap of the BeardifierMarker.
+	beard func(wx, wy, wz int) float64
+
 	cornerSamples int // count of interpolated-filler corner evaluations (the sparse-sample gate)
 
 	// Provisional fill block ids (resolved once; the placeholder Wave 5's Aquifer
@@ -90,6 +98,19 @@ const deepslateTopY = 0
 // router settings, then drives the interpolator over final_density to fill the per-block
 // density field. PURE: same router (seed) + pos → identical field (Pitfall 7).
 func NewNoiseChunk(r *router.Router, pos level.ChunkPos) *NoiseChunk {
+	return NewNoiseChunkWithBeard(r, pos, nil)
+}
+
+// NewNoiseChunkWithBeard builds the NoiseChunk threading an optional structure-Beardifier
+// contribution (STRUCT-POLISH-03): beard(wx,wy,wz) is added to final_density per block AFTER
+// the trilerp, mirroring the DensityFunctions$BeardifierMarker substitution vanilla performs
+// in the NoiseChunk constructor. A nil beard is byte-identical to NewNoiseChunk (the NONE
+// regression guard: structures that do not adapt contribute 0 -> identical density field).
+//
+// PURE over (seed, pos, beard): the beard is itself a pure function of the chunk's structure
+// starts (computed pre-fill in the generator from the singleflight-memoized cache), so the
+// chunk stays deterministic.
+func NewNoiseChunkWithBeard(r *router.Router, pos level.ChunkPos, beard func(wx, wy, wz int) float64) *NoiseChunk {
 	ns := r.Settings.Noise
 	cellWidth := ns.SizeHorizontal << 2 // QuartPos.toBlock: getCellWidth()
 	cellHeight := ns.SizeVertical << 2  // QuartPos.toBlock: getCellHeight()
@@ -109,6 +130,7 @@ func NewNoiseChunk(r *router.Router, pos level.ChunkPos) *NoiseChunk {
 		cellNoiseMinY: floorDiv(ns.MinY, cellHeight),   // NoiseChunk ctor
 		firstNoiseX:   blockX >> 2,                     // QuartPos.fromBlock(blockX)
 		firstNoiseZ:   blockZ >> 2,                     // QuartPos.fromBlock(blockZ)
+		beard:         beard,
 	}
 	nc.resolveBlocks()
 	nc.wrapFinalDensity(r.NoiseRouter.FinalDensity)
@@ -214,6 +236,12 @@ func (nc *NoiseChunk) fill() {
 							nc.fillState.filling = true
 							v := nc.wrappedFinalDensity.Compute(density.Context{X: worldX, Y: worldY, Z: worldZ})
 							nc.fillState.filling = false
+							// STRUCT-POLISH-03: add the structure Beardifier contribution to
+							// final_density AFTER the trilerp (the BeardifierMarker substitution
+							// vanilla's NoiseChunk ctor performs — an ADDITIVE, NON-interpolated
+							// per-block term, A5). nil beard -> no add -> byte-identical (the NONE
+							// regression guard). Gated internally on the Beardifier's affectedBox.
+							v += nc.beardAt(worldX, worldY, worldZ)
 							nc.density[nc.densityIndex(localX, worldY, localZ)] = v
 						}
 					}

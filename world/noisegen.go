@@ -223,8 +223,19 @@ func NewNoiseGenerator(seed int64, secs, minY int) *NoiseGenerator {
 // The chunk is left at StatusCarvers; the worker stages it and the Decorate pass
 // (below) promotes it to StatusFull once the 3x3 is carved (GEN2-02 seam).
 func (g *NoiseGenerator) GenerateTerrain(pos level.ChunkPos) *level.Chunk {
-	// (1) FILL — cell-sample + aquifer/ore doFill into a renderable chunk.
-	nc := noisechunk.NewNoiseChunk(g.router, pos)
+	// (0) STRUCT-POLISH-03 — THE ORDERING HAZARD (Pitfall 3). The structure Beardifier
+	// contributes to final_density at FILL time, but Sulfur places structures during
+	// Decorate (post-fill). So the structure STARTS for C + its ±12-block window MUST be
+	// computed BEFORE fillFromNoise. ComputeStarts is pure geometry over (seed,pos) +
+	// singleflight-deduped + memoized (the surface sampler reads the router, NOT the chunk),
+	// so computing it earlier is cheap, order-independent, and triggers NO neighbor chunk
+	// generation. A piece can be within 12 blocks of C only from C itself or an immediately
+	// adjacent chunk (12 < 16), so the ±1 chunk ring of starts is the complete candidate set;
+	// ForStructuresInChunk's isCloseToChunk(12) gate then keeps only the truly-close pieces.
+	// When NO adapting structure (village/stronghold) is near C, the Beardifier is EMPTY and
+	// Compute returns 0 everywhere -> the fill is byte-identical (the NONE regression guard).
+	beardifier := g.beardifierFor(pos)
+	nc := noisechunk.NewNoiseChunkWithBeard(g.router, pos, beardifier.Compute)
 	aq := noisechunk.NewAquifer(g.router, nc, pos)
 	ov := noisechunk.NewOreVeinifier(
 		g.router.NoiseRouter.VeinToggle,
@@ -398,6 +409,34 @@ func (g *NoiseGenerator) placeStructures(view *Neighborhood) {
 	// overlapping chunk, idempotently (the piece RNG is re-derivable over (seed,ownerChunk),
 	// Pitfall #2). Structures overwrite terrain + features (vanilla FEATURES order).
 	g.structCache.PlaceStructures(view, center, g.seed, minY, height)
+}
+
+// beardifierFor builds the STRUCT-POLISH-03 structure Beardifier for chunk C: it gathers the
+// structure STARTS owned by C and its ±1 chunk ring (the complete candidate set for a piece
+// within 12 blocks of C, since 12 < 16), dedupes by owner, and hands them to
+// structure.ForStructuresInChunk, which keeps only adapting structures (village=beard_thin /
+// stronghold=bury) whose pieces are close to C (isCloseToChunk(12)) and inflates the union by
+// 24 to form the affectedBox. NONE-adaptation structures (temples/igloo/mineshaft/swamp-hut)
+// are NOT gathered -> EMPTY -> Compute returns 0 -> byte-identical terrain.
+//
+// PURE over (seed, C): ComputeStarts is pure (seed,pos) geometry, singleflight-deduped, and
+// memoized — calling it here (pre-fill) reads the SAME cache the Decorate-time STARTS/REFERENCES
+// pass uses (and the same cache 20-03's persistence may have seeded from region), and triggers
+// NO neighbor chunk generation (only pure start geometry over a bounded ±1 ring).
+func (g *NoiseGenerator) beardifierFor(pos level.ChunkPos) *structure.Beardifier {
+	seen := make(map[level.ChunkPos]bool)
+	var candidates []*structure.StructureStart
+	for dx := -1; dx <= 1; dx++ {
+		for dz := -1; dz <= 1; dz++ {
+			cell := level.ChunkPos{pos[0] + int32(dx), pos[1] + int32(dz)}
+			if seen[cell] {
+				continue
+			}
+			seen[cell] = true
+			candidates = append(candidates, g.structCache.ComputeStarts(g.seed, cell, g.structGen)...)
+		}
+	}
+	return structure.ForStructuresInChunk(candidates, pos)
 }
 
 // Dims returns the generator's (minY, height) so the worker can size the Neighborhood

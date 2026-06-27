@@ -54,6 +54,21 @@ func Fill(nc *NoiseChunk, aq *Aquifer, ov *OreVeinifier, set func(localX, worldY
 	}
 }
 
+// beardAt returns the structure-Beardifier additive contribution at the world block
+// (STRUCT-POLISH-03). It is the BeardifierMarker substitution term threaded into the
+// final_density summation (nc.fill), the additive NON-interpolated per-block contribution
+// (A5) that raises terrain to meet a village (beard_thin) or digs to bury a stronghold
+// (bury). A nil beard (no adapting structure influences this chunk) returns 0 -> the fill is
+// byte-identical to a beard-free chunk (the NONE regression guard, TestNonAdaptingUnchanged).
+// The Beardifier itself gates the contribution on its affectedBox (no double-apply). Cite:
+// NoiseChunk ctor beardifier wrap of DensityFunctions$BeardifierMarker.
+func (nc *NoiseChunk) beardAt(wx, wy, wz int) float64 {
+	if nc.beard == nil {
+		return 0
+	}
+	return nc.beard(wx, wy, wz)
+}
+
 // blockState resolves one block's state via the ported rule chain (see Fill).
 func blockState(
 	nc *NoiseChunk, aq *Aquifer, ov *OreVeinifier,
