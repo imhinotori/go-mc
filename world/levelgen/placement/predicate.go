@@ -129,12 +129,18 @@ func (p replaceablePredicate) Test(ctx PlacementContext, x, y, z int) bool {
 
 // wouldSurvive is WouldSurvivePredicate: the to-place state could survive at p.
 // CONSERVATIVE PORT: the jar calls state.canSurvive(level, pos) which for the
-// vegetation set reduces to "the block BELOW p is a valid ground" (dirt/grass-like)
-// AND p itself is replaceable. The worldgen context cannot run the full canSurvive
-// behaviour, so this gates on: the block directly below (p.y-1) is non-air solid
-// ground and the block at p is air/replaceable. Faithful + conservative (never a
-// false keep over a floating position). The to-place state is captured for parity
-// with the jar signature but the ground check is state-independent here (documented).
+// vegetation set (saplings/trees) reduces to "the block BELOW p is valid VEGETATION
+// GROUND" (the #substrate_overworld tag = dirt/grass/podzol/mud/moss families + farmland,
+// via VegetationBlock.mayPlaceOn) AND p itself is replaceable. The worldgen context cannot
+// run the full canSurvive behaviour, so this gates on: the block directly below (p.y-1) is
+// vegetation ground and the block at p is air/replaceable. The to-place state is captured
+// for parity with the jar signature but the ground check is the substrate set here.
+//
+// BUGFIX (trees on trees): the prior port accepted ANY non-air block below as "ground", so a
+// tree whose origin landed on another tree's LOG or LEAF column passed the filter and
+// generated stacked on top. block.IsVegetationGround excludes logs/leaves, so a tree origin
+// over a lower tree is now correctly rejected — matching vanilla, where a sapling cannot
+// survive on a log/leaf (state.is(#dirt)-style ground only).
 type wouldSurvive struct {
 	off offset
 }
@@ -143,7 +149,7 @@ func (p wouldSurvive) Test(ctx PlacementContext, x, y, z int) bool {
 	px, py, pz := x+p.off.dx, y+p.off.dy, z+p.off.dz
 	below := ctx.GetBlock(px, py-1, pz)
 	here := ctx.GetBlock(px, py, pz)
-	return !block.IsAir(below) && block.IsAir(here)
+	return block.IsVegetationGround(below) && block.IsAir(here)
 }
 
 // ---- all_of / any_of / not ----

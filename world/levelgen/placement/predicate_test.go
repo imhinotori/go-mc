@@ -123,6 +123,26 @@ func TestWouldSurviveGate(t *testing.T) {
 	if p.Test(ctx, 5, 10, 5) {
 		t.Fatalf("would_survive kept a position already occupied by a solid block")
 	}
+
+	// BUGFIX regression (trees on trees): a non-vegetation-ground block below (a tree's LOG, or
+	// stone) must be REJECTED — it previously passed because the gate only checked non-air, so a
+	// tree origin that landed on another tree's log column stacked. STONE below stands in for any
+	// non-substrate block (logs/leaves/etc): IsVegetationGround returns false for all of them.
+	ctx2 := newFakeContext(-64, 384)
+	ctx2.blocks[[3]int{5, 9, 5}] = stateOf(t, block.Stone{})
+	if p.Test(ctx2, 5, 10, 5) {
+		t.Fatalf("would_survive kept a tree origin over STONE (non-vegetation ground); the trees-on-trees gate must reject any non-substrate block below")
+	}
+	// grass_block below IS vegetation ground (#grass_blocks) -> keep.
+	ctx2.blocks[[3]int{5, 9, 5}] = stateOf(t, block.GrassBlock{})
+	if !p.Test(ctx2, 5, 10, 5) {
+		t.Fatalf("would_survive dropped a tree origin over GRASS_BLOCK (valid vegetation ground)")
+	}
+	// coarse_dirt (#dirt) and mud (#mud) are also valid substrate.
+	ctx2.blocks[[3]int{5, 9, 5}] = stateOf(t, block.CoarseDirt{})
+	if !p.Test(ctx2, 5, 10, 5) {
+		t.Fatalf("would_survive dropped a tree origin over COARSE_DIRT (valid vegetation ground)")
+	}
 }
 
 // TestParsePredicateUnknownErrors: an unported predicate type errors loudly.
