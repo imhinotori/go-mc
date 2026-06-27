@@ -43,6 +43,28 @@
 
 ### Block survival — a broken support does NOT destroy the unsupported block above (gate finding, 17-05)
 
+- **STATUS: CLOSED for VEGETATION (the visible 80%) — torches/rails/redstone/doors still DEFERRED.**
+  Resolved by the BLOCK-SURVIVAL vegetation pass (this session): `block.IsVegetation` /
+  `block.IsDoublePlant` predicates (level/block/utilfuncs.go) + `updateVegetationOnEdit` /
+  `destroyUnsupportedVegetationAbove` (server/block_survival.go), wired into `reconcileEdit`
+  (server/block_interact.go) ALONGSIDE the fluid neighbor notification. Breaking a block under a
+  flower/sapling/short_grass/fern/bush/2-tall-plant now destroys + drops the unsupported plant
+  (cascading 2-tall plants and stacked columns via the bounded 512-deep recursion), reusing the
+  GAMEPLAY-06 `spawnBlockDrop` path + the `broadcastBlockUpdate(air)` to trackers. 1:1 cited against
+  the jar: `VegetationBlock.updateShape`/`canSurvive` (== `belowState.is(SUPPORTS_VEGETATION)`),
+  `DoublePlantBlock.canSurvive` (half-dependent), `Block.updateOrDestroy` (newState.isAir() ->
+  `destroyBlock(pos, dropBlock=(flags&32)==0, null, recursionLeft=512)`). Tests:
+  server/block_survival_test.go (break-under-flower drops, 2-tall cascade, non-vegetation no-op,
+  still-supported survives, full-dig-path integration) + level/block/vegetation_test.go (predicate
+  coverage). Gates: `CGO_ENABLED=0 go build/vet/test` green, Docker `-race` green.
+- **STILL DEFERRED (a follow-up survival pass):** the NON-vegetation survival classes — torches/
+  walls/ground torches (`DiodeBlock`/`BaseTorchBlock` ATTACHED-face survival), rails
+  (`BaseRailBlock`), redstone (`RedStoneWireBlock`/`DiodeBlock`), doors/beds (two-cell), ladders,
+  vines, signs, banners, pressure plates, and the DryVegetationBlock/FlowerBedBlock/LeafLitter/
+  MangrovePropagule/Seagrass plants that use a DIFFERENT ground predicate than SUPPORTS_VEGETATION.
+  Each is a distinct `canSurvive`/`updateShape` class to port; the generic `updateNeighborsAt` recursion
+  seam (`destroyUnsupportedVegetationAbove`) is the template to extend (it currently checks only the
+  cell ABOVE — the non-vegetation classes also need side/below neighbor checks for wall/floor mounts).
 - **Found during:** Phase 17 visual gate (real client). User: "rompe un bloque con flores arriba, las flores no se rompen".
 - **Symptom:** breaking a block that supports a plant/flower/torch/etc. leaves the unsupported block
   floating instead of breaking + dropping it. Vanilla destroys it the instant its support is removed.
