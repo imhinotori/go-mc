@@ -336,12 +336,18 @@ func (u Uniform) GetInt(ctx *LootContext) int {
 | A5 | The beard additive term slots into `final_density` summation (not the per-marker interpolator). | Subsystem 3 | MEDIUM — `BeardifierMarker` is per-chunk-substituted; verify against Sulfur's `NoiseChunk.mapAll` placement during planning. |
 | A6 | Persisting starts is a pure optimization (recompute is always a valid fallback). | Subsystem 4 / Pitfall 4 | LOW — `cache.go` already pure over (seed,pos). |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Loot evaluator package placement** — `level/loot` vs `world/loot` vs `server/loot`. Must be importable by `server` (block drops) AND by the chest-open path without an import cycle. Recommendation: `level/loot` (the lowest layer that both can import; it needs `data/item`, `data/registryid`, `world/levelgen` for the RNG — confirm no cycle with `world/levelgen` during planning).
-2. **Block-drop faithfulness scope** — does Phase 20 port the full block-table delta (`alternatives`/`match_tool`/`apply_bonus`/`explosion_decay`) for fortune/silk-touch, or keep block drops at "drops something" and only do chests faithfully? Recommendation: port the delta (GAMEPLAY-06's map is explicitly a placeholder), but it's a scoping decision for discuss-phase.
+All four were resolved during plan-phase (the plans made the choices below). Recorded inline for traceability.
+
+1. **Loot evaluator package placement** — `level/loot` vs `world/loot` vs `server/loot`. Must be importable by `server` (block drops) AND by the chest-open path without an import cycle.
+   **RESOLVED → `level/loot`** (20-01 picks it: the lowest layer both `server` and `world/structure` import; it needs `data/item`, `data/registryid`, `world/levelgen` for the RNG — 20-01's verification asserts `go build` reports no cycle).
+2. **Block-drop faithfulness scope** — port the full block-table delta (`alternatives`/`match_tool`/`survives_explosion`/`apply_bonus`/`explosion_decay`) for fortune/silk-touch, or keep block drops at "drops something"?
+   **RESOLVED → port the delta** (20-02 Task 1 ports the block-table delta for the faithful GAMEPLAY-06 path; GAMEPLAY-06's `blockDropTable` map is explicitly a placeholder and is DELETED). 20-01 SHAPES the model (conditions/alternatives fields) so 20-02 adds them data-only.
 3. **Village template entity extraction** — are the village `.nbt` templates already extracted with their entity lists, or is that a new offline extraction step (A4)?
-4. **Chest-open container path** — does Sulfur have a chest-open → container-menu path today to hang `unpackLootTable` on, or does opening a generated chest need new wiring? (The inventory menu exists per ENT-04; the block-entity-container open path may be net-new.)
+   **RESOLVED → NOT net-new; the entities are ALREADY stored.** `world/structure/template.go:62,75,86` already parses + stores `Entities []rawEntity` (`rawTemplate.Entities` -> `StructureTemplate.entities`) at `LoadTemplate` — the runtime .nbt parser keeps the list per its own comment ("kept so 16-02/v3 can find them"). So A4's "extraction may be net-new" was over-cautious: 20-04 Task 3 only TRANSFORMS the stored list + emits SpawnRequests (no offline extraction step). A4 risk downgraded MEDIUM → LOW.
+4. **Chest-open container path** — does Sulfur have a chest-open → container-menu path today to hang `unpackLootTable` on, or does opening a generated chest need new wiring?
+   **RESOLVED → 20-02 Task 3 wires the chest-open path.** If a block-entity chest-open path is net-new (the ENT-04 InventoryMenu exists, but the block-entity-container OPEN seam may not), 20-02 Task 3 wires the minimal open seam (player UseItemOn a chest block -> resolve the chest BE -> unpackLootTable -> present via the existing ENT-04 menu), keeping the roll on the tick. W2 NOTE: if the executor finds the block-entity chest-open path is genuinely absent today, that open-seam wiring is the larger sub-task in 20-02 Task 3 — if it balloons beyond the menu hookup, split it out rather than silently expanding scope; the explicit fallback is "present the rolled contents through the existing ENT-04 container menu", nothing more.
 
 ## Environment Availability
 
