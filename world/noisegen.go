@@ -452,6 +452,41 @@ func (g *NoiseGenerator) Dims() (minY, height int) { return g.minY, g.secs * 16 
 // cache (Superflat owns no structures and returns the zero value, so the worker skips seeding).
 func (g *NoiseGenerator) StructureCache() *structure.Cache { return g.structCache }
 
+// LocateStructures computes structure starts over a square chunk grid of the given chunk
+// radius around the origin chunk (0,0) and returns every VALID start (id + center block
+// coords) it finds. A diagnostic helper (used by the structure-locator tool) — it drives the
+// same ComputeStarts the generator uses, so the coords are exactly where the structures place.
+func (g *NoiseGenerator) LocateStructures(chunkRadius int) []LocatedStructure {
+	var out []LocatedStructure
+	for cx := -chunkRadius; cx <= chunkRadius; cx++ {
+		for cz := -chunkRadius; cz <= chunkRadius; cz++ {
+			for _, st := range g.structCache.ComputeStarts(g.seed, level.ChunkPos{int32(cx), int32(cz)}, g.structGen) {
+				if st == nil || !st.IsValid() {
+					continue
+				}
+				out = append(out, LocatedStructure{
+					ID:      st.Structure,
+					CenterX: (st.BBox.MinX + st.BBox.MaxX) / 2,
+					CenterZ: (st.BBox.MinZ + st.BBox.MaxZ) / 2,
+					MinY:    st.BBox.MinY,
+					ChunkX:  int(st.ChunkPos[0]),
+					ChunkZ:  int(st.ChunkPos[1]),
+				})
+			}
+		}
+	}
+	return out
+}
+
+// LocatedStructure is one structure found by LocateStructures: its id + center block coords.
+type LocatedStructure struct {
+	ID             string
+	CenterX        int
+	CenterZ        int
+	MinY           int
+	ChunkX, ChunkZ int
+}
+
 // Generate drives the full pipeline into a StatusFull level.Chunk via the concrete
 // single-chunk path (= GenerateTerrain then Decorate over a freshly-terrain-generated
 // 3x3). PURE over (seed, pos). It is NOT on the Generator interface — it is retained for
