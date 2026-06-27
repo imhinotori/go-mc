@@ -401,11 +401,15 @@ func maxI32(a, b int32) int32 {
 // the carrier that keeps the HUD's hearts in sync with regen too. Tick-owned (TICK-05): food /
 // saturation / health / lastFoodSent / lastSaturationSent are all single-owner tick state.
 func (t *TickLoop) syncFood(p *tickPlayer) {
-	if p.food == p.lastFoodSent && p.saturation == p.lastSaturationSent && p.health == p.lastHealthSent {
-		return // not dirty: nothing changed (vanilla re-sends only on a real change)
+	// Vanilla ServerPlayer.doTick dirty-check (jar-verified): re-send ONLY when health, food LEVEL,
+	// or the saturation-IS-ZERO boolean changes. Saturation's exact float is deliberately NOT in the
+	// condition (it drains fractionally every tick — comparing it spammed SetHealth ~20×/s).
+	satZero := p.saturation == 0
+	if p.health == p.lastHealthSent && p.food == p.lastFoodSent && satZero == p.lastFoodSaturationZero {
+		return // not dirty: nothing the client displays changed (vanilla re-sends only on a real change)
 	}
 	p.lastFoodSent = p.food
-	p.lastSaturationSent = p.saturation
+	p.lastFoodSaturationZero = satZero
 	p.lastHealthSent = p.health
 	if p.client != nil {
 		p.client.Send(setHealth(p.health, p.food, p.saturation))

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/imhinotori/sulfur/data/packetid"
 	"github.com/imhinotori/sulfur/save"
 )
 
@@ -23,7 +24,7 @@ func foodPlayer() *tickPlayer {
 		food:               maxFood,
 		saturation:         defaultSaturation,
 		lastFoodSent:       maxFood,
-		lastSaturationSent: defaultSaturation,
+		lastFoodSaturationZero: defaultSaturation == 0,
 		lastHealthSent:     maxHealth,
 		client:             captureClient(64),
 	}
@@ -242,5 +243,45 @@ func TestSnapshotPlayerPersistsFoodFields(t *testing.T) {
 	}
 	if snap.FoodTickTimer != 17 {
 		t.Fatalf("snapshot FoodTickTimer = %v, want 17", snap.FoodTickTimer)
+	}
+}
+
+// TestSyncFoodNoSpamOnSaturationDrain is the bandwidth-flood regression: a fractional saturation
+// drain (saturation changes but stays > 0, food level unchanged, health unchanged) must NOT
+// re-send ClientboundSetHealth. Vanilla ServerPlayer.doTick compares the saturation-IS-ZERO
+// boolean, not the float, so a sub-zero-crossing drain sends nothing. The pre-fix code compared
+// the exact float and spammed SetHealth ~20×/s (a multi-hundred-MB login flood).
+func TestSyncFoodNoSpamOnSaturationDrain(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	p := foodPlayer() // health/food/sat seeded == lastSent*, sat 5.0 (>0), lastFoodSaturationZero=false
+
+	// 100 fractional saturation drains, never crossing zero, food level + health unchanged.
+	for i := 0; i < 100; i++ {
+		p.saturation -= 0.01 // 5.0 -> 4.0, always > 0
+		loop.syncFood(p)
+	}
+	got := drainPackets(p.client)
+	if n := countID(got, packetid.ClientboundSetHealth); n != 0 {
+		t.Fatalf("syncFood sent %d SetHealth on a sub-zero saturation drain, want 0 (the bandwidth flood)", n)
+	}
+
+	// A real change (food level drops) MUST still send exactly one.
+	p2 := foodPlayer()
+	loop2 := NewTickLoop(newFakeClock())
+	p2.food = maxFood - 1
+	loop2.syncFood(p2)
+	got2 := drainPackets(p2.client)
+	if n := countID(got2, packetid.ClientboundSetHealth); n != 1 {
+		t.Fatalf("syncFood sent %d SetHealth on a food-level change, want 1", n)
+	}
+
+	// Saturation CROSSING zero must send exactly one (the boolean flips).
+	p3 := foodPlayer()
+	loop3 := NewTickLoop(newFakeClock())
+	p3.saturation = 0 // was non-zero (lastFoodSaturationZero=false) -> now zero
+	loop3.syncFood(p3)
+	got3 := drainPackets(p3.client)
+	if n := countID(got3, packetid.ClientboundSetHealth); n != 1 {
+		t.Fatalf("syncFood sent %d SetHealth on a saturation zero-crossing, want 1", n)
 	}
 }

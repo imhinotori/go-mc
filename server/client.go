@@ -125,6 +125,7 @@ func (c *Client) writeLoop() {
 		if !ok {
 			return // queue closed -> shut the writer down
 		}
+		debugCountOutbound(p) // ULTRA_DEBUG bandwidth accounting (no-op unless enabled)
 		if err := c.conn.WritePacket(p); err != nil {
 			// Write failed (conn gone). Tag the teardown cause (TUI-02 taxonomy #7)
 			// BEFORE Close so the leave log attributes it to a socket write failure

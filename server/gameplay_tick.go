@@ -351,9 +351,9 @@ func (g *gameTick) AcceptPlayer(
 		prevX:              spawnX,
 		prevY:              spawnY,
 		prevZ:              spawnZ,
-		lastFoodSent:       maxFood,
-		lastSaturationSent: defaultSaturation,
-		lastHealthSent:     maxHealth,
+		lastFoodSent:           maxFood,
+		lastFoodSaturationZero: defaultSaturation == 0, // seeded from spawn saturation (vanilla lastFoodSaturationZero)
+		lastHealthSent:         maxHealth,
 		// Block-break dig-time (Plan 17-21): the crack-overlay dirty-tracker seeds to -1, matching the
 		// vanilla ServerPlayerGameMode ctor (`lastSentState = -1`) so the first stage send fires on a
 		// real stage change. All other dig fields default to their zero value (isDestroyingBlock=false,
@@ -381,7 +381,7 @@ func (g *gameTick) AcceptPlayer(
 		// Re-seed the dirty-send trackers to the LOADED food/saturation/health so the first SetHealth
 		// fires only when the live value diverges (the bootstrap already sent the loaded values).
 		player.lastFoodSent = loaded.FoodLevel
-		player.lastSaturationSent = loaded.FoodSaturationLevel
+		player.lastFoodSaturationZero = loaded.FoodSaturationLevel == 0
 		player.lastHealthSent = loaded.Health
 		player.yaw = loaded.Rotation[0]
 		player.pitch = loaded.Rotation[1]

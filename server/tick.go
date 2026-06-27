@@ -611,14 +611,16 @@ type tickPlayer struct {
 	// like vanilla's xo=getX() at the tail of the tick. Tick-owned.
 	prevX, prevY, prevZ float64
 
-	// lastFoodSent / lastSaturationSent are the food/saturation values last pushed to this player's
-	// own client via ClientboundSetHealth — the dirty-send tracker (mirrors lastAirSent for the
-	// bubble bar). The hunger bar reads food/saturation off the SetHealth packet; the client does not
-	// locally simulate hunger, so tickFood must re-send SetHealth when food OR saturation OR health
-	// changes. Seeded to the spawn food/saturation at registration so the first send fires only on a
+	// lastFoodSent / lastFoodSaturationZero are the dirty-send tracker for ClientboundSetHealth,
+	// matching vanilla ServerPlayer.doTick EXACTLY: the re-send condition is
+	// `health != lastSentHealth || foodLevel != lastSentFood || (saturation==0) != lastFoodSaturationZero`.
+	// CRITICAL: saturation is compared ONLY via its is-ZERO boolean, NOT the exact float — saturation
+	// drains fractionally every tick while moving, so comparing the raw float marked the player dirty
+	// EVERY tick and spammed SetHealth ~20×/s (a multi-hundred-MB bandwidth flood). Vanilla never sends
+	// on a sub-zero-crossing saturation change. Seeded at registration so the first send fires only on a
 	// real change. Tick-owned.
-	lastFoodSent       int32
-	lastSaturationSent float32
+	lastFoodSent           int32
+	lastFoodSaturationZero bool
 
 	// lastHealthSent is the health value last carried to this player's own client via
 	// ClientboundSetHealth. tickFood folds health into the dirty-send because the regen path

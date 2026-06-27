@@ -93,7 +93,7 @@ func TestEatCookedBeefCompletes(t *testing.T) {
 	inv := giveHeld(p, item.CookedBeef.ID, 16)
 	// Seed the dirty-send trackers so syncFood's change detection is meaningful.
 	p.lastFoodSent = p.food
-	p.lastSaturationSent = p.saturation
+	p.lastFoodSaturationZero = p.saturation == 0
 	p.lastHealthSent = p.health
 
 	startEat(loop, p)
@@ -190,7 +190,7 @@ func TestCreativeDoesNotShrinkStack(t *testing.T) {
 	p.saturation = 0
 	inv := giveHeld(p, item.CookedBeef.ID, 16)
 	p.lastFoodSent = p.food
-	p.lastSaturationSent = p.saturation
+	p.lastFoodSaturationZero = p.saturation == 0
 	p.lastHealthSent = p.health
 
 	startEat(loop, p)
@@ -244,7 +244,7 @@ func TestEatAppleExactSaturation(t *testing.T) {
 	p.saturation = 0
 	giveHeld(p, item.Apple.ID, 16)
 	p.lastFoodSent = p.food
-	p.lastSaturationSent = p.saturation
+	p.lastFoodSaturationZero = p.saturation == 0
 	p.lastHealthSent = p.health
 
 	startEat(loop, p)
