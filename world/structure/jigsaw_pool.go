@@ -115,6 +115,13 @@ func (e *singlePoolElement) Jigsaws(origin Pos, rot Rotation, rng levelgen.Rando
 
 func (e *singlePoolElement) Place(view WorldGenView, origin Pos, rot Rotation, box BoundingBox, rng levelgen.RandomSource) {
 	e.template.PlaceInWorld(view, origin, rot, MirrorNone, 0, 0, e.processors, box, rng)
+	// STRUCT-POLISH-02 Task 3: place the template's stored INHABITANTS (villager/cat — the village
+	// .nbt entityInfoList) as SpawnRequests through the view (the tick adds them; the silverfish
+	// is NOT here — it is a stronghold spawner block). A template with no entities is a no-op.
+	// CFR StructurePoolElement.place runs StructureTemplate.placeInWorld which places blocks THEN
+	// entities; mirror NONE + pivot ZERO match the village pool placement (the SinglePoolElement
+	// default StructurePlaceSettings).
+	e.template.PlaceEntities(view, origin, rot, MirrorNone, 0, 0, box, rng)
 }
 
 // listPoolElement ports ListPoolElement: an ordered list of sub-elements placed together.
