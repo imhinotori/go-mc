@@ -13,6 +13,7 @@ import (
 	pk "github.com/imhinotori/sulfur/net/packet"
 	"github.com/imhinotori/sulfur/save"
 	"github.com/imhinotori/sulfur/world"
+	"github.com/imhinotori/sulfur/world/levelgen"
 	"github.com/imhinotori/sulfur/yggdrasil/user"
 
 	"github.com/google/uuid"
@@ -245,6 +246,16 @@ type TickLoop struct {
 	// gameTick.teleportSeq (T-6-08). The tick goroutine claims entity ids from the same
 	// allocator when it spawns entities (Plans 06-02+).
 	idAlloc *EntityIDAllocator
+
+	// levelRandom is the tick-owned level RandomSource — the Go analogue of
+	// net.minecraft.world.level.Level.random (a LegacyRandomSource created via RandomSource.create()).
+	// Vanilla's Mob.finalizeSpawn draws its random-spawn-bonus + left-handed rolls from
+	// level.getRandom(); we mirror that by giving the level ONE shared LegacyRandomSource, advanced
+	// ONLY on the tick goroutine (TICK-05). It is seeded once at construction; the SEED is not yet
+	// derived from the world seed (vanilla's Level.random uses a nondeterministic unique seed too —
+	// only worldgen RNG is seed-derived), so this matches vanilla's non-seed-pinned level random. Used
+	// by drainStructureSpawns -> attribute.FinalizeSpawn.
+	levelRandom *levelgen.LegacyRandomSource
 
 	// applyInputHook is a test-only observability seam: when non-nil, applyInput
 	// invokes it with each resolved input so a test can assert chronological apply
@@ -746,6 +757,10 @@ func NewTickLoop(clock Clock) *TickLoop {
 		consoleCmd: make(chan string, registerBuffer), // TUI-01: operator-console line seam (Plan 19-02)
 		entities:   newEntityStore(),                  // ENT-01: tick-owned entity store, non-nil from construction
 		idAlloc:    &EntityIDAllocator{}, // ENT-01: monotonic id allocator (first AllocID()==1)
+		// levelRandom is the per-level shared RandomSource (Level.random analogue). Seeded from a
+		// unique nondeterministic seed, exactly like vanilla's RandomSource.create() — the level random
+		// is NOT seed-pinned (only worldgen RNG is). Advanced only on the tick goroutine.
+		levelRandom: levelgen.NewLegacyRandomSource(uniqueLevelRandomSeed()),
 		// asyncIn stays nil (no-op Phase-4 seam until SetWorld); ring is zero-valued; gametime 0.
 
 		// Phase-8 async substrate (OPT-04): the SECOND rejoin channel + the per-subsystem
