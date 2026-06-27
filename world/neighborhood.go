@@ -3,6 +3,7 @@ package world
 import (
 	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/block"
+	"github.com/imhinotori/sulfur/nbt"
 )
 
 // Neighborhood is a WorldGenLevel-like read/write view over a 3x3 of carved chunks,
@@ -120,6 +121,53 @@ func (n *Neighborhood) SetBlock(wx, wy, wz int, st block.StateID) {
 			n.motionBlocking(st),
 			func(y int) bool { return n.motionBlocking(opaqueColumnAt(y)) })
 	}
+}
+
+// SetBlockEntity records a loot-bearing chest block entity at world (wx,wy,wz) into the
+// owning chunk's BlockEntity list — the worldgen side of the WorldGenView.SetBlockEntity
+// seam (20-02 Task 2). The BE carries the {LootTable, LootTableSeed} NBT the chest rolls
+// LAZILY on first open (server/chest_loot.go unpackLootTable); NO items are written at gen
+// (Pitfall 2). Out-of-window writes (outside the 3x3 or out of the Y range) are DROPPED, the
+// same clip SetBlock applies. The NBT keys mirror RandomizableContainerBlockEntity:
+// "LootTable" (string id) + "LootTableSeed" (long). Single-owner (the worker scheduler
+// goroutine), so the append into the immutable-on-emit chunk is race-free by construction.
+func (n *Neighborhood) SetBlockEntity(wx, wy, wz int, typ block.EntityType, lootTable string, lootSeed int64) {
+	ch, ok := n.chunkAt(wx, wz)
+	if !ok {
+		return // outside the 3x3 -> dropped (blockStateWriteRadius=1)
+	}
+	if wy < n.minY || wy >= n.minY+n.height {
+		return // out of Y range -> dropped
+	}
+	be := level.BlockEntity{
+		Y:    int16(wy),
+		Type: typ,
+		Data: chestLootNBT(lootTable, lootSeed),
+	}
+	// PackXZ stores the LOCAL (0..15) x/z; a successful pack is required for the wire encode.
+	if !be.PackXZ(wx&15, wz&15) {
+		return // unpackable local coord (never for an in-window write) -> drop, never panic
+	}
+	ch.BlockEntity = append(ch.BlockEntity, be)
+}
+
+// chestLootNBT builds the chest block-entity NBT compound carrying only {LootTable,
+// LootTableSeed} — the lazy-roll seam (no item list). The keys mirror
+// RandomizableContainer.LOOT_TABLE_TAG ("LootTable") and LOOT_TABLE_SEED_TAG
+// ("LootTableSeed") from the jar. nbt.Marshal emits a full document ([0x0A][nameLen=0]
+// [payload]); BlockEntity.Data wants the bare compound payload, so the 3-byte root header is
+// stripped (the same convention resolveIglooState uses for block-state Properties).
+func chestLootNBT(lootTable string, lootSeed int64) nbt.RawMessage {
+	doc, err := nbt.Marshal(struct {
+		LootTable     string `nbt:"LootTable"`
+		LootTableSeed int64  `nbt:"LootTableSeed"`
+	}{LootTable: lootTable, LootTableSeed: lootSeed})
+	if err != nil {
+		// The input is two trivial fixed-type fields; a marshal error is a build bug, not a
+		// runtime condition. Return an empty compound rather than panic on the worker goroutine.
+		return nbt.RawMessage{Type: nbt.TagCompound}
+	}
+	return nbt.RawMessage{Type: nbt.TagCompound, Data: doc[3:]}
 }
 
 // The 3 worldgen-heightmap opaque predicates, built from block.IsAir + the resolved

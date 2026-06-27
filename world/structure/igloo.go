@@ -194,20 +194,30 @@ func resolveIglooState(ps iglooState) block.StateID {
 // villager entity markers are DEFERRED v3; the chest BLOCK + the visible lab geometry are
 // placed. The igloo template carries no per-block RNG draw (unlike the jungle moss selector),
 // so the rng arg is unused here — the basement-present probability was drawn at START time.
-func (p *IglooPiece) PostProcess(view WorldGenView, box BoundingBox, _ level.ChunkPos, _ levelgen.RandomSource) {
+func (p *IglooPiece) PostProcess(view WorldGenView, box BoundingBox, _ level.ChunkPos, rng levelgen.RandomSource) {
 	for _, blk := range p.tmpl.blocks {
 		st := p.states[blk.state]
 		// Template coords are local to the template; apply the per-piece offset is already
 		// baked into the bbox anchor (newIglooPiece), so placeBlock's getWorldX/Y/Z maps the
 		// template-local (x,y,z) to world via the bbox + orientation.
 		if isIglooChestState(p.tmpl, blk.state) {
-			// Record the chest as a loot chest (loot deferred); the chest block is still placed.
+			// Place the chest block, then emit the chest BlockEntity carrying {LootTable,
+			// LootTableSeed}. Vanilla IglooPiece.postProcess draws random.nextLong() for the
+			// chest's lootTableSeed (javap: ChestBlockEntity.setLootTable(IGLOO_CHEST, nextLong())).
+			// Loot is rolled LAZILY on first open (Pitfall 2), never at gen.
+			//
+			// The nextLong() draw is UNCONDITIONAL (before the box clip) so the per-chunk re-run
+			// RNG streams stay identical (Pitfall #2 — same rationale as StructurePiece.createChest).
 			wx := p.getWorldX(blk.x, blk.z)
 			wy := p.getWorldY(blk.y)
 			wz := p.getWorldZ(blk.x, blk.z)
+			seed := rng.NextLong()
+			p.placeBlock(view, st, blk.x, blk.y, blk.z, box)
 			if box.IsInside(wx, wy, wz) {
-				p.LootChests = append(p.LootChests, LootChest{X: wx, Y: wy, Z: wz, LootTable: iglooBasementLoot})
+				view.SetBlockEntity(wx, wy, wz, block.EntityTypes["minecraft:chest"], iglooBasementLoot, seed)
+				p.LootChests = append(p.LootChests, LootChest{X: wx, Y: wy, Z: wz, LootTable: iglooBasementLoot, LootTableSeed: seed})
 			}
+			continue // chest block placed above; skip the trailing placeBlock
 		}
 		p.placeBlock(view, st, blk.x, blk.y, blk.z, box)
 	}

@@ -225,10 +225,10 @@ func (c *MineShaftCorridor) PostProcess(view WorldGenView, box BoundingBox, _ le
 		c.maybeGenerateBlock(view, box, rng, 0.05, 1, 2, z+2, stateOf(block.Torch{}))
 		// A rare chest tucked beside the beam.
 		if rng.NextIntN(100) == 0 {
-			c.createChest(view, box, 2, 0, z-1, abandonedMineshaftLootTable, &c.lootChests)
+			c.createChest(view, box, rng, 2, 0, z-1, abandonedMineshaftLootTable, &c.lootChests)
 		}
 		if rng.NextIntN(100) == 0 {
-			c.createChest(view, box, 0, 0, z+1, abandonedMineshaftLootTable, &c.lootChests)
+			c.createChest(view, box, rng, 0, 0, z+1, abandonedMineshaftLootTable, &c.lootChests)
 		}
 	}
 

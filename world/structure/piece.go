@@ -18,6 +18,13 @@ type WorldGenView interface {
 	SetBlock(wx, wy, wz int, st block.StateID)
 	// GetBlock returns the block state at world (wx,wy,wz); out-of-window reads return air.
 	GetBlock(wx, wy, wz int) block.StateID
+	// SetBlockEntity records a loot-bearing block entity (a structure chest) at world
+	// (wx,wy,wz): the block-entity type plus the {LootTable, LootTableSeed} the chest rolls
+	// LAZILY on first open (Pitfall 2 — never at gen). lootTable is the loot-table id
+	// (e.g. "minecraft:chests/simple_dungeon"); lootSeed is the piece-RNG nextLong() draw.
+	// Out-of-window writes are dropped (same clip as SetBlock). 20-02 Task 2 (the chest BE
+	// carrier — RandomizableContainerBlockEntity's LootTable/LootTableSeed NBT keys).
+	SetBlockEntity(wx, wy, wz int, typ block.EntityType, lootTable string, lootSeed int64)
 }
 
 // Rotation ports net.minecraft.world.level.block.Rotation: a horizontal rotation applied
@@ -708,38 +715,63 @@ func (p *StructurePiece) fillColumnDown(view WorldGenView, st block.StateID, x, 
 	}
 }
 
-// createChest ports StructurePiece.createChest: place a chest block at local (x,y,z) with a
-// loot-table TAG marker (LOOT DEFERRED to v3 — the chest is placed as the chest BLOCK with
-// the piece orientation's facing; the loot table is recorded on the start, NOT rolled here;
-// block entities / loot resolution are a v3 subsystem, matching the REQUIREMENTS.md chest
-// deferral + the Phase-13 dungeon precedent). Returns true on a successful in-box placement.
+// createChest ports StructurePiece.createChest: place a chest block at local (x,y,z) AND
+// emit a chest BlockEntity carrying {LootTable, LootTableSeed} — the lazy-roll keystone.
+// Vanilla: `setBlock(reorient(chest), 2); chestBE.setLootTable(key, random.nextLong())`. The
+// `random.nextLong()` draw on the PIECE's RandomSource (threaded in from PostProcess) is what
+// makes chest contents deterministic per (worldseed, chunk). Loot is NOT rolled here — the
+// chest stores only the table id + seed and rolls LAZILY on first open (Pitfall 2,
+// server/chest_loot.go unpackLootTable). Returns true on a successful in-box placement.
 //
-// Vanilla calls reorient() to face the chest away from a solid neighbor; that needs a
-// settled neighborhood + block-entity wiring (v3), so this places the chest with the piece's
-// default facing (NORTH transformed by the orientation) — the VISIBLE chest block is
-// delivered, only the loot/reorient is deferred. The lootTable id is appended to lootChests.
-func (p *StructurePiece) createChest(view WorldGenView, box BoundingBox, x, y, z int, lootTable string, lootChests *[]LootChest) bool {
+// Vanilla calls reorient() to face the chest away from a solid neighbor; that needs a settled
+// neighborhood (a live BlockGetter), so this places the chest with the piece's default facing
+// (NORTH transformed by the orientation) — the VISIBLE chest block + the loot seam are
+// delivered, only reorient (cosmetic facing) is deferred. The lootTable id + seed are appended
+// to lootChests (kept as the StructureStart record for persistence) when non-nil.
+//
+// CROSS-CHUNK DETERMINISM (Pitfall #2): Sulfur re-runs each piece's PostProcess once per
+// overlapping chunk with a FRESH rng re-seeded from the start's ORIGIN chunk (place.go
+// placeInChunk), clipping WRITES to that chunk's box. For the RNG streams to stay identical
+// across chunks, the nextLong() draw MUST be UNCONDITIONAL — drawn regardless of whether the
+// chest's world-pos falls in THIS chunk's writable box, exactly like maybeGenerateBlock draws
+// nextFloat() before placeBlock clips. (Vanilla writes the whole structure into a multi-chunk
+// WorldGenLevel in ONE pass, so its createChest early-returns on box.isInside before the draw;
+// Sulfur's per-chunk re-run model requires the draw to PRECEDE the clip — otherwise a chest in
+// chunk A but not chunk B desyncs every subsequent draw between the two passes.) The chest
+// BLOCK + BE writes are still clipped to the box. Returns true when the chest landed in THIS
+// chunk's box (the write happened).
+//
+// Source: javap StructurePiece.createChest -> setLootTable(key, random.nextLong()).
+func (p *StructurePiece) createChest(view WorldGenView, box BoundingBox, rng levelgen.RandomSource, x, y, z int, lootTable string, lootChests *[]LootChest) bool {
 	wx := p.getWorldX(x, z)
 	wy := p.getWorldY(y)
 	wz := p.getWorldZ(x, z)
+	// setLootTable(key, random.nextLong()): draw the seed UNCONDITIONALLY (before the box clip)
+	// so the RNG stream is identical across the per-chunk re-runs — the determinism keystone
+	// (Pitfall 1/2). ONE draw per chest regardless of clip.
+	seed := rng.NextLong()
 	if !box.IsInside(wx, wy, wz) {
-		return false
+		return false // out of THIS chunk's box -> no write (the draw already happened above)
 	}
 	chest := block.Chest{Facing: block.North, Type: block.ChestTypeSingle, Waterlogged: false}
 	st := transformState(block.ToStateID[chest], p.mirror, p.rotation)
 	view.SetBlock(wx, wy, wz, st)
+	view.SetBlockEntity(wx, wy, wz, block.EntityTypes["minecraft:chest"], lootTable, seed)
 	if lootChests != nil {
-		*lootChests = append(*lootChests, LootChest{X: wx, Y: wy, Z: wz, LootTable: lootTable})
+		*lootChests = append(*lootChests, LootChest{X: wx, Y: wy, Z: wz, LootTable: lootTable, LootTableSeed: seed})
 	}
 	return true
 }
 
-// LootChest records a placed chest's world position + its loot-table id. v3's loot subsystem
-// resolves these into block-entity loot; this plan only places the chest BLOCK (loot
-// deferred). Tracked on the StructureStart so the deferred resolver can find every chest.
+// LootChest records a placed chest's world position + its loot-table id + the gen-time
+// lootTableSeed (the piece-RNG nextLong() draw). The chest BlockEntity carries {LootTable,
+// LootTableSeed} into the chunk; this record tracks the same on the StructureStart so the
+// persistence/resolver path can find every chest. Loot is rolled LAZILY on first open
+// (server/chest_loot.go unpackLootTable), never at gen (Pitfall 2).
 type LootChest struct {
-	X, Y, Z   int
-	LootTable string
+	X, Y, Z       int
+	LootTable     string
+	LootTableSeed int64
 }
 
 // addChildren is the recursion hook (StructurePiece.addChildren). Single-piece temples (the

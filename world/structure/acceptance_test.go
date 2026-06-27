@@ -40,7 +40,7 @@ func TestStructuresPipelineAcceptance(t *testing.T) {
 			name: "jungle_temple", salt: jungleTempleSalt, seed: jungleSeed, cx: jungleChunkX, cz: jungleChunkZ,
 			newGen: NewJungleTempleStartGen, sampler: jungleSurfaceSampler{},
 			inBiome: jungleBiomeAt, outBiome: constBiome("minecraft:desert"),
-			wantCount: 1746, wantHash: 0xf50b9fb8be352499, wantPieces: 1,
+			wantCount: 1746, wantHash: 0x471f867df2e73b40, wantPieces: 1,
 		},
 		{
 			name: "igloo", salt: iglooSalt, seed: iglooBasementSeed, cx: iglooBasementChunkX, cz: iglooBasementChunkZ,

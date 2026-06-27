@@ -328,7 +328,7 @@ func (p *JungleTemplePiece) PostProcess(view WorldGenView, box BoundingBox, _ le
 	p.placeBlock(view, vineEast(), 8, -2, 3, box)
 
 	// The main hidden chest (block + loot tag, loot deferred).
-	p.createChest(view, box, 8, -3, 3, jungleTempleMainLoot, &p.LootChests)
+	p.createChest(view, box, rng, 8, -3, 3, jungleTempleMainLoot, &p.LootChests)
 
 	// The chamber framing.
 	p.placeBlock(view, mossy, 9, -3, 2, box)
@@ -362,7 +362,7 @@ func (p *JungleTemplePiece) PostProcess(view WorldGenView, box BoundingBox, _ le
 	p.placeBlock(view, repeaterNorth(), 10, -2, 10, box)
 
 	// The hidden treasure chest behind the piston (block + loot tag).
-	p.createChest(view, box, 9, -3, 10, jungleTempleMainLoot, &p.LootChests)
+	p.createChest(view, box, rng, 9, -3, 10, jungleTempleMainLoot, &p.LootChests)
 }
 
 // createDispenser ports JungleTemplePiece.createDispenser as a BLOCK placement (arrows

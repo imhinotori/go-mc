@@ -395,7 +395,7 @@ func (p *DesertPyramidPiece) PostProcess(view WorldGenView, box BoundingBox, _ l
 		}
 		xo := stepX(dir) * 2
 		zo := stepZ(dir) * 2
-		placed[idx] = p.createChest(view, box, 10+xo, -11, 10+zo, desertPyramidLootTable, &p.LootChests)
+		placed[idx] = p.createChest(view, box, rng, 10+xo, -11, 10+zo, desertPyramidLootTable, &p.LootChests)
 	}
 
 	// The cellar (the 26.2 suspicious-sand cellar). The cellar sandstone shell IS placed; the

@@ -141,8 +141,14 @@ func TestJungleTemplePlaces(t *testing.T) {
 	// Pinned oracle (regenerate ONLY on an intentional geometry change). Captured from the
 	// seed-6 (0,2) WEST-oriented temple over the fixed y=80/jungle stub. The hash is FNV-1a
 	// over the sorted (pos,state) set; it flips on ANY block/draw-order/moss-selector divergence.
+	//
+	// RE-SEALED 20-02: createChest now draws rng.NextLong() for the chest lootTableSeed
+	// (jar-faithful — JungleTemplePiece.postProcess calls createChest BEFORE 3 more
+	// generateBox(STONE_SELECTOR) boxes, so the chest's nextLong shifts those moss-selector
+	// nextFloat draws). Block COUNT is unchanged (1746); only cobble<->mossy_cobble cells flip.
+	// The new hash is the FAITHFUL value (the old no-draw hash was unfaithful to vanilla).
 	const wantCount = 1746
-	const wantHash = uint64(0xf50b9fb8be352499)
+	const wantHash = uint64(0x471f867df2e73b40)
 	if count != wantCount {
 		t.Fatalf("placed block count = %d, want pinned %d (geometry truncated/changed)", count, wantCount)
 	}

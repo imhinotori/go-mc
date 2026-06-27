@@ -31,6 +31,11 @@ func (m *mapView) GetBlock(wx, wy, wz int) block.StateID {
 	return stateAir
 }
 
+// SetBlockEntity satisfies WorldGenView for the piece tests that don't care about block
+// entities (the recordingView in chest_be_test.go overrides this to capture chest BEs).
+func (m *mapView) SetBlockEntity(wx, wy, wz int, typ block.EntityType, lootTable string, lootSeed int64) {
+}
+
 func sandstoneID(t *testing.T) block.StateID {
 	t.Helper()
 	id, ok := block.ToStateID[block.Sandstone{}]

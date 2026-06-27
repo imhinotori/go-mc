@@ -703,7 +703,7 @@ func (c *StrongholdFiveCrossing) PostProcess(view WorldGenView, box BoundingBox,
 	c.fillShell(view, box, rng, 0, 0, 0, 9, 7, 8)
 	c.placeDoor(view, box, c.entryDoor, 5, 4, 0)
 	// A crossing chest (block + loot tag minecraft:chests/stronghold_crossing; loot deferred v3).
-	c.createChest(view, box, 3, 1, 3, strongholdCrossingLoot, &c.lootChests)
+	c.createChest(view, box, rng, 3, 1, 3, strongholdCrossingLoot, &c.lootChests)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -736,7 +736,7 @@ func (c *StrongholdChestCorridor) PostProcess(view WorldGenView, box BoundingBox
 	c.placeLocal(view, stoneBricks(), 3, 1, 2, box)
 	c.placeLocal(view, stoneBricks(), 1, 1, 4, box)
 	c.placeLocal(view, stoneBricks(), 3, 1, 4, box)
-	c.createChest(view, box, 2, 1, 3, strongholdCorridorLoot, &c.lootChests)
+	c.createChest(view, box, rng, 2, 1, 3, strongholdCorridorLoot, &c.lootChests)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -858,9 +858,9 @@ func (l *StrongholdLibrary) PostProcess(view WorldGenView, box BoundingBox, _ le
 		l.placeLocal(view, stateOf(block.Torch{}), 6, 7, 6, box)
 	}
 	// One or two chests (block + loot tag minecraft:chests/stronghold_library; loot deferred v3).
-	l.createChest(view, box, 3, 1, 5, strongholdLibraryLoot, &l.lootChests)
+	l.createChest(view, box, rng, 3, 1, 5, strongholdLibraryLoot, &l.lootChests)
 	if l.tall {
-		l.createChest(view, box, 12, 6, 9, strongholdLibraryLoot, &l.lootChests)
+		l.createChest(view, box, rng, 12, 6, 9, strongholdLibraryLoot, &l.lootChests)
 	}
 }
 

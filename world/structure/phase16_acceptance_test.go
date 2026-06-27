@@ -221,7 +221,7 @@ func TestAllStructuresPlace(t *testing.T) {
 	}
 	temples := []temple{
 		{"desert_pyramid", NewDesertPyramidStartGen, desertSeed, desertChunkX, desertChunkZ, desertSurfaceSampler{}, desertBiomeAt, 57050, 0x02570922c9bdc1bf},
-		{"jungle_temple", NewJungleTempleStartGen, jungleSeed, jungleChunkX, jungleChunkZ, jungleSurfaceSampler{}, jungleBiomeAt, 1746, 0xf50b9fb8be352499},
+		{"jungle_temple", NewJungleTempleStartGen, jungleSeed, jungleChunkX, jungleChunkZ, jungleSurfaceSampler{}, jungleBiomeAt, 1746, 0x471f867df2e73b40},
 		{"igloo", NewIglooStartGen, iglooBasementSeed, iglooBasementChunkX, iglooBasementChunkZ, iglooSurfaceSampler{}, snowyBiomeAt, 357, 0x8b891d28bdfa0c7b},
 		{"swamp_hut", NewSwampHutStartGen, swampSeed, swampChunkX, swampChunkZ, swampSurfaceSampler{}, swampBiomeAt, 640, 0xa2cda652a4805635},
 	}
