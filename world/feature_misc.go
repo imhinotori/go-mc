@@ -451,18 +451,19 @@ func (b *bodyContext) minY() int {
 	return b.view.minY
 }
 
-// faceSturdyUp is the conservative isFaceSturdy(state, UP) used by these bodies' ground
-// gates: a block is "sturdy" if it is neither air nor a fluid. The full BlockBehaviour
-// face-occlusion shape is unavailable mid-worldgen (12-01's conservative-read precedent);
-// this never reports a false sturdy over air/water (so a pile/patch never floats).
+// faceSturdyUp is the 1:1 port of BlockState.isFaceSturdy(getter, pos, Direction.UP) used by
+// these feature bodies' ground gates (the 3-arg overload defaults to SupportType.FULL — CITE:
+// javap BlockBehaviour$BlockStateBase.isFaceSturdy(...,Direction) → invokes the SupportType.FULL
+// overload). The vanilla callers (e.g. BlockPileFeature.place: `getstatic Direction.UP ;
+// isFaceSturdy(getter,pos,UP)`) pass the live WorldGenLevel getter, but isFaceSturdy is a pure
+// per-state cache read that ignores the getter/pos for every non-dynamic-shape block (and all
+// worldgen ground blocks — stone/dirt/grass/sand/slabs — are non-dynamic), so the no-context
+// precomputed table (built with EmptyBlockGetter) returns the identical value. This replaces the
+// earlier conservative non-air/non-fluid proxy with the real face-occlusion read now that the
+// SUB-FACESTURDY table is extracted: e.g. a bottom slab is now correctly NOT sturdy on its UP
+// face, matching vanilla (a pile won't sit on a bottom slab's top).
 func (b *bodyContext) faceSturdyUp(st block.StateID) bool {
-	if block.IsAir(st) {
-		return false
-	}
-	if b.view != nil && st == b.view.water {
-		return false
-	}
-	return true
+	return block.IsFaceSturdy(st, block.Up, block.SupportFull)
 }
 
 // ---- a minimal IntProvider for the misc configs (constant + uniform only) ----

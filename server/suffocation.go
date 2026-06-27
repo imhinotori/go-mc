@@ -58,34 +58,28 @@ func (t *TickLoop) isInWall(p *tickPlayer) bool {
 	return t.isSuffocating(s)
 }
 
-// isSuffocating is the port of BlockState.isSuffocating (the per-block StatePredicate set in
+// isSuffocating is the 1:1 port of BlockState.isSuffocating (the per-block StatePredicate set in
 // BlockBehaviour.Properties). CITE: javap BlockBehaviour$BlockStateBase.isSuffocating — it invokes
 // the block's `isSuffocating` StatePredicate. The vanilla DEFAULT predicate
 // (Block.Properties.isSuffocating, used by most full-cube blocks) is
 // `(state, level, pos) -> state.blocksMotion() && state.isCollisionShapeFullBlock(level, pos)` —
-// i.e. a solid, full-cube block. A few blocks override it to false (e.g. those with a special
-// occlusion), and non-full blocks (slabs, stairs, fences, glass, leaves) return false.
+// i.e. a solid, full-cube block. A few blocks OVERRIDE it (glass, leaves, etc. return false even
+// though they are full collision cubes), and non-full blocks (slabs, stairs, fences) return false.
 //
-// v1 STUB (clearly cited, structured to become the real read later): the per-block isSuffocating
-// flag + isCollisionShapeFullBlock are NOT yet extracted from the jar. As the faithful v1 proxy we
-// use blockSolidAt's solidity test (non-air, non-fluid) — which equals the vanilla predicate for
-// the dominant full-cube blocks (dirt/stone/sand/ores/wood/etc, the blocks a player actually
-// suffocates in) and over-approximates only for the minority of solid non-full-cube blocks
-// (slabs/stairs/glass), where vanilla returns false. When the block-property table is extracted
-// (the same data subsystem block-survival needs), replace this body with the real
-// blocksMotion() && isCollisionShapeFullBlock() && the per-block override — the call site does not
-// change. This MUST stay a function (not a baked constant) so that replacement is a one-spot edit.
+// The per-state result is now extracted from the jar (SUB-FACESTURDY): block.IsSuffocating reads
+// the baked `isSuffocating(EmptyBlockGetter, ZERO)` value — the actual predicate (default OR
+// override) evaluated with no world context, which equals the live read for the dominant
+// non-dynamic-shape suffocation case (a head inside dirt/stone/sand/etc.). This replaces the
+// earlier non-air/non-fluid proxy, which over-approximated glass/leaves/slabs as suffocating; the
+// faithful table now reports glass=false, leaves=false, bottom-slab=false, matching vanilla.
+//
+// REMAINING v1 GAP (cited, not yet modeled): the few blocks whose isSuffocating override is
+// genuinely context-dependent (it reads the BlockGetter/pos) are baked at EmptyBlockGetter — a
+// no-context approximation. None of the common suffocation blocks are in that set, so this matches
+// vanilla for the IN_WALL case; a fully context-aware read would require the live VoxelShape
+// engine Sulfur has not extracted.
 func (t *TickLoop) isSuffocating(s block.StateID) bool {
-	if block.IsAir(s) {
-		return false
-	}
-	// FLUID is never suffocating (it is not a full collision cube): vanilla LiquidBlock is not a
-	// full block and its default isSuffocating is false. Exclude it explicitly (mirrors
-	// blockSolidAt's fluid exclusion).
-	if _, isWater := waterLevelOf(s); isWater {
-		return false
-	}
-	return true // v1 proxy: any non-air, non-fluid block is treated as a full suffocating cube.
+	return block.IsSuffocating(s)
 }
 
 // tickSuffocation runs the IN_WALL branch of LivingEntity.baseTick for every live player:

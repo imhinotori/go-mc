@@ -40,6 +40,7 @@ var generators = []generator{
 	{"component", genComponent},
 	{"blockentities", genBlockEntities},
 	{"blockhardness", genBlockHardness},
+	{"blocksupport", genBlockSupport},
 	{"itemfood", genItemFood},
 	{"registryid", genRegistryID},
 	{"biome", genBiome},
@@ -142,14 +143,25 @@ func detectGoMCRoot() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("getting working directory: %v", err)
 	}
-	for d := wd; d != "/" && d != "."; d = filepath.Dir(d) {
+	// Walk up to the filesystem root. filepath.Dir is idempotent at the root
+	// ("/" -> "/", "D:\\" -> "D:\\"), so terminate when Dir stops changing the
+	// path rather than testing for a single platform-specific root string —
+	// otherwise this loops forever at a Windows drive root (e.g. "D:\\").
+	for d := wd; ; {
 		data, err := os.ReadFile(filepath.Join(d, "go.mod"))
-		if err != nil {
-			continue
+		if err == nil {
+			// Match the module line tolerant of CRLF/LF line endings (a git
+			// checkout with autocrlf yields "module ...sulfur\r\n").
+			text := strings.ReplaceAll(string(data), "\r\n", "\n")
+			if strings.Contains(text, "module github.com/imhinotori/sulfur\n") {
+				return d, nil
+			}
 		}
-		if strings.Contains(string(data), "module github.com/imhinotori/sulfur\n") {
-			return d, nil
+		parent := filepath.Dir(d)
+		if parent == d {
+			break // reached the filesystem/drive root without a match
 		}
+		d = parent
 	}
 	return "", fmt.Errorf("cannot find go-mc root from %s (need go.mod with module github.com/imhinotori/sulfur)", wd)
 }
