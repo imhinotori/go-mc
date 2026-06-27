@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v3
 milestone_name: Online-mode + Operator UX + Structure polish
-status: executing
+status: verifying
 stopped_at: 20-03 (STRUCT-POLISH-04 StructureStart NBT persistence) COMPLETE — all 3 tasks committed (f8c17b9b, 85f35998, 531a0c6f), Docker -race ./world/structure/ ./save/ green, SUMMARY written. Spawn-guard slots left in pieceExtraData for 20-04.
-last_updated: "2026-06-27T04:51:04.221Z"
+last_updated: "2026-06-27T06:17:39.774Z"
 progress:
   total_phases: 4
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 15
-  completed_plans: 30
+  completed_plans: 31
   percent: 100
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-06-23)
 
 Phase: 20 (structure-polish-loot-inhabitants-beard-persistence) — EXECUTING
 Plan: 5 of 5
-Status: Ready to execute
+Status: Phase complete — ready for verification
 
 ### ⚠️ WHAT'S NEXT (resume here — see .planning/HANDOFF.md for the FULL detail)
 
@@ -210,6 +210,7 @@ Progress: [██████████] 100%
 | Phase 20 P03 | 35min | 3 tasks | 7 files |
 | Phase 20 P05 | 20min | 2 tasks | 7 files |
 | Phase 20 P02 | 25min | 3 tasks | 19 files |
+| Phase 20 P04 | 75min | 3 tasks | 17 files |
 
 ## Accumulated Context
 
@@ -327,6 +328,7 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 20 / 20-03]: STRUCT-POLISH-04 StructureStart NBT persistence — ported createTag/loadStaticStart (flat {id,ChunkX,ChunkZ,references,Children}) + StructurePiece base {id,BB,O,GD}+addAdditionalSaveData per piece type (type-keyed LoadPiece). structures compound jar-exact {starts lowercase, References capital}. save/structure.go opaque per-start RawMessage (no cycle). Persistence is PURE optimization: absent/garbled tag -> recompute (A6/T-20-07), never panic; Children bounded 4096. Coherence proven: LoadStaticStart(CreateTag(s))==ComputeStarts. Spawn-guard slots left for 20-04. Docker -race green; CGO=0.
 - [Phase 20 / 20-05]: STRUCT-POLISH-03 Beardifier terrain adaptation — ported Beardifier.compute + getBuryContribution (Mth.clampedMap length falloff) + getBeardContribution (24^3 BEARD_KERNEL gaussian + bit-exact fastInvSqrt falloff) 1:1 from the jar. terrain_adaptation read from the embedded structure JSON (codec default NONE): only village (beard_thin) RAISES + stronghold (bury) DIGS; temples/igloo/mineshaft/swamp-hut (NONE) stay BYTE-IDENTICAL (TestNonAdaptingUnchanged is the hard guard). ORDERING HAZARD resolved: STARTS computed PRE-fill (beardifierFor = ComputeStarts over C + the +-1 ring, pure/singleflight-memoized, NO neighbor gen) and the additive NON-interpolated beard term threaded into the noisechunk fill summation AFTER the trilerp (the BeardifierMarker substitution, A5) — NOT a router node, NOT the per-marker interpolator. The term is baked into nc.density so the aquifer/ore/heightmaps all read the beard-adjusted density (vanilla-faithful). afterPlace BURY is a NO-OP for these two (jar: only DesertPyramid/WoodlandMansion override afterPlace, for archaeology/cartography) — BURY is entirely the density term. W4: NO village/stronghold capture-diff golden exists (all goldens are packet-wire or Superflat) -> no re-seal needed. groundLevelDelta=0 (cited stub: surface-projected village + non-pool stronghold = jar-exact 0); JigsawJunction contribs omitted (no junction list yet). Docker -race ./world/ ./world/structure/ ./world/levelgen/noisechunk/ green; CGO=0; no new deps.
 - [Phase ?]: [Phase 20 / 20-02]: shared evaluator consumers wired (block drops via loot.Roll, blockDropTable deleted; createChest emits chest BE {LootTable,LootTableSeed} with unconditional nextLong; chest_loot.go unpackLootTable lazy roll; jungle_temple fingerprint re-sealed; W2 SPLIT chest-OPEN UI to follow-up). Docker -race green.
+- [Phase 20 / 20-04]: STRUCT-POLISH-02 structure inhabitant spawns — the off-tick->tick seam. ChunkResult gained Spawns []structure.SpawnRequest{EntityType id-string, X/Y/Z, PersistenceRequired}; WorldGenView gained RecordSpawn (live mob) + SetSpawner (mob_spawner BE) alongside 20-02's SetBlockEntity. PostProcess RECORDS a SpawnRequest -> Neighborhood buffers -> tryDecorate captures view.Spawns() onto the staged chunk -> tryEmit forwards onto ChunkResult.Spawns -> server.drainStructureSpawns (chunkReady.applyTo) resolves the id + NewEntity + entities.add on the TICK owner (TICK-05 / Pitfall 5: the worker NEVER touches the store); the tracker broadcasts AddEntity for free (the spawnBlockDrop path). Swamp hut: spawnWitch/spawnCat record a witch+cat at getWorldPos(2,2,5)+0.5, one-shot guarded (spawnedWitch/spawnedCat, persisted 20-03). Stronghold: PortalRoom places a SPAWNER block + mob_spawner BE set to silverfish (a BLOCK, NOT a live entity) — the hasPlacedSpawner guard is a RELOAD-ONLY skip (NOT set in-gen) so per-chunk re-runs stay byte-deterministic (box.isInside alone makes placement idempotent, the createChest discipline; the fingerprint/cross-chunk gates stay green). Village: StructureTemplate.PlaceEntities ports placeEntities — transformPos(blockPos) clip + the new transformVec3(float pos) (jar-verified $SwitchMap CCW90/CW90/CW180 +1 half-cell terms) + origin, reading the ALREADY-STORED template.entities (A4 resolved, no net-new extraction); singlePoolElement.Place places blocks THEN entities (cat_black/nitwit/villager). finalizeSpawn = cited vanilla-default stub. silverfish has no spawner-tick yet (cited). Capture-diff: no re-seal (the spawner BE rides the existing BlockEntity list encoder, spawns are server-side entities not chunk-wire). Docker -race ./server/ + ./world/structure/ green; the full ./world/ -race TIMES OUT (the 278s worldgen suite × race instrumentation, NOT a data race — zero DATA RACE reports). No new deps; no import C. STRUCT-POLISH-02 COMPLETE.
 
 ### Pending Todos
 
@@ -353,7 +355,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-27T04:50:52.485Z
+Last session: 2026-06-27T06:17:39.761Z
 Stopped at: 20-03 (STRUCT-POLISH-04 StructureStart NBT persistence) COMPLETE — all 3 tasks committed (f8c17b9b, 85f35998, 531a0c6f), Docker -race ./world/structure/ ./save/ green, SUMMARY written. Spawn-guard slots left in pieceExtraData for 20-04.
 Resume file: None
 Next: OPERATOR CHECKPOINT (19-02 Task 3) — build `CGO_ENABLED=0 go build -o sulfur.exe ./cmd/sulfur`, run `./sulfur.exe -seed 777` in a REAL terminal (expect alt-screen TUI: log viewport + command input), type `say hi`+Enter (expect a `console command cmd=say hi` viewport line), connect a vanilla 26.2 client (expect a join line), Ctrl-C (clean exit), then `./sulfur.exe -seed 777 | cat` (expect NO TUI, plain stderr — today's behavior). On "approved" → mark TUI-01 complete + advance the plan counter, then proceed to Plan 19-03 (gameplay_tick.go join/leave slog conversion + the full disconnect taxonomy). The console line routes TUI→tick (EnqueueConsoleCommand, cap 64, drop-on-full)→runConsoleCommand on the tick→existing graph (grant-all, no issuer), reply to slog. gameplay_tick.go is untouched (19-03 owns it). LEGACY: Phase 17 Wave 2 (17-02/17-03) — see prior continuity below. (GAMEPLAY-05 fluid simulation: OVERWRITE server/fluid.go with the FlowingFluid port + scheduled-tick queue; lazy-init t.fluidSchedule inside tickFluids, do NOT edit tick.go/tick_phases.go) and 17-03 (GAMEPLAY-04 fall damage + PvP dispatch: OVERWRITE server/fall_damage.go using the tickPlayer fallDistance/wasOnGround/lastY fields + the lookupPlayerByEntityID reverse lookup, do NOT edit tick.go/tick_phases.go). The exact Wave-2 seam surface (field names, init point, call sites, stub signatures) is in 17-01-SUMMARY.md "WAVE-2 HANDOFF". Deferred-still-open: dungeon loot/spawner-mob + BeehiveDecorator occupant + pale_garden PaleMoss (all v3, cosmetic, in 13-04-SUMMARY); KeepAlive double-leave hardening (Phase 3). KNOWN PRE-EXISTING FLAKE: TestTickAIDrivesMobs (OPT-01 async-pool timing, not caused by 17-01) intermittently fails under full-suite load; passes in isolation + 3× under -race.

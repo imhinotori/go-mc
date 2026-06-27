@@ -37,7 +37,7 @@ Full phase details: [milestones/v2-ROADMAP.md](milestones/v2-ROADMAP.md).
 - [x] **Phase 18: Online-mode — auth + protocol encryption** (ONLINE-01/02) — EncryptionRequest/Response RSA key exchange + AES-128/CFB8 stream encryption (hand-rolled CFB8 over stdlib AES, no new dep) + Yggdrasil `hasJoined` session-server verification, behind an `online-mode` config flag. (completed 2026-06-26)
 - [x] **Phase 19: Operator UX — TUI console + disconnect logging** (TUI-01/02) — a bubbletea+bubbles terminal console (command-input + live log viewport) that degrades to plain logging when stdout is not a TTY, plus disconnect-reason logging (kick/timeout/protocol/quit/login-fail).
  Both complete + operator-validated; verified 3/3. (completed 2026-06-27)
-- [ ] **Phase 20: Structure polish — loot, inhabitants, beard, persistence** (STRUCT-POLISH-01..04) — the documented v2 deferrals: loot tables (chests + block drops, shared evaluator with GAMEPLAY-06), structure entities (villagers/witch/cat/silverfish), `afterPlace` terrain-beard, and structure-start NBT persistence.
+- [x] **Phase 20: Structure polish — loot, inhabitants, beard, persistence** (STRUCT-POLISH-01..04) — the documented v2 deferrals: loot tables (chests + block drops, shared evaluator with GAMEPLAY-06), structure entities (villagers/witch/cat/silverfish), `afterPlace` terrain-beard, and structure-start NBT persistence. (completed 2026-06-27)
 
 ### 📋 v4 Plugin / Scripting System (Phases 21–28) — PLANNED (execution waits for v3 to close)
 
@@ -115,7 +115,7 @@ Plans:
 - [x] 20-01-PLAN.md — Shared loot evaluator (level/loot) + golden seed-reproduction (STRUCT-POLISH-01)
 - [x] 20-02-PLAN.md — Shared evaluator wired to block drops + lazy chest loot (STRUCT-POLISH-01)
 - [x] 20-03-PLAN.md — StructureStart NBT persistence + per-piece Save/Load (STRUCT-POLISH-04)
-- [ ] 20-04-PLAN.md — Structure inhabitant spawns via ChunkResult.Spawns + silverfish spawner (STRUCT-POLISH-02)
+- [x] 20-04-PLAN.md — Structure inhabitant spawns via ChunkResult.Spawns + silverfish spawner (STRUCT-POLISH-02)
 - [x] 20-05-PLAN.md — Beardifier terrain adaptation: village beard_thin + stronghold bury (STRUCT-POLISH-03)
 **Research**: Phase research covers the loot-table evaluation model + the `afterPlace`/Beardifier adaptation + the structure-start NBT tag format.
 
@@ -134,4 +134,4 @@ Plans:
 | 17. Gameplay Completion — the six unwired seams | v3 | 4/5 | In Progress|  |
 | 18. Online-mode — auth + protocol encryption | v3 | 2/2 | Complete   | 2026-06-26 |
 | 19. Operator UX — TUI console + disconnect logging | v3 | 3/3 | Complete   | 2026-06-27 |
-| 20. Structure polish — loot, inhabitants, beard, persistence | v3 | 4/5 | In Progress|  |
+| 20. Structure polish — loot, inhabitants, beard, persistence | v3 | 5/5 | Complete   | 2026-06-27 |
