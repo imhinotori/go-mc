@@ -182,6 +182,13 @@ func (t *TickLoop) tickEntities() {
 	t.syncJoinInventories()
 	t.tickFallDamage()
 
+	// Suffocation: the IN_WALL branch of LivingEntity.baseTick (`if isInWall() hurtServer(inWall(),
+	// 1.0F)`). In vanilla baseTick this check runs BEFORE the air/drowning branch, so it is placed
+	// here ahead of tickBreath. Its body lives in suffocation.go; a single ADDITIVE call inside this
+	// existing phase keeps the tick order unchanged (TestTickPhaseOrder updated to include it),
+	// mirroring the tickFallDamage seam above.
+	t.tickSuffocation()
+
 	// Plan 17-13 breath/drowning: the LivingEntity.baseTick air branch (air drains while the eyes
 	// are submerged, refills otherwise, 2.0 DROWN damage at the air<=-20 threshold). Its body lives
 	// in breath.go; a single ADDITIVE call inside this existing phase keeps the tick order unchanged
