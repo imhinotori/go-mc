@@ -85,6 +85,27 @@ The Docker -race gate covers the plugin path exactly as it covers the async subs
 | 27 | REGION-01 | **Folia regionization** (folded from the v3 deferral) — independent-region tick threads so the world ticks in parallel regions; the plugin seam + entity API are region-aware (a hook runs on its region's thread). | The world ticks in parallel regions, -race clean, plugin hooks run on the correct region thread. |
 | 28 | PLUGIN-07 | **Plugin system visual + perf gate** (autonomous:false) — real-client confirm: a custom mob plugin works, vanilla-mobs-as-plugins is behavior-identical, crafting (vanilla + custom recipe) works through the plugin path, events fire, and the plugin layer adds no measurable per-tick cost vs Go-native (Folia regions scale). | Human-verified on a real 26.2 client + a perf benchmark. Closes v4. |
 
+## Prerequisite subsystems (NOT plugin work — a v3.1 / pre-v4 vanilla-completeness milestone)
+
+Discovered during v3 execution (see ROADMAP.md "Deferred / Backlog"). These are core vanilla
+subsystems, NOT plugin features — they should land as their own small milestone BEFORE or
+ALONGSIDE early v4, because several v4 items (entity persistence across region threads, attribute-
+driven mob plugins) and a lot of vanilla completeness depend on them. They are listed here so they
+have an owner and are not lost. Per the "no built-but-unwired code" rule we will NOT pre-build them.
+
+| ID | Subsystem | Builds | Depended on by |
+|----|-----------|--------|----------------|
+| SUB-PERSIST | **Chunk-save / RunSaveLoop** — region write/flush loop (dirty tracking, on-unload + periodic flush, `save.Level` level.dat writer, weighted-IO throttle). `SerializeChunkData` already exists + serializes sections/heightmaps/structures/block_entities; it just has no caller. | Persistent worlds (modified blocks, chests, entities survive restart) | Everything persistence; Folia regions (each region flushes its own chunks) |
+| SUB-ITEMNBT | **ItemStack disk codec** — `{id,count,components}` compound + `ItemStackWithSlot` (`Slot` byte) for `ContainerHelper.saveAllItems`. Today only the WIRE `SlotData` exists. | Chest `Items` flush, player-inventory + dropped-item persistence | SUB-PERSIST (pairs with it) |
+| SUB-BLOCKTICK | **Scheduled block ticks (`LevelTicks`)** — per-chunk deterministic tick queues + `block_ticks`/`fluid_ticks` save/load (the `save.Chunk` fields exist + now encode). | Sugar cane/cactus/crop survival+growth, redstone, fire, faithful fluid cadence | Vanilla block completeness; SUB-PERSIST (saves the queues) |
+| SUB-FACESTURDY | **Block support shapes** — real `isFaceSturdy`/`canSupportCenter` (per-face support data from jar shapes), replacing the worldgen not-air-not-fluid proxy. | Non-vegetation block survival (torches/rails/redstone/ladders/signs/buttons), attachment placement | Vanilla block completeness |
+| SUB-ATTRIB | **Attribute system** — per-entity attribute map + modifiers (the `finalizeSpawn` variant/profession + damage/speed/health stubs read cited constants today). | Faithful `finalizeSpawn`, attribute-modified combat, luck-on-loot | v4 entity/mob plugins (Phase 23/24 want real attributes) |
+
+**Recommendation:** insert a **v3.1 "Persistence & Vanilla Completeness"** milestone (SUB-PERSIST +
+SUB-ITEMNBT + SUB-BLOCKTICK + SUB-FACESTURDY, in that dependency order) between v3 close and v4
+kickoff. SUB-ATTRIB can ride with v4 Phase 23 (entity API) since the mob-as-plugin dogfood needs it.
+Decide exact milestone boundary at v3 close.
+
 ## Build order rationale
 - 21 → 22: a runtime with no host is useless; a host with no runtime has nothing to load. Runtime first
   (the sandbox + CGO=0 proof is the riskiest single thing), then the host/event layer on top.

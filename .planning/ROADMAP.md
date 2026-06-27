@@ -135,3 +135,27 @@ Plans:
 | 18. Online-mode — auth + protocol encryption | v3 | 2/2 | Complete   | 2026-06-26 |
 | 19. Operator UX — TUI console + disconnect logging | v3 | 3/3 | Complete   | 2026-06-27 |
 | 20. Structure polish — loot, inhabitants, beard, persistence | v3 | 5/5 | Complete   | 2026-06-27 |
+
+## Deferred / Backlog (unwired or subsystem-blocked)
+
+Items discovered during execution that are **not yet wired** or are **blocked on an unbuilt subsystem**. Each names the missing subsystem and the phase that should build it. Per the "no built-but-unwired code" rule (the SC4 gap lesson), we DO NOT ship speculative unwired code — we record it here and build it when its subsystem lands. Nothing here blocks the v3 close (all are post-v3 / vanilla-completeness work).
+
+### Missing subsystems (each needs a real phase, not a snack)
+
+| Subsystem | Why missing | Unblocks | Proposed home |
+|-----------|-------------|----------|---------------|
+| **SUB-PERSIST: Chunk-save loop (RunSaveLoop)** | `world.SerializeChunkData` exists + now serializes sections/heightmaps/structures/**block_entities**, but has **zero production callers** — the worker is region-READ + always-generate. Nothing flushes a live/decorated chunk back to disk. | Chest-item on-disk flush, modified-block persistence, entity persistence, structure-start save (currently write-path-ready but never called) | **New Phase (v3.1 or early v4)** — a region write/flush loop: dirty-chunk tracking, periodic + on-unload flush, the `save.Level` (level.dat) writer, weighted-IO throttle (x/sync semaphore per the stack). |
+| **SUB-FACESTURDY: Block support shapes (`isFaceSturdy`/`canSupportCenter`)** | Only a CONSERVATIVE worldgen proxy exists (`feature_misc.go faceSturdyUp` = not-air-not-fluid). No real per-face support-shape data from the jar's `BlockBehaviour`/`VoxelShape`. | Non-vegetation block survival (torches, wall-torches, rails, redstone, ladders, levers, buttons, signs, banners), attachment-face placement validation | **New Phase (vanilla-completeness)** — port the support-shape / `canSupportCenter` / `isFaceSturdy` data (codegen from jar shapes or hand-port the shape table). Prereq for any wall/floor-mounted block survival. |
+| **SUB-BLOCKTICK: Scheduled block ticks (`ScheduledTickAccess`)** | No per-block scheduled-tick queue (vanilla `LevelTicks`/`ScheduledTick`). `updateShape` paths that `scheduleTick` instead of destroying-immediately can't be ported faithfully. | Sugar cane / cactus / crop survival + growth, fluid scheduled spread cadence (today's fluid is its own loop), redstone, fire spread | **New Phase (vanilla-completeness)** — port `LevelTicks` (per-chunk tick queues, deterministic ordering, save/load of `block_ticks`/`fluid_ticks` — the `save.Chunk` fields already exist + now encode correctly). |
+| **SUB-ITEMNBT: ItemStack disk codec (`id`/`count`/`components`)** | `component.SlotData` is the WIRE format (VarInt + raw component bytes). No disk NBT codec (`ItemStack.CODEC` → `{id,count,components}` SNBT compound). | Chest contents on-disk flush (`ContainerHelper.saveAllItems` → `Items` list of `ItemStackWithSlot`), player-inventory persistence, dropped-item-entity persistence | **New Phase (persistence)** — port the ItemStack disk codec + `ItemStackWithSlot` (`Slot` byte + flattened stack). Pairs with SUB-PERSIST. |
+| **SUB-ATTRIB: Attribute system** | `finalizeSpawn` variant/profession + per-entity attribute reads are cited-constant stubs. | Faithful `finalizeSpawn` (mob variants/professions/equipment), attribute-modified damage/speed/health, luck on loot | Already noted across phases; a real attribute-map phase (likely early v4 entity work). |
+
+### Wired-but-partial / small follow-ups (no new subsystem needed)
+
+| Item | State | Note |
+|------|-------|------|
+| Chest BE persistence | **DONE (cb4597d6)** | `block_entities` now serialize (loot table+seed round-trip; unopened chest re-rolls deterministically = vanilla-correct). Item-level flush waits on SUB-PERSIST + SUB-ITEMNBT. |
+| nbt list-of-Marshaler encoding | **FIXED (cb4597d6)** | Encoder list loop now routes through `marshal` — also un-corrupts `entities`/`Lights`/`ScheduledEvents` (`[]RawMessage`) for when those write paths land. |
+| Chest open UI follow-ups | Partial | Random-slot shuffle (cosmetic), multi-viewer sync — small, no subsystem. |
+| Vegetation survival | DONE | Non-vegetation classes blocked on SUB-FACESTURDY / SUB-BLOCKTICK above. |
+| DATA_SHARED_FLAGS sprint/sneak pose; mob-water-nav; async-fluid | Deferred | AI/perf-track items, not persistence. |
