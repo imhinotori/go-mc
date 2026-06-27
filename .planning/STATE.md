@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v3
 milestone_name: Online-mode + Operator UX + Structure polish
-status: executing
-stopped_at: Completed 18-02-PLAN.md (ONLINE-01 skins)
-last_updated: "2026-06-26T23:47:13.247Z"
+status: paused
+stopped_at: 19-02 Tasks 1+2 committed (console dispatch seam + main() TTY fork); PAUSED at Task 3 operator human-verify checkpoint
+last_updated: "2026-06-27T00:07:02.359Z"
 progress:
   total_phases: 3
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 10
-  completed_plans: 24
+  completed_plans: 26
   percent: 100
 ---
 
@@ -25,8 +25,8 @@ See: .planning/PROJECT.md (updated 2026-06-23)
 ## Current Position
 
 Phase: 19 (operator-ux-tui-console-disconnect-logging) — EXECUTING
-Plan: 2 of 3
-Status: PAUSED at 19-02 Task 3 — operator human-verify checkpoint (TUI renders + console dispatch + headless stays plain). Tasks 1+2 committed (ced76463, 9db922b6); TUI-01 NOT marked complete until the checkpoint passes.
+Plan: 3 of 3 (19-03 COMPLETE; 19-02 still PAUSED at its operator checkpoint)
+Status: 19-03 (TUI-02 disconnect taxonomy) COMPLETE — all 3 tasks committed (18e6db4a, 0afd0713, ed106fe3), Docker -race ./server/ green, TUI-02 marked done, the Phase-3 KeepAlive double-leave deferred-item CLOSED. 19-02 Task 3 REMAINS PAUSED at the operator human-verify checkpoint (TUI renders + console dispatch + headless stays plain); TUI-01 NOT marked complete until that checkpoint passes. Phase 19 closes once the 19-02 operator gate is approved.
 
 ### ⚠️ WHAT'S NEXT (resume here — see .planning/HANDOFF.md for the FULL detail)
 
@@ -205,6 +205,7 @@ Progress: [██████████] 100%
 | Phase 18 P01 | 18min | 3 tasks | 5 files |
 | Phase 18 P02 | 4min | 2 tasks | 6 files |
 | Phase 19 P01 | 18min | 3 tasks | 8 files |
+| Phase 19 P03 | 22min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -318,6 +319,7 @@ Recent decisions affecting current work:
 - [Phase 17]: 17-02: player fluid physics (0.8 getWaterSlowDown + 0.014 updateFluidInteraction push) ported + unit-tested, but the subtick.go call-site is DEFERRED (subtick.go is 17-03-owned this parallel wave)
 - [Phase 18]: 18-01: EncryptionRequest is now the jar-exact 4-field ClientboundHelloPacket wire (String serverId, ByteArray publicKey, ByteArray challenge, Boolean shouldAuthenticate=true) — the trailing boolean was the single hard blocker against a real 26.2 client; always true because the server only sends Hello in online-mode (handleHello iconst_1). Challenge is the strict 4-byte Ints.toByteArray(nextInt()); hasJoined query is net/url-encoded. RSA PKCS1v15/1024-bit + AES-128/CFB8 + authDigest + cipher-then-auth ordering left FAITHFUL (untouched). --online-mode flag (default false) + SULFUR_ONLINE_MODE env threaded via newServer(gameplay, onlineMode); offline stays byte-identical. authentication() gained an injectable sessionServerURL test seam so the online-handshake integration test stubs sessionserver (CI offline). Skins ADD_PLAYER propagation is owned by the parallel 18-02 on disjoint files.
 - [Phase 18]: 18-02 (ONLINE-01 skins): authenticated GameProfile properties (the hasJoined textures skin) now reach the ADD_PLAYER tab-list wire for SELF + every OTHER player. AcceptPlayer no longer DROPS them — tickPlayer + bootstrapParams gained a properties []user.Property field set at registration like name/uuid; playerInfoEntriesEncoder.WriteTo replaced the hardcoded VarInt(0) GAME_PROFILE_PROPERTIES count with a real count-prefixed loop via user.Property.WriteTo, which already == Property.STREAM_CODEC (String name/value/Optional<signature> = writeNullable, jar-verified vs ByteBufCodecs anon codec) so NO new per-property codec was written. Self-add passes params.properties (not empty) so the joiner sees its own skin. Offline -> nil -> count 0 (Steve/Alex, byte-identical). Strict round-trip test: count=1 signed online + count=0 offline. CGO=0 build/vet/test + Docker -race green.
+- [Phase ?]: [Phase 19 / 19-03]: TUI-02 disconnect taxonomy COMPLETE — every player-drop seam tags its reason token (login_failure/protocol_mismatch/config_failure as server.go slog attrs pre-*Client; timeout at keepAliveClient.SendDisconnect; kicked best-effort at playerlist server-full + slog.Warn; protocol_error/write_error/backpressure tagged before Close in client.go readLoop/writeLoop/Send, first-writer-wins). readLoop splits clean EOF/stdnet.ErrClosed (default quit) from a decode fault (protocol_error). join/leave log.Printf -> slog (name/uuid/addr/reason/detail); reasonHuman (disconnect_reason.go) is the single token->human map; unknown passes through. KeepAlive.removePlayer double-leave hardened (ok-guard on listIndex[c]) — the Phase-3 deferred-item CLOSED. Docker -race ./server/ green; disjoint from 19-02.
 
 ### Pending Todos
 
@@ -339,12 +341,12 @@ Items acknowledged and carried forward from previous milestone close:
 | Category | Item | Status | Deferred At |
 |----------|------|--------|-------------|
 | Rename | Project rename Ender → **Sulfur**: module `imhinotori/go-mc` → `imhinotori/sulfur` (367 .go + both go.mod), `cmd/ender` → `cmd/sulfur`, user-facing strings. MC entity names + frozen 774 baseline left as-is. | ✅ Done (630f90e3) | Phase 2 (NET-04) |
-| Robustness | `KeepAlive.removePlayer` (verbatim fork component) derefs `listIndex[c]` and would panic if `ClientLeft` is called for a player the keep-alive already kicked on a real 30s timeout. Cannot trigger in Phase 3 (no timeout in the milestone window); `keepalive.go` is consumed verbatim by mandate. Harden against a double-leave in the phase that adds real timeout-driven disconnects. | ⏳ Deferred | Phase 3 (03-03) |
+| Robustness | `KeepAlive.removePlayer` (verbatim fork component) derefs `listIndex[c]` and would panic if `ClientLeft` is called for a player the keep-alive already kicked on a real 30s timeout. Cannot trigger in Phase 3 (no timeout in the milestone window); `keepalive.go` is consumed verbatim by mandate. Harden against a double-leave in the phase that adds real timeout-driven disconnects. | ✅ Done (ed106fe3) — Phase 19 (19-03): `removePlayer` ok-guards `listIndex[c]` (mirrors the tickPlayer guard, non-panicking; missing key returns early). `TestRemovePlayerDoubleLeave` proves a double-leave does not panic. | Phase 3 (03-03) → closed Phase 19 (19-03) |
 | Pulled-forward | A MINIMAL Play-state Join Game bootstrap (`server/play_join.go`, 0fd96850) was pulled forward in 04-04 to enable the real-client visual milestone. Phase 5 was to **EXTEND** it (full profile/abilities/spawn/teleport-validation/movement) not duplicate it. | ✅ Done — Phase 5 (05-01/02/03) completed the full Player Session: movement + following ring, the early-Play tail (abilities/held-slot/PlayerInfoUpdate-self/spawn-pos), incrementing teleport-id validation, and the capture-diff-sealed encoders. Bootstrap extended, not duplicated. (Real inventory still belongs to Phase 6.) | Phase 4 (04-04) → closed Phase 5 (05-03) |
 
 ## Session Continuity
 
-Last session: 2026-06-26T23:55:00.000Z
-Stopped at: 19-02 Tasks 1+2 committed (console dispatch seam + main() TTY fork); PAUSED at Task 3 operator human-verify checkpoint
-Resume file: .planning/phases/19-operator-ux-tui-console-disconnect-logging/19-02-PLAN.md (Task 3 checkpoint)
+Last session: 2026-06-27T00:05:47.442Z
+Stopped at: 19-03 (TUI-02 disconnect taxonomy) COMPLETE — all 3 tasks committed (18e6db4a, 0afd0713, ed106fe3), Docker -race ./server/ green, SUMMARY written, TUI-02 marked done, the Phase-3 KeepAlive double-leave deferred-item CLOSED. 19-02 Task 3 still PAUSED at its operator human-verify checkpoint (TUI renders + console dispatch + headless stays plain) — TUI-01 not marked complete until it passes; Phase 19 closes after that gate.
+Resume file: .planning/phases/19-operator-ux-tui-console-disconnect-logging/19-02-PLAN.md (Task 3 operator checkpoint)
 Next: OPERATOR CHECKPOINT (19-02 Task 3) — build `CGO_ENABLED=0 go build -o sulfur.exe ./cmd/sulfur`, run `./sulfur.exe -seed 777` in a REAL terminal (expect alt-screen TUI: log viewport + command input), type `say hi`+Enter (expect a `console command cmd=say hi` viewport line), connect a vanilla 26.2 client (expect a join line), Ctrl-C (clean exit), then `./sulfur.exe -seed 777 | cat` (expect NO TUI, plain stderr — today's behavior). On "approved" → mark TUI-01 complete + advance the plan counter, then proceed to Plan 19-03 (gameplay_tick.go join/leave slog conversion + the full disconnect taxonomy). The console line routes TUI→tick (EnqueueConsoleCommand, cap 64, drop-on-full)→runConsoleCommand on the tick→existing graph (grant-all, no issuer), reply to slog. gameplay_tick.go is untouched (19-03 owns it). LEGACY: Phase 17 Wave 2 (17-02/17-03) — see prior continuity below. (GAMEPLAY-05 fluid simulation: OVERWRITE server/fluid.go with the FlowingFluid port + scheduled-tick queue; lazy-init t.fluidSchedule inside tickFluids, do NOT edit tick.go/tick_phases.go) and 17-03 (GAMEPLAY-04 fall damage + PvP dispatch: OVERWRITE server/fall_damage.go using the tickPlayer fallDistance/wasOnGround/lastY fields + the lookupPlayerByEntityID reverse lookup, do NOT edit tick.go/tick_phases.go). The exact Wave-2 seam surface (field names, init point, call sites, stub signatures) is in 17-01-SUMMARY.md "WAVE-2 HANDOFF". Deferred-still-open: dungeon loot/spawner-mob + BeehiveDecorator occupant + pale_garden PaleMoss (all v3, cosmetic, in 13-04-SUMMARY); KeepAlive double-leave hardening (Phase 3). KNOWN PRE-EXISTING FLAKE: TestTickAIDrivesMobs (OPT-01 async-pool timing, not caused by 17-01) intermittently fails under full-suite load; passes in isolation + 3× under -race.

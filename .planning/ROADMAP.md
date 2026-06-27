@@ -35,7 +35,7 @@ Full phase details: [milestones/v2-ROADMAP.md](milestones/v2-ROADMAP.md).
 
 - [ ] **Phase 17: Gameplay Completion — the six unwired seams** (GAMEPLAY-01..07) — wire the existing-but-disconnected gameplay: player-entity-in-tracker broadcast (GAMEPLAY-01, the keystone), persisted-position apply (02), inventory join-sync (03), Attack/Interact damage dispatch + fall damage (04), fluid simulation + player fluid physics (05), block-break item drops (06), closed by a real-client multiplayer VISUAL GATE (07). Pattern: reconnect seams whose core logic already exists + is unit-tested; fluid sim is the one large net-new port.
 - [x] **Phase 18: Online-mode — auth + protocol encryption** (ONLINE-01/02) — EncryptionRequest/Response RSA key exchange + AES-128/CFB8 stream encryption (hand-rolled CFB8 over stdlib AES, no new dep) + Yggdrasil `hasJoined` session-server verification, behind an `online-mode` config flag. (completed 2026-06-26)
-- [ ] **Phase 19: Operator UX — TUI console + disconnect logging** (TUI-01/02) — a bubbletea+bubbles terminal console (command-input + live log viewport) that degrades to plain logging when stdout is not a TTY, plus disconnect-reason logging (kick/timeout/protocol/quit/login-fail).
+- [ ] **Phase 19: Operator UX — TUI console + disconnect logging** (TUI-01/02) — a bubbletea+bubbles terminal console (command-input + live log viewport) that degrades to plain logging when stdout is not a TTY, plus disconnect-reason logging (kick/timeout/protocol/quit/login-fail). TUI-02 complete (19-03); TUI-01 awaits the 19-02 operator human-verify checkpoint.
 - [ ] **Phase 20: Structure polish — loot, inhabitants, beard, persistence** (STRUCT-POLISH-01..04) — the documented v2 deferrals: loot tables (chests + block drops, shared evaluator with GAMEPLAY-06), structure entities (villagers/witch/cat/silverfish), `afterPlace` terrain-beard, and structure-start NBT persistence.
 
 ### 📋 v4 Plugin / Scripting System (Phases 21–28) — PLANNED (execution waits for v3 to close)
@@ -96,8 +96,8 @@ Full phase details: [milestones/v2-ROADMAP.md](milestones/v2-ROADMAP.md).
   3. Every player disconnect logs WHY (kick/timeout/protocol error/clean quit/login failure) with player identity + reason, surfaced in the TUI log stream + structured logs (TUI-02)
 **Plans**: 3 plans in 2 waves (Wave 1: 19-01 foundation; Wave 2 parallel: 19-02 + 19-03, disjoint files)
   - [x] 19-01-PLAN.md — charm v2 deps + bubbletea Model (viewport+textinput) + slog.Handler log bridge (non-blocking, drop-on-full)
-  - [ ] 19-02-PLAN.md — console dispatch seam (runConsoleCommand via existing graph, no issuer) + main() TTY fork (TUI vs plain stderr)
-  - [ ] 19-03-PLAN.md — disconnect taxonomy (protocol_error/write_error/login/config/kick/timeout/quit) + slog join/leave + KeepAlive double-leave hardening
+  - [x] 19-02-PLAN.md — console dispatch seam (runConsoleCommand via existing graph, no issuer) + main() TTY fork (TUI vs plain stderr)
+  - [x] 19-03-PLAN.md — disconnect taxonomy (protocol_error/write_error/login/config/kick/timeout/quit) + slog join/leave + KeepAlive double-leave hardening
 **Research**: Phase research covers the bubbletea/bubbles API (textinput + viewport composition) + the TTY-detection degrade path.
 
 ### Phase 20: Structure polish — loot, inhabitants, beard, persistence
@@ -126,5 +126,5 @@ Full phase details: [milestones/v2-ROADMAP.md](milestones/v2-ROADMAP.md).
 | 16. Village Jigsaw & Structures Visual Gate | v2.0 | 3/3 | Complete | 2026-06-25 |
 | 17. Gameplay Completion — the six unwired seams | v3 | 4/5 | In Progress|  |
 | 18. Online-mode — auth + protocol encryption | v3 | 2/2 | Complete   | 2026-06-26 |
-| 19. Operator UX — TUI console + disconnect logging | v3 | 1/3 | In Progress|  |
+| 19. Operator UX — TUI console + disconnect logging | v3 | 3/3 | Complete   | 2026-06-27 |
 | 20. Structure polish — loot, inhabitants, beard, persistence | v3 | 0/? | Not started | — |
