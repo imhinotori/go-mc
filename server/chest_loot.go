@@ -47,9 +47,29 @@ type chestLoot struct {
 	// LootTableSeed is the gen-time piece-RNG nextLong() draw — the SERVER-stored seed (never
 	// client-supplied, T-20-05) that makes the roll reproduce vanilla per (worldseed, chunk).
 	LootTableSeed int64
-	// items is the rolled container contents (filled lazily by unpackLootTable). For a plain
-	// chest or before the first open it is empty.
+	// items is the chest container contents — the 27-slot backing of a single chest (vanilla
+	// ChestBlockEntity.items is a NonNullList of size 27, the inventory.Generic9x3 container).
+	// Empty (count 0) slots are the unfilled cells. Filled lazily by unpackLootTable; the
+	// chest-open path (chest_open.go) ensures it is a 27-slot list before serving the menu.
 	items []component.SlotData
+}
+
+// chestContainerSize is the slot count of a single chest container — ChestBlockEntity holds a
+// NonNullList<ItemStack> of size 27 (generic_9x3 = 3 rows × 9). The lazy roll places stacks into
+// this fixed list; the chest-open menu serves all 27 slots (empty cells included).
+const chestContainerSize = 27
+
+// ensureContainer normalizes items to exactly chestContainerSize slots (empty-padded). A freshly
+// loaded chest may have a short/nil items list (the lazy roll appends only the non-empty stacks);
+// the open path needs the full 27-slot backing so menu-slot indices 0..26 always resolve. Idempotent.
+func (c *chestLoot) ensureContainer() {
+	if len(c.items) >= chestContainerSize {
+		c.items = c.items[:chestContainerSize]
+		return
+	}
+	padded := make([]component.SlotData, chestContainerSize)
+	copy(padded, c.items)
+	c.items = padded
 }
 
 // unpackLootTable ports RandomizableContainer.unpackLootTable: on the first access of a chest

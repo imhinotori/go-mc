@@ -250,18 +250,10 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 	}
 }
 
-// useBlockInteraction is the faithful v1 hook for ServerPlayerGameMode.useItemOn step 1 —
-// blockState.useItemOn(...) (the BLOCK's own right-click behavior: opening a chest, toggling a
-// lever, opening a door). It returns true when the block CONSUMES the interaction, in which case
-// the caller places NOTHING. v1 Sulfur has no interactive blocks, so this is a structural no-op
-// that always returns false (InteractionResult.PASS) — the placement path always runs. A later
-// plan replaces the body with real per-block interaction dispatch without touching handleUseItemOn.
-func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direction int) bool {
-	_ = p
-	_ = hitPos
-	_ = direction
-	return false // PASS: no interactive blocks in v1
-}
+// useBlockInteraction (the ServerPlayerGameMode.useItemOn step-1 hook — blockState.useItemOn) now
+// lives in chest_open.go: it dispatches a right-click on a chest to the chest-OPEN path (returning
+// true so placement is skipped) and PASSes (false) for every other block. handleUseItemOn calls it
+// unchanged.
 
 // heldWindowSlot maps a hotbar index (0..8) to its player-inventory WINDOW slot. The vanilla
 // player inventory window lays out 4 craft + 4 armor + 27 main (9..35) + 9 hotbar (36..44), so the

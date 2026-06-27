@@ -282,6 +282,16 @@ type TickLoop struct {
 	// by gameTick.teleportSeq for the same player. Touched ONLY on the tick goroutine
 	// (TICK-05), so no atomic is needed.
 	respawnTeleportSeq int
+
+	// openChests is the runtime store of loot-bearing chest containers keyed by world position
+	// (STRUCT-POLISH-01 chest-open UI, the 20-02 W2 follow-up). A chest's {LootTable,
+	// LootTableSeed} is recorded into the chunk's BlockEntity list at gen; on the FIRST open the
+	// chest-open path (chest_open.go) decodes that BE into a chestLoot here, rolls the loot lazily
+	// (unpackLootTable, one-shot), and keeps the rolled 27-slot container so a re-open serves the
+	// SAME contents (no re-roll) and item moves persist across opens. Lazily constructed; tick-owned
+	// (resolved/mutated only on the tick goroutine — TICK-05 — since the open/click/close path runs
+	// on-tick). A future plan flushes this back to the chunk BE NBT on unload/save.
+	openChests map[pk.Position]*chestLoot
 }
 
 // respawnTeleportBase seeds the tick-owned respawn teleport-id counter well above any join id
@@ -442,6 +452,19 @@ type tickPlayer struct {
 	// SetSlot from here. Lazily initialized by the inventory handlers; mutated ONLY on the tick
 	// goroutine (TICK-05 / T-6-08), so it is -race clean by the single-owner discipline.
 	inventory *Inventory
+
+	// openContainer is the player's currently-open non-inventory container window, or nil when
+	// only the player inventory (window 0) is open (STRUCT-POLISH-01 chest-open UI). It carries the
+	// allocated windowId (the containerCounter draw) and the chest world position so a
+	// ContainerClick/ContainerClose on that windowId resolves to the right chest (chest_open.go).
+	// Tick-owned: set by the chest-open path, cleared by handleContainerClose, both on the tick
+	// goroutine (TICK-05). Mirrors ServerPlayer.containerMenu (one open menu at a time).
+	openContainer *openContainer
+
+	// containerCounter is the per-player window-id allocator — ServerPlayer.containerCounter. Each
+	// open draws nextContainerCounter() = (counter % 100) + 1, so window ids cycle 1..100 and never
+	// collide the player inventory (window 0). Tick-owned (advanced only on the tick goroutine).
+	containerCounter int
 
 	// lastMainHand is the snapshot of the player's MAINHAND item the last time tickEquipment
 	// broadcast it — the Sulfur analogue of LivingEntity.lastEquipmentItems (the per-slot last-

@@ -3,6 +3,7 @@ package server
 import (
 	"io"
 
+	"github.com/imhinotori/sulfur/chat"
 	"github.com/imhinotori/sulfur/data/packetid"
 	"github.com/imhinotori/sulfur/level/component"
 	pk "github.com/imhinotori/sulfur/net/packet"
@@ -54,6 +55,25 @@ func containerSetSlot(containerID, stateID int32, slot int16, item component.Slo
 		pk.VarInt(stateID),
 		pk.Short(slot),
 		&item,
+	)
+}
+
+// openScreen builds ClientboundOpenScreen. Jar-derived 3-field composite
+// (ClientboundOpenScreenPacket.STREAM_CODEC, verified javap this session):
+//
+//	VarInt    containerId   (ByteBufCodecs.CONTAINER_ID — a VarInt alias)
+//	VarInt    menuTypeId    (ByteBufCodecs.registry(Registries.MENU) — the menu registry index)
+//	Component title         (ComponentSerialization.TRUSTED_STREAM_CODEC — the NBT Component)
+//
+// menuTypeId is the index into the minecraft:menu registry (registryid.Menu): generic_9x3 is the
+// 3-row chest menu. title is the chest's display name (vanilla MenuProvider.getDisplayName →
+// "container.chest" → "Chest"). Source: ServerPlayer.openMenu sends `new ClientboundOpenScreenPacket(
+// menu.containerId, menu.getType(), provider.getDisplayName())`.
+func openScreen(containerID, menuTypeID int32, title string) pk.Packet {
+	return pk.Marshal(int32(packetid.ClientboundOpenScreen),
+		pk.VarInt(containerID),
+		pk.VarInt(menuTypeID),
+		chat.Message{Text: title},
 	)
 }
 
