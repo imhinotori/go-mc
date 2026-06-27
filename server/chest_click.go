@@ -86,6 +86,14 @@ func (t *TickLoop) clickedChest(p *tickPlayer, cl *chestLoot, slotNum int16, but
 		t.doChestClick(p, cl, inv, int(slotNum), button, int(input))
 	}()
 
+	// SUB-PERSIST: a chest click may have moved/taken items, so dirty the chest's column so the save
+	// loop flushes the rolled container to the chunk BE on the next save pass (a no-op when
+	// persistence is off / the column is unloaded). The first open already cleared the LootTable
+	// (unpackLootTable), so the chest now persists its Items (saveAllItems), not its loot table.
+	if p.openContainer != nil {
+		t.markChestDirty(p.openContainer.chestPos)
+	}
+
 	// broadcastChanges: re-send the full authoritative chest window so the client reflects the move.
 	t.sendChestContent(p, cl)
 

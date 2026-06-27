@@ -34,7 +34,12 @@ type PlayerData struct {
 	Score            int32
 	AbsorptionAmount float32
 
-	Inventory, EnderItems []Item
+	// Inventory / EnderItems are the modern (post-1.20.5) ItemStackWithSlot lists: each element is
+	// {Slot byte, id, count(, components)} flattened. SUB-PERSIST: upgraded from the legacy
+	// []Item{Count,Slot,id,Tag} (pre-1.20.5) to the 26.2 codec (ItemStackWithSlotDisk) so the
+	// player .dat matches vanilla. CITE: net.minecraft.world.entity.player.Inventory.save emits
+	// ItemStackWithSlot elements (the SAME codec ContainerHelper.saveAllItems uses).
+	Inventory, EnderItems []ItemStackWithSlotDisk
 
 	XpLevel int32
 	XpP     float32

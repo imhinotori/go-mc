@@ -385,6 +385,20 @@ func (g *gameTick) AcceptPlayer(
 		player.lastHealthSent = loaded.Health
 		player.yaw = loaded.Rotation[0]
 		player.pitch = loaded.Rotation[1]
+		// SUB-PERSIST: restore the persisted inventory into the live tick-owned slots so a
+		// reconnecting player keeps its items (the round-trip inverse of inventoryToItems). The
+		// component-free stacks restore exactly; a Phase-A-saved component-bearing stack restores as
+		// its base item (components were dropped on save). syncJoinInventories sends the restored
+		// inventory with the first authoritative ContainerSetContent. Runs on the accept goroutine
+		// before register (crosses no tick-owned state — the player is not yet registered).
+		if len(loaded.Inventory) > 0 {
+			inv := ensureInventory(player)
+			restored := itemsToInventory(loaded.Inventory, len(inv.slots))
+			copy(inv.slots, restored)
+			if loaded.SelectedItemSlot >= 0 && loaded.SelectedItemSlot <= 8 {
+				inv.heldSlot = int16(loaded.SelectedItemSlot)
+			}
+		}
 	}
 
 	// GATE-ONLY starter kit (test_kit.go): a no-op unless SULFUR_TEST_KIT=1. Seeds food + blocks

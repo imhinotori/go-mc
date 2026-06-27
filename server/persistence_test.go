@@ -68,9 +68,9 @@ func TestPlayerInventoryRoundTrip(t *testing.T) {
 	want := save.PlayerData{
 		Dimension: overworldDimensionName,
 		Health:    maxHealth,
-		Inventory: []save.Item{
-			{Slot: 0, Count: 64, ID: "minecraft:stone"},
-			{Slot: 8, Count: 1, ID: "minecraft:diamond_sword"},
+		Inventory: []save.ItemStackWithSlotDisk{
+			{Slot: 0, ItemStackDisk: save.ItemStackDisk{ID: "minecraft:stone", Count: 64}},
+			{Slot: 8, ItemStackDisk: save.ItemStackDisk{ID: "minecraft:diamond_sword", Count: 1}},
 		},
 	}
 	if err := savePlayer(dir, id, want); err != nil {
