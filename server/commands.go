@@ -87,6 +87,40 @@ func executorFrom(ctx context.Context) (cmdExecutor, bool) {
 	return e, ok && e.t != nil && e.p != nil
 }
 
+// cmdLoopKey carries the owning tick loop WITHOUT an issuing player — the console path. A
+// broadcast-style command (/say, /me) needs the loop to fan a message to all players but has
+// no issuer, so executorFrom (which requires a player) is not enough. The player path also
+// stores the loop here so a single accessor (commandLoop) reaches it from either source.
+type cmdLoopKey struct{}
+
+// withConsole returns ctx carrying just the tick loop (no issuing player) — installed by
+// runConsoleCommand so console-sourced broadcast commands can reach broadcastSystemChat.
+func withConsole(ctx context.Context, t *TickLoop) context.Context {
+	return context.WithValue(ctx, cmdLoopKey{}, t)
+}
+
+// commandLoop returns the owning tick loop for a broadcast-style handler, from either the
+// player executor (runCommand) or the console loop value (runConsoleCommand). nil if neither.
+func commandLoop(ctx context.Context) *TickLoop {
+	if e, ok := ctx.Value(cmdExecutorKey{}).(cmdExecutor); ok && e.t != nil {
+		return e.t
+	}
+	if t, ok := ctx.Value(cmdLoopKey{}).(*TickLoop); ok {
+		return t
+	}
+	return nil
+}
+
+// commandSenderName returns the display name to attribute a broadcast command to: the issuing
+// player's name, or "Server" for the console path (mirrors vanilla CommandSourceStack display
+// name — a console/server source renders as the server name in the SAY_COMMAND/emote chat type).
+func commandSenderName(ctx context.Context) string {
+	if e, ok := ctx.Value(cmdExecutorKey{}).(cmdExecutor); ok && e.p != nil {
+		return e.p.name
+	}
+	return "Server"
+}
+
 // permissionGated wraps a command.HandlerFunc so its body runs ONLY when the per-command
 // permission resolver (carried on the context) grants `node`. A denied permission returns
 // nil WITHOUT running the body (the command is a silent no-op for an unauthorized client —
@@ -119,17 +153,34 @@ func buildCommandGraph() *command.Graph {
 	// broadcast/reply lands when the chat path (07-05) wires the SystemChat helper — but the
 	// command now PARSES and dispatches end-to-end (the objective's `/say hi` runs).
 
-	// /say <message>
+	// /say <message> — vanilla net.minecraft.server.commands.SayCommand: broadcast the message
+	// to ALL players via ChatType.SAY_COMMAND (translatable chat.type.announcement = "[%s] %s",
+	// source display name + message). v1 ships the SystemChat path (ClientboundSystemChat) which
+	// renders the resolved "[sender] message" text identically. Console source name = "Server".
 	sayMsg := g.Argument("message", command.StringParser(2)).HandleFunc(permissionGated("command.say",
 		func(ctx context.Context, args []command.ParsedData) error {
+			t := commandLoop(ctx)
+			if t == nil || len(args) == 0 {
+				return nil
+			}
+			msg, _ := args[len(args)-1].(string)
+			t.broadcastSystemChat("[" + commandSenderName(ctx) + "] " + msg)
 			return nil
 		}))
 	say := g.Literal("say").AppendArgument(sayMsg).Unhandle()
 	g.AppendLiteral(say)
 
-	// /me <action>
+	// /me <action> — vanilla emote command: broadcast via ChatType.EMOTE_COMMAND (translatable
+	// chat.type.emote = "* %s %s", source display name + action). v1 ships the SystemChat path
+	// which renders the resolved "* sender action" text identically. Console source name = "Server".
 	meMsg := g.Argument("action", command.StringParser(2)).HandleFunc(permissionGated("command.me",
 		func(ctx context.Context, args []command.ParsedData) error {
+			t := commandLoop(ctx)
+			if t == nil || len(args) == 0 {
+				return nil
+			}
+			action, _ := args[len(args)-1].(string)
+			t.broadcastSystemChat("* " + commandSenderName(ctx) + " " + action)
 			return nil
 		}))
 	me := g.Literal("me").AppendArgument(meMsg).Unhandle()
@@ -289,8 +340,11 @@ func (t *TickLoop) runConsoleCommand(line string) {
 	}
 
 	// Console = operator: grant every command node. NO withExecutor → executorFrom(ctx) ok=false
-	// → issuer-acting commands no-op (commands.go:146 "no issuer (console/test path)").
-	ctx := withPermissionResolver(context.Background(), func(string) bool { return true })
+	// → issuer-acting commands no-op (commands.go:146 "no issuer (console/test path)"). The loop
+	// IS carried via withConsole so broadcast commands (/say, /me) can fan to all players with the
+	// "Server" source name — they need the loop but not a player issuer.
+	ctx := withConsole(context.Background(), t)
+	ctx = withPermissionResolver(ctx, func(string) bool { return true })
 
 	if err := executeCommand(ctx, line); err != nil {
 		// The reply path is the slog log stream (TUI + stderr), not a player SystemChat.

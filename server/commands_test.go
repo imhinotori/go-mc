@@ -328,3 +328,51 @@ func TestEnqueueConsoleCommandNonBlocking(t *testing.T) {
 		t.Fatalf("the drained console line reached Execute as %q, want %q", got, "me waves")
 	}
 }
+
+// TestSayBroadcastsToAll asserts /say is no longer a no-op: through the REAL command graph,
+// a console "say hi" broadcasts a ClientboundSystemChat carrying "[Server] hi" to every
+// player, and a player "say hi" broadcasts "[<name>] hi". This is the vanilla SayCommand
+// shape (ChatType.SAY_COMMAND = "[%s] %s") rendered via the v1 SystemChat path — closing the
+// 07-05-deferred no-op that made the TUI console (and player /say) produce no visible output.
+func TestSayBroadcastsToAll(t *testing.T) {
+	// --- console source: name "Server" ---
+	loop := NewTickLoop(newFakeClock())
+	recipient := commandPlayer(loop)
+	loop.runConsoleCommand("say hi")
+	pkts := drainPackets(recipient.client)
+	if !containsSystemChat(pkts, "[Server] hi") {
+		t.Fatalf("console /say did not broadcast [Server] hi to the recipient; got %d packets", len(pkts))
+	}
+
+	// --- player source: name is the issuer's ---
+	loop2 := NewTickLoop(newFakeClock())
+	issuer := commandPlayer(loop2)
+	issuer.name = "Steve"
+	other := commandPlayer(loop2) // a second player who must also receive it
+	loop2.runCommand(issuer, "say hello")
+	got := drainPackets(other.client)
+	if !containsSystemChat(got, "[Steve] hello") {
+		t.Fatalf("player /say did not broadcast [Steve] hello to other players; got %d packets", len(got))
+	}
+}
+
+// TestMeBroadcastsToAll asserts /me broadcasts the vanilla emote shape "* <name> <action>".
+func TestMeBroadcastsToAll(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	r := commandPlayer(loop)
+	loop.runConsoleCommand("me waves")
+	if !containsSystemChat(drainPackets(r.client), "* Server waves") {
+		t.Fatal("console /me did not broadcast '* Server waves'")
+	}
+}
+
+// containsSystemChat reports whether any packet is a ClientboundSystemChat whose body carries
+// text (the NBT Component encodes the string literally, so a byte-substring match suffices).
+func containsSystemChat(pkts []pk.Packet, text string) bool {
+	for _, p := range pkts {
+		if p.ID == int32(packetid.ClientboundSystemChat) && strings.Contains(string(p.Data), text) {
+			return true
+		}
+	}
+	return false
+}
