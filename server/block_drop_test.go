@@ -52,9 +52,13 @@ func TestItemMetadataEntry(t *testing.T) {
 	}
 }
 
-// TestBlockDropLookup: blockDropFor maps a broken block state to its v1 drop. Stone drops
-// cobblestone; dirt drops itself; air/unknown -> ok=false (no drop).
-func TestBlockDropLookup(t *testing.T) {
+// TestBlockDropViaLoot: blockDropsFor routes a broken block state through the SHARED
+// level/loot evaluator (loot.Roll over minecraft:blocks/<name>), NOT the deleted
+// hardcoded blockDropTable map. Stone -> cobblestone (the survives_explosion
+// alternative, since a v1 hand break carries no tool so match_tool's silk_touch child
+// fails); grass_block -> dirt; oak_log -> oak_log; diamond_ore -> diamond (one, since
+// apply_bonus/explosion_decay no-op without a tool/explosion). air/unknown -> no drop.
+func TestBlockDropViaLoot(t *testing.T) {
 	cases := []struct {
 		name     string
 		state    block.StateID
@@ -62,23 +66,31 @@ func TestBlockDropLookup(t *testing.T) {
 		wantItem item.ID
 	}{
 		{"stone->cobblestone", block.ToStateID[block.Stone{}], true, item.Cobblestone.ID},
-		{"dirt->dirt", block.ToStateID[block.Dirt{}], true, item.Dirt.ID},
+		{"grass_block->dirt", block.ToStateID[block.GrassBlock{Snowy: false}], true, item.Dirt.ID},
+		{"oak_log->oak_log", block.ToStateID[block.OakLog{Axis: block.Y}], true, item.OakLog.ID},
+		{"diamond_ore->diamond", block.ToStateID[block.DiamondOre{}], true, item.Diamond.ID},
 		{"air->nothing", block.ToStateID[block.Air{}], false, 0},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			drop, ok := blockDropFor(c.state)
-			if ok != c.wantOK {
-				t.Fatalf("blockDropFor(%s) ok = %v, want %v", c.name, ok, c.wantOK)
+			drops := blockDropsFor(c.state, 12345)
+			if c.wantOK && len(drops) == 0 {
+				t.Fatalf("blockDropsFor(%s) returned no drops, want a %d drop", c.name, c.wantItem)
 			}
-			if !ok {
+			if !c.wantOK {
+				if len(drops) != 0 {
+					t.Fatalf("blockDropsFor(%s) returned %d drops, want none", c.name, len(drops))
+				}
 				return
 			}
-			if item.ID(drop.ItemID) != c.wantItem {
-				t.Fatalf("blockDropFor(%s) item = %d, want %d", c.name, drop.ItemID, c.wantItem)
+			if len(drops) != 1 {
+				t.Fatalf("blockDropsFor(%s) returned %d drops, want exactly 1", c.name, len(drops))
 			}
-			if drop.Count <= 0 {
-				t.Fatalf("blockDropFor(%s) count = %d, want > 0", c.name, drop.Count)
+			if item.ID(drops[0].ItemID) != c.wantItem {
+				t.Fatalf("blockDropsFor(%s) item = %d, want %d", c.name, drops[0].ItemID, c.wantItem)
+			}
+			if drops[0].Count <= 0 {
+				t.Fatalf("blockDropsFor(%s) count = %d, want > 0", c.name, drops[0].Count)
 			}
 		})
 	}

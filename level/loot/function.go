@@ -126,15 +126,54 @@ func parseFunction(rf rawFunction) (LootFunction, error) {
 		if err != nil {
 			return nil, err
 		}
+	case "apply_bonus":
+		// The block-table fortune function. The ore tables use formula
+		// "minecraft:ore_drops" + enchantment "minecraft:fortune". Without a TOOL it is
+		// a no-op (the v1 break default). 20-02 Task 1 (javap ApplyBonusCount.run).
+		inner, err = parseApplyBonus(rf)
+		if err != nil {
+			return nil, err
+		}
+	case "explosion_decay":
+		// The block-table explosion drop-loss. Without an EXPLOSION_RADIUS it is a
+		// no-op (the v1 break default). 20-02 Task 1 (javap ApplyExplosionDecay.run).
+		inner = &applyExplosionDecay{}
 	default:
-		// A function type the 5 chest groups don't use (apply_bonus, explosion_decay,
-		// set_components, ...). 20-02 ports the block-table delta; until then a chest
-		// table containing one would error loudly here rather than silently dropping
-		// the transform — but per the inventory none of the 5 groups reach this.
-		return nil, fmt.Errorf("loot function %q not ported (only set_count/enchant_randomly/enchant_with_levels in scope)", typeStr)
+		// A function type neither the chest groups nor the block tables use
+		// (set_components, ...). Error loudly rather than silently drop the transform.
+		return nil, fmt.Errorf("loot function %q not ported (set_count/enchant_*/apply_bonus/explosion_decay in scope)", typeStr)
 	}
 	if len(conds) == 0 {
 		return inner, nil
 	}
 	return &conditionalFunction{inner: inner, conditions: conds}, nil
+}
+
+// parseApplyBonus decodes an apply_bonus function: the `enchantment` id (e.g.
+// "minecraft:fortune") + the `formula` ("minecraft:ore_drops" for the ore tables).
+// Without a TOOL the function is a no-op, so the formula only matters once a fortune
+// tool is threaded (the cited stub). An unknown formula errors loudly.
+//
+// Source: javap ApplyBonusCount (the codec reads enchantment + formula).
+func parseApplyBonus(rf rawFunction) (LootFunction, error) {
+	ench, err := rawString(rf, "enchantment")
+	if err != nil {
+		return nil, err
+	}
+	formulaStr, err := rawString(rf, "formula")
+	if err != nil {
+		return nil, err
+	}
+	var formula applyBonusFormula
+	switch normalizeType(formulaStr) {
+	case "ore_drops", "": // bare/absent defaults to ore_drops (the only block-table form)
+		formula = formulaOreDrops
+	case "uniform_bonus_count":
+		formula = formulaUniformBonus
+	case "binomial_with_bonus_count":
+		formula = formulaBinomialBonus
+	default:
+		return nil, fmt.Errorf("apply_bonus unknown formula %q", formulaStr)
+	}
+	return &applyBonusCount{formula: formula, enchantment: ench}, nil
 }

@@ -93,9 +93,52 @@ func parseCondition(rc rawCondition) (LootCondition, error) {
 			}
 		}
 		return &locationCheck{biomes: parseBiomeList(pred.Predicate.Biomes)}, nil
+	case "match_tool":
+		// The block tables' only match_tool form is a silk_touch enchantment gate:
+		// predicate.predicates["minecraft:enchantments"] = [{enchantments:"minecraft:silk_touch", levels:{min:1}}].
+		// Detect that gate so matchTool.Test reads ctx.ToolSilkTouch (the cited stub).
+		// 20-02 Task 1 (javap MatchTool.test).
+		return &matchTool{requiresSilkTouch: matchToolWantsSilkTouch(rc)}, nil
+	case "survives_explosion":
+		// ExplosionCondition: no fields. EXPLOSION_RADIUS absent -> true (the v1
+		// break default). 20-02 Task 1 (javap ExplosionCondition.test).
+		return &explosionCondition{}, nil
 	default:
-		return nil, fmt.Errorf("loot condition %q not ported (only location_check in scope; block delta is 20-02)", typeStr)
+		return nil, fmt.Errorf("loot condition %q not ported (location_check/match_tool/survives_explosion in scope)", typeStr)
 	}
+}
+
+// matchToolWantsSilkTouch reports whether a match_tool condition's predicate gates on a
+// silk_touch enchantment (level>=1) — the only match_tool form the block tables use. It
+// inspects predicate.predicates["minecraft:enchantments"][*].enchantments for
+// "minecraft:silk_touch". A predicate without an enchantment gate returns false (the
+// matchTool then defaults to the predicate.isEmpty()->true path under a real tool).
+//
+// Source: blocks/*.json match_tool predicate shape (verified against the datagen JSON).
+func matchToolWantsSilkTouch(rc rawCondition) bool {
+	predRaw, ok := rc["predicate"]
+	if !ok {
+		return false
+	}
+	var pred struct {
+		Predicates struct {
+			Enchantments []struct {
+				Enchantments json.RawMessage `json:"enchantments"`
+			} `json:"minecraft:enchantments"`
+		} `json:"predicates"`
+	}
+	if err := json.Unmarshal(predRaw, &pred); err != nil {
+		return false
+	}
+	for _, e := range pred.Predicates.Enchantments {
+		// `enchantments` is either a single id string or a list of ids.
+		for _, id := range parseBiomeList(e.Enchantments) { // reuse the single-or-list decoder
+			if id == "minecraft:silk_touch" || id == "silk_touch" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // parseBiomeList accepts either a single biome/tag string or a JSON array of biome

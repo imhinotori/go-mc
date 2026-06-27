@@ -169,18 +169,41 @@ func addRandomItem(p *LootPool, ctx *LootContext, emit func(ItemStack)) {
 	}
 }
 
-// expand mirrors LootPoolEntryContainer.expand for a singleton (item/empty):
-// `if (canRun(ctx)) accept(entry); return canRun;`. canRun tests the entry's
-// compositeCondition (the per-entry conditions, e.g. mineshaft's location_check).
-// Composite entries (alternatives/group/sequence) have a different expand — shaped
-// for 20-02 (they would recurse over Children); the chest groups never reach there.
+// expand mirrors LootPoolEntryContainer.expand. For a singleton (item/empty):
+// `if (canRun(ctx)) accept(entry); return canRun;`. For a composite entry
+// (alternatives/group/sequence — CompositeEntryBase.expand): `if (!canRun) return
+// false; return composedChildren.expand(ctx, accept)`. The composed form differs per
+// container:
 //
-// Source: javap LootPoolSingletonContainer.expand / canRun.
-func expand(e *Entry, ctx *LootContext, accept func(*Entry)) {
+//   - alternatives (OR): the first child whose own expand returns true wins; later
+//     children are NOT visited (AlternativesEntry.compose -> ComposableEntryContainer.or
+//     short-circuit). This is the block-table silk-touch-or-drop semantics.
+//
+// canRun tests the entry's compositeCondition (per-entry conditions, e.g. mineshaft's
+// location_check or a block child's match_tool/survives_explosion).
+//
+// Sources: javap LootPoolSingletonContainer.expand / canRun; CompositeEntryBase.expand;
+// AlternativesEntry.compose (the OR over children, first-passing wins).
+func expand(e *Entry, ctx *LootContext, accept func(*Entry)) bool {
 	if !allConditions(e.Conditions, ctx) { // canRun
-		return
+		return false
 	}
-	accept(e)
+	switch normalizeType(e.Type) {
+	case "alternatives":
+		// CompositeEntryBase.expand -> the composed OR: visit children in order, the
+		// FIRST whose expand returns true wins and we stop (return true). If none
+		// expand, return false (the alternatives entry contributes nothing).
+		for _, child := range e.Children {
+			if expand(child, ctx, accept) {
+				return true
+			}
+		}
+		return false
+	default:
+		// A singleton (item/empty): accept self.
+		accept(e)
+		return true
+	}
 }
 
 // getWeight mirrors LootPoolSingletonContainer.getWeight(luck): the vanilla formula

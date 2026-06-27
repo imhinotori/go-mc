@@ -24,6 +24,25 @@ type LootContext struct {
 	// wires the real chest-open context; an empty biome makes location_check a
 	// permissive default (see condition.go).
 	Biome string
+	// HasTool reports whether the loot context carries a TOOL (the
+	// LootContextParams.TOOL the block-break path supplies). The pure v1 block-break
+	// path (server/block_drop.go) supplies NO tool, so this is false and match_tool /
+	// apply_bonus take their decompiled `TOOL == null` branches (match_tool -> false,
+	// apply_bonus -> no-op). This is structured to become a real tool/enchantment read
+	// when the dig path threads the held tool through — never baked away.
+	HasTool bool
+	// ToolSilkTouch / ToolFortuneLevel are the cited-stub enchantment reads the block
+	// delta needs when HasTool is true: match_tool's silk_touch predicate reads
+	// ToolSilkTouch, apply_bonus's fortune formula reads ToolFortuneLevel. Both are 0/
+	// false until the dig path supplies a real held tool (HasTool gates their use).
+	ToolSilkTouch    bool
+	ToolFortuneLevel int
+	// ExplosionRadius is the LootContextParams.EXPLOSION_RADIUS the explosion drop path
+	// supplies (>0 when a block is destroyed by a blast). A block BREAK supplies none
+	// (HasExplosion false), so survives_explosion passes and explosion_decay is a no-op
+	// — the decompiled `EXPLOSION_RADIUS == null` branch.
+	HasExplosion    bool
+	ExplosionRadius float32
 }
 
 // NewLootContext mirrors LootContext$Builder.withOptionalRandomSeed(seed).create():
