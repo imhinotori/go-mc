@@ -346,6 +346,12 @@ func (t *TickLoop) reconcileEdit(editor *tickPlayer, pos pk.Position, state bloc
 	// This closes the Phase-17 gate finding: "rompe un bloque con flores arriba, las flores no se
 	// rompen" — vanilla destroys an unsupported plant the instant its support is removed.
 	t.updateVegetationOnEdit(pos)
+	// SUB-BLOCKTICK: Level.updateNeighborsAt -> SugarCaneBlock.updateShape — a break/place also
+	// re-checks the support of a sugar cane in the cell ABOVE the changed cell; if it can no
+	// longer survive, a destroy tick is SCHEDULED (delay 1) instead of an immediate destroy, and
+	// the block-tick subsystem fires it next tick (tickBlock -> sugarCaneTick). This is the schedule
+	// half of the scheduled-tick round-trip the subsystem exists to drive.
+	t.onBlockTickEdit(pos)
 }
 
 // broadcastBlockUpdate sends a ClientboundBlockUpdate(pos, state) to every player whose view
