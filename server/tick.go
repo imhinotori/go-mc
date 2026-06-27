@@ -85,6 +85,11 @@ func (r chunkReady) applyTo(t *TickLoop) {
 		return
 	}
 	t.world.Insert(r.res.Pos, r.res.Chunk)
+	// Register an (empty) block-tick container for the chunk so live scheduleTick calls inside
+	// it are not dropped (LevelTicks.Schedule routes by chunk; a chunk with no container drops
+	// the tick). Vanilla addContainer's every loaded chunk; without this the sugar-cane cascade
+	// (and every other scheduled block tick) never fired on generated/streamed chunks.
+	t.ensureChunkBlockTicks(r.res.Pos)
 	t.postProcessChunkFluids(r.res.Pos, r.res.Chunk)
 	// STRUCT-POLISH-02: drain the structure-inhabitant SpawnRequests the worker recorded
 	// off-tick onto the entity store — on the owner (TICK-05 / Pitfall 5). The witch/cat/villager

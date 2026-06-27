@@ -28,6 +28,29 @@ func newSugarCaneLoop() (*TickLoop, *world.ChunkManager) {
 	return loop, mgr
 }
 
+// TestChunkReadyRegistersBlockTickContainer locks the prod bug fix: a chunk integrated through
+// the off-tick worker rejoin (chunkReady.applyTo) must get a block-tick container registered, so
+// a live scheduleBlockTick inside it is NOT dropped by LevelTicks.Schedule. Before the fix only
+// the persist-load path registered a container, so generated/streamed chunks dropped every
+// scheduled tick (the sugar-cane cascade never fired in a real game).
+func TestChunkReadyRegistersBlockTickContainer(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	mgr := world.NewChunkManager()
+	loop.world = mgr
+	ch := level.EmptyChunk(blockTestSecs)
+	ch.Status = level.StatusFull
+
+	// Integrate the chunk the SAME way the worker does — NO manual container registration.
+	chunkReady{res: world.ChunkResult{Pos: level.ChunkPos{0, 0}, Chunk: ch}}.applyTo(loop)
+
+	// A scheduled tick in this chunk must survive (container exists) — Schedule would otherwise drop it.
+	pos := pk.Position{X: 2, Y: 70, Z: 2}
+	loop.scheduleBlockTick(pos, sugarCaneTickType, 1)
+	if !loop.hasScheduledBlockTick(pos, sugarCaneTickType) {
+		t.Fatal("scheduled block tick was DROPPED — chunkReady did not register a tick container")
+	}
+}
+
 func sugarCane(age int) block.StateID {
 	s, ok := block.SugarCaneState(age)
 	if !ok {

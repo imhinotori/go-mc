@@ -89,6 +89,24 @@ func (t *TickLoop) registerChunkBlockTicks(pos level.ChunkPos, container *ticks.
 	container.Unpack(t.gametime)
 }
 
+// ensureChunkBlockTicks registers an EMPTY per-chunk tick container for a chunk that does not
+// already have one, so live scheduleTick calls inside that chunk are not dropped. Vanilla's
+// ServerLevel registers a LevelChunkTicks container for EVERY loaded chunk (generated or read
+// from disk) via ChunkHolder/chunk-load wiring — not only for chunks that carried saved ticks.
+// Sulfur previously only registered a container on the persist-load path (loadChunkBlockTicks),
+// so a freshly GENERATED/STREAMED chunk had no container and LevelTicks.Schedule silently
+// dropped every tick scheduled in it (e.g. the sugar-cane cascade never fired). This is the
+// missing generic registration. Idempotent: a chunk that already has a container (e.g. a
+// persist-loaded one seeded with saved ticks) is left untouched. Tick-owned. CITE: ServerLevel
+// chunk-load wiring (addContainer for every loaded chunk).
+func (t *TickLoop) ensureChunkBlockTicks(pos level.ChunkPos) {
+	mgr := t.ensureBlockTicks()
+	if mgr.Container(pos[0], pos[1]) != nil {
+		return // already registered (saved-tick container or a prior call) — keep it
+	}
+	mgr.AddContainer(pos[0], pos[1], ticks.NewLevelChunkTicks[blockTickType]())
+}
+
 // scheduleBlockTick is net.minecraft.world.level.ScheduledTickAccess.scheduleTick(pos, block,
 // delay) (the 3-arg form, NORMAL priority): build a ScheduledTick at triggerTick = gameTime +
 // delay with a fresh subTickOrder and enqueue it. A tick for an unloaded chunk is dropped by
