@@ -347,6 +347,13 @@ func (t *TickLoop) reconcileEdit(editor *tickPlayer, pos pk.Position, state bloc
 	// block under standing water makes the water fall in). Without this the world mutated but the
 	// fluid sim never woke, leaving a permanent air gap next to water.
 	t.scheduleFluidNeighborsOnEdit(pos)
+	// Level.updateNeighborsAt → VegetationBlock.updateShape → Block.updateOrDestroy: a break/place
+	// also re-checks the support of the block ABOVE the changed cell. If that block is a vegetation
+	// feature (flower/sapling/grass/fern/bush/double-plant) that can no longer survive on the
+	// now-changed ground, it is destroyed + dropped, cascading up a 2-tall plant / stacked column.
+	// This closes the Phase-17 gate finding: "rompe un bloque con flores arriba, las flores no se
+	// rompen" — vanilla destroys an unsupported plant the instant its support is removed.
+	t.updateVegetationOnEdit(pos)
 }
 
 // broadcastBlockUpdate sends a ClientboundBlockUpdate(pos, state) to every player whose view
