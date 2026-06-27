@@ -114,7 +114,7 @@ Full phase details: [milestones/v2-ROADMAP.md](milestones/v2-ROADMAP.md).
 Plans:
 - [x] 20-01-PLAN.md — Shared loot evaluator (level/loot) + golden seed-reproduction (STRUCT-POLISH-01)
 - [ ] 20-02-PLAN.md — Shared evaluator wired to block drops + lazy chest loot (STRUCT-POLISH-01)
-- [ ] 20-03-PLAN.md — StructureStart NBT persistence + per-piece Save/Load (STRUCT-POLISH-04)
+- [x] 20-03-PLAN.md — StructureStart NBT persistence + per-piece Save/Load (STRUCT-POLISH-04)
 - [ ] 20-04-PLAN.md — Structure inhabitant spawns via ChunkResult.Spawns + silverfish spawner (STRUCT-POLISH-02)
 - [ ] 20-05-PLAN.md — Beardifier terrain adaptation: village beard_thin + stronghold bury (STRUCT-POLISH-03)
 **Research**: Phase research covers the loot-table evaluation model + the `afterPlace`/Beardifier adaptation + the structure-start NBT tag format.
@@ -134,4 +134,4 @@ Plans:
 | 17. Gameplay Completion — the six unwired seams | v3 | 4/5 | In Progress|  |
 | 18. Online-mode — auth + protocol encryption | v3 | 2/2 | Complete   | 2026-06-26 |
 | 19. Operator UX — TUI console + disconnect logging | v3 | 3/3 | Complete   | 2026-06-27 |
-| 20. Structure polish — loot, inhabitants, beard, persistence | v3 | 1/5 | In Progress|  |
+| 20. Structure polish — loot, inhabitants, beard, persistence | v3 | 2/5 | In Progress|  |
