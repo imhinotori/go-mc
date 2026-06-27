@@ -38,11 +38,15 @@
 
 ## STILL OPEN
 - **Two human visual gates** (operator AFK): GAMEPLAY-07 (re-confirm) + Phase 20 real-client (open a chest → per-seed loot; villagers/witch/cat alive; structures fit terrain) + the deferred premium-login + cross-player skin render. NO code blocks them.
-- **Deferred debt (no scope/decision needed, pure code):**
-  - ~~chest-OPEN UI~~ **DONE this session (20-06)** — only the on-disk chest-item flush (items persist in-memory per session; BE NBT carries only table+seed), random-slot shuffle (cosmetic), and multi-viewer sync remain as small follow-ups.
-  - **block-survival non-vegetation classes** — torches/rails/redstone/doors/wall-mounts + plants on different ground predicates (DryVegetation/seagrass/lily_pad/mushrooms/crops). `destroyUnsupportedVegetationAbove` (server/block_survival.go) is the template to extend. (Vegetation DONE.)
-  - finalizeSpawn variant/profession stub (mobs spawn at vanilla defaults); mob_spawner runtime tick; a production chunk-FLUSH caller of SerializeChunkData (READ side live).
-  - mob-water-nav (mobs walk on water — AI track); DATA_SHARED_FLAGS sprint/sneak pose; async-fluid (gated on cost data).
+- **Deferred debt → now TRACKED in `ROADMAP.md` "Deferred / Backlog" + `v4-PLAN.md` "Prerequisite subsystems" (commit 670a6418).** Stop ad-hoc snacking on these; they are subsystem-blocked, not small:
+  - **SUB-PERSIST** (chunk-save/RunSaveLoop — `SerializeChunkData` has no caller) gates the **chest-item on-disk flush** + all persistence.
+  - **SUB-ITEMNBT** (ItemStack disk codec; only wire `SlotData` exists) pairs with SUB-PERSIST for `Items` flush.
+  - **SUB-BLOCKTICK** (`LevelTicks` scheduled ticks) gates sugar-cane/crop survival + growth.
+  - **SUB-FACESTURDY** (real block support shapes; only worldgen proxy exists) gates **non-vegetation block survival** (torches/rails/redstone/doors/wall-mounts). Vegetation survival DONE.
+  - **SUB-ATTRIB** (attribute system) gates faithful `finalizeSpawn` variant/profession.
+  - Recommendation recorded: a **v3.1 "Persistence & Vanilla Completeness"** milestone (SUB-PERSIST→ITEMNBT→BLOCKTICK→FACESTURDY) before/alongside early v4.
+  - This session LANDED: **block_entities now persist** (chest loot table+seed round-trips; commit cb4597d6) + fixed a real **nbt encoder bug** (list-of-`RawMessage` was re-encoded as `{Type,Data}` structs — also un-corrupts `entities`/`Lights`/`ScheduledEvents`). All race-clean (nbt+level+world -race green).
+  - mob-water-nav (AI track); DATA_SHARED_FLAGS sprint/sneak pose; async-fluid (gated on cost data) — unchanged.
 - **v4 (Plugins)** is PLANNED in `.planning/v4-PLAN.md` (Phases 21-28, Starlark+Python) — NOT started, separate milestone, needs the new-milestone workflow + user scope confirm. Do NOT auto-start.
 - Push to `development` still pending (the attendly env-gate hook blocked earlier pushes).
 
