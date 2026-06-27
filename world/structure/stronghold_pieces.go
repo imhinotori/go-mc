@@ -873,7 +873,17 @@ func (l *StrongholdLibrary) PostProcess(view WorldGenView, box BoundingBox, _ le
 // placed per stronghold (forced when the depth budget exhausts). Terminal (no children).
 type StrongholdPortalRoom struct {
 	strongholdPiece
+
+	// hasPlacedSpawner is the jar's one-shot silverfish-spawner guard (PortalRoom.hasPlacedSpawner):
+	// once the mob_spawner BE is placed, the flag flips true so a re-pass / reload does not
+	// double-place it (Pitfall 6). Persisted via the 20-03 HasPlacedSpawner NBT slot (piece_nbt.go)
+	// so a reloaded portal room reads the guard true. STRUCT-POLISH-02.
+	hasPlacedSpawner bool
 }
+
+// spawnerStateID is the SPAWNER (mob_spawner) block state — resolved once (the silverfish
+// spawner the PortalRoom places). Kept as a package var so placeSilverfishSpawner is alloc-free.
+var spawnerStateID = stateOf(block.Spawner{})
 
 func portalRoomBBox(x, y, z int, dir block.Direction) BoundingBox {
 	switch dir {
@@ -921,10 +931,10 @@ func (r *StrongholdPortalRoom) PostProcess(view WorldGenView, box BoundingBox, _
 	r.placeFrameRow(view, box, rng, block.West, 3, 4, 0, 1, 5)
 	r.placeFrameRow(view, box, rng, block.East, 7, 4, 0, 1, 5)
 
-	// The silverfish spawner block (no spawn logic — entity/v3 deferral). PostProcess is
-	// IDEMPOTENT (no per-call mutable state): placeLocal clips per chunk, so the spawner is
-	// written into exactly the chunk whose writable box covers (5,3,6) — once.
-	r.placeLocal(view, stateOf(block.Spawner{}), 5, 3, 6, box)
+	// The silverfish spawner: a SPAWNER block + a mob_spawner block-entity set to silverfish
+	// (a BLOCK, NOT a live entity — Pitfall 5), one-shot guarded against reload double-placement
+	// (Pitfall 6). STRUCT-POLISH-02 — see placeSilverfishSpawner (stronghold_spawner.go).
+	r.placeSilverfishSpawner(view, box)
 }
 
 // placeFrameRow places 3 end_portal_frame blocks along a side of the ring, each with the EYE

@@ -211,9 +211,12 @@ func SavePiece(p Piece) (pieceTag, error) {
 	case *JungleTemplePiece:
 		return baseTag(pieceIDJungleTemple, &v.StructurePiece), nil
 	case *SwampHutPiece:
-		// SwampHutPiece.addAdditionalSaveData (jar): the one-shot witch/cat guards. Persisted in
-		// the forward-compat slots (20-04 sets them; until then they round-trip as false).
+		// SwampHutPiece.addAdditionalSaveData (jar): the one-shot witch/cat guards (putBoolean
+		// "Witch"/"Cat"). Persisted in the SpawnedWitch/SpawnedCat slots so a RELOADED swamp hut
+		// reads the guards true and records no second witch/cat (Pitfall 6 / STRUCT-POLISH-02).
 		t := baseTag(pieceIDSwampHut, &v.StructurePiece)
+		t.Extra.SpawnedWitch = v.spawnedWitch
+		t.Extra.SpawnedCat = v.spawnedCat
 		return t, nil
 	case *IglooPiece:
 		return saveIgloo(v), nil
@@ -292,6 +295,17 @@ func SavePiece(p Piece) (pieceTag, error) {
 	case *StrongholdPortalRoom:
 		t := baseTag(pieceIDShPortalRoom, &v.StructurePiece)
 		t.Extra.EntryDoor = int32(v.entryDoor)
+		// PortalRoom.addAdditionalSaveData (jar): the one-shot silverfish-spawner guard, persisted
+		// at its ACTUAL value. RELOAD-NO-DOUBLE-SPAWN IN SULFUR (Pitfall 6): a saved chunk reloads
+		// from region (fromRegion bypasses PostProcess entirely — worker.go), so the spawner is
+		// never re-placed; and a RECOMPUTED start (the chunk was NOT saved) SHOULD re-place it. So
+		// the faithful + coherent value is the fresh-gen `false` (the in-gen flag is never set —
+		// placement is idempotent via box.isInside, see placeSilverfishSpawner). The guard slot is
+		// the forward-compat carrier: should a future explicit "this start already placed its
+		// spawner" provenance arise, it sets hasPlacedSpawner true and Load restores the skip. The
+		// round-trip coherence gate (20-03) holds: Save/Load preserves the field, so a loaded piece
+		// places identically to a fresh one (the recompute-equality invariant).
+		t.Extra.HasPlacedSpawner = v.hasPlacedSpawner
 		return t, nil
 	default:
 		return pieceTag{}, fmt.Errorf("structure: SavePiece: no NBT saver for piece type %T", p)
@@ -321,6 +335,9 @@ func LoadPiece(tag pieceTag) (Piece, error) {
 		if err := applyBaseTag(&p.StructurePiece, tag); err != nil {
 			return nil, err
 		}
+		// Restore the one-shot witch/cat guards so a reloaded hut does not re-spawn (Pitfall 6).
+		p.spawnedWitch = tag.Extra.SpawnedWitch
+		p.spawnedCat = tag.Extra.SpawnedCat
 		return p, nil
 	case pieceIDIgloo:
 		return loadIgloo(tag)
@@ -444,6 +461,8 @@ func LoadPiece(tag pieceTag) (Piece, error) {
 			return nil, err
 		}
 		p.entryDoor = strongholdDoorType(tag.Extra.EntryDoor)
+		// Restore the one-shot spawner guard so a reloaded portal room does not re-place it.
+		p.hasPlacedSpawner = tag.Extra.HasPlacedSpawner
 		return p, nil
 	default:
 		return nil, fmt.Errorf("structure: LoadPiece: unknown structure piece id %q", tag.ID)

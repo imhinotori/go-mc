@@ -98,6 +98,14 @@ func (g *swampHutStartGen) GenerateStarts(seed int64, pos level.ChunkPos, sample
 type SwampHutPiece struct {
 	StructurePiece
 	width, depth, height int
+
+	// spawnedWitch/spawnedCat are the jar's one-shot spawn guards (SwampHutPiece.spawnedWitch /
+	// spawnedCat): once the witch (resp. cat) has been recorded, the flag flips true so a re-run
+	// of PostProcess (a per-chunk re-pass, or a RELOADED piece) records no second mob — the
+	// reload-no-double-spawn property (Pitfall 6). They round-trip in the piece NBT via the
+	// 20-03 SpawnedWitch/SpawnedCat slots (piece_nbt.go), so a reloaded swamp hut reads them true.
+	spawnedWitch bool
+	spawnedCat   bool
 }
 
 // newSwampHutPiece ports the SwampHutPiece(random, west, north) ctor.
@@ -187,8 +195,66 @@ func (p *SwampHutPiece) PostProcess(view WorldGenView, box BoundingBox, _ level.
 		}
 	}
 
-	// WITCH + BLACK-CAT entities DEFERRED v3 (the postProcess tail spawnWitch/spawnCat — not
-	// placed; entities are a v3 subsystem). The hut geometry above is complete.
+	// The witch + black-cat spawns (the postProcess tail). Both are recorded as SpawnRequests
+	// (live mobs the tick adds to the entity store — NOT off-tick entities, Pitfall 5), one-shot
+	// guarded so a re-run / reload does not double-spawn (Pitfall 6). STRUCT-POLISH-02.
+	p.spawnWitch(view, box)
+	p.spawnCat(view, box)
+}
+
+// spawnWitch ports SwampHutPiece.postProcess's witch tail: guarded on !spawnedWitch, the witch
+// spawns at getWorldPos(2,2,5) — block-center +0.5 on X/Z (snapTo(x+0.5, y, z+0.5, 0, 0)) —
+// when that world pos is inside the chunk's writable box, with setPersistenceRequired +
+// finalizeSpawn(STRUCTURE). It RECORDS a SpawnRequest through the view (the tick performs the
+// add); the one-shot guard flips so a re-pass / reload spawns no second witch.
+//
+// Source: javap SwampHutPiece.postProcess (the spawnedWitch block: getWorldPos(2,2,5);
+// box.isInside; spawnedWitch=true; WITCH.create + setPersistenceRequired + snapTo + finalizeSpawn
+// + addFreshEntityWithPassengers).
+func (p *SwampHutPiece) spawnWitch(view WorldGenView, box BoundingBox) {
+	if p.spawnedWitch {
+		return
+	}
+	wx := p.getWorldX(2, 5)
+	wy := p.getWorldY(2)
+	wz := p.getWorldZ(2, 5)
+	if !box.IsInside(wx, wy, wz) {
+		return // out of THIS chunk's box -> the witch belongs to a different chunk's pass
+	}
+	p.spawnedWitch = true
+	view.RecordSpawn(SpawnRequest{
+		EntityType:          "minecraft:witch",
+		X:                   float64(wx) + 0.5,
+		Y:                   float64(wy),
+		Z:                   float64(wz) + 0.5,
+		PersistenceRequired: true,
+	})
+}
+
+// spawnCat ports SwampHutPiece.spawnCat: guarded on !spawnedCat, the cat spawns at the SAME
+// getWorldPos(2,2,5)+0.5 when in-box, with setPersistenceRequired + finalizeSpawn(STRUCTURE).
+// Recorded as a SpawnRequest (the tick adds it); the one-shot guard prevents a reload double.
+//
+// Source: javap SwampHutPiece.spawnCat (the spawnedCat block: getWorldPos(2,2,5); box.isInside;
+// spawnedCat=true; CAT.create + setPersistenceRequired + snapTo + finalizeSpawn + add).
+func (p *SwampHutPiece) spawnCat(view WorldGenView, box BoundingBox) {
+	if p.spawnedCat {
+		return
+	}
+	wx := p.getWorldX(2, 5)
+	wy := p.getWorldY(2)
+	wz := p.getWorldZ(2, 5)
+	if !box.IsInside(wx, wy, wz) {
+		return
+	}
+	p.spawnedCat = true
+	view.RecordSpawn(SpawnRequest{
+		EntityType:          "minecraft:cat",
+		X:                   float64(wx) + 0.5,
+		Y:                   float64(wy),
+		Z:                   float64(wz) + 0.5,
+		PersistenceRequired: true,
+	})
 }
 
 // spruceStair resolves a spruce stair facing dir with shape (BOTTOM, non-waterlogged).
