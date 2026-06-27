@@ -51,7 +51,8 @@ func blockStateForItem(stack component.SlotData) (block.StateID, bool) {
 	// Block.byItem: only a BlockItem maps to a Block. The shared-name binding means a block item
 	// resolves through block.FromID; a non-block item (no matching block id) is Blocks.AIR -> no
 	// placement.
-	b, ok := block.FromID["minecraft:"+it.Name]
+	name := "minecraft:" + it.Name
+	b, ok := block.FromID[name]
 	if !ok {
 		return 0, false // not a BlockItem (Block.byItem -> Blocks.AIR)
 	}
@@ -59,6 +60,15 @@ func blockStateForItem(stack component.SlotData) (block.StateID, bool) {
 	if block.IsAirBlock(b) {
 		return 0, false
 	}
+	// getPlacementState defaults to Block.defaultBlockState() (registerDefaultState). The Go
+	// ZERO-VALUE struct (block.FromID) is NOT a valid state for blocks whose default props are
+	// non-zero — e.g. a chest's default facing is NORTH, but Chest{}'s Facing is the zero
+	// Direction (down), which is not a registered chest state, so ToStateID would MISS and the
+	// block would never place. DefaultStateID is the faithful defaultBlockState() id.
+	if sid, ok := block.DefaultStateID[name]; ok {
+		return sid, true
+	}
+	// Fallback for any block not in the default map: the zero-value state id (legacy path).
 	sid, ok := block.ToStateID[b]
 	if !ok {
 		return 0, false // block has no registered state (should not happen for real blocks)

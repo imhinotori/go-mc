@@ -332,6 +332,45 @@ func TestPlaceReplaceClicked(t *testing.T) {
 	}
 }
 
+// TestPlaceChestPlacesRealChest: placing a chest item must resolve to the chest's
+// defaultBlockState() (FACING=NORTH, TYPE=SINGLE) — NOT the Go zero-value Chest{} whose
+// Facing is the zero Direction (down), an INVALID state that ToStateID misses. The earlier
+// bug: blockStateForItem used the zero-value struct, so the chest never placed and a follow-up
+// right-click fell through to placement ("the chest gets replaced"). This locks the fix:
+// the placed cell is a real minecraft:chest and isChestBlock recognizes it.
+func TestPlaceChestPlacesRealChest(t *testing.T) {
+	loop, mgr := newBlockLoop()
+	p := blockPlayer(loop, 1.5, 66.0, 1.5)
+	setHeldItem(p, item.Chest.ID, 1)
+
+	hit := pk.Position{X: 1, Y: 64, Z: 1}
+	placed := pk.Position{X: 1, Y: 65, Z: 1}
+	mgr.SetBlock(hit, block.ToStateID[block.Stone{}], dimMinY) // solid clicked block -> place on top
+	ui := useItemOnPacket(0, hit, 1 /*UP*/, 0.5, 1.0, 0.5, false, false, 7)
+	loop.applyInput(p, SubtickInput{At: loop.clock.Now(), Packet: ui})
+
+	got, ok := mgr.GetBlock(placed, dimMinY)
+	if !ok {
+		t.Fatal("chest place: nothing placed at adjacent cell (blockStateForItem returned !ok)")
+	}
+	if !isChestBlock(got) {
+		t.Fatalf("chest place: placed state %d is %q, want a minecraft:chest", got, block.StateList[got].ID())
+	}
+	want := block.DefaultStateID["minecraft:chest"]
+	if got != want {
+		t.Fatalf("chest place: placed state %d, want defaultBlockState %d (north/single)", got, want)
+	}
+
+	// A right-click on the placed chest now OPENS it (useBlockInteraction consumes the action),
+	// instead of falling through to placement. Empty hand so only the block interaction runs.
+	setHeldItem(p, 0, 0)
+	open := useItemOnPacket(0, placed, 1, 0.5, 1.0, 0.5, false, false, 8)
+	loop.applyInput(p, SubtickInput{At: loop.clock.Now(), Packet: open})
+	if p.openContainer == nil {
+		t.Fatal("placed chest did not open on right-click (openContainer nil)")
+	}
+}
+
 // TestBlockBroadcastToTrackers: a second player tracking the edited chunk ALSO receives the
 // ClientboundBlockUpdate (broadcast hits every tracker, editor included). Uses a creative START break
 // (Plan 17-21) so the break completes in a single applyInput, isolating the broadcast assertion.

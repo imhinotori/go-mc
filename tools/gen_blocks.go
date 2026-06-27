@@ -321,6 +321,29 @@ func generateBlocksGo(w *strings.Builder, blocks []blockInfo) {
 		pad := strings.Repeat(" ", maxFullNameLen-len(b.FullName))
 		fmt.Fprintf(w, "\t%q:%s %s{},\n", b.FullName, pad, b.GoName)
 	}
+	w.WriteString("}\n\n")
+
+	// DefaultStateID map: each block's defaultBlockState() state id (the state flagged
+	// `default` in blocks.json — Block.defaultBlockState, set by registerDefaultState in the
+	// block ctor). FromID gives the Go ZERO-VALUE struct, whose enum fields are 0 and do NOT
+	// match a real state for blocks whose default props are non-zero (e.g. chest facing=north,
+	// not the zero Direction=down). DefaultStateID is the faithful default for placement.
+	w.WriteString("// DefaultStateID maps a block id to its defaultBlockState() state id (the\n")
+	w.WriteString("// registerDefaultState value). Use this — not ToStateID[FromID[id]] — for placement,\n")
+	w.WriteString("// because the Go zero-value struct is not a valid state for blocks with non-zero\n")
+	w.WriteString("// default properties (chest facing, etc).\n")
+	w.WriteString("var DefaultStateID = map[string]StateID{\n")
+	for _, b := range blocks {
+		def := b.States[0].ID
+		for _, s := range b.States {
+			if s.Default {
+				def = s.ID
+				break
+			}
+		}
+		pad := strings.Repeat(" ", maxFullNameLen-len(b.FullName))
+		fmt.Fprintf(w, "\t%q:%s %d,\n", b.FullName, pad, def)
+	}
 	w.WriteString("}\n")
 }
 
