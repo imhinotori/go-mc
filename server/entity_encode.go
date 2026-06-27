@@ -336,6 +336,42 @@ func livingEntityFlagsEntry(flags int8) entityDataEntry {
 	}
 }
 
+// dataPlayerModeCustomisationIndex is the SynchedEntityData accessor index for
+// Avatar.DATA_PLAYER_MODE_CUSTOMISATION (the displayed-skin-parts bitmask). defineId assigns indices
+// sequentially down the class hierarchy: Entity 0..7 (8), LivingEntity 8..14 (7), Avatar 15
+// (DATA_PLAYER_MAIN_HAND) then 16 (DATA_PLAYER_MODE_CUSTOMISATION). So the index is 16, BYTE
+// serializer. The client reads this to decide which skin LAYERS (hat/jacket/sleeves/pants) to render
+// on the avatar; without it OTHER players see the base model only (no second/overlay layer).
+//   [VERIFIED javap: net.minecraft.world.entity.player.Avatar DATA_PLAYER_MODE_CUSTOMISATION =
+//    EntityDataAccessor<Byte>; index 16 after Entity(8)+LivingEntity(7)+Avatar.MAIN_HAND(15).]
+const dataPlayerModeCustomisationIndex uint8 = 16
+
+// skinCustomisationEntry builds the SynchedEntityData$DataValue entry for
+// DATA_PLAYER_MODE_CUSTOMISATION: Byte(index=16) + VarInt(byteSerializerID=0) + Byte(parts). parts is
+// the client's displayed-skin-parts bitmask (bit1 jacket, bit2/3 sleeves, bit4/5 pants legs, bit6
+// hat). 1:1 port of ServerPlayer.updateOptions -> entityData.set(DATA_PLAYER_MODE_CUSTOMISATION,
+// (byte) info.modelCustomisation()).
+func skinCustomisationEntry(parts uint8) entityDataEntry {
+	return entityDataEntry{
+		index:        dataPlayerModeCustomisationIndex,
+		serializerID: byteSerializerID,
+		value:        pk.Byte(parts),
+	}
+}
+
+// playerSkinMetadata returns the pre-built SynchedEntityData entry bytes for a player's displayed
+// skin parts (the DATA_PLAYER_MODE_CUSTOMISATION value), to be carried on Entity.metadata so every
+// AddEntity-time SetEntityData a tracker sends includes it. Returns nil when parts is 0 (the client
+// has not reported its preference yet) so the player renders the vanilla default until it does.
+func playerSkinMetadata(parts uint8) []byte {
+	if parts == 0 {
+		return nil
+	}
+	var buf bytes.Buffer
+	_, _ = skinCustomisationEntry(parts).WriteTo(&buf)
+	return buf.Bytes()
+}
+
 // entityDataEOF is the SynchedEntityData EOF_MARKER (255 / 0xFF) — the MANDATORY single
 // terminator byte that closes the packed-items list. It is ALWAYS written, even for an
 // empty list; omitting it desyncs the client's entity stream and the entity is dropped.

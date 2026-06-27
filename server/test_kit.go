@@ -42,8 +42,12 @@ var testKit = []testKitStack{
 	{slot: 40, id: item.OakPlanks.ID, count: 64},   // hotbar 5: place/break blocks
 	{slot: 41, id: item.Torch.ID, count: 64},       // hotbar 6: place
 	{slot: 42, id: item.Dirt.ID, count: 64},        // hotbar 7: place/break
+	{slot: 43, id: item.Chest.ID, count: 16},       // hotbar 8: place a chest (open-UI gate)
+	{slot: 44, id: item.SugarCane.ID, count: 16},   // hotbar 9: sugar cane (scheduled-tick survival/growth)
 	{slot: 9, id: item.Cobblestone.ID, count: 64},  // main row 1: spare stack to shift-click/merge
 	{slot: 10, id: item.Cobblestone.ID, count: 32}, // main row 1: partial stack for double-click collect
+	{slot: 11, id: item.Sand.ID, count: 64},        // main row 1: sand (place sugar cane ON it, next to water)
+	{slot: 12, id: item.WaterBucket.ID, count: 1},  // main row 1: water source for sugar-cane survival
 }
 
 // applyTestKit seeds the gate-only starter kit into the player's tick-owned inventory. It is a

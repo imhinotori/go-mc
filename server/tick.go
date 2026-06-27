@@ -488,6 +488,13 @@ type tickPlayer struct {
 	unacknowledgedBatches    int
 	maxUnacknowledgedBatches int
 
+	// displayedSkinParts is the client's reported skin-customisation bitmask (the displayed skin
+	// LAYERS: bit1 jacket, bit2/3 sleeves, bit4/5 pants, bit6 hat), decoded from
+	// ServerboundClientInformation.modelCustomisation. It is propagated to OTHER players via the
+	// player entity's DATA_PLAYER_MODE_CUSTOMISATION metadata so they render the second/overlay skin
+	// layer (hat etc.). 0 until the client reports it (then the avatar renders the base model).
+	displayedSkinParts uint8
+
 	// secs is the dimension's section count (overworld 24), derived at registration for
 	// chunk generation/empty sizing — never hard-coded deeper in the pipeline.
 	secs int
@@ -1200,6 +1207,16 @@ func (t *TickLoop) dispatch(c *Client, p pk.Packet) {
 			if err := p.Scan(&rate); err == nil {
 				player.onChunkBatchReceivedByClient(float32(rate))
 			}
+		}
+	case packetid.ServerboundClientInformation:
+		// The client's settings, re-sent in PLAY on join and whenever the player changes options.
+		// 1:1 port of ServerGamePacketListenerImpl.handleClientInformation -> ServerPlayer.
+		// updateOptions: the only field we propagate is modelCustomisation (the displayed skin
+		// parts), set into DATA_PLAYER_MODE_CUSTOMISATION so OTHER players render the avatar's
+		// overlay layers (hat/jacket/sleeves/pants). Handled DIRECTLY here (not the subtick buffer)
+		// because it carries no positional/temporal ordering. Decoded on the owner.
+		if player != nil {
+			t.handleClientInformation(player, p)
 		}
 	case packetid.ServerboundClientTickEnd:
 		// Client input-batch boundary marker (new in 1.21.2 / present in 776). Phase 3

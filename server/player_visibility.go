@@ -2,6 +2,7 @@ package server
 
 import (
 	"github.com/imhinotori/sulfur/data/entity"
+	pk "github.com/imhinotori/sulfur/net/packet"
 
 	"github.com/google/uuid"
 )
@@ -43,6 +44,11 @@ func newPlayerEntity(p *tickPlayer) *Entity {
 		headYaw: p.headYaw,
 		width:   entity.Player.Width,  // 0.6
 		height:  entity.Player.Height, // 1.8
+		// Carry the player's displayed-skin-parts (DATA_PLAYER_MODE_CUSTOMISATION) so every
+		// AddEntity-time SetEntityData a tracker sends renders the second/overlay skin layer (hat,
+		// jacket, sleeves, pants). nil until the client reports its preference (then refreshed live
+		// by handleClientInformation -> refreshPlayerSkinMetadata).
+		metadata: playerSkinMetadata(p.displayedSkinParts),
 	}
 }
 
@@ -112,6 +118,48 @@ func (t *TickLoop) sendExistingPlayersTo(joiner *tickPlayer) {
 		// ONLINE-01: carry each existing player's authenticated skin properties so the joiner
 		// renders their real online skins (offline -> nil -> count 0). SERVER-authoritative.
 		joiner.client.Send(writePlayerInfoUpdateAdd(other.uuid, other.name, gameModeSurvival, other.properties))
+	}
+}
+
+// handleClientInformation decodes a PLAY ServerboundClientInformation and applies its
+// modelCustomisation (displayed skin parts) to the player — the 1:1 slice of ServerPlayer.
+// updateOptions we need for skin layers. Wire order (jar-verified ClientInformation(FriendlyByteBuf)):
+// readUtf(16) language, readByte viewDistance, readEnum chatVisibility (VarInt), readBoolean
+// chatColors, readUnsignedByte modelCustomisation, then mainHand/textFilter/allowsListing/particle
+// (unused here). We decode through modelCustomisation and ignore the tail. A malformed/short payload
+// is a no-op (never panics). On a CHANGE it refreshes the player entity's DATA_PLAYER_MODE_
+// CUSTOMISATION metadata and pushes a fresh SetEntityData to every player already tracking this one
+// so the overlay layers update live. Tick-owned.
+func (t *TickLoop) handleClientInformation(p *tickPlayer, pkt pk.Packet) {
+	var (
+		language       pk.String
+		viewDistance   pk.Byte
+		chatVisibility pk.VarInt
+		chatColors     pk.Boolean
+		modelCustom    pk.UnsignedByte
+	)
+	if err := pkt.Scan(&language, &viewDistance, &chatVisibility, &chatColors, &modelCustom); err != nil {
+		return // malformed/short: no mutation (never panic)
+	}
+	parts := uint8(modelCustom)
+	if parts == p.displayedSkinParts {
+		return // unchanged: nothing to refresh
+	}
+	p.displayedSkinParts = parts
+	if p.playerEntity == nil {
+		return // not yet spawned into the store; newPlayerEntity will carry the value at spawn
+	}
+	// Refresh the entity's pre-built metadata so a LATER tracker spawn includes the layers, AND push
+	// a live SetEntityData to everyone already tracking this player so existing viewers update now.
+	p.playerEntity.metadata = playerSkinMetadata(parts)
+	live := encodeSetEntityData(p.playerEntity)
+	for _, other := range t.players {
+		if other == nil || other == p || other.client == nil {
+			continue
+		}
+		if other.tracked != nil && other.tracked[p.entityID] {
+			other.client.Send(live)
+		}
 	}
 }
 
