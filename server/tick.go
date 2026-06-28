@@ -1096,6 +1096,10 @@ func (t *TickLoop) drainRegistrations() {
 				t.entities.add(p.playerEntity)
 				t.broadcastPlayerInfoAdd(p)
 				t.sendExistingPlayersTo(p)
+				// Send the joiner its OWN skin metadata so its client renders its second/overlay
+				// layer (the tracker self-skips this player). displayedSkinParts was captured in
+				// the CONFIG state (BUG-4) before the join, so it is already set here.
+				t.sendSelfSkin(p)
 			}
 		case c := <-t.unregister:
 			t.removePlayer(c)

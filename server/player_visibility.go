@@ -143,15 +143,47 @@ func (t *TickLoop) handleClientInformation(p *tickPlayer, pkt pk.Packet) {
 	}
 	parts := uint8(modelCustom)
 	if parts == p.displayedSkinParts {
-		return // unchanged: nothing to refresh
+		// Even if unchanged, make sure the entity carries the metadata (it may have been built
+		// before this value was known, or rebuilt). Refresh + rebroadcast to be safe.
+		if p.playerEntity != nil && len(p.playerEntity.metadata) == 0 && parts != 0 {
+			p.playerEntity.metadata = playerSkinMetadata(parts)
+			t.broadcastSkin(p)
+		}
+		return
 	}
 	p.displayedSkinParts = parts
 	if p.playerEntity == nil {
 		return // not yet spawned into the store; newPlayerEntity will carry the value at spawn
 	}
-	// Refresh the entity's pre-built metadata so a LATER tracker spawn includes the layers, AND push
-	// a live SetEntityData to everyone already tracking this player so existing viewers update now.
+	// Refresh the entity's pre-built metadata so a LATER tracker spawn includes the layers, push a
+	// live SetEntityData to everyone already tracking this player, AND send the player its own
+	// updated skin so its client re-renders its overlay layer.
 	p.playerEntity.metadata = playerSkinMetadata(parts)
+	t.broadcastSkin(p)
+	t.sendSelfSkin(p)
+}
+
+// sendSelfSkin sends the player its OWN DATA_PLAYER_MODE_CUSTOMISATION via a SetEntityData on its
+// own entityID, so the client renders its own second/overlay skin layer (hat/jacket/sleeves) — the
+// tracker self-skips this player, so without this explicit self-send the client never receives its
+// own skin metadata and shows the base model (operator: 'en vanilla puedo ver mi segunda capa, en
+// Sulfur no'). Vanilla's SynchedEntityData.set broadcasts to ALL tracking connections, the owner
+// included; Sulfur's tracker omits the owner, so we send it here. No-op until the client has
+// reported parts (parts 0 -> nil metadata -> nothing to render yet). Tick-owned.
+func (t *TickLoop) sendSelfSkin(p *tickPlayer) {
+	if p.client == nil || p.playerEntity == nil || p.displayedSkinParts == 0 {
+		return
+	}
+	p.client.Send(encodeSetEntityData(p.playerEntity))
+}
+
+// broadcastSkin pushes a live SetEntityData (the player's skin-parts metadata) to every other
+// player currently tracking this player, so existing viewers update the overlay layers without
+// waiting for a re-track. Tick-owned.
+func (t *TickLoop) broadcastSkin(p *tickPlayer) {
+	if p.playerEntity == nil {
+		return
+	}
 	live := encodeSetEntityData(p.playerEntity)
 	for _, other := range t.players {
 		if other == nil || other == p || other.client == nil {
