@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v4
 milestone_name: Plugin / Scripting System
-status: executing
+status: verifying
 stopped_at: "STRUCT-POLISH-01 chest-OPEN UI COMPLETE — the 20-02 W2 split landed. Right-click a structure chest -> resolve chest BlockEntity -> lazy-roll {LootTable, LootTableSeed} (one-shot unpackLootTable) -> allocate windowId (nextContainerCounter 1..100) -> ClientboundOpenScreen(generic_9x3) + ContainerSetContent(27 chest + 36 player). ContainerClick moves items (PICKUP/QUICK_MOVE/THROW) over the shared cursor; ContainerClose frees the windowId + items persist in t.openChests across opens. New: server/chest_open.go + server/chest_click.go; openScreen encoder (slot_encode.go); tickPlayer.openContainer/containerCounter + TickLoop.openChests. 1:1 jar-cited (ChestBlock.useWithoutItem, ServerPlayer.openMenu/nextContainerCounter, ClientboundOpenScreenPacket, ChestMenu slot layout). 8 chest tests green; CGO_ENABLED=0 build/vet/test green; Docker -race ./server/ green; no new deps. Committed 10157c6b (open path) + 87fc2681 (click/close + tests). SUMMARY: .planning/phases/20-structure-polish-loot-inhabitants-beard-persistence/20-06-SUMMARY.md. DEFERRED (cited): vanilla LootTable.fill random-slot shuffle (sequential placement), chest-item flush to BE NBT on unload/save (in-memory only), multi-viewer sync (single-viewer shipped). --- PRIOR: BLOCK-SURVIVAL (vegetation) COMPLETE — the Phase-17 deferred gate finding closed for vegetation. `block.IsVegetation`/`IsDoublePlant`/`SameDoublePlant` (level/block/utilfuncs.go) + `updateVegetationOnEdit`/`destroyUnsupportedVegetationAbove` (server/block_survival.go) wired into reconcileEdit (server/block_interact.go) alongside the fluid notification. Breaking a block under a flower/sapling/grass/fern/bush/2-tall-plant now destroys + drops the unsupported plant (cascading 2-tall plants via the bounded 512 recursion), reusing the GAMEPLAY-06 spawnBlockDrop path + broadcastBlockUpdate(air). 1:1 cited vs the jar (VegetationBlock.updateShape/canSurvive, DoublePlantBlock.canSurvive, Block.updateOrDestroy). Tests: server/block_survival_test.go + level/block/vegetation_test.go. Gates: CGO_ENABLED=0 build/vet/test green, Docker -race ./server/ ./level/... green. Committed 8b799d42 (code) + the docs commit (SUMMARY/STATE/deferred-items). STILL DEFERRED: torches/rails/redstone/doors + the dry/flowerbed/mangrove/seagrass plants (different survival classes). SUMMARY: .planning/phases/17-gameplay-completion/17-22-SUMMARY.md. --- PRIOR: 20-03 (STRUCT-POLISH-04 StructureStart NBT persistence) COMPLETE — all 3 tasks committed (f8c17b9b, 85f35998, 531a0c6f), Docker -race ./world/structure/ ./save/ green, SUMMARY written. Spawn-guard slots left in pieceExtraData for 20-04."
-last_updated: "2026-06-28T03:32:46.041Z"
+last_updated: "2026-06-28T03:39:08.437Z"
 last_activity: 2026-06-28
 progress:
   total_phases: 8
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 2
-  completed_plans: 1
-  percent: 50
+  completed_plans: 2
+  percent: 100
 ---
 
 # Project State
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-06-23)
 
 Phase: 21 (starlark-runtime-foundation) — EXECUTING
 Plan: 2 of 2
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-06-28
 
 ### ⚠️ WHAT'S NEXT (resume here — see .planning/HANDOFF.md for the FULL detail)
@@ -127,7 +127,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [█████░░░░░] 50%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -216,6 +216,7 @@ Progress: [█████░░░░░] 50%
 | Phase 20 P02 | 25min | 3 tasks | 19 files |
 | Phase 20 P04 | 75min | 3 tasks | 17 files |
 | Phase 21 P01 | 3min | 3 tasks | 8 files |
+| Phase 21 P02 | 3min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -336,6 +337,8 @@ Recent decisions affecting current work:
 - [Phase 20 / 20-04]: STRUCT-POLISH-02 structure inhabitant spawns — the off-tick->tick seam. ChunkResult gained Spawns []structure.SpawnRequest{EntityType id-string, X/Y/Z, PersistenceRequired}; WorldGenView gained RecordSpawn (live mob) + SetSpawner (mob_spawner BE) alongside 20-02's SetBlockEntity. PostProcess RECORDS a SpawnRequest -> Neighborhood buffers -> tryDecorate captures view.Spawns() onto the staged chunk -> tryEmit forwards onto ChunkResult.Spawns -> server.drainStructureSpawns (chunkReady.applyTo) resolves the id + NewEntity + entities.add on the TICK owner (TICK-05 / Pitfall 5: the worker NEVER touches the store); the tracker broadcasts AddEntity for free (the spawnBlockDrop path). Swamp hut: spawnWitch/spawnCat record a witch+cat at getWorldPos(2,2,5)+0.5, one-shot guarded (spawnedWitch/spawnedCat, persisted 20-03). Stronghold: PortalRoom places a SPAWNER block + mob_spawner BE set to silverfish (a BLOCK, NOT a live entity) — the hasPlacedSpawner guard is a RELOAD-ONLY skip (NOT set in-gen) so per-chunk re-runs stay byte-deterministic (box.isInside alone makes placement idempotent, the createChest discipline; the fingerprint/cross-chunk gates stay green). Village: StructureTemplate.PlaceEntities ports placeEntities — transformPos(blockPos) clip + the new transformVec3(float pos) (jar-verified $SwitchMap CCW90/CW90/CW180 +1 half-cell terms) + origin, reading the ALREADY-STORED template.entities (A4 resolved, no net-new extraction); singlePoolElement.Place places blocks THEN entities (cat_black/nitwit/villager). finalizeSpawn = cited vanilla-default stub. silverfish has no spawner-tick yet (cited). Capture-diff: no re-seal (the spawner BE rides the existing BlockEntity list encoder, spawns are server-side entities not chunk-wire). Docker -race ./server/ + ./world/structure/ green; the full ./world/ -race TIMES OUT (the 278s worldgen suite × race instrumentation, NOT a data race — zero DATA RACE reports). No new deps; no import C. STRUCT-POLISH-02 COMPLETE.
 - [Phase ?]: [Phase 21]: 21-01 — go.starlark.net embedded as a PLAIN require (NOT a fork); research verified all three sandbox knobs (per-Thread step budget via SetMaxExecutionSteps, recursion-off via FileOptions zero value, no fs/net/eval builtin in the universe) are exposed upstream unpatched. Closes the v4 fork-or-vendor open decision as 'plain dep, no fork needed'.
 - [Phase ?]: [Phase 21]: 21-01 — plugin/starlark is a LEAF package (imports only go.starlark.net + stdlib, never server/world/level). Sandbox policy is a single source of truth in runtime.go: every Thread via newThread() sets SetMaxExecutionSteps(stepBudget=10M); safeGlobals() curated StringDict is the entire reachable surface. Load(path) execs a .star ONCE via ExecFileOptions returning auto-frozen globals; LoadedPlugin.Call uses a fresh per-goroutine Thread. Negative sandbox tests + frozen -race test are Plan 02.
+- [Phase ?]: [Phase 21] 21-02: sandbox negatives PROVEN — TestStepBudgetHalts asserts *EvalError 'too many steps' + ExecutionSteps()==50000 at a small test cap with a P1 guard (error NOT 'not within a function'); TestRecursionRejected -> 'function f called recursively'; TestNoIOBuiltins -> 'undefined: open'. Loop fixture loops INSIDE def spin() using for/range (P1+P2).
+- [Phase ?]: [Phase 21] 21-02: frozen cross-goroutine PROVEN race-clean — TestFrozenCrossGoroutine (8 readers on the frozen 'result' global + 4 callers each on a fresh Thread via LoadedPlugin.Call) passes Docker -race (CGO=1) with no DATA RACE; CGO=0 ship build + CGO=0 test both green. PLUGIN-01 fully met; Phase 21 COMPLETE. Next: Phase 22 plugin host + event bus.
 
 ### Pending Todos
 
@@ -364,7 +367,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-28T03:32:37.042Z
+Last session: 2026-06-28T03:38:52.132Z
 Stopped at: STRUCT-POLISH-01 chest-OPEN UI COMPLETE — the 20-02 W2 split landed. Right-click a structure chest -> resolve chest BlockEntity -> lazy-roll {LootTable, LootTableSeed} (one-shot unpackLootTable) -> allocate windowId (nextContainerCounter 1..100) -> ClientboundOpenScreen(generic_9x3) + ContainerSetContent(27 chest + 36 player). ContainerClick moves items (PICKUP/QUICK_MOVE/THROW) over the shared cursor; ContainerClose frees the windowId + items persist in t.openChests across opens. New: server/chest_open.go + server/chest_click.go; openScreen encoder (slot_encode.go); tickPlayer.openContainer/containerCounter + TickLoop.openChests. 1:1 jar-cited (ChestBlock.useWithoutItem, ServerPlayer.openMenu/nextContainerCounter, ClientboundOpenScreenPacket, ChestMenu slot layout). 8 chest tests green; CGO_ENABLED=0 build/vet/test green; Docker -race ./server/ green; no new deps. Committed 10157c6b (open path) + 87fc2681 (click/close + tests). SUMMARY: .planning/phases/20-structure-polish-loot-inhabitants-beard-persistence/20-06-SUMMARY.md. DEFERRED (cited): vanilla LootTable.fill random-slot shuffle (sequential placement), chest-item flush to BE NBT on unload/save (in-memory only), multi-viewer sync (single-viewer shipped). --- PRIOR: BLOCK-SURVIVAL (vegetation) COMPLETE — the Phase-17 deferred gate finding closed for vegetation. `block.IsVegetation`/`IsDoublePlant`/`SameDoublePlant` (level/block/utilfuncs.go) + `updateVegetationOnEdit`/`destroyUnsupportedVegetationAbove` (server/block_survival.go) wired into reconcileEdit (server/block_interact.go) alongside the fluid notification. Breaking a block under a flower/sapling/grass/fern/bush/2-tall-plant now destroys + drops the unsupported plant (cascading 2-tall plants via the bounded 512 recursion), reusing the GAMEPLAY-06 spawnBlockDrop path + broadcastBlockUpdate(air). 1:1 cited vs the jar (VegetationBlock.updateShape/canSurvive, DoublePlantBlock.canSurvive, Block.updateOrDestroy). Tests: server/block_survival_test.go + level/block/vegetation_test.go. Gates: CGO_ENABLED=0 build/vet/test green, Docker -race ./server/ ./level/... green. Committed 8b799d42 (code) + the docs commit (SUMMARY/STATE/deferred-items). STILL DEFERRED: torches/rails/redstone/doors + the dry/flowerbed/mangrove/seagrass plants (different survival classes). SUMMARY: .planning/phases/17-gameplay-completion/17-22-SUMMARY.md. --- PRIOR: 20-03 (STRUCT-POLISH-04 StructureStart NBT persistence) COMPLETE — all 3 tasks committed (f8c17b9b, 85f35998, 531a0c6f), Docker -race ./world/structure/ ./save/ green, SUMMARY written. Spawn-guard slots left in pieceExtraData for 20-04.
 Resume file: None
 Next: OPERATOR CHECKPOINT (19-02 Task 3) — build `CGO_ENABLED=0 go build -o sulfur.exe ./cmd/sulfur`, run `./sulfur.exe -seed 777` in a REAL terminal (expect alt-screen TUI: log viewport + command input), type `say hi`+Enter (expect a `console command cmd=say hi` viewport line), connect a vanilla 26.2 client (expect a join line), Ctrl-C (clean exit), then `./sulfur.exe -seed 777 | cat` (expect NO TUI, plain stderr — today's behavior). On "approved" → mark TUI-01 complete + advance the plan counter, then proceed to Plan 19-03 (gameplay_tick.go join/leave slog conversion + the full disconnect taxonomy). The console line routes TUI→tick (EnqueueConsoleCommand, cap 64, drop-on-full)→runConsoleCommand on the tick→existing graph (grant-all, no issuer), reply to slog. gameplay_tick.go is untouched (19-03 owns it). LEGACY: Phase 17 Wave 2 (17-02/17-03) — see prior continuity below. (GAMEPLAY-05 fluid simulation: OVERWRITE server/fluid.go with the FlowingFluid port + scheduled-tick queue; lazy-init t.fluidSchedule inside tickFluids, do NOT edit tick.go/tick_phases.go) and 17-03 (GAMEPLAY-04 fall damage + PvP dispatch: OVERWRITE server/fall_damage.go using the tickPlayer fallDistance/wasOnGround/lastY fields + the lookupPlayerByEntityID reverse lookup, do NOT edit tick.go/tick_phases.go). The exact Wave-2 seam surface (field names, init point, call sites, stub signatures) is in 17-01-SUMMARY.md "WAVE-2 HANDOFF". Deferred-still-open: dungeon loot/spawner-mob + BeehiveDecorator occupant + pale_garden PaleMoss (all v3, cosmetic, in 13-04-SUMMARY); KeepAlive double-leave hardening (Phase 3). KNOWN PRE-EXISTING FLAKE: TestTickAIDrivesMobs (OPT-01 async-pool timing, not caused by 17-01) intermittently fails under full-suite load; passes in isolation + 3× under -race.
