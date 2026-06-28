@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v4
 milestone_name: Plugin / Scripting System
-status: executing
+status: verifying
 stopped_at: Completed 24-02-PLAN.md — Phase 24 (vanilla-mobs-as-plugins) COMPLETE
-last_updated: "2026-06-28T18:31:02.660Z"
+last_updated: "2026-06-28T18:50:48.672Z"
 last_activity: 2026-06-28
 progress:
   total_phases: 8
   completed_phases: 5
   total_plans: 14
-  completed_plans: 12
-  percent: 86
+  completed_plans: 13
+  percent: 93
 ---
 
 # Project State
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-06-23)
 
 Phase: 26 (opt-in-python-runtime) — EXECUTING
 Plan: 2 of 2
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-06-28
 
 ### ⚠️ DONE this session — 25-03 PLUGIN-05 close (cooking/stonecutting BLOCK build-or-defer)
@@ -156,7 +156,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [█████████░] 86%
+Progress: [█████████░] 93%
 
 ## Performance Metrics
 
@@ -256,6 +256,7 @@ Progress: [█████████░] 86%
 | Phase 25 P02 | 17min | 3 tasks | 18 files |
 | Phase 25 P03 | 30min | 2 tasks | 9 files |
 | Phase 26 P01 | 7min | 3 tasks | 13 files |
+| Phase 26 P02 | 11min | 3 tasks | 17 files |
 
 ## Accumulated Context
 
@@ -391,6 +392,7 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 25] 25-02: crafting THROUGH the plugin path (PLUGIN-05). ResultSlot.onTake UN-STUBBED — inventory_click.go slotOnTake routes a result-slot take to onTakeCraft; the 1:1 consume re-derives the asPositionedCraftInput footprint via the exported level/recipe.OfPositioned + removeItem(slot,1) per non-empty cell (GO applies the deltas over the tick-owned grid — NOT a plugin-supplied used mask, NOT a whole-new-grid return). The crafting_table block + 3x3 CraftingMenu clone the Phase-20 chest-open subsystem (openContainer.kind discriminator + transient craftGrid; close returns the grid via clearContainer, NOT chest persist). The vanilla recipe plugin is //go:embed'd + LoadCraftingPlugin boot-loaded (FATAL on no matcher) so a DEFAULT server crafts out-of-the-box; cmd/sulfur/main.go loads it into one Manager + the operator plugins/ on top. Custom-recipe model = matcher-fallthrough (set_recipe_matcher last-wins; customrecipe loads after crafting, checks custom-first then falls through to the 1:1 vanilla algorithm over recipes()). THE GATE green: vanilla (2 planks->4 sticks via Manager.Match + 1-per-cell consume) AND custom (1 dirt->1 diamond) both craft; Docker -race clean over ./plugin/... ./server/. Commits 9c3f3281+6a63d397+d1c994f5.
 - [Phase ?]: [Phase 25] 25-03 PLUGIN-05 close: stonecutting BUILT (1:1 single-input recipe-picker StonecutterMenu, plugin-gated via Manager.Match + server-side selectByInput pick); smelting/blasting/smoking/campfire DEFERRED with cited evidence (no per-tick block-entity drive + no FuelValues table; BE types are empty markers) — deferral is the BLOCK UI only, every deferred matcher tested headless (TestSmeltingMatcherShips). New ServerboundContainerButtonClick dispatch + ClientboundContainerSetData encoder. Commits 14966823 9a5fee10 6d2ca968.
 - [Phase 26]: 26-01 PLUGIN-06 isolation primitive — the build-tag stub/impl split is THE gate. plugin/python has runtime_python.go (//go:build python, imports gopython.xyz/py/v14 PINNED to the python3.14 branch commit b0bdc04a384b, pseudo-version v14.0.0-alpha.0.0.20260510154237-b0bdc04a384b; InitAndLock-once + RunFile + GIL-held CallHook) + runtime_stub.go (//go:build !python, cgo-free, ErrNotBuilt), byte-identical exported surface (Available/Runtime/Load/Close/CallHook). gopy is a DIRECT require in go.mod but reachable ONLY behind the tag, so CGO_ENABLED=0 go build ./... stays pure-Go static with ZERO gopython in the import graph (go list -deps grep EMPTY on every task — the #1 gate). The host routes runtime=python via a plain-Go PythonRuntime/PythonPlugin interface + SetPythonRuntime seam (the concrete gopy impl registers from a tagged adapter), so plugin/host + server stay cgo-free; the bare `runtime != "starlark"` skip became a switch (starlark inline / python via the interface, loaded-with-tag or logged+skipped without it / unknown runtime errors loudly — T-26-05). Wave-2 stub (cited, behind the tag only): the register-capture harvesting in Load. The -tags python link is gated to the python3.14 Docker image (no libpython3.14 on Windows — the documented split, like -race). Commits c7ca602b + e3fa8968 + cccb5be3.
+- [Phase ?]: [Phase 26] 26-02 PLUGIN-06 off-tick python lane LIVE: a runtime=python plugin's hook runs OFF the tick goroutine via submitOrDrop(t.pluginPool) (small ants pool) → GIL-held CallHook on a LockOSThread worker (plugin/python, //go:build python) → t.asyncIn2 <- pythonHookReady → applyAsyncResults on the owner → applyTo (telemetry-only, no world mutation; the pathReady discipline). SAME register(event,fn) API routed by manifest.Runtime (register_python.go injects the builtin via gopy NewCFunction; host.Emit→emitPython offers every discrete event to each python plugin off-tick via SetPythonDispatch→submitPythonHook). pythonHookReady+submitPythonHook+pluginPool are DEFAULT-BUILT cgo-free (host.PythonPlugin interface, gopy one hop away inside CallHook); only WirePython (gopy loader+dispatch registration, async_python_python.go) is build-tag split. SUB-INTERPRETERS: serialized one-interpreter FALLBACK, CITED — gopy@python3.14 (pinned b0bdc04a384b) exposes ZERO sub-interpreter surface (whole-module grep empty in .go AND cgo headers; GIL model is single-interpreter PyGILState_Ensure/Release; alpha) — NOT faked; pool sized small; the gate passes regardless of N-way parallelism. THE #1 GATE green every task (CGO=0 build + zero gopython in graph). -tags python build/-race Docker-gated. Commits 771ef48d+ee114ac8+9f44f918.
 
 ### Pending Todos
 
@@ -420,7 +422,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-28T18:28:00.694Z
+Last session: 2026-06-28T18:50:16.115Z
 Stopped at: Completed 24-02-PLAN.md — Phase 24 (vanilla-mobs-as-plugins) COMPLETE
 Resume file: None
 Next: OPERATOR CHECKPOINT (19-02 Task 3) — build `CGO_ENABLED=0 go build -o sulfur.exe ./cmd/sulfur`, run `./sulfur.exe -seed 777` in a REAL terminal (expect alt-screen TUI: log viewport + command input), type `say hi`+Enter (expect a `console command cmd=say hi` viewport line), connect a vanilla 26.2 client (expect a join line), Ctrl-C (clean exit), then `./sulfur.exe -seed 777 | cat` (expect NO TUI, plain stderr — today's behavior). On "approved" → mark TUI-01 complete + advance the plan counter, then proceed to Plan 19-03 (gameplay_tick.go join/leave slog conversion + the full disconnect taxonomy). The console line routes TUI→tick (EnqueueConsoleCommand, cap 64, drop-on-full)→runConsoleCommand on the tick→existing graph (grant-all, no issuer), reply to slog. gameplay_tick.go is untouched (19-03 owns it). LEGACY: Phase 17 Wave 2 (17-02/17-03) — see prior continuity below. (GAMEPLAY-05 fluid simulation: OVERWRITE server/fluid.go with the FlowingFluid port + scheduled-tick queue; lazy-init t.fluidSchedule inside tickFluids, do NOT edit tick.go/tick_phases.go) and 17-03 (GAMEPLAY-04 fall damage + PvP dispatch: OVERWRITE server/fall_damage.go using the tickPlayer fallDistance/wasOnGround/lastY fields + the lookupPlayerByEntityID reverse lookup, do NOT edit tick.go/tick_phases.go). The exact Wave-2 seam surface (field names, init point, call sites, stub signatures) is in 17-01-SUMMARY.md "WAVE-2 HANDOFF". Deferred-still-open: dungeon loot/spawner-mob + BeehiveDecorator occupant + pale_garden PaleMoss (all v3, cosmetic, in 13-04-SUMMARY); KeepAlive double-leave hardening (Phase 3). KNOWN PRE-EXISTING FLAKE: TestTickAIDrivesMobs (OPT-01 async-pool timing, not caused by 17-01) intermittently fails under full-suite load; passes in isolation + 3× under -race.
