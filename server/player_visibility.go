@@ -62,11 +62,33 @@ func (t *TickLoop) syncPlayerEntities() {
 		if p == nil || p.playerEntity == nil {
 			continue
 		}
-		t.only().entities.move(p.playerEntity, p.x, p.y, p.z)
+		// Phase-27 STEP-3 (N=2): the player entity lives in whatever region currently owns it
+		// (it transfers as the player walks across the seam). Resolve the owning region by id and
+		// move() within THAT region's store (move re-buckets on a column cross). If the new position
+		// crosses into another region, hand it off immediately here on the coordinator (quiescent —
+		// this runs on the coordinator goroutine, before the fan-out), so the player's region is
+		// always correct for the tracker/transfer that follow.
+		owner := t.owningRegion(p.playerEntity.id)
+		if owner == nil {
+			// Not in any region's store yet (mid-registration races): add it to its owning region.
+			owner = t.regionForEntity(p.playerEntity)
+			owner.entities.add(p.playerEntity)
+		}
+		owner.entities.move(p.playerEntity, p.x, p.y, p.z)
 		p.playerEntity.yaw = p.yaw
 		p.playerEntity.pitch = p.pitch
 		p.playerEntity.headYaw = p.headYaw
 		p.playerEntity.onGround = p.onGround
+
+		// If the move crossed the region seam, transfer the player entity NOW (coordinator is
+		// quiescent — no region is ticking during tickEntities). remove from the current owner, add
+		// to the destination region. The same *Entity (no copy), so the player's tracked-state and
+		// id are preserved.
+		dest := t.regionForEntity(p.playerEntity)
+		if dest != owner {
+			owner.entities.remove(p.playerEntity.id)
+			dest.entities.add(p.playerEntity)
+		}
 	}
 }
 

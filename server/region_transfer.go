@@ -1,0 +1,173 @@
+package server
+
+import (
+	"github.com/imhinotori/sulfur/level"
+)
+
+// region_transfer.go is the Phase-27 (Folia regionization) STEP-3 core: the static chunk→region
+// hash, the per-region current-region resolution that makes the N=2 fan-out route each phase to the
+// OWNING region's store WITHOUT touching the ~200 t.only() call sites, the cross-region entity
+// TRANSFER at the barrier, and the async-rejoin owning-region lookup. Plans 01/02 extracted the
+// region struct + the conc coordinator at N=1; this plan flips to N=2 and makes the four inherently
+// cross-region concerns correct (transfer, async-rejoin routing, the cross-region tracker — Task 2 —
+// and the region-aware plugin Emit — Task 2).
+//
+// THE STATIC SPLIT (27-RESEARCH Open Question 1 / A2): regionOf is a PURE function of the chunk
+// column only — no global state, no persisted region id — so the same chunk ALWAYS maps to the same
+// region, deterministically and STABLY across restarts (chunks are keyed by position, not by a stored
+// region id). N=2 is a fixed split (no dynamic merge/split — that is a locked deferral); it exists to
+// prove the seam, not to load-balance.
+
+// regionCount is the number of regions the world is statically split into (the N=2 flip). It is a
+// const, not a runtime value: the split is fixed (no dynamic merge/split — locked deferral), so the
+// coordinator builds exactly regionCount regions and regionOf maps every column into [0, regionCount).
+const regionCount = 2
+
+// regionOf is the STATIC chunk→region hash (27-RESEARCH Pattern: a 2-region static split). It maps a
+// chunk column to one of regionCount regions deterministically.
+//
+// THE EXACT FUNCTION + WHY IT IS RESTART-STABLE: regionOf returns the parity of (col.X ^ col.Z) — a
+// checkerboard split. It is a PURE function of the column coordinates ONLY: it reads no global state,
+// no clock, no persisted region id. Because Sulfur keys chunks by their (X,Z) position (the anvil
+// region format / the ChunkManager map), the SAME chunk has the SAME column on every run, so regionOf
+// yields the SAME region every restart — the 27-RESEARCH A2 "no region id persisted, stable across
+// restarts" requirement is met structurally. The XOR-parity (rather than e.g. a raw half-plane on X)
+// guarantees that EVERY chunk has neighbours in the OTHER region (a checkerboard), so the cross-region
+// seam — the thing this whole phase proves — is exercised everywhere a player or mob moves one column,
+// not only at a single dividing line.
+//
+// The bit math: (X^Z)&1. Go's & on a (possibly negative) int32 operates on the two's-complement bit
+// pattern, and bit 0 is the parity regardless of sign, so negative columns split identically to
+// positive ones (no negative-coordinate skew). The result is always 0 or 1 for regionCount==2.
+func regionOf(col level.ChunkPos) regionID {
+	return regionID((col[0] ^ col[1]) & 1)
+}
+
+// regionForColumn returns the region that owns chunk column col (the live *region the coordinator
+// built). Pure routing over t.regions via regionOf.
+func (t *TickLoop) regionForColumn(col level.ChunkPos) *region {
+	return t.regions[regionOf(col)]
+}
+
+// regionForEntity returns the region that owns entity e by its CURRENT position (regionOf its column).
+// This is the authoritative "which region should own this entity" answer the transfer detector and the
+// region-aware handle build use.
+func (t *TickLoop) regionForEntity(e *Entity) *region {
+	return t.regionForColumn(columnOf(e.x, e.z))
+}
+
+// owningRegion finds the region whose store CURRENTLY HOLDS id, scanning the regions (re-resolve by
+// id), or nil if no region owns it (the entity despawned or transferred away). It is the cross-region
+// "drop if gone" re-resolve the async rejoin (pathReady/spawnCandidatesReady.applyTo) uses: a late
+// async result re-resolves the owner here and DROPS if nil. The scan is O(regionCount) — tiny — and
+// runs on the OWNER (coordinator) at the barrier, never mid-region-tick.
+func (t *TickLoop) owningRegion(id int32) *region {
+	for _, r := range t.regions {
+		if _, ok := r.entities.get(id); ok {
+			return r
+		}
+	}
+	return nil
+}
+
+// withRegion runs fn with r registered as the CURRENT region for the calling goroutine, restoring
+// the prior registration (if any) afterwards. It lets a COORDINATOR-side phase (tickItems) process a
+// specific region's entities so the deep t.only() call sites (moveEntity's re-bucket, the despawn
+// remove) resolve to THAT region's store rather than globalRegion. Used only on the coordinator
+// goroutine where there is no concurrent region tick (quiescent), so the temporary registration never
+// races a fan-out goroutine's own registration (they key on distinct goroutine ids regardless).
+func (t *TickLoop) withRegion(r *region, fn func()) {
+	if t.currentRegion == nil {
+		fn()
+		return
+	}
+	gid := curGoroutineID()
+	prev, had := t.currentRegion.Load(gid)
+	t.currentRegion.Store(gid, r)
+	defer func() {
+		if had {
+			t.currentRegion.Store(gid, prev)
+		} else {
+			t.currentRegion.Delete(gid)
+		}
+	}()
+	fn()
+}
+
+// entitiesNearAcrossRegions returns every entity within rangeChunks columns of (x,z) across ALL
+// regions whose column range the query box intersects (Phase-27 STEP-3, Pitfall 2: the cross-region
+// tracker/pickup broad-phase). Because each region owns a disjoint subset of columns (the static
+// regionOf split), an entity in range may live in EITHER region, so the query merges each region's
+// near() result. It runs at the QUIESCENT barrier (every region joined), so reading multiple region
+// stores is -race clean by construction. The returned slice is a fresh merge the caller may retain.
+func (t *TickLoop) entitiesNearAcrossRegions(x, z float64, rangeChunks int) []*Entity {
+	var out []*Entity
+	for _, r := range t.regions {
+		if r.entities == nil {
+			continue
+		}
+		out = append(out, r.entities.near(x, z, rangeChunks)...)
+	}
+	return out
+}
+
+// transferIntent is one queued cross-region hand-off: the *Entity whose column now maps to region
+// `to`, recorded mid-tick by detectTransfers and applied at the barrier by applyCrossRegionTransfers.
+// It carries the live *Entity pointer (NOT a copy): the pointer is adopted by the new region at the
+// QUIESCENT barrier point (no region is ticking then), so the ai/nav/plugin-goal scratch travels with
+// it and is never aliased across a live tick (27-RESEARCH "Pattern 4: cross-region entity transfer at
+// the barrier").
+type transferIntent struct {
+	ent *Entity
+	to  regionID
+}
+
+// detectTransfers scans THIS region's entities at the END of its tick (still on the region's
+// goroutine — it only QUEUES, never mutates another region's store) and records a transferIntent for
+// every entity whose current column now maps to a DIFFERENT region. The physics/AI step inside the
+// region's tick may have moved an entity across the seam; the actual hand-off happens at the barrier
+// (applyCrossRegionTransfers) when every region is quiescent. Only enumeration + a slice append touch
+// the region here, so it is single-owner clean.
+func (r *region) detectTransfers() {
+	if r.entities == nil {
+		return
+	}
+	for _, e := range r.entities.byID {
+		if regionOf(columnOf(e.x, e.z)) != r.id {
+			r.pendingTransfers = append(r.pendingTransfers, transferIntent{ent: e, to: regionOf(columnOf(e.x, e.z))})
+		}
+	}
+}
+
+// applyCrossRegionTransfers drains every region's pendingTransfers on the QUIESCENT coordinator
+// (post-barrier, no region is ticking) and moves each entity A→B: remove from the source region's
+// store, add to the destination region's store. The *Entity pointer (with its ai/nav/scratch) is
+// ADOPTED by the new region — NEVER copied, NEVER aliased across a live tick (it moves at the
+// quiescent point). It is the FIRST step of the post-phase, BEFORE the cross-region tracker reads
+// across regions, so the tracker sees the post-transfer ownership.
+//
+// 27-RESEARCH "Pattern 4: Cross-region entity transfer at the barrier". The remove-then-add ordering
+// guarantees exactly-once ownership: between the remove and the add the entity is momentarily in no
+// store, but this runs single-threaded on the coordinator (every region joined), so no tick observes
+// the gap — the NEXT tick's fan-out finds it in exactly one region (no double-tick, no drop).
+func (t *TickLoop) applyCrossRegionTransfers() {
+	// NOTE: no t.trace here — applyCrossRegionTransfers is an internal barrier step, NOT one of the
+	// fixed observable phases (TestTickPhaseOrder asserts the exact phase sequence, which this must
+	// not perturb). It runs between the barrier and applyAsyncResults each tick.
+	for _, src := range t.regions {
+		if len(src.pendingTransfers) == 0 {
+			continue
+		}
+		for _, ti := range src.pendingTransfers {
+			// Re-confirm the source still holds it (a defensive guard: detectTransfers queued it from
+			// THIS src this tick, so it must be present — but a double-queue across regions can never
+			// double-move because remove() is a no-op for a missing id and the add targets one region).
+			if _, ok := src.entities.get(ti.ent.id); !ok {
+				continue
+			}
+			src.entities.remove(ti.ent.id)               // out of the source region's store
+			t.regions[ti.to].entities.add(ti.ent)        // into the destination region's store (same *Entity)
+		}
+		src.pendingTransfers = src.pendingTransfers[:0] // reset for next tick (keep the backing array)
+	}
+}

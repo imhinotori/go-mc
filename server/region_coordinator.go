@@ -48,23 +48,43 @@ import (
 // per-region tick is -race clean by the same single-owner discipline as the pre-extraction
 // TickLoop (TICK-05, multiplied by N).
 func (r *region) tick(gt int64) {
+	t := r.coord
+	// Phase-27 STEP-3 (N=2): register THIS goroutine→region so only() routes every per-region phase
+	// call site (physics/AI/spawner/handles' t.only().entities / t.only().world / t.only().levelRandom)
+	// to THIS region's store WITHOUT rewriting the ~200 sites. Cleared on exit so a transferred/joined
+	// goroutine never leaks a stale region. The coordinator's own goroutine never registers here, so
+	// the world-global + post phases see globalRegion via only()'s fallback.
+	if t.currentRegion != nil {
+		gid := curGoroutineID()
+		t.currentRegion.Store(gid, r)
+		defer t.currentRegion.Delete(gid)
+	}
+
 	// Test-only seam (nil in production): inject a panic (TestRegionPanicIsolated) or observe the
-	// barrier (TestCoordinatorBarrier) on the region's goroutine, before the per-region phases.
+	// barrier (TestCoordinatorBarrier / the parallelism probe) on the region's goroutine, before the
+	// per-region phases.
 	if r.tickHook != nil {
 		r.tickHook()
 	}
-	t := r.coord
-	// The PER-REGION phases, in the EXACT order today's tickOnce ran them (the gameplay order is
-	// the load-bearing contract — TestTickPhaseOrder). At N=1 these range t.only() == r.
-	t.tickWorld()         // PER-REGION: scheduled blocks/fluids + chunk-save over the region's world
-	t.tickChunks()        // PER-REGION: per-player ring → region.world requests
-	t.tickEntities()      // PER-REGION: the per-entity seams over region.entities
-	t.tickAI()            // PER-REGION: serverAiStep over region.entities + naturalSpawn
-	t.tickPhysics()       // PER-REGION: moveEntity over region.entities
-	t.applyAsyncResults() // PER-REGION chunkReady drain + the global asyncIn2 drain (identical N=1)
-	_ = gt                // gt is read by the region's scheduled-tick phases via t.gametime; the
-	// parameter documents the read-only shared anchor the coordinator passes in (Plan 03 threads
-	// it into the per-region phases explicitly when they range THIS region's store).
+
+	// The PER-REGION entity phases, in the EXACT order today's tickOnce ran them (the gameplay order
+	// is the load-bearing contract — TestTickPhaseOrder). These are the phases that are safe to run
+	// CONCURRENTLY across regions: each ranges ONLY THIS region's entity store (via only(), now
+	// resolving to r) and only READS the shared world (block reads for AI/physics) — the world is
+	// mutated solely on the coordinator (tickWorld/tickChunks/chunkReady), never inside the fan-out,
+	// so concurrent reads here are race-clean. The world-global phases (tickWorld/tickChunks), the
+	// player/item seams (tickEntities), and the async rejoin (applyAsyncResults) run on the
+	// coordinator (region_coordinator.go tickOnce) — quiescent, where a cross-region read is legal.
+	t.tickAI()      // PER-REGION: serverAiStep over r.entities + naturalSpawn (the plugin goal callbacks)
+	t.tickPhysics() // PER-REGION: moveEntity over r.entities
+
+	// Cross-region transfer DETECTION (queue only — applied at the barrier by the coordinator). The
+	// AI/physics step above may have moved an entity across the region seam; record the hand-off
+	// intent here on the region's goroutine (a pure scan + append to THIS region's pendingTransfers,
+	// no cross-region mutation), and applyCrossRegionTransfers moves it A→B at the quiescent barrier.
+	r.detectTransfers()
+
+	_ = gt // the shared anchor the coordinator passes read-only (scheduled ticks read t.gametime).
 }
 
 // tickOnce runs ONE logical tick as the Folia coordinator (Phase-27 STEP-2). It is the rewrite of
@@ -94,18 +114,32 @@ func (t *TickLoop) tickOnce() {
 	advanced := false
 	defer t.recoverTick(start, &advanced)
 
-	t.resolveSubtickInputs() // GLOBAL pre-phase (per-player input; touches no region store at N=1).
-	// At N>1 this routes a region-affine player's input to the OWNING region; here it stays on the
-	// coordinator before the fan-out because it touches no region store.
+	t.resolveSubtickInputs() // GLOBAL pre-phase (per-player input; touches no region store).
+
+	// --- WORLD-GLOBAL phases on the COORDINATOR (single-threaded, BEFORE the fan-out). These MUTATE
+	// the shared world (scheduled blocks/fluids/chunk-save; the per-player chunk-streaming requests),
+	// so they MUST run exactly once outside the parallel section — running them per-region would race
+	// the shared ChunkManager. only() falls back to globalRegion on the coordinator goroutine, so they
+	// operate over the (shared) world exactly as before. ---
+	t.tickWorld()  // scheduled blocks/fluids + chunk-save over the shared world
+	t.tickChunks() // per-player ring → world requests
+
+	// tickEntities (the player/item seams) runs on the COORDINATOR too: it iterates the GLOBAL player
+	// list + the per-region entity stores (syncPlayerEntities moves each player within its OWNING
+	// region; tickItems spans regions), so it must be single-threaded (a per-region fan-out would
+	// double-process the global player list). It keeps its fixed slot BEFORE tickAI (the trace order
+	// contract — TestTickPhaseOrder).
+	t.tickEntities()
 
 	gt := t.gametime // the ONE shared tick number every region reads this tick (Pitfall 3 /
 	// T-27-02-GT): a single value the coordinator passes into each region.tick, read-only.
 
-	// --- FAN OUT: each region ticks its own store in parallel (TICK-05 per region). At N=1 there
-	// is one region, so this runs the per-region pipeline once, serially. conc.WaitGroup.Go spawns
-	// the region tick under a per-region recover; wg.Wait re-raises the FIRST region panic's value
-	// + stack on this goroutine (structured propagation), where the recoverTick backstop catches
-	// it — one region's panic does NOT hang the tick (T-27-02). ---
+	// --- FAN OUT: each region ticks its OWN entity store in PARALLEL (TICK-05 per region) — the
+	// per-region entity phases (tickAI + tickPhysics + detectTransfers). conc.WaitGroup.Go spawns the
+	// region tick under a per-region recover; wg.Wait re-raises the FIRST region panic's value + stack
+	// on this goroutine (structured propagation), where the recoverTick backstop catches it — one
+	// region's panic does NOT hang the tick (T-27-02). The regions touch ONLY their own store + READ
+	// the shared world, so the fan-out is race-clean by construction (the Docker -race gate proves it).
 	var wg conc.WaitGroup
 	for _, r := range t.regions {
 		r := r
@@ -113,12 +147,19 @@ func (t *TickLoop) tickOnce() {
 	}
 	wg.Wait() // BARRIER: no region mutates its store past this point this tick.
 
-	// --- CROSS-REGION / GLOBAL POST-PHASE (coordinator, all regions quiescent → safe to read
-	// across regions). These stay where they were sequenced before, just AFTER the barrier: the
-	// tracker spans region seams (Plan 03), and the movement/equipment/flush read the global
-	// player list. At N=1 the single region is already quiescent, so the order/effect is identical
-	// to the pre-regionization inline pipeline (the gameplay order is the load-bearing contract —
-	// TestTickPhaseOrder). ---
+	// --- CROSS-REGION / GLOBAL POST-PHASE (coordinator, all regions quiescent → safe to read AND
+	// write across regions). ---
+
+	// Cross-region entity TRANSFER FIRST (before the tracker/movement read across regions): drain
+	// each region's pendingTransfers and move every boundary-crossing entity A→B (the *Entity adopted
+	// by the new region, ai/nav/scratch travelling). 27-RESEARCH Pattern 4.
+	t.applyCrossRegionTransfers()
+
+	// The async rejoin runs on the coordinator now (quiescent): the chunkReady drain (world mutation,
+	// globalRegion's asyncIn) + the asyncIn2 entity results (pathReady/spawnCandidatesReady), which
+	// re-resolve the OWNING region by id and apply there (drop if no region owns it — Pitfall 1).
+	t.applyAsyncResults()
+
 	t.tickEntityMovement() // GAMEPLAY-07: ServerEntity.sendChanges → delta move packets to trackers
 	t.tickEquipment()      // GAMEPLAY-07: detectEquipmentUpdates → SetEquipment to trackers
 	t.trace("tracker.Tick")

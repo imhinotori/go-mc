@@ -69,21 +69,26 @@ const (
 // pickup scan runs — mirroring vanilla, where ItemEntity.tick() (which decrements pickupDelay)
 // runs in the entity tick BEFORE Player.aiStep collects items in the same server tick.
 func (t *TickLoop) tickItems() {
-	if t.only().entities == nil {
-		return // defensive: store is non-nil from NewTickLoop, but never panic if absent
-	}
-
-	// Snapshot the item entities so the loop is stable even if tickItem discards one mid-range
-	// (discard removes from the store's byID map we would otherwise be ranging) — the same
-	// snapshot discipline tickPhysics / tickAI use.
-	snapshot := make([]*Entity, 0, len(t.only().entities.byID))
-	for _, e := range t.only().entities.byID {
-		if e.isItem {
-			snapshot = append(snapshot, e)
+	// Phase-27 STEP-3 (N=2): item entities live across BOTH regions (an item dropped near the seam),
+	// and tickItems runs on the COORDINATOR (quiescent — every region joined). Process each region's
+	// items WITH that region registered as the current region (withRegion), so tickItem's t.only()
+	// (the moveEntity re-bucket + the despawn remove) resolves to the item's OWN store rather than
+	// globalRegion. The snapshot per region keeps the loop stable across an in-loop discard.
+	for _, r := range t.regions {
+		if r.entities == nil {
+			continue
 		}
-	}
-	for _, e := range snapshot {
-		t.tickItem(e)
+		snapshot := make([]*Entity, 0, len(r.entities.byID))
+		for _, e := range r.entities.byID {
+			if e.isItem {
+				snapshot = append(snapshot, e)
+			}
+		}
+		t.withRegion(r, func() {
+			for _, e := range snapshot {
+				t.tickItem(e)
+			}
+		})
 	}
 
 	// Pickup scan AFTER the item step (vanilla: ItemEntity.tick precedes Player.aiStep's touch).
@@ -168,7 +173,7 @@ func (t *TickLoop) scanItemPickup(p *tickPlayer) {
 	pLoY, pHiY := p.y-itemPickupInflateY, p.y+playerHeight+itemPickupInflateY
 	pLoZ, pHiZ := p.z-hw, p.z+hw
 
-	for _, e := range t.only().entities.near(p.x, p.z, trackRange) {
+	for _, e := range t.entitiesNearAcrossRegions(p.x, p.z, trackRange) {
 		if !e.isItem {
 			continue // only dropped items are collectible here
 		}
@@ -235,7 +240,11 @@ func (t *TickLoop) playerTouchItem(p *tickPlayer, e *Entity) {
 	// tracker emits RemoveEntities next tick (it leaves near()). A partial pickup leaves the
 	// item with its remaining count on the ground.
 	if e.itemStack.Count <= 0 {
-		t.only().entities.remove(e.id)
+		// Phase-27 STEP-3 (N=2): remove from the item's OWNING region (it may live in either region;
+		// scanItemPickup ran cross-region). owningRegion(nil) → skip (already gone — a safe no-op).
+		if owner := t.owningRegion(e.id); owner != nil {
+			owner.entities.remove(e.id)
+		}
 	}
 }
 

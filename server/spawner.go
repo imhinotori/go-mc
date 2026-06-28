@@ -88,6 +88,41 @@ func (t *TickLoop) countByCategory() map[mobCategory]int {
 	return counts
 }
 
+// countByCategoryAcrossRegions tallies the live mob count per MobCategory across EVERY region's
+// store (Phase-27 STEP-3, Pitfall 1: the cross-region spawn cap). It runs on the coordinator at the
+// barrier (quiescent — every region joined), so reading multiple region stores is race-clean. It is
+// the authoritative cap re-check spawnCandidatesReady.applyTo uses before adding a mob: a stale
+// per-region snapshot can never over-spawn past the GLOBAL cap because the live count spans regions.
+func (t *TickLoop) countByCategoryAcrossRegions() map[mobCategory]int {
+	counts := make(map[mobCategory]int)
+	for _, r := range t.regions {
+		if r.entities == nil {
+			continue
+		}
+		for _, e := range r.entities.byID {
+			counts[categoryOf(e.typ)]++
+		}
+	}
+	return counts
+}
+
+// mobNearAcrossRegions reports whether any entity sits within rangeBlocks horizontal distance of
+// (x,z) across EVERY region (Phase-27 STEP-3: the cross-region anti-piling guard the spawn apply
+// uses). It runs at the quiescent barrier so reading multiple region stores is race-clean. It uses
+// the cross-region broad phase (entitiesNearAcrossRegions) so the scan stays bounded to the
+// candidate's column neighbourhood, not the whole world.
+func (t *TickLoop) mobNearAcrossRegions(x, z, rangeBlocks float64) bool {
+	r2 := rangeBlocks * rangeBlocks
+	for _, e := range t.entitiesNearAcrossRegions(x, z, 1) {
+		dx := e.x - x
+		dz := e.z - z
+		if dx*dx+dz*dz <= r2 {
+			return true
+		}
+	}
+	return false
+}
+
 // spawnableColumns ports the "loaded chunks within SPAWN_DISTANCE of a player" eligibility set
 // (NaturalSpawner only spawns in chunks near players — the chunkGetter walks the player-loaded
 // columns). It returns the distinct loaded columns within spawnDistanceChunk of ANY player, in
@@ -303,6 +338,11 @@ func (t *TickLoop) naturalSpawn() {
 	// only the snapshot + the carried spawnableChunkCount (immutable ints) — no live world/store
 	// (Pitfall 3) — and sends the standable candidates back on asyncIn2.
 	snap := t.snapshotSpawnColumns(picks, refY)
+	// Phase-27 STEP-3 (N=2): capture the SUBMITTING region ON the owner (here, inside the fan-out,
+	// t.only() resolves to this region). The worker closure must NOT call t.only() (it runs on a pool
+	// goroutine where only() would fall back to globalRegion), so the source region is captured as a
+	// value and carried in the result so applyTo clears THIS region's in-flight gate.
+	submitRegion := t.only()
 	submitted := submitOrDrop(t.spawnPool, func() {
 		candidates := make([]spawnCandidate, 0, len(picks))
 		for _, p := range picks {
@@ -313,7 +353,7 @@ func (t *TickLoop) naturalSpawn() {
 		// Rejoin on the owner: applyTo re-checks the cap + mobNear and adds at most one Pig. Always
 		// send (even an empty candidate set) so applyTo clears the in-flight gate — otherwise a
 		// cycle that found nothing would wedge spawnScanPending forever.
-		t.asyncIn2 <- spawnCandidatesReady{candidates: candidates, spawnableChunkCount: spawnableChunkCount}
+		t.asyncIn2 <- spawnCandidatesReady{candidates: candidates, spawnableChunkCount: spawnableChunkCount, region: submitRegion}
 	})
 	if submitted {
 		t.only().spawnScanPending = true // one scan in flight; cleared by spawnCandidatesReady.applyTo

@@ -52,12 +52,18 @@ func TestPlayerVisibility(t *testing.T) {
 	loop.register <- p2
 	loop.drainRegistrations()
 
-	// (1) both players are in the store with id==entityID and a non-nil playerEntity.
+	// (1) both players are in the store with id==entityID and a non-nil playerEntity. Phase-27
+	// STEP-3 (N=2): the player entity lives in its OWNING region (regionOf its spawn column), so
+	// resolve it across regions (owningRegion) rather than assuming the single globalRegion store.
 	for _, p := range []*tickPlayer{p1, p2} {
 		if p.playerEntity == nil {
 			t.Fatalf("player %q has nil playerEntity after register", p.name)
 		}
-		e, ok := loop.only().entities.get(p.entityID)
+		owner := loop.owningRegion(p.entityID)
+		if owner == nil {
+			t.Fatalf("player %q (id %d) not in any region store after register", p.name, p.entityID)
+		}
+		e, ok := owner.entities.get(p.entityID)
 		if !ok {
 			t.Fatalf("player %q (id %d) not in store after register", p.name, p.entityID)
 		}
@@ -69,18 +75,23 @@ func TestPlayerVisibility(t *testing.T) {
 		}
 	}
 
-	// (2) move p1 and run the per-tick sync; the store Entity must follow.
+	// (2) move p1 and run the per-tick sync; the store Entity must follow (and, N=2, may transfer to
+	// the region owning the new column — resolve cross-region).
 	p1.x, p1.y, p1.z = 100.5, 70, -40.5
 	loop.syncPlayerEntities()
-	e1, _ := loop.only().entities.get(p1.entityID)
+	owner1 := loop.owningRegion(p1.entityID)
+	if owner1 == nil {
+		t.Fatal("player Alice not in any region store after the move/sync")
+	}
+	e1, _ := owner1.entities.get(p1.entityID)
 	if e1.x != 100.5 || e1.y != 70 || e1.z != -40.5 {
 		t.Fatalf("synced entity pos = (%v,%v,%v), want (100.5,70,-40.5)", e1.x, e1.y, e1.z)
 	}
 
-	// (3) leave removes the Entity from the store.
+	// (3) leave removes the Entity from EVERY region store.
 	loop.unregister <- p2.client
 	loop.drainRegistrations()
-	if _, ok := loop.only().entities.get(p2.entityID); ok {
+	if owner := loop.owningRegion(p2.entityID); owner != nil {
 		t.Fatalf("player %q still in store after leave", p2.name)
 	}
 }

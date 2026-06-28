@@ -42,12 +42,16 @@ func TestRegionStructHasPerRegionFields(t *testing.T) {
 func TestRegionExtractionBehaviorNeutral(t *testing.T) {
 	loop, mgr := newPhysicsLoop()
 
-	// At N=1 there is exactly ONE region (globalRegion) holding everything the old TickLoop held.
-	if len(loop.regions) != 1 {
-		t.Fatalf("N=1 extraction: want exactly 1 region, got %d", len(loop.regions))
+	// Phase-27 STEP-3 (the N=2 flip): NewTickLoop now builds regionCount (==2) regions. This test
+	// still proves the BEHAVIOR-NEUTRAL invariant: an entity ticked through the pipeline lands
+	// identically. On the TEST goroutine (no region registered in currentRegion), only() falls back
+	// to globalRegion, so only()==region(globalRegion) and the direct tickPhysics call below ranges
+	// globalRegion's store exactly as before — the entity is spawned there.
+	if len(loop.regions) != regionCount {
+		t.Fatalf("the N=2 flip: want %d regions, got %d", regionCount, len(loop.regions))
 	}
 	if loop.only() != loop.region(globalRegion) {
-		t.Fatal("only() must return the globalRegion")
+		t.Fatal("only() must fall back to the globalRegion on a non-fan-out goroutine")
 	}
 
 	// The store the phase loops range must be SINGLE-SOURCED on the region (no second store).

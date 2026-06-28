@@ -156,10 +156,16 @@ type pathReady struct {
 // and nav.pending = false (the in-flight gate clears, so shouldRecomputePath may submit again).
 // Carrying r.mobID + r.target (plain values, NOT a live *Entity) is what makes this late apply safe.
 func (r pathReady) applyTo(t *TickLoop) {
-	if t.only().entities == nil {
-		return // defensive: store is non-nil from NewTickLoop; never panic if absent
+	// Phase-27 STEP-3 (Pitfall 1): re-resolve the OWNING region by id (the mob may live in either
+	// region, or have transferred/despawned). owningRegion scans the regions on the coordinator
+	// (quiescent at the barrier) and returns nil if no region owns it → DROP (the existing
+	// "drop if gone" discipline extended cross-region — a path for a despawned/un-owned mob is
+	// discarded, never applied to the wrong region).
+	reg := t.owningRegion(r.mobID)
+	if reg == nil {
+		return // no region owns the mob (despawned): DROP the late path
 	}
-	e, ok := t.only().entities.get(r.mobID)
+	e, ok := reg.entities.get(r.mobID)
 	if !ok || e.ai == nil {
 		return // mob despawned (or has no AI) while the path computed (Pitfall 2): DROP the result
 	}
@@ -252,6 +258,12 @@ type spawnCandidate struct {
 type spawnCandidatesReady struct {
 	candidates []spawnCandidate // the immutable scan result; applyTo adds at most one under the cap
 
+	// region is the Phase-27 STEP-3 source region that submitted this scan (the region whose
+	// naturalSpawn ran in the fan-out + set spawnScanPending). applyTo clears THAT region's in-flight
+	// gate (the gate is per-region) regardless of which region the candidate lands in. nil for a
+	// legacy/test result (then globalRegion's gate is cleared, the N=1 behavior).
+	region *region
+
 	// spawnableChunkCount is the eligible-column count the OWNER captured at submit time (len of
 	// spawnableColumns()), carried as a plain int so applyTo can recompute the CREATURE cap
 	// (maxInstancesPerChunk * spawnableChunkCount) on the owner without re-walking the columns. It
@@ -280,31 +292,35 @@ type spawnCandidatesReady struct {
 //     T-8-20). entityStore.add the Pig (fresh id from idAlloc, newPigAI attached). At most one per
 //     apply (the throttle). The mutation (add + idAlloc) is owner-only (TICK-05 / T-8-18).
 func (r spawnCandidatesReady) applyTo(t *TickLoop) {
-	// Always clear the in-flight gate on apply, regardless of whether anything is placed below —
-	// otherwise a cycle that scanned to nothing (or got dropped here) would block all future scans.
-	t.only().spawnScanPending = false
+	// Phase-27 STEP-3 (N=2): the in-flight gate is per-region. naturalSpawn set it on the region that
+	// submitted the scan (r.region); clear it THERE so the next cycle on that region can submit again,
+	// regardless of whether anything is placed below.
+	src := r.region
+	if src == nil {
+		src = t.regions[globalRegion] // defensive: a result without a recorded region (legacy/test)
+	}
+	src.spawnScanPending = false
 
 	if len(r.candidates) == 0 {
 		return // the scan found no standable spot: nothing to apply (the gate is already cleared)
 	}
-	if t.only().entities == nil {
-		return // defensive: store is non-nil from NewTickLoop; never panic if absent
-	}
 
-	// CAP RE-CHECK on the AUTHORITATIVE store (Pitfall 3 anti-flood): the off-tick scan counted a
-	// stale snapshot, so re-validate the live count before mutating. A creature spawned/added since
-	// the scan can push us to cap — drop rather than over-spawn.
+	// CAP RE-CHECK on the AUTHORITATIVE store ACROSS REGIONS (Pitfall 3 anti-flood + Pitfall 1
+	// cross-region cap): the off-tick scan counted a stale snapshot, so re-validate the live count
+	// before mutating. This runs on the coordinator at the barrier (quiescent), so counting every
+	// region's store is race-clean. A creature spawned/added since the scan can push us to cap — drop
+	// rather than over-spawn.
 	cap := categoryCreature.maxInstancesPerChunk() * r.spawnableChunkCount
-	live := t.countByCategory()[categoryCreature]
+	live := t.countByCategoryAcrossRegions()[categoryCreature]
 	if live >= cap {
 		return // now AT/OVER cap: DROP the stale candidates (no over-cap add)
 	}
 
 	// Place ONE candidate: the first still-unoccupied position (the mobNear packing guard re-checked
-	// against the LIVE store — the anti-piling guard survives the swap). A candidate now occupied is
-	// skipped, not piled on.
+	// against the LIVE store across regions — the anti-piling guard survives the swap + the seam). A
+	// candidate now occupied is skipped, not piled on.
 	for _, c := range r.candidates {
-		if t.mobNear(float64(c.x)+0.5, float64(c.z)+0.5, 6.0) {
+		if t.mobNearAcrossRegions(float64(c.x)+0.5, float64(c.z)+0.5, 6.0) {
 			continue // a mob moved/spawned onto this candidate since the snapshot: DROP it
 		}
 		// SWAP (PLUGIN-04 / Plan 24-02): the pig is now the PLUGIN-DRIVEN vanilla_pig — its AI is
@@ -312,8 +328,13 @@ func (r spawnCandidatesReady) applyTo(t *TickLoop) {
 		// NOT the Go newPigAI. spawnVanillaPig builds it through spawnDeclaredMob (real pig attrs +
 		// the declared goals + per-entity RNG) and adds it to the store; it renders as entity.Pig.ID.
 		// The Go newPigAI + goals are KEPT as the behavior-identical ORACLE (the comparison test),
-		// not as a live spawn path.
-		t.spawnVanillaPig(float64(c.x)+0.5, float64(c.y), float64(c.z)+0.5)
+		// not as a live spawn path. Phase-27 STEP-3 (N=2): add the pig to the region that OWNS the
+		// candidate column (regionForColumn), not blindly globalRegion — withRegion registers that
+		// region so spawnDeclaredMob's t.only().entities.add lands in the right store.
+		dest := t.regionForColumn(columnOf(float64(c.x)+0.5, float64(c.z)+0.5))
+		t.withRegion(dest, func() {
+			t.spawnVanillaPig(float64(c.x)+0.5, float64(c.y), float64(c.z)+0.5)
+		})
 		return // one placement per apply (the throttle)
 	}
 }

@@ -122,6 +122,15 @@ type region struct {
 	// A plain bool touched only on the region's goroutine, so it needs no atomic.
 	spawnScanPending bool
 
+	// pendingTransfers is the Phase-27 STEP-3 cross-region hand-off queue: detectTransfers (run at
+	// the END of this region's tick, on the region's goroutine) appends a transferIntent for every
+	// entity whose column now maps to ANOTHER region; applyCrossRegionTransfers drains it at the
+	// barrier (the quiescent coordinator) and moves each entity A→B. It is touched ONLY on this
+	// region's goroutine (append, during the tick) and on the coordinator at the barrier (drain, when
+	// no region ticks) — never concurrently — so it needs no lock (27-RESEARCH Pattern 4). nil until
+	// the first transfer is queued; reset to [:0] after each drain (the backing array is reused).
+	pendingTransfers []transferIntent
+
 	// tickHook is a TEST-ONLY seam (Phase-27 STEP-2): when non-nil, region.tick invokes it FIRST,
 	// on the region's goroutine, before the per-region phases. It exists so a test can inject a
 	// region whose tick panics (TestRegionPanicIsolated — the T-27-02 DoS-isolation proof: conc

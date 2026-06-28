@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/panjf2000/ants/v2"
+	"github.com/puzpuzpuz/xsync/v4"
 )
 
 // msptRingSize is the number of recent tick durations kept for the rolling
@@ -139,6 +140,18 @@ type TickLoop struct {
 	// boundary contract. These fields moved OFF TickLoop onto region: asyncIn, world, worker,
 	// asyncBridge, blockTicks, blockTickSubCounter, fluidSchedule, levelRandom, spawnScanPending.
 	regions []*region
+
+	// currentRegion is the Phase-27 STEP-3 (N=2) per-goroutine current-region registry: when a
+	// region's fan-out goroutine is running its tick, it registers itself here keyed by its goroutine
+	// id (region.tick does this on entry, clears on exit). only() consults it so the ~200 existing
+	// t.only() call sites in the per-region phases (physics/AI/spawner/handles) resolve to the OWNING
+	// region's store WITHOUT being rewritten — the lowest-churn way to scope the single-owner store
+	// per region across the conc fan-out. A goroutine NOT inside a region tick (the coordinator, a
+	// test calling tickPhysics directly) finds no entry and only() falls back to regions[globalRegion]
+	// (so N=1-style direct calls + the existing tests keep working unchanged). It is an xsync.Map
+	// because the fan-out goroutines write distinct keys concurrently and only() reads it on those
+	// same goroutines — a genuine concurrent map access (a plain map would race the parallel fan-out).
+	currentRegion *xsync.Map[int64, *region]
 
 	// asyncIn2 is the Phase-8 compute-pool rejoin channel (OPT-04/OPT-06), the SECOND result
 	// channel alongside asyncIn. It is a BOUNDED buffered channel (asyncIn2Buffer): the per-
@@ -833,12 +846,22 @@ func NewTickLoop(clock Clock) *TickLoop {
 		// SetPlugins set (possibly nil).
 		pluginSwap: make(chan *host.Manager, 1),
 	}
-	// Phase-27 STEP-1: construct the single region (globalRegion) that holds the WORLD-half of the
-	// tick state. At N=1 it == today's single-owner TickLoop, so the world ticks IDENTICALLY.
-	// newRegion wires the per-region entityStore + the per-region (never-shared) levelRandom; the
-	// world/worker/blockTicks/fluidSchedule stay nil until SetWorld (the same lazy wiring as before
-	// the extraction). The region back-refs t so it reaches the global idAlloc/players/plugins.
-	t.regions = []*region{newRegion(globalRegion, t)}
+	// Phase-27 STEP-3 (the N=2 flip): construct regionCount (==2) regions that statically split the
+	// world (regionOf — region_transfer.go). Each region holds its OWN entity store + (never-shared)
+	// levelRandom; the world/worker/blockTicks/fluidSchedule stay nil until SetWorld (the same lazy
+	// wiring as before). globalRegion (id 0) remains the world-streaming/scheduled-tick home (the
+	// world-global phases run on the coordinator over regions[globalRegion]'s world — see
+	// region_coordinator.go); the entity phases fan out per region. The region back-refs t so it
+	// reaches the global idAlloc/players/plugins.
+	t.regions = make([]*region, regionCount)
+	for id := 0; id < regionCount; id++ {
+		t.regions[id] = newRegion(regionID(id), t)
+	}
+	// The per-goroutine current-region registry (N=2): the fan-out goroutines register themselves so
+	// only() routes the per-region phases' t.only() calls to the OWNING region's store. Empty until a
+	// region.tick runs; a non-fan-out goroutine (coordinator / direct test calls) finds no entry and
+	// only() falls back to regions[globalRegion].
+	t.currentRegion = xsync.NewMap[int64, *region]()
 	// OPT-02 (08-04) SWAP-POINT — the single line that swaps the tracker EXECUTOR off-tick behind
 	// the UNCHANGED tracker.Tick() seam. ENT-01 filled this with the synchronous &entityTracker{};
 	// Phase 8 replaces it with &asyncTracker{}, whose Tick() builds a per-player snapshot ON the
@@ -858,12 +881,25 @@ func NewTickLoop(clock Clock) *TickLoop {
 // accessor every coordinator call site uses to reach the world-half store.
 func (t *TickLoop) region(id regionID) *region { return t.regions[id] }
 
-// only returns THE single region at N=1 (globalRegion) — the convenience accessor for the N=1
-// call sites that the field move re-pointed off TickLoop (t.only().entities -> t.only().entities, etc.).
-// At N=1 t.only().entities IS the same store every phase loop ranges and the handles/tracker
-// re-resolve, so nothing downstream observes a difference (the behavior-neutral guarantee). When
-// Plan 03 introduces N=2 these N=1 call sites are re-pointed to the OWNING region.
-func (t *TickLoop) only() *region { return t.regions[globalRegion] }
+// only returns the region whose store the CURRENTLY-EXECUTING goroutine should read/write (Phase-27
+// STEP-3, the N=2 routing). When a region's fan-out goroutine is inside its tick, it has registered
+// itself in currentRegion (region.tick), so only() returns THAT region — the ~200 per-region phase
+// call sites (physics/AI/spawner/handles' t.only().entities / t.only().world / t.only().levelRandom)
+// then resolve against the OWNING region's store WITHOUT being rewritten. A goroutine NOT inside a
+// region tick — the coordinator running the global/post phases, or a test calling tickPhysics
+// directly — finds no entry and falls back to regions[globalRegion] (so the world-global phases,
+// the discrete event handlers driven by dispatch, and the existing N=1-style tests all keep working
+// unchanged). The world (ChunkManager/worker) is wired into EVERY region by SetWorld, so a region's
+// t.only().world reads the SAME shared world the others do — concurrent-READ-safe during the parallel
+// entity phase (the world is mutated only on the coordinator, never inside the fan-out).
+func (t *TickLoop) only() *region {
+	if t.currentRegion != nil {
+		if r, ok := t.currentRegion.Load(curGoroutineID()); ok {
+			return r
+		}
+	}
+	return t.regions[globalRegion]
+}
 
 // asyncIn2Buffer bounds the Phase-8 compute-pool rejoin channel (asyncIn2). It mirrors
 // asyncBridgeBuffer: generously above the per-tick async-result burst (the pools are themselves
@@ -921,11 +957,21 @@ const asyncBridgeBuffer = 256
 // asyncIn is non-nil. The adapter touches NO tick state (only re-wraps the immutable
 // result), so it introduces no data race; the manager is mutated solely by the tick.
 func (t *TickLoop) SetWorld(mgr *world.ChunkManager, worker *world.Worker) {
-	t.only().world = mgr
-	t.only().worker = worker
+	// Phase-27 STEP-3 (N=2): the world (ChunkManager + worker) is SHARED across every region — wire
+	// the same pointers into ALL regions so a region's t.only().world (read on its fan-out goroutine
+	// during the parallel entity phase) reads the SAME blocks the others do. The world is a single
+	// global store here (not yet per-region-sharded chunks — a locked deferral), so concurrent READS
+	// during the parallel phase are safe (the world is MUTATED only on the coordinator: tickWorld's
+	// scheduled blocks/fluids, tickChunks' streaming, chunkReady.applyTo, and the dispatch-driven
+	// block edits — none run inside the fan-out). The chunkReady bridge stays on globalRegion (the
+	// coordinator drains it in the post-phase), so only globalRegion gets the asyncBridge/asyncIn.
 	bridge := make(chan asyncResult, asyncBridgeBuffer)
-	t.only().asyncBridge = bridge
-	t.only().asyncIn = bridge
+	for _, r := range t.regions {
+		r.world = mgr
+		r.worker = worker
+	}
+	t.regions[globalRegion].asyncBridge = bridge
+	t.regions[globalRegion].asyncIn = bridge
 	go func() {
 		// Adapter: immutable world.ChunkResult -> chunkReady (asyncResult). Ranges until
 		// the worker's results channel closes (it stays open for the worker's lifetime);
@@ -1017,11 +1063,20 @@ func (t *TickLoop) PluginSwapChan() chan<- *host.Manager { return t.pluginSwap }
 // nil to disable. Not used in production.
 func (t *TickLoop) traceTo(dst *[]string) { t.phaseTrace = dst }
 
-// trace records a phase name when the test hook is installed; a no-op otherwise.
+// trace records a phase name when the test hook is installed; a no-op otherwise. Phase-27 STEP-3
+// (N=2): the per-region phases run on N fan-out goroutines, so to keep the trace a SINGLE coherent
+// sequence (the load-bearing TestTickPhaseOrder contract) only the globalRegion goroutine (and the
+// coordinator, which sees globalRegion via only()'s fallback) appends — the other regions tick the
+// same phases silently. This also keeps the append single-goroutine (no race on phaseTrace) while the
+// fan-out runs. The observable phase ORDER is unchanged: region 0 emits exactly the N=1 sequence.
 func (t *TickLoop) trace(name string) {
-	if t.phaseTrace != nil {
-		*t.phaseTrace = append(*t.phaseTrace, name)
+	if t.phaseTrace == nil {
+		return
 	}
+	if t.only().id != globalRegion {
+		return // a non-global region's fan-out goroutine: stay silent to keep the trace one sequence
+	}
+	*t.phaseTrace = append(*t.phaseTrace, name)
 }
 
 // start initializes the accumulator baseline. Run calls it with the first clock
@@ -1139,7 +1194,12 @@ func (t *TickLoop) drainRegistrations() {
 				// ADD_PLAYER entry to every OTHER player and send all existing players' entries to
 				// the joiner (a Notchian client drops AddEntity without the tab entry — Pitfall 1).
 				p.playerEntity = newPlayerEntity(p)
-				t.only().entities.add(p.playerEntity)
+				// Phase-27 STEP-3 (N=2): the player entity is added to its OWNING region (regionOf its
+				// spawn column), not blindly globalRegion, so the cross-region tracker + transfer treat
+				// the player like any other region-owned entity. At N=1 this was t.only(); here it routes
+				// by position. syncPlayerEntities keeps it in the right region as the player walks (a
+				// player crossing a seam transfers like a mob).
+				t.regionForEntity(p.playerEntity).entities.add(p.playerEntity)
 				// PLUGIN-02 (Plan 22) on_player_join seam: fire ONCE here on the owner, at the
 				// discrete join occurrence (the same place GAMEPLAY-01 adds the player entity) —
 				// NEVER from a per-tick scan. Nil-guarded so a no-plugin server is unaffected; the
@@ -1219,8 +1279,13 @@ func (t *TickLoop) removePlayer(c *Client) {
 	// batches a RemoveEntities for it on the next tick) and broadcast a PlayerInfoRemove for
 	// its UUID to every REMAINING player so their clients drop the tab entry + avatar. Done
 	// AFTER the swap-remove so the leaving player is not re-sent its own removal. remove() is a
-	// no-op for a missing id, so a leave before the join seam ran never panics.
-	t.only().entities.remove(p.entityID)
+	// no-op for a missing id, so a leave before the join seam ran never panics. Phase-27 STEP-3
+	// (N=2): the player entity may live in EITHER region (it transferred as the player walked), so
+	// re-resolve its owning region by id and remove there (owningRegion returns nil only if it was
+	// never added / already gone — then the removes below are skipped, a safe no-op).
+	if owner := t.owningRegion(p.entityID); owner != nil {
+		owner.entities.remove(p.entityID)
+	}
 	t.broadcastPlayerInfoRemove(p.uuid)
 
 	// PLUGIN-02 (Plan 22) on_player_leave seam: fire ONCE per leave here on the owner (the existing
