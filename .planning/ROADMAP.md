@@ -85,7 +85,7 @@ Plans:
   4. Open decisions resolved here: hot-reload scope, capability/permission model (PLUGIN-02)
 **Plans**: 2 plans
 Plans:
-- [ ] 22-01-PLAN.md — plugin/host package: TOML manifest + Manager (discover/load/unload) + register-once event bus + Emit + the Phase-21 LoadWith extension (A2) (Wave 1)
+- [x] 22-01-PLAN.md — plugin/host package: TOML manifest + Manager (discover/load/unload) + register-once event bus + Emit + the Phase-21 LoadWith extension (A2) (Wave 1)
 - [ ] 22-02-PLAN.md — wire host.Emit into the 8 discrete server seams (on_damage post-mitigation) + the fire-once-per-break GATE + anti-seam grep gate + FULL fsnotify hot-reload with tick-goroutine swap (Wave 2)
 **Research**: Plugin-dir/manifest format, the event taxonomy mapped to existing tick seams, the off-hot-path dispatch design.
 
@@ -165,7 +165,7 @@ Plans:
 | 10–16 (v2.0 worldgen + structures) | v2.0 | 22/22 | Complete | 2026-06-25 |
 | 17–20 (v3 online-mode + operator-UX + structure-polish) | v3 | 33/33 | Complete | 2026-06-27 |
 | 21. Starlark runtime foundation | v4 | 2/2 | Complete   | 2026-06-28 |
-| 22. Plugin host + event bus | v4 | 0/? | Not started | — |
+| 22. Plugin host + event bus | v4 | 1/2 | In Progress|  |
 | 23. Entity/mob behavior API | v4 | 0/? | Not started | — |
 | 24. Vanilla mobs AS plugins (1:1 dogfood) | v4 | 0/? | Not started | — |
 | 25. Crafting/recipes AS plugins (2nd-domain dogfood) | v4 | 0/? | Not started | — |

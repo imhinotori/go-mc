@@ -18,7 +18,7 @@ The "user" is now (a) a **plugin author** writing `.star` (or, opt-in, Python) p
 ### Runtime + host (Phases 21–22)
 
 - [x] **PLUGIN-01**: A Starlark runtime is embedded (`go.starlark.net`, pure-Go, CGO_ENABLED=0 preserved). A `.star` file loads, parses, and compiles once; runs inside a sandbox (per-`starlark.Thread` step-counter budget, recursion OFF, no filesystem/network builtins unless explicitly exposed); one `starlark.Thread` per goroutine with FrozenValues shared safely across the tick boundary; a plugin can call a registered Go builtin and return a value — all `-race` clean. The plugin load/parse/compile lifecycle exists. (Riskiest single item: proves sandbox + CGO=0 + race-safety before anything is built on top.)
-- [ ] **PLUGIN-02**: A plugin host + typed event bus. The plugin manager discovers/loads/unloads plugins from a plugins directory (with a manifest); a typed event system fires the core gameplay events (tick, player join/leave, block break/place, entity spawn/death, damage); a plugin registers its hooks ONCE at load via a registration API; the Go→plugin dispatch seam stays OFF the per-entity hot path (event-driven + cached, not per-tick-per-entity scan). A plugin subscribes to an event and its hook fires on the real tick.
+- [x] **PLUGIN-02**: A plugin host + typed event bus. The plugin manager discovers/loads/unloads plugins from a plugins directory (with a manifest); a typed event system fires the core gameplay events (tick, player join/leave, block break/place, entity spawn/death, damage); a plugin registers its hooks ONCE at load via a registration API; the Go→plugin dispatch seam stays OFF the per-entity hot path (event-driven + cached, not per-tick-per-entity scan). A plugin subscribes to an event and its hook fires on the real tick.
 
 ### Entity/mob behavior + 1:1 dogfood (Phases 23–24)
 
@@ -79,7 +79,7 @@ Updated during roadmap creation.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | PLUGIN-01 | Phase 21 | Complete |
-| PLUGIN-02 | Phase 22 | Pending |
+| PLUGIN-02 | Phase 22 | Complete |
 | PLUGIN-03 | Phase 23 | Pending |
 | PLUGIN-04 | Phase 24 | Pending |
 | PLUGIN-05 | Phase 25 | Pending |
