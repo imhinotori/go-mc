@@ -48,6 +48,16 @@ type goalDecl struct {
 	tickFn   starlark.Callable
 	startFn  starlark.Callable
 	stopFn   starlark.Callable
+	// continueFn is the optional can_continue callable. When nil the starlarkGoal falls back to
+	// canUse (the Go convention: a goal whose continue-condition equals its use-condition). A ported
+	// vanilla goal (LookAtPlayerGoal/RandomLookAroundGoal) has a DISTINCT canContinueToUse (distance²
+	// + lookTime>0, or lookTime>=0), so the declaration carries its own continue predicate.
+	continueFn starlark.Callable
+	// requiresUpdateEveryTick threads RandomLookAroundGoal.requiresUpdateEveryTick()==true (jar-
+	// confirmed) through the declaration into the starlarkGoal (FIDELITY GAP 1, flagged by 24-01).
+	// starlarkGoal embeds baseGoal whose default is false; without this thread a ported @8 would not
+	// tick on the every-tick path vanilla guarantees, breaking behavior-identity. Default false.
+	requiresUpdateEveryTick bool
 }
 
 // mobDecl is one captured mob declaration: its name, the resolved base entity type (the EXISTING
@@ -213,23 +223,30 @@ func parseGoalFlags(list *starlark.List) (goalFlag, error) {
 // the builtins (methods on mobRegistry so they capture into byName)
 // ----------------------------------------------------------------------------------------------
 
-// goalBuiltin returns the `goal(priority, flags, tick, can_use=None, start=None, stop=None)` builtin.
-// It parses the priority + flags, captures the (frozen-after-load) callables, and returns a goalValue
-// wrapping the goalDecl. Type errors fire HERE (at goal()) so the author sees a precise call site.
+// goalBuiltin returns the `goal(priority, flags, tick=None, can_use=None, start=None, stop=None,
+// can_continue=None, requires_update_every_tick=False)` builtin. It parses the priority + flags,
+// captures the (frozen-after-load) callables + the requires_update_every_tick flag, and returns a
+// goalValue wrapping the goalDecl. Type errors fire HERE (at goal()) so the author sees a precise
+// call site. tick is OPTIONAL (an empty-tick goal like RandomStrollGoal carries its behavior in
+// start/can_continue); can_continue threads a DISTINCT canContinueToUse (the ported vanilla goals
+// have one); requires_update_every_tick threads the jar's requiresUpdateEveryTick (RandomLookAround).
 func (r *mobRegistry) goalBuiltin() *starlark.Builtin {
 	return starlark.NewBuiltin("goal", func(_ *starlark.Thread, b *starlark.Builtin,
 		args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 		var priority int
 		var flagsList *starlark.List
 		var tickFn starlark.Callable
-		var canUseFn, startFn, stopFn starlark.Callable
+		var canUseFn, startFn, stopFn, continueFn starlark.Callable
+		var requiresUpdateEveryTick bool
 		if err := starlark.UnpackArgs(b.Name(), args, kwargs,
 			"priority", &priority,
 			"flags", &flagsList,
-			"tick", &tickFn,
+			"tick?", &tickFn,
 			"can_use?", &canUseFn,
 			"start?", &startFn,
 			"stop?", &stopFn,
+			"can_continue?", &continueFn,
+			"requires_update_every_tick?", &requiresUpdateEveryTick,
 		); err != nil {
 			return nil, err
 		}
@@ -237,16 +254,22 @@ func (r *mobRegistry) goalBuiltin() *starlark.Builtin {
 		if err != nil {
 			return nil, err
 		}
-		if tickFn == nil {
-			return nil, fmt.Errorf("goal: tick callable is required")
+		// tick is OPTIONAL when start/can_use carry the behavior (RandomStrollGoal.tick is empty —
+		// its behavior is start()=navigation.moveTo + canContinue=!isDone; 24-RESEARCH Open-Q §7). A
+		// goal with NO callable at all is degenerate (it would do nothing), so require at least one of
+		// tick/start/can_use so a typo'd declaration still fails loudly rather than silently no-op.
+		if tickFn == nil && startFn == nil && canUseFn == nil {
+			return nil, fmt.Errorf("goal: at least one of tick/start/can_use is required")
 		}
 		return &goalValue{decl: goalDecl{
-			priority: priority,
-			flags:    flags,
-			canUseFn: canUseFn,
-			tickFn:   tickFn,
-			startFn:  startFn,
-			stopFn:   stopFn,
+			priority:                priority,
+			flags:                   flags,
+			canUseFn:                canUseFn,
+			tickFn:                  tickFn,
+			startFn:                 startFn,
+			stopFn:                  stopFn,
+			continueFn:              continueFn,
+			requiresUpdateEveryTick: requiresUpdateEveryTick,
 		}}, nil
 	})
 }

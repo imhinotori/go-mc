@@ -38,14 +38,26 @@ import (
 // attribution). Each SPAWNED mob gets a FRESH starlarkGoal struct (per-mob state) referencing the
 // shared frozen callables (Pattern 4) — buildAIFromDecl allocates fresh structs, it never re-parses.
 type starlarkGoal struct {
-	baseGoal       // flags from the declaration via newBaseGoal(gd.flags) + the defaults
-	t        *TickLoop // the tick loop the handles re-resolve through (tick goroutine only)
-	caps     capSet    // the owning plugin's capabilities, threaded into every handle
-	name     string    // the declared mob name (thread name + error attribution)
-	canUseFn starlark.Callable
-	tickFn   starlark.Callable
-	startFn  starlark.Callable
-	stopFn   starlark.Callable
+	baseGoal           // flags from the declaration via newBaseGoal(gd.flags) + the defaults
+	t          *TickLoop // the tick loop the handles re-resolve through (tick goroutine only)
+	caps       capSet    // the owning plugin's capabilities, threaded into every handle
+	name       string    // the declared mob name (thread name + error attribution)
+	canUseFn   starlark.Callable
+	tickFn     starlark.Callable
+	startFn    starlark.Callable
+	stopFn     starlark.Callable
+	continueFn starlark.Callable
+	// updateEveryTick is the jar's requiresUpdateEveryTick threaded from the declaration (FIDELITY
+	// GAP 1). RandomLookAroundGoal.requiresUpdateEveryTick()==true (jar-confirmed); a declared goal
+	// carrying requires_update_every_tick=True overrides baseGoal's default-false so the selector
+	// ticks it on the every-tick path (ai_goal.go tickRunningGoals: canSimulate || requiresUpdate...).
+	updateEveryTick bool
+	// scratch is the per-(mob,goal) mutable state the `entity.state` seam reads/writes — the analogue
+	// of the Go goal's struct fields (lookAtPlayerGoal.lookTime/lookX/Y/Z, randomLookAroundGoal.relX/
+	// relZ/lookTime) that a frozen Starlark module global cannot hold (FIDELITY GAP 2). Allocated per
+	// SPAWNED mob (buildAIFromDecl), so two pigs never share a countdown; tick-owned (mutated only on
+	// the tick goroutine via the entity handle the goal callback receives), -race clean by construction.
+	scratch map[string]float64
 }
 
 // Compile-time assertion: starlarkGoal IS a server.Goal (slots into goalSelector.addGoal unchanged).
@@ -58,7 +70,7 @@ var _ Goal = (*starlarkGoal)(nil)
 // id comes from e (every Goal method receives the live *Entity from serverAiStep), so one
 // starlarkGoal instance correctly drives whatever entity the selector ticks it for.
 func (g *starlarkGoal) handles(e *Entity) starlark.Tuple {
-	eh := newEntityHandle(g.t, e.id, g.caps)
+	eh := newEntityHandleWithScratch(g.t, e.id, g.caps, g.scratch)
 	wh := newWorldHandle(g.t, g.caps)
 	nh := newNavHandle(g.t, e.id, g.caps)
 	return starlark.Tuple{eh, wh, nh}
@@ -101,8 +113,20 @@ func (g *starlarkGoal) canUse(_ *TickLoop, e *Entity) bool {
 // This fires starlark.Call ONLY for a RUNNING goal (pass 1 of goalSelector.tick) — an idle goal is
 // never asked, so an idle declared mob makes zero calls.
 func (g *starlarkGoal) canContinueToUse(t *TickLoop, e *Entity) bool {
-	return g.canUse(t, e)
+	if g.continueFn == nil {
+		return g.canUse(t, e)
+	}
+	res, ok := g.call(e, g.continueFn)
+	if !ok {
+		return false
+	}
+	return bool(res.Truth())
 }
+
+// requiresUpdateEveryTick overrides baseGoal's default-false from the declaration (FIDELITY GAP 1).
+// A goal declared requires_update_every_tick=True (the ported RandomLookAroundGoal@8) ticks even when
+// the selector is not simulating — matching Java RandomLookAroundGoal.requiresUpdateEveryTick()==true.
+func (g *starlarkGoal) requiresUpdateEveryTick() bool { return g.updateEveryTick }
 
 // start invokes the optional start callable when the goal transitions to running (the flag-claim
 // edge), isolated. No start callable => no-op (baseGoal default). Fires only on the not-running ->
@@ -155,14 +179,18 @@ func buildAIFromDecl(t *TickLoop, decl *mobDecl) *mobAI {
 	m.rng = newEntityRandom(defaultEntityRandomSeed)
 	for _, gd := range decl.goals {
 		m.goals.addGoal(gd.priority, &starlarkGoal{
-			baseGoal: newBaseGoal(gd.flags),
-			t:        t,
-			caps:     decl.caps,
-			name:     decl.name,
-			canUseFn: gd.canUseFn,
-			tickFn:   gd.tickFn,
-			startFn:  gd.startFn,
-			stopFn:   gd.stopFn,
+			baseGoal:        newBaseGoal(gd.flags),
+			t:               t,
+			caps:            decl.caps,
+			name:            decl.name,
+			canUseFn:        gd.canUseFn,
+			tickFn:          gd.tickFn,
+			startFn:         gd.startFn,
+			stopFn:          gd.stopFn,
+			continueFn:      gd.continueFn,
+			updateEveryTick: gd.requiresUpdateEveryTick,
+			// Fresh per-(mob,goal) scratch (the Go goal's struct fields) — never shared between mobs.
+			scratch: make(map[string]float64),
 		})
 	}
 	return m

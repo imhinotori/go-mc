@@ -6,6 +6,7 @@
 package starlark
 
 import (
+	starlarkmath "go.starlark.net/lib/math"
 	"go.starlark.net/starlark"
 	"go.starlark.net/syntax"
 )
@@ -46,6 +47,14 @@ func NewThread(name string) *starlark.Thread { return newThread(name) }
 func safeGlobals() starlark.StringDict {
 	return starlark.StringDict{
 		"echo": starlark.NewBuiltin("echo", echoBuiltin),
+		// math is go.starlark.net's standard numeric module (cos/sin/atan2/pi/sqrt/...). It is a PURE,
+		// deterministic, CGO-free value module with NO filesystem/network/eval surface — fully within
+		// the sandbox boundary ("no fs/network/eval" — the universe + this allowlist). The 1:1 vanilla
+		// mob goals need trig (RandomLookAroundGoal.start computes relX=cos(2pi*r), relZ=sin(2pi*r));
+		// exposing the standard module lets a ported goal stay a literal port rather than smuggling the
+		// trig into a host seam. It is the math.Module singleton (a frozen *starlarkstruct.Module);
+		// safe to share across loads (immutable, no per-load state).
+		"math": starlarkmath.Module,
 	}
 }
 

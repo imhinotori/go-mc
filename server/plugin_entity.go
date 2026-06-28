@@ -35,12 +35,29 @@ type entityHandle struct {
 	t    *TickLoop
 	id   int32
 	caps capSet
+	// scratch is the per-(mob,goal) mutable state bag the get_state/set_state seam reads/writes — the
+	// frozen-Starlark-boundary fix (FIDELITY GAP 2). It is the OWNING goal's scratch map (allocated in
+	// buildAIFromDecl, threaded through starlarkGoal.handles), so set_state from a goal callback
+	// mutates that goal's own per-mob state (the lookAtPlayerGoal.lookTime / randomLookAroundGoal.relX
+	// /relZ struct-field analogue). nil for a handle built without a goal (entities_near results, the
+	// debug seam) — get_state then returns the default and set_state errors cleanly. Tick-owned.
+	scratch map[string]float64
 }
 
-// newEntityHandle builds an entity handle for an id with the given capability set. Wave 2 threads the
-// real manifest-derived capSet through buildAIFromDecl; tests construct handles directly.
+// newEntityHandle builds an entity handle for an id with the given capability set (no goal scratch).
+// Wave 2 threads the real manifest-derived capSet through buildAIFromDecl; tests construct handles
+// directly. Used where there is no owning goal (entities_near results, direct test handles).
 func newEntityHandle(t *TickLoop, id int32, caps capSet) *entityHandle {
 	return &entityHandle{t: t, id: id, caps: caps}
+}
+
+// newEntityHandleWithScratch builds an entity handle that also carries the OWNING goal's per-mob
+// scratch map, so a goal callback's get_state/set_state reaches that goal's own mutable state. The
+// scratch is allocated once per spawned mob per goal (buildAIFromDecl) and re-threaded fresh per
+// callback call (starlarkGoal.handles) — the handle never outlives the call, the scratch persists on
+// the goal. Tick-owned (mutated only on the tick goroutine).
+func newEntityHandleWithScratch(t *TickLoop, id int32, caps capSet, scratch map[string]float64) *entityHandle {
+	return &entityHandle{t: t, id: id, caps: caps, scratch: scratch}
 }
 
 // Compile-time interface assertions.
@@ -81,10 +98,18 @@ func (h *entityHandle) Attr(name string) (starlark.Value, error) {
 		return h.bound("attribute", h.attribute), nil
 	case "set_look":
 		return h.bound("set_look", h.setLook), nil
+	case "set_look_at":
+		return h.bound("set_look_at", h.setLookAt), nil
 	case "rand_int":
 		return h.bound("rand_int", h.randInt), nil
 	case "rand_float":
 		return h.bound("rand_float", h.randFloat), nil
+	case "rand_double":
+		return h.bound("rand_double", h.randDouble), nil
+	case "get_state":
+		return h.bound("get_state", h.getState), nil
+	case "set_state":
+		return h.bound("set_state", h.setState), nil
 	}
 
 	// Everything below is a READ — require capEntitiesRead, then re-resolve the entity.
@@ -126,7 +151,7 @@ func (h *entityHandle) AttrNames() []string {
 	return []string{
 		"x", "y", "z", "yaw", "pitch", "on_ground", "type", "velocity", "health",
 		"attribute", "move_to", "set_velocity", "set_attribute",
-		"set_look", "rand_int", "rand_float",
+		"set_look", "set_look_at", "rand_int", "rand_float", "rand_double", "get_state", "set_state",
 	}
 }
 
@@ -269,6 +294,39 @@ func (h *entityHandle) setLook(_ *starlark.Thread, b *starlark.Builtin,
 	return starlark.None, nil
 }
 
+// setLookAt(x, y, z) aims the mob at a WORLD POINT — the faithful LookControl.setLookAt(x,eyeY,z)
+// analogue both LookAtPlayerGoal.tick and RandomLookAroundGoal.tick call in the jar bytecode (they
+// pass a world point, NOT a precomputed yaw). The host derives the body/head yaw from the horizontal
+// delta via the SAME yawTowardDeg the Go oracle goals use (e.headYaw = e.yaw = yawTowardDeg(px-e.x,
+// pz-e.z)), so set_look_at is behavior-identical to the Go goal it replaces (Pitfall 2). The y arg is
+// accepted (the vanilla setLookAt takes the eye-Y) but the v1 non-gradual analogue sets only the
+// horizontal yaw — matching the Go goals, which set yaw from (dx,dz) and leave pitch untouched.
+// Requires entities.write (a look mutate, gated like set_look). Non-finite coords are ignored (no-op).
+func (h *entityHandle) setLookAt(_ *starlark.Thread, b *starlark.Builtin,
+	args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if !h.caps.has(capEntitiesWrite) {
+		return nil, capError("entities.write")
+	}
+	var x, y, z float64
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 3, &x, &y, &z); err != nil {
+		return nil, err
+	}
+	e, err := h.resolve()
+	if err != nil {
+		return nil, err
+	}
+	dx := x - e.x
+	dz := z - e.z
+	if math.IsNaN(dx) || math.IsInf(dx, 0) || math.IsNaN(dz) || math.IsInf(dz, 0) {
+		return starlark.None, nil // ignore a non-finite target (never feed NaN to the byte-angle packer)
+	}
+	_ = y // the eye-Y is part of the vanilla signature; the v1 non-gradual yaw set ignores it (Go parity)
+	yaw := yawTowardDeg(dx, dz) // the EXACT ported MC-convention yaw the Go look goals use
+	e.headYaw = yaw
+	e.yaw = yaw
+	return starlark.None, nil
+}
+
 // randInt(n) draws a pseudo-random int in [0, n) from the mob's PER-ENTITY seeded source (e.ai.rng —
 // the Mob.getRandom() analogue, ai_random.go). Deterministic for a fixed mob seed. NO capability gate
 // (CONTEXT decision 1 / 24-RESEARCH: a read of the mob's OWN RNG, like has_path). n must be > 0. A
@@ -305,6 +363,70 @@ func (h *entityHandle) randFloat(_ *starlark.Thread, _ *starlark.Builtin,
 		return nil, fmt.Errorf("entity %d has no AI random source (cannot rand_float)", h.id)
 	}
 	return starlark.Float(float64(e.ai.rng.nextFloat())), nil
+}
+
+// randDouble() draws a pseudo-random double in [0, 1) from the mob's per-entity seeded source (the
+// RandomSource.nextDouble() analogue). DISTINCT from rand_float() (nextFloat) — vanilla goals that
+// draw a double (RandomLookAroundGoal.start: d = 2pi * getRandom().nextDouble()) MUST use this seam so
+// the draw matches the Go oracle's nextDouble() exactly (a nextFloat substitute would diverge the RNG
+// stream and break behavior-identity). No capability gate (the mob's own RNG). A mob with no AI/rng
+// errors cleanly.
+func (h *entityHandle) randDouble(_ *starlark.Thread, _ *starlark.Builtin,
+	_ starlark.Tuple, _ []starlark.Tuple) (starlark.Value, error) {
+	e, err := h.resolve()
+	if err != nil {
+		return nil, err
+	}
+	if e.ai == nil || e.ai.rng == nil {
+		return nil, fmt.Errorf("entity %d has no AI random source (cannot rand_double)", h.id)
+	}
+	return starlark.Float(e.ai.rng.nextDouble()), nil
+}
+
+// getState(key, default=0.0) READS a per-(mob,goal) scratch value (the frozen-Starlark-boundary fix,
+// FIDELITY GAP 2). It is the OWNING goal's mutable state bag — the analogue of the Go goal's struct
+// fields (lookAtPlayerGoal.lookTime/lookX/Y/Z, randomLookAroundGoal.relX/relZ/lookTime). NO capability
+// gate (the goal's own scratch, like rand_int/rand_float). A missing key returns the supplied default
+// (or 0.0). A handle with no scratch (no owning goal) returns the default rather than erroring, so a
+// read is always safe. Values are float64 (the only scalar the ported goals stash — counts/coords).
+func (h *entityHandle) getState(_ *starlark.Thread, b *starlark.Builtin,
+	args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var key string
+	def := 0.0
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "key", &key, "default?", &def); err != nil {
+		return nil, err
+	}
+	if h.scratch == nil {
+		return starlark.Float(def), nil
+	}
+	if v, ok := h.scratch[key]; ok {
+		return starlark.Float(v), nil
+	}
+	return starlark.Float(def), nil
+}
+
+// setState(key, value) WRITES a per-(mob,goal) scratch value. NO capability gate (the goal's own
+// state). A handle with no scratch (no owning goal) errors cleanly so a misuse is observable rather
+// than a silent no-op. Tick-owned: mutated only on the tick goroutine from the goal callback — the
+// scratch map is the goal's own, never shared across mobs (allocated per spawned mob in buildAIFromDecl).
+func (h *entityHandle) setState(_ *starlark.Thread, b *starlark.Builtin,
+	args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var key string
+	var value starlark.Value
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "key", &key, "value", &value); err != nil {
+		return nil, err
+	}
+	// Accept either an int or a float (a Starlark `40 + rand_int(40)` is an int; coords are floats).
+	// The scratch stores float64, so coerce both via AsFloat — a non-number value is a clean error.
+	f, ok := starlark.AsFloat(value)
+	if !ok {
+		return nil, fmt.Errorf("set_state %q: value must be a number, got %s", key, value.Type())
+	}
+	if h.scratch == nil {
+		return nil, fmt.Errorf("entity %d has no goal scratch (cannot set_state)", h.id)
+	}
+	h.scratch[key] = f
+	return starlark.None, nil
 }
 
 // entityTypeName resolves a wire entity-type id to its registry name (data/entity.ByID). An unknown
@@ -499,11 +621,33 @@ func (h *navHandle) Attr(name string) (starlark.Value, error) {
 		return h.bound("path_to", h.pathTo), nil
 	case "has_path":
 		return h.bound("has_path", h.hasPath), nil
+	case "stop":
+		return h.bound("stop", h.stop), nil
 	}
 	return nil, nil
 }
 
-func (h *navHandle) AttrNames() []string { return []string{"path_to", "has_path"} }
+func (h *navHandle) AttrNames() []string { return []string{"path_to", "has_path", "stop"} }
+
+// stop() clears the mob's pending nav target — the navigation.stop() analogue (RandomStrollGoal.stop
+// = navigation.stop()). The Go oracle's randomStrollGoal.stop() calls clearWantTarget(); this is that
+// seam. No capability gate beyond nav (clearing a target the same caller could set). Re-resolves on
+// the owner; a removed / non-AI entity errors cleanly.
+func (h *navHandle) stop(_ *starlark.Thread, _ *starlark.Builtin,
+	_ starlark.Tuple, _ []starlark.Tuple) (starlark.Value, error) {
+	if !h.caps.has(capNav) {
+		return nil, capError("nav")
+	}
+	e, ok := h.t.entities.get(h.id)
+	if !ok {
+		return nil, fmt.Errorf("entity %d no longer exists", h.id)
+	}
+	if e.ai == nil {
+		return nil, fmt.Errorf("entity %d has no AI (cannot nav.stop)", h.id)
+	}
+	e.ai.clearWantTarget()
+	return starlark.None, nil
+}
 
 // hasPath() READS whether the mob's nav currently wants a target (e.ai.hasTarget). Re-resolves the
 // mob on the owner; a removed / non-AI entity errors cleanly. No capability gate — a read-only
