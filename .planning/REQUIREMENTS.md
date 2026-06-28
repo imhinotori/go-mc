@@ -35,7 +35,7 @@ The "user" is now (a) a **plugin author** writing `.star` (or, opt-in, Python) p
 
 ### Regionization (Phase 27)
 
-- [ ] **REGION-01**: Folia-style per-region tick threading (folded from the v3 deferral). The world ticks in independent parallel regions; the plugin call seam + the entity API become region-aware (a plugin hook runs on its region's thread). The world ticks in parallel regions, `-race` clean, plugin hooks run on the correct region thread. (Regionize a working single-thread seam — don't design the seam around regions first.)
+- [x] **REGION-01**: Folia-style per-region tick threading (folded from the v3 deferral). The world ticks in independent parallel regions; the plugin call seam + the entity API become region-aware (a plugin hook runs on its region's thread). The world ticks in parallel regions, `-race` clean, plugin hooks run on the correct region thread. (Regionize a working single-thread seam — don't design the seam around regions first.)
 
 ### Gate (Phase 28)
 
@@ -84,7 +84,7 @@ Updated during roadmap creation.
 | PLUGIN-04 | Phase 24 | Complete |
 | PLUGIN-05 | Phase 25 | Complete |
 | PLUGIN-06 | Phase 26 | Complete |
-| REGION-01 | Phase 27 | Pending |
+| REGION-01 | Phase 27 | Complete |
 | PLUGIN-07 | Phase 28 | Pending |
 
 **Coverage:**
