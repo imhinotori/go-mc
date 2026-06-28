@@ -233,6 +233,9 @@ func (t *TickLoop) clicked(p *tickPlayer, containerID int32, slotNum int16, butt
 			case containerKindCrafting:
 				t.clickedCrafting(p, p.openContainer, slotNum, button, input)
 				return
+			case containerKindStonecutter:
+				t.clickedStonecutter(p, p.openContainer, slotNum, button, input)
+				return
 			}
 		}
 		t.sendContent(p) // unknown/stale window: resend authoritative player content
@@ -329,6 +332,12 @@ func (t *TickLoop) handleContainerClose(p *tickPlayer, pkt pk.Packet) {
 	// tick-owned chestLoot (already mutated by clicks), so freeing the window is its whole close.
 	if p.openContainer != nil && p.openContainer.kind == containerKindCrafting {
 		t.closeCraftingWindow(p, p.openContainer)
+	}
+	// A STONECUTTER window (PLUGIN-05 Plan 25-03) returns its transient INPUT to the player on close
+	// (StonecutterMenu.removed -> clearContainer over the input slot) — the result is virtual (not
+	// returned). The input is real and must not be lost.
+	if p.openContainer != nil && p.openContainer.kind == containerKindStonecutter {
+		t.closeStonecutterWindow(p, p.openContainer)
 	}
 	// (A cursor item left on the mouse is dropped by vanilla in removed(); v1 leaves it on the player
 	// cursor — it is reconciled into the player inventory on the next inventory interaction. Cited.)

@@ -58,6 +58,23 @@ func containerSetSlot(containerID, stateID int32, slot int16, item component.Slo
 	)
 }
 
+// containerSetData builds ClientboundContainerSetData — the DataSlot sync (PLUGIN-05, the stonecutter
+// selectedRecipeIndex). Jar-derived 3-field write (ClientboundContainerSetDataPacket.write, javap'd):
+//
+//	VarInt containerId   (writeContainerId — a VarInt alias)
+//	Short  id            (writeShort — the DataSlot index, NOT a VarInt)
+//	Short  value         (writeShort — the DataSlot value, NOT a VarInt)
+//
+// The stonecutter has one DataSlot (id 0 = selectedRecipeIndex); value is the selected recipe index
+// (or -1 = none). A Short carries the -1 (0xFFFF) faithfully.
+func containerSetData(containerID int32, id, value int16) pk.Packet {
+	return pk.Marshal(int32(packetid.ClientboundContainerSetData),
+		pk.VarInt(containerID),
+		pk.Short(id),
+		pk.Short(value),
+	)
+}
+
 // openScreen builds ClientboundOpenScreen. Jar-derived 3-field composite
 // (ClientboundOpenScreenPacket.STREAM_CODEC, verified javap this session):
 //

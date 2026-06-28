@@ -19,11 +19,39 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/imhinotori/sulfur/level/recipe"
 	"github.com/imhinotori/sulfur/plugin/host"
 	"go.starlark.net/starlark"
 )
+
+// stonecutterOnce caches the parsed stonecutting recipe subset (PLUGIN-05 Plan 25-03). The
+// StonecutterMenu's setupRecipeList (selectByInput) needs the per-input list of stonecutter results,
+// which vanilla reads from RecipeAccess.stonecutterRecipes — Sulfur reads it from the SAME parsed
+// recipe tree LoadCraftingPlugin uses. Parsed once (the recipe tree is immutable), tick-read.
+var (
+	stonecutterOnce  sync.Once
+	stonecutterCache []recipe.Stonecutting
+)
+
+// stonecutterRecipes returns the parsed stonecutting recipes (cached). On a parse error it returns an
+// empty list (a stonecutter with no recipes opens but offers nothing — never a panic). This is the
+// Sulfur analogue of RecipeAccess.stonecutterRecipes().
+func stonecutterRecipes() []recipe.Stonecutting {
+	stonecutterOnce.Do(func() {
+		recipes, err := recipe.ParseAll()
+		if err != nil {
+			return // leave the cache empty (open-but-offer-nothing, never a panic)
+		}
+		for i := range recipes {
+			if recipes[i].Type == recipe.TypeStonecutting && recipes[i].Stonecutting != nil {
+				stonecutterCache = append(stonecutterCache, *recipes[i].Stonecutting)
+			}
+		}
+	})
+	return stonecutterCache
+}
 
 // craftingFS embeds the bundled crafting plugin. The canonical operator-facing copy also ships at the
 // repo-root plugins/crafting/; this embedded copy (server/assets/crafting/) is the source of truth for

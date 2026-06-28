@@ -38,6 +38,7 @@ import (
 	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/level/component"
+	"github.com/imhinotori/sulfur/level/recipe"
 	"github.com/imhinotori/sulfur/nbt"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
@@ -60,14 +61,27 @@ type openContainer struct {
 	// on close the 9 cells are returned to the player (CraftingMenu.removed -> clearContainer).
 	craftGrid   [9]component.SlotData
 	craftResult component.SlotData
+
+	// cutInput/cutResult/cutResults/cutSelected back the STONECUTTER window (kind ==
+	// containerKindStonecutter, PLUGIN-05 Plan 25-03): a single transient INPUT slot (cutInput,
+	// StonecutterMenu.inputSlot), the displayed RESULT (cutResult, StonecutterMenu.resultSlot — a
+	// virtual ResultContainer entry), the per-input recipe list (cutResults, the
+	// SelectableRecipe$SingleInputSet.selectByInput entries), and the selected index (cutSelected, the
+	// selectedRecipeIndex DataSlot — -1 = none). On close the input is returned to the player
+	// (StonecutterMenu.removed -> clearContainer over the input). No block-entity (transient).
+	cutInput    component.SlotData
+	cutResult   component.SlotData
+	cutResults  []recipe.Stack
+	cutSelected int
 }
 
 // containerKind discriminates an open non-inventory window.
 type containerKind int
 
 const (
-	containerKindChest    containerKind = iota // a world chest (chestPos)
-	containerKindCrafting                      // a transient crafting-table 3x3 (craftGrid)
+	containerKindChest       containerKind = iota // a world chest (chestPos)
+	containerKindCrafting                          // a transient crafting-table 3x3 (craftGrid)
+	containerKindStonecutter                       // a transient stonecutter single-input picker (cutInput)
 )
 
 // chestMenuSize is the chest-window slot count: 27 chest container slots + 27 player main + 9
@@ -132,8 +146,9 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 	}
 	isChest := isChestBlock(state)
 	isCraft := isCraftingTableBlock(state)
-	if !isChest && !isCraft {
-		return false // not an interactive block (chest/crafting_table): PASS → placement runs
+	isCut := isStonecutterBlock(state)
+	if !isChest && !isCraft && !isCut {
+		return false // not an interactive block (chest/crafting_table/stonecutter): PASS → placement runs
 	}
 	// Reach-gate the interaction (the same server-authoritative reach the place/break paths use):
 	// a far block is not openable. Vanilla gates the whole useItemOn behind the interaction
@@ -145,6 +160,11 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 		// CraftingTableBlock.useWithoutItem -> player.openMenu(crafting). The 3x3 transient menu opens
 		// on any right-click (the bl9 sneak guard collapses to false in v1, like the chest path).
 		return t.openCraftingTable(p, hitPos)
+	}
+	if isCut {
+		// StonecutterBlock.useWithoutItem -> player.openMenu(stonecutter). The single-input picker menu
+		// opens on any right-click (the bl9 sneak guard collapses to false in v1, like the chest path).
+		return t.openStonecutter(p, hitPos)
 	}
 	return t.openChest(p, hitPos)
 }

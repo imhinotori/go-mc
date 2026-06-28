@@ -234,6 +234,14 @@ func (t *TickLoop) applyInput(p *tickPlayer, in SubtickInput) {
 		// INVENTORY (ENT-04): the client closed a container window. v1 cleanup/no-op.
 		t.handleContainerClose(p, in.Packet)
 
+	case packetid.ServerboundContainerButtonClick:
+		// INVENTORY (PLUGIN-05 Plan 25-03): the client clicked a menu BUTTON — the stonecutter
+		// recipe-picker selection (AbstractContainerMenu.clickMenuButton via
+		// ServerGamePacketListenerImpl.handleContainerButtonClick). The handler resolves the named
+		// window, validates the button id against the current recipe list, and selects the result.
+		// A forged/stale window or out-of-range index is a silent no-op inside the handler.
+		t.handleContainerButtonClick(p, in.Packet)
+
 	case packetid.ServerboundAttack:
 		// COMBAT (GAMEPLAY-04): the entity ATTACK. In 26.2 the attack is its OWN packet —
 		// ServerboundAttackPacket = a single VarInt entityId (jar-verified) — split out of the
