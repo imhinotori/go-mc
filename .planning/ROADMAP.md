@@ -51,7 +51,7 @@ Full phase details: [milestones/v3-ROADMAP.md](milestones/v3-ROADMAP.md).
 
 - [x] **Phase 21: Starlark runtime foundation** (PLUGIN-01) — embed `go.starlark.net` (pure-Go, CGO=0 preserved); the per-goroutine `starlark.Thread` model, the sandbox (step-counter budget, `-recursion` off, no I/O builtins), FrozenValue sharing across the tick boundary, plugin load/parse/compile lifecycle, and a `replace`-pinned fork if needed. No game hooks yet — just "a `.star` file loads, runs sandboxed, calls a Go builtin, returns a value, race-clean."
  (completed 2026-06-28)
-- [ ] **Phase 22: Plugin host + event bus** (PLUGIN-02) — the plugin manager (discover/load/unload `.star` plugins from a plugins dir), the manifest, the **event system** (typed events: tick, player join/leave, block break/place, entity spawn/death, damage), the registration API (a plugin declares hooks once at load), and the Go→plugin dispatch seam that stays off the per-entity hot path (event-driven + cached, not per-tick-per-entity).
+- [x] **Phase 22: Plugin host + event bus** (PLUGIN-02) — the plugin manager (discover/load/unload `.star` plugins from a plugins dir), the manifest, the **event system** (typed events: tick, player join/leave, block break/place, entity spawn/death, damage), the registration API (a plugin declares hooks once at load), and the Go→plugin dispatch seam that stays off the per-entity hot path (event-driven + cached, not per-tick-per-entity). (completed 2026-06-28)
 - [ ] **Phase 23: Entity/mob behavior API** (PLUGIN-03) — the **declarative mob-behavior interface**: a plugin DECLARES a mob's attributes/goals/AI (loaded once); Go runs the hot path (physics/pathfinding/tick) calling the declared hooks. The FULL-OVERRIDE path: a plugin can replace a mob's whole behavior. The Go-side bridge exposes the entity/world/nav API to Starlark as frozen, tick-owned-safe handles. Race-clean by construction (TICK-05 carries into the plugin call seam).
 - [ ] **Phase 24: Vanilla mobs AS plugins (1:1 dogfood)** (PLUGIN-04) — rewrite the existing Go mob/entity logic as Starlark plugins that remain a **literal 1:1 port of the 26.2 jar** (the mandate carries into the plugin layer). This is the validation that the API is ultra-powerful enough to express real vanilla AI. Proven against the jar bytecode + the existing mob-AI tests, byte/behavior-identical to the Go-native path it replaces.
 - [ ] **Phase 25: Crafting/recipes AS plugins (2nd-domain dogfood)** (PLUGIN-05) — the crafting system is built THROUGH the plugin API, not as a hardcoded Go subsystem: a recipe-provider plugin loads the jar-extracted recipes (shaped/shapeless/smelting/etc) and drives the crafting-grid result + the ResultSlot.onTake consumption (the slots exist in InventoryMenu today but the result is a no-op stub — `inventory_click.go`: "no recipes wired in v1"). This proves the plugin API is general across a SECOND domain (recipes/menus, not just entity AI) — the real test of "ultra-powerful". The 1:1 mandate carries: the recipe-match + consume logic stays a literal jar port (RecipeManager/CraftingMenu), just expressed via the plugin host. Includes the crafting_table block + 3×3 menu (vanilla only had the 2×2 inventory grid). Custom (non-vanilla) recipes fall out for free.
@@ -86,7 +86,7 @@ Plans:
 **Plans**: 2 plans
 Plans:
 - [x] 22-01-PLAN.md — plugin/host package: TOML manifest + Manager (discover/load/unload) + register-once event bus + Emit + the Phase-21 LoadWith extension (A2) (Wave 1)
-- [ ] 22-02-PLAN.md — wire host.Emit into the 8 discrete server seams (on_damage post-mitigation) + the fire-once-per-break GATE + anti-seam grep gate + FULL fsnotify hot-reload with tick-goroutine swap (Wave 2)
+- [x] 22-02-PLAN.md — wire host.Emit into the 8 discrete server seams (on_damage post-mitigation) + the fire-once-per-break GATE + anti-seam grep gate + FULL fsnotify hot-reload with tick-goroutine swap (Wave 2)
 **Research**: Plugin-dir/manifest format, the event taxonomy mapped to existing tick seams, the off-hot-path dispatch design.
 
 ### Phase 23: Entity/mob behavior API
@@ -165,7 +165,7 @@ Plans:
 | 10–16 (v2.0 worldgen + structures) | v2.0 | 22/22 | Complete | 2026-06-25 |
 | 17–20 (v3 online-mode + operator-UX + structure-polish) | v3 | 33/33 | Complete | 2026-06-27 |
 | 21. Starlark runtime foundation | v4 | 2/2 | Complete   | 2026-06-28 |
-| 22. Plugin host + event bus | v4 | 1/2 | In Progress|  |
+| 22. Plugin host + event bus | v4 | 2/2 | Complete   | 2026-06-28 |
 | 23. Entity/mob behavior API | v4 | 0/? | Not started | — |
 | 24. Vanilla mobs AS plugins (1:1 dogfood) | v4 | 0/? | Not started | — |
 | 25. Crafting/recipes AS plugins (2nd-domain dogfood) | v4 | 0/? | Not started | — |
