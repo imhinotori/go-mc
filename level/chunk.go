@@ -121,9 +121,32 @@ func ChunkFromSave(c *save.Chunk) (*Chunk, error) {
 		blockEntities[i].Type = block.EntityTypes[tmp.ID]
 	}
 
+	// PostProcessing: decode the vanilla "PostProcessing" tag (ListTag of per-section ShortList)
+	// back into the flat PostProcessFluids list the server's postProcessChunkFluids consumes. Each
+	// short is ((localY_in_section<<8)|(localZ<<4)|localX) for section index `si`; the full local Y
+	// is (si<<4)|in-section-Y. Without this the gen-time aquifer/carver marks would not survive a
+	// chunk reload and cave/ravine water would stay static on revisit.
+	var postProcessFluids []uint32
+	if c.PostProcessing.Type == nbt.TagList && len(c.PostProcessing.Data) > 0 {
+		var perSection [][]int16
+		if err := c.PostProcessing.Unmarshal(&perSection); err == nil {
+			for si, shorts := range perSection {
+				for _, s := range shorts {
+					us := uint16(s)
+					inSecY := int(us>>8) & 0xF
+					lz := int(us>>4) & 0xF
+					lx := int(us) & 0xF
+					localYFull := (si << 4) | inSecY
+					postProcessFluids = append(postProcessFluids, uint32(localYFull)<<8|uint32(lz)<<4|uint32(lx))
+				}
+			}
+		}
+	}
+
 	bitsForHeight := bits.Len( /* chunk height in blocks */ uint(secs)*16 + 1)
 	return &Chunk{
-		Sections: sections,
+		Sections:          sections,
+		PostProcessFluids: postProcessFluids,
 		HeightMaps: HeightMaps{
 			WorldSurface:           NewBitStorage(bitsForHeight, 16*16, c.Heightmaps["WORLD_SURFACE"]),
 			WorldSurfaceWG:         NewBitStorage(bitsForHeight, 16*16, c.Heightmaps["WORLD_SURFACE_WG"]),
@@ -227,6 +250,36 @@ func ChunkToSave(c *Chunk, dst *save.Chunk) (err error) {
 	dst.Heightmaps["MOTION_BLOCKING"] = c.HeightMaps.MotionBlocking.Raw()
 	dst.Heightmaps["MOTION_BLOCKING_NO_LEAVES"] = c.HeightMaps.MotionBlockingNoLeaves.Raw()
 	dst.Status = string(c.Status)
+
+	// PostProcessing: serialize the chunk's PostProcessFluids list to the vanilla on-disk
+	// "PostProcessing" tag (SerializableChunkData.packOffsets) — a ListTag with one ShortList per
+	// SECTION, each short = ((localY_in_section<<8)|(localZ<<4)|localX). Without this the
+	// aquifer/carver fluid marks are LOST on the first save, so a reloaded chunk's cave/ravine water
+	// never flows (the marks only existed in memory at gen time). c.PostProcessFluids packs the
+	// FULL local Y (worldY-minY); split it back into (section, in-section Y). CITE
+	// SerializableChunkData.packOffsets / ChunkAccess.getPostProcessing.
+	if len(c.PostProcessFluids) > 0 {
+		perSection := make([][]int16, secs)
+		for i := range perSection {
+			perSection[i] = []int16{}
+		}
+		for _, packed := range c.PostProcessFluids {
+			localYFull := int(packed >> 8)
+			lz := int((packed >> 4) & 0xF)
+			lx := int(packed & 0xF)
+			sec := localYFull >> 4
+			if sec < 0 || sec >= secs {
+				continue
+			}
+			short := int16((localYFull&15)<<8 | (lz << 4) | lx)
+			perSection[sec] = append(perSection[sec], short)
+		}
+		doc, merr := nbt.Marshal(perSection)
+		if merr != nil {
+			return merr
+		}
+		dst.PostProcessing = nbt.RawMessage{Type: nbt.TagList, Data: doc[3:]}
+	}
 
 	// block_entities: serialize each BlockEntity as a full-metadata compound (the inverse of
 	// ChunkFromSave's id/x/y/z decode). Ports BlockEntity.saveWithFullMetadata =
