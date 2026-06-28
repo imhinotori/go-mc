@@ -32,6 +32,12 @@ func newThread(name string) *starlark.Thread {
 	return th
 }
 
+// NewThread is the exported handle the plugin host uses to build a FRESH,
+// budget-bounded Thread per Emit dispatch. It delegates to newThread so the
+// step budget stays un-bypassable: the host cannot dispatch a hook on a thread
+// without the runaway-loop guard set. ONE Thread per goroutine — never shared.
+func NewThread(name string) *starlark.Thread { return newThread(name) }
+
 // safeGlobals is the ENTIRE app-specific surface a plugin can reach. The
 // Starlark universe (len/range/dict/...) has NO filesystem/network/eval builtin
 // — `open` is undefined — so this allowlist IS the sandbox boundary.
@@ -42,3 +48,10 @@ func safeGlobals() starlark.StringDict {
 		"echo": starlark.NewBuiltin("echo", echoBuiltin),
 	}
 }
+
+// SafeGlobals is the exported view of the sandbox allowlist for the plugin
+// host. It returns a FRESH StringDict on every call (safeGlobals builds a new
+// map each time), so the host may mutate the returned dict — e.g. inject its
+// `register` builtin — without affecting any other load. Use this as the base
+// of the predeclared set passed to LoadWith.
+func SafeGlobals() starlark.StringDict { return safeGlobals() }

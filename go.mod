@@ -11,6 +11,8 @@ require (
 	charm.land/bubbles/v2 v2.1.0
 	charm.land/bubbletea/v2 v2.0.7
 	charm.land/lipgloss/v2 v2.0.4
+	github.com/BurntSushi/toml v1.6.0
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/klauspost/compress v1.18.6
 	github.com/panjf2000/ants/v2 v2.12.1
 	github.com/puzpuzpuz/xsync/v4 v4.5.0
