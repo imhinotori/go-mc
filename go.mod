@@ -14,6 +14,7 @@ require (
 	github.com/klauspost/compress v1.18.6
 	github.com/panjf2000/ants/v2 v2.12.1
 	github.com/puzpuzpuz/xsync/v4 v4.5.0
+	go.starlark.net v0.0.0-20260613233743-8ba36ccb83fb
 	golang.org/x/sync v0.21.0
 	golang.org/x/term v0.44.0
 )
