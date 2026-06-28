@@ -385,27 +385,36 @@ func (h *navHandle) bound(name string,
 	return starlark.NewBuiltin(name, fn).BindReceiver(h)
 }
 
-// Attr dispatches the nav handle surface. path_to is a bound mutate method (enforces capNav when
-// CALLED). has_path is a READ — re-resolve the entity on the tick goroutine and return the nav's
-// hasTarget; a removed entity / a non-AI entity returns a clean error.
+// Attr dispatches the nav handle surface. Both path_to and has_path are bound METHODS (callables) —
+// the plugin invokes them as nav.path_to(...) / nav.has_path(). path_to enforces capNav when called;
+// has_path is a read (no capability gate — observing whether a path is wanted is harmless) that
+// re-resolves the entity on the tick goroutine.
 func (h *navHandle) Attr(name string) (starlark.Value, error) {
 	switch name {
 	case "path_to":
 		return h.bound("path_to", h.pathTo), nil
 	case "has_path":
-		e, ok := h.t.entities.get(h.id)
-		if !ok {
-			return nil, fmt.Errorf("entity %d no longer exists", h.id)
-		}
-		if e.ai == nil {
-			return nil, fmt.Errorf("entity %d has no AI (cannot read has_path)", h.id)
-		}
-		return starlark.Bool(e.ai.hasTarget), nil
+		return h.bound("has_path", h.hasPath), nil
 	}
 	return nil, nil
 }
 
 func (h *navHandle) AttrNames() []string { return []string{"path_to", "has_path"} }
+
+// hasPath() READS whether the mob's nav currently wants a target (e.ai.hasTarget). Re-resolves the
+// mob on the owner; a removed / non-AI entity errors cleanly. No capability gate — a read-only
+// observation of the nav state.
+func (h *navHandle) hasPath(_ *starlark.Thread, _ *starlark.Builtin,
+	_ starlark.Tuple, _ []starlark.Tuple) (starlark.Value, error) {
+	e, ok := h.t.entities.get(h.id)
+	if !ok {
+		return nil, fmt.Errorf("entity %d no longer exists", h.id)
+	}
+	if e.ai == nil {
+		return nil, fmt.Errorf("entity %d has no AI (cannot read has_path)", h.id)
+	}
+	return starlark.Bool(e.ai.hasTarget), nil
+}
 
 // pathTo(x,y,z) MUTATES through the nav seam: setWantTarget -> requestPath (the async A*). It sets a
 // TARGET only — a POSITION change happens later via serverAiStep's navigation.tick -> moveEntity

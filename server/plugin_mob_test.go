@@ -1,6 +1,7 @@
 package server
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -365,13 +366,17 @@ func TestNavHandlePathTo(t *testing.T) {
 		t.Fatalf("path_to want target = (%v,%v,%v), want (10,64,3)", e.ai.wantX, e.ai.wantY, e.ai.wantZ)
 	}
 
-	// has_path reads hasTarget.
-	hp, err := nh.Attr("has_path")
+	// has_path() reads hasTarget (a bound callable, invoked as nav.has_path()).
+	hpAttr, err := nh.Attr("has_path")
 	if err != nil {
 		t.Fatalf("Attr(has_path): %v", err)
 	}
+	hp, err := starlark.Call(starlarkThread(), hpAttr.(*starlark.Builtin), nil, nil)
+	if err != nil {
+		t.Fatalf("has_path call: %v", err)
+	}
 	if hp != starlark.True {
-		t.Fatalf("has_path = %v, want True after path_to", hp)
+		t.Fatalf("has_path() = %v, want True after path_to", hp)
 	}
 
 	// WITHOUT capNav: path_to is denied (capability error), the target is unchanged.
@@ -392,4 +397,102 @@ func TestNavHandlePathTo(t *testing.T) {
 // (the same NewThread the goal callbacks use).
 func starlarkThread() *starlark.Thread {
 	return starlarkpkg.NewThread("test")
+}
+
+// --- Task 3: THE GATE — wander mob spawns + ticks + MOVES; idle = 0 interpreter -----------------
+
+// TestWanderMobSpawnsAndMoves is THE GATE (the PLUGIN-03 architecture proof): a Starlark-declared
+// wander mob (base_type pig, ONE MOVE goal whose tick nav-targets a fixed nearby pos) spawns, ticks
+// through the FULL pipeline (tickOnce -> tickAI -> serverAiStep -> starlarkGoal.tick -> nav.path_to
+// -> requestPath -> applyAsyncResults adopts the path -> navigation.tick -> moveEntity), and its
+// (x,z) CHANGES via the real Go nav. It renders as the EXISTING pig wire id (custom = behavior).
+func TestWanderMobSpawnsAndMoves(t *testing.T) {
+	loop, mgr := newPhysicsLoop()
+	// A floor wide enough for the mob to walk 8 blocks east: fill the spawn column + the eastward
+	// columns it will cross.
+	const floorY = 64
+	for cx := 0; cx <= 2; cx++ {
+		ch := putChunk(mgr, level.ChunkPos{int32(cx), 0})
+		fillFloor(ch, floorY)
+	}
+
+	r := loadMobRegistry(t, mobpluginsRoot)
+	decl := r.byName["wanderer"]
+
+	const x0, z0 = 2.5, 8.5
+	e := loop.spawnDeclaredMob(decl, x0, float64(floorY+1), z0)
+
+	if e.typ != entity.Pig.ID {
+		t.Fatalf("declared mob typ = %d, want pig wire id %d (custom = behavior, not a new wire type)", e.typ, entity.Pig.ID)
+	}
+	if e.attributes == nil || e.attributes.GetValue(attribute.MaxHealth.Name()) != 12.0 {
+		t.Fatalf("declared mob is missing the declared max_health (the supplier+override chain broke)")
+	}
+
+	// Drive the FULL tick pipeline: tickAI fires serverAiStep (the goal sets a nav target via the
+	// handle), applyAsyncResults adopts the async path, navigation.tick walks the mob via moveEntity.
+	for i := 0; i < 400; i++ {
+		loop.tickOnce()
+		// Re-resolve: a moved mob re-buckets but keeps its id; the store get is the authoritative read.
+		if _, ok := loop.entities.get(e.id); !ok {
+			t.Fatalf("the wander mob vanished from the store mid-walk")
+		}
+	}
+
+	moved := math.Hypot(e.x-x0, e.z-z0)
+	if moved < 2.0 {
+		t.Fatalf("the wander mob did not move via the Go nav: |Δ|=%v (start %v,%v -> %v,%v); want > 2 blocks", moved, x0, z0, e.x, e.z)
+	}
+	// Still the pig wire id after walking (the behavior is custom, the wire type is not).
+	if e.typ != entity.Pig.ID {
+		t.Fatalf("after walking, typ = %d, want pig wire id %d", e.typ, entity.Pig.ID)
+	}
+}
+
+// TestNoInterpreterWhenIdle proves the interpreter fires ONLY inside a running goal callback — an
+// IDLE declared mob makes 0 starlark.Calls per tick, an ACTIVE one makes >=1 (T-23-08, the per-mob-
+// per-tick interpreter-storm guard). It instruments the call count via a counting builtin the goal
+// ticks: an idle mob (its goal's can_use false, so it never runs) yields 0 calls across many ticks;
+// the active mob (the wander goal runs) yields >0. The assertion is NOT O(mobs*ticks) unconditional.
+func TestNoInterpreterWhenIdle(t *testing.T) {
+	loop, mgr := newPhysicsLoop()
+	const floorY = 64
+	ch := putChunk(mgr, level.ChunkPos{0, 0})
+	fillFloor(ch, floorY)
+
+	// IDLE mob: a MOVE goal whose can_use returns False — it never runs, so its tickFn never fires.
+	idle := testEntity(1, entity.Pig, 2.5, float64(floorY+1), 2.5)
+	var idleCalls int
+	falseFn := starlark.NewBuiltin("false", func(_ *starlark.Thread, _ *starlark.Builtin,
+		_ starlark.Tuple, _ []starlark.Tuple) (starlark.Value, error) {
+		return starlark.False, nil
+	})
+	idleAI := &mobAI{}
+	idleAI.navigation.speed = pigWalkSpeed
+	idleAI.goals.addGoal(6, &starlarkGoal{baseGoal: newBaseGoal(flagMove), t: loop, caps: capAll,
+		name: "idle", canUseFn: falseFn, tickFn: countingFn(&idleCalls)})
+	idle.ai = idleAI
+	loop.entities.add(idle)
+
+	// ACTIVE mob: a MOVE goal with no can_use (always usable) whose tickFn increments the counter.
+	active := testEntity(2, entity.Pig, 8.5, float64(floorY+1), 8.5)
+	var activeCalls int
+	activeAI := &mobAI{}
+	activeAI.navigation.speed = pigWalkSpeed
+	activeAI.goals.addGoal(6, &starlarkGoal{baseGoal: newBaseGoal(flagMove), t: loop, caps: capAll,
+		name: "active", tickFn: countingFn(&activeCalls)})
+	active.ai = activeAI
+	loop.entities.add(active)
+
+	const ticks = 10
+	for i := 0; i < ticks; i++ {
+		loop.tickOnce()
+	}
+
+	if idleCalls != 0 {
+		t.Fatalf("an IDLE declared mob fired %d interpreter calls — the interpreter must not run per-mob-per-tick unconditionally", idleCalls)
+	}
+	if activeCalls == 0 {
+		t.Fatalf("an ACTIVE declared mob fired 0 interpreter calls — the running goal's tick never invoked the callback")
+	}
 }
