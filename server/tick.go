@@ -649,6 +649,12 @@ type tickPlayer struct {
 	// reads it and a future sprint-flag decode wires it with no formula change). Tick-owned.
 	sprinting bool
 
+	// swimming is the player's swim pose state (Entity.updateSwimming). While swimming the
+	// hitbox is horizontal (0.6 tall) and the eyes sit at 0.4 above the feet — NOT the standing
+	// 1.62 — so the breath/drowning submersion check must use the swim eye height or the player
+	// wrongly regains air while submerged in the top water layer. Tick-owned.
+	swimming bool
+
 	// absorptionAmount is net.minecraft.world.entity.LivingEntity.getAbsorptionAmount(): the
 	// current absorption (golden-apple "yellow heart") shield, folded into actuallyHurt before the
 	// health subtraction. v1 has no absorption source (MAX_ABSORPTION base 0), so it stays 0; the
@@ -1226,6 +1232,23 @@ func (t *TickLoop) dispatch(c *Client, p pk.Packet) {
 		// because it carries no positional/temporal ordering. Decoded on the owner.
 		if player != nil {
 			t.handleClientInformation(player, p)
+		}
+	case packetid.ServerboundPlayerCommand:
+		// ServerboundPlayerCommandPacket: VarInt entityId, VarInt actionId (enum ordinal), VarInt
+		// data. We decode the SPRINT toggle (START_SPRINTING=1, STOP_SPRINTING=2) into p.sprinting —
+		// vanilla ServerGamePacketListenerImpl.handlePlayerCommand -> setSprinting. This drives the
+		// swim-pose eye height (a swimming player's eyes sit at 0.4, not the standing 1.62), so the
+		// breath/drowning check uses the right submersion threshold. Other actions are no-ops in v1.
+		if player != nil {
+			var entityID, actionID, data pk.VarInt
+			if err := p.Scan(&entityID, &actionID, &data); err == nil {
+				switch actionID {
+				case 1: // START_SPRINTING
+					player.sprinting = true
+				case 2: // STOP_SPRINTING
+					player.sprinting = false
+				}
+			}
 		}
 	case packetid.ServerboundClientTickEnd:
 		// Client input-batch boundary marker (new in 1.21.2 / present in 776). Phase 3

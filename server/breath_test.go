@@ -45,6 +45,56 @@ func TestEyeInWaterGatesOnEyes(t *testing.T) {
 	}
 }
 
+// TestSwimmingEyeHeightDrains: a SWIMMING player (horizontal pose, eyes at 0.4 not 1.62) submerged
+// in the top water layer must drain air — the standing eye height would put the eye block above the
+// water and wrongly refill (operator: 'nadando, empieza a recuperar oxigeno en la primera capa').
+func TestSwimmingEyeHeightDrains(t *testing.T) {
+	loop, mgr := newFluidLoop()
+	// One water block at the player's feet level (y=64). Standing eye (65.62 -> block 65) is AIR,
+	// but the swim eye (64.4 -> block 64) is IN the water.
+	setWater(mgr, pk.Position{X: 8, Y: 64, Z: 8}, 0)
+
+	p := breathPlayer(8.5, 64.0, 8.5)
+	p.swimming = true
+	if !loop.eyeInWater(p) {
+		t.Fatal("swimming player (eye 0.4) in the top water layer should be eye-in-water")
+	}
+
+	// The same player NOT swimming (standing eye 1.62 -> air block 65) is NOT eye-in-water.
+	p.swimming = false
+	if loop.eyeInWater(p) {
+		t.Fatal("standing player with only feet-level water should NOT be eye-in-water")
+	}
+}
+
+// TestUpdateSwimmingPose: swimming starts when sprinting + eyes underwater, and is kept while
+// sprinting + body in water (Entity.updateSwimming, v1 subset).
+func TestUpdateSwimmingPose(t *testing.T) {
+	loop, mgr := newFluidLoop()
+	// Water filling the player's body + standing eye (so isUnderWater is true to START).
+	setWater(mgr, pk.Position{X: 8, Y: 64, Z: 8}, 0)
+	setWater(mgr, pk.Position{X: 8, Y: 65, Z: 8}, 0)
+	setWater(mgr, pk.Position{X: 8, Y: 66, Z: 8}, 0)
+
+	p := breathPlayer(8.5, 64.0, 8.5)
+	p.sprinting = false
+	loop.updateSwimming(p)
+	if p.swimming {
+		t.Fatal("not sprinting -> not swimming")
+	}
+	p.sprinting = true
+	loop.updateSwimming(p)
+	if !p.swimming {
+		t.Fatal("sprinting + eyes underwater -> swimming")
+	}
+	// Stop sprinting -> stop swimming.
+	p.sprinting = false
+	loop.updateSwimming(p)
+	if p.swimming {
+		t.Fatal("stopped sprinting -> stopped swimming")
+	}
+}
+
 // TestAirDecrementsUnderwater: each tick with eyes submerged drops airSupply by exactly 1
 // (decreaseAirSupply for a bare player == air-1).
 func TestAirDecrementsUnderwater(t *testing.T) {

@@ -79,11 +79,44 @@ func shouldTakeDrowningDamage(air int32) bool {
 // (floor(x), floor(y+eyeHeight), floor(z)). This is intentionally the EYE position, NOT the
 // full-AABB playerInWater used by the movement physics (fluid_physics.go) and the fall-damage
 // reset — air only drains when the head is under, exactly like vanilla.
+// playerSwimmingEyeHeight is the swim-pose eye height: the SWIMMING dimensions are 0.6 tall with
+// the eye at 0.4 (Player POSES / EntityDimensions.withEyeHeight(0.4f)). A swimming player's eyes
+// are far lower than the standing 1.62, so the submersion check must use this while swimming.
+const playerSwimmingEyeHeight = 0.4
+
+// updateSwimming ports Entity.updateSwimming (the v1 subset, no passenger): a player is swimming
+// while sprinting AND in water — to START swimming the eyes must be underwater (isUnderWater),
+// to KEEP swimming the body just needs to be in water (isInWater). Sets p.swimming. The result
+// drives the eye height the breath check samples at.
+func (t *TickLoop) updateSwimming(p *tickPlayer) {
+	if p.swimming {
+		p.swimming = p.sprinting && t.playerInWater(p)
+		return
+	}
+	p.swimming = p.sprinting && t.eyesUnderWaterStanding(p)
+}
+
+// eyesUnderWaterStanding samples the standing eye cell for water — the isUnderWater test that gates
+// STARTING to swim (before the pose flips, the standing eye height applies).
+func (t *TickLoop) eyesUnderWaterStanding(p *tickPlayer) bool {
+	if t.world == nil {
+		return false
+	}
+	bx := int(math.Floor(p.x))
+	by := int(math.Floor(p.y + playerStandingEyeHeight))
+	bz := int(math.Floor(p.z))
+	return t.fluidAt(pk.Position{X: bx, Y: by, Z: bz}).isWater
+}
+
 func (t *TickLoop) eyeInWater(p *tickPlayer) bool {
 	if t.world == nil {
 		return false
 	}
-	eyeY := p.y + playerStandingEyeHeight
+	eyeHeight := playerStandingEyeHeight
+	if p.swimming {
+		eyeHeight = playerSwimmingEyeHeight
+	}
+	eyeY := p.y + eyeHeight
 	bx := int(math.Floor(p.x))
 	by := int(math.Floor(eyeY))
 	bz := int(math.Floor(p.z))
@@ -145,6 +178,10 @@ func (t *TickLoop) tickBreath() {
 		if p == nil || p.dead {
 			continue
 		}
+
+		// Update the swim pose first (Entity.updateSwimming) so eyeInWater samples at the correct
+		// eye height (0.4 swimming, 1.62 standing).
+		t.updateSwimming(p)
 
 		if t.eyeInWater(p) {
 			// setAirSupply(decreaseAirSupply(getAirSupply())): air-1 for a bare player.
