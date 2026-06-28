@@ -321,6 +321,13 @@ func main() {
 		}
 	}
 	tick.SetPlugins(pluginMgr)
+	// PLUGIN-07 (Plan 28-02): install the chat() output sink so a plugin event hook's chat(msg)
+	// reaction fans to every player as a ClientboundSystemChat (broadcastSystemChat). The sink
+	// fires from Manager.Emit on the tick goroutine (the discrete break/join seams), so the fan
+	// is tick-owned (TICK-05). Wired AFTER SetPlugins, before tick.Run. This is the observable-
+	// event seam the gate bot decodes (checklist item #4); the bundled gate_events plugin (in
+	// plugins/) subscribes on_block_break + on_player_join and reacts via chat().
+	tick.InstallChatSink(pluginMgr)
 	// PLUGIN-04 (Plan 24-02): BOOT-LOAD the bundled vanilla_pig plugin into a tick-owned mob registry
 	// BEFORE tick.Run. The SWAP (server/async.go + debug.go) makes the plugin pig the ONLY pig, so the
 	// "vanilla_pig" declaration MUST be live before the first pig can spawn (RESEARCH Pitfall 4). The

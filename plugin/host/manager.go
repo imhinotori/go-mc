@@ -75,6 +75,19 @@ type Manager struct {
 	// the callback ultimately invokes.
 	pythonDispatch func(pp PythonPlugin, event string, args []any)
 
+	// chatSink is the OPTIONAL output sink the SERVER installs at boot via SetChatSink.
+	// The chat(msg) builtin (Plan 28-02) calls it so a plugin hook's reaction lands on
+	// the player-facing wire as a ClientboundSystemChat. plugin/host has NO server import
+	// (the one-direction layering), so the sink is a plain `func(string)` the server wires
+	// to TickLoop.broadcastSystemChat. When nil (no server, or no sink installed — e.g. a
+	// unit test or a server with the chat lane off), chat() FALLS BACK to log() so the
+	// reaction is still recorded and the host stays self-contained (T-28-08: the sandbox
+	// surface widens by exactly one server-controlled text-output seam, no world/entity
+	// handle). WRITTEN once at boot before the tick owns the Manager, READ on the tick
+	// goroutine inside Emit (the sink fires from a hook → broadcastSystemChat's tick-owned
+	// fan is safe — TICK-05); same lock-free discipline as recipeMatcher/hooks.
+	chatSink func(string)
+
 	// pythonBridgeFactory is the WORLD-BRIDGE factory (Plan 26-03), registered by
 	// the server via SetPythonBridgeFactory. When LoadDir loads a runtime="python"
 	// plugin, it calls this with the plugin's name + manifest capabilities to build
@@ -87,6 +100,14 @@ type Manager struct {
 	// capability returns an error, which aborts the load (load-loudly discipline).
 	pythonBridgeFactory func(plugin string, capabilities []string) (WorldBridge, error)
 }
+
+// SetChatSink installs the OPTIONAL output sink the chat(msg) builtin calls (Plan 28-02).
+// The server wires it to a closure over TickLoop.broadcastSystemChat so a plugin hook's
+// chat() reaction fans to every player as a ClientboundSystemChat — the observable-event
+// seam the gate bot decodes (checklist item #4). Called ONCE at boot before the tick loop
+// owns the Manager (like SetPythonDispatch). On a server/test with no sink installed,
+// chat() falls back to log() (the host stays self-contained).
+func (m *Manager) SetChatSink(fn func(string)) { m.chatSink = fn }
 
 // SetPythonBridgeFactory registers the world-bridge factory (Plan 26-03). The server
 // wires it to a constructor that parses the plugin's manifest capabilities into a
@@ -208,6 +229,7 @@ func (m *Manager) LoadDirWith(root string, extra starlark.StringDict) error {
 		// caller extra.
 		predeclared := hostBuiltins()
 		predeclared["register"] = m.makeRegisterBuiltin(man.Name)
+		predeclared["chat"] = m.makeChatBuiltin()
 		predeclared["set_recipe_matcher"] = m.makeSetMatcherBuiltin(man.Name)
 		predeclared["set_recipe_remaining"] = m.makeSetRemainingBuiltin(man.Name)
 		predeclared["recipes"] = m.makeRecipesBuiltin()

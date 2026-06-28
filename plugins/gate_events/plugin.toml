@@ -1,0 +1,8 @@
+name = "gate_events"
+version = "0.1.0"
+entrypoint = "main.star"
+runtime = "starlark"
+# NO capabilities: gate_events only READS the discrete event payload (frozen scalars passed to
+# its hooks) and reacts via the chat() host builtin (a server-controlled text-output seam, not a
+# world/entity capability — T-28-08). It sets no blocks, spawns nothing, reads no world handle.
+capabilities = []
