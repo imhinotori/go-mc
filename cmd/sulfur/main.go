@@ -286,13 +286,23 @@ func main() {
 	// channel, which drainRegistrations installs ON the tick goroutine (TICK-05 — never a mid-Emit
 	// map mutation). The watcher is closed on ctx cancel so it does not leak past shutdown.
 	const pluginsDir = "plugins"
+	// PLUGIN-05 (Plan 25-02): a SINGLE runtime Manager always carries the embedded vanilla `crafting`
+	// recipe plugin so a DEFAULT server crafts out-of-the-box THROUGH the plugin path — even with no
+	// operator plugins/ dir (the embedded-default decision, CONTEXT D-4). LoadCraftingPlugin parses the
+	// vanilla recipe table, injects it, and loads the embedded matcher; a failure here is FATAL (a
+	// server that cannot craft is broken, not degraded). The operator plugins/ dir then loads ON TOP of
+	// the same Manager — an operator recipe plugin (e.g. customrecipe) registers the FINAL matcher
+	// (last-loaded wins) that falls through to the vanilla table, so vanilla + custom both craft.
+	pluginMgr := host.New()
+	if err := server.LoadCraftingPlugin(pluginMgr); err != nil {
+		log.Fatalf("crafting boot-load failed (the server cannot craft): %v", err)
+	}
+	log.Printf("crafting: bundled 1:1 vanilla recipe plugin boot-loaded (default crafting is plugin-driven)")
 	if _, err := os.Stat(pluginsDir); err == nil {
-		mgr := host.New()
-		if err := mgr.LoadDir(pluginsDir); err != nil {
-			log.Printf("plugin host: load %s failed (continuing without plugins): %v", pluginsDir, err)
+		if err := pluginMgr.LoadDir(pluginsDir); err != nil {
+			log.Printf("plugin host: load %s failed (continuing with the embedded crafting plugin only): %v", pluginsDir, err)
 		} else {
-			tick.SetPlugins(mgr)
-			log.Printf("plugin host: loaded %d plugin(s) from %s/ (hot-reload watcher armed)", mgr.PluginCount(), pluginsDir)
+			log.Printf("plugin host: loaded %d plugin(s) from %s/ (hot-reload watcher armed)", pluginMgr.PluginCount(), pluginsDir)
 			if w, err := host.NewWatcher(pluginsDir, tick.PluginSwapChan(), nil); err != nil {
 				log.Printf("plugin host: hot-reload watcher disabled: %v", err)
 			} else {
@@ -303,6 +313,7 @@ func main() {
 			}
 		}
 	}
+	tick.SetPlugins(pluginMgr)
 	// PLUGIN-04 (Plan 24-02): BOOT-LOAD the bundled vanilla_pig plugin into a tick-owned mob registry
 	// BEFORE tick.Run. The SWAP (server/async.go + debug.go) makes the plugin pig the ONLY pig, so the
 	// "vanilla_pig" declaration MUST be live before the first pig can spawn (RESEARCH Pitfall 4). The

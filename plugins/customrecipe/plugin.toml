@@ -1,0 +1,7 @@
+name = "customrecipe"
+version = "0.1.0"
+entrypoint = "main.star"
+runtime = "starlark"
+# Pure scalar math (custom recipe check + vanilla fallthrough over the host recipe table). No
+# entity/world/nav state read, no game state written (GO applies the consume). No capabilities.
+capabilities = []
