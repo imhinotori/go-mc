@@ -265,6 +265,14 @@ type TickLoop struct {
 	// fixed phase order; in production it stays nil and costs nothing.
 	phaseTrace *[]string
 
+	// onGoalCall is a TEST-ONLY observability seam (Phase-27 STEP-3): when non-nil, starlarkGoal.call
+	// invokes it with the mob whose declared-goal callback is about to fire, ON the region's goroutine
+	// (so a test can capture the goroutine id + re-resolve the mob's owning region — THE GATE proof
+	// that a hook for an entity in region R runs on R's goroutine and resolves R's store). In
+	// production it stays nil and costs one nil-check per goal callback — the same zero-cost discipline
+	// as applyInputHook/phaseTrace.
+	onGoalCall func(e *Entity)
+
 	// spawnSurfaceY is the world spawn column's top-solid block world-Y (the superflat
 	// generator's SurfaceY — the same value gameTick threads into the join bootstrap). It
 	// is set once before Run via SetSpawn and read only on the tick goroutine by

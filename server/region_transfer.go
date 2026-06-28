@@ -2,6 +2,7 @@ package server
 
 import (
 	"github.com/imhinotori/sulfur/level"
+	"github.com/imhinotori/sulfur/plugin/host"
 )
 
 // region_transfer.go is the Phase-27 (Folia regionization) STEP-3 core: the static chunk→region
@@ -68,6 +69,26 @@ func (t *TickLoop) owningRegion(id int32) *region {
 		}
 	}
 	return nil
+}
+
+// emitEntityEvent is the Phase-27 STEP-3 region-scoped plugin dispatch (27-RESEARCH "Pattern 3:
+// Region-aware plugin Emit"). An entity-scoped hook fired from inside region R (a spawn/death/damage
+// for an entity OWNED by R) goes through here so the dispatch is explicitly region-scoped: the FROZEN
+// *host.Manager registry (m.hooks) is GLOBAL + SHARED, and calling Emit from a region goroutine is
+// SAFE because the Phase-21 freeze makes the callables immutable + lock-free across threads (only the
+// HANDLES the payload carries are region-resolved — and those are built region-bound by
+// starlarkGoal.handles). The GLOBAL on_tick stays on the coordinator (region_coordinator.go) — this
+// helper is for ENTITY-scoped events only. Nil-guarded: a no-plugin server is unaffected.
+//
+// THE KEY INVARIANT: the registry is shared (read from every region thread, lock-free by the freeze),
+// while the per-entity HANDLES resolve against the calling region's state. That is what makes "an
+// entity-scoped event for an entity in region R fires on R's thread and resolves R's store" hold.
+func (r *region) emitEntityEvent(event host.EventType, payload host.Event) {
+	t := r.coord
+	if t == nil || t.plugins == nil {
+		return // no plugins / a standalone test region: a cheap no-op
+	}
+	t.plugins.Emit(event, payload)
 }
 
 // withRegion runs fn with r registered as the CURRENT region for the calling goroutine, restoring

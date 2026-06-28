@@ -24,9 +24,13 @@ const physicsSecs = 24
 func newPhysicsLoop() (*TickLoop, *world.ChunkManager) {
 	loop := NewTickLoop(newFakeClock())
 	mgr := world.NewChunkManager()
-	// Wire the manager directly (SetWorld also starts a worker bridge we don't need for
-	// physics-only tests; assign the tick-owned field straight so there is no goroutine).
-	loop.only().world = mgr
+	// Wire the manager directly into EVERY region (SetWorld also starts a worker bridge we don't need
+	// for physics-only tests; assign the tick-owned field straight so there is no goroutine). Phase-27
+	// STEP-3 (N=2): the world is SHARED across regions, so every region must see it — a mob that fans
+	// out on region 1's goroutine reads region 1's world for its physics/AI block checks.
+	for _, r := range loop.regions {
+		r.world = mgr
+	}
 	// PLUGIN-04 (Plan 24-02): the SWAP routes the natural/debug pig spawn through spawnVanillaPig,
 	// which needs the boot-loaded vanilla_pig registry. Install it on every physics loop so any test
 	// driving the spawn paths (spawner/async-stress/debug) has the declaration — the same boot-load

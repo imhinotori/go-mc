@@ -8,6 +8,7 @@ import (
 	"github.com/imhinotori/sulfur/level/attribute"
 	"github.com/imhinotori/sulfur/level/block"
 	pk "github.com/imhinotori/sulfur/net/packet"
+	"github.com/imhinotori/sulfur/world"
 	"go.starlark.net/starlark"
 )
 
@@ -32,9 +33,15 @@ import (
 // entityHandle is the thin Starlark handle over a live entity. It stores the entity id (re-resolved
 // each access) + the tick loop + the owning plugin's capability set — NEVER a *Entity field.
 type entityHandle struct {
-	t    *TickLoop
-	id   int32
-	caps capSet
+	t  *TickLoop
+	id int32
+	// region is the Phase-27 STEP-3 OWNING region this handle resolves the entity against (approach
+	// (a): the handle is region-bound at build time inside r.tick, so a callback for a mob in region R
+	// resolves R's store — Pitfall 4). nil for a handle built outside a region context (a direct test
+	// handle, the debug seam): store() then falls back to t.only() (the goroutine-local resolution,
+	// which is globalRegion off the fan-out). NEVER a live *Entity — only the region's store pointer.
+	region *region
+	caps   capSet
 	// scratch is the per-(mob,goal) mutable state bag the get_state/set_state seam reads/writes — the
 	// frozen-Starlark-boundary fix (FIDELITY GAP 2). It is the OWNING goal's scratch map (allocated in
 	// buildAIFromDecl, threaded through starlarkGoal.handles), so set_state from a goal callback
@@ -44,11 +51,37 @@ type entityHandle struct {
 	scratch map[string]float64
 }
 
+// store returns the entity store this handle resolves against: the bound OWNING region's store when
+// the handle is region-bound (the fan-out goal-callback path — Phase-27 Pitfall 4), else t.only()
+// (the goroutine-local fallback: the region currently registered, or globalRegion off the fan-out).
+// Centralizing it keeps every read/mutate path resolving against the SAME store.
+func (h *entityHandle) store() *entityStore {
+	if h.region != nil {
+		return h.region.entities
+	}
+	return h.t.only().entities
+}
+
 // newEntityHandle builds an entity handle for an id with the given capability set (no goal scratch).
 // Wave 2 threads the real manifest-derived capSet through buildAIFromDecl; tests construct handles
-// directly. Used where there is no owning goal (entities_near results, direct test handles).
+// directly. Used where there is no owning goal (entities_near results, direct test handles). The
+// region is left nil (store() falls back to t.only()).
 func newEntityHandle(t *TickLoop, id int32, caps capSet) *entityHandle {
 	return &entityHandle{t: t, id: id, caps: caps}
+}
+
+// newEntityHandleInRegion builds a region-BOUND entity handle (Phase-27 STEP-3): the handle resolves
+// the entity against `region`'s store, so a goal callback for a mob in region R finds it in R (even
+// if the resolving goroutine changed). Used by starlarkGoal.handles and the cross-region
+// entities_near results so the whole handle graph a callback touches is region-consistent.
+func newEntityHandleInRegion(t *TickLoop, region *region, id int32, caps capSet) *entityHandle {
+	return &entityHandle{t: t, region: region, id: id, caps: caps}
+}
+
+// newEntityHandleInRegionWithScratch is newEntityHandleInRegion carrying the owning goal's per-mob
+// scratch (the get_state/set_state bag) — the region-bound twin of newEntityHandleWithScratch.
+func newEntityHandleInRegionWithScratch(t *TickLoop, region *region, id int32, caps capSet, scratch map[string]float64) *entityHandle {
+	return &entityHandle{t: t, region: region, id: id, caps: caps, scratch: scratch}
 }
 
 // newEntityHandleWithScratch builds an entity handle that also carries the OWNING goal's per-mob
@@ -116,7 +149,7 @@ func (h *entityHandle) Attr(name string) (starlark.Value, error) {
 	if !h.caps.has(capEntitiesRead) {
 		return nil, capError("entities.read")
 	}
-	e, ok := h.t.only().entities.get(h.id)
+	e, ok := h.store().get(h.id)
 	if !ok {
 		return nil, fmt.Errorf("entity %d no longer exists", h.id)
 	}
@@ -157,7 +190,7 @@ func (h *entityHandle) AttrNames() []string {
 
 // resolve re-resolves the entity for a mutate method, returning a clean Starlark error if it is gone.
 func (h *entityHandle) resolve() (*Entity, error) {
-	e, ok := h.t.only().entities.get(h.id)
+	e, ok := h.store().get(h.id)
 	if !ok {
 		return nil, fmt.Errorf("entity %d no longer exists", h.id)
 	}
@@ -443,15 +476,34 @@ func entityTypeName(typ entity.ID) string {
 // ----------------------------------------------------------------------------------------------
 
 // worldHandle is the thin Starlark handle over the world (the ChunkManager). It carries no id — just
-// the tick loop + the owning plugin's capability set.
+// the tick loop + the owning plugin's capability set. Phase-27 STEP-3: it also carries the owning
+// region (for block reads it is irrelevant — the world is SHARED across regions — but it makes the
+// handle graph a callback receives region-consistent + future-proofs a per-region world).
 type worldHandle struct {
-	t    *TickLoop
-	caps capSet
+	t      *TickLoop
+	region *region
+	caps   capSet
 }
 
-// newWorldHandle builds a world handle with the given capability set.
+// world returns the shared ChunkManager (wired into every region by SetWorld). Region-bound or not,
+// it is the same world; the helper keeps the read site uniform.
+func (h *worldHandle) world() *world.ChunkManager {
+	if h.region != nil {
+		return h.region.world
+	}
+	return h.t.only().world
+}
+
+// newWorldHandle builds a world handle with the given capability set (region-unbound).
 func newWorldHandle(t *TickLoop, caps capSet) *worldHandle {
 	return &worldHandle{t: t, caps: caps}
+}
+
+// newWorldHandleInRegion builds a region-BOUND world handle (Phase-27 STEP-3): the world twin of
+// newEntityHandleInRegion (the block store is shared, but the binding keeps the callback's handles
+// region-consistent).
+func newWorldHandleInRegion(t *TickLoop, region *region, caps capSet) *worldHandle {
+	return &worldHandle{t: t, region: region, caps: caps}
 }
 
 func (h *worldHandle) String() string        { return "<world>" }
@@ -517,11 +569,11 @@ func (h *worldHandle) blockAt(_ *starlark.Thread, b *starlark.Builtin,
 	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 3, &x, &y, &z); err != nil {
 		return nil, err
 	}
-	if h.t.only().world == nil {
+	if h.world() == nil {
 		return starlark.Tuple{starlark.MakeInt(0), starlark.False}, nil
 	}
 	pos := pk.Position{X: x, Y: y, Z: z}
-	state, ok := h.t.only().world.GetBlock(pos, dimMinY)
+	state, ok := h.world().GetBlock(pos, dimMinY)
 	return starlark.Tuple{starlark.MakeInt(int(state)), starlark.Bool(ok)}, nil
 }
 
@@ -537,11 +589,11 @@ func (h *worldHandle) setBlock(_ *starlark.Thread, b *starlark.Builtin,
 	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 4, &x, &y, &z, &state); err != nil {
 		return nil, err
 	}
-	if h.t.only().world == nil {
+	if h.world() == nil {
 		return starlark.False, nil
 	}
 	pos := pk.Position{X: x, Y: y, Z: z}
-	changed := h.t.only().world.SetBlock(pos, block.StateID(state), dimMinY)
+	changed := h.world().SetBlock(pos, block.StateID(state), dimMinY)
 	if changed {
 		h.t.broadcastBlockUpdate(pos, block.StateID(state))
 	}
@@ -562,15 +614,31 @@ func (h *worldHandle) entitiesNear(_ *starlark.Thread, b *starlark.Builtin,
 	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 3, &x, &z, &radiusChunks); err != nil {
 		return nil, err
 	}
-	if h.t.only().entities == nil {
+	// Phase-27 STEP-3 (N=2): entities_near resolves against the CALLING region's store (h.store()),
+	// NOT across regions. A goal callback runs inside the fan-out where reading another region's store
+	// would race it (the cross-region query is a BARRIER-only operation — the tracker uses
+	// entitiesNearAcrossRegions there). So a goal sees the entities in its OWN region; this matches
+	// the Folia single-owner discipline (a region tick must not touch another region's store). The
+	// result handles are region-BOUND (h.region) so a later read re-resolves the same owning region.
+	store := h.entityStore()
+	if store == nil {
 		return starlark.NewList(nil), nil
 	}
-	near := h.t.only().entities.near(x, z, radiusChunks)
+	near := store.near(x, z, radiusChunks)
 	out := make([]starlark.Value, 0, len(near))
 	for _, e := range near {
-		out = append(out, newEntityHandle(h.t, e.id, h.caps))
+		out = append(out, newEntityHandleInRegion(h.t, h.region, e.id, h.caps))
 	}
 	return starlark.NewList(out), nil
+}
+
+// entityStore returns the entity store the world handle queries: the bound region's store (a goal
+// callback's region), else t.only() (the goroutine-local fallback).
+func (h *worldHandle) entityStore() *entityStore {
+	if h.region != nil {
+		return h.region.entities
+	}
+	return h.t.only().entities
 }
 
 // ----------------------------------------------------------------------------------------------
@@ -584,14 +652,29 @@ func (h *worldHandle) entitiesNear(_ *starlark.Thread, b *starlark.Builtin,
 // already wired via pathPool); has_path reads the nav's hasTarget flag. The goal SETS a target; the
 // Go nav/physics MOVES the mob (Pitfall 5: never a raw position write).
 type navHandle struct {
-	t    *TickLoop
-	id   int32
-	caps capSet
+	t      *TickLoop
+	id     int32
+	region *region // Phase-27 STEP-3 owning region (approach (a)); nil → store() falls back to t.only()
+	caps   capSet
 }
 
-// newNavHandle builds a nav handle for an id with the given capability set.
+// store returns the nav handle's owning-region store (region-bound) or the t.only() fallback.
+func (h *navHandle) store() *entityStore {
+	if h.region != nil {
+		return h.region.entities
+	}
+	return h.t.only().entities
+}
+
+// newNavHandle builds a nav handle for an id with the given capability set (region-unbound).
 func newNavHandle(t *TickLoop, id int32, caps capSet) *navHandle {
 	return &navHandle{t: t, id: id, caps: caps}
+}
+
+// newNavHandleInRegion builds a region-BOUND nav handle (Phase-27 STEP-3): re-resolves against the
+// owning region's store, the nav twin of newEntityHandleInRegion.
+func newNavHandleInRegion(t *TickLoop, region *region, id int32, caps capSet) *navHandle {
+	return &navHandle{t: t, region: region, id: id, caps: caps}
 }
 
 var (
@@ -638,7 +721,7 @@ func (h *navHandle) stop(_ *starlark.Thread, _ *starlark.Builtin,
 	if !h.caps.has(capNav) {
 		return nil, capError("nav")
 	}
-	e, ok := h.t.only().entities.get(h.id)
+	e, ok := h.store().get(h.id)
 	if !ok {
 		return nil, fmt.Errorf("entity %d no longer exists", h.id)
 	}
@@ -654,7 +737,7 @@ func (h *navHandle) stop(_ *starlark.Thread, _ *starlark.Builtin,
 // observation of the nav state.
 func (h *navHandle) hasPath(_ *starlark.Thread, _ *starlark.Builtin,
 	_ starlark.Tuple, _ []starlark.Tuple) (starlark.Value, error) {
-	e, ok := h.t.only().entities.get(h.id)
+	e, ok := h.store().get(h.id)
 	if !ok {
 		return nil, fmt.Errorf("entity %d no longer exists", h.id)
 	}
@@ -677,7 +760,7 @@ func (h *navHandle) pathTo(_ *starlark.Thread, b *starlark.Builtin,
 	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 3, &x, &y, &z); err != nil {
 		return nil, err
 	}
-	e, ok := h.t.only().entities.get(h.id)
+	e, ok := h.store().get(h.id)
 	if !ok {
 		return nil, fmt.Errorf("entity %d no longer exists", h.id)
 	}

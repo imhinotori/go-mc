@@ -70,9 +70,15 @@ var _ Goal = (*starlarkGoal)(nil)
 // id comes from e (every Goal method receives the live *Entity from serverAiStep), so one
 // starlarkGoal instance correctly drives whatever entity the selector ticks it for.
 func (g *starlarkGoal) handles(e *Entity) starlark.Tuple {
-	eh := newEntityHandleWithScratch(g.t, e.id, g.caps, g.scratch)
-	wh := newWorldHandle(g.t, g.caps)
-	nh := newNavHandle(g.t, e.id, g.caps)
+	// Phase-27 STEP-3 (Pitfall 4): build REGION-BOUND handles. serverAiStep(t,e) runs inside the
+	// OWNING region's fan-out tick, so the region that owns this mob is t.regionForEntity(e) (== the
+	// calling region). Binding the handles to that region means every re-resolution a callback makes
+	// (entity reads/mutates, nav, entities_near results) hits R's store explicitly — independent of
+	// the goroutine-local fallback — so THE GATE holds: a hook for an entity in R resolves R's store.
+	r := g.t.regionForEntity(e)
+	eh := newEntityHandleInRegionWithScratch(g.t, r, e.id, g.caps, g.scratch)
+	wh := newWorldHandleInRegion(g.t, r, g.caps)
+	nh := newNavHandleInRegion(g.t, r, e.id, g.caps)
 	return starlark.Tuple{eh, wh, nh}
 }
 
@@ -82,6 +88,11 @@ func (g *starlarkGoal) handles(e *Entity) starlark.Tuple {
 // treated as the safe default by each caller). A runaway callback hits the thread's stepBudget and
 // returns an EvalError here, which is logged and absorbed — the tick continues.
 func (g *starlarkGoal) call(e *Entity, fn starlark.Callable) (starlark.Value, bool) {
+	// Phase-27 STEP-3 test seam (nil in production): observe that this declared-goal callback fires
+	// on the OWNING region's goroutine, for a mob resolvable in that region's store (THE GATE).
+	if g.t.onGoalCall != nil {
+		g.t.onGoalCall(e)
+	}
 	th := starlarkpkg.NewThread("ai:" + g.name)
 	res, err := starlark.Call(th, fn, g.handles(e), nil)
 	if err != nil {

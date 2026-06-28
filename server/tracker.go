@@ -44,7 +44,7 @@ type entityTracker struct {
 // goroutine; emits via p.client.Send. No goroutine is spawned.
 func (et *entityTracker) Tick() {
 	t := et.loop
-	if t == nil || t.only().entities == nil {
+	if t == nil {
 		return // defensive: a loop without a store has nothing to track
 	}
 
@@ -56,9 +56,11 @@ func (et *entityTracker) Tick() {
 			p.tracked = make(map[int32]bool) // lazy-init: keep registration minimal
 		}
 
-		// Broad-phase: the in-range candidate entities (bounded by trackRange, never a full
-		// scan). near() returns a fresh slice the tracker may retain.
-		visible := t.only().entities.near(p.x, p.z, trackRange)
+		// Broad-phase ACROSS REGIONS (Phase-27 STEP-3, Pitfall 2): a player near the region seam must
+		// see entities in the ADJACENT region too, so near() spans every region the trackRange touches.
+		// The tracker runs at the BARRIER (every region quiescent), so reading multiple region stores
+		// is -race clean by construction. near() returns a fresh slice the tracker may retain.
+		visible := t.entitiesNearAcrossRegions(p.x, p.z, trackRange)
 
 		// seen marks which currently-tracked ids are still in range this tick; any tracked id
 		// NOT seen has left range and is batched into the single RemoveEntities below.
@@ -135,7 +137,7 @@ type asyncTracker struct {
 // after the worker's result is drained.
 func (at *asyncTracker) Tick() {
 	t := at.loop
-	if t == nil || t.only().entities == nil {
+	if t == nil {
 		return // defensive: a loop without a store has nothing to track
 	}
 
@@ -144,11 +146,13 @@ func (at *asyncTracker) Tick() {
 			continue // a player mid-registration / without a connection: skip
 		}
 
-		// Broad-phase ON THE OWNER: near() returns a fresh slice of live *Entity. We immediately
-		// copy out ONLY the value fields the diff + encoders need into worker-owned Entity values,
-		// so the closure holds NO pointer into the live store (Pitfall 3). The player's own id is
-		// skipped here so the snapshot never contains the player's own entity.
-		visible := t.only().entities.near(p.x, p.z, trackRange)
+		// Broad-phase ON THE OWNER, ACROSS REGIONS (Phase-27 STEP-3, Pitfall 2): near() spans every
+		// region the trackRange touches so a player near the seam sees entities across the boundary.
+		// The tracker runs at the BARRIER (quiescent), so the cross-region read is -race clean. We
+		// immediately copy out ONLY the value fields the diff + encoders need into worker-owned Entity
+		// values, so the closure holds NO pointer into the live store (Pitfall 3). The player's own id
+		// is skipped here so the snapshot never contains the player's own entity.
+		visible := t.entitiesNearAcrossRegions(p.x, p.z, trackRange)
 		snap := make([]Entity, 0, len(visible))
 		for _, e := range visible {
 			if e == nil || e.id == p.entityID {

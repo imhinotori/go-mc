@@ -39,7 +39,11 @@ func newStressLoop(t *testing.T, radius, floorY int) *TickLoop {
 	t.Helper()
 	loop := NewTickLoop(newFakeClock())
 	mgr := world.NewChunkManager()
-	loop.only().world = mgr
+	// Phase-27 STEP-3 (N=2): wire the shared world into EVERY region so a mob that transfers to /
+	// spawns in region 1 (and fans out on region 1's goroutine) reads the world for its physics/AI.
+	for _, r := range loop.regions {
+		r.world = mgr
+	}
 	// PLUGIN-04 (Plan 24-02): the SWAP routes the natural pig spawn through spawnVanillaPig, which
 	// needs the boot-loaded vanilla_pig registry. Install it so the stress loop's natural spawner can
 	// actually add plugin pigs under load (without it the spawn applyTo panics and the tickOnce recover
