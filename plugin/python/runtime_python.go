@@ -35,6 +35,7 @@ package python
 import (
 	"sync"
 
+	"github.com/imhinotori/sulfur/plugin/host"
 	"gopython.xyz/py/v14"
 )
 
@@ -64,6 +65,15 @@ type Runtime struct {
 	// hook's __globals__ already references it); it exists for lifetime + test
 	// introspection only.
 	globals *py.Dict
+
+	// bridge is the WORLD-BRIDGE (Plan 26-03) this plugin's off-tick world builtins
+	// (set_block/spawn/log/block_at, bridge_python.go) talk to. It is the plain-Go
+	// host.WorldBridge the server stamps with THIS plugin's capabilities and installs
+	// via SetWorldBridge after Load; the builtins construct requests through it (no
+	// cgo, no *py.Object crosses). nil when no world lane is wired → the builtins are
+	// safe no-ops. Set once (on the load goroutine, before the first off-tick
+	// dispatch), read off-tick by the builtins — the lock-free at-load discipline.
+	bridge host.WorldBridge
 }
 
 // ensureInit initializes CPython exactly once for the process. InitAndLock

@@ -62,6 +62,17 @@ func Load(entrypoint string) (*Runtime, error) {
 		return nil, fmt.Errorf("python: inject register for %s: %w", entrypoint, err)
 	}
 
+	// WORLD-BRIDGE (Plan 26-03): inject the off-tick world-request builtins
+	// (set_block/spawn/log/block_at) alongside register. They are request PRODUCERS
+	// — they construct a plain request and hand it to rt.bridge (installed by the
+	// server via SetWorldBridge after Load); the owner applies it on the tick through
+	// the Phase-23 seam. rt.bridge is nil here at load (the .py calls them at hook
+	// time, after the server installs the bridge), and the builtins no-op on a nil
+	// bridge, so injecting them at load is safe.
+	if err := rt.injectWorldBuiltins(globals); err != nil {
+		return nil, fmt.Errorf("python: inject world builtins for %s: %w", entrypoint, err)
+	}
+
 	// Run the plugin entrypoint against the injected globals. Its top-level
 	// register(event, fn) calls populate rt.hooks via registerBuiltin below.
 	res, err := py.RunFile(entrypoint, py.FileInput, globals, globals)

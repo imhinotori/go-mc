@@ -74,6 +74,27 @@ type Manager struct {
 	// stays cgo-free — the gopy marshalling happens inside the PythonPlugin.CallHook
 	// the callback ultimately invokes.
 	pythonDispatch func(pp PythonPlugin, event string, args []any)
+
+	// pythonBridgeFactory is the WORLD-BRIDGE factory (Plan 26-03), registered by
+	// the server via SetPythonBridgeFactory. When LoadDir loads a runtime="python"
+	// plugin, it calls this with the plugin's name + manifest capabilities to build
+	// a per-plugin WorldBridge stamped with that plugin's capSet, then installs it
+	// via pp.SetWorldBridge. The server's factory parses the capabilities (the SAME
+	// parseCapabilities the Phase-23 Starlark handles use) and returns a bridge whose
+	// set_block/spawn/log/block_at route through the async rejoin lane to the owner.
+	// Plain-Go signature (no cgo) so plugin/host stays cgo-free; nil on a server with
+	// no world lane → SetWorldBridge gets nil and the builtins no-op. An unknown
+	// capability returns an error, which aborts the load (load-loudly discipline).
+	pythonBridgeFactory func(plugin string, capabilities []string) (WorldBridge, error)
+}
+
+// SetPythonBridgeFactory registers the world-bridge factory (Plan 26-03). The server
+// wires it to a constructor that parses the plugin's manifest capabilities into a
+// capSet and returns a per-plugin WorldBridge. Called ONCE before the tick loop owns
+// the Manager (like SetPythonDispatch). On a server without the world lane it is never
+// called → python plugins load with a nil bridge (their world builtins no-op).
+func (m *Manager) SetPythonBridgeFactory(fn func(plugin string, capabilities []string) (WorldBridge, error)) {
+	m.pythonBridgeFactory = fn
 }
 
 // SetPythonDispatch registers the off-tick python submit callback (Wave 2). The
@@ -157,6 +178,19 @@ func (m *Manager) LoadDirWith(root string, extra starlark.StringDict) error {
 				pp, err := m.pythonRuntime.Load(entry)
 				if err != nil {
 					return fmt.Errorf("plugin %s load (python): %w", man.Name, err)
+				}
+				// WORLD-BRIDGE (Plan 26-03): build a per-plugin bridge stamped with
+				// this plugin's manifest capabilities (the SAME parseCapabilities the
+				// Phase-23 Starlark handles use) and install it so the plugin's
+				// off-tick set_block/spawn/log/block_at builtins reach the owner. An
+				// unknown capability errors here (load-loudly). A nil factory (no world
+				// lane) leaves a nil bridge → the world builtins no-op.
+				if m.pythonBridgeFactory != nil {
+					bridge, berr := m.pythonBridgeFactory(man.Name, man.Capabilities)
+					if berr != nil {
+						return fmt.Errorf("plugin %s capabilities (python): %w", man.Name, berr)
+					}
+					pp.SetWorldBridge(bridge)
 				}
 				m.plugins = append(m.plugins, &loadedPlugin{manifest: man, python: pp})
 			} else {

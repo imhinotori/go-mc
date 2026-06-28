@@ -9,7 +9,11 @@
 
 package python
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/imhinotori/sulfur/plugin/host"
+)
 
 // ErrNotBuilt is returned by every entry point when the binary was built WITHOUT
 // `-tags python`. The host's runtime-routing branch turns this into a graceful
@@ -32,3 +36,10 @@ func (r *Runtime) Close() {}
 
 // CallHook refuses on the stub: there is no CPython interpreter to dispatch to.
 func (r *Runtime) CallHook(event string, args ...any) error { return ErrNotBuilt }
+
+// SetWorldBridge is a no-op on the stub: no plugin is ever loaded on the default
+// build (Load refuses), so there is no .py whose world builtins need the bridge.
+// The signature matches the tagged impl so *Runtime satisfies host.PythonPlugin in
+// both builds (RESEARCH Pitfall 7 — stub/impl parity). The parameter type is the
+// plain-Go host.WorldBridge; the stub keeps the python package cgo-free.
+func (r *Runtime) SetWorldBridge(b host.WorldBridge) {}

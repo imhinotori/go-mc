@@ -34,11 +34,21 @@ func (pythonRuntimeAdapter) Load(entrypoint string) (host.PythonPlugin, error) {
 	return python.Load(entrypoint) // *python.Runtime satisfies host.PythonPlugin (CallHook/Close)
 }
 
-// WirePython registers the CPython runtime + the off-tick dispatch on the manager
-// so runtime="python" plugins load and their hooks fire OFF-TICK via t.pluginPool.
-// Called from main BEFORE SetPlugins/Run. On the `-tags python` build this is the
-// real wiring; the default build calls the no-op stub twin instead.
+// WirePython registers the CPython runtime + the off-tick dispatch + the WORLD-BRIDGE
+// factory on the manager so runtime="python" plugins load, their hooks fire OFF-TICK
+// via t.pluginPool, and their off-tick set_block/spawn/log/block_at builtins reach the
+// tick-owned world through the request/apply lane. Called from main BEFORE
+// SetPlugins/Run. On the `-tags python` build this is the real wiring; the default
+// build calls the no-op stub twin instead.
 func WirePython(t *TickLoop, m *host.Manager) {
 	m.SetPythonRuntime(pythonRuntimeAdapter{})
 	m.SetPythonDispatch(t.submitPythonHook)
+	// WORLD-BRIDGE (Plan 26-03): the host calls this per python plugin at load with
+	// the plugin's name + manifest capabilities; the server parses the capabilities
+	// (the SAME parseCapabilities the Phase-23 Starlark handles use) into a capSet and
+	// returns a per-plugin serverWorldBridge stamped with it. The factory signature is
+	// plain Go (no cgo) so plugin/host stays cgo-free.
+	m.SetPythonBridgeFactory(func(plugin string, capabilities []string) (host.WorldBridge, error) {
+		return t.newServerWorldBridge(plugin, capabilities)
+	})
 }

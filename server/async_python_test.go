@@ -122,6 +122,7 @@ func TestSubmitPythonHookOffTickRoundTrip(t *testing.T) {
 type recordingPlugin struct {
 	called bool
 	args   []any
+	bridge host.WorldBridge
 }
 
 func (r *recordingPlugin) CallHook(event string, args ...any) error {
@@ -129,4 +130,5 @@ func (r *recordingPlugin) CallHook(event string, args ...any) error {
 	r.args = args
 	return nil
 }
-func (r *recordingPlugin) Close() {}
+func (r *recordingPlugin) SetWorldBridge(b host.WorldBridge) { r.bridge = b }
+func (r *recordingPlugin) Close()                            {}

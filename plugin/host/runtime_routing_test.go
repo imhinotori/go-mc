@@ -13,9 +13,11 @@ import "testing"
 type fakePythonPlugin struct {
 	closed   bool
 	hookHits int
+	bridge   WorldBridge
 }
 
 func (f *fakePythonPlugin) CallHook(event string, args ...any) error { f.hookHits++; return nil }
+func (f *fakePythonPlugin) SetWorldBridge(b WorldBridge)             { f.bridge = b }
 func (f *fakePythonPlugin) Close()                                   { f.closed = true }
 
 // fakePythonRuntime is a pure-Go PythonRuntime test double. It records whether

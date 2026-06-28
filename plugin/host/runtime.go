@@ -31,8 +31,37 @@ type PythonPlugin interface {
 	// CallHook dispatches an event to the plugin OFF-TICK (never on the tick
 	// goroutine). Wave 2 wires the submit site.
 	CallHook(event string, args ...any) error
+	// SetWorldBridge installs the WORLD-BRIDGE (Plan 26-03) the plugin's off-tick
+	// set_block/spawn/log/block_at builtins talk to. The host calls it once at load
+	// with a bridge stamped with THIS plugin's capabilities; a nil bridge (no world
+	// lane wired) leaves the builtins as request producers with nowhere to send,
+	// which they handle as a no-op. It is a plain-Go interface (no cgo, no
+	// *py.Object) so plugin/host stays cgo-free.
+	SetWorldBridge(b WorldBridge)
 	// Close tears the plugin's references down (on unload).
 	Close()
+}
+
+// WorldBridge is the plain-Go (cgo-free) seam the off-tick python world builtins
+// (set_block/spawn/log/block_at) call to reach the tick-owned world (Plan 26-03).
+// The CONCRETE impl lives in server (serverWorldBridge): a write CONSTRUCTS a plain
+// mutation request + enqueues it on the async rejoin lane (the owner applies it
+// through the Phase-23 seam, the ONLY mutation point), and a read issues a request →
+// owner-snapshot → return-a-copy. NO live tick-owned handle ever crosses this
+// interface — only plain scalars + the request/apply indirection (the safety
+// boundary, 26-CONTEXT decision 4). The host holds it BY INTERFACE so plugin/host
+// and plugin/python never import server (no cycle, no cgo).
+type WorldBridge interface {
+	// SetBlock requests a world block change (capWorldWrite, enforced on apply).
+	SetBlock(x, y, z, state int)
+	// Spawn requests a simple entity spawn (capEntitiesWrite, enforced on apply).
+	Spawn(x, y, z int)
+	// Log requests a log line attributed to the plugin (no capability).
+	Log(msg string)
+	// BlockAt reads a block state id (capWorldRead). It BLOCKS on the owner's
+	// snapshot reply and returns the COPIED scalar (state id, ok) — never a live
+	// reference.
+	BlockAt(x, y, z int) (int, bool)
 }
 
 // SetPythonRuntime registers the concrete python runtime. It is called at boot
