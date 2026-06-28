@@ -224,8 +224,14 @@ func (t *TickLoop) clicked(p *tickPlayer, containerID int32, slotNum int16, butt
 	// id must match the player's currently-open container (a forged/stale id is rejected — resend).
 	if containerID != playerContainerID {
 		if p.openContainer != nil && containerID == int32(p.openContainer.windowID) {
-			if cl := t.resolveChest(p.openContainer.chestPos); cl != nil {
-				t.clickedChest(p, cl, slotNum, button, input)
+			switch p.openContainer.kind {
+			case containerKindChest:
+				if cl := t.resolveChest(p.openContainer.chestPos); cl != nil {
+					t.clickedChest(p, cl, slotNum, button, input)
+					return
+				}
+			case containerKindCrafting:
+				t.clickedCrafting(p, p.openContainer, slotNum, button, input)
 				return
 			}
 		}
@@ -317,10 +323,15 @@ func (t *TickLoop) handleContainerClose(p *tickPlayer, pkt pk.Packet) {
 	if p == nil {
 		return
 	}
-	// The chest's items live in the tick-owned chestLoot (t.openChests), already mutated by clicks —
-	// nothing to copy back here; freeing the window is the whole close. (A cursor item left on the
-	// mouse is dropped by vanilla in removed(); v1 leaves it on the player cursor — it is reconciled
-	// into the player inventory on the next inventory interaction. Cited refinement.)
+	// A CRAFTING window (PLUGIN-05) returns its transient 3x3 grid to the player on close
+	// (CraftingMenu.removed -> clearContainer) BEFORE freeing the window — NOT the chest persist model
+	// (Pitfall 7): the grid items are real and must not be lost. The chest path keeps its items in the
+	// tick-owned chestLoot (already mutated by clicks), so freeing the window is its whole close.
+	if p.openContainer != nil && p.openContainer.kind == containerKindCrafting {
+		t.closeCraftingWindow(p, p.openContainer)
+	}
+	// (A cursor item left on the mouse is dropped by vanilla in removed(); v1 leaves it on the player
+	// cursor — it is reconciled into the player inventory on the next inventory interaction. Cited.)
 	p.openContainer = nil
 	_ = pkt
 }

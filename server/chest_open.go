@@ -43,13 +43,32 @@ import (
 )
 
 // openContainer is the tick-owned state of a player's currently-open non-inventory window — the
-// Sulfur analogue of ServerPlayer.containerMenu narrowed to what the chest path needs. windowID is
-// the allocated containerCounter (1..100); chestPos is the world position of the open chest so a
-// ContainerClick/Close on windowID resolves back to the chest container.
+// Sulfur analogue of ServerPlayer.containerMenu narrowed to what the chest + crafting paths need.
+// windowID is the allocated containerCounter (1..100). kind discriminates the window backing: a CHEST
+// (chestPos -> the world chest container) or a CRAFTING_TABLE (craftGrid -> the transient 3x3 grid,
+// no backing block-entity — vanilla's CraftingMenu.craftSlots is a TransientCraftingContainer freed on
+// close). A ContainerClick/Close on windowID resolves back through the kind.
 type openContainer struct {
 	windowID int
+	kind     containerKind
+
+	// chestPos is the world position of the open chest (kind == containerKindChest).
 	chestPos pk.Position
+
+	// craftGrid is the transient 3x3 crafting-table grid (kind == containerKindCrafting): 9 cells
+	// row-major, plus the result is recomputed into craftResult on each grid change. No persistence —
+	// on close the 9 cells are returned to the player (CraftingMenu.removed -> clearContainer).
+	craftGrid   [9]component.SlotData
+	craftResult component.SlotData
 }
+
+// containerKind discriminates an open non-inventory window.
+type containerKind int
+
+const (
+	containerKindChest    containerKind = iota // a world chest (chestPos)
+	containerKindCrafting                      // a transient crafting-table 3x3 (craftGrid)
+)
 
 // chestMenuSize is the chest-window slot count: 27 chest container slots + 27 player main + 9
 // hotbar = 63 (the generic_9x3 ChestMenu slot count). ChestMenu adds the chest grid first
@@ -108,14 +127,24 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 		return false
 	}
 	state, ok := t.world.GetBlock(hitPos, dimMinY)
-	if !ok || !isChestBlock(state) {
-		return false // not a chest (or unloaded): PASS → placement runs
+	if !ok {
+		return false // unloaded: PASS → placement runs
+	}
+	isChest := isChestBlock(state)
+	isCraft := isCraftingTableBlock(state)
+	if !isChest && !isCraft {
+		return false // not an interactive block (chest/crafting_table): PASS → placement runs
 	}
 	// Reach-gate the interaction (the same server-authoritative reach the place/break paths use):
-	// a far chest is not openable. Vanilla gates the whole useItemOn behind the interaction
-	// distance; reusing withinReach keeps the chest open under the same bound.
+	// a far block is not openable. Vanilla gates the whole useItemOn behind the interaction
+	// distance; reusing withinReach keeps the open under the same bound.
 	if !t.withinReach(p, hitPos) {
 		return false
+	}
+	if isCraft {
+		// CraftingTableBlock.useWithoutItem -> player.openMenu(crafting). The 3x3 transient menu opens
+		// on any right-click (the bl9 sneak guard collapses to false in v1, like the chest path).
+		return t.openCraftingTable(p, hitPos)
 	}
 	return t.openChest(p, hitPos)
 }
@@ -152,7 +181,7 @@ func (t *TickLoop) openChest(p *tickPlayer, pos pk.Position) bool {
 	}
 
 	win := p.nextContainerCounter()
-	p.openContainer = &openContainer{windowID: win, chestPos: pos}
+	p.openContainer = &openContainer{windowID: win, kind: containerKindChest, chestPos: pos}
 
 	// connection.send(new ClientboundOpenScreenPacket(containerId, generic_9x3, getDisplayName())).
 	menuID := menuTypeID(registryid.Menu, "minecraft:generic_9x3")

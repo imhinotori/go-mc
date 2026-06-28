@@ -151,7 +151,7 @@ func (t *TickLoop) onTakeCraft(p *tickPlayer, inv *Inventory, v craftView) {
 					v.setCell(slot, remItem) // setItem(slot, remItem)
 				case stackSameItemSameComponents(remItem, item):
 					remItem.Count += item.Count // remItem.grow(item.getCount())
-					v.setCell(slot, remItem)     // setItem(slot, remItem)
+					v.setCell(slot, remItem)    // setItem(slot, remItem)
 				default:
 					if !t.invAdd(inv, &remItem) { // player.getInventory().add(remItem)
 						t.playerDrop(p, remItem, false) // player.drop(remItem, false)
@@ -183,3 +183,396 @@ func craftRemoveOne(v craftView, slot int) component.SlotData {
 // toItemID converts an int item id to the component.SlotData ItemID field type (pk.VarInt).
 // Centralized so the (id,count) -> SlotData construction is consistent across the crafting engine.
 func toItemID(id int) pk.VarInt { return pk.VarInt(id) }
+
+// ---------------------------------------------------------------------------------------------------
+// The 3x3 crafting-table window CLICK ENGINE (Task 2) — a clone of chest_click.go over the CraftingMenu
+// slot layout (result 0, grid 1-9, player main 10-36, hotbar 37-45). The result slot (0) is take-only
+// (ResultSlot.mayPlace == false) and a take fires onTakeCraft (the SAME 1:1 consume as the 2x2, w=h=3
+// over the transient craftGrid); a grid change re-runs slotChangedCraftingGrid (re-match). Supported
+// ContainerInputs: PICKUP, QUICK_MOVE, THROW — the operations a crafting menu actually receives. Jar
+// cites: AbstractContainerMenu.doClick (PICKUP/QUICK_MOVE/THROW) + CraftingMenu.quickMoveStack.
+
+// craftSlotRef resolves a crafting-WINDOW slot index (0..45) to its backing + local index:
+//
+//	0      -> the result slot (oc.craftResult, take-only)
+//	1..9   -> the 3x3 grid (oc.craftGrid[0..8])
+//	10..45 -> the player inventory window (main 9..35, hotbar 36..44)
+//
+// An out-of-range index returns ok=false. This is the CraftingMenu slot→container mapping.
+type craftSlotRef struct {
+	oc      *openContainer
+	inv     *Inventory
+	result  bool  // the result slot (0)
+	gridIdx int   // index into oc.craftGrid (grid slot), -1 otherwise
+	invSlot int16 // player inventory window slot (player slot), -1 otherwise
+	ok      bool
+}
+
+func craftingResolveSlot(oc *openContainer, inv *Inventory, menuIdx int) craftSlotRef {
+	switch {
+	case menuIdx == 0:
+		return craftSlotRef{oc: oc, inv: inv, result: true, gridIdx: -1, invSlot: -1, ok: true}
+	case menuIdx >= 1 && menuIdx <= 9:
+		return craftSlotRef{oc: oc, inv: inv, gridIdx: menuIdx - 1, invSlot: -1, ok: true}
+	case menuIdx >= 10 && menuIdx < 10+27:
+		// main: menu 10..36 → window slots 9..35
+		return craftSlotRef{oc: oc, inv: inv, gridIdx: -1, invSlot: int16(windowMainFirst + (menuIdx - 10)), ok: true}
+	case menuIdx >= 10+27 && menuIdx < craftingMenuSize:
+		// hotbar: menu 37..45 → window slots 36..44
+		return craftSlotRef{oc: oc, inv: inv, gridIdx: -1, invSlot: int16(windowHotbarFirst + (menuIdx - 10 - 27)), ok: true}
+	}
+	return craftSlotRef{}
+}
+
+func (r craftSlotRef) get() component.SlotData {
+	switch {
+	case r.result:
+		return r.oc.craftResult
+	case r.gridIdx >= 0:
+		return r.oc.craftGrid[r.gridIdx]
+	default:
+		return r.inv.get(r.invSlot)
+	}
+}
+
+// set writes the slot backing. The RESULT slot is take-only: a set into it is ignored (the result is
+// owned by the matcher, never client-set — T-25-06).
+func (r craftSlotRef) set(s component.SlotData) {
+	if stackEmpty(s) {
+		s = component.SlotData{Count: 0}
+	}
+	switch {
+	case r.result:
+		return // result is take-only (mayPlace == false)
+	case r.gridIdx >= 0:
+		r.oc.craftGrid[r.gridIdx] = s
+	default:
+		r.inv.set(r.invSlot, s)
+	}
+}
+
+// clickedCrafting ports AbstractContainerMenu.clicked for an open crafting window: snapshot the grid +
+// result + player + cursor, run doCraftingClick under a panic-recover (the vanilla clicked() try block —
+// no partial mutation leaks on a throw, T-6-04), recompute the result through the matcher, then re-send
+// the authoritative content + sync the carried cursor. The whole window is re-sent (the client snaps to
+// authoritative), like the chest engine.
+func (t *TickLoop) clickedCrafting(p *tickPlayer, oc *openContainer, slotNum int16, button int, input int32) {
+	inv := ensureInventory(p)
+
+	gridBefore := oc.craftGrid
+	resultBefore := oc.craftResult
+	invBefore := inv.snapshot()
+	carriedBefore := inv.getCarried()
+
+	func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				oc.craftGrid = gridBefore
+				oc.craftResult = resultBefore
+				copy(inv.slots, invBefore)
+				inv.setCarried(carriedBefore)
+			}
+		}()
+		t.doCraftingClick(p, oc, inv, int(slotNum), button, int(input))
+	}()
+
+	// slotsChanged: recompute the result from the (post-click) grid. A take already re-ran this inside
+	// onTakeCraft, but a grid-only change (place/move) needs it here. Idempotent.
+	t.slotChangedCraftingGrid(craftingTableView(oc))
+
+	// broadcastChanges: re-send the full authoritative crafting window so the client reflects the move.
+	t.sendCraftingContent(p)
+
+	// synchronizeCarriedToRemote: sync the cursor on change (ClientboundContainerSetSlot(-1, ...)).
+	if !slotDataEqual(carriedBefore, inv.getCarried()) {
+		p.client.Send(containerSetSlot(-1, inv.stateID, -1, inv.getCarried()))
+	}
+}
+
+// doCraftingClick ports the AbstractContainerMenu.doClick branches over the crafting window. PICKUP,
+// QUICK_MOVE, THROW are the supported inputs; an unsupported/forged input is a no-op (the authoritative
+// content is re-sent regardless). The result slot (0) is take-only — a place INTO it is rejected, and a
+// take fires onTakeCraft.
+func (t *TickLoop) doCraftingClick(p *tickPlayer, oc *openContainer, inv *Inventory, i, j, input int) {
+	switch input {
+	case containerInputPickup, containerInputQuickMove:
+		if inv.quickcraftStatus != 0 {
+			inv.resetQuickCraft()
+			return
+		}
+		if input == containerInputPickup {
+			t.craftPickup(p, oc, inv, i, j)
+		} else {
+			t.craftQuickMove(p, oc, inv, i)
+		}
+	case containerInputThrow:
+		t.craftThrow(p, oc, inv, i, j)
+	}
+}
+
+// craftPickup ports the PICKUP branch over the crafting window: left-click (j==0) takes/puts the whole
+// stack, right-click (j==1) takes half / puts one. The RESULT slot (0) is take-only: a pickup of it takes
+// the WHOLE result onto the cursor (or merges) and fires onTakeCraft (the consume); you cannot put INTO
+// it. The grid + player slots behave like chest cells.
+func (t *TickLoop) craftPickup(p *tickPlayer, oc *openContainer, inv *Inventory, i, j int) {
+	if j != 0 && j != 1 {
+		return
+	}
+	if i < 0 {
+		return
+	}
+	ref := craftingResolveSlot(oc, inv, i)
+	if !ref.ok {
+		return
+	}
+	carried := inv.getCarried()
+
+	// The RESULT slot: take-only. ResultSlot.mayPlace == false, so you can only TAKE.
+	if ref.result {
+		res := oc.craftResult
+		if stackEmpty(res) {
+			return // nothing to take
+		}
+		// Take onto the cursor: empty cursor -> take whole result; same-item cursor -> merge if room;
+		// different item -> no-op (you cannot swap into a take-only slot). Vanilla: the result is taken
+		// only when it can be picked up (mayPickup) and placed on the cursor.
+		if stackEmpty(carried) {
+			inv.setCarried(res)
+		} else if stackSameItemSameComponents(res, carried) && int(carried.Count)+int(res.Count) <= stackMaxSize(carried) {
+			c := carried
+			c.Count += res.Count
+			inv.setCarried(c)
+		} else {
+			return // cursor occupied by a different/full item: cannot take the result
+		}
+		// onTake: clear the result + apply the 1:1 per-cell consume + chained re-match.
+		t.onTakeCraft(p, inv, craftingTableView(oc))
+		return
+	}
+
+	primary := j == 0
+	slotItem := ref.get()
+
+	if stackEmpty(slotItem) {
+		if !stackEmpty(carried) {
+			place := 1
+			if primary {
+				place = int(carried.Count)
+			}
+			c := carried
+			ref.set(craftSafeInsert(ref, &c, place))
+			inv.setCarried(c)
+		}
+		return
+	}
+	if stackEmpty(carried) {
+		take := (int(slotItem.Count) + 1) / 2
+		if primary {
+			take = int(slotItem.Count)
+		}
+		rem := slotItem
+		taken := stackSplit(&rem, take)
+		ref.set(rem)
+		inv.setCarried(taken)
+		return
+	}
+	if stackSameItemSameComponents(slotItem, carried) {
+		add := 1
+		if primary {
+			add = int(carried.Count)
+		}
+		c := carried
+		ref.set(craftSafeInsert(ref, &c, add))
+		inv.setCarried(c)
+	} else if int(carried.Count) <= chestSlotMax(carried) {
+		inv.setCarried(slotItem)
+		ref.set(carried)
+	}
+}
+
+// craftSafeInsert ports Slot.safeInsert over a craftSlotRef (grid/player cells; the result is never an
+// insert target — craftPickup guards it): place up to min(increment, stack.count, slotMax-existing) of
+// *stack, shrink *stack, and return the slot's new contents. Mirrors chestSafeInsert.
+func craftSafeInsert(ref craftSlotRef, stack *component.SlotData, increment int) component.SlotData {
+	existing := ref.get()
+	if stackEmpty(*stack) {
+		return existing
+	}
+	add := min(increment, int(stack.Count))
+	if room := chestSlotMax(*stack) - int(existing.Count); room < add {
+		add = room
+	}
+	if add <= 0 {
+		return existing
+	}
+	if stackEmpty(existing) {
+		return stackSplit(stack, add)
+	}
+	if stackSameItemSameComponents(existing, *stack) {
+		stack.Count = toVar(int(stack.Count) - add)
+		if stack.Count <= 0 {
+			stack.Count = 0
+		}
+		existing.Count = toVar(int(existing.Count) + add)
+		return existing
+	}
+	return existing
+}
+
+// craftQuickMove ports CraftingMenu.quickMoveStack: shift-click moves a stack between the grid/result and
+// the player inventory. From the result (0) it moves the whole result into the player inventory and fires
+// onTakeCraft (the consume) per moved craft; from a grid cell it moves into the player inventory; from a
+// player cell it moves into the grid. v1 ports the common single-craft shift of the result + the
+// grid↔player moves (the result-book "craft as many as fit" multi-loop is a faithful follow-up). CITE
+// CraftingMenu.quickMoveStack.
+func (t *TickLoop) craftQuickMove(p *tickPlayer, oc *openContainer, inv *Inventory, i int) {
+	if i < 0 {
+		return
+	}
+	ref := craftingResolveSlot(oc, inv, i)
+	if !ref.ok {
+		return
+	}
+
+	if ref.result {
+		// Shift-take the result: deposit the whole result into the player inventory, then consume.
+		res := oc.craftResult
+		if stackEmpty(res) {
+			return
+		}
+		work := res
+		if !t.moveItemStackTo(inv, &work, windowMainFirst, 45, true) {
+			return // no room: nothing crafted
+		}
+		// The result moved (fully or partly); fire the consume once (one craft). A full recipe-book
+		// "craft until no room" loop is the faithful follow-up.
+		t.onTakeCraft(p, inv, craftingTableView(oc))
+		return
+	}
+
+	src := ref.get()
+	if stackEmpty(src) {
+		return
+	}
+	work := src
+	if ref.gridIdx >= 0 {
+		// Grid → player inventory (main+hotbar, hotbar-first).
+		if !t.moveItemStackTo(inv, &work, windowMainFirst, 45, true) {
+			return
+		}
+	} else {
+		// Player → the 3x3 grid.
+		if !t.craftMoveIntoGrid(oc, &work) {
+			return
+		}
+	}
+	ref.set(work)
+}
+
+// craftMoveIntoGrid ports moveItemStackTo for the 3x3 grid destination: pass 1 merges *stack into
+// existing same-item grid cells, pass 2 fills empty grid cells. Mirrors chestMoveInto over the 9 cells.
+func (t *TickLoop) craftMoveIntoGrid(oc *openContainer, stack *component.SlotData) bool {
+	moved := false
+	if stackIsStackable(*stack) {
+		for i := 0; i < 9 && !stackEmpty(*stack); i++ {
+			existing := oc.craftGrid[i]
+			if stackEmpty(existing) || !stackSameItemSameComponents(*stack, existing) {
+				continue
+			}
+			sum := int(existing.Count) + int(stack.Count)
+			slotMax := chestSlotMax(existing)
+			if sum <= slotMax {
+				existing.Count = toVar(sum)
+				oc.craftGrid[i] = existing
+				stack.Count = 0
+				moved = true
+			} else if int(existing.Count) < slotMax {
+				stack.Count = toVar(int(stack.Count) - (slotMax - int(existing.Count)))
+				existing.Count = toVar(slotMax)
+				oc.craftGrid[i] = existing
+				moved = true
+			}
+		}
+	}
+	if !stackEmpty(*stack) {
+		for i := 0; i < 9; i++ {
+			if !stackEmpty(oc.craftGrid[i]) {
+				continue
+			}
+			slotMax := chestSlotMax(*stack)
+			place := int(stack.Count)
+			if slotMax < place {
+				place = slotMax
+			}
+			oc.craftGrid[i] = stackCopyWithCount(*stack, place)
+			stack.Count = toVar(int(stack.Count) - place)
+			if stack.Count <= 0 {
+				stack.Count = 0
+			}
+			moved = true
+			break
+		}
+	}
+	return moved
+}
+
+// craftThrow ports the THROW branch over a crafting window: with an empty cursor, Q drops 1 (j==0) or the
+// whole stack (j==1) from the slot under the cursor. The result slot drops the whole result + fires the
+// consume (a Q on the result crafts-and-drops).
+func (t *TickLoop) craftThrow(p *tickPlayer, oc *openContainer, inv *Inventory, i, j int) {
+	if !stackEmpty(inv.getCarried()) {
+		return
+	}
+	if i < 0 {
+		return
+	}
+	ref := craftingResolveSlot(oc, inv, i)
+	if !ref.ok {
+		return
+	}
+	cur := ref.get()
+	if stackEmpty(cur) {
+		return
+	}
+	if ref.result {
+		// Q on the result: drop the whole result, then consume (a craft).
+		t.playerDrop(p, cur, true)
+		t.onTakeCraft(p, inv, craftingTableView(oc))
+		return
+	}
+	amt := 1
+	if j != 0 {
+		amt = int(cur.Count)
+	}
+	taken := stackCopyWithCount(cur, amt)
+	cur.Count = toVar(int(cur.Count) - amt)
+	if cur.Count <= 0 {
+		cur = component.SlotData{Count: 0}
+	}
+	ref.set(cur)
+	t.playerDrop(p, taken, true)
+}
+
+// closeCraftingWindow ports CraftingMenu.removed → AbstractContainerMenu.clearContainer(player,
+// craftSlots): every grid cell is returned to the player inventory (invAdd; overflow -> playerDrop as an
+// ItemEntity), NOT persisted (the transient grid, Pitfall 7). Called from handleContainerClose when the
+// open window is a crafting_table. The result slot is NOT returned (it is a virtual assembled stack, not
+// real items — vanilla clears only craftSlots).
+//
+// 1:1 net.minecraft.world.inventory.AbstractContainerMenu.clearContainer (over craftSlots)
+func (t *TickLoop) closeCraftingWindow(p *tickPlayer, oc *openContainer) {
+	inv := ensureInventory(p)
+	for i := 0; i < 9; i++ {
+		s := oc.craftGrid[i]
+		oc.craftGrid[i] = component.SlotData{Count: 0} // removeItemNoUpdate(i)
+		if stackEmpty(s) {
+			continue
+		}
+		// dropOrPlaceInInventory: add to the inventory, else drop as an ItemEntity.
+		stack := s
+		if !t.invAdd(inv, &stack) {
+			t.playerDrop(p, stack, false)
+		}
+	}
+	oc.craftResult = component.SlotData{Count: 0}
+}
