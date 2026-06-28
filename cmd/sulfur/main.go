@@ -28,6 +28,7 @@ import (
 
 	"github.com/imhinotori/sulfur/chat"
 	"github.com/imhinotori/sulfur/level"
+	"github.com/imhinotori/sulfur/plugin/host"
 	"github.com/imhinotori/sulfur/server"
 	"github.com/imhinotori/sulfur/server/tui"
 	"github.com/imhinotori/sulfur/world"
@@ -276,6 +277,32 @@ func main() {
 	// blocks the tick on persistence and no live tick-owned state is read off-thread.
 	tick.SetSaveSink()
 	go tick.RunSaveLoop(ctx, worldDir)
+
+	// PLUGIN-02 (Plan 22): load the plugin host from plugins/ (TOML-manifest dirs, register-once
+	// hooks) and wire it into the tick BEFORE Run, so the discrete gameplay seams (break/place/
+	// join/leave/spawn/death/damage/tick) dispatch to plugin hooks. A missing/empty plugins/ dir is
+	// a no-op (the seams stay nil-guarded no-ops). Then start the FULL hot-reload watcher: on a
+	// .star/.toml change it rebuilds a fresh Manager OFF-tick and publishes it on the tick's swap
+	// channel, which drainRegistrations installs ON the tick goroutine (TICK-05 — never a mid-Emit
+	// map mutation). The watcher is closed on ctx cancel so it does not leak past shutdown.
+	const pluginsDir = "plugins"
+	if _, err := os.Stat(pluginsDir); err == nil {
+		mgr := host.New()
+		if err := mgr.LoadDir(pluginsDir); err != nil {
+			log.Printf("plugin host: load %s failed (continuing without plugins): %v", pluginsDir, err)
+		} else {
+			tick.SetPlugins(mgr)
+			log.Printf("plugin host: loaded %d plugin(s) from %s/ (hot-reload watcher armed)", mgr.PluginCount(), pluginsDir)
+			if w, err := host.NewWatcher(pluginsDir, tick.PluginSwapChan(), nil); err != nil {
+				log.Printf("plugin host: hot-reload watcher disabled: %v", err)
+			} else {
+				go func() {
+					<-ctx.Done()
+					w.Close()
+				}()
+			}
+		}
+	}
 	// SUB-PERSIST: the off-tick chunk-save consumer (its own goroutine, like the player save loop).
 	// Disabled (SULFUR_PERSIST_CHUNKS != 1) it just waits on ctx — no disk IO. Enabled it drains the
 	// tick's immutable chunk snapshots and writes them to region files OFF the tick.
