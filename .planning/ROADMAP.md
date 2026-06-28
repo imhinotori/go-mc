@@ -55,7 +55,8 @@ Full phase details: [milestones/v3-ROADMAP.md](milestones/v3-ROADMAP.md).
  (completed 2026-06-28)
 - [x] **Phase 23: Entity/mob behavior API** (PLUGIN-03) — the **declarative mob-behavior interface**: a plugin DECLARES a mob's attributes/goals/AI (loaded once); Go runs the hot path (physics/pathfinding/tick) calling the declared hooks. The FULL-OVERRIDE path: a plugin can replace a mob's whole behavior. The Go-side bridge exposes the entity/world/nav API to Starlark as frozen, tick-owned-safe handles. Race-clean by construction (TICK-05 carries into the plugin call seam).
  (completed 2026-06-28)
-- [x] **Phase 24: Vanilla mobs AS plugins (1:1 dogfood)** (PLUGIN-04) — rewrite the existing Go mob/entity logic as Starlark plugins that remain a **literal 1:1 port of the 26.2 jar** (the mandate carries into the plugin layer). This is the validation that the API is ultra-powerful enough to express real vanilla AI. Proven against the jar bytecode + the existing mob-AI tests, byte/behavior-identical to the Go-native path it replaces. (completed 2026-06-28)
+- [x] **Phase 24: Vanilla mobs AS plugins (1:1 dogfood)** (PLUGIN-04) — rewrite the existing Go mob/entity logic as Starlark plugins that remain a **literal 1:1 port of the 26.2 jar** (the mandate carries into the plugin layer). This is the validation that the API is ultra-powerful enough to express real vanilla AI. Proven against the jar bytecode + the existing mob-AI tests, byte/behavior-identical to the Go-native path it replaces.
+ (completed 2026-06-28)
 - [ ] **Phase 25: Crafting/recipes AS plugins (2nd-domain dogfood)** (PLUGIN-05) — the crafting system is built THROUGH the plugin API, not as a hardcoded Go subsystem: a recipe-provider plugin loads the jar-extracted recipes (shaped/shapeless/smelting/etc) and drives the crafting-grid result + the ResultSlot.onTake consumption (the slots exist in InventoryMenu today but the result is a no-op stub — `inventory_click.go`: "no recipes wired in v1"). This proves the plugin API is general across a SECOND domain (recipes/menus, not just entity AI) — the real test of "ultra-powerful". The 1:1 mandate carries: the recipe-match + consume logic stays a literal jar port (RecipeManager/CraftingMenu), just expressed via the plugin host. Includes the crafting_table block + 3×3 menu (vanilla only had the 2×2 inventory grid). Custom (non-vanilla) recipes fall out for free.
 - [ ] **Phase 26: Opt-in Python runtime** (PLUGIN-06) — `qur/gopy` @ `python3.14` (idiomatic CPython bindings via cgo/libpython) behind a `python` build tag so the **default binary stays pure-Go static (CGO=0)**. A bridge for HEAVY off-tick plugins only (never the per-tick hot path — cgo + GIL + non-determinism keep it off the tick). The same event/registration API as Starlark, so a plugin author picks the runtime per workload.
 - [ ] **Phase 27: Folia regionization** (REGION-01, folded from v3-deferral) — Leaf/Folia-style independent-region tick threads so the world ticks in parallel regions; the plugin call seam + the entity API must be region-aware (a plugin hook runs on its region's thread). This is the perf payoff that makes "ultra-efficient" real at scale, and it was always a v4 item.
@@ -128,7 +129,11 @@ Plans:
   2. The crafting-grid result + `ResultSlot.onTake` consumption work (today a no-op stub — `inventory_click.go`: "no recipes wired in v1"); the recipe-match + consume logic is a literal jar port (RecipeManager/CraftingMenu), cited (PLUGIN-05)
   3. The `crafting_table` block + the 3×3 menu exist (the core only had the 2×2 inventory grid) (PLUGIN-05)
   4. Vanilla recipes craft correctly through the plugin path (result + consume, jar-verified) AND a custom recipe works (PLUGIN-05)
-**Plans**: TBD (set by `/gsd-plan-phase 25`)
+**Plans**: 3 plans in 3 waves
+Plans:
+- [ ] 25-01-PLAN.md — level/recipe data embed + parse (ALL types) + the 1:1 match (shaped shrink+mirror, shapeless multiset, cooking/stonecutting) + the value-returning Match seam in plugin/host (Wave 1)
+- [ ] 25-02-PLAN.md — un-stub ResultSlot.onTake + 1:1 consume (2×2 grid crafts) + crafting_table 3×3 menu (chest-open clone) + //go:embed'd vanilla recipe plugin boot-load + THE GATE (vanilla + custom recipe) + -race (Wave 2)
+- [ ] 25-03-PLAN.md — cooking/stonecutting BLOCK build-or-defer audit (deferred-blocks.md, cited) + build the feasible block(s) 1:1; deferred types keep their matcher (Wave 3)
 **Research**: RecipeManager/CraftingMenu/ResultSlot.onTake bytecode; the jar recipe extraction; the item/menu bridge surface the plugin API needs.
 
 ### Phase 26: Opt-in Python runtime
@@ -175,7 +180,7 @@ Plans:
 | 22. Plugin host + event bus | v4 | 2/2 | Complete   | 2026-06-28 |
 | 23. Entity/mob behavior API | v4 | 2/2 | Complete   | 2026-06-28 |
 | 24. Vanilla mobs AS plugins (1:1 dogfood) | v4 | 2/2 | Complete   | 2026-06-28 |
-| 25. Crafting/recipes AS plugins (2nd-domain dogfood) | v4 | 0/? | Not started | — |
+| 25. Crafting/recipes AS plugins (2nd-domain dogfood) | v4 | 0/3 | Planned | — |
 | 26. Opt-in Python runtime | v4 | 0/? | Not started | — |
 | 27. Folia regionization | v4 | 0/? | Not started | — |
 | 28. Plugin system visual + perf gate | v4 | 0/? | Not started | — |
