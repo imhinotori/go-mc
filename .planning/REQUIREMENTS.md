@@ -31,7 +31,7 @@ The "user" is now (a) a **plugin author** writing `.star` (or, opt-in, Python) p
 
 ### Opt-in Python runtime (Phase 26)
 
-- [ ] **PLUGIN-06**: An opt-in Python runtime (`qur/gopy` @ branch `python3.14`, module `gopython.xyz/py/v14` — corrected from `/py/v3` which is the old 3.11 line, per Phase-26 research; idiomatic CPython bindings via cgo + libpython) behind a `python` build tag, so the DEFAULT (no-tag) build stays pure-Go static (CGO=0). It is for HEAVY off-tick plugins ONLY (never the per-tick hot path — cgo overhead + GIL + non-determinism), running on their own goroutines/pools and rejoining via the existing async seam (`asyncIn2`/ants). Same event/registration API as Starlark (author picks the runtime per workload, not per API). A Python plugin runs off-tick, rejoins via the async seam; the default build is still pure-Go static.
+- [x] **PLUGIN-06**: An opt-in Python runtime (`qur/gopy` @ branch `python3.14`, module `gopython.xyz/py/v14` — corrected from `/py/v3` which is the old 3.11 line, per Phase-26 research; idiomatic CPython bindings via cgo + libpython) behind a `python` build tag, so the DEFAULT (no-tag) build stays pure-Go static (CGO=0). It is for HEAVY off-tick plugins ONLY (never the per-tick hot path — cgo overhead + GIL + non-determinism), running on their own goroutines/pools and rejoining via the existing async seam (`asyncIn2`/ants). Same event/registration API as Starlark (author picks the runtime per workload, not per API). A Python plugin runs off-tick, rejoins via the async seam; the default build is still pure-Go static.
 
 ### Regionization (Phase 27)
 
@@ -83,7 +83,7 @@ Updated during roadmap creation.
 | PLUGIN-03 | Phase 23 | Complete |
 | PLUGIN-04 | Phase 24 | Complete |
 | PLUGIN-05 | Phase 25 | Complete |
-| PLUGIN-06 | Phase 26 | Pending |
+| PLUGIN-06 | Phase 26 | Complete |
 | REGION-01 | Phase 27 | Pending |
 | PLUGIN-07 | Phase 28 | Pending |
 

@@ -148,7 +148,7 @@ Plans:
   4. A Python plugin runs off-tick and rejoins via the async seam, observably (PLUGIN-06)
 **Plans**: 3 plans in 3 waves
 Plans:
-- [ ] 26-01-PLAN.md — Build-tag isolation: the //go:build python real-gopy impl + //go:build !python cgo-free stub (plugin/python), gopy pinned to a python3.14 branch commit as /py/v14 (behind the tag), the runtime-routing interface in plugin/host (LoadDir python branch — loaded with the tag, gracefully skipped without it), + THE DEFAULT-BUILD GATE (CGO=0 static, ZERO gopy in the graph) + the -tags python build (Wave 1)
+- [x] 26-01-PLAN.md — Build-tag isolation: the //go:build python real-gopy impl + //go:build !python cgo-free stub (plugin/python), gopy pinned to a python3.14 branch commit as /py/v14 (behind the tag), the runtime-routing interface in plugin/host (LoadDir python branch — loaded with the tag, gracefully skipped without it), + THE DEFAULT-BUILD GATE (CGO=0 static, ZERO gopy in the graph) + the -tags python build (Wave 1)
 - [ ] 26-02-PLAN.md — The off-tick lane: the ants-pool dispatch via submitOrDrop + the pythonHookReady async rejoin on asyncIn2 (the pathReady discipline), the same register API routed by manifest.Runtime (a python on_block_break fires off-tick), + sub-interpreters-per-worker OR the serialized fallback (verify gopy@3.14, cite the decision) (Wave 2)
 - [ ] 26-03-PLAN.md — The world-bridge: an off-tick python set_block/spawn/log mutation REQUEST → tick-drain → apply through the Phase-23 tick-owned seams (capability-gated, no live handle off-tick), -race clean, + THE PHASE GATE (python off-tick + async rejoin + on-tick mutation apply, AND the default build still pure-Go static CGO=0) (Wave 3)
 **Research**: The `python3.14` branch build (libpython link, build-tag isolation), the off-tick bridge over the existing async pool, GIL handling.
@@ -186,7 +186,7 @@ Plans:
 | 23. Entity/mob behavior API | v4 | 2/2 | Complete   | 2026-06-28 |
 | 24. Vanilla mobs AS plugins (1:1 dogfood) | v4 | 2/2 | Complete   | 2026-06-28 |
 | 25. Crafting/recipes AS plugins (2nd-domain dogfood) | v4 | 3/3 | Complete   | 2026-06-28 |
-| 26. Opt-in Python runtime | v4 | 0/? | Not started | — |
+| 26. Opt-in Python runtime | v4 | 1/3 | In Progress|  |
 | 27. Folia regionization | v4 | 0/? | Not started | — |
 | 28. Plugin system visual + perf gate | v4 | 0/? | Not started | — |
 
