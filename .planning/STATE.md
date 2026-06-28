@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v4
 milestone_name: Plugin / Scripting System
-status: verifying
+status: executing
 stopped_at: Completed 24-02-PLAN.md — Phase 24 (vanilla-mobs-as-plugins) COMPLETE
-last_updated: "2026-06-28T07:05:50.547Z"
-last_activity: 2026-06-28
+last_updated: "2026-06-28T16:40:43.673Z"
+last_activity: 2026-06-28 -- Phase 25 execution started
 progress:
   total_phases: 8
   completed_phases: 4
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-23)
 
 **Core value:** A Go server that an unmodified vanilla Minecraft 26.2 client can connect to, log into, and play in a persistent, ticking world — architected from day one for Leaf-style async optimizations.
-**Current focus:** Phase 24 — vanilla-mobs-as-plugins
+**Current focus:** Phase 25 — crafting-recipes-as-plugins
 
 ## Current Position
 
-Phase: 24 (vanilla-mobs-as-plugins) — EXECUTING
-Plan: 2 of 2
-Status: Phase complete — ready for verification
-Last activity: 2026-06-28
+Phase: 25 (crafting-recipes-as-plugins) — EXECUTING
+Plan: 1 of 2
+Status: Executing Phase 25
+Last activity: 2026-06-28 -- Phase 25 execution started
 
 ### ⚠️ WHAT'S NEXT (resume here — see .planning/HANDOFF.md for the FULL detail)
 
