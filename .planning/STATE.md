@@ -4,14 +4,14 @@ milestone: v4
 milestone_name: Plugin / Scripting System
 status: executing
 stopped_at: Completed 24-02-PLAN.md — Phase 24 (vanilla-mobs-as-plugins) COMPLETE
-last_updated: "2026-06-28T16:40:43.673Z"
-last_activity: 2026-06-28 -- Phase 25 execution started
+last_updated: "2026-06-28T17:09:50.545Z"
+last_activity: 2026-06-28
 progress:
   total_phases: 8
   completed_phases: 4
-  total_plans: 8
-  completed_plans: 8
-  percent: 100
+  total_plans: 11
+  completed_plans: 9
+  percent: 82
 ---
 
 # Project State
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-06-23)
 ## Current Position
 
 Phase: 25 (crafting-recipes-as-plugins) — EXECUTING
-Plan: 1 of 2
-Status: Executing Phase 25
-Last activity: 2026-06-28 -- Phase 25 execution started
+Plan: 2 of 2
+Status: Ready to execute
+Last activity: 2026-06-28
 
 ### ⚠️ WHAT'S NEXT (resume here — see .planning/HANDOFF.md for the FULL detail)
 
@@ -127,7 +127,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [██████████] 100%
+Progress: [████████░░] 82%
 
 ## Performance Metrics
 
@@ -223,6 +223,7 @@ Progress: [██████████] 100%
 | Phase 23 P02 | 12min | 3 tasks | 7 files |
 | Phase 24 P01 | 9min | 2 tasks | 9 files |
 | Phase 24 P02 | 25min | 3 tasks | 19 files |
+| Phase 25 P01 | 11min | 3 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -353,6 +354,8 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 23 / 23-01]: SUB-ATTRIB coverage fix — 7 per-type suppliers ported 1:1 from jar (pig/cow/sheep/chicken/skeleton/creeper/spider) + livingFallbackSupplier so NewMapForEntity never returns nil for a living type; non-living stays nil. Thin id-not-pointer entity/world handles with capability enforcement at the handle-op boundary (Option A: handles in server).
 - [Phase 24]: 24-01 PLUGIN-04 Wave-1 — per-entity seeded RandomSource (server/ai_random.go: entityRandom over a per-mob seeded math/rand/v2 PCG, the Mob.getRandom() analogue) replaces the shared package-global RNG in the 3 passive Pig goals, drawing in the EXACT bytecode order (javap-verified: RandomStrollGoal nextInt(interval) gate THEN getPosition 3x nextInt; LookAtPlayerGoal nextFloat roll then 40+nextInt(40); RandomLookAroundGoal nextFloat roll then nextDouble heading then 20+nextInt(20)). Deterministic for a fixed seed -> TestTickAIDrivesMobs flake RETIRED (5/5) + a shared-global-rand race removed. Per 24-RESEARCH Open-Q4 a seeded PCG (not a bit-exact LegacyRandomSource port) suffices since no test asserts bit-exact sequences. PLUS the 3 faithful handle extensions Phase-23 lacked: entity.set_look(yaw,pitch) writes headYaw+yaw+pitch instantly (entities.write, NaN-clamped); world.nearest_player(x,y,z,range) reuses nearestPlayerAt over t.players (world.read); entity.rand_int(n)/rand_float() draw the mob's own rng (UNGATED). Additive only; existing tests green; Docker -race clean. NO swap yet (Wave 2). FLAGGED for Plan 02: starlarkGoal does NOT honor requiresUpdateEveryTick (baseGoal default false) — RandomLookAround needs it. Commits 2d8d8ac9 + 2be8584c.
 - [Phase ?]: [Phase 24]: 24-02 PLUGIN-04 dogfood — the vanilla Pig's 3 passive goals (Stroll@6 MOVE, LookAt@7 LOOK, LookAround@8 MOVE|LOOK) re-expressed 1:1 in plugins/vanilla_pig/main.star against the 26.2 jar (each cites its ai.goal.* class), //go:embed boot-loaded into a tick-owned registry (loud-fail if absent), SWAPPED in as the only pig (spawnVanillaPig replaces newPigAI at both spawn sites; the Go goals KEPT as the behavior-identical oracle). Two fidelity fixes: requires_update_every_tick threaded into starlarkGoal (RandomLookAround.requiresUpdateEveryTick==true) + a per-(mob,goal) get_state/set_state scratch (frozen-boundary fix). New seams: set_look_at (LookControl.setLookAt), rand_double (nextDouble), nav.stop, goal() tick-optional+can_continue; sandbox math module added. All 5 new goals DEFERRED cited (deferred-goals.md). TestPluginPigEqualsGoNativePig proves plugin==Go over 500 ticks; existing pig-AI suite passes UNCHANGED; CGO=0 green; Docker -race clean. Commits 56b2f88a + a66659b7 + 4a61e648.
+- [Phase ?]: [Phase 25] 25-01: level/recipe embeds + parses ALL vanilla recipe types (the level/loot twin); the 1:1 match is javap-verified — ofPositioned bounding-box SHRINK, ShapedRecipePattern mirror-then-unmirror (index (mirror?width-col-1:col)+row*width), ShapelessRecipe multiset cover (bipartite == StackedItemContents.canCraft), SingleItemRecipe single-ingredient cooking/stonecutting. Match() returns result + a per-cell used mask mapped through (Left,Top) for Wave-2 consume. Item tags embedded INTO level/recipe to keep it server-pure; #tag expanded recursively. Special types parsed as markers via a type-first decode (smithing_trim pattern is a STRING). Commits ff62c439+e30bda2c+fbc4d67d.
+- [Phase ?]: [Phase 25] 25-01: plugin/host gains the value-returning Match/Remaining seam (set_recipe_matcher + recipes builtins + SetRecipeTable) extending Phase-22 void Emit to query-resolution — the host READS the matcher's {id,count} dict back into Go. Fresh budget-bounded thread + recover; runaway matcher -> step budget *EvalError -> ok=false (T-25-01); readResult validates id>0 && count>0 (T-25-03). Lock-free write-at-load/read-on-tick; Unload drops the owned matcher.
 
 ### Pending Todos
 
@@ -382,7 +385,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-28T07:05:50.531Z
+Last session: 2026-06-28T17:09:40.230Z
 Stopped at: Completed 24-02-PLAN.md — Phase 24 (vanilla-mobs-as-plugins) COMPLETE
 Resume file: None
 Next: OPERATOR CHECKPOINT (19-02 Task 3) — build `CGO_ENABLED=0 go build -o sulfur.exe ./cmd/sulfur`, run `./sulfur.exe -seed 777` in a REAL terminal (expect alt-screen TUI: log viewport + command input), type `say hi`+Enter (expect a `console command cmd=say hi` viewport line), connect a vanilla 26.2 client (expect a join line), Ctrl-C (clean exit), then `./sulfur.exe -seed 777 | cat` (expect NO TUI, plain stderr — today's behavior). On "approved" → mark TUI-01 complete + advance the plan counter, then proceed to Plan 19-03 (gameplay_tick.go join/leave slog conversion + the full disconnect taxonomy). The console line routes TUI→tick (EnqueueConsoleCommand, cap 64, drop-on-full)→runConsoleCommand on the tick→existing graph (grant-all, no issuer), reply to slog. gameplay_tick.go is untouched (19-03 owns it). LEGACY: Phase 17 Wave 2 (17-02/17-03) — see prior continuity below. (GAMEPLAY-05 fluid simulation: OVERWRITE server/fluid.go with the FlowingFluid port + scheduled-tick queue; lazy-init t.fluidSchedule inside tickFluids, do NOT edit tick.go/tick_phases.go) and 17-03 (GAMEPLAY-04 fall damage + PvP dispatch: OVERWRITE server/fall_damage.go using the tickPlayer fallDistance/wasOnGround/lastY fields + the lookupPlayerByEntityID reverse lookup, do NOT edit tick.go/tick_phases.go). The exact Wave-2 seam surface (field names, init point, call sites, stub signatures) is in 17-01-SUMMARY.md "WAVE-2 HANDOFF". Deferred-still-open: dungeon loot/spawner-mob + BeehiveDecorator occupant + pale_garden PaleMoss (all v3, cosmetic, in 13-04-SUMMARY); KeepAlive double-leave hardening (Phase 3). KNOWN PRE-EXISTING FLAKE: TestTickAIDrivesMobs (OPT-01 async-pool timing, not caused by 17-01) intermittently fails under full-suite load; passes in isolation + 3× under -race.
