@@ -19,6 +19,12 @@ require (
 	go.starlark.net v0.0.0-20260613233743-8ba36ccb83fb
 	golang.org/x/sync v0.21.0
 	golang.org/x/term v0.44.0
+	// gopy (CPython 3.14 embed) — pinned to the python3.14 BRANCH commit
+	// b0bdc04a384b, NOT the moving v14.0.0-alpha.0 tag. Reachable ONLY from
+	// plugin/python/runtime_python.go behind //go:build python, so it stays OUT
+	// of the default CGO=0 import graph (PLUGIN-06). Verified via `go build
+	// -tags python` on the python3.14 Docker image (needs python-3.14-embed).
+	gopython.xyz/py/v14 v14.0.0-alpha.0.0.20260510154237-b0bdc04a384b
 )
 
 require (
