@@ -76,8 +76,12 @@ re_verification:
 | gopy API surface in cache | grep InitAndLock/NewLock/RunFile/NewCFunction/PackTuple/NewLong/AsLong/CallGoArgs | all found | ✓ PASS |
 | sub-interp absence (cited claim) | grep sub-interp surface in cache non-test .go | EMPTY (claim holds) | ✓ PASS |
 | Tagged files parse-clean | `gofmt -l` on all `//go:build python` files | empty | ✓ PASS |
-| `-tags python` build/link | `go build -tags python` | gcc/libpython3.14 absent on Windows | ? SKIP (Docker-deferred, documented) |
-| Default `-race` | `CGO_ENABLED=1 go test -race` | gcc absent on Windows | ? SKIP (Docker-deferred, documented) |
+| `-tags python` build/link | `go build -tags python ./...` in the `sulfur-py314` Docker image (python:3.14-slim-bookworm + Go 1.26) | LINKED against libpython3.14, exit 0 | ✓ PASS (RAN LIVE 2026-06-28, operator-directed) |
+| `-tags python` tests | `go test -tags python ./plugin/... ./server/` in the image | PASS (TestPythonHookOffTick/RegisterAndFire/SubInterpOrSerialized/WorldBridge+CapabilityDenied+NoLiveHandle) | ✓ PASS (RAN LIVE) |
+| `-tags python -race` | `go test -tags python -race ./plugin/... ./server/` in the image | PASS (server 21.6s, world-bridge + off-tick lane race-clean) | ✓ PASS (RAN LIVE) |
+| Default `-race` | `CGO_ENABLED=1 go test -race` in golang:1.26 Docker (as prior phases) | clean | ✓ PASS |
+
+**UPDATE 2026-06-28 (operator-directed):** the `-tags python` gate was NOT left Docker-deferred — it was RUN LIVE. A reproducible `ci/python/Dockerfile` (python:3.14-slim-bookworm + Go 1.26, asserts `pkg-config --exists python-3.14-embed`) builds `sulfur-py314`; the cgo link against libpython3.14 succeeds, the tagged tests + `-tags python -race` all pass. gopy confirmed = **qur/gopy** (`gopython.xyz/py/v14` vanity path → VCS origin github.com/qur/gopy @ the python3.14 branch), NOT the stale go-Python/gopy. 3 tagged-build issues surfaced + fixed (a missing host import in the tagged bridge, skipped-lane assertions that flip under the real runtime, a manifest capability). Default CGO=0 gate re-verified green, zero gopy in the graph. Commits c08f3912 (image) + 218e0fd3 (fixes).
 
 ### Requirements Coverage
 
