@@ -617,6 +617,23 @@ func (c *carveChunk) Set(wx, wy, wz int, state block.StateID) {
 	c.chunk.Sections[sec].SetBlock(local, state)
 }
 
+// MarkFluidPostProcess appends the carved cell to the chunk's PostProcessFluids list (the same
+// packing fill.go uses: (localY<<8)|(localZ<<4)|localX, localY = worldY - minY), so the server's
+// postProcessChunkFluids runs one FluidState.tick on it when the chunk goes live. Out-of-footprint
+// or out-of-range Y is dropped (only the target chunk records its own marks). This is the carver
+// half of markPosForPostProcessing that makes cave/ravine water flow on load.
+func (c *carveChunk) MarkFluidPostProcess(wx, wy, wz int) {
+	if !c.inFootprint(wx, wz) {
+		return
+	}
+	localY := wy - c.minY
+	if localY < 0 || localY >= c.height {
+		return
+	}
+	packed := uint32(localY)<<8 | uint32(wz&15)<<4 | uint32(wx&15)
+	c.chunk.PostProcessFluids = append(c.chunk.PostProcessFluids, packed)
+}
+
 // compile-time assertions: the generator is a drop-in world.Generator, and the adapter
 // satisfies the carver's CarveChunk contract.
 var (

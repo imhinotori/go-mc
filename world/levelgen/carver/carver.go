@@ -32,6 +32,11 @@ type CarveChunk interface {
 	MinY() int
 	// Height is the build height (NoiseSettings.height).
 	Height() int
+	// MarkFluidPostProcess flags a carved fluid cell for the chunk's one-shot
+	// postProcessGeneration FluidState.tick (ChunkAccess.markPosForPostProcessing). The carver
+	// calls this when it carves a fluid the aquifer reported as an unstable border
+	// (shouldScheduleFluidUpdate), so cave/ravine water actually flows on chunk load.
+	MarkFluidPostProcess(wx, wy, wz int)
 }
 
 // FluidSource makes the carve aquifer-aware: at a carved position it returns the
@@ -44,6 +49,11 @@ type FluidSource interface {
 	// air (the common case above the water table); ok=true with a water/lava state
 	// floods the carved block.
 	CarveFluid(wx, wy, wz int) (block.StateID, bool)
+	// ShouldScheduleFluidUpdate reports whether the LAST CarveFluid query landed on an
+	// unstable aquifer border (NoiseBasedAquifer.shouldScheduleFluidUpdate). carveBlock reads
+	// it right after CarveFluid to decide whether to markPosForPostProcessing — the vanilla
+	// WorldCarver.carveBlock gate (aquifer.shouldScheduleFluidUpdate() && !fluid.isEmpty()).
+	ShouldScheduleFluidUpdate() bool
 }
 
 // carvingMask ports net.minecraft.world.level.chunk.CarvingMask: a per-target-chunk
@@ -131,6 +141,15 @@ func (cc *carveContext) carveBlock(cfg *CarverConfig, wx, wy, wz int) bool {
 	}
 	carved := cc.getCarveState(cfg, wx, wy, wz)
 	cc.chunk.Set(wx, wy, wz, carved)
+	// WorldCarver.carveBlock @82-106: after setting the carve state, if the aquifer flagged this
+	// position as an unstable fluid border AND the carved block carries a (non-empty) fluid, mark
+	// it for the chunk's one-shot postProcessGeneration FluidState.tick — this is what makes
+	// cave/ravine water actually flow into the carved opening on chunk load (the operator's
+	// "naturally-generated water doesn't expand"). getCarveState already ran CarveFluid (via the
+	// aquifer) for this position, so ShouldScheduleFluidUpdate reflects THIS cell.
+	if (carved == cc.water || carved == cc.lava) && cc.fluid.ShouldScheduleFluidUpdate() {
+		cc.chunk.MarkFluidPostProcess(wx, wy, wz)
+	}
 	return true
 }
 

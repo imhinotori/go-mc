@@ -20,6 +20,7 @@ type solidChunk struct {
 	blocks map[[3]int]block.StateID
 	stone  block.StateID
 	bedrock block.StateID
+	marks  [][3]int // positions flagged via MarkFluidPostProcess (for assertions)
 }
 
 func newSolidChunk(pos level.ChunkPos, minY, height int) *solidChunk {
@@ -61,6 +62,10 @@ func (c *solidChunk) Set(wx, wy, wz int, state block.StateID) {
 	c.blocks[[3]int{wx, wy, wz}] = state
 }
 
+func (c *solidChunk) MarkFluidPostProcess(wx, wy, wz int) {
+	c.marks = append(c.marks, [3]int{wx, wy, wz})
+}
+
 // countAir returns how many blocks in the target footprint were carved to air/cave_air.
 func (c *solidChunk) countCarvedTo(states ...block.StateID) int {
 	want := map[block.StateID]bool{}
@@ -80,6 +85,7 @@ func (c *solidChunk) countCarvedTo(states ...block.StateID) int {
 type dryFluid struct{}
 
 func (dryFluid) CarveFluid(wx, wy, wz int) (block.StateID, bool) { return 0, false }
+func (dryFluid) ShouldScheduleFluidUpdate() bool                 { return false }
 
 // floodBelow is a FluidSource with a flat water table at level: any carve below
 // `level` floods with water, at/above is air.
@@ -94,6 +100,10 @@ func (f floodBelow) CarveFluid(wx, wy, wz int) (block.StateID, bool) {
 	}
 	return 0, false
 }
+
+// ShouldScheduleFluidUpdate: the test flood table treats every flooded carve as a border (so
+// carve tests that flood can assert MarkFluidPostProcess fires). The real aquifer is selective.
+func (f floodBelow) ShouldScheduleFluidUpdate() bool { return true }
 
 const testSeed = int64(123456789)
 
@@ -306,6 +316,26 @@ func TestCarverAquiferAware(t *testing.T) {
 	}
 	if got := ch.Get(5, 40, 5); got != caveAir {
 		t.Errorf("y=40 above water table: got %v, want cave_air %v", got, caveAir)
+	}
+
+	// BUG-3 water: a flooded carve whose aquifer flagged shouldScheduleFluidUpdate must be marked
+	// for post-process (WorldCarver.carveBlock markPosForPostProcessing) so the carved water flows
+	// on chunk load. floodBelow reports the flag true, so the y=20 water carve marks; the y=40
+	// cave_air carve (no fluid) does not.
+	foundWaterMark, foundAirMark := false, false
+	for _, m := range ch.marks {
+		if m == [3]int{5, 20, 5} {
+			foundWaterMark = true
+		}
+		if m == [3]int{5, 40, 5} {
+			foundAirMark = true
+		}
+	}
+	if !foundWaterMark {
+		t.Error("flooded carve at y=20 was NOT marked for post-process (water won't flow on load)")
+	}
+	if foundAirMark {
+		t.Error("dry cave_air carve at y=40 was marked for post-process (only fluid cells mark)")
 	}
 }
 
