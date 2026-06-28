@@ -61,8 +61,9 @@ Full phase details: [milestones/v3-ROADMAP.md](milestones/v3-ROADMAP.md).
  (completed 2026-06-28)
 - [x] **Phase 26: Opt-in Python runtime** (PLUGIN-06) — `qur/gopy` @ `python3.14` (idiomatic CPython bindings via cgo/libpython) behind a `python` build tag so the **default binary stays pure-Go static (CGO=0)**. A bridge for HEAVY off-tick plugins only (never the per-tick hot path — cgo + GIL + non-determinism keep it off the tick). The same event/registration API as Starlark, so a plugin author picks the runtime per workload.
  (completed 2026-06-28)
-- [x] **Phase 27: Folia regionization** (REGION-01, folded from v3-deferral) — Leaf/Folia-style independent-region tick threads so the world ticks in parallel regions; the plugin call seam + the entity API must be region-aware (a plugin hook runs on its region's thread). This is the perf payoff that makes "ultra-efficient" real at scale, and it was always a v4 item. (completed 2026-06-28)
-- [ ] **Phase 28: Plugin system visual + perf gate** (PLUGIN-07, autonomous:false) — a real client confirms: a custom non-vanilla mob plugin works, the vanilla-mobs-as-plugins path is behavior-identical, crafting (vanilla + a custom recipe) works through the plugin path, the event system fires correctly, and the perf target holds (the plugin layer adds no measurable per-tick cost vs Go-native; Folia regions scale). Closes v4.
+- [x] **Phase 27: Folia regionization** (REGION-01, folded from v3-deferral) — Leaf/Folia-style independent-region tick threads so the world ticks in parallel regions; the plugin call seam + the entity API must be region-aware (a plugin hook runs on its region's thread). This is the perf payoff that makes "ultra-efficient" real at scale, and it was always a v4 item.
+ (completed 2026-06-28)
+- [ ] **Phase 28: Plugin system visual + perf gate** (PLUGIN-07, BOT-DRIVEN gate — operator-directed, autonomous:true) — the test bot (cmd/testbot, a real proto-776 client) OBSERVES the wire to confirm: a custom non-vanilla mob plugin spawns + moves, the vanilla-mobs-as-plugins path is behavior-identical, crafting (vanilla + a custom recipe) works through the plugin path, and the event system fires (a hook reaction lands as ClientboundSystemChat) — bot exit 0 = visual PASS. Plus an automated perf bench (the promoted Phase-24 A/B oracle + TestPerfGate, threshold from a real baseline) proving no measurable per-tick cost vs Go-native; Folia regions scale. Closes v4.
 
 ### Phase 21: Starlark runtime foundation
 **Goal**: A Starlark runtime is embedded in Sulfur (pure-Go, CGO_ENABLED=0 preserved) that loads, sandboxes, and runs a `.star` plugin file — the riskiest single thing proven first (sandbox + CGO=0 + race-safety) before any host/event/behavior layer is built on top.
@@ -170,14 +171,18 @@ Plans:
 **Research**: The Folia region model (region ownership of chunks/entities, cross-region transfer), how the tick-owned plugin seam re-homes onto region threads.
 
 ### Phase 28: Plugin system visual + perf gate
-**Goal**: A real vanilla 26.2 client + a perf benchmark confirm the whole plugin system end-to-end — closes v4 (autonomous:false).
+**Goal**: The test bot (a real proto-776 client) drives + observes the plugin system end-to-end, and an automated perf bench proves no per-tick cost — closes v4. Operator-directed: the visual gate is BOT-AUTOMATED (the bot's observed packets ARE the proof), so the phase is autonomous:true.
 **Depends on**: Phases 21–27
 **Requirements**: PLUGIN-07
 **Success Criteria** (what must be TRUE):
-  1. **VISUAL GATE (autonomous:false)**: a real client confirms a custom non-vanilla mob plugin works, the vanilla-mobs-as-plugins path is behavior-identical, crafting (vanilla + a custom recipe) works through the plugin path, and the event system fires correctly (PLUGIN-07)
-  2. **PERF GATE**: a benchmark shows the plugin layer adds no measurable per-tick cost vs Go-native, and Folia regions scale (PLUGIN-07)
-**Plans**: TBD (set by `/gsd-plan-phase 28`)
-**Research**: The benchmark harness (plugin-driven vs Go-native per-tick cost), the real-client validation checklist.
+  1. **BOT-DRIVEN VISUAL GATE**: cmd/testbot, scripted, asserts on observed packets — a custom mob spawns + moves (AddEntity + move), the vanilla-pig-as-plugin behaves vanilla on the wire, crafting (vanilla + custom recipe) drives the result/consume (ContainerSetContent/SetSlot), and an event hook reacts observably (ClientboundSystemChat). exit 0 = PASS (PLUGIN-07)
+  2. **PERF GATE**: BenchmarkPluginPigVsGoNative (the promoted Phase-24 A/B oracle) + TestPerfGate (threshold from a real baseline: absolute ns/(mob·tick) + relative %) show no measurable per-tick cost vs Go-native; the zero-subscriber Emit bench is allocation-free; Folia regions scale (PLUGIN-07)
+**Plans**: 2 plans (set by `/gsd-plan-phase 28`)
+
+Plans:
+- [ ] 28-01-PLAN.md — the AUTOMATED PERF GATE (promote the Phase-24 A/B oracle to BenchmarkPluginPigVsGoNative + the Emit-overhead bench + TestPerfGate with a baseline-derived threshold) + boot-load a CUSTOM wander mob into the live registry + the SULFUR_TEST_KIT spawn trigger (Wave 1)
+- [ ] 28-02-PLAN.md — the BOT-DRIVEN VISUAL GATE: extend cmd/testbot with the scripted 4-item `gate` scenario (observe AddEntity+move / crafting result+consume / event SystemChat), the chat() host builtin + sink, the gate_events plugin, the offline run-gate.sh launch, and the live bot run (exit 0 = PASS) (Wave 2)
+**Research**: The benchmark harness (plugin-driven vs Go-native per-tick cost, isolate the starlark.Call delta), the bot-observes-packets gate scenario + per-item packet assertions, the test-kit spawn trigger, the online-mode/offline-login launch resolution.
 
 ## Progress
 
