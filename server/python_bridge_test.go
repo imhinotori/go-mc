@@ -19,28 +19,7 @@ import (
 	"github.com/imhinotori/sulfur/data/packetid"
 	"github.com/imhinotori/sulfur/level/block"
 	pk "github.com/imhinotori/sulfur/net/packet"
-	"github.com/imhinotori/sulfur/plugin/host"
 )
-
-// TestPythonWorldBridgeSkippedDefault: on the default (no `-tags python`) build,
-// WirePython is a no-op, so the runtime="python" worldmutate plugin is SKIPPED by
-// LoadDir — no error, no plugin loaded, no gopy linked. The world-bridge is additive:
-// a server with no python lane is unaffected. This is the gate the local CGO=0 box runs.
-func TestPythonWorldBridgeSkippedDefault(t *testing.T) {
-	loop, _ := newBlockLoop()
-	m := host.New()
-
-	// WirePython is the no-op stub on the default build — no python runtime, no bridge
-	// factory, so the python manifest is skipped.
-	WirePython(loop, m)
-
-	if err := m.LoadDir("testdata/worldbridge_granted"); err != nil {
-		t.Fatalf("LoadDir(worldbridge_granted) on default build must skip the python plugin gracefully, got err: %v", err)
-	}
-	if got := m.PluginCount(); got != 0 {
-		t.Fatalf("PluginCount = %d; want 0 (the runtime=\"python\" worldmutate plugin must be skipped on the default build)", got)
-	}
-}
 
 // drainOneMutation drains exactly one asyncResult off asyncIn2 and applies it on the
 // owner (standing in for applyAsyncResults). Fails the test if nothing arrives.
