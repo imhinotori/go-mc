@@ -56,6 +56,14 @@ func Available() bool { return true }
 // per-Runtime sub-interpreter).
 type Runtime struct {
 	hooks map[string]py.Object // event name -> the registered python callable (a held reference)
+
+	// globals is the plugin module's globals dict (the namespace register(...) ran
+	// against). It is retained so its module-level state outlives Load and so the
+	// tagged tests can read a plugin global back (e.g. an aggregation total). It is
+	// a held reference dropped in Close. Off-tick CallHook does NOT touch it (the
+	// hook's __globals__ already references it); it exists for lifetime + test
+	// introspection only.
+	globals *py.Dict
 }
 
 // ensureInit initializes CPython exactly once for the process. InitAndLock
@@ -83,5 +91,9 @@ func (r *Runtime) Close() {
 			fn.Decref()
 		}
 		delete(r.hooks, k)
+	}
+	if r.globals != nil {
+		r.globals.Decref()
+		r.globals = nil
 	}
 }

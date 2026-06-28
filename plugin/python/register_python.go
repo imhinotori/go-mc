@@ -47,7 +47,11 @@ func Load(entrypoint string) (*Runtime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("python: new globals for %s: %w", entrypoint, err)
 	}
-	defer globals.Decref()
+	// Retain globals on the Runtime (dropped in Close) so module-level plugin state
+	// (e.g. an aggregation counter the hook mutates) outlives Load; the hooks'
+	// __globals__ reference it regardless, but holding it makes the lifetime explicit
+	// and lets the tagged tests read a plugin global back.
+	rt.globals = globals
 
 	reg, err := py.NewCFunction("register", rt.registerBuiltin, "register(event, fn): subscribe a hook")
 	if err != nil {
