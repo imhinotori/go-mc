@@ -158,14 +158,11 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 		return // malformed/short payload: no-op, never panic
 	}
 
-	// (1) ServerPlayerGameMode.useItemOn step 1 — the BLOCK's own interaction. v1 has no
-	// interactive blocks, so this is a faithful PASS hook: it never consumes the action, so we
-	// fall through to placement. (A later plan that adds chests/levers/doors returns a consuming
-	// result here and the early-return below skips placement.)
+	// (1) ServerPlayerGameMode.useItemOn step 1 — the BLOCK's own interaction. Interactive blocks
+	// (chests) consume the action via useBlockInteraction and we early-return; non-interactive
+	// blocks pass through to placement.
 	if t.useBlockInteraction(p, pos, int(direction)) {
-		// The block consumed the interaction (e.g. opened a menu) — NO block is placed. v1's hook
-		// always returns false, so this branch is currently never taken; kept for faithful
-		// structure so the interaction path lands without touching this method again.
+		// The block consumed the interaction (e.g. a chest opened its menu) — NO block is placed.
 		return
 	}
 
