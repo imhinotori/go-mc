@@ -35,7 +35,8 @@ also enables fully-custom mobs and custom recipes.
   feature here (sandbox + determinism), and the reason the heavy/dynamic workloads get the opt-in
   Python runtime below.
 
-### Opt-in: Python — `qur/gopy` @ branch `python3.14` (`gopython.xyz/py/v3`)
+### Opt-in: Python — `qur/gopy` @ branch `python3.14` (`gopython.xyz/py/v14`)
+<!-- CORRECTED 2026-06-28 (Phase 26 research): the python3.14 branch's go.mod declares module `gopython.xyz/py/v14`, NOT `/py/v3` (which is the old 3.11 line). Import `/py/v14`. cgo preamble: `#cgo pkg-config: python-3.14-embed libffi`. -->
 - **Idiomatic CPython bindings via cgo + libpython** (`import "C"` / `Python.h`). Real Python —
   libs, dynamic, the whole ecosystem. The `python3.14` branch exists (confirmed via
   `git ls-remote https://github.com/qur/gopy`; branches go python2.6 → 3.14).
