@@ -271,6 +271,44 @@ func TestChestQuickCraftDragDistributes(t *testing.T) {
 	}
 }
 
+// TestChestPickupAllCollectsMatching locks the chest double-click (PICKUP_ALL): with one item on
+// the cursor, a double-click sweeps every matching stack in the chest window onto the cursor
+// (operator: 'doble click en un item me deberia tomar todos los del cofre').
+func TestChestPickupAllCollectsMatching(t *testing.T) {
+	loop, mgr := newBlockLoop()
+	ch, _ := mgr.Get(level.ChunkPos{0, 0})
+	p := blockPlayer(loop, 1.5, 65.0, 1.5)
+	pos := pk.Position{X: 1, Y: 64, Z: 1}
+	placeChestBE(loop, ch, pos, "", 0)
+
+	ui := useItemOnPacket(0, pos, 1, 0.5, 1.0, 0.5, false, false, 9)
+	loop.applyInput(p, SubtickInput{At: loop.clock.Now(), Packet: ui})
+	cl := loop.openChests[pos]
+	win := int32(p.openContainer.windowID)
+
+	cob := pk.VarInt(item.Cobblestone.ID)
+	// Seed three chest slots with 10 cobble each (chest menu indices 1,2,3).
+	cl.items[1] = component.SlotData{ItemID: cob, Count: 10}
+	cl.items[2] = component.SlotData{ItemID: cob, Count: 10}
+	cl.items[3] = component.SlotData{ItemID: cob, Count: 10}
+	// 30 cobble already on the cursor (the double-click happens AFTER the first click already put a
+	// stack on the cursor; the second click — PICKUP_ALL — targets an EMPTY slot and sweeps the rest).
+	p.inventory.setCarried(component.SlotData{ItemID: cob, Count: 30})
+
+	// PICKUP_ALL targeting an EMPTY chest slot (index 0) — vanilla's double-click PICKUP_ALL sweeps
+	// every matching stack in the window onto the cursor (30 + 3×10 = 60 <= 64).
+	loop.handleContainerClick(p, chestClickPacket(win, 0, 0, 0, containerInputPickupAll))
+
+	if c := int(p.inventory.getCarried().Count); c != 60 {
+		t.Fatalf("cursor = %d after pickup-all, want 60 (30 + 3×10)", c)
+	}
+	for s := 1; s <= 3; s++ {
+		if cl.items[s].Count != 0 {
+			t.Fatalf("chest slot %d = %d after pickup-all, want emptied", s, cl.items[s].Count)
+		}
+	}
+}
+
 // TestChestClosePersistsAndFrees: ContainerClose writes the chest items back to the BE store,
 // frees the windowId (openContainer nil), and a re-open shows the persisted contents.
 func TestChestClosePersistsAndFrees(t *testing.T) {

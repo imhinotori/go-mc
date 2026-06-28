@@ -125,6 +125,64 @@ func (t *TickLoop) doChestClick(p *tickPlayer, cl *chestLoot, inv *Inventory, i,
 		}
 	case containerInputThrow:
 		t.chestThrow(p, cl, inv, i, j)
+	case containerInputPickupAll:
+		t.chestPickupAll(p, cl, inv, i, j)
+	}
+}
+
+// chestPickupAll ports the PICKUP_ALL branch of doClick (double-click: collect every matching item
+// in the WHOLE window onto the cursor) over the chest window — the operator's "doble click en un
+// item me deberia tomar todos los del cofre". It sweeps all 63 chest-window slots (chest 0..26 +
+// player 27..62) in two passes (non-full stacks first, then full ones), filling the cursor up to
+// its max stack. CITE AbstractContainerMenu.doClick PICKUP_ALL (offsets 1640-1840).
+func (t *TickLoop) chestPickupAll(p *tickPlayer, cl *chestLoot, inv *Inventory, i, j int) {
+	if i < 0 {
+		return
+	}
+	carried := inv.getCarried()
+	if stackEmpty(carried) {
+		return
+	}
+	// @1649: if the clicked slot itself has a takeable matching item, a normal pickup handled it.
+	clicked := chestResolveSlot(cl, inv, i)
+	if clicked.ok && !stackEmpty(clicked.get()) && stackSameItemSameComponents(clicked.get(), carried) {
+		return
+	}
+
+	start, dir := 0, 1
+	if j != 0 {
+		start, dir = chestMenuSize-1, -1
+	}
+	for pass := 0; pass < 2; pass++ {
+		k := start
+		for k >= 0 && k < chestMenuSize && int(inv.getCarried().Count) < stackMaxSize(inv.getCarried()) {
+			ref := chestResolveSlot(cl, inv, k)
+			cur := inv.getCarried()
+			if ref.ok {
+				slot := ref.get()
+				if !stackEmpty(slot) && stackSameItemSameComponents(slot, cur) {
+					// pass 0: skip already-full stacks (leave them for pass 1), matching the vanilla
+					// "pass != 0 || count != maxStackSize" guard, so half-stacks merge first.
+					if pass != 0 || int(slot.Count) != stackMaxSize(slot) {
+						room := stackMaxSize(cur) - int(cur.Count)
+						take := int(slot.Count)
+						if room < take {
+							take = room
+						}
+						if take > 0 {
+							slot.Count = toVar(int(slot.Count) - take)
+							if slot.Count <= 0 {
+								slot = component.SlotData{Count: 0}
+							}
+							ref.set(slot)
+							cur.Count += toVar(take)
+							inv.setCarried(cur)
+						}
+					}
+				}
+			}
+			k += dir
+		}
 	}
 }
 
