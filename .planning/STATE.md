@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v4
 milestone_name: Plugin / Scripting System
-status: verifying
+status: executing
 stopped_at: "Completed 22-02-PLAN.md — Phase 22 (plugin-host-event-bus) COMPLETE: 8 discrete server seams emit host.Emit (on_damage post-mitigation, on_tick once/tick zero-sub-guarded), THE GATE proves fire-once-per-break N-independent, anti-seam grep clean, FULL fsnotify hot-reload (off-tick rebuild -> tick-goroutine swap) -race clean. CGO=0 build/test green; Docker -race ./plugin/host/ ./server/ green. Commits e5739e36 + 42d513f0. main() wires plugins/ + watcher."
-last_updated: "2026-06-28T04:27:42.002Z"
-last_activity: 2026-06-28
+last_updated: "2026-06-28T05:02:42.319Z"
+last_activity: 2026-06-28 -- Phase 23 execution started
 progress:
   total_phases: 8
   completed_phases: 2
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-23)
 
 **Core value:** A Go server that an unmodified vanilla Minecraft 26.2 client can connect to, log into, and play in a persistent, ticking world — architected from day one for Leaf-style async optimizations.
-**Current focus:** Phase 22 — plugin-host-event-bus
+**Current focus:** Phase 23 — entity-mob-behavior-api
 
 ## Current Position
 
-Phase: 22 (plugin-host-event-bus) — EXECUTING
-Plan: 2 of 2
-Status: Phase complete — ready for verification
-Last activity: 2026-06-28
+Phase: 23 (entity-mob-behavior-api) — EXECUTING
+Plan: 1 of 2
+Status: Executing Phase 23
+Last activity: 2026-06-28 -- Phase 23 execution started
 
 ### ⚠️ WHAT'S NEXT (resume here — see .planning/HANDOFF.md for the FULL detail)
 
