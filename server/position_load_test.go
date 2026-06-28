@@ -63,7 +63,7 @@ func TestPositionLoadApplied(t *testing.T) {
 	// packets AcceptPlayer enqueues before it registers the player.
 	go io.Copy(io.Discard, client)
 
-	go g.AcceptPlayer("reconnect", id, nil, nil, ProtocolVersion, server)
+	go g.AcceptPlayer("reconnect", id, nil, nil, ProtocolVersion, server, 0)
 
 	// AcceptPlayer constructs the tickPlayer off-tick and hands it to the owner via
 	// loop.register. Capture it directly (the loop is not Run here, so the channel is the

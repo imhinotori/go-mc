@@ -217,7 +217,7 @@ func TestJoinSequenceOrdering(t *testing.T) {
 	accepted := make(chan struct{})
 	go func() {
 		defer close(accepted)
-		g.AcceptPlayer("joiner", uuid.New(), nil, nil, ProtocolVersion, server)
+		g.AcceptPlayer("joiner", uuid.New(), nil, nil, ProtocolVersion, server, 0)
 	}()
 
 	// Read packets in arrival order and record the sequence of clientbound ids until we
@@ -585,7 +585,7 @@ func TestBootstrapTailOrdering(t *testing.T) {
 	accepted := make(chan struct{})
 	go func() {
 		defer close(accepted)
-		g.AcceptPlayer("joiner", uuid.New(), nil, nil, ProtocolVersion, server)
+		g.AcceptPlayer("joiner", uuid.New(), nil, nil, ProtocolVersion, server, 0)
 	}()
 
 	type seen struct {

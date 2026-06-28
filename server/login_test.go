@@ -18,16 +18,16 @@ import (
 // config read it didn't expect.
 type reachConfig struct{ reached chan struct{} }
 
-func (r *reachConfig) AcceptConfig(conn *netmc.Conn) error {
+func (r *reachConfig) AcceptConfig(conn *netmc.Conn) (uint8, error) {
 	close(r.reached)
-	return nil
+	return 0, nil
 }
 
 // noopGamePlay satisfies GamePlay without doing anything, so AcceptConn returns
 // promptly after login+config in the test.
 type noopGamePlay struct{}
 
-func (noopGamePlay) AcceptPlayer(string, uuid.UUID, *user.PublicKey, []user.Property, int32, *netmc.Conn) {
+func (noopGamePlay) AcceptPlayer(string, uuid.UUID, *user.PublicKey, []user.Property, int32, *netmc.Conn, uint8) {
 }
 
 // TestOfflineLogin covers NET-03: offline-mode login completes end-to-end —

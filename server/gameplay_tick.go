@@ -186,6 +186,7 @@ func (g *gameTick) AcceptPlayer(
 	properties []user.Property,
 	protocol int32,
 	conn *net.Conn,
+	skinParts uint8,
 ) {
 	c := NewClient(conn, outboundCap)
 	c.Start(g.inbound) // Phase-2 API UNCHANGED: one writeLoop + one readLoop -> inbound
@@ -312,6 +313,10 @@ func (g *gameTick) AcceptPlayer(
 		awaitingTeleport: teleportID,
 		entityID:         entityID,
 		uuid:             id,
+		// BUG-4: seed the displayed skin layers from the CONFIG-state Client Information so the
+		// player's entity spawns WITH its hat/jacket/sleeve overlay (newPlayerEntity reads this
+		// into the spawn metadata). A later PLAY-state Client Information still refreshes it live.
+		displayedSkinParts: skinParts,
 		// Plan 17-14: the player's GameType gates block drops (creative drops nothing). Sulfur
 		// hardcodes survival today (matching the bootstrap gameMode above), so the drop gate
 		// always passes; the field exists so a future creative toggle drops nothing for free.

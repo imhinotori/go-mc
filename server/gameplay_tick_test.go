@@ -53,7 +53,7 @@ func TestPlayerStandsInTickingWorld(t *testing.T) {
 	accepted := make(chan struct{})
 	go func() {
 		defer close(accepted)
-		g.AcceptPlayer("stander", uuid.New(), nil, nil, ProtocolVersion, server)
+		g.AcceptPlayer("stander", uuid.New(), nil, nil, ProtocolVersion, server, 0)
 	}()
 
 	// ---- Property 2 + 1 prerequisite: the tick advances (TICK-01/TICK-06). ----

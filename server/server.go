@@ -125,7 +125,7 @@ func (s *Server) AcceptConn(conn *net.Conn) {
 				"addr", conn.Socket.RemoteAddr(), "reason", "login_failure", "err", err)
 			return
 		}
-		err = s.AcceptConfig(conn)
+		skinParts, err := s.AcceptConfig(conn)
 		if err != nil {
 			var configErr ConfigFailErr
 			if errors.As(err, &configErr) {
@@ -140,6 +140,6 @@ func (s *Server) AcceptConn(conn *net.Conn) {
 				"addr", conn.Socket.RemoteAddr(), "reason", "config_failure", "err", err)
 			return
 		}
-		s.AcceptPlayer(name, id, profilePubKey, properties, protocol, conn)
+		s.AcceptPlayer(name, id, profilePubKey, properties, protocol, conn, skinParts)
 	}
 }

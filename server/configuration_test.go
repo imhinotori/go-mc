@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/imhinotori/sulfur/bot"
+	"github.com/imhinotori/sulfur/data/packetid"
+	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
 // configuration_test.go is the NET-04 self-consistency integration test: it runs
@@ -32,7 +34,8 @@ func TestConfigSequence(t *testing.T) {
 	cfg := &Configurations{}
 	srvErr := make(chan error, 1)
 	go func() {
-		srvErr <- cfg.AcceptConfig(server)
+		_, err := cfg.AcceptConfig(server)
+		srvErr <- err
 	}()
 
 	c := bot.NewClient()
@@ -76,6 +79,53 @@ func TestConfigSequence(t *testing.T) {
 	}
 }
 
+// TestConfigCapturesSkinParts proves BUG-4's CONFIG-state capture: a Client Information packet
+// sent during configuration has its modelCustomisation (skin layers) byte captured and returned
+// from AcceptConfig, so the joining player spawns with its overlay layers. The drain loop reads
+// the ClientInformation (5 fields through modelCustomisation), then exits on the Known Packs echo.
+func TestConfigCapturesSkinParts(t *testing.T) {
+	server, client := newPipe(t)
+
+	const wantParts uint8 = 0x7F // all skin layers on
+	var skinParts uint8
+	done := make(chan error, 1)
+	go func() {
+		done <- (&Configurations{}).drainKnownPacksEcho(server, &skinParts)
+	}()
+
+	// Client → server: Client Information (through modelCustomisation), then the Known Packs echo.
+	ci := pk.Marshal(int32(packetid.ServerboundConfigClientInformation),
+		pk.String("en_us"),       // language
+		pk.Byte(10),              // viewDistance
+		pk.VarInt(0),             // chatVisibility
+		pk.Boolean(true),         // chatColors
+		pk.UnsignedByte(wantParts), // modelCustomisation (the captured byte)
+		pk.VarInt(1),             // mainHand (trailing fields tolerated, not read here)
+		pk.Boolean(false),        // textFilter
+		pk.Boolean(true),         // allowsListing
+		pk.VarInt(0),             // particleStatus
+	)
+	if err := client.WritePacket(ci); err != nil {
+		t.Fatalf("write client information: %v", err)
+	}
+	echo := pk.Marshal(int32(packetid.ServerboundConfigSelectKnownPacks), pk.Array([]bot.DataPack{}))
+	if err := client.WritePacket(echo); err != nil {
+		t.Fatalf("write known-packs echo: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("drainKnownPacksEcho returned error: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("drainKnownPacksEcho deadlocked")
+	}
+	if skinParts != wantParts {
+		t.Fatalf("captured skin parts = %#x, want %#x", skinParts, wantParts)
+	}
+}
+
 // TestConfigNoSilentKickOnError asserts that a mid-sequence send failure yields a
 // ConfigFailErr with readable reason text (NET-07 / T-2-05) — never a bare close.
 // The client end of the pipe is closed before AcceptConfig runs, so the first
@@ -86,7 +136,7 @@ func TestConfigNoSilentKickOnError(t *testing.T) {
 	_ = client.Close()
 
 	cfg := &Configurations{}
-	err := cfg.AcceptConfig(server)
+	_, err := cfg.AcceptConfig(server)
 	if err == nil {
 		t.Fatal("expected AcceptConfig to fail when the peer is closed, got nil")
 	}

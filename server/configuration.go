@@ -16,7 +16,10 @@ import (
 // Play. Any failure returns a ConfigFailErr so the caller can emit a readable
 // ClientboundConfigDisconnect (NET-07) instead of a silent kick.
 type ConfigHandler interface {
-	AcceptConfig(conn *net.Conn) error
+	// AcceptConfig drives the Configuration sequence and returns the client's reported displayed
+	// skin parts (modelCustomisation, captured from a CONFIG-state Client Information packet; 0 if
+	// none) so the joining player spawns with its overlay layers already set (BUG-4).
+	AcceptConfig(conn *net.Conn) (uint8, error)
 }
 
 // Configurations is the default ConfigHandler. The 26.2 registry payload is no
@@ -47,7 +50,14 @@ type Configurations struct{}
 // and Pong are answered inline; unknown/unhandled IDs (including the new 26.2
 // CodeOfConduct accept) are no-ops, so a hostile or chatty client cannot crash the
 // loop (T-2-10). Every failure path returns a ConfigFailErr with readable text.
-func (c *Configurations) AcceptConfig(conn *net.Conn) error {
+func (c *Configurations) AcceptConfig(conn *net.Conn) (uint8, error) {
+	// skinParts captures the modelCustomisation byte from a CONFIG-state Client Information
+	// packet (BUG-4): a 26.2 client reports its displayed skin layers (hat/jacket/sleeves) in
+	// the CONFIGURATION state, before PLAY. Capturing it here lets the joining player's entity
+	// spawn WITH its overlay layers already set, instead of waiting for the (later, sometimes
+	// absent) PLAY-state Client Information to flip them on. 0 = none reported (Steve default).
+	var skinParts uint8
+
 	// 1. Select Known Packs FIRST — it governs registry NBT omission and MUST be
 	//    sent before Registry Data (Pitfall 2). v1 sends full NBT regardless.
 	corePack := []bot.DataPack{{Namespace: "minecraft", ID: "core", Version: ProtocolName}}
@@ -55,14 +65,14 @@ func (c *Configurations) AcceptConfig(conn *net.Conn) error {
 		packetid.ClientboundConfigSelectKnownPacks,
 		pk.Array(corePack),
 	)); err != nil {
-		return ConfigFailErr{reason: chat.Text("failed to send known packs")}
+		return 0, ConfigFailErr{reason: chat.Text("failed to send known packs")}
 	}
 
 	// 2. Drain serverbound config replies until the Known Packs echo arrives.
-	//    Answer KeepAlive/Pong inline; consume Client Information / unknown IDs as
-	//    no-ops. The echo (ServerboundConfigSelectKnownPacks) is the SOLE exit key.
-	if err := c.drainKnownPacksEcho(conn); err != nil {
-		return err
+	//    Answer KeepAlive/Pong inline; capture Client Information's skin parts; consume
+	//    unknown IDs as no-ops. The echo (ServerboundConfigSelectKnownPacks) is the SOLE exit key.
+	if err := c.drainKnownPacksEcho(conn, &skinParts); err != nil {
+		return 0, err
 	}
 
 	// 3. Update Enabled Features [minecraft:vanilla] (Feature Flags).
@@ -70,15 +80,15 @@ func (c *Configurations) AcceptConfig(conn *net.Conn) error {
 		packetid.ClientboundConfigUpdateEnabledFeatures,
 		pk.Array([]pk.Identifier{"minecraft:vanilla"}),
 	)); err != nil {
-		return ConfigFailErr{reason: chat.Text("failed to send enabled features")}
+		return 0, ConfigFailErr{reason: chat.Text("failed to send enabled features")}
 	}
 
 	// 4. Registry Data + Update Tags from the embedded real 26.2 NBT (Plan 02-03).
 	if err := registrydata.WriteRegistryData(conn); err != nil {
-		return ConfigFailErr{reason: chat.Text("registry data send failed")}
+		return 0, ConfigFailErr{reason: chat.Text("registry data send failed")}
 	}
 	if err := registrydata.WriteTags(conn); err != nil {
-		return ConfigFailErr{reason: chat.Text("update tags send failed")}
+		return 0, ConfigFailErr{reason: chat.Text("update tags send failed")}
 	}
 
 	// 5. Finish Configuration, then BLOCK reading the Acknowledge (Pitfall 3 — the
@@ -86,18 +96,18 @@ func (c *Configurations) AcceptConfig(conn *net.Conn) error {
 	if err := conn.WritePacket(pk.Marshal(
 		packetid.ClientboundConfigFinishConfiguration,
 	)); err != nil {
-		return ConfigFailErr{reason: chat.Text("finish config send failed")}
+		return 0, ConfigFailErr{reason: chat.Text("finish config send failed")}
 	}
 
 	var ack pk.Packet
 	if err := conn.ReadPacket(&ack); err != nil {
-		return ConfigFailErr{reason: chat.Text("failed reading finish-config acknowledge")}
+		return 0, ConfigFailErr{reason: chat.Text("failed reading finish-config acknowledge")}
 	}
 	if packetid.ServerboundPacketID(ack.ID) != packetid.ServerboundConfigFinishConfiguration {
-		return ConfigFailErr{reason: chat.Text("expected finish-config acknowledge")}
+		return 0, ConfigFailErr{reason: chat.Text("expected finish-config acknowledge")}
 	}
 
-	return nil
+	return skinParts, nil
 }
 
 // drainKnownPacksEcho reads serverbound config packets in a loop, dispatching by
@@ -106,7 +116,7 @@ func (c *Configurations) AcceptConfig(conn *net.Conn) error {
 // Information and any unknown/unhandled ID (including ServerboundConfigAccept-
 // CodeOfConduct) are consumed as no-ops, never a blocking precondition and never a
 // crash (T-2-10). A read error returns a ConfigFailErr.
-func (c *Configurations) drainKnownPacksEcho(conn *net.Conn) error {
+func (c *Configurations) drainKnownPacksEcho(conn *net.Conn, skinParts *uint8) error {
 	for {
 		var p pk.Packet
 		if err := conn.ReadPacket(&p); err != nil {
@@ -134,9 +144,23 @@ func (c *Configurations) drainKnownPacksEcho(conn *net.Conn) error {
 			// Pong needs no response. Consume and continue.
 
 		case packetid.ServerboundConfigClientInformation:
-			// OPTIONAL — consumed and ignored. NEVER a precondition for proceeding
-			// (the bot/ test client does not send it; blocking here deadlocks
-			// TestConfigSequence). Phase 3 wires client settings into game state.
+			// OPTIONAL — never a precondition for proceeding (the bot/test client does not
+			// send it; blocking here deadlocks TestConfigSequence). We DO capture the
+			// modelCustomisation byte (5th field) so the player spawns with its skin overlay
+			// layers (BUG-4). Wire order (ServerboundClientInformation): readUtf(16) language,
+			// readByte viewDistance, readEnum(VarInt) chatVisibility, readBoolean chatColors,
+			// readUnsignedByte modelCustomisation. A malformed/short packet is tolerated as a
+			// no-op (no skin update), never a kick — it stays optional.
+			var (
+				language       pk.String
+				viewDistance   pk.Byte
+				chatVisibility pk.VarInt
+				chatColors     pk.Boolean
+				modelCustom    pk.UnsignedByte
+			)
+			if err := p.Scan(&language, &viewDistance, &chatVisibility, &chatColors, &modelCustom); err == nil && skinParts != nil {
+				*skinParts = uint8(modelCustom)
+			}
 
 		default:
 			// Any unknown/unhandled ID (including ServerboundConfigAcceptCodeOf
