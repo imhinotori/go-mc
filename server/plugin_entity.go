@@ -346,3 +346,87 @@ func (h *worldHandle) entitiesNear(_ *starlark.Thread, b *starlark.Builtin,
 	}
 	return starlark.NewList(out), nil
 }
+
+// ----------------------------------------------------------------------------------------------
+// navHandle (Wave 2: the wander gate's one mutate seam)
+// ----------------------------------------------------------------------------------------------
+
+// navHandle is the thin Starlark handle over a mob's NAVIGATION — the seam a declared MOVE goal's
+// tick callback uses to (re)target the mob. Like the other handles it carries an id (re-resolved
+// each access on the tick goroutine) + *TickLoop + the owning plugin's capSet, NEVER a live *Entity.
+// path_to routes through the EXISTING setWantTarget -> groundNavigation.requestPath (the async A*
+// already wired via pathPool); has_path reads the nav's hasTarget flag. The goal SETS a target; the
+// Go nav/physics MOVES the mob (Pitfall 5: never a raw position write).
+type navHandle struct {
+	t    *TickLoop
+	id   int32
+	caps capSet
+}
+
+// newNavHandle builds a nav handle for an id with the given capability set.
+func newNavHandle(t *TickLoop, id int32, caps capSet) *navHandle {
+	return &navHandle{t: t, id: id, caps: caps}
+}
+
+var (
+	_ starlark.Value    = (*navHandle)(nil)
+	_ starlark.HasAttrs = (*navHandle)(nil)
+)
+
+func (h *navHandle) String() string        { return fmt.Sprintf("<nav %d>", h.id) }
+func (h *navHandle) Type() string          { return "nav" }
+func (h *navHandle) Freeze()               {} // no mutable Starlark state -> no-op
+func (h *navHandle) Truth() starlark.Bool  { return starlark.True }
+func (h *navHandle) Hash() (uint32, error) { return uint32(h.id), nil }
+
+func (h *navHandle) bound(name string,
+	fn func(*starlark.Thread, *starlark.Builtin, starlark.Tuple, []starlark.Tuple) (starlark.Value, error),
+) starlark.Value {
+	return starlark.NewBuiltin(name, fn).BindReceiver(h)
+}
+
+// Attr dispatches the nav handle surface. path_to is a bound mutate method (enforces capNav when
+// CALLED). has_path is a READ — re-resolve the entity on the tick goroutine and return the nav's
+// hasTarget; a removed entity / a non-AI entity returns a clean error.
+func (h *navHandle) Attr(name string) (starlark.Value, error) {
+	switch name {
+	case "path_to":
+		return h.bound("path_to", h.pathTo), nil
+	case "has_path":
+		e, ok := h.t.entities.get(h.id)
+		if !ok {
+			return nil, fmt.Errorf("entity %d no longer exists", h.id)
+		}
+		if e.ai == nil {
+			return nil, fmt.Errorf("entity %d has no AI (cannot read has_path)", h.id)
+		}
+		return starlark.Bool(e.ai.hasTarget), nil
+	}
+	return nil, nil
+}
+
+func (h *navHandle) AttrNames() []string { return []string{"path_to", "has_path"} }
+
+// pathTo(x,y,z) MUTATES through the nav seam: setWantTarget -> requestPath (the async A*). It sets a
+// TARGET only — a POSITION change happens later via serverAiStep's navigation.tick -> moveEntity
+// (Pitfall 5). Requires capNav (issuing a navigation request). Re-resolves the mob on the owner; a
+// removed / non-AI entity errors cleanly.
+func (h *navHandle) pathTo(_ *starlark.Thread, b *starlark.Builtin,
+	args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if !h.caps.has(capNav) {
+		return nil, capError("nav")
+	}
+	var x, y, z float64
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 3, &x, &y, &z); err != nil {
+		return nil, err
+	}
+	e, ok := h.t.entities.get(h.id)
+	if !ok {
+		return nil, fmt.Errorf("entity %d no longer exists", h.id)
+	}
+	if e.ai == nil {
+		return nil, fmt.Errorf("entity %d has no AI (cannot path_to)", h.id)
+	}
+	e.ai.setWantTarget(x, y, z)
+	return starlark.None, nil
+}
