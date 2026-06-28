@@ -204,3 +204,145 @@ func TestNoRawPositionWrite(t *testing.T) {
 		t.Error("move_to did not set a nav target")
 	}
 }
+
+// ----------------------------------------------------------------------------------------------
+// Task 3: capability enforcement at the handle-op boundary
+// ----------------------------------------------------------------------------------------------
+
+// callExpectDenied asserts a method call returns a capability-denied Starlark error naming `want`.
+func callExpectDenied(t *testing.T, h starlark.HasAttrs, name, want string, args ...starlark.Value) {
+	t.Helper()
+	_, err := callMethod(t, h, name, args...)
+	if err == nil {
+		t.Fatalf("%s without %q capability: got no error, want a denial", name, want)
+	}
+	if !strings.Contains(err.Error(), "capability denied") || !strings.Contains(err.Error(), want) {
+		t.Errorf("%s denial error = %q, want a 'capability denied: ... %q' message", name, err.Error(), want)
+	}
+}
+
+// TestCapabilityEnforced_WorldWrite: set_block without world.write errors and leaves the block
+// UNCHANGED; with world.write it succeeds and the block changes.
+func TestCapabilityEnforced_WorldWrite(t *testing.T) {
+	loop, mgr := newBlockLoop()
+	pos := pk.Position{X: 4, Y: 64, Z: 4}
+	stone := block.StateID(1)
+
+	// Denied: a world handle with everything EXCEPT world.write.
+	denied := newWorldHandle(loop, capAll&^capWorldWrite)
+	callExpectDenied(t, denied, "set_block", "world.write",
+		starlark.MakeInt(4), starlark.MakeInt(64), starlark.MakeInt(4), starlark.MakeInt(int(stone)))
+	if got, _ := mgr.GetBlock(pos, dimMinY); got == stone {
+		t.Errorf("block changed despite denied set_block (got %v)", got)
+	}
+
+	// Allowed: with world.write.
+	allowed := newWorldHandle(loop, capWorldWrite)
+	if _, err := callMethod(t, allowed, "set_block",
+		starlark.MakeInt(4), starlark.MakeInt(64), starlark.MakeInt(4), starlark.MakeInt(int(stone))); err != nil {
+		t.Fatalf("set_block with world.write error: %v", err)
+	}
+	if got, ok := mgr.GetBlock(pos, dimMinY); !ok || got != stone {
+		t.Errorf("block after allowed set_block = %v (ok %v), want %v", got, ok, stone)
+	}
+}
+
+// TestCapabilityEnforced_WorldRead: block_at requires world.read.
+func TestCapabilityEnforced_WorldRead(t *testing.T) {
+	loop, _ := newBlockLoop()
+	denied := newWorldHandle(loop, capAll&^capWorldRead)
+	callExpectDenied(t, denied, "block_at", "world.read",
+		starlark.MakeInt(0), starlark.MakeInt(64), starlark.MakeInt(0))
+	callExpectDenied(t, denied, "entities_near", "world.read",
+		starlark.Float(0), starlark.Float(0), starlark.MakeInt(1))
+
+	allowed := newWorldHandle(loop, capWorldRead)
+	if _, err := callMethod(t, allowed, "block_at", starlark.MakeInt(0), starlark.MakeInt(64), starlark.MakeInt(0)); err != nil {
+		t.Errorf("block_at with world.read error: %v", err)
+	}
+}
+
+// TestCapabilityEnforced_EntitiesWrite: set_velocity/set_attribute require entities.write; move_to
+// requires entities.write AND nav.
+func TestCapabilityEnforced_EntitiesWrite(t *testing.T) {
+	loop, _ := newBlockLoop()
+	e := spawnTestEntity(loop, 1.0, 64.0, 1.0)
+
+	// Denied: no entities.write.
+	denied := newEntityHandle(loop, e.id, capAll&^capEntitiesWrite)
+	callExpectDenied(t, denied, "set_velocity", "entities.write",
+		starlark.Float(1), starlark.Float(0), starlark.Float(0))
+	if e.vx != 0 {
+		t.Errorf("velocity changed despite denied set_velocity (vx=%v)", e.vx)
+	}
+	callExpectDenied(t, denied, "set_attribute", "entities.write",
+		starlark.String(attribute.MaxHealth.Name()), starlark.Float(99))
+
+	// move_to denied when nav is absent (even with entities.write).
+	noNav := newEntityHandle(loop, e.id, capEntitiesWrite)
+	callExpectDenied(t, noNav, "move_to", "nav",
+		starlark.Float(5), starlark.Float(64), starlark.Float(5))
+	if e.ai.hasTarget {
+		t.Error("move_to set a target despite missing nav capability")
+	}
+
+	// Allowed: with entities.write + nav.
+	allowed := newEntityHandle(loop, e.id, capEntitiesWrite|capNav)
+	if _, err := callMethod(t, allowed, "set_velocity", starlark.Float(2), starlark.Float(0), starlark.Float(0)); err != nil {
+		t.Fatalf("set_velocity with entities.write error: %v", err)
+	}
+	if e.vx != 2 {
+		t.Errorf("velocity after allowed set_velocity vx=%v, want 2", e.vx)
+	}
+	if _, err := callMethod(t, allowed, "move_to", starlark.Float(5), starlark.Float(64), starlark.Float(5)); err != nil {
+		t.Fatalf("move_to with entities.write+nav error: %v", err)
+	}
+	if !e.ai.hasTarget {
+		t.Error("move_to with the right capabilities did not set a target")
+	}
+}
+
+// TestCapabilityEnforced_EntitiesRead: entity reads require entities.read.
+func TestCapabilityEnforced_EntitiesRead(t *testing.T) {
+	loop, _ := newBlockLoop()
+	e := spawnTestEntity(loop, 1.0, 64.0, 1.0)
+
+	denied := newEntityHandle(loop, e.id, capAll&^capEntitiesRead)
+	if _, err := denied.Attr("x"); err == nil || !strings.Contains(err.Error(), "entities.read") {
+		t.Errorf("read x without entities.read = %v, want a denial", err)
+	}
+	// The 'attribute' bound method also enforces entities.read.
+	callExpectDenied(t, denied, "attribute", "entities.read", starlark.String(attribute.MaxHealth.Name()))
+
+	allowed := newEntityHandle(loop, e.id, capEntitiesRead)
+	if got := attrFloat(t, allowed, "x"); got != 1.0 {
+		t.Errorf("read x with entities.read = %v, want 1.0", got)
+	}
+}
+
+// TestCapabilityVocab: parseCapabilities yields exactly the requested bits; an unknown capability
+// string is rejected LOUDLY at parse, not silently ignored.
+func TestCapabilityVocab(t *testing.T) {
+	got, err := parseCapabilities([]string{"entities.read", "world.write"})
+	if err != nil {
+		t.Fatalf("parseCapabilities error: %v", err)
+	}
+	if got != (capEntitiesRead | capWorldWrite) {
+		t.Errorf("parseCapabilities bits = %b, want %b", got, capEntitiesRead|capWorldWrite)
+	}
+	if got.has(capEntitiesWrite) || got.has(capWorldRead) || got.has(capNav) {
+		t.Error("parseCapabilities granted a bit that was not requested")
+	}
+
+	// Empty -> zero capSet.
+	if z, err := parseCapabilities(nil); err != nil || z != 0 {
+		t.Errorf("parseCapabilities(nil) = %b (err %v), want 0", z, err)
+	}
+
+	// Unknown -> loud error naming the bad string.
+	if _, err := parseCapabilities([]string{"entities.read", "world.destroy"}); err == nil {
+		t.Fatal("parseCapabilities(unknown) returned no error, want a rejection")
+	} else if !strings.Contains(err.Error(), "world.destroy") {
+		t.Errorf("unknown-capability error = %q, want it to name 'world.destroy'", err.Error())
+	}
+}
