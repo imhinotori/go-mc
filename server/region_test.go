@@ -88,3 +88,32 @@ func TestRegionExtractionBehaviorNeutral(t *testing.T) {
 		t.Fatal("the physics loop and the region store diverged — duplicate store (T-27-EXT-1)")
 	}
 }
+
+// TestExtractionRaceClean pins the Task-3 invariant that the N=1 extraction preserves the exact
+// single-owner discipline: driving the loop's advance() seam while spawning into the region's store
+// (all on the owner, the way the pipeline does) stays race-free. It mirrors the existing -race test
+// structure (newPhysicsLoop + advance) so the Docker -race gate keeps catching any future
+// per-region field that gets read off the owning goroutine (T-27-01 / T-27-EXT-1). Under -race this
+// is the regression backstop; without -race it is a fast smoke test of the advance+spawn path.
+func TestExtractionRaceClean(t *testing.T) {
+	loop, mgr := newPhysicsLoop()
+	ch := putChunk(mgr, level.ChunkPos{0, 0})
+	fillFloor(ch, 64)
+
+	clk := loop.clock.(*fakeClock)
+	loop.start(clk.Now())
+
+	// Interleave: spawn an entity into the region store, then advance logical ticks (which runs the
+	// full per-region pipeline over t.only()'s store). The single region == today's single owner, so
+	// every access is on the tick goroutine and the race detector stays quiet.
+	for i := int32(1); i <= 20; i++ {
+		e := testEntity(i, entity.SulfurCube, 8.5, 70.0, 8.5)
+		loop.only().entities.add(e)
+		clk.add(tickStep)
+		loop.advance(clk.Now())
+	}
+
+	if loop.only().entities.len() == 0 {
+		t.Fatal("expected entities to remain in the region store after advancing")
+	}
+}
