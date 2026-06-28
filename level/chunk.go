@@ -94,6 +94,13 @@ func ChunkFromSave(c *save.Chunk) (*Chunk, error) {
 			return nil, err
 		}
 		sections[i].BlockCount = countNoneAirBlocks(&sections[i])
+		// FluidCount MUST be recomputed on load too: it is the chunk packet's second short
+		// (LevelChunkSection.nonEmptyFluidCount). A reloaded section left at FluidCount 0 tells the
+		// client the section is fluid-free even though its palette holds water, so the player does
+		// NOT float/swim in reloaded water until a manual block update (the operator's "chunks con
+		// agua quedan mal cuando se recarga un chunk guardado"). Generated chunks set this in gen;
+		// reloaded chunks dropped it. Mirror countNoneAirBlocks. CITE LevelChunkSection.write.
+		sections[i].FluidCount = CountFluidBlocks(&sections[i])
 		sections[i].Biomes, err = readBiomesPalette(v.Biomes.Palette, v.Biomes.Data)
 		if err != nil {
 			return nil, err

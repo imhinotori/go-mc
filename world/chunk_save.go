@@ -75,6 +75,12 @@ func SerializeChunkData(cache *structure.Cache, pos level.ChunkPos, ch *level.Ch
 	if structures.Type != nbt.TagEnd && len(structures.Data) > 0 {
 		minimal.Structures = &structures
 	}
+	// Carry the PostProcessing fluid marks ChunkToSave produced (the aquifer/carver water-flow
+	// flags) so a reloaded chunk's water flows. Omitted when the chunk has no marks.
+	if full.PostProcessing.Type != nbt.TagEnd && len(full.PostProcessing.Data) > 0 {
+		pp := full.PostProcessing
+		minimal.PostProcessing = &pp
+	}
 
 	var buf bytes.Buffer
 	buf.WriteByte(3) // compression tag 3 = none (save.Chunk.Load accepts it)
@@ -100,4 +106,8 @@ type chunkSaveShape struct {
 	// Structures is a POINTER so a structure-free chunk (nil) is dropped by omitempty — an
 	// empty nbt.RawMessage value would still try to encode (TagEnd) and the encoder rejects it.
 	Structures *nbt.RawMessage `nbt:"structures,omitempty"`
+	// PostProcessing carries the aquifer/carver fluid marks (ListTag of per-section ShortList) so a
+	// reloaded chunk's cave/ravine water still flows. POINTER + omitempty so a mark-free chunk drops
+	// the (empty) tag the encoder would otherwise reject.
+	PostProcessing *nbt.RawMessage `nbt:"PostProcessing,omitempty"`
 }

@@ -83,10 +83,39 @@ func (t *TickLoop) eyeInWater(p *tickPlayer) bool {
 	if t.world == nil {
 		return false
 	}
+	eyeY := p.y + playerStandingEyeHeight
 	bx := int(math.Floor(p.x))
-	by := int(math.Floor(p.y + playerStandingEyeHeight))
+	by := int(math.Floor(eyeY))
 	bz := int(math.Floor(p.z))
-	return t.fluidAt(pk.Position{X: bx, Y: by, Z: bz}).isWater
+	cell := pk.Position{X: bx, Y: by, Z: bz}
+	fs := t.fluidAt(cell)
+	if !fs.isWater {
+		return false
+	}
+	// Vanilla EntityFluidInteraction.update: eyes are inside iff eyeY is within
+	// [cellY, cellY + FluidState.getHeight]. getHeight is 1.0 when the cell ABOVE holds the same
+	// fluid (hasSameAbove), else getOwnHeight = amount/9 (source -> 8/9 ≈ 0.888). Without this
+	// height test the eye reads as submerged across the whole block cell, but a cell whose surface
+	// is below the eye (no water above, only an 8/9-tall source) should NOT count — and the inverse
+	// matters too. CITE EntityFluidInteraction.update (eyeY >= cellY && eyeY <= cellY+getHeight).
+	height := t.fluidSurfaceHeight(cell, fs)
+	surface := float64(by) + height
+	return eyeY >= float64(by) && eyeY <= surface
+}
+
+// fluidSurfaceHeight ports FlowingFluid.getHeight: 1.0 if the cell directly above holds the same
+// fluid (hasSameAbove), else getOwnHeight = amount/9 (a full source ≈ 0.888). This is the top of
+// the fluid column within the cell, used to decide whether the eye is below the water surface.
+func (t *TickLoop) fluidSurfaceHeight(cell pk.Position, fs fluidState) float64 {
+	above := t.fluidAt(pk.Position{X: cell.X, Y: cell.Y + 1, Z: cell.Z})
+	if above.isWater {
+		return 1.0 // hasSameAbove -> full cell height
+	}
+	amount := fs.amount
+	if amount <= 0 {
+		amount = 1
+	}
+	return float64(amount) / 9.0
 }
 
 // tickBreath is the per-tick air-supply step: the 1:1 port of the air/drowning branch of
