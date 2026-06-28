@@ -177,7 +177,17 @@ func (t *TickLoop) postProcessChunkFluids(pos level.ChunkPos, ch *level.Chunk) {
 		lz := int((packed >> 4) & 0xF)
 		localY := int(packed >> 8)
 		wp := pk.Position{X: baseX + lx, Y: dimMinY + localY, Z: baseZ + lz}
-		t.fluidTick(wp) // one-shot kick; spread() inside re-schedules onward flow normally
+		// ENQUEUE the one-shot kick for the next fluid pass rather than firing it inline here.
+		// chunkReady.applyTo integrates chunks ONE AT A TIME; a flagged border cell that must
+		// flow ACROSS the chunk edge needs the neighbor chunk loaded, but the neighbor may not be
+		// integrated yet when THIS chunk goes live. Firing inline read the neighbor as unloaded
+		// and the spread stopped at the border (the operator's "natural water doesn't expand").
+		// Deferring to the queue lets the whole load batch settle first; the cell still gets
+		// exactly one FluidState.tick (just one pass later — invisible, fluid getTickDelay is 5).
+		// spread() inside that tick re-schedules onward flow normally. CITE: LevelChunk.
+		// postProcessGeneration runs FluidState.tick once per flagged cell (timing relaxed to the
+		// next pass to honor the cross-chunk neighbor precondition vanilla gets from full-status).
+		t.fluidSchedule.schedule(wp, t.gametime+1)
 	}
 }
 

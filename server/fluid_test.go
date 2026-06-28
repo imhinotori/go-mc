@@ -64,6 +64,70 @@ func drainAll(loop *TickLoop) int {
 	return cap
 }
 
+// TestPostProcessChunkFluidsExpandsNaturalWater locks BUG-2: a freshly-generated chunk whose
+// aquifer flagged unstable fluid borders (Chunk.PostProcessFluids) must, on going live via
+// chunkReady.applyTo, run the one-shot FluidState.tick per flagged cell (LevelChunk.
+// postProcessGeneration) — and that tick must SPREAD the water into the bordering air. This is
+// "naturally-generated water expands on load" end-to-end, with NO manual block update.
+func TestPostProcessChunkFluidsExpandsNaturalWater(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	mgr := world.NewChunkManager()
+	loop.world = mgr
+	ch := level.EmptyChunk(blockTestSecs)
+	ch.Status = level.StatusFull
+
+	// Build a one-cell water source on a flat stone floor, with bordering air the water should
+	// flow into on load. Source at (4,64,4); a 3x3 stone floor at y=63 under the source and all
+	// four horizontal neighbors, so the spread is sideways (a flat shelf, the ravine-floor case).
+	src := pk.Position{X: 4, Y: 64, Z: 4}
+	ch.Sections[(64+64)>>4].SetBlock(localIndex(src), waterStateID(0))
+	for dx := -1; dx <= 1; dx++ {
+		for dz := -1; dz <= 1; dz++ {
+			fl := pk.Position{X: 4 + dx, Y: 63, Z: 4 + dz}
+			ch.Sections[(63+64)>>4].SetBlock(localIndex(fl), block.ToStateID[block.Stone{}])
+		}
+	}
+	neighbors := []pk.Position{
+		{X: 5, Y: 64, Z: 4}, {X: 3, Y: 64, Z: 4},
+		{X: 4, Y: 64, Z: 5}, {X: 4, Y: 64, Z: 3},
+	}
+
+	// Flag the source as an aquifer post-process border cell (localY = worldY - minY = 64+64).
+	localY := src.Y - dimMinY
+	ch.PostProcessFluids = []uint32{uint32(localY)<<8 | uint32(src.Z&15)<<4 | uint32(src.X & 15)}
+
+	// All four horizontal neighbors start AIR.
+	for _, n := range neighbors {
+		if _, isW := levelAt(mgr, n); isW {
+			t.Fatalf("precondition: %v should be air before integration", n)
+		}
+	}
+
+	// Integrate exactly like the worker rejoin: this calls postProcessChunkFluids.
+	chunkReady{res: world.ChunkResult{Pos: level.ChunkPos{0, 0}, Chunk: ch}}.applyTo(loop)
+
+	// The one-shot kick scheduled onward flow; drain the queue to the fixed point.
+	drainAll(loop)
+
+	// Water must have spread sideways onto the shelf (natural-water expansion on load, NO manual
+	// block update). On a flat floor with no drop-off, getSpread keeps all four equal directions.
+	spread := 0
+	for _, n := range neighbors {
+		if _, isW := levelAt(mgr, n); isW {
+			spread++
+		}
+	}
+	if spread == 0 {
+		t.Fatal("natural water did NOT expand on load (postProcessGeneration kick failed); all neighbors still air")
+	}
+	t.Logf("water expanded to %d/4 horizontal neighbors on load", spread)
+}
+
+// localIndex maps a world position to the y-major in-section local index used by Section.SetBlock.
+func localIndex(p pk.Position) int {
+	return (p.Y&15)<<8 | (p.Z&15)<<4 | (p.X & 15)
+}
+
 // TestGetNewLiquid pins the jar-exact getNewLiquid level arithmetic (FlowingFluid.getNewLiquid):
 // the highest reaching neighbor level minus dropOff, the >=2-source-neighbor source conversion,
 // the fluid-above falling rule, and the no-neighbor empty result.
