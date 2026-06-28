@@ -234,12 +234,20 @@ func (g *lookAtPlayerGoal) stop(_ *TickLoop, _ *Entity) { g.hasLook = false }
 // (horizontal+vertical Euclidean), or ok=false if none. Scans the tick-owned loop.players —
 // the player seam (players are not entityStore entries in this server). Tick-owned read.
 func nearestPlayerWithin(t *TickLoop, e *Entity, maxDist float64) (x, y, z float64, ok bool) {
+	return nearestPlayerAt(t, e.x, e.y, e.z, maxDist)
+}
+
+// nearestPlayerAt is the position-based core of the player scan: the nearest player within maxDist
+// of an arbitrary point (cx,cy,cz), or ok=false if none. Factored out of nearestPlayerWithin so the
+// world.nearest_player handle seam (plugin_entity.go) reuses the IDENTICAL tick-owned t.players scan
+// rather than re-rolling it. Tick-owned read (TICK-05).
+func nearestPlayerAt(t *TickLoop, cx, cy, cz, maxDist float64) (x, y, z float64, ok bool) {
 	best := maxDist * maxDist
 	for _, p := range t.players {
 		if p == nil {
 			continue
 		}
-		dx, dy, dz := p.x-e.x, p.y-e.y, p.z-e.z
+		dx, dy, dz := p.x-cx, p.y-cy, p.z-cz
 		d2 := dx*dx + dy*dy + dz*dz
 		if d2 <= best {
 			best = d2

@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/level/attribute"
@@ -78,6 +79,12 @@ func (h *entityHandle) Attr(name string) (starlark.Value, error) {
 		return h.bound("set_attribute", h.setAttribute), nil
 	case "attribute":
 		return h.bound("attribute", h.attribute), nil
+	case "set_look":
+		return h.bound("set_look", h.setLook), nil
+	case "rand_int":
+		return h.bound("rand_int", h.randInt), nil
+	case "rand_float":
+		return h.bound("rand_float", h.randFloat), nil
 	}
 
 	// Everything below is a READ — require capEntitiesRead, then re-resolve the entity.
@@ -119,6 +126,7 @@ func (h *entityHandle) AttrNames() []string {
 	return []string{
 		"x", "y", "z", "yaw", "pitch", "on_ground", "type", "velocity", "health",
 		"attribute", "move_to", "set_velocity", "set_attribute",
+		"set_look", "rand_int", "rand_float",
 	}
 }
 
@@ -227,6 +235,78 @@ func (h *entityHandle) setAttribute(_ *starlark.Thread, b *starlark.Builtin,
 	return starlark.None, nil
 }
 
+// setLook(yaw, pitch=0.0) MUTATES the body+head facing — EXACTLY what lookAtPlayerGoal.tick /
+// randomLookAroundGoal.tick do today (ai_goals_passive.go: e.headYaw = e.yaw = yaw, set instantly;
+// the v1 non-gradual LookControl analogue). These are tick-owned plain fields the entity tracker
+// auto-broadcasts (RotateHead / the next TeleportEntity). A faithful set_look therefore writes BOTH
+// headYaw AND yaw (and pitch) so it is behavior-identical to the Go goal it replaces (Pitfall 2).
+// Requires entities.write (a mutate, gated like setVelocity/move_to). Non-finite yaw/pitch are
+// clamped to 0 (T-24-03: never feed NaN/Inf to the wire byte-angle packer).
+func (h *entityHandle) setLook(_ *starlark.Thread, b *starlark.Builtin,
+	args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if !h.caps.has(capEntitiesWrite) {
+		return nil, capError("entities.write")
+	}
+	var yaw float64
+	pitch := 0.0
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "yaw", &yaw, "pitch?", &pitch); err != nil {
+		return nil, err
+	}
+	if math.IsNaN(yaw) || math.IsInf(yaw, 0) {
+		yaw = 0
+	}
+	if math.IsNaN(pitch) || math.IsInf(pitch, 0) {
+		pitch = 0
+	}
+	e, err := h.resolve()
+	if err != nil {
+		return nil, err
+	}
+	// EXACTLY what the Go look goals wrote: head AND body yaw instantly, plus the pitch.
+	e.headYaw = float32(yaw)
+	e.yaw = float32(yaw)
+	e.pitch = float32(pitch)
+	return starlark.None, nil
+}
+
+// randInt(n) draws a pseudo-random int in [0, n) from the mob's PER-ENTITY seeded source (e.ai.rng —
+// the Mob.getRandom() analogue, ai_random.go). Deterministic for a fixed mob seed. NO capability gate
+// (CONTEXT decision 1 / 24-RESEARCH: a read of the mob's OWN RNG, like has_path). n must be > 0. A
+// mob with no AI/rng errors cleanly (the caller should only draw on a goal-bearing mob).
+func (h *entityHandle) randInt(_ *starlark.Thread, b *starlark.Builtin,
+	args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var n int
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 1, &n); err != nil {
+		return nil, err
+	}
+	if n <= 0 {
+		return nil, fmt.Errorf("rand_int(n): n must be > 0, got %d", n)
+	}
+	e, err := h.resolve()
+	if err != nil {
+		return nil, err
+	}
+	if e.ai == nil || e.ai.rng == nil {
+		return nil, fmt.Errorf("entity %d has no AI random source (cannot rand_int)", h.id)
+	}
+	return starlark.MakeInt(e.ai.rng.nextInt(n)), nil
+}
+
+// randFloat() draws a pseudo-random float in [0, 1) from the mob's per-entity seeded source (the
+// RandomSource.nextFloat() analogue). No capability gate (the mob's own RNG). A mob with no AI/rng
+// errors cleanly.
+func (h *entityHandle) randFloat(_ *starlark.Thread, _ *starlark.Builtin,
+	_ starlark.Tuple, _ []starlark.Tuple) (starlark.Value, error) {
+	e, err := h.resolve()
+	if err != nil {
+		return nil, err
+	}
+	if e.ai == nil || e.ai.rng == nil {
+		return nil, fmt.Errorf("entity %d has no AI random source (cannot rand_float)", h.id)
+	}
+	return starlark.Float(float64(e.ai.rng.nextFloat())), nil
+}
+
 // entityTypeName resolves a wire entity-type id to its registry name (data/entity.ByID). An unknown
 // id yields "unknown" (a defensive fallback; the live entity's typ always comes from the table).
 func entityTypeName(typ entity.ID) string {
@@ -272,12 +352,36 @@ func (h *worldHandle) Attr(name string) (starlark.Value, error) {
 		return h.bound("set_block", h.setBlock), nil
 	case "entities_near":
 		return h.bound("entities_near", h.entitiesNear), nil
+	case "nearest_player":
+		return h.bound("nearest_player", h.nearestPlayer), nil
 	}
 	return nil, nil
 }
 
 func (h *worldHandle) AttrNames() []string {
-	return []string{"block_at", "set_block", "entities_near"}
+	return []string{"block_at", "set_block", "entities_near", "nearest_player"}
+}
+
+// nearestPlayer(x,y,z,max_dist) READS the nearest PLAYER position in range (world.read). Players are
+// NOT in the entityStore (entities_near returns mobs only) — they live in t.players, the same data
+// the Go lookAtPlayerGoal.canUse reads via nearestPlayerWithin. This seam REUSES that exact scan
+// (nearestPlayerAt — the position-based core factored out of nearestPlayerWithin), faithful to
+// vanilla's ServerLevel.getNearestPlayer "nearest player in range". Returns a (px,py,pz) tuple, or
+// None when no player is within range. Tick-owned read (TICK-05); gated on capWorldRead.
+func (h *worldHandle) nearestPlayer(_ *starlark.Thread, b *starlark.Builtin,
+	args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if !h.caps.has(capWorldRead) {
+		return nil, capError("world.read")
+	}
+	var x, y, z, maxDist float64
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 4, &x, &y, &z, &maxDist); err != nil {
+		return nil, err
+	}
+	px, py, pz, ok := nearestPlayerAt(h.t, x, y, z, maxDist)
+	if !ok {
+		return starlark.None, nil
+	}
+	return starlark.Tuple{starlark.Float(px), starlark.Float(py), starlark.Float(pz)}, nil
 }
 
 // blockAt(x,y,z) READS the block state id at a position (world.read). Returns a tuple

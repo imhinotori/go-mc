@@ -1,6 +1,7 @@
 package server
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -344,5 +345,165 @@ func TestCapabilityVocab(t *testing.T) {
 		t.Fatal("parseCapabilities(unknown) returned no error, want a rejection")
 	} else if !strings.Contains(err.Error(), "world.destroy") {
 		t.Errorf("unknown-capability error = %q, want it to name 'world.destroy'", err.Error())
+	}
+}
+
+// --- Phase 24 Task 2: the three handle extensions ---------------------------------------
+
+// TestSetLookSeam: entity.set_look(yaw) writes headYaw == yaw == float32(yaw); set_look(yaw, pitch)
+// also writes pitch. Behavior-identical to the Go look goals (both head AND body yaw, instantly —
+// Pitfall 2). A handle without entities.write is denied; a removed entity errors cleanly; non-finite
+// yaw is clamped to 0 (T-24-03).
+func TestSetLookSeam(t *testing.T) {
+	loop, _ := newBlockLoop()
+	e := spawnTestEntity(loop, 1.0, 64.0, 1.0)
+	h := newEntityHandle(loop, e.id, capAll)
+
+	// Happy path: set_look(90) sets headYaw AND yaw to 90.
+	if _, err := callMethod(t, h, "set_look", starlark.Float(90)); err != nil {
+		t.Fatalf("set_look error: %v", err)
+	}
+	if e.headYaw != 90 || e.yaw != 90 {
+		t.Fatalf("set_look(90): headYaw=%v yaw=%v, want both 90", e.headYaw, e.yaw)
+	}
+	if e.pitch != 0 {
+		t.Fatalf("set_look(90) without pitch: pitch=%v, want 0", e.pitch)
+	}
+
+	// With pitch: set_look(45, 30) sets headYaw==yaw==45, pitch==30.
+	if _, err := callMethod(t, h, "set_look", starlark.Float(45), starlark.Float(30)); err != nil {
+		t.Fatalf("set_look(yaw,pitch) error: %v", err)
+	}
+	if e.headYaw != 45 || e.yaw != 45 || e.pitch != 30 {
+		t.Fatalf("set_look(45,30): headYaw=%v yaw=%v pitch=%v, want 45,45,30", e.headYaw, e.yaw, e.pitch)
+	}
+
+	// Non-finite yaw clamps to 0 (never feed NaN to the byte-angle packer).
+	inf := starlark.Float(math.Inf(1))
+	if _, err := callMethod(t, h, "set_look", inf); err != nil {
+		t.Fatalf("set_look(Inf) error: %v", err)
+	}
+	if e.headYaw != 0 || e.yaw != 0 {
+		t.Fatalf("set_look(Inf) should clamp to 0: headYaw=%v yaw=%v", e.headYaw, e.yaw)
+	}
+
+	// Capability-denied: a handle without entities.write is rejected with a capability error.
+	noWrite := newEntityHandle(loop, e.id, capEntitiesRead) // read-only, no write bit
+	if _, err := callMethod(t, noWrite, "set_look", starlark.Float(10)); err == nil {
+		t.Fatal("set_look without entities.write should be denied")
+	} else if !strings.Contains(err.Error(), "entities.write") {
+		t.Errorf("set_look denial = %q, want it to name entities.write", err.Error())
+	}
+
+	// Removed entity: clean "no longer exists" error.
+	loop.entities.remove(e.id)
+	if _, err := callMethod(t, h, "set_look", starlark.Float(0)); err == nil {
+		t.Fatal("set_look on a removed entity should error")
+	} else if !strings.Contains(err.Error(), "no longer exists") {
+		t.Errorf("set_look stale error = %q, want 'no longer exists'", err.Error())
+	}
+}
+
+// TestEntityRandSeam: entity.rand_int(n) / rand_float() draw from the mob's per-entity seeded source
+// (deterministic for a fixed mob seed), with NO capability gate. n<=0 errors; a mob with no AI/rng
+// errors; a removed entity errors.
+func TestEntityRandSeam(t *testing.T) {
+	loop, _ := newBlockLoop()
+	e := spawnTestEntity(loop, 1.0, 64.0, 1.0)
+	e.ai.rng.reseed(42) // pin the stream
+
+	// rand_int with NO capability bits at all still works (the mob's own RNG, ungated).
+	h := newEntityHandle(loop, e.id, 0)
+
+	// Determinism: replay the same seed through a reference source in the same call order.
+	ref := newEntityRandom(42)
+	for i := 0; i < 5; i++ {
+		v, err := callMethod(t, h, "rand_int", starlark.MakeInt(100))
+		if err != nil {
+			t.Fatalf("rand_int error: %v", err)
+		}
+		iv, _ := starlark.AsInt32(v)
+		if int(iv) != ref.nextInt(100) {
+			t.Fatalf("rand_int draw %d not deterministic vs the seeded reference", i)
+		}
+	}
+	fv, err := callMethod(t, h, "rand_float")
+	if err != nil {
+		t.Fatalf("rand_float error: %v", err)
+	}
+	if f, ok := fv.(starlark.Float); !ok || float64(f) != float64(ref.nextFloat()) {
+		t.Fatalf("rand_float = %v, not deterministic vs the seeded reference", fv)
+	}
+
+	// n<=0 errors.
+	if _, err := callMethod(t, h, "rand_int", starlark.MakeInt(0)); err == nil {
+		t.Fatal("rand_int(0) should error (n must be > 0)")
+	}
+
+	// A mob with no AI/rng errors cleanly.
+	noAI := NewEntity(99, entity.Pig, 0, 64, 0)
+	loop.entities.add(noAI)
+	hNoAI := newEntityHandle(loop, noAI.id, capAll)
+	if _, err := callMethod(t, hNoAI, "rand_int", starlark.MakeInt(10)); err == nil {
+		t.Fatal("rand_int on a mob with no AI should error")
+	}
+
+	// Removed entity errors.
+	loop.entities.remove(e.id)
+	if _, err := callMethod(t, h, "rand_int", starlark.MakeInt(10)); err == nil {
+		t.Fatal("rand_int on a removed entity should error")
+	}
+}
+
+// TestNearestPlayerSeam: world.nearest_player(x,y,z,range) returns the nearest player tuple in range
+// or None; a handle without world.read is denied.
+func TestNearestPlayerSeam(t *testing.T) {
+	loop, _ := newBlockLoop()
+	wh := newWorldHandle(loop, capAll)
+
+	// No players -> None.
+	v, err := callMethod(t, wh, "nearest_player",
+		starlark.Float(0), starlark.Float(64), starlark.Float(0), starlark.Float(10))
+	if err != nil {
+		t.Fatalf("nearest_player error: %v", err)
+	}
+	if v != starlark.None {
+		t.Fatalf("nearest_player with no players = %v, want None", v)
+	}
+
+	// Add two players; the nearer one (at +X 3) must be returned over the far one (at +X 8).
+	loop.players = append(loop.players,
+		&tickPlayer{x: 8, y: 64, z: 0},
+		&tickPlayer{x: 3, y: 64, z: 0})
+	v, err = callMethod(t, wh, "nearest_player",
+		starlark.Float(0), starlark.Float(64), starlark.Float(0), starlark.Float(10))
+	if err != nil {
+		t.Fatalf("nearest_player error: %v", err)
+	}
+	tup, ok := v.(starlark.Tuple)
+	if !ok || len(tup) != 3 {
+		t.Fatalf("nearest_player = %v, want a 3-tuple", v)
+	}
+	if tup[0] != starlark.Float(3) {
+		t.Fatalf("nearest_player returned x=%v, want the nearer player at x=3", tup[0])
+	}
+
+	// Out of range -> None.
+	v, err = callMethod(t, wh, "nearest_player",
+		starlark.Float(0), starlark.Float(64), starlark.Float(0), starlark.Float(1))
+	if err != nil {
+		t.Fatalf("nearest_player (out of range) error: %v", err)
+	}
+	if v != starlark.None {
+		t.Fatalf("nearest_player out of range = %v, want None", v)
+	}
+
+	// Capability-denied: a world handle without world.read is rejected.
+	noRead := newWorldHandle(loop, capWorldWrite) // write-only, no read bit
+	if _, err := callMethod(t, noRead, "nearest_player",
+		starlark.Float(0), starlark.Float(64), starlark.Float(0), starlark.Float(10)); err == nil {
+		t.Fatal("nearest_player without world.read should be denied")
+	} else if !strings.Contains(err.Error(), "world.read") {
+		t.Errorf("nearest_player denial = %q, want it to name world.read", err.Error())
 	}
 }
