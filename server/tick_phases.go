@@ -6,6 +6,7 @@ import (
 
 	"github.com/imhinotori/sulfur/level"
 	pk "github.com/imhinotori/sulfur/net/packet"
+	"github.com/imhinotori/sulfur/plugin/host"
 	"github.com/imhinotori/sulfur/world"
 )
 
@@ -48,7 +49,17 @@ func (t *TickLoop) tickOnce() {
 	t.tracker.Tick()         // synchronous stub today; Phase 8 swaps the executor
 	t.flushOutbound()        // enqueue clientbound via Client.Send (no-op until players join)
 
-	t.gametime++                           // EXACTLY once per logical tick — anchors TICK-02
+	t.gametime++ // EXACTLY once per logical tick — anchors TICK-02
+
+	// PLUGIN-02 (Plan 22) on_tick seam: the ONE per-tick emit, fired ONCE per tick TOTAL (not once
+	// per entity) at the END of tickOnce after gametime++. Emit's zero-subscriber guard makes this
+	// free on a server with no on_tick hook (a single map read, zero alloc) — so an unsubscribed
+	// server pays nothing. Nil-guarded; payload = the current gametime as a frozen scalar. This is
+	// the SOLE per-tick emit — every other seam fires on a discrete occurrence, never per tick.
+	if t.plugins != nil {
+		t.plugins.Emit(host.EventTick, host.TickEvent{Tick: int(t.gametime)})
+	}
+
 	t.recordMSPT(t.clock.Now().Sub(start)) // publish the read-only telemetry snapshot (TICK-06)
 }
 

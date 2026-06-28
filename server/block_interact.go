@@ -4,6 +4,7 @@ import (
 	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/level/component"
 	pk "github.com/imhinotori/sulfur/net/packet"
+	"github.com/imhinotori/sulfur/plugin/host"
 )
 
 // block_interact.go — ENT-03: the on-tick place/break handlers behind the subtick route.
@@ -243,6 +244,19 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 	t.createBlockEntityOnPlace(placePos, placeState)
 
 	t.reconcileEdit(p, placePos, placeState, int32(sequence))
+
+	// PLUGIN-02 (Plan 22) on_block_place seam: fire ONCE here at the place call site, AFTER the
+	// authoritative SetBlock+reconcileEdit — NOT from the shared broadcastBlockUpdate (Pitfall 2:
+	// break ALSO routes block updates through that broadcaster, so emitting there would double-fire
+	// place on every break). This site is reached only on a real, successful placement. Nil-guarded;
+	// the payload carries the placed pos + state + placer entity id as plain frozen scalars.
+	if t.plugins != nil {
+		t.plugins.Emit(host.EventBlockPlace, host.BlockPlaceEvent{
+			X: placePos.X, Y: placePos.Y, Z: placePos.Z,
+			State:    int(placeState),
+			PlayerID: int(p.entityID),
+		})
+	}
 
 	// BlockItem.place tail -> stack.consume(1, player). ItemStack.consume shrinks the stack by 1
 	// UNLESS player.hasInfiniteMaterials() (CREATIVE). ServerPlayerGameMode.useItemOn's creative

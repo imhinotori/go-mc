@@ -4,6 +4,7 @@ import (
 	"github.com/imhinotori/sulfur/data/packetid"
 	"github.com/imhinotori/sulfur/level/block"
 	pk "github.com/imhinotori/sulfur/net/packet"
+	"github.com/imhinotori/sulfur/plugin/host"
 )
 
 // block_break.go — the 1:1 port of the server-authoritative block-break dig-time model from
@@ -364,6 +365,21 @@ func (t *TickLoop) destroyBlock(p *tickPlayer, pos pk.Position, air block.StateI
 	// means nothing broke: no ack, no broadcast, no drop (matches destroyBlock returning false).
 	if t.world == nil || !t.world.SetBlock(pos, air, dimMinY) {
 		return
+	}
+
+	// PLUGIN-02 (Plan 22) on_block_break seam: fire ONCE here, AFTER the block is actually removed
+	// (past the changed=false early-return), so a hook fires exactly once per REAL break — and
+	// because destroyBlock is the single funnel BOTH destroyAndAck (insta/STOP) and the
+	// tickBlockBreak delayed-destroy route through, every break path is covered exactly once.
+	// destroyBlock is NOT a per-entity loop, so the count is independent of entity count (THE GATE).
+	// Nil-guarded; the payload carries the PRE-air brokenState + the breaker's entity id as plain
+	// frozen scalars (no live handles — Phase 23).
+	if t.plugins != nil {
+		t.plugins.Emit(host.EventBlockBreak, host.BlockBreakEvent{
+			X: pos.X, Y: pos.Y, Z: pos.Z,
+			State:    int(brokenState),
+			PlayerID: int(p.entityID),
+		})
 	}
 
 	if ack {

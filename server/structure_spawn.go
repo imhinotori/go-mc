@@ -7,6 +7,7 @@ import (
 
 	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/level/attribute"
+	"github.com/imhinotori/sulfur/plugin/host"
 	"github.com/imhinotori/sulfur/world"
 )
 
@@ -67,6 +68,20 @@ func (t *TickLoop) drainStructureSpawns(res world.ChunkResult) {
 		e.leftHanded = attribute.FinalizeSpawn(e.attributes, t.levelRandom)
 		_ = req.PersistenceRequired
 		t.entities.add(e) // the ONLY off-tick-boundary store mutation; tracker broadcasts AddEntity
+
+		// PLUGIN-02 (Plan 22) on_entity_spawn seam: fire ONCE here, immediately after the actual
+		// store add — the discrete spawn occurrence — NOT from tickAI's per-tick naturalSpawn scan.
+		// One emit per spawned mob, independent of entity count. Nil-guarded; the payload carries the
+		// entity id + wire type id + spawn position (truncated to ints) as plain frozen scalars.
+		if t.plugins != nil {
+			t.plugins.Emit(host.EventEntitySpawn, host.EntitySpawnEvent{
+				EntityID: int(e.id),
+				TypeID:   int(e.typ),
+				X:        int(e.x),
+				Y:        int(e.y),
+				Z:        int(e.z),
+			})
+		}
 	}
 }
 

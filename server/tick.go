@@ -12,6 +12,7 @@ import (
 	"github.com/imhinotori/sulfur/level/component"
 	"github.com/imhinotori/sulfur/level/ticks"
 	pk "github.com/imhinotori/sulfur/net/packet"
+	"github.com/imhinotori/sulfur/plugin/host"
 	"github.com/imhinotori/sulfur/save"
 	"github.com/imhinotori/sulfur/world"
 	"github.com/imhinotori/sulfur/world/levelgen"
@@ -340,6 +341,27 @@ type TickLoop struct {
 	// rapid edit stream coalesces into one save per interval (a chunk dirtied 20× in a second is
 	// serialized once). Tick-owned (incremented only on the owner goroutine).
 	chunkSaveTickCounter int
+
+	// plugins is the loaded plugin host + typed event bus (PLUGIN-02 / Plan 22). It is nil until
+	// SetPlugins wires it (a server with no plugins dir leaves it nil — every seam emit is a cheap
+	// skipped no-op behind an `if t.plugins != nil` guard). The discrete gameplay seams
+	// (destroyBlock / handleUseItemOn / the join+leave seams / structure spawn / combat die +
+	// actuallyHurt / tickOnce) call t.plugins.Emit at the OCCURRENCE point — NEVER from the
+	// per-entity tickEntities/tickAI/tickPhysics loops (the forbidden O(entities×ticks) anti-seam).
+	// The pointer is READ only on the tick goroutine (Emit) and WRITTEN only on the tick goroutine
+	// (SetPlugins before Run, and the pluginSwap drain in drainRegistrations), so dispatch never
+	// reads a half-updated map (TICK-05).
+	plugins *host.Manager
+
+	// pluginSwap is the hot-reload swap channel (FULL hot-reload, Plan 22-02). The off-tick fsnotify
+	// watcher (plugin/host/reload.go) REBUILDS a fresh *host.Manager off-tick and sends the pointer
+	// here; drainRegistrations drains it on the OWNER goroutine and swaps t.plugins on-thread — the
+	// SAME select-with-default discipline as register/unregister/consoleCmd. The watcher NEVER
+	// mutates t.plugins or any live hook map, so a reload concurrent with dispatch is a pointer swap
+	// between two ticks, never a mid-Emit map mutation (TICK-05 / T-22-05). Buffered 1 with
+	// replace-latest semantics (a swap is idempotent-latest); nil-safe — a nil channel makes the
+	// select case never fire, so a server with no watcher is unaffected.
+	pluginSwap chan *host.Manager
 }
 
 // respawnTeleportBase seeds the tick-owned respawn teleport-id counter well above any join id
@@ -836,6 +858,12 @@ func NewTickLoop(clock Clock) *TickLoop {
 		pathPool:    newAsyncPool(runtime.NumCPU()),
 		trackerPool: newAsyncPool(asyncSmallPoolSize),
 		spawnPool:   newAsyncPool(asyncSmallPoolSize),
+		// pluginSwap is the hot-reload swap channel (Plan 22-02). Buffered 1 with replace-latest
+		// semantics: the off-tick watcher sends a freshly-rebuilt *host.Manager here and the owner
+		// drains+swaps it in drainRegistrations. Constructed always (cheap) so the watcher can feed it
+		// from day one; a server with no watcher simply never sends, and t.plugins stays whatever
+		// SetPlugins set (possibly nil).
+		pluginSwap: make(chan *host.Manager, 1),
 	}
 	// OPT-02 (08-04) SWAP-POINT — the single line that swaps the tracker EXECUTOR off-tick behind
 	// the UNCHANGED tracker.Tick() seam. ENT-01 filled this with the synchronous &entityTracker{};
@@ -972,6 +1000,20 @@ func (t *TickLoop) SetSaveSink() <-chan playerLeaveSnapshot {
 	return t.leaveSnapshots
 }
 
+// SetPlugins wires the loaded plugin host + event bus (PLUGIN-02 / Plan 22). Call it ONCE before
+// Run, on the setup goroutine, with the Manager main() built from LoadDir(plugins/). A nil Manager
+// (no plugins dir, or plugins disabled) leaves every discrete-seam emit a cheap skipped no-op behind
+// the `if t.plugins != nil` guard. After Run starts, the ONLY way to replace the Manager is the
+// pluginSwap channel drained on the tick goroutine (hot-reload) — never call SetPlugins concurrently
+// with a live tick (TICK-05).
+func (t *TickLoop) SetPlugins(m *host.Manager) { t.plugins = m }
+
+// PluginSwapChan returns the send side of the hot-reload swap channel (Plan 22-02). The off-tick
+// fsnotify watcher built by main() sends each freshly-rebuilt *host.Manager here; the tick owner
+// drains it in drainRegistrations and swaps t.plugins on-thread, so the watcher never touches live
+// tick-owned state. The channel is buffered 1 (replace-latest) so a watcher send never parks.
+func (t *TickLoop) PluginSwapChan() chan<- *host.Manager { return t.pluginSwap }
+
 // traceTo installs a test-only phase-order recorder. Each phase appends its name to
 // *dst as it runs, letting TestTickPhaseOrder assert the fixed pipeline order. Pass
 // nil to disable. Not used in production.
@@ -1100,6 +1142,16 @@ func (t *TickLoop) drainRegistrations() {
 				// the joiner (a Notchian client drops AddEntity without the tab entry — Pitfall 1).
 				p.playerEntity = newPlayerEntity(p)
 				t.entities.add(p.playerEntity)
+				// PLUGIN-02 (Plan 22) on_player_join seam: fire ONCE here on the owner, at the
+				// discrete join occurrence (the same place GAMEPLAY-01 adds the player entity) —
+				// NEVER from a per-tick scan. Nil-guarded so a no-plugin server is unaffected; the
+				// payload is plain frozen scalars (name + entity id), no live handles (Phase 23).
+				if t.plugins != nil {
+					t.plugins.Emit(host.EventPlayerJoin, host.PlayerJoinEvent{
+						Name:     p.name,
+						EntityID: int(p.entityID),
+					})
+				}
 				t.broadcastPlayerInfoAdd(p)
 				t.sendExistingPlayersTo(p)
 				// Send the joiner its OWN skin metadata so its client renders its second/overlay
@@ -1115,6 +1167,15 @@ func (t *TickLoop) drainRegistrations() {
 			// The select still falls through to default when consoleCmd is empty, so this case
 			// never parks the tick.
 			t.runConsoleCommand(line)
+		case mgr := <-t.pluginSwap:
+			// PLUGIN-02 (Plan 22-02) FULL hot-reload swap: the off-tick fsnotify watcher REBUILT a
+			// fresh *host.Manager (New+LoadDir) off-tick and sent the pointer here; the OWNER swaps
+			// t.plugins on-thread — exactly like the register/unregister/consoleCmd cases above. This
+			// is the ONLY post-Run writer of t.plugins; Emit reads it only on this same goroutine, so
+			// dispatch never sees a half-updated map and a reload concurrent with dispatch is a pointer
+			// swap between two ticks (TICK-05 / T-22-05). The select still falls through to default
+			// when pluginSwap is empty, so this case never parks the tick.
+			t.plugins = mgr
 		default:
 			return // nothing queued: return immediately, never block
 		}
@@ -1163,6 +1224,16 @@ func (t *TickLoop) removePlayer(c *Client) {
 	// no-op for a missing id, so a leave before the join seam ran never panics.
 	t.entities.remove(p.entityID)
 	t.broadcastPlayerInfoRemove(p.uuid)
+
+	// PLUGIN-02 (Plan 22) on_player_leave seam: fire ONCE per leave here on the owner (the existing
+	// save-on-leave seam), at the discrete leave occurrence — NEVER from a per-tick scan. Nil-guarded
+	// so a no-plugin server is unaffected; the payload is plain frozen scalars (name + entity id).
+	if t.plugins != nil {
+		t.plugins.Emit(host.EventPlayerLeave, host.PlayerLeaveEvent{
+			Name:     p.name,
+			EntityID: int(p.entityID),
+		})
+	}
 }
 
 // dispatch routes one inbound packet on the tick goroutine. It is total and cheap:

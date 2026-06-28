@@ -7,6 +7,7 @@ import (
 	"github.com/imhinotori/sulfur/data/packetid"
 	"github.com/imhinotori/sulfur/level"
 	pk "github.com/imhinotori/sulfur/net/packet"
+	"github.com/imhinotori/sulfur/plugin/host"
 )
 
 // combat.go is ENT-05: the server-owned health / damage / death / respawn loop. Health is
@@ -299,6 +300,19 @@ func (t *TickLoop) actuallyHurt(p *tickPlayer, amount float32) {
 		p.health = 0
 	}
 	udebugPlayer(p, "combat", "damage=%.2f -> hp=%.2f", amount, p.health)
+
+	// PLUGIN-02 (Plan 22) on_damage seam — the LOCKED POST-mitigation site: `amount` here is the
+	// FINAL landed damage (after armor + magic + absorption folding above), the value actually
+	// subtracted from health — NOT the raw applyDamage input. Emit even when health reached 0 (the
+	// death emit is separate, fired from die() via applyDamage's lethal tail). This is the discrete
+	// damage occurrence, NEVER a per-tick scan. Nil-guarded; payload = entity id + final amount as
+	// plain frozen scalars.
+	if t.plugins != nil {
+		t.plugins.Emit(host.EventDamage, host.DamageEvent{
+			EntityID: int(p.entityID),
+			Amount:   float64(amount),
+		})
+	}
 	// setAbsorptionAmount(getAbsorptionAmount() - amount): with absorption 0 this stays 0; kept
 	// for fidelity (vanilla performs it unconditionally after the health subtraction).
 	p.setAbsorptionAmount(p.getAbsorptionAmount() - amount)
@@ -385,6 +399,17 @@ func (t *TickLoop) getDamageAfterMagicAbsorb(p *tickPlayer, amount float32) floa
 func (t *TickLoop) die(p *tickPlayer) {
 	p.dead = true
 	p.client.Send(playerCombatKill(p.entityID, chat.Text("You died")))
+
+	// PLUGIN-02 (Plan 22) on_entity_death seam: fire ONCE per death here, at the discrete death
+	// occurrence — NEVER from a per-tick scan. Nil-guarded; the payload carries the dead entity's id
+	// + its wire type id (a player's type id is 0 here — the player's own Entity carries the real
+	// type; v1 routes all death through the player path) as plain frozen scalars.
+	if t.plugins != nil {
+		t.plugins.Emit(host.EventEntityDeath, host.EntityDeathEvent{
+			EntityID: int(p.entityID),
+			TypeID:   0,
+		})
+	}
 }
 
 // playerCombatKill builds ClientboundPlayerCombatKill in the JAR-VERIFIED order: VarInt
