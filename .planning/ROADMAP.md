@@ -38,7 +38,8 @@ Full phase details: [milestones/v2-ROADMAP.md](milestones/v2-ROADMAP.md).
 - [x] **Phase 18: Online-mode — auth + protocol encryption** (ONLINE-01/02) — EncryptionRequest/Response RSA key exchange + AES-128/CFB8 stream encryption (hand-rolled CFB8 over stdlib AES, no new dep) + Yggdrasil `hasJoined` session-server verification, behind an `online-mode` config flag. (completed 2026-06-26)
 - [x] **Phase 19: Operator UX — TUI console + disconnect logging** (TUI-01/02) — a bubbletea+bubbles terminal console (command-input + live log viewport) that degrades to plain logging when stdout is not a TTY, plus disconnect-reason logging (kick/timeout/protocol/quit/login-fail).
  Both complete + operator-validated; verified 3/3. (completed 2026-06-27)
-- [x] **Phase 20: Structure polish — loot, inhabitants, beard, persistence** (STRUCT-POLISH-01..04) — the documented v2 deferrals: loot tables (chests + block drops, shared evaluator with GAMEPLAY-06), structure entities (villagers/witch/cat/silverfish), `afterPlace` terrain-beard, and structure-start NBT persistence. (completed 2026-06-27)
+- [x] **Phase 20: Structure polish — loot, inhabitants, beard, persistence** (STRUCT-POLISH-01..04) — the documented v2 deferrals: loot tables (chests + block drops, shared evaluator with GAMEPLAY-06), structure entities (villagers/witch/cat/silverfish), `afterPlace` terrain-beard, and structure-start NBT persistence.
+ (completed 2026-06-27)
 
 Full phase details: [milestones/v3-ROADMAP.md](milestones/v3-ROADMAP.md).
 
@@ -57,89 +58,113 @@ Full phase details: [milestones/v3-ROADMAP.md](milestones/v3-ROADMAP.md).
 - [ ] **Phase 27: Folia regionization** (REGION-01, folded from v3-deferral) — Leaf/Folia-style independent-region tick threads so the world ticks in parallel regions; the plugin call seam + the entity API must be region-aware (a plugin hook runs on its region's thread). This is the perf payoff that makes "ultra-efficient" real at scale, and it was always a v4 item.
 - [ ] **Phase 28: Plugin system visual + perf gate** (PLUGIN-07, autonomous:false) — a real client confirms: a custom non-vanilla mob plugin works, the vanilla-mobs-as-plugins path is behavior-identical, crafting (vanilla + a custom recipe) works through the plugin path, the event system fires correctly, and the perf target holds (the plugin layer adds no measurable per-tick cost vs Go-native; Folia regions scale). Closes v4.
 
-### Phase 17: Gameplay Completion — the six unwired seams
-**Goal**: The world is *actually* playable on a real multiplayer client — the six gameplay seams that v1 left unwired (players invisible to each other, position not loaded, inventory empty on join, no damage, no fluid simulation, no block drops) are reconnected by wiring the existing-but-disconnected core logic, and a real vanilla 26.2 client confirms end-to-end multiplayer gameplay.
-**Depends on**: Phase 16
-**Requirements**: GAMEPLAY-01, GAMEPLAY-02, GAMEPLAY-03, GAMEPLAY-04, GAMEPLAY-05, GAMEPLAY-06, GAMEPLAY-07
+### Phase 21: Starlark runtime foundation
+**Goal**: A Starlark runtime is embedded in Sulfur (pure-Go, CGO_ENABLED=0 preserved) that loads, sandboxes, and runs a `.star` plugin file — the riskiest single thing proven first (sandbox + CGO=0 + race-safety) before any host/event/behavior layer is built on top.
+**Depends on**: Phase 20 (v3) + the v3.1 SUB prerequisites
+**Requirements**: PLUGIN-01
 **Success Criteria** (what must be TRUE):
-  1. Each joining player is added to the entity store as an `entity.Player` (ID 156) and its position synced every tick, so the existing entity tracker broadcasts AddEntity/move/remove — two clients see each other move (GAMEPLAY-01, the keystone)
-  2. The join bootstrap applies the persisted x/y/z (already saved + round-trip tested) instead of hardcoding spawn, so position survives a reconnect (GAMEPLAY-02)
-  3. The initial `ContainerSetContent` is sent on join so the client's inventory window is populated and the existing (tested) click/creative/carried handlers work end-to-end (GAMEPLAY-03)
-  4. `applyInput` gains real ServerboundAttack/Interact cases that resolve the target + call the existing (tested) `applyDamage`/`die`/`performRespawn`, plus an environmental-damage tick (fall damage) — attacks deal damage, death + respawn work (GAMEPLAY-04)
-  5. `tickWorld()` simulates fluids — vanilla `FlowingFluid`/`LiquidBlock` flow propagation + fluid-level updates + waterlogged handling, ported from the jar — plus player fluid physics (swim/buoyancy, slowed movement, breath) (GAMEPLAY-05)
-  6. After a block break sets air, the block's drop is looked up, an `Item` entity (ID 71) is spawned + tracked, and GAMEPLAY-01's broadcast path sends AddEntity so the drop is pickable (GAMEPLAY-06)
-  7. **VISUAL GATE (autonomous:false)**: a real vanilla 26.2 client (two players) confirms players see each other move, positions/inventory survive a reconnect, attacks deal damage + death/respawn, water flows + affects movement, and broken blocks drop pickable items (GAMEPLAY-07)
-**Plans**: 5 plans in 3 waves
-- [x] 17-01-PLAN.md — GAMEPLAY-01/02/03: player visibility + tab-list broadcast (keystone), persisted-position load, inventory join-sync (wave 1)
-- [x] 17-02-PLAN.md — GAMEPLAY-05: vanilla FlowingFluid sim + scheduled-tick queue + player fluid physics (wave 2)
-- [x] 17-03-PLAN.md — GAMEPLAY-04: Attack/Interact damage dispatch + fall damage (wave 2)
-- [x] 17-04-PLAN.md — GAMEPLAY-06: block-break Item drops + ITEM metadata (wave 2)
-- [~] 17-05-PLAN.md — GAMEPLAY-07: real-client multiplayer VISUAL GATE (autonomous:false, wave 3) — **1:1 work COMPLETE + tested + -race green** (17-05-SUMMARY.md + 17-VERIFICATION.md); the three visibility audits (swing/Animate, equipment/SetEquipment, eat-pose/DATA_LIVING_ENTITY_FLAGS, delta-move/sendChanges) landed, cave-gap + join-disconnect + worldgen-race + block-place-entity-collision all fixed. ONLY the operator's real-client visual sign-off remains.
-- [x] 17-06..22 — real-client gap-closure 1:1 fixes surfaced by the visual gate (spawn-finder, fall damage, combat, breath/air-supply sync, FoodData hunger 17-19, container-click 17-20, block-break dig-time + jar-extracted block hardness 17-21, **eating loop 17-22**, the cave-water-gap one-shot post-process, the three entity-visibility audits) — each a literal port of the 26.2 jar.
-**Research**: HANDOFF.md documents all six seams with file:line evidence + classification + build order (GAMEPLAY-01 keystone first; GAMEPLAY-05 fluid sim is the one large net-new jar port). Phase research deep-dives the `FlowingFluid` port.
+  1. `go.starlark.net` is embedded; a `.star` file loads, parses, and compiles once via the plugin load lifecycle; `CGO_ENABLED=0 go build ./...` stays clean (no `import "C"`, go.mod static) (PLUGIN-01)
+  2. The sandbox holds: per-`starlark.Thread` step-counter budget enforced, recursion OFF (self-call is a dynamic error), no filesystem/network builtins exposed unless explicitly registered (PLUGIN-01)
+  3. One `starlark.Thread` per goroutine; a FrozenValue produced at load is safe to read from the tick goroutine across the tick boundary (PLUGIN-01)
+  4. A plugin calls a registered Go builtin and returns a value to Go (`starlark.Call`); the whole path is Docker `-race` clean (PLUGIN-01)
+**Plans**: TBD (set by `/gsd-plan-phase 21`)
+**Research**: Confirm Starlark fork-or-vendor (likely a plain dep — does upstream expose the sandbox knobs we need, or is a `replace`-pinned patch required?). Context7 `/google/starlark-go` for the Thread/Freeze/Call/ExecFile API. v4-PLAN.md is the plan of record.
 
-### Phase 18: Online-mode — auth + protocol encryption
-**Goal**: Sulfur runs in online-mode — authenticated, encrypted logins with real Mojang/Microsoft UUIDs, skins, and ownership verification — behind an `online-mode` config flag (offline remains the default for local dev).
-**Depends on**: Phase 17
-**Requirements**: ONLINE-01, ONLINE-02
+### Phase 22: Plugin host + event bus
+**Goal**: A plugin host loads/unloads plugins from a plugins dir and a typed event bus fires the core gameplay events to register-once hooks — with the Go→plugin dispatch seam kept OFF the per-entity hot path.
+**Depends on**: Phase 21
+**Requirements**: PLUGIN-02
 **Success Criteria** (what must be TRUE):
-  1. The EncryptionRequest/EncryptionResponse handshake is ported: RSA PKCS#1 v1.5 (`RSA/ECB/PKCS1Padding`, NOT OAEP — per `net.minecraft.util.Crypt`) key exchange of the 16-byte shared secret + 4-byte verify token, with the trailing `shouldAuthenticate` boolean on the 776 EncryptionRequest (ONLINE-02)
-  2. AES-128/CFB8 stream encryption wraps the connection for all packets after the handshake — CFB8 hand-rolled over stdlib `crypto/aes` (Go stdlib dropped `cipher.CFB`), no new crypto dependency (ONLINE-02)
-  3. Yggdrasil `hasJoined` session-server verification: the server verifies the shared-secret-derived server hash against `sessionserver.mojang.com` → real UUID + skin properties, and those skin properties propagate to OTHER players via the tab-list ADD_PLAYER (ONLINE-01)
-  4. An `online-mode` config flag toggles auth/encryption; offline-mode (default) is unchanged
-**Plans**: 2 plans in 1 wave (parallel, disjoint files)
-- [x] 18-01-PLAN.md — ONLINE-02 crypto/auth wire: shouldAuthenticate boolean + 4-byte challenge + url-encoded hasJoined, online-mode flag, authDigest vectors + offline handshake test (wave 1)
-- [x] 18-02-PLAN.md — ONLINE-01 skins: propagate authenticated GameProfile properties to ADD_PLAYER so other players render the real skin, with a strict round-trip test (wave 1)
-**Research**: Phase research covers the Yggdrasil auth flow + the protocol-776 encryption packet shapes + the CFB8 hand-roll. It is a VERIFY-then-WIRE phase: ~90% of the crypto (CFB8, RSA PKCS1v15, authDigest, cipher ordering) is already FAITHFUL; the deltas are the missing EncryptionRequest boolean, the flag, and the dropped skin properties.
+  1. The plugin manager discovers/loads/unloads plugins from a plugins directory with a manifest (distribution-format decision: lean manifest-dir) (PLUGIN-02)
+  2. A typed event system fires the core events (tick, player join/leave, block break/place, entity spawn/death, damage); a plugin registers hooks ONCE at load via the registration API (PLUGIN-02)
+  3. The Go→plugin dispatch seam is event-driven + cached — NOT a per-tick-per-entity scan; a subscribed hook fires on the real tick, `-race` clean (PLUGIN-02)
+  4. Open decisions resolved here: hot-reload scope, capability/permission model (PLUGIN-02)
+**Plans**: TBD (set by `/gsd-plan-phase 22`)
+**Research**: Plugin-dir/manifest format, the event taxonomy mapped to existing tick seams, the off-hot-path dispatch design.
 
-### Phase 19: Operator UX — TUI console + disconnect logging
-**Goal**: The operator runs + watches Sulfur from a proper terminal console — command input + live scrolling logs in one screen — with every player drop logged with its reason.
-**Depends on**: Phase 18
-**Requirements**: TUI-01, TUI-02
+### Phase 23: Entity/mob behavior API
+**Goal**: A declarative mob-behavior interface — a plugin declares a mob's attributes/goals/AI once, Go runs the hot path calling the declared hooks, with a full-override path and a frozen tick-safe entity/world/nav bridge.
+**Depends on**: Phase 22 (event bus + registration API) + SUB-ATTRIB (real attributes)
+**Requirements**: PLUGIN-03
 **Success Criteria** (what must be TRUE):
-  1. A charmbracelet bubbletea+bubbles console renders a command-input zone (textinput) + a live log viewport; typed commands dispatch through the existing command system (TUI-01)
-  2. The TUI degrades gracefully when stdout is not a TTY (headless/Docker → plain structured logging, no TUI) (TUI-01)
-  3. Every player disconnect logs WHY (kick/timeout/protocol error/clean quit/login failure) with player identity + reason, surfaced in the TUI log stream + structured logs (TUI-02)
-**Plans**: 3 plans in 2 waves (Wave 1: 19-01 foundation; Wave 2 parallel: 19-02 + 19-03, disjoint files)
-  - [x] 19-01-PLAN.md — charm v2 deps + bubbletea Model (viewport+textinput) + slog.Handler log bridge (non-blocking, drop-on-full)
-  - [x] 19-02-PLAN.md — console dispatch seam (runConsoleCommand via existing graph, no issuer) + main() TTY fork (TUI vs plain stderr)
-  - [x] 19-03-PLAN.md — disconnect taxonomy (protocol_error/write_error/login/config/kick/timeout/quit) + slog join/leave + KeepAlive double-leave hardening
-**Research**: Phase research covers the bubbletea/bubbles API (textinput + viewport composition) + the TTY-detection degrade path.
+  1. A plugin DECLARES a mob's attributes/goals/AI at load; Go runs the hot path (physics/pathfinding/tick/collision) calling the declared hooks — not a script per-entity-per-tick (PLUGIN-03)
+  2. The FULL-OVERRIDE path: a plugin can replace a mob's whole decision logic (still through declared seams, owning all of them) (PLUGIN-03)
+  3. The Go-side bridge exposes entity/world/nav to Starlark as FROZEN, tick-owned-safe handles; read-only vs mutate-through-a-tick-owned-seam is distinguished (PLUGIN-03)
+  4. A trivial custom mob declared in Starlark spawns, ticks, and moves via the Go nav, Docker `-race` clean (PLUGIN-03)
+**Plans**: TBD (set by `/gsd-plan-phase 23`)
+**Research**: The hardest design question — the exact frozen-handle API surface (which entity/world/nav ops, read-only vs mutating). Map the existing Go goal-selector/brain seams to declared hooks.
 
-### Phase 20: Structure polish — loot, inhabitants, beard, persistence
-**Goal**: The v2 structures are finished — chests have loot, structures have their inhabitants, they adapt to terrain, and computed starts persist to NBT.
-**Depends on**: Phase 19
-**Requirements**: STRUCT-POLISH-01, STRUCT-POLISH-02, STRUCT-POLISH-03, STRUCT-POLISH-04
+### Phase 24: Vanilla mobs AS plugins (1:1 dogfood)
+**Goal**: The existing Go mob/entity logic is rewritten as Starlark plugins that remain a literal 1:1 port of the 26.2 jar — validating the API expresses real vanilla AI (the FIRST dogfood).
+**Depends on**: Phase 23
+**Requirements**: PLUGIN-04
 **Success Criteria** (what must be TRUE):
-  1. The loot-table system is ported (embedded loot-table JSON + function/condition/number-provider evaluation) and structure + dungeon chests are populated — shares the evaluator with GAMEPLAY-06's block loot tables (STRUCT-POLISH-01)
-  2. Structure inhabitants spawn with the structure: villagers (village), witch (swamp hut), cat (village/swamp), silverfish (stronghold) (STRUCT-POLISH-02)
-  3. The `afterPlace` terrain-beard adaptation is ported so structures fit terrain instead of floating/clipping (STRUCT-POLISH-03)
-  4. Computed `StructureStart`s persist to region NBT (write/read the structure-start tags) so starts survive without recompute (STRUCT-POLISH-04)
-**Plans**: 5 plans in 2 waves
-Plans:
-- [x] 20-01-PLAN.md — Shared loot evaluator (level/loot) + golden seed-reproduction (STRUCT-POLISH-01)
-- [x] 20-02-PLAN.md — Shared evaluator wired to block drops + lazy chest loot (STRUCT-POLISH-01)
-- [x] 20-03-PLAN.md — StructureStart NBT persistence + per-piece Save/Load (STRUCT-POLISH-04) — seam WIRED into the runtime (gap closure): worker decodeAndSeed reads persisted starts on region load, world.SerializeChunkData writes them on save; reload integration test proves starts survive without recompute
-- [x] 20-04-PLAN.md — Structure inhabitant spawns via ChunkResult.Spawns + silverfish spawner (STRUCT-POLISH-02)
-- [x] 20-05-PLAN.md — Beardifier terrain adaptation: village beard_thin + stronghold bury (STRUCT-POLISH-03)
-**Research**: Phase research covers the loot-table evaluation model + the `afterPlace`/Beardifier adaptation + the structure-start NBT tag format.
+  1. Vanilla mob behavior is re-expressed in Starlark as a literal jar port (method-for-method, cited, verified against `temp/cache/26.2-inner.jar` bytecode — the 1:1 mandate carries into the plugin layer) (PLUGIN-04)
+  2. The plugin-driven vanilla mob is behavior-identical to the Go-native path it replaces (PLUGIN-04)
+  3. The existing mob-AI tests are green against the plugin-driven path; Docker `-race` clean (PLUGIN-04)
+**Plans**: TBD (set by `/gsd-plan-phase 24`)
+**Research**: Per-mob jar bytecode (the goal sets the existing Go path already cites) re-verified for the Starlark re-expression. If vanilla AI doesn't fit the API, the API is wrong — caught here, before Python.
+
+### Phase 25: Crafting/recipes AS plugins (2nd-domain dogfood)
+**Goal**: Crafting is built THROUGH the plugin API (a recipe-provider plugin + the crafting_table 3×3 menu), proving the API generalizes to a second, very different domain (menus/recipes, not entity AI). Crafting was never built in the core — only the empty grid slots exist.
+**Depends on**: Phase 22 (host + item/menu bridge); ordered after 24 for the "domain 1 then domain 2" story (does NOT depend on 24)
+**Requirements**: PLUGIN-05
+**Success Criteria** (what must be TRUE):
+  1. A recipe-provider plugin loads the jar-extracted recipes (shaped/shapeless/smelting/…) through the plugin API — not a hardcoded Go subsystem (PLUGIN-05)
+  2. The crafting-grid result + `ResultSlot.onTake` consumption work (today a no-op stub — `inventory_click.go`: "no recipes wired in v1"); the recipe-match + consume logic is a literal jar port (RecipeManager/CraftingMenu), cited (PLUGIN-05)
+  3. The `crafting_table` block + the 3×3 menu exist (the core only had the 2×2 inventory grid) (PLUGIN-05)
+  4. Vanilla recipes craft correctly through the plugin path (result + consume, jar-verified) AND a custom recipe works (PLUGIN-05)
+**Plans**: TBD (set by `/gsd-plan-phase 25`)
+**Research**: RecipeManager/CraftingMenu/ResultSlot.onTake bytecode; the jar recipe extraction; the item/menu bridge surface the plugin API needs.
+
+### Phase 26: Opt-in Python runtime
+**Goal**: An opt-in Python runtime (`qur/gopy` @ `python3.14`, behind a `python` build tag) for HEAVY off-tick plugins only — the default binary stays pure-Go static (CGO=0).
+**Depends on**: Phase 24 + Phase 25 (the Starlark path proven end-to-end on two domains first)
+**Requirements**: PLUGIN-06
+**Success Criteria** (what must be TRUE):
+  1. `qur/gopy` @ branch `python3.14` (CPython via cgo/libpython) is wired behind a `python` build tag; the DEFAULT (no-tag) build is still pure-Go static, `CGO_ENABLED=0 go build ./...` clean (PLUGIN-06)
+  2. Python plugins run OFF-tick only (their own goroutines/pools, rejoin via the existing async seam `asyncIn2`/ants) — never inside `tickOnce` (PLUGIN-06)
+  3. The same event/registration API as Starlark — an author picks the runtime per workload, not per API (PLUGIN-06)
+  4. A Python plugin runs off-tick and rejoins via the async seam, observably (PLUGIN-06)
+**Plans**: TBD (set by `/gsd-plan-phase 26`)
+**Research**: The `python3.14` branch build (libpython link, build-tag isolation), the off-tick bridge over the existing async pool, GIL handling.
+
+### Phase 27: Folia regionization
+**Goal**: Folia-style independent-region tick threads so the world ticks in parallel regions; the plugin call seam + entity API become region-aware (folded from the v3 REGION-01 deferral).
+**Depends on**: Phase 23 (the working single-thread plugin seam to regionize) — regionize a working seam, don't design it around regions first
+**Requirements**: REGION-01
+**Success Criteria** (what must be TRUE):
+  1. The world ticks in independent parallel regions (Leaf/Folia-style region threads) (REGION-01)
+  2. The plugin call seam + the entity API are region-aware — a plugin hook runs on its region's thread (REGION-01)
+  3. The whole regionized tick + plugin path is Docker `-race` clean (REGION-01)
+**Plans**: TBD (set by `/gsd-plan-phase 27`)
+**Research**: The Folia region model (region ownership of chunks/entities, cross-region transfer), how the tick-owned plugin seam re-homes onto region threads.
+
+### Phase 28: Plugin system visual + perf gate
+**Goal**: A real vanilla 26.2 client + a perf benchmark confirm the whole plugin system end-to-end — closes v4 (autonomous:false).
+**Depends on**: Phases 21–27
+**Requirements**: PLUGIN-07
+**Success Criteria** (what must be TRUE):
+  1. **VISUAL GATE (autonomous:false)**: a real client confirms a custom non-vanilla mob plugin works, the vanilla-mobs-as-plugins path is behavior-identical, crafting (vanilla + a custom recipe) works through the plugin path, and the event system fires correctly (PLUGIN-07)
+  2. **PERF GATE**: a benchmark shows the plugin layer adds no measurable per-tick cost vs Go-native, and Folia regions scale (PLUGIN-07)
+**Plans**: TBD (set by `/gsd-plan-phase 28`)
+**Research**: The benchmark harness (plugin-driven vs Go-native per-tick cost), the real-client validation checklist.
 
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 1–9 (v1) | v1.0 | — | Complete | 2026-06-24 |
-| 10. Worldgen Foundation — LCG, Cross-Chunk Seam & Live Heightmap | v2.0 | 3/3 | Complete | 2026-06-25 |
-| 11. Feature Pipeline & Decoration Orchestration | v2.0 | 3/3 | Complete | 2026-06-25 |
-| 12. Core Feature Types | v2.0 | 3/3 | Complete | 2026-06-25 |
-| 13. Trees, Dungeon & Features Visual Gate | v2.0 | 4/4 | Complete | 2026-06-25 |
-| 14. Structure Pipeline & Temples | v2.0 | 3/3 | Complete | 2026-06-25 |
-| 15. Mineshaft & Stronghold | v2.0 | 3/3 | Complete | 2026-06-25 |
-| 16. Village Jigsaw & Structures Visual Gate | v2.0 | 3/3 | Complete | 2026-06-25 |
-| 17. Gameplay Completion — the six unwired seams | v3 | 5/5 | Complete   | 2026-06-27 |
-| 18. Online-mode — auth + protocol encryption | v3 | 2/2 | Complete   | 2026-06-26 |
-| 19. Operator UX — TUI console + disconnect logging | v3 | 3/3 | Complete   | 2026-06-27 |
-| 20. Structure polish — loot, inhabitants, beard, persistence | v3 | 5/5 | Complete   | 2026-06-27 |
+| 10–16 (v2.0 worldgen + structures) | v2.0 | 22/22 | Complete | 2026-06-25 |
+| 17–20 (v3 online-mode + operator-UX + structure-polish) | v3 | 33/33 | Complete | 2026-06-27 |
+| 21. Starlark runtime foundation | v4 | 0/? | Not started | — |
+| 22. Plugin host + event bus | v4 | 0/? | Not started | — |
+| 23. Entity/mob behavior API | v4 | 0/? | Not started | — |
+| 24. Vanilla mobs AS plugins (1:1 dogfood) | v4 | 0/? | Not started | — |
+| 25. Crafting/recipes AS plugins (2nd-domain dogfood) | v4 | 0/? | Not started | — |
+| 26. Opt-in Python runtime | v4 | 0/? | Not started | — |
+| 27. Folia regionization | v4 | 0/? | Not started | — |
+| 28. Plugin system visual + perf gate | v4 | 0/? | Not started | — |
 
 ## Deferred / Backlog (unwired or subsystem-blocked)
 
