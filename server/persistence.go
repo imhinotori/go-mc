@@ -18,7 +18,9 @@ import (
 	"github.com/imhinotori/sulfur/nbt"
 	pk "github.com/imhinotori/sulfur/net/packet"
 	"github.com/imhinotori/sulfur/save"
-	"github.com/imhinotori/sulfur/save/region"
+	// Aliased to regionfile: the unqualified `region` identifier is now the Phase-27
+	// per-region tick-owner type (region.go). This import is the anvil region-FILE IO.
+	regionfile "github.com/imhinotori/sulfur/save/region"
 
 	"github.com/google/uuid"
 )
@@ -252,12 +254,12 @@ func defaultPlayerData() save.PlayerData {
 }
 
 // entityRegionPath returns the entities/r.<rx>.<rz>.mca path for the region containing the chunk
-// column, reusing region.At (the SAME naming the chunk region uses, under a parallel entities/
+// column, reusing regionfile.At (the SAME naming the chunk region uses, under a parallel entities/
 // subdir). The directory is created by saveEntities on demand.
 func entityRegionPath(dir string, pos level.ChunkPos) (regionPath string, ix, iz int) {
 	cx, cz := int(pos[0]), int(pos[1])
-	rx, rz := region.At(cx, cz)
-	ix, iz = region.In(cx, cz)
+	rx, rz := regionfile.At(cx, cz)
+	ix, iz = regionfile.In(cx, cz)
 	regionPath = filepath.Join(dir, entitiesDir, "r."+strconv.Itoa(rx)+"."+strconv.Itoa(rz)+".mca")
 	return
 }
@@ -282,12 +284,12 @@ func saveEntities(dir string, pos level.ChunkPos, ents []save.Entities) error {
 	}
 
 	// Open the region (or create it if this is the first write to this region file).
-	r, err := region.Open(regionPath)
+	r, err := regionfile.Open(regionPath)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			return err
 		}
-		r, err = region.Create(regionPath)
+		r, err = regionfile.Create(regionPath)
 		if err != nil {
 			return err
 		}
@@ -308,12 +310,12 @@ func saveEntities(dir string, pos level.ChunkPos, ents []save.Entities) error {
 //	(nil, false, err) -> a real IO/parse error (corrupt sector)
 //	(ents, true, nil) -> hit
 //
-// A fresh Region is opened and closed per call (region.Region is Not MT-Safe), mirroring the
+// A fresh Region is opened and closed per call (regionfile.Region is Not MT-Safe), mirroring the
 // chunk-load discipline (world/worker.tryRegion). Runs OFF the tick.
 func loadEntities(dir string, pos level.ChunkPos) ([]save.Entities, bool, error) {
 	regionPath, ix, iz := entityRegionPath(dir, pos)
 
-	r, err := region.Open(regionPath)
+	r, err := regionfile.Open(regionPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, false, nil // no region file yet -> miss
@@ -324,7 +326,7 @@ func loadEntities(dir string, pos level.ChunkPos) ([]save.Entities, bool, error)
 
 	data, err := r.ReadSector(ix, iz)
 	if err != nil {
-		if errors.Is(err, region.ErrNoSector) || errors.Is(err, region.ErrNoData) {
+		if errors.Is(err, regionfile.ErrNoSector) || errors.Is(err, regionfile.ErrNoData) {
 			return nil, false, nil // not-yet-saved cell -> miss
 		}
 		return nil, false, err // corrupt/real error

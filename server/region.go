@@ -1,0 +1,143 @@
+package server
+
+import (
+	"github.com/imhinotori/sulfur/level/ticks"
+	"github.com/imhinotori/sulfur/world"
+	"github.com/imhinotori/sulfur/world/levelgen"
+)
+
+// region.go is the Phase-27 (Folia regionization) STEP-1 extraction: the `region` struct that
+// owns the WORLD half of the tick state. It is the per-region slice of today's TickLoop — the
+// "Pattern 1: Region as a slice of the single-owner loop" from 27-RESEARCH (Architecture
+// Patterns), extracted so Plans 02 (coordinator/barrier) and 03 (N=2 + cross-region transfer)
+// can multiply it by N WITHOUT changing observable behavior.
+//
+// THIS STEP IS BEHAVIOR-NEUTRAL BY CONSTRUCTION. At N=1 there is exactly ONE region
+// (globalRegion), and it holds everything the old single-owner TickLoop held, so the world ticks
+// IDENTICALLY to before the extraction (the #1 gate: the FULL existing server + world suite
+// passes UNCHANGED, and the Docker -race gate stays green). No parallelism, no conc, no new
+// dependency is added here — that is Plan 02. The single region == today's single-owner TickLoop.
+//
+// THE PER-REGION vs GLOBAL BOUNDARY (the documented contract — 27-RESEARCH "Architectural
+// Responsibility Map"). This split is the design of the whole phase; it is stated explicitly here
+// so the boundary is the documented contract, not implicit:
+//
+//	PER-REGION (owned by the region's tick goroutine — TICK-05 multiplied by N):
+//	  entities    *entityStore                    — the by-id map + per-column buckets
+//	  world       *world.ChunkManager             — the tick-owned chunk manager
+//	  worker      *world.Worker                   — the off-tick load/generate worker
+//	  asyncIn     <-chan asyncResult              — the chunkReady bridge (per-world)
+//	  asyncBridge chan asyncResult                — SetWorld's internal bridge channel
+//	  blockTicks  *ticks.LevelTicks[blockTickType]— the scheduled-block-tick manager
+//	  blockTickSubCounter int64                   — Level.subTickCount tiebreak
+//	  fluidSchedule *fluidScheduleQueue           — the scheduled-fluid-tick queue
+//	  levelRandom *levelgen.LegacyRandomSource    — Level.random analogue (NEVER shared across
+//	                                                regions — a shared RNG would race AND diverge
+//	                                                the stream non-deterministically)
+//	  spawnScanPending bool                       — the OPT-03 single-in-flight spawn-scan gate
+//
+//	GLOBAL (STAY on TickLoop — the coordinator owns these; one shared instance for all regions):
+//	  clock/last/acc/gametime  — the TICK-02 accumulator + the ONE shared 50ms gametime anchor
+//	  ring/ringN/ringIx/stats  — MSPT telemetry (server-wide)
+//	  asyncIn2 + the ants pools (path/tracker/spawn/plugin) — shared bounded async substrate
+//	  tracker                  — cross-region at the barrier (Plan 03)
+//	  players + clientIndex     — the GLOBAL player list / session / network
+//	  register/unregister/consoleCmd/pluginSwap/leaveSnapshots — global registration seams
+//	  idAlloc *EntityIDAllocator— ONE global id space (players + entities never collide)
+//	  plugins *host.Manager    — the FROZEN shared registry (Phase 21/22)
+//	  mobRegistry              — boot-loaded shared declaration
+//	  debug                    — global debug seam
+//	  spawn*/respawn*/openChests/chunkSaver/... — global setup/runtime state
+//
+// THE STORE STAYS SINGLE-SOURCED (no duplicate / aliased store — threat T-27-EXT-1). The region
+// is the SOLE holder of entities/world/etc; TickLoop reaches them ONLY through the only()/region()
+// accessors (tick.go). Every phase loop ranges the SAME store instance the handles/tracker read,
+// so there is no second store to drift.
+
+// regionID identifies a region within the coordinator's regions slice. At N=1 there is only
+// globalRegion; Plan 03 adds more ids via the static chunk->region hash.
+type regionID int
+
+// globalRegion is the id of the single region that exists at N=1 (this step). It holds everything
+// the pre-extraction TickLoop held, so the world ticks identically. Plan 03 introduces additional
+// region ids alongside it.
+const globalRegion regionID = 0
+
+// region owns the WORLD-half of today's TickLoop, scoped (at N>1) to its chunks. Exactly one
+// goroutine — the region's tick goroutine (the coordinator's single goroutine at N=1) — mutates
+// these fields, so the region is -race clean by the same single-owner discipline as the
+// pre-extraction TickLoop (TICK-05, multiplied by N). See the file doc comment for the explicit
+// per-region vs global boundary contract (27-RESEARCH Responsibility Map / Pattern 1).
+type region struct {
+	// id identifies this region within the coordinator's regions slice (globalRegion at N=1).
+	id regionID
+
+	// coord is the back-reference to the GLOBAL coordinator (Pattern 1's `coord *TickLoop`), so a
+	// region reaches the shared idAlloc, players, plugins, and the ONE gametime anchor that stay
+	// global. The region never mutates the coordinator's global state off-pattern; it reads the
+	// shared allocator/registry and (at N=1) is driven by the coordinator's single goroutine.
+	coord *TickLoop
+
+	// --- PER-REGION world state (moved off TickLoop by this step; see the file doc boundary) ---
+
+	// entities is the per-region tick-owned entity store (ENT-01). The by-id map + per-section grid
+	// buckets are mutated ONLY by the region's goroutine. A region owns its own *entityStore so
+	// move()/near()/add()/remove() stay single-owner per region (the bucket-consistency contract,
+	// entity_store.go, is unchanged). Non-nil from newRegion.
+	entities *entityStore
+
+	// world is the per-region tick-owned chunk manager and worker is the off-tick load/generate
+	// worker (WORLD-01/05). Both are nil until SetWorld wires them (lazily, exactly as the
+	// pre-extraction TickLoop did); the streaming phases treat a nil world as a no-op.
+	world  *world.ChunkManager
+	worker *world.Worker
+
+	// asyncIn is the async-result rejoin channel for THIS region's chunk worker; asyncBridge is the
+	// internal channel SetWorld assigns to asyncIn (a small adapter goroutine forwards the worker's
+	// immutable Results() as chunkReady onto it). nil until SetWorld; a nil asyncIn makes the
+	// chunkReady drain a genuine no-op.
+	asyncIn     <-chan asyncResult
+	asyncBridge chan asyncResult
+
+	// blockTicks is the per-region SUB-BLOCKTICK level-wide scheduled-block-tick manager
+	// (ServerLevel.blockTicks port); blockTickSubCounter is the Level.subTickCount tiebreak.
+	// blockTicks is lazily constructed inside tickScheduledBlocks (a nil manager drains to nothing);
+	// blockTickSubCounter is advanced only on the region's goroutine via nextSubTick.
+	blockTicks          *ticks.LevelTicks[blockTickType]
+	blockTickSubCounter int64
+
+	// fluidSchedule is the per-region GAMEPLAY-05 scheduled-fluid-tick queue. Lazily constructed
+	// inside tickFluids (a nil queue drains to nothing).
+	fluidSchedule *fluidScheduleQueue
+
+	// levelRandom is the per-region level RandomSource (Level.random analogue). It is NEVER shared
+	// across regions: two goroutines drawing from one LegacyRandomSource is a data race AND makes
+	// the RNG stream non-deterministic per region (27-RESEARCH anti-pattern). newRegion seeds it
+	// from a unique nondeterministic seed, exactly like vanilla's RandomSource.create() (the level
+	// random is NOT seed-pinned — only worldgen RNG is). Advanced only on the region's goroutine.
+	levelRandom *levelgen.LegacyRandomSource
+
+	// spawnScanPending is the OPT-03 single-in-flight gate for the async natural-spawn scan, now
+	// per-region (naturalSpawn sets it when it submits; spawnCandidatesReady.applyTo clears it).
+	// A plain bool touched only on the region's goroutine, so it needs no atomic.
+	spawnScanPending bool
+}
+
+// newRegion constructs an empty region bound to the global coordinator. It wires a fresh
+// per-region entity store and a fresh per-region levelRandom (seeded from a unique
+// nondeterministic seed, NEVER shared — the 27-RESEARCH never-shared-RNG invariant). The
+// world/worker/blockTicks/fluidSchedule stay nil until wired (matching how the pre-extraction
+// TickLoop wired them lazily). coord may be nil for a standalone region in a unit test.
+func newRegion(id regionID, coord *TickLoop) *region {
+	return &region{
+		id:    id,
+		coord: coord,
+		// entities: non-nil from construction so the per-region store the tracker/handles read
+		// exists immediately (the pre-extraction TickLoop's `entities: newEntityStore()`).
+		entities: newEntityStore(),
+		// levelRandom: PER-REGION, seeded from a unique nondeterministic seed exactly like the
+		// pre-extraction TickLoop's `levelRandom: levelgen.NewLegacyRandomSource(uniqueLevelRandomSeed())`.
+		// Distinct per region (never shared) — the anti-pattern guard.
+		levelRandom: levelgen.NewLegacyRandomSource(uniqueLevelRandomSeed()),
+	}
+}
