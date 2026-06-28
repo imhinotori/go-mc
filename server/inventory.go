@@ -250,6 +250,12 @@ func (t *TickLoop) clicked(p *tickPlayer, containerID int32, slotNum int16, butt
 		t.doClick(p, inv, int(slotNum), button, int(input))
 	}()
 
+	// slotsChanged: after the click, recompute the 2x2 player-grid result through the plugin matcher
+	// (CraftingMenu.slotsChanged -> slotChangedCraftingGrid). A change to grid slots 1-4 repopulates (or
+	// clears) result slot 0. The consume (onTakeCraft) also re-runs this, so a take leaves a correct
+	// result too. Recomputed from the (possibly panic-restored) grid. PLUGIN-05.
+	t.slotChangedCraftingGrid(playerCraftView(inv))
+
 	// broadcastChanges: send a SetSlot for each changed slot (one stateId bump for the whole broadcast).
 	t.broadcastInventoryChanges(p, inv, before)
 

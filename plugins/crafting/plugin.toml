@@ -1,0 +1,9 @@
+name = "crafting"
+version = "0.1.0"
+entrypoint = "main.star"
+runtime = "starlark"
+# The recipe matcher is PURE scalar math over the host-injected recipe table (recipes()) + the grid
+# payload — it reads no entity/world/nav state and writes no game state (GO applies the 1:1 consume
+# over the tick-owned grid, TICK-05). So it needs NO capabilities. The `recipes` channel (recipes()
+# builtin) is injected by LoadDirWith for every plugin, not a gated capability.
+capabilities = []

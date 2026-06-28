@@ -27,6 +27,17 @@ type Positioned struct {
 	Empty  bool
 }
 
+// OfPositioned is the exported wrapper over ofPositioned — the
+// CraftingInput.ofPositioned bounding-box shrink. The server's ResultSlot.onTake
+// consume (server/crafting_click.go) calls it to reproduce the jar's
+// asPositionedCraftInput() footprint EXACTLY (the same shrink the matcher used),
+// so the per-cell consume removes 1 from each non-empty cell in the trimmed
+// region mapped back through (Left, Top) to the real grid — never the whole stack,
+// never a wrong cell.
+//
+// 1:1 net.minecraft.world.inventory.CraftingContainer.asPositionedCraftInput
+func OfPositioned(items []Stack, w, h int) Positioned { return ofPositioned(items, w, h) }
+
 // ofPositioned ports net.minecraft.world.item.crafting.CraftingInput.ofPositioned:
 // it shrinks a w*h grid (row-major, an empty cell has Count<=0 or ID<=0) to the
 // minimal bounding box of non-empty cells. An all-empty (or zero-dim) grid

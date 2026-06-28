@@ -27,7 +27,9 @@ import (
 //     classification so normal shift-click routes main↔hotbar (the common case).
 //   - ArmorSlot.mayPlace / isArmorForSlot → default true (any item placeable into an armor slot) — slot 0
 //     (craft result) mayPlace is still hard false.
-//   - ResultSlot.onTake / crafting consumption → no-op (no recipes wired in v1).
+//   - ResultSlot.onTake / crafting consumption → WIRED (PLUGIN-05, Plan 25-02): a take of the result
+//     slot (index 0) fires t.onTakeCraft (crafting_click.go) — the 1:1 per-cell consume through the
+//     plugin matcher. See slotOnTake below.
 //   - Player.canDropItems → true; Player.handleCreativeModeItemDrop → no-op (both are the vanilla bases).
 
 // ItemStack-equivalent SlotData helpers — the ItemStack primitives the engine calls. SlotData is empty
@@ -255,9 +257,23 @@ func (m menuSlot) safeInsert(stack *component.SlotData, increment int) component
 	return *stack
 }
 
-// onTake ports Slot.onTake(player, stack) = setChanged() (base). ResultSlot.onTake (crafting consumption)
-// is a CITED no-op for v1 — slot 0 holds nothing with no recipes wired. setChanged is a no-op here.
+// onTake ports the BASE Slot.onTake(player, stack) = setChanged() (a no-op here). The RESULT slot's
+// override (ResultSlot.onTake, the crafting consume) is NOT on this value-receiver method — it has no
+// TickLoop/plugin access — so the engine routes a result-slot (index 0) take through t.slotOnTake
+// (below), which dispatches to onTakeCraft. A non-result slot's onTake stays this base no-op.
 func (m menuSlot) onTake(_ *tickPlayer, _ component.SlotData) {}
+
+// slotOnTake is the TickLoop-bound onTake dispatch the player click engine calls instead of the bare
+// menuSlot.onTake: for the RESULT slot (index 0) it fires the 1:1 ResultSlot.onTake crafting consume
+// (t.onTakeCraft over the 2x2 player grid) so taking the crafted result removes 1-per-used-cell and
+// recomputes the result (chained crafting); for any other slot it is the base setChanged no-op. This
+// is the un-stub of the former ResultSlot.onTake no-op (the recipes are now wired through the matcher).
+func (t *TickLoop) slotOnTake(p *tickPlayer, inv *Inventory, slotIndex int, _ component.SlotData) {
+	if slotIndex == 0 {
+		t.onTakeCraft(p, inv, playerCraftView(inv)) // ResultSlot.onTake (2x2 player grid)
+	}
+	// non-result slots: base Slot.onTake setChanged — no-op.
+}
 
 // onQuickCraft ports Slot.onQuickCraft(newStack, oldStack) → onQuickCraft(stack, count-delta). Base
 // Slot.onQuickCraft(stack, int) is empty (only ResultSlot overrides). CITED no-op for v1.
@@ -616,7 +632,7 @@ func (t *TickLoop) quickMoveStack(p *tickPlayer, inv *Inventory, i int) componen
 	if int(item.Count) == int(copyOf.Count) {
 		return empty // nothing actually moved
 	}
-	s.onTake(p, item)
+	t.slotOnTake(p, inv, i, item) // ResultSlot.onTake for slot 0 (shift-click of the crafted result)
 	if i == 0 {
 		t.playerDrop(p, item, false) // player.drop(item, false)
 	}

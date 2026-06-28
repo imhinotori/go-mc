@@ -204,7 +204,7 @@ func (t *TickLoop) doClickPickupOrQuickMove(p *tickPlayer, inv *Inventory, i, j,
 				}
 				if taken, ok := s.tryRemove(take, maxInt, p); ok {
 					inv.setCarried(taken)
-					s.onTake(p, taken)
+					t.slotOnTake(p, inv, i, taken) // ResultSlot.onTake for slot 0 (the crafting consume)
 				}
 			} else if s.mayPlace(carried) {
 				if stackSameItemSameComponents(slotItem, carried) {
@@ -227,7 +227,7 @@ func (t *TickLoop) doClickPickupOrQuickMove(p *tickPlayer, inv *Inventory, i, j,
 					c := inv.getCarried()
 					c.Count += pk.VarInt(taken.Count) // carried.grow(taken.getCount())
 					inv.setCarried(c)
-					s.onTake(p, taken)
+					t.slotOnTake(p, inv, i, taken) // ResultSlot.onTake for slot 0 (the crafting consume)
 				}
 			}
 		}
