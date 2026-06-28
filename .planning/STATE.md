@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v4
 milestone_name: Plugin / Scripting System
-status: executing
+status: verifying
 stopped_at: Completed 24-02-PLAN.md — Phase 24 (vanilla-mobs-as-plugins) COMPLETE
-last_updated: "2026-06-28T21:24:40.680Z"
+last_updated: "2026-06-28T22:06:42.358Z"
 last_activity: 2026-06-28
 progress:
   total_phases: 8
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 17
-  completed_plans: 16
-  percent: 94
+  completed_plans: 17
+  percent: 100
 ---
 
 # Project State
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-06-23)
 
 Phase: 27 (folia-regionization) — EXECUTING
 Plan: 3 of 3
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-06-28
 
 ### ⚠️ DONE this session — 25-03 PLUGIN-05 close (cooking/stonecutting BLOCK build-or-defer)
@@ -156,7 +156,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [█████████░] 94%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -260,6 +260,7 @@ Progress: [█████████░] 94%
 | Phase 26 P03 | 22min | 2 tasks | 17 files |
 | Phase 27 P01 | 50min | 3 tasks | 64 files |
 | Phase 27 P02 | 6min | 3 tasks | 6 files |
+| Phase 27 P03 | 35min | 4 tasks | 19 files |
 
 ## Accumulated Context
 
@@ -268,6 +269,7 @@ Progress: [█████████░] 94%
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- [Phase 27]: 27-03 the N=2 flip (REGION-01, Phase 27 COMPLETE) — the world is statically split into N=2 regions that tick CONCURRENTLY. `regionOf = (col.X ^ col.Z) & 1` is a PURE, restart-stable checkerboard hash (chunks are position-keyed, no region id persisted; the XOR-parity puts every chunk's neighbours in the OTHER region so the seam is exercised everywhere a mob/player moves a column). A per-goroutine `currentRegion` (xsync.Map keyed by goroutine id) lets region.tick register itself so the ~200 existing `t.only()` per-region call sites resolve to the OWNING region across the conc fan-out with ZERO churn (a non-fan-out goroutine — the coordinator / direct test calls — falls back to globalRegion). The world (shared ChunkManager, not goroutine-safe) is MUTATED only on the coordinator (tickWorld/tickChunks/chunkReady/dispatch edits); only `tickAI`+`tickPhysics` fan out (the fan-out only READS the world) — race-clean by construction + the observable phase order byte-identical (TestTickPhaseOrder). Cross-region entity TRANSFER at the barrier: detectTransfers queues boundary-crossers mid-tick, applyCrossRegionTransfers moves the SAME *Entity A->B at the quiescent barrier (ai/nav/scratch travel, no double-tick/drop). The async rejoin re-resolves owningRegion(id) (drop if gone); the spawn cap is cross-region; the entity/world/nav handles carry the OWNING region (approach a) so a declared-mob goal callback for a mob in R runs on R's goroutine + re-resolves R's store (THE REGION-01 GATE); the tracker.near spans regions at the barrier. THE GATE green: 2 parallel regions + transfer + cross-region tracker + region-aware Emit all Docker -race clean over ./server/ ./plugin/...; CGO=0 go build ./... + ./cmd/sulfur pure-Go static; the full existing suite UNCHANGED. Dynamic merge/split + per-region-sharded chunks are a locked Phase-28+ deferral. Commits 79abee79 + 89443381 + e9d9eef3.
 - [Phase 26]: 26-03 PLUGIN-06 world-bridge (Phase 26 COMPLETE) — an off-tick python hook produces a capability-gated MUTATION REQUEST (set_block + a simple spawn/log) carried as PLAIN SCALARS (never a live handle), queued on asyncIn2, drained on the TICK goroutine, and applied through the SAME Phase-23 seam (ChunkManager.SetBlock + broadcastBlockUpdate / spawnVanillaPig) — the ONLY mutation point (TICK-05). A READ goes request -> owner-snapshot -> return-a-copy (pythonReadReq carries a buffered reply channel; the owner snapshots GetBlock and sends the copied scalar back). The request/apply indirection IS the safety boundary (T-26-03 — no live tick-owned handle ever escapes off-tick). The capSet is parsed via the SAME parseCapabilities the Phase-23 Starlark handles use and enforced at apply (denied -> dropped + capError, T-26-09; unknown capability errors loudly at load). Capabilities threaded via a server-provided host.SetPythonBridgeFactory (the server owns the parse, the host installs the per-plugin bridge at load — keeps plugin/host + plugin/python cgo-free). The Go-side serverWorldBridge is the authoritative -race-able proof (the python set_block/spawn/log/block_at builtins, behind //go:build python, only PRODUCE the request). Minimal vocabulary, the rest deferred-cited. THE PHASE GATE green: python off-tick (26-02) + on-tick apply (this plan, -race Docker) + the default no-tag build STILL pure-Go static (CGO_ENABLED=0 build clean, ZERO gopython in the graph incl. the cmd/sulfur binary). Commits e51c8138 + 2c71da73.
 - [Phase 23]: 23-02 PLUGIN-03 behavior layer — declare_mob/goal capture a declaration ONCE at load into a tick-read mobRegistry (import-direction-A: the server owns the declare_mob/goal builtins + registry and injects them via host.LoadDirWith extra; the host just runs the body that captures into them). A starlarkGoal implements the EXISTING server.Goal and is arbitrated by the SAME goalSelector flag-locking (NOT a bypass, NOT a parallel AI tick); buildAIFromDecl mirrors newPigAI (a fresh per-spawn *mobAI whose starlarkGoals reference the SHARED frozen callables — per-mob struct state, shared frozen values). THE GATE green: a Starlark wander mob (base_type pig, one MOVE goal using nav.path_to) spawns, ticks via tickAI->serverAiStep, and MOVES through the real Go nav, rendering as entity.Pig.ID (custom = the BEHAVIOR, not a new wire id; an unknown base_type/flag/duplicate errors loudly at load). The interpreter fires ONLY inside a running goal's tick/canUse/start/stop (an idle declared mob makes 0 starlark.Calls/tick; NO starlark.Call in tickAI/tickPhysics/tickEntities); every callback runs on a fresh budget-bounded thread (stepBudget) + is error-isolated (logged, the tick survives). Declared-mob tick path Docker -race clean (the owner+pathPool A* compute is the only cross-goroutine boundary; the handles + starlarkGoal store an id, never a live *Entity — T-23-09). A plugin-facing spawn builtin is OUT of scope (T-23-11 accept — spawnDeclaredMob is the test/debug seam). Commits 58dc2da1 + dd2d58dd + 9d6f185a.
 - [Phase 6 / user, 2026-06-24]: SOURCE-PORTING PERMITTED for gameplay LOGIC — may read Bukkit/Spigot/Paper/Leaf (and the decompiled vanilla jar) and translate their behavior into Go as a NON-1:1 port, explicitly to make Sulfur behave 1:1 with a real server. This is the sanctioned way to get vanilla-faithful mechanics (AI, pathfinding, dig timing, damage, mob behavior) right in Phase 7+. NOT a blanket code-copy: translate the algorithm/behavior, keep it idiomatic Go, no direct paste of GPL Java. Wire layouts still come from the unobfuscated jar (javap) as the authoritative proto-776 source. (Prompted by the 06-07 "creative break" bug = misread START vs STOP dig stages — exactly the gameplay-logic class this permission covers.)
@@ -430,7 +432,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-28T21:24:12.213Z
+Last session: 2026-06-28T22:06:42.344Z
 Stopped at: Completed 24-02-PLAN.md — Phase 24 (vanilla-mobs-as-plugins) COMPLETE
 Resume file: None
 Next: OPERATOR CHECKPOINT (19-02 Task 3) — build `CGO_ENABLED=0 go build -o sulfur.exe ./cmd/sulfur`, run `./sulfur.exe -seed 777` in a REAL terminal (expect alt-screen TUI: log viewport + command input), type `say hi`+Enter (expect a `console command cmd=say hi` viewport line), connect a vanilla 26.2 client (expect a join line), Ctrl-C (clean exit), then `./sulfur.exe -seed 777 | cat` (expect NO TUI, plain stderr — today's behavior). On "approved" → mark TUI-01 complete + advance the plan counter, then proceed to Plan 19-03 (gameplay_tick.go join/leave slog conversion + the full disconnect taxonomy). The console line routes TUI→tick (EnqueueConsoleCommand, cap 64, drop-on-full)→runConsoleCommand on the tick→existing graph (grant-all, no issuer), reply to slog. gameplay_tick.go is untouched (19-03 owns it). LEGACY: Phase 17 Wave 2 (17-02/17-03) — see prior continuity below. (GAMEPLAY-05 fluid simulation: OVERWRITE server/fluid.go with the FlowingFluid port + scheduled-tick queue; lazy-init t.fluidSchedule inside tickFluids, do NOT edit tick.go/tick_phases.go) and 17-03 (GAMEPLAY-04 fall damage + PvP dispatch: OVERWRITE server/fall_damage.go using the tickPlayer fallDistance/wasOnGround/lastY fields + the lookupPlayerByEntityID reverse lookup, do NOT edit tick.go/tick_phases.go). The exact Wave-2 seam surface (field names, init point, call sites, stub signatures) is in 17-01-SUMMARY.md "WAVE-2 HANDOFF". Deferred-still-open: dungeon loot/spawner-mob + BeehiveDecorator occupant + pale_garden PaleMoss (all v3, cosmetic, in 13-04-SUMMARY); KeepAlive double-leave hardening (Phase 3). KNOWN PRE-EXISTING FLAKE: TestTickAIDrivesMobs (OPT-01 async-pool timing, not caused by 17-01) intermittently fails under full-suite load; passes in isolation + 3× under -race.

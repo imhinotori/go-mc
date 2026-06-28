@@ -61,7 +61,7 @@ Full phase details: [milestones/v3-ROADMAP.md](milestones/v3-ROADMAP.md).
  (completed 2026-06-28)
 - [x] **Phase 26: Opt-in Python runtime** (PLUGIN-06) — `qur/gopy` @ `python3.14` (idiomatic CPython bindings via cgo/libpython) behind a `python` build tag so the **default binary stays pure-Go static (CGO=0)**. A bridge for HEAVY off-tick plugins only (never the per-tick hot path — cgo + GIL + non-determinism keep it off the tick). The same event/registration API as Starlark, so a plugin author picks the runtime per workload.
  (completed 2026-06-28)
-- [ ] **Phase 27: Folia regionization** (REGION-01, folded from v3-deferral) — Leaf/Folia-style independent-region tick threads so the world ticks in parallel regions; the plugin call seam + the entity API must be region-aware (a plugin hook runs on its region's thread). This is the perf payoff that makes "ultra-efficient" real at scale, and it was always a v4 item.
+- [x] **Phase 27: Folia regionization** (REGION-01, folded from v3-deferral) — Leaf/Folia-style independent-region tick threads so the world ticks in parallel regions; the plugin call seam + the entity API must be region-aware (a plugin hook runs on its region's thread). This is the perf payoff that makes "ultra-efficient" real at scale, and it was always a v4 item. (completed 2026-06-28)
 - [ ] **Phase 28: Plugin system visual + perf gate** (PLUGIN-07, autonomous:false) — a real client confirms: a custom non-vanilla mob plugin works, the vanilla-mobs-as-plugins path is behavior-identical, crafting (vanilla + a custom recipe) works through the plugin path, the event system fires correctly, and the perf target holds (the plugin layer adds no measurable per-tick cost vs Go-native; Folia regions scale). Closes v4.
 
 ### Phase 21: Starlark runtime foundation
@@ -166,7 +166,7 @@ Plans:
 Plans:
 - [x] 27-01-PLAN.md — STEP 1: extract the `region` struct at N=1 (entityStore/ChunkManager/scheduled ticks/levelRandom → region; per-region/global split explicit); behavior-neutral, existing suite unchanged + -race (Wave 1)
 - [x] 27-02-PLAN.md — STEP 2: the conc fan-out/barrier coordinator at N=1 (add conc pure-Go; gametime advanced once by the coordinator; the global-region post-phase; region-panic isolation); still behavior-neutral + -race (Wave 2)
-- [ ] 27-03-PLAN.md — STEP 3 (THE GATE): flip to N=2 — static chunk→region hash, cross-region transfer at the barrier, async-rejoin re-routing, cross-region tracker, region-aware Emit; parallel-regions + hook-on-owning-region + transfer gates + Docker -race (Wave 3)
+- [x] 27-03-PLAN.md — STEP 3 (THE GATE): flip to N=2 — static chunk→region hash, cross-region transfer at the barrier, async-rejoin re-routing, cross-region tracker, region-aware Emit; parallel-regions + hook-on-owning-region + transfer gates + Docker -race (Wave 3)
 **Research**: The Folia region model (region ownership of chunks/entities, cross-region transfer), how the tick-owned plugin seam re-homes onto region threads.
 
 ### Phase 28: Plugin system visual + perf gate
@@ -192,7 +192,7 @@ Plans:
 | 24. Vanilla mobs AS plugins (1:1 dogfood) | v4 | 2/2 | Complete   | 2026-06-28 |
 | 25. Crafting/recipes AS plugins (2nd-domain dogfood) | v4 | 3/3 | Complete   | 2026-06-28 |
 | 26. Opt-in Python runtime | v4 | 3/3 | Complete   | 2026-06-28 |
-| 27. Folia regionization | v4 | 2/3 | In Progress|  |
+| 27. Folia regionization | v4 | 3/3 | Complete   | 2026-06-28 |
 | 28. Plugin system visual + perf gate | v4 | 0/? | Not started | — |
 
 ## Deferred / Backlog (unwired or subsystem-blocked)
