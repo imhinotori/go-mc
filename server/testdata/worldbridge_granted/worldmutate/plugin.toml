@@ -1,0 +1,5 @@
+name = "worldmutate"
+version = "0.1.0"
+entrypoint = "main.py"
+runtime = "python"
+capabilities = ["world.write"]
