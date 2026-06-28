@@ -67,7 +67,10 @@ Full phase details: [milestones/v3-ROADMAP.md](milestones/v3-ROADMAP.md).
   2. The sandbox holds: per-`starlark.Thread` step-counter budget enforced, recursion OFF (self-call is a dynamic error), no filesystem/network builtins exposed unless explicitly registered (PLUGIN-01)
   3. One `starlark.Thread` per goroutine; a FrozenValue produced at load is safe to read from the tick goroutine across the tick boundary (PLUGIN-01)
   4. A plugin calls a registered Go builtin and returns a value to Go (`starlark.Call`); the whole path is Docker `-race` clean (PLUGIN-01)
-**Plans**: TBD (set by `/gsd-plan-phase 21`)
+**Plans**: 2 plans in 2 waves
+Plans:
+- [ ] 21-01-PLAN.md — Embed go.starlark.net (plain dep, CGO=0), build the plugin/starlark leaf package (sandbox policy, dir loader, echo builtin, LoadedPlugin.Call) + load-once/builtin-round-trip tests
+- [ ] 21-02-PLAN.md — The three sandbox negative tests (step-budget halt, recursion rejected, no-I/O) + the frozen cross-goroutine -race test
 **Research**: Confirm Starlark fork-or-vendor (likely a plain dep — does upstream expose the sandbox knobs we need, or is a `replace`-pinned patch required?). Context7 `/google/starlark-go` for the Thread/Freeze/Call/ExecFile API. v4-PLAN.md is the plan of record.
 
 ### Phase 22: Plugin host + event bus
@@ -157,7 +160,7 @@ Full phase details: [milestones/v3-ROADMAP.md](milestones/v3-ROADMAP.md).
 | 1–9 (v1) | v1.0 | — | Complete | 2026-06-24 |
 | 10–16 (v2.0 worldgen + structures) | v2.0 | 22/22 | Complete | 2026-06-25 |
 | 17–20 (v3 online-mode + operator-UX + structure-polish) | v3 | 33/33 | Complete | 2026-06-27 |
-| 21. Starlark runtime foundation | v4 | 0/? | Not started | — |
+| 21. Starlark runtime foundation | v4 | 0/2 | Planned | — |
 | 22. Plugin host + event bus | v4 | 0/? | Not started | — |
 | 23. Entity/mob behavior API | v4 | 0/? | Not started | — |
 | 24. Vanilla mobs AS plugins (1:1 dogfood) | v4 | 0/? | Not started | — |
