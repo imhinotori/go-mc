@@ -115,7 +115,7 @@ Plans:
   2. The plugin-driven vanilla mob is behavior-identical to the Go-native path it replaces (PLUGIN-04)
   3. The existing mob-AI tests are green against the plugin-driven path; Docker `-race` clean (PLUGIN-04)
 **Plans**: 2 plans (2 waves)
-  - [ ] 24-01-PLAN.md — Per-entity seeded RandomSource (bytecode draw order, retires the global-rand flake) + the 3 faithful handle extensions (entity.set_look, world.nearest_player, entity.rand_int/rand_float), capability-gated
+  - [x] 24-01-PLAN.md — Per-entity seeded RandomSource (bytecode draw order, retires the global-rand flake) + the 3 faithful handle extensions (entity.set_look, world.nearest_player, entity.rand_int/rand_float), capability-gated
   - [ ] 24-02-PLAN.md — vanilla_pig.star (3 passive goals re-expressed 1:1, jar-cited) + per-new-goal build-or-defer audit + boot-load wiring + SWAP newPigAI at both sites + the behavior-identical gate + Docker -race
 **Research**: Per-mob jar bytecode (the goal sets the existing Go path already cites) re-verified for the Starlark re-expression. If vanilla AI doesn't fit the API, the API is wrong — caught here, before Python.
 
@@ -174,7 +174,7 @@ Plans:
 | 21. Starlark runtime foundation | v4 | 2/2 | Complete   | 2026-06-28 |
 | 22. Plugin host + event bus | v4 | 2/2 | Complete   | 2026-06-28 |
 | 23. Entity/mob behavior API | v4 | 2/2 | Complete   | 2026-06-28 |
-| 24. Vanilla mobs AS plugins (1:1 dogfood) | v4 | 0/? | Not started | — |
+| 24. Vanilla mobs AS plugins (1:1 dogfood) | v4 | 1/2 | In Progress|  |
 | 25. Crafting/recipes AS plugins (2nd-domain dogfood) | v4 | 0/? | Not started | — |
 | 26. Opt-in Python runtime | v4 | 0/? | Not started | — |
 | 27. Folia regionization | v4 | 0/? | Not started | — |
