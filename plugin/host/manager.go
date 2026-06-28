@@ -39,6 +39,19 @@ type loadedPlugin struct {
 type Manager struct {
 	plugins []*loadedPlugin
 	hooks   map[EventType][]Hook
+
+	// The value-returning RECIPE seam (Phase 25 — extends Emit's void dispatch
+	// to query-resolution). recipeMatcher/recipeRemaining are the plugin
+	// callables captured ONCE at load via set_recipe_matcher/set_recipe_remaining;
+	// recipeTable is the Go-parsed recipe table the server injects (SetRecipeTable)
+	// and the recipes() builtin hands back to the plugin (Starlark has no
+	// json/file builtin). All three follow the SAME lock-free discipline as
+	// hooks: WRITTEN only at load (the builtins capture on the load goroutine;
+	// SetRecipeTable runs before LoadDir), READ on the tick (Match/Remaining).
+	recipeMatcher   starlark.Callable
+	recipeRemaining starlark.Callable
+	recipeTable     starlark.Value
+	recipeOwner     string // the plugin that registered the matcher (for Unload)
 }
 
 // New returns an empty Manager with an initialized hook map.
@@ -77,9 +90,14 @@ func (m *Manager) LoadDirWith(root string, extra starlark.StringDict) error {
 		if man.Runtime != "starlark" {
 			continue // Phase 26 handles runtime=="python"; skip for the default build
 		}
-		// Predeclared = host builtins (log) + per-plugin register + caller extra.
+		// Predeclared = host builtins (log) + per-plugin register + the recipe
+		// seam builtins (set_recipe_matcher/set_recipe_remaining/recipes) +
+		// caller extra.
 		predeclared := hostBuiltins()
 		predeclared["register"] = m.makeRegisterBuiltin(man.Name)
+		predeclared["set_recipe_matcher"] = m.makeSetMatcherBuiltin(man.Name)
+		predeclared["set_recipe_remaining"] = m.makeSetRemainingBuiltin(man.Name)
+		predeclared["recipes"] = m.makeRecipesBuiltin()
 		for k, v := range extra {
 			predeclared[k] = v
 		}
@@ -116,6 +134,13 @@ func (m *Manager) Unload(name string) {
 		}
 	}
 	m.plugins = out
+
+	// Drop the recipe matcher/remaining if the unloaded plugin owned them.
+	if m.recipeOwner == name {
+		m.recipeMatcher = nil
+		m.recipeRemaining = nil
+		m.recipeOwner = ""
+	}
 }
 
 // PluginCount reports how many plugins are currently loaded. Exposed for tests
