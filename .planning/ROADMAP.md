@@ -59,7 +59,8 @@ Full phase details: [milestones/v3-ROADMAP.md](milestones/v3-ROADMAP.md).
  (completed 2026-06-28)
 - [x] **Phase 25: Crafting/recipes AS plugins (2nd-domain dogfood)** (PLUGIN-05) — the crafting system is built THROUGH the plugin API, not as a hardcoded Go subsystem: a recipe-provider plugin loads the jar-extracted recipes (shaped/shapeless/smelting/etc) and drives the crafting-grid result + the ResultSlot.onTake consumption (the slots exist in InventoryMenu today but the result is a no-op stub — `inventory_click.go`: "no recipes wired in v1"). This proves the plugin API is general across a SECOND domain (recipes/menus, not just entity AI) — the real test of "ultra-powerful". The 1:1 mandate carries: the recipe-match + consume logic stays a literal jar port (RecipeManager/CraftingMenu), just expressed via the plugin host. Includes the crafting_table block + 3×3 menu (vanilla only had the 2×2 inventory grid). Custom (non-vanilla) recipes fall out for free.
  (completed 2026-06-28)
-- [x] **Phase 26: Opt-in Python runtime** (PLUGIN-06) — `qur/gopy` @ `python3.14` (idiomatic CPython bindings via cgo/libpython) behind a `python` build tag so the **default binary stays pure-Go static (CGO=0)**. A bridge for HEAVY off-tick plugins only (never the per-tick hot path — cgo + GIL + non-determinism keep it off the tick). The same event/registration API as Starlark, so a plugin author picks the runtime per workload. (completed 2026-06-28)
+- [x] **Phase 26: Opt-in Python runtime** (PLUGIN-06) — `qur/gopy` @ `python3.14` (idiomatic CPython bindings via cgo/libpython) behind a `python` build tag so the **default binary stays pure-Go static (CGO=0)**. A bridge for HEAVY off-tick plugins only (never the per-tick hot path — cgo + GIL + non-determinism keep it off the tick). The same event/registration API as Starlark, so a plugin author picks the runtime per workload.
+ (completed 2026-06-28)
 - [ ] **Phase 27: Folia regionization** (REGION-01, folded from v3-deferral) — Leaf/Folia-style independent-region tick threads so the world ticks in parallel regions; the plugin call seam + the entity API must be region-aware (a plugin hook runs on its region's thread). This is the perf payoff that makes "ultra-efficient" real at scale, and it was always a v4 item.
 - [ ] **Phase 28: Plugin system visual + perf gate** (PLUGIN-07, autonomous:false) — a real client confirms: a custom non-vanilla mob plugin works, the vanilla-mobs-as-plugins path is behavior-identical, crafting (vanilla + a custom recipe) works through the plugin path, the event system fires correctly, and the perf target holds (the plugin layer adds no measurable per-tick cost vs Go-native; Folia regions scale). Closes v4.
 
@@ -161,7 +162,11 @@ Plans:
   1. The world ticks in independent parallel regions (Leaf/Folia-style region threads) (REGION-01)
   2. The plugin call seam + the entity API are region-aware — a plugin hook runs on its region's thread (REGION-01)
   3. The whole regionized tick + plugin path is Docker `-race` clean (REGION-01)
-**Plans**: TBD (set by `/gsd-plan-phase 27`)
+**Plans**: 3 plans in 3 waves (the operator's locked incremental path: extract → barrier → N=2)
+Plans:
+- [ ] 27-01-PLAN.md — STEP 1: extract the `region` struct at N=1 (entityStore/ChunkManager/scheduled ticks/levelRandom → region; per-region/global split explicit); behavior-neutral, existing suite unchanged + -race (Wave 1)
+- [ ] 27-02-PLAN.md — STEP 2: the conc fan-out/barrier coordinator at N=1 (add conc pure-Go; gametime advanced once by the coordinator; the global-region post-phase; region-panic isolation); still behavior-neutral + -race (Wave 2)
+- [ ] 27-03-PLAN.md — STEP 3 (THE GATE): flip to N=2 — static chunk→region hash, cross-region transfer at the barrier, async-rejoin re-routing, cross-region tracker, region-aware Emit; parallel-regions + hook-on-owning-region + transfer gates + Docker -race (Wave 3)
 **Research**: The Folia region model (region ownership of chunks/entities, cross-region transfer), how the tick-owned plugin seam re-homes onto region threads.
 
 ### Phase 28: Plugin system visual + perf gate

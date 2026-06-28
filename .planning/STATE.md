@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v4
 milestone_name: Plugin / Scripting System
-status: verifying
+status: executing
 stopped_at: Completed 24-02-PLAN.md — Phase 24 (vanilla-mobs-as-plugins) COMPLETE
-last_updated: "2026-06-28T19:08:03.453Z"
-last_activity: 2026-06-28
+last_updated: "2026-06-28T19:51:25.382Z"
+last_activity: 2026-06-28 -- Phase 27 execution started
 progress:
   total_phases: 8
   completed_phases: 6
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-23)
 
 **Core value:** A Go server that an unmodified vanilla Minecraft 26.2 client can connect to, log into, and play in a persistent, ticking world — architected from day one for Leaf-style async optimizations.
-**Current focus:** Phase 26 — opt-in-python-runtime
+**Current focus:** Phase 27 — folia-regionization
 
 ## Current Position
 
-Phase: 26 (opt-in-python-runtime) — EXECUTING
-Plan: 2 of 2
-Status: Phase complete — ready for verification
-Last activity: 2026-06-28
+Phase: 27 (folia-regionization) — EXECUTING
+Plan: 1 of 3
+Status: Executing Phase 27
+Last activity: 2026-06-28 -- Phase 27 execution started
 
 ### ⚠️ DONE this session — 25-03 PLUGIN-05 close (cooking/stonecutting BLOCK build-or-defer)
 
