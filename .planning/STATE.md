@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v4
 milestone_name: Plugin / Scripting System
-status: verifying
-stopped_at: Completed 25-03-PLAN.md — Phase 25 (crafting-recipes-as-plugins) COMPLETE
-last_updated: "2026-06-28T17:57:06.026Z"
-last_activity: 2026-06-28
+status: executing
+stopped_at: Completed 24-02-PLAN.md — Phase 24 (vanilla-mobs-as-plugins) COMPLETE
+last_updated: "2026-06-28T18:11:17.026Z"
+last_activity: 2026-06-28 -- Phase 26 execution started
 progress:
   total_phases: 8
   completed_phases: 5
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-23)
 
 **Core value:** A Go server that an unmodified vanilla Minecraft 26.2 client can connect to, log into, and play in a persistent, ticking world — architected from day one for Leaf-style async optimizations.
-**Current focus:** Phase 25 — crafting-recipes-as-plugins
+**Current focus:** Phase 26 — opt-in-python-runtime
 
 ## Current Position
 
-Phase: 25 (crafting-recipes-as-plugins) — COMPLETE
-Plan: 3 of 3
-Status: Phase complete — ready for verification
-Last activity: 2026-06-28
+Phase: 26 (opt-in-python-runtime) — EXECUTING
+Plan: 1 of 2
+Status: Executing Phase 26
+Last activity: 2026-06-28 -- Phase 26 execution started
 
 ### ⚠️ DONE this session — 25-03 PLUGIN-05 close (cooking/stonecutting BLOCK build-or-defer)
 
@@ -45,6 +45,7 @@ this plan audited each cooking/stonecutting type and BUILT the feasible block, D
   matchability — the dogfood) AND **server-side-picked** (the parsed `selectByInput` list — because
   `Match` returns only the first 1×1 match, and vanilla picks server-side too). New files
   server/stonecutter_menu.go + server/cooking_block.go.
+
 - **smelting/blasting/smoking/campfire_cooking DEFERRED** (cited, deferred-blocks.md): the furnace
   needs a per-tick block-entity drive seam (NONE exists — `grep serverTick/BlockEntityTick` → 0) +
   a FuelValues fuel table (NONE exists) + BE fields/NBT (the BE types are empty struct markers). A
