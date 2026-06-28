@@ -1,5 +1,7 @@
 package attribute
 
+import "github.com/imhinotori/sulfur/data/entity"
+
 // defaults.go — the port of net.minecraft.world.entity.ai.attributes.DefaultAttributes plus the
 // per-entity createAttributes builders, for the entities Sulfur spawns (Player, Witch, Cat,
 // Villager, Zombie, Silverfish). Each builder chain is a method-for-method port of the jar bytecode
@@ -145,6 +147,93 @@ func silverfishSupplier() *Supplier {
 		Build()
 }
 
+// pigSupplier is the port of Pig.createAttributes() : Animal.createAnimalAttributes() + MAX_HEALTH
+// 10.0 + MOVEMENT_SPEED 0.25 (jar bytecode this session:
+// net/minecraft/world/entity/animal/pig/Pig.createAttributes — ldc2_w 10.0d, 0.25d).
+func pigSupplier() *Supplier {
+	return createAnimalAttributes().
+		AddValue(MaxHealth, 10.0).
+		AddValue(MovementSpeed, 0.25).
+		Build()
+}
+
+// cowSupplier is the port of AbstractCow.createAttributes() : Animal.createAnimalAttributes() +
+// MAX_HEALTH 10.0 + MOVEMENT_SPEED 0.20000000298023224 (jar:
+// net/minecraft/world/entity/animal/cow/AbstractCow.createAttributes — ldc2_w 10.0d, then the
+// float-widened double 0.20000000298023224d, preserved bit-for-bit). createAttributes lives on
+// AbstractCow, which Cow extends.
+func cowSupplier() *Supplier {
+	return createAnimalAttributes().
+		AddValue(MaxHealth, 10.0).
+		AddValue(MovementSpeed, 0.20000000298023224).
+		Build()
+}
+
+// sheepSupplier is the port of Sheep.createAttributes() : Animal.createAnimalAttributes() +
+// MAX_HEALTH 8.0 + MOVEMENT_SPEED 0.23000000417232513 (jar:
+// net/minecraft/world/entity/animal/sheep/Sheep.createAttributes — ldc2_w 8.0d, then the
+// float-widened double 0.23000000417232513d, preserved bit-for-bit).
+func sheepSupplier() *Supplier {
+	return createAnimalAttributes().
+		AddValue(MaxHealth, 8.0).
+		AddValue(MovementSpeed, 0.23000000417232513).
+		Build()
+}
+
+// chickenSupplier is the port of Chicken.createAttributes() : Animal.createAnimalAttributes() +
+// MAX_HEALTH 4.0 + MOVEMENT_SPEED 0.25 (jar:
+// net/minecraft/world/entity/animal/chicken/Chicken.createAttributes — ldc2_w 4.0d, 0.25d).
+func chickenSupplier() *Supplier {
+	return createAnimalAttributes().
+		AddValue(MaxHealth, 4.0).
+		AddValue(MovementSpeed, 0.25).
+		Build()
+}
+
+// skeletonSupplier is the port of AbstractSkeleton.createAttributes() : Monster.createMonsterAttributes()
+// + MOVEMENT_SPEED 0.25 (jar:
+// net/minecraft/world/entity/monster/skeleton/AbstractSkeleton.createAttributes — ldc2_w 0.25d).
+// createAttributes lives on AbstractSkeleton, which Skeleton extends (Skeleton has no own override).
+func skeletonSupplier() *Supplier {
+	return createMonsterAttributes().
+		AddValue(MovementSpeed, 0.25).
+		Build()
+}
+
+// creeperSupplier is the port of Creeper.createAttributes() : Monster.createMonsterAttributes() +
+// MOVEMENT_SPEED 0.25 (jar: net/minecraft/world/entity/monster/Creeper.createAttributes — ldc2_w
+// 0.25d).
+func creeperSupplier() *Supplier {
+	return createMonsterAttributes().
+		AddValue(MovementSpeed, 0.25).
+		Build()
+}
+
+// spiderSupplier is the port of Spider.createAttributes() : Monster.createMonsterAttributes() +
+// MAX_HEALTH 16.0 + MOVEMENT_SPEED 0.30000001192092896 (jar:
+// net/minecraft/world/entity/monster/spider/Spider.createAttributes — ldc2_w 16.0d, then the
+// float-widened double 0.30000001192092896d, preserved bit-for-bit).
+func spiderSupplier() *Supplier {
+	return createMonsterAttributes().
+		AddValue(MaxHealth, 16.0).
+		AddValue(MovementSpeed, 0.30000001192092896).
+		Build()
+}
+
+// livingFallbackSupplier is the port of LivingEntity.createLivingAttributes() (the gameplay subset):
+// the base attribute set EVERY LivingEntity has. Vanilla's DefaultAttributes registers a supplier for
+// every living EntityType; Sulfur ports the common per-type suppliers above and leans on THIS fallback
+// for any still-unported living type, so NewMapForEntity NEVER returns nil for a living entity (the
+// operator-mandated "todos deberían estar disponibles" guarantee). It COMPOSES the real
+// createLivingAttributes() builder (not a baked value) so a future per-type port simply adds to the
+// `suppliers` map. Cite: net.minecraft.world.entity.LivingEntity.createLivingAttributes(). The full
+// vanilla method also adds the non-gameplay attributes (STEP_HEIGHT, SCALE, GRAVITY, JUMP_STRENGTH,
+// SAFE_FALL_DISTANCE, FALL_DAMAGE_MULTIPLIER, OXYGEN_BONUS, BURNING_TIME, …) — the CITED omission
+// documented in the file header (no live consumer yet; each equals its registration default).
+func livingFallbackSupplier() *Supplier {
+	return createLivingAttributes().Build()
+}
+
 // suppliers is the port of DefaultAttributes.SUPPLIERS: the EntityType-name -> Supplier table. Keyed
 // by the entity registry name (data/entity.Entity.Name, e.g. "witch"), which is the stable identity
 // the live entity carries. Only the entities Sulfur spawns are registered; getSupplier returns
@@ -161,6 +250,54 @@ var suppliers = map[string]*Supplier{
 	"villager":   villagerSupplier(),
 	"zombie":     zombieSupplier(),
 	"silverfish": silverfishSupplier(),
+	// SUB-ATTRIB coverage fix (Phase 23): the common animals/monsters a plugin would plausibly
+	// spawn, each a 1:1 jar copy of that type's createAttributes() (verified bytecode this session).
+	"pig":      pigSupplier(),
+	"cow":      cowSupplier(),
+	"sheep":    sheepSupplier(),
+	"chicken":  chickenSupplier(),
+	"skeleton": skeletonSupplier(),
+	"creeper":  creeperSupplier(),
+	"spider":   spiderSupplier(),
+}
+
+// livingCategories is the set of data/entity.Entity.Type values that correspond to a vanilla
+// MobCategory whose members are LivingEntity (and therefore carry a DefaultAttributes supplier). It
+// mirrors vanilla's MobCategory enum minus MISC: every living mob falls in one of these categories,
+// while "misc" (items, projectiles, boats, area-effect clouds, …) are non-living Entity subclasses
+// with NO attribute map. Derived from the distinct Type values in data/entity (creature, monster,
+// ambient, axolotls, water_creature, water_ambient, underground_water_creature) — "misc" is the only
+// non-living category and is deliberately ABSENT here.
+var livingCategories = map[string]bool{
+	"creature":                   true,
+	"monster":                    true,
+	"ambient":                    true,
+	"axolotls":                   true,
+	"water_creature":             true,
+	"water_ambient":              true,
+	"underground_water_creature": true,
+}
+
+// entityByName indexes data/entity.ByID by registry name, so NewMapForEntity can resolve a type's
+// MobCategory (Type) from its name to gate the living-fallback. Built once at init from the generated
+// table (read-only after init; concurrent tick reads are safe with no lock).
+var entityByName = func() map[string]*entity.Entity {
+	m := make(map[string]*entity.Entity, len(entity.ByID))
+	for _, e := range entity.ByID {
+		m[e.Name] = e
+	}
+	return m
+}()
+
+// isLivingType reports whether the entity registry name denotes a LIVING entity type (a member of a
+// living MobCategory), which in vanilla always has a DefaultAttributes supplier. An unknown name, or a
+// "misc"-category type (item/arrow/boat/…), is NOT living and gets no fallback attribute map.
+func isLivingType(entityName string) bool {
+	e, ok := entityByName[entityName]
+	if !ok {
+		return false
+	}
+	return livingCategories[e.Type]
 }
 
 // GetSupplier is the port of DefaultAttributes.getSupplier(EntityType): the default attribute
@@ -179,14 +316,28 @@ func HasSupplier(entityName string) bool {
 }
 
 // NewMapForEntity builds a per-entity AttributeMap for an entity type (by registry name), backed by
-// that type's DefaultAttributes supplier. Returns nil when the type has no registered supplier (an
-// unported entity) — the caller must nil-check (a nil map means "no attributes", and every
-// getAttributeValue helper falls back to a default for a nil map, exactly as a modifier-free read
-// would). This is the single constructor the live entity uses to attach its attribute map at spawn.
+// that type's DefaultAttributes supplier. This is the single constructor the live entity uses to
+// attach its attribute map at spawn.
+//
+// SUB-ATTRIB coverage fix (Phase 23): vanilla's DefaultAttributes registers a supplier for EVERY
+// LivingEntity type, so a pig (or any living mob) always gets faithful, type-correct attributes. To
+// match that guarantee without porting every single type up front:
+//
+//   - A type with a dedicated supplier (the table above) gets that supplier's exact createAttributes
+//     values (pig -> Pig.createAttributes, etc.).
+//   - A LIVING type with NO dedicated supplier falls back to livingFallbackSupplier()
+//     (LivingEntity.createLivingAttributes — the base set every living entity has), so the map is
+//     NEVER nil for a living type. This is the operator-mandated "todos deberían estar disponibles".
+//   - A NON-LIVING type ("misc": item/arrow/boat/…) returns nil — it has no attributes in vanilla, and
+//     the caller's nil-check degrades to "no attribute map", exactly the faithful outcome.
 func NewMapForEntity(entityName string) *Map {
-	supplier, ok := GetSupplier(entityName)
-	if !ok {
-		return nil
+	if supplier, ok := GetSupplier(entityName); ok {
+		return NewMap(supplier)
 	}
-	return NewMap(supplier)
+	if isLivingType(entityName) {
+		// Faithful fallback: every LivingEntity has at least the base createLivingAttributes set.
+		return NewMap(livingFallbackSupplier())
+	}
+	// Non-living (or unknown) type: no attributes (vanilla has no DefaultAttributes supplier).
+	return nil
 }
