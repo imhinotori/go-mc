@@ -155,7 +155,7 @@ func readStatesPalette(palette []save.BlockState, data []uint64) (paletteData *P
 		}
 		statePalette[i] = s
 	}
-	paletteData = NewStatesPaletteContainerWithData(16*16*16, data, statePalette)
+	paletteData = NewStatesPaletteContainerFromSave(16*16*16, data, statePalette)
 	return
 }
 
@@ -167,7 +167,7 @@ func readBiomesPalette(palette []save.BiomeState, data []uint64) (*PaletteContai
 			return nil, err
 		}
 	}
-	return NewBiomesPaletteContainerWithData(4*4*4, data, biomesRawPalette), nil
+	return NewBiomesPaletteContainerFromSave(4*4*4, data, biomesRawPalette), nil
 }
 
 func countNoneAirBlocks(sec *Section) (blockCount int16) {
@@ -293,27 +293,82 @@ func blockEntityFullMetadata(data nbt.RawMessage, id string, x, y, z int) (nbt.R
 
 func writeStatesPalette(paletteData *PaletteContainer[BlocksState]) (palette []save.BlockState, data []uint64, err error) {
 	rawPalette := paletteData.palette.export()
-	palette = make([]save.BlockState, len(rawPalette))
 
+	// GLOBAL/DIRECT palette guard (BUG-5): when a section's palette grew past the hash range
+	// (bits >= 9 for blocks), the in-memory container switches to the globalPalette, whose
+	// export() is EMPTY and whose data array holds DIRECT state ids (not palette indices). The
+	// Anvil format has NO direct block-state format — block_states ALWAYS carries an explicit
+	// palette that the data array indexes into. Writing the empty export + the direct-id data
+	// produced a 0-length palette with a non-empty data array: a structurally invalid section
+	// that, on reload, indexed garbage state ids → the client's IndexOutOfBounds in
+	// PalettedContainer.read on the next chunk send (the respawn crash). Rebuild an explicit
+	// palette from the distinct states actually present and RE-INDEX the data against it, exactly
+	// as vanilla's Anvil PalettedContainer.write does for a heavily-edited section.
+	if len(rawPalette) == 0 {
+		const length = 16 * 16 * 16
+		index := make(map[BlocksState]int)
+		var distinct []BlocksState
+		ids := make([]int, length)
+		for i := 0; i < length; i++ {
+			st := paletteData.Get(i)
+			idx, ok := index[st]
+			if !ok {
+				idx = len(distinct)
+				index[st] = idx
+				distinct = append(distinct, st)
+			}
+			ids[i] = idx
+		}
+		rawPalette = distinct
+		// Anvil block-state bits = max(4, ceil(log2(paletteLen))) (PalettedContainer's strategy
+		// floors block storage at 4 bits). calcBitsPerValue on reload re-derives this from the
+		// data length, so the BitStorage below must use the SAME width.
+		storageBits := 4
+		for (1 << storageBits) < len(distinct) {
+			storageBits++
+		}
+		bs := NewBitStorage(storageBits, length, nil)
+		for i := 0; i < length; i++ {
+			bs.Set(i, ids[i])
+		}
+		palette, err = encodeStatePalette(rawPalette)
+		if err != nil {
+			return nil, nil, err
+		}
+		raw := bs.Raw()
+		data = make([]uint64, len(raw))
+		copy(data, raw)
+		return palette, data, nil
+	}
+
+	palette, err = encodeStatePalette(rawPalette)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	data = make([]uint64, len(paletteData.data.Raw()))
+	copy(data, paletteData.data.Raw())
+	return palette, data, nil
+}
+
+// encodeStatePalette converts a slice of state ids into the Anvil save.BlockState palette
+// entries (Name + Properties), shared by the local-palette and rebuilt-global-palette paths.
+func encodeStatePalette(rawPalette []BlocksState) ([]save.BlockState, error) {
+	palette := make([]save.BlockState, len(rawPalette))
 	var buffer bytes.Buffer
 	for i, v := range rawPalette {
 		b := block.StateList[v]
 		palette[i].Name = b.ID()
 
 		buffer.Reset()
-		err = nbt.NewEncoder(&buffer).Encode(b, "")
-		if err != nil {
-			return
+		if err := nbt.NewEncoder(&buffer).Encode(b, ""); err != nil {
+			return nil, err
 		}
-		_, err = nbt.NewDecoder(&buffer).Decode(&palette[i].Properties)
-		if err != nil {
-			return
+		if _, err := nbt.NewDecoder(&buffer).Decode(&palette[i].Properties); err != nil {
+			return nil, err
 		}
 	}
-
-	data = make([]uint64, len(paletteData.data.Raw()))
-	copy(data, paletteData.data.Raw())
-	return
+	return palette, nil
 }
 
 func writeBiomesPalette(paletteData *PaletteContainer[BiomesState]) (palette []save.BiomeState, data []uint64, err error) {

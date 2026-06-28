@@ -33,6 +33,72 @@ func NewStatesPaletteContainer(length int, defaultValue BlocksState) *PaletteCon
 	}
 }
 
+// NewStatesPaletteContainerFromSave builds a block-state container from an ANVIL section, where
+// the data array holds PALETTE INDICES into an explicit palette (never raw state ids — Anvil has
+// no direct format). It resolves each index to its real state id and rebuilds the IN-MEMORY
+// container in the same representation generation produces, so the subsequent network WriteTo
+// emits the correct wire format:
+//   - <=256 distinct states -> a linear/hash palette (indexed), as before;
+//   - >256 distinct states  -> the globalPalette with RAW state ids in the data (the direct
+//     format the 26.2 client expects at bits>=9).
+//
+// BUG-5: the old reload used the NETWORK constructor, which at bits>=9 built a globalPalette but
+// LEFT the data holding Anvil palette INDICES. globalPalette.value(i)=i returned the index as the
+// state id, so a >256-entry section read back garbage (and the next chunk send crashed the client
+// with IndexOutOfBounds in PalettedContainer.read). Resolving indices->state ids here fixes both
+// the in-memory reads and the wire encode.
+func NewStatesPaletteContainerFromSave(length int, data []uint64, pat []BlocksState) *PaletteContainer[BlocksState] {
+	resolved := resolveAnvilCells(length, data, pat)
+	c := NewStatesPaletteContainer(length, 0)
+	if len(pat) == 1 {
+		c.palette = &singleValuePalette[BlocksState]{v: pat[0]}
+		return c
+	}
+	for i, st := range resolved {
+		c.Set(i, st)
+	}
+	return c
+}
+
+// NewBiomesPaletteContainerFromSave is the biome analogue of NewStatesPaletteContainerFromSave.
+func NewBiomesPaletteContainerFromSave(length int, data []uint64, pat []BiomesState) *PaletteContainer[BiomesState] {
+	resolved := resolveAnvilCells(length, data, pat)
+	c := NewBiomesPaletteContainer(length, 0)
+	if len(pat) == 1 {
+		c.palette = &singleValuePalette[BiomesState]{v: pat[0]}
+		return c
+	}
+	for i, st := range resolved {
+		c.Set(i, st)
+	}
+	return c
+}
+
+// resolveAnvilCells expands an Anvil (palette, indexData) section into the per-cell value list by
+// reading each cell's palette index out of the data BitStorage and mapping it through the palette.
+// The index width is derived from the data length (calcBitsPerValue) exactly as the network read
+// does. A single-entry (or empty-data) palette yields every cell = pat[0] (or the zero value).
+func resolveAnvilCells[T State](length int, data []uint64, pat []T) []T {
+	out := make([]T, length)
+	if len(pat) <= 1 {
+		if len(pat) == 1 {
+			for i := range out {
+				out[i] = pat[0]
+			}
+		}
+		return out
+	}
+	bits := calcBitsPerValue(length, len(data))
+	bs := NewBitStorage(bits, length, data)
+	for i := 0; i < length; i++ {
+		idx := bs.Get(i)
+		if idx >= 0 && idx < len(pat) {
+			out[i] = pat[idx]
+		}
+	}
+	return out
+}
+
 func NewStatesPaletteContainerWithData(length int, data []uint64, pat []BlocksState) *PaletteContainer[BlocksState] {
 	var p palette[BlocksState]
 	n := calcBitsPerValue(length, len(data))

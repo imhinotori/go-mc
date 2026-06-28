@@ -1,6 +1,9 @@
 package block
 
 func IsAir(s StateID) bool {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return false // out-of-range id (corrupt/garbled section): not air, never panic
+	}
 	return IsAirBlock(StateList[s])
 }
 
