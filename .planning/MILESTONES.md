@@ -1,5 +1,33 @@
 # Milestones — Sulfur
 
+## v3 Online-mode + Operator UX + Structure polish (Shipped: 2026-06-28)
+
+**Phases completed:** 4 phases, 15 plans, 28 tasks
+
+**Key accomplishments:**
+
+- Wired the three already-built-but-disconnected player-join seams — players now enter the entity store and broadcast their tab-list entry bidirectionally (so a second client renders them), reconnecting players spawn at their persisted position via the single bootstrap teleport, and the inventory window populates on the first tick — plus laid the exact Wave-2 seam surface (struct fields, dispatcher hooks, and two disjoint stub files) so 17-02/17-03 overwrite without any shared-file conflict.
+- Ported the vanilla FlowingFluid water simulation from the unobfuscated 26.2 jar — the level encoding (getLegacyLevel), the getNewLiquid/spread/spreadToSides/getSlopeDistance flow algorithm with jar-verified constants (dropOff=1, tickDelay=5, slopeFindDistance=4), and a net-new deterministic scheduled-block-tick queue it propagates on — plus the 26.2-renamed EntityFluidInteraction player physics (0.8 horizontal slowdown + 0.014 buoyant push); water now flows with vanilla-faithful ring decrement, terminates deterministically, and a player in water is slowed and buoyant.
+- Wired the two missing damage paths into the already-built combat loop: a PvP attack (ServerboundAttack, jar-confirmed as a VarInt-entityId-only packet in 26.2) now resolves the named target to a tickPlayer, reach-gates it, and applies server-authoritative bare-hand damage through the existing applyDamage->die flow; and a per-player fall-damage tick accumulates airborne descent and deals floor(fallDistance-3.0) on landing — all by overwriting the 17-01 fall_damage.go stub and adding two applyInput cases, with zero edits to any shared tick-pipeline file.
+- Breaking a block now spawns a visible, tracker-broadcast entity.Item (ID 71) at the block center carrying the jar-derived ITEM data-value (SynchedEntityData index 8, EntityDataSerializers.ITEM_STACK id 7) so the dropped stack renders instead of spawning invisible — the drop is server-derived from the broken block via a v1 1:1 block->item map.
+- [Rule 2 - Missing critical functionality] In-game respawn placement + all-ocean fallback.
+- 1. [Rule 1 - Bug] DarkOakFoliagePlacer collapsed all canopy rows onto one Y
+- 1. [Rule 2 - Critical correctness] Routed fall damage through the i-frame/armor gate
+- Commit:
+- 1. [Rule 1 - Bug] Existing tests pinned the OLD buggy "stone floor" placement
+- One-liner:
+- Closed the three 1:1 deltas in the inherited login-crypto path — the missing 776 EncryptionRequest `shouldAuthenticate` boolean (the only hard blocker against a real 26.2 client), the 16->4-byte challenge, and the un-encoded hasJoined query — then wired the `--online-mode` operator flag and locked the digest + encrypted handshake with offline tests.
+- Task 1 — wire the property propagation (commit e1a616c4):
+- 1. [Rule 3 - Blocking] x/term + the charm deps evicted by `go mod tidy`
+- A pure, self-contained `level/loot` package that reproduces vanilla Minecraft 26.2 chest/block-drop contents per seed — the LootTable/LootPool roll engine + LegacyRandomSource draw order ported byte-for-byte from the jar, proven by a bytecode-hand-traced golden (simple_dungeon @ seed 123456789).
+- Block-break drops and structure chests both now flow through the single `level/loot.Roll` evaluator: the v1 hardcoded `blockDropTable` map is DELETED and replaced by a roll over the embedded `minecraft:blocks/<name>` tables (with the block-table delta ported), and `createChest` emits a chest BlockEntity carrying `{LootTable, LootTableSeed}` that rolls LAZILY on first open via a ported `unpackLootTable`.
+- StructureStarts now round-trip region NBT (createTag <-> loadStaticStart) with full per-piece Children, so a reloaded structure chunk reads its starts from disk instead of recomputing — with recompute as the always-valid coherence authority (a missing/garbled tag falls back, never panics).
+- Structures now have their inhabitants: a swamp hut spawns a live witch + cat, a stronghold places a silverfish SPAWNER block, and a village spawns villagers + a cat from its template entity list — all crossing the off-tick worldgen -> tick entity store via a new immutable `ChunkResult.Spawns` slice (the worker only RECORDS a SpawnRequest; the tick performs the only store add, where GAMEPLAY-01's tracker broadcasts AddEntity for free), with reload-no-double-spawn guards that respect Sulfur's per-chunk re-run model.
+- Structures now adapt to terrain (STRUCT-POLISH-03): the ported Beardifier density contribution raises terrain to meet a floating village (beard_thin) and digs terrain to bury a stronghold (bury), threaded as an additive non-interpolated term into the noisechunk fill — with the structure STARTS computed PRE-fill to resolve the FILL-vs-Decorate ordering hazard, and temples/igloo/mineshaft/swamp-hut (NONE) staying byte-identical.
+- Right-clicking a structure chest now resolves the chest BlockEntity from its world position, rolls the stored `{LootTable, LootTableSeed}` lazily on first open (one-shot `unpackLootTable`), allocates a per-player windowId, and opens a `generic_9x3` container menu on the client (`ClientboundOpenScreen` + `ContainerSetContent` with the rolled 27 chest slots + the 36 player slots) — and clicks on that window move items between the chest and the player, with close freeing the windowId while the chest contents persist. This is the net-new interaction subsystem 20-02 explicitly split out, making structure-chest loot visible and takeable in-game (the STRUCT-POLISH-01 user-facing proof).
+
+---
+
 ## v2 Worldgen Features + Structures (Shipped: 2026-06-25)
 
 **Phases completed:** 7 phases, 22 plans, 30 tasks
