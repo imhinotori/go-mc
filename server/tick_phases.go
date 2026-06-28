@@ -1,12 +1,8 @@
 package server
 
 import (
-	"log"
-	"runtime/debug"
-
 	"github.com/imhinotori/sulfur/level"
 	pk "github.com/imhinotori/sulfur/net/packet"
-	"github.com/imhinotori/sulfur/plugin/host"
 	"github.com/imhinotori/sulfur/world"
 )
 
@@ -16,52 +12,13 @@ import (
 // request, not for a chunk that is merely still generating.
 const chunkLoadGraceTicks = 200
 
-// tickOnce runs ONE logical tick: the explicit, fixed-order phase pipeline (TICK-01).
-// drainInbound is intentionally NOT here — Run drains inbound once per wake before
-// calling tickOnce, kept separate so input is drained per wake, not per catch-up
-// step. Each phase is an empty stub today (later phases fill them); the call ORDER
-// is the load-bearing contract asserted by TestTickPhaseOrder.
-func (t *TickLoop) tickOnce() {
-	start := t.clock.Now() // capture via the injectable clock for MSPT (TICK-06)
-
-	// Resilience guard: a panic in any phase (a malformed mob, a bad packet build, a nil deref in
-	// new AI/spawn code) must NOT kill the tick goroutine — that would freeze the whole world and
-	// disconnect EVERY player (keepalive stops). Recover, log the stack, and let the loop continue
-	// to the next tick. This is a safety net, not a license to ignore panics: a logged panic is a
-	// real bug to fix, but one bad mob should never take down the server.
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("tick panic recovered (gametime=%d): %v\n%s", t.gametime, r, debug.Stack())
-			t.gametime++ // still advance time so the anchor (TICK-02) does not stall on a bad tick
-		}
-	}()
-
-	t.resolveSubtickInputs() // no-op slot in this plan; 03-02 fills the subtick buffer
-	t.tickWorld()            // Phase 4 fills
-	t.tickChunks()           // Phase 4 fills
-	t.tickEntities()         // Phase 6 fills
-	t.tickAI()               // Phase 7 fills
-	t.tickPhysics()          // Phase 6 fills
-	t.applyAsyncResults()    // NO-OP today (asyncIn nil); Phase 8 drains result channels here
-	t.tickEntityMovement()   // GAMEPLAY-07: ServerEntity.sendChanges → delta move packets to trackers
-	t.tickEquipment()        // GAMEPLAY-07: detectEquipmentUpdates → SetEquipment to trackers
-	t.trace("tracker.Tick")  // record the tracking phase at its call site
-	t.tracker.Tick()         // synchronous stub today; Phase 8 swaps the executor
-	t.flushOutbound()        // enqueue clientbound via Client.Send (no-op until players join)
-
-	t.gametime++ // EXACTLY once per logical tick — anchors TICK-02
-
-	// PLUGIN-02 (Plan 22) on_tick seam: the ONE per-tick emit, fired ONCE per tick TOTAL (not once
-	// per entity) at the END of tickOnce after gametime++. Emit's zero-subscriber guard makes this
-	// free on a server with no on_tick hook (a single map read, zero alloc) — so an unsubscribed
-	// server pays nothing. Nil-guarded; payload = the current gametime as a frozen scalar. This is
-	// the SOLE per-tick emit — every other seam fires on a discrete occurrence, never per tick.
-	if t.plugins != nil {
-		t.plugins.Emit(host.EventTick, host.TickEvent{Tick: int(t.gametime)})
-	}
-
-	t.recordMSPT(t.clock.Now().Sub(start)) // publish the read-only telemetry snapshot (TICK-06)
-}
+// tickOnce — the ONE logical tick — is the Folia coordinator (Phase-27 STEP-2): it fans out the
+// region tick(s) via conc, BARRIERS, runs the cross-region/global post-phase, and advances the
+// shared gametime EXACTLY ONCE. It now lives in region_coordinator.go alongside region.tick (the
+// per-region pipeline it fans out). The phase methods below (resolveSubtickInputs, tickWorld,
+// tickChunks, tickEntities, tickAI, tickPhysics, applyAsyncResults, the post-phase) are unchanged;
+// the coordinator sequences them in the byte-identical observable order (TestTickPhaseOrder).
+// drainInbound is intentionally NOT in the tick — Run drains inbound once per wake before stepping.
 
 // applyAsyncResults is the async rejoin seam (TICK-05). It drains BOTH result channels on the
 // OWNER goroutine, NON-BLOCKINGLY, applying each immutable result via applyTo — WITHOUT reordering
