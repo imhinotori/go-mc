@@ -358,6 +358,7 @@ None yet.
 
 - Bleeding-edge risk: proto 776 post-dates go-mc, the wiki, and training data. All exact 776 byte layouts must be jar-derived/capture-diffed, not asserted from memory. Affects Phases 1, 2, 4, 5.
 - Phases flagged for deeper per-phase research (`/gsd-research-phase`): 1 (codegen retarget), 2 (Configuration registry set), 4 (chunk section layout), 5 (teleport/spawn layout), 9 (vanilla-parity worldgen).
+- **FLAKE (own it, fix after v4 autonomous run):** `TestServerAiStepWalksToGoalTarget` (server/navigation_test.go, the AI-nav subsystem) intermittently fails under full-suite load, passes 5/5 on re-run + in isolation + at the pre-Phase-22 parent commit. NOT a Phase-22 regression (the PLUGIN-02 seams are additive guarded one-liners). Pre-existing low-frequency AI-navigation timing flake — investigate + harden the AI-nav test (timed receive / determinism) once the v4 phase chain completes.
 
 ## Deferred Items
 
