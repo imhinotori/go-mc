@@ -109,13 +109,151 @@ func (t *TickLoop) clickedChest(p *tickPlayer, cl *chestLoot, slotNum int16, but
 // or unsupported input is a no-op, never a panic — the authoritative content is re-sent regardless).
 func (t *TickLoop) doChestClick(p *tickPlayer, cl *chestLoot, inv *Inventory, i, j, input int) {
 	switch input {
-	case containerInputPickup:
-		t.chestPickup(p, cl, inv, i, j)
-	case containerInputQuickMove:
-		t.chestQuickMove(p, cl, inv, i)
+	case containerInputQuickCraft:
+		t.doChestQuickCraft(p, cl, inv, i, j)
+	case containerInputPickup, containerInputQuickMove:
+		// A PICKUP/QUICK_MOVE while a drag is mid-flight resets the drag and returns (doClick
+		// @547-560). Mirrors the player engine's guard so a chest drag cancels cleanly.
+		if inv.quickcraftStatus != 0 {
+			inv.resetQuickCraft()
+			return
+		}
+		if input == containerInputPickup {
+			t.chestPickup(p, cl, inv, i, j)
+		} else {
+			t.chestQuickMove(p, cl, inv, i)
+		}
 	case containerInputThrow:
 		t.chestThrow(p, cl, inv, i, j)
 	}
+}
+
+// chestQuickRef is the chest-window analogue of menuSlot for the QUICK_CRAFT (mouse-drag) engine:
+// it wraps a resolved chest-window slot (chest container OR player inventory cell) so the drag
+// state machine can read/write/space-check it uniformly. mayPlace is always true (a chest/inv slot
+// accepts any item — there is no armor/result restriction in this window), matching Slot.mayPlace
+// for a ChestMenu/Inventory slot.
+type chestQuickRef struct {
+	ref chestSlotRef
+}
+
+func (q chestQuickRef) hasItem() bool                     { return !stackEmpty(q.ref.get()) }
+func (q chestQuickRef) getItem() component.SlotData       { return q.ref.get() }
+func (q chestQuickRef) set(s component.SlotData)          { q.ref.set(s) }
+func (q chestQuickRef) maxStack(s component.SlotData) int { return chestSlotMax(s) }
+
+// doChestQuickCraft ports the QUICK_CRAFT drag state machine (doClick offsets 14-544) over the OPEN
+// CHEST window, distributing the carried stack across the dragged set of chest+inventory slots —
+// the operation the operator reported missing ("no puedo dejar varios items arrastrando"). The drag
+// STATE (quickcraftStatus/Type/Slots) is the player inventory's, exactly as the player engine uses
+// it (AbstractContainerMenu owns one drag at a time; the open chest IS that one menu). Each slot id
+// is resolved through chestResolveSlot so it addresses either a chest cell (0..26) or a player cell
+// (27..62). 1:1 with doClickQuickCraft, re-expressed over the two-container chest view.
+func (t *TickLoop) doChestQuickCraft(p *tickPlayer, cl *chestLoot, inv *Inventory, i, j int) {
+	header := getQuickcraftHeader(j)
+	prevStatus := inv.quickcraftStatus
+	inv.quickcraftStatus = header
+
+	if !((prevStatus == 1 && inv.quickcraftStatus == 2) || (prevStatus == inv.quickcraftStatus)) {
+		inv.resetQuickCraft()
+		return
+	}
+	if stackEmpty(inv.getCarried()) {
+		inv.resetQuickCraft()
+		return
+	}
+
+	switch inv.quickcraftStatus {
+	case 0: // START
+		inv.quickcraftType = getQuickcraftType(j)
+		if isValidQuickcraftType(inv.quickcraftType, p) {
+			inv.quickcraftStatus = 1
+			inv.quickcraftSlots = inv.quickcraftSlots[:0]
+		} else {
+			inv.resetQuickCraft()
+		}
+		return
+
+	case 1: // ADD slot i to the drag set
+		ref := chestResolveSlot(cl, inv, i)
+		if !ref.ok {
+			return
+		}
+		q := chestQuickRef{ref: ref}
+		carried := inv.getCarried()
+		if chestCanQuickReplace(q, carried, true) &&
+			(inv.quickcraftType == 2 || int(carried.Count) > len(inv.quickcraftSlots)) {
+			inv.addQuickcraftSlot(i)
+		}
+		return
+
+	case 2: // END — distribute the carried stack across the drag set
+		if len(inv.quickcraftSlots) != 0 {
+			if len(inv.quickcraftSlots) == 1 {
+				idx := inv.quickcraftSlots[0]
+				inv.resetQuickCraft()
+				// A single-slot drag is just a PICKUP on that chest-window slot.
+				t.doChestClick(p, cl, inv, idx, inv.quickcraftType, containerInputPickup)
+				return
+			}
+			carriedCopy := inv.getCarried()
+			if stackEmpty(carriedCopy) {
+				inv.resetQuickCraft()
+				return
+			}
+			remaining := int(inv.getCarried().Count)
+			setSize := len(inv.quickcraftSlots)
+			for _, idx := range inv.quickcraftSlots {
+				ref := chestResolveSlot(cl, inv, idx)
+				if !ref.ok {
+					continue
+				}
+				q := chestQuickRef{ref: ref}
+				carried := inv.getCarried()
+				if chestCanQuickReplace(q, carried, true) &&
+					(inv.quickcraftType == 2 || int(carried.Count) >= setSize) {
+					existing := 0
+					if q.hasItem() {
+						existing = int(q.getItem().Count)
+					}
+					slotMax := stackMaxSize(carriedCopy)
+					if sm := q.maxStack(carriedCopy); sm < slotMax {
+						slotMax = sm
+					}
+					give := getQuickCraftPlaceCount(setSize, inv.quickcraftType, carriedCopy) + existing
+					if slotMax < give {
+						give = slotMax
+					}
+					remaining -= give - existing
+					q.set(stackCopyWithCount(carriedCopy, give))
+				}
+			}
+			carriedCopy.Count = pk.VarInt(remaining)
+			inv.setCarried(carriedCopy)
+		}
+		inv.resetQuickCraft()
+		return
+	}
+
+	inv.resetQuickCraft()
+}
+
+// chestCanQuickReplace ports canItemQuickReplace over a chest-window slot (mayPlace is implicitly
+// true for chest/inventory cells): an empty slot is always replaceable; a same-item slot is
+// replaceable iff there is room (count + (stackSizeMatters?0:stack.count) <= max); a different item
+// is not.
+func chestCanQuickReplace(q chestQuickRef, stack component.SlotData, stackSizeMatters bool) bool {
+	if !q.hasItem() {
+		return true
+	}
+	if stackSameItemSameComponents(stack, q.getItem()) {
+		add := 0
+		if !stackSizeMatters {
+			add = int(stack.Count)
+		}
+		return int(q.getItem().Count)+add <= q.maxStack(stack)
+	}
+	return false
 }
 
 // chestPickup ports the PICKUP branch of doClick (offsets 561-1076, the real-slot arm) over the

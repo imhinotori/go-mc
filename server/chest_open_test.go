@@ -12,6 +12,7 @@ package server
 import (
 	"testing"
 
+	"github.com/imhinotori/sulfur/data/item"
 	"github.com/imhinotori/sulfur/data/packetid"
 	"github.com/imhinotori/sulfur/data/registryid"
 	"github.com/imhinotori/sulfur/level"
@@ -227,6 +228,46 @@ func TestChestClickMovesItemToPlayer(t *testing.T) {
 	}
 	if p.inventory.getCarried().Count != 0 {
 		t.Fatalf("cursor still holds %d after deposit, want empty", p.inventory.getCarried().Count)
+	}
+}
+
+// TestChestQuickCraftDragDistributes locks the chest right/left-drag (QUICK_CRAFT) the operator
+// reported missing: with a stack on the cursor, a left-drag (type 0, even split) across three
+// empty chest slots distributes floor(count/3) into each. Drives START / ADD×3 / END over the
+// chest window. CITE AbstractContainerMenu.doClick QUICK_CRAFT branch.
+func TestChestQuickCraftDragDistributes(t *testing.T) {
+	loop, mgr := newBlockLoop()
+	ch, _ := mgr.Get(level.ChunkPos{0, 0})
+	p := blockPlayer(loop, 1.5, 65.0, 1.5)
+	pos := pk.Position{X: 1, Y: 64, Z: 1}
+	placeChestBE(loop, ch, pos, "", 0) // empty chest (no loot) -> 27 empty slots
+
+	ui := useItemOnPacket(0, pos, 1, 0.5, 1.0, 0.5, false, false, 9)
+	loop.applyInput(p, SubtickInput{At: loop.clock.Now(), Packet: ui})
+	cl := loop.openChests[pos]
+	win := int32(p.openContainer.windowID)
+
+	// Put a stack of 9 cobblestone on the cursor.
+	p.inventory.setCarried(component.SlotData{ItemID: pk.VarInt(item.Cobblestone.ID), Count: 9})
+
+	// Left-drag even split: button = (type<<2)|header. type 0 (even).
+	start := int8((0 << 2) | 0) // START header 0
+	add := int8((0 << 2) | 1)   // ADD header 1
+	end := int8((0 << 2) | 2)   // END header 2
+	loop.handleContainerClick(p, chestClickPacket(win, 0, -999, start, containerInputQuickCraft))
+	for _, slot := range []int16{0, 1, 2} { // three empty chest slots
+		loop.handleContainerClick(p, chestClickPacket(win, 0, slot, add, containerInputQuickCraft))
+	}
+	loop.handleContainerClick(p, chestClickPacket(win, 0, -999, end, containerInputQuickCraft))
+
+	// floor(9/3) = 3 into each of the three chest slots; cursor empties.
+	for _, slot := range []int{0, 1, 2} {
+		if got := cl.items[slot].Count; got != 3 {
+			t.Fatalf("chest slot %d = %d after drag, want 3", slot, got)
+		}
+	}
+	if c := p.inventory.getCarried().Count; c != 0 {
+		t.Fatalf("cursor holds %d after drag, want 0 (all distributed)", c)
 	}
 }
 
