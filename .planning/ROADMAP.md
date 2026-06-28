@@ -101,7 +101,7 @@ Plans:
   4. A trivial custom mob declared in Starlark spawns, ticks, and moves via the Go nav, Docker `-race` clean (PLUGIN-03)
 **Plans**: 2 plans in 2 waves
 Plans:
-- [ ] 23-01-PLAN.md — SUB-ATTRIB coverage fix (per-type suppliers + LivingEntity fallback, 1:1 jar) + thin entity/world handles + capability enforcement (Wave 1)
+- [x] 23-01-PLAN.md — SUB-ATTRIB coverage fix (per-type suppliers + LivingEntity fallback, 1:1 jar) + thin entity/world handles + capability enforcement (Wave 1)
 - [ ] 23-02-PLAN.md — declare_mob/goal + starlarkGoal (via goalSelector) + buildAIFromDecl + the wander-mob GATE (spawns/ticks/moves via Go nav) + idle-no-interpreter + declared-mob -race (Wave 2)
 **Research**: The hardest design question — the exact frozen-handle API surface (which entity/world/nav ops, read-only vs mutating). Map the existing Go goal-selector/brain seams to declared hooks.
 
@@ -170,7 +170,7 @@ Plans:
 | 17–20 (v3 online-mode + operator-UX + structure-polish) | v3 | 33/33 | Complete | 2026-06-27 |
 | 21. Starlark runtime foundation | v4 | 2/2 | Complete   | 2026-06-28 |
 | 22. Plugin host + event bus | v4 | 2/2 | Complete   | 2026-06-28 |
-| 23. Entity/mob behavior API | v4 | 0/? | Not started | — |
+| 23. Entity/mob behavior API | v4 | 1/2 | In Progress|  |
 | 24. Vanilla mobs AS plugins (1:1 dogfood) | v4 | 0/? | Not started | — |
 | 25. Crafting/recipes AS plugins (2nd-domain dogfood) | v4 | 0/? | Not started | — |
 | 26. Opt-in Python runtime | v4 | 0/? | Not started | — |

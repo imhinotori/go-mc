@@ -4,14 +4,14 @@ milestone: v4
 milestone_name: Plugin / Scripting System
 status: executing
 stopped_at: "Completed 22-02-PLAN.md — Phase 22 (plugin-host-event-bus) COMPLETE: 8 discrete server seams emit host.Emit (on_damage post-mitigation, on_tick once/tick zero-sub-guarded), THE GATE proves fire-once-per-break N-independent, anti-seam grep clean, FULL fsnotify hot-reload (off-tick rebuild -> tick-goroutine swap) -race clean. CGO=0 build/test green; Docker -race ./plugin/host/ ./server/ green. Commits e5739e36 + 42d513f0. main() wires plugins/ + watcher."
-last_updated: "2026-06-28T05:02:42.319Z"
-last_activity: 2026-06-28 -- Phase 23 execution started
+last_updated: "2026-06-28T05:23:17.737Z"
+last_activity: 2026-06-28
 progress:
   total_phases: 8
   completed_phases: 2
-  total_plans: 4
-  completed_plans: 4
-  percent: 100
+  total_plans: 6
+  completed_plans: 5
+  percent: 83
 ---
 
 # Project State
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-06-23)
 ## Current Position
 
 Phase: 23 (entity-mob-behavior-api) — EXECUTING
-Plan: 1 of 2
-Status: Executing Phase 23
-Last activity: 2026-06-28 -- Phase 23 execution started
+Plan: 2 of 2
+Status: Ready to execute
+Last activity: 2026-06-28
 
 ### ⚠️ WHAT'S NEXT (resume here — see .planning/HANDOFF.md for the FULL detail)
 
@@ -127,7 +127,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [██████████] 100%
+Progress: [████████░░] 83%
 
 ## Performance Metrics
 
@@ -219,6 +219,7 @@ Progress: [██████████] 100%
 | Phase 21 P02 | 3min | 2 tasks | 5 files |
 | Phase 22 P01 | 25min | 3 tasks | 15 files |
 | Phase 22 P02 | 40min | 2 tasks | 13 files |
+| Phase 23 P01 | 40min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -345,6 +346,7 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 22 / 22-02]: PLUGIN-02 server wiring COMPLETE — host.Manager.Emit wired at the 8 named discrete seams (break->destroyBlock after removal, place->handleUseItemOn after reconcileEdit NOT the shared broadcaster, join/leave->drainRegistrations+removePlayer, spawn->drainStructureSpawns after entities.add, death->die, damage->actuallyHurt POST-mitigation, tick->tickOnce end zero-sub-guarded). Each guarded by if t.plugins != nil; payloads are frozen scalars (no live handles - Phase 23). NEVER from tickEntities/tickAI/tickPhysics anti-seam loops (grep-gated).
 - [Phase ?]: [Phase 22 / 22-02]: THE GATE (TestBlockBreakEventFiresOnce) is the PLUGIN-02 architecture proof — a hook fires EXACTLY ONCE per real block break with 50 entities present, count entity-independent (event-driven, not per-tick-per-entity scan). on_damage = the FINAL post-mitigation amount from actuallyHurt (LOCKED), not the raw applyDamage input.
 - [Phase ?]: [Phase 22 / 22-02]: FULL hot-reload (LOCKED) — plugin/host/reload.go fsnotify watcher rebuilds a fresh *Manager OFF-tick and sends the POINTER on pluginSwap; the tick owner is the SOLE writer of t.plugins and swaps on-thread in drainRegistrations. A reload concurrent with dispatch is a pointer swap between ticks, never a mid-Emit map mutation (T-22-05); TestReloadDuringDispatch -race clean. main() loads plugins/ + arms the watcher.
+- [Phase ?]: [Phase 23 / 23-01]: SUB-ATTRIB coverage fix — 7 per-type suppliers ported 1:1 from jar (pig/cow/sheep/chicken/skeleton/creeper/spider) + livingFallbackSupplier so NewMapForEntity never returns nil for a living type; non-living stays nil. Thin id-not-pointer entity/world handles with capability enforcement at the handle-op boundary (Option A: handles in server).
 
 ### Pending Todos
 
@@ -374,7 +376,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-28T04:27:15.604Z
+Last session: 2026-06-28T05:23:02.014Z
 Stopped at: Completed 22-02-PLAN.md — Phase 22 (plugin-host-event-bus) COMPLETE: 8 discrete server seams emit host.Emit (on_damage post-mitigation, on_tick once/tick zero-sub-guarded), THE GATE proves fire-once-per-break N-independent, anti-seam grep clean, FULL fsnotify hot-reload (off-tick rebuild -> tick-goroutine swap) -race clean. CGO=0 build/test green; Docker -race ./plugin/host/ ./server/ green. Commits e5739e36 + 42d513f0. main() wires plugins/ + watcher.
 Resume file: None
 Next: OPERATOR CHECKPOINT (19-02 Task 3) — build `CGO_ENABLED=0 go build -o sulfur.exe ./cmd/sulfur`, run `./sulfur.exe -seed 777` in a REAL terminal (expect alt-screen TUI: log viewport + command input), type `say hi`+Enter (expect a `console command cmd=say hi` viewport line), connect a vanilla 26.2 client (expect a join line), Ctrl-C (clean exit), then `./sulfur.exe -seed 777 | cat` (expect NO TUI, plain stderr — today's behavior). On "approved" → mark TUI-01 complete + advance the plan counter, then proceed to Plan 19-03 (gameplay_tick.go join/leave slog conversion + the full disconnect taxonomy). The console line routes TUI→tick (EnqueueConsoleCommand, cap 64, drop-on-full)→runConsoleCommand on the tick→existing graph (grant-all, no issuer), reply to slog. gameplay_tick.go is untouched (19-03 owns it). LEGACY: Phase 17 Wave 2 (17-02/17-03) — see prior continuity below. (GAMEPLAY-05 fluid simulation: OVERWRITE server/fluid.go with the FlowingFluid port + scheduled-tick queue; lazy-init t.fluidSchedule inside tickFluids, do NOT edit tick.go/tick_phases.go) and 17-03 (GAMEPLAY-04 fall damage + PvP dispatch: OVERWRITE server/fall_damage.go using the tickPlayer fallDistance/wasOnGround/lastY fields + the lookupPlayerByEntityID reverse lookup, do NOT edit tick.go/tick_phases.go). The exact Wave-2 seam surface (field names, init point, call sites, stub signatures) is in 17-01-SUMMARY.md "WAVE-2 HANDOFF". Deferred-still-open: dungeon loot/spawner-mob + BeehiveDecorator occupant + pale_garden PaleMoss (all v3, cosmetic, in 13-04-SUMMARY); KeepAlive double-leave hardening (Phase 3). KNOWN PRE-EXISTING FLAKE: TestTickAIDrivesMobs (OPT-01 async-pool timing, not caused by 17-01) intermittently fails under full-suite load; passes in isolation + 3× under -race.

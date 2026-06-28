@@ -22,7 +22,7 @@ The "user" is now (a) a **plugin author** writing `.star` (or, opt-in, Python) p
 
 ### Entity/mob behavior + 1:1 dogfood (Phases 23–24)
 
-- [ ] **PLUGIN-03**: A declarative entity/mob behavior API. A plugin DECLARES a mob's attributes/goals/AI once (loaded at parse time); Go runs the hot path (physics/pathfinding/tick/collision) calling the declared hooks; a FULL-OVERRIDE path lets a plugin replace a mob's whole decision logic. The Go-side bridge exposes the entity/world/nav API to Starlark as FROZEN, tick-owned-safe handles (read-only vs mutate-through-a-tick-owned-seam distinguished). A trivial custom mob declared in Starlark spawns, ticks, and moves via the Go nav, `-race` clean.
+- [x] **PLUGIN-03**: A declarative entity/mob behavior API. A plugin DECLARES a mob's attributes/goals/AI once (loaded at parse time); Go runs the hot path (physics/pathfinding/tick/collision) calling the declared hooks; a FULL-OVERRIDE path lets a plugin replace a mob's whole decision logic. The Go-side bridge exposes the entity/world/nav API to Starlark as FROZEN, tick-owned-safe handles (read-only vs mutate-through-a-tick-owned-seam distinguished). A trivial custom mob declared in Starlark spawns, ticks, and moves via the Go nav, `-race` clean.
 - [ ] **PLUGIN-04**: The vanilla mobs + entity logic are rewritten AS Starlark plugins that remain a **literal 1:1 port of the 26.2 jar** (the mandate carries into the plugin layer). This validates the API expresses real vanilla AI. The plugin-driven vanilla mob is behavior-identical to the Go-native path it replaces, jar-verified against bytecode, with the existing mob-AI tests green. (FIRST dogfood — if vanilla AI doesn't fit the API, the API is wrong, caught here before Python.)
 
 ### Crafting/recipes — 2nd-domain dogfood (Phase 25)
@@ -80,7 +80,7 @@ Updated during roadmap creation.
 |-------------|-------|--------|
 | PLUGIN-01 | Phase 21 | Complete |
 | PLUGIN-02 | Phase 22 | Complete |
-| PLUGIN-03 | Phase 23 | Pending |
+| PLUGIN-03 | Phase 23 | Complete |
 | PLUGIN-04 | Phase 24 | Pending |
 | PLUGIN-05 | Phase 25 | Pending |
 | PLUGIN-06 | Phase 26 | Pending |
