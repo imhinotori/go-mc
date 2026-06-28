@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v3
-milestone_name: Online-mode + Operator UX + Structure polish
-status: verifying
-stopped_at: "STRUCT-POLISH-01 chest-OPEN UI COMPLETE — the 20-02 W2 split landed. Right-click a structure chest -> resolve chest BlockEntity -> lazy-roll {LootTable, LootTableSeed} (one-shot unpackLootTable) -> allocate windowId (nextContainerCounter 1..100) -> ClientboundOpenScreen(generic_9x3) + ContainerSetContent(27 chest + 36 player). ContainerClick moves items (PICKUP/QUICK_MOVE/THROW) over the shared cursor; ContainerClose frees the windowId + items persist in t.openChests across opens. New: server/chest_open.go + server/chest_click.go; openScreen encoder (slot_encode.go); tickPlayer.openContainer/containerCounter + TickLoop.openChests. 1:1 jar-cited (ChestBlock.useWithoutItem, ServerPlayer.openMenu/nextContainerCounter, ClientboundOpenScreenPacket, ChestMenu slot layout). 8 chest tests green; CGO_ENABLED=0 build/vet/test green; Docker -race ./server/ green; no new deps. Committed 10157c6b (open path) + 87fc2681 (click/close + tests). SUMMARY: .planning/phases/20-structure-polish-loot-inhabitants-beard-persistence/20-06-SUMMARY.md. DEFERRED (cited): vanilla LootTable.fill random-slot shuffle (sequential placement), chest-item flush to BE NBT on unload/save (in-memory only), multi-viewer sync (single-viewer shipped). --- PRIOR: BLOCK-SURVIVAL (vegetation) COMPLETE — the Phase-17 deferred gate finding closed for vegetation. `block.IsVegetation`/`IsDoublePlant`/`SameDoublePlant` (level/block/utilfuncs.go) + `updateVegetationOnEdit`/`destroyUnsupportedVegetationAbove` (server/block_survival.go) wired into reconcileEdit (server/block_interact.go) alongside the fluid notification. Breaking a block under a flower/sapling/grass/fern/bush/2-tall-plant now destroys + drops the unsupported plant (cascading 2-tall plants via the bounded 512 recursion), reusing the GAMEPLAY-06 spawnBlockDrop path + broadcastBlockUpdate(air). 1:1 cited vs the jar (VegetationBlock.updateShape/canSurvive, DoublePlantBlock.canSurvive, Block.updateOrDestroy). Tests: server/block_survival_test.go + level/block/vegetation_test.go. Gates: CGO_ENABLED=0 build/vet/test green, Docker -race ./server/ ./level/... green. Committed 8b799d42 (code) + the docs commit (SUMMARY/STATE/deferred-items). STILL DEFERRED: torches/rails/redstone/doors + the dry/flowerbed/mangrove/seagrass plants (different survival classes). SUMMARY: .planning/phases/17-gameplay-completion/17-22-SUMMARY.md. --- PRIOR: 20-03 (STRUCT-POLISH-04 StructureStart NBT persistence) COMPLETE — all 3 tasks committed (f8c17b9b, 85f35998, 531a0c6f), Docker -race ./world/structure/ ./save/ green, SUMMARY written. Spawn-guard slots left in pieceExtraData for 20-04."
-last_updated: "2026-06-28T02:51:25.975Z"
+milestone: v4
+milestone_name: Plugin / Scripting System
+status: planning
+last_updated: "2026-06-28T02:58:15.525Z"
+last_activity: 2026-06-28
 progress:
-  total_phases: 4
-  completed_phases: 4
-  total_plans: 15
-  completed_plans: 33
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -24,9 +24,10 @@ See: .planning/PROJECT.md (updated 2026-06-23)
 
 ## Current Position
 
-Phase: 20 (structure-polish-loot-inhabitants-beard-persistence) — EXECUTING
-Plan: 5 of 5 (+ 20-06 chest-OPEN UI follow-up landed)
-Status: Phase complete — ready for verification
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-06-28 — Milestone v4 started
 
 ### ⚠️ WHAT'S NEXT (resume here — see .planning/HANDOFF.md for the FULL detail)
 

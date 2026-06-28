@@ -10,6 +10,23 @@ A Go server that a vanilla Minecraft 26.2 client can connect to, log into, and p
 
 ## Current State
 
+**Shipped: v3 (2026-06-27).** Sulfur is now a real **online-mode** server an operator can
+run + watch. The six v1 "unwired seams" are closed — two clients see each other move, position
++ inventory survive reconnect, attacks deal damage with death/respawn, water flows (ported
+FlowingFluid) and affects swim/buoyancy/breath, and broken blocks drop pickable Item entities.
+Logins authenticate against Yggdrasil with RSA + hand-rolled AES-128/CFB8 encryption (no new
+dep, CGO=0 preserved) behind an `online-mode` flag, with real UUIDs/skins propagated to the
+tab list. A bubbletea TUI console (commands + live logs, degrades off-TTY) + full
+disconnect-reason taxonomy. The v2 structures are finished — a shared loot evaluator (chests +
+block drops), inhabitants (witch/cat/villager/silverfish), Beardifier terrain-fit, and
+structure-start NBT persistence. Closed with a live 12-bug fidelity sweep (chest/water/cane/
+hats/persist/swim/oxygen), each reproduced, jar-verified, 1:1 ported, regression-tested, and
+operator-confirmed in-game. 4 phases (17–20), 33 plans, 15/15 v3 requirements, 4/4 integration
+seams wired. Also landed (parallel worktrees, v3.1 vanilla-completeness): the SUB-PERSIST /
+SUB-ITEMNBT / SUB-BLOCKTICK / SUB-FACESTURDY / SUB-ATTRIB subsystems — chunk-save loop, ItemStack
+disk codec, scheduled block ticks, per-face block support, and the attribute system — all 1:1
+from the jar, `-race` clean, the prerequisite base for v4 entity plugins.
+
 **Shipped: v2.0 (2026-06-25).** On top of the v1.0 playable server, the overworld now
 **looks + reads like vanilla 26.2**: every biome grows its correct vanilla tree set + full
 ground cover (grass/flowers/cactus/cane/mushrooms) + decoration ores, and the emblematic
@@ -29,16 +46,21 @@ AI) + block place/break + component-slot inventory + damage/death/respawn + pers
 commands + chat — all `-race` clean with Leaf-style async optimizations. 9 phases, 46 plans,
 45/45 v1 requirements + PARITY-01.
 
-## Current Milestone: v3 — Online-mode + Operator UX + Structure polish
+## Current Milestone: v4 — Plugin / Scripting System
 
-**Goal:** Make Sulfur a real online-mode server an operator can run + watch — Mojang/Microsoft authenticated logins with encrypted protocol, a proper TUI console (commands + live logs + disconnect reasons), and the structures finished (loot, inhabitants, terrain-fit, persistence).
+**Goal:** Give Sulfur a dual-runtime extension API — Starlark (pure-Go, CGO=0 preserved, deterministic, sandboxed) on the hot path + an opt-in build-tag-gated Python runtime off-tick — where plugins DECLARE behavior loaded once and Go executes the hot path calling declared hooks. Dogfood-validated by rewriting the vanilla mobs AS plugins (1:1 jar port carries into the plugin layer) and building crafting THROUGH the plugin API (a second, different domain). Folia regionization folds in.
 
 **Target features:**
-- **ONLINE-01 / ONLINE-02** — Mojang/Microsoft account authentication (Yggdrasil session join) + protocol encryption (AES/CFB8 + the encryption-request/response handshake), so the server runs in online-mode (real UUIDs, skins, ownership verification).
-- **TUI (bubbletea + bubbles)** — a terminal console with a command-input zone + live scrolling logs; disconnect-reason logging (why each player dropped: kick/timeout/protocol error/quit).
-- **Structure polish** — loot tables (chest contents), structure entities (villagers/witch/cat/silverfish spawns), `afterPlace` terrain-beard (structures adapt to terrain), structure-start NBT persistence (the documented v2 deferrals).
+- **PLUGIN-01 / PLUGIN-02** — Starlark runtime foundation (`go.starlark.net`, per-goroutine Thread, step-budget sandbox, FrozenValue tick-boundary sharing) + the plugin host + typed event bus (register-hooks-once, dispatch off the per-entity hot path).
+- **PLUGIN-03 / PLUGIN-04** — the declarative entity/mob behavior API (declare attributes/goals/AI once; Go runs the hot path; full-override path) + the first dogfood: vanilla mobs rewritten AS Starlark plugins, behavior-identical to the Go-native path, jar-verified.
+- **PLUGIN-05** — second dogfood: crafting/recipes built THROUGH the plugin API (recipe-provider plugin, result + ResultSlot.onTake consume, the crafting_table 3×3 menu) — proving the API generalizes beyond entity AI.
+- **PLUGIN-06** — opt-in Python runtime (`qur/gopy` @ `python3.14`, behind a `python` build tag so the default binary stays pure-Go static) for heavy off-tick plugins, same event/registration API.
+- **REGION-01** — Folia-style per-region tick threading (folded from the v3 deferral); the plugin seam + entity API become region-aware.
+- **PLUGIN-07** — real-client visual + perf gate closing v4.
 
-**Out of this milestone:** REGION-01 (Folia-style per-region tick threading) — deferred to v4.
+**Plan of record:** `.planning/v4-PLAN.md` (full per-phase breakdown, runtimes, architecture, build-order rationale).
+
+**Note:** This INVERTS the original "no plugin API" scope decision — intentional and user-directed for v4.
 
 ## Requirements
 
@@ -57,18 +79,23 @@ commands + chat — all `-race` clean with Leaf-style async optimizations. 9 pha
 - [x] Leaf-style async optimizations layered after vanilla logic — Phase 8 (OPT-01..06)
 - [x] Full vanilla per-biome vegetation (trees/grass/flowers/ores) via the ported ConfiguredFeature/PlacedFeature pipeline — Phase 10–13 (GEN2-01..03, FEAT-01..06) — v2.0
 - [x] Vanilla structures (temples, mineshafts, strongholds, villages) in vanilla positions, deterministic per seed — Phase 14–16 (STRUCT-01..06) — v2.0
+- [x] Gameplay completion: the six unwired seams — player-visibility broadcast, position-load apply, inventory join-sync, damage dispatch + fall damage, fluid simulation + player fluid physics, block-break item drops (GAMEPLAY-01..07) — Phase 17 — v3
+- [x] Online-mode: Mojang/Yggdrasil auth + AES-128/CFB8 protocol encryption (ONLINE-01/02) — Phase 18 — v3
+- [x] TUI (bubbletea + bubbles) console + disconnect-reason logs (TUI-01/02) — Phase 19 — v3
+- [x] Structure polish: loot tables, structure entities, afterPlace beard, NBT persistence (STRUCT-POLISH-01..04) — Phase 20 — v3
+- [x] Vanilla-completeness subsystems: chunk-save loop, ItemStack disk codec, scheduled block ticks, per-face block support, attribute system (SUB-PERSIST/ITEMNBT/BLOCKTICK/FACESTURDY/ATTRIB) — v3.1 (parallel worktrees)
 
-### Active (v3 — Phases 17–20, see REQUIREMENTS.md)
+### Active (v4 — Phases 21–28, see REQUIREMENTS.md)
 
-- [ ] Gameplay completion: the six unwired seams — player-visibility broadcast, position-load apply, inventory join-sync, damage dispatch + fall damage, fluid simulation + player fluid physics, block-break item drops (GAMEPLAY-01..07) — Phase 17
-- [ ] Online-mode: Mojang/Yggdrasil auth + AES-128/CFB8 protocol encryption (ONLINE-01/02) — Phase 18
-- [ ] TUI (bubbletea + bubbles) console + disconnect-reason logs (TUI-01/02) — Phase 19
-- [ ] Structure polish: loot tables, structure entities, afterPlace beard, NBT persistence (STRUCT-POLISH-01..04) — Phase 20
-- [ ] Folia-style per-region tick threading (REGION-01) — **deferred to v4**
+- [ ] Starlark runtime foundation + plugin host + typed event bus (PLUGIN-01/02) — Phases 21–22
+- [ ] Declarative entity/mob behavior API + vanilla-mobs-as-plugins dogfood (PLUGIN-03/04) — Phases 23–24
+- [ ] Crafting/recipes THROUGH the plugin API — 2nd-domain dogfood (PLUGIN-05) — Phase 25
+- [ ] Opt-in Python runtime behind a build tag (PLUGIN-06) — Phase 26
+- [ ] Folia-style per-region tick threading, region-aware plugin seam (REGION-01) — Phase 27
+- [ ] Plugin system real-client visual + perf gate (PLUGIN-07) — Phase 28
 
 ### Out of Scope
 
-- **Plugin system (Bukkit/Spigot/Paper API)** — explicitly excluded by user; this is a server core, not a plugin platform
 - **Bedrock Edition / cross-platform protocol** — Java Edition only; go-mc is Java-protocol
 - **Mojang account auth / online-mode encryption as v1 priority** — offline-mode first; online-mode is a later requirement, not core
 - **Faithful 1:1 port of Leaf's Java code** — Leaf is architectural inspiration; Go reimplements concurrency patterns idiomatically, it does not transpile Java patches
@@ -88,7 +115,7 @@ commands + chat — all `-race` clean with Leaf-style async optimizations. 9 pha
 - **Compatibility**: Must speak protocol 776 to an unmodified vanilla 26.2 client.
 - **Dependencies**: Built on `Tnze/go-mc` (likely a fork to apply the #294-296 codegen approach and retarget 776).
 - **Performance**: Architecture must be concurrency-ready from the start so Leaf-style async optimizations can be layered without rewrites.
-- **Scope**: Server core only — no plugin/extension API.
+- **Scope**: Server core PLUS (as of v4) a dual-runtime plugin/extension API. The original "server core only — no plugin API" boundary is intentionally inverted for v4 (user-directed): a Starlark (pure-Go, CGO=0) hot-path runtime + an opt-in build-tag-gated Python runtime. The plugin layer carries the 1:1 mandate (vanilla mobs become jar-faithful plugins) and the CGO=0/-race constraints.
 
 ## Key Decisions
 
@@ -97,7 +124,9 @@ commands + chat — all `-race` clean with Leaf-style async optimizations. 9 pha
 | Use Tnze/go-mc as protocol/data base | Provides ~30% (codec, NBT, chunk/region, save) for free; avoids reimplementing the wire format | ✅ Shipped v1.0 |
 | Code-generate data layer from official 26.2 jar (PR #294-296 approach) | Mojang ships unobfuscated jar; codegen yields authoritative packets/registries/blocks for 776 with no hand-transcription | ✅ Shipped v1.0 |
 | Build vanilla logic first, Leaf optimizations last | Async-optimizing nonexistent logic is impossible; correctness before performance | ✅ Shipped v1.0 |
-| No plugin system | User-specified scope boundary; keeps focus on server core | ✅ Shipped v1.0 |
+| No plugin system (v1–v3) → dual-runtime plugin API (v4) | v1–v3 kept focus on server core. For v4 the user reversed it: a Starlark (CGO=0, sandboxed, deterministic) hot-path runtime + opt-in Python (build-tag) off-tick, with vanilla mobs + crafting dogfooded THROUGH the API. The 1:1 mandate + CGO=0/-race constraints carry into the plugin layer. | 🚧 v4 in progress |
+| Starlark as the CORE plugin runtime (not Python) | `go.starlark.net` is pure-Go → preserves the CGO=0 static-binary value prop; natively sandboxed (step budget, recursion-off, no I/O builtins) + deterministic → safe inside the tick loop. Python (cgo/libpython) can't be the default without breaking the static binary, so it's opt-in behind a build tag for heavy off-tick work only. | 🚧 v4 (Phase 21/26) |
+| Plugins DECLARE behavior once; Go runs the hot path | 200 mobs × 20 TPS ≠ 4000 interpreter calls/sec — the interpreter runs at load + on events + on cached decisions, not per-entity-per-tick. Keeps "ultra-efficient" true while still allowing a plugin to FULLY override a mob. | 🚧 v4 (Phase 22/23) |
 | Offline-mode first | Removes auth/encryption from the critical path to first playable connection | ✅ Shipped v1.0 |
 | Game-time anchored to 50ms; subtick layer (CS2-style) for player movement/combat only | MC defines game-time by tick count, not real seconds — raising TPS naively accelerates the world (shorter day, faster crops/redstone), violating vanilla-parity. Anchoring game-time to 50ms keeps the world correct; a subtick layer adds µs-precise resolution for movement/hit-reg/projectiles without touching world simulation speed (same pattern as CS2 subtick over a fixed broadcast rate). | ✅ Shipped v1.0 |
 | Cross-chunk worldgen seam: hold-at-carved until 8 neighbors carve, then decorate/place into a 3×3 Neighborhood via a single lock-free scheduler goroutine (emit-once) | Features + structures write across chunk boundaries; a per-chunk footprint guard can't express that. The hold-until-neighborhood-complete seam makes decoration/placement pure over (seed, pos) regardless of generation order — the determinism contract the whole milestone rests on. | ✅ Shipped v2.0 (`-race` clean, 5×5 reorder byte-identical) |
@@ -123,4 +152,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-25 — v2.0 milestone shipped (all 15 v2 worldgen-features+structures requirements validated, two real-client visual gates approved, CI/CD + prod deploy live; next milestone = v3 online-mode/regionization/TUI).*
+*Last updated: 2026-06-27 — v3 milestone shipped (15/15 online-mode + operator-UX + structure-polish requirements validated, 4/4 integration seams, live 12-bug fidelity sweep operator-confirmed, v3.1 vanilla-completeness subsystems landed); v4 = Plugin/Scripting System (Phases 21–28) kicked off, plan of record in v4-PLAN.md. The "no plugin API" scope is intentionally inverted for v4.*

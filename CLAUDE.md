@@ -14,7 +14,7 @@ A from-scratch Minecraft Java Edition server (version 26.2, protocol 776) writte
 - **Compatibility**: Must speak protocol 776 to an unmodified vanilla 26.2 client.
 - **Dependencies**: Built on `Tnze/go-mc` (likely a fork to apply the #294-296 codegen approach and retarget 776).
 - **Performance**: Architecture must be concurrency-ready from the start so Leaf-style async optimizations can be layered without rewrites.
-- **Scope**: Server core only — no plugin/extension API.
+- **Scope**: Server core PLUS a dual-runtime plugin/extension API (as of v4 — intentional, user-directed inversion of the original "no plugin API" boundary). Core = Starlark (`go.starlark.net`, pure-Go, CGO_ENABLED=0 preserved, sandboxed, deterministic) on the hot path; opt-in Python (`qur/gopy`, cgo, behind a `python` build tag so the default binary stays pure-Go static) off-tick. Plugins DECLARE behavior loaded once; Go runs the hot path calling declared hooks. The 1:1-with-the-jar mandate carries into the plugin layer — vanilla mobs + crafting are dogfooded AS jar-faithful plugins.
 <!-- GSD:project-end -->
 
 <!-- GSD:stack-start source:research/STACK.md -->
