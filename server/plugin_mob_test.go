@@ -9,6 +9,7 @@ import (
 	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/attribute"
 	"github.com/imhinotori/sulfur/plugin/host"
+	starlarkpkg "github.com/imhinotori/sulfur/plugin/starlark"
 	"go.starlark.net/starlark"
 )
 
@@ -209,4 +210,186 @@ func contains(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// --- Task 2: starlarkGoal (implements Goal) + navHandle + buildAIFromDecl -----------------------
+
+// countingFn returns a starlark.Callable that increments *n each time it is invoked (and returns
+// None). It is the test stand-in for a goal's tick/can_use callback so a test can assert HOW OFTEN
+// the interpreter actually fired — the load-bearing "interpreter only when running" proof.
+func countingFn(n *int) starlark.Callable {
+	return starlark.NewBuiltin("counting", func(_ *starlark.Thread, _ *starlark.Builtin,
+		_ starlark.Tuple, _ []starlark.Tuple) (starlark.Value, error) {
+		*n++
+		return starlark.None, nil
+	})
+}
+
+// erroringFn returns a starlark.Callable that always raises (returns an error) — the test stand-in
+// for a buggy goal callback whose error MUST be isolated (logged, the tick survives).
+func erroringFn() starlark.Callable {
+	return starlark.NewBuiltin("erroring", func(_ *starlark.Thread, _ *starlark.Builtin,
+		_ starlark.Tuple, _ []starlark.Tuple) (starlark.Value, error) {
+		return nil, errBoom
+	})
+}
+
+var errBoom = starlarkError("boom")
+
+// starlarkError is a trivial error type so erroringFn can raise without importing errors.
+type starlarkError string
+
+func (e starlarkError) Error() string { return string(e) }
+
+// TestStarlarkGoalImplementsGoal: a starlarkGoal is assignable to server.Goal (the compile-time
+// assertion `var _ Goal = (*starlarkGoal)(nil)` in plugin_mob_ai.go), and goalSelector.addGoal
+// accepts it without a bypass.
+func TestStarlarkGoalImplementsGoal(t *testing.T) {
+	var sel goalSelector
+	g := &starlarkGoal{baseGoal: newBaseGoal(flagMove), name: "x"}
+	sel.addGoal(6, g) // must compile + accept a starlarkGoal as a Goal
+	if len(sel.goals) != 1 {
+		t.Fatalf("addGoal did not register the starlarkGoal")
+	}
+}
+
+// TestStarlarkGoalArbitration: two starlarkGoals both claim MOVE; the higher-precedence (smaller
+// priority) one runs and holds MOVE, the other does NOT tick — proving a declared goal goes THROUGH
+// the goalSelector flag-locking arbitration, not around it.
+func TestStarlarkGoalArbitration(t *testing.T) {
+	loop, _ := newPhysicsLoop()
+	e := testEntity(1, entity.Pig, 0, 0, 0)
+	e.ai = &mobAI{}
+	loop.entities.add(e)
+
+	var hiCount, loCount int
+	hi := &starlarkGoal{baseGoal: newBaseGoal(flagMove), t: loop, caps: capAll, name: "hi", tickFn: countingFn(&hiCount)}
+	lo := &starlarkGoal{baseGoal: newBaseGoal(flagMove), t: loop, caps: capAll, name: "lo", tickFn: countingFn(&loCount)}
+	e.ai.goals.addGoal(2, hi) // smaller priority = higher precedence
+	e.ai.goals.addGoal(6, lo)
+
+	for i := 0; i < 5; i++ {
+		e.ai.goals.tick(loop, e)
+	}
+	if hiCount == 0 {
+		t.Fatalf("the higher-precedence MOVE goal never ticked (arbitration broken)")
+	}
+	if loCount != 0 {
+		t.Fatalf("the lower-precedence MOVE goal ticked %d times — it must be locked out of MOVE", loCount)
+	}
+}
+
+// TestStarlarkGoalCallsFnOnlyWhenRunning: a goal's tickFn is invoked ONLY while the goal is running.
+// A goal whose can_use returns false NEVER starts, so its tickFn fires 0 times across many ticks.
+func TestStarlarkGoalCallsFnOnlyWhenRunning(t *testing.T) {
+	loop, _ := newPhysicsLoop()
+	e := testEntity(1, entity.Pig, 0, 0, 0)
+	e.ai = &mobAI{}
+	loop.entities.add(e)
+
+	var tickCount int
+	// can_use returns False (a falsey value) so the goal can never start.
+	falseFn := starlark.NewBuiltin("false", func(_ *starlark.Thread, _ *starlark.Builtin,
+		_ starlark.Tuple, _ []starlark.Tuple) (starlark.Value, error) {
+		return starlark.False, nil
+	})
+	g := &starlarkGoal{baseGoal: newBaseGoal(flagMove), t: loop, caps: capAll, name: "idle",
+		canUseFn: falseFn, tickFn: countingFn(&tickCount)}
+	e.ai.goals.addGoal(6, g)
+
+	for i := 0; i < 10; i++ {
+		e.ai.goals.tick(loop, e)
+	}
+	if tickCount != 0 {
+		t.Fatalf("a never-running goal's tickFn fired %d times — the interpreter must fire only while running", tickCount)
+	}
+
+	// Now a goal that CAN run: its tickFn must fire on every running tick (>=1).
+	var runCount int
+	g2 := &starlarkGoal{baseGoal: newBaseGoal(flagLook), t: loop, caps: capAll, name: "active",
+		tickFn: countingFn(&runCount)}
+	e.ai.goals.addGoal(7, g2)
+	for i := 0; i < 5; i++ {
+		e.ai.goals.tick(loop, e)
+	}
+	if runCount == 0 {
+		t.Fatalf("a running goal's tickFn never fired — the interpreter is not invoked for the active seam")
+	}
+}
+
+// TestGoalCallbackIsolation: a tickFn that errors (raises) is logged and the tick SURVIVES — the
+// error does not propagate to crash the goalSelector tick, and a sibling goal still ticks.
+func TestGoalCallbackIsolation(t *testing.T) {
+	loop, _ := newPhysicsLoop()
+	e := testEntity(1, entity.Pig, 0, 0, 0)
+	e.ai = &mobAI{}
+	loop.entities.add(e)
+
+	var siblingCount int
+	bad := &starlarkGoal{baseGoal: newBaseGoal(flagMove), t: loop, caps: capAll, name: "bad", tickFn: erroringFn()}
+	good := &starlarkGoal{baseGoal: newBaseGoal(flagLook), t: loop, caps: capAll, name: "good", tickFn: countingFn(&siblingCount)}
+	e.ai.goals.addGoal(6, bad)
+	e.ai.goals.addGoal(7, good)
+
+	// The erroring goal must not panic / propagate; the sibling (different flag) must still tick.
+	for i := 0; i < 3; i++ {
+		e.ai.goals.tick(loop, e) // must not panic
+	}
+	if siblingCount == 0 {
+		t.Fatalf("an erroring goal's callback killed the tick — the sibling goal never ticked (isolation broken)")
+	}
+}
+
+// TestNavHandlePathTo: navHandle.path_to(x,y,z) routes to e.ai.setWantTarget (hasTarget set, the
+// want target recorded); has_path reads e.ai.hasTarget; path_to is gated on capNav.
+func TestNavHandlePathTo(t *testing.T) {
+	loop, _ := newPhysicsLoop()
+	e := testEntity(1, entity.Pig, 0, 0, 0)
+	e.ai = &mobAI{}
+	loop.entities.add(e)
+
+	// With capNav: path_to sets the want target.
+	nh := newNavHandle(loop, e.id, capAll)
+	pathTo, err := nh.Attr("path_to")
+	if err != nil {
+		t.Fatalf("Attr(path_to): %v", err)
+	}
+	pf := pathTo.(*starlark.Builtin)
+	if _, err := starlark.Call(starlarkThread(), pf, starlark.Tuple{starlark.Float(10), starlark.Float(64), starlark.Float(3)}, nil); err != nil {
+		t.Fatalf("path_to call: %v", err)
+	}
+	if !e.ai.hasTarget {
+		t.Fatalf("path_to did not set the want target (hasTarget still false)")
+	}
+	if e.ai.wantX != 10 || e.ai.wantY != 64 || e.ai.wantZ != 3 {
+		t.Fatalf("path_to want target = (%v,%v,%v), want (10,64,3)", e.ai.wantX, e.ai.wantY, e.ai.wantZ)
+	}
+
+	// has_path reads hasTarget.
+	hp, err := nh.Attr("has_path")
+	if err != nil {
+		t.Fatalf("Attr(has_path): %v", err)
+	}
+	if hp != starlark.True {
+		t.Fatalf("has_path = %v, want True after path_to", hp)
+	}
+
+	// WITHOUT capNav: path_to is denied (capability error), the target is unchanged.
+	e2 := testEntity(2, entity.Pig, 0, 0, 0)
+	e2.ai = &mobAI{}
+	loop.entities.add(e2)
+	denied := newNavHandle(loop, e2.id, capEntitiesRead) // no nav cap
+	pathTo2, _ := denied.Attr("path_to")
+	if _, err := starlark.Call(starlarkThread(), pathTo2.(*starlark.Builtin), starlark.Tuple{starlark.Float(1), starlark.Float(2), starlark.Float(3)}, nil); err == nil {
+		t.Fatalf("path_to without capNav must error (capability denied)")
+	}
+	if e2.ai.hasTarget {
+		t.Fatalf("a denied path_to must NOT set the want target")
+	}
+}
+
+// starlarkThread builds a fresh budget-bounded thread for a direct handle-method call in tests
+// (the same NewThread the goal callbacks use).
+func starlarkThread() *starlark.Thread {
+	return starlarkpkg.NewThread("test")
 }
