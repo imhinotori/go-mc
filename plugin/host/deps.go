@@ -1,11 +1,9 @@
 package host
 
-// Blank imports keep go.mod requires that land with this phase but are first
-// imported for real in Plan 02 (the fsnotify hot-reload watcher). BurntSushi's
-// toml is imported for real by manifest.go in this plan; fsnotify is reserved
-// for the Plan-02 watcher. `go mod tidy` prunes a require with no importing
-// package, so this anchors fsnotify until the watcher imports it.
+// Blank import anchors a go.mod require that lands with this phase but is first
+// imported for real in Plan 02 (the fsnotify hot-reload watcher). `go mod tidy`
+// prunes a require with no importing package, so this keeps fsnotify until the
+// watcher imports it. (toml is imported for real by manifest.go in this plan.)
 import (
-	_ "github.com/BurntSushi/toml"
 	_ "github.com/fsnotify/fsnotify"
 )
