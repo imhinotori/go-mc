@@ -31,6 +31,17 @@ type testKitStack struct {
 	count int32
 }
 
+// gateSpawnEggID is the item the gate-only custom-mob spawn trigger matches in the use seam
+// (handleUseItem). It is a GATE-ONLY RE-SKIN of the vanilla pig spawn egg: right-clicking it spawns
+// the embedded CUSTOM wander mob (PLUGIN-07 / Plan 28-01) via spawnDeclaredMob — but ONLY when
+// SULFUR_TEST_KIT=1 (the egg is added to the kit only under that gate, and handleGateSpawnEgg early-
+// returns when the env is unset). The default prod join keeps the vanilla EMPTY inventory, so the egg
+// is never in any prod player's hand and the trigger is unreachable (threat T-28-03). The wander mob
+// renders as the pig wire id (base_type pig — custom = behavior), so a pig spawn egg is the natural
+// re-skin; the egg is NOT vanilla pig-spawning behavior, it is the bot's spawn seam.
+// (A var, not a const: item.PigSpawnEgg.ID is a struct field, not a compile-time constant.)
+var gateSpawnEggID = item.PigSpawnEgg.ID
+
 // testKit is the fixed gate kit: food to exercise the eat/hunger loop, and stackable blocks to
 // exercise place/break + every container-click path (pickup, shift-click, swap, drop, drag,
 // double-click). Hotbar slots 36-44 are filled first so the items are immediately in-hand.
@@ -48,6 +59,7 @@ var testKit = []testKitStack{
 	{slot: 10, id: item.Cobblestone.ID, count: 32}, // main row 1: partial stack for double-click collect
 	{slot: 11, id: item.Sand.ID, count: 64},        // main row 1: sand (place sugar cane ON it, next to water)
 	{slot: 12, id: item.WaterBucket.ID, count: 1},  // main row 1: water source for sugar-cane survival
+	{slot: 35, id: gateSpawnEggID, count: 8},       // main row 3 (last slot): PLUGIN-07 gate-only custom-mob spawn egg
 }
 
 // applyTestKit seeds the gate-only starter kit into the player's tick-owned inventory. It is a
@@ -63,4 +75,32 @@ func applyTestKit(p *tickPlayer) {
 	for _, k := range testKit {
 		inv.set(k.slot, component.SlotData{Count: pk.VarInt(k.count), ItemID: pk.VarInt(k.id)})
 	}
+}
+
+// handleGateSpawnEgg spawns the embedded CUSTOM wander mob (PLUGIN-07 / Plan 28-01) just in front of
+// the player who right-clicked the gate spawn egg — the in-game seam Plan 02's bot uses to make a
+// custom mob appear (checklist item #1). It is the test-kit analogue of a vanilla spawn-egg use, but
+// it routes through spawnDeclaredMob (NOT vanilla pig spawning).
+//
+// GATE-ONLY (threat T-28-03): it EARLY-RETURNS unless SULFUR_TEST_KIT=1, so the default prod path is a
+// no-op even if (impossibly) a prod player held the egg. A nil registry or a missing "wanderer" decl
+// is a silent no-op (the boot-load guarantees the decl is present when the gate is on; a missing one
+// means the operator ran the gate egg without the boot-load — never crash a player's right-click).
+//
+// Owner-goroutine only (TICK-05): called from the tick-side use path (handleUseItem), so it touches
+// tick-owned state (the registry read, spawnDeclaredMob's id alloc + entities.add) with no locks.
+func (t *TickLoop) handleGateSpawnEgg(p *tickPlayer) {
+	if !testKitEnabled() || t.mobRegistry == nil {
+		return
+	}
+	decl, ok := t.mobRegistry.byName[wanderMobName]
+	if !ok {
+		return // boot-load did not register the wander mob; no-op rather than panic on a right-click
+	}
+	// Spawn ~2 blocks in front of the player along +X so the mob does not appear inside the player.
+	// A fixed offset keeps the gate reproducible (the bot spawns from a known facing). The mob then
+	// WALKS via its Go-nav MOVE goal, which is how the bot distinguishes it from a vanilla pig
+	// (movement pattern, not wire type — threat T-28-05).
+	t.spawnDeclaredMob(decl, p.x+2.0, p.y, p.z)
+	udebugPlayer(p, "test-kit", "spawned custom wander mob via gate egg at (%.1f,%.1f,%.1f)", p.x+2.0, p.y, p.z)
 }

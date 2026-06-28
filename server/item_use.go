@@ -161,6 +161,20 @@ func (t *TickLoop) handleUseItem(p *tickPlayer, pkt pk.Packet) {
 		return
 	}
 
+	// PLUGIN-07 (Plan 28-01) GATE-ONLY trigger: if the test kit is enabled and the held item is the
+	// gate spawn egg, spawn the embedded custom wander mob (the seam Plan 02's bot needs) and return —
+	// BEFORE the food path so the egg never falls through to the eat chain. GATE-ONLY (threat T-28-03):
+	// testKitEnabled() is false in prod, so this branch is unreachable on the default empty-inventory
+	// join (the egg is never in a prod player's hand). Owner-goroutine (tick-side use path), no locks.
+	if testKitEnabled() {
+		inv := ensureInventory(p)
+		held := inv.get(heldMenuSlot(p, h))
+		if !slotIsEmpty(held) && int32(held.ItemID) == int32(gateSpawnEggID) {
+			t.handleGateSpawnEgg(p)
+			return
+		}
+	}
+
 	t.useItemInHand(p, h)
 }
 

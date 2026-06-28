@@ -331,6 +331,14 @@ func main() {
 	} else {
 		tick.SetMobRegistry(reg)
 		log.Printf("vanilla_pig: bundled 1:1 pig plugin boot-loaded (the only pig is plugin-driven)")
+		// PLUGIN-07 (Plan 28-01): MERGE the embedded CUSTOM wander mob into the SAME tick-owned
+		// registry so both vanilla_pig AND wanderer are spawnable. Phase 23 left the wander decl in an
+		// isolated testdata root; this promotes it to a live boot-load (CONTEXT D-2). Single-owner at
+		// boot (before tick.Run) — TICK-05. A load failure is FATAL (a broken embedded plugin).
+		if err := tick.RegisterWanderMob(); err != nil {
+			log.Fatalf("wandermob boot-load failed (the custom-mob spawn trigger has no declaration): %v", err)
+		}
+		log.Printf("wandermob: bundled custom wander mob boot-loaded (spawnable via the SULFUR_TEST_KIT gate egg)")
 	}
 
 	// SUB-PERSIST: the off-tick chunk-save consumer (its own goroutine, like the player save loop).
