@@ -150,6 +150,9 @@ func (g *starlarkGoal) tick(_ *TickLoop, e *Entity) {
 func buildAIFromDecl(t *TickLoop, decl *mobDecl) *mobAI {
 	m := &mobAI{}
 	m.navigation.speed = declaredWalkSpeed(decl)
+	// Per-mob seeded RandomSource (the Mob.getRandom() analogue) — same as newPigAI; the spawn site
+	// reseeds it per entity id (reseedMobAI) so each declared mob has its own deterministic stream.
+	m.rng = newEntityRandom(defaultEntityRandomSeed)
 	for _, gd := range decl.goals {
 		m.goals.addGoal(gd.priority, &starlarkGoal{
 			baseGoal: newBaseGoal(gd.flags),

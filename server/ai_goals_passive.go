@@ -27,14 +27,28 @@ package server
 //     gradual-turn control lands with navigation in 07-02; for now the goal sets the angle
 //     directly, which still proves the goal arbitration + the "faces the player" behavior).
 //
-// RNG: vanilla mobs roll against a per-entity RandomSource; v1 uses the stdlib math/rand/v2
-// package RNG (zero new deps). Each goal carries a test seam (forceTrigger / alwaysLook) so a
-// unit test can make the roll deterministic without a fake clock or seeded source.
+// RNG (Phase 24): vanilla mobs roll against a PER-ENTITY RandomSource (Mob.getRandom()); the goals
+// now draw from the mob's per-entity seeded source (e.ai.rng — ai_random.go) in the EXACT bytecode
+// draw ORDER (jar-verified this session), REPLACING the shared package-global stdlib RNG used in v1.
+// This makes the port 1:1-faithful (the draw order is the observable behavior) AND deterministic for
+// a fixed seed (the TestTickAIDrivesMobs flake fix), and removes a shared-global-rand data race.
+// Each goal still carries a test seam (forceTrigger / alwaysLook / always) so a unit test can make
+// the chance roll deterministic; the seam bypasses the ROLL, not the source.
 
 import (
 	"math"
-	"math/rand/v2"
 )
+
+// mobRandom returns the mob's per-entity seeded RandomSource (e.ai.rng). It is non-nil for every
+// goal-bearing mob (newPigAI / buildAIFromDecl set it; reseedMobAI guarantees it at spawn); the
+// nil-guard returns the package-default-seeded source so a hand-built mobAI in a test without an rng
+// still draws deterministically rather than panicking.
+func mobRandom(e *Entity) *entityRandom {
+	if e != nil && e.ai != nil && e.ai.rng != nil {
+		return e.ai.rng
+	}
+	return newEntityRandom(defaultEntityRandomSeed)
+}
 
 // yawTowardDeg returns the MC body-yaw (degrees) that faces a horizontal direction (dx, dz).
 // MC yaw convention (jar / 06-debug): 0°=+Z(south), 90°=-X(west), 270°/-90°=+X(east); the
@@ -83,7 +97,8 @@ func newWaterAvoidingRandomStrollGoal(speed float64) *randomStrollGoal {
 // and no combat, so they are omitted — documented faithful-scope.)
 func (g *randomStrollGoal) canUse(t *TickLoop, e *Entity) bool {
 	if !g.forceTrigger {
-		if g.interval > 0 && rand.IntN(g.interval) != 0 {
+		// DRAW 1 (the gate): getRandom().nextInt(reducedTickDelay(interval)) — RandomStrollGoal.canUse.
+		if g.interval > 0 && mobRandom(e).nextInt(g.interval) != 0 {
 			return false
 		}
 	}
@@ -103,9 +118,11 @@ func (g *randomStrollGoal) canUse(t *TickLoop, e *Entity) bool {
 // walkable node; the walkability check is the navigation's job in 07-02 — for now any in-radius
 // point is the wanted target, which 07-02's pathfinder will resolve/refuse). Always succeeds.
 func (g *randomStrollGoal) getPosition(e *Entity) (x, y, z float64, ok bool) {
-	dx := float64(rand.IntN(2*strollHorizontalRadius+1) - strollHorizontalRadius)
-	dz := float64(rand.IntN(2*strollHorizontalRadius+1) - strollHorizontalRadius)
-	dy := float64(rand.IntN(2*strollVerticalRadius+1) - strollVerticalRadius)
+	// DRAWS 2,3,4: the getPosition offset (DefaultRandomPos.getPos), AFTER the canUse gate draw.
+	r := mobRandom(e)
+	dx := float64(r.nextInt(2*strollHorizontalRadius+1) - strollHorizontalRadius)
+	dz := float64(r.nextInt(2*strollHorizontalRadius+1) - strollHorizontalRadius)
+	dy := float64(r.nextInt(2*strollVerticalRadius+1) - strollVerticalRadius)
 	return e.x + dx, e.y + dy, e.z + dz, true
 }
 
@@ -167,7 +184,8 @@ func newLookAtPlayerGoal(lookDistance float32) *lookAtPlayerGoal {
 // player is found by scanning the tick-owned loop.players set (the same data the tracker uses
 // for player visibility) — faithful to "nearest player in range", using the real seam.
 func (g *lookAtPlayerGoal) canUse(t *TickLoop, e *Entity) bool {
-	if !g.alwaysLook && rand.Float32() >= g.probability {
+	// LookAtPlayerGoal.canUse: getRandom().nextFloat() < probability (the chance roll), then find a player.
+	if !g.alwaysLook && mobRandom(e).nextFloat() >= g.probability {
 		return false
 	}
 	px, py, pz, ok := nearestPlayerWithin(t, e, float64(g.lookDistance))
@@ -191,9 +209,9 @@ func (g *lookAtPlayerGoal) canContinueToUse(t *TickLoop, e *Entity) bool {
 	return d2 <= float64(g.lookDistance)*float64(g.lookDistance)
 }
 
-// start ports LookAtPlayerGoal.start: lookTime = 40 + rnd(40) ticks of staring.
-func (g *lookAtPlayerGoal) start(_ *TickLoop, _ *Entity) {
-	g.lookTime = 40 + rand.IntN(40)
+// start ports LookAtPlayerGoal.start: lookTime = 40 + getRandom().nextInt(40) ticks of staring.
+func (g *lookAtPlayerGoal) start(_ *TickLoop, e *Entity) {
+	g.lookTime = 40 + mobRandom(e).nextInt(40)
 }
 
 // tick ports LookAtPlayerGoal.tick: aim the head/body at the look target and count down. The
@@ -246,9 +264,9 @@ func newRandomLookAroundGoal() *randomLookAroundGoal {
 	return &randomLookAroundGoal{baseGoal: newBaseGoal(flagMove | flagLook)}
 }
 
-// canUse ports RandomLookAroundGoal.canUse: roll < 0.02.
-func (g *randomLookAroundGoal) canUse(_ *TickLoop, _ *Entity) bool {
-	return g.always || rand.Float32() < 0.02
+// canUse ports RandomLookAroundGoal.canUse: getRandom().nextFloat() < 0.02f.
+func (g *randomLookAroundGoal) canUse(_ *TickLoop, e *Entity) bool {
+	return g.always || mobRandom(e).nextFloat() < 0.02
 }
 
 // canContinueToUse ports RandomLookAroundGoal.canContinueToUse = lookTime >= 0.
@@ -256,11 +274,14 @@ func (g *randomLookAroundGoal) canContinueToUse(_ *TickLoop, _ *Entity) bool { r
 
 // start ports RandomLookAroundGoal.start: pick a random heading on the unit circle and a
 // 20+rnd(20)-tick stare. d = 2π·rnd; relX = cos(d); relZ = sin(d).
-func (g *randomLookAroundGoal) start(_ *TickLoop, _ *Entity) {
-	d := math.Pi * 2 * rand.Float64()
+func (g *randomLookAroundGoal) start(_ *TickLoop, e *Entity) {
+	// RandomLookAroundGoal.start draw order (jar): d = (2π) * getRandom().nextDouble() FIRST, then
+	// relX/relZ = cos/sin(d), then lookTime = 20 + getRandom().nextInt(20).
+	r := mobRandom(e)
+	d := math.Pi * 2 * r.nextDouble()
 	g.relX = math.Cos(d)
 	g.relZ = math.Sin(d)
-	g.lookTime = 20 + rand.IntN(20)
+	g.lookTime = 20 + r.nextInt(20)
 }
 
 // requiresUpdateEveryTick ports RandomLookAroundGoal.requiresUpdateEveryTick = true.

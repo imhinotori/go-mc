@@ -43,6 +43,14 @@ type mobAI struct {
 	// computes a path, steps the mob, and clears hasTarget on arrival.
 	wantX, wantY, wantZ float64
 	hasTarget           bool
+
+	// rng is the per-mob seeded RandomSource (ai_random.go) — the Mob.getRandom() analogue every
+	// ported goal draws from (canUse's chance roll, getPosition's offset, start's lookTime). It
+	// REPLACES the shared package math/rand/v2 the goals used before, making the AI 1:1-faithful
+	// (the vanilla draw ORDER) AND deterministic for a fixed seed (the TestTickAIDrivesMobs flake
+	// fix). Tick-owned (TICK-05): created at AI build, drawn only on the tick goroutine. Never nil
+	// for a goal-bearing mob (newPigAI / buildAIFromDecl always set it).
+	rng *entityRandom
 }
 
 // setWantTarget records a navigation target (the randomStrollGoal start() seam). Setting a
@@ -101,6 +109,10 @@ func (m *mobAI) serverAiStep(t *TickLoop, e *Entity) {
 // faithful PASSIVE-AMBIENT subset that makes a Pig amble + look around exactly like vanilla.
 func newPigAI() *mobAI {
 	m := &mobAI{}
+	// Per-mob seeded RandomSource (the Mob.getRandom() analogue) — deterministic for the default
+	// seed; spawn sites may reseed per entity id (reseedMobAI) for per-mob variety. This is the
+	// determinism fix (TestTickAIDrivesMobs) AND the 1:1 faithful draw-order source.
+	m.rng = newEntityRandom(defaultEntityRandomSeed)
 	// navigation.speed is the mob's walk speed in blocks/tick (the stroll speedModifier 1.0
 	// scaled to a vanilla-ish ground speed). A Pig's movement speed attribute ≈ 0.25, walk pace
 	// ≈ 0.1-0.2 blocks/tick; v1 uses 0.15 for a visibly-alive amble (the tunable knob, like the
@@ -115,3 +127,21 @@ func newPigAI() *mobAI {
 // pigWalkSpeed is the v1 Pig's path-following speed in blocks/tick (a tunable, wire-irrelevant
 // value — the stroll goal's speedModifier 1.0 mapped to a vanilla-ish ground pace).
 const pigWalkSpeed = 0.15
+
+// reseedMobAI derives a per-entity deterministic seed from the entity id and reseeds the mob's
+// RandomSource, so each spawned mob has its own reproducible stream (the per-entity getRandom()
+// analogue). Called at spawn after e.ai is attached. A nil rng (a mob built before this plan, or a
+// non-goal mob) is created on demand so the call is always safe. Tick-owned (TICK-05).
+func reseedMobAI(m *mobAI, id int32) {
+	if m == nil {
+		return
+	}
+	// Mix the id into a 64-bit seed (uint32 widen + the nothing-up-my-sleeve constant) so adjacent
+	// ids give well-separated streams. Deterministic for a fixed id.
+	seed := uint64(uint32(id)) ^ defaultEntityRandomSeed
+	if m.rng == nil {
+		m.rng = newEntityRandom(seed)
+		return
+	}
+	m.rng.reseed(seed)
+}

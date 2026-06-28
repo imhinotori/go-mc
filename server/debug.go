@@ -164,7 +164,8 @@ func (t *TickLoop) tickDebug() {
 			pz := 4.5 // a few blocks toward -Z from the player's 8.5 spawn Z
 			py := float64(d.spawnSurfaceY + 1)
 			pig := NewEntity(id, entity.Pig, px, py, pz)
-			pig.ai = newPigAI() // REAL ported AI: tickAI's serverAiStep wanders + navigates it
+			pig.ai = newPigAI()         // REAL ported AI: tickAI's serverAiStep wanders + navigates it
+			reseedMobAI(pig.ai, pig.id) // per-entity deterministic RNG stream (the Mob.getRandom() seed)
 			t.entities.add(pig)
 			d.pigID = id
 			d.pigSpawned = true

@@ -309,8 +309,9 @@ func (r spawnCandidatesReady) applyTo(t *TickLoop) {
 			continue // a mob moved/spawned onto this candidate since the snapshot: DROP it
 		}
 		pig := NewEntity(t.idAlloc.AllocID(), entity.Pig, float64(c.x)+0.5, float64(c.y), float64(c.z)+0.5)
-		pig.ai = newPigAI() // the real ported AI: tickAI's serverAiStep drives wander + A* nav
-		t.entities.add(pig) // the unchanged tracker spawns it on clients next tick (AddEntity)
+		pig.ai = newPigAI()          // the real ported AI: tickAI's serverAiStep drives wander + A* nav
+		reseedMobAI(pig.ai, pig.id)  // per-entity deterministic RNG stream (the Mob.getRandom() seed)
+		t.entities.add(pig)          // the unchanged tracker spawns it on clients next tick (AddEntity)
 		return              // one placement per apply (the throttle)
 	}
 }
