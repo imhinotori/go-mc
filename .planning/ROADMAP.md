@@ -53,7 +53,7 @@ Full phase details: [milestones/v3-ROADMAP.md](milestones/v3-ROADMAP.md).
  (completed 2026-06-28)
 - [x] **Phase 22: Plugin host + event bus** (PLUGIN-02) — the plugin manager (discover/load/unload `.star` plugins from a plugins dir), the manifest, the **event system** (typed events: tick, player join/leave, block break/place, entity spawn/death, damage), the registration API (a plugin declares hooks once at load), and the Go→plugin dispatch seam that stays off the per-entity hot path (event-driven + cached, not per-tick-per-entity).
  (completed 2026-06-28)
-- [ ] **Phase 23: Entity/mob behavior API** (PLUGIN-03) — the **declarative mob-behavior interface**: a plugin DECLARES a mob's attributes/goals/AI (loaded once); Go runs the hot path (physics/pathfinding/tick) calling the declared hooks. The FULL-OVERRIDE path: a plugin can replace a mob's whole behavior. The Go-side bridge exposes the entity/world/nav API to Starlark as frozen, tick-owned-safe handles. Race-clean by construction (TICK-05 carries into the plugin call seam).
+- [x] **Phase 23: Entity/mob behavior API** (PLUGIN-03) — the **declarative mob-behavior interface**: a plugin DECLARES a mob's attributes/goals/AI (loaded once); Go runs the hot path (physics/pathfinding/tick) calling the declared hooks. The FULL-OVERRIDE path: a plugin can replace a mob's whole behavior. The Go-side bridge exposes the entity/world/nav API to Starlark as frozen, tick-owned-safe handles. Race-clean by construction (TICK-05 carries into the plugin call seam). (completed 2026-06-28)
 - [ ] **Phase 24: Vanilla mobs AS plugins (1:1 dogfood)** (PLUGIN-04) — rewrite the existing Go mob/entity logic as Starlark plugins that remain a **literal 1:1 port of the 26.2 jar** (the mandate carries into the plugin layer). This is the validation that the API is ultra-powerful enough to express real vanilla AI. Proven against the jar bytecode + the existing mob-AI tests, byte/behavior-identical to the Go-native path it replaces.
 - [ ] **Phase 25: Crafting/recipes AS plugins (2nd-domain dogfood)** (PLUGIN-05) — the crafting system is built THROUGH the plugin API, not as a hardcoded Go subsystem: a recipe-provider plugin loads the jar-extracted recipes (shaped/shapeless/smelting/etc) and drives the crafting-grid result + the ResultSlot.onTake consumption (the slots exist in InventoryMenu today but the result is a no-op stub — `inventory_click.go`: "no recipes wired in v1"). This proves the plugin API is general across a SECOND domain (recipes/menus, not just entity AI) — the real test of "ultra-powerful". The 1:1 mandate carries: the recipe-match + consume logic stays a literal jar port (RecipeManager/CraftingMenu), just expressed via the plugin host. Includes the crafting_table block + 3×3 menu (vanilla only had the 2×2 inventory grid). Custom (non-vanilla) recipes fall out for free.
 - [ ] **Phase 26: Opt-in Python runtime** (PLUGIN-06) — `qur/gopy` @ `python3.14` (idiomatic CPython bindings via cgo/libpython) behind a `python` build tag so the **default binary stays pure-Go static (CGO=0)**. A bridge for HEAVY off-tick plugins only (never the per-tick hot path — cgo + GIL + non-determinism keep it off the tick). The same event/registration API as Starlark, so a plugin author picks the runtime per workload.
@@ -102,7 +102,7 @@ Plans:
 **Plans**: 2 plans in 2 waves
 Plans:
 - [x] 23-01-PLAN.md — SUB-ATTRIB coverage fix (per-type suppliers + LivingEntity fallback, 1:1 jar) + thin entity/world handles + capability enforcement (Wave 1)
-- [ ] 23-02-PLAN.md — declare_mob/goal + starlarkGoal (via goalSelector) + buildAIFromDecl + the wander-mob GATE (spawns/ticks/moves via Go nav) + idle-no-interpreter + declared-mob -race (Wave 2)
+- [x] 23-02-PLAN.md — declare_mob/goal + starlarkGoal (via goalSelector) + buildAIFromDecl + the wander-mob GATE (spawns/ticks/moves via Go nav) + idle-no-interpreter + declared-mob -race (Wave 2)
 **Research**: The hardest design question — the exact frozen-handle API surface (which entity/world/nav ops, read-only vs mutating). Map the existing Go goal-selector/brain seams to declared hooks.
 
 ### Phase 24: Vanilla mobs AS plugins (1:1 dogfood)
@@ -170,7 +170,7 @@ Plans:
 | 17–20 (v3 online-mode + operator-UX + structure-polish) | v3 | 33/33 | Complete | 2026-06-27 |
 | 21. Starlark runtime foundation | v4 | 2/2 | Complete   | 2026-06-28 |
 | 22. Plugin host + event bus | v4 | 2/2 | Complete   | 2026-06-28 |
-| 23. Entity/mob behavior API | v4 | 1/2 | In Progress|  |
+| 23. Entity/mob behavior API | v4 | 2/2 | Complete   | 2026-06-28 |
 | 24. Vanilla mobs AS plugins (1:1 dogfood) | v4 | 0/? | Not started | — |
 | 25. Crafting/recipes AS plugins (2nd-domain dogfood) | v4 | 0/? | Not started | — |
 | 26. Opt-in Python runtime | v4 | 0/? | Not started | — |

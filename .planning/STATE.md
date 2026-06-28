@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v4
 milestone_name: Plugin / Scripting System
-status: executing
-stopped_at: "Completed 22-02-PLAN.md — Phase 22 (plugin-host-event-bus) COMPLETE: 8 discrete server seams emit host.Emit (on_damage post-mitigation, on_tick once/tick zero-sub-guarded), THE GATE proves fire-once-per-break N-independent, anti-seam grep clean, FULL fsnotify hot-reload (off-tick rebuild -> tick-goroutine swap) -race clean. CGO=0 build/test green; Docker -race ./plugin/host/ ./server/ green. Commits e5739e36 + 42d513f0. main() wires plugins/ + watcher."
-last_updated: "2026-06-28T05:23:17.737Z"
+status: verifying
+stopped_at: "Completed 23-02-PLAN.md — Phase 23 (entity-mob-behavior-api) plans COMPLETE: the PLUGIN-03 behavior layer. declare_mob/goal capture a declaration ONCE at load into a tick-read mobRegistry (import-direction-A via host.LoadDirWith extra); a starlarkGoal implements the EXISTING server.Goal + is arbitrated by the SAME goalSelector (not a bypass); buildAIFromDecl mirrors newPigAI (fresh per-spawn mobAI, SHARED frozen callables). THE GATE green: a Starlark wander mob (base_type pig, one MOVE goal using nav.path_to) spawns, ticks via tickAI->serverAiStep, and MOVES through the real Go nav, rendering as entity.Pig.ID. Interpreter fires ONLY at the running-goal seam (idle=0 calls; no starlark.Call in tickAI/tickPhysics/tickEntities); callbacks budget-bounded + error-isolated. Declared-mob tick Docker -race clean. CGO=0 build/vet/test green. Commits 58dc2da1 + dd2d58dd + 9d6f185a. NEXT: phase verification."
+last_updated: "2026-06-28T05:40:26.861Z"
 last_activity: 2026-06-28
 progress:
   total_phases: 8
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 6
-  completed_plans: 5
-  percent: 83
+  completed_plans: 6
+  percent: 100
 ---
 
 # Project State
@@ -25,9 +25,9 @@ See: .planning/PROJECT.md (updated 2026-06-23)
 
 ## Current Position
 
-Phase: 23 (entity-mob-behavior-api) — EXECUTING
-Plan: 2 of 2
-Status: Ready to execute
+Phase: 23 (entity-mob-behavior-api) — PLANS COMPLETE
+Plan: 2 of 2 (both complete)
+Status: Phase complete — ready for verification
 Last activity: 2026-06-28
 
 ### ⚠️ WHAT'S NEXT (resume here — see .planning/HANDOFF.md for the FULL detail)
@@ -127,7 +127,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [████████░░] 83%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -220,6 +220,7 @@ Progress: [████████░░] 83%
 | Phase 22 P01 | 25min | 3 tasks | 15 files |
 | Phase 22 P02 | 40min | 2 tasks | 13 files |
 | Phase 23 P01 | 40min | 3 tasks | 5 files |
+| Phase 23 P02 | 12min | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -228,6 +229,7 @@ Progress: [████████░░] 83%
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- [Phase 23]: 23-02 PLUGIN-03 behavior layer — declare_mob/goal capture a declaration ONCE at load into a tick-read mobRegistry (import-direction-A: the server owns the declare_mob/goal builtins + registry and injects them via host.LoadDirWith extra; the host just runs the body that captures into them). A starlarkGoal implements the EXISTING server.Goal and is arbitrated by the SAME goalSelector flag-locking (NOT a bypass, NOT a parallel AI tick); buildAIFromDecl mirrors newPigAI (a fresh per-spawn *mobAI whose starlarkGoals reference the SHARED frozen callables — per-mob struct state, shared frozen values). THE GATE green: a Starlark wander mob (base_type pig, one MOVE goal using nav.path_to) spawns, ticks via tickAI->serverAiStep, and MOVES through the real Go nav, rendering as entity.Pig.ID (custom = the BEHAVIOR, not a new wire id; an unknown base_type/flag/duplicate errors loudly at load). The interpreter fires ONLY inside a running goal's tick/canUse/start/stop (an idle declared mob makes 0 starlark.Calls/tick; NO starlark.Call in tickAI/tickPhysics/tickEntities); every callback runs on a fresh budget-bounded thread (stepBudget) + is error-isolated (logged, the tick survives). Declared-mob tick path Docker -race clean (the owner+pathPool A* compute is the only cross-goroutine boundary; the handles + starlarkGoal store an id, never a live *Entity — T-23-09). A plugin-facing spawn builtin is OUT of scope (T-23-11 accept — spawnDeclaredMob is the test/debug seam). Commits 58dc2da1 + dd2d58dd + 9d6f185a.
 - [Phase 6 / user, 2026-06-24]: SOURCE-PORTING PERMITTED for gameplay LOGIC — may read Bukkit/Spigot/Paper/Leaf (and the decompiled vanilla jar) and translate their behavior into Go as a NON-1:1 port, explicitly to make Sulfur behave 1:1 with a real server. This is the sanctioned way to get vanilla-faithful mechanics (AI, pathfinding, dig timing, damage, mob behavior) right in Phase 7+. NOT a blanket code-copy: translate the algorithm/behavior, keep it idiomatic Go, no direct paste of GPL Java. Wire layouts still come from the unobfuscated jar (javap) as the authoritative proto-776 source. (Prompted by the 06-07 "creative break" bug = misread START vs STOP dig stages — exactly the gameplay-logic class this permission covers.)
 - [Phase 7 MANDATE / user, 2026-06-24]: MOB LOGIC must be PORTED DIRECTLY FROM JAVA (vanilla decompiled jar + Paper/Leaf) so mob behavior is IDENTICAL to a real server — not approximated. Phase 7's AI/pathfinding work reads the actual `net.minecraft.world.entity.ai` sources (Goal/GoalSelector, the Brain/Behavior memory system, PathNavigation/NodeEvaluator A*) and translates them faithfully into Go. The debug pig's current sinusoidal pacing is a THROWAWAY cosmetic SULFUR_DEBUG trigger and will be REPLACED by the real ported AI in Phase 7 — do not treat it as the mob model.
 - [Phase 6]: Real-client interactive check (06-07) surfaced 3 bugs no self-test caught: respawn stuck on "Loading terrain" + dead (performRespawn must mirror the join bootstrap — GameEvent(LEVEL_CHUNKS_LOAD_START) + SetHealth(full) + abilities/held-slot, not just Respawn+teleport); survival break fired on START_DESTROY_BLOCK (instant "creative" break) — must fire only on STOP_DESTROY_BLOCK; empty v1 inventory means a survival client emits no UseItemOn (place) without a held item. Fixed in 94ec8a14. The debug pig motion is a cosmetic SULFUR_DEBUG trigger, NOT real AI (Phase 7).
