@@ -121,6 +121,14 @@ type region struct {
 	// per-region (naturalSpawn sets it when it submits; spawnCandidatesReady.applyTo clears it).
 	// A plain bool touched only on the region's goroutine, so it needs no atomic.
 	spawnScanPending bool
+
+	// tickHook is a TEST-ONLY seam (Phase-27 STEP-2): when non-nil, region.tick invokes it FIRST,
+	// on the region's goroutine, before the per-region phases. It exists so a test can inject a
+	// region whose tick panics (TestRegionPanicIsolated — the T-27-02 DoS-isolation proof: conc
+	// re-raises the panic on the coordinator goroutine where recoverTick catches it) or observe
+	// the barrier ordering (TestCoordinatorBarrier). In production it stays nil and costs one
+	// nil-check per region per tick — the same zero-cost discipline as applyInputHook/phaseTrace.
+	tickHook func()
 }
 
 // newRegion constructs an empty region bound to the global coordinator. It wires a fresh

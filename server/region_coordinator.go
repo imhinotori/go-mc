@@ -48,6 +48,11 @@ import (
 // per-region tick is -race clean by the same single-owner discipline as the pre-extraction
 // TickLoop (TICK-05, multiplied by N).
 func (r *region) tick(gt int64) {
+	// Test-only seam (nil in production): inject a panic (TestRegionPanicIsolated) or observe the
+	// barrier (TestCoordinatorBarrier) on the region's goroutine, before the per-region phases.
+	if r.tickHook != nil {
+		r.tickHook()
+	}
 	t := r.coord
 	// The PER-REGION phases, in the EXACT order today's tickOnce ran them (the gameplay order is
 	// the load-bearing contract — TestTickPhaseOrder). At N=1 these range t.only() == r.
