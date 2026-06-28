@@ -22,9 +22,18 @@ import (
 // kills the tick. The fresh thread carries the Phase-21 step budget (T-22-01),
 // so a runaway hook returns *EvalError and the loop continues.
 func (m *Manager) Emit(evt EventType, payload Event) {
+	// Python off-tick lane FIRST: a python plugin's hooks live in its own handle
+	// (register_python.go), NOT in m.hooks, so the starlark zero-subscriber check
+	// below must NOT short-circuit the python dispatch. emitPython is a cheap no-op
+	// when there is no python lane / no python plugins (one nil check + a loop that
+	// skips starlark plugins), so the on-tick hot path stays free on a server with
+	// no python plugin loaded. It SUBMITS off-tick (drop-on-overload) and returns
+	// immediately — the tick never blocks on python (PLUGIN-06).
+	m.emitPython(evt, payload)
+
 	hooks := m.hooks[evt]
 	if len(hooks) == 0 {
-		return // NO subscribers → one map read, zero interpreter cost
+		return // NO starlark subscribers → one map read, zero interpreter cost
 	}
 	args := payload.toStarlark()
 	for _, h := range hooks {

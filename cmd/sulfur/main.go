@@ -294,6 +294,13 @@ func main() {
 	// the same Manager — an operator recipe plugin (e.g. customrecipe) registers the FINAL matcher
 	// (last-loaded wins) that falls through to the vanilla table, so vanilla + custom both craft.
 	pluginMgr := host.New()
+	// PLUGIN-06 (Plan 26-02): wire the OPT-IN CPython runtime + off-tick dispatch
+	// BEFORE LoadDir, so a runtime="python" plugin loads and its hooks fire OFF-TICK
+	// via the tick's pluginPool. On the default (no `-tags python`) build WirePython
+	// is a no-op (async_python_stub.go) → python manifests are skipped gracefully and
+	// the binary stays pure-Go static (CGO=0). On `-tags python` it registers the
+	// gopy-backed loader + routes hooks to TickLoop.submitPythonHook.
+	server.WirePython(tick, pluginMgr)
 	if err := server.LoadCraftingPlugin(pluginMgr); err != nil {
 		log.Fatalf("crafting boot-load failed (the server cannot craft): %v", err)
 	}

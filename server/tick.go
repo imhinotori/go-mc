@@ -173,6 +173,26 @@ type TickLoop struct {
 	trackerPool *ants.Pool
 	spawnPool   *ants.Pool
 
+	// pluginPool is the OFF-TICK PYTHON LANE pool (PLUGIN-06, Plan 26-02): a python
+	// plugin's hook is submitted here (submitPythonHook → submitOrDrop), runs
+	// GIL-held on a LockOSThread-pinned worker (plugin/python.CallHook, behind
+	// //go:build python), and rejoins via pythonHookReady on asyncIn2. It is plain
+	// ants — NO cgo (the gopy call is one host.PythonPlugin interface hop away,
+	// inside CallHook), so this field + its construction stay in the default build.
+	// Sized SMALL (asyncSmallPoolSize): the single process-global GIL serializes
+	// every python call (subinterp_python.go — gopy@3.14 has no sub-interpreters),
+	// so a large pool would only pile work; small + drop-on-overload bounds it
+	// (T-26-07 — a saturated pool DROPS, the tick never blocks).
+	pluginPool *ants.Pool
+
+	// pythonHooksApplied / pythonHookErrors are the off-tick python lane telemetry,
+	// bumped ONLY on the owner inside pythonHookReady.applyTo (TICK-05 — the worker
+	// never touches them). They count successful vs errored python hook round-trips
+	// (the Phase-26 owner-side effect is bookkeeping only, not world mutation).
+	// Tick-owned plain int64s; read via PythonHookStats for tests/telemetry.
+	pythonHooksApplied int64
+	pythonHookErrors   int64
+
 	// spawnScanPending is the OPT-03 (08-05) single-in-flight gate for the async natural-spawn
 	// scan: naturalSpawn sets it true when it SUBMITS a candidate scan to spawnPool, and
 	// spawnCandidatesReady.applyTo clears it on rejoin (always — even when the scan placed nothing).
@@ -864,6 +884,10 @@ func NewTickLoop(clock Clock) *TickLoop {
 		pathPool:    newAsyncPool(runtime.NumCPU()),
 		trackerPool: newAsyncPool(asyncSmallPoolSize),
 		spawnPool:   newAsyncPool(asyncSmallPoolSize),
+		// pluginPool: the off-tick python lane (Plan 26-02). Small + non-blocking —
+		// the single GIL serializes python, so a saturated pool DROPS (T-26-07).
+		// Idle no-op until a runtime="python" plugin is wired (WirePython, tagged).
+		pluginPool: newAsyncPool(asyncSmallPoolSize),
 		// pluginSwap is the hot-reload swap channel (Plan 22-02). Buffered 1 with replace-latest
 		// semantics: the off-tick watcher sends a freshly-rebuilt *host.Manager here and the owner
 		// drains+swaps it in drainRegistrations. Constructed always (cheap) so the watcher can feed it
@@ -913,6 +937,18 @@ func (t *TickLoop) Close() {
 	if t.spawnPool != nil {
 		t.spawnPool.Release()
 	}
+	if t.pluginPool != nil {
+		t.pluginPool.Release()
+	}
+}
+
+// PythonHookStats reports the off-tick python lane telemetry (Plan 26-02):
+// successful applies + errored hooks, both bumped owner-side in
+// pythonHookReady.applyTo. Tick-owned — call on the tick goroutine (or after the
+// loop stops). Exposed for tests (the off-tick round-trip assertion) + operator
+// telemetry.
+func (t *TickLoop) PythonHookStats() (applied, errors int64) {
+	return t.pythonHooksApplied, t.pythonHookErrors
 }
 
 // asyncBridgeBuffer bounds the internal worker-results -> asyncResult bridge channel.

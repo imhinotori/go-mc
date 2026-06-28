@@ -63,6 +63,50 @@ type Manager struct {
 	// default (no-tag) build → runtime="python" plugins are skipped gracefully.
 	// The host holds it BY INTERFACE so plugin/host never imports gopy (cgo-free).
 	pythonRuntime PythonRuntime
+
+	// pythonDispatch is the OFF-TICK submit seam (Wave 2). When Emit fires a
+	// discrete event, it hands each loaded python plugin + the event's plain
+	// scalar args to this callback, which submits the hook to the off-tick ants
+	// pool (server/async_python_python.go) — Emit NEVER calls a python hook inline
+	// (PLUGIN-06 off-tick rule). It is registered by the server via
+	// SetPythonDispatch; nil on a server with no python lane (Emit just skips the
+	// python plugins). Plain Go signature (no cgo, no *py.Object) so plugin/host
+	// stays cgo-free — the gopy marshalling happens inside the PythonPlugin.CallHook
+	// the callback ultimately invokes.
+	pythonDispatch func(pp PythonPlugin, event string, args []any)
+}
+
+// SetPythonDispatch registers the off-tick python submit callback (Wave 2). The
+// server wires it to TickLoop.submitPythonHook so a python plugin's hook is
+// queued to the bounded plugin pool instead of run on the tick goroutine. Called
+// ONCE before the tick loop owns the Manager (like SetPythonRuntime). On a server
+// without the python lane it is never called → Emit skips python plugins.
+func (m *Manager) SetPythonDispatch(fn func(pp PythonPlugin, event string, args []any)) {
+	m.pythonDispatch = fn
+}
+
+// emitPython hands each loaded python plugin the event off-tick via the registered
+// dispatch callback. It is called from Emit on the tick goroutine; the callback
+// SUBMITS (drop-on-overload) and returns immediately, so the tick never blocks on
+// python. A nil dispatch (no python lane) or no python plugins makes this a cheap
+// no-op. The plugin's CallHook is a no-op for events it never registered, so it is
+// correct to offer EVERY discrete event to EVERY python plugin — the per-event
+// subscription lives inside the plugin's own captured hooks map (register_python.go),
+// not in the host bus (which only tracks starlark hooks).
+func (m *Manager) emitPython(evt EventType, payload Event) {
+	if m.pythonDispatch == nil {
+		return // no python lane wired (default build, or no SetPythonDispatch)
+	}
+	var args []any
+	for _, p := range m.plugins {
+		if p.python == nil {
+			continue // a starlark plugin — handled inline by the m.hooks bus
+		}
+		if args == nil {
+			args = payload.toArgs() // marshal once, lazily, only if a python plugin exists
+		}
+		m.pythonDispatch(p.python, string(evt), args)
+	}
 }
 
 // New returns an empty Manager with an initialized hook map.
