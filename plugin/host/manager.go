@@ -15,6 +15,7 @@ package host
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 
@@ -30,9 +31,13 @@ type Hook struct {
 }
 
 // loadedPlugin wraps a plugin's manifest + its Phase-21 LoadedPlugin handle.
+// For a runtime="python" plugin loaded WITH the tag, `python` holds the loaded
+// CPython handle (a plain interface — no cgo) the Wave-2 off-tick lane dispatches
+// to; it is nil for starlark plugins (and on the default build).
 type loadedPlugin struct {
 	manifest Manifest
 	loaded   *starlarkpkg.LoadedPlugin
+	python   PythonPlugin
 }
 
 // Manager is the single owner of the loaded plugins + the typed event bus.
@@ -52,6 +57,12 @@ type Manager struct {
 	recipeRemaining starlark.Callable
 	recipeTable     starlark.Value
 	recipeOwner     string // the plugin that registered the matcher (for Unload)
+
+	// pythonRuntime is the OPT-IN CPython lane, registered at boot from a
+	// //go:build python adapter via SetPythonRuntime (runtime.go). nil on the
+	// default (no-tag) build → runtime="python" plugins are skipped gracefully.
+	// The host holds it BY INTERFACE so plugin/host never imports gopy (cgo-free).
+	pythonRuntime PythonRuntime
 }
 
 // New returns an empty Manager with an initialized hook map.
@@ -87,8 +98,32 @@ func (m *Manager) LoadDirWith(root string, extra starlark.StringDict) error {
 		if err != nil {
 			return fmt.Errorf("plugin %s: %w", e.Name(), err)
 		}
-		if man.Runtime != "starlark" {
-			continue // Phase 26 handles runtime=="python"; skip for the default build
+		// Route by the manifest runtime selector. "starlark" falls through to the
+		// inline Phase-22 load path below; "python" routes to the opt-in CPython
+		// lane via the runtime-routing interface (loaded WITH the tag, skipped
+		// gracefully WITHOUT it); any other runtime errors loudly so an unknown
+		// runtime is never silently loaded (threat T-26-05, the Phase-22
+		// "load loudly or skip" discipline).
+		switch man.Runtime {
+		case "starlark":
+			// fall through to the existing starlark load path below.
+		case "python":
+			if m.pythonAvailable() {
+				entry := filepath.Join(dir, man.Entrypoint)
+				pp, err := m.pythonRuntime.Load(entry)
+				if err != nil {
+					return fmt.Errorf("plugin %s load (python): %w", man.Name, err)
+				}
+				m.plugins = append(m.plugins, &loadedPlugin{manifest: man, python: pp})
+			} else {
+				// Default (no-tag) build, or no python runtime registered: skip
+				// gracefully and keep scanning (T-26-06 accept — a missing optional
+				// runtime is not a server-down condition).
+				log.Printf("plugin %q: python runtime not built in this binary; skipping", man.Name)
+			}
+			continue
+		default:
+			return fmt.Errorf("plugin %s: unknown runtime %q (want \"starlark\" or \"python\")", man.Name, man.Runtime)
 		}
 		// Predeclared = host builtins (log) + per-plugin register + the recipe
 		// seam builtins (set_recipe_matcher/set_recipe_remaining/recipes) +
@@ -131,6 +166,12 @@ func (m *Manager) Unload(name string) {
 	for _, p := range m.plugins {
 		if p.manifest.Name != name {
 			out = append(out, p)
+			continue
+		}
+		// Tear down the python handle if this was a python plugin (drops the
+		// captured callable refs; no-op for starlark plugins, python == nil).
+		if p.python != nil {
+			p.python.Close()
 		}
 	}
 	m.plugins = out
