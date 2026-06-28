@@ -73,7 +73,7 @@ const (
 func main() {
 	addr := flag.String("addr", "localhost:25565", "Sulfur server address")
 	name := flag.String("name", "TestBot", "offline player name (UUID derived via offline.NameToUUID)")
-	mode := flag.String("mode", "hold", "movement script: hold | walk | swim | dive | goto")
+	mode := flag.String("mode", "hold", "script: hold | walk | swim | dive | goto | wander | gate (PLUGIN-07 visual gate)")
 	ticks := flag.Int("ticks", 200, "number of movement ticks to run, then disconnect cleanly")
 	tx := flag.Float64("x", 0, "goto target X (or spawn X override)")
 	ty := flag.Float64("y", 0, "goto target Y (or spawn Y override)")
@@ -145,6 +145,14 @@ func main() {
 	if *overrideSpawn {
 		b.x, b.y, b.z = *tx, *ty, *tz
 		log.Printf("spawn overridden to (%.3f, %.3f, %.3f)", b.x, b.y, b.z)
+	}
+
+	// PLUGIN-07 VISUAL GATE (-mode gate, cmd/testbot/gate.go): drive the 4-item plugin-system
+	// checklist + assert on observed packets, then os.Exit(0) on all-pass / os.Exit(1) on any fail.
+	// It owns its own reader + writer loop (runGate), so it bypasses the scripted movement loop below.
+	if *mode == "gate" {
+		b.runGate() // never returns (os.Exit)
+		return
 	}
 
 	onGround := defaultOnGround(*mode)
@@ -233,6 +241,30 @@ type bot struct {
 	blockSeq         int32
 	digX, digY, digZ int
 	broke            bool
+
+	// gate* are the PLUGIN-07 visual-gate OBSERVATION state (-mode gate, cmd/testbot/gate.go). The
+	// readLoop (reader goroutine) RECORDS what it decodes off the wire into these; runGate (the
+	// main goroutine) READS them between scenario steps to assert each checklist item observed its
+	// SPECIFIC effect (the false-pass guard — threat T-28-02). gateMu guards every field below
+	// because the reader writes and runGate reads them concurrently. They are populated ONLY when
+	// b.mode == "gate" (the cases are additive no-ops in every other mode).
+	gateMu        sync.Mutex
+	addEntities   map[int32]int32  // entity id -> entity type id (every AddEntity the bot observed)
+	moveCounts    map[int32]int    // entity id -> count of move-entity packets (proves the mob MOVES)
+	sawHeadRot    map[int32]bool   // entity id -> saw a SetEntityData / RotateHead (headrot/metadata)
+	sawOpenScreen bool             // a crafting menu opened (ClientboundOpenScreen)
+	craftWindow   int32            // the windowId the last ClientboundOpenScreen allocated (crafting menu)
+	craftResults  []craftResultObs // each non-empty result slot the bot observed in the crafting window
+	sawGateChat   bool             // observed a ClientboundSystemChat containing the "gate_events:" marker
+	gateChatTexts []string         // every decoded SystemChat text (for the transcript)
+}
+
+// craftResultObs is one observed crafting result-slot population: the menu slot that received a
+// non-empty stack + the item id + count. runGate asserts a result slot (menu slot 0) populated.
+type craftResultObs struct {
+	slot   int16
+	itemID int32
+	count  int32
 }
 
 func (b *bot) dial(addr string) error {
@@ -773,6 +805,59 @@ func (b *bot) readLoop() {
 		case packetid.ClientboundSetEntityData:
 			if err := validateSetEntityData(p); err != nil {
 				log.Printf("[DECODE-FAIL] SetEntityData: %v (%d bytes)", err, len(p.Data))
+			}
+		case packetid.ClientboundAddEntity:
+			// GATE (item #1/#2): a mob became visible. Decode the leading id + type from
+			// encodeAddEntity's wire (VarInt id, UUID, VarInt typeId, ...) — enough to track
+			// which ids appeared and their wire type. Additive: only records in gate mode.
+			if b.mode == "gate" {
+				b.recordAddEntity(p)
+			}
+		case packetid.ClientboundMoveEntityPos,
+			packetid.ClientboundMoveEntityPosRot,
+			packetid.ClientboundMoveEntityRot,
+			packetid.ClientboundTeleportEntity,
+			packetid.ClientboundEntityPositionSync:
+			// GATE (item #1/#2): the mob MOVED. The leading field of every one of these is the
+			// VarInt entity id; increment its move count (the wander mob walks via the Go nav,
+			// a vanilla pig drifts via its stroll goal). Counts the absolute-position packets too
+			// (the tracker uses TeleportEntity/EntityPositionSync for moved entities in v1).
+			if b.mode == "gate" {
+				b.recordMove(p)
+			}
+		case packetid.ClientboundRotateHead:
+			// GATE (item #2 supporting): headrot. Leading field is the VarInt entity id.
+			if b.mode == "gate" {
+				b.recordHeadRot(p)
+			}
+		case packetid.ClientboundOpenScreen:
+			// GATE (item #3): the crafting menu opened. Capture the windowId (leading VarInt) so the
+			// gate's ContainerClick targets the open crafting window (handleContainerClick routes by id).
+			if b.mode == "gate" {
+				var win, menuID pk.VarInt
+				_ = p.Scan(&win, &menuID)
+				b.gateMu.Lock()
+				b.sawOpenScreen = true
+				b.craftWindow = int32(win)
+				b.gateMu.Unlock()
+				log.Printf("[gate] observed OpenScreen windowId=%d menu=%d", int32(win), int32(menuID))
+			}
+		case packetid.ClientboundContainerSetContent:
+			// GATE (item #3): the full crafting-window content — if menu slot 0 (the result) is a
+			// non-empty stack, the plugin matcher populated it.
+			if b.mode == "gate" {
+				b.recordContainerContent(p)
+			}
+		case packetid.ClientboundContainerSetSlot:
+			// GATE (item #3): a single-slot update — record a non-empty result slot (menu slot 0).
+			if b.mode == "gate" {
+				b.recordContainerSlot(p)
+			}
+		case packetid.ClientboundSystemChat:
+			// GATE (item #4): the on_block_break / on_player_join hook's chat() reaction. Decode the
+			// NBT Component text and flag it if it carries the gate_events marker.
+			if b.mode == "gate" {
+				b.recordSystemChat(p)
 			}
 		case packetid.ClientboundDisconnect:
 			e := fmt.Errorf("server disconnected: %s", decodeText(p))
