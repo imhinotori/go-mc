@@ -132,7 +132,7 @@ Plans:
 **Plans**: 3 plans in 3 waves
 Plans:
 - [x] 25-01-PLAN.md — level/recipe data embed + parse (ALL types) + the 1:1 match (shaped shrink+mirror, shapeless multiset, cooking/stonecutting) + the value-returning Match seam in plugin/host (Wave 1)
-- [ ] 25-02-PLAN.md — un-stub ResultSlot.onTake + 1:1 consume (2×2 grid crafts) + crafting_table 3×3 menu (chest-open clone) + //go:embed'd vanilla recipe plugin boot-load + THE GATE (vanilla + custom recipe) + -race (Wave 2)
+- [x] 25-02-PLAN.md — un-stub ResultSlot.onTake + 1:1 consume (2×2 grid crafts) + crafting_table 3×3 menu (chest-open clone) + //go:embed'd vanilla recipe plugin boot-load + THE GATE (vanilla + custom recipe) + -race (Wave 2)
 - [ ] 25-03-PLAN.md — cooking/stonecutting BLOCK build-or-defer audit (deferred-blocks.md, cited) + build the feasible block(s) 1:1; deferred types keep their matcher (Wave 3)
 **Research**: RecipeManager/CraftingMenu/ResultSlot.onTake bytecode; the jar recipe extraction; the item/menu bridge surface the plugin API needs.
 
@@ -180,7 +180,7 @@ Plans:
 | 22. Plugin host + event bus | v4 | 2/2 | Complete   | 2026-06-28 |
 | 23. Entity/mob behavior API | v4 | 2/2 | Complete   | 2026-06-28 |
 | 24. Vanilla mobs AS plugins (1:1 dogfood) | v4 | 2/2 | Complete   | 2026-06-28 |
-| 25. Crafting/recipes AS plugins (2nd-domain dogfood) | v4 | 1/3 | In Progress|  |
+| 25. Crafting/recipes AS plugins (2nd-domain dogfood) | v4 | 2/3 | In Progress|  |
 | 26. Opt-in Python runtime | v4 | 0/? | Not started | — |
 | 27. Folia regionization | v4 | 0/? | Not started | — |
 | 28. Plugin system visual + perf gate | v4 | 0/? | Not started | — |

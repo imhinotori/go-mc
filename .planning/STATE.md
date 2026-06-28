@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v4
 milestone_name: Plugin / Scripting System
-status: executing
+status: verifying
 stopped_at: Completed 24-02-PLAN.md — Phase 24 (vanilla-mobs-as-plugins) COMPLETE
-last_updated: "2026-06-28T17:09:50.545Z"
+last_updated: "2026-06-28T17:38:42.982Z"
 last_activity: 2026-06-28
 progress:
   total_phases: 8
   completed_phases: 4
   total_plans: 11
-  completed_plans: 9
-  percent: 82
+  completed_plans: 10
+  percent: 91
 ---
 
 # Project State
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-06-23)
 
 Phase: 25 (crafting-recipes-as-plugins) — EXECUTING
 Plan: 2 of 2
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-06-28
 
 ### ⚠️ WHAT'S NEXT (resume here — see .planning/HANDOFF.md for the FULL detail)
@@ -127,7 +127,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [████████░░] 82%
+Progress: [█████████░] 91%
 
 ## Performance Metrics
 
@@ -224,6 +224,7 @@ Progress: [████████░░] 82%
 | Phase 24 P01 | 9min | 2 tasks | 9 files |
 | Phase 24 P02 | 25min | 3 tasks | 19 files |
 | Phase 25 P01 | 11min | 3 tasks | 13 files |
+| Phase 25 P02 | 17min | 3 tasks | 18 files |
 
 ## Accumulated Context
 
@@ -356,6 +357,7 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 24]: 24-02 PLUGIN-04 dogfood — the vanilla Pig's 3 passive goals (Stroll@6 MOVE, LookAt@7 LOOK, LookAround@8 MOVE|LOOK) re-expressed 1:1 in plugins/vanilla_pig/main.star against the 26.2 jar (each cites its ai.goal.* class), //go:embed boot-loaded into a tick-owned registry (loud-fail if absent), SWAPPED in as the only pig (spawnVanillaPig replaces newPigAI at both spawn sites; the Go goals KEPT as the behavior-identical oracle). Two fidelity fixes: requires_update_every_tick threaded into starlarkGoal (RandomLookAround.requiresUpdateEveryTick==true) + a per-(mob,goal) get_state/set_state scratch (frozen-boundary fix). New seams: set_look_at (LookControl.setLookAt), rand_double (nextDouble), nav.stop, goal() tick-optional+can_continue; sandbox math module added. All 5 new goals DEFERRED cited (deferred-goals.md). TestPluginPigEqualsGoNativePig proves plugin==Go over 500 ticks; existing pig-AI suite passes UNCHANGED; CGO=0 green; Docker -race clean. Commits 56b2f88a + a66659b7 + 4a61e648.
 - [Phase ?]: [Phase 25] 25-01: level/recipe embeds + parses ALL vanilla recipe types (the level/loot twin); the 1:1 match is javap-verified — ofPositioned bounding-box SHRINK, ShapedRecipePattern mirror-then-unmirror (index (mirror?width-col-1:col)+row*width), ShapelessRecipe multiset cover (bipartite == StackedItemContents.canCraft), SingleItemRecipe single-ingredient cooking/stonecutting. Match() returns result + a per-cell used mask mapped through (Left,Top) for Wave-2 consume. Item tags embedded INTO level/recipe to keep it server-pure; #tag expanded recursively. Special types parsed as markers via a type-first decode (smithing_trim pattern is a STRING). Commits ff62c439+e30bda2c+fbc4d67d.
 - [Phase ?]: [Phase 25] 25-01: plugin/host gains the value-returning Match/Remaining seam (set_recipe_matcher + recipes builtins + SetRecipeTable) extending Phase-22 void Emit to query-resolution — the host READS the matcher's {id,count} dict back into Go. Fresh budget-bounded thread + recover; runaway matcher -> step budget *EvalError -> ok=false (T-25-01); readResult validates id>0 && count>0 (T-25-03). Lock-free write-at-load/read-on-tick; Unload drops the owned matcher.
+- [Phase ?]: [Phase 25] 25-02: crafting THROUGH the plugin path (PLUGIN-05). ResultSlot.onTake UN-STUBBED — inventory_click.go slotOnTake routes a result-slot take to onTakeCraft; the 1:1 consume re-derives the asPositionedCraftInput footprint via the exported level/recipe.OfPositioned + removeItem(slot,1) per non-empty cell (GO applies the deltas over the tick-owned grid — NOT a plugin-supplied used mask, NOT a whole-new-grid return). The crafting_table block + 3x3 CraftingMenu clone the Phase-20 chest-open subsystem (openContainer.kind discriminator + transient craftGrid; close returns the grid via clearContainer, NOT chest persist). The vanilla recipe plugin is //go:embed'd + LoadCraftingPlugin boot-loaded (FATAL on no matcher) so a DEFAULT server crafts out-of-the-box; cmd/sulfur/main.go loads it into one Manager + the operator plugins/ on top. Custom-recipe model = matcher-fallthrough (set_recipe_matcher last-wins; customrecipe loads after crafting, checks custom-first then falls through to the 1:1 vanilla algorithm over recipes()). THE GATE green: vanilla (2 planks->4 sticks via Manager.Match + 1-per-cell consume) AND custom (1 dirt->1 diamond) both craft; Docker -race clean over ./plugin/... ./server/. Commits 9c3f3281+6a63d397+d1c994f5.
 
 ### Pending Todos
 
@@ -385,7 +387,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-28T17:09:40.230Z
+Last session: 2026-06-28T17:37:59.246Z
 Stopped at: Completed 24-02-PLAN.md — Phase 24 (vanilla-mobs-as-plugins) COMPLETE
 Resume file: None
 Next: OPERATOR CHECKPOINT (19-02 Task 3) — build `CGO_ENABLED=0 go build -o sulfur.exe ./cmd/sulfur`, run `./sulfur.exe -seed 777` in a REAL terminal (expect alt-screen TUI: log viewport + command input), type `say hi`+Enter (expect a `console command cmd=say hi` viewport line), connect a vanilla 26.2 client (expect a join line), Ctrl-C (clean exit), then `./sulfur.exe -seed 777 | cat` (expect NO TUI, plain stderr — today's behavior). On "approved" → mark TUI-01 complete + advance the plan counter, then proceed to Plan 19-03 (gameplay_tick.go join/leave slog conversion + the full disconnect taxonomy). The console line routes TUI→tick (EnqueueConsoleCommand, cap 64, drop-on-full)→runConsoleCommand on the tick→existing graph (grant-all, no issuer), reply to slog. gameplay_tick.go is untouched (19-03 owns it). LEGACY: Phase 17 Wave 2 (17-02/17-03) — see prior continuity below. (GAMEPLAY-05 fluid simulation: OVERWRITE server/fluid.go with the FlowingFluid port + scheduled-tick queue; lazy-init t.fluidSchedule inside tickFluids, do NOT edit tick.go/tick_phases.go) and 17-03 (GAMEPLAY-04 fall damage + PvP dispatch: OVERWRITE server/fall_damage.go using the tickPlayer fallDistance/wasOnGround/lastY fields + the lookupPlayerByEntityID reverse lookup, do NOT edit tick.go/tick_phases.go). The exact Wave-2 seam surface (field names, init point, call sites, stub signatures) is in 17-01-SUMMARY.md "WAVE-2 HANDOFF". Deferred-still-open: dungeon loot/spawner-mob + BeehiveDecorator occupant + pale_garden PaleMoss (all v3, cosmetic, in 13-04-SUMMARY); KeepAlive double-leave hardening (Phase 3). KNOWN PRE-EXISTING FLAKE: TestTickAIDrivesMobs (OPT-01 async-pool timing, not caused by 17-01) intermittently fails under full-suite load; passes in isolation + 3× under -race.

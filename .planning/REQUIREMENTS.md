@@ -27,7 +27,7 @@ The "user" is now (a) a **plugin author** writing `.star` (or, opt-in, Python) p
 
 ### Crafting/recipes — 2nd-domain dogfood (Phase 25)
 
-- [ ] **PLUGIN-05**: Crafting is built THROUGH the plugin API, not as a hardcoded Go subsystem. A recipe-provider plugin loads the jar-extracted recipes (shaped/shapeless/smelting/…) and drives the crafting-grid result + the `ResultSlot.onTake` consumption (today a no-op stub — `inventory_click.go`: "no recipes wired in v1"). Includes the `crafting_table` block + the 3×3 menu (the core only had the 2×2 inventory grid). Vanilla recipes craft correctly through the plugin path (result + consume, jar-verified vs `RecipeManager`/`CraftingMenu`) AND a custom recipe works. Proves the API generalizes to a SECOND domain (recipes/menus, not just entity AI).
+- [x] **PLUGIN-05**: Crafting is built THROUGH the plugin API, not as a hardcoded Go subsystem. A recipe-provider plugin loads the jar-extracted recipes (shaped/shapeless/smelting/…) and drives the crafting-grid result + the `ResultSlot.onTake` consumption (today a no-op stub — `inventory_click.go`: "no recipes wired in v1"). Includes the `crafting_table` block + the 3×3 menu (the core only had the 2×2 inventory grid). Vanilla recipes craft correctly through the plugin path (result + consume, jar-verified vs `RecipeManager`/`CraftingMenu`) AND a custom recipe works. Proves the API generalizes to a SECOND domain (recipes/menus, not just entity AI).
 
 ### Opt-in Python runtime (Phase 26)
 
@@ -82,7 +82,7 @@ Updated during roadmap creation.
 | PLUGIN-02 | Phase 22 | Complete |
 | PLUGIN-03 | Phase 23 | Complete |
 | PLUGIN-04 | Phase 24 | Complete |
-| PLUGIN-05 | Phase 25 | Pending |
+| PLUGIN-05 | Phase 25 | Complete |
 | PLUGIN-06 | Phase 26 | Pending |
 | REGION-01 | Phase 27 | Pending |
 | PLUGIN-07 | Phase 28 | Pending |
