@@ -39,7 +39,7 @@ The "user" is now (a) a **plugin author** writing `.star` (or, opt-in, Python) p
 
 ### Gate (Phase 28)
 
-- [ ] **PLUGIN-07**: A real vanilla 26.2 client + a perf benchmark confirm: a custom non-vanilla mob plugin works, the vanilla-mobs-as-plugins path is behavior-identical to Go-native, crafting (vanilla + a custom recipe) works through the plugin path, the event system fires correctly, and the plugin layer adds NO measurable per-tick cost vs Go-native (Folia regions scale). (VISUAL + PERF GATE, autonomous:false — closes v4.)
+- [x] **PLUGIN-07**: A real vanilla 26.2 client + a perf benchmark confirm: a custom non-vanilla mob plugin works, the vanilla-mobs-as-plugins path is behavior-identical to Go-native, crafting (vanilla + a custom recipe) works through the plugin path, the event system fires correctly, and the plugin layer adds NO measurable per-tick cost vs Go-native (Folia regions scale). (VISUAL + PERF GATE, autonomous:false — closes v4.)
 
 ## Out of Scope
 
@@ -85,7 +85,7 @@ Updated during roadmap creation.
 | PLUGIN-05 | Phase 25 | Complete |
 | PLUGIN-06 | Phase 26 | Complete |
 | REGION-01 | Phase 27 | Complete |
-| PLUGIN-07 | Phase 28 | Pending |
+| PLUGIN-07 | Phase 28 | Complete |
 
 **Coverage:**
 - v4 requirements: 8 total (7 PLUGIN + 1 REGION)

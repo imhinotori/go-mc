@@ -180,7 +180,7 @@ Plans:
 **Plans**: 2 plans (set by `/gsd-plan-phase 28`)
 
 Plans:
-- [ ] 28-01-PLAN.md — the AUTOMATED PERF GATE (promote the Phase-24 A/B oracle to BenchmarkPluginPigVsGoNative + the Emit-overhead bench + TestPerfGate with a baseline-derived threshold) + boot-load a CUSTOM wander mob into the live registry + the SULFUR_TEST_KIT spawn trigger (Wave 1)
+- [x] 28-01-PLAN.md — the AUTOMATED PERF GATE (promote the Phase-24 A/B oracle to BenchmarkPluginPigVsGoNative + the Emit-overhead bench + TestPerfGate with a baseline-derived threshold) + boot-load a CUSTOM wander mob into the live registry + the SULFUR_TEST_KIT spawn trigger (Wave 1)
 - [ ] 28-02-PLAN.md — the BOT-DRIVEN VISUAL GATE: extend cmd/testbot with the scripted 4-item `gate` scenario (observe AddEntity+move / crafting result+consume / event SystemChat), the chat() host builtin + sink, the gate_events plugin, the offline run-gate.sh launch, and the live bot run (exit 0 = PASS) (Wave 2)
 **Research**: The benchmark harness (plugin-driven vs Go-native per-tick cost, isolate the starlark.Call delta), the bot-observes-packets gate scenario + per-item packet assertions, the test-kit spawn trigger, the online-mode/offline-login launch resolution.
 
@@ -198,7 +198,7 @@ Plans:
 | 25. Crafting/recipes AS plugins (2nd-domain dogfood) | v4 | 3/3 | Complete   | 2026-06-28 |
 | 26. Opt-in Python runtime | v4 | 3/3 | Complete   | 2026-06-28 |
 | 27. Folia regionization | v4 | 3/3 | Complete   | 2026-06-28 |
-| 28. Plugin system visual + perf gate | v4 | 0/? | Not started | — |
+| 28. Plugin system visual + perf gate | v4 | 1/2 | In Progress|  |
 
 ## Deferred / Backlog (unwired or subsystem-blocked)
 
