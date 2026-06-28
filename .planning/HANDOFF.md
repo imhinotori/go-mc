@@ -1,53 +1,47 @@
-# Sulfur — Session Handoff (2026-06-27, v3 closed + live-bug sweep done → next is v4)
+# Sulfur — Session Handoff (2026-06-28, v4 7/8 phases done → Phase 28 next, then close v4)
 
-> Minecraft Java 26.2 (protocol 776) server in Go. GSD build. **Branch `ender-776`.** Push target **`development`** (NOT main). Remote `git@github.com:imhinotori/sulfur`. Module `github.com/imhinotori/sulfur`. Dir `D:\ender`.
+> Minecraft Java 26.2 (protocol 776) server in Go. GSD autonomous build. **Branch `ender-776`.** Push target **`development`** (NOT main). Remote `git@github.com:imhinotori/sulfur`. Module `github.com/imhinotori/sulfur`. Dir `D:\ender`. HEAD `de2001a2`.
 
 ## ⭐ THE ABSOLUTE MANDATE
-**ALL GAMEPLAY/PROTOCOL LOGIC IS A LITERAL 1:1 PORT of `temp/cache/26.2-inner.jar`.** Verify bytecode BEFORE writing: `JAVAP="/c/Program Files/Zulu/zulu-25/bin/javap"; "$JAVAP" -c -p -classpath temp/cache/26.2-inner.jar <FQCN>`. Cite the class/method. Only OPTIMIZATION (provably identical behavior) permitted. CGO_ENABLED=0 stays clean. NO Claude attribution in commits.
+**ALL GAMEPLAY/PROTOCOL LOGIC IS A LITERAL 1:1 PORT of `temp/cache/26.2-inner.jar`.** Verify bytecode BEFORE writing: `JAVAP="/c/Program Files/Zulu/zulu-25/bin/javap"; "$JAVAP" -c -p -classpath temp/cache/26.2-inner.jar <FQCN>`. Cite the class/method. Only OPTIMIZATION (provably identical behavior — e.g. regionization) permitted. CGO_ENABLED=0 default binary stays clean. **NO Claude attribution in commits** (the `Claude-Session:` trailer is harness-mandated + OK; no Co-Authored-By / "Generated with").
 
-**OPERATOR'S STANDING ORDER:** INSTRUMENT/REPRODUCE before editing — every fix this session was reproduced with an offline probe or a live `udebug` capture, root-caused against the jar bytecode, then locked with a regression test. That workflow WORKS; keep it.
+## 🛠 STANDING WORKFLOW (this whole v4 run used it — keep it)
+- **gopls diagnostics are STALE + FALSE.** Every phase this run threw a flood of "undefined X / missing method / region already declared / could not import" diagnostics — ALL FALSE. The real compiler is the truth. ALWAYS gate on `CGO_ENABLED=0 go build ./...` + `go vet` + `go test`, NEVER gopls. After every executor agent: run the REAL build/test to confirm (the agents' claims held every time, but verify).
+- **-race needs CGO=1 (Docker); ship build is CGO=0.** Two gates, not a conflict. Docker -race: `MSYS_NO_PATHCONV=1 docker run --rm -v //d/ender://src -w //src -v sulfur-gomod://go/pkg/mod golang:1.26 go test -race -timeout 900s ./server/ ./plugin/...`. **Scope -race to ./server/ ./plugin/** — the `./world/` suite needs `-timeout 2400s` (pre-existing slowness under -race, NOT a race; world imports nothing from server; logged in deferred-items).
+- **Per phase:** operator-decisions (AskUserQuestion) → write CONTEXT.md + VALIDATION.md → research (background agent, often pre-spawned for the NEXT phase to parallelize) → plan (gsd-planner agent) → commit plans → execute waves (gsd-executor agents, sequential) → verify REAL build/test after each → gsd-verifier agent → commit verification + roadmap.update-plan-progress. Background-research the next independent phase WHILE executing the current one.
 
-## 🐛 DEBUG MODE IS ALWAYS ON (operator request)
-Run the server with **`./run-debug.sh`** (new this session) — it builds CGO=0, kills the prior instance, and starts online + test-kit + persist + `SULFUR_ULTRA_DEBUG=1`, seed 777, logging to `sulfur.log`. `-fg` for foreground. Firehose cats: packet/move/water/tick/fluid/edit/combat/bandwidth/**skin**. Add `udebug("cat", ...)` for one-shot probes; remove them before committing (keep the FIX, drop the trace).
+## ✅ v4 PROGRESS — 7/8 PHASES VERIFIED-COMPLETE (this run)
+| Phase | Req | Verified | What landed |
+|-------|-----|----------|-------------|
+| 21 Starlark runtime | PLUGIN-01 | 4/4 | `plugin/starlark` — go.starlark.net plain dep (CGO=0), sandbox (step budget/recursion-off/no-IO), frozen cross-goroutine, LoadWith |
+| 22 Plugin host + event bus | PLUGIN-02 | 5/5 | `plugin/host` — TOML manifest, map[EventType][]Hook bus, register-once, Emit at 8 discrete server seams (NOT per-entity), FULL fsnotify hot-reload (tick-goroutine swap) |
+| 23 Entity/mob behavior API | PLUGIN-03 | 9/9 | thin-id handles (id+TickLoop, re-resolve on owner), declare_mob/starlarkGoal (via goalSelector), capability enforcement, **SUB-ATTRIB coverage fix (per-type suppliers + LivingEntity fallback — pig gets real attrs)**, set_velocity direct |
+| 24 Vanilla mobs AS plugins (1:1) | PLUGIN-04 | 6/6 | per-entity SEEDED RNG (bytecode draw order — retired the TestTickAIDrivesMobs flake), 3 pig goals re-expressed 1:1 (jar-cited), SWAP newPigAI→plugin pig, behavior-identical gate; 5 new goals deferred-with-cited-reasons (deferred-goals.md) |
+| 25 Crafting AS plugins (2nd dogfood) | PLUGIN-05 | 7/7 | `level/recipe` (all 7 types embedded+match 1:1), value-returning Match seam (extends Emit), ResultSlot.onTake un-stubbed + 1:1 consume, crafting_table 3×3 menu, stonecutter built; furnace/cooking deferred-cited (deferred-blocks.md) |
+| 26 Opt-in Python runtime | PLUGIN-06 | 7/7 | **gopy = qur/gopy** (`gopython.xyz/py/v14` vanity→github.com/qur/gopy @ python3.14 branch — corrected from /py/v3), build-tag isolation (#1 gate: default CGO=0 + ZERO gopy in graph), off-tick lane (pythonHookReady on asyncIn2), world-bridge (request→tick-apply), serialized-interp (sub-interp absent in alpha, cited). **`-tags python` build+tests+-race RAN LIVE in Docker python:3.14** (ci/python/Dockerfile, image `sulfur-py314`) — not deferred |
+| 27 Folia regionization | REGION-01 | 7/7 | 3 steps: extract `region` struct @ N=1 (behavior-neutral) → conc coordinator/barrier @ N=1 → N=2 (chunk→region hash, cross-region transfer at barrier, async-rejoin→owning region, region-aware Emit). 2 regions tick PARALLEL (proven), -race clean, behavior-neutral |
+| **28 Visual + perf gate** | PLUGIN-07 | **PLANNED ONLY** | 2 plans committed, NOT executed — see RESUME |
+
+Both dogfoods validated (mobs + crafting). Python runs live. World ticks 2 parallel regions race-clean. ~55 commits this run.
+
+## ▶ RESUME HERE — Phase 28 (the LAST v4 phase), then close v4
+**Run `/gsd-execute-phase 28`** (2 plans, 2 waves, both autonomous:true):
+- **28-01 (Wave 1, PERF gate):** promote the EXISTING Phase-24 A/B oracle (newPigAI Go-native kept as baseline vs the plugin pig — `TestPluginPigEqualsGoNativePig`) to `BenchmarkPluginPigVsGoNative`; run the baseline, set the threshold FROM it (absolute ns/mob·tick + relative %), `TestPerfGate` asserts it. + the Emit-overhead bench. + boot-load the CUSTOM wander mob decl into the LIVE registry (Phase-23 left it in isolated testdata) + a SULFUR_TEST_KIT spawn trigger (egg/debug cmd → spawnDeclaredMob).
+- **28-02 (Wave 2, BOT-driven visual gate — operator-directed):** extend `cmd/testbot` (the real proto-776 client) with a scripted `gate` scenario that OBSERVES packets (AddEntity+move = mob spawns/moves; ContainerSetContent = crafting; ClientboundSystemChat = event fires via a NEW `chat()` host builtin + server sink). Adds `run-gate.sh` (offline + SULFUR_TEST_KIT — NOTE: run-debug.sh is online-mode, the bot logs in OFFLINE, so a separate offline launch is needed). The bot run exit 0 = GATE PASS.
+- After BOTH pass: **close v4** → `/gsd-audit-milestone v4` → `/gsd-complete-milestone v4` (archives roadmap/reqs/audit to milestones/v4-*, collapses ROADMAP, tags v4). Then PROJECT.md evolution + retrospective (the complete-milestone skill drives most of it; the AI does the ROADMAP collapse + PROJECT evolution like the v3 close did).
 
 ## STATE OF THE TREE
-- HEAD = `e1c08b8b` (swim-pose eye height). Build CGO=0 exit 0; `go vet ./...` clean. `level`/`world`/`server` suites GREEN; world ~325s (noise gen).
-- Tree clean of tracked changes. Untracked: `.claude/`, `*.log`, `.planning/research/*-jar-spec.md`, `run-debug.sh` (commit it if you want it tracked).
-- STALE gopls floods FALSE diagnostics (undefined block.DefaultStateID / save.SavedTickNBT / uniqueLevelRandomSeed / packetid.ServerboundAttack / GoldenDandelion etc.) — ALL FALSE; trust `go build`/vet/test, NEVER gopls.
-- Server is LIVE on :25565 (debug config, mundo nuevo/clean).
+- HEAD `de2001a2`. Tree clean of tracked changes. Build CGO=0 exit 0. 21-27 all VERIFIED. Untracked: `.claude/`, `*.log`, `.planning/research/*` jar-specs, the testbot logs.
+- The server's plugin layer is live-wired: `cmd/sulfur/main.go` boot-loads the embedded vanilla plugins (vanilla_pig, the recipe provider); the plugin pig is the ONLY pig; crafting works through the plugin path; the world ticks in 2 regions.
+- `run-debug.sh` = the debug launch (online-mode + test-kit + persist + ULTRA_DEBUG). Phase 28 adds `run-gate.sh` (offline, for the bot).
 
-## ✅ THIS SESSION — 12 live bugs fixed (all jar-verified + regression-tested + operator-confirmed in-game)
-| # | Bug | Root cause | Fix (commit theme) |
-|---|-----|-----------|--------------------|
-| 1 | Chest didn't open / got replaced | `blockStateForItem` used the Go ZERO-VALUE struct; chest default is FACING=NORTH (zero Direction=down is an invalid state → ToStateID miss → never placed) | codegen-emitted `block.DefaultStateID` (= `defaultBlockState()`), used in placement. General — every block with non-zero default props. |
-| 2 | Sugar cane didn't cascade | `LevelTicks.Schedule` drops a tick if the chunk has no container; only persist-load registered one (no live callers) → generated chunks dropped every scheduleBlockTick | `chunkReady.applyTo` registers an empty tick container per integrated chunk |
-| 3 | Natural water didn't flow | the carver wrote aquifer water but never called `markPosForPostProcessing` (WorldCarver.carveBlock @82-106: mark when `shouldScheduleFluidUpdate && fluid`) | `FluidSource.ShouldScheduleFluidUpdate()` + `CarveChunk.MarkFluidPostProcess`; carveBlock marks; **chunk (1,0): 0→48 marks** |
-| 4 | Hats conditional | skin parts only read in PLAY ClientInformation (which the client never re-sends in PLAY — verified by logging every inbound PLAY id) | capture modelCustomisation in CONFIG → thread to `displayedSkinParts` |
-| 5 | Persist respawn crash (PalettedContainer IndexOutOfBounds) | a >256-state section uses the global/direct palette (raw ids, empty list); Anvil has no direct format → saved 0-len palette + data → reload read garbage ids | WRITE rebuilds an explicit Anvil palette + re-indexes; READ (`NewStatesPaletteContainerFromSave`) resolves indices→ids into the generation rep |
-| 6 | No item-drag in chest | no QUICK_CRAFT branch | ported `doChestQuickCraft` (START/ADD/END) |
-| 7 | Double-click didn't collect all | no PICKUP_ALL branch | ported `chestPickupAll` (two-pass sweep) |
-| 8 | **Own hat invisible** (vanilla shows it) | tracker self-skips the owner → client never gets its own DATA_PLAYER_MODE_CUSTOMISATION | `sendSelfSkin` on join + on change |
-| 9 | **Can't swim in reloaded chunks** | `ChunkFromSave` recomputed BlockCount but NOT `FluidCount` (the section's 2nd short) → client saw the section fluid-free | `CountFluidBlocks` in ChunkFromSave |
-| 10 | Reloaded water stayed static | `chunkSaveShape` (minimal on-disk struct) omitted `PostProcessing` → marks lost on save | add `PostProcessing` (ptr+omitempty) to the shape + ChunkToSave/FromSave serialize PostProcessFluids as the vanilla per-section ShortList |
-| 11 | Air refilled while submerged | `eyeInWater` ignored fluid surface height | port FlowingFluid.getHeight (1.0 if same fluid above, else amount/9) into the eye check |
-| 12 | **Air refilled while SWIMMING in top layer** | eye height fixed at 1.62; swimming pose eyes are at 0.4 | track swim pose (Entity.updateSwimming: sprinting && in-water) + decode sprint from ServerboundPlayerCommand + dynamic eye height |
+## CARRYOVER / DEFERRED (cited, not silent — all in the phase dirs)
+- Phase 24 `deferred-goals.md`: Float (needs mob jumpControl), Panic (needs mob damage source), Breed/Tempt/FollowParent (need entity aging/breeding) — the goals' MATCHERS/structure ready, the subsystems deferred.
+- Phase 25 `deferred-blocks.md`: furnace/blast/smoker/campfire BLOCKS deferred (need a per-tick block-entity drive + FuelValues table); the smelting/cooking MATCHERS ship + are tested.
+- Phase 26: richer Python mutation vocabulary (beyond set_block/spawn/log) deferred; sub-interpreter parallelism deferred (gopy alpha has no sub-interp surface — serialized fallback, cited).
+- Phase 27: dynamic region merge/split deferred (N=2 static hash proves the seam); per-region persistence flush a follow-up.
+- The `./world/` -race-gate timeout (needs 2400s) — ops follow-up to raise/shard.
+- **STILL PENDING (operator action, not code):** rotate the prod root password exposed in a much earlier session.
 
-Key files touched: `level/block/blocks.go` (regen), `tools/gen_blocks.go`, `server/block_place.go`, `server/block_ticks.go`, `server/tick.go`, `server/fluid.go`, `world/levelgen/carver/carver.go`, `world/noisegen.go`, `server/configuration.go`+`gameplay*.go` (skin thread), `level/palette.go`+`level/chunk.go` (palette+FluidCount+PostProcessing persist), `world/chunk_save.go`, `server/player_visibility.go` (sendSelfSkin), `server/breath.go` (eye height + swim pose).
-
-## v3 STATUS — **COMPLETE (100%, 4/4 phases)**
-Phases 17 (gameplay seams) / 18 (online-mode) / 19 (TUI+disconnect) / 20 (structure polish) all done + operator-validated. The 12 bugs above were post-Phase-17/20 gameplay-fidelity refinements surfaced by real-client play — all resolved. **v3 is ready to close.** STATE.md says `status: verifying, 100%`.
-
-## RESUME HERE
-1. **Close v3:** run `/gsd-audit-milestone v3` then `/gsd-complete-milestone v3` (archives roadmap+requirements, tags). Optionally **push to `development`** first (operator-authorized; was blocked by an unrelated attendly env-gate hook — check if still blocking).
-2. **Start v4 — Plugin/Scripting System (Phases 21–28).** Full plan in `.planning/v4-PLAN.md`. NEXT PHASE = **Phase 21: Starlark runtime foundation (PLUGIN-01)** — embed `go.starlark.net` (pure-Go, CGO=0 preserved), per-goroutine `starlark.Thread`, sandbox (step-counter budget, recursion off, no I/O builtins), FrozenValue sharing across the tick boundary, plugin load/parse/compile lifecycle. Kick off with `/gsd-plan-phase 21`. (v4 architecture: plugins DECLARE behavior loaded once, Go runs the hot path calling hooks; vanilla mobs get rewritten AS jar-faithful plugins — the 1:1 mandate carries into the plugin layer. Inverts CLAUDE.md's "no plugin API" scope — intentional/user-directed.)
-3. Carryover unwired (low priority, not blockers): chest `getStateForPlacement` should face the player (currently always NORTH); saved block-tick reload (`loadChunkBlockTicks` still has no caller + `level.Chunk` has no `block_ticks` field — live scheduling works, persisted ticks don't reload).
-4. STILL PENDING (operator action, not code): rotate the prod root password exposed in an earlier session.
-
-## HOW TO RUN / TEST
-- **`./run-debug.sh`** (build + run, debug ON, bg) or `-fg` for foreground. Logs → `sulfur.log`.
-- Test kit hotbar: 1-3 food, 4 cobble, 5 planks, 6 torch, 7 dirt, **8 chest**, **9 sugar cane**; inv: sand(11), water bucket(12).
-- Tests: `CGO_ENABLED=0 go test ./...` (world is slow ~5min). -race (Docker, warm cache): `MSYS_NO_PATHCONV=1 docker run --rm -v //d/ender://src -w //src -v sulfur-gomod://go/pkg/mod golang:1.26 go test -race -timeout 900s ./PKG/`.
-- Regen block data after a jar bump: `cd tools && go run . ../temp/jsons/26.2` (positional dir skips Docker extract; emits blocks.go incl. DefaultStateID).
-
-## JAR SPECS (verified bytecode, in .planning/research/)
-- `chest-open-jar-spec.md`, `fluid-blockupdate-jar-spec.md`, `SUB-ATTRIB/FACESTURDY/ITEMNBT-jar-spec.md`.
+## v3 (shipped 2026-06-27, tag v3) — for reference
+Online-mode + Operator UX + Structure polish (Phases 17-20) + the v3.1 SUB subsystems (PERSIST/ITEMNBT/BLOCKTICK/FACESTURDY/ATTRIB). Archived in milestones/v3-*.
