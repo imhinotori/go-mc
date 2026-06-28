@@ -24,13 +24,18 @@
 //     states. gopy hangs its entire GIL model on it.
 //
 //  2. gopy exposes NO sub-interpreter creation surface. A full source grep of the
-//     pinned module (`grep -rniE "NewInterpreter|sub.?interp|InterpreterConfig|
-//     Py_NewInterpreter|EndInterpreter|PyInterpreterConfig"`) returns ZERO hits in
-//     any non-test .go file. There is no Py_NewInterpreterFromConfig binding, no
-//     PyInterpreterConfig struct, and no per-interpreter-GIL (PEP 684) config knob.
-//     PEP 734 isolated interpreters (concurrent.interpreters) would have to be
-//     driven from python code, not from gopy's Go API, and gopy's PyGILState lock
-//     model would still serialize the embedding boundary.
+//     pinned module returns ZERO hits in EVERY non-test .go file AND in the cgo
+//     headers (utils.h / *.c):
+//       grep -rniE "NewInterpreter|Py_NewInterpreter|PyInterpreterConfig|
+//         InterpreterConfig|EndInterpreter|sub.?interpreter|PyInterpreterState_New"
+//       → (empty, both *.go non-test and *.h/*.c, run 2026-06-28 against the
+//          pinned commit b0bdc04a384b in the module cache)
+//     There is no Py_NewInterpreterFromConfig binding, no PyInterpreterConfig struct,
+//     no EndInterpreter, and no per-interpreter-GIL (PEP 684) config knob — neither
+//     in the Go API nor in the C preamble. PEP 734 isolated interpreters
+//     (concurrent.interpreters) would have to be driven from python code, not from
+//     gopy's Go API, and gopy's PyGILState lock model (point 1) would still serialize
+//     the embedding boundary regardless.
 //
 //  3. The gopy version is an ALPHA (v14.0.0-alpha.0...). Per 26-CONTEXT decision 5,
 //     an unstable/missing surface is exactly the "not cleanly usable in this alpha"
