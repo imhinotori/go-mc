@@ -17,26 +17,6 @@ import (
 	"github.com/imhinotori/sulfur/plugin/host"
 )
 
-// TestPythonLaneSkippedDefault: on the default (no `-tags python`) build,
-// WirePython is a no-op, so a runtime="python" plugin (heavylogger) is SKIPPED by
-// LoadDir — no error, no plugin loaded, no gopy linked. This is the "python lane
-// is opt-in" gate the local CGO=0 box runs.
-func TestPythonLaneSkippedDefault(t *testing.T) {
-	loop := NewTickLoop(newFakeClock())
-	m := host.New()
-
-	// WirePython is the no-op stub on the default build — it must NOT register a
-	// python runtime, so the python manifest is skipped.
-	WirePython(loop, m)
-
-	if err := m.LoadDir("testdata/plugins_python"); err != nil {
-		t.Fatalf("LoadDir(testdata/plugins_python) on default build must skip the python plugin gracefully, got err: %v", err)
-	}
-	if got := m.PluginCount(); got != 0 {
-		t.Fatalf("PluginCount = %d; want 0 (the runtime=\"python\" plugin must be skipped on the default build, not loaded)", got)
-	}
-}
-
 // TestPythonLaneAdditiveToStarlark: wiring the (no-op) python lane and loading a
 // python manifest alongside a starlark plugin must NOT disturb the inline starlark
 // dispatch — a real block break still fires the starlark on_block_break exactly

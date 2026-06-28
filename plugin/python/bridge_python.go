@@ -28,6 +28,7 @@ package python
 import (
 	"fmt"
 
+	"github.com/imhinotori/sulfur/plugin/host"
 	"gopython.xyz/py/v14"
 )
 
