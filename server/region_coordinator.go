@@ -140,6 +140,19 @@ func (t *TickLoop) tickOnce() {
 	// on this goroutine (structured propagation), where the recoverTick backstop catches it — one
 	// region's panic does NOT hang the tick (T-27-02). The regions touch ONLY their own store + READ
 	// the shared world, so the fan-out is race-clean by construction (the Docker -race gate proves it).
+	// GLOBAL-BROADCAST SAFETY AUDIT (Phase-27 STEP-3, Pitfall 6) — the read-only-during-fan-out
+	// invariant: broadcastBlockUpdate / chat / playerlist iterate t.players from within region-owned
+	// events (a plugin set_block fired from a goal callback in the fan-out). The AUDIT (grep for
+	// `t.players =` / `append(t.players` / `drainRegistrations`): EVERY mutation of t.players /
+	// clientIndex lives in drainRegistrations + removePlayer, which run ONLY on the coordinator,
+	// BEFORE the fan-out (Run/advance call drainRegistrations, then tickOnce). NOTHING inside the
+	// fan-out (tickAI/tickPhysics and the goal callbacks they invoke) mutates t.players — it only
+	// READS it (naturalSpawn's spawnableColumns/spawnRefY, broadcastBlockUpdate's send loop). So
+	// t.players is STABLE during the region ticks and a region thread READING it (never mutating) is
+	// race-clean — no broadcast needs deferring. Each player's sentChunks is likewise only WRITTEN by
+	// flushOutbound (coordinator, post-barrier) and only READ during the fan-out, so there is no
+	// concurrent read+write. TestGlobalBroadcastSafeFromRegion proves the read path; the Docker -race
+	// gate (Task 4) proves the read-during-fan-out crossing.
 	var wg conc.WaitGroup
 	for _, r := range t.regions {
 		r := r
