@@ -165,7 +165,7 @@ Plans:
 **Plans**: 3 plans in 3 waves (the operator's locked incremental path: extract → barrier → N=2)
 Plans:
 - [x] 27-01-PLAN.md — STEP 1: extract the `region` struct at N=1 (entityStore/ChunkManager/scheduled ticks/levelRandom → region; per-region/global split explicit); behavior-neutral, existing suite unchanged + -race (Wave 1)
-- [ ] 27-02-PLAN.md — STEP 2: the conc fan-out/barrier coordinator at N=1 (add conc pure-Go; gametime advanced once by the coordinator; the global-region post-phase; region-panic isolation); still behavior-neutral + -race (Wave 2)
+- [x] 27-02-PLAN.md — STEP 2: the conc fan-out/barrier coordinator at N=1 (add conc pure-Go; gametime advanced once by the coordinator; the global-region post-phase; region-panic isolation); still behavior-neutral + -race (Wave 2)
 - [ ] 27-03-PLAN.md — STEP 3 (THE GATE): flip to N=2 — static chunk→region hash, cross-region transfer at the barrier, async-rejoin re-routing, cross-region tracker, region-aware Emit; parallel-regions + hook-on-owning-region + transfer gates + Docker -race (Wave 3)
 **Research**: The Folia region model (region ownership of chunks/entities, cross-region transfer), how the tick-owned plugin seam re-homes onto region threads.
 
@@ -192,7 +192,7 @@ Plans:
 | 24. Vanilla mobs AS plugins (1:1 dogfood) | v4 | 2/2 | Complete   | 2026-06-28 |
 | 25. Crafting/recipes AS plugins (2nd-domain dogfood) | v4 | 3/3 | Complete   | 2026-06-28 |
 | 26. Opt-in Python runtime | v4 | 3/3 | Complete   | 2026-06-28 |
-| 27. Folia regionization | v4 | 1/3 | In Progress|  |
+| 27. Folia regionization | v4 | 2/3 | In Progress|  |
 | 28. Plugin system visual + perf gate | v4 | 0/? | Not started | — |
 
 ## Deferred / Backlog (unwired or subsystem-blocked)
