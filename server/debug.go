@@ -1,7 +1,6 @@
 package server
 
 import (
-	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/component"
 )
@@ -146,8 +145,9 @@ func (t *TickLoop) tickDebug() {
 	// soon as a player is present to see it. The pig stands on the surface a few blocks north
 	// of the origin column center so it is in front of a spawning player and inside trackRange.
 	//
-	// AI-03 (the STANDING MANDATE): the debug pig's MOTION now comes from the REAL ported AI —
-	// it is given a newPigAI() (07-01 GoalSelector + 07-02 A* navigation), so tickAI's
+	// AI-03 (the STANDING MANDATE) + PLUGIN-04 (the SWAP): the debug pig's MOTION comes from the
+	// REAL ported AI — now the PLUGIN-DRIVEN vanilla pig (spawnVanillaPig: the 3 passive goals
+	// re-expressed 1:1 in Starlark, behavior-identical to the old Go builder), so tickAI's
 	// serverAiStep drives it to WANDER and NAVIGATE exactly like a naturally-spawned mob. The
 	// throwaway sinusoidal pacing (sinApprox/cosApprox) that used to move it is RETIRED (see
 	// note below). The SULFUR_DEBUG spawn trigger remains only to GUARANTEE a visible mob near
@@ -159,15 +159,15 @@ func (t *TickLoop) tickDebug() {
 	// column guarantees solid ground under the pig and a non-degenerate A* snapshot.
 	if !d.pigSpawned && len(t.players) > 0 && t.world != nil {
 		if _, loaded := t.world.Get(level.ChunkPos{0, 0}); loaded {
-			id := t.idAlloc.AllocID()
 			px := 8.5 // origin column center X
 			pz := 4.5 // a few blocks toward -Z from the player's 8.5 spawn Z
 			py := float64(d.spawnSurfaceY + 1)
-			pig := NewEntity(id, entity.Pig, px, py, pz)
-			pig.ai = newPigAI()         // REAL ported AI: tickAI's serverAiStep wanders + navigates it
-			reseedMobAI(pig.ai, pig.id) // per-entity deterministic RNG stream (the Mob.getRandom() seed)
-			t.entities.add(pig)
-			d.pigID = id
+			// SWAP (PLUGIN-04 / Plan 24-02): the debug pig is the PLUGIN-DRIVEN vanilla_pig (the 3
+			// passive goals re-expressed 1:1), built from the boot-loaded declaration via
+			// spawnVanillaPig — NOT the Go newPigAI. It renders as entity.Pig.ID and tickAI's
+			// serverAiStep wanders + navigates it exactly like a naturally-spawned plugin pig.
+			pig := t.spawnVanillaPig(px, py, pz)
+			d.pigID = pig.id
 			d.pigSpawned = true
 		}
 	}

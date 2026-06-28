@@ -353,6 +353,12 @@ type TickLoop struct {
 	// reads a half-updated map (TICK-05).
 	plugins *host.Manager
 
+	// mobRegistry is the boot-loaded declared-mob registry (PLUGIN-04 / Plan 24-02): the captured
+	// "vanilla_pig" declaration the SWAP spawns. WRITTEN once at boot (SetMobRegistry, before Run) and
+	// READ at spawn on the tick goroutine (spawnVanillaPig) — tick-owned, lock-free (TICK-05). nil in
+	// a tick built without the boot-load (most unit tests); the swap sites that need it install one.
+	mobRegistry *mobRegistry
+
 	// pluginSwap is the hot-reload swap channel (FULL hot-reload, Plan 22-02). The off-tick fsnotify
 	// watcher (plugin/host/reload.go) REBUILDS a fresh *host.Manager off-tick and sends the pointer
 	// here; drainRegistrations drains it on the OWNER goroutine and swaps t.plugins on-thread — the

@@ -27,7 +27,24 @@ func newPhysicsLoop() (*TickLoop, *world.ChunkManager) {
 	// Wire the manager directly (SetWorld also starts a worker bridge we don't need for
 	// physics-only tests; assign the tick-owned field straight so there is no goroutine).
 	loop.world = mgr
+	// PLUGIN-04 (Plan 24-02): the SWAP routes the natural/debug pig spawn through spawnVanillaPig,
+	// which needs the boot-loaded vanilla_pig registry. Install it on every physics loop so any test
+	// driving the spawn paths (spawner/async-stress/debug) has the declaration — the same boot-load
+	// the server runs, just at test setup. A load failure here fails the test loudly (it would mean
+	// the embedded plugin is broken).
+	installVanillaPigRegistry(loop)
 	return loop, mgr
+}
+
+// installVanillaPigRegistry boot-loads the embedded vanilla_pig plugin and installs it on the loop so
+// the SWAP's spawnVanillaPig works in tests. Panics on a load failure (a broken embedded plugin is a
+// hard error, not a skippable test condition). Idempotent-safe to call once per loop.
+func installVanillaPigRegistry(loop *TickLoop) {
+	reg, err := loadVanillaPigRegistry()
+	if err != nil {
+		panic("test setup: vanilla_pig boot-load failed: " + err.Error())
+	}
+	loop.SetMobRegistry(reg)
 }
 
 // putChunk inserts an empty (all-air) ready chunk at column col so blocks can be placed.

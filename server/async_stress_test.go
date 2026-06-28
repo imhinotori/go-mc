@@ -40,6 +40,11 @@ func newStressLoop(t *testing.T, radius, floorY int) *TickLoop {
 	loop := NewTickLoop(newFakeClock())
 	mgr := world.NewChunkManager()
 	loop.world = mgr
+	// PLUGIN-04 (Plan 24-02): the SWAP routes the natural pig spawn through spawnVanillaPig, which
+	// needs the boot-loaded vanilla_pig registry. Install it so the stress loop's natural spawner can
+	// actually add plugin pigs under load (without it the spawn applyTo panics and the tickOnce recover
+	// drops the mob, leaving the stress trivial).
+	installVanillaPigRegistry(loop)
 	for cx := -radius; cx <= radius; cx++ {
 		for cz := -radius; cz <= radius; cz++ {
 			ch := putChunk(mgr, level.ChunkPos{int32(cx), int32(cz)})

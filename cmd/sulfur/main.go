@@ -303,6 +303,18 @@ func main() {
 			}
 		}
 	}
+	// PLUGIN-04 (Plan 24-02): BOOT-LOAD the bundled vanilla_pig plugin into a tick-owned mob registry
+	// BEFORE tick.Run. The SWAP (server/async.go + debug.go) makes the plugin pig the ONLY pig, so the
+	// "vanilla_pig" declaration MUST be live before the first pig can spawn (RESEARCH Pitfall 4). The
+	// plugin is //go:embed'd into the server binary, so it is ALWAYS present; a load failure here is
+	// FATAL (a swap with no pig is a broken server, not a degraded one — fail loudly at boot).
+	if reg, err := server.LoadVanillaPigRegistry(); err != nil {
+		log.Fatalf("vanilla_pig boot-load failed (the swapped pig has no declaration): %v", err)
+	} else {
+		tick.SetMobRegistry(reg)
+		log.Printf("vanilla_pig: bundled 1:1 pig plugin boot-loaded (the only pig is plugin-driven)")
+	}
+
 	// SUB-PERSIST: the off-tick chunk-save consumer (its own goroutine, like the player save loop).
 	// Disabled (SULFUR_PERSIST_CHUNKS != 1) it just waits on ctx — no disk IO. Enabled it drains the
 	// tick's immutable chunk snapshots and writes them to region files OFF the tick.

@@ -32,7 +32,6 @@ import (
 	"github.com/panjf2000/ants/v2"
 	"github.com/puzpuzpuz/xsync/v4"
 
-	"github.com/imhinotori/sulfur/data/entity"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
@@ -308,10 +307,13 @@ func (r spawnCandidatesReady) applyTo(t *TickLoop) {
 		if t.mobNear(float64(c.x)+0.5, float64(c.z)+0.5, 6.0) {
 			continue // a mob moved/spawned onto this candidate since the snapshot: DROP it
 		}
-		pig := NewEntity(t.idAlloc.AllocID(), entity.Pig, float64(c.x)+0.5, float64(c.y), float64(c.z)+0.5)
-		pig.ai = newPigAI()          // the real ported AI: tickAI's serverAiStep drives wander + A* nav
-		reseedMobAI(pig.ai, pig.id)  // per-entity deterministic RNG stream (the Mob.getRandom() seed)
-		t.entities.add(pig)          // the unchanged tracker spawns it on clients next tick (AddEntity)
-		return              // one placement per apply (the throttle)
+		// SWAP (PLUGIN-04 / Plan 24-02): the pig is now the PLUGIN-DRIVEN vanilla_pig — its AI is
+		// built from the boot-loaded Starlark declaration (the 3 passive goals re-expressed 1:1),
+		// NOT the Go newPigAI. spawnVanillaPig builds it through spawnDeclaredMob (real pig attrs +
+		// the declared goals + per-entity RNG) and adds it to the store; it renders as entity.Pig.ID.
+		// The Go newPigAI + goals are KEPT as the behavior-identical ORACLE (the comparison test),
+		// not as a live spawn path.
+		t.spawnVanillaPig(float64(c.x)+0.5, float64(c.y), float64(c.z)+0.5)
+		return // one placement per apply (the throttle)
 	}
 }
