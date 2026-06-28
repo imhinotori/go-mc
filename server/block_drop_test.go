@@ -103,7 +103,7 @@ func TestBlockDropViaLoot(t *testing.T) {
 func newDropLoop() (*TickLoop, *world.ChunkManager) {
 	loop := NewTickLoop(newFakeClock())
 	mgr := world.NewChunkManager()
-	loop.world = mgr
+	loop.only().world = mgr
 	ch := level.EmptyChunk(blockTestSecs)
 	ch.Status = level.StatusFull
 	mgr.Insert(level.ChunkPos{0, 0}, ch)
@@ -121,18 +121,18 @@ func TestBlockDropSpawnsItem(t *testing.T) {
 	target := pk.Position{X: 1, Y: 64, Z: 1}
 	mgr.SetBlock(target, block.ToStateID[block.Stone{}], dimMinY)
 
-	before := loop.entities.len()
+	before := loop.only().entities.len()
 	// Plan 17-21: a survival break is a dig-timer now (START -> elapse -> STOP at progress>=0.7),
 	// not an instant STOP. completeSurvivalDig drives the full dig so the block breaks and drops.
 	completeSurvivalDig(loop, p, target)
 
-	if got := loop.entities.len(); got != before+1 {
+	if got := loop.only().entities.len(); got != before+1 {
 		t.Fatalf("entity count = %d, want %d (one Item spawned)", got, before+1)
 	}
 
 	// Find the spawned Item: the one entity that is an Item type.
 	var drop *Entity
-	for _, e := range loop.entities.near(1.5, 1.5, trackRange) {
+	for _, e := range loop.only().entities.near(1.5, 1.5, trackRange) {
 		if e.typ == entity.Item.ID {
 			drop = e
 			break
@@ -216,12 +216,12 @@ func TestBreakAirNoDrop(t *testing.T) {
 	// (1,64,1) is air in the fresh chunk. A break there: SetBlock(air) over air returns
 	// changed=false, so reconcileEdit never runs and no drop spawns. Even if it did, air
 	// has no drop. Either way: no Item entity.
-	before := loop.entities.len()
+	before := loop.only().entities.len()
 	target := pk.Position{X: 1, Y: 64, Z: 1}
 	pa := playerActionPacket(2, target, 1, 7)
 	loop.applyInput(p, SubtickInput{At: loop.clock.Now(), Packet: pa})
 
-	if got := loop.entities.len(); got != before {
+	if got := loop.only().entities.len(); got != before {
 		t.Fatalf("entity count = %d, want %d (no drop for air)", got, before)
 	}
 }

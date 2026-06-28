@@ -17,11 +17,11 @@ package server
 //     state, stamped with the owning plugin's capSet) → sends it on asyncIn2 → the
 //     OWNER drains it in applyAsyncResults → pythonMutation.applyTo enforces the
 //     capSet FIRST, then applies through the SAME Phase-23 seam worldHandle.setBlock
-//     uses (t.world.SetBlock + broadcastBlockUpdate). This is the ONLY mutation point
+//     uses (t.only().world.SetBlock + broadcastBlockUpdate). This is the ONLY mutation point
 //     (TICK-05). NO live tick-owned handle ever escapes to the off-tick goroutine —
 //     the request/apply indirection IS the boundary (threat T-26-03).
 //   - A READ: off-tick python builtin → sends a pythonReadReq (coords + a reply
-//     channel) on asyncIn2 → the OWNER snapshots t.world.GetBlock and sends the
+//     channel) on asyncIn2 → the OWNER snapshots t.only().world.GetBlock and sends the
 //     copied scalar back on the reply channel → the builtin returns the copy. The
 //     off-tick side holds no live world reference — it gets a value copy snapshotted
 //     on the owner.
@@ -77,7 +77,7 @@ type pythonMutation struct {
 // apply (PLUGIN-06, the ONLY mutation point, TICK-05). It enforces the capability
 // gate FIRST (the Phase-23 capSet — a denied request is DROPPED with a capError-style
 // log, NEVER applied, threat T-26-09), then applies through the EXISTING Phase-23
-// tick-owned seam — literally the worldHandle.setBlock body (t.world.SetBlock +
+// tick-owned seam — literally the worldHandle.setBlock body (t.only().world.SetBlock +
 // broadcastBlockUpdate) for set_block, the existing spawnVanillaPig seam for spawn.
 // It re-validates the world is loaded (a set_block on an unloaded column is a no-op,
 // exactly like worldHandle.setBlock returning False). Because the request carries
@@ -93,13 +93,13 @@ func (m pythonMutation) applyTo(t *TickLoop) {
 				m.plugin, capError("world.write"), m.x, m.y, m.z)
 			return
 		}
-		if t.world == nil {
+		if t.only().world == nil {
 			return // no world loaded: nothing to mutate (mirrors worldHandle.setBlock's nil guard)
 		}
 		// Apply through the EXACT Phase-23 world.write seam (worldHandle.setBlock body):
 		// SetBlock persists in the tick-owned world; broadcastBlockUpdate tells the clients.
 		pos := pk.Position{X: m.x, Y: m.y, Z: m.z}
-		changed := t.world.SetBlock(pos, block.StateID(m.state), dimMinY)
+		changed := t.only().world.SetBlock(pos, block.StateID(m.state), dimMinY)
 		if changed {
 			t.broadcastBlockUpdate(pos, block.StateID(m.state))
 		}
@@ -111,7 +111,7 @@ func (m pythonMutation) applyTo(t *TickLoop) {
 				m.plugin, capError("entities.write"), m.x, m.y, m.z)
 			return
 		}
-		if t.entities == nil {
+		if t.only().entities == nil {
 			return // defensive: the store is non-nil from NewTickLoop
 		}
 		// Apply through the EXISTING spawn seam (the Phase-8/24 spawnVanillaPig — the
@@ -127,7 +127,7 @@ func (m pythonMutation) applyTo(t *TickLoop) {
 
 // pythonReadReq is a single off-tick-python READ request (block_at). It carries the
 // target coordinates + a buffered reply channel (capacity 1). The off-tick builtin
-// sends it on asyncIn2 and BLOCKS on `reply`; the OWNER snapshots t.world.GetBlock in
+// sends it on asyncIn2 and BLOCKS on `reply`; the OWNER snapshots t.only().world.GetBlock in
 // applyTo and sends back the COPIED scalar (state id + ok), so the off-tick side
 // never holds a live world reference — it gets a value copy snapshotted on the owner
 // (26-CONTEXT decision 4: a read goes request → tick-snapshot → return-a-copy). It
@@ -148,7 +148,7 @@ type pythonReadRes struct {
 
 // applyTo runs on the OWNER goroutine inside applyAsyncResults — the read-snapshot.
 // It enforces capWorldRead FIRST (a denied read returns ok=false + logs), then
-// snapshots t.world.GetBlock and sends the COPIED scalar back on the reply channel.
+// snapshots t.only().world.GetBlock and sends the COPIED scalar back on the reply channel.
 // The send is non-blocking by construction (reply is buffered cap 1, written once);
 // the off-tick builtin is the sole reader. NO live world reference crosses back — the
 // off-tick side receives only the value copy (threat T-26-03).
@@ -159,12 +159,12 @@ func (r pythonReadReq) applyTo(t *TickLoop) {
 		r.reply <- pythonReadRes{ok: false}
 		return
 	}
-	if t.world == nil {
+	if t.only().world == nil {
 		r.reply <- pythonReadRes{ok: false}
 		return
 	}
 	pos := pk.Position{X: r.x, Y: r.y, Z: r.z}
-	state, ok := t.world.GetBlock(pos, dimMinY)
+	state, ok := t.only().world.GetBlock(pos, dimMinY)
 	r.reply <- pythonReadRes{state: int(state), ok: ok}
 }
 
@@ -210,7 +210,7 @@ func (b *serverWorldBridge) Log(msg string) {
 }
 
 // BlockAt issues a READ request and BLOCKS on the reply (request → owner snapshot →
-// return-a-copy). The owner snapshots t.world.GetBlock in pythonReadReq.applyTo and
+// return-a-copy). The owner snapshots t.only().world.GetBlock in pythonReadReq.applyTo and
 // sends the copied scalar back; this returns it. NO live handle crosses — only the
 // value copy. Called OFF-TICK by the block_at builtin. The reply channel is buffered
 // (cap 1) so the owner's send never blocks.

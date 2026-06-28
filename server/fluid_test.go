@@ -23,7 +23,7 @@ import (
 func newFluidLoop() (*TickLoop, *world.ChunkManager) {
 	loop := NewTickLoop(newFakeClock())
 	mgr := world.NewChunkManager()
-	loop.world = mgr
+	loop.only().world = mgr
 	ch := level.EmptyChunk(blockTestSecs)
 	ch.Status = level.StatusFull
 	mgr.Insert(level.ChunkPos{0, 0}, ch)
@@ -55,7 +55,7 @@ func levelAt(mgr *world.ChunkManager, pos pk.Position) (int, bool) {
 func drainAll(loop *TickLoop) int {
 	const cap = 2000
 	for i := 0; i < cap; i++ {
-		if loop.fluidSchedule == nil || loop.scheduleEmpty() {
+		if loop.only().fluidSchedule == nil || loop.scheduleEmpty() {
 			return i
 		}
 		loop.tickFluids()
@@ -72,7 +72,7 @@ func drainAll(loop *TickLoop) int {
 func TestPostProcessChunkFluidsExpandsNaturalWater(t *testing.T) {
 	loop := NewTickLoop(newFakeClock())
 	mgr := world.NewChunkManager()
-	loop.world = mgr
+	loop.only().world = mgr
 	ch := level.EmptyChunk(blockTestSecs)
 	ch.Status = level.StatusFull
 

@@ -65,9 +65,9 @@ func (t *TickLoop) drainStructureSpawns(res world.ChunkResult) {
 		//   - NoAI / setPersistenceRequired: req.PersistenceRequired carries the persistence flag; the
 		//     persistence/despawn consumer is not wired (mobs never despawn in v1 anyway), so it is
 		//     read-and-held below pending the despawn subsystem.
-		e.leftHanded = attribute.FinalizeSpawn(e.attributes, t.levelRandom)
+		e.leftHanded = attribute.FinalizeSpawn(e.attributes, t.only().levelRandom)
 		_ = req.PersistenceRequired
-		t.entities.add(e) // the ONLY off-tick-boundary store mutation; tracker broadcasts AddEntity
+		t.only().entities.add(e) // the ONLY off-tick-boundary store mutation; tracker broadcasts AddEntity
 
 		// PLUGIN-02 (Plan 22) on_entity_spawn seam: fire ONCE here, immediately after the actual
 		// store add — the discrete spawn occurrence — NOT from tickAI's per-tick naturalSpawn scan.

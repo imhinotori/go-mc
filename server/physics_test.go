@@ -26,7 +26,7 @@ func newPhysicsLoop() (*TickLoop, *world.ChunkManager) {
 	mgr := world.NewChunkManager()
 	// Wire the manager directly (SetWorld also starts a worker bridge we don't need for
 	// physics-only tests; assign the tick-owned field straight so there is no goroutine).
-	loop.world = mgr
+	loop.only().world = mgr
 	// PLUGIN-04 (Plan 24-02): the SWAP routes the natural/debug pig spawn through spawnVanillaPig,
 	// which needs the boot-loaded vanilla_pig registry. Install it on every physics loop so any test
 	// driving the spawn paths (spawner/async-stress/debug) has the declaration — the same boot-load
@@ -97,7 +97,7 @@ func TestEntityLands(t *testing.T) {
 
 	// Sulfur cube spawned a few blocks above the floor, at rest.
 	e := testEntity(1, entity.SulfurCube, 8.5, 70.0, 8.5)
-	loop.entities.add(e)
+	loop.only().entities.add(e)
 
 	// Drive enough physics ticks for it to fall ~5 blocks and settle.
 	for i := 0; i < 200; i++ {
@@ -127,7 +127,7 @@ func TestEntityBlockedByWall(t *testing.T) {
 	fillWall(ch, 10, 8, 65, 67)
 
 	e := testEntity(1, entity.SulfurCube, 8.5, 65.0, 8.5) // width 0.49 => half 0.245
-	loop.entities.add(e)
+	loop.only().entities.add(e)
 	e.vx = 0.4 // walk east toward the wall at x=10
 
 	for i := 0; i < 100; i++ {
@@ -155,7 +155,7 @@ func TestNoTunnel(t *testing.T) {
 	fillWall(ch, 12, 8, 65, 67) // 1-block-thick wall at x=12
 
 	e := testEntity(1, entity.SulfurCube, 8.5, 65.0, 8.5)
-	loop.entities.add(e)
+	loop.only().entities.add(e)
 	// One huge horizontal velocity that, moved as a full vector, would land PAST the wall.
 	e.vx = 10.0
 
@@ -174,7 +174,7 @@ func TestGravityTunable(t *testing.T) {
 	putChunk(mgr, level.ChunkPos{0, 0}) // all-air chunk: nothing to collide with
 
 	e := testEntity(1, entity.SulfurCube, 8.5, 200.0, 8.5)
-	loop.entities.add(e)
+	loop.only().entities.add(e)
 
 	prevVy := e.vy
 	for i := 0; i < 5; i++ {
@@ -207,7 +207,7 @@ func TestTickPhysicsRunsGravity(t *testing.T) {
 	fillFloor(ch, floorY)
 
 	e := testEntity(1, entity.SulfurCube, 8.5, 80.0, 8.5)
-	loop.entities.add(e)
+	loop.only().entities.add(e)
 
 	for i := 0; i < 300; i++ {
 		loop.tickPhysics()
@@ -223,7 +223,7 @@ func TestTickPhysicsRunsGravity(t *testing.T) {
 	// The store bucket must reflect the post-physics position (move() re-buckets).
 	col := columnOf(e.x, e.z)
 	found := false
-	for _, be := range loop.entities.near(e.x, e.z, 0) {
+	for _, be := range loop.only().entities.near(e.x, e.z, 0) {
 		if be == e {
 			found = true
 		}

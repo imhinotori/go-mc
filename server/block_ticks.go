@@ -61,20 +61,20 @@ const maxAllowedBlockTicks = 65536
 // container registered is by definition loaded/tickable, so the gate returns true (a future
 // plan can tighten it to the real tick-distance check). Tick-owned.
 func (t *TickLoop) ensureBlockTicks() *ticks.LevelTicks[blockTickType] {
-	if t.blockTicks == nil {
-		t.blockTicks = ticks.NewLevelTicks[blockTickType](func(chunkKey int64) bool {
+	if t.only().blockTicks == nil {
+		t.only().blockTicks = ticks.NewLevelTicks[blockTickType](func(chunkKey int64) bool {
 			return true // v1: a chunk with a registered container is tickable (loaded)
 		})
 	}
-	return t.blockTicks
+	return t.only().blockTicks
 }
 
 // nextSubTick is net.minecraft.world.level.Level.nextSubTickCount(): post-increment the level
 // sub-tick counter, returning the value BEFORE the increment (so the first draw is 0). It feeds
 // each ScheduledTick's subTickOrder. CITE: Level.nextSubTickCount (`return subTickCount++`).
 func (t *TickLoop) nextSubTick() int64 {
-	v := t.blockTickSubCounter
-	t.blockTickSubCounter++
+	v := t.only().blockTickSubCounter
+	t.only().blockTickSubCounter++
 	return v
 }
 
@@ -128,10 +128,10 @@ func (t *TickLoop) scheduleBlockTickWithPriority(pos pk.Position, typ blockTickT
 // vanilla LevelTickAccess.hasScheduledTick guard a block uses before re-scheduling (so it does
 // not pile up duplicate ticks). CITE: LevelTicks.hasScheduledTick.
 func (t *TickLoop) hasScheduledBlockTick(pos pk.Position, typ blockTickType) bool {
-	if t.blockTicks == nil {
+	if t.only().blockTicks == nil {
 		return false
 	}
-	return t.blockTicks.HasScheduledTick(pos, typ)
+	return t.only().blockTicks.HasScheduledTick(pos, typ)
 }
 
 // packChunkBlockTicks serializes a chunk's pending block ticks to the on-disk SavedTickNBT list
@@ -141,10 +141,10 @@ func (t *TickLoop) hasScheduledBlockTick(pos pk.Position, typ blockTickType) boo
 // This is the SAVE half of the chunk tick round-trip; a chunk-flush caller folds the result into
 // the chunk's block_ticks before serializing. CITE: LevelChunkTicks.pack.
 func (t *TickLoop) packChunkBlockTicks(pos level.ChunkPos) []save.SavedTickNBT {
-	if t.blockTicks == nil {
+	if t.only().blockTicks == nil {
 		return nil
 	}
-	container := t.blockTicks.Container(pos[0], pos[1])
+	container := t.only().blockTicks.Container(pos[0], pos[1])
 	if container == nil {
 		return nil
 	}
@@ -194,10 +194,10 @@ func (t *TickLoop) loadChunkBlockTicks(pos level.ChunkPos, savedTicks []save.Sav
 // ServerLevel.tick drains blockTicks before fluidTicks. CITE: ServerLevel.tick block/fluid drain
 // order; LevelTicks.tick.
 func (t *TickLoop) tickScheduledBlocks() {
-	if t.blockTicks == nil {
+	if t.only().blockTicks == nil {
 		return
 	}
-	t.blockTicks.Tick(t.gametime, maxAllowedBlockTicks, t.tickBlock)
+	t.only().blockTicks.Tick(t.gametime, maxAllowedBlockTicks, t.tickBlock)
 }
 
 // tickBlock is net.minecraft.server.level.ServerLevel.tickBlock(pos, block): re-read the block
@@ -206,10 +206,10 @@ func (t *TickLoop) tickScheduledBlocks() {
 // nothing (the stale-tick guard). CITE: ServerLevel.tickBlock (`BlockState s = getBlockState(
 // pos); if (s.is(block)) s.tick(this, pos, this.random)`).
 func (t *TickLoop) tickBlock(pos pk.Position, typ blockTickType) {
-	if t.world == nil {
+	if t.only().world == nil {
 		return
 	}
-	state, ok := t.world.GetBlock(pos, dimMinY)
+	state, ok := t.only().world.GetBlock(pos, dimMinY)
 	if !ok {
 		return // unloaded/out-of-range: nothing to tick (getBlockState would be air, not `block`)
 	}

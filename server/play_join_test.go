@@ -692,7 +692,7 @@ func TestBootstrapEntityID(t *testing.T) {
 	loop := NewTickLoop(newFakeClock())
 
 	// NewTickLoop must wire both ENT-01 fields non-nil from construction.
-	if loop.entities == nil {
+	if loop.only().entities == nil {
 		t.Fatal("NewTickLoop must wire a non-nil entityStore")
 	}
 	if loop.idAlloc == nil {

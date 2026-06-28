@@ -79,10 +79,10 @@ const (
 // the tick goroutine over tick-owned state (TICK-05).
 func (t *TickLoop) countByCategory() map[mobCategory]int {
 	counts := make(map[mobCategory]int)
-	if t.entities == nil {
+	if t.only().entities == nil {
 		return counts
 	}
-	for _, e := range t.entities.byID {
+	for _, e := range t.only().entities.byID {
 		counts[categoryOf(e.typ)]++
 	}
 	return counts
@@ -96,7 +96,7 @@ func (t *TickLoop) countByCategory() map[mobCategory]int {
 // or no players the set is empty (nothing spawns) — exactly vanilla's "no players, no natural
 // spawns". The count of returned columns is the spawnableChunkCount that scales the cap.
 func (t *TickLoop) spawnableColumns() []level.ChunkPos {
-	if t.world == nil || len(t.players) == 0 {
+	if t.only().world == nil || len(t.players) == 0 {
 		return nil
 	}
 	seen := make(map[level.ChunkPos]bool)
@@ -112,7 +112,7 @@ func (t *TickLoop) spawnableColumns() []level.ChunkPos {
 				if seen[col] {
 					continue
 				}
-				if _, ok := t.world.Get(col); !ok {
+				if _, ok := t.only().world.Get(col); !ok {
 					continue // not Ready: vanilla only spawns in loaded columns
 				}
 				seen[col] = true
@@ -261,10 +261,10 @@ func (t *TickLoop) snapshotSpawnColumns(picks []spawnCandidatePick, refY int) *s
 // LocalMobCapCalculator per-player distance weighting, the per-position MIN_SPAWN_DISTANCE check,
 // biome spawn lists + the creature-probability roll, structure spawns, and light-level rules.
 func (t *TickLoop) naturalSpawn() {
-	if t.entities == nil || t.world == nil {
+	if t.only().entities == nil || t.only().world == nil {
 		return
 	}
-	if t.spawnScanPending {
+	if t.only().spawnScanPending {
 		return // a scan is already in flight: single-in-flight gate (Pitfall 4 / OPT-01 !pending)
 	}
 	cols := t.spawnableColumns()
@@ -316,7 +316,7 @@ func (t *TickLoop) naturalSpawn() {
 		t.asyncIn2 <- spawnCandidatesReady{candidates: candidates, spawnableChunkCount: spawnableChunkCount}
 	})
 	if submitted {
-		t.spawnScanPending = true // one scan in flight; cleared by spawnCandidatesReady.applyTo
+		t.only().spawnScanPending = true // one scan in flight; cleared by spawnCandidatesReady.applyTo
 	}
 	// On overload (submitted == false) the gate stays clear and the cycle is a no-op — it retries
 	// next spawnInterval (Pitfall 4). No spawn, no block.
@@ -338,11 +338,11 @@ func (t *TickLoop) spawnRefY() int {
 // per-column broad phase (near) so the scan is bounded to the candidate's column neighborhood,
 // not the whole world. Tick-owned.
 func (t *TickLoop) mobNear(x, z, rangeBlocks float64) bool {
-	if t.entities == nil {
+	if t.only().entities == nil {
 		return false
 	}
 	r2 := rangeBlocks * rangeBlocks
-	for _, e := range t.entities.near(x, z, 1) {
+	for _, e := range t.only().entities.near(x, z, 1) {
 		dx := e.x - x
 		dz := e.z - z
 		if dx*dx+dz*dz <= r2 {

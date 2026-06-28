@@ -44,7 +44,7 @@ type entityTracker struct {
 // goroutine; emits via p.client.Send. No goroutine is spawned.
 func (et *entityTracker) Tick() {
 	t := et.loop
-	if t == nil || t.entities == nil {
+	if t == nil || t.only().entities == nil {
 		return // defensive: a loop without a store has nothing to track
 	}
 
@@ -58,7 +58,7 @@ func (et *entityTracker) Tick() {
 
 		// Broad-phase: the in-range candidate entities (bounded by trackRange, never a full
 		// scan). near() returns a fresh slice the tracker may retain.
-		visible := t.entities.near(p.x, p.z, trackRange)
+		visible := t.only().entities.near(p.x, p.z, trackRange)
 
 		// seen marks which currently-tracked ids are still in range this tick; any tracked id
 		// NOT seen has left range and is batched into the single RemoveEntities below.
@@ -135,7 +135,7 @@ type asyncTracker struct {
 // after the worker's result is drained.
 func (at *asyncTracker) Tick() {
 	t := at.loop
-	if t == nil || t.entities == nil {
+	if t == nil || t.only().entities == nil {
 		return // defensive: a loop without a store has nothing to track
 	}
 
@@ -148,7 +148,7 @@ func (at *asyncTracker) Tick() {
 		// copy out ONLY the value fields the diff + encoders need into worker-owned Entity values,
 		// so the closure holds NO pointer into the live store (Pitfall 3). The player's own id is
 		// skipped here so the snapshot never contains the player's own entity.
-		visible := t.entities.near(p.x, p.z, trackRange)
+		visible := t.only().entities.near(p.x, p.z, trackRange)
 		snap := make([]Entity, 0, len(visible))
 		for _, e := range visible {
 			if e == nil || e.id == p.entityID {

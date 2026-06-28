@@ -53,7 +53,7 @@ func TestPluginPigRace(t *testing.T) {
 	deadline := time.After(2 * time.Second)
 	for {
 		loop.applyAsyncResults()
-		if !loop.spawnScanPending {
+		if !loop.only().spawnScanPending {
 			break
 		}
 		select {
@@ -69,7 +69,7 @@ func TestPluginPigRace(t *testing.T) {
 	// ran for real, not that the test passed vacuously.
 	alive := 0
 	for _, p := range pigs {
-		if _, ok := loop.entities.get(p.id); ok {
+		if _, ok := loop.only().entities.get(p.id); ok {
 			alive++
 		}
 	}

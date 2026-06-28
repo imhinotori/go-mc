@@ -11,7 +11,7 @@ package server
 //   2. TestNoLiveCollectionCapture — the snapshot-discipline GATE. It scans every server/*.go
 //      source (comment-stripped so the audit's own prose can't false-positive), finds each
 //      submitOrDrop(pool, func(){...}) pool-closure, and asserts its body NEVER references a live
-//      tick-owned collection (t.entities / t.world / t.players / t.clientIndex / p.tracked /
+//      tick-owned collection (t.only().entities / t.only().world / t.players / t.clientIndex / p.tracked /
 //      .byID / .buckets). A worker must read an owner-built SNAPSHOT, never the live store — so a
 //      future change that reintroduces a live cross-boundary read FAILS this test (08-RESEARCH
 //      Pitfall 1 warning sign, threat T-8-21).
@@ -77,8 +77,8 @@ func TestHotCollectionsXsyncConcurrent(t *testing.T) {
 // store method) — a snapshot copies these out on the owner BEFORE Submit, so the closure body
 // references the copy, not these.
 var forbiddenLiveTokens = []string{
-	"t.entities", // the live entity store (byID/buckets) — workers read a copied []*Entity / near() result
-	"t.world",    // the live ChunkManager — workers read a snapshotRegion / snapshotSpawnColumns copy
+	"t.only().entities", // the live entity store (byID/buckets) — workers read a copied []*Entity / near() result
+	"t.only().world",    // the live ChunkManager — workers read a snapshotRegion / snapshotSpawnColumns copy
 	"t.players",  // the live players slice — workers read a per-player position+tracked snapshot
 	"t.clientIndex",
 	"p.tracked", // the live per-player tracked set — workers compute a delta over a copied set

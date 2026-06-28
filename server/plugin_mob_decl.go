@@ -386,6 +386,6 @@ func (t *TickLoop) spawnDeclaredMob(decl *mobDecl, x, y, z float64) *Entity {
 	e := NewEntity(t.idAlloc.AllocID(), decl.baseType, x, y, z)
 	seedAttributes(e.attributes, decl.attrs)
 	e.ai = buildAIFromDecl(t, decl)
-	t.entities.add(e)
+	t.only().entities.add(e)
 	return e
 }

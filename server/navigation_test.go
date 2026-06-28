@@ -42,7 +42,7 @@ func TestNavigationFollow(t *testing.T) {
 
 	e := testEntity(1, entity.Pig, 1.5, float64(floorY+1), 1.5)
 	e.ai = &mobAI{} // the nav lives on the mob's AI so the async rejoin (applyTo) can reach it
-	loop.entities.add(e)
+	loop.only().entities.add(e)
 
 	nav := &e.ai.navigation
 	nav.speed = 0.2
@@ -81,7 +81,7 @@ func TestNavigationMovesViaMoveEntity(t *testing.T) {
 
 	e := testEntity(1, entity.Pig, 14.5, float64(floorY+1), 8.5)
 	e.ai = &mobAI{} // the nav lives on the mob's AI so the async rejoin (applyTo) can reach it
-	loop.entities.add(e)
+	loop.only().entities.add(e)
 
 	nav := &e.ai.navigation
 	nav.speed = 0.25
@@ -105,7 +105,7 @@ func TestNavigationMovesViaMoveEntity(t *testing.T) {
 		t.Fatalf("mob did not cross the chunk boundary (col still %v); cannot assert re-bucket", startCol)
 	}
 	found := false
-	for _, n := range loop.entities.near(e.x, e.z, 0) {
+	for _, n := range loop.only().entities.near(e.x, e.z, 0) {
 		if n.id == e.id {
 			found = true
 			break
@@ -126,7 +126,7 @@ func TestRequestPathBuildsSnapshot(t *testing.T) {
 
 	e := testEntity(1, entity.Pig, 2.5, float64(floorY+1), 2.5)
 	e.ai = &mobAI{} // the nav lives on the mob's AI so the async rejoin (applyTo) can reach it
-	loop.entities.add(e)
+	loop.only().entities.add(e)
 
 	nav := &e.ai.navigation
 	nav.speed = 0.2
@@ -179,7 +179,7 @@ func TestServerAiStepWalksToGoalTarget(t *testing.T) {
 		tx:       11.5, ty: float64(floorY + 1), tz: 8.5, // reachable point east along the floor
 	})
 	e.ai = ai
-	loop.entities.add(e)
+	loop.only().entities.add(e)
 
 	startX := e.x
 	for i := 0; i < 400; i++ {
@@ -218,7 +218,7 @@ func TestAsyncPathRejoins(t *testing.T) {
 	e := testEntity(1, entity.Pig, 1.5, float64(floorY+1), 1.5)
 	e.ai = &mobAI{}
 	e.ai.navigation.speed = 0.2
-	loop.entities.add(e)
+	loop.only().entities.add(e)
 
 	nav := &e.ai.navigation
 	nav.requestPath(loop, e, 10, floorY+1, 1) // path east along the floor
@@ -264,13 +264,13 @@ func TestAsyncPathDespawnedDropped(t *testing.T) {
 	e := testEntity(7, entity.Pig, 1.5, float64(floorY+1), 1.5)
 	e.ai = &mobAI{}
 	e.ai.navigation.speed = 0.2
-	loop.entities.add(e)
+	loop.only().entities.add(e)
 
 	nav := &e.ai.navigation
 	nav.requestPath(loop, e, 10, floorY+1, 1)
 
 	// The mob despawns while the path computes — remove it BEFORE the result lands.
-	loop.entities.remove(e.id)
+	loop.only().entities.remove(e.id)
 
 	// Drain: applyTo must take the despawn-drop path. No panic, and the (now-orphaned) nav.path
 	// must remain nil (nothing was adopted onto a non-existent mob).
@@ -295,7 +295,7 @@ func TestAsyncPathRetargetedDropped(t *testing.T) {
 	e := testEntity(3, entity.Pig, 1.5, float64(floorY+1), 1.5)
 	e.ai = &mobAI{}
 	e.ai.navigation.speed = 0.2
-	loop.entities.add(e)
+	loop.only().entities.add(e)
 
 	nav := &e.ai.navigation
 
@@ -340,7 +340,7 @@ func TestAsyncPathPoolOverloadDrops(t *testing.T) {
 	e := testEntity(4, entity.Pig, 1.5, float64(floorY+1), 1.5)
 	e.ai = &mobAI{}
 	e.ai.navigation.speed = 0.2
-	loop.entities.add(e)
+	loop.only().entities.add(e)
 
 	nav := &e.ai.navigation
 	existing := &Path{nodes: []*node{newNode(1, floorY+1, 1)}, idx: 0}
@@ -371,7 +371,7 @@ func TestAsyncPathCooldownPreserved(t *testing.T) {
 	e := testEntity(5, entity.Pig, 1.5, float64(floorY+1), 1.5)
 	e.ai = &mobAI{}
 	e.ai.navigation.speed = 0.2
-	loop.entities.add(e)
+	loop.only().entities.add(e)
 
 	nav := &e.ai.navigation
 	nav.requestPath(loop, e, 10, floorY+1, 1)

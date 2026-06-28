@@ -40,7 +40,7 @@ import (
 // half -> destroyed) or a stacked column.
 //
 // All access is on the TICK goroutine over the tick-owned ChunkManager (TICK-05): world reads/writes
-// go through t.world.GetBlock/SetBlock, and the drop reuses the GAMEPLAY-06 spawnBlockDrop path.
+// go through t.only().world.GetBlock/SetBlock, and the drop reuses the GAMEPLAY-06 spawnBlockDrop path.
 
 // vegetationRecursionLimit is Block.updateOrDestroy's recursionLeft seed (512): the cap on how many
 // nested updateOrDestroy -> destroyBlock -> updateNeighborsAt re-entries a single edit may trigger,
@@ -90,7 +90,7 @@ func (t *TickLoop) updateVegetationOnEdit(pos pk.Position) {
 // the cell ABOVE `pos`. recursionLeft is the remaining nested-destroy budget (Block.updateOrDestroy's
 // recursionLeft); at 0 the cascade stops (vanilla's recursion guard). Tick-owned.
 func (t *TickLoop) destroyUnsupportedVegetationAbove(pos pk.Position, recursionLeft int) {
-	if recursionLeft <= 0 || t.world == nil {
+	if recursionLeft <= 0 || t.only().world == nil {
 		return
 	}
 
@@ -100,7 +100,7 @@ func (t *TickLoop) destroyUnsupportedVegetationAbove(pos pk.Position, recursionL
 	// reads nothing -> no-op (vanilla's getBlockState on an unloaded chunk returns air, which is not
 	// vegetation, so it would not destroy anything either — treating an unreadable read as "skip" is
 	// the faithful, non-destructive outcome).
-	aboveState, ok := t.world.GetBlock(abovePos, dimMinY)
+	aboveState, ok := t.only().world.GetBlock(abovePos, dimMinY)
 	if !ok {
 		return
 	}
@@ -110,7 +110,7 @@ func (t *TickLoop) destroyUnsupportedVegetationAbove(pos pk.Position, recursionL
 		return
 	}
 
-	belowState, ok := t.world.GetBlock(pos, dimMinY)
+	belowState, ok := t.only().world.GetBlock(pos, dimMinY)
 	if !ok {
 		return // support cell unreadable: do not destroy (non-destructive on an unloaded read)
 	}
@@ -123,7 +123,7 @@ func (t *TickLoop) destroyUnsupportedVegetationAbove(pos pk.Position, recursionL
 	// abovePos, dropBlock=true, null, recursionLeft). The default setBlock flags carry no bit-32, so
 	// dropBlock is true: the destroyed vegetation drops its own loot. We mirror Sulfur's destroyBlock
 	// seam: capture the broken state, SetBlock air, broadcast the air to trackers, and drop.
-	if !t.world.SetBlock(abovePos, t.airState(), dimMinY) {
+	if !t.only().world.SetBlock(abovePos, t.airState(), dimMinY) {
 		return // already air / unloaded: nothing destroyed (destroyBlock returns false)
 	}
 	t.broadcastBlockUpdate(abovePos, t.airState())

@@ -39,7 +39,7 @@ func newStressLoop(t *testing.T, radius, floorY int) *TickLoop {
 	t.Helper()
 	loop := NewTickLoop(newFakeClock())
 	mgr := world.NewChunkManager()
-	loop.world = mgr
+	loop.only().world = mgr
 	// PLUGIN-04 (Plan 24-02): the SWAP routes the natural pig spawn through spawnVanillaPig, which
 	// needs the boot-loaded vanilla_pig registry. Install it so the stress loop's natural spawner can
 	// actually add plugin pigs under load (without it the spawn applyTo panics and the tickOnce recover
@@ -107,10 +107,10 @@ func TestAllAsyncSubsystemsRaceClean(t *testing.T) {
 		z := 6.5 + float64((i%3)*4)
 		e := NewEntity(loop.idAlloc.AllocID(), entity.Pig, x, float64(floorY+1), z)
 		e.ai = newPigAI()
-		loop.entities.add(e)
+		loop.only().entities.add(e)
 	}
 
-	startMobs := loop.entities.len()
+	startMobs := loop.only().entities.len()
 
 	// Drive the loop through a few hundred logical ticks. advance() consumes whole 50ms steps from the
 	// fake clock and runs the full ordered pipeline per step (tickAI submits to path/spawn pools,
@@ -129,7 +129,7 @@ func TestAllAsyncSubsystemsRaceClean(t *testing.T) {
 	deadline := time.After(2 * time.Second)
 	for {
 		loop.applyAsyncResults()
-		if !loop.spawnScanPending {
+		if !loop.only().spawnScanPending {
 			break
 		}
 		select {
@@ -147,9 +147,9 @@ func TestAllAsyncSubsystemsRaceClean(t *testing.T) {
 	// ticks (20 spawnInterval cycles, under cap, with a loaded world + players), and the tracker must
 	// have spawned the seeded mobs to at least one player (its tracked set is non-empty). If neither
 	// happened the test would pass the race gate vacuously — assert real work occurred.
-	if loop.entities.len() <= startMobs {
+	if loop.only().entities.len() <= startMobs {
 		t.Fatalf("the spawner added no mobs over %d ticks (%d -> %d) — the stress was trivial",
-			ticks, startMobs, loop.entities.len())
+			ticks, startMobs, loop.only().entities.len())
 	}
 	tracked := 0
 	for _, p := range loop.players {
@@ -183,7 +183,7 @@ func TestBehaviorRegressionPathArrives(t *testing.T) {
 		tx:       12.5, ty: float64(floorY + 1), tz: 8.5,
 	})
 	e.ai = ai
-	loop.entities.add(e)
+	loop.only().entities.add(e)
 
 	startX := e.x
 	// Drive the AI + physics + async rejoin per tick exactly as the live pipeline does: serverAiStep
@@ -224,7 +224,7 @@ func TestBehaviorRegressionTrackerSends(t *testing.T) {
 
 	// (1) Enter range: a mob one block away → AddEntity.
 	e := NewEntity(loop.idAlloc.AllocID(), entity.Pig, 9.5, 64, 9.5)
-	loop.entities.add(e)
+	loop.only().entities.add(e)
 	drainAsyncTracker(t, loop, 1) // one player → one diff result, applied on the owner
 	got := drainPackets(p.client)
 	if countID(got, packetid.ClientboundAddEntity) != 1 {
@@ -238,7 +238,7 @@ func TestBehaviorRegressionTrackerSends(t *testing.T) {
 	loop.tickEntityMovement() // seed the mob's move base; no packet
 	p.client = captureClient(64)
 	loop.clientIndex[p.client] = p
-	loop.entities.move(e, 13.5, 64, 13.5)
+	loop.only().entities.move(e, 13.5, 64, 13.5)
 	loop.tickEntityMovement()      // the 4-block delta → MoveEntityPos
 	drainAsyncTracker(t, loop, 1)  // tracker: no re-spawn
 	got = drainPackets(p.client)
@@ -253,7 +253,7 @@ func TestBehaviorRegressionTrackerSends(t *testing.T) {
 	// (3) Leave range: the mob moves far away → exactly one batched RemoveEntities, dropped from tracked.
 	p.client = captureClient(64)
 	loop.clientIndex[p.client] = p
-	loop.entities.move(e, 1600, 64, 1600)
+	loop.only().entities.move(e, 1600, 64, 1600)
 	drainAsyncTracker(t, loop, 1)
 	got = drainPackets(p.client)
 	if countID(got, packetid.ClientboundRemoveEntities) != 1 {
@@ -274,21 +274,21 @@ func TestBehaviorRegressionMobSpawns(t *testing.T) {
 	loop, _, _ := newSpawnLoop(t)
 	defer loop.Close()
 
-	before := loop.entities.len()
+	before := loop.only().entities.len()
 	// Run several spawn cycles. runSpawnCycle (spawner_test.go) submits the off-tick scan and applies
 	// the single rejoin on the owner — exactly what applyAsyncResults does in the live loop. A bounded
 	// number of cycles must yield at least one spawn under cap.
 	const cycles = 8
-	for i := 0; i < cycles && loop.entities.len() == before; i++ {
+	for i := 0; i < cycles && loop.only().entities.len() == before; i++ {
 		runSpawnCycle(t, loop)
 	}
 
-	if loop.entities.len() <= before {
+	if loop.only().entities.len() <= before {
 		t.Fatalf("the async spawner added no mob over %d cycles under cap (%d -> %d) — OPT-03 changed behavior",
-			cycles, before, loop.entities.len())
+			cycles, before, loop.only().entities.len())
 	}
 	var pig *Entity
-	for _, e := range loop.entities.byID {
+	for _, e := range loop.only().entities.byID {
 		if e.typ == entity.Pig.ID {
 			pig = e
 		}

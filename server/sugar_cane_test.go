@@ -20,7 +20,7 @@ import (
 func newSugarCaneLoop() (*TickLoop, *world.ChunkManager) {
 	loop := NewTickLoop(newFakeClock())
 	mgr := world.NewChunkManager()
-	loop.world = mgr
+	loop.only().world = mgr
 	ch := level.EmptyChunk(blockTestSecs)
 	ch.Status = level.StatusFull
 	mgr.Insert(level.ChunkPos{0, 0}, ch)
@@ -36,7 +36,7 @@ func newSugarCaneLoop() (*TickLoop, *world.ChunkManager) {
 func TestChunkReadyRegistersBlockTickContainer(t *testing.T) {
 	loop := NewTickLoop(newFakeClock())
 	mgr := world.NewChunkManager()
-	loop.world = mgr
+	loop.only().world = mgr
 	ch := level.EmptyChunk(blockTestSecs)
 	ch.Status = level.StatusFull
 
@@ -61,7 +61,7 @@ func sugarCane(age int) block.StateID {
 
 func itemDropCount(loop *TickLoop) int {
 	n := 0
-	for _, e := range loop.entities.byID {
+	for _, e := range loop.only().entities.byID {
 		if e.isItem {
 			n++
 		}
@@ -148,8 +148,8 @@ func TestSugarCaneScheduleDrainDestroy(t *testing.T) {
 		t.Fatalf("expected one sugar-cane drop, drops went %d -> %d", dropsBefore, itemDropCount(loop))
 	}
 	// The queue is drained.
-	if loop.blockTicks.Count() != 0 {
-		t.Fatalf("after firing, queue should be empty; Count = %d", loop.blockTicks.Count())
+	if loop.only().blockTicks.Count() != 0 {
+		t.Fatalf("after firing, queue should be empty; Count = %d", loop.only().blockTicks.Count())
 	}
 }
 
@@ -194,7 +194,7 @@ func TestSugarCaneCascade(t *testing.T) {
 
 	// Fire ticks until the queue drains (each destroy may schedule the next). Cap to avoid a
 	// runaway in case of a bug.
-	for i := 0; i < 10 && loop.blockTicks.Count() > 0; i++ {
+	for i := 0; i < 10 && loop.only().blockTicks.Count() > 0; i++ {
 		loop.gametime++
 		loop.tickScheduledBlocks()
 	}
@@ -281,7 +281,7 @@ func TestChunkBlockTicksSaveLoadCycle(t *testing.T) {
 	// the seeded one.
 	dst := NewTickLoop(newFakeClock())
 	dstMgr := world.NewChunkManager()
-	dst.world = dstMgr
+	dst.only().world = dstMgr
 	ch := level.EmptyChunk(blockTestSecs)
 	ch.Status = level.StatusFull
 	dstMgr.Insert(level.ChunkPos{0, 0}, ch)

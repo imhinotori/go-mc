@@ -16,11 +16,11 @@ import (
 // → saveAllItems), and that BE Items list decodes back to the same {slot,id,count} container.
 func TestChestItemsRoundTrip(t *testing.T) {
 	loop, _ := newBlockLoop()
-	ch, _ := loop.world.Get(level.ChunkPos{0, 0})
+	ch, _ := loop.only().world.Get(level.ChunkPos{0, 0})
 
 	// Place a chest block + a rolled chestLoot (LootTable already cleared, container filled).
 	chestPos := pk.Position{X: 3, Y: 65, Z: 4}
-	loop.world.SetBlock(chestPos, block.ToStateID[block.Chest{Facing: block.North, Type: block.ChestTypeSingle}], dimMinY)
+	loop.only().world.SetBlock(chestPos, block.ToStateID[block.Chest{Facing: block.North, Type: block.ChestTypeSingle}], dimMinY)
 	be := level.BlockEntity{Y: int16(chestPos.Y), Type: block.EntityTypes["minecraft:chest"]}
 	be.PackXZ(chestPos.X&15, chestPos.Z&15)
 	ch.BlockEntity = append(ch.BlockEntity, be)
@@ -67,7 +67,7 @@ func TestChestItemsRoundTrip(t *testing.T) {
 // (trySaveLootTable true → no Items written) — the items have not been generated yet.
 func TestChestUnrolledNotFlushed(t *testing.T) {
 	loop, _ := newBlockLoop()
-	ch, _ := loop.world.Get(level.ChunkPos{0, 0})
+	ch, _ := loop.only().world.Get(level.ChunkPos{0, 0})
 
 	chestPos := pk.Position{X: 7, Y: 65, Z: 2}
 	be := level.BlockEntity{Y: int16(chestPos.Y), Type: block.EntityTypes["minecraft:chest"], Data: testChestLootNBT("minecraft:chests/simple_dungeon", 999)}

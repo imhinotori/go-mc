@@ -40,7 +40,7 @@ const suffocationDamage = 1.0
 // a block boundary) and the exact collision-shape intersection (joinIsNotEmpty) are NOT yet modeled
 // — they require the per-block VoxelShape engine Sulfur has not extracted; documented as a v1 gap.
 func (t *TickLoop) isInWall(p *tickPlayer) bool {
-	if t.world == nil {
+	if t.only().world == nil {
 		return false
 	}
 	// getEyePosition() = (x, y + eyeHeight, z); the eye-box is centered here. The dominant case
@@ -48,7 +48,7 @@ func (t *TickLoop) isInWall(p *tickPlayer) bool {
 	bx := int(math.Floor(p.x))
 	by := int(math.Floor(p.y + playerStandingEyeHeight))
 	bz := int(math.Floor(p.z))
-	s, ok := t.world.GetBlock(pk.Position{X: bx, Y: by, Z: bz}, dimMinY)
+	s, ok := t.only().world.GetBlock(pk.Position{X: bx, Y: by, Z: bz}, dimMinY)
 	if !ok {
 		return false
 	}

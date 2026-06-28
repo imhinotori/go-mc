@@ -29,7 +29,7 @@ import (
 func runSpawnCycle(t *testing.T, loop *TickLoop) {
 	t.Helper()
 	loop.naturalSpawn()
-	if !loop.spawnScanPending {
+	if !loop.only().spawnScanPending {
 		return // no scan submitted this cycle (at cap, no eligible column, or pool overloaded)
 	}
 	select {
@@ -90,23 +90,23 @@ func TestSpawnCapAccounting(t *testing.T) {
 
 	// Fill the store with exactly `cap` CREATURE mobs (pigs) so CREATURE is AT the cap.
 	for i := 0; i < cap; i++ {
-		loop.entities.add(NewEntity(loop.idAlloc.AllocID(), entity.Pig, 8.5, float64(floorY+1), 8.5))
+		loop.only().entities.add(NewEntity(loop.idAlloc.AllocID(), entity.Pig, 8.5, float64(floorY+1), 8.5))
 	}
-	before := loop.entities.len()
+	before := loop.only().entities.len()
 	runSpawnCycle(t, loop)
-	if loop.entities.len() != before {
-		t.Fatalf("at cap, naturalSpawn must not spawn: count %d -> %d", before, loop.entities.len())
+	if loop.only().entities.len() != before {
+		t.Fatalf("at cap, naturalSpawn must not spawn: count %d -> %d", before, loop.only().entities.len())
 	}
 
 	// Remove one so we are below cap; now a spawn IS allowed.
-	for id := range loop.entities.byID {
-		loop.entities.remove(id)
+	for id := range loop.only().entities.byID {
+		loop.only().entities.remove(id)
 		break
 	}
-	below := loop.entities.len()
+	below := loop.only().entities.len()
 	runSpawnCycle(t, loop)
-	if loop.entities.len() != below+1 {
-		t.Fatalf("below cap, naturalSpawn should add exactly one mob: count %d -> %d", below, loop.entities.len())
+	if loop.only().entities.len() != below+1 {
+		t.Fatalf("below cap, naturalSpawn should add exactly one mob: count %d -> %d", below, loop.only().entities.len())
 	}
 }
 
@@ -119,7 +119,7 @@ func TestSpawnPlacementOnGround(t *testing.T) {
 	// (a) Valid floor: a spawn lands on the surface (feet at floorY+1, solid floorY below).
 	runSpawnCycle(t, loop)
 	var spawned *Entity
-	for _, e := range loop.entities.byID {
+	for _, e := range loop.only().entities.byID {
 		if e.typ == entity.Pig.ID {
 			spawned = e
 		}
@@ -146,10 +146,10 @@ func TestSpawnPlacementOnGround(t *testing.T) {
 	}
 	_ = ch // keep ch referenced (floor world built above)
 	loop2.players = append(loop2.players, &tickPlayer{x: 8.5, y: float64(floorY + 1), z: 8.5})
-	before := loop2.entities.len()
+	before := loop2.only().entities.len()
 	runSpawnCycle(t, loop2)
-	if loop2.entities.len() != before {
-		t.Fatalf("a fully-blocked column must not spawn (no ON_GROUND clearance): %d -> %d", before, loop2.entities.len())
+	if loop2.only().entities.len() != before {
+		t.Fatalf("a fully-blocked column must not spawn (no ON_GROUND clearance): %d -> %d", before, loop2.only().entities.len())
 	}
 	_ = ch2
 }
@@ -160,13 +160,13 @@ func TestSpawnPlacementOnGround(t *testing.T) {
 func TestSpawnAddsToStore(t *testing.T) {
 	loop, _, _ := newSpawnLoop(t)
 
-	before := loop.entities.len()
+	before := loop.only().entities.len()
 	runSpawnCycle(t, loop)
-	if loop.entities.len() != before+1 {
-		t.Fatalf("a valid spawn must add exactly one entity: %d -> %d", before, loop.entities.len())
+	if loop.only().entities.len() != before+1 {
+		t.Fatalf("a valid spawn must add exactly one entity: %d -> %d", before, loop.only().entities.len())
 	}
 	var pig *Entity
-	for _, e := range loop.entities.byID {
+	for _, e := range loop.only().entities.byID {
 		if e.typ == entity.Pig.ID {
 			pig = e
 		}
@@ -181,7 +181,7 @@ func TestSpawnAddsToStore(t *testing.T) {
 		t.Fatal("a naturally-spawned Pig must have a real mobAI attached (so it wanders via serverAiStep), not a static mover")
 	}
 	// The mob is registered in the bucket index too (so near()/the tracker sees it).
-	got := loop.entities.near(pig.x, pig.z, 0)
+	got := loop.only().entities.near(pig.x, pig.z, 0)
 	found := false
 	for _, e := range got {
 		if e.id == pig.id {
@@ -213,7 +213,7 @@ func TestTickAIDrivesMobs(t *testing.T) {
 		tx:       11.5, ty: float64(floorY + 1), tz: 8.5, // reachable point east along the floor
 	})
 	e.ai = ai
-	loop.entities.add(e)
+	loop.only().entities.add(e)
 
 	startX := e.x
 	// Drive the AI pipeline until the mob has clearly advanced toward its goal, up to a generous
@@ -256,7 +256,7 @@ func TestTickAIDrivesMobs(t *testing.T) {
 func TestTickAISpawns(t *testing.T) {
 	loop, _, _ := newSpawnLoop(t)
 
-	before := loop.entities.len()
+	before := loop.only().entities.len()
 	// Drive enough ticks that gametime crosses at least one spawnInterval boundary. gametime is
 	// 0 on the first tickAI call, so the very first call already submits a spawn scan. OPT-03: the
 	// scan is off-tick — tickAI SUBMITS to spawnPool and applyAsyncResults (the pipeline phase that
@@ -270,7 +270,7 @@ func TestTickAISpawns(t *testing.T) {
 	}
 	// The off-tick worker may not have finished within the loop above (the pool runs concurrently);
 	// give the pending scan a final bounded chance to rejoin so the assertion is deterministic.
-	if loop.spawnScanPending {
+	if loop.only().spawnScanPending {
 		select {
 		case r := <-loop.asyncIn2:
 			r.applyTo(loop)
@@ -278,13 +278,13 @@ func TestTickAISpawns(t *testing.T) {
 			t.Fatal("tickAI's off-tick spawn scan never rejoined on asyncIn2")
 		}
 	}
-	if loop.entities.len() <= before {
+	if loop.only().entities.len() <= before {
 		t.Fatalf("tickAI's throttled naturalSpawn should have added a mob over %d ticks: %d -> %d",
-			spawnInterval+1, before, loop.entities.len())
+			spawnInterval+1, before, loop.only().entities.len())
 	}
 	// And the spawned mob carries a real AI (it will wander next tick).
 	var pig *Entity
-	for _, e := range loop.entities.byID {
+	for _, e := range loop.only().entities.byID {
 		if e.typ == entity.Pig.ID {
 			pig = e
 		}
@@ -336,7 +336,7 @@ func TestDebugPigUsesRealAI(t *testing.T) {
 	// One tickEntities runs tickDebug, which spawns the debug pig.
 	loop.tickEntities()
 
-	pig, ok := loop.entities.get(loop.debug.pigID)
+	pig, ok := loop.only().entities.get(loop.debug.pigID)
 	if !ok {
 		t.Fatal("SULFUR_DEBUG should have spawned a debug pig")
 	}
@@ -367,9 +367,9 @@ func TestDebugPigUsesRealAI(t *testing.T) {
 func TestAsyncSpawnRejoinsAndAdds(t *testing.T) {
 	loop, _, floorY := newSpawnLoop(t)
 
-	before := loop.entities.len()
+	before := loop.only().entities.len()
 	loop.naturalSpawn()
-	if !loop.spawnScanPending {
+	if !loop.only().spawnScanPending {
 		t.Fatal("under cap with a standable column, naturalSpawn must SUBMIT an off-tick scan (spawnScanPending)")
 	}
 	// Rejoin the off-tick result on the owner (the production applyAsyncResults drain).
@@ -379,14 +379,14 @@ func TestAsyncSpawnRejoinsAndAdds(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("the off-tick spawn scan never rejoined on asyncIn2")
 	}
-	if loop.spawnScanPending {
+	if loop.only().spawnScanPending {
 		t.Fatal("applyTo must CLEAR the single-in-flight gate so the next cycle can submit")
 	}
-	if loop.entities.len() != before+1 {
-		t.Fatalf("the async scan + owner add must add exactly one mob: %d -> %d", before, loop.entities.len())
+	if loop.only().entities.len() != before+1 {
+		t.Fatalf("the async scan + owner add must add exactly one mob: %d -> %d", before, loop.only().entities.len())
 	}
 	var pig *Entity
-	for _, e := range loop.entities.byID {
+	for _, e := range loop.only().entities.byID {
 		if e.typ == entity.Pig.ID {
 			pig = e
 		}
@@ -402,7 +402,7 @@ func TestAsyncSpawnRejoinsAndAdds(t *testing.T) {
 	}
 	// The add ran on the OWNER (in applyTo), so the bucket index is consistent for near().
 	found := false
-	for _, e := range loop.entities.near(pig.x, pig.z, 0) {
+	for _, e := range loop.only().entities.near(pig.x, pig.z, 0) {
 		if e.id == pig.id {
 			found = true
 		}
@@ -427,7 +427,7 @@ func TestAsyncSpawnCapRecheck(t *testing.T) {
 
 	// Submit the scan while the store is EMPTY (well under cap).
 	loop.naturalSpawn()
-	if !loop.spawnScanPending {
+	if !loop.only().spawnScanPending {
 		t.Fatal("under cap, naturalSpawn must submit an off-tick scan")
 	}
 	// Receive the scan result but DO NOT apply it yet.
@@ -440,17 +440,17 @@ func TestAsyncSpawnCapRecheck(t *testing.T) {
 
 	// Now flood the store to EXACTLY the cap BEFORE applying — the world filled up since the scan.
 	for i := 0; i < cap; i++ {
-		loop.entities.add(NewEntity(loop.idAlloc.AllocID(), entity.Pig, 8.5, float64(floorY+1), 8.5))
+		loop.only().entities.add(NewEntity(loop.idAlloc.AllocID(), entity.Pig, 8.5, float64(floorY+1), 8.5))
 	}
-	atCap := loop.entities.len()
+	atCap := loop.only().entities.len()
 
 	// Apply the STALE scan result on the owner: the cap re-check must DROP it (no over-cap add).
 	result.applyTo(loop)
-	if loop.entities.len() != atCap {
+	if loop.only().entities.len() != atCap {
 		t.Fatalf("a stale scan must NOT over-spawn past the re-checked cap: %d -> %d (cap=%d)",
-			atCap, loop.entities.len(), cap)
+			atCap, loop.only().entities.len(), cap)
 	}
-	if loop.spawnScanPending {
+	if loop.only().spawnScanPending {
 		t.Fatal("applyTo must clear the in-flight gate even when it drops the spawn (no wedge)")
 	}
 }
@@ -465,8 +465,8 @@ func TestAsyncSpawnOccupiedDropped(t *testing.T) {
 	// Pre-place a mob at the exact candidate position so mobNear is true there at apply time.
 	const cx, cz = 8, 8
 	occupier := NewEntity(loop.idAlloc.AllocID(), entity.Pig, float64(cx)+0.5, float64(floorY+1), float64(cz)+0.5)
-	loop.entities.add(occupier)
-	before := loop.entities.len()
+	loop.only().entities.add(occupier)
+	before := loop.only().entities.len()
 
 	// A scan result proposing ONLY the occupied candidate. spawnableChunkCount is large so the cap
 	// re-check passes (live=1 << cap) and the ONLY drop reason under test is the mobNear guard.
@@ -476,9 +476,9 @@ func TestAsyncSpawnOccupiedDropped(t *testing.T) {
 	}
 	result.applyTo(loop)
 
-	if loop.entities.len() != before {
+	if loop.only().entities.len() != before {
 		t.Fatalf("an occupied candidate must be DROPPED (anti-piling guard re-checked on the owner): %d -> %d",
-			before, loop.entities.len())
+			before, loop.only().entities.len())
 	}
 }
 
@@ -510,14 +510,14 @@ func TestAsyncSpawnPoolOverloadSkips(t *testing.T) {
 		}
 	}
 
-	before := loop.entities.len()
+	before := loop.only().entities.len()
 	loop.naturalSpawn() // the candidate-scan submit must be DROPPED on the saturated pool
-	if loop.spawnScanPending {
+	if loop.only().spawnScanPending {
 		t.Fatal("on pool overload naturalSpawn must NOT mark a scan in flight (the cycle is skipped)")
 	}
-	if loop.entities.len() != before {
+	if loop.only().entities.len() != before {
 		t.Fatalf("an overloaded cycle must add no mob (it retries next interval): %d -> %d",
-			before, loop.entities.len())
+			before, loop.only().entities.len())
 	}
 	close(release) // free the saturating workers
 }

@@ -22,7 +22,7 @@ import (
 func newStructureSpawnLoop() (*TickLoop, *world.ChunkManager) {
 	loop := NewTickLoop(newFakeClock())
 	mgr := world.NewChunkManager()
-	loop.world = mgr
+	loop.only().world = mgr
 	return loop, mgr
 }
 
@@ -40,18 +40,18 @@ func TestStructureSpawnSeam(t *testing.T) {
 		{EntityType: "minecraft:villager", X: 4.5, Y: 64, Z: 4.5, PersistenceRequired: true},
 	}
 
-	before := loop.entities.len()
+	before := loop.only().entities.len()
 	cr := chunkReady{res: world.ChunkResult{Pos: level.ChunkPos{0, 0}, Chunk: ch, Spawns: reqs}}
 	cr.applyTo(loop)
 
-	if got := loop.entities.len(); got != before+len(reqs) {
+	if got := loop.only().entities.len(); got != before+len(reqs) {
 		t.Fatalf("entity count = %d, want %d (%d structure spawns)", got, before+len(reqs), len(reqs))
 	}
 
 	// Each request resolved to the right type at the right position.
 	want := map[entity.ID]int{entity.Witch.ID: 1, entity.Cat.ID: 1, entity.Villager.ID: 1}
 	got := map[entity.ID]int{}
-	for _, e := range loop.entities.all() {
+	for _, e := range loop.only().entities.all() {
 		got[e.typ]++
 		if e.id == 0 {
 			t.Fatalf("spawned entity has id 0 — AllocID not called")
@@ -75,11 +75,11 @@ func TestStructureSpawnUnknownTypeSkipped(t *testing.T) {
 		{EntityType: "minecraft:not_a_real_entity", X: 1, Y: 64, Z: 1},
 		{EntityType: "minecraft:witch", X: 2, Y: 64, Z: 2},
 	}
-	before := loop.entities.len()
+	before := loop.only().entities.len()
 	chunkReady{res: world.ChunkResult{Pos: level.ChunkPos{0, 0}, Chunk: ch, Spawns: reqs}}.applyTo(loop)
 
 	// Only the witch resolves; the unknown id is skipped.
-	if got := loop.entities.len(); got != before+1 {
+	if got := loop.only().entities.len(); got != before+1 {
 		t.Fatalf("entity count = %d, want %d (only the witch resolves)", got, before+1)
 	}
 }
@@ -95,7 +95,7 @@ func TestStructureSpawnRaceClean(t *testing.T) {
 	results := make(chan world.ChunkResult, n)
 
 	// Off-tick producers: each builds an immutable ChunkResult carrying SpawnRequests. They
-	// touch NO tick state (no loop.entities, no idAlloc) — exactly the worker discipline.
+	// touch NO tick state (no loop.only().entities, no idAlloc) — exactly the worker discipline.
 	var wg sync.WaitGroup
 	for i := 0; i < n; i++ {
 		wg.Add(1)
@@ -116,11 +116,11 @@ func TestStructureSpawnRaceClean(t *testing.T) {
 	close(results)
 
 	// The TICK drains each on the owner goroutine (this goroutine) — the only store mutation.
-	before := loop.entities.len()
+	before := loop.only().entities.len()
 	for res := range results {
 		chunkReady{res: res}.applyTo(loop)
 	}
-	if got := loop.entities.len(); got != before+n {
+	if got := loop.only().entities.len(); got != before+n {
 		t.Fatalf("entity count = %d, want %d (one witch per chunk)", got, before+n)
 	}
 }

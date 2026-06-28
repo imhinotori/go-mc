@@ -198,7 +198,7 @@ func TestSpawnDeclaredMobAttributes(t *testing.T) {
 	if e.ai == nil {
 		t.Fatalf("declared mob has no AI (buildAIFromDecl must attach a mobAI)")
 	}
-	if _, ok := loop.entities.get(e.id); !ok {
+	if _, ok := loop.only().entities.get(e.id); !ok {
 		t.Fatalf("spawnDeclaredMob did not add the mob to the tick-owned store")
 	}
 }
@@ -261,7 +261,7 @@ func TestStarlarkGoalArbitration(t *testing.T) {
 	loop, _ := newPhysicsLoop()
 	e := testEntity(1, entity.Pig, 0, 0, 0)
 	e.ai = &mobAI{}
-	loop.entities.add(e)
+	loop.only().entities.add(e)
 
 	var hiCount, loCount int
 	hi := &starlarkGoal{baseGoal: newBaseGoal(flagMove), t: loop, caps: capAll, name: "hi", tickFn: countingFn(&hiCount)}
@@ -286,7 +286,7 @@ func TestStarlarkGoalCallsFnOnlyWhenRunning(t *testing.T) {
 	loop, _ := newPhysicsLoop()
 	e := testEntity(1, entity.Pig, 0, 0, 0)
 	e.ai = &mobAI{}
-	loop.entities.add(e)
+	loop.only().entities.add(e)
 
 	var tickCount int
 	// can_use returns False (a falsey value) so the goal can never start.
@@ -324,7 +324,7 @@ func TestGoalCallbackIsolation(t *testing.T) {
 	loop, _ := newPhysicsLoop()
 	e := testEntity(1, entity.Pig, 0, 0, 0)
 	e.ai = &mobAI{}
-	loop.entities.add(e)
+	loop.only().entities.add(e)
 
 	var siblingCount int
 	bad := &starlarkGoal{baseGoal: newBaseGoal(flagMove), t: loop, caps: capAll, name: "bad", tickFn: erroringFn()}
@@ -347,7 +347,7 @@ func TestNavHandlePathTo(t *testing.T) {
 	loop, _ := newPhysicsLoop()
 	e := testEntity(1, entity.Pig, 0, 0, 0)
 	e.ai = &mobAI{}
-	loop.entities.add(e)
+	loop.only().entities.add(e)
 
 	// With capNav: path_to sets the want target.
 	nh := newNavHandle(loop, e.id, capAll)
@@ -382,7 +382,7 @@ func TestNavHandlePathTo(t *testing.T) {
 	// WITHOUT capNav: path_to is denied (capability error), the target is unchanged.
 	e2 := testEntity(2, entity.Pig, 0, 0, 0)
 	e2.ai = &mobAI{}
-	loop.entities.add(e2)
+	loop.only().entities.add(e2)
 	denied := newNavHandle(loop, e2.id, capEntitiesRead) // no nav cap
 	pathTo2, _ := denied.Attr("path_to")
 	if _, err := starlark.Call(starlarkThread(), pathTo2.(*starlark.Builtin), starlark.Tuple{starlark.Float(1), starlark.Float(2), starlark.Float(3)}, nil); err == nil {
@@ -434,7 +434,7 @@ func TestWanderMobSpawnsAndMoves(t *testing.T) {
 	for i := 0; i < 400; i++ {
 		loop.tickOnce()
 		// Re-resolve: a moved mob re-buckets but keeps its id; the store get is the authoritative read.
-		if _, ok := loop.entities.get(e.id); !ok {
+		if _, ok := loop.only().entities.get(e.id); !ok {
 			t.Fatalf("the wander mob vanished from the store mid-walk")
 		}
 	}
@@ -472,7 +472,7 @@ func TestNoInterpreterWhenIdle(t *testing.T) {
 	idleAI.goals.addGoal(6, &starlarkGoal{baseGoal: newBaseGoal(flagMove), t: loop, caps: capAll,
 		name: "idle", canUseFn: falseFn, tickFn: countingFn(&idleCalls)})
 	idle.ai = idleAI
-	loop.entities.add(idle)
+	loop.only().entities.add(idle)
 
 	// ACTIVE mob: a MOVE goal with no can_use (always usable) whose tickFn increments the counter.
 	active := testEntity(2, entity.Pig, 8.5, float64(floorY+1), 8.5)
@@ -482,7 +482,7 @@ func TestNoInterpreterWhenIdle(t *testing.T) {
 	activeAI.goals.addGoal(6, &starlarkGoal{baseGoal: newBaseGoal(flagMove), t: loop, caps: capAll,
 		name: "active", tickFn: countingFn(&activeCalls)})
 	active.ai = activeAI
-	loop.entities.add(active)
+	loop.only().entities.add(active)
 
 	const ticks = 10
 	for i := 0; i < ticks; i++ {

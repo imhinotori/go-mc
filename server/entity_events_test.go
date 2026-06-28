@@ -283,7 +283,7 @@ func newMoveEntity(t *testing.T) (*TickLoop, *Entity, *tickPlayer) {
 	loop := NewTickLoop(newFakeClock())
 	observer := newTrackerPlayer(loop, 100000, 8.5, 8.5)
 	e := NewEntity(loop.idAlloc.AllocID(), entity.Pig, 9.5, 64, 9.5)
-	loop.entities.add(e)
+	loop.only().entities.add(e)
 	observer.tracked = map[int32]bool{e.id: true}
 	loop.tickEntityMovement() // seed moveInit; no packet
 	_ = drainPackets(observer.client)
@@ -296,7 +296,7 @@ func newMoveEntity(t *testing.T) (*TickLoop, *Entity, *tickPlayer) {
 // not an absolute sync.
 func TestDeltaMoveSmallStepIsPos(t *testing.T) {
 	loop, e, observer := newMoveEntity(t)
-	loop.entities.move(e, e.x+1.0, e.y, e.z) // 1 block → 4096 units, well within short range
+	loop.only().entities.move(e, e.x+1.0, e.y, e.z) // 1 block → 4096 units, well within short range
 	loop.tickEntityMovement()
 	got := drainPackets(observer.client)
 	if countID(got, packetid.ClientboundMoveEntityPos) != 1 {
@@ -311,7 +311,7 @@ func TestDeltaMoveSmallStepIsPos(t *testing.T) {
 // must fall back to an absolute EntityPositionSync.
 func TestDeltaMoveBigJumpIsPositionSync(t *testing.T) {
 	loop, e, observer := newMoveEntity(t)
-	loop.entities.move(e, e.x+10.0, e.y, e.z) // 10 blocks → 40960 units > 32767: overflow
+	loop.only().entities.move(e, e.x+10.0, e.y, e.z) // 10 blocks → 40960 units > 32767: overflow
 	loop.tickEntityMovement()
 	got := drainPackets(observer.client)
 	if countID(got, packetid.ClientboundEntityPositionSync) != 1 {
@@ -357,7 +357,7 @@ func TestDeltaMoveIdleSendsNothing(t *testing.T) {
 // MoveEntityPosRot (not separate Pos and Rot).
 func TestDeltaMovePosAndRotIsPosRot(t *testing.T) {
 	loop, e, observer := newMoveEntity(t)
-	loop.entities.move(e, e.x+1.0, e.y, e.z)
+	loop.only().entities.move(e, e.x+1.0, e.y, e.z)
 	e.yaw += 45
 	loop.tickEntityMovement()
 	got := drainPackets(observer.client)

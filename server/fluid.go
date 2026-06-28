@@ -131,13 +131,13 @@ func encodeFluid(f fluidState) block.StateID {
 // so SetWorld/tick.go is never touched), drains the bucket due this gametime in deterministic
 // packed-pos order, and runs FlowingFluid.tick (fluidTick) per scheduled position.
 func (t *TickLoop) tickFluids() {
-	if t.fluidSchedule == nil {
-		t.fluidSchedule = newFluidScheduleQueue()
+	if t.only().fluidSchedule == nil {
+		t.only().fluidSchedule = newFluidScheduleQueue()
 	}
-	if t.world == nil {
+	if t.only().world == nil {
 		return
 	}
-	due := t.fluidSchedule.drainDue(t.gametime)
+	due := t.only().fluidSchedule.drainDue(t.gametime)
 	for _, st := range due {
 		t.fluidTick(st.pos)
 	}
@@ -146,7 +146,7 @@ func (t *TickLoop) tickFluids() {
 	// when there was work, so a busy session's fluid load is greppable (`grep 'ULTRA\[fluid\] cost'`)
 	// without deciding the async optimization blind. Zero cost when the firehose is off.
 	if len(due) > 0 {
-		udebug("fluid", "cost gametime=%d processed=%d pendingAfter=%d", t.gametime, len(due), t.fluidSchedule.pending())
+		udebug("fluid", "cost gametime=%d processed=%d pendingAfter=%d", t.gametime, len(due), t.only().fluidSchedule.pending())
 	}
 }
 
@@ -164,11 +164,11 @@ func (t *TickLoop) tickFluids() {
 // Cite: net.minecraft.world.level.chunk.LevelChunk.postProcessGeneration ->
 // FluidState.tick(level, pos, state) once per marked pos.
 func (t *TickLoop) postProcessChunkFluids(pos level.ChunkPos, ch *level.Chunk) {
-	if ch == nil || len(ch.PostProcessFluids) == 0 || t.world == nil {
+	if ch == nil || len(ch.PostProcessFluids) == 0 || t.only().world == nil {
 		return
 	}
-	if t.fluidSchedule == nil {
-		t.fluidSchedule = newFluidScheduleQueue()
+	if t.only().fluidSchedule == nil {
+		t.only().fluidSchedule = newFluidScheduleQueue()
 	}
 	baseX := int(pos[0]) * 16
 	baseZ := int(pos[1]) * 16
@@ -187,23 +187,23 @@ func (t *TickLoop) postProcessChunkFluids(pos level.ChunkPos, ch *level.Chunk) {
 		// spread() inside that tick re-schedules onward flow normally. CITE: LevelChunk.
 		// postProcessGeneration runs FluidState.tick once per flagged cell (timing relaxed to the
 		// next pass to honor the cross-chunk neighbor precondition vanilla gets from full-status).
-		t.fluidSchedule.schedule(wp, t.gametime+1)
+		t.only().fluidSchedule.schedule(wp, t.gametime+1)
 	}
 }
 
 // scheduleFluidTick schedules pos to re-evaluate getTickDelay(=5) ticks from now — the
 // getTickDelay-spaced propagation (never a per-tick full-water scan). Lazily inits the queue.
 func (t *TickLoop) scheduleFluidTick(pos pk.Position) {
-	if t.fluidSchedule == nil {
-		t.fluidSchedule = newFluidScheduleQueue()
+	if t.only().fluidSchedule == nil {
+		t.only().fluidSchedule = newFluidScheduleQueue()
 	}
-	t.fluidSchedule.schedule(pos, t.gametime+waterTickDelay)
+	t.only().fluidSchedule.schedule(pos, t.gametime+waterTickDelay)
 }
 
 // scheduleEmpty reports whether the fluid queue has no pending ticks (a fixed point). Used by
 // tests to drain the simulation to completion and prove termination.
 func (t *TickLoop) scheduleEmpty() bool {
-	return t.fluidSchedule == nil || t.fluidSchedule.empty()
+	return t.only().fluidSchedule == nil || t.only().fluidSchedule.empty()
 }
 
 // horizontalDirs is the 4 cardinal horizontal offsets (Direction.Plane.HORIZONTAL).
@@ -220,7 +220,7 @@ func plus(p, d pk.Position) pk.Position {
 
 // fluidAt decodes the fluid at a world position (empty for unloaded/non-water).
 func (t *TickLoop) fluidAt(pos pk.Position) fluidState {
-	id, ok := t.world.GetBlock(pos, dimMinY)
+	id, ok := t.only().world.GetBlock(pos, dimMinY)
 	if !ok {
 		return fluidState{}
 	}
@@ -232,7 +232,7 @@ func (t *TickLoop) fluidAt(pos pk.Position) fluidState {
 // FlowingFluid.canPassThroughWall (the full VoxelShape face-occlusion is simplified to a
 // solid/non-solid test for the water gate — 17-RESEARCH Pattern 5).
 func (t *TickLoop) isSolidAt(pos pk.Position) bool {
-	id, ok := t.world.GetBlock(pos, dimMinY)
+	id, ok := t.only().world.GetBlock(pos, dimMinY)
 	if !ok {
 		return false // unloaded reads as non-solid (matches GetBlock's "no block here" contract)
 	}
@@ -291,7 +291,7 @@ func (t *TickLoop) fluidTick(pos pk.Position) {
 // net.minecraft.world.level.Level.setBlock with Block.UPDATE_CLIENTS. Returns whether the write
 // changed the cell (mirrors world.SetBlock) so callers can gate on a real change.
 func (t *TickLoop) setFluidBlock(pos pk.Position, state block.StateID) bool {
-	if !t.world.SetBlock(pos, state, dimMinY) {
+	if !t.only().world.SetBlock(pos, state, dimMinY) {
 		return false // no change (already this state / unloaded): nothing to broadcast
 	}
 	t.broadcastBlockUpdate(pos, state)

@@ -63,7 +63,7 @@ func TestPluginPigBootLoads(t *testing.T) {
 			t.Fatalf("plugin pig missing a goal at priority %d (got %v)", p, priorities)
 		}
 	}
-	if _, ok := loop.entities.get(pig.id); !ok {
+	if _, ok := loop.only().entities.get(pig.id); !ok {
 		t.Fatal("spawnVanillaPig did not add the pig to the tick-owned store")
 	}
 }
@@ -236,7 +236,7 @@ func TestPluginPigEqualsGoNativePig(t *testing.T) {
 	goPig := NewEntity(pigID, entity.Pig, 8.5, float64(floorY+1), 8.5)
 	goPig.ai = newPigAI()
 	reseedMobAI(goPig.ai, goPig.id)
-	goLoop.entities.add(goPig)
+	goLoop.only().entities.add(goPig)
 
 	// The plugin pig — same id (so reseedMobAI gives the identical seed), same start pos.
 	plLoop, _ := build()

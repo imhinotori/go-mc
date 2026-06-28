@@ -24,7 +24,7 @@ func dropStack() component.SlotData {
 func TestItemPickupDelayDecrements(t *testing.T) {
 	loop, _ := newDropLoop()
 	ie := NewItemEntity(loop.idAlloc.AllocID(), 8.5, 64.0, 8.5, dropStack())
-	loop.entities.add(ie)
+	loop.only().entities.add(ie)
 
 	if ie.pickupDelay != itemDefaultPickupDelay {
 		t.Fatalf("fresh pickupDelay = %d, want %d (setDefaultPickUpDelay)", ie.pickupDelay, itemDefaultPickupDelay)
@@ -51,16 +51,16 @@ func TestItemPickupDelayDecrements(t *testing.T) {
 func TestItemAgesAndDespawns(t *testing.T) {
 	loop, _ := newDropLoop()
 	ie := NewItemEntity(loop.idAlloc.AllocID(), 8.5, 64.0, 8.5, dropStack())
-	loop.entities.add(ie)
+	loop.only().entities.add(ie)
 
 	// Jump age to one tick short of LIFETIME so the test is fast; one more item tick crosses it.
 	ie.age = itemLifetime - 1
-	if _, ok := loop.entities.get(ie.id); !ok {
+	if _, ok := loop.only().entities.get(ie.id); !ok {
 		t.Fatalf("item missing from store before despawn")
 	}
 
 	loop.tickItem(ie) // age -> 6000, age >= LIFETIME -> discard
-	if _, ok := loop.entities.get(ie.id); ok {
+	if _, ok := loop.only().entities.get(ie.id); ok {
 		t.Fatalf("item still in store at age %d, want despawned at LIFETIME %d", ie.age, itemLifetime)
 	}
 }
@@ -79,11 +79,11 @@ func TestItemPickedUpAfterDelay(t *testing.T) {
 
 	// Spawn the item right at the player's feet so it is inside the (1.0,0.5,1.0)-inflated box.
 	ie := NewItemEntity(loop.idAlloc.AllocID(), 8.5, 64.0, 8.5, dropStack())
-	loop.entities.add(ie)
+	loop.only().entities.add(ie)
 
 	// While the pickup delay is still running, the scan must NOT collect the item.
 	loop.scanItemPickup(p)
-	if _, ok := loop.entities.get(ie.id); !ok {
+	if _, ok := loop.only().entities.get(ie.id); !ok {
 		t.Fatalf("item collected while pickupDelay=%d, want it to stay (not yet pickable)", ie.pickupDelay)
 	}
 
@@ -95,7 +95,7 @@ func TestItemPickedUpAfterDelay(t *testing.T) {
 	beforeCount := totalInventoryCount(p.inventory)
 	loop.scanItemPickup(p)
 
-	if _, ok := loop.entities.get(ie.id); ok {
+	if _, ok := loop.only().entities.get(ie.id); ok {
 		t.Fatalf("item NOT picked up by a player within range with pickupDelay=0 — the reported bug")
 	}
 	afterCount := totalInventoryCount(p.inventory)
@@ -121,10 +121,10 @@ func TestItemPickupOutOfRange(t *testing.T) {
 	// 5 blocks away on X — well outside the player box inflated by 1.0 on X.
 	ie := NewItemEntity(loop.idAlloc.AllocID(), 13.5, 64.0, 8.5, dropStack())
 	ie.pickupDelay = 0
-	loop.entities.add(ie)
+	loop.only().entities.add(ie)
 
 	loop.scanItemPickup(p)
-	if _, ok := loop.entities.get(ie.id); !ok {
+	if _, ok := loop.only().entities.get(ie.id); !ok {
 		t.Fatalf("item 5 blocks away was collected, want it left on the ground (out of range)")
 	}
 }
@@ -140,18 +140,18 @@ func TestCreativeNoDrop(t *testing.T) {
 	creative := blockPlayer(loop, 1.5, 65.0, 1.5)
 	creative.gameMode = gameModeCreative
 
-	before := loop.entities.len()
+	before := loop.only().entities.len()
 	loop.spawnBlockDrop(creative, target, block.ToStateID[block.Stone{}])
-	if got := loop.entities.len(); got != before {
+	if got := loop.only().entities.len(); got != before {
 		t.Fatalf("creative break spawned %d items, want 0 (creative drops nothing)", got-before)
 	}
 
 	// Survival player: the same call DOES spawn one Item entity (the gate passes).
 	survival := blockPlayer(loop, 1.5, 65.0, 1.5)
 	survival.gameMode = gameModeSurvival
-	before = loop.entities.len()
+	before = loop.only().entities.len()
 	loop.spawnBlockDrop(survival, target, block.ToStateID[block.Stone{}])
-	if got := loop.entities.len(); got != before+1 {
+	if got := loop.only().entities.len(); got != before+1 {
 		t.Fatalf("survival break spawned %d items, want 1 (survival drops)", got-before)
 	}
 }
@@ -197,7 +197,7 @@ func TestPickupLandsInStorageNeverCraftingOrArmor(t *testing.T) {
 
 	ie := NewItemEntity(loop.idAlloc.AllocID(), 8.5, 64.0, 8.5, dropStack())
 	ie.pickupDelay = 0
-	loop.entities.add(ie)
+	loop.only().entities.add(ie)
 	p.tracked = map[int32]bool{ie.id: true}
 
 	loop.scanItemPickup(p)
@@ -242,7 +242,7 @@ func TestPickupPrefersSelectedHotbarSlot(t *testing.T) {
 
 	ie := NewItemEntity(loop.idAlloc.AllocID(), 8.5, 64.0, 8.5, dropStack())
 	ie.pickupDelay = 0
-	loop.entities.add(ie)
+	loop.only().entities.add(ie)
 	p.tracked = map[int32]bool{ie.id: true}
 
 	loop.scanItemPickup(p)
@@ -269,7 +269,7 @@ func TestPickupSendsSetSlot(t *testing.T) {
 
 	ie := NewItemEntity(loop.idAlloc.AllocID(), 8.5, 64.0, 8.5, dropStack())
 	ie.pickupDelay = 0
-	loop.entities.add(ie)
+	loop.only().entities.add(ie)
 	p.tracked = map[int32]bool{ie.id: true}
 
 	loop.scanItemPickup(p)

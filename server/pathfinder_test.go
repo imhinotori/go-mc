@@ -135,7 +135,7 @@ func TestComputePathPure(t *testing.T) {
 		reachRange:  1,
 		maxVisited:  1024,
 	}
-	p := computePath(req) // no t.world, no TickLoop — purity proven by the call shape
+	p := computePath(req) // no t.only().world, no TickLoop — purity proven by the call shape
 	if p == nil || len(p.nodes) == 0 {
 		t.Fatalf("pure computePath over a hand-built snapshot returned no path")
 	}

@@ -24,7 +24,7 @@ func craftBlockLoop(t *testing.T) (*TickLoop, *tickPlayer, pk.Position) {
 	p := blockPlayer(loop, 1.5, 65.0, 1.5)
 	p.gameMode = gameModeSurvival
 	pos := pk.Position{X: 1, Y: 64, Z: 1}
-	loop.world.SetBlock(pos, block.ToStateID[block.CraftingTable{}], dimMinY)
+	loop.only().world.SetBlock(pos, block.ToStateID[block.CraftingTable{}], dimMinY)
 	return loop, p, pos
 }
 

@@ -88,7 +88,7 @@ func TestVisibilityDiff(t *testing.T) {
 
 	// A test entity one block from the player, well within trackRange.
 	e := NewEntity(loop.idAlloc.AllocID(), entity.SulfurCube, 9.5, 64, 9.5)
-	loop.entities.add(e)
+	loop.only().entities.add(e)
 
 	// First Tick: the entity is newly visible → AddEntity + SetEntityData, and tracked.
 	syncTrackerTick(loop)
@@ -123,7 +123,7 @@ func TestTrackerSelfNotTracked(t *testing.T) {
 
 	// The player's own entity instance, at the player's position.
 	self := NewEntity(selfID, entity.SulfurCube, 8.5, 64, 8.5)
-	loop.entities.add(self)
+	loop.only().entities.add(self)
 
 	syncTrackerTick(loop)
 	got := drainPackets(p.client)
@@ -142,7 +142,7 @@ func TestTrackerMove(t *testing.T) {
 	p := newTrackerPlayer(loop, 1000, 8.5, 8.5)
 
 	e := NewEntity(loop.idAlloc.AllocID(), entity.SulfurCube, 9.5, 64, 9.5)
-	loop.entities.add(e)
+	loop.only().entities.add(e)
 
 	syncTrackerTick(loop)          // spawn → p.tracked[e.id]=true
 	loop.tickEntityMovement()      // seed the entity's move base (moveInit) — no packet yet
@@ -153,7 +153,7 @@ func TestTrackerMove(t *testing.T) {
 	// Move the entity a few blocks (still in range, small enough for a delta) AND turn its head,
 	// so the move is broadcast as a DELTA MoveEntityPos and RotateHead fires on its OWN head-yaw
 	// threshold (ServerEntity.sendChanges sends RotateHead independently, gated on yHeadRot).
-	loop.entities.move(e, 14.5, 64, 14.5)
+	loop.only().entities.move(e, 14.5, 64, 14.5)
 	e.headYaw = 90 // turn the head so RotateHead's own threshold trips
 
 	loop.tickEntityMovement() // the per-entity sendChanges decision: a delta-fits move
@@ -180,7 +180,7 @@ func TestTrackerMoveNoHeadTurnNoRotateHead(t *testing.T) {
 	loop := NewTickLoop(newFakeClock())
 	p := newTrackerPlayer(loop, 1000, 8.5, 8.5)
 	e := NewEntity(loop.idAlloc.AllocID(), entity.SulfurCube, 9.5, 64, 9.5)
-	loop.entities.add(e)
+	loop.only().entities.add(e)
 
 	syncTrackerTick(loop)
 	loop.tickEntityMovement() // seed
@@ -188,7 +188,7 @@ func TestTrackerMoveNoHeadTurnNoRotateHead(t *testing.T) {
 	p.client = captureClient(64)
 	loop.clientIndex[p.client] = p
 
-	loop.entities.move(e, 10.5, 64, 9.5) // move position only; headYaw stays 0
+	loop.only().entities.move(e, 10.5, 64, 9.5) // move position only; headYaw stays 0
 	loop.tickEntityMovement()
 	got := drainPackets(p.client)
 	if n := countID(got, packetid.ClientboundMoveEntityPos); n != 1 {
@@ -207,7 +207,7 @@ func TestTrackerRemove(t *testing.T) {
 	p := newTrackerPlayer(loop, 1000, 8.5, 8.5)
 
 	e := NewEntity(loop.idAlloc.AllocID(), entity.SulfurCube, 9.5, 64, 9.5)
-	loop.entities.add(e)
+	loop.only().entities.add(e)
 
 	syncTrackerTick(loop)          // spawn
 	_ = drainPackets(p.client)   // discard spawn
@@ -215,7 +215,7 @@ func TestTrackerRemove(t *testing.T) {
 	loop.clientIndex[p.client] = p
 
 	// Move the entity FAR away (out of trackRange ≈ 6 columns ≈ 96 blocks): column 100.
-	loop.entities.move(e, 1600, 64, 1600)
+	loop.only().entities.move(e, 1600, 64, 1600)
 
 	syncTrackerTick(loop)
 	got := drainPackets(p.client)
@@ -229,7 +229,7 @@ func TestTrackerRemove(t *testing.T) {
 	// Re-entry: move it back into range → it must re-Add.
 	p.client = captureClient(64)
 	loop.clientIndex[p.client] = p
-	loop.entities.move(e, 9.5, 64, 9.5)
+	loop.only().entities.move(e, 9.5, 64, 9.5)
 	syncTrackerTick(loop)
 	got2 := drainPackets(p.client)
 	if n := countID(got2, packetid.ClientboundAddEntity); n != 1 {
@@ -246,7 +246,7 @@ func TestTrackerRemoveBatchesMany(t *testing.T) {
 	var es []*Entity
 	for i := 0; i < 3; i++ {
 		e := NewEntity(loop.idAlloc.AllocID(), entity.SulfurCube, 9.5+float64(i), 64, 9.5)
-		loop.entities.add(e)
+		loop.only().entities.add(e)
 		es = append(es, e)
 	}
 
@@ -257,7 +257,7 @@ func TestTrackerRemoveBatchesMany(t *testing.T) {
 
 	// All three leave range this tick.
 	for _, e := range es {
-		loop.entities.move(e, 1600, 64, 1600)
+		loop.only().entities.move(e, 1600, 64, 1600)
 	}
 
 	syncTrackerTick(loop)
@@ -339,7 +339,7 @@ func TestAsyncTrackerMatchesSync(t *testing.T) {
 	refP := newTrackerPlayer(refLoop, 1000, 8.5, 8.5)
 	for i := 0; i < 3; i++ {
 		e := NewEntity(refLoop.idAlloc.AllocID(), entity.SulfurCube, 9.5+float64(i), 64, 9.5)
-		refLoop.entities.add(e)
+		refLoop.only().entities.add(e)
 	}
 	(&entityTracker{loop: refLoop}).Tick()
 	refPackets := drainPackets(refP.client)
@@ -349,7 +349,7 @@ func TestAsyncTrackerMatchesSync(t *testing.T) {
 	asyncP := newTrackerPlayer(asyncLoop, 1000, 8.5, 8.5)
 	for i := 0; i < 3; i++ {
 		e := NewEntity(asyncLoop.idAlloc.AllocID(), entity.SulfurCube, 9.5+float64(i), 64, 9.5)
-		asyncLoop.entities.add(e)
+		asyncLoop.only().entities.add(e)
 	}
 	drainAsyncTracker(t, asyncLoop, 1) // one player → one diff result
 	asyncPackets := drainPackets(asyncP.client)
@@ -385,7 +385,7 @@ func TestAsyncTrackerSendsOnOwner(t *testing.T) {
 	loop := NewTickLoop(newFakeClock())
 	p := newTrackerPlayer(loop, 1000, 8.5, 8.5)
 	e := NewEntity(loop.idAlloc.AllocID(), entity.SulfurCube, 9.5, 64, 9.5)
-	loop.entities.add(e)
+	loop.only().entities.add(e)
 
 	loop.tracker.Tick() // submit the diff math off-tick
 
@@ -422,7 +422,7 @@ func TestAsyncTrackerLeftPlayerDropped(t *testing.T) {
 	loop := NewTickLoop(newFakeClock())
 	p := newTrackerPlayer(loop, 1000, 8.5, 8.5)
 	e := NewEntity(loop.idAlloc.AllocID(), entity.SulfurCube, 9.5, 64, 9.5)
-	loop.entities.add(e)
+	loop.only().entities.add(e)
 
 	loop.tracker.Tick() // submit the diff for player 1000
 

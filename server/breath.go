@@ -99,7 +99,7 @@ func (t *TickLoop) updateSwimming(p *tickPlayer) {
 // eyesUnderWaterStanding samples the standing eye cell for water — the isUnderWater test that gates
 // STARTING to swim (before the pose flips, the standing eye height applies).
 func (t *TickLoop) eyesUnderWaterStanding(p *tickPlayer) bool {
-	if t.world == nil {
+	if t.only().world == nil {
 		return false
 	}
 	bx := int(math.Floor(p.x))
@@ -109,7 +109,7 @@ func (t *TickLoop) eyesUnderWaterStanding(p *tickPlayer) bool {
 }
 
 func (t *TickLoop) eyeInWater(p *tickPlayer) bool {
-	if t.world == nil {
+	if t.only().world == nil {
 		return false
 	}
 	eyeHeight := playerStandingEyeHeight

@@ -20,7 +20,7 @@ import (
 func spawnTestEntity(loop *TickLoop, x, y, z float64) *Entity {
 	e := NewEntity(1, entity.Pig, x, y, z)
 	e.ai = newPigAI()
-	loop.entities.add(e)
+	loop.only().entities.add(e)
 	return e
 }
 
@@ -103,7 +103,7 @@ func TestEntityHandleStale(t *testing.T) {
 	loop, _ := newBlockLoop()
 	e := spawnTestEntity(loop, 1.0, 64.0, 1.0)
 	h := newEntityHandle(loop, e.id, capAll)
-	loop.entities.remove(e.id)
+	loop.only().entities.remove(e.id)
 
 	v, err := h.Attr("x")
 	if err == nil {
@@ -123,7 +123,7 @@ func TestHandleFreezeNoop(t *testing.T) {
 	h.Freeze() // no-op
 
 	// Mutate the entity directly on the tick (the tracker/physics seam) AFTER Freeze.
-	loop.entities.move(e, 5.0, 70.0, 5.0)
+	loop.only().entities.move(e, 5.0, 70.0, 5.0)
 	if got := attrFloat(t, h, "y"); got != 70.0 {
 		t.Errorf("after Freeze + move, y = %v, want 70.0 (Freeze must not lock the entity)", got)
 	}
@@ -396,7 +396,7 @@ func TestSetLookSeam(t *testing.T) {
 	}
 
 	// Removed entity: clean "no longer exists" error.
-	loop.entities.remove(e.id)
+	loop.only().entities.remove(e.id)
 	if _, err := callMethod(t, h, "set_look", starlark.Float(0)); err == nil {
 		t.Fatal("set_look on a removed entity should error")
 	} else if !strings.Contains(err.Error(), "no longer exists") {
@@ -442,14 +442,14 @@ func TestEntityRandSeam(t *testing.T) {
 
 	// A mob with no AI/rng errors cleanly.
 	noAI := NewEntity(99, entity.Pig, 0, 64, 0)
-	loop.entities.add(noAI)
+	loop.only().entities.add(noAI)
 	hNoAI := newEntityHandle(loop, noAI.id, capAll)
 	if _, err := callMethod(t, hNoAI, "rand_int", starlark.MakeInt(10)); err == nil {
 		t.Fatal("rand_int on a mob with no AI should error")
 	}
 
 	// Removed entity errors.
-	loop.entities.remove(e.id)
+	loop.only().entities.remove(e.id)
 	if _, err := callMethod(t, h, "rand_int", starlark.MakeInt(10)); err == nil {
 		t.Fatal("rand_int on a removed entity should error")
 	}

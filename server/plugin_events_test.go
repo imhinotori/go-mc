@@ -116,7 +116,7 @@ func TestBlockBreakEventFiresOnce(t *testing.T) {
 	const n = 50
 	for i := 0; i < n; i++ {
 		e := NewEntity(loop.idAlloc.AllocID(), entity.Witch, float64(i), 64, 0)
-		loop.entities.add(e)
+		loop.only().entities.add(e)
 	}
 
 	p := blockPlayer(loop, 1.5, 65.0, 1.5)

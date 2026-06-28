@@ -16,7 +16,7 @@ import (
 // plugin/starlark + plugin/host, one direction, no cycle).
 //
 // A handle is a THIN, tick-owned-safe starlark.Value: it carries ONLY an entity id (int32) +
-// *TickLoop (NEVER a live *Entity pointer). Every read RE-RESOLVES t.entities.get(id) on the tick
+// *TickLoop (NEVER a live *Entity pointer). Every read RE-RESOLVES t.only().entities.get(id) on the tick
 // goroutine — the same id-carry / owner-re-resolve discipline pathReady.applyTo uses (server/async.go)
 // — so a read of a removed entity returns a clean Starlark error, never a stale-pointer deref.
 // Freeze() is a no-op (the handle holds no mutable Starlark state; the live entity is governed by
@@ -116,7 +116,7 @@ func (h *entityHandle) Attr(name string) (starlark.Value, error) {
 	if !h.caps.has(capEntitiesRead) {
 		return nil, capError("entities.read")
 	}
-	e, ok := h.t.entities.get(h.id)
+	e, ok := h.t.only().entities.get(h.id)
 	if !ok {
 		return nil, fmt.Errorf("entity %d no longer exists", h.id)
 	}
@@ -157,7 +157,7 @@ func (h *entityHandle) AttrNames() []string {
 
 // resolve re-resolves the entity for a mutate method, returning a clean Starlark error if it is gone.
 func (h *entityHandle) resolve() (*Entity, error) {
-	e, ok := h.t.entities.get(h.id)
+	e, ok := h.t.only().entities.get(h.id)
 	if !ok {
 		return nil, fmt.Errorf("entity %d no longer exists", h.id)
 	}
@@ -517,11 +517,11 @@ func (h *worldHandle) blockAt(_ *starlark.Thread, b *starlark.Builtin,
 	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 3, &x, &y, &z); err != nil {
 		return nil, err
 	}
-	if h.t.world == nil {
+	if h.t.only().world == nil {
 		return starlark.Tuple{starlark.MakeInt(0), starlark.False}, nil
 	}
 	pos := pk.Position{X: x, Y: y, Z: z}
-	state, ok := h.t.world.GetBlock(pos, dimMinY)
+	state, ok := h.t.only().world.GetBlock(pos, dimMinY)
 	return starlark.Tuple{starlark.MakeInt(int(state)), starlark.Bool(ok)}, nil
 }
 
@@ -537,11 +537,11 @@ func (h *worldHandle) setBlock(_ *starlark.Thread, b *starlark.Builtin,
 	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 4, &x, &y, &z, &state); err != nil {
 		return nil, err
 	}
-	if h.t.world == nil {
+	if h.t.only().world == nil {
 		return starlark.False, nil
 	}
 	pos := pk.Position{X: x, Y: y, Z: z}
-	changed := h.t.world.SetBlock(pos, block.StateID(state), dimMinY)
+	changed := h.t.only().world.SetBlock(pos, block.StateID(state), dimMinY)
 	if changed {
 		h.t.broadcastBlockUpdate(pos, block.StateID(state))
 	}
@@ -562,10 +562,10 @@ func (h *worldHandle) entitiesNear(_ *starlark.Thread, b *starlark.Builtin,
 	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 3, &x, &z, &radiusChunks); err != nil {
 		return nil, err
 	}
-	if h.t.entities == nil {
+	if h.t.only().entities == nil {
 		return starlark.NewList(nil), nil
 	}
-	near := h.t.entities.near(x, z, radiusChunks)
+	near := h.t.only().entities.near(x, z, radiusChunks)
 	out := make([]starlark.Value, 0, len(near))
 	for _, e := range near {
 		out = append(out, newEntityHandle(h.t, e.id, h.caps))
@@ -638,7 +638,7 @@ func (h *navHandle) stop(_ *starlark.Thread, _ *starlark.Builtin,
 	if !h.caps.has(capNav) {
 		return nil, capError("nav")
 	}
-	e, ok := h.t.entities.get(h.id)
+	e, ok := h.t.only().entities.get(h.id)
 	if !ok {
 		return nil, fmt.Errorf("entity %d no longer exists", h.id)
 	}
@@ -654,7 +654,7 @@ func (h *navHandle) stop(_ *starlark.Thread, _ *starlark.Builtin,
 // observation of the nav state.
 func (h *navHandle) hasPath(_ *starlark.Thread, _ *starlark.Builtin,
 	_ starlark.Tuple, _ []starlark.Tuple) (starlark.Value, error) {
-	e, ok := h.t.entities.get(h.id)
+	e, ok := h.t.only().entities.get(h.id)
 	if !ok {
 		return nil, fmt.Errorf("entity %d no longer exists", h.id)
 	}
@@ -677,7 +677,7 @@ func (h *navHandle) pathTo(_ *starlark.Thread, b *starlark.Builtin,
 	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 3, &x, &y, &z); err != nil {
 		return nil, err
 	}
-	e, ok := h.t.entities.get(h.id)
+	e, ok := h.t.only().entities.get(h.id)
 	if !ok {
 		return nil, fmt.Errorf("entity %d no longer exists", h.id)
 	}

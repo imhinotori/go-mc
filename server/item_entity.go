@@ -69,15 +69,15 @@ const (
 // pickup scan runs — mirroring vanilla, where ItemEntity.tick() (which decrements pickupDelay)
 // runs in the entity tick BEFORE Player.aiStep collects items in the same server tick.
 func (t *TickLoop) tickItems() {
-	if t.entities == nil {
+	if t.only().entities == nil {
 		return // defensive: store is non-nil from NewTickLoop, but never panic if absent
 	}
 
 	// Snapshot the item entities so the loop is stable even if tickItem discards one mid-range
 	// (discard removes from the store's byID map we would otherwise be ranging) — the same
 	// snapshot discipline tickPhysics / tickAI use.
-	snapshot := make([]*Entity, 0, len(t.entities.byID))
-	for _, e := range t.entities.byID {
+	snapshot := make([]*Entity, 0, len(t.only().entities.byID))
+	for _, e := range t.only().entities.byID {
 		if e.isItem {
 			snapshot = append(snapshot, e)
 		}
@@ -115,7 +115,7 @@ func (t *TickLoop) tickItems() {
 func (t *TickLoop) tickItem(e *Entity) {
 	// ItemEntity.tick first branch: an empty stack discards the entity (it carries nothing).
 	if e.itemStack.Count <= 0 {
-		t.entities.remove(e.id)
+		t.only().entities.remove(e.id)
 		return
 	}
 
@@ -147,7 +147,7 @@ func (t *TickLoop) tickItem(e *Entity) {
 		e.age++
 	}
 	if e.age >= itemLifetime {
-		t.entities.remove(e.id)
+		t.only().entities.remove(e.id)
 	}
 }
 
@@ -168,7 +168,7 @@ func (t *TickLoop) scanItemPickup(p *tickPlayer) {
 	pLoY, pHiY := p.y-itemPickupInflateY, p.y+playerHeight+itemPickupInflateY
 	pLoZ, pHiZ := p.z-hw, p.z+hw
 
-	for _, e := range t.entities.near(p.x, p.z, trackRange) {
+	for _, e := range t.only().entities.near(p.x, p.z, trackRange) {
 		if !e.isItem {
 			continue // only dropped items are collectible here
 		}
@@ -235,7 +235,7 @@ func (t *TickLoop) playerTouchItem(p *tickPlayer, e *Entity) {
 	// tracker emits RemoveEntities next tick (it leaves near()). A partial pickup leaves the
 	// item with its remaining count on the ground.
 	if e.itemStack.Count <= 0 {
-		t.entities.remove(e.id)
+		t.only().entities.remove(e.id)
 	}
 }
 

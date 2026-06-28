@@ -10,12 +10,10 @@ import (
 	"github.com/imhinotori/sulfur/data/packetid"
 	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/component"
-	"github.com/imhinotori/sulfur/level/ticks"
 	pk "github.com/imhinotori/sulfur/net/packet"
 	"github.com/imhinotori/sulfur/plugin/host"
 	"github.com/imhinotori/sulfur/save"
 	"github.com/imhinotori/sulfur/world"
-	"github.com/imhinotori/sulfur/world/levelgen"
 	"github.com/imhinotori/sulfur/yggdrasil/user"
 
 	"github.com/google/uuid"
@@ -78,14 +76,14 @@ type chunkReady struct{ res world.ChunkResult }
 // the column on a later tick (threat W1 retry) — it NEVER inserts a nil chunk. This is
 // the ONLY mutation that crosses the off-tick boundary, and it runs on the owner.
 func (r chunkReady) applyTo(t *TickLoop) {
-	if t.world == nil {
+	if t.only().world == nil {
 		return // no world wired (defensive; SetWorld always sets it before feeding asyncIn)
 	}
 	if r.res.Err != nil {
-		t.world.MarkEmpty(r.res.Pos) // un-strand the Loading holder so the tick retries
+		t.only().world.MarkEmpty(r.res.Pos) // un-strand the Loading holder so the tick retries
 		return
 	}
-	t.world.Insert(r.res.Pos, r.res.Chunk)
+	t.only().world.Insert(r.res.Pos, r.res.Chunk)
 	// Register an (empty) block-tick container for the chunk so live scheduleTick calls inside
 	// it are not dropped (LevelTicks.Schedule routes by chunk; a chunk with no container drops
 	// the tick). Vanilla addContainer's every loaded chunk; without this the sugar-cane cascade
@@ -132,24 +130,15 @@ type TickLoop struct {
 	// critical path and -race clean.
 	stats atomic.Pointer[TickStats]
 
-	// asyncIn is the async-result rejoin channel. It is nil until SetWorld wires it
-	// (Phase 3: nil => applyAsyncResults is a genuine no-op — the seam just EXISTS in
-	// the right slot). Plan 04-03 sets it to asyncBridge, fed by the world worker.
-	asyncIn <-chan asyncResult
-
-	// world is the tick-owned chunk manager and worker is the off-tick load/generate
-	// worker (Plan 04-03, WORLD-01/05). Both are nil until SetWorld; the streaming
-	// phases (tickChunks/flushOutbound) treat a nil world as a no-op so Phase-3-style
-	// tests still run. The manager is a PLAIN map mutated ONLY by the tick goroutine —
-	// the worker emits immutable ChunkResults and never touches it (TICK-05 / T-4-05).
-	world  *world.ChunkManager
-	worker *world.Worker
-
-	// asyncBridge is the internal channel SetWorld assigns to asyncIn. A small adapter
-	// goroutine ranges the worker's Results() and forwards each as a chunkReady onto
-	// this channel; applyAsyncResults drains it on the owner. The adapter touches NO
-	// tick state — it only re-wraps the immutable ChunkResult — so it adds no race.
-	asyncBridge chan asyncResult
+	// regions holds the per-region tick owners (Phase-27 STEP-1 extraction). At N=1 there is
+	// exactly ONE region (globalRegion) that holds everything the pre-extraction TickLoop held —
+	// the WORLD-half of the tick state (entities, world+worker, the chunkReady bridge, the
+	// scheduled block/fluid ticks, levelRandom, the spawn-scan gate). It is constructed in
+	// NewTickLoop. The coordinator reaches the single region via region()/only(); Plans 02/03
+	// add the coordinator fan-out/barrier and N=2. See region.go for the per-region/global
+	// boundary contract. These fields moved OFF TickLoop onto region: asyncIn, world, worker,
+	// asyncBridge, blockTicks, blockTickSubCounter, fluidSchedule, levelRandom, spawnScanPending.
+	regions []*region
 
 	// asyncIn2 is the Phase-8 compute-pool rejoin channel (OPT-04/OPT-06), the SECOND result
 	// channel alongside asyncIn. It is a BOUNDED buffered channel (asyncIn2Buffer): the per-
@@ -192,15 +181,6 @@ type TickLoop struct {
 	// Tick-owned plain int64s; read via PythonHookStats for tests/telemetry.
 	pythonHooksApplied int64
 	pythonHookErrors   int64
-
-	// spawnScanPending is the OPT-03 (08-05) single-in-flight gate for the async natural-spawn
-	// scan: naturalSpawn sets it true when it SUBMITS a candidate scan to spawnPool, and
-	// spawnCandidatesReady.applyTo clears it on rejoin (always — even when the scan placed nothing).
-	// While true, naturalSpawn submits no new scan, so at most ONE spawn scan is ever in flight (the
-	// 08-RESEARCH Pitfall 4 / OPT-01 !pending discipline — never a pile-up of redundant scans). It
-	// is a plain bool touched ONLY on the tick goroutine (set in naturalSpawn, cleared in applyTo,
-	// both owner-side — TICK-05), so it needs no atomic.
-	spawnScanPending bool
 
 	// tracker is the (synchronous stub) tracking executor; Phase 8 swaps it.
 	tracker tracker
@@ -245,35 +225,6 @@ type TickLoop struct {
 	// the leave-snapshot send a cheap skipped no-op. Buffered so a leave never parks the tick.
 	leaveSnapshots chan playerLeaveSnapshot
 
-	// entities is the tick-owned entity store (ENT-01). The by-id map + per-section grid
-	// buckets are mutated ONLY by the tick goroutine (TICK-05) — entity spawning (Plan
-	// 06-02), movement/re-bucketing (Plan 06-03), and the tracker's near() broad-phase all
-	// run on-thread over this store. A plain map (not xsync; that is Phase 8).
-	entities *entityStore
-
-	// fluidSchedule is the GAMEPLAY-05 scheduled-fluid-tick queue (Plan 17-02 fills it). It is
-	// DECLARED here by 17-01 so the shared TickLoop struct is never edited by a Wave-2 plan;
-	// the concrete fluidScheduleQueue type lives in fluid.go (a 17-01 stub 17-02 overwrites).
-	// 17-02 lazily constructs the queue inside tickFluids (a nil queue drains to nothing), so
-	// SetWorld — which lives in this shared file (tick.go) — is NOT touched by 17-02.
-	fluidSchedule *fluidScheduleQueue
-
-	// blockTicks is the SUB-BLOCKTICK level-wide scheduled-block-tick manager — the Go port of
-	// net.minecraft.server.level.ServerLevel.blockTicks (a LevelTicks<Block>). It holds every
-	// loaded chunk's per-chunk tick container and, each tick, drains the due ticks across chunks
-	// in the vanilla deterministic order (triggerTick, priority, subTickOrder) up to the 65536
-	// cap, dispatching each to tickBlock. Lazily constructed inside tickScheduledBlocks (a nil
-	// manager drains to nothing) so SetWorld is untouched; tick-owned (TICK-05). The existing
-	// fluid loop (fluid_schedule.go) is a SEPARATE one-off and is NOT migrated into this — they
-	// COEXIST in v1 (see block_ticks.go for the decision).
-	blockTicks *ticks.LevelTicks[blockTickType]
-
-	// blockTickSubCounter is the Go port of net.minecraft.world.level.Level.subTickCount — the
-	// monotonic per-schedule tiebreak (Level.nextSubTickCount post-increments it). It supplies
-	// each ScheduledTick's subTickOrder so two ticks scheduled at the same triggerTick + priority
-	// fire in schedule order. Tick-owned; advanced only on the owner goroutine via nextSubTick.
-	blockTickSubCounter int64
-
 	// debug holds the OPTIONAL, off-by-default debug triggers for the Plan 06-07 interactive
 	// human-verify gate (a visible moving pig + periodic damage so the operator can SEE entity
 	// movement and the health/death/respawn loop). nil in production AND in every test, so the
@@ -289,16 +240,6 @@ type TickLoop struct {
 	// gameTick.teleportSeq (T-6-08). The tick goroutine claims entity ids from the same
 	// allocator when it spawns entities (Plans 06-02+).
 	idAlloc *EntityIDAllocator
-
-	// levelRandom is the tick-owned level RandomSource — the Go analogue of
-	// net.minecraft.world.level.Level.random (a LegacyRandomSource created via RandomSource.create()).
-	// Vanilla's Mob.finalizeSpawn draws its random-spawn-bonus + left-handed rolls from
-	// level.getRandom(); we mirror that by giving the level ONE shared LegacyRandomSource, advanced
-	// ONLY on the tick goroutine (TICK-05). It is seeded once at construction; the SEED is not yet
-	// derived from the world seed (vanilla's Level.random uses a nondeterministic unique seed too —
-	// only worldgen RNG is seed-derived), so this matches vanilla's non-seed-pinned level random. Used
-	// by drainStructureSpawns -> attribute.FinalizeSpawn.
-	levelRandom *levelgen.LegacyRandomSource
 
 	// applyInputHook is a test-only observability seam: when non-nil, applyInput
 	// invokes it with each resolved input so a test can assert chronological apply
@@ -865,12 +806,9 @@ func NewTickLoop(clock Clock) *TickLoop {
 		register:   make(chan *tickPlayer, registerBuffer),
 		unregister: make(chan *Client, registerBuffer),
 		consoleCmd: make(chan string, registerBuffer), // TUI-01: operator-console line seam (Plan 19-02)
-		entities:   newEntityStore(),                  // ENT-01: tick-owned entity store, non-nil from construction
-		idAlloc:    &EntityIDAllocator{}, // ENT-01: monotonic id allocator (first AllocID()==1)
-		// levelRandom is the per-level shared RandomSource (Level.random analogue). Seeded from a
-		// unique nondeterministic seed, exactly like vanilla's RandomSource.create() — the level random
-		// is NOT seed-pinned (only worldgen RNG is). Advanced only on the tick goroutine.
-		levelRandom: levelgen.NewLegacyRandomSource(uniqueLevelRandomSeed()),
+		idAlloc:    &EntityIDAllocator{},              // ENT-01: monotonic id allocator (first AllocID()==1)
+		// The per-region entityStore + levelRandom now live on the single region (Phase-27 STEP-1),
+		// constructed below after t exists so newRegion can back-ref the coordinator.
 		// asyncIn stays nil (no-op Phase-4 seam until SetWorld); ring is zero-valued; gametime 0.
 
 		// Phase-8 async substrate (OPT-04): the SECOND rejoin channel + the per-subsystem
@@ -895,6 +833,12 @@ func NewTickLoop(clock Clock) *TickLoop {
 		// SetPlugins set (possibly nil).
 		pluginSwap: make(chan *host.Manager, 1),
 	}
+	// Phase-27 STEP-1: construct the single region (globalRegion) that holds the WORLD-half of the
+	// tick state. At N=1 it == today's single-owner TickLoop, so the world ticks IDENTICALLY.
+	// newRegion wires the per-region entityStore + the per-region (never-shared) levelRandom; the
+	// world/worker/blockTicks/fluidSchedule stay nil until SetWorld (the same lazy wiring as before
+	// the extraction). The region back-refs t so it reaches the global idAlloc/players/plugins.
+	t.regions = []*region{newRegion(globalRegion, t)}
 	// OPT-02 (08-04) SWAP-POINT — the single line that swaps the tracker EXECUTOR off-tick behind
 	// the UNCHANGED tracker.Tick() seam. ENT-01 filled this with the synchronous &entityTracker{};
 	// Phase 8 replaces it with &asyncTracker{}, whose Tick() builds a per-player snapshot ON the
@@ -904,10 +848,22 @@ func NewTickLoop(clock Clock) *TickLoop {
 	// site at tick_phases.go, and the pipeline order are ALL unchanged (TestTickPhaseOrder passes).
 	// The synchronous entityTracker stays in tracker.go as the golden reference the async tracker
 	// is diffed against (TestAsyncTrackerMatchesSync). The async executor holds a back-reference to
-	// the loop so Tick() can read the tick-owned store (loop.entities.near) + players on the owner.
+	// the loop so Tick() can read the tick-owned store (loop.only().entities.near) + players on the owner.
 	t.tracker = &asyncTracker{loop: t}
 	return t
 }
+
+// region returns the per-region tick owner for id (Phase-27 STEP-1). At N=1 the only valid id is
+// globalRegion. Plans 02/03 add the coordinator/barrier and more regions; for now this is the
+// accessor every coordinator call site uses to reach the world-half store.
+func (t *TickLoop) region(id regionID) *region { return t.regions[id] }
+
+// only returns THE single region at N=1 (globalRegion) — the convenience accessor for the N=1
+// call sites that the field move re-pointed off TickLoop (t.only().entities -> t.only().entities, etc.).
+// At N=1 t.only().entities IS the same store every phase loop ranges and the handles/tracker
+// re-resolve, so nothing downstream observes a difference (the behavior-neutral guarantee). When
+// Plan 03 introduces N=2 these N=1 call sites are re-pointed to the OWNING region.
+func (t *TickLoop) only() *region { return t.regions[globalRegion] }
 
 // asyncIn2Buffer bounds the Phase-8 compute-pool rejoin channel (asyncIn2). It mirrors
 // asyncBridgeBuffer: generously above the per-tick async-result burst (the pools are themselves
@@ -965,11 +921,11 @@ const asyncBridgeBuffer = 256
 // asyncIn is non-nil. The adapter touches NO tick state (only re-wraps the immutable
 // result), so it introduces no data race; the manager is mutated solely by the tick.
 func (t *TickLoop) SetWorld(mgr *world.ChunkManager, worker *world.Worker) {
-	t.world = mgr
-	t.worker = worker
+	t.only().world = mgr
+	t.only().worker = worker
 	bridge := make(chan asyncResult, asyncBridgeBuffer)
-	t.asyncBridge = bridge
-	t.asyncIn = bridge
+	t.only().asyncBridge = bridge
+	t.only().asyncIn = bridge
 	go func() {
 		// Adapter: immutable world.ChunkResult -> chunkReady (asyncResult). Ranges until
 		// the worker's results channel closes (it stays open for the worker's lifetime);
@@ -1183,7 +1139,7 @@ func (t *TickLoop) drainRegistrations() {
 				// ADD_PLAYER entry to every OTHER player and send all existing players' entries to
 				// the joiner (a Notchian client drops AddEntity without the tab entry — Pitfall 1).
 				p.playerEntity = newPlayerEntity(p)
-				t.entities.add(p.playerEntity)
+				t.only().entities.add(p.playerEntity)
 				// PLUGIN-02 (Plan 22) on_player_join seam: fire ONCE here on the owner, at the
 				// discrete join occurrence (the same place GAMEPLAY-01 adds the player entity) —
 				// NEVER from a per-tick scan. Nil-guarded so a no-plugin server is unaffected; the
@@ -1264,7 +1220,7 @@ func (t *TickLoop) removePlayer(c *Client) {
 	// its UUID to every REMAINING player so their clients drop the tab entry + avatar. Done
 	// AFTER the swap-remove so the leaving player is not re-sent its own removal. remove() is a
 	// no-op for a missing id, so a leave before the join seam ran never panics.
-	t.entities.remove(p.entityID)
+	t.only().entities.remove(p.entityID)
 	t.broadcastPlayerInfoRemove(p.uuid)
 
 	// PLUGIN-02 (Plan 22) on_player_leave seam: fire ONCE per leave here on the owner (the existing

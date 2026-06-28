@@ -57,7 +57,7 @@ func TestPlayerVisibility(t *testing.T) {
 		if p.playerEntity == nil {
 			t.Fatalf("player %q has nil playerEntity after register", p.name)
 		}
-		e, ok := loop.entities.get(p.entityID)
+		e, ok := loop.only().entities.get(p.entityID)
 		if !ok {
 			t.Fatalf("player %q (id %d) not in store after register", p.name, p.entityID)
 		}
@@ -72,7 +72,7 @@ func TestPlayerVisibility(t *testing.T) {
 	// (2) move p1 and run the per-tick sync; the store Entity must follow.
 	p1.x, p1.y, p1.z = 100.5, 70, -40.5
 	loop.syncPlayerEntities()
-	e1, _ := loop.entities.get(p1.entityID)
+	e1, _ := loop.only().entities.get(p1.entityID)
 	if e1.x != 100.5 || e1.y != 70 || e1.z != -40.5 {
 		t.Fatalf("synced entity pos = (%v,%v,%v), want (100.5,70,-40.5)", e1.x, e1.y, e1.z)
 	}
@@ -80,7 +80,7 @@ func TestPlayerVisibility(t *testing.T) {
 	// (3) leave removes the Entity from the store.
 	loop.unregister <- p2.client
 	loop.drainRegistrations()
-	if _, ok := loop.entities.get(p2.entityID); ok {
+	if _, ok := loop.only().entities.get(p2.entityID); ok {
 		t.Fatalf("player %q still in store after leave", p2.name)
 	}
 }

@@ -439,5 +439,5 @@ func (t *TickLoop) playerDrop(p *tickPlayer, stack component.SlotData, dropAroun
 	z := p.z + (rand.Float64()-0.5)*0.1
 
 	ie := NewItemEntity(t.idAlloc.AllocID(), x, y, z, stack)
-	t.entities.add(ie) // store insert → the tracker broadcasts AddEntity + SetEntityData
+	t.only().entities.add(ie) // store insert → the tracker broadcasts AddEntity + SetEntityData
 }

@@ -149,10 +149,10 @@ const sendChangesTeleportDelayCap = 400
 // seeded base. moveInit seeds the base/angles for a never-sent entity (the ctor setBase analogue).
 func (t *TickLoop) tickEntityMovement() {
 	t.trace("tickEntityMovement")
-	if t.entities == nil {
+	if t.only().entities == nil {
 		return
 	}
-	for _, e := range t.entities.all() {
+	for _, e := range t.only().entities.all() {
 		if e == nil {
 			continue
 		}

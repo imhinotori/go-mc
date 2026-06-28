@@ -39,7 +39,7 @@ func testChestLootNBT(table string, seed int64) nbt.RawMessage {
 // gen-time {LootTable, LootTableSeed} store) into the owning chunk's BlockEntity list — exactly
 // what world/structure createChest emits. The server resolves it at open time.
 func placeChestBE(loop *TickLoop, mgr *level.Chunk, pos pk.Position, table string, seed int64) {
-	loop.world.SetBlock(pos, block.ToStateID[block.Chest{Facing: block.North, Type: block.ChestTypeSingle, Waterlogged: false}], dimMinY)
+	loop.only().world.SetBlock(pos, block.ToStateID[block.Chest{Facing: block.North, Type: block.ChestTypeSingle, Waterlogged: false}], dimMinY)
 	be := level.BlockEntity{
 		Y:    int16(pos.Y),
 		Type: block.EntityTypes["minecraft:chest"],

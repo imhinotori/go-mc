@@ -50,7 +50,7 @@ const blockTestSecs = 24
 func newBlockLoop() (*TickLoop, *world.ChunkManager) {
 	loop := NewTickLoop(newFakeClock())
 	mgr := world.NewChunkManager()
-	loop.world = mgr
+	loop.only().world = mgr
 	ch := level.EmptyChunk(blockTestSecs)
 	ch.Status = level.StatusFull
 	mgr.Insert(level.ChunkPos{0, 0}, ch)
@@ -486,7 +486,7 @@ func TestPlaceBlockedByEntity(t *testing.T) {
 	// A mob standing IN the placement cell (feet at the cell's base): its AABB overlaps the
 	// full-cube collision shape, so the placement must be obstructed.
 	mob := NewEntity(loop.idAlloc.AllocID(), entity.Pig, float64(placed.X)+0.5, float64(placed.Y), float64(placed.Z)+0.5)
-	loop.entities.add(mob)
+	loop.only().entities.add(mob)
 
 	ui := useItemOnPacket(0, hit, 1 /*UP*/, 0.5, 1.0, 0.5, false, false, 99)
 	loop.applyInput(p, SubtickInput{At: loop.clock.Now(), Packet: ui})
@@ -513,7 +513,7 @@ func TestPlaceNotBlockedByDroppedItem(t *testing.T) {
 	// A dropped item in the cell: blocksBuilding=false, must NOT obstruct.
 	it := NewEntity(loop.idAlloc.AllocID(), entity.Item, float64(placed.X)+0.5, float64(placed.Y), float64(placed.Z)+0.5)
 	it.isItem = true
-	loop.entities.add(it)
+	loop.only().entities.add(it)
 
 	ui := useItemOnPacket(0, hit, 1 /*UP*/, 0.5, 1.0, 0.5, false, false, 99)
 	loop.applyInput(p, SubtickInput{At: loop.clock.Now(), Packet: ui})
@@ -536,7 +536,7 @@ func TestPlaceClearOfEntity(t *testing.T) {
 
 	// A mob two cells away in X: its AABB cannot reach the placement cell.
 	mob := NewEntity(loop.idAlloc.AllocID(), entity.Pig, float64(placed.X)+3.5, float64(placed.Y), float64(placed.Z)+0.5)
-	loop.entities.add(mob)
+	loop.only().entities.add(mob)
 
 	ui := useItemOnPacket(0, hit, 1 /*UP*/, 0.5, 1.0, 0.5, false, false, 99)
 	loop.applyInput(p, SubtickInput{At: loop.clock.Now(), Packet: ui})

@@ -74,7 +74,7 @@ func floorI(v float64) int { return int(math.Floor(v)) }
 // the READ counterpart to the WRITE API Plan 06-04 adds; both mirror the generator's
 // section/local mapping (world/generator.go sectionLocal).
 func (t *TickLoop) blockSolidAt(x, y, z int) bool {
-	if t.world == nil {
+	if t.only().world == nil {
 		return false // no world: nothing to collide with (world-less unit tests)
 	}
 	// One mapping: the read goes through world.ChunkManager.GetBlock (Plan 06-04), which
@@ -83,7 +83,7 @@ func (t *TickLoop) blockSolidAt(x, y, z int) bool {
 	// collide / never block), exactly as the old inline read did. This is the READ side of
 	// the same API the place/break handlers WRITE through, so physics and edits can never
 	// disagree on where a block lives.
-	s, ok := t.world.GetBlock(pk.Position{X: x, Y: y, Z: z}, dimMinY)
+	s, ok := t.only().world.GetBlock(pk.Position{X: x, Y: y, Z: z}, dimMinY)
 	if !ok {
 		return false
 	}
@@ -261,17 +261,17 @@ func (t *TickLoop) moveEntity(e *Entity, dx, dy, dz float64) {
 	// Y first: clip vertical motion, then move so the post-Y box is the basis for X/Z.
 	cy, blockedY := t.clipAxis(e, 1, dy)
 	nx, ny, nz := e.x, e.y+cy, e.z
-	t.entities.move(e, nx, ny, nz)
+	t.only().entities.move(e, nx, ny, nz)
 
 	// X next against the post-Y box.
 	cx, _ := t.clipAxis(e, 0, dx)
 	nx = e.x + cx
-	t.entities.move(e, nx, e.y, e.z)
+	t.only().entities.move(e, nx, e.y, e.z)
 
 	// Z last against the post-Y/X box.
 	cz, _ := t.clipAxis(e, 2, dz)
 	nz = e.z + cz
-	t.entities.move(e, e.x, e.y, nz)
+	t.only().entities.move(e, e.x, e.y, nz)
 
 	// onGround iff we were moving down AND that downward motion was clamped by a solid block.
 	e.onGround = dy < 0 && blockedY
@@ -301,7 +301,7 @@ func (t *TickLoop) moveEntity(e *Entity, dx, dy, dz float64) {
 // no solid block in the path, the claimed position is returned unchanged (world-less tests
 // and open-air movement accept the client position verbatim). Runs on the tick goroutine.
 func (t *TickLoop) collidePlayer(p *tickPlayer, newX, newY, newZ float64) (x, y, z float64) {
-	if t.world == nil {
+	if t.only().world == nil {
 		return newX, newY, newZ // no world: nothing to collide against, accept as-is
 	}
 	// Fast path: if the claimed position is already clear, accept it verbatim. This keeps

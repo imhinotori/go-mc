@@ -42,7 +42,7 @@ func stoneCutLoop(t *testing.T) (*TickLoop, *tickPlayer, pk.Position) {
 	pos := pk.Position{X: 1, Y: 64, Z: 1}
 	// Stonecutter has a Facing property; Facing=2 (north) is the canonical placed default state (the
 	// zero-value Facing=0 is not a registered state). Any facing opens the same menu (isStonecutterBlock).
-	loop.world.SetBlock(pos, block.ToStateID[block.Stonecutter{Facing: 2}], dimMinY)
+	loop.only().world.SetBlock(pos, block.ToStateID[block.Stonecutter{Facing: 2}], dimMinY)
 	return loop, p, pos
 }
 

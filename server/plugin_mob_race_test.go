@@ -41,7 +41,7 @@ func TestDeclaredMobRace(t *testing.T) {
 		loop.tickOnce()
 	}
 
-	if _, ok := loop.entities.get(e.id); !ok {
+	if _, ok := loop.only().entities.get(e.id); !ok {
 		t.Fatalf("the declared mob vanished during the race run")
 	}
 }

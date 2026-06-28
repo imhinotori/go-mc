@@ -185,8 +185,8 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 	// lands on the ADJACENT face (hitPos + the face normal).
 	var clickedState block.StateID
 	clickedKnown := false
-	if t.world != nil {
-		if s, ok := t.world.GetBlock(pos, dimMinY); ok {
+	if t.only().world != nil {
+		if s, ok := t.only().world.GetBlock(pos, dimMinY); ok {
 			clickedState, clickedKnown = s, true
 		}
 	}
@@ -213,7 +213,7 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 	// lava) — placement never overwrites a solid block. An unloaded/unreadable target is treated
 	// as not-replaceable (no-op), matching FAIL.
 	if !replaceClicked {
-		targetState, ok := t.world.GetBlock(placePos, dimMinY)
+		targetState, ok := t.only().world.GetBlock(placePos, dimMinY)
 		if !ok || !(isReplaceableState(targetState) && placeState != targetState) {
 			return // !canPlace() -> FAIL, silent no-op
 		}
@@ -233,7 +233,7 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 
 	// placeBlock -> Level.setBlock(getClickedPos(), state). changed=false (unloaded / no-change)
 	// -> no ack, no broadcast (matches placeBlock returning false -> FAIL).
-	if t.world == nil || !t.world.SetBlock(placePos, placeState, dimMinY) {
+	if t.only().world == nil || !t.only().world.SetBlock(placePos, placeState, dimMinY) {
 		return
 	}
 
@@ -318,13 +318,13 @@ func (t *TickLoop) shrinkHeldItem(p *tickPlayer, inv *Inventory) {
 // Sulfur reads that off Entity.isItem. The overlap is the half-open AABB intersection
 // (Shapes.joinIsNotEmpty with AND: interiors must overlap, edge-touching does not count).
 func (t *TickLoop) placementObstructedByEntity(pos pk.Position) bool {
-	if t.entities == nil {
+	if t.only().entities == nil {
 		return false
 	}
 	// The full-cube collision shape at pos: the unit box [pos, pos+1].
 	bx0, by0, bz0 := float64(pos.X), float64(pos.Y), float64(pos.Z)
 	bx1, by1, bz1 := bx0+1, by0+1, bz0+1
-	for _, e := range t.entities.all() {
+	for _, e := range t.only().entities.all() {
 		if e == nil || e.isItem {
 			continue // dropped items have blocksBuilding=false: they never obstruct a placement
 		}

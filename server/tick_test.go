@@ -72,7 +72,7 @@ func TestTickPhaseOrder(t *testing.T) {
 func TestApplyAsyncResultsNoop(t *testing.T) {
 	loop := NewTickLoop(newFakeClock())
 
-	if loop.asyncIn != nil {
+	if loop.only().asyncIn != nil {
 		t.Fatal("Phase 3 TickLoop must have a nil asyncIn (no-op seam)")
 	}
 

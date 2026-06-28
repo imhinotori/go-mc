@@ -156,10 +156,10 @@ type pathReady struct {
 // and nav.pending = false (the in-flight gate clears, so shouldRecomputePath may submit again).
 // Carrying r.mobID + r.target (plain values, NOT a live *Entity) is what makes this late apply safe.
 func (r pathReady) applyTo(t *TickLoop) {
-	if t.entities == nil {
+	if t.only().entities == nil {
 		return // defensive: store is non-nil from NewTickLoop; never panic if absent
 	}
-	e, ok := t.entities.get(r.mobID)
+	e, ok := t.only().entities.get(r.mobID)
 	if !ok || e.ai == nil {
 		return // mob despawned (or has no AI) while the path computed (Pitfall 2): DROP the result
 	}
@@ -268,7 +268,7 @@ type spawnCandidatesReady struct {
 // Pitfall 3): the scan's mob count was a snapshot, so the owner re-reads the live state before
 // adding.
 //
-//  1. Clear the single-in-flight gate (t.spawnScanPending) FIRST and unconditionally, so the next
+//  1. Clear the single-in-flight gate (t.only().spawnScanPending) FIRST and unconditionally, so the next
 //     spawnInterval cycle can submit again even when this result places nothing (an empty candidate
 //     set, an over-cap drop, or an occupied drop must never wedge the gate — Pitfall 4).
 //  2. CAP RE-CHECK (the load-bearing safety): re-read the live CREATURE count over the authoritative
@@ -282,12 +282,12 @@ type spawnCandidatesReady struct {
 func (r spawnCandidatesReady) applyTo(t *TickLoop) {
 	// Always clear the in-flight gate on apply, regardless of whether anything is placed below —
 	// otherwise a cycle that scanned to nothing (or got dropped here) would block all future scans.
-	t.spawnScanPending = false
+	t.only().spawnScanPending = false
 
 	if len(r.candidates) == 0 {
 		return // the scan found no standable spot: nothing to apply (the gate is already cleared)
 	}
-	if t.entities == nil {
+	if t.only().entities == nil {
 		return // defensive: store is non-nil from NewTickLoop; never panic if absent
 	}
 

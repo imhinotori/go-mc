@@ -17,7 +17,7 @@ import (
 // countItemEntities returns how many Item-type entities are in the loop's store.
 func countItemEntities(loop *TickLoop) int {
 	n := 0
-	for _, e := range loop.entities.all() {
+	for _, e := range loop.only().entities.all() {
 		if e != nil && e.typ == entity.Item.ID {
 			n++
 		}
@@ -29,7 +29,7 @@ func countItemEntities(loop *TickLoop) int {
 // neighbor check exactly as reconcileEdit does after a real break. It mirrors the production seam:
 // SetBlock then updateVegetationOnEdit. Returns nothing; callers assert on the world + entity store.
 func breakSupport(loop *TickLoop, pos pk.Position) {
-	loop.world.SetBlock(pos, block.ToStateID[block.Air{}], dimMinY)
+	loop.only().world.SetBlock(pos, block.ToStateID[block.Air{}], dimMinY)
 	loop.updateVegetationOnEdit(pos)
 }
 

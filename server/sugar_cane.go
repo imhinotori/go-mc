@@ -43,7 +43,7 @@ const sugarCaneTickDelay = 1
 // neighbor checks so a cane stacked above this one re-evaluates its own support). CITE:
 // SugarCaneBlock.tick.
 func (t *TickLoop) sugarCaneTick(state block.StateID, pos pk.Position) {
-	if t.world == nil {
+	if t.only().world == nil {
 		return
 	}
 	if t.sugarCaneCanSurvive(pos) {
@@ -51,7 +51,7 @@ func (t *TickLoop) sugarCaneTick(state block.StateID, pos pk.Position) {
 	}
 	// destroyBlock(pos, true): set air, broadcast, drop the cane (dropBlock=true, entity=null so a
 	// nil player always drops). spawnBlockDrop rolls sugar_cane's loot table for the broken state.
-	if !t.world.SetBlock(pos, t.airState(), dimMinY) {
+	if !t.only().world.SetBlock(pos, t.airState(), dimMinY) {
 		return // already air/unloaded: destroyBlock returned false
 	}
 	t.broadcastBlockUpdate(pos, t.airState())
@@ -69,7 +69,7 @@ func (t *TickLoop) sugarCaneTick(state block.StateID, pos pk.Position) {
 // only destroys on a positively-read invalid support. CITE: SugarCaneBlock.canSurvive.
 func (t *TickLoop) sugarCaneCanSurvive(pos pk.Position) bool {
 	belowPos := below(pos)
-	belowState, ok := t.world.GetBlock(belowPos, dimMinY)
+	belowState, ok := t.only().world.GetBlock(belowPos, dimMinY)
 	if !ok {
 		return false // below unreadable -> not sugar cane, not a support block -> cannot survive
 	}
@@ -85,7 +85,7 @@ func (t *TickLoop) sugarCaneCanSurvive(pos pk.Position) bool {
 	}
 	for _, d := range horizontalDirections {
 		nb := pk.Position{X: belowPos.X + d.dx, Y: belowPos.Y, Z: belowPos.Z + d.dz}
-		nbState, ok := t.world.GetBlock(nb, dimMinY)
+		nbState, ok := t.only().world.GetBlock(nb, dimMinY)
 		if !ok {
 			continue // unreadable neighbor: not a supporting fluid/block (non-destructive skip)
 		}
@@ -119,7 +119,7 @@ var horizontalDirections = []horizontalDir{
 // tick subsystem exists to drive. CITE: SugarCaneBlock.updateShape (`if (!canSurvive)
 // scheduleTick(pos, this, 1)`).
 func (t *TickLoop) updateShapeSugarCane(pos pk.Position) {
-	if t.world == nil {
+	if t.only().world == nil {
 		return
 	}
 	if t.sugarCaneCanSurvive(pos) {
@@ -139,11 +139,11 @@ func (t *TickLoop) updateShapeSugarCane(pos pk.Position) {
 // is the hook reconcileEdit and sugarCaneTick call to wake the cane above a changed cell. CITE:
 // ServerLevel.updateNeighborsAt -> SugarCaneBlock.updateShape.
 func (t *TickLoop) onBlockTickEdit(pos pk.Position) {
-	if t.world == nil {
+	if t.only().world == nil {
 		return
 	}
 	abovePos := above(pos)
-	aboveState, ok := t.world.GetBlock(abovePos, dimMinY)
+	aboveState, ok := t.only().world.GetBlock(abovePos, dimMinY)
 	if !ok {
 		return
 	}
@@ -160,12 +160,12 @@ func (t *TickLoop) onBlockTickEdit(pos pk.Position) {
 // completeness; random ticking is driven by the world's random-tick pass (a separate subsystem),
 // so it is exposed for that caller and unit-tested here. CITE: SugarCaneBlock.randomTick.
 func (t *TickLoop) sugarCaneRandomTick(state block.StateID, pos pk.Position) {
-	if t.world == nil {
+	if t.only().world == nil {
 		return
 	}
 	abovePos := above(pos)
 	// level.isEmptyBlock(pos.above()): the cell above must be air to grow.
-	aboveState, ok := t.world.GetBlock(abovePos, dimMinY)
+	aboveState, ok := t.only().world.GetBlock(abovePos, dimMinY)
 	if !ok || !block.IsAir(aboveState) {
 		return
 	}
@@ -175,7 +175,7 @@ func (t *TickLoop) sugarCaneRandomTick(state block.StateID, pos pk.Position) {
 	height := 1
 	for {
 		bp := pk.Position{X: pos.X, Y: pos.Y - height, Z: pos.Z}
-		bs, ok := t.world.GetBlock(bp, dimMinY)
+		bs, ok := t.only().world.GetBlock(bp, dimMinY)
 		if !ok || !block.IsSugarCane(bs) {
 			break
 		}
@@ -191,11 +191,11 @@ func (t *TickLoop) sugarCaneRandomTick(state block.StateID, pos pk.Position) {
 	if age == 15 {
 		// Place a new cane above (default AGE 0) and reset this cell to AGE 0.
 		if newCane, ok := block.SugarCaneState(0); ok {
-			if t.world.SetBlock(abovePos, newCane, dimMinY) {
+			if t.only().world.SetBlock(abovePos, newCane, dimMinY) {
 				t.broadcastBlockUpdate(abovePos, newCane)
 			}
 			if reset, ok := block.SugarCaneState(0); ok {
-				if t.world.SetBlock(pos, reset, dimMinY) {
+				if t.only().world.SetBlock(pos, reset, dimMinY) {
 					t.broadcastBlockUpdate(pos, reset)
 				}
 			}
@@ -204,7 +204,7 @@ func (t *TickLoop) sugarCaneRandomTick(state block.StateID, pos pk.Position) {
 	}
 	// AGE++.
 	if grown, ok := block.SugarCaneState(age + 1); ok {
-		if t.world.SetBlock(pos, grown, dimMinY) {
+		if t.only().world.SetBlock(pos, grown, dimMinY) {
 			t.broadcastBlockUpdate(pos, grown)
 		}
 	}

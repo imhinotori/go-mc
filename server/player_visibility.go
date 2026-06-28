@@ -62,7 +62,7 @@ func (t *TickLoop) syncPlayerEntities() {
 		if p == nil || p.playerEntity == nil {
 			continue
 		}
-		t.entities.move(p.playerEntity, p.x, p.y, p.z)
+		t.only().entities.move(p.playerEntity, p.x, p.y, p.z)
 		p.playerEntity.yaw = p.yaw
 		p.playerEntity.pitch = p.pitch
 		p.playerEntity.headYaw = p.headYaw

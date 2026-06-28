@@ -81,7 +81,7 @@ func TestChunkReadyRejoin(t *testing.T) {
 func TestChunkReadyApplyToInserts(t *testing.T) {
 	mgr := world.NewChunkManager()
 	loop := NewTickLoop(newFakeClock())
-	loop.world = mgr
+	loop.only().world = mgr
 
 	okPos := level.ChunkPos{1, 1}
 	ch := level.EmptyChunk(24)
@@ -104,7 +104,7 @@ func TestChunkReadyApplyToInserts(t *testing.T) {
 // alongside TestApplyAsyncResultsNoop, but asserted here for the streaming path too).
 func TestRejoinNoopWithoutWorld(t *testing.T) {
 	loop := NewTickLoop(newFakeClock())
-	if loop.asyncIn != nil {
+	if loop.only().asyncIn != nil {
 		t.Fatal("a TickLoop without SetWorld must keep asyncIn nil (Phase-3 no-op seam)")
 	}
 	loop.tickChunks()    // no world wired: must be a cheap no-op, never panic

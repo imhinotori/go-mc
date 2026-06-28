@@ -155,7 +155,7 @@ func (t *TickLoop) spawnBlockDrop(p *tickPlayer, pos pk.Position, brokenState bl
 
 		ie := NewItemEntity(t.idAlloc.AllocID(), x, y, z, drop)
 
-		t.entities.add(ie) // store insert -> the tracker broadcasts AddEntity + SetEntityData
+		t.only().entities.add(ie) // store insert -> the tracker broadcasts AddEntity + SetEntityData
 	}
 }
 
