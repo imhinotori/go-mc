@@ -64,6 +64,17 @@ func (g *floatGoal) canUse(t *TickLoop, e *Entity) bool {
 // the goal is active (so the swim-jump chance is rolled continuously, not just on the start edge).
 func (g *floatGoal) requiresUpdateEveryTick() bool { return true }
 
+// canContinueToUse ports FloatGoal's INHERITED Goal.canContinueToUse, which returns canUse() (FloatGoal
+// declares no override, so it gets Goal's default `canContinueToUse(){ return this.canUse(); }`). Without
+// this, floatGoal would inherit baseGoal.canContinueToUse → true (ai_goal.go:95) and keep running after
+// the mob leaves water — holding the JUMP flag forever AND drawing nextFloat() every tick on dry land,
+// diverging from the jar AND from the plugin pig (whose starlarkGoal.canContinueToUse already delegates
+// to canUse). The DRY oracle world hides this (canUse never true → goal never starts), but a wet-world
+// run desyncs the RNG stream. Delegating to canUse is the 1:1 fix.
+//
+//	[VERIFIED javap Goal.canContinueToUse: aload_0; invokevirtual canUse; ireturn (default = canUse()).]
+func (g *floatGoal) canContinueToUse(t *TickLoop, e *Entity) bool { return g.canUse(t, e) }
+
 // tick ports FloatGoal.tick: roll the per-mob RandomSource and, on nextFloat() < 0.8f, arm the jump
 // control (the JumpControl.jump() analogue = jumpControl.doJump()). This is the SINGLE new RNG draw in
 // the FloatGoal subsystem, drawn from mobRandom(e) (= e.ai.rng) — lockstep with the plugin float_tick.

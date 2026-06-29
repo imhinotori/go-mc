@@ -24,6 +24,7 @@ import (
 
 	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/level"
+	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
 // --- boot-load + declaration -------------------------------------------------------------------
@@ -274,6 +275,46 @@ func TestPluginPigEqualsGoNativePig(t *testing.T) {
 		if go_ != pl {
 			t.Fatalf("tick %d: plugin pig diverged from the Go oracle:\n  go     = %+v\n  plugin = %+v", i, go_, pl)
 		}
+	}
+}
+
+// TestFloatGoalCanContinueDelegatesToCanUse is the direct CR-01 regression: vanilla FloatGoal declares
+// NO canContinueToUse override, so it inherits Goal.canContinueToUse → canUse(). The Go-native floatGoal
+// MUST delegate the same way — without the override it would inherit baseGoal.canContinueToUse → true
+// (ai_goal.go) and keep running (holding JUMP + drawing nextFloat every tick) after the mob leaves water,
+// diverging from the jar AND from the plugin pig (whose starlarkGoal.canContinueToUse already delegates
+// to canUse). This asserts the contract directly: in water canContinueToUse==true==canUse; OUT of water
+// canContinueToUse==false==canUse (the edge where CR-01 lived). Without the fix the out-of-water case
+// returns true and this test FAILS.
+func TestFloatGoalCanContinueDelegatesToCanUse(t *testing.T) {
+	const floorY = 64
+	loop, mgr := newPhysicsLoop()
+	ch := putChunk(mgr, level.ChunkPos{0, 0})
+	fillFloor(ch, floorY)
+
+	g := newFloatGoal()
+
+	// DRY: a pig on the floor, no water → canUse false → canContinueToUse MUST be false (the CR-01 edge).
+	dry := NewEntity(7001, entity.Pig, 8.5, float64(floorY+1), 8.5)
+	dry.ai = newPigAI()
+	if g.canUse(loop, dry) {
+		t.Fatalf("dry pig: canUse should be false (no water/lava)")
+	}
+	if g.canContinueToUse(loop, dry) {
+		t.Fatalf("CR-01: floatGoal.canContinueToUse returned TRUE out of water — it must delegate to canUse (vanilla Goal.canContinueToUse default). Without the override it inherits baseGoal→true and never stops, desyncing the oracle.")
+	}
+
+	// WET: water over the pig column → canUse true → canContinueToUse MUST be true.
+	for dy := 1; dy <= 2; dy++ {
+		mgr.SetBlock(pk.Position{X: 8, Y: floorY + dy, Z: 8}, waterStateID(0), dimMinY)
+	}
+	wet := NewEntity(7002, entity.Pig, 8.5, float64(floorY+1), 8.5)
+	wet.ai = newPigAI()
+	if !g.canUse(loop, wet) {
+		t.Fatalf("wet pig: canUse should be true (in water above the 0.4 fluid-jump threshold)")
+	}
+	if !g.canContinueToUse(loop, wet) {
+		t.Fatalf("wet pig: canContinueToUse should be true (== canUse in water)")
 	}
 }
 
