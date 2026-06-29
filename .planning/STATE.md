@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v4
 milestone_name: Plugin / Scripting System
-status: executing
+status: verifying
 stopped_at: Completed 24-02-PLAN.md — Phase 24 (vanilla-mobs-as-plugins) COMPLETE
-last_updated: "2026-06-28T23:36:27.729Z"
-last_activity: 2026-06-28
+last_updated: "2026-06-29T00:25:30.197Z"
+last_activity: 2026-06-29
 progress:
   total_phases: 8
-  completed_phases: 7
+  completed_phases: 8
   total_plans: 19
-  completed_plans: 18
-  percent: 95
+  completed_plans: 19
+  percent: 100
 ---
 
 # Project State
@@ -27,8 +27,8 @@ See: .planning/PROJECT.md (updated 2026-06-23)
 
 Phase: 28 (plugin-system-visual-perf-gate) — EXECUTING
 Plan: 2 of 2
-Status: Ready to execute
-Last activity: 2026-06-28
+Status: Phase complete — ready for verification
+Last activity: 2026-06-29
 
 ### ⚠️ DONE this session — 25-03 PLUGIN-05 close (cooking/stonecutting BLOCK build-or-defer)
 
@@ -156,7 +156,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [██████████] 95%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -262,6 +262,7 @@ Progress: [██████████] 95%
 | Phase 27 P02 | 6min | 3 tasks | 6 files |
 | Phase 27 P03 | 35min | 4 tasks | 19 files |
 | Phase 28 P01 | 17min | 2 tasks | 8 files |
+| Phase 28 P02 | 38min | 3 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -405,6 +406,10 @@ Recent decisions affecting current work:
 - [Phase ?]: 27-02: conc (sourcegraph/conc v0.3.0, pure-Go CGO=0) drives the per-tick fan-out/join barrier — the Folia coordinator at N=1, behavior-neutral
 - [Phase ?]: 27-02: tickOnce = drain -> read shared gt -> conc.WaitGroup.Go(r.tick) per region -> wg.Wait BARRIER -> cross-region post-phase -> gametime++ EXACTLY once; shared 50ms anchor advanced ONLY by the coordinator
 - [Phase ?]: 27-02: a region panic is recovered by conc + the hoisted recoverTick backstop (advanced flag = exactly-once gametime advance); the tick survives and never hangs (T-27-02)
+- [Phase ?]: PLUGIN-07 bot visual gate PASSES: cmd/testbot -mode gate triggers + asserts all 4 plugin-system items on observed proto-776 packets, exit 0 (28-02)
+- [Phase ?]: chat() Starlark host builtin + installable server sink (broadcastSystemChat) makes a plugin event hook's reaction observable on the wire as ClientboundSystemChat (28-02)
+- [Phase ?]: run-gate.sh is OFFLINE by design so the offline-login bot can connect (run-debug.sh online-mode would reject it); dev-only gate launch, T-28-07 accept (28-02)
+- [Phase ?]: operator LoadDir now skips+logs a per-plugin load failure and continues (was aborting the whole scan on the duplicate plugins/vanilla_pig); strict boot-load LoadDirWith unchanged (28-02)
 
 ### Pending Todos
 
@@ -434,7 +439,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-28T23:36:27.714Z
+Last session: 2026-06-29T00:24:46.784Z
 Stopped at: Completed 24-02-PLAN.md — Phase 24 (vanilla-mobs-as-plugins) COMPLETE
 Resume file: None
 Next: OPERATOR CHECKPOINT (19-02 Task 3) — build `CGO_ENABLED=0 go build -o sulfur.exe ./cmd/sulfur`, run `./sulfur.exe -seed 777` in a REAL terminal (expect alt-screen TUI: log viewport + command input), type `say hi`+Enter (expect a `console command cmd=say hi` viewport line), connect a vanilla 26.2 client (expect a join line), Ctrl-C (clean exit), then `./sulfur.exe -seed 777 | cat` (expect NO TUI, plain stderr — today's behavior). On "approved" → mark TUI-01 complete + advance the plan counter, then proceed to Plan 19-03 (gameplay_tick.go join/leave slog conversion + the full disconnect taxonomy). The console line routes TUI→tick (EnqueueConsoleCommand, cap 64, drop-on-full)→runConsoleCommand on the tick→existing graph (grant-all, no issuer), reply to slog. gameplay_tick.go is untouched (19-03 owns it). LEGACY: Phase 17 Wave 2 (17-02/17-03) — see prior continuity below. (GAMEPLAY-05 fluid simulation: OVERWRITE server/fluid.go with the FlowingFluid port + scheduled-tick queue; lazy-init t.fluidSchedule inside tickFluids, do NOT edit tick.go/tick_phases.go) and 17-03 (GAMEPLAY-04 fall damage + PvP dispatch: OVERWRITE server/fall_damage.go using the tickPlayer fallDistance/wasOnGround/lastY fields + the lookupPlayerByEntityID reverse lookup, do NOT edit tick.go/tick_phases.go). The exact Wave-2 seam surface (field names, init point, call sites, stub signatures) is in 17-01-SUMMARY.md "WAVE-2 HANDOFF". Deferred-still-open: dungeon loot/spawner-mob + BeehiveDecorator occupant + pale_garden PaleMoss (all v3, cosmetic, in 13-04-SUMMARY); KeepAlive double-leave hardening (Phase 3). KNOWN PRE-EXISTING FLAKE: TestTickAIDrivesMobs (OPT-01 async-pool timing, not caused by 17-01) intermittently fails under full-suite load; passes in isolation + 3× under -race.
