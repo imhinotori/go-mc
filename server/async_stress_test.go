@@ -95,7 +95,13 @@ func addStressPlayer(loop *TickLoop, entityID int32, x, z float64, floorY int) *
 // drains any in-flight async work before Close() so no worker is mid-send at teardown.
 func TestAllAsyncSubsystemsRaceClean(t *testing.T) {
 	const floorY = 64
-	loop := newStressLoop(t, 2, floorY) // chunks [-2,2]^2 — room to wander and path
+	// chunks [-8,8]^2 = 289 loaded columns — room to wander/path AND enough spawnable columns for a
+	// CREATURE cap that EXCEEDS the seeded mob count after the spawn-cap fix
+	// (creatureCap = 10*spawnableChunkCount/289; 10*289/289 = 10). The test seeds 8 pigs below; a
+	// smaller world (e.g. 5x5 = 25 cols → cap 0, or 9x9 = 81 → cap 2) leaves the spawner AT/OVER cap
+	// from the seed alone, so no natural spawn ever fires and the "stress was non-trivial" assertion
+	// can never pass. cap 10 > 8 seeded leaves headroom for the spawner to add mobs under load.
+	loop := newStressLoop(t, 8, floorY)
 	defer loop.Close()
 
 	// Two players with capturing clients, a few columns apart so each has its own visibility set and
@@ -114,7 +120,10 @@ func TestAllAsyncSubsystemsRaceClean(t *testing.T) {
 		loop.only().entities.add(e)
 	}
 
-	startMobs := loop.only().entities.len()
+	// Count ACROSS regions: the natural spawner routes a spawn into the region OWNING its random
+	// candidate column (either region), and a seeded mob can transfer between regions as it wanders,
+	// so loop.only() (region 0 only) is not a stable measure of "mobs in the world".
+	startMobs := totalEntities(loop)
 
 	// Drive the loop through a few hundred logical ticks. advance() consumes whole 50ms steps from the
 	// fake clock and runs the full ordered pipeline per step (tickAI submits to path/spawn pools,
@@ -151,9 +160,9 @@ func TestAllAsyncSubsystemsRaceClean(t *testing.T) {
 	// ticks (20 spawnInterval cycles, under cap, with a loaded world + players), and the tracker must
 	// have spawned the seeded mobs to at least one player (its tracked set is non-empty). If neither
 	// happened the test would pass the race gate vacuously — assert real work occurred.
-	if loop.only().entities.len() <= startMobs {
+	if totalEntities(loop) <= startMobs {
 		t.Fatalf("the spawner added no mobs over %d ticks (%d -> %d) — the stress was trivial",
-			ticks, startMobs, loop.only().entities.len())
+			ticks, startMobs, totalEntities(loop))
 	}
 	tracked := 0
 	for _, p := range loop.players {

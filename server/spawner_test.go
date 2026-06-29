@@ -17,6 +17,40 @@ import (
 	"github.com/imhinotori/sulfur/level/block"
 )
 
+// totalEntities sums the entity count ACROSS every region. The natural spawner picks RANDOM
+// candidate columns across the loaded 11x11 area and routes the spawned mob into the region that
+// OWNS that column (regionOf(col)=(x^z)&1) — so a spawn can land in EITHER region. loop.only()
+// resolves to region 0 only, which would make a region-1 spawn invisible to a count assertion;
+// counting across regions is the region-routing-correct way to ask "did the spawner add a mob".
+func totalEntities(loop *TickLoop) int {
+	total := 0
+	for _, r := range loop.regions {
+		if r != nil && r.entities != nil {
+			total += r.entities.len()
+		}
+	}
+	return total
+}
+
+// findEntityOfType scans EVERY region's by-id map for the first entity whose type matches one of
+// typ. Used by the "find the spawned Pig" assertions: the spawned mob can be routed into either
+// region, so a region-0-only scan (loop.only().entities.byID) would miss a region-1 spawn.
+func findEntityOfType(loop *TickLoop, typ ...entity.Entity) *Entity {
+	for _, r := range loop.regions {
+		if r == nil || r.entities == nil {
+			continue
+		}
+		for _, e := range r.entities.byID {
+			for _, want := range typ {
+				if e.typ == want.ID {
+					return e
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // runSpawnCycle drives ONE full OPT-03 natural-spawn cycle end-to-end for a test: it submits the
 // off-tick candidate scan via naturalSpawn (the owner side), then — if a scan was actually
 // submitted (under cap, columns available, pool not overloaded) — deterministically receives the
@@ -49,6 +83,21 @@ func newSpawnLoop(t *testing.T) (*TickLoop, *level.Chunk, int) {
 	const floorY = 64
 	ch := putChunk(mgr, level.ChunkPos{0, 0})
 	fillFloor(ch, floorY) // solid [floorY,floorY+1); standable feet Y is floorY+1
+	// The vanilla CREATURE cap is maxInstancesPerChunk * spawnableChunkCount / MAGIC_NUMBER(289)
+	// (creatureCap). A single loaded column yields cap = 10*1/289 = 0 — no spawn is ever allowed,
+	// which is correct vanilla behavior but makes a "must spawn" test impossible. Load enough columns
+	// around the player that the cap is >= a few: 11x11 = 121 columns -> cap = 10*121/289 = 4. The
+	// floor is filled in (0,0) (the column the player + the scan reference sit on, where spawns land).
+	const r = 5 // 11x11 columns around the player
+	for dx := -r; dx <= r; dx++ {
+		for dz := -r; dz <= r; dz++ {
+			if dx == 0 && dz == 0 {
+				continue // (0,0) already created + floored above
+			}
+			c := putChunk(mgr, level.ChunkPos{int32(dx), int32(dz)})
+			fillFloor(c, floorY)
+		}
+	}
 	// A player on the floor at the column center so spawnableColumns includes (0,0) and the
 	// scan reference Y is the floor surface.
 	loop.players = append(loop.players, &tickPlayer{x: 8.5, y: float64(floorY + 1), z: 8.5})
@@ -86,16 +135,16 @@ func TestSpawnCapAccounting(t *testing.T) {
 	if len(cols) == 0 {
 		t.Fatal("expected at least one spawnable column near the player")
 	}
-	cap := categoryCreature.maxInstancesPerChunk() * len(cols)
+	cap := creatureCap(len(cols)) // maxInstancesPerChunk * spawnableChunkCount / MAGIC_NUMBER (vanilla)
 
 	// Fill the store with exactly `cap` CREATURE mobs (pigs) so CREATURE is AT the cap.
 	for i := 0; i < cap; i++ {
 		loop.only().entities.add(NewEntity(loop.idAlloc.AllocID(), entity.Pig, 8.5, float64(floorY+1), 8.5))
 	}
-	before := loop.only().entities.len()
+	before := totalEntities(loop)
 	runSpawnCycle(t, loop)
-	if loop.only().entities.len() != before {
-		t.Fatalf("at cap, naturalSpawn must not spawn: count %d -> %d", before, loop.only().entities.len())
+	if totalEntities(loop) != before {
+		t.Fatalf("at cap, naturalSpawn must not spawn: count %d -> %d", before, totalEntities(loop))
 	}
 
 	// Remove one so we are below cap; now a spawn IS allowed.
@@ -103,10 +152,12 @@ func TestSpawnCapAccounting(t *testing.T) {
 		loop.only().entities.remove(id)
 		break
 	}
-	below := loop.only().entities.len()
+	below := totalEntities(loop)
 	runSpawnCycle(t, loop)
-	if loop.only().entities.len() != below+1 {
-		t.Fatalf("below cap, naturalSpawn should add exactly one mob: count %d -> %d", below, loop.only().entities.len())
+	// The spawned mob is routed into the region OWNING its (random) candidate column — either
+	// region — so count across regions, not just region 0 (loop.only()).
+	if totalEntities(loop) != below+1 {
+		t.Fatalf("below cap, naturalSpawn should add exactly one mob: count %d -> %d", below, totalEntities(loop))
 	}
 }
 
@@ -118,12 +169,8 @@ func TestSpawnPlacementOnGround(t *testing.T) {
 
 	// (a) Valid floor: a spawn lands on the surface (feet at floorY+1, solid floorY below).
 	runSpawnCycle(t, loop)
-	var spawned *Entity
-	for _, e := range loop.only().entities.byID {
-		if e.typ == entity.Pig.ID {
-			spawned = e
-		}
-	}
+	// The Pig is routed into whichever region owns its random candidate column — scan across regions.
+	spawned := findEntityOfType(loop, entity.Pig)
 	if spawned == nil {
 		t.Fatal("expected a Pig to spawn on the valid floor")
 	}
@@ -146,10 +193,10 @@ func TestSpawnPlacementOnGround(t *testing.T) {
 	}
 	_ = ch // keep ch referenced (floor world built above)
 	loop2.players = append(loop2.players, &tickPlayer{x: 8.5, y: float64(floorY + 1), z: 8.5})
-	before := loop2.only().entities.len()
+	before := totalEntities(loop2)
 	runSpawnCycle(t, loop2)
-	if loop2.only().entities.len() != before {
-		t.Fatalf("a fully-blocked column must not spawn (no ON_GROUND clearance): %d -> %d", before, loop2.only().entities.len())
+	if totalEntities(loop2) != before {
+		t.Fatalf("a fully-blocked column must not spawn (no ON_GROUND clearance): %d -> %d", before, totalEntities(loop2))
 	}
 	_ = ch2
 }
@@ -160,17 +207,14 @@ func TestSpawnPlacementOnGround(t *testing.T) {
 func TestSpawnAddsToStore(t *testing.T) {
 	loop, _, _ := newSpawnLoop(t)
 
-	before := loop.only().entities.len()
+	before := totalEntities(loop)
 	runSpawnCycle(t, loop)
-	if loop.only().entities.len() != before+1 {
-		t.Fatalf("a valid spawn must add exactly one entity: %d -> %d", before, loop.only().entities.len())
+	// The spawned mob is routed into the region owning its random candidate column — count + scan
+	// across regions (loop.only() is region 0 only and would miss a region-1 spawn).
+	if totalEntities(loop) != before+1 {
+		t.Fatalf("a valid spawn must add exactly one entity: %d -> %d", before, totalEntities(loop))
 	}
-	var pig *Entity
-	for _, e := range loop.only().entities.byID {
-		if e.typ == entity.Pig.ID {
-			pig = e
-		}
-	}
+	pig := findEntityOfType(loop, entity.Pig)
 	if pig == nil {
 		t.Fatal("the spawned entity should be a Pig")
 	}
@@ -180,8 +224,13 @@ func TestSpawnAddsToStore(t *testing.T) {
 	if pig.ai == nil {
 		t.Fatal("a naturally-spawned Pig must have a real mobAI attached (so it wanders via serverAiStep), not a static mover")
 	}
-	// The mob is registered in the bucket index too (so near()/the tracker sees it).
-	got := loop.only().entities.near(pig.x, pig.z, 0)
+	// The mob is registered in the bucket index too (so near()/the tracker sees it). Query near()
+	// on the region that OWNS the pig (its column may be region 1, not region 0).
+	owner := loop.owningRegion(pig.id)
+	if owner == nil {
+		t.Fatal("the spawned Pig must be owned by some region")
+	}
+	got := owner.entities.near(pig.x, pig.z, 0)
 	found := false
 	for _, e := range got {
 		if e.id == pig.id {
@@ -256,7 +305,7 @@ func TestTickAIDrivesMobs(t *testing.T) {
 func TestTickAISpawns(t *testing.T) {
 	loop, _, _ := newSpawnLoop(t)
 
-	before := loop.only().entities.len()
+	before := totalEntities(loop)
 	// Drive enough ticks that gametime crosses at least one spawnInterval boundary. gametime is
 	// 0 on the first tickAI call, so the very first call already submits a spawn scan. OPT-03: the
 	// scan is off-tick — tickAI SUBMITS to spawnPool and applyAsyncResults (the pipeline phase that
@@ -278,17 +327,13 @@ func TestTickAISpawns(t *testing.T) {
 			t.Fatal("tickAI's off-tick spawn scan never rejoined on asyncIn2")
 		}
 	}
-	if loop.only().entities.len() <= before {
+	// The spawn is routed into the region owning its random candidate column — count across regions.
+	if totalEntities(loop) <= before {
 		t.Fatalf("tickAI's throttled naturalSpawn should have added a mob over %d ticks: %d -> %d",
-			spawnInterval+1, before, loop.only().entities.len())
+			spawnInterval+1, before, totalEntities(loop))
 	}
 	// And the spawned mob carries a real AI (it will wander next tick).
-	var pig *Entity
-	for _, e := range loop.only().entities.byID {
-		if e.typ == entity.Pig.ID {
-			pig = e
-		}
-	}
+	pig := findEntityOfType(loop, entity.Pig)
 	if pig == nil || pig.ai == nil {
 		t.Fatal("tickAI-spawned Pig must have a real mobAI attached")
 	}
@@ -367,7 +412,7 @@ func TestDebugPigUsesRealAI(t *testing.T) {
 func TestAsyncSpawnRejoinsAndAdds(t *testing.T) {
 	loop, _, floorY := newSpawnLoop(t)
 
-	before := loop.only().entities.len()
+	before := totalEntities(loop)
 	loop.naturalSpawn()
 	if !loop.only().spawnScanPending {
 		t.Fatal("under cap with a standable column, naturalSpawn must SUBMIT an off-tick scan (spawnScanPending)")
@@ -382,15 +427,12 @@ func TestAsyncSpawnRejoinsAndAdds(t *testing.T) {
 	if loop.only().spawnScanPending {
 		t.Fatal("applyTo must CLEAR the single-in-flight gate so the next cycle can submit")
 	}
-	if loop.only().entities.len() != before+1 {
-		t.Fatalf("the async scan + owner add must add exactly one mob: %d -> %d", before, loop.only().entities.len())
+	// The mob is routed into the region owning its random candidate column — count + scan across
+	// regions (loop.only() is region 0 only and would miss a region-1 spawn).
+	if totalEntities(loop) != before+1 {
+		t.Fatalf("the async scan + owner add must add exactly one mob: %d -> %d", before, totalEntities(loop))
 	}
-	var pig *Entity
-	for _, e := range loop.only().entities.byID {
-		if e.typ == entity.Pig.ID {
-			pig = e
-		}
-	}
+	pig := findEntityOfType(loop, entity.Pig)
 	if pig == nil {
 		t.Fatal("the rejoined spawn must add a Pig")
 	}
@@ -400,9 +442,14 @@ func TestAsyncSpawnRejoinsAndAdds(t *testing.T) {
 	if int(pig.y) != floorY+1 {
 		t.Fatalf("the Pig must stand on the floor surface (feet Y=%d), got y=%v", floorY+1, pig.y)
 	}
-	// The add ran on the OWNER (in applyTo), so the bucket index is consistent for near().
+	// The add ran on the OWNER (in applyTo), so the bucket index is consistent for near(). Query
+	// near() on the region that OWNS the pig (its column may be region 1, not region 0).
+	owner := loop.owningRegion(pig.id)
+	if owner == nil {
+		t.Fatal("the async-spawned Pig must be owned by some region")
+	}
 	found := false
-	for _, e := range loop.only().entities.near(pig.x, pig.z, 0) {
+	for _, e := range owner.entities.near(pig.x, pig.z, 0) {
 		if e.id == pig.id {
 			found = true
 		}
@@ -423,7 +470,7 @@ func TestAsyncSpawnCapRecheck(t *testing.T) {
 	if len(cols) == 0 {
 		t.Fatal("expected at least one spawnable column near the player")
 	}
-	cap := categoryCreature.maxInstancesPerChunk() * len(cols)
+	cap := creatureCap(len(cols)) // maxInstancesPerChunk * spawnableChunkCount / MAGIC_NUMBER (vanilla)
 
 	// Submit the scan while the store is EMPTY (well under cap).
 	loop.naturalSpawn()
@@ -442,13 +489,15 @@ func TestAsyncSpawnCapRecheck(t *testing.T) {
 	for i := 0; i < cap; i++ {
 		loop.only().entities.add(NewEntity(loop.idAlloc.AllocID(), entity.Pig, 8.5, float64(floorY+1), 8.5))
 	}
-	atCap := loop.only().entities.len()
+	atCap := totalEntities(loop)
 
 	// Apply the STALE scan result on the owner: the cap re-check must DROP it (no over-cap add).
+	// The cap is GLOBAL/cross-region, and a re-checked spawn would route into either region — count
+	// across regions so a (dropped) region-1 candidate is still accounted for.
 	result.applyTo(loop)
-	if loop.only().entities.len() != atCap {
+	if totalEntities(loop) != atCap {
 		t.Fatalf("a stale scan must NOT over-spawn past the re-checked cap: %d -> %d (cap=%d)",
-			atCap, loop.only().entities.len(), cap)
+			atCap, totalEntities(loop), cap)
 	}
 	if loop.only().spawnScanPending {
 		t.Fatal("applyTo must clear the in-flight gate even when it drops the spawn (no wedge)")
