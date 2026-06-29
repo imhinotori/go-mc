@@ -64,7 +64,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
 
 ### 🚧 v5 Mob Behaviors & Living-Entity Subsystems (Phases 29–36) — IN PROGRESS
 
-- [ ] **Phase 29: Damage Keystone (S2)** — the parallel `*Entity` mob damage/hurt pipeline + `lastDamageSource` + jar-extracted damage-type tags; the widest fan-out, built first.
+- [x] **Phase 29: Damage Keystone (S2)** — the parallel `*Entity` mob damage/hurt pipeline + `lastDamageSource` + jar-extracted damage-type tags; the widest fan-out, built first. (completed 2026-06-29)
 - [ ] **Phase 30: JumpControl + Fluid (S1)** — mob `JumpControl` impulse + `*Entity` fluid predicates; FloatGoal@0 on the pig (oracle + plugin in lockstep).
 - [ ] **Phase 31: PanicGoal (S2 consumer)** — PanicGoal@1 on the pig reading the real `lastDamageSource` + the panic-causing tag set.
 - [ ] **Phase 32: Held-Item + Item Tags (S4)** — nearest-player held-item read + jar-extracted item-food tags; TemptGoal@4 ×2 on the pig.
@@ -89,7 +89,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
 - [x] 29-01-PLAN.md — Tag codegen: GenTags.java (recursive nested-tag flatten) + gen_tags.go → data/tag/ (damage-type AND item tags) [MOB-SUB-03]
 - [x] 29-02-PLAN.md — Entity hurt pipeline: *Entity fields + damage_source.go + combat_mob.go (applyDamageEntity/actuallyHurtEntity + baseTick i-frame decrement) [MOB-SUB-01, MOB-SUB-02]
 - [x] 29-03-PLAN.md — Attack routing + cross-region: handleAttack dual-resolve + damageIntent barrier-queue + was_hurt/last_damage_type handle attrs (-race + strictRegion) [MOB-SUB-01, MOB-SUB-02]
-- [ ] 29-04-PLAN.md — Death + loot + XP: dieEntity (death removal) + dropMobLoot + dropMobExperience (entity-loot de-risk first) [MOB-SUB-01]
+- [x] 29-04-PLAN.md — Death + loot + XP: dieEntity (death removal) + dropMobLoot + dropMobExperience (entity-loot de-risk first) [MOB-SUB-01]
 **Research flag**: yes — the cross-region `damageIntent` barrier-queue is the FIRST true cross-region write; the exact barrier/inbox plumbing (`transferIntent`/`asyncIn2` discipline) must be pinned before coding. Also confirm the registry extraction surfaces damage-type *entries* with their fields (exponent/scaling/message-id) — extend slightly if only IDs are present.
 
 ### Phase 30: JumpControl + Fluid (S1)
@@ -180,7 +180,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
 | 10–16 (v2.0 worldgen + structures) | v2.0 | 22/22 | Complete | 2026-06-25 |
 | 17–20 (v3 online-mode + operator-UX + structure-polish) | v3 | 33/33 | Complete | 2026-06-27 |
 | 21–28 (v4 plugin / scripting system) | v4 | 19/19 | Complete | 2026-06-29 |
-| 29. Damage Keystone (S2) | v5 | 3/4 | In Progress|  |
+| 29. Damage Keystone (S2) | v5 | 4/4 | Complete   | 2026-06-29 |
 | 30. JumpControl + Fluid (S1) | v5 | 0/? | Not started | - |
 | 31. PanicGoal (S2 consumer) | v5 | 0/? | Not started | - |
 | 32. Held-Item + Item Tags (S4) | v5 | 0/? | Not started | - |
