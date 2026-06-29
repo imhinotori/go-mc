@@ -4,14 +4,14 @@ milestone: v5
 milestone_name: Mob Behaviors & Living-Entity Subsystems
 status: executing
 stopped_at: Completed 24-02-PLAN.md — Phase 24 (vanilla-mobs-as-plugins) COMPLETE
-last_updated: "2026-06-29T07:18:55.738Z"
+last_updated: "2026-06-29T07:35:00.370Z"
 last_activity: 2026-06-29
 progress:
   total_phases: 8
   completed_phases: 0
   total_plans: 4
-  completed_plans: 2
-  percent: 50
+  completed_plans: 3
+  percent: 75
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-06-29)
 ## Current Position
 
 Phase: 29 (Damage Keystone (S2)) — EXECUTING
-Plan: 3 of 4
+Plan: 4 of 4
 Status: Ready to execute
 Last activity: 2026-06-29
 
@@ -187,7 +187,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [█████░░░░░] 50%
+Progress: [████████░░] 75%
 
 ## Performance Metrics
 
@@ -296,6 +296,7 @@ Progress: [█████░░░░░] 50%
 | Phase 28 P02 | 38min | 3 tasks | 12 files |
 | Phase 29 P01 | 35min | 3 tasks | 5 files |
 | Phase 29 P02 | 10min | 4 tasks | 6 files |
+| Phase 29 P03 | 30min | 5 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -446,6 +447,8 @@ Recent decisions affecting current work:
 - [Phase ?]: Phase 29-01: damage_type ids assigned by sorted-element index (dynamic registry absent from registries.json); DamageTypeIDs/DamageTypeNames expose name<->id mapping so consumers resolve by name, never magic ids
 - [Phase 29]: 29-02: mob hurt pipeline is a sibling *Entity port of combat.go (applyDamageEntity/actuallyHurtEntity 1:1 with LivingEntity.hurtServer/actuallyHurt; combat.go helpers reused, not duplicated)
 - [Phase 29]: 29-02: lastDamageSource stored as a real damageSource{typeTag,attacker} value (MOB-SUB-02), not a faked hurt flag; is(tag) reads data/tag.DamageTypeTags genuinely
+- [Phase ?]: 29-03: cross-region damage routes via the OWNER region barrier-queue (queueDamageIntent on the source region, drained at applyCrossRegionDamage next to applyCrossRegionTransfers) — the project's first true cross-region write; the same/cross split uses the attacker's region, never t.cur()
+- [Phase ?]: 29-03: mob knockback + sweep deferred (cited) — the routed hit lands (damage + lastDamageSource + on_damage emit) but the post-hit mob impulse is a follow-on; was_hurt handle attr = hurtTime>0
 
 ### Pending Todos
 
@@ -475,7 +478,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-29T07:18:41.598Z
+Last session: 2026-06-29T07:34:34.634Z
 Stopped at: Completed 24-02-PLAN.md — Phase 24 (vanilla-mobs-as-plugins) COMPLETE
 Resume file: None
 Next: OPERATOR CHECKPOINT (19-02 Task 3) — build `CGO_ENABLED=0 go build -o sulfur.exe ./cmd/sulfur`, run `./sulfur.exe -seed 777` in a REAL terminal (expect alt-screen TUI: log viewport + command input), type `say hi`+Enter (expect a `console command cmd=say hi` viewport line), connect a vanilla 26.2 client (expect a join line), Ctrl-C (clean exit), then `./sulfur.exe -seed 777 | cat` (expect NO TUI, plain stderr — today's behavior). On "approved" → mark TUI-01 complete + advance the plan counter, then proceed to Plan 19-03 (gameplay_tick.go join/leave slog conversion + the full disconnect taxonomy). The console line routes TUI→tick (EnqueueConsoleCommand, cap 64, drop-on-full)→runConsoleCommand on the tick→existing graph (grant-all, no issuer), reply to slog. gameplay_tick.go is untouched (19-03 owns it). LEGACY: Phase 17 Wave 2 (17-02/17-03) — see prior continuity below. (GAMEPLAY-05 fluid simulation: OVERWRITE server/fluid.go with the FlowingFluid port + scheduled-tick queue; lazy-init t.fluidSchedule inside tickFluids, do NOT edit tick.go/tick_phases.go) and 17-03 (GAMEPLAY-04 fall damage + PvP dispatch: OVERWRITE server/fall_damage.go using the tickPlayer fallDistance/wasOnGround/lastY fields + the lookupPlayerByEntityID reverse lookup, do NOT edit tick.go/tick_phases.go). The exact Wave-2 seam surface (field names, init point, call sites, stub signatures) is in 17-01-SUMMARY.md "WAVE-2 HANDOFF". Deferred-still-open: dungeon loot/spawner-mob + BeehiveDecorator occupant + pale_garden PaleMoss (all v3, cosmetic, in 13-04-SUMMARY); KeepAlive double-leave hardening (Phase 3). KNOWN PRE-EXISTING FLAKE: TestTickAIDrivesMobs (OPT-01 async-pool timing, not caused by 17-01) intermittently fails under full-suite load; passes in isolation + 3× under -race.
