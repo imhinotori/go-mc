@@ -17,8 +17,8 @@
 
 ### Living-Entity Subsystems (the 4 deferred prerequisites)
 
-- [ ] **MOB-SUB-01**: A mob can take and deal damage — a parallel `*Entity` damage pipeline (`applyDamageEntity`/`actuallyHurtEntity`) reading the mob's real `*attribute.Map`, with i-frame/invulnerable-time gating, the `on_damage` Emit at the post-mitigation site, and player↔mob / mob↔mob / mob↔player attack flows wired. **(S2 — the keystone.)**
-- [ ] **MOB-SUB-02**: A mob records its last damage source — a per-`*Entity` `lastDamageSource` field (owner-thread-safe under Folia), readable by goals via a `was_hurt`/`last_damage_type` handle attr (the real ported source, NOT a faked hurt flag).
+- [x] **MOB-SUB-01**: A mob can take and deal damage — a parallel `*Entity` damage pipeline (`applyDamageEntity`/`actuallyHurtEntity`) reading the mob's real `*attribute.Map`, with i-frame/invulnerable-time gating, the `on_damage` Emit at the post-mitigation site, and player↔mob / mob↔mob / mob↔player attack flows wired. **(S2 — the keystone.)**
+- [x] **MOB-SUB-02**: A mob records its last damage source — a per-`*Entity` `lastDamageSource` field (owner-thread-safe under Folia), readable by goals via a `was_hurt`/`last_damage_type` handle attr (the real ported source, NOT a faked hurt flag).
 - [x] **MOB-SUB-03**: Damage-type tag membership is data-driven — a jar-extracted damage-type tag table (`PANIC_CAUSES`, `BYPASSES_ARMOR`, `IS_FIRE`, …) so `source.is(tag)` reads are genuine, not `const false` (the armor-bypass + panic-causing branches).
 - [ ] **MOB-SUB-04**: A mob can jump on command — a `JumpControl` impulse seam on `mobAI` consumed in `serverAiStep`'s JUMP slot in jar order (the real `jumpFromGround` impulse), claimable by a goal's JUMP flag.
 - [ ] **MOB-SUB-05**: A mob can detect fluid — `mobIsInWater`/`mobFluidHeight`/`isInLava` predicates (built on the existing `fluidAt` read) so FloatGoal and swim behavior work for `*Entity`, not just `*tickPlayer`.
@@ -75,8 +75,8 @@ Every v5 requirement maps to exactly one phase. 21/21 mapped — no orphans, no 
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| MOB-SUB-01 | Phase 29 — Damage Keystone (S2) | Pending |
-| MOB-SUB-02 | Phase 29 — Damage Keystone (S2) | Pending |
+| MOB-SUB-01 | Phase 29 — Damage Keystone (S2) | Complete |
+| MOB-SUB-02 | Phase 29 — Damage Keystone (S2) | Complete |
 | MOB-SUB-03 | Phase 29 — Damage Keystone (S2) | Complete |
 | MOB-SUB-04 | Phase 30 — JumpControl + Fluid (S1) | Pending |
 | MOB-SUB-05 | Phase 30 — JumpControl + Fluid (S1) | Pending |
