@@ -382,16 +382,26 @@ func (t *TickLoop) destroyBlock(p *tickPlayer, pos pk.Position, air block.StateI
 		})
 	}
 
-	if ack {
-		t.reconcileEdit(p, pos, air, sequence) // BlockChangedAck(sequence) + tracking-column BlockUpdate
-	} else {
-		t.broadcastBlockUpdate(pos, air) // delayed-destroy: no sequence to ack, still broadcast the air
-		udebugPlayer(p, "edit", "break(delayed) pos=(%d,%d,%d) -> air (was state=%d)", pos.X, pos.Y, pos.Z, brokenState)
-	}
+	// Phase-27 N=2: the break's per-region effects must land in the region that OWNS this column.
+	// destroyBlock is the single funnel for EVERY break path — the instant/STOP break (destroyAndAck,
+	// on the dispatch goroutine) and the delayed-destroy (tickBlockBreak, on the coordinator) — and
+	// both run with NO specific region registered, so cur() would fall back to region 0 and strand a
+	// region-1 break's fluid kicks (reconcileEdit → scheduleFluidNeighborsOnEdit → cur().fluidSchedule),
+	// support-cascade block ticks (cur().blockTicks), and dropped item (spawnBlockDrop → cur().entities)
+	// all in region 0. Wrap the per-region effect tail in the owning region. The SetBlock + the global
+	// broadcastBlockUpdate above are on the SHARED world / global player list (correct on any goroutine).
+	t.withRegion(t.regionForColumn(columnOf(float64(pos.X)+0.5, float64(pos.Z)+0.5)), func() {
+		if ack {
+			t.reconcileEdit(p, pos, air, sequence) // BlockChangedAck(sequence) + tracking-column BlockUpdate
+		} else {
+			t.broadcastBlockUpdate(pos, air) // delayed-destroy: no sequence to ack, still broadcast the air
+			udebugPlayer(p, "edit", "break(delayed) pos=(%d,%d,%d) -> air (was state=%d)", pos.X, pos.Y, pos.Z, brokenState)
+		}
 
-	// Spawn the dropped Item entity (ServerPlayerGameMode.destroyBlock's loot path). Creative drops
-	// nothing (gated inside spawnBlockDrop).
-	t.spawnBlockDrop(p, pos, brokenState)
+		// Spawn the dropped Item entity (ServerPlayerGameMode.destroyBlock's loot path). Creative drops
+		// nothing (gated inside spawnBlockDrop). Lands in the OWNING region's store (cur().entities.add).
+		t.spawnBlockDrop(p, pos, brokenState)
+	})
 }
 
 // destroyBlockProgress is ServerLevel.destroyBlockProgress(entityId, pos, stage): broadcast a

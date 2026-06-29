@@ -236,43 +236,58 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 		}
 	}
 
-	// BlockItem.canPlace tail: Level.isUnobstructed(state, pos, placementContext(player)). For a
-	// full-cube block the collision shape is the 1×1×1 box at placePos; isUnobstructed REJECTS the
-	// placement if that box overlaps any non-removed, blocksBuilding entity's AABB (the entity arg
-	// is null in placementContext, so even the placer counts). Without this a player could place a
-	// block inside another player/mob. v1 subset: the full-cube shape + the blocksBuilding filter
-	// (players + mobs block; dropped items do NOT — ItemEntity.blocksBuilding is false). Cite:
-	// net.minecraft.world.item.BlockItem.canPlace -> Level.isUnobstructed ->
-	// EntityGetter.isUnobstructed(null, shape) [getEntities + !isRemoved && blocksBuilding && overlap].
-	if t.placementObstructedByEntity(placePos) {
-		return // obstructed by an entity -> !canPlace() -> FAIL, silent no-op
-	}
+	// Phase-27 N=2: the placement MUTATION must run with the region that OWNS placePos's column
+	// registered, so the per-region scheduling reconcileEdit performs (scheduleFluidNeighborsOnEdit →
+	// cur().fluidSchedule, the support-cascade's scheduled block ticks → cur().blockTicks) lands in the
+	// OWNING region's queue rather than blindly region 0. handleUseItemOn runs on the dispatch goroutine
+	// (no region registered), so without this wrap a place in region 1 would schedule its fluid/block
+	// kicks into region 0 — dead. SetBlock itself is on the SHARED world (correct on any goroutine); the
+	// wrap is for the per-region SCHEDULE side. `placed` carries the success out of the closure so the
+	// item-consume (player inventory, region-independent) runs after, exactly as before.
+	placed := false
+	t.withRegion(t.regionForColumn(columnOf(float64(placePos.X)+0.5, float64(placePos.Z)+0.5)), func() {
+		// BlockItem.canPlace tail: Level.isUnobstructed(state, pos, placementContext(player)). For a
+		// full-cube block the collision shape is the 1×1×1 box at placePos; isUnobstructed REJECTS the
+		// placement if that box overlaps any non-removed, blocksBuilding entity's AABB (the entity arg
+		// is null in placementContext, so even the placer counts). Without this a player could place a
+		// block inside another player/mob. v1 subset: the full-cube shape + the blocksBuilding filter
+		// (players + mobs block; dropped items do NOT — ItemEntity.blocksBuilding is false). Cite:
+		// net.minecraft.world.item.BlockItem.canPlace -> Level.isUnobstructed ->
+		// EntityGetter.isUnobstructed(null, shape) [getEntities + !isRemoved && blocksBuilding && overlap].
+		if t.placementObstructedByEntity(placePos) {
+			return // obstructed by an entity -> !canPlace() -> FAIL, silent no-op
+		}
 
-	// placeBlock -> Level.setBlock(getClickedPos(), state). changed=false (unloaded / no-change)
-	// -> no ack, no broadcast (matches placeBlock returning false -> FAIL).
-	if t.world() == nil || !t.world().SetBlock(placePos, placeState, dimMinY) {
-		return
-	}
+		// placeBlock -> Level.setBlock(getClickedPos(), state). changed=false (unloaded / no-change)
+		// -> no ack, no broadcast (matches placeBlock returning false -> FAIL).
+		if t.world() == nil || !t.world().SetBlock(placePos, placeState, dimMinY) {
+			return
+		}
 
-	// LevelChunk.setBlockState hasBlockEntity() branch: a placed block that carries a BlockEntity
-	// (chest) gets its (empty) BlockEntity created + registered synchronously on place. Sulfur's
-	// SetBlock writes only the state, so we replicate the BE creation here — without it a placed
-	// chest has no BE and never opens. CITE: LevelChunk.setBlockState -> EntityBlock.newBlockEntity.
-	t.createBlockEntityOnPlace(placePos, placeState)
+		// LevelChunk.setBlockState hasBlockEntity() branch: a placed block that carries a BlockEntity
+		// (chest) gets its (empty) BlockEntity created + registered synchronously on place. Sulfur's
+		// SetBlock writes only the state, so we replicate the BE creation here — without it a placed
+		// chest has no BE and never opens. CITE: LevelChunk.setBlockState -> EntityBlock.newBlockEntity.
+		t.createBlockEntityOnPlace(placePos, placeState)
 
-	t.reconcileEdit(p, placePos, placeState, int32(sequence))
+		t.reconcileEdit(p, placePos, placeState, int32(sequence))
 
-	// PLUGIN-02 (Plan 22) on_block_place seam: fire ONCE here at the place call site, AFTER the
-	// authoritative SetBlock+reconcileEdit — NOT from the shared broadcastBlockUpdate (Pitfall 2:
-	// break ALSO routes block updates through that broadcaster, so emitting there would double-fire
-	// place on every break). This site is reached only on a real, successful placement. Nil-guarded;
-	// the payload carries the placed pos + state + placer entity id as plain frozen scalars.
-	if t.plugins != nil {
-		t.plugins.Emit(host.EventBlockPlace, host.BlockPlaceEvent{
-			X: placePos.X, Y: placePos.Y, Z: placePos.Z,
-			State:    int(placeState),
-			PlayerID: int(p.entityID),
-		})
+		// PLUGIN-02 (Plan 22) on_block_place seam: fire ONCE here at the place call site, AFTER the
+		// authoritative SetBlock+reconcileEdit — NOT from the shared broadcastBlockUpdate (Pitfall 2:
+		// break ALSO routes block updates through that broadcaster, so emitting there would double-fire
+		// place on every break). This site is reached only on a real, successful placement. Nil-guarded;
+		// the payload carries the placed pos + state + placer entity id as plain frozen scalars.
+		if t.plugins != nil {
+			t.plugins.Emit(host.EventBlockPlace, host.BlockPlaceEvent{
+				X: placePos.X, Y: placePos.Y, Z: placePos.Z,
+				State:    int(placeState),
+				PlayerID: int(p.entityID),
+			})
+		}
+		placed = true
+	})
+	if !placed {
+		return // !canPlace() / SetBlock failed: no consume (matches placeBlock returning false -> FAIL)
 	}
 
 	// BlockItem.place tail -> stack.consume(1, player). ItemStack.consume shrinks the stack by 1
@@ -335,13 +350,16 @@ func (t *TickLoop) shrinkHeldItem(p *tickPlayer, inv *Inventory) {
 // Sulfur reads that off Entity.isItem. The overlap is the half-open AABB intersection
 // (Shapes.joinIsNotEmpty with AND: interiors must overlap, edge-touching does not count).
 func (t *TickLoop) placementObstructedByEntity(pos pk.Position) bool {
-	if t.cur().entities == nil {
-		return false
-	}
 	// The full-cube collision shape at pos: the unit box [pos, pos+1].
 	bx0, by0, bz0 := float64(pos.X), float64(pos.Y), float64(pos.Z)
 	bx1, by1, bz1 := bx0+1, by0+1, bz0+1
-	for _, e := range t.cur().entities.all() {
+	// Phase-27 N=2: an entity occupying the target cell may live in EITHER region — the cell sits on a
+	// region seam (the checkerboard split puts every column's neighbours in the other region), and the
+	// place path runs on the dispatch/coordinator goroutine where cur() resolves to one region only.
+	// Scan ACROSS regions near the cell so a mob in region B blocks a place issued for region A's column
+	// (the obstruction guard must see every blocksBuilding entity, exactly like vanilla's null-entity
+	// isUnobstructed). entitiesNearAcrossRegions bounds the scan to the cell's column neighbourhood.
+	for _, e := range t.entitiesNearAcrossRegions(float64(pos.X)+0.5, float64(pos.Z)+0.5, 1) {
 		if e == nil || e.isItem {
 			continue // dropped items have blocksBuilding=false: they never obstruct a placement
 		}
