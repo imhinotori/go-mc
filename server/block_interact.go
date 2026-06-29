@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/level/component"
 	pk "github.com/imhinotori/sulfur/net/packet"
@@ -267,7 +268,7 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 		// (players + mobs block; dropped items do NOT — ItemEntity.blocksBuilding is false). Cite:
 		// net.minecraft.world.item.BlockItem.canPlace -> Level.isUnobstructed ->
 		// EntityGetter.isUnobstructed(null, shape) [getEntities + !isRemoved && blocksBuilding && overlap].
-		if t.placementObstructedByEntity(placePos) {
+		if t.placementObstructedByEntity(placePos, p) {
 			return // obstructed by an entity -> !canPlace() -> FAIL, silent no-op
 		}
 
@@ -362,27 +363,47 @@ func (t *TickLoop) shrinkHeldItem(p *tickPlayer, inv *Inventory) {
 // FALSE for dropped items (ItemEntity), so a drop lying in the cell does NOT block the place;
 // Sulfur reads that off Entity.isItem. The overlap is the half-open AABB intersection
 // (Shapes.joinIsNotEmpty with AND: interiors must overlap, edge-touching does not count).
-func (t *TickLoop) placementObstructedByEntity(pos pk.Position) bool {
+func (t *TickLoop) placementObstructedByEntity(pos pk.Position, placer *tickPlayer) bool {
 	// The full-cube collision shape at pos: the unit box [pos, pos+1].
 	bx0, by0, bz0 := float64(pos.X), float64(pos.Y), float64(pos.Z)
 	bx1, by1, bz1 := bx0+1, by0+1, bz0+1
-	// Phase-27 N=2: an entity occupying the target cell may live in EITHER region — the cell sits on a
-	// region seam (the checkerboard split puts every column's neighbours in the other region), and the
-	// place path runs on the dispatch/coordinator goroutine where cur() resolves to one region only.
-	// Scan ACROSS regions near the cell so a mob in region B blocks a place issued for region A's column
-	// (the obstruction guard must see every blocksBuilding entity, exactly like vanilla's null-entity
-	// isUnobstructed). entitiesNearAcrossRegions bounds the scan to the cell's column neighbourhood.
-	for _, e := range t.entitiesNearAcrossRegions(float64(pos.X)+0.5, float64(pos.Z)+0.5, 1) {
-		if e == nil || e.isItem {
-			continue // dropped items have blocksBuilding=false: they never obstruct a placement
-		}
-		// e's feet-anchored AABB (centered on x/z, base at y, top at y+height).
-		hw := e.width / 2
-		ex0, ey0, ez0 := e.x-hw, e.y, e.z-hw
-		ex1, ey1, ez1 := e.x+hw, e.y+e.height, e.z+hw
+
+	overlaps := func(ex, ey, ez, w, h float64) bool {
+		hw := w / 2
+		ex0, ey0, ez0 := ex-hw, ey, ez-hw
+		ex1, ey1, ez1 := ex+hw, ey+h, ez+hw
 		// Half-open interior overlap on all three axes (AABB.intersects: lower < other.upper &&
 		// other.lower < upper). Edge-flush (a box exactly atop the cell face) does NOT overlap.
-		if bx0 < ex1 && ex0 < bx1 && by0 < ey1 && ey0 < by1 && bz0 < ez1 && ez0 < bz1 {
+		return bx0 < ex1 && ex0 < bx1 && by0 < ey1 && ey0 < by1 && bz0 < ez1 && ez0 < bz1
+	}
+
+	// THE PLACER: test its LIVE tickPlayer position (p.x/y/z), NOT its store entity. The store
+	// playerEntity is re-synced from the tickPlayer in tickEntities → syncPlayerEntities, which runs
+	// AFTER the place packet is dispatched in resolveSubtickInputs — so during the place the store
+	// entity still holds the PREVIOUS tick's position. A player who jumped this tick (p.y already
+	// raised by the MovePlayerPos dispatched just before) was still seen at his old feet Y in the
+	// store, so a place into the just-vacated cell was wrongly "obstructed by the player" — the
+	// "jump + place under you always fails" bug. Use the authoritative live position instead.
+	if placer != nil && overlaps(placer.x, placer.y, placer.z, entity.Player.Width, entity.Player.Height) {
+		return true
+	}
+
+	// OTHER entities: Phase-27 N=2 — an entity occupying the target cell may live in EITHER region
+	// (the checkerboard split puts a column's neighbours in the other region) and the place runs on the
+	// dispatch/coordinator goroutine where cur() resolves to one region only. Scan ACROSS regions near
+	// the cell so a mob in region B blocks a place for region A's column (vanilla's null-entity
+	// isUnobstructed sees every blocksBuilding entity). SKIP the placer's own store entity here — it was
+	// already tested above against its live position (testing the stale store copy too would re-introduce
+	// the bug). entitiesNearAcrossRegions bounds the scan to the cell's column neighbourhood.
+	var placerEntityID int32 = -1
+	if placer != nil && placer.playerEntity != nil {
+		placerEntityID = placer.playerEntity.id
+	}
+	for _, e := range t.entitiesNearAcrossRegions(float64(pos.X)+0.5, float64(pos.Z)+0.5, 1) {
+		if e == nil || e.isItem || e.id == placerEntityID {
+			continue // dropped items never obstruct; the placer is handled above via its live position
+		}
+		if overlaps(e.x, e.y, e.z, e.width, e.height) {
 			return true // a blocksBuilding entity occupies the cell -> obstructed
 		}
 	}

@@ -200,13 +200,13 @@ func TestPlacementCollisionSeesRegion1(t *testing.T) {
 
 	// The obstruction scan runs on the dispatch/coordinator goroutine (no region registered) — exactly
 	// where the bug lived. It must see the region-1 mob across regions and report obstructed.
-	if !loop.placementObstructedByEntity(placePos) {
+	if !loop.placementObstructedByEntity(placePos, nil) {
 		t.Fatal("a mob in region 1 occupying the cell must obstruct the placement (cross-region scan missing)")
 	}
 
 	// Sanity: an empty cell far from the mob is NOT obstructed.
 	clear := region1Pos(0, 64, 0)
-	if loop.placementObstructedByEntity(clear) {
+	if loop.placementObstructedByEntity(clear, nil) {
 		t.Fatal("an empty region-1 cell must not be reported obstructed")
 	}
 }
