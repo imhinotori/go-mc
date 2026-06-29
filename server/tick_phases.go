@@ -292,22 +292,37 @@ func (t *TickLoop) tickAI() {
 		return // defensive: store is non-nil from NewTickLoop, but never panic if absent
 	}
 
-	// Snapshot the AI mobs so the loop is stable even if a spawn (below) or a move re-buckets
-	// mid-range — exactly the discipline tickPhysics uses (copy the byID values, then range).
+	// MOB-SUB-01 (Plan 29-02 / WR-03): the LivingEntity.baseTick i-frame decrement, run as its OWN
+	// per-entity step BEFORE serverAiStep — never inside a goal callback / navigation.tick. In vanilla
+	// baseTick the hurtTime--/invulnerableTime-- block runs in LivingEntity.tick() ahead of aiStep ->
+	// serverAiStep for EVERY LivingEntity, INDEPENDENT of whether it has a goalSelector. Iterate the
+	// FULL store (NOT the AI-only snapshot): an AI-less living entity that takes a hit arms its
+	// invulnerableTime to 20 and would otherwise NEVER decrement, leaving it stuck in the upper i-frame
+	// half (effectively immune). tickMobIFrames is self-gated (only touches hurtTime/invulnerableTime
+	// when > 0), so it is a harmless no-op for non-living entities (items, XP orbs) that never arm them
+	// — there is no isLiving flag yet, and gating on >0 is exactly equivalent to vanilla's per-field
+	// `if (... > 0)`.
+	//
+	//	[VERIFIED javap net.minecraft.world.entity.LivingEntity.baseTick: at the isAlive-branch target
+	//	 the block is `if (hurtTime > 0) hurtTime--;` (unconditional for every LivingEntity) then
+	//	 `if (invulnerableTime > 0 && !(this instanceof ServerPlayer)) invulnerableTime--;` — neither
+	//	 gated on AI. The ServerPlayer guard is honored elsewhere (combat.go ServerPlayer.tick); mobs
+	//	 here are never ServerPlayer, so both fields decrement.]
+	//
+	// It is PURE INTEGER MATH (no RNG draw), so it cannot perturb the per-mob RNG stream the pig oracle
+	// pins (PITFALLS Pitfall 5), and it stays structurally outside the AI RNG flow (its own loop, before
+	// serverAiStep).
+	for _, e := range t.cur().entities.byID {
+		t.tickMobIFrames(e)
+	}
+
+	// Snapshot the AI mobs so the serverAiStep loop is stable even if a spawn (below) or a move
+	// re-buckets mid-range — exactly the discipline tickPhysics uses (copy the byID values, then range).
 	snapshot := make([]*Entity, 0, len(t.cur().entities.byID))
 	for _, e := range t.cur().entities.byID {
 		if e.ai != nil {
 			snapshot = append(snapshot, e)
 		}
-	}
-	// MOB-SUB-01 (Plan 29-02): the LivingEntity.baseTick i-frame decrement, run as its OWN per-mob
-	// step BEFORE serverAiStep — never inside a goal callback / navigation.tick. In vanilla baseTick
-	// (the hurtTime--/invulnerableTime-- block) runs in LivingEntity.tick() ahead of aiStep ->
-	// serverAiStep, and it is PURE INTEGER MATH (no RNG draw), so it cannot perturb the per-mob RNG
-	// stream the pig oracle pins (PITFALLS Pitfall 5). Kept a separate loop over the same snapshot so
-	// the i-frame countdown is structurally outside the AI RNG flow.
-	for _, e := range snapshot {
-		t.tickMobIFrames(e)
 	}
 
 	for _, e := range snapshot {
