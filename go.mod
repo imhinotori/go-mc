@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/google/uuid v1.3.0
+	github.com/petermattis/goid v0.0.0-20260625140558-4207c655779d
 	github.com/sourcegraph/conc v0.3.0
 	golang.org/x/exp v0.0.0-20231006140011-7918f672742d
 )

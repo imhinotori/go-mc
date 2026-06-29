@@ -1,44 +1,25 @@
 package server
 
-import (
-	"bytes"
-	"runtime"
-	"strconv"
-)
+import "github.com/petermattis/goid"
 
-// goroutine_id.go provides curGoroutineID — a tiny helper to read the running goroutine's id from
-// the runtime stack header. It exists ONLY to support the Phase-27 N=2 per-goroutine current-region
-// resolution (region.go's currentRegion map): each region's fan-out goroutine registers ITSELF as
-// the current region for the duration of its tick, so the ~200 existing `t.only()` call sites in the
-// per-region phases (physics/AI/spawner/etc.) route to the OWNING region's store WITHOUT being
-// rewritten. This is the lowest-churn way to scope the single-owner store per region across the conc
-// fan-out (an explicit thread-through of *region into 200 call sites would be a vastly larger,
-// error-prone change with no behavior benefit).
+// goroutine_id.go provides curGoroutineID — the goroutine-local key for the Phase-27 N=2
+// per-goroutine current-region resolution (region.go's currentRegion map): each region's fan-out
+// goroutine registers ITSELF as the current region for the duration of its tick, so the ~170 existing
+// `t.only()` call sites in the per-region phases (physics/AI/spawner/etc.) route to the OWNING
+// region's store WITHOUT being rewritten.
 //
-// The id is parsed from the first line of runtime.Stack ("goroutine N [running]: ..."). This is the
-// well-known Go idiom for a goroutine-local; it is called exactly ONCE per region per tick (at
-// region.tick entry/exit and inside only()'s lookup) — a handful of times per tick total — so the
-// cost is negligible relative to the tick budget. It is NEVER used for game logic, only to key the
-// current-region map so the store resolves correctly per fan-out goroutine.
+// PERF (regression fix): only() is NOT called "a handful of times per tick" — it is on the HOTTEST
+// path (every block read in clipAxis/boxOverlapsSolid during tickPhysics calls it), i.e. millions of
+// times per tick. The previous implementation read the id from runtime.Stack(), which forces a FULL
+// goroutine stack traceback on EVERY call (the small buffer only truncates the OUTPUT, not the work).
+// A CPU profile showed only()->runtime.Stack() at ~73% of the tick budget (~500ms ticks). goid.Get()
+// reads the goroutine id directly from the g struct via a per-Go-version field offset (assembly /
+// linkname, no traceback) in ~1ns — the standard fast goroutine-local technique (the same approach
+// xsync and other concurrency libs use). It is pure-Go (CGO_ENABLED=0 preserved) and is used ONLY to
+// key the current-region map, never for game logic.
 
-// goroutineStackHeader is the fixed prefix runtime.Stack writes before the goroutine number.
-var goroutineStackHeader = []byte("goroutine ")
-
-// curGoroutineID returns the running goroutine's numeric id. It reads only the small stack header
-// (runtime.Stack with a tiny buffer and all=false), so it does not walk the whole stack.
+// curGoroutineID returns the running goroutine's numeric id (a fast g-struct offset read, no stack
+// traceback).
 func curGoroutineID() int64 {
-	var buf [64]byte
-	n := runtime.Stack(buf[:], false)
-	b := buf[:n]
-	b = bytes.TrimPrefix(b, goroutineStackHeader)
-	// b now begins with the decimal id followed by a space.
-	i := bytes.IndexByte(b, ' ')
-	if i < 0 {
-		return 0
-	}
-	id, err := strconv.ParseInt(string(b[:i]), 10, 64)
-	if err != nil {
-		return 0
-	}
-	return id
+	return goid.Get()
 }
