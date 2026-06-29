@@ -300,6 +300,16 @@ func (t *TickLoop) tickAI() {
 			snapshot = append(snapshot, e)
 		}
 	}
+	// MOB-SUB-01 (Plan 29-02): the LivingEntity.baseTick i-frame decrement, run as its OWN per-mob
+	// step BEFORE serverAiStep — never inside a goal callback / navigation.tick. In vanilla baseTick
+	// (the hurtTime--/invulnerableTime-- block) runs in LivingEntity.tick() ahead of aiStep ->
+	// serverAiStep, and it is PURE INTEGER MATH (no RNG draw), so it cannot perturb the per-mob RNG
+	// stream the pig oracle pins (PITFALLS Pitfall 5). Kept a separate loop over the same snapshot so
+	// the i-frame countdown is structurally outside the AI RNG flow.
+	for _, e := range snapshot {
+		t.tickMobIFrames(e)
+	}
+
 	for _, e := range snapshot {
 		e.ai.serverAiStep(t, e) // 07-01 goals + 07-02 navigation: the real ported AI walk
 	}

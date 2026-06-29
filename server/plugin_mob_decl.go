@@ -385,6 +385,12 @@ func collectGoalDecls(list *starlark.List) ([]goalDecl, error) {
 func (t *TickLoop) spawnDeclaredMob(decl *mobDecl, x, y, z float64) *Entity {
 	e := NewEntity(t.idAlloc.AllocID(), decl.baseType, x, y, z)
 	seedAttributes(e.attributes, decl.attrs)
+	// MOB-SUB-01 (Plan 29-02): initialize health to the mob's MaxHealth, the port of
+	// LivingEntity.<init>'s `setHealth(getMaxHealth())` (getMaxHealth() == (float) getAttributeValue(
+	// MAX_HEALTH)). seedAttributes has already applied the declared max_health override (the vanilla pig
+	// is 10.0), so this reads the FINAL folded value — a mob born with health 0 would be instantly dead
+	// in applyDamageEntity's isDeadOrDying guard. The d2f narrowing matches vanilla's getMaxHealth cast.
+	e.health = float32(e.getAttributeValue(attribute.MaxHealth))
 	e.ai = buildAIFromDecl(t, decl)
 	// Per-entity RNG reseed (Mob.getRandom() analogue): buildAIFromDecl seeds the rng with the SHARED
 	// defaultEntityRandomSeed, so WITHOUT this every declared mob would draw the IDENTICAL stream —

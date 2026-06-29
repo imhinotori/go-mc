@@ -141,6 +141,42 @@ type Entity struct {
 	// — a visual the metadata subsystem surfaces). Tick-owned (TICK-05).
 	leftHanded bool
 
+	// --- MOB-SUB-01/02: the *Entity hurt-pipeline state (Plan 29-02) ----------------------
+	//
+	// These are the *Entity siblings of the tickPlayer combat fields (health/lastHurt/
+	// invulnerableTime/hurtTime/hurtDuration in server/combat.go), mirroring the private
+	// net.minecraft.world.entity.LivingEntity fields (decompiled from temp/cache/26.2-inner.jar this
+	// session). They are PLAIN VALUE types — set for a goal-bearing mob (health initialized to its
+	// MaxHealth at spawn) and read/written ONLY on the tick goroutine (TICK-05). They carry the SAME
+	// snapshot-friendly exemption ai/attributes carry (l.119-135): damageSource is a small value struct
+	// (an int enum + an int32, NO pointers), so the contract above holds — they travel with the
+	// *Entity at the barrier with no special handling.
+
+	// health is LivingEntity.health (setHealth subtracts; clamp at 0). Initialized to the mob's
+	// MaxHealth at the spawn site (a mob born with health 0 would be instantly dead).
+	health float32
+
+	// lastHurt is LivingEntity.lastHurt: the previous hit's amount, the i-frame excess gate in
+	// hurtServer (`if (amount <= lastHurt) return false` within the 10.0F window).
+	lastHurt float32
+
+	// invulnerableTime is LivingEntity.invulnerableTime: the i-frame window (armed to 20 on a fresh
+	// hit, decremented each tick in baseTick — the `> 10.0F` upper half is the anti-spam half).
+	invulnerableTime int32
+
+	// hurtTime is LivingEntity.hurtTime: the red-flash timer (decremented unconditionally each tick in
+	// baseTick). Set to hurtDuration on a fresh hit.
+	hurtTime int32
+
+	// hurtDuration is LivingEntity.hurtDuration: set to 10 on a fresh hit (`hurtDuration = 10;
+	// hurtTime = hurtDuration`).
+	hurtDuration int32
+
+	// lastDamageSource is LivingEntity.lastDamageSource — the genuine ported source set in the flag2
+	// (fresh-hit) block of hurtServer (bytecode 449-451). MOB-SUB-02: PanicGoal (P31) reads its tag,
+	// wolf anger (P36) reads its attacker. A plain value (no pointer) — the Folia rule.
+	lastDamageSource damageSource
+
 	// --- GAMEPLAY-07: delta-move tracking state (ServerEntity.sendChanges) ----------------
 	//
 	// These mirror net.minecraft.server.level.ServerEntity's per-entity send state so the
