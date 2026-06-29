@@ -85,6 +85,24 @@ func waterLevelOf(id block.StateID) (level int, isWater bool) {
 	return 0, false
 }
 
+// lavaLevelOf reads the legacy lava level (0=source, 1..7 flowing, 8..15 falling) of a state id,
+// reporting isLava=false for any non-lava block. The exact mirror of waterLevelOf but matching the
+// generated block.Lava{Level Integer} (level/block/blocks.go: `Lava struct { Level Integer }`,
+// ID "minecraft:lava"). Cite net.minecraft.world.level.material.LavaFluid / the fluid registry:
+// lava carries the SAME legacy "level" property as water (FlowingFluid.getLegacyLevel is shared),
+// so the level→amount inversion in decodeFluid is identical; only the FLOW constants differ (lava's
+// overworld getDropOff -> iconst_2 = 2 vs water's 1, javap-verified), which is a flow-sim concern
+// DEFERRED this phase (decode-only satisfies MOB-SUB-05; FloatGoal only READS lava, never flows it).
+func lavaLevelOf(id block.StateID) (level int, isLava bool) {
+	if id < 0 || int(id) >= len(block.StateList) {
+		return 0, false
+	}
+	if l, ok := block.StateList[id].(block.Lava); ok {
+		return int(l.Level), true
+	}
+	return 0, false
+}
+
 // waterStateID returns the state id for water at the given legacy level. Source:
 // block.ToStateID[block.Water{Level Integer}].
 func waterStateID(level int) block.StateID {
@@ -103,6 +121,13 @@ func airStateID() block.StateID {
 // -> amount = 8 - legacy.
 type fluidState struct {
 	isWater bool
+	// isLava marks a lava cell (block.Lava). A cell is water XOR lava XOR neither — isWater and
+	// isLava are never both true. The decode is the full-lava read MOB-SUB-05 needs (do NOT stub
+	// lava as const-false). Cite net.minecraft.world.level.material.LavaFluid / FluidTags.LAVA.
+	// Lava FLOW SIMULATION is DEFERRED (FlowingFluid.tick for lava): no existing .isWater consumer
+	// reads isLava, and the water flow scheduler keeps its `if fs.isWater` guards, so lava is never
+	// flowed by the water sim — the extension is decode-only and water behavior is unperturbed.
+	isLava  bool
 	source  bool
 	falling bool
 	amount  int // 1..8; the FlowingFluid "amount" (8 = full source-equivalent height)
@@ -115,26 +140,55 @@ type fluidState struct {
 //	level 1..7    -> flowing, amount = 8 - level, falling=false
 //	level 8..15   -> falling, amount = 8 - (level - 8) = 16 - level, falling=true
 func decodeFluid(id block.StateID) fluidState {
-	legacy, ok := waterLevelOf(id)
-	if !ok {
-		return fluidState{}
+	if legacy, ok := waterLevelOf(id); ok {
+		switch {
+		case legacy == 0:
+			return fluidState{isWater: true, source: true, amount: waterSourceAmount}
+		case legacy <= 7:
+			return fluidState{isWater: true, amount: waterSourceAmount - legacy}
+		default: // 8..15 falling
+			return fluidState{isWater: true, falling: true, amount: waterSourceAmount - (legacy - 8)}
+		}
 	}
-	switch {
-	case legacy == 0:
-		return fluidState{isWater: true, source: true, amount: waterSourceAmount}
-	case legacy <= 7:
-		return fluidState{isWater: true, amount: waterSourceAmount - legacy}
-	default: // 8..15 falling
-		return fluidState{isWater: true, falling: true, amount: waterSourceAmount - (legacy - 8)}
+	// Lava branch (MOB-SUB-05 full-lava decode). FlowingFluid.getLegacyLevel is SHARED by Water and
+	// Lava, so the level→amount inversion is IDENTICAL to water above — only the isLava/isWater flag
+	// differs. Decode-only: the lava amount/falling trio is read by mobInLava / mobFluidHeight(LAVA);
+	// the differing lava flow constants (getDropOff=2 overworld, javap LavaFluid) belong to the
+	// DEFERRED lava flow sim, not the decode. A non-lava, non-water id returns the zero fluidState.
+	if legacy, ok := lavaLevelOf(id); ok {
+		switch {
+		case legacy == 0:
+			return fluidState{isLava: true, source: true, amount: waterSourceAmount}
+		case legacy <= 7:
+			return fluidState{isLava: true, amount: waterSourceAmount - legacy}
+		default: // 8..15 falling
+			return fluidState{isLava: true, falling: true, amount: waterSourceAmount - (legacy - 8)}
+		}
 	}
+	return fluidState{}
 }
 
-// encodeFluid turns a fluidState into the state id to write (air when not water).
+// lavaStateID returns the state id for lava at the given legacy level. Source:
+// block.ToStateID[block.Lava{Level Integer}]. Mirrors waterStateID.
+func lavaStateID(level int) block.StateID {
+	return block.ToStateID[block.Lava{Level: block.Integer(level)}]
+}
+
+// encodeFluid turns a fluidState into the state id to write (air when neither water nor lava).
+// The lava branch is defensive: the water flow sim NEVER feeds a lava fluidState here (every
+// spread/tick path is `if fs.isWater`-guarded — see the consumer audit), so this is unreachable
+// from the current scheduler. It is written 1:1 so the DEFERRED lava flow sim can route through
+// the same primitive without re-deriving the encode, and so a lava state can never silently
+// collapse to air. getLegacyLevel is shared by both fluids (FlowingFluid.getLegacyLevel).
 func encodeFluid(f fluidState) block.StateID {
-	if !f.isWater {
+	switch {
+	case f.isWater:
+		return waterStateID(getLegacyLevel(f.amount, f.falling, f.source))
+	case f.isLava:
+		return lavaStateID(getLegacyLevel(f.amount, f.falling, f.source))
+	default:
 		return airStateID()
 	}
-	return waterStateID(getLegacyLevel(f.amount, f.falling, f.source))
 }
 
 // tickFluids is the GAMEPLAY-05 fluid pass, called from tickWorld each tick (wired by 17-01 in
