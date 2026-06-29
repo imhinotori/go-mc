@@ -161,6 +161,20 @@ type TickLoop struct {
 	// same goroutines — a genuine concurrent map access (a plain map would race the parallel fan-out).
 	currentRegion *xsync.Map[int64, *region]
 
+	// spawnLiveCreatureSnapshot is the GLOBAL live-CREATURE count snapshotted on the coordinator at the
+	// QUIESCENT point right before the region fan-out, for naturalSpawn's pre-submit cap gate (Phase-27
+	// N=2). naturalSpawn runs INSIDE the parallel fan-out, where ranging another region's store
+	// (countByCategoryAcrossRegions) would RACE that region's concurrent tickAI/physics mutations. The
+	// cap, however, spans ALL players/regions — a per-region countByCategory() under-counts and lets
+	// each region submit a scan even when the GLOBAL cap is met. So the coordinator computes the
+	// cross-region count once while every region is quiescent (no race) and stashes it here; naturalSpawn
+	// reads this immutable snapshot during the fan-out. It is exactly a "snapshot" gate (the comment at
+	// the gate already says the count is a snapshot the apply-time re-check re-validates), now a GLOBAL
+	// snapshot instead of a per-region one. The authoritative anti-flood remains the quiescent
+	// apply-time countByCategoryAcrossRegions re-check (spawnCandidatesReady.applyTo). Written only on
+	// the coordinator before the fan-out; read-only during the fan-out (TICK-05, race-clean).
+	spawnLiveCreatureSnapshot int
+
 	// strictRegion arms the per-region access guard in cur(): when true, a cur() call from a
 	// goroutine with NO region registered PANICS instead of silently falling back to globalRegion.
 	// It is the catch for the systemic regionization bug class (Phase-27 N=2): coordinator-phase and

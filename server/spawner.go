@@ -311,9 +311,23 @@ func (t *TickLoop) naturalSpawn() {
 	// state.spawnableChunkCount * maxInstancesPerChunk (getFilteredSpawningCategories). Gate it on
 	// the owner BEFORE submitting (don't burn an off-tick scan when already at cap); the count is a
 	// snapshot, so applyTo RE-CHECKS it before the add (the load-bearing anti-flood, Pitfall 3).
+	//
+	// Phase-27 N=2: the cap spans ALL players/regions, so the pre-submit count must be GLOBAL too (a
+	// per-region countByCategory() under-counts and lets each region submit even at the global cap).
+	// But naturalSpawn runs INSIDE the parallel fan-out, where ranging another region's live store
+	// would RACE its concurrent mutations. So: when a region is registered (the production fan-out),
+	// read the coordinator's quiescent pre-fan-out snapshot (spawnLiveCreatureSnapshot — race-free);
+	// when NONE is registered (a direct single-threaded test call), no region is ticking, so a live
+	// cross-region count is race-free — compute it directly. Either way the count is GLOBAL and matches
+	// the apply-time countByCategoryAcrossRegions re-check (async.go).
 	spawnableChunkCount := len(cols)
 	cap := categoryCreature.maxInstancesPerChunk() * spawnableChunkCount
-	live := t.countByCategory()[categoryCreature]
+	var live int
+	if _, inFanOut := t.resolveRegion(); inFanOut {
+		live = t.spawnLiveCreatureSnapshot // race-free snapshot the coordinator took while quiescent
+	} else {
+		live = t.countByCategoryAcrossRegions()[categoryCreature] // direct call: quiescent, live is safe
+	}
 	if live >= cap {
 		return // AT or OVER cap: the anti-flood gate (Pitfall 3) — submit no scan
 	}

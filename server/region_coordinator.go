@@ -134,6 +134,13 @@ func (t *TickLoop) tickOnce() {
 	gt := t.gametime // the ONE shared tick number every region reads this tick (Pitfall 3 /
 	// T-27-02-GT): a single value the coordinator passes into each region.tick, read-only.
 
+	// Phase-27 N=2 SPAWN-CAP SNAPSHOT: compute the GLOBAL live-CREATURE count NOW, while every region is
+	// quiescent (the fan-out has not started), so naturalSpawn's pre-submit cap gate reads a race-free
+	// cross-region count during the parallel fan-out instead of ranging another region's live store. The
+	// cap spans all players/regions; the apply-time re-check (also cross-region, at the barrier) remains
+	// the authoritative anti-flood. countByCategoryAcrossRegions is safe here (no region is ticking).
+	t.spawnLiveCreatureSnapshot = t.countByCategoryAcrossRegions()[categoryCreature]
+
 	// --- FAN OUT: each region ticks its OWN entity store in PARALLEL (TICK-05 per region) — the
 	// per-region entity phases (tickAI + tickPhysics + detectTransfers). conc.WaitGroup.Go spawns the
 	// region tick under a per-region recover; wg.Wait re-raises the FIRST region panic's value + stack
