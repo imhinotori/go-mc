@@ -148,9 +148,179 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 // markHurt() (the velocity-changed/hurt-marker metadata dirty flag) is DEFERRED here: it is NOT the
 // red flash (broadcastDamageEvent IS), and the SynchedEntityData velocity-changed marker has no v1
 // metadata reader yet. Cited deferral, structured so a markHurt analogue slots in unchanged when the
-// metadata dirty path lands; knockback stays deferred exactly as the rest of the hurt tail leaves it.
+// metadata dirty path lands.
+//
+// KNOCKBACK (WR-04, the in-game "mob doesn't recoil" gap): the tookFullDamage tail's
+// `if (!source.is(NO_KNOCKBACK)) dealDefaultKnockback(source, damage, blocked)` (bytecode 352-367) IS
+// now ported — broadcastMobDamageEvent runs the FULL tookFullDamage tail in vanilla order
+// (broadcastDamageEvent -> [markHurt deferred] -> dealDefaultKnockback), so the mob recoils on a hit.
+// The damage amount (the `damage` arg dealDefaultKnockback receives) is hurtServer's fload_3 — the
+// PRE-mitigation amount passed into hurtServer — but it is unused by dealDefaultKnockback/knockback in
+// v1 (knockback's `damage` param feeds only the deferred projectile/effect branches), so it is not
+// threaded here. blocked is the `iload 7` flag (shield-block); v1 has no shields, so blocked == false
+// always, which makes indicateDamage fire — and indicateDamage is itself a deferred no-op (it is the
+// client hurt-direction tilt, already covered by ClientboundDamageEvent's directional data).
+//
+//	[VERIFIED javap LivingEntity.hurtServer tookFullDamage tail (bytecode 321-367): broadcastDamageEvent
+//	 -> if(!is(NO_IMPACT)) markHurt -> if(!is(NO_KNOCKBACK)) dealDefaultKnockback(source, damage, blocked).]
 func (t *TickLoop) broadcastMobDamageEvent(e *Entity, src damageSource) {
 	t.broadcastToTrackers(e.id, encodeDamageEvent(e.id, int32(src.typeTag), src.attacker, src.attacker))
+
+	// `if (!source.is(NO_KNOCKBACK)) dealDefaultKnockback(...)` — a genuine tag read (no Phase-29 damage
+	// type is in NO_KNOCKBACK, but the branch is the real read so a future no-knockback source skips it).
+	if !src.is("no_knockback") {
+		t.dealDefaultKnockbackEntity(e, src)
+	}
+}
+
+// dealDefaultKnockbackEntity is the port of LivingEntity.dealDefaultKnockback(DamageSource, float,
+// boolean) for a mob, the non-projectile branch (v1 has no projectiles). It resolves the source
+// position (the attacker's position for a melee hit) and drives knockback away from it:
+//
+//	double xd = 0, zd = 0;
+//	Entity direct = source.getDirectEntity();
+//	if (direct instanceof Projectile) { ... }            // v1: no projectiles — skip
+//	else if (source.getSourcePosition() != null) {
+//	    Vec3 sp = source.getSourcePosition();
+//	    xd = sp.x - this.getX();
+//	    zd = sp.z - this.getZ();
+//	}
+//	this.knockback(0.4, xd, zd, source, damage);
+//	if (!blocked) this.indicateDamage(xd, zd);           // indicateDamage is a no-op (bytecode `return`)
+//
+// getSourcePosition() returns damageSourcePosition if set, else the directEntity's position
+// (DamageSource.getSourcePosition: `damageSourcePosition != null ? damageSourcePosition :
+// directEntity != null ? directEntity.position() : null`). For a player melee hit the source carries
+// the attacker entity (src.attacker), so the source position is the ATTACKER's (x,z) — resolved here
+// via playerByEntityID. A source with no resolvable attacker position (attacker 0 / a departed
+// attacker / an environmental hit) leaves xd==zd==0, and knockback's RNG guard then nudges the mob in
+// a tiny random direction (vanilla's xd²+zd²<1e-5 guard) so even a zero-direction hit still recoils.
+//
+//	[VERIFIED javap LivingEntity.dealDefaultKnockback: getDirectEntity instanceof Projectile branch,
+//	 else getSourcePosition()!=null -> xd = sp.x - getX(), zd = sp.z - getZ(); knockback(0.4, xd, zd,
+//	 source, damage); if(!blocked) indicateDamage(xd, zd). LivingEntity.indicateDamage: `return` (no-op).]
+func (t *TickLoop) dealDefaultKnockbackEntity(e *Entity, src damageSource) {
+	// xd/zd default to 0 (the dconst_0 dstore at bytecode 0-4). v1 has no Projectile direct entity, so
+	// only the getSourcePosition()!=null branch can set them.
+	var xd, zd float64
+
+	// source.getSourcePosition(): for a melee hit the directEntity == the attacker, whose position is
+	// (attacker.x, attacker.z). Resolve the attacker tickPlayer; a nil resolve (no attacker / departed)
+	// leaves the source position "null" (xd==zd==0), exactly as getSourcePosition returns null when
+	// there is no damageSourcePosition and no directEntity.
+	if src.attacker != 0 {
+		if attacker := t.playerByEntityID(src.attacker); attacker != nil {
+			xd = attacker.x - e.x
+			zd = attacker.z - e.z
+		}
+	}
+
+	// knockback(0.4, xd, zd, source, damage): the 0.4 is the ldc2_w #1792 (0.4000000059604645d) power.
+	t.knockbackEntity(e, knockbackDefaultPower, xd, zd)
+
+	// indicateDamage(xd, zd): LivingEntity.indicateDamage is `return` (a no-op for a mob — it is the
+	// ServerPlayer-only client hurt-direction tilt, and the mob's directional flash already rides the
+	// ClientboundDamageEvent). Cited no-op; `if (!blocked)` is always true in v1 (no shields).
+}
+
+// knockbackDefaultPower is the 0.4 power dealDefaultKnockback passes to knockback (ldc2_w
+// 0.4000000059604645d — the double nearest 0.4f, exactly as the jar emits it).
+//
+//	[VERIFIED javap LivingEntity.dealDefaultKnockback: ldc2_w #1792 // double 0.4000000059604645d.]
+const knockbackDefaultPower = 0.4000000059604645
+
+// knockbackRngGuardThreshold is the xd²+zd² floor below which knockback nudges the direction with a
+// tiny random vector (ldc2_w #493 // double 9.999999747378752E-6d — the double nearest the float 1e-5).
+//
+//	[VERIFIED javap LivingEntity.knockback: dload xd*xd + zd*zd ; ldc2_w 9.999999747378752E-6d ; dcmpg.]
+const knockbackRngGuardThreshold = 9.999999747378752e-6
+
+// knockbackRngNudgeScale is the 0.01 scale on each (nextDouble()-nextDouble()) random nudge component.
+//
+//	[VERIFIED javap LivingEntity.knockback: (random.nextDouble()-random.nextDouble()) ; ldc2_w 0.01d ; dmul.]
+const knockbackRngNudgeScale = 0.01
+
+// knockbackVerticalCap is the 0.4 cap on the on-ground vertical knockback (Math.min(0.4, dm.y/2 + power)).
+//
+//	[VERIFIED javap LivingEntity.knockback: ldc2_w #2299 // double 0.4d ; ... Math.min(D, D).]
+const knockbackVerticalCap = 0.4
+
+// knockbackEntity is the port of LivingEntity.knockback(double power, double xd, double zd,
+// DamageSource, float damage, boolean comesFromEffect=false) for a mob — the velocity recoil itself.
+// Decompiled verbatim (javap LivingEntity.knockback this session):
+//
+//	power *= 1.0 - getAttributeValue(KNOCKBACK_RESISTANCE);   // pig KB_RESIST base 0 -> power stays 0.4
+//	if (power <= 0.0) return;
+//	this.needsSync = true;                                    // v1: re-sync is implicit (tracker resends)
+//	Vec3 dm = getDeltaMovement();
+//	while (xd*xd + zd*zd < 9.999999747378752E-6) {            // degenerate-direction RNG guard
+//	    xd = (random.nextDouble() - random.nextDouble()) * 0.01;
+//	    zd = (random.nextDouble() - random.nextDouble()) * 0.01;
+//	}
+//	Vec3 kv = new Vec3(xd, 0.0, zd).normalize().scale(power);
+//	setDeltaMovement(
+//	    dm.x / 2.0 - kv.x,
+//	    onGround() ? Math.min(0.4, dm.y / 2.0 + power) : dm.y,
+//	    dm.z / 2.0 - kv.z);
+//
+// THE RNG DRAW (the while loop): the (nextDouble()-nextDouble())*0.01 nudges are drawn from the MOB's
+// per-entity seeded RandomSource (mobRandom(e) == e.ai.rng, the Mob.getRandom() analogue), NOT the
+// global pool — CLAUDE.md's "mirror the RNG source/draw-order EXACTLY". This is HIT-event-driven (it
+// fires inside applyDamageEntity on a player hit), never inside the AI tick the pig oracle
+// (TestPluginPigEqualsGoNativePig) exercises — that oracle deals NO damage in its 500-tick window — so
+// these draws do not perturb the oracle's pinned in-window stream (PITFALLS Pitfall 5). The guard only
+// trips when xd²+zd²<1e-5 (the attacker is essentially on top of the mob), so the draws are rare; the
+// loop is ported exactly so that rare case still recoils 1:1.
+//
+//	[VERIFIED javap LivingEntity.knockback: power *= 1 - getAttributeValue(KNOCKBACK_RESISTANCE);
+//	 if(power<=0) return; the xd²+zd²<9.999999747378752E-6 while-guard drawing this.random.nextDouble();
+//	 Vec3(xd,0,zd).normalize().scale(power); setDeltaMovement(dm.x/2 - kv.x, onGround ? min(0.4, dm.y/2 +
+//	 power) : dm.y, dm.z/2 - kv.z).]
+func (t *TickLoop) knockbackEntity(e *Entity, power, xd, zd float64) {
+	// power *= 1.0 - getAttributeValue(KNOCKBACK_RESISTANCE). The pig's KNOCKBACK_RESISTANCE base is 0
+	// (registration default), so the multiplier is 1.0 and power stays 0.4; the read is GENUINE (the mob's
+	// real *attribute.Map) so a future armor/effect modifier composes here with no code change.
+	power *= 1.0 - e.getAttributeValue(attribute.KnockbackResistance)
+
+	// `if (power <= 0.0) return;` — a fully knockback-resistant mob (resist >= 1.0) does not recoil.
+	if power <= 0.0 {
+		return
+	}
+
+	// needsSync = true: vanilla marks the entity for an immediate velocity re-sync. v1's tracker resends
+	// the moved/teleported position next tick (sendEntityMotion / the move deltas), so the recoil is
+	// observable without a separate needsSync field — cited no-op store.
+
+	// Vec3 dm = getDeltaMovement() — snapshot the pre-knockback velocity (the dm.x/2 etc. all read THIS).
+	dmx, dmy, dmz := e.vx, e.vy, e.vz
+
+	// The degenerate-direction RNG guard: while xd²+zd² is below the 1e-5 floor, nudge (xd,zd) with a
+	// tiny random vector drawn from the MOB's RNG so the normalize below is well-defined and the mob
+	// still recoils in SOME direction (the attacker is right on top of it). Drawn from mobRandom(e).
+	rng := mobRandom(e)
+	for xd*xd+zd*zd < knockbackRngGuardThreshold {
+		xd = (rng.nextDouble() - rng.nextDouble()) * knockbackRngNudgeScale
+		zd = (rng.nextDouble() - rng.nextDouble()) * knockbackRngNudgeScale
+	}
+
+	// Vec3(xd, 0, zd).normalize().scale(power): the horizontal knockback impulse. normalize divides by
+	// the length; with the guard above the length is always > 0 so this never divides by zero.
+	length := math.Sqrt(xd*xd + zd*zd)
+	kvx := xd / length * power
+	kvz := zd / length * power
+
+	// setDeltaMovement(dm.x/2 - kv.x, onGround ? min(0.4, dm.y/2 + power) : dm.y, dm.z/2 - kv.z): the
+	// recoil halves the existing horizontal velocity and adds the impulse away from the source; the
+	// vertical pop (capped at 0.4) only applies when the mob is on the ground (an airborne mob keeps its
+	// falling velocity). tickPhysics integrates e.vx/vy/vz into the position next tick, so the mob visibly
+	// flies back.
+	e.vx = dmx/2.0 - kvx
+	if e.onGround {
+		e.vy = math.Min(knockbackVerticalCap, dmy/2.0+power)
+	} else {
+		e.vy = dmy
+	}
+	e.vz = dmz/2.0 - kvz
 }
 
 // actuallyHurtEntity is the port of net.minecraft.world.entity.LivingEntity.actuallyHurt(ServerLevel,

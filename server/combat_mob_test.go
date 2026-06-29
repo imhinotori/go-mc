@@ -287,3 +287,64 @@ func TestMobOnDamageEmit(t *testing.T) {
 		t.Fatalf("on_damage amount = %v, want %v (post-mitigation, v1 pass-through armor)", got, raw)
 	}
 }
+
+// TestMobKnockback_RecoilsAwayFromAttacker (WR-04): a player melee hit on a mob sets the mob's velocity
+// AWAY from the attacker (dealDefaultKnockback -> knockback). The mob is at x=8.5; the attacker stands at
+// x=4.5 (4 blocks WEST, same z), so the knockback impulse points EAST (+x): the mob's resulting vx must
+// be strictly positive and the on-ground vertical pop must be > 0. Pins the 1:1 knockback math
+// (power 0.4, KB_RESIST 0 multiplier, the dm.x/2 - kv.x recoil). No RNG draw fires (xd²+zd² = 16 >> 1e-5).
+func TestMobKnockback_RecoilsAwayFromAttacker(t *testing.T) {
+	loop, _ := newBlockLoop()
+	mob := newDamageMob(loop, 1, 20.0) // pig at (8.5, 64, 8.5)
+	mob.onGround = true                // a grounded mob gets the vertical pop branch
+
+	// The attacker player WEST of the mob (same z), 4 blocks away: xd = 4.5-8.5 = -4, zd = 0.
+	// knockback normalizes (xd,0,zd) and scales by 0.4, then setDeltaMovement(dm.x/2 - kv.x, ...):
+	// kv.x = (-4/4)*0.4 = -0.4, so vx = 0/2 - (-0.4) = +0.4 (the mob flies EAST, away from the attacker).
+	attacker := &tickPlayer{entityID: 77, x: 4.5, y: 64, z: 8.5}
+	loop.players = append(loop.players, attacker)
+
+	src := damageSourcePlayerAttack(77)
+	loop.applyDamageEntity(mob, src, 6.0)
+
+	if mob.vx <= 0 {
+		t.Fatalf("knockback vx = %v, want > 0 (the mob must recoil EAST, away from the attacker WEST of it)", mob.vx)
+	}
+	// kv.x = -power, dm.x was 0 -> vx = 0/2 - (-power) = power exactly (KB_RESIST 0). power is the
+	// jar-exact double 0.4000000059604645 (the double nearest 0.4f), not the literal 0.4.
+	if mob.vx != knockbackDefaultPower {
+		t.Fatalf("knockback vx = %v, want %v (dm.x/2 - kv.x = 0 - (-power); power 0.4, KB_RESIST 0)",
+			mob.vx, knockbackDefaultPower)
+	}
+	// On-ground vertical pop: min(0.4, dm.y/2 + power) = min(0.4d, 0 + 0.4000000059604645) = 0.4d (the
+	// 0.4d cap, slightly LESS than the power double, so the cap wins).
+	if mob.vy != knockbackVerticalCap {
+		t.Fatalf("knockback vy = %v, want %v (on-ground min(0.4d, dm.y/2 + power) — the cap wins)",
+			mob.vy, knockbackVerticalCap)
+	}
+	// Pure WEST attacker (zd == 0): the z impulse is 0, so vz stays 0 (dm.z/2 - kv.z = 0 - 0).
+	if mob.vz != 0 {
+		t.Fatalf("knockback vz = %v, want 0 (attacker is due-west; zd == 0)", mob.vz)
+	}
+}
+
+// TestMobKnockback_ResistFullNoRecoil: a mob with KNOCKBACK_RESISTANCE >= 1.0 does not recoil
+// (knockback's `power *= 1 - resist` makes power <= 0 -> early return, velocity unchanged). Pins the
+// resist read is GENUINE (not a const 0).
+func TestMobKnockback_ResistFullNoRecoil(t *testing.T) {
+	loop, _ := newBlockLoop()
+	mob := newDamageMob(loop, 1, 20.0)
+	mob.onGround = true
+	// Set the mob's KNOCKBACK_RESISTANCE instance base to 1.0 (fully resistant): power *= (1 - 1) = 0.
+	mob.attributes.GetInstance(attribute.KnockbackResistance.Name()).SetBaseValue(1.0)
+
+	attacker := &tickPlayer{entityID: 77, x: 4.5, y: 64, z: 8.5}
+	loop.players = append(loop.players, attacker)
+
+	src := damageSourcePlayerAttack(77)
+	loop.applyDamageEntity(mob, src, 6.0)
+
+	if mob.vx != 0 || mob.vy != 0 || mob.vz != 0 {
+		t.Fatalf("fully knockback-resistant mob recoiled (vx=%v vy=%v vz=%v), want (0,0,0)", mob.vx, mob.vy, mob.vz)
+	}
+}
