@@ -90,6 +90,16 @@ func applyTestKit(p *tickPlayer) {
 // Owner-goroutine only (TICK-05): called from the tick-side use path (handleUseItem), so it touches
 // tick-owned state (the registry read, spawnDeclaredMob's id alloc + entities.add) with no locks.
 func (t *TickLoop) handleGateSpawnEgg(p *tickPlayer) {
+	// Air-path (right-click air) fallback: spawn ~2 blocks in front along +X so the mob does not
+	// appear inside the player. The block-path (handleUseItemOn) is the primary, vanilla-faithful
+	// trigger and passes an explicit clicked-face position via handleGateSpawnEggAt.
+	t.handleGateSpawnEggAt(p, p.x+2.0, p.y, p.z)
+}
+
+// handleGateSpawnEggAt spawns the embedded custom wander mob at an explicit position (the spawn-egg
+// gate trigger — Plan 28-01). Gated by SULFUR_TEST_KIT (T-28-03): no-op when the kit is disabled or
+// the wander decl is missing. Owner-goroutine only (the tick-side use path), no locks (TICK-05).
+func (t *TickLoop) handleGateSpawnEggAt(p *tickPlayer, x, y, z float64) {
 	if !testKitEnabled() || t.mobRegistry == nil {
 		return
 	}
@@ -97,10 +107,6 @@ func (t *TickLoop) handleGateSpawnEgg(p *tickPlayer) {
 	if !ok {
 		return // boot-load did not register the wander mob; no-op rather than panic on a right-click
 	}
-	// Spawn ~2 blocks in front of the player along +X so the mob does not appear inside the player.
-	// A fixed offset keeps the gate reproducible (the bot spawns from a known facing). The mob then
-	// WALKS via its Go-nav MOVE goal, which is how the bot distinguishes it from a vanilla pig
-	// (movement pattern, not wire type — threat T-28-05).
-	t.spawnDeclaredMob(decl, p.x+2.0, p.y, p.z)
-	udebugPlayer(p, "test-kit", "spawned custom wander mob via gate egg at (%.1f,%.1f,%.1f)", p.x+2.0, p.y, p.z)
+	t.spawnDeclaredMob(decl, x, y, z)
+	udebugPlayer(p, "test-kit", "spawned custom wander mob via gate egg at (%.1f,%.1f,%.1f)", x, y, z)
 }

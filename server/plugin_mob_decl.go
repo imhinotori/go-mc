@@ -386,6 +386,15 @@ func (t *TickLoop) spawnDeclaredMob(decl *mobDecl, x, y, z float64) *Entity {
 	e := NewEntity(t.idAlloc.AllocID(), decl.baseType, x, y, z)
 	seedAttributes(e.attributes, decl.attrs)
 	e.ai = buildAIFromDecl(t, decl)
-	t.only().entities.add(e)
+	// Phase-27 (N=2): add the mob to the region that OWNS its column, NOT t.only().
+	// only() resolves to the CALLING goroutine's region — globalRegion when spawned from the
+	// coordinator (e.g. the SULFUR_TEST_KIT gate egg's use-packet path) — which orphans the mob
+	// from its position's owning region. Its goal callbacks run during that region's fan-out and
+	// re-resolve the store via regionForEntity(e) (plugin_mob_ai.go), so the store the mob is
+	// ADDED to must be the SAME one: regionForEntity(e). This keeps every spawn caller correct
+	// (egg + natural pig) without each having to wrap in withRegion. TICK-05: the add is a pure
+	// store mutation on the owning region; spawn callers run single-threaded (coordinator use-path
+	// or inside withRegion at the barrier-adjacent natural-spawn apply).
+	t.regionForEntity(e).entities.add(e)
 	return e
 }
