@@ -209,6 +209,16 @@ type Entity struct {
 	// re-entry guard.
 	dead bool
 
+	// deathTime is net.minecraft.world.entity.LivingEntity.deathTime — the death-animation countdown
+	// ticked by tickDeath() once the mob is dead. die() leaves the mob in the world (it does NOT
+	// remove it); LivingEntity.baseTick then calls tickDeath() every tick while isDeadOrDying(), which
+	// increments deathTime and, at deathTime >= 20 (~1s, the fall-over animation length), broadcasts
+	// the death-poof status (60) and removes the entity (Entity.RemovalReason.KILLED). Reset to 0 in
+	// dieEntity. A plain int32 (snapshot-friendly), tick-owned (TICK-05).
+	//	[VERIFIED javap LivingEntity.tickDeath: ++deathTime; if (deathTime >= 20 && !isClientSide &&
+	//	 !isRemoved) { broadcastEntityEvent(this, 60); remove(KILLED); }.]
+	deathTime int32
+
 	// --- GAMEPLAY-07: delta-move tracking state (ServerEntity.sendChanges) ----------------
 	//
 	// These mirror net.minecraft.server.level.ServerEntity's per-entity send state so the

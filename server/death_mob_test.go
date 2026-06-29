@@ -25,10 +25,33 @@ package server
 // oracle-safe.
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/imhinotori/sulfur/data/entity"
+	"github.com/imhinotori/sulfur/data/packetid"
+	pk "github.com/imhinotori/sulfur/net/packet"
 )
+
+// allEntityEventStatuses decodes the status byte of every ClientboundEntityEvent in ps, in FIFO
+// order. The wire layout is encodeEntityEvent's `pk.Int(entityID), pk.Byte(status)`
+// (ClientboundEntityEventPacket: writeInt(entityId) then writeByte(eventId)).
+func allEntityEventStatuses(ps []pk.Packet) []int8 {
+	var out []int8
+	for _, p := range ps {
+		if p.ID != int32(packetid.ClientboundEntityEvent) {
+			continue
+		}
+		r := bytes.NewReader(p.Data)
+		var id pk.Int
+		var ev pk.Byte
+		if _, err := (pk.Tuple{&id, &ev}).ReadFrom(r); err != nil {
+			continue
+		}
+		out = append(out, int8(ev))
+	}
+	return out
+}
 
 // lethalPigInRegion0 builds a Pig with a tiny health at a region-0 column and adds it to region 0's
 // store via withRegion, returning the mob and its owner region. The id is drawn from the loop's
@@ -53,8 +76,12 @@ func countByType(r *region, typ entity.ID) int {
 	return n
 }
 
-// TestMobDeath_Removal: a player-attack hit that takes the pig to <=0 removes it from its owning
-// region store (the HARD deliverable). A second dieEntity is a guarded no-op (no double-removal).
+// TestMobDeath_Removal (the death-animation deliverable): a player-attack hit that takes the pig to
+// <=0 does NOT remove it immediately — vanilla die() leaves the corpse in the world and marks it dead
+// (deathTime=0), so the client can play the ~1s fall-over animation. The mob is removed ONLY once
+// tickDeath() has run 20 ticks (deathTime >= 20). A second dieEntity is a guarded no-op.
+//
+//	[VERIFIED javap LivingEntity.die has NO remove(); LivingEntity.tickDeath removes at deathTime>=20.]
 func TestMobDeath_Removal(t *testing.T) {
 	loop, _ := newN2Loop(t)
 	mob, owner := lethalPigInRegion0(loop)
@@ -66,12 +93,78 @@ func TestMobDeath_Removal(t *testing.T) {
 	src := damageSourcePlayerAttack(42)
 	loop.withRegion(owner, func() { loop.applyDamageEntity(mob, src, 100.0) }) // lethal
 
+	// At death-time 0 the corpse MUST still be in the store (die() does not remove) so trackers keep
+	// sending it and the client plays the fall-over. It is marked dead with deathTime seeded to 0.
+	if _, ok := owner.entities.get(mob.id); !ok {
+		t.Fatalf("mob removed immediately on death — die() must leave the corpse in the world for the death animation")
+	}
+	if !mob.dead {
+		t.Fatalf("dead flag not set after lethal hit")
+	}
+	if mob.deathTime != 0 {
+		t.Fatalf("deathTime = %d after die(), want 0 (the animation countdown is seeded fresh)", mob.deathTime)
+	}
+
+	// Tick the death animation: it must STILL be present for ticks 1..19, then removed exactly at 20.
+	for i := int32(1); i < deathAnimationTicks; i++ {
+		loop.withRegion(owner, func() { loop.tickDeath(mob) })
+		if _, ok := owner.entities.get(mob.id); !ok {
+			t.Fatalf("mob removed at deathTime %d — must survive until deathTime >= %d", i, deathAnimationTicks)
+		}
+	}
+	// The 20th tickDeath takes deathTime to 20 -> poof + remove.
+	loop.withRegion(owner, func() { loop.tickDeath(mob) })
 	if _, ok := owner.entities.get(mob.id); ok {
-		t.Fatalf("dead mob still in the owner region store — death REMOVAL (the hard deliverable) failed")
+		t.Fatalf("dead mob still in the owner region store at deathTime %d — tickDeath must remove at >= %d", mob.deathTime, deathAnimationTicks)
 	}
 
 	// Guarded double-death: re-running dieEntity must not panic / not re-spawn / not re-remove.
 	loop.withRegion(owner, func() { loop.dieEntity(mob, src) })
+}
+
+// TestMobDeath_Poof (the status-60 deliverable): when tickDeath removes the mob at deathTime>=20 it
+// FIRST broadcasts the death-poof entity event (status 60) to the still-tracking players, distinct
+// from the status-3 death-animation start that die() broadcasts on the killing blow. This pins the
+// full death sequence: status-3 at death (still present), status-60 + removal at deathTime 20.
+//
+//	[VERIFIED javap LivingEntity.tickDeath: broadcastEntityEvent(this, 60); remove(KILLED).]
+func TestMobDeath_Poof(t *testing.T) {
+	loop, _ := newN2Loop(t)
+	mob, owner := lethalPigInRegion0(loop)
+
+	viewer := &tickPlayer{client: captureClient(64), entityID: 1000, tracked: map[int32]bool{mob.id: true}}
+	loop.players = append(loop.players, viewer)
+
+	src := damageSourcePlayerAttack(42)
+	loop.withRegion(owner, func() { loop.applyDamageEntity(mob, src, 100.0) }) // lethal
+
+	// Drive the full death animation: 19 ticks where deathTime climbs 1..19 (no poof yet), then the
+	// 20th tick (deathTime -> 20) which broadcasts the status-60 poof and removes the mob. The viewer's
+	// outbound queue is drained ONCE at the END (drainPackets closes the queue, so it is single-use):
+	// the whole sequence's broadcasts (the status-3 death animation on the kill, then the status-60
+	// poof at 20) accumulate in FIFO order for a single assertion.
+	for i := int32(1); i <= deathAnimationTicks; i++ {
+		loop.withRegion(owner, func() { loop.tickDeath(mob) })
+	}
+
+	// Removal happened exactly at deathTime >= 20.
+	if _, ok := owner.entities.get(mob.id); ok {
+		t.Fatalf("mob still in the store after the death animation (deathTime %d) — tickDeath must remove at >= %d", mob.deathTime, deathAnimationTicks)
+	}
+
+	got := drainPackets(viewer.client)
+	// Exactly two entity events fire across the death: the status-3 death-animation start (die()) and
+	// the status-60 poof (tickDeath at 20). No event fires on ticks 1..19.
+	statuses := allEntityEventStatuses(got)
+	if len(statuses) != 2 {
+		t.Fatalf("death broadcast %d ClientboundEntityEvent packets %v, want exactly 2 (status-3 then status-60)", len(statuses), statuses)
+	}
+	if statuses[0] != int8(entityEventDeath) {
+		t.Fatalf("first entity-event status = %d, want %d (death-animation start, broadcast by die())", statuses[0], entityEventDeath)
+	}
+	if statuses[1] != int8(entityEventDeathPoof) {
+		t.Fatalf("second entity-event status = %d, want %d (death poof, broadcast by tickDeath at deathTime>=%d)", statuses[1], entityEventDeathPoof, deathAnimationTicks)
+	}
 }
 
 // TestMobDeath_Loot: a lethal hit spawns Item entities (the rolled pig loot) into the OWNER region.

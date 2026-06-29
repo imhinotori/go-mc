@@ -405,10 +405,15 @@ func TestMobHurtSound_PlaysOnNonFatalHit(t *testing.T) {
 	}
 }
 
-// TestMobHurtSound_NoSoundOnFatalHit: a lethal hit does NOT play the hurt sound (the death branch plays
-// the death sound instead — `if (isDeadOrDying()) ... else if (tookFullDamage) playHurtSound`). Pins the
-// else-branch gate so the hurt sound never plays on a kill.
-func TestMobHurtSound_NoSoundOnFatalHit(t *testing.T) {
+// TestMobDeathSound_PlaysDeathSoundOnFatalHit: a lethal hit plays the DEATH sound (entity.pig.death,
+// id 1270), NOT the hurt sound — vanilla's death branch is `if (isDeadOrDying()) { if (tookFullDamage)
+// makeSound(getDeathSound()); die(source); } else if (tookFullDamage) playHurtSound(source)`. Exactly
+// one ClientboundSoundEntity broadcasts, and its holder id is the death sound (1270+1 on the wire),
+// distinct from the hurt sound (1269+1).
+//
+//	[VERIFIED javap LivingEntity.hurtServer: makeSound(getDeathSound()) on the kill branch (offset 390-395),
+//	 BEFORE die() (403-405); Pig.getDeathSound -> CLASSIC deathSound == SoundEvents.PIG_DEATH (1270).]
+func TestMobDeathSound_PlaysDeathSoundOnFatalHit(t *testing.T) {
 	loop, _ := newN2Loop(t)
 	mob, owner := lethalPigInRegion0(loop) // 4 health: a 100.0 hit is fatal
 
@@ -419,7 +424,40 @@ func TestMobHurtSound_NoSoundOnFatalHit(t *testing.T) {
 	loop.withRegion(owner, func() { loop.applyDamageEntity(mob, src, 100.0) }) // lethal
 
 	got := drainPackets(viewer.client)
-	if n := countID(got, packetid.ClientboundSoundEntity); n != 0 {
-		t.Fatalf("fatal hit broadcast %d ClientboundSoundEntity packets, want 0 (death plays the death sound, not hurt)", n)
+	if n := countID(got, packetid.ClientboundSoundEntity); n != 1 {
+		t.Fatalf("fatal hit broadcast %d ClientboundSoundEntity packets, want 1 (the death sound)", n)
+	}
+
+	// Decode the one SoundEntity and assert it is the DEATH sound (1270+1), NOT the hurt sound.
+	var pkt pk.Packet
+	for _, p := range got {
+		if p.ID == int32(packetid.ClientboundSoundEntity) {
+			pkt = p
+		}
+	}
+	r := bytes.NewReader(pkt.Data)
+	var soundHolder, source, entityID pk.VarInt
+	var volume, pitch pk.Float
+	var seed pk.Long
+	if _, err := (pk.Tuple{&soundHolder, &source, &entityID, &volume, &pitch, &seed}).ReadFrom(r); err != nil {
+		t.Fatalf("decode ClientboundSoundEntity: %v", err)
+	}
+	if int32(soundHolder) != soundIDPigDeath+1 {
+		t.Fatalf("SoundEntity holder = %d, want %d (pig.death id 1270 + 1) — the death sound, not the hurt sound", int32(soundHolder), soundIDPigDeath+1)
+	}
+	if int32(source) != soundSourceNeutral {
+		t.Fatalf("SoundEntity source = %d, want %d (SoundSource.NEUTRAL ordinal)", int32(source), soundSourceNeutral)
+	}
+	if int32(entityID) != mob.id {
+		t.Fatalf("SoundEntity entityId = %d, want %d (the dying mob)", int32(entityID), mob.id)
+	}
+	if float32(volume) != mobHurtSoundVolume {
+		t.Fatalf("SoundEntity volume = %v, want %v (getSoundVolume 1.0)", float32(volume), mobHurtSoundVolume)
+	}
+	if float32(pitch) < 0.8 || float32(pitch) >= 1.2 {
+		t.Fatalf("SoundEntity pitch = %v, want in [0.8, 1.2) ((nextFloat()-nextFloat())*0.2 + 1.0)", float32(pitch))
+	}
+	if r.Len() != 0 {
+		t.Fatalf("SoundEntity has %d trailing bytes, want 0 (exact wire layout)", r.Len())
 	}
 }

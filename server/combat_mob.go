@@ -118,10 +118,17 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 	// path, the `amount <= lastHurt` i-frame rejection, returned early above), so the `else if (tookFullDamage)`
 	// is unconditionally the hurt-sound branch on survival.
 	//
-	//	[VERIFIED javap LivingEntity.hurtServer (bytecode 370-423): if(isDeadOrDying()) ... die(source); else
-	//	 if(tookFullDamage) playHurtSound(source). The death-sound (getDeathSound/makeSound) is the death
-	//	 path's own sound — a v1 deferral on the death side; this fix lands the surviving-hit HURT sound.]
+	//	[VERIFIED javap LivingEntity.hurtServer (bytecode 370-423): if(isDeadOrDying()) { if(!checkTotem...)
+	//	 { if(tookFullDamage) { makeSound(getDeathSound()); playSecondaryHurtSound(source); } die(source); } }
+	//	 else if(tookFullDamage) playHurtSound(source). The DEATH SOUND (getDeathSound/makeSound) fires on
+	//	 the killing blow, BEFORE die(); the HURT sound only on survival. Reaching this `if e.health <= 0`
+	//	 here means tookFullDamage was true (the only non-tookFullDamage path, the `amount <= lastHurt`
+	//	 i-frame rejection, returned early above), so the death-sound branch is unconditional on a kill.]
 	if e.health <= 0 {
+		// makeSound(getDeathSound()): the pig's death sound (entity.pig.death, id 1270), played BEFORE
+		// die() exactly as the bytecode orders it (offset 390-395 makeSound, 403-405 die). checkTotem...
+		// is a v1 no-op (no totem subsystem) so the death sound + die always run on a kill.
+		t.playMobDeathSound(e)
 		t.dieEntity(e, src)
 	} else {
 		// playHurtSound(source) -> makeSound(getHurtSound(source)) -> playSound(sound, getSoundVolume(),
@@ -174,6 +181,56 @@ func (t *TickLoop) playMobHurtSound(e *Entity) {
 	// is a v1 constant-false (no DATA_SILENT mob is wired), so the sound always plays — cited.
 	t.broadcastToTrackers(e.id, encodeSoundEntity(soundIDPigHurt, soundSourceNeutral, e.id, mobHurtSoundVolume, pitch, seed))
 }
+
+// playMobDeathSound is the port of the DEATH-sound limb of LivingEntity.hurtServer's lethal branch —
+// `makeSound(getDeathSound())` (the killing-blow sound, distinct from the survival hurt sound). It is
+// the sibling of playMobHurtSound (same makeSound -> getSoundVolume()==1.0 -> getVoicePitch() pitch ->
+// Entity.playSound -> Level.playSound on the NEUTRAL category, broadcast to trackers), differing ONLY
+// in the sound id: the pig's getDeathSound resolves through its PigSoundVariant CLASSIC sound set to
+// SoundEvents.PIG_DEATH ("entity.pig.death", id 1270 — the death sibling of the CLASSIC hurt sound
+// PIG_HURT/1269 the hurt path uses).
+//
+//	makeSound(sound): if (sound != null) playSound(sound, getSoundVolume(), getVoicePitch());
+//	getSoundVolume(): 1.0F (LivingEntity default);
+//	getVoicePitch(): non-baby (nextFloat()-nextFloat())*0.2 + 1.0, drawn from the MOB's per-entity RNG;
+//	Entity.playSound: if (!isSilent()) level.playSound(null, x, y, z, sound, getSoundSource()==NEUTRAL,
+//	    vol, pitch);  // seeded with a fresh server draw (Level.soundSeedGenerator.nextLong() analogue)
+//
+// The seed is a fresh server-generated math/rand/v2 draw (NEVER the mob's stream, never client-supplied
+// — the same event-time discipline death loot / the hurt sound use), so it does not perturb the pig
+// oracle. The voice-pitch nextFloat()-nextFloat() draws come from the mob RNG but fire on the DEATH
+// event (inside applyDamageEntity's lethal branch), never during the AI tick the pig oracle exercises
+// (that oracle deals NO damage and is never killed), so they are outside the pinned in-window stream
+// (PITFALLS Pitfall 5) — the oracle stays green.
+//
+//	[VERIFIED javap LivingEntity.hurtServer death branch: makeSound(getDeathSound()) at offset 390-395
+//	 (BEFORE die() at 403-405); LivingEntity.makeSound/getSoundVolume(==1.0F)/getVoicePitch (non-baby
+//	 (nextFloat()-nextFloat())*0.2+1.0); Pig.getDeathSound -> getSoundSet().deathSound() -> PigSoundVariant
+//	 CLASSIC deathSound == SoundEvents.PIG_DEATH; Animal.getSoundSource == NEUTRAL; data/soundid/soundid.go
+//	 1270: "entity.pig.death".]
+func (t *TickLoop) playMobDeathSound(e *Entity) {
+	// getVoicePitch() (non-baby): (nextFloat() - nextFloat()) * 0.2 + 1.0, from the mob's RandomSource —
+	// the SAME formula playMobHurtSound uses (it is LivingEntity.getVoicePitch, shared by every sound).
+	rng := mobRandom(e)
+	pitch := (rng.nextFloat()-rng.nextFloat())*mobVoicePitchJitter + mobVoicePitchBase
+
+	// The per-sound seed: a fresh server draw (Level.soundSeedGenerator.nextLong() analogue), never the
+	// mob's stream and never client-supplied — the event-time RNG discipline the hurt sound / death loot use.
+	seed := rand.Int64()
+
+	// playSound(getDeathSound()==PIG_DEATH, getSoundVolume()==1.0, pitch) -> Level.playSound(...) on the
+	// NEUTRAL category, broadcast to every player tracking the dying mob. isSilent() is a v1 constant-false
+	// (no DATA_SILENT mob wired) so the death sound always plays — cited.
+	t.broadcastToTrackers(e.id, encodeSoundEntity(soundIDPigDeath, soundSourceNeutral, e.id, mobHurtSoundVolume, pitch, seed))
+}
+
+// soundIDPigDeath is SoundEvents.PIG_DEATH's registry id ("entity.pig.death" == 1270 in
+// data/soundid/soundid.go, generated from the jar's registries — the death sibling of PIG_HURT/1269).
+// The pig's getDeathSound resolves to this via its CLASSIC PigSoundVariant death set.
+//
+//	[VERIFIED data/soundid/soundid.go: 1270: "entity.pig.death"; javap Pig.getDeathSound ->
+//	 getSoundSet().deathSound() -> PigSoundVariant CLASSIC deathSound == SoundEvents.PIG_DEATH.]
+const soundIDPigDeath int32 = 1270
 
 // soundIDPigHurt is SoundEvents.PIG_HURT's registry id ("entity.pig.hurt" == 1269 in
 // data/soundid/soundid.go, generated from the jar's registries). The pig's getHurtSound resolves to

@@ -639,6 +639,15 @@ func encodeTakeItemEntity(itemID, collectorID int32, amount int) pk.Packet {
 //    at die bytecode 162) -> ClientboundEntityEventPacket(entity, 3).]
 const entityEventDeath byte = 3
 
+// entityEventDeathPoof is the EntityEvent byte broadcast by
+// net.minecraft.world.entity.LivingEntity.tickDeath at deathTime >= 20: status 60 == the death
+// "poof" — the client spawns the despawn smoke/explosion particles as the dying entity is removed.
+// Unlike status 3 (which die() sends to START the fall-over animation), status 60 is the FINAL
+// despawn cue, sent by tickDeath the same tick it calls remove(KILLED).
+//   [VERIFIED javap LivingEntity.tickDeath: bipush 60; Level.broadcastEntityEvent(this, 60); then
+//    remove(Entity$RemovalReason.KILLED) — the deathTime>=20 branch.]
+const entityEventDeathPoof byte = 60
+
 // encodeEntityEvent builds ClientboundEntityEvent (jar: ClientboundEntityEventPacket.write):
 // writeInt(entityId) — a PLAIN 4-byte Int, NOT a VarInt — then writeByte(eventId). Broadcast to
 // every player tracking the entity (broadcastEntityEvent -> ServerChunkCache.broadcastAndSend).

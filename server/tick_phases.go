@@ -325,11 +325,35 @@ func (t *TickLoop) tickAI() {
 		t.tickMobIFrames(e)
 	}
 
+	// WR death-animation drive: LivingEntity.baseTick runs `if (isDeadOrDying() && shouldTickDeath(this))
+	// tickDeath();` RIGHT AFTER the i-frame block above (javap baseTick: the hurtTime--/invulnerableTime--
+	// block at offsets 450-491, then the isDeadOrDying -> tickDeath gate at 491-513). A dead mob runs
+	// baseTick (so its deathTime counts up and it is removed at 20) but does NOT run aiStep goals — the
+	// fall-over is a CLIENT animation driven by the die() status-3 broadcast, not server movement. We
+	// snapshot the byID values first because tickDeath removes the entity from the byID map at deathTime
+	// >= 20 (ranging the map directly while deleting from it is unsafe).
+	//
+	//	[VERIFIED javap LivingEntity.baseTick: after the i-frame decrements, `isDeadOrDying ifeq skip;
+	//	 level.shouldTickDeath(this) ifeq skip; tickDeath()`. The dead corpse stays in the store (aiStep
+	//	 is gated only on !isRemoved, but its goals self-gate and v1 deliberately skips them for a corpse —
+	//	 a dead mob does not path).]
+	deadSnapshot := make([]*Entity, 0, len(t.cur().entities.byID))
+	for _, e := range t.cur().entities.byID {
+		if e.dead {
+			deadSnapshot = append(deadSnapshot, e)
+		}
+	}
+	for _, e := range deadSnapshot {
+		t.tickDeath(e) // ++deathTime; at >=20 broadcast the status-60 poof + remove via the owner region
+	}
+
 	// Snapshot the AI mobs so the serverAiStep loop is stable even if a spawn (below) or a move
 	// re-buckets mid-range — exactly the discipline tickPhysics uses (copy the byID values, then range).
+	// A DEAD mob is EXCLUDED: a corpse does not run AI/goals/navigation (it is counting down its death
+	// animation via tickDeath above), matching vanilla where a dying mob's goals self-gate to no-ops.
 	snapshot := make([]*Entity, 0, len(t.cur().entities.byID))
 	for _, e := range t.cur().entities.byID {
-		if e.ai != nil {
+		if e.ai != nil && !e.dead {
 			snapshot = append(snapshot, e)
 		}
 	}
@@ -375,6 +399,17 @@ func (t *TickLoop) tickPhysics() {
 	}
 
 	for _, e := range snapshot {
+		// A DEAD mob is frozen for its death-animation window: the ~1s fall-over is a CLIENT animation
+		// driven by the die() status-3 broadcast, NOT server movement, so freezing the server position
+		// for the 20 ticks until tickDeath removes it matches exactly what the client renders. This is a
+		// cited v1 simplification (vanilla corpses still integrate gravity, but with goals/navigation
+		// stopped a settled corpse barely moves; freezing it avoids running physics on a thing about to
+		// despawn and keeps the observable result identical). The corpse is still in the store so the
+		// tracker keeps sending it through the animation.
+		if e.dead {
+			continue
+		}
+
 		// Gravity: accelerate downward, then air drag so vertical speed converges to a
 		// terminal velocity (06-RESEARCH A1 — tunable, wire-irrelevant constants).
 		e.vy -= gravityPerTick

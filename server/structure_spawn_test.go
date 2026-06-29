@@ -111,14 +111,25 @@ func TestStructureSpawnMobTakesDamageAndDies(t *testing.T) {
 		t.Fatalf("after a 6.0 hit, structure mob health = %v, want %v (the hit must land, not be a health-0 no-op)", witch.health, witchMaxHealth-6.0)
 	}
 
-	// (3) Lethal damage kills it: the mob is removed from its owning region store (dieEntity). Wait
+	// (3) Lethal damage kills it: dieEntity marks it dead but leaves the corpse in the world for the
+	// ~1s death animation (vanilla die() has no remove()); tickDeath removes it at deathTime>=20. Wait
 	// out the i-frame window between hits so the second hit is not absorbed by invulnerableTime.
 	for i := int32(0); i < witch.invulnerableTime; i++ {
 		loop.tickMobIFrames(witch)
 	}
-	loop.applyDamageEntity(witch, src, witchMaxHealth) // overkill -> health 0 -> dieEntity
+	loop.applyDamageEntity(witch, src, witchMaxHealth) // overkill -> health 0 -> dieEntity (no remove)
+	if !witch.dead {
+		t.Fatalf("structure mob not marked dead after a lethal hit — a health-0-born mob could never die through this path")
+	}
+	if _, ok := loop.only().entities.byID[witch.id]; !ok {
+		t.Fatalf("structure mob removed immediately on death — die() must leave the corpse for the death animation")
+	}
+	// Drive the death-animation countdown: removed exactly at deathTime>=20.
+	for i := int32(0); i < deathAnimationTicks; i++ {
+		loop.tickDeath(witch)
+	}
 	if _, ok := loop.only().entities.byID[witch.id]; ok {
-		t.Fatalf("structure mob still in the store after a lethal hit, want removed (dieEntity) — a health-0-born mob could never die through this path")
+		t.Fatalf("structure mob still in the store after the death animation (deathTime>=%d), want removed (tickDeath)", deathAnimationTicks)
 	}
 }
 

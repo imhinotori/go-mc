@@ -22,10 +22,20 @@ import (
 	"github.com/imhinotori/sulfur/level/loot"
 )
 
+// deathAnimationTicks is the LivingEntity.tickDeath threshold: the entity is removed (and the
+// status-60 death poof broadcast) once deathTime reaches 20 ticks (~1s at 20 TPS) — the length of
+// the client-side fall-over animation that the status-3 broadcast in die() starts.
+//
+//	[VERIFIED javap LivingEntity.tickDeath: `if (this.deathTime >= 20 ...)` (bipush 20).]
+const deathAnimationTicks int32 = 20
+
 // dieEntity is the port of net.minecraft.world.entity.LivingEntity.die(DamageSource) — the death
-// flow driven from applyDamageEntity when a mob's health reaches 0. It is the HARD deliverable:
-// a dead mob is REMOVED from its owning region store (auto-broadcasting RemoveEntities) and a
-// death-status broadcast is sent; the loot roll + XP orb ride with it.
+// flow driven from applyDamageEntity when a mob's health reaches 0. CRITICAL (WR live-debug): die()
+// does NOT remove the entity. It marks it dead, rolls the loot/XP, broadcasts the death-animation
+// status (3), and leaves the corpse in the world; LivingEntity.tickDeath() (below) then runs every
+// tick and ONLY at deathTime >= 20 (~1s of fall-over animation) broadcasts the death-poof status
+// (60) and removes the entity. The old immediate-removal here made a dying mob vanish instantly —
+// no fall-over, no death sound, no poof — which this fix corrects.
 //
 // Faithful bytecode trace (javap die this session):
 //
@@ -45,16 +55,20 @@ import (
 //	    level.broadcastEntityEvent(this, (byte) 3);  // the death-status animation (status 3)
 //	}
 //	setPose(Pose.DYING);                             // v1: pose is not wired to a mob metadata yet
+//	// NOTE: there is NO this.remove() in die() — the removal is tickDeath()'s job at deathTime>=20.
 //
-// Sulfur ordering: guard -> dead=true -> dropAllDeathLoot (loot + XP, BEFORE removal: vanilla rolls
-// loot in die() while the entity is still in the world so its position drives the drop coords) ->
-// death-status broadcast -> REMOVE from the owner region store. Death REMOVAL is non-negotiable; it
-// works even if loot/XP are no-ops (e.g. an entity with no loot table).
+// Sulfur ordering: guard -> dead=true -> dropAllDeathLoot (loot + XP, AT death-time so the drops
+// spawn at the mob's still-current position: vanilla rolls loot in die() while the entity is still
+// in the world) -> death-status broadcast (status 3) -> seed deathTime=0 for the tickDeath countdown.
+// The corpse STAYS in the store so trackers keep sending it and the client plays the ~1s fall-over.
+//
+//	[CITED: LivingEntity.die contains NO remove() call (javap die: dropAllDeathLoot, broadcastEntityEvent
+//	 (3), setPose(DYING) — and returns). The removal lives in LivingEntity.tickDeath (deathTime>=20).]
 func (t *TickLoop) dieEntity(e *Entity, src damageSource) {
 	// The death guard (bytecode 0-14): `if (isRemoved() || dead) return`. Sulfur has no separate
 	// isRemoved() flag for a mob (removal IS the store delete), so `dead` covers both — a second
-	// lethal hit or a re-entrant die is a no-op (the loot is never double-rolled, the remove is
-	// idempotent). T-29-08 (the guarded double-death).
+	// lethal hit or a re-entrant die is a no-op (the loot is never double-rolled, deathTime is not
+	// re-seeded). T-29-08 (the guarded double-death).
 	if e.dead {
 		return
 	}
@@ -67,28 +81,71 @@ func (t *TickLoop) dieEntity(e *Entity, src damageSource) {
 	}
 	e.lastDamageSource = src
 
-	// dropAllDeathLoot(level, source) — the loot table + the XP orb. Ordered BEFORE removal so the
-	// drops spawn at the mob's still-current position (vanilla rolls loot in die()). The killedEntity
-	// gate (`attacker == null || attacker.killedEntity(...)`) is a v1 stub that always allows the loot
-	// (no kill-cancel hook), so dropAllDeathLoot runs unconditionally on a ServerLevel.
+	// dropAllDeathLoot(level, source) — the loot table + the XP orb. Vanilla rolls loot in die() while
+	// the entity is still in the world, so the drops spawn at the mob's still-current position. The
+	// killedEntity gate (`attacker == null || attacker.killedEntity(...)`) is a v1 stub that always
+	// allows the loot (no kill-cancel hook), so dropAllDeathLoot runs unconditionally on a ServerLevel.
 	t.dropAllDeathLoot(e, src)
 
-	// level.broadcastEntityEvent(this, 3) — the death-status animation (status 3). Broadcast to every
-	// player tracking the mob (the tracker's visibility set), exactly as
-	// ServerChunkCache.broadcastAndSend fans broadcastEntityEvent out. broadcastToTrackers already
-	// excludes nobody relevant here (the dying mob is not a player). It is sent BEFORE the store remove
-	// so the players still have the mob in their tracked set this tick (the next tracker tick emits the
-	// RemoveEntities that despawns it).
+	// level.broadcastEntityEvent(this, 3) — the death-status animation (status 3) that STARTS the
+	// client-side fall-over. Broadcast to every player tracking the mob, exactly as
+	// ServerChunkCache.broadcastAndSend fans broadcastEntityEvent out. The corpse remains in the
+	// store, so the players keep it in their tracked set and watch the ~1s death animation play.
 	t.broadcastToTrackers(e.id, encodeEntityEvent(e.id, entityEventDeath))
 
 	// setPose(Pose.DYING): a mob's pose is not wired to entity metadata in v1 (no DATA_POSE sync for a
 	// mob yet) — cited no-op, the death animation already plays from the status-3 broadcast above.
 
-	// REMOVE the mob from its OWNING region store (the HARD deliverable). regionForEntity(e), NOT
-	// cur() — the death path is NOT already in the owning region context (Pitfall 2). The remove
-	// auto-broadcasts RemoveEntities: the tracker's near() no longer returns the gone id, so it is
-	// batched into the next tick's RemoveEntities and dropped from every viewer's tracked set (A2).
-	t.regionForEntity(e).entities.remove(e.id)
+	// Seed the death-animation countdown. die() leaves the mob in the world; tickDeath() increments
+	// deathTime each tick and removes the entity at >= 20 (broadcasting the status-60 poof first). The
+	// removal is DELIBERATELY NOT done here (vanilla die() has no remove()) — see tickDeath below.
+	e.deathTime = 0
+}
+
+// tickDeath is the port of net.minecraft.world.entity.LivingEntity.tickDeath() — the per-tick death
+// countdown that drives the actual removal. LivingEntity.baseTick calls it every tick while the mob
+// isDeadOrDying() (and level.shouldTickDeath(this)); after ~1s (deathTime >= 20) it broadcasts the
+// death-poof status (60) and removes the entity (Entity.RemovalReason.KILLED), which auto-broadcasts
+// RemoveEntities to every tracker.
+//
+// Faithful bytecode trace (javap tickDeath this session):
+//
+//	protected void tickDeath() {
+//	    ++this.deathTime;
+//	    if (this.deathTime >= 20 && !this.level().isClientSide() && !this.isRemoved()) {
+//	        this.level().broadcastEntityEvent(this, (byte) 60);     // status 60 = the death poof
+//	        this.remove(Entity.RemovalReason.KILLED);               // -> RemoveEntities to trackers
+//	    }
+//	}
+//	[VERIFIED javap LivingEntity.tickDeath: dup getfield deathTime; iconst_1; iadd; putfield deathTime;
+//	 getfield deathTime; bipush 20; if_icmplt return; isClientSide ifne return; isRemoved ifne return;
+//	 bipush 60; Level.broadcastEntityEvent(this,60); getstatic RemovalReason.KILLED; remove(...).]
+//
+// !isClientSide is a constant true on the server (Sulfur has no client world). !isRemoved is covered
+// by the call-site gate in tickAI: tickDeath runs only for an entity STILL in the store (e.dead==true
+// and not yet removed), so a re-entry after removal cannot happen — the entity is gone from the byID
+// map the loop ranges. Runs on the owner goroutine over tick-owned state (TICK-05). Pure integer math
+// (the ++deathTime / >=20 compare) — no RNG draw, so it cannot perturb the per-mob RNG stream the pig
+// oracle pins (PITFALLS Pitfall 5); the oracle pig is never killed, so e.dead stays false and tickDeath
+// never runs on it.
+func (t *TickLoop) tickDeath(e *Entity) {
+	// ++this.deathTime;
+	e.deathTime++
+
+	// if (deathTime >= 20 && !isClientSide && !isRemoved) { broadcastEntityEvent(60); remove(KILLED); }
+	// 20 ticks == ~1s: the fall-over animation has played; now poof + despawn.
+	if e.deathTime >= deathAnimationTicks {
+		// broadcastEntityEvent(this, 60) — the death-poof particles. Broadcast to the still-tracking
+		// players BEFORE the remove so they still have the mob in their tracked set this tick (the poof
+		// renders at its last-known position; the removal that follows despawns it).
+		t.broadcastToTrackers(e.id, encodeEntityEvent(e.id, entityEventDeathPoof))
+
+		// remove(Entity.RemovalReason.KILLED): the actual store removal, routed through the OWNING
+		// region (regionForEntity(e), NEVER cur() — the region-0 trap, Pitfall 2). The remove
+		// auto-broadcasts RemoveEntities: the tracker's near() no longer returns the gone id, so it is
+		// batched into the next tick's RemoveEntities and dropped from every viewer's tracked set (A2).
+		t.regionForEntity(e).entities.remove(e.id)
+	}
 }
 
 // dropAllDeathLoot is the port of LivingEntity.dropAllDeathLoot(ServerLevel, DamageSource):
