@@ -1,17 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v4
-milestone_name: Plugin / Scripting System
-status: verifying
-stopped_at: Completed 24-02-PLAN.md — Phase 24 (vanilla-mobs-as-plugins) COMPLETE
-last_updated: "2026-06-29T00:43:06.121Z"
+milestone: v5
+milestone_name: Mob Behaviors & Living-Entity Subsystems
+status: planning
+last_updated: "2026-06-29T05:15:44.249Z"
 last_activity: 2026-06-29
 progress:
-  total_phases: 8
-  completed_phases: 8
-  total_plans: 19
-  completed_plans: 19
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -25,10 +24,10 @@ See: .planning/PROJECT.md (updated 2026-06-23)
 
 ## Current Position
 
-Phase: 28 (plugin-system-visual-perf-gate) — EXECUTING
-Plan: 2 of 2
-Status: Phase complete — ready for verification
-Last activity: 2026-06-29
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-06-29 — Milestone v5 started
 
 ### ⚠️ DONE this session — 25-03 PLUGIN-05 close (cooking/stonecutting BLOCK build-or-defer)
 

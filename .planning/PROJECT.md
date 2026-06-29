@@ -8,6 +8,20 @@ A from-scratch Minecraft Java Edition server (version 26.2, protocol 776) writte
 
 A Go server that a vanilla Minecraft 26.2 client can connect to, log into, and play in a persistent, ticking world — with an architecture designed from day one for the concurrency-based optimizations Leaf pioneered (async pathfinding, async entity tracking, async mob spawning).
 
+## Current Milestone: v5 Mob Behaviors & Living-Entity Subsystems
+
+**Goal:** Build the four deferred mob/living-entity subsystems 1:1 from the jar, finish the pig's five deferred goals, and add passive + hostile + neutral mobs as jar-faithful Starlark plugins.
+
+**Target features:**
+- **Mob JumpControl + fluid detection** — a real mob `JumpControl.jump()` impulse seam + mob `isInWater`/`getFluidHeight`/`isInLava` predicates (today fluid is `*tickPlayer`-only). Unblocks FloatGoal@0 + any swimming mob.
+- **Mob damage / hurt pipeline** — mob `applyDamage`/`actuallyHurt` + per-mob `lastDamageSource` + panic damage-type tag (today combat.go is `*tickPlayer`-only). Unblocks PanicGoal@1 + all hostile mobs taking AND dealing damage.
+- **Animal aging + breeding** — `Animal` age/`inLove`/`canMate`, partner search, baby spawn, parent-follow. Unblocks BreedGoal@3 + FollowParentGoal@5 + all breedable animals.
+- **Held-item read + item tags** — read nearest player's main-hand item + `ItemTags` membership (PIG_FOOD / CARROT_ON_A_STICK). Unblocks TemptGoal@4 ×2 + tempt/feed across animals.
+- **Pig parity** — wire the 5 deferred goals onto the existing `vanilla_pig` plugin via the new subsystems (the 1:1 dogfood completes).
+- **New mobs as plugins** — passive (cow/sheep/chicken), hostile (zombie/skeleton/spider, with melee-attack + target-selectors + day/night spawn rules), neutral (wolf: tame/owner/sit/anger-on-hit). Each a jar-faithful Starlark plugin (`javap <Mob>.registerGoals`), dogfooding the v4 plugin API.
+
+**Key context:** Continues the 1:1-jar mandate into the mob layer. Each subsystem is the missing prerequisite cited in `.planning/phases/24-vanilla-mobs-as-plugins/deferred-goals.md` (jar class + method, javap-verified). New mobs render via the existing declared-mob wire path; attribute suppliers for most types already exist in `level/attribute/defaults.go`. The mob damage pipeline is the keystone — hostile mobs and PanicGoal both depend on it. CGO=0 static binary + `-race` constraints carry into all of it.
+
 ## Current State
 
 **Shipped: v4 (2026-06-29).** Sulfur's gameplay is now **scriptable through a dual-runtime
@@ -73,12 +87,13 @@ commands + chat — all `-race` clean with Leaf-style async optimizations. 9 pha
 
 ## Next Milestone Goals
 
-v4 shipped the plugin/scripting system. The next milestone is undefined — candidate directions
-(operator-driven plugin distribution; richer plugin mutation vocabulary + sub-interpreter Python
-parallelism; dynamic region merge/split + per-region persistence; the cited vanilla-completeness
-follow-ups: more mob goals/breeding, furnace/cooking blocks, SUB-ITEMNBT Phase B). Run
-`/gsd-new-milestone` to scope it. The cited carryover lives in the v4 phase `deferred-*.md` files
-and the milestone audit's `tech_debt`.
+v5 (Mob Behaviors & Living-Entity Subsystems) is now ACTIVE — see "Current Milestone" above. It
+builds the four deferred mob subsystems (JumpControl+fluid, mob damage pipeline, animal aging/
+breeding, held-item+item-tags), finishes the pig's five deferred goals 1:1, and adds passive +
+hostile + neutral mobs as jar-faithful Starlark plugins. Candidate directions deferred PAST v5
+(undefined, future milestones): operator-driven plugin distribution; richer plugin mutation
+vocabulary + sub-interpreter Python parallelism; dynamic region merge/split + per-region
+persistence; furnace/cooking blocks (Phase-25 deferred-blocks.md); SUB-ITEMNBT Phase B.
 
 ## Requirements
 
@@ -174,4 +189,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-29 — v4 Plugin/Scripting System shipped (8/8 requirements validated across Phases 21–28, 7/7 cross-phase integration chains wired, 4/4 bot-driven gate flows green + the automated perf gate). Dual-runtime API: Starlark hot-path core (CGO=0 preserved) + opt-in build-tag Python; vanilla mobs + crafting dogfooded 1:1 through the API; Folia regionization (REGION-01) folded in. Next milestone undefined — run `/gsd-new-milestone`.*
+*Last updated: 2026-06-29 — v5 Mob Behaviors & Living-Entity Subsystems STARTED. Builds the 4 deferred mob subsystems (JumpControl+fluid, mob damage pipeline, animal aging/breeding, held-item+item-tags) 1:1 from the jar, finishes the pig's 5 deferred goals, adds passive (cow/sheep/chicken) + hostile (zombie/skeleton/spider) + neutral (wolf) mobs as jar-faithful Starlark plugins. Continues from Phase 28 → Phase 29+. Prior: v4 Plugin/Scripting System shipped (8/8 reqs across Phases 21–28).*
