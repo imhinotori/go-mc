@@ -704,6 +704,51 @@ func encodeDamageEvent(entityID, sourceTypeID, sourceCauseID, sourceDirectID int
 	)
 }
 
+// --- WR-05: the entity-attached SOUND packet (ClientboundSoundEntity) ------------------
+//
+// The HURT SOUND (the reported "no sound on hit" gap) rides ClientboundSoundEntityPacket — the
+// entity-attached sound variant LivingEntity.makeSound -> playSound emits, which is closer than the
+// positional ClientboundSoundPacket because it follows the entity. The codebase had NO sound packet at
+// all; this is the first one. All wire numbers are JAR-DERIVED (javap'd from temp/cache/26.2-inner.jar
+// this session), NOT guessed.
+
+// soundSourceNeutral is SoundSource.NEUTRAL.ordinal() == 6. SoundSource's enum order is MASTER(0),
+// MUSIC(1), RECORDS(2), WEATHER(3), BLOCKS(4), HOSTILE(5), NEUTRAL(6), PLAYERS(7), AMBIENT(8), VOICE(9),
+// UI(10). A passive mob (Animal/Pig) overrides getSoundSource() to NEUTRAL, so its hurt sound plays on
+// the NEUTRAL category. FriendlyByteBuf.writeEnum writes the ordinal as a VarInt.
+//   [VERIFIED javap: net.minecraft.sounds.SoundSource enum order (MASTER..UI); Animal.getSoundSource ->
+//    getstatic SoundSource.NEUTRAL; FriendlyByteBuf.writeEnum -> writeVarInt(ordinal).]
+const soundSourceNeutral = 6
+
+// encodeSoundEntity builds ClientboundSoundEntity (jar: ClientboundSoundEntityPacket.write) — an
+// entity-attached sound. JAR-DERIVED wire layout (the constructor/decode field order matches write):
+//   - sound  : Holder<SoundEvent> via SoundEvent.STREAM_CODEC == ByteBufCodecs.holder(SOUND_EVENT, ...):
+//              a registry Reference holder writes VarInt(registryId + 1); a Direct holder writes
+//              VarInt(0) then the inline SoundEvent. PIG_HURT is a registry sound, so we write
+//              VarInt(soundID + 1) only (the inline-direct path is never taken for a registered sound).
+//   - source : SoundSource enum via writeEnum -> VarInt(ordinal)
+//   - id     : VarInt (the entity the sound is attached to)
+//   - volume : Float
+//   - pitch  : Float
+//   - seed   : Long (the client's per-sound RNG seed for variant selection)
+//
+//	[VERIFIED javap net.minecraft.network.protocol.game.ClientboundSoundEntityPacket: ctor/decode order
+//	 SoundEvent.STREAM_CODEC(Holder) ; readEnum(SoundSource) ; readVarInt(id) ; readFloat(volume) ;
+//	 readFloat(pitch) ; readLong(seed). write writes them in the SAME order. SoundEvent.STREAM_CODEC =
+//	 ByteBufCodecs.holder(Registries.SOUND_EVENT, DIRECT_STREAM_CODEC); ByteBufCodecs$30.encode writes
+//	 VarInt(getIdOrThrow + 1) for a Reference holder, VarInt(0)+direct for a Direct holder.]
+func encodeSoundEntity(soundID int32, source int, entityID int32, volume, pitch float32, seed int64) pk.Packet {
+	return pk.Marshal(
+		int32(packetid.ClientboundSoundEntity),
+		pk.VarInt(soundID+1), // Holder<SoundEvent>: registry Reference -> id + 1 (0 reserved for inline)
+		pk.VarInt(int32(source)), // SoundSource ordinal (writeEnum)
+		pk.VarInt(entityID),      // the entity the sound follows
+		pk.Float(volume),         // getSoundVolume() == 1.0 for a pig
+		pk.Float(pitch),          // getVoicePitch()
+		pk.Long(seed),            // per-sound RNG seed
+	)
+}
+
 // encodeRemoveEntities builds ClientboundRemoveEntities (06-CAPTURE-DIFF §5):
 // writeIntIdList == VarInt count followed by N VarInt ids. The tracker batches ALL of a
 // player's newly-out-of-range ids into ONE such packet per tick.

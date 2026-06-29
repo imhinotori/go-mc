@@ -17,6 +17,7 @@ package server
 
 import (
 	"math"
+	"math/rand/v2"
 
 	"github.com/imhinotori/sulfur/level/attribute"
 	"github.com/imhinotori/sulfur/plugin/host"
@@ -110,12 +111,92 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 		e.lastDamageSource = src
 	}
 
-	// Death drive (`if (isDeadOrDying()) { ...; die(source); }`): actuallyHurtEntity has set the
-	// authoritative health; if it reached 0 run the death flow.
+	// Death-or-hurt-sound drive (bytecode 370-423): `if (isDeadOrDying()) { ...getDeathSound...; die(source); }
+	// else if (tookFullDamage) { playHurtSound(source); playSecondaryHurtSound(source); }`. actuallyHurtEntity
+	// has set the authoritative health; if it reached 0 run the death flow, OTHERWISE (the mob survived the
+	// hit) play the HURT SOUND. Reaching here at all means tookFullDamage was true (the only non-tookFullDamage
+	// path, the `amount <= lastHurt` i-frame rejection, returned early above), so the `else if (tookFullDamage)`
+	// is unconditionally the hurt-sound branch on survival.
+	//
+	//	[VERIFIED javap LivingEntity.hurtServer (bytecode 370-423): if(isDeadOrDying()) ... die(source); else
+	//	 if(tookFullDamage) playHurtSound(source). The death-sound (getDeathSound/makeSound) is the death
+	//	 path's own sound — a v1 deferral on the death side; this fix lands the surviving-hit HURT sound.]
 	if e.health <= 0 {
 		t.dieEntity(e, src)
+	} else {
+		// playHurtSound(source) -> makeSound(getHurtSound(source)) -> playSound(sound, getSoundVolume(),
+		// getVoicePitch()). playSecondaryHurtSound is a v1 no-op (it is the shield/armor secondary clink,
+		// with no v1 source). WR-05: the reported "no sound on hit" gap.
+		t.playMobHurtSound(e)
 	}
 }
+
+// playMobHurtSound is the port of LivingEntity.playHurtSound(DamageSource) -> makeSound(getHurtSound(
+// source)) -> Entity.playSound(SoundEvent, float, float) -> Level.playSound(...) for a mob, emitting the
+// entity-attached hurt sound to every player tracking the mob. It is the WR-05 fix (the codebase had no
+// sound packet at all). Decompiled this session:
+//
+//	playHurtSound(source): makeSound(getHurtSound(source));
+//	makeSound(sound): if (sound != null) playSound(sound, getSoundVolume(), getVoicePitch());
+//	getSoundVolume(): 1.0F (LivingEntity default);
+//	getVoicePitch(): isBaby() ? (nextFloat()-nextFloat())*0.2 + 1.5 : (nextFloat()-nextFloat())*0.2 + 1.0;
+//	Entity.playSound(sound, vol, pitch): if (!isSilent()) level.playSound(null, x, y, z, sound,
+//	    getSoundSource(), vol, pitch);  // -> seeded with level.soundSeedGenerator.nextLong()
+//
+// The pig's getHurtSound resolves through its PigSoundVariant CLASSIC sound set to SoundEvents.PIG_HURT
+// ("entity.pig.hurt", registry id 1269). getSoundSource() == SoundSource.NEUTRAL (Animal override). The
+// volume is 1.0; the voice pitch is the non-baby formula (the v1 pig is never a baby): (nextFloat() -
+// nextFloat()) * 0.2 + 1.0, drawn from the MOB's per-entity RNG (mobRandom — Mob.getRandom()). The seed
+// is a FRESH server-generated draw (Level.soundSeedGenerator.nextLong() analogue — math/rand/v2, never
+// client-supplied, the same event-time discipline death loot uses), NOT the mob's stream, so it does not
+// perturb the pig oracle. The packet broadcasts to trackers exactly as the damage-event/death-status do.
+//
+// ORACLE NOTE: the getVoicePitch nextFloat()-nextFloat() draws come from the mob RNG, but they fire on a
+// HIT event (inside applyDamageEntity), never during the AI tick the pig oracle (TestPluginPigEqualsGoNativePig)
+// runs — that oracle deals NO damage in its 500-tick window — so the draws are outside the pinned stream
+// (PITFALLS Pitfall 5). Confirmed: the oracle stays green.
+//
+//	[VERIFIED javap LivingEntity.playHurtSound/makeSound/getSoundVolume(==1.0F)/getVoicePitch
+//	 ((nextFloat()-nextFloat())*0.2+1.0 non-baby); Pig.getHurtSound -> PigSoundVariant CLASSIC hurtSound
+//	 == SoundEvents.PIG_HURT; Animal.getSoundSource == NEUTRAL; Entity.playSound -> Level.playSound (null
+//	 player, x/y/z, sound, source, vol, pitch) seeded soundSeedGenerator.nextLong().]
+func (t *TickLoop) playMobHurtSound(e *Entity) {
+	// getVoicePitch() (non-baby): (nextFloat() - nextFloat()) * 0.2 + 1.0, from the mob's RandomSource.
+	rng := mobRandom(e)
+	pitch := (rng.nextFloat()-rng.nextFloat())*mobVoicePitchJitter + mobVoicePitchBase
+
+	// The per-sound seed: a fresh server draw (Level.soundSeedGenerator.nextLong() analogue), never the
+	// mob's stream and never client-supplied — the same event-time RNG discipline death loot uses.
+	seed := rand.Int64()
+
+	// playSound(sound, getSoundVolume()==1.0, pitch) -> Level.playSound(...) for the pig hurt sound on the
+	// NEUTRAL category, broadcast to every player tracking the mob (sendToTrackingPlayers analogue). isSilent()
+	// is a v1 constant-false (no DATA_SILENT mob is wired), so the sound always plays — cited.
+	t.broadcastToTrackers(e.id, encodeSoundEntity(soundIDPigHurt, soundSourceNeutral, e.id, mobHurtSoundVolume, pitch, seed))
+}
+
+// soundIDPigHurt is SoundEvents.PIG_HURT's registry id ("entity.pig.hurt" == 1269 in
+// data/soundid/soundid.go, generated from the jar's registries). The pig's getHurtSound resolves to
+// this via its CLASSIC PigSoundVariant hurt set.
+//
+//	[VERIFIED data/soundid/soundid.go: 1269: "entity.pig.hurt"; javap Pig.getHurtSound -> PigSoundVariant
+//	 CLASSIC hurtSound == SoundEvents.PIG_HURT.]
+const soundIDPigHurt int32 = 1269
+
+// mobHurtSoundVolume is LivingEntity.getSoundVolume() == 1.0F (the default mob sound volume).
+//
+//	[VERIFIED javap LivingEntity.getSoundVolume: fconst_1; freturn.]
+const mobHurtSoundVolume float32 = 1.0
+
+// mobVoicePitchBase / mobVoicePitchJitter are the non-baby getVoicePitch() terms: the result is
+// (nextFloat() - nextFloat()) * 0.2 + 1.0.
+//
+//	[VERIFIED javap LivingEntity.getVoicePitch (non-baby branch): (nextFloat() - nextFloat()) ; ldc 0.2f ;
+//	 fmul ; fconst_1 ; fadd.]
+const (
+	mobVoicePitchBase   float32 = 1.0
+	mobVoicePitchJitter float32 = 0.2
+)
 
 // broadcastMobDamageEvent is the port of the tookFullDamage hurt-animation broadcast inside
 // net.minecraft.world.entity.LivingEntity.hurtServer:

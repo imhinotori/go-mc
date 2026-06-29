@@ -348,3 +348,78 @@ func TestMobKnockback_ResistFullNoRecoil(t *testing.T) {
 		t.Fatalf("fully knockback-resistant mob recoiled (vx=%v vy=%v vz=%v), want (0,0,0)", mob.vx, mob.vy, mob.vz)
 	}
 }
+
+// TestMobHurtSound_PlaysOnNonFatalHit (WR-05): a hit that does NOT kill the mob broadcasts exactly one
+// ClientboundSoundEntity (the pig hurt sound) to the trackers, and the wire fields match the jar layout
+// 1:1 (sound holder id 1269+1, NEUTRAL source, the mob entity id, volume 1.0, a pitch near 1.0). A FATAL
+// hit must NOT play the hurt sound (vanilla plays the death sound on that branch, not the hurt sound).
+func TestMobHurtSound_PlaysOnNonFatalHit(t *testing.T) {
+	loop, _ := newBlockLoop()
+	mob := newDamageMob(loop, 1, 20.0) // 20 health: a 6.0 hit is non-fatal
+
+	viewer := &tickPlayer{client: captureClient(64), entityID: 1000, tracked: map[int32]bool{mob.id: true}}
+	loop.players = append(loop.players, viewer)
+
+	src := damageSourcePlayerAttack(77)
+	loop.applyDamageEntity(mob, src, 6.0) // non-fatal (14 health remains)
+
+	got := drainPackets(viewer.client)
+	if n := countID(got, packetid.ClientboundSoundEntity); n != 1 {
+		t.Fatalf("non-fatal hit broadcast %d ClientboundSoundEntity packets, want 1 (the hurt sound)", n)
+	}
+
+	// Decode the one SoundEntity and assert the wire layout: VarInt soundHolder(id+1), VarInt source,
+	// VarInt entityId, Float volume, Float pitch, Long seed.
+	var pkt pk.Packet
+	for _, p := range got {
+		if p.ID == int32(packetid.ClientboundSoundEntity) {
+			pkt = p
+		}
+	}
+	r := bytes.NewReader(pkt.Data)
+	var soundHolder, source, entityID pk.VarInt
+	var volume, pitch pk.Float
+	var seed pk.Long
+	if _, err := (pk.Tuple{&soundHolder, &source, &entityID, &volume, &pitch, &seed}).ReadFrom(r); err != nil {
+		t.Fatalf("decode ClientboundSoundEntity: %v", err)
+	}
+	// Holder<SoundEvent>: registry Reference -> id + 1. entity.pig.hurt == 1269 -> 1270 on the wire.
+	if int32(soundHolder) != soundIDPigHurt+1 {
+		t.Fatalf("SoundEntity holder = %d, want %d (pig.hurt id 1269 + 1)", int32(soundHolder), soundIDPigHurt+1)
+	}
+	if int32(source) != soundSourceNeutral {
+		t.Fatalf("SoundEntity source = %d, want %d (SoundSource.NEUTRAL ordinal)", int32(source), soundSourceNeutral)
+	}
+	if int32(entityID) != mob.id {
+		t.Fatalf("SoundEntity entityId = %d, want %d (the hurt mob)", int32(entityID), mob.id)
+	}
+	if float32(volume) != mobHurtSoundVolume {
+		t.Fatalf("SoundEntity volume = %v, want %v (getSoundVolume 1.0)", float32(volume), mobHurtSoundVolume)
+	}
+	// pitch == (nextFloat()-nextFloat())*0.2 + 1.0, so in [0.8, 1.2).
+	if float32(pitch) < 0.8 || float32(pitch) >= 1.2 {
+		t.Fatalf("SoundEntity pitch = %v, want in [0.8, 1.2) ((nextFloat()-nextFloat())*0.2 + 1.0)", float32(pitch))
+	}
+	if r.Len() != 0 {
+		t.Fatalf("SoundEntity has %d trailing bytes, want 0 (exact wire layout)", r.Len())
+	}
+}
+
+// TestMobHurtSound_NoSoundOnFatalHit: a lethal hit does NOT play the hurt sound (the death branch plays
+// the death sound instead — `if (isDeadOrDying()) ... else if (tookFullDamage) playHurtSound`). Pins the
+// else-branch gate so the hurt sound never plays on a kill.
+func TestMobHurtSound_NoSoundOnFatalHit(t *testing.T) {
+	loop, _ := newN2Loop(t)
+	mob, owner := lethalPigInRegion0(loop) // 4 health: a 100.0 hit is fatal
+
+	viewer := &tickPlayer{client: captureClient(64), entityID: 1000, tracked: map[int32]bool{mob.id: true}}
+	loop.players = append(loop.players, viewer)
+
+	src := damageSourcePlayerAttack(77)
+	loop.withRegion(owner, func() { loop.applyDamageEntity(mob, src, 100.0) }) // lethal
+
+	got := drainPackets(viewer.client)
+	if n := countID(got, packetid.ClientboundSoundEntity); n != 0 {
+		t.Fatalf("fatal hit broadcast %d ClientboundSoundEntity packets, want 0 (death plays the death sound, not hurt)", n)
+	}
+}
