@@ -103,9 +103,166 @@ func parseCondition(rc rawCondition) (LootCondition, error) {
 		// ExplosionCondition: no fields. EXPLOSION_RADIUS absent -> true (the v1
 		// break default). 20-02 Task 1 (javap ExplosionCondition.test).
 		return &explosionCondition{}, nil
+	case "any_of":
+		// AnyOfCondition (Phase 29-04, the entity-loot OR): test = OR over the child terms
+		// (CompositeLootItemCondition with Predicate.or). The pig table wraps furnace_smelt in an
+		// any_of(is_on_fire, attacker-smelts_loot). javap AnyOfCondition extends
+		// CompositeLootItemCondition (the `terms` list, .or composition).
+		var rcs []rawCondition
+		if raw, ok := rc["terms"]; ok {
+			if err := json.Unmarshal(raw, &rcs); err != nil {
+				return nil, fmt.Errorf("any_of terms: %w", err)
+			}
+		}
+		terms, err := parseConditions(rcs)
+		if err != nil {
+			return nil, err
+		}
+		return &anyOfCondition{terms: terms}, nil
+	case "all_of":
+		// AllOfCondition (the AND composite, the sibling of any_of): test = AND over the terms
+		// (CompositeLootItemCondition with Predicate.and). Not used by the pig table but ported
+		// alongside any_of for the other entity tables. javap AllOfCondition.and composition.
+		var rcs []rawCondition
+		if raw, ok := rc["terms"]; ok {
+			if err := json.Unmarshal(raw, &rcs); err != nil {
+				return nil, fmt.Errorf("all_of terms: %w", err)
+			}
+		}
+		terms, err := parseConditions(rcs)
+		if err != nil {
+			return nil, err
+		}
+		return &allOfCondition{terms: terms}, nil
+	case "killed_by_player":
+		// LootItemKilledByPlayerCondition.test == hasParameter(LAST_DAMAGE_PLAYER) — the mob was
+		// killed by a player. Reads ctx.KilledByPlayer (the death-source player-attack proxy).
+		// javap LootItemKilledByPlayerCondition.test: hasParameter(LAST_DAMAGE_PLAYER); ireturn.
+		return &killedByPlayerCondition{}, nil
+	case "entity_properties":
+		// LootItemEntityPropertyCondition.test: resolve the target entity (this / direct_attacker /
+		// attacker) and test its EntityPredicate. The pig table uses two forms: (a) entity="this"
+		// predicate.flags.is_on_fire (the victim is burning -> furnace_smelt), and (b)
+		// entity="direct_attacker" predicate.equipment.mainhand enchants #smelts_loot. Parse which
+		// form this is so the condition reads the matching cited-stub context field (VictimOnFire /
+		// AttackerSmeltsLoot). javap LootItemEntityPropertyCondition.test (EntityPredicate.matches).
+		return parseEntityProperties(rc)
 	default:
-		return nil, fmt.Errorf("loot condition %q not ported (location_check/match_tool/survives_explosion in scope)", typeStr)
+		return nil, fmt.Errorf("loot condition %q not ported (location_check/match_tool/survives_explosion/any_of/all_of/killed_by_player/entity_properties in scope)", typeStr)
 	}
+}
+
+// anyOfCondition is the port of net.minecraft.world.level.storage.loot.predicates.AnyOfCondition
+// (CompositeLootItemCondition with Predicate.or): test passes if ANY child term passes. An empty
+// terms list is FALSE (the OR identity — vanilla's CompositeLootItemCondition.or over no terms is
+// the constant-false predicate). Short-circuits on the first passing term.
+type anyOfCondition struct {
+	terms []LootCondition
+}
+
+func (a *anyOfCondition) Test(ctx *LootContext) bool {
+	for _, t := range a.terms {
+		if t.Test(ctx) {
+			return true
+		}
+	}
+	return false
+}
+
+// allOfCondition is the port of AllOfCondition (CompositeLootItemCondition with Predicate.and):
+// test passes if EVERY child term passes (an empty list is TRUE — the AND identity). Reuses the
+// allConditions fold semantics.
+type allOfCondition struct {
+	terms []LootCondition
+}
+
+func (a *allOfCondition) Test(ctx *LootContext) bool {
+	return allConditions(a.terms, ctx)
+}
+
+// killedByPlayerCondition is the port of LootItemKilledByPlayerCondition: the mob was killed by a
+// player (hasParameter(LAST_DAMAGE_PLAYER)). Reads the entity context's KilledByPlayer bit.
+type killedByPlayerCondition struct{}
+
+func (k *killedByPlayerCondition) Test(ctx *LootContext) bool {
+	return ctx.KilledByPlayer
+}
+
+// entityPropertyKind is which entity-context fact an entity_properties condition asserts (the two
+// forms the entity tables use). Each maps to a cited-stub context field with the v1 vanilla default.
+type entityPropertyKind int
+
+const (
+	// entityPropOnFire: entity="this" predicate.flags.is_on_fire — the VICTIM is burning (reads
+	// VictimOnFire, v1 default false).
+	entityPropOnFire entityPropertyKind = iota
+	// entityPropAttackerSmeltsLoot: entity="direct_attacker" predicate.equipment.mainhand enchants
+	// #smelts_loot — the ATTACKER's weapon smelts loot (reads AttackerSmeltsLoot, v1 default false).
+	entityPropAttackerSmeltsLoot
+	// entityPropUnknown: a form this v1 port does not model (a future entity table) — TEST FALSE
+	// (the conservative default: a drop gated on an unmodeled predicate does not fire, never a
+	// wrong/extra drop). Cited so the real EntityPredicate match slots in later.
+	entityPropUnknown
+)
+
+// entityPropertyCondition is the port of LootItemEntityPropertyCondition for the two entity-table
+// forms (is_on_fire on "this", smelts_loot on "direct_attacker"). Test reads the matching cited-stub
+// context field. An unrecognized form tests FALSE (the conservative default — never a wrong drop).
+type entityPropertyCondition struct {
+	kind entityPropertyKind
+}
+
+func (e *entityPropertyCondition) Test(ctx *LootContext) bool {
+	switch e.kind {
+	case entityPropOnFire:
+		return ctx.VictimOnFire
+	case entityPropAttackerSmeltsLoot:
+		return ctx.AttackerSmeltsLoot
+	default:
+		return false // unmodeled predicate form -> conservative false (no wrong drop).
+	}
+}
+
+// parseEntityProperties decodes an entity_properties condition into the entity-table form it asserts.
+// It inspects entity (this / direct_attacker) + predicate (flags.is_on_fire | equipment.mainhand
+// enchants) to pick the cited-stub field the Test reads. A form this v1 port does not model parses to
+// entityPropUnknown (Test -> false), erroring on nothing (the table is trusted/vendored).
+func parseEntityProperties(rc rawCondition) (LootCondition, error) {
+	ent, err := rawString(rc, "entity")
+	if err != nil {
+		return nil, err
+	}
+	predRaw := rc["predicate"]
+	switch ent {
+	case "this":
+		// predicate.minecraft:flags.is_on_fire == true -> the victim-on-fire form.
+		if entityPredicateWantsOnFire(predRaw) {
+			return &entityPropertyCondition{kind: entityPropOnFire}, nil
+		}
+		return &entityPropertyCondition{kind: entityPropUnknown}, nil
+	case "direct_attacker", "attacker":
+		// predicate.minecraft:equipment.mainhand enchants #smelts_loot -> the smelts-loot form.
+		return &entityPropertyCondition{kind: entityPropAttackerSmeltsLoot}, nil
+	default:
+		return &entityPropertyCondition{kind: entityPropUnknown}, nil
+	}
+}
+
+// entityPredicateWantsOnFire reports whether an entity_properties predicate gates on the entity being
+// on fire (predicate.minecraft:flags.is_on_fire == true) — the pig table's "this is burning" term.
+func entityPredicateWantsOnFire(predRaw json.RawMessage) bool {
+	if len(predRaw) == 0 {
+		return false
+	}
+	var pred struct {
+		Flags struct {
+			IsOnFire *bool `json:"is_on_fire"`
+		} `json:"minecraft:flags"`
+	}
+	if err := json.Unmarshal(predRaw, &pred); err != nil {
+		return false
+	}
+	return pred.Flags.IsOnFire != nil && *pred.Flags.IsOnFire
 }
 
 // matchToolWantsSilkTouch reports whether a match_tool condition's predicate gates on a
