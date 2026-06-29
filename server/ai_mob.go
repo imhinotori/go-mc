@@ -51,6 +51,49 @@ type mobAI struct {
 	// fix). Tick-owned (TICK-05): created at AI build, drawn only on the tick goroutine. Never nil
 	// for a goal-bearing mob (newPigAI / buildAIFromDecl always set it).
 	rng *entityRandom
+
+	// jumpControl is the mob's ported net.minecraft.world.entity.ai.control.JumpControl (MOB-SUB-04).
+	// A goal claiming the JUMP flag calls jumpControl.doJump() (the JumpControl.jump() analogue), and
+	// the serverAiStep JUMP slot runs jumpControl.tick(e) AFTER navigation.tick (jar order) — which
+	// pushes the armed flag into e.jumping (setJumping) then clears it. PLAIN VALUE, RNG-FREE,
+	// tick-owned: the slot draws no random (the only new RNG in this subsystem is FloatGoal.tick in
+	// Plan 03, inside the goal callback). Cite JumpControl.
+	jumpControl jumpControl
+
+	// noJumpDelay is net.minecraft.world.entity.LivingEntity.noJumpDelay — the per-mob land-jump
+	// rate-limiter. The aiStep jump branch sets it to 10 after a jumpFromGround (so a mob jumps at
+	// most once per ~10 ticks on land), and it is decremented toward 0 at the TOP of each serverAiStep
+	// step (clamped at 0, never negative). A plain int, RNG-FREE, tick-owned. Cite LivingEntity.aiStep
+	// (the `if (noJumpDelay > 0) noJumpDelay--;` at the top + the `noJumpDelay = 10` after a land jump).
+	noJumpDelay int
+}
+
+// jumpControl is the ported net.minecraft.world.entity.ai.control.JumpControl — the per-mob jump
+// coalescer. A goal claiming the JUMP flag calls doJump() (arming the flag); the serverAiStep JUMP
+// slot calls tick(e) once per tick, which pushes the flag into the mob (setJumping) then clears it.
+// Repeated doJump() calls within a tick are idempotent (coalesce to one bool) — the T-30-06 DoS
+// bound. PLAIN VALUE, RNG-FREE, tick-owned (TICK-05).
+//
+//	[VERIFIED javap JumpControl: jump(){ this.jump = true; }  tick(){ mob.setJumping(jump); jump = false; }.]
+type jumpControl struct {
+	// jump is JumpControl.jump — the "a goal wants a jump this tick" flag. Armed by doJump(), consumed
+	// + cleared by tick(). Plain bool.
+	jump bool
+}
+
+// doJump is the JumpControl.jump() analogue: arm the jump flag. Named doJump (not jump) to avoid
+// colliding with the `jump` field. A goal's tick callback / nav.jump() calls it.
+//
+//	[VERIFIED javap JumpControl.jump(): iconst_1; putfield jump:Z — `this.jump = true;`.]
+func (j *jumpControl) doJump() { j.jump = true }
+
+// tick is the JumpControl.tick() analogue: push the armed flag into the mob (setJumping) then clear
+// it, so a jump intent lasts exactly one tick. Runs in the serverAiStep JUMP slot after navigation.
+//
+//	[VERIFIED javap JumpControl.tick(): mob.setJumping(jump); this.jump = false;.]
+func (j *jumpControl) tick(e *Entity) {
+	e.setJumping(j.jump)
+	j.jump = false
 }
 
 // setWantTarget records a navigation target (the randomStrollGoal start() seam). Setting a
@@ -103,6 +146,15 @@ func (m *mobAI) navWantsPath() bool {
 // there is no second GoalSelector to tick (07-RESEARCH AI-01 row 5). Plan 07-03 calls this
 // from the tickAI() slot for every AI mob; this plan delivers the driver, not the call site.
 func (m *mobAI) serverAiStep(t *TickLoop, e *Entity) {
+	// MOB-SUB-04 — the noJumpDelay decrement at the TOP of LivingEntity.aiStep (`if (noJumpDelay > 0)
+	// noJumpDelay--;`). It is PURE INTEGER MATH (no RNG draw), so it cannot perturb the per-mob RNG
+	// stream the pig oracle pins. Clamped at 0 — never negative.
+	//	[VERIFIED javap LivingEntity.aiStep top: getfield noJumpDelay; ifle skip; iconst_1; isub;
+	//	 putfield noJumpDelay — i.e. `if (noJumpDelay > 0) noJumpDelay--;`.]
+	if m.noJumpDelay > 0 {
+		m.noJumpDelay--
+	}
+
 	// (sensing.tick — skipped: the v1 goals probe the world directly in their canUse.)
 	// (targetSelector.tick + tickRunningGoals — skipped: no attack targets for a passive Pig.)
 	m.goals.tick(t, e)                   // start/stop goals by priority + per-flag locking
@@ -121,7 +173,17 @@ func (m *mobAI) serverAiStep(t *TickLoop, e *Entity) {
 	// Advance the active path one step (Pattern 3: desired Δ -> the EXISTING moveEntity, which
 	// re-buckets; the unchanged tracker auto-broadcasts). Runs inline on the tick (TICK-05).
 	m.navigation.tick(t, e)
-	// (moveControl/lookControl/jumpControl.tick — folded into navigation.tick's yaw + moveEntity.)
+
+	// MOB-SUB-04 — the JUMP slot, in the jar-confirmed Mob.serverAiStep order: moveControl/lookControl
+	// (folded into navigation.tick's yaw + moveEntity above) THEN jumpControl.tick. jumpControl.tick
+	// pushes the goal-armed jump flag into e.jumping (setJumping) then clears it; entityJumpStep is the
+	// LivingEntity.aiStep jump branch that consumes e.jumping into the real vy impulse. BOTH are PURE
+	// (no RNG draw) — the slot cannot perturb the pig oracle's RNG stream; the only new RNG is
+	// FloatGoal.tick (Plan 03), confined to the goal callback above. The impulse lands HERE, in tickAI,
+	// BEFORE tickPhysics integrates gravity (tick_phases.go: tickAI → tickPhysics), so the jump is not
+	// cancelled the same tick.
+	m.jumpControl.tick(e)
+	t.entityJumpStep(e)
 }
 
 // newPigAI builds the v1 passive Pig AI: the three "visibly alive" goals registered at the

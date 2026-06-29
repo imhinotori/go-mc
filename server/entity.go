@@ -69,6 +69,13 @@ type Entity struct {
 	// a solid block (physics, Plan 06-03). Tick-owned.
 	onGround bool
 
+	// jumping is net.minecraft.world.entity.LivingEntity.jumping — the per-tick "this mob WANTS to
+	// jump" flag the JumpControl writes (jumpControl.tick → setJumping(jump)) and the aiStep jump
+	// branch reads (`if (jumping && isAffectedByFluids())`). A plain bool (snapshot-friendly,
+	// tick-owned, RNG-free), set every tick by the mob's jumpControl. MOB-SUB-04 (Plan 30-02).
+	//	[VERIFIED javap LivingEntity.setJumping(boolean): `this.jumping = b;` — a bare field write.]
+	jumping bool
+
 	// width, height are the entity's AABB footprint, COPIED from the data/entity table at
 	// spawn (NewEntity) so the AABB helper and physics never re-look-up the table. Plain
 	// values, snapshot-friendly.
@@ -281,6 +288,20 @@ func (e *Entity) getAttributeValue(attr *attribute.Attribute) float64 {
 	}
 	return e.attributes.GetValue(attr.Name())
 }
+
+// setJumping is net.minecraft.world.entity.LivingEntity.setJumping(boolean) — the bare field write
+// the mob's JumpControl performs each tick (jumpControl.tick → mob.setJumping(jump)). MOB-SUB-04.
+//	[VERIFIED javap LivingEntity.setJumping(boolean): aload_0; iload_1; putfield jumping:Z; return —
+//	 i.e. `this.jumping = b;`. No side effects beyond the field write.]
+func (e *Entity) setJumping(b bool) { e.jumping = b }
+
+// isAffectedByFluids is net.minecraft.world.entity.LivingEntity.isAffectedByFluids — the gate the
+// aiStep jump branch checks (`if (jumping && isAffectedByFluids())`). For a base LivingEntity it
+// returns TRUE unconditionally (only a few overrides — e.g. ArmorStand — return false). A v1 Pig is
+// a plain LivingEntity, so this is a cited const-true, structured to become a per-type override read
+// (a `noFluidAffect` flag) once a mob type needs the ArmorStand-style false. MOB-SUB-04.
+//	[VERIFIED javap LivingEntity.isAffectedByFluids: iconst_1; ireturn — `return true;`.]
+func (e *Entity) isAffectedByFluids() bool { return true }
 
 // initSpawnHealth sets a freshly-spawned mob's health to its folded MaxHealth — the port of
 // net.minecraft.world.entity.LivingEntity.<init>'s `setHealth(getMaxHealth())`, where
