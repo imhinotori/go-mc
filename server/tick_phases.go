@@ -40,10 +40,10 @@ func (t *TickLoop) applyAsyncResults() {
 	t.trace("applyAsyncResults")
 
 	// Drain the Phase-4 chunkReady bridge (skipped cheaply when no world is wired).
-	if t.only().asyncIn != nil {
+	if t.cur().asyncIn != nil {
 		for {
 			select {
-			case r := <-t.only().asyncIn:
+			case r := <-t.cur().asyncIn:
 				r.applyTo(t) // applied by the owner; the worker only computed an immutable result
 			default:
 				goto phase8 // nothing queued on asyncIn: move to the Phase-8 channel
@@ -115,7 +115,7 @@ func (t *TickLoop) tickWorld() {
 // set unbounded (threat T-4-01). Runs on the owner goroutine over tick-owned state.
 func (t *TickLoop) tickChunks() {
 	t.trace("tickChunks")
-	if t.only().world == nil || t.only().worker == nil {
+	if t.world() == nil || t.worker() == nil {
 		return // no world wired (Phase-3-style tests / pre-SetWorld): cheap no-op
 	}
 	// Advance the manager clock, then revert any column stuck in Loading past the grace window
@@ -123,14 +123,14 @@ func (t *TickLoop) tickChunks() {
 	// DROPPED under burst backpressure (worker.Request is non-blocking and silently drops when its
 	// bounded queue is full) or a center stranded by the scheduler's emit gate — without it a
 	// dropped request leaves the column transparent forever (the "invisible chunk" bug).
-	t.only().world.Tick()
-	t.only().world.RetryStale(chunkLoadGraceTicks)
+	t.world().Tick()
+	t.world().RetryStale(chunkLoadGraceTicks)
 	for _, p := range t.players {
 		ring := centerOutRing(p.center, p.viewDist)
 		for _, pos := range ring {
-			if t.only().world.IsEmpty(pos) {
-				t.only().world.MarkLoading(pos) // Empty -> Loading: this tick owns the single request
-				t.only().worker.Request(pos)    // non-blocking; drops if the bounded queue is full
+			if t.world().IsEmpty(pos) {
+				t.world().MarkLoading(pos) // Empty -> Loading: this tick owns the single request
+				t.worker().Request(pos)    // non-blocking; drops if the bounded queue is full
 			}
 		}
 	}
@@ -153,7 +153,7 @@ func (t *TickLoop) tickEntities() {
 	t.trace("tickEntities")
 	// No entity self-propulsion in this plan: positions are unchanged within the tick, so the
 	// store's per-section buckets are already consistent for the tracker's near() read that
-	// follows. Plan 06-03 fills this with velocity integration via t.only().entities.move (the
+	// follows. Plan 06-03 fills this with velocity integration via t.cur().entities.move (the
 	// bucket-consistent mutation path), keeping near() stale-free.
 
 	// Plan 06-07 interactive gate: the OFF-by-default debug triggers (a visible moving pig +
@@ -279,14 +279,14 @@ func (t *TickLoop) tickUltraDebug() {
 // safe (it cannot corrupt the iteration we are driving).
 func (t *TickLoop) tickAI() {
 	t.trace("tickAI")
-	if t.only().entities == nil {
+	if t.cur().entities == nil {
 		return // defensive: store is non-nil from NewTickLoop, but never panic if absent
 	}
 
 	// Snapshot the AI mobs so the loop is stable even if a spawn (below) or a move re-buckets
 	// mid-range — exactly the discipline tickPhysics uses (copy the byID values, then range).
-	snapshot := make([]*Entity, 0, len(t.only().entities.byID))
-	for _, e := range t.only().entities.byID {
+	snapshot := make([]*Entity, 0, len(t.cur().entities.byID))
+	for _, e := range t.cur().entities.byID {
 		if e.ai != nil {
 			snapshot = append(snapshot, e)
 		}
@@ -321,13 +321,13 @@ func (t *TickLoop) tickAI() {
 // to any future in-loop add/remove.
 func (t *TickLoop) tickPhysics() {
 	t.trace("tickPhysics")
-	if t.only().entities == nil {
+	if t.cur().entities == nil {
 		return // defensive: store is non-nil from NewTickLoop, but never panic if absent
 	}
 
 	// Snapshot the live entities so the loop is stable even if a move re-buckets mid-range.
-	snapshot := make([]*Entity, 0, len(t.only().entities.byID))
-	for _, e := range t.only().entities.byID {
+	snapshot := make([]*Entity, 0, len(t.cur().entities.byID))
+	for _, e := range t.cur().entities.byID {
 		snapshot = append(snapshot, e)
 	}
 
@@ -359,7 +359,7 @@ func (t *TickLoop) tickPhysics() {
 // socket writer); the tick never writes the socket directly. Runs on the owner.
 func (t *TickLoop) flushOutbound() {
 	t.trace("flushOutbound")
-	if t.only().world == nil {
+	if t.world() == nil {
 		return // no world wired: cheap no-op (Phase-3-style tests / pre-SetWorld)
 	}
 	for _, p := range t.players {
@@ -441,7 +441,7 @@ func (t *TickLoop) sendNextChunks(p *tickPlayer) {
 		if p.sentChunks[pos] {
 			continue
 		}
-		ch, ok := t.only().world.Get(pos)
+		ch, ok := t.world().Get(pos)
 		if !ok {
 			continue // not Ready yet (still generating) — a later tick sends it
 		}

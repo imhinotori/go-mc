@@ -137,10 +137,10 @@ func isChestBlock(s block.StateID) bool {
 // on any right-click. Structured so a real sneak read flips the guard later without touching this.
 func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direction int) bool {
 	_ = direction
-	if t.only().world == nil {
+	if t.world() == nil {
 		return false
 	}
-	state, ok := t.only().world.GetBlock(hitPos, dimMinY)
+	state, ok := t.world().GetBlock(hitPos, dimMinY)
 	if !ok {
 		return false // unloaded: PASS → placement runs
 	}
@@ -220,12 +220,12 @@ func (t *TickLoop) openChest(p *tickPlayer, pos pk.Position) bool {
 // Extend the switch as more block-entity blocks land (furnace, etc). CITE: ChestBlock is an
 // EntityBlock; ChestBlock.newBlockEntity = new ChestBlockEntity(pos,state) (empty, on-place).
 func (t *TickLoop) createBlockEntityOnPlace(pos pk.Position, state block.StateID) {
-	if t.only().world == nil || !isChestBlock(state) {
+	if t.world() == nil || !isChestBlock(state) {
 		return
 	}
 	// Empty bare compound: a placed chest has no LootTable and no Items yet.
 	empty := nbt.RawMessage{Type: nbt.TagCompound, Data: []byte{0x00}}
-	t.only().world.SetBlockEntityAt(pos, block.EntityTypes["minecraft:chest"], empty, dimMinY)
+	t.world().SetBlockEntityAt(pos, block.EntityTypes["minecraft:chest"], empty, dimMinY)
 }
 
 // resolveChest returns the tick-owned chestLoot container for pos, decoding it from the chunk's
@@ -247,7 +247,7 @@ func (t *TickLoop) resolveChest(pos pk.Position) *chestLoot {
 	if cl == nil {
 		// No recorded BE: if the block is actually a chest (a player-placed plain chest), open an
 		// empty container; otherwise it is not a chest at all -> nil (the click is a non-open).
-		if state, ok := t.only().world.GetBlock(pos, dimMinY); ok && isChestBlock(state) {
+		if state, ok := t.world().GetBlock(pos, dimMinY); ok && isChestBlock(state) {
 			cl = &chestLoot{} // empty: LootTable "" -> unpackLootTable is a no-op, 27 empty slots
 		} else {
 			return nil
@@ -264,11 +264,11 @@ func (t *TickLoop) resolveChest(pos pk.Position) *chestLoot {
 // chestLootNBT), which nbt.RawMessage.Unmarshal decodes directly. A garbled/empty BE yields a
 // chestLoot with no table (opens empty) — never a panic (T-20-04 tolerant decode).
 func (t *TickLoop) decodeChestBE(pos pk.Position) *chestLoot {
-	if t.only().world == nil {
+	if t.world() == nil {
 		return nil
 	}
 	col := level.ChunkPos{int32(pos.X >> 4), int32(pos.Z >> 4)}
-	ch, ok := t.only().world.Get(col)
+	ch, ok := t.world().Get(col)
 	if !ok {
 		return nil
 	}

@@ -172,6 +172,23 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 	inv := ensureInventory(p)
 	held := inv.get(heldWindowSlot(inv.heldSlot))
 
+	// PLUGIN-07 (Plan 28-01) GATE-ONLY trigger — the spawn-egg path. A vanilla spawn egg spawns ON
+	// the CLICKED BLOCK (SpawnEggItem.useOn), not on right-click-air, so the gate egg must hook the
+	// UseItemOn (block) path — this is how a player actually uses a spawn egg. Spawn at the adjacent
+	// face cell, centered (clickedPos.relative(face) + 0.5/0.5 — SpawnEggItem.useOn spawns at the
+	// relative pos when the clicked face is obstructed, which is the common case clicking a solid top
+	// face). GATE-ONLY (threat T-28-03): testKitEnabled() is false in prod, so the egg is never in a
+	// prod hand. Owner-goroutine (tick-side), no locks. Fire BEFORE block placement so the egg never
+	// falls through to blockStateForItem.
+	if testKitEnabled() && !slotIsEmpty(held) && int32(held.ItemID) == int32(gateSpawnEggID) {
+		dx, dy, dz := directionNormal(int(direction))
+		t.handleGateSpawnEggAt(p,
+			float64(pos.X+dx)+0.5,
+			float64(pos.Y+dy),
+			float64(pos.Z+dz)+0.5)
+		return
+	}
+
 	// (2) ItemStack.isEmpty() short-circuit + Block.byItem resolution. An EMPTY hand (or a
 	// non-block item like a tool) resolves to no block -> nothing is placed. THIS fixes the
 	// empty-hand-stone bug (the old code hardcoded stone regardless of the held item).
@@ -185,8 +202,8 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 	// lands on the ADJACENT face (hitPos + the face normal).
 	var clickedState block.StateID
 	clickedKnown := false
-	if t.only().world != nil {
-		if s, ok := t.only().world.GetBlock(pos, dimMinY); ok {
+	if t.world() != nil {
+		if s, ok := t.world().GetBlock(pos, dimMinY); ok {
 			clickedState, clickedKnown = s, true
 		}
 	}
@@ -213,7 +230,7 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 	// lava) — placement never overwrites a solid block. An unloaded/unreadable target is treated
 	// as not-replaceable (no-op), matching FAIL.
 	if !replaceClicked {
-		targetState, ok := t.only().world.GetBlock(placePos, dimMinY)
+		targetState, ok := t.world().GetBlock(placePos, dimMinY)
 		if !ok || !(isReplaceableState(targetState) && placeState != targetState) {
 			return // !canPlace() -> FAIL, silent no-op
 		}
@@ -233,7 +250,7 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 
 	// placeBlock -> Level.setBlock(getClickedPos(), state). changed=false (unloaded / no-change)
 	// -> no ack, no broadcast (matches placeBlock returning false -> FAIL).
-	if t.only().world == nil || !t.only().world.SetBlock(placePos, placeState, dimMinY) {
+	if t.world() == nil || !t.world().SetBlock(placePos, placeState, dimMinY) {
 		return
 	}
 
@@ -318,13 +335,13 @@ func (t *TickLoop) shrinkHeldItem(p *tickPlayer, inv *Inventory) {
 // Sulfur reads that off Entity.isItem. The overlap is the half-open AABB intersection
 // (Shapes.joinIsNotEmpty with AND: interiors must overlap, edge-touching does not count).
 func (t *TickLoop) placementObstructedByEntity(pos pk.Position) bool {
-	if t.only().entities == nil {
+	if t.cur().entities == nil {
 		return false
 	}
 	// The full-cube collision shape at pos: the unit box [pos, pos+1].
 	bx0, by0, bz0 := float64(pos.X), float64(pos.Y), float64(pos.Z)
 	bx1, by1, bz1 := bx0+1, by0+1, bz0+1
-	for _, e := range t.only().entities.all() {
+	for _, e := range t.cur().entities.all() {
 		if e == nil || e.isItem {
 			continue // dropped items have blocksBuilding=false: they never obstruct a placement
 		}

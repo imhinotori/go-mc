@@ -50,7 +50,7 @@ const (
 // any is water. A waterlogged block is treated as a read-only source contributor (Assumption
 // A3) — detection only; the block is never overwritten.
 func (t *TickLoop) playerInWater(p *tickPlayer) bool {
-	if t.only().world == nil {
+	if t.world() == nil {
 		return false
 	}
 	hw := playerWidth / 2

@@ -137,7 +137,7 @@ func (t *TickLoop) SetDebugNavObservable() {
 // It is a cheap nil-check no-op when debug is off (production / every test).
 func (t *TickLoop) tickDebug() {
 	d := t.debug
-	if d == nil || t.only().entities == nil {
+	if d == nil || t.cur().entities == nil {
 		return
 	}
 
@@ -157,8 +157,8 @@ func (t *TickLoop) tickDebug() {
 	// its floor exists: the navigation snapshot would read all-air (no path → the pig stands
 	// still) and gravity would drop it through the un-generated floor. Gating on the loaded
 	// column guarantees solid ground under the pig and a non-degenerate A* snapshot.
-	if !d.pigSpawned && len(t.players) > 0 && t.only().world != nil {
-		if _, loaded := t.only().world.Get(level.ChunkPos{0, 0}); loaded {
+	if !d.pigSpawned && len(t.players) > 0 && t.world() != nil {
+		if _, loaded := t.world().Get(level.ChunkPos{0, 0}); loaded {
 			px := 8.5 // origin column center X
 			pz := 4.5 // a few blocks toward -Z from the player's 8.5 spawn Z
 			py := float64(d.spawnSurfaceY + 1)
@@ -205,11 +205,11 @@ func (t *TickLoop) tickDebug() {
 	// retarget only sets the want-target; the path computation + the move + the tracker
 	// broadcast all run in tickAI/moveEntity on the tick goroutine (TICK-05), exactly as for a
 	// natural mob.
-	if d.navObservable && d.pigSpawned && t.only().entities != nil {
+	if d.navObservable && d.pigSpawned && t.cur().entities != nil {
 		d.navTick++
 		if d.navTick >= debugNavEvery {
 			d.navTick = 0
-			if pig, ok := t.only().entities.get(d.pigID); ok && pig != nil && pig.ai != nil {
+			if pig, ok := t.cur().entities.get(d.pigID); ok && pig != nil && pig.ai != nil {
 				// The two anchors sit along ±Z from the pig's spawn Z (4.5), at the same X/Y, so
 				// the pig walks a known straight segment the operator can wall off.
 				const spawnX, spawnZ = 8.5, 4.5

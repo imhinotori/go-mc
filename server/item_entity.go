@@ -120,7 +120,7 @@ func (t *TickLoop) tickItems() {
 func (t *TickLoop) tickItem(e *Entity) {
 	// ItemEntity.tick first branch: an empty stack discards the entity (it carries nothing).
 	if e.itemStack.Count <= 0 {
-		t.only().entities.remove(e.id)
+		t.cur().entities.remove(e.id)
 		return
 	}
 
@@ -152,7 +152,7 @@ func (t *TickLoop) tickItem(e *Entity) {
 		e.age++
 	}
 	if e.age >= itemLifetime {
-		t.only().entities.remove(e.id)
+		t.cur().entities.remove(e.id)
 	}
 }
 

@@ -62,7 +62,7 @@ func (t *TickLoop) spawnVanillaPigWithID(id int32, x, y, z float64) *Entity {
 	e := NewEntity(id, decl.baseType, x, y, z)
 	seedAttributes(e.attributes, decl.attrs)
 	e.ai = buildAIFromDecl(t, decl)
-	t.only().entities.add(e)
+	t.cur().entities.add(e)
 	reseedMobAI(e.ai, e.id)
 	return e
 }

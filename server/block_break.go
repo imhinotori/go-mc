@@ -154,10 +154,10 @@ func (t *TickLoop) getDestroyProgress(p *tickPlayer, stateID block.StateID) floa
 // as if the player dug into air. Tick-owned (called on the tick goroutine).
 func (t *TickLoop) digBlockState(pos pk.Position) block.StateID {
 	air := block.ToStateID[block.Air{}]
-	if t.only().world == nil {
+	if t.world() == nil {
 		return air
 	}
-	if s, ok := t.only().world.GetBlock(pos, dimMinY); ok {
+	if s, ok := t.world().GetBlock(pos, dimMinY); ok {
 		return s
 	}
 	return air
@@ -355,15 +355,15 @@ func (t *TickLoop) destroyBlock(p *tickPlayer, pos pk.Position, air block.StateI
 	// Capture the broken state BEFORE SetBlock overwrites it with air (reading after would see air, so
 	// no drop). A failed read leaves brokenState at air (no drop) — the safe default.
 	brokenState := air
-	if t.only().world != nil {
-		if s, ok := t.only().world.GetBlock(pos, dimMinY); ok {
+	if t.world() != nil {
+		if s, ok := t.world().GetBlock(pos, dimMinY); ok {
 			brokenState = s
 		}
 	}
 
 	// level.removeBlock(pos, false) -> SetBlock to air. changed=false (unloaded column / already air)
 	// means nothing broke: no ack, no broadcast, no drop (matches destroyBlock returning false).
-	if t.only().world == nil || !t.only().world.SetBlock(pos, air, dimMinY) {
+	if t.world() == nil || !t.world().SetBlock(pos, air, dimMinY) {
 		return
 	}
 

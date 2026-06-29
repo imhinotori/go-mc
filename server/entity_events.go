@@ -149,25 +149,36 @@ const sendChangesTeleportDelayCap = 400
 // seeded base. moveInit seeds the base/angles for a never-sent entity (the ctor setBase analogue).
 func (t *TickLoop) tickEntityMovement() {
 	t.trace("tickEntityMovement")
-	if t.only().entities == nil {
-		return
-	}
-	for _, e := range t.only().entities.all() {
-		if e == nil {
+	// Phase-27 STEP-3 (N=2) FIX: entities live across ALL regions, and tickEntityMovement runs on the
+	// COORDINATOR (quiescent — every region joined at the barrier). The previous t.cur().entities
+	// iterated ONLY globalRegion (region 0), so mobs in every OTHER region never had their move deltas
+	// sent to trackers — they appeared frozen on the client (spawned, never moved). Iterate EACH
+	// region's store with that region registered (withRegion) so sendEntityMovementChanges and its
+	// t.only()-resolving helpers hit the entity's OWN store, exactly like tickItems.
+	for _, r := range t.regions {
+		if r.entities == nil {
 			continue
 		}
-		if !e.moveInit {
-			// ServerEntity ctor: positionCodec.setBase(spawnPos); lastSent*Rot = packDegrees(angle).
-			e.lastSentX, e.lastSentY, e.lastSentZ = e.x, e.y, e.z
-			e.lastSentYRot = packDegrees(e.yaw)
-			e.lastSentXRot = packDegrees(e.pitch)
-			e.lastSentYHeadRot = packDegrees(e.headYaw)
-			e.wasOnGround = e.onGround
-			e.teleportDelay = 0
-			e.moveInit = true
-			continue
-		}
-		t.sendEntityMovementChanges(e)
+		snapshot := r.entities.all()
+		t.withRegion(r, func() {
+			for _, e := range snapshot {
+				if e == nil {
+					continue
+				}
+				if !e.moveInit {
+					// ServerEntity ctor: positionCodec.setBase(spawnPos); lastSent*Rot = packDegrees(angle).
+					e.lastSentX, e.lastSentY, e.lastSentZ = e.x, e.y, e.z
+					e.lastSentYRot = packDegrees(e.yaw)
+					e.lastSentXRot = packDegrees(e.pitch)
+					e.lastSentYHeadRot = packDegrees(e.headYaw)
+					e.wasOnGround = e.onGround
+					e.teleportDelay = 0
+					e.moveInit = true
+					continue
+				}
+				t.sendEntityMovementChanges(e)
+			}
+		})
 	}
 }
 

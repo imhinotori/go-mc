@@ -116,11 +116,23 @@ func TestStructureSpawnRaceClean(t *testing.T) {
 	close(results)
 
 	// The TICK drains each on the owner goroutine (this goroutine) — the only store mutation.
-	before := loop.only().entities.len()
+	// Phase-27 N=2: the 16 columns alternate regions (regionOf checkerboard), so chunkReady.applyTo
+	// now routes each witch into the region that OWNS its column. Count ACROSS regions — the spawns
+	// are distributed, not all in region 0 (the fix this whole change makes correct).
+	allEntities := func() int {
+		total := 0
+		for _, r := range loop.regions {
+			if r.entities != nil {
+				total += r.entities.len()
+			}
+		}
+		return total
+	}
+	before := allEntities()
 	for res := range results {
 		chunkReady{res: res}.applyTo(loop)
 	}
-	if got := loop.only().entities.len(); got != before+n {
-		t.Fatalf("entity count = %d, want %d (one witch per chunk)", got, before+n)
+	if got := allEntities(); got != before+n {
+		t.Fatalf("entity count = %d, want %d (one witch per chunk, across regions)", got, before+n)
 	}
 }

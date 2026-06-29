@@ -50,7 +50,7 @@ import (
 func (r *region) tick(gt int64) {
 	t := r.coord
 	// Phase-27 STEP-3 (N=2): register THIS goroutine→region so only() routes every per-region phase
-	// call site (physics/AI/spawner/handles' t.only().entities / t.only().world / t.only().levelRandom)
+	// call site (physics/AI/spawner/handles' t.cur().entities / t.world() / t.cur().levelRandom)
 	// to THIS region's store WITHOUT rewriting the ~200 sites. Cleared on exit so a transferred/joined
 	// goroutine never leaks a stale region. The coordinator's own goroutine never registers here, so
 	// the world-global + post phases see globalRegion via only()'s fallback.

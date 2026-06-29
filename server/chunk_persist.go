@@ -42,7 +42,7 @@ func (t *TickLoop) SetChunkSaver(s *world.ChunkSaver) { t.chunkSaver = s }
 // gameplay seams). Every chunkSaveIntervalTicks it drains the manager's dirty set and flushes each
 // dirty column. A nil/disabled saver or nil world makes it a cheap no-op. Runs on the owner.
 func (t *TickLoop) tickChunkSave() {
-	if t.only().world == nil || !t.chunkSaver.Enabled() {
+	if t.world() == nil || !t.chunkSaver.Enabled() {
 		return // no world wired or persistence off: nothing to save
 	}
 	t.chunkSaveTickCounter++
@@ -51,12 +51,12 @@ func (t *TickLoop) tickChunkSave() {
 	}
 	t.chunkSaveTickCounter = 0
 
-	dirty := t.only().world.DrainDirty()
+	dirty := t.world().DrainDirty()
 	for _, pos := range dirty {
 		if !t.flushColumn(pos) {
 			// Queue full: re-mark dirty so the next pass retries (a dropped save is deferred,
 			// never lost). MarkDirty is a no-op for a no-longer-Ready column (already unloaded).
-			t.only().world.MarkDirty(pos)
+			t.world().MarkDirty(pos)
 		}
 	}
 }
@@ -66,7 +66,7 @@ func (t *TickLoop) tickChunkSave() {
 // snapshot was enqueued (or there was nothing to save). It also clears the column's dirty flag (the
 // flush supersedes any pending periodic save). Runs on the owner before Remove.
 func (t *TickLoop) flushColumnNow(pos level.ChunkPos) bool {
-	if t.only().world == nil || !t.chunkSaver.Enabled() {
+	if t.world() == nil || !t.chunkSaver.Enabled() {
 		return true
 	}
 	return t.flushColumn(pos)
@@ -78,7 +78,7 @@ func (t *TickLoop) flushColumnNow(pos level.ChunkPos) bool {
 // no-op-true (nothing more this tick can do). The serialization is a pure READ over tick-owned
 // chunk state on the owner goroutine.
 func (t *TickLoop) flushColumn(pos level.ChunkPos) bool {
-	ch, ok := t.only().world.Get(pos)
+	ch, ok := t.world().Get(pos)
 	if !ok {
 		return true // not Ready (unloaded / not yet generated): nothing to serialize
 	}
@@ -89,7 +89,7 @@ func (t *TickLoop) flushColumn(pos level.ChunkPos) bool {
 	// safe), so the subsequent serialize captures the rolled items. Done before SerializeChunkData.
 	t.flushChestItems(pos, ch)
 
-	data, err := world.SerializeChunkData(t.only().worker.StructureCache(), pos, ch, t.only().worker.MinY())
+	data, err := world.SerializeChunkData(t.worker().StructureCache(), pos, ch, t.worker().MinY())
 	if err != nil {
 		// A serialize error is an encode bug, not runtime input; skip this column (do not crash the
 		// tick). It stays out of the dirty set (DrainDirty already cleared it); a later edit re-dirties.
@@ -193,8 +193,8 @@ func setChestBEData(ch *level.Chunk, lx, y, lz, baseX, baseZ int, data nbt.RawMe
 // container so an item move/roll is persisted. A no-op when persistence is off or the column is not
 // Ready. Runs on the owner (the chest path is tick-owned).
 func (t *TickLoop) markChestDirty(chestPos pk.Position) {
-	if t.only().world == nil {
+	if t.world() == nil {
 		return
 	}
-	t.only().world.MarkDirty(level.ChunkPos{int32(chestPos.X >> 4), int32(chestPos.Z >> 4)})
+	t.world().MarkDirty(level.ChunkPos{int32(chestPos.X >> 4), int32(chestPos.Z >> 4)})
 }

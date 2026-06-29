@@ -113,7 +113,7 @@ func maxVisitedBudget() int {
 // tracking + recompute cooldown (the A* DoS guards) are reset exactly as before — they SURVIVE the
 // swap. Runs on the tick goroutine (TICK-05).
 func (n *groundNavigation) requestPath(t *TickLoop, e *Entity, tx, ty, tz int) {
-	region := snapshotRegion(t.only().world, e, tx, ty, tz, navFollowRange, navReachRange) // COPY (on the tick)
+	region := snapshotRegion(t.world(), e, tx, ty, tz, navFollowRange, navReachRange) // COPY (on the tick)
 	req := pathRequest{
 		startX: floorI(e.x), startY: floorI(e.y), startZ: floorI(e.z),
 		targetX: tx, targetY: ty, targetZ: tz,
@@ -125,7 +125,7 @@ func (n *groundNavigation) requestPath(t *TickLoop, e *Entity, tx, ty, tz int) {
 		maxVisited:  maxVisitedBudget(),
 	}
 
-	// Capture ONLY immutable values for the off-tick worker (NEVER e or t.only().world — Pitfall 3): the
+	// Capture ONLY immutable values for the off-tick worker (NEVER e or t.world() — Pitfall 3): the
 	// mob id (re-resolved on apply) and the goal target (re-checked on apply), both plain values.
 	mobID := e.id
 	tgt := [3]int{tx, ty, tz}

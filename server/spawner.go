@@ -79,10 +79,10 @@ const (
 // the tick goroutine over tick-owned state (TICK-05).
 func (t *TickLoop) countByCategory() map[mobCategory]int {
 	counts := make(map[mobCategory]int)
-	if t.only().entities == nil {
+	if t.cur().entities == nil {
 		return counts
 	}
-	for _, e := range t.only().entities.byID {
+	for _, e := range t.cur().entities.byID {
 		counts[categoryOf(e.typ)]++
 	}
 	return counts
@@ -131,7 +131,7 @@ func (t *TickLoop) mobNearAcrossRegions(x, z, rangeBlocks float64) bool {
 // or no players the set is empty (nothing spawns) — exactly vanilla's "no players, no natural
 // spawns". The count of returned columns is the spawnableChunkCount that scales the cap.
 func (t *TickLoop) spawnableColumns() []level.ChunkPos {
-	if t.only().world == nil || len(t.players) == 0 {
+	if t.world() == nil || len(t.players) == 0 {
 		return nil
 	}
 	seen := make(map[level.ChunkPos]bool)
@@ -147,7 +147,7 @@ func (t *TickLoop) spawnableColumns() []level.ChunkPos {
 				if seen[col] {
 					continue
 				}
-				if _, ok := t.only().world.Get(col); !ok {
+				if _, ok := t.world().Get(col); !ok {
 					continue // not Ready: vanilla only spawns in loaded columns
 				}
 				seen[col] = true
@@ -296,10 +296,10 @@ func (t *TickLoop) snapshotSpawnColumns(picks []spawnCandidatePick, refY int) *s
 // LocalMobCapCalculator per-player distance weighting, the per-position MIN_SPAWN_DISTANCE check,
 // biome spawn lists + the creature-probability roll, structure spawns, and light-level rules.
 func (t *TickLoop) naturalSpawn() {
-	if t.only().entities == nil || t.only().world == nil {
+	if t.cur().entities == nil || t.world() == nil {
 		return
 	}
-	if t.only().spawnScanPending {
+	if t.cur().spawnScanPending {
 		return // a scan is already in flight: single-in-flight gate (Pitfall 4 / OPT-01 !pending)
 	}
 	cols := t.spawnableColumns()
@@ -339,10 +339,11 @@ func (t *TickLoop) naturalSpawn() {
 	// (Pitfall 3) — and sends the standable candidates back on asyncIn2.
 	snap := t.snapshotSpawnColumns(picks, refY)
 	// Phase-27 STEP-3 (N=2): capture the SUBMITTING region ON the owner (here, inside the fan-out,
-	// t.only() resolves to this region). The worker closure must NOT call t.only() (it runs on a pool
-	// goroutine where only() would fall back to globalRegion), so the source region is captured as a
-	// value and carried in the result so applyTo clears THIS region's in-flight gate.
-	submitRegion := t.only()
+	// cur() resolves to this region). The worker closure must NOT call cur() (it runs on a pool
+	// goroutine where cur() would fall back to globalRegion / panic under strictRegion), so the source
+	// region is captured as a value and carried in the result so applyTo clears THIS region's in-flight
+	// gate. cur() (not only()) so an unwrapped coordinator-side submit is caught by the strict guard.
+	submitRegion := t.cur()
 	submitted := submitOrDrop(t.spawnPool, func() {
 		candidates := make([]spawnCandidate, 0, len(picks))
 		for _, p := range picks {
@@ -356,7 +357,7 @@ func (t *TickLoop) naturalSpawn() {
 		t.asyncIn2 <- spawnCandidatesReady{candidates: candidates, spawnableChunkCount: spawnableChunkCount, region: submitRegion}
 	})
 	if submitted {
-		t.only().spawnScanPending = true // one scan in flight; cleared by spawnCandidatesReady.applyTo
+		t.cur().spawnScanPending = true // one scan in flight; cleared by spawnCandidatesReady.applyTo
 	}
 	// On overload (submitted == false) the gate stays clear and the cycle is a no-op — it retries
 	// next spawnInterval (Pitfall 4). No spawn, no block.
@@ -378,11 +379,11 @@ func (t *TickLoop) spawnRefY() int {
 // per-column broad phase (near) so the scan is bounded to the candidate's column neighborhood,
 // not the whole world. Tick-owned.
 func (t *TickLoop) mobNear(x, z, rangeBlocks float64) bool {
-	if t.only().entities == nil {
+	if t.cur().entities == nil {
 		return false
 	}
 	r2 := rangeBlocks * rangeBlocks
-	for _, e := range t.only().entities.near(x, z, 1) {
+	for _, e := range t.cur().entities.near(x, z, 1) {
 		dx := e.x - x
 		dz := e.z - z
 		if dx*dx+dz*dz <= r2 {

@@ -77,24 +77,32 @@ type chunkReady struct{ res world.ChunkResult }
 // the column on a later tick (threat W1 retry) — it NEVER inserts a nil chunk. This is
 // the ONLY mutation that crosses the off-tick boundary, and it runs on the owner.
 func (r chunkReady) applyTo(t *TickLoop) {
-	if t.only().world == nil {
+	if t.world() == nil {
 		return // no world wired (defensive; SetWorld always sets it before feeding asyncIn)
 	}
 	if r.res.Err != nil {
-		t.only().world.MarkEmpty(r.res.Pos) // un-strand the Loading holder so the tick retries
+		t.world().MarkEmpty(r.res.Pos) // un-strand the Loading holder so the tick retries
 		return
 	}
-	t.only().world.Insert(r.res.Pos, r.res.Chunk)
-	// Register an (empty) block-tick container for the chunk so live scheduleTick calls inside
-	// it are not dropped (LevelTicks.Schedule routes by chunk; a chunk with no container drops
-	// the tick). Vanilla addContainer's every loaded chunk; without this the sugar-cane cascade
-	// (and every other scheduled block tick) never fired on generated/streamed chunks.
-	t.ensureChunkBlockTicks(r.res.Pos)
-	t.postProcessChunkFluids(r.res.Pos, r.res.Chunk)
-	// STRUCT-POLISH-02: drain the structure-inhabitant SpawnRequests the worker recorded
-	// off-tick onto the entity store — on the owner (TICK-05 / Pitfall 5). The witch/cat/villager
-	// then ride GAMEPLAY-01's tracker (AddEntity broadcast) next tick. No-op when Spawns is empty.
-	t.drainStructureSpawns(r.res)
+	t.world().Insert(r.res.Pos, r.res.Chunk)
+	// Phase-27 N=2 ROUTING: a chunk's per-region containers + fluid kicks + structure spawns must land
+	// in the region that OWNS this column, NOT blindly globalRegion. chunkReady.applyTo runs on the
+	// COORDINATOR (quiescent post-barrier), where cur() would otherwise fall back to region 0 and strand
+	// every container/fluid/spawn for a region-1 chunk in region 0's stores. Wrap the per-region writes
+	// in the owning region so ensureChunkBlockTicks (cur().blockTicks), postProcessChunkFluids
+	// (cur().fluidSchedule), and drainStructureSpawns (cur().entities) resolve to r.res.Pos's region.
+	t.withRegion(t.regionForColumn(r.res.Pos), func() {
+		// Register an (empty) block-tick container for the chunk so live scheduleTick calls inside
+		// it are not dropped (LevelTicks.Schedule routes by chunk; a chunk with no container drops
+		// the tick). Vanilla addContainer's every loaded chunk; without this the sugar-cane cascade
+		// (and every other scheduled block tick) never fired on generated/streamed chunks.
+		t.ensureChunkBlockTicks(r.res.Pos)
+		t.postProcessChunkFluids(r.res.Pos, r.res.Chunk)
+		// STRUCT-POLISH-02: drain the structure-inhabitant SpawnRequests the worker recorded
+		// off-tick onto the entity store — on the owner (TICK-05 / Pitfall 5). The witch/cat/villager
+		// then ride GAMEPLAY-01's tracker (AddEntity broadcast) next tick. No-op when Spawns is empty.
+		t.drainStructureSpawns(r.res)
+	})
 }
 
 // tracker is the entity/chunk tracking executor seam (TICK-05). Phase 3 shipped it with a
@@ -152,6 +160,17 @@ type TickLoop struct {
 	// because the fan-out goroutines write distinct keys concurrently and only() reads it on those
 	// same goroutines — a genuine concurrent map access (a plain map would race the parallel fan-out).
 	currentRegion *xsync.Map[int64, *region]
+
+	// strictRegion arms the per-region access guard in cur(): when true, a cur() call from a
+	// goroutine with NO region registered PANICS instead of silently falling back to globalRegion.
+	// It is the catch for the systemic regionization bug class (Phase-27 N=2): coordinator-phase and
+	// DISPATCH-handler code that touches PER-REGION state (entities/fluidSchedule/blockTicks/
+	// levelRandom) without first wrapping in withRegion would, under the old fallback, silently SKIP
+	// regions 1..N-1 by resolving to region 0. With strictRegion on, that mistake fails loudly in
+	// tests instead of corrupting gameplay in only region 0. It defaults to false so production +
+	// the existing N=1 suite keep today's tolerant fallback; tests opt in to prove the contract.
+	// SHARED accessors world()/worker() NEVER consult it (region-0 read is correct for shared state).
+	strictRegion bool
 
 	// asyncIn2 is the Phase-8 compute-pool rejoin channel (OPT-04/OPT-06), the SECOND result
 	// channel alongside asyncIn. It is a BOUNDED buffered channel (asyncIn2Buffer): the per-
@@ -889,24 +908,64 @@ func NewTickLoop(clock Clock) *TickLoop {
 // accessor every coordinator call site uses to reach the world-half store.
 func (t *TickLoop) region(id regionID) *region { return t.regions[id] }
 
-// only returns the region whose store the CURRENTLY-EXECUTING goroutine should read/write (Phase-27
-// STEP-3, the N=2 routing). When a region's fan-out goroutine is inside its tick, it has registered
-// itself in currentRegion (region.tick), so only() returns THAT region — the ~200 per-region phase
-// call sites (physics/AI/spawner/handles' t.only().entities / t.only().world / t.only().levelRandom)
-// then resolve against the OWNING region's store WITHOUT being rewritten. A goroutine NOT inside a
-// region tick — the coordinator running the global/post phases, or a test calling tickPhysics
-// directly — finds no entry and falls back to regions[globalRegion] (so the world-global phases,
-// the discrete event handlers driven by dispatch, and the existing N=1-style tests all keep working
-// unchanged). The world (ChunkManager/worker) is wired into EVERY region by SetWorld, so a region's
-// t.only().world reads the SAME shared world the others do — concurrent-READ-safe during the parallel
-// entity phase (the world is mutated only on the coordinator, never inside the fan-out).
-func (t *TickLoop) only() *region {
+// resolveRegion is the shared goroutine→region lookup behind cur()/only(): it returns the region the
+// CURRENTLY-EXECUTING goroutine registered (region.tick / withRegion), and whether one was found. A
+// goroutine NOT inside a region tick (the coordinator running the global/post phases, a dispatch
+// handler, a test calling a phase directly) has no entry — (regions[globalRegion], false).
+func (t *TickLoop) resolveRegion() (*region, bool) {
 	if t.currentRegion != nil {
 		if r, ok := t.currentRegion.Load(curGoroutineID()); ok {
-			return r
+			return r, true
 		}
 	}
-	return t.regions[globalRegion]
+	return t.regions[globalRegion], false
+}
+
+// world returns the SHARED tick-owned ChunkManager. The world (ChunkManager + worker) is wired
+// IDENTICALLY into EVERY region by SetWorld, so reading it off globalRegion is correct regardless of
+// which goroutine calls — it NEVER depends on the per-goroutine current region. world() therefore
+// reads globalRegion directly and NEVER consults strictRegion: a coordinator-phase or dispatch read
+// of the shared world is legitimate and must never panic. This is the SHARED half of the old only()
+// (~78 call sites: only().world). Concurrent READS during the parallel entity phase are safe (the
+// world is mutated only on the coordinator, never inside the fan-out).
+func (t *TickLoop) world() *world.ChunkManager { return t.regions[globalRegion].world }
+
+// worker returns the SHARED off-tick chunk load/generate worker — the other half of the shared world
+// pair SetWorld wires into every region. Like world() it reads globalRegion directly and never
+// consults strictRegion (shared state; region-0 read is correct on any goroutine).
+func (t *TickLoop) worker() *world.Worker { return t.regions[globalRegion].worker }
+
+// cur returns the region whose PER-REGION store the CURRENTLY-EXECUTING goroutine should read/write
+// (Phase-27 STEP-3, the N=2 routing). When a region's fan-out goroutine is inside its tick it has
+// registered itself in currentRegion (region.tick), so cur() returns THAT region — the per-region
+// phase call sites (physics/AI/spawner/handles' cur().entities / cur().fluidSchedule /
+// cur().blockTicks / cur().levelRandom) resolve against the OWNING region's store WITHOUT being
+// rewritten.
+//
+// THE GUARD (the systemic-bug catch): a goroutine with NO region registered — the coordinator
+// running a per-region phase it forgot to wrap, a dispatch handler mutating per-region state, a test
+// calling a per-region phase directly — is the bug class this whole fix targets. When strictRegion is
+// armed, cur() PANICS there (the access would otherwise silently land in region 0 and SKIP regions
+// 1..N-1). When strictRegion is off (production + the existing N=1 suite), it falls back to
+// regions[globalRegion] — today's tolerant behavior — so behavior is unchanged at N=1.
+func (t *TickLoop) cur() *region {
+	r, ok := t.resolveRegion()
+	if !ok && t.strictRegion {
+		panic("per-region access with no region registered — wrap in withRegion or run inside the fan-out")
+	}
+	return r
+}
+
+// only is the NON-STRICT region resolver kept for the bare *region passers (e.g.
+// `submitRegion := t.only()`) and the existing direct-store test call sites (loop.only().entities…).
+// It NEVER panics: it always falls back to regions[globalRegion] off the fan-out, preserving the
+// pre-fix contract (region_test.go: only() == region(globalRegion) on a non-fan-out goroutine) and
+// every legacy test that touches a store directly. Per-region PRODUCTION code uses cur() (strict);
+// only() is the deliberate tolerant alias for the cases where region-0 fallback is the intended
+// semantics (a captured submit region, a test driving a single region by hand).
+func (t *TickLoop) only() *region {
+	r, _ := t.resolveRegion()
+	return r
 }
 
 // asyncIn2Buffer bounds the Phase-8 compute-pool rejoin channel (asyncIn2). It mirrors

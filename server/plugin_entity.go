@@ -17,7 +17,7 @@ import (
 // plugin/starlark + plugin/host, one direction, no cycle).
 //
 // A handle is a THIN, tick-owned-safe starlark.Value: it carries ONLY an entity id (int32) +
-// *TickLoop (NEVER a live *Entity pointer). Every read RE-RESOLVES t.only().entities.get(id) on the tick
+// *TickLoop (NEVER a live *Entity pointer). Every read RE-RESOLVES t.cur().entities.get(id) on the tick
 // goroutine — the same id-carry / owner-re-resolve discipline pathReady.applyTo uses (server/async.go)
 // — so a read of a removed entity returns a clean Starlark error, never a stale-pointer deref.
 // Freeze() is a no-op (the handle holds no mutable Starlark state; the live entity is governed by
@@ -59,7 +59,7 @@ func (h *entityHandle) store() *entityStore {
 	if h.region != nil {
 		return h.region.entities
 	}
-	return h.t.only().entities
+	return h.t.cur().entities
 }
 
 // newEntityHandle builds an entity handle for an id with the given capability set (no goal scratch).
@@ -491,7 +491,7 @@ func (h *worldHandle) world() *world.ChunkManager {
 	if h.region != nil {
 		return h.region.world
 	}
-	return h.t.only().world
+	return h.t.world()
 }
 
 // newWorldHandle builds a world handle with the given capability set (region-unbound).
@@ -638,7 +638,7 @@ func (h *worldHandle) entityStore() *entityStore {
 	if h.region != nil {
 		return h.region.entities
 	}
-	return h.t.only().entities
+	return h.t.cur().entities
 }
 
 // ----------------------------------------------------------------------------------------------
@@ -663,7 +663,7 @@ func (h *navHandle) store() *entityStore {
 	if h.region != nil {
 		return h.region.entities
 	}
-	return h.t.only().entities
+	return h.t.cur().entities
 }
 
 // newNavHandle builds a nav handle for an id with the given capability set (region-unbound).
