@@ -177,6 +177,15 @@ type Entity struct {
 	// wolf anger (P36) reads its attacker. A plain value (no pointer) — the Folia rule.
 	lastDamageSource damageSource
 
+	// dead is net.minecraft.world.entity.LivingEntity.dead (the death guard set TRUE the first time
+	// die() runs). dieEntity (Plan 29-04) checks `if (isRemoved() || dead) return` at the top and sets
+	// dead=true before the loot/XP/removal, so a second lethal hit (or a re-entrant die) is a no-op —
+	// the loot table is never double-rolled and the store-remove is idempotent (T-29-08, the guarded
+	// double-death). A plain bool (snapshot-friendly). Sulfur has no separate isRemoved() flag for a
+	// mob (removal IS the store delete), so `dead` covers both the vanilla `dead` and the post-removal
+	// re-entry guard.
+	dead bool
+
 	// --- GAMEPLAY-07: delta-move tracking state (ServerEntity.sendChanges) ----------------
 	//
 	// These mirror net.minecraft.server.level.ServerEntity's per-entity send state so the

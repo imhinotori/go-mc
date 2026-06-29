@@ -31,9 +31,11 @@ import (
 )
 
 // lethalPigInRegion0 builds a Pig with a tiny health at a region-0 column and adds it to region 0's
-// store via withRegion, returning the mob and its owner region.
-func lethalPigInRegion0(loop *TickLoop, id int32) (*Entity, *region) {
-	e := NewEntity(id, entity.Pig, 8.5, 64, 8.0) // column {0,0} -> region 0
+// store via withRegion, returning the mob and its owner region. The id is drawn from the loop's
+// idAlloc (NOT a literal) so it never collides with the loot-drop / XP-orb ids dieEntity allocates
+// from the SAME idAlloc — exactly as production spawns every entity from the one shared id space.
+func lethalPigInRegion0(loop *TickLoop) (*Entity, *region) {
+	e := NewEntity(loop.idAlloc.AllocID(), entity.Pig, 8.5, 64, 8.0) // column {0,0} -> region 0
 	e.health = 4.0
 	owner := loop.regionForColumn(columnOf(e.x, e.z))
 	loop.withRegion(owner, func() { loop.cur().entities.add(e) })
@@ -55,7 +57,7 @@ func countByType(r *region, typ entity.ID) int {
 // region store (the HARD deliverable). A second dieEntity is a guarded no-op (no double-removal).
 func TestMobDeath_Removal(t *testing.T) {
 	loop, _ := newN2Loop(t)
-	mob, owner := lethalPigInRegion0(loop, 1)
+	mob, owner := lethalPigInRegion0(loop)
 
 	if _, ok := owner.entities.get(mob.id); !ok {
 		t.Fatalf("precondition: mob must be in its owner region store before death")
@@ -76,7 +78,7 @@ func TestMobDeath_Removal(t *testing.T) {
 // The pig table drops 1-3 porkchop -> at least one Item entity appears in region 0's store.
 func TestMobDeath_Loot(t *testing.T) {
 	loop, _ := newN2Loop(t)
-	mob, owner := lethalPigInRegion0(loop, 1)
+	mob, owner := lethalPigInRegion0(loop)
 
 	itemsBefore := countByType(owner, entity.Item.ID)
 
@@ -95,7 +97,7 @@ func TestMobDeath_Loot(t *testing.T) {
 // which ExperienceOrb.award splits into >=1 orb.
 func TestMobDeath_XP(t *testing.T) {
 	loop, _ := newN2Loop(t)
-	mob, owner := lethalPigInRegion0(loop, 1)
+	mob, owner := lethalPigInRegion0(loop)
 
 	orbsBefore := countByType(owner, entity.ExperienceOrb.ID)
 
@@ -113,7 +115,7 @@ func TestMobDeath_XP(t *testing.T) {
 // (the lastHurtByPlayer gate, modeled by the player-attack proxy). Pins the gate is real, not always-on.
 func TestMobDeath_XP_NoPlayerNoOrb(t *testing.T) {
 	loop, _ := newN2Loop(t)
-	mob, owner := lethalPigInRegion0(loop, 1)
+	mob, owner := lethalPigInRegion0(loop)
 
 	orbsBefore := countByType(owner, entity.ExperienceOrb.ID)
 

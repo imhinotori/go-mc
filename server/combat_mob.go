@@ -299,19 +299,6 @@ func (t *TickLoop) tickMobIFrames(e *Entity) {
 	}
 }
 
-// dieEntity is the Plan-04 SEAM for net.minecraft.world.entity.LivingEntity.die(DamageSource): the full
-// death flow (dropAllDeathLoot -> dropFromLootTable + dropExperience, broadcastEntityEvent(this, 3),
-// setPose(DYING), store-remove + RemoveEntities broadcast) lands in Phase 29 Plan 04. THIS plan stops
-// at "health hits 0": it records the lethal source so the death flow has it and marks the mob dead, so
-// applyDamageEntity's lethal tail compiles and a dead mob takes no further damage (the health<=0 guard).
-//
-// TODO(Plan 29-04): replace this minimal seam with the real LivingEntity.die port (loot + XP + the
-// death broadcast + store removal). Until then the mob is simply pinned at health 0 (isDeadOrDying), so
-// it stops being hurt; it is not yet removed from the store (Plan 04's hard requirement).
-func (t *TickLoop) dieEntity(e *Entity, src damageSource) {
-	// Pin health at 0 (the isDeadOrDying state) and record the lethal source for the Plan-04 death flow.
-	if e.health > 0 {
-		e.health = 0
-	}
-	e.lastDamageSource = src
-}
+// dieEntity is implemented in death_mob.go (Plan 29-04): the full LivingEntity.die port (loot + XP
+// + the death-status broadcast + owner-region store removal). applyDamageEntity's lethal tail calls
+// it; the seam Plan 02 left here is replaced there with no call-site change.

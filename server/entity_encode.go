@@ -631,6 +631,26 @@ func encodeTakeItemEntity(itemID, collectorID int32, amount int) pk.Packet {
 	)
 }
 
+// entityEventDeath is the EntityEvent (the legacy "entity status") byte broadcast by
+// net.minecraft.world.level.Level.broadcastEntityEvent(this, 3) inside LivingEntity.die: status
+// 3 == the death animation (the client plays the death tilt/fade). The full status table lives in
+// ClientboundEntityEventPacket; v1 needs only the death status the die() port broadcasts.
+//   [VERIFIED javap: LivingEntity.die -> Level.broadcastEntityEvent(this, (byte) 3) (the iconst_3
+//    at die bytecode 162) -> ClientboundEntityEventPacket(entity, 3).]
+const entityEventDeath byte = 3
+
+// encodeEntityEvent builds ClientboundEntityEvent (jar: ClientboundEntityEventPacket.write):
+// writeInt(entityId) — a PLAIN 4-byte Int, NOT a VarInt — then writeByte(eventId). Broadcast to
+// every player tracking the entity (broadcastEntityEvent -> ServerChunkCache.broadcastAndSend).
+//   [VERIFIED javap: ClientboundEntityEventPacket.write -> writeInt(entityId); writeByte(eventId).]
+func encodeEntityEvent(entityID int32, eventID byte) pk.Packet {
+	return pk.Marshal(
+		int32(packetid.ClientboundEntityEvent),
+		pk.Int(entityID),     // writeInt — a fixed 4-byte int, NOT a VarInt
+		pk.Byte(int8(eventID)),
+	)
+}
+
 // encodeRemoveEntities builds ClientboundRemoveEntities (06-CAPTURE-DIFF §5):
 // writeIntIdList == VarInt count followed by N VarInt ids. The tracker batches ALL of a
 // player's newly-out-of-range ids into ONE such packet per tick.
