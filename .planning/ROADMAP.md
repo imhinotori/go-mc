@@ -64,7 +64,8 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
 
 ### 🚧 v5 Mob Behaviors & Living-Entity Subsystems (Phases 29–36) — IN PROGRESS
 
-- [x] **Phase 29: Damage Keystone (S2)** — the parallel `*Entity` mob damage/hurt pipeline + `lastDamageSource` + jar-extracted damage-type tags; the widest fan-out, built first. (completed 2026-06-29)
+- [x] **Phase 29: Damage Keystone (S2)** — the parallel `*Entity` mob damage/hurt pipeline + `lastDamageSource` + jar-extracted damage-type tags; the widest fan-out, built first.
+ (completed 2026-06-29)
 - [ ] **Phase 30: JumpControl + Fluid (S1)** — mob `JumpControl` impulse + `*Entity` fluid predicates; FloatGoal@0 on the pig (oracle + plugin in lockstep).
 - [ ] **Phase 31: PanicGoal (S2 consumer)** — PanicGoal@1 on the pig reading the real `lastDamageSource` + the panic-causing tag set.
 - [ ] **Phase 32: Held-Item + Item Tags (S4)** — nearest-player held-item read + jar-extracted item-food tags; TemptGoal@4 ×2 on the pig.
@@ -101,7 +102,10 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
   2. `mobIsInWater` / `mobFluidHeight` / `isInLava` predicates (built on the existing `fluidAt` read) return jar-correct values for an `*Entity` — a mob in water no longer sinks/suffocates visibly.
   3. FloatGoal@0 is wired onto the pig in the Go-native oracle AND the plugin pig IN LOCKSTEP (the same plan), its `nextFloat()<0.8` draw confined to the running-goal callback — never the shared `serverAiStep`/`navigation.tick`.
   4. Standing: jar-verified (javap before writing); CGO=0 + no new Go deps; the pig oracle stays GREEN; Docker `-race` + `strictRegion` clean.
-**Plans**: TBD
+**Plans**: 3 plans (3 sequential waves)
+- [ ] 30-01-PLAN.md — Mob fluid predicates + lava decode: extend fluidState/decodeFluid for lava (lavaLevelOf + .isWater consumer audit) + mobInWater/mobFluidHeight/mobInLava/getFluidJumpThreshold [MOB-SUB-05]
+- [ ] 30-02-PLAN.md — JumpControl + aiStep jump branch: jumpControl/noJumpDelay + jumping/setJumping + the RNG-free JUMP slot after navigation.tick + jumpInLiquid(+0.04)/jumpFromGround(0.42) + entity.in_water/fluid_height/in_lava + nav.jump() handle ops [MOB-SUB-04]
+- [ ] 30-03-PLAN.md — FloatGoal@0 lockstep (Go-native newPigAI + vanilla_pig/main.star) + the wet-behavior test; the DRY pig oracle stays GREEN (canUse false -> zero draws) [MOB-SUB-04]
 
 ### Phase 31: PanicGoal (S2 consumer)
 **Goal**: A hurt pig flees — PanicGoal reads the real damage source delivered by the keystone.
