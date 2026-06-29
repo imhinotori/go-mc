@@ -171,6 +171,23 @@ func (n *groundNavigation) requestPath(t *TickLoop, e *Entity, tx, ty, tz int) {
 // so a saturated/slow pool cannot accumulate duplicate work for one mob. A target CHANGE still
 // supersedes a pending compute (the old result will be dropped by applyTo's retarget check), so a
 // retarget is never blocked by an in-flight request for the previous goal.
+// active reports whether the mob is currently navigating toward a target — there is an active
+// (not-done) path, OR an async compute is in flight (a path was just requested and has not yet
+// rejoined). It is the navigation.isDone() INVERSE used by the plugin nav handle's has_path():
+// a declared MOVE goal asks "do I already have a path?" and re-requests only when this is false.
+// CRITICAL: this reads the REAL path state, NOT mobAI.hasTarget — mobAI.hasTarget is the "a target
+// is wanted" intent flag that is set on path_to and only cleared by an explicit nav.stop(), so it
+// stays true forever after the first path_to. Keying has_path() off mobAI.hasTarget made a declared
+// wander mob walk to its first target and then freeze (has_path() never went false, so the goal
+// never re-requested). When the mob ARRIVES (path.done()) or the A* FAILS (no path, pending
+// cleared), active() returns false so the goal re-requests the next target — the mob keeps moving.
+func (n *groundNavigation) active() bool {
+	if n.pending {
+		return true // a compute is in flight — a path is coming; don't re-request yet
+	}
+	return n.path != nil && !n.path.done()
+}
+
 func (n *groundNavigation) shouldRecomputePath(tx, ty, tz int) bool {
 	targetChanged := !n.hasTarget || tx != n.lastTX || ty != n.lastTY || tz != n.lastTZ
 	if targetChanged {

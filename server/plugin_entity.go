@@ -744,7 +744,11 @@ func (h *navHandle) hasPath(_ *starlark.Thread, _ *starlark.Builtin,
 	if e.ai == nil {
 		return nil, fmt.Errorf("entity %d has no AI (cannot read has_path)", h.id)
 	}
-	return starlark.Bool(e.ai.hasTarget), nil
+	// Read the REAL navigation state (active path or in-flight compute), NOT mobAI.hasTarget — the
+	// intent flag stays true forever after path_to (only nav.stop clears it), which froze a declared
+	// wander mob after its first target. active() goes false on arrival / path-fail so the goal
+	// re-requests and the mob keeps moving.
+	return starlark.Bool(e.ai.navigation.active()), nil
 }
 
 // pathTo(x,y,z) MUTATES through the nav seam: setWantTarget -> requestPath (the async A*). It sets a
