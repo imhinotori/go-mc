@@ -386,6 +386,13 @@ func (t *TickLoop) spawnDeclaredMob(decl *mobDecl, x, y, z float64) *Entity {
 	e := NewEntity(t.idAlloc.AllocID(), decl.baseType, x, y, z)
 	seedAttributes(e.attributes, decl.attrs)
 	e.ai = buildAIFromDecl(t, decl)
+	// Per-entity RNG reseed (Mob.getRandom() analogue): buildAIFromDecl seeds the rng with the SHARED
+	// defaultEntityRandomSeed, so WITHOUT this every declared mob would draw the IDENTICAL stream —
+	// many wander mobs walked in a synchronized single-file line (same rand_int sequence). Reseed by
+	// entity id here, in the ONE shared spawn path, so each declared mob (egg wander mob AND the
+	// vanilla pig, which both route through here) gets its own deterministic stream and wanders
+	// independently. Done before the store add (the mob is not yet ticking).
+	reseedMobAI(e.ai, e.id)
 	// Phase-27 (N=2): add the mob to the region that OWNS its column, NOT t.only().
 	// only() resolves to the CALLING goroutine's region — globalRegion when spawned from the
 	// coordinator (e.g. the SULFUR_TEST_KIT gate egg's use-packet path) — which orphans the mob

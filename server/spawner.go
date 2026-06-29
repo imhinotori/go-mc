@@ -70,7 +70,24 @@ const (
 	// a reference surface, so an attempt is O(constant) — never a full -64..319 column walk.
 	// v1 references the players' feet Y; ±spawnScanYRange covers a few blocks up/down.
 	spawnScanYRange = 8
+
+	// spawnMagicNumber ports NaturalSpawner.MAGIC_NUMBER = (int)Math.pow(17.0, 2.0) = 289. The
+	// per-category mob cap is `maxInstancesPerChunk * spawnableChunkCount / MAGIC_NUMBER`
+	// (NaturalSpawner$SpawnState.canSpawnForCategoryGlobal bytecode: imul then idiv by MAGIC_NUMBER).
+	// WITHOUT this divisor the cap was maxInstancesPerChunk * spawnableChunkCount (~2890 creatures for
+	// a radius-8 area) — the world flooded with mobs. With it the cap is ~10 (CREATURE max) for a
+	// fully-loaded spawn area, matching vanilla. CITE: net.minecraft.world.level.NaturalSpawner.
+	spawnMagicNumber = 289
 )
+
+// creatureCap is the vanilla per-category global cap for CREATURE:
+// maxInstancesPerChunk * spawnableChunkCount / MAGIC_NUMBER (NaturalSpawner$SpawnState
+// .canSpawnForCategoryGlobal). A live count >= this blocks further CREATURE spawns. The single
+// source of the formula so the pre-submit gate (naturalSpawn) and the apply-time re-check
+// (spawnCandidatesReady.applyTo) can never diverge.
+func creatureCap(spawnableChunkCount int) int {
+	return categoryCreature.maxInstancesPerChunk() * spawnableChunkCount / spawnMagicNumber
+}
 
 // countByCategory ranges the tick-owned entityStore and tallies the live mob count per
 // MobCategory (ported from NaturalSpawner.createState's per-category tally). This is the
@@ -321,7 +338,7 @@ func (t *TickLoop) naturalSpawn() {
 	// cross-region count is race-free — compute it directly. Either way the count is GLOBAL and matches
 	// the apply-time countByCategoryAcrossRegions re-check (async.go).
 	spawnableChunkCount := len(cols)
-	cap := categoryCreature.maxInstancesPerChunk() * spawnableChunkCount
+	cap := creatureCap(spawnableChunkCount) // maxInstancesPerChunk * count / MAGIC_NUMBER (vanilla)
 	var live int
 	if _, inFanOut := t.resolveRegion(); inFanOut {
 		live = t.spawnLiveCreatureSnapshot // race-free snapshot the coordinator took while quiescent

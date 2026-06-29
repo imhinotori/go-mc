@@ -41,9 +41,9 @@ func (t *TickLoop) spawnVanillaPig(x, y, z float64) *Entity {
 	if !ok {
 		panic("spawnVanillaPig: the vanilla_pig declaration is missing from the registry (boot-load did not capture it)")
 	}
-	pig := t.spawnDeclaredMob(decl, x, y, z)
-	reseedMobAI(pig.ai, pig.id) // per-entity deterministic RNG stream (the Mob.getRandom() seed)
-	return pig
+	// spawnDeclaredMob reseeds the per-entity RNG by entity id (the Mob.getRandom() per-mob stream),
+	// so no separate reseedMobAI is needed here — every declared mob gets an independent stream.
+	return t.spawnDeclaredMob(decl, x, y, z)
 }
 
 // spawnVanillaPigWithID is spawnVanillaPig with a caller-supplied entity id instead of an allocated

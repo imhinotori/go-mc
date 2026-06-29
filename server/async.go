@@ -310,7 +310,7 @@ func (r spawnCandidatesReady) applyTo(t *TickLoop) {
 	// before mutating. This runs on the coordinator at the barrier (quiescent), so counting every
 	// region's store is race-clean. A creature spawned/added since the scan can push us to cap — drop
 	// rather than over-spawn.
-	cap := categoryCreature.maxInstancesPerChunk() * r.spawnableChunkCount
+	cap := creatureCap(r.spawnableChunkCount) // maxInstancesPerChunk * count / MAGIC_NUMBER (vanilla)
 	live := t.countByCategoryAcrossRegions()[categoryCreature]
 	if live >= cap {
 		return // now AT/OVER cap: DROP the stale candidates (no over-cap add)

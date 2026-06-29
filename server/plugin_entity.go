@@ -744,11 +744,14 @@ func (h *navHandle) hasPath(_ *starlark.Thread, _ *starlark.Builtin,
 	if e.ai == nil {
 		return nil, fmt.Errorf("entity %d has no AI (cannot read has_path)", h.id)
 	}
-	// Read the REAL navigation state (active path or in-flight compute), NOT mobAI.hasTarget — the
-	// intent flag stays true forever after path_to (only nav.stop clears it), which froze a declared
-	// wander mob after its first target. active() goes false on arrival / path-fail so the goal
-	// re-requests and the mob keeps moving.
-	return starlark.Bool(e.ai.navigation.active()), nil
+	// has_path() reads mobAI.hasTarget — the canContinueToUse = !navigation.isDone() analogue. Both the
+	// vanilla_pig stroll's canContinueToUse and the wander mob's `if not nav.has_path()` re-request
+	// guard depend on this equalling hasTarget. hasTarget is set by path_to and CLEARED ON ARRIVAL by
+	// serverAiStep when the path completes (the 07-02 "flip hasTarget false when the path completes"
+	// step), so it correctly goes false when the mob reaches its target — ending the Go stroll's
+	// canContinueToUse AND letting the wander mob re-request. Go-native + plugin pig clear it in the
+	// SAME serverAiStep step, so the equality oracle stays in lockstep.
+	return starlark.Bool(e.ai.hasTarget), nil
 }
 
 // pathTo(x,y,z) MUTATES through the nav seam: setWantTarget -> requestPath (the async A*). It sets a

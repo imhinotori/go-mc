@@ -87,18 +87,23 @@ func (t *TickLoop) blockSolidAt(x, y, z int) bool {
 	if !ok {
 		return false
 	}
-	if block.IsAir(s) {
+	// COLLISION = blocksMotion(), NOT "not air". Vanilla BlockStateBase.blocksMotion() is
+	// `block != COBWEB && block != BAMBOO_SAPLING && legacySolid` (legacySolid == isSolid()).
+	// block.IsSolid is the precomputed isSolid() table (level/block/support.go) — true for stone /
+	// grass_block (the ground), FALSE for short_grass / flowers / ferns / saplings (their
+	// getCollisionShape is empty). The old `!IsAir` test treated every non-air block as a collision
+	// wall, so a mob/player stepped UP onto grass/flowers as if they were full blocks. Using IsSolid
+	// restores the empty collision shape for non-colliding plants. (Cobweb/bamboo-sapling are
+	// isSolid=false anyway, so the blocksMotion special-cases don't change this result; lava is not
+	// yet extracted — water is handled below.) CITE: BlockBehaviour$BlockStateBase.blocksMotion.
+	if !block.IsSolid(s) {
 		return false
 	}
-	// FLUID is NOT a collision wall. Vanilla LiquidBlock.getCollisionShape returns
-	// Shapes.empty() for a normal entity (the alwaysCollideWithFluid branch is a boat-only
-	// CollisionContext, not a walking player), so water/lava never block movement — an entity
-	// falls THROUGH the surface and then swims/sinks via travelInFluid. Treating water as solid
-	// here made the anti-clip sweep clamp the player flush onto the ocean surface (Y=sea level),
-	// so a player who reached an ocean column stood ON the water as if it were ground (no sink,
-	// no oxygen, no float). Excluding fluids from the solid test restores the empty collision
-	// shape. (v1 ports water; lava is not yet extracted — waterLevelOf covers the water case,
-	// which is the only fluid the generator currently places. CITE: LiquidBlock.getCollisionShape.)
+	// FLUID is NOT a collision wall. Vanilla LiquidBlock.getCollisionShape returns Shapes.empty()
+	// for a normal entity, so water/lava never block movement — an entity falls THROUGH the surface
+	// and then swims/sinks via travelInFluid. (Water is isSolid=false so the IsSolid gate above
+	// already excludes it, but keep the explicit guard for clarity + any solid-flagged fluid edge.)
+	// CITE: LiquidBlock.getCollisionShape.
 	if _, isWater := waterLevelOf(s); isWater {
 		return false
 	}
