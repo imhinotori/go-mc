@@ -92,16 +92,25 @@ func (t *TickLoop) resolveSubtickInputs() {
 // Wave-1-owned and is NOT edited by 17-02.
 func (t *TickLoop) tickWorld() {
 	t.trace("tickWorld")
-	// SUB-BLOCKTICK: drain the general scheduled-BLOCK-tick queue (ServerLevel.blockTicks.tick)
-	// BEFORE the fluid pass, matching ServerLevel.tick which drains blockTicks then fluidTicks at
-	// the same game-time. It lives INSIDE this existing phase so no new phase is added to the
-	// fixed tick order (TestTickPhaseOrder stays green). A nil manager (no chunk container ever
-	// registered) is a cheap no-op.
-	t.tickScheduledBlocks()
-	t.tickFluids()
-	// SUB-PERSIST: the periodic chunk-save pass (every chunkSaveIntervalTicks). It lives INSIDE
-	// this existing phase so no new phase is added to the fixed tick order (TestTickPhaseOrder
-	// stays green). A nil/disabled chunkSaver makes it a cheap no-op (tests/ephemeral runs).
+	// Phase-27 N=2: the scheduled-block + fluid drains are PER-REGION (each region owns its own
+	// blockTicks manager + fluidSchedule queue), but they run on the COORDINATOR where cur() would
+	// fall back to region 0 and silently drain ONLY region 0's queues — leaving fluids/scheduled
+	// blocks dead in regions 1..N-1. forEachRegion runs each drain once per region with that region
+	// registered, so cur().blockTicks / cur().fluidSchedule resolve to the OWNING region's queue;
+	// every drain still operates against the SHARED world (world()). At N=1 this is exactly one
+	// iteration over region 0 — identical to the pre-fix single drain (TestTickPhaseOrder unchanged:
+	// the trace marker is "tickWorld" above and stays put; only the bodies are wrapped).
+	t.forEachRegion(func(r *region) {
+		// SUB-BLOCKTICK: drain THIS region's scheduled-BLOCK-tick queue (ServerLevel.blockTicks.tick)
+		// BEFORE the fluid pass, matching ServerLevel.tick which drains blockTicks then fluidTicks at
+		// the same game-time. A nil manager (no chunk container ever registered) is a cheap no-op.
+		t.tickScheduledBlocks()
+		t.tickFluids()
+	})
+	// SUB-PERSIST: the periodic chunk-save pass (every chunkSaveIntervalTicks) stays GLOBAL — it
+	// serializes the SHARED world's dirty chunks once, not per region. It lives INSIDE this existing
+	// phase so no new phase is added to the fixed tick order (TestTickPhaseOrder stays green). A
+	// nil/disabled chunkSaver makes it a cheap no-op (tests/ephemeral runs).
 	t.tickChunkSave()
 }
 
