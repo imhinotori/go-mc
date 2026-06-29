@@ -162,6 +162,32 @@ type transferIntent struct {
 	to  regionID
 }
 
+// damageIntent is one queued cross-region damage application: a player (in the SOURCE region) hit a
+// mob OWNED by region `to`, recorded by handleAttack and applied at the barrier by
+// applyCrossRegionDamage. It mirrors transferIntent (l.160) EXACTLY — the `to` is the OWNER/target
+// region (transferIntent.to), and the intent is kept on the SOURCE region's slice (the actor's own
+// region), drained centrally so no goroutine appends to another region's slice mid-tick (Assumption
+// A3). It carries the damageSource as a PLAIN VALUE (the Folia rule: a value travels across the
+// barrier with no aliasing) and the victim's id (re-resolved by owningRegion at drain — drop if gone),
+// NOT a live *Entity pointer.
+type damageIntent struct {
+	victimID int32
+	src      damageSource
+	amount   float32
+	to       regionID // target (owner) region — mirrors transferIntent.to (l.162)
+}
+
+// queueDamageIntent records a cross-region hit on the SOURCE region's pendingDamage slice, tagged to
+// the OWNER region. It mirrors the transferIntent discipline (detectTransfers appends to THIS region's
+// pendingTransfers, l.177): the append targets srcRegion's OWN slice — the actor's own region — NEVER a
+// cross-goroutine append to owner's slice, which would race owner's tick (Assumption A3). The actual
+// apply happens at the quiescent coordinator barrier (applyCrossRegionDamage). This is a pure
+// same-goroutine slice append; it does NOT touch the owner region or the victim's store.
+func (t *TickLoop) queueDamageIntent(srcRegion *region, owner regionID, di damageIntent) {
+	di.to = owner
+	srcRegion.pendingDamage = append(srcRegion.pendingDamage, di)
+}
+
 // detectTransfers scans THIS region's entities at the END of its tick (still on the region's
 // goroutine — it only QUEUES, never mutates another region's store) and records a transferIntent for
 // every entity whose current column now maps to a DIFFERENT region. The physics/AI step inside the

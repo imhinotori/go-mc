@@ -131,6 +131,18 @@ type region struct {
 	// the first transfer is queued; reset to [:0] after each drain (the backing array is reused).
 	pendingTransfers []transferIntent
 
+	// pendingDamage is the Phase-29 cross-region DAMAGE queue (the project's FIRST true cross-region
+	// write — PITFALLS Pitfall 2), mirroring pendingTransfers above. handleAttack (on the dispatch
+	// goroutine, this region being the ATTACKER's region) appends a damageIntent for every cross-region
+	// hit (a player here hitting a mob owned by ANOTHER region, the intent tagged `to` that owner);
+	// applyCrossRegionDamage drains it at the barrier (the quiescent coordinator) and applies each hit
+	// via withRegion(owner) -> applyDamageEntity, re-resolving the owner by id (drop if gone). Like
+	// pendingTransfers it is touched ONLY on this region's goroutine (the append, off the fan-out) and
+	// on the coordinator at the barrier (the drain, when no region ticks) — never concurrently — so it
+	// needs no lock (A3: kept on the SOURCE region to avoid a cross-goroutine append race). nil until
+	// the first cross-region hit is queued; reset to [:0] after each drain (the backing array is reused).
+	pendingDamage []damageIntent
+
 	// tickHook is a TEST-ONLY seam (Phase-27 STEP-2): when non-nil, region.tick invokes it FIRST,
 	// on the region's goroutine, before the per-region phases. It exists so a test can inject a
 	// region whose tick panics (TestRegionPanicIsolated — the T-27-02 DoS-isolation proof: conc
