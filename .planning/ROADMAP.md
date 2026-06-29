@@ -104,7 +104,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
   4. Standing: jar-verified (javap before writing); CGO=0 + no new Go deps; the pig oracle stays GREEN; Docker `-race` + `strictRegion` clean.
 **Plans**: 3 plans (3 sequential waves)
 - [x] 30-01-PLAN.md — Mob fluid predicates + lava decode: extend fluidState/decodeFluid for lava (lavaLevelOf + .isWater consumer audit) + mobInWater/mobFluidHeight/mobInLava/getFluidJumpThreshold [MOB-SUB-05]
-- [ ] 30-02-PLAN.md — JumpControl + aiStep jump branch: jumpControl/noJumpDelay + jumping/setJumping + the RNG-free JUMP slot after navigation.tick + jumpInLiquid(+0.04)/jumpFromGround(0.42) + entity.in_water/fluid_height/in_lava + nav.jump() handle ops [MOB-SUB-04]
+- [x] 30-02-PLAN.md — JumpControl + aiStep jump branch: jumpControl/noJumpDelay + jumping/setJumping + the RNG-free JUMP slot after navigation.tick + jumpInLiquid(+0.04)/jumpFromGround(0.42) + entity.in_water/fluid_height/in_lava + nav.jump() handle ops [MOB-SUB-04]
 - [ ] 30-03-PLAN.md — FloatGoal@0 lockstep (Go-native newPigAI + vanilla_pig/main.star) + the wet-behavior test; the DRY pig oracle stays GREEN (canUse false -> zero draws) [MOB-SUB-04]
 
 ### Phase 31: PanicGoal (S2 consumer)
@@ -185,7 +185,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
 | 17–20 (v3 online-mode + operator-UX + structure-polish) | v3 | 33/33 | Complete | 2026-06-27 |
 | 21–28 (v4 plugin / scripting system) | v4 | 19/19 | Complete | 2026-06-29 |
 | 29. Damage Keystone (S2) | v5 | 4/4 | Complete   | 2026-06-29 |
-| 30. JumpControl + Fluid (S1) | v5 | 1/3 | In Progress|  |
+| 30. JumpControl + Fluid (S1) | v5 | 2/3 | In Progress|  |
 | 31. PanicGoal (S2 consumer) | v5 | 0/? | Not started | - |
 | 32. Held-Item + Item Tags (S4) | v5 | 0/? | Not started | - |
 | 33. Aging + Breeding (S3) — Pig Parity / DOGFOOD GATE | v5 | 0/? | Not started | - |
