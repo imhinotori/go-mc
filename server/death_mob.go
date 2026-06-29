@@ -256,9 +256,17 @@ func killedByPlayer(src damageSource) bool {
 // hostiles) extends the switch with no caller change.
 func (t *TickLoop) entityBaseExperienceReward(e *Entity) int {
 	// All v1 death-capable mobs are Animals (the pig and the egg-spawned passives), so the Animal
-	// override applies: 1 + random.nextInt(3). Use a fresh math/rand/v2 draw (event-time, outside the
-	// oracle window) as the mob's RandomSource analogue — the same discipline the loot seed uses.
-	return 1 + rand.IntN(3)
+	// override applies: `1 + this.random.nextInt(3)`. The draw MUST come from the mob's OWN
+	// RandomSource (the `this.random` field), NOT the process-global pool — `this.random.nextInt(3)`
+	// is a draw on the per-entity stream (CLAUDE.md: mirror the RNG source/draw-order EXACTLY).
+	// mobRandom(e) is the Mob.getRandom() analogue (e.ai.rng), nil-safe for a hand-built/AI-less mob.
+	// The draw is at the DEATH event — outside the 500-tick oracle window (the oracle pig is never
+	// killed), so it does not perturb TestPluginPigEqualsGoNativePig's pinned in-window stream.
+	//
+	//	[VERIFIED javap net.minecraft.world.entity.animal.Animal.getBaseExperienceReward:
+	//	 iconst_1; aload_0 getfield random; iconst_3; invokeinterface RandomSource.nextInt:(I)I; iadd;
+	//	 ireturn  => 1 + this.random.nextInt(3).]
+	return 1 + mobRandom(e).nextInt(3)
 }
 
 // awardExperienceOrbs is the port of net.minecraft.world.entity.ExperienceOrb.award ->
