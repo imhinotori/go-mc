@@ -97,33 +97,54 @@ func newEvalNode(r *pathRegion, x, y, z int, mobH float64) *node {
 	return n
 }
 
-// findAcceptedNode ports WalkNodeEvaluator.findAcceptedNode (v1 ground subset): from the source
-// node, try the candidate at (x,y,z); if it is WALKABLE accept it; if it is OPEN (no floor) try
-// stepping DOWN to the first solid floor below (a step-down); if it is BLOCKED try stepping UP
-// to y+1 .. y+stepUp where a WALKABLE node exists (the maxUpStep allowance). Returns nil when no
-// standable node is found in the step band (the move is rejected). Reads ONLY the snapshot.
-func findAcceptedNode(r *pathRegion, x, y, z, stepUp int, mobH float64) *node {
-	// Same-level: a standable floor here.
-	if n := newEvalNode(r, x, y, z, mobH); n.ptype == pathWalkable {
-		return n
-	}
-	// Step UP: a 1-block (or stepUp-block) ledge — the mob climbs onto it.
-	for up := 1; up <= stepUp; up++ {
-		if n := newEvalNode(r, x, y+up, z, mobH); n.ptype == pathWalkable {
-			return n
-		}
-	}
-	// Step DOWN: the candidate is OPEN (air, no floor) — fall to the first solid floor below,
-	// within a short drop band (vanilla bounds the fall; v1 uses a small fixed band so a mob
-	// does not "see" a node across a deep chasm). The band of 3 mirrors a mob's safe-ish drop.
-	if newEvalNode(r, x, y, z, mobH).ptype == pathOpen {
+// findAcceptedNode ports WalkNodeEvaluator.findAcceptedNode (v1 ground subset). The ORDER + guards
+// are load-bearing (a wrong order makes a mob "climb" out of a covered hole). Faithful flow:
+//   - same-level WALKABLE  -> accept it (a standable floor here).
+//   - same-level OPEN (clear body, no floor) -> step DOWN to the first solid floor below (the mob
+//     FALLS; it does NOT jump). This is vanilla's tryFindFirstGroundNodeBelow branch.
+//   - same-level BLOCKED (the mob's body cell is solid) -> ONLY THEN try stepping UP (tryJumpOn),
+//     and only if there is JUMP CLEARANCE in the SOURCE column (no ceiling pinning the mob) AND the
+//     destination y+1 is itself standable. This is vanilla's `if (best==null || best.costMalus<0) &&
+//     jumpSize>0` gate + tryJumpOn's collision sweep.
+// The previous code tried the step-UP BEFORE the step-DOWN and for ANY non-WALKABLE same-level node,
+// so a mob standing in a 2-high covered hole (same-level OPEN/BLOCKED, a solid block at y+mobCells
+// above its head) was lifted onto the block above instead of staying/falling — the "spawn under a
+// block, it climbs up immediately" bug. Reads ONLY the snapshot.
+//
+// src(X,Z) is the SOURCE column the mob is moving FROM — needed for the jump ceiling check (the mob
+// must be able to rise in its CURRENT column, not just land in the destination). stepUp is the
+// maxUpStep allowance in blocks.
+func findAcceptedNode(r *pathRegion, x, y, z, stepUp int, mobH float64, srcX, srcZ int) *node {
+	// Same-level classification drives the branch (vanilla switches on the same-level pathType).
+	switch newEvalNode(r, x, y, z, mobH).ptype {
+	case pathWalkable:
+		return newEvalNode(r, x, y, z, mobH) // a standable floor here — accept
+	case pathOpen:
+		// Clear body, no floor below — the mob FALLS (step DOWN), never jumps. Find the first solid
+		// floor within a bounded drop band (vanilla scans down; v1 caps the band so a mob does not see
+		// a node across a deep chasm). NO step-up is attempted for an OPEN node.
 		for down := 1; down <= 3; down++ {
 			if n := newEvalNode(r, x, y-down, z, mobH); n.ptype == pathWalkable {
 				return n
 			}
 		}
+		return nil
+	default: // pathBlocked — the body cell ahead is solid; the only way through is UP (step/jump).
+		// JUMP CEILING GUARD (vanilla tryJumpOn): the mob can only rise if its SOURCE column has the
+		// headroom to lift — i.e. the cell directly above the mob's body in the column it is LEAVING
+		// must be clear. Without this, a mob pinned under a block "teleports" onto the block. The body
+		// occupies cells y .. y+mobAirCells-1; the lift cell is (srcX, y+mobAirCells, srcZ). If that is
+		// solid, no jump is possible — return nil (the move is rejected; the mob stays / falls).
+		if r.solidAt(srcX, y+mobAirCells(mobH), srcZ) {
+			return nil // ceiling above the mob in its current column — cannot jump up
+		}
+		for up := 1; up <= stepUp; up++ {
+			if n := newEvalNode(r, x, y+up, z, mobH); n.ptype == pathWalkable {
+				return n // a reachable ledge with clear headroom at the destination
+			}
+		}
+		return nil
 	}
-	return nil
 }
 
 // getNeighbors ports WalkNodeEvaluator.getNeighbors: the 4 cardinal moves (each via
@@ -146,7 +167,7 @@ func getNeighbors(r *pathRegion, n *node, mobW, mobH float64) []*node {
 	side := [4]*node{}
 	out := make([]*node, 0, 8)
 	for i, d := range card {
-		c := findAcceptedNode(r, n.x+d.dx, n.y, n.z+d.dz, stepUp, mobH)
+		c := findAcceptedNode(r, n.x+d.dx, n.y, n.z+d.dz, stepUp, mobH, n.x, n.z)
 		side[i] = c
 		if isNeighborValid(c, n) {
 			out = append(out, c)
@@ -161,7 +182,7 @@ func getNeighbors(r *pathRegion, n *node, mobW, mobH float64) []*node {
 		j := (i + 1) % 4
 		di, dj := card[i], card[j]
 		cx, cz := n.x+di.dx+dj.dx, n.z+di.dz+dj.dz
-		corner := findAcceptedNode(r, cx, n.y, cz, stepUp, mobH)
+		corner := findAcceptedNode(r, cx, n.y, cz, stepUp, mobH, n.x, n.z)
 		if isDiagonalValidSides(n, side[i], side[j], mobW) && isDiagonalValidCorner(corner) {
 			out = append(out, corner)
 		}
