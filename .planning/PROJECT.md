@@ -10,6 +10,31 @@ A Go server that a vanilla Minecraft 26.2 client can connect to, log into, and p
 
 ## Current State
 
+**Shipped: v4 (2026-06-29).** Sulfur's gameplay is now **scriptable through a dual-runtime
+plugin API** — without giving up the two things that define the project (the pure-Go static
+binary, CGO_ENABLED=0; the 1:1-with-the-jar mandate). **Starlark** (`go.starlark.net`, pure-Go,
+sandboxed with a step-budget + recursion-off + no-I/O builtins, FrozenValue tick-boundary
+sharing) is the hot-path core; a typed event bus fires the core gameplay events to register-once
+hooks at 9 discrete server seams, OFF the per-entity hot path. Plugins DECLARE behavior loaded
+once and Go runs the hot path calling the declared hooks (a plugin can fully override a mob). The
+API is **dogfood-validated across two domains**: the vanilla pig was rewritten AS a Starlark
+plugin (3 goals, literal jar port, behavior-identical to the retained `newPigAI` Go oracle, the
+ONLY pig now), and crafting was built THROUGH the plugin API (a recipe-provider plugin drives the
+result + the formerly-stubbed `ResultSlot.onTake` consume, plus the `crafting_table` 3×3 menu).
+An **opt-in Python runtime** (`qur/gopy` @ `python3.14`, module `gopython.xyz/py/v14`, CPython via
+cgo) sits behind a `python` build tag — the default no-tag build stays pure-Go static with ZERO
+gopy in the import graph (verified `go list -deps`); Python runs HEAVY plugins off-tick, rejoining
+via the async seam. **Folia regionization** (REGION-01, folded from the v3 deferral) layers
+parallel-region tick threading (conc fan-out/barrier, N=2 static chunk→region hash, cross-region
+transfer at the barrier, region-aware Emit) over the faithful logic — 2 regions tick in parallel,
+`-race` clean, behavior-neutral. Closed by **PLUGIN-07**: a bot-driven visual gate (cmd/testbot, a
+real proto-776 client, OBSERVES the wire — custom mob spawns+walks, vanilla pig wire-identical,
+vanilla+custom crafting result/consume, an on_block_break SystemChat — exit 0 = PASS) PLUS an
+automated perf gate (`TestPerfGate` + the A/B `BenchmarkPluginPigVsGoNative`: the plugin layer
+adds ~1.7–4.2% per-mob-tick over Go-native, under a baseline-derived cap; zero-subscriber Emit =
+0 allocs/op). 8 phases (21–28), 19 plans, 8/8 requirements, 7/7 cross-phase integration chains
+wired, 4/4 gate flows green. The "no plugin API" scope was intentionally inverted for v4.
+
 **Shipped: v3 (2026-06-27).** Sulfur is now a real **online-mode** server an operator can
 run + watch. The six v1 "unwired seams" are closed — two clients see each other move, position
 + inventory survive reconnect, attacks deal damage with death/respawn, water flows (ported
@@ -46,21 +71,14 @@ AI) + block place/break + component-slot inventory + damage/death/respawn + pers
 commands + chat — all `-race` clean with Leaf-style async optimizations. 9 phases, 46 plans,
 45/45 v1 requirements + PARITY-01.
 
-## Current Milestone: v4 — Plugin / Scripting System
+## Next Milestone Goals
 
-**Goal:** Give Sulfur a dual-runtime extension API — Starlark (pure-Go, CGO=0 preserved, deterministic, sandboxed) on the hot path + an opt-in build-tag-gated Python runtime off-tick — where plugins DECLARE behavior loaded once and Go executes the hot path calling declared hooks. Dogfood-validated by rewriting the vanilla mobs AS plugins (1:1 jar port carries into the plugin layer) and building crafting THROUGH the plugin API (a second, different domain). Folia regionization folds in.
-
-**Target features:**
-- **PLUGIN-01 / PLUGIN-02** — Starlark runtime foundation (`go.starlark.net`, per-goroutine Thread, step-budget sandbox, FrozenValue tick-boundary sharing) + the plugin host + typed event bus (register-hooks-once, dispatch off the per-entity hot path).
-- **PLUGIN-03 / PLUGIN-04** — the declarative entity/mob behavior API (declare attributes/goals/AI once; Go runs the hot path; full-override path) + the first dogfood: vanilla mobs rewritten AS Starlark plugins, behavior-identical to the Go-native path, jar-verified.
-- **PLUGIN-05** — second dogfood: crafting/recipes built THROUGH the plugin API (recipe-provider plugin, result + ResultSlot.onTake consume, the crafting_table 3×3 menu) — proving the API generalizes beyond entity AI.
-- **PLUGIN-06** — opt-in Python runtime (`qur/gopy` @ `python3.14`, behind a `python` build tag so the default binary stays pure-Go static) for heavy off-tick plugins, same event/registration API.
-- **REGION-01** — Folia-style per-region tick threading (folded from the v3 deferral); the plugin seam + entity API become region-aware.
-- **PLUGIN-07** — real-client visual + perf gate closing v4.
-
-**Plan of record:** `.planning/v4-PLAN.md` (full per-phase breakdown, runtimes, architecture, build-order rationale).
-
-**Note:** This INVERTS the original "no plugin API" scope decision — intentional and user-directed for v4.
+v4 shipped the plugin/scripting system. The next milestone is undefined — candidate directions
+(operator-driven plugin distribution; richer plugin mutation vocabulary + sub-interpreter Python
+parallelism; dynamic region merge/split + per-region persistence; the cited vanilla-completeness
+follow-ups: more mob goals/breeding, furnace/cooking blocks, SUB-ITEMNBT Phase B). Run
+`/gsd-new-milestone` to scope it. The cited carryover lives in the v4 phase `deferred-*.md` files
+and the milestone audit's `tech_debt`.
 
 ## Requirements
 
@@ -84,15 +102,16 @@ commands + chat — all `-race` clean with Leaf-style async optimizations. 9 pha
 - [x] TUI (bubbletea + bubbles) console + disconnect-reason logs (TUI-01/02) — Phase 19 — v3
 - [x] Structure polish: loot tables, structure entities, afterPlace beard, NBT persistence (STRUCT-POLISH-01..04) — Phase 20 — v3
 - [x] Vanilla-completeness subsystems: chunk-save loop, ItemStack disk codec, scheduled block ticks, per-face block support, attribute system (SUB-PERSIST/ITEMNBT/BLOCKTICK/FACESTURDY/ATTRIB) — v3.1 (parallel worktrees)
+- [x] Starlark runtime foundation (`go.starlark.net`, CGO=0, step-budget sandbox, FrozenValue tick-boundary sharing) + plugin host + typed event bus (register-once, off-hot-path) (PLUGIN-01/02) — Phases 21–22 — v4
+- [x] Declarative entity/mob behavior API (frozen tick-owned handles, full-override path) + vanilla-mobs-as-plugins dogfood (behavior-identical, jar-verified) (PLUGIN-03/04) — Phases 23–24 — v4
+- [x] Crafting/recipes THROUGH the plugin API — 2nd-domain dogfood (recipe-provider plugin, result+consume, crafting_table 3×3 menu) (PLUGIN-05) — Phase 25 — v4
+- [x] Opt-in Python runtime (`qur/gopy` @ `python3.14`) behind a `python` build tag — default build stays pure-Go static (PLUGIN-06) — Phase 26 — v4
+- [x] Folia-style per-region tick threading, region-aware plugin seam (REGION-01) — Phase 27 — v4
+- [x] Plugin system bot-driven visual + automated perf gate (PLUGIN-07) — Phase 28 — v4
 
-### Active (v4 — Phases 21–28, see REQUIREMENTS.md)
+### Active (next milestone — undefined; run `/gsd-new-milestone`)
 
-- [ ] Starlark runtime foundation + plugin host + typed event bus (PLUGIN-01/02) — Phases 21–22
-- [ ] Declarative entity/mob behavior API + vanilla-mobs-as-plugins dogfood (PLUGIN-03/04) — Phases 23–24
-- [ ] Crafting/recipes THROUGH the plugin API — 2nd-domain dogfood (PLUGIN-05) — Phase 25
-- [ ] Opt-in Python runtime behind a build tag (PLUGIN-06) — Phase 26
-- [ ] Folia-style per-region tick threading, region-aware plugin seam (REGION-01) — Phase 27
-- [ ] Plugin system real-client visual + perf gate (PLUGIN-07) — Phase 28
+_No active requirements — v4 shipped. See "Next Milestone Goals" above for candidate directions._
 
 ### Out of Scope
 
@@ -124,9 +143,12 @@ commands + chat — all `-race` clean with Leaf-style async optimizations. 9 pha
 | Use Tnze/go-mc as protocol/data base | Provides ~30% (codec, NBT, chunk/region, save) for free; avoids reimplementing the wire format | ✅ Shipped v1.0 |
 | Code-generate data layer from official 26.2 jar (PR #294-296 approach) | Mojang ships unobfuscated jar; codegen yields authoritative packets/registries/blocks for 776 with no hand-transcription | ✅ Shipped v1.0 |
 | Build vanilla logic first, Leaf optimizations last | Async-optimizing nonexistent logic is impossible; correctness before performance | ✅ Shipped v1.0 |
-| No plugin system (v1–v3) → dual-runtime plugin API (v4) | v1–v3 kept focus on server core. For v4 the user reversed it: a Starlark (CGO=0, sandboxed, deterministic) hot-path runtime + opt-in Python (build-tag) off-tick, with vanilla mobs + crafting dogfooded THROUGH the API. The 1:1 mandate + CGO=0/-race constraints carry into the plugin layer. | 🚧 v4 in progress |
-| Starlark as the CORE plugin runtime (not Python) | `go.starlark.net` is pure-Go → preserves the CGO=0 static-binary value prop; natively sandboxed (step budget, recursion-off, no I/O builtins) + deterministic → safe inside the tick loop. Python (cgo/libpython) can't be the default without breaking the static binary, so it's opt-in behind a build tag for heavy off-tick work only. | 🚧 v4 (Phase 21/26) |
-| Plugins DECLARE behavior once; Go runs the hot path | 200 mobs × 20 TPS ≠ 4000 interpreter calls/sec — the interpreter runs at load + on events + on cached decisions, not per-entity-per-tick. Keeps "ultra-efficient" true while still allowing a plugin to FULLY override a mob. | 🚧 v4 (Phase 22/23) |
+| No plugin system (v1–v3) → dual-runtime plugin API (v4) | v1–v3 kept focus on server core. For v4 the user reversed it: a Starlark (CGO=0, sandboxed, deterministic) hot-path runtime + opt-in Python (build-tag) off-tick, with vanilla mobs + crafting dogfooded THROUGH the API. The 1:1 mandate + CGO=0/-race constraints carry into the plugin layer. | ✅ Shipped v4 |
+| Starlark as the CORE plugin runtime (not Python) | `go.starlark.net` is pure-Go → preserves the CGO=0 static-binary value prop; natively sandboxed (step budget, recursion-off, no I/O builtins) + deterministic → safe inside the tick loop. Python (cgo/libpython) can't be the default without breaking the static binary, so it's opt-in behind a build tag for heavy off-tick work only. | ✅ Shipped v4 (`go list -deps` confirms ZERO gopy in the default graph) |
+| Plugins DECLARE behavior once; Go runs the hot path | 200 mobs × 20 TPS ≠ 4000 interpreter calls/sec — the interpreter runs at load + on events + on cached decisions, not per-entity-per-tick. Keeps "ultra-efficient" true while still allowing a plugin to FULLY override a mob. | ✅ Shipped v4 (perf gate: plugin pig ~1.7–4.2% over the Go-native oracle, under the cap) |
+| Thin-id entity handle (id + *TickLoop, re-resolves on the owner thread; never a live *Entity) | The Phase-23 plugin↔entity bridge MUST be race-safe across the tick boundary AND across region threads. A handle that carries only an id + re-resolves on the thread owning the entity is the single primitive that satisfies both — it is also the Folia-safety primitive that made region-aware hooks (Phase 27) fall out cleanly. | ✅ Shipped v4 (the entity API + REGION-01, `-race` clean) |
+| gopy = `qur/gopy` @ `python3.14` (`gopython.xyz/py/v14`), NOT go-Python/gopy | The maintained fork supports CPython 3.14; the old go-Python/gopy line (the `/py/v3` 3.11 module) is years stale. The `/py/v14` vanity path resolves to `github.com/qur/gopy`. | ✅ Shipped v4 (Phase 26, the `-tags python` build linked libpython3.14 + tests + -race ran live in a Docker python:3.14 image) |
+| Regionize a WORKING single-thread seam (extract → barrier → N=2), don't design around regions first | The operator's locked incremental path: extract the `region` struct at N=1 (behavior-neutral) → add the conc fan-out/barrier at N=1 → flip to N=2. Each step is independently `-race`-verifiable + keeps the existing suite green, so regionization stays a pure concurrency change over the faithful logic (the only permitted deviation). | ✅ Shipped v4 (REGION-01, 2 regions parallel + behavior-neutral) |
 | Offline-mode first | Removes auth/encryption from the critical path to first playable connection | ✅ Shipped v1.0 |
 | Game-time anchored to 50ms; subtick layer (CS2-style) for player movement/combat only | MC defines game-time by tick count, not real seconds — raising TPS naively accelerates the world (shorter day, faster crops/redstone), violating vanilla-parity. Anchoring game-time to 50ms keeps the world correct; a subtick layer adds µs-precise resolution for movement/hit-reg/projectiles without touching world simulation speed (same pattern as CS2 subtick over a fixed broadcast rate). | ✅ Shipped v1.0 |
 | Cross-chunk worldgen seam: hold-at-carved until 8 neighbors carve, then decorate/place into a 3×3 Neighborhood via a single lock-free scheduler goroutine (emit-once) | Features + structures write across chunk boundaries; a per-chunk footprint guard can't express that. The hold-until-neighborhood-complete seam makes decoration/placement pure over (seed, pos) regardless of generation order — the determinism contract the whole milestone rests on. | ✅ Shipped v2.0 (`-race` clean, 5×5 reorder byte-identical) |
@@ -152,4 +174,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-27 — v3 milestone shipped (15/15 online-mode + operator-UX + structure-polish requirements validated, 4/4 integration seams, live 12-bug fidelity sweep operator-confirmed, v3.1 vanilla-completeness subsystems landed); v4 = Plugin/Scripting System (Phases 21–28) kicked off, plan of record in v4-PLAN.md. The "no plugin API" scope is intentionally inverted for v4.*
+*Last updated: 2026-06-29 — v4 Plugin/Scripting System shipped (8/8 requirements validated across Phases 21–28, 7/7 cross-phase integration chains wired, 4/4 bot-driven gate flows green + the automated perf gate). Dual-runtime API: Starlark hot-path core (CGO=0 preserved) + opt-in build-tag Python; vanilla mobs + crafting dogfooded 1:1 through the API; Folia regionization (REGION-01) folded in. Next milestone undefined — run `/gsd-new-milestone`.*

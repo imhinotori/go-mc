@@ -4,7 +4,7 @@ milestone: v4
 milestone_name: Plugin / Scripting System
 status: verifying
 stopped_at: Completed 24-02-PLAN.md — Phase 24 (vanilla-mobs-as-plugins) COMPLETE
-last_updated: "2026-06-29T00:25:30.197Z"
+last_updated: "2026-06-29T00:43:06.121Z"
 last_activity: 2026-06-29
 progress:
   total_phases: 8
