@@ -95,8 +95,17 @@ func (t *TickLoop) handleAttack(p *tickPlayer, pkt pk.Packet) {
 	}
 
 	victim := t.lookupPlayerByEntityID(int32(targetID))
-	if victim == nil || victim == p {
-		return // forged/unknown target, or a self-attack: cannotAttack -> silent no-op
+	if victim == nil {
+		// DUAL-RESOLVE (Phase-29, MOB-SUB-01): the named id is not a player. It may be a Go-native MOB
+		// owned by some region — route to the Wave-2 applyDamageEntity hurt pipeline (same-region
+		// synchronous, cross-region via the owner barrier-queue). A non-player, non-mob id falls through
+		// to a silent no-op. handleMobAttack mirrors the player path below exactly (same reach gate, same
+		// ATTACK_DAMAGE × scale × crit math, the same hurtOrSimulate boolean tail).
+		t.handleMobAttack(p, int32(targetID))
+		return
+	}
+	if victim == p {
+		return // a self-attack: cannotAttack -> silent no-op
 	}
 
 	// Server-authoritative reach gate (T-6-01): reject an out-of-range target silently. This is the
@@ -198,6 +207,171 @@ func (t *TickLoop) handleAttack(p *tickPlayer, pkt pk.Packet) {
 	t.causeFoodExhaustion(p, 0.1)
 
 	// postPiercingAttack(): stub (no multi-hit piercing weapon in v1).
+}
+
+// handleMobAttack is the MOB-victim arm of the handleAttack dual-resolve (Phase-29, MOB-SUB-01): a
+// player hit a Go-native mob (the named id is not a player). It is a FAITHFUL MIRROR of the player
+// branch of handleAttack — the SAME Player.attack(Entity) bytecode trace — differing ONLY in (a) the
+// victim is an *Entity resolved through its OWNING region (owningRegion, NEVER cur(): the cross-region
+// victim must never fall to region 0 — Pitfall 2 / T-29-02), (b) the reach gate measures player→mob
+// distance, and (c) the hurtOrSimulate application routes to applyDamageEntity (the LivingEntity
+// .hurtServer port) either SYNCHRONOUSLY (same region — the fast path) or via the barrier-queue
+// (cross region — queueDamageIntent drained by applyCrossRegionDamage).
+//
+// Because Player.attack calls target.hurtOrSimulate(source, total) for ANY LivingEntity target (javap:
+// bytecode 242 → LivingEntity.hurtServer at 184), the SAME ATTACK_DAMAGE × strength-scale × crit math
+// applies to a mob target as to a player target — so the damage computation is shared verbatim with the
+// player branch via the inlined sequence below (kept identical so a divergence is impossible).
+func (t *TickLoop) handleMobAttack(p *tickPlayer, targetID int32) {
+	// Resolve the victim through its OWNING region (re-resolve by id, O(regionCount), nil if gone). NEVER
+	// cur() — a cross-region victim resolved through cur() would silently fall to region 0 (the trap the
+	// strictRegion gate guards). A forged/despawned id yields a nil owner -> a silent no-op (T-29-01).
+	ownerRegion := t.owningRegion(targetID)
+	if ownerRegion == nil {
+		return
+	}
+	mob, ok := ownerRegion.entities.get(targetID)
+	if !ok {
+		return // owningRegion confirmed it, but stay defensive
+	}
+
+	// Server-authoritative reach gate (T-29-01): reject an out-of-reach mob silently. A client cannot
+	// melee a mob across the map even if it names a valid mob id — the SAME entity-interaction reach the
+	// player branch enforces (attackReach), measured player-center to mob-position.
+	if !t.withinAttackReachEntity(p, mob) {
+		return
+	}
+
+	// --- The SHARED Player.attack(Entity) damage math (IDENTICAL to the player branch above) -----------
+	// base damage = (float) getAttributeValue(ATTACK_DAMAGE) (the d2f narrowing cast).
+	damage := float32(p.getAttributeValue(attrAttackDamage))
+	// float scale = getAttackStrengthScale(0.5F) — read BEFORE the swing reset.
+	scale := p.getAttackStrengthScale(attackStrengthScaleArg)
+	// enchBonus = (getEnchantedDamage - damage) * scale == 0 in v1 (no enchantments).
+	const enchantedDamage = float32(0.0)
+	enchBonus := enchantedDamage * scale
+	// damage *= baseDamageScaleFactor() == 0.2F + scale*scale*0.8F.
+	damage *= p.baseDamageScaleFactor()
+	// ServerPlayer.swing() resets the attack-strength ticker (every swing, even a no-damage one) — done
+	// after the scale read, before the early returns, exactly as the player branch does.
+	p.resetAttackStrengthTicker()
+	// `if (damage > 0.0F || enchBonus > 0.0F)` — skip if nothing to deal.
+	if !(damage > 0.0 || enchBonus > 0.0) {
+		return
+	}
+	// boolean fullStrength = scale > 0.9F; boolean sprintKb = isSprinting() && fullStrength. sprintKb
+	// feeds the knockback strength (+0.5) and the sweep gate in the player branch; the mob knockback +
+	// sweep tail is the cited follow-on below, so it is computed for the faithful trace but not yet
+	// consumed for a mob victim.
+	fullStrength := scale > 0.9
+	sprintKb := p.sprinting && fullStrength
+	_ = sprintKb // consumed by the deferred mob-knockback/sweep tail (cited below)
+	// boolean crit = fullStrength && canCriticalAttack(target); if (crit) damage *= 1.5F. The mob is a
+	// LivingEntity (targetIsLivingEntity true, like a player victim), so canCriticalAttackEntity reuses
+	// the SAME attacker-side conditions as canCriticalAttack (none depend on the victim beyond the
+	// always-true LivingEntity check).
+	crit := fullStrength && t.canCriticalAttackEntity(p)
+	if crit {
+		damage *= 1.5
+	}
+	// float total = damage + enchBonus (enchBonus 0 in v1).
+	total := damage + enchBonus
+
+	// src = DamageSources.playerAttack(player) — type player_attack, causingEntity = the attacker id
+	// (javap DamageSources.playerAttack: DamageTypes.PLAYER_ATTACK + the player). The genuine ported
+	// source so PanicGoal (P31) reads its tag and wolf anger (P36) its attacker.
+	src := damageSourcePlayerAttack(p.entityID)
+
+	// ROUTING (the FIRST true cross-region write — Pitfall 2). Resolve the ATTACKER's region by its
+	// column (NEVER cur() — handleAttack runs on the dispatch goroutine with NO region registered, where
+	// cur() would either fall to region 0 or, with strictRegion armed, PANIC). A same-region hit applies
+	// SYNCHRONOUSLY (the fast path — dispatch runs on the coordinator BEFORE the fan-out, so the owner's
+	// store is quiescent); a cross-region hit is queued on the ATTACKER's region tagged to the owner and
+	// drained at the coordinator barrier (applyCrossRegionDamage).
+	attackerRegion := t.regionForColumn(columnOf(p.x, p.z))
+	if ownerRegion == attackerRegion {
+		// SAME-region fast path: apply inline via the hurtOrSimulate bridge (gates the knockback tail on
+		// the hit landing, exactly as the player branch gates on `if (hurt)`).
+		if !t.applyMobAttackDamage(mob, src, total) {
+			return // hurtOrSimulate returned false (i-frame window absorbed it): no knockback tail
+		}
+	} else {
+		// CROSS-region: queue on the attacker's region (the actor's own slice — A3), tagged to the owner.
+		// The hit is applied at the barrier; the knockback tail (which would mutate the cross-region
+		// mob's store mid-tick) is INTENTIONALLY not run from the dispatch goroutine for a cross-region
+		// victim — knockback of a cross-region mob is a barrier concern, deferred (cited stub below).
+		t.queueDamageIntent(attackerRegion, ownerRegion.id, damageIntent{victimID: mob.id, src: src, amount: total})
+		return
+	}
+
+	// causeExtraKnockback / doSweepAttack tail for a SAME-region mob victim: knockback of a mob is the
+	// LivingEntity.knockback port over the mob's vx/vy/vz. The player-victim knockback (causeExtraKnockback)
+	// is typed on *tickPlayer; a mob-target knockback is a thin sibling. For this plan the routing +
+	// damage are the deliverable (MOB-SUB-01); the mob-knockback impulse + sweep-over-mobs are a cited
+	// follow-on (no consumer reads a mob's post-hit velocity yet — the tracker syncs position, and the
+	// mob hurt/death pipeline drives the gameplay). The hit LANDED (applyMobAttackDamage returned true),
+	// damage + lastDamageSource + the on_damage emit all fired in applyDamageEntity. causeFoodExhaustion
+	// for the attacker still applies (the attack costs the player hunger regardless of the victim type).
+	t.causeFoodExhaustion(p, 0.1)
+}
+
+// canCriticalAttackEntity is canCriticalAttack for a MOB target — the port of Player.canCriticalAttack(
+// Entity) where `target instanceof LivingEntity` is always true for a mob (a Pig is a LivingEntity), so
+// it reduces to the attacker-side conditions, IDENTICAL to canCriticalAttack's player-victim form. Kept
+// as a sibling (rather than overloading canCriticalAttack) so the mob path is explicit and the player
+// path is untouched.
+func (t *TickLoop) canCriticalAttackEntity(p *tickPlayer) bool {
+	const onClimbable = false          // no ladder/vine climb state in v1
+	const isMobilityRestricted = false // no use-item/sleep restraint state in v1
+	const isPassenger = false          // no mounts in v1
+	const targetIsLivingEntity = true  // a mob (Pig/...) is always a LivingEntity
+	return p.fallDistance > 0.0 &&
+		!p.onGround &&
+		!onClimbable &&
+		!t.playerInWater(p) &&
+		!isMobilityRestricted &&
+		!isPassenger &&
+		targetIsLivingEntity &&
+		!p.sprinting
+}
+
+// withinAttackReachEntity is withinAttackReach for a MOB target: the server-authoritative entity reach
+// gate (T-29-01), squared-distance from the player position to the mob position vs attackReach. Mirrors
+// withinAttackReach (player-vs-player) but the victim is an *Entity. A mob beyond reach is a silent
+// no-op — a client cannot melee a mob across the map.
+func (t *TickLoop) withinAttackReachEntity(attacker *tickPlayer, mob *Entity) bool {
+	dx := mob.x - attacker.x
+	dy := mob.y - attacker.y
+	dz := mob.z - attacker.z
+	return dx*dx+dy*dy+dz*dz <= attackReach*attackReach
+}
+
+// applyMobAttackDamage is the hurtOrSimulate(source, amount) -> LivingEntity.hurtServer bridge for a MOB
+// victim — the *Entity sibling of applyAttackDamage. It returns whether damage ACTUALLY landed so the
+// caller gates the knockback tail exactly as vanilla's `if (hurt)`. applyDamageEntity (the mob hurtServer
+// port) is void, so this snapshots the i-frame state to decide the boolean the same way hurtServer
+// computes its return value (BEFORE applyDamageEntity mutates invulnerableTime/lastHurt):
+//   - a dead mob (health<=0): hurtServer returns false (isDeadOrDying guard);
+//   - inside the upper i-frame window ((float) invulnerableTime > 10.0F) with a non-greater hit:
+//     hurtServer returns false (the `if (amount <= lastHurt) return false` branch);
+//   - otherwise damage lands and hurtServer returns true.
+// src is the genuine ported DamageSource (player_attack with the real attacker id); applyDamageEntity
+// records it as the mob's lastDamageSource (MOB-SUB-02).
+func (t *TickLoop) applyMobAttackDamage(mob *Entity, src damageSource, amount float32) bool {
+	if mob.health <= 0 {
+		return false // isDeadOrDying() -> hurtServer returns false
+	}
+	// Mirror hurtServer's `if (amount < 0.0F) amount = 0.0F;` for the gate decision.
+	if amount < 0.0 {
+		amount = 0.0
+	}
+	landed := true
+	if float32(mob.invulnerableTime) > hurtCooldownConst {
+		// Inside the upper grace window: only a STRICTLY greater hit lands (the excess).
+		landed = amount > mob.lastHurt
+	}
+	t.applyDamageEntity(mob, src, amount)
+	return landed
 }
 
 // applyAttackDamage is the hurtOrSimulate(source, amount) -> LivingEntity.hurtServer bridge used by

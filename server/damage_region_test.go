@@ -68,18 +68,19 @@ func TestCrossRegionDamage(t *testing.T) {
 	loop, _ := newN2Loop(t)
 	loop.strictRegion = true // arm the loud guard: any unwrapped cur() on the cross-region path panics
 
-	attacker := placeAttackPlayer(loop, 1000, 8.0, 64, 8.0)   // region 0
+	// Straddle the chunk-0/chunk-1 seam: the mob is at world X=16.5 (chunk 1 -> region 1), the attacker
+	// at X=15.0 (chunk 0 -> region 0), same Z — 1.5 blocks apart (within attackReach=3.5) but owned by
+	// DIFFERENT regions (the (X^Z)&1 checkerboard makes adjacent columns different regions).
+	mob := newDamageRegionMob(loop, 1, 16.5, 64, 8.0, 20.0)  // region 1 (chunk X=1)
+	attacker := placeAttackPlayer(loop, 1000, 15.0, 64, 8.0) // region 0 (chunk X=0), within reach
 	charge(attacker)
-	mob := newDamageRegionMob(loop, 1, 24.5, 64, 8.0, 20.0) // region 1 (chunk X=1)
 
 	if regionOf(columnOf(mob.x, mob.z)) == regionOf(columnOf(attacker.x, attacker.z)) {
 		t.Fatalf("test precondition: attacker and mob must be in DIFFERENT regions")
 	}
-	// Move the mob next to the attacker IN WORLD SPACE for the reach gate, but keep it in region 1's
-	// store (the cross-region case: the victim is owned by region 1 even though it is near region-0
-	// geometry would put it in region 0 — so we instead keep the mob at the region-1 column and place
-	// the attacker within reach of it).
-	attacker.x, attacker.z = 24.0, 8.0 // within reach of the region-1 mob; the attacker is still a player
+	if !loop.withinAttackReachEntity(attacker, mob) {
+		t.Fatalf("test precondition: the cross-region mob must be within reach")
+	}
 
 	before := mob.health
 	loop.handleAttack(attacker, attackPacket(mob.id))
@@ -102,9 +103,9 @@ func TestCrossRegionDamage_DropIfGone(t *testing.T) {
 	loop, _ := newN2Loop(t)
 	loop.strictRegion = true
 
-	attacker := placeAttackPlayer(loop, 1000, 24.0, 64, 8.0) // positioned within reach of the region-1 mob
+	mob := newDamageRegionMob(loop, 1, 16.5, 64, 8.0, 20.0)  // region 1
+	attacker := placeAttackPlayer(loop, 1000, 15.0, 64, 8.0) // region 0, within reach
 	charge(attacker)
-	mob := newDamageRegionMob(loop, 1, 24.5, 64, 8.0, 20.0) // region 1
 
 	loop.handleAttack(attacker, attackPacket(mob.id))
 
@@ -158,12 +159,13 @@ func TestWasHurtHandleAttr(t *testing.T) {
 	if err != nil {
 		t.Fatalf("last_damage_type attr error: %v", err)
 	}
-	wantID := starlark.MakeInt(int(tag.DamageTypeIDs["minecraft:player_attack"]))
+	wantID := int64(tag.DamageTypeIDs["minecraft:player_attack"])
 	gotInt, ok := dt.(starlark.Int)
 	if !ok {
 		t.Fatalf("last_damage_type returned %s, want a starlark.Int", dt.Type())
 	}
-	if gotInt.Cmp(wantID, 0) != 0 {
-		t.Fatalf("last_damage_type = %s, want %s (minecraft:player_attack id)", gotInt, wantID)
+	got, ok := gotInt.Int64()
+	if !ok || got != wantID {
+		t.Fatalf("last_damage_type = %s, want %d (minecraft:player_attack id)", gotInt, wantID)
 	}
 }
