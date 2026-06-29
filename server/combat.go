@@ -59,6 +59,23 @@ func setHealth(health float32, food int32, sat float32) pk.Packet {
 	)
 }
 
+// setExperience builds ClientboundSetExperience in the JAR-VERIFIED order: Float experienceProgress,
+// VarInt experienceLevel, VarInt totalExperience (ClientboundSetExperiencePacket.write: writeFloat,
+// writeVarInt, writeVarInt — NOTE level BEFORE total, the opposite of the ctor arg order). The server
+// sends it whenever the player's XP changes (WR-06: an XP-orb pickup) so the client's XP bar reflects
+// the authoritative server state — the client never sets XP itself.
+//
+//	[VERIFIED javap net.minecraft.network.protocol.game.ClientboundSetExperiencePacket.write:
+//	 writeFloat(experienceProgress); writeVarInt(experienceLevel); writeVarInt(totalExperience).]
+func setExperience(progress float32, level, total int32) pk.Packet {
+	return pk.Marshal(
+		int32(packetid.ClientboundSetExperience),
+		pk.Float(progress),
+		pk.VarInt(level),
+		pk.VarInt(total),
+	)
+}
+
 // ============================================================================================
 // MELEE COMBAT 1:1 PORT (Plan 17-11) — LITERAL PORT of vanilla Java 26.2 (protocol 776), verified
 // method-for-method against temp/cache/26.2-inner.jar via `javap -c -p` this session. No GPL
@@ -109,6 +126,13 @@ func (t *TickLoop) tickPlayerCombat() {
 		// LivingEntity.tick: if (hurtTime > 0) hurtTime--.
 		if p.hurtTime > 0 {
 			p.hurtTime--
+		}
+		// Player.tick: if (takeXpDelay > 0) takeXpDelay-- (WR-06: the XP-orb pickup cooldown). Ported
+		// here alongside the other Player/LivingEntity per-tick decrements so the orb pickup path's
+		// takeXpDelay==0 gate clears 2 ticks after each collect, exactly as vanilla.
+		//   [VERIFIED javap Player.tick: if (takeXpDelay > 0) takeXpDelay--.]
+		if p.takeXpDelay > 0 {
+			p.takeXpDelay--
 		}
 	}
 }

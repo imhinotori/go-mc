@@ -705,6 +705,35 @@ type tickPlayer struct {
 	// effect slots in with no formula change. Tick-owned.
 	absorptionAmount float32
 
+	// --- Experience (WR-06, the XP-orb pickup path). ALL tick-owned (TICK-05): mutated only on the
+	// tick goroutine by the orb pickup path (playerTouchOrb -> giveExperiencePoints), so they are
+	// -race clean by the same single-owner discipline as the rest of tickPlayer. They mirror the
+	// identically-named net.minecraft.world.entity.player.Player fields. ---
+
+	// takeXpDelay is net.minecraft.world.entity.player.Player.takeXpDelay: the per-player cooldown
+	// (in ticks) between absorbing XP orbs. ExperienceOrb.playerTouch refuses to collect while it is
+	// > 0 and sets it to 2 on a successful pickup; the player tick decrements it toward 0 (mirroring
+	// the item pickupDelay pattern). Tick-owned.
+	takeXpDelay int32
+
+	// experienceLevel / experienceProgress / totalExperience are Player.experienceLevel /
+	// experienceProgress / totalExperience — the XP bar state giveExperiencePoints updates and the
+	// ClientboundSetExperience packet carries. experienceProgress is the 0..1 fraction toward the next
+	// level; experienceLevel is the green number; totalExperience is the lifetime total. All default to
+	// 0 (a fresh player). Tick-owned.
+	experienceLevel    int32
+	experienceProgress float32
+	totalExperience    int32
+
+	// lastSentExperience is the experienceProgress/level/total triple last pushed to this player's own
+	// client via ClientboundSetExperience. giveExperiencePoints sends the packet on a change; a separate
+	// per-tick resend is not modeled (v1 sends on the XP-gain event, the only mutation site). Seeded at
+	// registration so the first send fires only on a real change. Tick-owned.
+	lastSentXpLevel    int32
+	lastSentXpProgress float32
+	lastSentXpTotal    int32
+	xpInit             bool
+
 	// --- Breath / drowning 1:1 port (Plan 17-13). Tick-owned (TICK-05): mutated only on the tick
 	// goroutine by tickBreath, so it is -race clean by the same single-owner discipline as the rest
 	// of tickPlayer. ---

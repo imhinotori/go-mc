@@ -219,6 +219,15 @@ func (t *TickLoop) tickEntities() {
 	// reflected in this tick's near() and the tracker emits RemoveEntities promptly.
 	t.tickItems()
 
+	// WR-06 XP-ORB PICKUP: the experience-orb lifecycle — ExperienceOrb.tick (0.03 gravity, the
+	// followNearbyPlayer homing, 6000-tick despawn) for every orb, then the Player.touch scan that
+	// collects nearby orbs (ExperienceOrb.playerTouch + giveExperiencePoints + the orb-suck animation).
+	// A single ADDITIVE call inside this existing phase keeps the tick order unchanged (TestTickPhaseOrder
+	// stays green), mirroring the tickItems seam directly above. Its body lives in xp_orb.go. Placed right
+	// AFTER tickItems (the sibling pickup pass) and BEFORE tracker.Tick so a collected/despawned orb's
+	// removal is reflected in this tick's near() and the tracker emits RemoveEntities promptly.
+	t.tickOrbs()
+
 	// Plan 17-21 block-break dig-time: the ServerPlayerGameMode.tick() port — advance any pending
 	// delayed-destroy (finish the break at progress>=1.0) and refresh the in-progress crack overlay
 	// for each digging player. A single ADDITIVE call inside this existing phase keeps the tick order

@@ -107,8 +107,31 @@ type Entity struct {
 
 	// age is ItemEntity.age: ticks since spawn. The item tick increments it and DISCARDS the
 	// entity at LIFETIME (6000 == 5 minutes) — the vanilla despawn. The -32768 INFINITE_LIFETIME
-	// sentinel is honored (never aged, never despawns).
+	// sentinel is honored (never aged, never despawns). The XP-orb tick reuses this field with the
+	// SAME semantics (ExperienceOrb.age, discard at 6000) — both vanilla entities count an `age`.
 	age int
+
+	// --- XP-ORB PICKUP (WR-06): the experience-orb lifecycle state -------------------------
+	//
+	// These mirror net.minecraft.world.entity.ExperienceOrb's private fields (decompiled from
+	// temp/cache/26.2-inner.jar this session). Tick-owned plain values, set ONLY for an XP orb
+	// (typ==entity.ExperienceOrb.ID); for every other entity they stay zero and are never read
+	// (the orb tick/pickup scan gate on isOrb). They preserve the snapshot-friendly contract.
+
+	// isOrb marks this entity as an ExperienceOrb (typ==entity.ExperienceOrb.ID). The orb tick
+	// (gravity + age + despawn + followNearbyPlayer) and the player pickup scan run ONLY for entities
+	// with this set, exactly as isItem gates the dropped-item path. Set at spawn by awardExperienceOrbs.
+	isOrb bool
+
+	// xpValue is ExperienceOrb.value — the experience this orb carries (the 1-3 reward chunk for a pig).
+	// playerTouch awards getValue() == this to the collecting player, then the orb is discarded. Set at
+	// spawn (the chunk from ExperienceOrb.awardWithDirection's split). Zero for a non-orb entity.
+	xpValue int
+
+	// followingPlayerID is ExperienceOrb.followingPlayer modeled as the followed player's entity id
+	// (NEVER a live *tickPlayer — the Folia/snapshot rule). followNearbyPlayer sets it to the nearest
+	// player within 8 blocks and homes the orb toward them; 0 == not currently following. Tick-owned.
+	followingPlayerID int32
 
 	// ai is the per-mob AI handle (AI-01, Plan 07-01): the mob's goalSelector + the
 	// navigation/look targets a goal writes (server/ai_mob.go). nil for a non-mob entity (a

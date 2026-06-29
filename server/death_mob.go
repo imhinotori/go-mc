@@ -294,6 +294,11 @@ func (t *TickLoop) awardExperienceOrbs(e *Entity, value int) {
 		value -= chunk
 		// tryMergeToExisting: v1 stub (false) — no orb-merge subsystem, so always spawn a fresh orb.
 		orb := NewEntity(t.idAlloc.AllocID(), entity.ExperienceOrb, e.x, e.y, e.z)
+		// WR-06: mark the orb so the orb tick (followNearbyPlayer + pickup) drives it, and record the
+		// carried value (ExperienceOrb.value == this chunk) so playerTouchOrb awards getValue() == chunk
+		// to the collector. Without these the orb spawns + renders but never follows/collects (the bug).
+		orb.isOrb = true
+		orb.xpValue = chunk
 		owner.entities.add(orb)
 	}
 }
