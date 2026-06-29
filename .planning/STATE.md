@@ -16,6 +16,17 @@ progress:
 
 # Project State
 
+### ⚠️ CARRYOVER (pre-existing, non-blocking) — flaky spawn-regression test
+`TestBehaviorRegressionMobSpawns` (async_stress_test.go) intermittently fails under `-count`/full -race:
+"async spawner added no mob over N cycles under cap (0->0)". ROOT: the spawner picks candidate (x,z)
+via the GLOBAL `math/rand/v2` `rand.IntN` (spawner.go:360-363), unseeded — under `-count` the global
+RNG carries across reruns so some runs never pick a standable column in the cycle budget. NOT caused by
+Phase 29 (no spawner.go/async.go change in 29). Phase-29's own damage/death/knockback/sound/orb/
+cross-region tests are ALL -race clean in isolation. FIX (own task): inject a seeded `*rand.Rand` into
+the spawner so the test is deterministic — deferred to avoid destabilizing the bit-fragile pig-oracle
+RNG mid-Phase-29. Tracked alongside the prior `TestServerAiStepWalksToGoalTarget` flake.
+
+
 ## Project Reference
 
 See: .planning/PROJECT.md (updated 2026-06-29)
