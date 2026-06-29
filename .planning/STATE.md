@@ -2,21 +2,22 @@
 gsd_state_version: 1.0
 milestone: v5
 milestone_name: Mob Behaviors & Living-Entity Subsystems
-status: verifying
+status: executing
 stopped_at: Completed 24-02-PLAN.md — Phase 24 (vanilla-mobs-as-plugins) COMPLETE
-last_updated: "2026-06-29T08:07:29.068Z"
+last_updated: "2026-06-29T22:19:56.468Z"
 last_activity: 2026-06-29
 progress:
   total_phases: 8
   completed_phases: 1
-  total_plans: 4
-  completed_plans: 4
-  percent: 100
+  total_plans: 7
+  completed_plans: 5
+  percent: 71
 ---
 
 # Project State
 
 ### ⚠️ CARRYOVER (pre-existing, non-blocking) — flaky spawn-regression test
+
 `TestBehaviorRegressionMobSpawns` (async_stress_test.go) intermittently fails under `-count`/full -race:
 "async spawner added no mob over N cycles under cap (0->0)". ROOT: the spawner picks candidate (x,z)
 via the GLOBAL `math/rand/v2` `rand.IntN` (spawner.go:360-363), unseeded — under `-count` the global
@@ -26,19 +27,18 @@ cross-region tests are ALL -race clean in isolation. FIX (own task): inject a se
 the spawner so the test is deterministic — deferred to avoid destabilizing the bit-fragile pig-oracle
 RNG mid-Phase-29. Tracked alongside the prior `TestServerAiStepWalksToGoalTarget` flake.
 
-
 ## Project Reference
 
 See: .planning/PROJECT.md (updated 2026-06-29)
 
 **Core value:** A Go server that an unmodified vanilla Minecraft 26.2 client can connect to, log into, and play in a persistent, ticking world — architected from day one for Leaf-style async optimizations.
-**Current focus:** Phase 29 — Damage Keystone (S2)
+**Current focus:** Phase 30 — JumpControl + Fluid (S1)
 
 ## Current Position
 
-Phase: 29 (Damage Keystone (S2)) — EXECUTING
-Plan: 4 of 4
-Status: Phase complete — ready for verification
+Phase: 30 (JumpControl + Fluid (S1)) — EXECUTING
+Plan: 2 of 3
+Status: Ready to execute
 Last activity: 2026-06-29
 
 ### v5 ROADMAP — Phases 29–36 (the convergent jar-grounded dependency order)
@@ -198,7 +198,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [██████████] 100%
+Progress: [███████░░░] 71%
 
 ## Performance Metrics
 
@@ -309,6 +309,7 @@ Progress: [██████████] 100%
 | Phase 29 P02 | 10min | 4 tasks | 6 files |
 | Phase 29 P03 | 30min | 5 tasks | 6 files |
 | Phase 29 P04 | 28min | 4 tasks | 9 files |
+| Phase 30 P01 | 6min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -462,6 +463,8 @@ Recent decisions affecting current work:
 - [Phase ?]: 29-03: cross-region damage routes via the OWNER region barrier-queue (queueDamageIntent on the source region, drained at applyCrossRegionDamage next to applyCrossRegionTransfers) — the project's first true cross-region write; the same/cross split uses the attacker's region, never t.cur()
 - [Phase ?]: 29-03: mob knockback + sweep deferred (cited) — the routed hit lands (damage + lastDamageSource + on_damage emit) but the post-hit mob impulse is a follow-on; was_hurt handle attr = hurtTime>0
 - [Phase ?]: Phase 29-04: dieEntity ports LivingEntity.die 1:1 — death removal from the OWNER region (regionForEntity, not cur) auto-broadcasts RemoveEntities via the tracker; loot/XP route through the owner region; the dead guard prevents double-death. A4 resolved as a bounded loot extension (entity-table handlers read cited-stub v1 defaults so the pig drops 1-3 raw porkchop). Pig XP = Animal.getBaseExperienceReward 1 + random.nextInt(3).
+- [Phase ?]: 30-01: getFluidJumpThreshold ports the real jar formula getEyeHeight()<0.4?0.0:0.4 (pig=0.4, NOT assumed 0.0); eye height=height*0.85 default until per-type read lands
+- [Phase ?]: 30-01: lava decode-only (full read, never const-false); lava flow sim (FlowingFluid.tick, getDropOff=2) DEFERRED — FloatGoal only reads lava
 
 ### Pending Todos
 
@@ -491,7 +494,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-29T08:07:13.186Z
+Last session: 2026-06-29T22:19:50.699Z
 Stopped at: Completed 24-02-PLAN.md — Phase 24 (vanilla-mobs-as-plugins) COMPLETE
 Resume file: None
 Next: OPERATOR CHECKPOINT (19-02 Task 3) — build `CGO_ENABLED=0 go build -o sulfur.exe ./cmd/sulfur`, run `./sulfur.exe -seed 777` in a REAL terminal (expect alt-screen TUI: log viewport + command input), type `say hi`+Enter (expect a `console command cmd=say hi` viewport line), connect a vanilla 26.2 client (expect a join line), Ctrl-C (clean exit), then `./sulfur.exe -seed 777 | cat` (expect NO TUI, plain stderr — today's behavior). On "approved" → mark TUI-01 complete + advance the plan counter, then proceed to Plan 19-03 (gameplay_tick.go join/leave slog conversion + the full disconnect taxonomy). The console line routes TUI→tick (EnqueueConsoleCommand, cap 64, drop-on-full)→runConsoleCommand on the tick→existing graph (grant-all, no issuer), reply to slog. gameplay_tick.go is untouched (19-03 owns it). LEGACY: Phase 17 Wave 2 (17-02/17-03) — see prior continuity below. (GAMEPLAY-05 fluid simulation: OVERWRITE server/fluid.go with the FlowingFluid port + scheduled-tick queue; lazy-init t.fluidSchedule inside tickFluids, do NOT edit tick.go/tick_phases.go) and 17-03 (GAMEPLAY-04 fall damage + PvP dispatch: OVERWRITE server/fall_damage.go using the tickPlayer fallDistance/wasOnGround/lastY fields + the lookupPlayerByEntityID reverse lookup, do NOT edit tick.go/tick_phases.go). The exact Wave-2 seam surface (field names, init point, call sites, stub signatures) is in 17-01-SUMMARY.md "WAVE-2 HANDOFF". Deferred-still-open: dungeon loot/spawner-mob + BeehiveDecorator occupant + pale_garden PaleMoss (all v3, cosmetic, in 13-04-SUMMARY); KeepAlive double-leave hardening (Phase 3). KNOWN PRE-EXISTING FLAKE: TestTickAIDrivesMobs (OPT-01 async-pool timing, not caused by 17-01) intermittently fails under full-suite load; passes in isolation + 3× under -race.
