@@ -31,7 +31,7 @@
 
 ### Pig Parity (the dogfood gate)
 
-- [ ] **MOB-GATE-01**: The pig's 5 deferred goals are wired 1:1 onto the existing `vanilla_pig` plugin via MOB-SUB-01..09 — FloatGoal@0, PanicGoal@1, BreedGoal@3, TemptGoal@4 ×2 (PIG_FOOD + CARROT_ON_A_STICK), FollowParentGoal@5 — each added to the Go-native oracle AND the plugin pig IN LOCKSTEP.
+- [ ] **MOB-GATE-01**: The pig's 5 deferred goals are wired 1:1 onto the existing `vanilla_pig` plugin via MOB-SUB-01..09 — FloatGoal@0, PanicGoal@1, BreedGoal@3, TemptGoal@4 ×2 (PIG_FOOD + CARROT_ON_A_STICK), FollowParentGoal@5 — each added to the Go-native oracle AND the plugin pig IN LOCKSTEP. (Goal-wiring lands incrementally across Phases 30–33; formally closed at Phase 33.)
 - [ ] **MOB-GATE-02**: The full 8-goal pig oracle stays green — `TestPluginPigEqualsGoNativePig` passes byte-identical over 500 ticks with all goals live, AND two fed pigs breed + the baby follows its parent (the observable dogfood). This gate MUST pass before any new mob type is added.
 
 ### Passive Mobs
@@ -71,4 +71,32 @@
 
 ## Traceability
 
-_(Filled by the roadmapper — each REQ-ID maps to exactly one phase.)_
+Every v5 requirement maps to exactly one phase. 21/21 mapped — no orphans, no duplicates.
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| MOB-SUB-01 | Phase 29 — Damage Keystone (S2) | Pending |
+| MOB-SUB-02 | Phase 29 — Damage Keystone (S2) | Pending |
+| MOB-SUB-03 | Phase 29 — Damage Keystone (S2) | Pending |
+| MOB-SUB-04 | Phase 30 — JumpControl + Fluid (S1) | Pending |
+| MOB-SUB-05 | Phase 30 — JumpControl + Fluid (S1) | Pending |
+| MOB-SUB-06 | Phase 32 — Held-Item + Item Tags (S4) | Pending |
+| MOB-SUB-07 | Phase 32 — Held-Item + Item Tags (S4) | Pending |
+| MOB-SUB-08 | Phase 33 — Aging + Breeding (S3) / Pig Parity GATE | Pending |
+| MOB-SUB-09 | Phase 33 — Aging + Breeding (S3) / Pig Parity GATE | Pending |
+| MOB-SUB-10 | Phase 35 — Hostiles + Spawn Rules | Pending |
+| MOB-SUB-11 | Phase 35 — Hostiles + Spawn Rules | Pending |
+| MOB-GATE-01 | Phase 33 — Aging + Breeding (S3) / Pig Parity GATE | Pending |
+| MOB-GATE-02 | Phase 33 — Aging + Breeding (S3) / Pig Parity GATE | Pending |
+| MOB-PASS-01 | Phase 34 — New Passive Mobs | Pending |
+| MOB-PASS-02 | Phase 34 — New Passive Mobs | Pending |
+| MOB-PASS-03 | Phase 34 — New Passive Mobs | Pending |
+| MOB-HOST-01 | Phase 35 — Hostiles + Spawn Rules | Pending |
+| MOB-HOST-02 | Phase 35 — Hostiles + Spawn Rules | Pending |
+| MOB-HOST-03 | Phase 35 — Hostiles + Spawn Rules | Pending |
+| MOB-NEUT-01 | Phase 36 — Wolf (Neutral) | Pending |
+| MOB-NEUT-02 | Phase 36 — Wolf (Neutral) | Pending |
+
+**Coverage:** 21/21 v5 requirements mapped ✓ — no orphans, no duplicates.
+
+> **Note on MOB-GATE-01 (incremental wiring):** the pig's 5 deferred goals are wired across Phases 30–33 in lockstep with each enabling subsystem — FloatGoal@0 (Phase 30), PanicGoal@1 (Phase 31), TemptGoal@4 ×2 (Phase 32), BreedGoal@3 + FollowParentGoal@5 (Phase 33). The requirement is FORMALLY OWNED/CLOSED at Phase 33, where the full 8-goal oracle (MOB-GATE-02) must pass before any new mob (Phases 34–36).

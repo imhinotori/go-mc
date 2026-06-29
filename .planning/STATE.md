@@ -3,10 +3,10 @@ gsd_state_version: 1.0
 milestone: v5
 milestone_name: Mob Behaviors & Living-Entity Subsystems
 status: planning
-last_updated: "2026-06-29T05:15:44.249Z"
+last_updated: "2026-06-29T06:30:00.000Z"
 last_activity: 2026-06-29
 progress:
-  total_phases: 0
+  total_phases: 8
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -17,17 +17,48 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-06-23)
+See: .planning/PROJECT.md (updated 2026-06-29)
 
 **Core value:** A Go server that an unmodified vanilla Minecraft 26.2 client can connect to, log into, and play in a persistent, ticking world — architected from day one for Leaf-style async optimizations.
-**Current focus:** Phase 28 — plugin-system-visual-perf-gate
+**Current focus:** v5 roadmap created — Phases 29–36 (Mob Behaviors & Living-Entity Subsystems). Next: `/gsd-plan-phase 29` (Damage Keystone, the S2 keystone with widest fan-out).
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 29 — Damage Keystone (S2) — NOT STARTED (roadmap created, awaiting plan)
 Plan: —
-Status: Defining requirements
-Last activity: 2026-06-29 — Milestone v5 started
+Status: Roadmap created — 8 phases (29–36), 21/21 MOB-* requirements mapped, 100% coverage. Awaiting phase planning.
+Last activity: 2026-06-29 — v5 ROADMAP.md written (Phases 29–36), STATE.md + REQUIREMENTS.md traceability updated
+
+### v5 ROADMAP — Phases 29–36 (the convergent jar-grounded dependency order)
+
+The dependency graph IS the build order. The damage keystone (29) has the widest fan-out and comes
+first; held-item (32) precedes breeding (33); pig parity (33) is the HARD GATE before any new mob
+(34–36); hostiles (35) precede wolf (36). The bit-fragile pig oracle (`TestPluginPigEqualsGoNativePig`)
+must stay GREEN through every goal-adding phase (29–33) — each new RNG-drawing goal added to the
+Go-native oracle AND the plugin pig IN LOCKSTEP, in the SAME plan, draws confined to running-goal
+callbacks (never `serverAiStep`/`navigation.tick`). Standing constraints: 1:1 jar-verified (javap
+before writing), CGO=0 preserved, no new Go deps, Docker `-race` + `strictRegion` clean.
+
+| Phase | Goal | Requirements | Research flag |
+|-------|------|--------------|---------------|
+| 29 — Damage Keystone (S2) | Mob takes/deals damage + lastDamageSource + damage-type tags | MOB-SUB-01/02/03 | YES — cross-region damageIntent barrier plumbing |
+| 30 — JumpControl + Fluid (S1) | Mob jump impulse + fluid predicates; FloatGoal@0 on the pig | MOB-SUB-04/05 | no |
+| 31 — PanicGoal (S2 consumer) | PanicGoal@1 reads lastDamageSource | (MOB-GATE-01, closed P33) | no |
+| 32 — Held-Item + Item Tags (S4) | Held-item read + item-food tags; TemptGoal@4 ×2 | MOB-SUB-06/07 | no |
+| 33 — Aging + Breeding (S3) / PIG PARITY GATE | Aging + breeding; BreedGoal@3 + FollowParentGoal@5; full 8-goal oracle | MOB-SUB-08/09 + MOB-GATE-01/02 | YES — aging/breeding javap + same-region-cut decision |
+| 34 — New Passive Mobs | cow/sheep/chicken as plugins | MOB-PASS-01/02/03 | no |
+| 35 — Hostiles + Spawn Rules | target selector + cap + day/night; zombie/skeleton/spider | MOB-SUB-10/11 + MOB-HOST-01/02/03 | YES — light-gate decision + cap/despawn |
+| 36 — Wolf (Neutral) | wolf base type + supplier; wild then tame second pass | MOB-NEUT-01/02 | YES — TamableAnimal + wolf supplier |
+
+**The pig-oracle gate (Phase 33):** the full 8-goal oracle passes byte-identical over 500 ticks
+with all goals live, AND two fed pigs breed + the baby follows its parent — MUST pass before any
+new mob. **The forced Phase-35 decision:** light engine vs documented gametime-darkness proxy —
+never a silent daylight flood. **Accepted v5 deviation (Phase 33):** same-region breeding cut
+(barrier-resolved full-fidelity cross-region match deferred, documented).
+
+---
+
+## Historical context (pre-v5, preserved)
 
 ### ⚠️ DONE this session — 25-03 PLUGIN-05 close (cooking/stonecutting BLOCK build-or-defer)
 
