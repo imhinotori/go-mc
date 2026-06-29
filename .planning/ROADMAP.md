@@ -66,7 +66,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
 
 - [x] **Phase 29: Damage Keystone (S2)** — the parallel `*Entity` mob damage/hurt pipeline + `lastDamageSource` + jar-extracted damage-type tags; the widest fan-out, built first.
  (completed 2026-06-29)
-- [ ] **Phase 30: JumpControl + Fluid (S1)** — mob `JumpControl` impulse + `*Entity` fluid predicates; FloatGoal@0 on the pig (oracle + plugin in lockstep).
+- [x] **Phase 30: JumpControl + Fluid (S1)** — mob `JumpControl` impulse + `*Entity` fluid predicates; FloatGoal@0 on the pig (oracle + plugin in lockstep). (completed 2026-06-29)
 - [ ] **Phase 31: PanicGoal (S2 consumer)** — PanicGoal@1 on the pig reading the real `lastDamageSource` + the panic-causing tag set.
 - [ ] **Phase 32: Held-Item + Item Tags (S4)** — nearest-player held-item read + jar-extracted item-food tags; TemptGoal@4 ×2 on the pig.
 - [ ] **Phase 33: Aging + Breeding (S3) — Pig Parity / DOGFOOD GATE** — animal aging + breeding; BreedGoal@3 + FollowParentGoal@5 on the pig closes the full 8-goal oracle. HARD GATE before any new mob.
@@ -105,7 +105,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
 **Plans**: 3 plans (3 sequential waves)
 - [x] 30-01-PLAN.md — Mob fluid predicates + lava decode: extend fluidState/decodeFluid for lava (lavaLevelOf + .isWater consumer audit) + mobInWater/mobFluidHeight/mobInLava/getFluidJumpThreshold [MOB-SUB-05]
 - [x] 30-02-PLAN.md — JumpControl + aiStep jump branch: jumpControl/noJumpDelay + jumping/setJumping + the RNG-free JUMP slot after navigation.tick + jumpInLiquid(+0.04)/jumpFromGround(0.42) + entity.in_water/fluid_height/in_lava + nav.jump() handle ops [MOB-SUB-04]
-- [ ] 30-03-PLAN.md — FloatGoal@0 lockstep (Go-native newPigAI + vanilla_pig/main.star) + the wet-behavior test; the DRY pig oracle stays GREEN (canUse false -> zero draws) [MOB-SUB-04]
+- [x] 30-03-PLAN.md — FloatGoal@0 lockstep (Go-native newPigAI + vanilla_pig/main.star) + the wet-behavior test; the DRY pig oracle stays GREEN (canUse false -> zero draws) [MOB-SUB-04]
 
 ### Phase 31: PanicGoal (S2 consumer)
 **Goal**: A hurt pig flees — PanicGoal reads the real damage source delivered by the keystone.
@@ -185,7 +185,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
 | 17–20 (v3 online-mode + operator-UX + structure-polish) | v3 | 33/33 | Complete | 2026-06-27 |
 | 21–28 (v4 plugin / scripting system) | v4 | 19/19 | Complete | 2026-06-29 |
 | 29. Damage Keystone (S2) | v5 | 4/4 | Complete   | 2026-06-29 |
-| 30. JumpControl + Fluid (S1) | v5 | 2/3 | In Progress|  |
+| 30. JumpControl + Fluid (S1) | v5 | 3/3 | Complete   | 2026-06-29 |
 | 31. PanicGoal (S2 consumer) | v5 | 0/? | Not started | - |
 | 32. Held-Item + Item Tags (S4) | v5 | 0/? | Not started | - |
 | 33. Aging + Breeding (S3) — Pig Parity / DOGFOOD GATE | v5 | 0/? | Not started | - |
