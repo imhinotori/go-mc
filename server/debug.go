@@ -231,7 +231,7 @@ func (t *TickLoop) tickDebug() {
 			d.damageTick = 0
 			for _, p := range t.players {
 				if p != nil && !p.dead {
-					t.applyDamage(p, d.damageAmount)
+					t.applyDamage(p, damageSourceOf(damageTypeGeneric), d.damageAmount)
 				}
 			}
 		}

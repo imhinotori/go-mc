@@ -185,7 +185,7 @@ const damageFoodExhaustion float32 = 0.1
 //	// resolveMob/Player responsibility, broadcastDamageEvent, markHurt, dealDefaultKnockback,
 //	// death sounds: world-side/visual — the death drive is the die() call after actuallyHurt
 //	// reduces health to 0.
-func (t *TickLoop) applyDamage(p *tickPlayer, amount float32) {
+func (t *TickLoop) applyDamage(p *tickPlayer, src damageSource, amount float32) {
 	// isDeadOrDying() guard (bytecode: isDeadOrDying ifeq -> iconst_0 ireturn): a corpse takes no
 	// further damage until it respawns.
 	if p.dead {
@@ -219,6 +219,9 @@ func (t *TickLoop) applyDamage(p *tickPlayer, amount float32) {
 		// `actuallyHurt(amount - lastHurt);` then `lastHurt = amount;` — only the excess lands.
 		t.actuallyHurt(p, amount-p.lastHurt)
 		p.lastHurt = amount
+		// tookFullDamage == true on this i-frame EXCESS branch (the hit landed its excess), so vanilla
+		// fires the hurt animation. See broadcastPlayerDamageEvent for the full cite.
+		t.broadcastPlayerDamageEvent(p, src)
 	} else {
 		// Fresh hit (bytecode 240–271): record lastHurt, arm the 20-tick window, apply full damage,
 		// set the hurt-flash duration/time.
@@ -227,6 +230,8 @@ func (t *TickLoop) applyDamage(p *tickPlayer, amount float32) {
 		t.actuallyHurt(p, amount)
 		p.hurtDuration = hurtDurationTicks
 		p.hurtTime = p.hurtDuration
+		// tookFullDamage == true on the fresh sub-branch too — broadcast the hurt animation.
+		t.broadcastPlayerDamageEvent(p, src)
 	}
 
 	// Death drive: actuallyHurt has set the authoritative health (and sent SetHealth); if it
@@ -235,6 +240,45 @@ func (t *TickLoop) applyDamage(p *tickPlayer, amount float32) {
 	if p.health <= 0 {
 		t.die(p)
 	}
+}
+
+// broadcastPlayerDamageEvent is the port of the tookFullDamage hurt-animation broadcast inside
+// net.minecraft.world.entity.LivingEntity.hurtServer for a PLAYER victim:
+//
+//	if (tookFullDamage) {
+//	    if (blocked && blocksAttacks != null) { ... }     // shield — not modeled in v1
+//	    else { level.broadcastDamageEvent(this, source); }  // <-- THE RED FLASH
+//	    ...
+//	}
+//
+// tookFullDamage is true on BOTH sub-branches where damage actually landed (the i-frame EXCESS branch
+// and the FRESH-window branch); it is false ONLY on the `amount <= lastHurt` early return — which
+// never reaches here. ServerLevel.broadcastDamageEvent fans
+// `getChunkSource().sendToTrackingPlayersAndSelf(entity, new ClientboundDamageEventPacket(entity,
+// source))` to every tracking player AND the entity itself. For a PLAYER the "and self" is NOT a
+// no-op (a player has a connection): the victim's own client must receive the packet to play its red
+// flash + directional knockback tilt — broadcastToTrackers excludes the actor, so the victim is sent
+// the packet DIRECTLY here, then the fan-out covers every OTHER tracking player.
+//
+// sourceCause == sourceDirect == src.attacker (the attacker entity id for a player-vs-X melee hit;
+// both absent/0 for an environmental source: fall/drown/starve/suffocation). sourceType is
+// int32(src.typeTag) directly (the sorted index IS the client's damage_type holder id — no remap; the
+// mob test asserts the invariant).
+//
+//	[VERIFIED javap LivingEntity.hurtServer tookFullDamage -> Level.broadcastDamageEvent(this, source);
+//	 ServerLevel.broadcastDamageEvent -> sendToTrackingPlayersAndSelf(entity, ClientboundDamageEventPacket).]
+//
+// This fixes the player red-flash that was equally missing (the math-only hurt port never broadcast
+// the event). markHurt + knockback stay deferred exactly as the rest of the hurt tail leaves them.
+func (t *TickLoop) broadcastPlayerDamageEvent(p *tickPlayer, src damageSource) {
+	pkt := encodeDamageEvent(p.entityID, int32(src.typeTag), src.attacker, src.attacker)
+	// "...AndSelf": the victim's own client plays its hurt animation (broadcastToTrackers skips the
+	// actor, so the self-send is explicit here).
+	if p.client != nil {
+		p.client.Send(pkt)
+	}
+	// The "tracking players" fan-out: every OTHER player that can see the victim flashes it red too.
+	t.broadcastToTrackers(p.entityID, pkt)
 }
 
 // actuallyHurt is the port of net.minecraft.world.entity.LivingEntity.actuallyHurt(ServerLevel,

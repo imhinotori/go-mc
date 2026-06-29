@@ -213,7 +213,7 @@ func (t *TickLoop) checkFallDamage(p *tickPlayer, deltaY float64, onGround bool,
 func (t *TickLoop) causeFallDamage(p *tickPlayer, d float64, damageMultiplier float64) bool {
 	i := calculateFallDamage(d, damageMultiplier)
 	if i > 0 {
-		t.applyDamage(p, float32(i))
+		t.applyDamage(p, damageSourceOf(damageTypeFall), float32(i))
 		return true
 	}
 	return false

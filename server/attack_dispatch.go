@@ -181,7 +181,7 @@ func (t *TickLoop) handleAttack(p *tickPlayer, pkt pk.Packet) {
 	// applies armor/absorption via actuallyHurt, sends SetHealth, and drives die() if lethal. It
 	// returns whether damage actually landed (false during the i-frame window with no greater hit),
 	// which gates the knockback/sweep/exhaustion tail exactly as vanilla's `if (hurt)` does.
-	hurt := t.applyAttackDamage(victim, total)
+	hurt := t.applyAttackDamage(victim, p.entityID, total)
 	if !hurt {
 		return // hurtOrSimulate returned false (i-frame window absorbed it): no knockback/sweep/exhaustion
 	}
@@ -385,7 +385,7 @@ func (t *TickLoop) applyMobAttackDamage(mob *Entity, src damageSource, amount fl
 //   - otherwise damage lands and hurtServer returns true.
 // The decision is computed BEFORE calling applyDamage (which mutates invulnerableTime/lastHurt), so
 // it reflects the same pre-hit state vanilla branches on.
-func (t *TickLoop) applyAttackDamage(victim *tickPlayer, amount float32) bool {
+func (t *TickLoop) applyAttackDamage(victim *tickPlayer, attackerID int32, amount float32) bool {
 	if victim.dead {
 		return false // isDeadOrDying() -> hurtServer returns false
 	}
@@ -400,7 +400,10 @@ func (t *TickLoop) applyAttackDamage(victim *tickPlayer, amount float32) bool {
 		// non-greater hit is fully absorbed -> hurtServer returns false.
 		landed = amount > victim.lastHurt
 	}
-	t.applyDamage(victim, amount)
+	// The attack carries DamageSources.playerAttack(attacker) (type PLAYER_ATTACK, causingEntity =
+	// the attacker) — the genuine source so the victim's ClientboundDamageEvent flashes the right
+	// direction and the on-hit consumers read the real attacker id.
+	t.applyDamage(victim, damageSourcePlayerAttack(attackerID), amount)
 	return landed
 }
 
@@ -668,7 +671,7 @@ func (t *TickLoop) doSweepAttack(attacker, primary *tickPlayer, damage, scale fl
 
 		// e.hurtServer(...) -> applyAttackDamage so the per-target knockback is gated on the hit
 		// landing (vanilla's `if (e.hurtServer(...))`).
-		if t.applyAttackDamage(e, d) {
+		if t.applyAttackDamage(e, attacker.entityID, d) {
 			// e.knockback(0.4, sin(yaw·π/180), -cos(yaw·π/180), source, d) — the lighter 0.4 sweep
 			// impulse along the attacker's facing.
 			kdx := float64(float32(math.Sin(float64(attacker.yaw * degToRad))))

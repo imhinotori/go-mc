@@ -19,11 +19,14 @@ package server
 //     ServerPlayer))invulnerableTime-- — for a mob the instanceof guard is false so it always decrements.
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/imhinotori/sulfur/data/entity"
+	"github.com/imhinotori/sulfur/data/packetid"
 	"github.com/imhinotori/sulfur/data/tag"
 	"github.com/imhinotori/sulfur/level/attribute"
+	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
 // newDamageMob builds a fresh Pig *Entity with the given health for a hurt-pipeline test, added to
@@ -161,6 +164,80 @@ func TestLastDamageSource(t *testing.T) {
 	}
 	if e.lastDamageSource.attacker != 77 {
 		t.Fatalf("lastDamageSource.attacker = %d, want 77", e.lastDamageSource.attacker)
+	}
+}
+
+// TestMobDamageEvent_Broadcast pins the keystone red-flash fix: a FRESH (tookFullDamage) hit on a mob
+// broadcasts ClientboundDamageEvent to every tracking player (the port of
+// LivingEntity.hurtServer.tookFullDamage -> ServerLevel.broadcastDamageEvent), and an i-frame-REJECTED
+// follow-up (amount <= lastHurt within the window) broadcasts NOTHING (it is the early-return path
+// where tookFullDamage is false). It also asserts the wire invariant the fix depends on:
+// sourceType == int32(src.typeTag) (the sorted DamageTypeNames index IS the client damage_type holder
+// id, so no remap), and the registry is the expected size so that invariant is anchored to real data.
+func TestMobDamageEvent_Broadcast(t *testing.T) {
+	// Wire invariant anchor: DamageTypeNames is the 51-element sorted damage_type registry, and the
+	// config registrydata send order is the SAME alphabetical sort, so the typeTag index == holder id.
+	if len(tag.DamageTypeNames) != 51 {
+		t.Fatalf("DamageTypeNames len = %d, want 51 (the sorted damage_type registry the holder id indexes)", len(tag.DamageTypeNames))
+	}
+
+	loop, _ := newBlockLoop()
+	mob := newDamageMob(loop, 1, 20.0)
+
+	// A player tracking the mob with a capturing client — broadcastToTrackers sends to it iff
+	// p.tracked[mob.id]. The high entity id never collides with the mob id (1).
+	viewer := &tickPlayer{client: captureClient(64), entityID: 1000, tracked: map[int32]bool{mob.id: true}}
+	loop.players = append(loop.players, viewer)
+
+	src := damageSourcePlayerAttack(77) // player_attack, attacker entity id 77 (== cause == direct)
+
+	// Fresh hit (tookFullDamage): a ClientboundDamageEvent MUST be broadcast to the viewer.
+	loop.applyDamageEntity(mob, src, 6.0)
+
+	got := drainPackets(viewer.client)
+	if n := countID(got, packetid.ClientboundDamageEvent); n != 1 {
+		t.Fatalf("fresh hit broadcast %d ClientboundDamageEvent packets to the tracker, want 1 (the red flash)", n)
+	}
+
+	// Decode the one DamageEvent and assert the wire fields (entityId, sourceTypeId, cause+1, direct+1,
+	// no source position) match the jar layout 1:1.
+	var pkt pk.Packet
+	for _, p := range got {
+		if p.ID == int32(packetid.ClientboundDamageEvent) {
+			pkt = p
+		}
+	}
+	r := bytes.NewReader(pkt.Data)
+	var entityID, sourceType, causeID, directID pk.VarInt
+	var hasPos pk.Boolean
+	if _, err := (pk.Tuple{&entityID, &sourceType, &causeID, &directID, &hasPos}).ReadFrom(r); err != nil {
+		t.Fatalf("decode ClientboundDamageEvent: %v", err)
+	}
+	if int32(entityID) != mob.id {
+		t.Fatalf("DamageEvent entityId = %d, want %d (the hurt mob)", int32(entityID), mob.id)
+	}
+	if int32(sourceType) != int32(src.typeTag) {
+		t.Fatalf("DamageEvent sourceTypeId = %d, want %d (== typeTag; the sorted index IS the holder id, no remap)",
+			int32(sourceType), int32(src.typeTag))
+	}
+	// writeOptionalEntityId: id+1, so attacker 77 -> 78 on the wire for BOTH cause and direct.
+	if int32(causeID) != 78 || int32(directID) != 78 {
+		t.Fatalf("DamageEvent cause/direct = %d/%d, want 78/78 (attacker 77 + 1)", int32(causeID), int32(directID))
+	}
+	if bool(hasPos) {
+		t.Fatalf("DamageEvent sourcePosition present, want absent (empty Optional<Vec3> for an entity-caused hit)")
+	}
+	if r.Len() != 0 {
+		t.Fatalf("DamageEvent has %d trailing bytes, want 0 (exact wire layout)", r.Len())
+	}
+
+	// An i-frame-REJECTED follow-up (within the window, amount <= lastHurt) is the early-return path
+	// where tookFullDamage is false: it must broadcast NOTHING. The window is fresh (invulnerableTime
+	// just armed to 20 > 10), so a 6.0 (== lastHurt) hit is rejected.
+	loop.applyDamageEntity(mob, src, 6.0)
+	got2 := drainPackets(viewer.client)
+	if n := countID(got2, packetid.ClientboundDamageEvent); n != 0 {
+		t.Fatalf("i-frame-rejected hit broadcast %d ClientboundDamageEvent packets, want 0 (tookFullDamage is false)", n)
 	}
 }
 

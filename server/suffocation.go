@@ -94,7 +94,7 @@ func (t *TickLoop) tickSuffocation() {
 		}
 		if t.isInWall(p) {
 			// hurtServer(damageSources().inWall(), 1.0F) — the 1.0 IN_WALL hit.
-			t.applyDamage(p, suffocationDamage)
+			t.applyDamage(p, damageSourceOf(damageTypeInWall), suffocationDamage)
 		}
 	}
 }

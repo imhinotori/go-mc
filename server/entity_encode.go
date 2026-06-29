@@ -651,6 +651,59 @@ func encodeEntityEvent(entityID int32, eventID byte) pk.Packet {
 	)
 }
 
+// writeOptionalEntityIDPlusOne is the port of FriendlyByteBuf.writeOptionalEntityId / the
+// ClientboundDamageEventPacket id encoding: an entity id is written as a VarInt of (id + 1), so 0
+// means "none/absent" and a real id N is written as N+1. An absent id (Sulfur models it as <= 0
+// from damageSource.attacker, where 0 == none) writes the VarInt 0.
+//   [VERIFIED javap ClientboundDamageEventPacket: sourceCauseId/sourceDirectId written via
+//    buf.writeVarInt(id + 1) with 0 reserved for the empty optional (writeOptionalEntityId).]
+func writeOptionalEntityIDPlusOne(id int32) pk.VarInt {
+	if id <= 0 {
+		return pk.VarInt(0) // no causing/direct entity (an environmental / anonymous source)
+	}
+	return pk.VarInt(id + 1)
+}
+
+// encodeDamageEvent builds ClientboundDamageEvent — THE RED-FLASH packet. It is the wire side of
+// net.minecraft.world.level.Level.broadcastDamageEvent(Entity, DamageSource), which
+// LivingEntity.hurtServer fires on the tookFullDamage branch so the client plays the hurt animation
+// (the red flash) and the directional knockback tilt. v1's hurt pipeline ported the damage MATH but
+// never broadcast this packet, so neither mobs nor players flashed red on a hit — this encoder + the
+// broadcast calls in combat_mob.go / combat.go close that gap, 1:1 with the jar.
+//
+// JAR-DERIVED wire layout (javap ClientboundDamageEventPacket.write, proto 776, this session) — the
+// fields IN ORDER:
+//   - entityId      : VarInt  (the hurt entity)
+//   - sourceTypeId  : VarInt  (Holder<DamageType> written as its registry network id — the
+//                     damage_type holder id the client got at config; == damageSource.typeTag, because
+//                     BOTH the config registrydata damage_type send order AND data/tag.DamageTypeNames
+//                     are sorted alphabetically, so the sorted index IS the holder id — no remap)
+//   - sourceCauseId : VarInt  via writeOptionalEntityId (id+1; 0 == none)
+//   - sourceDirectId: VarInt  via writeOptionalEntityId (id+1; 0 == none)
+//   - hasSourcePos  : Boolean (Optional<Vec3> present flag) — empty for a normal entity-caused hit, so
+//                     a single false; the 3 source-position doubles are written ONLY when present
+//                     (they are not, in v1: no positional damage source is wired).
+//
+//	[VERIFIED javap net.minecraft.world.entity.LivingEntity.hurtServer: tookFullDamage branch ->
+//	 level.broadcastDamageEvent(this, source); ServerLevel.broadcastDamageEvent ->
+//	 getChunkSource().sendToTrackingPlayersAndSelf(entity, new ClientboundDamageEventPacket(entity,
+//	 source)); ClientboundDamageEventPacket.write -> writeVarInt(entityId); writeVarInt(sourceTypeId);
+//	 writeVarInt(causeId+1 / 0); writeVarInt(directId+1 / 0); writeBoolean(sourcePos.isPresent()).]
+//
+// For a direct melee hit sourceCauseId == sourceDirectId == the attacker's entity id; both are
+// absent (0) for an environmental hit (fall/drown/starve/suffocation), and sourcePosition is always
+// empty in v1.
+func encodeDamageEvent(entityID, sourceTypeID, sourceCauseID, sourceDirectID int32) pk.Packet {
+	return pk.Marshal(
+		int32(packetid.ClientboundDamageEvent),
+		pk.VarInt(entityID),                            // entityId
+		pk.VarInt(sourceTypeID),                        // sourceTypeId: the damage_type holder id
+		writeOptionalEntityIDPlusOne(sourceCauseID),    // sourceCauseId (id+1; 0 == none)
+		writeOptionalEntityIDPlusOne(sourceDirectID),   // sourceDirectId (id+1; 0 == none)
+		pk.Boolean(false),                              // sourcePosition: empty Optional<Vec3> (no pos)
+	)
+}
+
 // encodeRemoveEntities builds ClientboundRemoveEntities (06-CAPTURE-DIFF §5):
 // writeIntIdList == VarInt count followed by N VarInt ids. The tracker batches ALL of a
 // player's newly-out-of-range ids into ONE such packet per tick.

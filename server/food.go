@@ -272,7 +272,7 @@ func (t *TickLoop) foodDataTick(p *tickPlayer) {
 				(p.health > starveHealthNormalGate && diff == difficultyNormal) {
 				// hurtServer(damageSources().starve(), 1.0f): routed through applyDamage (Sulfur's
 				// hurtServer port) so the starve hit obeys i-frames exactly as vanilla.
-				t.applyDamage(p, starveDamage)
+				t.applyDamage(p, damageSourceOf(damageTypeStarve), starveDamage)
 			}
 			p.foodTickTimer = 0
 		}

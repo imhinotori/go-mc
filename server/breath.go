@@ -189,7 +189,7 @@ func (t *TickLoop) tickBreath() {
 			if shouldTakeDrowningDamage(p.airSupply) {
 				// setAirSupply(0); hurtServer(DROWN, 2.0F).
 				p.airSupply = 0
-				t.applyDamage(p, drownDamage)
+				t.applyDamage(p, damageSourceOf(damageTypeDrown), drownDamage)
 			}
 			// (else-if refill-while-submerged branch is Water-Breathing-only -> omitted for v1.)
 		} else if p.airSupply < maxAirSupply {

@@ -42,7 +42,23 @@ var (
 	damageTypeMobAttack = damageTypeID(tag.DamageTypeIDs["minecraft:mob_attack"])
 	// damageTypeFall is minecraft:fall — a bypasses_armor + is_fall member (the bypass branch reads it).
 	damageTypeFall = damageTypeID(tag.DamageTypeIDs["minecraft:fall"])
+	// damageTypeDrown is minecraft:drown — the source DROWN carries (hurtServer(DROWN, 2.0F) in breath).
+	damageTypeDrown = damageTypeID(tag.DamageTypeIDs["minecraft:drown"])
+	// damageTypeStarve is minecraft:starve — the source the hunger-starvation tick carries.
+	damageTypeStarve = damageTypeID(tag.DamageTypeIDs["minecraft:starve"])
+	// damageTypeInWall is minecraft:in_wall — the source suffocation (block-in-eye) carries.
+	damageTypeInWall = damageTypeID(tag.DamageTypeIDs["minecraft:in_wall"])
+	// damageTypeGeneric is minecraft:generic — the catch-all source for an attributed-less hit (the
+	// debug /damage command, which carries no real DamageType source in v1).
+	damageTypeGeneric = damageTypeID(tag.DamageTypeIDs["minecraft:generic"])
 )
+
+// damageSourceOf builds a DamageSource for an environmental/anonymous source: the given damage-type
+// id with no causing entity (attacker 0 == none, exactly DamageSources.<env>() whose causingEntity is
+// null). The port of e.g. DamageSources.drown()/starve()/inWall()/fall()/generic().
+func damageSourceOf(typeID damageTypeID) damageSource {
+	return damageSource{typeTag: typeID, attacker: 0}
+}
 
 // damageSource is the ported DamageSource value: a damage-type id + the causing entity's id. It is a
 // PLAIN VALUE (an int enum + an int32, NO pointers), so it satisfies the entity.go snapshot-friendly

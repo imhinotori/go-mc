@@ -82,7 +82,7 @@ func TestApplyDamage(t *testing.T) {
 	loop := NewTickLoop(newFakeClock())
 	p := combatPlayer(loop, 1)
 
-	loop.applyDamage(p, 6)
+	loop.applyDamage(p, damageSourceOf(damageTypeGeneric), 6)
 	if p.health != 14 {
 		t.Fatalf("after 6 damage health = %v, want 14", p.health)
 	}
@@ -108,7 +108,7 @@ func TestApplyDamage(t *testing.T) {
 
 	// Overkill clamps at 0 (not negative).
 	p2 := combatPlayer(loop, 2)
-	loop.applyDamage(p2, 999)
+	loop.applyDamage(p2, damageSourceOf(damageTypeGeneric), 999)
 	if p2.health != 0 {
 		t.Fatalf("after overkill health = %v, want 0 (clamped)", p2.health)
 	}
@@ -124,7 +124,7 @@ func TestIFrameRateLimit(t *testing.T) {
 		loop := NewTickLoop(newFakeClock())
 		p := combatPlayer(loop, 1)
 
-		loop.applyDamage(p, 6) // fresh hit: full 6, health 14, invulnerableTime=20, lastHurt=6
+		loop.applyDamage(p, damageSourceOf(damageTypeGeneric), 6) // fresh hit: full 6, health 14, invulnerableTime=20, lastHurt=6
 		if p.health != 14 {
 			t.Fatalf("after first hit health = %v, want 14", p.health)
 		}
@@ -137,7 +137,7 @@ func TestIFrameRateLimit(t *testing.T) {
 
 		_ = drainPackets(p.client) // discard the first SetHealth
 
-		loop.applyDamage(p, 6) // spam within window, amount <= lastHurt -> NO damage
+		loop.applyDamage(p, damageSourceOf(damageTypeGeneric), 6) // spam within window, amount <= lastHurt -> NO damage
 		if p.health != 14 {
 			t.Fatalf("equal spam hit within window changed health to %v, want 14 (absorbed)", p.health)
 		}
@@ -150,11 +150,11 @@ func TestIFrameRateLimit(t *testing.T) {
 		loop := NewTickLoop(newFakeClock())
 		p := combatPlayer(loop, 2)
 
-		loop.applyDamage(p, 4) // fresh: health 16, lastHurt=4, window=20
+		loop.applyDamage(p, damageSourceOf(damageTypeGeneric), 4) // fresh: health 16, lastHurt=4, window=20
 		if p.health != 16 {
 			t.Fatalf("after first hit health = %v, want 16", p.health)
 		}
-		loop.applyDamage(p, 10) // within window, 10 > 4 -> applies only 10-4 = 6: health 16-6 = 10
+		loop.applyDamage(p, damageSourceOf(damageTypeGeneric), 10) // within window, 10 > 4 -> applies only 10-4 = 6: health 16-6 = 10
 		if p.health != 10 {
 			t.Fatalf("larger second hit health = %v, want 10 (only the 6 excess)", p.health)
 		}
@@ -168,13 +168,13 @@ func TestIFrameRateLimit(t *testing.T) {
 		loop := NewTickLoop(newFakeClock())
 		p := combatPlayer(loop, 3)
 
-		loop.applyDamage(p, 4) // window=20
+		loop.applyDamage(p, damageSourceOf(damageTypeGeneric), 4) // window=20
 		// Decrement the window past the > 10 threshold (simulate ~10 ticks of tickPlayerCombat).
 		for i := 0; i < 11; i++ {
 			loop.tickPlayerCombat()
 		}
 		// invulnerableTime is now 20-11 = 9 (<= 10), so a fresh hit lands fully.
-		loop.applyDamage(p, 4) // fresh full 4: health 20-4-4 = 12
+		loop.applyDamage(p, damageSourceOf(damageTypeGeneric), 4) // fresh full 4: health 20-4-4 = 12
 		if p.health != 12 {
 			t.Fatalf("post-window hit health = %v, want 12 (both 4s landed)", p.health)
 		}
@@ -189,7 +189,7 @@ func TestArmorFormula(t *testing.T) {
 	t.Run("armor 0 takes full damage", func(t *testing.T) {
 		loop := NewTickLoop(newFakeClock())
 		p := combatPlayer(loop, 1)
-		loop.applyDamage(p, 10) // ARMOR base 0 -> full 10: health 10
+		loop.applyDamage(p, damageSourceOf(damageTypeGeneric), 10) // ARMOR base 0 -> full 10: health 10
 		if p.health != 10 {
 			t.Fatalf("armor-0 hit health = %v, want 10 (full damage)", p.health)
 		}
@@ -201,7 +201,7 @@ func TestArmorFormula(t *testing.T) {
 		// Seed the holder and override ARMOR to a synthetic 20 (a full iron set's armor points).
 		p.playerAttributes().base[attrArmor] = 20.0
 
-		loop.applyDamage(p, 10) // armor curve: 10 -> 4.0: health 20-4 = 16
+		loop.applyDamage(p, damageSourceOf(damageTypeGeneric), 10) // armor curve: 10 -> 4.0: health 20-4 = 16
 		if p.health != 16 {
 			t.Fatalf("armor-20 hit health = %v, want 16 (10 damage reduced to 4)", p.health)
 		}
@@ -214,7 +214,7 @@ func TestDeath(t *testing.T) {
 	loop := NewTickLoop(newFakeClock())
 	p := combatPlayer(loop, 7)
 
-	loop.applyDamage(p, maxHealth) // exactly lethal
+	loop.applyDamage(p, damageSourceOf(damageTypeGeneric), maxHealth) // exactly lethal
 	if p.health != 0 {
 		t.Fatalf("after lethal damage health = %v, want 0", p.health)
 	}
@@ -253,7 +253,7 @@ func TestRespawnFlow(t *testing.T) {
 	t.Run("dead player respawns", func(t *testing.T) {
 		p := combatPlayer(loop, 11)
 		// Kill the player.
-		loop.applyDamage(p, maxHealth)
+		loop.applyDamage(p, damageSourceOf(damageTypeGeneric), maxHealth)
 		_ = drainPackets(p.client) // discard the death packets; re-arm a fresh capturing client
 		p.client = captureClient(64)
 		loop.clientIndex[p.client] = p

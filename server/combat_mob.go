@@ -86,6 +86,9 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 		t.actuallyHurtEntity(e, src, amount-e.lastHurt)
 		e.lastHurt = amount
 		flag2 = false
+		// tookFullDamage == true on this sub-branch (the hit was not i-frame-rejected — it landed its
+		// excess), so vanilla fires the hurt animation. See broadcastMobDamageEvent for the full cite.
+		t.broadcastMobDamageEvent(e, src)
 	} else {
 		// Fresh hit (bytecode 240-271): record lastHurt, arm the 20-tick window, apply full damage, set
 		// the hurt-flash duration/time.
@@ -94,6 +97,8 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 		t.actuallyHurtEntity(e, src, amount)
 		e.hurtDuration = hurtDurationTicks
 		e.hurtTime = e.hurtDuration
+		// tookFullDamage == true on the fresh sub-branch too — broadcast the hurt animation.
+		t.broadcastMobDamageEvent(e, src)
 	}
 
 	// MOB DIFF (MOB-SUB-02): the flag2 block (bytecode 444-462) — `if (flag2) { this.lastDamageSource =
@@ -110,6 +115,42 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 	if e.health <= 0 {
 		t.dieEntity(e, src)
 	}
+}
+
+// broadcastMobDamageEvent is the port of the tookFullDamage hurt-animation broadcast inside
+// net.minecraft.world.entity.LivingEntity.hurtServer:
+//
+//	if (tookFullDamage) {
+//	    if (blocked && blocksAttacks != null) { ... }     // shield — not relevant to a mob (no items in v1)
+//	    else { level.broadcastDamageEvent(this, source); }  // <-- THE RED FLASH
+//	    if (!source.is(NO_IMPACT)) this.markHurt();          // velocity-changed metadata dirty marker
+//	    if (!source.is(NO_KNOCKBACK)) { ... knockback ... }  // knockback — already deferred (combat path)
+//	}
+//
+// tookFullDamage is true on BOTH sub-branches where damage actually landed (the i-frame EXCESS branch
+// and the FRESH-window branch); it is false ONLY on the `amount <= lastHurt` early return — which
+// never reaches here. ServerLevel.broadcastDamageEvent fans
+// `getChunkSource().sendToTrackingPlayersAndSelf(entity, new ClientboundDamageEventPacket(entity,
+// source))` out to every tracking player AND the entity itself; for a MOB the "and self" is a no-op
+// (a mob has no connection), so broadcastToTrackers (the Sulfur sendToTrackingPlayers analogue, which
+// already skips nobody relevant for a non-player actor) is the faithful fan-out — the SAME path
+// death_mob.go uses for the death-status broadcast.
+//
+// sourceCause == sourceDirect == src.attacker (the causing entity for a direct hit; both the cause and
+// the direct entity are the attacker for a melee hit, both absent/0 for an environmental source).
+// sourceType is int32(src.typeTag) directly: the typeTag (the sorted index into DamageTypeNames) IS
+// the client's damage_type holder id (both the config registrydata send order and DamageTypeNames are
+// sorted alphabetically), so no remap is needed (asserted in the test).
+//
+//	[VERIFIED javap LivingEntity.hurtServer tookFullDamage -> Level.broadcastDamageEvent(this, source);
+//	 ServerLevel.broadcastDamageEvent -> sendToTrackingPlayersAndSelf(entity, ClientboundDamageEventPacket).]
+//
+// markHurt() (the velocity-changed/hurt-marker metadata dirty flag) is DEFERRED here: it is NOT the
+// red flash (broadcastDamageEvent IS), and the SynchedEntityData velocity-changed marker has no v1
+// metadata reader yet. Cited deferral, structured so a markHurt analogue slots in unchanged when the
+// metadata dirty path lands; knockback stays deferred exactly as the rest of the hurt tail leaves it.
+func (t *TickLoop) broadcastMobDamageEvent(e *Entity, src damageSource) {
+	t.broadcastToTrackers(e.id, encodeDamageEvent(e.id, int32(src.typeTag), src.attacker, src.attacker))
 }
 
 // actuallyHurtEntity is the port of net.minecraft.world.entity.LivingEntity.actuallyHurt(ServerLevel,

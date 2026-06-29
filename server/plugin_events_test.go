@@ -257,7 +257,7 @@ func TestDamageIsPostMitigation(t *testing.T) {
 
 	const raw float32 = 6
 	hpBefore := p.health
-	loop.applyDamage(p, raw)
+	loop.applyDamage(p, damageSourceOf(damageTypeGeneric), raw)
 	landed := float64(hpBefore - p.health)
 
 	if got := ec.get("on_damage"); got != 1 {
