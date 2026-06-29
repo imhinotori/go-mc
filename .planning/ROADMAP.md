@@ -85,7 +85,11 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
   3. `source.is(tag)` reads are genuine against a jar-extracted damage-type tag table (`PANIC_CAUSES` / `BYPASSES_ARMOR` / `IS_FIRE` …), NOT `const false`; the `on_damage` Emit fires at the post-mitigation site.
   4. Cross-region hits route through the OWNER's region as a barrier-queued `damageIntent` (never the actor's `cur()`); Docker `-race` + `strictRegion` clean.
   5. Standing: every op `float32` and every clamp/branch verbatim vs the jar (javap before writing); the `combat.go` CombatRules/clamp helpers reused not duplicated; CGO=0 + no new Go deps; the pig oracle `TestPluginPigEqualsGoNativePig` stays GREEN (no AI RNG touched).
-**Plans**: TBD
+**Plans**: 4 plans (4 sequential waves)
+- [ ] 29-01-PLAN.md — Tag codegen: GenTags.java (recursive nested-tag flatten) + gen_tags.go → data/tag/ (damage-type AND item tags) [MOB-SUB-03]
+- [ ] 29-02-PLAN.md — Entity hurt pipeline: *Entity fields + damage_source.go + combat_mob.go (applyDamageEntity/actuallyHurtEntity + baseTick i-frame decrement) [MOB-SUB-01, MOB-SUB-02]
+- [ ] 29-03-PLAN.md — Attack routing + cross-region: handleAttack dual-resolve + damageIntent barrier-queue + was_hurt/last_damage_type handle attrs (-race + strictRegion) [MOB-SUB-01, MOB-SUB-02]
+- [ ] 29-04-PLAN.md — Death + loot + XP: dieEntity (death removal) + dropMobLoot + dropMobExperience (entity-loot de-risk first) [MOB-SUB-01]
 **Research flag**: yes — the cross-region `damageIntent` barrier-queue is the FIRST true cross-region write; the exact barrier/inbox plumbing (`transferIntent`/`asyncIn2` discipline) must be pinned before coding. Also confirm the registry extraction surfaces damage-type *entries* with their fields (exponent/scaling/message-id) — extend slightly if only IDs are present.
 
 ### Phase 30: JumpControl + Fluid (S1)
@@ -176,7 +180,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
 | 10–16 (v2.0 worldgen + structures) | v2.0 | 22/22 | Complete | 2026-06-25 |
 | 17–20 (v3 online-mode + operator-UX + structure-polish) | v3 | 33/33 | Complete | 2026-06-27 |
 | 21–28 (v4 plugin / scripting system) | v4 | 19/19 | Complete | 2026-06-29 |
-| 29. Damage Keystone (S2) | v5 | 0/? | Not started | - |
+| 29. Damage Keystone (S2) | v5 | 0/4 | Planned | - |
 | 30. JumpControl + Fluid (S1) | v5 | 0/? | Not started | - |
 | 31. PanicGoal (S2 consumer) | v5 | 0/? | Not started | - |
 | 32. Held-Item + Item Tags (S4) | v5 | 0/? | Not started | - |
