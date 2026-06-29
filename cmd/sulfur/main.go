@@ -21,6 +21,8 @@ import (
 	"flag"
 	"log"
 	"log/slog"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"path/filepath"
 
@@ -134,6 +136,15 @@ func main() {
 	// is an OR'd env escape hatch mirroring the SULFUR_SUPERFLAT/SULFUR_DEBUG pattern in
 	// this file. Default stays offline so a bare `sulfur` run is byte-identical to today.
 	online := *onlineMode || os.Getenv("SULFUR_ONLINE_MODE") == "1"
+
+	// SULFUR_PPROF=1 exposes net/http/pprof on :6060 for live CPU/heap profiling
+	// (dev/diagnostic only — off by default, never reached in a bare prod run).
+	if os.Getenv("SULFUR_PPROF") == "1" {
+		go func() {
+			slog.Info("pprof listening on :6060 (SULFUR_PPROF=1)")
+			_ = http.ListenAndServe("localhost:6060", nil)
+		}()
+	}
 
 	// Construct the single-owner runtime: the network->tick seam (one bounded chan
 	// Intent), the authoritative tick loop over the real system clock, and the
