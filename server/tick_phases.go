@@ -436,10 +436,27 @@ func (t *TickLoop) tickPhysics() {
 			e.vz *= horizontalFriction
 		}
 
+		// LIVE-DEBUG B (the "mobs take no fall damage" fix): accumulate fallDistance from this tick's
+		// downward motion BEFORE moveEntity integrates it, mirroring Entity.checkFallDamage's
+		// `if (!isInWater() && deltaY < 0.0) fallDistance -= (float) deltaY`. deltaY is the vertical
+		// velocity (vanilla's deltaMovement.y) about to be integrated; a fall makes it negative, and
+		// a descent in water adds NO fallDistance (so a mob that falls into water takes no fall
+		// damage). The landing edge is checked AFTER moveEntity, where onGround is freshly set. Reuses
+		// the Phase-30 mobInWater predicate; mob_fall_damage.go owns the jar citations.
+		inWater := t.mobInWater(e)
+		t.accumulateMobFallDistance(e, e.vy, inWater)
+
 		// Integrate via the per-axis swept resolver (the anti-tunneling discipline). This
 		// also re-buckets through entities.move and updates onGround / zeroes blocked
 		// velocity components.
 		t.moveEntity(e, e.vx, e.vy, e.vz)
+
+		// LIVE-DEBUG B landing edge: now that moveEntity has set e.onGround (it lands a mob whose
+		// downward motion was clamped by a solid block this tick), run the Entity.checkFallDamage
+		// landing branch — `if (onGround) { if (fallDistance > 0) causeFallDamage(fallDistance, 1.0,
+		// FALL); resetFallDistance(); }`. causeFallDamageEntity routes the damage through
+		// applyDamageEntity (the Phase-29 keystone), reusing the player path's calculateFallDamage.
+		t.landMobFallDamage(e, inWater)
 	}
 }
 

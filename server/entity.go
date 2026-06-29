@@ -226,6 +226,20 @@ type Entity struct {
 	//	 !isRemoved) { broadcastEntityEvent(this, 60); remove(KILLED); }.]
 	deathTime int32
 
+	// fallDistance is net.minecraft.world.entity.Entity.fallDistance — the running descent distance
+	// the entity has accumulated since it was last on the ground (or in water). Entity.checkFallDamage
+	// adds the per-tick drop (`fallDistance -= (float) deltaY` while !isInWater && deltaY < 0) and, on
+	// landing (onGround), feeds it to LivingEntity.causeFallDamage -> calculateFallDamage to compute
+	// the fall damage, then resets it. It is the *Entity sibling of tickPlayer.fallDistance (the player
+	// fall path, fall_damage.go / tick.go). LIVE-DEBUG B: without this the mob fall-damage path never
+	// ran (only tickPlayer accumulated fallDistance), so a mob that fell from height took no damage. A
+	// plain float64 (snapshot-friendly), tick-owned (TICK-05): mutated only on the tick goroutine in
+	// tickPhysics (the mob fall path, mob_fall_damage.go).
+	//	[VERIFIED javap Entity.checkFallDamage: getfield fallDistance; dload deltaY; d2f; f2d; dsub;
+	//	 putfield fallDistance (the descent accumulation), then on onGround the >0 -> causeFallDamage ->
+	//	 resetFallDistance chain.]
+	fallDistance float64
+
 	// --- GAMEPLAY-07: delta-move tracking state (ServerEntity.sendChanges) ----------------
 	//
 	// These mirror net.minecraft.server.level.ServerEntity's per-entity send state so the
