@@ -1,361 +1,462 @@
-# Architecture Research
+# Architecture Research — v5 Mob Subsystem Integration
 
-**Domain:** Minecraft Java Edition server (26.2, proto 776) reimplemented in Go on Tnze/go-mc, concurrency-ready for Leaf-style async optimizations
-**Researched:** 2026-06-23
-**Confidence:** HIGH on vanilla/Leaf/Folia architecture and go-mc package boundaries (verified against DeepWiki Paper/Folia/Leaf wikis, pkg.go.dev, GitHub); MEDIUM on exact Go-idiomatic mapping (synthesized, not a port-of-record exists)
+**Domain:** Living-entity subsystems (damage, jump/fluid, aging/breeding, held-item/tags) + new mobs as Starlark plugins, integrated into the existing Sulfur tick-owned, Folia-regionized server
+**Researched:** 2026-06-29
+**Confidence:** HIGH (every integration point below is a real `file:function` read this session, not inferred)
 
-## Executive Take
+---
 
-The whole architecture hinges on one invariant: **the tick is the unit of authority, and game state must only be mutated by the goroutine that owns it.** Vanilla single-threads everything. Folia keeps the single-threaded *correctness* guarantee but shards it per-region. Leaf keeps the single main thread but moves *pure computation* (pathfinding, tracked-set diffing, brain ticks) off-thread and rejoins results into the tick.
+## 0. The Integration Surface — Read These First
 
-For Ender, the right move is: **build a single-threaded authoritative tick loop with explicit "compute off, apply on" seams from day one**, never letting off-tick code touch live game state directly. If those seams exist, Leaf optimizations bolt on without rewrites. If you bake locks into game state instead, you will rewrite. The design choice that prevents rewrites is **ownership-based synchronization (the Folia/Leaf model), not lock-based shared state.**
+The v5 subsystems do NOT get a greenfield design. They bolt onto five existing, shipped seams. The single most important fact discovered during research:
 
-## Standard Architecture
+> **There are TWO separate attribute systems.** `*tickPlayer` carries its own `attributeHolder` (`server/attributes.go` — an `attributeKey int` enum over a `playerAttributeBase` map). `*Entity` carries the REAL `*attribute.Map` (`server/entity.go:135`, `level/attribute`), read via `e.getAttributeValue(*attribute.Attribute)`. **The entire `combat.go` damage pipeline is built on the `*tickPlayer` flavor and reads the player holder.** A mob has the real `*attribute.Map`, not the player holder. This is the deciding constraint for the damage keystone (§1).
 
-### System Overview
+The five seams and their owning files:
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                          NETWORK EDGE (per-connection goroutines)      │
-│  ┌──────────────┐   ┌──────────────┐   ┌──────────────────────────┐    │
-│  │ TCP Listener │──▶│ Conn goroutine│──▶│ Packet Codec (net pkg)   │    │
-│  │  (accept)    │   │ read / write  │   │ VarInt/compress/encrypt  │    │
-│  └──────────────┘   └──────┬───────┘    └──────────┬───────────────┘    │
-│                            │ State Machine: Handshake│ Status Login     │
-│                            │            Config Play   │                  │
-├────────────────────────────┼──────────────────────────┼─────────────────┤
-│            inbound packets ▼ (channel)      outbound ▲ (channel)         │
-├──────────────────────────────────────────────────────────────────────┤
-│                    AUTHORITATIVE TICK LOOP (20 TPS, owns game state)    │
-│   ┌───────────────────────────────────────────────────────────────┐    │
-│   │ 1.drain inbound 2.world tick 3.entity tick 4.AI/brain 5.physics │    │
-│   │ 6.apply async results 7.entity tracking 8.flush outbound        │    │
-│   └─────────┬──────────────┬──────────────┬───────────────┬─────────┘    │
-│             │ owns         │ owns         │ owns          │ owns         │
-│   ┌─────────▼───┐ ┌────────▼─────┐ ┌──────▼──────┐ ┌──────▼───────┐      │
-│   │ World Mgr   │ │ Chunk System │ │ Entity Sys  │ │ Command      │      │
-│   │ (dimensions)│ │ load/gen/view│ │ store + tick│ │ Dispatch     │      │
-│   └─────┬───────┘ └──────┬───────┘ └──────┬──────┘ └──────────────┘      │
-├─────────┼────────────────┼────────────────┼─────────────────────────────┤
-│         │ RESULT QUEUES (off-thread compute → apply on tick) — SEAMS     │
-│  ┌──────▼──────┐  ┌───────▼────────┐  ┌────▼─────────┐                    │
-│  │ async path  │  │ async tracker  │  │ async spawn  │  (Leaf layers)    │
-│  │ goroutine   │  │ goroutine pool │  │ goroutine    │   added LATER     │
-│  │ pool        │  │                │  │              │                    │
-│  └─────────────┘  └────────────────┘  └──────────────┘                    │
-├──────────────────────────────────────────────────────────────────────┤
-│                    PERSISTENCE (save/region — off-tick I/O)             │
-│   ┌──────────────────┐  ┌───────────────────┐  ┌───────────────────┐   │
-│   │ Region/MCA files │  │ player data (NBT) │  │ level.dat         │   │
-│   │ (save pkg)       │  │                   │  │                   │   │
-│   └──────────────────┘  └───────────────────┘  └───────────────────┘   │
-└──────────────────────────────────────────────────────────────────────┘
-```
+| Seam | Owner file:function | What it is today | v5 needs |
+|------|--------------------|------------------|----------|
+| Damage pipeline | `combat.go` `applyDamage(p *tickPlayer)` / `actuallyHurt(p *tickPlayer)` | `*tickPlayer`-only, reads player attr holder, `on_damage` Emit at `actuallyHurt` post-mitigation site (`combat.go:310`) | a `*Entity` mob path + `lastDamageSource` + damage-type tags |
+| AI driver | `ai_mob.go` `serverAiStep(t, e)` (line 105) + `mobAI` struct (line 29) | navigation only; jumpControl DEFERRED (line 124 comment) | a `jumpControl` seam + mob `isInWater`/`getFluidHeight` |
+| Goal arbitration | `ai_goal.go` `goalSelector` (flag-locking, line 233 `tick`) | single selector per mob; flags MOVE/LOOK/JUMP/TARGET already defined (line 38) | TARGET flag is defined but unused; needs a 2nd (target) selector for hostiles |
+| Fluid read | `fluid.go` `fluidAt(pos)` (line 246), `decodeFluid` | raw block→`fluidState`; player fluid in `breath.go`/`suffocation.go` is `*tickPlayer`-only | a position/AABB mob `isInWater` predicate built on `fluidAt` |
+| Plugin mob spawn | `plugin_mob_decl.go` `spawnDeclaredMob` (line 385), `buildAIFromDecl` (`plugin_mob_ai.go:185`) | builds a `*mobAI`, routes to `regionForEntity(e).entities.add` | reused verbatim for baby spawn + new mob types |
 
-### Component Responsibilities
+Plus the Folia substrate that constrains every new mutable field:
 
-| Component | Responsibility (what it owns) | go-mc coverage | Built by Ender |
-|-----------|-------------------------------|----------------|----------------|
-| **Connection/Session Manager** | TCP accept, per-conn goroutine, read/write loops, compression & encryption thresholds, keepalive, connection lifecycle | `net` (codec), `server` (login/keepalive/playerlist framework) | Session-to-player binding, play-state loop |
-| **Packet Codec Layer** | VarInt/VarLong, packet length framing, zlib compression, AES-CFB8 encryption, serialize/deserialize typed packets | `net`, `net/packet`, `CFB8` | Generated 776 packet structs (PR #294-296 codegen) |
-| **Protocol State Machine** | Handshake → Status / Login → Config → Play transitions; routes packets to the right handler set per state | `net` has state constants; `server` has login flow | Config-state handler, Play-state handler, transition logic |
-| **World Manager** | Owns set of dimensions/levels, world rules, time, weather; routes by dimension | `save.LevelData` (level.dat struct) | Runtime world container, dimension registry |
-| **Chunk System** | Load/generate/store chunk columns, BitStorage block states, heightmaps, view-distance chunk streaming to clients, ticket/loading | `level`/`level/block`/`chunk` data structures; `save` MCA region I/O | Chunk manager (ticket system), generator, view tracking |
-| **Entity System + Tick** | Entity registry (id→entity), per-entity tick, position/velocity, spawn/despawn, metadata sync | none | Full system |
-| **AI / Brain** | Goal selectors or brain (memories + behaviors + sensors), pathfinding requests, target selection | none | Full system |
-| **Physics** | Gravity, AABB collision (entity↔block, entity↔entity), block place/break, fluid, knockback | none | Full system |
-| **Command Dispatch** | Parse Brigadier-style command tree, execute, permissions, chat routing | `chat` (message format) | Command tree + dispatch |
-| **Persistence** | Region/MCA read/write, player NBT, level.dat, async flush | `save`, `save/region`, `nbt` | Async scheduling, dirty-tracking |
+| Folia primitive | Owner | Rule for v5 |
+|-----------------|-------|-------------|
+| Thin-id handle | `plugin_entity.go:35` `entityHandle{t, id, region, caps}` (NEVER a live `*Entity`) | any new plugin-facing read/mutate goes through a handle op, re-resolving `store().get(id)` on the owner |
+| Region routing | `region_transfer.go` `regionForEntity` (line 56), `regionForColumn`, `withRegion` (line 100) | new state lives on `*Entity` and travels with the entity at the barrier (`applyCrossRegionTransfers`, line 193) — never aliased mid-tick |
+| Cross-region scan | `region_transfer.go` `entitiesNearAcrossRegions` (line 143), `spawner.go` `mobNearAcrossRegions` | any partner/parent/target broad-phase that may cross the seam runs at the QUIESCENT barrier, not mid-region-tick |
+| Region-aware Emit | `region_transfer.go` `emitEntityEvent` (line 86) | new entity-scoped events fire through the region-bound path so payload handles resolve the owning region's store |
 
-**Critical boundary:** Everything from World Manager down to Command Dispatch is **game state owned by the tick loop**. The Network Edge and the Persistence layer are the *only* components that legitimately run on other goroutines, and they communicate with the tick loop **exclusively through channels/queues**, never by touching game state. This boundary is the concurrency seam that makes Leaf optimizations possible later.
+---
 
-## Recommended Project Structure
+## 1. KEYSTONE — Mob Damage Pipeline
 
-```
-ender/
-├── cmd/ender/              # main: wire up server, load config, start tick loop
-├── internal/
-│   ├── net/                # thin wrappers / extensions over go-mc net
-│   │   ├── conn.go         # per-connection goroutine, read/write channels
-│   │   └── codec.go        # compression/encryption setup
-│   ├── protocol/
-│   │   ├── packet/         # GENERATED 776 packet structs (codegen output)
-│   │   ├── state.go        # Handshake/Status/Login/Config/Play state machine
-│   │   ├── handshake.go
-│   │   ├── login.go        # offline-mode first; encryption later
-│   │   ├── config.go       # registries, known packs
-│   │   └── play.go         # play-state inbound packet routing
-│   ├── server/             # Server struct, session registry, player list
-│   │   ├── server.go
-│   │   ├── session.go      # binds conn <-> player; inbound/outbound channels
-│   │   └── tick.go         # THE authoritative tick loop (20 TPS scheduler)
-│   ├── world/
-│   │   ├── world.go        # World/dimension manager, owned by tick
-│   │   ├── chunk/          # chunk manager, ticket system, view tracking
-│   │   ├── gen/            # world generation (deterministic first)
-│   │   └── block/          # block state behavior (uses generated block data)
-│   ├── entity/
-│   │   ├── entity.go       # entity store + interface/component split
-│   │   ├── tick.go         # entity tick orchestration
-│   │   ├── tracker.go      # entity tracking (sync first; async seam)
-│   │   └── metadata.go     # data components / entity metadata sync
-│   ├── ai/
-│   │   ├── brain.go        # memories/behaviors/sensors OR goal selectors
-│   │   ├── pathfind/       # A* navigation (sync first; async seam)
-│   │   └── spawn/          # mob spawning (sync first; async seam)
-│   ├── physics/            # gravity, AABB collision, fluids
-│   ├── command/            # Brigadier-style tree + dispatch
-│   ├── persist/            # region/save scheduling, player data, dirty flush
-│   └── data/               # GENERATED registries/blocks/items/entities/sounds
-├── tools/                  # codegen pipeline (fork of go-mc PR #294-296)
-└── .planning/
-```
+**Decision: PARALLEL `*Entity` path, NOT generalize-in-place. Build `applyDamageEntity` / `actuallyHurtEntity` as new functions in a new `combat_mob.go`.**
 
-### Structure Rationale
+### Why parallel, not generalize
 
-- **`server/tick.go` is the spine.** Every system exposes a `Tick(ctx)` method called in a fixed order from here. This is where the single-threaded authority lives.
-- **`data/` and `protocol/packet/` are generated, never hand-edited.** They come from the 776 jar extractor. Keeping them isolated means a `--version` bump regenerates cleanly.
-- **`pathfind/`, `tracker.go`, `spawn/` each get their own sub-package from the start** even when implemented synchronously, so the async swap is a single-package change behind a stable interface — not a cross-cutting rewrite.
-- **`net` and `persist` are the only packages allowed to spawn long-lived goroutines** touching server data, and they only do so through channels into the tick loop.
+`combat.go`'s `applyDamage`/`actuallyHurt` are `func (t *TickLoop) applyDamage(p *tickPlayer, ...)`. They:
+1. Read the **player attribute holder** (`p.getAttributeValue(attrArmor)` → `attributeKey` enum, `server/attributes.go:148`). A mob reads `e.getAttributeValue(*attribute.Attribute)` — a different backend.
+2. Drive **player-specific death** (`die(p)` → `playerCombatKill` packet + death screen, `combat.go:399`). A mob death is a despawn + `EntityDeathEvent`, never a `PlayerCombatKill`.
+3. Send **`setHealth(...)` to `p.client`** (`combat.go:320`). A mob has no client; its health change is wire-broadcast as entity metadata (a later metadata concern) — for v5 the mob's `health` field is internal AI state (PanicGoal reads `lastDamageSource`, not health-bar wire).
 
-## Architectural Patterns
+Trying to make these generic with an interface would (a) force the bit-fragile shared AI flow through a new abstraction and (b) risk perturbing the player combat path that v3 sealed and tested. A second, sibling path keeps the player path BYTE-IDENTICAL (the player oracle is also implicitly protected) and lets the mob path port `LivingEntity.hurtServer`/`actuallyHurt` against the mob's real `*attribute.Map`.
 
-### Pattern 1: Authoritative Single-Threaded Tick Loop
+**The shared core to FACTOR OUT (no behavior change):** `combatRulesGetDamageAfterAbsorb`, `combatRulesGetDamageAfterMagicAbsorb`, `mthClampF`, `maxF`, the NaN/Inf clamp — these are already free functions in `combat.go` (lines 543, 562, 128, 603). Both paths call them. Do NOT duplicate them.
 
-**What:** One goroutine drives a 20 TPS loop (50 ms budget per tick). All game-state mutation happens here, in a deterministic phase order. Vanilla does exactly this — "every tick of every entity, every block update, every player action runs on one CPU thread."
+### Where `lastDamageSource` lives — and Folia safety
 
-**When to use:** As the foundation. Correctness and determinism come free; you never reason about data races inside game logic.
+Add to `*Entity` (`server/entity.go`, next to `health`/`ai`):
 
-**Tick phase order (mirrors vanilla, drives build order):**
-```
-1. Drain inbound packet queue  → apply player intent (movement, actions)
-2. World tick                  → time, weather, scheduled block ticks, random ticks
-3. Chunk tick                  → loaded-chunk upkeep, block entities
-4. Entity tick                 → movement, velocity integration
-5. AI / brain tick             → goal selection, navigation step
-6. Physics resolution          → collisions, gravity settle
-7. Apply async results         → drain result queues from off-thread workers
-8. Entity tracking             → compute who-sees-what, emit spawn/move/despawn
-9. Flush outbound              → push packets to per-conn write channels
-```
-
-**Trade-offs:** Simple and correct, but the whole world is bounded by one core. That is *acceptable and intended* — Leaf/Folia optimizations relieve it later. Do not pre-optimize.
-
-**Go example (the spine):**
 ```go
-func (s *Server) runTickLoop(ctx context.Context) {
-    ticker := time.NewTicker(50 * time.Millisecond)
-    defer ticker.Stop()
-    for {
-        select {
-        case <-ctx.Done():
-            return
-        case <-ticker.C:
-            start := time.Now()
-            s.drainInbound()        // 1
-            s.world.Tick()          // 2-3 (owns chunks)
-            s.entities.Tick()       // 4
-            s.ai.Tick()             // 5
-            s.physics.Resolve()     // 6
-            s.applyAsyncResults()   // 7  <-- the rejoin seam
-            s.tracker.Tick()        // 8
-            s.flushOutbound()       // 9
-            s.recordMSPT(time.Since(start)) // watch the 50ms budget
-        }
-    }
-}
+// LivingEntity.lastDamageSource / lastHurt / invulnerableTime / hurtTime — the i-frame +
+// panic-read state. Tick-owned (TICK-05), travels with the *Entity at the barrier
+// (applyCrossRegionTransfers adopts the pointer, so this state is never aliased mid-tick).
+lastDamageSource damageSource  // zero value = "never hurt" (PanicGoal.shouldPanic reads the tag)
+health           float32       // LivingEntity.health (a mob's, distinct from tickPlayer.health)
+lastHurt         float32
+invulnerableTime int32
+hurtTime, hurtDuration int32
 ```
 
-### Pattern 2: Compute-Off / Apply-On (the async rejoin seam)
+**Folia race-safety story:** `lastDamageSource` is a plain value/struct field on `*Entity`. The Entity is owned by exactly one region's store at any tick (the static `regionOf` split, `region_transfer.go:43`). All damage application happens on the OWNER region's goroutine. The cross-region case — a player in region A attacks a mob in region B — is the ONLY hazard, addressed below. The field is NOT part of the snapshot-friendly value set the async tracker copies (same exemption `ai`/`attributes` already carry, documented at `entity.go:119`), so it does not break the snapshot contract.
 
-**What:** Heavy *pure* computation (pathfinding A*, tracked-set diffing, brain evaluation, spawn candidate selection) is dispatched to a worker goroutine pool with an immutable snapshot of inputs. The worker never touches live game state. It returns a result onto a channel. The tick loop drains that channel in phase 7 and applies the result to live state single-threaded.
+`damageSource` is a NEW small value type (not a pointer to shared state):
 
-This is exactly how Leaf works: "the result is safely returned to the mob's navigation system for the next tick cycle"; tracked sets are "computed off-thread, then applied back to the main thread during the tick." It is also how Folia reintegrates: async results are "queued to execute during the target region's next tick, ensuring single-threaded access."
-
-**When to use:** This is THE pattern that must exist in the seams from day one. Even the synchronous v1 should be structured as request→result so going async is swapping the executor, not restructuring callers.
-
-**Critical rule:** The worker gets a **snapshot** (copied coordinates, copied nav-mesh slice, copied entity positions), not a live pointer into game state. If a worker reads live state, you have a data race the moment you parallelize.
-
-**Go example (pathfinding seam, sync today / async tomorrow):**
 ```go
-type PathRequest struct {
-    EntityID int32
-    Start, Goal Vec3
-    Snapshot NavSnapshot // immutable copy of relevant collision data
-}
-type PathResult struct {
-    EntityID int32
-    Path     []Vec3
-}
-
-// v1 synchronous: compute inline, push to same queue the async version uses
-func (p *Pathfinder) Request(req PathRequest) {
-    res := computePath(req)        // later: go computePath into worker pool
-    p.results <- res               // tick loop drains this in phase 7
-}
-
-// tick loop, phase 7 — identical whether sync or async
-func (s *Server) applyAsyncResults() {
-    for {
-        select {
-        case r := <-s.pathfinder.results:
-            if e := s.entities.Get(r.EntityID); e != nil {
-                e.Nav.SetPath(r.Path) // single-threaded mutation, safe
-            }
-        default:
-            return
-        }
-    }
+// net.minecraft.world.damagesource.DamageSource — v5 subset: the type tag + the optional
+// attacker id (a THIN id, never a live *Entity — Folia rule). Tags drive PanicGoal +
+// wolf-anger (lastDamageSource.is(panicCausingDamageTypes) / getEntity()).
+type damageSource struct {
+    typeTag   damageTypeTag  // PLAYER_ATTACK, MOB_ATTACK, FALL, IN_FIRE, ... (an enum/bitset)
+    attacker  int32          // entity id of the attacker, 0 = none (re-resolve on owner if needed)
 }
 ```
 
-### Pattern 3: Ownership-Based Synchronization (not locks)
+### The three attack flows — data flow for the keystone
 
-**What:** Game state has exactly one owner goroutine (the tick loop in v1; a per-region tick thread in a future Folia-style model). Other goroutines never lock-and-mutate; they enqueue requests/results. "Data is isolated, not shared. Regions do not share data structures." Folia enforces "only the thread currently ticking a region may access data owned by that region."
-
-**When to use:** Always, for game state. Use locks/atomics only for genuinely shared infra (metrics counters, connection registry, the channels themselves).
-
-**Trade-offs:** Forces you to think in messages, but eliminates the entire class of game-logic data races and makes the future regionization a *partitioning* exercise rather than a *locking* exercise. The alternative (shared-state + mutexes on chunks/entities) appears easier early and becomes a rewrite when you parallelize — avoid it.
-
-### Pattern 4: Entity Model — OOP-with-component-split, not pure ECS
-
-**What:** Vanilla and Leaf are OOP (Entity → Mob → PathfinderMob; Brain holds memories/behaviors/sensors). A pure data-oriented ECS would be faster for cache locality but means *not* mirroring vanilla, which fights the "vanilla-faithful" requirement and makes 1:1 behavior porting harder.
-
-**Recommendation:** Use **OOP entities (Go interfaces + embedding) with a deliberate data/behavior split for the hot, async-bound parts** — position, velocity, nav state, and tracked-set inputs stored as plain copyable structs so they can be snapshotted for off-thread work. This is the pragmatic middle: faithful to vanilla logic, but the async-critical data is already in snapshot-friendly form.
-
-**When pure ECS would win:** if raw entity throughput became the goal over vanilla fidelity. Given the "vanilla-faithful" requirement, ECS is an anti-goal for v1.
-
-## Data Flow
-
-### Inbound (client → world)
 ```
-client TCP → conn goroutine reads → codec decode → typed packet
-    → inbound channel → [TICK phase 1] dispatch by play-state handler
-    → mutate player/world state (single-threaded)
-```
+PLAYER → MOB (the main new flow):
+  ServerboundAttack (subtick.go → handleAttack, attack_dispatch.go:91)
+    └─ TODAY: lookupPlayerByEntityID → tickPlayer victim ONLY
+    └─ v5: ALSO try store().get(targetID) → *Entity mob victim
+         (region note: the attack runs on the PLAYER's region goroutine; the mob may be in
+          ANOTHER region. RESOLUTION: do NOT mutate the mob's store cross-region mid-tick.
+          Queue the hit as a damageIntent{victimID, source, amount} onto the OWNING region's
+          inbox, applied at the barrier — the SAME discipline as transferIntent/asyncIn2.
+          The checkerboard split means an adjacent column IS the other region, and attackReach
+          (3.5) routinely crosses a 16-block chunk seam at chunk edges — so the barrier-queue
+          path is the correct, race-clean one, not "same-region only".)
+    └─ applyDamageEntity(victimMob, source{PLAYER_ATTACK, attackerID}, total)
+         (mirrors applyAttackDamage's i-frame boolean so the knockback/sweep tail gates correctly)
 
-### Outbound (world → clients)
-```
-[TICK phase 8] tracker computes per-player visible entity deltas
-    → [TICK phase 9] build packets → per-conn outbound channel
-    → conn goroutine writes → codec encode → client TCP
-```
+MOB → PLAYER (hostiles):
+  MeleeAttackGoal.tick (Starlark, in the mob plugin) → entity handle attack op
+    └─ host op resolves the nearest player (nearestPlayerAt) within attack-reach
+    └─ apply player damage — the EXISTING player path
+         (a mob hitting a player runs on the MOB's region goroutine; players are NOT in the
+          per-region entity store — t.players is coordinator-shared read — so reading player
+          pos is fine, but MUTATING player health from a region goroutine must route through
+          the same barrier-queue / coordinator-applied path. Treat player-victim hits as a
+          mob→player damageIntent applied at the barrier.)
 
-### Async compute rejoin (the seam)
-```
-[TICK phase 5] AI needs path → enqueue PathRequest(snapshot)
-    → worker goroutine computes A* on snapshot (no live state access)
-    → PathResult onto results channel
-    → [NEXT TICK phase 7] drain results → apply to entity nav (single-threaded)
+MOB → MOB (wolf retaliation, future-proof):
+  same shape as PLAYER→MOB but attacker is a mob id; applyDamageEntity on the victim's owning region.
 ```
 
-### Persistence
+### `on_damage` Emit — it already generalizes cleanly
+
+The Emit at `combat.go:310` carries `host.DamageEvent{EntityID, Amount}` (post-mitigation `amount`). It is already keyed by entity id, not by `*tickPlayer`. The mob path's `actuallyHurtEntity` fires the SAME Emit with `EntityID: int(e.id)` — but through `r.emitEntityEvent(host.EventDamage, ...)` (`region_transfer.go:86`) so the dispatch is region-scoped. **PanicGoal does NOT read `on_damage`** — it reads `e.lastDamageSource` directly via a new entity handle attr (`entity.last_damage_type` / `entity.was_hurt`). The Emit is for external plugins; the goal reads the field. Keep these two paths separate (the deferred-goals.md "do NOT fake a hurt flag" rule means the field must be the REAL ported `lastDamageSource`, set by `applyDamageEntity`).
+
+### New vs modified
+
+| Component | New/Modified | File |
+|-----------|--------------|------|
+| `applyDamageEntity` / `actuallyHurtEntity` | NEW | `combat_mob.go` (new) |
+| `damageSource` + `damageTypeTag` + panic-tag set | NEW | `damage_source.go` (new) |
+| `*Entity.lastDamageSource/health/lastHurt/invulnerableTime/hurtTime` | NEW fields | `entity.go` (modify) |
+| `damageIntent` barrier queue (cross-region hit) | NEW | `combat_mob.go` + region inbox in `region_transfer.go` |
+| `handleAttack` dual-resolve (player OR mob target) | MODIFIED | `attack_dispatch.go:91` |
+| CombatRules / clamp helpers | REUSED (do not duplicate) | `combat.go` |
+| `on_damage` Emit (region-scoped) | REUSED via `emitEntityEvent` | — |
+| entity handle `was_hurt`/`last_damage_type` attr | NEW handle attr | `plugin_entity.go` |
+
+---
+
+## 2. Mob JumpControl + Fluid
+
+### JumpControl seam — fill the deferred line
+
+`ai_mob.go:124` documents the deferral: `// (moveControl/lookControl/jumpControl.tick — folded into navigation.tick's yaw + moveEntity.)`. The FloatGoal port (`net.minecraft.world.entity.ai.goal.FloatGoal`) does `if getRandom().nextFloat() < 0.8 then getJumpControl().jump()` and claims `Goal$Flag.JUMP` (already defined, `ai_goal.go:42`).
+
+Add to `mobAI` (`ai_mob.go:29`):
+
+```go
+// jumpControl is the JumpControl.jump() impulse latch — net.minecraft.world.entity.ai.control
+// .JumpControl. A goal (FloatGoal) sets wantJump=true via jumpControl().jump(); serverAiStep
+// consumes it AFTER navigation.tick (the jar order: navigation.tick → ... → jumpControl.tick),
+// applies the vanilla jump impulse to e.vy, then clears it. Tick-owned (TICK-05).
+jumpControl struct{ wantJump bool }
 ```
-[TICK] mark chunk/entity dirty → enqueue save job
-    → persist goroutine serializes (NBT) → region/MCA file write (off-tick I/O)
-chunk load: ticket added → enqueue load → persist goroutine reads MCA / generator
-    → decoded chunk onto load-result channel → [TICK] insert into world
+
+The jump *impulse* itself ports `LivingEntity.jumpFromGround()` (`vy = 0.42 * blockJumpFactor`, plus the sprint-forward bonus — port the exact bytecode). It is applied in `serverAiStep` in the JUMP slot AFTER `navigation.tick` (`ai_mob.go:123`), matching the jar's `moveControl/lookControl/jumpControl` tail. The plugin-facing seam is a new nav-or-entity handle op `nav.jump()` / `entity.jump()` that sets `m.jumpControl.wantJump = true`.
+
+**Folia:** `jumpControl` is on `mobAI`, which hangs off `*Entity` and travels at the barrier. Single-owner, no new hazard.
+
+### `isInWater` / `getFluidHeight` predicate
+
+Build a mob fluid predicate on the EXISTING `fluidAt` (`fluid.go:246`). The player fluid code (`breath.go`, `suffocation.go`) is `*tickPlayer`-specific and uses player eye-heights, so it is NOT reusable — write a mob version:
+
+```go
+// mobIsInWater ports Entity.isInWater (updateInWaterStateAndDoFluidPushing → the WATER fluid
+// AABB intersection). v5 subset: sample fluidAt over the mob's AABB feet cells; getFluidHeight
+// returns the max submerged water column height in the AABB. Reads fluidAt (the raw block read)
+// — NO new world primitive. Tick-owned read on the owner; the mob's AABB is e.AABB() (entity.go:214).
+func (t *TickLoop) mobIsInWater(e *Entity) bool { ... }
+func (t *TickLoop) mobFluidHeight(e *Entity, tag fluidTag) float64 { ... }
 ```
 
-## Build Order (dependency-driven)
+**Folia:** `fluidAt` reads `t.world().GetBlock` — the world (ChunkManager) is shared and read-only during the mob's region tick (writes go through the owner's `SetBlock`). A mob reading its own column's fluid is reading blocks its own region owns. Race-clean.
 
-This is the load-bearing output. Each stage depends on the prior; concurrency seams are designed in at the stage marked, even though the async *implementation* comes last.
+### FloatGoal's JUMP claim through the goalSelector
 
-| Order | Stage | Depends on | Why this order | Concurrency seam to design in |
-|-------|-------|-----------|----------------|-------------------------------|
-| 0 | **Data codegen** (packets, registries, blocks, items, entities for 776) | go-mc PR #294-296 fork, 26.2 jar | Nothing speaks the protocol or knows block states without this. Pure prerequisite. | — |
-| 1 | **Net + protocol state machine** (handshake→status→login→config→play) | Stage 0 packets, go-mc `net`/`server` | A client cannot connect at all until states transition. Login (offline-mode) gates everything visible. | Per-conn goroutines + inbound/outbound channels established here — the network/tick boundary is born now |
-| 2 | **Authoritative tick loop skeleton** (20 TPS, keepalive, empty phases) | Stage 1 | Everything below is "a thing that ticks." Establish the spine and phase order before filling phases. | The tick is the single owner; `applyAsyncResults` phase exists as a no-op from day one |
-| 3 | **World + chunk system** (load/gen/store, BitStorage, heightmaps, view streaming) | Stage 2 (something to tick), go-mc `level`/`save` | Player needs ground to stand on and chunks to receive. Must exist before entities have a world. | Chunk load/save runs on persist goroutine → load-result channel into tick |
-| 4 | **Player session in-world** (spawn, movement, view chunks, see other players, physics for player) | Stage 3 | First *playable* milestone. Validates the whole inbound→tick→outbound→client round trip with real state. | Entity tracking implemented synchronously but behind `tracker.Tick()` interface (async seam) |
-| 5 | **Entity system + tick** (non-player entities: store, spawn, metadata, movement) | Stage 4 (tracking + physics primitives exist) | AI and spawning have nothing to drive without entities. | Entity data hot-fields stored as snapshot-friendly structs; `tracker` already async-shaped |
-| 6 | **Physics** (gravity, AABB collision, block place/break, knockback) | Stage 5 entities, Stage 3 blocks | Entities need collision to behave; block interaction needs world. Can co-develop with 5. | Collision data snapshot-able for off-thread pathfinding later |
-| 7 | **AI / brain + pathfinding** (goal selectors or brain, sync A* navigation, mob spawning) | Stage 6 (physics/collision), Stage 5 (entities) | Pathfinding needs collision; brain needs entities + world. Highest-value async target, so its request→result seam must be clean. | Pathfinding, brain ticks, and spawn candidate selection all built as request→snapshot→result, executed **synchronously** for now |
-| 8 | **Command dispatch + chat** | Stage 2 (tick), Stage 4 (players) | Orthogonal; can slot in any time after players exist. | Commands enqueue into tick like any inbound intent |
-| 9 | **Leaf concurrency optimizations** (async pathfinding, async entity tracker, DAB, async spawn, linear region format, lock-free queues) | Stages 4–8 complete | "You cannot async-optimize logic that does not yet exist." Each optimization swaps a synchronous executor for a goroutine pool behind the seam built in stages 4–7. No caller changes. | This stage *consumes* the seams; if stages 4–7 built them, this is additive, not a rewrite |
-| 10 (stretch) | **Folia-style regionization** | Stage 9 ownership model proven | If single-tick-thread becomes the bottleneck after async offload, partition the world into per-region tick goroutines. Only viable because state was ownership-isolated, not lock-shared, from stage 2. | Tick loop generalizes from 1 owner to N region-owners |
+No new mechanism — FloatGoal declares `flags = ["JUMP"]` in the plugin and the EXISTING `goalSelector` (`ai_goal.go`) arbitrates it. At priority 0 it outranks everything; while it holds JUMP, its `requiresUpdateEveryTick=true` ticks it every tick (the existing `tickRunningGoals` path, `ai_goal.go:282`). **This is the FIRST real use of the JUMP flag** — verify the flag-lock arbitration handles a JUMP-only goal (it does: `goalCanBeReplacedForAllFlags` is flag-generic, `ai_goal.go:182`).
 
-**One-line dependency chain:** `data → protocol/net → tick spine → world/chunks → player-in-world → entities → physics → AI/pathfinding → (commands) → async optimizations → (regionization)`.
+### New vs modified
 
-## Concurrency Seams (where Leaf attaches later — design these in early)
+| Component | New/Modified | File |
+|-----------|--------------|------|
+| `mobAI.jumpControl` field + jump-impulse in `serverAiStep` | NEW field, MODIFIED `serverAiStep` | `ai_mob.go` |
+| `jumpFromGround` impulse port | NEW | `ai_mob.go` or `physics.go` |
+| `mobIsInWater` / `mobFluidHeight` | NEW | `fluid_mob.go` (new) |
+| `nav.jump()` / `entity.in_water` handle ops | NEW handle attrs | `plugin_entity.go` |
+| FloatGoal plugin goal | NEW | `plugins/vanilla_pig/main.star` (+ each swimming mob) |
 
-| Seam | Built synchronously in stage | Async swap in stage 9 | What must be true at build time so the swap is non-breaking |
-|------|------------------------------|------------------------|--------------------------------------------------------------|
-| **Pathfinding** | 7 | async pathfinding goroutine pool | Path request carries an immutable nav snapshot; result returns via channel drained in tick phase 7; navigation tolerates a path arriving 1+ ticks late (Leaf's `path.isProcessed()` / callback model) |
-| **Entity tracking** | 4 | async entity tracker pool | Tracked-set computation reads only snapshotted entity positions; emits deltas applied in-tick; "intervals adapt via backpressure" — so make tracking interval a tunable, not hardcoded every-tick |
-| **Mob spawning** | 7 | async spawn executor (note: Leaf removed this in 1.21.7 — treat as optional) | Spawn candidate scan runs on snapshot of chunk/entity density; actual spawn (state mutation) happens in-tick |
-| **Brain / AI (DAB)** | 7 | distance-aware brain frequency throttling | Brain tick frequency is a per-entity tunable keyed on nearest-player distance; brain reads memories/sensors that can be snapshotted |
-| **Persistence I/O** | 3 | already off-tick | Save serialization works on dirty-copied data; never blocks the tick on disk |
-| **Region partitioning** | 2 (ownership rule) | per-region tick goroutines (Folia model, stretch) | No game state guarded by mutexes; all mutation funnels through an owner. If true, partitioning = giving each region its own owner + cross-region ops via the global/coordination queue |
+---
 
-**The single most important early decision:** adopt **ownership-based synchronization at stage 2** (tick loop owns all game state; off-thread code only snapshots-in and channels-results-out). Every seam above is cheap if this holds and a rewrite if it does not. Folia and Leaf both prove the model; the cost of imposing it on a single-threaded v1 is near zero (one goroutine owns everything anyway), and it is the entire insurance policy against the "concurrency-ready from day one" requirement.
+## 3. Animal Aging + Breeding
 
-## How go-mc Slots In (and where the seams are)
+### Where age/inLove/babyness live
 
-| go-mc package | Role in Ender | Seam / boundary |
-|---------------|---------------|-----------------|
-| `net`, `net/packet`, `CFB8` | Wire codec: framing, VarInt, compression, encryption. Used by stage-1 conn goroutines. | Provides codec only — Ender owns the per-conn goroutine lifecycle and the channel boundary to the tick |
-| `server` | Connection framework: login flow, keepalive, player list scaffolding. **No game loop, no world, no entities** (confirmed: "focused on protocol and connection management"). | The seam is exactly here: go-mc stops at "client logged in." Ender's tick loop, world, entities, AI begin past this line. This is the ~70% Ender builds. |
-| `level`, `level/block`, chunk structs | Chunk/block **data structures** (block states, sections). Used by stage-3 chunk system. | Data only — Ender owns chunk *management* (tickets, loading, view tracking, ticking) |
-| `save`, `save/region` | MCA region file read/write, `LevelData`/level.dat. Used by stage-3 + persist goroutine. | I/O primitives only — Ender owns *when* (off-tick scheduling, dirty tracking) |
-| `nbt` | NBT encode/decode for persistence, player data, (legacy) metadata. | Library; no seam concern |
-| `chat` | Chat component format (JSON + legacy §). Used by stage-8 commands/chat. | Library; note 1.20.5+ moved slots to data components (not NBT) — verify chat/component handling against generated 776 data |
-| `data` | Static registries. **Replaced/augmented** by the stage-0 codegen output for 776. | Ender's generated `data/` supersedes this for version accuracy |
-| `yggdrasil`, `realms`, `bot` | Auth (online-mode, later), Realms (out of scope), client bot (test harness only). | Online-mode auth is a later stage; offline-mode first keeps stage 1 simple |
+Add to `*Entity` (these are `Animal`/`AgeableMob` fields, ported from `net.minecraft.world.entity.AgeableMob` + `Animal`):
 
-**Summary of the seam:** go-mc gives Ender the *wire* (net/codec), the *data shapes* (level/chunk/nbt), and the *persistence I/O* (save/region) — roughly the 30% noted in PROJECT.md. The boundary where go-mc ends and Ender begins is precisely the line "a client is connected and authenticated." Everything that makes it a *game* — the tick loop, world simulation, entities, AI, physics, commands — is Ender, and all of it lives behind the network/persistence channel boundaries that double as the concurrency seams.
+```go
+age       int32 // AgeableMob.age (<0 = baby ticking up to 0 = adult; >0 = breeding cooldown)
+forcedAge int32 // AgeableMob.forcedAge
+inLove    int32 // Animal.inLoveTime (>0 = in love; decrements; partner search runs while >0)
+loveCause int32 // Animal.loveCause (the player id who fed it — for baby owner/stats)
+```
 
-## Anti-Patterns
+**Folia:** plain ints on `*Entity`, travel at the barrier. The decrement (`age`/`inLove` countdown) is a per-tick mob update — put it in a new `tickMobAging` step or fold it into the mob's `customServerAiStep` slot in `serverAiStep`. Single-owner.
 
-### Anti-Pattern 1: Mutex-guarded shared game state
-**What people do:** Put a `sync.RWMutex` on the chunk map / entity registry and let any goroutine lock-and-mutate.
-**Why it's wrong:** It "works" single-threaded but locks become the bottleneck and the source of deadlocks the moment you add async workers; converting to a region model later is a full rewrite. Folia explicitly rejects this: "ownership-based synchronization eliminates lock contention."
-**Do this instead:** One owner goroutine per state partition; mutate only in-tick; off-thread code snapshots in / channels out.
+**Bit-fragile risk:** `inLove`/`age` decrements are new per-tick mutations on EVERY animal including the pig. The pig oracle (`TestPluginPigEqualsGoNativePig`) compares Go-native vs plugin pig over 500 ticks. **Aging does not draw RNG** (it's a pure decrement), so it does not perturb the RNG stream — SAFE. The hazard is BreedGoal's spawn-time RNG (below).
 
-### Anti-Pattern 2: Off-thread workers reading live game state
-**What people do:** Pass a `*Entity` or live chunk pointer into the pathfinding goroutine to "save a copy."
-**Why it's wrong:** Instant data race when the tick mutates that entity concurrently. This is the #1 way async optimizations introduce heisenbugs.
-**Do this instead:** Pass an immutable snapshot struct; return a plain result; apply in-tick.
+### Baby spawn — reuse `spawnDeclaredMob`
 
-### Anti-Pattern 3: Async-first, before vanilla logic exists
-**What people do:** Build the pathfinder async from the start to "save a rewrite."
-**Why it's wrong:** You cannot validate correctness of logic you haven't built, and you debug concurrency + game logic simultaneously. PROJECT.md is explicit: "you cannot async-optimize logic that does not yet exist."
-**Do this instead:** Build synchronous behind the request→result seam; flip the executor to a goroutine pool in stage 9.
+A baby is spawned by `BreedGoal.spawnChildFromBreeding` → `getBreedOffspring`. **Reuse `spawnDeclaredMob` (`plugin_mob_decl.go:385`) verbatim** — it already:
+- routes to `regionForEntity(e).entities.add` (line 405) — the baby lands in its position's owning region;
+- reseeds per-entity RNG by id (`reseedMobAI`, line 395) — the baby gets its own deterministic stream.
 
-### Anti-Pattern 4: Pure ECS to chase performance
-**What people do:** Adopt a data-oriented ECS for entities to maximize cache locality.
-**Why it's wrong:** It diverges from vanilla's OOP brain/goal model, making "vanilla-faithful" behavior porting much harder, for a performance win the async-offload model already largely delivers.
-**Do this instead:** OOP entities with snapshot-friendly hot data; reconsider ECS only if entity throughput becomes the proven bottleneck.
+The baby is the SAME declared mob with `age` set negative (the `setBaby` analogue). The plugin's breed goal calls a new spawn handle op `world.spawn_baby(parent_a, parent_b)` that resolves both parents (thin-id), picks the midpoint, and calls `spawnDeclaredMob` with a baby age.
 
-### Anti-Pattern 5: Blocking the tick on I/O or async completion
-**What people do:** Synchronously read a chunk from disk, or `<-result` (block) inside the tick.
-**Why it's wrong:** A 50 ms tick budget cannot absorb disk latency; one blocking call stalls the whole world (TPS drop).
-**Do this instead:** Chunk load/save and async compute are fire-and-forget into queues; the tick *drains what's ready* (non-blocking `select … default`) and moves on.
+### Partner/parent search broad-phase — Folia is the hard part
 
-## Scaling Considerations
+BreedGoal's `canUse` scans for a nearby in-love partner of the same type within ~8 blocks; FollowParentGoal scans for the nearest adult of the same type within range. Use the EXISTING broad-phase:
+- same-region search: `t.cur().entities.near(x, z, rangeChunks)` (the per-section bucket scan the spawner uses, `spawner.go:417`).
+- **cross-region search: `entitiesNearAcrossRegions` (`region_transfer.go:143`) — but it MUST run at the quiescent barrier, NOT mid-region-tick** (its doc-comment: "runs at the QUIESCENT barrier ... reading multiple region stores is -race clean by construction"). A breed partner one column away IS in the other region (checkerboard split).
 
-| Scale | Architecture posture |
-|-------|----------------------|
-| 1 player, dev | Single tick thread, all sync. Validates correctness. Stages 1–8. |
-| ~tens of players, vanilla parity | Single tick thread + async pathfinding/tracker (stage 9). This is where Leaf's wins land: heavy compute off the main thread, tick stays under 50 ms. DAB throttles distant brains. |
-| hundreds, spread out | Folia-style regionization (stage 10). Only reachable because state was ownership-isolated from stage 2. Players spread across regions tick in parallel. |
+**RESOLUTION for cross-region partner search:** the partner scan inside a goal's `canUse` runs DURING the region fan-out (a goal callback is on the owning region's goroutine, `plugin_mob_ai.go:78`). It therefore CANNOT call `entitiesNearAcrossRegions` (that races the other region's concurrent tick). Two options:
+1. **Same-region-only partner search (recommended for v5 first cut):** the goal's handle op uses `h.region.entities.near(...)` (the bound region's store, race-clean). Breeding only works between two animals the same region owns. Visually identical for animals herded together (they share a region most of the time); the seam case (partners split across the checkerboard) simply doesn't breed until one wanders into the other's region — acceptable, documented deviation.
+2. **Barrier-resolved breed (full fidelity):** the goal sets an `intent` flag; a coordinator-side post-barrier step (like `applyCrossRegionTransfers`) runs the cross-region partner match with `entitiesNearAcrossRegions` and spawns the baby. More complex; defer to a follow-up if the same-region cut shows visible gaps.
 
-**First bottleneck:** the single tick thread saturating at 50 ms — relieved by stage-9 async offload (pathfinding and entity tracking are the classic top consumers per Leaf/Mojang MC-198840 "entities do pathfinding on the main thread").
-**Second bottleneck:** the tick thread *itself* even after offload (dense single region) — relieved by stage-10 regionization.
+**Pick option 1 for v5.** It keeps every goal callback strictly region-local (the whole thin-handle invariant) and avoids a new barrier phase.
+
+### New vs modified
+
+| Component | New/Modified | File |
+|-----------|--------------|------|
+| `*Entity.age/forcedAge/inLove/loveCause` | NEW fields | `entity.go` |
+| `tickMobAging` (decrements) | NEW | `ai_mob.go` or new `aging.go` |
+| `world.spawn_baby` / `entity.set_in_love` / `entity.age` handle ops | NEW handle attrs | `plugin_entity.go` |
+| same-region partner search op (`entities_near` filtered by type + in_love) | NEW handle attr (uses `h.region.entities.near`) | `plugin_entity.go` |
+| BreedGoal + FollowParentGoal plugin goals | NEW | each animal plugin |
+| baby spawn | REUSED `spawnDeclaredMob` | — |
+
+---
+
+## 4. Held-Item Read + Item Tags
+
+### Held-item read — reuse the player scan
+
+TemptGoal's `canUse` finds the nearest player holding a tempting item. The player scan already exists: `nearestPlayerAt` (`ai_goals_passive.go:244`) and the handle seam `world.nearest_player` (`plugin_entity.go:607` area). v5 adds a held-item read to the player result.
+
+**Gap:** `nearestPlayerAt` returns only `(x,y,z)`. TemptGoal needs the player's main-hand item. Add a variant that returns the player id, then a new handle op `world.player_main_hand(player_id)` → the player's selected hotbar `component.SlotData` item id. The player's inventory/held slot is `*tickPlayer` state (coordinator-shared read). **Folia note:** players are NOT in the per-region entity store; `t.players` is read on any region goroutine (the existing `nearestPlayerAt` already does this mid-tick). Reading a player's held item id (a scalar) is a race-clean read of stable-per-tick player state — same safety class as the existing position read.
+
+### ItemTags membership
+
+The deferred goals cite `ItemTags.PIG_FOOD` and `Items.CARROT_ON_A_STICK`. Item tag data ships in the jar and is codegen-extracted (the `tools/` pipeline already extracts registries/tags — see `server/registrydata/tags/`). v5 adds an item-tag lookup:
+
+```go
+// itemTagContains reports whether an item id is in the named tag (ItemTags.PIG_FOOD).
+// Data sourced from the codegen'd item-tag tables (registrydata/tags/item/...), embedded once.
+func itemTagContains(tag string, itemID int32) bool { ... }
+```
+
+The plugin TemptGoal calls a handle op `item_in_tag(item_id, "pig_food")`. **Folia:** tag data is immutable embedded data — read from any goroutine, lock-free. No hazard.
+
+### New vs modified
+
+| Component | New/Modified | File |
+|-----------|--------------|------|
+| `nearestPlayerAt` variant returning player id | MODIFIED/NEW | `ai_goals_passive.go` |
+| `world.player_main_hand(id)` handle op | NEW | `plugin_entity.go` |
+| `itemTagContains` + embedded item-tag data | NEW | `item_tags.go` (new) + `registrydata/tags/item/` |
+| `world.item_in_tag` handle op | NEW | `plugin_entity.go` |
+| TemptGoal plugin goal (×2: PIG_FOOD + CARROT_ON_A_STICK) | NEW | each animal plugin |
+
+---
+
+## 5. New Mobs as Plugins
+
+### Each is a Starlark plugin via `declare_mob`/`goal`
+
+The base types already resolve (`baseTypeByName`, `plugin_mob_decl.go:107` — cow/sheep/chicken/skeleton/spider/zombie/cat are ALREADY in the map; **wolf is NOT — add `"wolf": entity.Wolf`**). The attribute suppliers already exist (`level/attribute/defaults.go` — zombie/cow/sheep/chicken/skeleton/spider confirmed; **verify wolf has a supplier or add `wolfSupplier`**). Each mob follows the `vanilla_pig/main.star` shape exactly.
+
+### Hostiles: the second (target) selector — DOES need a new selector instance
+
+The vanilla `Mob` has TWO `GoalSelector`s: `goalSelector` (movement/look/jump) and `targetSelector` (TARGET-flag goals like `NearestAttackableTargetGoal`). The jar's `serverAiStep` order (documented at `ai_mob.go:6`) is:
+
+```
+sensing.tick → targetSelector.tick → goalSelector.tick
+  → targetSelector.tickRunningGoals(true) → goalSelector.tickRunningGoals(true)
+  → navigation.tick → customServerAiStep → moveControl/lookControl/jumpControl
+```
+
+Today `serverAiStep` SKIPS `targetSelector` (`ai_mob.go:107`: "no attack targets for a passive Pig"). **For hostiles, `mobAI` needs a second `goalSelector` field `targetSelector goalSelector`**, and `serverAiStep` must run it in the jar order:
+
+```go
+// mobAI (ai_mob.go) — ADD:
+targetSelector goalSelector  // the TARGET-flag selector; empty for a passive mob (zero-cost)
+
+// serverAiStep (ai_mob.go:105) — INSERT before goals.tick, in jar order:
+m.targetSelector.tick(t, e)            // NearestAttackableTargetGoal etc.
+m.goals.tick(t, e)
+m.targetSelector.tickRunningGoals(t, e, true)
+m.goals.tickRunningGoals(t, e, true)
+```
+
+**A second selector instance, NOT a second mechanism** — it reuses the EXISTING `goalSelector` type and arbitration. `buildAIFromDecl` (`plugin_mob_ai.go:185`) routes a goal whose flags include `TARGET` into `m.targetSelector` instead of `m.goals` (a one-line split on `gd.flags&flagTarget`).
+
+The shared "current target" (the attack target a TargetGoal sets and MeleeAttackGoal reads) is new `*Entity`/`mobAI` state: `attackTargetID int32` (a THIN id — never a live `*Entity`, re-resolved on the owner). Folia-safe by the same id-carry discipline.
+
+### MeleeAttackGoal — reuses the goalSelector + nav
+
+`MeleeAttackGoal` (a normal MOVE-flag goal in `m.goals`) paths to the target via the EXISTING navigation, and when in attack-reach calls the damage op (§1, mob→player or mob→mob). Attack-reach lives as a goal constant in the plugin (vanilla computes it from `mob.getBbWidth()*2 + target.getBbWidth()` — port that). No new selector.
+
+### Day/night spawn gating
+
+Vanilla MONSTER spawns gate on light level + (some) on `isNight`. The spawner (`spawner.go`) currently relaxes light (no light engine, documented in `spawner.go`). v5 spawn gating for hostiles lives in `spawner.go`'s `naturalSpawn` / a per-category `checkSpawnRules`. **The MONSTER category cap (70) already exists** (`mob_category.go`, referenced in PROJECT.md). Add the night/light gate to the spawn-candidate filter; gametime→day/night is `t.gametime % 24000`. This is a server-side spawn-eligibility check, not a per-mob hot-path concern — Folia-safe (runs in the existing `naturalSpawn` which already handles the global cap via `countByCategoryAcrossRegions`).
+
+### New vs modified
+
+| Component | New/Modified | File |
+|-----------|--------------|------|
+| `mobAI.targetSelector` field + `serverAiStep` jar-order insert | NEW field, MODIFIED | `ai_mob.go` |
+| `buildAIFromDecl` TARGET-flag split into targetSelector | MODIFIED | `plugin_mob_ai.go` |
+| `*Entity.attackTargetID` (thin id) | NEW field | `entity.go` |
+| `"wolf"` base type + `wolfSupplier` (if absent) | MODIFIED/NEW | `plugin_mob_decl.go`, `level/attribute/defaults.go` |
+| day/night + light spawn gate | MODIFIED | `spawner.go` |
+| cow/sheep/chicken/zombie/skeleton/spider/wolf plugins | NEW | `plugins/*/main.star` |
+| MeleeAttackGoal, NearestAttackableTargetGoal, wolf goals | NEW (plugin goals) | each plugin |
+
+---
+
+## 6. Suggested Build Order (dependency-driven)
+
+```
+Phase A — DAMAGE KEYSTONE (combat_mob.go + damage_source.go + *Entity fields)
+   └─ everything downstream needs a mob that can take/deal damage
+   └─ deliver: applyDamageEntity/actuallyHurtEntity, lastDamageSource, damageSource+tags,
+              cross-region damageIntent barrier queue, handleAttack dual-resolve,
+              entity handle was_hurt/last_damage_type attr, region-scoped on_damage Emit
+   └─ GATE: a player can hit a spawned (Go-native) mob; mob takes i-frame-gated damage;
+            on_damage fires; lastDamageSource is set. PIG ORACLE STILL GREEN (no AI RNG touched).
+
+Phase B — JUMPCONTROL + FLUID (ai_mob.go jumpControl, fluid_mob.go, FloatGoal)
+   └─ independent of A; sequence after A to keep the pig-plugin churn serial
+   └─ deliver: mobAI.jumpControl + jump impulse, mobIsInWater/mobFluidHeight, nav.jump()/
+              entity.in_water handle ops, FloatGoal on the pig plugin (+ the Go-native oracle)
+   └─ GATE: pig FloatGoal@0 wired; pig in water jumps; FloatGoal claims JUMP via goalSelector.
+            RNG RISK: FloatGoal draws nextFloat() < 0.8 every tick it runs — see §7.
+
+Phase C — PANICGOAL (depends on A's lastDamageSource)
+   └─ deliver: PanicGoal@1 on the pig plugin (+ oracle) reading entity.was_hurt/last_damage_type
+              + the panic-causing damage-type tag set
+   └─ GATE: a hit pig panics (flees). PanicGoal@1 wired.
+
+Phase D — HELD-ITEM + ITEM TAGS (item_tags.go, player_main_hand op)
+   └─ independent of A/B/C; needed before breeding (Tempt feeds → in_love)
+   └─ deliver: itemTagContains + embedded tag data, world.player_main_hand,
+              world.item_in_tag, nearestPlayer-with-id
+   └─ GATE: pig TemptGoal@4 ×2 wired (+ oracle); pig follows a player holding carrot/pig-food.
+
+Phase E — AGING + BREEDING (entity.go age/inLove, aging.go, spawn_baby, BreedGoal+FollowParent)
+   └─ depends on D (feeding sets in_love) and reuses spawnDeclaredMob
+   └─ deliver: age/inLove fields + tickMobAging, same-region partner search op,
+              spawn_baby, BreedGoal@3 + FollowParentGoal@5 on the pig (+ oracle)
+   └─ GATE: two fed pigs breed a baby; baby follows parent. PIG PARITY COMPLETE (all 5 deferred
+            goals wired) — the DOGFOOD GATE (TestPluginPigEqualsGoNativePig over the full 8-goal set).
+
+Phase F — NEW PASSIVE MOBS (cow/sheep/chicken plugins; reuse A–E subsystems)
+   └─ pure plugin authoring against the now-complete subsystem set; no new Go subsystems
+   └─ GATE: cow/sheep/chicken spawn, wander, breed, panic, float — all via plugins.
+
+Phase G — HOSTILES (mobAI.targetSelector, serverAiStep jar-order, buildAIFromDecl split,
+                     attackTargetID, day/night spawn gate, zombie/skeleton/spider plugins)
+   └─ depends on A (mob→player damage) + the targetSelector insert
+   └─ deliver: second selector, target-flag routing, MeleeAttackGoal, NearestAttackableTargetGoal,
+              day/night spawn gating
+   └─ GATE: zombie targets + chases + hits a player at night; respects MONSTER cap.
+
+Phase H — WOLF (neutral; depends on A's lastDamageSource for anger-on-hit + G's target machinery)
+   └─ deliver: wolf base type + supplier, tame/owner/sit/anger plugin goals
+   └─ GATE: wolf tames, sits, retaliates when hit (reads lastDamageSource.attacker).
+```
+
+**Rationale chain:** Damage is the keystone (PanicGoal, hostiles, wolf-anger all read `lastDamageSource`). Held-item precedes breeding (feeding sets `in_love`). Pig parity (Phase E) is the dogfood gate — it must complete before new mobs (F/G/H) so the subsystem set is proven 1:1 against the oracle before reuse. Hostiles need the target-selector; wolf needs both damage and the target machinery, so it's last.
+
+---
+
+## 7. THE BIT-FRAGILE PIG ORACLE — explicit risk + mitigation
+
+`TestPluginPigEqualsGoNativePig` (`plugin_pig_test.go:256`) ticks a Go-native pig and a plugin pig in lockstep for 500 ticks and demands byte-identical observations. Both pigs draw from a per-mob seeded RandomSource (`entityRandom`, `ai_mob.go:53`) whose DRAW ORDER must match the jar. **Any new RNG draw inserted into the shared `serverAiStep`/goal flow at the wrong point shifts every subsequent draw and breaks the oracle.**
+
+### Where new draws are SAFE vs DANGEROUS
+
+| New draw | Where | Safe? | Why |
+|----------|-------|-------|-----|
+| Aging decrement (age/inLove--) | `tickMobAging` | SAFE | no RNG — pure integer decrement |
+| FloatGoal `nextFloat() < 0.8` | inside FloatGoal.tick (running only) | SAFE **IF** the Go-native oracle ALSO ports FloatGoal with the identical draw | oracle pig + plugin pig must BOTH gain FloatGoal in the same draw position |
+| PanicGoal flee-pos draws | inside PanicGoal.canUse (running only) | SAFE same condition | both oracle + plugin must port it identically |
+| BreedGoal partner search | inside BreedGoal.canUse | DANGEROUS if it draws RNG | vanilla BreedGoal.canUse does a deterministic scan (no RNG) for the partner; the baby's attributes draw RNG only at spawn — keep spawn-RNG OUT of the 500-tick observation window or seed it identically on both sides |
+| TemptGoal | inside TemptGoal.canUse | SAFE same condition | port identically into BOTH oracle + plugin |
+
+### The governing rule
+
+**The Go-native pig oracle (`newPigAI`, `ai_mob.go:138`) and the plugin pig (`vanilla_pig/main.star`) must gain each new goal IN LOCKSTEP, with the identical jar-faithful draw order, in the SAME phase.** The oracle is not a frozen 3-goal pig — it must grow to the full 8-goal pig alongside the plugin. The deferred-goals.md audit already pairs each goal to its jar class + draw order; port each goal's draws into BOTH sides in the same plan. The dogfood gate (Phase E) is exactly the proof that the lockstep held.
+
+**Do NOT** add any unconditional per-tick RNG draw to `serverAiStep`, `tickAI`, or `tickPhysics` (none exists today — confirmed: the only draws are inside running goals). New per-tick mob updates (aging) must be RNG-free. New RNG must live INSIDE a goal's running callback, ported identically on both sides.
+
+### Secondary fragility — `serverAiStep` order
+
+Inserting the `targetSelector` calls (§5) changes `serverAiStep` for ALL mobs including the pig. **Mitigation:** the pig's `targetSelector` is EMPTY (zero goals), and `goalSelector.tick` over an empty selector draws no RNG and starts no goal — so the inserted `m.targetSelector.tick(t,e)` is a no-op for the pig. Verify with a test that an empty targetSelector tick is observationally identical (it is, by construction: empty `goals` slice → both loops in `goalSelector.tick` iterate zero times). This keeps the order change behavior-neutral for the pig oracle while enabling hostiles.
+
+---
+
+## 8. Integration Points Summary (file:function quick-reference)
+
+| v5 subsystem | Hooks into (existing) | New file(s) |
+|--------------|----------------------|-------------|
+| Mob damage | `attack_dispatch.go:91 handleAttack`; `combat.go` CombatRules helpers (reuse); `region_transfer.go:86 emitEntityEvent` | `combat_mob.go`, `damage_source.go` |
+| JumpControl/fluid | `ai_mob.go:105 serverAiStep` (JUMP slot), `:29 mobAI`; `fluid.go:246 fluidAt`; `entity.go:214 AABB` | `fluid_mob.go` |
+| Aging/breeding | `entity.go *Entity`; `plugin_mob_decl.go:385 spawnDeclaredMob` (reuse); `region_transfer.go:143 entitiesNearAcrossRegions` (same-region cut); `spawner.go:417 near` | `aging.go` |
+| Held-item/tags | `ai_goals_passive.go:244 nearestPlayerAt`; `plugin_entity.go` handle attrs; `registrydata/tags/item/` | `item_tags.go` |
+| New mobs | `plugin_mob_decl.go:107 baseTypeByName` (+wolf); `plugin_mob_ai.go:185 buildAIFromDecl` (TARGET split); `ai_mob.go serverAiStep` (targetSelector); `spawner.go naturalSpawn` (day/night); `level/attribute/defaults.go` | `plugins/{cow,sheep,chicken,zombie,skeleton,spider,wolf}/main.star` |
+
+### Internal Boundaries
+
+| Boundary | Communication | Folia rule |
+|----------|---------------|-----------|
+| Plugin goal ↔ mob | thin-id `entityHandle` (`plugin_entity.go:35`), re-resolve `store().get(id)` on owner | NEVER a live `*Entity` crosses the Starlark boundary |
+| Mob ↔ mob (breed/target) | thin id (`attackTargetID`, partner id), re-resolved on owner; same-region search only | no cross-region store read mid-tick |
+| Player→mob / mob→player attack | barrier-queued `damageIntent` onto the victim's owning region | no cross-region health mutation mid-tick |
+| New `*Entity` state ↔ region | the `*Entity` pointer is adopted at the barrier (`applyCrossRegionTransfers`) | all new fields travel with the pointer, never aliased mid-tick |
+| Entity event ↔ plugin | `emitEntityEvent` (region-scoped) | registry shared+frozen; handles region-bound |
+
+---
+
+## Anti-Patterns (v5-specific)
+
+### Anti-Pattern 1: Generalizing combat.go in place with an interface
+**What people do:** make `applyDamage` take a `LivingEntity` interface so player + mob share one path.
+**Why it's wrong:** the two paths read DIFFERENT attribute backends (player holder vs `*attribute.Map`), drive DIFFERENT death (death-screen packet vs despawn), and the player path is v3-sealed + tested. An interface forces both through a new abstraction and risks the player oracle.
+**Do this instead:** parallel `applyDamageEntity` sibling; factor only the pure CombatRules/clamp helpers (already free functions).
+
+### Anti-Pattern 2: Cross-region partner/target/damage mutation mid-tick
+**What people do:** a goal callback calls `entitiesNearAcrossRegions` or mutates another region's entity directly during the fan-out.
+**Why it's wrong:** races the other region's concurrent tick; `-race` fails; the checkerboard split means an adjacent column is the OTHER region, so this fires constantly.
+**Do this instead:** same-region search (`h.region.entities.near`) for partner/target; barrier-queued `damageIntent` for cross-region hits — the `transferIntent`/`asyncIn2` discipline.
+
+### Anti-Pattern 3: Adding RNG to the shared per-tick flow
+**What people do:** add a `nextFloat()` somewhere in `serverAiStep`/`tickAI` for a new behavior.
+**Why it's wrong:** shifts the pig oracle's draw stream → `TestPluginPigEqualsGoNativePig` breaks.
+**Do this instead:** RNG ONLY inside a running goal's callback, ported identically into BOTH the Go-native oracle pig and the plugin pig in the same plan; per-tick mob updates (aging) stay RNG-free.
+
+### Anti-Pattern 4: Faking a hurt flag / faking jumpControl
+**What people do:** a bool `wasHurt` the goal reads, or a raw `vy` poke for FloatGoal.
+**Why it's wrong:** the deferred-goals.md audit explicitly forbids it — it's not the vanilla `getLastDamageSource()`/`JumpControl.jump()`, violating the 1:1 mandate.
+**Do this instead:** the real ported `lastDamageSource` set by `applyDamageEntity`; the real `jumpFromGround` impulse via the `jumpControl` latch.
+
+---
 
 ## Sources
 
-- PaperMC/Folia Region Threading System — DeepWiki (region definition, thread ownership, async reintegration, ownership-based sync): https://deepwiki.com/PaperMC/Folia/2-region-threading-system [HIGH]
-- Folia overview — paper-chan.moe & papermc.io (regionized ticking, 20 TPS per region): https://paper-chan.moe/folia/ , https://papermc.io/software/folia/ [HIGH]
-- PaperMC/Paper Tick Loop and Task Scheduling — DeepWiki (single main thread, scheduler): https://deepwiki.com/PaperMC/Paper/3.2-tick-loop-and-task-scheduling [HIGH]
-- Winds-Studio/Leaf Features and Benefits — DeepWiki (async pathfinding, async tracker, DAB, async spawn, rejoin pattern): https://deepwiki.com/Winds-Studio/Leaf/1.1-features-and-benefits [HIGH]
-- Leaf docs / global config (DAB, async pathfinding behavior): https://docs.leafmc.one/reference/config/leaf-global/ [MEDIUM]
-- Mojang bug MC-198840 "Entities do pathfinding on the main Thread" (confirms the offload target): https://bugs.mojang.com/browse/MC-198840 [HIGH]
-- Tnze/go-mc package layout — GitHub & pkg.go.dev (net/server/level/save/nbt/chat/data scope; server = connection framework, no game loop): https://github.com/Tnze/go-mc , https://pkg.go.dev/github.com/Tnze/go-mc [HIGH]
-- go-mc save package (LevelData / region format): https://pkg.go.dev/github.com/Tnze/go-mc/save [HIGH]
-- Minecraft single-threaded tick loop / 20 TPS / 50 ms budget (vanilla behavior): https://deepwiki.com/PaperMC/Paper/3.2-tick-loop-and-task-scheduling , https://wabbanode.com/blog/minecraft/minecraft-server-tps-explained [MEDIUM]
-- ECS vs OOP tradeoffs & Go game-server concurrency (goroutines/channels per-connection, ticker-driven sim): https://github.com/SanderMertens/ecs-faq , https://reintech.io/blog/implementing-multiplayer-game-server-with-go [MEDIUM]
+- `server/combat.go`, `attack_dispatch.go`, `attributes.go` — the player damage pipeline + the dual attribute system (read this session) — HIGH
+- `server/ai_mob.go`, `ai_goal.go`, `navigation.go`, `tick_phases.go` — AI driver, goalSelector, jumpControl deferral, tickAI call site — HIGH
+- `server/fluid.go` — `fluidAt` raw read primitive — HIGH
+- `server/plugin_mob_decl.go`, `plugin_mob_ai.go`, `plugin_entity.go` — declare_mob/spawn path, thin-id handle bridge, region-bound handles — HIGH
+- `server/region_transfer.go`, `spawner.go` — Folia routing, cross-region scan, barrier transfer, mob cap — HIGH
+- `plugin/host/event.go` — the 8 EventType set + DamageEvent payload — HIGH
+- `server/entity.go` — `*Entity` fields + the snapshot-friendly contract + real `*attribute.Map` — HIGH
+- `.planning/milestones/v4-phases/24-vanilla-mobs-as-plugins/deferred-goals.md` — the 5 deferred goals + cited missing subsystems — HIGH
+- `plugins/vanilla_pig/main.star` — the plugin shape new mobs follow — HIGH
+- `level/attribute/defaults.go` (grep) — existing suppliers (zombie/cow/sheep/chicken/skeleton/spider confirmed; wolf to verify) — HIGH
+- `.planning/PROJECT.md` — milestone goals, thin-id + regionize decisions — project ground truth
 
 ---
-*Architecture research for: Minecraft Java 26.2 server in Go (Ender)*
-*Researched: 2026-06-23*
+*Architecture research for: v5 mob subsystem integration into Sulfur*
+*Researched: 2026-06-29*
