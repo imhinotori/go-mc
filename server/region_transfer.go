@@ -115,6 +115,25 @@ func (t *TickLoop) withRegion(r *region, fn func()) {
 	fn()
 }
 
+// forEachRegion runs fn once per region with THAT region registered as the calling goroutine's
+// current region (via withRegion), so a coordinator-side per-region phase drained inside fn resolves
+// cur().{entities,fluidSchedule,blockTicks,levelRandom} to the iterated region's OWN store rather than
+// blindly globalRegion. It is the fix for the coordinator-phase bug class: a per-region drain
+// (tickScheduledBlocks/tickFluids) run once on the coordinator silently skipped regions 1..N-1 because
+// cur() fell back to region 0; wrapping each region in turn makes every region's queue drain against
+// the shared world. Skips a region whose entities are nil (a not-yet-constructed standalone region).
+// Runs on the coordinator at the quiescent barrier (no region is ticking), so the temporary
+// per-iteration registration never races a fan-out goroutine. At N=1 it runs exactly once with region
+// 0 registered — identical to the pre-fix single drain (behavior-neutral).
+func (t *TickLoop) forEachRegion(fn func(r *region)) {
+	for _, r := range t.regions {
+		if r.entities == nil {
+			continue
+		}
+		t.withRegion(r, func() { fn(r) })
+	}
+}
+
 // entitiesNearAcrossRegions returns every entity within rangeChunks columns of (x,z) across ALL
 // regions whose column range the query box intersects (Phase-27 STEP-3, Pitfall 2: the cross-region
 // tracker/pickup broad-phase). Because each region owns a disjoint subset of columns (the static
