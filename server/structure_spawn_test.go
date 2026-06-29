@@ -64,6 +64,64 @@ func TestStructureSpawnSeam(t *testing.T) {
 	}
 }
 
+// TestStructureSpawnMobTakesDamageAndDies is the CR-01 regression: a structure-spawned mob (NOT a
+// declared mob — it rides drainStructureSpawns, the spawn path that previously omitted health init)
+// must spawn at its folded MaxHealth, lose health on a player hit, and die when its health reaches 0.
+//
+// Before the fix every structure mob was born at health 0, which made applyDamageEntity's
+// `e.health <= 0` entry guard a silent no-op and treated the mob as already-dead — the keystone
+// "a mob can take and deal damage" (MOB-SUB-01) was silently defeated for this path and NO test
+// covered it. This test would have failed (health 0 at spawn; the hit a no-op) before the fix.
+func TestStructureSpawnMobTakesDamageAndDies(t *testing.T) {
+	loop, _ := newStructureSpawnLoop()
+
+	ch := level.EmptyChunk(blockTestSecs)
+	ch.Status = level.StatusFull
+
+	// A single Witch at column (0,0) -> region 0, so cur()/regionForEntity resolve to the same
+	// single test region (the damage + death store mutations land where the mob lives).
+	reqs := []structure.SpawnRequest{
+		{EntityType: "minecraft:witch", X: 8.5, Y: 65, Z: 8.5, PersistenceRequired: true},
+	}
+	chunkReady{res: world.ChunkResult{Pos: level.ChunkPos{0, 0}, Chunk: ch, Spawns: reqs}}.applyTo(loop)
+
+	// Find the spawned witch in the store.
+	var witch *Entity
+	for _, e := range loop.only().entities.all() {
+		if e.typ == entity.Witch.ID {
+			witch = e
+			break
+		}
+	}
+	if witch == nil {
+		t.Fatal("witch was not spawned into the store")
+	}
+
+	// (1) Born at its folded MaxHealth (Witch MAX_HEALTH = 26.0), NOT health 0 (the bug).
+	const witchMaxHealth float32 = 26.0
+	if witch.health != witchMaxHealth {
+		t.Fatalf("structure mob spawn health = %v, want %v (LivingEntity.<init> setHealth(getMaxHealth())) — health 0 means the CR-01 spawn-health gap is back", witch.health, witchMaxHealth)
+	}
+
+	// (2) A player hit reduces health (the keystone: a structure mob CAN take damage). 0 armor on
+	// the witch base, so the hit lands full (player_attack folds the armor curve over base-0 armor).
+	src := damageSourcePlayerAttack(0)
+	loop.applyDamageEntity(witch, src, 6.0)
+	if witch.health != witchMaxHealth-6.0 {
+		t.Fatalf("after a 6.0 hit, structure mob health = %v, want %v (the hit must land, not be a health-0 no-op)", witch.health, witchMaxHealth-6.0)
+	}
+
+	// (3) Lethal damage kills it: the mob is removed from its owning region store (dieEntity). Wait
+	// out the i-frame window between hits so the second hit is not absorbed by invulnerableTime.
+	for i := int32(0); i < witch.invulnerableTime; i++ {
+		loop.tickMobIFrames(witch)
+	}
+	loop.applyDamageEntity(witch, src, witchMaxHealth) // overkill -> health 0 -> dieEntity
+	if _, ok := loop.only().entities.byID[witch.id]; ok {
+		t.Fatalf("structure mob still in the store after a lethal hit, want removed (dieEntity) — a health-0-born mob could never die through this path")
+	}
+}
+
 // TestStructureSpawnUnknownTypeSkipped: an unresolvable entity-type id is a no-op (never panics,
 // never adds a malformed entity) — the region NBT / build-data robustness contract.
 func TestStructureSpawnUnknownTypeSkipped(t *testing.T) {

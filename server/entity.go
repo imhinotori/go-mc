@@ -249,6 +249,21 @@ func (e *Entity) getAttributeValue(attr *attribute.Attribute) float64 {
 	return e.attributes.GetValue(attr.Name())
 }
 
+// initSpawnHealth sets a freshly-spawned mob's health to its folded MaxHealth — the port of
+// net.minecraft.world.entity.LivingEntity.<init>'s `setHealth(getMaxHealth())`, where
+// getMaxHealth() == (float) getAttributeValue(MAX_HEALTH) (the d2f narrowing matches the vanilla
+// cast site). This MUST run on EVERY mob spawn path (declared, structure, test fixtures): a mob
+// born with health 0 is treated as already-dead — applyDamageEntity's `e.health <= 0` guard and
+// applyMobAttackDamage's `mob.health <= 0` short-circuit make it permanently invulnerable.
+//
+// It is the SINGLE source of truth for spawn-side health init: call it AFTER the attribute map is
+// seeded (seedAttributes / FinalizeSpawn) so it reads the FINAL folded MaxHealth (e.g. the vanilla
+// pig's declared 10.0, not the bare living default). Tick-owned (TICK-05): a pure store-state write
+// on the owner at spawn, no RNG draw.
+func initSpawnHealth(e *Entity) {
+	e.health = float32(e.getAttributeValue(attribute.MaxHealth))
+}
+
 // AABB returns the entity's axis-aligned bounding box in world space, sourced from the
 // data/entity Width/Height copied at spawn (06-RESEARCH Code Example): the box is CENTERED
 // horizontally on x/z (half-width = width/2 on both X and Z), with its BASE at y (the

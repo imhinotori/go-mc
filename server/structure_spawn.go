@@ -66,6 +66,13 @@ func (t *TickLoop) drainStructureSpawns(res world.ChunkResult) {
 		//     persistence/despawn consumer is not wired (mobs never despawn in v1 anyway), so it is
 		//     read-and-held below pending the despawn subsystem.
 		e.leftHanded = attribute.FinalizeSpawn(e.attributes, t.cur().levelRandom)
+		// MOB-SUB-01 (CR-01): LivingEntity.<init> setHealth(getMaxHealth()) — initialize the structure
+		// mob's health to its folded MaxHealth (Witch 26.0, Cat 10.0, Villager 20.0). FinalizeSpawn has
+		// already seeded the attribute map, so initSpawnHealth reads the FINAL value. WITHOUT this every
+		// structure-spawned mob is born at health 0 and is permanently invulnerable (applyDamageEntity's
+		// `health <= 0` guard) — the keystone silently defeated for the structure-spawn path. Shared with
+		// the declared + oracle spawn paths via the one helper (entity.go) so the gap cannot recur.
+		initSpawnHealth(e)
 		_ = req.PersistenceRequired
 		t.cur().entities.add(e) // the ONLY off-tick-boundary store mutation; tracker broadcasts AddEntity
 

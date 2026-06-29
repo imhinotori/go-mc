@@ -61,6 +61,11 @@ func (t *TickLoop) spawnVanillaPigWithID(id int32, x, y, z float64) *Entity {
 	}
 	e := NewEntity(id, decl.baseType, x, y, z)
 	seedAttributes(e.attributes, decl.attrs)
+	// MOB-SUB-01 (WR-01): LivingEntity.<init> setHealth(getMaxHealth()) — mirror spawnDeclaredMob's
+	// health init (the line this test-only helper previously DROPPED, leaving every oracle-spawned pig
+	// at health 0 and the damage/death path untestable on the canonical fixture). Shared helper so this
+	// path stays in lockstep with the production spawners. Read AFTER seedAttributes (final folded 10.0).
+	initSpawnHealth(e)
 	e.ai = buildAIFromDecl(t, decl)
 	t.cur().entities.add(e)
 	reseedMobAI(e.ai, e.id)
