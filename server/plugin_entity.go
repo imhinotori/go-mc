@@ -188,6 +188,20 @@ func (h *entityHandle) Attr(name string) (starlark.Value, error) {
 		// goal resolves the tag membership by NAME via data/tag (e.g. is the id in panic_causes), it never
 		// holds a live DamageSource. Re-resolved through the region-bound h.store(), never t.cur().
 		return starlark.MakeInt(int(e.lastDamageSource.typeTag)), nil
+	case "in_water":
+		// MOB-SUB-04 frozen scalar: whether the mob's AABB intersects any water cell (the FloatGoal.canUse
+		// predicate). Host-COMPUTED through the handle's owner-bound TickLoop over the entity already
+		// re-resolved via h.store() (NOT t.cur() — Pitfall 7); the goal never holds a live fluid state.
+		return starlark.Bool(h.t.mobInWater(e)), nil
+	case "fluid_height":
+		// MOB-SUB-04 frozen scalar: the WATER fluid height at the mob (Entity.getFluidHeight(WATER), the
+		// MAX over the AABB). FloatGoal.canUse compares it against the jump threshold. Host-computed,
+		// re-resolved via h.store().
+		return starlark.Float(h.t.mobFluidHeight(e, fluidWater)), nil
+	case "in_lava":
+		// MOB-SUB-04 frozen scalar: whether the mob's AABB intersects any lava cell (the second
+		// FloatGoal.canUse disjunct). Host-computed, re-resolved via h.store().
+		return starlark.Bool(h.t.mobInLava(e)), nil
 	}
 	// HasAttrs contract: (nil, nil) == "no such field".
 	return nil, nil
@@ -198,6 +212,7 @@ func (h *entityHandle) AttrNames() []string {
 	return []string{
 		"x", "y", "z", "yaw", "pitch", "on_ground", "type", "velocity", "health",
 		"was_hurt", "last_damage_type",
+		"in_water", "fluid_height", "in_lava",
 		"attribute", "move_to", "set_velocity", "set_attribute",
 		"set_look", "set_look_at", "rand_int", "rand_float", "rand_double", "get_state", "set_state",
 	}
@@ -721,11 +736,13 @@ func (h *navHandle) Attr(name string) (starlark.Value, error) {
 		return h.bound("has_path", h.hasPath), nil
 	case "stop":
 		return h.bound("stop", h.stop), nil
+	case "jump":
+		return h.bound("jump", h.jump), nil
 	}
 	return nil, nil
 }
 
-func (h *navHandle) AttrNames() []string { return []string{"path_to", "has_path", "stop"} }
+func (h *navHandle) AttrNames() []string { return []string{"path_to", "has_path", "stop", "jump"} }
 
 // stop() clears the mob's pending nav target — the navigation.stop() analogue (RandomStrollGoal.stop
 // = navigation.stop()). The Go oracle's randomStrollGoal.stop() calls clearWantTarget(); this is that
@@ -744,6 +761,29 @@ func (h *navHandle) stop(_ *starlark.Thread, _ *starlark.Builtin,
 		return nil, fmt.Errorf("entity %d has no AI (cannot nav.stop)", h.id)
 	}
 	e.ai.clearWantTarget()
+	return starlark.None, nil
+}
+
+// jump() arms the mob's JumpControl — the seam a declared FloatGoal's tick callback uses to claim the
+// JUMP flag's impulse (the Starlark twin of the Go FloatGoal calling e.ai.jumpControl.doJump()). It
+// routes to jumpControl.doJump(), which only SETS a bool consumed once per tick by jumpControl.tick
+// in the serverAiStep JUMP slot — so repeated calls within a tick are idempotent (no impulse
+// stacking; the T-30-06 DoS bound). Gated on capNav (a jump is a navigation-adjacent mutate, like
+// path_to / stop). Re-resolves the mob on the OWNER (h.store(), never t.cur() — the T-30-05 Pitfall-7
+// discipline); a removed / non-AI entity errors cleanly (no panic).
+func (h *navHandle) jump(_ *starlark.Thread, _ *starlark.Builtin,
+	_ starlark.Tuple, _ []starlark.Tuple) (starlark.Value, error) {
+	if !h.caps.has(capNav) {
+		return nil, capError("nav")
+	}
+	e, ok := h.store().get(h.id)
+	if !ok {
+		return nil, fmt.Errorf("entity %d no longer exists", h.id)
+	}
+	if e.ai == nil {
+		return nil, fmt.Errorf("entity %d has no AI (cannot nav.jump)", h.id)
+	}
+	e.ai.jumpControl.doJump()
 	return starlark.None, nil
 }
 
