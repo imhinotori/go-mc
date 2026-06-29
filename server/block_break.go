@@ -168,6 +168,15 @@ func (t *TickLoop) digBlockState(pos pk.Position) block.StateID {
 // ordinal (0=START, 1=ABORT, 2=STOP); sequence is the predictive-edit ack id. Runs on the tick
 // goroutine; all sends go through the bounded outbound queue.
 func (t *TickLoop) handleBlockBreakAction(p *tickPlayer, pos pk.Position, action int, sequence int32) {
+	// ACK THE SEQUENCE FIRST (vanilla acks the block-change sequence per action so the client's
+	// predicted dig reconciles even on a REJECTED action — out of reach, above build height, an abort).
+	// Without acking on those fail paths the client's predicted break lingers as a ghost. The success
+	// arms (destroyBlock/destroyAndAck) historically re-acked via reconcileEdit; that ack moved to the
+	// packet entry (handleUseItemOn / here), so it fires exactly once per packet regardless of outcome.
+	if p.client != nil {
+		p.client.Send(blockChangedAck(sequence))
+	}
+
 	// Pre-check 1 — reach: ServerPlayer.isWithinBlockInteractionRange(pos, 1.0). Reuse Sulfur's
 	// existing server-authoritative reach gate (withinReach). Out of range -> "too far" no-op return.
 	if !t.withinReach(p, pos) {

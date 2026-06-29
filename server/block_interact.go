@@ -159,6 +159,19 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 		return // malformed/short payload: no-op, never panic
 	}
 
+	// ACK THE SEQUENCE FIRST — vanilla ServerGamePacketListenerImpl.handleUseItemOn calls
+	// this.ackBlockChangesUpTo(packet.getSequence()) IMMEDIATELY on entry, BEFORE any reach/canPlace/
+	// obstruction validation or early return. The client predicts the placement locally and waits for
+	// this ack to reconcile: on a REJECTED place (out of reach, target not replaceable, obstructed by
+	// the player's own body when jumping, SetBlock no-op) the ack tells the client to ROLL BACK its
+	// predicted block. WITHOUT acking on the fail paths, the client's predicted block was never
+	// confirmed nor reverted — it lingered as a ghost ("transparent" block / "the server removes it
+	// immediately" when placing under a jumping player). reconcileEdit no longer sends the ack (the
+	// success path is covered here too), so it fires exactly once per packet regardless of outcome.
+	if p.client != nil {
+		p.client.Send(blockChangedAck(int32(sequence)))
+	}
+
 	// (1) ServerPlayerGameMode.useItemOn step 1 — the BLOCK's own interaction. Interactive blocks
 	// (chests) consume the action via useBlockInteraction and we early-return; non-interactive
 	// blocks pass through to placement.
@@ -381,9 +394,10 @@ func (t *TickLoop) placementObstructedByEntity(pos pk.Position) bool {
 // to every player tracking the edited column (editor included). Called only after SetBlock
 // reported changed=true. Runs on the tick goroutine; all sends go through the bounded queue.
 func (t *TickLoop) reconcileEdit(editor *tickPlayer, pos pk.Position, state block.StateID, sequence int32) {
-	if editor.client != nil {
-		editor.client.Send(blockChangedAck(sequence))
-	}
+	// NOTE: the sequence ack is now sent at the START of handleUseItemOn / handleBlockBreakAction
+	// (vanilla acks on entry, before any validation, so a REJECTED edit still reconciles the client's
+	// prediction). reconcileEdit runs only on the SUCCESS path, so re-acking here would double-send;
+	// the broadcast below is the authoritative world-state push to all viewers.
 	t.broadcastBlockUpdate(pos, state)
 	udebugPlayer(editor, "edit", "pos=(%d,%d,%d) -> state=%d seq=%d", pos.X, pos.Y, pos.Z, state, sequence)
 	// Level.updateNeighborsAt → LiquidBlock.neighborChanged: a break/place re-schedules every

@@ -104,8 +104,10 @@ func TestDigStartStoneDoesNotInstaBreak(t *testing.T) {
 	}
 
 	pkts := drainPackets(p.client)
-	if n := countID(pkts, packetid.ClientboundBlockChangedAck); n != 0 {
-		t.Fatalf("survival START acked (%d), want 0 (no break yet)", n)
+	// Vanilla acks each break action on entry — a survival START acks its sequence immediately even
+	// though the block does not break yet (the dig only begins). Assertion: no break occurred (above).
+	if n := countID(pkts, packetid.ClientboundBlockChangedAck); n != 1 {
+		t.Fatalf("survival START: ack count = %d, want 1 (vanilla acks the action on entry)", n)
 	}
 	stage, ok := destroyStageOf(t, pkts)
 	if !ok {
@@ -149,10 +151,16 @@ func TestDigStopStoneCompletesAfterEnoughTicks(t *testing.T) {
 
 	// Drain once at the end (drainPackets closes the queue, so it must be the last read).
 	pkts := drainPackets(p.client)
-	if n := countID(pkts, packetid.ClientboundBlockChangedAck); n != 1 {
-		t.Fatalf("completing STOP acked %d times, want 1", n)
+	// Vanilla acks EACH break action on entry: the START (seq 1) acked when the dig began and the STOP
+	// (seq 77) acks when it completes — so two acks total over the dig. The STOP's sequence must be
+	// among them (it is the one the client is waiting on to confirm the completed break).
+	if n := countID(pkts, packetid.ClientboundBlockChangedAck); n != 2 {
+		t.Fatalf("START+STOP over a dig acked %d times, want 2 (one per action, vanilla)", n)
 	}
-	if seqGot := findAckSequence(t, pkts); seqGot != seq {
+	if !ackSequencePresent(pkts, seq) {
+		t.Fatalf("the STOP sequence %d was not acked", seq)
+	}
+	if seqGot := lastAckSequence(t, pkts); seqGot != seq {
 		t.Fatalf("completing STOP ack sequence = %d, want %d", seqGot, seq)
 	}
 	// A stage-0 START overlay, then the stop's overlay-clear (stage -1) are both present; the LAST

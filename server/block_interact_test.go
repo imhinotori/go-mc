@@ -196,8 +196,10 @@ func TestPlaceEmptyHandNoBlock(t *testing.T) {
 		t.Fatalf("empty-hand place mutated the world: GetBlock(adjacent) = (%v, ok=%v), want air", got, ok)
 	}
 	pkts := drainPackets(p.client)
-	if n := countID(pkts, packetid.ClientboundBlockChangedAck); n != 0 {
-		t.Fatalf("empty-hand place acked (%d), want 0 (no placement)", n)
+	// Vanilla acks on UseItemOn entry regardless of outcome — an empty-hand right-click still acks
+	// once so the client reconciles. Assertion: nothing was PLACED (above), not "no ack".
+	if n := countID(pkts, packetid.ClientboundBlockChangedAck); n != 1 {
+		t.Fatalf("empty-hand place: ack count = %d, want 1 (vanilla acks every UseItemOn)", n)
 	}
 	if n := countID(pkts, packetid.ClientboundBlockUpdate); n != 0 {
 		t.Fatalf("empty-hand place broadcast (%d), want 0", n)
@@ -288,8 +290,10 @@ func TestPlaceIntoSolidNoOp(t *testing.T) {
 	if got, ok := mgr.GetBlock(placed, dimMinY); !ok || got != block.ToStateID[block.Dirt{}] {
 		t.Fatalf("place into solid overwrote it: GetBlock = (%v, ok=%v), want unchanged dirt", got, ok)
 	}
-	if n := countID(drainPackets(p.client), packetid.ClientboundBlockChangedAck); n != 0 {
-		t.Fatalf("place into solid acked (%d), want 0 (canPlace false -> no-op)", n)
+	// Vanilla acks on UseItemOn entry even when canPlace is false (target not replaceable) — the ack
+	// reverts the client's predicted block. Assertion: the solid block was NOT overwritten (above).
+	if n := countID(drainPackets(p.client), packetid.ClientboundBlockChangedAck); n != 1 {
+		t.Fatalf("place into solid: ack count = %d, want 1 (vanilla acks every UseItemOn)", n)
 	}
 }
 
@@ -309,8 +313,11 @@ func TestPlaceNonBlockItemNoOp(t *testing.T) {
 	if got, ok := mgr.GetBlock(placed, dimMinY); !ok || !block.IsAir(got) {
 		t.Fatalf("non-block item placed something: GetBlock(adjacent) = (%v, ok=%v), want air", got, ok)
 	}
-	if n := countID(drainPackets(p.client), packetid.ClientboundBlockChangedAck); n != 0 {
-		t.Fatalf("non-block item acked (%d), want 0", n)
+	// Vanilla acks the sequence on EVERY UseItemOn (ackBlockChangesUpTo on entry, before any
+	// validation), so even a no-op placement (non-block item) acks exactly once — the client needs the
+	// ack to discard its prediction. The assertion is "nothing was PLACED" (above), not "no ack".
+	if n := countID(drainPackets(p.client), packetid.ClientboundBlockChangedAck); n != 1 {
+		t.Fatalf("non-block item: ack count = %d, want 1 (vanilla acks every UseItemOn)", n)
 	}
 }
 
@@ -417,8 +424,10 @@ func TestBlockReachRejected(t *testing.T) {
 		t.Fatalf("out-of-reach break mutated the world: GetBlock = (%v, ok=%v), want still-solid", got, ok)
 	}
 	pkts := drainPackets(p.client)
-	if n := countID(pkts, packetid.ClientboundBlockChangedAck); n != 0 {
-		t.Fatalf("out-of-reach edit acked (%d), want 0 (reject is a silent no-op)", n)
+	// Vanilla acks the sequence on entry of handleBlockBreakAction (per action), BEFORE the reach
+	// check, so a rejected break still acks once — the client needs it to roll back its predicted dig.
+	if n := countID(pkts, packetid.ClientboundBlockChangedAck); n != 1 {
+		t.Fatalf("out-of-reach break: ack count = %d, want 1 (vanilla acks before the reach check)", n)
 	}
 	if n := countID(pkts, packetid.ClientboundBlockUpdate); n != 0 {
 		t.Fatalf("out-of-reach edit broadcast (%d), want 0", n)
@@ -441,12 +450,14 @@ func TestBlockMalformed(t *testing.T) {
 	pa := playerActionPacket(2, unloaded, 1, 3)
 	loop.applyInput(farP, SubtickInput{At: loop.clock.Now(), Packet: pa})
 
-	// No ack from either (malformed -> no-op; unloaded -> SetBlock changed=false).
+	// Malformed -> Scan errors BEFORE the entry ack -> no ack (a truncated packet is a pure decode
+	// no-op). Unloaded-column -> the packet decodes fine, so handleBlockBreakAction acks on entry
+	// (vanilla acks per action before any validation) even though SetBlock later changes nothing.
 	if n := countID(drainPackets(p.client), packetid.ClientboundBlockChangedAck); n != 0 {
-		t.Fatalf("malformed PlayerAction produced an ack (%d), want 0", n)
+		t.Fatalf("malformed PlayerAction produced an ack (%d), want 0 (decode fails before the ack)", n)
 	}
-	if n := countID(drainPackets(farP.client), packetid.ClientboundBlockChangedAck); n != 0 {
-		t.Fatalf("unloaded-column edit produced an ack (%d), want 0", n)
+	if n := countID(drainPackets(farP.client), packetid.ClientboundBlockChangedAck); n != 1 {
+		t.Fatalf("unloaded-column break: ack count = %d, want 1 (vanilla acks on entry)", n)
 	}
 	// Nothing got placed in the unloaded column.
 	if _, ok := mgr.GetBlock(unloaded, dimMinY); ok {
@@ -468,6 +479,42 @@ func findAckSequence(t *testing.T, ps []pk.Packet) int32 {
 	}
 	t.Fatalf("no BlockChangedAck packet found")
 	return 0
+}
+
+// ackSequencePresent reports whether any BlockChangedAck in ps carries the given sequence.
+func ackSequencePresent(ps []pk.Packet, want int32) bool {
+	for _, p := range ps {
+		if p.ID == int32(packetid.ClientboundBlockChangedAck) {
+			var seq pk.VarInt
+			if err := p.Scan(&seq); err == nil && int32(seq) == want {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// lastAckSequence returns the sequence of the LAST BlockChangedAck in ps (the most recent ack — the
+// one the client most recently reconciled against). Vanilla acks each action, so over START+STOP the
+// last ack is the STOP's sequence.
+func lastAckSequence(t *testing.T, ps []pk.Packet) int32 {
+	t.Helper()
+	found := false
+	var last int32
+	for _, p := range ps {
+		if p.ID == int32(packetid.ClientboundBlockChangedAck) {
+			var seq pk.VarInt
+			if err := p.Scan(&seq); err != nil {
+				t.Fatalf("decode BlockChangedAck sequence: %v", err)
+			}
+			last = int32(seq)
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no BlockChangedAck packet found")
+	}
+	return last
 }
 
 // TestPlaceBlockedByEntity: a placement whose target cell is occupied by a blocksBuilding entity
@@ -494,8 +541,11 @@ func TestPlaceBlockedByEntity(t *testing.T) {
 	if got, ok := mgr.GetBlock(placed, dimMinY); ok && got == block.ToStateID[block.Stone{}] {
 		t.Fatal("placement into an entity-occupied cell must be rejected, but the block was placed")
 	}
-	if n := countID(drainPackets(p.client), packetid.ClientboundBlockChangedAck); n != 0 {
-		t.Fatalf("obstructed placement must not ack, got %d acks", n)
+	// Vanilla acks on UseItemOn entry, so an obstructed placement STILL acks once — that ack is
+	// exactly what makes the client roll back its predicted block (the "placed a block that the
+	// server removes immediately" symptom is caused by NOT acking here). Assertion: not PLACED above.
+	if n := countID(drainPackets(p.client), packetid.ClientboundBlockChangedAck); n != 1 {
+		t.Fatalf("obstructed placement: ack count = %d, want 1 (the ack reverts the client prediction)", n)
 	}
 }
 
