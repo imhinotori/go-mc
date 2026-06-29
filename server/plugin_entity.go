@@ -174,6 +174,20 @@ func (h *entityHandle) Attr(name string) (starlark.Value, error) {
 		// Health is attribute-derived in Sulfur (no separate health field yet) — the max-health
 		// attribute fold, nil-safe via getAttributeValue.
 		return starlark.Float(e.getAttributeValue(attribute.MaxHealth)), nil
+	case "was_hurt":
+		// MOB-SUB-02 frozen scalar: whether the mob is CURRENTLY in its hurt-flash window. The predicate
+		// is e.hurtTime > 0 — LivingEntity.hurtTime is set to hurtDuration (10) on a fresh hit in
+		// hurtServer and decremented unconditionally each tick in baseTick (the red-flash timer); it is
+		// the canonical "this mob was just hurt" signal a goal reacts to (PanicGoal in P31 pairs it with
+		// last_damage_type against the panic_causes tag). It is host-COMPUTED here (the goal never holds a
+		// live source) and re-resolved through the region-bound h.store() (Pitfall 7), never t.cur().
+		return starlark.Bool(e.hurtTime > 0), nil
+	case "last_damage_type":
+		// MOB-SUB-02 frozen scalar: the damage-type id of the mob's lastDamageSource (the genuine ported
+		// source set in hurtServer's flag2 block, combat_mob.go). Returned as a plain Starlark int — the
+		// goal resolves the tag membership by NAME via data/tag (e.g. is the id in panic_causes), it never
+		// holds a live DamageSource. Re-resolved through the region-bound h.store(), never t.cur().
+		return starlark.MakeInt(int(e.lastDamageSource.typeTag)), nil
 	}
 	// HasAttrs contract: (nil, nil) == "no such field".
 	return nil, nil
@@ -183,6 +197,7 @@ func (h *entityHandle) Attr(name string) (starlark.Value, error) {
 func (h *entityHandle) AttrNames() []string {
 	return []string{
 		"x", "y", "z", "yaw", "pitch", "on_ground", "type", "velocity", "health",
+		"was_hurt", "last_damage_type",
 		"attribute", "move_to", "set_velocity", "set_attribute",
 		"set_look", "set_look_at", "rand_int", "rand_float", "rand_double", "get_state", "set_state",
 	}
