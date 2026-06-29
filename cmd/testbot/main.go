@@ -257,6 +257,7 @@ type bot struct {
 	craftResults  []craftResultObs // each non-empty result slot the bot observed in the crafting window
 	sawGateChat   bool             // observed a ClientboundSystemChat containing the "gate_events:" marker
 	gateChatTexts []string         // every decoded SystemChat text (for the transcript)
+	chunksSeen    int              // count of ClientboundLevelChunkWithLight observed (world-stream readiness)
 }
 
 // craftResultObs is one observed crafting result-slot population: the menu slot that received a
@@ -780,6 +781,13 @@ func (b *bot) readLoop() {
 			// proves whether the water blocks actually arrive in the CLIENT's ClientLevel.
 			if b.probeActive {
 				b.probeChunk(p)
+			}
+			// GATE: count streamed chunks so runGate can wait for the world to settle before
+			// triggering (the entity tracker only sends AddEntity once chunks are loaded).
+			if b.mode == "gate" {
+				b.gateMu.Lock()
+				b.chunksSeen++
+				b.gateMu.Unlock()
 			}
 		case packetid.ClientboundChunkBatchFinished:
 			// Acknowledge the batch so the server's PlayerChunkSender flow control releases the next

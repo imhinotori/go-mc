@@ -57,8 +57,8 @@ const (
 
 // gate item ids (data/item) the bot asserts the crafting result against.
 const (
-	idStickItem   = 808 // minecraft:stick — vanilla recipe result (2 vertical planks -> 4 sticks)
-	idDiamondItem = 926 // minecraft:diamond — customrecipe result (1 dirt -> 1 diamond)
+	idStickItem   = 974 // minecraft:stick (data/item: Stick.ID) — vanilla recipe result (2 vertical planks -> 4 sticks)
+	idDiamondItem = 926 // minecraft:diamond (data/item: Diamond.ID) — customrecipe result (1 dirt -> 1 diamond)
 )
 
 // drainTicks moves+keepalives for n bot ticks while the reader records observations. It sends a
@@ -76,6 +76,58 @@ func (b *bot) drainTicks(n int) {
 			pk.Double(x), pk.Double(y), pk.Double(z), movementFlagOnGround))
 		time.Sleep(tickInterval)
 	}
+}
+
+// waitForChunks drains until the chunk STREAM QUIESCES — no new ClientboundLevelChunkWithLight for a
+// full second — which is the real readiness signal: the join chunk-stream burst SATURATES the server
+// tick (each column is a ~73KB encode + send), starving the entity tracker, so triggering during the
+// burst spawns a mob the (stalled) tracker never gets to broadcast before the bot disconnects. We wait
+// for the burst to finish AND a few quiet ticks so the tick loop is back to a healthy 20 TPS before any
+// trigger. Capped generously; keeps movement flowing so the chunk flow-control releases batches.
+func (b *bot) waitForChunks() {
+	// The join chunk stream is flow-controlled in BATCHES, so it PAUSES mid-stream (a gap between
+	// batches) — an early "no new chunks for 1s" reads as a false quiescence while the full ~21x21
+	// ring (≈441 columns at view distance 10) is still coming, and that later burst STALLS the server
+	// tick (each ~73KB column encode+send), starving the tracker. So require a HIGH minimum chunk count
+	// (most of the ring) AND a long quiet window before declaring the tick healthy.
+	const quietTicks = 60    // 3s of no new chunks = the batch stream is genuinely done (not a mid-stream gap)
+	const minChunks = 300    // most of the ~441-column ring must arrive first (defeats the early-pause false quiesce)
+	const maxTicks = 1200    // 60s hard cap (the per-item asserts catch a genuinely broken world)
+	lastSeen := -1
+	quiet := 0
+	for i := 0; i < maxTicks; i++ {
+		b.gateMu.Lock()
+		seen := b.chunksSeen
+		b.gateMu.Unlock()
+		if seen == lastSeen {
+			quiet++
+		} else {
+			quiet = 0
+			lastSeen = seen
+		}
+		if seen >= minChunks && quiet >= quietTicks {
+			log.Printf("[gate] world stream quiesced (%d chunks, %d quiet ticks) after %d ticks — tick loop healthy, starting scenario", seen, quiet, i)
+			return
+		}
+		b.drainTicks(1)
+	}
+	b.gateMu.Lock()
+	seen := b.chunksSeen
+	b.gateMu.Unlock()
+	log.Printf("[gate] WARNING: chunk stream did not quiesce (%d chunks) after %d ticks — proceeding anyway", seen, maxTicks)
+}
+
+// waitObserve polls (wall-clock, while draining ticks) until pred() is true or the timeout elapses.
+// Used by the per-item asserts so a slow/stalled server tick (heavy chunk streaming) gets enough real
+// time to spawn + track the mob and send the result, rather than racing a fixed tick count.
+func (b *bot) waitObserve(maxTicks int, pred func() bool) bool {
+	for i := 0; i < maxTicks; i++ {
+		if pred() {
+			return true
+		}
+		b.drainTicks(1)
+	}
+	return pred()
 }
 
 // --- reader-side recorders (called from readLoop on the reader goroutine, gate mode only) ----------
@@ -240,8 +292,15 @@ func (b *bot) runGate() {
 	b.mu.Unlock()
 	log.Printf("[gate] scenario start at (%.2f, %.2f, %.2f)", spawnX, spawnY, spawnZ)
 
-	// Let the initial chunk + entity stream settle (and the join-hook SystemChat arrive).
-	b.drainTicks(20)
+	// Wait for the world to STREAM before triggering anything: the entity tracker only sends
+	// AddEntity once the player has its surrounding chunks loaded + is registered in the world. The
+	// first scenario was racing the chunk stream (the egg fired before chunks arrived, so the spawned
+	// mob was never tracked). Drain until we have seen the chunk ring settle (a fixed generous wait),
+	// keeping movement flowing so the player stays registered + the tracker streams.
+	b.waitForChunks()
+	// Extra settle so the entity tracker's first pass runs with the player fully in-world, and the
+	// join-hook SystemChat has arrived.
+	b.drainTicks(40)
 
 	var results []gateResult
 	results = append(results, b.gateItem1CustomMob())
@@ -273,31 +332,47 @@ func (b *bot) runGate() {
 	os.Exit(1)
 }
 
+// gateEggHotbar is the hotbar index holding the custom-mob spawn egg in the gate kit (window slot 43 =
+// hotbar index 7). The bot SELECTs it (ServerboundSetCarriedItem) then right-clicks the air to spawn.
+const gateEggHotbar = 7
+
 // gateItem1CustomMob: spawn the custom wander mob via the test-kit egg and assert it is OBSERVED as a
-// new AddEntity that MOVES (it walks via the Go nav). The egg is at MAIN inventory slot 35 (28-01); the
-// handleGateSpawnEgg use-seam matches the HELD item, so the bot first moves the egg to the hotbar via
-// two player-window ContainerClicks (pick up slot 35 -> deposit into hotbar slot 36), selects it, then
-// right-clicks the air (ServerboundUseItem) to trigger the spawn (28-01's documented seam).
+// new AddEntity that MOVES (it walks via the Go nav). The egg is on hotbar slot 7 (gate kit), so the
+// bot SELECTs it and right-clicks the air (ServerboundUseItem) to hit the handleGateSpawnEgg seam
+// (28-01), which calls spawnDeclaredMob for the "wanderer" decl ~2 blocks in front.
 func (b *bot) gateItem1CustomMob() gateResult {
 	before := b.entitySnapshot()
 
-	// Move the spawn egg from main slot 35 into hotbar slot 0 (window slot 36) so it is HELD, then use it.
-	// ServerboundContainerClick on the player window (containerId 0): a left-click PICKUP on menu slot 35
-	// (the egg), then a left-click PICKUP on menu slot 36 (hotbar 0) deposits it. The player-window menu
-	// indices equal the inventory window slots for this path (slot 35 main, slot 36 hotbar-0).
-	b.playerClick(35, 0, containerInputPickup)
-	b.playerClick(36, 0, containerInputPickup)
-	// Select hotbar slot 0 (now holding the egg) and right-click the air to spawn the wander mob.
-	_ = b.conn.WritePacket(pk.Marshal(int32(packetid.ServerboundSetCarriedItem), pk.Short(0)))
-	b.mu.Lock()
-	yaw, pitch := b.yaw, b.pitch
-	b.mu.Unlock()
-	_ = b.conn.WritePacket(pk.Marshal(int32(packetid.ServerboundUseItem),
-		pk.VarInt(0), pk.VarInt(0), pk.Float(yaw), pk.Float(pitch)))
-	log.Printf("[gate] item1: used spawn egg (right-click) — waiting for the wander mob to appear + move")
+	// Select the egg on the hotbar (let the held-slot change apply), then right-click the air to spawn
+	// the wander mob in front. Send the UseItem a few times across ticks (RETRY) so a dropped/early use
+	// before the player is fully ready still lands — each use spawns one mob; the assert only needs one
+	// new mob that MOVES, and extra wander mobs only strengthen the move signal.
+	_ = b.conn.WritePacket(pk.Marshal(int32(packetid.ServerboundSetCarriedItem), pk.Short(gateEggHotbar)))
+	b.drainTicks(10) // let the held-slot change apply before the first use
+	// Use the egg, then POLL (wall-clock, up to ~6s) for the new mob's AddEntity. Retry the use a few
+	// times spaced out so a use that landed during a residual tick-stall still spawns + tracks.
+	for attempt := 0; attempt < 3; attempt++ {
+		b.mu.Lock()
+		yaw, pitch := b.yaw, b.pitch
+		b.mu.Unlock()
+		_ = b.conn.WritePacket(pk.Marshal(int32(packetid.ServerboundUseItem),
+			pk.VarInt(0), pk.VarInt(0), pk.Float(yaw), pk.Float(pitch)))
+		log.Printf("[gate] item1: used spawn egg (attempt %d) — polling for the wander mob's AddEntity", attempt+1)
+		if b.waitObserve(40, func() bool { return len(b.newEntities(before)) > 0 }) {
+			break // a mob appeared
+		}
+	}
 
-	// Drain ~3s so the mob spawns AND walks via the Go nav.
-	b.drainTicks(60)
+	// Now POLL up to ~6s for one of the new mobs to accrue enough move packets (it walks via the Go nav).
+	const moveThreshold = 3
+	b.waitObserve(120, func() bool {
+		for _, id := range b.newEntities(before) {
+			if b.moveCount(id) >= moveThreshold {
+				return true
+			}
+		}
+		return false
+	})
 
 	newIDs := b.newEntities(before)
 	if len(newIDs) == 0 {
@@ -310,7 +385,6 @@ func (b *bot) gateItem1CustomMob() gateResult {
 			bestID, bestMoves = id, m
 		}
 	}
-	const moveThreshold = 3 // a walking mob emits many move packets over 3s; >=3 proves motion, not a static spawn
 	if bestID < 0 || bestMoves < moveThreshold {
 		return gateResult{1, "custom wander mob", false,
 			fmt.Sprintf("a mob spawned (ids=%v) but none accrued >=%d move packets (max=%d) — it did not MOVE", newIDs, moveThreshold, bestMoves)}
@@ -359,61 +433,52 @@ func (b *bot) gateItem3Crafting() gateResult {
 	b.mu.Lock()
 	fx, fy, fz := b.x, b.y, b.z
 	b.mu.Unlock()
-	tbx, tby, tbz := int(math.Floor(fx))+1, int(math.Floor(fy))-1, int(math.Floor(fz))
-	// Select the crafting_table hotbar slot, place it on the UP face of the floor block beneath the target.
-	_ = b.conn.WritePacket(pk.Marshal(int32(packetid.ServerboundSetCarriedItem), pk.Short(gateTableHotbar)))
-	below := pk.Position{X: tbx, Y: tby - 1, Z: tbz}
-	b.blockSeq++
-	_ = b.conn.WritePacket(pk.Marshal(int32(packetid.ServerboundUseItemOn),
-		pk.VarInt(0), below, pk.VarInt(1), // face UP
-		pk.Float(0.5), pk.Float(1.0), pk.Float(0.5), pk.Boolean(false), pk.Boolean(false), pk.VarInt(b.blockSeq)))
-	b.drainTicks(6)
+	// The player stands ON the floor block at y = floor(fy)-1; the neighbor floor cell one east is solid.
+	// Click that solid floor's UP face → the crafting_table lands in the AIR cell directly above it. Then
+	// right-click the placed table (in that air cell) to OPEN the 3x3 menu.
+	floorY := int(math.Floor(fy)) - 1
+	floorBlock := pk.Position{X: int(math.Floor(fx)) + 1, Y: floorY, Z: int(math.Floor(fz))} // solid floor neighbor
+	tablePos := pk.Position{X: floorBlock.X, Y: floorY + 1, Z: floorBlock.Z}                  // AIR cell above it → the table
 
-	// Right-click the placed crafting_table to OPEN the 3x3 menu.
-	tablePos := pk.Position{X: tbx, Y: tby, Z: tbz}
-	b.blockSeq++
-	_ = b.conn.WritePacket(pk.Marshal(int32(packetid.ServerboundUseItemOn),
-		pk.VarInt(0), tablePos, pk.VarInt(1),
-		pk.Float(0.5), pk.Float(1.0), pk.Float(0.5), pk.Boolean(false), pk.Boolean(false), pk.VarInt(b.blockSeq)))
-	b.drainTicks(6)
-
-	b.gateMu.Lock()
-	opened := b.sawOpenScreen
-	b.gateMu.Unlock()
-	if !opened {
-		return gateResult{3, "crafting (plugin path)", false, "ClientboundOpenScreen never arrived — the crafting_table did not open"}
+	// Place the crafting_table, then right-click it to OPEN. Retry the place+open a few times, polling
+	// (wall-clock) for the OpenScreen — a place/open that landed during a residual tick-stall is retried.
+	for attempt := 0; attempt < 4 && b.craftWindowID() <= 0; attempt++ {
+		_ = b.conn.WritePacket(pk.Marshal(int32(packetid.ServerboundSetCarriedItem), pk.Short(gateTableHotbar)))
+		b.drainTicks(4)
+		b.blockSeq++
+		_ = b.conn.WritePacket(pk.Marshal(int32(packetid.ServerboundUseItemOn),
+			pk.VarInt(0), floorBlock, pk.VarInt(1), // place onto the UP face of the solid floor neighbor → table at tablePos
+			pk.Float(0.5), pk.Float(1.0), pk.Float(0.5), pk.Boolean(false), pk.Boolean(false), pk.VarInt(b.blockSeq)))
+		b.drainTicks(6)
+		b.blockSeq++
+		_ = b.conn.WritePacket(pk.Marshal(int32(packetid.ServerboundUseItemOn),
+			pk.VarInt(0), tablePos, pk.VarInt(1), // right-click the placed table to open the 3x3 menu
+			pk.Float(0.5), pk.Float(1.0), pk.Float(0.5), pk.Boolean(false), pk.Boolean(false), pk.VarInt(b.blockSeq)))
+		log.Printf("[gate] item3: placed crafting_table on floor (%d,%d,%d) -> table at (%d,%d,%d), right-clicked to open (attempt %d)", floorBlock.X, floorBlock.Y, floorBlock.Z, tablePos.X, tablePos.Y, tablePos.Z, attempt+1)
+		b.waitObserve(30, func() bool { return b.craftWindowID() > 0 })
 	}
 
-	// The crafting window id: parse it back is unneeded — handleContainerClick matches the player's
-	// currently-open container, so a click with the open window id routes to clickedCrafting. We use
-	// windowId 0 only for the player window; for the crafting window we must use the real id. The server
-	// allocated it (1..100); we discover it by tracking the OpenScreen — but we did not capture it here.
-	// Instead, drive the grid via the player-window click path is wrong. So capture the window id.
 	win := b.craftWindowID()
 	if win <= 0 {
-		return gateResult{3, "crafting (plugin path)", false, "could not determine the crafting window id from OpenScreen"}
+		return gateResult{3, "crafting (plugin path)", false, "ClientboundOpenScreen never arrived — the crafting_table did not place/open"}
 	}
 
 	// --- VANILLA recipe: 2 vertical oak planks -> 4 sticks ---
-	// Pick up the planks stack from the player area of the crafting window (menu slot 41), then deposit
-	// 1 into grid cell 1 (top-left) and 1 into grid cell 4 (middle-left): right-click (button 1) deposits
-	// one each.
+	// Pick up the planks stack (crafting-window menu slot 41), then right-click (deposit 1) into grid
+	// cells 1 (menu slot 1, top-left) and 4 (menu slot 4, middle-left) — the vertical 2-plank pattern.
 	b.craftClick(win, gatePlanksMenuSlot, 0, containerInputPickup) // pick up the whole planks stack onto cursor
-	b.craftClick(win, 1, 1, containerInputPickup)                  // right-click grid cell 1 (menu slot 1): deposit 1
-	b.craftClick(win, 4, 1, containerInputPickup)                  // right-click grid cell 4 (menu slot 4): deposit 1
+	b.craftClick(win, 1, 1, containerInputPickup)                  // deposit 1 into grid cell 1
+	b.craftClick(win, 4, 1, containerInputPickup)                  // deposit 1 into grid cell 4
+	sawStick := b.waitObserve(30, func() bool { return b.sawCraftResult(idStickItem) })
+	// Shift-take the result (take + consume) so the grid clears for the next recipe.
+	b.craftClick(win, 0, 0, containerInputQuickMove)
 	b.drainTicks(6)
-	sawStick := b.sawCraftResult(idStickItem)
-	// Return the cursor + clear the grid: shift-take the result if present, then put the cursor back.
-	b.craftClick(win, 0, 0, containerInputQuickMove) // shift-click the result (take + consume) if it populated
-	b.drainTicks(4)
 
 	// --- CUSTOM recipe: 1 dirt -> 1 diamond (customrecipe plugin) ---
-	// Clear the cursor first (deposit any leftover planks back to the planks menu slot), then pick up dirt.
-	b.craftClick(win, gatePlanksMenuSlot, 0, containerInputPickup) // dump cursor leftovers back
+	b.craftClick(win, gatePlanksMenuSlot, 0, containerInputPickup) // dump any cursor leftovers back
 	b.craftClick(win, gateDirtMenuSlot, 0, containerInputPickup)   // pick up the dirt stack
 	b.craftClick(win, 1, 1, containerInputPickup)                  // deposit 1 dirt into grid cell 1
-	b.drainTicks(6)
-	sawDiamond := b.sawCraftResult(idDiamondItem)
+	sawDiamond := b.waitObserve(30, func() bool { return b.sawCraftResult(idDiamondItem) })
 
 	// Close the window (return the grid items).
 	_ = b.conn.WritePacket(pk.Marshal(int32(packetid.ServerboundContainerClose), pk.VarInt(win)))
@@ -422,7 +487,7 @@ func (b *bot) gateItem3Crafting() gateResult {
 	switch {
 	case sawStick && sawDiamond:
 		return gateResult{3, "crafting (plugin path)", true,
-			"OpenScreen + result slot populated for the VANILLA recipe (planks->stick id 808) AND the CUSTOM recipe (dirt->diamond id 926) via the plugin Match path"}
+			"OpenScreen + result slot populated for the VANILLA recipe (planks->stick id 974) AND the CUSTOM recipe (dirt->diamond id 926) via the plugin Match path"}
 	case sawStick:
 		return gateResult{3, "crafting (plugin path)", false,
 			"the vanilla recipe (planks->stick) crafted but the CUSTOM recipe (dirt->diamond) result was not observed"}
@@ -443,23 +508,29 @@ func (b *bot) gateItem4Events() gateResult {
 	joinChat := b.sawGateChat
 	b.gateMu.Unlock()
 
-	// Break a block: START_DESTROY a reachable floor neighbor, swing, then STOP_DESTROY.
-	b.startBreakBelow()
-	b.drainTicks(10) // accrue dig-time
-	b.stopBreak()
-	b.drainTicks(20) // let the break complete + the hook fire + the SystemChat arrive
+	// Break a block: START_DESTROY a reachable floor neighbor, swing, then STOP_DESTROY, retrying the
+	// break a few times while polling for the on_block_break -> chat() SystemChat (the "block broken"
+	// marker, distinct from the on_player_join "joined" marker — so item #4 proves the BREAK hook
+	// specifically, not just the join hook, the false-pass guard T-28-02).
+	for attempt := 0; attempt < 4; attempt++ {
+		b.startBreakBelow()
+		b.drainTicks(12) // accrue dig-time so the block actually breaks (per-hardness dig model)
+		b.stopBreak()
+		if b.waitObserve(30, func() bool { return b.sawBreakChat() }) {
+			break
+		}
+	}
 
 	b.gateMu.Lock()
-	saw := b.sawGateChat
 	texts := append([]string(nil), b.gateChatTexts...)
 	b.gateMu.Unlock()
 
-	if !saw {
+	if !b.sawBreakChat() {
 		return gateResult{4, "plugin events (on_block_break)", false,
-			fmt.Sprintf("no SystemChat containing \"gate_events:\" observed after breaking a block (join-chat seen=%v; all chat=%v)", joinChat, texts)}
+			fmt.Sprintf("no \"gate_events: block broken\" SystemChat observed after breaking a block (join-chat seen=%v; all chat=%v)", joinChat, texts)}
 	}
 	return gateResult{4, "plugin events (on_block_break)", true,
-		"observed a ClientboundSystemChat carrying \"gate_events:\" (the on_block_break hook reacted via chat() -> broadcastSystemChat; the on_player_join hook also fired at connect)"}
+		"observed a ClientboundSystemChat carrying \"gate_events: block broken\" (the on_block_break hook reacted via chat() -> broadcastSystemChat; the on_player_join hook also fired at connect, observed separately)"}
 }
 
 // --- small observation/query helpers (read under gateMu) -----------------------------------------
@@ -512,6 +583,20 @@ func (b *bot) sawCraftResult(itemID int32) bool {
 	return false
 }
 
+// sawBreakChat reports whether a gate_events SystemChat carrying the on_block_break marker ("block
+// broken") was observed — distinct from the on_player_join "joined" marker, so item #4 proves the
+// BREAK hook fired specifically (the false-pass guard, T-28-02).
+func (b *bot) sawBreakChat() bool {
+	b.gateMu.Lock()
+	defer b.gateMu.Unlock()
+	for _, t := range b.gateChatTexts {
+		if strings.Contains(t, "gate_events:") && strings.Contains(t, "block broken") {
+			return true
+		}
+	}
+	return false
+}
+
 // craftWindowID returns the crafting window id the last OpenScreen allocated (0 if none observed).
 func (b *bot) craftWindowID() int32 {
 	b.gateMu.Lock()
@@ -551,14 +636,6 @@ func (b *bot) pigTypeID() int32 {
 // entity_capture_test vanilla golden) — the fallback pig wire type when no AddEntity has been observed
 // yet. The wander mob (base_type=pig) and the vanilla-pig-as-plugin both spawn with this type.
 const pigRegistryID int32 = 100
-
-// playerClick sends a ServerboundContainerClick on the PLAYER inventory window (containerId 0) — the
-// minimal wire (empty changedSlots map + absent carried HashedStack); the server is authoritative and
-// discards the client's claimed contents. Used to move the spawn egg from the main inventory to the
-// hotbar (item #1).
-func (b *bot) playerClick(slotNum int16, button int8, input int32) {
-	b.sendContainerClick(0, slotNum, button, input)
-}
 
 // craftClick sends a ServerboundContainerClick on the open CRAFTING window (the OpenScreen-allocated
 // windowId) — handleContainerClick routes it to clickedCrafting because the id matches the player's

@@ -53,7 +53,7 @@ var testKit = []testKitStack{
 	{slot: 40, id: item.OakPlanks.ID, count: 64},   // hotbar 5: place/break blocks
 	{slot: 41, id: item.Torch.ID, count: 64},       // hotbar 6: place
 	{slot: 42, id: item.Dirt.ID, count: 64},        // hotbar 7: place/break
-	{slot: 43, id: item.Chest.ID, count: 16},       // hotbar 8: place a chest (open-UI gate)
+	{slot: 43, id: gateSpawnEggID, count: 8},       // hotbar 8: PLUGIN-07 gate custom-mob spawn egg ON the hotbar (item #1 — held + UseItem; was a chest)
 	{slot: 44, id: item.CraftingTable.ID, count: 1}, // hotbar 9: PLUGIN-07 gate crafting bench (item #3 — place + open the 3x3 grid; was sugar cane)
 	{slot: 9, id: item.Cobblestone.ID, count: 64},  // main row 1: spare stack to shift-click/merge
 	{slot: 10, id: item.Cobblestone.ID, count: 32}, // main row 1: partial stack for double-click collect

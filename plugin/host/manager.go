@@ -159,10 +159,22 @@ func New() *Manager {
 // LoadDir scans root for plugin dirs (root/*/plugin.toml), loads every
 // runtime="starlark" plugin once, and lets each plugin's module body capture
 // its hooks via the injected register builtin. Non-starlark runtimes are
-// skipped (Phase-26 reserves "python"). A manifest or load error aborts the
-// whole scan.
+// skipped (Phase-26 reserves "python").
+//
+// PER-PLUGIN TOLERANCE (Plan 28-02): the OPERATOR scan SKIPS a plugin that fails
+// to load (logging it loudly) and CONTINUES with the rest, rather than aborting
+// the whole scan on the first bad dir. The repo-root plugins/ ships operator-facing
+// COPIES of the embedded boot-loaded plugins (vanilla_pig, crafting) that use
+// boot-only builtins (declare_mob/goal) the operator scan does not inject — loading
+// one via this path errors, and the old abort-the-scan behavior silently dropped
+// every plugin AFTER the failing dir in directory order (so a real operator plugin
+// like gate_events/customrecipe could vanish depending on its name). Skipping the
+// failing plugin keeps every loadable operator plugin live (the embedded boot-load
+// remains the authoritative copy of the duplicated ones). The strict, fail-fast
+// LoadDirWith below is still used by the embedded boot-loads (each over a temp dir
+// with exactly one plugin + its required builtins), where a failure IS fatal.
 func (m *Manager) LoadDir(root string) error {
-	return m.LoadDirWith(root, nil)
+	return m.loadDir(root, nil, true /* tolerate per-plugin load failures */)
 }
 
 // LoadDirWith is LoadDir with extra host builtins injected into every plugin's
@@ -171,6 +183,16 @@ func (m *Manager) LoadDir(root string) error {
 // builtin, and Plan 02's watcher uses to re-load a single plugin. extra keys
 // win on a name collision with the host builtins.
 func (m *Manager) LoadDirWith(root string, extra starlark.StringDict) error {
+	return m.loadDir(root, extra, false /* strict: a load error aborts (boot-load discipline) */)
+}
+
+// loadDir is the shared scan body for LoadDir (tolerate=true) and LoadDirWith
+// (tolerate=false). When tolerate is true, a per-plugin manifest/load error is
+// logged and SKIPPED so the scan continues with the remaining plugins (the
+// operator path — a single bad/duplicate dir must not silently drop the rest).
+// When false, the first error aborts the whole scan (the embedded boot-load path,
+// where each scan is one plugin in a temp dir and a failure is genuinely fatal).
+func (m *Manager) loadDir(root string, extra starlark.StringDict, tolerate bool) error {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return fmt.Errorf("host: scan %s: %w", root, err)
@@ -182,6 +204,10 @@ func (m *Manager) LoadDirWith(root string, extra starlark.StringDict) error {
 		dir := filepath.Join(root, e.Name())
 		man, err := readManifest(filepath.Join(dir, "plugin.toml"))
 		if err != nil {
+			if tolerate {
+				log.Printf("plugin host: skipping %q (manifest error): %v", e.Name(), err)
+				continue
+			}
 			return fmt.Errorf("plugin %s: %w", e.Name(), err)
 		}
 		// Route by the manifest runtime selector. "starlark" falls through to the
@@ -198,6 +224,10 @@ func (m *Manager) LoadDirWith(root string, extra starlark.StringDict) error {
 				entry := filepath.Join(dir, man.Entrypoint)
 				pp, err := m.pythonRuntime.Load(entry)
 				if err != nil {
+					if tolerate {
+						log.Printf("plugin host: skipping %q (python load error): %v", man.Name, err)
+						continue
+					}
 					return fmt.Errorf("plugin %s load (python): %w", man.Name, err)
 				}
 				// WORLD-BRIDGE (Plan 26-03): build a per-plugin bridge stamped with
@@ -209,6 +239,10 @@ func (m *Manager) LoadDirWith(root string, extra starlark.StringDict) error {
 				if m.pythonBridgeFactory != nil {
 					bridge, berr := m.pythonBridgeFactory(man.Name, man.Capabilities)
 					if berr != nil {
+						if tolerate {
+							log.Printf("plugin host: skipping %q (python capabilities error): %v", man.Name, berr)
+							continue
+						}
 						return fmt.Errorf("plugin %s capabilities (python): %w", man.Name, berr)
 					}
 					pp.SetWorldBridge(bridge)
@@ -222,6 +256,10 @@ func (m *Manager) LoadDirWith(root string, extra starlark.StringDict) error {
 			}
 			continue
 		default:
+			if tolerate {
+				log.Printf("plugin host: skipping %q (unknown runtime %q)", man.Name, man.Runtime)
+				continue
+			}
 			return fmt.Errorf("plugin %s: unknown runtime %q (want \"starlark\" or \"python\")", man.Name, man.Runtime)
 		}
 		// Predeclared = host builtins (log) + per-plugin register + the recipe
@@ -239,6 +277,10 @@ func (m *Manager) LoadDirWith(root string, extra starlark.StringDict) error {
 		entry := filepath.Join(dir, man.Entrypoint)
 		lp, err := starlarkpkg.LoadWith(entry, predeclared)
 		if err != nil {
+			if tolerate {
+				log.Printf("plugin host: skipping %q (starlark load error): %v", man.Name, err)
+				continue
+			}
 			return fmt.Errorf("plugin %s load: %w", man.Name, err)
 		}
 		// The module body ran ONCE; its register(...) calls already populated

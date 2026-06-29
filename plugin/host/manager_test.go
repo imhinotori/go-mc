@@ -89,7 +89,11 @@ func TestDiscoverLoad(t *testing.T) {
 	}
 }
 
-// TestRegisterUnknownEvent: register with a typo'd event name fails the load.
+// TestRegisterUnknownEvent: a plugin that registers a typo'd event name is SKIPPED by the
+// tolerant operator LoadDir (Plan 28-02) — the bad plugin is logged + dropped, not loaded,
+// and the scan returns nil so other (good) plugins still load. The register builtin still
+// rejects the typo'd event (no hook is captured). The strict boot-load path (LoadDirWith)
+// keeps aborting on such an error; this asserts the operator path's skip-and-continue.
 func TestRegisterUnknownEvent(t *testing.T) {
 	dir := t.TempDir()
 	pdir := filepath.Join(dir, "typo")
@@ -102,8 +106,21 @@ func TestRegisterUnknownEvent(t *testing.T) {
 		"def f(x,y,z,s,p):\n    pass\nregister(\"on_blockbreak\", f)\n") // missing underscore
 
 	m := New()
-	if err := m.LoadDir(dir); err == nil {
-		t.Fatal("LoadDir with typo'd event: want load error, got nil")
+	// The tolerant operator scan SKIPS the bad plugin (logged) and returns nil.
+	if err := m.LoadDir(dir); err != nil {
+		t.Fatalf("LoadDir (tolerant) should skip the bad plugin and return nil, got: %v", err)
+	}
+	// The typo'd plugin must NOT be loaded, and no hook captured for it.
+	if n := m.PluginCount(); n != 0 {
+		t.Fatalf("PluginCount = %d, want 0 (the typo'd plugin must be skipped, not loaded)", n)
+	}
+	if n := m.HookCount(EventBlockBreak); n != 0 {
+		t.Fatalf("HookCount(on_block_break) = %d, want 0 (the typo'd register must capture no hook)", n)
+	}
+
+	// The STRICT boot-load path (LoadDirWith) still aborts on the same typo (load-loudly).
+	if err := New().LoadDirWith(dir, nil); err == nil {
+		t.Fatal("LoadDirWith (strict) with a typo'd event: want load error, got nil")
 	}
 }
 
