@@ -29,12 +29,14 @@ func itemID(t *testing.T, name string) int32 {
 // These assertions are membership facts against the jar JSON (TagLoader.build semantics),
 // keyed by the generated damage-type / item ids (resolved through DamageTypeIDs / data/registryid).
 
-// id resolves a damage-type element name to its generated id, failing the test if absent.
+// id resolves a damage-type element short name (e.g. "fall") to its generated id via the full
+// resource id key ("minecraft:fall"), failing the test if absent.
 func id(t *testing.T, name string) int32 {
 	t.Helper()
-	v, ok := DamageTypeIDs[name]
+	key := "minecraft:" + name
+	v, ok := DamageTypeIDs[key]
 	if !ok {
-		t.Fatalf("damage type %q absent from DamageTypeIDs (generation incomplete?)", name)
+		t.Fatalf("damage type %q absent from DamageTypeIDs (generation incomplete?)", key)
 	}
 	return v
 }
