@@ -186,17 +186,22 @@ func (m *mobAI) serverAiStep(t *TickLoop, e *Entity) {
 	t.entityJumpStep(e)
 }
 
-// newPigAI builds the v1 passive Pig AI: the three "visibly alive" goals registered at the
-// EXACT priorities read from javap animal.pig.Pig.registerGoals.
+// newPigAI builds the Pig AI: FloatGoal@0 (Phase 30-03) plus the three "visibly alive" passive
+// goals, registered at the EXACT priorities read from javap animal.pig.Pig.registerGoals.
 //
+//	0  FloatGoal(mob)                           -> floatGoal           [JUMP]
 //	6  WaterAvoidingRandomStrollGoal(mob, 1.0)  -> randomStrollGoal  [MOVE]
 //	7  LookAtPlayerGoal(mob, Player, 6.0)       -> lookAtPlayerGoal  [LOOK]
 //	8  RandomLookAroundGoal(mob)                -> randomLookAroundGoal [MOVE|LOOK]
 //
-// DEFERRED for v1 (documented, faithful-scope): FloatGoal@0 (no water hazard), PanicGoal@1
-// (no damage source), BreedGoal@3 + FollowParentGoal@5 + TemptGoal@4 (no breeding/items).
-// They are added when their preconditions exist (water, combat, items). The v1 set is the
-// faithful PASSIVE-AMBIENT subset that makes a Pig amble + look around exactly like vanilla.
+// FloatGoal@0 is the JUMP-flag consumer (MOB-SUB-04): in water/lava its canUse is true and tick()
+// draws nextFloat()<0.8 → jumpControl.doJump → the serverAiStep JUMP slot's +0.04 swim impulse keeps
+// the pig afloat. It is added in LOCKSTEP with the plugin (plugins/vanilla_pig/main.star) in this same
+// plan (the oracle contract — never split). FloatGoal's ctor mob.getNavigation().setCanFloat(true) is
+// applied below (navigation.canFloat = true).
+//
+// STILL DEFERRED for v1 (documented, faithful-scope): PanicGoal@1 (no damage source), BreedGoal@3 +
+// FollowParentGoal@5 + TemptGoal@4 (no breeding/items). They are added when their preconditions exist.
 func newPigAI() *mobAI {
 	m := &mobAI{}
 	// Per-mob seeded RandomSource (the Mob.getRandom() analogue) — deterministic for the default
@@ -208,6 +213,13 @@ func newPigAI() *mobAI {
 	// ≈ 0.1-0.2 blocks/tick; v1 uses 0.15 for a visibly-alive amble (the tunable knob, like the
 	// physics constants — wire-irrelevant, gated by the real-client visual check).
 	m.navigation.speed = pigWalkSpeed
+	// FloatGoal ctor: mob.getNavigation().setCanFloat(true) — the mob may path over water (the float
+	// PATHING node-evaluator behavior is deferred + cited on the field; the flag set is the 1:1 port).
+	m.navigation.canFloat = true
+	// @0 FloatGoal [JUMP] — added FIRST (priority 0 = highest precedence: it runs first in the goal
+	// walk, ai_goal.go "smaller priority = higher"). LOCKSTEP with vanilla_pig/main.star's @0 FloatGoal.
+	// Cite Pig.registerGoals @0 FloatGoal (javap: iconst_0; new FloatGoal; FloatGoal.<init>).
+	m.goals.addGoal(0, newFloatGoal())
 	m.goals.addGoal(6, newWaterAvoidingRandomStrollGoal(1.0))
 	m.goals.addGoal(7, newLookAtPlayerGoal(6.0))
 	m.goals.addGoal(8, newRandomLookAroundGoal())

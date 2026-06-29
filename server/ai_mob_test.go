@@ -112,18 +112,29 @@ func TestServerAiStepOrder(t *testing.T) {
 	}
 }
 
-// TestPigGoalSetRegistered: newPigAI registers the v1 passive goal set at the priorities read
-// from javap animal.pig.Pig.registerGoals — WaterAvoidingRandomStroll@6 [MOVE],
-// LookAtPlayer@7 [LOOK], RandomLookAround@8 [MOVE|LOOK].
+// TestPigGoalSetRegistered: newPigAI registers the pig goal set at the priorities read from javap
+// animal.pig.Pig.registerGoals — FloatGoal@0 [JUMP] (Phase 30-03), WaterAvoidingRandomStroll@6
+// [MOVE], LookAtPlayer@7 [LOOK], RandomLookAround@8 [MOVE|LOOK]. FloatGoal is @0 (highest precedence,
+// runs first) and must be a *floatGoal with the JUMP flag, in lockstep with vanilla_pig/main.star.
 func TestPigGoalSetRegistered(t *testing.T) {
 	m := newPigAI()
-	if got := len(m.goals.goals); got != 3 {
-		t.Fatalf("pig v1 goal set should have 3 goals, got %d", got)
+	if got := len(m.goals.goals); got != 4 {
+		t.Fatalf("pig goal set should have 4 goals (FloatGoal@0 + the 3 passive), got %d", got)
 	}
-	// Assert the recorded priorities + that the three goal types are present.
+	// FloatGoal must be FIRST in the priority-sorted slice (@0 = highest precedence).
+	if _, ok := m.goals.goals[0].g.(*floatGoal); !ok || m.goals.goals[0].priority != 0 {
+		t.Fatalf("expected *floatGoal at priority 0 first, got %T @%d",
+			m.goals.goals[0].g, m.goals.goals[0].priority)
+	}
+	// Assert the recorded priorities + that the four goal types are present.
 	byPriority := map[int]Goal{}
 	for _, wg := range m.goals.goals {
 		byPriority[wg.priority] = wg.g
+	}
+	if g, ok := byPriority[0].(*floatGoal); !ok {
+		t.Fatalf("expected floatGoal at priority 0, got %T", byPriority[0])
+	} else if g.flags() != flagJump {
+		t.Fatalf("FloatGoal must claim exactly the JUMP flag, got %v", g.flags())
 	}
 	if _, ok := byPriority[6].(*randomStrollGoal); !ok {
 		t.Fatalf("expected randomStrollGoal at priority 6, got %T", byPriority[6])
@@ -133,6 +144,10 @@ func TestPigGoalSetRegistered(t *testing.T) {
 	}
 	if _, ok := byPriority[8].(*randomLookAroundGoal); !ok {
 		t.Fatalf("expected randomLookAroundGoal at priority 8, got %T", byPriority[8])
+	}
+	// The FloatGoal ctor's mob.getNavigation().setCanFloat(true) must have set the nav flag.
+	if !m.navigation.canFloat {
+		t.Fatal("newPigAI must set navigation.canFloat=true (FloatGoal ctor setCanFloat(true))")
 	}
 }
 

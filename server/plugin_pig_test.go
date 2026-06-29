@@ -1,12 +1,12 @@
 package server
 
 // plugin_pig_test.go — PLUGIN-04 (Plan 24-02): THE GATE for the FIRST 1:1 vanilla-mob dogfood. It
-// proves the bundled vanilla_pig plugin (the 3 passive goals re-expressed 1:1) is behavior-identical
-// to the Go-native pig it replaces:
+// proves the bundled vanilla_pig plugin (FloatGoal@0 + the 3 passive goals re-expressed 1:1) is
+// behavior-identical to the Go-native pig it replaces:
 //
 //   - TestPluginPigBootLoads      — the embedded plugin boot-loads into a registry; spawnVanillaPig
-//                                   builds a live pig (entity.Pig.ID, 3 goals @6/@7/@8).
-//   - TestVanillaPigDeclaresGoalSet — the declaration captures the 3 goals at the jar priorities+flags.
+//                                   builds a live pig (entity.Pig.ID, 4 goals @0/@6/@7/@8).
+//   - TestVanillaPigDeclaresGoalSet — the declaration captures the 4 goals at the jar priorities+flags.
 //   - TestVanillaPigGoalsPorted   — @8 carries requiresUpdateEveryTick (FIDELITY GAP 1 fix).
 //   - TestVanillaPigStrollSetsTarget — the plugin stroll goal sets a wantTarget within ±10/±7.
 //   - TestVanillaPigLooksAtPlayer — the plugin lookAt goal faces the nearest player via set_look_at.
@@ -51,14 +51,14 @@ func TestPluginPigBootLoads(t *testing.T) {
 	if pig.ai == nil {
 		t.Fatal("plugin pig has no AI")
 	}
-	if got := len(pig.ai.goals.goals); got != 3 {
-		t.Fatalf("plugin pig has %d goals, want 3 (@6/@7/@8)", got)
+	if got := len(pig.ai.goals.goals); got != 4 {
+		t.Fatalf("plugin pig has %d goals, want 4 (FloatGoal@0 + @6/@7/@8)", got)
 	}
 	priorities := map[int]bool{}
 	for _, wg := range pig.ai.goals.goals {
 		priorities[wg.priority] = true
 	}
-	for _, p := range []int{6, 7, 8} {
+	for _, p := range []int{0, 6, 7, 8} {
 		if !priorities[p] {
 			t.Fatalf("plugin pig missing a goal at priority %d (got %v)", p, priorities)
 		}
@@ -68,8 +68,9 @@ func TestPluginPigBootLoads(t *testing.T) {
 	}
 }
 
-// TestVanillaPigDeclaresGoalSet: the boot-loaded declaration captures the 3 passive goals at the EXACT
-// jar priorities + flags (RandomStroll@6 MOVE, LookAtPlayer@7 LOOK, RandomLookAround@8 MOVE|LOOK).
+// TestVanillaPigDeclaresGoalSet: the boot-loaded declaration captures the 4 goals at the EXACT jar
+// priorities + flags — FloatGoal@0 JUMP (Phase 30-03), RandomStroll@6 MOVE, LookAtPlayer@7 LOOK,
+// RandomLookAround@8 MOVE|LOOK.
 func TestVanillaPigDeclaresGoalSet(t *testing.T) {
 	r, err := loadVanillaPigRegistry()
 	if err != nil {
@@ -89,12 +90,16 @@ func TestVanillaPigDeclaresGoalSet(t *testing.T) {
 	if decl.attrs["movement_speed"] != 0.25 {
 		t.Fatalf("movement_speed = %v, want 0.25 (Pig.createAttributes)", decl.attrs["movement_speed"])
 	}
-	if len(decl.goals) != 3 {
-		t.Fatalf("captured %d goals, want 3", len(decl.goals))
+	if len(decl.goals) != 4 {
+		t.Fatalf("captured %d goals, want 4 (FloatGoal@0 + @6/@7/@8)", len(decl.goals))
 	}
 	byPriority := map[int]goalDecl{}
 	for _, g := range decl.goals {
 		byPriority[g.priority] = g
+	}
+	// @0 JUMP (FloatGoal — Phase 30-03)
+	if g, ok := byPriority[0]; !ok || g.flags != flagJump {
+		t.Fatalf("@0 flags = %b, want flagJump %b (FloatGoal)", g.flags, flagJump)
 	}
 	// @6 MOVE
 	if g, ok := byPriority[6]; !ok || g.flags != flagMove {

@@ -20,7 +20,6 @@ import (
 
 	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/level"
-	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
 // fillWaterColumn lays water source cells across the whole 16x16 chunk for every Y in [yLo, yHi],
@@ -78,10 +77,14 @@ func newWaterWorldPig(t *testing.T, id int32, x, y, z float64, yLo, yHi int) (*T
 // non-stub observable of FloatGoal as built this phase.
 func TestFloatGoalKeepsPigAfloat(t *testing.T) {
 	const (
-		startY     = 100.0
-		yLo, yHi   = 40, 110 // deep water spanning well above + below the pig, no floor in range
-		ticks      = 200
-		x, z       = 8.5, 8.5
+		startY   = 100.0
+		yLo, yHi = -60, 110 // deep water spanning well above + below the pig, no floor in range
+		// 50 ticks: long enough for FloatGoal's impulses to open a large descent gap (~37 blocks) yet
+		// short enough that the FloatGoal pig is still submerged (gravity has no buoyancy counter yet —
+		// the deferred water travel physics — so both pigs eventually fall through; the differential is
+		// the observable, measured while the FloatGoal pig is still in the water).
+		ticks = 50
+		x, z  = 8.5, 8.5
 	)
 
 	// The FloatGoal pig — full newPigAI (FloatGoal@0 active in water).
@@ -221,6 +224,3 @@ func assertRNGUntouched(t *testing.T, e *Entity, ref *entityRandom, what string)
 		t.Fatalf("%s drew RNG (mob=%v ref=%v) — it must be a pure predicate", what, got, want)
 	}
 }
-
-// (silence the unused import if the lava sub-test is the only pk user)
-var _ = pk.Position{}

@@ -78,6 +78,17 @@ type groundNavigation struct {
 	// cooldown counts ticks since the last recompute (the MAX_TIME_RECOMPUTE throttle).
 	cooldown int
 
+	// canFloat is net.minecraft.world.entity.ai.navigation.PathNavigation.canFloat, set true by the
+	// FloatGoal ctor (mob.getNavigation().setCanFloat(true)). It tells the node-evaluator that the mob
+	// may PATH over/through water (WalkNodeEvaluator.setCanFloat → BlockPathTypes.WATER walkable). The
+	// flag is ported 1:1 here; the float PATHING behavior (pathing across water surfaces) is a
+	// node-evaluator concern DEFERRED + cited (CONTEXT deferred: "port the flag set; the nav float
+	// behavior is a node-evaluator concern, cite if not trivially included") — FloatGoal's observable
+	// (the swim-jump impulse) does not depend on float-pathing, so setting the flag fully satisfies the
+	// FloatGoal ctor without the pathing port. Plain bool, tick-owned.
+	//	[VERIFIED javap FloatGoal.<init>: getNavigation().setCanFloat(true); PathNavigation.setCanFloat(boolean).]
+	canFloat bool
+
 	// pending is set when an async path compute is in flight (OPT-01, 08-02): requestPath
 	// SUBMITS computePath to the off-tick pathPool and sets pending=true, then pathReady.applyTo
 	// clears it on the owner when the late path lands (or it is left false on a dropped/overloaded

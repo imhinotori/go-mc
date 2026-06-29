@@ -8,10 +8,11 @@
 #
 # Pig.registerGoals() (javap-verified): @0 FloatGoal, @1 PanicGoal(1.25), @3 BreedGoal(1.0),
 # @4 TemptGoal x2, @5 FollowParentGoal(1.1), @6 WaterAvoidingRandomStrollGoal(1.0),
-# @7 LookAtPlayerGoal(Player,6.0f), @8 RandomLookAroundGoal. @0/@1/@3/@4/@5 are DEFERRED with a
-# cited reason (deferred-goals.md): their prerequisites (mob jump control + fluid detection; a mob
-# damage source; entity aging/breeding; held-item tags) are unbuilt — porting them now would be
-# built-but-unwired or faked, both forbidden. This plugin ports @6/@7/@8 1:1.
+# @7 LookAtPlayerGoal(Player,6.0f), @8 RandomLookAroundGoal. @0 FloatGoal is PORTED (Phase 30-03: its
+# prerequisites — mob jump control + fluid detection — landed in 30-01/30-02). @1/@3/@4/@5 remain
+# DEFERRED with a cited reason (deferred-goals.md): their prerequisites (a mob damage source; entity
+# aging/breeding; held-item tags) are unbuilt — porting them now would be built-but-unwired or faked,
+# both forbidden. This plugin ports @0/@6/@7/@8 1:1.
 #
 # Each goal callback receives (entity, world, nav) handles. The interpreter fires ONLY while a goal
 # is RUNNING (an idle pig makes zero starlark.Calls per tick). The draw ORDER below matches the
@@ -19,6 +20,12 @@
 # reproduce the identical stream, so TestPluginPigEqualsGoNativePig can prove plugin == Go pig).
 
 # --- constants (jar-confirmed) -----------------------------------------------------------------
+FLOAT_JUMP_PROBABILITY = 0.8   # FloatGoal.tick: getRandom().nextFloat() < 0.8f (the swim-jump chance)
+FLUID_JUMP_THRESHOLD = 0.4     # Entity.getFluidJumpThreshold for the pig: getEyeHeight()<0.4?0.0:0.4;
+                               # pig eye 0.765 >= 0.4 -> 0.4 (Plan 30-01 jar finding, LOCKSTEP with the
+                               # Go oracle's t.getFluidJumpThreshold(e) == 0.4). FloatGoal.canUse compares
+                               # entity.fluid_height (WATER) > this. In the DRY oracle in_water is false so
+                               # canUse short-circuits before this comparison -> the value never gates a draw.
 STROLL_INTERVAL = 120     # RandomStrollGoal.DEFAULT_INTERVAL (the 1-in-N chance gate)
 STROLL_H = 10             # DefaultRandomPos.getPos horizontal radius (Pig: getPosition()=getPos(mob,10,7))
 STROLL_V = 7              # DefaultRandomPos.getPos vertical radius
@@ -26,6 +33,27 @@ LOOK_DIST = 6.0           # LookAtPlayerGoal lookDistance (Pig: 6.0f)
 LOOK_PROBABILITY = 0.02   # LookAtPlayerGoal.DEFAULT_PROBABILITY
 LOOK_AROUND_PROBABILITY = 0.02   # RandomLookAroundGoal.canUse: nextFloat() < 0.02f
 TWO_PI = 2.0 * 3.141592653589793   # RandomLookAroundGoal.start: d = 6.283185307179586d * nextDouble()
+
+# ============================================================================================
+# @0  FloatGoal(mob)   flags {JUMP}   requiresUpdateEveryTick=true
+# ports net.minecraft.world.entity.ai.goal.FloatGoal — LOCKSTEP with the Go oracle (server/ai_goals_float.go)
+# ============================================================================================
+# canUse (bytecode): isInWater() && getFluidHeight(WATER) > getFluidJumpThreshold() || isInLava(). NO RNG
+# (the only FloatGoal draw is in tick()). The strict `>` matches the bytecode (dcmpl; ifgt). Reads the
+# Plan-02 frozen-scalar handle attrs entity.in_water / entity.fluid_height (WATER) / entity.in_lava —
+# the SAME predicates the Go oracle's t.mobInWater/mobFluidHeight/mobInLava compute, so the two halves
+# agree. In the DRY oracle world in_water is false -> canUse false -> tick never runs -> zero new draws.
+def float_can_use(entity, world, nav):
+    return (entity.in_water and entity.fluid_height > FLUID_JUMP_THRESHOLD) or entity.in_lava
+
+# tick (bytecode): if getRandom().nextFloat() < 0.8f -> getJumpControl().jump(). DRAW 1: the single new
+# RNG in this subsystem, in tick() ONLY, drawn via entity.rand_float() (= e.ai.rng.nextFloat) — LOCKSTEP
+# with the Go oracle's mobRandom(e).nextFloat(). On a draw < 0.8 it arms the jump via nav.jump()
+# (capNav -> jumpControl.doJump). FloatGoal@0 runs FIRST in both goal walks, so this draw lands before
+# stroll/look in both -> identical lockstep stream.
+def float_tick(entity, world, nav):
+    if entity.rand_float() < FLOAT_JUMP_PROBABILITY:   # DRAW 1: nextFloat()<0.8 (the swim-jump chance)
+        nav.jump()
 
 # ============================================================================================
 # @6  WaterAvoidingRandomStrollGoal(mob, 1.0)   flags {MOVE}
@@ -157,6 +185,16 @@ declare_mob(
         "movement_speed": 0.25,  # Pig.createAttributes: MOVEMENT_SPEED 0.25
     },
     goals = [
+        # @0 FloatGoal [JUMP] — requiresUpdateEveryTick=true (jar-confirmed). FIRST = highest precedence,
+        # LOCKSTEP with the Go oracle's addGoal(0, newFloatGoal()). canUse=fluid predicate (no RNG);
+        # tick=nextFloat()<0.8 -> nav.jump() (the only new RNG, in tick()).
+        goal(
+            priority = 0,
+            flags = ["JUMP"],
+            can_use = float_can_use,
+            tick = float_tick,
+            requires_update_every_tick = True,
+        ),
         # @6 WaterAvoidingRandomStrollGoal [MOVE] — empty tick (start/continue carry it).
         goal(
             priority = 6,
