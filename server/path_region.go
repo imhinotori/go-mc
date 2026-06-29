@@ -29,10 +29,21 @@ package server
 // malus (A5) — v1 superflat is flat stone, so a solidity bitset is faithful.
 
 import (
+	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/block"
-	pk "github.com/imhinotori/sulfur/net/packet"
 	"github.com/imhinotori/sulfur/world"
 )
+
+// snapSectionLocal mirrors world/manager.go's sectionLocal (the single authoritative mapping,
+// package-private there): sec = (y-minY)>>4; local = (y&15)<<8 | (z&15)<<4 | (x&15). Replicated here
+// (not exported from world) to read a cached chunk's sections directly in snapshotRegion without a
+// per-cell ChunkManager lookup. Negative-safe: Go's >> is arithmetic and y&15 is correct for
+// negatives ((-1)&15==15), so no extra correction is needed.
+func snapSectionLocal(x, y, z, minY int) (sec, local int) {
+	sec = (y - minY) >> 4
+	local = (y&15)<<8 | (z&15)<<4 | (x & 15)
+	return
+}
 
 // pathRegion is the ported PathNavigationRegion: an IMMUTABLE solidity snapshot of the block
 // box [minX..maxX]×[minY..maxY]×[minZ..maxZ]. solid is a dense bitset indexed by the packed
@@ -128,11 +139,28 @@ func snapshotRegion(w *world.ChunkManager, e *Entity, tx, ty, tz int, followRang
 	if w == nil {
 		return r // world-less: an all-air region (degenerate, but never panics)
 	}
+	// PERF (Phase-8 snapshot, hot-path fix): the snapshot cube is ~(2*size+span)^3 cells (~74k for a
+	// followRange-16 stroll). The naive per-cell w.GetBlock did a full ChunkManager column map-lookup
+	// (m.Get -> mapaccess1) PER BLOCK — a CPU profile put this at ~85% of the tick with a handful of
+	// mobs pathing. The cube spans only ~9 columns, so resolve the *level.Chunk ONCE PER (x,z) column
+	// and read every y of that column from the cached chunk's sections directly. This is a pure perf
+	// rewrite — the produced solid/air bitmap is byte-identical to the per-cell path (same GetBlock +
+	// IsAir per cell, just without re-doing the column lookup) — the only permitted deviation.
+	// Iterate column-major (x,z outer) so the cached chunk + section index are reused across the y run.
 	for x := r.minX; x <= r.maxX; x++ {
-		for y := r.minY; y <= r.maxY; y++ {
-			for z := r.minZ; z <= r.maxZ; z++ {
-				s, ok := w.GetBlock(pk.Position{X: x, Y: y, Z: z}, dimMinY)
-				r.set(x, y, z, ok && !block.IsAir(s)) // solid? (the copy — never a live alias)
+		for z := r.minZ; z <= r.maxZ; z++ {
+			col := level.ChunkPos{int32(x >> 4), int32(z >> 4)}
+			ch, loaded := w.Get(col)
+			if !loaded {
+				continue // unloaded column: leave the cells false (air) — same as GetBlock ok==false
+			}
+			for y := r.minY; y <= r.maxY; y++ {
+				sec, local := snapSectionLocal(x, y, z, dimMinY)
+				if sec < 0 || sec >= len(ch.Sections) {
+					continue // y outside the section range: air (same as GetBlock ok==false)
+				}
+				s := ch.Sections[sec].GetBlock(local)
+				r.set(x, y, z, !block.IsAir(s)) // solid? (the copy — never a live alias)
 			}
 		}
 	}
