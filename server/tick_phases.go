@@ -410,14 +410,31 @@ func (t *TickLoop) tickPhysics() {
 			continue
 		}
 
-		// Gravity: accelerate downward, then air drag so vertical speed converges to a
-		// terminal velocity (06-RESEARCH A1 — tunable, wire-irrelevant constants).
-		e.vy -= gravityPerTick
-		e.vy *= airDrag
+		// LIVE-DEBUG A (the "mobs sink in water" fix): a mob whose AABB is in water runs the
+		// VANILLA water physics (LivingEntity.travelInWater) INSTEAD of the dry travelInAir path —
+		// vertical drag 0.8 (NOT the 0.98 air drag) + reduced gravity baseGravity/16 == 0.005 (NOT
+		// the full 0.08). Without this the dry 0.08 gravity sank the mob faster than FloatGoal's
+		// +0.04 swim impulse could lift it, so a pig dropped in water swam briefly then sank to the
+		// floor. travelInWaterVertical mirrors travelInWater's vertical ops + getFluidFallingAdjusted
+		// Movement (fluid_travel.go, javap-cited); mobInWater is the Phase-30 predicate (fluid_physics
+		// .go). A DRY mob takes the unchanged air branch below. The dead-mob corpse is already frozen
+		// (the `if e.dead { continue }` guard above), so a corpse never swims — the live-mob gate holds.
+		if t.mobInWater(e) {
+			// Water branch: travelInWater vertical (0.8 drag + 0.005 gravity) replaces gravity +
+			// air drag + the dry horizontal friction (the 0.8 horizontal water drag is applied
+			// inside travelInWaterVertical). FloatGoal's +0.04 impulse (applied in tickAI, before
+			// this) survives the gentle 0.005 pull, so the mob bobs at the surface instead of sinking.
+			travelInWaterVertical(e)
+		} else {
+			// Dry (travelInAir) branch: accelerate downward, then air drag so vertical speed
+			// converges to a terminal velocity (06-RESEARCH A1 — tunable, wire-irrelevant constants).
+			e.vy -= gravityPerTick
+			e.vy *= airDrag
 
-		// Horizontal friction: a moving entity slows instead of sliding forever.
-		e.vx *= horizontalFriction
-		e.vz *= horizontalFriction
+			// Horizontal friction: a moving entity slows instead of sliding forever.
+			e.vx *= horizontalFriction
+			e.vz *= horizontalFriction
+		}
 
 		// Integrate via the per-axis swept resolver (the anti-tunneling discipline). This
 		// also re-buckets through entities.move and updates onGround / zeroes blocked

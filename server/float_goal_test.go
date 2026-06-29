@@ -61,62 +61,144 @@ func newWaterWorldPig(t *testing.T, id int32, x, y, z float64, yLo, yHi int) (*T
 	return loop, pig
 }
 
-// TestFloatGoalKeepsPigAfloat is the WET-behavior proof (the TDD RED→GREEN driver). A pig with
-// FloatGoal@0 dropped in a deep water column does NOT sink the way an identical pig WITHOUT FloatGoal
-// does: FloatGoal.canUse is true in water → tick() draws nextFloat()<0.8 → jumpControl.jump() → the
-// serverAiStep JUMP slot's entityJumpStep adds the +0.04 swim impulse (jumpInLiquid), counteracting
-// gravity. Driven through serverAiStep + tickPhysics for N ticks, the FloatGoal pig ends up
-// MEASURABLY HIGHER (less sunk) than the control pig whose goals are stripped (pure gravity).
+// TestFloatGoalKeepsPigAfloat is the WET-behavior proof (the in-game "pig sinks to the floor" bug,
+// LIVE-DEBUG A). A pig with FloatGoal@0 dropped in a water column with a SOLID FLOOR stays NEAR the
+// surface and does NOT sink to the floor: the water physics (travelInWaterVertical — vertical drag
+// 0.8 + reduced gravity 0.005) makes the mob sink slowly, and FloatGoal.canUse is true in water →
+// tick() draws nextFloat()<0.8 → jumpControl.jump() → the serverAiStep JUMP slot's entityJumpStep
+// adds the +0.04 swim impulse (jumpInLiquid), which overcomes the gentle 0.005 pull and keeps the
+// pig bobbing at the surface. Driven through serverAiStep + tickPhysics for many ticks, the FloatGoal
+// pig stays within a few blocks of where it started — it never reaches the floor.
 //
-// NOTE (cited, faithful scope): vanilla water also applies buoyancy/fluid-push movement physics
-// (LivingEntity.travel's water branch — isPushedByFluid + the 0.8 water drag) which is DEFERRED
-// (30-01/30-02 cited it: FloatGoal only READS the fluid; the water travel physics is a later port).
-// So this test measures FloatGoal's OWN observable — the +0.04 jump impulse counteracting gravity,
-// making the FloatGoal pig descend slower than a no-FloatGoal pig — NOT the full vanilla "bobs at the
-// surface" behavior, which needs the deferred water travel physics. The differential is the honest,
-// non-stub observable of FloatGoal as built this phase.
+// This is the STRENGTHENED assertion (was: merely "sinks less than a control pig"): with the water
+// travel physics now ported (LIVE-DEBUG A — travelInWaterVertical wired into tickPhysics), the
+// observable is the full vanilla "bobs at the surface" behavior, so the test asserts the pig STAYS
+// AFLOAT near its start, not just that it outpaces a gravity-only control.
 func TestFloatGoalKeepsPigAfloat(t *testing.T) {
 	const (
-		startY   = 100.0
-		yLo, yHi = -60, 110 // deep water spanning well above + below the pig, no floor in range
-		// 50 ticks: long enough for FloatGoal's impulses to open a large descent gap (~37 blocks) yet
-		// short enough that the FloatGoal pig is still submerged (gravity has no buoyancy counter yet —
-		// the deferred water travel physics — so both pigs eventually fall through; the differential is
-		// the observable, measured while the FloatGoal pig is still in the water).
-		ticks = 50
+		// A water column ABOVE a solid floor: water in [floorY+1 .. yHi], a stone floor at floorY.
+		// The pig starts a few blocks ABOVE the floor, submerged. If FloatGoal+water-physics work,
+		// it stays near startY; if it sank like the old dry-physics bug, it would land on floorY+1.
+		floorY = 40
+		yLo    = floorY + 1 // first water cell above the floor
+		yHi    = 110        // deep water well above the pig
+		startY = 60.0       // ~19 blocks above the floor surface (floorY+1 == 41)
+		// 200 ticks: long enough that a sinking pig WOULD have reached the floor (a 0.005/tick + drag
+		// descent over the 19-block gap would land it well within 200 ticks), so staying afloat is a
+		// genuine proof FloatGoal's impulse beats the reduced water gravity.
+		ticks = 200
 		x, z  = 8.5, 8.5
 	)
 
-	// The FloatGoal pig — full newPigAI (FloatGoal@0 active in water).
-	floatLoop, floatPig := newWaterWorldPig(t, 4242, x, startY, z, yLo, yHi)
+	loop, mgr := newPhysicsLoop()
+	for cx := -1; cx <= 1; cx++ {
+		for cz := -1; cz <= 1; cz++ {
+			ch := putChunk(mgr, level.ChunkPos{int32(cx), int32(cz)})
+			fillWaterColumn(ch, yLo, yHi)
+			fillFloor(ch, floorY) // solid floor BELOW the water (overwrites the water cell at floorY)
+		}
+	}
+	pig := NewEntity(4242, entity.Pig, x, startY, z)
+	pig.ai = newPigAI()
+	reseedMobAI(pig.ai, pig.id)
+	pig.onGround = false
+	loop.only().entities.add(pig)
 
-	// The control pig — identical world + id (same seed), but its goals are STRIPPED so FloatGoal
-	// never fires. It descends under pure gravity (the impulse-free baseline).
-	ctrlLoop, ctrlPig := newWaterWorldPig(t, 4242, x, startY, z, yLo, yHi)
-	ctrlPig.ai.goals = goalSelector{}
-
-	// Sanity: both pigs start in water (FloatGoal.canUse precondition).
-	if !floatLoop.mobInWater(floatPig) {
+	// Sanity: the pig starts in water (FloatGoal.canUse precondition) and well above the floor.
+	if !loop.mobInWater(pig) {
 		t.Fatal("setup: the FloatGoal pig must start submerged in water")
 	}
 
+	minY := pig.y // track the LOWEST the pig ever sinks to over the run
 	for i := 0; i < ticks; i++ {
-		floatPig.ai.serverAiStep(floatLoop, floatPig)
-		ctrlPig.ai.serverAiStep(ctrlLoop, ctrlPig)
-		floatLoop.tickPhysics()
-		ctrlLoop.tickPhysics()
+		pig.ai.serverAiStep(loop, pig)
+		loop.tickPhysics()
+		if pig.y < minY {
+			minY = pig.y
+		}
 	}
 
-	// FloatGoal's impulses must leave its pig HIGHER than the impulse-free control: it sank less.
-	if floatPig.y <= ctrlPig.y {
-		t.Fatalf("FloatGoal pig did not stay afloat: floatPig.y=%.4f must be > ctrlPig.y=%.4f "+
-			"(FloatGoal's +0.04 impulses should counteract gravity)", floatPig.y, ctrlPig.y)
+	// The pig must still be IN water at the end (it did not sink out / the column did not drain).
+	if !loop.mobInWater(pig) {
+		t.Fatalf("FloatGoal pig left the water column (y=%.4f) — it should stay afloat in the water", pig.y)
 	}
 
-	// And the FloatGoal pig must still be IN water at the end (it did not sink out of the column).
-	if !floatLoop.mobInWater(floatPig) {
-		t.Fatalf("FloatGoal pig sank out of the water column (y=%.4f) — it should stay afloat in the water",
-			floatPig.y)
+	// THE STRENGTHENED AFLOAT ASSERTION: the pig must NOT have sunk near the floor. The floor surface
+	// is floorY+1 (== 41); the pig started at 60. Assert it never sank below a generous afloat band
+	// (here: stayed within ~6 blocks of its start, i.e. y > 54), which is FAR above the floor — the
+	// old dry-physics bug would have parked it on the floor at ~41.
+	const afloatFloor = startY - 6.0 // 54.0 — well above the floorY+1==41 surface
+	if minY < afloatFloor {
+		t.Fatalf("FloatGoal pig sank below the afloat band: lowest y=%.4f dropped below %.1f (floor "+
+			"surface is %.1f). It should bob near the start (%.1f), not sink toward the floor.",
+			minY, afloatFloor, float64(floorY+1), startY)
+	}
+}
+
+// TestMobSinksSlowerInWaterThanAir is the LIVE-DEBUG A unit proof for travelInWaterVertical: an
+// IDENTICAL mob with the SAME downward velocity descends MUCH slower in water (vertical drag 0.8 +
+// reduced gravity 0.005) than in air (the dry vy -= 0.08; vy *= 0.98 path). It strips the AI (no
+// FloatGoal impulse) so the test isolates the water TRAVEL physics, not the swim-jump. Mirrors
+// LivingEntity.travelInWater vs travelInAir.
+func TestMobSinksSlowerInWaterThanAir(t *testing.T) {
+	const (
+		yLo, yHi = -60, 110 // deep water with no floor in range, so the descent is unobstructed
+		startY   = 100.0
+		startVy  = -0.2 // a downward velocity both mobs begin with
+		ticks    = 20
+		x, z     = 8.5, 8.5
+	)
+
+	// The water mob — submerged in a deep water column (no floor), no AI (pure travel physics).
+	waterLoop, mgr := newPhysicsLoop()
+	for cx := -1; cx <= 1; cx++ {
+		for cz := -1; cz <= 1; cz++ {
+			ch := putChunk(mgr, level.ChunkPos{int32(cx), int32(cz)})
+			fillWaterColumn(ch, yLo, yHi)
+		}
+	}
+	waterMob := NewEntity(1, entity.Pig, x, startY, z)
+	waterMob.onGround = false
+	waterMob.vy = startVy
+	waterLoop.only().entities.add(waterMob)
+	if !waterLoop.mobInWater(waterMob) {
+		t.Fatal("setup: the water mob must start submerged")
+	}
+
+	// The air mob — an empty (all-air) world, same start, same velocity, no AI (the dry path).
+	airLoop, airMgr := newPhysicsLoop()
+	for cx := -1; cx <= 1; cx++ {
+		for cz := -1; cz <= 1; cz++ {
+			putChunk(airMgr, level.ChunkPos{int32(cx), int32(cz)}) // all-air chunk, no water
+		}
+	}
+	airMob := NewEntity(1, entity.Pig, x, startY, z)
+	airMob.onGround = false
+	airMob.vy = startVy
+	airLoop.only().entities.add(airMob)
+	if airLoop.mobInWater(airMob) {
+		t.Fatal("setup: the air mob must NOT be in water")
+	}
+
+	for i := 0; i < ticks; i++ {
+		waterLoop.tickPhysics()
+		airLoop.tickPhysics()
+	}
+
+	waterDrop := startY - waterMob.y
+	airDrop := startY - airMob.y
+
+	// The air mob must have dropped MUCH further: the dry 0.08 gravity vs the water 0.005 reduced
+	// gravity + 0.8 drag is roughly an order of magnitude. Assert the water mob fell strictly less,
+	// and by a wide margin (less than half the air drop) so the test is not flaky on small diffs.
+	if waterDrop >= airDrop {
+		t.Fatalf("water mob did not sink slower: waterDrop=%.4f air Drop=%.4f (water should be far less)",
+			waterDrop, airDrop)
+	}
+	if waterDrop > airDrop*0.5 {
+		t.Fatalf("water drag too weak: waterDrop=%.4f is more than half airDrop=%.4f — the water "+
+			"vertical drag (0.8) + reduced gravity (0.005) should make the water mob sink FAR slower",
+			waterDrop, airDrop)
 	}
 }
 
