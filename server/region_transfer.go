@@ -237,3 +237,43 @@ func (t *TickLoop) applyCrossRegionTransfers() {
 		src.pendingTransfers = src.pendingTransfers[:0] // reset for next tick (keep the backing array)
 	}
 }
+
+// applyCrossRegionDamage drains every region's pendingDamage on the QUIESCENT coordinator (post-barrier,
+// no region is ticking) and applies each cross-region hit to its OWNER region — the project's FIRST true
+// cross-region WRITE (PITFALLS Pitfall 2 / T-29-02). It mirrors applyCrossRegionTransfers EXACTLY: it
+// runs at the same barrier point (called right after applyCrossRegionTransfers in the coordinator), with
+// the same defensive owner==nil drop and the same [:0] reset.
+//
+// For each queued damageIntent the OWNER is RE-RESOLVED BY ID (owningRegion, l.65) at drain time — NOT
+// trusted from di.to and NEVER resolved through cur() (the cur()→region-0 silent-fallback trap the whole
+// regionization gate guards against). If no region owns the victim (it despawned/transferred since the
+// hit was queued), the intent is DROPPED — the same "drop if gone" guard the async rejoin uses. The
+// surviving hit is applied inside withRegion(owner) so applyDamageEntity's region-scoped writes
+// (the mob's store fields + the on_damage emitEntityEvent) resolve against the OWNER's region. Because
+// every region is joined here, the write is -race clean by construction (no region tick observes it).
+func (t *TickLoop) applyCrossRegionDamage() {
+	// NOTE: no t.trace here — like applyCrossRegionTransfers this is an internal barrier step, NOT one of
+	// the fixed observable phases (TestTickPhaseOrder asserts the exact phase sequence, which this must
+	// not perturb). It runs immediately after the transfer drain each tick.
+	for _, src := range t.regions {
+		if len(src.pendingDamage) == 0 {
+			continue
+		}
+		for _, di := range src.pendingDamage {
+			// Re-resolve the OWNER by id (drop if gone — the defensive guard mirroring l.205): a victim
+			// removed or transferred since the hit was queued has no owning region; skip it (no panic, no
+			// phantom write). NEVER resolve via cur() (the silent region-0 fallback trap).
+			owner := t.owningRegion(di.victimID)
+			if owner == nil {
+				continue
+			}
+			mob, ok := owner.entities.get(di.victimID)
+			if !ok {
+				continue // owningRegion just confirmed the id, but stay defensive (mirrors the transfer guard)
+			}
+			// Apply in the OWNER's region context so applyDamageEntity's per-region writes resolve there.
+			t.withRegion(owner, func() { t.applyDamageEntity(mob, di.src, di.amount) })
+		}
+		src.pendingDamage = src.pendingDamage[:0] // reset for next tick (keep the backing array)
+	}
+}

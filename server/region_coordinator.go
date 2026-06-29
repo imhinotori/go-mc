@@ -175,6 +175,14 @@ func (t *TickLoop) tickOnce() {
 	// by the new region, ai/nav/scratch travelling). 27-RESEARCH Pattern 4.
 	t.applyCrossRegionTransfers()
 
+	// Cross-region DAMAGE drain (Phase-29, the FIRST true cross-region write — Pitfall 2 / T-29-02):
+	// drain each region's pendingDamage and apply every boundary hit to its OWNER region (re-resolved by
+	// id, drop if gone), inside withRegion(owner) so the mob-store write + on_damage emit are region-
+	// correct. Quiescent here (every region joined), so it is -race clean. Mirrors the transfer drain
+	// above; ordered right after it (the transfer establishes post-transfer ownership before the damage
+	// owner re-resolve, so a victim that just transferred is hit in its NEW region).
+	t.applyCrossRegionDamage()
+
 	// The async rejoin runs on the coordinator now (quiescent): the chunkReady drain (world mutation,
 	// globalRegion's asyncIn) + the asyncIn2 entity results (pathReady/spawnCandidatesReady), which
 	// re-resolve the OWNING region by id and apply there (drop if no region owns it — Pitfall 1).
