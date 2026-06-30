@@ -717,15 +717,131 @@ func (t *TickLoop) withinAttackReach(attacker, victim *tickPlayer) bool {
 // handleInteract resolves a ServerboundInteract on-tick. In 26.2 this packet is the RIGHT-CLICK
 // entity interaction (entityId + InteractionHand + Vec3 location + Boolean usingSecondaryAction
 // — jar-verified, NO Action enum; ATTACK is a separate ServerboundAttack handled by
-// handleAttack). v1 has no entity right-click behavior (mounting, trading, leashing, etc.), so
-// this is a defensive-decode no-op: it never deals damage (only ServerboundAttack does). Kept
-// as an explicit handler so the wire is consumed deliberately rather than via the default drop,
-// and so a future plan can attach interaction behavior here. Decoding is best-effort; a
-// malformed payload is simply ignored.
+// handleAttack). MOB-SUB-09 (Plan 33-02) wires the FEED path here: a player right-clicking a pig
+// with pig_food (Animal.mobInteract) feeds it — an ADULT falls in love (setInLove + hearts), a BABY
+// ages up faster, both consuming 1 held item. It still NEVER deals damage (only ServerboundAttack
+// does). The target is resolved through its owning region (cross-region feeds are dropped per the v5
+// same-region cut); a malformed payload / forged or non-mob id is a silent no-op (defensive decode).
 func (t *TickLoop) handleInteract(p *tickPlayer, pkt pk.Packet) {
-	// No-op for v1. Intentionally does NOT damage: per the jar split, ServerboundInteract is
-	// the right-click interaction, never the attack (T-6-05 — only the server-driven attack
-	// path deals damage). Left as a named seam for future entity-interaction behavior.
-	_ = p
-	_ = pkt
+	// DECODE the ServerboundInteract. Wire layout (javap ServerboundInteractPacket.STREAM_CODEC,
+	// composite of): VarInt entityId ; InteractionHand (VarInt enum) ; Vec3 location (3 doubles) ;
+	// Boolean usingSecondaryAction. We only need the target entityId for the feed path (the held item
+	// is read server-side from the player's selected hand, exactly as the TemptGoal held-read does);
+	// the trailing fields are decoded defensively to consume the frame cleanly and are not used. A
+	// malformed/short payload is a silent no-op (the existing defensive-decode discipline).
+	var targetID pk.VarInt
+	if err := pkt.Scan(&targetID); err != nil {
+		return // short payload: no entity id -> ignore (never panic)
+	}
+
+	// RESOLVE the target mob through its OWNING region (re-resolve by id; nil if gone/forged), exactly
+	// as handleMobAttack does — NEVER cur() (the dispatch goroutine has no region registered; cur()
+	// would fall to region 0 or panic under strictRegion). A non-mob / despawned / forged id -> a silent
+	// no-op. The feed path only touches mobs, so a player or unknown id falls through harmlessly.
+	ownerRegion := t.owningRegion(int32(targetID))
+	if ownerRegion == nil {
+		return
+	}
+	mob, ok := ownerRegion.entities.get(int32(targetID))
+	if !ok {
+		return
+	}
+
+	// CROSS-REGION discipline (T-33-03): handleInteract runs on the player's dispatch path. If the mob
+	// is owned by a DIFFERENT region than the player's column, do NOT mutate that foreign region's mob
+	// inline (the same Pitfall-2 hazard handleMobAttack guards with its owner-resolve/queue split). v5
+	// takes the accepted "same-region cut" deviation here (mirroring the documented same-region breeding
+	// cut): a cross-region feed is dropped rather than queued — the player simply re-interacts after the
+	// mob/player settle into one region. The common case (a player feeding a pig beside them) is always
+	// same-region. CITE region_transfer.go queueDamageIntent as the full-fidelity barrier path a later
+	// plan can adopt if cross-region feeding becomes load-bearing.
+	playerRegion := t.regionForColumn(columnOf(p.x, p.z))
+	if ownerRegion != playerRegion {
+		return // cross-region feed: dropped (accepted v5 same-region cut), never a foreign inline mutation
+	}
+
+	t.tryFeedAnimal(p, mob)
+}
+
+// tryFeedAnimal is the port of net.minecraft.world.entity.animal.Animal.mobInteract's FEED branch for
+// a pig (Pig.isFood = stack.is(ItemTags.PIG_FOOD)). Verbatim from the javap'd bytecode
+// (33-JARNOTES.md:92-115):
+//
+//	ItemStack stack = player.getItemInHand(hand);
+//	if (isFood(stack)) {
+//	    int age = getAge();
+//	    if (player instanceof ServerPlayer && age == 0 && canFallInLove()) {  // ADULT, not already in love
+//	        usePlayerItem(player, hand, stack);     // consume 1 (survival)
+//	        setInLove(serverPlayer);                // inLove = 600 + broadcastEntityEvent(this, 18)
+//	        playEatingSound();                      // PIG: the base Animal.playEatingSound is a no-op
+//	        return SUCCESS_SERVER;
+//	    }
+//	    if (canAgeUp()) {                           // BABY (age<0; isAgeLocked is a v1 const-false stub)
+//	        usePlayerItem(player, hand, stack);
+//	        ageUp(getSpeedUpSecondsWhenFeeding(-age), true);  // grow toward adult faster
+//	        playEatingSound();                      // PIG: no-op
+//	        return SUCCESS;
+//	    }
+//	}
+//
+// ORDER is load-bearing and preserved: the ADULT-love branch is tried FIRST, then the BABY age-up
+// branch. The server is authoritative — the held item is read server-side (the player's selected hand,
+// the TemptGoal precedent), never trusted from the packet. usePlayerItem == shrinkHeldItem (stack.
+// consume(1); pig_food carrots carry no USE_REMAINDER). setInLove's heart broadcast (Level.
+// broadcastEntityEvent(this, 18)) is realized via broadcastHearts. playEatingSound() for a PIG is the
+// empty base Animal.playEatingSound (Pig does NOT override it — javap-confirmed `return`), so feeding a
+// pig emits NO sound; the call is preserved as a documented no-op so a sound-overriding animal (Phase
+// 34) slots in here. This runs ONLY on a real ServerboundInteract — the oracle pig is never fed, so
+// the whole path is dormant on it (the byte-identical gate).
+//	[VERIFIED javap Animal.mobInteract (offsets 0-119): isFood; getAge; (ServerPlayer && age==0 &&
+//	 canFallInLove) -> usePlayerItem + setInLove + playEatingSound + SUCCESS_SERVER; canAgeUp ->
+//	 usePlayerItem + ageUp(getSpeedUpSecondsWhenFeeding(-age), true) + playEatingSound + SUCCESS.
+//	 Mob.usePlayerItem -> stack.consume(1, player). AgeableMob.canAgeUp == isBaby() && !isAgeLocked().
+//	 Pig has NO playEatingSound override; Animal.playEatingSound == return (no-op).]
+func (t *TickLoop) tryFeedAnimal(p *tickPlayer, mob *Entity) {
+	inv := ensureInventory(p)
+
+	// player.getItemInHand(hand): read the player's selected hand. Sulfur reads the MAIN-hand selected
+	// hotbar slot (heldWindowSlot) — the established held-item read (TemptGoal.shouldFollow precedent).
+	// An empty hand (slotIsEmpty) is never pig_food (ItemStack.EMPTY fails isFood), so it falls through.
+	held := inv.get(heldWindowSlot(inv.heldSlot))
+	if slotIsEmpty(held) {
+		return
+	}
+	itemID := int32(held.ItemID)
+
+	// Pig.isFood = stack.is(ItemTags.PIG_FOOD) — the Phase-32 tag read (the same predicate the @4
+	// pig_food TemptGoal uses). A non-food item is a silent no-op (no consume, no love).
+	if !itemInTag(itemID, "pig_food") {
+		return
+	}
+
+	age := mob.breedAge
+
+	// ADULT branch (tried FIRST): age == 0 && canFallInLove() (player is always a ServerPlayer here).
+	if age == 0 && mob.canFallInLove() {
+		t.shrinkHeldItem(p, inv) // usePlayerItem -> stack.consume(1): survival shrink by 1
+		mob.setInLove()          // inLove = 600
+		t.broadcastHearts(mob)   // setInLove's broadcastEntityEvent(this, 18): the client heart burst
+		// playEatingSound(): the base Animal.playEatingSound is a no-op for a pig (Pig has no override).
+		return
+	}
+
+	// BABY branch: canAgeUp() == isBaby() (isAgeLocked is a v1 const-false stub) == age < 0.
+	if mob.isBaby() {
+		t.shrinkHeldItem(p, inv)
+		// ageUp(getSpeedUpSecondsWhenFeeding(-age)): grow the fed baby toward adulthood faster. -age is
+		// positive (a baby's breedAge is negative). If the grow-up crosses 0 (the baby becomes an adult
+		// THIS feed), perform the same 0-crossing side effect tickMobAging's onGrewUp does — restore the
+		// adult AABB + broadcast DATA_BABY_ID=false — so a fed-to-adulthood baby renders full-size at once.
+		wasBaby := mob.isBaby()
+		mob.ageUp(getSpeedUpSecondsWhenFeeding(-age))
+		if wasBaby && !mob.isBaby() {
+			t.onGrewUp(mob)
+		}
+		// playEatingSound(): no-op for a pig (see above).
+		return
+	}
+	// Neither branch (an adult already in love, or on cooldown): no consume, no effect — falls through
+	// to super.mobInteract in vanilla (no further v1 behavior).
 }
