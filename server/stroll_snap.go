@@ -42,8 +42,9 @@ func (t *TickLoop) isStableDestination(bx, by, bz int) bool { return t.blockSoli
 
 // moveUpOutOfSolid is RandomPos.moveUpOutOfSolid(pos, maxY, isSolid): if the candidate cell is solid,
 // move Y up while up.getY() <= maxY && the cell is still solid; return the first clear y. maxY is pinned
-// to maxBuildHeightY == ServerLevel.getMaxY() (block_break.go:78 — the overworld getMinY()+getHeight()
-// == -64+384 == 320); the jar passes mob.level().getMaxY() here. If the cell is already clear, return by.
+// to maxBuildHeightY == Level.getMaxY() (block_break.go — the overworld getMinY()+getHeight()-1 ==
+// -64+384-1 == 319, the INCLUSIVE top valid Y); the jar passes mob.level().getMaxY() here. If the cell
+// is already clear, return by.
 //
 //	[VERIFIED javap RandomPos.moveUpOutOfSolid: if (solidityTester.test(pos)) { up = pos.mutable().move(UP);
 //	 while (up.getY() <= maxY && solidityTester.test(up)) up.move(UP); return up.immutable(); } return pos;.]
@@ -60,11 +61,12 @@ func (t *TickLoop) moveUpOutOfSolid(bx, by, bz int) int {
 
 // isOutsideLimits is GoalUtils.isOutsideLimits(pos, mob) == mob.level().isOutsideBuildHeight(pos.getY())
 // — reject a candidate whose Y is below the build floor (dimMinY) or above the ceiling (maxBuildHeightY
-// == ServerLevel.getMaxY(), the SAME bound moveUpOutOfSolid's maxY uses). A flat-world pig at Y≈64 with
+// == Level.getMaxY() == 319, the SAME bound moveUpOutOfSolid's maxY uses). A flat-world pig at Y≈64 with
 // ±7 vertical offset never trips this, but it is a CITED guard at the vanilla default, never baked away.
 //
-//	[VERIFIED CFR GoalUtils.isOutsideLimits: `return mob.level().isOutsideBuildHeight(pos.getY());`
-//	 — Level.isOutsideBuildHeight(y) = y < getMinBuildHeight() || y >= getMaxBuildHeight().]
+//	[VERIFIED CFR/javap LevelHeightAccessor.isOutsideBuildHeight(y) = `y < getMinY() || y > getMaxY()`,
+//	 with getMaxY() = getMinY()+getHeight()-1 == 319 (NOT the exclusive getMaxBuildHeight 320). So the
+//	 reject is `by < dimMinY || by > maxBuildHeightY(319)` — by==320 is correctly rejected.]
 func (t *TickLoop) isOutsideLimits(by int) bool { return by < dimMinY || by > maxBuildHeightY }
 
 // isRestricted is GoalUtils.isRestricted(restrict, mob, pos) == restrict && !mob.isWithinHome(pos). A
@@ -104,7 +106,7 @@ func (t *TickLoop) hasMalus(_ *Entity, _, _, _ int) bool { return false }
 //
 // PER-CANDIDATE VALIDATION, JAR ORDER (the LandRandomPos.getPos validation — the ~99.9% COMMON branch
 // of WaterAvoidingRandomStrollGoal.getPosition): isOutsideLimits || isRestricted || isNotStable
-// (==!isStableDestination), THEN moveUpOutOfSolid (maxY = dimMaxY == Level.getMaxY()), THEN
+// (==!isStableDestination), THEN moveUpOutOfSolid (maxY = maxBuildHeightY == Level.getMaxY() == 319), THEN
 // isWater || hasMalus.
 //
 // FLAG MEANING (jar-verified, see ai_goals_passive.go getPosition): wantLandMode=true is the COMMON
@@ -142,7 +144,7 @@ func (m *mobAI) snapStrollWant(t *TickLoop, e *Entity) (x, y, z float64, ok bool
 		if !t.isStableDestination(bx, by, bz) { // isNotStable == !isStableDestination
 			continue
 		}
-		// movePosUpOutOfSolid: snap Y up out of solid (maxY pinned to maxBuildHeightY == getMaxY()) —
+		// movePosUpOutOfSolid: snap Y up out of solid (maxY pinned to maxBuildHeightY == getMaxY() == 319) —
 		// the always-snap optimization (see the doc comment). For a stable candidate already standing on
 		// a solid floor with a clear cell above, this is a no-op (returns by); for an underground stable
 		// candidate it climbs to the first clear cell == the walkable surface above the floor.

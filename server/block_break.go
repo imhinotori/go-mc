@@ -71,11 +71,16 @@ const (
 // all `iconst_m1; invokevirtual destroyBlockProgress`).
 const digOverlayClear = -1
 
-// maxBuildHeightY is ServerLevel.getMaxY() for the overworld: getMinY()+getHeight() == -64+384 ==
-// 320 (verified: the handleBlockBreakAction caller passes `ServerLevel.getMaxY()` as maxBuildHeight,
-// and the reject is `pos.getY() > maxBuildHeight`). v1 single-dimension overworld; a future
-// multi-dimension wiring threads the real per-dimension getMaxY here (mirrors dimMinY's note).
-const maxBuildHeightY = dimMinY + 384 // -64 + 384 = 320
+// maxBuildHeightY is Level.getMaxY() for the overworld — the HIGHEST VALID block Y, INCLUSIVE:
+// getMinY() + getHeight() - 1 == -64 + 384 - 1 == 319 (javap LevelHeightAccessor.getMaxY:
+// `getMinY; getHeight; iadd; iconst_1; isub`). NOT getMaxBuildHeight()/getHeight() (the exclusive 320).
+// Both consumers want this inclusive 319: ServerGamePacketListenerImpl.handlePlayerAction passes
+// `player.level().getMaxY()` to handleBlockBreakAction whose reject is `pos.getY() > maxY` (so 320 is
+// correctly rejected — isOutsideBuildHeight(320) is true since `y > getMaxY()` with getMaxY==319), and
+// RandomPos.moveUpOutOfSolid / GoalUtils.isOutsideLimits (stroll_snap.go) bound on the same getMaxY().
+// v1 single-dimension overworld; a future multi-dimension wiring threads the real per-dimension getMaxY
+// here (mirrors dimMinY's note).
+const maxBuildHeightY = dimMinY + 384 - 1 // -64 + 384 - 1 = 319 == Level.getMaxY() (inclusive)
 
 // blockHardness maps a state id to its block's break-time inputs (Part A — level/block/hardness.go,
 // extracted from the jar's BlockBehaviour.getDestroySpeed / requiresCorrectToolForDrops). The
@@ -183,7 +188,8 @@ func (t *TickLoop) handleBlockBreakAction(p *tickPlayer, pos pk.Position, action
 		return
 	}
 
-	// Pre-check 2 — too high: `pos.getY() > maxBuildHeight` (ServerLevel.getMaxY() == 320). Reject by
+	// Pre-check 2 — too high: `pos.getY() > maxY` where the caller (handlePlayerAction) passes
+	// `player.level().getMaxY()` == 319 (inclusive top valid Y). Reject by
 	// re-asserting the current authoritative state to the breaker (a BlockUpdate, so the client's
 	// predicted edit snaps back) and returning. We broadcast the current state to the tracking column,
 	// which includes the breaker — the same snap-back reconciliation broadcastBlockUpdate provides.
