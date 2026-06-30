@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v5
 milestone_name: Mob Behaviors & Living-Entity Subsystems
-status: verifying
-stopped_at: Completed 34-01-PLAN.md (cow)
-last_updated: "2026-06-30T18:11:08.220Z"
+status: milestone_complete
+stopped_at: Phase 36 (wolf) COMPLETE + VERIFIED 3/3 — v5 ALL 9 PHASES DONE (29/30/30.1/31/32/33/34/35/36). The 8-mob jar-faithful roster ships byte-identical; pig oracle byte-identical throughout; Docker -race clean. v5 READY for milestone-completion (/gsd-complete-milestone v5).
+last_updated: "2026-06-30T18:30:00.000Z"
 last_activity: 2026-06-30
 progress:
   total_phases: 9
-  completed_phases: 8
-  total_plans: 31
-  completed_plans: 28
-  percent: 90
+  completed_phases: 9
+  total_plans: 37
+  completed_plans: 37
+  percent: 100
 ---
 
 # Project State
