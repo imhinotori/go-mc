@@ -296,6 +296,32 @@ type Entity struct {
 	//	 canFallInLove() == inLove <= 0; aiStep tail: if getAge()!=0 inLove=0; if inLove>0 {--inLove; ...}.]
 	inLove int
 
+	// --- MOB-PASS-02 (Phase 34): Sheep wool / shear state ------------------------------------
+	//
+	// sheared is the host-side mirror of net.minecraft.world.entity.animal.sheep.Sheep's DATA_WOOL
+	// sheared bit (isSheared() == (DATA_WOOL & 0x10) != 0). Sheep.shear sets it true (the wool is
+	// gone until it regrows); Sheep.ate (the EatBlockGoal eat) sets it false (the wool regrows). Sulfur
+	// keeps the bool here and DERIVES the wire DATA_WOOL byte from it on broadcast (setSheared in
+	// sheep_eat.go), since v1 ships WHITE sheep only (the low color nibble is always 0). readyForShearing()
+	// == !sheared && !isBaby() gates the shear action. Tick-owned plain bool (TICK-05), FALSE (not sheared)
+	// for the zero value, never read for a non-sheep entity (only the shear/eat seams touch it), so it is a
+	// harmless no-op for the pig and every other mob — the pig oracle's stream gains ZERO draws from it.
+	//	[VERIFIED javap Sheep: isSheared() == (DATA_WOOL & 0x10) != 0; setSheared(b) -> DATA_WOOL =
+	//	 b ? (cur|0x10) : (cur&0xEF); DEFAULT_SHEARED == false; getColor default WHITE (DATA_WOOL low nibble 0).]
+	sheared bool
+
+	// --- MOB-PASS-03 (Phase 34): Chicken egg-lay timer ----------------------------------------
+	//
+	// eggTime is net.minecraft.world.entity.animal.chicken.Chicken.eggTime — the per-tick countdown to
+	// the next egg lay. Chicken.<init> seeds it to nextInt(6000) + 6000 (5..10 minutes), the aiStep
+	// egg-lay decrements it every server tick, and on hitting <= 0 it drops an egg, plays the egg sound,
+	// and resets to nextInt(6000) + 6000. Set at spawn ONLY for a chicken (plugin_mob_decl.go's spawn
+	// init); zero for every other entity, where the chickenAiStep hook is never invoked (the tick wiring
+	// gates on typ == entity.Chicken.ID), so it is inert for the pig — the pig oracle stream is unperturbed.
+	//	[VERIFIED javap Chicken: `int eggTime`; <init> eggTime = random.nextInt(6000) + 6000; aiStep
+	//	 `if (--eggTime <= 0) { ...drop... ; eggTime = random.nextInt(6000) + 6000; }`.]
+	eggTime int
+
 	// --- GAMEPLAY-07: delta-move tracking state (ServerEntity.sendChanges) ----------------
 	//
 	// These mirror net.minecraft.server.level.ServerEntity's per-entity send state so the
@@ -525,3 +551,12 @@ func (e *Entity) ageUp(amount int) {
 func getSpeedUpSecondsWhenFeeding(ageDelta int) int {
 	return int(float32(ageDelta/20) * 0.1)
 }
+
+// canAgeUp is net.minecraft.world.entity.AgeableMob.canAgeUp() == `isBaby() && !isAgeLocked()`.
+// isAgeLocked() reads the AGE_LOCKED SynchedEntityData boolean (DATA_AGE_ID's sibling), which is a v1
+// const-false stub (no age-lock subsystem is wired — the tryFeedAnimal BABY branch already documents
+// this), so canAgeUp() reduces to isBaby() == breedAge < 0. Sheep.ate calls it to decide whether a baby
+// sheep that just ate grass grows up by 60 (ageUp(60)). Pure int read, draws no RNG.
+//	[VERIFIED javap AgeableMob.canAgeUp: `return isBaby() && !isAgeLocked();`; isAgeLocked reads
+//	 AGE_LOCKED (v1 const-false stub here, same as the tryFeedAnimal canAgeUp comment).]
+func (e *Entity) canAgeUp() bool { return e.isBaby() }

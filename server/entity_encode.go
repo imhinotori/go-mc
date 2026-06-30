@@ -416,6 +416,45 @@ func babyDataEntry(isBaby bool) entityDataEntry {
 	}
 }
 
+// --- MOB-PASS-02 (Phase 34): the DATA_WOOL data-value (the Sheep wool-color/sheared byte) -----------
+//
+// A Sheep synchs its wool color + sheared flag in ONE byte, DATA_WOOL: the low nibble (& 0xF) is the
+// DyeColor id (WHITE == 0, the v1 default — dye mechanics deferred per 34-CONTEXT), and bit 0x10 is the
+// sheared flag (isSheared() == (DATA_WOOL & 0x10) != 0). The server is authoritative and PUSHES it on a
+// shear (setSheared(true) -> bit set) or a wool regrow (the EatBlockGoal eat -> setSheared(false) -> bit
+// cleared). Both numbers below are JAR-DERIVED (javap'd from temp/cache/26.2-inner.jar; see
+// 34-JARNOTES.md:274-286), NOT guessed.
+
+// dataWoolIndex is the SynchedEntityData accessor index for Sheep.DATA_WOOL_ID. Continuing the
+// dataBabyIndex=16 derivation (defineId assigns indices sequentially down the hierarchy): Entity 0..7,
+// LivingEntity 8..14, Mob 15 (DATA_MOB_FLAGS_ID), AgeableMob 16 (DATA_BABY_ID) + 17 (AGE_LOCKED), Animal
+// adds NO accessor (javap-confirmed empty defineSynchedData), Sheep adds DATA_WOOL_ID = index 18, BYTE
+// serializer. The client renders the wool color + sheared body from this byte.
+//   [VERIFIED javap: net.minecraft.world.entity.animal.sheep.Sheep static{} -> DATA_WOOL_ID =
+//     SynchedEntityData.defineId(Sheep.class, EntityDataSerializers.BYTE); the hierarchy count
+//     Entity(8)+LivingEntity(7)+Mob(15)+AgeableMob(16,17)+Animal(none) puts DATA_WOOL_ID at index 18.]
+const dataWoolIndex uint8 = 18
+
+// woolDataEntry uses the existing byteSerializerID (== 0, EntityDataSerializers.BYTE, the FIRST registered
+// serializer — declared above for DATA_LIVING_ENTITY_FLAGS; the same registration sequence boolSerializerID=8
+// cites: 0=BYTE, 1=INT, ... 8=BOOLEAN). The BYTE serializer's value codec is ByteBufCodecs.BYTE — a single
+// byte (pk.Byte).
+//
+// woolDataEntry builds the single SynchedEntityData$DataValue entry that carries a Sheep's DATA_WOOL —
+// the byte the client reads for the wool color (low nibble) + sheared flag (bit 0x10). It frames on the
+// wire as Byte(dataWoolIndex=18) + VarInt(byteSerializerID=0) + Byte(woolByte) (entityDataEntry.WriteTo),
+// mirroring babyDataEntry's BOOLEAN pattern with the BYTE codec. Broadcast on a shear (woolByte |= 0x10)
+// and on a wool regrow (woolByte &= 0xEF). The default un-sheared WHITE sheep byte is 0x00.
+//   [VERIFIED javap Sheep.DATA_WOOL_ID = EntityDataAccessor<Byte> (BYTE codec); ByteBufCodecs.BYTE ==
+//    one byte, which pk.Byte writes.]
+func woolDataEntry(woolByte byte) entityDataEntry {
+	return entityDataEntry{
+		index:        dataWoolIndex,
+		serializerID: byteSerializerID,
+		value:        pk.Byte(int8(woolByte)), // EntityDataSerializers.BYTE codec == ByteBufCodecs.BYTE
+	}
+}
+
 // entityDataEOF is the SynchedEntityData EOF_MARKER (255 / 0xFF) — the MANDATORY single
 // terminator byte that closes the packed-items list. It is ALWAYS written, even for an
 // empty list; omitting it desyncs the client's entity stream and the entity is dropped.
@@ -772,6 +811,15 @@ func encodeDamageEvent(entityID, sourceTypeID, sourceCauseID, sourceDirectID int
 //   [VERIFIED javap: net.minecraft.sounds.SoundSource enum order (MASTER..UI); Animal.getSoundSource ->
 //    getstatic SoundSource.NEUTRAL; FriendlyByteBuf.writeEnum -> writeVarInt(ordinal).]
 const soundSourceNeutral = 6
+
+// soundSourcePlayers is SoundSource.PLAYERS.ordinal() == 7 (the enum order MASTER(0)..NEUTRAL(6),
+// PLAYERS(7), AMBIENT(8), VOICE(9), UI(10) — see soundSourceNeutral above). Sheep.shear plays the
+// SHEEP_SHEAR sound on SoundSource.PLAYERS (`level.playSound(null, this, SHEEP_SHEAR, SoundSource.PLAYERS,
+// 1.0, 1.0)`), so the shear sound rides this category. FriendlyByteBuf.writeEnum writes the ordinal as a
+// VarInt.
+//   [VERIFIED javap: net.minecraft.sounds.SoundSource enum order (PLAYERS == ordinal 7);
+//    Sheep.shear -> playSound(..., SoundSource.PLAYERS, ...); FriendlyByteBuf.writeEnum -> writeVarInt(ordinal).]
+const soundSourcePlayers = 7
 
 // encodeSoundEntity builds ClientboundSoundEntity (jar: ClientboundSoundEntityPacket.write) — an
 // entity-attached sound. JAR-DERIVED wire layout (the constructor/decode field order matches write):

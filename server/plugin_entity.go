@@ -145,6 +145,12 @@ func (h *entityHandle) Attr(name string) (starlark.Value, error) {
 		return h.bound("nearest_player_holding_carrot_on_a_stick", h.nearestPlayerHoldingCarrotOnAStick), nil
 	case "nearest_player_holding_pig_food":
 		return h.bound("nearest_player_holding_pig_food", h.nearestPlayerHoldingPigFood), nil
+	case "nearest_player_holding_food":
+		return h.bound("nearest_player_holding_food", h.nearestPlayerHoldingFood), nil
+	case "eat_grass_block":
+		return h.bound("eat_grass_block", h.eatGrassBlockHandle), nil
+	case "eat_broadcast_byte10":
+		return h.bound("eat_broadcast_byte10", h.eatBroadcastByte10Handle), nil
 	case "nearest_breeding_partner":
 		return h.bound("nearest_breeding_partner", h.nearestBreedingPartner), nil
 	case "nearest_adult_parent":
@@ -264,6 +270,7 @@ func (h *entityHandle) AttrNames() []string {
 		"x", "y", "z", "yaw", "pitch", "on_ground", "type", "velocity", "health",
 		"was_hurt", "last_damage_type", "has_last_damage", "damage_in_tag",
 		"nearest_player_holding_carrot_on_a_stick", "nearest_player_holding_pig_food",
+		"nearest_player_holding_food", "eat_grass_block", "eat_broadcast_byte10",
 		"nearest_breeding_partner", "nearest_adult_parent", "try_breed",
 		"is_in_love", "is_baby", "breed_age",
 		"in_water", "fluid_height", "in_lava",
@@ -370,6 +377,81 @@ func (h *entityHandle) nearestPlayerHoldingPigFood(_ *starlark.Thread, b *starla
 		return starlark.None, nil
 	}
 	return starlark.Tuple{starlark.Float(x), starlark.Float(y), starlark.Float(z)}, nil
+}
+
+// nearestPlayerHoldingFood is the PARAMETERIZED tempt-player scan (MOB-PASS-01) the new cow/sheep/chicken
+// TemptGoal callbacks use. It is nearestPlayerHoldingPigFood with the food tag PASSED IN (TWO positional
+// args: tag string, range float64) instead of the pig_food literal — the Go port of
+// net.minecraft.world.entity.animal.Animal.isFood = stack.is(ItemTags.<X>_FOOD), parameterized by the
+// declared food tag (cow_food / sheep_food / chicken_food). The HOST still owns the itemInTag membership
+// (the .star never sees an item id, only a position tuple or None); the .star only chooses WHICH food tag.
+// Re-resolved via h.resolve() (the region-bound store — Pitfall 7). Gated on capEntitiesRead (matching
+// nearestPlayerHoldingPigFood). Draws no RNG. The pig's nearestPlayerHoldingPigFood is left UNTOUCHED so
+// the byte-identical oracle is unperturbed.
+func (h *entityHandle) nearestPlayerHoldingFood(_ *starlark.Thread, b *starlark.Builtin,
+	args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if !h.caps.has(capEntitiesRead) {
+		return nil, capError("entities.read")
+	}
+	var tag string
+	var maxDist float64
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 2, &tag, &maxDist); err != nil {
+		return nil, err
+	}
+	e, err := h.resolve()
+	if err != nil {
+		return nil, err
+	}
+	// Animal.isFood = stack.is(ItemTags.<tag>) — the Phase-32 tag read, parameterized by the declared tag.
+	x, y, z, ok := nearestPlayerHolding(h.t, e, maxDist, func(id int32) bool { return itemInTag(id, tag) })
+	if !ok {
+		return starlark.None, nil
+	}
+	return starlark.Tuple{starlark.Float(x), starlark.Float(y), starlark.Float(z)}, nil
+}
+
+// eatGrassBlockHandle is the EatBlockGoal eat seam (MOB-PASS-02) the sheep .star calls when its
+// EatBlockGoal acts (the tick == adjustedTickDelay(4) eat). It does the HOST-side block write (a
+// grass_block-below -> dirt swap + the sheep wool regrow + a baby ageUp) — see sheep_eat.go's
+// eatGrassBlock for the 1:1 EatBlockGoal.tick + Sheep.ate port. The block write needs capWorldWrite (the
+// sheep plugin.toml grants world.write); the .star passes NO position, so the seam can only ever touch the
+// mob's OWN below-position (T-34-04/T-34-05). Re-resolved via h.resolve() (Pitfall 7). Draws no RNG.
+func (h *entityHandle) eatGrassBlockHandle(_ *starlark.Thread, b *starlark.Builtin,
+	args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if !h.caps.has(capWorldWrite) {
+		return nil, capError("world.write")
+	}
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 0); err != nil {
+		return nil, err
+	}
+	e, err := h.resolve()
+	if err != nil {
+		return nil, err
+	}
+	h.t.eatGrassBlock(e)
+	return starlark.None, nil
+}
+
+// eatBroadcastByte10Handle is the EatBlockGoal.start broadcast seam (MOB-PASS-02): it fires
+// ClientboundEntityEvent byte 10 (the EatBlockGoal eat-animation status — Mob.broadcastEntityEvent(mob,
+// (byte)10)) to the sheep's trackers so the client plays the head-down grass-eat animation. The .star
+// calls it on EatBlockGoal.start. It is a metadata/event broadcast, so it gates on capEntitiesWrite.
+// Re-resolved via h.resolve() (Pitfall 7). Draws no RNG.
+func (h *entityHandle) eatBroadcastByte10Handle(_ *starlark.Thread, b *starlark.Builtin,
+	args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if !h.caps.has(capEntitiesWrite) {
+		return nil, capError("entities.write")
+	}
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 0); err != nil {
+		return nil, err
+	}
+	e, err := h.resolve()
+	if err != nil {
+		return nil, err
+	}
+	// EatBlockGoal.start: level.broadcastEntityEvent(mob, (byte)10) — the eat-animation client event.
+	h.t.broadcastToTrackers(e.id, encodeEntityEvent(e.id, 10))
+	return starlark.None, nil
 }
 
 // nearestBreedingPartner(range) is the host-computed BreedGoal.getFreePartner scan (MOB-SUB-09): the

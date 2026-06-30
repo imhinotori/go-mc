@@ -3,6 +3,7 @@ package server
 import (
 	"math"
 
+	"github.com/imhinotori/sulfur/data/entity"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
@@ -760,6 +761,16 @@ func (t *TickLoop) handleInteract(p *tickPlayer, pkt pk.Packet) {
 		return // cross-region feed: dropped (accepted v5 same-region cut), never a foreign inline mutation
 	}
 
+	// MOB-PASS-02 (Phase 34): the Sheep SHEAR path runs BEFORE the feed path (Sheep.mobInteract tries
+//	the shears branch ahead of super.mobInteract == Animal.mobInteract feed). trySheepShear returns true
+//	when the held item is shears (consuming the interact — whether it sheared or the sheep was not ready),
+//	so handleInteract does NOT fall through to feed; it returns false ONLY when the held item is not shears,
+//	falling through to tryFeedAnimal. Sheep-gated (typ == entity.Sheep.ID) so it is a zero-cost no-op for a
+//	pig/cow/chicken — the pig oracle stream is unperturbed. The cow's tryMilkCow gate (34-01, wave 2) slots
+//	in this SAME spot; both are wave-ordered after this wave-1 plan, so no parallel edit to this file.
+	if mob.typ == entity.Sheep.ID && t.trySheepShear(p, mob) {
+		return // the shear (or the not-ready consume) handled the interact
+	}
 	t.tryFeedAnimal(p, mob)
 }
 
