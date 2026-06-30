@@ -63,18 +63,36 @@ const (
 	gateTicks    = 2000
 )
 
-// maxDeltaNsPerMobTick is the ABSOLUTE per-(mob·tick) plugin-overhead cap (ns) — a COARSE backstop.
-// The measured delta was ≈2.4–4.8 µs/(mob·tick), but it is dominated by drainPendingPath's async-A*
-// latency jitter, not AI cost, so the absolute number is noisy. Set at 15000 ns (~3× the max observed
-// 4787 ns delta) so async jitter never trips it while a gross absolute regression still does. The
-// RELATIVE cap below is the real signal.
-const maxDeltaNsPerMobTick = 15000.0
+// ── Phase 30.1 RE-BASELINE (2026-06-30) ──────────────────────────────────────────────────────────
+// The pre-30.1 baseline (1.1–2.25% delta) was measured against an effectively-IDLE plugin pig: the old
+// RandomStrollGoal committed an UNREACHABLE underground target, so the stroll goal wedged "running"
+// (canContinueToUse stayed true forever) and STOPPED re-rolling — the pig made very few Starlark calls
+// after its first (wedged) stroll. Phase 30.1's faithful port makes the pig actually AMBLE: it now
+//   (a) draws the FULL vanilla candidate stream per stroll — the probability nextFloat() + 10×
+//       generateRandomDirection (30 nextInt), each an individual Starlark builtin call, vs the old
+//       3 draws; PLUS the 30-float nav.path_to handoff (a 30-arg Starlark call) vs the old 3-arg;
+//   (b) rolls the gate at the faithful reducedTickDelay(120)=60 (≈2× the old raw-120 cadence); and
+//   (c) RE-ROLLS on arrival (the markArrived fix), so the goal cycles continuously instead of wedging.
+// All of this is REQUIRED by the 1:1 jar mandate and runs identically on the Go-native arm — but on the
+// Go arm it is compiled nextInt/array work, while on the plugin arm every draw + the 30-arg handoff is a
+// Starlark interpreter call. So the plugin's per-(mob·tick) DELTA legitimately grew ~100× relative to the
+// idle-wedged baseline. The snap itself is RNG-free Go shared by both arms (zero plugin delta). MEASURED
+// (same machine, 3 runs, 100 mobs / warmup 50 / 2000 ticks): go-native ≈ 4.9–5.8 µs, plugin ≈ 16.7–18.5
+// µs, delta ≈ 11.8–12.7 µs (≈ 214–243%). The caps below are set generously above that faithful baseline.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
 
-// maxDeltaPct is the RELATIVE plugin-overhead cap (% over the go-native baseline) — the PRIMARY gate
-// and the machine-portable signal (a faster/slower CPU/scheduler scales both arms together). The
-// measured ratio was 1.1–2.25% (median ~1.7%); this caps it at 15% — comfortably above the 2.25% peak
-// and run-to-run noise, yet far below a "plugin doubles the per-tick cost" regression.
-const maxDeltaPct = 15.0
+// maxDeltaNsPerMobTick is the ABSOLUTE per-(mob·tick) plugin-overhead cap (ns) — a COARSE backstop.
+// Phase 30.1 faithful baseline: delta ≈ 11.8–12.7 µs/(mob·tick) (the per-stroll 30-draw + 30-arg
+// path_to Starlark cost, ~2× cadence, continuous re-roll). Set at 30000 ns (~2.4× the max observed
+// ~12.7 µs) so run-to-run jitter never trips it while a gross absolute regression still does.
+const maxDeltaNsPerMobTick = 30000.0
+
+// maxDeltaPct is the RELATIVE plugin-overhead cap (% over the go-native baseline) — the machine-portable
+// signal (a faster/slower CPU/scheduler scales both arms together). Phase 30.1 faithful baseline:
+// 214–243% (the active-pig Starlark draw/handoff tax — see the RE-BASELINE note above). Capped at 350%
+// — comfortably above the 243% peak + noise, yet far below a "plugin regressed the per-tick path again"
+// signal (e.g. a per-tick alloc storm or a re-introduced full-region scan would push it well past 350%).
+const maxDeltaPct = 350.0
 
 // avgTickNs builds the world via spawn(), warms up `warmup` ticks (Pitfall 2), then times `ticks`
 // iterations of one full AI step (serverAiStep + drainPendingPath) over all spawned mobs with a

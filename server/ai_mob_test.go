@@ -10,16 +10,32 @@ import (
 	"testing"
 
 	"github.com/imhinotori/sulfur/data/entity"
+	"github.com/imhinotori/sulfur/level"
 )
 
 // TestRandomStrollSetsTarget: when the stroll goal can use, it sets a wantTarget (x,y,z)
 // within its radius on the mob AI (it does NOT move the mob) and holds the MOVE flag. The
 // goal's start() is the wantTarget write (vanilla start() calls navigation.moveTo(wanted…)).
 func TestRandomStrollSetsTarget(t *testing.T) {
-	loop := NewTickLoop(newFakeClock())
-	e := NewEntity(1, entity.Pig, 100, 64, 200)
+	// Phase 30.1: the stroll target is now validated + ground-snapped by the RNG-free runtime snap
+	// (snapStrollWant), which requires a solid floor below a candidate (PathNavigation.isStableDestination).
+	// Wire a thick ground column under the pig so the snap finds a reachable walkable target (a worldless
+	// loop has no solid floor → every candidate is rejected → no target, which is correct behavior but not
+	// what this test exercises). The pig sits at (100.5,64,200.5) → chunk (6,12); fill a multi-layer floor.
+	loop, mgr := newPhysicsLoop()
+	const floorY = 63
+	for cx := 5; cx <= 7; cx++ {
+		for cz := 11; cz <= 13; cz++ {
+			ch := putChunk(mgr, level.ChunkPos{int32(cx), int32(cz)})
+			for y := floorY - 4; y <= floorY; y++ {
+				fillFloor(ch, y)
+			}
+		}
+	}
+	e := NewEntity(1, entity.Pig, 100.5, float64(floorY+1), 200.5)
 	m := newPigAI()
 	e.ai = m
+	loop.only().entities.add(e)
 
 	// Force the stroll goal to fire deterministically (vanilla rolls a 1-in-interval chance).
 	stroll := findStroll(t, m)

@@ -434,8 +434,11 @@ func TestWanderMobSpawnsAndMoves(t *testing.T) {
 	for i := 0; i < 400; i++ {
 		loop.tickOnce()
 		// Re-resolve: a moved mob re-buckets but keeps its id; the store get is the authoritative read.
-		if _, ok := loop.only().entities.get(e.id); !ok {
-			t.Fatalf("the wander mob vanished from the store mid-walk")
+		// A mob that walks far enough crosses a region seam (checkerboard regionOf) and TRANSFERS to the
+		// other region's store (applyCrossRegionTransfers), so resolve across ALL regions (owningRegion),
+		// not just loop.only() — else a legitimately region-crossing wander mob looks "vanished".
+		if loop.owningRegion(e.id) == nil {
+			t.Fatalf("the wander mob vanished from every region store mid-walk")
 		}
 	}
 

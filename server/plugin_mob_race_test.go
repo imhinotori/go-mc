@@ -41,8 +41,10 @@ func TestDeclaredMobRace(t *testing.T) {
 		loop.tickOnce()
 	}
 
-	if _, ok := loop.only().entities.get(e.id); !ok {
-		t.Fatalf("the declared mob vanished during the race run")
+	// A mob that walked across a region seam transfers to the other region's store, so resolve across
+	// ALL regions (owningRegion), not just loop.only() — a legitimately region-crossing mob is not "gone".
+	if loop.owningRegion(e.id) == nil {
+		t.Fatalf("the declared mob vanished from every region store during the race run")
 	}
 }
 
