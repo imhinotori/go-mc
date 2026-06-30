@@ -36,17 +36,30 @@ var hostileEmbedSpecs = []struct {
 	{"spider", vanillaSpiderMobName, entity.Spider.ID, 6, 2},
 }
 
-// TestHostileEmbedByteIdentical: for EACH of the 3 hostiles, the repo-root canonical copy
-// (plugins/vanilla_<hostile>/{plugin.toml,main.star}) and the embedded copy
-// (server/assets/vanilla_<hostile>/{...}) are byte-identical. T-35-12: the embedded manifest is the
+// embedByteIdenticalMobs is the FULL set of //go:embed-shipped vanilla mobs whose embedded copy
+// (server/assets/vanilla_<mob>/) must stay byte-identical to the canonical repo-root copy
+// (plugins/vanilla_<mob>/) — the T-35-12 / T-36-09 anti-drift gate. It spans the 3 Phase-35 hostiles
+// PLUS the Phase-36 wolf (the LAST v5 mob), so a swapped-on-disk plugins/ copy of ANY of them cannot
+// widen the shipped caps (the embedded manifest governs). The wolf is a CREATURE (not in
+// hostileEmbedSpecs' MONSTER boot-load loop), so it lives in this dedicated byte-identity list.
+var embedByteIdenticalMobs = []string{
+	vanillaZombieMobName,
+	vanillaSkeletonMobName,
+	vanillaSpiderMobName,
+	vanillaWolfMobName, // Phase 36 — the neutral/tameable wolf (T-36-09: the embed-vs-root anti-drift gate)
+}
+
+// TestHostileEmbedByteIdentical: for EACH //go:embed-shipped mob (the 3 hostiles + the Phase-36 wolf),
+// the repo-root canonical copy (plugins/vanilla_<mob>/{plugin.toml,main.star}) and the embedded copy
+// (server/assets/vanilla_<mob>/{...}) are byte-identical. T-35-12 / T-36-09: the embedded manifest is the
 // source of truth for the SWAP's caps; a divergent on-disk plugins/ copy must NOT be able to widen them,
 // which only holds if the pair is byte-identical (so the operator-visible copy == the shipped copy).
 // Tests run with cwd=server/, so the repo-root copy sits at ../plugins/ and the embed copy at assets/.
 func TestHostileEmbedByteIdentical(t *testing.T) {
-	for _, spec := range hostileEmbedSpecs {
+	for _, mobName := range embedByteIdenticalMobs {
 		for _, file := range []string{"plugin.toml", "main.star"} {
-			rootPath := filepath.Join("..", "plugins", spec.mobName, file)
-			embedPath := filepath.Join("assets", spec.mobName, file)
+			rootPath := filepath.Join("..", "plugins", mobName, file)
+			embedPath := filepath.Join("assets", mobName, file)
 
 			rootData, err := os.ReadFile(rootPath)
 			if err != nil {
@@ -57,8 +70,8 @@ func TestHostileEmbedByteIdentical(t *testing.T) {
 				t.Fatalf("read embed %s: %v", embedPath, err)
 			}
 			if !bytes.Equal(rootData, embedData) {
-				t.Fatalf("%s/%s: repo-root (%d bytes) and embed (%d bytes) copies DIVERGE — the embedded manifest governs the swap's caps (T-35-12); they MUST be byte-identical",
-					spec.mobName, file, len(rootData), len(embedData))
+				t.Fatalf("%s/%s: repo-root (%d bytes) and embed (%d bytes) copies DIVERGE — the embedded manifest governs the swap's caps (T-35-12/T-36-09); they MUST be byte-identical",
+					mobName, file, len(rootData), len(embedData))
 			}
 		}
 	}
@@ -86,6 +99,12 @@ func TestHostilesBootLoad(t *testing.T) {
 		if _, ok := r.byName[name]; !ok {
 			t.Fatalf("boot-loaded registry lost the passive %q — adding the hostiles must be additive", name)
 		}
+	}
+	// The Phase-36 wolf (the LAST v5 mob) boot-loads from the SAME real //go:embed registry alongside the
+	// hostiles + passives. The wolf is a CREATURE (its goal/target shape is asserted by TestWolfBootLoads);
+	// here we only pin that the embed directive + vanillaMobNames wired it into the shipped binary.
+	if _, ok := r.byName[vanillaWolfMobName]; !ok {
+		t.Fatalf("boot-loaded registry has no %q declaration — the embed directive + vanillaMobNames did not wire the wolf in", vanillaWolfMobName)
 	}
 
 	// Spawn each hostile through the boot-loaded registry and assert its wire type + goal/target sets +
