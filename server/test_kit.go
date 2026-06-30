@@ -96,17 +96,23 @@ func (t *TickLoop) handleGateSpawnEgg(p *tickPlayer) {
 	t.handleGateSpawnEggAt(p, p.x+2.0, p.y, p.z)
 }
 
-// handleGateSpawnEggAt spawns the embedded custom wander mob at an explicit position (the spawn-egg
-// gate trigger — Plan 28-01). Gated by SULFUR_TEST_KIT (T-28-03): no-op when the kit is disabled or
-// the wander decl is missing. Owner-goroutine only (the tick-side use path), no locks (TICK-05).
+// handleGateSpawnEggAt spawns a mob at an explicit position (the spawn-egg gate trigger — Plan 28-01).
+// Gated by SULFUR_TEST_KIT (T-28-03): no-op when the kit is disabled or the decl is missing. Owner-
+// goroutine only (the tick-side use path), no locks (TICK-05).
+//
+// v5 SWAP: the egg now spawns the VANILLA_PIG (the real mob with the full ported goal set — FloatGoal,
+// stroll, look) instead of the wandermob (a custom mob with ONE MOVE goal and no FloatGoal). Spawning
+// the wandermob made it look like FloatGoal was broken in water (the wandermob has no FloatGoal, so it
+// sank), masking the working vanilla-pig float. The wandermob stays registered + naturally spawnable;
+// the egg is the operator's "give me a REAL pig to test gameplay against" button.
 func (t *TickLoop) handleGateSpawnEggAt(p *tickPlayer, x, y, z float64) {
 	if !testKitEnabled() || t.mobRegistry == nil {
 		return
 	}
-	decl, ok := t.mobRegistry.byName[wanderMobName]
+	decl, ok := t.mobRegistry.byName[vanillaPigMobName]
 	if !ok {
-		return // boot-load did not register the wander mob; no-op rather than panic on a right-click
+		return // boot-load did not register the vanilla pig; no-op rather than panic on a right-click
 	}
 	t.spawnDeclaredMob(decl, x, y, z)
-	udebugPlayer(p, "test-kit", "spawned custom wander mob via gate egg at (%.1f,%.1f,%.1f)", x, y, z)
+	udebugPlayer(p, "test-kit", "spawned vanilla pig via gate egg at (%.1f,%.1f,%.1f)", x, y, z)
 }

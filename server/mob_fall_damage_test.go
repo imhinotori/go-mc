@@ -86,6 +86,41 @@ func TestMobShortFallNoDamage(t *testing.T) {
 	}
 }
 
+// TestMobStandingOnGroundTakesNoDamage is the LIVE-DEBUG regression for the "mobs on land dying to
+// constant damage" bug. A pig already resting on the floor still has gravity pull its velocity to -0.08
+// each tick, but moveEntity clips that against the floor so its ACTUAL vertical displacement is ~0. The
+// bug accumulated the PRE-MOVE velocity intent (-0.08) instead of the real moved deltaY — adding phantom
+// fall distance every tick until it crossed the 3.0 safe-fall threshold, then dealing damage every tick.
+// The fix accumulates the resolved displacement (e.y - yBefore) post-moveEntity. A standing pig must
+// take ZERO damage over a long run and its fallDistance must stay ~0.
+func TestMobStandingOnGroundTakesNoDamage(t *testing.T) {
+	const floorY = 64
+	loop, mgr := newPhysicsLoop()
+	for cx := -1; cx <= 1; cx++ {
+		for cz := -1; cz <= 1; cz++ {
+			ch := putChunk(mgr, level.ChunkPos{int32(cx), int32(cz)})
+			fillFloor(ch, floorY)
+		}
+	}
+	pig := NewEntity(4242, entity.Pig, 8.5, float64(floorY+1), 8.5)
+	initSpawnHealth(pig)
+	loop.only().entities.add(pig)
+
+	start := pig.health
+	for i := 0; i < 200; i++ {
+		loop.tickPhysics()
+		if pig.health < start {
+			t.Fatalf("tick %d: a pig STANDING on flat ground took damage (health %.2f -> %.2f, "+
+				"fallDistance=%.4f) — the phantom-fall-distance-from-gravity bug regressed",
+				i, start, pig.health, pig.fallDistance)
+		}
+		if pig.fallDistance > 0.5 {
+			t.Fatalf("tick %d: a grounded pig accumulated fallDistance=%.4f (should stay ~0 — gravity's "+
+				"intent is clipped by the floor, so the ACTUAL moved deltaY is ~0)", i, pig.fallDistance)
+		}
+	}
+}
+
 // TestMobFallIntoWaterNoDamage: a pig dropped from height into a WATER column takes NO fall damage —
 // the descent in water adds no fallDistance (Entity.checkFallDamage's !isInWater guard) AND the
 // updateFluidInteraction per-tick water reset zeroes any pre-water distance. The pig keeps full

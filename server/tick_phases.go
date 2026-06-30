@@ -436,27 +436,30 @@ func (t *TickLoop) tickPhysics() {
 			e.vz *= horizontalFriction
 		}
 
-		// LIVE-DEBUG B (the "mobs take no fall damage" fix): accumulate fallDistance from this tick's
-		// downward motion BEFORE moveEntity integrates it, mirroring Entity.checkFallDamage's
-		// `if (!isInWater() && deltaY < 0.0) fallDistance -= (float) deltaY`. deltaY is the vertical
-		// velocity (vanilla's deltaMovement.y) about to be integrated; a fall makes it negative, and
-		// a descent in water adds NO fallDistance (so a mob that falls into water takes no fall
-		// damage). The landing edge is checked AFTER moveEntity, where onGround is freshly set. Reuses
-		// the Phase-30 mobInWater predicate; mob_fall_damage.go owns the jar citations.
-		inWater := t.mobInWater(e)
-		t.accumulateMobFallDistance(e, e.vy, inWater)
+		// LIVE-DEBUG B (mob fall damage). VANILLA ORDER: Entity.move() integrates the motion AND, at its
+		// tail, calls checkFallDamage(this.getY() - yBefore, onGround, ...) with the ACTUAL resolved
+		// vertical displacement — NOT the pre-move velocity intent. This distinction is load-bearing: a
+		// mob STANDING on the ground still has gravity pull vy to -0.08 each tick, but moveEntity clips
+		// that against the floor so the ACTUAL moved deltaY ≈ 0. Accumulating the pre-move intent (-0.08)
+		// instead added phantom fall distance every tick on flat ground (the "mobs on land taking
+		// constant fall damage" bug — fallDistance climbed 0.0784/tick from gravity*airDrag even at rest).
+		// So: capture y, move, then accumulate from the REAL displacement.
+		yBefore := e.y
 
 		// Integrate via the per-axis swept resolver (the anti-tunneling discipline). This
 		// also re-buckets through entities.move and updates onGround / zeroes blocked
 		// velocity components.
 		t.moveEntity(e, e.vx, e.vy, e.vz)
 
-		// LIVE-DEBUG B landing edge: now that moveEntity has set e.onGround (it lands a mob whose
-		// downward motion was clamped by a solid block this tick), run the Entity.checkFallDamage
-		// landing branch — `if (onGround) { if (fallDistance > 0) causeFallDamage(fallDistance, 1.0,
-		// FALL); resetFallDistance(); }`. causeFallDamageEntity routes the damage through
-		// applyDamageEntity (the Phase-29 keystone), reusing the player path's calculateFallDamage.
-		t.landMobFallDamage(e, inWater)
+		// Entity.checkFallDamage(actualDeltaY, onGround, ...) — run with the resolved displacement, the
+		// freshly-set onGround, and isInWater re-read at the SETTLED position (vanilla reads all three
+		// fresh here). actualDeltaY = e.y - yBefore: ~0 for a grounded mob (no phantom accumulation),
+		// negative for a real fall. `if (!isInWater && actualDeltaY<0) fallDistance -= (float)
+		// actualDeltaY; if (onGround) { if (fallDistance>0) causeFallDamage(...); resetFallDistance(); }`.
+		actualDeltaY := e.y - yBefore
+		mobWet := t.mobInWater(e)
+		t.accumulateMobFallDistance(e, actualDeltaY, mobWet)
+		t.landMobFallDamage(e, mobWet)
 	}
 }
 

@@ -212,6 +212,23 @@ func buildCommandGraph() *command.Graph {
 	tp := g.Literal("tp").AppendArgument(tpArgs).Unhandle()
 	g.AppendLiteral(tp)
 
+	// /dbg <sub> — DEV debug command (operator). Subcommands:
+	//   pig            — spawn a vanilla pig at the issuer's position
+	//   water          — fill a 5x5x4 water box around+below the issuer (to test FloatGoal)
+	//   pig-in-water   — water box + a pig dropped into it
+	dbgArgs := g.Argument("sub", command.StringParser(2)).HandleFunc(permissionGated("command.tp",
+		func(ctx context.Context, args []command.ParsedData) error {
+			e, ok := executorFrom(ctx)
+			if !ok || len(args) == 0 {
+				return nil
+			}
+			sub, _ := args[len(args)-1].(string)
+			e.t.runDbgCommand(e.p, strings.TrimSpace(sub))
+			return nil
+		}))
+	dbg := g.Literal("dbg").AppendArgument(dbgArgs).Unhandle()
+	g.AppendLiteral(dbg)
+
 	return g
 }
 

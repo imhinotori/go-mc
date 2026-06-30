@@ -109,12 +109,22 @@ func TestFloatGoalKeepsPigAfloat(t *testing.T) {
 		t.Fatal("setup: the FloatGoal pig must start submerged in water")
 	}
 
-	minY := pig.y // track the LOWEST the pig ever sinks to over the run
+	startHealth := pig.health // the pig must take NO damage while bobbing in water
+	minY := pig.y             // track the LOWEST the pig ever sinks to over the run
 	for i := 0; i < ticks; i++ {
 		pig.ai.serverAiStep(loop, pig)
 		loop.tickPhysics()
 		if pig.y < minY {
 			minY = pig.y
+		}
+		// THE "DYING SLOWLY IN WATER" REGRESSION: a pig bobbing at a shallow water surface used to
+		// accumulate fallDistance on the brief out-of-water (jump) ticks and then take repeated landing
+		// damage as it slow-sank — dying as if from constant damage. With inWater re-read at the settled
+		// post-moveEntity position, the water-reset fires whenever the mob is actually submerged, so it
+		// takes ZERO fall damage. Assert health never drops.
+		if pig.health < startHealth {
+			t.Fatalf("tick %d: FloatGoal pig took damage in water (health %.1f -> %.1f, fallDistance=%.4f) — "+
+				"the surface-bob fall-damage bug regressed", i, startHealth, pig.health, pig.fallDistance)
 		}
 	}
 
