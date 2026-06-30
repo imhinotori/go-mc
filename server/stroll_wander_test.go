@@ -34,7 +34,19 @@ func TestPigStrollsWithoutWedging(t *testing.T) {
 	for cx := -2; cx <= 2; cx++ {
 		for cz := -2; cz <= 2; cz++ {
 			ch := putChunk(mgr, level.ChunkPos{int32(cx), int32(cz)})
-			fillFloor(ch, floorY)
+			// A REALISTIC ground column (surface floorY down through several strata), not a single
+			// floating plane. Phase 30.1: the faithful vanilla stroll target selection
+			// (LandRandomPos/DefaultRandomPos.getPos) requires terrain DEPTH — a candidate is only a
+			// valid destination when the block directly BELOW it is solid (PathNavigation
+			// .isStableDestination). A 1-block floating floor makes that true only at the single surface
+			// Y, so almost every candidate is rejected and the pig (faithfully) rarely finds a stroll
+			// target — an artifact of an unrealistic world, not the wedge bug under test. A multi-layer
+			// ground column (as any real/superflat world has) lets the snap find+ground-snap candidates
+			// the way vanilla does, so this test exercises the actual fix (reachable walkable target +
+			// arrival re-roll) rather than the thin-floor artifact.
+			for y := floorY - 8; y <= floorY; y++ {
+				fillFloor(ch, y)
+			}
 		}
 	}
 	pig := NewEntity(4242, entity.Pig, x, startY, z)

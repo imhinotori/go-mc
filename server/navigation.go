@@ -228,11 +228,45 @@ func (n *groundNavigation) shouldRecomputePath(tx, ty, tz int) bool {
 // adopted by pathReady.applyTo on a later tick (paths tolerated 1+ ticks late) and tick starts
 // following it the next tick it runs. No change to the follow logic is needed: pending is purely a
 // submit-side gate, and the existing path==nil no-op IS the tolerance.
+// markArrived records that the navigation reached (or got within reachRange of) its target. It
+// clears the navigation's own hasTarget AND mobAI.hasTarget so they stay consistent — the stroll
+// goal's canContinueToUse (RandomStrollGoal.canContinueToUse == !navigation.isDone()) reads
+// mobAI.hasTarget as the "still navigating" proxy, so clearing it ends the goal and lets it re-roll
+// a fresh stroll target next interval. Both the Go-native and plugin pig run this in serverAiStep's
+// navigation.tick, so the bit-fragile oracle observes the SAME hasTarget transition on both sides.
+func (n *groundNavigation) markArrived(e *Entity) {
+	n.hasTarget = false
+	if e.ai != nil {
+		e.ai.hasTarget = false
+	}
+}
+
 func (n *groundNavigation) tick(t *TickLoop, e *Entity) {
 	if n.cooldown > 0 {
 		n.cooldown--
 	}
-	if n.path == nil || n.path.done() {
+	if n.path == nil {
+		return
+	}
+	if n.path.done() {
+		// A fresh path is in flight (pending): the current n.path is the PREVIOUS, already-done path
+		// that requestPath has NOT yet replaced (the async result rejoins 1+ ticks later via
+		// applyAsyncResults). The mob has NOT arrived at the new target — it is waiting for the new
+		// path. Do NOT markArrived here, or it would clobber the freshly-committed mobAI.hasTarget and
+		// the mob would drop the new target before ever pathing to it. Just idle until the path lands.
+		if n.pending {
+			return
+		}
+		// No pending compute and the path is done at entry — either we arrived last tick, or the A*
+		// returned a trivially-done path because the mob was already within reachRange of the target
+		// (the navReachRange-vs-target-column case). EITHER WAY the navigation has arrived: mark done so
+		// the stroll goal's canContinueToUse (== !navigation.isDone(), read via mobAI.hasTarget) ends
+		// and the goal re-rolls a fresh target. Without this, a reachable target the A* completes one
+		// block short (within reachRange) leaves mobAI.hasTarget set forever → the goal never re-rolls
+		// → the mob wedges. (This is the latent arrival bug the old unreachable-underground targets
+		// masked; Phase 30.1's reachable targets expose it.) markArrived clears BOTH the navigation's
+		// own hasTarget and mobAI.hasTarget so the two stay consistent.
+		n.markArrived(e)
 		return
 	}
 
@@ -247,7 +281,7 @@ func (n *groundNavigation) tick(t *TickLoop, e *Entity) {
 		n.path.advance()
 	}
 	if n.path.done() {
-		n.hasTarget = false // arrived: clear so the stroll goal's canContinueToUse ends it
+		n.markArrived(e) // arrived: clear so the stroll goal's canContinueToUse ends it + it re-rolls
 		return
 	}
 

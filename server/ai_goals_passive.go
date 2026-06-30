@@ -63,9 +63,18 @@ func yawTowardDeg(dx, dz float64) float32 {
 // --- randomStrollGoal (WaterAvoidingRandomStrollGoal v1) -------------------------------
 
 // strollDefaultInterval is RandomStrollGoal.DEFAULT_INTERVAL (jar) — the mean 1-in-N chance
-// per tick that the goal triggers. reducedTickDelay halves it at the default 20 TPS; v1 uses
-// the raw interval for the roll (the visible "ambles every few seconds" behavior).
+// per tick that the goal triggers, BEFORE Goal.reducedTickDelay halves it (canUse rolls
+// nextInt(reducedTickDelay(interval)) == nextInt(60), so the effective stroll cadence is ~1-in-60).
 const strollDefaultInterval = 120
+
+// reducedTickDelay ports net.minecraft.world.entity.ai.goal.Goal.reducedTickDelay(int):
+// `Mth.positiveCeilDiv(ticks, 2)` == ceil(ticks/2). The goal selector ticks the AI at a reduced
+// cadence, so vanilla halves a goal's tick-delay interval; RandomStrollGoal.canUse rolls
+// nextInt(reducedTickDelay(interval)). positiveCeilDiv(n,2) for n>=0 is (n+1)/2 in integer math.
+//
+//	[VERIFIED javap Goal.reducedTickDelay: `iload_0; iconst_2; invokestatic Mth.positiveCeilDiv(I,I)`.]
+//	[VERIFIED javap Mth.positiveCeilDiv == Math.floorDiv(x + y - 1, y); for y=2: (n+1)/2 == ceil(n/2).]
+func reducedTickDelay(ticks int) int { return (ticks + 1) / 2 }
 
 // strollHorizontalRadius / strollVerticalRadius are getPosition()'s DefaultRandomPos.getPos
 // (mob, 10, 7) radii (jar): a random target within ±10 blocks horizontally, ±7 vertically.
@@ -81,6 +90,8 @@ type randomStrollGoal struct {
 	interval      int
 	forceTrigger  bool // RandomStrollGoal.forceTrigger / trigger(): skip the chance roll once
 
+	probability float32 // WaterAvoidingRandomStrollGoal.probability — Pig ctor default 0.001f
+
 	// wantCandidates is the 10 RAW candidate offsets getPosition emits this canUse (the
 	// RandomPos.generateRandomPos supplier results — BlockPos.containing(xt+x, yt+y, zt+z), NOT yet
 	// ground-snapped). Per the Phase-30.1 architecture split (CONTEXT <decisions>): the GOAL draws
@@ -88,13 +99,29 @@ type randomStrollGoal struct {
 	// (mobAI.snapStrollWant in serverAiStep, RNG-free) validates + ground-snaps them to the first
 	// reachable walkable column. start() hands this slice to the runtime via setWantCandidates.
 	wantCandidates [][3]float64
+
+	// wantLandMode is the WaterAvoidingRandomStrollGoal.getPosition branch chosen by the probability
+	// nextFloat() draw: false => the common DefaultRandomPos.getPos path (validate isOutsideLimits/
+	// isRestricted/isNotStable/hasMalus, NO up-snap, NO water reject); true => the rare LandRandomPos
+	// .getPos path (validate isOutsideLimits/isRestricted/isNotStable, THEN moveUpOutOfSolid, THEN
+	// isWater/hasMalus). The runtime snap reads this mode to apply the correct validation. The DRAW
+	// COUNT is identical in both branches (the probability nextFloat + 30 direction draws), so the
+	// bit-fragile pig oracle stays in lockstep regardless of which branch the mode picks.
+	wantLandMode bool
 }
+
+// strollWaterAvoidingProbability is WaterAvoidingRandomStrollGoal.PROBABILITY — the default the
+// Pig's WaterAvoidingRandomStrollGoal(mob, 1.0) 2-arg ctor passes to the 3-arg ctor (jar:
+// `ldc 0.001f; invokespecial <init>(mob, speed, 0.001f)`). getPosition rolls nextFloat() < this to
+// take the rare LandRandomPos.getPos (ground-snap) path; otherwise it takes DefaultRandomPos.getPos.
+const strollWaterAvoidingProbability = 0.001
 
 func newWaterAvoidingRandomStrollGoal(speed float64) *randomStrollGoal {
 	return &randomStrollGoal{
 		baseGoal:      newBaseGoal(flagMove),
 		speedModifier: speed,
 		interval:      strollDefaultInterval,
+		probability:   strollWaterAvoidingProbability,
 	}
 }
 
@@ -105,7 +132,13 @@ func newWaterAvoidingRandomStrollGoal(speed float64) *randomStrollGoal {
 func (g *randomStrollGoal) canUse(t *TickLoop, e *Entity) bool {
 	if !g.forceTrigger {
 		// DRAW 1 (the gate): getRandom().nextInt(reducedTickDelay(interval)) — RandomStrollGoal.canUse.
-		if g.interval > 0 && mobRandom(e).nextInt(g.interval) != 0 {
+		// reducedTickDelay(n) == Mth.positiveCeilDiv(n, 2) == ceil(n/2): the jar HALVES the interval, so
+		// the Pig's 120 interval rolls nextInt(60), NOT nextInt(120) — the stroll fires ~twice as often
+		// as a raw-120 roll (a faithfulness fix; the prior v1 used the raw interval). The .star gate is
+		// changed in lockstep to the same reduced value so the bit-fragile pig oracle stays byte-identical.
+		//	[VERIFIED javap Goal.reducedTickDelay: `iload_0; iconst_2; Mth.positiveCeilDiv(I,I)` == ceil(n/2);
+		//	 RandomStrollGoal.canUse: `getRandom().nextInt(reducedTickDelay(interval))`.]
+		if g.interval > 0 && mobRandom(e).nextInt(reducedTickDelay(g.interval)) != 0 {
 			return false
 		}
 	}
@@ -115,43 +148,56 @@ func (g *randomStrollGoal) canUse(t *TickLoop, e *Entity) bool {
 	}
 	// Stash the 10 raw candidates on the goal until start() hands them to the runtime
 	// (mobAI.setWantCandidates). The runtime's RNG-free snap (snapStrollWant) picks the first
-	// reachable walkable column. Mirrors vanilla LandRandomPos.getPos's candidate set.
+	// reachable walkable column, using the DefaultRandomPos/LandRandomPos validation mode
+	// getPosition selected (g.wantLandMode).
 	g.wantCandidates = cands
 	g.forceTrigger = false
 	return true
 }
 
-// getPosition ports RandomStrollGoal.getPosition -> LandRandomPos.getPos(mob, 10, 7) ->
-// RandomPos.generateRandomPos(supplier, mob::getWalkTargetValue). It draws ONLY the direction
-// (the 10-candidate supplier loop) and emits the 10 RAW candidate world positions; it does NO
-// world read, NO ground-snap, NO validity check — those are the shared Go runtime's job
-// (mobAI.snapStrollWant in serverAiStep), per the Phase-30.1 architecture split (CONTEXT
-// <decisions>: keep the per-mob RNG the single lockstep source; goals stay world-read-free).
+// getPosition ports WaterAvoidingRandomStrollGoal.getPosition (the Pig's stroll goal — NOT the bare
+// RandomStrollGoal.getPosition). For a NOT-in-water pig the jar is:
 //
-// DRAW CONTRACT (the bit-fragile pig-oracle lockstep): RandomPos.generateRandomPos is an
-// UNCONDITIONAL `for i<10` loop (NO break) that calls the supplier all 10 times — so it ALWAYS
-// draws 3×10 = 30 nextInt, in x,y,z order per candidate (generateRandomDirection), regardless of
-// which candidate is later chosen. The strict-`>` tie-break with all weights == getWalkTargetValue
-// == 0.0 means the FIRST non-null (first valid) candidate wins — that selection happens in the
-// runtime snap, but the GOAL must still draw all 30 + emit all 10 raw candidates here so the runtime
-// can pick the first valid. The DRAW-1 interval gate in canUse is unchanged and precedes these 30.
+//	if (mob.isInWater()) { ... }                                   // skipped: a v1 flat-world pig
+//	if (mob.getRandom().nextFloat() >= probability)                // probability == 0.001f
+//	    return super.getPosition();                                // RandomStrollGoal -> DefaultRandomPos.getPos(mob,10,7)
+//	return LandRandomPos.getPos(mob, 10, 7);                       // the rare (0.1%) ground-snap path
 //
-//	[VERIFIED CFR RandomPos.generateRandomPos: `for (i=0; i<10; ++i) { pos = posSupplier.get(); ... }`
-//	 — posSupplier.get() (which draws) is called every iteration, no break; returns bestPos or null.]
+// So the COMMON path (≈99.9%) is DefaultRandomPos.getPos (validate isOutsideLimits/isRestricted/
+// isNotStable/hasMalus over the raw candidate, NO moveUpOutOfSolid, NO isWater) and the RARE path is
+// LandRandomPos.getPos (the same first three rejects, THEN moveUpOutOfSolid, THEN isWater/hasMalus).
+// BOTH feed RandomPos.generateRandomPos(mob, supplier) == the UNCONDITIONAL `for i<10` (NO break)
+// best-of-10 loop weighted by mob::getWalkTargetValue (all 0.0 → first non-null wins).
+//
+// ARCHITECTURE SPLIT (CONTEXT <decisions>): getPosition draws ONLY the RNG — the probability
+// nextFloat() gate THEN 10×generateRandomDirection (30 nextInt, x/y/z order) — and emits the 10 RAW
+// candidates + the chosen validation mode (wantLandMode). It does NO world read; the RNG-free runtime
+// snap (mobAI.snapStrollWant) applies the mode's validity + (for LAND) the ground-snap. The DRAW
+// COUNT is identical in both branches (1 nextFloat + 30 nextInt), so the bit-fragile pig oracle stays
+// byte-identical regardless of which branch the probability draw selects.
+//
+//	[VERIFIED javap WaterAvoidingRandomStrollGoal.getPosition: isInWater?branch; nextFloat() >= probability
+//	 -> RandomStrollGoal.getPosition (DefaultRandomPos.getPos 10,7); else LandRandomPos.getPos 10,7.]
+//	[VERIFIED javap RandomPos.generateRandomPos(Supplier,ToDoubleFunction): for i<10, NO break; keep the
+//	 STRICTLY > bestWeight candidate (first max wins ties); return atBottomCenterOf(best) or null.]
 func (g *randomStrollGoal) getPosition(_ *TickLoop, e *Entity) (candidates [][3]float64, ok bool) {
 	r := mobRandom(e)
+	// (mob.isInWater() — a v1 flat-world pig is never in water; the in-water radius-15 branch is a
+	// cited no-op that draws ZERO randoms here, faithful-scope. Upgrade when fluid nav lands.)
+	// Probability gate: nextFloat() >= probability → DefaultRandomPos (common); else LandRandomPos.
+	g.wantLandMode = r.nextFloat() < g.probability
 	cands := make([][3]float64, 0, 10)
 	for i := 0; i < 10; i++ { // RandomPos.generateRandomPos: for i<10, NO break (always 10 supplier calls)
 		xt, yt, zt := generateRandomDirection(r, strollHorizontalRadius, strollVerticalRadius)
-		// LandRandomPos.getPos supplier -> RandomPos.generateRandomPosTowardDirection: a v1 pig has
-		// NO home, so the `mob.hasHome() && xzDist>1.0` bias branch never runs (ZERO extra draws) —
-		// vanilla then just returns BlockPos.containing(xt+mob.getX(), yt+mob.getY(), zt+mob.getZ()).
-		// Ported as a cited no-op so a future home-bound mob slots the bias in.
-		//	[VERIFIED CFR RandomPos.generateRandomPosTowardDirection: the hasHome bias is guarded by
+		// Both DefaultRandomPos.generateRandomPosTowardDirection and LandRandomPos's supplier compute
+		// the candidate as BlockPos.containing(xt+mob.getX(), yt+mob.getY(), zt+mob.getZ()); a v1 pig
+		// has NO home, so the hasHome()&&xzDist>1.0 bias branch never runs (ZERO extra draws) — a cited
+		// no-op so a future home-bound mob slots the bias in.
+		//	[VERIFIED CFR RandomPos.generateRandomPosTowardDirection: hasHome bias guarded by
 		//	 `mob.hasHome() && distSqr>1.0`; otherwise `return BlockPos.containing(x+pos.getX(), ...)`.]
 		cands = append(cands, [3]float64{e.x + float64(xt), e.y + float64(yt), e.z + float64(zt)})
 	}
-	return cands, true // the 10 raw candidates; the runtime (snapStrollWant) validates + snaps.
+	return cands, true // the 10 raw candidates; the runtime (snapStrollWant) validates + snaps per mode.
 }
 
 // generateRandomDirection ports RandomPos.generateRandomDirection(random, horizontalDist,
@@ -185,7 +231,7 @@ func (g *randomStrollGoal) start(_ *TickLoop, e *Entity) {
 	}
 	var arr [10][3]float64
 	copy(arr[:], g.wantCandidates)
-	e.ai.setWantCandidates(arr)
+	e.ai.setWantCandidates(arr, g.wantLandMode)
 }
 
 // stop ports RandomStrollGoal.stop = navigation.stop(): clear the pending target.

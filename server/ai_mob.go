@@ -54,6 +54,11 @@ type mobAI struct {
 	// pig and the bit-fragile pig oracle stays byte-identical.
 	wantCands    [10][3]float64
 	hasWantCands bool
+	// wantLandMode selects the snap validation: false => DefaultRandomPos.getPos (validate
+	// isOutsideLimits/isRestricted/isNotStable/hasMalus, NO up-snap, NO water), true => LandRandomPos
+	// .getPos (validate isOutsideLimits/isRestricted/isNotStable, THEN moveUpOutOfSolid, THEN
+	// isWater/hasMalus). Set by the stroll goal's probability nextFloat() draw (CONTEXT split).
+	wantLandMode bool
 
 	// rng is the per-mob seeded RandomSource (ai_random.go) — the Mob.getRandom() analogue every
 	// ported goal draws from (canUse's chance roll, getPosition's offset, start's lookTime). It
@@ -126,8 +131,9 @@ func (m *mobAI) clearWantTarget() { m.hasTarget = false }
 // the single lockstep source); the shared Go runtime owns the world reads. Fixed 10 candidates (the
 // generateRandomPos loop is for i<10). Tick-owned (TICK-05). Both the Go-native pig's start() and the
 // plugin pig's overloaded path_to(30 floats) reach this setter, so both pigs run the SAME snap.
-func (m *mobAI) setWantCandidates(c [10][3]float64) {
+func (m *mobAI) setWantCandidates(c [10][3]float64, landMode bool) {
 	m.wantCands = c
+	m.wantLandMode = landMode
 	m.hasWantCands = true
 }
 
@@ -183,6 +189,22 @@ func (m *mobAI) serverAiStep(t *TickLoop, e *Entity) {
 	// (targetSelector.tick + tickRunningGoals — skipped: no attack targets for a passive Pig.)
 	m.goals.tick(t, e)                   // start/stop goals by priority + per-flag locking
 	m.goals.tickRunningGoals(t, e, true) // tick every running goal (canSimulate = true)
+
+	// Phase 30.1 — the RNG-FREE stroll snap: a MOVE goal (Go stroll start() or the plugin pig's
+	// overloaded path_to(30 floats)) emitted 10 RAW candidates this tick (hasWantCands). Validate +
+	// ground-snap them to the first reachable walkable column (RandomPos.generateRandomPos first-valid,
+	// LandRandomPos.getPos snap) and commit the winner — or leave hasTarget false if none survive
+	// (vanilla generateRandomPos null). This draws ZERO randoms, so it does not perturb the per-mob RNG
+	// stream the pig oracle pins, and it runs BEFORE requestPath so the floored want fed to the A* (and
+	// the wantX/Y/Z the oracle observes) is the SNAPPED reachable column — the wedge-bug root-cause fix.
+	if m.hasWantCands {
+		if wx, wy, wz, ok := m.snapStrollWant(t, e); ok {
+			m.setWantTarget(wx, wy, wz) // commit the snapped, reachable target (sets hasTarget)
+		} else {
+			m.hasTarget = false // no valid candidate (generateRandomPos null) — no want this roll
+		}
+		m.hasWantCands = false // consumed
+	}
 
 	// navigation (Plan 07-02): consume the wantTarget a MOVE goal set this/last tick. When the
 	// goal wants a (new) target, ask the navigation to (re)compute a path — throttled by
