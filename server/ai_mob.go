@@ -228,8 +228,10 @@ func (m *mobAI) serverAiStep(t *TickLoop, e *Entity) {
 // contract — never split). FloatGoal's ctor mob.getNavigation().setCanFloat(true) is applied below
 // (navigation.canFloat = true).
 //
-// STILL DEFERRED for v1 (documented, faithful-scope): BreedGoal@3 + FollowParentGoal@5 + TemptGoal@4
-// (no breeding/items). They are added when their preconditions exist.
+// TemptGoal@4 ×2 (carrot_on_a_stick literal + pig_food tag, speed 1.2, canScare=false) is WIRED
+// (Phase 32 — the S4 held-item read landed). STILL DEFERRED for v1 (documented, faithful-scope):
+// BreedGoal@3 + FollowParentGoal@5 (no breeding/aging yet — Phase 33). They are added when their
+// preconditions exist.
 func newPigAI() *mobAI {
 	m := &mobAI{}
 	// Per-mob seeded RandomSource (the Mob.getRandom() analogue) — deterministic for the default
@@ -252,6 +254,14 @@ func newPigAI() *mobAI {
 	// (priority 1 < 6). LOCKSTEP with vanilla_pig/main.star's @1 PanicGoal. Cite Pig.registerGoals @1
 	// PanicGoal (javap: iconst_1; new PanicGoal; ldc2_w 1.25d; PanicGoal.<init>(PathfinderMob, double)).
 	m.goals.addGoal(1, newPanicGoal(panicSpeedModifier))
+	// @4 TemptGoal ×2 [MOVE, LOOK] — Pig.registerGoals adds two: the CARROT_ON_A_STICK literal FIRST,
+	// then the PIG_FOOD tag, both speed 1.2, canScare=false (32-CONTEXT.md, javap Pig.registerGoals).
+	// Carrot MUST be added first: addGoal's insertion-sort keeps it before pig_food among the equal-
+	// priority @4 pair, so the carrot goal wins the shared {MOVE,LOOK} flags (the faithful "first-added
+	// wins" arbitration — ai_goal.go canBeReplacedBy needs other.priority < this.priority, 4<4 false).
+	// LOCKSTEP with vanilla_pig/main.star's two @4 TemptGoals (the oracle contract).
+	m.goals.addGoal(4, newTemptGoal(1.2, func(id int32) bool { return id == 887 }, false))                  // Items.CARROT_ON_A_STICK (id 887), canScare=false
+	m.goals.addGoal(4, newTemptGoal(1.2, func(id int32) bool { return itemInTag(id, "pig_food") }, false)) // ItemTags.PIG_FOOD, canScare=false
 	m.goals.addGoal(6, newWaterAvoidingRandomStrollGoal(1.0))
 	m.goals.addGoal(7, newLookAtPlayerGoal(6.0))
 	m.goals.addGoal(8, newRandomLookAroundGoal())

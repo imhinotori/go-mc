@@ -37,6 +37,8 @@ package server
 
 import (
 	"math"
+
+	"github.com/imhinotori/sulfur/level/attribute"
 )
 
 // mobRandom returns the mob's per-entity seeded RandomSource (e.ai.rng). It is non-nil for every
@@ -411,6 +413,130 @@ func playerHoldsTempt(p *tickPlayer, pred func(itemID int32) bool) bool {
 		return true
 	}
 	return false
+}
+
+// --- temptGoal ---------------------------------------------------------------------------
+
+// temptGoal ports net.minecraft.world.entity.ai.goal.TemptGoal (flags {MOVE, LOOK}). The pig adds two
+// of these at priority 4 (Pig.registerGoals): one matching the Items.CARROT_ON_A_STICK literal, one
+// matching the ItemTags.PIG_FOOD tag, both speed 1.2, both canScare=false. The pig uses the default
+// ctor → DEFAULT_STOP_DISTANCE = 2.5.
+//
+// JAR AUTHORITY (javap -c -p net.minecraft.world.entity.ai.goal.TemptGoal, temp/cache/26.2-inner.jar;
+// captured in 32-CONTEXT.md <decisions>):
+//
+//	private static final double DEFAULT_STOP_DISTANCE = 2.5;
+//	public boolean canUse() {
+//	    if (this.calmDown > 0) { --this.calmDown; return false; }
+//	    this.player = getServerLevel(mob).getNearestPlayer(
+//	        TEMPT_TARGETING.range(mob.getAttributeValue(Attributes.TEMPT_RANGE)), this.mob);
+//	    return this.player != null;                                   // TEMPT_TARGETING carries shouldFollow
+//	}
+//	private boolean shouldFollow(LivingEntity p) {                    // applied inside getNearestPlayer
+//	    return this.items.test(p.getMainHandItem()) || this.items.test(p.getOffhandItem());
+//	}
+//	public boolean canContinueToUse() {
+//	    if (this.canScare()) { ...player-moved-too-much abort... }    // PIG: canScare=false → dead skip
+//	    return this.canUse();
+//	}
+//	public void start()  { this.px = player.getX(); this.py = ...; this.pz = ...; this.isRunning = true; }
+//	public void stop()   { this.player = null; stopNavigation(); this.calmDown = reducedTickDelay(100); this.isRunning = false; }
+//	public void tick()   { mob.getLookControl().setLookAt(player, ...);
+//	                       if (mob.distanceToSqr(player) < stopDistance*stopDistance) stopNavigation();
+//	                       else navigateTowards(player); }            // moveTo(player, speedModifier)
+//
+// NO RNG anywhere — canUse is an int gate + a held-item player scan, so it is oracle-trivially-safe
+// (the pig oracle has no tempt-holding player near the pig → player==null → zero new draws).
+type temptGoal struct {
+	baseGoal
+	speedModifier float64                 // 1.2 (pig): the navigateTowards(player) move speed
+	stopDistance  float64                 // 2.5 (DEFAULT_STOP_DISTANCE); stop within stopDistance²
+	canScare      bool                    // false (pig) — canContinueToUse skips the flee-abort block
+	pred          func(itemID int32) bool // carrot literal (id==887) OR pig_food tag membership
+	calmDown      int                     // post-stop cooldown; reducedTickDelay(100) = 50 @20TPS
+	isRunning     bool
+	hasPlayer     bool
+	px, py, pz    float64 // player pos, captured in canUse/start (TemptGoal.player snapshot)
+}
+
+// newTemptGoal builds a TemptGoal with the pig's defaults: stopDistance 2.5 (DEFAULT_STOP_DISTANCE),
+// flags {MOVE, LOOK}. speedModifier 1.2 and canScare false for the pig.
+func newTemptGoal(speedModifier float64, pred func(int32) bool, canScare bool) *temptGoal {
+	return &temptGoal{
+		baseGoal:      newBaseGoal(flagMove | flagLook),
+		speedModifier: speedModifier,
+		stopDistance:  2.5,
+		canScare:      canScare,
+		pred:          pred,
+	}
+}
+
+// canUse ports TemptGoal.canUse: the calmDown decrement FIRST (post-stop cooldown), then the nearest
+// player within TEMPT_RANGE who holds a tempt item (shouldFollow applied during the scan). Range =
+// mob.getAttributeValue(Attributes.TEMPT_RANGE) (jar default 10.0, level/attribute/attributes.go:87 —
+// for an entity with no map getAttributeValue folds the registration default 10.0). Draws ZERO RNG.
+func (g *temptGoal) canUse(t *TickLoop, e *Entity) bool {
+	if g.calmDown > 0 {
+		g.calmDown--
+		return false
+	}
+	r := e.getAttributeValue(attribute.TemptRange) // jar default 10.0 (attributes.go:87)
+	px, py, pz, ok := nearestPlayerHolding(t, e, r, g.pred)
+	if !ok {
+		g.hasPlayer = false
+		return false
+	}
+	g.px, g.py, g.pz, g.hasPlayer = px, py, pz, true
+	return true
+}
+
+// canContinueToUse ports TemptGoal.canContinueToUse. For the pig canScare=false, so the entire
+// player-moved-too-much flee-abort block is DEAD (CONTEXT lines 49-52); the port keeps the structure
+// as a cited dead skip and returns canUse() — a pig keeps following as long as a player in TEMPT_RANGE
+// holds a tempt item.
+func (g *temptGoal) canContinueToUse(t *TickLoop, e *Entity) bool {
+	if g.canScare {
+		// PIG: canScare=false → DEAD. Vanilla aborts here if the player moved too far from the
+		// goal-start position (the flee-on-approach branch); no pig TemptGoal uses canScare=true, so
+		// this block never runs for the pig. Ported as a cited faithful skip (32-CONTEXT.md line 50).
+	}
+	return g.canUse(t, e)
+}
+
+// start ports TemptGoal.start: snapshot the player position and mark running. The player pos was
+// already captured in canUse; re-capture here per the bytecode (px = player.getX(); ...).
+func (g *temptGoal) start(_ *TickLoop, _ *Entity) {
+	g.isRunning = true
+}
+
+// tick ports TemptGoal.tick: aim the head at the player (setLookAt(player)), then if within
+// stopDistance² (2.5² = 6.25) stop the navigation, else navigate toward the player at speedModifier
+// 1.2. The look seam reuses lookAtPlayerGoal's yawTowardDeg → headYaw/yaw; the move seam is
+// setWantTarget (the navigateTowards(player) analog — the want carries the position, the nav tick
+// applies the 1.2 speed, matching the PanicGoal/stroll precedent).
+func (g *temptGoal) tick(_ *TickLoop, e *Entity) {
+	if !g.hasPlayer {
+		return
+	}
+	// setLookAt(player): aim the head/body toward the player (lookAtPlayerGoal.tick seam).
+	yaw := yawTowardDeg(g.px-e.x, g.pz-e.z)
+	e.headYaw = yaw
+	e.yaw = yaw
+	dx, dy, dz := g.px-e.x, g.py-e.y, g.pz-e.z
+	if dx*dx+dy*dy+dz*dz < g.stopDistance*g.stopDistance { // 2.5² = 6.25
+		e.ai.clearWantTarget() // stopNavigation()
+	} else {
+		e.ai.setWantTarget(g.px, g.py, g.pz) // navigateTowards(player) @ speedModifier 1.2
+	}
+}
+
+// stop ports TemptGoal.stop: drop the player, stop the navigation, and set the post-stop cooldown
+// calmDown = reducedTickDelay(100) = 50 @20TPS.
+func (g *temptGoal) stop(_ *TickLoop, e *Entity) {
+	g.hasPlayer = false
+	e.ai.clearWantTarget()         // stopNavigation()
+	g.calmDown = reducedTickDelay(100) // 100 → 50 @20TPS
+	g.isRunning = false
 }
 
 // --- randomLookAroundGoal ---------------------------------------------------------------
