@@ -220,6 +220,103 @@ Chicken hitbox is smaller (~0.4×0.7) — SC#3 per-mob sizing.
 ##   the existing adjustedTickDelay==n tests. (If Go ever adopts the every-other-tick decimation as a later
 ##   optimization, adjustedTickDelay must flip to ceilDiv IN LOCKSTEP — note for the future, out of scope here.)
 
+## --- ⚠ CHICKEN EGG LOOT GAP (exec-time, found pre-plan-check) ---
+## level/loot/data/loot_table/gameplay/chicken_lay.json IS embedded (LoadTable("minecraft:gameplay/chicken_lay")
+## works — embed.go strips "minecraft:" → data/loot_table/gameplay/chicken_lay.json). BUT it is a
+## `minecraft:gift` table whose single `alternatives` entry has 3 children, EACH gated on a
+## `chicken/variant` component predicate (temperate→minecraft:egg, warm→brown_egg, cold→blue_egg).
+## The loot evaluator (condition.go) ports `entity_properties` ONLY for is_on_fire — the chicken/variant
+## COMPONENT predicate is NOT ported. ⇒ with the table as-is, all 3 alternatives children FAIL → the gift
+## table emits NOTHING → no egg EVER drops (a silent fidelity break the chicken plan must NOT ship).
+## Vanilla: Chicken.finalizeSpawn picks the variant by biome (VariantUtils.selectVariantToSpawn) — overworld
+## default biomes resolve to TEMPERATE → plain minecraft:egg.
+## RESOLUTION (cite-defer, v1 — no chicken-variant subsystem): the chicken egg-lay drops plain minecraft:egg
+## directly (the TEMPERATE default), bypassing the variant-gated alternatives. Document the deferral in
+## 34-CONTEXT Deferred Ideas (brown_egg/blue_egg by cold/warm biome variant = future). Observably identical
+## for a default-biome chicken. Either (a) spawnAtLocation(egg) directly in the egg-lay path with a cited
+## stub, OR (b) extend the evaluator's entity_properties to treat a missing chicken/variant as temperate.
+## Lean (a) — smallest, clearly-cited, no evaluator change. The egg-lay RNG (2 nextFloat + nextInt(6000))
+## is UNCHANGED either way — only the item resolution is deferred.
+
+## --- SHEEP SHEAR + DATA_WOOL (decompiled for the plan-check blocker B1) ---
+## Sheep.mobInteract (the shear path — runs BEFORE super=feed):
+##   if (itemStack.is(Items.SHEARS)) {
+##       if (level instanceof ServerLevel sl) {
+##           if (readyForShearing()) {                         // = !isSheared() && !isBaby()
+##               shear(sl, SoundSource.PLAYERS, itemStack);
+##               gameEvent(GameEvent.SHEAR, player);
+##               itemStack.hurtAndBreak(1, player, hand.asEquipmentSlot());   // shears durability -1
+##               return InteractionResult.SUCCESS_SERVER;
+##           }
+##       }
+##       return InteractionResult.CONSUME;                     // not ready / client side
+##   }
+##   return super.mobInteract(player, hand);                   // the feed/breed path
+## Sheep.shear(ServerLevel level, SoundSource src, ItemStack tool):
+##   level.playSound(null, this, SoundEvents.SHEEP_SHEAR, src, 1.0, 1.0);
+##   dropFromShearingLootTable(level, BuiltInLootTables.SHEAR_SHEEP, tool, (l, drop) -> {
+##       for (int i = 0; i < drop.getCount(); i++) {
+##           ItemEntity e = spawnAtLocation(l, drop.copyWithCount(1), 1.0f);
+##           if (e != null) e.setDeltaMovement(e.getDeltaMovement().add(
+##               (random.nextFloat()-random.nextFloat())*0.1f,   // 2 nextFloat (x scatter)
+##                random.nextFloat()*0.05f,                       // 1 nextFloat (y)
+##               (random.nextFloat()-random.nextFloat())*0.1f));  // 2 nextFloat (z scatter)  => 5 nextFloat PER dropped item
+##       }
+##   });
+##   setSheared(true);
+##   ⇒ SHEAR loot tables ARE embedded: level/loot/data/loot_table/shearing/sheep/<color>.json (white.json → wool).
+##     LoadTable("minecraft:shearing/sheep/white") for the default WHITE sheep. The shear-scatter RNG draws
+##     from the MOB stream (this.random) — 5 nextFloat per dropped wool stack. Default white sheep drops 1 wool
+##     stack (rolls 1) → 5 nextFloat. Lockstep ONLY matters if the sheep is dogfooded Go-vs-plugin; the
+##     pig oracle is untouched, so a per-mob behavior+RNG test suffices. The loot SEED itself is event-time
+##     rand.Int64() (OFF the mob stream, like death loot) — does not perturb mobRandom(e).
+## readyForShearing(): !isSheared() && !isBaby().
+## isSheared():  (DATA_WOOL & 0x10) != 0.
+## setSheared(b): DATA_WOOL = b ? (cur | 0x10) : (cur & 0xEF).
+## getColor():   DyeColor.byId(DATA_WOOL & 0xF).   DEFAULT_COLOR = WHITE (id 0); DEFAULT_SHEARED = false.
+##   ⇒ default DATA_WOOL byte = 0x00 (white, not sheared).
+## DATA_WOOL_ID ACCESSOR INDEX = 18 (BYTE serializer, id 0). Chain (continuing the phase-33 dataBabyIndex=16
+##   derivation, VERIFIED javap): Entity 0..7, LivingEntity 8..14, Mob 15, AgeableMob 16=DATA_BABY_ID +
+##   17=AGE_LOCKED; Animal adds NO accessor (javap-confirmed empty); Sheep adds DATA_WOOL_ID = index 18.
+##   The DataValue frames: Byte(18) + VarInt(0=BYTE serializerID) + Byte(woolByte). (byteSerializerID=0,
+##   the first in the EntityDataSerializers registration sequence the phase-33 boolSerializerID=8 cites.)
+##   Cross-0 / shear broadcast: ClientboundSetEntityData with the DATA_WOOL entry on setSheared change.
+## SCOPE: v1 ships WHITE sheep only (spawn color = white; dye mechanics deferred per CONTEXT). So getColor
+##   is always WHITE, the shear table is shearing/sheep/white. The shear ACTION (shears→wool+setSheared(true))
+##   + wool REGROW (eat→setSheared(false)) together satisfy MOB-PASS-02 "shear/wool with regrow".
+
+## --- EXEC NOTE: shearing/sheep/white.json (the shear drop) ---
+## type minecraft:shearing, ONE entry minecraft:white_wool, rolls = uniform(min 1, max 3).
+## ⇒ a shear drops 1–3 white_wool (the uniform roll count drawn from the LOOT SEED = event-time rand.Int64(),
+##   OFF the mob stream). The loot evaluator handles this AS-IS: getRandomItemsRaw is table-type-agnostic
+##   (the "minecraft:shearing" type string is parsed metadata, not an eval gate — vanilla getRandomItemsRaw
+##   ignores type), and uniform NumberProvider rolls ARE supported (parseNumberProvider / GetInt). So
+##   LoadTable("minecraft:shearing/sheep/white") + Roll(seed, ctx) yields 1–3 white_wool — NO evaluator change.
+##   shear() spawns each rolled stack as its own ItemEntity with the 5-nextFloat scatter (MOB stream) per stack.
+##   (Contrast the chicken_lay GIFT table, which IS variant-gated and needs the cite-defer to a direct egg.)
+
+## --- ⚠ EXEC NOTE: customServerAiStep seam is UNWIRED — chicken slow-fall/egg-lay must wire it into ai_mob.go ---
+## ai_mob.go's serverAiStep ORDER comment lists "...navigation.tick -> customServerAiStep -> moveControl/
+## lookControl/jumpControl" BUT serverAiStep (ai_mob.go ~155-208) does NOT actually call customServerAiStep —
+## there is no per-mob aiStep hook implemented yet (the pig has no aiStep override, so none was needed).
+## The chicken's slow-fall (deltaMovement.y*=0.6 when !onGround && vy<0) + egg-lay are Chicken.aiStep work →
+## they need a customServerAiStep seam ADDED to serverAiStep at the jar-correct slot (vanilla Mob.aiStep calls
+## the entity's customServerAiStep; the order is AFTER navigation.tick, before the move/look/jump controls —
+## though for slow-fall the exact placement vs moveEntity matters: chicken's y*=0.6 runs in Chicken.aiStep =
+## super.aiStep() FIRST [which is LivingEntity.aiStep → travel/gravity], THEN the chicken overrides — verify the
+## slow-fall applies AFTER gravity each tick). This is an ai_mob.go edit (serverAiStep) — ai_mob.go is the
+## PIG'S core file. ⚠ COLLISION/ORACLE RISK: the seam call must be ADDITIVE + mob-gated (only chickens have a
+## customServerAiStep; pig's is a no-op) so the pig oracle's serverAiStep RNG stream is BYTE-IDENTICAL (zero
+## new draws for the pig). Whichever plan edits ai_mob.go (34-00 the shared owner) must keep the pig path
+## draw-free. Confirm at exec that the seam dispatch (e.g. e.ai.customServerAiStep or a baseType switch) adds
+## NOTHING to the pig's tick. The chicken's slow-fall is PURE physics (no RNG); the egg-lay RNG (2 nextFloat +
+## nextInt(6000)) is chicken-only via mobRandom(e).
+
+## --- DOCKER -race COMMAND (plan-check blocker B2 — lift verbatim from 33-05) ---
+## MSYS_NO_PATHCONV=1 docker run --rm -v //d/ender://src -w //src -v sulfur-gomod://go/pkg/mod golang:1.26 go test -race -timeout 900s ./server/
+##   Embed as an <automated> verify in 34-04 (append ` 2>&1 | tail -20`). TestRegionPanicIsolated prints a
+##   scary recovered-panic stack in full runs (KNOWN false alarm — judge final ok/FAIL).
+
 ## --- Attributes (createAttributes) — all CONFIRMED ---
 ## Cow (AbstractCow):  Animal.createAnimalAttributes + MAX_HEALTH 10.0 + MOVEMENT_SPEED 0.2
 ## Sheep:              Animal.createAnimalAttributes + MAX_HEALTH 8.0  + MOVEMENT_SPEED 0.23
