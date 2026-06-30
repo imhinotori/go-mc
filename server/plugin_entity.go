@@ -139,6 +139,8 @@ func (h *entityHandle) Attr(name string) (starlark.Value, error) {
 		return h.bound("set_attribute", h.setAttribute), nil
 	case "attribute":
 		return h.bound("attribute", h.attribute), nil
+	case "damage_in_tag":
+		return h.bound("damage_in_tag", h.damageInTag), nil
 	case "set_look":
 		return h.bound("set_look", h.setLook), nil
 	case "set_look_at":
@@ -198,6 +200,15 @@ func (h *entityHandle) Attr(name string) (starlark.Value, error) {
 		// goal resolves the tag membership by NAME via data/tag (e.g. is the id in panic_causes), it never
 		// holds a live DamageSource. Re-resolved through the region-bound h.store(), never t.cur().
 		return starlark.MakeInt(int(e.lastDamageSource.typeTag)), nil
+	case "has_last_damage":
+		// MOB-SUB-02 / P31 frozen scalar (Decision B): the host-COMPUTED faithful
+		// LivingEntity.getLastDamageSource() != null mirror — e.hasLastDamage, set TRUE in hurtServer's
+		// flag2 block the first time a real source is recorded (combat_mob.go). PanicGoal.shouldPanic
+		// pairs it with damage_in_tag("panic_causes"). It is a SEPARATE bool because typeTag==0
+		// (minecraft:in_fire) is a real panic_causes member, so the raw id cannot represent "unset"
+		// (data/tag/tags.go:152). Re-resolved through the region-bound h.store() (Pitfall 7), never
+		// t.cur() — same discipline as was_hurt.
+		return starlark.Bool(e.hasLastDamage), nil
 	case "in_water":
 		// MOB-SUB-04 frozen scalar: whether the mob's AABB intersects any water cell (the FloatGoal.canUse
 		// predicate). Host-COMPUTED through the handle's owner-bound TickLoop over the entity already
@@ -221,7 +232,7 @@ func (h *entityHandle) Attr(name string) (starlark.Value, error) {
 func (h *entityHandle) AttrNames() []string {
 	return []string{
 		"x", "y", "z", "yaw", "pitch", "on_ground", "type", "velocity", "health",
-		"was_hurt", "last_damage_type",
+		"was_hurt", "last_damage_type", "has_last_damage", "damage_in_tag",
 		"in_water", "fluid_height", "in_lava",
 		"attribute", "move_to", "set_velocity", "set_attribute",
 		"set_look", "set_look_at", "rand_int", "rand_float", "rand_double", "get_state", "set_state",
@@ -255,6 +266,29 @@ func (h *entityHandle) attribute(_ *starlark.Thread, b *starlark.Builtin,
 		return starlark.Float(0.0), nil
 	}
 	return starlark.Float(e.attributes.GetValue(name)), nil
+}
+
+// damageInTag(name) READS whether the mob's lastDamageSource is a member of the named damage-type tag
+// (entities.read). It is the plugin analog of the Go src.is("...") read and the host-side port of
+// DamageSource.is(TagKey) (damage_source.go:78) — PanicGoal's shouldPanic tests panic_causes
+// membership BY NAME without duplicating the id set into Starlark (Decision C); the membership table
+// stays on the Go side. Modeled on attribute(): gated on capEntitiesRead, one positional string arg,
+// resolved via the region-bound h.resolve() (NOT t.cur() — Pitfall 7). An unknown tag yields false
+// (the zero-value map read, exactly Holder.is over an empty tag), never a panic.
+func (h *entityHandle) damageInTag(_ *starlark.Thread, b *starlark.Builtin,
+	args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if !h.caps.has(capEntitiesRead) {
+		return nil, capError("entities.read")
+	}
+	var tagName string
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 1, &tagName); err != nil {
+		return nil, err
+	}
+	e, err := h.resolve()
+	if err != nil {
+		return nil, err
+	}
+	return starlark.Bool(e.lastDamageSource.is(tagName)), nil
 }
 
 // moveTo(x,y,z) MUTATES through the nav seam: setWantTarget -> groundNavigation.requestPath (the

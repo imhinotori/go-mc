@@ -207,6 +207,17 @@ type Entity struct {
 	// wolf anger (P36) reads its attacker. A plain value (no pointer) — the Folia rule.
 	lastDamageSource damageSource
 
+	// hasLastDamage is the faithful LivingEntity.getLastDamageSource() != null signal — set TRUE the
+	// first time hurtServer records a real lastDamageSource (the flag2 block, combat_mob.go). It
+	// PERSISTS (it is NOT the 10-tick hurtTime window): vanilla's lastDamageSource is a longer-lived
+	// source reference, not the hurt-flash timer, so PanicGoal.shouldPanic (which gates on
+	// getLastDamageSource() != null, NOT on hurtTime) keeps firing while the source persists. A
+	// SEPARATE not-null signal is required because lastDamageSource is a plain VALUE struct (never nil)
+	// whose zero value has typeTag==0 — and id 0 (minecraft:in_fire) is a REAL panic_causes member
+	// (data/tag/tags.go:152), so the id itself cannot represent "unset" (Decision B). A plain bool
+	// (snapshot-friendly, the Folia rule). PanicGoal (P31) reads it via shouldPanic.
+	hasLastDamage bool
+
 	// dead is net.minecraft.world.entity.LivingEntity.dead (the death guard set TRUE the first time
 	// die() runs). dieEntity (Plan 29-04) checks `if (isRemoved() || dead) return` at the top and sets
 	// dead=true before the loot/XP/removal, so a second lethal hit (or a re-entrant die) is a no-op —

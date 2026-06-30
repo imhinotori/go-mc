@@ -109,6 +109,11 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 	// alongside this store when a reader lands; the source itself is the MOB-SUB-02 deliverable.
 	if flag2 {
 		e.lastDamageSource = src
+		// MOB-SUB-02 / P31 (Decision B): the faithful getLastDamageSource() != null signal — a real
+		// source was recorded in this same flag2 store-point (LivingEntity.hurtServer bytecode 444-462).
+		// PanicGoal.shouldPanic reads this bool (NOT typeTag==0, which is minecraft:in_fire, a real
+		// panic_causes member — so the id cannot be the unset sentinel; cite data/tag/tags.go:152).
+		e.hasLastDamage = true
 	}
 
 	// Death-or-hurt-sound drive (bytecode 370-423): `if (isDeadOrDying()) { ...getDeathSound...; die(source); }
