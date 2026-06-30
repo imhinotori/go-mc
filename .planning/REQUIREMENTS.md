@@ -27,7 +27,7 @@
 - [x] **MOB-SUB-08**: Animals age — a signed-int `age`/`forcedAge` machine (-24000 baby start ticking up; +6000 breed cooldown) with `tickMobAging` (RNG-free), `isBaby`, and the baby half-scale hitbox. **(S3.)**
 - [x] **MOB-SUB-09**: Animals breed — `inLove`/`loveCause` set by feeding (via MOB-SUB-06), same-region partner search, `canMate`, and baby spawn reusing `spawnDeclaredMob` (correct region routing + per-id RNG reseed) with `finalizeSpawnChildFromBreeding` (XP orb `1+nextInt(7)` + cooldown). Cross-region breeding ships the same-region cut (full-fidelity barrier-resolved match documented as deferred).
 - [ ] **MOB-SUB-10**: Hostiles have a target selector — a second `targetSelector goalSelector` instance on `mobAI` run in jar order, `buildAIFromDecl` routing TARGET-flag goals into it, and an `attackTargetID` thin-id field. The shared `MeleeAttackGoal` / `NearestAttackableTargetGoal` / `HurtByTargetGoal` primitives, built once for reuse.
-- [ ] **MOB-SUB-11**: Hostile spawning is gated — a per-category cap (MONSTER 70 vs CREATURE 10, keeping the `/289` divisor) with MONSTER tallied in `countByCategory`, `checkDespawn` ported (cap bounds spawns, not population), and a day/night spawn gate (a real minimal light read OR a documented gametime-darkness proxy — never a silent daylight flood). **(S5.)**
+- [x] **MOB-SUB-11**: Hostile spawning is gated — a per-category cap (MONSTER 70 vs CREATURE 10, keeping the `/289` divisor) with MONSTER tallied in `countByCategory`, `checkDespawn` ported (cap bounds spawns, not population), and a day/night spawn gate (a real minimal light read OR a documented gametime-darkness proxy — never a silent daylight flood). **(S5.)**
 
 ### Pig Parity (the dogfood gate)
 
@@ -85,7 +85,7 @@ Every v5 requirement maps to exactly one phase. 21/21 mapped — no orphans, no 
 | MOB-SUB-08 | Phase 33 — Aging + Breeding (S3) / Pig Parity GATE | Complete |
 | MOB-SUB-09 | Phase 33 — Aging + Breeding (S3) / Pig Parity GATE | Complete |
 | MOB-SUB-10 | Phase 35 — Hostiles + Spawn Rules | Pending |
-| MOB-SUB-11 | Phase 35 — Hostiles + Spawn Rules | Pending |
+| MOB-SUB-11 | Phase 35 — Hostiles + Spawn Rules | Complete |
 | MOB-GATE-01 | Phase 33 — Aging + Breeding (S3) / Pig Parity GATE | Complete |
 | MOB-GATE-02 | Phase 33 — Aging + Breeding (S3) / Pig Parity GATE | Complete |
 | MOB-PASS-01 | Phase 34 — New Passive Mobs | Complete (34-01 cow + 34-04 gate; live-verify deferred) |

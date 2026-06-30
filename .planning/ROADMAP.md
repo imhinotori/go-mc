@@ -198,7 +198,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
   5. Standing: jar-verified (javap `registerGoals`/`isDarkEnoughToSpawn`/`checkMonsterSpawnRules`/`checkDespawn` before writing); CGO=0 + no new Go deps; target/attack goal draws added in lockstep where they touch any shared pig path; the pig oracle stays GREEN; Docker `-race` + `strictRegion` clean.
 **Plans**: 6 plans (3 waves)
 - [ ] 35-01-PLAN.md — targetSelector machinery: 2nd goalSelector instance + jar-order tick + buildAIFromDecl TARGET routing + attackTargetID + lastHurtByMob bookkeeping + shared NearestAttackableTarget/HurtByTarget/MeleeAttack goals [MOB-SUB-10]
-- [ ] 35-02-PLAN.md — Spawn gating: 3 MONSTER categoryOf cases + monsterCap (70/289) + isDarkEnoughToSpawn gametime proxy (FORCED) + the natural-spawn MONSTER pass + checkDespawn [MOB-SUB-11]
+- [x] 35-02-PLAN.md — Spawn gating: 3 MONSTER categoryOf cases + monsterCap (70/289) + isDarkEnoughToSpawn gametime proxy (FORCED) + the natural-spawn MONSTER pass + checkDespawn [MOB-SUB-11]
 - [ ] 35-03-PLAN.md — Zombie plugin: Zombie.registerGoals (ZombieAttackGoal + target selectors) + per-hostile behavior/RNG test [MOB-HOST-01]
 - [ ] 35-04-PLAN.md — Skeleton plugin: Skeleton.registerGoals melee-only subset (bow deferred) + test [MOB-HOST-02]
 - [ ] 35-05-PLAN.md — Spider plugin: Spider.registerGoals (FloatGoal + LeapAtTargetGoal nextFloat + daylight-gated SpiderAttackGoal) + test [MOB-HOST-03]
@@ -230,7 +230,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
 | 32. Held-Item + Item Tags (S4) | v5 | 1/1 | Complete   | 2026-06-30 |
 | 33. Aging + Breeding (S3) — Pig Parity / DOGFOOD GATE | v5 | 5/5 | Complete   | 2026-06-30 |
 | 34. New Passive Mobs | v5 | 5/5 | Complete   | 2026-06-30 |
-| 35. Hostiles + Spawn Rules | v5 | 0/6 | Planning | - |
+| 35. Hostiles + Spawn Rules | v5 | 1/6 | In Progress|  |
 | 36. Wolf (Neutral) | v5 | 0/? | Not started | - |
 
 ## Deferred / Backlog (unwired or subsystem-blocked)
