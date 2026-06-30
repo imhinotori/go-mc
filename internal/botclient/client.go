@@ -830,6 +830,24 @@ func (c *Client) Attack(entityID int32) error {
 	))
 }
 
+// Interact sends a ServerboundInteract (the RIGHT-CLICK on an entity — the FEED path). Wire layout
+// (server/attack_dispatch.go handleInteract): VarInt entityId ; VarInt hand ; Vec3 location (3 doubles)
+// ; Boolean usingSecondaryAction. The server reads only the entityId + the player's held item
+// server-side (the held-read mirrors TemptGoal), so the trailing fields just form a clean frame.
+// Right-clicking a pig with a pig_food item held makes it fall in love (P33 breeding).
+func (c *Client) Interact(entityID int32) error {
+	if err := c.fatalErr(); err != nil {
+		return err
+	}
+	return c.conn.WritePacket(pk.Marshal(
+		int32(packetid.ServerboundInteract),
+		pk.VarInt(entityID),
+		pk.VarInt(0),                             // InteractionHand: MAIN_HAND (the server reads entityId; rest is frame)
+		pk.Double(0), pk.Double(0), pk.Double(0), // Vec3 location (defensively consumed, unused)
+		pk.Boolean(false),                        // usingSecondaryAction
+	))
+}
+
 // SelectSlot sends a ServerboundSetCarriedItem (Short slot) selecting a hotbar slot 0..8.
 func (c *Client) SelectSlot(slot int32) error {
 	if err := c.fatalErr(); err != nil {
