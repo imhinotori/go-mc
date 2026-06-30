@@ -44,6 +44,17 @@ type mobAI struct {
 	wantX, wantY, wantZ float64
 	hasTarget           bool
 
+	// wantCands / hasWantCands are the Phase-30.1 stroll candidate carrier (CONTEXT <decisions>
+	// architecture split). The stroll goal's start() emits 10 RAW candidate offsets here via
+	// setWantCandidates (the RandomPos.generateRandomPos supplier results); the RNG-free runtime
+	// snap (snapStrollWant in serverAiStep) validates + ground-snaps them to the first reachable
+	// walkable column and commits the winner via setWantTarget — so hasWantCands does NOT set
+	// hasTarget (the snap does, only on a valid commit). Fixed 10 (the for-i<10 supplier loop).
+	// Tick-owned (TICK-05). The snap is RNG-free, so it is identical for the Go-native and plugin
+	// pig and the bit-fragile pig oracle stays byte-identical.
+	wantCands    [10][3]float64
+	hasWantCands bool
+
 	// rng is the per-mob seeded RandomSource (ai_random.go) — the Mob.getRandom() analogue every
 	// ported goal draws from (canUse's chance roll, getPosition's offset, start's lookTime). It
 	// REPLACES the shared package math/rand/v2 the goals used before, making the AI 1:1-faithful
@@ -106,6 +117,19 @@ func (m *mobAI) setWantTarget(x, y, z float64) {
 // clearWantTarget drops the navigation target (the navigation.stop() seam, used by the stroll
 // goal's stop()). With no navigation yet, "done" simply means no target is pending.
 func (m *mobAI) clearWantTarget() { m.hasTarget = false }
+
+// setWantCandidates records the 10 RAW stroll candidates the goal emitted (RandomPos.generateRandomPos's
+// supplier results — BlockPos.containing(xt+x, yt+y, zt+z), NOT yet ground-snapped). It does NOT set
+// hasTarget — the RNG-free runtime snap (snapStrollWant, serverAiStep) validates + ground-snaps them to
+// the first reachable walkable column and commits the winner via setWantTarget. Per the Phase-30.1
+// architecture split (CONTEXT <decisions>): the goal/.star draw only the direction (the per-mob RNG is
+// the single lockstep source); the shared Go runtime owns the world reads. Fixed 10 candidates (the
+// generateRandomPos loop is for i<10). Tick-owned (TICK-05). Both the Go-native pig's start() and the
+// plugin pig's overloaded path_to(30 floats) reach this setter, so both pigs run the SAME snap.
+func (m *mobAI) setWantCandidates(c [10][3]float64) {
+	m.wantCands = c
+	m.hasWantCands = true
+}
 
 
 // navWantsPath reports whether the mob is currently navigating toward a target — used by the plugin

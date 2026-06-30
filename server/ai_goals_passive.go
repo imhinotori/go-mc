@@ -77,10 +77,17 @@ const (
 // randomStrollGoal ports RandomStrollGoal/WaterAvoidingRandomStrollGoal (flags {MOVE}).
 type randomStrollGoal struct {
 	baseGoal
-	speedModifier      float64
-	interval           int
-	forceTrigger       bool    // RandomStrollGoal.forceTrigger / trigger(): skip the chance roll once
-	wantX, wantY, wantZ float64 // the chosen target between canUse and start (vanilla wantedX/Y/Z)
+	speedModifier float64
+	interval      int
+	forceTrigger  bool // RandomStrollGoal.forceTrigger / trigger(): skip the chance roll once
+
+	// wantCandidates is the 10 RAW candidate offsets getPosition emits this canUse (the
+	// RandomPos.generateRandomPos supplier results — BlockPos.containing(xt+x, yt+y, zt+z), NOT yet
+	// ground-snapped). Per the Phase-30.1 architecture split (CONTEXT <decisions>): the GOAL draws
+	// only the direction (the per-mob RNG is the single lockstep source); the shared Go RUNTIME
+	// (mobAI.snapStrollWant in serverAiStep, RNG-free) validates + ground-snaps them to the first
+	// reachable walkable column. start() hands this slice to the runtime via setWantCandidates.
+	wantCandidates [][3]float64
 }
 
 func newWaterAvoidingRandomStrollGoal(speed float64) *randomStrollGoal {
@@ -102,28 +109,63 @@ func (g *randomStrollGoal) canUse(t *TickLoop, e *Entity) bool {
 			return false
 		}
 	}
-	wx, wy, wz, ok := g.getPosition(e)
+	cands, ok := g.getPosition(t, e)
 	if !ok {
 		return false
 	}
-	// Stash on the goal until start() commits it to the mob AI (mirrors vanilla wantedX/Y/Z).
-	g.wantX, g.wantY, g.wantZ = wx, wy, wz
+	// Stash the 10 raw candidates on the goal until start() hands them to the runtime
+	// (mobAI.setWantCandidates). The runtime's RNG-free snap (snapStrollWant) picks the first
+	// reachable walkable column. Mirrors vanilla LandRandomPos.getPos's candidate set.
+	g.wantCandidates = cands
 	g.forceTrigger = false
 	return true
 }
 
-// getPosition ports RandomStrollGoal.getPosition -> DefaultRandomPos.getPos(mob, 10, 7): a
-// random offset within the horizontal/vertical radius around the mob. v1 picks a uniform
-// random offset (the real DefaultRandomPos biases toward a random angle + tries to land on a
-// walkable node; the walkability check is the navigation's job in 07-02 — for now any in-radius
-// point is the wanted target, which 07-02's pathfinder will resolve/refuse). Always succeeds.
-func (g *randomStrollGoal) getPosition(e *Entity) (x, y, z float64, ok bool) {
-	// DRAWS 2,3,4: the getPosition offset (DefaultRandomPos.getPos), AFTER the canUse gate draw.
+// getPosition ports RandomStrollGoal.getPosition -> LandRandomPos.getPos(mob, 10, 7) ->
+// RandomPos.generateRandomPos(supplier, mob::getWalkTargetValue). It draws ONLY the direction
+// (the 10-candidate supplier loop) and emits the 10 RAW candidate world positions; it does NO
+// world read, NO ground-snap, NO validity check — those are the shared Go runtime's job
+// (mobAI.snapStrollWant in serverAiStep), per the Phase-30.1 architecture split (CONTEXT
+// <decisions>: keep the per-mob RNG the single lockstep source; goals stay world-read-free).
+//
+// DRAW CONTRACT (the bit-fragile pig-oracle lockstep): RandomPos.generateRandomPos is an
+// UNCONDITIONAL `for i<10` loop (NO break) that calls the supplier all 10 times — so it ALWAYS
+// draws 3×10 = 30 nextInt, in x,y,z order per candidate (generateRandomDirection), regardless of
+// which candidate is later chosen. The strict-`>` tie-break with all weights == getWalkTargetValue
+// == 0.0 means the FIRST non-null (first valid) candidate wins — that selection happens in the
+// runtime snap, but the GOAL must still draw all 30 + emit all 10 raw candidates here so the runtime
+// can pick the first valid. The DRAW-1 interval gate in canUse is unchanged and precedes these 30.
+//
+//	[VERIFIED CFR RandomPos.generateRandomPos: `for (i=0; i<10; ++i) { pos = posSupplier.get(); ... }`
+//	 — posSupplier.get() (which draws) is called every iteration, no break; returns bestPos or null.]
+func (g *randomStrollGoal) getPosition(_ *TickLoop, e *Entity) (candidates [][3]float64, ok bool) {
 	r := mobRandom(e)
-	dx := float64(r.nextInt(2*strollHorizontalRadius+1) - strollHorizontalRadius)
-	dz := float64(r.nextInt(2*strollHorizontalRadius+1) - strollHorizontalRadius)
-	dy := float64(r.nextInt(2*strollVerticalRadius+1) - strollVerticalRadius)
-	return e.x + dx, e.y + dy, e.z + dz, true
+	cands := make([][3]float64, 0, 10)
+	for i := 0; i < 10; i++ { // RandomPos.generateRandomPos: for i<10, NO break (always 10 supplier calls)
+		xt, yt, zt := generateRandomDirection(r, strollHorizontalRadius, strollVerticalRadius)
+		// LandRandomPos.getPos supplier -> RandomPos.generateRandomPosTowardDirection: a v1 pig has
+		// NO home, so the `mob.hasHome() && xzDist>1.0` bias branch never runs (ZERO extra draws) —
+		// vanilla then just returns BlockPos.containing(xt+mob.getX(), yt+mob.getY(), zt+mob.getZ()).
+		// Ported as a cited no-op so a future home-bound mob slots the bias in.
+		//	[VERIFIED CFR RandomPos.generateRandomPosTowardDirection: the hasHome bias is guarded by
+		//	 `mob.hasHome() && distSqr>1.0`; otherwise `return BlockPos.containing(x+pos.getX(), ...)`.]
+		cands = append(cands, [3]float64{e.x + float64(xt), e.y + float64(yt), e.z + float64(zt)})
+	}
+	return cands, true // the 10 raw candidates; the runtime (snapStrollWant) validates + snaps.
+}
+
+// generateRandomDirection ports RandomPos.generateRandomDirection(random, horizontalDist,
+// verticalDist) — the per-candidate direction draw. DRAW ORDER is x, y, z (the bit-fragile
+// lockstep contract): xt = nextInt(2*h+1)-h, then yt = nextInt(2*v+1)-v, then zt = nextInt(2*h+1)-h.
+// The OLD getPosition drew z BEFORE y, which was both a faithfulness bug and a lockstep mismatch.
+//
+//	[VERIFIED javap RandomPos.generateRandomDirection: nextInt(2*h+1)-h -> istore_3 (xt);
+//	 nextInt(2*v+1)-v -> istore 4 (yt); nextInt(2*h+1)-h (zt); new BlockPos(xt, yt, zt).]
+func generateRandomDirection(r *entityRandom, h, v int) (xt, yt, zt int) {
+	xt = r.nextInt(2*h+1) - h // horizontal (h=strollHorizontalRadius=10) — DRAW order 1 of 3
+	yt = r.nextInt(2*v+1) - v // vertical   (v=strollVerticalRadius=7)    — DRAW order 2 of 3
+	zt = r.nextInt(2*h+1) - h // horizontal (h=strollHorizontalRadius=10) — DRAW order 3 of 3
+	return
 }
 
 // canContinueToUse ports RandomStrollGoal.canContinueToUse = !navigation.isDone() (&& no
@@ -133,12 +175,17 @@ func (g *randomStrollGoal) canContinueToUse(_ *TickLoop, e *Entity) bool {
 	return e.ai != nil && e.ai.hasTarget
 }
 
-// start ports RandomStrollGoal.start = navigation.moveTo(wantedX, wantedY, wantedZ, speed):
-// commit the wanted target to the mob AI (the seam 07-02 consumes). It does NOT move the mob.
+// start ports RandomStrollGoal.start = navigation.moveTo(wantedX, wantedY, wantedZ, speed): hand
+// the 10 raw candidates to the mob AI (the runtime snap consumes them in serverAiStep and commits
+// the first reachable walkable column via setWantTarget). It does NOT move the mob. The candidate
+// loop always produces exactly 10 (RandomPos.generateRandomPos's for i<10); guard the contract.
 func (g *randomStrollGoal) start(_ *TickLoop, e *Entity) {
-	if e.ai != nil {
-		e.ai.setWantTarget(g.wantX, g.wantY, g.wantZ)
+	if e.ai == nil || len(g.wantCandidates) != 10 {
+		return
 	}
+	var arr [10][3]float64
+	copy(arr[:], g.wantCandidates)
+	e.ai.setWantCandidates(arr)
 }
 
 // stop ports RandomStrollGoal.stop = navigation.stop(): clear the pending target.
