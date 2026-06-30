@@ -743,6 +743,24 @@ func (t *TickLoop) emitInLoveHearts(e *Entity) {
 //	[VERIFIED javap Animal.aiStep: ldc2_w 0.02d; dmul after each nextGaussian().]
 const inLoveHeartGaussianScale = 0.02
 
+// broadcastHearts fires the in-love / breeding HEART burst to the mob's trackers — the faithful
+// dedicated-server heart path. Vanilla Animal.setInLove (and finalizeSpawnChildFromBreeding) calls
+// Level.broadcastEntityEvent(this, (byte)18); on the server that becomes a ClientboundEntityEvent(id,
+// 18) sent to every tracking player (ServerChunkCache.sendToTrackingPlayersAndSelf), and the CLIENT's
+// Animal.handleEntityEvent(18) spawns the 7 hearts locally. NOTE: the server does NOT emit the per-tick
+// aiStep `inLove % 10` hearts on the wire (its Level.addParticle is a no-op — see emitInLoveHearts);
+// the ONLY wire hearts come from this event-18 burst on setInLove/breed. It is the SAME
+// broadcastToTrackers fan-out the hurt/death sounds and the DATA_BABY_ID flip use (NOT an RNG draw).
+// Called from the FEED path right after e.setInLove() (mirroring setInLove's own broadcastEntityEvent),
+// and reusable by Plan C's breed() after the parents reset inLove.
+//	[VERIFIED javap Animal.setInLove: bipush 18; Level.broadcastEntityEvent(this, 18) -> ServerLevel
+//	 .broadcastEntityEvent -> ClientboundEntityEventPacket(this, 18) to trackers; Animal.handleEntityEvent
+//	 spawns 7 HEART particles on event 18. The encodeLevelParticles encoder (entity_encode.go) is the
+//	 general sendParticles wire-out; the in-love hearts specifically ride the EntityEvent, not that.]
+func (t *TickLoop) broadcastHearts(e *Entity) {
+	t.broadcastToTrackers(e.id, encodeEntityEvent(e.id, entityEventInLoveHearts))
+}
+
 // onGrewUp is the breedAge -1 -> 0 boundary handler — the part of AgeableMob.setAge's 0-crossing side
 // effect this server reproduces: restore the ADULT AABB (refreshDimensions, now that isBaby()==false)
 // and broadcast DATA_BABY_ID=false to the entity's trackers so the client re-renders the pig at full

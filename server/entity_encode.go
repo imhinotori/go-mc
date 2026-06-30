@@ -802,6 +802,64 @@ func encodeSoundEntity(soundID int32, source int, entityID int32, volume, pitch 
 	)
 }
 
+// --- MOB-SUB-09: the HEART particle wire-out (encodeLevelParticles) --------------------
+//
+// THE GAP THIS CLOSES: the codebase had a ClientboundLevelParticles packet id (data/packetid) but NO
+// encoder. This is the minimal, javap-confirmed ClientboundLevelParticlesPacket wire-out — the general
+// "the server spawns particles" packet (ServerLevel.sendParticles builds exactly this). It is built
+// for the in-love/breed HEART burst, but it is generic (any particle-type id + position + offset +
+// speed + count).
+//
+// JAR-CONFIRMED WIRE LAYOUT (javap net.minecraft.network.protocol.game.ClientboundLevelParticlesPacket
+// write/decode this session — the read ctor and write() agree field-for-field):
+//	1. overrideLimiter : Boolean   (writeBoolean)
+//	2. alwaysShow      : Boolean   (writeBoolean)   <- the 26.2 addition (was absent in <=1.21.4)
+//	3. x, y, z         : Double    (writeDouble × 3)
+//	4. xDist, yDist, zDist : Float (writeFloat × 3) — the spread (per-particle random offset radius)
+//	5. maxSpeed        : Float     (writeFloat)
+//	6. count           : Int       (writeInt — a FIXED 4-byte int, NOT a VarInt)
+//	7. particle        : ParticleTypes.STREAM_CODEC == ByteBufCodecs.registry(PARTICLE_TYPE).dispatch:
+//	                     VarInt(particleTypeId) THEN the per-type options stream. ParticleTypes.HEART is
+//	                     a SimpleParticleType whose options codec is StreamCodec.unit -> writes NOTHING,
+//	                     so for HEART the particle field is just VarInt(particleTypeId), nothing trailing.
+//
+// THE COUNT FIELD IS writeInt (a plain 4-byte big-endian int), NOT a VarInt — load-bearing (pk.Int).
+// THE PARTICLE-TYPE id is the trailing field (after count), a VarInt registry index — load-bearing
+// (it is NOT leading; the 26.2 layout puts the particle last).
+//	[VERIFIED javap ClientboundLevelParticlesPacket.write: writeBoolean(overrideLimiter);
+//	 writeBoolean(alwaysShow); writeDouble(x/y/z); writeFloat(xDist/yDist/zDist); writeFloat(maxSpeed);
+//	 writeInt(count); ParticleTypes.STREAM_CODEC.encode(buf, particle). ParticleTypes.STREAM_CODEC ==
+//	 ByteBufCodecs.registry(Registries.PARTICLE_TYPE).dispatch(...) -> VarInt(typeId) + options;
+//	 SimpleParticleType (HEART) streamCodec == StreamCodec.unit -> no per-particle bytes.]
+func encodeLevelParticles(particleID int32, overrideLimiter, alwaysShow bool, x, y, z float64, xDist, yDist, zDist, maxSpeed float32, count int32) pk.Packet {
+	return pk.Marshal(
+		int32(packetid.ClientboundLevelParticles),
+		pk.Boolean(overrideLimiter), // overrideLimiter (long-distance / ignore the client particle cap)
+		pk.Boolean(alwaysShow),      // alwaysShow (26.2 addition)
+		pk.Double(x),                // x
+		pk.Double(y),                // y
+		pk.Double(z),                // z
+		pk.Float(xDist),             // xDist — per-particle spread radius on X
+		pk.Float(yDist),             // yDist
+		pk.Float(zDist),             // zDist
+		pk.Float(maxSpeed),          // maxSpeed
+		pk.Int(count),               // count — writeInt: a FIXED 4-byte int, NOT a VarInt
+		pk.VarInt(particleID),       // particle: ParticleTypes registry index (HEART has no options bytes)
+	)
+}
+
+// entityEventInLoveHearts is the EntityEvent ("entity status") byte Animal.setInLove +
+// finalizeSpawnChildFromBreeding broadcast via Level.broadcastEntityEvent(this, (byte)18): status 18 ==
+// the in-love / breeding HEART burst. The CLIENT's Animal.handleEntityEvent(18) spawns 7 HEART
+// particles around the mob locally; the SERVER never sends the aiStep hearts on the wire (its
+// Level.addParticle is a no-op) — the heart trigger is THIS event, not a ClientboundLevelParticles
+// packet. This is the faithful in-love heart path on a dedicated server.
+//	[VERIFIED javap Animal.setInLove: level(); bipush 18; Level.broadcastEntityEvent(this, 18).
+//	 Animal.handleEntityEvent: `if (event == 18) { for i<7: addParticle(HEART, getRandomX(1),
+//	 getRandomY()+0.5, getRandomZ(1), gauss*0.02 ×3) }`. finalizeSpawnChildFromBreeding also
+//	 broadcastEntityEvent(this, 18).]
+const entityEventInLoveHearts byte = 18
+
 // encodeRemoveEntities builds ClientboundRemoveEntities (06-CAPTURE-DIFF §5):
 // writeIntIdList == VarInt count followed by N VarInt ids. The tracker batches ALL of a
 // player's newly-out-of-range ids into ONE such packet per tick.
