@@ -16,6 +16,17 @@ progress:
 
 # Project State
 
+### ⚠️ CARRYOVER (live-test feedback, non-blocking) — zombie/skeleton don't burn in daylight
+The hostile day/night BURN (a zombie/skeleton catching fire in sunlight) is NOT ported — cite-deferred
+in Phase 35 ("day/night BURN deferred"). It needs TWO subsystems that don't exist in v1: (1) sky-light
+exposure detection (the same light-engine gap the spawn gate defers, currently a gametime proxy), and
+(2) a fire/fire-ticks system (no onFire/remainingFireTicks on the Go Entity at all — grep is empty).
+Vanilla: Mob.aiStep -> isSunBurnTick() (brightness + canSeeSky + !waterlogged + random) -> setRemainingFireTicks
+/ igniteForSeconds(8). FIX (own task, a real feature): add the fire-ticks field + tick (damage over time),
+add the sky-exposure read (or a gametime+exposed-column proxy), wire Zombie/Skeleton.aiStep isSunBurnTick.
+NOT a regression — deferred scope. (Found alongside the goal double-tick fix 7d0611dd, which WAS a real bug:
+mobs ticked goals 2x/step so the zombie attacked ultra-fast — now fixed.)
+
 ### ⚠️ CARRYOVER (found Phase-36 live-verify, non-blocking) — bot joins reporting health 0
 A freshly-joined player's ClientboundSetHealth reports health 0 to the client (the bot probe showed
 health=0.0/seen=true from tick 0, Y stable on the floor — NOT void/fall death, NOT a stale .dat: persists
