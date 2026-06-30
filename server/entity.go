@@ -218,6 +218,20 @@ type Entity struct {
 	// (snapshot-friendly, the Folia rule). PanicGoal (P31) reads it via shouldPanic.
 	hasLastDamage bool
 
+	// lastHurtByMob is net.minecraft.world.entity.LivingEntity.lastHurtByMob — the entity id of the
+	// attacker that last hit this mob (0 == null/no attacker). Set in LivingEntity.hurtServer alongside
+	// the Phase-31 lastDamageSource (combat_mob.go flag2 store-point) when an entity attacker hits the
+	// mob. HurtByTargetGoal.canUse reads it (timestamp != its own && lastHurtByMob != null -> retaliate).
+	// Phase 31 tracked the damage SOURCE (the tag); this is the attacker ENTITY ref. A THIN id (never a
+	// live *Entity — the Folia rule, == damageSource.attacker). Tick-owned (TICK-05).
+	lastHurtByMob int32
+
+	// lastHurtByMobTimestamp is net.minecraft.world.entity.LivingEntity.lastHurtByMobTimestamp — the
+	// gameTime tick stamp of the last attacker hit, set beside lastHurtByMob. HurtByTargetGoal compares
+	// it against its OWN stored timestamp (canUse: timestamp == this.timestamp -> false) so it
+	// retaliates only ONCE per fresh hit. A plain int32 (snapshot-friendly), tick-owned (TICK-05).
+	lastHurtByMobTimestamp int32
+
 	// dead is net.minecraft.world.entity.LivingEntity.dead (the death guard set TRUE the first time
 	// die() runs). dieEntity (Plan 29-04) checks `if (isRemoved() || dead) return` at the top and sets
 	// dead=true before the loot/XP/removal, so a second lethal hit (or a re-entrant die) is a no-op —

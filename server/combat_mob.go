@@ -114,6 +114,15 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 		// PanicGoal.shouldPanic reads this bool (NOT typeTag==0, which is minecraft:in_fire, a real
 		// panic_causes member — so the id cannot be the unset sentinel; cite data/tag/tags.go:152).
 		e.hasLastDamage = true
+		// Phase 35 (MOB-SUB-10): the attacker-ENTITY bookkeeping HurtByTargetGoal reads — the reader
+		// combat_mob.go's doc (line 108) anticipated ("lastDamageStamp slots in alongside this store when
+		// a reader lands"). LivingEntity.setLastHurtByMob records the causing entity ref + the gameTime
+		// stamp on a fresh hit; here src.attacker is the causing entity id (damage_source.go:71, 0 for an
+		// environmental hit) and t.gametime is the per-tick counter (the same int32 cast block_break.go:230
+		// uses). PURE field writes, NO RNG — cannot perturb the pig oracle (the oracle pig deals/takes no
+		// damage in its window). Cite LivingEntity.actuallyHurt/setLastHurtByMob.
+		e.lastHurtByMob = src.attacker
+		e.lastHurtByMobTimestamp = int32(t.gametime)
 	}
 
 	// Death-or-hurt-sound drive (bytecode 370-423): `if (isDeadOrDying()) { ...getDeathSound...; die(source); }
