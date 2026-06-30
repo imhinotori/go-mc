@@ -48,8 +48,8 @@
 
 ### Neutral Mob
 
-- [ ] **MOB-NEUT-01**: Wolf (wild subset) — a `"wolf"` base type + a NEW 1:1 `Wolf.createAttributes()` supplier in `level/attribute/defaults.go`; the wild goal set (Float/Panic/Avoid/Leap/Melee/target).
-- [ ] **MOB-NEUT-02**: Wolf (tame second pass) — `TamableAnimal` owner/sit state + the OwnerHurt target chain + anger-on-hit (reads MOB-SUB-02's `lastDamageSource`).
+- [x] **MOB-NEUT-01**: Wolf (wild subset) — a `"wolf"` base type + a NEW 1:1 `Wolf.createAttributes()` supplier in `level/attribute/defaults.go`; the wild goal set (Float/Panic/Avoid/Leap/Melee/target).
+- [x] **MOB-NEUT-02**: Wolf (tame second pass) — `TamableAnimal` owner/sit state + the OwnerHurt target chain + anger-on-hit (reads MOB-SUB-02's `lastDamageSource`).
 
 ---
 
@@ -94,8 +94,8 @@ Every v5 requirement maps to exactly one phase. 21/21 mapped — no orphans, no 
 | MOB-HOST-01 | Phase 35 — Hostiles + Spawn Rules | Complete |
 | MOB-HOST-02 | Phase 35 — Hostiles + Spawn Rules | Complete |
 | MOB-HOST-03 | Phase 35 — Hostiles + Spawn Rules | Complete |
-| MOB-NEUT-01 | Phase 36 — Wolf (Neutral) | Pending |
-| MOB-NEUT-02 | Phase 36 — Wolf (Neutral) | Pending |
+| MOB-NEUT-01 | Phase 36 — Wolf (Neutral) | Complete |
+| MOB-NEUT-02 | Phase 36 — Wolf (Neutral) | Complete |
 
 **Coverage:** 21/21 v5 requirements mapped ✓ — no orphans, no duplicates.
 
