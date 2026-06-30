@@ -115,3 +115,21 @@ public InteractionResult mobInteract(Player player, InteractionHand hand) {
 ```
 Wire this into handleInteract (attack_dispatch.go:725, currently a v1 no-op): read held item, isFood?
 adult+canFallInLove → setInLove+consume; baby+canAgeUp → ageUp+consume. playEatingSound = a sound emit (reuse the Phase-29 ClientboundSoundEntity seam).
+
+## DATA_BABY_ID accessor index (computed — EXECUTOR MUST javap-confirm before wiring)
+SynchedEntityData accessor chain (defineId order, the wire index):
+  Entity:        indices 0-7  (8 accessors: 0=BYTE shared-flags, 1=DATA_AIR_SUPPLY_ID INT, 2=custom-name,
+                              3=name-visible, 4=silent, 5=no-gravity, 6=POSE, 7=DATA_TICKS_FROZEN) — per entity_encode.go's documented map
+  LivingEntity:  indices 8-14 (7: DATA_LIVING_ENTITY_FLAGS, DATA_EFFECT_PARTICLES, DATA_EFFECT_AMBIENCE_ID,
+                              DATA_ARROW_COUNT_ID, DATA_STINGER_COUNT_ID, DATA_HEALTH_ID, SLEEPING_POS_ID)
+  Mob:           index 15     (DATA_MOB_FLAGS_ID)
+  AgeableMob:    index 16 = DATA_BABY_ID (BOOLEAN), index 17 = AGE_LOCKED (BOOLEAN)
+=> DATA_BABY_ID = accessor index 16, serializer = BOOLEAN. The baby flag is a single Byte(16) +
+   VarInt(BOOLEAN_serializer_id) + Boolean(isBaby) entry (mirror the DATA_AIR INT entry in entity_encode.go,
+   swapping INT→BOOLEAN). VERIFY the BOOLEAN serializer id from the generated registry (EntityDataSerializers
+   order) — it is a small VarInt; the executor confirms it the same way itemStackSerializerID/INT were pinned.
+
+## Heart-particle (the flagged gap): breed() + the inLove%10 emit spawn ParticleTypes.HEART via
+## ClientboundLevelParticlesPacket. NO particle encoder exists yet — Plan B must add a minimal
+## ClientboundLevelParticles encode (particle id + long-distance bool + x,y,z + offset xyz + maxSpeed +
+## count). Cite the packet; the HEART particle id comes from the generated particle registry.
