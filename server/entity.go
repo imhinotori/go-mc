@@ -473,6 +473,25 @@ func (e *Entity) canFallInLove() bool { return e.inLove <= 0 }
 //	 bipush 18; Level.broadcastEntityEvent(this, 18).]
 func (e *Entity) setInLove() { e.inLove = defaultInLoveTime }
 
+// canMate is net.minecraft.world.entity.animal.Animal.canMate(Animal other): the partner gate the
+// BreedGoal's getFreePartner scan applies — `other != this && other.getClass() == this.getClass()
+// && this.isInLove() && other.isInLove()`. Our same-species check is `other.typ == e.typ` (both the
+// vanilla_pig wire type, entity.Pig.ID): two distinct same-type animals that are BOTH in love may
+// breed. Pure read, draws no RNG.
+//	[VERIFIED javap Animal.canMate: `other != this` (if_acmpeq -> 0); `other.getClass()==getClass()`
+//	 (if_acmpne -> 0); `isInLove()` (ifeq -> 0); `other.isInLove()` (ifeq -> 0); else 1.]
+func (e *Entity) canMate(other *Entity) bool {
+	return other != e && other.typ == e.typ && e.isInLove() && other.isInLove()
+}
+
+// isAlive is net.minecraft.world.entity.LivingEntity.isAlive(): `!isRemoved() && health > 0`. The
+// BreedGoal.canContinueToUse (partner alive) and FollowParentGoal.canContinueToUse (parent alive)
+// gates read it so a goal drops a partner/parent that died or was removed mid-courting/follow. Sulfur
+// folds isRemoved() into the `dead` flag (removal IS the store delete; see the field doc), so this is
+// `!e.dead && e.health > 0`. Pure read, no RNG.
+//	[VERIFIED javap LivingEntity.isAlive: `return !isRemoved() && getHealth() > 0.0F;`.]
+func (e *Entity) isAlive() bool { return !e.dead && e.health > 0 }
+
 // ageUp is net.minecraft.world.entity.AgeableMob.ageUp(int amount) == ageUp(amount, false): it
 // advances the age toward adulthood by `amount * 20` ticks, clamped at 0 so the result never goes
 // positive (a fed baby lands exactly on 0 = adult, never into the breeding cooldown). The exact

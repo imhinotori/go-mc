@@ -87,6 +87,18 @@ func (er *entityRandom) nextDouble() float64 {
 	return er.r.Float64()
 }
 
+// nextBoolean returns a pseudo-random bool — the RandomSource.nextBoolean() analogue. The breed
+// path's Pig.getBreedOffspring draws it ONCE to pick which parent's PigVariant the baby inherits
+// (`nextBoolean() ? this.getVariant() : partner.getVariant()`). Drawn ONLY mid-breeding (inside
+// breedGoal's breed()), so it is dormant on the un-fed oracle pig and never perturbs the pinned
+// oracle stream. Like the other draws it is draw-ORDER-faithful (not bit-exact vanilla), backed by
+// math/rand/v2's IntN(2)==0; the draw being CONSUMED (and its order vs the XP nextInt) is the
+// observable contract the lockstep rule pins, not the bit value.
+//	[VERIFIED javap Pig.getBreedOffspring: getRandom().nextBoolean() ? getVariant() : partner.getVariant().]
+func (er *entityRandom) nextBoolean() bool {
+	return er.r.IntN(2) == 0
+}
+
 // nextGaussian returns a normally-distributed float64 (mean 0, stddev 1) — the
 // RandomSource.nextGaussian() analogue. Animal.aiStep's in-love heart branch draws it three times
 // (xd/yd/zd = nextGaussian() * 0.02) as the per-heart particle velocity. Like the other draws this is
