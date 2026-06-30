@@ -141,34 +141,6 @@ func (m *mobAI) setWantCandidates(c [10][3]float64, landMode bool) {
 	m.hasWantCands = true
 }
 
-
-// navWantsPath reports whether the mob is currently navigating toward a target — used by the plugin
-// nav handle's has_path() so a declared MOVE goal re-requests only when navigation has finished. It
-// is TRUE when the want-target intent is set AND the nav has NOT arrived at that target: either an
-// async compute is in flight (pending), an active not-done path exists, OR the nav has not yet
-// processed this target (path_to set the want this tick but serverAiStep has not submitted a compute
-// for it yet — lastT != the wanted block). It goes FALSE once the path completes or the A* fails
-// (arrival), without mutating mobAI.hasTarget — so the Go-native/plugin pig oracle (which compares
-// hasTarget directly) is unaffected. This is the fix for the declared wander mob freezing after its
-// first target (has_path() never going false because hasTarget alone stayed true).
-func (m *mobAI) navWantsPath() bool {
-	if !m.hasTarget {
-		return false
-	}
-	n := &m.navigation
-	if n.active() {
-		return true // a compute is in flight or an active path is being followed
-	}
-	// No active path: is this because the nav already ARRIVED at the current want-target, or because
-	// the want was just set and serverAiStep has not submitted a compute yet? If the nav's recorded
-	// target does not match the current want block, the want is fresh/unprocessed → still wants a path.
-	tx, ty, tz := floorI(m.wantX), floorI(m.wantY), floorI(m.wantZ)
-	if n.lastTX != tx || n.lastTY != ty || n.lastTZ != tz {
-		return true // a fresh want-target the nav has not computed for yet
-	}
-	return false // arrived at (or failed to reach) the current target — no path wanted
-}
-
 // serverAiStep drives one AI step for the mob, in the jar-confirmed Mob.serverAiStep ORDER
 // (minus the v1-skipped targetSelector + sensing, and minus navigation/controls which land in
 // Plan 07-02). It runs goalSelector.tick (start/stop goals by priority + flag locks, which

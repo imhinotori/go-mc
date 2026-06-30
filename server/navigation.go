@@ -184,14 +184,16 @@ func (n *groundNavigation) requestPath(t *TickLoop, e *Entity, tx, ty, tz int) {
 // retarget is never blocked by an in-flight request for the previous goal.
 // active reports whether the mob is currently navigating toward a target — there is an active
 // (not-done) path, OR an async compute is in flight (a path was just requested and has not yet
-// rejoined). It is the navigation.isDone() INVERSE used by the plugin nav handle's has_path():
-// a declared MOVE goal asks "do I already have a path?" and re-requests only when this is false.
-// CRITICAL: this reads the REAL path state, NOT mobAI.hasTarget — mobAI.hasTarget is the "a target
-// is wanted" intent flag that is set on path_to and only cleared by an explicit nav.stop(), so it
-// stays true forever after the first path_to. Keying has_path() off mobAI.hasTarget made a declared
-// wander mob walk to its first target and then freeze (has_path() never went false, so the goal
-// never re-requested). When the mob ARRIVES (path.done()) or the A* FAILS (no path, pending
-// cleared), active() returns false so the goal re-requests the next target — the mob keeps moving.
+// rejoined). It is the navigation.isDone() INVERSE on the REAL path state.
+//
+// NOTE: the plugin nav handle's has_path() does NOT call this — has_path() reads mobAI.hasTarget
+// directly (plugin_entity.go), which is the !navigation.isDone() proxy the stroll goal's
+// canContinueToUse depends on. mobAI.hasTarget is set on path_to/setWantTarget and CLEARED ON ARRIVAL
+// by markArrived (which clears BOTH navigation.hasTarget and mobAI.hasTarget), so it correctly goes
+// false when the mob reaches its target — ending the goal and letting it re-roll. (The earlier wander
+// freeze — has_path() staying true forever — was fixed by markArrived clearing hasTarget on arrival,
+// NOT by an alternative active()-based path; that alternative was removed as dead code.) active()
+// itself remains the direct real-path-state observer used by diagnostics/tests.
 func (n *groundNavigation) active() bool {
 	if n.pending {
 		return true // a compute is in flight — a path is coming; don't re-request yet
