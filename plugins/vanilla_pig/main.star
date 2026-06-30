@@ -11,9 +11,11 @@
 # @7 LookAtPlayerGoal(Player,6.0f), @8 RandomLookAroundGoal. @0 FloatGoal is PORTED (Phase 30-03: its
 # prerequisites — mob jump control + fluid detection — landed in 30-01/30-02). @1 PanicGoal is PORTED
 # (Phase 31-01: its prerequisite — the lastDamageSource keystone (Phase 29) + the candidate/snap
-# machinery (Phase 30.1) — exist). @3/@4/@5 remain DEFERRED with a cited reason (deferred-goals.md):
-# their prerequisites (entity aging/breeding; held-item tags) are unbuilt — porting them now would be
-# built-but-unwired or faked, both forbidden. This plugin ports @0/@1/@6/@7/@8 1:1.
+# machinery (Phase 30.1) — exist). @4 TemptGoal x2 is PORTED (Phase 32-01: its prerequisite — the S4
+# held-item read + item-tag membership — landed; the carrot_on_a_stick literal + the pig_food tag).
+# @3/@5 remain DEFERRED with a cited reason (deferred-goals.md): their prerequisites (entity aging/
+# breeding) are unbuilt — porting them now would be built-but-unwired or faked, both forbidden. This
+# plugin ports @0/@1/@4/@6/@7/@8 1:1.
 #
 # Each goal callback receives (entity, world, nav) handles. The interpreter fires ONLY while a goal
 # is RUNNING (an idle pig makes zero starlark.Calls per tick). The draw ORDER below matches the
@@ -43,6 +45,13 @@ PANIC_V = 4               # vertical radius (DefaultRandomPos.getPos(mob, 5, 4))
 PANIC_SPEED = 1.25        # Pig.registerGoals @1 PanicGoal(mob, 1.25) (the want carries position only; the
                                # 1.25 multiplier is cited-deferred like stroll's speedModifier, LOCKSTEP with
                                # the Go oracle's panicSpeedModifier)
+TEMPT_RANGE = 10.0        # Attributes.TEMPT_RANGE default (level/attribute/attributes.go:87) — the
+                               # nearest-tempt-player scan radius the host applies. LOCKSTEP with the Go
+                               # oracle's e.getAttributeValue(attribute.TemptRange).
+TEMPT_SPEED = 1.2         # Pig.registerGoals @4 TemptGoal(mob, 1.2, ..., false) speedModifier (the want
+                               # carries position only; the 1.2 multiplier is cited-deferred like the others)
+STOP_DISTANCE = 2.5       # TemptGoal DEFAULT_STOP_DISTANCE (the pig uses the default ctor); tick stops the
+                               # navigation within STOP_DISTANCE² (2.5² = 6.25), LOCKSTEP with the Go oracle
 LOOK_DIST = 6.0           # LookAtPlayerGoal lookDistance (Pig: 6.0f)
 LOOK_PROBABILITY = 0.02   # LookAtPlayerGoal.DEFAULT_PROBABILITY
 LOOK_AROUND_PROBABILITY = 0.02   # RandomLookAroundGoal.canUse: nextFloat() < 0.02f
@@ -110,6 +119,87 @@ def panic_stop(entity, world, nav):
 # canContinueToUse (bytecode): !navigation.isDone(). The Go oracle: e.ai.hasTarget. nav.has_path is that seam.
 def panic_continue(entity, world, nav):
     return nav.has_path()
+
+# ============================================================================================
+# @4  TemptGoal(mob, 1.2, i -> i.is(Items.CARROT_ON_A_STICK), false)   flags {MOVE, LOOK}
+# ports net.minecraft.world.entity.ai.goal.TemptGoal — LOCKSTEP with the Go oracle (server/ai_goals_passive.go temptGoal)
+# ============================================================================================
+# canUse (bytecode): if (calmDown > 0) { --calmDown; return false; }  then player = getNearestPlayer(
+# TEMPT_TARGETING.range(TEMPT_RANGE), mob); return player != null. NO RNG — an int gate + a held-item
+# player scan. The HOST owns the item-id set + the scan: entity.nearest_player_holding_carrot_on_a_stick(
+# range) returns the matching player's (px,py,pz) tuple or None (the carrot_on_a_stick id 887 stays
+# Go-side, mirroring damage_in_tag). The calmDown cooldown lives Go-side in the oracle's temptGoal; the
+# .star re-scans each can_use, which is the observable equivalent (a player leaving range fails
+# can_use / can_continue — the same not-following result). Distinct state keys (tempt_c_*) so the two @4
+# goals never clobber each other. In the DRY oracle no player holds a tempt item near the pig -> None ->
+# can_use false -> zero new draws (the oracle contract; TemptGoal draws zero RNG anyway).
+def tempt_carrot_can_use(entity, world, nav):
+    p = entity.nearest_player_holding_carrot_on_a_stick(TEMPT_RANGE)   # host scan + predicate; item id stays Go-side
+    if p == None:
+        return False
+    entity.set_state("tempt_c_px", p[0])
+    entity.set_state("tempt_c_py", p[1])
+    entity.set_state("tempt_c_pz", p[2])
+    return True
+
+# tick (bytecode): getLookControl().setLookAt(player, ...); if (distanceToSqr(player) < stopDistance²)
+# stopNavigation(); else navigateTowards(player) (moveTo(player, 1.2)). set_look_at is the LookControl
+# .setLookAt seam (host derives the same yawTowardDeg as the Go oracle); move_to is the navigateTowards
+# seam (setWantTarget — the 1.2 speedModifier is the nav-tick multiplier, cited-deferred like the others).
+def tempt_carrot_tick(entity, world, nav):
+    px = entity.get_state("tempt_c_px")
+    py = entity.get_state("tempt_c_py")
+    pz = entity.get_state("tempt_c_pz")
+    entity.set_look_at(px, py, pz)   # TemptGoal.tick setLookAt(player)
+    dx = px - entity.x
+    dy = py - entity.y
+    dz = pz - entity.z
+    if dx * dx + dy * dy + dz * dz < STOP_DISTANCE * STOP_DISTANCE:   # 2.5² = 6.25
+        nav.stop()   # stopNavigation()
+    else:
+        entity.move_to(px, py, pz)   # navigateTowards(player) @ TEMPT_SPEED 1.2
+
+# stop (bytecode): player = null; stopNavigation(); calmDown = reducedTickDelay(100); isRunning = false.
+# The Go oracle resets calmDown=50; the .star side stops the nav (the calmDown lives Go-side in the oracle).
+def tempt_carrot_stop(entity, world, nav):
+    nav.stop()   # stopNavigation()
+
+# canContinueToUse (bytecode): if (canScare()) { ...flee-abort... } return canUse(). PIG: canScare=false
+# -> the flee block is DEAD -> canContinueToUse == canUse (re-scan).
+def tempt_carrot_continue(entity, world, nav):
+    return tempt_carrot_can_use(entity, world, nav)
+
+# ============================================================================================
+# @4  TemptGoal(mob, 1.2, i -> i.is(ItemTags.PIG_FOOD), false)   flags {MOVE, LOOK}
+# the SECOND @4 — identical callbacks calling the pig_food host handle. Distinct state keys (tempt_p_*).
+# ============================================================================================
+def tempt_pigfood_can_use(entity, world, nav):
+    p = entity.nearest_player_holding_pig_food(TEMPT_RANGE)   # host scan + predicate (ItemTags.PIG_FOOD stays Go-side)
+    if p == None:
+        return False
+    entity.set_state("tempt_p_px", p[0])
+    entity.set_state("tempt_p_py", p[1])
+    entity.set_state("tempt_p_pz", p[2])
+    return True
+
+def tempt_pigfood_tick(entity, world, nav):
+    px = entity.get_state("tempt_p_px")
+    py = entity.get_state("tempt_p_py")
+    pz = entity.get_state("tempt_p_pz")
+    entity.set_look_at(px, py, pz)   # TemptGoal.tick setLookAt(player)
+    dx = px - entity.x
+    dy = py - entity.y
+    dz = pz - entity.z
+    if dx * dx + dy * dy + dz * dz < STOP_DISTANCE * STOP_DISTANCE:   # 2.5² = 6.25
+        nav.stop()   # stopNavigation()
+    else:
+        entity.move_to(px, py, pz)   # navigateTowards(player) @ TEMPT_SPEED 1.2
+
+def tempt_pigfood_stop(entity, world, nav):
+    nav.stop()   # stopNavigation()
+
+def tempt_pigfood_continue(entity, world, nav):
+    return tempt_pigfood_can_use(entity, world, nav)   # canScare=false -> canContinueToUse == canUse
 
 # ============================================================================================
 # @6  WaterAvoidingRandomStrollGoal(mob, 1.0)   flags {MOVE}
@@ -275,6 +365,27 @@ declare_mob(
             can_use = panic_can_use,
             stop = panic_stop,
             can_continue = panic_continue,
+        ),
+        # @4 TemptGoal(mob, 1.2, CARROT_ON_A_STICK, false) [MOVE, LOOK] — ADDED FIRST among the @4 pair
+        # (the carrot goal wins the shared {MOVE,LOOK} flags; addGoal keeps insertion order among equals,
+        # faithful "first-added wins"). LOCKSTEP with the Go oracle's first addGoal(4, newTemptGoal(...887...)).
+        goal(
+            priority = 4,
+            flags = ["MOVE", "LOOK"],
+            can_use = tempt_carrot_can_use,
+            tick = tempt_carrot_tick,
+            stop = tempt_carrot_stop,
+            can_continue = tempt_carrot_continue,
+        ),
+        # @4 TemptGoal(mob, 1.2, PIG_FOOD, false) [MOVE, LOOK] — the SECOND @4 (pig_food tag). LOCKSTEP
+        # with the Go oracle's second addGoal(4, newTemptGoal(...pig_food...)).
+        goal(
+            priority = 4,
+            flags = ["MOVE", "LOOK"],
+            can_use = tempt_pigfood_can_use,
+            tick = tempt_pigfood_tick,
+            stop = tempt_pigfood_stop,
+            can_continue = tempt_pigfood_continue,
         ),
         # @6 WaterAvoidingRandomStrollGoal [MOVE] — can_use commits the candidates (via path_to), so NO
         # start kwarg; stop/continue carry the rest.
