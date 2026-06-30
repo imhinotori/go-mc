@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v5
 milestone_name: Mob Behaviors & Living-Entity Subsystems
 status: executing
-stopped_at: Completed 32-01-PLAN.md
-last_updated: "2026-06-30T08:18:48.788Z"
+stopped_at: Completed 33-03-PLAN.md
+last_updated: "2026-06-30T08:35:03.186Z"
 last_activity: 2026-06-30
 progress:
   total_phases: 9
   completed_phases: 5
   total_plans: 15
-  completed_plans: 12
-  percent: 80
+  completed_plans: 13
+  percent: 87
 ---
 
 # Project State
@@ -37,7 +37,7 @@ See: .planning/PROJECT.md (updated 2026-06-29)
 ## Current Position
 
 Phase: 33 (Aging + Breeding (S3) — Pig Parity / DOGFOOD GATE) — EXECUTING
-Plan: 3 of 5
+Plan: 4 of 5
 Status: Ready to execute
 Last activity: 2026-06-30
 
@@ -198,7 +198,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [████████░░] 80%
+Progress: [█████████░] 87%
 
 ## Performance Metrics
 
@@ -317,6 +317,7 @@ Progress: [████████░░] 80%
 | Phase 32 P01 | 11min | 4 tasks | 10 files |
 | Phase 33 P01 | 22min | 3 tasks | 6 files |
 | Phase 33 P02 | 11min | 3 tasks | 6 files |
+| Phase 33 P03 | 25min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -481,6 +482,8 @@ Recent decisions affecting current work:
 - [Phase ?]: In-love hearts use ClientboundEntityEvent(id, 18), NOT ClientboundLevelParticles — the server never wires the aiStep hearts (Level.addParticle is a server no-op); javap-corrected (33-02)
 - [Phase ?]: Pig playEatingSound is a no-op (Pig has no override; base is empty) — feeding a pig emits NO sound; javap-corrected (33-02)
 - [Phase ?]: encodeLevelParticles built as the javap-confirmed ClientboundLevelParticles wire-out + byte-tested (33-02)
+- [Phase ?]: 33-03: breed() RNG order is variant nextBoolean() THEN XP 1+nextInt(7), both on the initiator's RNG (jar-verified) — the lockstep order 33-04 mirrors onto both .star pigs
+- [Phase ?]: 33-03: BreedGoal@3 + FollowParentGoal@5 added GO-NATIVE only (C1/C2 split); the oracle stays GREEN because both goals are canUse-gated dormant on the un-fed lone-adult pig
 
 ### Pending Todos
 
@@ -510,7 +513,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-30T08:18:40.723Z
-Stopped at: Completed 32-01-PLAN.md
+Last session: 2026-06-30T08:35:03.171Z
+Stopped at: Completed 33-03-PLAN.md
 Resume file: None
 Next: OPERATOR CHECKPOINT (19-02 Task 3) — build `CGO_ENABLED=0 go build -o sulfur.exe ./cmd/sulfur`, run `./sulfur.exe -seed 777` in a REAL terminal (expect alt-screen TUI: log viewport + command input), type `say hi`+Enter (expect a `console command cmd=say hi` viewport line), connect a vanilla 26.2 client (expect a join line), Ctrl-C (clean exit), then `./sulfur.exe -seed 777 | cat` (expect NO TUI, plain stderr — today's behavior). On "approved" → mark TUI-01 complete + advance the plan counter, then proceed to Plan 19-03 (gameplay_tick.go join/leave slog conversion + the full disconnect taxonomy). The console line routes TUI→tick (EnqueueConsoleCommand, cap 64, drop-on-full)→runConsoleCommand on the tick→existing graph (grant-all, no issuer), reply to slog. gameplay_tick.go is untouched (19-03 owns it). LEGACY: Phase 17 Wave 2 (17-02/17-03) — see prior continuity below. (GAMEPLAY-05 fluid simulation: OVERWRITE server/fluid.go with the FlowingFluid port + scheduled-tick queue; lazy-init t.fluidSchedule inside tickFluids, do NOT edit tick.go/tick_phases.go) and 17-03 (GAMEPLAY-04 fall damage + PvP dispatch: OVERWRITE server/fall_damage.go using the tickPlayer fallDistance/wasOnGround/lastY fields + the lookupPlayerByEntityID reverse lookup, do NOT edit tick.go/tick_phases.go). The exact Wave-2 seam surface (field names, init point, call sites, stub signatures) is in 17-01-SUMMARY.md "WAVE-2 HANDOFF". Deferred-still-open: dungeon loot/spawner-mob + BeehiveDecorator occupant + pale_garden PaleMoss (all v3, cosmetic, in 13-04-SUMMARY); KeepAlive double-leave hardening (Phase 3). KNOWN PRE-EXISTING FLAKE: TestTickAIDrivesMobs (OPT-01 async-pool timing, not caused by 17-01) intermittently fails under full-suite load; passes in isolation + 3× under -race.
