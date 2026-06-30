@@ -32,6 +32,21 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned chicken eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
 		}
+	case "zombie":
+		e := t.spawnVanillaMob(vanillaZombieMobName, p.x, p.y, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned zombie eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
+		}
+	case "skeleton":
+		e := t.spawnVanillaMob(vanillaSkeletonMobName, p.x, p.y, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned skeleton eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
+		}
+	case "spider":
+		e := t.spawnVanillaMob(vanillaSpiderMobName, p.x, p.y, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned spider eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
+		}
 	case "water":
 		t.dbgFillWater(p)
 		t.broadcastSystemChat("[dbg] filled a water box around you")
@@ -42,7 +57,7 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] water box + pig eid=%d dropped in", e.id))
 		}
 	default:
-		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | water | pig-in-water")
+		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | water | pig-in-water")
 	}
 }
 

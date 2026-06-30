@@ -29,7 +29,7 @@ import (
 // embedded manifest governs, T-24-07). Keep each repo-root/embed pair byte-identical. Embedding the
 // dirs covers plugin.toml + main.star for each mob.
 //
-//go:embed assets/vanilla_pig assets/vanilla_cow assets/vanilla_sheep assets/vanilla_chicken
+//go:embed assets/vanilla_pig assets/vanilla_cow assets/vanilla_sheep assets/vanilla_chicken assets/vanilla_zombie assets/vanilla_skeleton assets/vanilla_spider
 var vanillaMobFS embed.FS
 
 // The declared mob names the swap sites look up. Each is the directory name under assets/ AND the
@@ -53,14 +53,20 @@ const (
 	vanillaSpiderMobName   = "vanilla_spider"
 )
 
-// vanillaMobNames is the load order: ALL FOUR bundled mobs load into the ONE registry. The pig is first
-// to keep the boot log + any pig-first diagnostics stable, but order is otherwise irrelevant (each mob
-// loads independently under its own caps). A missing entry here means that mob never boot-loads.
+// vanillaMobNames is the load order: ALL SEVEN bundled mobs (the 4 passives + the Phase-35 hostiles)
+// load into the ONE registry. The pig is first to keep the boot log + any pig-first diagnostics stable,
+// but order is otherwise irrelevant (each mob loads independently under its own caps). A missing entry
+// here means that mob never boot-loads — and the SWAP would have no such mob (the LOUD re-assertion in
+// loadVanillaMobRegistry catches it). The 3 hostiles are additive: the loader + the re-assertion are
+// category-agnostic (a MONSTER declares its goal/target sets exactly as a CREATURE declares its goals).
 var vanillaMobNames = []string{
 	vanillaPigMobName,
 	vanillaCowMobName,
 	vanillaSheepMobName,
 	vanillaChickenMobName,
+	vanillaZombieMobName,
+	vanillaSkeletonMobName,
+	vanillaSpiderMobName,
 }
 
 // loadVanillaMobRegistry materializes EACH bundled vanilla mob plugin to a temp dir, parses its
