@@ -71,6 +71,12 @@ type BotState struct {
 	Yaw, Pitch float32
 	OnGround   bool
 	Connected  bool
+	// Health is the bot's current health, updated from ClientboundSetHealth. Starts at 20 (full).
+	// A hostile that hits the bot drops this — the live signal that a mob dealt real damage.
+	Health float32
+	// HealthSeen reports whether any ClientboundSetHealth has been observed (so a test can tell
+	// "never updated" from "updated to 20").
+	HealthSeen bool
 }
 
 // EntitySnapshot is one row of the live entity table the read loop maintains: the entity id,
@@ -106,6 +112,8 @@ type Client struct {
 	x, y, z    float64
 	yaw, pitch float32
 	onGround   bool
+	health     float32
+	healthSeen bool
 	entities   map[int32]*entityRec
 	chatRing   []string
 
@@ -172,6 +180,12 @@ func (c *Client) Connect(ctx context.Context, addr, name string) error {
 	}
 
 	c.connected.Store(true)
+	// The bot joins at full health (20). The server only pushes ClientboundSetHealth on a CHANGE, so
+	// without this default a test reading Health before any damage would see the 0 zero-value (a false
+	// "dead"). HealthSeen stays false until a real SetHealth arrives.
+	c.mu.Lock()
+	c.health = 20.0
+	c.mu.Unlock()
 	// Start the continuous reader (owns ALL reads from here) and the keepalive/flush loop.
 	c.wg.Add(2)
 	go func() { defer c.wg.Done(); c.readLoop() }()
@@ -396,6 +410,20 @@ func (c *Client) readLoop() {
 				_ = c.conn.WritePacket(pk.Marshal(
 					int32(packetid.ServerboundAcceptTeleportation), tpID,
 				))
+			}
+
+		case packetid.ClientboundSetHealth:
+			// The server's authoritative health update (ClientboundSetHealth: Float health, VarInt food,
+			// Float saturation). A hostile that lands a hit drops health here — the live proof a mob dealt
+			// real damage to the bot.
+			var hp pk.Float
+			var food pk.VarInt
+			var sat pk.Float
+			if err := p.Scan(&hp, &food, &sat); err == nil {
+				c.mu.Lock()
+				c.health = float32(hp)
+				c.healthSeen = true
+				c.mu.Unlock()
 			}
 
 		case packetid.ClientboundChunkBatchFinished:
@@ -684,8 +712,10 @@ func (c *Client) State() BotState {
 	return BotState{
 		X: c.x, Y: c.y, Z: c.z,
 		Yaw: c.yaw, Pitch: c.pitch,
-		OnGround:  c.onGround,
-		Connected: c.connected.Load(),
+		OnGround:   c.onGround,
+		Connected:  c.connected.Load(),
+		Health:     c.health,
+		HealthSeen: c.healthSeen,
 	}
 }
 
