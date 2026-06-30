@@ -78,7 +78,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
  (completed 2026-06-30)
 - [x] **Phase 34: New Passive Mobs** — cow/sheep/chicken as jar-faithful Starlark plugins. (completed 2026-06-30)
 - [x] **Phase 35: Hostiles + Spawn Rules** — target-selector machinery + per-category cap + day/night gate; zombie/skeleton/spider.
-- [ ] **Phase 36: Wolf (Neutral)** — `"wolf"` base type + supplier; wild goal set then the tame/owner second pass.
+- [x] **Phase 36: Wolf (Neutral)** — `"wolf"` base type + supplier; wild goal set then the tame/owner second pass. (completed 2026-06-30)
 
 ## Phase Details
 
@@ -217,7 +217,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
 - [x] 36-01-PLAN.md — Foundation: wolf state (tame/owner/sit/anger) + DATA_FLAGS metadata + the NEW goal classes (sit/follow_owner/owner_hurt) + the kind seam + wolfSupplier + categoryOf + anger-on-hit + base_type/embed/dbg wiring [Wave 1]
 - [x] 36-02-PLAN.md — The taming interact: Wolf.mobInteract + tryToTame nextInt(3) + applyTamingSideEffects (8→40) + the sit-toggle, wired into handleInteract [Wave 2]
 - [x] 36-03-PLAN.md — The vanilla_wolf .star plugin: the full wild+tame goal set by kind=/callback, both copies byte-identical [Wave 2]
-- [ ] 36-04-PLAN.md — The gate: boot-load + behavior tests (tame/sit/follow/anger) + focused RNG tests + pig-oracle byte-identity + Docker -race + live bot verify [Wave 3]
+- [x] 36-04-PLAN.md — The gate: boot-load + behavior tests (tame/sit/follow/anger) + focused RNG tests + pig-oracle byte-identity + Docker -race + live bot verify [Wave 3]
 **Research flag**: yes — the `TamableAnimal` owner/sit/anger state model + the OwnerHurt target chain; verify/add the wolf attribute supplier FIRST (the one missing supplier).
 
 ## Progress
@@ -235,7 +235,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
 | 33. Aging + Breeding (S3) — Pig Parity / DOGFOOD GATE | v5 | 5/5 | Complete   | 2026-06-30 |
 | 34. New Passive Mobs | v5 | 5/5 | Complete   | 2026-06-30 |
 | 35. Hostiles + Spawn Rules | v5 | 6/6 | Complete   | 2026-06-30 |
-| 36. Wolf (Neutral) | v5 | 3/4 | In Progress|  |
+| 36. Wolf (Neutral) | v5 | 4/4 | Complete   | 2026-06-30 |
 
 ## Deferred / Backlog (unwired or subsystem-blocked)
 
