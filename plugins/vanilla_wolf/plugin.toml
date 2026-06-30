@@ -1,0 +1,17 @@
+name = "vanilla_wolf"
+version = "0.1.0"
+entrypoint = "main.star"
+runtime = "starlark"
+# Least-privilege caps (24-RESEARCH Security Domain / T-24-07). The wolf's COMBAT + TAME/OWNER/TARGET goals
+# are Go-NATIVE (kind="melee_attack"/"leap_at_target"/"hurt_by_target"/"sit"/"follow_owner"/"owner_hurt_by"/
+# "owner_hurt"/"angry_player_target"/"skeleton_target", 35-01b/36-01): the target acquire (setTarget), the
+# chase (navigation.moveTo), the melee-hit (doHurtTarget), the sit-park, the owner-follow, and the anger gate
+# are HOST-side ops the Go-native goals own — NOT plugin ops — so the .star needs NO widened cap for them.
+# Taming is a HOST-side interact (attack_dispatch.go's tryWolfInteract / tryToTame, 36-02), NOT a plugin op,
+# so no widened cap (mirrors the cow's milking note). The .star (the PASSIVE goals
+# float/panic/stroll/look/around/breed) reads its own state + the nearest player and writes its look + nav want:
+#   entities.read  — read x/y/z + the rng draws (the float/panic/stroll/look/breed gates) + the goal scratch
+#   entities.write — set_look_at (LookControl.setLookAt) + set_state (the passive goal scratch) + try_breed (host op)
+#   world.read     — nearest_player (LookAtPlayerGoal getNearestPlayer)
+#   nav            — path_to/has_path/stop/jump (the Float/Panic/Stroll navigation)
+capabilities = ["entities.read", "entities.write", "world.read", "nav"]
