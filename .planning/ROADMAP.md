@@ -165,7 +165,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
   - [x] 33-01-PLAN.md - Aging + AgeableMob: breedAge int + tickMobAging (pure-int, OUTSIDE serverAiStep) + baby HALF-SCALE hitbox + DATA_BABY_ID metadata + cross-0 broadcast
   - [x] 33-02-PLAN.md - Animal in-love + FEED: inLove int + setInLove/canFallInLove/isInLove + handleInteract feed path + encodeLevelParticles (HEART)
   - [x] 33-03-PLAN.md - C1 Go-native goals: BreedGoal@3 + FollowParentGoal@5 + breed()/getFreePartner/canMate + adjustedTickDelay + faithful isPanicking + Go-native goal-count test
-  - [ ] 33-04-PLAN.md - C2 lockstep: 5 host handles + both .star copies (9 goals, byte-identical) + 3 plugin-side goal-count tests + breed/follow scenario tests
+  - [x] 33-04-PLAN.md - C2 lockstep: 5 host handles + both .star copies (9 goals, byte-identical) + 3 plugin-side goal-count tests + breed/follow scenario tests
   - [ ] 33-05-PLAN.md - THE GATE: full 9v9 oracle byte-identical + end-to-end scenario + Docker -race + deviation doc (same-region/eye-height) + live dogfood verify
 **Research flag**: yes — javap-verify `AgeableMob.aging`/`setAge`/`ageUp`, `Animal.canMate`/`spawnChildFromBreeding`/`finalizeSpawnChildFromBreeding` (XP/cooldown draw order) before porting; the same-region-cut vs barrier-resolved full-fidelity decision must be FORCED and documented as an accepted deviation, not left silent.
 
@@ -216,7 +216,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
 | 30. JumpControl + Fluid (S1) | v5 | 3/3 | Complete   | 2026-06-29 |
 | 31. PanicGoal (S2 consumer) | v5 | 1/1 | Complete   | 2026-06-30 |
 | 32. Held-Item + Item Tags (S4) | v5 | 1/1 | Complete   | 2026-06-30 |
-| 33. Aging + Breeding (S3) — Pig Parity / DOGFOOD GATE | v5 | 3/5 | In Progress|  |
+| 33. Aging + Breeding (S3) — Pig Parity / DOGFOOD GATE | v5 | 4/5 | In Progress|  |
 | 34. New Passive Mobs | v5 | 0/? | Not started | - |
 | 35. Hostiles + Spawn Rules | v5 | 0/? | Not started | - |
 | 36. Wolf (Neutral) | v5 | 0/? | Not started | - |
