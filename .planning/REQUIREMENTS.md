@@ -24,7 +24,7 @@
 - [x] **MOB-SUB-05**: A mob can detect fluid — `mobIsInWater`/`mobFluidHeight`/`isInLava` predicates (built on the existing `fluidAt` read) so FloatGoal and swim behavior work for `*Entity`, not just `*tickPlayer`.
 - [x] **MOB-SUB-06**: A goal can read the nearest player's held item — `world.player_main_hand` (+ a nearest-player-with-id scan) and `world.item_in_tag` / host-side `itemTagContains` returning frozen tag-bools across the Starlark boundary. **(S4.)**
 - [x] **MOB-SUB-07**: Item-food tag membership is data-driven — a jar-extracted item-tag table (`PIG_FOOD`, `COW_FOOD`, `WOLF_FOOD`, `Items.CARROT_ON_A_STICK`, …) added to the `tools/` codegen pipeline (`GenTags.java` → `tags.json` → `data/tag/`).
-- [ ] **MOB-SUB-08**: Animals age — a signed-int `age`/`forcedAge` machine (-24000 baby start ticking up; +6000 breed cooldown) with `tickMobAging` (RNG-free), `isBaby`, and the baby half-scale hitbox. **(S3.)**
+- [x] **MOB-SUB-08**: Animals age — a signed-int `age`/`forcedAge` machine (-24000 baby start ticking up; +6000 breed cooldown) with `tickMobAging` (RNG-free), `isBaby`, and the baby half-scale hitbox. **(S3.)**
 - [ ] **MOB-SUB-09**: Animals breed — `inLove`/`loveCause` set by feeding (via MOB-SUB-06), same-region partner search, `canMate`, and baby spawn reusing `spawnDeclaredMob` (correct region routing + per-id RNG reseed) with `finalizeSpawnChildFromBreeding` (XP orb `1+nextInt(7)` + cooldown). Cross-region breeding ships the same-region cut (full-fidelity barrier-resolved match documented as deferred).
 - [ ] **MOB-SUB-10**: Hostiles have a target selector — a second `targetSelector goalSelector` instance on `mobAI` run in jar order, `buildAIFromDecl` routing TARGET-flag goals into it, and an `attackTargetID` thin-id field. The shared `MeleeAttackGoal` / `NearestAttackableTargetGoal` / `HurtByTargetGoal` primitives, built once for reuse.
 - [ ] **MOB-SUB-11**: Hostile spawning is gated — a per-category cap (MONSTER 70 vs CREATURE 10, keeping the `/289` divisor) with MONSTER tallied in `countByCategory`, `checkDespawn` ported (cap bounds spawns, not population), and a day/night spawn gate (a real minimal light read OR a documented gametime-darkness proxy — never a silent daylight flood). **(S5.)**
@@ -82,7 +82,7 @@ Every v5 requirement maps to exactly one phase. 21/21 mapped — no orphans, no 
 | MOB-SUB-05 | Phase 30 — JumpControl + Fluid (S1) | Complete |
 | MOB-SUB-06 | Phase 32 — Held-Item + Item Tags (S4) | Complete |
 | MOB-SUB-07 | Phase 32 — Held-Item + Item Tags (S4) | Complete |
-| MOB-SUB-08 | Phase 33 — Aging + Breeding (S3) / Pig Parity GATE | Pending |
+| MOB-SUB-08 | Phase 33 — Aging + Breeding (S3) / Pig Parity GATE | Complete |
 | MOB-SUB-09 | Phase 33 — Aging + Breeding (S3) / Pig Parity GATE | Pending |
 | MOB-SUB-10 | Phase 35 — Hostiles + Spawn Rules | Pending |
 | MOB-SUB-11 | Phase 35 — Hostiles + Spawn Rules | Pending |
