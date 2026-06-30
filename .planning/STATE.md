@@ -16,6 +16,19 @@ progress:
 
 # Project State
 
+### ⚠️ CARRYOVER (found Phase-36 live-verify, non-blocking) — bot joins reporting health 0
+A freshly-joined player's ClientboundSetHealth reports health 0 to the client (the bot probe showed
+health=0.0/seen=true from tick 0, Y stable on the floor — NOT void/fall death, NOT a stale .dat: persists
+after wiping world/playerdata + a fresh-disk server). The tickPlayer is CREATED with health: maxHealth (20)
+at gameplay_tick.go:339, yet syncFood (food.go:407) sends SetHealth(p.health) reading 0 — so something
+between join and the first food-sync zeroes p.health (or the join uses a different tickPlayer-creation path
+that skips the health init). Real bug (a real client would HUD-render 0 hearts on join, risking instant
+perceived death). NOT a Phase-36/wolf defect (the wolf melee + anger-on-hit are unit-proven through the
+Phase-29 keystone; the live wolf test was pivoted to a position/homing signal that doesn't depend on health).
+FIX (own task): trace the join → tickPlayer health-init path; ensure p.health = maxHealth before the first
+syncFood, and add a bot live-test asserting join health == 20. The botclient now tracks health (BotState.Health,
+default 20) for that test once the server bug is fixed.
+
 ### ⚠️ CARRYOVER (pre-existing, non-blocking) — flaky spawn-regression test
 
 `TestBehaviorRegressionMobSpawns` (async_stress_test.go) intermittently fails under `-count`/full -race:
