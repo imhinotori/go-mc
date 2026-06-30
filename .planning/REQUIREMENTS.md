@@ -36,9 +36,9 @@
 
 ### Passive Mobs
 
-- [ ] **MOB-PASS-01**: Cow — a jar-faithful Starlark plugin (`Cow.registerGoals`), mapped to CREATURE, with the milking interact (`Cow.mobInteract`).
-- [ ] **MOB-PASS-02**: Sheep — a jar-faithful plugin (`Sheep.registerGoals`) adding EatBlockGoal + shear/wool (and wool regrow as a differentiator).
-- [ ] **MOB-PASS-03**: Chicken — a jar-faithful plugin (`Chicken.registerGoals`) adding the `aiStep` egg-lay + slow-fall.
+- [ ] **MOB-PASS-01**: Cow — a jar-faithful Starlark plugin (`Cow.registerGoals`), mapped to CREATURE, with the milking interact (`Cow.mobInteract`). _(34-00 shared infra: the parameterized food handle. The cow plugin + milking interact close in 34-01.)_
+- [ ] **MOB-PASS-02**: Sheep — a jar-faithful plugin (`Sheep.registerGoals`) adding EatBlockGoal + shear/wool (and wool regrow as a differentiator). _(34-00 shared infra: the sheep eat seam + DATA_WOOL setSheared + the shear interact + wool regrow are DONE. The sheep .star plugin closes it in 34-02.)_
+- [ ] **MOB-PASS-03**: Chicken — a jar-faithful plugin (`Chicken.registerGoals`) adding the `aiStep` egg-lay + slow-fall. _(34-00 shared infra: the chicken aiStep host hook (slow-fall + egg-lay) + spawn init + tick wiring are DONE. The chicken .star plugin closes it in 34-03.)_
 
 ### Hostile Mobs
 
@@ -88,9 +88,9 @@ Every v5 requirement maps to exactly one phase. 21/21 mapped — no orphans, no 
 | MOB-SUB-11 | Phase 35 — Hostiles + Spawn Rules | Pending |
 | MOB-GATE-01 | Phase 33 — Aging + Breeding (S3) / Pig Parity GATE | Complete |
 | MOB-GATE-02 | Phase 33 — Aging + Breeding (S3) / Pig Parity GATE | Complete |
-| MOB-PASS-01 | Phase 34 — New Passive Mobs | Pending |
-| MOB-PASS-02 | Phase 34 — New Passive Mobs | Pending |
-| MOB-PASS-03 | Phase 34 — New Passive Mobs | Pending |
+| MOB-PASS-01 | Phase 34 — New Passive Mobs | In Progress (34-00 infra; closes 34-01) |
+| MOB-PASS-02 | Phase 34 — New Passive Mobs | In Progress (34-00 infra; closes 34-02) |
+| MOB-PASS-03 | Phase 34 — New Passive Mobs | In Progress (34-00 infra; closes 34-03) |
 | MOB-HOST-01 | Phase 35 — Hostiles + Spawn Rules | Pending |
 | MOB-HOST-02 | Phase 35 — Hostiles + Spawn Rules | Pending |
 | MOB-HOST-03 | Phase 35 — Hostiles + Spawn Rules | Pending |

@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v5
 milestone_name: Mob Behaviors & Living-Entity Subsystems
 status: verifying
-stopped_at: Completed 33-03-PLAN.md
-last_updated: "2026-06-30T09:07:44.088Z"
+stopped_at: Completed 34-00-PLAN.md
+last_updated: "2026-06-30T13:59:45.077Z"
 last_activity: 2026-06-30
 progress:
   total_phases: 9
   completed_phases: 6
-  total_plans: 15
-  completed_plans: 15
-  percent: 100
+  total_plans: 20
+  completed_plans: 16
+  percent: 80
 ---
 
 # Project State
@@ -198,7 +198,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [██████████] 100%
+Progress: [████████░░] 80%
 
 ## Performance Metrics
 
@@ -320,6 +320,7 @@ Progress: [██████████] 100%
 | Phase 33 P03 | 25min | 2 tasks | 7 files |
 | Phase 33 P04 | 13min | 3 tasks | 7 files |
 | Phase 33 P05 | 35min | 2 tasks | 2 files |
+| Phase 34 P00 | 13min | 2 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -491,6 +492,7 @@ Recent decisions affecting current work:
 - [Phase ?]: Phase 33 HEADLESS dogfood gate GREEN (33-05): the 9-goal pig oracle byte-identical over 500 ticks + the end-to-end breed/age/follow/grow scenario + boot-load-9; Docker -race clean. Phase 34 BLOCKED on the live bot dogfood pass.
 - [Phase ?]: Same-region breeding cut + baby eye-height + pig-variant-assign + Age/InLove NBT persist documented as accepted v5 deviations in 33-deviations.md (never silent; each cited + a fidelity path).
 - [Phase ?]: TestPerfGate is a pre-existing flaky wall-clock perf gate (passes 5/5 isolated; spikes only under full-suite parallel contention); not a 33-05 regression (test-only change). Real fix: assert per-stroll Starlark alloc-count vs wall-clock ns.
+- [Phase ?]: 34-00: parameterized nearest_player_holding_food(tag,range) + sheep eat seam (DATA_WOOL setSheared) + sheep shear (white-wool, 5 nextFloat/stack scatter) + chicken aiStep (slow-fall vy*0.6 + egg-lay 2nf/nextInt6000); shared wave-1 infra, pig oracle byte-identical
 
 ### Pending Todos
 
@@ -520,7 +522,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-30T09:07:13.640Z
-Stopped at: Completed 33-03-PLAN.md
+Last session: 2026-06-30T13:59:38.488Z
+Stopped at: Completed 34-00-PLAN.md
 Resume file: None
 Next: OPERATOR CHECKPOINT (19-02 Task 3) — build `CGO_ENABLED=0 go build -o sulfur.exe ./cmd/sulfur`, run `./sulfur.exe -seed 777` in a REAL terminal (expect alt-screen TUI: log viewport + command input), type `say hi`+Enter (expect a `console command cmd=say hi` viewport line), connect a vanilla 26.2 client (expect a join line), Ctrl-C (clean exit), then `./sulfur.exe -seed 777 | cat` (expect NO TUI, plain stderr — today's behavior). On "approved" → mark TUI-01 complete + advance the plan counter, then proceed to Plan 19-03 (gameplay_tick.go join/leave slog conversion + the full disconnect taxonomy). The console line routes TUI→tick (EnqueueConsoleCommand, cap 64, drop-on-full)→runConsoleCommand on the tick→existing graph (grant-all, no issuer), reply to slog. gameplay_tick.go is untouched (19-03 owns it). LEGACY: Phase 17 Wave 2 (17-02/17-03) — see prior continuity below. (GAMEPLAY-05 fluid simulation: OVERWRITE server/fluid.go with the FlowingFluid port + scheduled-tick queue; lazy-init t.fluidSchedule inside tickFluids, do NOT edit tick.go/tick_phases.go) and 17-03 (GAMEPLAY-04 fall damage + PvP dispatch: OVERWRITE server/fall_damage.go using the tickPlayer fallDistance/wasOnGround/lastY fields + the lookupPlayerByEntityID reverse lookup, do NOT edit tick.go/tick_phases.go). The exact Wave-2 seam surface (field names, init point, call sites, stub signatures) is in 17-01-SUMMARY.md "WAVE-2 HANDOFF". Deferred-still-open: dungeon loot/spawner-mob + BeehiveDecorator occupant + pale_garden PaleMoss (all v3, cosmetic, in 13-04-SUMMARY); KeepAlive double-leave hardening (Phase 3). KNOWN PRE-EXISTING FLAKE: TestTickAIDrivesMobs (OPT-01 async-pool timing, not caused by 17-01) intermittently fails under full-suite load; passes in isolation + 3× under -race.
