@@ -323,6 +323,13 @@ func (t *TickLoop) tickAI() {
 	// serverAiStep).
 	for _, e := range t.cur().entities.byID {
 		t.tickMobIFrames(e)
+		// MOB-SUB-08 (Plan 33-01): AgeableMob aging, in the SAME OUTSIDE-serverAiStep per-mob loop as the
+		// i-frame decrement (vanilla runs aging in aiStep; we run it here — pure-int, no draw — to keep it
+		// off the per-mob RNG stream the pig oracle pins; the cited oracle-preserving optimization). A baby
+		// (breedAge<0) ages up toward 0, an adult on cooldown (breedAge>0) decays toward 0, an un-fed adult
+		// (breedAge==0, the oracle pig) is a no-op. Self-gated on breedAge sign, so it is a harmless no-op
+		// for non-animals (items/orbs, breedAge 0).
+		t.tickMobAging(e)
 	}
 
 	// WR death-animation drive: LivingEntity.baseTick runs `if (isDeadOrDying() && shouldTickDeath(this))

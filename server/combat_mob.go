@@ -653,6 +653,64 @@ func (t *TickLoop) tickMobIFrames(e *Entity) {
 	}
 }
 
+// tickMobAging is the port of net.minecraft.world.entity.AgeableMob's per-tick aging — the server
+// branch of aiStep (javap'd from temp/cache/26.2-inner.jar):
+//
+//	int age = getAge();
+//	if (canAgeUp())  setAge(age + 1);   // canAgeUp() == isBaby() && !isAgeLocked() == (age < 0) (no age-lock in v1)
+//	else if (age > 0) setAge(age - 1);  // breeding cooldown decays toward 0
+//
+// inlined to a pure-int machine on breedAge: a baby (<0) ages UP, an adult on cooldown (>0) decays
+// DOWN, an un-fed adult (==0) is a NO-OP. setAge's 0-crossing side effect (flip DATA_BABY_ID + call
+// ageBoundaryReached) is reproduced for the only crossing this tick can cause — the baby's -1 -> 0
+// grow-up — via onGrewUp (restore the adult AABB + broadcast DATA_BABY_ID=false). A cooldown adult
+// decaying to 0 does NOT cross the baby boundary (>0 -> 0, isBaby stays false), so no flip is needed.
+//
+// IT IS PURE INTEGER MATH (no RNG draw): the broadcast it can trigger is a tracker fan-out, not a
+// random draw. Vanilla runs this in aiStep; we run it in the dedicated per-mob loop (tick_phases.go,
+// the tickMobIFrames twin), structurally OUTSIDE serverAiStep's goal callbacks / navigation.tick, so
+// it cannot perturb the per-mob RNG stream the pig oracle pins (the oracle pig is breedAge 0 -> this
+// is a no-op on it). The observable gameplay is identical to the in-aiStep position (pure-int, no draw);
+// the loop move is the cited oracle-preserving optimization (33-deviations.md).
+//	[VERIFIED javap AgeableMob.aiStep server branch (offsets 74+): isAlive -> getAge -> canAgeUp ?
+//	 iinc 1,1; setAge : (age>0 ? iinc 1,-1; setAge); AgeableMob.canAgeUp = isBaby() && !isAgeLocked().]
+func (t *TickLoop) tickMobAging(e *Entity) {
+	if e.breedAge < 0 {
+		e.breedAge++
+		if e.breedAge == 0 {
+			t.onGrewUp(e) // -1 -> 0: restore adult dims + broadcast DATA_BABY_ID=false
+		}
+	} else if e.breedAge > 0 {
+		e.breedAge--
+	}
+}
+
+// onGrewUp is the breedAge -1 -> 0 boundary handler — the part of AgeableMob.setAge's 0-crossing side
+// effect this server reproduces: restore the ADULT AABB (refreshDimensions, now that isBaby()==false)
+// and broadcast DATA_BABY_ID=false to the entity's trackers so the client re-renders the pig at full
+// size (the Plan-D "the baby grows to full size" live criterion). It is NOT an RNG draw — the broadcast
+// is the same tracker fan-out the hurt/death sounds use (broadcastToTrackers). Cite AgeableMob.setAge
+// (the DATA_BABY_ID flip on the 0-crossing) + AgeableMob.ageBoundaryReached.
+//	[VERIFIED javap AgeableMob.setAge: on the sign-crossing it `entityData.set(DATA_BABY_ID, age<0)` then
+//	 ageBoundaryReached(); here age becomes 0 (>=0) so DATA_BABY_ID := false.]
+func (t *TickLoop) onGrewUp(e *Entity) {
+	e.refreshDimensions()
+	t.broadcastBabyFlag(e)
+}
+
+// broadcastBabyFlag pushes the entity's current DATA_BABY_ID (== e.isBaby()) to its trackers via
+// ClientboundSetEntityData, so the client re-renders at the right size. It is the AgeableMob.setAge
+// 0-crossing wire effect (entityData.set(DATA_BABY_ID, age<0)) realized as a tracker fan-out — the
+// SAME broadcastToTrackers seam the hurt/death sounds and the damage-event use (combat_mob.go), NOT
+// an RNG draw, so it never perturbs the per-mob oracle stream. Fired from onGrewUp on the -1 -> 0
+// grow-up (pushes DATA_BABY_ID=false). Plan C's breed() can reuse it right after setting
+// child.breedAge = BABY_START_AGE to push DATA_BABY_ID=true for a freshly-spawned baby.
+//	[VERIFIED javap AgeableMob.setAge: on the sign-crossing entityData.set(DATA_BABY_ID, Boolean(age<0));
+//	 SynchedEntityData broadcasts the changed value to trackers via ClientboundSetEntityData.]
+func (t *TickLoop) broadcastBabyFlag(e *Entity) {
+	t.broadcastToTrackers(e.id, encodeSetEntityDataByID(e.id, babyDataEntry(e.isBaby())))
+}
+
 // dieEntity is implemented in death_mob.go (Plan 29-04): the full LivingEntity.die port (loot + XP
 // + the death-status broadcast + owner-region store removal). applyDamageEntity's lethal tail calls
 // it; the seam Plan 02 left here is replaced there with no call-site change.

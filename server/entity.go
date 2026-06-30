@@ -251,6 +251,31 @@ type Entity struct {
 	//	 resetFallDistance chain.]
 	fallDistance float64
 
+	// --- MOB-SUB-08 (Plan 33-01): AgeableMob aging state -------------------------------------
+	//
+	// breedAge is net.minecraft.world.entity.AgeableMob.age (the server-side signed-int age machine,
+	// NOT the ItemEntity/XP-orb `age int` at :119 — that is ticks-since-spawn for a dropped item).
+	// Semantics (AgeableMob.getAge/setAge/aiStep, javap'd from temp/cache/26.2-inner.jar):
+	//   breedAge <  0  -> BABY: ticks UP toward 0 (canAgeUp() == isBaby()), grows into an adult at 0.
+	//   breedAge >  0  -> ADULT on breeding cooldown: ticks DOWN toward 0.
+	//   breedAge == 0  -> ADULT, breeding-ready: a pure no-op every tick (no draw, no transition).
+	// A freshly-spawned mob is breedAge 0 (the zero value) — an adult — so the oracle pig (an un-fed
+	// lone adult) is breedAge 0 from spawn and never ages; the per-tick aging is a pure-int no-op on it
+	// (the byte-identical gate). A spawned BABY sets breedAge = BABY_START_AGE (-24000) (Plan C's breed).
+	// Tick-owned plain int (TICK-05), zero for every non-animal entity, snapshot-friendly.
+	//	[VERIFIED javap AgeableMob.getAge (server branch): `return this.age;`; setAge writes age + flips
+	//	 DATA_BABY_ID on the 0-crossing; aiStep: `if (canAgeUp()) setAge(age+1); else if (age>0) setAge(age-1)`;
+	//	 BABY_START_AGE static = sipush -24000; isBaby() == getAge() < 0.]
+	breedAge int
+
+	// adultWidth, adultHeight capture the entity's UN-SCALED (adult) AABB footprint at spawn, copied
+	// from the data/entity table in NewEntity. refreshDimensions reads them as the source dims so the
+	// baby half-scale toggle (width = adultWidth * babyDimensionScale) and the grow-up restore
+	// (width = adultWidth) are both exact, with no entity-type re-lookup. This is the Go analogue of
+	// Pig.getDefaultDimensions reading EntityType.PIG.getDimensions() (the un-scaled table dims) vs
+	// BABY_DIMENSIONS (the scaled ones). Plain values, snapshot-friendly, never mutated after spawn.
+	adultWidth, adultHeight float64
+
 	// --- GAMEPLAY-07: delta-move tracking state (ServerEntity.sendChanges) ----------------
 	//
 	// These mirror net.minecraft.server.level.ServerEntity's per-entity send state so the
@@ -292,6 +317,10 @@ func NewEntity(id int32, t entity.Entity, x, y, z float64) *Entity {
 		z:      z,
 		width:  t.Width,
 		height: t.Height,
+		// Capture the un-scaled (adult) dims so refreshDimensions can derive the baby half-scale box
+		// and restore the adult box exactly on grow-up (Pig.getDefaultDimensions source dims). MOB-SUB-08.
+		adultWidth:  t.Width,
+		adultHeight: t.Height,
 		// Attach the per-entity AttributeMap from this type's DefaultAttributes supplier (the Go
 		// analogue of LivingEntity's `this.attributes = new AttributeMap(DefaultAttributes.getSupplier(
 		// type))`). NewMapForEntity returns nil for a type with no registered supplier (a dropped Item,
@@ -356,4 +385,42 @@ func (e *Entity) AABB() bvh.AABB[float64, bvh.Vec3[float64]] {
 		Lower: bvh.Vec3[float64]{e.x - hw, e.y, e.z - hw},
 		Upper: bvh.Vec3[float64]{e.x + hw, e.y + e.height, e.z + hw},
 	}
+}
+
+// babyDimensionScale is the BABY hitbox scale factor — net.minecraft.world.entity.animal.Pig's
+// BABY_DIMENSIONS = EntityType.PIG.getDimensions().scale(0.5f) (the adult box halved on both axes;
+// for the pig: adult 0.9x0.9 -> baby 0.45x0.45 == EntityDimensions.scalable(0.45, 0.45)). It is the
+// SCALE, derived once, NOT a hardcoded 0.45, so a non-pig AgeableMob (Phase 34 cow/sheep/chicken)
+// reuses the factor against its OWN adult dims. MOB-SUB-08 + ROADMAP SC#1 (the baby half-scale hitbox).
+//	[VERIFIED javap (33-JARNOTES): Pig.BABY_DIMENSIONS = EntityType.PIG.getDimensions().scale(0.5f)
+//	 .withEyeHeight(0.40625f) == scalable(0.45, 0.45); adult pig dims 0.9x0.9 from the data table.]
+const babyDimensionScale = 0.5
+
+// isBaby is net.minecraft.world.entity.AgeableMob.isBaby() — true exactly while the age machine is
+// negative (a growing baby). The follow/breed goal distSqr checks and the half-scale hitbox both
+// read it. MOB-SUB-08.
+//	[VERIFIED javap AgeableMob.isBaby: `return getAge() < 0;` (server getAge() == this.age == breedAge).]
+func (e *Entity) isBaby() bool { return e.breedAge < 0 }
+
+// refreshDimensions is the port of net.minecraft.world.entity.animal.Pig.getDefaultDimensions(Pose):
+// `return this.isBaby() ? BABY_DIMENSIONS : super.getDefaultDimensions(pose);`. It sets the entity's
+// live AABB footprint (width/height — what AABB() reads) to either the BABY box (adult dims x
+// babyDimensionScale, the load-bearing half-scale hitbox the BreedGoal distSqr<9 / FollowParentGoal
+// 9..256 checks consume) or the restored ADULT box (the captured spawn-table dims). It is called
+// whenever breedAge crosses 0 (tickMobAging's onGrewUp) and will be called by Plan C's breed()
+// child-spawn (which sets child.breedAge = BABY_START_AGE then refreshes to the small box).
+//
+// Eye height (baby 0.40625): our Entity has NO eye-height field today — cite-deferred (Pig.BABY_DIMENSIONS
+// .withEyeHeight(0.40625f)); it is NOT load-bearing for the goal distSqr checks (those read the AABB).
+// If an eye-height field lands later, scale it by 0.40625/adult at the same seam (33-deviations.md).
+//	[VERIFIED javap Pig.getDefaultDimensions: isBaby() ? BABY_DIMENSIONS : super; BABY_DIMENSIONS is the
+//	 adult dims scaled 0.5 — so baby width/height = adultWidth/adultHeight * babyDimensionScale.]
+func (e *Entity) refreshDimensions() {
+	if e.isBaby() {
+		e.width = e.adultWidth * babyDimensionScale
+		e.height = e.adultHeight * babyDimensionScale
+		return
+	}
+	e.width = e.adultWidth
+	e.height = e.adultHeight
 }
