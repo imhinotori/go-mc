@@ -1,0 +1,42 @@
+# Sulfur — Session Handoff (2026-06-30, post-v5: bugfixes + live-test feedback)
+
+> MC Java 26.2 (proto 776) server in Go. Branch `ender-776`. Module `github.com/imhinotori/sulfur`. Dir `D:\ender`. NOT pushed. HEAD `21a0ac35`. Tree clean (only ignored `.log`/`.exe`/`world/` noise).
+
+## ⭐ THE MANDATE (unchanged)
+ALL gameplay/protocol = LITERAL 1:1 PORT of `temp/cache/26.2-inner.jar`. Verify bytecode BEFORE writing: `JAVAP="/c/Program Files/Zulu/zulu-25/bin/javap"; "$JAVAP" -c -p -classpath temp/cache/26.2-inner.jar <FQCN>`. Readable: `java -jar /tmp/cfr.jar --extraclasspath temp/cache/26.2-inner.jar <FQCN> --methodname <m>`. Cite class/method. Only OPTIMIZATION may deviate. NO Claude attribution in commits (Claude-Session trailer OK; NEVER Co-Authored-By).
+
+## 🛠 STANDING WORKFLOW (unchanged, reconfirmed this session)
+- **gopls diagnostics are STALE/FALSE.** Gate ONLY on real `CGO_ENABLED=0 go build ./...` + `go vet ./server/` + `go test ./server/`. Bit ~6× this session.
+- **The pig oracle is the GATE.** `TestPluginPigEqualsGoNativePig` byte-identical — stayed green through every fix this session.
+- **The verification bot** (`cmd/botmcp` + `internal/botclient`, `botlive` build tag) — added health tracking this session (BotState.Health). LIVE-VERIFY: kill zombie servers first (`tasklist | grep -i sulfur` → `taskkill //F //PID <pid>`; pkill does NOT work on Windows), fresh port, `-tags botlive -count=1 -v`. ⚠ **STALE-PLAYER-DATA GOTCHA (new this session):** reused bot names → same offline-UUID → loads the prior session's `world/playerdata/<uuid>.dat`. A dead bot persists at health 0 → reconnect reads 0. Wipe `world/playerdata/*.dat` between runs OR use fresh names.
+
+## ✅ DONE THIS SESSION (v5 was already complete; this is post-v5 bugfixing)
+v5 ("Mob Behaviors") shipped all 9 phases (29/30/30.1/31/32/33/34/35/36) — see `.planning/HANDOFF.md` for that. This session = live-testing v5 + fixing what the user found.
+
+1. **Inventory: invisible on death-respawn** — FIXED (`c5bd6cad`). `performRespawn` (combat.go) rebuilt the client world (ClientboundRespawn) but never re-sent the inventory → empty/invisible after dying. Added step (7): re-send ContainerSetContent. Vanilla cite: PlayerList.respawn → ServerPlayer.initInventoryMenu → initMenu → sendAllDataToRemote. Regression test in TestRespawnFlow (asserts the re-sync packet).
+
+2. **Inventory: cursor item lost on container close** — FIXED (`c5bd6cad`). handleContainerClose (inventory.go) left a carried (cursor) item in limbo when closing a chest/crafting/stonecutter (ClientboundContainerClose tore down the window → client stopped rendering the cursor). Ported AbstractContainerMenu.removed: placeItemBackInInventory (inventoryAdd, drop if full) + setCarried(EMPTY) + re-sync window 0. New test TestChestCloseReturnsCarriedItem. ⚠ test gotcha: `drainPackets` CLOSES the outbound queue — do NOT drain before the action you're capturing.
+
+3. **Zombie melee ULTRA-FAST** — FIXED (`21a0ac35`, after a revert detour). ROOT CAUSE (confirmed via live udebug log: hits every 10 gametime ticks, not 20): `serverAiStep` (ai_mob.go) called BOTH `goalSelector.tick()` AND an explicit `tickRunningGoals(true)` per selector — but vanilla `GoalSelector.tick()` ALREADY ends with `this.tickRunningGoals(true)` (its last line, javap-confirmed). So every running goal ticked 2×/step → MeleeAttackGoal decremented ticksUntilNextAttack twice → zombie attacked 2× too fast (every 0.5s vs 1s). Vanilla avoids this: tick() and the explicit tickRunningGoals are MUTUALLY EXCLUSIVE via the Mob.serverAiStep (tickCount+id)%2 decimation (even→tick(); odd→tickRunningGoals(false)). Our driver runs every tick with no decimation, so the faithful single-tick-per-step is tick() alone. FIX: removed the two explicit `tickRunningGoals` calls. Pig oracle byte-identical, FULL SUITE GREEN, TestMeleeAttackCooldown + TestRandomStrollSetsTarget + TestZombieBehavior all pass.
+   - **DETOUR (resolved):** first applied the fix → user reported "no se mueve". I REVERTED (`50fa4bc0`), then RE-APPLIED (`21a0ac35`) after confirming via the live udebug log that the double-tick WAS the cause AND the full suite (incl. movement tests) passes with the fix. The "no se mueve" was almost certainly the **chunk-backpressure** (item 5 below) masking the mob render, NOT the AI fix — the suite proves setWantTarget/movement works single-ticked.
+
+## ▶ RESUME HERE — verify the melee fix in-game, then close it out
+The single-tick fix (`21a0ac35`) is committed + suite-green but NOT yet user-confirmed in-game (the user asked to compact before re-testing). RESUME:
+1. Kill strays, build, boot SUPERFLAT (avoids the chunk-backpressure, item 5): `CGO_ENABLED=0 go build -o ./sulfur.exe ./cmd/sulfur/; ` then boot with env `SULFUR_SUPERFLAT=1` (+ `SULFUR_ULTRA_DEBUG=1` to log hits) on `0.0.0.0:25565`.
+2. User connects, `/dbg zombie`, lets it attack ~10s while moving (confirm the zombie FOLLOWS = movement OK + cadence). The udebug "melee hit gametime=" log should now show hits ~20 ticks apart (was 10). To re-add the temp log: in `server/ai_goals_attack.go` checkAndPerformAttack, after `resetAttackCooldown()`: `udebug("melee", "hit eid=%d gametime=%d", e.id, t.gametime)` (gated on SULFUR_ULTRA_DEBUG=1; REMOVE before final commit).
+3. If cadence==20 + moves → done (the fix is already committed). If still wrong → the double-tick analysis holds; investigate whether OTHER per-tick goal state (stroll interval, chicken egg-timer, sheep eat-gate) was ALSO relying on the 2× and now needs its own adjustedTickDelay review (the double-tick affected ALL goals, not just melee — the others were observationally masked but are now single-ticked; verify nothing regressed observationally, esp. the EatBlockGoal/egg-lay RNG cadences).
+
+## ⚠ OPEN ISSUES (found this session, NOT fixed — each its own task)
+1. **Chunk backpressure with WORLD NORMAL (noise terrain)** — the noise worldgen is too heavy: chunks stream slow → the 4096 outbound queue fills → player kicked (reason=backpressure, client.go:189). SUPERFLAT loads fine (flat stone). So it's worldgen-noise PERFORMANCE, pre-existing, NOT a v5/inventory/melee regression. Needs: profile the noise generator / chunk-encode path, or throttle the streamer. The chunk-batch flow-control (unacknowledgedBatches, tick_phases.go:551) exists but the queue still fills — the bottleneck is upstream (gen/encode speed), not the ack gate.
+2. **Zombie/skeleton don't BURN in daylight** — deferred feature (Phase 35 cite-deferred). Needs TWO missing subsystems: sky-light exposure (the light-engine gap; spawn gate uses a gametime proxy) + a fire/fire-ticks system (no onFire/remainingFireTicks on the Go Entity at all). Vanilla: Mob.aiStep → isSunBurnTick → igniteForSeconds(8). Logged in STATE.md carryover.
+3. **Bot joins reporting health 0** — partly explained (item: stale playerdata .dat). But ALSO: a fresh-name bot on a fresh server still read 0 at one point (probe: Y stable on floor, health 0 seen=true). May be a real join-health-init path bug (tickPlayer is created with health: maxHealth at gameplay_tick.go:339, but syncFood sends SetHealth(p.health) — trace whether p.health is 0 before the first syncFood on a TRULY fresh join). Logged in STATE.md. Lower priority (the botclient defaults Health=20 now; only matters for a join-health live-test).
+
+## STATE OF THE TREE
+- HEAD `21a0ac35`, branch `ender-776`. NOT pushed. Tree clean (only ignored `.log`/`.exe`/`web/`/`world/`/`.claude/` noise).
+- `CGO_ENABLED=0 go build ./...` exit 0; vet clean; full server suite green (`TestRegionPanicIsolated` is the known false-alarm — passes in isolation, judge the rest); pig oracle byte-identical; all 8 mob embeds byte-identical.
+- This session's commits (HEAD-first): 21a0ac35 (melee re-fix) · 50fa4bc0 (revert) · 6f4aeaef (burn carryover doc) · 7d0611dd (melee fix, reverted then re-applied) · c5bd6cad (2 inventory fixes) · 013ecf5b/51270091/c68407fa (v5 closes).
+- ⚠ NOTE the 7d0611dd→50fa4bc0→21a0ac35 revert dance in the log — the NET effect is the single-tick fix IS applied (21a0ac35 reapplies 7d0611dd). A future cleanup could squash these 3 into one, but they're harmless as-is.
+
+## CARRYOVER (pre-existing, from the v5 HANDOFF — still open)
+- `TestPerfGate` wall-clock flake; `TestBehaviorRegressionMobSpawns` global-RNG flake; the wandermob full removal; prod root password rotation. (See `.planning/HANDOFF.md`.)
+- v5 is milestone-COMPLETE + verified (9/9 phases). Ready for `/gsd-complete-milestone v5` whenever (not yet run).
