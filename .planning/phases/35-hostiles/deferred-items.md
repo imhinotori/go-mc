@@ -27,3 +27,6 @@ issues directly caused by the current plan's changes).
   running any selected test, so this file's compile error WILL block a `-run`'d test run too — see
   the SUMMARY note: the 35-01 tests were verified by temporarily confirming the package compiles
   with the future-plan file excluded, and via `go build`.)
+
+## 35-03 / 35-04 SUPERSEDED by 35-01b (2026-06-30)
+The zombie (35-03) + skeleton (35-04) plans returned BLOCKED (no goal-kind seam existed); their .star pairs + tests were written by the 35-01b gap-closure plan instead (commit c26a88ec). 35-05's spider was rewired by 35-01b (its hand-rolled .star combat bodies were unwired-melee; replaced with kind-goals). All 3 hostiles now deal real player damage through the Go-native goals. 35-03/04/05 requirements (MOB-HOST-01/02/03) are delivered via 35-01b + 35-05.
