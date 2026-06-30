@@ -134,8 +134,8 @@ func TestServerAiStepOrder(t *testing.T) {
 // runs first) and must be a *floatGoal with the JUMP flag, in lockstep with vanilla_pig/main.star.
 func TestPigGoalSetRegistered(t *testing.T) {
 	m := newPigAI()
-	if got := len(m.goals.goals); got != 7 {
-		t.Fatalf("pig goal set should have 7 goals (FloatGoal@0 + PanicGoal@1 + TemptGoal@4 ×2 + stroll@6 + look@7 + lookAround@8), got %d", got)
+	if got := len(m.goals.goals); got != 9 {
+		t.Fatalf("pig goal set should have 9 goals (FloatGoal@0 + PanicGoal@1 + BreedGoal@3 + TemptGoal@4 ×2 + FollowParentGoal@5 + stroll@6 + look@7 + lookAround@8), got %d", got)
 	}
 	// FloatGoal must be FIRST in the priority-sorted slice (@0 = highest precedence).
 	if _, ok := m.goals.goals[0].g.(*floatGoal); !ok || m.goals.goals[0].priority != 0 {
@@ -179,6 +179,16 @@ func TestPigGoalSetRegistered(t *testing.T) {
 		t.Fatalf("expected panicGoal at priority 1, got %T", byPriority[1])
 	} else if g.flags() != flagMove {
 		t.Fatalf("PanicGoal must claim exactly the MOVE flag, got %v", g.flags())
+	}
+	if g, ok := byPriority[3].(*breedGoal); !ok {
+		t.Fatalf("expected breedGoal at priority 3, got %T", byPriority[3])
+	} else if g.flags() != (flagMove | flagLook) {
+		t.Fatalf("BreedGoal must claim exactly {MOVE,LOOK}, got %v", g.flags())
+	}
+	if g, ok := byPriority[5].(*followParentGoal); !ok {
+		t.Fatalf("expected followParentGoal at priority 5, got %T", byPriority[5])
+	} else if g.flags() != 0 {
+		t.Fatalf("FollowParentGoal must claim EMPTY flags (0), got %v", g.flags())
 	}
 	if _, ok := byPriority[6].(*randomStrollGoal); !ok {
 		t.Fatalf("expected randomStrollGoal at priority 6, got %T", byPriority[6])

@@ -215,6 +215,9 @@ func (m *mobAI) serverAiStep(t *TickLoop, e *Entity) {
 //
 //	0  FloatGoal(mob)                           -> floatGoal           [JUMP]
 //	1  PanicGoal(mob, 1.25)                      -> panicGoal           [MOVE]
+//	3  BreedGoal(mob, 1.0)                        -> breedGoal           [MOVE|LOOK]
+//	4  TemptGoal(mob, 1.2, …) ×2                 -> temptGoal           [MOVE|LOOK]
+//	5  FollowParentGoal(mob, 1.1)                -> followParentGoal    [] (EMPTY)
 //	6  WaterAvoidingRandomStrollGoal(mob, 1.0)  -> randomStrollGoal  [MOVE]
 //	7  LookAtPlayerGoal(mob, Player, 6.0)       -> lookAtPlayerGoal  [LOOK]
 //	8  RandomLookAroundGoal(mob)                -> randomLookAroundGoal [MOVE|LOOK]
@@ -229,9 +232,16 @@ func (m *mobAI) serverAiStep(t *TickLoop, e *Entity) {
 // (navigation.canFloat = true).
 //
 // TemptGoal@4 ×2 (carrot_on_a_stick literal + pig_food tag, speed 1.2, canScare=false) is WIRED
-// (Phase 32 — the S4 held-item read landed). STILL DEFERRED for v1 (documented, faithful-scope):
-// BreedGoal@3 + FollowParentGoal@5 (no breeding/aging yet — Phase 33). They are added when their
-// preconditions exist.
+// (Phase 32 — the S4 held-item read landed). BreedGoal@3 + FollowParentGoal@5 are now PORTED
+// (Phase 33 — the aging + breeding subsystem landed: Plan 01 aging/half-scale hitbox, Plan 02
+// inLove/feed, this plan the two goals). The Go-native pig now has all 9 goals {0,1,3,4,4,5,6,7,8}.
+//
+// LOCKSTEP NOTE (the oracle contract): this plan adds BreedGoal@3 + FollowParentGoal@5 to the
+// GO-NATIVE pig ONLY (the C1/C2 split). Until 33-04 mirrors them onto vanilla_pig/main.star, the Go
+// pig has 9 goals and the plugin pig has 7 — so the plugin-vs-native gate (TestPluginPigEqualsGoNativePig)
+// diverges by the two added goals. That divergence is EXPECTED and is closed by 33-04 (the .star
+// mirror) + 33-05 (the full 9v9 gate). The breed/follow RNG draws (variant nextBoolean() + XP
+// nextInt(7)) fire ONLY mid-breeding — dormant on the un-fed lone-adult oracle pig.
 func newPigAI() *mobAI {
 	m := &mobAI{}
 	// Per-mob seeded RandomSource (the Mob.getRandom() analogue) — deterministic for the default
@@ -254,6 +264,12 @@ func newPigAI() *mobAI {
 	// (priority 1 < 6). LOCKSTEP with vanilla_pig/main.star's @1 PanicGoal. Cite Pig.registerGoals @1
 	// PanicGoal (javap: iconst_1; new PanicGoal; ldc2_w 1.25d; PanicGoal.<init>(PathfinderMob, double)).
 	m.goals.addGoal(1, newPanicGoal(panicSpeedModifier))
+	// @3 BreedGoal(mob, 1.0) [MOVE, LOOK] — the GO-NATIVE breed seeker (Phase 33). canUse gates on
+	// isInLove (dormant on the un-fed oracle pig), then getFreePartner scans the same-region store for
+	// the nearest in-love non-panicking same-class partner; tick navigates + courts + breed()s. LOCKSTEP
+	// with vanilla_pig/main.star's @3 BreedGoal — added there in 33-04 (the C1/C2 split; the Go pig leads).
+	// Cite Pig.registerGoals @3 BreedGoal (javap: iconst_3; new BreedGoal; dconst_1 1.0d; BreedGoal.<init>).
+	m.goals.addGoal(3, newBreedGoal(1.0))
 	// @4 TemptGoal ×2 [MOVE, LOOK] — Pig.registerGoals adds two: the CARROT_ON_A_STICK literal FIRST,
 	// then the PIG_FOOD tag, both speed 1.2, canScare=false (32-CONTEXT.md, javap Pig.registerGoals).
 	// Carrot MUST be added first: addGoal's insertion-sort keeps it before pig_food among the equal-
@@ -262,6 +278,13 @@ func newPigAI() *mobAI {
 	// LOCKSTEP with vanilla_pig/main.star's two @4 TemptGoals (the oracle contract).
 	m.goals.addGoal(4, newTemptGoal(1.2, func(id int32) bool { return id == 887 }, false))                  // Items.CARROT_ON_A_STICK (id 887), canScare=false
 	m.goals.addGoal(4, newTemptGoal(1.2, func(id int32) bool { return itemInTag(id, "pig_food") }, false)) // ItemTags.PIG_FOOD, canScare=false
+	// @5 FollowParentGoal(mob, 1.1) [] EMPTY flags — the GO-NATIVE baby follower (Phase 33). canUse gates
+	// on isBaby (false on the adult oracle), then trails the nearest adult same-class; NO RNG, EMPTY flags
+	// (the ctor never setFlags, so it never locks MOVE/LOOK — the selector handles an empty-flag goal,
+	// ai_goal.go). LOCKSTEP with vanilla_pig/main.star's @5 FollowParentGoal — added there in 33-04.
+	// Cite Pig.registerGoals @5 FollowParentGoal (javap: iconst_5; new FollowParentGoal; ldc2_w 1.1d;
+	// FollowParentGoal.<init>(Animal, double)).
+	m.goals.addGoal(5, newFollowParentGoal(1.1))
 	m.goals.addGoal(6, newWaterAvoidingRandomStrollGoal(1.0))
 	m.goals.addGoal(7, newLookAtPlayerGoal(6.0))
 	m.goals.addGoal(8, newRandomLookAroundGoal())
