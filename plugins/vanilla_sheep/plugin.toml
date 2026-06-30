@@ -1,0 +1,16 @@
+name = "vanilla_sheep"
+version = "0.1.0"
+entrypoint = "main.star"
+runtime = "starlark"
+# Least-privilege caps (24-RESEARCH Security Domain / T-24-07): a sheep READS its own state + the
+# nearest player + WRITES its look/nav, AND (the EatBlockGoal) WRITES the one grass_block under its
+# feet through the 34-00 host eat seam.
+#   entities.read  — read x/y/z + is_baby/is_in_love (stroll/look/breed/follow/eat gates)
+#   entities.write — set_look_at (the LOOK goals' LookControl.setLookAt analogue) + eat_broadcast_byte10
+#                    (EatBlockGoal.start's broadcastEntityEvent(mob,(byte)10) eat-animation event)
+#   world.read     — nearest_player (LookAtPlayerGoal's getNearestPlayer)
+#   world.write    — eat_grass_block (EatBlockGoal.tick: the host swaps the grass_block-below to dirt +
+#                    Sheep.ate wool regrow). The .star passes NO position, so the host seam can ONLY ever
+#                    touch the mob's OWN below-position — no arbitrary set_block is exposed (T-34-04/T-34-05).
+#   nav            — path_to/has_path (WaterAvoidingRandomStrollGoal's navigation.moveTo/isDone)
+capabilities = ["entities.read", "entities.write", "world.read", "world.write", "nav"]
