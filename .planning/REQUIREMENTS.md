@@ -36,7 +36,7 @@
 
 ### Passive Mobs
 
-- [ ] **MOB-PASS-01**: Cow — a jar-faithful Starlark plugin (`Cow.registerGoals`), mapped to CREATURE, with the milking interact (`Cow.mobInteract`). _(34-00 shared infra: the parameterized food handle. The cow plugin + milking interact close in 34-01.)_
+- [x] **MOB-PASS-01**: Cow — a jar-faithful Starlark plugin (`Cow.registerGoals`), mapped to CREATURE, with the milking interact (`Cow.mobInteract`). _(34-00 shared infra: the parameterized food handle. The cow plugin + milking interact close in 34-01.)_
 - [x] **MOB-PASS-02**: Sheep — a jar-faithful plugin (`Sheep.registerGoals`) adding EatBlockGoal + shear/wool (and wool regrow as a differentiator). _(34-00 shared infra: the sheep eat seam + DATA_WOOL setSheared + the shear interact + wool regrow are DONE. The sheep .star plugin closes it in 34-02.)_
 - [x] **MOB-PASS-03**: Chicken — a jar-faithful plugin (`Chicken.registerGoals`) adding the `aiStep` egg-lay + slow-fall. _(34-00 shared infra: the chicken aiStep host hook (slow-fall + egg-lay) + spawn init + tick wiring are DONE. The chicken .star plugin closes it in 34-03.)_
 

@@ -181,7 +181,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
   4. Standing: jar-verified (javap `<Mob>.registerGoals` before writing); CGO=0 + no new Go deps; the pig oracle stays GREEN; Docker `-race` + `strictRegion` clean.
 **Plans**: 5 plans (3 waves)
 - [x] 34-00-PLAN.md — Shared infra (wave 1): parameterized nearest_player_holding_food handle + sheep eat seam (EatBlockGoal.tick/Sheep.ate, DATA_WOOL regrow) + chicken aiStep hook (slow-fall + egg-lay, eggTime) + tick wiring [MOB-PASS-01/02/03]
-- [ ] 34-01-PLAN.md — Cow (wave 2): vanilla_cow .star pair (8-goal subset) + milking interact (AbstractCow.mobInteract bucket->milk_bucket) + cow tests [MOB-PASS-01]
+- [x] 34-01-PLAN.md — Cow (wave 2): vanilla_cow .star pair (8-goal subset) + milking interact (AbstractCow.mobInteract bucket->milk_bucket) + cow tests [MOB-PASS-01]
 - [x] 34-02-PLAN.md — Sheep (wave 2): vanilla_sheep .star pair (9 goals + EatBlockGoal@5 RNG-gated via the 34-00 seam, grass_block-below cite-defer) + EatBlockGoal RNG test [MOB-PASS-02]
 - [x] 34-03-PLAN.md — Chicken (wave 2): vanilla_chicken .star pair (8 goals) + boot/behavior + slow-fall-applies-live test (egg-lay/slow-fall built in 34-00) [MOB-PASS-03]
 - [ ] 34-04-PLAN.md — The gate (wave 3): generalize boot-load (all 4 embeds) + spawnVanillaMob(name) + /dbg cow|sheep|chicken + natural-spawn pick + main.go boot + Docker -race + live bot; the pig oracle stays byte-identical [MOB-PASS-01/02/03]
@@ -223,7 +223,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
 | 31. PanicGoal (S2 consumer) | v5 | 1/1 | Complete   | 2026-06-30 |
 | 32. Held-Item + Item Tags (S4) | v5 | 1/1 | Complete   | 2026-06-30 |
 | 33. Aging + Breeding (S3) — Pig Parity / DOGFOOD GATE | v5 | 5/5 | Complete   | 2026-06-30 |
-| 34. New Passive Mobs | v5 | 3/5 | In Progress|  |
+| 34. New Passive Mobs | v5 | 4/5 | In Progress|  |
 | 35. Hostiles + Spawn Rules | v5 | 0/? | Not started | - |
 | 36. Wolf (Neutral) | v5 | 0/? | Not started | - |
 

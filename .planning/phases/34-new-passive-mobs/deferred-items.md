@@ -18,3 +18,10 @@
   - **34-04 (gate) blocker:** the phase-wide `go test ./...` / the `-race` Docker run will stay RED
     until 34-01's cow GREEN commit compiles. 34-04 should run the phase gate only after cow + sheep
     have landed their Go symbols.
+  - **RESOLVED (34-01 GREEN, commit `ef8651ea`):** the cow GREEN commit landed `tryMilkCow` +
+    `createFilledResult` (attack_dispatch.go) + the `categoryOf(Cow) -> CREATURE` case (mob_category.go).
+    cow_test.go now COMPILES and all 6 cow tests pass; `CGO_ENABLED=0 go test ./server/ -count=1` is
+    GREEN (7.77s) and `TestPluginPigEqualsGoNativePig` is byte-identical. The RED test referenced
+    `loop.tryMilkCow`, `loop.advance`, `component`, `bytes.NewReader`, `cow.attributes.GetValue` (the
+    final test uses the real APIs, not the `bytesReader`/`attributes.value` placeholders the chicken
+    executor read in the interim RED snapshot). The phase-wide suite is no longer blocked by the cow gap.
