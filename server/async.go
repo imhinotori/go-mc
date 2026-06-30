@@ -323,18 +323,55 @@ func (r spawnCandidatesReady) applyTo(t *TickLoop) {
 		if t.mobNearAcrossRegions(float64(c.x)+0.5, float64(c.z)+0.5, 6.0) {
 			continue // a mob moved/spawned onto this candidate since the snapshot: DROP it
 		}
-		// SWAP (PLUGIN-04 / Plan 24-02): the pig is now the PLUGIN-DRIVEN vanilla_pig — its AI is
-		// built from the boot-loaded Starlark declaration (the 3 passive goals re-expressed 1:1),
-		// NOT the Go newPigAI. spawnVanillaPig builds it through spawnDeclaredMob (real pig attrs +
-		// the declared goals + per-entity RNG) and adds it to the store; it renders as entity.Pig.ID.
-		// The Go newPigAI + goals are KEPT as the behavior-identical ORACLE (the comparison test),
-		// not as a live spawn path. Phase-27 STEP-3 (N=2): add the pig to the region that OWNS the
-		// candidate column (regionForColumn), not blindly globalRegion — withRegion registers that
-		// region so spawnDeclaredMob's t.only().entities.add lands in the right store.
+		// SWAP (PLUGIN-04 / Plan 24-02, generalized to all 4 CREATURE mobs in Plan 34-04): the natural
+		// spawn now picks among the 4 PLUGIN-DRIVEN vanilla mobs (pig/cow/sheep/chicken), not the
+		// pig-hardcoded path. Each is built from its boot-loaded Starlark declaration via
+		// spawnDeclaredMob (real per-mob attrs + the declared 1:1 goals + per-entity RNG) and rendered
+		// as its base wire id. All 4 are categoryOf -> CREATURE (34-CONTEXT) sharing the same
+		// creatureCap, so the cap re-check above (categoryCreature) governs the pick uniformly — no
+		// cap-math change. Phase-27 STEP-3 (N=2): add the mob to the region that OWNS the candidate
+		// column (regionForColumn), not blindly globalRegion — withRegion registers that region so
+		// spawnDeclaredMob's t.only().entities.add lands in the right store AND pickNaturalCreatureMob's
+		// draw reads THAT region's seeded levelRandom (race-clean, deterministic per region — NOT the
+		// unseeded global rand.IntN that caused the STATE.md async-spawner flake, T-34-11).
 		dest := t.regionForColumn(columnOf(float64(c.x)+0.5, float64(c.z)+0.5))
 		t.withRegion(dest, func() {
-			t.spawnVanillaPig(float64(c.x)+0.5, float64(c.y), float64(c.z)+0.5)
+			name := t.pickNaturalCreatureMob()
+			t.spawnVanillaMob(name, float64(c.x)+0.5, float64(c.y), float64(c.z)+0.5)
 		})
 		return // one placement per apply (the throttle)
 	}
+}
+
+// naturalCreatureMobNames is the set the natural spawner picks among — the 4 vanilla CREATURE mobs that
+// boot-load into the registry (vanillaMobNames). They ALL map to categoryOf -> CREATURE (34-CONTEXT),
+// so they share the one creatureCap the apply-time re-check enforces; the pick only chooses WHICH
+// creature to place in the one throttled slot. Kept as its own slice (not reusing vanillaMobNames
+// directly) so a future non-CREATURE bundled mob added to the boot-load is NOT silently dragged into
+// the creature spawn pool — the natural-spawn pool is an explicit, intentional list.
+var naturalCreatureMobNames = []string{
+	vanillaPigMobName,
+	vanillaCowMobName,
+	vanillaSheepMobName,
+	vanillaChickenMobName,
+}
+
+// pickNaturalCreatureMob returns the name of one of the 4 vanilla CREATURE mobs to place at a natural
+// spawn point. The choice is uniform-random among the 4 for v1 (a cited deferral: vanilla's per-biome
+// MobSpawnSettings spawn WEIGHTS — different mobs/weights per biome — are a future subsystem, not yet
+// ported; v1 spawns any of the 4 overworld passives with equal probability). The draw reads the OWNING
+// region's seeded levelRandom (Level.random analogue, NextIntN), which is:
+//   - SEEDED + per-region (newRegion seeds it from a unique nondeterministic seed) — NOT the unseeded
+//     global rand.IntN that caused the STATE.md async-spawner flake (T-34-11);
+//   - race-clean: levelRandom is advanced ONLY on its region's goroutine, and this runs inside
+//     withRegion(dest) on that owner (the apply-time barrier is quiescent — TICK-05);
+//   - deterministic for a given region seed + draw order, so a test that seeds the region's levelRandom
+//     gets a reproducible pick sequence.
+// It must be called ONLY inside a withRegion scope (cur() resolves the owning region); off a region it
+// would fall back to region 0 / panic under strictRegion — exactly the discipline the rest of the
+// per-region spawn path follows.
+func (t *TickLoop) pickNaturalCreatureMob() string {
+	n := int32(len(naturalCreatureMobNames))
+	idx := t.cur().levelRandom.NextIntN(n)
+	return naturalCreatureMobNames[idx]
 }

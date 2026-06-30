@@ -51,6 +51,15 @@ func findEntityOfType(loop *TickLoop, typ ...entity.Entity) *Entity {
 	return nil
 }
 
+// findAnyNaturalCreature scans EVERY region for the first naturally-spawnable CREATURE mob (pig, cow,
+// sheep, or chicken). Plan 34-04 generalized the natural spawner from pig-hardcoded to a uniform pick
+// among the 4 CREATURE mobs, so a spawn-placement/store/AI assertion can no longer expect a Pig
+// specifically — it expects ONE of the 4. The placement + store + AI properties under test are
+// CREATURE-agnostic (every passive mob lands ON_GROUND, gets a fresh id, carries a real mobAI).
+func findAnyNaturalCreature(loop *TickLoop) *Entity {
+	return findEntityOfType(loop, entity.Pig, entity.Cow, entity.Sheep, entity.Chicken)
+}
+
 // runSpawnCycle drives ONE full OPT-03 natural-spawn cycle end-to-end for a test: it submits the
 // off-tick candidate scan via naturalSpawn (the owner side), then — if a scan was actually
 // submitted (under cap, columns available, pool not overloaded) — deterministically receives the
@@ -169,19 +178,20 @@ func TestSpawnPlacementOnGround(t *testing.T) {
 
 	// (a) Valid floor: a spawn lands on the surface (feet at floorY+1, solid floorY below).
 	runSpawnCycle(t, loop)
-	// The Pig is routed into whichever region owns its random candidate column — scan across regions.
-	spawned := findEntityOfType(loop, entity.Pig)
+	// The mob is routed into whichever region owns its random candidate column — scan across regions.
+	// Plan 34-04: the natural spawn picks among the 4 CREATURE mobs, so accept any of them.
+	spawned := findAnyNaturalCreature(loop)
 	if spawned == nil {
-		t.Fatal("expected a Pig to spawn on the valid floor")
+		t.Fatal("expected a CREATURE mob (pig/cow/sheep/chicken) to spawn on the valid floor")
 	}
 	if int(spawned.y) != floorY+1 {
-		t.Fatalf("Pig should stand on the floor surface (feet Y=%d), got y=%v", floorY+1, spawned.y)
+		t.Fatalf("mob should stand on the floor surface (feet Y=%d), got y=%v", floorY+1, spawned.y)
 	}
 	if !loop.blockSolidAt(floorI(spawned.x), int(spawned.y)-1, floorI(spawned.z)) {
-		t.Fatal("Pig must have a solid block below it (ON_GROUND)")
+		t.Fatal("mob must have a solid block below it (ON_GROUND)")
 	}
 	if loop.blockSolidAt(floorI(spawned.x), int(spawned.y), floorI(spawned.z)) {
-		t.Fatal("Pig must NOT be placed inside a solid block (clear feet)")
+		t.Fatal("mob must NOT be placed inside a solid block (clear feet)")
 	}
 
 	// (b) Block the entire scan window solid at the column center so there is NO air gap: no
@@ -214,31 +224,31 @@ func TestSpawnAddsToStore(t *testing.T) {
 	if totalEntities(loop) != before+1 {
 		t.Fatalf("a valid spawn must add exactly one entity: %d -> %d", before, totalEntities(loop))
 	}
-	pig := findEntityOfType(loop, entity.Pig)
-	if pig == nil {
-		t.Fatal("the spawned entity should be a Pig")
+	mob := findAnyNaturalCreature(loop)
+	if mob == nil {
+		t.Fatal("the spawned entity should be a CREATURE mob (pig/cow/sheep/chicken)")
 	}
-	if pig.id == 0 {
-		t.Fatal("the spawned Pig must have a fresh non-zero allocated id")
+	if mob.id == 0 {
+		t.Fatal("the spawned mob must have a fresh non-zero allocated id")
 	}
-	if pig.ai == nil {
-		t.Fatal("a naturally-spawned Pig must have a real mobAI attached (so it wanders via serverAiStep), not a static mover")
+	if mob.ai == nil {
+		t.Fatal("a naturally-spawned mob must have a real mobAI attached (so it wanders via serverAiStep), not a static mover")
 	}
 	// The mob is registered in the bucket index too (so near()/the tracker sees it). Query near()
-	// on the region that OWNS the pig (its column may be region 1, not region 0).
-	owner := loop.owningRegion(pig.id)
+	// on the region that OWNS the mob (its column may be region 1, not region 0).
+	owner := loop.owningRegion(mob.id)
 	if owner == nil {
-		t.Fatal("the spawned Pig must be owned by some region")
+		t.Fatal("the spawned mob must be owned by some region")
 	}
-	got := owner.entities.near(pig.x, pig.z, 0)
+	got := owner.entities.near(mob.x, mob.z, 0)
 	found := false
 	for _, e := range got {
-		if e.id == pig.id {
+		if e.id == mob.id {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatal("the spawned Pig must be bucketed so the tracker's near() returns it")
+		t.Fatal("the spawned mob must be bucketed so the tracker's near() returns it")
 	}
 }
 
@@ -332,10 +342,11 @@ func TestTickAISpawns(t *testing.T) {
 		t.Fatalf("tickAI's throttled naturalSpawn should have added a mob over %d ticks: %d -> %d",
 			spawnInterval+1, before, totalEntities(loop))
 	}
-	// And the spawned mob carries a real AI (it will wander next tick).
-	pig := findEntityOfType(loop, entity.Pig)
-	if pig == nil || pig.ai == nil {
-		t.Fatal("tickAI-spawned Pig must have a real mobAI attached")
+	// And the spawned mob carries a real AI (it will wander next tick). Plan 34-04: any of the 4
+	// CREATURE mobs may be the one picked, so accept any of them.
+	mob := findAnyNaturalCreature(loop)
+	if mob == nil || mob.ai == nil {
+		t.Fatal("tickAI-spawned CREATURE mob must have a real mobAI attached")
 	}
 }
 
@@ -432,30 +443,31 @@ func TestAsyncSpawnRejoinsAndAdds(t *testing.T) {
 	if totalEntities(loop) != before+1 {
 		t.Fatalf("the async scan + owner add must add exactly one mob: %d -> %d", before, totalEntities(loop))
 	}
-	pig := findEntityOfType(loop, entity.Pig)
-	if pig == nil {
-		t.Fatal("the rejoined spawn must add a Pig")
+	// Plan 34-04: the natural spawn picks among the 4 CREATURE mobs, so accept any of them.
+	mob := findAnyNaturalCreature(loop)
+	if mob == nil {
+		t.Fatal("the rejoined spawn must add a CREATURE mob (pig/cow/sheep/chicken)")
 	}
-	if pig.ai == nil {
-		t.Fatal("an async-spawned Pig must have a real mobAI attached (the owner add path mirrors the sync spawn)")
+	if mob.ai == nil {
+		t.Fatal("an async-spawned mob must have a real mobAI attached (the owner add path mirrors the sync spawn)")
 	}
-	if int(pig.y) != floorY+1 {
-		t.Fatalf("the Pig must stand on the floor surface (feet Y=%d), got y=%v", floorY+1, pig.y)
+	if int(mob.y) != floorY+1 {
+		t.Fatalf("the mob must stand on the floor surface (feet Y=%d), got y=%v", floorY+1, mob.y)
 	}
 	// The add ran on the OWNER (in applyTo), so the bucket index is consistent for near(). Query
-	// near() on the region that OWNS the pig (its column may be region 1, not region 0).
-	owner := loop.owningRegion(pig.id)
+	// near() on the region that OWNS the mob (its column may be region 1, not region 0).
+	owner := loop.owningRegion(mob.id)
 	if owner == nil {
-		t.Fatal("the async-spawned Pig must be owned by some region")
+		t.Fatal("the async-spawned mob must be owned by some region")
 	}
 	found := false
-	for _, e := range owner.entities.near(pig.x, pig.z, 0) {
-		if e.id == pig.id {
+	for _, e := range owner.entities.near(mob.x, mob.z, 0) {
+		if e.id == mob.id {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatal("the async-spawned Pig must be bucketed (the owner add re-buckets it)")
+		t.Fatal("the async-spawned mob must be bucketed (the owner add re-buckets it)")
 	}
 }
 

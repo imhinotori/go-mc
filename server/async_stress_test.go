@@ -300,13 +300,10 @@ func TestBehaviorRegressionMobSpawns(t *testing.T) {
 		t.Fatalf("the async spawner added no mob over %d cycles under cap (%d -> %d) — OPT-03 changed behavior",
 			cycles, before, loop.only().entities.len())
 	}
-	var pig *Entity
-	for _, e := range loop.only().entities.byID {
-		if e.typ == entity.Pig.ID {
-			pig = e
-		}
-	}
-	if pig == nil || pig.ai == nil {
-		t.Fatal("an async-spawned Pig must carry a real mobAI (so it wanders) — the spawn is not a static placeholder")
+	// Plan 34-04: the natural spawner picks among the 4 CREATURE mobs (pig/cow/sheep/chicken), so the
+	// added mob may be any of them — assert the spawn carries a real mobAI regardless of which.
+	mob := findAnyNaturalCreature(loop)
+	if mob == nil || mob.ai == nil {
+		t.Fatal("an async-spawned CREATURE mob must carry a real mobAI (so it wanders) — the spawn is not a static placeholder")
 	}
 }
