@@ -189,7 +189,7 @@ func buildAIFromDecl(t *TickLoop, decl *mobDecl) *mobAI {
 	// reseeds it per entity id (reseedMobAI) so each declared mob has its own deterministic stream.
 	m.rng = newEntityRandom(defaultEntityRandomSeed)
 	for _, gd := range decl.goals {
-		m.goals.addGoal(gd.priority, &starlarkGoal{
+		g := &starlarkGoal{
 			baseGoal:        newBaseGoal(gd.flags),
 			t:               t,
 			caps:            decl.caps,
@@ -202,7 +202,17 @@ func buildAIFromDecl(t *TickLoop, decl *mobDecl) *mobAI {
 			updateEveryTick: gd.requiresUpdateEveryTick,
 			// Fresh per-(mob,goal) scratch (the Go goal's struct fields) — never shared between mobs.
 			scratch: make(map[string]float64),
-		})
+		}
+		// TARGET-flag goals -> targetSelector (Mob.registerGoals routes HurtByTargetGoal /
+		// NearestAttackableTargetGoal into mob.targetSelector, every other goal into mob.goalSelector).
+		// The two selectors are independent flag-lock instances (ai_mob.go), exactly as vanilla holds a
+		// separate goalSelector and targetSelector. A passive pig declares no TARGET goal, so this branch
+		// is never taken for it — every pig goal still routes into m.goals (byte-identical).
+		if gd.flags&flagTarget != 0 {
+			m.targetSelector.addGoal(gd.priority, g)
+		} else {
+			m.goals.addGoal(gd.priority, g)
+		}
 	}
 	return m
 }

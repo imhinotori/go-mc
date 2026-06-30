@@ -139,6 +139,16 @@ func resolveBaseType(name string) (entity.Entity, bool) {
 var attrAlias = map[string]string{
 	"max_health":     attribute.MaxHealth.Name(),     // "max_health"
 	"movement_speed": attribute.MovementSpeed.Name(), // "movement_speed"
+	// The hostile combat attributes (Phase 35): a declared zombie/skeleton/spider seeds these so the
+	// targetSelector + melee goals read real values. follow_range bounds NearestAttackableTargetGoal's
+	// AABB scan (TargetGoal.getFollowDistance == getAttributeValue(FOLLOW_RANGE)); attack_damage is the
+	// damage Mob.doHurtTarget deals (== getAttributeValue(ATTACK_DAMAGE)); armor folds into the victim's
+	// armor curve. Each maps to its real registry name; the suppliers already register them on the
+	// monster base (level/attribute/defaults.go createMonsterAttributes + the zombie/skeleton/spider
+	// suppliers), so GetInstance is non-nil and seedAttributes applies the override (not silently dropped).
+	"follow_range":  attribute.FollowRange.Name(),  // "follow_range"  — Monster base (Mob override 16.0)
+	"attack_damage": attribute.AttackDamage.Name(), // "attack_damage" — Monster.createMonsterAttributes base 2.0
+	"armor":         attribute.Armor.Name(),        // "armor"         — Mob base 0.0 (Zombie override 2.0)
 }
 
 // seedAttributes overrides a freshly-built attribute.Map's base values from the declared overrides.

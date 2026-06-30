@@ -30,6 +30,17 @@ type mobAI struct {
 	// goals is the mob's ported GoalSelector (ai_goal.go). serverAiStep drives it.
 	goals goalSelector
 
+	// targetSelector is the SECOND ported GoalSelector instance (net.minecraft.world.entity.Mob
+	// .targetSelector) — the combat-targeting GoalSelector ticked BEFORE goalSelector in the
+	// Mob.serverAiStep order. It is the SAME goalSelector type as goals but a fresh, INDEPENDENT
+	// instance (its own lockedBy map), exactly as vanilla holds two separate GoalSelectors whose
+	// lockedFlags do not share — TARGET goals (HurtByTargetGoal/NearestAttackableTargetGoal) lock the
+	// TARGET flag among themselves here, MOVE/LOOK goals lock theirs in goals. buildAIFromDecl routes
+	// a TARGET-flagged declared goal into this selector (plugin_mob_ai.go). A passive Pig declares ZERO
+	// TARGET goals, so this selector is empty for it and its tick adds NO new RNG draw (the pig oracle
+	// stays byte-identical). Cite Mob.serverAiStep (the targetSelector.tick BEFORE goalSelector.tick).
+	targetSelector goalSelector
+
 	// navigation is the mob's ported GroundPathNavigation (navigation.go, Plan 07-02): the per-
 	// mob path follower. serverAiStep CONSUMES wantTarget below — when a MOVE goal sets a new
 	// wantTarget, it calls navigation.requestPath (snapshot -> computePath -> Path), then
@@ -43,6 +54,15 @@ type mobAI struct {
 	// computes a path, steps the mob, and clears hasTarget on arrival.
 	wantX, wantY, wantZ float64
 	hasTarget           bool
+
+	// attackTargetID is the thin-id analogue of net.minecraft.world.entity.Mob's current attack target
+	// (the Mob.getTarget() id; 0 == null/no target). The targetSelector goals (HurtByTargetGoal,
+	// NearestAttackableTargetGoal) SET it on a successful acquire (their start() == Mob.setTarget); the
+	// attack goals (MeleeAttackGoal) canUse-gate on it being non-zero. It lives here on mobAI alongside
+	// the wantX/Y/Z nav-want fields (35-CONTEXT:74): AI state, tick-owned, single-owner (TICK-05). A
+	// THIN id (never a live *Entity / *tickPlayer pointer — the Folia rule, mirroring damageSource
+	// .attacker). For a v1 player target it carries the player's entity id. Cite Mob.getTarget/setTarget.
+	attackTargetID int32
 
 	// wantCands / hasWantCands are the Phase-30.1 stroll candidate carrier (CONTEXT <decisions>
 	// architecture split). The stroll goal's start() emits 10 RAW candidate offsets here via
@@ -127,6 +147,17 @@ func (m *mobAI) setWantTarget(x, y, z float64) {
 // goal's stop()). With no navigation yet, "done" simply means no target is pending.
 func (m *mobAI) clearWantTarget() { m.hasTarget = false }
 
+// getTarget is the Mob.getTarget() id analogue: the current attack-target entity id (0 == no
+// target). The attack goals (MeleeAttackGoal.canUse) read it; the targetSelector goals set it
+// via setTarget. Cite Mob.getTarget.
+func (m *mobAI) getTarget() int32 { return m.attackTargetID }
+
+// setTarget is the Mob.setTarget(LivingEntity) id analogue: record the acquired attack target's
+// entity id (0 clears it). The targetSelector goals' start() call it (NearestAttackableTargetGoal
+// .start = mob.setTarget(target); HurtByTargetGoal.start = mob.setTarget(getLastHurtByMob())).
+// Cite Mob.setTarget.
+func (m *mobAI) setTarget(id int32) { m.attackTargetID = id }
+
 // setWantCandidates records the 10 RAW stroll candidates the goal emitted (RandomPos.generateRandomPos's
 // supplier results — BlockPos.containing(xt+x, yt+y, zt+z), NOT yet ground-snapped). It does NOT set
 // hasTarget — the RNG-free runtime snap (snapStrollWant, serverAiStep) validates + ground-snaps them to
@@ -163,9 +194,18 @@ func (m *mobAI) serverAiStep(t *TickLoop, e *Entity) {
 	}
 
 	// (sensing.tick — skipped: the v1 goals probe the world directly in their canUse.)
-	// (targetSelector.tick + tickRunningGoals — skipped: no attack targets for a passive Pig.)
-	m.goals.tick(t, e)                   // start/stop goals by priority + per-flag locking
-	m.goals.tickRunningGoals(t, e, true) // tick every running goal (canSimulate = true)
+	// Mob.serverAiStep order (bytecode-confirmed, the file header doc lines 7-8): the targetSelector
+	// (combat-target goals) ticks BEFORE the goalSelector (action goals), then BOTH explicit
+	// tickRunningGoals run in the same order. Each goalSelector.tick already runs its OWN
+	// tickRunningGoals at its tail (ai_goal.go), and the existing single-selector code then called an
+	// explicit tickRunningGoals AFTER tick — matching vanilla's goalSelector.tick() then
+	// tickRunningGoals(canSimulate). The SAME shape is applied to BOTH selectors here. For a passive
+	// Pig the targetSelector is empty (zero TARGET goals declared), so its tick/tickRunningGoals are
+	// no-ops that draw NO RNG — the pig oracle stays byte-identical.
+	m.targetSelector.tick(t, e)                   // jar order: target goals FIRST (combat targeting)
+	m.goals.tick(t, e)                            // then the action goals
+	m.targetSelector.tickRunningGoals(t, e, true) // tick running target goals (canSimulate = true)
+	m.goals.tickRunningGoals(t, e, true)          // then tick running action goals
 
 	// Phase 30.1 — the RNG-FREE stroll snap: a MOVE goal (Go stroll start() or the plugin pig's
 	// overloaded path_to(31 floats: 10 candidates + landMode)) emitted 10 RAW candidates this tick (hasWantCands). Validate +
