@@ -209,22 +209,27 @@ func (m *mobAI) serverAiStep(t *TickLoop, e *Entity) {
 	t.entityJumpStep(e)
 }
 
-// newPigAI builds the Pig AI: FloatGoal@0 (Phase 30-03) plus the three "visibly alive" passive
-// goals, registered at the EXACT priorities read from javap animal.pig.Pig.registerGoals.
+// newPigAI builds the Pig AI: FloatGoal@0 (Phase 30-03) + PanicGoal@1 (Phase 31-01) plus the three
+// "visibly alive" passive goals, registered at the EXACT priorities read from javap animal.pig.Pig
+// .registerGoals.
 //
 //	0  FloatGoal(mob)                           -> floatGoal           [JUMP]
+//	1  PanicGoal(mob, 1.25)                      -> panicGoal           [MOVE]
 //	6  WaterAvoidingRandomStrollGoal(mob, 1.0)  -> randomStrollGoal  [MOVE]
 //	7  LookAtPlayerGoal(mob, Player, 6.0)       -> lookAtPlayerGoal  [LOOK]
 //	8  RandomLookAroundGoal(mob)                -> randomLookAroundGoal [MOVE|LOOK]
 //
 // FloatGoal@0 is the JUMP-flag consumer (MOB-SUB-04): in water/lava its canUse is true and tick()
 // draws nextFloat()<0.8 → jumpControl.doJump → the serverAiStep JUMP slot's +0.04 swim impulse keeps
-// the pig afloat. It is added in LOCKSTEP with the plugin (plugins/vanilla_pig/main.star) in this same
-// plan (the oracle contract — never split). FloatGoal's ctor mob.getNavigation().setCanFloat(true) is
-// applied below (navigation.canFloat = true).
+// the pig afloat. PanicGoal@1 is the MOB-GATE-01 flee consumer: on a panic_causes hit its canUse draws
+// the DefaultRandomPos(5,4) flee selection and routes 10 candidates through the SAME
+// setWantCandidates -> snapStrollWant path (preempting stroll@6's MOVE flag, priority 1 < 6). Both are
+// added in LOCKSTEP with the plugin (plugins/vanilla_pig/main.star) in their own plan (the oracle
+// contract — never split). FloatGoal's ctor mob.getNavigation().setCanFloat(true) is applied below
+// (navigation.canFloat = true).
 //
-// STILL DEFERRED for v1 (documented, faithful-scope): PanicGoal@1 (no damage source), BreedGoal@3 +
-// FollowParentGoal@5 + TemptGoal@4 (no breeding/items). They are added when their preconditions exist.
+// STILL DEFERRED for v1 (documented, faithful-scope): BreedGoal@3 + FollowParentGoal@5 + TemptGoal@4
+// (no breeding/items). They are added when their preconditions exist.
 func newPigAI() *mobAI {
 	m := &mobAI{}
 	// Per-mob seeded RandomSource (the Mob.getRandom() analogue) — deterministic for the default
@@ -243,6 +248,10 @@ func newPigAI() *mobAI {
 	// walk, ai_goal.go "smaller priority = higher"). LOCKSTEP with vanilla_pig/main.star's @0 FloatGoal.
 	// Cite Pig.registerGoals @0 FloatGoal (javap: iconst_0; new FloatGoal; FloatGoal.<init>).
 	m.goals.addGoal(0, newFloatGoal())
+	// @1 PanicGoal(mob, 1.25) [MOVE] — the MOB-GATE-01 flee consumer, preempting stroll@6's MOVE flag
+	// (priority 1 < 6). LOCKSTEP with vanilla_pig/main.star's @1 PanicGoal. Cite Pig.registerGoals @1
+	// PanicGoal (javap: iconst_1; new PanicGoal; ldc2_w 1.25d; PanicGoal.<init>(PathfinderMob, double)).
+	m.goals.addGoal(1, newPanicGoal(panicSpeedModifier))
 	m.goals.addGoal(6, newWaterAvoidingRandomStrollGoal(1.0))
 	m.goals.addGoal(7, newLookAtPlayerGoal(6.0))
 	m.goals.addGoal(8, newRandomLookAroundGoal())

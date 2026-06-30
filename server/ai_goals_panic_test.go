@@ -56,6 +56,7 @@ func TestPanicGoalFleesOnPanicDamage(t *testing.T) {
 	pig := NewEntity(4343, entity.Pig, x, startY, z)
 	pig.ai = newPigAI()
 	reseedMobAI(pig.ai, pig.id)
+	pig.health = 10.0 // a live pig (else applyDamageEntity's isDeadOrDying guard returns early)
 	pig.onGround = true
 	loop.only().entities.add(pig)
 
