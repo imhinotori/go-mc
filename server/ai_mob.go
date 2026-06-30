@@ -202,19 +202,10 @@ func (m *mobAI) serverAiStep(t *TickLoop, e *Entity) {
 	// tickRunningGoals(canSimulate). The SAME shape is applied to BOTH selectors here. For a passive
 	// Pig the targetSelector is empty (zero TARGET goals declared), so its tick/tickRunningGoals are
 	// no-ops that draw NO RNG — the pig oracle stays byte-identical.
-	// jar order: target goals FIRST (combat targeting), then the action goals. Each goalSelector.tick()
-	// ENDS WITH its own tickRunningGoals(true) (the last line of vanilla GoalSelector.tick — javap-
-	// confirmed), so calling tick() already ticks every running goal exactly ONCE. The earlier code ALSO
-	// called an explicit tickRunningGoals(true) after each tick() — that DOUBLE-ticked every running goal
-	// per serverAiStep (e.g. MeleeAttackGoal decremented ticksUntilNextAttack twice + checkAndPerformAttack
-	// ran twice → the zombie attacked ~2× too fast). In vanilla, tick() and the explicit tickRunningGoals
-	// are MUTUALLY EXCLUSIVE per the Mob.serverAiStep (tickCount+id)%2 decimation: even-tick → tick()
-	// (which internally ticks once); odd-tick → tickRunningGoals(false). Our driver runs every tick with no
-	// decimation, so the faithful single-tick-per-step is just tick() alone (its built-in tickRunningGoals).
-	//	[VERIFIED javap GoalSelector.tick: ... ; this.tickRunningGoals(true);  // the final line.
-	//	 Mob.serverAiStep: if ((tickCount+id)%2==0) goalSelector.tick(); else goalSelector.tickRunningGoals(false).]
-	m.targetSelector.tick(t, e) // target goals (combat targeting) — ticks its running goals once at its tail
-	m.goals.tick(t, e)          // action goals — ticks its running goals once at its tail
+	m.targetSelector.tick(t, e)                   // jar order: target goals FIRST (combat targeting)
+	m.goals.tick(t, e)                            // then the action goals
+	m.targetSelector.tickRunningGoals(t, e, true) // tick running target goals (canSimulate = true)
+	m.goals.tickRunningGoals(t, e, true)          // then tick running action goals
 
 	// Phase 30.1 — the RNG-FREE stroll snap: a MOVE goal (Go stroll start() or the plugin pig's
 	// overloaded path_to(31 floats: 10 candidates + landMode)) emitted 10 RAW candidates this tick (hasWantCands). Validate +
