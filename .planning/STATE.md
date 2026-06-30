@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v5
 milestone_name: Mob Behaviors & Living-Entity Subsystems
-status: verifying
-stopped_at: Completed 34-01-PLAN.md (cow)
-last_updated: "2026-06-30T14:42:21.919Z"
+status: planning
+stopped_at: Phase 34 COMPLETE + VERIFIED 6/6 (cow/sheep/chicken live-verified, pig oracle byte-identical); next Phase 35 (hostiles)
+last_updated: "2026-06-30T16:00:00.000Z"
 last_activity: 2026-06-30
 progress:
   total_phases: 9
-  completed_phases: 7
-  total_plans: 20
-  completed_plans: 20
+  completed_phases: 8
+  total_plans: 25
+  completed_plans: 25
   percent: 100
 ---
 
