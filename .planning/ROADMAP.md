@@ -161,11 +161,12 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
   3. BreedGoal@3 + FollowParentGoal@5 are wired onto the pig (oracle + plugin in lockstep), completing all 5 deferred goals; the baby follows its parent (the observable dogfood).
   4. **THE GATE**: the full 8-goal pig oracle `TestPluginPigEqualsGoNativePig` passes byte-identical over 500 ticks with all goals live, AND two fed pigs breed + the baby follows its parent. This MUST pass before any new mob type is added (Phases 34–36).
   5. Standing: jar-verified (javap before writing); CGO=0 + no new Go deps; Docker `-race` + `strictRegion` clean.
-**Plans**: 4 plans (4 sequential waves)
-  - [ ] 33-01-PLAN.md - Aging + AgeableMob: breedAge int + tickMobAging (pure-int, OUTSIDE serverAiStep) + DATA_BABY_ID BOOLEAN metadata
+**Plans**: 5 plans (5 sequential waves)
+  - [ ] 33-01-PLAN.md - Aging + AgeableMob: breedAge int + tickMobAging (pure-int, OUTSIDE serverAiStep) + baby HALF-SCALE hitbox + DATA_BABY_ID metadata + cross-0 broadcast
   - [ ] 33-02-PLAN.md - Animal in-love + FEED: inLove int + setInLove/canFallInLove/isInLove + handleInteract feed path + encodeLevelParticles (HEART)
-  - [ ] 33-03-PLAN.md - BreedGoal@3 + FollowParentGoal@5 + breed()/getFreePartner/canMate + 5 host handles + both .star copies lockstep + 4 goal-count tests (7-to-9)
-  - [ ] 33-04-PLAN.md - THE GATE: full 9-goal oracle byte-identical + end-to-end scenario + Docker -race + same-region-cut deviation doc + live dogfood verify
+  - [ ] 33-03-PLAN.md - C1 Go-native goals: BreedGoal@3 + FollowParentGoal@5 + breed()/getFreePartner/canMate + adjustedTickDelay + faithful isPanicking + Go-native goal-count test
+  - [ ] 33-04-PLAN.md - C2 lockstep: 5 host handles + both .star copies (9 goals, byte-identical) + 3 plugin-side goal-count tests + breed/follow scenario tests
+  - [ ] 33-05-PLAN.md - THE GATE: full 9v9 oracle byte-identical + end-to-end scenario + Docker -race + deviation doc (same-region/eye-height) + live dogfood verify
 **Research flag**: yes — javap-verify `AgeableMob.aging`/`setAge`/`ageUp`, `Animal.canMate`/`spawnChildFromBreeding`/`finalizeSpawnChildFromBreeding` (XP/cooldown draw order) before porting; the same-region-cut vs barrier-resolved full-fidelity decision must be FORCED and documented as an accepted deviation, not left silent.
 
 ### Phase 34: New Passive Mobs
