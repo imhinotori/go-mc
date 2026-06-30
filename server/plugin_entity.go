@@ -851,10 +851,12 @@ func (h *navHandle) pathTo(_ *starlark.Thread, b *starlark.Builtin,
 	}
 	// path_to is OVERLOADED on arity (a HANDOFF overload — the want payload — NOT a new method or a new
 	// world-solidity handle; the .star still reads no world solidity). 3 floats = a single legacy target
-	// (setWantTarget, unchanged). 30 floats = the 10 RAW stroll candidates as x0,y0,z0,...,x9,y9,z9
-	// (candidate-major) → setWantCandidates → the Go runtime snap (Phase 30.1). The per-goal scratch is
-	// float-only (set_state coerces via AsFloat), so a candidate LIST cannot cross via set_state — the 30
-	// flat floats are AsFloat-compatible. kwargs are not accepted (positional only).
+	// (setWantTarget, unchanged). 31 floats = the 10 RAW stroll candidates as x0,y0,z0,...,x9,y9,z9
+	// (candidate-major, args[0..29]) PLUS the wantLandMode flag (args[30]: != 0.0 => true) → setWantCandidates
+	// → the Go runtime snap (Phase 30.1). The per-goal scratch is float-only (set_state coerces via AsFloat),
+	// so a candidate LIST cannot cross via set_state — the flat floats are AsFloat-compatible, and the mode
+	// is carried as a 0.0/1.0 float so the .star and Go arms store the IDENTICAL wantLandMode for the same
+	// probability nextFloat() roll (WR-05). kwargs are not accepted (positional only).
 	switch len(args) {
 	case 3:
 		var x, y, z float64
@@ -862,9 +864,9 @@ func (h *navHandle) pathTo(_ *starlark.Thread, b *starlark.Builtin,
 			return nil, err
 		}
 		e.ai.setWantTarget(x, y, z) // legacy single target — UNCHANGED
-	case 30:
+	case 31:
 		if len(kwargs) != 0 {
-			return nil, fmt.Errorf("path_to: the 30-float candidate form takes no keyword args")
+			return nil, fmt.Errorf("path_to: the 31-float candidate form takes no keyword args")
 		}
 		var cands [10][3]float64
 		for i := 0; i < 30; i++ {
@@ -874,15 +876,20 @@ func (h *navHandle) pathTo(_ *starlark.Thread, b *starlark.Builtin,
 			}
 			cands[i/3][i%3] = f
 		}
-		// landMode=false: the Go stroll goal derives wantLandMode from the probability nextFloat() draw,
-		// but the runtime snap currently up-snaps EVERY committed target (the user-approved optimization —
-		// see stroll_snap.go), so the mode value does NOT affect the committed target. The plugin draws
-		// the SAME probability nextFloat() for lockstep but the bool itself is inert, so passing false here
-		// commits the identical target the Go side commits. (When the deferred no-up-snap branch lands, the
-		// .star will pass the real mode as a 31st arg.)
-		e.ai.setWantCandidates(cands, false)
+		// args[30] is the wantLandMode flag carried across the handoff (the .star computes it from the
+		// SAME probability nextFloat() draw: nextFloat() >= probability => Land/true, the ~99.9% common
+		// up-snap path; < probability => Default/false, the ~0.1% rare no-up-snap path — see CR-01 and the
+		// jar in ai_goals_passive.go getPosition). Carrying the real mode (not a hard-coded false) keeps
+		// mobAI.wantLandMode BYTE-IDENTICAL across the Go-native and plugin arms, so the oracle cannot
+		// desync if the field is ever observed. The runtime snap is still consumed-as-Land today (it up-snaps
+		// every target — see stroll_snap.go), so the mode does not change the committed target yet.
+		landFlag, lok := starlark.AsFloat(args[30])
+		if !lok {
+			return nil, fmt.Errorf("path_to: arg 30 (landMode) must be a number, got %s", args[30].Type())
+		}
+		e.ai.setWantCandidates(cands, landFlag != 0.0)
 	default:
-		return nil, fmt.Errorf("path_to: expected 3 floats (target) or 30 floats (10 candidates), got %d", len(args))
+		return nil, fmt.Errorf("path_to: expected 3 floats (target) or 31 floats (10 candidates + landMode), got %d", len(args))
 	}
 	return starlark.None, nil
 }

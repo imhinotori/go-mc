@@ -73,18 +73,22 @@ def float_tick(entity, world, nav):
 # (~0.1% RARE, no up-snap); the draw is required for lockstep but the branch does not change the
 # committed target today — the Go runtime snap is consumed-as-Land (always up-snaps)), THEN the
 # RandomPos.generateRandomPos UNCONDITIONAL 10-candidate loop: each candidate = generateRandomDirection in
-# x, y, z ORDER (3 nextInt). 30 draws total. Emit the 10 RAW candidates as 30 FLAT positional floats via
-# nav.path_to(x0,y0,z0,...,x9,y9,z9) → the Go runtime (snapStrollWant) validates + ground-snaps them (the
-# architecture split — the .star does NO world read; the per-goal scratch is float-only so a list cannot be
-# stashed). The commit lands in can_use (path_to fires on canUse success), matching the Go goal which draws
-# in getPosition (called from canUse). DRAW ORDER must match the Go oracle (gate, probability, then xt/yt/zt
-# per candidate) or the bit-fragile pig oracle desyncs on the first diverging tick.
+# x, y, z ORDER (3 nextInt). 31 RNG draws total (gate + probability + 30 offsets). Emit the 10 RAW
+# candidates PLUS the wantLandMode flag as 31 FLAT positional floats via nav.path_to(x0,y0,z0,...,x9,y9,z9,
+# landMode) → the Go runtime (snapStrollWant) validates + ground-snaps them (the architecture split — the
+# .star does NO world read; the per-goal scratch is float-only so a list cannot be stashed). The commit
+# lands in can_use (path_to fires on canUse success), matching the Go goal which draws in getPosition
+# (called from canUse). DRAW ORDER must match the Go oracle (gate, probability, then xt/yt/zt per candidate)
+# or the bit-fragile pig oracle desyncs on the first diverging tick.
 def stroll_can_use(entity, world, nav):
     if entity.rand_int(STROLL_REDUCED_INTERVAL) != 0:   # DRAW 1: nextInt(reducedTickDelay(120)=60) gate
         return False
-    entity.rand_float()   # DRAW 2: nextFloat() probability gate (WaterAvoidingRandomStrollGoal.getPosition);
-                          # >= 0.001 => LandRandomPos (common), < 0.001 => DefaultRandomPos (rare). Value
-                          # discarded here — required for lockstep; branch does not change the committed target
+    roll = entity.rand_float()   # DRAW 2: nextFloat() probability gate (WaterAvoidingRandomStrollGoal.getPosition)
+    # wantLandMode: >= 0.001 => LandRandomPos (~99.9% COMMON, up-snap), < 0.001 => DefaultRandomPos (~0.1%
+    # RARE, no up-snap). Carry the SAME bool the Go goal computes so mobAI.wantLandMode is byte-identical
+    # across the arms (WR-05). Pass it as the 31st float (1.0/0.0); the snap is consumed-as-Land today, so
+    # the mode does not change the committed target yet.
+    land_mode = 1.0 if roll >= STROLL_WATER_AVOID_PROBABILITY else 0.0
     flat = []
     for _ in range(10):   # RandomPos.generateRandomPos: 10 unconditional candidates (NO break)
         xt = entity.rand_int(2 * STROLL_H + 1) - STROLL_H   # x offset (DRAW order 1 of 3)
@@ -93,7 +97,8 @@ def stroll_can_use(entity, world, nav):
         flat.append(entity.x + xt)
         flat.append(entity.y + yt)
         flat.append(entity.z + zt)
-    nav.path_to(*flat)   # 30 positional floats (x0,y0,z0,...,x9,y9,z9) -> setWantCandidates -> the snap
+    flat.append(land_mode)   # 31st float: wantLandMode (1.0 Land / 0.0 Default)
+    nav.path_to(*flat)   # 31 positional floats (x0,y0,z0,...,x9,y9,z9, landMode) -> setWantCandidates -> the snap
     return True
 
 # start: the candidates are committed in can_use (above), so start is a no-op. The goal() builtin makes

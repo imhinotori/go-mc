@@ -134,7 +134,8 @@ func (m *mobAI) clearWantTarget() { m.hasTarget = false }
 // architecture split (CONTEXT <decisions>): the goal/.star draw only the direction (the per-mob RNG is
 // the single lockstep source); the shared Go runtime owns the world reads. Fixed 10 candidates (the
 // generateRandomPos loop is for i<10). Tick-owned (TICK-05). Both the Go-native pig's start() and the
-// plugin pig's overloaded path_to(30 floats) reach this setter, so both pigs run the SAME snap.
+// plugin pig's overloaded path_to(31 floats = 10 candidates + landMode) reach this setter with the SAME
+// wantLandMode for the same probability roll, so both pigs run the SAME snap with identical state.
 func (m *mobAI) setWantCandidates(c [10][3]float64, landMode bool) {
 	m.wantCands = c
 	m.wantLandMode = landMode
@@ -167,7 +168,7 @@ func (m *mobAI) serverAiStep(t *TickLoop, e *Entity) {
 	m.goals.tickRunningGoals(t, e, true) // tick every running goal (canSimulate = true)
 
 	// Phase 30.1 — the RNG-FREE stroll snap: a MOVE goal (Go stroll start() or the plugin pig's
-	// overloaded path_to(30 floats)) emitted 10 RAW candidates this tick (hasWantCands). Validate +
+	// overloaded path_to(31 floats: 10 candidates + landMode)) emitted 10 RAW candidates this tick (hasWantCands). Validate +
 	// ground-snap them to the first reachable walkable column (RandomPos.generateRandomPos first-valid,
 	// LandRandomPos.getPos snap) and commit the winner — or leave hasTarget false if none survive
 	// (vanilla generateRandomPos null). This draws ZERO randoms, so it does not perturb the per-mob RNG
