@@ -63,3 +63,57 @@ when the phase opens. The float-down may need a per-mob gravity tweak.
 ## deferral of wool/eggs) per the ROADMAP. base_type must map each to its wire entity type (cow/sheep/chicken).
 ## Each new mob also needs its own oracle-style test OR a reduced gate (the pig oracle is the bit-exact one;
 ## new mobs reuse the proven goals so a lighter per-mob spawn+behavior test may suffice — confirm).
+
+## --- Per-mob extras + attributes (decompiled 2026-06-30) ---
+
+## Attributes (createAttributes):
+- Cow:     MAX_HEALTH 10.0, MOVEMENT_SPEED 0.2
+- Sheep:   MAX_HEALTH 8.0,  MOVEMENT_SPEED 0.23
+- Chicken: MAX_HEALTH 4.0,  MOVEMENT_SPEED 0.25
+Wire entity types Cow/Sheep/Chicken all present in data/entity/entity.go. categoryOf → CREATURE (like pig).
+
+## Sheep EatBlockGoal (net.minecraft.world.entity.ai.goal.EatBlockGoal), flags {MOVE,LOOK,JUMP}
+```java
+EAT_ANIMATION_TICKS=40; IS_EDIBLE = state.is(BlockTags.EDIBLE_FOR_SHEEP);
+canUse():  if (random.nextInt(adjustedTickDelay(isBaby? 50 : 1000)) != 0) return false;   // RNG GATE (lockstep!)
+           pos = blockPosition();
+           if (IS_EDIBLE.test(getBlockState(pos))) return true;                            // tall grass / fern at the mob
+           return getBlockState(pos.below()).is(GRASS_BLOCK);                              // OR grass block below
+start():   eatAnimationTick = adjustedTickDelay(40); broadcastEntityEvent(mob, (byte)10); navigation.stop();
+stop():    eatAnimationTick = 0;
+canContinueToUse(): eatAnimationTick > 0;
+tick():    if (--eatAnimationTick == adjustedTickDelay(4)) { ... eat the block: tall-grass→AIR + setSheared(false)/wool regrow,
+           or grass_block below→DIRT + the eat event; the sheep's woolRegrow + a baby ageUp(60) ... }   // decompile tick fully at exec
+```
+RNG: ONE nextInt per tick (the gate). EDIBLE_FOR_SHEEP is a BLOCK tag NOT in data/tag (only damage-type + item
+tags were extracted). The plan must EITHER extend the tag extractor for block tags (edible_for_sheep) OR
+cite-defer the tall-grass branch and check GRASS_BLOCK below directly (the common eat case). The wool-regrow +
+shear is the sheep's DATA_WOOL byte + setSheared; scope per the ROADMAP (SC#2 says shear/wool with regrow).
+
+## Chicken aiStep extras (net.minecraft.world.entity.animal.chicken.Chicken.aiStep)
+```java
+super.aiStep();
+// flap visuals (oFlap/flapSpeed/flapping — client render; the flapSpeed += (onGround?-1:4)*0.3 clamp 0..1)
+// SLOW FALL: if (!onGround && deltaMovement.y < 0) setDeltaMovement(movement.multiply(1.0, 0.6, 1.0));  // y *= 0.6 each tick falling
+// EGG LAY (ServerLevel, !isBaby, !chickenJockey):
+if (--eggTime <= 0) {
+    if (dropFromGiftLootTable(CHICKEN_LAY, spawnAtLocation))      // drop an egg item (loot table)
+        playSound(CHICKEN_EGG, 1.0, (nextFloat()-nextFloat())*0.2 + 1.0);   // RNG: 2 nextFloat (pitch)
+    eggTime = nextInt(6000) + 6000;                              // RNG: nextInt(6000)  — reset 5..10 min
+}
+```
+RNG (chicken, server): the egg-lay block draws nextInt(6000) on reset + 2 nextFloat for the egg sound pitch
+(only WHEN it lays). eggTime inits to nextInt(6000)+6000 at spawn. The SLOW-FALL (y*=0.6 when falling) is a
+per-mob physics override — the chicken needs a customServerAiStep / aiStep hook (the plugin tick) that applies it.
+Chicken hitbox is smaller (~0.4×0.7) — SC#3 per-mob sizing.
+
+## Cow milking (Cow.mobInteract): right-click with an empty BUCKET → return a MILK_BUCKET + sound. No RNG.
+## (decompile Cow.mobInteract at exec — bucket→milk_bucket swap + SoundEvents.COW_MILK.)
+
+## SCOPE (per ROADMAP SC#2 — full per-mob extras): cow milking, sheep EatBlock+shear/wool, chicken egg+slow-fall.
+## The 3 mobs are declare_mob plugin declarations reusing the 8-goal Go runtime (cheap); the per-mob extras
+## (milk interact, EatBlockGoal+wool, egg-lay+float) are the real work. PIG ORACLE stays green (untouched).
+## Multi-plan: likely Plan A cow (+milk), Plan B sheep (+EatBlock+wool), Plan C chicken (+egg+float), Plan D gate.
+## Each new mob may get a per-mob spawn+behavior test (the pig oracle is THE bit-exact one; the new mobs reuse
+## proven goals so a lighter per-mob test suffices — but any NEW RNG goal (EatBlockGoal, chicken egg) needs its
+## own lockstep discipline IF the mob is dogfooded as a plugin drawing that RNG).
