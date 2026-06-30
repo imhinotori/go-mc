@@ -147,7 +147,8 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
   2. `world.item_in_tag` / host-side `itemTagContains` return frozen tag-bools across the Starlark boundary against a jar-extracted item-tag table (`PIG_FOOD`, `CARROT_ON_A_STICK`, …) added to the `tools/` codegen pipeline (`GenTags.java` → `tags.json` → `data/tag/`).
   3. TemptGoal@4 ×2 (PIG_FOOD + CARROT_ON_A_STICK) is wired onto the pig in the oracle AND the plugin pig IN LOCKSTEP — a tempted pig follows the held food.
   4. Standing: jar-verified (javap before writing); CGO=0 + no new Go deps (the tag-extractor adds jar DATA, not a lib); the pig oracle stays GREEN; Docker `-race` + `strictRegion` clean.
-**Plans**: TBD
+**Plans**: 1 plan (1 wave, sequential)
+- [ ] 32-01-PLAN.md — S4 read primitives (itemInTag + offhand slot 45 + nearestPlayerHolding + two host nearest-tempt-player handles) + temptGoal port + two TemptGoal@4 (carrot 887 / pig_food tag) in newPigAI + lockstep both vanilla_pig/main.star + follow/ignore/boot-load-7 tests incl. -race [MOB-SUB-06, MOB-SUB-07, MOB-GATE-01]
 
 ### Phase 33: Aging + Breeding (S3) — Pig Parity / DOGFOOD GATE
 **Goal**: Animals age and breed, and the pig's last two deferred goals land — closing full pig parity and PROVING S1–S4 are 1:1 before any new mob reuses them. This is the HARD GATE.
@@ -208,7 +209,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
 | 29. Damage Keystone (S2) | v5 | 4/4 | Complete   | 2026-06-29 |
 | 30. JumpControl + Fluid (S1) | v5 | 3/3 | Complete   | 2026-06-29 |
 | 31. PanicGoal (S2 consumer) | v5 | 1/1 | Complete   | 2026-06-30 |
-| 32. Held-Item + Item Tags (S4) | v5 | 0/? | Not started | - |
+| 32. Held-Item + Item Tags (S4) | v5 | 0/1 | Planned     | - |
 | 33. Aging + Breeding (S3) — Pig Parity / DOGFOOD GATE | v5 | 0/? | Not started | - |
 | 34. New Passive Mobs | v5 | 0/? | Not started | - |
 | 35. Hostiles + Spawn Rules | v5 | 0/? | Not started | - |
