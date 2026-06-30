@@ -5,6 +5,7 @@ import (
 
 	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/data/item"
+	"github.com/imhinotori/sulfur/level/attribute"
 	"github.com/imhinotori/sulfur/level/component"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
@@ -797,6 +798,19 @@ func (t *TickLoop) handleInteract(p *tickPlayer, pkt pk.Packet) {
 	if mob.typ == entity.Cow.ID && t.tryMilkCow(p, mob) {
 		return // the milk handled the interact
 	}
+	// MOB-NEUT-02 (Phase 36-02): the Wolf TAMING / sit-toggle path runs BEFORE the feed path
+	// (Wolf.mobInteract is tried ahead of super.mobInteract == TamableAnimal/Animal.mobInteract). For an
+	// UNTAMED non-angry wolf right-clicked with a BONE, tryWolfInteract consumes the interact (it consumed
+	// the bone + ran tryToTame). For a TAMED wolf it consumes the interact ONLY on the OWNER empty-hand
+	// sit-toggle (after super.mobInteract did not consume the action); a food/non-owner/client-fall-through
+	// returns false so handleInteract falls through to tryFeedAnimal (the super.mobInteract feed/breed path,
+	// exactly the Wolf.mobInteract `r = super.mobInteract(...)` tail). Wolf-gated (typ == entity.Wolf.ID) so
+	// it is a zero-cost no-op for a pig/cow/sheep/chicken — the pig oracle stream is unperturbed (it draws
+	// ZERO new RNG; the lone nextInt(3) tame draw is on the wolf's own per-entity stream). This slots into
+	// the SAME spot the cow/sheep gates use; all are additive, mob-gated, wave-disjoint.
+	if mob.typ == entity.Wolf.ID && t.tryWolfInteract(p, mob) {
+		return // the taming / sit-toggle handled the interact
+	}
 	t.tryFeedAnimal(p, mob)
 }
 
@@ -990,4 +1004,230 @@ func (t *TickLoop) createFilledResult(p *tickPlayer, inv *Inventory, emptyStack,
 	}
 	// return emptyStack: the hand keeps the remaining bucket(s).
 	return emptyStack
+}
+
+// entityEventWolfTameHearts / entityEventWolfTameSmoke are the EntityEvent ("entity status") bytes
+// Wolf.tryToTame broadcasts: status 7 == the taming-SUCCESS HEART burst (the client spawns hearts via
+// TamableAnimal.handleEntityEvent(7)), status 6 == the taming-FAIL SMOKE puff (handleEntityEvent(6)).
+// They ride the SAME Level.broadcastEntityEvent / ClientboundEntityEvent seam the in-love hearts (18)
+// and the death statuses (3/60) use -- NOT an RNG draw.
+//	[VERIFIED javap Wolf.tryToTame: nextInt(3)==0 -> ... Level.broadcastEntityEvent(this, (byte)7);
+//	 else Level.broadcastEntityEvent(this, (byte)6). TamableAnimal.handleEntityEvent: case 7 -> hearts,
+//	 case 6 -> smoke particles.]
+const (
+	entityEventWolfTameHearts byte = 7
+	entityEventWolfTameSmoke  byte = 6
+)
+
+// wolfIsAngry ports net.minecraft.world.entity.NeutralMob.isAngry() for the wolf: the gametime-ENDPOINT
+// anger check (W6-DISSOLVED, Phase 36-01) -- endTime = getPersistentAngerEndTime(); return endTime > 0
+// && (endTime - level.getGameTime()) > 0. There is NO per-tick counter; the anger expires automatically
+// when the gametime passes angerEndTime. This is the SAME predicate isAngryAt (ai_goals_target.go) reads,
+// factored here because Wolf.mobInteract's UNTAMED branch gates the BONE-tame on !isAngry() (an angry
+// wolf cannot be tamed). Pure read, NO RNG.
+//	[VERIFIED javap NeutralMob.isAngry(): endTime = getPersistentAngerEndTime(); endTime > 0 &&
+//	 (endTime - level.getGameTime()) > 0.]
+func (t *TickLoop) wolfIsAngry(mob *Entity) bool {
+	return mob.angerEndTime > 0 && (mob.angerEndTime-t.gametime) > 0
+}
+
+// applyWolfTamingSideEffects ports net.minecraft.world.entity.animal.wolf.Wolf.applyTamingSideEffects
+// VERBATIM for the TAMED branch -- the MAX_HEALTH 8->40 bump + full heal that setTame(_, true) triggers:
+//
+//	if (isTame()) { getAttribute(MAX_HEALTH).setBaseValue(40.0); setHealth(40.0F); }
+//	else          { getAttribute(MAX_HEALTH).setBaseValue(8.0); }
+//
+// Called from tryToTameWolf only on the SUCCESS branch (after mob.tame := true), so the isTame()==true arm
+// is the live path: it sets the wolf's LOCAL MAX_HEALTH AttributeInstance base to 40.0 (getAttribute ->
+// AttributeMap.getInstance materializes the local instance from the wolfSupplier template, level/attribute)
+// and heals to the new max (setHealth(40.0F) -- the d2f-narrowed 40.0f, mirroring the float literal). The
+// else (untame 40->8) arm has no v1 trigger (no un-taming path) but is preserved as a cited const so an
+// un-tame port reads through. Wolf-gated by the caller; the pig (never tamed) never runs this. NO RNG.
+//	[VERIFIED javap Wolf.applyTamingSideEffects: isTame() -> getAttribute(MAX_HEALTH).setBaseValue(40.0d);
+//	 setHealth(40.0f); else getAttribute(MAX_HEALTH).setBaseValue(8.0d).]
+func (t *TickLoop) applyWolfTamingSideEffects(mob *Entity) {
+	if mob.attributes == nil {
+		return // a wolf always carries the wolfSupplier map; defensive no-op for a test-built map-less mob
+	}
+	inst := mob.attributes.GetInstance(attribute.MaxHealth.Name())
+	if inst == nil {
+		return // MAX_HEALTH is registered for the wolf; defensive guard
+	}
+	if mob.tame {
+		inst.SetBaseValue(40.0) // getAttribute(MAX_HEALTH).setBaseValue(40.0d)
+		mob.health = 40.0       // setHealth(40.0F) -- full heal to the new max (the d2f-narrowed literal)
+		return
+	}
+	inst.SetBaseValue(8.0) // untame path (no v1 trigger): MAX_HEALTH back to 8.0 (cited const)
+}
+
+// tryWolfInteract ports net.minecraft.world.entity.animal.wolf.Wolf.mobInteract + Wolf.tryToTame
+// VERBATIM (36-JARNOTES.md:43-69,120-129; jar-verified this session). It is the wolf sibling of
+// tryMilkCow/trySheepShear: a held-item-gated, mob-gated interact that returns true ONLY when it
+// consumes the interact (so handleInteract does NOT fall through to tryFeedAnimal). Returns false to
+// fall through to tryFeedAnimal (== Wolf.mobInteract's super.mobInteract(player, hand) feed/breed tail).
+//
+// The held item is read SERVER-side (the player's selected hand, the tryMilkCow/TemptGoal precedent --
+// T-36-04), NEVER trusted from the Interact payload; a forged held item cannot tame.
+//
+// Faithful bytecode trace (the v1-relevant slice):
+//
+//	if (isTame()) {
+//	    // feed-heal / collar-dye / body-armor equip / armor-repair: all DEFERRED (no equipment/dye
+//	    // system) -> fall through to super (return false here so tryFeedAnimal runs the feed path).
+//	    InteractionResult r = super.mobInteract(player, hand);   // == tryFeedAnimal (the feed/breed path)
+//	    if (r.consumesAction() || !isOwnedBy(player)) return r;  // consumed OR non-owner -> done by super
+//	    setOrderedToSit(!isOrderedToSit()); jumping = false; navigation.stop(); setTarget(null);  // SIT TOGGLE
+//	    return SUCCESS.withoutItem();
+//	}
+//	// UNTAMED:
+//	if (isClientSide || !stack.is(Items.BONE) || isAngry()) return super.mobInteract(player, hand);
+//	stack.consume(1, player);
+//	tryToTame(player);
+//	return SUCCESS_SERVER;
+//
+// ORDER is load-bearing: the tamed branch is fully distinct from the untamed branch (the isTame() split).
+// In v1 the tamed feed-heal/dye/armor/repair branches are DEFERRED+CITED (no equipment/dye/health-feed
+// system); tryWolfInteract therefore models the tamed branch as ONLY the sit-toggle that follows the
+// super.mobInteract fall-through -- for v1 the owner empty-hand case (held item not food -> tryFeedAnimal
+// did nothing -> the sit-toggle fires). The is(Items.BONE) gate is the EXACT item-id check (like
+// tryMilkCow's is(BUCKET)), the Items.BONE constant.
+//
+// RNG: the UNTAMED tame path draws EXACTLY ONE mobRandom(mob).nextInt(3) (tryToTame's 1-in-3 chance),
+// on the wolf's OWN per-entity stream -- the pig (never a wolf, the gate is typ == entity.Wolf.ID) draws
+// ZERO. The hearts(7)/smoke(6) and the DATA_FLAGS flip ride the existing EntityEvent / SetEntityData
+// tracker fan-out (broadcastHearts / setWolfInSittingPose precedent), NOT RNG.
+//	[VERIFIED javap Wolf.mobInteract: isTame() ifeq UNTAMED; (tamed) isFood/dye/armor/repair branches then
+//	 r=super.mobInteract; if (consumesAction()||!isOwnedBy) areturn r; setOrderedToSit(!isOrderedToSit());
+//	 jumping=false; navigation.stop(); setTarget(null); return SUCCESS.withoutItem(). UNTAMED: isClientSide
+//	 ifne super; stack.is(BONE) ifeq super; isAngry() ifne super; stack.consume(1,player); tryToTame(player);
+//	 return SUCCESS_SERVER. Wolf.tryToTame: nextInt(3)==0 -> tame(player); navigation.stop(); setTarget(null);
+//	 setOrderedToSit(true); broadcastEntityEvent(this,(byte)7); else broadcastEntityEvent(this,(byte)6).
+//	 TamableAnimal.tame: setTame(true,true) [setTame(_,includeSideEffects=true) -> applyTamingSideEffects]
+//	 + setOwner(player) (+ TAME_ANIMAL advancement, deferred -- no advancement system).]
+func (t *TickLoop) tryWolfInteract(p *tickPlayer, mob *Entity) bool {
+	inv := ensureInventory(p)
+	held := inv.get(heldWindowSlot(inv.heldSlot)) // player.getItemInHand(hand): SERVER-side held read
+
+	// ===== TAMED branch (isTame()) =====
+	if mob.tame {
+		// The tamed feed-heal (isFood && getHealth() < getMaxHealth() -> feed), collar-dye (WOLF_COLLAR_DYES
+		// && isOwnedBy), body-armor equip (isEquippableInSlot BODY ...), and armor-repair branches are ALL
+		// DEFERRED + CITED: no equipment/dye/health-feed system in v1 (JARNOTES:46-51). So we proceed to the
+		// super.mobInteract fall-through exactly as a wolf for which none of those branches matched.
+		//
+		// r = super.mobInteract(player, hand): the feed/breed path (TamableAnimal -> Animal.mobInteract ==
+		// tryFeedAnimal). r.consumesAction() <=> the feed actually fired. We detect that via the held item:
+		// a wolf-food item in hand would let the feed branch consume, so the sit-toggle must NOT fire. For v1
+		// the load-bearing tamed-interact is the OWNER EMPTY-HAND sit-toggle.
+		//
+		// if (r.consumesAction() || !isOwnedBy(player)) return r; -- when the feed consumed OR the player is
+		// NOT the owner, the super result stands and the wolf does NOT sit-toggle. We model that as: if the
+		// held item is wolf food (the feed branch would run) OR the player is not the owner, fall through to
+		// tryFeedAnimal (return false) and do NOT sit-toggle. A non-owner can NEVER command a tamed wolf to
+		// sit (T-36-05, the owner gate).
+		if !slotIsEmpty(held) && itemInTag(int32(held.ItemID), "wolf_food") {
+			return false // isFood(stack): super.mobInteract (feed) handles it -> r.consumesAction(); no sit-toggle
+		}
+		if mob.ownerUUID != p.entityID {
+			return false // !isOwnedBy(player): the super result stands -> a non-owner cannot toggle sit
+		}
+
+		// setOrderedToSit(!isOrderedToSit()): flip the orderedToSit field. jumping = false; navigation.stop();
+		// setTarget(null) -- park the wolf (SitWhenOrderedToGoal.canUse now gates on the flipped orderedToSit).
+		mob.orderedToSit = !mob.orderedToSit
+		mob.setJumping(false) // jumping = false
+		if mob.ai != nil {
+			mob.ai.setTarget(0) // navigation.stop() + setTarget(null): clear the combat/move want (the park)
+		}
+		// The sit-pose DATA_FLAGS bit is driven by SitWhenOrderedToGoal.start/stop (setWolfInSittingPose) on
+		// the next tick (the goal reads the flipped orderedToSit); the toggle itself only flips orderedToSit,
+		// exactly as the bytecode (setOrderedToSit does NOT itself touch the DATA_FLAGS sit bit -- that is the
+		// goal's job). return SUCCESS.withoutItem() == consume the interact, no item used.
+		return true
+	}
+
+	// ===== UNTAMED branch =====
+	// if (isClientSide || !stack.is(Items.BONE) || isAngry()) return super.mobInteract(player, hand);
+	// The server is NEVER client-side (isClientSide == false, the cited const the whole server assumes), so
+	// the live gates are: the held item must be a BONE, and the wolf must NOT be angry. Either failing falls
+	// through to tryFeedAnimal (super.mobInteract).
+	if slotIsEmpty(held) {
+		return false // ItemStack.EMPTY fails is(Items.BONE) -> super.mobInteract (feed)
+	}
+	if int32(held.ItemID) != int32(item.Bone.ID) {
+		return false // !stack.is(Items.BONE): the exact item-id gate (like tryMilkCow's is(BUCKET)) -> super
+	}
+	if t.wolfIsAngry(mob) {
+		return false // isAngry(): an angry wolf cannot be tamed -> super.mobInteract (feed)
+	}
+
+	// stack.consume(1, player): shrink the held bone by 1 (survival). usePlayerItem precedent (shrinkHeldItem).
+	t.shrinkHeldItem(p, inv)
+
+	// tryToTame(player): the 1-in-3 tame draw.
+	t.tryToTameWolf(p, mob)
+
+	// return SUCCESS_SERVER: the interact is consumed (the bone was eaten + tryToTame ran).
+	return true
+}
+
+// tryToTameWolf ports net.minecraft.world.entity.animal.wolf.Wolf.tryToTame(Player) VERBATIM
+// (36-JARNOTES.md:62-69,125-129; jar-verified this session). It draws EXACTLY ONE nextInt(3) on the
+// wolf's per-entity stream:
+//
+//	if (random.nextInt(3) == 0) {
+//	    tame(player);                    // setTame(true, true) [+ applyTamingSideEffects 8->40] + setOwner
+//	    navigation.stop(); setTarget(null);
+//	    setOrderedToSit(true);
+//	    broadcastEntityEvent(this, (byte)7);   // hearts (tame SUCCESS)
+//	} else {
+//	    broadcastEntityEvent(this, (byte)6);   // smoke (tame FAILED)
+//	}
+//
+// The ONE nextInt(3) is the LOCKSTEP-critical draw (lockstep if the wolf is ever dogfooded). On success
+// it flips DATA_FLAGS tame 0x4 (mob.tame) + sit 0x1 (via setOrderedToSit(true) -> the SitWhenOrderedToGoal
+// reflects it) and broadcasts both the DATA_FLAGS flip (so the client renders the tamed collar + sit pose)
+// and the hearts EntityEvent; on failure it broadcasts only the smoke EntityEvent. The bone was already
+// consumed by the caller (mobInteract) BEFORE this draw, exactly as the bytecode orders it.
+//	[VERIFIED javap Wolf.tryToTame: random.nextInt(3) ifne SMOKE; tame(player); navigation.stop();
+//	 setTarget(null); setOrderedToSit(true); Level.broadcastEntityEvent(this,(byte)7); goto end; SMOKE:
+//	 Level.broadcastEntityEvent(this,(byte)6). TamableAnimal.tame: setTame(true,true)+setOwner(player).]
+func (t *TickLoop) tryToTameWolf(p *tickPlayer, mob *Entity) {
+	// random.nextInt(3): the 1-in-3 tame roll, drawn on the wolf's OWN per-entity stream (mobRandom). ONE
+	// draw per BONE feed on an untamed non-angry wolf -- the pig never reaches here (typ == entity.Wolf.ID).
+	if mobRandom(mob).nextInt(3) == 0 {
+		// --- tame(player) = setTame(true, true) + setOwner(player) ---
+		// setTame(true, includeSideEffects=true): flip DATA_FLAGS bit 0x4 (mob.tame := true) then run
+		// applyTamingSideEffects (MAX_HEALTH 8->40 + full heal). Order matches setTame: the flag is set
+		// BEFORE applyTamingSideEffects (which reads isTame()).
+		mob.tame = true
+		t.applyWolfTamingSideEffects(mob) // includeSideEffects: MAX_HEALTH 8->40 + setHealth(40)
+		// setOwner(player): store the owner ref (the THIN entity id for v1; the wire owner-UUID broadcast is
+		// deferred -- the server-side ref drives FollowOwner/OwnerHurt + the sit-toggle owner gate).
+		mob.ownerUUID = p.entityID
+		// (TAME_ANIMAL advancement trigger on a ServerPlayer: deferred -- no advancement system in v1.)
+
+		// navigation.stop(); setTarget(null): clear any wander/combat want so the freshly-tamed wolf settles.
+		if mob.ai != nil {
+			mob.ai.setTarget(0)
+		}
+		// setOrderedToSit(true): the freshly-tamed wolf sits (the SitWhenOrderedToGoal parks it next tick and
+		// flips the DATA_FLAGS sit bit). Flip the orderedToSit field.
+		mob.orderedToSit = true
+
+		// Broadcast the DATA_FLAGS flip (tame 0x4 [+ sit 0x1 once the goal sets inSittingPose]) so the client
+		// renders the tamed collar immediately. wolfFlagsByte carries the tame bit even though inSittingPose
+		// is still false until the goal starts; reuse the wolfFlagsDataEntry/encodeSetEntityDataByID seam
+		// (the setWolfInSittingPose precedent) with the current pose state to broadcast the tame bit now.
+		t.broadcastToTrackers(mob.id, encodeSetEntityDataByID(mob.id, wolfFlagsDataEntry(wolfFlagsByte(mob.inSittingPose, mob.tame))))
+
+		// broadcastEntityEvent(this, (byte)7): the taming-SUCCESS HEART burst (the SAME EntityEvent tracker
+		// fan-out broadcastHearts uses for the in-love 18).
+		t.broadcastToTrackers(mob.id, encodeEntityEvent(mob.id, entityEventWolfTameHearts))
+		return
+	}
+
+	// else broadcastEntityEvent(this, (byte)6): the taming-FAIL SMOKE puff. The bone was still consumed.
+	t.broadcastToTrackers(mob.id, encodeEntityEvent(mob.id, entityEventWolfTameSmoke))
 }
