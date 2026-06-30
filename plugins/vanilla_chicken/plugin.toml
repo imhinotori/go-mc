@@ -1,0 +1,12 @@
+name = "vanilla_chicken"
+version = "0.1.0"
+entrypoint = "main.star"
+runtime = "starlark"
+# Least-privilege caps (mirrors vanilla_pig): a chicken READS its own state + the nearest player +
+# WRITES its look/nav. It NEVER sets blocks, so NO world.write. The chicken slow-fall + egg-lay are
+# HOST aiStep extras (TickLoop.chickenAiStep) — host-side, drawing NO plugin capability.
+#   entities.read  — read x/y/z (stroll offset base, look target delta) + the food/breed/parent scans
+#   entities.write — set_look_at (the LOOK goals' LookControl.setLookAt analogue)
+#   world.read     — nearest_player (LookAtPlayerGoal's getNearestPlayer)
+#   nav            — path_to/has_path (WaterAvoidingRandomStrollGoal's navigation.moveTo/isDone)
+capabilities = ["entities.read", "entities.write", "world.read", "nav"]
