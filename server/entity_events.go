@@ -65,6 +65,18 @@ func (t *TickLoop) handleSwing(p *tickPlayer, pkt pk.Packet) {
 	t.broadcastToTrackers(p.entityID, encodeAnimate(p.entityID, action))
 }
 
+// broadcastMobSwing is the mob-side LivingEntity.swing(MAIN_HAND) — MeleeAttackGoal's mob.swing(
+// MAIN_HAND) on a melee hit. It broadcasts the MAIN_HAND arm-swing ClientboundAnimate (action 0) to
+// every player TRACKING the mob (sendToTrackingPlayers), exactly as the player swing does — the only
+// difference is the actor is a mob *Entity (no "self" to exclude, a mob has no connection). NOT an RNG
+// draw. Cite LivingEntity.swing(hand) -> ClientboundAnimatePacket(this, MAIN_HAND?0:3).
+//
+//	[VERIFIED javap LivingEntity.swing(InteractionHand): swing(hand, false) -> new ClientboundAnimate
+//	 Packet(this, hand==MAIN_HAND ? 0 : 3) -> getChunkSource().broadcast(this, packet).]
+func (t *TickLoop) broadcastMobSwing(e *Entity) {
+	t.broadcastToTrackers(e.id, encodeAnimate(e.id, animateActionMainHandSwing))
+}
+
 // playerMainHand returns the player's currently-held (MAINHAND) item: inventory slot
 // (windowHotbarFirst + heldSlot). An empty/uninitialized inventory yields an empty SlotData.
 // Mirrors Inventory.getSelected() == items.get(selected).

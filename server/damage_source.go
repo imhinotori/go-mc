@@ -85,3 +85,13 @@ func (s damageSource) is(tagName string) bool {
 func damageSourcePlayerAttack(attackerID int32) damageSource {
 	return damageSource{typeTag: damageTypePlayerAttack, attacker: attackerID}
 }
+
+// damageSourceMobAttack builds the DamageSource for a MOB melee hit: type mob_attack with the given
+// attacker (the mob) entity id. The port of DamageSources.mobAttack(LivingEntity) — the source a
+// no-weapon Mob.doHurtTarget builds (getWeaponItem().getDamageSource(this) for an empty weapon resolves
+// to the generic mob attack source, type MOB_ATTACK, causingEntity = the attacking mob). attackerID is
+// the host-set mob id (never plugin-forgeable, T-35-02). mob_attack is a panic_causes member (so a hit
+// mob's PanicGoal still reads it) and NOT a bypasses_armor member (so the victim folds the armor curve).
+func damageSourceMobAttack(attackerID int32) damageSource {
+	return damageSource{typeTag: damageTypeMobAttack, attacker: attackerID}
+}
