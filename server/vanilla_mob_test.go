@@ -30,16 +30,20 @@ var allFourMobs = []struct {
 	{vanillaChickenMobName, entity.Chicken.ID, 8},
 }
 
-// TestAllFourMobsBootLoad: loadVanillaMobRegistry returns ONE registry holding ALL FOUR declarations,
-// each with the right base type + jar goal count. This is the T-34-10 guarantee (no silent missing mob)
-// exercised directly.
+// TestAllFourMobsBootLoad: loadVanillaMobRegistry returns ONE registry holding the 4 passive
+// declarations, each with the right base type + jar goal count. This is the T-34-10 guarantee (no
+// silent missing mob) exercised directly. As of Plan 35-06 the same ONE registry ALSO boot-loads the 3
+// Phase-35 hostiles (zombie/skeleton/spider) additively — so the total declaration count is now 7 (the 4
+// passives asserted here + the 3 hostiles asserted by TestHostilesBootLoad). The exact total guards
+// against an accidental extra/missing mob in vanillaMobNames.
 func TestAllFourMobsBootLoad(t *testing.T) {
 	r, err := loadVanillaMobRegistry()
 	if err != nil {
 		t.Fatalf("loadVanillaMobRegistry: %v", err)
 	}
-	if got := len(r.byName); got != len(allFourMobs) {
-		t.Fatalf("registry holds %d declarations, want %d (pig/cow/sheep/chicken)", got, len(allFourMobs))
+	const wantTotal = 7 // 4 passives (this test) + 3 Phase-35 hostiles (TestHostilesBootLoad)
+	if got := len(r.byName); got != wantTotal {
+		t.Fatalf("registry holds %d declarations, want %d (pig/cow/sheep/chicken + zombie/skeleton/spider)", got, wantTotal)
 	}
 	for _, m := range allFourMobs {
 		decl, ok := r.byName[m.name]
