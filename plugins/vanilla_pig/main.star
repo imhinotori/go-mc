@@ -13,9 +13,13 @@
 # (Phase 31-01: its prerequisite — the lastDamageSource keystone (Phase 29) + the candidate/snap
 # machinery (Phase 30.1) — exist). @4 TemptGoal x2 is PORTED (Phase 32-01: its prerequisite — the S4
 # held-item read + item-tag membership — landed; the carrot_on_a_stick literal + the pig_food tag).
-# @3/@5 remain DEFERRED with a cited reason (deferred-goals.md): their prerequisites (entity aging/
-# breeding) are unbuilt — porting them now would be built-but-unwired or faked, both forbidden. This
-# plugin ports @0/@1/@4/@6/@7/@8 1:1.
+# @3 BreedGoal(1.0) + @5 FollowParentGoal(1.1) are PORTED (Phase 33: their prerequisites — entity
+# aging (33-01) + in-love/FEED (33-02) — landed, and the Go-native breedGoal/followParentGoal +
+# TickLoop.breed shipped in 33-03). This plugin now ports ALL 9 goals @0/@1/@3/@4×2/@5/@6/@7/@8 1:1.
+# The @3/@5 callbacks read the Task-1 host handles (is_in_love, is_baby, breed_age,
+# nearest_breeding_partner, nearest_adult_parent) and route the actual breed through the ONE host
+# try_breed (= TickLoop.breed) so the breed RNG draws (variant nextBoolean() then XP 1+nextInt(7)) are
+# made HOST-SIDE in lockstep with the Go-native breedGoal — the .star NEVER draws breed RNG itself.
 #
 # Each goal callback receives (entity, world, nav) handles. The interpreter fires ONLY while a goal
 # is RUNNING (an idle pig makes zero starlark.Calls per tick). The draw ORDER below matches the
@@ -56,6 +60,18 @@ LOOK_DIST = 6.0           # LookAtPlayerGoal lookDistance (Pig: 6.0f)
 LOOK_PROBABILITY = 0.02   # LookAtPlayerGoal.DEFAULT_PROBABILITY
 LOOK_AROUND_PROBABILITY = 0.02   # RandomLookAroundGoal.canUse: nextFloat() < 0.02f
 TWO_PI = 2.0 * 3.141592653589793   # RandomLookAroundGoal.start: d = 6.283185307179586d * nextDouble()
+
+BREED_RANGE = 8.0         # BreedGoal PARTNER_TARGETING: forNonCombat().range(8.0) — getFreePartner's
+                               # inflate(8.0) scan radius (the host nearest_breeding_partner / try_breed bound).
+                               # LOCKSTEP with the Go oracle's breedRange.
+BREED_LOVE_THRESHOLD = 60      # BreedGoal.tick breed gate: loveTime >= adjustedTickDelay(60) (60 @ 20 TPS,
+                               # NOT the halved 30). LOCKSTEP with the Go oracle's breedLoveThreshold.
+BREED_DISTANCE_SQR = 9.0       # BreedGoal.tick breed gate: distanceToSqr(partner) < 9.0 (within 3 blocks).
+                               # LOCKSTEP with the Go oracle's breedDistanceSqr.
+FOLLOW_RANGE = 8.0        # FollowParentGoal HORIZONTAL_SCAN_RANGE (8) — the host nearest_adult_parent
+                               # symmetry arg (the actual scan box is the host's fixed inflate(8,4,8)).
+FOLLOW_RECALC_INTERVAL = 10    # FollowParentGoal.tick re-path cadence: adjustedTickDelay(10) (10 @ 20 TPS,
+                               # NOT the halved 5). LOCKSTEP with the Go oracle's followRecalcInterval.
 
 # ============================================================================================
 # @0  FloatGoal(mob)   flags {JUMP}   requiresUpdateEveryTick=true
@@ -200,6 +216,128 @@ def tempt_pigfood_stop(entity, world, nav):
 
 def tempt_pigfood_continue(entity, world, nav):
     return tempt_pigfood_can_use(entity, world, nav)   # canScare=false -> canContinueToUse == canUse
+
+# ============================================================================================
+# @3  BreedGoal(mob, 1.0)   flags {MOVE, LOOK}
+# ports net.minecraft.world.entity.ai.goal.BreedGoal — LOCKSTEP with the Go oracle (server/ai_goals_breed.go breedGoal)
+# ============================================================================================
+# canUse (bytecode): if (!animal.isInLove()) return false; partner = getFreePartner(); return partner != null.
+# The isInLove gate is the FIRST line — the oracle-safety contract: the un-fed lone-adult oracle pig
+# (inLove==0) returns false HERE, before the partner scan, so the breed path (and its host RNG draws via
+# try_breed) NEVER fires on the oracle → byte-identical. is_in_love is the Task-1 host read (Animal.isInLove);
+# nearest_breeding_partner is the Task-1 host scan (getFreePartner: nearest same-class in-love non-panicking
+# within 8.0 — the same-class + canMate + isPanicking filter stays HOST-side, mirroring the tempt item-id
+# predicate). The .star sees only a partner position tuple or None. start() resets loveTime=0 (mirrored
+# here: the goal commits loveTime=0 on a fresh acquire). NO RNG drawn in the .star (the breed draws are
+# made host-side inside try_breed = TickLoop.breed — the lockstep rule).
+def breed_can_use(entity, world, nav):
+    if not entity.is_in_love():   # Animal.isInLove() gate (line 1) — ZERO effect on the un-fed oracle
+        return False
+    p = entity.nearest_breeding_partner(BREED_RANGE)   # host scan = getFreePartner (filter stays Go-side)
+    if p == None:
+        return False
+    entity.set_state("breed_px", p[0])
+    entity.set_state("breed_py", p[1])
+    entity.set_state("breed_pz", p[2])
+    entity.set_state("breed_love_time", 0)   # BreedGoal.start: loveTime = 0 (fresh courting)
+    return True
+
+# tick (bytecode): lookAt(partner); navigation.moveTo(partner, speed); ++loveTime; if (loveTime >=
+# adjustedTickDelay(60) && distanceToSqr(partner) < 9.0) breed(). set_look_at is the LookControl.setLookAt
+# seam (host derives the same yawTowardDeg as the Go oracle); move_to is the navigation.moveTo seam
+# (setWantTarget — the 1.0 speedModifier is the nav-tick multiplier, cited-deferred like the others).
+# The ++loveTime happens BEFORE the breed check (matching the Go oracle's tick order). At the threshold
+# within 3 blocks the .star calls try_breed(8.0) — the ONE host breed op (= TickLoop.breed) that draws
+# the variant nextBoolean() FIRST then the XP 1+nextInt(7) SECOND on the initiator's per-mob RNG, EXACTLY
+# the order the Go-native breedGoal.tick -> t.breed draws (Plan 33-03). The .star draws NO breed RNG.
+def breed_tick(entity, world, nav):
+    px = entity.get_state("breed_px")
+    py = entity.get_state("breed_py")
+    pz = entity.get_state("breed_pz")
+    entity.set_look_at(px, py, pz)   # BreedGoal.tick lookAt(partner)
+    entity.move_to(px, py, pz)       # navigation.moveTo(partner, 1.0)
+    lt = entity.get_state("breed_love_time") + 1   # ++loveTime (BEFORE the breed check — Go tick order)
+    entity.set_state("breed_love_time", lt)
+    dx = px - entity.x
+    dy = py - entity.y
+    dz = pz - entity.z
+    if lt >= BREED_LOVE_THRESHOLD and dx * dx + dy * dy + dz * dz < BREED_DISTANCE_SQR:
+        entity.try_breed(BREED_RANGE)   # THE one host breed (= TickLoop.breed) — variant then XP, the lockstep
+
+# stop (bytecode): partner = null; loveTime = 0. The Go oracle: g.partner=nil; g.loveTime=0; clearWantTarget().
+def breed_stop(entity, world, nav):
+    entity.set_state("breed_love_time", 0)
+    nav.stop()   # clearWantTarget()
+
+# canContinueToUse (bytecode): partner.isAlive() && partner.isInLove() && loveTime < 60 && !partner.isPanicking().
+# The .star cannot read the partner's inLove/panicking directly (the host hands it only a position) — the
+# observable equivalent is a re-scan: nearest_breeding_partner still returns a tuple iff a same-class in-love
+# non-panicking partner is still in range (the canMate+isPanicking filter is the SAME host scan getFreePartner
+# applies for partner.isInLove() && !partner.isPanicking()). Paired with loveTime < 60 (the courting bound),
+# this is behavior-identical to the Go oracle's canContinueToUse for the oracle (where the goal is dormant)
+# and for the scenario (where the pair stays in love until breed at loveTime>=60).
+def breed_continue(entity, world, nav):
+    if entity.get_state("breed_love_time") >= BREED_LOVE_THRESHOLD:   # loveTime < 60 bound
+        return False
+    return entity.nearest_breeding_partner(BREED_RANGE) != None   # partner alive && isInLove && !isPanicking
+
+# ============================================================================================
+# @5  FollowParentGoal(mob, 1.1)   flags {} EMPTY
+# ports net.minecraft.world.entity.ai.goal.FollowParentGoal — LOCKSTEP with the Go oracle (server/ai_goals_follow.go)
+# ============================================================================================
+# canUse (bytecode): if (animal.getAge() >= 0) return false;  // only a BABY follows
+#   parents = getEntitiesOfClass(animal.getClass(), inflate(8,4,8)); closest = nearest ADULT (age>=0);
+#   if (closest == null) return false; if (closestDistSqr < 9.0) return false; parent = closest; return true.
+# is_baby is the Task-1 host read (AgeableMob.isBaby == age<0) — the FIRST-line gate: the lone-ADULT oracle
+# pig (is_baby false) returns false HERE, so the follow path is dormant on the oracle → byte-identical.
+# nearest_adult_parent is the Task-1 host scan (the nearest same-class ADULT in inflate(8,4,8) NOT within 3
+# blocks — the adult filter + the DONT_FOLLOW_IF_CLOSER_THAN reject stay HOST-side). NO RNG anywhere
+# (FollowParentGoal is fully deterministic). The .star sees only the parent position tuple or None.
+def follow_can_use(entity, world, nav):
+    if not entity.is_baby():   # FollowParentGoal.canUse: age>=0 returns false — only a baby follows
+        return False
+    p = entity.nearest_adult_parent(FOLLOW_RANGE)   # host scan = the nearest-adult inflate(8,4,8) pick
+    if p == None:
+        return False
+    entity.set_state("follow_px", p[0])
+    entity.set_state("follow_py", p[1])
+    entity.set_state("follow_pz", p[2])
+    entity.set_state("follow_recalc", 0)   # FollowParentGoal.start: timeToRecalcPath = 0 (first tick re-paths)
+    return True
+
+# tick (bytecode): if (--timeToRecalcPath > 0) return; timeToRecalcPath = adjustedTickDelay(10);
+# navigation.moveTo(parent, speed). PURE INT — NO RNG. The decrement-then-gate matches the Go oracle's
+# tick exactly: the first tick (--0 = -1, not >0) re-paths and resets the timer to 10; intermediate ticks
+# count down without re-pathing. move_to is the navigation.moveTo(parent, 1.1) seam (setWantTarget). The
+# parent position is re-read from the host scan on each re-path so the baby trails a moving parent.
+def follow_tick(entity, world, nav):
+    rc = entity.get_state("follow_recalc") - 1   # --timeToRecalcPath
+    if rc > 0:
+        entity.set_state("follow_recalc", rc)
+        return
+    entity.set_state("follow_recalc", FOLLOW_RECALC_INTERVAL)   # adjustedTickDelay(10) — re-path cadence
+    p = entity.nearest_adult_parent(FOLLOW_RANGE)   # re-read the parent (it may have moved)
+    if p == None:
+        return
+    entity.set_state("follow_px", p[0])
+    entity.set_state("follow_py", p[1])
+    entity.set_state("follow_pz", p[2])
+    entity.move_to(p[0], p[1], p[2])   # navigation.moveTo(parent, 1.1)
+
+# stop (bytecode): parent = null. The Go oracle: g.parent=nil; clearWantTarget().
+def follow_stop(entity, world, nav):
+    nav.stop()   # clearWantTarget()
+
+# canContinueToUse (bytecode): if (animal.getAge() >= 0) return false; if (!parent.isAlive()) return false;
+# d = distanceToSqr(parent); return !(d < 9.0) && !(d > 256.0).  // follow while 3..16 blocks.
+# The .star re-scans for the parent (a live in-range adult still returns a tuple — the host scan already
+# rejects an adult within 3 blocks via DONT_FOLLOW, and the 16-block upper bound is the same-region near()
+# reach), gated on is_baby (grew-up → stop). Behavior-identical to the Go oracle's continue band for both
+# the dormant oracle (no adult → false) and the scenario (the baby follows while the adult is 3..16 away).
+def follow_continue(entity, world, nav):
+    if not entity.is_baby():   # grew up (age>=0) → stop
+        return False
+    return entity.nearest_adult_parent(FOLLOW_RANGE) != None   # a live adult still in the follow band
 
 # ============================================================================================
 # @6  WaterAvoidingRandomStrollGoal(mob, 1.0)   flags {MOVE}
@@ -366,6 +504,19 @@ declare_mob(
             stop = panic_stop,
             can_continue = panic_continue,
         ),
+        # @3 BreedGoal(mob, 1.0) [MOVE, LOOK] — preempts the @4 tempts + @6 stroll for MOVE/LOOK when it
+        # fires (priority 3 < 4 < 6). can_use gates on is_in_love (dormant on the un-fed oracle); tick
+        # courts the partner and at the threshold routes the breed through the ONE host try_breed
+        # (= TickLoop.breed) so the variant+XP draws are host-side in lockstep with the Go-native breedGoal.
+        # LOCKSTEP with the Go oracle's addGoal(3, newBreedGoal(1.0)). Cite Pig.registerGoals @3 BreedGoal.
+        goal(
+            priority = 3,
+            flags = ["MOVE", "LOOK"],
+            can_use = breed_can_use,
+            tick = breed_tick,
+            stop = breed_stop,
+            can_continue = breed_continue,
+        ),
         # @4 TemptGoal(mob, 1.2, CARROT_ON_A_STICK, false) [MOVE, LOOK] — ADDED FIRST among the @4 pair
         # (the carrot goal wins the shared {MOVE,LOOK} flags; addGoal keeps insertion order among equals,
         # faithful "first-added wins"). LOCKSTEP with the Go oracle's first addGoal(4, newTemptGoal(...887...)).
@@ -386,6 +537,18 @@ declare_mob(
             tick = tempt_pigfood_tick,
             stop = tempt_pigfood_stop,
             can_continue = tempt_pigfood_continue,
+        ),
+        # @5 FollowParentGoal(mob, 1.1) [] EMPTY flags — a baby trails the nearest adult; claims NO control
+        # flag (the selector never blocks an empty-flag goal), re-paths every 10 ticks, draws NO RNG.
+        # can_use gates on is_baby (dormant on the lone-ADULT oracle). LOCKSTEP with the Go oracle's
+        # addGoal(5, newFollowParentGoal(1.1)). Cite Pig.registerGoals @5 FollowParentGoal.
+        goal(
+            priority = 5,
+            flags = [],
+            can_use = follow_can_use,
+            tick = follow_tick,
+            stop = follow_stop,
+            can_continue = follow_continue,
         ),
         # @6 WaterAvoidingRandomStrollGoal [MOVE] — can_use commits the candidates (via path_to), so NO
         # start kwarg; stop/continue carry the rest.
