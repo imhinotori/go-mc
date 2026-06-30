@@ -336,6 +336,75 @@ type Entity struct {
 	//	 `if (--eggTime <= 0) { ...drop... ; eggTime = random.nextInt(6000) + 6000; }`.]
 	eggTime int
 
+	// --- MOB-NEUT-01/02 (Phase 36-01): Wolf TamableAnimal / NeutralMob state ------------------
+	//
+	// The wolf is the FIRST tameable/neutral mob; these fields mirror the TamableAnimal (tame/owner/
+	// sit) + NeutralMob (anger) state. EVERY field is wolf-gated at its reader/writer (typ ==
+	// entity.Wolf.ID / a "wolf" base_type), so the ZERO value is the exact non-wolf default and the
+	// pig oracle's stream gains ZERO draws from any of them — the same discipline the sheared/eggTime
+	// fields above follow. All are tick-owned plain values (TICK-05), snapshot-friendly (no live
+	// pointers — the owner/anger refs are THIN entity ids, the Folia rule == lastHurtByMob).
+	//
+	// tame is the TamableAnimal DATA_FLAGS bit 0x4 (isTame() == (DATA_FLAGS & 4) != 0). setTame flips
+	// it; the tamed-HP bump (8->40 applyTamingSideEffects) is the runtime side-effect Plan B owns.
+	// FALSE (untamed) for the pig and the zero value.
+	//	[VERIFIED javap TamableAnimal: isTame() == (DATA_FLAGS & 4)!=0; setTame -> DATA_FLAGS |= 4.]
+	tame bool
+
+	// orderedToSit is the plain TamableAnimal.orderedToSit field (isOrderedToSit/setOrderedToSit — a
+	// real bool field, NOT a DATA_FLAGS bit). SitWhenOrderedToGoal.canUse gates on it; the sit-toggle
+	// interact (Plan B) flips it. FALSE for the pig and the zero value.
+	//	[VERIFIED javap TamableAnimal: orderedToSit is a private boolean field; isOrderedToSit returns it.]
+	orderedToSit bool
+
+	// inSittingPose is the TamableAnimal DATA_FLAGS bit 0x1 (isInSittingPose() == (DATA_FLAGS & 1)!=0).
+	// SitWhenOrderedToGoal.start/stop sets it (setInSittingPose), and it drives the DATA_FLAGS wire
+	// broadcast (the client renders the sit pose). FALSE for the pig and the zero value.
+	//	[VERIFIED javap TamableAnimal: isInSittingPose() == (DATA_FLAGS & 1)!=0; setInSittingPose(b) ->
+	//	 DATA_FLAGS = b ? (cur|1) : (cur&0xFE).]
+	inSittingPose bool
+
+	// ownerUUID is the TamableAnimal DATA_OWNERUUID_ID owner ref (Optional<EntityReference<LivingEntity>>),
+	// reduced to the owner's THIN entity id for v1 (the goals only need to resolve the owner on the
+	// loop; the WIRE broadcast of the owner ref is deferred — server-side ref drives the goals). 0 ==
+	// no owner (the pig and the zero value). setOwner (Plan B) writes it; getOwner resolves it via
+	// playerByEntityID (v1 owners are players).
+	//	[VERIFIED javap TamableAnimal: DATA_OWNERUUID_ID = OPTIONAL_LIVING_ENTITY_REFERENCE accessor
+	//	 (index 19); setOwner sets it from the LivingEntity.]
+	ownerUUID int32
+
+	// angerEndTime is the NeutralMob persistent-anger GAMETIME ENDPOINT (the DATA_ANGER_END_TIME /
+	// getPersistentAngerEndTime() value, held as a plain server-side int64 — the wire accessor index 22
+	// is deferred). The anger model is a gametime-endpoint, NOT a counter: isAngry() == angerEndTime > 0
+	// && (angerEndTime - gameTime) > 0, so the anger EXPIRES automatically when gameTime passes
+	// angerEndTime — there is NO per-tick decrement and NO ResetUniversalAngerTargetGoal (both
+	// dissolved). On a player hit (combat_mob.go store-point) it is set to gameTime + 400 + nextInt(381)
+	// (UniformInt(400,780).sample). 0 (no live anger) for the pig and the zero value.
+	//	[VERIFIED javap NeutralMob.isAngry(): endTime = getPersistentAngerEndTime(); endTime > 0 &&
+	//	 (endTime - level.getGameTime()) > 0. Wolf.PERSISTENT_ANGER_TIME = TimeUtil.rangeOfSeconds(20,39)
+	//	 = UniformInt.of(400,780); sample = 400 + nextInt(381).]
+	angerEndTime int64
+
+	// angerTarget is the NeutralMob persistentAngerTarget (the EntityReference of whoever provoked the
+	// wolf), reduced to that attacker's THIN entity id for v1. isAngryAt gates the angry_player_target
+	// goal on `angerEndTime live && angerTarget == candidate`. Set beside angerEndTime at the combat
+	// store-point. 0 (no target) for the pig and the zero value.
+	//	[VERIFIED javap NeutralMob.isAngryAt: canAttack(target) && (... || getPersistentAngerTarget()
+	//	 matches target). getPersistentAngerTarget() == the persistentAngerTarget EntityReference.]
+	angerTarget int32
+
+	// lastHurtMob / lastHurtMobTimestamp are the OWNER-SIDE attack bookkeeping OwnerHurtTargetGoal
+	// reads: net.minecraft.world.entity.LivingEntity.lastHurtMob (whoever THIS entity last ATTACKED)
+	// and its gameTime stamp — the attack-side mirror of lastHurtByMob/lastHurtByMobTimestamp (the
+	// hurt-by side, above). OwnerHurtTargetGoal.canUse reads owner.getLastHurtMob()/Timestamp() to
+	// retaliate against whatever the owner is fighting. Set on the attacker side wherever an entity
+	// deals damage; 0 for the pig and the zero value (the pig owns no wolf, and these reads are
+	// wolf-goal-gated). THIN id (the Folia rule == lastHurtByMob). Tick-owned (TICK-05).
+	//	[VERIFIED javap LivingEntity: lastHurtMob (the entity this last hit) + lastHurtMobTimestamp;
+	//	 OwnerHurtTargetGoal.canUse: owner.getLastHurtMob(); owner.getLastHurtMobTimestamp().]
+	lastHurtMob          int32
+	lastHurtMobTimestamp int32
+
 	// --- GAMEPLAY-07: delta-move tracking state (ServerEntity.sendChanges) ----------------
 	//
 	// These mirror net.minecraft.server.level.ServerEntity's per-entity send state so the

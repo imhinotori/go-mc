@@ -47,6 +47,14 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned spider eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
 		}
+	case "wolf":
+		// MOB-NEUT-01 (Phase 36): spawn a vanilla wolf. spawnVanillaMob returns nil until Plan C's
+		// vanilla_wolf declaration boot-loads (the registry lookup is a graceful nil, never a panic — the
+		// `if e != nil` guard mirrors every other arm), so /dbg wolf is a safe no-op until the .star lands.
+		e := t.spawnVanillaMob(vanillaWolfMobName, p.x, p.y, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned wolf eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
+		}
 	case "water":
 		t.dbgFillWater(p)
 		t.broadcastSystemChat("[dbg] filled a water box around you")
@@ -57,7 +65,7 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] water box + pig eid=%d dropped in", e.id))
 		}
 	default:
-		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | water | pig-in-water")
+		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | water | pig-in-water")
 	}
 }
 

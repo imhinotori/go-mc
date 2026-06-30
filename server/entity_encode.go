@@ -455,6 +455,67 @@ func woolDataEntry(woolByte byte) entityDataEntry {
 	}
 }
 
+// --- MOB-NEUT-01 (Phase 36-01): the DATA_FLAGS data-value (the Wolf tame/sitting byte) --------------
+//
+// A TamableAnimal synchs its tame + sit flags in ONE byte, DATA_FLAGS: bit 0x1 = inSittingPose (the
+// client renders the sit pose), bit 0x4 = tame (the client renders the tamed collar). The server is
+// authoritative and PUSHES it on a tame (bit 0x4 set, Plan B) or a sit-toggle (bit 0x1 set/cleared,
+// the SitWhenOrderedToGoal start/stop). Both indices below are JAR-DERIVED (javap'd from
+// temp/cache/26.2-inner.jar this session — TamableAnimal.defineSynchedData defines DATA_FLAGS_ID
+// (BYTE) then DATA_OWNERUUID_ID after Animal's empty defineSynchedData), NOT guessed.
+
+// dataWolfFlagsIndex is the SynchedEntityData accessor index for TamableAnimal.DATA_FLAGS_ID. Continuing
+// the dataBabyIndex=16 / dataWoolIndex=18 derivations (defineId assigns indices sequentially down the
+// hierarchy): Entity 0..7, LivingEntity 8..14, Mob 15 (DATA_MOB_FLAGS_ID), AgeableMob 16 (DATA_BABY_ID)
+// + 17 (AGE_LOCKED), Animal adds NO accessor (javap-confirmed empty defineSynchedData), TamableAnimal
+// adds DATA_FLAGS_ID = index 18 (BYTE serializer) THEN DATA_OWNERUUID_ID = index 19. (Sheep's DATA_WOOL
+// is ALSO index 18 — that is FINE, accessor indices are PER-CLASS-HIERARCHY; a wolf is not a sheep.)
+//   [VERIFIED javap this session: net.minecraft.world.entity.TamableAnimal.defineSynchedData calls
+//     Animal.defineSynchedData (which adds nothing past AgeableMob's 16,17), then define(DATA_FLAGS_ID,
+//     (byte)0) [BYTE] then define(DATA_OWNERUUID_ID, Optional.empty()) [OPTIONAL_LIVING_ENTITY_REFERENCE]
+//     — putting DATA_FLAGS_ID at accessor index 18 and DATA_OWNERUUID_ID at 19.]
+const dataWolfFlagsIndex uint8 = 18
+
+// dataWolfOwnerIndex is the SynchedEntityData accessor index for TamableAnimal.DATA_OWNERUUID_ID
+// (Optional<EntityReference<LivingEntity>>, index 19 — see the chain count above). v1 holds the owner
+// ref SERVER-SIDE only (entity.ownerUUID); its WIRE broadcast is DEFERRED (the client uses it for the
+// owner-glow on the owner's screen + collar render — a deferred render concern, not needed for the
+// goals). The const is defined for the record so the deferred owner-metadata wire encode slots in here
+// without re-deriving the index.
+const dataWolfOwnerIndex uint8 = 19
+
+// wolfFlagsByte computes the DATA_FLAGS byte from a wolf's tame/inSittingPose state (bit 0x1 if
+// inSittingPose, bit 0x4 if tame), mirroring TamableAnimal's setInSittingPose/setTame bit ops. The
+// other DATA_FLAGS bits (0x2 unused here; the higher Wolf-specific bits live on Wolf's own accessors)
+// are 0 in v1. A fresh untamed, un-sitting wolf is 0x00.
+//   [VERIFIED javap TamableAnimal: setInSittingPose(b) -> DATA_FLAGS = b ? (cur|1) : (cur&0xFE);
+//    setTame -> DATA_FLAGS = isTame ? (cur|4) : (cur&0xFB).]
+func wolfFlagsByte(inSittingPose, tame bool) byte {
+	var b byte
+	if inSittingPose {
+		b |= 0x1
+	}
+	if tame {
+		b |= 0x4
+	}
+	return b
+}
+
+// wolfFlagsDataEntry builds the single SynchedEntityData$DataValue entry that carries a Wolf's
+// DATA_FLAGS — the byte the client reads for the sit pose (bit 0x1) + tamed collar (bit 0x4). It frames
+// on the wire as Byte(dataWolfFlagsIndex=18) + VarInt(byteSerializerID=0) + Byte(flagsByte)
+// (entityDataEntry.WriteTo), the EXACT shape of woolDataEntry (also a BYTE accessor at index 18 — fine,
+// per-class-hierarchy). Carried at spawn (a tamed/sitting wolf) and broadcast on a tame/sit-toggle.
+//   [VERIFIED javap TamableAnimal.DATA_FLAGS_ID = EntityDataAccessor<Byte> (BYTE codec); ByteBufCodecs
+//    .BYTE == one byte, which pk.Byte writes.]
+func wolfFlagsDataEntry(flagsByte byte) entityDataEntry {
+	return entityDataEntry{
+		index:        dataWolfFlagsIndex,
+		serializerID: byteSerializerID,
+		value:        pk.Byte(int8(flagsByte)), // EntityDataSerializers.BYTE codec == ByteBufCodecs.BYTE
+	}
+}
+
 // entityDataEOF is the SynchedEntityData EOF_MARKER (255 / 0xFF) — the MANDATORY single
 // terminator byte that closes the packed-items list. It is ALWAYS written, even for an
 // empty list; omitting it desyncs the client's entity stream and the entity is dropped.

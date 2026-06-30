@@ -51,6 +51,17 @@ const (
 	vanillaZombieMobName   = "vanilla_zombie"
 	vanillaSkeletonMobName = "vanilla_skeleton"
 	vanillaSpiderMobName   = "vanilla_spider"
+
+	// Phase 36 wolf (declared here as the canonical mob-name home, the SAME forward-declaration pattern
+	// the Phase-35 hostiles used above: the const + the /dbg arm land in THIS foundation plan, while the
+	// actual boot-load — the assets/vanilla_wolf embed directive + the vanillaMobNames load entry — is
+	// EXTENDED by Plan C (the .star plugin), which ships the assets/vanilla_wolf/{plugin.toml,main.star}
+	// declaration. Defining the const now is purely additive: /dbg wolf references it, and
+	// spawnVanillaMob(vanillaWolfMobName) resolves it the moment Plan C's declaration boot-loads (until
+	// then the registry lookup returns nil → a graceful no-op, never a panic). NOT added to the
+	// //go:embed directive here because assets/vanilla_wolf does not yet exist — embedding a missing
+	// directory is a hard compile error; Plan C adds the directive + the load entry alongside the asset.)
+	vanillaWolfMobName = "vanilla_wolf"
 )
 
 // vanillaMobNames is the load order: ALL SEVEN bundled mobs (the 4 passives + the Phase-35 hostiles)

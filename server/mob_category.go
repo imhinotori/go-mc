@@ -116,6 +116,12 @@ func categoryOf(t entity.ID) mobCategory {
 		// Spider.Type == "monster", entity.go:1143). Same MONSTER-budget accounting; countByCategory +
 		// countByCategoryAcrossRegions tally all 3 hostiles under the one MONSTER cap.
 		return categoryMonster
+	case entity.Wolf.ID:
+		// MOB-NEUT-01 (Phase 36): the Wolf is MobCategory.CREATURE (vanilla EntityType.WOLF is built with
+		// MobCategory.CREATURE; data/entity Wolf.Type == "creature", entity.go:1368 — ID 149). Like the
+		// other passives it consumes the CREATURE spawn budget. Additive — the pig + the 35 MONSTER arms +
+		// the default arm are untouched (the pig oracle's category accounting is unperturbed).
+		return categoryCreature
 	default:
 		return categoryMisc
 	}

@@ -130,6 +130,7 @@ var baseTypeByName = map[string]entity.Entity{
 	"witch":      entity.Witch,
 	"villager":   entity.Villager,
 	"silverfish": entity.Silverfish,
+	"wolf":       entity.Wolf, // MOB-NEUT-01 (Phase 36): the wolf base_type (the LAST v5 mob)
 }
 
 // resolveBaseType resolves a base_type string to its data/entity record. (record, true) for an
@@ -352,7 +353,7 @@ func (r *mobRegistry) declareMobBuiltin() *starlark.Builtin {
 
 		baseType, ok := resolveBaseType(baseTypeName)
 		if !ok {
-			return nil, fmt.Errorf("declare_mob %q: unknown base_type %q (allowed: pig, cow, sheep, chicken, skeleton, creeper, spider, zombie, cat, witch, villager, silverfish)", name, baseTypeName)
+			return nil, fmt.Errorf("declare_mob %q: unknown base_type %q (allowed: pig, cow, sheep, chicken, skeleton, creeper, spider, zombie, cat, witch, villager, silverfish, wolf)", name, baseTypeName)
 		}
 
 		attrs, err := parseAttributesDict(attrsDict)
@@ -476,6 +477,21 @@ func (t *TickLoop) spawnDeclaredMob(decl *mobDecl, x, y, z float64) *Entity {
 		var buf bytes.Buffer
 		_, _ = babyDataEntry(e.isBaby()).WriteTo(&buf)
 		e.metadata = append(e.metadata, buf.Bytes()...)
+	}
+	// MOB-NEUT-01 (Phase 36-01): spawn-time DATA_FLAGS carry for a Wolf — splice the tame/sit byte onto
+	// Entity.metadata so a tamed or sitting wolf renders its collar + sit pose from the first
+	// AddEntity/SetEntityData a tracker sends (the SAME seam the babyDataEntry carry uses). Wolf-gated
+	// (typ == entity.Wolf.ID) AND non-zero-only: a freshly-spawned wild wolf is untamed + un-sitting
+	// (flags 0x00), so the splice is skipped — no metadata entry, byte-identical to a plain mob spawn,
+	// and the pig (never a wolf) is wholly unperturbed. A future persisted-tamed wolf (Plan B) spawns
+	// with tame=true and carries its 0x04 flag here. The live tame/sit FLIPS broadcast via
+	// wolfFlagsDataEntry + encodeSetEntityDataByID (the goal start/stop + the interact, Plan B).
+	if e.typ == entity.Wolf.ID {
+		if flags := wolfFlagsByte(e.inSittingPose, e.tame); flags != 0 {
+			var buf bytes.Buffer
+			_, _ = wolfFlagsDataEntry(flags).WriteTo(&buf)
+			e.metadata = append(e.metadata, buf.Bytes()...)
+		}
 	}
 	// Phase-27 (N=2): add the mob to the region that OWNS its column, NOT t.only().
 	// only() resolves to the CALLING goroutine's region — globalRegion when spawned from the

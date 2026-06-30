@@ -421,6 +421,18 @@ type tickPlayer struct {
 	// registration; tick-owned thereafter.
 	uuid uuid.UUID
 
+	// lastHurtMob / lastHurtMobTimestamp are the OWNER-SIDE attack bookkeeping
+	// net.minecraft.world.entity.LivingEntity.lastHurtMob (the entity this player last ATTACKED) +
+	// its gameTime stamp — the attack-side mirror of a mob's lastHurtByMob. A tamed wolf's
+	// OwnerHurtTargetGoal reads its OWNER's getLastHurtMob()/getLastHurtMobTimestamp() to retaliate
+	// against whatever its owner is fighting (MOB-NEUT-01, Phase 36-01). v1 owners are players, so the
+	// owner-side bookkeeping lives here; setLastHurtMob is recorded when a player attacks a mob
+	// (handleMobAttack). 0 == no attack yet (the zero value). THIN id (the Folia rule). Tick-owned.
+	//	[VERIFIED javap LivingEntity.setLastHurtMob(Entity): lastHurtMob = entity; lastHurtMobTimestamp
+	//	 = tickCount. OwnerHurtTargetGoal.canUse: owner.getLastHurtMob(); owner.getLastHurtMobTimestamp().]
+	lastHurtMob          int32
+	lastHurtMobTimestamp int32
+
 	// gameMode is the player's GameType byte (play_join.go: gameModeSurvival==0). It gates the
 	// block-drop path (Plan 17-14 / ServerPlayerGameMode.destroyBlock): a CREATIVE player's
 	// break drops NOTHING. v1 hardcodes survival at registration, so the gate always passes

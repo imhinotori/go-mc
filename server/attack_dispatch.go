@@ -315,6 +315,20 @@ func (t *TickLoop) handleMobAttack(p *tickPlayer, targetID int32) {
 	// mob hurt/death pipeline drives the gameplay). The hit LANDED (applyMobAttackDamage returned true),
 	// damage + lastDamageSource + the on_damage emit all fired in applyDamageEntity. causeFoodExhaustion
 	// for the attacker still applies (the attack costs the player hunger regardless of the victim type).
+
+	// setLastHurtMob(target): the OWNER-SIDE attack bookkeeping (the formerly-stubbed setLastHurtMob from
+	// the player branch, line 205) — record the mob this player just hit + the gameTime stamp. A tamed
+	// wolf's OwnerHurtTargetGoal reads its OWNER's getLastHurtMob()/Timestamp() to retaliate against what
+	// its owner is fighting (MOB-NEUT-01, Phase 36-01). Set ONLY on a landed same-region hit (the `if
+	// (hurt)` tail, exactly where Player.attack calls setLastHurtMob). The cross-region victim returned
+	// early above; recording the owner-side ref for a cross-region hit is the same barrier follow-on the
+	// knockback tail defers (cited). PURE field writes, NO RNG — a non-wolf-owning player never feeds a
+	// wolf goal, so this cannot perturb any oracle stream.
+	//	[VERIFIED javap Player.attack: on the hurt branch, setLastHurtMob(target) -> lastHurtMob = target;
+	//	 lastHurtMobTimestamp = tickCount.]
+	p.lastHurtMob = mob.id
+	p.lastHurtMobTimestamp = int32(t.gametime)
+
 	t.causeFoodExhaustion(p, 0.1)
 }
 

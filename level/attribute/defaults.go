@@ -169,6 +169,24 @@ func cowSupplier() *Supplier {
 		Build()
 }
 
+// wolfSupplier is the port of Wolf.createAttributes() : Animal.createAnimalAttributes() (Wolf extends
+// TamableAnimal -> Animal) + MOVEMENT_SPEED 0.3 + MAX_HEALTH 8.0 + ATTACK_DAMAGE 4.0 (jar:
+// net/minecraft/world/entity/animal/wolf/Wolf.createAttributes — MOVEMENT_SPEED 0.30000001192092896d,
+// MAX_HEALTH 8.0d, ATTACK_DAMAGE 4.0d). The MOVEMENT_SPEED literal is the vanilla float-widened double,
+// preserved bit-for-bit. NOTE the tamed-wolf MAX_HEALTH 40 + full heal is a RUNTIME side-effect of
+// setTame (applyTamingSideEffects), NOT the base supplier — an untamed wolf has MAX_HEALTH 8.0 here, and
+// Plan B applies the 8->40 bump on tame.
+//	[VERIFIED javap Wolf.createAttributes: createAnimalAttributes; MOVEMENT_SPEED ldc2_w
+//	 0.30000001192092896d; MAX_HEALTH ldc2_w 8.0d; ATTACK_DAMAGE ldc2_w 4.0d; build. applyTamingSideEffects
+//	 sets MAX_HEALTH base 40.0 + setHealth(40) on tame.]
+func wolfSupplier() *Supplier {
+	return createAnimalAttributes().
+		AddValue(MovementSpeed, 0.30000001192092896).
+		AddValue(MaxHealth, 8.0).
+		AddValue(AttackDamage, 4.0).
+		Build()
+}
+
 // sheepSupplier is the port of Sheep.createAttributes() : Animal.createAnimalAttributes() +
 // MAX_HEALTH 8.0 + MOVEMENT_SPEED 0.23000000417232513 (jar:
 // net/minecraft/world/entity/animal/sheep/Sheep.createAttributes — ldc2_w 8.0d, then the
@@ -259,6 +277,10 @@ var suppliers = map[string]*Supplier{
 	"skeleton": skeletonSupplier(),
 	"creeper":  creeperSupplier(),
 	"spider":   spiderSupplier(),
+	// MOB-NEUT-01 (Phase 36): the wolf — the one missing supplier (the LAST v5 mob). A 1:1 jar copy of
+	// Wolf.createAttributes() (verified bytecode this session). The tamed MAX_HEALTH 40 bump is a runtime
+	// setTame side-effect (Plan B), not the base supplier.
+	"wolf": wolfSupplier(),
 }
 
 // livingCategories is the set of data/entity.Entity.Type values that correspond to a vanilla
