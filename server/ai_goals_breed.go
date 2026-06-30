@@ -1,5 +1,7 @@
 package server
 
+import "bytes"
+
 // ai_goals_breed.go — MOB-SUB-09 (Phase 33, Plan 03, C1): the GO-NATIVE BreedGoal@3 plus the
 // shared identity helper adjustedTickDelay, the faithful Mob.isPanicking read, the Animal.canMate
 // partner gate (entity.go), getFreePartner's same-class scan, and breed() (the
@@ -244,6 +246,18 @@ func (t *TickLoop) breed(e, partner *Entity) {
 	// (Plan A refreshDimensions) and push DATA_BABY_ID=true to the child's trackers (Plan A broadcastBabyFlag).
 	child.breedAge = babyStartAge
 	child.refreshDimensions()
+	// CR-01 (code-review): spawnVanillaPig added the child as an ADULT (breedAge 0 at add → the
+	// spawn-time DATA_BABY_ID carry in spawnDeclaredMob was skipped), and we only set the negative age
+	// AFTER. So the child's metadata slot has NO baby entry — a player who STARTS tracking the baby
+	// after this breed event builds AddEntity/SetEntityData from the stale metadata and renders it
+	// FULL-SIZE. Splice the babyDataEntry onto child.metadata NOW (mirroring the spawn-time carry,
+	// plugin_mob_decl.go:413-417) so late-trackers see DATA_BABY_ID=true; broadcastBabyFlag below
+	// pushes the live update to CURRENT trackers.
+	if child.isBaby() {
+		var buf bytes.Buffer
+		_, _ = babyDataEntry(child.isBaby()).WriteTo(&buf)
+		child.metadata = append(child.metadata, buf.Bytes()...)
+	}
 	t.broadcastBabyFlag(child)
 
 	// finalizeSpawnChildFromBreeding: both parents to the 6000-tick breeding cooldown (setAge(6000)),

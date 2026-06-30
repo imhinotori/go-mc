@@ -14,7 +14,10 @@ package server
 // Animal.canMate, Animal.spawnChildFromBreeding -> Pig.getBreedOffspring (variant nextBoolean) ->
 // finalizeSpawnChildFromBreeding (setAge(6000)×2, resetLove×2, XP 1+nextInt(7)), Goal.adjustedTickDelay.
 
-import "testing"
+import (
+	"bytes"
+	"testing"
+)
 
 // TestAdjustedTickDelay: the identity helper — adjustedTickDelay(n) == n at 20 TPS (NOT
 // reducedTickDelay's ceil(n/2)). The breed/follow thresholds depend on this being 60/10, not 30/5.
@@ -207,6 +210,18 @@ func TestBreed(t *testing.T) {
 	}
 	if !baby.isBaby() {
 		t.Fatal("the bred child is not a baby (isBaby() false)")
+	}
+	// CR-01 (code-review): the bred baby's DATA_BABY_ID must be spliced into its metadata slot, so a
+	// player who STARTS tracking the baby AFTER the breed event (AddEntity/SetEntityData built from
+	// e.metadata) renders it SMALL — not just the one-shot broadcast to breed-time trackers.
+	if len(baby.metadata) == 0 {
+		t.Fatal("CR-01: bred baby has EMPTY metadata — DATA_BABY_ID not spliced; a late tracker renders it full-size")
+	}
+	var wantBaby bytes.Buffer
+	_, _ = babyDataEntry(true).WriteTo(&wantBaby)
+	if !bytes.Contains(baby.metadata, wantBaby.Bytes()) {
+		t.Fatalf("CR-01: bred baby metadata lacks the DATA_BABY_ID=true entry (got % x, want substring % x)",
+			baby.metadata, wantBaby.Bytes())
 	}
 	if orb == nil {
 		t.Fatal("breed() awarded no XP orb (the finalizeSpawnChildFromBreeding 1+nextInt(7) draw)")

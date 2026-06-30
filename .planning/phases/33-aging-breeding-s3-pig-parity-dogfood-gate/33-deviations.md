@@ -199,3 +199,16 @@ The only true fidelity REDUCTIONS are #1 (same-region cut — pre-accepted), #2 
 not goal-load-bearing), #4 (variant assign — draw preserved so the oracle is unaffected), and #7 (NBT
 persist — not gate-load-bearing). #3/#5/#6 are faithful ports (recorded so the gate's line items are not
 silent). None reduce the OBSERVABLE breeding/aging/follow dogfood the gate proves.
+
+## Code-review additions (33-REVIEW.md — cited, masked by the single-candidate dormant oracle)
+
+| # | Item | Vanilla | Sulfur | Kind | Upgrade path |
+|---|------|---------|--------|------|--------------|
+| 8 | BreedGoal/FollowParentGoal partner-cache | Go-native CACHES the partner/parent from canUse | the `.star` goals RE-SCAN every tick (host scan) | **divergence (masked)** | route the `.star` goals through a cached partner handle, OR have the Go-native re-scan too; observable only with MULTIPLE candidate partners/parents in range (the oracle + scenario tests use a single candidate, so byte-identical there). WR-01/WR-03. |
+| 9 | Breed XP orb count | `finalizeSpawnChildFromBreeding` spawns exactly ONE orb of value 1+nextInt(7) | routes through `awardExperienceOrbs` (the death path) which may SPLIT into multiple orbs summing the value | **divergence (RNG-neutral)** | give breed() a single-orb spawn (not the splitting death path); the RNG draw (1+nextInt(7)) + its order are already correct, only the orb COUNT differs. Lockstep-safe (same draw on both halves). WR-02. |
+| 10 | Bred-baby DATA_BABY_ID metadata | child carries the baby flag in its synched data from the first AddEntity | **FIXED (CR-01)**: breed() now splices babyDataEntry onto child.metadata after setting breedAge, so late-trackers render it small | **faithful (fix)** | n/a — fixed + regression-tested (TestBreed asserts the baby metadata carries the entry) |
+
+#8/#9 are observable only in multi-candidate / orb-count edge cases the dogfood gate does not exercise;
+they are RNG-lockstep-safe (the oracle stays byte-identical) and recorded here so they are CITED, not
+silent, per the CLAUDE.md mandate. #10 (CR-01) was a real wire-render-flag break for late-trackers —
+FIXED in this pass, not deferred.
