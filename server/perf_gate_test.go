@@ -122,6 +122,15 @@ func avgTickNs(tb testing.TB, spawn func() (*TickLoop, []*Entity), warmup, ticks
 // ns cap and the relative % cap (set from the documented baseline). It t.Logf's the measured numbers
 // so a CI run records the live baseline (and a near-trip is visible before it fails).
 func TestPerfGate(t *testing.T) {
+	// SKIP under the race detector: this is a WALL-CLOCK timing gate, and -race instruments every
+	// memory access so the absolute ns/(mob·tick) balloons (~5-8×), tripping the absolute cap on
+	// instrumentation overhead, not a real regression (the RELATIVE % stays well within cap). The file
+	// header documents that this gate runs on the default CGO=0 host; the -race correctness pass runs
+	// the equality oracle + nav/float tests (which carry no timing assertion). Guard so a full
+	// `go test -race ./server/` is clean without a -run/-skip filter.
+	if raceEnabled {
+		t.Skip("perf gate is a wall-clock timing test; -race instrumentation inflates the absolute ns (run on the CGO=0 host)")
+	}
 	goNs := avgTickNs(t, func() (*TickLoop, []*Entity) {
 		loop := buildPerfLoop(t)
 		return loop, spawnGoNativePigs(loop, gateMobCount)
