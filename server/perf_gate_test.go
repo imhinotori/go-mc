@@ -70,11 +70,11 @@ const (
 // after its first (wedged) stroll. Phase 30.1's faithful port makes the pig actually AMBLE: it now
 //   (a) draws the FULL vanilla candidate stream per stroll — the probability nextFloat() + 10×
 //       generateRandomDirection (30 nextInt), each an individual Starlark builtin call, vs the old
-//       3 draws; PLUS the 30-float nav.path_to handoff (a 30-arg Starlark call) vs the old 3-arg;
+//       3 draws; PLUS the 31-float nav.path_to handoff (a 31-arg Starlark call: 10 candidates + landMode) vs the old 3-arg;
 //   (b) rolls the gate at the faithful reducedTickDelay(120)=60 (≈2× the old raw-120 cadence); and
 //   (c) RE-ROLLS on arrival (the markArrived fix), so the goal cycles continuously instead of wedging.
 // All of this is REQUIRED by the 1:1 jar mandate and runs identically on the Go-native arm — but on the
-// Go arm it is compiled nextInt/array work, while on the plugin arm every draw + the 30-arg handoff is a
+// Go arm it is compiled nextInt/array work, while on the plugin arm every draw + the 31-arg handoff is a
 // Starlark interpreter call. So the plugin's per-(mob·tick) DELTA legitimately grew ~100× relative to the
 // idle-wedged baseline. The snap itself is RNG-free Go shared by both arms (zero plugin delta). MEASURED
 // (same machine, 3 runs, 100 mobs / warmup 50 / 2000 ticks): go-native ≈ 4.9–5.8 µs, plugin ≈ 16.7–18.5
@@ -82,9 +82,14 @@ const (
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 // maxDeltaNsPerMobTick is the ABSOLUTE per-(mob·tick) plugin-overhead cap (ns) — a COARSE backstop.
-// Phase 30.1 faithful baseline: delta ≈ 11.8–12.7 µs/(mob·tick) (the per-stroll 30-draw + 30-arg
+// Phase 30.1 faithful baseline: delta ≈ 11.8–12.7 µs/(mob·tick) (the per-stroll 31-draw + 31-arg
 // path_to Starlark cost, ~2× cadence, continuous re-roll). Set at 30000 ns (~2.4× the max observed
 // ~12.7 µs) so run-to-run jitter never trips it while a gross absolute regression still does.
+//
+// FUTURE WORK (review WR-04): these caps are deliberately LOOSE post-fix (the absolute is ~2.4× and the
+// relative ~1.4× the measured peak), so they only trip on a gross regression — a tighter, jitter-immune
+// guard would assert the per-stroll Starlark ALLOCATION COUNT (the stable signal in the file header:
+// plugin 10245 vs go-native 3436 allocs) rather than wall-clock ns.
 const maxDeltaNsPerMobTick = 30000.0
 
 // maxDeltaPct is the RELATIVE plugin-overhead cap (% over the go-native baseline) — the machine-portable
