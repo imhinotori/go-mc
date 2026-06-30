@@ -88,3 +88,30 @@ RNG-lockstep rule applies to every new draw (aging tick? breed child? follow re-
 - canMate; getFreePartner nearby-same-class scan.
 - NBT persist InLove + Age.
 This is a LARGE phase — consider whether the planner splits it (S3 subsystem plan + the 2-goals plan + the gate plan) or one big sequential plan. Let the planner decide via the source-audit.
+
+## Animal.mobInteract (THE FEED PATH — verbatim CFR)
+```java
+public InteractionResult mobInteract(Player player, InteractionHand hand) {
+    ItemStack itemStack = player.getItemInHand(hand);
+    if (this.isFood(itemStack)) {                                  // Pig.isFood = is(PIG_FOOD)
+        int age = this.getAge();
+        if (player instanceof ServerPlayer && age == 0 && this.canFallInLove()) {  // ADULT + not already in love
+            this.usePlayerItem(player, hand, itemStack);           // consume 1
+            this.setInLove(serverPlayer);                          // inLove = 600
+            this.playEatingSound();
+            return SUCCESS_SERVER;
+        }
+        if (this.canAgeUp()) {                                     // BABY (age<0) — canAgeUp = age<0 && forcedAgeTimer<=0
+            this.usePlayerItem(player, hand, itemStack);
+            this.ageUp(getSpeedUpSecondsWhenFeeding(-age), true);  // grow toward adult faster
+            this.playEatingSound();
+            return SUCCESS;
+        }
+    }
+    return super.mobInteract(player, hand);
+}
+// getSpeedUpSecondsWhenFeeding(ageDelta) = (int)(ageDelta / 20 * 0.1f) — the baby-grow speedup on feed.
+// usePlayerItem: if (!player.hasInfiniteMaterials()) itemStack.shrink(1).   (survival consumes 1)
+```
+Wire this into handleInteract (attack_dispatch.go:725, currently a v1 no-op): read held item, isFood?
+adult+canFallInLove → setInLove+consume; baby+canAgeUp → ageUp+consume. playEatingSound = a sound emit (reuse the Phase-29 ClientboundSoundEntity seam).
