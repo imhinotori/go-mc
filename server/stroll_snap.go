@@ -102,23 +102,35 @@ func (t *TickLoop) hasMalus(_ *Entity, _, _, _ int) bool { return false }
 // ok=false (no want this roll — re-roll next interval). Draws ZERO randoms — the lockstep stream is
 // untouched.
 //
-// PER-CANDIDATE VALIDATION, JAR ORDER (shared by both WaterAvoidingRandomStrollGoal.getPosition
-// branches): isOutsideLimits || isRestricted || isNotStable (==!isStableDestination), THEN
-// moveUpOutOfSolid (maxY = maxBuildHeightY == ServerLevel.getMaxY()), THEN isWater || hasMalus.
+// PER-CANDIDATE VALIDATION, JAR ORDER (the LandRandomPos.getPos validation — the ~99.9% COMMON branch
+// of WaterAvoidingRandomStrollGoal.getPosition): isOutsideLimits || isRestricted || isNotStable
+// (==!isStableDestination), THEN moveUpOutOfSolid (maxY = dimMaxY == Level.getMaxY()), THEN
+// isWater || hasMalus.
+//
+// FLAG MEANING (jar-verified, see ai_goals_passive.go getPosition): wantLandMode=true is the COMMON
+// (~99.9%, nextFloat() >= probability) LandRandomPos.getPos up-snap path; wantLandMode=false is the
+// RARE (~0.1%, nextFloat() < probability) DefaultRandomPos.getPos NO-up-snap path. This snap is
+// CONSUMED-AS-LAND: it always applies the LandRandomPos validation regardless of wantLandMode (the rare
+// DefaultRandomPos no-up-snap branch is deferred). The flag is computed FAITHFULLY (the corrected
+// nextFloat() >= probability) and recorded on mobAI, NOT silently ignored — it is just not yet routed to
+// a distinct DefaultRandomPos validation path; see the always-snap rationale below.
 //
 // USER-APPROVED OPTIMIZATION (CONTEXT <decisions> ARCHITECTURE DECISION + plan must_haves): the
 // committed target is ALWAYS the moveUpOutOfSolid-snapped WALKABLE COLUMN (solid floor at want_y-1) —
-// never a raw e.y+dy underground point. The bare DefaultRandomPos.getPos path (the ≈99.9% probability
+// never a raw e.y+dy underground point. The rare DefaultRandomPos.getPos path (the ≈0.1% probability
 // branch) does NOT up-snap in vanilla — it commits an underground target and lets PathNavigation
 // resolve it to the nearest reachable surface node at path time. THIS server's groundNavigation marks
 // "arrived" by REACHING THE TARGET BLOCK, so an underground target would leave hasTarget true forever
 // (the mob walks to the surface XZ but never "arrives" → never re-rolls → the WEDGE). Eagerly
 // up-snapping every committed target to the same surface column the vanilla A* would resolve it to is
 // the PERMITTED optimization: it preserves the observable gameplay (the pig walks to that surface
-// column either way) while keeping our arrival detection well-defined. The probability nextFloat()
-// draw is still taken in the goal (lockstep) and m.wantLandMode is recorded for a future upgrade where
-// the navigation resolves underground targets natively (then the DefaultRandomPos no-up-snap path can
-// be restored verbatim); for now both branches snap. CITED so it becomes a real branch later.
+// column either way) while keeping our arrival detection well-defined. Because LandRandomPos IS the
+// ~99.9% common path, always-Land is faithful for the overwhelming majority of rolls; the rare
+// DefaultRandomPos branch differs only by SKIPPING the up-snap, which on flat ground (the only world a
+// v1 pig sees) is a near-no-op. The probability nextFloat() draw is still taken in the goal (lockstep)
+// and m.wantLandMode is recorded for a future upgrade where the navigation resolves underground targets
+// natively (then the DefaultRandomPos no-up-snap path can be restored verbatim, keyed off the now-correct
+// flag). CITED so it becomes a real branch later.
 func (m *mobAI) snapStrollWant(t *TickLoop, e *Entity) (x, y, z float64, ok bool) {
 	for _, c := range m.wantCands {
 		// BlockPos.containing(cand) — floor each axis (negative-correct).

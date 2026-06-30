@@ -32,9 +32,11 @@ STROLL_REDUCED_INTERVAL = 60   # reducedTickDelay(120) == Mth.positiveCeilDiv(12
 STROLL_H = 10             # LandRandomPos/DefaultRandomPos.getPos horizontal radius (Pig: getPos(mob,10,7))
 STROLL_V = 7              # vertical radius
 STROLL_WATER_AVOID_PROBABILITY = 0.001   # WaterAvoidingRandomStrollGoal.PROBABILITY (the Pig 2-arg ctor
-                               # default): getPosition rolls nextFloat() to pick DefaultRandomPos vs
-                               # LandRandomPos. The DRAW is required for lockstep; the chosen branch does
-                               # not change the committed target (the Go runtime snap always up-snaps).
+                               # default): getPosition rolls nextFloat() — >= probability (~99.9% COMMON)
+                               # picks LandRandomPos (up-snap), < probability (~0.1% RARE) picks
+                               # DefaultRandomPos (no up-snap). The DRAW is required for lockstep; the
+                               # Go runtime snap is consumed-as-Land (always up-snaps) so the chosen
+                               # branch does not change the committed target today.
 LOOK_DIST = 6.0           # LookAtPlayerGoal lookDistance (Pig: 6.0f)
 LOOK_PROBABILITY = 0.02   # LookAtPlayerGoal.DEFAULT_PROBABILITY
 LOOK_AROUND_PROBABILITY = 0.02   # RandomLookAroundGoal.canUse: nextFloat() < 0.02f
@@ -67,8 +69,9 @@ def float_tick(entity, world, nav):
 # ============================================================================================
 # canUse (WaterAvoidingRandomStrollGoal.getPosition, jar-verified): the 1-in-reducedTickDelay(interval)
 # gate (DRAW 1: nextInt(60)), THEN — for a not-in-water pig — the probability nextFloat() gate (DRAW 2:
-# nextFloat() < 0.001 picks LandRandomPos vs DefaultRandomPos; the draw is required for lockstep but the
-# branch does not change the committed target — the Go runtime snap always up-snaps), THEN the
+# nextFloat() >= 0.001 picks LandRandomPos (~99.9% COMMON, up-snap), < 0.001 picks DefaultRandomPos
+# (~0.1% RARE, no up-snap); the draw is required for lockstep but the branch does not change the
+# committed target today — the Go runtime snap is consumed-as-Land (always up-snaps)), THEN the
 # RandomPos.generateRandomPos UNCONDITIONAL 10-candidate loop: each candidate = generateRandomDirection in
 # x, y, z ORDER (3 nextInt). 30 draws total. Emit the 10 RAW candidates as 30 FLAT positional floats via
 # nav.path_to(x0,y0,z0,...,x9,y9,z9) → the Go runtime (snapStrollWant) validates + ground-snaps them (the
@@ -80,7 +83,8 @@ def stroll_can_use(entity, world, nav):
     if entity.rand_int(STROLL_REDUCED_INTERVAL) != 0:   # DRAW 1: nextInt(reducedTickDelay(120)=60) gate
         return False
     entity.rand_float()   # DRAW 2: nextFloat() probability gate (WaterAvoidingRandomStrollGoal.getPosition);
-                          # value discarded — required for lockstep, branch does not change the committed target
+                          # >= 0.001 => LandRandomPos (common), < 0.001 => DefaultRandomPos (rare). Value
+                          # discarded here — required for lockstep; branch does not change the committed target
     flat = []
     for _ in range(10):   # RandomPos.generateRandomPos: 10 unconditional candidates (NO break)
         xt = entity.rand_int(2 * STROLL_H + 1) - STROLL_H   # x offset (DRAW order 1 of 3)

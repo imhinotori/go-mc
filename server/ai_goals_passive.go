@@ -101,19 +101,21 @@ type randomStrollGoal struct {
 	wantCandidates [][3]float64
 
 	// wantLandMode is the WaterAvoidingRandomStrollGoal.getPosition branch chosen by the probability
-	// nextFloat() draw: false => the common DefaultRandomPos.getPos path (validate isOutsideLimits/
-	// isRestricted/isNotStable/hasMalus, NO up-snap, NO water reject); true => the rare LandRandomPos
-	// .getPos path (validate isOutsideLimits/isRestricted/isNotStable, THEN moveUpOutOfSolid, THEN
-	// isWater/hasMalus). The runtime snap reads this mode to apply the correct validation. The DRAW
-	// COUNT is identical in both branches (the probability nextFloat + 30 direction draws), so the
-	// bit-fragile pig oracle stays in lockstep regardless of which branch the mode picks.
+	// nextFloat() draw (jar-verified, see getPosition below): true => the COMMON (~99.9%) LandRandomPos
+	// .getPos path (nextFloat() >= probability) — validate isOutsideLimits/isRestricted/isNotStable,
+	// THEN moveUpOutOfSolid, THEN isWater/hasMalus; false => the RARE (~0.1%) DefaultRandomPos.getPos
+	// path (nextFloat() < probability) — validate isOutsideLimits/isRestricted/isNotStable/hasMalus,
+	// NO moveUpOutOfSolid, NO isWater. The runtime snap reads this mode to apply the correct validation.
+	// The DRAW COUNT is identical in both branches (the probability nextFloat + 30 direction draws), so
+	// the bit-fragile pig oracle stays in lockstep regardless of which branch the mode picks.
 	wantLandMode bool
 }
 
 // strollWaterAvoidingProbability is WaterAvoidingRandomStrollGoal.PROBABILITY — the default the
 // Pig's WaterAvoidingRandomStrollGoal(mob, 1.0) 2-arg ctor passes to the 3-arg ctor (jar:
-// `ldc 0.001f; invokespecial <init>(mob, speed, 0.001f)`). getPosition rolls nextFloat() < this to
-// take the rare LandRandomPos.getPos (ground-snap) path; otherwise it takes DefaultRandomPos.getPos.
+// `ldc 0.001f; invokespecial <init>(mob, speed, 0.001f)`). getPosition rolls nextFloat(): when
+// nextFloat() >= this (the ~99.9% COMMON case) it takes the LandRandomPos.getPos (ground-snap) path;
+// when nextFloat() < this (the ~0.1% RARE case) it takes the DefaultRandomPos.getPos path (no up-snap).
 const strollWaterAvoidingProbability = 0.001
 
 func newWaterAvoidingRandomStrollGoal(speed float64) *randomStrollGoal {
@@ -156,16 +158,20 @@ func (g *randomStrollGoal) canUse(t *TickLoop, e *Entity) bool {
 }
 
 // getPosition ports WaterAvoidingRandomStrollGoal.getPosition (the Pig's stroll goal — NOT the bare
-// RandomStrollGoal.getPosition). For a NOT-in-water pig the jar is:
+// RandomStrollGoal.getPosition). The jar bytecode (javap-verified this session) is:
 //
-//	if (mob.isInWater()) { ... }                                   // skipped: a v1 flat-world pig
-//	if (mob.getRandom().nextFloat() >= probability)                // probability == 0.001f
-//	    return super.getPosition();                                // RandomStrollGoal -> DefaultRandomPos.getPos(mob,10,7)
-//	return LandRandomPos.getPos(mob, 10, 7);                       // the rare (0.1%) ground-snap path
+//	if (mob.isInWater()) {                                          // skipped: a v1 flat-world pig
+//	    Vec3 p = LandRandomPos.getPos(mob, 15, 7);                  // in-water: radius-15 LandRandomPos
+//	    return p == null ? super.getPosition() : p;                 // (NO probability nextFloat in this arm)
+//	}
+//	if (mob.getRandom().nextFloat() < probability)                 // probability == 0.001f; `iflt 67`
+//	    return super.getPosition();                                // RARE (~0.1%): RandomStrollGoal -> DefaultRandomPos.getPos(mob,10,7)
+//	return LandRandomPos.getPos(mob, 10, 7);                       // COMMON (~99.9%): the ground-snap path
 //
-// So the COMMON path (≈99.9%) is DefaultRandomPos.getPos (validate isOutsideLimits/isRestricted/
-// isNotStable/hasMalus over the raw candidate, NO moveUpOutOfSolid, NO isWater) and the RARE path is
-// LandRandomPos.getPos (the same first three rejects, THEN moveUpOutOfSolid, THEN isWater/hasMalus).
+// So the COMMON path (≈99.9%, nextFloat() >= probability) is LandRandomPos.getPos (validate
+// isOutsideLimits/isRestricted/isNotStable over the raw candidate, THEN moveUpOutOfSolid, THEN
+// isWater/hasMalus) and the RARE path (≈0.1%, nextFloat() < probability) is DefaultRandomPos.getPos
+// (validate isOutsideLimits/isRestricted/isNotStable/hasMalus, NO moveUpOutOfSolid, NO isWater).
 // BOTH feed RandomPos.generateRandomPos(mob, supplier) == the UNCONDITIONAL `for i<10` (NO break)
 // best-of-10 loop weighted by mob::getWalkTargetValue (all 0.0 → first non-null wins).
 //
@@ -176,16 +182,24 @@ func (g *randomStrollGoal) canUse(t *TickLoop, e *Entity) bool {
 // COUNT is identical in both branches (1 nextFloat + 30 nextInt), so the bit-fragile pig oracle stays
 // byte-identical regardless of which branch the probability draw selects.
 //
-//	[VERIFIED javap WaterAvoidingRandomStrollGoal.getPosition: isInWater?branch; nextFloat() >= probability
-//	 -> RandomStrollGoal.getPosition (DefaultRandomPos.getPos 10,7); else LandRandomPos.getPos 10,7.]
+//	[VERIFIED javap WaterAvoidingRandomStrollGoal.getPosition: isInWater?branch (LandRandomPos 15,7, NO
+//	 probability draw); else nextFloat() (off 42); `fcmpl; iflt 67` -> nextFloat() < probability returns
+//	 RandomStrollGoal.getPosition (DefaultRandomPos.getPos 10,7); fall-through (>=) -> LandRandomPos.getPos 10,7.]
 //	[VERIFIED javap RandomPos.generateRandomPos(Supplier,ToDoubleFunction): for i<10, NO break; keep the
 //	 STRICTLY > bestWeight candidate (first max wins ties); return atBottomCenterOf(best) or null.]
 func (g *randomStrollGoal) getPosition(_ *TickLoop, e *Entity) (candidates [][3]float64, ok bool) {
 	r := mobRandom(e)
-	// (mob.isInWater() — a v1 flat-world pig is never in water; the in-water radius-15 branch is a
-	// cited no-op that draws ZERO randoms here, faithful-scope. Upgrade when fluid nav lands.)
-	// Probability gate: nextFloat() >= probability → DefaultRandomPos (common); else LandRandomPos.
-	g.wantLandMode = r.nextFloat() < g.probability
+	// (mob.isInWater() — a v1 flat-world pig is never in water; the in-water radius-15 LandRandomPos
+	// branch is a cited no-op that draws ZERO randoms here, faithful-scope. NOTE the jar draws the
+	// probability nextFloat() ONLY in the not-in-water arm (the in-water arm goes straight to
+	// LandRandomPos 15,7), so this unconditional draw matches the jar for the not-in-water case a v1
+	// flat-world pig is always in; an in-water pig would need this draw GATED behind !isInWater() to
+	// stay byte-identical. Upgrade when fluid nav lands.)
+	// Probability gate (jar `nextFloat(); fcmpl; iflt 67`): nextFloat() >= probability → LandRandomPos
+	// (the COMMON ~99.9% up-snap path, wantLandMode=true); nextFloat() < probability → DefaultRandomPos
+	// (the RARE ~0.1% no-up-snap path, wantLandMode=false). The SAME single nextFloat() draw yields the
+	// flag — only which boolean it maps to is corrected here; the draw count/order is unchanged.
+	g.wantLandMode = r.nextFloat() >= g.probability
 	cands := make([][3]float64, 0, 10)
 	for i := 0; i < 10; i++ { // RandomPos.generateRandomPos: for i<10, NO break (always 10 supplier calls)
 		xt, yt, zt := generateRandomDirection(r, strollHorizontalRadius, strollVerticalRadius)

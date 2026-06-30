@@ -54,10 +54,14 @@ type mobAI struct {
 	// pig and the bit-fragile pig oracle stays byte-identical.
 	wantCands    [10][3]float64
 	hasWantCands bool
-	// wantLandMode selects the snap validation: false => DefaultRandomPos.getPos (validate
-	// isOutsideLimits/isRestricted/isNotStable/hasMalus, NO up-snap, NO water), true => LandRandomPos
-	// .getPos (validate isOutsideLimits/isRestricted/isNotStable, THEN moveUpOutOfSolid, THEN
-	// isWater/hasMalus). Set by the stroll goal's probability nextFloat() draw (CONTEXT split).
+	// wantLandMode selects the snap validation (jar-verified, see ai_goals_passive.go getPosition):
+	// true => the COMMON (~99.9%, nextFloat() >= probability) LandRandomPos.getPos path (validate
+	// isOutsideLimits/isRestricted/isNotStable, THEN moveUpOutOfSolid, THEN isWater/hasMalus); false =>
+	// the RARE (~0.1%, nextFloat() < probability) DefaultRandomPos.getPos path (validate isOutsideLimits/
+	// isRestricted/isNotStable/hasMalus, NO up-snap, NO water). Set by the stroll goal's probability
+	// nextFloat() draw (CONTEXT split). CONSUMED-AS-LAND today: snapStrollWant always applies the
+	// LandRandomPos (up-snap) validation — see its doc — so the rare DefaultRandomPos no-up-snap branch
+	// is a deferred-but-correctly-computed flag, NOT silently ignored.
 	wantLandMode bool
 
 	// rng is the per-mob seeded RandomSource (ai_random.go) — the Mob.getRandom() analogue every
