@@ -16,7 +16,11 @@ import (
 // dbgSpawnedEID parses the "[dbg] spawned pig eid=N at (...)" SystemChat ack so the test tracks the
 // EXACT pig /dbg created, ignoring any natural-spawn pigs roaming the world.
 func dbgSpawnedEID(c *Client) (int32, bool) {
-	for _, m := range c.RecentChat(30) {
+	// Scan NEWEST-first so repeated /dbg spawns (a test that spawns several mobs in sequence) read the
+	// LATEST spawn ack, not the first stale one still in the chat ring.
+	recent := c.RecentChat(30)
+	for k := len(recent) - 1; k >= 0; k-- {
+		m := recent[k]
 		i := strings.Index(m, "eid=")
 		if i < 0 || !strings.Contains(m, "[dbg]") {
 			continue

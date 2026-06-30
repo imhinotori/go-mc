@@ -59,6 +59,8 @@ var testKit = []testKitStack{
 	{slot: 10, id: item.Cobblestone.ID, count: 32}, // main row 1: partial stack for double-click collect
 	{slot: 11, id: item.Sand.ID, count: 64},        // main row 1: sand (place sugar cane ON it, next to water)
 	{slot: 12, id: item.WaterBucket.ID, count: 1},  // main row 1: water source for sugar-cane survival
+	{slot: 13, id: item.Bucket.ID, count: 1},       // main row 1: empty bucket — milk a cow (Cow.mobInteract bucket->milk_bucket, P34); swap to hotbar via inventory to hold
+	{slot: 14, id: item.Shears.ID, count: 1},       // main row 1: shears — shear a sheep (Sheep.mobInteract -> wool drop + setSheared, P34); swap to hotbar to hold
 	{slot: 35, id: gateSpawnEggID, count: 8},       // main row 3 (last slot): PLUGIN-07 gate-only custom-mob spawn egg
 }
 
