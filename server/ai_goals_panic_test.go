@@ -68,6 +68,14 @@ func TestPanicGoalFleesOnPanicDamage(t *testing.T) {
 		t.Fatal("applyDamageEntity did not set hasLastDamage (the not-null keystone signal)")
 	}
 
+	// WR-03 (code-review): assert PanicGoal SPECIFICALLY fired — a direct canUse==true proves the
+	// panic path, not stroll@6 (which can independently set hasTarget and false-green the drive loop
+	// below). canUse is deterministic given the panic-causing lastDamageSource just injected.
+	if !newPanicGoal(panicSpeedModifier).canUse(loop, pig) {
+		t.Fatal("panicGoal.canUse is false after a panic-causing hit — PanicGoal did not fire " +
+			"(shouldPanic = hasLastDamage && is(panic_causes))")
+	}
+
 	acquired := false
 	for i := 0; i < ticks; i++ {
 		runtime.Gosched()
