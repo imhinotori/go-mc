@@ -70,7 +70,8 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
  (completed 2026-06-29)
 - [x] **Phase 30.1: Faithful RandomStrollGoal Target Selection (BUGFIX)** — re-port `LandRandomPos.getPos` (best-of-10 weighted + `generateRandomDirection` x/y/z draw order + `movePosUpOutOfSolid` ground-snap + `isStableDestination`/water/malus rejection) so the pig's stroll target is always reachable; fixes the "walk a little then jam against a block forever" wedge. RNG-sensitive → lockstep `newPigAI` + both `vanilla_pig/main.star`.
  (completed 2026-06-30)
-- [x] **Phase 31: PanicGoal (S2 consumer)** — PanicGoal@1 on the pig reading the real `lastDamageSource` + the panic-causing tag set. (completed 2026-06-30)
+- [x] **Phase 31: PanicGoal (S2 consumer)** — PanicGoal@1 on the pig reading the real `lastDamageSource` + the panic-causing tag set.
+ (completed 2026-06-30)
 - [ ] **Phase 32: Held-Item + Item Tags (S4)** — nearest-player held-item read + jar-extracted item-food tags; TemptGoal@4 ×2 on the pig.
 - [ ] **Phase 33: Aging + Breeding (S3) — Pig Parity / DOGFOOD GATE** — animal aging + breeding; BreedGoal@3 + FollowParentGoal@5 on the pig closes the full 8-goal oracle. HARD GATE before any new mob.
 - [ ] **Phase 34: New Passive Mobs** — cow/sheep/chicken as jar-faithful Starlark plugins.
