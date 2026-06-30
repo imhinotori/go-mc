@@ -141,6 +141,10 @@ func (h *entityHandle) Attr(name string) (starlark.Value, error) {
 		return h.bound("attribute", h.attribute), nil
 	case "damage_in_tag":
 		return h.bound("damage_in_tag", h.damageInTag), nil
+	case "nearest_player_holding_carrot_on_a_stick":
+		return h.bound("nearest_player_holding_carrot_on_a_stick", h.nearestPlayerHoldingCarrotOnAStick), nil
+	case "nearest_player_holding_pig_food":
+		return h.bound("nearest_player_holding_pig_food", h.nearestPlayerHoldingPigFood), nil
 	case "set_look":
 		return h.bound("set_look", h.setLook), nil
 	case "set_look_at":
@@ -233,6 +237,7 @@ func (h *entityHandle) AttrNames() []string {
 	return []string{
 		"x", "y", "z", "yaw", "pitch", "on_ground", "type", "velocity", "health",
 		"was_hurt", "last_damage_type", "has_last_damage", "damage_in_tag",
+		"nearest_player_holding_carrot_on_a_stick", "nearest_player_holding_pig_food",
 		"in_water", "fluid_height", "in_lava",
 		"attribute", "move_to", "set_velocity", "set_attribute",
 		"set_look", "set_look_at", "rand_int", "rand_float", "rand_double", "get_state", "set_state",
@@ -289,6 +294,54 @@ func (h *entityHandle) damageInTag(_ *starlark.Thread, b *starlark.Builtin,
 		return nil, err
 	}
 	return starlark.Bool(e.lastDamageSource.is(tagName)), nil
+}
+
+// nearestPlayerHoldingCarrotOnAStick / nearestPlayerHoldingPigFood are the host-computed
+// nearest-tempt-player scans (MOB-SUB-06). They mirror damageInTag (the HOST owns the item-id set:
+// the carrot_on_a_stick literal id 887 / the pig_food tag) AND worldHandle.nearestPlayer (the
+// tuple-or-None return) — the .star NEVER sees an item id, only a position tuple or None. One
+// positional arg: range (the TEMPT_RANGE the goal passes). Re-resolved via h.resolve() (the
+// region-bound store, NOT t.cur() — Pitfall 7). Gated on capEntitiesRead (matching damageInTag).
+func (h *entityHandle) nearestPlayerHoldingCarrotOnAStick(_ *starlark.Thread, b *starlark.Builtin,
+	args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if !h.caps.has(capEntitiesRead) {
+		return nil, capError("entities.read")
+	}
+	var maxDist float64
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 1, &maxDist); err != nil {
+		return nil, err
+	}
+	e, err := h.resolve()
+	if err != nil {
+		return nil, err
+	}
+	// Items.CARROT_ON_A_STICK literal (data/item/item.go:5340, id 887) — vanilla pred i.is(CARROT_ON_A_STICK).
+	x, y, z, ok := nearestPlayerHolding(h.t, e, maxDist, func(id int32) bool { return id == 887 })
+	if !ok {
+		return starlark.None, nil
+	}
+	return starlark.Tuple{starlark.Float(x), starlark.Float(y), starlark.Float(z)}, nil
+}
+
+func (h *entityHandle) nearestPlayerHoldingPigFood(_ *starlark.Thread, b *starlark.Builtin,
+	args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if !h.caps.has(capEntitiesRead) {
+		return nil, capError("entities.read")
+	}
+	var maxDist float64
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 1, &maxDist); err != nil {
+		return nil, err
+	}
+	e, err := h.resolve()
+	if err != nil {
+		return nil, err
+	}
+	// ItemTags.PIG_FOOD (data/tag/tags.go:305 {1257,1258,1317}) — vanilla pred i.is(ItemTags.PIG_FOOD).
+	x, y, z, ok := nearestPlayerHolding(h.t, e, maxDist, func(id int32) bool { return itemInTag(id, "pig_food") })
+	if !ok {
+		return starlark.None, nil
+	}
+	return starlark.Tuple{starlark.Float(x), starlark.Float(y), starlark.Float(z)}, nil
 }
 
 // moveTo(x,y,z) MUTATES through the nav seam: setWantTarget -> groundNavigation.requestPath (the

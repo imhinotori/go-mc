@@ -364,6 +364,55 @@ func nearestPlayerAt(t *TickLoop, cx, cy, cz, maxDist float64) (x, y, z float64,
 	return x, y, z, ok
 }
 
+// nearestPlayerHolding is the TEMPT_TARGETING scan (MOB-SUB-06): the nearest player within maxDist
+// who holds a tempt item in MAIN or OFF hand. It ports vanilla
+// getServerLevel(mob).getNearestPlayer(TEMPT_TARGETING.range(mob.getAttributeValue(TEMPT_RANGE)), mob)
+// where TEMPT_TARGETING = forNonCombat().ignoreLineOfSight() carrying the shouldFollow selector
+// (`items.test(mainHand) || items.test(offhand)`) applied DURING the scan (TargetingConditions.test).
+//
+// It is a SIBLING of nearestPlayerAt — NOT a mutation: nearestPlayerAt is the shared seam reused by
+// worldHandle.nearestPlayer (plugin_entity.go) AND lookAtPlayerGoal, so changing its signature would
+// ripple to both. The loop body is the identical tick-owned t.players scan with the shouldFollow gate
+// inserted BEFORE the distance test (vanilla applies the TargetingConditions selector while scanning).
+// pred takes the held item id (the carrot_on_a_stick literal == 887 OR itemInTag(id,"pig_food")).
+// Tick-owned read (TICK-05). Draws ZERO RNG.
+func nearestPlayerHolding(t *TickLoop, e *Entity, maxDist float64, pred func(itemID int32) bool) (x, y, z float64, ok bool) {
+	best := maxDist * maxDist
+	for _, p := range t.players {
+		if p == nil {
+			continue
+		}
+		if !playerHoldsTempt(p, pred) { // shouldFollow selector, BEFORE the distance test
+			continue
+		}
+		dx, dy, dz := p.x-e.x, p.y-e.y, p.z-e.z
+		d2 := dx*dx + dy*dy + dz*dz
+		if d2 <= best {
+			best = d2
+			x, y, z, ok = p.x, p.y, p.z, true
+		}
+	}
+	return x, y, z, ok
+}
+
+// playerHoldsTempt ports TemptGoal.shouldFollow(LivingEntity) =
+// `items.test(p.getMainHandItem()) || items.test(p.getOffhandItem())`: it reads the player's MAIN hand
+// (inv.get(heldWindowSlot(inv.heldSlot)), block_interact.go:187) AND OFF hand (offhandWindowSlot 45)
+// and applies pred to either. The empty-guard slotIsEmpty + int32(stack.ItemID) match the held-item
+// read at block_interact.go:197 (an empty hand never matches — ItemStack.EMPTY fails items.test).
+func playerHoldsTempt(p *tickPlayer, pred func(itemID int32) bool) bool {
+	inv := ensureInventory(p)
+	main := inv.get(heldWindowSlot(inv.heldSlot))
+	if !slotIsEmpty(main) && pred(int32(main.ItemID)) {
+		return true
+	}
+	off := inv.get(offhandWindowSlot)
+	if !slotIsEmpty(off) && pred(int32(off.ItemID)) {
+		return true
+	}
+	return false
+}
+
 // --- randomLookAroundGoal ---------------------------------------------------------------
 
 // randomLookAroundGoal ports RandomLookAroundGoal (flags {MOVE, LOOK} — jar-confirmed, NOT

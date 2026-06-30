@@ -22,6 +22,13 @@ import (
 // semantics (crafting, shift-click) are beyond v1.
 const playerInventorySize = 46
 
+// offhandWindowSlot is the single off-hand slot (Inventory.OFFHAND_SLOT) as a player-inventory
+// WINDOW index: the LAST index of the 46-slot window (4 craft + 4 armor + 36 main + 1 offhand → 45).
+// The off-hand sibling of heldWindowSlot (block_interact.go:326). Used by the held-item read
+// (playerHoldsTempt, ai_goals_passive.go) since TemptGoal.shouldFollow tests main || off hand.
+// (Equal to item_use.go's offHandMenuSlot 45 — same physical slot, named here for the S4 read seam.)
+const offhandWindowSlot = 45
+
 // playerContainerID is the window id of the player's own inventory (always 0 in vanilla).
 const playerContainerID = 0
 
