@@ -26,9 +26,15 @@ FLUID_JUMP_THRESHOLD = 0.4     # Entity.getFluidJumpThreshold for the pig: getEy
                                # Go oracle's t.getFluidJumpThreshold(e) == 0.4). FloatGoal.canUse compares
                                # entity.fluid_height (WATER) > this. In the DRY oracle in_water is false so
                                # canUse short-circuits before this comparison -> the value never gates a draw.
-STROLL_INTERVAL = 120     # RandomStrollGoal.DEFAULT_INTERVAL (the 1-in-N chance gate)
-STROLL_H = 10             # DefaultRandomPos.getPos horizontal radius (Pig: getPosition()=getPos(mob,10,7))
-STROLL_V = 7              # DefaultRandomPos.getPos vertical radius
+STROLL_INTERVAL = 120     # RandomStrollGoal.DEFAULT_INTERVAL (before Goal.reducedTickDelay halves it)
+STROLL_REDUCED_INTERVAL = 60   # reducedTickDelay(120) == Mth.positiveCeilDiv(120,2) == 60: canUse rolls
+                               # nextInt(60), NOT nextInt(120) (the faithful gate; LOCKSTEP with the Go oracle)
+STROLL_H = 10             # LandRandomPos/DefaultRandomPos.getPos horizontal radius (Pig: getPos(mob,10,7))
+STROLL_V = 7              # vertical radius
+STROLL_WATER_AVOID_PROBABILITY = 0.001   # WaterAvoidingRandomStrollGoal.PROBABILITY (the Pig 2-arg ctor
+                               # default): getPosition rolls nextFloat() to pick DefaultRandomPos vs
+                               # LandRandomPos. The DRAW is required for lockstep; the chosen branch does
+                               # not change the committed target (the Go runtime snap always up-snaps).
 LOOK_DIST = 6.0           # LookAtPlayerGoal lookDistance (Pig: 6.0f)
 LOOK_PROBABILITY = 0.02   # LookAtPlayerGoal.DEFAULT_PROBABILITY
 LOOK_AROUND_PROBABILITY = 0.02   # RandomLookAroundGoal.canUse: nextFloat() < 0.02f
@@ -59,27 +65,35 @@ def float_tick(entity, world, nav):
 # @6  WaterAvoidingRandomStrollGoal(mob, 1.0)   flags {MOVE}
 # ports net.minecraft.world.entity.ai.goal.RandomStrollGoal (WaterAvoidingRandomStrollGoal base)
 # ============================================================================================
-# canUse (bytecode): [passenger/noActionTime gates omitted — a v1 passive pig has no rider/combat,
-# matching the Go oracle's documented faithful-scope] -> getRandom().nextInt(reducedTickDelay(interval))
-# != 0 ? false : getPosition() (DefaultRandomPos.getPos = 3 nextInt draws) -> stash wantedX/Y/Z.
-# DRAW ORDER: the interval gate FIRST (DRAW 1), THEN the 3 offset draws (DRAWS 2,3,4) — never the
-# offset before the gate (Pitfall 1). reducedTickDelay(120)==120 at 20 TPS (matches the Go oracle's
-# raw nextInt(120)).
+# canUse (WaterAvoidingRandomStrollGoal.getPosition, jar-verified): the 1-in-reducedTickDelay(interval)
+# gate (DRAW 1: nextInt(60)), THEN — for a not-in-water pig — the probability nextFloat() gate (DRAW 2:
+# nextFloat() < 0.001 picks LandRandomPos vs DefaultRandomPos; the draw is required for lockstep but the
+# branch does not change the committed target — the Go runtime snap always up-snaps), THEN the
+# RandomPos.generateRandomPos UNCONDITIONAL 10-candidate loop: each candidate = generateRandomDirection in
+# x, y, z ORDER (3 nextInt). 30 draws total. Emit the 10 RAW candidates as 30 FLAT positional floats via
+# nav.path_to(x0,y0,z0,...,x9,y9,z9) → the Go runtime (snapStrollWant) validates + ground-snaps them (the
+# architecture split — the .star does NO world read; the per-goal scratch is float-only so a list cannot be
+# stashed). The commit lands in can_use (path_to fires on canUse success), matching the Go goal which draws
+# in getPosition (called from canUse). DRAW ORDER must match the Go oracle (gate, probability, then xt/yt/zt
+# per candidate) or the bit-fragile pig oracle desyncs on the first diverging tick.
 def stroll_can_use(entity, world, nav):
-    if entity.rand_int(STROLL_INTERVAL) != 0:   # DRAW 1: the 1-in-interval gate
+    if entity.rand_int(STROLL_REDUCED_INTERVAL) != 0:   # DRAW 1: nextInt(reducedTickDelay(120)=60) gate
         return False
-    dx = entity.rand_int(2 * STROLL_H + 1) - STROLL_H   # DRAW 2: x offset in [-10,10]
-    dz = entity.rand_int(2 * STROLL_H + 1) - STROLL_H   # DRAW 3: z offset in [-10,10]
-    dy = entity.rand_int(2 * STROLL_V + 1) - STROLL_V   # DRAW 4: y offset in [-7,7]
-    entity.set_state("want_x", entity.x + dx)   # vanilla wantedX/Y/Z (stashed for start())
-    entity.set_state("want_y", entity.y + dy)
-    entity.set_state("want_z", entity.z + dz)
+    entity.rand_float()   # DRAW 2: nextFloat() probability gate (WaterAvoidingRandomStrollGoal.getPosition);
+                          # value discarded — required for lockstep, branch does not change the committed target
+    flat = []
+    for _ in range(10):   # RandomPos.generateRandomPos: 10 unconditional candidates (NO break)
+        xt = entity.rand_int(2 * STROLL_H + 1) - STROLL_H   # x offset (DRAW order 1 of 3)
+        yt = entity.rand_int(2 * STROLL_V + 1) - STROLL_V   # y offset (DRAW order 2 of 3) <- y BEFORE z
+        zt = entity.rand_int(2 * STROLL_H + 1) - STROLL_H   # z offset (DRAW order 3 of 3)
+        flat.append(entity.x + xt)
+        flat.append(entity.y + yt)
+        flat.append(entity.z + zt)
+    nav.path_to(*flat)   # 30 positional floats (x0,y0,z0,...,x9,y9,z9) -> setWantCandidates -> the snap
     return True
 
-# start (bytecode): navigation.moveTo(wantedX, wantedY, wantedZ, speed). The Go oracle commits the
-# stashed want via setWantTarget; here nav.path_to is that seam.
-def stroll_start(entity, world, nav):
-    nav.path_to(entity.get_state("want_x"), entity.get_state("want_y"), entity.get_state("want_z"))
+# start: the candidates are committed in can_use (above), so start is a no-op. The goal() builtin makes
+# start optional; the stroll goal declaration drops the start kwarg (no stroll_start).
 
 # canContinueToUse (bytecode): !navigation.isDone(). The Go oracle: e.ai.hasTarget. nav.has_path is
 # that seam.
@@ -195,12 +209,12 @@ declare_mob(
             tick = float_tick,
             requires_update_every_tick = True,
         ),
-        # @6 WaterAvoidingRandomStrollGoal [MOVE] — empty tick (start/continue carry it).
+        # @6 WaterAvoidingRandomStrollGoal [MOVE] — can_use commits the candidates (via path_to), so NO
+        # start kwarg; stop/continue carry the rest.
         goal(
             priority = 6,
             flags = ["MOVE"],
             can_use = stroll_can_use,
-            start = stroll_start,
             stop = stroll_stop,
             can_continue = stroll_continue,
         ),

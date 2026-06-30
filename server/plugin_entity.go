@@ -57,6 +57,16 @@ type entityHandle struct {
 // Centralizing it keeps every read/mutate path resolving against the SAME store.
 func (h *entityHandle) store() *entityStore {
 	if h.region != nil {
+		// Fall back to the entity's ACTUAL owning region when the position-bound store does not hold
+		// the id — a mob that walked into another region's column is bound to the position-derived
+		// region in handles(), but its store entry transfers 1+ ticks later (or never, in a direct-drive
+		// test). See navHandle.store() for the full rationale (the region-crossing-mob lockstep fix).
+		if _, ok := h.region.entities.get(h.id); ok {
+			return h.region.entities
+		}
+		if r := h.t.owningRegion(h.id); r != nil {
+			return r.entities
+		}
 		return h.region.entities
 	}
 	return h.t.cur().entities
@@ -688,10 +698,24 @@ type navHandle struct {
 	caps   capSet
 }
 
-// store returns the nav handle's owning-region store (region-bound) or the t.only() fallback.
+// store returns the nav handle's owning-region store (region-bound) or the t.only() fallback. It
+// falls back to the entity's ACTUAL owning region (owningRegion scan) when the position-bound store
+// does not contain the id: a mob that walked into a different region's column is bound (in handles())
+// to the position-derived region, but its store entry only transfers on applyCrossRegionTransfers
+// (1+ ticks later, or never in a direct-drive test harness). Without this fallback a nav callback for
+// a region-crossing mob errors "entity no longer exists" and the goal silently stops — which desyncs
+// the bit-fragile pig oracle the moment the faithful stroll first walks the mob across a region seam.
+// Resolving against the real store keeps the plugin path identical to the Go-native path (which reads
+// e.ai directly, never through a store), so both stay in lockstep across region boundaries.
 func (h *navHandle) store() *entityStore {
 	if h.region != nil {
-		return h.region.entities
+		if _, ok := h.region.entities.get(h.id); ok {
+			return h.region.entities
+		}
+		if r := h.t.owningRegion(h.id); r != nil {
+			return r.entities
+		}
+		return h.region.entities // not found anywhere — return the bound store so get() errors cleanly
 	}
 	return h.t.cur().entities
 }
@@ -818,10 +842,6 @@ func (h *navHandle) pathTo(_ *starlark.Thread, b *starlark.Builtin,
 	if !h.caps.has(capNav) {
 		return nil, capError("nav")
 	}
-	var x, y, z float64
-	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 3, &x, &y, &z); err != nil {
-		return nil, err
-	}
 	e, ok := h.store().get(h.id)
 	if !ok {
 		return nil, fmt.Errorf("entity %d no longer exists", h.id)
@@ -829,6 +849,40 @@ func (h *navHandle) pathTo(_ *starlark.Thread, b *starlark.Builtin,
 	if e.ai == nil {
 		return nil, fmt.Errorf("entity %d has no AI (cannot path_to)", h.id)
 	}
-	e.ai.setWantTarget(x, y, z)
+	// path_to is OVERLOADED on arity (a HANDOFF overload — the want payload — NOT a new method or a new
+	// world-solidity handle; the .star still reads no world solidity). 3 floats = a single legacy target
+	// (setWantTarget, unchanged). 30 floats = the 10 RAW stroll candidates as x0,y0,z0,...,x9,y9,z9
+	// (candidate-major) → setWantCandidates → the Go runtime snap (Phase 30.1). The per-goal scratch is
+	// float-only (set_state coerces via AsFloat), so a candidate LIST cannot cross via set_state — the 30
+	// flat floats are AsFloat-compatible. kwargs are not accepted (positional only).
+	switch len(args) {
+	case 3:
+		var x, y, z float64
+		if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 3, &x, &y, &z); err != nil {
+			return nil, err
+		}
+		e.ai.setWantTarget(x, y, z) // legacy single target — UNCHANGED
+	case 30:
+		if len(kwargs) != 0 {
+			return nil, fmt.Errorf("path_to: the 30-float candidate form takes no keyword args")
+		}
+		var cands [10][3]float64
+		for i := 0; i < 30; i++ {
+			f, fok := starlark.AsFloat(args[i])
+			if !fok {
+				return nil, fmt.Errorf("path_to: arg %d must be a number, got %s", i, args[i].Type())
+			}
+			cands[i/3][i%3] = f
+		}
+		// landMode=false: the Go stroll goal derives wantLandMode from the probability nextFloat() draw,
+		// but the runtime snap currently up-snaps EVERY committed target (the user-approved optimization —
+		// see stroll_snap.go), so the mode value does NOT affect the committed target. The plugin draws
+		// the SAME probability nextFloat() for lockstep but the bool itself is inert, so passing false here
+		// commits the identical target the Go side commits. (When the deferred no-up-snap branch lands, the
+		// .star will pass the real mode as a 31st arg.)
+		e.ai.setWantCandidates(cands, false)
+	default:
+		return nil, fmt.Errorf("path_to: expected 3 floats (target) or 30 floats (10 candidates), got %d", len(args))
+	}
 	return starlark.None, nil
 }
