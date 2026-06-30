@@ -352,11 +352,18 @@ func TestSpiderBootLoads(t *testing.T) {
 	}
 }
 
-// --- TestSpiderBehavior ------------------------------------------------------------------------
+// --- TestSpiderBehavior (THE phase goal: hunt + attack) ----------------------------------------
 
-// TestSpiderBehavior: a spawned spider is a MONSTER (categoryOf -> categoryMonster; the jar
-// EntityType.SPIDER is MobCategory.MONSTER) and its AI ticks without error over many ticks (the shared
-// goals + the leap/daylight goals drive it). A smoke drive that the spider is a live, ticking mob.
+// TestSpiderBehavior: a spawned spider next to a player ACQUIRES the player (attackTargetID ==
+// player.id, via the kind-routed nearestAttackableTargetGoal) AND deals the player REAL ATTACK_DAMAGE
+// (the kind-routed spider_attack — meleeAttackGoal + the daylight-flee — fires doHurtTarget through the
+// Phase-29 keystone). 35-05 shipped a spider whose .star LEAPS but whose melee DAMAGE was UNWIRED (the
+// meleeAttackGoal was never instantiated for a declared mob); 35-01b's kind= seam wires it — this proves
+// the seam closes the unwired-melee gap with REAL player damage, not just a leap.
+//
+// Driven at NIGHT (gametime in the dark window) so the SpiderAttackGoal does NOT roll the daylight-flee
+// (1/100 target-drop) — the spider keeps its target and the melee lands deterministically. The daylight
+// flee itself is pinned by TestSpiderAttackDaylightGate (the Go-native goal test) above.
 func TestSpiderBehavior(t *testing.T) {
 	loop, floorY, clock := spiderLoop(t)
 
@@ -364,20 +371,42 @@ func TestSpiderBehavior(t *testing.T) {
 		t.Fatalf("categoryOf(Spider) = %v, want categoryMonster (vanilla EntityType.SPIDER is MobCategory.MONSTER)", got)
 	}
 
+	// NIGHT: isDarkEnoughToSpawn true -> the spider_attack never rolls the daylight-flee, so it holds its
+	// acquired target and melees. (Daylight would 1/100-drop the target — pinned separately.)
+	loop.gametime = 18000
+
 	spider := spawnSpider(loop, 8.5, float64(floorY+1), 8.5)
 	spider.onGround = true
 	if spider.ai == nil {
 		t.Fatal("spider has no AI to drive")
 	}
 
+	p := combatTestPlayer(loop, 8.5, float64(floorY+1), 8.5, 7900)
+	startHealth := p.health
+
+	acquired := false
 	for i := 0; i < 200; i++ {
 		clock.add(tickStep)
 		loop.advance(clock.Now())
+		if spider.ai.getTarget() == p.entityID {
+			acquired = true
+		}
+		if p.health < startHealth {
+			break
+		}
 	}
+
 	if _, ok := loop.only().entities.get(spider.id); !ok {
 		t.Fatal("the spider vanished from the store after the drive")
 	}
-	if spider.typ != entity.Spider.ID {
-		t.Fatalf("spider typ drifted to %d, want entity.Spider.ID %d", spider.typ, entity.Spider.ID)
+	if !acquired {
+		t.Fatal("the spider never ACQUIRED the player as its target — the kind-routed nearestAttackableTargetGoal did not hunt")
+	}
+	if p.health >= startHealth {
+		t.Fatalf("the player took NO damage (health %v >= start %v) — the kind-routed spider_attack did not deal ATTACK_DAMAGE (the unwired-melee gap 35-05 left)", p.health, startHealth)
+	}
+	// The damage dealt is the spider's ATTACK_DAMAGE (the Monster base 2.0), no armor on the player.
+	if dealt := startHealth - p.health; dealt != float32(spider.getAttributeValue(attribute.AttackDamage)) {
+		t.Fatalf("player lost %v health, want %v (the spider ATTACK_DAMAGE, no armor)", dealt, spider.getAttributeValue(attribute.AttackDamage))
 	}
 }
