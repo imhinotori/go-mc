@@ -74,7 +74,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
  (completed 2026-06-30)
 - [x] **Phase 32: Held-Item + Item Tags (S4)** — nearest-player held-item read + jar-extracted item-food tags; TemptGoal@4 ×2 on the pig.
  (completed 2026-06-30)
-- [ ] **Phase 33: Aging + Breeding (S3) — Pig Parity / DOGFOOD GATE** — animal aging + breeding; BreedGoal@3 + FollowParentGoal@5 on the pig closes the full 8-goal oracle. HARD GATE before any new mob.
+- [x] **Phase 33: Aging + Breeding (S3) — Pig Parity / DOGFOOD GATE** — animal aging + breeding; BreedGoal@3 + FollowParentGoal@5 on the pig closes the full 8-goal oracle. HARD GATE before any new mob. (completed 2026-06-30)
 - [ ] **Phase 34: New Passive Mobs** — cow/sheep/chicken as jar-faithful Starlark plugins.
 - [ ] **Phase 35: Hostiles + Spawn Rules** — target-selector machinery + per-category cap + day/night gate; zombie/skeleton/spider.
 - [ ] **Phase 36: Wolf (Neutral)** — `"wolf"` base type + supplier; wild goal set then the tame/owner second pass.
@@ -166,7 +166,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
   - [x] 33-02-PLAN.md - Animal in-love + FEED: inLove int + setInLove/canFallInLove/isInLove + handleInteract feed path + encodeLevelParticles (HEART)
   - [x] 33-03-PLAN.md - C1 Go-native goals: BreedGoal@3 + FollowParentGoal@5 + breed()/getFreePartner/canMate + adjustedTickDelay + faithful isPanicking + Go-native goal-count test
   - [x] 33-04-PLAN.md - C2 lockstep: 5 host handles + both .star copies (9 goals, byte-identical) + 3 plugin-side goal-count tests + breed/follow scenario tests
-  - [ ] 33-05-PLAN.md - THE GATE: full 9v9 oracle byte-identical + end-to-end scenario + Docker -race + deviation doc (same-region/eye-height) + live dogfood verify
+  - [x] 33-05-PLAN.md - THE GATE: full 9v9 oracle byte-identical + end-to-end scenario + Docker -race + deviation doc (same-region/eye-height) + live dogfood verify
 **Research flag**: yes — javap-verify `AgeableMob.aging`/`setAge`/`ageUp`, `Animal.canMate`/`spawnChildFromBreeding`/`finalizeSpawnChildFromBreeding` (XP/cooldown draw order) before porting; the same-region-cut vs barrier-resolved full-fidelity decision must be FORCED and documented as an accepted deviation, not left silent.
 
 ### Phase 34: New Passive Mobs
@@ -216,7 +216,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
 | 30. JumpControl + Fluid (S1) | v5 | 3/3 | Complete   | 2026-06-29 |
 | 31. PanicGoal (S2 consumer) | v5 | 1/1 | Complete   | 2026-06-30 |
 | 32. Held-Item + Item Tags (S4) | v5 | 1/1 | Complete   | 2026-06-30 |
-| 33. Aging + Breeding (S3) — Pig Parity / DOGFOOD GATE | v5 | 4/5 | In Progress|  |
+| 33. Aging + Breeding (S3) — Pig Parity / DOGFOOD GATE | v5 | 5/5 | Complete   | 2026-06-30 |
 | 34. New Passive Mobs | v5 | 0/? | Not started | - |
 | 35. Hostiles + Spawn Rules | v5 | 0/? | Not started | - |
 | 36. Wolf (Neutral) | v5 | 0/? | Not started | - |
