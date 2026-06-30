@@ -89,6 +89,15 @@ func categoryOf(t entity.ID) mobCategory {
 		// the pig, the cow consumes the CREATURE spawn budget. Additive — the pig + default arms are
 		// untouched, so the pig oracle's category accounting is unperturbed.
 		return categoryCreature
+	case entity.Sheep.ID:
+		// MOB-PASS-02 (Phase 34): Sheep is MobCategory.CREATURE (vanilla EntityType.SHEEP; data/entity
+		// Sheep.Type == "creature"). Consumes the CREATURE spawn budget, so countByCategory tallies it and
+		// the natural-spawn cap bounds it — the vanilla anti-flood cap holds for all 4 passives.
+		return categoryCreature
+	case entity.Chicken.ID:
+		// MOB-PASS-03 (Phase 34): Chicken is MobCategory.CREATURE (vanilla EntityType.CHICKEN; data/entity
+		// Chicken.Type == "creature"). Same CREATURE-budget accounting as pig/cow/sheep.
+		return categoryCreature
 	default:
 		return categoryMisc
 	}
