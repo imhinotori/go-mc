@@ -67,6 +67,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
 - [x] **Phase 29: Damage Keystone (S2)** — the parallel `*Entity` mob damage/hurt pipeline + `lastDamageSource` + jar-extracted damage-type tags; the widest fan-out, built first.
  (completed 2026-06-29)
 - [x] **Phase 30: JumpControl + Fluid (S1)** — mob `JumpControl` impulse + `*Entity` fluid predicates; FloatGoal@0 on the pig (oracle + plugin in lockstep). (completed 2026-06-29)
+- [ ] **Phase 30.1: Faithful RandomStrollGoal Target Selection (BUGFIX)** — re-port `LandRandomPos.getPos` (best-of-10 weighted + `generateRandomDirection` x/y/z draw order + `movePosUpOutOfSolid` ground-snap + `isStableDestination`/water/malus rejection) so the pig's stroll target is always reachable; fixes the "walk a little then jam against a block forever" wedge. RNG-sensitive → lockstep `newPigAI` + both `vanilla_pig/main.star`.
 - [ ] **Phase 31: PanicGoal (S2 consumer)** — PanicGoal@1 on the pig reading the real `lastDamageSource` + the panic-causing tag set.
 - [ ] **Phase 32: Held-Item + Item Tags (S4)** — nearest-player held-item read + jar-extracted item-food tags; TemptGoal@4 ×2 on the pig.
 - [ ] **Phase 33: Aging + Breeding (S3) — Pig Parity / DOGFOOD GATE** — animal aging + breeding; BreedGoal@3 + FollowParentGoal@5 on the pig closes the full 8-goal oracle. HARD GATE before any new mob.
@@ -106,6 +107,21 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
 - [x] 30-01-PLAN.md — Mob fluid predicates + lava decode: extend fluidState/decodeFluid for lava (lavaLevelOf + .isWater consumer audit) + mobInWater/mobFluidHeight/mobInLava/getFluidJumpThreshold [MOB-SUB-05]
 - [x] 30-02-PLAN.md — JumpControl + aiStep jump branch: jumpControl/noJumpDelay + jumping/setJumping + the RNG-free JUMP slot after navigation.tick + jumpInLiquid(+0.04)/jumpFromGround(0.42) + entity.in_water/fluid_height/in_lava + nav.jump() handle ops [MOB-SUB-04]
 - [x] 30-03-PLAN.md — FloatGoal@0 lockstep (Go-native newPigAI + vanilla_pig/main.star) + the wet-behavior test; the DRY pig oracle stays GREEN (canUse false -> zero draws) [MOB-SUB-04]
+
+### Phase 30.1: Faithful RandomStrollGoal Target Selection (BUGFIX)
+**Goal**: A wandering pig picks a REACHABLE stroll target every time, so it ambles freely instead of walking a few blocks and then jamming against a block forever. The current `randomStrollGoal.getPosition` returns a raw `e.y+dy` offset (dy ∈ [-7..+7]) with NO ground-snap or walkability check — an underground/unreachable target produces a partial/no A* path, and because `canContinueToUse` keys purely off `hasTarget` (cleared only on `path.done()`), the mob wedges permanently with `pending=true`.
+**Depends on**: Phase 30 (navigation + jump in place). Reuses the existing `groundNavigation` + `computePath` seam; no new subsystem.
+**Requirements**: BUGFIX (contributes to MOB-GATE-01 pig parity — RandomStrollGoal must be 1:1 before the dogfood gate in Phase 33).
+**Root cause** (jar-verified): vanilla `RandomStrollGoal.getPosition` → `WaterAvoidingRandomStrollGoal`/`LandRandomPos.getPos(mob, 10, 7)` → `RandomPos.generateRandomPos(supplier, mob::getWalkTargetValue)`:
+  - Tries **10** candidates, keeps the highest `getWalkTargetValue` weight (`Vec3.atBottomCenterOf(bestPos)`).
+  - Each candidate: `generateRandomDirection(random, 10, 7)` draws **xt, yt, zt** IN THAT ORDER (our port draws dx, dz, dy — wrong RNG order) → `generateRandomPosTowardDirection` (home-restriction bias + `isOutsideLimits`/`isRestricted`/`isNotStable` reject) → `movePosUpOutOfSolid` (`RandomPos.moveUpOutOfSolid` scans Y up out of solid to the walkable surface; reject on `isWater`/`hasMalus`).
+**Success Criteria** (what must be TRUE):
+  1. A pig on flat ground strolls continuously (no permanent jam): a headless full-tick repro driving `serverAiStep`+`advance` shows the pig visits many distinct positions over N ticks and is never motionless for more than ~`interval`×2 ticks (the re-roll cadence), NOT 500+ ticks frozen.
+  2. The stroll target is always a reachable walkable column: `getPosition` ports `LandRandomPos.getPos` — best-of-10 weighted by `getWalkTargetValue`, `generateRandomDirection` x/y/z draw order, `movePosUpOutOfSolid` ground-snap, `isStableDestination`/water/malus rejection — verbatim vs the jar (javap/CFR before writing).
+  3. RNG lockstep: the new draw sequence is added to BOTH `newPigAI` (Go-native oracle) AND both `vanilla_pig/main.star` copies (repo-root + `server/assets/`) IN THE SAME PLAN; the pig oracle `TestPluginPigEqualsGoNativePig` stays GREEN (DRY world: the stroll gate still rolls, but the new candidate draws are identical on both sides → byte-identical).
+  4. Standing: every op faithful (best-of-10 loop, draw order, moveUpOutOfSolid scan); CGO=0 + no new Go deps; Docker `-race` + `strictRegion` clean.
+**Plans**: 1 plan (pattern-map → port `getWalkTargetValue` + `RandomPos`/`LandRandomPos` helpers → rewrite `getPosition` → lockstep both pigs → repro regression test).
+**Research flag**: no — the jar methods are decompiled and cited above; the only care item is the exact `getWalkTargetValue` (BlockPathTypes malus) port surface, scoped during pattern-map.
 
 ### Phase 31: PanicGoal (S2 consumer)
 **Goal**: A hurt pig flees — PanicGoal reads the real damage source delivered by the keystone.
