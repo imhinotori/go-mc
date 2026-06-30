@@ -283,6 +283,131 @@ func TestFollowParent(t *testing.T) {
 	}
 }
 
+// TestBreedSpawnsBaby is the Plan 33-04 SCENARIO test: two in-love adult pigs in range, driven through
+// the live breedGoal canUse/tick loop, breed — a THIRD (baby, breedAge==BABY_START_AGE) pig appears,
+// both parents go to the 6000 cooldown, both inLove reset, and an XP orb is awarded. Unlike the unit
+// TestBreed (which calls loop.breed() directly), this drives the GOAL: canUse acquires the partner,
+// then tick courts (++loveTime) until loveTime>=60 within 3 blocks fires breed() — proving the
+// canUse→tick→breed path end-to-end, the same path the plugin pig's breed_tick→try_breed mirrors.
+func TestBreedSpawnsBaby(t *testing.T) {
+	loop, _ := newBlockLoop()
+	installVanillaPigRegistry(loop) // spawnVanillaPig (the child) needs the declaration
+
+	// Two in-love adult pigs ~1 block apart (well within the 3-block breed distance) so courting never
+	// loses the partner — breed fires on the tick loveTime first reaches 60.
+	e := newDamageMob(loop, 1, 20.0)
+	e.x, e.y, e.z = 8.5, 64, 8.5
+	e.ai = &mobAI{} // setWantTarget needs an ai
+	e.setInLove()
+	partner := newDamageMob(loop, 2, 20.0)
+	partner.x, partner.y, partner.z = 9.5, 64, 8.5
+	partner.ai = &mobAI{}
+	partner.setInLove()
+
+	preCount := len(loop.only().entities.byID)
+
+	g := newBreedGoal(1.0)
+	if !g.canUse(loop, e) {
+		t.Fatal("breedGoal.canUse false with two in-love pigs in range, want true")
+	}
+	g.start(loop, e)
+
+	// Drive tick until breed fires (a baby appears). With the pair stationary 1 block apart the breed
+	// gate (loveTime>=60 && distSqr<9.0) trips at tick 60; a generous budget guards against an off-by-one.
+	var baby *Entity
+	for i := 0; i < 120 && baby == nil; i++ {
+		g.tick(loop, e)
+		for _, x := range loop.only().entities.all() {
+			if x.breedAge == babyStartAge {
+				baby = x
+			}
+		}
+	}
+	if baby == nil {
+		t.Fatal("breedGoal.tick never bred a baby over 120 ticks (the canUse→tick→breed scenario)")
+	}
+	if !baby.isBaby() {
+		t.Fatal("the bred child is not a baby (isBaby() false)")
+	}
+
+	// Both parents to the 6000 cooldown + inLove reset.
+	if e.breedAge != breedingCooldownAge || partner.breedAge != breedingCooldownAge {
+		t.Fatalf("parents not at the breeding cooldown after breed: e=%d partner=%d, want %d/%d",
+			e.breedAge, partner.breedAge, breedingCooldownAge, breedingCooldownAge)
+	}
+	if e.inLove != 0 || partner.inLove != 0 {
+		t.Fatalf("inLove not reset after breed: e=%d partner=%d, want 0/0", e.inLove, partner.inLove)
+	}
+
+	// An XP orb (the finalizeSpawnChildFromBreeding 1+nextInt(7) draw) and the baby grew the store.
+	var orb *Entity
+	for _, x := range loop.only().entities.all() {
+		if x.isOrb {
+			orb = x
+		}
+	}
+	if orb == nil {
+		t.Fatal("breedGoal.tick awarded no XP orb (the 1+nextInt(7) draw)")
+	}
+	if orb.xpValue < 1 || orb.xpValue > 7 {
+		t.Fatalf("breed XP orb value = %d, want 1..7 (1 + nextInt(7))", orb.xpValue)
+	}
+	if len(loop.only().entities.all()) <= preCount {
+		t.Fatalf("entity count did not grow after the breed scenario (%d -> %d), want a baby + orb",
+			preCount, len(loop.only().entities.all()))
+	}
+}
+
+// TestFollowParentPathsToAdult is the Plan 33-04 SCENARIO test: a baby (breedAge<0) + a nearby adult
+// same-class in the 3..16 follow band, driven through the live followParentGoal canUse/tick, makes the
+// baby's nav want target point AT the adult (re-path every 10 ticks, NO RNG) — the path the plugin
+// pig's follow_tick→move_to mirrors. Deterministic (FollowParentGoal draws no RNG).
+func TestFollowParentPathsToAdult(t *testing.T) {
+	loop, _ := newBlockLoop()
+
+	baby := newDamageMob(loop, 1, 20.0)
+	baby.x, baby.y, baby.z = 8.5, 64, 8.5
+	baby.breedAge = -100 // a baby
+	baby.ai = &mobAI{}   // setWantTarget needs an ai
+
+	adult := newDamageMob(loop, 2, 20.0)
+	adult.x, adult.y, adult.z = 13.5, 64, 8.5 // 5 blocks east (distSqr 25, in the 3..16 band)
+	adult.breedAge = 0                        // an adult
+
+	g := newFollowParentGoal(1.1)
+	if !g.canUse(loop, baby) {
+		t.Fatal("followParentGoal.canUse false with an adult at 5 blocks, want true")
+	}
+	if g.parent != adult {
+		t.Fatalf("followParentGoal.parent = %v, want the adult (id 2)", g.parent)
+	}
+	g.start(loop, baby)
+
+	// First tick re-paths (--0 = -1, not >0) → the baby wants the adult's position.
+	baby.ai.hasTarget = false
+	g.tick(loop, baby)
+	if !baby.ai.hasTarget {
+		t.Fatal("followParentGoal.tick set no want target on the first (re-path) tick")
+	}
+	if baby.ai.wantX != adult.x || baby.ai.wantY != adult.y || baby.ai.wantZ != adult.z {
+		t.Fatalf("baby want target (%v,%v,%v) does not point at the adult (%v,%v,%v)",
+			baby.ai.wantX, baby.ai.wantY, baby.ai.wantZ, adult.x, adult.y, adult.z)
+	}
+	if g.timeToRecalcPath != adjustedTickDelay(followRecalcInterval) {
+		t.Fatalf("timeToRecalcPath = %d after re-path, want %d (adjustedTickDelay(10) — NO RNG)",
+			g.timeToRecalcPath, followRecalcInterval)
+	}
+
+	// Intermediate ticks (1..9) do NOT re-path; the 10th re-paths again toward the (possibly moved) adult.
+	adult.x = 14.5 // the adult drifts a block east
+	for i := 0; i < adjustedTickDelay(followRecalcInterval); i++ {
+		g.tick(loop, baby)
+	}
+	if baby.ai.wantX != adult.x {
+		t.Fatalf("after a re-path cycle the baby want X = %v, want the adult's new X %v", baby.ai.wantX, adult.x)
+	}
+}
+
 // TestFollowParentContinueBand: canContinueToUse follows only while 3..16 blocks (9.0 <= distSqr <=
 // 256.0) and stops outside it or on grow-up.
 func TestFollowParentContinueBand(t *testing.T) {

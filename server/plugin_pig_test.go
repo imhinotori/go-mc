@@ -52,8 +52,8 @@ func TestPluginPigBootLoads(t *testing.T) {
 	if pig.ai == nil {
 		t.Fatal("plugin pig has no AI")
 	}
-	if got := len(pig.ai.goals.goals); got != 7 {
-		t.Fatalf("plugin pig has %d goals, want 7 (FloatGoal@0 + PanicGoal@1 + TemptGoal@4 ×2 + @6/@7/@8)", got)
+	if got := len(pig.ai.goals.goals); got != 9 {
+		t.Fatalf("plugin pig has %d goals, want 9 (FloatGoal@0 + PanicGoal@1 + BreedGoal@3 + TemptGoal@4 ×2 + FollowParentGoal@5 + @6/@7/@8)", got)
 	}
 	priorities := map[int]bool{}
 	tempts := 0
@@ -63,7 +63,7 @@ func TestPluginPigBootLoads(t *testing.T) {
 			tempts++
 		}
 	}
-	for _, p := range []int{0, 1, 4, 6, 7, 8} {
+	for _, p := range []int{0, 1, 3, 4, 5, 6, 7, 8} {
 		if !priorities[p] {
 			t.Fatalf("plugin pig missing a goal at priority %d (got %v)", p, priorities)
 		}
@@ -100,8 +100,8 @@ func TestVanillaPigDeclaresGoalSet(t *testing.T) {
 	if decl.attrs["movement_speed"] != 0.25 {
 		t.Fatalf("movement_speed = %v, want 0.25 (Pig.createAttributes)", decl.attrs["movement_speed"])
 	}
-	if len(decl.goals) != 7 {
-		t.Fatalf("captured %d goals, want 7 (FloatGoal@0 + PanicGoal@1 + TemptGoal@4 ×2 + @6/@7/@8)", len(decl.goals))
+	if len(decl.goals) != 9 {
+		t.Fatalf("captured %d goals, want 9 (FloatGoal@0 + PanicGoal@1 + BreedGoal@3 + TemptGoal@4 ×2 + FollowParentGoal@5 + @6/@7/@8)", len(decl.goals))
 	}
 	// The map-by-priority collapses the two @4 TemptGoals — count them separately and assert each
 	// declares {MOVE,LOOK}, then map the single-per-priority decls for the @0/@1/@6/@7/@8 checks.
@@ -131,6 +131,14 @@ func TestVanillaPigDeclaresGoalSet(t *testing.T) {
 	// @1 MOVE (PanicGoal — Phase 31-01)
 	if g, ok := byPriority[1]; !ok || g.flags != flagMove {
 		t.Fatalf("@1 flags = %b, want flagMove %b (PanicGoal)", g.flags, flagMove)
+	}
+	// @3 MOVE|LOOK (BreedGoal — Phase 33-04)
+	if g, ok := byPriority[3]; !ok || g.flags != (flagMove|flagLook) {
+		t.Fatalf("@3 flags = %b, want flagMove|flagLook %b (BreedGoal)", g.flags, flagMove|flagLook)
+	}
+	// @5 EMPTY (FollowParentGoal — Phase 33-04; the ctor never sets flags)
+	if g, ok := byPriority[5]; !ok || g.flags != 0 {
+		t.Fatalf("@5 flags = %b, want 0 (EMPTY — FollowParentGoal)", g.flags)
 	}
 	// @6 MOVE
 	if g, ok := byPriority[6]; !ok || g.flags != flagMove {
@@ -171,6 +179,14 @@ func TestVanillaPigGoalsPorted(t *testing.T) {
 	}
 	if byPriority[7].requiresUpdateEveryTick() {
 		t.Fatal("@7 lookAt must NOT requiresUpdateEveryTick (jar default false)")
+	}
+	// @3 BreedGoal + @5 FollowParentGoal (Phase 33-04) — neither carries requiresUpdateEveryTick (jar
+	// default false; BreedGoal/FollowParentGoal never call setRequiresUpdateEveryTick, like @6/@7).
+	if byPriority[3].requiresUpdateEveryTick() {
+		t.Fatal("@3 BreedGoal must NOT requiresUpdateEveryTick (jar default false)")
+	}
+	if byPriority[5].requiresUpdateEveryTick() {
+		t.Fatal("@5 FollowParentGoal must NOT requiresUpdateEveryTick (jar default false)")
 	}
 }
 

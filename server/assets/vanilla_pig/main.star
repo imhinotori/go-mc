@@ -231,7 +231,7 @@ def tempt_pigfood_continue(entity, world, nav):
 # here: the goal commits loveTime=0 on a fresh acquire). NO RNG drawn in the .star (the breed draws are
 # made host-side inside try_breed = TickLoop.breed — the lockstep rule).
 def breed_can_use(entity, world, nav):
-    if not entity.is_in_love():   # Animal.isInLove() gate (line 1) — ZERO effect on the un-fed oracle
+    if not entity.is_in_love:   # Animal.isInLove() READ accessor (no call) — ZERO effect on the un-fed oracle
         return False
     p = entity.nearest_breeding_partner(BREED_RANGE)   # host scan = getFreePartner (filter stays Go-side)
     if p == None:
@@ -294,7 +294,7 @@ def breed_continue(entity, world, nav):
 # blocks — the adult filter + the DONT_FOLLOW_IF_CLOSER_THAN reject stay HOST-side). NO RNG anywhere
 # (FollowParentGoal is fully deterministic). The .star sees only the parent position tuple or None.
 def follow_can_use(entity, world, nav):
-    if not entity.is_baby():   # FollowParentGoal.canUse: age>=0 returns false — only a baby follows
+    if not entity.is_baby:   # FollowParentGoal.canUse READ accessor (no call): age>=0 → only a baby follows
         return False
     p = entity.nearest_adult_parent(FOLLOW_RANGE)   # host scan = the nearest-adult inflate(8,4,8) pick
     if p == None:
@@ -335,7 +335,7 @@ def follow_stop(entity, world, nav):
 # reach), gated on is_baby (grew-up → stop). Behavior-identical to the Go oracle's continue band for both
 # the dormant oracle (no adult → false) and the scenario (the baby follows while the adult is 3..16 away).
 def follow_continue(entity, world, nav):
-    if not entity.is_baby():   # grew up (age>=0) → stop
+    if not entity.is_baby:   # READ accessor (no call): grew up (age>=0) → stop
         return False
     return entity.nearest_adult_parent(FOLLOW_RANGE) != None   # a live adult still in the follow band
 
