@@ -4,14 +4,14 @@ milestone: v5
 milestone_name: Mob Behaviors & Living-Entity Subsystems
 status: verifying
 stopped_at: Completed 34-00-PLAN.md
-last_updated: "2026-06-30T14:15:21.154Z"
+last_updated: "2026-06-30T14:18:51.164Z"
 last_activity: 2026-06-30
 progress:
   total_phases: 9
   completed_phases: 6
   total_plans: 20
-  completed_plans: 17
-  percent: 85
+  completed_plans: 18
+  percent: 90
 ---
 
 # Project State
@@ -198,7 +198,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [█████████░] 85%
+Progress: [█████████░] 90%
 
 ## Performance Metrics
 
@@ -322,6 +322,7 @@ Progress: [█████████░] 85%
 | Phase 33 P05 | 35min | 2 tasks | 2 files |
 | Phase 34 P00 | 13min | 2 tasks | 10 files |
 | Phase 34 P02 | 22min | 1 tasks | 5 files |
+| Phase 34 P03 | 22min | 1 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -495,6 +496,8 @@ Recent decisions affecting current work:
 - [Phase ?]: TestPerfGate is a pre-existing flaky wall-clock perf gate (passes 5/5 isolated; spikes only under full-suite parallel contention); not a 33-05 regression (test-only change). Real fix: assert per-stroll Starlark alloc-count vs wall-clock ns.
 - [Phase ?]: 34-00: parameterized nearest_player_holding_food(tag,range) + sheep eat seam (DATA_WOOL setSheared) + sheep shear (white-wool, 5 nextFloat/stack scatter) + chicken aiStep (slow-fall vy*0.6 + egg-lay 2nf/nextInt6000); shared wave-1 infra, pig oracle byte-identical
 - [Phase ?]: 34-02: sheep EatBlockGoal as plugin callbacks (nextInt gate via entity.rand_int, lockstep, identity adjustedTickDelay 1000/50; eat via the 34-00 host seam); shear+regrow closes MOB-PASS-02 on a real plugin sheep; no shared Go edit, pig oracle byte-identical
+- [Phase ?]: 34-03: chicken CREATURE asserted via data/entity Chicken.Type, not a categoryOf() shared edit
+- [Phase ?]: 34-03: chicken dogfood test loads on-disk plugins/vanilla_chicken via loadMobRegistry + spawnDeclaredMob (no new Go embed file)
 
 ### Pending Todos
 
@@ -524,7 +527,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-30T14:15:13.782Z
+Last session: 2026-06-30T14:18:29.993Z
 Stopped at: Completed 34-00-PLAN.md
 Resume file: None
 Next: OPERATOR CHECKPOINT (19-02 Task 3) — build `CGO_ENABLED=0 go build -o sulfur.exe ./cmd/sulfur`, run `./sulfur.exe -seed 777` in a REAL terminal (expect alt-screen TUI: log viewport + command input), type `say hi`+Enter (expect a `console command cmd=say hi` viewport line), connect a vanilla 26.2 client (expect a join line), Ctrl-C (clean exit), then `./sulfur.exe -seed 777 | cat` (expect NO TUI, plain stderr — today's behavior). On "approved" → mark TUI-01 complete + advance the plan counter, then proceed to Plan 19-03 (gameplay_tick.go join/leave slog conversion + the full disconnect taxonomy). The console line routes TUI→tick (EnqueueConsoleCommand, cap 64, drop-on-full)→runConsoleCommand on the tick→existing graph (grant-all, no issuer), reply to slog. gameplay_tick.go is untouched (19-03 owns it). LEGACY: Phase 17 Wave 2 (17-02/17-03) — see prior continuity below. (GAMEPLAY-05 fluid simulation: OVERWRITE server/fluid.go with the FlowingFluid port + scheduled-tick queue; lazy-init t.fluidSchedule inside tickFluids, do NOT edit tick.go/tick_phases.go) and 17-03 (GAMEPLAY-04 fall damage + PvP dispatch: OVERWRITE server/fall_damage.go using the tickPlayer fallDistance/wasOnGround/lastY fields + the lookupPlayerByEntityID reverse lookup, do NOT edit tick.go/tick_phases.go). The exact Wave-2 seam surface (field names, init point, call sites, stub signatures) is in 17-01-SUMMARY.md "WAVE-2 HANDOFF". Deferred-still-open: dungeon loot/spawner-mob + BeehiveDecorator occupant + pale_garden PaleMoss (all v3, cosmetic, in 13-04-SUMMARY); KeepAlive double-leave hardening (Phase 3). KNOWN PRE-EXISTING FLAKE: TestTickAIDrivesMobs (OPT-01 async-pool timing, not caused by 17-01) intermittently fails under full-suite load; passes in isolation + 3× under -race.
