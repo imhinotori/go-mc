@@ -83,6 +83,12 @@ func categoryOf(t entity.ID) mobCategory {
 	switch t {
 	case entity.Pig.ID:
 		return categoryCreature
+	case entity.Cow.ID:
+		// MOB-PASS-01 (Phase 34): the Cow is MobCategory.CREATURE (vanilla EntityType.COW is built with
+		// MobCategory.CREATURE; data/entity Cow.Type == "creature", the jar-derived codegen source). Like
+		// the pig, the cow consumes the CREATURE spawn budget. Additive — the pig + default arms are
+		// untouched, so the pig oracle's category accounting is unperturbed.
+		return categoryCreature
 	default:
 		return categoryMisc
 	}

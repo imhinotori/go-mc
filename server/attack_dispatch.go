@@ -4,6 +4,8 @@ import (
 	"math"
 
 	"github.com/imhinotori/sulfur/data/entity"
+	"github.com/imhinotori/sulfur/data/item"
+	"github.com/imhinotori/sulfur/level/component"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
@@ -771,6 +773,16 @@ func (t *TickLoop) handleInteract(p *tickPlayer, pkt pk.Packet) {
 	if mob.typ == entity.Sheep.ID && t.trySheepShear(p, mob) {
 		return // the shear (or the not-ready consume) handled the interact
 	}
+	// MOB-PASS-01 (Phase 34, Plan 34-01): the Cow MILK path runs BEFORE the feed path
+	// (AbstractCow.mobInteract tries the empty-bucket branch ahead of super.mobInteract == Animal
+	// .mobInteract feed). tryMilkCow returns true ONLY when the held item is an empty BUCKET on an
+	// ADULT cow (it milked); a non-bucket or a baby returns false and falls through to tryFeedAnimal
+	// (super.mobInteract). Cow-gated (typ == entity.Cow.ID), so it is a zero-cost no-op for a
+	// pig/sheep/chicken — the pig oracle stream is unperturbed. This slots into the SAME spot the
+	// sheep shear gate (wave-1) uses; both are additive, mob-gated, and wave-ordered after 34-00.
+	if mob.typ == entity.Cow.ID && t.tryMilkCow(p, mob) {
+		return // the milk handled the interact
+	}
 	t.tryFeedAnimal(p, mob)
 }
 
@@ -855,4 +867,113 @@ func (t *TickLoop) tryFeedAnimal(p *tickPlayer, mob *Entity) {
 	}
 	// Neither branch (an adult already in love, or on cooldown): no consume, no effect — falls through
 	// to super.mobInteract in vanilla (no further v1 behavior).
+}
+
+// tryMilkCow ports net.minecraft.world.entity.animal.cow.AbstractCow.mobInteract VERBATIM
+// (34-JARNOTES.md:134-147 — NO RNG):
+//
+//	@Override mobInteract(Player player, InteractionHand hand) {
+//	    ItemStack itemStack = player.getItemInHand(hand);
+//	    if (itemStack.is(Items.BUCKET) && !this.isBaby()) {
+//	        player.playSound(SoundEvents.COW_MILK, 1.0f, 1.0f);
+//	        ItemStack r = ItemUtils.createFilledResult(itemStack, player, Items.MILK_BUCKET.getDefaultInstance());
+//	        player.setItemInHand(hand, r);
+//	        return InteractionResult.SUCCESS;
+//	    }
+//	    return super.mobInteract(player, hand);   // the feed/breed path (Animal.mobInteract)
+//	}
+//
+// Returns true iff the milk branch fired (held item is an empty BUCKET && the cow is an ADULT); a
+// non-bucket or a baby returns false so handleInteract falls through to tryFeedAnimal (super.mobInteract).
+// The held item is read SERVER-side (the player's selected hand, the tryFeedAnimal/TemptGoal precedent),
+// never trusted from the Interact payload (T-34-02). COW_MILK == soundid 449; Cow (Animal) getSoundSource
+// == NEUTRAL. The sound is emitted via the established entity-attached broadcastToTrackers/encodeSoundEntity
+// model (the chicken egg-lay + combat hurt/death sounds use the same seam) — player.playSound on the
+// server side reaches the tracking players. NO RNG: COW_MILK plays at a fixed 1.0/1.0 (no voice-pitch
+// jitter), so this draws ZERO from any stream.
+//	[VERIFIED javap AbstractCow.mobInteract: is(Items.BUCKET) && !isBaby() -> playSound(COW_MILK,1,1) +
+//	 ItemUtils.createFilledResult(stack, player, MILK_BUCKET.getDefaultInstance()) + setItemInHand + SUCCESS;
+//	 else super.mobInteract. Items.BUCKET == "bucket" (1040), Items.MILK_BUCKET == "milk_bucket" (1046).]
+func (t *TickLoop) tryMilkCow(p *tickPlayer, mob *Entity) bool {
+	inv := ensureInventory(p)
+
+	// player.getItemInHand(hand): the player's selected MAIN-hand hotbar slot (the established held read).
+	held := inv.get(heldWindowSlot(inv.heldSlot))
+	if slotIsEmpty(held) {
+		return false // empty hand: ItemStack.EMPTY fails is(BUCKET) -> super.mobInteract (feed)
+	}
+
+	// itemStack.is(Items.BUCKET): the held item must be an empty bucket (1040). A water/lava/milk bucket
+	// or any other item fails the gate -> super.mobInteract (the bucket id is exact, no tag).
+	if int32(held.ItemID) != int32(item.Bucket.ID) {
+		return false
+	}
+
+	// !this.isBaby(): only an ADULT cow milks. A baby falls through to the feed path (super.mobInteract).
+	if mob.isBaby() {
+		return false
+	}
+
+	// player.playSound(SoundEvents.COW_MILK, 1.0f, 1.0f): emit the entity.cow.milk sound (449) on the
+	// NEUTRAL category at a fixed 1.0/1.0 (NO RNG). Broadcast to the cow's trackers (the entity-attached
+	// sound seam the chicken egg-lay + mob hurt/death use).
+	t.broadcastToTrackers(mob.id, encodeSoundEntity(449, soundSourceNeutral, mob.id, 1.0, 1.0, 0))
+
+	// ItemStack r = ItemUtils.createFilledResult(itemStack, player, MILK_BUCKET.getDefaultInstance());
+	// player.setItemInHand(hand, r): replace the hand with the createFilledResult return value.
+	r := t.createFilledResult(p, inv, held, component.SlotData{Count: 1, ItemID: pk.VarInt(item.MilkBucket.ID)})
+	inv.set(heldWindowSlot(inv.heldSlot), r)
+
+	// The held-slot change (the bucket consume + the possible milk_bucket replace) plus the inventory.add
+	// from createFilledResult are synchronized to the client with an authoritative full content re-send
+	// (createFilledResult's add path may have touched arbitrary slots).
+	t.sendContent(p)
+	return true
+}
+
+// createFilledResult ports net.minecraft.world.item.ItemUtils.createFilledResult(emptyStack, player,
+// filledStack, grow=true) VERBATIM (the 3-arg overload passes grow=true; javap ItemUtils.createFilledResult
+// this session). It is the survival item-swap helper: consume one of the empty stack and yield the filled
+// stack, replacing the hand if the empty stack emptied, else depositing the filled stack into the inventory.
+// Returns the ItemStack that becomes the new hand contents (the empty stack if it is still non-empty, else
+// the filled stack). MUTATES the player inventory (the inventory.add path) but NOT the passed empty slot —
+// the caller writes the return value into the hand.
+//
+//	createFilledResult(ItemStack emptyStack, Player player, ItemStack filledStack, boolean grow):
+//	    boolean creative = player.hasInfiniteMaterials();
+//	    if (grow && creative) {                              // creative: keep the bucket, add milk if absent
+//	        if (!player.getInventory().contains(filledStack)) player.getInventory().add(filledStack);
+//	        return emptyStack;
+//	    }
+//	    emptyStack.consume(1, player);                       // SURVIVAL: shrink the bucket by 1
+//	    if (emptyStack.isEmpty()) return filledStack;        // the bucket emptied -> the hand becomes milk
+//	    if (!player.getInventory().add(filledStack)) player.drop(filledStack, false);  // else deposit/drop milk
+//	    return emptyStack;                                   // and the hand keeps the remaining bucket(s)
+//
+// v1 is always survival here (a milking player has finite materials; the creative path is a documented
+// no-op branch — Player.hasInfiniteMaterials is a v1 const-false stub, mirroring shrinkHeldItem's caller
+// creative guard). The `player.drop` (inventory-full) fallback is realized as a dropped ItemEntity at the
+// player, but v1's inventoryAdd into a 46-slot player inventory effectively never fills for a single milk
+// bucket — the drop branch is the cited fallback (no item is ever silently lost).
+//	[VERIFIED javap ItemUtils.createFilledResult(Lnet/minecraft/world/item/ItemStack;Lnet/minecraft/world/
+//	 entity/player/Player;Lnet/minecraft/world/item/ItemStack;Z): hasInfiniteMaterials; (grow && creative)
+//	 -> contains/add + return emptyStack; else consume(1, player); isEmpty -> return filledStack; add ->
+//	 (!add) drop(filled, false); return emptyStack. The 3-arg overload calls it with grow=true (iconst_1).]
+func (t *TickLoop) createFilledResult(p *tickPlayer, inv *Inventory, emptyStack, filledStack component.SlotData) component.SlotData {
+	// SURVIVAL (v1: hasInfiniteMaterials is const-false): emptyStack.consume(1, player) — shrink by 1.
+	emptyStack.Count--
+	if emptyStack.Count <= 0 {
+		// emptyStack.isEmpty(): the bucket emptied -> the hand becomes the filled (milk) stack.
+		return filledStack
+	}
+	// The bucket stack is still non-empty: deposit the milk into the inventory (player.getInventory().add).
+	// inventoryAdd mutates the stack to the leftover; a full inventory's leftover is the cited drop fallback.
+	add := filledStack
+	if !t.inventoryAdd(p, inv, &add) {
+		// player.drop(filledStack, false): inventory full -> drop the milk at the player. v1 never fills for
+		// a single milk bucket; this is the cited faithful fallback (no item silently lost).
+		t.playerDrop(p, add, false)
+	}
+	// return emptyStack: the hand keeps the remaining bucket(s).
+	return emptyStack
 }
