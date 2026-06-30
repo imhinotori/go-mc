@@ -372,6 +372,50 @@ func playerSkinMetadata(parts uint8) []byte {
 	return buf.Bytes()
 }
 
+// --- MOB-SUB-08 (Plan 33-01): the DATA_BABY_ID data-value (the baby render flag) ----------
+//
+// A baby AgeableMob (breedAge < 0) renders SMALL client-side, driven ENTIRELY by its synched
+// DATA_BABY_ID boolean — the server is authoritative and PUSHES it (the client does not derive
+// "baby" locally). This is a SEPARATE deliverable from the half-scale HITBOX (the server-side AABB
+// shrink, entity.go refreshDimensions): the hitbox drives the goal distSqr checks; DATA_BABY_ID is
+// only the client render. Both numbers below are JAR-DERIVED (javap'd from temp/cache/26.2-inner.jar
+// this session), NOT guessed.
+
+// dataBabyIndex is the SynchedEntityData accessor index for AgeableMob.DATA_BABY_ID. defineId assigns
+// indices sequentially down the class hierarchy: Entity 0..7 (8), LivingEntity 8..14 (7), Mob 15
+// (DATA_MOB_FLAGS_ID), AgeableMob 16 = DATA_BABY_ID (then 17 = AGE_LOCKED). So the index is 16, BOOLEAN
+// serializer. The client renders a small pig when this is true.
+//   [VERIFIED javap: net.minecraft.world.entity.AgeableMob static{} -> defineSynchedData defines
+//     DATA_BABY_ID FIRST (BOOLEAN) then AGE_LOCKED (BOOLEAN); the hierarchy count Entity(8)+
+//     LivingEntity(7)+Mob.DATA_MOB_FLAGS_ID(15) puts DATA_BABY_ID at accessor index 16.]
+const dataBabyIndex uint8 = 16
+
+// boolSerializerID is the registry id of EntityDataSerializers.BOOLEAN — the VarInt serializerId the
+// DataValue carries. The id is the registerSerializer() call ORDER in the EntityDataSerializers static
+// initializer: 0=BYTE, 1=INT, 2=LONG, 3=FLOAT, 4=STRING, 5=COMPONENT, 6=OPTIONAL_COMPONENT,
+// 7=ITEM_STACK, 8=BOOLEAN (the same registration order itemStackSerializerID==7 / intSerializerID==1
+// are derived from). The BOOLEAN serializer's value codec is forValueType(ByteBufCodecs.BOOL) — a
+// single byte 0/1 (pk.Boolean).
+//   [VERIFIED javap: net.minecraft.network.syncher.EntityDataSerializers static{} registerSerializer
+//     sequence — getstatic BYTE;register (id0) INT(1) LONG(2) FLOAT(3) STRING(4) COMPONENT(5)
+//     OPTIONAL_COMPONENT(6) ITEM_STACK(7) BOOLEAN(8); BOOLEAN = forValueType(ByteBufCodecs.BOOL).]
+const boolSerializerID int32 = 8
+
+// babyDataEntry builds the single SynchedEntityData$DataValue entry that carries an AgeableMob's
+// DATA_BABY_ID — the field the client reads to render the pig small. It frames on the wire as
+// Byte(dataBabyIndex=16) + VarInt(boolSerializerID=8) + Boolean(isBaby) (entityDataEntry.WriteTo),
+// mirroring airDataEntry's INT pattern with the BOOL codec. Carried at spawn (the small-render baby)
+// and broadcast on the -1->0 grow-up (DATA_BABY_ID=false, so the client re-renders full size).
+//   [VERIFIED javap AgeableMob.DATA_BABY_ID = EntityDataAccessor<Boolean>; the BOOLEAN codec is
+//    ByteBufCodecs.BOOL == one byte 0/1, which pk.Boolean writes.]
+func babyDataEntry(isBaby bool) entityDataEntry {
+	return entityDataEntry{
+		index:        dataBabyIndex,
+		serializerID: boolSerializerID,
+		value:        pk.Boolean(isBaby), // EntityDataSerializers.BOOLEAN codec == ByteBufCodecs.BOOL
+	}
+}
+
 // entityDataEOF is the SynchedEntityData EOF_MARKER (255 / 0xFF) — the MANDATORY single
 // terminator byte that closes the packed-items list. It is ALWAYS written, even for an
 // empty list; omitting it desyncs the client's entity stream and the entity is dropped.

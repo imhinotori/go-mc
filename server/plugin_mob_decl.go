@@ -25,6 +25,7 @@ package server
 // same discipline host.Manager.hooks uses.
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/imhinotori/sulfur/data/entity"
@@ -400,6 +401,21 @@ func (t *TickLoop) spawnDeclaredMob(decl *mobDecl, x, y, z float64) *Entity {
 	// vanilla pig, which both route through here) gets its own deterministic stream and wanders
 	// independently. Done before the store add (the mob is not yet ticking).
 	reseedMobAI(e.ai, e.id)
+	// MOB-SUB-08 (Plan 33-01): spawn-time DATA_BABY_ID carry. A mob spawned as a BABY (breedAge < 0 —
+	// e.g. Plan C's breed() child, which sets breedAge = BABY_START_AGE before this add) must render
+	// small client-side, so its half-scale hitbox AND the wire baby flag are present from the first
+	// AddEntity/SetEntityData a tracker sends. Splice the babyDataEntry onto Entity.metadata (the slot
+	// encodeSetEntityData splices verbatim, the same seam playerSkinMetadata uses) and shrink the AABB.
+	// An ADULT (breedAge == 0 — the oracle pig spawns here) is skipped entirely: no metadata entry, full
+	// dims, so the byte-identical oracle wire is unchanged. Babies are not spawned by any path yet (Plan C
+	// adds breed()), so today this branch is inert for every live spawn; it is wired now so the breed child
+	// renders correctly the moment Plan C sets the negative age.
+	if e.isBaby() {
+		e.refreshDimensions()
+		var buf bytes.Buffer
+		_, _ = babyDataEntry(e.isBaby()).WriteTo(&buf)
+		e.metadata = append(e.metadata, buf.Bytes()...)
+	}
 	// Phase-27 (N=2): add the mob to the region that OWNS its column, NOT t.only().
 	// only() resolves to the CALLING goroutine's region — globalRegion when spawned from the
 	// coordinator (e.g. the SULFUR_TEST_KIT gate egg's use-packet path) — which orphans the mob
