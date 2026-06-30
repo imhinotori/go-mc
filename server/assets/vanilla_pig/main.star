@@ -9,10 +9,11 @@
 # Pig.registerGoals() (javap-verified): @0 FloatGoal, @1 PanicGoal(1.25), @3 BreedGoal(1.0),
 # @4 TemptGoal x2, @5 FollowParentGoal(1.1), @6 WaterAvoidingRandomStrollGoal(1.0),
 # @7 LookAtPlayerGoal(Player,6.0f), @8 RandomLookAroundGoal. @0 FloatGoal is PORTED (Phase 30-03: its
-# prerequisites — mob jump control + fluid detection — landed in 30-01/30-02). @1/@3/@4/@5 remain
-# DEFERRED with a cited reason (deferred-goals.md): their prerequisites (a mob damage source; entity
-# aging/breeding; held-item tags) are unbuilt — porting them now would be built-but-unwired or faked,
-# both forbidden. This plugin ports @0/@6/@7/@8 1:1.
+# prerequisites — mob jump control + fluid detection — landed in 30-01/30-02). @1 PanicGoal is PORTED
+# (Phase 31-01: its prerequisite — the lastDamageSource keystone (Phase 29) + the candidate/snap
+# machinery (Phase 30.1) — exist). @3/@4/@5 remain DEFERRED with a cited reason (deferred-goals.md):
+# their prerequisites (entity aging/breeding; held-item tags) are unbuilt — porting them now would be
+# built-but-unwired or faked, both forbidden. This plugin ports @0/@1/@6/@7/@8 1:1.
 #
 # Each goal callback receives (entity, world, nav) handles. The interpreter fires ONLY while a goal
 # is RUNNING (an idle pig makes zero starlark.Calls per tick). The draw ORDER below matches the
@@ -37,6 +38,11 @@ STROLL_WATER_AVOID_PROBABILITY = 0.001   # WaterAvoidingRandomStrollGoal.PROBABI
                                # DefaultRandomPos (no up-snap). The DRAW is required for lockstep; the
                                # Go runtime snap is consumed-as-Land (always up-snaps) so the chosen
                                # branch does not change the committed target today.
+PANIC_H = 5               # PanicGoal.findRandomPosition: DefaultRandomPos.getPos(mob, 5, 4) horizontal radius
+PANIC_V = 4               # vertical radius (DefaultRandomPos.getPos(mob, 5, 4))
+PANIC_SPEED = 1.25        # Pig.registerGoals @1 PanicGoal(mob, 1.25) (the want carries position only; the
+                               # 1.25 multiplier is cited-deferred like stroll's speedModifier, LOCKSTEP with
+                               # the Go oracle's panicSpeedModifier)
 LOOK_DIST = 6.0           # LookAtPlayerGoal lookDistance (Pig: 6.0f)
 LOOK_PROBABILITY = 0.02   # LookAtPlayerGoal.DEFAULT_PROBABILITY
 LOOK_AROUND_PROBABILITY = 0.02   # RandomLookAroundGoal.canUse: nextFloat() < 0.02f
@@ -62,6 +68,48 @@ def float_can_use(entity, world, nav):
 def float_tick(entity, world, nav):
     if entity.rand_float() < FLOAT_JUMP_PROBABILITY:   # DRAW 1: nextFloat()<0.8 (the swim-jump chance)
         nav.jump()
+
+# ============================================================================================
+# @1  PanicGoal(mob, 1.25)   flags {MOVE}
+# ports net.minecraft.world.entity.ai.goal.PanicGoal — LOCKSTEP with the Go oracle (server/ai_goals_panic.go)
+# ============================================================================================
+# canUse (bytecode): if (!shouldPanic()) return false; (RETURN BEFORE ANY RNG); if (isOnFire())
+# { lookForWater(level, mob, 5); ... } ; return findRandomPosition() == DefaultRandomPos.getPos(mob,5,4).
+# shouldPanic() = getLastDamageSource() != null && getLastDamageSource().is(panic_causes) — read via the
+# Task-1 handle attrs entity.has_last_damage (the faithful not-null signal) + entity.damage_in_tag(
+# "panic_causes") (the host-side DamageSource.is membership read; the tag id set stays on the Go side).
+# The shouldPanic gate is the FIRST line so a dry/unhurt pig draws ZERO RNG (the oracle contract — IDENTICAL
+# to the Go oracle's canUse short-circuit). When a panic DOES fire, findRandomPosition draws the
+# UNCONDITIONAL 10-candidate DefaultRandomPos(5,4) loop: each candidate = generateRandomDirection in x, y, z
+# ORDER (3 nextInt: nextInt(11)-5, nextInt(9)-4, nextInt(11)-5) = 30 nextInt total, IDENTICAL to the Go
+# oracle's stream. Emit the 10 RAW candidates PLUS landMode=0.0 (DefaultRandomPos, no up-snap) as 31 FLAT
+# positional floats via nav.path_to(x0,y0,z0,...,x9,y9,z9, 0.0) — the SAME 31-float overload Phase 30.1
+# added (setWantCandidates -> snapStrollWant). The commit lands in can_use (path_to fires on canUse
+# success), matching the Go goal which draws in findRandomPosition (called from canUse).
+def panic_can_use(entity, world, nav):
+    if not (entity.has_last_damage and entity.damage_in_tag("panic_causes")):   # shouldPanic: ZERO draws if false
+        return False
+    # (on-fire lookForWater branch: rare, RNG-free, currently a cited false-stub — matching the Go
+    # isOnFire/lookForWater false-stubs; a non-burning pig never enters it.)
+    flat = []
+    for _ in range(10):   # DefaultRandomPos.getPos: 10 unconditional candidates (RandomPos.generateRandomPos, NO break)
+        xt = entity.rand_int(2 * PANIC_H + 1) - PANIC_H   # x offset (DRAW order 1 of 3)
+        yt = entity.rand_int(2 * PANIC_V + 1) - PANIC_V   # y offset (DRAW order 2 of 3) <- y BEFORE z
+        zt = entity.rand_int(2 * PANIC_H + 1) - PANIC_H   # z offset (DRAW order 3 of 3)
+        flat.append(entity.x + xt)
+        flat.append(entity.y + yt)
+        flat.append(entity.z + zt)
+    flat.append(0.0)   # 31st float: landMode = 0.0 (DefaultRandomPos, no up-snap — LOCKSTEP with the Go start())
+    nav.path_to(*flat)   # 31 positional floats (x0,y0,z0,...,x9,y9,z9, landMode) -> setWantCandidates -> the snap
+    return True
+
+# stop (bytecode): isRunning = false. The Go oracle: clearWantTarget(). nav.stop() is that seam.
+def panic_stop(entity, world, nav):
+    nav.stop()
+
+# canContinueToUse (bytecode): !navigation.isDone(). The Go oracle: e.ai.hasTarget. nav.has_path is that seam.
+def panic_continue(entity, world, nav):
+    return nav.has_path()
 
 # ============================================================================================
 # @6  WaterAvoidingRandomStrollGoal(mob, 1.0)   flags {MOVE}
@@ -217,6 +265,16 @@ declare_mob(
             can_use = float_can_use,
             tick = float_tick,
             requires_update_every_tick = True,
+        ),
+        # @1 PanicGoal(mob, 1.25) [MOVE] — the flee consumer; can_use commits the candidates (via path_to)
+        # so NO start kwarg; stop/continue carry the rest. Preempts stroll@6's MOVE flag (priority 1 < 6).
+        # LOCKSTEP with the Go oracle's addGoal(1, newPanicGoal(1.25)). Cite Pig.registerGoals @1 PanicGoal.
+        goal(
+            priority = 1,
+            flags = ["MOVE"],
+            can_use = panic_can_use,
+            stop = panic_stop,
+            can_continue = panic_continue,
         ),
         # @6 WaterAvoidingRandomStrollGoal [MOVE] — can_use commits the candidates (via path_to), so NO
         # start kwarg; stop/continue carry the rest.
