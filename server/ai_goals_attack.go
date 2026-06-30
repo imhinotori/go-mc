@@ -41,6 +41,12 @@ const meleeCooldownBetweenCanUseChecks = 20
 //	[VERIFIED javap MeleeAttackGoal.resetAttackCooldown: ticksUntilNextAttack = adjustedTickDelay(20).]
 const meleeAttackResetCooldown = 20
 
+// spiderDaylightFleeChance is Spider$SpiderAttackGoal.canContinueToUse's daylight-flee bound: when the
+// spider is in bright light it drops its target with probability 1-in-100 PER TICK (nextInt(100)==0).
+//
+//	[VERIFIED javap Spider$SpiderAttackGoal.canContinueToUse: bipush 100; nextInt(100); ifne ... .]
+const spiderDaylightFleeChance = 100
+
 // defaultAttackReach is net.minecraft.world.entity.Mob.DEFAULT_ATTACK_REACH, computed in Mob's static
 // init as Math.sqrt(2.0399999618530273) - 0.6000000238418579 (the exact float-widened doubles the jar
 // emits). isWithinMeleeAttackRange inflates the attacker's bounding box by this reach and tests AABB
@@ -61,10 +67,11 @@ type meleeAttackGoal struct {
 	lastCanUseCheck     int64 // MeleeAttackGoal.lastCanUseCheck — the gameTime of the last canUse eval
 	ticksUntilNextAttack int  // MeleeAttackGoal.ticksUntilNextAttack — RNG-free swing countdown
 
-	// daylightGated is the SpiderAttackGoal delta: a spider "won't attack in daylight". When set, the
-	// goal gates additionally on the day/night proxy (the SAME gametime-darkness proxy the spawn rule
-	// uses, 35-02). v1 has no light engine; the gate is the proxy. ZombieAttackGoal leaves this false
-	// (plain melee). Cite SpiderAttackGoal / Spider$SpiderAttackGoal.
+	// daylightGated is the Spider$SpiderAttackGoal delta: a spider in BRIGHT light drops its target
+	// 1-in-100 per tick (canContinueToUse's daylight-flee). When set, canContinueToUse runs the
+	// stochastic flee draw (nextInt(100)) gated on the day/night proxy (isBright == !isDarkEnoughToSpawn,
+	// 35-02). v1 has no light engine; the gate is the proxy. ZombieAttackGoal leaves this false (plain
+	// melee, NO daylight draw). Cite Spider$SpiderAttackGoal.canContinueToUse.
 	daylightGated bool
 }
 
@@ -78,8 +85,13 @@ func newMeleeAttackGoal(speed float64) *meleeAttackGoal {
 	return &meleeAttackGoal{baseGoal: newBaseGoal(flagMove), speedModifier: speed}
 }
 
-// newSpiderAttackGoal builds the SpiderAttackGoal delta: a MeleeAttackGoal that won't attack in
-// daylight. Behaviorally the base melee + the daylight gate. Cite Spider$SpiderAttackGoal.
+// newSpiderAttackGoal builds the Spider$SpiderAttackGoal delta: a MeleeAttackGoal whose
+// canContinueToUse drops the target 1-in-100 per tick in bright light (the "spiders calm in daylight"
+// flee). The jar ctor is super(spider, 1.0, true) — speedModifier 1.0, followingTargetEvenIfNotSeen
+// true (a cited no-op in v1, no LoS/sensing). Behaviorally the base melee + the daylight-flee draw.
+//
+//	[VERIFIED javap Spider$SpiderAttackGoal.<init>: dconst_1; iconst_1; invokespecial
+//	 MeleeAttackGoal.<init>(PathfinderMob, double, boolean).]
 func newSpiderAttackGoal(speed float64) *meleeAttackGoal {
 	g := newMeleeAttackGoal(speed)
 	g.daylightGated = true
@@ -114,9 +126,11 @@ func (g *meleeAttackGoal) canUse(t *TickLoop, e *Entity) bool {
 		return false
 	}
 	g.lastCanUseCheck = time
-	if g.daylightGated && !g.isNight(t) {
-		return false // SpiderAttackGoal: no attack in daylight (the day/night proxy)
-	}
+	// NOTE: SpiderAttackGoal.canUse is super.canUse() && !isVehicle() — it carries NO daylight check
+	// (the daylight gate lives in canContinueToUse as the stochastic 1/100 target-drop, below). v1 has
+	// no vehicle/passenger subsystem, so !isVehicle() is a cited no-op (always true) — the spider is
+	// never a passenger. The wave-1 canUse daylight block was NOT faithful to the decompile and is
+	// removed (Spider$SpiderAttackGoal.canUse: invokespecial MeleeAttackGoal.canUse; isVehicle ifne).
 	id := mobTarget(e)
 	if id == 0 {
 		return false
@@ -131,18 +145,36 @@ func (g *meleeAttackGoal) canUse(t *TickLoop, e *Entity) bool {
 	return true
 }
 
-// canContinueToUse ports MeleeAttackGoal.canContinueToUse: keep attacking while the target is a
-// present, valid combat target (the jar walks getTarget()!=null && canAttackTarget &&
-// !navigation.isDone() / within-reach). v1: the target still resolves on the loop. NO RNG.
+// canContinueToUse ports MeleeAttackGoal.canContinueToUse + the Spider$SpiderAttackGoal daylight
+// delta. The base MeleeAttackGoal: keep attacking while the target is a present, valid combat target
+// (getTarget()!=null && canAttackTarget). For a daylight-gated spider, FIRST the daylight-flee gate
+// runs (Spider$SpiderAttackGoal.canContinueToUse):
 //
-//	[VERIFIED javap MeleeAttackGoal.canContinueToUse: target = getTarget(); if null false; if
-//	 !canAttack(target) false; ... return true.]
+//	float br = mob.getLightLevelDependentMagicValue();
+//	if (br >= 0.5f && mob.getRandom().nextInt(100) == 0) { mob.setTarget(null); return false; }  // RNG
+//	return super.canContinueToUse();
+//
+// A spider in BRIGHT light (br >= 0.5 — daytime) drops its target 1-in-100 per tick (the "spiders
+// calm in daylight" behavior). The nextInt(100) is drawn ONLY when bright; at night the branch is
+// skipped (no draw). The brightness read is the day/night proxy (isBright == !isDarkEnoughToSpawn).
+// NO RNG for a plain (non-daylight-gated) melee.
+//
+//	[VERIFIED javap MeleeAttackGoal.canContinueToUse: target = getTarget(); if null false; ... ;
+//	 Spider$SpiderAttackGoal.canContinueToUse: getLightLevelDependentMagicValue; >=0.5f &&
+//	 nextInt(100)==0 -> setTarget(null); iconst_0 ireturn; else super.canContinueToUse.]
 func (g *meleeAttackGoal) canContinueToUse(t *TickLoop, e *Entity) bool {
+	if g.daylightGated && g.isBright(t) {
+		// DRAW (daylight-flee, ONLY when bright): getRandom().nextInt(100). On 0 -> drop the target.
+		if mobRandom(e).nextInt(spiderDaylightFleeChance) == 0 {
+			if e.ai != nil {
+				e.ai.setTarget(0) // mob.setTarget(null)
+			}
+			return false
+		}
+	}
+	// super.canContinueToUse(): the target still resolves on the loop (a present, valid combat target).
 	id := mobTarget(e)
 	if id == 0 {
-		return false
-	}
-	if g.daylightGated && !g.isNight(t) {
 		return false
 	}
 	return t.playerByEntityID(id) != nil
@@ -250,17 +282,24 @@ func (g *meleeAttackGoal) doHurtTarget(t *TickLoop, e *Entity, target *tickPlaye
 	t.applyDamage(target, src, dmg) // the PLAYER hurt path (victim is a player)
 }
 
-// isNight is the SpiderAttackGoal daylight gate's day/night proxy: spiders calm in daylight, so the
-// goal runs only at "night". The real Spider gate reads getLightLevelDependentMagicValue (a light
-// read) — no light engine exists in v1, so this is the SAME gametime-darkness proxy the hostile spawn
-// rule uses (35-02). Until the spawn proxy lands, this is a cited stub returning true (always "night")
-// so the spider attacks — the gate is structured to read the real proxy when it lands. Cite
-// Spider$SpiderAttackGoal (getLightLevelDependentMagicValue >= 0.5 -> daylight) + Monster
-// .isDarkEnoughToSpawn (the proxy).
-func (g *meleeAttackGoal) isNight(_ *TickLoop) bool {
-	// CITE-DEFERRED: the gametime-darkness proxy (35-02's isDarkEnoughToSpawn) is not yet built; until
-	// it lands the spider is treated as always at night (attacks). Wire this to the proxy in 35-02/35-05.
-	return true
+// isBright is the SpiderAttackGoal daylight gate's day/night proxy: a spider in BRIGHT light (vanilla
+// getLightLevelDependentMagicValue() >= 0.5f) runs the 1/100 daylight-flee draw. The real Spider gate
+// reads getLightLevelDependentMagicValue (a sky/block-light read) — no light engine exists in v1, so
+// this is the SAME gametime-darkness proxy the hostile spawn rule uses (35-02's isDarkEnoughToSpawn).
+// "Bright" == NOT dark-enough-to-spawn == daytime (gametime % 24000 outside the [13000,23000) night
+// window). At night the daylight branch never runs (no flee draw, the target is retained); in daylight
+// the 1/100 drop fires. The gate is structured to read the real getLightLevelDependentMagicValue >= 0.5
+// when the lighting engine lands. Cite Spider$SpiderAttackGoal.canContinueToUse +
+// Monster.isDarkEnoughToSpawn (the proxy).
+//
+// DEFERRED (recorded + in the SUMMARY): the real getLightLevelDependentMagicValue (a continuous
+// light-derived float, the interpolated sky+block brightness) collapses here to a binary day/night
+// proxy — the same FORCED decision the spawn gate made (35-02). It becomes a real light read with the
+// lighting engine, off no mob's lockstep stream (the flee draw stays on the spider's per-entity rng).
+func (g *meleeAttackGoal) isBright(t *TickLoop) bool {
+	// "Bright" (daytime) is the inverse of the night-window dark proxy. isDarkEnoughToSpawn() is true
+	// during the [13000,23000) night window; bright == its negation (daytime).
+	return !t.isDarkEnoughToSpawn()
 }
 
 // mobTarget reads the mob's current attack-target id (the Mob.getTarget() analogue), nil-guarding the
@@ -304,3 +343,157 @@ func isWithinMeleeAttackRange(e *Entity, target *tickPlayer) bool {
 		aMinY <= tMaxY && aMaxY >= tMinY &&
 		aMinZ <= tMaxZ && aMaxZ >= tMinZ
 }
+
+// --- leapAtTargetGoal ---------------------------------------------------------------------------
+
+// leapAtTargetGoal ports net.minecraft.world.entity.ai.goal.LeapAtTargetGoal (the Spider @3). It is
+// the ONE goal that IMPULSES — it sets a velocity delta toward the target (a pounce), it does NOT set
+// a nav want / path. canUse is RNG-gated (a 1-in-leapReducedInterval roll, drawn ONLY after the
+// distance-band + on-ground guards pass), and start() applies the impulse.
+//
+//   ⚠ THE GATE IS nextInt, NOT nextFloat (the 35-JARNOTES pre-decompile guess said "nextFloat" — the
+//   exec-time decompile this session CORRECTS that to nextInt(reducedTickDelay(5))). The 1:1-with-the-
+//   jar mandate is absolute, so this ports the REAL bytecode: getRandom().nextInt(reducedTickDelay(5)).
+//
+// THE PIG ORACLE IS UNTOUCHED: a passive pig declares no leap goal, so this never ticks on it — no
+// draw reaches the pinned pig stream.
+type leapAtTargetGoal struct {
+	baseGoal
+	yd     float64 // LeapAtTargetGoal.yd — the vertical leap component (Spider: 0.4)
+	target int32   // LeapAtTargetGoal.target — captured in canUse, used by start()'s impulse
+}
+
+// leapReducedInterval is the FAITHFUL Go RNG-gate bound for LeapAtTargetGoal.canUse: the FULL value
+// (5), NOT the jar's reducedTickDelay(5) == Mth.positiveCeilDiv(5,2) == 3. The jar halves it to
+// compensate for vanilla evaluating goals every-OTHER server tick (the Mob.serverAiStep (tickCount+id)
+// %2 decimation); our full-rate serverAiStep does not decimate, so the raw 5 is the 1:1-faithful value
+// run every tick — EXACTLY the same identity rule nearestTargetRandomInterval (10, not 5) follows.
+//
+//	[VERIFIED javap LeapAtTargetGoal.canUse: ... iconst_5; invokestatic reducedTickDelay; nextInt; ifeq.]
+const leapReducedInterval = 5
+
+// leapMinDistSqr / leapMaxDistSqr are the LeapAtTargetGoal.canUse distance band: the mob leaps only
+// when 4.0 <= distanceToSqr(target) <= 16.0 (too close -> no leap, too far -> no leap).
+//
+//	[VERIFIED javap LeapAtTargetGoal.canUse: distanceToSqr; ldc2_w 4.0d dcmpg iflt; ldc2_w 16.0d dcmpl ifle.]
+const (
+	leapMinDistSqr = 4.0
+	leapMaxDistSqr = 16.0
+)
+
+// leapHorizontalScale / leapDeltaCarry are the start() impulse vector scalars: the normalized
+// horizontal direction is scaled by 0.4 and ADDED to 0.2× the mob's existing delta movement.
+//
+//	[VERIFIED javap LeapAtTargetGoal.start: v.normalize().scale(0.4d).add(delta.scale(0.2d)).]
+const (
+	leapHorizontalScale = 0.4
+	leapDeltaCarry      = 0.2
+)
+
+// leapLengthSqrEpsilon is the LeapAtTargetGoal.start() guard: the horizontal direction is normalized
+// only when its lengthSqr exceeds 1.0E-7 (else the impulse keeps the zero horizontal vector, applying
+// just the vertical yd) — guards a divide-by-zero on a degenerate (mob == target x/z) direction.
+//
+//	[VERIFIED javap LeapAtTargetGoal.start: v.lengthSqr(); ldc2_w 1.0E-7d; dcmpl; ifle (skip normalize).]
+const leapLengthSqrEpsilon = 1.0e-7
+
+// newLeapAtTargetGoal builds the leap goal with the JUMP+MOVE flags (LeapAtTargetGoal ctor:
+// setFlags(EnumSet.of(JUMP, MOVE))) and the vertical leap component yd.
+//
+//	[VERIFIED javap LeapAtTargetGoal.<init>: putfield yd; EnumSet.of(JUMP, MOVE); setFlags.]
+func newLeapAtTargetGoal(yd float64) *leapAtTargetGoal {
+	return &leapAtTargetGoal{baseGoal: newBaseGoal(flagJump | flagMove), yd: yd}
+}
+
+// canUse ports LeapAtTargetGoal.canUse (bytecode-verified this session):
+//
+//	if (mob.hasControllingPassenger()) return false;            // v1: no passenger subsystem -> no-op
+//	this.target = mob.getTarget();
+//	if (this.target == null) return false;
+//	double d = mob.distanceToSqr(target);
+//	if (d < 4.0 || d > 16.0) return false;                      // the leap distance band
+//	if (!mob.onGround()) return false;                          // must be grounded to leap
+//	return mob.getRandom().nextInt(reducedTickDelay(5)) == 0;   // RNG GATE (the raw 5, our full-rate value)
+//
+// The RNG gate is the LAST check — it draws EXACTLY ONE nextInt(5), and ONLY when the passenger +
+// target + distance-band + on-ground guards all pass (an out-of-band / airborne reject draws ZERO RNG).
+// v1's target is a player id (mobAI.getTarget()); distanceToSqr is the squared mob->player distance.
+//
+//	[VERIFIED javap LeapAtTargetGoal.canUse: hasControllingPassenger ifne -> 0; getTarget putfield;
+//	 ifnull -> 0; distanceToSqr; <4.0 || >16.0 -> 0; onGround ifeq -> 0; nextInt(reducedTickDelay(5))
+//	 ifeq -> 1 else 0.]
+func (g *leapAtTargetGoal) canUse(t *TickLoop, e *Entity) bool {
+	// hasControllingPassenger(): v1 has no passenger/vehicle subsystem — a cited no-op (always false,
+	// the spider is never ridden). The guard is structured to read a real passenger when one lands.
+	if e.ai == nil {
+		return false
+	}
+	g.target = e.ai.getTarget()
+	if g.target == 0 { // getTarget() == null
+		return false
+	}
+	p := t.playerByEntityID(g.target)
+	if p == nil {
+		return false
+	}
+	// distanceToSqr(target): the squared mob->player distance (the band guard, BEFORE the RNG draw).
+	dx, dy, dz := p.x-e.x, p.y-e.y, p.z-e.z
+	d := dx*dx + dy*dy + dz*dz
+	if d < leapMinDistSqr || d > leapMaxDistSqr {
+		return false
+	}
+	if !e.onGround { // !mob.onGround() -> false (must be grounded)
+		return false
+	}
+	// DRAW (the gate, LAST): getRandom().nextInt(reducedTickDelay(5)). reducedTickDelay(5)==3 in the
+	// jar, but our full-rate tick uses the raw 5 (the leapReducedInterval identity, see its doc). The
+	// leap fires iff the roll == 0.
+	return mobRandom(e).nextInt(leapReducedInterval) == 0
+}
+
+// canContinueToUse ports LeapAtTargetGoal.canContinueToUse: !mob.onGround() — the leap continues only
+// while the mob is airborne (the pounce arc); once it lands the goal stops. NO RNG.
+//
+//	[VERIFIED javap LeapAtTargetGoal.canContinueToUse: onGround ifne -> iconst_0 else iconst_1.]
+func (g *leapAtTargetGoal) canContinueToUse(_ *TickLoop, e *Entity) bool {
+	return !e.onGround
+}
+
+// start ports LeapAtTargetGoal.start — the impulse (the ONE goal that sets a velocity delta, NOT a
+// nav want):
+//
+//	Vec3 delta = mob.getDeltaMovement();
+//	Vec3 v = new Vec3(target.getX() - mob.getX(), 0.0, target.getZ() - mob.getZ());
+//	if (v.lengthSqr() > 1.0E-7) v = v.normalize().scale(0.4).add(delta.scale(0.2));
+//	mob.setDeltaMovement(v.x, this.yd, v.z);
+//
+// The horizontal direction toward the target (y zeroed) is normalized + scaled by 0.4 and the mob's
+// existing horizontal delta (×0.2) is carried; the vertical component is the fixed yd. setDeltaMovement
+// is the e.vx/vy/vz seam (the SAME seam knockbackEntity/set_velocity uses, combat_mob.go) — NOT
+// setWantTarget (the leap impulses, the navigation does not path it). NO RNG.
+//
+//	[VERIFIED javap LeapAtTargetGoal.start: getDeltaMovement; new Vec3(tx-x, 0, tz-z); lengthSqr >1e-7
+//	 -> normalize.scale(0.4).add(delta.scale(0.2)); setDeltaMovement(v.x, yd, v.z).]
+func (g *leapAtTargetGoal) start(t *TickLoop, e *Entity) {
+	p := t.playerByEntityID(g.target)
+	if p == nil {
+		return
+	}
+	// delta = getDeltaMovement() (the mob's current velocity).
+	deltaX, deltaZ := e.vx, e.vz
+	// v = (tx - x, 0, tz - z): the horizontal direction toward the target.
+	vx := p.x - e.x
+	vz := p.z - e.z
+	if vx*vx+vz*vz > leapLengthSqrEpsilon {
+		// v = v.normalize().scale(0.4).add(delta.scale(0.2)).
+		length := math.Sqrt(vx*vx + vz*vz)
+		vx = vx/length*leapHorizontalScale + deltaX*leapDeltaCarry
+		vz = vz/length*leapHorizontalScale + deltaZ*leapDeltaCarry
+	}
+	// setDeltaMovement(v.x, yd, v.z): the impulse — vertical = yd, horizontal = the scaled direction.
+	// This IMPULSES (sets velocity); it does NOT setWantTarget (the leap is the one goal exception).
+	e.vx, e.vy, e.vz = vx, g.yd, vz
+}
+
+// Compile-time assertion: leapAtTargetGoal IS a server.Goal.
+var _ Goal = (*leapAtTargetGoal)(nil)
