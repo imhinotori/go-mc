@@ -35,8 +35,8 @@ import (
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
-// vanillaChickenMobName is the declare_mob name the chicken plugin captures (mirrors vanillaPigMobName).
-const vanillaChickenMobName = "vanilla_chicken"
+// vanillaChickenMobName is the declare_mob name the chicken plugin captures; the package const now
+// lives in vanilla_pig_embed.go (Plan 34-04 boot-load generalization), shared by the spawn levers.
 
 // loadVanillaChickenRegistry materializes the on-disk vanilla_chicken plugin (the operator-facing copy
 // under repo-root plugins/vanilla_chicken/, byte-identical to the server/assets embed copy) into a

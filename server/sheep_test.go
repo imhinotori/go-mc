@@ -26,8 +26,8 @@ import (
 	"go.starlark.net/starlark"
 )
 
-// vanillaSheepMobName is the declared mob name the sheep .star captures (declare_mob name=).
-const vanillaSheepMobName = "vanilla_sheep"
+// vanillaSheepMobName is the declared mob name the sheep .star captures; the package const now lives in
+// vanilla_pig_embed.go (Plan 34-04 boot-load generalization), shared by the spawn levers.
 
 // loadSheepRegistry materializes the on-disk vanilla_sheep plugin (plugins/vanilla_sheep/, reached from
 // the server/ test cwd via ../plugins) into an isolated temp plugin dir and loads it through the host's

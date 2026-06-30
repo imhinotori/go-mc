@@ -344,11 +344,11 @@ func main() {
 	// "vanilla_pig" declaration MUST be live before the first pig can spawn (RESEARCH Pitfall 4). The
 	// plugin is //go:embed'd into the server binary, so it is ALWAYS present; a load failure here is
 	// FATAL (a swap with no pig is a broken server, not a degraded one — fail loudly at boot).
-	if reg, err := server.LoadVanillaPigRegistry(); err != nil {
-		log.Fatalf("vanilla_pig boot-load failed (the swapped pig has no declaration): %v", err)
+	if reg, err := server.LoadVanillaMobRegistry(); err != nil {
+		log.Fatalf("vanilla mob boot-load failed (a swapped mob has no declaration): %v", err)
 	} else {
 		tick.SetMobRegistry(reg)
-		log.Printf("vanilla_pig: bundled 1:1 pig plugin boot-loaded (the only pig is plugin-driven)")
+		log.Printf("vanilla mobs: bundled 1:1 pig/cow/sheep/chicken plugins boot-loaded (the only mobs are plugin-driven)")
 		// v5: the wandermob (a v4 custom-mob API gate — base_type pig, ONE MOVE goal, no FloatGoal) is
 		// NO LONGER boot-loaded. The dogfood is now the REAL vanilla mobs as plugins (vanilla_pig, then
 		// cow/sheep/etc. in Phase 34), not a toy custom mob — and a second pig-looking mob with no

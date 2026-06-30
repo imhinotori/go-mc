@@ -1,15 +1,16 @@
 package server
 
-// vanilla_pig_embed.go — PLUGIN-04 (Plan 24-02): the BOOT-LOAD of the bundled vanilla_pig plugin
-// (RESEARCH Pitfall 4 — the Phase-23-deferred follow-up). The SWAP (async.go/debug.go) makes the
-// plugin pig the ONLY pig, so the vanilla_pig declaration MUST be present in the binary and live in a
-// tick-owned registry BEFORE the first pig can spawn. We //go:embed the plugin (plugin.toml +
-// main.star) so it is ALWAYS in the binary (an operator cannot delete it from a plugins/ dir and
-// leave the swap with no pig), materialize it to a temp dir, and load it through the host's
-// LoadDirWith with the server-owned declare_mob/goal builtins injected (the exact plugin_mob_test.go
-// harness). The least-privilege caps come from the embedded manifest (stamped via setLoadCaps so the
-// captured mobDecl carries the right grant). If the declaration is missing after load, the loader
-// FAILS LOUDLY (not a silent spawn-time nil — Pitfall 4 / T-24-09).
+// vanilla_pig_embed.go — PLUGIN-04 (Plan 24-02) generalized in Plan 34-04 (THE GATE): the BOOT-LOAD of
+// the bundled vanilla mob plugins (pig + the Phase-34 cow/sheep/chicken). The SWAP (async.go/debug.go)
+// makes the plugin mobs the ONLY mobs, so EACH vanilla_<mob> declaration MUST be present in the binary
+// and live in ONE tick-owned registry BEFORE the first mob can spawn (RESEARCH Pitfall 4). We
+// //go:embed the plugins (plugin.toml + main.star per mob) so they are ALWAYS in the binary (an
+// operator cannot delete one from a plugins/ dir and leave the swap with no mob), materialize each to a
+// temp dir, and load it through the host's LoadDirWith with the server-owned declare_mob/goal builtins
+// injected (the exact plugin_mob_test.go harness). The least-privilege caps come from EACH embedded
+// manifest (stamped via setLoadCaps PER MOB so the captured mobDecl carries the right grant — caps are
+// per-load, plugin_mob_decl.go:95). If ANY of the 4 declarations is missing after load, the loader
+// FAILS LOUDLY (not a silent spawn-time nil — Pitfall 4 / T-24-09 / T-34-10).
 
 import (
 	"embed"
@@ -22,102 +23,143 @@ import (
 	"go.starlark.net/starlark"
 )
 
-// vanillaPigFS embeds the bundled vanilla_pig plugin. The canonical operator-facing copy also ships
-// at the repo-root plugins/vanilla_pig/; this embedded copy (server/assets/vanilla_pig/) is the
+// vanillaMobFS embeds the bundled vanilla mob plugins. The canonical operator-facing copies also ship
+// at the repo-root plugins/vanilla_<mob>/; these embedded copies (server/assets/vanilla_<mob>/) are the
 // source of truth for the SWAP (a swapped-on-disk plugins/ copy cannot widen the swap's caps — the
-// embedded manifest governs, T-24-07). Keep the two copies identical.
+// embedded manifest governs, T-24-07). Keep each repo-root/embed pair byte-identical. Embedding the
+// dirs covers plugin.toml + main.star for each mob.
 //
-//go:embed assets/vanilla_pig/plugin.toml assets/vanilla_pig/main.star
-var vanillaPigFS embed.FS
+//go:embed assets/vanilla_pig assets/vanilla_cow assets/vanilla_sheep assets/vanilla_chicken
+var vanillaMobFS embed.FS
 
-// vanillaPigMobName is the declared mob name the swap sites look up.
-const vanillaPigMobName = "vanilla_pig"
+// The declared mob names the swap sites look up. Each is the directory name under assets/ AND the
+// declare_mob(name=...) the plugin emits — the two must agree (the per-mob load asserts the name
+// captured).
+const (
+	vanillaPigMobName     = "vanilla_pig"
+	vanillaCowMobName     = "vanilla_cow"
+	vanillaSheepMobName   = "vanilla_sheep"
+	vanillaChickenMobName = "vanilla_chicken"
+)
 
-// loadVanillaPigRegistry materializes the embedded vanilla_pig plugin to a temp dir, parses its
-// manifest capabilities, stamps them onto a fresh mobRegistry, and loads it through the host with the
-// declare_mob/goal builtins injected — returning the registry holding the captured "vanilla_pig"
-// declaration. It FAILS LOUDLY if the declaration is absent after load (Pitfall 4). The temp dir is
-// removed before returning (the module body already captured into the registry at load — the files
-// are not needed afterward). Called once at boot, before tick.Run (single-threaded, before the tick
-// owns the registry — TICK-05).
-func loadVanillaPigRegistry() (*mobRegistry, error) {
-	dir, err := materializeVanillaPig()
-	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(dir)
+// vanillaMobNames is the load order: ALL FOUR bundled mobs load into the ONE registry. The pig is first
+// to keep the boot log + any pig-first diagnostics stable, but order is otherwise irrelevant (each mob
+// loads independently under its own caps). A missing entry here means that mob never boot-loads.
+var vanillaMobNames = []string{
+	vanillaPigMobName,
+	vanillaCowMobName,
+	vanillaSheepMobName,
+	vanillaChickenMobName,
+}
 
-	// Parse the embedded manifest's capabilities so the captured mobDecl carries the least-privilege
-	// grant (NOT capAll). The embedded manifest is the source of truth (T-24-07).
-	caps, err := vanillaPigCaps()
-	if err != nil {
-		return nil, err
-	}
-
+// loadVanillaMobRegistry materializes EACH bundled vanilla mob plugin to a temp dir, parses its
+// manifest capabilities, stamps them onto the SHARED mobRegistry (per-mob, before that mob's load —
+// caps are per-load), and loads it through the host with the declare_mob/goal builtins injected —
+// returning the ONE registry holding ALL FOUR captured declarations. It FAILS LOUDLY if ANY declaration
+// is absent after its load (Pitfall 4 / T-34-10). Each temp dir is removed before the next mob loads
+// (the module body already captured into the registry at load — the files are not needed afterward).
+// Called once at boot, before tick.Run (single-threaded, before the tick owns the registry — TICK-05).
+//
+// IMPORTANT: ONE registry r is created before the loop; all 4 mobs load into it (the byName map holds
+// all 4 — plugin_mob_decl.go:80-83). setLoadCaps is called PER MOB right before its LoadDirWith so each
+// captured mobDecl carries ITS OWN manifest's least-privilege grant (not the previous mob's, not capAll).
+func loadVanillaMobRegistry() (*mobRegistry, error) {
 	r := newMobRegistry()
-	r.setLoadCaps(caps)
-
 	mgr := host.New()
 	extra := starlark.StringDict{
 		"declare_mob": r.declareMobBuiltin(),
 		"goal":        r.goalBuiltin(),
 	}
-	if err := mgr.LoadDirWith(dir, extra); err != nil {
-		return nil, fmt.Errorf("vanilla_pig boot-load: %w", err)
+
+	for _, name := range vanillaMobNames {
+		if err := loadOneVanillaMob(r, mgr, extra, name); err != nil {
+			return nil, err
+		}
 	}
 
-	// LOUD failure if the declaration did not capture (Pitfall 4 / T-24-09): a missing "vanilla_pig"
-	// at boot is a hard error, never a silent spawn-time nil (which would leave a pigless world).
-	if _, ok := r.byName[vanillaPigMobName]; !ok {
-		return nil, fmt.Errorf("vanilla_pig boot-load: the embedded plugin did not declare %q (the SWAP would have no pig)", vanillaPigMobName)
+	// LOUD failure if ANY declaration did not capture (Pitfall 4 / T-24-09 / T-34-10): a missing
+	// vanilla_<mob> at boot is a hard error, never a silent spawn-time nil (which would leave that mob
+	// un-spawnable). Re-assert EACH name after the whole load so a name collision (two plugins claiming
+	// one name) also surfaces here.
+	for _, name := range vanillaMobNames {
+		if _, ok := r.byName[name]; !ok {
+			return nil, fmt.Errorf("vanilla mob boot-load: the embedded plugin did not declare %q (the SWAP would have no %s)", name, name)
+		}
 	}
 	return r, nil
 }
 
-// materializeVanillaPig writes the embedded plugin (plugin.toml + main.star) into a fresh temp plugin
-// dir layout (root/vanilla_pig/{plugin.toml,main.star}) that LoadDirWith can scan, returning the root.
-// The caller removes the dir after load.
-func materializeVanillaPig() (string, error) {
-	root, err := os.MkdirTemp("", "sulfur-vanilla-pig-*")
+// loadOneVanillaMob materializes the embedded plugin for one mob, stamps its manifest caps onto the
+// shared registry (per-load), and loads it through the host into that registry. The temp dir is removed
+// before returning. The per-mob LOUD assertion lives in the caller (after all loads) so a name that
+// failed to capture is reported uniformly.
+func loadOneVanillaMob(r *mobRegistry, mgr *host.Manager, extra starlark.StringDict, name string) error {
+	dir, err := materializeVanillaMob(name)
 	if err != nil {
-		return "", fmt.Errorf("vanilla_pig boot-load: temp dir: %w", err)
+		return err
 	}
-	dir := filepath.Join(root, vanillaPigMobName)
+	defer os.RemoveAll(dir)
+
+	// Parse THIS mob's embedded manifest capabilities so the captured mobDecl carries the
+	// least-privilege grant (NOT capAll, NOT the previous mob's). The embedded manifest is the source
+	// of truth (T-24-07). setLoadCaps is per-load (plugin_mob_decl.go:95) — set it right before the
+	// LoadDirWith for this mob.
+	caps, err := vanillaMobCaps(name)
+	if err != nil {
+		return err
+	}
+	r.setLoadCaps(caps)
+
+	if err := mgr.LoadDirWith(dir, extra); err != nil {
+		return fmt.Errorf("%s boot-load: %w", name, err)
+	}
+	return nil
+}
+
+// materializeVanillaMob writes the embedded plugin (plugin.toml + main.star) for the named mob into a
+// fresh temp plugin dir layout (root/<name>/{plugin.toml,main.star}) that LoadDirWith can scan,
+// returning the root. The caller removes the dir after load.
+func materializeVanillaMob(name string) (string, error) {
+	root, err := os.MkdirTemp("", "sulfur-"+name+"-*")
+	if err != nil {
+		return "", fmt.Errorf("%s boot-load: temp dir: %w", name, err)
+	}
+	dir := filepath.Join(root, name)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		os.RemoveAll(root)
-		return "", fmt.Errorf("vanilla_pig boot-load: mkdir: %w", err)
+		return "", fmt.Errorf("%s boot-load: mkdir: %w", name, err)
 	}
-	for _, name := range []string{"plugin.toml", "main.star"} {
-		data, err := vanillaPigFS.ReadFile("assets/vanilla_pig/" + name)
+	for _, file := range []string{"plugin.toml", "main.star"} {
+		data, err := vanillaMobFS.ReadFile("assets/" + name + "/" + file)
 		if err != nil {
 			os.RemoveAll(root)
-			return "", fmt.Errorf("vanilla_pig boot-load: read embedded %s: %w", name, err)
+			return "", fmt.Errorf("%s boot-load: read embedded %s: %w", name, file, err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, name), data, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, file), data, 0o644); err != nil {
 			os.RemoveAll(root)
-			return "", fmt.Errorf("vanilla_pig boot-load: write %s: %w", name, err)
+			return "", fmt.Errorf("%s boot-load: write %s: %w", name, file, err)
 		}
 	}
 	return root, nil
 }
 
-// vanillaPigCaps parses the embedded plugin.toml's capabilities into a capSet (the least-privilege
-// grant the goal callbacks' handles enforce). An unknown capability string is a loud error (the same
-// parseCapabilities rule the rest of the plugin system uses).
-func vanillaPigCaps() (capSet, error) {
-	data, err := vanillaPigFS.ReadFile("assets/vanilla_pig/plugin.toml")
+// vanillaMobCaps parses the named mob's embedded plugin.toml capabilities into a capSet (the
+// least-privilege grant the goal callbacks' handles enforce). An unknown capability string is a loud
+// error (the same parseCapabilities rule the rest of the plugin system uses).
+func vanillaMobCaps(name string) (capSet, error) {
+	data, err := vanillaMobFS.ReadFile("assets/" + name + "/plugin.toml")
 	if err != nil {
-		return 0, fmt.Errorf("vanilla_pig boot-load: read manifest: %w", err)
+		return 0, fmt.Errorf("%s boot-load: read manifest: %w", name, err)
 	}
 	var man struct {
 		Capabilities []string `toml:"capabilities"`
 	}
 	if err := toml.Unmarshal(data, &man); err != nil {
-		return 0, fmt.Errorf("vanilla_pig boot-load: parse manifest: %w", err)
+		return 0, fmt.Errorf("%s boot-load: parse manifest: %w", name, err)
 	}
 	caps, err := parseCapabilities(man.Capabilities)
 	if err != nil {
-		return 0, fmt.Errorf("vanilla_pig boot-load: %w", err)
+		return 0, fmt.Errorf("%s boot-load: %w", name, err)
 	}
 	return caps, nil
 }
