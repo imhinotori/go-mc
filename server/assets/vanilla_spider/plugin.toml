@@ -1,0 +1,13 @@
+name = "vanilla_spider"
+version = "0.1.0"
+entrypoint = "main.star"
+runtime = "starlark"
+# Least-privilege caps (24-RESEARCH Security Domain / T-24-07): a spider READS its own state + the
+# nearest player + the day/night darkness proxy, and WRITES its look/nav + the leap velocity impulse.
+# It NEVER sets blocks, so NO world.write. The melee-hit (player damage) is HOST-side (the targetSelector
+# / Go-native meleeAttackGoal through the player hurt path, 35-01) — NOT a plugin op, so no widened cap.
+#   entities.read  — read x/y/z + on_ground + velocity + was_hurt (the goal gates + leap direction)
+#   entities.write — set_look_at (LookControl.setLookAt) + set_velocity (LeapAtTargetGoal's setDeltaMovement impulse)
+#   world.read     — nearest_player (LookAtPlayer/Leap/SpiderTarget getNearestPlayer) + is_dark (the SpiderAttackGoal daylight proxy)
+#   nav            — path_to/has_path (WaterAvoidingRandomStrollGoal + the melee navigation.moveTo/isDone)
+capabilities = ["entities.read", "entities.write", "world.read", "nav"]

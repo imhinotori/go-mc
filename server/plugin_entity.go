@@ -854,12 +854,34 @@ func (h *worldHandle) Attr(name string) (starlark.Value, error) {
 		return h.bound("entities_near", h.entitiesNear), nil
 	case "nearest_player":
 		return h.bound("nearest_player", h.nearestPlayer), nil
+	case "is_dark":
+		return h.bound("is_dark", h.isDark), nil
 	}
 	return nil, nil
 }
 
 func (h *worldHandle) AttrNames() []string {
-	return []string{"block_at", "set_block", "entities_near", "nearest_player"}
+	return []string{"block_at", "set_block", "entities_near", "nearest_player", "is_dark"}
+}
+
+// isDark() READS the day/night darkness proxy (world.read): true when it is dark enough for hostiles
+// (the night portion of the gametime cycle). It is the FORCED proxy the spawn gate uses
+// (TickLoop.isDarkEnoughToSpawn, 35-02) standing in for the real sky/block-light read until the
+// lighting engine lands. The Spider$SpiderAttackGoal daylight-flee is gated on its INVERSE (bright ==
+// daytime == not is_dark): a spider drops its target 1-in-100/tick only when NOT dark. Exposed as a
+// host seam so the vanilla_spider .star can express the daylight gate faithfully (the brightness read
+// stays Go-side, cite-deferred to getLightLevelDependentMagicValue). NO RNG; tick-owned read; gated on
+// capWorldRead. CITE: net.minecraft.world.entity.monster.Monster.isDarkEnoughToSpawn (the proxy) +
+// Spider$SpiderAttackGoal.canContinueToUse (getLightLevelDependentMagicValue >= 0.5f -> bright).
+func (h *worldHandle) isDark(_ *starlark.Thread, b *starlark.Builtin,
+	args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if !h.caps.has(capWorldRead) {
+		return nil, capError("world.read")
+	}
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 0); err != nil {
+		return nil, err
+	}
+	return starlark.Bool(h.t.isDarkEnoughToSpawn()), nil
 }
 
 // nearestPlayer(x,y,z,max_dist) READS the nearest PLAYER position in range (world.read). Players are
