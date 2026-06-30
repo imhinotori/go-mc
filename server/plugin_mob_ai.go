@@ -189,6 +189,41 @@ func buildAIFromDecl(t *TickLoop, decl *mobDecl) *mobAI {
 	// reseeds it per entity id (reseedMobAI) so each declared mob has its own deterministic stream.
 	m.rng = newEntityRandom(defaultEntityRandomSeed)
 	for _, gd := range decl.goals {
+		// KIND-GOAL: route to the matching Go-NATIVE goal (the verbatim 35-01 jar port) instead of a
+		// starlarkGoal. The hostiles' combat goals (NearestAttackableTargetGoal/HurtByTargetGoal/
+		// MeleeAttackGoal/SpiderAttackGoal/LeapAtTargetGoal) are the SAME CLASS for every hostile — there
+		// is nothing per-mob to re-express in .star — so a hostile DECLARES the goal's priority + flags +
+		// kind and the Go-native goal does the work. The Go goal draws from THIS mob's m.rng (the same
+		// per-entity seeded stream the starlarkGoal goals draw from, set above + reseeded per id by the
+		// spawn site), so a kind-routed goal stays in lockstep with the .star goals. The pig declares NO
+		// kind-goal, so this branch is NEVER taken for it → zero new draws → the pig oracle is unperturbed.
+		if gd.nativeKind != "" {
+			ng := buildNativeGoal(gd.nativeKind, decl)
+			if ng == nil {
+				// An unknown kind is a LOUD failure (never a silent no-op): a declared hostile with a
+				// typo'd combat-goal kind would otherwise boot with a MISSING combat goal (it would never
+				// hunt/attack). spawnDeclaredMob runs on the tick goroutine; a panic here is isolated by
+				// the tickOnce recover backstop, surfacing the bad declaration loudly rather than shipping
+				// a silently-disarmed hostile. (The .star load already validated the rest of the mob.)
+				panic("buildAIFromDecl: unknown goal kind " + gd.nativeKind + " (valid: nearest_attackable_target, hurt_by_target, melee_attack, spider_attack, leap_at_target, float)")
+			}
+			// The Go goal's OWN flags() must match the declared flags — a declaration that names, e.g.,
+			// kind="melee_attack" but flags=["TARGET"] would route the goal into the WRONG selector AND
+			// mis-claim the wrong control flag. The native goal's ctor sets its faithful flag set
+			// (MeleeAttackGoal {MOVE}, NearestAttackableTargetGoal {TARGET}, ...), so assert the
+			// declaration agrees before routing. A mismatch is a loud declaration bug.
+			if ng.flags() != gd.flags {
+				panic("buildAIFromDecl: goal kind " + gd.nativeKind + " declares flags that disagree with the Go-native goal's own flags")
+			}
+			// Route by the goal's flag EXACTLY as the starlarkGoal branch does: a TARGET goal locks the
+			// TARGET flag in the independent targetSelector; every other goal arbitrates in goals.
+			if gd.flags&flagTarget != 0 {
+				m.targetSelector.addGoal(gd.priority, ng)
+			} else {
+				m.goals.addGoal(gd.priority, ng)
+			}
+			continue
+		}
 		g := &starlarkGoal{
 			baseGoal:        newBaseGoal(gd.flags),
 			t:               t,
@@ -216,6 +251,48 @@ func buildAIFromDecl(t *TickLoop, decl *mobDecl) *mobAI {
 	}
 	return m
 }
+
+// buildNativeGoal instantiates the Go-NATIVE goal (the verbatim 35-01 jar port) a kind-goal names. It
+// is the seam that lets a hostile .star reference the shared combat goals (the SAME class every hostile
+// uses) by name instead of re-expressing their combat RNG in Starlark (a lockstep-drift risk). It
+// returns nil for an unknown kind so the caller can fail loudly (never a silent no-op — a disarmed
+// hostile). The melee speed derives from the declared movement_speed (declaredWalkSpeed) — the SAME
+// blocks/tick pace the starlarkGoal navigation uses — so a faster-declared hostile chases faster; the
+// speedModifier is stored on the goal (the want-multiplier, cited-deferred like PanicGoal's, matching
+// ai_goals_attack.go's MeleeAttackGoal port). The Go goal's ctor sets its own faithful flag set, which
+// the caller asserts against the declared flags before routing.
+//
+//   - "nearest_attackable_target" → newNearestAttackableTargetGoal()  {TARGET}; the nextInt(10) acquire
+//   - "hurt_by_target"            → newHurtByTargetGoal()             {TARGET}; retaliate, NO RNG
+//   - "melee_attack"              → newMeleeAttackGoal(speed)         {MOVE};   the doHurtTarget keystone
+//   - "spider_attack"             → newSpiderAttackGoal(speed)        {MOVE};   melee + the daylight-flee
+//   - "leap_at_target"            → newLeapAtTargetGoal(spiderLeapYd) {JUMP,MOVE}; the leap impulse
+//   - "float"                     → newFloatGoal()                    {JUMP};   the swim-jump
+func buildNativeGoal(kind string, decl *mobDecl) Goal {
+	switch kind {
+	case "nearest_attackable_target":
+		return newNearestAttackableTargetGoal()
+	case "hurt_by_target":
+		return newHurtByTargetGoal()
+	case "melee_attack":
+		return newMeleeAttackGoal(declaredWalkSpeed(decl))
+	case "spider_attack":
+		return newSpiderAttackGoal(declaredWalkSpeed(decl))
+	case "leap_at_target":
+		// Spider.registerGoals @3 LeapAtTargetGoal(this, 0.4) — the ONLY leap user in v1; the 0.4
+		// vertical leap component is the Spider's literal ctor arg (35-JARNOTES.md:226-243).
+		return newLeapAtTargetGoal(spiderLeapYd)
+	case "float":
+		return newFloatGoal()
+	default:
+		return nil
+	}
+}
+
+// spiderLeapYd is the vertical leap component Spider.registerGoals passes to LeapAtTargetGoal(this, 0.4)
+// — the ONE caller of the leap goal in v1. Pinned here (rather than a magic literal in buildNativeGoal)
+// so the kind="leap_at_target" route stays the verbatim Spider arg. Cite Spider.registerGoals @3.
+const spiderLeapYd = 0.4
 
 // declaredWalkSpeed maps a declared movement_speed attribute (≈0.25 for a pig) to a blocks/tick walk
 // pace. Vanilla's movement_speed attribute (~0.25) is NOT blocks/tick directly; newPigAI uses a

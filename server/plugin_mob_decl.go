@@ -59,6 +59,18 @@ type goalDecl struct {
 	// starlarkGoal embeds baseGoal whose default is false; without this thread a ported @8 would not
 	// tick on the every-tick path vanilla guarantees, breaking behavior-identity. Default false.
 	requiresUpdateEveryTick bool
+	// nativeKind names a Go-NATIVE goal (the verbatim 35-01 jar ports: nearestAttackableTargetGoal /
+	// hurtByTargetGoal / meleeAttackGoal / spiderAttackGoal / leapAtTargetGoal / floatGoal) the
+	// declaration routes to INSTEAD of building a starlarkGoal over Starlark callbacks. The combat
+	// goals (NearestAttackableTargetGoal/MeleeAttackGoal/...) are the SAME CLASS for every hostile —
+	// there is nothing per-mob to re-express in .star, and re-expressing the combat RNG in Starlark
+	// would risk lockstep drift — so a hostile DECLARES the goal's priority + flags + kind, and the
+	// Go-native goal (which already draws from the mob's seeded rng in lockstep) does the work. Default
+	// "" (the existing starlarkGoal path, where the callbacks carry the behavior). A non-empty kind
+	// REQUIRES that NO callback be supplied (a kind-goal carries no Starlark body); buildAIFromDecl
+	// (plugin_mob_ai.go) switches on it. The pig declares NO kind-goal, so this branch is never taken
+	// for it → zero new draws → the pig oracle stays byte-identical.
+	nativeKind string
 }
 
 // mobDecl is one captured mob declaration: its name, the resolved base entity type (the EXISTING
@@ -235,12 +247,19 @@ func parseGoalFlags(list *starlark.List) (goalFlag, error) {
 // ----------------------------------------------------------------------------------------------
 
 // goalBuiltin returns the `goal(priority, flags, tick=None, can_use=None, start=None, stop=None,
-// can_continue=None, requires_update_every_tick=False)` builtin. It parses the priority + flags,
-// captures the (frozen-after-load) callables + the requires_update_every_tick flag, and returns a
-// goalValue wrapping the goalDecl. Type errors fire HERE (at goal()) so the author sees a precise
+// can_continue=None, requires_update_every_tick=False, kind=None)` builtin. It parses the priority +
+// flags, captures the (frozen-after-load) callables + the requires_update_every_tick flag, and returns
+// a goalValue wrapping the goalDecl. Type errors fire HERE (at goal()) so the author sees a precise
 // call site. tick is OPTIONAL (an empty-tick goal like RandomStrollGoal carries its behavior in
 // start/can_continue); can_continue threads a DISTINCT canContinueToUse (the ported vanilla goals
 // have one); requires_update_every_tick threads the jar's requiresUpdateEveryTick (RandomLookAround).
+//
+// kind names a Go-NATIVE goal (the 35-01 combat ports) the declaration routes to INSTEAD of a Starlark
+// body — used by the hostiles for their shared combat goals (the SAME MeleeAttackGoal/Nearest-
+// AttackableTargetGoal CLASS every hostile uses; nothing per-mob to re-express, and routing to the Go
+// port avoids re-expressing the combat RNG in Starlark / a lockstep-drift risk). A kind-goal carries
+// the priority + flags + kind ONLY: supplying ANY callback (or requires_update_every_tick) alongside
+// kind is a loud load error (the native goal owns the behavior + its update cadence).
 func (r *mobRegistry) goalBuiltin() *starlark.Builtin {
 	return starlark.NewBuiltin("goal", func(_ *starlark.Thread, b *starlark.Builtin,
 		args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
@@ -249,6 +268,7 @@ func (r *mobRegistry) goalBuiltin() *starlark.Builtin {
 		var tickFn starlark.Callable
 		var canUseFn, startFn, stopFn, continueFn starlark.Callable
 		var requiresUpdateEveryTick bool
+		var nativeKind string
 		if err := starlark.UnpackArgs(b.Name(), args, kwargs,
 			"priority", &priority,
 			"flags", &flagsList,
@@ -258,6 +278,7 @@ func (r *mobRegistry) goalBuiltin() *starlark.Builtin {
 			"stop?", &stopFn,
 			"can_continue?", &continueFn,
 			"requires_update_every_tick?", &requiresUpdateEveryTick,
+			"kind?", &nativeKind,
 		); err != nil {
 			return nil, err
 		}
@@ -265,12 +286,32 @@ func (r *mobRegistry) goalBuiltin() *starlark.Builtin {
 		if err != nil {
 			return nil, err
 		}
+		if nativeKind != "" {
+			// A KIND-goal routes to a Go-NATIVE goal (the verbatim 35-01 jar port) and carries NO
+			// Starlark body — the priority + flags + kind are the WHOLE declaration. Supplying any
+			// callback alongside kind is a CONTRADICTION (the native goal owns the behavior, the
+			// callback would be silently dead) — a LOUD load error, never a silent precedence. The
+			// requires_update_every_tick flag is owned by the native goal too (each Go goal returns its
+			// own requiresUpdateEveryTick), so a kind-goal must not carry it either.
+			if tickFn != nil || canUseFn != nil || startFn != nil || stopFn != nil || continueFn != nil {
+				return nil, fmt.Errorf("goal: kind=%q must NOT also supply a tick/can_use/start/stop/can_continue callback (a kind-goal routes to a Go-native goal; the callback would be dead)", nativeKind)
+			}
+			if requiresUpdateEveryTick {
+				return nil, fmt.Errorf("goal: kind=%q must NOT set requires_update_every_tick (the Go-native goal owns its own update cadence)", nativeKind)
+			}
+			return &goalValue{decl: goalDecl{
+				priority:   priority,
+				flags:      flags,
+				nativeKind: nativeKind,
+			}}, nil
+		}
 		// tick is OPTIONAL when start/can_use carry the behavior (RandomStrollGoal.tick is empty —
 		// its behavior is start()=navigation.moveTo + canContinue=!isDone; 24-RESEARCH Open-Q §7). A
 		// goal with NO callable at all is degenerate (it would do nothing), so require at least one of
 		// tick/start/can_use so a typo'd declaration still fails loudly rather than silently no-op.
+		// (A kind-goal is the ONE exception — handled above — its behavior lives in the Go-native goal.)
 		if tickFn == nil && startFn == nil && canUseFn == nil {
-			return nil, fmt.Errorf("goal: at least one of tick/start/can_use is required")
+			return nil, fmt.Errorf("goal: at least one of tick/start/can_use is required (or kind= for a Go-native goal)")
 		}
 		return &goalValue{decl: goalDecl{
 			priority:                priority,
