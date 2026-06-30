@@ -346,8 +346,27 @@ func (t *TickLoop) handleContainerClose(p *tickPlayer, pkt pk.Packet) {
 	if p.openContainer != nil && p.openContainer.kind == containerKindStonecutter {
 		t.closeStonecutterWindow(p, p.openContainer)
 	}
-	// (A cursor item left on the mouse is dropped by vanilla in removed(); v1 leaves it on the player
-	// cursor — it is reconciled into the player inventory on the next inventory interaction. Cited.)
+	// The CARRIED (cursor) item: vanilla AbstractContainerMenu.removed() places a left-on-cursor item
+	// back into the inventory (or drops it) and clears the cursor. v1 previously LEFT it on the cursor —
+	// but ClientboundContainerClose tears down the window, so the client no longer renders the cursor
+	// item: it became invisible/limbo (the "items go weird on close" bug). Port removed() faithfully:
+	// place the carried item back into the player inventory (drop it if the inventory is full), clear the
+	// cursor, and re-sync window 0 so the client shows the reconciled inventory.
+	//   [VERIFIED javap: net.minecraft.world.inventory.AbstractContainerMenu.removed(Player): if carried
+	//    not empty -> dropOrPlaceInInventory(player, carried) { live player -> placeItemBackInInventory;
+	//    disconnected/removed -> drop } then setCarried(EMPTY). v1's normal close path is the live-player
+	//    placeItemBackInInventory branch.]
+	inv := ensureInventory(p)
+	if carried := inv.getCarried(); !stackEmpty(carried) {
+		add := carried
+		if !t.inventoryAdd(p, inv, &add) {
+			// Inventory full: drop the residual into the world (placeItemBackInInventory's overflow
+			// path -> player.drop), mirroring dropOrPlaceInInventory's drop branch.
+			t.playerDrop(p, add, false)
+		}
+		inv.setCarried(component.SlotData{})
+		t.sendContent(p) // re-sync window 0 so the client renders the reconciled inventory + empty cursor
+	}
 	p.openContainer = nil
 	_ = pkt
 }

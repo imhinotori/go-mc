@@ -582,6 +582,18 @@ func (t *TickLoop) performRespawn(p *tickPlayer) {
 	p.lastHurt = 0
 	p.hurtTime = 0
 	p.hurtDuration = 0
+
+	// (7) Re-send the authoritative inventory ContainerSetContent. ClientboundRespawn (step 1) tore
+	// down the old ClientLevel — including the client's inventory menu — so without this the player's
+	// inventory renders EMPTY/invisible after a death-respawn even though the server still holds every
+	// item. Vanilla re-syncs it: PlayerList.respawn() calls ServerPlayer.initInventoryMenu() ->
+	// initMenu(inventoryMenu) -> menu.sendAllDataToRemote() (the full ContainerSetContent for window 0).
+	// sendContent is that exact re-sync (bumps stateID + sends the snapshot). The bootstrapped flag is
+	// also re-armed false so syncJoinInventories stays consistent for any later first-tick path.
+	//   [VERIFIED javap: net.minecraft.server.players.PlayerList.respawn -> player.initInventoryMenu();
+	//    ServerPlayer.initInventoryMenu -> initMenu(this.inventoryMenu) -> sendAllDataToRemote.]
+	p.bootstrapped = true // already past join-bootstrap; the explicit resend below is the respawn sync
+	t.sendContent(p)
 }
 
 // ============================================================================================

@@ -349,6 +349,67 @@ func TestChestClosePersistsAndFrees(t *testing.T) {
 	}
 }
 
+// TestChestCloseReturnsCarriedItem is the "items go invisible on close" regression: closing a container
+// while holding an item on the cursor must place that item back into the player inventory and clear the
+// cursor (vanilla AbstractContainerMenu.removed -> dropOrPlaceInInventory + setCarried(EMPTY)). Before the
+// fix, the carried item was left on the cursor — but ContainerClose tears down the window, so the client
+// stopped rendering it: the item vanished into limbo.
+func TestChestCloseReturnsCarriedItem(t *testing.T) {
+	loop, mgr := newBlockLoop()
+	ch, _ := mgr.Get(level.ChunkPos{0, 0})
+	p := blockPlayer(loop, 1.5, 65.0, 1.5)
+	pos := pk.Position{X: 1, Y: 64, Z: 1}
+	placeChestBE(loop, ch, pos, "minecraft:chests/simple_dungeon", 123456789)
+
+	ui := useItemOnPacket(0, pos, 1, 0.5, 1.0, 0.5, false, false, 9)
+	loop.applyInput(p, SubtickInput{At: loop.clock.Now(), Packet: ui})
+	cl := loop.openChests[pos]
+	win := int32(p.openContainer.windowID)
+
+	// Pick a non-empty chest slot UP onto the cursor (the carried item).
+	src := -1
+	for i, s := range cl.items {
+		if s.Count > 0 {
+			src = i
+			break
+		}
+	}
+	if src < 0 {
+		t.Skip("no item in the chest to carry")
+	}
+	carriedItem := cl.items[src]
+	loop.handleContainerClick(p, chestClickPacket(win, 0, int16(src), 0, containerInputPickup))
+
+	inv := ensureInventory(p)
+	if stackEmpty(inv.getCarried()) {
+		t.Fatal("setup: expected an item on the cursor after pickup")
+	}
+
+	// Close the window WHILE holding the item. (Do NOT drainPackets before the close — drainPackets
+	// CLOSES the outbound queue, which would swallow the close's re-sync packet.)
+	loop.handleContainerClose(p, chestClosePacket(win))
+
+	// The cursor must now be EMPTY (the carried item was reconciled, not left in limbo).
+	if !stackEmpty(inv.getCarried()) {
+		t.Fatalf("close left an item on the cursor (count %d) — it would render invisible after the window closed", inv.getCarried().Count)
+	}
+	// The item must be back in the player inventory (placeItemBackInInventory).
+	found := false
+	for _, s := range inv.snapshot() {
+		if s.Count > 0 && s.ItemID == carriedItem.ItemID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("the carried %d (item %d) was NOT placed back into the inventory on close — the item was lost", carriedItem.Count, carriedItem.ItemID)
+	}
+	// The close must re-sync window 0 so the client shows the reconciled inventory + empty cursor.
+	if n := countID(drainPackets(p.client), packetid.ClientboundContainerSetContent); n < 1 {
+		t.Fatal("close did not re-sync the inventory (ContainerSetContent) — the client cursor would stay stale")
+	}
+}
+
 // TestChestQuickMoveToPlayer: a shift-click (QUICK_MOVE) on a non-empty chest slot moves the whole
 // stack into the player inventory and empties the chest slot (ChestMenu.quickMoveStack chest→player).
 func TestChestQuickMoveToPlayer(t *testing.T) {

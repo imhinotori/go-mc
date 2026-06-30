@@ -280,6 +280,12 @@ func TestRespawnFlow(t *testing.T) {
 		if n := countID(ps, packetid.ClientboundPlayerPosition); n != 1 {
 			t.Fatalf("respawn sent %d PlayerPosition (re-teleport), want 1", n)
 		}
+		// The respawn MUST re-send the inventory ContainerSetContent — ClientboundRespawn tore down the
+		// client's inventory menu, so without this the inventory renders empty/invisible after a death
+		// (the bug fix). Vanilla: PlayerList.respawn -> ServerPlayer.initInventoryMenu -> sendAllDataToRemote.
+		if n := countID(ps, packetid.ClientboundContainerSetContent); n != 1 {
+			t.Fatalf("respawn sent %d ContainerSetContent (inventory re-sync), want 1 — inventory would render invisible after death", n)
+		}
 		// The Respawn body must be the sealed spawn-info encoder followed by exactly one
 		// trailing dataToKeep byte. Decode the spawn-info prefix, then the final Byte.
 		for _, pkt := range ps {
