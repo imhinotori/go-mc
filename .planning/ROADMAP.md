@@ -68,7 +68,8 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
  (completed 2026-06-29)
 - [x] **Phase 30: JumpControl + Fluid (S1)** — mob `JumpControl` impulse + `*Entity` fluid predicates; FloatGoal@0 on the pig (oracle + plugin in lockstep).
  (completed 2026-06-29)
-- [x] **Phase 30.1: Faithful RandomStrollGoal Target Selection (BUGFIX)** — re-port `LandRandomPos.getPos` (best-of-10 weighted + `generateRandomDirection` x/y/z draw order + `movePosUpOutOfSolid` ground-snap + `isStableDestination`/water/malus rejection) so the pig's stroll target is always reachable; fixes the "walk a little then jam against a block forever" wedge. RNG-sensitive → lockstep `newPigAI` + both `vanilla_pig/main.star`. (completed 2026-06-30)
+- [x] **Phase 30.1: Faithful RandomStrollGoal Target Selection (BUGFIX)** — re-port `LandRandomPos.getPos` (best-of-10 weighted + `generateRandomDirection` x/y/z draw order + `movePosUpOutOfSolid` ground-snap + `isStableDestination`/water/malus rejection) so the pig's stroll target is always reachable; fixes the "walk a little then jam against a block forever" wedge. RNG-sensitive → lockstep `newPigAI` + both `vanilla_pig/main.star`.
+ (completed 2026-06-30)
 - [ ] **Phase 31: PanicGoal (S2 consumer)** — PanicGoal@1 on the pig reading the real `lastDamageSource` + the panic-causing tag set.
 - [ ] **Phase 32: Held-Item + Item Tags (S4)** — nearest-player held-item read + jar-extracted item-food tags; TemptGoal@4 ×2 on the pig.
 - [ ] **Phase 33: Aging + Breeding (S3) — Pig Parity / DOGFOOD GATE** — animal aging + breeding; BreedGoal@3 + FollowParentGoal@5 on the pig closes the full 8-goal oracle. HARD GATE before any new mob.
@@ -133,7 +134,8 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
   1. PanicGoal@1 is wired onto the pig (oracle + plugin in lockstep) reading `entity.was_hurt` / `last_damage_type` against the panic-causing tag set — a genuine `is(panicCausing)` read, not a faked flag.
   2. A pig that takes panic-causing damage searches for water / picks a flee position in the exact jar draw order, then flees.
   3. Standing: jar-verified (javap before writing); CGO=0 + no new Go deps; the pig oracle stays GREEN (the water-search-vs-flee-pos draw order added in lockstep on both halves); Docker `-race` + `strictRegion` clean.
-**Plans**: TBD
+**Plans**: 1 plan (1 wave, sequential)
+- [ ] 31-01-PLAN.md — PanicGoal@1 (speed 1.25, MOVE) thin-consumer: has_last_damage signal + damage_in_tag handle, Go-native panicGoal (reuses generateRandomDirection 5/4 + snapStrollWant), lockstep both vanilla_pig/main.star, flee + non-panic + 5-goal boot-load tests [MOB-GATE-01]
 
 ### Phase 32: Held-Item + Item Tags (S4)
 **Goal**: A goal can read the nearest player's held item and test item-tag membership — the read that powers tempting and (next phase) love-on-feed.
@@ -204,7 +206,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
 | 21–28 (v4 plugin / scripting system) | v4 | 19/19 | Complete | 2026-06-29 |
 | 29. Damage Keystone (S2) | v5 | 4/4 | Complete   | 2026-06-29 |
 | 30. JumpControl + Fluid (S1) | v5 | 3/3 | Complete   | 2026-06-29 |
-| 31. PanicGoal (S2 consumer) | v5 | 0/? | Not started | - |
+| 31. PanicGoal (S2 consumer) | v5 | 0/1 | Planned | - |
 | 32. Held-Item + Item Tags (S4) | v5 | 0/? | Not started | - |
 | 33. Aging + Breeding (S3) — Pig Parity / DOGFOOD GATE | v5 | 0/? | Not started | - |
 | 34. New Passive Mobs | v5 | 0/? | Not started | - |
