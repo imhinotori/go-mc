@@ -145,6 +145,12 @@ func (h *entityHandle) Attr(name string) (starlark.Value, error) {
 		return h.bound("nearest_player_holding_carrot_on_a_stick", h.nearestPlayerHoldingCarrotOnAStick), nil
 	case "nearest_player_holding_pig_food":
 		return h.bound("nearest_player_holding_pig_food", h.nearestPlayerHoldingPigFood), nil
+	case "nearest_breeding_partner":
+		return h.bound("nearest_breeding_partner", h.nearestBreedingPartner), nil
+	case "nearest_adult_parent":
+		return h.bound("nearest_adult_parent", h.nearestAdultParent), nil
+	case "try_breed":
+		return h.bound("try_breed", h.tryBreed), nil
 	case "set_look":
 		return h.bound("set_look", h.setLook), nil
 	case "set_look_at":
@@ -227,6 +233,26 @@ func (h *entityHandle) Attr(name string) (starlark.Value, error) {
 		// MOB-SUB-04 frozen scalar: whether the mob's AABB intersects any lava cell (the second
 		// FloatGoal.canUse disjunct). Host-computed, re-resolved via h.store().
 		return starlark.Bool(h.t.mobInLava(e)), nil
+	case "is_in_love":
+		// MOB-SUB-09 frozen scalar: net.minecraft.world.entity.animal.Animal.isInLove() == inLove>0.
+		// BreedGoal.canUse gates on it (the FIRST line: if (!animal.isInLove()) return false) — the
+		// oracle-safety contract: an un-fed adult (inLove==0) makes breed_can_use return false BEFORE the
+		// partner scan, so the breed path (and its host RNG draws) never fires on the lone-adult oracle.
+		// Host-COMPUTED here, re-resolved through the region-bound h.store() (Pitfall 7), never t.cur() —
+		// the same discipline as was_hurt. The .star never sees the raw inLove timer, only the bool.
+		return starlark.Bool(e.isInLove()), nil
+	case "is_baby":
+		// MOB-SUB-09 frozen scalar: net.minecraft.world.entity.AgeableMob.isBaby() == breedAge<0.
+		// FollowParentGoal.canUse gates on it (only a baby follows: if (animal.getAge() >= 0) return
+		// false) — the oracle-safety contract: an adult (breedAge>=0) makes follow_can_use return false,
+		// so the follow path is dormant on the lone-adult oracle. Host-computed, re-resolved via h.store().
+		return starlark.Bool(e.isBaby()), nil
+	case "breed_age":
+		// MOB-SUB-09 frozen scalar: net.minecraft.world.entity.AgeableMob.getAge() == breedAge (the
+		// signed-int age machine: <0 baby ticks up, >0 cooldown ticks down, ==0 adult). Exposed for the
+		// .star follow/breed callbacks to read the same age the Go-native goals read (e.breedAge), so the
+		// two halves agree on the baby/adult/cooldown state. Host-computed, re-resolved via h.store().
+		return starlark.MakeInt(e.breedAge), nil
 	}
 	// HasAttrs contract: (nil, nil) == "no such field".
 	return nil, nil
@@ -238,6 +264,8 @@ func (h *entityHandle) AttrNames() []string {
 		"x", "y", "z", "yaw", "pitch", "on_ground", "type", "velocity", "health",
 		"was_hurt", "last_damage_type", "has_last_damage", "damage_in_tag",
 		"nearest_player_holding_carrot_on_a_stick", "nearest_player_holding_pig_food",
+		"nearest_breeding_partner", "nearest_adult_parent", "try_breed",
+		"is_in_love", "is_baby", "breed_age",
 		"in_water", "fluid_height", "in_lava",
 		"attribute", "move_to", "set_velocity", "set_attribute",
 		"set_look", "set_look_at", "rand_int", "rand_float", "rand_double", "get_state", "set_state",
@@ -342,6 +370,95 @@ func (h *entityHandle) nearestPlayerHoldingPigFood(_ *starlark.Thread, b *starla
 		return starlark.None, nil
 	}
 	return starlark.Tuple{starlark.Float(x), starlark.Float(y), starlark.Float(z)}, nil
+}
+
+// nearestBreedingPartner(range) is the host-computed BreedGoal.getFreePartner scan (MOB-SUB-09): the
+// nearest same-class in-love non-panicking partner within `range` blocks. It mirrors
+// nearestPlayerHoldingPigFood (the HOST owns the same-class + canMate + isPanicking filter; the .star
+// NEVER sees an entity id or class set, only a position tuple or None) and routes through the EXACT
+// same findFreePartner the Go-native breedGoal.getFreePartner calls — so the plugin pig and the Go pig
+// pick the IDENTICAL partner (the lockstep contract, Plan 33-04). The .star breed_can_use uses the
+// returned tuple only to navigate; the actual breed (and its RNG draws) goes through try_breed below.
+// One positional arg: range. Re-resolved via h.resolve() (the region-bound store — Pitfall 7). Gated on
+// capEntitiesRead (matching nearestPlayerHoldingPigFood). Draws no RNG.
+func (h *entityHandle) nearestBreedingPartner(_ *starlark.Thread, b *starlark.Builtin,
+	args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if !h.caps.has(capEntitiesRead) {
+		return nil, capError("entities.read")
+	}
+	var rng float64
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 1, &rng); err != nil {
+		return nil, err
+	}
+	e, err := h.resolve()
+	if err != nil {
+		return nil, err
+	}
+	partner := findFreePartner(h.t, e, rng)
+	if partner == nil {
+		return starlark.None, nil
+	}
+	return starlark.Tuple{starlark.Float(partner.x), starlark.Float(partner.y), starlark.Float(partner.z)}, nil
+}
+
+// nearestAdultParent(range) is the host-computed FollowParentGoal.canUse adult scan (MOB-SUB-09): the
+// nearest same-class ADULT (breedAge>=0) within the inflate(8,4,8) box that is NOT already within 3
+// blocks. It routes through the EXACT same findNearestAdultParent the Go-native followParentGoal.canUse
+// calls — so the plugin pig and the Go pig pick the IDENTICAL parent (the lockstep contract). The
+// `range` arg is accepted for symmetry with nearestBreedingPartner (the scan box is the jar's fixed
+// inflate(8,4,8), so the arg is informational — the host owns the box). Re-resolved via h.resolve();
+// gated on capEntitiesRead; the .star sees only a tuple or None. Draws no RNG.
+func (h *entityHandle) nearestAdultParent(_ *starlark.Thread, b *starlark.Builtin,
+	args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if !h.caps.has(capEntitiesRead) {
+		return nil, capError("entities.read")
+	}
+	var rng float64
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 1, &rng); err != nil {
+		return nil, err
+	}
+	_ = rng // the FollowParentGoal scan box is the fixed jar inflate(8,4,8); the range arg is symmetry only
+	e, err := h.resolve()
+	if err != nil {
+		return nil, err
+	}
+	parent := findNearestAdultParent(h.t, e)
+	if parent == nil {
+		return starlark.None, nil
+	}
+	return starlark.Tuple{starlark.Float(parent.x), starlark.Float(parent.y), starlark.Float(parent.z)}, nil
+}
+
+// tryBreed(range) is THE LOCKSTEP host breed op (MOB-SUB-09, Plan 33-04): the .star breed_tick calls it
+// at the breed threshold (loveTime>=60 && within 3 blocks), and the HOST re-finds the partner (the SAME
+// findFreePartner scan) and routes through t.breed(e, partner) — the EXACT same TickLoop.breed the
+// Go-native breedGoal.tick calls. This is the make-or-break lockstep: both the Go pig AND the plugin pig
+// fire ONE host breed() that draws the variant nextBoolean() FIRST then the XP 1+nextInt(7) SECOND, both
+// on `e`'s per-mob RNG in the jar's exact order (Plan 33-03 javap). The .star NEVER draws breed RNG
+// itself — it only signals readiness, so the two halves' RNG streams are byte-identical. Returns True if
+// a breed fired (a partner was still in range), False otherwise (the partner wandered off between the
+// scan and the threshold). Gated on capEntitiesWrite (a breed spawns a child + mutates both parents — a
+// write, like move_to). Re-resolved via h.resolve(); draws RNG ONLY through t.breed (dormant on the
+// un-fed oracle, which never reaches breed_tick).
+func (h *entityHandle) tryBreed(_ *starlark.Thread, b *starlark.Builtin,
+	args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if !h.caps.has(capEntitiesWrite) {
+		return nil, capError("entities.write")
+	}
+	var rng float64
+	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 1, &rng); err != nil {
+		return nil, err
+	}
+	e, err := h.resolve()
+	if err != nil {
+		return nil, err
+	}
+	partner := findFreePartner(h.t, e, rng)
+	if partner == nil {
+		return starlark.False, nil // the partner is gone — no breed this tick (the goal re-acquires)
+	}
+	h.t.breed(e, partner) // THE one host breed — variant nextBoolean() then XP nextInt(7), the lockstep
+	return starlark.True, nil
 }
 
 // moveTo(x,y,z) MUTATES through the nav seam: setWantTarget -> groundNavigation.requestPath (the

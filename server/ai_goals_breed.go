@@ -110,8 +110,24 @@ func newBreedGoal(speed float64) *breedGoal {
 //	 animal, inflate(8.0)); for each: canMate(other) && !isPanicking() && distanceToSqr < best ->
 //	 keep nearest; return best (or null).]
 func (g *breedGoal) getFreePartner(t *TickLoop, e *Entity) *Entity {
+	return findFreePartner(t, e, breedRange)
+}
+
+// findFreePartner is the standalone same-class free-partner scan shared by the Go-native breedGoal
+// (getFreePartner) AND the plugin host handle (nearestBreedingPartner / tryBreed). Factoring the scan
+// out of the goal method keeps the Go pig and the plugin pig calling the IDENTICAL partner-selection
+// logic (the lockstep contract, Plan 33-04): both halves pick the SAME nearest same-class in-love
+// non-panicking partner within `rng` blocks, so the breed they route through t.breed() draws the same
+// RNG in the same order. The scan uses the OWNING-region store (t.cur().entities.near) — the v5
+// same-region cut. Draws no RNG (the breed RNG fires only inside t.breed()). The rng bound mirrors
+// getFreePartner's inflate(8.0) center-distance gate.
+//
+//	[VERIFIED javap BreedGoal.getFreePartner: getNearbyEntities(partnerClass, PARTNER_TARGETING,
+//	 animal, inflate(8.0)); for each: canMate(other) && !isPanicking() && distanceToSqr < best ->
+//	 keep nearest; return best (or null).]
+func findFreePartner(t *TickLoop, e *Entity, rng float64) *Entity {
 	var best *Entity
-	bestDistSqr := breedRange * breedRange // start at the range bound (8.0²); only closer wins
+	bestDistSqr := rng * rng // start at the range bound (8.0²); only closer wins
 	for _, other := range t.cur().entities.near(e.x, e.z, 1) {
 		if other == e || other.typ != e.typ {
 			continue // not a same-class candidate

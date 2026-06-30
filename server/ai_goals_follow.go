@@ -82,6 +82,24 @@ func (g *followParentGoal) canUse(t *TickLoop, e *Entity) bool {
 	if e.breedAge >= 0 { // animal.getAge() >= 0 — only a baby follows
 		return false
 	}
+	closest := findNearestAdultParent(t, e)
+	if closest == nil {
+		return false
+	}
+	g.parent = closest
+	return true
+}
+
+// findNearestAdultParent is the standalone FollowParentGoal.canUse adult scan shared by the Go-native
+// followParentGoal (canUse) AND the plugin host handle (nearestAdultParent). It returns the nearest
+// same-class ADULT (breedAge>=0) within the inflate(8,4,8) box that is NOT already within 3 blocks
+// (distSqr>=9.0), or nil. Factoring it out keeps the Go pig and the plugin pig selecting the IDENTICAL
+// parent (the lockstep contract, Plan 33-04). The scan uses the OWNING-region store — the v5
+// same-region cut. Draws no RNG (FollowParentGoal is fully deterministic).
+//
+//	[VERIFIED javap FollowParentGoal.canUse: getEntitiesOfClass(animal.getClass(), inflate(8,4,8));
+//	 skip age<0; pick nearest; reject if closestDistSqr < 9.0 (DONT_FOLLOW_IF_CLOSER_THAN²).]
+func findNearestAdultParent(t *TickLoop, e *Entity) *Entity {
 	var closest *Entity
 	closestDistSqr := followLoseParentDistSqr + 1e9 // start at +inf (Double.MAX_VALUE in vanilla)
 	for _, p := range t.cur().entities.near(e.x, e.z, 1) {
@@ -102,13 +120,12 @@ func (g *followParentGoal) canUse(t *TickLoop, e *Entity) bool {
 		closest = p
 	}
 	if closest == nil {
-		return false
+		return nil
 	}
 	if closestDistSqr < followDontFollowDistSqr { // already within 3 blocks — no follow
-		return false
+		return nil
 	}
-	g.parent = closest
-	return true
+	return closest
 }
 
 // canContinueToUse ports FollowParentGoal.canContinueToUse: stop if grown up (age>=0) or the parent
