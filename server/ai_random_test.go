@@ -1,11 +1,13 @@
 package server
 
-// ai_random_test.go — Phase 24 Task 1: the per-entity seeded RandomSource determinism + the
-// faithful goal-draw-ORDER regression. These pin that (a) a seed yields an identical stream, and
-// (b) each ported goal draws from the per-entity source in the EXACT bytecode order (jar-verified
-// this session: RandomStrollGoal.canUse = nextInt(interval) GATE then 3× nextInt offset;
-// LookAtPlayerGoal = nextFloat roll then 40+nextInt(40); RandomLookAroundGoal = nextFloat roll then
-// nextDouble heading then 20+nextInt(20)).
+// ai_random_test.go — Phase 24 Task 1 (+ Phase 30.1 stroll rewrite): the per-entity seeded
+// RandomSource determinism + the faithful goal-draw-ORDER regression. These pin that (a) a seed yields
+// an identical stream, and (b) each ported goal draws from the per-entity source in the EXACT bytecode
+// order. Jar-verified this session: WaterAvoidingRandomStrollGoal.canUse = nextInt(reducedTickDelay(120)
+// == 60) GATE, THEN getPosition's probability nextFloat(), THEN RandomPos.generateRandomPos's
+// UNCONDITIONAL 10× generateRandomDirection (each = nextInt(2h+1)-h, nextInt(2v+1)-v, nextInt(2h+1)-h
+// in x/y/z order) == 31 draws; LookAtPlayerGoal = nextFloat roll then 40+nextInt(40); RandomLookAroundGoal
+// = nextFloat roll then nextDouble heading then 20+nextInt(20).
 
 import (
 	"testing"
@@ -64,36 +66,60 @@ func TestSeededAIRandom(t *testing.T) {
 func TestEntityRandFaithfulDrawOrder(t *testing.T) {
 	const seed uint64 = 0xABCDEF
 
-	// --- RandomStroll: canUse draws nextInt(interval) [gate] then getPosition's 3× nextInt. ---
+	// --- WaterAvoidingRandomStrollGoal: canUse draws the reducedTickDelay(120)==60 GATE, THEN
+	// getPosition's probability nextFloat(), THEN RandomPos.generateRandomPos's UNCONDITIONAL
+	// 10× generateRandomDirection (x/y/z order) == 31 draws. This is the lockstep contract this
+	// phase changed; the test FAILS if the gate radix, the nextFloat draw, the candidate count, or
+	// the x/y/z order is ever reverted. ---
 	{
+		// strollGateZeroSeed makes the first nextInt(reducedTickDelay(120)) land on 0 so the gate
+		// passes and the FULL draw stream (probability + 30 offsets) is actually exercised — the old
+		// test used a seed whose gate was non-zero, so canUse returned false and the draw-order body
+		// never ran (vacuous). Verified: newEntityRandom(73).nextInt(60) == 0.
+		const strollGateZeroSeed uint64 = 73
+
 		loop := NewTickLoop(newFakeClock())
 		e := NewEntity(1, entity.Pig, 100, 64, 200)
 		m := newPigAI()
-		m.rng.reseed(seed)
+		m.rng.reseed(strollGateZeroSeed)
 		e.ai = m
 		stroll := findStroll(t, m)
 
-		// Reference source replaying the SAME seed in the documented order.
-		ref := newEntityRandom(seed)
-		gate := ref.nextInt(stroll.interval) // DRAW 1 — the chance gate
-		dx := ref.nextInt(2*strollHorizontalRadius + 1)
-		dz := ref.nextInt(2*strollHorizontalRadius + 1)
-		dy := ref.nextInt(2*strollVerticalRadius + 1)
+		// Reference source replaying the SAME seed in the EXACT documented order. ANY reorder, drop,
+		// or extra draw on the real path shifts the stream and makes the candidate compare below fail.
+		ref := newEntityRandom(strollGateZeroSeed)
+		gate := ref.nextInt(reducedTickDelay(stroll.interval)) // DRAW 1 — the reducedTickDelay gate (nextInt(60))
+		if gate != 0 {
+			t.Fatalf("test setup invariant broken: seed %d gate nextInt(%d) = %d, want 0 (pick a zero-gate seed)",
+				strollGateZeroSeed, reducedTickDelay(stroll.interval), gate)
+		}
+		_ = ref.nextFloat() // DRAW 2 — the probability nextFloat() (WaterAvoidingRandomStrollGoal.getPosition)
+		// DRAWS 3..32 — RandomPos.generateRandomPos's 10 unconditional generateRandomDirection draws,
+		// each in x, y, z order (xt=nextInt(2h+1)-h, yt=nextInt(2v+1)-v, zt=nextInt(2h+1)-h).
+		var wantCands [10][3]float64
+		for i := 0; i < 10; i++ {
+			xt := ref.nextInt(2*strollHorizontalRadius+1) - strollHorizontalRadius // x — order 1 of 3
+			yt := ref.nextInt(2*strollVerticalRadius+1) - strollVerticalRadius     // y — order 2 of 3 (y BEFORE z)
+			zt := ref.nextInt(2*strollHorizontalRadius+1) - strollHorizontalRadius // z — order 3 of 3
+			wantCands[i] = [3]float64{e.x + float64(xt), e.y + float64(yt), e.z + float64(zt)}
+		}
 
 		used := stroll.canUse(loop, e)
-		// canUse returns true iff the gate landed on 0; assert our reference predicted the same.
-		if used != (gate == 0) {
-			t.Fatalf("stroll.canUse=%v but the reference gate draw was %d (expected canUse==%v)", used, gate, gate == 0)
+		if !used {
+			t.Fatalf("stroll.canUse=false with a zero-gate seed — the gate draw or its radix regressed")
 		}
-		if used {
-			// The wanted target must equal e.pos + the reference offsets (proving getPosition drew
-			// exactly DX,DZ,DY in that order, right after the gate).
-			wantX := e.x + float64(dx-strollHorizontalRadius)
-			wantZ := e.z + float64(dz-strollHorizontalRadius)
-			wantY := e.y + float64(dy-strollVerticalRadius)
-			if m.wantX != wantX || m.wantZ != wantZ || m.wantY != wantY {
-				t.Fatalf("stroll getPosition draw order mismatch: got want=(%v,%v,%v) ref=(%v,%v,%v)",
-					m.wantX, m.wantY, m.wantZ, wantX, wantY, wantZ)
+		// The goal stashes the 10 RAW candidates (getPosition's generateRandomPos supplier results,
+		// pre-snap) on g.wantCandidates. They must equal the reference set EXACTLY — proving the gate
+		// radix, the probability nextFloat, the 10-candidate count, and the x/y/z draw order all match.
+		if len(stroll.wantCandidates) != 10 {
+			t.Fatalf("stroll emitted %d candidates, want 10 (RandomPos.generateRandomPos for-i<10)", len(stroll.wantCandidates))
+		}
+		for i := 0; i < 10; i++ {
+			got := stroll.wantCandidates[i]
+			if got != wantCands[i] {
+				t.Fatalf("stroll candidate %d draw-order/count mismatch: got %v ref %v\n"+
+					"(a desync here means the gate radix, the probability nextFloat, or the x/y/z order regressed)",
+					i, got, wantCands[i])
 			}
 		}
 	}
