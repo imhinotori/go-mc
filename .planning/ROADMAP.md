@@ -66,7 +66,8 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
 
 - [x] **Phase 29: Damage Keystone (S2)** — the parallel `*Entity` mob damage/hurt pipeline + `lastDamageSource` + jar-extracted damage-type tags; the widest fan-out, built first.
  (completed 2026-06-29)
-- [x] **Phase 30: JumpControl + Fluid (S1)** — mob `JumpControl` impulse + `*Entity` fluid predicates; FloatGoal@0 on the pig (oracle + plugin in lockstep). (completed 2026-06-29)
+- [x] **Phase 30: JumpControl + Fluid (S1)** — mob `JumpControl` impulse + `*Entity` fluid predicates; FloatGoal@0 on the pig (oracle + plugin in lockstep).
+ (completed 2026-06-29)
 - [ ] **Phase 30.1: Faithful RandomStrollGoal Target Selection (BUGFIX)** — re-port `LandRandomPos.getPos` (best-of-10 weighted + `generateRandomDirection` x/y/z draw order + `movePosUpOutOfSolid` ground-snap + `isStableDestination`/water/malus rejection) so the pig's stroll target is always reachable; fixes the "walk a little then jam against a block forever" wedge. RNG-sensitive → lockstep `newPigAI` + both `vanilla_pig/main.star`.
 - [ ] **Phase 31: PanicGoal (S2 consumer)** — PanicGoal@1 on the pig reading the real `lastDamageSource` + the panic-causing tag set.
 - [ ] **Phase 32: Held-Item + Item Tags (S4)** — nearest-player held-item read + jar-extracted item-food tags; TemptGoal@4 ×2 on the pig.
@@ -121,6 +122,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
   3. RNG lockstep: the new draw sequence is added to BOTH `newPigAI` (Go-native oracle) AND both `vanilla_pig/main.star` copies (repo-root + `server/assets/`) IN THE SAME PLAN; the pig oracle `TestPluginPigEqualsGoNativePig` stays GREEN (DRY world: the stroll gate still rolls, but the new candidate draws are identical on both sides → byte-identical).
   4. Standing: every op faithful (best-of-10 loop, draw order, moveUpOutOfSolid scan); CGO=0 + no new Go deps; Docker `-race` + `strictRegion` clean.
 **Plans**: 1 plan (pattern-map → port `getWalkTargetValue` + `RandomPos`/`LandRandomPos` helpers → rewrite `getPosition` → lockstep both pigs → repro regression test).
+- [ ] 30.1-01-PLAN.md — Re-port `LandRandomPos.getPos`: goal draws 10 candidates (x/y/z, 30 nextInt) + emits them; RNG-free runtime snap/validate in `serverAiStep` (moveUpOutOfSolid + isStableDestination/water/malus, first-valid); lockstep both `.star` copies; green `TestPigStrollsWithoutWedging` + the pig oracle.
 **Research flag**: no — the jar methods are decompiled and cited above; the only care item is the exact `getWalkTargetValue` (BlockPathTypes malus) port surface, scoped during pattern-map.
 
 ### Phase 31: PanicGoal (S2 consumer)
