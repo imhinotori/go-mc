@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v5
 milestone_name: Mob Behaviors & Living-Entity Subsystems
-status: verifying
-stopped_at: Completed 34-01-PLAN.md (cow)
-last_updated: "2026-06-30T16:31:17.585Z"
+status: planning
+stopped_at: Phase 35 COMPLETE + VERIFIED 5/5 (zombie/skeleton/spider hunt+attack the player; targetSelector + goal-kind seam + MONSTER cap + day/night gate; live zombie killed the bot 20->0); next Phase 36 (wolf — the LAST v5 phase)
+last_updated: "2026-06-30T17:00:00.000Z"
 last_activity: 2026-06-30
 progress:
   total_phases: 9
-  completed_phases: 7
-  total_plans: 27
-  completed_plans: 24
-  percent: 89
+  completed_phases: 8
+  total_plans: 32
+  completed_plans: 32
+  percent: 100
 ---
 
 # Project State
