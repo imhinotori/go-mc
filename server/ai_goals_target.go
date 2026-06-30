@@ -29,6 +29,9 @@ package server
 //   (35-JARNOTES.md:149-164; pinned by TestNearestAttackableTargetGateUsesTen.)
 
 import (
+	"math"
+
+	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/level/attribute"
 )
 
@@ -44,17 +47,47 @@ import (
 //	 reducedTickDelay(10); DEFAULT_RANDOM_INTERVAL == 10. canUse: getRandom().nextInt(randomInterval).]
 const nearestTargetRandomInterval = 10
 
-// nearestAttackableTargetGoal ports NearestAttackableTargetGoal<Player> (flags {TARGET}). v1 only
-// acquires a PLAYER target (the hostile-vs-player case), so findTarget reuses the position-based
-// nearestPlayerAt scan (ai_goals_passive.go) bounded by FOLLOW_RANGE — exactly
-// findTarget's Player branch: level.getNearestPlayer(targetConditions, mob, x, eyeY, z).
+// nearestTargetClass parameterizes WHICH class of entity the goal acquires (the B1/B2 fix, Phase 36-01,
+// cite NearestAttackableTargetGoal<T> — the generic target type). The Phase-35 goal was hard-coded to
+// the Player branch; the wolf needs a SKELETON branch (NearestAttackableTargetGoal<AbstractSkeleton>)
+// AND an anger gate on its Player branch. The zero value is targetClassPlayer, so the EXISTING
+// newNearestAttackableTargetGoal() (untouched below) stays the byte-identical Phase-35 Player goal.
+type nearestTargetClass int
+
+const (
+	// targetClassPlayer is the Player branch: findTarget scans t.players (the existing nearestPlayerIDAt).
+	// The zero value — so every Phase-35 hostile keeps this with NO change.
+	targetClassPlayer nearestTargetClass = iota
+	// targetClassSkeleton is the AbstractSkeleton branch (the wolf @7
+	// NearestAttackableTargetGoal<AbstractSkeleton>): findTarget scans the entity store for
+	// entity.Skeleton.ID within FOLLOW_RANGE (the mob-vs-mob nearestEntityOfTypeAt).
+	targetClassSkeleton
+)
+
+// nearestAttackableTargetGoal ports NearestAttackableTargetGoal<T> (flags {TARGET}). It acquires the
+// nearest valid target of its targetClass (PLAYER via nearestPlayerIDAt, SKELETON via
+// nearestEntityOfTypeAt) bounded by FOLLOW_RANGE — exactly findTarget's getNearestEntity branch (the
+// Player branch is level.getNearestPlayer; the non-Player branch is
+// getNearestEntity(getEntitiesOfClass(type, searchArea), conditions, mob, x, eyeY, z)).
 type nearestAttackableTargetGoal struct {
 	baseGoal
 	randomInterval int
 
+	// targetClass selects the findTarget branch (B1/B2). targetClassPlayer (zero) == the Phase-35
+	// Player goal; targetClassSkeleton == the wolf skeleton goal. The bare newNearestAttackableTargetGoal
+	// leaves it zero, so the hostiles are byte-identical.
+	targetClass nearestTargetClass
+
+	// angerGate is an OPTIONAL post-acquire predicate (NeutralMob.isAngryAt gating
+	// NearestAttackableTargetGoal<Player>): after findTarget acquires a candidate, if angerGate != nil
+	// && it returns false, the target is DROPPED (a wild un-hit wolf must NOT aggro players). nil for
+	// every hostile (they always aggro) AND for the skeleton goal (no anger gate) → the Phase-35
+	// behavior is UNCHANGED wherever angerGate is nil. Cite NeutralMob.isAngryAt.
+	angerGate func(t *TickLoop, e *Entity, targetID int32) bool
+
 	// target is NearestAttackableTargetGoal.target, captured in canUse(findTarget) and committed to
-	// mobAI.attackTargetID in start(). For a v1 player target it carries the player's entity id; 0 ==
-	// no target found.
+	// mobAI.attackTargetID in start(). It carries the acquired entity id (a player id for PLAYER, a
+	// skeleton entity id for SKELETON); 0 == no target found.
 	target int32
 
 	// forceTrigger skips the RNG gate once (test seam, mirroring randomStrollGoal.forceTrigger — it
@@ -63,11 +96,39 @@ type nearestAttackableTargetGoal struct {
 }
 
 // newNearestAttackableTargetGoal builds the goal with the FULL randomInterval (10) and the TARGET
-// flag (NearestAttackableTargetGoal ctor: setFlags(EnumSet.of(TARGET))).
+// flag (NearestAttackableTargetGoal ctor: setFlags(EnumSet.of(TARGET))). targetClass is the zero value
+// (targetClassPlayer) and angerGate is nil — so this is the byte-identical Phase-35 hostile-vs-player
+// goal, UNCHANGED by the B1/B2 parameterization (re-run the hostile tests + the pig oracle to prove it).
 func newNearestAttackableTargetGoal() *nearestAttackableTargetGoal {
 	return &nearestAttackableTargetGoal{
 		baseGoal:       newBaseGoal(flagTarget),
 		randomInterval: nearestTargetRandomInterval,
+	}
+}
+
+// newAngryPlayerTargetGoal builds the wolf @4 NearestAttackableTargetGoal<Player>(this, Player, 10,
+// true, false, this::isAngryAt) — the PLAYER class GATED on isAngryAt (B1). A wild un-hit wolf (no live
+// angerEndTime / no matching angerTarget) acquires no player target; a provoked wolf (angerEndTime live
+// && angerTarget == the candidate) does. Same struct/canUse/start/stop as the bare goal — only the
+// angerGate differs. Cite Wolf.registerGoals targetSelector @4 + NeutralMob.isAngryAt.
+func newAngryPlayerTargetGoal() *nearestAttackableTargetGoal {
+	return &nearestAttackableTargetGoal{
+		baseGoal:       newBaseGoal(flagTarget),
+		randomInterval: nearestTargetRandomInterval,
+		targetClass:    targetClassPlayer,
+		angerGate:      isAngryAt,
+	}
+}
+
+// newSkeletonTargetGoal builds the wolf @7 NearestAttackableTargetGoal<AbstractSkeleton>(this,
+// AbstractSkeleton, false) — the SKELETON class, NO anger gate (B2). Wolves attack skeletons on sight.
+// findTarget scans entity.Skeleton.ID within FOLLOW_RANGE (nearestEntityOfTypeAt). Cite
+// Wolf.registerGoals targetSelector @7.
+func newSkeletonTargetGoal() *nearestAttackableTargetGoal {
+	return &nearestAttackableTargetGoal{
+		baseGoal:       newBaseGoal(flagTarget),
+		randomInterval: nearestTargetRandomInterval,
+		targetClass:    targetClassSkeleton,
 	}
 }
 
@@ -94,6 +155,18 @@ func (g *nearestAttackableTargetGoal) canUse(t *TickLoop, e *Entity) bool {
 	}
 	g.forceTrigger = false
 	g.findTarget(t, e)
+	// THE ANGER GATE (B1, Phase 36-01): NeutralMob gates NearestAttackableTargetGoal<Player> on
+	// isAngryAt — the wolf @4 passes `this::isAngryAt` as the targeting-conditions selector. After the
+	// scan acquires a candidate, drop it unless the wolf is angry AT that candidate. nil for every
+	// hostile (the bare goal) AND the skeleton goal → this branch NEVER fires for them, so their
+	// Phase-35 behavior is byte-identical (proven by the unchanged hostile tests + the pig oracle). The
+	// gate runs AFTER findTarget (the candidate id is what isAngryAt checks against e.angerTarget).
+	//	[VERIFIED javap Wolf.registerGoals: NearestAttackableTargetGoal<Player>(..., this::isAngryAt);
+	//	 NearestAttackableTargetGoal.findTarget builds targetConditions with the passed selector and
+	//	 getNearestEntity filters on it — i.e. a candidate failing isAngryAt is not selected.]
+	if g.angerGate != nil && g.target != 0 && !g.angerGate(t, e, g.target) {
+		g.target = 0
+	}
 	return g.target != 0
 }
 
@@ -118,12 +191,24 @@ func (g *nearestAttackableTargetGoal) canUse(t *TickLoop, e *Entity) bool {
 //	 == getAttributeValue(FOLLOW_RANGE).]
 func (g *nearestAttackableTargetGoal) findTarget(t *TickLoop, e *Entity) {
 	follow := e.getAttributeValue(attribute.FollowRange)
-	// getNearestPlayer is anchored at (mob.getX(), mob.getEyeY(), mob.getZ()); v1 has no eye-height
-	// field (refreshDimensions notes the cited eye-height gap), so the scan anchors at the mob feet y
-	// — the same anchor lookAtPlayerGoal/nearestPlayerWithin use. The FOLLOW_RANGE bound is faithful.
-	if id, ok := nearestPlayerIDAt(t, e.x, e.y, e.z, follow); ok {
-		g.target = id
-		return
+	switch g.targetClass {
+	case targetClassSkeleton:
+		// The non-Player branch (B2): getNearestEntity(getEntitiesOfClass(AbstractSkeleton, searchArea),
+		// conditions, mob, x, eyeY, z) — the nearest entity.Skeleton.ID within FOLLOW_RANGE. The mob-class
+		// analog of the Player branch, scanning the entity store instead of t.players. Cite
+		// NearestAttackableTargetGoal.findTarget's non-Player getNearestEntity branch.
+		if id, ok := nearestEntityOfTypeAt(t, e, entity.Skeleton.ID, follow); ok {
+			g.target = id
+			return
+		}
+	default: // targetClassPlayer (the Phase-35 branch, UNCHANGED)
+		// getNearestPlayer is anchored at (mob.getX(), mob.getEyeY(), mob.getZ()); v1 has no eye-height
+		// field (refreshDimensions notes the cited eye-height gap), so the scan anchors at the mob feet y
+		// — the same anchor lookAtPlayerGoal/nearestPlayerWithin use. The FOLLOW_RANGE bound is faithful.
+		if id, ok := nearestPlayerIDAt(t, e.x, e.y, e.z, follow); ok {
+			g.target = id
+			return
+		}
 	}
 	g.target = 0
 }
@@ -144,11 +229,25 @@ func (g *nearestAttackableTargetGoal) canContinueToUse(t *TickLoop, e *Entity) b
 	if id == 0 {
 		return false
 	}
+	follow := e.getAttributeValue(attribute.FollowRange)
+	if g.targetClass == targetClassSkeleton {
+		// SKELETON class: resolve the target through the OWNING-region entity store (a skeleton is an
+		// *Entity, not a player) + the live FOLLOW_RANGE distance bound. t.cur() is the region whose
+		// fan-out is running this goal — the SAME store nearestEntityOfTypeAt scanned (the v5 same-region
+		// cut, as the breed/follow scans use). Keeps the "target alive + within followDistance²"
+		// TargetGoal.canContinueToUse shape.
+		other, ok := t.cur().entities.get(id)
+		if !ok || other.dead {
+			return false // the skeleton died / was removed (TargetGoal: target not alive/absent)
+		}
+		return entityDistSqr(e, other) <= follow*follow
+	}
+	// PLAYER class (the Phase-35 branch, byte-identical): resolve via playerByEntityID + the same
+	// FOLLOW_RANGE distance bound.
 	p := t.playerByEntityID(id)
 	if p == nil {
 		return false // the target left / disconnected (TargetGoal: target not alive/absent)
 	}
-	follow := e.getAttributeValue(attribute.FollowRange)
 	dx, dy, dz := p.x-e.x, p.y-e.y, p.z-e.z
 	return dx*dx+dy*dy+dz*dz <= follow*follow
 }
@@ -309,4 +408,73 @@ func nearestPlayerIDAt(t *TickLoop, cx, cy, cz, maxDist float64) (id int32, ok b
 		}
 	}
 	return id, ok
+}
+
+// nearestEntityOfTypeAt is the mob-class sibling of nearestPlayerIDAt (B2, Phase 36-01): the entity id
+// of the nearest *Entity of type `typ` within maxDist of mob `e`, or ok=false if none. It is the Go
+// analog of NearestAttackableTargetGoal.findTarget's non-Player branch
+// getNearestEntity(getEntitiesOfClass(type, getTargetSearchArea(followDistance)), conditions, mob, x,
+// eyeY, z): build the search box (FOLLOW_RANGE-inflated AABB → the chunk-column broad-phase), collect
+// the entities of the wanted type, and keep the nearest by squared distance within FOLLOW_RANGE². It
+// reuses the SAME t.cur().entities.near broad-phase + entityDistSqr nearest-wins loop the breed scan
+// (findFreePartner) uses, converting the block range to a chunk-column range via ceil(maxDist/16) (near
+// takes a CHUNK range) and re-checking the precise maxDist² inside the loop. Tick-owned read (TICK-05).
+// NO RNG.
+//
+//	[VERIFIED javap NearestAttackableTargetGoal.findTarget (non-Player): target = getNearestEntity(
+//	 level.getEntitiesOfClass(targetType, getTargetSearchArea(getFollowDistance())), getTargetConditions(),
+//	 mob, getX(), getEyeY(), getZ()); getTargetSearchArea(d) = getBoundingBox().inflate(d, 4.0, d).]
+func nearestEntityOfTypeAt(t *TickLoop, e *Entity, typ entity.ID, maxDist float64) (id int32, ok bool) {
+	// near takes a CHUNK-column range; convert the block FOLLOW_RANGE (the inflate(d) horizontal radius)
+	// to columns via ceil(maxDist/16), then re-check the precise block distance inside the loop.
+	rangeChunks := int(math.Ceil(maxDist / 16.0))
+	best := maxDist * maxDist // start at FOLLOW_RANGE²; only a closer same-type candidate wins
+	for _, other := range t.cur().entities.near(e.x, e.z, rangeChunks) {
+		if other == e || other.typ != typ || other.dead {
+			continue // not a live candidate of the wanted type (getEntitiesOfClass(type) + isAlive)
+		}
+		d := entityDistSqr(e, other)
+		if d <= best {
+			best = d
+			id, ok = other.id, true
+		}
+	}
+	return id, ok
+}
+
+// isAngryAt ports net.minecraft.world.entity.NeutralMob.isAngryAt(LivingEntity, ServerLevel) for the
+// wolf's @4 NearestAttackableTargetGoal<Player> gate (B1, Phase 36-01). The wolf passes `this::isAngryAt`
+// as the goal's targeting selector, so a candidate is acquirable ONLY when the wolf is angry at it:
+//
+//	if (!canAttack(target)) return false;
+//	if (isValidPlayerTarget(target) && isAngryAtAllPlayers(level)) return true;   // the gamerule path
+//	EntityReference angerTarget = getPersistentAngerTarget();
+//	return angerTarget != null && angerTarget.matches(target);
+//
+// v1 reduction (each a CITED no-op, not a silent drop):
+//   - canAttack(target): the candidate must be a present, valid combat target. v1's candidate is a
+//     player id; validity == the player still resolves on the loop (the same existence gate the
+//     hurtByTargetGoal/nearestAttackableTargetGoal player branch uses).
+//   - isAngryAtAllPlayers(level): reads the UNIVERSAL_ANGER gamerule, which DEFAULTS FALSE in vanilla
+//     (javap NeutralMob.isAngryAtAllPlayers: GameRules.UNIVERSAL_ANGER) — no gamerule subsystem in v1,
+//     so this all-players path is a cited constant-false (never fires). The live path is the
+//     persistentAngerTarget match below.
+//   - the persistentAngerTarget match: the wolf is angry at `target` iff its anger is LIVE (the
+//     gametime-endpoint isAngry: angerEndTime > 0 && (angerEndTime - gameTime) > 0) AND its angerTarget
+//     == the candidate id. Both are set at the combat store-point on a player hit (combat_mob.go).
+//
+//	[VERIFIED javap NeutralMob.isAngryAt: canAttack(target) ifeq -> false; isValidPlayerTarget &&
+//	 isAngryAtAllPlayers -> true; getPersistentAngerTarget(); != null && matches(target). isAngry():
+//	 endTime = getPersistentAngerEndTime(); endTime > 0 && (endTime - level.getGameTime()) > 0.]
+func isAngryAt(t *TickLoop, e *Entity, targetID int32) bool {
+	// canAttack(target): the candidate (a player id) must still be present on the loop.
+	if t.playerByEntityID(targetID) == nil {
+		return false
+	}
+	// (isAngryAtAllPlayers: the UNIVERSAL_ANGER gamerule defaults FALSE — a cited constant-false no-op.)
+	// The persistentAngerTarget match: anger LIVE (gametime-endpoint isAngry) AND angerTarget == candidate.
+	if e.angerEndTime <= 0 || (e.angerEndTime-t.gametime) <= 0 {
+		return false // isAngry() == false: the anger expired (gameTime passed angerEndTime)
+	}
+	return e.angerTarget == targetID // getPersistentAngerTarget().matches(target)
 }

@@ -19,6 +19,7 @@ import (
 	"math"
 	"math/rand/v2"
 
+	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/level/attribute"
 	"github.com/imhinotori/sulfur/plugin/host"
 )
@@ -123,6 +124,31 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 		// damage in its window). Cite LivingEntity.actuallyHurt/setLastHurtByMob.
 		e.lastHurtByMob = src.attacker
 		e.lastHurtByMobTimestamp = int32(t.gametime)
+
+		// MOB-NEUT-01 (Phase 36-01): the NeutralMob persistent-anger trigger. A WOLF hit by a PLAYER
+		// becomes angry — startPersistentAngerTimer sets the anger timer, and isAngryAt then gates the
+		// wolf's @4 NearestAttackableTargetGoal<Player> so the provoked wolf retaliates. The anger model
+		// is the gametime-ENDPOINT (W6-DISSOLVED): angerEndTime = gameTime + PERSISTENT_ANGER_TIME.sample,
+		// and isAngry() compares it to gameTime — the anger EXPIRES automatically when gameTime passes it,
+		// with NO per-tick decrement and NO ResetUniversalAngerTargetGoal (both dissolved). Wolf.PERSISTENT_
+		// ANGER_TIME = TimeUtil.rangeOfSeconds(20,39) = UniformInt(400,780); sample = 400 + nextInt(381).
+		//
+		// GATES: typ == entity.Wolf.ID (only a wolf gets angry) AND the attacker is a PLAYER
+		// (playerByEntityID resolves it — a wolf provoked by a mob does not start the player-anger timer;
+		// the HurtByTargetGoal handles the generic retaliation). The single nextInt(381) draw is on the
+		// wolf's OWN mobRandom stream — the pig (never a wolf) draws ZERO (its oracle stream is unperturbed),
+		// and a non-player attacker draws ZERO. Uses the SAME mobRandom(e) the combat kinds draw from AND
+		// the SAME t.gametime the MeleeAttackGoal cooldown reads.
+		//	[VERIFIED javap Wolf.startPersistentAngerTimer: setTimeToRemainAngry(PERSISTENT_ANGER_TIME
+		//	 .sample(this.random)); UniformInt.sample = minInclusive + nextInt(max-min+1) = 400 + nextInt(381).
+		//	 NeutralMob.setPersistentAngerTarget(entity); setRemainingPersistentAngerTime → angerEndTime =
+		//	 gameTime + sampled. NeutralMob.isAngry(): angerEndTime > 0 && (angerEndTime - gameTime) > 0.]
+		if e.typ == entity.Wolf.ID && t.playerByEntityID(src.attacker) != nil {
+			// DRAW (the anger timer, wolf-gated, player-attacker-gated): UniformInt(400,780).sample =
+			// 400 + nextInt(381). ONE draw per fresh hit on a wolf by a player.
+			e.angerEndTime = t.gametime + int64(400+mobRandom(e).nextInt(381))
+			e.angerTarget = src.attacker // setPersistentAngerTarget(the attacking player)
+		}
 	}
 
 	// Death-or-hurt-sound drive (bytecode 370-423): `if (isDeadOrDying()) { ...getDeathSound...; die(source); }

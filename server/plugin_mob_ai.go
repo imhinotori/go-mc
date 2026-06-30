@@ -205,7 +205,7 @@ func buildAIFromDecl(t *TickLoop, decl *mobDecl) *mobAI {
 				// hunt/attack). spawnDeclaredMob runs on the tick goroutine; a panic here is isolated by
 				// the tickOnce recover backstop, surfacing the bad declaration loudly rather than shipping
 				// a silently-disarmed hostile. (The .star load already validated the rest of the mob.)
-				panic("buildAIFromDecl: unknown goal kind " + gd.nativeKind + " (valid: nearest_attackable_target, hurt_by_target, melee_attack, spider_attack, leap_at_target, float)")
+				panic("buildAIFromDecl: unknown goal kind " + gd.nativeKind + " (valid: nearest_attackable_target, hurt_by_target, melee_attack, spider_attack, leap_at_target, float, sit, follow_owner, owner_hurt_by, owner_hurt, angry_player_target, skeleton_target)")
 			}
 			// The Go goal's OWN flags() must match the declared flags — a declaration that names, e.g.,
 			// kind="melee_attack" but flags=["TARGET"] would route the goal into the WRONG selector AND
@@ -284,6 +284,31 @@ func buildNativeGoal(kind string, decl *mobDecl) Goal {
 		return newLeapAtTargetGoal(spiderLeapYd)
 	case "float":
 		return newFloatGoal()
+	case "sit":
+		// MOB-NEUT-01 (Phase 36): Wolf @2 SitWhenOrderedToGoal — {JUMP,MOVE}, NO RNG. Parks a tamed/
+		// ordered wolf (sit subsystem).
+		return newSitWhenOrderedToGoal()
+	case "follow_owner":
+		// MOB-NEUT-01 (Phase 36): Wolf @6 FollowOwnerGoal(this, 1.0, 10.0, 2.0) — {MOVE}, NO RNG. The
+		// speed routes from the declared movement_speed (declaredWalkSpeed), the same want-multiplier the
+		// melee goal uses.
+		return newFollowOwnerGoal(declaredWalkSpeed(decl))
+	case "owner_hurt_by":
+		// MOB-NEUT-01 (Phase 36): Wolf targetSelector @1 OwnerHurtByTargetGoal — {TARGET}, NO RNG.
+		return newOwnerHurtByTargetGoal()
+	case "owner_hurt":
+		// MOB-NEUT-01 (Phase 36): Wolf targetSelector @2 OwnerHurtTargetGoal — {TARGET}, NO RNG.
+		return newOwnerHurtTargetGoal()
+	case "angry_player_target":
+		// MOB-NEUT-01 (Phase 36, B1): Wolf targetSelector @4 NearestAttackableTargetGoal<Player>(isAngryAt)
+		// — {TARGET}, the PLAYER goal GATED on the wolf's anger (a wild un-hit wolf does NOT aggro players).
+		// The bare nearest_attackable_target stays the un-gated hostile goal (UNCHANGED).
+		return newAngryPlayerTargetGoal()
+	case "skeleton_target":
+		// MOB-NEUT-01 (Phase 36, B2): Wolf targetSelector @7 NearestAttackableTargetGoal<AbstractSkeleton>
+		// — {TARGET}, NO anger gate (wolves attack skeletons on sight). findTarget scans entity.Skeleton.ID
+		// within FOLLOW_RANGE.
+		return newSkeletonTargetGoal()
 	default:
 		return nil
 	}
