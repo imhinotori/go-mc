@@ -41,12 +41,32 @@ isBaby() = getAge() < 0.
 finalizeSpawnChildFromBreeding: child setAge(BABY_START_AGE); parents setAge(6000) (5min cooldown); reset inLove.
 ```
 
-## FollowParentGoal (net.minecraft.world.entity.ai.goal.FollowParentGoal), flags {MOVE}, priority 5, speed 1.1
+## FollowParentGoal (net.minecraft.world.entity.ai.goal.FollowParentGoal), priority 5, speed 1.1
+NOTE: ctor does NOT setFlags → flags = EMPTY set (no MOVE/LOOK lock). Verify the v1 selector handles an
+empty-flag goal (it claims no flag, so it never blocks/locks — it just navigates in tick). Decompiled:
 ```java
-(decompile when the phase opens: a BABY follows the nearest ADULT of its class within ~8 blocks; canUse
- gated on isBaby() && a nearby adult exists; tick navigates toward the parent. RNG: a periodic re-scan
- interval (likely every 10 ticks) — VERIFY the exact draw/no-draw before lockstep.)
+HORIZONTAL_SCAN_RANGE=8; VERTICAL_SCAN_RANGE=4; DONT_FOLLOW_IF_CLOSER_THAN=3;
+canUse():
+    if (animal.getAge() >= 0) return false;                      // only a BABY (age<0) follows
+    parents = level.getEntitiesOfClass(animal.getClass(), boundingBox.inflate(8,4,8));
+    closest=null; closestDistSqr=MAX;
+    for (p : parents) { if (p.getAge() < 0 || distSqr(p) > closestDistSqr) continue;  // skip babies → keep ADULTS (age>=0)
+                        closestDistSqr=distSqr(p); closest=p; }
+    if (closest==null) return false;
+    if (closestDistSqr < 9.0) return false;                      // already close enough (DONT_FOLLOW_IF_CLOSER_THAN 3 → 3²=9)
+    parent=closest; return true;
+canContinueToUse():
+    if (animal.getAge() >= 0) return false;                      // grew up → stop
+    if (!parent.isAlive()) return false;
+    distSqr = distSqr(parent); return !(distSqr<9.0) && !(distSqr>256.0);   // follow while 3..16 blocks
+start():  timeToRecalcPath = 0;
+stop():   parent = null;
+tick():   if (--timeToRecalcPath > 0) return;
+          timeToRecalcPath = adjustedTickDelay(10);             // PURE INT — NO RNG (oracle-safe)
+          navigation.moveTo(parent, speed);                     // = path_to(parent pos, 1.1)
 ```
+RNG: NONE in FollowParentGoal (the entity scan + the int recalc timer are deterministic). Oracle-safe; it
+only fires for a BABY with a nearby adult — the oracle pig is a lone adult → canUse false → zero effect.
 
 ## Pig.registerGoals (already confirmed, Phase 31): BreedGoal@3 (1.0), FollowParentGoal@5 (1.1).
 ## Pig.isFood = stack.is(ItemTags.PIG_FOOD) — reuses the Phase-32 itemInTag(pig_food) read.
