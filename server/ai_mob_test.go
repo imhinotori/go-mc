@@ -134,17 +134,40 @@ func TestServerAiStepOrder(t *testing.T) {
 // runs first) and must be a *floatGoal with the JUMP flag, in lockstep with vanilla_pig/main.star.
 func TestPigGoalSetRegistered(t *testing.T) {
 	m := newPigAI()
-	if got := len(m.goals.goals); got != 5 {
-		t.Fatalf("pig goal set should have 5 goals (FloatGoal@0 + PanicGoal@1 + the 3 passive), got %d", got)
+	if got := len(m.goals.goals); got != 7 {
+		t.Fatalf("pig goal set should have 7 goals (FloatGoal@0 + PanicGoal@1 + TemptGoal@4 ×2 + stroll@6 + look@7 + lookAround@8), got %d", got)
 	}
 	// FloatGoal must be FIRST in the priority-sorted slice (@0 = highest precedence).
 	if _, ok := m.goals.goals[0].g.(*floatGoal); !ok || m.goals.goals[0].priority != 0 {
 		t.Fatalf("expected *floatGoal at priority 0 first, got %T @%d",
 			m.goals.goals[0].g, m.goals.goals[0].priority)
 	}
-	// Assert the recorded priorities + that the four goal types are present.
+	// A map-by-priority cannot represent the two @4 TemptGoals (duplicate key) — count them directly:
+	// exactly two *temptGoal at priority 4, each claiming {MOVE,LOOK}. The carrot goal is added first
+	// (insertion-sort keeps it before pig_food among the equals).
+	tempts := 0
+	for _, wg := range m.goals.goals {
+		g, ok := wg.g.(*temptGoal)
+		if !ok {
+			continue
+		}
+		if wg.priority != 4 {
+			t.Fatalf("temptGoal registered at priority %d, want 4", wg.priority)
+		}
+		if g.flags() != (flagMove | flagLook) {
+			t.Fatalf("TemptGoal must claim exactly {MOVE,LOOK}, got %v", g.flags())
+		}
+		tempts++
+	}
+	if tempts != 2 {
+		t.Fatalf("expected exactly two *temptGoal at priority 4, got %d", tempts)
+	}
+	// Assert the single-per-priority types (@0/@1/@6/@7/@8). The @4 pair is asserted above.
 	byPriority := map[int]Goal{}
 	for _, wg := range m.goals.goals {
+		if wg.priority == 4 {
+			continue // the duplicate @4 pair is counted above, not mapped
+		}
 		byPriority[wg.priority] = wg.g
 	}
 	if g, ok := byPriority[0].(*floatGoal); !ok {

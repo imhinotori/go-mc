@@ -52,17 +52,26 @@ func TestPluginPigBootLoads(t *testing.T) {
 	if pig.ai == nil {
 		t.Fatal("plugin pig has no AI")
 	}
-	if got := len(pig.ai.goals.goals); got != 5 {
-		t.Fatalf("plugin pig has %d goals, want 5 (FloatGoal@0 + PanicGoal@1 + @6/@7/@8)", got)
+	if got := len(pig.ai.goals.goals); got != 7 {
+		t.Fatalf("plugin pig has %d goals, want 7 (FloatGoal@0 + PanicGoal@1 + TemptGoal@4 ×2 + @6/@7/@8)", got)
 	}
 	priorities := map[int]bool{}
+	tempts := 0
 	for _, wg := range pig.ai.goals.goals {
 		priorities[wg.priority] = true
+		if wg.priority == 4 {
+			tempts++
+		}
 	}
-	for _, p := range []int{0, 1, 6, 7, 8} {
+	for _, p := range []int{0, 1, 4, 6, 7, 8} {
 		if !priorities[p] {
 			t.Fatalf("plugin pig missing a goal at priority %d (got %v)", p, priorities)
 		}
+	}
+	// The map[int]bool collapses the duplicate @4 — assert there are EXACTLY two goals at priority 4
+	// (the two TemptGoals: carrot_on_a_stick literal + pig_food tag).
+	if tempts != 2 {
+		t.Fatalf("plugin pig has %d goals at priority 4, want exactly 2 (two TemptGoals)", tempts)
 	}
 	if _, ok := loop.only().entities.get(pig.id); !ok {
 		t.Fatal("spawnVanillaPig did not add the pig to the tick-owned store")
@@ -91,11 +100,28 @@ func TestVanillaPigDeclaresGoalSet(t *testing.T) {
 	if decl.attrs["movement_speed"] != 0.25 {
 		t.Fatalf("movement_speed = %v, want 0.25 (Pig.createAttributes)", decl.attrs["movement_speed"])
 	}
-	if len(decl.goals) != 5 {
-		t.Fatalf("captured %d goals, want 5 (FloatGoal@0 + PanicGoal@1 + @6/@7/@8)", len(decl.goals))
+	if len(decl.goals) != 7 {
+		t.Fatalf("captured %d goals, want 7 (FloatGoal@0 + PanicGoal@1 + TemptGoal@4 ×2 + @6/@7/@8)", len(decl.goals))
+	}
+	// The map-by-priority collapses the two @4 TemptGoals — count them separately and assert each
+	// declares {MOVE,LOOK}, then map the single-per-priority decls for the @0/@1/@6/@7/@8 checks.
+	tempts := 0
+	for _, g := range decl.goals {
+		if g.priority == 4 {
+			if g.flags != (flagMove | flagLook) {
+				t.Fatalf("@4 TemptGoal flags = %b, want flagMove|flagLook %b", g.flags, flagMove|flagLook)
+			}
+			tempts++
+		}
+	}
+	if tempts != 2 {
+		t.Fatalf("captured %d goals at priority 4, want exactly 2 (two TemptGoals)", tempts)
 	}
 	byPriority := map[int]goalDecl{}
 	for _, g := range decl.goals {
+		if g.priority == 4 {
+			continue // the @4 pair is counted above, not mapped
+		}
 		byPriority[g.priority] = g
 	}
 	// @0 JUMP (FloatGoal — Phase 30-03)
