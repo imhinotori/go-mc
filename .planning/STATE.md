@@ -4,14 +4,14 @@ milestone: v5
 milestone_name: Mob Behaviors & Living-Entity Subsystems
 status: verifying
 stopped_at: Completed 34-01-PLAN.md (cow)
-last_updated: "2026-06-30T15:58:53.108Z"
+last_updated: "2026-06-30T16:31:17.585Z"
 last_activity: 2026-06-30
 progress:
   total_phases: 9
   completed_phases: 7
-  total_plans: 26
-  completed_plans: 23
-  percent: 88
+  total_plans: 27
+  completed_plans: 24
+  percent: 89
 ---
 
 # Project State
@@ -36,9 +36,9 @@ See: .planning/PROJECT.md (updated 2026-06-29)
 
 ## Current Position
 
-Phase: 33 (Aging + Breeding (S3) — Pig Parity / DOGFOOD GATE) — EXECUTING
-Plan: 5 of 5
-Status: Phase complete — ready for verification
+Phase: 35 (Hostiles + Spawn Rules) — COMPLETE
+Plan: 6 of 6 (35-06 THE GATE done; 35-03/35-04 consolidated into the 35-01b gap-closure)
+Status: Phase complete — all 5 requirements (MOB-SUB-10/11, MOB-HOST-01/02/03) closed; the gate (pig-oracle byte-identity + Docker -race + live bot hunt+melee) GREEN. Ready for Phase 36 (Wolf).
 Last activity: 2026-06-30
 
 ### v5 ROADMAP — Phases 29–36 (the convergent jar-grounded dependency order)
@@ -198,7 +198,7 @@ Phase-4 milestone (prior): a real client stands in a streamed world — chunks e
 byte-identical to vanilla 26.2 (04-04 capture-diff) and stream as a clamped center-out
 ring with batch framing (WORLD-05).
 
-Progress: [█████████░] 88%
+Progress: [█████████░] 89%
 
 ## Performance Metrics
 
@@ -328,6 +328,7 @@ Progress: [█████████░] 88%
 | Phase 35 P02 | 35min | 2 tasks | 8 files |
 | Phase 35 P01 | ~1h | 3 tasks | 10 files |
 | Phase 35 P05 | 35 | 3 tasks | 7 files |
+| Phase 35 P06 | 40m | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -511,6 +512,7 @@ Recent decisions affecting current work:
 - [Phase ?]: MOB-SUB-10 targetSelector: NearestAttackableTargetGoal canUse uses the FULL nextInt(10) NOT reducedTickDelay 5 (faithful under full-rate serverAiStep); the targetSelector is a second independent goalSelector ticked in jar order; doHurtTarget routes through the player hurt path with a host-set mob_attack source.
 - [Phase ?]: Spider leap gate is nextInt(reducedTickDelay(5))=>raw 5, NOT nextFloat — the exec-time decompile corrected the JARNOTES guess; the 1:1 jar mandate made the bytecode authoritative.
 - [Phase ?]: SpiderAttackGoal daylight behavior is the stochastic 1/100 canContinueToUse flee when bright, not a flat no-attack-in-daylight block — wave-1 stub rewritten to match the bytecode.
+- [Phase ?]: Phase 35 complete: the 3 hostiles boot-load into the ONE registry via the //go:embed extension; /dbg zombie|skeleton|spider added; embed-vs-root byte-identity + pig-oracle byte-identity + Docker -race all GREEN; live bot verified a zombie hunts + deals real melee (health 19.3->0.0).
 
 ### Pending Todos
 
@@ -540,7 +542,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-30T15:56:30.047Z
+Last session: 2026-06-30T16:31:11.285Z
 Stopped at: Completed 34-01-PLAN.md (cow)
 Resume file: None
 Next: OPERATOR CHECKPOINT (19-02 Task 3) — build `CGO_ENABLED=0 go build -o sulfur.exe ./cmd/sulfur`, run `./sulfur.exe -seed 777` in a REAL terminal (expect alt-screen TUI: log viewport + command input), type `say hi`+Enter (expect a `console command cmd=say hi` viewport line), connect a vanilla 26.2 client (expect a join line), Ctrl-C (clean exit), then `./sulfur.exe -seed 777 | cat` (expect NO TUI, plain stderr — today's behavior). On "approved" → mark TUI-01 complete + advance the plan counter, then proceed to Plan 19-03 (gameplay_tick.go join/leave slog conversion + the full disconnect taxonomy). The console line routes TUI→tick (EnqueueConsoleCommand, cap 64, drop-on-full)→runConsoleCommand on the tick→existing graph (grant-all, no issuer), reply to slog. gameplay_tick.go is untouched (19-03 owns it). LEGACY: Phase 17 Wave 2 (17-02/17-03) — see prior continuity below. (GAMEPLAY-05 fluid simulation: OVERWRITE server/fluid.go with the FlowingFluid port + scheduled-tick queue; lazy-init t.fluidSchedule inside tickFluids, do NOT edit tick.go/tick_phases.go) and 17-03 (GAMEPLAY-04 fall damage + PvP dispatch: OVERWRITE server/fall_damage.go using the tickPlayer fallDistance/wasOnGround/lastY fields + the lookupPlayerByEntityID reverse lookup, do NOT edit tick.go/tick_phases.go). The exact Wave-2 seam surface (field names, init point, call sites, stub signatures) is in 17-01-SUMMARY.md "WAVE-2 HANDOFF". Deferred-still-open: dungeon loot/spawner-mob + BeehiveDecorator occupant + pale_garden PaleMoss (all v3, cosmetic, in 13-04-SUMMARY); KeepAlive double-leave hardening (Phase 3). KNOWN PRE-EXISTING FLAKE: TestTickAIDrivesMobs (OPT-01 async-pool timing, not caused by 17-01) intermittently fails under full-suite load; passes in isolation + 3× under -race.

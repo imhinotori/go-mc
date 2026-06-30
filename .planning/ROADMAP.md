@@ -77,7 +77,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
 - [x] **Phase 33: Aging + Breeding (S3) — Pig Parity / DOGFOOD GATE** — animal aging + breeding; BreedGoal@3 + FollowParentGoal@5 on the pig closes the full 8-goal oracle. HARD GATE before any new mob.
  (completed 2026-06-30)
 - [x] **Phase 34: New Passive Mobs** — cow/sheep/chicken as jar-faithful Starlark plugins. (completed 2026-06-30)
-- [ ] **Phase 35: Hostiles + Spawn Rules** — target-selector machinery + per-category cap + day/night gate; zombie/skeleton/spider.
+- [x] **Phase 35: Hostiles + Spawn Rules** — target-selector machinery + per-category cap + day/night gate; zombie/skeleton/spider.
 - [ ] **Phase 36: Wolf (Neutral)** — `"wolf"` base type + supplier; wild goal set then the tame/owner second pass.
 
 ## Phase Details
@@ -199,10 +199,10 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
 **Plans**: 6 plans (3 waves)
 - [x] 35-01-PLAN.md — targetSelector machinery: 2nd goalSelector instance + jar-order tick + buildAIFromDecl TARGET routing + attackTargetID + lastHurtByMob bookkeeping + shared NearestAttackableTarget/HurtByTarget/MeleeAttack goals [MOB-SUB-10]
 - [x] 35-02-PLAN.md — Spawn gating: 3 MONSTER categoryOf cases + monsterCap (70/289) + isDarkEnoughToSpawn gametime proxy (FORCED) + the natural-spawn MONSTER pass + checkDespawn [MOB-SUB-11]
-- [ ] 35-03-PLAN.md — Zombie plugin: Zombie.registerGoals (ZombieAttackGoal + target selectors) + per-hostile behavior/RNG test [MOB-HOST-01]
-- [ ] 35-04-PLAN.md — Skeleton plugin: Skeleton.registerGoals melee-only subset (bow deferred) + test [MOB-HOST-02]
+- [x] 35-03-PLAN.md — Zombie plugin: Zombie.registerGoals (ZombieAttackGoal + target selectors) + per-hostile behavior/RNG test [MOB-HOST-01] (delivered via 35-01b: vanilla_zombie pair + zombie_test.go; boot-loaded in 35-06)
+- [x] 35-04-PLAN.md — Skeleton plugin: Skeleton.registerGoals melee-only subset (bow deferred) + test [MOB-HOST-02] (delivered via 35-01b: vanilla_skeleton pair + skeleton_test.go; boot-loaded in 35-06)
 - [x] 35-05-PLAN.md — Spider plugin: Spider.registerGoals (FloatGoal + LeapAtTargetGoal nextFloat + daylight-gated SpiderAttackGoal) + test [MOB-HOST-03]
-- [ ] 35-06-PLAN.md — The gate: boot-load 3 embeds + /dbg levers + embed-vs-root byte-identity + pig-oracle byte-identical + Docker -race + live bot verify [MOB-SUB-10, MOB-SUB-11, MOB-HOST-01, MOB-HOST-02, MOB-HOST-03]
+- [x] 35-06-PLAN.md — The gate: boot-load 3 embeds + /dbg levers + embed-vs-root byte-identity + pig-oracle byte-identical + Docker -race + live bot verify [MOB-SUB-10, MOB-SUB-11, MOB-HOST-01, MOB-HOST-02, MOB-HOST-03]
 **Research flag**: yes — the light-engine vs documented darkness-proxy decision must be FORCED (not left silent); javap `isDarkEnoughToSpawn`/`checkMonsterSpawnRules`/`checkDespawn`; verify hostile types map to MONSTER in `countByCategory` and port `checkDespawn` (cap gates spawns, not population).
 
 ### Phase 36: Wolf (Neutral)
@@ -230,7 +230,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
 | 32. Held-Item + Item Tags (S4) | v5 | 1/1 | Complete   | 2026-06-30 |
 | 33. Aging + Breeding (S3) — Pig Parity / DOGFOOD GATE | v5 | 5/5 | Complete   | 2026-06-30 |
 | 34. New Passive Mobs | v5 | 5/5 | Complete   | 2026-06-30 |
-| 35. Hostiles + Spawn Rules | v5 | 3/6 | In Progress|  |
+| 35. Hostiles + Spawn Rules | v5 | 6/6 | Complete   | 2026-06-30 |
 | 36. Wolf (Neutral) | v5 | 0/? | Not started | - |
 
 ## Deferred / Backlog (unwired or subsystem-blocked)

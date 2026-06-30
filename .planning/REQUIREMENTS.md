@@ -42,8 +42,8 @@
 
 ### Hostile Mobs
 
-- [ ] **MOB-HOST-01**: Zombie — a jar-faithful plugin (`Zombie.registerGoals`) with `ZombieAttackGoal` + target selectors, mapped to MONSTER, day/night burn behavior.
-- [ ] **MOB-HOST-02**: Skeleton — a jar-faithful plugin (`Skeleton.registerGoals`), melee-only subset acceptable for v1 (bow / `RangedBowAttackGoal` + `reassessWeaponGoal` a documented follow-up), day/night burn.
+- [x] **MOB-HOST-01**: Zombie — a jar-faithful plugin (`Zombie.registerGoals`) with `ZombieAttackGoal` + target selectors, mapped to MONSTER, day/night burn behavior.
+- [x] **MOB-HOST-02**: Skeleton — a jar-faithful plugin (`Skeleton.registerGoals`), melee-only subset acceptable for v1 (bow / `RangedBowAttackGoal` + `reassessWeaponGoal` a documented follow-up), day/night burn.
 - [x] **MOB-HOST-03**: Spider — a jar-faithful plugin (`Spider.registerGoals`) with its target selector (wall-climb + light-gated aggression as differentiators).
 
 ### Neutral Mob
@@ -91,8 +91,8 @@ Every v5 requirement maps to exactly one phase. 21/21 mapped — no orphans, no 
 | MOB-PASS-01 | Phase 34 — New Passive Mobs | Complete (34-01 cow + 34-04 gate; live-verify deferred) |
 | MOB-PASS-02 | Phase 34 — New Passive Mobs | Complete (34-02 sheep + 34-04 gate; live-verify deferred) |
 | MOB-PASS-03 | Phase 34 — New Passive Mobs | Complete (34-03 chicken + 34-04 gate; live-verify deferred) |
-| MOB-HOST-01 | Phase 35 — Hostiles + Spawn Rules | Pending |
-| MOB-HOST-02 | Phase 35 — Hostiles + Spawn Rules | Pending |
+| MOB-HOST-01 | Phase 35 — Hostiles + Spawn Rules | Complete |
+| MOB-HOST-02 | Phase 35 — Hostiles + Spawn Rules | Complete |
 | MOB-HOST-03 | Phase 35 — Hostiles + Spawn Rules | Complete |
 | MOB-NEUT-01 | Phase 36 — Wolf (Neutral) | Pending |
 | MOB-NEUT-02 | Phase 36 — Wolf (Neutral) | Pending |
