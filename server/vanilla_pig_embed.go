@@ -29,7 +29,7 @@ import (
 // embedded manifest governs, T-24-07). Keep each repo-root/embed pair byte-identical. Embedding the
 // dirs covers plugin.toml + main.star for each mob.
 //
-//go:embed assets/vanilla_pig assets/vanilla_cow assets/vanilla_sheep assets/vanilla_chicken assets/vanilla_zombie assets/vanilla_skeleton assets/vanilla_spider
+//go:embed assets/vanilla_pig assets/vanilla_cow assets/vanilla_sheep assets/vanilla_chicken assets/vanilla_zombie assets/vanilla_skeleton assets/vanilla_spider assets/vanilla_wolf
 var vanillaMobFS embed.FS
 
 // The declared mob names the swap sites look up. Each is the directory name under assets/ AND the
@@ -53,23 +53,23 @@ const (
 	vanillaSpiderMobName   = "vanilla_spider"
 
 	// Phase 36 wolf (declared here as the canonical mob-name home, the SAME forward-declaration pattern
-	// the Phase-35 hostiles used above: the const + the /dbg arm land in THIS foundation plan, while the
-	// actual boot-load — the assets/vanilla_wolf embed directive + the vanillaMobNames load entry — is
-	// EXTENDED by Plan C (the .star plugin), which ships the assets/vanilla_wolf/{plugin.toml,main.star}
-	// declaration. Defining the const now is purely additive: /dbg wolf references it, and
-	// spawnVanillaMob(vanillaWolfMobName) resolves it the moment Plan C's declaration boot-loads (until
-	// then the registry lookup returns nil → a graceful no-op, never a panic). NOT added to the
-	// //go:embed directive here because assets/vanilla_wolf does not yet exist — embedding a missing
-	// directory is a hard compile error; Plan C adds the directive + the load entry alongside the asset.)
+	// the Phase-35 hostiles used above: the const + the /dbg arm landed in the 36-01 foundation plan).
+	// Plan 36-03 (the .star plugin) NOW ships assets/vanilla_wolf/{plugin.toml,main.star} and COMPLETES
+	// the boot-load by adding assets/vanilla_wolf to the //go:embed directive above + appending
+	// vanillaWolfMobName to vanillaMobNames below (the embed + load entry the foundation plan deferred
+	// because the directory did not yet exist — embedding a missing directory is a hard compile error).
+	// With the asset present, spawnVanillaMob(vanillaWolfMobName) + /dbg wolf now resolve a real
+	// boot-loaded declaration.
 	vanillaWolfMobName = "vanilla_wolf"
 )
 
-// vanillaMobNames is the load order: ALL SEVEN bundled mobs (the 4 passives + the Phase-35 hostiles)
-// load into the ONE registry. The pig is first to keep the boot log + any pig-first diagnostics stable,
-// but order is otherwise irrelevant (each mob loads independently under its own caps). A missing entry
-// here means that mob never boot-loads — and the SWAP would have no such mob (the LOUD re-assertion in
-// loadVanillaMobRegistry catches it). The 3 hostiles are additive: the loader + the re-assertion are
-// category-agnostic (a MONSTER declares its goal/target sets exactly as a CREATURE declares its goals).
+// vanillaMobNames is the load order: ALL EIGHT bundled mobs (the 4 passives + the 3 Phase-35 hostiles +
+// the Phase-36 wolf) load into the ONE registry. The pig is first to keep the boot log + any pig-first
+// diagnostics stable, but order is otherwise irrelevant (each mob loads independently under its own
+// caps). A missing entry here means that mob never boot-loads — and the SWAP would have no such mob (the
+// LOUD re-assertion in loadVanillaMobRegistry catches it). The hostiles + the wolf are additive: the
+// loader + the re-assertion are category-agnostic (a MONSTER or a tameable CREATURE declares its
+// goal/target sets exactly as a passive CREATURE declares its goals).
 var vanillaMobNames = []string{
 	vanillaPigMobName,
 	vanillaCowMobName,
@@ -78,6 +78,7 @@ var vanillaMobNames = []string{
 	vanillaZombieMobName,
 	vanillaSkeletonMobName,
 	vanillaSpiderMobName,
+	vanillaWolfMobName,
 }
 
 // loadVanillaMobRegistry materializes EACH bundled vanilla mob plugin to a temp dir, parses its

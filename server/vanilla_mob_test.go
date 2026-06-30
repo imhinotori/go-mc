@@ -19,31 +19,45 @@ import (
 // @6/@7/@8), cow 8 (@0..7), sheep 9 (@0..8 with EatBlockGoal@5), chicken 8 (@0..7). The counts are the
 // SAME ones the per-mob tests (plugin_pig_test/cow_test/sheep_test/chicken_test) assert independently;
 // re-asserted here from the ONE generalized registry to prove the loop loaded EACH faithfully.
+//
+// goalCount is the number of GOAL-SELECTOR goals (every non-TARGET-flag goal — what lands in
+// e.ai.goals.goals at spawn); targetCount is the number of TARGET-flag goals (what routes into the
+// independent e.ai.targetSelector.goals, the Mob.registerGoals goalSelector/targetSelector split). The
+// passive mobs declare NO target goal (targetCount 0), so their registry total == goalCount.
+//
+// Plan 36-03 adds the wolf (the 8th boot-loaded declaration): its IN-SCOPE Wolf.registerGoals set is 15
+// goals — goalSelector float/panic/sit/leap_at_target/melee_attack/follow_owner/breed/stroll/look/around
+// (10) + targetSelector owner_hurt_by/owner_hurt/hurt_by_target/angry_player_target/skeleton_target (5).
+// The 5 cited+omitted deferrals (WolfAvoidEntityGoal@3, BegGoal@9, NonTameRandomTarget@5/@6,
+// ResetUniversalAnger@8) are NOT counted — they ship with their not-yet-built targets/subsystems.
 var allFourMobs = []struct {
-	name      string
-	baseID    entity.ID
-	goalCount int
+	name        string
+	baseID      entity.ID
+	goalCount   int
+	targetCount int
 }{
-	{vanillaPigMobName, entity.Pig.ID, 9},
-	{vanillaCowMobName, entity.Cow.ID, 8},
-	{vanillaSheepMobName, entity.Sheep.ID, 9},
-	{vanillaChickenMobName, entity.Chicken.ID, 8},
+	{vanillaPigMobName, entity.Pig.ID, 9, 0},
+	{vanillaCowMobName, entity.Cow.ID, 8, 0},
+	{vanillaSheepMobName, entity.Sheep.ID, 9, 0},
+	{vanillaChickenMobName, entity.Chicken.ID, 8, 0},
+	{vanillaWolfMobName, entity.Wolf.ID, 10, 5},
 }
 
-// TestAllFourMobsBootLoad: loadVanillaMobRegistry returns ONE registry holding the 4 passive
-// declarations, each with the right base type + jar goal count. This is the T-34-10 guarantee (no
+// TestAllFourMobsBootLoad: loadVanillaMobRegistry returns ONE registry holding the passive + hostile +
+// wolf declarations, each with the right base type + jar goal count. This is the T-34-10 guarantee (no
 // silent missing mob) exercised directly. As of Plan 35-06 the same ONE registry ALSO boot-loads the 3
-// Phase-35 hostiles (zombie/skeleton/spider) additively — so the total declaration count is now 7 (the 4
-// passives asserted here + the 3 hostiles asserted by TestHostilesBootLoad). The exact total guards
-// against an accidental extra/missing mob in vanillaMobNames.
+// Phase-35 hostiles (zombie/skeleton/spider) additively; Plan 36-03 adds the wolf — so the total
+// declaration count is now 8 (the 4 passives + the wolf asserted here via allFourMobs + the 3 hostiles
+// asserted by TestHostilesBootLoad). The exact total guards against an accidental extra/missing mob in
+// vanillaMobNames.
 func TestAllFourMobsBootLoad(t *testing.T) {
 	r, err := loadVanillaMobRegistry()
 	if err != nil {
 		t.Fatalf("loadVanillaMobRegistry: %v", err)
 	}
-	const wantTotal = 7 // 4 passives (this test) + 3 Phase-35 hostiles (TestHostilesBootLoad)
+	const wantTotal = 8 // 4 passives + wolf (this test) + 3 Phase-35 hostiles (TestHostilesBootLoad)
 	if got := len(r.byName); got != wantTotal {
-		t.Fatalf("registry holds %d declarations, want %d (pig/cow/sheep/chicken + zombie/skeleton/spider)", got, wantTotal)
+		t.Fatalf("registry holds %d declarations, want %d (pig/cow/sheep/chicken/wolf + zombie/skeleton/spider)", got, wantTotal)
 	}
 	for _, m := range allFourMobs {
 		decl, ok := r.byName[m.name]
@@ -53,8 +67,10 @@ func TestAllFourMobsBootLoad(t *testing.T) {
 		if decl.baseType.ID != m.baseID {
 			t.Fatalf("%s base type = %d, want %d", m.name, decl.baseType.ID, m.baseID)
 		}
-		if len(decl.goals) != m.goalCount {
-			t.Fatalf("%s captured %d goals, want %d (the jar registerGoals set)", m.name, len(decl.goals), m.goalCount)
+		// The registry decl.goals is the COMBINED declared set (goalSelector + targetSelector — the
+		// split happens at spawn, plugin_mob_ai.go's flagTarget routing). So assert against the total.
+		if wantTotalGoals := m.goalCount + m.targetCount; len(decl.goals) != wantTotalGoals {
+			t.Fatalf("%s captured %d goals, want %d (the jar registerGoals set: %d goalSelector + %d targetSelector)", m.name, len(decl.goals), wantTotalGoals, m.goalCount, m.targetCount)
 		}
 	}
 }
@@ -76,8 +92,14 @@ func TestSpawnVanillaMobByName(t *testing.T) {
 		if e.ai == nil {
 			t.Fatalf("spawnVanillaMob(%q) has no AI", m.name)
 		}
+		// The TARGET-flag goals route into the independent targetSelector at spawn (plugin_mob_ai.go's
+		// flagTarget split); every other goal lands in goals.goals. Assert BOTH lists (the wolf is the
+		// first vanilla CREATURE with a targetSelector — owner-defense + anger + skeleton hunting).
 		if got := len(e.ai.goals.goals); got != m.goalCount {
-			t.Fatalf("spawnVanillaMob(%q) built %d goals, want %d", m.name, got, m.goalCount)
+			t.Fatalf("spawnVanillaMob(%q) built %d goalSelector goals, want %d", m.name, got, m.goalCount)
+		}
+		if got := len(e.ai.targetSelector.goals); got != m.targetCount {
+			t.Fatalf("spawnVanillaMob(%q) built %d targetSelector goals, want %d", m.name, got, m.targetCount)
 		}
 	}
 }
