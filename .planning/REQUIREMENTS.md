@@ -88,9 +88,9 @@ Every v5 requirement maps to exactly one phase. 21/21 mapped — no orphans, no 
 | MOB-SUB-11 | Phase 35 — Hostiles + Spawn Rules | Pending |
 | MOB-GATE-01 | Phase 33 — Aging + Breeding (S3) / Pig Parity GATE | Complete |
 | MOB-GATE-02 | Phase 33 — Aging + Breeding (S3) / Pig Parity GATE | Complete |
-| MOB-PASS-01 | Phase 34 — New Passive Mobs | In Progress (34-00 infra; closes 34-01) |
-| MOB-PASS-02 | Phase 34 — New Passive Mobs | In Progress (34-00 infra; closes 34-02) |
-| MOB-PASS-03 | Phase 34 — New Passive Mobs | In Progress (34-00 infra; closes 34-03) |
+| MOB-PASS-01 | Phase 34 — New Passive Mobs | Complete (34-01 cow + 34-04 gate; live-verify deferred) |
+| MOB-PASS-02 | Phase 34 — New Passive Mobs | Complete (34-02 sheep + 34-04 gate; live-verify deferred) |
+| MOB-PASS-03 | Phase 34 — New Passive Mobs | Complete (34-03 chicken + 34-04 gate; live-verify deferred) |
 | MOB-HOST-01 | Phase 35 — Hostiles + Spawn Rules | Pending |
 | MOB-HOST-02 | Phase 35 — Hostiles + Spawn Rules | Pending |
 | MOB-HOST-03 | Phase 35 — Hostiles + Spawn Rules | Pending |

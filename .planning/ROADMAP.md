@@ -76,7 +76,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
  (completed 2026-06-30)
 - [x] **Phase 33: Aging + Breeding (S3) — Pig Parity / DOGFOOD GATE** — animal aging + breeding; BreedGoal@3 + FollowParentGoal@5 on the pig closes the full 8-goal oracle. HARD GATE before any new mob.
  (completed 2026-06-30)
-- [ ] **Phase 34: New Passive Mobs** — cow/sheep/chicken as jar-faithful Starlark plugins.
+- [x] **Phase 34: New Passive Mobs** — cow/sheep/chicken as jar-faithful Starlark plugins. (completed 2026-06-30)
 - [ ] **Phase 35: Hostiles + Spawn Rules** — target-selector machinery + per-category cap + day/night gate; zombie/skeleton/spider.
 - [ ] **Phase 36: Wolf (Neutral)** — `"wolf"` base type + supplier; wild goal set then the tame/owner second pass.
 
@@ -184,7 +184,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
 - [x] 34-01-PLAN.md — Cow (wave 2): vanilla_cow .star pair (8-goal subset) + milking interact (AbstractCow.mobInteract bucket->milk_bucket) + cow tests [MOB-PASS-01]
 - [x] 34-02-PLAN.md — Sheep (wave 2): vanilla_sheep .star pair (9 goals + EatBlockGoal@5 RNG-gated via the 34-00 seam, grass_block-below cite-defer) + EatBlockGoal RNG test [MOB-PASS-02]
 - [x] 34-03-PLAN.md — Chicken (wave 2): vanilla_chicken .star pair (8 goals) + boot/behavior + slow-fall-applies-live test (egg-lay/slow-fall built in 34-00) [MOB-PASS-03]
-- [ ] 34-04-PLAN.md — The gate (wave 3): generalize boot-load (all 4 embeds) + spawnVanillaMob(name) + /dbg cow|sheep|chicken + natural-spawn pick + main.go boot + Docker -race + live bot; the pig oracle stays byte-identical [MOB-PASS-01/02/03]
+- [x] 34-04-PLAN.md — The gate (wave 3): generalize boot-load (all 4 embeds) + spawnVanillaMob(name) + /dbg cow|sheep|chicken + natural-spawn pick + main.go boot + Docker -race + live bot; the pig oracle stays byte-identical [MOB-PASS-01/02/03]
 
 ### Phase 35: Hostiles + Spawn Rules
 **Goal**: A survival night exists — zombie/skeleton/spider hunt and attack the player, gated by a faithful per-category cap and a day/night spawn rule.
@@ -223,7 +223,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
 | 31. PanicGoal (S2 consumer) | v5 | 1/1 | Complete   | 2026-06-30 |
 | 32. Held-Item + Item Tags (S4) | v5 | 1/1 | Complete   | 2026-06-30 |
 | 33. Aging + Breeding (S3) — Pig Parity / DOGFOOD GATE | v5 | 5/5 | Complete   | 2026-06-30 |
-| 34. New Passive Mobs | v5 | 4/5 | In Progress|  |
+| 34. New Passive Mobs | v5 | 5/5 | Complete   | 2026-06-30 |
 | 35. Hostiles + Spawn Rules | v5 | 0/? | Not started | - |
 | 36. Wolf (Neutral) | v5 | 0/? | Not started | - |
 
