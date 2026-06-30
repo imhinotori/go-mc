@@ -515,7 +515,7 @@ func (g *temptGoal) start(_ *TickLoop, _ *Entity) {
 // setWantTarget (the navigateTowards(player) analog — the want carries the position, the nav tick
 // applies the 1.2 speed, matching the PanicGoal/stroll precedent).
 func (g *temptGoal) tick(_ *TickLoop, e *Entity) {
-	if !g.hasPlayer {
+	if !g.hasPlayer || e.ai == nil { // WR-01: nil-guard e.ai, matching every sibling goal in this file
 		return
 	}
 	// setLookAt(player): aim the head/body toward the player (lookAtPlayerGoal.tick seam).
@@ -534,7 +534,9 @@ func (g *temptGoal) tick(_ *TickLoop, e *Entity) {
 // calmDown = reducedTickDelay(100) = 50 @20TPS.
 func (g *temptGoal) stop(_ *TickLoop, e *Entity) {
 	g.hasPlayer = false
-	e.ai.clearWantTarget()         // stopNavigation()
+	if e.ai != nil { // WR-01: nil-guard e.ai, matching every sibling goal in this file
+		e.ai.clearWantTarget() // stopNavigation()
+	}
 	g.calmDown = reducedTickDelay(100) // 100 → 50 @20TPS
 	g.isRunning = false
 }
