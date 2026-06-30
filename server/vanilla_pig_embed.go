@@ -40,6 +40,17 @@ const (
 	vanillaCowMobName     = "vanilla_cow"
 	vanillaSheepMobName   = "vanilla_sheep"
 	vanillaChickenMobName = "vanilla_chicken"
+
+	// Phase 35 hostiles (declared here as the canonical mob-name home so the spawn-gating picker —
+	// naturalMonsterMobNames / pickNaturalMonsterMob, async.go — and the later hostile-plugin embed
+	// plans (35-03..05) share ONE definition, never a duplicate const). These names are the directory
+	// names under assets/ AND the declare_mob(name=...) the hostile plugins emit; the embed directive
+	// (vanillaMobFS) + vanillaMobNames load order are EXTENDED by the hostile-plugin plans to actually
+	// boot-load them. Defining the constants now (Phase 35-02) is purely additive: the spawn picker
+	// references them, and the spawnVanillaMob registry lookup resolves them once the declarations load.
+	vanillaZombieMobName   = "vanilla_zombie"
+	vanillaSkeletonMobName = "vanilla_skeleton"
+	vanillaSpiderMobName   = "vanilla_spider"
 )
 
 // vanillaMobNames is the load order: ALL FOUR bundled mobs load into the ONE registry. The pig is first

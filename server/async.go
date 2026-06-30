@@ -265,12 +265,23 @@ type spawnCandidatesReady struct {
 	region *region
 
 	// spawnableChunkCount is the eligible-column count the OWNER captured at submit time (len of
-	// spawnableColumns()), carried as a plain int so applyTo can recompute the CREATURE cap
+	// spawnableColumns()), carried as a plain int so applyTo can recompute the cap
 	// (maxInstancesPerChunk * spawnableChunkCount) on the owner without re-walking the columns. It
 	// is the same scaling vanilla's getFilteredSpawningCategories uses; carrying it (a value, not a
 	// live reference — Pitfall 3) keeps the apply-time cap derivation consistent with the gate the
 	// scan was submitted under, while the live COUNT is re-read from the authoritative store.
 	spawnableChunkCount int
+
+	// category is the MobCategory this scan was submitted FOR (Phase 35-02, SC#3). The natural
+	// spawner now runs TWO passes per cycle (CREATURE + the night-gated MONSTER pass); each submits
+	// its own spawnCandidatesReady carrying the category it gated under, so applyTo re-checks the
+	// RIGHT per-category cap (creatureCap for CREATURE, monsterCap for MONSTER) against
+	// countByCategoryAcrossRegions()[category] and picks from the RIGHT species list
+	// (pickNaturalCreatureMob vs pickNaturalMonsterMob). Carried as a plain value (Pitfall 3 — never
+	// a live reference). The zero value (categoryMonster, iota 0) is NOT relied on as a default — every
+	// submit site sets it explicitly; a legacy/test result that omits it would be treated as MONSTER,
+	// so the test/CREATURE submit sites set categoryCreature explicitly.
+	category mobCategory
 }
 
 // applyTo runs on the OWNER goroutine inside applyAsyncResults — the OPT-03 (08-05) implementation
@@ -308,10 +319,12 @@ func (r spawnCandidatesReady) applyTo(t *TickLoop) {
 	// CAP RE-CHECK on the AUTHORITATIVE store ACROSS REGIONS (Pitfall 3 anti-flood + Pitfall 1
 	// cross-region cap): the off-tick scan counted a stale snapshot, so re-validate the live count
 	// before mutating. This runs on the coordinator at the barrier (quiescent), so counting every
-	// region's store is race-clean. A creature spawned/added since the scan can push us to cap — drop
-	// rather than over-spawn.
-	cap := creatureCap(r.spawnableChunkCount) // maxInstancesPerChunk * count / MAGIC_NUMBER (vanilla)
-	live := t.countByCategoryAcrossRegions()[categoryCreature]
+	// region's store is race-clean. A mob spawned/added since the scan can push us to cap — drop
+	// rather than over-spawn. Phase 35-02 (SC#3): use the RIGHT per-category cap + live count for the
+	// category this scan was submitted under (CREATURE vs MONSTER) so the MONSTER pass re-checks
+	// monsterCap/countByCategoryAcrossRegions()[categoryMonster], not the CREATURE budget.
+	cap := categorySpawnCap(r.category, r.spawnableChunkCount) // maxInstancesPerChunk * count / MAGIC_NUMBER (vanilla)
+	live := t.countByCategoryAcrossRegions()[r.category]
 	if live >= cap {
 		return // now AT/OVER cap: DROP the stale candidates (no over-cap add)
 	}
@@ -336,7 +349,11 @@ func (r spawnCandidatesReady) applyTo(t *TickLoop) {
 		// unseeded global rand.IntN that caused the STATE.md async-spawner flake, T-34-11).
 		dest := t.regionForColumn(columnOf(float64(c.x)+0.5, float64(c.z)+0.5))
 		t.withRegion(dest, func() {
-			name := t.pickNaturalCreatureMob()
+			// Phase 35-02 (SC#3): pick from the species list for the category this scan was submitted
+			// under — pickNaturalCreatureMob (pig/cow/sheep/chicken) for CREATURE, pickNaturalMonsterMob
+			// (zombie/skeleton/spider) for MONSTER. Both draw from THIS region's seeded levelRandom inside
+			// the withRegion scope (race-clean, deterministic per region — T-34-11).
+			name := t.pickNaturalSpawnMob(r.category)
 			t.spawnVanillaMob(name, float64(c.x)+0.5, float64(c.y), float64(c.z)+0.5)
 		})
 		return // one placement per apply (the throttle)
@@ -374,4 +391,46 @@ func (t *TickLoop) pickNaturalCreatureMob() string {
 	n := int32(len(naturalCreatureMobNames))
 	idx := t.cur().levelRandom.NextIntN(n)
 	return naturalCreatureMobNames[idx]
+}
+
+// naturalMonsterMobNames is the set the natural spawner's MONSTER pass picks among — the 3 vanilla
+// MONSTER mobs (Phase 35-02). They ALL map to categoryOf -> MONSTER (35-CONTEXT), so they share the
+// one monsterCap the apply-time re-check enforces; the pick only chooses WHICH hostile to place in
+// the one throttled slot. Kept as its OWN explicit slice (the exact discipline naturalCreatureMobNames
+// uses) so a future non-MONSTER bundled mob added to the boot-load is NEVER silently dragged into the
+// hostile spawn pool — the monster-spawn pool is an intentional, explicit list.
+//
+// NOTE (Phase boundary): the vanilla_zombie/skeleton/spider PLUGIN declarations + their embeds are
+// boot-loaded by the sibling hostile-plugin plans (35-03..05); this plan (35-02) owns only the spawn
+// GATING (category/cap/dark-gate/picker). The picker returns these names by value — a pickNaturalMonsterMob
+// test asserts the name membership WITHOUT needing the embed to load; the live spawnVanillaMob lookup
+// resolves them once the hostile declarations boot-load.
+var naturalMonsterMobNames = []string{
+	vanillaZombieMobName,
+	vanillaSkeletonMobName,
+	vanillaSpiderMobName,
+}
+
+// pickNaturalMonsterMob returns the name of one of the 3 vanilla MONSTER mobs to place at a natural
+// spawn point. The choice is uniform-random among the 3 for v1 (a cited deferral, the exact mirror of
+// pickNaturalCreatureMob: vanilla's per-biome MobSpawnSettings spawn WEIGHTS are a future subsystem,
+// not yet ported; v1 spawns any of the 3 overworld hostiles with equal probability). The draw reads
+// the OWNING region's seeded levelRandom (Level.random analogue, NextIntN) — SEEDED + per-region +
+// race-clean + deterministic, the same draw discipline pickNaturalCreatureMob obeys. Call ONLY inside
+// a withRegion scope (cur() resolves the owning region).
+func (t *TickLoop) pickNaturalMonsterMob() string {
+	n := int32(len(naturalMonsterMobNames))
+	idx := t.cur().levelRandom.NextIntN(n)
+	return naturalMonsterMobNames[idx]
+}
+
+// pickNaturalSpawnMob dispatches the species pick to the right category list (Phase 35-02). The
+// natural spawner runs a CREATURE pass and a night-gated MONSTER pass; each carries its category on
+// the spawnCandidatesReady message so applyTo picks from the matching explicit list. Any non-MONSTER
+// category falls through to the CREATURE picker (v1 only spawns CREATURE + MONSTER naturally).
+func (t *TickLoop) pickNaturalSpawnMob(cat mobCategory) string {
+	if cat == categoryMonster {
+		return t.pickNaturalMonsterMob()
+	}
+	return t.pickNaturalCreatureMob()
 }

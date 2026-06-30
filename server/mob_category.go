@@ -98,6 +98,24 @@ func categoryOf(t entity.ID) mobCategory {
 		// MOB-PASS-03 (Phase 34): Chicken is MobCategory.CREATURE (vanilla EntityType.CHICKEN; data/entity
 		// Chicken.Type == "creature"). Same CREATURE-budget accounting as pig/cow/sheep.
 		return categoryCreature
+	case entity.Zombie.ID:
+		// MOB-HOST-01 (Phase 35): Zombie is MobCategory.MONSTER (vanilla EntityType.ZOMBIE is built with
+		// MobCategory.MONSTER; data/entity Zombie.Type == "monster", the jar-derived codegen source —
+		// confirmed entity.go:1386). Consumes the MONSTER spawn budget (cap 70 via maxInstancesPerChunk),
+		// so countByCategory tallies it under categoryMonster with ZERO counting-code change. Additive —
+		// the pig/cow/sheep/chicken CREATURE arms + the default arm are untouched (the pig oracle's
+		// category accounting is unperturbed).
+		return categoryMonster
+	case entity.Skeleton.ID:
+		// MOB-HOST-02 (Phase 35): Skeleton is MobCategory.MONSTER (vanilla EntityType.SKELETON; data/entity
+		// Skeleton.Type == "monster", entity.go:1062). Same MONSTER-budget accounting as the zombie — the
+		// monsterCap bounds it once categoryOf returns categoryMonster here.
+		return categoryMonster
+	case entity.Spider.ID:
+		// MOB-HOST-03 (Phase 35): Spider is MobCategory.MONSTER (vanilla EntityType.SPIDER; data/entity
+		// Spider.Type == "monster", entity.go:1143). Same MONSTER-budget accounting; countByCategory +
+		// countByCategoryAcrossRegions tally all 3 hostiles under the one MONSTER cap.
+		return categoryMonster
 	default:
 		return categoryMisc
 	}

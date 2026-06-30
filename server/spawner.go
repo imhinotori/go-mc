@@ -89,6 +89,64 @@ func creatureCap(spawnableChunkCount int) int {
 	return categoryCreature.maxInstancesPerChunk() * spawnableChunkCount / spawnMagicNumber
 }
 
+// monsterCap is the vanilla per-category global cap for MONSTER (Phase 35, SC#3):
+// maxInstancesPerChunk(70) * spawnableChunkCount / MAGIC_NUMBER(289)
+// (NaturalSpawner$SpawnState.canSpawnForCategoryGlobal — the SAME imul-then-idiv-by-MAGIC_NUMBER
+// bytecode creatureCap ports, only the per-category max differs: 70 for MONSTER vs 10 for CREATURE).
+// A live MONSTER count >= this blocks further hostile spawns. The /289 divisor is KEPT (without it
+// the cap would be ~70*spawnableChunkCount ≈ tens of thousands of hostiles — a flood). The single
+// source of the MONSTER formula so the pre-submit gate (naturalSpawn) and the apply-time re-check
+// (spawnCandidatesReady.applyTo) can never diverge. CITE: net.minecraft.world.level.NaturalSpawner.
+func monsterCap(spawnableChunkCount int) int {
+	return categoryMonster.maxInstancesPerChunk() * spawnableChunkCount / spawnMagicNumber
+}
+
+// categorySpawnCap returns the per-category global cap for the given MobCategory (Phase 35-02). It is
+// the single dispatch the apply-time re-check (spawnCandidatesReady.applyTo) uses so the CREATURE pass
+// and the MONSTER pass each re-check their OWN cap. Both formulas are identical (maxInstancesPerChunk *
+// count / MAGIC_NUMBER); the dispatch keeps the apply path category-driven instead of cap-fn-hardcoded.
+func categorySpawnCap(cat mobCategory, spawnableChunkCount int) int {
+	if cat == categoryMonster {
+		return monsterCap(spawnableChunkCount)
+	}
+	return creatureCap(spawnableChunkCount)
+}
+
+// Day/night gametime windows for the FORCED isDarkEnoughToSpawn proxy (35-CONTEXT SC#4). The vanilla
+// day is 24000 ticks; hostiles spawn from dusk (~13000) to dawn (~23000) — the night portion of the
+// day-time cycle. These bound the proxy that stands in for the real sky/block-light read.
+const (
+	dayLengthTicks  = 24000 // vanilla day length (one full day/night cycle in ticks)
+	nightStartTicks = 13000 // dusk: monsters begin spawning
+	nightEndTicks   = 23000 // dawn: monster spawning ends
+)
+
+// isDarkEnoughToSpawn — THE FORCED PROXY (35-CONTEXT SC#4): no light engine exists yet (the v1 world
+// is flat-stone superflat with NO light propagation — node_evaluator.go:27 / path_region.go:29), so
+// the real Monster.isDarkEnoughToSpawn SKY/BLOCK-brightness read (35-JARNOTES.md:177-192:
+// `if (level.getBrightness(SKY, pos) > random.nextInt(32)) return false; ...
+// `return b <= dimensionType.monsterSpawnLightTest().sample(random)`) is UNAVAILABLE. So this gates
+// hostile spawns on the day/night GAMETIME window instead — the night portion of `t.gametime %
+// dayLengthTicks` (tick.go:130: gametime is the per-tick clock, the only time-of-day signal — no
+// separate dayTime/timeOfDay field is ticked or sent to the client, confirmed). This EQUALS the
+// vanilla night-time default and is STRUCTURED to become a real sky-light read when the lighting
+// engine lands (swap the gametime read for `level.getBrightness(SKY, pos)` + the nextInt(32) sample).
+// It is NEVER a silent daylight flood and NEVER a silent missing gate — daytime hard-blocks the
+// hostile pass.
+//
+// DEFERRED (recorded here + in the SUMMARY, to land with the lighting engine): the full
+// light-propagation engine, block-light/cave hostile spawning, and the light-test RNG — the spawn-
+// attempt nextInt(32) SKY sample + the monsterSpawnLightTest UniformInt(0,7).sample(random) draw
+// (35-JARNOTES.md:179-183). Those are off the per-mob RNG stream (spawn-attempt RNG), so the deferral
+// does not perturb any mob's lockstep draw order; it only changes WHICH light positions are dark.
+// CITE: net.minecraft.world.entity.monster.Monster.isDarkEnoughToSpawn.
+func (t *TickLoop) isDarkEnoughToSpawn() bool {
+	dayTime := t.gametime % dayLengthTicks
+	// Go's % keeps the sign of the dividend; gametime is a monotonic non-negative tick counter
+	// (tick.go:130 — ++ once per consumed step, never decremented), so dayTime is always in [0,24000).
+	return dayTime >= nightStartTicks && dayTime < nightEndTicks
+}
+
 // countByCategory ranges the tick-owned entityStore and tallies the live mob count per
 // MobCategory (ported from NaturalSpawner.createState's per-category tally). This is the
 // load-bearing cap-accounting (Pitfall 3): the count is recomputed from the AUTHORITATIVE
@@ -217,8 +275,8 @@ type spawnCandidatePick struct{ x, z int }
 // owner pre-picked, storing the solid bits over [minY..maxY] for each, so the off-tick
 // findStandableYIn is a pure lookup. The map is built once on the owner and read-only thereafter.
 type spawnSnapshot struct {
-	refY       int            // the scan center Y (player feet) carried into the worker
-	minY, maxY int            // the snapshot's inclusive Y-window (refY ± spawnScanYRange, padded)
+	refY       int                     // the scan center Y (player feet) carried into the worker
+	minY, maxY int                     // the snapshot's inclusive Y-window (refY ± spawnScanYRange, padded)
 	columns    map[[2]int]map[int]bool // (x,z) -> y -> solid; out-of-snapshot reads treated as non-solid
 }
 
@@ -324,33 +382,65 @@ func (t *TickLoop) naturalSpawn() {
 		return // no loaded columns near a player: nothing to populate
 	}
 
-	// The CREATURE cap scales with the spawnable-chunk count, exactly as vanilla derives it from
-	// state.spawnableChunkCount * maxInstancesPerChunk (getFilteredSpawningCategories). Gate it on
-	// the owner BEFORE submitting (don't burn an off-tick scan when already at cap); the count is a
-	// snapshot, so applyTo RE-CHECKS it before the add (the load-bearing anti-flood, Pitfall 3).
-	//
-	// Phase-27 N=2: the cap spans ALL players/regions, so the pre-submit count must be GLOBAL too (a
-	// per-region countByCategory() under-counts and lets each region submit even at the global cap).
-	// But naturalSpawn runs INSIDE the parallel fan-out, where ranging another region's live store
-	// would RACE its concurrent mutations. So: when a region is registered (the production fan-out),
-	// read the coordinator's quiescent pre-fan-out snapshot (spawnLiveCreatureSnapshot — race-free);
-	// when NONE is registered (a direct single-threaded test call), no region is ticking, so a live
-	// cross-region count is race-free — compute it directly. Either way the count is GLOBAL and matches
-	// the apply-time countByCategoryAcrossRegions re-check (async.go).
 	spawnableChunkCount := len(cols)
-	cap := creatureCap(spawnableChunkCount) // maxInstancesPerChunk * count / MAGIC_NUMBER (vanilla)
-	var live int
-	if _, inFanOut := t.resolveRegion(); inFanOut {
-		live = t.spawnLiveCreatureSnapshot // race-free snapshot the coordinator took while quiescent
-	} else {
-		live = t.countByCategoryAcrossRegions()[categoryCreature] // direct call: quiescent, live is safe
-	}
-	if live >= cap {
-		return // AT or OVER cap: the anti-flood gate (Pitfall 3) — submit no scan
-	}
-
 	// Reference Y for the column scan: a player's feet (the surface a near-player spawn sits on).
 	refY := t.spawnRefY()
+
+	// DEFERRED — Mob.checkDespawn (Phase 35-02, SC#3, recorded in code + SUMMARY): vanilla bounds the
+	// hostile POPULATION two ways — the per-category spawn CAP (ported here as monsterCap, the gate that
+	// matters for "a survival night needs hostiles under a cap") AND a per-mob checkDespawn that removes
+	// a mob with no nearby player (Mob.checkDespawn: a noActionTime counter + getNearestPlayer distance
+	// buckets — instant-despawn past EntityType.getCategory() despawn distance, a random.nextInt(800)==0
+	// roll past the soft radius, persistenceRequired/requiresCustomPersistence guards). NONE of that
+	// infrastructure exists yet (no noActionTime counter, no per-mob nearest-player despawn loop, no
+	// persistenceRequired flag — entity.go's `age` is ItemEntity/XP-orb only). Porting it needs those
+	// new subsystems, so it is DEFERRED. The cap re-check (submitSpawnScanFor + spawnCandidatesReady
+	// .applyTo) already bounds SPAWNS — the load-bearing anti-flood — so the world cannot exceed the
+	// MONSTER cap; checkDespawn is the future complement that culls idle mobs far from players. NOT
+	// faked. CITE: net.minecraft.world.entity.Mob.checkDespawn.
+
+	// Two faithful passes per cycle (vanilla NaturalSpawner iterates the filtered spawning categories):
+	// the CREATURE pass, then the night-gated MONSTER pass (Phase 35-02). The single-in-flight gate
+	// (spawnScanPending) admits ONE scan per cycle, so try CREATURE first; only if it did NOT submit
+	// (at cap / pool overload) does the MONSTER pass get a turn this cycle — the next cycle alternates
+	// naturally. The MONSTER pass is ADDITIONALLY gated by isDarkEnoughToSpawn (the FORCED day/night
+	// proxy, SC#4): in daytime the hostile pass submits NOTHING (never a silent daylight flood).
+	if t.submitSpawnScanFor(categoryCreature, cols, spawnableChunkCount, refY) {
+		return // a CREATURE scan is in flight this cycle (the gate is set)
+	}
+	if t.isDarkEnoughToSpawn() {
+		t.submitSpawnScanFor(categoryMonster, cols, spawnableChunkCount, refY)
+	}
+}
+
+// spawnLiveCount returns the GLOBAL live count for a category for naturalSpawn's pre-submit cap gate
+// (Phase 35-02 generalization of the Phase-27 N=2 CREATURE gate). Inside the parallel fan-out it reads
+// the coordinator's quiescent pre-fan-out snapshot (race-free); from a direct single-threaded call (a
+// test, no region ticking) it computes the cross-region count live (also race-free). Either way the
+// count is GLOBAL and matches the apply-time countByCategoryAcrossRegions re-check (async.go).
+func (t *TickLoop) spawnLiveCount(cat mobCategory) int {
+	if _, inFanOut := t.resolveRegion(); inFanOut {
+		if cat == categoryMonster {
+			return t.spawnLiveMonsterSnapshot // race-free snapshot the coordinator took while quiescent
+		}
+		return t.spawnLiveCreatureSnapshot
+	}
+	return t.countByCategoryAcrossRegions()[cat] // direct call: quiescent, live is safe
+}
+
+// submitSpawnScanFor runs ONE category's pre-submit gate + the off-tick candidate-scan submit, the
+// category-parameterized core extracted from the old pig-only naturalSpawn tail (Phase 35-02). It
+// returns true iff it actually SUBMITTED a scan (and therefore set the single-in-flight gate), so the
+// caller can stop after the first submitting pass. The per-category cap scales with the spawnable-chunk
+// count exactly as vanilla derives it (state.spawnableChunkCount * maxInstancesPerChunk /
+// MAGIC_NUMBER); the live count is a snapshot, so applyTo RE-CHECKS the right per-category cap before
+// the add (the load-bearing anti-flood, Pitfall 3). The roll/snapshot/submit machinery is wholly
+// category-agnostic — only the cap, the live count, and the category carried on the result differ.
+func (t *TickLoop) submitSpawnScanFor(cat mobCategory, cols []level.ChunkPos, spawnableChunkCount, refY int) bool {
+	cap := categorySpawnCap(cat, spawnableChunkCount) // maxInstancesPerChunk * count / MAGIC_NUMBER (vanilla)
+	if t.spawnLiveCount(cat) >= cap {
+		return false // AT or OVER cap: the anti-flood gate (Pitfall 3) — submit no scan
+	}
 
 	// Roll the random in-column candidate positions ON the owner (trivial rand). Vanilla picks a
 	// random chunk + getRandomPosWithin; the random pick spreads spawns across the loaded area so
@@ -382,16 +472,18 @@ func (t *TickLoop) naturalSpawn() {
 				candidates = append(candidates, spawnCandidate{x: p.x, y: y, z: p.z})
 			}
 		}
-		// Rejoin on the owner: applyTo re-checks the cap + mobNear and adds at most one Pig. Always
+		// Rejoin on the owner: applyTo re-checks the cap + mobNear and adds at most one mob. Always
 		// send (even an empty candidate set) so applyTo clears the in-flight gate — otherwise a
-		// cycle that found nothing would wedge spawnScanPending forever.
-		t.asyncIn2 <- spawnCandidatesReady{candidates: candidates, spawnableChunkCount: spawnableChunkCount, region: submitRegion}
+		// cycle that found nothing would wedge spawnScanPending forever. Carry the category so applyTo
+		// re-checks the RIGHT cap + picks from the RIGHT species list (Phase 35-02).
+		t.asyncIn2 <- spawnCandidatesReady{candidates: candidates, spawnableChunkCount: spawnableChunkCount, region: submitRegion, category: cat}
 	})
 	if submitted {
 		t.cur().spawnScanPending = true // one scan in flight; cleared by spawnCandidatesReady.applyTo
 	}
 	// On overload (submitted == false) the gate stays clear and the cycle is a no-op — it retries
 	// next spawnInterval (Pitfall 4). No spawn, no block.
+	return submitted
 }
 
 // spawnRefY returns the world-Y the column scan centers on — the first player's feet, or the

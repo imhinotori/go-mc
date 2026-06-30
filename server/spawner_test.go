@@ -534,6 +534,7 @@ func TestAsyncSpawnOccupiedDropped(t *testing.T) {
 	result := spawnCandidatesReady{
 		candidates:          []spawnCandidate{{x: cx, y: floorY + 1, z: cz}},
 		spawnableChunkCount: 100,
+		category:            categoryCreature, // Phase 35-02: the message now carries its category
 	}
 	result.applyTo(loop)
 

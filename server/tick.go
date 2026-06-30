@@ -175,6 +175,15 @@ type TickLoop struct {
 	// the coordinator before the fan-out; read-only during the fan-out (TICK-05, race-clean).
 	spawnLiveCreatureSnapshot int
 
+	// spawnLiveMonsterSnapshot is the GLOBAL live-MONSTER count snapshotted on the coordinator at the
+	// SAME quiescent pre-fan-out point as spawnLiveCreatureSnapshot (Phase 35-02). The naturalSpawn
+	// MONSTER pass runs inside the parallel fan-out too, so it reads THIS race-free cross-region count
+	// for its pre-submit cap gate instead of ranging another region's live store. Same discipline as the
+	// CREATURE snapshot: written only on the coordinator before the fan-out, read-only during it
+	// (TICK-05), and the authoritative anti-flood remains the quiescent apply-time
+	// countByCategoryAcrossRegions()[categoryMonster] re-check.
+	spawnLiveMonsterSnapshot int
+
 	// strictRegion arms the per-region access guard in cur(): when true, a cur() call from a
 	// goroutine with NO region registered PANICS instead of silently falling back to globalRegion.
 	// It is the catch for the systemic regionization bug class (Phase-27 N=2): coordinator-phase and

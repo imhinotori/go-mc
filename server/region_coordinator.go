@@ -139,7 +139,12 @@ func (t *TickLoop) tickOnce() {
 	// cross-region count during the parallel fan-out instead of ranging another region's live store. The
 	// cap spans all players/regions; the apply-time re-check (also cross-region, at the barrier) remains
 	// the authoritative anti-flood. countByCategoryAcrossRegions is safe here (no region is ticking).
-	t.spawnLiveCreatureSnapshot = t.countByCategoryAcrossRegions()[categoryCreature]
+	// One cross-region tally feeds BOTH per-category snapshots (Phase 35-02: the MONSTER pass needs its
+	// own race-free global count, exactly like CREATURE). countByCategoryAcrossRegions buckets every
+	// category in one pass, so read both keys off the single quiescent tally.
+	quiescentCounts := t.countByCategoryAcrossRegions()
+	t.spawnLiveCreatureSnapshot = quiescentCounts[categoryCreature]
+	t.spawnLiveMonsterSnapshot = quiescentCounts[categoryMonster]
 
 	// --- FAN OUT: each region ticks its OWN entity store in PARALLEL (TICK-05 per region) — the
 	// per-region entity phases (tickAI + tickPhysics + detectTransfers). conc.WaitGroup.Go spawns the
