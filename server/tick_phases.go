@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/level"
 	pk "github.com/imhinotori/sulfur/net/packet"
 	"github.com/imhinotori/sulfur/world"
@@ -367,6 +368,17 @@ func (t *TickLoop) tickAI() {
 
 	for _, e := range snapshot {
 		e.ai.serverAiStep(t, e) // 07-01 goals + 07-02 navigation: the real ported AI walk
+		// MOB-PASS-03 (Phase 34): the Chicken.aiStep server extras (slow-fall + egg-lay). Vanilla runs
+		// aiStep INDEPENDENTLY of the running goals (Mob.aiStep -> customServerAiStep), so it fires every
+		// tick for a live chicken regardless of which goal is active. It is gated on typ == entity.Chicken.ID
+		// — a PER-TYPE branch (the minimal faithful wiring; no new generic customServerAiStep seam in
+		// ai_mob.go that would risk the pig oracle stream). The slow-fall lands HERE (in tickAI, before
+		// tickPhysics integrates this tick's gravity), mirroring where the pig jump impulse lands, so the
+		// y *= 0.6 dampens the velocity tickPhysics then integrates. ADDITIVE + chicken-gated: the pig (and
+		// every non-chicken mob) is a zero-cost skip, so the pig oracle's RNG stream gains ZERO draws.
+		if e.typ == entity.Chicken.ID {
+			t.chickenAiStep(e)
+		}
 	}
 
 	// Throttled natural spawner: vanilla attempts every tick (most no-op under cap); v1 runs the

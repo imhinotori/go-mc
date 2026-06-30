@@ -401,6 +401,16 @@ func (t *TickLoop) spawnDeclaredMob(decl *mobDecl, x, y, z float64) *Entity {
 	// vanilla pig, which both route through here) gets its own deterministic stream and wanders
 	// independently. Done before the store add (the mob is not yet ticking).
 	reseedMobAI(e.ai, e.id)
+	// MOB-PASS-03 (Phase 34): the Chicken egg-lay timer init — net.minecraft.world.entity.animal.chicken
+	// .Chicken.<init> seeds `eggTime = random.nextInt(6000) + 6000` (the next lay is 5..10 minutes out).
+	// Drawn HERE (after reseedMobAI gives the chicken its per-entity stream), so it is the chicken's FIRST
+	// mob-stream draw — before any goal draw — matching the jar where the field-init runs in the
+	// constructor, ahead of the first aiStep. Chicken-gated (typ == entity.Chicken.ID), so it is a no-op
+	// for every other declared mob (the pig draws NOTHING here — its oracle stream is unperturbed).
+	//	[VERIFIED javap Chicken.<init>: eggTime = random.nextInt(6000) + 6000 (the entity RNG draw).]
+	if e.typ == entity.Chicken.ID {
+		e.eggTime = mobRandom(e).nextInt(6000) + 6000
+	}
 	// MOB-SUB-08 (Plan 33-01): spawn-time DATA_BABY_ID carry. A mob spawned as a BABY (breedAge < 0 —
 	// e.g. Plan C's breed() child, which sets breedAge = BABY_START_AGE before this add) must render
 	// small client-side, so its half-scale hitbox AND the wire baby flag are present from the first
