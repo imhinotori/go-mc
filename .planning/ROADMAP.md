@@ -72,7 +72,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
  (completed 2026-06-30)
 - [x] **Phase 31: PanicGoal (S2 consumer)** — PanicGoal@1 on the pig reading the real `lastDamageSource` + the panic-causing tag set.
  (completed 2026-06-30)
-- [ ] **Phase 32: Held-Item + Item Tags (S4)** — nearest-player held-item read + jar-extracted item-food tags; TemptGoal@4 ×2 on the pig.
+- [x] **Phase 32: Held-Item + Item Tags (S4)** — nearest-player held-item read + jar-extracted item-food tags; TemptGoal@4 ×2 on the pig. (completed 2026-06-30)
 - [ ] **Phase 33: Aging + Breeding (S3) — Pig Parity / DOGFOOD GATE** — animal aging + breeding; BreedGoal@3 + FollowParentGoal@5 on the pig closes the full 8-goal oracle. HARD GATE before any new mob.
 - [ ] **Phase 34: New Passive Mobs** — cow/sheep/chicken as jar-faithful Starlark plugins.
 - [ ] **Phase 35: Hostiles + Spawn Rules** — target-selector machinery + per-category cap + day/night gate; zombie/skeleton/spider.
@@ -148,7 +148,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
   3. TemptGoal@4 ×2 (PIG_FOOD + CARROT_ON_A_STICK) is wired onto the pig in the oracle AND the plugin pig IN LOCKSTEP — a tempted pig follows the held food.
   4. Standing: jar-verified (javap before writing); CGO=0 + no new Go deps (the tag-extractor adds jar DATA, not a lib); the pig oracle stays GREEN; Docker `-race` + `strictRegion` clean.
 **Plans**: 1 plan (1 wave, sequential)
-- [ ] 32-01-PLAN.md — S4 read primitives (itemInTag + offhand slot 45 + nearestPlayerHolding + two host nearest-tempt-player handles) + temptGoal port + two TemptGoal@4 (carrot 887 / pig_food tag) in newPigAI + lockstep both vanilla_pig/main.star + follow/ignore/boot-load-7 tests incl. -race [MOB-SUB-06, MOB-SUB-07, MOB-GATE-01]
+- [x] 32-01-PLAN.md — S4 read primitives (itemInTag + offhand slot 45 + nearestPlayerHolding + two host nearest-tempt-player handles) + temptGoal port + two TemptGoal@4 (carrot 887 / pig_food tag) in newPigAI + lockstep both vanilla_pig/main.star + follow/ignore/boot-load-7 tests incl. -race [MOB-SUB-06, MOB-SUB-07, MOB-GATE-01]
 
 ### Phase 33: Aging + Breeding (S3) — Pig Parity / DOGFOOD GATE
 **Goal**: Animals age and breed, and the pig's last two deferred goals land — closing full pig parity and PROVING S1–S4 are 1:1 before any new mob reuses them. This is the HARD GATE.
@@ -209,7 +209,7 @@ Full phase details: [milestones/v4-ROADMAP.md](milestones/v4-ROADMAP.md).
 | 29. Damage Keystone (S2) | v5 | 4/4 | Complete   | 2026-06-29 |
 | 30. JumpControl + Fluid (S1) | v5 | 3/3 | Complete   | 2026-06-29 |
 | 31. PanicGoal (S2 consumer) | v5 | 1/1 | Complete   | 2026-06-30 |
-| 32. Held-Item + Item Tags (S4) | v5 | 0/1 | Planned     | - |
+| 32. Held-Item + Item Tags (S4) | v5 | 1/1 | Complete   | 2026-06-30 |
 | 33. Aging + Breeding (S3) — Pig Parity / DOGFOOD GATE | v5 | 0/? | Not started | - |
 | 34. New Passive Mobs | v5 | 0/? | Not started | - |
 | 35. Hostiles + Spawn Rules | v5 | 0/? | Not started | - |
