@@ -48,7 +48,7 @@ var gateSpawnEggID = item.PigSpawnEgg.ID
 var testKit = []testKitStack{
 	{slot: 36, id: item.CookedBeef.ID, count: 16},  // hotbar 1: food (eat -> restore hunger)
 	{slot: 37, id: item.Bread.ID, count: 16},       // hotbar 2: more food
-	{slot: 38, id: item.Apple.ID, count: 16},       // hotbar 3: more food
+	{slot: 38, id: item.Carrot.ID, count: 16},      // hotbar 3: pig_food — HELD (main-hand) to tempt/breed a pig (TemptGoal P32 + feed P33)
 	{slot: 39, id: item.Cobblestone.ID, count: 64}, // hotbar 4: place/break blocks
 	{slot: 40, id: item.OakPlanks.ID, count: 64},   // hotbar 5: place/break blocks
 	{slot: 41, id: item.Torch.ID, count: 64},       // hotbar 6: place
