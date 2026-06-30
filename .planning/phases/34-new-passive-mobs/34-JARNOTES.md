@@ -117,3 +117,110 @@ Chicken hitbox is smaller (~0.4×0.7) — SC#3 per-mob sizing.
 ## Each new mob may get a per-mob spawn+behavior test (the pig oracle is THE bit-exact one; the new mobs reuse
 ## proven goals so a lighter per-mob test suffices — but any NEW RNG goal (EatBlockGoal, chicken egg) needs its
 ## own lockstep discipline IF the mob is dogfooded as a plugin drawing that RNG).
+
+## ============================================================================
+## EXEC-TIME DECOMPILES (verbatim bytecode, captured 2026-06-30 at phase open)
+## ============================================================================
+
+## --- adjustedTickDelay / reducedTickDelay (Goal) — CRITICAL for EatBlockGoal lockstep ---
+## adjustedTickDelay(ticks) = requiresUpdateEveryTick() ? ticks : reducedTickDelay(ticks)
+## reducedTickDelay(ticks) = Mth.positiveCeilDiv(ticks, 2)
+## requiresUpdateEveryTick() default = false. EatBlockGoal does NOT override it → default false.
+## ⇒ adjustedTickDelay(1000)=500, (50)=25, (40)=20, (4)=2.
+## So the EatBlockGoal canUse RNG gate is nextInt(500) (adult) / nextInt(25) (baby) — NOT 1000/50.
+## MUST port Mth.positiveCeilDiv(n,2) exactly = (n + 2 - 1) / 2 = (n+1)/2 for positive n (Java int div).
+##   Mth.positiveCeilDiv(x, y) = -Math.floorDiv(-x, y)  — for (1000,2)=500,(50,2)=25,(40,2)=20,(4,2)=2,(1,2)=1.
+
+## --- Cow milking (net.minecraft.world.entity.animal.cow.AbstractCow.mobInteract) — NO RNG ---
+## @Override mobInteract(Player player, InteractionHand hand) {
+##     ItemStack itemStack = player.getItemInHand(hand);
+##     if (itemStack.is(Items.BUCKET) && !this.isBaby()) {
+##         player.playSound(SoundEvents.COW_MILK, 1.0f, 1.0f);
+##         ItemStack r = ItemUtils.createFilledResult(itemStack, player, Items.MILK_BUCKET.getDefaultInstance());
+##         player.setItemInHand(hand, r);
+##         return InteractionResult.SUCCESS;
+##     }
+##     return super.mobInteract(player, hand);   // the feed/breed path (Animal.mobInteract)
+## }
+## Wire into handleInteract BEFORE the feed path: held is BUCKET && !isBaby → consume 1 bucket, give milk_bucket
+## (createFilledResult: if stack size 1 → replace with milk_bucket; else shrink 1 + add milk_bucket to inv or drop),
+## COW_MILK sound. Else fall through to the existing feed/breed handler. Cow-only (gate on mob name/type).
+
+## --- Sheep EatBlockGoal (net.minecraft.world.entity.ai.goal.EatBlockGoal) — flags {MOVE,LOOK,JUMP} ---
+## EAT_ANIMATION_TICKS=40; IS_EDIBLE = state.is(BlockTags.EDIBLE_FOR_SHEEP);
+## canUse():  if (random.nextInt(adjustedTickDelay(isBaby?50:1000)) != 0) return false;  // ONE nextInt, UNCONDITIONAL gate
+##            pos = blockPosition();
+##            if (IS_EDIBLE.test(getBlockState(pos))) return true;                        // tall-grass/fern at mob
+##            return getBlockState(pos.below()).is(Blocks.GRASS_BLOCK);                    // OR grass_block below
+## start():   eatAnimationTick = adjustedTickDelay(40)=20; level.broadcastEntityEvent(mob, (byte)10); navigation.stop();
+## stop():    eatAnimationTick = 0;
+## canContinueToUse(): eatAnimationTick > 0;
+## tick():    eatAnimationTick = Math.max(0, eatAnimationTick - 1);
+##            if (eatAnimationTick != adjustedTickDelay(4)=2) return;                      // only acts at tick==2
+##            pos = blockPosition();
+##            if (IS_EDIBLE.test(getBlockState(pos))) {
+##                if (MOB_GRIEFING gamerule) level.destroyBlock(pos, false);
+##                mob.ate();
+##            } else {
+##                below = pos.below();
+##                if (getBlockState(below).is(GRASS_BLOCK)) {
+##                    if (MOB_GRIEFING) { level.levelEvent(2001, below, Block.getId(GRASS_BLOCK.defaultBlockState()));
+##                                        level.setBlock(below, DIRT.defaultBlockState(), 2); }
+##                    mob.ate();
+##                }
+##            }
+## RNG: EXACTLY ONE nextInt per tick (the canUse gate, drawn every tick canUse runs). No other RNG in the goal.
+## EDIBLE_FOR_SHEEP is a BLOCK tag NOT extracted → either extend the block-tag extractor OR cite-defer the
+## tall-grass branch and check GRASS_BLOCK-below only (the common eat case). Document the deferral if taken.
+## mob.ate() on Sheep (Sheep.ate): super.ate(); setSheared(false) [wool regrow]; if(canAgeUp) ageUp(60).
+
+## --- Chicken aiStep (net.minecraft.world.entity.animal.chicken.Chicken.aiStep) ---
+## super.aiStep();
+## oFlap=flap; oFlapSpeed=flapSpeed; flapSpeed += (onGround?-1:4)*0.3f; flapSpeed=clamp(0,1);
+## if (!onGround && flapping<1) flapping=1; flapping*=0.9f;       // client-render visuals — server no-op (no net effect)
+## Vec3 m = getDeltaMovement();
+## if (!onGround && m.y < 0) setDeltaMovement(m.multiply(1.0, 0.6, 1.0));   // SLOW FALL — y *= 0.6 each falling tick
+## flap += flapping * 2.0f;
+## if (level instanceof ServerLevel sl) {
+##     if (isAlive && !isBaby && !isChickenJockey && --eggTime <= 0) {       // eggTime decremented EVERY server tick
+##         if (dropFromGiftLootTable(sl, BuiltInLootTables.CHICKEN_LAY, this::spawnAtLocation)) {  // loot draws (egg)
+##             playSound(CHICKEN_EGG, 1.0f, (random.nextFloat()-random.nextFloat())*0.2f + 1.0f);  // 2 nextFloat — ONLY if dropped
+##             gameEvent(ENTITY_PLACE);
+##         }
+##         eggTime = random.nextInt(6000) + 6000;                            // nextInt(6000) — reset, ALWAYS when eggTime hits 0
+##     }
+## }
+## eggTime field-init = random.nextInt(6000) + 6000  (drawn at construction via entity RNG).
+## RNG order when laying: [loot draws] → 2 nextFloat (sound, only if loot dropped an egg) → nextInt(6000).
+## When eggTime>0: ZERO draws that tick (just the decrement). The chicken needs a per-mob aiStep/customServerAiStep
+## hook (the plugin tick seam) to apply slow-fall + egg-lay. CHICKEN_LAY loot table → 1 egg (check loot evaluator).
+
+## --- ✅ RESOLVED: adjustedTickDelay STAYS identity (=n). The phase-33 decision is CORRECT (re-verified). ---
+## I initially suspected the stub `func adjustedTickDelay(n int) int { return n }` (ai_goals_breed.go:43)
+## was a 1:1 break (jar adjustedTickDelay = reducedTickDelay = positiveCeilDiv(n,2) for goals that don't
+## override requiresUpdateEveryTick). It is NOT a break — here is the full vanilla machinery and why identity
+## is the faithful Go value:
+##   Mob.serverAiStep (jar offsets ~754): the goal selector is DECIMATED —
+##     if ((tickCount + getId()) % 2 == 0 || tickCount <= 1) { goalSelector.tick(); }      // even tick: full canUse pass
+##     else { goalSelector.tickRunningGoals(false); }                                       // odd tick: only requiresUpdateEveryTick goals
+##   So a goal whose requiresUpdateEveryTick()==false (EatBlock, Follow, Stroll, …) has canUse() evaluated
+##   only EVERY OTHER server tick in vanilla. reducedTickDelay=ceilDiv(n,2) HALVES the bound to COMPENSATE
+##   for that half-rate invocation — the two halvings cancel, so the goal fires at the intended real rate.
+##   ⇒ A 1000-intent becomes nextInt(500) drawn every-other-tick = same expected period as nextInt(1000)
+##     drawn every tick.
+##   OUR Go driver (tick_phases.go:368  `for _, e := range snapshot { e.ai.serverAiStep(t, e) }`) calls
+##   serverAiStep — and thus goalSelector.tick() / canUse — EVERY tick, UNCONDITIONALLY. We do NOT replicate
+##   the (tickCount+id)%2 decimation. So to fire at the vanilla real-world rate, the bound must stay FULL:
+##   nextInt(1000) drawn every tick. Halving it (ceilDiv) here WOULD double the fire rate — the actual 1:1 break.
+##   adjustedTickDelay(n)=n (identity) is therefore the CORRECT faithful compensation, exactly as the
+##   phase-33 comment ("identity at 20 TPS, NOT reducedTickDelay's ceil(n/2)") documents.
+## ⇒ EatBlockGoal canUse gate in Go = nextInt(adjustedTickDelay(isBaby?50:1000)) = nextInt(50)/nextInt(1000),
+##   drawn every tick. start() eatAnimationTick = adjustedTickDelay(40) = 40. tick() acts at == adjustedTickDelay(4) = 4.
+##   Keep using the existing adjustedTickDelay helper for ALL these — do NOT introduce ceilDiv. Do NOT touch
+##   the existing adjustedTickDelay==n tests. (If Go ever adopts the every-other-tick decimation as a later
+##   optimization, adjustedTickDelay must flip to ceilDiv IN LOCKSTEP — note for the future, out of scope here.)
+
+## --- Attributes (createAttributes) — all CONFIRMED ---
+## Cow (AbstractCow):  Animal.createAnimalAttributes + MAX_HEALTH 10.0 + MOVEMENT_SPEED 0.2
+## Sheep:              Animal.createAnimalAttributes + MAX_HEALTH 8.0  + MOVEMENT_SPEED 0.23
+## Chicken:            Animal.createAnimalAttributes + MAX_HEALTH 4.0  + MOVEMENT_SPEED 0.25
