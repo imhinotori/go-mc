@@ -142,6 +142,106 @@ needs the lighting engine (check what worldgen/lighting exists).
 - The pig oracle stays untouched/green (hostiles are separate mobs). A per-hostile behavior test + focused
   RNG tests for each new RNG goal. The combat (melee damage application) ports the Phase-31 damage path.
 
+## ============================================================================
+## EXEC-TIME DECOMPILES (verbatim, captured 2026-06-30 at phase open during 34-close)
+## ============================================================================
+
+## --- NearestAttackableTargetGoal (target.NearestAttackableTargetGoal) — ⚠ LOCKSTEP-CRITICAL ---
+## DEFAULT_RANDOM_INTERVAL = 10. ctor: this.randomInterval = reducedTickDelay(randomInterval) = ceilDiv(10,2) = 5.
+## setFlags(EnumSet.of(Goal.Flag.TARGET)); targetConditions = TargetingConditions.forCombat().range(followDistance).selector(sel).
+## canUse():
+##   if (randomInterval > 0 && mob.getRandom().nextInt(randomInterval) != 0) return false;   // RNG GATE
+##   findTarget(); return target != null;
+## findTarget(): target = (targetType==Player) ? level.getNearestPlayer(targetConditions, mob, x, eyeY, z)
+##                                             : level.getNearestEntity(getEntitiesOfClass(type, searchArea), targetConditions, ...);
+##   searchArea = mob.getBoundingBox().inflate(followDistance) (followDistance = FOLLOW_RANGE attribute).
+## start(): mob.setTarget(this.target); super.start().    NO RNG beyond the canUse gate.
+## ⚠ THE SAME adjustedTickDelay/decimation COMPENSATION AS PHASE 34: the ctor does reducedTickDelay(10)=5 to
+## compensate for vanilla evaluating TARGET goals every-OTHER server tick (the Mob.serverAiStep (tickCount+id)%2
+## decimation). The Go driver ticks serverAiStep EVERY tick (tick_phases.go:368 — no decimation), so to fire at the
+## vanilla real-world rate the Go gate MUST use the FULL interval = nextInt(10), NOT the halved nextInt(5). DO NOT
+## call reducedTickDelay in the Go port of this ctor (use the raw 10), EXACTLY as adjustedTickDelay stays identity.
+## This is the 1:1-faithful value given our full-rate tick. Pin it with a focused RNG test (nextInt(10) gate).
+
+## --- MeleeAttackGoal (ai.goal.MeleeAttackGoal) — the shared melee, NO RNG ---
+## canUse(): time = gameTime; if (time - lastCanUseCheck < 20) return false; lastCanUseCheck = time;
+##           target = mob.getTarget(); if (target==null || !target.isAlive()) return false;
+##           path = navigation.createPath(target, 0); if (path != null) return true;
+##           return mob.isWithinMeleeAttackRange(target);
+## checkAndPerformAttack(target): if (canPerformAttack(target)) { resetAttackCooldown(); mob.swing(MAIN_HAND);
+##           mob.doHurtTarget(serverLevel, target); }    // doHurtTarget = the Phase-29 mob->target damage keystone (ATTACK_DAMAGE)
+## NO RNG — the attack cadence is gametime/cooldown based. tick() paths to target + faces it + checkAndPerformAttack
+## when in reach (getMeleeAttackRangeSqr). ZombieAttackGoal/SpiderAttackGoal are subclasses (Spider won't attack in
+## daylight; Zombie is plain melee). Decompile ZombieAttackGoal/SpiderAttackGoal deltas + isWithinMeleeAttackRange at exec.
+
+## --- Spawn rules: isDarkEnoughToSpawn + checkMonsterSpawnRules (Monster) — confirms the CONTEXT light-gate decision ---
+## isDarkEnoughToSpawn(level, pos, random):
+##   if (level.getBrightness(SKY, pos) > random.nextInt(32)) return false;                 // needs SKY light engine
+##   int blockLimit = dimensionType.monsterSpawnBlockLightLimit();
+##   if (blockLimit < 15 && level.getBrightness(BLOCK, pos) > blockLimit) return false;    // needs BLOCK light engine
+##   int b = isThundering ? getMaxLocalRawBrightness(pos,10) : getMaxLocalRawBrightness(pos);
+##   return b <= dimensionType.monsterSpawnLightTest().sample(random);                     // UniformInt(0,7).sample
+## checkMonsterSpawnRules(type, level, reason, pos, random):
+##   return (ignoresLightRequirements(reason) || isDarkEnoughToSpawn(level,pos,random)) && checkMobSpawnRules(type,level,reason,pos,random);
+## ⇒ isDarkEnoughToSpawn READS the light engine (SKY/BLOCK brightness) which DOES NOT EXIST in v1 (flat-stone
+##   superflat, no light propagation). This CONFIRMS the CONTEXT's FORCED decision: ship the gametime-darkness
+##   proxy — gate hostile spawns on the day/night gametime window (the night portion of the dayTime cycle the
+##   server already ticks), behind a clearly-cited isDarkEnoughToSpawn stub that EQUALS the vanilla night default
+##   and becomes a real light read when the lighting engine lands. The light-test RNG (nextInt(32) + the
+##   monsterSpawnLightTest UniformInt sample) is spawn-attempt RNG (off the mob stream); the proxy documents its
+##   deferral. checkMobSpawnRules (position/difficulty/below-sky) is the OTHER half — port the position checks.
+
+## --- ZombieAttackGoal (ai.goal.ZombieAttackGoal extends MeleeAttackGoal) — NO RNG ---
+## = MeleeAttackGoal(zombie, speed, trackTarget=false) + raiseArmTicks / setAggressive (the arm-raise client
+## animation flag). start: raiseArmTicks=0. stop: setAggressive(false). tick: super.tick(); ++raiseArmTicks;
+## setAggressive(raiseArmTicks>=5 && ticksUntilNextAttack < attackInterval/2). The aggressive flag is a metadata
+## bit (client visual) — server-side it's a DATA flag set; behaviorally ZombieAttackGoal == MeleeAttackGoal +
+## that flag. v1: port as MeleeAttackGoal (the setAggressive metadata is a cite-deferrable client visual, OR set
+## the DATA_ZOMBIE flag additively). NO RNG.
+
+## --- Spider$SpiderAttackGoal (inner class, extends MeleeAttackGoal) — ⚠ HAS RNG (daylight flee) ---
+## ctor: super(spider, 1.0, true). canUse(): super.canUse() && !mob.isVehicle().
+## canContinueToUse():
+##   float br = mob.getLightLevelDependentMagicValue();
+##   if (br >= 0.5f && mob.getRandom().nextInt(100) == 0) { mob.setTarget(null); return false; }   // RNG: daylight-drop 1/100/tick
+##   return super.canContinueToUse();
+## ⇒ a spider in bright light (br>=0.5) drops its target 1-in-100 per tick (the "spiders calm in daylight" behavior).
+## RNG: nextInt(100) drawn EACH canContinueToUse tick WHEN br>=0.5 (mob stream — lockstep if dogfooded; but the
+## pig oracle is untouched, so a focused spider RNG test suffices). getLightLevelDependentMagicValue needs a light
+## read — with no light engine, gate on the SAME gametime-darkness proxy (br = day? bright : dark) the spawn rule
+## uses; document the deferral. The daylight-flee draw must still be made when "bright" per the proxy for fidelity.
+
+## --- HurtByTargetGoal.start + the lastHurtByMob bookkeeping (the NEW entity state Phase 35 must add) ---
+## HurtByTargetGoal.start():
+##   mob.setTarget(mob.getLastHurtByMob()); targetMob = mob.getTarget(); timestamp = mob.getLastHurtByMobTimestamp();
+##   unseenMemoryTicks = 300; if (alertSameType) alertOthers(); super.start();
+## LivingEntity fields (javap-confirmed): private EntityReference<LivingEntity> lastHurtByMob; private int
+## lastHurtByMobTimestamp; + getLastHurtByMob()/getLastHurtByMobTimestamp(). Set in LivingEntity.hurt/actuallyHurt
+## when an entity attacker hits the mob (alongside the lastDamageSource Phase 31 already tracks — P31 tracked the
+## damage SOURCE; this is the attacker ENTITY ref + a timestamp). Phase 35 must ADD lastHurtByMob (an attackTargetID-
+## style thin-id ref to the attacker) + lastHurtByMobTimestamp, set at the mob-damage point (combat_mob.go
+## applyDamageEntity flag2 store-point — damageSource.attacker already exists per PATTERNS). HurtByTargetGoal.canUse
+## (in JARNOTES above) reads timestamp != this.timestamp && lastHurtByMob != null → retaliate. NO RNG in HurtByTarget.
+
+## --- LeapAtTargetGoal (ai.goal.LeapAtTargetGoal) — ⚠ LOCKSTEP (same nextInt un-halving) ---
+## flags {JUMP, MOVE}. ctor(mob, yd).  yd = Spider passes 0.4.
+## canUse():
+##   if (mob.hasControllingPassenger()) return false;
+##   target = mob.getTarget(); if (target == null) return false;
+##   d = mob.distanceToSqr(target); if (d < 4.0 || d > 16.0) return false;   // target in [4,16] sqr
+##   if (!mob.onGround()) return false;
+##   return mob.getRandom().nextInt(reducedTickDelay(5)) == 0;               // ⚠ jar reducedTickDelay(5)=ceilDiv(5,2)=3
+## canContinueToUse(): !mob.onGround().
+## start():
+##   Vec3 m = mob.getDeltaMovement();
+##   Vec3 delta = new Vec3(target.getX()-mob.getX(), 0.0, target.getZ()-mob.getZ());
+##   if (delta.lengthSqr() > 1e-7) delta = delta.normalize().scale(0.4).add(m.scale(0.2));
+##   mob.setDeltaMovement(delta.x, yd /*0.4*/, delta.z);                     // the leap impulse — NO RNG in start
+## ⚠ THE SAME un-halving as NearestAttackableTargetGoal: the jar gate is nextInt(reducedTickDelay(5))=nextInt(3) to
+## compensate for vanilla's every-OTHER-tick eval. The Go driver ticks EVERY tick (no decimation), so the FAITHFUL
+## Go gate is the un-halved nextInt(5), NOT nextInt(3). DO NOT call reducedTickDelay — use the raw 5. Pin with the
+## focused leap RNG test. (The leap canUse draws ONE nextInt(5) when target is in [4,16] sqr + onGround; zero otherwise.)
+
 ## --- OPEN exec-time decompiles (do at 35 open) ---
 reassessWeaponGoal, performRangedAttack, RangedBowAttackGoal, MeleeAttackGoal, ZombieAttackGoal,
 SpiderAttackGoal, LeapAtTargetGoal, AvoidEntityGoal, FleeSunGoal/RestrictSunGoal, NearestAttackableTargetGoal
