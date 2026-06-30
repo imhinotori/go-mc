@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v5
 milestone_name: Mob Behaviors & Living-Entity Subsystems
 status: verifying
-stopped_at: Completed 24-02-PLAN.md — Phase 24 (vanilla-mobs-as-plugins) COMPLETE
-last_updated: "2026-06-30T04:42:48.383Z"
+stopped_at: Completed 31-01-PLAN.md
+last_updated: "2026-06-30T05:56:35.782Z"
 last_activity: 2026-06-30
 progress:
   total_phases: 9
-  completed_phases: 3
-  total_plans: 8
-  completed_plans: 8
+  completed_phases: 4
+  total_plans: 9
+  completed_plans: 9
   percent: 100
 ---
 
@@ -32,11 +32,11 @@ RNG mid-Phase-29. Tracked alongside the prior `TestServerAiStepWalksToGoalTarget
 See: .planning/PROJECT.md (updated 2026-06-29)
 
 **Core value:** A Go server that an unmodified vanilla Minecraft 26.2 client can connect to, log into, and play in a persistent, ticking world — architected from day one for Leaf-style async optimizations.
-**Current focus:** Phase 30.1 — Faithful RandomStrollGoal Target Selection
+**Current focus:** Phase 31 — PanicGoal (S2 consumer)
 
 ## Current Position
 
-Phase: 30.1 (Faithful RandomStrollGoal Target Selection) — EXECUTING
+Phase: 31 (PanicGoal (S2 consumer)) — EXECUTING
 Plan: 1 of 1
 Status: Phase complete — ready for verification
 Last activity: 2026-06-30
@@ -313,6 +313,7 @@ Progress: [██████████] 100%
 | Phase 30 P02 | 9min | 3 tasks | 5 files |
 | Phase 30 P03 | 27min | 1 tasks | 8 files |
 | Phase 30.1 P01 | 75min | 4 tasks | 12 files |
+| Phase 31 P01 | 35min | 4 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -471,6 +472,8 @@ Recent decisions affecting current work:
 - [Phase ?]: 30-02: jump chain ported 1:1 — fluidJumpImpulse is the exact jar double 0.03999999910593033 (not 0.04); jumpFromGround uses max(0.42, vy); the JUMP slot is RNG-free so the pig oracle stays byte-identical
 - [Phase 30]: FloatGoal@0 wired lockstep on the Go-native pig + the vanilla_pig plugin in one plan; the DRY oracle (canUse false -> zero new draws) stays byte-identical
 - [Phase 30]: Plugin FLUID_JUMP_THRESHOLD=0.4 (lockstep with the Go oracle's getFluidJumpThreshold==0.4 for the pig), not the plan's assumed 0.0; the wet test is a differential (FloatGoal pig descends slower than a goal-stripped control) since vanilla water buoyancy is deferred
+- [Phase ?]: P31-01: PanicGoal@1 (MOVE, 1.25) wired Go+plugin in lockstep; shouldPanic = hasLastDamage && is(panic_causes)
+- [Phase ?]: P31-01: panic speedModifier 1.25 cited-deferred; isOnFire+lookForWater cited false-stubs (zero RNG for a non-burning pig)
 
 ### Pending Todos
 
@@ -500,7 +503,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-30T04:42:48.367Z
-Stopped at: Completed 24-02-PLAN.md — Phase 24 (vanilla-mobs-as-plugins) COMPLETE
+Last session: 2026-06-30T05:56:35.768Z
+Stopped at: Completed 31-01-PLAN.md
 Resume file: None
 Next: OPERATOR CHECKPOINT (19-02 Task 3) — build `CGO_ENABLED=0 go build -o sulfur.exe ./cmd/sulfur`, run `./sulfur.exe -seed 777` in a REAL terminal (expect alt-screen TUI: log viewport + command input), type `say hi`+Enter (expect a `console command cmd=say hi` viewport line), connect a vanilla 26.2 client (expect a join line), Ctrl-C (clean exit), then `./sulfur.exe -seed 777 | cat` (expect NO TUI, plain stderr — today's behavior). On "approved" → mark TUI-01 complete + advance the plan counter, then proceed to Plan 19-03 (gameplay_tick.go join/leave slog conversion + the full disconnect taxonomy). The console line routes TUI→tick (EnqueueConsoleCommand, cap 64, drop-on-full)→runConsoleCommand on the tick→existing graph (grant-all, no issuer), reply to slog. gameplay_tick.go is untouched (19-03 owns it). LEGACY: Phase 17 Wave 2 (17-02/17-03) — see prior continuity below. (GAMEPLAY-05 fluid simulation: OVERWRITE server/fluid.go with the FlowingFluid port + scheduled-tick queue; lazy-init t.fluidSchedule inside tickFluids, do NOT edit tick.go/tick_phases.go) and 17-03 (GAMEPLAY-04 fall damage + PvP dispatch: OVERWRITE server/fall_damage.go using the tickPlayer fallDistance/wasOnGround/lastY fields + the lookupPlayerByEntityID reverse lookup, do NOT edit tick.go/tick_phases.go). The exact Wave-2 seam surface (field names, init point, call sites, stub signatures) is in 17-01-SUMMARY.md "WAVE-2 HANDOFF". Deferred-still-open: dungeon loot/spawner-mob + BeehiveDecorator occupant + pale_garden PaleMoss (all v3, cosmetic, in 13-04-SUMMARY); KeepAlive double-leave hardening (Phase 3). KNOWN PRE-EXISTING FLAKE: TestTickAIDrivesMobs (OPT-01 async-pool timing, not caused by 17-01) intermittently fails under full-suite load; passes in isolation + 3× under -race.
