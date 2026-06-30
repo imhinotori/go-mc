@@ -86,3 +86,18 @@ func (er *entityRandom) nextFloat() float32 {
 func (er *entityRandom) nextDouble() float64 {
 	return er.r.Float64()
 }
+
+// nextGaussian returns a normally-distributed float64 (mean 0, stddev 1) — the
+// RandomSource.nextGaussian() analogue. Animal.aiStep's in-love heart branch draws it three times
+// (xd/yd/zd = nextGaussian() * 0.02) as the per-heart particle velocity. Like the other draws this is
+// draw-ORDER-faithful (not bit-exact vanilla), backed by math/rand/v2's NormFloat64 — sufficient for
+// the 1:1 mandate (the draw order is the observable behavior; on a dedicated server the heart's
+// addParticle is a no-op so the velocity value never reaches a client, but the THREE draws must still
+// be consumed from the mob stream in lockstep so a future bit-exact swap and the breed/in-love
+// scenario RNG stay aligned). Drawn ONLY when a pig is in love (inLove>0 && inLove%10==0) — dormant on
+// the un-fed oracle pig (inLove 0), so it never perturbs the pinned oracle stream.
+//	[VERIFIED javap Animal.aiStep: 3× getRandom().nextGaussian() each * 0.02d -> xd/yd/zd, fed to
+//	 Level.addParticle(HEART, getRandomX(1), getRandomY()+0.5, getRandomZ(1), xd, yd, zd).]
+func (er *entityRandom) nextGaussian() float64 {
+	return er.r.NormFloat64()
+}

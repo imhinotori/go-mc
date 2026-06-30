@@ -683,7 +683,65 @@ func (t *TickLoop) tickMobAging(e *Entity) {
 	} else if e.breedAge > 0 {
 		e.breedAge--
 	}
+
+	// --- Animal.aiStep tail (the in-love decrement) — runs AFTER the AgeableMob aging above, exactly
+	// as Animal.aiStep calls super.aiStep() (AgeableMob's aging) THEN runs its own tail. Ported verbatim
+	// (33-JARNOTES.md:26-27, javap Animal.aiStep):
+	//
+	//	if (getAge() != 0) inLove = 0;                       // only an ADULT (age 0) can stay in love
+	//	if (inLove > 0) { --inLove; if (inLove % 10 == 0) { ...heart particles... } }
+	//
+	// The `getAge() != 0` guard forces inLove to 0 the instant a mob is a baby OR on breeding cooldown
+	// (breedAge != 0), so love-mode only ever runs on a breeding-ready adult — and is a pure-int no-op on
+	// the un-fed oracle pig (breedAge 0, inLove 0: the guard does nothing, the `inLove > 0` block never
+	// runs). This keeps the byte-identical gate (TestPluginPigEqualsGoNativePig): the lone-adult oracle
+	// never feeds, so inLove stays 0 and this whole tail is dormant.
+	//
+	// THE HEART EMIT: vanilla's `inLove % 10 == 0` branch draws 3× random.nextGaussian()*0.02 (the
+	// per-heart velocity) then calls Level.addParticle(HEART, ...). On a DEDICATED SERVER Level.addParticle
+	// is the empty base no-op (ServerLevel does NOT override it — javap-confirmed: `Level.addParticle ->
+	// return`), so NO packet is emitted from this tail; the client-facing hearts come from setInLove's
+	// broadcastEntityEvent(this, 18) (broadcastHearts, fired on the FEED interaction). We STILL draw the 3
+	// nextGaussian values here so the mob RNG stream stays in lockstep with vanilla's aiStep (load-bearing
+	// for the breed/in-love scenario RNG and a future bit-exact source swap); they are dormant on the
+	// oracle (inLove 0). This runs in the OUTSIDE-serverAiStep per-mob loop (the tickMobIFrames twin): the
+	// only stream it touches is the mob's own RandomSource, and only while in love — never on the oracle.
+	//	[VERIFIED javap Animal.aiStep: getAge ifeq -> inLove=0; inLove ifle skip; iinc inLove,-1; inLove
+	//	 % 10 ifne skip; 3× random.nextGaussian()*0.02d; Level.addParticle(HEART, getRandomX(1),
+	//	 getRandomY()+0.5, getRandomZ(1), gauss0, gauss1, gauss2). javap Level.addParticle == `return`.]
+	if e.breedAge != 0 {
+		e.inLove = 0
+	}
+	if e.inLove > 0 {
+		e.inLove--
+		if e.inLove%10 == 0 {
+			t.emitInLoveHearts(e)
+		}
+	}
 }
+
+// emitInLoveHearts is the Animal.aiStep `inLove % 10 == 0` heart-particle limb. It draws the 3
+// per-heart velocity gaussians from the mob's RandomSource (so the stream stays lockstep with vanilla
+// — see tickMobAging's note) and would call Level.addParticle(HEART, ...), which is a no-op on a
+// dedicated server (ServerLevel inherits the empty Level.addParticle). The CLIENT-visible hearts are
+// delivered separately by broadcastHearts (the broadcastEntityEvent(this, 18) burst setInLove fires on
+// the FEED interaction), exactly as vanilla: the server never spawns the aiStep hearts on the wire.
+// Drawn ONLY while in love (dormant on the un-fed oracle pig), so it never perturbs the pinned oracle
+// RNG. Cite Animal.aiStep (the gaussian draws + the no-op server addParticle).
+func (t *TickLoop) emitInLoveHearts(e *Entity) {
+	rng := mobRandom(e)
+	// xd/yd/zd = nextGaussian() * 0.02 — the per-heart velocity (Level.addParticle's last 3 args). The
+	// values feed a server-side no-op addParticle; we consume the 3 draws to keep the mob stream aligned
+	// with vanilla's aiStep. Assigned to _ deliberately: the velocity never reaches a client from here.
+	_ = rng.nextGaussian() * inLoveHeartGaussianScale
+	_ = rng.nextGaussian() * inLoveHeartGaussianScale
+	_ = rng.nextGaussian() * inLoveHeartGaussianScale
+}
+
+// inLoveHeartGaussianScale is the 0.02 factor Animal.aiStep applies to each nextGaussian() for the
+// heart velocity (xd/yd/zd = nextGaussian() * 0.02).
+//	[VERIFIED javap Animal.aiStep: ldc2_w 0.02d; dmul after each nextGaussian().]
+const inLoveHeartGaussianScale = 0.02
 
 // onGrewUp is the breedAge -1 -> 0 boundary handler — the part of AgeableMob.setAge's 0-crossing side
 // effect this server reproduces: restore the ADULT AABB (refreshDimensions, now that isBaby()==false)

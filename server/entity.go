@@ -276,6 +276,26 @@ type Entity struct {
 	// BABY_DIMENSIONS (the scaled ones). Plain values, snapshot-friendly, never mutated after spawn.
 	adultWidth, adultHeight float64
 
+	// --- MOB-SUB-09 (Plan 33-02): Animal in-love state ---------------------------------------
+	//
+	// inLove is net.minecraft.world.entity.animal.Animal.inLove — the love-mode countdown.
+	// setInLove sets it to DEFAULT_IN_LOVE_TIME (600 ticks == 30s); it ticks DOWN one per server
+	// tick while > 0 (the Animal.aiStep tail), and is FORCED to 0 every tick for a non-adult
+	// (getAge() != 0 -> inLove = 0), so only a breeding-ready ADULT (breedAge == 0) can stay in
+	// love. isInLove() == inLove > 0; canFallInLove() == inLove <= 0. A freshly-spawned mob is
+	// inLove 0 (the zero value, can-fall-in-love, not in love) — so the oracle pig (an un-fed lone
+	// adult) is inLove 0 from spawn and the whole love subsystem (the decrement + the heart trigger)
+	// is dormant on it (the byte-identical gate). setInLove fires ONLY from the FEED path (a real
+	// ServerboundInteract) — the oracle never feeds. The loveCause/ServerPlayer record (vanilla's
+	// setInLove(player) second effect, used for the breed XP-orb attribution) is OUT OF SCOPE for
+	// this plan — a Plan-C concern — so setInLove here is reduced to the inLove countdown (the value
+	// is NOT baked away: a loveCause field slots in later without changing the countdown). Tick-owned
+	// plain int (TICK-05), zero for every non-animal entity, snapshot-friendly.
+	//	[VERIFIED javap Animal: `private int inLove`; DEFAULT_IN_LOVE_TIME == sipush 600; setInLove ->
+	//	 inLove = 600 (+ loveCause record + broadcastEntityEvent(this,18)); isInLove() == inLove > 0;
+	//	 canFallInLove() == inLove <= 0; aiStep tail: if getAge()!=0 inLove=0; if inLove>0 {--inLove; ...}.]
+	inLove int
+
 	// --- GAMEPLAY-07: delta-move tracking state (ServerEntity.sendChanges) ----------------
 	//
 	// These mirror net.minecraft.server.level.ServerEntity's per-entity send state so the
@@ -423,4 +443,66 @@ func (e *Entity) refreshDimensions() {
 	}
 	e.width = e.adultWidth
 	e.height = e.adultHeight
+}
+
+// defaultInLoveTime is net.minecraft.world.entity.animal.Animal.DEFAULT_IN_LOVE_TIME — the love-mode
+// countdown setInLove arms (600 ticks == 30 seconds at 20 TPS).
+//	[VERIFIED javap Animal.setInLove: `this.inLove = 600;` (sipush 600); DEFAULT_IN_LOVE_TIME == 600.]
+const defaultInLoveTime = 600
+
+// isInLove is net.minecraft.world.entity.animal.Animal.isInLove() == `this.inLove > 0`. True while
+// the love-mode countdown is running (BreedGoal.canUse gates on it: a pig only seeks a partner while
+// in love). Pure read, draws no RNG.
+//	[VERIFIED javap Animal.isInLove: `return this.inLove > 0;` (getfield inLove; ifle; iconst_1/0).]
+func (e *Entity) isInLove() bool { return e.inLove > 0 }
+
+// canFallInLove is net.minecraft.world.entity.animal.Animal.canFallInLove() == `this.inLove <= 0`.
+// The FEED-path adult branch (mobInteract) gates on it so a pig already in love is not re-armed (and
+// does not consume a second food item). Pure read, draws no RNG.
+//	[VERIFIED javap Animal.canFallInLove: `return this.inLove <= 0;` (getfield inLove; ifgt; iconst_1/0).]
+func (e *Entity) canFallInLove() bool { return e.inLove <= 0 }
+
+// setInLove is net.minecraft.world.entity.animal.Animal.setInLove(player) reduced to its inLove
+// countdown effect: `this.inLove = 600`. Vanilla ALSO records the love-causing ServerPlayer (for the
+// breed XP-orb attribution) and calls level.broadcastEntityEvent(this, (byte)18) to fire the client
+// heart-particle burst; the loveCause record is a Plan-C concern (cited OUT OF SCOPE above, NOT baked
+// away), and the EntityEvent-18 heart broadcast is performed by the FEED-path caller (broadcastHearts)
+// right after this, mirroring setInLove's own broadcast. Tick-owned; the value is never mutated off
+// the tick goroutine.
+//	[VERIFIED javap Animal.setInLove: sipush 600; putfield inLove; (record loveCause); level();
+//	 bipush 18; Level.broadcastEntityEvent(this, 18).]
+func (e *Entity) setInLove() { e.inLove = defaultInLoveTime }
+
+// ageUp is net.minecraft.world.entity.AgeableMob.ageUp(int amount) == ageUp(amount, false): it
+// advances the age toward adulthood by `amount * 20` ticks, clamped at 0 so the result never goes
+// positive (a fed baby lands exactly on 0 = adult, never into the breeding cooldown). The exact
+// bytecode (ageUp(int,boolean)): `int i = getAge(); i += amount * 20; if (i > 0) i = 0; setAge(i)`.
+// The *20 factor is LOAD-BEARING — getSpeedUpSecondsWhenFeeding returns a number of SECONDS, and
+// ageUp converts seconds to ticks. The `forced` branch (forcedAge / forcedAgeTimer) is skipped: the
+// FEED path calls ageUp(amount, true) in vanilla, but forcedAge/forcedAgeTimer are v1 const-0 stubs
+// (no age-lock subsystem), so only the age advance + clamp is observable. If the add crosses 0 (the
+// baby grows up), the caller (the feed path) performs the same 0-crossing side effect tickMobAging's
+// onGrewUp does (refresh dims + broadcast DATA_BABY_ID=false). Pure int, draws no RNG.
+//	[VERIFIED javap AgeableMob.ageUp(int,boolean): iload age; iload amount; bipush 20; imul; iadd ->
+//	 i; ifle skip-clamp; iconst_0 -> i (clamp >0 to 0); setAge(i); the forced branch touches
+//	 forcedAge/forcedAgeTimer only (both v1 const-0).]
+func (e *Entity) ageUp(amount int) {
+	newAge := e.breedAge + amount*20
+	if newAge > 0 {
+		newAge = 0 // clamp: a fed baby lands exactly on adulthood (0), never overshoots positive
+	}
+	e.breedAge = newAge
+}
+
+// getSpeedUpSecondsWhenFeeding is net.minecraft.world.entity.AgeableMob.getSpeedUpSecondsWhenFeeding(
+// int ageDelta): `return (int)((float)(ageDelta / 20) * 0.1f);`. The FEED baby branch passes -breedAge
+// (a positive number, since a baby's breedAge is negative) to get the SECONDS of grow-up speedup,
+// which ageUp then multiplies by 20 back to ticks. The op ORDER is load-bearing and ported verbatim:
+// the integer division `ageDelta / 20` is computed FIRST (truncating int division), THEN cast to
+// float, THEN * 0.1f, THEN truncated back to int. (For a fresh -24000 baby: -(-24000)=24000; 24000/20
+// =1200; 1200f*0.1f=120.0f; (int)120.0f=120 seconds == 2400 ticks of speedup.) Pure int/float, no RNG.
+//	[VERIFIED javap AgeableMob.getSpeedUpSecondsWhenFeeding: iload; bipush 20; idiv; i2f; ldc 0.1f;
+//	 fmul; f2i; ireturn — int-divide first, float-multiply, truncate.]
+func getSpeedUpSecondsWhenFeeding(ageDelta int) int {
+	return int(float32(ageDelta/20) * 0.1)
 }
