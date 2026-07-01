@@ -185,6 +185,15 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 	if e.typ == entity.Enderman.ID {
 		t.endermanHurtTeleport(e, src)
 	}
+
+	// MOB-HOST-05 (infest goals): Silverfish.hurtServer arms the SilverfishWakeUpFriendsGoal when hit by
+	// an entity source (or an ALWAYS_TRIGGERS_SILVERFISH source) — a per-type post-hurt hook (gated on
+	// typ == entity.Silverfish.ID) run AFTER the shared hit lands, the sibling of the enderman hook.
+	// ADDITIVE + silverfish-gated (zero cost / zero RNG for every non-silverfish — the pig oracle stream
+	// is untouched). Cite Silverfish.hurtServer + SilverfishWakeUpFriendsGoal.notifyHurt.
+	if e.typ == entity.Silverfish.ID {
+		t.silverfishNotifyHurt(e, src)
+	}
 }
 
 // playMobHurtSound is the port of LivingEntity.playHurtSound(DamageSource) -> makeSound(getHurtSound(

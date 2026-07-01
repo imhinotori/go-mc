@@ -205,7 +205,7 @@ func buildAIFromDecl(t *TickLoop, decl *mobDecl) *mobAI {
 				// hunt/attack). spawnDeclaredMob runs on the tick goroutine; a panic here is isolated by
 				// the tickOnce recover backstop, surfacing the bad declaration loudly rather than shipping
 				// a silently-disarmed hostile. (The .star load already validated the rest of the mob.)
-				panic("buildAIFromDecl: unknown goal kind " + gd.nativeKind + " (valid: nearest_attackable_target, hurt_by_target, melee_attack, spider_attack, leap_at_target, float, sit, follow_owner, owner_hurt_by, owner_hurt, angry_player_target, skeleton_target, enderman_look_for_player, enderman_freeze_when_looked_at)")
+				panic("buildAIFromDecl: unknown goal kind " + gd.nativeKind + " (valid: nearest_attackable_target, hurt_by_target, melee_attack, spider_attack, leap_at_target, float, sit, follow_owner, owner_hurt_by, owner_hurt, angry_player_target, skeleton_target, enderman_look_for_player, enderman_freeze_when_looked_at, silverfish_merge_stone, silverfish_wake_friends)")
 			}
 			// The Go goal's OWN flags() must match the declared flags — a declaration that names, e.g.,
 			// kind="melee_attack" but flags=["TARGET"] would route the goal into the WRONG selector AND
@@ -318,6 +318,16 @@ func buildNativeGoal(kind string, decl *mobDecl) Goal {
 		// — {TARGET}, the PLAYER goal GATED on the wolf's anger (a wild un-hit wolf does NOT aggro players).
 		// The bare nearest_attackable_target stays the un-gated hostile goal (UNCHANGED).
 		return newAngryPlayerTargetGoal()
+	case "silverfish_merge_stone":
+		// MOB-HOST-05 (infest goals): Silverfish @5 SilverfishMergeWithStoneGoal — {MOVE}. The stone->
+		// infested conversion goal; canUse RNG-gates (nextInt(reducedTickDelay(10))) then converts an
+		// adjacent host block, falling back to a bare RandomStroll. Speed routes from movement_speed.
+		return newSilverfishMergeStoneGoal(declaredWalkSpeed(decl))
+	case "silverfish_wake_friends":
+		// MOB-HOST-05 (infest goals): Silverfish @3 SilverfishWakeUpFriendsGoal — {} (NO flags). The
+		// hurt-armed spiral that de-infests/summons nearby silverfish. notifyHurt is fired from the
+		// per-type hurt hook (silverfishNotifyHurt, combat_mob.go). RNG-free ctor.
+		return newSilverfishWakeFriendsGoal()
 	case "skeleton_target":
 		// MOB-NEUT-01 (Phase 36, B2): Wolf targetSelector @7 NearestAttackableTargetGoal<AbstractSkeleton>
 		// — {TARGET}, NO anger gate (wolves attack skeletons on sight). findTarget scans entity.Skeleton.ID

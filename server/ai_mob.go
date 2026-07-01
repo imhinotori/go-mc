@@ -115,6 +115,15 @@ type mobAI struct {
 	// allocates it, gated on typ == entity.Rabbit.ID); nil for every other mob so the pig oracle stream
 	// is untouched. Cite net.minecraft.world.entity.animal.rabbit.Rabbit. See ai_goals_rabbit.go.
 	rabbit *rabbitHopState
+
+	// silverfishLookForFriends is the per-mob analogue of Silverfish$SilverfishWakeUpFriendsGoal's
+	// `int lookForFriends` field (MOB-HOST-05 infest goals). It lives here (not on the goal struct) so
+	// the hurt-path hook (silverfishNotifyHurt, combat_mob.go) can arm it — the goal itself is stateless.
+	// notifyHurt sets it to adjustedTickDelay(20) (once, only when it is 0); the wake goal's canUse gates
+	// on it > 0 and its tick decrements it, firing the spiral at <= 0. A plain int, tick-owned, silverfish-
+	// only (every other mob leaves it 0 — a zero-cost skip; the pig oracle is unperturbed). Cite
+	// Silverfish$SilverfishWakeUpFriendsGoal.lookForFriends.
+	silverfishLookForFriends int
 }
 
 // jumpControl is the ported net.minecraft.world.entity.ai.control.JumpControl — the per-mob jump

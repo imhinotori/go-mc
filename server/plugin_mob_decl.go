@@ -109,6 +109,21 @@ func (r *mobRegistry) setLoadCaps(c capSet) { r.caps = c }
 // Count returns the number of captured mob declarations (the boot-load log + any coverage assert).
 func (r *mobRegistry) Count() int { return len(r.byName) }
 
+// declByBaseType returns the FIRST captured declaration whose base_type is the given entity id, or nil
+// if none is registered (the EntityType.create == null analogue used by InfestedBlock.spawnInfestation's
+// summon). Read-only over byName (written only at load), so a tick-goroutine read after boot is race-
+// free. Deterministic map-iteration is not needed — in v1 at most one decl carries a given base_type
+// (the dogfooded vanilla mobs are 1-per-type); a future multi-decl-per-type world would want a
+// registration-order pick, wired then.
+func (r *mobRegistry) declByBaseType(id entity.ID) *mobDecl {
+	for _, d := range r.byName {
+		if d.baseType.ID == id {
+			return d
+		}
+	}
+	return nil
+}
+
 // ----------------------------------------------------------------------------------------------
 // base-type resolver (custom = behavior; renders as an EXISTING wire id)
 // ----------------------------------------------------------------------------------------------

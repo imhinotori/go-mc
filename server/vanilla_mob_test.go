@@ -45,9 +45,10 @@ var allFourMobs = []struct {
 	// Mooshroom == Cow goals (8 goalSelector + 0 targetSelector, base Mooshroom wire id).
 	{vanillaHuskMobName, entity.Husk.ID, 4, 2},
 	{vanillaMooshroomMobName, entity.Mooshroom.ID, 8, 0},
-	// MOB-HOST-05 (Task #9): Silverfish — float@1 + melee@4 (2 goalSelector) + hurt_by@1 + nearest@2
-	// (2 targetSelector); the powder-snow/wake-friends/merge-stone goals are cite-deferred.
-	{vanillaSilverfishMobName, entity.Silverfish.ID, 2, 2},
+	// MOB-HOST-05 (Task #9 + infest goals): Silverfish — float@1 + wake_friends@3 + melee@4 +
+	// merge_stone@5 (4 goalSelector) + hurt_by@1 + nearest@2 (2 targetSelector); the powder-snow
+	// goal is cite-deferred. The wake-friends + merge-stone infest goals are now wired (kind=).
+	{vanillaSilverfishMobName, entity.Silverfish.ID, 4, 2},
 	// MOB-HOST-06 (Task #9): Creeper — float@1 + swell@2 + melee@4 + stroll@5 + look@6 + around@6
 	// (6 goalSelector) + nearest@1 + hurt_by@2 (2 targetSelector); AvoidEntity Ocelot/Cat cite-deferred.
 	{vanillaCreeperMobName, entity.Creeper.ID, 6, 2},
