@@ -200,6 +200,23 @@ func foxSupplier() *Supplier {
 		Build()
 }
 
+// happyGhastSupplier is the port of HappyGhast.createAttributes(): Animal.createAnimalAttributes()
+// (which adds TEMPT_RANGE 10.0) then .add(MAX_HEALTH 20.0).add(TEMPT_RANGE 16.0).add(FLYING_SPEED 0.05)
+// .add(MOVEMENT_SPEED 0.05).add(FOLLOW_RANGE 16.0).add(CAMERA_DISTANCE 8.0). The later TEMPT_RANGE 16.0
+// overrides the animal 10.0 (buildKeepingLast). Cite net.minecraft.world.entity.animal.happyghast.
+// HappyGhast.createAttributes (javap: ldc2_w 20.0d MAX_HEALTH, 16.0d TEMPT_RANGE, 0.05d FLYING_SPEED,
+// 0.05d MOVEMENT_SPEED, 16.0d FOLLOW_RANGE, 8.0d CAMERA_DISTANCE).
+func happyGhastSupplier() *Supplier {
+	return createAnimalAttributes().
+		AddValue(MaxHealth, 20.0).
+		AddValue(TemptRange, 16.0).
+		AddValue(FlyingSpeed, 0.05).
+		AddValue(MovementSpeed, 0.05).
+		AddValue(FollowRange, 16.0).
+		AddValue(CameraDistance, 8.0).
+		Build()
+}
+
 // endermanSupplier is EnderMan's attribute supplier. EnderMan.createAttributes = Monster
 // .createMonsterAttributes().add(MAX_HEALTH 40).add(MOVEMENT_SPEED 0.3).add(ATTACK_DAMAGE 7)
 // .add(FOLLOW_RANGE 64).add(STEP_HEIGHT 1.0). Cite EnderMan.createAttributes
@@ -377,6 +394,9 @@ var suppliers = map[string]*Supplier{
 	// MOB-CUBE (SulfurCube): the size-scaled cube-mob base (createMobAttributes + TEMPT_RANGE 8.0). setSize
 	// overrides MAX_HEALTH (4*size) + MOVEMENT_SPEED (0.2+0.1*size) at runtime. Cite SulfurCube.createSulfurCubeAttributes.
 	"sulfur_cube": sulfurCubeSupplier(),
+	// happy_ghast (Task): HappyGhast is a flying Animal; happyGhastSupplier is a 1:1 copy of
+	// HappyGhast.createAttributes (FLYING_SPEED + CAMERA_DISTANCE + the 16.0 tempt/follow range).
+	"happy_ghast": happyGhastSupplier(),
 }
 
 // livingCategories is the set of data/entity.Entity.Type values that correspond to a vanilla

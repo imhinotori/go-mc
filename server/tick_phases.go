@@ -434,6 +434,14 @@ func (t *TickLoop) tickAI() {
 		if e.typ == entity.SulfurCube.ID {
 			t.sulfurCubeAiStep(e)
 		}
+		// happy_ghast (Task): the HappyGhast FLIGHT (RandomFloatAroundGoal fly-to selection +
+		// GhastMoveControl.tick deltaMovement kick). Runs the moveControl-driven hover (NOT the ground A*
+		// nav), per-type-gated like the creeper/enderman, AFTER serverAiStep. The 0.91 flying drag +
+		// no-gravity integration land in tickPhysics (also happy-ghast-gated). ADDITIVE + ghast-gated
+		// (zero cost / zero RNG for every non-ghast — the pig oracle stream is untouched).
+		if e.typ == entity.HappyGhast.ID {
+			t.happyGhastAiStep(e)
+		}
 	}
 
 	// Throttled natural spawner: vanilla attempts every tick (most no-op under cap); v1 runs the
@@ -499,6 +507,15 @@ func (t *TickLoop) tickPhysics() {
 			// inside travelInWaterVertical). FloatGoal's +0.04 impulse (applied in tickAI, before
 			// this) survives the gentle 0.005 pull, so the mob bobs at the surface instead of sinking.
 			travelInWaterVertical(e)
+		} else if happyGhastIsFlyer(e) {
+			// happy_ghast (Task): the travelFlying AIR branch (HappyGhast.travel → LivingEntity.travelFlying).
+			// There is NO gravity for a hovering ghast; deltaMovement is scaled by 0.91 on ALL three axes
+			// (deltaMovement *= 0.91f) so the moveControl kick (happyGhastAiStep) drifts and settles. The
+			// ghast keeps its Y (does not sink) — this is the whole point of the mob. Cite HappyGhast.travel /
+			// LivingEntity.travelFlying (air branch: move(deltaMovement); deltaMovement *= 0.91f; no gravity).
+			e.vx *= ghastFlyingDrag
+			e.vy *= ghastFlyingDrag
+			e.vz *= ghastFlyingDrag
 		} else {
 			// Dry (travelInAir) branch: accelerate downward, then air drag so vertical speed
 			// converges to a terminal velocity (06-RESEARCH A1 — tunable, wire-irrelevant constants).

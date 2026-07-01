@@ -78,6 +78,10 @@ var allFourMobs = []struct {
 	// targetSelector — addTargetingGoals is EMPTY). The SulfurCube.addBehaviourGoals TemptGoal@2 +
 	// SearchForItemsGoal@3 are cite-deferred (tempt/item-pickup subsystems).
 	{vanillaSulfurCubeMobName, entity.SulfurCube.ID, 3, 0},
+	// happy_ghast (Task): HappyGhast — HappyGhastFloatGoal@3 + TemptGoal.ForNonPathfinders@4 (2 declared
+	// observable goals, 0 targetSelector). RandomFloatAroundGoal@5 FLIGHT is HOST-NATIVE (happyGhastAiStep),
+	// NOT a declared nav goal; the Brain + ride/harness + dried-ghast spawn are cite-deferred (.star header).
+	{vanillaHappyGhastMobName, entity.HappyGhast.ID, 2, 0},
 }
 
 // TestAllFourMobsBootLoad: loadVanillaMobRegistry returns ONE registry holding the passive + hostile +
@@ -92,9 +96,9 @@ func TestAllFourMobsBootLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadVanillaMobRegistry: %v", err)
 	}
-	const wantTotal = 18 // + Task-#9 mobs + the SulfurCube (husk/mooshroom/silverfish/creeper/witch/rabbit/enderman/cat/fox/sulfur_cube)
+	const wantTotal = 19 // + Task-#9 mobs + the SulfurCube + HappyGhast (husk/mooshroom/silverfish/creeper/witch/rabbit/enderman/cat/fox/sulfur_cube)
 	if got := len(r.byName); got != wantTotal {
-		t.Fatalf("registry holds %d declarations, want %d (18: passives+hostiles+variants+witch+rabbit+enderman+cat+fox+sulfur_cube)", got, wantTotal)
+		t.Fatalf("registry holds %d declarations, want %d (19: passives+hostiles+variants+witch+rabbit+enderman+cat+fox+sulfur_cube+happy_ghast)", got, wantTotal)
 	}
 	for _, m := range allFourMobs {
 		decl, ok := r.byName[m.name]

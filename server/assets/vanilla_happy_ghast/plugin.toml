@@ -1,0 +1,14 @@
+name = "vanilla_happy_ghast"
+version = "0.1.0"
+entrypoint = "main.star"
+runtime = "starlark"
+# Least-privilege caps: the happy ghast READS its own state + the nearest player + WRITES its look. Its
+# FLIGHT is host-side (server/ai_goals_happy_ghast.go happyGhastAiStep — the GhastMoveControl float physics
+# + RandomFloatAroundGoal fly-to selection cannot go through the ground A* nav seam), so the .star declares
+# the observable goal SHAPE for registry/goal-count parity but does NOT drive movement via nav. It still
+# declares the look seam, so it needs entities.read/write + world.read; no nav (flight is native), no
+# world.write (a ghast sets no blocks).
+#   entities.read  — read x/y/z (look target delta base)
+#   entities.write — set_look_at (the LookControl.setLookAt analogue)
+#   world.read     — nearest_player (TemptGoal getNearestPlayer / player-holding-food scan)
+capabilities = ["entities.read", "entities.write", "world.read"]

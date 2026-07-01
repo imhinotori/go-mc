@@ -100,4 +100,13 @@ var (
 	// LivingEntity by createLivingAttributes; Fox.createAttributes OVERRIDES it to 5.0. Consumed by
 	// LivingEntity.calculateFallPower (`(d + 1.0E-6) - getAttributeValue(SAFE_FALL_DISTANCE)`).
 	SafeFallDistance = NewRangedAttribute("safe_fall_distance", 3.0, -1024.0, 1024.0)
+	// FlyingSpeed is Attributes.FLYING_SPEED (RangedAttribute "flying_speed", 0.4, 0.0, 1024.0). The
+	// registry default is 0.4; the HappyGhast supplier overrides it to 0.05 (HappyGhast.createAttributes).
+	// Cite net.minecraft.world.entity.ai.attributes.Attributes.FLYING_SPEED.
+	FlyingSpeed = NewRangedAttribute("flying_speed", 0.4, 0.0, 1024.0)
+
+	// CameraDistance is Attributes.CAMERA_DISTANCE (RangedAttribute "camera_distance", 4.0, 0.0, 32.0).
+	// The registry default is 4.0; the HappyGhast supplier overrides it to 8.0 (HappyGhast.createAttributes,
+	// the mounted-camera pull-back). Cite net.minecraft.world.entity.ai.attributes.Attributes.CAMERA_DISTANCE.
+	CameraDistance = NewRangedAttribute("camera_distance", 4.0, 0.0, 32.0)
 )

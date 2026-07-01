@@ -62,6 +62,30 @@ Each is a dedicated jar-faithful phase (javap-verify BEFORE writing, cite class/
 - **Silverfish infest** — SilverfishWakeUpFriendsGoal, SilverfishMergeWithStoneGoal (stone-infest blocks).
 - **AvoidEntityGoal** — the generic flee goal (creeper←cat/ocelot, skeleton←wolf, rabbit/fox flees).
 
+### Happy Ghast subsystems (from vanilla_happy_ghast, Task)
+- **Brain subsystem** — the entity Brain framework (memory modules, sensors, activities, behaviors). The
+  HappyGhast is the first brain-based mob: HappyGhastAi drives the BABY (customServerAiStep ticks the brain
+  only while isBaby). Sensors NEAREST_LIVING_ENTITIES/HURT_BY/FOOD_TEMPTATIONS/NEAREST_ADULT_ANY_TYPE/
+  NEAREST_PLAYERS + the activity/behavior tree. v1 SUBSTITUTES the baby brain with the same classic
+  goalSelector the adult runs (both baby+adult registerGoals: HappyGhastFloatGoal@3 + TemptGoal@4 +
+  Ghast.RandomFloatAroundGoal@5). This subsystem, once built, unblocks every future brain mob (villager,
+  piglin, axolotl, allay, warden, etc.), not just the happy ghast.
+- **Ride / harness (happy ghast)** — doPlayerRide/startRiding, MAX_PASSANGERS 4 (canAddPassenger),
+  getRiddenInput/getRiddenRotation/tickRidden (the mounted flight controls), isFlyingVehicle,
+  getDismountLocationForPassenger; canUseSlot(BODY)=adult-only harness equip + canDispenserEquipIntoSlot,
+  the goggles-up/down harness states (lang subtitles happy_ghast.harness_goggles_up/down + equip/unequip).
+  Needs a riding/vehicle subsystem (none in v1).
+- **Dried-ghast rehydration spawn** — the happy ghast is NOT a natural mob-spawn; it hatches from a dried
+  ghast block rehydrated in water. Needs a dried-ghast block + the rehydration timer (v1 spawns via /dbg or
+  the spawn egg only; the mob stays OUT of the natural pool).
+- **Happy ghast ambient upkeep** — continuousHeal (heal 1 every 20t in clouds/rain else 600t; needs an
+  isInClouds + precipitationAt read), checkRestriction/home-radius (32/64-block leash to a home), serverStill
+  Timeout (setRequiresPrecisePosition + scanPlayerAboveGhast), leash-holder (IS_LEASH_HOLDER). The
+  GhastMoveControl.canReach careful-mode AABB traversal + the HAPPY_GHAST_AVOIDS block tag (v1 uses a
+  reduced destination-air reach check).
+- **FLYING_SPEED / CAMERA_DISTANCE attributes** — ADDED this task (level/attribute/attributes.go). The
+  happy ghast flight reads FLYING_SPEED; when riding lands, wire the mounted camera to CAMERA_DISTANCE.
+
 ### Attribute/movement gaps
 - **STEP_HEIGHT / SAFE_FALL_DISTANCE** attributes (enderman step 1.0, fox safe-fall 5.0) — currently not in
   the v1 attribute set; add them + wire the physics reads.

@@ -214,6 +214,17 @@ type Entity struct {
 	cubeAggressive  bool
 	cubeWantMove    float64 // negative sentinel: no MOVE_TO wanted this tick (Operation.WAIT)
 	cubeWasOnGround bool
+	// --- HAPPY GHAST MOVE CONTROL (net.minecraft.world.entity.monster.Ghast$GhastMoveControl +
+	// Ghast$RandomFloatAroundGoal) --------------------------------------------------------------------
+	//
+	// Tick-owned plain values, set/read ONLY for a HappyGhast (happyGhastAiStep gates on typ ==
+	// entity.HappyGhast.ID). ghastWantedX/Y/Z + ghastHasWanted mirror MoveControl.wantedX/Y/Z +
+	// hasWanted() (the fly-to target RandomFloatAroundGoal.start commits). ghastFloatDuration mirrors
+	// GhastMoveControl.floatDuration (the accel cadence: += nextInt(5)+2 between deltaMovement kicks).
+	// Zero for every non-ghast entity.
+	ghastWantedX, ghastWantedY, ghastWantedZ float64
+	ghastHasWanted                           bool
+	ghastFloatDuration                       int32
 
 	// ai is the per-mob AI handle (AI-01, Plan 07-01): the mob's goalSelector + the
 	// navigation/look targets a goal writes (server/ai_mob.go). nil for a non-mob entity (a

@@ -169,6 +169,9 @@ var baseTypeByName = map[string]entity.Entity{
 	// MOB-CUBE (SulfurCube): the size-scaled cube mob (a NEW 26.2 mob). base_type "sulfur_cube" renders as
 	// entity.SulfurCube.ID (id 130); the cube AI (jump-move state machine + split-on-death) is Go-native.
 	"sulfur_cube": entity.SulfurCube,
+	// happy_ghast (Task): the flying rideable Animal. Renders as its OWN wire type (entity.HappyGhast,
+	// id 58); the hover flight + fly-to selection are host-native (happyGhastAiStep, ai_goals_happy_ghast.go).
+	"happy_ghast": entity.HappyGhast,
 }
 
 // resolveBaseType resolves a base_type string to its data/entity record. (record, true) for an

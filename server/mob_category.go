@@ -165,6 +165,12 @@ func categoryOf(t entity.ID) mobCategory {
 		// Consumes the MONSTER spawn budget like the zombie. (It spawns naturally ONLY in the sulfur_caves
 		// biome — biome-gated, so it is kept OUT of the uniform natural MONSTER pool; see async.go.)
 		return categoryMonster
+	case entity.HappyGhast.ID:
+		// happy_ghast (Task): HappyGhast is MobCategory.CREATURE (vanilla EntityType.HAPPY_GHAST extends
+		// Animal; data/entity HappyGhast.Type == "creature", id 58). Consumes the CREATURE spawn budget
+		// like the other passives — though it never joins the NATURAL pool (dried-ghast rehydration only,
+		// cited), so the category matters only for the shared count accounting.
+		return categoryCreature
 	default:
 		return categoryMisc
 	}
