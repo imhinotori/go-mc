@@ -109,6 +109,12 @@ type mobAI struct {
 	// step (clamped at 0, never negative). A plain int, RNG-FREE, tick-owned. Cite LivingEntity.aiStep
 	// (the `if (noJumpDelay > 0) noJumpDelay--;` at the top + the `noJumpDelay = 10` after a land jump).
 	noJumpDelay int
+
+	// rabbit holds the per-mob Rabbit hop state machine (RabbitJumpControl + RabbitMoveControl +
+	// Rabbit.aiStep/customServerAiStep counters). NON-NIL only for a rabbit (rabbitAiStep lazily
+	// allocates it, gated on typ == entity.Rabbit.ID); nil for every other mob so the pig oracle stream
+	// is untouched. Cite net.minecraft.world.entity.animal.rabbit.Rabbit. See ai_goals_rabbit.go.
+	rabbit *rabbitHopState
 }
 
 // jumpControl is the ported net.minecraft.world.entity.ai.control.JumpControl — the per-mob jump

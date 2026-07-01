@@ -7,7 +7,7 @@
 # Rabbit.registerGoals() (javap-verified this session):
 #   @1  FloatGoal                                       <-- .star (shared passive float)
 #   @1  ClimbOnTopOfPowderSnowGoal                      <-- DEFERRED (no powder-snow subsystem)
-#   @1  RabbitPanicGoal(2.2)                            <-- .star (PanicGoal; the hop-speed setSpeedModifier is cite-deferred)
+#   @1  RabbitPanicGoal(2.2)                            <-- .star (PanicGoal; the hop-speed setSpeedModifier is now the Go-native hop, ai_goals_rabbit.go)
 #   @2  BreedGoal(0.8)                                  <-- .star (shared BreedGoal)
 #   @3  TemptGoal(1.0, is(RABBIT_FOOD), false)          <-- .star (shared TemptGoal; rabbit_food tag)
 #   @4  RabbitAvoidEntityGoal<Player/Wolf/Monster>      <-- DEFERRED (no AvoidEntityGoal subsystem)
@@ -20,10 +20,18 @@
 #   - RabbitAvoidEntityGoal@4 (flee player/wolf/monster) + RaidGardenGoal@5 (eat carrot crops): no
 #     AvoidEntityGoal / no crop-raid subsystem in v1. The core ambient behavior (float/panic/breed/tempt/
 #     stroll/look) is fully wired.
-#   - The RABBIT HOP (RabbitJumpControl/RabbitMoveControl): a MOVEMENT-STYLE flavor over the same
-#     navigation — the rabbit reaches every want-target via the ported nav exactly as a cow does; the
-#     visible hop (vs walk) is cite-deferred until a per-mob MoveControl seam lands. RabbitPanicGoal's
-#     setSpeedModifier is part of that hop flavor (cite-deferred); the PanicGoal BEHAVIOR is the base port.
+#   - The RABBIT HOP (RabbitJumpControl/RabbitMoveControl) is now PORTED (Go-native per-type hook
+#     TickLoop.rabbitAiStep, server/ai_goals_rabbit.go — the sibling of creeperAiStep/endermanAiStep):
+#     Rabbit.customServerAiStep (jumpDelayTicks/wasOnGround/startJumping/enableJumpControl) +
+#     Rabbit.aiStep (jumpTicks/jumpDuration hop-arc counter) + RabbitMoveControl.tick (setSpeedModifier
+#     0.0-while-idle / nextJumpSpeed-while-hopping) + Rabbit.getJumpPower/jumpFromGround (the taller
+#     ADULT/BABY hop impulse + the horizontal moveRelative launch, routed via entityJumpStep). The
+#     rabbit now visibly HOPS (vs walks). Sub-pieces still DEFERRED (cited in ai_goals_rabbit.go): the
+#     EVIL killer-bunny attack-lunge (no Variant subsystem), getJumpPower's path-lookahead +
+#     horizontalCollision jump-boost (no horizontalCollision field), and the client hop-animation
+#     broadcastEntityEvent (no wire hook) — the movement gameplay is fully wired. RabbitPanicGoal's
+#     setSpeedModifier (FLEE_SPEED_MOD 2.2) flows into the hop as the panic want-speed -> the shorter
+#     3-tick PANIC_JUMP_DELAY landing rest.
 #   - There is NO FollowParentGoal and NO RandomLookAroundGoal in Rabbit.registerGoals (unlike the cow) —
 #     those goals are absent here (the unused cow callbacks below are harmless dead bindings).
 

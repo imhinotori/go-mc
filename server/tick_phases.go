@@ -420,6 +420,13 @@ func (t *TickLoop) tickAI() {
 		if e.typ == entity.Enderman.ID {
 			t.endermanAiStep(e)
 		}
+		// MOB-PASS-05 (rabbit hop): the Rabbit's RabbitJumpControl/RabbitMoveControl hop-vs-walk movement
+		// (Rabbit.customServerAiStep + aiStep counter). Per-type-gated like the creeper/enderman, AFTER
+		// serverAiStep (so the stroll/panic MOVE goal has committed its want this tick). ADDITIVE +
+		// rabbit-gated (zero cost / zero RNG for every non-rabbit — the pig oracle stream is untouched).
+		if e.typ == entity.Rabbit.ID {
+			t.rabbitAiStep(e)
+		}
 	}
 
 	// Throttled natural spawner: vanilla attempts every tick (most no-op under cap); v1 runs the

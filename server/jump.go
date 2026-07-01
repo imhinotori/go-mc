@@ -11,7 +11,11 @@ package server
 // integer/float math + the fluid predicate reads — it draws no random, so it never perturbs the pig
 // oracle's per-mob RNG stream (the only new RNG in this subsystem is FloatGoal.tick in Plan 03).
 
-import "math"
+import (
+	"math"
+
+	"github.com/imhinotori/sulfur/data/entity"
+)
 
 const (
 	// fluidJumpImpulse is the EXACT double LivingEntity.jumpInLiquid adds to delta-movement Y. The
@@ -104,8 +108,15 @@ func (t *TickLoop) entityJumpStep(e *Entity) {
 		// CALLER's branch selection, not the impulse magnitude).
 		jumpInLiquid(e)
 	case (e.onGround || (inWaterAndHasFluidHeight && fluidHeight <= threshold)) && (e.ai == nil || e.ai.noJumpDelay == 0):
-		// Land jump — gated by the per-mob delay.
-		jumpFromGround(e)
+		// Land jump — gated by the per-mob delay. MOB-PASS-05: a RABBIT overrides jumpFromGround with its
+		// taller hop impulse + the horizontal moveRelative launch (Rabbit.jumpFromGround), so route a
+		// rabbit's land jump to rabbitJumpFromGround (ai_goals_rabbit.go). Every other mob uses the generic
+		// LivingEntity.jumpFromGround. Cite Rabbit.jumpFromGround (overrides LivingEntity.jumpFromGround).
+		if e.typ == entity.Rabbit.ID && e.ai != nil {
+			t.rabbitJumpFromGround(e)
+		} else {
+			jumpFromGround(e)
+		}
 		if e.ai != nil {
 			e.ai.noJumpDelay = landJumpDelay
 		}
