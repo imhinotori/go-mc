@@ -180,6 +180,19 @@ func mooshroomSupplier() *Supplier {
 		Build()
 }
 
+// foxSupplier is Fox's attribute supplier. Fox.createAttributes = Animal.createAnimalAttributes()
+// .add(MOVEMENT_SPEED 0.3).add(MAX_HEALTH 10).add(ATTACK_DAMAGE 2).add(SAFE_FALL_DISTANCE 5).add(
+// FOLLOW_RANGE 32). SAFE_FALL_DISTANCE is not in the v1 attribute set (a movement detail cite-deferred);
+// the rest seed here. Cite Fox.createAttributes.
+func foxSupplier() *Supplier {
+	return createAnimalAttributes().
+		AddValue(MovementSpeed, 0.30000001192092896).
+		AddValue(MaxHealth, 10.0).
+		AddValue(AttackDamage, 2.0).
+		AddValue(FollowRange, 32.0).
+		Build()
+}
+
 // endermanSupplier is EnderMan's attribute supplier. EnderMan.createAttributes = Monster
 // .createMonsterAttributes().add(MAX_HEALTH 40).add(MOVEMENT_SPEED 0.3).add(ATTACK_DAMAGE 7)
 // .add(FOLLOW_RANGE 64).add(STEP_HEIGHT 1.0). STEP_HEIGHT is not in the v1 attribute set (a movement
@@ -333,6 +346,7 @@ var suppliers = map[string]*Supplier{
 	"mooshroom": mooshroomSupplier(),
 	"rabbit":    rabbitSupplier(),
 	"enderman":  endermanSupplier(),
+	"fox":       foxSupplier(),
 }
 
 // livingCategories is the set of data/entity.Entity.Type values that correspond to a vanilla

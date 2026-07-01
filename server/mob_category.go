@@ -155,6 +155,10 @@ func categoryOf(t entity.ID) mobCategory {
 		// MOB-NEUT-03 (Task #9): Cat is MobCategory.CREATURE (vanilla EntityType.CAT; data/entity
 		// Cat.Type == "creature"). Same CREATURE-budget accounting as the wolf/cow.
 		return categoryCreature
+	case entity.Fox.ID:
+		// MOB-PASS-06 (Task #9): Fox is MobCategory.CREATURE (vanilla EntityType.FOX; data/entity
+		// Fox.Type == "creature"). Same CREATURE-budget accounting as the cow.
+		return categoryCreature
 	default:
 		return categoryMisc
 	}

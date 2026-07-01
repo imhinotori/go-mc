@@ -140,6 +140,7 @@ var baseTypeByName = map[string]entity.Entity{
 	"mooshroom": entity.Mooshroom,
 	"rabbit":    entity.Rabbit,
 	"enderman":  entity.Enderman,
+	"fox":       entity.Fox,
 }
 
 // resolveBaseType resolves a base_type string to its data/entity record. (record, true) for an
