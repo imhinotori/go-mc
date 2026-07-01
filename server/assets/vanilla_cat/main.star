@@ -24,12 +24,67 @@
 # tryToTameCat, attack_dispatch.go) — the wolf sibling, EXCEPT no health bump (Cat.applyTamingSideEffects is
 # the base no-op: MAX_HEALTH stays 10). The tamed sit-toggle + FollowOwner reuse the wolf's sit/follow_owner.
 #
-# DEFERRED (cite-recorded, NEVER silently dropped):
-#   - The cat-specific comfort goals (CatRelaxOnOwner@3 / CatLieOnBed@5 / CatSitOnBlock@7): no bed/block-sit
-#     subsystem in v1. The core tame+sit+follow-owner (the phase goal) is fully wired.
-#   - LeapAtTarget@8 / OcelotAttack@9 / the NonTameRandomTarget prey goals: no rabbit/turtle-as-prey selector
-#     for the cat in v1 (the cat's hunt targets defer WITH those prey). A tamed cat does not hunt anyway.
-#   - The morning-gift (giveMorningGift) + collar-dye: cite-deferred (no sleep-gift / dye system).
+# DEFERRED (cite-recorded, NEVER silently dropped). This session jar-verified the comfort goals + the
+# morning-gift + the collar-dye down to their exact constants and RNG draw order (below). They are NOT
+# landed because EVERY ONE of their gates is an unbuilt subsystem, and the 1:1 mandate forbids stubbing a
+# whole GATE to a constant (constant-false = a silent disabled goal; constant-true = a wrong-firing goal --
+# both violations). What is landed here is the build-ready spec: when the named subsystem arrives, the goal
+# drops in verbatim from these citations with no further jar reads.
+#
+#   - @3 Cat$CatRelaxOnOwnerGoal (lie on the owner sleeping in bed). Cite Cat$CatRelaxOnOwnerGoal.
+#       BLOCKED BY: player-sleep state. canUse gate order (CFR):
+#         isTame() && !isOrderedToSit() && getOwner() instanceof Player && owner.isSleeping()   <-- MISSING
+#         && distanceToSqr(owner) <= 100.0 && level.getBlockState(owner.blockPosition()).is(BlockTags.BEDS)
+#         && !spaceIsOccupied().  goalPos = ownerPos.relative(BedBlock.FACING.getOpposite()) (or ownerPos).
+#       spaceIsOccupied: getEntitiesOfClass(Cat, AABB(goalPos).inflate(2.0)); occupied iff any OTHER cat
+#         isLying()||isRelaxStateOne().  start: setInSittingPose(false); nav.moveTo(goalPos, 1.1f).
+#       tick: setInSittingPose(false); nav.moveTo(goalPos, 1.1f); if distanceToSqr(owner) < 2.5 {
+#         ++onBedTicks; if onBedTicks > adjustedTickDelay(16) { setLying(true); setRelaxStateOne(false) }
+#         else { lookAt(owner,45,45); setRelaxStateOne(true) } } else setLying(false).  NO RNG in canUse/tick.
+#       stop: setLying(false); THEN the morning-gift roll (below); onBedTicks=0; setRelaxStateOne(false);
+#         nav.stop().  Needs synched IS_LYING + RELAX_STATE_ONE (Cat.defineSynchedData define(...,false)).
+#   - The morning-gift (Cat$CatRelaxOnOwnerGoal.stop -> giveMorningGift). Cite giveMorningGift.
+#       BLOCKED BY: player-sleep (getSleepTimer) + the CAT_MORNING_GIFT loot table + randomTeleport.
+#       GATE (stop): owner.getSleepTimer() >= 100 && level.getRandom().nextFloat() <
+#         environmentAttributes().getValue(EnvironmentAttributes.CAT_WAKING_UP_GIFT_CHANCE, position()).
+#         JAR FINDING: CAT_WAKING_UP_GIFT_CHANCE defaultValue == 0.0f (26.2 EnvironmentAttributes) -- so at
+#         the vanilla default the gift NEVER fires (nextFloat() < 0.0f is always false); it is a datapack/
+#         dimension override knob. The nextFloat() draw is on the LEVEL rng (getRandom()), not the cat rng.
+#       giveMorningGift RNG (cat.getRandom(), IN ORDER): randomTeleport(x + nextInt(11)-5, y + nextInt(5)-2,
+#         z + nextInt(11)-5, false); then dropFromGiftLootTable(CAT_MORNING_GIFT) spawns an ItemEntity at
+#         (catX - sin(yBodyRot*pi/180), catY, catZ + cos(yBodyRot*pi/180)) (leash holder pos if leashed).
+#   - @5 CatLieOnBedGoal (extends MoveToBlockGoal(cat, speed, searchRange=8, verticalSearchRange=6);
+#       verticalSearchStart=-2; flags {JUMP,MOVE}). Cat.registerGoals @5 ctor (Cat, D, I) with I(searchRange)
+#       = bipush 8. Cite CatLieOnBedGoal + MoveToBlockGoal.  BLOCKED BY: BlockTags.BEDS block-state scan.
+#       canUse: isTame() && !isOrderedToSit() && !isLying() && super.canUse().  isValidTarget(level,pos):
+#         level.isEmptyBlock(pos.above()) && level.getBlockState(pos).is(BlockTags.BEDS)   <-- MISSING (no
+#         generated BlockTags map; data/tag.tags.go `beds` is an ITEM tag, not the block tag).
+#       nextStartTick override = 40 (constant, NOT the base 200+nextInt(200)).  tick: super.tick();
+#         setInSittingPose(false); if !isReachedTarget() setLying(false) else if !isLying() setLying(true).
+#   - @7 CatSitOnBlockGoal (extends MoveToBlockGoal(cat, speed, searchRange=8); flags {MOVE,JUMP} base).
+#       Cite CatSitOnBlockGoal + MoveToBlockGoal.  BLOCKED BY: BlockTags.BEDS + Blocks.CHEST/FURNACE +
+#       ChestBlockEntity.getOpenCount + FurnaceBlock.LIT -- none queryable from the AI layer in v1.
+#       canUse: isTame() && !isOrderedToSit() && super.canUse().  isValidTarget(level,pos): isEmptyBlock(
+#         pos.above()) && ( is(Blocks.CHEST) ? ChestBlockEntity.getOpenCount(level,pos) < 1
+#         : is(Blocks.FURNACE) && FurnaceBlock.LIT ? true
+#         : is(BlockTags.BEDS, s -> s.getOptionalValue(BedBlock.PART).map(v -> v != HEAD).orElse(true)) ).
+#       tick: super.tick(); setInSittingPose(isReachedTarget()).
+#   - MoveToBlockGoal base RNG (shared by @5/@7 once BlockTags land) -- TWO draws, IN ORDER: (1) canUse when
+#       nextStartTick==0 -> nextStartTick = nextStartTick(mob) (CatLieOnBed overrides to a CONSTANT 40, so
+#       NO draw; CatSitOnBlock uses the base reducedTickDelay(200 + nextInt(200)) -> ONE nextInt(200));
+#       (2) start -> maxStayTicks = nextInt(nextInt(1200) + 1200) + 1200 (TWO nextInt, inner first).
+#       findNearestBlock is the deterministic ring scan (NO RNG). requiresUpdateEveryTick == true.
+#   - Collar-dye (Cat.mobInteract tamed+owned branch, BEFORE the feed/sit-toggle). Cite Cat.mobInteract.
+#       BLOCKED BY: ItemTags.CAT_COLLAR_DYES + DataComponents.DYE + the synched DATA_COLLAR_COLOR field +
+#       setPersistenceRequired -- none exist in v1 (entity_encode.go carries the default WHITE collar only).
+#       BRANCH (CFR): if stack.is(ItemTags.CAT_COLLAR_DYES) { DyeColor c = stack.get(DataComponents.DYE);
+#         if (c != null && c != getCollarColor()) { setCollarColor(c); stack.consume(1, player);
+#         setPersistenceRequired(); return SUCCESS } }.  NO RNG.  DATA_COLLAR_COLOR default = DEFAULT_COLLAR
+#         _COLOR.getId() (RED == 14) per Cat.defineSynchedData.  When wired: slot it into tryCatInteract
+#         (attack_dispatch.go) as the FIRST tamed+owned check, before the cat_food feed short-circuit.
+#   - @8 LeapAtTargetGoal(0.3) / @9 OcelotAttackGoal / targetSelector @1 NonTameRandomTargetGoal<Rabbit/
+#       Turtle>: no rabbit/turtle-as-prey selector for the cat in v1 (defers WITH those prey). A tamed cat
+#       does not hunt anyway. Cite Cat.registerGoals @8/@9 + targetSelector @1.
 
 # --- constants (jar-confirmed) -----------------------------------------------------------------
 FLOAT_JUMP_PROBABILITY = 0.8   # FloatGoal.tick: getRandom().nextFloat() < 0.8f (the swim-jump chance)
