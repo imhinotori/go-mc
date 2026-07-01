@@ -71,6 +71,16 @@ type goalDecl struct {
 	// (plugin_mob_ai.go) switches on it. The pig declares NO kind-goal, so this branch is never taken
 	// for it → zero new draws → the pig oracle stays byte-identical.
 	nativeKind string
+	// avoidType is the resolved data/entity id of the class a kind="avoid_entity" goal flees
+	// (AvoidEntityGoal's avoidClass — e.g. Cat for the Creeper's AvoidEntityGoal<Cat>). Set from the
+	// goal() builtin's avoid_type= string (resolved via resolveBaseType at LOAD, a loud error on an
+	// unknown type). Zero-valued (and unused) for every other kind. buildNativeGoal reads it to build
+	// the avoidEntityGoal's per-goal avoided-class filter. Cite AvoidEntityGoal.avoidClass.
+	avoidType entity.ID
+	// avoidTypeSet records whether avoid_type was supplied (an avoid_entity goal REQUIRES it; every
+	// other kind must NOT set it). Distinguishes "avoid_type=<id 0>" from "unset" (entity id 0 is a
+	// real entity), so the builtin can reject a missing/misplaced avoid_type loudly.
+	avoidTypeSet bool
 }
 
 // mobDecl is one captured mob declaration: its name, the resolved base entity type (the EXISTING
@@ -295,6 +305,7 @@ func (r *mobRegistry) goalBuiltin() *starlark.Builtin {
 		var canUseFn, startFn, stopFn, continueFn starlark.Callable
 		var requiresUpdateEveryTick bool
 		var nativeKind string
+		var avoidTypeName string
 		if err := starlark.UnpackArgs(b.Name(), args, kwargs,
 			"priority", &priority,
 			"flags", &flagsList,
@@ -305,6 +316,7 @@ func (r *mobRegistry) goalBuiltin() *starlark.Builtin {
 			"can_continue?", &continueFn,
 			"requires_update_every_tick?", &requiresUpdateEveryTick,
 			"kind?", &nativeKind,
+			"avoid_type?", &avoidTypeName,
 		); err != nil {
 			return nil, err
 		}
@@ -325,10 +337,31 @@ func (r *mobRegistry) goalBuiltin() *starlark.Builtin {
 			if requiresUpdateEveryTick {
 				return nil, fmt.Errorf("goal: kind=%q must NOT set requires_update_every_tick (the Go-native goal owns its own update cadence)", nativeKind)
 			}
+			// avoid_type is the AvoidEntityGoal<T> type parameter (the avoidClass): REQUIRED for
+			// kind="avoid_entity" (the goal has nothing to flee without it) and FORBIDDEN for every other
+			// kind (it would be silently dead). Resolve the type NAME to its data/entity record via the SAME
+			// resolveBaseType table base_type uses, so an unknown type is a LOUD load error (never a mob that
+			// flees nothing). Cite AvoidEntityGoal.<init>(mob, Class<T>, ...).
+			var avoidType entity.ID
+			var avoidTypeSet bool
+			if nativeKind == "avoid_entity" {
+				if avoidTypeName == "" {
+					return nil, fmt.Errorf("goal: kind=%q requires avoid_type=<entity name> (the class to flee, e.g. \"cat\")", nativeKind)
+				}
+				rec, ok := resolveBaseType(avoidTypeName)
+				if !ok {
+					return nil, fmt.Errorf("goal: kind=%q unknown avoid_type %q", nativeKind, avoidTypeName)
+				}
+				avoidType, avoidTypeSet = rec.ID, true
+			} else if avoidTypeName != "" {
+				return nil, fmt.Errorf("goal: kind=%q must NOT set avoid_type (only kind=\"avoid_entity\" uses it)", nativeKind)
+			}
 			return &goalValue{decl: goalDecl{
-				priority:   priority,
-				flags:      flags,
-				nativeKind: nativeKind,
+				priority:     priority,
+				flags:        flags,
+				nativeKind:   nativeKind,
+				avoidType:    avoidType,
+				avoidTypeSet: avoidTypeSet,
 			}}, nil
 		}
 		// tick is OPTIONAL when start/can_use carry the behavior (RandomStrollGoal.tick is empty —
@@ -338,6 +371,11 @@ func (r *mobRegistry) goalBuiltin() *starlark.Builtin {
 		// (A kind-goal is the ONE exception — handled above — its behavior lives in the Go-native goal.)
 		if tickFn == nil && startFn == nil && canUseFn == nil {
 			return nil, fmt.Errorf("goal: at least one of tick/start/can_use is required (or kind= for a Go-native goal)")
+		}
+		// avoid_type is meaningful ONLY for kind="avoid_entity" (handled above). A callback goal that sets
+		// avoid_type is a declaration bug (it would be silently ignored) — reject it loudly.
+		if avoidTypeName != "" {
+			return nil, fmt.Errorf("goal: avoid_type is only valid with kind=\"avoid_entity\"")
 		}
 		return &goalValue{decl: goalDecl{
 			priority:                priority,

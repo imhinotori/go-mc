@@ -10,8 +10,8 @@
 #   goalSelector:
 #     @1 FloatGoal(this)                          <-- .star (the shared passive float)
 #     @2 SwellGoal(this)                          <-- kind="creeper_swell" (arms the fuse; explode in Creeper.tick)
-#     @3 AvoidEntityGoal<Ocelot>(this, 6, 1.0, 1.2) <-- DEFERRED (no Ocelot / AvoidEntityGoal in v1)
-#     @3 AvoidEntityGoal<Cat>(this, 6, 1.0, 1.2)  <-- DEFERRED (no cat-avoid subsystem in v1)
+#     @3 AvoidEntityGoal<Ocelot>(this, 6, 1.0, 1.2) <-- DEFERRED (no "ocelot" base_type in v1)
+#     @3 AvoidEntityGoal<Cat>(this, 6, 1.0, 1.2)  <-- kind="avoid_entity" avoid_type="cat" (flees cats)
 #     @4 MeleeAttackGoal(this, 1.0, false)        <-- kind="melee_attack" (the creeper closes to blow up)
 #     @5 WaterAvoidingRandomStrollGoal(this, 0.8) <-- .star (the shared passive stroll; speed 0.8 cited-deferred)
 #     @6 LookAtPlayerGoal(this, Player, 8.0)      <-- .star (the shared passive look)
@@ -21,8 +21,9 @@
 #     @2 HurtByTargetGoal(this)                   <-- kind="hurt_by_target"
 #
 # DEFERRED (cite-recorded, NEVER silently dropped):
-#   - AvoidEntityGoal<Ocelot/Cat>@3: no Ocelot entity / no AvoidEntityGoal in v1 (the creeper-flees-cats
-#     behavior). The CORE hunt+swell+explode (the phase goal) is fully wired.
+#   - AvoidEntityGoal<Ocelot>@3: no "ocelot" base_type registered in v1 (resolveBaseType). The
+#     AvoidEntityGoal<Cat>@3 leg IS wired (kind="avoid_entity" avoid_type="cat", ai_goals_avoid.go) —
+#     the creeper flees cats; the Ocelot leg lands when an ocelot base_type/plugin exists.
 #   - The primed-fuse sound + the swell client metadata (DATA_SWELL_DIR/POWERED/IGNITED): cite-deferred
 #     client visuals (the creeper still fuses + explodes with REAL entity damage — the gameplay).
 #   - NearestAttackableTargetGoal's mustSee: the cited "visible" stub (no sensing subsystem).
@@ -152,6 +153,10 @@ declare_mob(
         # @2 SwellGoal [MOVE] — kind="creeper_swell" (arms/disarms the fuse; the explosion is in
         # creeperAiStep). Cite Creeper.registerGoals @2 SwellGoal.
         goal(priority = 2, flags = ["MOVE"], kind = "creeper_swell"),
+        # @3 AvoidEntityGoal<Cat>(mob, 6.0f, 1.0, 1.2) [MOVE] — kind="avoid_entity" avoid_type="cat"
+        # (the creeper flees nearby cats; ai_goals_avoid.go). Cite Creeper.registerGoals @3
+        # AvoidEntityGoal<Cat>. (The Ocelot leg is deferred: no "ocelot" base_type in v1.)
+        goal(priority = 3, flags = ["MOVE"], kind = "avoid_entity", avoid_type = "cat"),
         # @4 MeleeAttackGoal(mob, 1.0, false) [MOVE] — kind="melee_attack" (the creeper closes the gap so
         # the SwellGoal can arm within 3 blocks). Cite Creeper.registerGoals @4 MeleeAttackGoal.
         goal(priority = 4, flags = ["MOVE"], kind = "melee_attack"),

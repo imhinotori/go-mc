@@ -49,9 +49,10 @@ var allFourMobs = []struct {
 	// merge_stone@5 (4 goalSelector) + hurt_by@1 + nearest@2 (2 targetSelector); the powder-snow
 	// goal is cite-deferred. The wake-friends + merge-stone infest goals are now wired (kind=).
 	{vanillaSilverfishMobName, entity.Silverfish.ID, 4, 2},
-	// MOB-HOST-06 (Task #9): Creeper — float@1 + swell@2 + melee@4 + stroll@5 + look@6 + around@6
-	// (6 goalSelector) + nearest@1 + hurt_by@2 (2 targetSelector); AvoidEntity Ocelot/Cat cite-deferred.
-	{vanillaCreeperMobName, entity.Creeper.ID, 6, 2},
+	// MOB-HOST-06 (Task #9): Creeper — float@1 + swell@2 + avoid_entity(cat)@3 + melee@4 + stroll@5 +
+	// look@6 + around@6 (7 goalSelector) + nearest@1 + hurt_by@2 (2 targetSelector); the AvoidEntity Cat
+	// leg is wired (kind="avoid_entity" avoid_type="cat", ai_goals_avoid.go), the Ocelot leg cite-deferred.
+	{vanillaCreeperMobName, entity.Creeper.ID, 7, 2},
 	// MOB-HOST-07 (Task #9): Witch — float@1 + witch_ranged@2 + stroll@2 + look@3 + around@3
 	// (5 goalSelector) + hurt_by@1 + nearest@3 (2 targetSelector); raid/heal goals cite-deferred.
 	{vanillaWitchMobName, entity.Witch.ID, 5, 2},

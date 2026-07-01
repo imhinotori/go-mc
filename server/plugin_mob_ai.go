@@ -198,14 +198,14 @@ func buildAIFromDecl(t *TickLoop, decl *mobDecl) *mobAI {
 		// spawn site), so a kind-routed goal stays in lockstep with the .star goals. The pig declares NO
 		// kind-goal, so this branch is NEVER taken for it → zero new draws → the pig oracle is unperturbed.
 		if gd.nativeKind != "" {
-			ng := buildNativeGoal(gd.nativeKind, decl)
+			ng := buildNativeGoal(gd.nativeKind, gd, decl)
 			if ng == nil {
 				// An unknown kind is a LOUD failure (never a silent no-op): a declared hostile with a
 				// typo'd combat-goal kind would otherwise boot with a MISSING combat goal (it would never
 				// hunt/attack). spawnDeclaredMob runs on the tick goroutine; a panic here is isolated by
 				// the tickOnce recover backstop, surfacing the bad declaration loudly rather than shipping
 				// a silently-disarmed hostile. (The .star load already validated the rest of the mob.)
-				panic("buildAIFromDecl: unknown goal kind " + gd.nativeKind + " (valid: nearest_attackable_target, hurt_by_target, melee_attack, spider_attack, leap_at_target, float, sit, follow_owner, owner_hurt_by, owner_hurt, angry_player_target, skeleton_target, enderman_look_for_player, enderman_freeze_when_looked_at, silverfish_merge_stone, silverfish_wake_friends)")
+				panic("buildAIFromDecl: unknown goal kind " + gd.nativeKind + " (valid: nearest_attackable_target, hurt_by_target, melee_attack, spider_attack, leap_at_target, avoid_entity, float, sit, follow_owner, owner_hurt_by, owner_hurt, angry_player_target, skeleton_target, enderman_look_for_player, enderman_freeze_when_looked_at, silverfish_merge_stone, silverfish_wake_friends)")
 			}
 			// The Go goal's OWN flags() must match the declared flags — a declaration that names, e.g.,
 			// kind="melee_attack" but flags=["TARGET"] would route the goal into the WRONG selector AND
@@ -267,8 +267,9 @@ func buildAIFromDecl(t *TickLoop, decl *mobDecl) *mobAI {
 //   - "melee_attack"              → newMeleeAttackGoal(speed)         {MOVE};   the doHurtTarget keystone
 //   - "spider_attack"             → newSpiderAttackGoal(speed)        {MOVE};   melee + the daylight-flee
 //   - "leap_at_target"            → newLeapAtTargetGoal(spiderLeapYd) {JUMP,MOVE}; the leap impulse
+//   - "avoid_entity"              → newAvoidEntityGoal(gd.avoidType,...) {MOVE};   the generic flee (per-goal avoid_type)
 //   - "float"                     → newFloatGoal()                    {JUMP};   the swim-jump
-func buildNativeGoal(kind string, decl *mobDecl) Goal {
+func buildNativeGoal(kind string, gd goalDecl, decl *mobDecl) Goal {
 	switch kind {
 	case "nearest_attackable_target":
 		return newNearestAttackableTargetGoal()
@@ -296,6 +297,14 @@ func buildNativeGoal(kind string, decl *mobDecl) Goal {
 		// Spider.registerGoals @3 LeapAtTargetGoal(this, 0.4) — the ONLY leap user in v1; the 0.4
 		// vertical leap component is the Spider's literal ctor arg (35-JARNOTES.md:226-243).
 		return newLeapAtTargetGoal(spiderLeapYd)
+	case "avoid_entity":
+		// net.minecraft.world.entity.ai.goal.AvoidEntityGoal<T> — the generic flee goal (Creeper avoids
+		// Cat/Ocelot @3, Skeleton flees Wolf, Rabbit/Fox flee threats). The avoided class + maxDist + the
+		// two speed modifiers are the per-goal ctor args (Creeper: AvoidEntityGoal<Cat>(this, 6.0f, 1.0,
+		// 1.2)). The avoided TYPE is per-goal (gd.avoidType), NOT per-mob, so it threads from the goalDecl.
+		// maxDist/speed modifiers use the Creeper's literal args as the v1 default (the ONE consumer wired
+		// so far); a future declaration seam can carry per-goal overrides. Cite Creeper.registerGoals @3.
+		return newAvoidEntityGoal(gd.avoidType, avoidDefaultMaxDist, avoidWalkSpeedModifier, avoidSprintSpeedModifier)
 	case "float":
 		return newFloatGoal()
 	case "sit":
