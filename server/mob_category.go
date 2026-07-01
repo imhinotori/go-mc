@@ -131,6 +131,10 @@ func categoryOf(t entity.ID) mobCategory {
 		// MushroomCow extends AbstractCow which is CREATURE; data/entity Mooshroom.Type == "creature").
 		// Same CREATURE-budget accounting as the cow.
 		return categoryCreature
+	case entity.Silverfish.ID:
+		// MOB-HOST-05 (Task #9): Silverfish is MobCategory.MONSTER (vanilla EntityType.SILVERFISH;
+		// data/entity Silverfish.Type == "monster"). Same MONSTER-budget accounting as the zombie.
+		return categoryMonster
 	default:
 		return categoryMisc
 	}

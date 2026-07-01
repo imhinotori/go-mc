@@ -29,7 +29,7 @@ import (
 // embedded manifest governs, T-24-07). Keep each repo-root/embed pair byte-identical. Embedding the
 // dirs covers plugin.toml + main.star for each mob.
 //
-//go:embed assets/vanilla_pig assets/vanilla_cow assets/vanilla_sheep assets/vanilla_chicken assets/vanilla_zombie assets/vanilla_skeleton assets/vanilla_spider assets/vanilla_wolf assets/vanilla_husk assets/vanilla_mooshroom
+//go:embed assets/vanilla_pig assets/vanilla_cow assets/vanilla_sheep assets/vanilla_chicken assets/vanilla_zombie assets/vanilla_skeleton assets/vanilla_spider assets/vanilla_wolf assets/vanilla_husk assets/vanilla_mooshroom assets/vanilla_silverfish
 var vanillaMobFS embed.FS
 
 // The declared mob names the swap sites look up. Each is the directory name under assets/ AND the
@@ -67,6 +67,10 @@ const (
 	// zombie/cow declarations with base_type husk/mooshroom. Additive to the embed + load order below.
 	vanillaHuskMobName      = "vanilla_husk"
 	vanillaMooshroomMobName = "vanilla_mooshroom"
+
+	// MOB-HOST-05 (Task #9): the Silverfish — a MONSTER whose CORE hunt+melee ports on the existing
+	// float + Go-native combat seams (the stone-infest goals are cite-deferred). Additive.
+	vanillaSilverfishMobName = "vanilla_silverfish"
 )
 
 // vanillaMobNames is the load order: ALL EIGHT bundled mobs (the 4 passives + the 3 Phase-35 hostiles +
@@ -87,6 +91,7 @@ var vanillaMobNames = []string{
 	vanillaWolfMobName,
 	vanillaHuskMobName,
 	vanillaMooshroomMobName,
+	vanillaSilverfishMobName,
 }
 
 // loadVanillaMobRegistry materializes EACH bundled vanilla mob plugin to a temp dir, parses its
