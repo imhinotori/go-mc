@@ -229,6 +229,10 @@ func buildCommandGraph() *command.Graph {
 	dbg := g.Literal("dbg").AppendArgument(dbgArgs).Unhandle()
 	g.AppendLiteral(dbg)
 
+	// The vanilla 26.2 command set (commands_vanilla.go): /gamemode /op /deop /kill /list /seed
+	// /help /msg — each permission-gated on its minecraft.command.<name> node.
+	registerVanillaCommands(g)
+
 	return g
 }
 
@@ -295,7 +299,7 @@ func (t *TickLoop) runCommand(p *tickPlayer, cmd string) {
 	// v1 permission policy: every player is an operator for the harmless literals. The
 	// resolver is the hook a future privileged command gates on.
 	ctx := withPermissionResolver(context.Background(), func(node string) bool {
-		return playerHasPermission(p, node)
+		return t.playerHasPermission(p, node)
 	})
 	// Carry the issuer + loop so an issuer-acting command (/tp) can move this player.
 	ctx = withExecutor(ctx, t, p)
@@ -312,14 +316,27 @@ func (t *TickLoop) runCommand(p *tickPlayer, cmd string) {
 	}
 }
 
-// playerHasPermission is the v1 permission policy: all players are operators for the
-// harmless /say,/me literals (an all-players-operator model). It is the SINGLE place a
-// future privileged-command policy is implemented — a real operator check (ops list, perm
-// node table) replaces the body here and every permissionGated handler is gated by it
-// automatically (ASVS V4 / T-7-02). Runs on the tick goroutine.
-func playerHasPermission(p *tickPlayer, node string) bool {
-	return true
+// playerHasPermission is the command-authorization gate every permissionGated handler consults
+// (ASVS V4 / T-7-02). It resolves the node against the LuckPerms-style permission store
+// (permissions.go) keyed by the player's UUID. When no store is wired (t.perms == nil — tests, or
+// a server booted without SetPermStore) it falls back to the legacy all-players-operator policy so
+// existing behavior is preserved. Runs on the tick goroutine (HasPermission is read-locked).
+func (t *TickLoop) playerHasPermission(p *tickPlayer, node string) bool {
+	if t.perms == nil {
+		return true // legacy all-operator fallback (no store configured)
+	}
+	if p == nil {
+		return false // no player identity → fail closed
+	}
+	return t.perms.HasPermission(p.uuid, node)
 }
+
+// SetPermStore wires the permission store (loaded from world/permissions.json at boot). Set-once at
+// setup before Run; nil keeps the all-operator fallback.
+func (t *TickLoop) SetPermStore(s *permStore) { t.perms = s }
+
+// SetWorldSeed records the overworld seed for /seed. Set-once at boot.
+func (t *TickLoop) SetWorldSeed(seed int64) { t.worldSeed = seed }
 
 // EnqueueConsoleCommand hands an operator-console line to the tick via the bounded consoleCmd
 // channel (mirrors the register/unregister discipline — TICK-05). It is called FROM THE TUI

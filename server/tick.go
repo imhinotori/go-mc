@@ -129,6 +129,15 @@ type TickLoop struct {
 
 	gametime int64 // pure tick counter: ++ exactly once per consumed 50ms step (TICK-02)
 
+	// worldSeed is the overworld seed (WORLD-04), for /seed. Set at boot via SetWorldSeed; 0 if unset.
+	worldSeed int64
+
+	// perms is the LuckPerms-style permission store (permissions.go) the command gate consults
+	// (t.playerHasPermission). nil = the legacy all-players-operator fallback (tests + a server
+	// booted without SetPermStore), so existing behavior is preserved until a store is wired.
+	// Read on the tick goroutine (HasPermission); mutated on-tick (op/deop) + saved off-tick.
+	perms *permStore
+
 	// MSPT ring buffer (TICK-06). Written only by the tick goroutine inside recordMSPT.
 	ring   [msptRingSize]time.Duration
 	ringN  int // total ticks recorded (so we know how much of the ring is valid)

@@ -331,6 +331,22 @@ func main() {
 			}
 		}
 	}
+	// Permission system (LuckPerms-style, server/permissions.go): load world/permissions.json (or
+	// seed the baseline default+admin groups on first boot) and wire it as the command-authorization
+	// gate. Without this the server keeps the legacy all-players-operator fallback. Loaded before
+	// tick.Run; a parse error is fatal (never silently reset a server's op list).
+	permPath := filepath.Join(worldDir, "permissions.json")
+	permStore, err := server.LoadPermStore(permPath)
+	if err != nil {
+		log.Fatalf("permissions: load %s failed: %v", permPath, err)
+	}
+	tick.SetPermStore(permStore)
+	tick.SetWorldSeed(*seed)
+	if err := permStore.Save(); err != nil { // write the baseline on first boot
+		log.Printf("permissions: initial save failed: %v", err)
+	}
+	log.Printf("permissions: loaded %s (default group %q)", permPath, permStore.DefaultGroup)
+
 	tick.SetPlugins(pluginMgr)
 	// PLUGIN-07 (Plan 28-02): install the chat() output sink so a plugin event hook's chat(msg)
 	// reaction fans to every player as a ClientboundSystemChat (broadcastSystemChat). The sink

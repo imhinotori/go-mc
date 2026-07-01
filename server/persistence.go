@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/imhinotori/sulfur/data/item"
 	"github.com/imhinotori/sulfur/level"
@@ -227,10 +228,26 @@ func loadPlayer(dir string, id uuid.UUID) (save.PlayerData, bool) {
 // cancelled. main() runs it in its own goroutine; if no save sink was wired (leaveSnapshots nil)
 // it simply blocks on ctx.Done with nothing to drain.
 func (t *TickLoop) RunSaveLoop(ctx context.Context, worldDir string) {
+	// Periodic permission-store flush: op/deop mutations mark the store dirty on the tick goroutine;
+	// Save() is a cheap no-op when clean, so a coarse ticker persists changes without per-mutation IO.
+	// A final flush runs on ctx cancel so a shutdown right after /op is not lost.
+	permTick := time.NewTicker(30 * time.Second)
+	defer permTick.Stop()
 	for {
 		select {
 		case <-ctx.Done():
+			if t.perms != nil {
+				if err := t.perms.Save(); err != nil {
+					log.Printf("save permissions (shutdown): %v", err)
+				}
+			}
 			return
+		case <-permTick.C:
+			if t.perms != nil {
+				if err := t.perms.Save(); err != nil {
+					log.Printf("save permissions: %v", err)
+				}
+			}
 		case snap := <-t.leaveSnapshots:
 			if err := savePlayer(worldDir, snap.uuid, snap.data); err != nil {
 				log.Printf("save player %s: %v", snap.uuid, err)
