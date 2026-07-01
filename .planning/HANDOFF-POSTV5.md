@@ -4,7 +4,25 @@
 
 ---
 
-## 🔴 SESSION 2 (2026-06-30/07-01) — MOB MOVEMENT PORT + 2 more real bugs. UNCOMMITTED (WIP).
+## 🟢 SESSION 3 (2026-07-01) — commands, permissions, fire/daylight, worldgen perf. ALL COMMITTED.
+Branch `ender-776`, NOT pushed. Commits (HEAD-first): 9ffffa6c (fire+daylight) · 33d3b2c3 (worldgen perf) · 676c745c (commands+perms) · b4ed088d (mob movement, Session 2) · a194b7ec (cache markers).
+
+DONE (each committed, suite green, pig oracle byte-identical, vet clean):
+- **Vanilla commands + permissions** (676c745c): LuckPerms-style perm store (server/permissions.go — uuid users + groups + parent inheritance + "*"/"prefix.*" wildcards + "-" negation + default group, JSON at world/permissions.json, saved by RunSaveLoop). Wired into t.playerHasPermission (the single gate; nil store = legacy all-op fallback for tests). Vanilla commands (server/commands_vanilla.go) on the existing brigadier graph: /gamemode /op /deop /kill /list /seed /help /msg, each permissionGated on minecraft.command.<name>. +setPlayerGameMode/playerByName/adventure+spectator GameTypes/TickLoop.worldSeed.
+- **Fire + daylight burn** (9ffffa6c): Entity.remainingFireTicks + tickEntityFire (in tickAI: countdown, 1 on_fire dmg/20t, water-extinguish, on-fire shared-flag broadcast bit 0x01) + sunBurnTick (Mob.isSunBurnTick — zombie/skeleton ignite 8s in day+open-sky). CITED STUBS: br==1.0 + canSeeSky=y>=spawnSurfaceY (superflat, no light engine). Pig oracle safe (fire no-op when not burning; sunBurn gated by isSunSensitive so no RNG on pig).
+- **Worldgen perf** (33d3b2c3): climate FlatCache (FillBiomes 2.79s→0.63s, -77%) + feature-config pre-parse. 0.96s→0.81s/chunk, byte-identical.
+
+STILL PENDING (next session — big, self-contained, NOT started):
+- **Projectiles + skeleton bow** (task 8): Arrow entity (velocity/gravity/collision physics) + RangedAttackGoal; wire skeleton to shoot instead of melee. Needs a projectile subsystem (none exists). javap AbstractArrow/BowRangedAttackGoal.
+- **More vanilla mobs** (task 9): add via the .star plugin pattern (creeper/enderman/slime/witch hostile; horse/rabbit/fox/cat passive). Pattern mapped in the entity explorer report: .star plugin + loadVanillaMobRegistry line + mob_category.go categoryOf + attribute supplier.
+- **Zombie movement FEEL** — explicitly deferred by the user ("veremos más a detalle después"). The travel-physics port (Session 2, b4ed088d) passes all 5 live bot tests; residual momentum-overshoot on abrupt direction changes is faithful to vanilla but wants a human eyeball.
+- **Worldgen perf remaining**: still 0.81s/chunk — the stronghold biome spiral (sync.Once, ~9.5s one-time) + the base Perlin. Diminishing returns; profile before more.
+
+ENTITY ROSTER: 8 of 158 registry types have behavior (pig/cow/sheep/chicken/wolf passive; zombie/skeleton/spider hostile). Item + player + XP-orb(partial) non-mob. Missing subsystems that block whole entity classes: projectiles, riding/vehicles, falling-block, explosion, boss AI, display entities.
+
+---
+
+## 🔴 SESSION 2 (2026-06-30/07-01) — MOB MOVEMENT PORT + 2 more real bugs. NOW COMMITTED (b4ed088d).
 
 **All UNCOMMITTED — 11 server files + 5 new botlive test files modified. Suite green (1 known flake), pig oracle byte-identical, vet clean, CGO_ENABLED=0 build clean. NOT pushed. User wants to review the zombie movement more before commit.**
 
