@@ -29,7 +29,7 @@ import (
 // embedded manifest governs, T-24-07). Keep each repo-root/embed pair byte-identical. Embedding the
 // dirs covers plugin.toml + main.star for each mob.
 //
-//go:embed assets/vanilla_pig assets/vanilla_cow assets/vanilla_sheep assets/vanilla_chicken assets/vanilla_zombie assets/vanilla_skeleton assets/vanilla_spider assets/vanilla_wolf assets/vanilla_husk assets/vanilla_mooshroom assets/vanilla_silverfish assets/vanilla_creeper
+//go:embed assets/vanilla_pig assets/vanilla_cow assets/vanilla_sheep assets/vanilla_chicken assets/vanilla_zombie assets/vanilla_skeleton assets/vanilla_spider assets/vanilla_wolf assets/vanilla_husk assets/vanilla_mooshroom assets/vanilla_silverfish assets/vanilla_creeper assets/vanilla_witch
 var vanillaMobFS embed.FS
 
 // The declared mob names the swap sites look up. Each is the directory name under assets/ AND the
@@ -75,6 +75,10 @@ const (
 	// MOB-HOST-06 (Task #9): the Creeper — hunt + SwellGoal fuse + ServerExplosion (entity damage +
 	// knockback; block destruction cite-deferred). Additive.
 	vanillaCreeperMobName = "vanilla_creeper"
+
+	// MOB-HOST-07 (Task #9): the Witch — hunt + RangedAttackGoal throwing splash potions (the mob-effect
+	// subsystem). Additive.
+	vanillaWitchMobName = "vanilla_witch"
 )
 
 // vanillaMobNames is the load order: ALL EIGHT bundled mobs (the 4 passives + the 3 Phase-35 hostiles +
@@ -97,6 +101,7 @@ var vanillaMobNames = []string{
 	vanillaMooshroomMobName,
 	vanillaSilverfishMobName,
 	vanillaCreeperMobName,
+	vanillaWitchMobName,
 }
 
 // loadVanillaMobRegistry materializes EACH bundled vanilla mob plugin to a temp dir, parses its

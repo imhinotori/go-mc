@@ -60,6 +60,12 @@ var (
 	// damageTypeExplosion is minecraft:explosion — the source a MOB explosion (a creeper) deals via
 	// ServerExplosion (Explosion.getDefaultDamageSource: type EXPLOSION, causingEntity = the source mob).
 	damageTypeExplosion = damageTypeID(tag.DamageTypeIDs["minecraft:explosion"])
+	// damageTypeMagic is minecraft:magic — the source instant-damage/poison effects deal
+	// (damageSources().magic()). A bypasses_armor member (magic ignores the armor curve).
+	damageTypeMagic = damageTypeID(tag.DamageTypeIDs["minecraft:magic"])
+	// damageTypeIndirectMagic is minecraft:indirect_magic — the source a thrown-potion splash deals with a
+	// thrower (damageSources().indirectMagic(potion, owner)). Also a bypasses_armor member.
+	damageTypeIndirectMagic = damageTypeID(tag.DamageTypeIDs["minecraft:indirect_magic"])
 )
 
 // damageSourceOf builds a DamageSource for an environmental/anonymous source: the given damage-type
@@ -111,4 +117,16 @@ func damageSourceMobAttack(attackerID int32) damageSource {
 // in vanilla; here 0 = anonymous). Cite AbstractArrow.onHitEntity: damageSources().arrow(this, owner).
 func damageSourceArrow(attackerID int32) damageSource {
 	return damageSource{typeTag: damageTypeArrow, attacker: attackerID}
+}
+
+// damageSourceMagic builds the DamageSource for a direct magic effect (instant_damage / poison self-tick):
+// type magic, no attacker (DamageSources.magic() — causingEntity null). A bypasses_armor source.
+func damageSourceMagic() damageSource {
+	return damageSource{typeTag: damageTypeMagic, attacker: 0}
+}
+
+// damageSourceIndirectMagic builds the DamageSource for a thrown-potion splash harm attributed to the
+// thrower (owner): type indirect_magic, causingEntity = owner. The port of DamageSources.indirectMagic.
+func damageSourceIndirectMagic(ownerID int32) damageSource {
+	return damageSource{typeTag: damageTypeIndirectMagic, attacker: ownerID}
 }

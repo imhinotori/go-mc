@@ -1,5 +1,7 @@
 package server
 
+import "github.com/imhinotori/sulfur/level/attribute"
+
 // attributes.go — the minimal, FAITHFUL per-player attribute holder the 1:1 melee-combat port
 // reads from (instead of hardcoding numbers). It is a literal port of the relevant slice of the
 // vanilla attribute system: each attribute has a registered BASE value (from
@@ -90,6 +92,36 @@ type attributeHolder struct {
 	// base is attribute -> base value. Seeded lazily from playerAttributeBase on first access so
 	// no registration code path is touched (the holder self-initializes on the tick goroutine).
 	base map[attributeKey]float64
+
+	// modifiers is attribute -> (modifierID -> modifier). The effect subsystem (mob_effect.go) attaches
+	// a modifier here when a modifier-bearing effect starts (slowness → MOVEMENT_SPEED, weakness →
+	// ATTACK_DAMAGE) and removes it on expiry. getAttributeValue folds them via calculateValue (the
+	// vanilla AttributeInstance.calculateValue order: ADD_VALUE, then ADD_MULTIPLIED_BASE, then
+	// ADD_MULTIPLIED_TOTAL). Nil until the first modifier attaches (a modifier-free player stays base-only).
+	modifiers map[attributeKey]map[string]attribute.AttributeModifier
+}
+
+// addModifier attaches (or replaces by id) an effect attribute modifier to the given attribute.
+func (h *attributeHolder) addModifier(attr attributeKey, m attribute.AttributeModifier) {
+	if h.modifiers == nil {
+		h.modifiers = make(map[attributeKey]map[string]attribute.AttributeModifier)
+	}
+	bucket := h.modifiers[attr]
+	if bucket == nil {
+		bucket = make(map[string]attribute.AttributeModifier)
+		h.modifiers[attr] = bucket
+	}
+	bucket[m.ID] = m
+}
+
+// removeModifier detaches the modifier with this id from the attribute (a no-op if absent).
+func (h *attributeHolder) removeModifier(attr attributeKey, id string) {
+	if h.modifiers == nil {
+		return
+	}
+	if bucket := h.modifiers[attr]; bucket != nil {
+		delete(bucket, id)
+	}
 }
 
 // newAttributeHolder builds a holder seeded with the vanilla player default base values
@@ -123,7 +155,31 @@ func (h *attributeHolder) getAttributeValue(attr attributeKey) float64 {
 		}
 		return 0.0
 	}
-	return h.base[attr]
+	base := h.base[attr]
+	// Fold any effect modifiers via the vanilla AttributeInstance.calculateValue order: ADD_VALUE first
+	// (summed into base), then ADD_MULTIPLIED_BASE (of the pre-multiply base), then ADD_MULTIPLIED_TOTAL
+	// (compounded on the running result). A modifier-free attribute returns base unchanged.
+	bucket := h.modifiers[attr]
+	if len(bucket) == 0 {
+		return base
+	}
+	for _, m := range bucket {
+		if m.Operation == attribute.AddValue {
+			base += m.Amount
+		}
+	}
+	result := base
+	for _, m := range bucket {
+		if m.Operation == attribute.AddMultipliedBase {
+			result += base * m.Amount
+		}
+	}
+	for _, m := range bucket {
+		if m.Operation == attribute.AddMultipliedTotal {
+			result *= 1.0 + m.Amount
+		}
+	}
+	return result
 }
 
 // playerAttributes returns the tickPlayer's attribute holder, lazily seeding it with the vanilla

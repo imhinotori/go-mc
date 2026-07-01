@@ -286,6 +286,10 @@ func buildNativeGoal(kind string, decl *mobDecl) Goal {
 		// target distance; the fuse advance + explosion live in creeperAiStep (ai_goals_creeper.go). Cite
 		// Creeper.registerGoals @2 SwellGoal.
 		return newSwellGoal()
+	case "witch_ranged_attack":
+		// MOB-HOST-07 (Task #9): the Witch's RangedAttackGoal(this, 1.0, 60, 10.0) — the generic ranged
+		// goal that throws splash potions (ai_goals_witch.go). Cite Witch.registerGoals @2 RangedAttackGoal.
+		return newWitchRangedAttackGoal()
 	case "spider_attack":
 		return newSpiderAttackGoal(declaredWalkSpeed(decl))
 	case "leap_at_target":

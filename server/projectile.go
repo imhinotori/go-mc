@@ -210,6 +210,135 @@ func (t *TickLoop) arrowOnHitPlayer(e *Entity, victim *tickPlayer) {
 	t.cur().entities.remove(e.id)
 }
 
+// --- THROWN SPLASH POTION (net.minecraft.world.entity.projectile.ThrownSplashPotion) ------------------
+
+const potionSplashGravity = 0.05 // AbstractThrownPotion.getDefaultGravity()
+const potionSplashDrag = 0.99    // ThrowableItemProjectile air drag (inherited)
+
+// spawnSplashPotion creates a ThrownSplashPotion carrying the given effects, launched with the given
+// velocity + owner, and adds it to the owner region's store. Cite Witch.performRangedAttack +
+// Projectile.spawnProjectileUsingShoot(ThrownSplashPotion::new, ...).
+func (t *TickLoop) spawnSplashPotion(ownerID int32, x, y, z, vx, vy, vz float64, effects []splashEffect) *Entity {
+	p := NewEntity(t.idAlloc.AllocID(), entity.SplashPotion, x, y, z)
+	p.isPotion = true
+	p.arrowShooterID = ownerID // reuse the projectile owner field
+	p.potionEffects = effects
+	p.vx, p.vy, p.vz = vx, vy, vz
+
+	horiz := math.Sqrt(vx*vx + vz*vz)
+	p.yaw = float32(math.Atan2(vx, vz) * 180.0 / math.Pi)
+	p.pitch = float32(math.Atan2(vy, horiz) * 180.0 / math.Pi)
+	p.headYaw = p.yaw
+
+	owner := t.regionForEntity(p)
+	if owner == nil {
+		owner = t.cur()
+	}
+	owner.entities.add(p)
+	return p
+}
+
+// tickPotions drives every thrown potion, the sibling of tickArrows. A potion arcs (gravity 0.05, drag
+// 0.99) and SPLASHES on the first block or entity hit — applying its effects to nearby players — then is
+// discarded. Cite AbstractThrownPotion.tick/onHit + ThrownSplashPotion.onHitAsPotion.
+func (t *TickLoop) tickPotions() {
+	for _, r := range t.regions {
+		if r.entities == nil {
+			continue
+		}
+		snapshot := make([]*Entity, 0, len(r.entities.byID))
+		for _, e := range r.entities.byID {
+			if e.isPotion {
+				snapshot = append(snapshot, e)
+			}
+		}
+		t.withRegion(r, func() {
+			for _, e := range snapshot {
+				t.tickPotion(e)
+			}
+		})
+	}
+}
+
+// tickPotion advances one thrown potion: move along its arc, and if the flight segment hits a block or a
+// player, SPLASH at the impact point (apply effects to nearby players) and discard. Else apply drag +
+// gravity and continue. Cite AbstractThrownPotion.tick + onHit.
+func (t *TickLoop) tickPotion(e *Entity) {
+	ox, oy, oz := e.x, e.y, e.z
+	nx, ny, nz := ox+e.vx, oy+e.vy, oz+e.vz
+
+	// Block clip (the same anti-tunnel segment sampler the arrow uses). A block hit splashes at the hit.
+	hx, hy, hz, blockHit := t.arrowClipSegment(ox, oy, oz, nx, ny, nz)
+	endX, endY, endZ := nx, ny, nz
+	if blockHit {
+		endX, endY, endZ = hx, hy, hz
+	}
+
+	// Entity hit: the first player the segment passes through (excluding the thrower). A hit splashes there.
+	if victim := t.arrowFindHitPlayer(e, ox, oy, oz, endX, endY, endZ); victim != nil {
+		t.cur().entities.move(e, victim.x, victim.y, victim.z)
+		t.splashPotion(e)
+		return
+	}
+	if blockHit {
+		t.cur().entities.move(e, endX, endY, endZ)
+		t.splashPotion(e)
+		return
+	}
+
+	// No hit: advance, then drag + gravity (AbstractThrownPotion arc).
+	t.cur().entities.move(e, nx, ny, nz)
+	horiz := math.Sqrt(e.vx*e.vx + e.vz*e.vz)
+	if e.vx != 0 || e.vz != 0 {
+		e.yaw = float32(math.Atan2(e.vx, e.vz) * 180.0 / math.Pi)
+		e.headYaw = e.yaw
+	}
+	e.pitch = float32(math.Atan2(e.vy, horiz) * 180.0 / math.Pi)
+	e.vx *= potionSplashDrag
+	e.vy *= potionSplashDrag
+	e.vz *= potionSplashDrag
+	e.vy -= potionSplashGravity
+
+	// Safety despawn (a potion that somehow never lands): reuse the arrow lifetime cap.
+	e.arrowLife++
+	if e.arrowLife >= arrowDespawnTicks {
+		t.cur().entities.remove(e.id)
+	}
+}
+
+// splashPotion is the port of ThrownSplashPotion.onHitAsPotion: apply each carried effect to every player
+// within the inflated (4,2,4) AABB, scaled by proximity (scale = 1 - sqrt(distSqr)/4, cutoff distSqr<16).
+// Instant effects apply their scaled amount; duration effects add with duration = (int)(scale*d+0.5),
+// dropped if <=20. Then discard the potion. Cite ThrownSplashPotion.onHitAsPotion.
+func (t *TickLoop) splashPotion(e *Entity) {
+	for _, p := range t.players {
+		if p == nil || p.dead {
+			continue
+		}
+		// distanceToSqr from the potion point to the player's box center-ish (feet + half-height).
+		dx := p.x - e.x
+		dy := (p.y + playerHeight/2) - e.y
+		dz := p.z - e.z
+		distSqr := dx*dx + dy*dy + dz*dz
+		if distSqr >= 16.0 { // SPLASH_RANGE_SQ
+			continue
+		}
+		scale := splashPotionScale(distSqr)
+		for _, ef := range e.potionEffects {
+			if isInstantEffect(ef.id) {
+				t.addPlayerEffect(p, e.arrowShooterID, ef.id, ef.duration, ef.amplifier, scale)
+				continue
+			}
+			dur := int(scale*float64(ef.duration) + 0.5)
+			if dur <= 20 { // endsWithin(20) → dropped
+				continue
+			}
+			t.addPlayerEffect(p, e.arrowShooterID, ef.id, dur, ef.amplifier, scale)
+		}
+	}
+	t.cur().entities.remove(e.id)
+}
+
 // segmentAABB reports whether the segment (o→n) intersects the axis-aligned box and, if so, the entry
 // parameter t in [0,1] along the segment (the slab method). Used to pick the FIRST entity the arrow's
 // flight passes through this tick.

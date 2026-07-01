@@ -168,6 +168,20 @@ type Entity struct {
 	// ownerId+1 (the client owner link for crit visuals); 0 for a plain mob. Set at spawn.
 	spawnData int32
 
+	// --- THROWN SPLASH POTION (net.minecraft.world.entity.projectile.ThrownSplashPotion) --------------
+	//
+	// A thrown potion is a NON-mob projectile (isPotion) that arcs (gravity 0.05, drag 0.99) and SPLASHES
+	// on the first block/entity hit — applying its effects to LivingEntities in the inflated AABB. Zero for
+	// every non-potion entity (the potion tick gates on isPotion).
+
+	// isPotion marks this entity as a ThrownSplashPotion. The potion tick (arc + splash-on-hit) runs ONLY
+	// for entities with this set. Set at spawn by spawnSplashPotion.
+	isPotion bool
+
+	// potionEffects is the splash payload — the effects the potion applies on impact (the PotionContents
+	// getAllEffects). Plain values (no pointers); scaled by proximity at splash time.
+	potionEffects []splashEffect
+
 	// --- CREEPER SWELL (net.minecraft.world.entity.monster.Creeper) --------------------------------
 	//
 	// Tick-owned plain values, set/read ONLY for a Creeper. swellDir is the SwellGoal output

@@ -690,6 +690,11 @@ type tickPlayer struct {
 	// change. nil until first read; self-initializing on the tick goroutine.
 	attributes *attributeHolder
 
+	// activeEffects is the per-player mob-effect map (mob_effect.go) — the Go stand-in for
+	// LivingEntity.activeEffects (effectId -> the active MobEffectInstance). Populated by addEffect (a
+	// thrown-potion splash) and ticked down by tickPlayerEffects. nil until the first effect applies.
+	activeEffects map[string]*activeEffect
+
 	// invulnerableTime is net.minecraft.world.entity.Entity.invulnerableTime: the post-hit damage
 	// grace window in ticks. Set to 20 on a fresh hit (hurtServer), and decremented by 1 each tick
 	// while > 0 (ServerPlayer.tick — the player path, not the LivingEntity.tick path which skips

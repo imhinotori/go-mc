@@ -119,6 +119,27 @@ func (i *AttributeInstance) AddPermanentModifier(m AttributeModifier) {
 // a modifier that is NOT persisted (item/effect modifiers in vanilla). Delegates to addModifier.
 func (i *AttributeInstance) AddTransientModifier(m AttributeModifier) { i.addModifier(m) }
 
+// RemoveModifier is the port of AttributeInstance.removeModifier(Identifier): detach the modifier with
+// this id from both modifierById and its per-operation bucket (a no-op if absent). Used when a mob
+// effect that applied an attribute modifier (slowness → MOVEMENT_SPEED, weakness → ATTACK_DAMAGE)
+// expires or is removed (MobEffect.removeAttributeModifiers). Cite AttributeInstance.removeModifier.
+func (i *AttributeInstance) RemoveModifier(id string) {
+	m, ok := i.modifierByID[id]
+	if !ok {
+		return
+	}
+	delete(i.modifierByID, id)
+	if bucket := i.modifiersByOperation[m.Operation]; bucket != nil {
+		delete(bucket, id)
+	}
+	for idx, pid := range i.permanent {
+		if pid == id {
+			i.permanent = append(i.permanent[:idx], i.permanent[idx+1:]...)
+			break
+		}
+	}
+}
+
 // putModifier files a modifier into modifierById + the per-operation bucket (the shared tail of
 // addModifier/addOrUpdateTransientModifier/addPermanentModifier).
 func (i *AttributeInstance) putModifier(m AttributeModifier) {

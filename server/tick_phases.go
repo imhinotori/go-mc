@@ -196,6 +196,16 @@ func (t *TickLoop) tickEntities() {
 	// (TestTickPhaseOrder stays green), mirroring the tickFallDamage seam above.
 	t.tickBreath()
 
+	// MOB-EFFECT-01 (Task #9): the per-player mob-effect tick (LivingEntity.tickEffects — poison damage,
+	// duration countdown, modifier expiry). ADDITIVE, sibling of tickBreath. Placed AFTER tickBreath so a
+	// poison tick this frame lands on the post-drown health, mirroring the food step's ordering rationale.
+	for _, p := range t.players {
+		if p == nil || p.dead {
+			continue
+		}
+		t.tickPlayerEffects(p)
+	}
+
 	// Plan 17-19 food/hunger: the FoodData.tick port (exhaustion drains saturation then food, health
 	// regenerates from saturation while fed, starvation damage at food 0) plus the movement-exhaustion
 	// ladder (ServerPlayer.checkMovementStatistics). Its body lives in food.go; a single ADDITIVE call
@@ -236,6 +246,11 @@ func (t *TickLoop) tickEntities() {
 	// projectile.go. Placed AFTER tickOrbs and BEFORE tracker.Tick so a hit/despawn removal is reflected
 	// in this tick's near() and the tracker emits RemoveEntities promptly.
 	t.tickArrows()
+
+	// MOB-EFFECT-01 (Task #9): the thrown-splash-potion arc + splash (AbstractThrownPotion.tick →
+	// onHitAsPotion). Sibling of tickArrows; a potion that hits a block/player applies its effects to
+	// nearby players. ADDITIVE + potion-gated (zero cost when no potion is in flight).
+	t.tickPotions()
 
 	// Plan 17-21 block-break dig-time: the ServerPlayerGameMode.tick() port — advance any pending
 	// delayed-destroy (finish the break at progress>=1.0) and refresh the in-progress crack overlay
