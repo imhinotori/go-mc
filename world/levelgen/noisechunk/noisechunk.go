@@ -149,13 +149,28 @@ func NewNoiseChunkWithBeard(r *router.Router, pos level.ChunkPos, beard func(wx,
 func (nc *NoiseChunk) wrapFinalDensity(finalDensity density.Function) {
 	nc.fillState = &fillState{}
 	nc.wrappedFinalDensity = density.MapAll(finalDensity, func(fn density.Function) density.Function {
-		if m, ok := fn.(density.Marked); ok && m.Kind() == density.MarkerInterpolated {
+		m, ok := fn.(density.Marked)
+		if !ok {
+			return fn
+		}
+		// NoiseChunk.wrapNew: replace each cache/interp marker with its memoizing wrapper. Was: only
+		// Interpolated was replaced; flat_cache/cache_2d/cache_once fell through as pass-throughs, so their
+		// Perlin sub-trees re-evaluated per-block (the 1.2s/chunk hotspot). Now all four are wrapped 1:1.
+		switch m.Kind() {
+		case density.MarkerInterpolated:
 			ip := newInterpolatedFn(m.Wrapped(), nc.fillState,
 				nc.cellCountXZ, nc.cellCountY, nc.cellWidth, nc.cellHeight, nc.cellNoiseMinY)
 			nc.interps = append(nc.interps, ip)
 			return ip
+		case density.MarkerFlatCache:
+			return newFlatCache(m.Wrapped(), nc.cellCountXZ, nc.firstNoiseX, nc.firstNoiseZ)
+		case density.MarkerCache2D:
+			return &cache2D{fn: m.Wrapped(), state: nc.fillState}
+		case density.MarkerCacheOnce:
+			return &cacheOnce{fn: m.Wrapped(), state: nc.fillState}
+		default:
+			return fn
 		}
-		return fn
 	})
 }
 
@@ -233,7 +248,9 @@ func (nc *NoiseChunk) fill() {
 							worldZ := nc.WorldZ(localZ)
 							// filling=true: interpolated nodes return their trilerped value,
 							// every other op computes per-block at the exact block coords.
+							// Bump interpCounter so a cacheOnce wrapper memoizes for THIS block visit only.
 							nc.fillState.filling = true
+							nc.fillState.interpCounter++
 							v := nc.wrappedFinalDensity.Compute(density.Context{X: worldX, Y: worldY, Z: worldZ})
 							nc.fillState.filling = false
 							// STRUCT-POLISH-03: add the structure Beardifier contribution to

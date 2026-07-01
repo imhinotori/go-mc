@@ -83,6 +83,10 @@ type interpolatedFn struct {
 // rewritten final_density.
 type fillState struct {
 	filling bool
+	// interpCounter is bumped once per per-block visit in fill() so a cacheOnce wrapper can memoize the
+	// wrapped value for the duration of a single block's final_density evaluation (NoiseChunk's
+	// interpolationCounter). Monotonic; wraparound is irrelevant (equality within one visit only).
+	interpCounter uint64
 }
 
 // Compute ports NoiseInterpolator.compute: trilerped value() inside the loop, direct
