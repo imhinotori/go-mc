@@ -69,11 +69,20 @@ func (t *TickLoop) happyGhastAiStep(e *Entity) {
 		return
 	}
 	// RandomFloatAroundGoal: re-roll the fly-to target when there is none, or the current one is reached
-	// (<1-sq) or drifted too far (>3600-sq). This is the goal's canUse; when true it runs start().
+	// (<1-sq) or drifted too far (>3600-sq). This is the goal's canUse; when true it runs start(). This
+	// runs for EVERY happy ghast (registerGoals adds RandomFloatAroundGoal@5 un-gated on age — VERIFIED
+	// CFR HappyGhast.registerGoals) — it is the goalSelector slot of Mob.serverAiStep.
 	if t.ghastRandomFloatAroundCanUse(e) {
 		t.ghastRandomFloatAroundStart(e)
 	}
-	// GhastMoveControl.tick: accelerate deltaMovement toward the wanted point on the floatDuration cadence.
+	// customServerAiStep: for the BABY, the Brain runs HERE — AFTER the goalSelector set the classic
+	// wanted point and BEFORE the move-control tick consumes it (VERIFIED Mob.serverAiStep order:
+	// goalSelector.tick -> navigation.tick -> customServerAiStep -> controls/moveControl.tick). The brain
+	// MoveToTargetSink overwrites ghastWanted* with the walk-target the baby behaviors chose, so the baby
+	// is brain-steered while the adult keeps the classic RandomFloatAroundGoal wanted. Adult: no-op.
+	t.happyGhastBabyBrainTick(e)
+	// GhastMoveControl.tick: accelerate deltaMovement toward the (final) wanted point on the floatDuration
+	// cadence — the controls slot, AFTER customServerAiStep.
 	t.ghastMoveControlTick(e)
 }
 

@@ -225,6 +225,12 @@ type Entity struct {
 	ghastWantedX, ghastWantedY, ghastWantedZ float64
 	ghastHasWanted                           bool
 	ghastFloatDuration                       int32
+	// brain is the ported net.minecraft.world.entity.ai.Brain (brain.go). It is NON-NIL only for a mob
+	// that runs the behavior subsystem — currently the BABY HappyGhast (HappyGhast.customServerAiStep
+	// ticks the brain ONLY when isBaby()); every other entity leaves it nil (a nil brain is never ticked,
+	// so the classic-goal mobs are wholly unaffected). Attached at spawn by attachHappyGhastBrain.
+	// Tick-owned (TICK-05).
+	brain *brain
 	// --- FOX CHARACTER STATE (net.minecraft.world.entity.animal.fox.Fox) ---------------------------
 	//
 	// Tick-owned plain values, set/read ONLY for a Fox. foxFlags is the DATA_FLAGS_ID byte the fox
