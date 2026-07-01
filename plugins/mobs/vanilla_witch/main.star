@@ -15,16 +15,31 @@
 #     @3 RandomLookAroundGoal(this)                   <-- .star (the shared passive around)
 #   targetSelector:
 #     @1 HurtByTargetGoal(this, Raider.class)         <-- kind="hurt_by_target" (Raider-alert exclusion cite-deferred)
-#     @2 NearestHealableRaiderTargetGoal              <-- DEFERRED (no raid subsystem / no raider heal)
+#     @2 NearestHealableRaiderTargetGoal              <-- kind="nearest_healable_raider_target" (STRUCTURE, inert: hasActiveRaid stub-false)
 #     @3 NearestAttackableWitchTargetGoal<Player>     <-- kind="nearest_attackable_target" (the witch hunts the player)
 #
 # DEFERRED (cite-recorded, NEVER silently dropped):
-#   - super.registerGoals (Raider/PatrollingMonster patrol) + NearestHealableRaiderTargetGoal: no raid
-#     subsystem in v1. The CORE hunt + splash-potion attack (the phase goal) is fully wired.
+#   - super.registerGoals (Raider/PatrollingMonster patrol — LongDistancePatrolGoal@4) + the raid EVENT
+#     (wave spawning, village detection, bad-omen, raid bar): no raid subsystem in v1. The CORE hunt +
+#     splash-potion attack (the phase goal) is fully wired; the patrol/raid EVENT is cite-deferred (see
+#     .planning/FINAL-MILESTONE-PARITY.md Phase-A queue).
 #   - Witch.performRangedAttack's Raider heal/regeneration branch (HEALING/REGENERATION on a hurt raider):
-#     no raiders in v1, so the witch only ever throws the HARMING/SLOWNESS/POISON/WEAKNESS harmful ladder
-#     at the player (ai_goals_witch.go). The drinking-potion self-buff + WITCH_THROW sound are cite-deferred.
+#     no other raiders in v1 (target is always a player), so the witch throws only the HARMING/SLOWNESS/
+#     POISON/WEAKNESS harmful ladder at the player (ai_goals_witch.go). The heal-THROW branch is deferred
+#     with the raid subsystem; the WITCH_THROW sound is cite-deferred.
 #   - NearestAttackableWitchTargetGoal's mustSee: the cited "visible" stub (no sensing subsystem).
+#
+# LANDED (this batch — the Witch.aiStep self-drink buff, ai_goals_witch.go witchAiStep + mob_effect.go):
+#   - The self-drink potion ladder (Witch.aiStep, witch-gated per-type hook, AFTER serverAiStep): rand<0.15
+#     WATER_BREATHING (eye in water); rand<0.15 FIRE_RESISTANCE (on fire / last-damage IS_FIRE); rand<0.05
+#     HEALING (health<max — instant self-heal 4); rand<0.5 SWIFTNESS (target > 121 sqr away). The drink
+#     seeds usingTime=32 (Consumable 1.6s), attaches the -0.25 ADD_VALUE MOVEMENT_SPEED "drinking" modifier,
+#     and on countdown-finish applies the potion effect to the witch ITSELF (entity-side mobEffects map).
+#     The RNG draw order (each rung's nextFloat + the 7.5E-4 idle roll) is exact. The WITCH_DRINK sound +
+#     the idle-particle broadcast(15) are cite-deferred (client visual; the RNG draw still fires).
+#   - NearestHealableRaiderTargetGoal@2 STRUCTURE (kind="nearest_healable_raider_target", {TARGET}): the
+#     cooldown + nextBoolean coin-flip + hasActiveRaid gate, registered + RNG-faithful but INERT (hasActiveRaid
+#     cited-false — no raid subsystem). Acquires when the raid EVENT lands.
 
 # --- constants (jar-confirmed) -----------------------------------------------------------------
 FLUID_JUMP_THRESHOLD = 0.4
@@ -183,6 +198,11 @@ declare_mob(
         # targetSelector @1 HurtByTargetGoal(mob) [TARGET] — kind="hurt_by_target". Cite Witch.registerGoals
         # targetSelector @1 HurtByTargetGoal.
         goal(priority = 1, flags = ["TARGET"], kind = "hurt_by_target"),
+        # targetSelector @2 NearestHealableRaiderTargetGoal [TARGET] — kind="nearest_healable_raider_target":
+        # the raid-heal target goal STRUCTURE (cooldown + nextBoolean + hasActiveRaid gate). INERT in v1
+        # (hasActiveRaid cited-false — no raid subsystem) but registered + RNG-faithful. Cite Witch.registerGoals
+        # targetSelector @2 NearestHealableRaiderTargetGoal.
+        goal(priority = 2, flags = ["TARGET"], kind = "nearest_healable_raider_target"),
         # targetSelector @3 NearestAttackableWitchTargetGoal<Player>(mob) [TARGET] — kind="nearest_attackable_target"
         # (the witch hunts the player). Cite Witch.registerGoals targetSelector @3.
         goal(priority = 3, flags = ["TARGET"], kind = "nearest_attackable_target"),

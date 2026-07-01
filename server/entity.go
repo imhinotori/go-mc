@@ -256,6 +256,28 @@ type Entity struct {
 	foxTrusted0 int32
 	foxTrusted1 int32
 
+	// --- Witch self-drink state (MOB-HOST-07 heal branch, ai_goals_witch.go witchAiStep) ---
+	// Tick-owned plain values, set/read ONLY for a Witch (Witch.aiStep). witchDrinking mirrors
+	// Witch.DATA_USING_ITEM (isDrinkingPotion); witchUsingTime mirrors Witch.usingTime (the drink
+	// countdown, seeded to the potion useDuration=32 and decremented each tick). false/0 for every
+	// non-witch. When the countdown hits 0 the witch APPLIES the drunk potion's effects to ITSELF via
+	// the entity-side mobEffects map below. During the drink a -0.25 ADD_VALUE MOVEMENT_SPEED transient
+	// modifier ("drinking") is attached and removed on finish.
+	//	[VERIFIED CFR Witch.aiStep + Witch.usingTime / DATA_USING_ITEM / SPEED_MODIFIER_DRINKING.]
+	witchDrinking  bool
+	witchUsingTime int32
+	// witchDrinkPending is the effect id the in-progress drink will apply when its countdown finishes
+	// (the reduced stand-in for reading the mainhand potion's PotionContents on finish); witchDrinkPendingDur
+	// is that effect's base duration. Cleared on finish. false/""/0 for every non-drinking witch.
+	witchDrinkPending    string
+	witchDrinkPendingDur int
+
+	// mobEffects is the entity-side MobEffectInstance map (LivingEntity.activeEffects), the mob analogue
+	// of tickPlayer.activeEffects (mob_effect.go). Populated when a witch drinks a potion on itself (the
+	// self-buff branch) and ticked down by tickMobEffects. nil until the first self-effect applies; only
+	// the witch writes it in v1. Effect ids -> the active instance (duration counts DOWN). Tick-owned.
+	mobEffects map[string]*activeEffect
+
 	// ai is the per-mob AI handle (AI-01, Plan 07-01): the mob's goalSelector + the
 	// navigation/look targets a goal writes (server/ai_mob.go). nil for a non-mob entity (a
 	// dropped item, a player's instance) and for a mob with no AI registered. Hung off the

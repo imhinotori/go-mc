@@ -87,6 +87,16 @@ type groundNavigation struct {
 	//	[VERIFIED javap FloatGoal.<init>: getNavigation().setCanFloat(true); PathNavigation.setCanFloat(boolean).]
 	canFloat bool
 
+	// avoidSun is net.minecraft.world.entity.ai.navigation.GroundPathNavigation.avoidSun, flipped by the
+	// skeleton's RestrictSunGoal (setAvoidSun(true) on start, false on stop — ai_goals_skeleton_sun.go).
+	// It tells the WalkNodeEvaluator to add a sun-exposed pathfinding malus so a day-time skeleton routes
+	// through shade. The flag is ported 1:1 here; the avoid-sun PATHING MALUS itself is a node-evaluator
+	// concern DEFERRED + cited (sibling of canFloat's float-pathing deferral) — no path-malus subsystem
+	// exists in v1, so setting the flag faithfully satisfies the RestrictSunGoal ctor/start/stop without
+	// the malus port. The malus lands when the node-evaluator malus subsystem does. Plain bool, tick-owned.
+	//	[VERIFIED CFR RestrictSunGoal: start setAvoidSun(true); stop setAvoidSun(false).]
+	avoidSun bool
+
 	// pending is set when an async path compute is in flight (OPT-01, 08-02): requestPath
 	// SUBMITS computePath to the off-tick pathPool and sets pending=true, then pathReady.applyTo
 	// clears it on the owner when the late path lands (or it is left false on a dropped/overloaded
@@ -222,6 +232,11 @@ func (n *groundNavigation) active() bool {
 	}
 	return n.path != nil && !n.path.done()
 }
+
+// setAvoidSun ports GroundPathNavigation.setAvoidSun(boolean): flip the avoid-sun pathfinding bias flag.
+// The skeleton RestrictSunGoal drives it (start true / stop false). The malus itself is node-evaluator
+// deferred (see the avoidSun field doc); this setter is the faithful flag write.
+func (n *groundNavigation) setAvoidSun(b bool) { n.avoidSun = b }
 
 func (n *groundNavigation) shouldRecomputePath(tx, ty, tz int) bool {
 	targetChanged := !n.hasTarget || tx != n.lastTX || ty != n.lastTY || tz != n.lastTZ

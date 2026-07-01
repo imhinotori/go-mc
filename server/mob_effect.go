@@ -204,3 +204,133 @@ func splashPotionScale(distSqr float64) float64 {
 	}
 	return s
 }
+
+// ============================================================================================
+// Entity-side mob effects (MOB-HOST-07 witch self-drink). The witch drinks a potion on ITSELF, so the
+// effect applies to an *Entity (not a tickPlayer). This is the entity analogue of the tickPlayer effect
+// slice above, scoped to the witch self-buffs: instant_health (HEALING, instant self-heal), regeneration
+// (the raid path, periodic heal), speed/water_breathing/fire_resistance (pure duration effects — no
+// server-side observable beyond presence in v1, but ticked down + hasEffect-visible so the ladder's
+// !hasEffect gate is faithful). Cite LivingEntity.addEffect / tickEffects + the effect classes.
+//
+// Verified behavior (net.minecraft.world.effect.*):
+//   - instant_health (HealOrHarmMobEffect, !isHarm): instant, heal((int)(scale*(4<<amp)+0.5)); self-drink
+//     scale=1.0 so HEALING amp0 heals 4. (VERIFIED CFR HealOrHarmMobEffect.applyInstantaneousEffect.)
+//   - regeneration (RegenerationMobEffect): interval = 50>>amp; on tick if health<maxHealth heal(1.0).
+//     (VERIFIED CFR RegenerationMobEffect.applyEffectTick / shouldApplyEffectTickThisTick.)
+//   - speed/water_breathing/fire_resistance: duration effects with no v1 server-side per-tick action
+//     (SPEED's MOVEMENT_SPEED buff + water-breath/fire-immunity are movement/breath/fire subsystem reads
+//     deferred; the effect is attached + ticked so hasEffect is faithful and the buff lands when those
+//     subsystems read it — sibling of the player-side slowness cited no-op).
+
+// isInstantEntityEffect reports whether an entity effect id is an InstantaneousMobEffect (applied once at
+// add, never duration-ticked). instant_health is the witch-self-drink instant.
+func isInstantEntityEffect(id string) bool {
+	return id == effectInstantHealth || id == effectInstantDamage
+}
+
+// entityHasEffect ports LivingEntity.hasEffect(Holder) for a mob: whether the entity currently carries the
+// effect. The witch self-drink ladder reads it (don't re-drink a buff it already has).
+func entityHasEffect(e *Entity, id string) bool {
+	if e == nil || e.mobEffects == nil {
+		return false
+	}
+	_, ok := e.mobEffects[id]
+	return ok
+}
+
+// addEntityEffect ports LivingEntity.addEffect for a mob self-target: an INSTANT effect (HEALING) applies
+// its one-shot amount immediately; a DURATION effect is inserted into the mobEffects map (keeping the
+// stronger/longer on a same-id collision). scale is fixed 1.0 for the self-drink (potion.forEachEffect).
+// Cite LivingEntity.addEffect + onEffectAdded.
+func (t *TickLoop) addEntityEffect(e *Entity, id string, duration, amplifier int) {
+	if e == nil || !e.isAlive() || e.dead {
+		return // isAffectedByPotions == !isDeadOrDying()
+	}
+	if isInstantEntityEffect(id) {
+		t.applyInstantEntityEffect(e, id, amplifier)
+		return
+	}
+	if e.mobEffects == nil {
+		e.mobEffects = make(map[string]*activeEffect)
+	}
+	if existing, ok := e.mobEffects[id]; ok {
+		if amplifier < existing.amplifier || (amplifier == existing.amplifier && duration <= existing.duration) {
+			return
+		}
+	}
+	e.mobEffects[id] = &activeEffect{id: id, duration: duration, amplifier: amplifier}
+}
+
+// applyInstantEntityEffect ports HealOrHarmMobEffect.applyInstantaneousEffect for a self-drinking mob:
+// HEALING (!isHarm, self scale 1.0) heals (int)(1.0*(4<<amp)+0.5). isInvertedHealAndHarm()==false (the
+// witch is not undead), so HEALING heals. Cite HealOrHarmMobEffect.applyInstantaneousEffect + heal.
+func (t *TickLoop) applyInstantEntityEffect(e *Entity, id string, amplifier int) {
+	switch id {
+	case effectInstantHealth:
+		amount := int(1.0*float64(int(4)<<uint(amplifier)) + 0.5)
+		entityHeal(e, float32(amount))
+	}
+}
+
+// tickMobEffects ports LivingEntity.tickEffects for a mob: for each active effect, run its per-tick apply
+// (regeneration heal), then count the duration down and remove it at 0. Called once per tick per live
+// witch from the tick loop (witch-gated in tick_phases.go, sibling of tickPlayerEffects). No modifiers are
+// attached for the witch self-buffs in v1 (SPEED's MOVEMENT_SPEED buff is a movement-subsystem read
+// deferred, like the player-side slowness no-op), so removal is a plain delete.
+func (t *TickLoop) tickMobEffects(e *Entity) {
+	if e == nil || len(e.mobEffects) == 0 {
+		return
+	}
+	for id, ef := range e.mobEffects {
+		if entityEffectShouldApplyThisTick(id, ef.duration, ef.amplifier) {
+			t.applyEntityEffectTick(e, id, ef.amplifier)
+		}
+		ef.duration--
+		if ef.duration <= 0 {
+			delete(e.mobEffects, id)
+		}
+	}
+}
+
+// entityEffectShouldApplyThisTick ports MobEffect.shouldApplyEffectTickThisTick for the witch self-buffs.
+func entityEffectShouldApplyThisTick(id string, remaining, amplifier int) bool {
+	switch id {
+	case effectRegeneration:
+		interval := 50 >> amplifier // RegenerationMobEffect: 50>>amp (amp0=50, amp1=25, ...)
+		if interval <= 0 {
+			return true
+		}
+		return remaining%interval == 0
+	default:
+		return false // speed/water_breathing/fire_resistance never tick (pure presence)
+	}
+}
+
+// applyEntityEffectTick ports MobEffect.applyEffectTick for the witch's periodic self-buffs.
+func (t *TickLoop) applyEntityEffectTick(e *Entity, id string, amplifier int) {
+	switch id {
+	case effectRegeneration:
+		// RegenerationMobEffect: if health < maxHealth heal 1.0.
+		if e.health < float32(e.getAttributeValue(attribute.MaxHealth)) {
+			entityHeal(e, 1.0)
+		}
+	}
+}
+
+// entityHeal ports LivingEntity.heal(float): if health>0, setHealth(health+heal) clamped to [0,maxHealth].
+// Cite LivingEntity.heal + setHealth (Mth.clamp(health, 0, getMaxHealth())).
+func entityHeal(e *Entity, heal float32) {
+	if e.health <= 0 {
+		return
+	}
+	maxH := float32(e.getAttributeValue(attribute.MaxHealth))
+	h := e.health + heal
+	if h > maxH {
+		h = maxH
+	}
+	if h < 0 {
+		h = 0
+	}
+	e.health = h
+}

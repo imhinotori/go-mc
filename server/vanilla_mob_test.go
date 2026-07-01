@@ -54,9 +54,11 @@ var allFourMobs = []struct {
 	// leg is wired (kind="avoid_entity" avoid_type="cat", ai_goals_avoid.go), the Ocelot leg cite-deferred.
 	// Creeper is NOT in POWDER_SNOW_WALKABLE_MOBS per the jar — no climb goal (#17 verified).
 	{vanillaCreeperMobName, entity.Creeper.ID, 7, 2},
-	// MOB-HOST-07 (Task #9): Witch — float@1 + witch_ranged@2 + stroll@2 + look@3 + around@3
-	// (5 goalSelector) + hurt_by@1 + nearest@3 (2 targetSelector); raid/heal goals cite-deferred.
-	{vanillaWitchMobName, entity.Witch.ID, 5, 2},
+	// MOB-HOST-07 (Task #9 + heal branch): Witch — float@1 + witch_ranged@2 + stroll@2 + look@3 +
+	// around@3 (5 goalSelector) + hurt_by@1 + healable_raider@2 + nearest@3 (3 targetSelector). The self-
+	// drink potion buff is a per-type aiStep hook (witchAiStep, NOT a goal); the healable-raider TARGET goal
+	// is a STRUCTURE (inert: hasActiveRaid stub-false, no raid subsystem). The raid EVENT is cite-deferred.
+	{vanillaWitchMobName, entity.Witch.ID, 5, 3},
 	// MOB-PASS-05 (Task #9 + hop + powder-snow): Rabbit — float@1 + climb_on_powder_snow@1 + panic@1 +
 	// breed@2 + tempt@3 + stroll@6 + look@11 (7 goalSelector, 0 targetSelector); climb wired (#17), the
 	// hop is now Go-native (#13, rabbitAiStep); avoid/raid-garden cite-deferred.

@@ -51,8 +51,14 @@ Each is a dedicated jar-faithful phase (javap-verify BEFORE writing, cite class/
 - **Creeper block-destruction** — ServerExplosion.interactWithBlocks: the per-block ExplosionResistance
   table + the mobGriefing gamerule (ExplosionInteraction.MOB → KEEP when off). Explosion entity-damage is
   already done; this adds the block removal + drops.
-- **Raids** — Witch heal/regeneration branch (Raider target) + the raid subsystem (PatrollingMonster,
-  NearestHealableRaiderTargetGoal). Also RestrictSun/FleeSun for the skeleton.
+- **Raids** — the raid EVENT subsystem (wave spawning, village detection, bad-omen, raid bar) +
+  PatrollingMonster patrol (LongDistancePatrolGoal@4 + the patrol-leader spawn) + Witch.performRangedAttack's
+  Raider heal-THROW branch (HEALING/REGENERATION at a hurt fellow raider). LANDED (skeleton-sun batch):
+  RestrictSunGoal + FleeSunGoal for the skeleton (ai_goals_skeleton_sun.go — the avoid-sun pathfinding MALUS
+  itself is still node-evaluator-deferred, see below); the Witch.aiStep self-drink potion buff (witchAiStep,
+  WATER_BREATHING/FIRE_RESISTANCE/HEALING/SWIFTNESS on itself + the entity-side mobEffects slice); the
+  NearestHealableRaiderTargetGoal STRUCTURE (registered + RNG-faithful, INERT until hasActiveRaid becomes a
+  real read). REMAINING here: the raid EVENT + patrol + the heal-THROW (all need the raid subsystem).
 - **Rabbit hop** — RabbitJumpControl/RabbitMoveControl (the visible hop-vs-walk movement style) +
   RabbitPanicGoal.setSpeedModifier.
 - **Prey mobs** — Endermite (enderman target), Turtle (fox/cat/skeleton target + eggs), Ocelot
@@ -114,3 +120,16 @@ Each is a dedicated jar-faithful phase (javap-verify BEFORE writing, cite class/
 
 (This list is the LIVING queue — as each mob header's DEFERRED notes close, cross them off. New deferrals
 found during Phase A append here.)
+
+### Appended (skeleton-sun batch — new deferrals surfaced while landing the sun/heal goals)
+- **Avoid-sun pathfinding malus** — RestrictSunGoal.setAvoidSun flips groundNavigation.avoidSun faithfully,
+  but the WalkNodeEvaluator sun-exposed MALUS (the actual pathfinding bias that routes a day-time skeleton
+  through shade) is node-evaluator-deferred (no path-malus subsystem in v1). Sibling of the canFloat
+  float-pathing deferral. Also FleeSunGoal/RestrictSunGoal's getItemBySlot(HEAD).isEmpty() is a cited
+  constant-true (no mob equipment slots) — closes with the mob-equipment subsystem.
+- **Witch drink client feedback** — SoundEvents.WITCH_DRINK / WITCH_THROW + the broadcastEntityEvent(15)
+  idle-particle (the RNG draw fires; the client broadcast is deferred). Closes with a sound/particle bus.
+- **Witch self-buff subsystem reads** — SPEED (SWIFTNESS) MOVEMENT_SPEED buff, WATER_BREATHING (air), and
+  FIRE_RESISTANCE (fire immunity) effects are attached + ticked + hasEffect-visible on the witch, but their
+  server-side observable action is movement/breath/fire-subsystem-deferred (sibling of the player-side
+  slowness no-op). The effect PRESENCE (the ladder's !hasEffect gate) is faithful now.

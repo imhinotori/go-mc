@@ -23,7 +23,8 @@ import (
 
 // hostileEmbedSpecs pins, per hostile, the wire entity type + the jar goalSelector/targetSelector goal
 // counts (the per-mob _test.go files own the priority indices; this gate only asserts the SETS landed
-// through the real boot-load). zombie/skeleton: 4 goalSelector + 2 targetSelector; spider: 6 + 2.
+// through the real boot-load). zombie: 4 goalSelector + 2 targetSelector; skeleton: 6 + 2 (restrict_sun +
+// flee_sun added — the daytime burn-avoidance); spider: 6 + 2.
 var hostileEmbedSpecs = []struct {
 	name        string
 	mobName     string
@@ -32,7 +33,7 @@ var hostileEmbedSpecs = []struct {
 	targetCount int
 }{
 	{"zombie", vanillaZombieMobName, entity.Zombie.ID, 4, 2},
-	{"skeleton", vanillaSkeletonMobName, entity.Skeleton.ID, 4, 2},
+	{"skeleton", vanillaSkeletonMobName, entity.Skeleton.ID, 6, 2},
 	{"spider", vanillaSpiderMobName, entity.Spider.ID, 6, 2},
 }
 

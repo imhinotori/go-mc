@@ -81,8 +81,9 @@ func spawnSkeleton(loop *TickLoop, x, y, z float64) *Entity {
 // --- TestSkeletonBootLoads ---------------------------------------------------------------------
 
 // TestSkeletonBootLoads: the vanilla_skeleton plugin boot-loads, spawnSkeleton builds a live skeleton
-// rendering as entity.Skeleton.ID with a non-nil AI holding the 4 goalSelector goals (ranged_bow@4 +
-// stroll@5 + look@6 + around@6) and the 2 targetSelector goals (hurt_by_target@1 + nearest_attackable_target@2).
+// rendering as entity.Skeleton.ID with a non-nil AI holding the 6 goalSelector goals (restrict_sun@2 +
+// flee_sun@3 + ranged_bow@4 + stroll@5 + look@6 + around@6) and the 2 targetSelector goals (hurt_by_target@1
+// + nearest_attackable_target@2).
 // Skeleton attribute movement_speed 0.25.
 func TestSkeletonBootLoads(t *testing.T) {
 	loop, floorY, _ := skeletonLoop(t)
@@ -94,8 +95,8 @@ func TestSkeletonBootLoads(t *testing.T) {
 	if skel.ai == nil {
 		t.Fatal("skeleton has no AI")
 	}
-	if got := len(skel.ai.goals.goals); got != 4 {
-		t.Fatalf("skeleton has %d goalSelector goals, want 4 (melee@4 stroll@5 look@6 around@6)", got)
+	if got := len(skel.ai.goals.goals); got != 6 {
+		t.Fatalf("skeleton has %d goalSelector goals, want 6 (restrict_sun@2 flee_sun@3 ranged_bow@4 stroll@5 look@6 around@6)", got)
 	}
 	if got := len(skel.ai.targetSelector.goals); got != 2 {
 		t.Fatalf("skeleton has %d targetSelector goals, want 2 (hurt_by_target@1 + nearest_attackable_target@2)", got)
@@ -104,8 +105,8 @@ func TestSkeletonBootLoads(t *testing.T) {
 	for _, wg := range skel.ai.goals.goals {
 		seen[wg.priority]++
 	}
-	if seen[4] != 1 || seen[5] != 1 || seen[6] != 2 {
-		t.Fatalf("skeleton goalSelector priorities = %v, want {4:1, 5:1, 6:2}", seen)
+	if seen[2] != 1 || seen[3] != 1 || seen[4] != 1 || seen[5] != 1 || seen[6] != 2 {
+		t.Fatalf("skeleton goalSelector priorities = %v, want {2:1, 3:1, 4:1, 5:1, 6:2}", seen)
 	}
 
 	if ms := skel.attributes.GetValue(attribute.MovementSpeed.Name()); ms != 0.25 {

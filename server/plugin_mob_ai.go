@@ -205,7 +205,7 @@ func buildAIFromDecl(t *TickLoop, decl *mobDecl) *mobAI {
 				// hunt/attack). spawnDeclaredMob runs on the tick goroutine; a panic here is isolated by
 				// the tickOnce recover backstop, surfacing the bad declaration loudly rather than shipping
 				// a silently-disarmed hostile. (The .star load already validated the rest of the mob.)
-				panic("buildAIFromDecl: unknown goal kind " + gd.nativeKind + " (valid: nearest_attackable_target, hurt_by_target, melee_attack, spider_attack, leap_at_target, avoid_entity, float, climb_on_powder_snow, sit, follow_owner, owner_hurt_by, owner_hurt, angry_player_target, skeleton_target, enderman_look_for_player, enderman_freeze_when_looked_at, silverfish_merge_stone, silverfish_wake_friends, cube_float, cube_random_direction, cube_keep_on_jumping, fox_faceplant, fox_stalk, fox_pounce, fox_seek_shelter, fox_sleep, fox_perch_search, fox_defend_trusted, fox_land_target)")
+				panic("buildAIFromDecl: unknown goal kind " + gd.nativeKind + " (valid: nearest_attackable_target, hurt_by_target, melee_attack, spider_attack, leap_at_target, avoid_entity, float, climb_on_powder_snow, sit, follow_owner, owner_hurt_by, owner_hurt, angry_player_target, skeleton_target, enderman_look_for_player, enderman_freeze_when_looked_at, silverfish_merge_stone, silverfish_wake_friends, cube_float, cube_random_direction, cube_keep_on_jumping, fox_faceplant, fox_stalk, fox_pounce, fox_seek_shelter, fox_sleep, fox_perch_search, fox_defend_trusted, fox_land_target, restrict_sun, flee_sun, nearest_healable_raider_target)")
 			}
 			// The Go goal's OWN flags() must match the declared flags — a declaration that names, e.g.,
 			// kind="melee_attack" but flags=["TARGET"] would route the goal into the WRONG selector AND
@@ -291,6 +291,24 @@ func buildNativeGoal(kind string, gd goalDecl, decl *mobDecl) Goal {
 		// MOB-HOST-07 (Task #9): the Witch's RangedAttackGoal(this, 1.0, 60, 10.0) — the generic ranged
 		// goal that throws splash potions (ai_goals_witch.go). Cite Witch.registerGoals @2 RangedAttackGoal.
 		return newWitchRangedAttackGoal()
+	case "restrict_sun":
+		// AbstractSkeleton.registerGoals @2 RestrictSunGoal(this) — {} (NO flags), NO RNG. Flips the
+		// navigation avoid-sun bias while it is bright out (ai_goals_skeleton_sun.go). Cite
+		// AbstractSkeleton.registerGoals @2 RestrictSunGoal.
+		return newRestrictSunGoal()
+	case "flee_sun":
+		// AbstractSkeleton.registerGoals @3 FleeSunGoal(this, 1.0) — {MOVE}; getHidePos draws up to 30
+		// nextInt. A burning, sky-exposed, day-time skeleton runs for shade (ai_goals_skeleton_sun.go —
+		// the UNMODIFIED base FleeSunGoal, keeping the isOnFire() guard the Fox override drops). The
+		// speedModifier routes from the declared movement_speed (declaredWalkSpeed), scaling the ctor's
+		// literal 1.0. Cite AbstractSkeleton.registerGoals @3 FleeSunGoal.
+		return newFleeSunGoal(declaredWalkSpeed(decl))
+	case "nearest_healable_raider_target":
+		// MOB-HOST-07 (Task #9, heal branch): Witch.registerGoals targetSelector @2 NearestHealableRaiderTargetGoal
+		// — {TARGET}. The raid-heal target goal STRUCTURE (cooldown + nextBoolean coin-flip + hasActiveRaid gate);
+		// INERT in v1 (hasActiveRaid cited-false, no raid subsystem) but structurally present + RNG-faithful.
+		// Cite Witch.registerGoals targetSelector @2 NearestHealableRaiderTargetGoal (ai_goals_witch.go).
+		return newNearestHealableRaiderTargetGoal()
 	case "spider_attack":
 		return newSpiderAttackGoal(declaredWalkSpeed(decl))
 	case "leap_at_target":

@@ -15,8 +15,8 @@
 #
 # AbstractSkeleton.registerGoals() (javap-verified, 35-JARNOTES.md:37-51):
 #   goalSelector:
-#     @2 RestrictSunGoal(this)                              <-- DEFERRED (no light/sun navigation in v1)
-#     @3 FleeSunGoal(this, 1.0)                             <-- DEFERRED (no sun-flee navigation in v1)
+#     @2 RestrictSunGoal(this)                              <-- kind="restrict_sun" (avoid-sun path bias; malus deferred)
+#     @3 FleeSunGoal(this, 1.0)                             <-- kind="flee_sun" (burning day-time run-for-shade)
 #     @3 AvoidEntityGoal<Wolf>(this, Wolf, 6.0, 1.0, 1.2)   <-- DEFERRED (no Wolf / no AvoidEntityGoal in v1)
 #     @5 WaterAvoidingRandomStrollGoal(this, 1.0)           <-- .star (the shared passive stroll)
 #     @6 LookAtPlayerGoal(Player, 8.0)                      <-- .star (the shared passive look)
@@ -35,8 +35,19 @@
 #     else meleeGoal@4 — v1 has no bow item / no Arrow projectile entity, so the skeleton ALWAYS uses the
 #     melee goal (the reassessWeaponGoal `else` branch). The ranged path lands with the projectile
 #     subsystem. (35-JARNOTES.md:52-55.) This is the documented v1 deviation: melee, not ranged.
-#   - RestrictSunGoal@2 / FleeSunGoal@3: daylight-avoidance NAVIGATION — no light engine in v1.
 #   - AvoidEntityGoal<Wolf>@3: no Wolf entity / no AvoidEntityGoal port in v1.
+#
+# LANDED (this batch — daytime burn-avoidance, ai_goals_skeleton_sun.go):
+#   - RestrictSunGoal@2 (kind="restrict_sun", {} no flags): while bright out, flips the navigation
+#     avoid-sun bias (setAvoidSun). The avoid-sun pathfinding MALUS is node-evaluator DEFERRED + cited
+#     (no path-malus subsystem); the flag write + the goal's ctor/start/stop are faithful, and holding
+#     no MOVE flag it never fights the flee. Cite AbstractSkeleton.registerGoals @2 RestrictSunGoal.
+#   - FleeSunGoal@3 (kind="flee_sun", {MOVE}): the UNMODIFIED base FleeSunGoal (KEEPS the isOnFire()
+#     guard the Fox.SeekShelterGoal override drops). A burning (remainingFireTicks>0), sky-exposed,
+#     day-time, target-less, bare-headed skeleton runs to a getHidePos shade tile (10 candidates,
+#     nextInt(20)-10 / nextInt(6)-3 / nextInt(20)-10). isBrightOutside == !isDarkEnoughToSpawn (the day/
+#     night proxy); canSeeSky == the superflat sky stub; head-empty + getWalkTargetValue>=0 are cited
+#     constant-true. Cite AbstractSkeleton.registerGoals @3 FleeSunGoal(this, 1.0).
 #   - The IronGolem/Turtle NearestAttackableTargetGoal variants: those entities do not exist in v1 — the
 #     Player acquire (the phase goal "hunt the player") is the must-have.
 #   - NearestAttackableTargetGoal's mustSee (line-of-sight): no LoS/sensing subsystem — the cited
@@ -164,6 +175,14 @@ declare_mob(
         # fires an Arrow at the target (setBaseDamageFromMob(1.0) ≈ 2 + noise, velocity 1.6, inaccuracy 6 on
         # NORMAL). Replaces the v1 MELEE-ONLY stub. Cite AbstractSkeleton.reassessWeaponGoal @4 (bow branch).
         goal(priority = 4, flags = ["MOVE", "LOOK"], kind = "ranged_bow_attack"),
+        # @2 RestrictSunGoal(mob) [] (NO flags) — kind="restrict_sun": while bright out, biases the
+        # navigation away from sun (setAvoidSun; the pathfinding malus is node-evaluator deferred). Holds
+        # no MOVE flag so it never contends with flee/stroll. Cite AbstractSkeleton.registerGoals @2 RestrictSunGoal.
+        goal(priority = 2, flags = [], kind = "restrict_sun"),
+        # @3 FleeSunGoal(mob, 1.0) [MOVE] — kind="flee_sun": a burning, sky-exposed, day-time skeleton
+        # runs to a getHidePos shade tile (the UNMODIFIED base goal — keeps the isOnFire() guard). Cite
+        # AbstractSkeleton.registerGoals @3 FleeSunGoal(this, 1.0).
+        goal(priority = 3, flags = ["MOVE"], kind = "flee_sun"),
         # @5 WaterAvoidingRandomStrollGoal(mob, 1.0) [MOVE] — .star (passive). can_use commits the
         # candidates (path_to), so NO start kwarg. Cite AbstractSkeleton.registerGoals @5.
         goal(

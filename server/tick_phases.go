@@ -456,6 +456,15 @@ func (t *TickLoop) tickAI() {
 		if e.typ == entity.Endermite.ID {
 			t.endermiteAiStep(e)
 		}
+		// MOB-HOST-07 (Task #9, heal branch): the Witch.aiStep self-drink potion buff (roll the potion
+		// ladder + advance the drink countdown + apply the self-effect on finish) plus tickMobEffects (the
+		// entity-side effect countdown — regeneration heal, buff expiry). Per-type-gated like the creeper/
+		// enderman, AFTER serverAiStep. ADDITIVE + witch-gated (zero cost / zero RNG for every non-witch —
+		// the pig oracle stream is untouched). Cite Witch.aiStep + LivingEntity.tickEffects.
+		if e.typ == entity.Witch.ID {
+			t.witchAiStep(e)
+			t.tickMobEffects(e)
+		}
 	}
 
 	// Throttled natural spawner: vanilla attempts every tick (most no-op under cap); v1 runs the
