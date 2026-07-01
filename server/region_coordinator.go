@@ -188,6 +188,12 @@ func (t *TickLoop) tickOnce() {
 	// owner re-resolve, so a victim that just transferred is hit in its NEW region).
 	t.applyCrossRegionDamage()
 
+	// RAID tick (raid.go/raids.go): every region's Raids manager ticks its active raids ONCE here, at the
+	// quiescent post-fan-out barrier (all regions joined -> the raid wave-spawn's cross-region entity
+	// spawns + membership reads are legal, exactly like the damage/transfer drains above). A region with
+	// no raidsManager is a no-op. This is the ServerLevel.getRaids().tick(level) call site.
+	t.raidsTickAllRegions()
+
 	// The async rejoin runs on the coordinator now (quiescent): the chunkReady drain (world mutation,
 	// globalRegion's asyncIn) + the asyncIn2 entity results (pathReady/spawnCandidatesReady), which
 	// re-resolve the OWNING region by id and apply there (drop if no region owns it — Pitfall 1).

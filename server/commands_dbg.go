@@ -116,7 +116,7 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned sulfur_cube eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
 		}
-		case "happy_ghast", "happyghast", "ghast":
+	case "happy_ghast", "happyghast", "ghast":
 		// happy_ghast (Task): spawn a vanilla happy ghast (hovering flyer, HappyGhast wire type). It floats
 		// in place then wanders via the native RandomFloatAround hover (happyGhastAiStep); it does NOT fall.
 		e := t.spawnVanillaMob(vanillaHappyGhastMobName, p.x, p.y+3, p.z)
@@ -153,8 +153,17 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] water box + pig eid=%d dropped in", e.id))
 		}
+	case "raid":
+		// RAID subsystem (raid.go/raids.go): start a raid at the player's position via the createRaidAt SEAM
+		// (the CITE-DEFERRED bad-omen village auto-trigger stand-in — no POI subsystem). Difficulty NORMAL
+		// (5 waves), raidOmenLevel 1. The raid ticks on the coordinator each tick (raidsTickAllRegions),
+		// counting down the 300-tick pre-wave cooldown then spawning wave 1 (in a witch-only v1 wave, wave 5
+		// spawns 3 witches; the earlier waves are witch-empty per the RaiderType table but still count down).
+		rm := t.only().ensureRaidsManager()
+		raid := rm.createRaidAt(int(p.x), int(p.y), int(p.z), difficultyNormal, 1)
+		t.broadcastSystemChat(fmt.Sprintf("[dbg] started raid id=%d at (%d,%d,%d) numGroups=%d (waves spawn after the 300-tick cooldown; only WITCH raiders exist in v1)", raid.id, int(p.x), int(p.y), int(p.z), raid.numGroups))
 	default:
-		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | water | pig-in-water")
+		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | water | pig-in-water | raid")
 	}
 }
 

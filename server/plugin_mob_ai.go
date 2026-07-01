@@ -38,7 +38,7 @@ import (
 // attribution). Each SPAWNED mob gets a FRESH starlarkGoal struct (per-mob state) referencing the
 // shared frozen callables (Pattern 4) — buildAIFromDecl allocates fresh structs, it never re-parses.
 type starlarkGoal struct {
-	baseGoal           // flags from the declaration via newBaseGoal(gd.flags) + the defaults
+	baseGoal             // flags from the declaration via newBaseGoal(gd.flags) + the defaults
 	t          *TickLoop // the tick loop the handles re-resolve through (tick goroutine only)
 	caps       capSet    // the owning plugin's capabilities, threaded into every handle
 	name       string    // the declared mob name (thread name + error attribution)
@@ -303,6 +303,13 @@ func buildNativeGoal(kind string, gd goalDecl, decl *mobDecl) Goal {
 		// speedModifier routes from the declared movement_speed (declaredWalkSpeed), scaling the ctor's
 		// literal 1.0. Cite AbstractSkeleton.registerGoals @3 FleeSunGoal.
 		return newFleeSunGoal(declaredWalkSpeed(decl))
+	case "long_distance_patrol":
+		// PatrollingMonster.registerGoals @4 LongDistancePatrolGoal(this, 0.7, 0.595) — {MOVE}. The long-
+		// distance patrol walk (ai_goals_patrol.go). STRUCTURALLY REAL but INERT in v1: no PatrollingMonster
+		// mob exists among the 22 (Pillager/Vindicator/Evoker/Ravager absent), so no mob declares this and a
+		// v1 mob is never isPatrolling() — registered + faithful, dormant until a PatrollingMonster lands.
+		// Cite PatrollingMonster.registerGoals @4 LongDistancePatrolGoal.
+		return newLongDistancePatrolGoal()
 	case "nearest_healable_raider_target":
 		// MOB-HOST-07 (Task #9, heal branch): Witch.registerGoals targetSelector @2 NearestHealableRaiderTargetGoal
 		// — {TARGET}. The raid-heal target goal STRUCTURE (cooldown + nextBoolean coin-flip + hasActiveRaid gate);

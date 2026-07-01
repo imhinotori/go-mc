@@ -124,6 +124,72 @@ type mobAI struct {
 	// only (every other mob leaves it 0 — a zero-cost skip; the pig oracle is unperturbed). Cite
 	// Silverfish$SilverfishWakeUpFriendsGoal.lookForFriends.
 	silverfishLookForFriends int
+
+	// --- RAID membership (Raider fields, RAID subsystem — raid.go/raids.go) ------------------
+	//
+	// currentRaid is Raider.currentRaid: the back-pointer to the Raid this mob was spawned into (nil
+	// for a mob not in a raid). Raider.hasActiveRaid() reads currentRaid != nil && currentRaid.isActive()
+	// (witchHasActiveRaid, ai_goals_witch.go). raidJoinRaid sets it; raidRemoveRaider/stop clears it.
+	// A pointer to the Raid (coordinator-owned, single-owner TICK-05) — set/read only on the tick.
+	currentRaid *Raid
+	// raidWave is Raider.wave (the 1-based group number); canJoinRaid is Raider.canJoinRaid;
+	// ticksOutsideRaid is Raider.ticksOutsideRaid (the strayed-out counter). Plain ints/bool, tick-owned,
+	// zero for a non-raider. Cite Raider (setWave/setCanJoinRaid/setTicksOutsideRaid).
+	raidWave         int
+	canJoinRaid      bool
+	ticksOutsideRaid int
+
+	// --- PATROL state (PatrollingMonster fields — ai_goals_patrol.go) -------------------------
+	//
+	// patrolling is PatrollingMonster.patrolling; patrolLeader is PatrollingMonster.patrolLeader;
+	// patrolTarget{X,Y,Z} + patrolHasTarget are the @Nullable BlockPos patrolTarget; patrolCooldownUntil
+	// is LongDistancePatrolGoal.cooldownUntil (init -1 conceptually; 0 here == "never on cooldown" since
+	// gameTime starts at 0 and the check is gameTime < cooldownUntil). NONE of the 22 v1 mobs is a
+	// PatrollingMonster, so these stay zero on every live mob (a v1 mob is never isPatrolling()) — the
+	// patrol goal is STRUCTURALLY real but inert. Cite PatrollingMonster / LongDistancePatrolGoal.
+	patrolling          bool
+	patrolLeader        bool
+	patrolHasTarget     bool
+	patrolTargetX       int
+	patrolTargetY       int
+	patrolTargetZ       int
+	patrolCooldownUntil int64
+}
+
+// hasPatrolTarget ports PatrollingMonster.hasPatrolTarget: patrolTarget != null.
+func (m *mobAI) hasPatrolTarget() bool { return m.patrolHasTarget }
+
+// setPatrolTarget ports PatrollingMonster.setPatrolTarget(BlockPos): patrolTarget = target; patrolling = true.
+func (m *mobAI) setPatrolTarget(x, y, z int) {
+	m.patrolTargetX, m.patrolTargetY, m.patrolTargetZ = x, y, z
+	m.patrolHasTarget = true
+	m.patrolling = true
+}
+
+// patrolTargetCloserThan ports BlockPos.closerToCenterThan(pos, dist): the patrol target's block center
+// is within dist of (x,y,z). Used by LongDistancePatrolGoal.tick's leader "arrived" check.
+func (m *mobAI) patrolTargetCloserThan(x, y, z, dist float64) bool {
+	if !m.patrolHasTarget {
+		return false
+	}
+	dx := (float64(m.patrolTargetX) + 0.5) - x
+	dy := (float64(m.patrolTargetY) + 0.5) - y
+	dz := (float64(m.patrolTargetZ) + 0.5) - z
+	return dx*dx+dy*dy+dz*dz < dist*dist
+}
+
+// findPatrolTarget ports PatrollingMonster.findPatrolTarget: patrolTarget = blockPosition + (-500 +
+// random.nextInt(1000)) on X and Z; patrolling = true. The two nextInt(1000) DRAWS are on the mob's own
+// stream (draw-order-faithful).
+func (m *mobAI) findPatrolTarget(t *TickLoop, e *Entity) {
+	r := mobRandom(e)
+	bx := raidFloor(e.x)
+	bz := raidFloor(e.z)
+	m.patrolTargetX = bx + (-500 + r.nextInt(1000))
+	m.patrolTargetY = raidFloor(e.y)
+	m.patrolTargetZ = bz + (-500 + r.nextInt(1000))
+	m.patrolHasTarget = true
+	m.patrolling = true
 }
 
 // jumpControl is the ported net.minecraft.world.entity.ai.control.JumpControl — the per-mob jump
@@ -371,7 +437,7 @@ func newPigAI() *mobAI {
 	// priority @4 pair, so the carrot goal wins the shared {MOVE,LOOK} flags (the faithful "first-added
 	// wins" arbitration — ai_goal.go canBeReplacedBy needs other.priority < this.priority, 4<4 false).
 	// LOCKSTEP with vanilla_pig/main.star's two @4 TemptGoals (the oracle contract).
-	m.goals.addGoal(4, newTemptGoal(1.2, func(id int32) bool { return id == 887 }, false))                  // Items.CARROT_ON_A_STICK (id 887), canScare=false
+	m.goals.addGoal(4, newTemptGoal(1.2, func(id int32) bool { return id == 887 }, false))                 // Items.CARROT_ON_A_STICK (id 887), canScare=false
 	m.goals.addGoal(4, newTemptGoal(1.2, func(id int32) bool { return itemInTag(id, "pig_food") }, false)) // ItemTags.PIG_FOOD, canScare=false
 	// @5 FollowParentGoal(mob, 1.1) [] EMPTY flags — the GO-NATIVE baby follower (Phase 33). canUse gates
 	// on isBaby (false on the adult oracle), then trails the nearest adult same-class; NO RNG, EMPTY flags

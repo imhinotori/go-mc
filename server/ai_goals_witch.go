@@ -24,10 +24,10 @@ import (
 
 // RangedAttackGoal constants (verified CFR — the witch's ctor args).
 const (
-	witchRangedSpeed      = 1.0
-	witchAttackInterval   = 60   // Witch RangedAttackGoal(this, 1.0, 60, 10.0)
-	witchAttackRadius     = 10.0 // → radiusSqr 100
-	witchAttackRadiusSqr  = witchAttackRadius * witchAttackRadius
+	witchRangedSpeed       = 1.0
+	witchAttackInterval    = 60   // Witch RangedAttackGoal(this, 1.0, 60, 10.0)
+	witchAttackRadius      = 10.0 // → radiusSqr 100
+	witchAttackRadiusSqr   = witchAttackRadius * witchAttackRadius
 	witchLaunchUncertainty = 8.0 // performRangedAttack uncertainty arg
 )
 
@@ -420,23 +420,81 @@ func newNearestHealableRaiderTargetGoal() *nearestHealableRaiderTargetGoal {
 	return &nearestHealableRaiderTargetGoal{baseGoal: newBaseGoal(flagTarget)}
 }
 
-// witchHasActiveRaid ports Raider.hasActiveRaid() — CITED CONSTANT-FALSE (no raid subsystem in v1). The
-// goal short-circuits on it before findTarget, so the goal is inert. UPGRADE PATH: read the witch's raid
-// membership once the raid EVENT lands.
-func witchHasActiveRaid(_ *Entity) bool { return false }
+// witchHasActiveRaid ports Raider.hasActiveRaid(): getCurrentRaid() != null && getCurrentRaid().isActive().
+// NOW A REAL QUERY (the RAID EVENT landed, raid.go/raids.go): it reads the witch's raid membership back-
+// pointer (mobAI.currentRaid, set by raidJoinRaid when the witch spawns in a wave). A witch NOT in a raid
+// has currentRaid==nil and stays inert (the healable-raider goal never acquires); a witch spawned into an
+// ACTIVE raid reads true, so the NearestHealableRaiderTargetGoal proceeds past the hasActiveRaid gate.
+// Cite Raider.hasActiveRaid.
+func witchHasActiveRaid(e *Entity) bool {
+	if e == nil || e.ai == nil || e.ai.currentRaid == nil {
+		return false
+	}
+	return e.ai.currentRaid.isActive()
+}
 
-// canUse ports NearestHealableRaiderTargetGoal.canUse. The nextBoolean() coin-flip IS drawn (faithful RNG
-// order) whenever cooldown<=0; the hasActiveRaid gate then keeps the goal inert in v1.
+// canUse ports NearestHealableRaiderTargetGoal.canUse (VERIFIED CFR): cooldown/nextBoolean gate, then
+// !hasActiveRaid() short-circuit, then findTarget() + return target != null. The nextBoolean() coin-flip
+// IS drawn (faithful RNG order) whenever cooldown<=0. hasActiveRaid is NOW REAL (witchHasActiveRaid reads
+// the witch's raid membership). findTarget acquires the nearest matching raider per the witch's subselector
+// (Witch.registerGoals: `(target, level) -> hasActiveRaid() && !target.is(WITCH)` — a hurt NON-WITCH
+// raider). In v1 the ONLY spawnable raider is the WITCH itself, so the `!target.is(WITCH)` filter excludes
+// every candidate and findTarget acquires NOTHING — the goal is REAL (hasActiveRaid can be true) yet
+// faithfully never targets, exactly matching the jar in a witch-only wave. Cite NearestHealableRaiderTargetGoal.canUse.
 func (g *nearestHealableRaiderTargetGoal) canUse(t *TickLoop, e *Entity) bool {
 	if g.cooldown > 0 || !mobRandom(e).nextBoolean() { // cooldown + coin-flip gate (DRAW: nextBoolean)
 		return false
 	}
-	if !witchHasActiveRaid(e) { // !hasActiveRaid() — cited constant-false: the goal never proceeds in v1
+	if !witchHasActiveRaid(e) { // !hasActiveRaid() — NOW REAL: false unless the witch is in an active raid
 		return false
 	}
-	// findTarget() + return target != null: unreachable in v1 (no active raid). When the raid subsystem
-	// lands, this acquires the hurt fellow raider (the Raider heal-throw branch in performWitchRangedAttack).
-	return false
+	// findTarget(): the nearest hurt raider matching the subselector (!is(WITCH)) within range 500. In a
+	// witch-only v1 wave there are no non-witch raiders, so target stays nil (return false). g.acquire sets
+	// the witch's attack target when a real non-witch raider ever exists.
+	return g.findHealTarget(t, e)
+}
+
+// findHealTarget ports NearestAttackableTargetGoal.findTarget for the witch's heal subselector: scan the
+// witch's raid membership for the nearest ALIVE, HURT, NON-WITCH raider and (if found) set it as the
+// witch's target (super.start's setTarget). Returns whether a target was acquired. In v1 this always
+// returns false (no non-witch raiders exist) — the faithful witch-only-wave result — but it is a REAL scan
+// over the live raid roster, not a stub. Cite NearestAttackableTargetGoal.findTarget + the witch subselector.
+func (g *nearestHealableRaiderTargetGoal) findHealTarget(t *TickLoop, e *Entity) bool {
+	if e.ai == nil || e.ai.currentRaid == nil {
+		return false
+	}
+	raid := e.ai.currentRaid
+	var best *Entity
+	bestDistSqr := 500.0 * 500.0 // NearestAttackableTargetGoal followRange 500 (the ctor arg)
+	for _, set := range raid.groupRaiderMap {
+		for _, raider := range set {
+			if raider.id == e.id || raider.dead || raider.health <= 0 {
+				continue
+			}
+			// subselector: !target.is(WITCH). The acquiring mob e IS a witch (this goal only registers on the
+			// witch), and every v1 raider is likewise a witch, so `raider.typ == e.typ` is the `is(WITCH)`
+			// filter — it excludes every v1 raider (import-free: compares against the witch's own type id).
+			if raider.typ == e.typ {
+				continue
+			}
+			// heal target must be HURT (a full-health raider is not worth a REGENERATION splash) —
+			// NearestAttackableTargetGoal itself has no hurt gate, but the witch only THROWS regen at a
+			// hurt raider (performRangedAttack's target.getHealth() branch); acquiring the nearest is faithful.
+			dx := raider.x - e.x
+			dy := raider.y - e.y
+			dz := raider.z - e.z
+			d := dx*dx + dy*dy + dz*dz
+			if d < bestDistSqr {
+				best = raider
+				bestDistSqr = d
+			}
+		}
+	}
+	if best == nil {
+		return false
+	}
+	e.ai.attackTargetID = best.id // super.start() == setTarget(target)
+	return true
 }
 
 // start ports NearestHealableRaiderTargetGoal.start: cooldown = reducedTickDelay(200); super.start().

@@ -110,6 +110,12 @@ type region struct {
 	// inside tickFluids (a nil queue drains to nothing).
 	fluidSchedule *fluidScheduleQueue
 
+	// raidsManager is the per-region Raids manager (raids.go — the ServerLevel.getRaids() analogue): it
+	// holds every active Raid for this region's level and is ticked once per tick on the coordinator at
+	// the quiescent barrier (raidsTickAllRegions). nil until the first raid is created (ensureRaidsManager
+	// lazily builds it); most regions never have one. Coordinator-owned (TICK-05).
+	raidsManager *raidsManager
+
 	// levelRandom is the per-region level RandomSource (Level.random analogue). It is NEVER shared
 	// across regions: two goroutines drawing from one LegacyRandomSource is a data race AND makes
 	// the RNG stream non-deterministic per region (27-RESEARCH anti-pattern). newRegion seeds it

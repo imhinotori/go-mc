@@ -133,3 +133,46 @@ found during Phase A append here.)
   FIRE_RESISTANCE (fire immunity) effects are attached + ticked + hasEffect-visible on the witch, but their
   server-side observable action is movement/breath/fire-subsystem-deferred (sibling of the player-side
   slowness no-op). The effect PRESENCE (the ladder's !hasEffect gate) is faithful now.
+
+## RAID event subsystem (raid.go / raids.go / raid_tick.go / ai_goals_patrol.go)
+
+The Raid EVENT core landed 1:1 from `net.minecraft.world.entity.raid.Raid` / `.Raids` /
+`PatrollingMonster$LongDistancePatrolGoal` (VERIFIED CFR): the wave schedule (numGroups PEACEFUL 0 /
+EASY 3 / NORMAL 5 / HARD 7), the RaiderType.spawnsPerWaveBeforeBonus table (ordinals VINDICATOR 0 /
+EVOKER 1 / PILLAGER 2 / WITCH 3 / RAVAGER 4), getPotentialBonusSpawns (RNG-draw-faithful), the 300-tick
+pre-wave cooldown countdown, shouldSpawnGroup / spawnGroup / joinRaid / updateRaiders / removeFromRaid,
+the ONGOING->VICTORY (final wave + 40 postRaidTicks) / STOPPED (48000 timeout) transitions, and the
+ServerBossEvent MODEL (progress/name/visible). `Raider.hasActiveRaid()` is now a REAL query
+(mobAI.currentRaid back-pointer), so the witch's NearestHealableRaiderTargetGoal proceeds past the
+hasActiveRaid gate + runs its real findTarget. A raid is startable via the `/dbg raid` + `createRaidAt`
+SEAM and the raid loop ticks on the coordinator at the quiescent barrier (raidsTickAllRegions).
+
+Deferrals (cited, NOT silently dropped):
+- **Bad-omen -> raid AUTO-trigger (`Raids.createOrExtendRaid`)** — reads
+  `level.getPoiManager().getInRange(VILLAGE)`; there is NO village/POI subsystem (grep PoiManager: zero
+  hits) and NO BAD_OMEN/RAID_OMEN mob effects. Replaced by the `createRaidAt` test/dbg SEAM so the raid
+  loop is fully exercised + hasActiveRaid is real+testable. Closes with the POI/village + omen-effect subsystems.
+- **Village center guards in Raid.tick** — `isVillage(center)` / `moveRaidCenterToNearbyVillageSection` /
+  the "drifted out of a village -> LOSS" branch are POI-deferred; the raid holds its fixed center.
+- **Absent RaiderType mobs (Pillager/Vindicator/Evoker/Ravager)** — only WITCH exists among the 22 merged
+  mobs. spawnGroup computes their counts faithfully but `raidCreateRaider` returns nil for them (the jar's
+  `EntityType.create(...) == null` loop-guard behavior), so no mob spawns. The ravager-rider spawns
+  (Pillager/Evoker/Vindicator riding a Ravager) + the leader ominous banner (setLeader) are deferred with
+  them. In a witch-only wave the witch's heal subselector `!target.is(WITCH)` correctly excludes every
+  raider (findTarget acquires nothing) — 1:1 with vanilla for that roster.
+- **findRandomSpawnPos heightmap/village probing** — reduced to the raid center (spawnGroup places raiders
+  at center+0.5). The observable (a wave of witches spawns near center) is faithful.
+- **ServerBossEvent CLIENT WIRE** — there is NO ClientboundBossEventPacket in net/packet (grep: zero
+  hits). The bar MODEL (progress/name/visible/players) is computed 1:1; its packet emission closes when a
+  BossEvent wire lands (pure add-on).
+- **Raids SavedData persistence + RAIDS gamerule** — the per-raid tick + STOPPED prune are faithful; the
+  Codec/SavedData disk persistence + the RAIDS gamerule short-circuit are reduced (no gamerule/SavedData
+  subsystem).
+- **Hero-of-the-village grant + raid horn sound** — the VICTORY path's HERO_OF_THE_VILLAGE effect grant +
+  RAID_HORN ClientboundSoundPacket are deferred (no player-hero tracking / sound bus).
+- **PatrollingMonster.LongDistancePatrolGoal (`kind="long_distance_patrol"`)** — a COMPLETE, testable port
+  (canUse gate + the yRot(90)*0.4 long-distance step + moveRandomly + findPatrolTarget + the nav-fail
+  200-tick cooldown), registered via buildNativeGoal. STRUCTURALLY REAL but INERT: no PatrollingMonster
+  mob exists among the 22 (all RaiderTypes but WITCH are absent), so no mob declares it and a v1 mob is
+  never isPatrolling(). The leader companion-drag (findPatrolCompanions) is broad-phase-deferred; a lone
+  patroller drops patrolling (the faithful no-companion branch). Becomes live when a PatrollingMonster mob lands.
