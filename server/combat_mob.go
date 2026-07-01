@@ -176,6 +176,15 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 		// with no v1 source). WR-05: the reported "no sound on hit" gap.
 		t.playMobHurtSound(e)
 	}
+
+	// MOB-HOST-08 (Task #9): the EnderMan.hurtServer teleport reaction — a per-type post-hurt hook (gated
+	// on typ == entity.Enderman.ID) run AFTER the shared hit lands. A projectile/indirect hit makes the
+	// enderman dodge; a non-living-attacker hit teleports on nextInt(10)!=0; a player melee hit does NOT
+	// teleport. Guarded on survival inside endermanHurtTeleport. ADDITIVE + enderman-gated (zero draws for
+	// every non-enderman — the pig oracle stream is untouched). Cite EnderMan.hurtServer.
+	if e.typ == entity.Enderman.ID {
+		t.endermanHurtTeleport(e, src)
+	}
 }
 
 // playMobHurtSound is the port of LivingEntity.playHurtSound(DamageSource) -> makeSound(getHurtSound(

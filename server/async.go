@@ -425,6 +425,8 @@ var naturalMonsterMobNames = []string{
 	// MOB-HOST-06 (Task #9): the Creeper spawns naturally in the overworld dark (unlike the biome-gated
 	// husk/silverfish), so it JOINS the uniform MONSTER pool — a faithful overworld hostile.
 	vanillaCreeperMobName,
+	// MOB-HOST-08 (Task #9): the Enderman spawns naturally in the overworld dark too — JOINS the pool.
+	vanillaEndermanMobName,
 }
 
 // pickNaturalMonsterMob returns the name of one of the 3 vanilla MONSTER mobs to place at a natural

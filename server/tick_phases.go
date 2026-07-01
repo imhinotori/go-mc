@@ -414,6 +414,12 @@ func (t *TickLoop) tickAI() {
 		if e.typ == entity.Creeper.ID {
 			t.creeperAiStep(e)
 		}
+		// MOB-HOST-08 (Task #9): the EnderMan.customServerAiStep daylight-flee (random teleport away when
+		// brightly lit + sky-exposed). Per-type-gated like the creeper/chicken, AFTER serverAiStep.
+		// ADDITIVE + enderman-gated (zero cost / zero RNG for every non-enderman — pig oracle untouched).
+		if e.typ == entity.Enderman.ID {
+			t.endermanAiStep(e)
+		}
 	}
 
 	// Throttled natural spawner: vanilla attempts every tick (most no-op under cap); v1 runs the
