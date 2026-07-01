@@ -202,6 +202,12 @@ type Entity struct {
 	// hurtTime = hurtDuration`).
 	hurtDuration int32
 
+	// remainingFireTicks is Entity.remainingFireTicks: the burn countdown. igniteForSeconds(n) sets it
+	// to floor(n*20) (only if larger); baseTick decrements it, deals 1 fire damage every 20 ticks, and
+	// broadcasts the on-fire shared-flag (DATA_SHARED_FLAGS bit 0x01). 0 = not on fire. Tick-owned.
+	//	[VERIFIED javap Entity.remainingFireTicks / igniteForTicks / baseTick fire block.]
+	remainingFireTicks int32
+
 	// lastDamageSource is LivingEntity.lastDamageSource — the genuine ported source set in the flag2
 	// (fresh-hit) block of hurtServer (bytecode 449-451). MOB-SUB-02: PanicGoal (P31) reads its tag,
 	// wolf anger (P36) reads its attacker. A plain value (no pointer) — the Folia rule.

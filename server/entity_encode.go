@@ -455,6 +455,22 @@ func woolDataEntry(woolByte byte) entityDataEntry {
 	}
 }
 
+// dataSharedFlagsIndex is the SynchedEntityData accessor index for Entity.DATA_SHARED_FLAGS_ID — the
+// FIRST entity data value defined (index 0), a BYTE whose bits are the shared entity flags
+// (0x01 on-fire, 0x02 crouching, 0x08 sprinting, …). v1 broadcasts only the on-fire bit (fire.go).
+//	[VERIFIED javap Entity.defineSynchedData: DATA_SHARED_FLAGS_ID = defineId(BYTE) first → index 0.]
+const dataSharedFlagsIndex = 0
+
+// sharedFlagsDataEntry builds the DATA_SHARED_FLAGS byte entry (index 0, BYTE serializer): Byte(0) +
+// VarInt(byteSerializerID=0) + Byte(flags). Used to render/clear the on-fire flames on trackers.
+func sharedFlagsDataEntry(flags int8) entityDataEntry {
+	return entityDataEntry{
+		index:        dataSharedFlagsIndex,
+		serializerID: byteSerializerID,
+		value:        pk.Byte(flags),
+	}
+}
+
 // --- MOB-NEUT-01 (Phase 36-01): the DATA_FLAGS data-value (the Wolf tame/sitting byte) --------------
 //
 // A TamableAnimal synchs its tame + sit flags in ONE byte, DATA_FLAGS: bit 0x1 = inSittingPose (the

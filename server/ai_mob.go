@@ -208,6 +208,14 @@ func (m *mobAI) serverAiStep(t *TickLoop, e *Entity) {
 		m.noJumpDelay--
 	}
 
+	// Mob.aiStep daylight-burn (fire.go sunBurnTick): a sun-sensitive mob (zombie/skeleton) in open
+	// sky during the day ignites for 8s. isSunSensitive GATES the nextFloat() draw to those types ONLY,
+	// so a passive Pig never reaches it — zero new draws on the pig's per-mob RNG stream (the oracle is
+	// unperturbed; PITFALLS Pitfall 5). Placed in aiStep like vanilla (the Zombie.aiStep sun-burn limb).
+	if isSunSensitive(e) {
+		t.sunBurnTick(e)
+	}
+
 	// (sensing.tick — skipped: the v1 goals probe the world directly in their canUse.)
 	// Mob.serverAiStep order (bytecode-confirmed, the file header doc lines 7-8): the targetSelector
 	// (combat-target goals) ticks BEFORE the goalSelector (action goals), then BOTH explicit

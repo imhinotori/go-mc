@@ -51,6 +51,9 @@ var (
 	// damageTypeGeneric is minecraft:generic — the catch-all source for an attributed-less hit (the
 	// debug /damage command, which carries no real DamageType source in v1).
 	damageTypeGeneric = damageTypeID(tag.DamageTypeIDs["minecraft:generic"])
+	// damageTypeOnFire is minecraft:on_fire — the source Entity.baseTick deals every 20 fire ticks
+	// (damageSources().onFire(), 1.0 damage) while remainingFireTicks > 0.
+	damageTypeOnFire = damageTypeID(tag.DamageTypeIDs["minecraft:on_fire"])
 )
 
 // damageSourceOf builds a DamageSource for an environmental/anonymous source: the given damage-type

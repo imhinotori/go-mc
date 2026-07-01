@@ -324,6 +324,11 @@ func (t *TickLoop) tickAI() {
 	// serverAiStep).
 	for _, e := range t.cur().entities.byID {
 		t.tickMobIFrames(e)
+		// Entity.baseTick fire block (fire.go): while burning, deal on_fire damage every 20 ticks +
+		// keep the on-fire shared-flag synced + extinguish in water. Pure-int + a gated damage/broadcast;
+		// NO RNG draw, and a non-burning entity (remainingFireTicks==0, the oracle pig) is an early-return
+		// no-op → the pig oracle's pinned stream is unperturbed (PITFALLS Pitfall 5).
+		t.tickEntityFire(e)
 		// MOB-SUB-08 (Plan 33-01): AgeableMob aging, in the SAME OUTSIDE-serverAiStep per-mob loop as the
 		// i-frame decrement (vanilla runs aging in aiStep; we run it here — pure-int, no draw — to keep it
 		// off the per-mob RNG stream the pig oracle pins; the cited oracle-preserving optimization). A baby
