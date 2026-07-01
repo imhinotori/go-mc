@@ -1,0 +1,12 @@
+name = "vanilla_ocelot"
+# (ocelot: the ambient slice reuses the cat's caps: read own state + nearest player, write look/nav.
+# It NEVER sets blocks, so NO world.write.)
+version = "0.1.0"
+entrypoint = "main.star"
+runtime = "starlark"
+# Least-privilege caps (matching the cat, the sibling feline CREATURE):
+#   entities.read  - read x/y/z + is_in_love (breed), tempt-player food scan
+#   entities.write - set_look_at (the LOOK goals' LookControl.setLookAt analogue)
+#   world.read     - nearest_player (LookAtPlayerGoal's getNearestPlayer)
+#   nav            - path_to/has_path (WaterAvoidingRandomStrollGoal's navigation.moveTo/isDone)
+capabilities = ["entities.read", "entities.write", "world.read", "nav"]

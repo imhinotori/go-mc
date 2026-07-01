@@ -171,6 +171,22 @@ func categoryOf(t entity.ID) mobCategory {
 		// like the other passives — though it never joins the NATURAL pool (dried-ghast rehydration only,
 		// cited), so the category matters only for the shared count accounting.
 		return categoryCreature
+	case entity.Endermite.ID:
+		// MOB-PREY (Task #9): Endermite is MobCategory.MONSTER (vanilla EntityType.ENDERMITE; data/entity
+		// Endermite.Type == "monster", id 42). Same MONSTER-budget accounting as the zombie. (Endermite is NOT
+		// naturally spawned - only from an EnderMan teleport, special-gated - so it stays OUT of the uniform
+		// natural MONSTER pool; see async.go, like husk/silverfish.)
+		return categoryMonster
+	case entity.Turtle.ID:
+		// MOB-PREY (Task #9): Turtle is MobCategory.CREATURE (vanilla EntityType.TURTLE; data/entity
+		// Turtle.Type == "creature", id 138). Same CREATURE-budget accounting as the cow. (Turtle spawns only
+		// on BEACH biomes - biome-gated - so it stays OUT of the uniform natural CREATURE pool.)
+		return categoryCreature
+	case entity.Ocelot.ID:
+		// MOB-PREY (Task #9): Ocelot is MobCategory.CREATURE (vanilla EntityType.OCELOT; data/entity
+		// Ocelot.Type == "creature", id 91). Same CREATURE-budget accounting as the cat. (Ocelot spawns only
+		// in JUNGLE biomes - biome-gated - so it stays OUT of the uniform natural CREATURE pool.)
+		return categoryCreature
 	default:
 		return categoryMisc
 	}

@@ -83,6 +83,16 @@ var allFourMobs = []struct {
 	// observable goals, 0 targetSelector). RandomFloatAroundGoal@5 FLIGHT is HOST-NATIVE (happyGhastAiStep),
 	// NOT a declared nav goal; the Brain + ride/harness + dried-ghast spawn are cite-deferred (.star header).
 	{vanillaHappyGhastMobName, entity.HappyGhast.ID, 2, 0},
+	// MOB-PREY (Task #9): Endermite - float@1 + climb_on_powder_snow@1 + melee@2 + stroll@3 + look@7 +
+	// around@8 (6 goalSelector) + hurt_by@1 + nearest@2 (2 targetSelector); the Go-native despawn timer
+	// (endermiteAiStep) is a tick hook, not a declared goal.
+	{vanillaEndermiteMobName, entity.Endermite.ID, 6, 2},
+	// MOB-PREY (Task #9): Turtle - panic@0 + breed@1 + tempt(turtle_food)@2 + look@8 + stroll@9 (5
+	// goalSelector, 0 targetSelector); the water-nav trio (GoToWater/GoHome/Travel) + egg-lay are cite-deferred.
+	{vanillaTurtleMobName, entity.Turtle.ID, 5, 0},
+	// MOB-PREY (Task #9): Ocelot - tempt@0 + float@1 + tempt@3 (the same instance re-added) + breed@9 +
+	// stroll@10 + look@11 (6 goalSelector, 0 targetSelector); leap/attack/prey-target + trust are cite-deferred.
+	{vanillaOcelotMobName, entity.Ocelot.ID, 6, 0},
 }
 
 // TestAllFourMobsBootLoad: loadVanillaMobRegistry returns ONE registry holding the passive + hostile +
@@ -97,9 +107,9 @@ func TestAllFourMobsBootLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadVanillaMobRegistry: %v", err)
 	}
-	const wantTotal = 19 // + Task-#9 mobs + the SulfurCube + HappyGhast (husk/mooshroom/silverfish/creeper/witch/rabbit/enderman/cat/fox/sulfur_cube)
+	const wantTotal = 22 // + the 3 prey mobs (endermite/turtle/ocelot) added to the 19 (husk/mooshroom/silverfish/creeper/witch/rabbit/enderman/cat/fox/sulfur_cube/happy_ghast)
 	if got := len(r.byName); got != wantTotal {
-		t.Fatalf("registry holds %d declarations, want %d (19: passives+hostiles+variants+witch+rabbit+enderman+cat+fox+sulfur_cube+happy_ghast)", got, wantTotal)
+		t.Fatalf("registry holds %d declarations, want %d (22: passives+hostiles+variants+witch+rabbit+enderman+cat+fox+sulfur_cube+happy_ghast+endermite+turtle+ocelot)", got, wantTotal)
 	}
 	for _, m := range allFourMobs {
 		decl, ok := r.byName[m.name]

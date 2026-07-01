@@ -123,6 +123,27 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned happy_ghast eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+3, p.z))
 		}
+	case "endermite":
+		// MOB-PREY (Task #9): spawn a vanilla endermite (small MONSTER, Endermite wire type). It hunts + melees
+		// like a silverfish and DESPAWNS after ~2 min (endermiteAiStep life>=2400) unless made persistent.
+		e := t.spawnVanillaMob(vanillaEndermiteMobName, p.x, p.y, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned endermite eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
+		}
+	case "turtle":
+		// MOB-PREY (Task #9): spawn a vanilla turtle (beach CREATURE, Turtle wire type). It strolls/panics/breeds
+		// + is tempted by seagrass; the water-nav + egg-lay goals are cite-deferred (.star header).
+		e := t.spawnVanillaMob(vanillaTurtleMobName, p.x, p.y, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned turtle eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
+		}
+	case "ocelot":
+		// MOB-PREY (Task #9): spawn a vanilla ocelot (jungle CREATURE, Ocelot wire type). It is tempted by
+		// cod/salmon + breeds/strolls; the hunt (leap/attack/prey-target) + trust are cite-deferred (.star header).
+		e := t.spawnVanillaMob(vanillaOcelotMobName, p.x, p.y, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned ocelot eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
+		}
 	case "water":
 		t.dbgFillWater(p)
 		t.broadcastSystemChat("[dbg] filled a water box around you")
@@ -133,7 +154,7 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] water box + pig eid=%d dropped in", e.id))
 		}
 	default:
-		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | water | pig-in-water")
+		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | water | pig-in-water")
 	}
 }
 

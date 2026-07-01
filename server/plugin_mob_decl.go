@@ -172,6 +172,12 @@ var baseTypeByName = map[string]entity.Entity{
 	// happy_ghast (Task): the flying rideable Animal. Renders as its OWN wire type (entity.HappyGhast,
 	// id 58); the hover flight + fly-to selection are host-native (happyGhastAiStep, ai_goals_happy_ghast.go).
 	"happy_ghast": entity.HappyGhast,
+	// MOB-PREY (Task #9): the 3 prey mobs. Endermite (MONSTER, id 42) - the enderman spawn + the endermite's
+	// own hunt+despawn; Turtle (CREATURE, id 138) - the beach passive; Ocelot (CREATURE, id 91) - the jungle
+	// feline. Each renders as its OWN wire type. Cite Endermite/Turtle/Ocelot registerGoals.
+	"endermite": entity.Endermite,
+	"turtle":    entity.Turtle,
+	"ocelot":    entity.Ocelot,
 }
 
 // resolveBaseType resolves a base_type string to its data/entity record. (record, true) for an

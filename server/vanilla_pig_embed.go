@@ -29,7 +29,7 @@ import (
 // embedded manifest governs, T-24-07). Keep each repo-root/embed pair byte-identical. Embedding the
 // dirs covers plugin.toml + main.star for each mob.
 //
-//go:embed assets/vanilla_pig assets/vanilla_cow assets/vanilla_sheep assets/vanilla_chicken assets/vanilla_zombie assets/vanilla_skeleton assets/vanilla_spider assets/vanilla_wolf assets/vanilla_husk assets/vanilla_mooshroom assets/vanilla_silverfish assets/vanilla_creeper assets/vanilla_witch assets/vanilla_rabbit assets/vanilla_enderman assets/vanilla_cat assets/vanilla_fox assets/vanilla_sulfur_cube assets/vanilla_happy_ghast
+//go:embed assets/vanilla_pig assets/vanilla_cow assets/vanilla_sheep assets/vanilla_chicken assets/vanilla_zombie assets/vanilla_skeleton assets/vanilla_spider assets/vanilla_wolf assets/vanilla_husk assets/vanilla_mooshroom assets/vanilla_silverfish assets/vanilla_creeper assets/vanilla_witch assets/vanilla_rabbit assets/vanilla_enderman assets/vanilla_cat assets/vanilla_fox assets/vanilla_sulfur_cube assets/vanilla_happy_ghast assets/vanilla_endermite assets/vanilla_turtle assets/vanilla_ocelot
 var vanillaMobFS embed.FS
 
 // The declared mob names the swap sites look up. Each is the directory name under assets/ AND the
@@ -102,6 +102,13 @@ const (
 	vanillaSulfurCubeMobName = "vanilla_sulfur_cube"
 	// happy_ghast (Task): the flying rideable Animal (hover flight + baby scaling; ride/brain deferred).
 	vanillaHappyGhastMobName = "vanilla_happy_ghast"
+
+	// MOB-PREY (Task #9): the 3 prey mobs. Endermite (MONSTER) - the combat slice + the Go-native despawn
+	// timer (endermiteAiStep); Turtle + Ocelot (CREATURE) - the portable ambient/tempt slice (water-nav +
+	// egg-lay for the turtle, hunt/trust for the ocelot, cite-deferred). Additive.
+	vanillaEndermiteMobName = "vanilla_endermite"
+	vanillaTurtleMobName    = "vanilla_turtle"
+	vanillaOcelotMobName    = "vanilla_ocelot"
 )
 
 // vanillaMobNames is the load order: ALL EIGHT bundled mobs (the 4 passives + the 3 Phase-35 hostiles +
@@ -131,6 +138,9 @@ var vanillaMobNames = []string{
 	vanillaFoxMobName,
 	vanillaSulfurCubeMobName,
 	vanillaHappyGhastMobName,
+	vanillaEndermiteMobName,
+	vanillaTurtleMobName,
+	vanillaOcelotMobName,
 }
 
 // loadVanillaMobRegistry materializes EACH bundled vanilla mob plugin to a temp dir, parses its

@@ -200,6 +200,43 @@ func foxSupplier() *Supplier {
 		Build()
 }
 
+// endermiteSupplier is Endermite's attribute supplier. Endermite.createAttributes = Monster
+// .createMonsterAttributes().add(MAX_HEALTH 8).add(MOVEMENT_SPEED 0.25).add(ATTACK_DAMAGE 2). Cite
+// net.minecraft.world.entity.monster.Endermite.createAttributes (javap this session: MAX_HEALTH
+// ldc2_w 8.0d, MOVEMENT_SPEED 0.25d, ATTACK_DAMAGE 2.0d).
+func endermiteSupplier() *Supplier {
+	return createMonsterAttributes().
+		AddValue(MaxHealth, 8.0).
+		AddValue(MovementSpeed, 0.25).
+		AddValue(AttackDamage, 2.0).
+		Build()
+}
+
+// turtleSupplier is Turtle's attribute supplier. Turtle.createAttributes = Animal.createAnimalAttributes()
+// .add(MAX_HEALTH 30).add(MOVEMENT_SPEED 0.25).add(STEP_HEIGHT 1.0). Cite
+// net.minecraft.world.entity.animal.turtle.Turtle.createAttributes (javap this session: MAX_HEALTH
+// ldc2_w 30.0d, MOVEMENT_SPEED 0.25d, STEP_HEIGHT dconst_1 == 1.0d). STEP_HEIGHT 1.0 OVERRIDES the base
+// createLivingAttributes default 0.6 (a turtle auto-steps a full block, like the enderman).
+func turtleSupplier() *Supplier {
+	return createAnimalAttributes().
+		AddValue(MaxHealth, 30.0).
+		AddValue(MovementSpeed, 0.25).
+		AddValue(StepHeight, 1.0).
+		Build()
+}
+
+// ocelotSupplier is Ocelot's attribute supplier. Ocelot.createAttributes = Animal.createAnimalAttributes()
+// .add(MAX_HEALTH 10).add(MOVEMENT_SPEED 0.3).add(ATTACK_DAMAGE 3). Cite
+// net.minecraft.world.entity.animal.feline.Ocelot.createAttributes (javap this session: MAX_HEALTH
+// ldc2_w 10.0d, MOVEMENT_SPEED ldc2_w 0.30000001192092896d float-widened double, ATTACK_DAMAGE 3.0d).
+func ocelotSupplier() *Supplier {
+	return createAnimalAttributes().
+		AddValue(MaxHealth, 10.0).
+		AddValue(MovementSpeed, 0.30000001192092896).
+		AddValue(AttackDamage, 3.0).
+		Build()
+}
+
 // happyGhastSupplier is the port of HappyGhast.createAttributes(): Animal.createAnimalAttributes()
 // (which adds TEMPT_RANGE 10.0) then .add(MAX_HEALTH 20.0).add(TEMPT_RANGE 16.0).add(FLYING_SPEED 0.05)
 // .add(MOVEMENT_SPEED 0.05).add(FOLLOW_RANGE 16.0).add(CAMERA_DISTANCE 8.0). The later TEMPT_RANGE 16.0
@@ -397,6 +434,11 @@ var suppliers = map[string]*Supplier{
 	// happy_ghast (Task): HappyGhast is a flying Animal; happyGhastSupplier is a 1:1 copy of
 	// HappyGhast.createAttributes (FLYING_SPEED + CAMERA_DISTANCE + the 16.0 tempt/follow range).
 	"happy_ghast": happyGhastSupplier(),
+	// MOB-PREY (Task #9): the 3 prey mobs. Endermite (Monster), Turtle + Ocelot (Animal), each a 1:1 jar
+	// copy of its createAttributes (verified bytecode this session).
+	"endermite": endermiteSupplier(),
+	"turtle":    turtleSupplier(),
+	"ocelot":    ocelotSupplier(),
 }
 
 // livingCategories is the set of data/entity.Entity.Type values that correspond to a vanilla

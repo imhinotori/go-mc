@@ -458,6 +458,15 @@ type Entity struct {
 	//	 `if (--eggTime <= 0) { ...drop... ; eggTime = random.nextInt(6000) + 6000; }`.]
 	eggTime int
 
+	// life is net.minecraft.world.entity.monster.Endermite.life - the endermite's despawn counter. A
+	// NON-persistent endermite increments it each server tick (Endermite.aiStep) and discard()s when it
+	// reaches MAX_LIFE (2400 ticks, ~2 min). Set at 0 (DEFAULT_LIFE) on spawn; advanced ONLY by
+	// endermiteAiStep (tick wiring gates on typ == entity.Endermite.ID), so it is inert for every other
+	// entity and the pig oracle stream is unperturbed.
+	//	[VERIFIED javap Endermite: `int life`; MAX_LIFE 2400; aiStep `if (!isPersistenceRequired()) ++life;
+	//	 if (life >= 2400) discard();`.]
+	life int
+
 	// --- MOB-NEUT-01/02 (Phase 36-01): Wolf TamableAnimal / NeutralMob state ------------------
 	//
 	// The wolf is the FIRST tameable/neutral mob; these fields mirror the TamableAnimal (tame/owner/

@@ -1,0 +1,12 @@
+name = "vanilla_turtle"
+# (turtle: the ambient slice reuses the cow's caps: read own state + nearest player, write look/nav.
+# It NEVER sets blocks - the egg-lay block is cite-deferred - so NO world.write.)
+version = "0.1.0"
+entrypoint = "main.star"
+runtime = "starlark"
+# Least-privilege caps (matching the cow, the sibling passive CREATURE):
+#   entities.read  - read x/y/z + is_baby / is_in_love (breed/follow), tempt-player food scan
+#   entities.write - set_look_at (the LOOK goals' LookControl.setLookAt analogue)
+#   world.read     - nearest_player (LookAtPlayerGoal's getNearestPlayer)
+#   nav            - path_to/has_path (RandomStrollGoal's navigation.moveTo/isDone)
+capabilities = ["entities.read", "entities.write", "world.read", "nav"]

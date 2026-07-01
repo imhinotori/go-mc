@@ -450,6 +450,12 @@ func (t *TickLoop) tickAI() {
 		if e.typ == entity.Fox.ID {
 			t.foxAiStep(e)
 		}
+		// MOB-PREY (Task #9): the Endermite.aiStep despawn timer (life++ while non-persistent, discard at
+		// life>=2400). Per-type-gated like the creeper/enderman, AFTER serverAiStep. ADDITIVE + endermite-gated
+		// (zero cost / zero RNG for every non-endermite - the pig oracle stream is untouched).
+		if e.typ == entity.Endermite.ID {
+			t.endermiteAiStep(e)
+		}
 	}
 
 	// Throttled natural spawner: vanilla attempts every tick (most no-op under cap); v1 runs the
