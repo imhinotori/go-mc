@@ -77,6 +77,11 @@ func (et *entityTracker) Tick() {
 				// terminator keeps the stream aligned), then SetEntityMotion only if moving.
 				p.client.Send(encodeAddEntity(e))
 				p.client.Send(encodeSetEntityData(e))
+				// Equipment (SetEquipment per populated slot): a skeleton spawns visibly holding its
+				// bow. A mob with no equipment (the pig) yields no packets — the byte-identical default.
+				for _, ep := range equipmentSpawnPackets(e) {
+					p.client.Send(ep)
+				}
 				if e.vx != 0 || e.vy != 0 || e.vz != 0 {
 					p.client.Send(encodeSetEntityMotion(e))
 				}
@@ -207,6 +212,9 @@ func snapshotEntity(e *Entity) Entity {
 		onGround: e.onGround,
 		width:    e.width,
 		height:   e.height,
+		// Equipment is a VALUE array — a plain struct copy carries it, so the off-tick worker's
+		// equipmentSpawnPackets reads the mob's slots without aliasing the live store (Pitfall 3).
+		equipment: e.equipment,
 	}
 	if len(e.metadata) > 0 {
 		// Deep-copy the metadata bytes so the worker never aliases the live slot.
@@ -237,6 +245,9 @@ func computeTrackerDiff(snap []Entity, tracked map[int32]bool) (packets []pk.Pac
 			// only if moving) and record the add in the delta.
 			packets = append(packets, encodeAddEntity(e))
 			packets = append(packets, encodeSetEntityData(e))
+			// Equipment (SetEquipment per populated slot) — the worker reads the snapshot's value
+			// equipment array (no live-store alias); a no-equipment mob appends nothing.
+			packets = append(packets, equipmentSpawnPackets(e)...)
 			if e.vx != 0 || e.vy != 0 || e.vz != 0 {
 				packets = append(packets, encodeSetEntityMotion(e))
 			}

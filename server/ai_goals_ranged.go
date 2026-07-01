@@ -28,6 +28,7 @@ package server
 import (
 	"math"
 
+	"github.com/imhinotori/sulfur/data/item"
 	"github.com/imhinotori/sulfur/level/attribute"
 )
 
@@ -68,15 +69,34 @@ func newRangedBowAttackGoal() *rangedBowAttackGoal {
 
 func (g *rangedBowAttackGoal) requiresUpdateEveryTick() bool { return true }
 
-// canUse: target != null && isHoldingBow. v1: isHoldingBow is the cited constant true (the skeleton always
-// carries a bow — no equipment subsystem), so canUse reduces to "has a target".
+// canUse is net.minecraft.world.entity.ai.goal.RangedBowAttackGoal.canUse:
+//
+//	return this.mob.getTarget() != null && this.isHoldingBow();
+//
+// isHoldingBow() == mob.isHolding(Items.BOW). Now that the skeleton carries a REAL bow in MAINHAND
+// (populateSkeletonEquipment, the AbstractSkeleton.populateDefaultEquipmentSlots port), isHoldingBow
+// reads the actual held item (isHoldingItem) instead of the previous cited constant — so a skeleton
+// that ever LOST its bow would correctly drop the ranged goal, exactly as vanilla's reassessWeaponGoal.
+//
+//	[VERIFIED javap RangedBowAttackGoal.canUse: getTarget() != null && isHoldingBow();
+//	 isHoldingBow(): mob.isHolding(Items.BOW).]
 func (g *rangedBowAttackGoal) canUse(t *TickLoop, e *Entity) bool {
-	return mobTarget(e) != 0
+	return mobTarget(e) != 0 && e.isHoldingItem(int32(item.Bow.ID))
 }
 
-// canContinueToUse: (canUse || !navigation.isDone()) && isHoldingBow. isDone == !navigation.active().
+// canContinueToUse is RangedBowAttackGoal.canContinueToUse:
+//
+//	return (this.canUse() || !this.mob.getNavigation().isDone()) && this.isHoldingBow();
+//
+// isDone == !navigation.active(). isHoldingBow() == mob.isHolding(Items.BOW) (the real held item).
+//
+//	[VERIFIED javap RangedBowAttackGoal.canContinueToUse: (canUse() || !navigation.isDone()) &&
+//	 isHoldingBow().]
 func (g *rangedBowAttackGoal) canContinueToUse(t *TickLoop, e *Entity) bool {
 	if e.ai == nil {
+		return false
+	}
+	if !e.isHoldingItem(int32(item.Bow.ID)) {
 		return false
 	}
 	return g.canUse(t, e) || e.ai.navigation.active()

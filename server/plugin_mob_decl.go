@@ -572,6 +572,17 @@ func (t *TickLoop) spawnDeclaredMob(decl *mobDecl, x, y, z float64) *Entity {
 			e.metadata = append(e.metadata, buf.Bytes()...)
 		}
 	}
+	// MOB EQUIPMENT (populateDefaultEquipmentSlots): a skeleton spawns holding a bow in MAINHAND —
+	// the port of AbstractSkeleton.populateDefaultEquipmentSlots (super.populate + setItemSlot(
+	// MAINHAND, new ItemStack(Items.BOW))). Drawn HERE (after reseed, before the store add) so the
+	// tracker's first AddEntity carries the bow in a ClientboundSetEquipment. UNCONDITIONAL + RNG-free
+	// (the armor/enchant roll of the base populate is the deferred Phase-A item), so it perturbs NO
+	// mob RNG stream. Skeleton-gated (typ == entity.Skeleton.ID) — a no-op for every other declared
+	// mob (the oracle pig equips NOTHING here; its stream is unperturbed). Cite AbstractSkeleton
+	// .populateDefaultEquipmentSlots. (Other mobs' default equip / full 6-slot population: deferred.)
+	if e.typ == entity.Skeleton.ID {
+		populateSkeletonEquipment(e)
+	}
 	// Phase-27 (N=2): add the mob to the region that OWNS its column, NOT t.only().
 	// only() resolves to the CALLING goroutine's region — globalRegion when spawned from the
 	// coordinator (e.g. the SULFUR_TEST_KIT gate egg's use-packet path) — which orphans the mob

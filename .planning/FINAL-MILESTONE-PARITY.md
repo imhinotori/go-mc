@@ -91,8 +91,22 @@ Each is a dedicated jar-faithful phase (javap-verify BEFORE writing, cite class/
   the v1 attribute set; add them + wire the physics reads.
 
 ### Equipment / items (broad)
-- Mob equipment (skeleton bow item, zombie/skeleton armor), the held-item subsystem the enderman
-  block-carry + weapon goals need.
+- **LANDED (mob equipment subsystem — the held-item/armor slots):** EntityEquipment storage on Entity
+  (the [8]SlotData ordinal-indexed EnumMap analogue), getItemBySlot/setItemSlot/getMainHandItem/
+  getOffhandItem/isHoldingItem (LivingEntity accessors), the skeleton's spawn-time MAINHAND bow
+  (AbstractSkeleton.populateDefaultEquipmentSlots), the spawn-time ClientboundSetEquipment wire (a client
+  SEES the bow), and RangedBowAttackGoal.isHoldingBow now backed by the real held item. (server/
+  entity_equipment.go, server/entity.go equipment field, spawnDeclaredMob skeleton gate, tracker wire.)
+- STILL DEFERRED (equipment):
+  - Mob.populateDefaultEquipmentSlots for the OTHER mobs (zombie/skeleton ARMOR, the full 6-slot
+    population + the difficulty-scaled armor roll) and populateDefaultEquipmentEnchantments (the
+    armor-enchant RNG draw). Only the skeleton's unconditional RNG-free bow lands so far.
+  - getDropChances / DropChances + the on-death equipment drop roll (dropEquipment) — the storage lands,
+    the death-drop of a held/worn item does not.
+  - The LIVE mob-side equipment SWAP broadcast (detectEquipmentUpdates per-tick compare for a mob) — the
+    spawn-time SetEquipment lands; a runtime equip CHANGE reuses encodeSetEquipment when a swap path exists.
+  - The enderman block-carry HELD-ITEM (carriedBlockState → getItemBySlot) — the enderman uses the same
+    equipment surface once its carry state feeds a slot.
 
 ### Client-visual metadata (cite-deferred, behavior-neutral but wanted for fidelity)
 - Creeper swell metadata (DATA_SWELL_DIR/POWERED/IGNITED), cat/wolf TamableAnimal DATA_FLAGS sit-pose +

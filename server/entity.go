@@ -550,6 +550,23 @@ type Entity struct {
 	// re-anchor cadence after a teleport, so they are kept separate (bytecode reads #139 tickCount
 	// for the %60, #257 teleportDelay for the 400 cap).
 	sendTickCount int
+
+	// --- MOB EQUIPMENT (net.minecraft.world.entity.EntityEquipment / LivingEntity.equipment) ------
+	//
+	// equipment is the mob's held-item/armor slots — the Go analogue of LivingEntity's
+	//   protected final EntityEquipment equipment;   // an EnumMap<EquipmentSlot, ItemStack>
+	// represented as a fixed [equipmentSlotCount]SlotData array indexed by EquipmentSlot ordinal
+	// (MAINHAND=0..SADDLE=7 — the SAME ordinal ClientboundSetEquipmentPacket writes). A zero-value
+	// SlotData (Count==0) IS ItemStack.EMPTY, so an un-populated slot reads back empty exactly as
+	// EntityEquipment.get's getOrDefault(slot, EMPTY) does — a mob with no equipment (the oracle pig)
+	// carries an all-zero array: no allocation beyond the inline array, no RNG draw, no wire bytes.
+	// getItemBySlot/setItemSlot (entity_equipment.go) are the accessors; populateSkeletonEquipment
+	// seeds the skeleton's MAINHAND bow at spawn. Tick-owned (TICK-05); a VALUE array (snapshot-
+	// friendly — snapshotEntity copies it by value so the async tracker can emit the spawn-time
+	// SetEquipment without aliasing the live store).
+	//	[VERIFIED javap LivingEntity: `protected final EntityEquipment equipment;`; EntityEquipment:
+	//	 `private final EnumMap<EquipmentSlot,ItemStack> items;` get/set over it.]
+	equipment [equipmentSlotCount]component.SlotData
 }
 
 // NewEntity constructs a live entity instance from a data/entity TABLE record at the given
