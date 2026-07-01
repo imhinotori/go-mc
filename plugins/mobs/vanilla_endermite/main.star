@@ -18,7 +18,9 @@
 #
 # THE DESPAWN TIMER (Endermite.aiStep, now wired - endermiteAiStep, ai_goals_endermite.go): server-side,
 # a NON-persistent endermite increments `life` each tick and discard()s at life >= 2400 (MAX_LIFE, ~2 min).
-# The client-side PORTAL particle burst is a visual (not ported - no particle subsystem). Cite Endermite.aiStep.
+# The PORTAL particle burst is CLIENT-side (inside if(isClientSide)); a dedicated server sends nothing for it.
+# A server particle wire path now exists (TickLoop.spawnParticle) but emitting here would DOUBLE the client burst,
+# so it stays deliberately un-ported (the faithful behavior is: emit nothing). Cite Endermite.aiStep.
 #
 # DEFERRED (cite-recorded, NEVER silently dropped):
 #   - HurtByTargetGoal.setAlertOthers(): no alert-burst in v1 (the base hurtByTargetGoal carries no

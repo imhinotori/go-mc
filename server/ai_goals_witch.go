@@ -226,11 +226,18 @@ const (
 	witchHealingChance        = 0.05   // rand < 0.05f (HEALING rung)
 	witchSwiftnessChance      = 0.5    // rand < 0.5f  (SWIFTNESS rung)
 	witchSwiftnessDistSqr     = 121.0  // target.distanceToSqr(this) > 121.0
-	witchIdleEventChance      = 7.5e-4 // rand < 7.5E-4f (broadcastEntityEvent 15 — deferred visual)
+	witchIdleEventChance      = 7.5e-4 // rand < 7.5E-4f (broadcastEntityEvent 15 -- the idle WITCH-particle event)
 
 	witchDrinkingModifierID = "minecraft:drinking" // SPEED_MODIFIER_DRINKING_ID ("drinking")
 	witchDrinkingSpeedAmt   = -0.25                // SPEED_MODIFIER_DRINKING amount, ADD_VALUE
 )
+
+// entityEventWitchIdleParticles is the byte status Witch.aiStep broadcasts on the 7.5E-4 idle roll
+// (Level.broadcastEntityEvent(this, (byte)15)). The client's Witch.handleEntityEvent(15) spawns the
+// WITCH particle burst locally; the server only fires the EntityEvent. Cite Witch.aiStep / .handleEntityEvent.
+//
+//	[VERIFIED javap Witch.aiStep: `bipush 15; Level.broadcastEntityEvent(this, 15)`.]
+const entityEventWitchIdleParticles byte = 15
 
 // witch self-buff potion payloads (Potions.*, VERIFIED CFR alchemy.Potions).
 const (
@@ -286,9 +293,21 @@ func (t *TickLoop) witchAiStep(e *Entity) {
 			t.witchAddDrinkingModifier(e)
 		}
 	}
-	// broadcastEntityEvent(15) idle particle roll: draw the RNG to keep the stream faithful, but the
-	// particle broadcast is a client visual (cite-deferred). The draw MUST happen (order fidelity).
-	_ = float64(r.nextFloat()) < witchIdleEventChance
+	// broadcastEntityEvent(15) idle particle roll (Witch.aiStep tail, offset 484): draw the RNG (order
+	// fidelity -- the draw MUST fire on the witch stream regardless of outcome), and on rand < 7.5E-4f
+	// broadcast ClientboundEntityEvent status 15 to every tracking player. This is the FAITHFUL wire path
+	// for the witch idle WITCH-particle burst: vanilla does NOT call ServerLevel.sendParticles here -- it
+	// fires Level.broadcastEntityEvent(this, (byte)15), and the CLIENT's Witch.handleEntityEvent(15) spawns
+	// the (10 + nextInt(35)) WITCH particles locally (gaussian offsets, all client-side). So the server's
+	// job is exactly this EntityEvent, on the SAME encodeEntityEvent / broadcastToTrackers seam the death
+	// poof (60), spawnAnim (20), wolf-tame (7/6) and in-love hearts (18) ride -- NOT a LevelParticles packet.
+	//	[VERIFIED javap Witch.aiStep: `ldc_w 7.5E-4f; fcmpg; ifge; level(); aload_0; bipush 15;
+	//	 Level.broadcastEntityEvent(this, 15)`. Witch.handleEntityEvent(15): loop i < 10 + random.nextInt(35)
+	//	 -> Level.addParticle(ParticleTypes.WITCH, getX()+gauss*0.13, maxY+0.5+gauss*0.13, getZ()+gauss*0.13,
+	//	 0,0,0). ServerLevel.broadcastEntityEvent -> ClientboundEntityEventPacket to tracking players.]
+	if float64(r.nextFloat()) < witchIdleEventChance {
+		t.broadcastToTrackers(e.id, encodeEntityEvent(e.id, entityEventWitchIdleParticles))
+	}
 	// super.aiStep() (Mob/PathfinderMob aiStep) is driven by the shared serverAiStep path already.
 }
 

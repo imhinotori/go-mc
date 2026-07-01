@@ -13,7 +13,11 @@ package server
 //
 // The endermite is a SHORT-LIVED mob: naturally it appears only from an EnderMan teleport (a 5% roll) and
 // then despawns after 2 minutes unless a name-tag / bucket makes it persistent. We port the server branch
-// exactly; the client-side PORTAL particle burst is a pure visual (no particle subsystem) and is cited-out.
+// exactly; the client-side PORTAL particle burst stays CLIENT-only and is cited-out DELIBERATELY: it lives
+// inside `if (level().isClientSide())`, so a dedicated server sends NOTHING for it (the client spawns it in
+// its own aiStep). Even though the server now HAS a particle wire path (TickLoop.spawnParticle, particles.go),
+// emitting a ClientboundLevelParticles here would DOUBLE the burst on the client -- a deviation from vanilla.
+// The faithful behavior is exactly this: emit nothing.
 //
 // The endermite's COMBAT (float / powder-snow climb / melee / stroll / look / around + hurt_by + nearest-
 // player target) is the .star declaration (vanilla_endermite/main.star) over the shared Go-native combat

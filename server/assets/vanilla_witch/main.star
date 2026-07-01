@@ -36,7 +36,8 @@
 #     seeds usingTime=32 (Consumable 1.6s), attaches the -0.25 ADD_VALUE MOVEMENT_SPEED "drinking" modifier,
 #     and on countdown-finish applies the potion effect to the witch ITSELF (entity-side mobEffects map).
 #     The RNG draw order (each rung's nextFloat + the 7.5E-4 idle roll) is exact. The WITCH_DRINK sound +
-#     the idle-particle broadcast(15) are cite-deferred (client visual; the RNG draw still fires).
+#     the idle-particle broadcast(15) is now WIRED: witchAiStep fires broadcastEntityEvent(this,15) on the
+#     7.5E-4 win (the client renders the WITCH particles). The WITCH_DRINK sound stays cite-deferred (client sound).
 #   - NearestHealableRaiderTargetGoal@2 STRUCTURE (kind="nearest_healable_raider_target", {TARGET}): the
 #     cooldown + nextBoolean coin-flip + hasActiveRaid gate, registered + RNG-faithful but INERT (hasActiveRaid
 #     cited-false — no raid subsystem). Acquires when the raid EVENT lands.
