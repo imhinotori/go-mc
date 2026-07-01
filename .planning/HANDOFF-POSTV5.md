@@ -4,22 +4,23 @@
 
 ---
 
-## 🟢 SESSION 4 (2026-07-01) — recursive plugin loader + projectiles/skeleton bow + 4 new mobs. ALL COMMITTED.
-Branch `ender-776`, NOT pushed. Commits (HEAD-first): `8b3c24a8` (boot-log count) · `f92ffb84` (Creeper + explosion) · `25b791e3` (Silverfish) · `708150b3` (Husk + Mooshroom) · `79707c11` (Arrow projectile + skeleton bow) · `6560d6b9` (recursive plugin loader + `plugins/mobs/` reorg).
+## 🟢 SESSION 4 (2026-07-01) — recursive plugin loader + projectiles/skeleton bow + 5 new mobs + effects. ALL COMMITTED.
+Branch `ender-776`, NOT pushed. Commits (HEAD-first): `aa570d2c` (Witch + mob-effects + splash potions) · `5e0aba2b` (handoff) · `8b3c24a8` (boot-log count) · `f92ffb84` (Creeper + explosion) · `25b791e3` (Silverfish) · `708150b3` (Husk + Mooshroom) · `79707c11` (Arrow projectile + skeleton bow) · `6560d6b9` (recursive plugin loader + `plugins/mobs/` reorg).
 
 User directives: (a) mobs as one big plugin OR loader supports subdirs → **recursive loader + `plugins/mobs/*`**; (b) "los esqueletos no tienen su arco" → **skeleton bow shipped**; (c) "commitea lo verde" → each batch committed green.
 
 DONE (each committed, full suite green, pig oracle byte-identical, vet clean, 12-mob registry boots clean):
 1. **Recursive plugin loader** (`6560d6b9`) — `host.LoadDir` recurses into a subdir with NO `plugin.toml` (container dir, e.g. `plugins/mobs/`), bounded by `maxPluginDirDepth`=8; a dir WITH a manifest loads (never recursed). Moved `plugins/vanilla_*`→`plugins/mobs/*`, retargeted byte-identical test paths. Embed copies (`server/assets/`) stay flat.
 2. **Arrow projectile + skeleton bow** (`79707c11`) — `server/projectile.go` (AbstractArrow.tick: clip→hit→move→drag 0.99→gravity 0.05, despawn 1200, damage=ceil(len*baseDamage), anti-tunnel block clip) + `server/ai_goals_ranged.go` (RangedBowAttackGoal: see-time/strafe/20-tick charge → performRangedAttack, velocity 1.6, inaccuracy 6). `ranged_bow_attack` kind; skeleton @4 melee→ranged. `minecraft:arrow` source. Full jar spec in `.planning/PROJECTILE-JARNOTES.md`.
-3. **4 new mobs → registry now 12** (all jar-faithful, `plugins/mobs/*`, byte-identical embeds, `/dbg` arms):
+3. **5 new mobs → registry now 13** (all jar-faithful, `plugins/mobs/*`, byte-identical embeds, `/dbg` arms):
    - **Husk** = Zombie (extends Zombie, no override — javap-verified), MONSTER; **Mooshroom** = Cow (MushroomCow extends AbstractCow, no override), CREATURE — `708150b3`.
    - **Silverfish** (`25b791e3`) — float + Go melee/hurt_by/nearest (stone-infest goals cite-deferred), MONSTER.
    - **Creeper** (`f92ffb84`) — float + `creeper_swell` (SwellGoal) + melee + passives; needed the **explosion subsystem** `server/explosion.go` (ServerExplosion: getSeenPercent ray-cast exposure + damage ((p²+p)/2·7·2r+1) + knockback; ray-power rolls drawn for lockstep; **block destruction cite-deferred** — needs blast-resistance table + mobGriefing). `creeperAiStep` fuse hook. Creeper JOINS the natural MONSTER pool; husk/mooshroom/silverfish stay OUT (biome-gated).
-   - **Add-a-mob recipe** (proven): `.star` + byte-identical `server/assets/` copy → supplier(+key) → `baseTypeByName` → `categoryOf` → `//go:embed`+`vanillaMobNames`+const → (natural pool if overworld) → `/dbg` → boot-count test + `allFourMobs` row + behavior test.
+   - **Witch** (`aa570d2c`) — float + `witch_ranged_attack` (generic RangedAttackGoal) + stroll/look/around; needed the **mob-effects subsystem** `server/mob_effect.go` (per-player activeEffects + tickEffects: instant_damage 6<<amp, poison 25>>amp interval 1dmg never-kill, slowness MOVEMENT_SPEED −0.15*(amp+1) ADD_MULTIPLIED_TOTAL, weakness ATTACK_DAMAGE −4*(amp+1) ADD_VALUE) + **ThrownSplashPotion** (`server/projectile.go` tickPotions: arc gravity 0.05/drag 0.99, splash inflate 4/2/4 distSqr<16 scale=1−sqrt/4). Player `attributeHolder` gained a modifier layer + `AttributeInstance.RemoveModifier`. new magic/indirect_magic sources. Witch stays OUT of the natural pool (swamp-hut/raid gated). Raid heal/regen + LoS + potion metadata cite-deferred.
+   - **Add-a-mob recipe** (proven): `.star` + byte-identical `server/assets/` copy → supplier(+key) → `baseTypeByName` → `categoryOf` → `//go:embed`+`vanillaMobNames`+const → (natural pool if overworld) → `/dbg` → boot-count test (now 13) + `allFourMobs` row + behavior test.
 
 ### ▶ REMAINING in Task #9 (user picked ALL; each needs a NEW subsystem)
-- **Witch** (potion-throwing ranged — reuses the projectile seam, needs ThrownPotion + effect clouds) → **Enderman** (teleport + anger-on-gaze) → **Rabbit** (JumpControl hop) / **Fox** (sleep/pounce) / **Cat** (taming). Suggested order: Witch first (most reuse of the new projectile subsystem).
+- **Enderman** (teleport TeleportRandomly/TeleportTowards + anger-on-gaze — the "look at me" trigger) → **Rabbit** (its own JumpControl hop movement) / **Fox** (sleep/pounce/sit + berry eat) / **Cat** (full taming + sit + morning-gift). Each needs a genuinely new movement/AI subsystem. The **mob-effects subsystem now exists** (reusable for any future effect/potion). Suggested next: Enderman (no effects needed) or a passive (Rabbit is the most self-contained).
 
 ---
 
