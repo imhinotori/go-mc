@@ -13,8 +13,8 @@
 #     @7  WaterAvoidingRandomStrollGoal(1.0)     <-- .star (shared stroll)
 #     @8  LookAtPlayerGoal(Player, 8.0)          <-- .star (shared look)
 #     @8  RandomLookAroundGoal                   <-- .star (shared around)
-#     @10 EndermanLeaveBlockGoal                <-- DEFERRED (no held-block subsystem)
-#     @11 EndermanTakeBlockGoal                 <-- DEFERRED (no held-block subsystem)
+#     @10 EndermanLeaveBlockGoal                <-- kind="enderman_leave_block" (block put-down, BUILT)
+#     @11 EndermanTakeBlockGoal                 <-- kind="enderman_take_block" (block pick-up, BUILT)
 #   targetSelector:
 #     @1  EndermanLookForPlayerGoal(isAngryAt)  <-- kind="enderman_look_for_player" (gaze-aggro, BUILT)
 #     @2  HurtByTargetGoal                       <-- kind="hurt_by_target"
@@ -31,8 +31,15 @@
 #     ai_goals_enderman_gaze.go): the hasLineOfSight raycast (no LoS subsystem), the DATA_CREEPY/
 #     DATA_STARED_AT synched render flags, and the in-combat teleport-management branch of
 #     LookForPlayerGoal.tick (folded into the Go-native endermanAiStep/endermanHurtTeleport teleport).
-#   - Block-carry (LeaveBlock@10 / TakeBlock@11), Endermite target@3, ResetUniversalAnger@4: no held-block /
-#     endermite / universal-anger subsystems in v1.
+#   - Block-carry (LeaveBlock@10 / TakeBlock@11) is now BUILT as the Go-native kinds enderman_leave_block +
+#     enderman_take_block (ai_goals_enderman_carry.go): the enderman picks up a #minecraft:enderman_holdable
+#     block (setCarriedBlock, DATA_CARRY_STATE index 16 OPTIONAL_BLOCK_STATE) and later puts it back down,
+#     both gated on the MOB_GRIEFING gamerule + the vanilla nextInt(reducedTickDelay(20|2000)) rolls. Cite
+#     EnderMan$EndermanTakeBlockGoal / EnderMan$EndermanLeaveBlockGoal. Residual carry deferrals (cited in
+#     ai_goals_enderman_carry.go): the take-goal clip/reachability raycast, the leave-goal
+#     updateFromNeighbourShapes + canSurvive, and the BLOCK_DESTROY/BLOCK_PLACE game-events (no clip / neighbour-
+#     shape / support / game-event subsystems in v1). Endermite target@3, ResetUniversalAnger@4: no endermite /
+#     universal-anger subsystems in v1.
 #   - The TELEPORT is Go-native (endermanAiStep daylight-flee + endermanHurtTeleport dodge, ai_goals_enderman.go)
 #     — the distinctive enderman mechanic IS wired; only the gaze + block-carry flavor is deferred.
 
@@ -195,6 +202,14 @@ declare_mob(
             can_continue = around_continue,
             requires_update_every_tick = True,
         ),
+        # @10 EndermanLeaveBlockGoal [] — kind="enderman_leave_block". A carrying enderman occasionally puts
+        # its carried block back down (nextInt(reducedTickDelay(2000))==0 + a placeable random cell). Cite
+        # EnderMan.registerGoals @10 EndermanLeaveBlockGoal (ai_goals_enderman_carry.go).
+        goal(priority = 10, flags = [], kind = "enderman_leave_block"),
+        # @11 EndermanTakeBlockGoal [] — kind="enderman_take_block". A not-carrying enderman occasionally picks
+        # up a nearby #minecraft:enderman_holdable block (nextInt(reducedTickDelay(20))==0). Cite
+        # EnderMan.registerGoals @11 EndermanTakeBlockGoal (ai_goals_enderman_carry.go).
+        goal(priority = 11, flags = [], kind = "enderman_take_block"),
         # targetSelector @1 EndermanLookForPlayerGoal(isAngryAt) [TARGET] — kind="enderman_look_for_player".
         # The REAL gaze-aggro: a player aggroes the enderman only by LOOKING at it (isBeingStaredBy, the
         # coneSize-0.025 distance-adjusted view-vector dot test) or by having already angered it (isAngryAt),

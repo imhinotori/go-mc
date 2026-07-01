@@ -63,11 +63,12 @@ var allFourMobs = []struct {
 	// breed@2 + tempt@3 + stroll@6 + look@11 (7 goalSelector, 0 targetSelector); climb wired (#17), the
 	// hop is now Go-native (#13, rabbitAiStep); avoid/raid-garden cite-deferred.
 	{vanillaRabbitMobName, entity.Rabbit.ID, 7, 0},
-	// MOB-HOST-08 (Task #9 + gaze): Enderman — float@0 + freeze@1 + melee@2 + stroll@7 + look@8 + around@8
-	// (6 goalSelector) + look_for_player@1 + hurt_by@2 (2 targetSelector); the gaze subsystem (freeze +
-	// look_for_player) is now Go-native (#14, ai_goals_enderman_gaze.go); block-carry/endermite cite-deferred;
-	// teleport Go-native.
-	{vanillaEndermanMobName, entity.Enderman.ID, 6, 2},
+	// MOB-HOST-08 (Task #9 + gaze + block-carry): Enderman — float@0 + freeze@1 + melee@2 + stroll@7 + look@8 +
+	// around@8 + leave_block@10 + take_block@11 (8 goalSelector) + look_for_player@1 + hurt_by@2 (2 targetSelector);
+	// the gaze subsystem (freeze + look_for_player) is Go-native (#14, ai_goals_enderman_gaze.go); block-carry
+	// (leave_block/take_block) is now BUILT (ai_goals_enderman_carry.go, DATA_CARRY_STATE index 16); endermite
+	// cite-deferred; teleport Go-native.
+	{vanillaEndermanMobName, entity.Enderman.ID, 8, 2},
 	// MOB-NEUT-03 (Task #9): Cat — float@1 + panic@1 + sit@2 + tempt@4 + follow_owner@6 + breed@10 +
 	// stroll@11 + look@12 (8 goalSelector, 0 targetSelector); comfort/prey goals cite-deferred; fish-tamed.
 	{vanillaCatMobName, entity.Cat.ID, 10, 0}, // +2: cat_relax_on_owner @3, cat_lie_on_bed @5 (MOB-NEUT-03)

@@ -452,6 +452,18 @@ func buildNativeGoal(kind string, gd goalDecl, decl *mobDecl) Goal {
 		// MoveToBlockGoal that finds sand near home (range 16), digs, and places the TURTLE_EGG block.
 		// Cite Turtle.registerGoals @1 TurtleLayEggGoal.
 		return newTurtleLayEggGoal(1.0)
+	case "enderman_take_block":
+		// MOB-HOST-08 (Enderman block-carry): EnderMan.EndermanTakeBlockGoal — goalSelector @11, flags {}.
+		// A not-carrying, mobGriefing-on enderman rolls nextInt(reducedTickDelay(20))==0, looks at a random
+		// block in a 4x3x4 box, and if it is #minecraft:enderman_holdable removes it and carries its default
+		// state. Cite EnderMan.registerGoals @11 EndermanTakeBlockGoal (ai_goals_enderman_carry.go).
+		return newEndermanTakeBlockGoal()
+	case "enderman_leave_block":
+		// MOB-HOST-08 (Enderman block-carry): EnderMan.EndermanLeaveBlockGoal — goalSelector @10, flags {}.
+		// A carrying, mobGriefing-on enderman rolls nextInt(reducedTickDelay(2000))==0 and, if a random cell
+		// in a 2x2x2 box is placeable (air over a full-collision non-bedrock block, entity-free), places the
+		// carried block and stops carrying. Cite EnderMan.registerGoals @10 EndermanLeaveBlockGoal (ai_goals_enderman_carry.go).
+		return newEndermanLeaveBlockGoal()
 	default:
 		return nil
 	}

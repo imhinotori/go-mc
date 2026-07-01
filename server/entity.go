@@ -3,6 +3,7 @@ package server
 import (
 	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/level/attribute"
+	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/level/component"
 	"github.com/imhinotori/sulfur/server/internal/bvh"
 
@@ -678,6 +679,24 @@ type Entity struct {
 	//	[VERIFIED javap LivingEntity: `protected final EntityEquipment equipment;`; EntityEquipment:
 	//	 `private final EnumMap<EquipmentSlot,ItemStack> items;` get/set over it.]
 	equipment [equipmentSlotCount]component.SlotData
+
+	// --- MOB-HOST-08 (Enderman block-carry): the DATA_CARRY_STATE synched state -----------------
+	//
+	// carriedBlockState mirrors net.minecraft.world.entity.monster.EnderMan's DATA_CARRY_STATE
+	// (EntityDataAccessor<Optional<BlockState>>, EntityDataSerializers.OPTIONAL_BLOCK_STATE). It holds the
+	// block state the enderman is carrying (the DEFAULT state of the block it picked up), or "none".
+	// EnderMan.setCarriedBlock(state) stores it; getCarriedBlock() reads it back (null == not carrying).
+	// EndermanTakeBlockGoal fills it (setCarriedBlock(block.defaultBlockState())); EndermanLeaveBlockGoal
+	// clears it (setCarriedBlock(null)). carriedBlockSet is the Optional present-bit: it distinguishes
+	// "carrying air (state id 0)" — never a Take result (HOLDABLE blocks are never air) — from the null/
+	// not-carrying default, exactly as Java's Optional<BlockState> distinguishes empty from present.
+	// Enderman-gated at every reader/writer (typ == entity.Enderman.ID / the enderman native goals), so the
+	// ZERO value is the exact non-enderman default and the pig oracle stream gains ZERO draws — the same
+	// discipline the turtle fields above follow. Tick-owned (TICK-05); a plain state id (no live pointer).
+	//	[VERIFIED javap EnderMan: private static final EntityDataAccessor<Optional<BlockState>>
+	//	 DATA_CARRY_STATE; setCarriedBlock(BlockState)/getCarriedBlock():BlockState over SynchedEntityData.]
+	carriedBlockState block.StateID
+	carriedBlockSet   bool
 }
 
 // NewEntity constructs a live entity instance from a data/entity TABLE record at the given
