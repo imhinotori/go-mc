@@ -3,11 +3,25 @@ package world
 import (
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/world/levelgen"
 	"github.com/imhinotori/sulfur/world/levelgen/feature"
 	"github.com/imhinotori/sulfur/world/levelgen/placement"
+)
+
+// The misc feature bodies (block_pile, fallen_tree, vegetation_patch) each ran
+// json.Unmarshal on the immutable cf.Config.Raw — plus ParseProvider / parseMiscIntProvider
+// — on EVERY placement (a chunk places many, and the 3x3 decoration neighborhood multiplies
+// it). These per-config parse caches memoize the decode ONCE per ConfiguredFeature, keyed by
+// the stable *ConfiguredFeature pointer the parser DAG dedups (feature_ore.go's oreConfigCache
+// pattern, verbatim). sync.Map keeps them -race clean; the decode is pure over the config
+// bytes so the cached value is shared and the output stays byte-identical.
+var (
+	blockPileCache  sync.Map // map[*feature.ConfiguredFeature]*blockPileDecoded
+	fallenTreeCache sync.Map // map[*feature.ConfiguredFeature]*fallenTreeDecoded
+	vegPatchCache   sync.Map // map[*feature.ConfiguredFeature]*vegPatchDecoded
 )
 
 // This file ports the remaining non-tree, non-selector overworld feature bodies
@@ -38,6 +52,40 @@ type blockPileConfig struct {
 	StateProvider json.RawMessage `json:"state_provider"`
 }
 
+// blockPileDecoded is the memoized BlockPile decode: the parsed provider (nil when
+// ParseProvider failed — a deferred Phase-13 provider the body skips), plus a deferred
+// config-parse error the body panics on (matching the uncached body's json.Unmarshal panic).
+type blockPileDecoded struct {
+	provider    feature.BlockStateProvider
+	providerErr bool
+	cfgErr      error
+}
+
+// decodeBlockPileCached memoizes the BlockPile config + provider parse per cf (oreConfigCache
+// pattern). A cfgErr defers the config json.Unmarshal panic to the body; providerErr==true
+// records an unported provider so the body skips (returns false) exactly as before.
+func decodeBlockPileCached(cf *feature.ConfiguredFeature) *blockPileDecoded {
+	if v, ok := blockPileCache.Load(cf); ok {
+		return v.(*blockPileDecoded)
+	}
+	d := &blockPileDecoded{}
+	var cfg blockPileConfig
+	if err := json.Unmarshal(cf.Config.Raw, &cfg); err != nil {
+		d.cfgErr = fmt.Errorf("world: block_pile config %q: %v", cf.ID, err)
+		blockPileCache.Store(cf, d)
+		return d
+	}
+	provider, err := feature.ParseProvider(cfg.StateProvider)
+	if err != nil {
+		d.providerErr = true
+		blockPileCache.Store(cf, d)
+		return d
+	}
+	d.provider = provider
+	blockPileCache.Store(cf, d)
+	return d
+}
+
 // blockPileBody ports BlockPileFeature.place (javap -c):
 //
 //	if origin.Y < level.getMinY()+5: return false
@@ -57,17 +105,17 @@ func blockPileBody(
 	rng levelgen.RandomSource,
 	pos placement.BlockPos,
 ) bool {
-	var cfg blockPileConfig
-	if err := json.Unmarshal(cf.Config.Raw, &cfg); err != nil {
-		panic(fmt.Sprintf("world: block_pile config %q: %v", cf.ID, err))
+	d := decodeBlockPileCached(cf)
+	if d.cfgErr != nil {
+		panic(d.cfgErr.Error())
 	}
-	provider, err := feature.ParseProvider(cfg.StateProvider)
-	if err != nil {
+	if d.providerErr {
 		// An unported provider (e.g. rotated_block_provider — hay_block pile) is a
 		// deferred Phase-13 provider; skip rather than crash. The draws not yet consumed
 		// (the pile's per-pos draws) do not run, matching the no-op skip convention.
 		return false
 	}
+	provider := d.provider
 
 	if pos.Y < bctx.minY()+5 {
 		return false
@@ -140,6 +188,50 @@ type fallenTreeConfig struct {
 	LogLength     json.RawMessage `json:"log_length"`
 }
 
+// fallenTreeDecoded is the memoized FallenTree decode: the parsed trunk provider (nil when
+// ParseProvider failed -> the body skips) + log-length IntProvider, with deferred parse
+// errors surfaced by the body (config + log_length panic exactly where the uncached body did).
+type fallenTreeDecoded struct {
+	trunk     feature.BlockStateProvider
+	trunkErr  bool
+	logLen    *miscIntProvider
+	cfgErr    error
+	logLenErr error
+}
+
+// decodeFallenTreeCached memoizes the FallenTree config + trunk provider + log_length parse
+// per cf (oreConfigCache pattern). Deferred errors preserve the uncached body's panic/skip:
+// cfgErr and logLenErr panic; trunkErr==true skips (returns true — the stump-less no-op path
+// the uncached body took on a provider error).
+func decodeFallenTreeCached(cf *feature.ConfiguredFeature) *fallenTreeDecoded {
+	if v, ok := fallenTreeCache.Load(cf); ok {
+		return v.(*fallenTreeDecoded)
+	}
+	d := &fallenTreeDecoded{}
+	var cfg fallenTreeConfig
+	if err := json.Unmarshal(cf.Config.Raw, &cfg); err != nil {
+		d.cfgErr = fmt.Errorf("world: fallen_tree config %q: %v", cf.ID, err)
+		fallenTreeCache.Store(cf, d)
+		return d
+	}
+	trunk, err := feature.ParseProvider(cfg.TrunkProvider)
+	if err != nil {
+		d.trunkErr = true
+		fallenTreeCache.Store(cf, d)
+		return d
+	}
+	d.trunk = trunk
+	logLen, err := parseMiscIntProvider(cfg.LogLength)
+	if err != nil {
+		d.logLenErr = fmt.Errorf("world: fallen_tree log_length %q: %v", cf.ID, err)
+		fallenTreeCache.Store(cf, d)
+		return d
+	}
+	d.logLen = logLen
+	fallenTreeCache.Store(cf, d)
+	return d
+}
+
 // fallenTreeBody ports FallenTreeFeature.placeFallenTree (javap -c) draw order:
 //
 //	placeStump: place ONE log block at origin (trunkProvider.getState) [+ stump decorators — DEFERRED]
@@ -162,18 +254,18 @@ func fallenTreeBody(
 	rng levelgen.RandomSource,
 	pos placement.BlockPos,
 ) bool {
-	var cfg fallenTreeConfig
-	if err := json.Unmarshal(cf.Config.Raw, &cfg); err != nil {
-		panic(fmt.Sprintf("world: fallen_tree config %q: %v", cf.ID, err))
+	d := decodeFallenTreeCached(cf)
+	if d.cfgErr != nil {
+		panic(d.cfgErr.Error())
 	}
-	trunk, err := feature.ParseProvider(cfg.TrunkProvider)
-	if err != nil {
+	if d.trunkErr {
 		return false
 	}
-	logLen, err := parseMiscIntProvider(cfg.LogLength)
-	if err != nil {
-		panic(fmt.Sprintf("world: fallen_tree log_length %q: %v", cf.ID, err))
+	if d.logLenErr != nil {
+		panic(d.logLenErr.Error())
 	}
+	trunk := d.trunk
+	logLen := d.logLen
 
 	// placeStump: one log block at origin (Function.identity — no axis change).
 	stump := trunk.GetState(rng, pos.X, pos.Y, pos.Z)
@@ -239,6 +331,63 @@ type vegetationPatchConfig struct {
 	Surface            string          `json:"surface"`
 }
 
+// vegPatchDecoded is the memoized VegetationPatch decode: the parsed config, the ground
+// provider (nil when ParseProvider failed -> the body skips), the xz_radius + depth
+// IntProviders, and the resolved replaceable set. Deferred errors preserve the uncached
+// body's panic/skip order (config/xz_radius/depth panic; a ground-provider error skips).
+type vegPatchDecoded struct {
+	cfg         vegetationPatchConfig
+	ground      feature.BlockStateProvider
+	groundErr   bool
+	xzRadius    *miscIntProvider
+	depth       *miscIntProvider
+	replaceable map[block.StateID]bool
+	cfgErr      error
+	xzErr       error
+	depthErr    error
+}
+
+// decodeVegPatchCached memoizes the VegetationPatch config + ground provider + xz_radius +
+// depth + replaceable-set parse per cf (oreConfigCache pattern). The decode order mirrors the
+// uncached body exactly so a deferred error fires at the same point: config parse, then
+// ground provider (skip on error), then xz_radius (panic), then depth (panic), then the
+// (pure) replaceable-set resolution. resolveReplaceableSet is deterministic over the tag id.
+func decodeVegPatchCached(cf *feature.ConfiguredFeature) *vegPatchDecoded {
+	if v, ok := vegPatchCache.Load(cf); ok {
+		return v.(*vegPatchDecoded)
+	}
+	d := &vegPatchDecoded{}
+	if err := json.Unmarshal(cf.Config.Raw, &d.cfg); err != nil {
+		d.cfgErr = fmt.Errorf("world: vegetation_patch config %q: %v", cf.ID, err)
+		vegPatchCache.Store(cf, d)
+		return d
+	}
+	ground, err := feature.ParseProvider(d.cfg.GroundState)
+	if err != nil {
+		d.groundErr = true
+		vegPatchCache.Store(cf, d)
+		return d
+	}
+	d.ground = ground
+	xzRadius, err := parseMiscIntProvider(d.cfg.XZRadius)
+	if err != nil {
+		d.xzErr = fmt.Errorf("world: vegetation_patch xz_radius %q: %v", cf.ID, err)
+		vegPatchCache.Store(cf, d)
+		return d
+	}
+	d.xzRadius = xzRadius
+	depth, err := parseMiscIntProvider(d.cfg.Depth)
+	if err != nil {
+		d.depthErr = fmt.Errorf("world: vegetation_patch depth %q: %v", cf.ID, err)
+		vegPatchCache.Store(cf, d)
+		return d
+	}
+	d.depth = depth
+	d.replaceable = resolveReplaceableSet(d.cfg.Replaceable)
+	vegPatchCache.Store(cf, d)
+	return d
+}
+
 // vegetationPatchBody ports VegetationPatchFeature.place + placeGroundPatch +
 // distributeVegetation (javap -c) draw order. waterlogged is the same draw order (the
 // waterlogged variant only post-filters the placed set for the inner vegetation; its
@@ -268,29 +417,29 @@ func vegetationPatchBody(
 	rng levelgen.RandomSource,
 	pos placement.BlockPos,
 ) bool {
-	var cfg vegetationPatchConfig
-	if err := json.Unmarshal(cf.Config.Raw, &cfg); err != nil {
-		panic(fmt.Sprintf("world: vegetation_patch config %q: %v", cf.ID, err))
+	d := decodeVegPatchCached(cf)
+	if d.cfgErr != nil {
+		panic(d.cfgErr.Error())
 	}
-	ground, err := feature.ParseProvider(cfg.GroundState)
-	if err != nil {
+	if d.groundErr {
 		return false
 	}
-	xzRadius, err := parseMiscIntProvider(cfg.XZRadius)
-	if err != nil {
-		panic(fmt.Sprintf("world: vegetation_patch xz_radius %q: %v", cf.ID, err))
+	if d.xzErr != nil {
+		panic(d.xzErr.Error())
 	}
-	depth, err := parseMiscIntProvider(cfg.Depth)
-	if err != nil {
-		panic(fmt.Sprintf("world: vegetation_patch depth %q: %v", cf.ID, err))
+	if d.depthErr != nil {
+		panic(d.depthErr.Error())
 	}
-	replaceable := resolveReplaceableSet(cfg.Replaceable)
+	ground := d.ground
+	xzRadius := d.xzRadius
+	depth := d.depth
+	replaceable := d.replaceable
 
 	rx := xzRadius.sample(rng) + 1
 	rz := xzRadius.sample(rng) + 1
 
-	placed := bctx.placeGroundPatch(&cfg, ground, replaceable, depth, rng, pos, rx, rz)
-	bctx.distributeVegetation(&cfg, ctx, rng, placed, pos)
+	placed := bctx.placeGroundPatch(&d.cfg, ground, replaceable, depth, rng, pos, rx, rz)
+	bctx.distributeVegetation(&d.cfg, ctx, rng, placed, pos)
 	return len(placed) > 0
 }
 

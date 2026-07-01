@@ -59,6 +59,58 @@ type jsonSimpleBlockConfig struct {
 	ScheduleTicks bool            `json:"schedule_ticks"`
 }
 
+// simpleBlockCache memoizes the decoded SimpleBlockConfiguration (the parsed JSON + the
+// resolved provider) per ConfiguredFeature. simpleBlockBody runs once per placement (a
+// chunk places many, and the 3x3 decoration neighborhood multiplies it), so the per-call
+// json.Unmarshal + ParseProvider was re-parsing the SAME immutable config bytes on every
+// placement. Keying by the *ConfiguredFeature pointer matches feature_ore.go's
+// oreConfigCache exactly: the parser DAG returns one stable instance per feature id
+// (registry dedup) and its config is immutable after parse, so the cached value is shared.
+// A sync.Map keeps it -race clean regardless of caller. Byte-identical output (the decode
+// is pure over the config bytes; providers themselves are stateless w.r.t. the cache).
+var simpleBlockCache sync.Map // map[*feature.ConfiguredFeature]*simpleBlockDecoded
+
+// simpleBlockDecoded is the memoized SimpleBlock config: the parsed provider (nil when the
+// config carried no to_place — a no-op body). decodeErr defers a parse failure to the body
+// so the panic (a build-data error) surfaces exactly where the uncached path panicked.
+type simpleBlockDecoded struct {
+	provider feature.BlockStateProvider
+	err      error
+}
+
+// decodeSimpleBlockCached returns the memoized decode for cf, parsing (and caching) it on
+// first use. A nil provider with a nil error means "no to_place -> no-op" (the same skip
+// the uncached body took). The decode is pure over the config bytes, so the value is shared.
+func decodeSimpleBlockCached(cf *feature.ConfiguredFeature) *simpleBlockDecoded {
+	if v, ok := simpleBlockCache.Load(cf); ok {
+		return v.(*simpleBlockDecoded)
+	}
+	d := &simpleBlockDecoded{}
+	var j jsonSimpleBlockConfig
+	if raw := configRaw(cf); len(raw) > 0 {
+		if err := json.Unmarshal(raw, &j); err != nil {
+			d.err = fmt.Errorf("world: simple_block config: %w", err)
+			simpleBlockCache.Store(cf, d)
+			return d
+		}
+	}
+	if len(j.ToPlace) == 0 {
+		// No provider -> nothing to place (a malformed/empty config); jar would NPE, here we
+		// no-op (nil provider, nil err) rather than crash a parallel decoration pass.
+		simpleBlockCache.Store(cf, d)
+		return d
+	}
+	provider, err := feature.ParseProvider(j.ToPlace)
+	if err != nil {
+		d.err = fmt.Errorf("world: simple_block to_place: %w", err)
+		simpleBlockCache.Store(cf, d)
+		return d
+	}
+	d.provider = provider
+	simpleBlockCache.Store(cf, d)
+	return d
+}
+
 // simpleBlockBody ports SimpleBlockFeature.place: decode to_place, draw the provider
 // state at the origin, canSurvive-gate it (conservative), then SetBlock. Returns true
 // iff it wrote a block.
@@ -69,21 +121,17 @@ func simpleBlockBody(
 	rng levelgen.RandomSource,
 	pos placement.BlockPos,
 ) bool {
-	var j jsonSimpleBlockConfig
-	if raw := configRaw(cf); len(raw) > 0 {
-		if err := json.Unmarshal(raw, &j); err != nil {
-			panic(fmt.Errorf("world: simple_block config: %w", err))
-		}
+	d := decodeSimpleBlockCached(cf)
+	if d.err != nil {
+		// A config/provider decode failure is a build-data error; panic exactly where the
+		// uncached body did (the cache only defers the SAME error to the first placement).
+		panic(d.err)
 	}
-	if len(j.ToPlace) == 0 {
-		// No provider -> nothing to place (a malformed/empty config); jar would NPE,
-		// here we no-op rather than crash a parallel decoration pass.
+	if d.provider == nil {
+		// No provider (no/empty to_place) -> nothing to place; the uncached no-op.
 		return false
 	}
-	provider, err := feature.ParseProvider(j.ToPlace)
-	if err != nil {
-		panic(fmt.Errorf("world: simple_block to_place: %w", err))
-	}
+	provider := d.provider
 
 	// SimpleBlockFeature.place: state = toPlace.getOptionalState(level, rng, origin),
 	// which is just getState (0 extra draws over GetState). The (x,y,z) feeds the noise
@@ -198,6 +246,37 @@ type jsonRandomPatchConfig struct {
 	Feature  json.RawMessage `json:"feature"`
 }
 
+// randomPatchCache memoizes the parsed RandomPatchConfiguration per ConfiguredFeature so
+// randomPatchBody parses the immutable config bytes ONCE instead of on every placement
+// (oreConfigCache pattern; keyed by the stable *ConfiguredFeature the parser DAG dedups).
+// Only the JSON parse is cached — the inner sub-feature resolve depends on the per-view
+// bctx and stays in the body. A sync.Map keeps it -race clean; byte-identical output.
+var randomPatchCache sync.Map // map[*feature.ConfiguredFeature]*randomPatchDecoded
+
+// randomPatchDecoded is the memoized parsed RandomPatchConfiguration (the four fields) plus
+// a deferred parse error surfaced by the body (so the panic lands where the uncached body's
+// did).
+type randomPatchDecoded struct {
+	cfg jsonRandomPatchConfig
+	err error
+}
+
+// decodeRandomPatchCached returns the memoized parse for cf, decoding (and caching) it on
+// first use. The parse is pure over the config bytes, so the cached value is shared.
+func decodeRandomPatchCached(cf *feature.ConfiguredFeature) *randomPatchDecoded {
+	if v, ok := randomPatchCache.Load(cf); ok {
+		return v.(*randomPatchDecoded)
+	}
+	d := &randomPatchDecoded{}
+	if raw := configRaw(cf); len(raw) > 0 {
+		if err := json.Unmarshal(raw, &d.cfg); err != nil {
+			d.err = fmt.Errorf("world: random_patch config: %w", err)
+		}
+	}
+	randomPatchCache.Store(cf, d)
+	return d
+}
+
 // randomPatchBody ports RandomPatchFeature.place (stable algorithm; the class is absent
 // from the 26.2 jar — see the file header). For each of `tries`, it jitters the origin
 // by the symmetric two-draw form per axis (x, then y, then z — 6 nextInt draws) and
@@ -211,12 +290,11 @@ func randomPatchBody(
 	rng levelgen.RandomSource,
 	pos placement.BlockPos,
 ) bool {
-	var j jsonRandomPatchConfig
-	if raw := configRaw(cf); len(raw) > 0 {
-		if err := json.Unmarshal(raw, &j); err != nil {
-			panic(fmt.Errorf("world: random_patch config: %w", err))
-		}
+	d := decodeRandomPatchCached(cf)
+	if d.err != nil {
+		panic(d.err)
 	}
+	j := d.cfg
 	if j.Tries <= 0 || len(j.Feature) == 0 {
 		return false
 	}

@@ -545,9 +545,15 @@ type biomeCache struct {
 	cache map[[3]int]levelbiome.Type
 }
 
-// newBiomeCache builds an empty per-chunk cache over the biome source.
+// newBiomeCache builds an empty per-chunk cache over the biome source. It wraps the source in
+// a per-call climate-cached VIEW (NewClimateCachedView): the outer 3D biomeCache dedups the
+// whole (sample + RTree) per distinct quart cell, while the view's 2D flat caches underneath
+// collapse the Y-flat climate density functions across the many Y layers of one (x,z) column
+// that FillBiomes sweeps (the biomeCache's 3D key can't, because the Y-dependent `depth` DF
+// makes nearly every 3D cell distinct). Both caches are per-Generate (no shared state), so
+// Generate stays pure over (seed, pos). Byte-identical: the view only elides Y-flat recomputes.
 func newBiomeCache(src *biome.MultiNoiseBiomeSource) *biomeCache {
-	return &biomeCache{src: src, cache: make(map[[3]int]levelbiome.Type, 256)}
+	return &biomeCache{src: src.NewClimateCachedView(), cache: make(map[[3]int]levelbiome.Type, 256)}
 }
 
 // get returns the biome at a BLOCK position, memoized by its quart cell. The key is the quart

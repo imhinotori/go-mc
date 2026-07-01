@@ -6,6 +6,7 @@ import (
 
 	levelbiome "github.com/imhinotori/sulfur/level/biome"
 	"github.com/imhinotori/sulfur/world/levelgen/data"
+	"github.com/imhinotori/sulfur/world/levelgen/density"
 	"github.com/imhinotori/sulfur/world/levelgen/router"
 )
 
@@ -118,4 +119,31 @@ func (s *MultiNoiseBiomeSource) getNoiseBiome(quartX, quartY, quartZ int) levelb
 // the Wave-8 biome containers call.
 func (s *MultiNoiseBiomeSource) GetBiome(x, y, z int) levelbiome.Type {
 	return s.getNoiseBiome(x>>2, y>>2, z>>2)
+}
+
+// NewClimateCachedView returns a per-call biome lookup that shares this source's parameter
+// list (and its lazily-built RTree) but samples the climate through a FRESH Sampler whose six
+// climate density functions have their `flat_cache` markers replaced by lazy 2D memoizing
+// caches (density.WrapClimateFlatCaches). Since flat_cache-marked DFs are Y-independent by
+// vanilla's own declaration, the 2D memoization is BYTE-IDENTICAL to the uncached source — it
+// only elides the redundant Perlin re-evaluations of the Y-flat climate DFs that the FillBiomes
+// per-Y-layer sweep otherwise triggers (~99x for the 5 Y-flat DFs; `depth`'s Y-dependent
+// y_clamped_gradient is not flat_cache-marked and stays uncached).
+//
+// The returned MultiNoiseBiomeSource is a lightweight view: it reuses s.params (immutable +
+// concurrency-safe) and owns only the fresh, per-call climate caches — so it is NOT shared
+// across goroutines and keeps Generate pure over (seed, pos), exactly like world.biomeCache.
+// The BLOCK-position GetBiome contract is unchanged, so callers use it as a drop-in source.
+func (s *MultiNoiseBiomeSource) NewClimateCachedView() *MultiNoiseBiomeSource {
+	return &MultiNoiseBiomeSource{
+		params: s.params,
+		sampler: Sampler{
+			Temperature:     density.WrapClimateFlatCaches(s.sampler.Temperature),
+			Humidity:        density.WrapClimateFlatCaches(s.sampler.Humidity),
+			Continentalness: density.WrapClimateFlatCaches(s.sampler.Continentalness),
+			Erosion:         density.WrapClimateFlatCaches(s.sampler.Erosion),
+			Depth:           density.WrapClimateFlatCaches(s.sampler.Depth),
+			Weirdness:       density.WrapClimateFlatCaches(s.sampler.Weirdness),
+		},
+	}
 }
