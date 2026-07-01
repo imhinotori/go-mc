@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/data/item"
 	"github.com/imhinotori/sulfur/level/component"
 	pk "github.com/imhinotori/sulfur/net/packet"
@@ -36,12 +37,10 @@ import (
 // worker only READS the copy — no live-store alias.
 //
 // DEFERRED (cite-recorded, see .planning/FINAL-MILESTONE-PARITY.md Phase-A):
-//   - Mob.populateDefaultEquipmentSlots for the OTHER mobs (zombie armor, the full 6-slot
-//     population + the difficulty-scaled roll) and populateDefaultEquipmentEnchantments (the
-//     armor-enchant RNG): only the skeleton's MAINHAND bow (an unconditional, RNG-free equip)
-//     lands here as the concrete first consumer.
 //   - getDropChances / DropChances + the on-death equipment drop roll (dropEquipment): the
-//     storage lands; the death-drop of a held/worn item is a Phase-A item.
+//     storage lands; the death-drop of a held/worn item is a Phase-A item. (The DEFAULT drop
+//     chance is DropChances.DEFAULT_EQUIPMENT_DROP_CHANCE == 0.085f — cited here for the death-drop
+//     port; no spawn-time draw depends on it.)
 //   - OFFHAND/armor WIRE-out for a live equip CHANGE (detectEquipmentUpdates per-tick compare for
 //     mobs): the spawn-time SetEquipment lands (a skeleton spawns visibly holding its bow); a live
 //     mob-side equipment SWAP broadcast reuses the same encodeSetEquipment when a swap path exists.
@@ -61,6 +60,15 @@ const (
 
 	equipmentSlotCount = 8 // EquipmentSlot.values().length
 )
+
+// defaultEquipmentDropChance is DropChances.DEFAULT_EQUIPMENT_DROP_CHANCE == 0.085f — the per-slot
+// drop chance every populated equipment slot carries by default (DropChances.DEFAULT fills every
+// EquipmentSlot with this value). Cited now for the deferred on-death drop roll (dropEquipment reads
+// this.dropChances.byEquipment(slot)); no spawn-time RNG depends on it.
+//
+//	[VERIFIED javap DropChances: DEFAULT_EQUIPMENT_DROP_CHANCE = 0.085f;
+//	 DEFAULT = new DropChances(makeEnumMap(EquipmentSlot.class, slot -> 0.085f)).]
+const defaultEquipmentDropChance = float32(0.085)
 
 // getItemBySlot is net.minecraft.world.entity.LivingEntity.getItemBySlot(EquipmentSlot) ->
 // equipment.get(slot): the stack in the slot, or the EMPTY stack (a zero-value SlotData) for an
@@ -126,23 +134,252 @@ func itemStackOf(it item.Item) component.SlotData {
 	return component.SlotData{Count: 1, ItemID: pk.VarInt(it.ID)}
 }
 
-// populateSkeletonEquipment is the port of
-// net.minecraft.world.entity.monster.skeleton.AbstractSkeleton.populateDefaultEquipmentSlots:
+// specialMultiplierFor is the port of net.minecraft.world.DifficultyInstance.getSpecialMultiplier()
+// — the [0,1] difficulty scalar that gates the spawn-time armor / enchant rolls. Vanilla builds the
+// DifficultyInstance in ServerLevel.getCurrentDifficultyAt(pos) as
 //
-//	super.populateDefaultEquipmentSlots(random, difficulty);   // Monster/Mob: no default equip
-//	this.setItemSlot(EquipmentSlot.MAINHAND, new ItemStack(Items.BOW));
+//	new DifficultyInstance(getDifficulty(), getOverworldClockTime(), chunk.getInhabitedTime(), moonBrightness)
 //
-// The bow equip is UNCONDITIONAL and draws NO RNG (the base Mob.populateDefaultEquipmentSlots is a
-// difficulty-gated armor roll the skeleton's super-call does nothing observable for — a bare
-// skeleton wears no armor; that armor/enchant roll is the deferred Phase-A item). So this is a
-// pure store-state write: MAINHAND = a single bow. Called from spawnDeclaredMob for a skeleton,
-// BEFORE the store add, so the tracker's first AddEntity carries the bow in the SetEquipment.
+// then getSpecialMultiplier() reads only the derived `effectiveDifficulty`:
 //
-//	[VERIFIED javap AbstractSkeleton.populateDefaultEquipmentSlots: invokespecial
-//	 Monster.populateDefaultEquipmentSlots(random, difficulty); getstatic EquipmentSlot.MAINHAND;
-//	 new ItemStack(Items.BOW); invokevirtual setItemSlot(MAINHAND, stack).]
-func populateSkeletonEquipment(e *Entity) {
-	e.setItemSlot(eqSlotMainHand, itemStackOf(item.Bow))
+//	if (effectiveDifficulty < 2.0f) return 0.0f;
+//	if (effectiveDifficulty > 4.0f) return 1.0f;
+//	return (effectiveDifficulty - 2.0f) / 2.0f;
+//
+// effectiveDifficulty = calculateDifficulty(base, totalGameTime, localGameTime, moonBrightness):
+//
+//	if (base == PEACEFUL) return 0;
+//	scale = 0.75 + clamp((totalGameTime - 72000)/1440000, 0, 1) * 0.25;   // globalScale
+//	localScale  = clamp(localGameTime/3600000, 0, 1) * (isHard ? 1.0 : 0.75);
+//	localScale += clamp(moonBrightness * 0.25, 0, globalScale);
+//	if (base == EASY) localScale *= 0.5;
+//	return base.getId() * (scale + localScale);
+//
+// We feed the FAITHFUL available reads: totalGameTime = t.gametime (the tick clock),
+// localGameTime = 0 and moonBrightness = 0.0 — the EXACT values vanilla itself uses when the spawn
+// chunk has no inhabited-time / the moon system is absent (getCurrentDifficultyAt's `chunk == null`
+// branch leaves localTime=0L, moonBrightness=0.0f). base = serverDifficulty (the cited NORMAL stub,
+// food.go). Structured so a real inhabited-time / moon read replaces the two 0 stubs later without
+// touching the arithmetic. NOTE: with localGameTime=0 and moonBrightness=0, effectiveDifficulty for
+// NORMAL grows from 2*0.75=1.5 (fresh world -> multiplier 0.0, no armor) toward 2*1.0=2.0 as
+// totalGameTime passes 1,512,000 ticks (globalScale saturates) — byte-for-byte vanilla.
+//
+//	[VERIFIED javap DifficultyInstance.getSpecialMultiplier + calculateDifficulty; ServerLevel
+//	 .getCurrentDifficultyAt (localTime=0L, moonBrightness=0.0f when chunk==null). Difficulty.getId:
+//	 PEACEFUL=0, EASY=1, NORMAL=2, HARD=3.]
+func specialMultiplierFor(base difficulty, totalGameTime int64) float32 {
+	eff := effectiveDifficulty(base, totalGameTime, 0, 0.0)
+	if eff < 2.0 {
+		return 0.0
+	}
+	if eff > 4.0 {
+		return 1.0
+	}
+	return (eff - 2.0) / 2.0
+}
+
+// effectiveDifficulty is DifficultyInstance.calculateDifficulty (see specialMultiplierFor).
+//
+//	[VERIFIED javap DifficultyInstance.calculateDifficulty.]
+func effectiveDifficulty(base difficulty, totalGameTime, localGameTime int64, moonBrightness float32) float32 {
+	if base == difficultyPeaceful {
+		return 0.0
+	}
+	isHard := base == difficultyHard
+	globalScale := mthClampF((float32(totalGameTime)-72000.0)/1440000.0, 0.0, 1.0) * 0.25
+	scale := float32(0.75) + globalScale
+	localHardMul := float32(0.75)
+	if isHard {
+		localHardMul = 1.0
+	}
+	localScale := mthClampF(float32(localGameTime)/3600000.0, 0.0, 1.0) * localHardMul
+	localScale += mthClampF(moonBrightness*0.25, 0.0, globalScale)
+	if base == difficultyEasy {
+		localScale *= 0.5
+	}
+	return float32(int(base)) * (scale + localScale)
+}
+
+// getEquipmentForSlot is net.minecraft.world.entity.Mob.getEquipmentForSlot(EquipmentSlot, int): the
+// tier ladder that maps an armor slot + rolled tier index [0..5] to the concrete armor Item. Returns
+// ok=false (the vanilla @Nullable null) for a hand slot or an out-of-range tier — the caller skips.
+// Tier order (26.2 adds COPPER at index 1): 0=LEATHER 1=COPPER 2=GOLDEN 3=CHAINMAIL 4=IRON 5=DIAMOND.
+//
+//	[VERIFIED javap Mob.getEquipmentForSlot: switch(slot){HEAD/CHEST/LEGS/FEET -> if(type==0..5)
+//	 return Items.<TIER>_<PIECE>; default null}. Items per tier confirmed in data/item.]
+func getEquipmentForSlot(slot, tier int) (item.Item, bool) {
+	var ladder [6]item.Item
+	switch slot {
+	case eqSlotHead:
+		ladder = [6]item.Item{item.LeatherHelmet, item.CopperHelmet, item.GoldenHelmet, item.ChainmailHelmet, item.IronHelmet, item.DiamondHelmet}
+	case eqSlotChest:
+		ladder = [6]item.Item{item.LeatherChestplate, item.CopperChestplate, item.GoldenChestplate, item.ChainmailChestplate, item.IronChestplate, item.DiamondChestplate}
+	case eqSlotLegs:
+		ladder = [6]item.Item{item.LeatherLeggings, item.CopperLeggings, item.GoldenLeggings, item.ChainmailLeggings, item.IronLeggings, item.DiamondLeggings}
+	case eqSlotFeet:
+		ladder = [6]item.Item{item.LeatherBoots, item.CopperBoots, item.GoldenBoots, item.ChainmailBoots, item.IronBoots, item.DiamondBoots}
+	default:
+		return item.Item{}, false // HAND slot (or non-armor): vanilla null
+	}
+	if tier < 0 || tier > 5 {
+		return item.Item{}, false // out-of-range tier: vanilla null
+	}
+	return ladder[tier], true
+}
+
+// eqPopulationOrder is Mob.EQUIPMENT_POPULATION_ORDER = List.of(HEAD, CHEST, LEGS, FEET) — the slot
+// order populateDefaultEquipmentSlots walks (top-down). NOT the EquipmentSlot ordinal order.
+//
+//	[VERIFIED javap Mob: EQUIPMENT_POPULATION_ORDER = List.of(HEAD, CHEST, LEGS, FEET).]
+var eqPopulationOrder = [4]int{eqSlotHead, eqSlotChest, eqSlotLegs, eqSlotFeet}
+
+// populateDefaultEquipmentSlots is the port of net.minecraft.world.entity.Mob
+// .populateDefaultEquipmentSlots(RandomSource, DifficultyInstance) — the difficulty-gated spawn-time
+// armor roll every Monster runs. The RNG DRAW ORDER is load-bearing (spawn determinism / the pig
+// oracle) and is reproduced EXACTLY:
+//
+//	if (random.nextFloat() < 0.15f * difficulty.getSpecialMultiplier()) {   // (draw 1) gate
+//	    int armorType = random.nextInt(3);                                  // (draw 2) base tier 0..2
+//	    for (int i = 1; (float)i <= 3.0f; i++)                              // (draws 3..5) 3x upgrade
+//	        if (random.nextFloat() < 0.1087f) armorType++;
+//	    float partialChance = level().getDifficulty() == HARD ? 0.1f : 0.25f;
+//	    boolean first = true;
+//	    for (EquipmentSlot slot : EQUIPMENT_POPULATION_ORDER) {             // HEAD,CHEST,LEGS,FEET
+//	        ItemStack cur = getItemBySlot(slot);
+//	        if (!first && random.nextFloat() < partialChance) break;       // (draw per non-first slot)
+//	        first = false;
+//	        if (!cur.isEmpty()) continue;                                   // keep existing (no equip)
+//	        Item equip = getEquipmentForSlot(slot, armorType);
+//	        if (equip == null) continue;
+//	        setItemSlot(slot, new ItemStack(equip));
+//	    }
+//	}
+//
+// When the gate (draw 1) fails NO further draws happen — so a mob spawned under multiplier 0.0 (a
+// fresh world, see specialMultiplierFor) still draws EXACTLY one nextFloat, matching vanilla. `mult`
+// is passed in (the caller reads it once, since finalizeSpawn also uses it). Monster-gated by the
+// caller so Animals (the pig) never reach this.
+//
+//	[VERIFIED javap Mob.populateDefaultEquipmentSlots — full bytecode traced.]
+func populateDefaultEquipmentSlots(e *Entity, rng *entityRandom, mult float32) {
+	if !(rng.nextFloat() < 0.15*mult) {
+		return
+	}
+	armorType := rng.nextInt(3)
+	for i := 1; float32(i) <= 3.0; i++ {
+		if rng.nextFloat() < 0.1087 {
+			armorType++
+		}
+	}
+	partialChance := float32(0.25)
+	if serverDifficulty == difficultyHard {
+		partialChance = 0.1
+	}
+	first := true
+	for _, slot := range eqPopulationOrder {
+		cur := e.getItemBySlot(slot)
+		if !first && rng.nextFloat() < partialChance {
+			break
+		}
+		first = false
+		if cur.Count > 0 { // !isEmpty(): keep the existing item, no roll
+			continue
+		}
+		if equip, ok := getEquipmentForSlot(slot, armorType); ok {
+			e.setItemSlot(slot, itemStackOf(equip))
+		}
+	}
+}
+
+// populateDefaultEquipmentEnchantments is the port of Mob.populateDefaultEquipmentEnchantments ->
+// enchantSpawnedWeapon (MAINHAND, chance 0.25) then enchantSpawnedArmor for each HUMANOID_ARMOR slot
+// in EquipmentSlot.VALUES order (FEET, LEGS, CHEST, HEAD; chance 0.5). Each dispatches to
+// enchantSpawnedEquipment, which draws its RNG gate ONLY when the slot is non-empty:
+//
+//	ItemStack it = getItemBySlot(slot);
+//	if (!it.isEmpty() && random.nextFloat() < chance * difficulty.getSpecialMultiplier()) {
+//	    EnchantmentHelper.enchantItemFromProvider(it, ..., MOB_SPAWN_EQUIPMENT, difficulty, random);
+//	    setItemSlot(slot, it);
+//	}
+//
+// The RNG GATE (the short-circuited nextFloat, drawn per non-empty slot in the VALUES order
+// MAINHAND,FEET,LEGS,CHEST,HEAD) is ported faithfully so spawn determinism is preserved. The actual
+// enchant APPLICATION is a CITED no-op: Sulfur has no enchantment registry / provider yet (v1: no
+// enchantments — see attack_dispatch.go getEnchantedDamage==damage), so enchantItemFromProvider
+// contributes no enchantments and no FURTHER RNG here (it would draw from the provider only once the
+// registry exists). Structured so the real enchantItemFromProvider slots in at the marked seam.
+//
+//	[VERIFIED javap Mob.populateDefaultEquipmentEnchantments / enchantSpawnedWeapon(0.25f) /
+//	 enchantSpawnedArmor(0.5f) / enchantSpawnedEquipment (nextFloat gate short-circuited by
+//	 !isEmpty()); EquipmentSlot.VALUES order MAINHAND,OFFHAND,FEET,LEGS,CHEST,HEAD; only
+//	 HUMANOID_ARMOR (FEET,LEGS,CHEST,HEAD) reaches enchantSpawnedArmor.]
+func populateDefaultEquipmentEnchantments(e *Entity, rng *entityRandom, mult float32) {
+	enchantSpawnedEquipment(e, eqSlotMainHand, rng, 0.25, mult) // enchantSpawnedWeapon
+	for _, slot := range [4]int{eqSlotFeet, eqSlotLegs, eqSlotChest, eqSlotHead} {
+		enchantSpawnedEquipment(e, slot, rng, 0.5, mult) // enchantSpawnedArmor
+	}
+}
+
+// enchantSpawnedEquipment is Mob.enchantSpawnedEquipment: the per-slot enchant gate. The nextFloat is
+// drawn ONLY for a non-empty slot (Java `&&` short-circuit) — matching the exact draw count. See
+// populateDefaultEquipmentEnchantments for the cited no-op on the application half.
+func enchantSpawnedEquipment(e *Entity, slot int, rng *entityRandom, chance, mult float32) {
+	it := e.getItemBySlot(slot)
+	if it.Count > 0 && rng.nextFloat() < chance*mult {
+		// SEAM: EnchantmentHelper.enchantItemFromProvider(it, registryAccess,
+		// VanillaEnchantmentProviders.MOB_SPAWN_EQUIPMENT, difficulty, rng); setItemSlot(slot, it).
+		// No enchantment registry yet (v1: no enchantments) -> no-op, no further RNG. The gate draw
+		// above is the observable RNG contract preserved here.
+		_ = it
+	}
+}
+
+// populateMonsterEquipment runs the FULL vanilla spawn-time equip for a Monster: the base armor roll
+// (populateDefaultEquipmentSlots) followed by the per-species weapon override and the enchant gate,
+// in the SAME order finalizeSpawn invokes them. `mult` is difficulty.getSpecialMultiplier(), read
+// once by the caller (finalizeSpawn reads it once too). Species-gated inside:
+//
+//   - Skeleton (AbstractSkeleton.populateDefaultEquipmentSlots): super armor roll, THEN
+//     setItemSlot(MAINHAND, BOW). The BOW overwrites any rolled mainhand (there is none — the armor
+//     roll only touches HEAD/CHEST/LEGS/FEET) and is set AFTER the armor roll, so the enchant gate
+//     below sees a non-empty MAINHAND and rolls its weapon-enchant nextFloat.
+//   - Zombie (Zombie.populateDefaultEquipmentSlots): super armor roll, THEN nextFloat() + a HARD-vs
+//     -else chance (0.05f / 0.01f); on success nextInt(6) picks IRON_SWORD(0) / IRON_SPEAR(1) /
+//     IRON_SHOVEL(else) into MAINHAND.
+//   - Every other Monster: just the base armor roll (its super), no weapon override.
+//
+// Ordering matches finalizeSpawn: populateDefaultEquipmentSlots(random,difficulty) then
+// populateDefaultEquipmentEnchantments(level,random,difficulty). (Zombie.finalizeSpawn also draws
+// canBreakDoors/canPickUpLoot/baby/jockey around this — those are NOT ported here; this helper is
+// the equipment slice only, invoked at the equipment point of the shared spawn path.)
+//
+//	[VERIFIED javap AbstractSkeleton / Zombie.populateDefaultEquipmentSlots + their finalizeSpawn
+//	 ordering (super.finalizeSpawn -> ... -> populateDefaultEquipmentSlots ->
+//	 populateDefaultEquipmentEnchantments).]
+func populateMonsterEquipment(e *Entity, rng *entityRandom, mult float32) {
+	populateDefaultEquipmentSlots(e, rng, mult)
+	switch e.typ {
+	case entity.Skeleton.ID:
+		// AbstractSkeleton: after the super armor roll, unconditionally hold a bow.
+		e.setItemSlot(eqSlotMainHand, itemStackOf(item.Bow))
+	case entity.Zombie.ID:
+		// Zombie: chance to hold an iron tool/weapon.
+		f2 := float32(0.01)
+		if serverDifficulty == difficultyHard {
+			f2 = 0.05
+		}
+		if rng.nextFloat() < f2 {
+			switch rng.nextInt(6) {
+			case 0:
+				e.setItemSlot(eqSlotMainHand, itemStackOf(item.IronSword))
+			case 1:
+				e.setItemSlot(eqSlotMainHand, itemStackOf(item.IronSpear))
+			default:
+				e.setItemSlot(eqSlotMainHand, itemStackOf(item.IronShovel))
+			}
+		}
+	}
+	populateDefaultEquipmentEnchantments(e, rng, mult)
 }
 
 // equipmentSpawnPackets builds the ClientboundSetEquipment packets a newly-tracking observer needs

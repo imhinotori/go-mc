@@ -586,16 +586,18 @@ func (t *TickLoop) spawnDeclaredMob(decl *mobDecl, x, y, z float64) *Entity {
 			e.metadata = append(e.metadata, buf.Bytes()...)
 		}
 	}
-	// MOB EQUIPMENT (populateDefaultEquipmentSlots): a skeleton spawns holding a bow in MAINHAND —
-	// the port of AbstractSkeleton.populateDefaultEquipmentSlots (super.populate + setItemSlot(
-	// MAINHAND, new ItemStack(Items.BOW))). Drawn HERE (after reseed, before the store add) so the
-	// tracker's first AddEntity carries the bow in a ClientboundSetEquipment. UNCONDITIONAL + RNG-free
-	// (the armor/enchant roll of the base populate is the deferred Phase-A item), so it perturbs NO
-	// mob RNG stream. Skeleton-gated (typ == entity.Skeleton.ID) — a no-op for every other declared
-	// mob (the oracle pig equips NOTHING here; its stream is unperturbed). Cite AbstractSkeleton
-	// .populateDefaultEquipmentSlots. (Other mobs' default equip / full 6-slot population: deferred.)
-	if e.typ == entity.Skeleton.ID {
-		populateSkeletonEquipment(e)
+	// MOB EQUIPMENT (populateDefaultEquipmentSlots + populateDefaultEquipmentEnchantments): the FULL
+	// vanilla spawn-time equip — the difficulty-gated armor roll (Mob.populateDefaultEquipmentSlots),
+	// the per-species weapon override (Skeleton's BOW / Zombie's iron tool), and the enchant gate.
+	// Drawn HERE (after reseed, before the store add) so the tracker's first AddEntity carries the
+	// populated slots in a ClientboundSetEquipment. Gated to the MONSTERS that override populate in
+	// scope (Zombie, Skeleton) — Animals (the oracle pig) never reach this, so the pig's mob RNG
+	// stream is BYTE-IDENTICALLY unperturbed (zero new draws). `mult` is difficulty.getSpecialMultiplier()
+	// read ONCE from the tick clock (t.gametime), mirroring finalizeSpawn's single read of the
+	// per-mob DifficultyInstance. Cite Mob / AbstractSkeleton / Zombie.populateDefaultEquipmentSlots +
+	// finalizeSpawn ordering (populate slots -> populate enchantments).
+	if e.typ == entity.Zombie.ID || e.typ == entity.Skeleton.ID {
+		populateMonsterEquipment(e, mobRandom(e), specialMultiplierFor(serverDifficulty, t.gametime))
 	}
 	// MOB-PREY (Task #9): Turtle.finalizeSpawn -> setHomePos(this.blockPosition()) — a spawned turtle's
 	// scented home is its spawn column. Set HERE (the spawn path, after the store position is fixed) so the
