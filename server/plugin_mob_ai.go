@@ -205,7 +205,7 @@ func buildAIFromDecl(t *TickLoop, decl *mobDecl) *mobAI {
 				// hunt/attack). spawnDeclaredMob runs on the tick goroutine; a panic here is isolated by
 				// the tickOnce recover backstop, surfacing the bad declaration loudly rather than shipping
 				// a silently-disarmed hostile. (The .star load already validated the rest of the mob.)
-				panic("buildAIFromDecl: unknown goal kind " + gd.nativeKind + " (valid: nearest_attackable_target, hurt_by_target, melee_attack, spider_attack, leap_at_target, avoid_entity, float, climb_on_powder_snow, sit, follow_owner, owner_hurt_by, owner_hurt, angry_player_target, skeleton_target, enderman_look_for_player, enderman_freeze_when_looked_at, silverfish_merge_stone, silverfish_wake_friends, cube_float, cube_random_direction, cube_keep_on_jumping, fox_faceplant, fox_stalk, fox_pounce, fox_seek_shelter, fox_sleep, fox_perch_search, fox_defend_trusted, fox_land_target, restrict_sun, flee_sun, nearest_healable_raider_target)")
+				panic("buildAIFromDecl: unknown goal kind " + gd.nativeKind + " (valid: nearest_attackable_target, hurt_by_target, melee_attack, spider_attack, leap_at_target, avoid_entity, float, climb_on_powder_snow, sit, follow_owner, owner_hurt_by, owner_hurt, angry_player_target, skeleton_target, enderman_look_for_player, enderman_freeze_when_looked_at, silverfish_merge_stone, silverfish_wake_friends, cube_float, cube_random_direction, cube_keep_on_jumping, fox_faceplant, fox_stalk, fox_pounce, fox_seek_shelter, fox_sleep, fox_perch_search, fox_defend_trusted, fox_land_target, turtle_goto_water, turtle_go_home, turtle_travel, turtle_lay_egg, restrict_sun, flee_sun, nearest_healable_raider_target)")
 			}
 			// The Go goal's OWN flags() must match the declared flags — a declaration that names, e.g.,
 			// kind="melee_attack" but flags=["TARGET"] would route the goal into the WRONG selector AND
@@ -414,6 +414,25 @@ func buildNativeGoal(kind string, gd goalDecl, decl *mobDecl) Goal {
 	case "fox_land_target":
 		// Fox.registerGoals landTargetGoal NearestAttackableTargetGoal<Chicken|Rabbit> — {TARGET}; nextInt(10).
 		return newFoxLandTargetGoal()
+	case "turtle_goto_water":
+		// MOB-PREY (Task #9): Turtle.registerGoals @3 TurtleGoToWaterGoal(this, 1.0) — {MOVE, JUMP}. The
+		// MoveToBlockGoal that finds the nearest WATER cell (range 24) and walks to it (ai_goals_turtle.go).
+		// Cite Turtle.registerGoals @3 TurtleGoToWaterGoal.
+		return newTurtleGoToWaterGoal(1.0)
+	case "turtle_go_home":
+		// MOB-PREY (Task #9): Turtle.registerGoals @4 TurtleGoHomeGoal(this, 1.0) — {MOVE}. The home-scent
+		// return (nextInt(700) gate / hasEgg force / >64 blocks) that biases toward homePos. Cite
+		// Turtle.registerGoals @4 TurtleGoHomeGoal.
+		return newTurtleGoHomeGoal(1.0)
+	case "turtle_travel":
+		// MOB-PREY (Task #9): Turtle.registerGoals @7 TurtleTravelGoal(this, 1.0) — {MOVE}. The in-water
+		// deep-wander (nextInt(1025)-512 travelPos). Cite Turtle.registerGoals @7 TurtleTravelGoal.
+		return newTurtleTravelGoal(1.0)
+	case "turtle_lay_egg":
+		// MOB-PREY (Task #9): Turtle.registerGoals @1 TurtleLayEggGoal(this, 1.0) — {MOVE, JUMP}. The
+		// MoveToBlockGoal that finds sand near home (range 16), digs, and places the TURTLE_EGG block.
+		// Cite Turtle.registerGoals @1 TurtleLayEggGoal.
+		return newTurtleLayEggGoal(1.0)
 	default:
 		return nil
 	}

@@ -7,21 +7,30 @@
 # Turtle.registerGoals() (javap-verified this session):
 #   @0 TurtlePanicGoal(this, 1.2)          <-- .star (extends PanicGoal - the shared panic)
 #   @1 TurtleBreedGoal(this, 1.0)          <-- .star (extends BreedGoal - the shared breed)
-#   @1 TurtleLayEggGoal(this, 1.0)         <-- DEFERRED (no TURTLE_EGG block / home-scent-pos subsystem)
+#   @1 TurtleLayEggGoal(this, 1.0)         <-- BUILT (kind=turtle_lay_egg: TURTLE_EGG block + homePos subsystem)
 #   @2 TemptGoal(this, 1.1, is(TURTLE_FOOD), false)  <-- .star (shared TemptGoal; turtle_food = seagrass)
-#   @3 TurtleGoToWaterGoal(this, 1.0)      <-- DEFERRED (no water pathfinding / find-water subsystem)
-#   @4 TurtleGoHomeGoal(this, 1.0)         <-- DEFERRED (no home-pos memory subsystem)
-#   @7 TurtleTravelGoal(this, 1.0)         <-- DEFERRED (no water-travel wander subsystem)
+#   @3 TurtleGoToWaterGoal(this, 1.0)      <-- BUILT (kind=turtle_goto_water: MoveToBlockGoal find-water)
+#   @4 TurtleGoHomeGoal(this, 1.0)         <-- BUILT (kind=turtle_go_home: homePos-memory subsystem)
+#   @7 TurtleTravelGoal(this, 1.0)         <-- BUILT (kind=turtle_travel: in-water deep-wander)
 #   @8 LookAtPlayerGoal(this, Player, 8.0) <-- .star (shared look, dist 8.0)
 #   @9 TurtleRandomStrollGoal(this, 1.0, 100) <-- .star (extends RandomStrollGoal, interval 100)
 #
-# DEFERRED (cite-recorded, NEVER silently dropped):
-#   - TurtleLayEggGoal@1: needs the minecraft:turtle_egg block + the sand-home-pos (hasEgg / homePos)
-#     subsystem. The egg-lay (the turtle's signature mechanic) requires a placeable block + a
-#     scented-home BlockPos memory; no block-place-by-mob path exists in v1. hasEgg stays false (cited).
-#   - TurtleGoToWaterGoal@3 / TurtleGoHomeGoal@4 / TurtleTravelGoal@7: the water-navigation trio needs a
-#     WaterBoundPathNavigation + a findWater BlockPos scan + the home-pos memory - none exist in v1. The
-#     turtle strolls on land via the shared RandomStrollGoal (its @9 goal) meanwhile; the water goals defer.
+# BUILT this batch (the water-nav trio + egg-lay, kind-goals routed to Go-native ports in
+# server/ai_goals_turtle.go — 1:1 with Turtle.registerGoals, RNG in lockstep via the mob's seeded rng):
+#   - TurtleLayEggGoal@1 (kind=turtle_lay_egg): the minecraft:turtle_egg block (codegen'd, level/block) +
+#     the sand-home-pos (hasEgg / homePos / layEggCounter) subsystem now EXIST. The turtle digs sand near
+#     its scented home and places TURTLE_EGG (EGGS = nextInt(4)+1). hasEgg is still set only by a future
+#     breed-override (the .star breed keeps spawning a baby — cited below); the lay/home/egg machinery is live.
+#   - TurtleGoToWaterGoal@3 / TurtleGoHomeGoal@4 / TurtleTravelGoal@7 (kind=turtle_goto_water/go_home/travel):
+#     the home-pos memory + the MoveToBlockGoal find-water/find-sand scans are BUILT. The underlying node
+#     evaluator is WALKABLE-only (AmphibiousPathNavigation water-traversal is the ONE cited reduction —
+#     sibling of navigation.go's canFloat deferral; the GOAL logic + RNG + targets are 1:1). See
+#     server/ai_goals_turtle.go's WATER-NAV REDUCTION note.
+#
+# STILL DEFERRED (cite-recorded, NEVER silently dropped):
+#   - TurtleBreedGoal.breed's hasEgg override: vanilla's turtle breed sets hasEgg=true instead of spawning a
+#     baby. The .star keeps the SHARED breed (spawns a baby) — flipping to the egg-lay path is a breed-hook
+#     override (a Plan-C concern); the hasEgg consumer goals are built so it slots in. Cite TurtleBreedGoal.breed.
 #   - The turtle is prey for the fox/ocelot/wolf (NonTameRandomTarget<Turtle>); those PREDATOR target legs
 #     are wired on the predator side (ocelot targetSelector), cite-deferred where the predator's prey-selector
 #     is not yet built. The turtle itself has NO targetSelector (it never attacks).
@@ -232,6 +241,10 @@ declare_mob(
             stop = breed_stop,
             can_continue = breed_continue,
         ),
+        # @1 TurtleLayEggGoal(mob, 1.0) [MOVE, JUMP] - kind="turtle_lay_egg" (MoveToBlockGoal: find sand
+        # near home, dig, place the TURTLE_EGG block). Added AFTER breed so the @1 tie keeps breed's
+        # precedence (vanilla registers breed@1 then layEgg@1). Cite Turtle.registerGoals @1 TurtleLayEggGoal.
+        goal(priority = 1, flags = ["MOVE", "JUMP"], kind = "turtle_lay_egg"),
         # @2 TemptGoal(mob, 1.1, TURTLE_FOOD, false) [MOVE, LOOK] - the .star tempt on the turtle_food tag
         # (seagrass). Cite Turtle.registerGoals @2 TemptGoal.
         goal(
@@ -242,6 +255,15 @@ declare_mob(
             stop = tempt_food_stop,
             can_continue = tempt_food_continue,
         ),
+        # @3 TurtleGoToWaterGoal(mob, 1.0) [MOVE, JUMP] - kind="turtle_goto_water" (MoveToBlockGoal: find the
+        # nearest WATER cell within 24 and walk to it). Cite Turtle.registerGoals @3 TurtleGoToWaterGoal.
+        goal(priority = 3, flags = ["MOVE", "JUMP"], kind = "turtle_goto_water"),
+        # @4 TurtleGoHomeGoal(mob, 1.0) [MOVE] - kind="turtle_go_home" (bias toward homePos to lay). Cite
+        # Turtle.registerGoals @4 TurtleGoHomeGoal.
+        goal(priority = 4, flags = ["MOVE"], kind = "turtle_go_home"),
+        # @7 TurtleTravelGoal(mob, 1.0) [MOVE] - kind="turtle_travel" (in-water deep-wander). Cite
+        # Turtle.registerGoals @7 TurtleTravelGoal.
+        goal(priority = 7, flags = ["MOVE"], kind = "turtle_travel"),
         # @8 LookAtPlayerGoal(Player, 8.0) [LOOK] - .star. Cite Turtle.registerGoals @8 LookAtPlayerGoal.
         goal(
             priority = 8,

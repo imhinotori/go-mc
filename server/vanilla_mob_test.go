@@ -89,9 +89,11 @@ var allFourMobs = []struct {
 	// around@8 (6 goalSelector) + hurt_by@1 + nearest@2 (2 targetSelector); the Go-native despawn timer
 	// (endermiteAiStep) is a tick hook, not a declared goal.
 	{vanillaEndermiteMobName, entity.Endermite.ID, 6, 2},
-	// MOB-PREY (Task #9): Turtle - panic@0 + breed@1 + tempt(turtle_food)@2 + look@8 + stroll@9 (5
-	// goalSelector, 0 targetSelector); the water-nav trio (GoToWater/GoHome/Travel) + egg-lay are cite-deferred.
-	{vanillaTurtleMobName, entity.Turtle.ID, 5, 0},
+	// MOB-PREY (Task #9): Turtle - panic@0 + breed@1 + layEgg@1 + tempt(turtle_food)@2 + gotoWater@3 +
+	// goHome@4 + travel@7 + look@8 + stroll@9 (9 goalSelector, 0 targetSelector). The water-nav trio
+	// (GoToWater/GoHome/Travel) + egg-lay are now BUILT (kind-goals -> ai_goals_turtle.go); the water-
+	// traversal node evaluator is the one cited reduction. The breed hasEgg-override + prey-target legs defer.
+	{vanillaTurtleMobName, entity.Turtle.ID, 9, 0},
 	// MOB-PREY (Task #9): Ocelot - tempt@0 + float@1 + tempt@3 (the same instance re-added) + breed@9 +
 	// stroll@10 + look@11 (6 goalSelector, 0 targetSelector); leap/attack/prey-target + trust are cite-deferred.
 	{vanillaOcelotMobName, entity.Ocelot.ID, 6, 0},

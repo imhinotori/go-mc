@@ -597,6 +597,14 @@ func (t *TickLoop) spawnDeclaredMob(decl *mobDecl, x, y, z float64) *Entity {
 	if e.typ == entity.Skeleton.ID {
 		populateSkeletonEquipment(e)
 	}
+	// MOB-PREY (Task #9): Turtle.finalizeSpawn -> setHomePos(this.blockPosition()) — a spawned turtle's
+	// scented home is its spawn column. Set HERE (the spawn path, after the store position is fixed) so the
+	// TurtleGoHomeGoal / TurtleLayEggGoal home-distance checks read the real home. Turtle-gated (typ ==
+	// entity.Turtle.ID) — a no-op for every other declared mob (the pig sets no home; its oracle stream is
+	// unperturbed — this is RNG-free). Cite Turtle.finalizeSpawn setHomePos(blockPosition()).
+	if e.typ == entity.Turtle.ID {
+		setTurtleHomePos(e, floorI(e.x), floorI(e.y), floorI(e.z))
+	}
 	// Phase-27 (N=2): add the mob to the region that OWNS its column, NOT t.only().
 	// only() resolves to the CALLING goroutine's region — globalRegion when spawned from the
 	// coordinator (e.g. the SULFUR_TEST_KIT gate egg's use-packet path) — which orphans the mob

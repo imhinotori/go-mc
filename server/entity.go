@@ -564,6 +564,56 @@ type Entity struct {
 	lastHurtMob          int32
 	lastHurtMobTimestamp int32
 
+	// --- MOB-PREY (Task #9): Turtle home-pos / egg-lay state -----------------------------------
+	//
+	// The turtle is the FIRST home-bound / block-placing mob; these fields mirror
+	// net.minecraft.world.entity.animal.turtle.Turtle's private BlockPos homePos / travelPos +
+	// the boolean goingHome + the synched HAS_EGG / LAYING_EGG data + the int layEggCounter. EVERY
+	// field is turtle-gated at its reader/writer (typ == entity.Turtle.ID / the turtle native goals),
+	// so the ZERO value is the exact non-turtle default and the pig oracle's stream gains ZERO draws
+	// from any of them — the SAME discipline the wolf / eggTime / life fields above follow. All are
+	// tick-owned plain values (TICK-05); homePos/travelPos are packed block coords (no live pointers).
+	//
+	// homePos is Turtle.homePos — the scented sand home a turtle returns to lay eggs. Turtle.finalizeSpawn
+	// sets it to blockPosition() (setHomePos), so a spawned turtle's home is its spawn column. TurtleGoHomeGoal
+	// / TurtleLayEggGoal read it (closerToCenterThan checks). homePosSet distinguishes "home == (0,0,0)"
+	// (a real world pos) from "never set" so a home-goal never fires on an unspawned zero pos.
+	//	[VERIFIED javap Turtle: private BlockPos homePos; setHomePos/getHomePos; finalizeSpawn setHomePos(blockPosition()).]
+	homePosX, homePosY, homePosZ int
+	homePosSet                   bool
+
+	// travelPos is Turtle.travelPos — the far deep-water wander goal TurtleTravelGoal picks (nextInt(1025)-512
+	// on X/Z). travelPosSet mirrors the Java field being null before the goal's start() sets it (canUse/tick
+	// null-guards). Only TurtleTravelGoal / TurtlePathNavigation.isStableDestination read it.
+	//	[VERIFIED javap Turtle: private BlockPos travelPos; TurtleTravelGoal.start sets it, stop nulls it.]
+	travelPosX, travelPosY, travelPosZ int
+	travelPosSet                       bool
+
+	// goingHome is Turtle.goingHome — set true by TurtleGoHomeGoal.start / false by its stop. It GATES
+	// TurtleGoToWaterGoal.canUse (a homing turtle does not detour to water) and TurtleTravelGoal.canUse
+	// (a homing turtle does not deep-wander). FALSE for the pig and the zero value.
+	//	[VERIFIED javap Turtle: private boolean goingHome; TurtleGoHomeGoal.start goingHome=true, stop=false.]
+	goingHome bool
+
+	// hasEgg is Turtle.hasEgg() (the HAS_EGG synched data, DEFAULT_HAS_EGG=false). TurtleBreedGoal.breed
+	// sets it true (the turtle lays instead of spawning a live baby); TurtleLayEggGoal.tick clears it after
+	// placing the egg block. It GATES TurtleGoHomeGoal (a pregnant turtle always homes) and TurtleLayEggGoal.
+	// FALSE for the pig and the zero value. (Breed still spawns a baby in v1 — the hasEgg breed override is
+	// cited-deferred in the .star; the field + lay/home consumers are built so a future breed override slots in.)
+	//	[VERIFIED javap Turtle: HAS_EGG synched Boolean; hasEgg()/setHasEgg(boolean); DEFAULT_HAS_EGG=false.]
+	hasEgg bool
+
+	// layingEgg is Turtle.isLayingEgg() (the LAYING_EGG synched data). TurtleLayEggGoal.tick sets it true
+	// while the turtle is digging (layEggCounter counting up), cleared when the egg is placed. It slows the
+	// turtle's movement in vanilla (travelInWater 0.3 factor — a cited-deferred physics tweak). FALSE default.
+	//	[VERIFIED javap Turtle: LAYING_EGG synched Boolean; isLayingEgg()/setLayingEgg(boolean).]
+	layingEgg bool
+
+	// layEggCounter is Turtle.layEggCounter — the dig-timer TurtleLayEggGoal.tick counts up once the turtle
+	// has reached the sand target and set layingEgg; at > adjustedTickDelay(200) the egg block is placed. 0 default.
+	//	[VERIFIED javap Turtle: private int layEggCounter; TurtleLayEggGoal.tick ++layEggCounter / place at >200.]
+	layEggCounter int
+
 	// --- GAMEPLAY-07: delta-move tracking state (ServerEntity.sendChanges) ----------------
 	//
 	// These mirror net.minecraft.server.level.ServerEntity's per-entity send state so the
