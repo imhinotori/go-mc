@@ -281,6 +281,11 @@ func buildNativeGoal(kind string, decl *mobDecl) Goal {
 		// bow goal that charges + fires an Arrow (ai_goals_ranged.go). Replaces the skeleton's melee goal
 		// (the skeleton now shoots instead of swinging). Cite AbstractSkeleton.reassessWeaponGoal @4.
 		return newRangedBowAttackGoal()
+	case "creeper_swell":
+		// MOB-HOST-06 (Task #9): Creeper's SwellGoal @2 — arms/disarms the fuse (setSwellDir) based on
+		// target distance; the fuse advance + explosion live in creeperAiStep (ai_goals_creeper.go). Cite
+		// Creeper.registerGoals @2 SwellGoal.
+		return newSwellGoal()
 	case "spider_attack":
 		return newSpiderAttackGoal(declaredWalkSpeed(decl))
 	case "leap_at_target":

@@ -419,6 +419,9 @@ var naturalMonsterMobNames = []string{
 	vanillaZombieMobName,
 	vanillaSkeletonMobName,
 	vanillaSpiderMobName,
+	// MOB-HOST-06 (Task #9): the Creeper spawns naturally in the overworld dark (unlike the biome-gated
+	// husk/silverfish), so it JOINS the uniform MONSTER pool — a faithful overworld hostile.
+	vanillaCreeperMobName,
 }
 
 // pickNaturalMonsterMob returns the name of one of the 3 vanilla MONSTER mobs to place at a natural

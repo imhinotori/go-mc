@@ -392,6 +392,13 @@ func (t *TickLoop) tickAI() {
 		if e.typ == entity.Chicken.ID {
 			t.chickenAiStep(e)
 		}
+		// MOB-HOST-06 (Task #9): the Creeper.tick fuse advance (swell += swellDir, explode at maxSwell).
+		// Runs INDEPENDENTLY of the goals (Creeper.tick), per-type-gated like the chicken, AFTER
+		// serverAiStep so the SwellGoal has set swellDir this tick. ADDITIVE + creeper-gated (zero cost /
+		// zero RNG for every non-creeper — the pig oracle stream is untouched).
+		if e.typ == entity.Creeper.ID {
+			t.creeperAiStep(e)
+		}
 	}
 
 	// Throttled natural spawner: vanilla attempts every tick (most no-op under cap); v1 runs the

@@ -185,13 +185,14 @@ func TestMonsterCapBlocks(t *testing.T) {
 // TestPickNaturalMonsterMob: the picker returns one of the explicit naturalMonsterMobNames
 // {vanilla_zombie, vanilla_skeleton, vanilla_spider}, drawn from the per-region seeded levelRandom.
 func TestPickNaturalMonsterMob(t *testing.T) {
-	if len(naturalMonsterMobNames) != 3 {
-		t.Fatalf("naturalMonsterMobNames must hold the 3 hostiles, got %v", naturalMonsterMobNames)
+	if len(naturalMonsterMobNames) != 4 {
+		t.Fatalf("naturalMonsterMobNames must hold the 4 overworld hostiles, got %v", naturalMonsterMobNames)
 	}
 	want := map[string]bool{
 		vanillaZombieMobName:   true,
 		vanillaSkeletonMobName: true,
 		vanillaSpiderMobName:   true,
+		vanillaCreeperMobName:  true,
 	}
 	for _, n := range naturalMonsterMobNames {
 		if !want[n] {

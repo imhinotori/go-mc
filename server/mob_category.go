@@ -135,6 +135,10 @@ func categoryOf(t entity.ID) mobCategory {
 		// MOB-HOST-05 (Task #9): Silverfish is MobCategory.MONSTER (vanilla EntityType.SILVERFISH;
 		// data/entity Silverfish.Type == "monster"). Same MONSTER-budget accounting as the zombie.
 		return categoryMonster
+	case entity.Creeper.ID:
+		// MOB-HOST-06 (Task #9): Creeper is MobCategory.MONSTER (vanilla EntityType.CREEPER; data/entity
+		// Creeper.Type == "monster"). Same MONSTER-budget accounting as the zombie.
+		return categoryMonster
 	default:
 		return categoryMisc
 	}

@@ -73,6 +73,12 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned silverfish eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
 		}
+	case "creeper":
+		// MOB-HOST-06 (Task #9): spawn a vanilla creeper (hunt + swell fuse + explosion, Creeper wire type).
+		e := t.spawnVanillaMob(vanillaCreeperMobName, p.x, p.y, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned creeper eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
+		}
 	case "water":
 		t.dbgFillWater(p)
 		t.broadcastSystemChat("[dbg] filled a water box around you")
@@ -83,7 +89,7 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] water box + pig eid=%d dropped in", e.id))
 		}
 	default:
-		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | water | pig-in-water")
+		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | water | pig-in-water")
 	}
 }
 

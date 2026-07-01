@@ -48,6 +48,9 @@ var allFourMobs = []struct {
 	// MOB-HOST-05 (Task #9): Silverfish — float@1 + melee@4 (2 goalSelector) + hurt_by@1 + nearest@2
 	// (2 targetSelector); the powder-snow/wake-friends/merge-stone goals are cite-deferred.
 	{vanillaSilverfishMobName, entity.Silverfish.ID, 2, 2},
+	// MOB-HOST-06 (Task #9): Creeper — float@1 + swell@2 + melee@4 + stroll@5 + look@6 + around@6
+	// (6 goalSelector) + nearest@1 + hurt_by@2 (2 targetSelector); AvoidEntity Ocelot/Cat cite-deferred.
+	{vanillaCreeperMobName, entity.Creeper.ID, 6, 2},
 }
 
 // TestAllFourMobsBootLoad: loadVanillaMobRegistry returns ONE registry holding the passive + hostile +
@@ -62,9 +65,9 @@ func TestAllFourMobsBootLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadVanillaMobRegistry: %v", err)
 	}
-	const wantTotal = 11 // + the Task-#9 mobs (husk + mooshroom + silverfish)
+	const wantTotal = 12 // + the Task-#9 mobs (husk + mooshroom + silverfish + creeper)
 	if got := len(r.byName); got != wantTotal {
-		t.Fatalf("registry holds %d declarations, want %d (pig/cow/sheep/chicken/wolf + zombie/skeleton/spider + husk/mooshroom/silverfish)", got, wantTotal)
+		t.Fatalf("registry holds %d declarations, want %d (pig/cow/sheep/chicken/wolf + zombie/skeleton/spider + husk/mooshroom/silverfish/creeper)", got, wantTotal)
 	}
 	for _, m := range allFourMobs {
 		decl, ok := r.byName[m.name]

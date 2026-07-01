@@ -57,6 +57,9 @@ var (
 	// damageTypeArrow is minecraft:arrow — the source AbstractArrow.onHitEntity deals
 	// (damageSources().arrow(this, owner)). NOT a bypasses_armor member (the victim folds the armor curve).
 	damageTypeArrow = damageTypeID(tag.DamageTypeIDs["minecraft:arrow"])
+	// damageTypeExplosion is minecraft:explosion — the source a MOB explosion (a creeper) deals via
+	// ServerExplosion (Explosion.getDefaultDamageSource: type EXPLOSION, causingEntity = the source mob).
+	damageTypeExplosion = damageTypeID(tag.DamageTypeIDs["minecraft:explosion"])
 )
 
 // damageSourceOf builds a DamageSource for an environmental/anonymous source: the given damage-type

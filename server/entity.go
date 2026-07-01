@@ -168,6 +168,20 @@ type Entity struct {
 	// ownerId+1 (the client owner link for crit visuals); 0 for a plain mob. Set at spawn.
 	spawnData int32
 
+	// --- CREEPER SWELL (net.minecraft.world.entity.monster.Creeper) --------------------------------
+	//
+	// Tick-owned plain values, set/read ONLY for a Creeper. swellDir is the SwellGoal output
+	// (Creeper.setSwellDir: +1 arming, -1 disarming); swell is the fuse counter Creeper.tick advances by
+	// swellDir each tick and, at maxSwell, triggers explodeCreeper. oldSwell mirrors Creeper.oldSwell (the
+	// client-render prev value). powered/ignited are the charged/primed flags. maxSwell default 30 (the
+	// vanilla fuse). Zero for every non-creeper entity (the creeper tick gates on typ == entity.Creeper.ID).
+	swellDir int32
+	swell    int32
+	oldSwell int32
+	maxSwell int32
+	powered  bool
+	ignited  bool
+
 	// ai is the per-mob AI handle (AI-01, Plan 07-01): the mob's goalSelector + the
 	// navigation/look targets a goal writes (server/ai_mob.go). nil for a non-mob entity (a
 	// dropped item, a player's instance) and for a mob with no AI registered. Hung off the
