@@ -556,6 +556,14 @@ func (t *TickLoop) spawnDeclaredMob(decl *mobDecl, x, y, z float64) *Entity {
 	if e.typ == entity.Chicken.ID {
 		e.eggTime = mobRandom(e).nextInt(6000) + 6000
 	}
+	// MOB-NEUT-03 (Cat comfort @7 / collar-dye): a fresh Cat's DATA_COLLAR_COLOR defaults to
+	// DEFAULT_COLLAR_COLOR.getId() == DyeColor.RED (14), NOT the Go zero-value 0 (WHITE). Cat.defineSynchedData
+	// define(DATA_COLLAR_COLOR, DEFAULT_COLLAR_COLOR.getId()) sets it at construction, so seed the RED default
+	// here in the shared spawn path (no RNG). Cat-gated: every other mob keeps catCollarColor 0 and the pig
+	// oracle draws NOTHING. Cite Cat.defineSynchedData + Cat static{} DEFAULT_COLLAR_COLOR = DyeColor.RED.
+	if e.typ == entity.Cat.ID {
+		e.catCollarColor = catDefaultCollarColor
+	}
 	// MOB-SUB-08 (Plan 33-01): spawn-time DATA_BABY_ID carry. A mob spawned as a BABY (breedAge < 0 —
 	// e.g. Plan C's breed() child, which sets breedAge = BABY_START_AGE before this add) must render
 	// small client-side, so its half-scale hitbox AND the wire baby flag are present from the first

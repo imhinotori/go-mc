@@ -548,6 +548,18 @@ type Entity struct {
 	//	 adjustedTickDelay(16) -> setLying(true); stop onBedTicks = 0.]
 	catOnBedTicks int
 
+	// catCollarColor is net.minecraft.world.entity.animal.feline.Cat's DATA_COLLAR_COLOR synched data
+	// (INT, accessor index 23), reduced to the DyeColor id (WHITE 0 .. BLACK 15). Cat.mobInteract's
+	// collar-dye branch sets it (setCollarColor(color) = entityData.set(DATA_COLLAR_COLOR, color.getId())),
+	// and getCollarColor() = DyeColor.byId(get(DATA_COLLAR_COLOR)). Its define(...) default is
+	// DEFAULT_COLLAR_COLOR.getId() == DyeColor.RED (14) per Cat.defineSynchedData, so a fresh cat starts
+	// with a RED collar (NOT 0/WHITE). Set to catDefaultCollarColor at spawn (newTestCat / the mob factory).
+	//	[VERIFIED javap Cat: DATA_COLLAR_COLOR = defineId(Cat.class, INT); defineSynchedData define(
+	//	 DATA_COLLAR_COLOR, DEFAULT_COLLAR_COLOR.getId()); static{} DEFAULT_COLLAR_COLOR = DyeColor.RED.
+	//	 Index derivation: ...TamableAnimal(18,19) Cat DATA_VARIANT_ID(20) IS_LYING(21) RELAX_STATE_ONE(22)
+	//	 DATA_COLLAR_COLOR(23).]
+	catCollarColor int
+
 	// ownerUUID is the TamableAnimal DATA_OWNERUUID_ID owner ref (Optional<EntityReference<LivingEntity>>),
 	// reduced to the owner's THIN entity id for v1 (the goals only need to resolve the owner on the
 	// loop; the WIRE broadcast of the owner ref is deferred — server-side ref drives the goals). 0 ==
@@ -743,6 +755,7 @@ func (e *Entity) getAttributeValue(attr *attribute.Attribute) float64 {
 
 // setJumping is net.minecraft.world.entity.LivingEntity.setJumping(boolean) — the bare field write
 // the mob's JumpControl performs each tick (jumpControl.tick → mob.setJumping(jump)). MOB-SUB-04.
+//
 //	[VERIFIED javap LivingEntity.setJumping(boolean): aload_0; iload_1; putfield jumping:Z; return —
 //	 i.e. `this.jumping = b;`. No side effects beyond the field write.]
 func (e *Entity) setJumping(b bool) { e.jumping = b }
@@ -752,6 +765,7 @@ func (e *Entity) setJumping(b bool) { e.jumping = b }
 // returns TRUE unconditionally (only a few overrides — e.g. ArmorStand — return false). A v1 Pig is
 // a plain LivingEntity, so this is a cited const-true, structured to become a per-type override read
 // (a `noFluidAffect` flag) once a mob type needs the ArmorStand-style false. MOB-SUB-04.
+//
 //	[VERIFIED javap LivingEntity.isAffectedByFluids: iconst_1; ireturn — `return true;`.]
 func (e *Entity) isAffectedByFluids() bool { return true }
 
@@ -790,6 +804,7 @@ func (e *Entity) AABB() bvh.AABB[float64, bvh.Vec3[float64]] {
 // for the pig: adult 0.9x0.9 -> baby 0.45x0.45 == EntityDimensions.scalable(0.45, 0.45)). It is the
 // SCALE, derived once, NOT a hardcoded 0.45, so a non-pig AgeableMob (Phase 34 cow/sheep/chicken)
 // reuses the factor against its OWN adult dims. MOB-SUB-08 + ROADMAP SC#1 (the baby half-scale hitbox).
+//
 //	[VERIFIED javap (33-JARNOTES): Pig.BABY_DIMENSIONS = EntityType.PIG.getDimensions().scale(0.5f)
 //	 .withEyeHeight(0.40625f) == scalable(0.45, 0.45); adult pig dims 0.9x0.9 from the data table.]
 const babyDimensionScale = 0.5
@@ -797,6 +812,7 @@ const babyDimensionScale = 0.5
 // isBaby is net.minecraft.world.entity.AgeableMob.isBaby() — true exactly while the age machine is
 // negative (a growing baby). The follow/breed goal distSqr checks and the half-scale hitbox both
 // read it. MOB-SUB-08.
+//
 //	[VERIFIED javap AgeableMob.isBaby: `return getAge() < 0;` (server getAge() == this.age == breedAge).]
 func (e *Entity) isBaby() bool { return e.breedAge < 0 }
 
@@ -811,6 +827,7 @@ func (e *Entity) isBaby() bool { return e.breedAge < 0 }
 // Eye height (baby 0.40625): our Entity has NO eye-height field today — cite-deferred (Pig.BABY_DIMENSIONS
 // .withEyeHeight(0.40625f)); it is NOT load-bearing for the goal distSqr checks (those read the AABB).
 // If an eye-height field lands later, scale it by 0.40625/adult at the same seam (33-deviations.md).
+//
 //	[VERIFIED javap Pig.getDefaultDimensions: isBaby() ? BABY_DIMENSIONS : super; BABY_DIMENSIONS is the
 //	 adult dims scaled 0.5 — so baby width/height = adultWidth/adultHeight * babyDimensionScale.]
 func (e *Entity) refreshDimensions() {
@@ -825,18 +842,21 @@ func (e *Entity) refreshDimensions() {
 
 // defaultInLoveTime is net.minecraft.world.entity.animal.Animal.DEFAULT_IN_LOVE_TIME — the love-mode
 // countdown setInLove arms (600 ticks == 30 seconds at 20 TPS).
+//
 //	[VERIFIED javap Animal.setInLove: `this.inLove = 600;` (sipush 600); DEFAULT_IN_LOVE_TIME == 600.]
 const defaultInLoveTime = 600
 
 // isInLove is net.minecraft.world.entity.animal.Animal.isInLove() == `this.inLove > 0`. True while
 // the love-mode countdown is running (BreedGoal.canUse gates on it: a pig only seeks a partner while
 // in love). Pure read, draws no RNG.
+//
 //	[VERIFIED javap Animal.isInLove: `return this.inLove > 0;` (getfield inLove; ifle; iconst_1/0).]
 func (e *Entity) isInLove() bool { return e.inLove > 0 }
 
 // canFallInLove is net.minecraft.world.entity.animal.Animal.canFallInLove() == `this.inLove <= 0`.
 // The FEED-path adult branch (mobInteract) gates on it so a pig already in love is not re-armed (and
 // does not consume a second food item). Pure read, draws no RNG.
+//
 //	[VERIFIED javap Animal.canFallInLove: `return this.inLove <= 0;` (getfield inLove; ifgt; iconst_1/0).]
 func (e *Entity) canFallInLove() bool { return e.inLove <= 0 }
 
@@ -847,6 +867,7 @@ func (e *Entity) canFallInLove() bool { return e.inLove <= 0 }
 // away), and the EntityEvent-18 heart broadcast is performed by the FEED-path caller (broadcastHearts)
 // right after this, mirroring setInLove's own broadcast. Tick-owned; the value is never mutated off
 // the tick goroutine.
+//
 //	[VERIFIED javap Animal.setInLove: sipush 600; putfield inLove; (record loveCause); level();
 //	 bipush 18; Level.broadcastEntityEvent(this, 18).]
 func (e *Entity) setInLove() { e.inLove = defaultInLoveTime }
@@ -856,6 +877,7 @@ func (e *Entity) setInLove() { e.inLove = defaultInLoveTime }
 // && this.isInLove() && other.isInLove()`. Our same-species check is `other.typ == e.typ` (both the
 // vanilla_pig wire type, entity.Pig.ID): two distinct same-type animals that are BOTH in love may
 // breed. Pure read, draws no RNG.
+//
 //	[VERIFIED javap Animal.canMate: `other != this` (if_acmpeq -> 0); `other.getClass()==getClass()`
 //	 (if_acmpne -> 0); `isInLove()` (ifeq -> 0); `other.isInLove()` (ifeq -> 0); else 1.]
 func (e *Entity) canMate(other *Entity) bool {
@@ -867,6 +889,7 @@ func (e *Entity) canMate(other *Entity) bool {
 // gates read it so a goal drops a partner/parent that died or was removed mid-courting/follow. Sulfur
 // folds isRemoved() into the `dead` flag (removal IS the store delete; see the field doc), so this is
 // `!e.dead && e.health > 0`. Pure read, no RNG.
+//
 //	[VERIFIED javap LivingEntity.isAlive: `return !isRemoved() && getHealth() > 0.0F;`.]
 func (e *Entity) isAlive() bool { return !e.dead && e.health > 0 }
 
@@ -880,6 +903,7 @@ func (e *Entity) isAlive() bool { return !e.dead && e.health > 0 }
 // (no age-lock subsystem), so only the age advance + clamp is observable. If the add crosses 0 (the
 // baby grows up), the caller (the feed path) performs the same 0-crossing side effect tickMobAging's
 // onGrewUp does (refresh dims + broadcast DATA_BABY_ID=false). Pure int, draws no RNG.
+//
 //	[VERIFIED javap AgeableMob.ageUp(int,boolean): iload age; iload amount; bipush 20; imul; iadd ->
 //	 i; ifle skip-clamp; iconst_0 -> i (clamp >0 to 0); setAge(i); the forced branch touches
 //	 forcedAge/forcedAgeTimer only (both v1 const-0).]
@@ -898,6 +922,7 @@ func (e *Entity) ageUp(amount int) {
 // the integer division `ageDelta / 20` is computed FIRST (truncating int division), THEN cast to
 // float, THEN * 0.1f, THEN truncated back to int. (For a fresh -24000 baby: -(-24000)=24000; 24000/20
 // =1200; 1200f*0.1f=120.0f; (int)120.0f=120 seconds == 2400 ticks of speedup.) Pure int/float, no RNG.
+//
 //	[VERIFIED javap AgeableMob.getSpeedUpSecondsWhenFeeding: iload; bipush 20; idiv; i2f; ldc 0.1f;
 //	 fmul; f2i; ireturn — int-divide first, float-multiply, truncate.]
 func getSpeedUpSecondsWhenFeeding(ageDelta int) int {
@@ -909,6 +934,7 @@ func getSpeedUpSecondsWhenFeeding(ageDelta int) int {
 // const-false stub (no age-lock subsystem is wired — the tryFeedAnimal BABY branch already documents
 // this), so canAgeUp() reduces to isBaby() == breedAge < 0. Sheep.ate calls it to decide whether a baby
 // sheep that just ate grass grows up by 60 (ageUp(60)). Pure int read, draws no RNG.
+//
 //	[VERIFIED javap AgeableMob.canAgeUp: `return isBaby() && !isAgeLocked();`; isAgeLocked reads
 //	 AGE_LOCKED (v1 const-false stub here, same as the tryFeedAnimal canAgeUp comment).]
 func (e *Entity) canAgeUp() bool { return e.isBaby() }

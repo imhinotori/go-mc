@@ -12,7 +12,7 @@
 #   @4  CatTemptGoal(0.6, is(CAT_FOOD), true)           <-- .star (shared TemptGoal; cat_food tag)
 #   @5  CatLieOnBedGoal                                 <-- kind="cat_lie_on_bed" (MOB-NEUT-03 Go-native)
 #   @6  FollowOwnerGoal(1.0, 10.0, 5.0)                 <-- kind="follow_owner" (36-01 followOwnerGoal)
-#   @7  CatSitOnBlockGoal                               <-- DEFERRED (cat-specific chest/furnace sit)
+#   @7  CatSitOnBlockGoal                               <-- kind="cat_sit_on_block" (MOB-NEUT-03 Go-native)
 #   @8  LeapAtTargetGoal(0.3)                           <-- DEFERRED (defers WITH its prey target)
 #   @9  OcelotAttackGoal                                <-- DEFERRED (defers WITH its prey target)
 #   @10 BreedGoal(0.8)                                  <-- .star (shared BreedGoal)
@@ -61,9 +61,11 @@
 #         generated BlockTags map; data/tag.tags.go `beds` is an ITEM tag, not the block tag).
 #       nextStartTick override = 40 (constant, NOT the base 200+nextInt(200)).  tick: super.tick();
 #         setInSittingPose(false); if !isReachedTarget() setLying(false) else if !isLying() setLying(true).
-#   - @7 CatSitOnBlockGoal (extends MoveToBlockGoal(cat, speed, searchRange=8); flags {MOVE,JUMP} base).
-#       Cite CatSitOnBlockGoal + MoveToBlockGoal.  BLOCKED BY: BlockTags.BEDS + Blocks.CHEST/FURNACE +
-#       ChestBlockEntity.getOpenCount + FurnaceBlock.LIT -- none queryable from the AI layer in v1.
+#   - @7 CatSitOnBlockGoal (extends MoveToBlockGoal(cat, 0.8, searchRange=8, verticalSearchRange=1);
+#       flags {MOVE,JUMP} base) -- LANDED (kind="cat_sit_on_block", ai_goals_cat.go). The block-entity
+#       queries it was blocked on are now built (block_entity_query.go): chestOpenCount (the viewer count,
+#       ChestBlockEntity.getOpenCount analog), furnaceLit (FurnaceBlock.LIT), plus the existing BlockTags
+#       .BEDS scan. Cite CatSitOnBlockGoal + MoveToBlockGoal.
 #       canUse: isTame() && !isOrderedToSit() && super.canUse().  isValidTarget(level,pos): isEmptyBlock(
 #         pos.above()) && ( is(Blocks.CHEST) ? ChestBlockEntity.getOpenCount(level,pos) < 1
 #         : is(Blocks.FURNACE) && FurnaceBlock.LIT ? true
@@ -74,14 +76,17 @@
 #       NO draw; CatSitOnBlock uses the base reducedTickDelay(200 + nextInt(200)) -> ONE nextInt(200));
 #       (2) start -> maxStayTicks = nextInt(nextInt(1200) + 1200) + 1200 (TWO nextInt, inner first).
 #       findNearestBlock is the deterministic ring scan (NO RNG). requiresUpdateEveryTick == true.
-#   - Collar-dye (Cat.mobInteract tamed+owned branch, BEFORE the feed/sit-toggle). Cite Cat.mobInteract.
-#       BLOCKED BY: ItemTags.CAT_COLLAR_DYES + DataComponents.DYE + the synched DATA_COLLAR_COLOR field +
-#       setPersistenceRequired -- none exist in v1 (entity_encode.go carries the default WHITE collar only).
+#   - Collar-dye (Cat.mobInteract tamed+owned branch, BEFORE the feed/sit-toggle) -- LANDED
+#       (tryCatInteract, attack_dispatch.go). The subsystems it was blocked on are now built:
+#       ItemTags.CAT_COLLAR_DYES == #minecraft:dyes (data/tag, "cat_collar_dyes"); stack.get(
+#       DataComponents.DYE) -> dyeColorIDOf (dye_color.go, the contiguous dye-id -> DyeColor-id map); the
+#       synched DATA_COLLAR_COLOR field (entity.catCollarColor, INT index 23, default RED 14 seeded at
+#       spawn) + its setCatCollarColor broadcast (catCollarDataEntry). Cite Cat.mobInteract.
 #       BRANCH (CFR): if stack.is(ItemTags.CAT_COLLAR_DYES) { DyeColor c = stack.get(DataComponents.DYE);
 #         if (c != null && c != getCollarColor()) { setCollarColor(c); stack.consume(1, player);
 #         setPersistenceRequired(); return SUCCESS } }.  NO RNG.  DATA_COLLAR_COLOR default = DEFAULT_COLLAR
-#         _COLOR.getId() (RED == 14) per Cat.defineSynchedData.  When wired: slot it into tryCatInteract
-#         (attack_dispatch.go) as the FIRST tamed+owned check, before the cat_food feed short-circuit.
+#         _COLOR.getId() (RED == 14) per Cat.defineSynchedData.  setPersistenceRequired() is a cited no-op
+#         in v1 (no per-entity despawn flag), the same treatment the untamed feed-tame branch gives it.
 #   - @8 LeapAtTargetGoal(0.3) / @9 OcelotAttackGoal / targetSelector @1 NonTameRandomTargetGoal<Rabbit/
 #       Turtle>: no rabbit/turtle-as-prey selector for the cat in v1 (defers WITH those prey). A tamed cat
 #       does not hunt anyway. Cite Cat.registerGoals @8/@9 + targetSelector @1.
@@ -497,6 +502,11 @@ declare_mob(
         # @6 FollowOwnerGoal(mob, 1.0, 10.0, 5.0) [MOVE] — kind="follow_owner" (the wolf's Go-native follow).
         # Cite Cat.registerGoals @6 FollowOwnerGoal.
         goal(priority = 6, flags = ["MOVE"], kind = "follow_owner"),
+        # @7 CatSitOnBlockGoal(mob, 0.8) [MOVE, JUMP] -- kind="cat_sit_on_block" (the Go-native
+        # MoveToBlockGoal that walks to + sits on an unopened chest / lit furnace / bed foot). Unblocked by
+        # the chest open-count + furnace-LIT block-entity queries (block_entity_query.go). Cite
+        # Cat.registerGoals @7 CatSitOnBlockGoal + MoveToBlockGoal.
+        goal(priority = 7, flags = ["MOVE", "JUMP"], kind = "cat_sit_on_block"),
         # @10 BreedGoal(mob, 0.8) [MOVE, LOOK]. Cite Cat.registerGoals @10 BreedGoal(0.8).
         goal(
             priority = 10,

@@ -46,6 +46,20 @@ func (t *TickLoop) setCatRelaxStateOne(e *Entity, relax bool) {
 	t.broadcastToTrackers(e.id, encodeSetEntityDataByID(e.id, catRelaxDataEntry(relax)))
 }
 
+// setCatCollarColor ports Cat.setCollarColor(color) == entityData.set(DATA_COLLAR_COLOR, color.getId()):
+// flip the server-side catCollarColor (the DyeColor id) and PUSH the new INT to trackers (dirty-only,
+// matching SynchedEntityData — no broadcast when the value is unchanged). Tick-owned. The caller (the
+// mobInteract dye branch) has already gated on color != current, so the guard here is belt-and-braces.
+//
+//	[VERIFIED CFR Cat.setCollarColor: entityData.set(DATA_COLLAR_COLOR, color.getId()).]
+func (t *TickLoop) setCatCollarColor(e *Entity, colorID int) {
+	if e.catCollarColor == colorID {
+		return
+	}
+	e.catCollarColor = colorID
+	t.broadcastToTrackers(e.id, encodeSetEntityDataByID(e.id, catCollarDataEntry(colorID)))
+}
+
 // blockPosOf floors a world position to its integer block coordinate (Entity.blockPosition() /
 // BlockPos.containing). The same math the other goals use (int(math.Floor)).
 func blockPosOf(x, y, z float64) pk.Position {
@@ -356,6 +370,93 @@ func (t *TickLoop) setCatInSittingPose(e *Entity, sitting bool) {
 }
 
 var _ Goal = (*catLieOnBedGoal)(nil)
+
+// --- CatSitOnBlockGoal (net.minecraft.world.entity.ai.goal.CatSitOnBlockGoal) ---------------------
+//
+// Extends MoveToBlockGoal(cat, speed, searchRange=8) -- the 3-arg ctor, which forwards to the 4-arg with
+// verticalSearchRange=1 (iconst_1) and verticalSearchStart=0 (base default); flags stay {MOVE, JUMP}
+// (base). Walk to + sit on a valid comfort block: an unopened CHEST, a LIT FURNACE, or the FOOT of a
+// bed. Ported 1:1 (javap this session).
+//
+//	[VERIFIED javap CatSitOnBlockGoal: ctor super(cat, speed, bipush 8) -> MoveToBlockGoal 3-arg (which
+//	 calls 4-arg with verticalSearchRange=iconst_1); canUse isTame() && !isOrderedToSit() && super.canUse();
+//	 start super.start()+setInSittingPose(false); stop super.stop()+setInSittingPose(false);
+//	 tick super.tick()+setInSittingPose(isReachedTarget()); isValidTarget level.isEmptyBlock(pos.above())
+//	 && ( is(Blocks.CHEST) ? ChestBlockEntity.getOpenCount(level,pos) < 1
+//	    : is(Blocks.FURNACE) && FurnaceBlock.LIT ? true
+//	    : is(BlockTags.BEDS, s -> s.getOptionalValue(BedBlock.PART).map(v -> v != HEAD).orElse(true)) ).
+//	 Cat.registerGoals @7: new CatSitOnBlockGoal(this, 0.8).]
+type catSitOnBlockGoal struct {
+	moveToBlockGoal
+}
+
+// newCatSitOnBlockGoal ports CatSitOnBlockGoal's ctor. Cat.registerGoals @7 passes speed 0.8 (ldc2_w
+// 0.8d); the searchRange is the bipush 8, the verticalSearchRange the base 3-arg-ctor default 1,
+// verticalSearchStart the base default 0. The base start/stop/tick/canUse are composed via the hook
+// fields (Go has no super-method dispatch).
+//
+//	[VERIFIED javap CatSitOnBlockGoal.<init>(cat, speed): super(cat, speed, 8) (MoveToBlockGoal 3-arg).
+//	 Cat.registerGoals @7: new CatSitOnBlockGoal(this, 0.8).]
+func newCatSitOnBlockGoal(speedModifier float64) *catSitOnBlockGoal {
+	g := &catSitOnBlockGoal{moveToBlockGoal: newMoveToBlockGoal(speedModifier, catSitOnBlockSearchRange, 1)}
+	// isValidTarget(level, pos): isEmptyBlock(pos.above()) && ( CHEST&&openCount<1 || FURNACE&&LIT ||
+	// BED&&part!=HEAD ). The three-way is the exact bytecode order (CHEST first, then FURNACE, then BEDS).
+	g.validTarget = func(t *TickLoop, pos pk.Position) bool {
+		if t.world() == nil {
+			return false
+		}
+		above := pk.Position{X: pos.X, Y: pos.Y + 1, Z: pos.Z}
+		if !t.isEmptyBlockAt(above) { // level.isEmptyBlock(pos.above())
+			return false
+		}
+		s, ok := t.world().GetBlock(pos, dimMinY)
+		if !ok {
+			return false
+		}
+		if isChestBlock(s) { // s.is(Blocks.CHEST) -> getOpenCount(level,pos) < 1
+			return t.chestOpenCount(pos) < 1
+		}
+		if isFurnaceBlock(s) { // s.is(Blocks.FURNACE) && FurnaceBlock.LIT
+			return furnaceLit(s)
+		}
+		// s.is(BlockTags.BEDS, s -> s.getOptionalValue(BedBlock.PART).map(v -> v != HEAD).orElse(true)).
+		// The predicate accepts a bed whose PART is NOT the HEAD (i.e. the FOOT), or a bed with no PART
+		// property (orElse(true)); a non-bed fails the tag membership first.
+		if !blockInTag(s, blockTagBeds) {
+			return false
+		}
+		if bp, okBed := readBed(s); okBed {
+			return bp.part != block.BedPartHead
+		}
+		return true // in BEDS but no PART property -> orElse(true)
+	}
+	// canUse extra gate: isTame() && !isOrderedToSit() (ANDed BEFORE super.canUse). NO isLying gate (unlike
+	// CatLieOnBedGoal -- CatSitOnBlockGoal.canUse omits it).
+	g.canUseHook = func(_ *TickLoop, e *Entity) bool {
+		return e.tame && !e.orderedToSit
+	}
+	// start: super.start(); setInSittingPose(false).
+	g.startHook = func(t *TickLoop, e *Entity) {
+		t.setCatInSittingPose(e, false)
+	}
+	// stop: super.stop(); setInSittingPose(false).
+	g.stopHook = func(t *TickLoop, e *Entity) {
+		t.setCatInSittingPose(e, false)
+	}
+	// tick: super.tick() already ran; setInSittingPose(isReachedTarget()).
+	g.tickHook = func(t *TickLoop, e *Entity) {
+		t.setCatInSittingPose(e, g.isReachedTarget())
+	}
+	return g
+}
+
+// catSitOnBlockSearchRange is Cat.registerGoals @7 CatSitOnBlockGoal(this, 0.8) -> MoveToBlockGoal(cat,
+// 0.8, 8) searchRange arg (bipush 8).
+//
+//	[VERIFIED javap CatSitOnBlockGoal.<init>: super(cat, speed, bipush 8).]
+const catSitOnBlockSearchRange = 8
+
+var _ Goal = (*catSitOnBlockGoal)(nil)
 
 // --- CatRelaxOnOwnerGoal (net.minecraft.world.entity.animal.feline.Cat$CatRelaxOnOwnerGoal) --------
 //

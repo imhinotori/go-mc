@@ -384,6 +384,7 @@ func (t *TickLoop) withinAttackReachEntity(attacker *tickPlayer, mob *Entity) bo
 //   - inside the upper i-frame window ((float) invulnerableTime > 10.0F) with a non-greater hit:
 //     hurtServer returns false (the `if (amount <= lastHurt) return false` branch);
 //   - otherwise damage lands and hurtServer returns true.
+//
 // src is the genuine ported DamageSource (player_attack with the real attacker id); applyDamageEntity
 // records it as the mob's lastDamageSource (MOB-SUB-02).
 func (t *TickLoop) applyMobAttackDamage(mob *Entity, src damageSource, amount float32) bool {
@@ -412,6 +413,7 @@ func (t *TickLoop) applyMobAttackDamage(mob *Entity, src damageSource, amount fl
 //   - inside the upper i-frame window ((float) invulnerableTime > 10.0F) with a non-greater hit:
 //     hurtServer returns false (the `if (amount <= lastHurt) return false` branch);
 //   - otherwise damage lands and hurtServer returns true.
+//
 // The decision is computed BEFORE calling applyDamage (which mutates invulnerableTime/lastHurt), so
 // it reflects the same pre-hit state vanilla branches on.
 func (t *TickLoop) applyAttackDamage(victim *tickPlayer, attackerID int32, amount float32) bool {
@@ -482,10 +484,10 @@ func (p *tickPlayer) baseDamageScaleFactor() float32 {
 // state yet) — they widen the crit window only in their absence, and are documented so a future
 // port closes them with no formula change. isSprinting() is the p.sprinting stub (false in v1).
 func (t *TickLoop) canCriticalAttack(p *tickPlayer, victim *tickPlayer) bool {
-	const onClimbable = false        // no ladder/vine climb state in v1
+	const onClimbable = false          // no ladder/vine climb state in v1
 	const isMobilityRestricted = false // no use-item/sleep restraint state in v1
-	const isPassenger = false        // no mounts in v1
-	const targetIsLivingEntity = true // a victim tickPlayer is always a LivingEntity
+	const isPassenger = false          // no mounts in v1
+	const targetIsLivingEntity = true  // a victim tickPlayer is always a LivingEntity
 	return p.fallDistance > 0.0 &&
 		!p.onGround &&
 		!onClimbable &&
@@ -804,12 +806,12 @@ func (t *TickLoop) handleInteract(p *tickPlayer, pkt pk.Packet) {
 	}
 
 	// MOB-PASS-02 (Phase 34): the Sheep SHEAR path runs BEFORE the feed path (Sheep.mobInteract tries
-//	the shears branch ahead of super.mobInteract == Animal.mobInteract feed). trySheepShear returns true
-//	when the held item is shears (consuming the interact — whether it sheared or the sheep was not ready),
-//	so handleInteract does NOT fall through to feed; it returns false ONLY when the held item is not shears,
-//	falling through to tryFeedAnimal. Sheep-gated (typ == entity.Sheep.ID) so it is a zero-cost no-op for a
-//	pig/cow/chicken — the pig oracle stream is unperturbed. The cow's tryMilkCow gate (34-01, wave 2) slots
-//	in this SAME spot; both are wave-ordered after this wave-1 plan, so no parallel edit to this file.
+	//	the shears branch ahead of super.mobInteract == Animal.mobInteract feed). trySheepShear returns true
+	//	when the held item is shears (consuming the interact — whether it sheared or the sheep was not ready),
+	//	so handleInteract does NOT fall through to feed; it returns false ONLY when the held item is not shears,
+	//	falling through to tryFeedAnimal. Sheep-gated (typ == entity.Sheep.ID) so it is a zero-cost no-op for a
+	//	pig/cow/chicken — the pig oracle stream is unperturbed. The cow's tryMilkCow gate (34-01, wave 2) slots
+	//	in this SAME spot; both are wave-ordered after this wave-1 plan, so no parallel edit to this file.
 	if mob.typ == entity.Sheep.ID && t.trySheepShear(p, mob) {
 		return // the shear (or the not-ready consume) handled the interact
 	}
@@ -875,6 +877,7 @@ func (t *TickLoop) handleInteract(p *tickPlayer, pkt pk.Packet) {
 // pig emits NO sound; the call is preserved as a documented no-op so a sound-overriding animal (Phase
 // 34) slots in here. This runs ONLY on a real ServerboundInteract — the oracle pig is never fed, so
 // the whole path is dormant on it (the byte-identical gate).
+//
 //	[VERIFIED javap Animal.mobInteract (offsets 0-119): isFood; getAge; (ServerPlayer && age==0 &&
 //	 canFallInLove) -> usePlayerItem + setInLove + playEatingSound + SUCCESS_SERVER; canAgeUp ->
 //	 usePlayerItem + ageUp(getSpeedUpSecondsWhenFeeding(-age), true) + playEatingSound + SUCCESS.
@@ -950,6 +953,7 @@ func (t *TickLoop) tryFeedAnimal(p *tickPlayer, mob *Entity) {
 // model (the chicken egg-lay + combat hurt/death sounds use the same seam) — player.playSound on the
 // server side reaches the tracking players. NO RNG: COW_MILK plays at a fixed 1.0/1.0 (no voice-pitch
 // jitter), so this draws ZERO from any stream.
+//
 //	[VERIFIED javap AbstractCow.mobInteract: is(Items.BUCKET) && !isBaby() -> playSound(COW_MILK,1,1) +
 //	 ItemUtils.createFilledResult(stack, player, MILK_BUCKET.getDefaultInstance()) + setItemInHand + SUCCESS;
 //	 else super.mobInteract. Items.BUCKET == "bucket" (1040), Items.MILK_BUCKET == "milk_bucket" (1046).]
@@ -1014,6 +1018,7 @@ func (t *TickLoop) tryMilkCow(p *tickPlayer, mob *Entity) bool {
 // creative guard). The `player.drop` (inventory-full) fallback is realized as a dropped ItemEntity at the
 // player, but v1's inventoryAdd into a 46-slot player inventory effectively never fills for a single milk
 // bucket — the drop branch is the cited fallback (no item is ever silently lost).
+//
 //	[VERIFIED javap ItemUtils.createFilledResult(Lnet/minecraft/world/item/ItemStack;Lnet/minecraft/world/
 //	 entity/player/Player;Lnet/minecraft/world/item/ItemStack;Z): hasInfiniteMaterials; (grow && creative)
 //	 -> contains/add + return emptyStack; else consume(1, player); isEmpty -> return filledStack; add ->
@@ -1042,6 +1047,7 @@ func (t *TickLoop) createFilledResult(p *tickPlayer, inv *Inventory, emptyStack,
 // TamableAnimal.handleEntityEvent(7)), status 6 == the taming-FAIL SMOKE puff (handleEntityEvent(6)).
 // They ride the SAME Level.broadcastEntityEvent / ClientboundEntityEvent seam the in-love hearts (18)
 // and the death statuses (3/60) use -- NOT an RNG draw.
+//
 //	[VERIFIED javap Wolf.tryToTame: nextInt(3)==0 -> ... Level.broadcastEntityEvent(this, (byte)7);
 //	 else Level.broadcastEntityEvent(this, (byte)6). TamableAnimal.handleEntityEvent: case 7 -> hearts,
 //	 case 6 -> smoke particles.]
@@ -1056,6 +1062,7 @@ const (
 // when the gametime passes angerEndTime. This is the SAME predicate isAngryAt (ai_goals_target.go) reads,
 // factored here because Wolf.mobInteract's UNTAMED branch gates the BONE-tame on !isAngry() (an angry
 // wolf cannot be tamed). Pure read, NO RNG.
+//
 //	[VERIFIED javap NeutralMob.isAngry(): endTime = getPersistentAngerEndTime(); endTime > 0 &&
 //	 (endTime - level.getGameTime()) > 0.]
 func (t *TickLoop) wolfIsAngry(mob *Entity) bool {
@@ -1074,6 +1081,7 @@ func (t *TickLoop) wolfIsAngry(mob *Entity) bool {
 // and heals to the new max (setHealth(40.0F) -- the d2f-narrowed 40.0f, mirroring the float literal). The
 // else (untame 40->8) arm has no v1 trigger (no un-taming path) but is preserved as a cited const so an
 // un-tame port reads through. Wolf-gated by the caller; the pig (never tamed) never runs this. NO RNG.
+//
 //	[VERIFIED javap Wolf.applyTamingSideEffects: isTame() -> getAttribute(MAX_HEALTH).setBaseValue(40.0d);
 //	 setHealth(40.0f); else getAttribute(MAX_HEALTH).setBaseValue(8.0d).]
 func (t *TickLoop) applyWolfTamingSideEffects(mob *Entity) {
@@ -1128,6 +1136,7 @@ func (t *TickLoop) applyWolfTamingSideEffects(mob *Entity) {
 // on the wolf's OWN per-entity stream -- the pig (never a wolf, the gate is typ == entity.Wolf.ID) draws
 // ZERO. The hearts(7)/smoke(6) and the DATA_FLAGS flip ride the existing EntityEvent / SetEntityData
 // tracker fan-out (broadcastHearts / setWolfInSittingPose precedent), NOT RNG.
+//
 //	[VERIFIED javap Wolf.mobInteract: isTame() ifeq UNTAMED; (tamed) isFood/dye/armor/repair branches then
 //	 r=super.mobInteract; if (consumesAction()||!isOwnedBy) areturn r; setOrderedToSit(!isOrderedToSit());
 //	 jumping=false; navigation.stop(); setTarget(null); return SUCCESS.withoutItem(). UNTAMED: isClientSide
@@ -1221,6 +1230,7 @@ func (t *TickLoop) tryWolfInteract(p *tickPlayer, mob *Entity) bool {
 // reflects it) and broadcasts both the DATA_FLAGS flip (so the client renders the tamed collar + sit pose)
 // and the hearts EntityEvent; on failure it broadcasts only the smoke EntityEvent. The bone was already
 // consumed by the caller (mobInteract) BEFORE this draw, exactly as the bytecode orders it.
+//
 //	[VERIFIED javap Wolf.tryToTame: random.nextInt(3) ifne SMOKE; tame(player); navigation.stop();
 //	 setTarget(null); setOrderedToSit(true); Level.broadcastEntityEvent(this,(byte)7); goto end; SMOKE:
 //	 Level.broadcastEntityEvent(this,(byte)6). TamableAnimal.tame: setTame(true,true)+setOwner(player).]
@@ -1283,9 +1293,36 @@ func (t *TickLoop) tryCatInteract(p *tickPlayer, mob *Entity) bool {
 		if mob.ownerUUID != p.entityID {
 			return false
 		}
-		// The feed-heal (isFood && hp<max) + collar-dye branches are cite-deferred; a CAT_FOOD item would
-		// let the super feed consume, so do NOT sit-toggle then (parent.consumesAction()).
-		if !slotIsEmpty(held) && itemInTag(int32(held.ItemID), "cat_food") {
+		// COLLAR-DYE (the FIRST tamed+owned check, BEFORE the feed/sit-toggle) — Cat.mobInteract (CFR):
+		//   if (itemStack.is(ItemTags.CAT_COLLAR_DYES)) {
+		//       DyeColor color = itemStack.get(DataComponents.DYE);
+		//       if (color != null && color != getCollarColor()) {
+		//           setCollarColor(color); itemStack.consume(1, player); setPersistenceRequired();
+		//           return SUCCESS;
+		//       }
+		//   } else if (isFood && hp<max) { feed; ... }
+		// ItemTags.CAT_COLLAR_DYES == #minecraft:dyes (the 16 dyes). stack.get(DataComponents.DYE) is the
+		// dye item's DyeColor (dyeColorIDOf). NOTE the vanilla `else if`: when the held item IS a collar dye
+		// (even if color==null or color==current), the feed branch is SKIPPED — control falls to super
+		// .mobInteract -> the sit-toggle. So a dye held on a tamed cat NEVER feeds. NO RNG.
+		if !slotIsEmpty(held) && itemInTag(int32(held.ItemID), "cat_collar_dyes") {
+			if color, ok := dyeColorIDOf(int32(held.ItemID)); ok && color != mob.catCollarColor {
+				// setCollarColor(color) = entityData.set(DATA_COLLAR_COLOR, color.getId()); broadcast the
+				// new INT collar to trackers (the client re-renders the collar). consume(1) shrinks the dye.
+				t.setCatCollarColor(mob, color)
+				t.shrinkHeldItem(p, inv)
+				// setPersistenceRequired(): a cited no-op in v1 (no per-entity despawn flag on the tick
+				// Entity — the same cited-deferred treatment the untamed feed-tame branch gives it). Cite
+				// Cat.mobInteract setPersistenceRequired.
+				return true // InteractionResult.SUCCESS (the action was consumed)
+			}
+			// A collar dye that is null / already the current color: the vanilla `else if` is NOT entered
+			// (the stack IS a collar dye), so the feed is skipped; fall through to the sit-toggle below.
+		} else if !slotIsEmpty(held) && itemInTag(int32(held.ItemID), "cat_food") {
+			// The feed-heal (isFood && hp<max) branch: a CAT_FOOD item lets the super feed consume (when the
+			// cat is below max health), so do NOT sit-toggle then (parent.consumesAction()). The feed-heal
+			// itself is cite-deferred (no feed-health delta in v1), matching the wolf; a fish held over a
+			// tamed cat therefore falls through as before.
 			return false
 		}
 		// parent = super.mobInteract; if(!parent.consumesAction()) setOrderedToSit(!isOrderedToSit()).

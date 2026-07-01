@@ -147,7 +147,8 @@ func degToByteAngle(deg float32) pk.Angle {
 // so the server's idea of "the angle the client has" matches what vanilla would send. (The
 // AddEntity/Teleport encoders keep degToByteAngle for backward compatibility; the move-delta
 // path is the one that must be floor-exact to track correctly tick-over-tick.)
-//   [VERIFIED javap: Mth.packDegrees -> fmul 256; fdiv 360; floor; i2b.]
+//
+//	[VERIFIED javap: Mth.packDegrees -> fmul 256; fdiv 360; floor; i2b.]
 func packDegrees(deg float32) int8 {
 	return int8(mthFloorF(float64(deg) * 256.0 / 360.0))
 }
@@ -227,10 +228,11 @@ func (e entityDataEntry) WriteTo(w io.Writer) (int64, error) {
 // custom-name, BOOLEAN name-visible, BOOLEAN silent, BOOLEAN no-gravity, POSE, INT ticks-
 // frozen). So ItemEntity.DATA_ITEM — the FIRST (and only) accessor ItemEntity defines — is
 // index 8.
-//   [VERIFIED: javap -c -p net.minecraft.world.entity.item.ItemEntity →
-//     static{}: getstatic EntityDataSerializers.ITEM_STACK; SynchedEntityData.defineId(...)
-//     → putstatic DATA_ITEM; defineSynchedData defines ONLY DATA_ITEM.
-//    javap -c -p net.minecraft.world.entity.Entity → 8 SynchedEntityData.defineId calls.]
+//
+//	[VERIFIED: javap -c -p net.minecraft.world.entity.item.ItemEntity →
+//	  static{}: getstatic EntityDataSerializers.ITEM_STACK; SynchedEntityData.defineId(...)
+//	  → putstatic DATA_ITEM; defineSynchedData defines ONLY DATA_ITEM.
+//	 javap -c -p net.minecraft.world.entity.Entity → 8 SynchedEntityData.defineId calls.]
 const dataItemIndex uint8 = 8
 
 // itemStackSerializerID is the registry id of EntityDataSerializers.ITEM_STACK — the VarInt
@@ -239,8 +241,9 @@ const dataItemIndex uint8 = 8
 // 5=COMPONENT, 6=OPTIONAL_COMPONENT, 7=ITEM_STACK. The ITEM_STACK serializer's codec is
 // ItemStack.OPTIONAL_STREAM_CODEC — the SAME stream codec ContainerSetContent's carried item
 // uses, so component.SlotData's WriteTo is the correct value encoder (no new item codec).
-//   [VERIFIED: javap -c -p net.minecraft.network.syncher.EntityDataSerializers → static{}
-//     registerSerializer order; EntityDataSerializers$1.codec() = ItemStack.OPTIONAL_STREAM_CODEC.]
+//
+//	[VERIFIED: javap -c -p net.minecraft.network.syncher.EntityDataSerializers → static{}
+//	  registerSerializer order; EntityDataSerializers$1.codec() = ItemStack.OPTIONAL_STREAM_CODEC.]
 const itemStackSerializerID int32 = 7
 
 // itemDataEntry builds the single SynchedEntityData$DataValue entry that carries a dropped
@@ -268,9 +271,10 @@ func itemDataEntry(stack component.SlotData) entityDataEntry {
 // Entity.defineId assigns indices sequentially in static-init order: index 0 = DATA_SHARED_FLAGS_ID
 // (BYTE), index 1 = DATA_AIR_SUPPLY_ID (INT), 2 = DATA_CUSTOM_NAME, ... 7 = DATA_TICKS_FROZEN. So
 // air is index 1 — the SECOND accessor Entity defines and the first INT one.
-//   [VERIFIED: javap -c -p net.minecraft.world.entity.Entity → static{} defineId order:
-//     getstatic EntityDataSerializers.BYTE; defineId → DATA_SHARED_FLAGS_ID  (index 0)
-//     getstatic EntityDataSerializers.INT;  defineId → DATA_AIR_SUPPLY_ID    (index 1)]
+//
+//	[VERIFIED: javap -c -p net.minecraft.world.entity.Entity → static{} defineId order:
+//	  getstatic EntityDataSerializers.BYTE; defineId → DATA_SHARED_FLAGS_ID  (index 0)
+//	  getstatic EntityDataSerializers.INT;  defineId → DATA_AIR_SUPPLY_ID    (index 1)]
 const dataAirSupplyIndex uint8 = 1
 
 // intSerializerID is the registry id of EntityDataSerializers.INT — the VarInt serializerId the
@@ -279,9 +283,10 @@ const dataAirSupplyIndex uint8 = 1
 // 7=ITEM_STACK (the same order itemStackSerializerID==7 above is derived from). The INT serializer's
 // value codec is EntityDataSerializer.forValueType(ByteBufCodecs.VAR_INT), so the air value is
 // written as a VarInt (NOT a fixed big-endian Int).
-//   [VERIFIED: javap -c -p net.minecraft.network.syncher.EntityDataSerializers → static{}:
-//     getstatic BYTE; registerSerializer (id 0), getstatic INT; registerSerializer (id 1), ...
-//     and BYTE/INT = forValueType(ByteBufCodecs.BYTE / .VAR_INT).]
+//
+//	[VERIFIED: javap -c -p net.minecraft.network.syncher.EntityDataSerializers → static{}:
+//	  getstatic BYTE; registerSerializer (id 0), getstatic INT; registerSerializer (id 1), ...
+//	  and BYTE/INT = forValueType(ByteBufCodecs.BYTE / .VAR_INT).]
 const intSerializerID int32 = 1
 
 // airDataEntry builds the single SynchedEntityData$DataValue entry that carries a player's
@@ -308,19 +313,22 @@ func airDataEntry(air int32) entityDataEntry {
 // .DATA_LIVING_ENTITY_FLAGS. Entity defines indices 0..7 (0=SHARED_FLAGS, 1=AIR_SUPPLY, ...,
 // 7=TICKS_FROZEN); LivingEntity's FIRST defined field is DATA_LIVING_ENTITY_FLAGS, so it is
 // index 8 (a BYTE).
-//   [VERIFIED javap: net.minecraft.world.entity.LivingEntity static{} -> the first defineId is
-//    EntityDataSerializers.BYTE -> DATA_LIVING_ENTITY_FLAGS, after Entity's 8 fields (0..7).]
+//
+//	[VERIFIED javap: net.minecraft.world.entity.LivingEntity static{} -> the first defineId is
+//	 EntityDataSerializers.BYTE -> DATA_LIVING_ENTITY_FLAGS, after Entity's 8 fields (0..7).]
 const dataLivingEntityFlagsIndex uint8 = 8
 
 // byteSerializerID is the registry id of EntityDataSerializers.BYTE — 0 (the first
 // registerSerializer call). Its value codec is ByteBufCodecs.BYTE (a single signed byte).
-//   [VERIFIED javap: EntityDataSerializers static{} -> BYTE registered first (id 0).]
+//
+//	[VERIFIED javap: EntityDataSerializers static{} -> BYTE registered first (id 0).]
 const byteSerializerID int32 = 0
 
 // livingEntityFlag bit masks (LivingEntity.setLivingEntityFlag arg = the MASK, not a bit index):
-//   USING_ITEM = 0x01, OFFHAND active hand = 0x02, SPIN_ATTACK = 0x04 (v1 sets only 0x01/0x02).
-//   [VERIFIED javap: startUsingItem -> setLivingEntityFlag(1,true), setLivingEntityFlag(2,
-//    hand==OFF_HAND); the flag is OR'd/AND-NOT'd into the byte.]
+//
+//	USING_ITEM = 0x01, OFFHAND active hand = 0x02, SPIN_ATTACK = 0x04 (v1 sets only 0x01/0x02).
+//	[VERIFIED javap: startUsingItem -> setLivingEntityFlag(1,true), setLivingEntityFlag(2,
+//	 hand==OFF_HAND); the flag is OR'd/AND-NOT'd into the byte.]
 const (
 	livingFlagUsingItem  = 0x01
 	livingFlagOffHandUse = 0x02
@@ -343,8 +351,9 @@ func livingEntityFlagsEntry(flags int8) entityDataEntry {
 // (DATA_PLAYER_MAIN_HAND) then 16 (DATA_PLAYER_MODE_CUSTOMISATION). So the index is 16, BYTE
 // serializer. The client reads this to decide which skin LAYERS (hat/jacket/sleeves/pants) to render
 // on the avatar; without it OTHER players see the base model only (no second/overlay layer).
-//   [VERIFIED javap: net.minecraft.world.entity.player.Avatar DATA_PLAYER_MODE_CUSTOMISATION =
-//    EntityDataAccessor<Byte>; index 16 after Entity(8)+LivingEntity(7)+Avatar.MAIN_HAND(15).]
+//
+//	[VERIFIED javap: net.minecraft.world.entity.player.Avatar DATA_PLAYER_MODE_CUSTOMISATION =
+//	 EntityDataAccessor<Byte>; index 16 after Entity(8)+LivingEntity(7)+Avatar.MAIN_HAND(15).]
 const dataPlayerModeCustomisationIndex uint8 = 16
 
 // skinCustomisationEntry builds the SynchedEntityData$DataValue entry for
@@ -386,9 +395,10 @@ func playerSkinMetadata(parts uint8) []byte {
 // indices sequentially down the class hierarchy: Entity 0..7 (8), LivingEntity 8..14 (7), Mob 15
 // (DATA_MOB_FLAGS_ID), AgeableMob 16 = DATA_BABY_ID (then 17 = AGE_LOCKED). So the index is 16, BOOLEAN
 // serializer. The client renders a small pig when this is true.
-//   [VERIFIED javap: net.minecraft.world.entity.AgeableMob static{} -> defineSynchedData defines
-//     DATA_BABY_ID FIRST (BOOLEAN) then AGE_LOCKED (BOOLEAN); the hierarchy count Entity(8)+
-//     LivingEntity(7)+Mob.DATA_MOB_FLAGS_ID(15) puts DATA_BABY_ID at accessor index 16.]
+//
+//	[VERIFIED javap: net.minecraft.world.entity.AgeableMob static{} -> defineSynchedData defines
+//	  DATA_BABY_ID FIRST (BOOLEAN) then AGE_LOCKED (BOOLEAN); the hierarchy count Entity(8)+
+//	  LivingEntity(7)+Mob.DATA_MOB_FLAGS_ID(15) puts DATA_BABY_ID at accessor index 16.]
 const dataBabyIndex uint8 = 16
 
 // boolSerializerID is the registry id of EntityDataSerializers.BOOLEAN — the VarInt serializerId the
@@ -397,9 +407,10 @@ const dataBabyIndex uint8 = 16
 // 7=ITEM_STACK, 8=BOOLEAN (the same registration order itemStackSerializerID==7 / intSerializerID==1
 // are derived from). The BOOLEAN serializer's value codec is forValueType(ByteBufCodecs.BOOL) — a
 // single byte 0/1 (pk.Boolean).
-//   [VERIFIED javap: net.minecraft.network.syncher.EntityDataSerializers static{} registerSerializer
-//     sequence — getstatic BYTE;register (id0) INT(1) LONG(2) FLOAT(3) STRING(4) COMPONENT(5)
-//     OPTIONAL_COMPONENT(6) ITEM_STACK(7) BOOLEAN(8); BOOLEAN = forValueType(ByteBufCodecs.BOOL).]
+//
+//	[VERIFIED javap: net.minecraft.network.syncher.EntityDataSerializers static{} registerSerializer
+//	  sequence — getstatic BYTE;register (id0) INT(1) LONG(2) FLOAT(3) STRING(4) COMPONENT(5)
+//	  OPTIONAL_COMPONENT(6) ITEM_STACK(7) BOOLEAN(8); BOOLEAN = forValueType(ByteBufCodecs.BOOL).]
 const boolSerializerID int32 = 8
 
 // babyDataEntry builds the single SynchedEntityData$DataValue entry that carries an AgeableMob's
@@ -407,8 +418,9 @@ const boolSerializerID int32 = 8
 // Byte(dataBabyIndex=16) + VarInt(boolSerializerID=8) + Boolean(isBaby) (entityDataEntry.WriteTo),
 // mirroring airDataEntry's INT pattern with the BOOL codec. Carried at spawn (the small-render baby)
 // and broadcast on the -1->0 grow-up (DATA_BABY_ID=false, so the client re-renders full size).
-//   [VERIFIED javap AgeableMob.DATA_BABY_ID = EntityDataAccessor<Boolean>; the BOOLEAN codec is
-//    ByteBufCodecs.BOOL == one byte 0/1, which pk.Boolean writes.]
+//
+//	[VERIFIED javap AgeableMob.DATA_BABY_ID = EntityDataAccessor<Boolean>; the BOOLEAN codec is
+//	 ByteBufCodecs.BOOL == one byte 0/1, which pk.Boolean writes.]
 func babyDataEntry(isBaby bool) entityDataEntry {
 	return entityDataEntry{
 		index:        dataBabyIndex,
@@ -431,9 +443,10 @@ func babyDataEntry(isBaby bool) entityDataEntry {
 // LivingEntity 8..14, Mob 15 (DATA_MOB_FLAGS_ID), AgeableMob 16 (DATA_BABY_ID) + 17 (AGE_LOCKED), Animal
 // adds NO accessor (javap-confirmed empty defineSynchedData), Sheep adds DATA_WOOL_ID = index 18, BYTE
 // serializer. The client renders the wool color + sheared body from this byte.
-//   [VERIFIED javap: net.minecraft.world.entity.animal.sheep.Sheep static{} -> DATA_WOOL_ID =
-//     SynchedEntityData.defineId(Sheep.class, EntityDataSerializers.BYTE); the hierarchy count
-//     Entity(8)+LivingEntity(7)+Mob(15)+AgeableMob(16,17)+Animal(none) puts DATA_WOOL_ID at index 18.]
+//
+//	[VERIFIED javap: net.minecraft.world.entity.animal.sheep.Sheep static{} -> DATA_WOOL_ID =
+//	  SynchedEntityData.defineId(Sheep.class, EntityDataSerializers.BYTE); the hierarchy count
+//	  Entity(8)+LivingEntity(7)+Mob(15)+AgeableMob(16,17)+Animal(none) puts DATA_WOOL_ID at index 18.]
 const dataWoolIndex uint8 = 18
 
 // woolDataEntry uses the existing byteSerializerID (== 0, EntityDataSerializers.BYTE, the FIRST registered
@@ -446,8 +459,9 @@ const dataWoolIndex uint8 = 18
 // wire as Byte(dataWoolIndex=18) + VarInt(byteSerializerID=0) + Byte(woolByte) (entityDataEntry.WriteTo),
 // mirroring babyDataEntry's BOOLEAN pattern with the BYTE codec. Broadcast on a shear (woolByte |= 0x10)
 // and on a wool regrow (woolByte &= 0xEF). The default un-sheared WHITE sheep byte is 0x00.
-//   [VERIFIED javap Sheep.DATA_WOOL_ID = EntityDataAccessor<Byte> (BYTE codec); ByteBufCodecs.BYTE ==
-//    one byte, which pk.Byte writes.]
+//
+//	[VERIFIED javap Sheep.DATA_WOOL_ID = EntityDataAccessor<Byte> (BYTE codec); ByteBufCodecs.BYTE ==
+//	 one byte, which pk.Byte writes.]
 func woolDataEntry(woolByte byte) entityDataEntry {
 	return entityDataEntry{
 		index:        dataWoolIndex,
@@ -459,6 +473,7 @@ func woolDataEntry(woolByte byte) entityDataEntry {
 // dataSharedFlagsIndex is the SynchedEntityData accessor index for Entity.DATA_SHARED_FLAGS_ID — the
 // FIRST entity data value defined (index 0), a BYTE whose bits are the shared entity flags
 // (0x01 on-fire, 0x02 crouching, 0x08 sprinting, …). v1 broadcasts only the on-fire bit (fire.go).
+//
 //	[VERIFIED javap Entity.defineSynchedData: DATA_SHARED_FLAGS_ID = defineId(BYTE) first → index 0.]
 const dataSharedFlagsIndex = 0
 
@@ -487,10 +502,11 @@ func sharedFlagsDataEntry(flags int8) entityDataEntry {
 // + 17 (AGE_LOCKED), Animal adds NO accessor (javap-confirmed empty defineSynchedData), TamableAnimal
 // adds DATA_FLAGS_ID = index 18 (BYTE serializer) THEN DATA_OWNERUUID_ID = index 19. (Sheep's DATA_WOOL
 // is ALSO index 18 — that is FINE, accessor indices are PER-CLASS-HIERARCHY; a wolf is not a sheep.)
-//   [VERIFIED javap this session: net.minecraft.world.entity.TamableAnimal.defineSynchedData calls
-//     Animal.defineSynchedData (which adds nothing past AgeableMob's 16,17), then define(DATA_FLAGS_ID,
-//     (byte)0) [BYTE] then define(DATA_OWNERUUID_ID, Optional.empty()) [OPTIONAL_LIVING_ENTITY_REFERENCE]
-//     — putting DATA_FLAGS_ID at accessor index 18 and DATA_OWNERUUID_ID at 19.]
+//
+//	[VERIFIED javap this session: net.minecraft.world.entity.TamableAnimal.defineSynchedData calls
+//	  Animal.defineSynchedData (which adds nothing past AgeableMob's 16,17), then define(DATA_FLAGS_ID,
+//	  (byte)0) [BYTE] then define(DATA_OWNERUUID_ID, Optional.empty()) [OPTIONAL_LIVING_ENTITY_REFERENCE]
+//	  — putting DATA_FLAGS_ID at accessor index 18 and DATA_OWNERUUID_ID at 19.]
 const dataWolfFlagsIndex uint8 = 18
 
 // dataWolfOwnerIndex is the SynchedEntityData accessor index for TamableAnimal.DATA_OWNERUUID_ID
@@ -505,8 +521,9 @@ const dataWolfOwnerIndex uint8 = 19
 // inSittingPose, bit 0x4 if tame), mirroring TamableAnimal's setInSittingPose/setTame bit ops. The
 // other DATA_FLAGS bits (0x2 unused here; the higher Wolf-specific bits live on Wolf's own accessors)
 // are 0 in v1. A fresh untamed, un-sitting wolf is 0x00.
-//   [VERIFIED javap TamableAnimal: setInSittingPose(b) -> DATA_FLAGS = b ? (cur|1) : (cur&0xFE);
-//    setTame -> DATA_FLAGS = isTame ? (cur|4) : (cur&0xFB).]
+//
+//	[VERIFIED javap TamableAnimal: setInSittingPose(b) -> DATA_FLAGS = b ? (cur|1) : (cur&0xFE);
+//	 setTame -> DATA_FLAGS = isTame ? (cur|4) : (cur&0xFB).]
 func wolfFlagsByte(inSittingPose, tame bool) byte {
 	var b byte
 	if inSittingPose {
@@ -523,8 +540,9 @@ func wolfFlagsByte(inSittingPose, tame bool) byte {
 // on the wire as Byte(dataWolfFlagsIndex=18) + VarInt(byteSerializerID=0) + Byte(flagsByte)
 // (entityDataEntry.WriteTo), the EXACT shape of woolDataEntry (also a BYTE accessor at index 18 — fine,
 // per-class-hierarchy). Carried at spawn (a tamed/sitting wolf) and broadcast on a tame/sit-toggle.
-//   [VERIFIED javap TamableAnimal.DATA_FLAGS_ID = EntityDataAccessor<Byte> (BYTE codec); ByteBufCodecs
-//    .BYTE == one byte, which pk.Byte writes.]
+//
+//	[VERIFIED javap TamableAnimal.DATA_FLAGS_ID = EntityDataAccessor<Byte> (BYTE codec); ByteBufCodecs
+//	 .BYTE == one byte, which pk.Byte writes.]
 func wolfFlagsDataEntry(flagsByte byte) entityDataEntry {
 	return entityDataEntry{
 		index:        dataWolfFlagsIndex,
@@ -753,9 +771,10 @@ func encodeMoveEntityRotB(id int32, yRot, xRot int8, onGround bool) pk.Packet {
 // flipped (NOT ClientboundTeleportEntity, which is for explicit teleports). Wire (jar:
 // ClientboundEntityPositionSyncPacket.STREAM_CODEC): VarInt id, PositionMoveRotation (pos 3×Double,
 // deltaMovement 3×Double, Float yRot, Float xRot), Boolean onGround.
-//   [VERIFIED javap: ClientboundEntityPositionSyncPacket.of -> id, PositionMoveRotation(
-//    trackingPosition, deltaMovement, yRot, xRot), onGround; PositionMoveRotation.STREAM_CODEC =
-//    Vec3 position, Vec3 deltaMovement, Float yRot, Float xRot.]
+//
+//	[VERIFIED javap: ClientboundEntityPositionSyncPacket.of -> id, PositionMoveRotation(
+//	 trackingPosition, deltaMovement, yRot, xRot), onGround; PositionMoveRotation.STREAM_CODEC =
+//	 Vec3 position, Vec3 deltaMovement, Float yRot, Float xRot.]
 func encodeEntityPositionSync(e *Entity) pk.Packet {
 	return pk.Marshal(
 		int32(packetid.ClientboundEntityPositionSync),
@@ -822,8 +841,9 @@ func encodeAnimate(entityID int32, action int) pk.Packet {
 // equipmentSlotMainHand is EquipmentSlot.MAINHAND.ordinal() — 0 (the enum's first constant:
 // MAINHAND, OFFHAND, FEET, LEGS, CHEST, HEAD, BODY, SADDLE). The SetEquipment slot byte is the
 // ordinal, with bit 0x80 (continuation) set on every entry EXCEPT the last.
-//   [VERIFIED javap: ClientboundSetEquipmentPacket.write -> for each pair: writeByte(
-//    isLast ? ordinal : ordinal | 0x80), ItemStack.OPTIONAL_STREAM_CODEC.encode(stack).]
+//
+//	[VERIFIED javap: ClientboundSetEquipmentPacket.write -> for each pair: writeByte(
+//	 isLast ? ordinal : ordinal | 0x80), ItemStack.OPTIONAL_STREAM_CODEC.encode(stack).]
 const equipmentSlotMainHand = 0
 
 // encodeSetEquipment builds ClientboundSetEquipment for a SINGLE equipment slot (jar:
@@ -861,8 +881,9 @@ func encodeTakeItemEntity(itemID, collectorID int32, amount int) pk.Packet {
 // net.minecraft.world.level.Level.broadcastEntityEvent(this, 3) inside LivingEntity.die: status
 // 3 == the death animation (the client plays the death tilt/fade). The full status table lives in
 // ClientboundEntityEventPacket; v1 needs only the death status the die() port broadcasts.
-//   [VERIFIED javap: LivingEntity.die -> Level.broadcastEntityEvent(this, (byte) 3) (the iconst_3
-//    at die bytecode 162) -> ClientboundEntityEventPacket(entity, 3).]
+//
+//	[VERIFIED javap: LivingEntity.die -> Level.broadcastEntityEvent(this, (byte) 3) (the iconst_3
+//	 at die bytecode 162) -> ClientboundEntityEventPacket(entity, 3).]
 const entityEventDeath byte = 3
 
 // entityEventDeathPoof is the EntityEvent byte broadcast by
@@ -870,18 +891,20 @@ const entityEventDeath byte = 3
 // "poof" — the client spawns the despawn smoke/explosion particles as the dying entity is removed.
 // Unlike status 3 (which die() sends to START the fall-over animation), status 60 is the FINAL
 // despawn cue, sent by tickDeath the same tick it calls remove(KILLED).
-//   [VERIFIED javap LivingEntity.tickDeath: bipush 60; Level.broadcastEntityEvent(this, 60); then
-//    remove(Entity$RemovalReason.KILLED) — the deathTime>=20 branch.]
+//
+//	[VERIFIED javap LivingEntity.tickDeath: bipush 60; Level.broadcastEntityEvent(this, 60); then
+//	 remove(Entity$RemovalReason.KILLED) — the deathTime>=20 branch.]
 const entityEventDeathPoof byte = 60
 
 // encodeEntityEvent builds ClientboundEntityEvent (jar: ClientboundEntityEventPacket.write):
 // writeInt(entityId) — a PLAIN 4-byte Int, NOT a VarInt — then writeByte(eventId). Broadcast to
 // every player tracking the entity (broadcastEntityEvent -> ServerChunkCache.broadcastAndSend).
-//   [VERIFIED javap: ClientboundEntityEventPacket.write -> writeInt(entityId); writeByte(eventId).]
+//
+//	[VERIFIED javap: ClientboundEntityEventPacket.write -> writeInt(entityId); writeByte(eventId).]
 func encodeEntityEvent(entityID int32, eventID byte) pk.Packet {
 	return pk.Marshal(
 		int32(packetid.ClientboundEntityEvent),
-		pk.Int(entityID),     // writeInt — a fixed 4-byte int, NOT a VarInt
+		pk.Int(entityID), // writeInt — a fixed 4-byte int, NOT a VarInt
 		pk.Byte(int8(eventID)),
 	)
 }
@@ -890,8 +913,9 @@ func encodeEntityEvent(entityID int32, eventID byte) pk.Packet {
 // ClientboundDamageEventPacket id encoding: an entity id is written as a VarInt of (id + 1), so 0
 // means "none/absent" and a real id N is written as N+1. An absent id (Sulfur models it as <= 0
 // from damageSource.attacker, where 0 == none) writes the VarInt 0.
-//   [VERIFIED javap ClientboundDamageEventPacket: sourceCauseId/sourceDirectId written via
-//    buf.writeVarInt(id + 1) with 0 reserved for the empty optional (writeOptionalEntityId).]
+//
+//	[VERIFIED javap ClientboundDamageEventPacket: sourceCauseId/sourceDirectId written via
+//	 buf.writeVarInt(id + 1) with 0 reserved for the empty optional (writeOptionalEntityId).]
 func writeOptionalEntityIDPlusOne(id int32) pk.VarInt {
 	if id <= 0 {
 		return pk.VarInt(0) // no causing/direct entity (an environmental / anonymous source)
@@ -908,22 +932,27 @@ func writeOptionalEntityIDPlusOne(id int32) pk.VarInt {
 //
 // JAR-DERIVED wire layout (javap ClientboundDamageEventPacket.write, proto 776, this session) — the
 // fields IN ORDER:
-//   - entityId      : VarInt  (the hurt entity)
-//   - sourceTypeId  : VarInt  (Holder<DamageType> written as its registry network id — the
-//                     damage_type holder id the client got at config; == damageSource.typeTag, because
-//                     BOTH the config registrydata damage_type send order AND data/tag.DamageTypeNames
-//                     are sorted alphabetically, so the sorted index IS the holder id — no remap)
-//   - sourceCauseId : VarInt  via writeOptionalEntityId (id+1; 0 == none)
-//   - sourceDirectId: VarInt  via writeOptionalEntityId (id+1; 0 == none)
-//   - hasSourcePos  : Boolean (Optional<Vec3> present flag) — empty for a normal entity-caused hit, so
-//                     a single false; the 3 source-position doubles are written ONLY when present
-//                     (they are not, in v1: no positional damage source is wired).
 //
-//	[VERIFIED javap net.minecraft.world.entity.LivingEntity.hurtServer: tookFullDamage branch ->
-//	 level.broadcastDamageEvent(this, source); ServerLevel.broadcastDamageEvent ->
-//	 getChunkSource().sendToTrackingPlayersAndSelf(entity, new ClientboundDamageEventPacket(entity,
-//	 source)); ClientboundDamageEventPacket.write -> writeVarInt(entityId); writeVarInt(sourceTypeId);
-//	 writeVarInt(causeId+1 / 0); writeVarInt(directId+1 / 0); writeBoolean(sourcePos.isPresent()).]
+//   - entityId      : VarInt  (the hurt entity)
+//
+//   - sourceTypeId  : VarInt  (Holder<DamageType> written as its registry network id — the
+//     damage_type holder id the client got at config; == damageSource.typeTag, because
+//     BOTH the config registrydata damage_type send order AND data/tag.DamageTypeNames
+//     are sorted alphabetically, so the sorted index IS the holder id — no remap)
+//
+//   - sourceCauseId : VarInt  via writeOptionalEntityId (id+1; 0 == none)
+//
+//   - sourceDirectId: VarInt  via writeOptionalEntityId (id+1; 0 == none)
+//
+//   - hasSourcePos  : Boolean (Optional<Vec3> present flag) — empty for a normal entity-caused hit, so
+//     a single false; the 3 source-position doubles are written ONLY when present
+//     (they are not, in v1: no positional damage source is wired).
+//
+//     [VERIFIED javap net.minecraft.world.entity.LivingEntity.hurtServer: tookFullDamage branch ->
+//     level.broadcastDamageEvent(this, source); ServerLevel.broadcastDamageEvent ->
+//     getChunkSource().sendToTrackingPlayersAndSelf(entity, new ClientboundDamageEventPacket(entity,
+//     source)); ClientboundDamageEventPacket.write -> writeVarInt(entityId); writeVarInt(sourceTypeId);
+//     writeVarInt(causeId+1 / 0); writeVarInt(directId+1 / 0); writeBoolean(sourcePos.isPresent()).]
 //
 // For a direct melee hit sourceCauseId == sourceDirectId == the attacker's entity id; both are
 // absent (0) for an environmental hit (fall/drown/starve/suffocation), and sourcePosition is always
@@ -931,11 +960,11 @@ func writeOptionalEntityIDPlusOne(id int32) pk.VarInt {
 func encodeDamageEvent(entityID, sourceTypeID, sourceCauseID, sourceDirectID int32) pk.Packet {
 	return pk.Marshal(
 		int32(packetid.ClientboundDamageEvent),
-		pk.VarInt(entityID),                            // entityId
-		pk.VarInt(sourceTypeID),                        // sourceTypeId: the damage_type holder id
-		writeOptionalEntityIDPlusOne(sourceCauseID),    // sourceCauseId (id+1; 0 == none)
-		writeOptionalEntityIDPlusOne(sourceDirectID),   // sourceDirectId (id+1; 0 == none)
-		pk.Boolean(false),                              // sourcePosition: empty Optional<Vec3> (no pos)
+		pk.VarInt(entityID),                          // entityId
+		pk.VarInt(sourceTypeID),                      // sourceTypeId: the damage_type holder id
+		writeOptionalEntityIDPlusOne(sourceCauseID),  // sourceCauseId (id+1; 0 == none)
+		writeOptionalEntityIDPlusOne(sourceDirectID), // sourceDirectId (id+1; 0 == none)
+		pk.Boolean(false),                            // sourcePosition: empty Optional<Vec3> (no pos)
 	)
 }
 
@@ -951,8 +980,9 @@ func encodeDamageEvent(entityID, sourceTypeID, sourceCauseID, sourceDirectID int
 // MUSIC(1), RECORDS(2), WEATHER(3), BLOCKS(4), HOSTILE(5), NEUTRAL(6), PLAYERS(7), AMBIENT(8), VOICE(9),
 // UI(10). A passive mob (Animal/Pig) overrides getSoundSource() to NEUTRAL, so its hurt sound plays on
 // the NEUTRAL category. FriendlyByteBuf.writeEnum writes the ordinal as a VarInt.
-//   [VERIFIED javap: net.minecraft.sounds.SoundSource enum order (MASTER..UI); Animal.getSoundSource ->
-//    getstatic SoundSource.NEUTRAL; FriendlyByteBuf.writeEnum -> writeVarInt(ordinal).]
+//
+//	[VERIFIED javap: net.minecraft.sounds.SoundSource enum order (MASTER..UI); Animal.getSoundSource ->
+//	 getstatic SoundSource.NEUTRAL; FriendlyByteBuf.writeEnum -> writeVarInt(ordinal).]
 const soundSourceNeutral = 6
 
 // soundSourcePlayers is SoundSource.PLAYERS.ordinal() == 7 (the enum order MASTER(0)..NEUTRAL(6),
@@ -960,31 +990,38 @@ const soundSourceNeutral = 6
 // SHEEP_SHEAR sound on SoundSource.PLAYERS (`level.playSound(null, this, SHEEP_SHEAR, SoundSource.PLAYERS,
 // 1.0, 1.0)`), so the shear sound rides this category. FriendlyByteBuf.writeEnum writes the ordinal as a
 // VarInt.
-//   [VERIFIED javap: net.minecraft.sounds.SoundSource enum order (PLAYERS == ordinal 7);
-//    Sheep.shear -> playSound(..., SoundSource.PLAYERS, ...); FriendlyByteBuf.writeEnum -> writeVarInt(ordinal).]
+//
+//	[VERIFIED javap: net.minecraft.sounds.SoundSource enum order (PLAYERS == ordinal 7);
+//	 Sheep.shear -> playSound(..., SoundSource.PLAYERS, ...); FriendlyByteBuf.writeEnum -> writeVarInt(ordinal).]
 const soundSourcePlayers = 7
 
 // encodeSoundEntity builds ClientboundSoundEntity (jar: ClientboundSoundEntityPacket.write) — an
 // entity-attached sound. JAR-DERIVED wire layout (the constructor/decode field order matches write):
+//
 //   - sound  : Holder<SoundEvent> via SoundEvent.STREAM_CODEC == ByteBufCodecs.holder(SOUND_EVENT, ...):
-//              a registry Reference holder writes VarInt(registryId + 1); a Direct holder writes
-//              VarInt(0) then the inline SoundEvent. PIG_HURT is a registry sound, so we write
-//              VarInt(soundID + 1) only (the inline-direct path is never taken for a registered sound).
+//     a registry Reference holder writes VarInt(registryId + 1); a Direct holder writes
+//     VarInt(0) then the inline SoundEvent. PIG_HURT is a registry sound, so we write
+//     VarInt(soundID + 1) only (the inline-direct path is never taken for a registered sound).
+//
 //   - source : SoundSource enum via writeEnum -> VarInt(ordinal)
+//
 //   - id     : VarInt (the entity the sound is attached to)
+//
 //   - volume : Float
+//
 //   - pitch  : Float
+//
 //   - seed   : Long (the client's per-sound RNG seed for variant selection)
 //
-//	[VERIFIED javap net.minecraft.network.protocol.game.ClientboundSoundEntityPacket: ctor/decode order
-//	 SoundEvent.STREAM_CODEC(Holder) ; readEnum(SoundSource) ; readVarInt(id) ; readFloat(volume) ;
-//	 readFloat(pitch) ; readLong(seed). write writes them in the SAME order. SoundEvent.STREAM_CODEC =
-//	 ByteBufCodecs.holder(Registries.SOUND_EVENT, DIRECT_STREAM_CODEC); ByteBufCodecs$30.encode writes
-//	 VarInt(getIdOrThrow + 1) for a Reference holder, VarInt(0)+direct for a Direct holder.]
+//     [VERIFIED javap net.minecraft.network.protocol.game.ClientboundSoundEntityPacket: ctor/decode order
+//     SoundEvent.STREAM_CODEC(Holder) ; readEnum(SoundSource) ; readVarInt(id) ; readFloat(volume) ;
+//     readFloat(pitch) ; readLong(seed). write writes them in the SAME order. SoundEvent.STREAM_CODEC =
+//     ByteBufCodecs.holder(Registries.SOUND_EVENT, DIRECT_STREAM_CODEC); ByteBufCodecs$30.encode writes
+//     VarInt(getIdOrThrow + 1) for a Reference holder, VarInt(0)+direct for a Direct holder.]
 func encodeSoundEntity(soundID int32, source int, entityID int32, volume, pitch float32, seed int64) pk.Packet {
 	return pk.Marshal(
 		int32(packetid.ClientboundSoundEntity),
-		pk.VarInt(soundID+1), // Holder<SoundEvent>: registry Reference -> id + 1 (0 reserved for inline)
+		pk.VarInt(soundID+1),     // Holder<SoundEvent>: registry Reference -> id + 1 (0 reserved for inline)
 		pk.VarInt(int32(source)), // SoundSource ordinal (writeEnum)
 		pk.VarInt(entityID),      // the entity the sound follows
 		pk.Float(volume),         // getSoundVolume() == 1.0 for a pig
@@ -1003,20 +1040,21 @@ func encodeSoundEntity(soundID int32, source int, entityID int32, volume, pitch 
 //
 // JAR-CONFIRMED WIRE LAYOUT (javap net.minecraft.network.protocol.game.ClientboundLevelParticlesPacket
 // write/decode this session — the read ctor and write() agree field-for-field):
-//	1. overrideLimiter : Boolean   (writeBoolean)
-//	2. alwaysShow      : Boolean   (writeBoolean)   <- the 26.2 addition (was absent in <=1.21.4)
-//	3. x, y, z         : Double    (writeDouble × 3)
-//	4. xDist, yDist, zDist : Float (writeFloat × 3) — the spread (per-particle random offset radius)
-//	5. maxSpeed        : Float     (writeFloat)
-//	6. count           : Int       (writeInt — a FIXED 4-byte int, NOT a VarInt)
-//	7. particle        : ParticleTypes.STREAM_CODEC == ByteBufCodecs.registry(PARTICLE_TYPE).dispatch:
-//	                     VarInt(particleTypeId) THEN the per-type options stream. ParticleTypes.HEART is
-//	                     a SimpleParticleType whose options codec is StreamCodec.unit -> writes NOTHING,
-//	                     so for HEART the particle field is just VarInt(particleTypeId), nothing trailing.
+//  1. overrideLimiter : Boolean   (writeBoolean)
+//  2. alwaysShow      : Boolean   (writeBoolean)   <- the 26.2 addition (was absent in <=1.21.4)
+//  3. x, y, z         : Double    (writeDouble × 3)
+//  4. xDist, yDist, zDist : Float (writeFloat × 3) — the spread (per-particle random offset radius)
+//  5. maxSpeed        : Float     (writeFloat)
+//  6. count           : Int       (writeInt — a FIXED 4-byte int, NOT a VarInt)
+//  7. particle        : ParticleTypes.STREAM_CODEC == ByteBufCodecs.registry(PARTICLE_TYPE).dispatch:
+//     VarInt(particleTypeId) THEN the per-type options stream. ParticleTypes.HEART is
+//     a SimpleParticleType whose options codec is StreamCodec.unit -> writes NOTHING,
+//     so for HEART the particle field is just VarInt(particleTypeId), nothing trailing.
 //
 // THE COUNT FIELD IS writeInt (a plain 4-byte big-endian int), NOT a VarInt — load-bearing (pk.Int).
 // THE PARTICLE-TYPE id is the trailing field (after count), a VarInt registry index — load-bearing
 // (it is NOT leading; the 26.2 layout puts the particle last).
+//
 //	[VERIFIED javap ClientboundLevelParticlesPacket.write: writeBoolean(overrideLimiter);
 //	 writeBoolean(alwaysShow); writeDouble(x/y/z); writeFloat(xDist/yDist/zDist); writeFloat(maxSpeed);
 //	 writeInt(count); ParticleTypes.STREAM_CODEC.encode(buf, particle). ParticleTypes.STREAM_CODEC ==
@@ -1045,6 +1083,7 @@ func encodeLevelParticles(particleID int32, overrideLimiter, alwaysShow bool, x,
 // particles around the mob locally; the SERVER never sends the aiStep hearts on the wire (its
 // Level.addParticle is a no-op) — the heart trigger is THIS event, not a ClientboundLevelParticles
 // packet. This is the faithful in-love heart path on a dedicated server.
+//
 //	[VERIFIED javap Animal.setInLove: level(); bipush 18; Level.broadcastEntityEvent(this, 18).
 //	 Animal.handleEntityEvent: `if (event == 18) { for i<7: addParticle(HEART, getRandomX(1),
 //	 getRandomY()+0.5, getRandomZ(1), gauss*0.02 ×3) }`. finalizeSpawnChildFromBreeding also
@@ -1074,6 +1113,7 @@ func encodeRemoveEntities(ids []int32) pk.Packet {
 // hierarchy derivation (dataWoolIndex=18 cites the same chain): Entity 0..7, LivingEntity 8..14, Mob 15,
 // AgeableMob 16,17, Animal none, TamableAnimal 18 (DATA_FLAGS) + 19 (DATA_OWNERUUID_ID), Cat
 // DATA_VARIANT_ID 20, IS_LYING 21 (the first BOOLEAN Cat defines after the variant).
+//
 //	[VERIFIED javap Cat static{}: DATA_VARIANT_ID(CAT_VARIANT) then IS_LYING(BOOLEAN) then
 //	 RELAX_STATE_ONE(BOOLEAN) then DATA_COLLAR_COLOR(INT) then DATA_SOUND_VARIANT_ID; hierarchy count
 //	 Entity(8)+LivingEntity(7)+Mob(1)+AgeableMob(2)+Animal(0)+TamableAnimal(2)=20 puts DATA_VARIANT_ID
@@ -1083,9 +1123,17 @@ const dataCatIsLyingIndex uint8 = 21
 // dataCatRelaxStateOneIndex is the accessor index for Cat.RELAX_STATE_ONE (22, right after IS_LYING).
 const dataCatRelaxStateOneIndex uint8 = 22
 
+// dataCatCollarColorIndex is the accessor index for Cat.DATA_COLLAR_COLOR (23, right after
+// RELAX_STATE_ONE). Continuing the hierarchy derivation: Cat DATA_VARIANT_ID(20) IS_LYING(21)
+// RELAX_STATE_ONE(22) DATA_COLLAR_COLOR(23) (then DATA_SOUND_VARIANT_ID at 24).
+//
+//	[VERIFIED javap Cat static{}: DATA_COLLAR_COLOR = defineId(Cat.class, INT) after RELAX_STATE_ONE.]
+const dataCatCollarColorIndex uint8 = 23
+
 // catLyingDataEntry builds the single DataValue entry carrying Cat.IS_LYING (index 21, BOOLEAN
 // serializer id 8): Byte(21) + VarInt(8) + Boolean(lying). Broadcast when the comfort goals flip the
 // lying pose (setLying), mirroring babyDataEntry's BOOLEAN shape.
+//
 //	[VERIFIED javap Cat.IS_LYING = EntityDataAccessor<Boolean>; BOOLEAN codec == ByteBufCodecs.BOOL.]
 func catLyingDataEntry(lying bool) entityDataEntry {
 	return entityDataEntry{
@@ -1097,11 +1145,27 @@ func catLyingDataEntry(lying bool) entityDataEntry {
 
 // catRelaxDataEntry builds the single DataValue entry carrying Cat.RELAX_STATE_ONE (index 22, BOOLEAN):
 // Byte(22) + VarInt(8) + Boolean(relax). Broadcast when the relax goal flips the head-up pose.
+//
 //	[VERIFIED javap Cat.RELAX_STATE_ONE = EntityDataAccessor<Boolean>; BOOLEAN codec == ByteBufCodecs.BOOL.]
 func catRelaxDataEntry(relax bool) entityDataEntry {
 	return entityDataEntry{
 		index:        dataCatRelaxStateOneIndex,
 		serializerID: boolSerializerID,
 		value:        pk.Boolean(relax),
+	}
+}
+
+// catCollarDataEntry builds the single DataValue entry carrying Cat.DATA_COLLAR_COLOR (index 23, INT
+// serializer id 1): Byte(23) + VarInt(1) + VarInt(colorID). Broadcast when the collar-dye branch of
+// Cat.mobInteract flips the collar color (setCollarColor). The value is the DyeColor id (WHITE 0 ..
+// BLACK 15), written through the INT serializer's VAR_INT codec, exactly like airDataEntry.
+//
+//	[VERIFIED javap Cat.DATA_COLLAR_COLOR = EntityDataAccessor<Integer>; INT codec == ByteBufCodecs.VAR_INT;
+//	 setCollarColor(c) = entityData.set(DATA_COLLAR_COLOR, c.getId()).]
+func catCollarDataEntry(colorID int) entityDataEntry {
+	return entityDataEntry{
+		index:        dataCatCollarColorIndex,
+		serializerID: intSerializerID,
+		value:        pk.VarInt(int32(colorID)),
 	}
 }

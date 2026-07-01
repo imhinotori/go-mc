@@ -7,10 +7,11 @@ package server
 // (kind="cat_lie_on_bed"), plus the morning-gift branch (never fires at the vanilla default
 // CAT_WAKING_UP_GIFT_CHANCE == 0.0f). These tests exercise the now-LIVE goals deterministically.
 //
-// STILL DEFERRED (cited): CatSitOnBlockGoal@7 (needs the CHEST open-count / FURNACE-LIT block-entity
-// queries), the prey goals (@8 leap / @9 ocelot / targetSelector rabbit+turtle — defer WITH the prey
-// selector), and the collar-dye branch of Cat.mobInteract (needs ItemTags.CAT_COLLAR_DYES +
-// DataComponents.DYE + the synched DATA_COLLAR_COLOR). TestCatCollarDyeDeferred still locks that one.
+// LANDED this pass: CatSitOnBlockGoal@7 (kind="cat_sit_on_block") — the CHEST open-count / FURNACE-LIT
+// block-entity queries are now built (block_entity_query.go) — and the collar-dye branch of
+// Cat.mobInteract (ItemTags.CAT_COLLAR_DYES == #minecraft:dyes, dyeColorIDOf for DataComponents.DYE, the
+// synched DATA_COLLAR_COLOR field catCollarColor with the RED default). STILL DEFERRED (cited): the prey
+// goals (@8 leap / @9 ocelot / targetSelector rabbit+turtle — defer WITH the prey selector).
 
 import (
 	"testing"
@@ -45,7 +46,7 @@ func TestCatComfortGoalsLanded(t *testing.T) {
 		t.Fatal("vanilla_cat declaration missing from the registry")
 	}
 	var goalSel, targetSel int
-	haveRelax, haveLie := false, false
+	haveRelax, haveLie, haveSit := false, false, false
 	for _, g := range decl.goals {
 		if g.flags&flagTarget != 0 {
 			targetSel++
@@ -57,16 +58,18 @@ func TestCatComfortGoalsLanded(t *testing.T) {
 			haveRelax = true
 		case "cat_lie_on_bed":
 			haveLie = true
+		case "cat_sit_on_block":
+			haveSit = true
 		}
 	}
-	if goalSel != 10 {
-		t.Fatalf("cat goalSelector goal count = %d, want 10 (the 8 prior + cat_relax_on_owner@3 + cat_lie_on_bed@5)", goalSel)
+	if goalSel != 11 {
+		t.Fatalf("cat goalSelector goal count = %d, want 11 (the 8 prior + cat_relax_on_owner@3 + cat_lie_on_bed@5 + cat_sit_on_block@7)", goalSel)
 	}
 	if targetSel != 0 {
 		t.Fatalf("cat targetSelector goal count = %d, want 0 (the rabbit/turtle prey goals are cite-deferred)", targetSel)
 	}
-	if !haveRelax || !haveLie {
-		t.Fatalf("cat comfort kinds present: relax=%v lie=%v, want both true", haveRelax, haveLie)
+	if !haveRelax || !haveLie || !haveSit {
+		t.Fatalf("cat comfort kinds present: relax=%v lie=%v sit=%v, want all true", haveRelax, haveLie, haveSit)
 	}
 }
 
@@ -87,6 +90,13 @@ func TestCatComfortGoalKindsBuild(t *testing.T) {
 	}
 	if lie.flags() != flagJump|flagMove {
 		t.Fatalf("cat_lie_on_bed flags = %d, want JUMP|MOVE (%d)", lie.flags(), flagJump|flagMove)
+	}
+	sit := buildNativeGoal("cat_sit_on_block", goalDecl{}, &mobDecl{})
+	if sit == nil {
+		t.Fatal("buildNativeGoal(cat_sit_on_block) == nil")
+	}
+	if sit.flags() != flagMove|flagJump {
+		t.Fatalf("cat_sit_on_block flags = %d, want MOVE|JUMP (%d)", sit.flags(), flagMove|flagJump)
 	}
 }
 
@@ -277,31 +287,120 @@ func TestCatLieOnBedCanUseGates(t *testing.T) {
 	}
 }
 
-// TestCatCollarDyeDeferred locks that the collar-dye branch of Cat.mobInteract is INERT in v1. Per the jar
-// (CFR Cat.mobInteract), the FIRST tamed+owned check is `if stack.is(ItemTags.CAT_COLLAR_DYES) { … }`
-// BEFORE the feed/sit-toggle. There is no CAT_COLLAR_DYES runtime tag / DataComponents.DYE read / synched
-// DATA_COLLAR_COLOR in v1, so tryCatInteract does NOT special-case a dye: an owner holding a dye on a
-// tamed cat falls THROUGH to the plain sit-toggle. When the dye subsystem lands, this must flip.
-func TestCatCollarDyeDeferred(t *testing.T) {
+// TestCatCollarDyeChangesColorAndConsumes: an owner holding a dye whose color differs from the cat's
+// collar dyes the collar (setCollarColor), consumes 1 dye, returns SUCCESS, and does NOT sit-toggle (the
+// dye branch returns before the sit-toggle). A fresh cat's collar is RED (14); a WHITE dye (0) differs, so
+// it recolors to WHITE. Cite Cat.mobInteract collar-dye branch.
+func TestCatCollarDyeChangesColorAndConsumes(t *testing.T) {
 	loop := NewTickLoop(newFakeClock())
 	cat := newTestCat(1)
 	cat.tame = true
 	cat.ownerUUID = 42
-	p := newTestPlayerHolding(loop, 42, int32(item.RedDye.ID))
+	cat.catCollarColor = catDefaultCollarColor // a real spawned cat starts RED (14)
+	p := newTestPlayerHolding(loop, 42, int32(item.WhiteDye.ID))
 
 	if cat.orderedToSit {
 		t.Fatal("precondition: the tamed cat starts NOT ordered to sit")
 	}
 	if !loop.tryCatInteract(p, cat) {
-		t.Fatal("owner dye interact on a tamed cat returned false, want true (falls through to sit-toggle)")
+		t.Fatal("owner white-dye interact on a RED-collar cat returned false, want true (SUCCESS)")
+	}
+	// setCollarColor(WHITE) -> collar id 0.
+	if cat.catCollarColor != 0 {
+		t.Fatalf("collar color after a white-dye interact = %d, want 0 (WHITE)", cat.catCollarColor)
+	}
+	// The dye branch returns BEFORE the sit-toggle, so the cat must NOT have sat.
+	if cat.orderedToSit {
+		t.Fatal("cat sat after a collar-dye interact, want NOT sat (the dye branch returns before the sit-toggle)")
+	}
+	// consume(1): the dye stack shrinks to empty (Count 1 -> 0).
+	held := ensureInventory(p).get(heldWindowSlot(ensureInventory(p).heldSlot))
+	if !slotIsEmpty(held) {
+		t.Fatalf("held slot after a collar-dye interact = %+v, want empty (consume(1) shrank the single dye)", held)
+	}
+}
+
+// TestCatCollarDyeSameColorFallsThrough: a dye whose color EQUALS the cat's current collar does NOT
+// recolor/consume; per the vanilla else-if, the held item IS a collar dye so the feed branch is skipped
+// and control falls through to super.mobInteract -> the sit-toggle. So a RED dye on a RED-collar cat just
+// toggles the sit and keeps the dye. Cite Cat.mobInteract (the collar-dye if / else if).
+func TestCatCollarDyeSameColorFallsThrough(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	cat := newTestCat(1)
+	cat.tame = true
+	cat.ownerUUID = 42
+	cat.catCollarColor = catDefaultCollarColor // RED (14)
+	p := newTestPlayerHolding(loop, 42, int32(item.RedDye.ID))
+
+	if !loop.tryCatInteract(p, cat) {
+		t.Fatal("owner red-dye interact on a RED-collar cat returned false, want true (falls through to sit-toggle)")
+	}
+	if cat.catCollarColor != catDefaultCollarColor {
+		t.Fatalf("collar color after a same-color dye interact = %d, want %d (unchanged)", cat.catCollarColor, catDefaultCollarColor)
 	}
 	if !cat.orderedToSit {
-		t.Fatal("cat did not sit after a dye interact — the collar-dye branch is deferred, so the interact " +
-			"MUST fall through to the sit-toggle (when the dye subsystem lands, flip this assertion)")
+		t.Fatal("cat did not sit after a same-color dye interact — the collar-dye if did not fire, so the " +
+			"interact must fall through to the sit-toggle")
 	}
+	// The dye must NOT be consumed (the color-equal path returns nothing; the sit-toggle consumes no item).
 	held := ensureInventory(p).get(heldWindowSlot(ensureInventory(p).heldSlot))
 	if slotIsEmpty(held) || int32(held.ItemID) != int32(item.RedDye.ID) {
-		t.Fatalf("held slot after a deferred dye interact = %+v, want the dye intact (dye branch must not "+
-			"consume it in v1)", held)
+		t.Fatalf("held slot after a same-color dye interact = %+v, want the RED dye intact (no consume)", held)
+	}
+}
+
+// TestCatSitOnBlockValidTarget locks the CatSitOnBlockGoal.isValidTarget three-way over the built
+// block-entity queries: an unopened CHEST (openCount 0 < 1) is valid; a LIT furnace is valid; an UNLIT
+// furnace is not; a bed FOOT is valid but a bed HEAD is not; and any target with a non-empty block above
+// is rejected. Cite CatSitOnBlockGoal.isValidTarget.
+func TestCatSitOnBlockValidTarget(t *testing.T) {
+	loop, mgr := newFluidLoop()
+	cat := newTestCat(1)
+	cat.x, cat.y, cat.z = 8.5, 64, 8.5
+	cat.tame = true
+	g := newCatSitOnBlockGoal(catSitOnBlockSpeed)
+
+	// CHEST with nobody viewing -> getOpenCount 0 < 1 -> valid.
+	chestPos := pk.Position{X: 8, Y: 64, Z: 10}
+	mgr.SetBlock(chestPos, block.ToStateID[block.Chest{Facing: block.North, Type: block.ChestTypeSingle}], dimMinY)
+	if !g.validTarget(loop, chestPos) {
+		t.Fatal("sit-on-block validTarget false for an unopened chest, want true (getOpenCount 0 < 1)")
+	}
+	// A player VIEWING the chest bumps the open count to 1 -> !(< 1) -> invalid.
+	viewer := &tickPlayer{entityID: 99, openContainer: &openContainer{windowID: 1, kind: containerKindChest, chestPos: chestPos}}
+	loop.players = append(loop.players, viewer)
+	if g.validTarget(loop, chestPos) {
+		t.Fatal("sit-on-block validTarget true for a chest with one viewer, want false (getOpenCount 1, not < 1)")
+	}
+	loop.players = loop.players[:len(loop.players)-1] // remove the viewer
+
+	// LIT furnace -> valid; UNLIT furnace -> invalid.
+	litPos := pk.Position{X: 8, Y: 64, Z: 12}
+	mgr.SetBlock(litPos, block.ToStateID[block.Furnace{Facing: block.North, Lit: block.Boolean(true)}], dimMinY)
+	if !g.validTarget(loop, litPos) {
+		t.Fatal("sit-on-block validTarget false for a LIT furnace, want true")
+	}
+	unlitPos := pk.Position{X: 8, Y: 64, Z: 14}
+	mgr.SetBlock(unlitPos, block.ToStateID[block.Furnace{Facing: block.North, Lit: block.Boolean(false)}], dimMinY)
+	if g.validTarget(loop, unlitPos) {
+		t.Fatal("sit-on-block validTarget true for an UNLIT furnace, want false (FurnaceBlock.LIT == false)")
+	}
+
+	// Bed FOOT -> valid (PART != HEAD); bed HEAD -> invalid.
+	footPos := pk.Position{X: 10, Y: 64, Z: 8}
+	mgr.SetBlock(footPos, block.ToStateID[block.RedBed{Facing: block.North, Part: block.BedPartFoot}], dimMinY)
+	if !g.validTarget(loop, footPos) {
+		t.Fatal("sit-on-block validTarget false for a bed FOOT, want true (PART != HEAD)")
+	}
+	headPos := pk.Position{X: 10, Y: 64, Z: 10}
+	mgr.SetBlock(headPos, redBedHeadState(t), dimMinY)
+	if g.validTarget(loop, headPos) {
+		t.Fatal("sit-on-block validTarget true for a bed HEAD, want false (PART == HEAD)")
+	}
+
+	// A solid block directly above a valid chest -> not empty above -> invalid.
+	mgr.SetBlock(pk.Position{X: 8, Y: 65, Z: 10}, block.ToStateID[block.Stone{}], dimMinY)
+	if g.validTarget(loop, chestPos) {
+		t.Fatal("sit-on-block validTarget true for a chest with a solid block above, want false (space above not empty)")
 	}
 }
