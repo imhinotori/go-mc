@@ -147,8 +147,9 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 	isChest := isChestBlock(state)
 	isCraft := isCraftingTableBlock(state)
 	isCut := isStonecutterBlock(state)
-	if !isChest && !isCraft && !isCut {
-		return false // not an interactive block (chest/crafting_table/stonecutter): PASS → placement runs
+	isBed := isBedBlock(state)
+	if !isChest && !isCraft && !isCut && !isBed {
+		return false // not an interactive block (chest/crafting_table/stonecutter/bed): PASS → placement runs
 	}
 	// Reach-gate the interaction (the same server-authoritative reach the place/break paths use):
 	// a far block is not openable. Vanilla gates the whole useItemOn behind the interaction
@@ -165,6 +166,13 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 		// StonecutterBlock.useWithoutItem -> player.openMenu(stonecutter). The single-input picker menu
 		// opens on any right-click (the bl9 sneak guard collapses to false in v1, like the chest path).
 		return t.openStonecutter(p, hitPos)
+	}
+	if isBed {
+		// BedBlock.useWithoutItem -> player.startSleepInBed (SLEEP-01, bed_block.go useBed). The bed
+		// right-click puts the player to sleep (the base subsystem the cat comfort goals gate on). It
+		// consumes the action on any bed click (the bl9 sneak guard collapses to false in v1, like the
+		// chest path), so placement is skipped whenever the target is a bed.
+		return t.useBed(p, hitPos)
 	}
 	return t.openChest(p, hitPos)
 }

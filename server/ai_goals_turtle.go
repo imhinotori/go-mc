@@ -131,7 +131,7 @@ func (t *TickLoop) isSandAt(x, y, z int) bool {
 // be empty) — a faithful air read.
 //
 //	[VERIFIED CFR TurtleLayEggGoal.isValidTarget: if (!level.isEmptyBlock(pos.above())) return false.]
-func (t *TickLoop) isEmptyBlockAt(x, y, z int) bool {
+func (t *TickLoop) isEmptyBlockXYZ(x, y, z int) bool {
 	return t.blockStateAt(x, y, z) == 0
 }
 
@@ -631,7 +631,7 @@ func newTurtleLayEggGoal(speed float64) *turtleLayEggGoal {
 //	 return TurtleEggBlock.isSand(level, pos).]
 func (g *turtleLayEggGoal) isValidTarget(t *TickLoop) func(x, y, z int) bool {
 	return func(x, y, z int) bool {
-		if !t.isEmptyBlockAt(x, y+1, z) {
+		if !t.isEmptyBlockXYZ(x, y+1, z) {
 			return false
 		}
 		return t.isSandAt(x, y, z)

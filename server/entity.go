@@ -523,6 +523,30 @@ type Entity struct {
 	//	 DATA_FLAGS = b ? (cur|1) : (cur&0xFE).]
 	inSittingPose bool
 
+	// catLying is net.minecraft.world.entity.animal.feline.Cat's IS_LYING synched data (BOOLEAN,
+	// accessor index 21): the cat is lying flat (CatRelaxOnOwnerGoal.tick setLying / CatLieOnBedGoal
+	// setLying). It drives the lying-pose client render (catLyingDataEntry) and the spaceIsOccupied
+	// scan (another cat lying||relaxStateOne blocks the spot). FALSE for a non-cat and the zero value.
+	//	[VERIFIED javap Cat: IS_LYING = defineId(Cat.class, BOOLEAN); setLying(b) = entityData.set(IS_LYING,b);
+	//	 isLying() = get(IS_LYING). Index derivation: Entity(0..7) LivingEntity(8..14) Mob(15) AgeableMob
+	//	 (16,17) Animal(none) TamableAnimal(18,19) Cat DATA_VARIANT_ID(20) IS_LYING(21).]
+	catLying bool
+
+	// catRelaxStateOne is Cat's RELAX_STATE_ONE synched data (BOOLEAN, accessor index 22): the cat is in
+	// the head-up "relax state one" pre-lying pose (CatRelaxOnOwnerGoal.tick setRelaxStateOne). Drives
+	// the relax-pose client render (catRelaxDataEntry) and the spaceIsOccupied scan. FALSE otherwise.
+	//	[VERIFIED javap Cat: RELAX_STATE_ONE = defineId(Cat.class, BOOLEAN); setRelaxStateOne(b) =
+	//	 entityData.set(RELAX_STATE_ONE,b); isRelaxStateOne() = get(RELAX_STATE_ONE). Index 22 (after
+	//	 IS_LYING at 21).]
+	catRelaxStateOne bool
+
+	// catOnBedTicks is CatRelaxOnOwnerGoal.onBedTicks -- the per-run counter (reset to 0 on start/stop)
+	// that, once it exceeds adjustedTickDelay(16), flips the cat from relaxStateOne to lying while it
+	// sits on the sleeping owner. Server-side goal state (not synched). 0 for a non-cat / between runs.
+	//	[VERIFIED javap Cat$CatRelaxOnOwnerGoal: private int onBedTicks; tick ++onBedTicks; >
+	//	 adjustedTickDelay(16) -> setLying(true); stop onBedTicks = 0.]
+	catOnBedTicks int
+
 	// ownerUUID is the TamableAnimal DATA_OWNERUUID_ID owner ref (Optional<EntityReference<LivingEntity>>),
 	// reduced to the owner's THIN entity id for v1 (the goals only need to resolve the owner on the
 	// loop; the WIRE broadcast of the owner ref is deferred — server-side ref drives the goals). 0 ==

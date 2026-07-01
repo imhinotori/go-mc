@@ -196,6 +196,13 @@ func (t *TickLoop) tickEntities() {
 	// (TestTickPhaseOrder stays green), mirroring the tickFallDamage seam above.
 	t.tickBreath()
 
+	// SLEEP-01: the per-player sleep advance (Player.tick sleep branch — sleepCounter climb/unwind + the
+	// wake-at-dawn stopSleepInBed). ADDITIVE, sibling of tickBreath (its body lives in player_sleep.go),
+	// inside this existing phase so no new phase is added to the fixed tick order. Placed AFTER tickBreath
+	// so a drowning hit this tick is reflected before the sleep step reads the player. Untraced, like
+	// tickBreath/tickFood.
+	t.tickPlayerSleep()
+
 	// MOB-EFFECT-01 (Task #9): the per-player mob-effect tick (LivingEntity.tickEffects — poison damage,
 	// duration countdown, modifier expiry). ADDITIVE, sibling of tickBreath. Placed AFTER tickBreath so a
 	// poison tick this frame lands on the post-drown health, mirroring the food step's ordering rationale.

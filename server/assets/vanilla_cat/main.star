@@ -8,9 +8,9 @@
 #   @1  FloatGoal                                       <-- .star (shared passive float)
 #   @1  TamableAnimal.TamableAnimalPanicGoal(1.5)       <-- .star (the cow PanicGoal reuse; extends PanicGoal)
 #   @2  SitWhenOrderedToGoal                            <-- kind="sit" (36-01 sitWhenOrderedToGoal)
-#   @3  CatRelaxOnOwnerGoal                             <-- DEFERRED (cat-specific: lie on the owner in bed)
+#   @3  CatRelaxOnOwnerGoal                             <-- kind="cat_relax_on_owner" (MOB-NEUT-03 Go-native)
 #   @4  CatTemptGoal(0.6, is(CAT_FOOD), true)           <-- .star (shared TemptGoal; cat_food tag)
-#   @5  CatLieOnBedGoal                                 <-- DEFERRED (cat-specific bed subsystem)
+#   @5  CatLieOnBedGoal                                 <-- kind="cat_lie_on_bed" (MOB-NEUT-03 Go-native)
 #   @6  FollowOwnerGoal(1.0, 10.0, 5.0)                 <-- kind="follow_owner" (36-01 followOwnerGoal)
 #   @7  CatSitOnBlockGoal                               <-- DEFERRED (cat-specific chest/furnace sit)
 #   @8  LeapAtTargetGoal(0.3)                           <-- DEFERRED (defers WITH its prey target)
@@ -475,6 +475,11 @@ declare_mob(
         ),
         # @2 SitWhenOrderedToGoal [JUMP, MOVE] — kind="sit" (the wolf's Go-native sit). Cite Cat.registerGoals @2.
         goal(priority = 2, flags = ["JUMP", "MOVE"], kind = "sit"),
+        # @3 CatRelaxOnOwnerGoal [] (no flags) -- kind="cat_relax_on_owner" (the Go-native comfort goal:
+        # lie on the owner sleeping in bed; the morning-gift roll on stop, always-false at the default
+        # CAT_WAKING_UP_GIFT_CHANCE 0.0f). Unblocked by SLEEP-01 + BlockTags.BEDS. Cite Cat.registerGoals
+        # @3 CatRelaxOnOwnerGoal.
+        goal(priority = 3, flags = [], kind = "cat_relax_on_owner"),
         # @4 CatTemptGoal(mob, 0.6, CAT_FOOD, true) [MOVE, LOOK] — the .star tempt on the cat_food tag. Cite
         # Cat.registerGoals @4 CatTemptGoal.
         goal(
@@ -485,6 +490,10 @@ declare_mob(
             stop = tempt_food_stop,
             can_continue = tempt_food_continue,
         ),
+        # @5 CatLieOnBedGoal(mob, 1.1, 8) [JUMP, MOVE] -- kind="cat_lie_on_bed" (the Go-native MoveToBlockGoal
+        # that walks to + lies on any #minecraft:beds block). Unblocked by BlockTags.BEDS. Cite
+        # Cat.registerGoals @5 CatLieOnBedGoal + MoveToBlockGoal.
+        goal(priority = 5, flags = ["JUMP", "MOVE"], kind = "cat_lie_on_bed"),
         # @6 FollowOwnerGoal(mob, 1.0, 10.0, 5.0) [MOVE] — kind="follow_owner" (the wolf's Go-native follow).
         # Cite Cat.registerGoals @6 FollowOwnerGoal.
         goal(priority = 6, flags = ["MOVE"], kind = "follow_owner"),

@@ -205,7 +205,7 @@ func buildAIFromDecl(t *TickLoop, decl *mobDecl) *mobAI {
 				// hunt/attack). spawnDeclaredMob runs on the tick goroutine; a panic here is isolated by
 				// the tickOnce recover backstop, surfacing the bad declaration loudly rather than shipping
 				// a silently-disarmed hostile. (The .star load already validated the rest of the mob.)
-				panic("buildAIFromDecl: unknown goal kind " + gd.nativeKind + " (valid: nearest_attackable_target, hurt_by_target, melee_attack, spider_attack, leap_at_target, avoid_entity, float, climb_on_powder_snow, sit, follow_owner, owner_hurt_by, owner_hurt, angry_player_target, skeleton_target, enderman_look_for_player, enderman_freeze_when_looked_at, silverfish_merge_stone, silverfish_wake_friends, cube_float, cube_random_direction, cube_keep_on_jumping, fox_faceplant, fox_stalk, fox_pounce, fox_seek_shelter, fox_sleep, fox_perch_search, fox_defend_trusted, fox_land_target, turtle_goto_water, turtle_go_home, turtle_travel, turtle_lay_egg, restrict_sun, flee_sun, nearest_healable_raider_target)")
+				panic("buildAIFromDecl: unknown goal kind " + gd.nativeKind + " (valid: nearest_attackable_target, hurt_by_target, melee_attack, spider_attack, leap_at_target, avoid_entity, float, climb_on_powder_snow, sit, follow_owner, owner_hurt_by, owner_hurt, angry_player_target, skeleton_target, enderman_look_for_player, enderman_freeze_when_looked_at, silverfish_merge_stone, silverfish_wake_friends, cube_float, cube_random_direction, cube_keep_on_jumping, fox_faceplant, fox_stalk, fox_pounce, fox_seek_shelter, fox_sleep, fox_perch_search, fox_defend_trusted, fox_land_target, turtle_goto_water, turtle_go_home, turtle_travel, turtle_lay_egg, restrict_sun, flee_sun, nearest_healable_raider_target, cat_relax_on_owner, cat_lie_on_bed)")
 			}
 			// The Go goal's OWN flags() must match the declared flags — a declaration that names, e.g.,
 			// kind="melee_attack" but flags=["TARGET"] would route the goal into the WRONG selector AND
@@ -344,6 +344,18 @@ func buildNativeGoal(kind string, gd goalDecl, decl *mobDecl) Goal {
 		// tick arms the jump control). Registered on Rabbit @1, Fox @0, Silverfish @1 (jar-verified);
 		// Creeper is NOT a walkable mob and does NOT register it. Cite ClimbOnTopOfPowderSnowGoal.
 		return newClimbOnTopOfPowderSnowGoal()
+	case "cat_relax_on_owner":
+		// MOB-NEUT-03: Cat @3 CatRelaxOnOwnerGoal — NO flags (the ctor sets no flag set; it drives the
+		// navigation directly in tick without reserving MOVE), NO RNG in canUse/tick (the ONLY RNG is the
+		// morning-gift LEVEL-rng nextFloat in stop, always-false at the default chance). Lie on the owner
+		// sleeping in bed (ai_goals_cat.go). Cite Cat.registerGoals @3 CatRelaxOnOwnerGoal.
+		return newCatRelaxOnOwnerGoal()
+	case "cat_lie_on_bed":
+		// MOB-NEUT-03: Cat @5 CatLieOnBedGoal(this, 1.1, 8) — {JUMP, MOVE}, extends MoveToBlockGoal. Walk
+		// to + lie on any #minecraft:beds block (ai_goals_cat.go). The speedModifier is the ctor's literal
+		// 1.1 (the bed-approach pace, NOT the declared walk speed — a cat ambles to its bed at the jar's
+		// fixed 1.1). Cite Cat.registerGoals @5 CatLieOnBedGoal + MoveToBlockGoal.
+		return newCatLieOnBedGoal(catLieOnBedSpeed)
 	case "sit":
 		// MOB-NEUT-01 (Phase 36): Wolf @2 SitWhenOrderedToGoal — {JUMP,MOVE}, NO RNG. Parks a tamed/
 		// ordered wolf (sit subsystem).
@@ -442,6 +454,12 @@ func buildNativeGoal(kind string, gd goalDecl, decl *mobDecl) Goal {
 // — the ONE caller of the leap goal in v1. Pinned here (rather than a magic literal in buildNativeGoal)
 // so the kind="leap_at_target" route stays the verbatim Spider arg. Cite Spider.registerGoals @3.
 const spiderLeapYd = 0.4
+
+// catLieOnBedSpeed is the 1.1 speedModifier Cat.registerGoals @5 passes to CatLieOnBedGoal(this, 1.1, 8)
+// — the fixed bed-approach pace (NOT the declared walk speed; the cat ambles to its bed at the jar's
+// literal 1.1). Pinned here (rather than a magic literal in buildNativeGoal) so the kind="cat_lie_on_bed"
+// route stays the verbatim Cat ctor arg. Cite Cat.registerGoals @5.
+const catLieOnBedSpeed = 1.1
 
 // declaredWalkSpeed maps a declared movement_speed attribute (≈0.25 for a pig) to a blocks/tick walk
 // pace. Vanilla's movement_speed attribute (~0.25) is NOT blocks/tick directly; newPigAI uses a

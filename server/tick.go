@@ -504,6 +504,28 @@ type tickPlayer struct {
 	// Question 2). Tick-owned.
 	loaded bool
 
+	// --- Player sleep state (SLEEP-01). The 1:1 port of the LivingEntity/Player sleep fields the bed
+	// interaction + per-tick sleep advance drive, and the read seam the cat comfort goals gate on
+	// (owner.isSleeping() / owner.getSleepTimer()). ALL tick-owned (set by useBed + tickPlayerSleep,
+	// read by the cat goals -- all on the tick goroutine, TICK-05). ---
+
+	// sleepingPos is net.minecraft.world.entity.LivingEntity's SLEEPING_POS_ID (Optional<BlockPos>):
+	// nil == awake, non-nil == the bed the player is sleeping in. isSleeping() == (sleepingPos != nil)
+	// (LivingEntity.isSleeping == getSleepingPos().isPresent()). startSleeping sets it; stopSleeping
+	// clears it. THIN copy of the block position (the Folia rule).
+	//	[VERIFIED javap LivingEntity: SLEEPING_POS_ID = OPTIONAL_BLOCK_POS accessor; isSleeping() ==
+	//	 getSleepingPos().isPresent(); startSleeping/setSleepingPos set it, clearSleepingPos clears it.]
+	sleepingPos *pk.Position
+
+	// sleepCounter is net.minecraft.world.entity.player.Player.sleepCounter -- the tick counter that
+	// climbs to SLEEP_DURATION (100) while sleeping and unwinds to 0 while waking. getSleepTimer()
+	// returns it; the cat morning-gift gate reads it (owner.getSleepTimer() >= 100). Advanced by
+	// tickPlayerSleep (Player.tick). 0 for an awake, never-slept player (the zero value).
+	//	[VERIFIED javap Player: private int sleepCounter; getSleepTimer() returns it; Player.tick climbs
+	//	 it to 100 (bipush 100) while sleeping, unwinds to 0 at 110 (bipush 110) while waking;
+	//	 startSleepInBed sets it to 0.]
+	sleepCounter int
+
 	// --- Player position (PLAY-04). ALL tick-owned: decoded and updated only by
 	// applyInput on the tick goroutine, so the position is -race clean by the same
 	// single-owner discipline as the rest of tickPlayer (TICK-05 / T-5-06). The four

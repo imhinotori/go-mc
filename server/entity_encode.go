@@ -996,3 +996,46 @@ func encodeRemoveEntities(ids []int32) pk.Packet {
 	}
 	return pk.Marshal(int32(packetid.ClientboundRemoveEntities), fields...)
 }
+
+// --- SLEEP-01 / cat comfort: the Cat IS_LYING + RELAX_STATE_ONE data-values -------------------------
+//
+// A Cat synchs two BOOLEAN accessors the CatRelaxOnOwnerGoal/CatLieOnBedGoal set: IS_LYING (the flat
+// lying pose) and RELAX_STATE_ONE (the head-up pre-lying pose). The client reads them to render the
+// comfort poses. Both indices are JAR-DERIVED (javap Cat static{} + the hierarchy accessor count), NOT
+// guessed.
+
+// dataCatIsLyingIndex is the SynchedEntityData accessor index for Cat.IS_LYING. Continuing the
+// hierarchy derivation (dataWoolIndex=18 cites the same chain): Entity 0..7, LivingEntity 8..14, Mob 15,
+// AgeableMob 16,17, Animal none, TamableAnimal 18 (DATA_FLAGS) + 19 (DATA_OWNERUUID_ID), Cat
+// DATA_VARIANT_ID 20, IS_LYING 21 (the first BOOLEAN Cat defines after the variant).
+//	[VERIFIED javap Cat static{}: DATA_VARIANT_ID(CAT_VARIANT) then IS_LYING(BOOLEAN) then
+//	 RELAX_STATE_ONE(BOOLEAN) then DATA_COLLAR_COLOR(INT) then DATA_SOUND_VARIANT_ID; hierarchy count
+//	 Entity(8)+LivingEntity(7)+Mob(1)+AgeableMob(2)+Animal(0)+TamableAnimal(2)=20 puts DATA_VARIANT_ID
+//	 at 20, IS_LYING at 21, RELAX_STATE_ONE at 22.]
+const dataCatIsLyingIndex uint8 = 21
+
+// dataCatRelaxStateOneIndex is the accessor index for Cat.RELAX_STATE_ONE (22, right after IS_LYING).
+const dataCatRelaxStateOneIndex uint8 = 22
+
+// catLyingDataEntry builds the single DataValue entry carrying Cat.IS_LYING (index 21, BOOLEAN
+// serializer id 8): Byte(21) + VarInt(8) + Boolean(lying). Broadcast when the comfort goals flip the
+// lying pose (setLying), mirroring babyDataEntry's BOOLEAN shape.
+//	[VERIFIED javap Cat.IS_LYING = EntityDataAccessor<Boolean>; BOOLEAN codec == ByteBufCodecs.BOOL.]
+func catLyingDataEntry(lying bool) entityDataEntry {
+	return entityDataEntry{
+		index:        dataCatIsLyingIndex,
+		serializerID: boolSerializerID,
+		value:        pk.Boolean(lying),
+	}
+}
+
+// catRelaxDataEntry builds the single DataValue entry carrying Cat.RELAX_STATE_ONE (index 22, BOOLEAN):
+// Byte(22) + VarInt(8) + Boolean(relax). Broadcast when the relax goal flips the head-up pose.
+//	[VERIFIED javap Cat.RELAX_STATE_ONE = EntityDataAccessor<Boolean>; BOOLEAN codec == ByteBufCodecs.BOOL.]
+func catRelaxDataEntry(relax bool) entityDataEntry {
+	return entityDataEntry{
+		index:        dataCatRelaxStateOneIndex,
+		serializerID: boolSerializerID,
+		value:        pk.Boolean(relax),
+	}
+}
