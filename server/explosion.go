@@ -2,11 +2,11 @@ package server
 
 // explosion.go — MOB-HOST-06 (Task #9): the ServerExplosion port (the creeper's blast), a 1:1 port of
 // net.minecraft.world.level.ServerExplosion.hurtEntities + getSeenPercent + the
-// ExplosionDamageCalculator entity-damage/knockback formulas (temp/cache/26.2-inner.jar, CFR this session
-// — see the agent report). The ENTITY effect (the iconic "a creeper kills you") is ported faithfully;
-// BLOCK DESTRUCTION is cite-deferred (it needs the per-block blast-resistance table + the mobGriefing
-// gamerule, neither of which exists in v1 — the ray-power roll IS drawn to keep level.random in lockstep,
-// but no block is removed until the resistance table lands; see calculateExplodedRayRolls).
+// ExplosionDamageCalculator entity-damage/knockback formulas (temp/cache/26.2-inner.jar, javap this
+// session). The ENTITY effect (the iconic "a creeper kills you") is here; the BLOCK-DESTRUCTION half
+// (calculateExplodedPositions + interactWithBlocks — the resistance-attenuated ray collection, the
+// Util.shuffle, and the per-block destroy+drop, gated by the MOB_GRIEFING gamerule) lives in
+// explosion_blocks.go, driven by the codegen'd level/block.ExplosionResistance table.
 //
 // Verified constants (bytecode): entity in-range if sqrt(distSqr)/(radius*2) <= 1.0; the exposure fraction
 // is getSeenPercent (a 3D grid of collision ray casts, MISS==clear); damage = ((p²+p)/2 * 7.0 * (radius*2)
@@ -18,46 +18,34 @@ import "math"
 
 // Explosion constants (bytecode-verified).
 const (
-	explosionRayPowerBase   = 0.7        // radius * (0.7 + nextFloat()*0.6)
-	explosionRayPowerRange  = 0.6        //   the nextFloat() scale
-	explosionRadiusEpsilon  = 1.0e-5     // radius < 1e-5f skips entity damage
-	explosionDamageConstant = 7.0        // the (p²+p)/2 * 7.0 * doubleRadius + 1.0 formula constant
-	explosionKnockbackMult  = 1.0        // ExplosionDamageCalculator.getKnockbackMultiplier == 1.0f
+	explosionRayPowerBase   = 0.7    // radius * (0.7 + nextFloat()*0.6)
+	explosionRayPowerRange  = 0.6    //   the nextFloat() scale
+	explosionRadiusEpsilon  = 1.0e-5 // radius < 1e-5f skips entity damage
+	explosionDamageConstant = 7.0    // the (p²+p)/2 * 7.0 * doubleRadius + 1.0 formula constant
+	explosionKnockbackMult  = 1.0    // ExplosionDamageCalculator.getKnockbackMultiplier == 1.0f
 )
 
-// explode is the port of ServerExplosion.explode for the creeper path (interaction MOB): it draws the
-// per-ray power rolls (lockstep with level.random), then hurts + knocks back every entity in range. Block
-// destruction is cite-deferred (no blast-resistance table). srcID is the exploding entity id (excluded
-// from the hurt set — a creeper does not damage itself; it is already discarded).
+// explode is the port of ServerExplosion.explode for the creeper path (interaction MOB). It mirrors
+// the vanilla method-and-RNG order EXACTLY: (1) collect the destroyed-block set via
+// calculateExplodedPositions (this draws the 16^3-shell ray nextFloats from level.random — the FIRST
+// RNG use), (2) hurtEntities (falloff+exposure damage + knockback; no RNG), (3) if the explosion
+// interacts with blocks (MOB_GRIEFING gate) interactWithBlocks(toBlow) (Util.shuffle nextInts + the
+// per-block drop rolls). srcID is the exploding entity id (excluded from the hurt set — a creeper does
+// not damage itself; it is already discarded). The gameEvent(EXPLODE) + createFire are cite-deferred
+// (no gameEvent/fire seam; a creeper explosion sets fire=false so createFire never runs anyway).
+//
+//	[VERIFIED javap ServerExplosion.explode: calculateExplodedPositions(); hurtEntities();
+//	 if (interactsWithBlocks()) interactWithBlocks(list); if (fire) createFire(list).]
 func (t *TickLoop) explode(srcID int32, x, y, z, radius float64) {
-	t.calculateExplodedRayRolls(radius)
+	toBlow := t.calculateExplodedPositions(x, y, z, radius)
 	t.hurtEntitiesFromExplosion(srcID, x, y, z, radius)
-	// interactWithBlocks (block destruction + drops) is CITE-DEFERRED: it requires the per-block
-	// ExplosionResistance table + the mobGriefing gamerule (ExplosionInteraction.MOB → KEEP when off).
-	// Neither exists in v1, so no block is removed. The ray-power rolls above ARE drawn so level.random
-	// stays in lockstep for when the block pass lands. Cite ServerExplosion.interactWithBlocks.
-}
-
-// calculateExplodedRayRolls draws the 16³-shell ray power rolls from level.random, matching
-// ServerExplosion.calculateExplodedPositions' RNG draw order (one nextFloat() per shell ray, in
-// xx→yy→zz order). It does NOT compute destroyed blocks (deferred) — it only ADVANCES the RNG so the
-// stream stays in lockstep. Cite ServerExplosion.calculateExplodedPositions (the ray-power init roll).
-func (t *TickLoop) calculateExplodedRayRolls(radius float64) {
-	r := t.cur().levelRandom
-	if r == nil {
-		return
-	}
-	for xx := 0; xx < 16; xx++ {
-		for yy := 0; yy < 16; yy++ {
-			for zz := 0; zz < 16; zz++ {
-				// Shell only: skip the interior (matches the vanilla `if !=0 && !=15 ... continue`).
-				if xx != 0 && xx != 15 && yy != 0 && yy != 15 && zz != 0 && zz != 15 {
-					continue
-				}
-				// The ray power init expression runs once per shell cell: radius*(0.7 + nextFloat()*0.6).
-				_ = radius * (explosionRayPowerBase + float64(r.NextFloat())*explosionRayPowerRange)
-			}
-		}
+	// interactsWithBlocks(): blockInteraction != KEEP. For a creeper (ExplosionInteraction.MOB) the
+	// interaction is KEEP exactly when MOB_GRIEFING is off (ServerLevel.explode); so gate on mobGriefing
+	// — when off, NO block is removed (the vanilla KEEP path). The ray nextFloats above are still drawn
+	// (calculateExplodedPositions runs unconditionally in vanilla), so level.random stays in lockstep
+	// regardless of the gamerule. Cite ServerExplosion.explode + interactsWithBlocks + ServerLevel.explode.
+	if mobGriefing {
+		t.interactWithBlocks(toBlow, radius)
 	}
 }
 

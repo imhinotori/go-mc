@@ -40,6 +40,7 @@ var generators = []generator{
 	{"component", genComponent},
 	{"blockentities", genBlockEntities},
 	{"blockhardness", genBlockHardness},
+	{"blockresistance", genBlockResistance},
 	{"blocksupport", genBlockSupport},
 	{"itemfood", genItemFood},
 	{"tags", genTags},
@@ -57,6 +58,7 @@ func main() {
 	runtime := flagValue(args, "--runtime")
 	dryRun := flagBool(args, "--dry-run")
 	genOnly := flagBool(args, "--gen-only")
+	only := flagValue(args, "--only") // run a single generator by name (e.g. --only blockresistance)
 
 	goMCRoot, err := detectGoMCRoot()
 	if err != nil {
@@ -126,6 +128,9 @@ func main() {
 	fmt.Fprintf(os.Stderr, "tools: go-mc=%s json-dir=%s\n\n", goMCRoot, jsonDir)
 
 	for _, g := range generators {
+		if only != "" && g.name != only {
+			continue // --only: skip every generator but the requested one
+		}
 		start := time.Now()
 		if err := g.fn(jsonDir, goMCRoot); err != nil {
 			fmt.Fprintf(os.Stderr, "tools: %s: %v\n", g.name, err)
@@ -183,7 +188,7 @@ func positionalArg(args []string) string {
 			skip = false
 			continue
 		}
-		if a == "--version" || a == "--runtime" {
+		if a == "--version" || a == "--runtime" || a == "--only" {
 			skip = true
 			continue
 		}

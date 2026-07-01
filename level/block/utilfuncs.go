@@ -1,5 +1,7 @@
 package block
 
+import "reflect"
+
 func IsAir(s StateID) bool {
 	if int(s) < 0 || int(s) >= len(StateList) {
 		return false // out-of-range id (corrupt/garbled section): not air, never panic
@@ -58,11 +60,12 @@ func IsFluidBlock(b Block) bool {
 //   - BushBlock: Bush. FireflyBushBlock: FireflyBush.
 //
 // DELIBERATELY EXCLUDED (different ground predicate — a FOLLOW-UP, not this vegetation pass):
-//   DeadBush/ShortDryGrass/TallDryGrass (DryVegetationBlock overrides mayPlaceOn -> #dry_vegetation_
-//   may_place_on), LeafLitter/PinkPetals/Wildflowers (FlowerBedBlock/LeafLitterBlock override),
-//   MangrovePropagule (override), CactusFlower (override), Seagrass/TallSeagrass/LilyPad,
-//   mushrooms, crops, nether vegetation. The 2-TALL plants (DoublePlantBlock) are handled by the
-//   IsDoublePlant/DoublePlantLowerHalf predicates below, since their canSurvive is half-dependent.
+//
+//	DeadBush/ShortDryGrass/TallDryGrass (DryVegetationBlock overrides mayPlaceOn -> #dry_vegetation_
+//	may_place_on), LeafLitter/PinkPetals/Wildflowers (FlowerBedBlock/LeafLitterBlock override),
+//	MangrovePropagule (override), CactusFlower (override), Seagrass/TallSeagrass/LilyPad,
+//	mushrooms, crops, nether vegetation. The 2-TALL plants (DoublePlantBlock) are handled by the
+//	IsDoublePlant/DoublePlantLowerHalf predicates below, since their canSurvive is half-dependent.
 //
 // CITE: VegetationBlock.canSurvive / VegetationBlock.mayPlaceOn (BlockTags.SUPPORTS_VEGETATION);
 // per-block `javap -p` confirming no override.
@@ -186,4 +189,62 @@ func IsVegetationGround(s StateID) bool {
 	default:
 		return false
 	}
+}
+
+// StateExplosionResistance is the 1:1 port of
+// net.minecraft.world.level.ExplosionDamageCalculator.getBlockExplosionResistance's non-empty
+// branch: max(block.getExplosionResistance(), fluidState.getExplosionResistance()). The block
+// half reads the generated ExplosionResistance table (keyed by Block.ID(), constant per block).
+// The fluid half is the state's fluid: air/most blocks carry EmptyFluid (0.0), water/lava carry
+// their fluid (100.0), and a WATERLOGGED block carries water (100.0). The empty (air + no fluid)
+// case never reaches here — the collection loop only calls this on a present resistance.
+//
+// CITE: ExplosionDamageCalculator.getBlockExplosionResistance (Optional.of(max(block, fluid)));
+// Block.getExplosionResistance (the explosionResistance field, extracted into ExplosionResistance);
+// WaterFluid/LavaFluid.getExplosionResistance == 100.0f; EmptyFluid == 0.0f.
+func StateExplosionResistance(s StateID) float32 {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return 0
+	}
+	b := StateList[s]
+	blockR := ExplosionResistance[b.ID()] // 0 if unmapped (never for a registered block)
+	fluidR := stateFluidExplosionResistance(b)
+	if fluidR > blockR {
+		return fluidR
+	}
+	return blockR
+}
+
+// stateFluidExplosionResistance is the fluid half of getBlockExplosionResistance: the state's
+// FluidState.getExplosionResistance(). Water/lava blocks ARE their fluid (100.0); a block with a
+// waterlogged=true property carries water (100.0); everything else carries EmptyFluid (0.0). The
+// waterlogged read is reflective because the block structs each declare their own Waterlogged
+// field — matching how BlockBehaviour reads the WATERLOGGED property generically.
+//
+//	[VERIFIED javap: FluidState.getExplosionResistance -> Fluid.getExplosionResistance;
+//	 WaterFluid/LavaFluid == 100.0f, EmptyFluid == 0.0f.]
+func stateFluidExplosionResistance(b Block) float32 {
+	if IsFluidBlock(b) {
+		return 100.0 // water/lava block: the fluid IS the block (WaterFluid/LavaFluid == 100.0f)
+	}
+	if isWaterlogged(b) {
+		return 100.0 // waterlogged block: getFluidState() is water (100.0f)
+	}
+	return 0.0 // EmptyFluid
+}
+
+// isWaterlogged reports whether a block state has a waterlogged=true property (the generated
+// block structs declare a `Waterlogged Boolean` field). Read reflectively so every waterloggable
+// block (stairs/slabs/fences/…) is covered without enumerating them. A block with no Waterlogged
+// field returns false.
+func isWaterlogged(b Block) bool {
+	v := reflect.ValueOf(b)
+	if v.Kind() != reflect.Struct {
+		return false
+	}
+	f := v.FieldByName("Waterlogged")
+	if !f.IsValid() || f.Kind() != reflect.Bool {
+		return false
+	}
+	return f.Bool()
 }
