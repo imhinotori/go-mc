@@ -836,6 +836,12 @@ func (t *TickLoop) handleInteract(p *tickPlayer, pkt pk.Packet) {
 	if mob.typ == entity.Wolf.ID && t.tryWolfInteract(p, mob) {
 		return // the taming / sit-toggle handled the interact
 	}
+	// MOB-NEUT-03 (Task #9): the Cat.mobInteract taming/sit-toggle — the cat sibling of the wolf gate
+	// (fish-tames, no health bump). Cat-gated (zero-cost for every other mob; the lone nextInt(3) tame
+	// draw is on the cat's own per-entity stream, so the pig oracle is unperturbed).
+	if mob.typ == entity.Cat.ID && t.tryCatInteract(p, mob) {
+		return // the taming / sit-toggle handled the interact
+	}
 	t.tryFeedAnimal(p, mob)
 }
 
@@ -1254,5 +1260,69 @@ func (t *TickLoop) tryToTameWolf(p *tickPlayer, mob *Entity) {
 	}
 
 	// else broadcastEntityEvent(this, (byte)6): the taming-FAIL SMOKE puff. The bone was still consumed.
+	t.broadcastToTrackers(mob.id, encodeEntityEvent(mob.id, entityEventWolfTameSmoke))
+}
+
+// tryCatInteract ports net.minecraft.world.entity.animal.feline.Cat.mobInteract's taming + sit-toggle
+// (MOB-NEUT-03, Task #9; jar-verified this session), the cat sibling of tryWolfInteract. Returns true when
+// it consumes the interact (no fall-through to tryFeedAnimal), false to fall through. Held item read
+// SERVER-side (never trusted from the payload). Cat differences from the wolf: tamed by CAT_FOOD (cod/
+// salmon) not a bone; NO applyTamingSideEffects health bump (Cat inherits the base no-op — MAX_HEALTH stays
+// 10); tryToTame does NOT clear nav/target. The tamed feed-heal + collar-dye branches are cite-deferred (no
+// feed-health / dye system in v1) → fall through to the sit-toggle / super feed exactly as the wolf does.
+//
+//	[VERIFIED CFR Cat.mobInteract: if(isTame()){ if(isOwnedBy){ dye… ; feed if isFood&&hp<max ; parent=
+//	 super.mobInteract; if(!parent.consumesAction){ setOrderedToSit(!isOrderedToSit()); return SUCCESS } } }
+//	 else if(isFood(stack)){ usePlayerItem; tryToTame(player); … return SUCCESS }. isFood = is(CAT_FOOD).]
+func (t *TickLoop) tryCatInteract(p *tickPlayer, mob *Entity) bool {
+	inv := ensureInventory(p)
+	held := inv.get(heldWindowSlot(inv.heldSlot))
+
+	if mob.tame {
+		// A non-owner cannot command a tamed cat (isOwnedBy gate). Fall through to the super feed.
+		if mob.ownerUUID != p.entityID {
+			return false
+		}
+		// The feed-heal (isFood && hp<max) + collar-dye branches are cite-deferred; a CAT_FOOD item would
+		// let the super feed consume, so do NOT sit-toggle then (parent.consumesAction()).
+		if !slotIsEmpty(held) && itemInTag(int32(held.ItemID), "cat_food") {
+			return false
+		}
+		// parent = super.mobInteract; if(!parent.consumesAction()) setOrderedToSit(!isOrderedToSit()).
+		mob.orderedToSit = !mob.orderedToSit
+		mob.setJumping(false)
+		if mob.ai != nil {
+			mob.ai.setTarget(0)
+		}
+		return true
+	}
+
+	// UNTAMED: else if (isFood(stack)) { usePlayerItem; tryToTame; … }. isFood = is(CAT_FOOD) (cod/salmon).
+	if slotIsEmpty(held) || !itemInTag(int32(held.ItemID), "cat_food") {
+		return false // not fish → fall through to super feed
+	}
+	// usePlayerItem: consume 1 fish (survival) BEFORE the roll, exactly as the bytecode orders it.
+	t.shrinkHeldItem(p, inv)
+	// tryToTame(player): the 1-in-3 tame roll.
+	t.tryToTameCat(p, mob)
+	return true
+}
+
+// tryToTameCat ports net.minecraft.world.entity.animal.feline.Cat.tryToTame(Player) VERBATIM: ONE
+// nextInt(3) on the cat's per-entity stream; on 0 → tame (setTame(true,true) [base no-op side-effect, so
+// NO health change] + setOwner) + setOrderedToSit(true) + hearts (byte 7); else smoke (byte 6). Unlike the
+// wolf, the cat does NOT stop navigation / clear target on tame. Cite Cat.tryToTame.
+func (t *TickLoop) tryToTameCat(p *tickPlayer, mob *Entity) {
+	if mobRandom(mob).nextInt(3) == 0 {
+		// tame(player) = setTame(true, true) + setOwner. Cat.applyTamingSideEffects is the base no-op, so
+		// MAX_HEALTH stays 10 (no wolf-style 8->40 bump). Flip the tame flag + record the owner.
+		mob.tame = true
+		mob.ownerUUID = p.entityID
+		mob.orderedToSit = true // setOrderedToSit(true): the freshly-tamed cat sits
+		// broadcastEntityEvent(this, (byte)7): the taming-SUCCESS HEART burst.
+		t.broadcastToTrackers(mob.id, encodeEntityEvent(mob.id, entityEventWolfTameHearts))
+		return
+	}
+	// broadcastEntityEvent(this, (byte)6): the taming-FAIL SMOKE puff. The fish was still consumed.
 	t.broadcastToTrackers(mob.id, encodeEntityEvent(mob.id, entityEventWolfTameSmoke))
 }

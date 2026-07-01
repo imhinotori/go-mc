@@ -60,6 +60,9 @@ var allFourMobs = []struct {
 	// MOB-HOST-08 (Task #9): Enderman — float@0 + melee@2 + stroll@7 + look@8 + around@8 (5 goalSelector)
 	// + nearest@1 + hurt_by@2 (2 targetSelector); gaze/block-carry/endermite cite-deferred; teleport Go-native.
 	{vanillaEndermanMobName, entity.Enderman.ID, 5, 2},
+	// MOB-NEUT-03 (Task #9): Cat — float@1 + panic@1 + sit@2 + tempt@4 + follow_owner@6 + breed@10 +
+	// stroll@11 + look@12 (8 goalSelector, 0 targetSelector); comfort/prey goals cite-deferred; fish-tamed.
+	{vanillaCatMobName, entity.Cat.ID, 8, 0},
 }
 
 // TestAllFourMobsBootLoad: loadVanillaMobRegistry returns ONE registry holding the passive + hostile +
@@ -74,9 +77,9 @@ func TestAllFourMobsBootLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadVanillaMobRegistry: %v", err)
 	}
-	const wantTotal = 15 // + the Task-#9 mobs (husk/mooshroom/silverfish/creeper/witch/rabbit/enderman)
+	const wantTotal = 16 // + the Task-#9 mobs (husk/mooshroom/silverfish/creeper/witch/rabbit/enderman/cat)
 	if got := len(r.byName); got != wantTotal {
-		t.Fatalf("registry holds %d declarations, want %d (15: passives+hostiles+variants+witch+rabbit+enderman)", got, wantTotal)
+		t.Fatalf("registry holds %d declarations, want %d (16: passives+hostiles+variants+witch+rabbit+enderman+cat)", got, wantTotal)
 	}
 	for _, m := range allFourMobs {
 		decl, ok := r.byName[m.name]
