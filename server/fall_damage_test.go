@@ -154,8 +154,8 @@ func TestCalculateFallDamageMatchesVanillaFormula(t *testing.T) {
 		// LivingEntity.calculateFallDamage -> Mth.floor(calculateFallPower(d) * mul * FALL_DAMAGE_MULTIPLIER),
 		// calculateFallPower(d) = (d + 1.0E-6) - SAFE_FALL_DISTANCE(=3.0), FALL_DAMAGE_MULTIPLIER=1.0.
 		want := int(math.Floor((c.d + 1.0e-6 - 3.0) * c.mul * 1.0))
-		if got := calculateFallDamage(c.d, c.mul); got != want {
-			t.Fatalf("calculateFallDamage(%v, %v) = %d, want %d (floor((d+1e-6-3.0)*mul*1.0))",
+		if got := calculateFallDamage(c.d, c.mul, 3.0); got != want {
+			t.Fatalf("calculateFallDamage(%v, %v, 3.0) = %d, want %d (floor((d+1e-6-3.0)*mul*1.0))",
 				c.d, c.mul, got, want)
 		}
 	}

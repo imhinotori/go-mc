@@ -57,9 +57,12 @@ import "math"
 // ATTRIBUTE BASE VALUES (verified in net.minecraft.world.entity.ai.attributes.Attributes.<clinit>):
 //   SAFE_FALL_DISTANCE    = RangedAttribute("safe_fall_distance",    3.0, -1024.0, 1024.0) -> base 3.0
 //   FALL_DAMAGE_MULTIPLIER = RangedAttribute("fall_damage_multiplier", 1.0,     0.0,  100.0) -> base 1.0
-// Sulfur has no attribute system yet, so these are named constants set to the JAR'S ATTRIBUTE
-// BASE VALUES. They are kept as explicit factors in the formula (NOT baked away) so that when an
-// attribute system arrives, each becomes a `getAttributeValue(...)` read with no formula change.
+// SAFE_FALL_DISTANCE is now a LIVE per-entity attribute read: calculateFallPower / calculateFallDamage
+// take the caller's getAttributeValue(SAFE_FALL_DISTANCE) as a parameter (player: playerAttributes
+// attrSafeFallDistance base 3.0; mob: Entity.getAttributeValue(attribute.SafeFallDistance) — 3.0 for a
+// plain living entity, 5.0 for a Fox, etc.). FALL_DAMAGE_MULTIPLIER stays a named constant equal to its
+// jar base 1.0 (its per-entity attribute is not yet in the v1 set — cited, structured to slot in the
+// same way when its consumer needs a non-default value).
 //
 // WATER GUARD (17-08 — IS vanilla). Vanilla negates ALL fall damage in water via TWO cooperating
 // guards, both reproduced here using the 17-02 in-water check (fluid_physics.go:playerInWater):
@@ -75,9 +78,8 @@ import "math"
 // These stand in for getAttributeValue(...) until an attribute system exists; keeping them as
 // explicit factors preserves the literal vanilla product power*mul*fallDamageMultiplier.
 const (
-	// safeFallDistanceAttr == getAttributeValue(Attributes.SAFE_FALL_DISTANCE), base 3.0.
-	safeFallDistanceAttr = 3.0
-	// fallDamageMultiplierAttr == getAttributeValue(Attributes.FALL_DAMAGE_MULTIPLIER), base 1.0.
+	// fallDamageMultiplierAttr == getAttributeValue(Attributes.FALL_DAMAGE_MULTIPLIER), base 1.0. Kept
+	// as a named constant equal to the jar base (its per-entity attribute is not yet in the v1 set).
 	fallDamageMultiplierAttr = 1.0
 	// fallDamageEpsilon mirrors calculateFallPower's literal 1.0E-6 addend (ldc2_w 1.0E-6d).
 	fallDamageEpsilon = 1.0e-6
@@ -100,9 +102,10 @@ func (p *tickPlayer) resetFallDistance() {
 //
 //	return (d + 1.0E-6) - getAttributeValue(SAFE_FALL_DISTANCE);
 //
-// safeFallDistanceAttr is the SAFE_FALL_DISTANCE attribute base (3.0).
-func calculateFallPower(d float64) float64 {
-	return (d + fallDamageEpsilon) - safeFallDistanceAttr
+// safeFallDistance is the caller's getAttributeValue(Attributes.SAFE_FALL_DISTANCE) — a live per-entity
+// read (base 3.0; a Fox carries 5.0), passed at the exact bytecode read site.
+func calculateFallPower(d float64, safeFallDistance float64) float64 {
+	return (d + fallDamageEpsilon) - safeFallDistance
 }
 
 // calculateFallDamage mirrors LivingEntity.calculateFallDamage(double d, float damageMultiplier):
@@ -117,12 +120,12 @@ func calculateFallPower(d float64) float64 {
 // per-entity tag lookup slots in here unchanged. The product keeps power, damageMultiplier and
 // the FALL_DAMAGE_MULTIPLIER attribute as three explicit factors, exactly as the bytecode's two
 // `dmul`s do.
-func calculateFallDamage(d float64, damageMultiplier float64) int {
+func calculateFallDamage(d float64, damageMultiplier float64, safeFallDistance float64) int {
 	const fallDamageImmune = false // players are not in the EntityTypeTags.FALL_DAMAGE_IMMUNE tag
 	if fallDamageImmune {
 		return 0
 	}
-	power := calculateFallPower(d)
+	power := calculateFallPower(d, safeFallDistance)
 	return mthFloor(power * damageMultiplier * fallDamageMultiplierAttr)
 }
 
@@ -213,7 +216,11 @@ func (t *TickLoop) checkFallDamage(p *tickPlayer, deltaY float64, onGround bool,
 // applyDamage(p, float32(i)) — the same server-authoritative path attacks use. Sounds are skipped
 // server-side. Returns whether damage was dealt (mirrors the method's boolean result).
 func (t *TickLoop) causeFallDamage(p *tickPlayer, d float64, damageMultiplier float64) bool {
-	i := calculateFallDamage(d, damageMultiplier)
+	// getAttributeValue(SAFE_FALL_DISTANCE): the live per-player attribute read (base 3.0), the value
+	// LivingEntity.calculateFallPower subtracts. Read at the vanilla call site so a future modifier
+	// (feather-falling-style effect) composes automatically.
+	safeFallDistance := p.getAttributeValue(attrSafeFallDistance)
+	i := calculateFallDamage(d, damageMultiplier, safeFallDistance)
 	if i > 0 {
 		t.applyDamage(p, damageSourceOf(damageTypeFall), float32(i))
 		return true

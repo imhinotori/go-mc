@@ -30,6 +30,8 @@ import "github.com/imhinotori/sulfur/level/attribute"
 //	max_health             -> RangedAttribute("max_health",            20.0,  1.0, 1024.0)   base 20.0
 //	movement_speed         -> RangedAttribute("movement_speed",         (varies)        )    (Player overrides 0.1)
 //	sweeping_damage_ratio  -> RangedAttribute("sweeping_damage_ratio",  0.0,  0.0,    1.0)   base 0.0
+//	step_height            -> RangedAttribute("step_height",            0.6,  0.0,   10.0)   base 0.6
+//	safe_fall_distance     -> RangedAttribute("safe_fall_distance",     3.0, -1024.0, 1024.0) base 3.0
 //
 // PLAYER DEFAULT SUPPLIER (Player.createAttributes() extends LivingEntity.createLivingAttributes()):
 //   - .add(ATTACK_DAMAGE,   1.0d)  -> OVERRIDES the 2.0 registration default to 1.0 for a player
@@ -37,7 +39,8 @@ import "github.com/imhinotori/sulfur/level/attribute"
 //   - .add(ATTACK_SPEED)          -> no override, uses the 4.0 registration default
 //   - .add(SWEEPING_DAMAGE_RATIO) -> no override, uses the 0.0 registration default
 //   - createLivingAttributes adds MAX_HEALTH(20), ARMOR(0), ARMOR_TOUGHNESS(0), KNOCKBACK_RESISTANCE(0),
-//     MAX_ABSORPTION(0), ENTITY_INTERACTION_RANGE(3.0), etc. with no overrides -> registration defaults.
+//     MAX_ABSORPTION(0), STEP_HEIGHT(0.6), SAFE_FALL_DISTANCE(3.0), ENTITY_INTERACTION_RANGE(3.0), etc.
+//     with no overrides -> registration defaults.
 //
 // So the PLAYER base for each attribute the melee port reads is the value below. These are the
 // AttributeSupplier.getValue() returns for a modifier-free player — the literal numbers vanilla's
@@ -61,6 +64,8 @@ const (
 	attrMovementSpeed
 	attrMaxAbsorption
 	attrEntityInteractionRange
+	attrStepHeight
+	attrSafeFallDistance
 )
 
 // playerAttributeBase is the per-player BASE value for each attribute — the value
@@ -70,17 +75,19 @@ const (
 // createLivingAttributes), as documented in the file header. All are doubles to mirror vanilla's
 // double-precision attribute math (getAttributeValue returns a double; callers d2f as vanilla does).
 var playerAttributeBase = map[attributeKey]float64{
-	attrAttackDamage:           1.0,  // Player.createAttributes .add(ATTACK_DAMAGE, 1.0) overrides the 2.0 default
-	attrAttackSpeed:            4.0,  // registration default (Player .add(ATTACK_SPEED) no override)
-	attrAttackKnockback:        0.0,  // registration default
-	attrArmor:                  0.0,  // registration default (no armor items yet)
-	attrArmorToughness:         0.0,  // registration default (no armor items yet)
-	attrKnockbackResistance:    0.0,  // registration default
-	attrSweepingDamageRatio:    0.0,  // registration default (Player .add(SWEEPING_DAMAGE_RATIO) no override)
-	attrMaxHealth:              20.0, // createLivingAttributes registration default
+	attrAttackDamage:           1.0,                 // Player.createAttributes .add(ATTACK_DAMAGE, 1.0) overrides the 2.0 default
+	attrAttackSpeed:            4.0,                 // registration default (Player .add(ATTACK_SPEED) no override)
+	attrAttackKnockback:        0.0,                 // registration default
+	attrArmor:                  0.0,                 // registration default (no armor items yet)
+	attrArmorToughness:         0.0,                 // registration default (no armor items yet)
+	attrKnockbackResistance:    0.0,                 // registration default
+	attrSweepingDamageRatio:    0.0,                 // registration default (Player .add(SWEEPING_DAMAGE_RATIO) no override)
+	attrMaxHealth:              20.0,                // createLivingAttributes registration default
 	attrMovementSpeed:          0.10000000149011612, // Player .add(MOVEMENT_SPEED, 0.1) — the vanilla float-widened double literal
-	attrMaxAbsorption:          0.0,  // registration default
-	attrEntityInteractionRange: 3.0,  // registration default
+	attrMaxAbsorption:          0.0,                 // registration default
+	attrEntityInteractionRange: 3.0,                 // registration default
+	attrStepHeight:             0.6,                 // createLivingAttributes STEP_HEIGHT registration default (Player no override)
+	attrSafeFallDistance:       3.0,                 // createLivingAttributes SAFE_FALL_DISTANCE registration default (Player no override)
 }
 
 // attributeHolder is a per-player map of attribute -> base value. It is the Go stand-in for

@@ -42,9 +42,13 @@ const (
 	// "entities don't slide forever" behavior. [ASSUMED — wire-irrelevant.]
 	horizontalFriction = 0.6 * 0.91
 
-	// stepHeight is the auto-step-up players/most mobs get over a 1-block edge. Recorded for
-	// completeness/tuning; v1's visible gate (land, blocked, no clip-through) does not depend
-	// on stepping, so it is not yet applied in the sweep. [ASSUMED.]
+	// stepHeight is the auto-step-up players/most mobs get over a 1-block edge. It equals the
+	// STEP_HEIGHT attribute registration default (attribute.StepHeight, RangedAttribute default 0.6 -
+	// verified in Attributes.<clinit>). Recorded for completeness/tuning; v1's visible collision gate
+	// (land, blocked, no clip-through) does not consume stepping yet, so it is not applied in the
+	// sweep. When the sweep gains step-up, it must read the PER-ENTITY value
+	// getAttributeValue(attribute.StepHeight) (== Entity.maxUpStep, 0.6 for a plain living entity, 1.0
+	// for an EnderMan) rather than this base constant - the attribute is the real source of truth.
 	stepHeight = 0.6
 )
 

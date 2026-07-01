@@ -85,4 +85,19 @@ var (
 	// TemptRange is Attributes.TEMPT_RANGE (RangedAttribute "tempt_range", 10.0, 0.0, 2048.0).
 	// Added by Animal.createAnimalAttributes (so Cat and other animals carry it at 10.0).
 	TemptRange = NewRangedAttribute("tempt_range", 10.0, 0.0, 2048.0)
+
+	// StepHeight is Attributes.STEP_HEIGHT (RangedAttribute "step_height", 0.6, 0.0, 10.0).
+	// Registered in Attributes.<clinit> via `new RangedAttribute("attribute.name.step_height", 0.6d,
+	// 0.0d, 10.0d).setSyncable(true)` (javap Attributes: ldc2_w 0.6d, dconst_0, ldc2_w 10.0d - this
+	// session). Added to every LivingEntity by createLivingAttributes; EnderMan.createAttributes
+	// OVERRIDES it to 1.0. Consumed by Entity.maxUpStep() (the auto-step-up height).
+	StepHeight = NewRangedAttribute("step_height", 0.6, 0.0, 10.0)
+
+	// SafeFallDistance is Attributes.SAFE_FALL_DISTANCE (RangedAttribute "safe_fall_distance", 3.0,
+	// -1024.0, 1024.0). Registered in Attributes.<clinit> via `new RangedAttribute(
+	// "attribute.name.safe_fall_distance", 3.0d, -1024.0d, 1024.0d).setSyncable(true)` (javap
+	// Attributes: ldc2_w 3.0d, ldc2_w -1024.0d, ldc2_w 1024.0d - this session). Added to every
+	// LivingEntity by createLivingAttributes; Fox.createAttributes OVERRIDES it to 5.0. Consumed by
+	// LivingEntity.calculateFallPower (`(d + 1.0E-6) - getAttributeValue(SAFE_FALL_DISTANCE)`).
+	SafeFallDistance = NewRangedAttribute("safe_fall_distance", 3.0, -1024.0, 1024.0)
 )

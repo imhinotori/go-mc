@@ -26,19 +26,22 @@ import "github.com/imhinotori/sulfur/data/entity"
 // BASE-BUILDER CHAINS (the registration defaults flow through these unless overridden):
 //
 //	createLivingAttributes : MAX_HEALTH(20), KNOCKBACK_RESISTANCE(0), MOVEMENT_SPEED(0.7), ARMOR(0),
-//	                         ARMOR_TOUGHNESS(0), MAX_ABSORPTION(0), ENTITY_INTERACTION_RANGE(3),
-//	                         ATTACK_KNOCKBACK(0), ... (plus the non-gameplay set omitted here)
+//	                         ARMOR_TOUGHNESS(0), MAX_ABSORPTION(0), STEP_HEIGHT(0.6),
+//	                         SAFE_FALL_DISTANCE(3.0), ENTITY_INTERACTION_RANGE(3), ATTACK_KNOCKBACK(0),
+//	                         ... (plus the non-gameplay set omitted here)
 //	createMobAttributes    : + FOLLOW_RANGE override 16.0
 //	createMonsterAttributes: + ATTACK_DAMAGE (registration default 2.0, no override)
 //	createAnimalAttributes : + TEMPT_RANGE 10.0
 //
-// CITED NOTE on the omitted non-gameplay attributes: createLivingAttributes also adds STEP_HEIGHT,
-// SCALE, GRAVITY, JUMP_STRENGTH, SAFE_FALL_DISTANCE, FALL_DAMAGE_MULTIPLIER, OXYGEN_BONUS,
-// BURNING_TIME, and ~15 others at their registration defaults. They are omitted from these builders
-// because no consumer reads them yet (no fall-physics-from-attribute, no scale, no gravity-attribute
-// path). Each equals its vanilla registration default and slots in as one `.Add(...)` line when its
-// consumer lands — never baked away. The gameplay subset below is exactly what combat / health /
-// movement / AI-ranging read today.
+// CITED NOTE on the omitted non-gameplay attributes: createLivingAttributes also adds SCALE, GRAVITY,
+// JUMP_STRENGTH, FALL_DAMAGE_MULTIPLIER, OXYGEN_BONUS, BURNING_TIME, and ~15 others at their
+// registration defaults. They are omitted from these builders because no consumer reads them yet (no
+// scale, no gravity-attribute path). STEP_HEIGHT (0.6) and SAFE_FALL_DISTANCE (3.0) are NO LONGER
+// omitted — they now have live consumers (Entity.maxUpStep and LivingEntity.calculateFallPower) and
+// are added to createLivingAttributes below, exactly as vanilla does. Each still-omitted attribute
+// equals its vanilla registration default and slots in as one `.Add(...)` line when its consumer
+// lands — never baked away. The gameplay subset below is exactly what combat / health / movement /
+// AI-ranging / step-up / fall-distance read today.
 
 // createLivingAttributes is the port of LivingEntity.createLivingAttributes() (the gameplay subset):
 // the base builder every living entity starts from. The full vanilla method adds ~25 attributes; we
@@ -46,14 +49,16 @@ import "github.com/imhinotori/sulfur/data/entity"
 // non-gameplay attributes are the CITED omission documented in the file header.
 func createLivingAttributes() *Builder {
 	return NewBuilder().
-		Add(MaxHealth).             // registration default 20.0
-		Add(KnockbackResistance).   // registration default 0.0
-		Add(MovementSpeed).         // registration default 0.7 (every entity overrides this)
-		Add(Armor).                 // registration default 0.0
-		Add(ArmorToughness).        // registration default 0.0
-		Add(MaxAbsorption).         // registration default 0.0
+		Add(MaxHealth).              // registration default 20.0
+		Add(KnockbackResistance).    // registration default 0.0
+		Add(MovementSpeed).          // registration default 0.7 (every entity overrides this)
+		Add(Armor).                  // registration default 0.0
+		Add(ArmorToughness).         // registration default 0.0
+		Add(MaxAbsorption).          // registration default 0.0
+		Add(StepHeight).             // registration default 0.6 (createLivingAttributes .add(STEP_HEIGHT))
+		Add(SafeFallDistance).       // registration default 3.0 (createLivingAttributes .add(SAFE_FALL_DISTANCE))
 		Add(EntityInteractionRange). // registration default 3.0
-		Add(AttackKnockback)        // registration default 0.0
+		Add(AttackKnockback)         // registration default 0.0
 }
 
 // createMobAttributes is the port of Mob.createMobAttributes(): createLivingAttributes() with
@@ -169,7 +174,6 @@ func cowSupplier() *Supplier {
 		Build()
 }
 
-
 // mooshroomSupplier is MushroomCow's attribute supplier. MushroomCow extends AbstractCow and does NOT
 // override createAttributes (javap-verified), so its supplier is IDENTICAL to the cow's (AbstractCow.
 // createAttributes: MAX_HEALTH 10, MOVEMENT_SPEED 0.2). Cite MushroomCow (no createAttributes override).
@@ -182,27 +186,34 @@ func mooshroomSupplier() *Supplier {
 
 // foxSupplier is Fox's attribute supplier. Fox.createAttributes = Animal.createAnimalAttributes()
 // .add(MOVEMENT_SPEED 0.3).add(MAX_HEALTH 10).add(ATTACK_DAMAGE 2).add(SAFE_FALL_DISTANCE 5).add(
-// FOLLOW_RANGE 32). SAFE_FALL_DISTANCE is not in the v1 attribute set (a movement detail cite-deferred);
-// the rest seed here. Cite Fox.createAttributes.
+// FOLLOW_RANGE 32). Cite Fox.createAttributes (net/minecraft/world/entity/animal/fox/Fox — javap this
+// session: MOVEMENT_SPEED ldc2_w 0.30000001192092896d, MAX_HEALTH 10.0d, ATTACK_DAMAGE 2.0d,
+// SAFE_FALL_DISTANCE ldc2_w 5.0d, FOLLOW_RANGE 32.0d). SAFE_FALL_DISTANCE 5.0 OVERRIDES the base
+// createLivingAttributes default 3.0 (calculateFallPower reads it — a fox survives a taller fall).
 func foxSupplier() *Supplier {
 	return createAnimalAttributes().
 		AddValue(MovementSpeed, 0.30000001192092896).
 		AddValue(MaxHealth, 10.0).
 		AddValue(AttackDamage, 2.0).
+		AddValue(SafeFallDistance, 5.0).
 		AddValue(FollowRange, 32.0).
 		Build()
 }
 
 // endermanSupplier is EnderMan's attribute supplier. EnderMan.createAttributes = Monster
 // .createMonsterAttributes().add(MAX_HEALTH 40).add(MOVEMENT_SPEED 0.3).add(ATTACK_DAMAGE 7)
-// .add(FOLLOW_RANGE 64).add(STEP_HEIGHT 1.0). STEP_HEIGHT is not in the v1 attribute set (a movement
-// detail cite-deferred); the rest seed here. Cite EnderMan.createAttributes.
+// .add(FOLLOW_RANGE 64).add(STEP_HEIGHT 1.0). Cite EnderMan.createAttributes
+// (net/minecraft/world/entity/monster/EnderMan — javap this session: MAX_HEALTH ldc2_w 40.0d,
+// MOVEMENT_SPEED 0.30000001192092896d, ATTACK_DAMAGE 7.0d, FOLLOW_RANGE 64.0d, STEP_HEIGHT dconst_1
+// == 1.0d). STEP_HEIGHT 1.0 OVERRIDES the base createLivingAttributes default 0.6 (an enderman
+// auto-steps a full block).
 func endermanSupplier() *Supplier {
 	return createMonsterAttributes().
 		AddValue(MaxHealth, 40.0).
 		AddValue(MovementSpeed, 0.30000001192092896).
 		AddValue(AttackDamage, 7.0).
 		AddValue(FollowRange, 64.0).
+		AddValue(StepHeight, 1.0).
 		Build()
 }
 
@@ -235,6 +246,7 @@ func huskSupplier() *Supplier {
 // preserved bit-for-bit. NOTE the tamed-wolf MAX_HEALTH 40 + full heal is a RUNTIME side-effect of
 // setTame (applyTamingSideEffects), NOT the base supplier — an untamed wolf has MAX_HEALTH 8.0 here, and
 // Plan B applies the 8->40 bump on tame.
+//
 //	[VERIFIED javap Wolf.createAttributes: createAnimalAttributes; MOVEMENT_SPEED ldc2_w
 //	 0.30000001192092896d; MAX_HEALTH ldc2_w 8.0d; ATTACK_DAMAGE ldc2_w 4.0d; build. applyTamingSideEffects
 //	 sets MAX_HEALTH base 40.0 + setHealth(40) on tame.]

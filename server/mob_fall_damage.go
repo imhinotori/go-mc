@@ -1,5 +1,7 @@
 package server
 
+import "github.com/imhinotori/sulfur/level/attribute"
+
 // mob_fall_damage.go — LIVE-DEBUG B (the "mobs take no fall damage" fix): the *Entity sibling of the
 // player fall-damage path (fall_damage.go). The player path (tickFallDamage) accumulated fallDistance
 // and called causeFallDamage ONLY for tickPlayers; a mob (*Entity) accumulated no fallDistance and
@@ -117,7 +119,12 @@ func (t *TickLoop) landMobFallDamage(e *Entity, inWater bool) {
 // hurt(FALL, (float) i) is t.applyDamageEntity(e, damageSourceOf(damageTypeFall), float32(i)) — the
 // Phase-29 keystone. Returns whether damage was dealt (mirrors the method's boolean result).
 func (t *TickLoop) causeFallDamageEntity(e *Entity, d float64, damageMultiplier float64) bool {
-	i := calculateFallDamage(d, damageMultiplier)
+	// getAttributeValue(SAFE_FALL_DISTANCE): the live per-mob attribute read — 3.0 for a plain living
+	// entity (createLivingAttributes default), 5.0 for a Fox (Fox.createAttributes override). Read at
+	// the vanilla LivingEntity.calculateFallPower call site so each mob's own safe-fall threshold
+	// applies (a fox survives a taller fall than a pig).
+	safeFallDistance := e.getAttributeValue(attribute.SafeFallDistance)
+	i := calculateFallDamage(d, damageMultiplier, safeFallDistance)
 	if i > 0 {
 		// hurt(DamageSource.FALL, (float) i): route the fall damage through the keystone mob hurt
 		// pipeline. damageSourceOf(damageTypeFall) is the environmental FALL source (no attacker), the
