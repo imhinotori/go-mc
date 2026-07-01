@@ -23,6 +23,8 @@ package server
 import (
 	"math"
 
+	"github.com/imhinotori/sulfur/data/entity"
+
 	"github.com/imhinotori/sulfur/level/attribute"
 )
 
@@ -43,11 +45,13 @@ const meleeAttackResetCooldown = 20
 
 // meleeLookMaxYawStep is MeleeAttackGoal.tick's setLookAt(target, 30, 30) yaw cap: the HEAD turns at
 // most 30°/tick toward the target (the LookControl clamp). The body yaw is separate (MoveControl/nav).
+//
 //	[VERIFIED javap/CFR MeleeAttackGoal.tick: getLookControl().setLookAt(target, 30.0f, 30.0f).]
 const meleeLookMaxYawStep float32 = 30.0
 
 // meleeChaseSpeedModifier is the ZombieAttackGoal/SpiderAttackGoal speedModifier (1.0): the MoveControl
 // setSpeed is speedModifier × MOVEMENT_SPEED, and both hostiles pass 1.0.
+//
 //	[VERIFIED javap ZombieAttackGoal.<init>(zombie, 1.0, false); Spider$SpiderAttackGoal super(spider, 1.0, true).]
 const meleeChaseSpeedModifier = 1.0
 
@@ -74,8 +78,8 @@ type meleeAttackGoal struct {
 	baseGoal
 	speedModifier float64 // MeleeAttackGoal.speedModifier — the navigateTowards(target) move speed
 
-	lastCanUseCheck     int64 // MeleeAttackGoal.lastCanUseCheck — the gameTime of the last canUse eval
-	ticksUntilNextAttack int  // MeleeAttackGoal.ticksUntilNextAttack — RNG-free swing countdown
+	lastCanUseCheck      int64 // MeleeAttackGoal.lastCanUseCheck — the gameTime of the last canUse eval
+	ticksUntilNextAttack int   // MeleeAttackGoal.ticksUntilNextAttack — RNG-free swing countdown
 
 	// ticksUntilNextPathRecalculation / pathedTargetX|Y|Z port MeleeAttackGoal's path-recompute THROTTLE
 	// (the jar fields of the same names). tick() recomputes the nav want ONLY when the countdown hits 0
@@ -87,7 +91,7 @@ type meleeAttackGoal struct {
 	//	 when <=0 && (pathedTarget all 0 || target.distanceToSqr(pathedTarget) >= 1.0 || nextFloat()<0.05);
 	//	 on recompute pathedTarget = target.pos, cooldown = 4 + nextInt(7) (+10 if d²>1024, +5 if >256,
 	//	 +15 if moveTo fails), adjustedTickDelay (identity here).]
-	ticksUntilNextPathRecalculation int
+	ticksUntilNextPathRecalculation             int
 	pathedTargetX, pathedTargetY, pathedTargetZ float64
 
 	// daylightGated is the Spider$SpiderAttackGoal delta: a spider in BRIGHT light drops its target
@@ -308,6 +312,12 @@ func (g *meleeAttackGoal) checkAndPerformAttack(t *TickLoop, e *Entity, target *
 	}
 	g.resetAttackCooldown()
 	t.broadcastMobSwing(e) // mob.swing(MAIN_HAND) — the arm-swing animation to trackers
+	// Ravager.doHurtTarget override (RAIDER Task): a ravager sets attackTick=10 + broadcasts event 4
+	// (the swing-immobilize) BEFORE super.doHurtTarget deals the damage. Ravager-gated (zero cost for
+	// every other mob). Cite Ravager.doHurtTarget.
+	if e.typ == entity.Ravager.ID {
+		t.ravagerDidHurt(e)
+	}
 	g.doHurtTarget(t, e, target)
 }
 
@@ -426,9 +436,9 @@ func isWithinMeleeAttackRange(e *Entity, target *tickPlayer) bool {
 // a nav want / path. canUse is RNG-gated (a 1-in-leapReducedInterval roll, drawn ONLY after the
 // distance-band + on-ground guards pass), and start() applies the impulse.
 //
-//   ⚠ THE GATE IS nextInt, NOT nextFloat (the 35-JARNOTES pre-decompile guess said "nextFloat" — the
-//   exec-time decompile this session CORRECTS that to nextInt(reducedTickDelay(5))). The 1:1-with-the-
-//   jar mandate is absolute, so this ports the REAL bytecode: getRandom().nextInt(reducedTickDelay(5)).
+//	⚠ THE GATE IS nextInt, NOT nextFloat (the 35-JARNOTES pre-decompile guess said "nextFloat" — the
+//	exec-time decompile this session CORRECTS that to nextInt(reducedTickDelay(5))). The 1:1-with-the-
+//	jar mandate is absolute, so this ports the REAL bytecode: getRandom().nextInt(reducedTickDelay(5)).
 //
 // THE PIG ORACLE IS UNTOUCHED: a passive pig declares no leap goal, so this never ticks on it — no
 // draw reaches the pinned pig stream.

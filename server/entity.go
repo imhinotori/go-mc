@@ -285,6 +285,34 @@ type Entity struct {
 	// the witch writes it in v1. Effect ids -> the active instance (duration counts DOWN). Tick-owned.
 	mobEffects map[string]*activeEffect
 
+	// --- RAVAGER state (net.minecraft.world.entity.monster.Ravager) --------------------------------
+	//
+	// Tick-owned plain values, set/read ONLY for a Ravager (ravagerAiStep gates on typ ==
+	// entity.Ravager.ID). ravagerAttackTick mirrors Ravager.attackTick (ATTACK_DURATION 10, set by
+	// doHurtTarget, counted down in aiStep); ravagerStunnedTick mirrors Ravager.stunnedTick (STUN_DURATION
+	// 40, set on a blocked hit, drives isImmobile + the roar re-arm at 0); ravagerRoarTick mirrors
+	// Ravager.roarTick (set to 20 when the stun ends, fires roar() at 10). All three gate isImmobile()
+	// (Ravager.isImmobile). Zero for every non-ravager entity.
+	//	[VERIFIED CFR Ravager: ATTACK_DURATION=10, STUN_DURATION=40; aiStep countdowns; roarTick=20 on
+	//	 stun-end -> roar() at roarTick==10; attackTick=10 in doHurtTarget.]
+	ravagerAttackTick  int32
+	ravagerStunnedTick int32
+	ravagerRoarTick    int32
+
+	// --- EVOKER / SpellcasterIllager state (net.minecraft.world.entity.monster.illager.Evoker) ------
+	//
+	// Tick-owned plain values, set/read ONLY for an Evoker (the evoker spell goals + evokerAiStep gate on
+	// typ == entity.Evoker.ID). spellCastingTickCount mirrors SpellcasterIllager.spellCastingTickCount
+	// (set by a UseSpellGoal.start to the spell's castingTime, decremented in customServerAiStep; drives
+	// the prio-1 EvokerCastingSpellGoal.canUse gate). currentSpell mirrors DATA_SPELL_CASTING_ID (0=NONE,
+	// 1=SUMMON_VEX, 2=FANGS, 3=WOLOLO); isCastingSpell == currentSpell>0. evokerWololoTarget is the BLUE
+	// sheep the WOLOLO goal picked (a thin entity id; 0 == none). Zero for every non-evoker.
+	//	[VERIFIED CFR SpellcasterIllager: spellCastingTickCount, DATA_SPELL_CASTING_ID byte; customServer
+	//	 AiStep decrements spellCastingTickCount; IllagerSpell ids NONE=0/SUMMON_VEX=1/FANGS=2/WOLOLO=3.]
+	spellCastingTickCount int32
+	currentSpell          int32
+	evokerWololoTarget    int32
+
 	// ai is the per-mob AI handle (AI-01, Plan 07-01): the mob's goalSelector + the
 	// navigation/look targets a goal writes (server/ai_mob.go). nil for a non-mob entity (a
 	// dropped item, a player's instance) and for a mob with no AI registered. Hung off the

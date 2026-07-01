@@ -82,8 +82,8 @@ func (s raidStatus) name() string {
 // raiderType is Raid$RaiderType (VERIFIED CFR). The ORDINAL is load-bearing (getPotentialBonusSpawns
 // switches on it): VINDICATOR=0, EVOKER=1, PILLAGER=2, WITCH=3, RAVAGER=4. Each carries its
 // spawnsPerWaveBeforeBonus table (1-indexed by wave). Only WITCH maps to a mob that exists among the
-// 22 merged mobs; the others resolve to no spawnable declaration (createRaider returns nil), matching
-// the jar's entityType.create(...) != null loop guard which simply spawns nothing for them.
+// merged mobs. As of the RAIDER task ALL FIVE RaiderTypes map to a boot-loaded declaration (Vindicator/
+// Evoker/Pillager/Witch/Ravager), so raidCreateRaider spawns a REAL raider for each — the waves are live.
 type raiderType struct {
 	ordinal                  int
 	mobName                  string // the vanilla_* declaration name, or "" if the RaiderType has no v1 mob
@@ -93,11 +93,11 @@ type raiderType struct {
 // raiderTypesValues is Raid$RaiderType.VALUES, in ordinal order (the spawnGroup iteration order).
 // VERIFIED CFR RaiderType enum declaration.
 var raiderTypesValues = []raiderType{
-	{ordinal: 0, mobName: "", spawnsPerWaveBeforeBonus: [8]int{0, 0, 2, 0, 1, 4, 2, 5}},                  // VINDICATOR (no v1 mob)
-	{ordinal: 1, mobName: "", spawnsPerWaveBeforeBonus: [8]int{0, 0, 0, 0, 0, 1, 1, 2}},                  // EVOKER (no v1 mob)
-	{ordinal: 2, mobName: "", spawnsPerWaveBeforeBonus: [8]int{0, 4, 3, 3, 4, 4, 4, 2}},                  // PILLAGER (no v1 mob)
-	{ordinal: 3, mobName: vanillaWitchMobName, spawnsPerWaveBeforeBonus: [8]int{0, 0, 0, 0, 3, 0, 0, 1}}, // WITCH
-	{ordinal: 4, mobName: "", spawnsPerWaveBeforeBonus: [8]int{0, 0, 0, 1, 0, 1, 0, 2}},                  // RAVAGER (no v1 mob)
+	{ordinal: 0, mobName: vanillaVindicatorMobName, spawnsPerWaveBeforeBonus: [8]int{0, 0, 2, 0, 1, 4, 2, 5}}, // VINDICATOR
+	{ordinal: 1, mobName: vanillaEvokerMobName, spawnsPerWaveBeforeBonus: [8]int{0, 0, 0, 0, 0, 1, 1, 2}},     // EVOKER
+	{ordinal: 2, mobName: vanillaPillagerMobName, spawnsPerWaveBeforeBonus: [8]int{0, 4, 3, 3, 4, 4, 4, 2}},   // PILLAGER
+	{ordinal: 3, mobName: vanillaWitchMobName, spawnsPerWaveBeforeBonus: [8]int{0, 0, 0, 0, 3, 0, 0, 1}},      // WITCH
+	{ordinal: 4, mobName: vanillaRavagerMobName, spawnsPerWaveBeforeBonus: [8]int{0, 0, 0, 1, 0, 1, 0, 2}},    // RAVAGER
 }
 
 // difficulty (PEACEFUL/EASY/NORMAL/HARD) + its constants are defined in food.go (the existing

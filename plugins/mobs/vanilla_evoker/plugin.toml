@@ -1,0 +1,13 @@
+name = "vanilla_evoker"
+version = "0.1.0"
+entrypoint = "main.star"
+runtime = "starlark"
+# Least-privilege caps (RAIDER Task): the evoker's COMBAT/spell/crossbow/patrol goals are Go-NATIVE (kind=)
+# — the target acquire, the chase, the melee/crossbow/spell/roar are HOST-side ops the Go-native goals
+# own, so the .star needs NO widened cap for combat. The .star (the PASSIVE goals: float/stroll/look/
+# around) reads its own state + the nearest player and writes its look + nav want:
+#   entities.read  — read x/y/z + the rng draws (the stroll/look gates) + the look-state scratch
+#   entities.write — set_look_at (LookControl.setLookAt) + set_state (the passive goal scratch)
+#   world.read     — nearest_player (LookAtPlayerGoal getNearestPlayer)
+#   nav            — path_to/has_path/stop (WaterAvoidingRandomStrollGoal / RandomStrollGoal navigation)
+capabilities = ["entities.read", "entities.write", "world.read", "nav"]

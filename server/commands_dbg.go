@@ -144,6 +144,34 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned ocelot eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
 		}
+	case "pillager":
+		// RAIDER (Task): spawn a vanilla pillager (crossbow illager, Pillager wire type). Hunts the player +
+		// fires the crossbow (pillager_crossbow_attack); patrols via long_distance_patrol.
+		e := t.spawnVanillaMob(vanillaPillagerMobName, p.x, p.y, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned pillager eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
+		}
+	case "vindicator":
+		// RAIDER (Task): spawn a vanilla vindicator (iron-axe illager, Vindicator wire type). Hunts + melees
+		// the player; the Johnny name-check + door-break are cite-deferred (.star header).
+		e := t.spawnVanillaMob(vanillaVindicatorMobName, p.x, p.y, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned vindicator eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
+		}
+	case "evoker":
+		// RAIDER (Task): spawn a vanilla evoker (spellcaster, Evoker wire type). Casts the summon/fangs/wololo
+		// spells (RNG-faithful; Vex + EvokerFangs spawns cite-deferred — see .star header).
+		e := t.spawnVanillaMob(vanillaEvokerMobName, p.x, p.y, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned evoker eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
+		}
+	case "ravager":
+		// RAIDER (Task): spawn a vanilla ravager (raid beast, Ravager wire type). Hunts + melees + roars
+		// (ravagerAiStep: attackTick/roar AoE/stun; the leaf-trample + stun-trigger are cite-deferred).
+		e := t.spawnVanillaMob(vanillaRavagerMobName, p.x, p.y, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned ravager eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
+		}
 	case "water":
 		t.dbgFillWater(p)
 		t.broadcastSystemChat("[dbg] filled a water box around you")
@@ -157,13 +185,13 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		// RAID subsystem (raid.go/raids.go): start a raid at the player's position via the createRaidAt SEAM
 		// (the CITE-DEFERRED bad-omen village auto-trigger stand-in — no POI subsystem). Difficulty NORMAL
 		// (5 waves), raidOmenLevel 1. The raid ticks on the coordinator each tick (raidsTickAllRegions),
-		// counting down the 300-tick pre-wave cooldown then spawning wave 1 (in a witch-only v1 wave, wave 5
-		// spawns 3 witches; the earlier waves are witch-empty per the RaiderType table but still count down).
+		// counting down the 300-tick pre-wave cooldown then spawning waves. ALL FIVE RaiderTypes now spawn REAL
+		// raiders (vindicator/evoker/pillager/witch/ravager per the wave table).
 		rm := t.only().ensureRaidsManager()
 		raid := rm.createRaidAt(int(p.x), int(p.y), int(p.z), difficultyNormal, 1)
-		t.broadcastSystemChat(fmt.Sprintf("[dbg] started raid id=%d at (%d,%d,%d) numGroups=%d (waves spawn after the 300-tick cooldown; only WITCH raiders exist in v1)", raid.id, int(p.x), int(p.y), int(p.z), raid.numGroups))
+		t.broadcastSystemChat(fmt.Sprintf("[dbg] started raid id=%d at (%d,%d,%d) numGroups=%d (waves spawn after the 300-tick cooldown; all 5 RaiderTypes now spawn real raiders)", raid.id, int(p.x), int(p.y), int(p.z), raid.numGroups))
 	default:
-		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | water | pig-in-water | raid")
+		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | water | pig-in-water | raid")
 	}
 }
 

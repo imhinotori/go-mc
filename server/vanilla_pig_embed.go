@@ -29,7 +29,7 @@ import (
 // embedded manifest governs, T-24-07). Keep each repo-root/embed pair byte-identical. Embedding the
 // dirs covers plugin.toml + main.star for each mob.
 //
-//go:embed assets/vanilla_pig assets/vanilla_cow assets/vanilla_sheep assets/vanilla_chicken assets/vanilla_zombie assets/vanilla_skeleton assets/vanilla_spider assets/vanilla_wolf assets/vanilla_husk assets/vanilla_mooshroom assets/vanilla_silverfish assets/vanilla_creeper assets/vanilla_witch assets/vanilla_rabbit assets/vanilla_enderman assets/vanilla_cat assets/vanilla_fox assets/vanilla_sulfur_cube assets/vanilla_happy_ghast assets/vanilla_endermite assets/vanilla_turtle assets/vanilla_ocelot
+//go:embed assets/vanilla_pig assets/vanilla_cow assets/vanilla_sheep assets/vanilla_chicken assets/vanilla_zombie assets/vanilla_skeleton assets/vanilla_spider assets/vanilla_wolf assets/vanilla_husk assets/vanilla_mooshroom assets/vanilla_silverfish assets/vanilla_creeper assets/vanilla_witch assets/vanilla_rabbit assets/vanilla_enderman assets/vanilla_cat assets/vanilla_fox assets/vanilla_sulfur_cube assets/vanilla_happy_ghast assets/vanilla_endermite assets/vanilla_turtle assets/vanilla_ocelot assets/vanilla_pillager assets/vanilla_vindicator assets/vanilla_evoker assets/vanilla_ravager
 var vanillaMobFS embed.FS
 
 // The declared mob names the swap sites look up. Each is the directory name under assets/ AND the
@@ -109,6 +109,15 @@ const (
 	vanillaEndermiteMobName = "vanilla_endermite"
 	vanillaTurtleMobName    = "vanilla_turtle"
 	vanillaOcelotMobName    = "vanilla_ocelot"
+
+	// RAIDER (Task): the 4 RaiderType mobs that make the raid waves + patrol REAL. Pillager (crossbow +
+	// patrol-spawn), Vindicator (iron-axe melee), Evoker (spellcaster), Ravager (roar/stun beast). Each is
+	// raid/patrol-spawned (NOT a uniform natural spawn), so NONE join naturalMonsterMobNames. Additive to
+	// the embed + load order. raidCreateRaider (raid_tick.go) now resolves these -> the raid waves are REAL.
+	vanillaPillagerMobName   = "vanilla_pillager"
+	vanillaVindicatorMobName = "vanilla_vindicator"
+	vanillaEvokerMobName     = "vanilla_evoker"
+	vanillaRavagerMobName    = "vanilla_ravager"
 )
 
 // vanillaMobNames is the load order: ALL EIGHT bundled mobs (the 4 passives + the 3 Phase-35 hostiles +
@@ -141,6 +150,10 @@ var vanillaMobNames = []string{
 	vanillaEndermiteMobName,
 	vanillaTurtleMobName,
 	vanillaOcelotMobName,
+	vanillaPillagerMobName,
+	vanillaVindicatorMobName,
+	vanillaEvokerMobName,
+	vanillaRavagerMobName,
 }
 
 // loadVanillaMobRegistry materializes EACH bundled vanilla mob plugin to a temp dir, parses its

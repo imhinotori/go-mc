@@ -100,6 +100,16 @@ var allFourMobs = []struct {
 	// MOB-PREY (Task #9): Ocelot - tempt@0 + float@1 + tempt@3 (the same instance re-added) + breed@9 +
 	// stroll@10 + look@11 (6 goalSelector, 0 targetSelector); leap/attack/prey-target + trust are cite-deferred.
 	{vanillaOcelotMobName, entity.Ocelot.ID, 6, 0},
+	// RAIDER (Task): the 4 RaiderType mobs. Pillager - float@0 + patrol@4 + crossbow@3 + stroll@8 + look@9 +
+	// around@10 (6 goalSelector) + hurt_by@1 + nearest@2 (2 targetSelector). Vindicator - float@0 + patrol@4 +
+	// melee@5 + stroll@8 + look@9 + around@10 (6) + 2 targets. Evoker - float@0 + casting@1 + summon@4 +
+	// attack@5 + wololo@6 + patrol@4 + stroll@8 + look@9 + around@10 (9) + 2 targets. Ravager - float@0 +
+	// patrol@4 + melee@4 + wa_stroll@5 + look@6 + around@10 (6) + 2 targets. The Raider village/banner goals,
+	// AvoidEntity, door-break, and the villager/iron-golem targets are cite-deferred (.star headers).
+	{vanillaPillagerMobName, entity.Pillager.ID, 6, 2},
+	{vanillaVindicatorMobName, entity.Vindicator.ID, 6, 2},
+	{vanillaEvokerMobName, entity.Evoker.ID, 9, 2},
+	{vanillaRavagerMobName, entity.Ravager.ID, 6, 2},
 }
 
 // TestAllFourMobsBootLoad: loadVanillaMobRegistry returns ONE registry holding the passive + hostile +
@@ -114,9 +124,9 @@ func TestAllFourMobsBootLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadVanillaMobRegistry: %v", err)
 	}
-	const wantTotal = 22 // + the 3 prey mobs (endermite/turtle/ocelot) added to the 19 (husk/mooshroom/silverfish/creeper/witch/rabbit/enderman/cat/fox/sulfur_cube/happy_ghast)
+	const wantTotal = 26 // + the 4 RaiderType mobs (pillager/vindicator/evoker/ravager) added to the 22
 	if got := len(r.byName); got != wantTotal {
-		t.Fatalf("registry holds %d declarations, want %d (22: passives+hostiles+variants+witch+rabbit+enderman+cat+fox+sulfur_cube+happy_ghast+endermite+turtle+ocelot)", got, wantTotal)
+		t.Fatalf("registry holds %d declarations, want %d (26: the 22 + pillager/vindicator/evoker/ravager)", got, wantTotal)
 	}
 	for _, m := range allFourMobs {
 		decl, ok := r.byName[m.name]

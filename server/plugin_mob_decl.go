@@ -178,6 +178,14 @@ var baseTypeByName = map[string]entity.Entity{
 	"endermite": entity.Endermite,
 	"turtle":    entity.Turtle,
 	"ocelot":    entity.Ocelot,
+	// RAIDER (Task): the 4 RaiderType mobs that make the raid waves + patrol REAL. Each renders as its
+	// OWN wire type (Pillager 103, Vindicator 141, Evoker 46, Ravager 109). Pillager/Vindicator/Evoker/
+	// Ravager all extend Raider -> PatrollingMonster -> Monster (Evoker via SpellcasterIllager). Cite
+	// Pillager/Vindicator/Evoker/Ravager registerGoals.
+	"pillager":   entity.Pillager,
+	"vindicator": entity.Vindicator,
+	"evoker":     entity.Evoker,
+	"ravager":    entity.Ravager,
 }
 
 // resolveBaseType resolves a base_type string to its data/entity record. (record, true) for an

@@ -237,6 +237,60 @@ func ocelotSupplier() *Supplier {
 		Build()
 }
 
+// pillagerSupplier is Pillager's attribute supplier. Pillager.createAttributes = Monster.createMonster
+// Attributes().add(MOVEMENT_SPEED 0.35f).add(FOLLOW_RANGE 32).add(MAX_HEALTH 24).add(ATTACK_DAMAGE 5).
+// MOVEMENT_SPEED is the float-widened double 0.3499999940395355 (0.35f promoted). Cite
+// net.minecraft.world.entity.monster.illager.Pillager.createAttributes.
+func pillagerSupplier() *Supplier {
+	return createMonsterAttributes().
+		AddValue(MovementSpeed, 0.3499999940395355).
+		AddValue(FollowRange, 32.0).
+		AddValue(MaxHealth, 24.0).
+		AddValue(AttackDamage, 5.0).
+		Build()
+}
+
+// vindicatorSupplier is Vindicator's attribute supplier. Vindicator.createAttributes = Monster.create
+// MonsterAttributes().add(MOVEMENT_SPEED 0.35f).add(FOLLOW_RANGE 12).add(MAX_HEALTH 24).add(ATTACK_DAMAGE 5).
+// MOVEMENT_SPEED is the float-widened double 0.3499999940395355. Cite
+// net.minecraft.world.entity.monster.illager.Vindicator.createAttributes.
+func vindicatorSupplier() *Supplier {
+	return createMonsterAttributes().
+		AddValue(MovementSpeed, 0.3499999940395355).
+		AddValue(FollowRange, 12.0).
+		AddValue(MaxHealth, 24.0).
+		AddValue(AttackDamage, 5.0).
+		Build()
+}
+
+// evokerSupplier is Evoker's attribute supplier. Evoker.createAttributes = Monster.createMonster
+// Attributes().add(MOVEMENT_SPEED 0.5).add(FOLLOW_RANGE 12).add(MAX_HEALTH 24). Evoker has NO ATTACK_DAMAGE
+// override (its damage is the fangs spell). Cite net.minecraft.world.entity.monster.illager.Evoker
+// .createAttributes.
+func evokerSupplier() *Supplier {
+	return createMonsterAttributes().
+		AddValue(MovementSpeed, 0.5).
+		AddValue(FollowRange, 12.0).
+		AddValue(MaxHealth, 24.0).
+		Build()
+}
+
+// ravagerSupplier is Ravager's attribute supplier. Ravager.createAttributes = Monster.createMonster
+// Attributes().add(MAX_HEALTH 100).add(MOVEMENT_SPEED 0.3).add(KNOCKBACK_RESISTANCE 0.75).add(ATTACK_DAMAGE
+// 12).add(ATTACK_KNOCKBACK 1.5).add(FOLLOW_RANGE 32).add(STEP_HEIGHT 1.0). All plain doubles (no float
+// widening). Cite net.minecraft.world.entity.monster.Ravager.createAttributes.
+func ravagerSupplier() *Supplier {
+	return createMonsterAttributes().
+		AddValue(MaxHealth, 100.0).
+		AddValue(MovementSpeed, 0.3).
+		AddValue(KnockbackResistance, 0.75).
+		AddValue(AttackDamage, 12.0).
+		AddValue(AttackKnockback, 1.5).
+		AddValue(FollowRange, 32.0).
+		AddValue(StepHeight, 1.0).
+		Build()
+}
+
 // happyGhastSupplier is the port of HappyGhast.createAttributes(): Animal.createAnimalAttributes()
 // (which adds TEMPT_RANGE 10.0) then .add(MAX_HEALTH 20.0).add(TEMPT_RANGE 16.0).add(FLYING_SPEED 0.05)
 // .add(MOVEMENT_SPEED 0.05).add(FOLLOW_RANGE 16.0).add(CAMERA_DISTANCE 8.0). The later TEMPT_RANGE 16.0
@@ -439,6 +493,11 @@ var suppliers = map[string]*Supplier{
 	"endermite": endermiteSupplier(),
 	"turtle":    turtleSupplier(),
 	"ocelot":    ocelotSupplier(),
+	// RAIDER (Task): the 4 RaiderType mobs. All Monster.createMonsterAttributes with the jar overrides.
+	"pillager":   pillagerSupplier(),
+	"vindicator": vindicatorSupplier(),
+	"evoker":     evokerSupplier(),
+	"ravager":    ravagerSupplier(),
 }
 
 // livingCategories is the set of data/entity.Entity.Type values that correspond to a vanilla

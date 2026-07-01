@@ -144,9 +144,10 @@ type mobAI struct {
 	// patrolling is PatrollingMonster.patrolling; patrolLeader is PatrollingMonster.patrolLeader;
 	// patrolTarget{X,Y,Z} + patrolHasTarget are the @Nullable BlockPos patrolTarget; patrolCooldownUntil
 	// is LongDistancePatrolGoal.cooldownUntil (init -1 conceptually; 0 here == "never on cooldown" since
-	// gameTime starts at 0 and the check is gameTime < cooldownUntil). NONE of the 22 v1 mobs is a
-	// PatrollingMonster, so these stay zero on every live mob (a v1 mob is never isPatrolling()) — the
-	// patrol goal is STRUCTURALLY real but inert. Cite PatrollingMonster / LongDistancePatrolGoal.
+	// gameTime starts at 0 and the check is gameTime < cooldownUntil). As of the RAIDER task the 4
+	// PatrollingMonsters (Pillager/Vindicator/Evoker/Ravager) carry these fields; they stay zero until a
+	// PatrolSpawner sets patrolling=true (cite-deferred), so a raid-spawned raider stays a hunter, not a
+	// patroller — faithful. Cite PatrollingMonster / LongDistancePatrolGoal.
 	patrolling          bool
 	patrolLeader        bool
 	patrolHasTarget     bool

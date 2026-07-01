@@ -61,10 +61,18 @@ func TestRaidWaveSpawnTable(t *testing.T) {
 	if witch.spawnsPerWaveBeforeBonus != want {
 		t.Fatalf("witch spawnsPerWaveBeforeBonus = %v, want %v", witch.spawnsPerWaveBeforeBonus, want)
 	}
-	// The absent RaiderTypes carry no v1 mob (createRaider returns nil for them).
+	// As of the RAIDER task ALL FIVE RaiderTypes map to a boot-loaded declaration (createRaider spawns a
+	// REAL raider for each). Pin the ordinal -> mob-name mapping (the RaiderType VALUES order is load-bearing).
+	wantMob := map[int]string{
+		0: vanillaVindicatorMobName,
+		1: vanillaEvokerMobName,
+		2: vanillaPillagerMobName,
+		3: vanillaWitchMobName,
+		4: vanillaRavagerMobName,
+	}
 	for _, rt := range raiderTypesValues {
-		if rt.ordinal != 3 && rt.mobName != "" {
-			t.Fatalf("RaiderType ordinal %d unexpectedly maps to mob %q (only WITCH has a v1 mob)", rt.ordinal, rt.mobName)
+		if rt.mobName != wantMob[rt.ordinal] {
+			t.Fatalf("RaiderType ordinal %d maps to mob %q, want %q", rt.ordinal, rt.mobName, wantMob[rt.ordinal])
 		}
 	}
 }

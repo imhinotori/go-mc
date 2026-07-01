@@ -187,6 +187,27 @@ func categoryOf(t entity.ID) mobCategory {
 		// Ocelot.Type == "creature", id 91). Same CREATURE-budget accounting as the cat. (Ocelot spawns only
 		// in JUNGLE biomes - biome-gated - so it stays OUT of the uniform natural CREATURE pool.)
 		return categoryCreature
+	case entity.Pillager.ID:
+		// RAIDER (Task): Pillager is MobCategory.MONSTER (vanilla EntityTypes.PILLAGER = Builder.of(...,
+		// MobCategory.MONSTER); data/entity Pillager.Type == "monster", id 103). Same MONSTER-budget accounting
+		// as the zombie. (Pillager spawns naturally ONLY via the PatrolSpawner special path - NOT the uniform
+		// natural pool - so it stays OUT of naturalMonsterMobNames; async.go.)
+		return categoryMonster
+	case entity.Vindicator.ID:
+		// RAIDER (Task): Vindicator is MobCategory.MONSTER (vanilla EntityTypes.VINDICATOR; data/entity
+		// Vindicator.Type == "monster", id 141). Same MONSTER-budget accounting. (Vindicator spawns ONLY in
+		// raids + woodland mansions - never a uniform natural spawn - so it stays OUT of the natural pool.)
+		return categoryMonster
+	case entity.Evoker.ID:
+		// RAIDER (Task): Evoker is MobCategory.MONSTER (vanilla EntityTypes.EVOKER; data/entity Evoker.Type
+		// == "monster", id 46). Same MONSTER-budget accounting. (Evoker spawns ONLY in raids + woodland
+		// mansions - never a uniform natural spawn - so it stays OUT of the natural pool.)
+		return categoryMonster
+	case entity.Ravager.ID:
+		// RAIDER (Task): Ravager is MobCategory.MONSTER (vanilla EntityTypes.RAVAGER = Builder.of(...,
+		// MobCategory.MONSTER).sized(1.95, 2.2); data/entity Ravager.Type == "monster", id 109). Same MONSTER-
+		// budget accounting. (Ravager spawns ONLY in raids - never a uniform natural spawn - so it stays OUT.)
+		return categoryMonster
 	default:
 		return categoryMisc
 	}

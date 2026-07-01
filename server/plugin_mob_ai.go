@@ -205,7 +205,7 @@ func buildAIFromDecl(t *TickLoop, decl *mobDecl) *mobAI {
 				// hunt/attack). spawnDeclaredMob runs on the tick goroutine; a panic here is isolated by
 				// the tickOnce recover backstop, surfacing the bad declaration loudly rather than shipping
 				// a silently-disarmed hostile. (The .star load already validated the rest of the mob.)
-				panic("buildAIFromDecl: unknown goal kind " + gd.nativeKind + " (valid: nearest_attackable_target, hurt_by_target, melee_attack, spider_attack, leap_at_target, avoid_entity, float, climb_on_powder_snow, sit, follow_owner, owner_hurt_by, owner_hurt, angry_player_target, skeleton_target, enderman_look_for_player, enderman_freeze_when_looked_at, silverfish_merge_stone, silverfish_wake_friends, cube_float, cube_random_direction, cube_keep_on_jumping, fox_faceplant, fox_stalk, fox_pounce, fox_seek_shelter, fox_sleep, fox_perch_search, fox_defend_trusted, fox_land_target, fox_search_items, turtle_goto_water, turtle_go_home, turtle_travel, turtle_lay_egg, restrict_sun, flee_sun, nearest_healable_raider_target, cat_relax_on_owner, cat_lie_on_bed, cat_sit_on_block)")
+				panic("buildAIFromDecl: unknown goal kind " + gd.nativeKind + " (valid: nearest_attackable_target, hurt_by_target, melee_attack, spider_attack, leap_at_target, avoid_entity, float, climb_on_powder_snow, sit, follow_owner, owner_hurt_by, owner_hurt, angry_player_target, skeleton_target, enderman_look_for_player, enderman_freeze_when_looked_at, silverfish_merge_stone, silverfish_wake_friends, cube_float, cube_random_direction, cube_keep_on_jumping, fox_faceplant, fox_stalk, fox_pounce, fox_seek_shelter, fox_sleep, fox_perch_search, fox_defend_trusted, fox_land_target, fox_search_items, turtle_goto_water, turtle_go_home, turtle_travel, turtle_lay_egg, restrict_sun, flee_sun, nearest_healable_raider_target, cat_relax_on_owner, cat_lie_on_bed, cat_sit_on_block, long_distance_patrol, pillager_crossbow_attack, evoker_casting_spell, evoker_summon_spell, evoker_attack_spell, evoker_wololo_spell)")
 			}
 			// The Go goal's OWN flags() must match the declared flags — a declaration that names, e.g.,
 			// kind="melee_attack" but flags=["TARGET"] would route the goal into the WRONG selector AND
@@ -476,6 +476,28 @@ func buildNativeGoal(kind string, gd goalDecl, decl *mobDecl) Goal {
 		// in a 2x2x2 box is placeable (air over a full-collision non-bedrock block, entity-free), places the
 		// carried block and stops carrying. Cite EnderMan.registerGoals @10 EndermanLeaveBlockGoal (ai_goals_enderman_carry.go).
 		return newEndermanLeaveBlockGoal()
+	case "pillager_crossbow_attack":
+		// RAIDER (Task): Pillager.registerGoals @3 RangedCrossbowAttackGoal(this, 1.0, 8.0f) — {MOVE, LOOK}.
+		// The crossbow charge/fire state machine (ai_goals_crossbow.go); fires an Arrow at 1.6. Cite
+		// Pillager.registerGoals @3 RangedCrossbowAttackGoal.
+		return newRangedCrossbowAttackGoal()
+	case "evoker_casting_spell":
+		// RAIDER (Task): Evoker.registerGoals @1 EvokerCastingSpellGoal — {MOVE, LOOK}. The mid-cast lock
+		// (parks nav + faces target while spellCastingTickCount>0). Cite Evoker.registerGoals @1.
+		return newEvokerCastingSpellGoal()
+	case "evoker_summon_spell":
+		// RAIDER (Task): Evoker.registerGoals @4 EvokerSummonSpellGoal — the VEX summon (Vex spawn deferred,
+		// RNG draws faithful). Cite Evoker.registerGoals @4 EvokerSummonSpellGoal.
+		return newEvokerUseSpellGoal(spellKindSummon)
+	case "evoker_attack_spell":
+		// RAIDER (Task): Evoker.registerGoals @5 EvokerAttackSpellGoal — the EVOKER FANGS attack (fang
+		// geometry faithful; EvokerFangs spawn deferred; NO RNG). Cite Evoker.registerGoals @5.
+		return newEvokerUseSpellGoal(spellKindFangs)
+	case "evoker_wololo_spell":
+		// RAIDER (Task): Evoker.registerGoals @6 EvokerWololoSpellGoal — the sheep-recolor (BLUE->RED). INERT
+		// in v1 (sheep have no color state -> empty search -> canUse false), STRUCTURALLY present + RNG-
+		// faithful. Cite Evoker.registerGoals @6 EvokerWololoSpellGoal.
+		return newEvokerUseSpellGoal(spellKindWololo)
 	default:
 		return nil
 	}

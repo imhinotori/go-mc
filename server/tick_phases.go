@@ -484,6 +484,18 @@ func (t *TickLoop) tickAI() {
 			t.witchAiStep(e)
 			t.tickMobEffects(e)
 		}
+		// RAIDER (Task): the Ravager.aiStep roar/stun/attack countdowns + the roar() AoE. Per-type-gated
+		// like the creeper/enderman, AFTER serverAiStep so this tick's target/melee state is set. ADDITIVE +
+		// ravager-gated (zero cost / zero RNG for every non-ravager — the pig oracle stream is untouched).
+		if e.typ == entity.Ravager.ID {
+			t.ravagerAiStep(e)
+		}
+		// RAIDER (Task): the SpellcasterIllager.customServerAiStep spell-cast countdown for an Evoker.
+		// Per-type-gated like the ravager, AFTER serverAiStep. ADDITIVE + evoker-gated (zero cost / zero RNG
+		// for every non-evoker — the pig oracle stream is untouched).
+		if e.typ == entity.Evoker.ID {
+			t.evokerAiStep(e)
+		}
 	}
 
 	// Throttled natural spawner: vanilla attempts every tick (most no-op under cap); v1 runs the

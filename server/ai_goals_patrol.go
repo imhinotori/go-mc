@@ -17,14 +17,13 @@ package server
 //         each companion (setPatrolTarget). else -> findPatrolTarget().
 //   findPatrolTarget: patrolTarget = blockPosition + (-500 + random.nextInt(1000)) on X and Z; patrolling=true.
 //
-// STRUCTURALLY REAL, INERT IN v1 (cited, NOT silently dropped): NONE of the 22 merged mobs is a
-// PatrollingMonster — Pillager/Vindicator/Evoker/Ravager are absent (they are RaiderTypes with no v1 mob,
-// see raid.go). So no mob DECLARES this goal today (buildNativeGoal exposes kind="long_distance_patrol"
-// for the day a PatrollingMonster lands). The goal is a COMPLETE, testable port: its canUse gate reads
-// the mobAI patrol-state fields (patrolling / patrolTarget / patrolCooldownUntil, added to mobAI) and its
-// tick drives the real navigation via requestPath. Because a v1 mob is never isPatrolling(), canUse is
-// always false and the goal never runs on any live mob — REAL but currently unreachable, exactly the
-// witch-heal-target pattern (registered + faithful, dormant until its subsystem/mob lands).
+// STRUCTURALLY REAL (cited): as of the RAIDER task the 4 PatrollingMonsters (Pillager/Vindicator/Evoker/
+// Ravager) DECLARE this goal (kind="long_distance_patrol") — so it is now a LIVE goal on a real mob, not
+// an inert forward-port. The goal is a COMPLETE port: its canUse gate reads the mobAI patrol-state fields
+// (patrolling / patrolTarget / patrolCooldownUntil) and its tick drives the real navigation via requestPath.
+// A raid-spawned raider carries patrolling=false (it hunts, not patrols), so the goal stays dormant for it;
+// it activates once a PatrolSpawner (the special pillager-patrol spawn, cite-deferred) sets patrolling=true
+// and seeds a patrolTarget (findPatrolTarget). The port is faithful + exercised (TestLongDistancePatrolGoalInert).
 
 import "math"
 
