@@ -109,7 +109,7 @@ func (t *TickLoop) raidsTick(rm *raidsManager) {
 			delete(rm.raidMap, id)
 			continue
 		}
-		t.tickRaid(raid)
+		t.tickRaid(rm, raid)
 		if raid.isStopped() {
 			delete(rm.raidMap, id)
 		}

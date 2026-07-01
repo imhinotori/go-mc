@@ -1,6 +1,10 @@
 package server
 
-import "math"
+import (
+	"math"
+
+	"github.com/google/uuid"
+)
 
 // raid.go — the Raid EVENT lifecycle, ported 1:1 from the unobfuscated 26.2 jar
 // (net.minecraft.world.entity.raid.Raid, temp/cache/26.2-inner.jar, CFR + javap this session).
@@ -25,9 +29,10 @@ import "math"
 //     (RAID_TIMEOUT_TICKS) -> stop() (STOPPED). PEACEFUL difficulty -> stop().
 //   - the boss bar: ServerBossEvent(RED, NOTCHED_10). setProgress during cooldown = clamp((300-cd)/300);
 //     updateBossbar during a wave = clamp(healthOfLivingRaiders / totalHealth). Its client packet
-//     emission is CITE-DEFERRED (no ClientboundBossEventPacket in the net/packet wire layer — grep:
-//     zero hits). The MODEL (progress/name/visible) is computed faithfully so the wire is a pure
-//     add-on when a BossEvent packet lands.
+//     emission is now BUILT (bossbar.go: ClientboundBossEvent ADD/REMOVE/UPDATE_PROGRESS/UPDATE_NAME).
+//     The MODEL (progress/name/visible/players) drives the wire: setProgress/setName broadcast an
+//     UPDATE to the tracked players, and updatePlayers (by VALID_RAID_RADIUS_SQR distance) sends
+//     ADD/REMOVE as players enter/leave range.
 //
 // v1 REDUCTIONS (cited, NOT silently dropped):
 //   - VILLAGE/POI dependence: Raid.tick's isVillage/moveRaidCenterToNearbyVillageSection center checks
@@ -159,11 +164,28 @@ type Raid struct {
 // cite-deferred (no ClientboundBossEventPacket in net/packet — grep: zero hits), so this holds the
 // state a future BossEvent wire would serialize. Cite ServerBossEvent(RED, NOTCHED_10).
 type serverBossEvent struct {
+	// id is the BossEvent id (BossEvent.id — Mth.createInsecureUUID(this.random)). It keys every
+	// ADD/REMOVE/UPDATE_* packet the bar sends. Generated once at raid creation; stable per bar.
+	id uuid.UUID
+
 	name     string
 	progress float32
 	visible  bool
-	// players is the set of player entity ids currently shown the bar (updatePlayers). A thin id set
-	// (never live pointers — the Folia rule). In v1 with no BossEvent wire it is bookkeeping only.
+
+	// color/overlay are BossEvent.color/overlay (RED, NOTCHED_10 for a raid). They ride the ADD
+	// payload and (were setColor/setOverlay ever called) an UPDATE_STYLE; the raid never changes them.
+	color   bossBarColor
+	overlay bossBarOverlay
+
+	// darkenScreen/playBossMusic/createWorldFog are BossEvent's three property flags. All false for a
+	// raid (the vanilla default — Raid never sets them), carried in the ADD/UPDATE_PROPERTIES flags byte.
+	darkenScreen   bool
+	playBossMusic  bool
+	createWorldFog bool
+
+	// players is the set of player entity ids currently shown the bar (ServerBossEvent.players, driven
+	// by updatePlayers). A thin id set (never live pointers — the Folia rule). addPlayer sends ADD to a
+	// newly-tracked player; removePlayer sends REMOVE.
 	players map[int32]struct{}
 }
 
@@ -182,9 +204,15 @@ func newRaid(id int, cx, cy, cz int, d difficulty, seed uint64) *Raid {
 		raidCooldownTicks: raidDefaultPreTicks,
 		groupRaiderMap:    map[int]map[int32]*Entity{},
 		bossEvent: serverBossEvent{
+			// id is Mth.createInsecureUUID(this.random) — a per-raid insecure UUID. Sourced from a
+			// google/uuid random UUID here (the id need only be STABLE per bar, not vanilla-seed-pinned;
+			// only the ADD/REMOVE/UPDATE key identity is observable).
+			id:       uuid.New(),
 			name:     "event.minecraft.raid",
 			progress: 0.0,
 			visible:  true,
+			color:    bossBarColorRed,         // ServerBossEvent(..., RED, ...)
+			overlay:  bossBarOverlayNotched10, // ServerBossEvent(..., NOTCHED_10)
 			players:  map[int32]struct{}{},
 		},
 		rng: newEntityRandom(seed),
@@ -278,19 +306,26 @@ func (r *Raid) getHealthOfLivingRaiders() float32 {
 	return h
 }
 
-// updateBossbar ports Raid.updateBossbar: progress = clamp(healthOfLivingRaiders / totalHealth, 0, 1).
-func (r *Raid) updateBossbar() {
+// updateBossbar ports Raid.updateBossbar (VERIFIED CFR): raidEvent.setProgress(clamp(healthOf
+// LivingRaiders / totalHealth, 0, 1)). setProgress broadcasts UPDATE_PROGRESS on change, so this is a
+// *TickLoop method now (it emits the wire). The totalHealth<=0 guard is a defensive port of the
+// vanilla 0/0 -> NaN division (Mth.clamp(NaN) is undefined); progress 0 is the observable pre-wave value.
+func (t *TickLoop) updateBossbar(r *Raid) {
 	if r.totalHealth <= 0 {
-		r.bossEvent.progress = 0
+		t.bossSetProgress(r, 0)
 		return
 	}
-	r.bossEvent.progress = clampF32(r.getHealthOfLivingRaiders()/r.totalHealth, 0, 1)
+	t.bossSetProgress(r, clampF32(r.getHealthOfLivingRaiders()/r.totalHealth, 0, 1))
 }
 
-// stop ports Raid.stop: active=false, clear the bar players, status=STOPPED.
-func (r *Raid) stop() {
+// raidStop ports Raid.stop (VERIFIED CFR): active=false; raidEvent.removeAllPlayers() (sends REMOVE to
+// every tracked player); status=STOPPED. It is a *TickLoop method now because removeAllPlayers emits
+// the wire.
+//
+//	[VERIFIED CFR Raid.stop: this.active = false; this.raidEvent.removeAllPlayers(); this.status = STOPPED.]
+func (t *TickLoop) raidStop(r *Raid) {
 	r.active = false
-	r.bossEvent.players = map[int32]struct{}{}
+	t.bossRemoveAllPlayers(r)
 	r.status = raidStatusStopped
 }
 

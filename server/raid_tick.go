@@ -30,7 +30,7 @@ func (t *TickLoop) chunkPresentAt(cx, cz int) bool {
 // everything else is faithful. PEACEFUL difficulty -> stop (there is no live difficulty setting, so a
 // raid is created NORMAL and never PEACEFUL — the guard is kept structurally). The Raids manager
 // (raids.go) prunes a STOPPED raid.
-func (t *TickLoop) tickRaid(r *Raid) {
+func (t *TickLoop) tickRaid(rm *raidsManager, r *Raid) {
 	if r.isStopped() {
 		return
 	}
@@ -39,11 +39,11 @@ func (t *TickLoop) tickRaid(r *Raid) {
 		r.active = t.chunkPresentAt(r.centerX, r.centerZ)
 		// PEACEFUL -> stop(): the difficulty is fixed at creation (NORMAL); kept structurally faithful.
 		if r.difficulty == difficultyPeaceful {
-			r.stop()
+			t.raidStop(r)
 			return
 		}
 		if oldActive != r.active {
-			r.bossEvent.visible = r.active
+			t.bossSetVisible(r, r.active)
 		}
 		if !r.active {
 			return
@@ -53,7 +53,7 @@ func (t *TickLoop) tickRaid(r *Raid) {
 
 		r.ticksActive++
 		if r.ticksActive >= raidTimeoutTicks {
-			r.stop()
+			t.raidStop(r)
 			return
 		}
 		raidersAlive := r.getTotalRaidersAlive()
@@ -63,21 +63,28 @@ func (t *TickLoop) tickRaid(r *Raid) {
 		// heightmap search — spawnGroup uses the center), so the shouldTryToFindSpawnPos block collapses.
 		if raidersAlive == 0 && r.hasMoreWaves() {
 			if r.raidCooldownTicks > 0 {
+				// updatePlayers on tick 300 (the first pre-wave tick) and every 20 ticks thereafter
+				// (VERIFIED CFR: raidCooldownTicks == 300 || raidCooldownTicks % 20 == 0), BEFORE the
+				// decrement — the boss bar picks up players as they enter VALID_RAID_RADIUS during the pause.
+				if r.raidCooldownTicks == raidDefaultPreTicks || r.raidCooldownTicks%20 == 0 {
+					t.bossUpdatePlayers(r, rm)
+				}
 				r.raidCooldownTicks--
-				r.bossEvent.progress = clampF32(float32(raidDefaultPreTicks-r.raidCooldownTicks)/float32(raidDefaultPreTicks), 0, 1)
+				t.bossSetProgress(r, clampF32(float32(raidDefaultPreTicks-r.raidCooldownTicks)/float32(raidDefaultPreTicks), 0, 1))
 			} else if r.raidCooldownTicks == 0 && r.groupsSpawned > 0 {
 				r.raidCooldownTicks = raidDefaultPreTicks
-				r.bossEvent.name = "event.minecraft.raid"
+				t.bossSetName(r, "event.minecraft.raid")
 				return
 			}
 		}
 		if r.ticksActive%20 == 0 {
+			t.bossUpdatePlayers(r, rm)
 			t.raidUpdateRaiders(r)
 			raidersAlive = r.getTotalRaidersAlive()
 			if raidersAlive > 0 && raidersAlive <= raidLowMobThreshold {
-				r.bossEvent.name = "event.minecraft.raid.raiders_remaining"
+				t.bossSetName(r, "event.minecraft.raid.raiders_remaining")
 			} else {
-				r.bossEvent.name = "event.minecraft.raid"
+				t.bossSetName(r, "event.minecraft.raid")
 			}
 		}
 		// The wave-spawn loop (VERIFIED CFR): while shouldSpawnGroup(), place a wave at the center. The
@@ -92,7 +99,7 @@ func (t *TickLoop) tickRaid(r *Raid) {
 				attempt++
 			}
 			if attempt > 5 {
-				r.stop()
+				t.raidStop(r)
 				break
 			}
 		}
@@ -111,16 +118,17 @@ func (t *TickLoop) tickRaid(r *Raid) {
 	if r.isOver() {
 		r.celebrationTicks++
 		if r.celebrationTicks >= raidMaxCelebration {
-			r.stop()
+			t.raidStop(r)
 			return
 		}
 		if r.celebrationTicks%20 == 0 {
-			r.bossEvent.visible = true
+			t.bossUpdatePlayers(r, rm)
+			t.bossSetVisible(r, true)
 			if r.isVictory() {
-				r.bossEvent.progress = 0
-				r.bossEvent.name = "event.minecraft.raid.victory"
+				t.bossSetProgress(r, 0)
+				t.bossSetName(r, "event.minecraft.raid.victory")
 			} else {
-				r.bossEvent.name = "event.minecraft.raid.defeat"
+				t.bossSetName(r, "event.minecraft.raid.defeat")
 			}
 		}
 	}
@@ -158,7 +166,7 @@ func (t *TickLoop) raidSpawnGroup(r *Raid) bool {
 		}
 	}
 	r.groupsSpawned++
-	r.updateBossbar()
+	t.updateBossbar(r)
 	return true
 }
 
@@ -197,7 +205,7 @@ func (t *TickLoop) raidJoinRaid(r *Raid, groupNumber int, raider *Entity) {
 		raider.ai.canJoinRaid = true
 		raider.ai.ticksOutsideRaid = 0
 	}
-	r.updateBossbar()
+	t.updateBossbar(r)
 }
 
 // raidUpdateRaiders ports Raid.updateRaiders(level) — the per-20-tick membership prune. A raider is
@@ -226,13 +234,13 @@ func (t *TickLoop) raidUpdateRaiders(r *Raid) {
 		}
 	}
 	for _, raider := range toRemove {
-		r.raidRemoveRaider(raider, true)
+		t.raidRemoveRaider(r, raider, true)
 	}
 }
 
 // raidRemoveRaider ports Raid.removeFromRaid(level, raider, removeFromTotalHealth): drop the raider from
 // its wave set, subtract its health from totalHealth, clear its currentRaid back-pointer, refresh the bar.
-func (r *Raid) raidRemoveRaider(raider *Entity, removeFromTotalHealth bool) {
+func (t *TickLoop) raidRemoveRaider(r *Raid, raider *Entity, removeFromTotalHealth bool) {
 	wave := 0
 	if raider.ai != nil {
 		wave = raider.ai.raidWave
@@ -251,5 +259,5 @@ func (r *Raid) raidRemoveRaider(raider *Entity, removeFromTotalHealth bool) {
 	if raider.ai != nil {
 		raider.ai.currentRaid = nil
 	}
-	r.updateBossbar()
+	t.updateBossbar(r)
 }
