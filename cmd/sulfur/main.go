@@ -364,7 +364,7 @@ func main() {
 		log.Fatalf("vanilla mob boot-load failed (a swapped mob has no declaration): %v", err)
 	} else {
 		tick.SetMobRegistry(reg)
-		log.Printf("vanilla mobs: bundled 1:1 pig/cow/sheep/chicken + zombie/skeleton/spider + wolf plugins boot-loaded (8 mobs — the only mobs are plugin-driven)")
+		log.Printf("vanilla mobs: %d bundled 1:1 plugins boot-loaded (passives + hostiles + variants — the only mobs are plugin-driven)", reg.Count())
 		// v5: the wandermob (a v4 custom-mob API gate — base_type pig, ONE MOVE goal, no FloatGoal) is
 		// NO LONGER boot-loaded. The dogfood is now the REAL vanilla mobs as plugins (vanilla_pig, then
 		// cow/sheep/etc. in Phase 34), not a toy custom mob — and a second pig-looking mob with no

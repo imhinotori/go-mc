@@ -106,6 +106,9 @@ func newMobRegistry() *mobRegistry {
 // for a given plugin so the captured mobDecl carries the right least-privilege grant.
 func (r *mobRegistry) setLoadCaps(c capSet) { r.caps = c }
 
+// Count returns the number of captured mob declarations (the boot-load log + any coverage assert).
+func (r *mobRegistry) Count() int { return len(r.byName) }
+
 // ----------------------------------------------------------------------------------------------
 // base-type resolver (custom = behavior; renders as an EXISTING wire id)
 // ----------------------------------------------------------------------------------------------
