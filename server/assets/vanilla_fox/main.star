@@ -7,7 +7,7 @@
 #
 # Fox.registerGoals() (javap-verified this session — the v1-relevant slice):
 #   @0  FoxFloatGoal                                    <-- .star (shared passive float)
-#   @0  ClimbOnTopOfPowderSnowGoal                      <-- DEFERRED (no powder-snow subsystem)
+#   @0  ClimbOnTopOfPowderSnowGoal                      <-- kind="climb_on_powder_snow" (JUMP; climb, do not sink)
 #   @1  FaceplantGoal                                   <-- DEFERRED (the stunned face-plant, cat-mouse flavor)
 #   @2  FoxPanicGoal(2.2)                               <-- .star (PanicGoal reuse)
 #   @3  FoxBreedGoal(1.0)                               <-- .star (shared BreedGoal)
@@ -411,6 +411,10 @@ declare_mob(
             tick = float_tick,
             requires_update_every_tick = True,
         ),
+        # @0 ClimbOnTopOfPowderSnowGoal(mob, level) [JUMP] — kind="climb_on_powder_snow" (the fox is in
+        # the POWDER_SNOW_WALKABLE_MOBS tag): climb ON TOP of powder snow instead of sinking; NO RNG.
+        # Cite Fox.registerGoals @0 ClimbOnTopOfPowderSnowGoal.
+        goal(priority = 0, flags = ["JUMP"], kind = "climb_on_powder_snow"),
         # @2 FoxPanicGoal(mob, 2.2) [MOVE] — PanicGoal reuse. Cite Fox.registerGoals @2 FoxPanicGoal(2.2).
         goal(
             priority = 2,

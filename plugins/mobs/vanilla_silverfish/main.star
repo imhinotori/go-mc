@@ -7,7 +7,7 @@
 # Silverfish.registerGoals() (javap-verified this session):
 #   goalSelector:
 #     @1 FloatGoal(this)                          <-- .star (the shared passive float — swim-jump)
-#     @1 ClimbOnTopOfPowderSnowGoal(this, level)  <-- DEFERRED (no powder-snow subsystem in v1)
+#     @1 ClimbOnTopOfPowderSnowGoal(this, level)  <-- kind="climb_on_powder_snow" (JUMP; climb, do not sink)
 #     @3 SilverfishWakeUpFriendsGoal(this)        <-- kind="silverfish_wake_friends" (the hurt-armed spiral wake)
 #     @4 MeleeAttackGoal(this, 1.0, false)        <-- kind="melee_attack" (the 35-01 meleeAttackGoal; CORE melee)
 #     @5 SilverfishMergeWithStoneGoal(this)       <-- kind="silverfish_merge_stone" (the stone->infested merge)
@@ -26,7 +26,9 @@
 #     spawnInfestation). Cite Silverfish$SilverfishWakeUpFriendsGoal.
 #
 # DEFERRED (cite-recorded, NEVER silently dropped):
-#   - ClimbOnTopOfPowderSnowGoal@1: no powder-snow block behavior in v1 — a cited no-op goal.
+#   - ClimbOnTopOfPowderSnowGoal@1 (kind="climb_on_powder_snow"): wired; isInPowderSnow reads the feet-block
+#     proxy (no inside-block subsystem yet, ai_goals_powder_snow.go), POWDER_SNOW_WALKABLE_MOBS is the exact
+#     jar entity-type set.
 #   - The infest block mapping is a StateID table at defaultBlockState() granularity; the deepslate
 #     axis-copy (InfestedRotatedPillarBlock) is DEFERRED to the default axis=y (silverfish_infest.go),
 #     and the mobGriefing destroyBlock loot-drop is DEFERRED (the summon fires; the item drop does not).
@@ -73,6 +75,10 @@ declare_mob(
             tick = float_tick,
             requires_update_every_tick = True,
         ),
+        # @1 ClimbOnTopOfPowderSnowGoal(mob, level) [JUMP] — kind="climb_on_powder_snow" (the silverfish
+        # is in the POWDER_SNOW_WALKABLE_MOBS tag): climb ON TOP of powder snow instead of sinking; NO RNG.
+        # Cite Silverfish.registerGoals @1 ClimbOnTopOfPowderSnowGoal.
+        goal(priority = 1, flags = ["JUMP"], kind = "climb_on_powder_snow"),
         # @3 SilverfishWakeUpFriendsGoal(mob) [] (NO flags) — kind="silverfish_wake_friends": the hurt-armed
         # spiral that de-infests / summons nearby silverfish. Cite Silverfish.registerGoals @3.
         goal(priority = 3, flags = [], kind = "silverfish_wake_friends"),

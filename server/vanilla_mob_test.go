@@ -45,31 +45,34 @@ var allFourMobs = []struct {
 	// Mooshroom == Cow goals (8 goalSelector + 0 targetSelector, base Mooshroom wire id).
 	{vanillaHuskMobName, entity.Husk.ID, 4, 2},
 	{vanillaMooshroomMobName, entity.Mooshroom.ID, 8, 0},
-	// MOB-HOST-05 (Task #9 + infest goals): Silverfish — float@1 + wake_friends@3 + melee@4 +
-	// merge_stone@5 (4 goalSelector) + hurt_by@1 + nearest@2 (2 targetSelector); the powder-snow
-	// goal is cite-deferred. The wake-friends + merge-stone infest goals are now wired (kind=).
-	{vanillaSilverfishMobName, entity.Silverfish.ID, 4, 2},
+	// MOB-HOST-05 (Task #9 + infest + powder-snow): Silverfish — float@1 + climb_on_powder_snow@1 +
+	// wake_friends@3 + melee@4 + merge_stone@5 (5 goalSelector) + hurt_by@1 + nearest@2 (2 targetSelector).
+	// wake-friends + merge-stone infest goals wired (#16); climb_on_powder_snow wired (#17).
+	{vanillaSilverfishMobName, entity.Silverfish.ID, 5, 2},
 	// MOB-HOST-06 (Task #9): Creeper — float@1 + swell@2 + avoid_entity(cat)@3 + melee@4 + stroll@5 +
 	// look@6 + around@6 (7 goalSelector) + nearest@1 + hurt_by@2 (2 targetSelector); the AvoidEntity Cat
 	// leg is wired (kind="avoid_entity" avoid_type="cat", ai_goals_avoid.go), the Ocelot leg cite-deferred.
+	// Creeper is NOT in POWDER_SNOW_WALKABLE_MOBS per the jar — no climb goal (#17 verified).
 	{vanillaCreeperMobName, entity.Creeper.ID, 7, 2},
 	// MOB-HOST-07 (Task #9): Witch — float@1 + witch_ranged@2 + stroll@2 + look@3 + around@3
 	// (5 goalSelector) + hurt_by@1 + nearest@3 (2 targetSelector); raid/heal goals cite-deferred.
 	{vanillaWitchMobName, entity.Witch.ID, 5, 2},
-	// MOB-PASS-05 (Task #9): Rabbit — float@1 + panic@1 + breed@2 + tempt@3 + stroll@6 + look@11
-	// (6 goalSelector, 0 targetSelector); avoid/raid-garden/powder-snow + the hop are cite-deferred.
-	{vanillaRabbitMobName, entity.Rabbit.ID, 6, 0},
-	// MOB-HOST-08 (Task #9): Enderman — float@0 + freeze@1 + melee@2 + stroll@7 + look@8 + around@8
+	// MOB-PASS-05 (Task #9 + hop + powder-snow): Rabbit — float@1 + climb_on_powder_snow@1 + panic@1 +
+	// breed@2 + tempt@3 + stroll@6 + look@11 (7 goalSelector, 0 targetSelector); climb wired (#17), the
+	// hop is now Go-native (#13, rabbitAiStep); avoid/raid-garden cite-deferred.
+	{vanillaRabbitMobName, entity.Rabbit.ID, 7, 0},
+	// MOB-HOST-08 (Task #9 + gaze): Enderman — float@0 + freeze@1 + melee@2 + stroll@7 + look@8 + around@8
 	// (6 goalSelector) + look_for_player@1 + hurt_by@2 (2 targetSelector); the gaze subsystem (freeze +
-	// look_for_player) is now Go-native (ai_goals_enderman_gaze.go); block-carry/endermite cite-deferred;
+	// look_for_player) is now Go-native (#14, ai_goals_enderman_gaze.go); block-carry/endermite cite-deferred;
 	// teleport Go-native.
 	{vanillaEndermanMobName, entity.Enderman.ID, 6, 2},
 	// MOB-NEUT-03 (Task #9): Cat — float@1 + panic@1 + sit@2 + tempt@4 + follow_owner@6 + breed@10 +
 	// stroll@11 + look@12 (8 goalSelector, 0 targetSelector); comfort/prey goals cite-deferred; fish-tamed.
 	{vanillaCatMobName, entity.Cat.ID, 8, 0},
-	// MOB-PASS-06 (Task #9): Fox — float@0 + panic@2 + breed@3 + melee@7 + leap@10 + stroll@11 + look@12
-	// (7 goalSelector, 0 targetSelector); the fox character layer + prey targets cite-deferred.
-	{vanillaFoxMobName, entity.Fox.ID, 7, 0},
+	// MOB-PASS-06 (Task #9): Fox — float@0 + climb_on_powder_snow@0 + panic@2 + breed@3 + melee@7 +
+	// leap@10 + stroll@11 + look@12 (8 goalSelector, 0 targetSelector); the fox character layer + prey
+	// targets cite-deferred.
+	{vanillaFoxMobName, entity.Fox.ID, 8, 0},
 }
 
 // TestAllFourMobsBootLoad: loadVanillaMobRegistry returns ONE registry holding the passive + hostile +

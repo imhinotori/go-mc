@@ -205,7 +205,7 @@ func buildAIFromDecl(t *TickLoop, decl *mobDecl) *mobAI {
 				// hunt/attack). spawnDeclaredMob runs on the tick goroutine; a panic here is isolated by
 				// the tickOnce recover backstop, surfacing the bad declaration loudly rather than shipping
 				// a silently-disarmed hostile. (The .star load already validated the rest of the mob.)
-				panic("buildAIFromDecl: unknown goal kind " + gd.nativeKind + " (valid: nearest_attackable_target, hurt_by_target, melee_attack, spider_attack, leap_at_target, avoid_entity, float, sit, follow_owner, owner_hurt_by, owner_hurt, angry_player_target, skeleton_target, enderman_look_for_player, enderman_freeze_when_looked_at, silverfish_merge_stone, silverfish_wake_friends)")
+				panic("buildAIFromDecl: unknown goal kind " + gd.nativeKind + " (valid: nearest_attackable_target, hurt_by_target, melee_attack, spider_attack, leap_at_target, avoid_entity, float, climb_on_powder_snow, sit, follow_owner, owner_hurt_by, owner_hurt, angry_player_target, skeleton_target, enderman_look_for_player, enderman_freeze_when_looked_at, silverfish_merge_stone, silverfish_wake_friends)")
 			}
 			// The Go goal's OWN flags() must match the declared flags — a declaration that names, e.g.,
 			// kind="melee_attack" but flags=["TARGET"] would route the goal into the WRONG selector AND
@@ -307,6 +307,12 @@ func buildNativeGoal(kind string, gd goalDecl, decl *mobDecl) Goal {
 		return newAvoidEntityGoal(gd.avoidType, avoidDefaultMaxDist, avoidWalkSpeedModifier, avoidSprintSpeedModifier)
 	case "float":
 		return newFloatGoal()
+	case "climb_on_powder_snow":
+		// ClimbOnTopOfPowderSnowGoal(mob, level) {JUMP} — the powder-snow-walkable mob climbs on TOP of
+		// powder snow instead of sinking (ai_goals_powder_snow.go). NO RNG (canUse is pure world reads,
+		// tick arms the jump control). Registered on Rabbit @1, Fox @0, Silverfish @1 (jar-verified);
+		// Creeper is NOT a walkable mob and does NOT register it. Cite ClimbOnTopOfPowderSnowGoal.
+		return newClimbOnTopOfPowderSnowGoal()
 	case "sit":
 		// MOB-NEUT-01 (Phase 36): Wolf @2 SitWhenOrderedToGoal — {JUMP,MOVE}, NO RNG. Parks a tamed/
 		// ordered wolf (sit subsystem).

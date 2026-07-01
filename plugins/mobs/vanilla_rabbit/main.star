@@ -6,7 +6,7 @@
 #
 # Rabbit.registerGoals() (javap-verified this session):
 #   @1  FloatGoal                                       <-- .star (shared passive float)
-#   @1  ClimbOnTopOfPowderSnowGoal                      <-- DEFERRED (no powder-snow subsystem)
+#   @1  ClimbOnTopOfPowderSnowGoal                      <-- kind="climb_on_powder_snow" (JUMP; climb, do not sink)
 #   @1  RabbitPanicGoal(2.2)                            <-- .star (PanicGoal; the hop-speed setSpeedModifier is now the Go-native hop, ai_goals_rabbit.go)
 #   @2  BreedGoal(0.8)                                  <-- .star (shared BreedGoal)
 #   @3  TemptGoal(1.0, is(RABBIT_FOOD), false)          <-- .star (shared TemptGoal; rabbit_food tag)
@@ -16,7 +16,6 @@
 #   @11 LookAtPlayerGoal(Player, 10.0)                  <-- .star (shared look)
 #
 # DEFERRED (cite-recorded, NEVER silently dropped):
-#   - ClimbOnTopOfPowderSnowGoal@1: no powder-snow block behavior in v1.
 #   - RabbitAvoidEntityGoal@4 (flee player/wolf/monster) + RaidGardenGoal@5 (eat carrot crops): no
 #     AvoidEntityGoal / no crop-raid subsystem in v1. The core ambient behavior (float/panic/breed/tempt/
 #     stroll/look) is fully wired.
@@ -414,6 +413,10 @@ declare_mob(
             tick = float_tick,
             requires_update_every_tick = True,
         ),
+        # @1 ClimbOnTopOfPowderSnowGoal(mob, level) [JUMP] — kind="climb_on_powder_snow" (the rabbit is
+        # in the POWDER_SNOW_WALKABLE_MOBS tag): climb ON TOP of powder snow instead of sinking; NO RNG.
+        # Cite Rabbit.registerGoals @1 ClimbOnTopOfPowderSnowGoal.
+        goal(priority = 1, flags = ["JUMP"], kind = "climb_on_powder_snow"),
         # @1 RabbitPanicGoal(mob, 2.2) [MOVE] — PanicGoal (the hop-speed setSpeedModifier is cite-deferred).
         # Cite Rabbit.registerGoals @1 RabbitPanicGoal(2.2).
         goal(
