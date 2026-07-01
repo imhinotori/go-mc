@@ -62,6 +62,12 @@ const (
 	// NearestAttackableTargetGoal<AbstractSkeleton>): findTarget scans the entity store for
 	// entity.Skeleton.ID within FOLLOW_RANGE (the mob-vs-mob nearestEntityOfTypeAt).
 	targetClassSkeleton
+	// targetClassFoxPrey is the Fox landTargetGoal branch (Fox.registerGoals: NearestAttackableTargetGoal
+	// <Animal>(this, Animal.class, 10, false, false, target -> target instanceof Chicken || target
+	// instanceof Rabbit)): findTarget scans the entity store for entity.Chicken.ID / entity.Rabbit.ID
+	// within FOLLOW_RANGE (the same mob-vs-mob nearestEntityOfTypeAt the skeleton branch uses). Cite
+	// Fox.registerGoals landTargetGoal.
+	targetClassFoxPrey
 )
 
 // nearestAttackableTargetGoal ports NearestAttackableTargetGoal<T> (flags {TARGET}). It acquires the
@@ -129,6 +135,19 @@ func newSkeletonTargetGoal() *nearestAttackableTargetGoal {
 		baseGoal:       newBaseGoal(flagTarget),
 		randomInterval: nearestTargetRandomInterval,
 		targetClass:    targetClassSkeleton,
+	}
+}
+
+// newFoxLandTargetGoal builds the Fox landTargetGoal: NearestAttackableTargetGoal<Animal>(this,
+// Animal.class, 10, false, false, chicken||rabbit). It scans the entity store for the nearest Chicken or
+// Rabbit within FOLLOW_RANGE (targetClassFoxPrey), NO anger gate. The randomInterval stays the shared
+// nearestTargetRandomInterval (the full-rate 10 the goal uses everywhere — matching the vanilla reachRange
+// arg of 10 that also seeds the DEFAULT_RANDOM_INTERVAL). Cite Fox.registerGoals landTargetGoal.
+func newFoxLandTargetGoal() *nearestAttackableTargetGoal {
+	return &nearestAttackableTargetGoal{
+		baseGoal:       newBaseGoal(flagTarget),
+		randomInterval: nearestTargetRandomInterval,
+		targetClass:    targetClassFoxPrey,
 	}
 }
 
@@ -201,6 +220,29 @@ func (g *nearestAttackableTargetGoal) findTarget(t *TickLoop, e *Entity) {
 			g.target = id
 			return
 		}
+	case targetClassFoxPrey:
+		// The Fox landTarget branch: the nearest Chicken OR Rabbit within FOLLOW_RANGE. Scans both prey
+		// types and keeps the closer (the getNearestEntity(getEntitiesOfClass(Animal, area, chicken||rabbit))
+		// predicate). Cite Fox.registerGoals landTargetGoal (Chicken || Rabbit).
+		bestID, bestOK := int32(0), false
+		best := follow * follow
+		for _, other := range t.cur().entities.near(e.x, e.z, int(math.Ceil(follow/16.0))) {
+			if other == e || other.dead {
+				continue
+			}
+			if other.typ != entity.Chicken.ID && other.typ != entity.Rabbit.ID {
+				continue
+			}
+			d := entityDistSqr(e, other)
+			if d <= best {
+				best = d
+				bestID, bestOK = other.id, true
+			}
+		}
+		if bestOK {
+			g.target = bestID
+			return
+		}
 	default: // targetClassPlayer (the Phase-35 branch, UNCHANGED)
 		// getNearestPlayer is anchored at (mob.getX(), mob.getEyeY(), mob.getZ()); v1 has no eye-height
 		// field (refreshDimensions notes the cited eye-height gap), so the scan anchors at the mob feet y
@@ -230,7 +272,7 @@ func (g *nearestAttackableTargetGoal) canContinueToUse(t *TickLoop, e *Entity) b
 		return false
 	}
 	follow := e.getAttributeValue(attribute.FollowRange)
-	if g.targetClass == targetClassSkeleton {
+	if g.targetClass == targetClassSkeleton || g.targetClass == targetClassFoxPrey {
 		// SKELETON class: resolve the target through the OWNING-region entity store (a skeleton is an
 		// *Entity, not a player) + the live FOLLOW_RANGE distance bound. t.cur() is the region whose
 		// fan-out is running this goal — the SAME store nearestEntityOfTypeAt scanned (the v5 same-region

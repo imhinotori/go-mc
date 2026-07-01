@@ -69,10 +69,11 @@ var allFourMobs = []struct {
 	// MOB-NEUT-03 (Task #9): Cat — float@1 + panic@1 + sit@2 + tempt@4 + follow_owner@6 + breed@10 +
 	// stroll@11 + look@12 (8 goalSelector, 0 targetSelector); comfort/prey goals cite-deferred; fish-tamed.
 	{vanillaCatMobName, entity.Cat.ID, 8, 0},
-	// MOB-PASS-06 (Task #9): Fox — float@0 + climb_on_powder_snow@0 + panic@2 + breed@3 + melee@7 +
-	// leap@10 + stroll@11 + look@12 (8 goalSelector, 0 targetSelector); the fox character layer + prey
-	// targets cite-deferred.
-	{vanillaFoxMobName, entity.Fox.ID, 8, 0},
+	// MOB-PASS-06 (Task #9) + fox CHARACTER LAYER: Fox — float@0 + faceplant@1 + panic@2 + breed@3 +
+	// stalk@5 + pounce@6 + seek_shelter@6 + melee@7 + sleep@7 + leap@10 + stroll@11 + look@12 +
+	// climb_on_powder_snow@0 + perch_search@13 (14 goalSelector) + defend_trusted@3 + land_target@4 (2 targetSelector). The
+	// eat-berries/search-items/village-stroll/avoid/fish-target goals remain cite-deferred (subsystems absent).
+	{vanillaFoxMobName, entity.Fox.ID, 14, 2},
 	// MOB-CUBE (SulfurCube): the NEW 26.2 cube mob — the AbstractCubeMob.registerGoals CORE jump-move goals
 	// (CubeMobFloatGoal@1 + CubeMobRandomDirectionGoal@4 + CubeMobKeepOnJumpingGoal@5 = 3 goalSelector, 0
 	// targetSelector — addTargetingGoals is EMPTY). The SulfurCube.addBehaviourGoals TemptGoal@2 +

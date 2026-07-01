@@ -442,6 +442,14 @@ func (t *TickLoop) tickAI() {
 		if e.typ == entity.HappyGhast.ID {
 			t.happyGhastAiStep(e)
 		}
+		// The Fox character-layer per-tick extras (Fox.tick + Fox.aiStep server branch): the crouch/
+		// interested animation lerp, ++ticksSinceEaten, the wake/sit-in-water/target-lost state clears,
+		// and the sleep immobility (jump+horizontal-velocity zero). Per-type-gated like the creeper/chicken,
+		// AFTER serverAiStep so this tick's fox goals have set the flags. ADDITIVE + fox-gated (zero cost /
+		// zero RNG for every non-fox — the pig oracle stream is untouched).
+		if e.typ == entity.Fox.ID {
+			t.foxAiStep(e)
+		}
 	}
 
 	// Throttled natural spawner: vanilla attempts every tick (most no-op under cap); v1 runs the

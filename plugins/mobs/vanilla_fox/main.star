@@ -1,35 +1,54 @@
-# vanilla_fox — a 1:1 vanilla-Fox dogfood (MOB-PASS-06, Task #9), the fox built as a Starlark plugin. A
+# vanilla_fox - a 1:1 vanilla-Fox dogfood (MOB-PASS-06, Task #9), the fox built as a Starlark plugin. A
 # LITERAL method-for-method port of the unobfuscated 26.2 jar (temp/cache/26.2-inner.jar, javap -c -p). It
-# declares the PORTABLE slice of net.minecraft.world.entity.animal.fox.Fox.registerGoals, reusing the
-# mob-agnostic passive callbacks (float/panic/breed/stroll/look — COPIED VERBATIM from vanilla_cow) plus the
-# Go-native melee + leap kinds. The fox is a LARGE mob whose CHARACTER goals (sleep/pounce/stalk/eat-berries/
-# trust/avoid) all need subsystems that do not exist in v1 — those are cite-deferred; the ambient slice ships.
+# declares net.minecraft.world.entity.animal.fox.Fox.registerGoals, reusing the mob-agnostic passive
+# callbacks (float/panic/breed/stroll/look - COPIED VERBATIM from vanilla_cow) PLUS the fox CHARACTER goals
+# as Go-native kinds (ai_goals_fox.go: fox_faceplant/fox_stalk/fox_pounce/fox_seek_shelter/fox_sleep/
+# fox_perch_search/fox_defend_trusted/fox_land_target) driven by the fox DATA_FLAGS state + foxAiStep. The
+# fox now SLEEPS by day under shelter, STALKS + POUNCES chickens/rabbits, FLEES the sun, PERCHES to scan,
+# and DEFENDS trusted mobs - the character layer cite-deferred in the prior pass now LANDS (the subset that
+# does not require a not-yet-built block/item/village subsystem; the rest stays cite-deferred).
 #
-# Fox.registerGoals() (javap-verified this session — the v1-relevant slice):
+# Fox.registerGoals() (javap-verified this session):
 #   @0  FoxFloatGoal                                    <-- .star (shared passive float)
 #   @0  ClimbOnTopOfPowderSnowGoal                      <-- kind="climb_on_powder_snow" (JUMP; climb, do not sink)
-#   @1  FaceplantGoal                                   <-- DEFERRED (the stunned face-plant, cat-mouse flavor)
+#   @1  FaceplantGoal                                   <-- kind="fox_faceplant" (LANDS: the stunned countdown)
 #   @2  FoxPanicGoal(2.2)                               <-- .star (PanicGoal reuse)
 #   @3  FoxBreedGoal(1.0)                               <-- .star (shared BreedGoal)
-#   @4  AvoidEntityGoal<Player/Wolf/PolarBear>          <-- DEFERRED (no AvoidEntityGoal / trust subsystem)
-#   @5  StalkPreyGoal                                   <-- DEFERRED (the crouch-stalk; no prey subsystem)
-#   @6  FoxPounceGoal / SeekShelterGoal                 <-- DEFERRED (the pounce arc / shelter-from-day subsystem)
-#   @7  FoxMeleeAttackGoal(1.2, true)                   <-- kind="melee_attack" (fires vs a prey target)
-#   @7  SleepGoal                                       <-- DEFERRED (the day-sleep subsystem)
-#   @8  FoxFollowParentGoal(1.25)                       <-- DEFERRED (fox-specific follow variant)
-#   @9  FoxStrollThroughVillageGoal                     <-- DEFERRED (no village subsystem)
-#   @10 FoxEatBerriesGoal / LeapAtTargetGoal(0.4)       <-- eat-berries DEFERRED; leap = kind="leap_at_target"
+#   @4  AvoidEntityGoal<Player/Wolf/PolarBear>          <-- DEFERRED (no AvoidEntityGoal port; trust FIELDS
+#                                                           foxTrusted0/1 land, the avoid MOVEMENT goal defers)
+#   @5  StalkPreyGoal                                   <-- kind="fox_stalk" (LANDS: crouch-approach prey)
+#   @6  FoxPounceGoal                                   <-- kind="fox_pounce" (LANDS: the leap + landing hurt)
+#   @6  SeekShelterGoal(1.25)                           <-- kind="fox_seek_shelter" (LANDS: flee-sun/FleeSunGoal)
+#   @7  FoxMeleeAttackGoal(1.2, true)                   <-- kind="melee_attack" (now fires vs a real prey target)
+#   @7  SleepGoal                                       <-- kind="fox_sleep" (LANDS: day-sleep under shelter)
+#   @8  FoxFollowParentGoal(1.25)                       <-- DEFERRED (fox follow variant clears interested/crouch)
+#   @9  FoxStrollThroughVillageGoal                     <-- DEFERRED (no village POI subsystem)
+#   @10 FoxEatBerriesGoal                               <-- DEFERRED (no SWEET_BERRY_BUSH/cave-vine + MoveToBlockGoal)
+#   @10 LeapAtTargetGoal(0.4)                           <-- kind="leap_at_target" (now fires vs a real prey target)
 #   @11 WaterAvoidingRandomStrollGoal(1.0)              <-- .star (shared stroll)
-#   @11 FoxSearchForItemsGoal                           <-- DEFERRED (item pickup/carry subsystem)
+#   @11 FoxSearchForItemsGoal                           <-- DEFERRED (no fox MAINHAND slot / ItemEntity pickup)
 #   @12 FoxLookAtPlayerGoal(Player, 24.0)               <-- .star (shared look, dist 24.0)
-#   @13 PerchAndSearchGoal                              <-- DEFERRED (the perch-and-scan flavor)
-#   targetSelector: landTarget(Chicken/Rabbit) / fishTarget / DefendTrusted <-- DEFERRED (no prey / trust)
+#   @13 PerchAndSearchGoal                              <-- kind="fox_perch_search" (LANDS: idle sit-and-scan)
+#   targetSelector @3 DefendTrustedTargetGoal           <-- kind="fox_defend_trusted" (LANDS for a trusted MOB)
+#   targetSelector landTarget(Chicken/Rabbit)           <-- kind="fox_land_target" (LANDS: acquire prey)
+#   targetSelector fishTarget / turtleEggTarget         <-- DEFERRED (schooling-fish/turtle-egg + RED variant order)
 #
-# DEFERRED (cite-recorded, NEVER silently dropped): the ENTIRE fox character layer — sleep, pounce, stalk,
-# eat-berries, trust, avoid-player/wolf/bear, faceplant, item-carry, village-stroll, perch, and the prey
-# target goals (chicken/rabbit/fish) — each needs a subsystem absent in v1. The ambient slice (float/panic/
-# breed/stroll/look) + the melee/leap kinds (inert without a prey target, cited) ships; the fox behaves as a
-# skittish ambient animal until its character subsystems land. This is the honest v1 fox (NOT a fake).
+# STILL DEFERRED (cite-recorded, NEVER silently dropped):
+#   - FoxEatBerriesGoal @10: needs the SWEET_BERRY_BUSH / cave-vine blocks + MoveToBlockGoal (no berry block).
+#   - FoxSearchForItemsGoal @11: needs the fox MAINHAND equipment slot + ItemEntity pickup (no fox inventory).
+#   - FoxStrollThroughVillageGoal @9: needs the village POI subsystem.
+#   - ClimbOnTopOfPowderSnowGoal @0: needs the powder-snow subsystem.
+#   - AvoidEntityGoal @4 (player/wolf/polar-bear): needs an AvoidEntityGoal port (trust FIELDS land; avoid defers).
+#   - fishTarget + turtleEggTarget + the RED/non-RED variant target ordering (setTargetGoals) - only landTarget lands.
+#   - trusted-PLAYER defend: fires for a trusted MOB, but a trusted PLAYER needs the player-side lastHurtByMob
+#     bookkeeping (tickPlayer tracks lastHurtMob, not lastHurtByMob) - cite-deferred.
+#   - the addTrustedEntity trust WIRING (Fox breeding populates DATA_TRUSTED_ID_0/1): the FIELDS + trusts() land;
+#     the breed-time populate is cite-deferred (the fox breed path is the shared BreedGoal, no fox onborn hook).
+#   - sub-stubs inside the landed goals (each cited AT its call-site in ai_goals_fox.go): hasShelter getWalkTarget
+#     Value (constant-true default), isThundering (constant-false), isVillage (constant-false), isInPowderSnow
+#     (constant-false), the getMotionDirection/getDirection pounce alignment gate (pass), the snow-miss faceplant
+#     SNOW block, the xRot flight arc + the head-look yaw writes (client visuals), and the DATA_FLAGS wire metadata
+#     (a client visual, like the creeper swell) - the GAMEPLAY lands.
 
 # --- constants (jar-confirmed) -----------------------------------------------------------------
 FLOAT_JUMP_PROBABILITY = 0.8   # FloatGoal.tick: getRandom().nextFloat() < 0.8f (the swim-jump chance)
@@ -415,6 +434,9 @@ declare_mob(
         # the POWDER_SNOW_WALKABLE_MOBS tag): climb ON TOP of powder snow instead of sinking; NO RNG.
         # Cite Fox.registerGoals @0 ClimbOnTopOfPowderSnowGoal.
         goal(priority = 0, flags = ["JUMP"], kind = "climb_on_powder_snow"),
+        # @1 FaceplantGoal [LOOK, JUMP, MOVE] — kind="fox_faceplant" (the stunned face-plant countdown).
+        # Cite Fox.registerGoals @1 FaceplantGoal.
+        goal(priority = 1, flags = ["LOOK", "JUMP", "MOVE"], kind = "fox_faceplant"),
         # @2 FoxPanicGoal(mob, 2.2) [MOVE] — PanicGoal reuse. Cite Fox.registerGoals @2 FoxPanicGoal(2.2).
         goal(
             priority = 2,
@@ -423,6 +445,18 @@ declare_mob(
             stop = panic_stop,
             can_continue = panic_continue,
         ),
+        # @5 StalkPreyGoal [MOVE, LOOK] — kind="fox_stalk" (crouch-approach a chicken/rabbit prey target).
+        # Cite Fox.registerGoals @5 StalkPreyGoal.
+        goal(priority = 5, flags = ["MOVE", "LOOK"], kind = "fox_stalk"),
+        # @6 FoxPounceGoal [] (JumpGoal, isInterruptable=false) — kind="fox_pounce" (the leap onto crouched
+        # prey; on landing within 2 blocks -> doHurtTarget). Cite Fox.registerGoals @6 FoxPounceGoal.
+        goal(priority = 6, flags = [], kind = "fox_pounce"),
+        # @6 SeekShelterGoal(mob, 1.25) [MOVE] — kind="fox_seek_shelter" (flee to shade by day; FleeSunGoal).
+        # Cite Fox.registerGoals @6 SeekShelterGoal(1.25).
+        goal(priority = 6, flags = ["MOVE"], kind = "fox_seek_shelter"),
+        # @7 SleepGoal [MOVE, LOOK, JUMP] — kind="fox_sleep" (sleep by day under shelter when un-alerted).
+        # Cite Fox.registerGoals @7 SleepGoal.
+        goal(priority = 7, flags = ["MOVE", "LOOK", "JUMP"], kind = "fox_sleep"),
         # @3 FoxBreedGoal(mob, 1.0) [MOVE, LOOK]. Cite Fox.registerGoals @3 FoxBreedGoal(1.0).
         goal(
             priority = 3,
@@ -456,5 +490,16 @@ declare_mob(
             stop = look_stop,
             can_continue = look_continue,
         ),
+        # @13 PerchAndSearchGoal [MOVE, LOOK] — kind="fox_perch_search" (the idle sit-and-scan; 2% roll).
+        # Cite Fox.registerGoals @13 PerchAndSearchGoal.
+        goal(priority = 13, flags = ["MOVE", "LOOK"], kind = "fox_perch_search"),
+        # targetSelector @3 DefendTrustedTargetGoal [TARGET] — kind="fox_defend_trusted" (retaliate for a
+        # hurt trusted entity). Cite Fox.registerGoals targetSelector @3 DefendTrustedTargetGoal.
+        goal(priority = 3, flags = ["TARGET"], kind = "fox_defend_trusted"),
+        # targetSelector landTargetGoal NearestAttackableTargetGoal<Chicken|Rabbit> [TARGET] —
+        # kind="fox_land_target" (acquire prey the stalk/pounce goals hunt). Priority 4 == the RED-variant
+        # setTargetGoals slot (the default; the RED/non-RED variant reordering + fish/turtle targets are
+        # cite-deferred). Cite Fox.registerGoals landTargetGoal + setTargetGoals.
+        goal(priority = 4, flags = ["TARGET"], kind = "fox_land_target"),
     ],
 )

@@ -225,6 +225,36 @@ type Entity struct {
 	ghastWantedX, ghastWantedY, ghastWantedZ float64
 	ghastHasWanted                           bool
 	ghastFloatDuration                       int32
+	// --- FOX CHARACTER STATE (net.minecraft.world.entity.animal.fox.Fox) ---------------------------
+	//
+	// Tick-owned plain values, set/read ONLY for a Fox. foxFlags is the DATA_FLAGS_ID byte the fox
+	// goals read/write via the flag helpers below — the bit layout is jar-verified: SITTING=1,
+	// CROUCHING=4, INTERESTED=8, POUNCING=16, SLEEPING=32, FACEPLANTED=64, DEFENDING=128 (Fox
+	// isSitting/isCrouching/isInterested/isPouncing/isSleeping/isFaceplanted/isDefending accessors).
+	// crouchAmount / crouchAmountO mirror Fox.crouchAmount(O) — the per-tick crouch animation counter
+	// Fox.tick advances by 0.2 toward 5.0 while crouching (isFullyCrouched == crouchAmount == 5.0).
+	// interestedAngle / interestedAngleO mirror Fox.interestedAngle(O). ticksSinceEaten mirrors
+	// Fox.ticksSinceEaten (Fox.aiStep's mouth-food counter). foxDefendSince is DefendTrustedTargetGoal
+	// .timestamp. Zero for every non-fox entity (the fox tick gates on typ == entity.Fox.ID). The
+	// DATA_FLAGS wire metadata is a cite-deferred client visual (like the creeper's DATA_SWELL_DIR) —
+	// the SERVER-SIDE gameplay (goal gating, pounce, sleep immobility) lands here.
+	//	[VERIFIED javap Fox: DATA_FLAGS_ID byte; FLAG_SITTING=1, FLAG_CROUCHING=4, FLAG_INTERESTED=8,
+	//	 FLAG_POUNCING=16, FLAG_SLEEPING=32, FLAG_FACEPLANTED=64, FLAG_DEFENDING=128; isFullyCrouched
+	//	 == crouchAmount==5.0f; Fox.tick crouch/interested lerp; Fox.aiStep ++ticksSinceEaten.]
+	foxFlags         byte
+	crouchAmount     float32
+	crouchAmountO    float32
+	interestedAngle  float32
+	interestedAngleO float32
+	ticksSinceEaten  int32
+	foxDefendSince   int32
+	// foxTrusted0 / foxTrusted1 are the two DATA_TRUSTED_ID_0/1 EntityReference slots (Fox's trust list),
+	// reduced to the trusted entities' THIN entity ids for v1 (the Folia rule == angerTarget). A tamed
+	// fox trusts whoever bred it. DefendTrustedTargetGoal scans these. 0 == an empty slot; 0 for a wild
+	// fox and every non-fox.
+	//	[VERIFIED javap Fox: DATA_TRUSTED_ID_0 / DATA_TRUSTED_ID_1 OptionalLivingEntityReference; getTrustedEntities.]
+	foxTrusted0 int32
+	foxTrusted1 int32
 
 	// ai is the per-mob AI handle (AI-01, Plan 07-01): the mob's goalSelector + the
 	// navigation/look targets a goal writes (server/ai_mob.go). nil for a non-mob entity (a

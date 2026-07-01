@@ -205,7 +205,7 @@ func buildAIFromDecl(t *TickLoop, decl *mobDecl) *mobAI {
 				// hunt/attack). spawnDeclaredMob runs on the tick goroutine; a panic here is isolated by
 				// the tickOnce recover backstop, surfacing the bad declaration loudly rather than shipping
 				// a silently-disarmed hostile. (The .star load already validated the rest of the mob.)
-				panic("buildAIFromDecl: unknown goal kind " + gd.nativeKind + " (valid: nearest_attackable_target, hurt_by_target, melee_attack, spider_attack, leap_at_target, avoid_entity, float, climb_on_powder_snow, sit, follow_owner, owner_hurt_by, owner_hurt, angry_player_target, skeleton_target, enderman_look_for_player, enderman_freeze_when_looked_at, silverfish_merge_stone, silverfish_wake_friends, cube_float, cube_random_direction, cube_keep_on_jumping)")
+				panic("buildAIFromDecl: unknown goal kind " + gd.nativeKind + " (valid: nearest_attackable_target, hurt_by_target, melee_attack, spider_attack, leap_at_target, avoid_entity, float, climb_on_powder_snow, sit, follow_owner, owner_hurt_by, owner_hurt, angry_player_target, skeleton_target, enderman_look_for_player, enderman_freeze_when_looked_at, silverfish_merge_stone, silverfish_wake_friends, cube_float, cube_random_direction, cube_keep_on_jumping, fox_faceplant, fox_stalk, fox_pounce, fox_seek_shelter, fox_sleep, fox_perch_search, fox_defend_trusted, fox_land_target)")
 			}
 			// The Go goal's OWN flags() must match the declared flags — a declaration that names, e.g.,
 			// kind="melee_attack" but flags=["TARGET"] would route the goal into the WRONG selector AND
@@ -372,6 +372,30 @@ func buildNativeGoal(kind string, gd goalDecl, decl *mobDecl) Goal {
 		// Freezes the enderman (stops its nav, stares back) while its player target is staring at it within
 		// 16 blocks. Cite EnderMan.registerGoals @1 EndermanFreezeWhenLookedAt (ai_goals_enderman_gaze.go).
 		return newEndermanFreezeWhenLookedAtGoal()
+	case "fox_faceplant":
+		// Fox.registerGoals @1 FaceplantGoal — {LOOK,JUMP,MOVE}, NO RNG. The stunned face-plant countdown.
+		return newFoxFaceplantGoal()
+	case "fox_stalk":
+		// Fox.registerGoals @5 StalkPreyGoal — {MOVE,LOOK}, NO RNG. Crouch-approach the prey.
+		return newFoxStalkPreyGoal()
+	case "fox_pounce":
+		// Fox.registerGoals @6 FoxPounceGoal — {} (JumpGoal), isInterruptable false, NO RNG. The leap.
+		return newFoxPounceGoal()
+	case "fox_seek_shelter":
+		// Fox.registerGoals @6 SeekShelterGoal(1.25) — {MOVE}; getHidePos draws up to 30 nextInt. Flee-sun.
+		return newFoxSeekShelterGoal()
+	case "fox_sleep":
+		// Fox.registerGoals @7 SleepGoal — {MOVE,LOOK,JUMP}; the ctor countdown = nextInt(140). Day-sleep.
+		return newFoxSleepGoal()
+	case "fox_perch_search":
+		// Fox.registerGoals @13 PerchAndSearchGoal — {MOVE,LOOK}; the 0.02 canUse roll + the look draws.
+		return newFoxPerchAndSearchGoal()
+	case "fox_defend_trusted":
+		// Fox.registerGoals targetSelector @3 DefendTrustedTargetGoal — {TARGET}; the nextInt(10) gate.
+		return newFoxDefendTrustedGoal()
+	case "fox_land_target":
+		// Fox.registerGoals landTargetGoal NearestAttackableTargetGoal<Chicken|Rabbit> — {TARGET}; nextInt(10).
+		return newFoxLandTargetGoal()
 	default:
 		return nil
 	}
