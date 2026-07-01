@@ -156,10 +156,16 @@ func New() *Manager {
 	return &Manager{hooks: make(map[EventType][]Hook)}
 }
 
-// LoadDir scans root for plugin dirs (root/*/plugin.toml), loads every
-// runtime="starlark" plugin once, and lets each plugin's module body capture
-// its hooks via the injected register builtin. Non-starlark runtimes are
-// skipped (Phase-26 reserves "python").
+// LoadDir scans root for plugin dirs, loads every runtime="starlark" plugin
+// once, and lets each plugin's module body capture its hooks via the injected
+// register builtin. Non-starlark runtimes are skipped (Phase-26 reserves
+// "python").
+//
+// NESTED LAYOUT: a subdir WITHOUT a plugin.toml is treated as a CONTAINER and
+// scanned recursively (bounded by maxPluginDirDepth). This lets operators group
+// plugins into folders — e.g. plugins/mobs/vanilla_zombie/, plugins/mobs/vanilla_cow/
+// — while every leaf plugin still loads independently under its own manifest caps.
+// A subdir WITH a plugin.toml is loaded as a plugin (never recursed into).
 //
 // PER-PLUGIN TOLERANCE (Plan 28-02): the OPERATOR scan SKIPS a plugin that fails
 // to load (logging it loudly) and CONTINUES with the rest, rather than aborting
@@ -193,6 +199,29 @@ func (m *Manager) LoadDirWith(root string, extra starlark.StringDict) error {
 // When false, the first error aborts the whole scan (the embedded boot-load path,
 // where each scan is one plugin in a temp dir and a failure is genuinely fatal).
 func (m *Manager) loadDir(root string, extra starlark.StringDict, tolerate bool) error {
+	return m.loadDirDepth(root, extra, tolerate, 0)
+}
+
+// maxPluginDirDepth bounds recursion into container directories (dirs with no
+// plugin.toml, e.g. plugins/mobs/) so a symlink cycle or a pathological tree can
+// never spin the loader. A plugin nested a few levels deep is fine; anything past
+// this is refused loudly (or skipped when tolerating).
+const maxPluginDirDepth = 8
+
+// loadDirDepth is the recursive scan body. For each immediate subdir: if it holds
+// a plugin.toml it is loaded as a plugin (the Phase-22 path); if it does NOT it is
+// treated as a CONTAINER directory (e.g. plugins/mobs/) and its children are
+// scanned recursively. This lets operators organize plugins into subfolders
+// (plugins/mobs/vanilla_zombie/, plugins/mobs/vanilla_cow/, …) while every leaf
+// plugin still loads independently under its own manifest caps.
+func (m *Manager) loadDirDepth(root string, extra starlark.StringDict, tolerate bool, depth int) error {
+	if depth > maxPluginDirDepth {
+		if tolerate {
+			log.Printf("plugin host: skipping %q (nesting exceeds %d levels)", root, maxPluginDirDepth)
+			return nil
+		}
+		return fmt.Errorf("plugin host: %q nested deeper than %d levels", root, maxPluginDirDepth)
+	}
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return fmt.Errorf("host: scan %s: %w", root, err)
@@ -202,91 +231,112 @@ func (m *Manager) loadDir(root string, extra starlark.StringDict, tolerate bool)
 			continue
 		}
 		dir := filepath.Join(root, e.Name())
-		man, err := readManifest(filepath.Join(dir, "plugin.toml"))
-		if err != nil {
-			if tolerate {
-				log.Printf("plugin host: skipping %q (manifest error): %v", e.Name(), err)
-				continue
-			}
-			return fmt.Errorf("plugin %s: %w", e.Name(), err)
-		}
-		// Route by the manifest runtime selector. "starlark" falls through to the
-		// inline Phase-22 load path below; "python" routes to the opt-in CPython
-		// lane via the runtime-routing interface (loaded WITH the tag, skipped
-		// gracefully WITHOUT it); any other runtime errors loudly so an unknown
-		// runtime is never silently loaded (threat T-26-05, the Phase-22
-		// "load loudly or skip" discipline).
-		switch man.Runtime {
-		case "starlark":
-			// fall through to the existing starlark load path below.
-		case "python":
-			if m.pythonAvailable() {
-				entry := filepath.Join(dir, man.Entrypoint)
-				pp, err := m.pythonRuntime.Load(entry)
-				if err != nil {
-					if tolerate {
-						log.Printf("plugin host: skipping %q (python load error): %v", man.Name, err)
-						continue
-					}
-					return fmt.Errorf("plugin %s load (python): %w", man.Name, err)
-				}
-				// WORLD-BRIDGE (Plan 26-03): build a per-plugin bridge stamped with
-				// this plugin's manifest capabilities (the SAME parseCapabilities the
-				// Phase-23 Starlark handles use) and install it so the plugin's
-				// off-tick set_block/spawn/log/block_at builtins reach the owner. An
-				// unknown capability errors here (load-loudly). A nil factory (no world
-				// lane) leaves a nil bridge → the world builtins no-op.
-				if m.pythonBridgeFactory != nil {
-					bridge, berr := m.pythonBridgeFactory(man.Name, man.Capabilities)
-					if berr != nil {
-						if tolerate {
-							log.Printf("plugin host: skipping %q (python capabilities error): %v", man.Name, berr)
-							continue
-						}
-						return fmt.Errorf("plugin %s capabilities (python): %w", man.Name, berr)
-					}
-					pp.SetWorldBridge(bridge)
-				}
-				m.plugins = append(m.plugins, &loadedPlugin{manifest: man, python: pp})
-			} else {
-				// Default (no-tag) build, or no python runtime registered: skip
-				// gracefully and keep scanning (T-26-06 accept — a missing optional
-				// runtime is not a server-down condition).
-				log.Printf("plugin %q: python runtime not built in this binary; skipping", man.Name)
+		manifestPath := filepath.Join(dir, "plugin.toml")
+		if _, statErr := os.Stat(manifestPath); statErr != nil {
+			// No plugin.toml here: this is a container directory (e.g. plugins/mobs/).
+			// Recurse so nested plugins are discovered. A dir with neither a manifest
+			// nor any nested plugin is simply a no-op.
+			if err := m.loadDirDepth(dir, extra, tolerate, depth+1); err != nil {
+				return err
 			}
 			continue
-		default:
-			if tolerate {
-				log.Printf("plugin host: skipping %q (unknown runtime %q)", man.Name, man.Runtime)
-				continue
-			}
-			return fmt.Errorf("plugin %s: unknown runtime %q (want \"starlark\" or \"python\")", man.Name, man.Runtime)
 		}
-		// Predeclared = host builtins (log) + per-plugin register + the recipe
-		// seam builtins (set_recipe_matcher/set_recipe_remaining/recipes) +
-		// caller extra.
-		predeclared := hostBuiltins()
-		predeclared["register"] = m.makeRegisterBuiltin(man.Name)
-		predeclared["chat"] = m.makeChatBuiltin()
-		predeclared["set_recipe_matcher"] = m.makeSetMatcherBuiltin(man.Name)
-		predeclared["set_recipe_remaining"] = m.makeSetRemainingBuiltin(man.Name)
-		predeclared["recipes"] = m.makeRecipesBuiltin()
-		for k, v := range extra {
-			predeclared[k] = v
+		if err := m.loadOnePlugin(dir, manifestPath, extra, tolerate); err != nil {
+			return err
 		}
-		entry := filepath.Join(dir, man.Entrypoint)
-		lp, err := starlarkpkg.LoadWith(entry, predeclared)
-		if err != nil {
-			if tolerate {
-				log.Printf("plugin host: skipping %q (starlark load error): %v", man.Name, err)
-				continue
-			}
-			return fmt.Errorf("plugin %s load: %w", man.Name, err)
-		}
-		// The module body ran ONCE; its register(...) calls already populated
-		// m.hooks. Hold the handle so GC keeps the frozen module alive.
-		m.plugins = append(m.plugins, &loadedPlugin{manifest: man, loaded: lp})
 	}
+	return nil
+}
+
+// loadOnePlugin loads a single plugin whose manifest lives at manifestPath inside
+// dir. It routes by the manifest runtime selector and captures the loaded module
+// (or the python plugin). On a per-plugin failure it logs+skips when tolerate is
+// true, else returns the error (aborting the scan).
+func (m *Manager) loadOnePlugin(dir, manifestPath string, extra starlark.StringDict, tolerate bool) error {
+	man, err := readManifest(manifestPath)
+	if err != nil {
+		if tolerate {
+			log.Printf("plugin host: skipping %q (manifest error): %v", filepath.Base(dir), err)
+			return nil
+		}
+		return fmt.Errorf("plugin %s: %w", filepath.Base(dir), err)
+	}
+	// Route by the manifest runtime selector. "starlark" falls through to the
+	// inline Phase-22 load path below; "python" routes to the opt-in CPython
+	// lane via the runtime-routing interface (loaded WITH the tag, skipped
+	// gracefully WITHOUT it); any other runtime errors loudly so an unknown
+	// runtime is never silently loaded (threat T-26-05, the Phase-22
+	// "load loudly or skip" discipline).
+	switch man.Runtime {
+	case "starlark":
+		// fall through to the existing starlark load path below.
+	case "python":
+		if m.pythonAvailable() {
+			entry := filepath.Join(dir, man.Entrypoint)
+			pp, err := m.pythonRuntime.Load(entry)
+			if err != nil {
+				if tolerate {
+					log.Printf("plugin host: skipping %q (python load error): %v", man.Name, err)
+					return nil
+				}
+				return fmt.Errorf("plugin %s load (python): %w", man.Name, err)
+			}
+			// WORLD-BRIDGE (Plan 26-03): build a per-plugin bridge stamped with
+			// this plugin's manifest capabilities (the SAME parseCapabilities the
+			// Phase-23 Starlark handles use) and install it so the plugin's
+			// off-tick set_block/spawn/log/block_at builtins reach the owner. An
+			// unknown capability errors here (load-loudly). A nil factory (no world
+			// lane) leaves a nil bridge → the world builtins no-op.
+			if m.pythonBridgeFactory != nil {
+				bridge, berr := m.pythonBridgeFactory(man.Name, man.Capabilities)
+				if berr != nil {
+					if tolerate {
+						log.Printf("plugin host: skipping %q (python capabilities error): %v", man.Name, berr)
+						return nil
+					}
+					return fmt.Errorf("plugin %s capabilities (python): %w", man.Name, berr)
+				}
+				pp.SetWorldBridge(bridge)
+			}
+			m.plugins = append(m.plugins, &loadedPlugin{manifest: man, python: pp})
+		} else {
+			// Default (no-tag) build, or no python runtime registered: skip
+			// gracefully and keep scanning (T-26-06 accept — a missing optional
+			// runtime is not a server-down condition).
+			log.Printf("plugin %q: python runtime not built in this binary; skipping", man.Name)
+		}
+		return nil
+	default:
+		if tolerate {
+			log.Printf("plugin host: skipping %q (unknown runtime %q)", man.Name, man.Runtime)
+			return nil
+		}
+		return fmt.Errorf("plugin %s: unknown runtime %q (want \"starlark\" or \"python\")", man.Name, man.Runtime)
+	}
+	// Predeclared = host builtins (log) + per-plugin register + the recipe
+	// seam builtins (set_recipe_matcher/set_recipe_remaining/recipes) +
+	// caller extra.
+	predeclared := hostBuiltins()
+	predeclared["register"] = m.makeRegisterBuiltin(man.Name)
+	predeclared["chat"] = m.makeChatBuiltin()
+	predeclared["set_recipe_matcher"] = m.makeSetMatcherBuiltin(man.Name)
+	predeclared["set_recipe_remaining"] = m.makeSetRemainingBuiltin(man.Name)
+	predeclared["recipes"] = m.makeRecipesBuiltin()
+	for k, v := range extra {
+		predeclared[k] = v
+	}
+	entry := filepath.Join(dir, man.Entrypoint)
+	lp, err := starlarkpkg.LoadWith(entry, predeclared)
+	if err != nil {
+		if tolerate {
+			log.Printf("plugin host: skipping %q (starlark load error): %v", man.Name, err)
+			return nil
+		}
+		return fmt.Errorf("plugin %s load: %w", man.Name, err)
+	}
+	// The module body ran ONCE; its register(...) calls already populated
+	// m.hooks. Hold the handle so GC keeps the frozen module alive.
+	m.plugins = append(m.plugins, &loadedPlugin{manifest: man, loaded: lp})
 	return nil
 }
 

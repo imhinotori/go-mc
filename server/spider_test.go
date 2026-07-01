@@ -255,7 +255,7 @@ func loadVanillaSpiderRegistry(t *testing.T) *mobRegistry {
 		t.Fatalf("mkdir spider plugin dir: %v", err)
 	}
 	for _, name := range []string{"plugin.toml", "main.star"} {
-		data, err := os.ReadFile(filepath.Join("..", "plugins", "vanilla_spider", name))
+		data, err := os.ReadFile(filepath.Join("..", "plugins", "mobs", "vanilla_spider", name))
 		if err != nil {
 			t.Fatalf("read repo-root vanilla_spider/%s: %v", name, err)
 		}

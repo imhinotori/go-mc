@@ -35,7 +35,7 @@ func loadVanillaSkeletonRegistry(t *testing.T) *mobRegistry {
 		t.Fatalf("mkdir skeleton plugin dir: %v", err)
 	}
 	for _, name := range []string{"plugin.toml", "main.star"} {
-		data, err := os.ReadFile(filepath.Join("..", "plugins", "vanilla_skeleton", name))
+		data, err := os.ReadFile(filepath.Join("..", "plugins", "mobs", "vanilla_skeleton", name))
 		if err != nil {
 			t.Fatalf("read repo-root vanilla_skeleton/%s: %v", name, err)
 		}

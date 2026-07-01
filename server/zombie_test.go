@@ -38,7 +38,7 @@ func loadVanillaZombieRegistry(t *testing.T) *mobRegistry {
 		t.Fatalf("mkdir zombie plugin dir: %v", err)
 	}
 	for _, name := range []string{"plugin.toml", "main.star"} {
-		data, err := os.ReadFile(filepath.Join("..", "plugins", "vanilla_zombie", name))
+		data, err := os.ReadFile(filepath.Join("..", "plugins", "mobs", "vanilla_zombie", name))
 		if err != nil {
 			t.Fatalf("read repo-root vanilla_zombie/%s: %v", name, err)
 		}

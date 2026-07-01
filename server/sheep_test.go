@@ -45,7 +45,7 @@ func loadSheepRegistry(t *testing.T) *mobRegistry {
 		t.Fatalf("mkdir sheep plugin dir: %v", err)
 	}
 	for _, name := range []string{"plugin.toml", "main.star"} {
-		data, err := os.ReadFile(filepath.Join("..", "plugins", vanillaSheepMobName, name))
+		data, err := os.ReadFile(filepath.Join("..", "plugins", "mobs", vanillaSheepMobName, name))
 		if err != nil {
 			t.Fatalf("read on-disk sheep %s: %v", name, err)
 		}

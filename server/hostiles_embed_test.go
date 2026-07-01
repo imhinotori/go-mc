@@ -58,7 +58,7 @@ var embedByteIdenticalMobs = []string{
 func TestHostileEmbedByteIdentical(t *testing.T) {
 	for _, mobName := range embedByteIdenticalMobs {
 		for _, file := range []string{"plugin.toml", "main.star"} {
-			rootPath := filepath.Join("..", "plugins", mobName, file)
+			rootPath := filepath.Join("..", "plugins", "mobs", mobName, file)
 			embedPath := filepath.Join("assets", mobName, file)
 
 			rootData, err := os.ReadFile(rootPath)

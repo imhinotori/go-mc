@@ -41,7 +41,7 @@ func loadVanillaCowRegistry(t *testing.T) *mobRegistry {
 		t.Fatalf("mkdir cow plugin dir: %v", err)
 	}
 	for _, name := range []string{"plugin.toml", "main.star"} {
-		data, err := os.ReadFile(filepath.Join("..", "plugins", "vanilla_cow", name))
+		data, err := os.ReadFile(filepath.Join("..", "plugins", "mobs", "vanilla_cow", name))
 		if err != nil {
 			t.Fatalf("read repo-root vanilla_cow/%s: %v", name, err)
 		}

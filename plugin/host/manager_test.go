@@ -166,3 +166,64 @@ func mustWrite(t *testing.T, path, body string) {
 		t.Fatalf("write %s: %v", path, err)
 	}
 }
+
+// TestNestedContainerDirLoad: a subdir WITHOUT a plugin.toml is a CONTAINER and is
+// scanned recursively, so a plugin nested under plugins/mobs/<name>/ still loads.
+// This is the /mobs/* organization seam: operators may group plugins in folders.
+func TestNestedContainerDirLoad(t *testing.T) {
+	root := t.TempDir()
+	// plugins/mobs/np/ — a self-contained plugin one level DEEPER than the scan root.
+	// The "mobs" dir has no plugin.toml, so it must be treated as a container and recursed.
+	nested := filepath.Join(root, "mobs", "np")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(nested, "plugin.toml"),
+		"name=\"np\"\nversion=\"1\"\nentrypoint=\"main.star\"\nruntime=\"starlark\"\n")
+	mustWrite(t, filepath.Join(nested, "main.star"),
+		"def f(x,y,z,s,p):\n    pass\nregister(\"on_block_break\", f)\n")
+
+	m := New()
+	if err := m.LoadDir(root); err != nil {
+		t.Fatalf("LoadDir over a nested layout: %v", err)
+	}
+	if m.PluginCount() != 1 {
+		t.Fatalf("PluginCount = %d, want 1 (the nested plugin must load)", m.PluginCount())
+	}
+	if got := m.HookCount(EventBlockBreak); got != 1 {
+		t.Fatalf("HookCount(on_block_break) = %d, want 1 (nested plugin's register must capture)", got)
+	}
+}
+
+// TestNestedDoesNotRecurseIntoPlugin: a dir WITH a plugin.toml is loaded as a plugin
+// and NOT recursed into — a stray subdir inside a plugin dir must not be scanned.
+func TestNestedDoesNotRecurseIntoPlugin(t *testing.T) {
+	root := t.TempDir()
+	pdir := filepath.Join(root, "np")
+	if err := os.MkdirAll(pdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(pdir, "plugin.toml"),
+		"name=\"np\"\nversion=\"1\"\nentrypoint=\"main.star\"\nruntime=\"starlark\"\n")
+	mustWrite(t, filepath.Join(pdir, "main.star"),
+		"def f(x,y,z,s,p):\n    pass\nregister(\"on_block_break\", f)\n")
+	// A junk subdir inside the plugin dir that itself contains a plugin.toml — if the
+	// loader wrongly recursed into a plugin dir, it would load this too and PluginCount
+	// would be 2. It must be ignored (np is a plugin, not a container).
+	junk := filepath.Join(pdir, "inner")
+	if err := os.MkdirAll(junk, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(junk, "plugin.toml"),
+		"name=\"inner\"\nversion=\"1\"\nentrypoint=\"main.star\"\nruntime=\"starlark\"\n")
+	mustWrite(t, filepath.Join(junk, "main.star"),
+		"def f(x,y,z,s,p):\n    pass\nregister(\"on_block_break\", f)\n")
+
+	m := New()
+	if err := m.LoadDir(root); err != nil {
+		t.Fatalf("LoadDir: %v", err)
+	}
+	if m.PluginCount() != 1 {
+		t.Fatalf("PluginCount = %d, want 1 (a plugin dir must not be recursed into)", m.PluginCount())
+	}
+}

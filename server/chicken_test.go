@@ -55,7 +55,7 @@ func loadVanillaChickenRegistry(t *testing.T) *mobRegistry {
 	// The repo-root operator copy (plugins/vanilla_chicken/) is the source loaded here; it is
 	// byte-identical to the server/assets embed copy (asserted by the diff acceptance criterion), so
 	// loading either is equivalent. The test package runs in server/, so the repo root is one dir up.
-	src := filepath.Join("..", "plugins", vanillaChickenMobName)
+	src := filepath.Join("..", "plugins", "mobs", vanillaChickenMobName)
 	for _, name := range []string{"plugin.toml", "main.star"} {
 		data, err := os.ReadFile(filepath.Join(src, name))
 		if err != nil {
