@@ -180,6 +180,16 @@ func mooshroomSupplier() *Supplier {
 		Build()
 }
 
+// rabbitSupplier is Rabbit's attribute supplier. Rabbit.createAttributes = Animal.createAnimalAttributes()
+// .add(MAX_HEALTH 3.0).add(MOVEMENT_SPEED 0.3).add(ATTACK_DAMAGE 3.0). Cite Rabbit.createAttributes.
+func rabbitSupplier() *Supplier {
+	return createAnimalAttributes().
+		AddValue(MaxHealth, 3.0).
+		AddValue(MovementSpeed, 0.30000001192092896).
+		AddValue(AttackDamage, 3.0).
+		Build()
+}
+
 // huskSupplier is Husk's attribute supplier. Husk extends Zombie and does NOT override createAttributes
 // (javap-verified), so its supplier is IDENTICAL to the zombie's (Zombie.createAttributes: FOLLOW_RANGE
 // 35, MOVEMENT_SPEED 0.23, ATTACK_DAMAGE 3, ARMOR 2). Cite Husk (no createAttributes override).
@@ -308,6 +318,7 @@ var suppliers = map[string]*Supplier{
 	// AbstractCow), each a 1:1 inherited-attribute copy of its parent (no createAttributes override).
 	"husk":      huskSupplier(),
 	"mooshroom": mooshroomSupplier(),
+	"rabbit":    rabbitSupplier(),
 }
 
 // livingCategories is the set of data/entity.Entity.Type values that correspond to a vanilla

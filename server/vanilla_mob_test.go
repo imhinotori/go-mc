@@ -54,6 +54,9 @@ var allFourMobs = []struct {
 	// MOB-HOST-07 (Task #9): Witch — float@1 + witch_ranged@2 + stroll@2 + look@3 + around@3
 	// (5 goalSelector) + hurt_by@1 + nearest@3 (2 targetSelector); raid/heal goals cite-deferred.
 	{vanillaWitchMobName, entity.Witch.ID, 5, 2},
+	// MOB-PASS-05 (Task #9): Rabbit — float@1 + panic@1 + breed@2 + tempt@3 + stroll@6 + look@11
+	// (6 goalSelector, 0 targetSelector); avoid/raid-garden/powder-snow + the hop are cite-deferred.
+	{vanillaRabbitMobName, entity.Rabbit.ID, 6, 0},
 }
 
 // TestAllFourMobsBootLoad: loadVanillaMobRegistry returns ONE registry holding the passive + hostile +
@@ -68,9 +71,9 @@ func TestAllFourMobsBootLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadVanillaMobRegistry: %v", err)
 	}
-	const wantTotal = 13 // + the Task-#9 mobs (husk + mooshroom + silverfish + creeper + witch)
+	const wantTotal = 14 // + the Task-#9 mobs (husk + mooshroom + silverfish + creeper + witch + rabbit)
 	if got := len(r.byName); got != wantTotal {
-		t.Fatalf("registry holds %d declarations, want %d (pig/cow/sheep/chicken/wolf + zombie/skeleton/spider + husk/mooshroom/silverfish/creeper/witch)", got, wantTotal)
+		t.Fatalf("registry holds %d declarations, want %d (14: passives+hostiles+variants+witch+rabbit)", got, wantTotal)
 	}
 	for _, m := range allFourMobs {
 		decl, ok := r.byName[m.name]
@@ -151,6 +154,7 @@ func TestNaturalSpawnPicksAmongFour(t *testing.T) {
 		vanillaCowMobName:     true,
 		vanillaSheepMobName:   true,
 		vanillaChickenMobName: true,
+		vanillaRabbitMobName:  true, // MOB-PASS-05 (Task #9): the rabbit joined the overworld CREATURE pool
 	}
 	seen := map[string]bool{}
 
@@ -161,7 +165,7 @@ func TestNaturalSpawnPicksAmongFour(t *testing.T) {
 		for draw := 0; draw < 64; draw++ {
 			name := loop.pickNaturalCreatureMob()
 			if !valid[name] {
-				t.Fatalf("pickNaturalCreatureMob returned %q, not one of the 4 CREATURE mobs", name)
+				t.Fatalf("pickNaturalCreatureMob returned %q, not one of the overworld CREATURE mobs", name)
 			}
 			seen[name] = true
 		}

@@ -57,7 +57,7 @@ func findEntityOfType(loop *TickLoop, typ ...entity.Entity) *Entity {
 // specifically — it expects ONE of the 4. The placement + store + AI properties under test are
 // CREATURE-agnostic (every passive mob lands ON_GROUND, gets a fresh id, carries a real mobAI).
 func findAnyNaturalCreature(loop *TickLoop) *Entity {
-	return findEntityOfType(loop, entity.Pig, entity.Cow, entity.Sheep, entity.Chicken)
+	return findEntityOfType(loop, entity.Pig, entity.Cow, entity.Sheep, entity.Chicken, entity.Rabbit)
 }
 
 // runSpawnCycle drives ONE full OPT-03 natural-spawn cycle end-to-end for a test: it submits the

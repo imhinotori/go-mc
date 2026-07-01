@@ -1,0 +1,12 @@
+name = "vanilla_rabbit"
+version = "0.1.0"
+entrypoint = "main.star"
+runtime = "starlark"
+# Least-privilege caps (24-RESEARCH Security Domain / T-24-07): a cow READS its own state + the
+# nearest player + WRITES its look/nav. It NEVER sets blocks, so NO world.write. Milking is HOST-side
+# (attack_dispatch.go tryMilkCow), not a plugin op, so no widened cap.
+#   entities.read  — read x/y/z (stroll offset base, look target delta)
+#   entities.write — set_look_at (the LOOK goals' LookControl.setLookAt analogue)
+#   world.read     — nearest_player (LookAtPlayerGoal's getNearestPlayer)
+#   nav            — path_to/has_path (WaterAvoidingRandomStrollGoal's navigation.moveTo/isDone)
+capabilities = ["entities.read", "entities.write", "world.read", "nav"]

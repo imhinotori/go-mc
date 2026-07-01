@@ -143,6 +143,10 @@ func categoryOf(t entity.ID) mobCategory {
 		// MOB-HOST-07 (Task #9): Witch is MobCategory.MONSTER (vanilla EntityType.WITCH; data/entity
 		// Witch.Type == "monster"). Same MONSTER-budget accounting as the zombie.
 		return categoryMonster
+	case entity.Rabbit.ID:
+		// MOB-PASS-05 (Task #9): Rabbit is MobCategory.CREATURE (vanilla EntityType.RABBIT; data/entity
+		// Rabbit.Type == "creature"). Same CREATURE-budget accounting as the cow — an overworld passive.
+		return categoryCreature
 	default:
 		return categoryMisc
 	}

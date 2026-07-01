@@ -138,6 +138,7 @@ var baseTypeByName = map[string]entity.Entity{
 	// AbstractCow — each renders as its OWN wire type but reuses the parent's goals + attributes.
 	"husk":      entity.Husk,
 	"mooshroom": entity.Mooshroom,
+	"rabbit":    entity.Rabbit,
 }
 
 // resolveBaseType resolves a base_type string to its data/entity record. (record, true) for an

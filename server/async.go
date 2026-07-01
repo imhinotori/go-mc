@@ -376,6 +376,9 @@ var naturalCreatureMobNames = []string{
 	vanillaCowMobName,
 	vanillaSheepMobName,
 	vanillaChickenMobName,
+	// MOB-PASS-05 (Task #9): the Rabbit spawns naturally on grass/snow overworld surfaces — an overworld
+	// passive, so it JOINS the uniform CREATURE pool (unlike the biome-gated mooshroom).
+	vanillaRabbitMobName,
 }
 
 // pickNaturalCreatureMob returns the name of one of the 4 vanilla CREATURE mobs to place at a natural
