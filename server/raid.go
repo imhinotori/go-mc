@@ -200,6 +200,31 @@ func (r *Raid) isOver() bool    { return r.isVictory() || r.isLoss() }
 func (r *Raid) isActive() bool  { return r.active }
 func (r *Raid) isStarted() bool { return r.started }
 
+// getRaidOmenLevel ports Raid.getRaidOmenLevel.
+func (r *Raid) getRaidOmenLevel() int { return r.raidOmenLevel }
+
+// getMaxRaidOmenLevel ports Raid.getMaxRaidOmenLevel (VERIFIED CFR: returns 5 == DEFAULT_MAX_RAID_OMEN_LEVEL).
+func (r *Raid) getMaxRaidOmenLevel() int { return raidDefaultMaxOmen }
+
+// absorbRaidOmen ports Raid.absorbRaidOmen(ServerPlayer): read the player's RAID_OMEN effect amplifier,
+// add (amp+1) to raidOmenLevel, clamp to [0, maxRaidOmenLevel]. Returns false if the player has no
+// raid-omen effect. VERIFIED CFR Raid.absorbRaidOmen. (awardStat(RAID_TRIGGER) + CriteriaTriggers.RAID_OMEN
+// are cite-deferred — no stats/advancement subsystem; the omen-level math is faithful.)
+func (r *Raid) absorbRaidOmen(p *tickPlayer) bool {
+	eff := p.activeEffects[effectRaidOmen]
+	if eff == nil {
+		return false
+	}
+	r.raidOmenLevel += eff.amplifier + 1
+	if r.raidOmenLevel < 0 {
+		r.raidOmenLevel = 0
+	}
+	if r.raidOmenLevel > r.getMaxRaidOmenLevel() {
+		r.raidOmenLevel = r.getMaxRaidOmenLevel()
+	}
+	return true
+}
+
 // getTotalRaidersAlive ports Raid.getTotalRaidersAlive: sum of the per-wave raider-set sizes.
 func (r *Raid) getTotalRaidersAlive() int {
 	total := 0

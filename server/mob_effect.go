@@ -32,6 +32,12 @@ const (
 	effectPoison        = "minecraft:poison"
 	effectSlowness      = "minecraft:slowness"
 	effectWeakness      = "minecraft:weakness"
+	// BAD_OMEN / RAID_OMEN drive the village raid trigger (BadOmenMobEffect/RaidOmenMobEffect). A raider
+	// captain kill grants BAD_OMEN; entering a village converts it to RAID_OMEN; RAID_OMEN expiry starts a
+	// raid via PoiManager's village-center query. VERIFIED net.minecraft.world.effect.MobEffects.BAD_OMEN /
+	// RAID_OMEN.
+	effectBadOmen  = "minecraft:bad_omen"
+	effectRaidOmen = "minecraft:raid_omen"
 )
 
 // modifier ids (stable identity per effect, matching the vanilla effect.<name> ids).
@@ -144,9 +150,15 @@ func (t *TickLoop) tickPlayerEffects(p *tickPlayer) {
 		return
 	}
 	for id, e := range p.activeEffects {
+		// MobEffectInstance.tickServer: if shouldApply, run applyEffectTick; a false return means the effect
+		// consumed itself (BAD_OMEN converting / RAID_OMEN firing) -> remove it now and skip the countdown.
 		// tickCount passed to shouldApplyEffectTickThisTick is the remaining duration (counting DOWN).
 		if effectShouldApplyThisTick(id, e.duration, e.amplifier) {
-			t.applyEffectTick(p, id, e.amplifier)
+			if !t.applyEffectTick(p, id, e.amplifier) {
+				delete(p.activeEffects, id)
+				t.removeEffectModifiers(p, id)
+				continue
+			}
 		}
 		e.duration--
 		if e.duration <= 0 {
@@ -165,20 +177,72 @@ func effectShouldApplyThisTick(id string, remaining, amplifier int) bool {
 			return true
 		}
 		return remaining%interval == 0
+	case effectBadOmen:
+		return true // BadOmenMobEffect.shouldApplyEffectTickThisTick -> always true
+	case effectRaidOmen:
+		return remaining == 1 // RaidOmenMobEffect.shouldApplyEffectTickThisTick -> remainingDuration == 1
 	default:
 		return false // slowness/weakness never tick (pure attribute modifiers)
 	}
 }
 
-// applyEffectTick is the port of MobEffect.applyEffectTick for the witch's periodic effects.
-func (t *TickLoop) applyEffectTick(p *tickPlayer, id string, amplifier int) {
+// applyEffectTick is the port of MobEffect.applyEffectTick. It returns whether the effect should be
+// KEPT (Java returns boolean; false -> remove the effect this tick). The witch's periodic effects always
+// return true; the BAD_OMEN/RAID_OMEN transitions return false when they fire (they consume themselves).
+func (t *TickLoop) applyEffectTick(p *tickPlayer, id string, amplifier int) bool {
 	switch id {
 	case effectPoison:
 		// PoisonMobEffect: if health > 1.0 hurt magic 1.0 (poison never kills).
 		if p.health > 1.0 {
 			t.applyDamage(p, damageSourceMagic(), 1.0)
 		}
+		return true
+	case effectBadOmen:
+		return t.applyBadOmenTick(p, amplifier)
+	case effectRaidOmen:
+		return t.applyRaidOmenTick(p)
 	}
+	return true
+}
+
+// applyBadOmenTick is BadOmenMobEffect.applyEffectTick for a player: if the player is in a village (POI-
+// dense) and the difficulty is not PEACEFUL and there is no active raid already at max raid-omen level,
+// convert BAD_OMEN -> RAID_OMEN (600 ticks, same amplifier), record the raid-omen position, and REMOVE
+// bad_omen (return false). Otherwise keep bad_omen (return true). VERIFIED BadOmenMobEffect.applyEffectTick.
+func (t *TickLoop) applyBadOmenTick(p *tickPlayer, amplifier int) bool {
+	if p == nil || p.dead {
+		return true // !isSpectator() analogue (v1 has no spectator toggle) -> proceed only for a live player
+	}
+	if serverDifficulty == difficultyPeaceful {
+		return true
+	}
+	pos := playerBlockPos(p)
+	pm := t.cur().poiManager
+	if pm == nil || !pm.isVillage(pos) {
+		return true // not in a village -> keep bad_omen and keep scanning
+	}
+	// (raid == null || raid.getRaidOmenLevel() < raid.getMaxRaidOmenLevel())
+	if rm := t.cur().raidsManager; rm != nil {
+		if raid := rm.getRaidAtBlock(pos); raid != nil && raid.getRaidOmenLevel() >= raid.getMaxRaidOmenLevel() {
+			return true
+		}
+	}
+	t.addPlayerEffect(p, 0, effectRaidOmen, 600, amplifier, 1.0)
+	imm := pos
+	p.raidOmenPosition = &imm
+	return false // player.addEffect(RAID_OMEN...) then return false -> bad_omen is consumed
+}
+
+// applyRaidOmenTick is RaidOmenMobEffect.applyEffectTick for a player: when the raid-omen effect reaches
+// its final tick (shouldApply gates remaining==1), fire createOrExtendRaid at the recorded raid-omen
+// position, clear the position, and REMOVE raid_omen (return false). VERIFIED RaidOmenMobEffect.applyEffectTick.
+func (t *TickLoop) applyRaidOmenTick(p *tickPlayer) bool {
+	if p == nil || p.raidOmenPosition == nil {
+		return true
+	}
+	t.createOrExtendRaid(p, *p.raidOmenPosition)
+	p.raidOmenPosition = nil
+	return false
 }
 
 // playerHasEffect is the port of LivingEntity.hasEffect(Holder): whether the player currently carries the

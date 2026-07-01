@@ -210,7 +210,11 @@ func (t *TickLoop) tickEntities() {
 		if p == nil || p.dead {
 			continue
 		}
-		t.tickPlayerEffects(p)
+		// Run each player's effect tick in the region that OWNS the player's column, so the BAD_OMEN /
+		// RAID_OMEN village check + createOrExtendRaid read that region's poiManager/raidsManager (t.cur()).
+		t.withRegion(t.regionForColumn(columnOf(p.x, p.z)), func() {
+			t.tickPlayerEffects(p)
+		})
 	}
 
 	// Plan 17-19 food/hunger: the FoodData.tick port (exhaustion drains saturation then food, health

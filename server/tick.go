@@ -717,6 +717,12 @@ type tickPlayer struct {
 	// thrown-potion splash) and ticked down by tickPlayerEffects. nil until the first effect applies.
 	activeEffects map[string]*activeEffect
 
+	// raidOmenPosition is net.minecraft.server.level.ServerPlayer.raidOmenPosition: the block pos the
+	// player was standing at when their BAD_OMEN converted to RAID_OMEN (BadOmenMobEffect.applyEffectTick
+	// -> setRaidOmenPosition). It is where RaidOmenMobEffect.applyEffectTick fires createOrExtendRaid when
+	// the raid-omen effect expires. nil when the player has no pending raid omen. Tick-owned.
+	raidOmenPosition *pk.Position
+
 	// invulnerableTime is net.minecraft.world.entity.Entity.invulnerableTime: the post-hit damage
 	// grace window in ticks. Set to 20 on a fresh hit (hurtServer), and decremented by 1 each tick
 	// while > 0 (ServerPlayer.tick — the player path, not the LivingEntity.tick path which skips

@@ -1,5 +1,7 @@
 package server
 
+import pk "github.com/imhinotori/sulfur/net/packet"
+
 // raids.go — the per-level Raids MANAGER (net.minecraft.world.entity.raid.Raids, the SavedData that
 // holds every active Raid for a level), ported 1:1 from the unobfuscated 26.2 jar (CFR this session).
 // It owns the raid map keyed by an incrementing id, ticks every raid once per tick, and prunes STOPPED
@@ -63,6 +65,14 @@ func (rm *raidsManager) getRaidAt(x, y, z float64) *Raid {
 		}
 	}
 	return closest
+}
+
+// getRaidAtBlock is the BlockPos overload of Raids.getRaidAt(BlockPos): the closest ACTIVE raid whose
+// center is within RAID_REMOVAL_THRESHOLD_SQR of the block pos, or nil. It is what createOrExtendRaid ->
+// getOrCreateRaid and the bad-omen guard read. (getRaidAt(float) already implements getNearbyRaid with the
+// threshold; this just adapts the integer BlockPos.)
+func (rm *raidsManager) getRaidAtBlock(pos pk.Position) *Raid {
+	return rm.getRaidAt(float64(pos.X), float64(pos.Y), float64(pos.Z))
 }
 
 // createRaidAt is the test/dbg SEAM that stands in for the CITE-DEFERRED Raids.createOrExtendRaid

@@ -116,6 +116,13 @@ type region struct {
 	// lazily builds it); most regions never have one. Coordinator-owned (TICK-05).
 	raidsManager *raidsManager
 
+	// poiManager is the per-region Point-of-Interest manager (poi.go -- the ServerLevel.getPoiManager()
+	// analogue): the per-section store of POI records (beds -> HOME, bells -> MEETING) the village-center
+	// query + bad-omen raid trigger read. nil until the first POI is registered (ensurePoiManager lazily
+	// builds it); a region with no beds/bells never has one. Coordinator/region-goroutine-owned (TICK-05),
+	// mutated only by the block place/break POI hooks + the coordinator-barrier village scan.
+	poiManager *poiManager
+
 	// levelRandom is the per-region level RandomSource (Level.random analogue). It is NEVER shared
 	// across regions: two goroutines drawing from one LegacyRandomSource is a data race AND makes
 	// the RNG stream non-deterministic per region (27-RESEARCH anti-pattern). newRegion seeds it

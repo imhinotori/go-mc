@@ -273,10 +273,20 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 		}
 
 		// placeBlock -> Level.setBlock(getClickedPos(), state). changed=false (unloaded / no-change)
-		// -> no ack, no broadcast (matches placeBlock returning false -> FAIL).
-		if t.world() == nil || !t.world().SetBlock(placePos, placeState, dimMinY) {
+		// -> no ack, no broadcast (matches placeBlock returning false -> FAIL). Capture the pre-place state
+		// first so the POI hook below sees the old->new transition (LevelChunk.setBlockState reads both).
+		if t.world() == nil {
 			return
 		}
+		prePlaceState, _ := t.world().GetBlock(placePos, dimMinY)
+		if !t.world().SetBlock(placePos, placeState, dimMinY) {
+			return
+		}
+
+		// POI-01: register/deregister a Point of Interest for the placed block (a bed -> HOME, a bell ->
+		// MEETING) — the LevelChunk.setBlockState -> ServerLevel.updatePOIOnBlockStateChange hook. A no-op for
+		// a non-POI block. Runs in the placer's region context (t.cur()), same as reconcileEdit below.
+		t.updatePoiOnBlockStateChange(placePos, prePlaceState, placeState)
 
 		// LevelChunk.setBlockState hasBlockEntity() branch: a placed block that carries a BlockEntity
 		// (chest) gets its (empty) BlockEntity created + registered synchronously on place. Sulfur's

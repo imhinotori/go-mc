@@ -176,3 +176,46 @@ Deferrals (cited, NOT silently dropped):
   mob exists among the 22 (all RaiderTypes but WITCH are absent), so no mob declares it and a v1 mob is
   never isPatrolling(). The leader companion-drag (findPatrolCompanions) is broad-phase-deferred; a lone
   patroller drops patrolling (the faithful no-companion branch). Becomes live when a PatrollingMonster mob lands.
+
+## POI (Point-of-Interest) subsystem + bad-omen->raid auto-trigger (poi.go)
+
+Landed 1:1 from the 26.2 jar (javap/CFR): the PoiManager storage (per-region, per-section
+`records[SectionPos.sectionRelativePos]`), the PoiRecord ticket/occupancy system (freeTickets starts at
+maxTickets; acquire/release; hasSpace=free>0; isOccupied=free!=max), the Occupancy enum (HAS_SPACE/
+IS_OCCUPIED/ANY), the block-state->PoiType map (`PoiTypes.forState`), and the queries
+(getInSquare/getInRange/getCountInRange/findClosest). Village machinery: isVillageCenter (a section with an
+IS_OCCUPIED #village POI), sectionsToVillage (Chebyshev distance to the nearest such section, cap
+MAX_VILLAGE_DISTANCE=6), isVillage (`ServerLevel.isVillage` = sectionsToVillage<=1). POI types landed: HOME
+(beds, maxTickets 1, validRange 1) and MEETING (bell, 32, 6) — VERIFIED `PoiTypes.bootstrap`. The
+block-change hook `updatePoiOnBlockStateChange(pos,old,new)` (`ServerLevel.updatePOIOnBlockStateChange`) is
+wired into the block PLACE (block_interact.go) and BREAK (block_break.go) seams. The bad-omen->raid
+AUTO-trigger is now REAL, replacing the /dbg-only createRaidAt seam: BadOmenMobEffect (in a village +
+non-peaceful + no raid at max omen -> convert to RAID_OMEN, record raidOmenPosition) -> RaidOmenMobEffect
+(on its final tick -> createOrExtendRaid) -> `Raids.createOrExtendRaid` (getInRange(#village, pos, 64,
+IS_OCCUPIED) -> average POI positions for the center, else raidPosition; getOrCreateRaid; absorbRaidOmen).
+The /dbg raid createRaidAt seam is KEPT (a manual, POI-independent trigger).
+
+### Cite-deferred (POI)
+- **Villager JOB-SITE POI types** (`ARMORER..WEAPONSMITH`, the `#acquirable_job_site` members —
+  composter/lectern/barrel/... block sets) — omitted from `poiTypeForState` / `poiTypeVillage`. No
+  villagers exist to claim job sites; the two VILLAGE-tag members the raid center query needs (HOME/MEETING)
+  are landed. Slots in at `poiTypeForState` + `poiTypeVillage` (`#acquirable_job_site` branch) when villager
+  POIs land. VERIFIED `registrydata/tags/point_of_interest_type/village.json` =
+  {#acquirable_job_site, home, meeting}.
+- **The rest of `PoiTypes`** (BEEHIVE/BEE_NEST/NETHER_PORTAL/LODESTONE/LIGHTNING_ROD/TEST_INSTANCE and the
+  cauldron LEATHERWORKER) — not village-relevant; omitted from the type table.
+- **Villager bed/bell CLAIMING** (the acquireTicket path that makes a HOME/MEETING POI IS_OCCUPIED) — no
+  villagers yet, so in a live world NO bed/bell ever becomes occupied, so `isVillage` is always false and
+  the bad-omen chain never spontaneously fires in-world (a bad-omen player over an UNCLAIMED bed-village
+  does nothing — faithful to vanilla, where a village requires occupied POIs). The occupancy math + the
+  full trigger chain are exercised in poi_test.go by simulating a villager claim (`acquireTicket`). The
+  chain becomes spontaneously live when villagers land and claim beds/bells.
+- **PoiManager.DistanceTracker (SectionTracker) incrementality** — replaced by a lazily-recomputed
+  `villageDist` cache cleared on any village-POI add/remove. This is an OPTIMIZATION/reduction: the
+  observable result (min Chebyshev section distance to an occupied #village section, cap 6) is identical.
+- **SectionStorage disk persistence (poi/*.mca)** — POI is rebuilt from runtime block edits; no POI region
+  file is written/read yet (no villager memory to persist). The PoiRecord `setDirty` runnable is reduced.
+- **createOrExtendRaid guards**: the RAIDS gamerule + `EnvironmentAttributes.CAN_START_RAID` + isSpectator()
+  checks are const-true/false analogues (no gamerule/dimension-attribute/spectator subsystem); a live
+  non-peaceful world always passes. `absorbRaidOmen`'s `awardStat(RAID_TRIGGER)` + `CriteriaTriggers.RAID_OMEN`
+  are deferred (no stats/advancement subsystem); the omen-level math is faithful.

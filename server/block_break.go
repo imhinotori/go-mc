@@ -416,6 +416,11 @@ func (t *TickLoop) destroyBlock(p *tickPlayer, pos pk.Position, air block.StateI
 		// Spawn the dropped Item entity (ServerPlayerGameMode.destroyBlock's loot path). Creative drops
 		// nothing (gated inside spawnBlockDrop). Lands in the OWNING region's store (cur().entities.add).
 		t.spawnBlockDrop(p, pos, brokenState)
+
+		// POI-01: deregister the broken block's Point of Interest (a bed HOME / bell MEETING) — the
+		// LevelChunk.setBlockState -> ServerLevel.updatePOIOnBlockStateChange hook for the break-to-air
+		// transition. A no-op for a non-POI block. Runs in the owning region's context (t.cur()).
+		t.updatePoiOnBlockStateChange(pos, brokenState, air)
 	})
 }
 
