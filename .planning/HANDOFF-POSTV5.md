@@ -4,6 +4,33 @@
 
 ---
 
+## 🟢 SESSION 5 (2026-07-01) — Task #9 COMPLETE: 17 mobs + 4 subsystems. ALL COMMITTED.
+Branch `ender-776`, NOT pushed. Task #9 ("more vanilla mobs") is DONE — the user picked ALL, delivered incrementally green. Registry grew 8 → **17 mobs**.
+
+Commits (HEAD-first): `36fd944a` (Fox) · `69a12637` (Cat + fish-taming) · `fba02651` (Enderman + teleport) · `4852bc95` (Rabbit) · `aa570d2c` (Witch + mob-effects + splash potions) · `f92ffb84` (Creeper + explosion) · `25b791e3` (Silverfish) · `708150b3` (Husk + Mooshroom) · `79707c11` (Arrow + skeleton bow) · `6560d6b9` (recursive loader + `plugins/mobs/`).
+
+**The 17 mobs:** pig/cow/sheep/chicken/wolf + zombie/skeleton/spider + husk/mooshroom/silverfish/creeper/witch/rabbit/enderman/cat/fox.
+
+**NEW SUBSYSTEMS built this session (all jar-faithful, reusable):**
+- **Projectiles** (`server/projectile.go`): Arrow (skeleton bow) + ThrownSplashPotion — arc/drag/gravity/segment-hit/despawn.
+- **Explosions** (`server/explosion.go`): ServerExplosion entity-damage + knockback + getSeenPercent (creeper). Block destruction cite-deferred (needs blast-resistance table + mobGriefing).
+- **Mob-effects** (`server/mob_effect.go`): per-player activeEffects + tickEffects (instant_damage/poison/slowness/weakness) + attribute-modifier layer on the player holder. Reusable for any future potion/effect.
+- **Teleport** (`server/ai_goals_enderman.go`): enderman random-teleport (daylight-flee + hurt-dodge).
+- **Recursive plugin loader**: `plugins/mobs/*` organization.
+
+**Taming**: Wolf was ALREADY COMPLETE (bone-tame, HP 8→40, sit-toggle, follow_owner, owner-hurt — the user's "wolf has no taming" premise was wrong). Cat added (fish-tame, NO health bump — Cat.applyTamingSideEffects is a no-op, stays 10; reuses wolf sit/follow_owner).
+
+**Per-mob cite-deferred (each needs a subsystem absent in v1, all documented in the mob's .star header):** creeper block-destruction; witch raid-heal/potion-metadata; enderman gaze-aggro (substituted with nearest-target) + block-carry; rabbit hop-movement + avoid/raid-garden; cat comfort/prey goals + morning-gift; fox ENTIRE character layer (sleep/pounce/stalk/berries/trust/avoid/faceplant/perch) + prey targets.
+
+**Add-a-mob recipe (proven 9×):** `.star` in `plugins/mobs/<n>` + byte-identical `server/assets/<n>` → supplier(+key in defaults.go) → `baseTypeByName` → `categoryOf` → `//go:embed`+`vanillaMobNames`+const → (natural pool if overworld-spawnable) → `/dbg` arm → boot-count test + `allFourMobs` row + behavior test.
+
+### ▶ Task #9 has NO remaining mobs. Possible NEXT work (not started):
+- The deferred per-mob subsystems above (each a dedicated phase): gaze (enderman/EndermanFreezeWhenLookedAt), fox character layer, creeper block-destruction (blast-resistance table + mobGriefing gamerule), raids (witch heal), rabbit JumpControl hop, endermite/turtle/ocelot prey mobs.
+- Zombie movement FEEL (still user-deferred from Session 2).
+- Worldgen perf residual (0.81s/chunk).
+
+---
+
 ## 🟢 SESSION 4 (2026-07-01) — recursive plugin loader + projectiles/skeleton bow + 5 new mobs + effects. ALL COMMITTED.
 Branch `ender-776`, NOT pushed. Commits (HEAD-first): `aa570d2c` (Witch + mob-effects + splash potions) · `5e0aba2b` (handoff) · `8b3c24a8` (boot-log count) · `f92ffb84` (Creeper + explosion) · `25b791e3` (Silverfish) · `708150b3` (Husk + Mooshroom) · `79707c11` (Arrow projectile + skeleton bow) · `6560d6b9` (recursive plugin loader + `plugins/mobs/` reorg).
 
