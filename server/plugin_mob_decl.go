@@ -166,6 +166,9 @@ var baseTypeByName = map[string]entity.Entity{
 	"rabbit":    entity.Rabbit,
 	"enderman":  entity.Enderman,
 	"fox":       entity.Fox,
+	// MOB-CUBE (SulfurCube): the size-scaled cube mob (a NEW 26.2 mob). base_type "sulfur_cube" renders as
+	// entity.SulfurCube.ID (id 130); the cube AI (jump-move state machine + split-on-death) is Go-native.
+	"sulfur_cube": entity.SulfurCube,
 }
 
 // resolveBaseType resolves a base_type string to its data/entity record. (record, true) for an
@@ -416,7 +419,7 @@ func (r *mobRegistry) declareMobBuiltin() *starlark.Builtin {
 
 		baseType, ok := resolveBaseType(baseTypeName)
 		if !ok {
-			return nil, fmt.Errorf("declare_mob %q: unknown base_type %q (allowed: pig, cow, sheep, chicken, skeleton, creeper, spider, zombie, cat, witch, villager, silverfish, wolf)", name, baseTypeName)
+			return nil, fmt.Errorf("declare_mob %q: unknown base_type %q (allowed: pig, cow, sheep, chicken, skeleton, creeper, spider, zombie, cat, witch, villager, silverfish, wolf, sulfur_cube)", name, baseTypeName)
 		}
 
 		attrs, err := parseAttributesDict(attrsDict)
@@ -516,6 +519,16 @@ func (t *TickLoop) spawnDeclaredMob(decl *mobDecl, x, y, z float64) *Entity {
 	// vanilla pig, which both route through here) gets its own deterministic stream and wanders
 	// independently. Done before the store add (the mob is not yet ticking).
 	reseedMobAI(e.ai, e.id)
+	// MOB-CUBE (SulfurCube): apply SulfurCube.setSpawnSize (finalizeSpawn -> setSpawnSize): an adult cube
+	// spawns at size 2 with the size-scaled MAX_HEALTH (4*size=8), MOVEMENT_SPEED (0.2+0.1*size=0.4) and
+	// dims (0.49*size=0.98). setSize(...,true) resets health to the size-scaled MaxHealth, so it MUST run
+	// AFTER initSpawnHealth (which read the pre-size base 20.0). Reseed already gave the cube its per-entity
+	// stream (setSpawnSize draws no RNG here - the size is fixed 2 for an adult). Cube-gated (no-op for every
+	// other declared mob - the pig draws NOTHING here). Cite SulfurCube.finalizeSpawn -> setSpawnSize.
+	if e.typ == entity.SulfurCube.ID {
+		initSulfurCubeSpawn(e)
+		e.cubeWantMove = -1 // Operation.WAIT until a cube goal arms MOVE_TO
+	}
 	// MOB-PASS-03 (Phase 34): the Chicken egg-lay timer init — net.minecraft.world.entity.animal.chicken
 	// .Chicken.<init> seeds `eggTime = random.nextInt(6000) + 6000` (the next lay is 5..10 minutes out).
 	// Drawn HERE (after reseedMobAI gives the chicken its per-entity stream), so it is the chicken's FIRST

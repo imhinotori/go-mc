@@ -159,6 +159,12 @@ func categoryOf(t entity.ID) mobCategory {
 		// MOB-PASS-06 (Task #9): Fox is MobCategory.CREATURE (vanilla EntityType.FOX; data/entity
 		// Fox.Type == "creature"). Same CREATURE-budget accounting as the cow.
 		return categoryCreature
+	case entity.SulfurCube.ID:
+		// MOB-CUBE (SulfurCube): SulfurCube is MobCategory.MONSTER (jar EntityTypes.SULFUR_CUBE =
+		// EntityType.Builder.of(SulfurCube::new, MobCategory.MONSTER); data/entity SulfurCube.Type == "monster").
+		// Consumes the MONSTER spawn budget like the zombie. (It spawns naturally ONLY in the sulfur_caves
+		// biome — biome-gated, so it is kept OUT of the uniform natural MONSTER pool; see async.go.)
+		return categoryMonster
 	default:
 		return categoryMisc
 	}

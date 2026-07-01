@@ -309,6 +309,21 @@ func spiderSupplier() *Supplier {
 		Build()
 }
 
+// sulfurCubeSupplier is the port of SulfurCube.createSulfurCubeAttributes() : Mob.createMobAttributes()
+// + TEMPT_RANGE 8.0 (jar: net.minecraft.world.entity.monster.cubemob.SulfurCube.createSulfurCubeAttributes
+// == createMobAttributes().add(Attributes.TEMPT_RANGE, 8.0)). NOTE the cube builds on createMobAttributes
+// (NOT Monster), so it has NO ATTACK_DAMAGE by default — and SulfurCube.isDealsDamage() returns false, so
+// the base cube never reads ATTACK_DAMAGE (contact damage is a body-item/archetype feature, cite-deferred).
+// The MAX_HEALTH and MOVEMENT_SPEED here are only the createMobAttributes/createLivingAttributes base
+// values (20.0 / 0.7); setSize OVERRIDES BOTH at runtime per the size machine (SulfurCube.setcubeMobHealth:
+// MAX_HEALTH = 4*size; AbstractCubeMob.setSize: MOVEMENT_SPEED base = 0.2 + 0.1*size). Cite
+// SulfurCube.createSulfurCubeAttributes.
+func sulfurCubeSupplier() *Supplier {
+	return createMobAttributes().
+		AddValue(TemptRange, 8.0).
+		Build()
+}
+
 // livingFallbackSupplier is the port of LivingEntity.createLivingAttributes() (the gameplay subset):
 // the base attribute set EVERY LivingEntity has. Vanilla's DefaultAttributes registers a supplier for
 // every living EntityType; Sulfur ports the common per-type suppliers above and leans on THIS fallback
@@ -359,6 +374,9 @@ var suppliers = map[string]*Supplier{
 	"rabbit":    rabbitSupplier(),
 	"enderman":  endermanSupplier(),
 	"fox":       foxSupplier(),
+	// MOB-CUBE (SulfurCube): the size-scaled cube-mob base (createMobAttributes + TEMPT_RANGE 8.0). setSize
+	// overrides MAX_HEALTH (4*size) + MOVEMENT_SPEED (0.2+0.1*size) at runtime. Cite SulfurCube.createSulfurCubeAttributes.
+	"sulfur_cube": sulfurCubeSupplier(),
 }
 
 // livingCategories is the set of data/entity.Entity.Type values that correspond to a vanilla

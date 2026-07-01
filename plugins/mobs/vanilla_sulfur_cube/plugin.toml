@@ -1,0 +1,10 @@
+name = "vanilla_sulfur_cube"
+version = "0.1.0"
+entrypoint = "main.star"
+runtime = "starlark"
+# Least-privilege caps (24-RESEARCH Security Domain / T-24-07). The SulfurCube's WHOLE AI is Go-NATIVE:
+# the three AbstractCubeMob.registerGoals goals are kind-goals (kind="cube_float"/"cube_random_direction"/
+# "cube_keep_on_jumping", ai_goals_sulfur_cube.go) whose behavior — the CubeMobMoveControl jump-move state
+# machine + the split-on-death — is HOST-side (sulfurCubeAiStep + sulfurCubeSplitOnRemove). There is NO
+# .star callback in this plugin (no starlark.Call ever fires for a sulfur cube), so it needs NO capability.
+capabilities = []

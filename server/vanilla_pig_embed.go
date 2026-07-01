@@ -29,7 +29,7 @@ import (
 // embedded manifest governs, T-24-07). Keep each repo-root/embed pair byte-identical. Embedding the
 // dirs covers plugin.toml + main.star for each mob.
 //
-//go:embed assets/vanilla_pig assets/vanilla_cow assets/vanilla_sheep assets/vanilla_chicken assets/vanilla_zombie assets/vanilla_skeleton assets/vanilla_spider assets/vanilla_wolf assets/vanilla_husk assets/vanilla_mooshroom assets/vanilla_silverfish assets/vanilla_creeper assets/vanilla_witch assets/vanilla_rabbit assets/vanilla_enderman assets/vanilla_cat assets/vanilla_fox
+//go:embed assets/vanilla_pig assets/vanilla_cow assets/vanilla_sheep assets/vanilla_chicken assets/vanilla_zombie assets/vanilla_skeleton assets/vanilla_spider assets/vanilla_wolf assets/vanilla_husk assets/vanilla_mooshroom assets/vanilla_silverfish assets/vanilla_creeper assets/vanilla_witch assets/vanilla_rabbit assets/vanilla_enderman assets/vanilla_cat assets/vanilla_fox assets/vanilla_sulfur_cube
 var vanillaMobFS embed.FS
 
 // The declared mob names the swap sites look up. Each is the directory name under assets/ AND the
@@ -95,6 +95,11 @@ const (
 	// MOB-PASS-06 (Task #9): the Fox — the ambient slice (float/panic/breed/melee/leap/stroll/look); the
 	// large fox character layer (sleep/pounce/stalk/berries/trust/avoid) is cite-deferred. Additive.
 	vanillaFoxMobName = "vanilla_fox"
+
+	// MOB-CUBE (SulfurCube): the NEW 26.2 size-scaled cube mob — the jump-move state machine + split-on-death
+	// + size scaling (Go-native cube goals + sulfurCubeAiStep). Biome-gated (sulfur_caves), so NOT in the
+	// natural pool. Additive to the embed + load order.
+	vanillaSulfurCubeMobName = "vanilla_sulfur_cube"
 )
 
 // vanillaMobNames is the load order: ALL EIGHT bundled mobs (the 4 passives + the 3 Phase-35 hostiles +
@@ -122,6 +127,7 @@ var vanillaMobNames = []string{
 	vanillaEndermanMobName,
 	vanillaCatMobName,
 	vanillaFoxMobName,
+	vanillaSulfurCubeMobName,
 }
 
 // loadVanillaMobRegistry materializes EACH bundled vanilla mob plugin to a temp dir, parses its

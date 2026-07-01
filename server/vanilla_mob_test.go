@@ -73,6 +73,11 @@ var allFourMobs = []struct {
 	// leap@10 + stroll@11 + look@12 (8 goalSelector, 0 targetSelector); the fox character layer + prey
 	// targets cite-deferred.
 	{vanillaFoxMobName, entity.Fox.ID, 8, 0},
+	// MOB-CUBE (SulfurCube): the NEW 26.2 cube mob — the AbstractCubeMob.registerGoals CORE jump-move goals
+	// (CubeMobFloatGoal@1 + CubeMobRandomDirectionGoal@4 + CubeMobKeepOnJumpingGoal@5 = 3 goalSelector, 0
+	// targetSelector — addTargetingGoals is EMPTY). The SulfurCube.addBehaviourGoals TemptGoal@2 +
+	// SearchForItemsGoal@3 are cite-deferred (tempt/item-pickup subsystems).
+	{vanillaSulfurCubeMobName, entity.SulfurCube.ID, 3, 0},
 }
 
 // TestAllFourMobsBootLoad: loadVanillaMobRegistry returns ONE registry holding the passive + hostile +
@@ -87,9 +92,9 @@ func TestAllFourMobsBootLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadVanillaMobRegistry: %v", err)
 	}
-	const wantTotal = 17 // + Task-#9 mobs (husk/mooshroom/silverfish/creeper/witch/rabbit/enderman/cat/fox)
+	const wantTotal = 18 // + Task-#9 mobs + the SulfurCube (husk/mooshroom/silverfish/creeper/witch/rabbit/enderman/cat/fox/sulfur_cube)
 	if got := len(r.byName); got != wantTotal {
-		t.Fatalf("registry holds %d declarations, want %d (17: passives+hostiles+variants+witch+rabbit+enderman+cat+fox)", got, wantTotal)
+		t.Fatalf("registry holds %d declarations, want %d (18: passives+hostiles+variants+witch+rabbit+enderman+cat+fox+sulfur_cube)", got, wantTotal)
 	}
 	for _, m := range allFourMobs {
 		decl, ok := r.byName[m.name]

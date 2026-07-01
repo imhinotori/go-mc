@@ -205,7 +205,7 @@ func buildAIFromDecl(t *TickLoop, decl *mobDecl) *mobAI {
 				// hunt/attack). spawnDeclaredMob runs on the tick goroutine; a panic here is isolated by
 				// the tickOnce recover backstop, surfacing the bad declaration loudly rather than shipping
 				// a silently-disarmed hostile. (The .star load already validated the rest of the mob.)
-				panic("buildAIFromDecl: unknown goal kind " + gd.nativeKind + " (valid: nearest_attackable_target, hurt_by_target, melee_attack, spider_attack, leap_at_target, avoid_entity, float, climb_on_powder_snow, sit, follow_owner, owner_hurt_by, owner_hurt, angry_player_target, skeleton_target, enderman_look_for_player, enderman_freeze_when_looked_at, silverfish_merge_stone, silverfish_wake_friends)")
+				panic("buildAIFromDecl: unknown goal kind " + gd.nativeKind + " (valid: nearest_attackable_target, hurt_by_target, melee_attack, spider_attack, leap_at_target, avoid_entity, float, climb_on_powder_snow, sit, follow_owner, owner_hurt_by, owner_hurt, angry_player_target, skeleton_target, enderman_look_for_player, enderman_freeze_when_looked_at, silverfish_merge_stone, silverfish_wake_friends, cube_float, cube_random_direction, cube_keep_on_jumping)")
 			}
 			// The Go goal's OWN flags() must match the declared flags — a declaration that names, e.g.,
 			// kind="melee_attack" but flags=["TARGET"] would route the goal into the WRONG selector AND
@@ -305,6 +305,19 @@ func buildNativeGoal(kind string, gd goalDecl, decl *mobDecl) Goal {
 		// maxDist/speed modifiers use the Creeper's literal args as the v1 default (the ONE consumer wired
 		// so far); a future declaration seam can carry per-goal overrides. Cite Creeper.registerGoals @3.
 		return newAvoidEntityGoal(gd.avoidType, avoidDefaultMaxDist, avoidWalkSpeedModifier, avoidSprintSpeedModifier)
+	case "cube_float":
+		// MOB-CUBE (SulfurCube): AbstractCubeMob.registerGoals @1 CubeMobFloatGoal — {JUMP,MOVE}. Bobs the
+		// cube in water/lava (jump 80% + setWantedMovement(1.2)). Cite AbstractCubeMob$CubeMobFloatGoal.
+		return newCubeMobFloatGoal()
+	case "cube_random_direction":
+		// MOB-CUBE (SulfurCube): AbstractCubeMob.registerGoals @4 CubeMobRandomDirectionGoal — {LOOK}. Picks a
+		// new random heading every 40+nextInt(60) ticks. Cite AbstractCubeMob$CubeMobRandomDirectionGoal.
+		return newCubeMobRandomDirectionGoal()
+	case "cube_keep_on_jumping":
+		// MOB-CUBE (SulfurCube): AbstractCubeMob.registerGoals @5 CubeMobKeepOnJumpingGoal — {JUMP,MOVE}. Keeps
+		// the cube hopping (setWantedMovement(1.0)) whenever it is not a passenger. Cite
+		// AbstractCubeMob$CubeMobKeepOnJumpingGoal.
+		return newCubeMobKeepOnJumpingGoal()
 	case "float":
 		return newFloatGoal()
 	case "climb_on_powder_snow":

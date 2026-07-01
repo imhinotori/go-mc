@@ -427,6 +427,13 @@ func (t *TickLoop) tickAI() {
 		if e.typ == entity.Rabbit.ID {
 			t.rabbitAiStep(e)
 		}
+		// MOB-CUBE (SulfurCube): the AbstractCubeMob CubeMobMoveControl.tick (yaw rotlerp + jump-on-delay +
+		// the direct travel drive) + the squish edge. Per-type-gated like the creeper/enderman, AFTER
+		// serverAiStep so the three cube goals have set the move-control state this tick. ADDITIVE +
+		// cube-gated (zero cost / zero RNG for every non-cube - the pig oracle stream is untouched).
+		if e.typ == entity.SulfurCube.ID {
+			t.sulfurCubeAiStep(e)
+		}
 	}
 
 	// Throttled natural spawner: vanilla attempts every tick (most no-op under cap); v1 runs the

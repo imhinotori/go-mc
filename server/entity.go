@@ -196,6 +196,25 @@ type Entity struct {
 	powered  bool
 	ignited  bool
 
+	// --- CUBE MOB (net.minecraft.world.entity.monster.cubemob.AbstractCubeMob / SulfurCube) ---------
+	//
+	// Tick-owned plain values, set/read ONLY for a sulfur cube (typ == entity.SulfurCube.ID). cubeSize is
+	// AbstractCubeMob.ID_SIZE (the SynchedEntityData Integer size, 1..127 clamped; SulfurCube uses 1 or 2)
+	// - it drives the size-scaled MAX_HEALTH (SulfurCube.setcubeMobHealth: 4*size), MOVEMENT_SPEED
+	// (AbstractCubeMob.setSize: 0.2+0.1*size) and dims (getDefaultDimensions: baseDims.scale(size)). The
+	// move-control fields mirror AbstractCubeMob.CubeMobMoveControl: cubeMoveYRot (the CubeMobMoveControl
+	// .yRot heading it rotlerps toward), cubeJumpDelay (the JumpControl countdown), cubeAggressive (the
+	// isAggressive flag that thirds the jump delay when chasing/tempted), cubeWantMove (the setWantedMovement
+	// speedModifier; a NEGATIVE value is the Operation.WAIT default - no MOVE_TO this tick). cubeWasOnGround
+	// mirrors AbstractCubeMob.wasOnGround (the squish/land edge). Zero for every non-cube entity (the cube
+	// tick gates on typ == entity.SulfurCube.ID).
+	cubeSize        int32
+	cubeMoveYRot    float32
+	cubeJumpDelay   int32
+	cubeAggressive  bool
+	cubeWantMove    float64 // negative sentinel: no MOVE_TO wanted this tick (Operation.WAIT)
+	cubeWasOnGround bool
+
 	// ai is the per-mob AI handle (AI-01, Plan 07-01): the mob's goalSelector + the
 	// navigation/look targets a goal writes (server/ai_mob.go). nil for a non-mob entity (a
 	// dropped item, a player's instance) and for a mob with no AI registered. Hung off the

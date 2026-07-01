@@ -144,6 +144,13 @@ func (t *TickLoop) tickDeath(e *Entity) {
 		// region (regionForEntity(e), NEVER cur() — the region-0 trap, Pitfall 2). The remove
 		// auto-broadcasts RemoveEntities: the tracker's near() no longer returns the gone id, so it is
 		// batched into the next tick's RemoveEntities and dropped from every viewer's tracked set (A2).
+		// MOB-CUBE (SulfurCube): AbstractCubeMob.remove() splits a size>1 cube into 2 smaller cubes JUST
+		// BEFORE the store removal (vanilla's remove() runs the split then super.remove()). Per-type-gated on
+		// typ == entity.SulfurCube.ID; a no-op for every other mob (and for a size-1 cube). Cite
+		// AbstractCubeMob.remove.
+		if e.typ == entity.SulfurCube.ID {
+			t.sulfurCubeSplitOnRemove(e)
+		}
 		t.regionForEntity(e).entities.remove(e.id)
 	}
 }

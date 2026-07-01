@@ -38,3 +38,6 @@ temp//world/
 # local run artifacts
 sulfur-gate.log
 sulfur.exe
+
+# Claude Code agent worktrees
+.claude/worktrees/
