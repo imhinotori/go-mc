@@ -8,7 +8,7 @@
 # EnderMan.registerGoals() (javap-verified this session):
 #   goalSelector:
 #     @0  FloatGoal                              <-- .star (shared passive float)
-#     @1  EndermanFreezeWhenLookedAt            <-- DEFERRED (no player-gaze subsystem)
+#     @1  EndermanFreezeWhenLookedAt            <-- kind="enderman_freeze_when_looked_at" (gaze-freeze, BUILT)
 #     @2  MeleeAttackGoal(1.0)                   <-- kind="melee_attack" (the CORE melee)
 #     @7  WaterAvoidingRandomStrollGoal(1.0)     <-- .star (shared stroll)
 #     @8  LookAtPlayerGoal(Player, 8.0)          <-- .star (shared look)
@@ -16,16 +16,21 @@
 #     @10 EndermanLeaveBlockGoal                <-- DEFERRED (no held-block subsystem)
 #     @11 EndermanTakeBlockGoal                 <-- DEFERRED (no held-block subsystem)
 #   targetSelector:
-#     @1  EndermanLookForPlayerGoal(isAngryAt)  <-- gaze-aggro; v1 substitutes kind="nearest_attackable_target" (cited)
+#     @1  EndermanLookForPlayerGoal(isAngryAt)  <-- kind="enderman_look_for_player" (gaze-aggro, BUILT)
 #     @2  HurtByTargetGoal                       <-- kind="hurt_by_target"
 #     @3  NearestAttackableTargetGoal<Endermite> <-- DEFERRED (no Endermite entity)
 #     @4  ResetUniversalAngerTargetGoal         <-- DEFERRED (no universal-anger subsystem)
 #
 # DEFERRED (cite-recorded, NEVER silently dropped):
 #   - The GAZE subsystem (EndermanFreezeWhenLookedAt@1 + EndermanLookForPlayerGoal@1 "look at the enderman
-#     to aggro it") needs a player-look-direction read absent in v1. SUBSTITUTION: the enderman acquires
-#     the player via the base kind="nearest_attackable_target" (the standard hostile hunt) so it is a real
-#     threat in v1; the gaze-gate lands with the look-direction subsystem.
+#     to aggro it") is now BUILT as the Go-native kinds enderman_freeze_when_looked_at +
+#     enderman_look_for_player (ai_goals_enderman_gaze.go), reading the player's tracked yaw/pitch as the
+#     view vector (Entity.calculateViewVector) for the isBeingStaredBy dot-product cone (coneSize 0.025,
+#     distance-adjusted). This REPLACES the earlier nearest_attackable_target substitution. Cite
+#     EnderMan.isBeingStaredBy / LivingEntity.isLookingAtMe. Residual gaze deferrals (cited in
+#     ai_goals_enderman_gaze.go): the hasLineOfSight raycast (no LoS subsystem), the DATA_CREEPY/
+#     DATA_STARED_AT synched render flags, and the in-combat teleport-management branch of
+#     LookForPlayerGoal.tick (folded into the Go-native endermanAiStep/endermanHurtTeleport teleport).
 #   - Block-carry (LeaveBlock@10 / TakeBlock@11), Endermite target@3, ResetUniversalAnger@4: no held-block /
 #     endermite / universal-anger subsystems in v1.
 #   - The TELEPORT is Go-native (endermanAiStep daylight-flee + endermanHurtTeleport dodge, ai_goals_enderman.go)
@@ -156,6 +161,10 @@ declare_mob(
             tick = float_tick,
             requires_update_every_tick = True,
         ),
+        # @1 EndermanFreezeWhenLookedAt [JUMP, MOVE] — kind="enderman_freeze_when_looked_at". Freezes the
+        # enderman (stops its nav, stares back) while its player target is staring at it within 16 blocks.
+        # Cite EnderMan.registerGoals @1 EndermanFreezeWhenLookedAt.
+        goal(priority = 1, flags = ["JUMP", "MOVE"], kind = "enderman_freeze_when_looked_at"),
         # @2 MeleeAttackGoal(mob, 1.0, false) [MOVE] — kind="melee_attack". Cite EnderMan.registerGoals @2.
         goal(priority = 2, flags = ["MOVE"], kind = "melee_attack"),
         # @7 WaterAvoidingRandomStrollGoal(mob, 1.0) [MOVE] — .star. Cite EnderMan.registerGoals @7.
@@ -186,10 +195,11 @@ declare_mob(
             can_continue = around_continue,
             requires_update_every_tick = True,
         ),
-        # targetSelector @1 (gaze-aggro SUBSTITUTED, cited): kind="nearest_attackable_target" — the base
-        # player hunt bounded by FOLLOW_RANGE 64 (vanilla gates on player-gaze; v1 uses the base hunt until
-        # the look-direction subsystem lands). Cite EnderMan.registerGoals targetSelector @1 (substitution).
-        goal(priority = 1, flags = ["TARGET"], kind = "nearest_attackable_target"),
+        # targetSelector @1 EndermanLookForPlayerGoal(isAngryAt) [TARGET] — kind="enderman_look_for_player".
+        # The REAL gaze-aggro: a player aggroes the enderman only by LOOKING at it (isBeingStaredBy, the
+        # coneSize-0.025 distance-adjusted view-vector dot test) or by having already angered it (isAngryAt),
+        # within FOLLOW_RANGE 64. Cite EnderMan.registerGoals targetSelector @1 EndermanLookForPlayerGoal.
+        goal(priority = 1, flags = ["TARGET"], kind = "enderman_look_for_player"),
         # targetSelector @2 HurtByTargetGoal(mob) [TARGET] — kind="hurt_by_target". Cite EnderMan.registerGoals @2.
         goal(priority = 2, flags = ["TARGET"], kind = "hurt_by_target"),
     ],

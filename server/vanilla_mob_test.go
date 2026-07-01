@@ -57,9 +57,11 @@ var allFourMobs = []struct {
 	// MOB-PASS-05 (Task #9): Rabbit — float@1 + panic@1 + breed@2 + tempt@3 + stroll@6 + look@11
 	// (6 goalSelector, 0 targetSelector); avoid/raid-garden/powder-snow + the hop are cite-deferred.
 	{vanillaRabbitMobName, entity.Rabbit.ID, 6, 0},
-	// MOB-HOST-08 (Task #9): Enderman — float@0 + melee@2 + stroll@7 + look@8 + around@8 (5 goalSelector)
-	// + nearest@1 + hurt_by@2 (2 targetSelector); gaze/block-carry/endermite cite-deferred; teleport Go-native.
-	{vanillaEndermanMobName, entity.Enderman.ID, 5, 2},
+	// MOB-HOST-08 (Task #9): Enderman — float@0 + freeze@1 + melee@2 + stroll@7 + look@8 + around@8
+	// (6 goalSelector) + look_for_player@1 + hurt_by@2 (2 targetSelector); the gaze subsystem (freeze +
+	// look_for_player) is now Go-native (ai_goals_enderman_gaze.go); block-carry/endermite cite-deferred;
+	// teleport Go-native.
+	{vanillaEndermanMobName, entity.Enderman.ID, 6, 2},
 	// MOB-NEUT-03 (Task #9): Cat — float@1 + panic@1 + sit@2 + tempt@4 + follow_owner@6 + breed@10 +
 	// stroll@11 + look@12 (8 goalSelector, 0 targetSelector); comfort/prey goals cite-deferred; fish-tamed.
 	{vanillaCatMobName, entity.Cat.ID, 8, 0},

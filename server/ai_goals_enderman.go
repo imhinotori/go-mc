@@ -11,9 +11,11 @@ package server
 //   - EnderMan.hurtServer: a PROJECTILE hit → try teleport up to 64× (dodge); a non-living-attacker hit →
 //     teleport on nextInt(10)!=0. (Melee from a player: NO teleport — the enderman stands and fights.)
 //
-// v1 STUBS (cited): the gaze subsystem (EndermanFreezeWhenLookedAt / EndermanLookForPlayerGoal — "look at
-// the enderman to aggro it") needs a player-look-direction read that does not exist in v1 → cite-deferred
-// (the enderman still hunts via the base nearest-target/hurt-by goals). Block-carry (LeaveBlock/TakeBlock)
+// GAZE (Task #9, gaze — BUILT): the gaze subsystem (EndermanFreezeWhenLookedAt / EndermanLookForPlayerGoal
+// — "look at the enderman to aggro it") is now the Go-native ai_goals_enderman_gaze.go (kinds
+// enderman_freeze_when_looked_at + enderman_look_for_player). It reads the player's tracked yaw/pitch as
+// the view vector (Entity.calculateViewVector) for the isBeingStaredBy dot-product cone (coneSize 0.025,
+// distance-adjusted), REPLACING the earlier nearest-target substitution. Block-carry (LeaveBlock/TakeBlock)
 // + Endermite target + universal-anger-reset are cite-deferred (no held-block/endermite subsystems). The
 // magic-value/targetChangeTime daylight preconditions collapse to the same isDay+canSeeSky gate the
 // sunBurnTick uses (no light engine); the br==1.0 roll is identical.

@@ -205,7 +205,7 @@ func buildAIFromDecl(t *TickLoop, decl *mobDecl) *mobAI {
 				// hunt/attack). spawnDeclaredMob runs on the tick goroutine; a panic here is isolated by
 				// the tickOnce recover backstop, surfacing the bad declaration loudly rather than shipping
 				// a silently-disarmed hostile. (The .star load already validated the rest of the mob.)
-				panic("buildAIFromDecl: unknown goal kind " + gd.nativeKind + " (valid: nearest_attackable_target, hurt_by_target, melee_attack, spider_attack, leap_at_target, float, sit, follow_owner, owner_hurt_by, owner_hurt, angry_player_target, skeleton_target)")
+				panic("buildAIFromDecl: unknown goal kind " + gd.nativeKind + " (valid: nearest_attackable_target, hurt_by_target, melee_attack, spider_attack, leap_at_target, float, sit, follow_owner, owner_hurt_by, owner_hurt, angry_player_target, skeleton_target, enderman_look_for_player, enderman_freeze_when_looked_at)")
 			}
 			// The Go goal's OWN flags() must match the declared flags — a declaration that names, e.g.,
 			// kind="melee_attack" but flags=["TARGET"] would route the goal into the WRONG selector AND
@@ -323,6 +323,17 @@ func buildNativeGoal(kind string, decl *mobDecl) Goal {
 		// — {TARGET}, NO anger gate (wolves attack skeletons on sight). findTarget scans entity.Skeleton.ID
 		// within FOLLOW_RANGE.
 		return newSkeletonTargetGoal()
+	case "enderman_look_for_player":
+		// MOB-HOST-08 (Task #9, gaze): EnderMan.EndermanLookForPlayerGoal — targetSelector @1, {TARGET}.
+		// The REAL gaze-aggro (a player only angers the enderman by LOOKING at it, or by having already
+		// angered it), REPLACING the v1 nearest_attackable_target substitution. Cite
+		// EnderMan.registerGoals targetSelector @1 EndermanLookForPlayerGoal (ai_goals_enderman_gaze.go).
+		return newEndermanLookForPlayerGoal()
+	case "enderman_freeze_when_looked_at":
+		// MOB-HOST-08 (Task #9, gaze): EnderMan.EndermanFreezeWhenLookedAt — goalSelector @1, {JUMP, MOVE}.
+		// Freezes the enderman (stops its nav, stares back) while its player target is staring at it within
+		// 16 blocks. Cite EnderMan.registerGoals @1 EndermanFreezeWhenLookedAt (ai_goals_enderman_gaze.go).
+		return newEndermanFreezeWhenLookedAtGoal()
 	default:
 		return nil
 	}
