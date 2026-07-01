@@ -140,6 +140,34 @@ type Entity struct {
 	// player within 8 blocks and homes the orb toward them; 0 == not currently following. Tick-owned.
 	followingPlayerID int32
 
+	// --- PROJECTILE / ARROW (net.minecraft.world.entity.projectile.arrow.AbstractArrow) ----------
+	//
+	// Tick-owned plain values, set ONLY for an Arrow (typ==entity.Arrow.ID); zero + never read for any
+	// other entity (the arrow tick gates on isArrow). Snapshot-friendly (plain values, no pointers).
+
+	// isArrow marks this entity as an AbstractArrow. The arrow tick (drag 0.99 + gravity 0.05 + swept
+	// entity/block hit + 1200-tick despawn) runs ONLY for entities with this set. Set at spawn by spawnArrow.
+	isArrow bool
+
+	// arrowBaseDamage is AbstractArrow.baseDamage — setBaseDamageFromMob(power) == power*2.0 +
+	// triangle(difficulty*0.11, 0.57425). onHitEntity deals ceil(clamp(deltaMovement.length()*baseDamage)).
+	arrowBaseDamage float64
+
+	// arrowShooterID is AbstractArrow.getOwner() modeled as the shooter's entity id (NEVER a live pointer
+	// — the Folia/snapshot rule). Attributed on the arrow's damage source; the arrow never hits its owner.
+	arrowShooterID int32
+
+	// arrowLife is AbstractArrow.life — ticks since spawn; tickDespawn discards the arrow at life>=1200.
+	arrowLife int
+
+	// arrowInGround is AbstractArrow.inGround — true once the arrow stuck in a block (deltaMovement zeroed).
+	// A grounded arrow skips flight physics and counts toward despawn (tickDespawn).
+	arrowInGround bool
+
+	// spawnData is the ClientboundAddEntity "data" field (object-specific). For an arrow vanilla sets it to
+	// ownerId+1 (the client owner link for crit visuals); 0 for a plain mob. Set at spawn.
+	spawnData int32
+
 	// ai is the per-mob AI handle (AI-01, Plan 07-01): the mob's goalSelector + the
 	// navigation/look targets a goal writes (server/ai_mob.go). nil for a non-mob entity (a
 	// dropped item, a player's instance) and for a mob with no AI registered. Hung off the

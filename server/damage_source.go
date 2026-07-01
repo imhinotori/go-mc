@@ -54,6 +54,9 @@ var (
 	// damageTypeOnFire is minecraft:on_fire — the source Entity.baseTick deals every 20 fire ticks
 	// (damageSources().onFire(), 1.0 damage) while remainingFireTicks > 0.
 	damageTypeOnFire = damageTypeID(tag.DamageTypeIDs["minecraft:on_fire"])
+	// damageTypeArrow is minecraft:arrow — the source AbstractArrow.onHitEntity deals
+	// (damageSources().arrow(this, owner)). NOT a bypasses_armor member (the victim folds the armor curve).
+	damageTypeArrow = damageTypeID(tag.DamageTypeIDs["minecraft:arrow"])
 )
 
 // damageSourceOf builds a DamageSource for an environmental/anonymous source: the given damage-type
@@ -97,4 +100,12 @@ func damageSourcePlayerAttack(attackerID int32) damageSource {
 // mob's PanicGoal still reads it) and NOT a bypasses_armor member (so the victim folds the armor curve).
 func damageSourceMobAttack(attackerID int32) damageSource {
 	return damageSource{typeTag: damageTypeMobAttack, attacker: attackerID}
+}
+
+// damageSourceArrow builds the DamageSource for an arrow hit: type arrow with the SHOOTER's entity id as
+// the causing entity. The port of DamageSources.arrow(AbstractArrow, Entity) — type ARROW, causingEntity
+// = the owner (the shooting mob/player). attackerID 0 means an ownerless arrow (it attributes to itself
+// in vanilla; here 0 = anonymous). Cite AbstractArrow.onHitEntity: damageSources().arrow(this, owner).
+func damageSourceArrow(attackerID int32) damageSource {
+	return damageSource{typeTag: damageTypeArrow, attacker: attackerID}
 }

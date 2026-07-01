@@ -21,8 +21,8 @@
 #     @5 WaterAvoidingRandomStrollGoal(this, 1.0)           <-- .star (the shared passive stroll)
 #     @6 LookAtPlayerGoal(Player, 8.0)                      <-- .star (the shared passive look)
 #     @6 RandomLookAroundGoal                               <-- .star (the shared passive around)
-#   reassessWeaponGoal (held-item swap): bow -> RangedBowAttackGoal@4 (DEFERRED), else meleeGoal@4
-#     @4 MeleeAttackGoal(this, 1.0, false)                  <-- kind="melee_attack" (35-01 meleeAttackGoal; v1 MELEE-ONLY)
+#   reassessWeaponGoal (held-item swap): bow -> RangedBowAttackGoal@4 (ACTIVE — the skeleton holds a bow)
+#     @4 RangedBowAttackGoal(this, 1.0, 20|40, 15.0)        <-- kind="ranged_bow_attack" (PROJECTILE-01; fires Arrows)
 #   targetSelector:
 #     @1 HurtByTargetGoal(this)                             <-- kind="hurt_by_target" (35-01 hurtByTargetGoal)
 #     @2 NearestAttackableTargetGoal<Player>(this, Player, mustSee=true)  <-- kind="nearest_attackable_target"
@@ -158,10 +158,12 @@ declare_mob(
         # supplier defaults — NO override needed (seedAttributes leaves them at the registered base).
     },
     goals = [
-        # @4 MeleeAttackGoal(mob, 1.0, false) [MOVE] — kind="melee_attack" (the 35-01 meleeAttackGoal,
-        # added by reassessWeaponGoal's melee `else` branch since v1 has no bow): chases the target + fires
-        # doHurtTarget through the Phase-29 keystone (REAL ATTACK_DAMAGE). Cite AbstractSkeleton.reassessWeaponGoal @4.
-        goal(priority = 4, flags = ["MOVE"], kind = "melee_attack"),
+        # @4 RangedBowAttackGoal(mob, 1.0, 20|40, 15.0) [MOVE, LOOK] — kind="ranged_bow_attack"
+        # (the PROJECTILE-01 rangedBowAttackGoal): the skeleton HOLDS A BOW, so reassessWeaponGoal's bow
+        # branch installs THIS goal (not the melee `else`). It closes to bow range, charges 20 ticks, and
+        # fires an Arrow at the target (setBaseDamageFromMob(1.0) ≈ 2 + noise, velocity 1.6, inaccuracy 6 on
+        # NORMAL). Replaces the v1 MELEE-ONLY stub. Cite AbstractSkeleton.reassessWeaponGoal @4 (bow branch).
+        goal(priority = 4, flags = ["MOVE", "LOOK"], kind = "ranged_bow_attack"),
         # @5 WaterAvoidingRandomStrollGoal(mob, 1.0) [MOVE] — .star (passive). can_use commits the
         # candidates (path_to), so NO start kwarg. Cite AbstractSkeleton.registerGoals @5.
         goal(

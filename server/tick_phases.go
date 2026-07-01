@@ -229,6 +229,14 @@ func (t *TickLoop) tickEntities() {
 	// removal is reflected in this tick's near() and the tracker emits RemoveEntities promptly.
 	t.tickOrbs()
 
+	// PROJECTILE-01 (Task #8): the AbstractArrow flight lifecycle — AbstractArrow.tick (block latch,
+	// drag 0.99 + gravity 0.05, swept entity hit → onHitEntity, 1200-tick despawn) for every in-flight
+	// arrow. A single ADDITIVE call inside this existing phase keeps the tick order unchanged
+	// (TestTickPhaseOrder stays green), mirroring the tickOrbs seam directly above. Its body lives in
+	// projectile.go. Placed AFTER tickOrbs and BEFORE tracker.Tick so a hit/despawn removal is reflected
+	// in this tick's near() and the tracker emits RemoveEntities promptly.
+	t.tickArrows()
+
 	// Plan 17-21 block-break dig-time: the ServerPlayerGameMode.tick() port — advance any pending
 	// delayed-destroy (finish the break at progress>=1.0) and refresh the in-progress crack overlay
 	// for each digging player. A single ADDITIVE call inside this existing phase keeps the tick order

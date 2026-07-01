@@ -175,7 +175,7 @@ func encodeAddEntity(e *Entity) pk.Packet {
 		degToByteAngle(e.pitch),   // 8: xRot
 		degToByteAngle(e.yaw),     // 9: yRot
 		degToByteAngle(e.headYaw), // 10: yHeadRot
-		pk.VarInt(0),              // 11: data (object-specific; 0 for a plain mob)
+		pk.VarInt(e.spawnData),    // 11: data (object-specific; 0 for a plain mob, ownerId+1 for an arrow)
 	)
 }
 

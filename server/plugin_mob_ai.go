@@ -276,6 +276,11 @@ func buildNativeGoal(kind string, decl *mobDecl) Goal {
 		return newHurtByTargetGoal()
 	case "melee_attack":
 		return newMeleeAttackGoal(declaredWalkSpeed(decl))
+	case "ranged_bow_attack":
+		// PROJECTILE-01 (Task #8): AbstractSkeleton's RangedBowAttackGoal(this, 1.0, 20|40, 15.0) — the
+		// bow goal that charges + fires an Arrow (ai_goals_ranged.go). Replaces the skeleton's melee goal
+		// (the skeleton now shoots instead of swinging). Cite AbstractSkeleton.reassessWeaponGoal @4.
+		return newRangedBowAttackGoal()
 	case "spider_attack":
 		return newSpiderAttackGoal(declaredWalkSpeed(decl))
 	case "leap_at_target":
