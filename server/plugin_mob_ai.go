@@ -205,7 +205,7 @@ func buildAIFromDecl(t *TickLoop, decl *mobDecl) *mobAI {
 				// hunt/attack). spawnDeclaredMob runs on the tick goroutine; a panic here is isolated by
 				// the tickOnce recover backstop, surfacing the bad declaration loudly rather than shipping
 				// a silently-disarmed hostile. (The .star load already validated the rest of the mob.)
-				panic("buildAIFromDecl: unknown goal kind " + gd.nativeKind + " (valid: nearest_attackable_target, hurt_by_target, melee_attack, spider_attack, leap_at_target, avoid_entity, float, climb_on_powder_snow, sit, follow_owner, owner_hurt_by, owner_hurt, angry_player_target, skeleton_target, enderman_look_for_player, enderman_freeze_when_looked_at, silverfish_merge_stone, silverfish_wake_friends, cube_float, cube_random_direction, cube_keep_on_jumping, fox_faceplant, fox_stalk, fox_pounce, fox_seek_shelter, fox_sleep, fox_perch_search, fox_defend_trusted, fox_land_target, turtle_goto_water, turtle_go_home, turtle_travel, turtle_lay_egg, restrict_sun, flee_sun, nearest_healable_raider_target, cat_relax_on_owner, cat_lie_on_bed, cat_sit_on_block)")
+				panic("buildAIFromDecl: unknown goal kind " + gd.nativeKind + " (valid: nearest_attackable_target, hurt_by_target, melee_attack, spider_attack, leap_at_target, avoid_entity, float, climb_on_powder_snow, sit, follow_owner, owner_hurt_by, owner_hurt, angry_player_target, skeleton_target, enderman_look_for_player, enderman_freeze_when_looked_at, silverfish_merge_stone, silverfish_wake_friends, cube_float, cube_random_direction, cube_keep_on_jumping, fox_faceplant, fox_stalk, fox_pounce, fox_seek_shelter, fox_sleep, fox_perch_search, fox_defend_trusted, fox_land_target, fox_search_items, turtle_goto_water, turtle_go_home, turtle_travel, turtle_lay_egg, restrict_sun, flee_sun, nearest_healable_raider_target, cat_relax_on_owner, cat_lie_on_bed, cat_sit_on_block)")
 			}
 			// The Go goal's OWN flags() must match the declared flags — a declaration that names, e.g.,
 			// kind="melee_attack" but flags=["TARGET"] would route the goal into the WRONG selector AND
@@ -439,6 +439,12 @@ func buildNativeGoal(kind string, gd goalDecl, decl *mobDecl) Goal {
 	case "fox_land_target":
 		// Fox.registerGoals landTargetGoal NearestAttackableTargetGoal<Chicken|Rabbit> — {TARGET}; nextInt(10).
 		return newFoxLandTargetGoal()
+	case "fox_search_items":
+		// Fox.registerGoals @11 FoxSearchForItemsGoal — {MOVE}; canUse rolls nextInt(reducedTickDelay(10))
+		// == nextInt(5). The forage-walk toward a nearby dropped item; the pickup itself is the shared
+		// Mob.aiStep looting scan (mobPickupItems, item_entity_mob.go). Cite Fox.registerGoals @11
+		// FoxSearchForItemsGoal.
+		return newFoxSearchForItemsGoal()
 	case "turtle_goto_water":
 		// MOB-PREY (Task #9): Turtle.registerGoals @3 TurtleGoToWaterGoal(this, 1.0) — {MOVE, JUMP}. The
 		// MoveToBlockGoal that finds the nearest WATER cell (range 24) and walks to it (ai_goals_turtle.go).

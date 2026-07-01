@@ -692,6 +692,16 @@ type Entity struct {
 	//	 `private final EnumMap<EquipmentSlot,ItemStack> items;` get/set over it.]
 	equipment [equipmentSlotCount]component.SlotData
 
+	// canPickUpLoot is net.minecraft.world.entity.Mob.canPickUpLoot — the boolean field the Mob.aiStep
+	// looting scan gates on. Default FALSE (Mob's ctor: `this.canPickUpLoot = false`), so a passive Animal
+	// (the oracle pig) NEVER runs the pickup scan and draws ZERO new RNG. A mob that overrides it to true
+	// in its ctor (Fox: `setCanPickUpLoot(true)`) — or a hostile with CanPickUpLoot in its save data —
+	// enters the scan. Set at spawn (plugin_mob_decl.go) for the mobs that default it true; read by
+	// mobPickupItems (item_entity_mob.go). Tick-owned (TICK-05).
+	//	[VERIFIED javap Mob: `private boolean canPickUpLoot;` = false in <init>; canPickUpLoot() getter,
+	//	 setCanPickUpLoot(boolean) setter; Fox.<init> calls setCanPickUpLoot(true).]
+	canPickUpLoot bool
+
 	// --- MOB-HOST-08 (Enderman block-carry): the DATA_CARRY_STATE synched state -----------------
 	//
 	// carriedBlockState mirrors net.minecraft.world.entity.monster.EnderMan's DATA_CARRY_STATE

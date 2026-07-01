@@ -746,3 +746,107 @@ func foxTargetGoneClears(t *TickLoop, e *Entity) bool {
 	_, _, _, _, ok := foxResolveTarget(t, e)
 	return !ok
 }
+
+// --- fox constants for the search goal (jar-verified) ----------------------------------------------
+const (
+	foxSearchInterval   = 5   // FoxSearchForItemsGoal.canUse: nextInt(reducedTickDelay(10)) == 0 (reducedTickDelay(10)=5)
+	foxSearchBoxInflate = 8.0 // FoxSearchForItemsGoal: getBoundingBox().inflate(8.0, 8.0, 8.0) item search box
+	foxSearchMoveSpeed  = 1.2 // FoxSearchForItemsGoal.tick/start: getNavigation().moveTo(item, 1.2)
+)
+
+// @11 FoxSearchForItemsGoal — flags {MOVE}. Ports net.minecraft.world.entity.animal.fox.Fox
+// $FoxSearchForItemsGoal (the fox walks to a nearby dropped item to pick it into its mouth). No mouth
+// state stored on the goal — the pickup itself is Mob.aiStep's looting scan (mobPickupItems), which the
+// fox reaches once it stands on the item. This goal is JUST the "walk toward the item" movement.
+// VERIFIED javap Fox$FoxSearchForItemsGoal:
+//
+//	ctor: setFlags(MOVE).
+//	canUse: !getItemBySlot(MAINHAND).isEmpty() -> false; (getTarget()!=null || getLastHurtByMob()!=null)
+//	  -> false; !canMove() -> false; getRandom().nextInt(reducedTickDelay(10))!=0 -> false;
+//	  list = getEntitiesOfClass(ItemEntity, getBoundingBox().inflate(8,8,8), ALLOWED_ITEMS);
+//	  return !list.isEmpty() && getItemBySlot(MAINHAND).isEmpty().
+//	start/tick: re-query the same box; if mainhand empty && list non-empty -> navigation.moveTo(list.get(0), 1.2).
+//	ALLOWED_ITEMS predicate: e -> !e.hasPickUpDelay() && e.isAlive().
+type foxSearchForItemsGoal struct {
+	baseGoal
+}
+
+func newFoxSearchForItemsGoal() *foxSearchForItemsGoal {
+	return &foxSearchForItemsGoal{baseGoal: newBaseGoal(flagMove)}
+}
+
+// foxNearestSearchItem finds the first dropped ItemEntity in the fox's inflate(8,8,8) search box that
+// passes ALLOWED_ITEMS (!hasPickUpDelay && isAlive) — the list.get(0) the goal navigates to. Returns the
+// item position + ok. Deterministic on the store's near() order (the v1 stand-in for getEntitiesOfClass
+// iteration order; single-region in the fox tests). No RNG.
+func foxNearestSearchItem(t *TickLoop, e *Entity) (ix, iy, iz float64, ok bool) {
+	hw := e.width/2 + foxSearchBoxInflate
+	loX, hiX := e.x-hw, e.x+hw
+	loY, hiY := e.y-foxSearchBoxInflate, e.y+e.height+foxSearchBoxInflate
+	loZ, hiZ := e.z-hw, e.z+hw
+	rangeChunks := int(math.Ceil(foxSearchBoxInflate / 16.0))
+	if rangeChunks < 1 {
+		rangeChunks = 1
+	}
+	for _, ie := range t.cur().entities.near(e.x, e.z, rangeChunks) {
+		if !ie.isItem {
+			continue
+		}
+		// ALLOWED_ITEMS: !hasPickUpDelay() (pickupDelay==0) && isAlive() (non-empty stack, not removed).
+		if ie.pickupDelay != 0 || ie.itemStack.Count <= 0 {
+			continue
+		}
+		ihw := ie.width / 2
+		if hiX <= ie.x-ihw || ie.x+ihw <= loX ||
+			hiY <= ie.y || ie.y+ie.height <= loY ||
+			hiZ <= ie.z-ihw || ie.z+ihw <= loZ {
+			continue
+		}
+		return ie.x, ie.y, ie.z, true
+	}
+	return 0, 0, 0, false
+}
+
+func (g *foxSearchForItemsGoal) canUse(t *TickLoop, e *Entity) bool {
+	// !getItemBySlot(MAINHAND).isEmpty() -> false (the mouth is already full).
+	if e.getMainHandItem().Count > 0 {
+		return false
+	}
+	// getTarget()!=null || getLastHurtByMob()!=null -> false (busy fighting / retaliating).
+	if e.ai != nil && e.ai.getTarget() != 0 {
+		return false
+	}
+	if e.lastHurtByMob != 0 {
+		return false
+	}
+	// !canMove() -> false (sleeping/sitting/faceplanted fox does not forage).
+	if !foxCanMove(e) {
+		return false
+	}
+	// getRandom().nextInt(reducedTickDelay(10)) != 0 -> false (the 1-in-5 forage roll).
+	if mobRandom(e).nextInt(foxSearchInterval) != 0 { // DRAW: nextInt(5)
+		return false
+	}
+	// list = getEntitiesOfClass(ItemEntity, inflate(8,8,8), ALLOWED_ITEMS); return !list.isEmpty() &&
+	// mainhand empty (re-checked — still empty here).
+	_, _, _, ok := foxNearestSearchItem(t, e)
+	return ok
+}
+
+func (g *foxSearchForItemsGoal) start(t *TickLoop, e *Entity) { g.moveToItem(t, e) }
+func (g *foxSearchForItemsGoal) tick(t *TickLoop, e *Entity)  { g.moveToItem(t, e) }
+
+// moveToItem is the shared body of FoxSearchForItemsGoal.start/tick: if the mouth is empty and an item
+// is in range, navigation.moveTo(list.get(0), 1.2). No RNG.
+func (g *foxSearchForItemsGoal) moveToItem(t *TickLoop, e *Entity) {
+	if e.getMainHandItem().Count > 0 {
+		return // mainhand not empty: the guard both start/tick share
+	}
+	ix, iy, iz, ok := foxNearestSearchItem(t, e)
+	if !ok {
+		return
+	}
+	if e.ai != nil {
+		e.ai.setWantTargetSpeed(ix, iy, iz, foxSearchMoveSpeed) // navigation.moveTo(item, 1.2)
+	}
+}

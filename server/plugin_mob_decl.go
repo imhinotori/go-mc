@@ -615,6 +615,17 @@ func (t *TickLoop) spawnDeclaredMob(decl *mobDecl, x, y, z float64) *Entity {
 	if e.typ == entity.Turtle.ID {
 		setTurtleHomePos(e, floorI(e.x), floorI(e.y), floorI(e.z))
 	}
+	// MOB item-pickup (net.minecraft.world.entity.Mob.canPickUpLoot): the Fox <init> calls
+	// setCanPickUpLoot(true) (javap Fox.<init>), so a spawned fox runs the Mob.aiStep looting scan
+	// (mobPickupItems, item_entity_mob.go) — it picks up food off the ground into its mouth. Set HERE
+	// (the spawn path, after the store position is fixed), fox-gated (typ == entity.Fox.ID). PURE field
+	// set — NO RNG — so every non-fox mob (the oracle pig) is a zero-cost skip and its RNG stream is
+	// byte-identically unperturbed. Hostiles (zombie/skeleton) default canPickUpLoot=false in v1 (their
+	// finalizeSpawn CanPickUpLoot roll is a cited deferral); only the Fox overrides it in its ctor.
+	// Cite Mob.canPickUpLoot / Fox.<init> setCanPickUpLoot(true).
+	if e.typ == entity.Fox.ID {
+		e.canPickUpLoot = true
+	}
 	// Phase-27 (N=2): add the mob to the region that OWNS its column, NOT t.only().
 	// only() resolves to the CALLING goroutine's region — globalRegion when spawned from the
 	// coordinator (e.g. the SULFUR_TEST_KIT gate egg's use-packet path) — which orphans the mob

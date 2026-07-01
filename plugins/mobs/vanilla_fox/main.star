@@ -26,7 +26,7 @@
 #   @10 FoxEatBerriesGoal                               <-- DEFERRED (no SWEET_BERRY_BUSH/cave-vine + MoveToBlockGoal)
 #   @10 LeapAtTargetGoal(0.4)                           <-- kind="leap_at_target" (now fires vs a real prey target)
 #   @11 WaterAvoidingRandomStrollGoal(1.0)              <-- .star (shared stroll)
-#   @11 FoxSearchForItemsGoal                           <-- DEFERRED (no fox MAINHAND slot / ItemEntity pickup)
+#   @11 FoxSearchForItemsGoal                           <-- kind="fox_search_items" (LANDS: forage-walk to an item)
 #   @12 FoxLookAtPlayerGoal(Player, 24.0)               <-- .star (shared look, dist 24.0)
 #   @13 PerchAndSearchGoal                              <-- kind="fox_perch_search" (LANDS: idle sit-and-scan)
 #   targetSelector @3 DefendTrustedTargetGoal           <-- kind="fox_defend_trusted" (LANDS for a trusted MOB)
@@ -35,7 +35,6 @@
 #
 # STILL DEFERRED (cite-recorded, NEVER silently dropped):
 #   - FoxEatBerriesGoal @10: needs the SWEET_BERRY_BUSH / cave-vine blocks + MoveToBlockGoal (no berry block).
-#   - FoxSearchForItemsGoal @11: needs the fox MAINHAND equipment slot + ItemEntity pickup (no fox inventory).
 #   - FoxStrollThroughVillageGoal @9: needs the village POI subsystem.
 #   - ClimbOnTopOfPowderSnowGoal @0: needs the powder-snow subsystem.
 #   - AvoidEntityGoal @4 (player/wolf/polar-bear): needs an AvoidEntityGoal port (trust FIELDS land; avoid defers).
@@ -493,6 +492,9 @@ declare_mob(
         # @13 PerchAndSearchGoal [MOVE, LOOK] — kind="fox_perch_search" (the idle sit-and-scan; 2% roll).
         # Cite Fox.registerGoals @13 PerchAndSearchGoal.
         goal(priority = 13, flags = ["MOVE", "LOOK"], kind = "fox_perch_search"),
+        # @11 FoxSearchForItemsGoal [MOVE] — kind="fox_search_items" (forage-walk to a nearby dropped item;
+        # the pickup is the shared Mob.aiStep looting scan). Cite Fox.registerGoals @11 FoxSearchForItemsGoal.
+        goal(priority = 11, flags = ["MOVE"], kind = "fox_search_items"),
         # targetSelector @3 DefendTrustedTargetGoal [TARGET] — kind="fox_defend_trusted" (retaliate for a
         # hurt trusted entity). Cite Fox.registerGoals targetSelector @3 DefendTrustedTargetGoal.
         goal(priority = 3, flags = ["TARGET"], kind = "fox_defend_trusted"),

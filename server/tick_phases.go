@@ -403,6 +403,14 @@ func (t *TickLoop) tickAI() {
 
 	for _, e := range snapshot {
 		e.ai.serverAiStep(t, e) // 07-01 goals + 07-02 navigation: the real ported AI walk
+		// MOB item-pickup (net.minecraft.world.entity.Mob.aiStep looting block): a mob that canPickUpLoot()
+		// scans getBoundingBox().inflate(1,0,1) for dropped items and picks them up (item_entity_mob.go). Runs
+		// as part of aiStep for EVERY live mob, gated INSIDE mobPickupItems on e.canPickUpLoot -- FALSE for every
+		// Animal (the oracle pig), so a non-pickup mob returns at the first gate with ZERO new RNG draws and the
+		// pig oracle stream is byte-identically unperturbed. Only the Fox (setCanPickUpLoot(true)) enters it in
+		// v1. Placed AFTER serverAiStep (mirroring vanilla aiStep, where the looting scan runs after the goal/
+		// nav tick). Cite Mob.aiStep looting block.
+		t.mobPickupItems(e)
 		// MOB-PASS-03 (Phase 34): the Chicken.aiStep server extras (slow-fall + egg-lay). Vanilla runs
 		// aiStep INDEPENDENTLY of the running goals (Mob.aiStep -> customServerAiStep), so it fires every
 		// tick for a live chicken regardless of which goal is active. It is gated on typ == entity.Chicken.ID
