@@ -29,7 +29,7 @@ import (
 // embedded manifest governs, T-24-07). Keep each repo-root/embed pair byte-identical. Embedding the
 // dirs covers plugin.toml + main.star for each mob.
 //
-//go:embed assets/vanilla_pig assets/vanilla_cow assets/vanilla_sheep assets/vanilla_chicken assets/vanilla_zombie assets/vanilla_skeleton assets/vanilla_spider assets/vanilla_wolf
+//go:embed assets/vanilla_pig assets/vanilla_cow assets/vanilla_sheep assets/vanilla_chicken assets/vanilla_zombie assets/vanilla_skeleton assets/vanilla_spider assets/vanilla_wolf assets/vanilla_husk assets/vanilla_mooshroom
 var vanillaMobFS embed.FS
 
 // The declared mob names the swap sites look up. Each is the directory name under assets/ AND the
@@ -61,6 +61,12 @@ const (
 	// With the asset present, spawnVanillaMob(vanillaWolfMobName) + /dbg wolf now resolve a real
 	// boot-loaded declaration.
 	vanillaWolfMobName = "vanilla_wolf"
+
+	// MOB-VARIANT (Task #9): the zero-subsystem variants. Husk (extends Zombie, MONSTER) and Mooshroom
+	// (extends AbstractCow, CREATURE) reuse the parent's goals + attributes verbatim — the plugins are the
+	// zombie/cow declarations with base_type husk/mooshroom. Additive to the embed + load order below.
+	vanillaHuskMobName      = "vanilla_husk"
+	vanillaMooshroomMobName = "vanilla_mooshroom"
 )
 
 // vanillaMobNames is the load order: ALL EIGHT bundled mobs (the 4 passives + the 3 Phase-35 hostiles +
@@ -79,6 +85,8 @@ var vanillaMobNames = []string{
 	vanillaSkeletonMobName,
 	vanillaSpiderMobName,
 	vanillaWolfMobName,
+	vanillaHuskMobName,
+	vanillaMooshroomMobName,
 }
 
 // loadVanillaMobRegistry materializes EACH bundled vanilla mob plugin to a temp dir, parses its

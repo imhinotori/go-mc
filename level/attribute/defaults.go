@@ -169,6 +169,29 @@ func cowSupplier() *Supplier {
 		Build()
 }
 
+
+// mooshroomSupplier is MushroomCow's attribute supplier. MushroomCow extends AbstractCow and does NOT
+// override createAttributes (javap-verified), so its supplier is IDENTICAL to the cow's (AbstractCow.
+// createAttributes: MAX_HEALTH 10, MOVEMENT_SPEED 0.2). Cite MushroomCow (no createAttributes override).
+func mooshroomSupplier() *Supplier {
+	return createAnimalAttributes().
+		AddValue(MaxHealth, 10.0).
+		AddValue(MovementSpeed, 0.20000000298023224).
+		Build()
+}
+
+// huskSupplier is Husk's attribute supplier. Husk extends Zombie and does NOT override createAttributes
+// (javap-verified), so its supplier is IDENTICAL to the zombie's (Zombie.createAttributes: FOLLOW_RANGE
+// 35, MOVEMENT_SPEED 0.23, ATTACK_DAMAGE 3, ARMOR 2). Cite Husk (no createAttributes override).
+func huskSupplier() *Supplier {
+	return createMonsterAttributes().
+		AddValue(FollowRange, 35.0).
+		AddValue(MovementSpeed, 0.23000000417232513).
+		AddValue(AttackDamage, 3.0).
+		AddValue(Armor, 2.0).
+		Build()
+}
+
 // wolfSupplier is the port of Wolf.createAttributes() : Animal.createAnimalAttributes() (Wolf extends
 // TamableAnimal -> Animal) + MOVEMENT_SPEED 0.3 + MAX_HEALTH 8.0 + ATTACK_DAMAGE 4.0 (jar:
 // net/minecraft/world/entity/animal/wolf/Wolf.createAttributes — MOVEMENT_SPEED 0.30000001192092896d,
@@ -281,6 +304,10 @@ var suppliers = map[string]*Supplier{
 	// Wolf.createAttributes() (verified bytecode this session). The tamed MAX_HEALTH 40 bump is a runtime
 	// setTame side-effect (Plan B), not the base supplier.
 	"wolf": wolfSupplier(),
+	// MOB-VARIANT (Task #9): the zero-subsystem variants — Husk (extends Zombie) and Mooshroom (extends
+	// AbstractCow), each a 1:1 inherited-attribute copy of its parent (no createAttributes override).
+	"husk":      huskSupplier(),
+	"mooshroom": mooshroomSupplier(),
 }
 
 // livingCategories is the set of data/entity.Entity.Type values that correspond to a vanilla

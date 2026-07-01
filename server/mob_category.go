@@ -122,6 +122,15 @@ func categoryOf(t entity.ID) mobCategory {
 		// other passives it consumes the CREATURE spawn budget. Additive — the pig + the 35 MONSTER arms +
 		// the default arm are untouched (the pig oracle's category accounting is unperturbed).
 		return categoryCreature
+	case entity.Husk.ID:
+		// MOB-VARIANT (Task #9): Husk is MobCategory.MONSTER (vanilla EntityType.HUSK; Husk extends Zombie
+		// which is MONSTER; data/entity Husk.Type == "monster"). Same MONSTER-budget accounting as the zombie.
+		return categoryMonster
+	case entity.Mooshroom.ID:
+		// MOB-VARIANT (Task #9): Mooshroom is MobCategory.CREATURE (vanilla EntityType.MOOSHROOM;
+		// MushroomCow extends AbstractCow which is CREATURE; data/entity Mooshroom.Type == "creature").
+		// Same CREATURE-budget accounting as the cow.
+		return categoryCreature
 	default:
 		return categoryMisc
 	}

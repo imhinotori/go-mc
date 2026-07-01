@@ -366,6 +366,11 @@ func (r spawnCandidatesReady) applyTo(t *TickLoop) {
 // creature to place in the one throttled slot. Kept as its own slice (not reusing vanillaMobNames
 // directly) so a future non-CREATURE bundled mob added to the boot-load is NOT silently dragged into
 // the creature spawn pool — the natural-spawn pool is an explicit, intentional list.
+//
+// NOTE (Task #9): the Mooshroom (vanilla_mooshroom) is boot-loaded + spawnable (declaration + /dbg) but
+// is DELIBERATELY NOT in this uniform natural pool — vanilla spawns it ONLY in mushroom-field biomes. With
+// no per-biome MobSpawnSettings weights yet, adding it here would spawn it everywhere (a behavior
+// DEVIATION, not fidelity). It joins the pool once biome-gated spawn weights land (the cited deferral).
 var naturalCreatureMobNames = []string{
 	vanillaPigMobName,
 	vanillaCowMobName,
@@ -405,6 +410,11 @@ func (t *TickLoop) pickNaturalCreatureMob() string {
 // GATING (category/cap/dark-gate/picker). The picker returns these names by value — a pickNaturalMonsterMob
 // test asserts the name membership WITHOUT needing the embed to load; the live spawnVanillaMob lookup
 // resolves them once the hostile declarations boot-load.
+//
+// NOTE (Task #9): the Husk (vanilla_husk) is boot-loaded + spawnable (declaration + /dbg) but is
+// DELIBERATELY NOT in this uniform natural pool — vanilla spawns it ONLY in desert biomes (a special
+// desert-zombie spawn). With no per-biome MobSpawnSettings weights yet, adding it here would spawn it
+// everywhere (a behavior DEVIATION). It joins the pool once biome-gated spawn weights land (cited deferral).
 var naturalMonsterMobNames = []string{
 	vanillaZombieMobName,
 	vanillaSkeletonMobName,

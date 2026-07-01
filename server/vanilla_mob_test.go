@@ -41,6 +41,10 @@ var allFourMobs = []struct {
 	{vanillaSheepMobName, entity.Sheep.ID, 9, 0},
 	{vanillaChickenMobName, entity.Chicken.ID, 8, 0},
 	{vanillaWolfMobName, entity.Wolf.ID, 10, 5},
+	// MOB-VARIANT (Task #9): Husk == Zombie goals (4 goalSelector + 2 targetSelector, base Husk wire id);
+	// Mooshroom == Cow goals (8 goalSelector + 0 targetSelector, base Mooshroom wire id).
+	{vanillaHuskMobName, entity.Husk.ID, 4, 2},
+	{vanillaMooshroomMobName, entity.Mooshroom.ID, 8, 0},
 }
 
 // TestAllFourMobsBootLoad: loadVanillaMobRegistry returns ONE registry holding the passive + hostile +
@@ -55,9 +59,9 @@ func TestAllFourMobsBootLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadVanillaMobRegistry: %v", err)
 	}
-	const wantTotal = 8 // 4 passives + wolf (this test) + 3 Phase-35 hostiles (TestHostilesBootLoad)
+	const wantTotal = 10 // 4 passives + wolf + 3 hostiles + the Task-#9 variants (husk + mooshroom)
 	if got := len(r.byName); got != wantTotal {
-		t.Fatalf("registry holds %d declarations, want %d (pig/cow/sheep/chicken/wolf + zombie/skeleton/spider)", got, wantTotal)
+		t.Fatalf("registry holds %d declarations, want %d (pig/cow/sheep/chicken/wolf + zombie/skeleton/spider + husk/mooshroom)", got, wantTotal)
 	}
 	for _, m := range allFourMobs {
 		decl, ok := r.byName[m.name]

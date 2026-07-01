@@ -131,6 +131,10 @@ var baseTypeByName = map[string]entity.Entity{
 	"villager":   entity.Villager,
 	"silverfish": entity.Silverfish,
 	"wolf":       entity.Wolf, // MOB-NEUT-01 (Phase 36): the wolf base_type (the LAST v5 mob)
+	// MOB-VARIANT (Task #9): the zero-subsystem variants. Husk extends Zombie, Mooshroom extends
+	// AbstractCow — each renders as its OWN wire type but reuses the parent's goals + attributes.
+	"husk":      entity.Husk,
+	"mooshroom": entity.Mooshroom,
 }
 
 // resolveBaseType resolves a base_type string to its data/entity record. (record, true) for an
