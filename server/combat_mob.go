@@ -219,7 +219,8 @@ func (t *TickLoop) playMobHurtSound(e *Entity) {
 	// playSound(sound, getSoundVolume()==1.0, pitch) -> Level.playSound(...) for the pig hurt sound on the
 	// NEUTRAL category, broadcast to every player tracking the mob (sendToTrackingPlayers analogue). isSilent()
 	// is a v1 constant-false (no DATA_SILENT mob is wired), so the sound always plays — cited.
-	t.broadcastToTrackers(e.id, encodeSoundEntity(soundIDPigHurt, soundSourceNeutral, e.id, mobHurtSoundVolume, pitch, seed))
+	hurtID, _ := mobSoundIDs(e)
+	t.broadcastToTrackers(e.id, encodeSoundEntity(hurtID, soundSourceNeutral, e.id, mobHurtSoundVolume, pitch, seed))
 }
 
 // playMobDeathSound is the port of the DEATH-sound limb of LivingEntity.hurtServer's lethal branch —
@@ -261,7 +262,8 @@ func (t *TickLoop) playMobDeathSound(e *Entity) {
 	// playSound(getDeathSound()==PIG_DEATH, getSoundVolume()==1.0, pitch) -> Level.playSound(...) on the
 	// NEUTRAL category, broadcast to every player tracking the dying mob. isSilent() is a v1 constant-false
 	// (no DATA_SILENT mob wired) so the death sound always plays — cited.
-	t.broadcastToTrackers(e.id, encodeSoundEntity(soundIDPigDeath, soundSourceNeutral, e.id, mobHurtSoundVolume, pitch, seed))
+	_, deathID := mobSoundIDs(e)
+	t.broadcastToTrackers(e.id, encodeSoundEntity(deathID, soundSourceNeutral, e.id, mobHurtSoundVolume, pitch, seed))
 }
 
 // soundIDPigDeath is SoundEvents.PIG_DEATH's registry id ("entity.pig.death" == 1270 in
@@ -279,6 +281,40 @@ const soundIDPigDeath int32 = 1270
 //	[VERIFIED data/soundid/soundid.go: 1269: "entity.pig.hurt"; javap Pig.getHurtSound -> PigSoundVariant
 //	 CLASSIC hurtSound == SoundEvents.PIG_HURT.]
 const soundIDPigHurt int32 = 1269
+
+// mobSoundIDs resolves a mob's (hurt, death) SoundEvent registry ids from its vanilla entity type —
+// the faithful port of each Mob subclass's getHurtSound/getDeathSound override. In vanilla these live
+// on the entity CLASS (not data-driven): Zombie/Spider override directly to ZOMBIE_*/SPIDER_*; Cow's
+// CowSoundVariant CLASSIC and Pig's PigSoundVariant CLASSIC resolve to COW_*/PIG_*; Sheep/Chicken/
+// Skeleton/Wolf resolve to their eponymous SHEEP_*/CHICKEN_*/SKELETON_*/WOLF_* sets. Keying on the
+// host-set wire type (e.typ, never plugin-forgeable) reproduces that per-class dispatch. Unknown types
+// fall back to the LivingEntity defaults' nearest analogue (pig) so the pig oracle path is byte-identical.
+//
+//	[VERIFIED javap/CFR 26.2: monster.zombie.Zombie.getHurtSound->ZOMBIE_HURT, getDeathSound->ZOMBIE_DEATH;
+//	 monster.spider.Spider->SPIDER_HURT/SPIDER_DEATH; animal.cow.AbstractCow getSoundSet()==CowSoundVariant
+//	 CLASSIC->COW_HURT/COW_DEATH; animal.Sheep->SHEEP_HURT/SHEEP_DEATH; animal.Chicken->CHICKEN_HURT/
+//	 CHICKEN_DEATH; monster.Skeleton->SKELETON_HURT/SKELETON_DEATH; animal.wolf.Wolf getSoundSet() CLASSIC
+//	 ->WOLF_HURT/WOLF_DEATH. Registry ids from data/soundid/soundid.go.]
+func mobSoundIDs(e *Entity) (hurt int32, death int32) {
+	switch e.typ {
+	case entity.Zombie.ID:
+		return 1881, 1874 // entity.zombie.hurt, entity.zombie.death
+	case entity.Spider.ID:
+		return 1580, 1579 // entity.spider.hurt, entity.spider.death
+	case entity.Cow.ID:
+		return 451, 452 // entity.cow.hurt, entity.cow.death
+	case entity.Sheep.ID:
+		return 1440, 1439 // entity.sheep.hurt, entity.sheep.death
+	case entity.Chicken.ID:
+		return 357, 358 // entity.chicken.hurt, entity.chicken.death
+	case entity.Skeleton.ID:
+		return 1490, 1481 // entity.skeleton.hurt, entity.skeleton.death
+	case entity.Wolf.ID:
+		return 1806, 1804 // entity.wolf.hurt, entity.wolf.death
+	default:
+		return soundIDPigHurt, soundIDPigDeath // pig + any unported mob: LivingEntity-default analogue
+	}
+}
 
 // mobHurtSoundVolume is LivingEntity.getSoundVolume() == 1.0F (the default mob sound volume).
 //

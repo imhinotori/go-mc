@@ -54,6 +54,9 @@ type mobAI struct {
 	// computes a path, steps the mob, and clears hasTarget on arrival.
 	wantX, wantY, wantZ float64
 	hasTarget           bool
+	// wantSpeed is the per-request move speed (blocks/tick) a CHASE goal sets via setWantTargetSpeed;
+	// 0 means "use the navigation default amble" (pigWalkSpeed) — the stroll/passive path leaves it 0.
+	wantSpeed float64
 
 	// attackTargetID is the thin-id analogue of net.minecraft.world.entity.Mob's current attack target
 	// (the Mob.getTarget() id; 0 == null/no target). The targetSelector goals (HurtByTargetGoal,
@@ -137,10 +140,22 @@ func (j *jumpControl) tick(e *Entity) {
 }
 
 // setWantTarget records a navigation target (the randomStrollGoal start() seam). Setting a
-// target is the v1 stand-in for navigation.moveTo; 07-02 consumes it.
+// target is the v1 stand-in for navigation.moveTo; 07-02 consumes it. The want SPEED is left at the
+// navigation's default amble (pigWalkSpeed) — the stroll/passive pace the pig oracle pins.
 func (m *mobAI) setWantTarget(x, y, z float64) {
 	m.wantX, m.wantY, m.wantZ = x, y, z
 	m.hasTarget = true
+	m.wantSpeed = 0 // 0 == "use the navigation default" (pigWalkSpeed); see serverAiStep's speed route
+}
+
+// setWantTargetSpeed is setWantTarget carrying an explicit per-request move speed (blocks/tick) — the
+// navigation.moveTo(target, speedModifier) overload a CHASE goal uses. The melee goal passes its
+// speedModifier-scaled chase speed so a hunting zombie moves at its real pace, not the passive amble.
+// A 0 speed means "use the navigation default" (the pig stroll path, oracle-pinned, never routes here).
+func (m *mobAI) setWantTargetSpeed(x, y, z, speed float64) {
+	m.wantX, m.wantY, m.wantZ = x, y, z
+	m.hasTarget = true
+	m.wantSpeed = speed
 }
 
 // clearWantTarget drops the navigation target (the navigation.stop() seam, used by the stroll
@@ -237,6 +252,14 @@ func (m *mobAI) serverAiStep(t *TickLoop, e *Entity) {
 	// shouldRecomputePath so an unreachable target cannot flood the A* (Pitfall 6 / T-7-04).
 	// The target is the floor block under the wanted position (the A* works in block coords).
 	if m.hasTarget {
+		// Route the want SPEED into the navigation: a CHASE goal (setWantTargetSpeed) sets a faster pace
+		// than the passive amble; the stroll/passive path leaves wantSpeed 0 → keep the default (the pig
+		// oracle's pinned pigWalkSpeed). navigation.moveTo(target, speedModifier) — the speed half.
+		if m.wantSpeed > 0 {
+			m.navigation.speed = m.wantSpeed
+		} else {
+			m.navigation.speed = pigWalkSpeed
+		}
 		tx, ty, tz := floorI(m.wantX), floorI(m.wantY), floorI(m.wantZ)
 		if m.navigation.shouldRecomputePath(tx, ty, tz) {
 			m.navigation.requestPath(t, e, tx, ty, tz) // snapshot -> computePath -> Path (the seam)

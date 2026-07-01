@@ -92,6 +92,33 @@ func TestSmallFallNoDamage(t *testing.T) {
 	}
 }
 
+// TestSpawnAtLowYNoFallDamage pins the join/respawn invariant that the fall-damage baseline (lastY)
+// MUST seed to the spawn Y — not the zero value. REGRESSION: gameplay_tick's fresh-join tickPlayer
+// left lastY at 0, so the FIRST fall-damage pass computed deltaY = spawnY - 0 (e.g. -46 on a superflat
+// floor at y=-46) and the player "fell" its entire world-Y on join, taking lethal fall damage the
+// instant it landed — every fresh join / respawn on a low-Y world died on spawn. Here a player seeded
+// exactly as the fixed join does it (y == lastY == the deep spawn Y, wasOnGround true) takes ZERO
+// damage on its first grounded tick. A player with the OLD buggy init (lastY 0) would take floor(|Y|-3).
+func TestSpawnAtLowYNoFallDamage(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	const spawnY = -46.0 // a superflat floor spawn (overworldSurfaceY -48 + 2)
+
+	// The join contract (gameplay_tick tickPlayer init): y AND lastY BOTH seed to the spawn Y, and the
+	// player spawns standing (wasOnGround true). fallPlayer applies exactly this seeding.
+	p := fallPlayer(loop, 1, spawnY)
+
+	// First grounded tick standing still at the spawn Y: deltaY = y - lastY = 0, so no fall distance
+	// accumulates and no damage is dealt.
+	step(loop, p, spawnY, true)
+
+	if p.health != maxHealth {
+		t.Fatalf("fresh spawn at y=%v dealt fall damage (health %v, want %v) — lastY not seeded to spawn Y", spawnY, p.health, float32(maxHealth))
+	}
+	if p.fallDistance != 0 {
+		t.Fatalf("fresh spawn accumulated fallDistance %v, want 0 — the lastY-baseline regression", p.fallDistance)
+	}
+}
+
 // TestStayGroundedNoDamage: a player on the ground every tick accumulates nothing and takes no
 // damage.
 func TestStayGroundedNoDamage(t *testing.T) {

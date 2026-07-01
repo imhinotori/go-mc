@@ -246,6 +246,7 @@ func (t *TickLoop) applyDamage(p *tickPlayer, src damageSource, amount float32) 
 		// tookFullDamage == true on this i-frame EXCESS branch (the hit landed its excess), so vanilla
 		// fires the hurt animation. See broadcastPlayerDamageEvent for the full cite.
 		t.broadcastPlayerDamageEvent(p, src)
+		t.dealDefaultKnockbackPlayer(p, src)
 	} else {
 		// Fresh hit (bytecode 240–271): record lastHurt, arm the 20-tick window, apply full damage,
 		// set the hurt-flash duration/time.
@@ -256,6 +257,7 @@ func (t *TickLoop) applyDamage(p *tickPlayer, src damageSource, amount float32) 
 		p.hurtTime = p.hurtDuration
 		// tookFullDamage == true on the fresh sub-branch too — broadcast the hurt animation.
 		t.broadcastPlayerDamageEvent(p, src)
+		t.dealDefaultKnockbackPlayer(p, src)
 	}
 
 	// Death drive: actuallyHurt has set the authoritative health (and sent SetHealth); if it
@@ -263,6 +265,75 @@ func (t *TickLoop) applyDamage(p *tickPlayer, src damageSource, amount float32) 
 	// death sound and the eventual death handling — v1's die() sends the PlayerCombatKill.
 	if p.health <= 0 {
 		t.die(p)
+	}
+}
+
+// dealDefaultKnockbackPlayer is the PLAYER-victim port of LivingEntity.dealDefaultKnockback(DamageSource,
+// float, boolean), the limb of hurtServer that runs on tookFullDamage when the source is not NO_KNOCKBACK.
+// It is the sibling of dealDefaultKnockbackEntity (the mob-victim port, combat_mob.go): same 0.4 power,
+// same source-position direction, but it pushes the PLAYER away and sends the resulting velocity to the
+// player's own client (ServerPlayer is the authority for its motion, so the server-driven impulse must be
+// pushed via ClientboundSetEntityMotion — done inside knockback()). This is what gives a player hit by a
+// mob (or another player) the recoil "pop"; without it a mob hit dealt damage but no knockback.
+//
+//	double xd = 0, zd = 0;
+//	Entity direct = source.getDirectEntity();
+//	if (direct instanceof Projectile) { ... }            // v1: no projectiles — skip
+//	else if (source.getSourcePosition() != null) {       // the attacker's position
+//	    xd = sp.x - this.getX();
+//	    zd = sp.z - this.getZ();
+//	}
+//	this.knockback(0.4, xd, zd, source, damage);
+//	if (!blocked) this.indicateDamage(xd, zd);           // ServerPlayer hurt-direction tilt — cited stub
+//
+// getSourcePosition() resolves to the attacking entity's (x,z): the attacker may be a MOB (resolved in
+// the current region's store — doHurtTarget runs inside that region's AI step) or a PLAYER (PvP). An
+// environmental/anonymous source (attacker 0 — fall/drown/starve/suffocation) leaves xd==zd==0, and
+// knockback's degenerate-direction handling yields no net horizontal push: faithful (those sources are
+// NO_KNOCKBACK or position-less in vanilla, so they never knock the player around).
+//
+//	[VERIFIED javap LivingEntity.hurtServer: if(!source.is(NO_KNOCKBACK)) dealDefaultKnockback(source,
+//	 damage, blocked); LivingEntity.dealDefaultKnockback: getSourcePosition()!=null -> xd = sp.x - getX(),
+//	 zd = sp.z - getZ(); knockback(0.4, xd, zd, source, damage). knockback power ldc2_w 0.4000000059604645d.]
+func (t *TickLoop) dealDefaultKnockbackPlayer(p *tickPlayer, src damageSource) {
+	// `if (!source.is(NO_KNOCKBACK))` — a genuine tag read (DamageTypeTags.NO_KNOCKBACK). A source in
+	// that set never knocks the victim back, exactly as vanilla skips dealDefaultKnockback for it.
+	if src.is("no_knockback") {
+		return
+	}
+
+	// xd/zd default 0 (the dconst_0 dstore). Resolve the attacker's (x,z) as getSourcePosition():
+	// try a player attacker (PvP) first, then the current region's entity store (a mob attacker —
+	// doHurtTarget ticks inside that region). A 0/departed attacker leaves xd==zd==0 (position null).
+	var xd, zd float64
+	if src.attacker != 0 {
+		if attacker := t.playerByEntityID(src.attacker); attacker != nil {
+			xd = attacker.x - p.x
+			zd = attacker.z - p.z
+		} else if mob, ok := t.cur().entities.get(src.attacker); ok && mob != nil {
+			xd = mob.x - p.x
+			zd = mob.z - p.z
+		}
+	}
+
+	// knockback(0.4, xd, zd): the 0.4 is the ldc2_w 0.4000000059604645d power; knockback normalizes
+	// (xd,0,zd) and pushes the player away from the attacker. Use the NO-SEND core: this is vanilla's
+	// dealDefaultKnockback, whose knockback sets needsSync (a deferred flush), NOT an immediate send.
+	// A mob-attack hit (no causeExtraKnockback follow-up, getKnockback==0) is then re-synced by the
+	// tracker; a player-attack hit's causeExtraKnockback emits the single SetEntityMotion. indicateDamage
+	// is a cited v1 stub (the directional flash rides the ClientboundDamageEvent).
+	changed := t.knockbackNoSend(p, knockbackDefaultPower, xd, zd)
+
+	// For a mob-attack victim there is NO causeExtraKnockback follow-up (a base mob's ATTACK_KNOCKBACK is
+	// 0, so getKnockback is 0 and the extra-knockback strength>0 guard skips). Vanilla's needsSync flush
+	// reaches the client via the tracker's velocity re-sync, but to make the impulse land THIS tick (no
+	// 1-tick lag on a server-authoritative player motion) send the motion now when the attacker is a mob.
+	// A PvP victim's causeExtraKnockback already sends the combined velocity, so skip the send there to
+	// keep exactly one SetEntityMotion per hit.
+	if changed && src.attacker != 0 && t.playerByEntityID(src.attacker) == nil {
+		if p.playerEntity != nil && p.client != nil {
+			p.client.Send(encodeSetEntityMotion(p.playerEntity))
+		}
 	}
 }
 

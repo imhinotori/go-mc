@@ -229,10 +229,10 @@ func TestAttackMalformedNoPanic(t *testing.T) {
 	loop.applyInput(attacker, SubtickInput{At: loop.clock.Now(), Packet: pk.Packet{ID: int32(packetid.ServerboundAttack)}})
 }
 
-// TestAttackKnockbackApplied: a charged sprint attack (sprintKb adds 0.5 knockback) imparts a
-// non-zero velocity to the victim's playerEntity and sends it a SetEntityMotion. Without sprint,
-// ATTACK_KNOCKBACK base is 0, so the base getKnockback is 0 and the sprint bonus is what produces
-// a measurable horizontal impulse.
+// TestAttackKnockbackApplied: a charged sprint attack (sprintKb adds 0.5 extra knockback) imparts a
+// non-zero velocity to the victim's playerEntity and sends it exactly ONE SetEntityMotion reflecting
+// the combined base (dealDefaultKnockback 0.4) + extra (causeExtraKnockback, sprint 0.5) impulse — the
+// base path mutates velocity via knockbackNoSend, and causeExtraKnockback emits the single send.
 func TestAttackKnockbackApplied(t *testing.T) {
 	loop := NewTickLoop(newFakeClock())
 	attacker := placeAttackPlayer(loop, 1, 0, 64, 0)
@@ -254,10 +254,16 @@ func TestAttackKnockbackApplied(t *testing.T) {
 	}
 }
 
-// TestAttackNoKnockbackWithoutSprint: a charged NON-sprint attack has strength 0 (ATTACK_KNOCKBACK
-// base 0, no sprint bonus), so causeExtraKnockback's strength>0 guard skips — no velocity, no
-// SetEntityMotion. (Damage still lands.)
-func TestAttackNoKnockbackWithoutSprint(t *testing.T) {
+// TestAttackNoSprintBaseKnockback: a charged NON-sprint attack has causeExtraKnockback strength 0
+// (ATTACK_KNOCKBACK base 0, no sprint bonus), so the EXTRA knockback is skipped — but vanilla's
+// hurtServer STILL runs dealDefaultKnockback(0.4) for the (non-NO_KNOCKBACK) player-attack source, so
+// the victim gets the BASE 0.4 horizontal impulse away from the attacker and exactly ONE SetEntityMotion.
+// (Attacker at x=0, victim at x=1 -> pushed +X: vx = -normalize(-1,0)*0.4 = +0.4.)
+//
+//	[VERIFIED javap LivingEntity.hurtServer: if(!source.is(NO_KNOCKBACK)) dealDefaultKnockback(source,
+//	 damage, blocked) -> knockback(0.4, sp.x-getX(), sp.z-getZ(), source, damage). Runs BEFORE/independent
+//	 of Player.attack's causeExtraKnockback, so a non-sprint melee still knocks the victim back.]
+func TestAttackNoSprintBaseKnockback(t *testing.T) {
 	loop := NewTickLoop(newFakeClock())
 	attacker := placeAttackPlayer(loop, 1, 0, 64, 0)
 	charge(attacker)
@@ -267,11 +273,11 @@ func TestAttackNoKnockbackWithoutSprint(t *testing.T) {
 
 	loop.applyInput(attacker, SubtickInput{At: loop.clock.Now(), Packet: attackPacket(victim.entityID)})
 
-	if victim.playerEntity.vx != 0 || victim.playerEntity.vy != 0 || victim.playerEntity.vz != 0 {
-		t.Fatalf("non-sprint attack imparted velocity (want none): v=(%v,%v,%v)", victim.playerEntity.vx, victim.playerEntity.vy, victim.playerEntity.vz)
+	if victim.playerEntity.vx != knockbackDefaultPower || victim.playerEntity.vy != 0 || victim.playerEntity.vz != 0 {
+		t.Fatalf("non-sprint base knockback velocity = (%v,%v,%v), want (%v,0,0)", victim.playerEntity.vx, victim.playerEntity.vy, victim.playerEntity.vz, knockbackDefaultPower)
 	}
-	if n := countID(drainPackets(victim.client), packetid.ClientboundSetEntityMotion); n != 0 {
-		t.Fatalf("non-sprint attack sent %d SetEntityMotion, want 0", n)
+	if n := countID(drainPackets(victim.client), packetid.ClientboundSetEntityMotion); n != 1 {
+		t.Fatalf("non-sprint attack sent %d SetEntityMotion, want 1 (base knockback)", n)
 	}
 }
 

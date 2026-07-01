@@ -191,12 +191,23 @@ func (t *TickLoop) handleAttack(p *tickPlayer, pkt pk.Packet) {
 	}
 
 	// causeExtraKnockback(target, getKnockback(target, source) + (sprintKb ? 0.5F : 0.0F),
-	//                     targetDelta, source, total, true).
+	//                     targetDelta, source, total, true). The BASE knockback (dealDefaultKnockback
+	//                     0.4) already ran inside applyAttackDamage->applyDamage via knockbackNoSend (no
+	//                     send), so the victim's velocity is already set; this adds the extra (attribute
+	//                     + sprint) impulse on top. Use the no-send core for the extra too, then emit the
+	//                     SINGLE SetEntityMotion reflecting the combined base+extra velocity — vanilla's
+	//                     ServerPlayer needsSync single-flush, not one packet per knockback call.
 	extraKb := t.getKnockback(victim)
 	if sprintKb {
 		extraKb += 0.5
 	}
 	t.causeExtraKnockback(p, victim, extraKb)
+	// One flush for the whole hit (base dealDefaultKnockback + any extra): vanilla broadcasts the
+	// knocked ServerPlayer's motion once per tick. `hurt` is true here, so the base knockback set a
+	// push velocity even when extraKb is 0 (non-sprint) — the victim still recoils and is synced once.
+	if victim.playerEntity != nil && victim.client != nil {
+		victim.client.Send(encodeSetEntityMotion(victim.playerEntity))
+	}
 
 	// if (sweep) doSweepAttack(target, damage, source, scale).
 	if sweep {
@@ -551,12 +562,13 @@ func (t *TickLoop) causeExtraKnockback(attacker, victim *tickPlayer, strength fl
 	if strength > 0.0 {
 		dx := float64(float32(math.Sin(float64(attacker.yaw * degToRad))))
 		dz := float64(-float32(math.Cos(float64(attacker.yaw * degToRad))))
-		t.knockback(victim, float64(strength), dx, dz)
+		// knockbackNoSend (not knockback): this EXTRA impulse stacks on the BASE dealDefaultKnockback
+		// (already applied to the victim's velocity in applyDamage). The caller emits ONE SetEntityMotion
+		// for the combined base+extra velocity (vanilla's ServerPlayer needsSync single-flush per tick).
+		t.knockbackNoSend(victim, float64(strength), dx, dz)
 	}
-	// Attacker recoil (deltaMovement *0.6/1/0.6) + setSprinting(false): v1 stubs (no attacker
-	// velocity model / sprint flag). The ServerPlayer-target SetEntityMotion send happens inside
-	// knockback() below (where the victim's velocity actually changes), so the victim's client sees
-	// the impulse.
+	// Attacker recoil (deltaMovement *0.6/1/0.6) + setSprinting(false): v1 stubs (no attacker velocity
+	// model / sprint flag).
 }
 
 // knockback is the port of LivingEntity.knockback(double strength, double dx, double dz,
@@ -578,23 +590,41 @@ func (t *TickLoop) causeExtraKnockback(attacker, victim *tickPlayer, strength fl
 // stored on its playerEntity (the store Entity the tracker syncs) and a SetEntityMotion is sent to
 // the victim's own client so it sees the impulse (vanilla's ServerPlayer SetEntityMotion send).
 func (t *TickLoop) knockback(victim *tickPlayer, strength, dx, dz float64) {
+	if !t.knockbackNoSend(victim, strength, dx, dz) {
+		return
+	}
+	// ServerPlayer knockback: vanilla sends ClientboundSetEntityMotion to the knocked player so its
+	// client applies the impulse (the player is the authority for its own motion, but the server-driven
+	// knockback must be pushed). This is the causeExtraKnockback immediate-send seam; the base
+	// dealDefaultKnockback path uses knockbackNoSend and lets the one send here (or the tracker) carry
+	// the final velocity, so a base+extra hit emits ONE SetEntityMotion reflecting the combined impulse.
+	if victim.playerEntity != nil && victim.client != nil {
+		victim.client.Send(encodeSetEntityMotion(victim.playerEntity))
+	}
+}
+
+// knockbackNoSend is the velocity-mutating core of LivingEntity.knockback WITHOUT the ServerPlayer
+// SetEntityMotion send: it applies the impulse to the victim's store velocity and returns true if the
+// velocity changed (strength survived the KNOCKBACK_RESISTANCE scale). The base dealDefaultKnockback
+// path (dealDefaultKnockbackPlayer) uses this so a PvP hit's base+extra knockback both mutate velocity
+// but only ONE SetEntityMotion is emitted (matching vanilla's needsSync/single-flush wire shape); a
+// mob-attack hit (no extra) is re-synced by the tracker on the next velocity sync.
+func (t *TickLoop) knockbackNoSend(victim *tickPlayer, strength, dx, dz float64) bool {
 	strength *= 1.0 - victim.getAttributeValue(attrKnockbackResistance)
 	if strength <= 0.0 {
-		return
+		return false
 	}
 
 	// cur = getDeltaMovement(). The victim's velocity lives on its store Entity (playerEntity); if
-	// it is not yet wired (mid-registration), treat current velocity as zero — the impulse still
-	// applies and is sent to the client.
+	// it is not yet wired (mid-registration), treat current velocity as zero — the impulse still applies.
 	var curX, curY, curZ float64
 	if victim.playerEntity != nil {
 		curX, curY, curZ = victim.playerEntity.vx, victim.playerEntity.vy, victim.playerEntity.vz
 	}
 
 	// impulse = Vec3(dx, 0, dz).normalize().scale(strength). The horizontal direction is normalized
-	// (so a yaw-derived (sin, -cos) of unit length stays unit) then scaled by strength. The
-	// degenerate dx²+dz² < 1e-5 random-jitter loop is omitted: our (dx, dz) come from the attacker
-	// yaw and are never both ~0 in the gated strength>0 melee path.
+	// (so a yaw-derived (sin, -cos) of unit length stays unit) then scaled by strength. The degenerate
+	// dx²+dz² < 1e-5 random-jitter loop is omitted: a 0-direction source-position hit yields a 0 impulse.
 	ix, iz := normalizeHoriz(dx, dz)
 	impulseX := ix * strength
 	impulseZ := iz * strength
@@ -612,13 +642,8 @@ func (t *TickLoop) knockback(victim *tickPlayer, strength, dx, dz float64) {
 		victim.playerEntity.vx = newX
 		victim.playerEntity.vy = newY
 		victim.playerEntity.vz = newZ
-		// ServerPlayer knockback: vanilla sends ClientboundSetEntityMotion to the knocked player so
-		// its client applies the impulse (the player is the authority for its own motion, but the
-		// server-driven knockback must be pushed). Send it to the victim's own client.
-		if victim.client != nil {
-			victim.client.Send(encodeSetEntityMotion(victim.playerEntity))
-		}
 	}
+	return true
 }
 
 // normalizeHoriz mirrors Vec3.normalize() restricted to the horizontal plane for the knockback

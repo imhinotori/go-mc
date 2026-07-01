@@ -34,7 +34,11 @@ package server
 // rejoins via applyAsyncResults — ZERO logic change. NO ants/conc/xsync here — the seam is
 // async-READY but executed inline.
 
-import "math"
+import (
+	"math"
+
+	"github.com/imhinotori/sulfur/level/attribute"
+)
 
 // --- navigation tuning (ported constants) ----------------------------------------------
 
@@ -50,12 +54,6 @@ const (
 	// navMaxVisitedMultiplier is GroundPathNavigation.maxVisitedNodesMultiplier (jar DEFAULT
 	// 0.5f) — the searchDepthMultiplier folded into the budget.
 	navMaxVisitedMultiplier = 0.5
-
-	// navWaypointReach is the horizontal distance (blocks) at which the mob is considered to have
-	// reached the current waypoint and advances to the next. Mirrors vanilla's followThePath
-	// column-match (floor(x),floor(z) == node) with a small slack so a mob centered near the node
-	// advances smoothly.
-	navWaypointReach = 0.5
 
 	// navRecomputeCooldown throttles recompute (vanilla MAX_TIME_RECOMPUTE ~20 ticks): a fresh
 	// path is requested at most once per this many ticks unless the target changed (Pitfall 6 /
@@ -102,7 +100,16 @@ type groundNavigation struct {
 // `(int)(getMaxPathLength() * 16.0)` times the searchDepthMultiplier (maxVisitedNodesMultiplier).
 // followRange*16*0.5 = followRange*8 effective expansions — the DoS cap (Pitfall 6 / T-7-04).
 func maxVisitedBudget() int {
-	return int(float64(navFollowRange) * 16.0 * navMaxVisitedMultiplier)
+	return maxVisitedBudgetFor(navFollowRange)
+}
+
+// maxVisitedBudgetFor computes the A* visited-node budget for a given follow range — vanilla's
+// createPathFinder(floor(FOLLOW_RANGE * 16.0)) times the searchDepthMultiplier (maxVisitedNodesMultiplier
+// 0.5). A zombie's 35 follow range yields a larger budget than a pig's 16, so the longer pursuit path
+// has the search depth to actually be found (Pitfall 6 / T-7-04 DoS cap still applies — it just scales
+// with the mob's real follow range as vanilla does, instead of a fixed 16).
+func maxVisitedBudgetFor(followRange int) int {
+	return int(float64(followRange) * 16.0 * navMaxVisitedMultiplier)
 }
 
 // requestPath ports GroundPathNavigation.createPath + moveTo and, for OPT-01 (08-02), SWAPS the
@@ -124,16 +131,31 @@ func maxVisitedBudget() int {
 // tracking + recompute cooldown (the A* DoS guards) are reset exactly as before — they SURVIVE the
 // swap. Runs on the tick goroutine (TICK-05).
 func (n *groundNavigation) requestPath(t *TickLoop, e *Entity, tx, ty, tz int) {
-	region := snapshotRegion(t.world(), e, tx, ty, tz, navFollowRange, navReachRange) // COPY (on the tick)
+	// followRange is the mob's FOLLOW_RANGE attribute, NOT a hardcoded constant: vanilla's PathNavigation
+	// sizes both the search region (createPath: max(FOLLOW_RANGE, requiredPathLength)) and the visited-node
+	// budget (createPathFinder: floor(FOLLOW_RANGE * 16) * multiplier) from this attribute. A Pig uses the
+	// generic 16; a ZOMBIE uses 35 — so capping every mob at 16 left a zombie able to ACQUIRE a player up
+	// to 35 blocks (the targetSelector reads the same attribute) but only PATHFIND within 16, freezing it
+	// out of range past 16 blocks (the "se queda parado / no me sigue de lejos" stall the bot caught).
+	//	[VERIFIED CFR PathNavigation: createPathFinder(Mth.floor(getAttributeBaseValue(FOLLOW_RANGE)*16.0));
+	//	 getMaxPathLength = max((float)getAttributeValue(FOLLOW_RANGE), requiredPathLength).]
+	followRangeF := e.getAttributeValue(attribute.FollowRange)
+	followRangeI := int(followRangeF)
+	if followRangeI < 1 {
+		followRangeI = navFollowRange // defensive floor (an unset attribute would zero the search box)
+		followRangeF = float64(navFollowRange)
+	}
+
+	region := snapshotRegion(t.world(), e, tx, ty, tz, followRangeI, navReachRange) // COPY (on the tick)
 	req := pathRequest{
 		startX: floorI(e.x), startY: floorI(e.y), startZ: floorI(e.z),
 		targetX: tx, targetY: ty, targetZ: tz,
 		region:      region,
 		mobW:        e.width,
 		mobH:        e.height,
-		followRange: navFollowRange,
+		followRange: followRangeF,
 		reachRange:  navReachRange,
-		maxVisited:  maxVisitedBudget(),
+		maxVisited:  maxVisitedBudgetFor(followRangeI),
 	}
 
 	// Capture ONLY immutable values for the off-tick worker (NEVER e or t.world() — Pitfall 3): the
@@ -272,15 +294,29 @@ func (n *groundNavigation) tick(t *TickLoop, e *Entity) {
 		return
 	}
 
-	// Advance past any waypoints the mob has already reached (followThePath's column-match).
-	for !n.path.done() {
-		next := n.path.nextNode()
-		dx := float64(next.x) + 0.5 - e.x
-		dz := float64(next.z) + 0.5 - e.z
-		if dx*dx+dz*dz > navWaypointReach*navWaypointReach {
-			break
+	// followThePath (PathNavigation.followThePath, ported): advance the current node when the mob is close
+	// enough on BOTH horizontal axes (per-axis maxDistanceToWaypoint, NOT euclidean) OR it can cut the
+	// corner toward the next node. This per-axis + corner-cut advance is what keeps a grid A* path from
+	// staircase-wobbling the heading — a euclidean radius advance kept the mob aimed at the immediate node
+	// as it zigzagged, which read as "se pega vueltas de 30° a los lados". Vanilla advances at most ONE
+	// node per tick here.
+	//	[VERIFIED CFR PathNavigation.followThePath: maxDistanceToWaypoint = bbWidth>0.75 ? bbWidth/2 :
+	//	 0.75 - bbWidth/2; advance if (|x-nodeX|<max && |z-nodeZ|<max && |y-nodeY|<1.0) ||
+	//	 (canCutCorner(nextType) && shouldTargetNextNodeInDirection(mobPos)). getMaxVerticalDistanceToWaypoint
+	//	 == 1.0. canCutCorner is true for a plain WALKABLE node (no FIRE/DAMAGING/DOOR types in v1).]
+	{
+		cur := n.path.nextNode()
+		maxWp := 0.75 - e.width/2.0
+		if e.width > 0.75 {
+			maxWp = e.width / 2.0
 		}
-		n.path.advance()
+		xDist := math.Abs(e.x - (float64(cur.x) + 0.5))
+		yDist := math.Abs(e.y - float64(cur.y))
+		zDist := math.Abs(e.z - (float64(cur.z) + 0.5))
+		closeEnough := xDist < maxWp && zDist < maxWp && yDist < 1.0
+		if closeEnough || n.shouldTargetNextNodeInDirection(e) {
+			n.path.advance()
+		}
 	}
 	if n.path.done() {
 		n.markArrived(e) // arrived: clear so the stroll goal's canContinueToUse ends it + it re-rolls
@@ -291,27 +327,108 @@ func (n *groundNavigation) tick(t *TickLoop, e *Entity) {
 	dx := float64(next.x) + 0.5 - e.x
 	dz := float64(next.z) + 0.5 - e.z
 
-	// Face the heading (the v1 LookControl analogue — yawToward sets the body yaw so the tracker
-	// broadcasts a turned mob).
-	e.yaw = yawTowardDeg(dx, dz)
-	e.headYaw = e.yaw
-
-	// Clamp the per-axis step to the move speed (a unit-vector × speed toward the waypoint).
-	stepX, stepZ := clampStep(dx, dz, n.speed)
-
-	// Jump when the next node is one block UP (a step the swept collision will not auto-climb):
-	// give a small upward Δ so moveEntity lifts the mob onto the ledge. Gravity (tickPhysics,
-	// AFTER tickAI) settles it back down on the higher floor.
-	var stepY float64
-	if next.y > floorI(e.y) {
-		stepY = float64(next.y) - e.y // lift toward the ledge top
+	// Turn the BODY yaw toward the current path node (MoveControl.MOVE_TO: yRotD = atan2(zd,xd); setYRot
+	// (rotlerp(getYRot(), yRotD, 90))). rotlerp caps the turn at 90°/tick along the shortest wrapped arc
+	// so the mob curves toward the heading instead of snapping. The node advance above is the faithful
+	// followThePath (per-axis maxDistanceToWaypoint + corner-cut), which is what keeps the heading from
+	// staircase-wobbling. Skip rotation when essentially ON the node (vanilla MOVE_TO returns on dd tiny).
+	if dx*dx+dz*dz >= 2.5e-7 {
+		yRotD := yawTowardDeg(dx, dz)
+		e.yaw = rotlerpDeg(e.yaw, yRotD, moveControlMaxYawStep)
+		e.headYaw = e.yaw
 	}
 
-	// Motion goes through the EXISTING moveEntity: per-axis swept collision + onGround + the
-	// re-bucket (entities.move), so the mob never clips a wall and the tracker's near() stays
-	// correct (Pitfall 5). Gravity is applied by tickPhysics afterward — pass 0 vertical here
-	// unless jumping (Pattern 3: "gravity in tickPhysics").
-	t.moveEntity(e, stepX, stepY, stepZ)
+	// MOVEMENT = the ported LivingEntity.travel ground-physics (momentum + friction), NOT a fixed
+	// kinematic step. Vanilla accelerates the mob ALONG its yaw each tick and lets block+air friction
+	// build to a terminal velocity; a fixed step toward the waypoint (independent of the yaw and with no
+	// momentum) is what made the mob feel "raro" (lunge on start, slide, moonwalk). The faithful chain:
+	//
+	//   frictionSpeed = getSpeed × (0.216 / blockFriction³)          [getFrictionInfluencedSpeed, ground]
+	//   deltaMovement += getInputVector(forward=(0,0,1), frictionSpeed, yaw)   [moveRelative]
+	//   move(deltaMovement)                                          [our moveEntity — swept collision]
+	//   deltaMovement.xz ×= blockFriction × airDrag(0.91)            [travelInAir tail]
+	//
+	// getSpeed = speedModifier × MOVEMENT_SPEED (MoveControl.setSpeed), carried in n.speed. blockFriction
+	// for a normal block is 0.6 → frictionSpeed = getSpeed × (0.216/0.216) = getSpeed, and the terminal
+	// horizontal speed is getSpeed × 0.546/(1−0.546) ≈ getSpeed × 1.203 (a zombie ≈ 0.277 b/tick).
+	//	[VERIFIED CFR LivingEntity.travelInAir/handleRelativeFrictionAndCalculateMovement/getFrictionInfluencedSpeed;
+	//	 Entity.moveRelative/getInputVector: delta = forward.scale(speed) rotated by yaw (x·cos−z·sin, z·cos+x·sin).]
+	const blockFriction = 0.6
+	const airDrag = 0.91
+	const friction = blockFriction * airDrag // 0.546
+	frictionSpeed := n.speed * (0.21600002 / (blockFriction * blockFriction * blockFriction))
+
+	// getInputVector(forward=(0,0,1) scaled by frictionSpeed, rotated by yaw). With input.z=1: the rotated
+	// delta is (−sin·s, +cos·s) — i.e. frictionSpeed along the FACING. (input.x=0, so the x·cos/z·sin form
+	// reduces to this.) Accumulate onto the horizontal velocity (deltaMovement += delta).
+	yawRad := float64(e.yaw) * math.Pi / 180.0
+	sinY := math.Sin(yawRad)
+	cosY := math.Cos(yawRad)
+	e.vx += -sinY * frictionSpeed
+	e.vz += cosY * frictionSpeed
+
+	// Jump when the next node is one block UP (a step the swept collision will not auto-climb): a small
+	// upward Δ lifts the mob onto the ledge (gravity in tickPhysics settles it). Kept as a direct Δy on
+	// the move — the vertical momentum model stays with the existing physics.
+	var stepY float64
+	if next.y > floorI(e.y) {
+		stepY = float64(next.y) - e.y
+	}
+
+	// move(deltaMovement): step the mob by its accumulated horizontal velocity through the EXISTING
+	// moveEntity (per-axis swept collision + onGround + re-bucket). Horizontal only here; gravity is
+	// tickPhysics (Pattern 3).
+	t.moveEntity(e, e.vx, stepY, e.vz)
+
+	// travelInAir tail: apply friction so the velocity decays toward the terminal speed instead of
+	// growing unbounded. (Vertical friction is handled by the physics/gravity pass.)
+	e.vx *= friction
+	e.vz *= friction
+}
+
+// shouldTargetNextNodeInDirection ports PathNavigation.shouldTargetNextNodeInDirection — the corner-cut
+// half of followThePath. It lets the mob advance to the next node EARLY (before physically reaching the
+// current one) when it is already heading past it, so a grid-staircase path is walked as a smooth
+// diagonal instead of a step-by-step zigzag (the source of the side-to-side wobble). The canMoveDirectly
+// LoS/collision fast-path is a cited v1 stub (no raycast subsystem); the dot-product corner test — the
+// heading-reversal check that does the actual corner-cutting — is ported faithfully.
+//
+//	[VERIFIED CFR PathNavigation.shouldTargetNextNodeInDirection: if (nextIndex+1 >= nodeCount) false;
+//	 currentNode = atBottomCenterOf(nextNodePos); if (!mobPos.closerThan(currentNode, 2.0)) false;
+//	 if (canMoveDirectly(mobPos, getNextEntityPos)) true;  // v1: cited stub, skipped
+//	 nextNode = atBottomCenterOf(nodePos(nextIndex+1)); mobToCurrent = currentNode - mobPos;
+//	 mobToNext = nextNode - mobPos; if (mobToNextSqr < mobToCurrentSqr || mobToCurrentSqr < 0.5)
+//	     return mobToNext.normalize().dot(mobToCurrent.normalize()) < 0.0;  else false.]
+func (n *groundNavigation) shouldTargetNextNodeInDirection(e *Entity) bool {
+	idx := n.path.idx
+	if idx+1 >= len(n.path.nodes) {
+		return false
+	}
+	cur := n.path.nodes[idx]
+	// currentNode = Vec3.atBottomCenterOf(nodePos) = (x+0.5, y, z+0.5).
+	curX, curY, curZ := float64(cur.x)+0.5, float64(cur.y), float64(cur.z)+0.5
+	mcx, mcy, mcz := curX-e.x, curY-e.y, curZ-e.z
+	// mobPos.closerThan(currentNode, 2.0): only cut the corner when within 2 blocks of the current node.
+	if mcx*mcx+mcy*mcy+mcz*mcz >= 2.0*2.0 {
+		return false
+	}
+	nxt := n.path.nodes[idx+1]
+	nxX, nxY, nxZ := float64(nxt.x)+0.5, float64(nxt.y), float64(nxt.z)+0.5
+	mnx, mny, mnz := nxX-e.x, nxY-e.y, nxZ-e.z
+	mobToCurrentSqr := mcx*mcx + mcy*mcy + mcz*mcz
+	mobToNextSqr := mnx*mnx + mny*mny + mnz*mnz
+	if mobToNextSqr < mobToCurrentSqr || mobToCurrentSqr < 0.5 {
+		// dot(mobToNext.normalize(), mobToCurrent.normalize()) < 0 — the next node is on the OPPOSITE side
+		// of the mob from the current node, i.e. the mob has effectively passed/rounded the corner.
+		cLen := math.Sqrt(mobToCurrentSqr)
+		nLen := math.Sqrt(mobToNextSqr)
+		if cLen < 1e-9 || nLen < 1e-9 {
+			return true // degenerate (on the node) — advance
+		}
+		dot := (mcx*mnx + mcy*mny + mcz*mnz) / (cLen * nLen)
+		return dot < 0.0
+	}
+	return false
 }
 
 // clampStep returns a horizontal step (dx,dz) clamped to magnitude `speed` toward the waypoint.

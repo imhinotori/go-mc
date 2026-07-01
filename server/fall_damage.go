@@ -188,6 +188,8 @@ func (t *TickLoop) tickFallDamage() {
 // HIT_GROUND game event are cosmetic/world-side and omitted; Block.fallOn's default forwards
 // damageMultiplier = 1.0 to causeFallDamage, which is passed literally here.
 func (t *TickLoop) checkFallDamage(p *tickPlayer, deltaY float64, onGround bool, inWater bool) {
+	if deltaY != 0 || onGround {
+	}
 	if !inWater && deltaY < 0.0 {
 		// d2f then f2d: the (float) narrowing cast widened back to double, ported verbatim.
 		p.fallDistance -= float64(float32(deltaY))

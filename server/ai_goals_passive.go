@@ -62,6 +62,50 @@ func yawTowardDeg(dx, dz float64) float32 {
 	return float32(math.Atan2(-dx, dz) * 180 / math.Pi)
 }
 
+// wrapDegreesF ports net.minecraft.util.Mth.wrapDegrees(float): normalize an angle to (-180, 180].
+//
+//	[VERIFIED CFR Mth.wrapDegrees(float): a %= 360; if (a >= 180) a -= 360; if (a < -180) a += 360.]
+func wrapDegreesF(angle float32) float32 {
+	a := float32(math.Mod(float64(angle), 360.0))
+	if a >= 180.0 {
+		a -= 360.0
+	}
+	if a < -180.0 {
+		a += 360.0
+	}
+	return a
+}
+
+// rotlerpDeg ports net.minecraft.world.entity.ai.control.MoveControl.rotlerp(a, b, max): turn the body
+// yaw from `a` TOWARD `b` by AT MOST `max` degrees this tick (the wrapped shortest-arc step), then
+// re-wrap into [0,360). This is what stops the mob snapping 180° when the next path node is behind/beside
+// it — vanilla turns the body at most 90°/tick, so the mob curves toward the new heading instead of
+// flipping. Without it our instantaneous yawTowardDeg set makes the mob "spin 180° while walking".
+//
+//	[VERIFIED CFR MoveControl.rotlerp: diff = Mth.wrapDegrees(b - a); clamp diff to [-max, max];
+//	 result = a + diff; if (result < 0) result += 360; else if (result > 360) result -= 360; return result.]
+func rotlerpDeg(a, b, max float32) float32 {
+	diff := wrapDegreesF(b - a)
+	if diff > max {
+		diff = max
+	}
+	if diff < -max {
+		diff = -max
+	}
+	result := a + diff
+	if result < 0 {
+		result += 360.0
+	} else if result > 360.0 {
+		result -= 360.0
+	}
+	return result
+}
+
+// moveControlMaxYawStep is MoveControl.MOVE_TO's rotlerp cap (90.0f): the body yaw turns at most 90°
+// per tick toward the path heading.
+//	[VERIFIED CFR MoveControl.tick MOVE_TO: setYRot(rotlerp(getYRot(), yRotD, 90.0f)).]
+const moveControlMaxYawStep float32 = 90.0
+
 // --- randomStrollGoal (WaterAvoidingRandomStrollGoal v1) -------------------------------
 
 // strollDefaultInterval is RandomStrollGoal.DEFAULT_INTERVAL (jar) — the mean 1-in-N chance

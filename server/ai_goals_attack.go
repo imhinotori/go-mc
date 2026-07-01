@@ -41,6 +41,16 @@ const meleeCooldownBetweenCanUseChecks = 20
 //	[VERIFIED javap MeleeAttackGoal.resetAttackCooldown: ticksUntilNextAttack = adjustedTickDelay(20).]
 const meleeAttackResetCooldown = 20
 
+// meleeLookMaxYawStep is MeleeAttackGoal.tick's setLookAt(target, 30, 30) yaw cap: the HEAD turns at
+// most 30°/tick toward the target (the LookControl clamp). The body yaw is separate (MoveControl/nav).
+//	[VERIFIED javap/CFR MeleeAttackGoal.tick: getLookControl().setLookAt(target, 30.0f, 30.0f).]
+const meleeLookMaxYawStep float32 = 30.0
+
+// meleeChaseSpeedModifier is the ZombieAttackGoal/SpiderAttackGoal speedModifier (1.0): the MoveControl
+// setSpeed is speedModifier × MOVEMENT_SPEED, and both hostiles pass 1.0.
+//	[VERIFIED javap ZombieAttackGoal.<init>(zombie, 1.0, false); Spider$SpiderAttackGoal super(spider, 1.0, true).]
+const meleeChaseSpeedModifier = 1.0
+
 // spiderDaylightFleeChance is Spider$SpiderAttackGoal.canContinueToUse's daylight-flee bound: when the
 // spider is in bright light it drops its target with probability 1-in-100 PER TICK (nextInt(100)==0).
 //
@@ -66,6 +76,19 @@ type meleeAttackGoal struct {
 
 	lastCanUseCheck     int64 // MeleeAttackGoal.lastCanUseCheck — the gameTime of the last canUse eval
 	ticksUntilNextAttack int  // MeleeAttackGoal.ticksUntilNextAttack — RNG-free swing countdown
+
+	// ticksUntilNextPathRecalculation / pathedTargetX|Y|Z port MeleeAttackGoal's path-recompute THROTTLE
+	// (the jar fields of the same names). tick() recomputes the nav want ONLY when the countdown hits 0
+	// AND the target moved ≥1 block from the last pathed position (or a 1/20 nextFloat() nudge) — without
+	// this the want is re-set every tick the player crosses a block boundary, which oscillates the async
+	// path and reads as the mob "jittering / trying to go back". pathedTarget* default 0 (the vanilla
+	// "no pathed target yet" sentinel that forces the first recompute).
+	//	[VERIFIED javap/CFR MeleeAttackGoal.tick: ticksUntilNextPathRecalculation = max(-1,0); recompute
+	//	 when <=0 && (pathedTarget all 0 || target.distanceToSqr(pathedTarget) >= 1.0 || nextFloat()<0.05);
+	//	 on recompute pathedTarget = target.pos, cooldown = 4 + nextInt(7) (+10 if d²>1024, +5 if >256,
+	//	 +15 if moveTo fails), adjustedTickDelay (identity here).]
+	ticksUntilNextPathRecalculation int
+	pathedTargetX, pathedTargetY, pathedTargetZ float64
 
 	// daylightGated is the Spider$SpiderAttackGoal delta: a spider in BRIGHT light drops its target
 	// 1-in-100 per tick (canContinueToUse's daylight-flee). When set, canContinueToUse runs the
@@ -203,16 +226,68 @@ func (g *meleeAttackGoal) tick(t *TickLoop, e *Entity) {
 	if target == nil {
 		return
 	}
-	// setLookAt(target, 30, 30): face the target (the lookAtPlayerGoal yaw seam).
-	yaw := yawTowardDeg(target.x-e.x, target.z-e.z)
-	e.headYaw = yaw
-	e.yaw = yaw
+	// setLookAt(target, 30, 30): turn the HEAD toward the target at most 30°/tick — the LookControl seam.
+	// This is the HEAD only (headYaw), NOT the body yaw: vanilla's MeleeAttackGoal.tick calls
+	// getLookControl().setLookAt(target, 30, 30), and the BODY yaw is owned by the MoveControl (our
+	// navigation.tick, which rotlerps it toward the path heading). Setting the body yaw here too made two
+	// controllers fight over it and snap the mob around; leave the body to the nav so the walk stays smooth.
+	yRotD := yawTowardDeg(target.x-e.x, target.z-e.z)
+	e.headYaw = rotlerpDeg(e.headYaw, yRotD, meleeLookMaxYawStep)
 
-	// navigation.moveTo(target, speedModifier): SET the nav want toward the target (a goal SETS a want;
-	// the async navigation.tick steps the mob — ai_mob.go:119). v1 carries POSITION only (the
-	// speedModifier is stored but not yet routed to a per-request nav speed, the SAME posture as
-	// PanicGoal/stroll). NEVER calls moveEntity.
-	e.ai.setWantTarget(target.x, target.y, target.z)
+	// ticksUntilNextPathRecalculation = max(.. - 1, 0): decrement the path-recompute throttle each tick.
+	g.ticksUntilNextPathRecalculation = max(g.ticksUntilNextPathRecalculation-1, 0)
+
+	// Recompute the nav want ONLY when the throttle elapsed AND the target has meaningfully moved (or the
+	// 1/20 nextFloat() nudge fires). The followingTargetEvenIfNotSeen/hasLineOfSight guard is a v1 no-op
+	// (no sensing — every target is "seen"). Without this throttle the want re-set every tick the player
+	// crosses a block boundary, oscillating the async path (the "jitter / tries to go back" the user saw).
+	//	[VERIFIED CFR MeleeAttackGoal.tick: if((following || hasLineOfSight) && ticksUntilNextPathRecalc<=0
+	//	 && (pathedTarget all 0 || target.distanceToSqr(pathedTarget)>=1.0 || nextFloat()<0.05)) { ... }.]
+	if g.ticksUntilNextPathRecalculation <= 0 {
+		noPathedTarget := g.pathedTargetX == 0 && g.pathedTargetY == 0 && g.pathedTargetZ == 0
+		dpx := target.x - g.pathedTargetX
+		dpy := target.y - g.pathedTargetY
+		dpz := target.z - g.pathedTargetZ
+		movedSqr := dpx*dpx + dpy*dpy + dpz*dpz
+		movedFar := movedSqr >= 1.0
+		// Re-engage when the nav has NO active path (our async nav CLEARS the path on arrival, unlike
+		// vanilla which keeps the previous path alive and steps it through the cooldown) AND either:
+		//   (a) the mob is not yet in attack reach — it must keep closing the gap; OR
+		//   (b) the target has moved AT ALL since the last path (movedSqr > 0) — a player strafing/edging
+		//       AROUND the mob at close range moves <1 block per recompute window, so movedFar (≥1 block)
+		//       misses it; without (b) the mob parks BESIDE the moving player until the 5% nudge fires
+		//       (the "se queda parado al lado" stall). A target that is in reach AND perfectly still keeps
+		//       neither branch true, so the mob correctly stands and swings instead of jittering in place.
+		stalled := !e.ai.navigation.active() && (!isWithinMeleeAttackRange(e, target) || movedSqr > 1e-6)
+		if noPathedTarget || movedFar || stalled || mobRandom(e).nextFloat() < 0.05 {
+			g.pathedTargetX = target.x
+			g.pathedTargetY = target.y
+			g.pathedTargetZ = target.z
+			// ticksUntilNextPathRecalculation = 4 + nextInt(7), +10 if dist²>1024, +5 if >256
+			// (adjustedTickDelay is identity in the full-rate driver — the moveTo-failed +15 is a cited
+			// no-op: the async setWantTarget never "fails" synchronously like navigation.moveTo).
+			g.ticksUntilNextPathRecalculation = 4 + mobRandom(e).nextInt(7)
+			ddx := target.x - e.x
+			ddy := target.y - e.y
+			ddz := target.z - e.z
+			distSqr := ddx*ddx + ddy*ddy + ddz*ddz
+			if distSqr > 1024.0 {
+				g.ticksUntilNextPathRecalculation += 10
+			} else if distSqr > 256.0 {
+				g.ticksUntilNextPathRecalculation += 5
+			}
+
+			// navigation.moveTo(target, speedModifier): SET the nav want toward the target AT the chase
+			// SPEED — the MoveControl.setSpeed value = speedModifier × MOVEMENT_SPEED, which the ported
+			// travel-physics in navigation.tick accelerates the mob by (getSpeed input, NOT a blocks/tick
+			// step). ZombieAttackGoal/SpiderAttackGoal use speedModifier 1.0, so getSpeed = MOVEMENT_SPEED
+			// (a zombie 0.23 → terminal ≈ 0.277 b/tick). Pass the attribute directly.
+			//	[VERIFIED javap ZombieAttackGoal.<init>(zombie, 1.0, false) / Spider$SpiderAttackGoal(super, 1.0, true);
+			//	 MoveControl.setSpeed(speedModifier × getAttributeValue(MOVEMENT_SPEED)).]
+			getSpeed := e.getAttributeValue(attribute.MovementSpeed) * meleeChaseSpeedModifier
+			e.ai.setWantTargetSpeed(target.x, target.y, target.z, getSpeed)
+		}
+	}
 
 	// ticksUntilNextAttack = max(ticksUntilNextAttack - 1, 0): the RNG-FREE per-attack countdown.
 	if g.ticksUntilNextAttack > 0 {

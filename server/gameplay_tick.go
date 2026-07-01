@@ -356,6 +356,13 @@ func (g *gameTick) AcceptPlayer(
 		prevX:              spawnX,
 		prevY:              spawnY,
 		prevZ:              spawnZ,
+		// lastY is the fall-damage baseline (deltaY = y - lastY). It MUST seed to the spawn Y, not the
+		// zero value: otherwise the FIRST physics tick computes deltaY = spawnY - 0 (e.g. -46 on a
+		// superflat floor at y=-46) and the player "falls" its entire world-Y on join, taking lethal
+		// fall damage the instant it lands. wasOnGround seeds true (the player spawns standing on the
+		// floor, mid-air-less), so the first checkFallDamage sees a grounded, zero-delta start.
+		lastY:              spawnY,
+		wasOnGround:        true,
 		lastFoodSent:           maxFood,
 		lastFoodSaturationZero: defaultSaturation == 0, // seeded from spawn saturation (vanilla lastFoodSaturationZero)
 		lastHealthSent:         maxHealth,
