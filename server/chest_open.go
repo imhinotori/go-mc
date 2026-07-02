@@ -92,6 +92,13 @@ type openContainer struct {
 	mselectionHint     int
 	mactiveOffer       int
 
+	// brewingStandPos is the world position of the open brewing_stand (kind == containerKindBrewingStand).
+	// The window's 5 slots (3 bottles / ingredient / fuel) + the 2 data slots (brewTime, fuel) back onto the
+	// tick-owned brewingStandBE at t.brewingStands[brewingStandPos] — NO transient copy (like the furnace):
+	// the brewing container IS the block-entity, so a click mutates the same items the brew drive ticks, and
+	// close just frees the window (the items persist in the BE, like a chest/furnace).
+	brewingStandPos pk.Position
+
 	// furnacePos is the world position of the open furnace/blast_furnace/smoker (kind ==
 	// containerKindFurnace, GAMEPLAY-05). The window's 3 slots (input/fuel/result) + the 2 progress data
 	// slots back onto the tick-owned furnaceBE at t.furnaces[furnacePos] — NO transient copy (unlike the
@@ -110,6 +117,7 @@ const (
 	containerKindStonecutter                      // a transient stonecutter single-input picker (cutInput)
 	containerKindMerchant                         // a villager merchant window (2 payment + 1 result)
 	containerKindFurnace                          // a furnace/blast_furnace/smoker BE (furnacePos)
+	containerKindBrewingStand                     // a brewing_stand BE (brewingStandPos)
 )
 
 // chestMenuSize is the chest-window slot count: 27 chest container slots + 27 player main + 9
@@ -177,8 +185,9 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 	isCut := isStonecutterBlock(state)
 	isBed := isBedBlock(state)
 	isFurnace := isAnyFurnaceBlock(state)
-	if !isChest && !isCraft && !isCut && !isBed && !isFurnace {
-		return false // not an interactive block (chest/crafting_table/stonecutter/bed/furnace): PASS → placement runs
+	isBrew := isBrewingStandBlock(state)
+	if !isChest && !isCraft && !isCut && !isBed && !isFurnace && !isBrew {
+		return false // not an interactive block (chest/crafting_table/stonecutter/bed/furnace/brewing_stand): PASS → placement runs
 	}
 	// Reach-gate the interaction (the same server-authoritative reach the place/break paths use):
 	// a far block is not openable. Vanilla gates the whole useItemOn behind the interaction
@@ -208,6 +217,12 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 		// furnace menu opens on any right-click (the bl9 sneak guard collapses to false in v1, like the
 		// chest path), so placement is skipped whenever the target is a furnace-family block.
 		return t.openFurnace(p, hitPos)
+	}
+	if isBrew {
+		// BrewingStandBlock.useWithoutItem -> player.openMenu(brewing_stand). The 5-slot brewing menu opens
+		// on any right-click (the bl9 sneak guard collapses to false in v1, like the chest path), so
+		// placement is skipped whenever the target is a brewing_stand.
+		return t.openBrewingStand(p, hitPos)
 	}
 	return t.openChest(p, hitPos)
 }

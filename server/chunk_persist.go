@@ -94,6 +94,10 @@ func (t *TickLoop) flushColumn(pos level.ChunkPos) bool {
 	// mutation of the live chunk's BE slice as flushChestItems, before SerializeChunkData.
 	t.flushFurnaceItems(pos, ch)
 
+	// BREWING-STAND FLUSH: fold any live brewingStandBE in this column into the chunk's BlockEntity list
+	// (BrewingStandBlockEntity.saveAdditional — Items + BrewTime + Fuel). The furnace-flush twin.
+	t.flushBrewingStandItems(pos, ch)
+
 	data, err := world.SerializeChunkData(t.worker().StructureCache(), pos, ch, t.worker().MinY())
 	if err != nil {
 		// A serialize error is an encode bug, not runtime input; skip this column (do not crash the

@@ -369,6 +369,13 @@ type TickLoop struct {
 	// the live in-memory drive is fully faithful.
 	furnaces map[pk.Position]*furnaceBE
 
+	// brewingStands is the runtime store of brewing-stand BLOCK-ENTITIES keyed by world position (the
+	// furnaces twin). A brewing stand's per-tick brew drive (brewing_stand_be.go brewingStandServerTick)
+	// reads/writes its brewingStandBE here every tick (tickWorld); the menu (brewing_stand_menu.go) resolves
+	// the SAME brewingStandBE on open so clicks + the brew drive share one state. Lazily constructed;
+	// tick-owned (TICK-05). Persistence (Items + BrewTime + Fuel) round-trips via brewing_stand_persist.go.
+	brewingStands map[pk.Position]*brewingStandBE
+
 	// chunkSaver is the off-tick chunk-persistence consumer (SUB-PERSIST). It is nil until
 	// SetChunkSaver wires it (tests/ephemeral runs leave it nil → no chunk saves). The tick's save
 	// phase (tickChunkSave) drains the manager's dirty set, SERIALIZES each dirty/unloaded chunk ON

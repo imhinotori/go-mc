@@ -249,6 +249,9 @@ func (t *TickLoop) clicked(p *tickPlayer, containerID int32, slotNum int16, butt
 			case containerKindFurnace:
 				t.clickedFurnace(p, p.openContainer, slotNum, button, input)
 				return
+			case containerKindBrewingStand:
+				t.clickedBrewingStand(p, p.openContainer, slotNum, button, input)
+				return
 			}
 		}
 		t.sendContent(p) // unknown/stale window: resend authoritative player content

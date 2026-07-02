@@ -91,6 +91,49 @@ func isAnyFurnaceBlock(s block.StateID) bool {
 	return isFurnaceBlock(s) || isBlastFurnaceBlock(s) || isSmokerBlock(s)
 }
 
+// isBrewingStandBlock reports whether a block state is Blocks.BREWING_STAND (the brewing-stand block that
+// drives a BrewingStandBlockEntity). The open/tick gate for the brewing-stand block-entity subsystem. CITE
+// BrewingStandBlock (an EntityBlock whose newBlockEntity is BrewingStandBlockEntity).
+func isBrewingStandBlock(s block.StateID) bool {
+	if int(s) < 0 || int(s) >= len(block.StateList) {
+		return false
+	}
+	_, ok := block.StateList[s].(block.BrewingStand)
+	return ok
+}
+
+// brewingStandWithBottles ports the serverTick HAS_BOTTLE toggle: state.setValue(HAS_BOTTLE[i], bits[i]) for
+// i in 0..2 (BrewingStandBlock.HAS_BOTTLE = {HAS_BOTTLE_0, HAS_BOTTLE_1, HAS_BOTTLE_2}, VERIFIED CFR
+// BrewingStandBlock). Reads the state's BrewingStand struct, writes its three has_bottle_N booleans, and
+// resolves the resulting stateID via block.ToStateID. Returns (s, false) if s is not a brewing-stand state.
+//
+// 1:1 net.minecraft.world.level.block.entity.BrewingStandBlockEntity.serverTick HAS_BOTTLE setValue loop.
+func brewingStandWithBottles(s block.StateID, bits [3]bool) (block.StateID, bool) {
+	if int(s) < 0 || int(s) >= len(block.StateList) {
+		return s, false
+	}
+	bs, ok := block.StateList[s].(block.BrewingStand)
+	if !ok {
+		return s, false
+	}
+	bs.HasBottle0 = block.Boolean(bits[0])
+	bs.HasBottle1 = block.Boolean(bits[1])
+	bs.HasBottle2 = block.Boolean(bits[2])
+	if id, ok := block.ToStateID[bs]; ok {
+		return id, true
+	}
+	return s, false
+}
+
+// setBrewingStandBlockBottles writes the HAS_BOTTLE-toggled brewing-stand state at pos into the world
+// (level.setBlock(pos, state, 2) in serverTick). A nil world (tests without a world) is a cheap no-op.
+func (t *TickLoop) setBrewingStandBlockBottles(pos pk.Position, state block.StateID) {
+	if t.world() == nil {
+		return
+	}
+	t.world().SetBlock(pos, state, dimMinY)
+}
+
 // furnaceSubtypeOf returns the cook RecipeType a block state's furnace block-entity uses: smelting for a
 // furnace, blasting for a blast_furnace, smoking for a smoker (the AbstractFurnaceBlockEntity ctor's
 // recipeType per subclass). The second return is whether s is a furnace-family block at all.
