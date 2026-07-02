@@ -249,6 +249,14 @@ func buildAIFromDecl(t *TickLoop, decl *mobDecl) *mobAI {
 			m.goals.addGoal(gd.priority, g)
 		}
 	}
+	// Animal.<init> pathfinding malus (FIRE_IN_NEIGHBOR 16 / FIRE -1) for a declared ANIMAL base type —
+	// the SAME override newPigAI stamps, so the dogfooded plugin pig and the Go-native pig carry the
+	// IDENTICAL malus map (the byte-identical pig oracle stays byte-identical; a fire-free world never
+	// exercises the override). A non-animal declared mob (a hostile) is not an Animal and gets none.
+	// Cite Animal.<init>.
+	if isAnimalType(decl.baseType.ID) {
+		applyAnimalPathfindingMalus(m)
+	}
 	return m
 }
 

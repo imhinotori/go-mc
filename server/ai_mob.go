@@ -23,6 +23,8 @@ package server
 // SINGLE-OWNER (TICK-05): mobAI is tick-owned game state mutated ONLY on the tick goroutine.
 // No goroutine, no xsync — plain Go.
 
+import "github.com/imhinotori/sulfur/data/entity"
+
 // mobAI is the per-mob AI state that hangs off an Entity (entity.ai). It holds the mob's
 // goalSelector and the navigation/look TARGETS a goal writes — the wantTarget that Plan
 // 07-02's navigation will CONSUME (this plan only SETS it; it never moves the mob).
@@ -155,6 +157,14 @@ type mobAI struct {
 	patrolTargetY       int
 	patrolTargetZ       int
 	patrolCooldownUntil int64
+
+	// malus is the mob ported net.minecraft.world.entity.Mob per-mob pathfinding-malus map
+	// (node_evaluator.go mobMalus): a sparse override of the PathType defaults. Animal sets FIRE_IN_NEIGHBOR
+	// 16 / FIRE -1 (both == the PathType defaults, so no observable change — structured so a real
+	// override lands per-mob). navigation.requestPath threads a COPY into the A* request so the off-tick
+	// pathfinder re-costs WATER/LAVA/FIRE nodes per this mob. Tick-owned; the zero value is pure defaults.
+	// Cite Mob.getPathfindingMalus/setPathfindingMalus.
+	malus mobMalus
 }
 
 // hasPatrolTarget ports PatrollingMonster.hasPatrolTarget: patrolTarget != null.
@@ -371,6 +381,39 @@ func (m *mobAI) serverAiStep(t *TickLoop, e *Entity) {
 	t.entityJumpStep(e)
 }
 
+// applyAnimalPathfindingMalus ports net.minecraft.world.entity.animal.Animal.<init>'s two
+// setPathfindingMalus calls (VERIFIED CFR Animal ctor): FIRE_IN_NEIGHBOR = 16.0 (the default is 8,
+// so an Animal is MORE fire-averse near fire) and FIRE = -1.0 (the default is 16, so an Animal treats
+// a fire node as IMPASSABLE, not merely costly). Every Animal subclass (Pig/Cow/Sheep/Chicken/Wolf/
+// Cat/Fox/Rabbit/Mooshroom/Turtle/Ocelot/HappyGhast) inherits these from the base ctor. In a world
+// with no fire (every current test world, incl. the pig oracle) these overrides never change a path —
+// but they are stamped faithfully so an Animal near lava/fire routes as vanilla does. Cite Animal.<init>.
+func applyAnimalPathfindingMalus(m *mobAI) {
+	if m == nil {
+		return
+	}
+	m.malus.setPathfindingMalus(pathFireInNeighbor, 16.0)
+	m.malus.setPathfindingMalus(pathFire, -1.0)
+}
+
+// isAnimalType reports whether an entity wire type is a net.minecraft.world.entity.animal.Animal
+// subclass (so applyAnimalPathfindingMalus applies its FIRE overrides). Vanilla's Animal hierarchy —
+// the overworld passives/tameables that extend Animal (directly or via AgeableMob->Animal). This is
+// the jar's class hierarchy (Pig/Cow/... extends Animal), mirrored here so a declared mob gets the
+// SAME malus its Go-native twin does (the pig oracle parity contract). Non-animals (zombies, skeletons,
+// endermen, raiders, sulfur cube) are NOT Animals and get no FIRE override (their own classes may set
+// their own malus, cited-deferred). Cite the Animal class hierarchy.
+func isAnimalType(t entity.ID) bool {
+	switch t {
+	case entity.Pig.ID, entity.Cow.ID, entity.Sheep.ID, entity.Chicken.ID,
+		entity.Wolf.ID, entity.Cat.ID, entity.Fox.ID, entity.Rabbit.ID,
+		entity.Mooshroom.ID, entity.Turtle.ID, entity.Ocelot.ID, entity.HappyGhast.ID:
+		return true
+	default:
+		return false
+	}
+}
+
 // newPigAI builds the Pig AI: FloatGoal@0 (Phase 30-03) + PanicGoal@1 (Phase 31-01) plus the three
 // "visibly alive" passive goals, registered at the EXACT priorities read from javap animal.pig.Pig
 // .registerGoals.
@@ -418,6 +461,10 @@ func newPigAI() *mobAI {
 	// FloatGoal ctor: mob.getNavigation().setCanFloat(true) — the mob may path over water (the float
 	// PATHING node-evaluator behavior is deferred + cited on the field; the flag set is the 1:1 port).
 	m.navigation.canFloat = true
+	// Animal.<init> pathfinding malus: FIRE_IN_NEIGHBOR 16 / FIRE -1 (a pig is an Animal). No-op on a
+	// fire-free world (the pig oracle), but the plugin pig gets the IDENTICAL malus (buildAIFromDecl ->
+	// applyAnimalPathfindingMalus), so the byte-identical oracle stays byte-identical. Cite Animal.<init>.
+	applyAnimalPathfindingMalus(m)
 	// @0 FloatGoal [JUMP] — added FIRST (priority 0 = highest precedence: it runs first in the goal
 	// walk, ai_goal.go "smaller priority = higher"). LOCKSTEP with vanilla_pig/main.star's @0 FloatGoal.
 	// Cite Pig.registerGoals @0 FloatGoal (javap: iconst_0; new FloatGoal; FloatGoal.<init>).

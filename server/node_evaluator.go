@@ -2,60 +2,170 @@ package server
 
 // node_evaluator.go — AI-02: the ported WalkNodeEvaluator — the cost/passability heart of the
 // A*. PORTED (the STANDING MANDATE, idiomatic non-1:1 Go, never a GPL paste) from the
-// unobfuscated 26.2 jar (javap, this session):
+// unobfuscated 26.2 jar (temp/cache/26.2-inner.jar, javap -c -p / CFR this session):
 //
 //   net.minecraft.world.level.pathfinder.WalkNodeEvaluator
-//     - getNeighbors(Node[], node) (bytecode): a maxUpStep allowance `stepUp = floor(max(1,
-//       mob.maxUpStep))` when the node ABOVE the current is not blocked; getFloorLevel(node);
+//     - getNeighbors(Node[], node) (bytecode): a maxUpStep allowance stepUp = floor(max(1,
+//       mob.maxUpStep)) when the node ABOVE the current is not blocked; getFloorLevel(node);
 //       then for each of the 4 HORIZONTAL Directions call findAcceptedNode(x+stepX, y, z+stepZ,
 //       stepUp, floorLevel, dir, currentType) and keep it if isNeighborValid; then for each
 //       Direction also try its CLOCKWISE diagonal — findAcceptedNode at the corner — kept iff
-//       isDiagonalValid(node, sideA, sideB) AND isDiagonalValid(corner). The 8 candidate moves
-//       (4 cardinal + 4 diagonal) emerge from "each cardinal + its clockwise diagonal".
-//     - isNeighborValid(neighbor, node) (bytecode): neighbor != null && !neighbor.closed &&
-//       (neighbor.costMalus >= 0 || node.costMalus < 0). A negative costMalus = impassable.
-//     - isDiagonalValid(node, sideA, sideB) (bytecode): both sides non-null; the corner is not
-//       a strict step-up/down over both sides; neither side is a closed/blocked door; for a
-//       wide mob (bbWidth > 1) both sides passable; FENCE corner only squeezable by a thin mob;
-//       and the corner is reachable iff at least one side is at/below the node's Y with a
-//       non-negative malus. v1 keeps the core: both sides must be non-negative-malus (passable)
-//       to allow the diagonal — the corner-cut rejection (Pitfall: a mob cutting a wall corner).
-//     - isDiagonalValid(corner) (bytecode): corner != null && !corner.closed && type !=
-//       WALKABLE_DOOR && costMalus >= 0.
-//     - PathType malus table (javap PathType static{}): BLOCKED=-1, OPEN=0, WALKABLE=0,
-//       FENCE=-1, LAVA=-1, WATER=8, … A negative malus is impassable. v1 ports BLOCKED/OPEN/
-//       WALKABLE only (A5 — superflat is flat stone; water/lava/fence/door deferred, documented).
+//       isDiagonalValid(node, sideA, sideB) AND isDiagonalValid(corner).
+//     - findAcceptedNode (bytecode, VERIFIED this session): pathType = getCachedPathType(x,y,z);
+//       pathCost = mob.getPathfindingMalus(pathType); if (pathCost >= 0) best =
+//       getNodeAndUpdateCostToMax(x,y,z, pathType, pathCost); if (pathType==WALKABLE || (amphibious
+//       && pathType==WATER)) return best; else if ((best==null||best.costMalus<0) && jumpSize>0 &&
+//       …) best = tryJumpOn(...); else if (!amphibious && pathType==WATER && !canFloat) best =
+//       tryFindFirstNonWaterBelow(...); else if (pathType==OPEN) best = tryFindFirstGroundNodeBelow.
+//       So the node's costMalus is mob.getPathfindingMalus(nodeType), NOT the raw PathType default —
+//       the per-mob malus map (Mob.getPathfindingMalus) is the observable cost.
+//     - isNeighborValid (bytecode): neighbor != null && !neighbor.closed && (neighbor.costMalus >= 0
+//       || node.costMalus < 0). A negative costMalus = impassable.
+//     - PathType malus table (jar PathType static ctor, VERIFIED CFR this session — the FULL table):
+//       BLOCKED -1, OPEN 0, WALKABLE 0, WALKABLE_DOOR 0, TRAPDOOR 0, POWDER_SNOW -1,
+//       ON_TOP_OF_POWDER_SNOW 0, FENCE -1, LAVA -1, WATER 8, WATER_BORDER 8, RAIL 0,
+//       UNPASSABLE_RAIL -1, FIRE_IN_NEIGHBOR 8, FIRE 16, DAMAGING_IN_NEIGHBOR 8, DAMAGING -1,
+//       DOOR_OPEN 0, DOOR_WOOD_CLOSED -1, DOOR_IRON_CLOSED -1, BREACH 4, LEAVES -1, STICKY_HONEY 8,
+//       COCOA 0, DAMAGE_CAUTIOUS 0, ON_TOP_OF_TRAPDOOR 0, BIG_MOBS_CLOSE_TO_DANGER 4.
+//     - getPathTypeFromState (bytecode, VERIFIED CFR): air->OPEN; LAVA fluid->LAVA; burning->FIRE;
+//       WATER fluid (after !isPathfindable->BLOCKED)->WATER; else OPEN. (Trapdoor/powder/cactus/
+//       honey/cocoa/door/rail/leaves/fence classes are the wider block set — v1 superflat only ever
+//       sees air/stone/water/lava, so those classes are cited-deferred; the fluid classes are live.)
 //
-// v1 PASSABILITY (07-RESEARCH WalkNodeEvaluator row): a ground node at (x,y,z) is WALKABLE iff
-// the block BELOW (y-1) is solid AND the mob's height of air is clear from y upward; it is OPEN
-// (no floor) iff nothing solid is below but the body space is clear (a drop candidate); it is
-// BLOCKED iff the body space itself is solid. Reads ONLY the immutable pathRegion snapshot — no
-// live world, no *TickLoop (the purity that makes computePath relocatable off-tick).
+// v1 PASSABILITY: a ground node at (x,y,z) is WALKABLE iff the block BELOW (y-1) is solid AND the
+// mob height of air is clear from y upward; it is OPEN (no floor) iff nothing solid is below but
+// the body space is clear (a drop candidate); it is BLOCKED iff the body space itself is solid; it
+// is WATER/LAVA iff the mob FEET cell is that fluid. Reads ONLY the immutable pathRegion snapshot
+// (block-id classified ON the tick) — no live world, no *TickLoop (the purity that makes computePath
+// relocatable off-tick).
 
-// pathType is the ported PathType — v1 keeps the three faithful classes (BLOCKED/OPEN/WALKABLE)
-// plus their malus from the jar's static table. The wider enum (WATER/LAVA/FENCE/DOOR/…) is
-// deferred (A5); when added, each gets its jar malus and getPathType learns to classify it.
+// pathType is the ported net.minecraft.world.level.pathfinder.PathType. The ORDER matches the jar
+// enum (so a value maps to the same ordinal), and malus() below is the jar static-ctor table.
 type pathType int
 
 const (
-	pathBlocked  pathType = iota // jar malus -1.0 (impassable)
-	pathOpen                     // jar malus  0.0 (no floor under it — a drop/air node)
-	pathWalkable                 // jar malus  0.0 (solid floor below, clear above — standable)
+	pathBlocked              pathType = iota // jar malus -1.0 (impassable)
+	pathOpen                                 // jar malus  0.0 (no floor under it — a drop/air node)
+	pathWalkable                             // jar malus  0.0 (solid floor below, clear above — standable)
+	pathWalkableDoor                         // jar malus  0.0
+	pathTrapdoor                             // jar malus  0.0
+	pathPowderSnow                           // jar malus -1.0
+	pathOnTopOfPowderSnow                    // jar malus  0.0
+	pathFence                                // jar malus -1.0
+	pathLava                                 // jar malus -1.0
+	pathWater                                // jar malus  8.0
+	pathWaterBorder                          // jar malus  8.0
+	pathRail                                 // jar malus  0.0
+	pathUnpassableRail                       // jar malus -1.0
+	pathFireInNeighbor                       // jar malus  8.0
+	pathFire                                 // jar malus 16.0
+	pathDamagingInNeighbor                   // jar malus  8.0
+	pathDamaging                             // jar malus -1.0
+	pathDoorOpen                             // jar malus  0.0
+	pathDoorWoodClosed                       // jar malus -1.0
+	pathDoorIronClosed                       // jar malus -1.0
+	pathBreach                               // jar malus  4.0
+	pathLeaves                               // jar malus -1.0
+	pathStickyHoney                          // jar malus  8.0
+	pathCocoa                                // jar malus  0.0
+	pathDamageCautious                       // jar malus  0.0
+	pathOnTopOfTrapdoor                      // jar malus  0.0
+	pathBigMobsCloseToDanger                 // jar malus  4.0
 )
 
-// malus returns the ported PathType.getMalus value (jar static{}): BLOCKED -1, OPEN/WALKABLE 0.
-// A negative malus marks an impassable node (isNeighborValid rejects it).
+// pathTypeDefaultMalus is the jar PathType static-ctor malus table (VERIFIED CFR PathType.java,
+// this session — the FULL 27-value table). PathType.getMalus() returns exactly these; a mob with no
+// per-mob override inherits them (Mob.getPathfindingMalus: malus == null ? pathType.getMalus() : malus).
+var pathTypeDefaultMalus = [...]float32{
+	pathBlocked:              -1.0,
+	pathOpen:                 0.0,
+	pathWalkable:             0.0,
+	pathWalkableDoor:         0.0,
+	pathTrapdoor:             0.0,
+	pathPowderSnow:           -1.0,
+	pathOnTopOfPowderSnow:    0.0,
+	pathFence:                -1.0,
+	pathLava:                 -1.0,
+	pathWater:                8.0,
+	pathWaterBorder:          8.0,
+	pathRail:                 0.0,
+	pathUnpassableRail:       -1.0,
+	pathFireInNeighbor:       8.0,
+	pathFire:                 16.0,
+	pathDamagingInNeighbor:   8.0,
+	pathDamaging:             -1.0,
+	pathDoorOpen:             0.0,
+	pathDoorWoodClosed:       -1.0,
+	pathDoorIronClosed:       -1.0,
+	pathBreach:               4.0,
+	pathLeaves:               -1.0,
+	pathStickyHoney:          8.0,
+	pathCocoa:                0.0,
+	pathDamageCautious:       0.0,
+	pathOnTopOfTrapdoor:      0.0,
+	pathBigMobsCloseToDanger: 4.0,
+}
+
+// malus returns the ported PathType.getMalus value (the jar static table). A negative malus marks an
+// impassable node (isNeighborValid rejects it). This is the DEFAULT; a mob per-mob override
+// (mobMalus) takes precedence via getPathfindingMalus.
 func (p pathType) malus() float32 {
-	switch p {
-	case pathBlocked:
-		return -1.0
-	default: // pathOpen, pathWalkable
+	if int(p) < 0 || int(p) >= len(pathTypeDefaultMalus) {
 		return 0.0
 	}
+	return pathTypeDefaultMalus[p]
+}
+
+// mobMalus is the ported net.minecraft.world.entity.Mob per-mob pathfinding-malus map: a sparse
+// override of the PathType defaults. getPathfindingMalus returns the override if present, else the
+// PathType default (Mob.getPathfindingMalus: malus == null ? pathType.getMalus() : malus); an
+// unset map is the vanilla default for every type. It is an IMMUTABLE VALUE threaded into the A*
+// snapshot (pathRequest.malus) — computePath reads it off-tick, never the live mob.
+//
+//	[VERIFIED CFR Mob.getPathfindingMalus/setPathfindingMalus: Map<PathType,Float> pathfindingMalus
+//	 = Maps.newEnumMap(PathType.class); get(pathType) ?? pathType.getMalus(); put(pathType, cost).]
+type mobMalus struct {
+	// overrides holds only the types a mob set (Animal sets FIRE/FIRE_IN_NEIGHBOR). nil == pure
+	// defaults. A copy is threaded into pathRequest so the off-tick A* reads a frozen snapshot.
+	overrides map[pathType]float32
+}
+
+// getPathfindingMalus ports Mob.getPathfindingMalus(PathType): the override if set, else the jar
+// PathType default. (The controlled-vehicle inheritFrom branch is a rider concern deferred with the
+// vehicle subsystem — a v1 walking mob is its own inheritFrom, so this.pathfindingMalus is read.)
+func (m mobMalus) getPathfindingMalus(p pathType) float32 {
+	if m.overrides != nil {
+		if v, ok := m.overrides[p]; ok {
+			return v
+		}
+	}
+	return p.malus()
+}
+
+// setPathfindingMalus ports Mob.setPathfindingMalus(PathType, float): record a per-mob override.
+func (m *mobMalus) setPathfindingMalus(p pathType, cost float32) {
+	if m.overrides == nil {
+		m.overrides = make(map[pathType]float32)
+	}
+	m.overrides[p] = cost
+}
+
+// copy returns an immutable snapshot of the malus map to thread into pathRequest (so the off-tick A*
+// never aliases the live mob map — the Phase-8 purity contract). A nil/empty map copies to a
+// zero-value mobMalus (pure defaults).
+func (m mobMalus) copy() mobMalus {
+	if len(m.overrides) == 0 {
+		return mobMalus{}
+	}
+	c := make(map[pathType]float32, len(m.overrides))
+	for k, v := range m.overrides {
+		c[k] = v
+	}
+	return mobMalus{overrides: c}
 }
 
 // mobAirCells is the number of air cells the mob needs above its feet to stand at a node —
-// ceil(mobH). A Pig (0.9) needs 1; a 1.8-high mob needs 2. Ported from WalkNodeEvaluator's
+// ceil(mobH). A Pig (0.9) needs 1; a 1.8-high mob needs 2. Ported from WalkNodeEvaluator
 // entityHeight (Mth.floor(bbHeight + 1)) clearance check, simplified to "ceil(height) clear".
 func mobAirCells(mobH float64) int {
 	n := int(mobH)
@@ -68,16 +178,32 @@ func mobAirCells(mobH float64) int {
 	return n
 }
 
-// getPathType ports WalkNodeEvaluator.getPathType (v1 BLOCKED/OPEN/WALKABLE classification) over
-// the immutable snapshot. A node at (x,y,z) is the cell the mob's FEET occupy:
-//   - BLOCKED if any of the mob's body cells (y .. y+ceil(h)-1) is solid (it cannot stand here).
+// getPathType ports WalkNodeEvaluator.getPathType over the immutable snapshot — the mob-aware node
+// classification. A node at (x,y,z) is the cell the mob FEET occupy:
+//   - WATER if the feet cell is a water fluid (the getPathTypeFromState WATER class); the WATER malus
+//     (default 8, positive) makes water COSTLY but passable, so a water-avoider (higher malus) routes
+//     around it while a swimmer (malus 0, AmphibiousNodeEvaluator) treats it as cheap.
+//   - LAVA if the feet cell is a lava fluid (malus -1, impassable — a mob never paths into lava).
+//   - BLOCKED if any of the mob body cells (y .. y+ceil(h)-1) is solid (it cannot stand here).
 //   - WALKABLE if the body space is clear AND the floor (y-1) is solid (a standable surface).
 //   - OPEN otherwise (clear body, no floor below — an air/drop node the step-down logic uses).
+//
+// This is the getPathTypeFromState precedence (VERIFIED CFR: air->OPEN; LAVA->LAVA; WATER->WATER;
+// else solidity) folded with the body-BB clearance check WalkNodeEvaluator.getPathTypeOfMob applies.
+// v1 superflat only ever produces OPEN/WALKABLE/BLOCKED; WATER/LAVA appear only where those fluids
+// are placed (turtle oceans, nether — the wider worlds), and their jar malus now re-costs the path.
 func getPathType(r *pathRegion, x, y, z int, mobH float64) pathType {
+	// Fluid at the FEET cell (getPathTypeFromState precedence: LAVA before WATER, before solidity).
+	switch r.fluidAt(x, y, z) {
+	case pathFluidLava:
+		return pathLava
+	case pathFluidWater:
+		return pathWater
+	}
 	cells := mobAirCells(mobH)
 	for i := 0; i < cells; i++ {
 		if r.solidAt(x, y+i, z) {
-			return pathBlocked // the mob's body would intersect a solid block
+			return pathBlocked // the mob body would intersect a solid block
 		}
 	}
 	if r.solidAt(x, y-1, z) {
@@ -87,51 +213,68 @@ func getPathType(r *pathRegion, x, y, z int, mobH float64) pathType {
 }
 
 // newEvalNode builds a Node at (x,y,z), classifies it via getPathType, and stamps the ported
-// costMalus (PathType.getMalus). The A* reads node.costMalus to relax g; a negative malus marks
-// an impassable node that isNeighborValid rejects.
-func newEvalNode(r *pathRegion, x, y, z int, mobH float64) *node {
+// costMalus = mob.getPathfindingMalus(nodeType) (findAcceptedNode pathCost = mob
+// .getPathfindingMalus(pathType)), NOT the raw PathType default — the per-mob malus map is the
+// observable cost. The A* reads node.costMalus to relax g; a negative malus marks an impassable node
+// that isNeighborValid rejects.
+func newEvalNode(r *pathRegion, x, y, z int, mobH float64, malus mobMalus) *node {
 	t := getPathType(r, x, y, z, mobH)
 	n := newNode(x, y, z)
 	n.ptype = t
-	n.costMalus = t.malus()
+	n.costMalus = malus.getPathfindingMalus(t)
 	return n
 }
 
 // findAcceptedNode ports WalkNodeEvaluator.findAcceptedNode (v1 ground subset). The ORDER + guards
 // are load-bearing (a wrong order makes a mob "climb" out of a covered hole). Faithful flow:
+//   - WATER feet (not floating) -> tryFindFirstNonWaterBelow (fall to the floor under the water);
+//     for a floating mob (canFloat) WATER is standable-in and returned directly (the water surface).
 //   - same-level WALKABLE  -> accept it (a standable floor here).
 //   - same-level OPEN (clear body, no floor) -> step DOWN to the first solid floor below (the mob
-//     FALLS; it does NOT jump). This is vanilla's tryFindFirstGroundNodeBelow branch.
-//   - same-level BLOCKED (the mob's body cell is solid) -> ONLY THEN try stepping UP (tryJumpOn),
-//     and only if there is JUMP CLEARANCE in the SOURCE column (no ceiling pinning the mob) AND the
-//     destination y+1 is itself standable. This is vanilla's `if (best==null || best.costMalus<0) &&
-//     jumpSize>0` gate + tryJumpOn's collision sweep.
-// The previous code tried the step-UP BEFORE the step-DOWN and for ANY non-WALKABLE same-level node,
-// so a mob standing in a 2-high covered hole (same-level OPEN/BLOCKED, a solid block at y+mobCells
-// above its head) was lifted onto the block above instead of staying/falling — the "spawn under a
-// block, it climbs up immediately" bug. Reads ONLY the snapshot.
+//     FALLS; it does NOT jump). This is vanilla tryFindFirstGroundNodeBelow branch.
+//   - same-level BLOCKED/LAVA (the mob body cell is solid or lava) -> ONLY THEN try stepping UP
+//     (tryJumpOn), and only if there is JUMP CLEARANCE in the SOURCE column (no ceiling pinning the
+//     mob) AND the destination y+1 is itself standable. Vanilla if (best==null || best.costMalus<0)
+//     && jumpSize>0 gate + tryJumpOn collision sweep. A negative-malus node (LAVA) yields best==null
+//     (pathCost<0 skips getNodeAndUpdateCostToMax), so it falls through to the jump-or-nil path — a mob
+//     never accepts a lava node.
 //
 // src(X,Z) is the SOURCE column the mob is moving FROM — needed for the jump ceiling check (the mob
 // must be able to rise in its CURRENT column, not just land in the destination). stepUp is the
-// maxUpStep allowance in blocks.
-func findAcceptedNode(r *pathRegion, x, y, z, stepUp int, mobH float64, srcX, srcZ int) *node {
-	// Same-level classification drives the branch (vanilla switches on the same-level pathType).
-	switch newEvalNode(r, x, y, z, mobH).ptype {
+// maxUpStep allowance in blocks. canFloat is PathNavigation.canFloat (FloatGoal sets it) — it makes
+// WATER a standable surface node (the float-pathing the FloatGoal implies). Reads ONLY the snapshot.
+func findAcceptedNode(r *pathRegion, x, y, z, stepUp int, mobH float64, srcX, srcZ int, malus mobMalus, canFloat bool) *node {
+	nd := newEvalNode(r, x, y, z, mobH, malus)
+	switch nd.ptype {
 	case pathWalkable:
-		return newEvalNode(r, x, y, z, mobH) // a standable floor here — accept
+		return nd // a standable floor here — accept
+	case pathWater:
+		// A water feet cell. For a floating mob (canFloat, e.g. FloatGoal) WATER is standable-into —
+		// return the node with its (mob-adjusted) WATER malus so a swim path costs the WATER malus. For a
+		// non-floating mob vanilla falls to the first non-water floor below (tryFindFirstNonWaterBelow) —
+		// v1 reduces to the same bounded step-down as OPEN (the water column drains to a solid floor).
+		if canFloat && nd.costMalus >= 0 {
+			return nd
+		}
+		for down := 1; down <= 3; down++ {
+			if n := newEvalNode(r, x, y-down, z, mobH, malus); n.ptype == pathWalkable {
+				return n
+			}
+		}
+		return nil
 	case pathOpen:
 		// Clear body, no floor below — the mob FALLS (step DOWN), never jumps. Find the first solid
 		// floor within a bounded drop band (vanilla scans down; v1 caps the band so a mob does not see
 		// a node across a deep chasm). NO step-up is attempted for an OPEN node.
 		for down := 1; down <= 3; down++ {
-			if n := newEvalNode(r, x, y-down, z, mobH); n.ptype == pathWalkable {
+			if n := newEvalNode(r, x, y-down, z, mobH, malus); n.ptype == pathWalkable {
 				return n
 			}
 		}
 		return nil
-	default: // pathBlocked — the body cell ahead is solid; the only way through is UP (step/jump).
+	default: // pathBlocked / pathLava / other negative-malus classes — the only way through is UP.
 		// JUMP CEILING GUARD (vanilla tryJumpOn): the mob can only rise if its SOURCE column has the
-		// headroom to lift — i.e. the cell directly above the mob's body in the column it is LEAVING
+		// headroom to lift — i.e. the cell directly above the mob body in the column it is LEAVING
 		// must be clear. Without this, a mob pinned under a block "teleports" onto the block. The body
 		// occupies cells y .. y+mobAirCells-1; the lift cell is (srcX, y+mobAirCells, srcZ). If that is
 		// solid, no jump is possible — return nil (the move is rejected; the mob stays / falls).
@@ -139,7 +282,7 @@ func findAcceptedNode(r *pathRegion, x, y, z, stepUp int, mobH float64, srcX, sr
 			return nil // ceiling above the mob in its current column — cannot jump up
 		}
 		for up := 1; up <= stepUp; up++ {
-			if n := newEvalNode(r, x, y+up, z, mobH); n.ptype == pathWalkable {
+			if n := newEvalNode(r, x, y+up, z, mobH, malus); n.ptype == pathWalkable {
 				return n // a reachable ledge with clear headroom at the destination
 			}
 		}
@@ -154,7 +297,7 @@ func findAcceptedNode(r *pathRegion, x, y, z, stepUp int, mobH float64, srcX, sr
 // immutable snapshot (no live world) — the purity that lets the A* run off-tick in Phase 8.
 //
 // stepUp is the maxUpStep allowance (vanilla floor(max(1, mob.maxUpStep))); for a Pig that is 1.
-func getNeighbors(r *pathRegion, n *node, mobW, mobH float64) []*node {
+func getNeighbors(r *pathRegion, n *node, mobW, mobH float64, malus mobMalus, canFloat bool) []*node {
 	const stepUp = 1 // floor(max(1, mob.maxUpStep)); a Pig steps up 1 block
 
 	// The 4 cardinal directions in vanilla Direction2D order (N=-Z, E=+X, S=+Z, W=-X), each
@@ -167,7 +310,7 @@ func getNeighbors(r *pathRegion, n *node, mobW, mobH float64) []*node {
 	side := [4]*node{}
 	out := make([]*node, 0, 8)
 	for i, d := range card {
-		c := findAcceptedNode(r, n.x+d.dx, n.y, n.z+d.dz, stepUp, mobH, n.x, n.z)
+		c := findAcceptedNode(r, n.x+d.dx, n.y, n.z+d.dz, stepUp, mobH, n.x, n.z, malus, canFloat)
 		side[i] = c
 		if isNeighborValid(c, n) {
 			out = append(out, c)
@@ -182,7 +325,7 @@ func getNeighbors(r *pathRegion, n *node, mobW, mobH float64) []*node {
 		j := (i + 1) % 4
 		di, dj := card[i], card[j]
 		cx, cz := n.x+di.dx+dj.dx, n.z+di.dz+dj.dz
-		corner := findAcceptedNode(r, cx, n.y, cz, stepUp, mobH, n.x, n.z)
+		corner := findAcceptedNode(r, cx, n.y, cz, stepUp, mobH, n.x, n.z, malus, canFloat)
 		if isDiagonalValidSides(n, side[i], side[j], mobW) && isDiagonalValidCorner(corner) {
 			out = append(out, corner)
 		}
@@ -207,7 +350,7 @@ func isNeighborValid(neighbor, src *node) bool {
 // isDiagonalValidSides ports WalkNodeEvaluator.isDiagonalValid(node, sideA, sideB) — the
 // corner-cut rejection (the v1 core). Both adjacent cardinal nodes must exist and be passable
 // (non-negative malus) for the diagonal to be allowed, so a mob cannot slide diagonally THROUGH
-// a blocked corner (Pitfall 5's pathing analogue). The wide-mob (bbWidth > 1) tightening and the
+// a blocked corner (Pitfall 5 pathing analogue). The wide-mob (bbWidth > 1) tightening and the
 // FENCE-squeeze are deferred with the wider PathType set (A5); for a Pig (width 0.9 <= 1) the
 // faithful gate is "both sides passable".
 func isDiagonalValidSides(n, sideA, sideB *node, mobW float64) bool {

@@ -176,6 +176,11 @@ func (r pathReady) applyTo(t *TickLoop) {
 	// Still-valid: adopt the late path on the owner; the mob starts following it next tick.
 	nav.path = r.path
 	nav.pending = false
+	// GroundPathNavigation.trimPath avoid-sun tail (VERIFIED CFR): a day-time restricted skeleton
+	// (RestrictSunGoal set avoidSun) has its fresh path truncated at the first sky-exposed node so it
+	// routes only as far as the shade extends. Runs HERE on the owner (a live *TickLoop canSeeSky read),
+	// right after the path is adopted — the faithful post-A* trim. A no-op for avoidSun=false mobs.
+	nav.trimPathAvoidSun(t, e)
 }
 
 // trackerDiffReady is the OPT-02 (async entity tracker, 08-04) rejoin message. The off-tick

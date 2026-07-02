@@ -79,21 +79,20 @@ type groundNavigation struct {
 	// canFloat is net.minecraft.world.entity.ai.navigation.PathNavigation.canFloat, set true by the
 	// FloatGoal ctor (mob.getNavigation().setCanFloat(true)). It tells the node-evaluator that the mob
 	// may PATH over/through water (WalkNodeEvaluator.setCanFloat → BlockPathTypes.WATER walkable). The
-	// flag is ported 1:1 here; the float PATHING behavior (pathing across water surfaces) is a
-	// node-evaluator concern DEFERRED + cited (CONTEXT deferred: "port the flag set; the nav float
-	// behavior is a node-evaluator concern, cite if not trivially included") — FloatGoal's observable
-	// (the swim-jump impulse) does not depend on float-pathing, so setting the flag fully satisfies the
-	// FloatGoal ctor without the pathing port. Plain bool, tick-owned.
+	// flag is ported 1:1 here AND now DRIVES the float-pathing: it is threaded into the A* request
+	// (pathRequest.canFloat) so findAcceptedNode (node_evaluator.go) treats a WATER node as a standable
+	// surface — a canFloat mob paths ACROSS water instead of routing around it. (The float-pathing was a
+	// cited node-evaluator deferral; the NodeEvaluator path-malus work closed it.) Plain bool, tick-owned.
 	//	[VERIFIED javap FloatGoal.<init>: getNavigation().setCanFloat(true); PathNavigation.setCanFloat(boolean).]
 	canFloat bool
 
 	// avoidSun is net.minecraft.world.entity.ai.navigation.GroundPathNavigation.avoidSun, flipped by the
 	// skeleton's RestrictSunGoal (setAvoidSun(true) on start, false on stop — ai_goals_skeleton_sun.go).
-	// It tells the WalkNodeEvaluator to add a sun-exposed pathfinding malus so a day-time skeleton routes
-	// through shade. The flag is ported 1:1 here; the avoid-sun PATHING MALUS itself is a node-evaluator
-	// concern DEFERRED + cited (sibling of canFloat's float-pathing deferral) — no path-malus subsystem
-	// exists in v1, so setting the flag faithfully satisfies the RestrictSunGoal ctor/start/stop without
-	// the malus port. The malus lands when the node-evaluator malus subsystem does. Plain bool, tick-owned.
+	// It drives GroundPathNavigation.trimPath's avoid-sun tail (trimPathAvoidSun, this file): after a fresh
+	// path is adopted (async.go pathReady.applyTo) the path is TRUNCATED at the first sky-exposed node, so a
+	// day-time skeleton routes only as far as the shade extends. (Vanilla's avoid-sun is a post-A* path TRIM,
+	// not a costMalus — VERIFIED CFR GroundPathNavigation.trimPath.) The flag now has its real observable
+	// effect (previously a cited deferral). Plain bool, tick-owned.
 	//	[VERIFIED CFR RestrictSunGoal: start setAvoidSun(true); stop setAvoidSun(false).]
 	avoidSun bool
 
@@ -166,6 +165,12 @@ func (n *groundNavigation) requestPath(t *TickLoop, e *Entity, tx, ty, tz int) {
 		followRange: followRangeF,
 		reachRange:  navReachRange,
 		maxVisited:  maxVisitedBudgetFor(followRangeI),
+		// The mob per-mob pathfinding-malus map SNAPSHOT (an immutable copy — Mob.getPathfindingMalus,
+		// node_evaluator.go). newEvalNode stamps node.costMalus from it, so a fire-averse Animal (FIRE -1)
+		// or a water-avoider re-costs the A* off-tick. A copy so the off-tick worker never aliases the
+		// live mob's map (the Phase-8 purity contract). canFloat routes WATER as a standable node.
+		malus:    mobMalusOf(e),
+		canFloat: n.canFloat,
 	}
 
 	// Capture ONLY immutable values for the off-tick worker (NEVER e or t.world() — Pitfall 3): the
@@ -233,10 +238,51 @@ func (n *groundNavigation) active() bool {
 	return n.path != nil && !n.path.done()
 }
 
-// setAvoidSun ports GroundPathNavigation.setAvoidSun(boolean): flip the avoid-sun pathfinding bias flag.
-// The skeleton RestrictSunGoal drives it (start true / stop false). The malus itself is node-evaluator
-// deferred (see the avoidSun field doc); this setter is the faithful flag write.
+// setAvoidSun ports GroundPathNavigation.setAvoidSun(boolean): flip the avoid-sun path-trim flag. The
+// skeleton RestrictSunGoal drives it (start true / stop false); trimPathAvoidSun (this file) consumes it
+// on path adoption to truncate the path at the first sky-exposed node.
 func (n *groundNavigation) setAvoidSun(b bool) { n.avoidSun = b }
+
+// mobMalusOf returns an IMMUTABLE COPY of the mob's per-mob pathfinding-malus map (mobAI.malus,
+// node_evaluator.go mobMalus) to thread into the A* pathRequest. A nil-ai mob (a hand-built test
+// entity) yields the zero-value mobMalus (pure PathType defaults). The copy is the Phase-8 purity
+// discipline: the off-tick worker reads a frozen snapshot, never the live mob's map. Cite Mob
+// .getPathfindingMalus (the per-mob override read the A* performs per node).
+func mobMalusOf(e *Entity) mobMalus {
+	if e == nil || e.ai == nil {
+		return mobMalus{}
+	}
+	return e.ai.malus.copy()
+}
+
+// trimPathAvoidSun ports net.minecraft.world.entity.ai.navigation.GroundPathNavigation.trimPath's
+// avoid-sun tail (VERIFIED CFR): when avoidSun is set, if the mob is CURRENTLY sky-exposed the path is
+// left whole (nowhere shaded to route to — it already burns); otherwise the path is TRUNCATED at the
+// FIRST node that sees sky, so a day-time skeleton (RestrictSunGoal set avoidSun) walks only as far as
+// the shade extends. It runs ON THE OWNER after a fresh path is adopted (async.go pathReady.applyTo),
+// where the live *TickLoop canSeeSky read is available — the faithful post-A* trim, NOT a costMalus.
+// A mob with avoidSun=false (every mob but a day-time restricted skeleton) is a zero-cost no-op.
+//
+//	[VERIFIED CFR GroundPathNavigation.trimPath: super.trimPath(); if (avoidSun) { if (canSeeSky(mobPos))
+//	 return; for i in 0..nodeCount: if (canSeeSky(node)) { truncateNodes(i); return; } }.]
+func (n *groundNavigation) trimPathAvoidSun(t *TickLoop, e *Entity) {
+	if !n.avoidSun || n.path == nil {
+		return
+	}
+	// canSeeSky(BlockPos.containing(mob.getX(), mob.getY()+0.5, mob.getZ())): the mob is already in the
+	// open — nothing to trim toward (it burns regardless), so leave the path whole.
+	if t.canSeeSky(e) {
+		return
+	}
+	// Truncate at the first sky-exposed node (the mob stops at the edge of the shade).
+	for i := 0; i < len(n.path.nodes); i++ {
+		nd := n.path.nodes[i]
+		if t.canSeeSkyAt(nd.y) {
+			n.path.truncateNodes(i)
+			return
+		}
+	}
+}
 
 func (n *groundNavigation) shouldRecomputePath(tx, ty, tz int) bool {
 	targetChanged := !n.hasTarget || tx != n.lastTX || ty != n.lastTY || tz != n.lastTZ

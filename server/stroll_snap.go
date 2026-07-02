@@ -1,5 +1,7 @@
 package server
 
+import pk "github.com/imhinotori/sulfur/net/packet"
+
 // stroll_snap.go — Phase 30.1: the RNG-FREE shared-runtime snap/validate for the stroll goal's 10
 // raw candidates. PORTED (the STANDING MANDATE, idiomatic non-1:1 Go, no GPL paste) from the
 // unobfuscated 26.2 jar (javap/CFR over temp/cache/26.2-inner.jar, CONTEXT <jar_bytecode>):
@@ -77,25 +79,68 @@ func (t *TickLoop) isOutsideLimits(by int) bool { return by < dimMinY || by > ma
 func (t *TickLoop) isRestricted(_ *Entity, _, _, _ int) bool { return false }
 
 // isWaterAt is GoalUtils.isWater(mob, pos) == mob.level().getFluidState(pos).is(FluidTags.WATER) —
-// reject a candidate whose snapped cell is water. A flat-world pig never strolls onto water, and the
-// fluid-tag read for an arbitrary world pos is not yet wired into the tick-owned solidity read, so this
-// is a CITED stub at the vanilla default (false). UPGRADE PATH: read the real getFluidState(pos) water
-// tag here when the mob nav becomes water-aware (the deferred WalkNodeEvaluator water classification).
+// reject a candidate whose snapped cell is water. Now a REAL read of the tick-owned world fluid state
+// (t.fluidAt), so a water-avoiding stroll (WaterAvoidingRandomStrollGoal) actually rejects a water cell
+// and re-rolls a dry candidate. A flat-world pig never strolls onto water (there is none), so this
+// stays false in the pig oracle — byte-identical — but a world WITH water now sees the avoidance.
 //
 //	[VERIFIED CFR GoalUtils.isWater: `return mob.level().getFluidState(pos).is(FluidTags.WATER);`.]
-func (t *TickLoop) isWaterAt(_, _, _ int) bool { return false }
+func (t *TickLoop) isWaterAt(bx, by, bz int) bool {
+	if t.world() == nil {
+		return false
+	}
+	return t.fluidAt(pk.Position{X: bx, Y: by, Z: bz}).isWater
+}
 
 // hasMalus is GoalUtils.hasMalus(mob, pos) == mob.getPathfindingMalus(WalkNodeEvaluator.getPathTypeStatic
-// (mob, pos)) != 0.0f — reject a candidate whose path type carries a non-zero pathfinding malus. A v1
-// walkable node's malus is 0.0 (PathType WALKABLE/OPEN malus == 0.0 in node_evaluator.go's faithful
-// table; the WATER/LAVA/FENCE/DOOR malus classes are deferred there), so this is ALWAYS false. CITED
-// stub at the vanilla default; UPGRADE PATH: a real getPathfindingMalus(getPathTypeStatic(mob,pos)) read
-// when the wider BlockPathTypes malus set lands. This is the SAME getWalkTargetValue==0.0 consequence
-// that makes the first valid candidate win.
+// (mob, pos)) != 0.0f — reject a candidate whose path type carries a non-zero pathfinding malus for THIS
+// mob. Now a REAL read: classify the live world cell into a PathType (pathTypeAtLive, the getPathTypeStatic
+// analogue) and look up the mob's per-mob malus (mobAI.malus.getPathfindingMalus). A WALKABLE/OPEN cell is
+// malus 0.0 (false), a WATER cell is 8.0 (true — an animal avoids strolling onto water even before the
+// isWaterAt reject), a fire cell is the Animal FIRE -1 (true). A flat-world pig's snapped cell is always
+// the WALKABLE column above stone → malus 0.0 → false, so the pig oracle stays byte-identical.
 //
 //	[VERIFIED CFR GoalUtils.hasMalus: `return mob.getPathfindingMalus(WalkNodeEvaluator.getPathTypeStatic
-//	 (mob, pos)) != 0.0f;` — pig walkable malus 0.0.]
-func (t *TickLoop) hasMalus(_ *Entity, _, _, _ int) bool { return false }
+//	 (mob, pos)) != 0.0f;`.]
+func (t *TickLoop) hasMalus(e *Entity, bx, by, bz int) bool {
+	pt := t.pathTypeAtLive(bx, by, bz, entityHeightOf(e))
+	return mobMalusOf(e).getPathfindingMalus(pt) != 0.0
+}
+
+// pathTypeAtLive classifies a live-world cell into a pathType — the on-tick getPathTypeStatic analogue
+// (a MoveToBlockGoal/RandomPos validity read, NOT the off-tick snapshot getPathType). Same
+// getPathTypeFromState precedence node_evaluator.getPathType uses over the snapshot: fluid (LAVA before
+// WATER) at the feet cell, then the body-BB solidity (BLOCKED / WALKABLE / OPEN). Tick-owned world reads.
+func (t *TickLoop) pathTypeAtLive(x, y, z int, mobH float64) pathType {
+	if t.world() != nil {
+		fs := t.fluidAt(pk.Position{X: x, Y: y, Z: z})
+		if fs.isLava {
+			return pathLava
+		}
+		if fs.isWater {
+			return pathWater
+		}
+	}
+	cells := mobAirCells(mobH)
+	for i := 0; i < cells; i++ {
+		if t.blockSolidAt(x, y+i, z) {
+			return pathBlocked
+		}
+	}
+	if t.blockSolidAt(x, y-1, z) {
+		return pathWalkable
+	}
+	return pathOpen
+}
+
+// entityHeightOf is the mob AABB height for the pathType body-BB clearance (mobAirCells). A nil entity
+// (a hand-built test) falls back to 1.0 (a single-cell body). Mirrors newEvalNode's mobH argument.
+func entityHeightOf(e *Entity) float64 {
+	if e == nil || e.height <= 0 {
+		return 1.0
+	}
+	return e.height
+}
 
 // snapStrollWant is the RNG-FREE first-valid scan over the 10 raw candidates (RandomPos.generateRandomPos
 // with all weights 0.0 + the strict-`>` tie-break → the first non-null candidate wins). It walks the

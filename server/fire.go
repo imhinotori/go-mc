@@ -144,3 +144,11 @@ func (t *TickLoop) entityInWater(e *Entity) bool {
 func (t *TickLoop) canSeeSky(e *Entity) bool {
 	return int(math.Floor(e.y)) >= t.spawnSurfaceY
 }
+
+// canSeeSkyAt is canSeeSky for a raw block position (the GroundPathNavigation.trimPath per-node check
+// level.canSeeSky(new BlockPos(node.x, node.y, node.z))). Same superflat sky-exposure shortcut as
+// canSeeSky: a cell at or above the spawn surface has open sky. CITED STUB (becomes the real light-
+// engine canSeeSky later), sibling of canSeeSky above.
+func (t *TickLoop) canSeeSkyAt(y int) bool {
+	return y >= t.spawnSurfaceY
+}

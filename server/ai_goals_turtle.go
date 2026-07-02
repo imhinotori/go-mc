@@ -137,6 +137,32 @@ func (t *TickLoop) isEmptyBlockXYZ(x, y, z int) bool {
 
 // --- home-pos setter (the finalizeSpawn seam) -----------------------------------------------------
 
+// applyTurtleAmphibiousMalus ports net.minecraft.world.level.pathfinder.AmphibiousNodeEvaluator.prepare's
+// per-mob malus overrides (VERIFIED CFR AmphibiousNodeEvaluator.prepare, this session): WATER 0.0 (water
+// is a FREE swim node, not the 8.0 land-mob avoidance), WALKABLE 6.0 (dry land is COSTLY so the turtle
+// prefers water), WATER_BORDER 4.0 (the shore is mid-cost). The turtle's TurtlePathNavigation extends
+// AmphibiousPathNavigation, so its node evaluator IS the amphibious one — these are its per-mob malus. Plus
+// setCanFloat(true) so the ground A* (node_evaluator.findAcceptedNode) treats WATER as a standable surface
+// node and the turtle paths THROUGH water (the water-nav the WalkNodeEvaluator-only server previously could
+// not express — now the malus + canFloat wiring lets the SAME ground A* route the turtle across water).
+//
+// This LANDS the water-nav reduction the turtle goals documented: the goal logic was already 1:1; only the
+// underlying node evaluator's water traversal was reduced. With the malus map + canFloat wired, the ground
+// A* now re-costs water as cheap and land as costly for the turtle, so a turtle in an ocean prefers to swim
+// — the AmphibiousNodeEvaluator's observable bias, re-expressed over the ground A*. (The vertical up/down
+// WATER neighbors + prefersShallowSwimming +1 cost are a deeper amphibious-specific getNeighbors change,
+// cited-deferred; the malus + canFloat capture the dominant observable — water-preference routing.) On a
+// superflat v1 world (no ocean) it is a near-no-op. Cite AmphibiousNodeEvaluator.prepare.
+func applyTurtleAmphibiousMalus(m *mobAI) {
+	if m == nil {
+		return
+	}
+	m.malus.setPathfindingMalus(pathWater, 0.0)
+	m.malus.setPathfindingMalus(pathWalkable, 6.0)
+	m.malus.setPathfindingMalus(pathWaterBorder, 4.0)
+	m.navigation.canFloat = true // TurtlePathNavigation swims: WATER is a standable surface node
+}
+
 // setTurtleHomePos is Turtle.setHomePos(BlockPos): record the turtle's scented home column. Called at
 // spawn (finalizeSpawn setHomePos(blockPosition())) so a spawned turtle's home is its spawn block.
 //

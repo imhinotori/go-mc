@@ -642,6 +642,13 @@ func (t *TickLoop) spawnDeclaredMob(decl *mobDecl, x, y, z float64) *Entity {
 	// unperturbed — this is RNG-free). Cite Turtle.finalizeSpawn setHomePos(blockPosition()).
 	if e.typ == entity.Turtle.ID {
 		setTurtleHomePos(e, floorI(e.x), floorI(e.y), floorI(e.z))
+		// TurtlePathNavigation extends AmphibiousPathNavigation: apply the AmphibiousNodeEvaluator.prepare
+		// per-mob malus (WATER 0 / WALKABLE 6 / WATER_BORDER 4) + setCanFloat(true) so the ground A* routes
+		// the turtle THROUGH water and PREFERS it — the water-nav the turtle goals cited as reduced now
+		// lands over the shared ground A* (RNG-free; a no-op on superflat). Cite AmphibiousNodeEvaluator.prepare.
+		if e.ai != nil {
+			applyTurtleAmphibiousMalus(e.ai)
+		}
 	}
 	// MOB item-pickup (net.minecraft.world.entity.Mob.canPickUpLoot): the Fox <init> calls
 	// setCanPickUpLoot(true) (javap Fox.<init>), so a spawned fox runs the Mob.aiStep looting scan

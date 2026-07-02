@@ -25,9 +25,12 @@ package server
 // (fire.go); getItemBySlot(HEAD).isEmpty() == cited constant-true (no equipment slots on a v1 skeleton, so
 // its head is always bare — the vanilla default for a naturally-spawned skeleton); getWalkTargetValue >= 0
 // == cited constant-true (no path-malus subsystem; base PathfinderMob getWalkTargetValue is 0.0, jar-
-// verified in ai_goals_avoid.go). setAvoidSun is a cited no-op on the v1 GroundPathNavigation (no avoidSun
-// pathfinding malus yet) — the RESTRICT goal's OBSERVABLE effect (it holds no MOVE flag, so it never fights
-// the flee) is faithful; the pathfinding bias lands when the navigation malus subsystem does.
+// verified in ai_goals_avoid.go). setAvoidSun NOW has its real observable effect: it drives
+// GroundPathNavigation.trimPath's avoid-sun tail (navigation.trimPathAvoidSun, run on path adoption in
+// async.go) so a shaded day-time skeleton's fresh path is TRUNCATED at the first sky-exposed node — it
+// routes only as far as the shade extends (VERIFIED CFR GroundPathNavigation.trimPath). Previously a cited
+// no-op; the NodeEvaluator path-malus work landed the real trim. The RESTRICT goal still holds no MOVE
+// flag, so it never fights the flee — faithful.
 
 import "math"
 

@@ -51,11 +51,29 @@ func snapSectionLocal(x, y, z, minY int) (sec, local int) {
 // region is treated as immutable — only the builder writes it, and computePath reads it. A
 // flat []bool keeps the read branch-free and cache-friendly (the box is small: ~50³ worst case
 // for a follow range of 24, well within a tick-built scratch buffer).
+//
+// pathFluid is the per-cell fluid classification the snapshot stores alongside solidity, so the
+// pure A* (node_evaluator.go getPathType) can classify WATER/LAVA nodes off-tick WITHOUT a live
+// world read. It mirrors the getPathTypeFromState fluid precedence (LAVA before WATER). pathFluidNone is
+// the common case (air or a non-fluid block). Classified ON the tick in snapshotRegion via the SAME
+// waterLevelOf/lavaLevelOf reads fluid.go uses, so the snapshot and the live world never disagree.
+type pathFluid uint8
+
+const (
+	pathFluidNone pathFluid = iota
+	pathFluidWater
+	pathFluidLava
+)
+
 type pathRegion struct {
 	minX, minY, minZ int
 	maxX, maxY, maxZ int
 	dx, dy, dz       int // span = max-min+1 per axis (precomputed for the index)
 	solid            []bool
+	// fluid is the per-cell fluid classification (fluidNone/fluidWater/fluidLava), index-aligned with
+	// solid (same idx). Built by snapshotRegion; immutable thereafter. A cell may be BOTH a fluid and
+	// non-solid (water/lava are non-solid), so this is a SEPARATE array, not folded into solid.
+	fluid []pathFluid
 }
 
 // newPathRegion allocates an all-air region over the inclusive box. The builder
@@ -75,6 +93,7 @@ func newPathRegion(minX, minY, minZ, maxX, maxY, maxZ int) *pathRegion {
 		maxX: maxX, maxY: maxY, maxZ: maxZ,
 		dx: dx, dy: dy, dz: dz,
 		solid: make([]bool, dx*dy*dz),
+		fluid: make([]pathFluid, dx*dy*dz),
 	}
 }
 
@@ -110,6 +129,24 @@ func (r *pathRegion) solidAt(x, y, z int) bool {
 		return true
 	}
 	return r.solid[r.idx(x, y, z)]
+}
+
+// setFluid writes a cell fluid classification (builder/test only — immutable thereafter).
+func (r *pathRegion) setFluid(x, y, z int, f pathFluid) {
+	if !r.inBox(x, y, z) {
+		return
+	}
+	r.fluid[r.idx(x, y, z)] = f
+}
+
+// fluidAt reports the fluid classification (fluidNone/fluidWater/fluidLava) at (x,y,z). OUT-OF-BOX is
+// fluidNone (the edge is treated as a solid barrier by solidAt; a void cell carries no fluid). Reads
+// only the immutable snapshot — the getPathTypeFromState fluid precedence in node_evaluator.getPathType.
+func (r *pathRegion) fluidAt(x, y, z int) pathFluid {
+	if !r.inBox(x, y, z) {
+		return pathFluidNone
+	}
+	return r.fluid[r.idx(x, y, z)]
 }
 
 // snapshotRegion builds the immutable pathRegion ON the tick by COPYING world solidity over the
@@ -161,6 +198,14 @@ func snapshotRegion(w *world.ChunkManager, e *Entity, tx, ty, tz int, followRang
 				}
 				s := ch.Sections[sec].GetBlock(local)
 				r.set(x, y, z, !block.IsAir(s)) // solid? (the copy — never a live alias)
+				// Fluid classification (getPathTypeFromState precedence: LAVA before WATER), read via the
+				// SAME waterLevelOf/lavaLevelOf fluid.go uses so the snapshot matches the live world. A
+				// non-fluid block stays fluidNone. This is the copy the pure A* classifies WATER/LAVA from.
+				if _, isLava := lavaLevelOf(s); isLava {
+					r.setFluid(x, y, z, pathFluidLava)
+				} else if _, isWater := waterLevelOf(s); isWater {
+					r.setFluid(x, y, z, pathFluidWater)
+				}
 			}
 		}
 	}

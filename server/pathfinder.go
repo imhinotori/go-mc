@@ -205,8 +205,8 @@ func (h *binaryHeap) siftDown(i int) {
 // Path ports net.minecraft.world.level.pathfinder.Path: the ordered node list the mob walks,
 // plus the current waypoint index. done/nextNode/advance drive navigation.tick (navigation.go).
 type Path struct {
-	nodes  []*node
-	idx    int  // the next node the mob is walking toward
+	nodes   []*node
+	idx     int  // the next node the mob is walking toward
 	reached bool // whether the path actually reached a target (vs a best-effort partial)
 }
 
@@ -218,6 +218,20 @@ func (p *Path) nextNode() *node { return p.nodes[p.idx] }
 
 // advance steps the waypoint index forward (called when the mob reaches the current node).
 func (p *Path) advance() { p.idx++ }
+
+// truncateNodes ports net.minecraft.world.level.pathfinder.Path.truncateNodes(int length): drop
+// every node from index `length` onward (keep nodes [0, length)). GroundPathNavigation.trimPath calls
+// it to cut the path at the first sky-exposed node (the avoid-sun bias). A length past the end is a
+// no-op; a length <= idx (already walked past) leaves at least the walked prefix so idx stays valid.
+func (p *Path) truncateNodes(length int) {
+	if p == nil || length < 0 || length >= len(p.nodes) {
+		return
+	}
+	p.nodes = p.nodes[:length]
+	if p.idx > len(p.nodes) {
+		p.idx = len(p.nodes)
+	}
+}
 
 // --- pathRequest + computePath (the PURE seam) -----------------------------------------
 
@@ -232,6 +246,13 @@ type pathRequest struct {
 	followRange               float64 // the A* follow-range gate (skip nodes beyond it)
 	reachRange                int     // accuracy: manhattan distance at which a target counts reached
 	maxVisited                int     // the visited-node BUDGET (Pitfall 6 / T-7-04)
+	// malus is the mob per-mob pathfinding-malus map SNAPSHOT (an immutable copy — Mob
+	// .getPathfindingMalus, node_evaluator.go). newEvalNode stamps node.costMalus from it, so a
+	// water-avoider (higher WATER malus) or a fire-averse Animal (FIRE -1) re-costs the A* off-tick.
+	malus mobMalus
+	// canFloat is PathNavigation.canFloat (FloatGoal sets it): a floating mob treats WATER as a
+	// standable surface node (findAcceptedNode), so it may path across water. Frozen into the request.
+	canFloat bool
 }
 
 // computePath is the PURE A* over the immutable snapshot (THE Phase-8 hinge). It reads ONLY req
@@ -260,7 +281,7 @@ func computePathDebug(req pathRequest) (*Path, int) {
 		if n, ok := cache[key]; ok {
 			return n
 		}
-		n := newEvalNode(r, x, y, z, req.mobH)
+		n := newEvalNode(r, x, y, z, req.mobH, req.malus)
 		cache[key] = n
 		return n
 	}
@@ -317,7 +338,7 @@ func computePathDebug(req pathRequest) (*Path, int) {
 			continue
 		}
 
-		for _, raw := range getNeighbors(r, cur, req.mobW, req.mobH) {
+		for _, raw := range getNeighbors(r, cur, req.mobW, req.mobH, req.malus, req.canFloat) {
 			// Resolve the cached identity for this coordinate (so g/closed/heapIdx persist).
 			neighbor := getNode(raw.x, raw.y, raw.z)
 			if neighbor.closed {
