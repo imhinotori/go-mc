@@ -503,6 +503,18 @@ type Entity struct {
 	//	 b ? (cur|0x10) : (cur&0xEF); DEFAULT_SHEARED == false; getColor default WHITE (DATA_WOOL low nibble 0).]
 	sheared bool
 
+	// sheepColor is the host-side mirror of net.minecraft.world.entity.animal.sheep.Sheep's DATA_WOOL
+	// low nibble (getColor() == DyeColor.byId(DATA_WOOL & 0xF); setColor(c) -> DATA_WOOL = (cur & 0xF0) |
+	// (c.getId() & 0xF)). It is the sheep's wool DyeColor id (WHITE 0 .. BLACK 15). Set at spawn by
+	// finalizeSpawn (getRandomSheepColor, drawn off the LEVEL RandomSource -- NOT the mob stream), flipped
+	// by the dye interact (DyeItem.interactLivingEntity -> setColor) and the evoker WOLOLO (setColor(RED)).
+	// The wire DATA_WOOL byte is DERIVED from this nibble + the sheared bit (woolByte). Sheep-gated at every
+	// reader/writer (typ == entity.Sheep.ID), so the ZERO value (WHITE) is the exact non-sheep default and
+	// the pig oracle's stream gains ZERO draws from it. Tick-owned plain byte (TICK-05), snapshot-friendly.
+	//	[VERIFIED javap Sheep: getColor() == DyeColor.byId(entityData.get(DATA_WOOL_ID) & 0xF);
+	//	 setColor(c) -> DATA_WOOL = (byte)((cur & 0xF0) | (c.getId() & 0xF)); DEFAULT_COLOR == WHITE (id 0).]
+	sheepColor byte
+
 	// --- MOB-PASS-03 (Phase 34): Chicken egg-lay timer ----------------------------------------
 	//
 	// eggTime is net.minecraft.world.entity.animal.chicken.Chicken.eggTime — the per-tick countdown to

@@ -29,12 +29,17 @@ package server
 //     its RNG faithfully. The vex spawn + finalizeSpawn-internal draws land when the Vex entity is built.
 //   - EVOKER FANGS entity is unbuilt: EvokerAttackSpellGoal computes the EXACT fang geometry (arc/line) but
 //     spawns NO fangs. NO RandomSource draws in FANGS, so deferring the spawn does not desync the stream.
-//   - WOLOLO: sheep carry NO wool-color state in v1, so the BLUE-sheep search is always empty -> canUse is
-//     always false (no blue sheep to recolor). STRUCTURALLY present + RNG-faithful (the nextInt(list.size())
-//     pick only fires on a non-empty list, which never happens in v1). Lands when sheep get a color field.
+//   - WOLOLO: now LIVE. wololoCanUse scans BLUE sheep in getBoundingBox().inflate(16,4,16), and on a
+//     non-empty list picks one via random.nextInt(list.size()) (the evoker mob stream) as the wololoTarget;
+//     performSpellCasting (evokerWololoRecolor) does wololoTarget.setColor(RED). RNG-faithful (the ONE
+//     nextInt(size) pick fires only on a non-empty BLUE-sheep list). Cite Evoker$EvokerWololoSpellGoal.
 //   - getCurrentDifficultyAt / the tickCount gate use the entity's tickCount proxy (gametime-based).
 
-import "math"
+import (
+	"math"
+
+	"github.com/imhinotori/sulfur/data/entity"
+)
 
 // IllagerSpell ids (VERIFIED CFR SpellcasterIllager.IllagerSpell).
 const (
@@ -300,10 +305,19 @@ func (t *TickLoop) evokerCreateFang(e *Entity, x, z, minY, maxY, yRot float64, w
 }
 
 // evokerWololoRecolor ports EvokerWololoSpellGoal.performSpellCasting: recolor the picked BLUE sheep to RED.
-// In v1 sheep carry no wool-color state so a wololo target is never acquired (canUse is always false) -> this
-// never runs. NO RNG. Cite EvokerWololoSpellGoal.performSpellCasting.
+// VERBATIM (CFR): Sheep wololoTarget = getWololoTarget(); if (wololoTarget != null && wololoTarget.isAlive())
+// wololoTarget.setColor(DyeColor.RED). The target id was captured by wololoCanUse; resolve it through the
+// evoker's owning region (the same-region cut the other evoker scans use) and setColor(RED). NO RNG.
+// Cite Evoker$EvokerWololoSpellGoal.performSpellCasting.
 func (t *TickLoop) evokerWololoRecolor(e *Entity) {
-	// getWololoTarget().setColor(RED): DEFERRED (sheep have no color field in v1). Never reached (canUse false).
+	if e.evokerWololoTarget == 0 || t.cur() == nil {
+		return // getWololoTarget() == null
+	}
+	target, ok := t.cur().entities.get(e.evokerWololoTarget)
+	if !ok || !target.isAlive() || target.dead {
+		return // wololoTarget == null || !isAlive()
+	}
+	t.sheepSetColor(target, dyeRed) // wololoTarget.setColor(DyeColor.RED)
 }
 
 // wololoCanUse ports EvokerWololoSpellGoal.canUse: false if the evoker has a combat target, is casting, or is
@@ -323,9 +337,39 @@ func (g *evokerUseSpellGoal) wololoCanUse(t *TickLoop, e *Entity) bool {
 	if !mobGriefing { // gamerule mobGriefing off -> no wololo
 		return false
 	}
-	// getNearbyEntities(Sheep, BLUE selector, inflate(16,4,16)): EMPTY in v1 (no colored sheep) -> false. The
-	// nextInt(list.size()) target pick lands when sheep carry a color field.
-	return false
+	// getNearbyEntities(Sheep.class, wololoTargeting, this, getBoundingBox().inflate(16,4,16)): collect every
+	// live BLUE sheep whose center is within the inflated AABB (|dx|<=16, |dy|<=4, |dz|<=16) — the
+	// TargetingConditions.forNonCombat().range(16.0).selector(getColor()==BLUE) predicate. entities.near scans
+	// the surrounding chunk band (16 blocks -> ceil(16/16)=1 chunk radius); we filter to Sheep + BLUE + the box.
+	// If the list is EMPTY, canUse is false; else pick one via random.nextInt(list.size()) (the evoker's mob
+	// stream) and set it as the wololoTarget. The list's iteration order follows entities.near (the v5
+	// same-region-scan order the breed/target scans use) — the DRAW (nextInt(size)) + its bound are the
+	// faithful contract. Cite Evoker$EvokerWololoSpellGoal.canUse.
+	if t.cur() == nil {
+		return false
+	}
+	blue := make([]int32, 0, 4)
+	for _, other := range t.cur().entities.near(e.x, e.z, 1) {
+		if other == e || other.dead || !other.isAlive() {
+			continue
+		}
+		if other.typ != entity.Sheep.ID {
+			continue
+		}
+		if sheepGetColor(other) != dyeBlue { // selector: (Sheep)target.getColor() == DyeColor.BLUE
+			continue
+		}
+		if math.Abs(other.x-e.x) > 16.0 || math.Abs(other.y-e.y) > 4.0 || math.Abs(other.z-e.z) > 16.0 {
+			continue // outside getBoundingBox().inflate(16,4,16)
+		}
+		blue = append(blue, other.id)
+	}
+	if len(blue) == 0 {
+		return false // entities.isEmpty()
+	}
+	// setWololoTarget(entities.get(random.nextInt(entities.size()))): the ONE wololo pick draw (mob stream).
+	e.evokerWololoTarget = blue[mobRandom(e).nextInt(len(blue))]
+	return true
 }
 
 // evokerAiStep ports SpellcasterIllager.customServerAiStep's server branch (the per-type hook, sibling of

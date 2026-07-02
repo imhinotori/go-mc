@@ -470,6 +470,20 @@ func woolDataEntry(woolByte byte) entityDataEntry {
 	}
 }
 
+// woolByteFor packs a Sheep's DATA_WOOL byte from its wool color id (low nibble) + sheared flag (bit
+// 0x10), the exact composition of net.minecraft.world.entity.animal.sheep.Sheep's DATA_WOOL:
+// setColor(c) -> (cur & 0xF0) | (c.getId() & 0xF); setSheared(true) -> cur | 0x10. A WHITE (0) un-sheared
+// sheep is 0x00; a RED (14) sheared sheep is 0x1E. NO RNG. Cite Sheep.setColor + Sheep.setSheared.
+//
+//	[VERIFIED javap Sheep: DATA_WOOL low nibble == DyeColor id (getColor/setColor & 0xF); bit 0x10 == sheared.]
+func woolByteFor(colorID byte, sheared bool) byte {
+	b := colorID & 0x0F
+	if sheared {
+		b |= 0x10
+	}
+	return b
+}
+
 // dataSharedFlagsIndex is the SynchedEntityData accessor index for Entity.DATA_SHARED_FLAGS_ID — the
 // FIRST entity data value defined (index 0), a BYTE whose bits are the shared entity flags
 // (0x01 on-fire, 0x02 crouching, 0x08 sprinting, …). v1 broadcasts only the on-fire bit (fire.go).

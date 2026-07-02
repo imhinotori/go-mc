@@ -32,3 +32,24 @@ func dyeColorIDOf(itemID int32) (int, bool) {
 	}
 	return int(itemID - first), true
 }
+
+// dyeColorNames are the DyeColor serialized names in enum/id order (WHITE 0 .. BLACK 15), the exact order
+// the DyeColor enum declares. These are the names the per-color loot tables use (shearing/sheep/<name>)
+// and the DyeColor.getSerializedName strings.
+//
+//	[VERIFIED javap DyeColor enum order: WHITE(0),ORANGE(1),MAGENTA(2),LIGHT_BLUE(3),YELLOW(4),LIME(5),
+//	 PINK(6),GRAY(7),LIGHT_GRAY(8),CYAN(9),PURPLE(10),BLUE(11),BROWN(12),GREEN(13),RED(14),BLACK(15).]
+var dyeColorNames = [16]string{
+	"white", "orange", "magenta", "light_blue", "yellow", "lime", "pink", "gray",
+	"light_gray", "cyan", "purple", "blue", "brown", "green", "red", "black",
+}
+
+// dyeColorName maps a DyeColor id (0..15) to its serialized name (WHITE->"white"). Used to select the
+// per-color shearing loot table ("shearing/sheep/<name>"). An out-of-range id clamps to WHITE (the
+// DyeColor.byId default), matching Sheep.getColor's DyeColor.byId(nibble) never yielding an invalid color.
+func dyeColorName(colorID byte) string {
+	if int(colorID) >= len(dyeColorNames) {
+		return dyeColorNames[0]
+	}
+	return dyeColorNames[colorID]
+}

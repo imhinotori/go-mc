@@ -564,6 +564,26 @@ func (t *TickLoop) spawnDeclaredMob(decl *mobDecl, x, y, z float64) *Entity {
 	if e.typ == entity.Chicken.ID {
 		e.eggTime = mobRandom(e).nextInt(6000) + 6000
 	}
+	// MOB-PASS-02 (Phase 34): the Sheep spawn-color — net.minecraft.world.entity.animal.sheep.Sheep
+	// .finalizeSpawn calls setColor(getRandomSheepColor(level, blockPosition())) BEFORE super.finalizeSpawn.
+	// getRandomSheepColor draws off the LEVEL RandomSource (level.getRandom() == this region's levelRandom),
+	// NOT the mob's per-entity stream — so a spawning sheep leaves the mobRandom(e) stream (and thus the pig
+	// oracle, which is a DIFFERENT mob that never runs this block) byte-identically untouched. Sheep-gated
+	// (typ == entity.Sheep.ID). A nil region levelRandom (a bare test loop with no region) skips the draw and
+	// leaves the default WHITE (0) — the same graceful degrade catWakingUpGiftRoll uses. When the color is
+	// non-WHITE we splice the DATA_WOOL byte onto the spawn metadata so a tracker's first AddEntity/SetEntityData
+	// renders the color (the SAME carry seam the babyDataEntry/wolfFlags splices use); WHITE (0x00) is skipped
+	// (byte-identical to a plain spawn). Cite Sheep.finalizeSpawn -> setColor(getRandomSheepColor(level, pos)).
+	if e.typ == entity.Sheep.ID {
+		if t.cur() != nil && t.cur().levelRandom != nil {
+			e.sheepColor = getRandomSheepColor(t.cur().levelRandom)
+		}
+		if wb := woolByteFor(e.sheepColor, e.sheared); wb != 0 {
+			var buf bytes.Buffer
+			_, _ = woolDataEntry(wb).WriteTo(&buf)
+			e.metadata = append(e.metadata, buf.Bytes()...)
+		}
+	}
 	// MOB-NEUT-03 (Cat comfort @7 / collar-dye): a fresh Cat's DATA_COLLAR_COLOR defaults to
 	// DEFAULT_COLLAR_COLOR.getId() == DyeColor.RED (14), NOT the Go zero-value 0 (WHITE). Cat.defineSynchedData
 	// define(DATA_COLLAR_COLOR, DEFAULT_COLLAR_COLOR.getId()) sets it at construction, so seed the RED default

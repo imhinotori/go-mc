@@ -18,8 +18,15 @@ package server
 //   - level.levelEvent(2001, below, ...) (the block-break particle/sound client event) is CITE-DEFERRED:
 //     no levelEvent seam exists. It is a pure client cosmetic with no gameplay/RNG effect; the eat-event
 //     byte 10 (the head-down animation) IS broadcast via eat_broadcast_byte10 from the .star.
-//   - v1 ships WHITE sheep ONLY (getColor() is always WHITE; the shear loot table is shearing/sheep/white;
-//     dye-color mechanics deferred per 34-CONTEXT). The low DATA_WOOL color nibble is always 0.
+//   - Sheep wool COLOR is now live (e.sheepColor): finalizeSpawn seeds it via getRandomSheepColor (off the
+//     LEVEL RandomSource), the dye interact (trySheepDye) recolors, the evoker WOLOLO recolors to RED, and
+//     the shear picks the per-color loot table (shearing/sheep/<color>). The biome-tag routing of the spawn
+//     color (SheepColorSpawnRules WARM/COLD configs) is CITE-DEFERRED to the TEMPERATE config: no biome-tag
+//     read is wired for SPAWNS_WARM/COLD_VARIANT_FARM_ANIMALS, so getRandomSheepColor uses the TEMPERATE
+//     weighted table (the overworld default) — the RNG draw order + thresholds are exact; a biome read slots
+//     in ahead of the config pick later. The breed-offspring color (Sheep.getBreedOffspring -> getMixedColor,
+//     which needs the dye-mixing recipe subsystem) is CITE-DEFERRED (the sheep has no host breed path yet;
+//     breed() is pig-specific).
 //   - itemStack.hurtAndBreak(1, ...) (shears durability -1) is realized as a held-item shrink-by-1 (v1 has
 //     no per-item durability subsystem) — see trySheepShear; documented there.
 
@@ -93,12 +100,27 @@ func (t *TickLoop) sheepAte(e *Entity) {
 // (the BYTE-serializer DATA_WOOL entry). NO RNG. Cite Sheep.setSheared + Sheep.DATA_WOOL_ID.
 func (t *TickLoop) setSheared(e *Entity, v bool) {
 	e.sheared = v
-	woolByte := byte(0x00) // low nibble = color; v1 WHITE (0) — cur == 0x00
-	if v {
-		woolByte |= 0x10 // setSheared(true): cur | 0x10
-	}
-	// setSheared(false): cur & 0xEF == 0x00 already (cur is 0x00), so woolByte stays 0x00.
-	t.broadcastToTrackers(e.id, encodeSetEntityData(e, woolDataEntry(woolByte)))
+	// The wire DATA_WOOL byte is the wool color id (low nibble) OR the sheared bit (0x10) — woolByteFor
+	// composes both from the live e.sheepColor + e.sheared, exactly as the jar's setSheared toggles bit
+	// 0x10 while preserving the color nibble (cur & 0xF0 stays; only 0x10 changes).
+	t.broadcastToTrackers(e.id, encodeSetEntityData(e, woolDataEntry(woolByteFor(e.sheepColor, v))))
+}
+
+// sheepGetColor is net.minecraft.world.entity.animal.sheep.Sheep.getColor() reduced to the DyeColor id
+// (the low DATA_WOOL nibble). Sulfur keeps the id on e.sheepColor, so getColor == e.sheepColor & 0xF.
+// VERBATIM (Sheep.getColor: DyeColor.byId(entityData.get(DATA_WOOL_ID) & 0xF)). NO RNG. Cite Sheep.getColor.
+func sheepGetColor(e *Entity) byte {
+	return e.sheepColor & 0x0F
+}
+
+// sheepSetColor is net.minecraft.world.entity.animal.sheep.Sheep.setColor(DyeColor) reduced to its
+// observable effect — the DATA_WOOL low-nibble color set + the ClientboundSetEntityData broadcast so
+// trackers re-render the wool color. VERBATIM (Sheep.setColor: DATA_WOOL = (cur & 0xF0) | (c.getId() &
+// 0xF)). Sulfur keeps the id on e.sheepColor and derives the wire byte (woolByteFor: color nibble | the
+// preserved sheared bit). NO RNG. Cite Sheep.setColor + Sheep.DATA_WOOL_ID.
+func (t *TickLoop) sheepSetColor(e *Entity, colorID byte) {
+	e.sheepColor = colorID & 0x0F
+	t.broadcastToTrackers(e.id, encodeSetEntityData(e, woolDataEntry(woolByteFor(e.sheepColor, e.sheared))))
 }
 
 // trySheepShear is the SHEAR path of net.minecraft.world.entity.animal.sheep.Sheep.mobInteract — the
@@ -150,7 +172,8 @@ func (t *TickLoop) trySheepShear(p *tickPlayer, mob *Entity) bool {
 //	});
 //	setSheared(true);
 //
-// SHEAR_SHEEP for a WHITE sheep -> "minecraft:shearing/sheep/white" (white.json, 1-3 white_wool). The loot
+// SHEAR_SHEEP routes by the sheep's DyeColor -> "minecraft:shearing/sheep/<color>" (e.g. white.json,
+// 1-3 white_wool; red.json, 1-3 red_wool). The loot
 // SEED is event-time rand.Int64() (OFF the mob stream, like death loot — does not perturb mobRandom(e));
 // the per-stack scatter (5 nextFloat) is drawn from the MOB stream (mobRandom(e)) in jar order: x =
 // (nF - nF)*0.1, y = nF*0.05, z = (nF - nF)*0.1. setSheared(true) is AFTER the drop (jar order).
@@ -159,7 +182,13 @@ func (t *TickLoop) shearSheep(e *Entity) {
 	// level.playSound(SHEEP_SHEAR, SoundSource.PLAYERS, 1.0, 1.0). soundid 1441 == entity.sheep.shear.
 	t.broadcastToTrackers(e.id, encodeSoundEntity(1441, soundSourcePlayers, e.id, 1.0, 1.0, 0))
 
-	tbl, err := loot.LoadTable("minecraft:shearing/sheep/white") // SHEAR_SHEEP, WHITE (v1)
+	// SHEAR_SHEEP (== "minecraft:shearing/sheep") routes by the sheep's DyeColor via the root table's
+	// entity_properties(sheep/color) alternatives to the per-color pool "shearing/sheep/<color>" (each a
+	// 1..3 uniform roll of that color's wool). Sulfur's loot evaluator does not evaluate the sheep-color
+	// entity predicate, so we select the SAME per-color table directly by e.sheepColor — producing the
+	// identical drop the predicate-routed root table would (structurally faithful; the observable drop set
+	// is byte-identical). Cite BuiltInLootTables.SHEAR_SHEEP (data/loot_table/shearing/sheep.json alternatives).
+	tbl, err := loot.LoadTable("minecraft:shearing/sheep/" + dyeColorName(sheepGetColor(e)))
 	if err == nil {
 		// The loot seed is event-time (server-generated), OFF the mob stream — same discipline as
 		// dropMobLoot's death-loot seed. The shearing table is type-agnostic in the evaluator (the
@@ -185,3 +214,115 @@ func (t *TickLoop) shearSheep(e *Entity) {
 	}
 	t.setSheared(e, true) // setSheared(true) AFTER the drop (jar order)
 }
+
+// trySheepDye is net.minecraft.world.item.DyeItem.interactLivingEntity's Sheep branch — the DYE path that
+// recolors a live, un-sheared sheep when right-clicked with a dye whose color differs from the sheep's.
+// It is wired into handleInteract as a sheep-gated interact (a dye ItemStack on a Sheep target), the
+// sibling of trySheepShear. VERBATIM (DyeItem.interactLivingEntity):
+//
+//	if (target instanceof Sheep sheep && sheep.isAlive() && !sheep.isSheared()
+//	        && (dye = itemStack.get(DataComponents.DYE)) != null && sheep.getColor() != dye) {
+//	    sheep.level().playSound(player, sheep, DYE_USE, SoundSource.PLAYERS, 1.0, 1.0);
+//	    if (!isClientSide) { sheep.setColor(dye); itemStack.shrink(1); }
+//	    return SUCCESS;
+//	}
+//	return PASS;
+//
+// Returns TRUE when the held item is a dye AND the recolor conditions hold (the interact is consumed so
+// handleInteract does NOT fall through to feed); FALSE when the held item is not a dye (fall through) OR
+// the dye matched an already-sheared / same-color sheep (PASS — no consume, but also not a feed item, so
+// a false here harmlessly falls to tryFeedAnimal which no-ops on a non-food dye). The held item is read
+// SERVER-SIDE (inv.get — never trusted from the Interact payload), exactly as trySheepShear/tryFeedAnimal.
+// NO RNG. Cite DyeItem.interactLivingEntity (Sheep branch).
+func (t *TickLoop) trySheepDye(p *tickPlayer, mob *Entity) bool {
+	inv := ensureInventory(p)
+	held := inv.get(heldWindowSlot(inv.heldSlot))
+	if slotIsEmpty(held) {
+		return false // empty hand -> not a dye -> super.mobInteract (feed path)
+	}
+	// itemStack.get(DataComponents.DYE): a non-dye item yields null -> PASS (fall through).
+	dye, ok := dyeColorIDOf(int32(held.ItemID))
+	if !ok {
+		return false // not a dye item -> fall through to the feed path
+	}
+	// sheep.isAlive() && !sheep.isSheared() && sheep.getColor() != dye: a sheared sheep or a same-color
+	// dye is a no-op PASS (vanilla returns PASS; here false so the feed path — which no-ops on a dye — runs).
+	if !mob.isAlive() || mob.sheared || sheepGetColor(mob) == byte(dye) {
+		return false
+	}
+	// level.playSound(player, sheep, DYE_USE, SoundSource.PLAYERS, 1.0, 1.0). soundid 571 == item.dye.use.
+	t.broadcastToTrackers(mob.id, encodeSoundEntity(571, soundSourcePlayers, mob.id, 1.0, 1.0, 0))
+	// !isClientSide: sheep.setColor(dye) + itemStack.shrink(1). The server is authoritative (always the
+	// server branch here); setColor broadcasts the DATA_WOOL recolor to trackers.
+	t.sheepSetColor(mob, byte(dye))
+	t.shrinkHeldItem(p, inv) // itemStack.shrink(1)
+	return true              // SUCCESS
+}
+
+// getRandomSheepColor is net.minecraft.world.entity.animal.sheep.Sheep.getRandomSheepColor(level, pos) ->
+// SheepColorSpawnRules.getSheepColor(biome, level.getRandom()): the spawn-time wool DyeColor a sheep is
+// finalized with. It draws off the LEVEL RandomSource (level.getRandom() — the region's levelRandom, NOT
+// the mob's per-entity stream), so a spawning sheep NEVER perturbs the pig oracle's mob stream (and the
+// pig, never a sheep, never reaches this — zero draws for it).
+//
+// BIOME CITE-DEFERRAL: SheepColorSpawnRules.getSheepColorConfiguration branches on biome tags
+// (SPAWNS_WARM/COLD_VARIANT_FARM_ANIMALS) to a WARM/COLD/TEMPERATE weighted table. No biome-tag read is
+// wired, so this uses the TEMPERATE config (the overworld default) — the value is NOT baked away: a biome
+// read slots in ahead of the config pick later. The RNG DRAW ORDER + thresholds below are EXACT for the
+// TEMPERATE table.
+//
+// TEMPERATE WeightedList (insertion order, total 100): BLACK(5), GRAY(5), LIGHT_GRAY(5), BROWN(3),
+// commonColors(WHITE)(82). commonColors(WHITE) is a nested WeightedList (total 500): WHITE(499), PINK(1).
+// WeightedList.getRandomOrThrow draws nextInt(totalWeight) then walks entries in insertion order
+// subtracting each weight until the running selection goes negative (WeightedList$Compact.get). So:
+//
+//	sel = level.nextInt(100)               // DRAW 1 (outer table)
+//	 sel<5   -> BLACK;   sel<10 -> GRAY;   sel<15 -> LIGHT_GRAY;   sel<18 -> BROWN
+//	 else (commonColors provider .get(random)):
+//	   sel2 = level.nextInt(500)           // DRAW 2 (nested, ONLY on the commonColors branch)
+//	   sel2<499 -> WHITE ; else PINK
+//
+// The nested nextInt(500) is drawn ONLY when the outer pick lands in the commonColors bucket (sel>=18) —
+// the single(...) providers return their constant with NO further draw. This matches the jar exactly
+// (single = random -> color; weighted = random -> elements.getRandomOrThrow(random).get(random)).
+//
+//	[VERIFIED CFR SheepColorSpawnRules.TEMPERATE_SPAWN_CONFIGURATION + WeightedList.getRandomOrThrow +
+//	 WeightedList$Compact.get; Sheep.getRandomSheepColor(level, pos) -> getSheepColor(biome, getRandom()).]
+func getRandomSheepColor(lr sheepLevelRandom) byte {
+	sel := lr.NextIntN(100) // DRAW 1: outer TEMPERATE table nextInt(100)
+	switch {
+	case sel < 5:
+		return dyeBlack // BLACK
+	case sel < 10:
+		return dyeGray // GRAY
+	case sel < 15:
+		return dyeLightGray // LIGHT_GRAY
+	case sel < 18:
+		return dyeBrown // BROWN
+	default: // commonColors(WHITE) bucket (weight 82) -> the nested nextInt(500)
+		sel2 := lr.NextIntN(500) // DRAW 2: nested commonColors nextInt(500)
+		if sel2 < 499 {
+			return dyeWhite // WHITE
+		}
+		return dyePink // PINK
+	}
+}
+
+// sheepLevelRandom is the minimal RandomSource surface getRandomSheepColor needs (level.getRandom()
+// .nextInt(bound)) — satisfied by *levelgen.LegacyRandomSource (the region levelRandom). Kept as an
+// interface so the color draw is unit-testable against a mirror LegacyRandomSource.
+type sheepLevelRandom interface {
+	NextIntN(bound int32) int32
+}
+
+// DyeColor ids used by the sheep spawn/WOLOLO paths (DyeColor enum order, javap-verified).
+const (
+	dyeWhite     byte = 0  // DyeColor.WHITE
+	dyeGray      byte = 7  // DyeColor.GRAY
+	dyeLightGray byte = 8  // DyeColor.LIGHT_GRAY
+	dyeBlue      byte = 11 // DyeColor.BLUE
+	dyeBrown     byte = 12 // DyeColor.BROWN
+	dyeRed       byte = 14 // DyeColor.RED
+	dyeBlack     byte = 15 // DyeColor.BLACK
+	dyePink      byte = 6  // DyeColor.PINK
+)

@@ -815,6 +815,14 @@ func (t *TickLoop) handleInteract(p *tickPlayer, pkt pk.Packet) {
 	if mob.typ == entity.Sheep.ID && t.trySheepShear(p, mob) {
 		return // the shear (or the not-ready consume) handled the interact
 	}
+	// MOB-PASS-02 (Phase 34): the Sheep DYE path — the item-side DyeItem.interactLivingEntity(Sheep) branch
+	// (a dye ItemStack recolors a live, un-sheared sheep whose color differs). It runs after the shear gate
+	// (shears/dye are disjoint items) and BEFORE the feed path; trySheepDye returns true only when the held
+	// item is a dye AND the recolor applied (consuming the interact), false otherwise (fall through). Sheep-
+	// gated (typ == entity.Sheep.ID), a zero-cost no-op for every other mob — the pig oracle is unperturbed.
+	if mob.typ == entity.Sheep.ID && t.trySheepDye(p, mob) {
+		return // the dye recolor handled the interact
+	}
 	// MOB-PASS-01 (Phase 34, Plan 34-01): the Cow MILK path runs BEFORE the feed path
 	// (AbstractCow.mobInteract tries the empty-bucket branch ahead of super.mobInteract == Animal
 	// .mobInteract feed). tryMilkCow returns true ONLY when the held item is an empty BUCKET on an
