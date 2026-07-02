@@ -9,6 +9,8 @@ package server
 // globalRegion off the fan-out) for the entity store + spawnDeclaredMob.
 
 import (
+	"math"
+
 	"github.com/imhinotori/sulfur/level"
 )
 
@@ -91,10 +93,19 @@ func (t *TickLoop) tickRaid(rm *raidsManager, r *Raid) {
 		// attempt cap (>5 -> stop) is kept; spawnPos is the center (findRandomSpawnPos reduced), always
 		// non-null, so the attempt path never trips in v1 (the counter is structurally present).
 		attempt := 0
+		hornPlayed := false // Raid.tick local bl (hasSpawnedNextWave): the horn plays once per tick.
 		for r.shouldSpawnGroup() {
 			spawnOK := t.raidSpawnGroup(r)
 			if spawnOK {
 				r.started = true
+				// playSound(RAID_HORN) once per tick, on the FIRST successful spawn (Raid.tick guards
+				// it with a local flag: `if (!bl) { playSound(level, spawnPos); bl = true; }`). The
+				// horn seed is a single draw from the raid own stream (r.rng.nextLong()) taken inside
+				// raidPlaySound, so the raid stream stays draw-order-faithful.
+				if !hornPlayed {
+					t.raidPlaySound(r)
+					hornPlayed = true
+				}
 			} else {
 				attempt++
 			}
@@ -260,4 +271,55 @@ func (t *TickLoop) raidRemoveRaider(r *Raid, raider *Entity, removeFromTotalHeal
 		raider.ai.currentRaid = nil
 	}
 	t.updateBossbar(r)
+}
+
+// raidHornSoundID / raidHornVolume are Raid.playSound RAID_HORN: SoundEvents.RAID_HORN
+// ("event.raid.horn", registry id 1354) on SoundSource.NEUTRAL at volume 64.0f, pitch 1.0f. The wave-spawn
+// horn is a per-player POSITIONAL sound whose (x,z) is pulled toward the raid center along a 13-block
+// radius so a distant player still hears it from the raid direction.
+//
+//	[VERIFIED javap Raid.playSound: getstatic SoundEvents.RAID_HORN ; getstatic SoundSource.NEUTRAL ;
+//	 ldc 64.0f (volume) ; fconst_1 (pitch) ; random.nextLong() (seed). id 1354 in data/registryid/soundevent.go.]
+const (
+	raidHornSoundID    int32   = 1354 // SoundEvents.RAID_HORN ("event.raid.horn")
+	raidHornVolume     float32 = 64.0 // Raid.playSound volume (ldc 64.0f)
+	raidHornPitch      float32 = 1.0  // Raid.playSound pitch (fconst_1)
+	raidHornPullRadius         = 13.0 // the 13.0 radius the horn (x,z) is pulled toward the center
+	raidHornHearRange          = 64.0 // dist <= 64.0 -> always heard; beyond only bossbar players hear it
+)
+
+// raidPlaySound ports Raid.playSound(ServerLevel, BlockPos) -- the RAID_HORN wave-spawn horn. VERIFIED CFR:
+// it draws ONE seed (random.nextLong on the raid own stream) up front, then for EACH server player computes
+// the horizontal distance to the raid center, pulls the horn (x,z) onto a 13-block circle around the center
+// direction (so distant players hear it coming from the raid), and sends a positional ClientboundSound if
+// the player is within 64 blocks OR is a bossbar (raid) participant. The Y is the player own Y (the horn
+// tracks the listener vertically). NEUTRAL category, volume 64.0, pitch 1.0.
+//
+//	[VERIFIED javap Raid.playSound: fstore 13.0f ; bipush 64 ; getPlayers() ; random.nextLong() ; per player
+//	 dist = sqrt((cx-px)^2 + (cz-pz)^2) ; sx = px + (13.0/dist)*(cx-px) ; sz = pz + (13.0/dist)*(cz-pz) ;
+//	 if (dist > 64.0 && !players.contains(p)) skip ; else send ClientboundSoundPacket(RAID_HORN, NEUTRAL,
+//	 sx, p.getY(), sz, 64.0f, 1.0f, seed).]
+func (t *TickLoop) raidPlaySound(r *Raid) {
+	// atCenterOf(BlockPos): the center of the raid center block (Vec3.atCenterOf adds 0.5 to each axis).
+	cx := float64(r.centerX) + 0.5
+	cz := float64(r.centerZ) + 0.5
+	// ONE seed for the whole broadcast, drawn from the raid stream (Raid.random.nextLong), taken BEFORE the
+	// per-player loop exactly as vanilla does.
+	seed := r.rng.nextLong()
+	for _, p := range t.players {
+		if p == nil || p.client == nil {
+			continue
+		}
+		dx := cx - p.x
+		dz := cz - p.z
+		dist := math.Sqrt(dx*dx + dz*dz)
+		// sx/sz = player pos + (13.0/dist) * (center - player pos): the horn pulled onto the 13-block circle.
+		sx := p.x + (raidHornPullRadius/dist)*(cx-p.x)
+		sz := p.z + (raidHornPullRadius/dist)*(cz-p.z)
+		_, isParticipant := r.bossEvent.players[p.entityID]
+		if dist > raidHornHearRange && !isParticipant {
+			continue // too far and not a bossbar participant: no horn for this player
+		}
+		p.client.Send(encodeSound(raidHornSoundID, soundSourceNeutral, sx, p.y, sz, raidHornVolume, raidHornPitch, seed))
+	}
 }

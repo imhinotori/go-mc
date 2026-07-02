@@ -17,6 +17,7 @@ package server
 
 import (
 	"math"
+	"math/rand/v2"
 
 	"github.com/imhinotori/sulfur/level/attribute"
 	pk "github.com/imhinotori/sulfur/net/packet"
@@ -219,6 +220,24 @@ func witchPotionWeakness() []splashEffect {
 // == (int)(DEFAULT_CONSUME_SECONDS 1.6f * 20) == 32. Cite Consumable.DEFAULT_CONSUME_SECONDS / consumeTicks.
 const witchPotionUseDuration = 32
 
+// witchDrinkSoundID / witchDrinkSoundVolume are the WITCH_DRINK positional sound Witch.aiStep plays when
+// it starts a self-drink: SoundEvents.WITCH_DRINK ("entity.witch.drink", registry id 1777) at volume 1.0
+// on the witch's own SoundSource (Monster.getSoundSource() == HOSTILE). The pitch is a per-drink jitter
+// random.nextFloat()*0.4 + 0.8 drawn from the WITCH's per-mob stream (r) -- a witch-gated draw (never the
+// pig oracle), which MUST fire in order right after setUsingItem(true). The per-sound seed is a dedicated
+// non-gameplay draw (the Level.soundSeedGenerator analogue), never the witch stream.
+//
+//	[VERIFIED javap Witch.aiStep: getX/getY/getZ ; getstatic SoundEvents.WITCH_DRINK ; getSoundSource() ;
+//	 fconst_1 (volume 1.0) ; ldc 0.8f + random.nextFloat()*0.4f (pitch) ; Level.playSound(this, x,y,z,
+//	 sound, source, vol, pitch). SoundEvents.WITCH_DRINK id 1777 in data/registryid/soundevent.go.
+//	 Monster.getSoundSource -> SoundSource.HOSTILE.]
+const (
+	witchDrinkSoundID     int32   = 1777 // SoundEvents.WITCH_DRINK ("entity.witch.drink")
+	witchDrinkSoundVolume float32 = 1.0  // Witch.aiStep playSound volume (fconst_1)
+	witchDrinkPitchBase   float32 = 0.8  // 0.8f + nextFloat()*0.4f -> the [0.8,1.2) pitch jitter base
+	witchDrinkPitchJitter float32 = 0.4  // the 0.4f jitter span
+)
+
 // witch self-drink draw gates (Witch.aiStep) + the drinking speed modifier (SPEED_MODIFIER_DRINKING).
 const (
 	witchWaterBreathingChance = 0.15   // rand < 0.15f (WATER_BREATHING rung)
@@ -289,7 +308,13 @@ func (t *TickLoop) witchAiStep(e *Entity) {
 			e.witchDrinking = true
 			e.witchDrinkPending = effectID
 			e.witchDrinkPendingDur = duration
-			// playSound(WITCH_DRINK): cite-deferred (client sound).
+			// playSound(WITCH_DRINK) at the witch position on its HOSTILE SoundSource, volume 1.0,
+			// pitch 0.8f + random.nextFloat()*0.4f. The nextFloat() draw is on the WITCH own stream
+			// (r), so it MUST fire here in order (witch-gated, never the pig oracle). The per-sound
+			// seed is a dedicated non-gameplay draw (soundSeedGenerator.nextLong analogue) so it never
+			// perturbs the witch stream. Broadcast to every player within getRange(1.0)==16 blocks.
+			pitch := r.nextFloat()*witchDrinkPitchJitter + witchDrinkPitchBase
+			t.playSound(witchDrinkSoundID, soundSourceHostile, e.x, e.y, e.z, witchDrinkSoundVolume, pitch, rand.Int64())
 			t.witchAddDrinkingModifier(e)
 		}
 	}

@@ -94,9 +94,23 @@ func (er *entityRandom) nextDouble() float64 {
 // oracle stream. Like the other draws it is draw-ORDER-faithful (not bit-exact vanilla), backed by
 // math/rand/v2's IntN(2)==0; the draw being CONSUMED (and its order vs the XP nextInt) is the
 // observable contract the lockstep rule pins, not the bit value.
+//
 //	[VERIFIED javap Pig.getBreedOffspring: getRandom().nextBoolean() ? getVariant() : partner.getVariant().]
 func (er *entityRandom) nextBoolean() bool {
 	return er.r.IntN(2) == 0
+}
+
+// nextLong returns a pseudo-random int64 across the full 64-bit range — the RandomSource.nextLong()
+// analogue. Raid.playSound draws it ONCE (`this.random.nextLong()`) to seed the RAID_HORN's client
+// pitch-variation playback; the draw is on the raid's own stream (Raid.random == r.rng here) and MUST
+// be consumed in order so the raid stream stays draw-order-faithful. Like the other draws it is
+// draw-ORDER-faithful (not bit-exact vanilla), backed by math/rand/v2's Uint64. The seed only affects
+// CLIENT-side sound-variant selection, never gameplay.
+//
+//	[VERIFIED javap Raid.playSound: `aload_0; getfield random; RandomSource.nextLong()` -> the
+//	 ClientboundSoundPacket seed arg.]
+func (er *entityRandom) nextLong() int64 {
+	return int64(er.r.Uint64())
 }
 
 // nextGaussian returns a normally-distributed float64 (mean 0, stddev 1) — the
@@ -108,6 +122,7 @@ func (er *entityRandom) nextBoolean() bool {
 // be consumed from the mob stream in lockstep so a future bit-exact swap and the breed/in-love
 // scenario RNG stay aligned). Drawn ONLY when a pig is in love (inLove>0 && inLove%10==0) — dormant on
 // the un-fed oracle pig (inLove 0), so it never perturbs the pinned oracle stream.
+//
 //	[VERIFIED javap Animal.aiStep: 3× getRandom().nextGaussian() each * 0.02d -> xd/yd/zd, fed to
 //	 Level.addParticle(HEART, getRandomX(1), getRandomY()+0.5, getRandomZ(1), xd, yd, zd).]
 func (er *entityRandom) nextGaussian() float64 {
