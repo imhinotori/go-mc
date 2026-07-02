@@ -671,6 +671,25 @@ func (s *Section) GetBlock(i int) BlocksState {
 	return s.States.Get(i)
 }
 
+// HasRandomlyTicking approximates net.minecraft.world.level.chunk.LevelChunkSection.
+// isRandomlyTickingBlocks() (`this.tickingBlockCount > 0`). Vanilla maintains a per-section
+// tickingBlockCount incremented/decremented as randomly-ticking blocks are set/cleared
+// (LevelChunkSection.setBlockState / recalcBlockCounts); this repo does not yet track that counter,
+// so this scans the section's PALETTE (not all 4096 cells — the palette holds only the DISTINCT
+// states present, typically a handful) for any block whose BlockStateBase.isRandomlyTicking() is
+// true. Result-identical to `tickingBlockCount > 0` (a section contains a randomly-ticking block iff
+// the driver should sample it); the per-section counter is a perf follow-up, not a correctness gap.
+// CITE: LevelChunkSection.isRandomlyTickingBlocks (tickingBlockCount > 0); the tickingBlockCount
+// counter (LevelChunkSection.recalcBlockCounts) is the deferred optimization.
+func (s *Section) HasRandomlyTicking() bool {
+	for _, st := range s.States.Palette() {
+		if block.IsRandomlyTicking(st) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Section) SetBlock(i int, v BlocksState) {
 	if !block.IsAir(s.States.Get(i)) {
 		s.BlockCount--

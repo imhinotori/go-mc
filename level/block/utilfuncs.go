@@ -18,6 +18,35 @@ func IsAirBlock(b Block) bool {
 	}
 }
 
+// IsRandomlyTicking is the 1:1 port of
+// net.minecraft.world.level.block.state.BlockBehaviour$BlockStateBase.isRandomlyTicking() — the
+// per-state boolean flag the random-tick driver gates on before calling randomTick. In vanilla the
+// flag is baked into each BlockState at construction from the block's Properties (a block that calls
+// `.randomTicks()` in its properties builder, or whose BlockBehaviour overrides isRandomlyTicking to
+// return true, e.g. GrowingPlant/Crop/Sapling/Leaves/Grass/Farmland/SugarCane). This is the
+// per-block-family membership test that reproduces that flag.
+//
+// SCOPE (v1): the only ported block whose randomTick is wired is SugarCaneBlock — its properties call
+// randomTicks() so isRandomlyTicking()==true for every sugar-cane state. Other randomly-ticking
+// families (crops, saplings, leaves, grass spread, farmland moisture, etc.) are FOLLOW-UPS: add each
+// Go block type to the switch below AND its randomTick handler to the server-side dispatch as it is
+// ported. Returning false for a not-yet-ported family is correct-by-omission (the driver simply does
+// not tick it yet — no wrong behavior, only a missing one), never a baked-away value.
+//
+// CITE: BlockBehaviour$BlockStateBase.isRandomlyTicking() (returns the isRandomlyTicking flag);
+// SugarCaneBlock properties (.randomTicks()).
+func IsRandomlyTicking(s StateID) bool {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return false
+	}
+	switch StateList[s].(type) {
+	case SugarCane:
+		return true // SugarCaneBlock: .randomTicks() -> isRandomlyTicking()==true (any AGE)
+	default:
+		return false
+	}
+}
+
 // IsFluid reports whether a state id is a fluid (water or lava) — i.e. its vanilla
 // getFluidState() is non-empty. This is the predicate behind the chunk section's
 // fluidCount short (LevelChunkSection.nonEmptyFluidCount): the client uses that count to

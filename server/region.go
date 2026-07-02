@@ -130,6 +130,18 @@ type region struct {
 	// random is NOT seed-pinned — only worldgen RNG is). Advanced only on the region's goroutine.
 	levelRandom *levelgen.LegacyRandomSource
 
+	// randValue is the per-region port of net.minecraft.world.level.Level.randValue — the SEPARATE
+	// integer LCG state that ONLY Level.getBlockRandomPos advances (`randValue = randValue*3 +
+	// 1013904223`). It is DELIBERATELY NOT levelRandom: in vanilla getBlockRandomPos never touches
+	// this.random, so the random-tick block-POSITION sampling must not perturb the region's
+	// levelRandom stream (the one the pig oracle pins). Vanilla seeds it ONCE in the Level ctor from
+	// RandomSource.createThreadLocalInstance().nextInt() (a nondeterministic int); newRegion seeds it
+	// from the low 32 bits of a unique nondeterministic seed — same "arbitrary starting int"
+	// semantics, per-region, never shared. Advanced only on the region's goroutine.
+	// CITE: Level.randValue (protected int; ctor RandomSource.createThreadLocalInstance().nextInt());
+	// Level.getBlockRandomPos.
+	randValue int32
+
 	// spawnScanPending is the OPT-03 single-in-flight gate for the async natural-spawn scan, now
 	// per-region (naturalSpawn sets it when it submits; spawnCandidatesReady.applyTo clears it).
 	// A plain bool touched only on the region's goroutine, so it needs no atomic.
@@ -181,5 +193,9 @@ func newRegion(id regionID, coord *TickLoop) *region {
 		// pre-extraction TickLoop's `levelRandom: levelgen.NewLegacyRandomSource(uniqueLevelRandomSeed())`.
 		// Distinct per region (never shared) — the anti-pattern guard.
 		levelRandom: levelgen.NewLegacyRandomSource(uniqueLevelRandomSeed()),
+		// randValue: the Level.randValue seed — a nondeterministic starting int (low 32 bits of a
+		// fresh unique seed), matching vanilla's ctor init from createThreadLocalInstance().nextInt().
+		// Its own stream, never levelRandom, so the block-random-pos LCG cannot perturb the pig oracle.
+		randValue: int32(uniqueLevelRandomSeed()),
 	}
 }

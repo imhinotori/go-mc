@@ -108,6 +108,17 @@ func (t *TickLoop) tickWorld() {
 		t.tickScheduledBlocks()
 		t.tickFluids()
 	})
+	// SUB-RANDOMTICK: the UNSCHEDULED random-tick driver (ServerLevel.tickChunk block-sampling pass —
+	// sugar-cane growth + future crops/saplings/grass/leaves). It is a WORLD-GLOBAL pass over the
+	// SHARED ChunkManager (the world is not yet per-region-sharded), so it runs ONCE here on the
+	// coordinator (the tickChunkSave twin), NOT inside the per-region forEachRegion wrap. It reads the
+	// RANDOM_TICK_SPEED gamerule (constant 3 in v1) and samples every loaded, randomly-ticking section.
+	// The block-position draw uses the region's SEPARATE randValue int LCG (Level.getBlockRandomPos),
+	// never levelRandom, so the pig oracle's pinned stream is unperturbed. A nil world is a cheap no-op.
+	// Its body lives in random_tick.go. Placed AFTER the scheduled block/fluid drains, mirroring
+	// vanilla's ServerLevel.tick ordering (tickChunk runs in ServerChunkCache.tickChunks, after the
+	// pending block/fluid ticks). CITE: ServerChunkCache.tickChunks -> ServerLevel.tickChunk.
+	t.tickRandomBlocks()
 	// SUB-BLOCKENTITY: tick every furnace/blast_furnace/smoker block-entity (GAMEPLAY-05
 	// AbstractFurnaceBlockEntity.serverTick). Furnaces are keyed by world position (t.furnaces, global —
 	// not per-region), so they tick ONCE globally here (the tickChunkSave twin), after the per-region

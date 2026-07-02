@@ -129,6 +129,23 @@ func (m *ChunkManager) Get(pos level.ChunkPos) (*level.Chunk, bool) {
 	return h.chunk, true
 }
 
+// ForEachReady invokes fn for every column that is Ready (loaded, holding a chunk). It is the
+// enumeration seam the random-tick driver needs — the vanilla ServerChunkCache.tickChunks path
+// iterates the loaded/block-ticking chunks (chunkMap.forEachBlockTickingChunk) and calls
+// ServerLevel.tickChunk on each. This exposes that loaded-column set WITHOUT leaking the private
+// holder map. fn MUST NOT structurally mutate the column map (Insert/Remove/MarkLoading) during
+// iteration — the driver only reads chunk sections and writes block STATE via SetBlock (which
+// mutates a section in place, never the column map), so ranging is safe. Tick-owned; runs on the
+// owner goroutine over the tick-owned manager (TICK-05). CITE: ServerChunkCache.tickChunks ->
+// chunkMap.forEachBlockTickingChunk(chunk -> level.tickChunk(chunk, tickSpeed)).
+func (m *ChunkManager) ForEachReady(fn func(pos level.ChunkPos, ch *level.Chunk)) {
+	for pos, h := range m.columns {
+		if h.state == stateReady && h.chunk != nil {
+			fn(pos, h.chunk)
+		}
+	}
+}
+
 // State reports the load state of pos (stateEmpty if absent).
 func (m *ChunkManager) State(pos level.ChunkPos) loadState {
 	h := m.columns[pos]
