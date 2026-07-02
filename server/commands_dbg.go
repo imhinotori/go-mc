@@ -200,6 +200,18 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned villager eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
 		}
+	case "villager_farmer":
+		// VILLAGER (test-only): a FARMER level-1 villager with offers already assigned — the merchant-menu
+		// path needs a villager whose getOffers() is non-empty (a professionless villager's mobInteract
+		// gate returns before opening, which is jar-faithful). This shortcut sets VillagerData(farmer, 1) so
+		// villagerGetOffers builds farmerLevel1Offers, so right-clicking it opens the trade screen. Skips the
+		// AcquirePoi job-site claim (which /dbg villager exercises) — this arm is for exercising the MENU.
+		e := t.spawnVanillaMob(vanillaVillagerMobName, p.x, p.y, p.z)
+		if e != nil {
+			e.villagerProfession = "farmer"
+			e.villagerLevel = 1
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned villager_farmer eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
+		}
 	case "ravager":
 		// RAIDER (Task): spawn a vanilla ravager (raid beast, Ravager wire type). Hunts + melees + roars
 		// (ravagerAiStep: attackTick/roar AoE/stun; the leaf-trample + stun-trigger are cite-deferred).
@@ -226,7 +238,7 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		raid := rm.createRaidAt(int(p.x), int(p.y), int(p.z), difficultyNormal, 1)
 		t.broadcastSystemChat(fmt.Sprintf("[dbg] started raid id=%d at (%d,%d,%d) numGroups=%d (waves spawn after the 300-tick cooldown; all 5 RaiderTypes now spawn real raiders)", raid.id, int(p.x), int(p.y), int(p.z), raid.numGroups))
 	default:
-		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | iron_golem | vex | fangs | water | pig-in-water | raid")
+		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | iron_golem | villager | villager_farmer | vex | fangs | water | pig-in-water | raid")
 	}
 }
 
