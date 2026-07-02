@@ -42,6 +42,17 @@ func IsRandomlyTicking(s StateID) bool {
 	switch StateList[s].(type) {
 	case SugarCane:
 		return true // SugarCaneBlock: .randomTicks() -> isRandomlyTicking()==true (any AGE)
+	case Wheat, Carrots, Potatoes, Beetroots:
+		// CropBlock/BeetrootBlock override isRandomlyTicking() to return !isMaxAge(state) — a crop is
+		// randomly ticking ONLY while its age is below the family's MAX_AGE. So a max-age crop is NOT
+		// sampled for growth (no roll drawn), matching CropBlock.isRandomlyTicking. CITE:
+		// CropBlock.isRandomlyTicking (== !isMaxAge); BeetrootBlock inherits it (MAX_AGE 3).
+		return CropAge(s) < CropMaxAge(s)
+	case Farmland:
+		// FarmlandBlock uses the Properties.randomTicks() flag -> isRandomlyTicking()==true for every
+		// MOISTURE (the moisture drop / turnToDirt logic runs each random tick). CITE: FarmlandBlock
+		// randomTick + BlockBehaviour$Properties.randomTicks().
+		return true
 	default:
 		return false
 	}

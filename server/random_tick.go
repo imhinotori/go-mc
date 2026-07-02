@@ -42,11 +42,11 @@ import (
 //
 // PIG-ORACLE SAFETY (mandate — PITFALLS Pitfall 5): getBlockRandomPos advances the region's OWN
 // randValue int LCG (region.randValue), NEVER levelRandom, so the POSITION sampling adds ZERO draws
-// to the levelRandom stream the pig oracle pins. The only levelRandom (`this.random`) touch is the
-// `randomTick(this, pos, this.random)` handler — and the one wired block (sugar cane) draws NO RNG in
-// its randomTick (deterministic growth), so no levelRandom draw occurs at all in v1. The pig oracle
-// (TestPluginPigEqualsGoNativePig) drives serverAiStep directly and never runs this driver, so it is
-// doubly unaffected; the byte-identical gate stays green.
+// to the levelRandom stream the pig oracle pins. Some wired handlers DO draw levelRandom (`this.random`)
+// — CropBlock/BeetrootBlock.randomTick roll random.nextInt for growth; sugar cane and farmland draw
+// none. The pig oracle (TestPluginPigEqualsGoNativePig) drives serverAiStep directly and NEVER runs
+// this driver, so the levelRandom stream it pins is untouched regardless of which handlers draw here;
+// the byte-identical gate stays green.
 //
 // PLACEMENT: this is a WORLD-GLOBAL phase (it iterates the SHARED ChunkManager's loaded columns and
 // mutates the shared world via SetBlock, exactly like the scheduled-block drain), so it runs on the
@@ -155,8 +155,10 @@ func (t *TickLoop) tickChunk(pos level.ChunkPos, ch *level.Chunk, tickSpeed int)
 				continue // out-of-range (should not happen: bpos is inside a Ready column+section)
 			}
 			// `if (blockState.isRandomlyTicking()) blockState.randomTick(this, pos, this.random);`
+			// r is the owning region (the tickChunk-resolved only()): its levelRandom is `this.random`
+			// passed to the handler, and its randValue drove getBlockRandomPos above.
 			if block.IsRandomlyTicking(state) {
-				t.dispatchRandomTick(state, bpos)
+				t.dispatchRandomTick(r, state, bpos)
 			}
 			// FLUID random tick (`if (fluidState.isRandomlyTicking()) fluidState.randomTick(...)`) is
 			// DEFERRED — see the deferral note at dispatchRandomTick.
@@ -168,14 +170,24 @@ func (t *TickLoop) tickChunk(pos level.ChunkPos, ch *level.Chunk, tickSpeed int)
 // switch that routes a sampled randomly-ticking state to its ported randomTick handler. It is the
 // growth seam: each randomly-ticking family (crops, saplings, leaves, grass spread, farmland moisture,
 // …) plugs in here BY BLOCK IDENTITY as it is ported, alongside its IsRandomlyTicking flag in
-// level/block. In v1 only sugar cane is wired (sugarCaneRandomTick, sugar_cane.go). CITE:
-// BlockBehaviour$BlockStateBase.randomTick -> the block's randomTick(state, level, pos, random).
-func (t *TickLoop) dispatchRandomTick(state block.StateID, pos pk.Position) {
+// level/block. r is the OWNING region (tickChunk's only()); its levelRandom is `this.random` handed
+// to a handler that draws RNG (crops/beetroot), and its randValue is the position-sampling stream.
+// CITE: BlockBehaviour$BlockStateBase.randomTick -> the block's randomTick(state, level, pos, random).
+func (t *TickLoop) dispatchRandomTick(r *region, state block.StateID, pos pk.Position) {
 	switch {
 	case block.IsSugarCane(state):
 		// SugarCaneBlock.randomTick(state, level, pos, random): deterministic growth (no RNG draw), so
 		// this touches levelRandom ZERO times — the pig-oracle stream is unperturbed.
 		t.sugarCaneRandomTick(state, pos)
+	case block.IsCrop(state):
+		// CropBlock.randomTick / BeetrootBlock.randomTick: light-gated growth. DRAWS levelRandom
+		// (random.nextInt) — see crop_block.go. The pig oracle never runs the random-tick driver, so
+		// the levelRandom stream it pins is untouched by this handler.
+		t.cropRandomTick(r, state, pos)
+	case block.IsFarmland(state):
+		// FarmlandBlock.randomTick: moisture drop / hydrate / turnToDirt. NO RNG draw (deterministic
+		// off the near-water + rain + moisture reads), so it leaves levelRandom untouched.
+		t.farmlandRandomTick(r, state, pos)
 	default:
 		// A state whose IsRandomlyTicking is true but whose randomTick handler is not yet ported: no-op
 		// (the family's IsRandomlyTicking should not be true until its handler is wired — kept as a
