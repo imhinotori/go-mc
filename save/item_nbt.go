@@ -30,27 +30,22 @@ import (
 //       in.listOrEmpty("Items", ItemStackWithSlot.CODEC); for each e: if e.isValidInContainer(
 //       list.size()) list.set(e.slot(), e.stack()).
 //
-// ============================ PHASE A vs PHASE B ============================
-// PHASE A (THIS file, fully 1:1 faithful): persist {Slot, id, count}. This round-trips PERFECTLY
-// any stack WITHOUT components (the common case: plain blocks, food, un-enchanted/un-named tools).
+// ============================ PHASE A + PHASE B ============================
+// PHASE A (THIS file): persist {Slot, id, count}. Round-trips PERFECTLY any stack WITHOUT components.
 //
-// COMPONENTS (the WIRE↔DISK GAP, see SUB-ITEMNBT-jar-spec.md §WIRE-VS-DISK GAP): Sulfur holds a
-// component-bearing stack only as opaque WIRE bytes (level/component.SlotData.RawComponents —
-// registry-id-indexed, streamCodec-encoded). The DISK "components" compound is string-keyed
-// (PatchKey: "namespace:path", "!"-prefixed removals) with each value encoded by the component's
-// type.codec() (the DATA codec), a DIFFERENT serializer from the wire type.streamCodec(). The raw
-// wire bytes therefore CANNOT be written into disk NBT — a wire→disk transcoder is required.
+// PHASE B (item_components.go, NOW IMPLEMENTED): the WIRE↔DISK component transcoder. Sulfur holds a
+// component-bearing stack as opaque WIRE bytes (level/component.SlotData.RawComponents — registry-id-
+// indexed, streamCodec-encoded). The DISK "components" compound is string-keyed (PatchKey: "namespace:
+// path", "!"-prefixed removals) with each value encoded by the component's type.codec() (the DATA
+// codec), a DIFFERENT serializer from the wire type.streamCodec(). item_components.go transcodes the
+// SUPPORTED set (damage/max_damage/repair_cost/custom_name/lore/potion_contents) wire↔disk with a
+// faithful, byte-stable round-trip; the DiskItem carries the wire span (WireComponents + counts) and
+// SaveAllItems fills the Components compound while LoadAllItems rebuilds the wire span.
 //
-// THIS file does NOT fake that transcoder. A stack flagged as carrying components (DiskItem.
-// HasComponents) is persisted as {Slot, id, count} ONLY — the item & count survive, the
-// components (enchants/custom_name/damage/...) are DROPPED. The drop is NEVER silent: SaveAllItems
-// returns a DroppedComponents count so the caller can log/meter the fidelity gap. The Components
-// field is a *DiskComponents pointer left nil in Phase A; Phase B fills it via the per-
-// DataComponentType streamCodec→value→codec transcoder, and ItemStackWithSlotDisk already carries
-// the omitempty "components" slot so Phase B enchant-NBT plugs in WITHOUT reshaping this codec.
-// TODO(SUB-ITEMNBT Phase B): build the per-DataComponentType codec()/streamCodec() transcoder
-//   (DataComponentPatch.CODEC, PatchKey, type.codecOrThrow) so component-bearing stacks round-trip
-//   on disk. Until then component-bearing stacks are lossy-but-structurally-vanilla.
+// The residual gap is METERED, never silent: a stack carrying an UNSUPPORTED component (enchantments —
+// deferred behind the datapack-registry seam — or the ~100-component long tail) still persists id+count
+// and SaveAllItems counts it in DroppedComponents so the caller can log the fidelity gap. See the
+// item_components.go header for the exact SUPPORTED/DEFERRED split and each jar citation.
 // ===========================================================================
 
 // TagItems is ContainerHelper.TAG_ITEMS — the NBT list key for a container's contents. CITE:
@@ -66,13 +61,13 @@ const (
 )
 
 // DiskComponents is the on-disk "components" compound: a string-keyed map (component registry id,
-// with a "!" prefix for removals) to each component's type.codec() (DATA/NBT) value. It is the
-// Phase-B carrier; Phase A always leaves it nil (components dropped). CITE: DataComponentPatch.CODEC
-// = dispatchedMap(PatchKey.CODEC, PatchKey::valueCodec).
+// with a "!" prefix for removals) to each component's type.codec() (DATA/NBT) value. Populated by the
+// Phase-B transcoder (item_components.go: wireToDiskComponents), nil when a stack has no transcodable
+// components. CITE: DataComponentPatch.CODEC = dispatchedMap(PatchKey.CODEC, PatchKey::valueCodec).
 //
 // nbt.RawMessage values keep the per-component delegation opaque to this container codec (the
-// transcoder, Phase B, produces them); the map shape (string keys, "!"-prefix) is the only
-// structural commitment this type makes — matching the jar's dispatchedMap exactly.
+// transcoder produces them); the map shape (string keys, "!"-prefix) is the only structural
+// commitment this type makes — matching the jar's dispatchedMap exactly.
 type DiskComponents map[string]nbt.RawMessage
 
 // ItemStackDisk is the flattened ItemStack.MAP_CODEC record: "id" (the Holder<Item> identifier
@@ -120,9 +115,18 @@ type DiskItem struct {
 	// stack.isEmpty()). On load it is the clamped (1..99) disk count.
 	Count int32
 	// HasComponents flags that the source stack carried wire components (SlotData.RawComponents
-	// non-empty) which Phase A CANNOT persist. SaveAllItems counts these as DroppedComponents so the
-	// loss is measurable. Phase B replaces this flag with the transcoded DiskComponents.
+	// non-empty). Kept for callers that only meter the gap; when WireComponents is also supplied the
+	// SUPPORTED components are transcoded and only the UNSUPPORTED remainder is counted as dropped.
 	HasComponents bool
+	// WireComponents is the verbatim wire added+removed component span (component.SlotData.
+	// RawComponents). SaveAllItems transcodes its SUPPORTED entries to disk; LoadAllItems rebuilds
+	// this span (supported entries only) from the disk compound.
+	WireComponents []byte
+	// WireAddedCount / WireRemovedCount are the SlotData count headers for WireComponents (the number
+	// of present and removed component entries in the span). Required to parse WireComponents on save
+	// and re-emitted on load for the reconstructed span.
+	WireAddedCount   int
+	WireRemovedCount int
 }
 
 // IsEmpty reports whether the DiskItem is an empty container slot (no id, or count<=0). CITE:
@@ -166,17 +170,17 @@ func SaveAllItems(list []DiskItem, keepEmptyTag bool) (items []ItemStackWithSlot
 		if it.IsEmpty() {
 			continue // ItemStack.isEmpty() -> not added (sparse, slot-keyed list)
 		}
-		if it.HasComponents {
-			// Phase A: components cannot be transcoded to disk NBT yet — drop them (item & count
-			// survive). Counted so the fidelity gap is measurable, never silent. TODO Phase B.
-			droppedComponents++
-		}
+		// PHASE B: transcode the SUPPORTED wire components to the disk DataComponentPatch compound.
+		// dropped is the number of PRESENT components with no supported DATA transcode (enchantments /
+		// the long tail) — still metered so the residual gap is never silent (item_components.go).
+		comps, dropped := wireToDiskComponents(it)
+		droppedComponents += dropped
 		items = append(items, ItemStackWithSlotDisk{
 			Slot: byte(i), // ItemStackWithSlot(i, stack): Slot = the NonNullList index
 			ItemStackDisk: ItemStackDisk{
-				ID:    it.ID,
-				Count: clampCount(it.Count),
-				// Components: nil in Phase A (Phase B: transcoded DiskComponents).
+				ID:         it.ID,
+				Count:      clampCount(it.Count),
+				Components: comps, // nil when nothing transcoded (omitempty drops the "components" key)
 			},
 		})
 	}
@@ -207,12 +211,17 @@ func LoadAllItems(items []ItemStackWithSlotDisk, size int) []DiskItem {
 		if !isValidInContainer(slot, size) {
 			continue // out-of-range slot: silently skipped (no throw), slot keeps EMPTY
 		}
+		// PHASE B: rebuild the WIRE component span from the disk "components" compound (supported set).
+		// raw/added/removed reconstruct the component.SlotData RawComponents/AddedCount/RemovedCount the
+		// caller restores; HasComponents mirrors whether a "components" tag was present on disk.
+		raw, added, removed := diskToWireComponents(e.Components)
 		out[slot] = DiskItem{
-			ID:    e.ID,
-			Count: clampCount(e.Count),
-			// HasComponents: a Phase-A-saved item carries no "components" tag; a Phase-B item would
-			// decode e.Components here. Left false (no components round-tripped in Phase A).
-			HasComponents: e.Components != nil,
+			ID:               e.ID,
+			Count:            clampCount(e.Count),
+			HasComponents:    e.Components != nil,
+			WireComponents:   raw,
+			WireAddedCount:   added,
+			WireRemovedCount: removed,
 		}
 	}
 	return out

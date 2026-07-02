@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/imhinotori/sulfur/level/component"
 	"github.com/imhinotori/sulfur/nbt"
+	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
 // TestSaveLoadAllItems_RoundTripNoComponents proves the Phase-A {Slot,id,count} round-trip is exact
@@ -161,23 +163,39 @@ func TestSaveAllItems_KeepEmptyTag(t *testing.T) {
 	}
 }
 
-// TestSaveAllItems_DropsComponentsFlagged proves a component-bearing stack persists its id+count but
-// is counted as a dropped-components stack (Phase A lossy-but-visible). CITE: file header Phase A.
+// TestSaveAllItems_DropsComponentsFlagged proves a stack carrying an UNSUPPORTED component persists its
+// id+count and is counted as a dropped-components stack (Phase B: the residual gap for the long
+// tail/enchantments is metered, never silent). A stack with ONLY supported components does NOT drop.
+// CITE: item_components.go header (counted-and-dropped SEAM).
 func TestSaveAllItems_DropsComponentsFlagged(t *testing.T) {
+	// Build an added span carrying a single UNSUPPORTED component (minecraft:unbreakable, wire id 4,
+	// no DATA transcode in the supported set). It is decodable on the wire so it counts as dropped.
+	var buf bytes.Buffer
+	unbreak := component.NewComponent(4) // *Unbreakable
+	if unbreak == nil {
+		t.Fatal("NewComponent(4) nil; expected *Unbreakable")
+	}
+	if _, err := pk.VarInt(4).WriteTo(&buf); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := unbreak.WriteTo(&buf); err != nil {
+		t.Fatal(err)
+	}
+
 	in := []DiskItem{
-		{ID: "minecraft:diamond_sword", Count: 1, HasComponents: true}, // enchanted: components dropped
-		{ID: "minecraft:stone", Count: 64},                             // plain: no drop
+		{ID: "minecraft:diamond_sword", Count: 1, WireComponents: buf.Bytes(), WireAddedCount: 1}, // unsupported: dropped
+		{ID: "minecraft:stone", Count: 64}, // plain: no drop
 	}
 	items, dropped := SaveAllItems(in, false)
 	if dropped != 1 {
-		t.Fatalf("dropped = %d, want 1 (one component-bearing stack)", dropped)
+		t.Fatalf("dropped = %d, want 1 (one unsupported-component stack)", dropped)
 	}
 	if len(items) != 2 {
 		t.Fatalf("items = %d, want 2 (both still persist id+count)", len(items))
 	}
-	// The component-bearing stack must persist WITHOUT a components compound (Phase A).
+	// The unsupported-component stack persists id+count with NO components compound (nothing transcoded).
 	if items[0].Components != nil {
-		t.Errorf("Phase A must not write a components compound; got %v", items[0].Components)
+		t.Errorf("unsupported-only stack must not write a components compound; got %v", items[0].Components)
 	}
 	if items[0].ID != "minecraft:diamond_sword" || items[0].Count != 1 {
 		t.Errorf("dropped-component stack lost id/count: %+v", items[0])

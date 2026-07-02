@@ -101,14 +101,17 @@ func inventoryToItems(inv *Inventory) []save.ItemStackWithSlotDisk {
 			continue // empty slot: zero DiskItem (skipped on save by index)
 		}
 		disk[i] = save.DiskItem{
-			ID:            itemName(int32(slot.ItemID)),
-			Count:         int32(slot.Count),
-			HasComponents: len(slot.RawComponents) > 0, // Phase A: components dropped, metered
+			ID:               itemName(int32(slot.ItemID)),
+			Count:            int32(slot.Count),
+			HasComponents:    len(slot.RawComponents) > 0,
+			WireComponents:   slot.RawComponents, // Phase B: SUPPORTED components transcoded to disk
+			WireAddedCount:   int(slot.AddedCount),
+			WireRemovedCount: int(slot.RemovedCount),
 		}
 	}
 	items, dropped := save.SaveAllItems(disk, false)
 	if dropped > 0 {
-		log.Printf("player inventory: %d component-bearing stacks persisted without components (SUB-ITEMNBT Phase A)", dropped)
+		log.Printf("player inventory: %d component-bearing stacks had UNSUPPORTED components dropped (SUB-ITEMNBT Phase B: enchantments/long-tail; supported set transcoded)", dropped)
 	}
 	return items
 }
@@ -162,9 +165,11 @@ func itemsToInventory(items []save.ItemStackWithSlotDisk, size int) []component.
 			continue
 		}
 		out[i] = component.SlotData{
-			Count:  pk.VarInt(d.Count),
-			ItemID: pk.VarInt(itemNameToID(d.ID)),
-			// RawComponents nil in Phase A (components were dropped on save).
+			Count:         pk.VarInt(d.Count),
+			ItemID:        pk.VarInt(itemNameToID(d.ID)),
+			AddedCount:    pk.VarInt(d.WireAddedCount),   // Phase B: rebuilt from the disk components compound
+			RemovedCount:  pk.VarInt(d.WireRemovedCount), //
+			RawComponents: d.WireComponents,              //
 		}
 	}
 	return out

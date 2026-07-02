@@ -162,9 +162,12 @@ func chestItemsToDisk(slots []component.SlotData) []save.DiskItem {
 			continue // empty slot: zero DiskItem (skipped on save by index)
 		}
 		out[i] = save.DiskItem{
-			ID:            itemName(int32(s.ItemID)),
-			Count:         int32(s.Count),
-			HasComponents: len(s.RawComponents) > 0, // Phase A: components dropped, metered
+			ID:               itemName(int32(s.ItemID)),
+			Count:            int32(s.Count),
+			HasComponents:    len(s.RawComponents) > 0,
+			WireComponents:   s.RawComponents, // Phase B: SUPPORTED components transcoded to disk
+			WireAddedCount:   int(s.AddedCount),
+			WireRemovedCount: int(s.RemovedCount),
 		}
 	}
 	return out

@@ -382,8 +382,11 @@ func decodeChestItems(data nbt.RawMessage) []component.SlotData {
 			continue
 		}
 		out[i] = component.SlotData{
-			ItemID: toItemID(int(itemNameToID(it.ID))),
-			Count:  toVar(int(it.Count)),
+			ItemID:        toItemID(int(itemNameToID(it.ID))),
+			Count:         toVar(int(it.Count)),
+			AddedCount:    toVar(it.WireAddedCount),   // Phase B: rebuilt from the disk components compound
+			RemovedCount:  toVar(it.WireRemovedCount), //
+			RawComponents: it.WireComponents,          //
 		}
 	}
 	return out

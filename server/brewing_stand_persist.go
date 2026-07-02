@@ -59,9 +59,12 @@ func brewingItemsToDisk(items [brewContainerSize]component.SlotData) []save.Disk
 			continue
 		}
 		out[i] = save.DiskItem{
-			ID:            itemName(int32(s.ItemID)),
-			Count:         int32(s.Count),
-			HasComponents: len(s.RawComponents) > 0,
+			ID:               itemName(int32(s.ItemID)),
+			Count:            int32(s.Count),
+			HasComponents:    len(s.RawComponents) > 0,
+			WireComponents:   s.RawComponents, // Phase B: SUPPORTED components transcoded to disk
+			WireAddedCount:   int(s.AddedCount),
+			WireRemovedCount: int(s.RemovedCount),
 		}
 	}
 	return out
@@ -108,8 +111,11 @@ func decodeBrewingStandBE(data nbt.RawMessage) *brewingStandBE {
 			continue
 		}
 		b.items[i] = component.SlotData{
-			ItemID: toItemID(int(itemNameToID(it.ID))),
-			Count:  toVar(int(it.Count)),
+			ItemID:        toItemID(int(itemNameToID(it.ID))),
+			Count:         toVar(int(it.Count)),
+			AddedCount:    toVar(it.WireAddedCount),   // Phase B: rebuilt from the disk components compound
+			RemovedCount:  toVar(it.WireRemovedCount), //
+			RawComponents: it.WireComponents,          //
 		}
 	}
 
