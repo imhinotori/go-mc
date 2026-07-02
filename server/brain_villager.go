@@ -24,6 +24,8 @@ package server
 // AcquirePoi, AssignProfessionFromJobSite, VillagerProfession.ALL_ACQUIRABLE_JOBS.
 
 import (
+	"github.com/google/uuid"
+
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
@@ -57,6 +59,23 @@ func (t *TickLoop) villagerBrainTick(e *Entity) {
 		return
 	}
 	e.brain.tick(t, e, t.GameTime())
+
+	// Villager.customServerAiStep TRADE-event block (VERIFIED CFR this session):
+	//   if (this.lastTradedPlayer != null) {
+	//       level.onReputationEvent(ReputationEventType.TRADE, this.lastTradedPlayer, this);
+	//       level.broadcastEntityEvent(this, (byte)14);   // "yes"/happy particles — v1 cite-deferred
+	//       this.lastTradedPlayer = null;
+	//   }
+	// rewardTradeXp set lastTradedPlayerUUID to the trading player on the last trade; drain it here (one
+	// TRADE reputation event per villager-tick that saw a trade). onReputationEvent is a pass-through to
+	// onReputationEventFrom (ServerLevel.onReputationEvent -> target.onReputationEventFrom), so this raises
+	// the trading player's TRADING gossip (+2), which lowers future prices via updateSpecialPrices. The
+	// broadcastEntityEvent(14) happy-particle status is a cite-deferred client visual (no entity-event
+	// wire for the villager here yet). CITE Villager.customServerAiStep + ServerLevel.onReputationEvent.
+	if e.lastTradedPlayerUUID != (uuid.UUID{}) {
+		villagerOnReputationEventFrom(e, reputationTrade, e.lastTradedPlayerUUID)
+		e.lastTradedPlayerUUID = uuid.UUID{}
+	}
 }
 
 // newVillagerBrainProvider builds the brainProvider for the villager: the CORE activity holding the real

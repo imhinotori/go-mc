@@ -151,6 +151,33 @@ func (m *merchantOffer) take(buyA, buyB *component.SlotData) bool {
 // increaseUses ports MerchantOffer.increaseUses(): ++uses. isOutOfStock == uses >= maxUses.
 func (m *merchantOffer) increaseUses() { m.uses++ }
 
+// updateDemand ports net.minecraft.world.item.trading.MerchantOffer.updateDemand(): the exponential-ish
+// demand accumulator. Run once per restock (Villager.updateDemand -> for each offer offer.updateDemand()):
+//
+//	this.demand = this.demand + this.uses - (this.maxUses - this.uses)
+//
+// A heavily-used offer (uses near maxUses) RAISES demand (making it costlier via getModifiedCostCount's
+// demandDiff); an unused offer (uses 0) LOWERS demand by maxUses. CITE MerchantOffer.updateDemand.
+//
+//	[VERIFIED CFR MerchantOffer.updateDemand: this.demand = this.demand + this.uses - (this.maxUses - this.uses).]
+func (m *merchantOffer) updateDemand() {
+	m.demand = m.demand + m.uses - (m.maxUses - m.uses)
+}
+
+// addToSpecialPriceDiff ports MerchantOffer.addToSpecialPriceDiff(add): specialPriceDiff += add. The single
+// mutator Villager.updateSpecialPrices funnels the reputation/hero discount through (add is NEGATIVE for a
+// discount). CITE MerchantOffer.addToSpecialPriceDiff.
+func (m *merchantOffer) addToSpecialPriceDiff(add int) { m.specialPriceDiff += add }
+
+// resetSpecialPriceDiff ports MerchantOffer.resetSpecialPriceDiff(): specialPriceDiff = 0. Called by
+// Villager.resetSpecialPrices when trading STOPS (so the discount is recomputed fresh on the next open).
+// CITE MerchantOffer.resetSpecialPriceDiff.
+func (m *merchantOffer) resetSpecialPriceDiff() { m.specialPriceDiff = 0 }
+
+// getPriceMultiplier ports MerchantOffer.getPriceMultiplier(): the reputation/demand discount factor
+// (0.05f for the farmer trades). CITE MerchantOffer.getPriceMultiplier.
+func (m *merchantOffer) getPriceMultiplier() float32 { return m.priceMultiplier }
+
 // isOutOfStock ports MerchantOffer.isOutOfStock(): uses >= maxUses.
 func (m *merchantOffer) isOutOfStock() bool { return m.uses >= m.maxUses }
 

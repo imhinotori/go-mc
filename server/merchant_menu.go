@@ -179,8 +179,11 @@ func (t *TickLoop) openMerchantMenu(p *tickPlayer, villager *Entity) bool {
 	}
 
 	// Villager.startTrading: updateSpecialPrices(player) then setTradingPlayer(player). updateSpecialPrices
-	// is a deferred no-op (reputation 0 + no hero-of-the-village effect => both price loops are dead), so
-	// only setTradingPlayer runs. CITE Villager.updateSpecialPrices as the future price adjuster.
+	// applies the reputation discount (getPlayerReputation -> per-offer specialPriceDiff) + the
+	// HERO_OF_THE_VILLAGE discount (read live via villagerHeroOfVillageAmplifier; -1 == no effect, the
+	// common case while the raid-win grant is deferred). It runs BEFORE setTradingPlayer so the emitted
+	// offers below carry the discounted specialPriceDiff. CITE Villager.startTrading + updateSpecialPrices.
+	villagerUpdateSpecialPrices(villager, p.uuid, villagerHeroOfVillageAmplifier(p))
 	villagerSetTradingPlayer(villager, p.entityID)
 
 	// ServerPlayer.openMenu: close any previously-open non-inventory window first. v1 tracks one window at
@@ -494,8 +497,15 @@ func merchantPaymentSet(oc *openContainer, slot int, s component.SlotData) {
 //	 live ServerPlayer -> placeItemBackInInventory(removeItemNoUpdate(0)) + placeItemBackInInventory(1).]
 func (t *TickLoop) closeMerchantWindow(p *tickPlayer, oc *openContainer) {
 	// trader.setTradingPlayer(null): re-resolve the villager (best-effort) and clear its trading player.
+	// Villager.setTradingPlayer(null) with a prior trader triggers stopTrading -> resetSpecialPrices, so the
+	// per-offer specialPriceDiff discount applied on open is zeroed here (the next open recomputes it fresh).
+	// CITE Villager.setTradingPlayer (shouldStop -> stopTrading) + Villager.resetSpecialPrices.
 	if villager, _ := t.merchantOffersForWindow(oc); villager != nil {
+		hadTrader := villager.villagerTradingPlayer != 0
 		villagerSetTradingPlayer(villager, 0)
+		if hadTrader {
+			villagerResetSpecialPrices(villager)
+		}
 	}
 	inv := ensureInventory(p)
 	for _, s := range []component.SlotData{oc.mpay0, oc.mpay1} {

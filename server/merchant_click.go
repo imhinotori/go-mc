@@ -441,7 +441,14 @@ func (t *TickLoop) notifyTrade(villager *Entity, offer *merchantOffer) {
 func (t *TickLoop) rewardTradeXp(villager *Entity, offer *merchantOffer) {
 	popXp := 3 + mobRandom(villager).nextInt(4)
 	villager.villagerXp += offer.xp
-	// lastTradedPlayer = getTradingPlayer(): no field on *Entity -> cited no-op.
+	// lastTradedPlayer = getTradingPlayer(): record the trading player's UUID so villagerBrainTick's
+	// customServerAiStep block fires the TRADE reputation event (raising the player's TRADING gossip +2,
+	// which lowers future prices via updateSpecialPrices). Resolve the UUID from the trading player's
+	// entity id; if the player is gone the field stays zero (no event), matching a null lastTradedPlayer.
+	// CITE Villager.rewardTradeXp (lastTradedPlayer = getTradingPlayer()).
+	if tp := t.playerByEntityID(villager.villagerTradingPlayer); tp != nil {
+		villager.lastTradedPlayerUUID = tp.uuid
+	}
 	if villagerShouldIncreaseLevel(villager) {
 		// updateMerchantTimer=40 + increaseProfessionLevelOnUpdate=true: the level-up scheduling is DEFERRED
 		// (no merchant-update tick). The +5 popXp bonus is preserved for when the gate is wired.

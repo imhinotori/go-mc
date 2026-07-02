@@ -262,6 +262,16 @@ type Entity struct {
 	offersBuilt           bool
 	villagerTradingPlayer int32
 	villagerXp            int
+	// villagerGossips mirrors Villager.gossips (net.minecraft.world.entity.ai.gossip.GossipContainer): the
+	// per-UUID reputation store that drives the trade-price economy (getPlayerReputation ->
+	// updateSpecialPrices) and receives reputation events (onReputationEventFrom: TRADE/VILLAGER_HURT/
+	// VILLAGER_KILLED/ZOMBIE_VILLAGER_CURED). Lazily created (villagerEnsureGossips) so non-villager
+	// entities carry no map. lastTradedPlayerUUID mirrors Villager.lastTradedPlayer (set in rewardTradeXp,
+	// consumed by the customServerAiStep TRADE-event fire) — the zero UUID means "none".
+	//	[VERIFIED CFR Villager.gossips (GossipContainer field) / getPlayerReputation / onReputationEventFrom;
+	//	 Villager.rewardTradeXp (lastTradedPlayer = getTradingPlayer()) + customServerAiStep (fires TRADE).]
+	villagerGossips      *gossipContainer
+	lastTradedPlayerUUID uuid.UUID
 	// --- FOX CHARACTER STATE (net.minecraft.world.entity.animal.fox.Fox) ---------------------------
 	//
 	// Tick-owned plain values, set/read ONLY for a Fox. foxFlags is the DATA_FLAGS_ID byte the fox
