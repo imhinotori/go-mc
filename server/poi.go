@@ -216,11 +216,25 @@ type poiManager struct {
 	// MAX_VILLAGE_DISTANCE=6) is identical; the propagation is recomputed lazily on demand instead of
 	// incrementally — a pure OPTIMIZATION/reduction of the tracker (no gameplay difference).
 	villageDist map[int64]int
+
+	// dirty is the SectionStorage/SavedData dirty flag (PoiManager -> SectionStorage.setDirty). SET by
+	// add/remove (a POI record changed -> the owning section's chunk is dirty); the periodic save
+	// (poi_persist.go) CLEARS it after a successful flush. A loaded manager starts clean. Region-owned.
+	dirty bool
 }
 
 func newPoiManager() *poiManager {
 	return &poiManager{sections: map[int64]*poiSection{}, villageDist: map[int64]int{}}
 }
+
+// setDirty marks the manager for the next POI save pass (SectionStorage.setDirty(sectionPos)).
+func (m *poiManager) setDirty() { m.dirty = true }
+
+// isDirty reports whether an unsaved POI mutation is pending (the SavedData contract).
+func (m *poiManager) isDirty() bool { return m.dirty }
+
+// clearDirty is called by the save pass after a successful flush (SavedData.setDirty(false)).
+func (m *poiManager) clearDirty() { m.dirty = false }
 
 // getOrCreate is SectionStorage.getOrCreate(long): the section, created empty if absent.
 func (m *poiManager) getOrCreate(sectionLong int64) *poiSection {
@@ -238,6 +252,7 @@ func (m *poiManager) add(pos pk.Position, pt *poiType) *poiRecord {
 	rec := m.getOrCreate(sectionPosLong(pos)).add(pos, pt)
 	if rec != nil {
 		m.villageDist = map[int64]int{}
+		m.setDirty() // PoiSection.add -> setDirty (a new record was stored in the section)
 	}
 	return rec
 }
@@ -248,6 +263,7 @@ func (m *poiManager) remove(pos pk.Position) {
 	if s := m.sections[sectionPosLong(pos)]; s != nil {
 		s.remove(pos)
 		m.villageDist = map[int64]int{}
+		m.setDirty() // PoiSection.remove -> setDirty (a record was dropped from the section)
 	}
 }
 

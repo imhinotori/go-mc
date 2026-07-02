@@ -375,6 +375,16 @@ type TickLoop struct {
 	// serialized once). Tick-owned (incremented only on the owner goroutine).
 	chunkSaveTickCounter int
 
+	// persistDir is the world directory the raid + POI SavedData persist under (raids -> data/raids.dat,
+	// POI -> poi/r.x.z.mca). "" disables raid/POI persistence (tests/ephemeral runs). Set once by
+	// SetPersistDir before Run; read only on the tick goroutine (the periodic save pass). See
+	// raid_persist.go / poi_persist.go for the on-disk shapes.
+	persistDir string
+
+	// savedDataTickCounter counts ticks toward the next periodic raid/POI save pass, mirroring
+	// chunkSaveTickCounter (independent so a raid/POI flush never blocks on the chunk pass).
+	savedDataTickCounter int
+
 	// plugins is the loaded plugin host + typed event bus (PLUGIN-02 / Plan 22). It is nil until
 	// SetPlugins wires it (a server with no plugins dir leaves it nil — every seam emit is a cheap
 	// skipped no-op behind an `if t.plugins != nil` guard). The discrete gameplay seams
@@ -1314,6 +1324,10 @@ func (t *TickLoop) Run(ctx context.Context, inbound <-chan Intent) {
 	for {
 		select {
 		case <-ctx.Done():
+			// SUB-PERSIST (raids/POI): a final dirty-flush on the OWNER goroutine before the tick
+			// exits, so a clean shutdown right after a raid/POI mutation is never lost (the managers
+			// are tick-owned; flushing here keeps the IO race-free). A "" persistDir is a no-op.
+			t.flushSavedData()
 			return
 		case <-ticker.C:
 			// Drain joins/leaves every wake (not only on a full step) so a player that

@@ -26,11 +26,29 @@ type raidsManager struct {
 	raidMap map[int]*Raid
 	nextId  int // Raids.nextId — starts 1; getUniqueId returns ++nextId
 	tick    int // Raids.tick — the manager's own tick counter
+
+	// dirty is net.minecraft.world.level.saveddata.SavedData.dirty (Raids extends SavedData). It is
+	// SET by every mutation vanilla marks (the STOPPED-raid prune + the tick%200==0 checkpoint in
+	// Raids.tick, and createOrExtendRaid); the periodic save (raid_persist.go) CLEARS it after a
+	// successful write. isDirty()/setDirty() below are the SavedData contract. Coordinator-owned.
+	dirty bool
 }
 
 func newRaidsManager() *raidsManager {
-	return &raidsManager{raidMap: map[int]*Raid{}, nextId: 1}
+	// SavedData's base ctor is clean, but Raids() specifically calls setDirty() (VERIFIED CFR Raids
+	// public ctor: this.setDirty()), so a freshly-created (never-loaded) manager is dirty and its
+	// first state is persisted. A LOADED manager (decodeRaidsData) starts clean until it is mutated.
+	return &raidsManager{raidMap: map[int]*Raid{}, nextId: 1, dirty: true}
 }
+
+// setDirty ports SavedData.setDirty() (== setDirty(true)): mark the manager for the next save pass.
+func (rm *raidsManager) setDirty() { rm.dirty = true }
+
+// isDirty ports SavedData.isDirty(): whether an unsaved mutation is pending.
+func (rm *raidsManager) isDirty() bool { return rm.dirty }
+
+// clearDirty ports SavedData.setDirty(false): called by the save pass after a successful write.
+func (rm *raidsManager) clearDirty() { rm.dirty = false }
 
 // getUniqueId ports Raids.getUniqueId(): ++nextId.
 func (rm *raidsManager) getUniqueId() int {
@@ -91,6 +109,7 @@ func (rm *raidsManager) createRaidAt(cx, cy, cz int, d difficulty, raidOmenLevel
 	}
 	raid.raidOmenLevel = raidOmenLevel
 	rm.raidMap[id] = raid
+	rm.setDirty() // Raids.createOrExtendRaid ends with this.setDirty() (a new raid was registered)
 	return raid
 }
 
@@ -107,12 +126,17 @@ func (t *TickLoop) raidsTick(rm *raidsManager) {
 	for id, raid := range rm.raidMap {
 		if raid.isStopped() {
 			delete(rm.raidMap, id)
+			rm.setDirty() // Raids.tick: on removing a stopped raid -> this.setDirty()
 			continue
 		}
 		t.tickRaid(rm, raid)
 		if raid.isStopped() {
 			delete(rm.raidMap, id)
+			rm.setDirty() // (same setDirty on the post-tick STOPPED transition)
 		}
+	}
+	if rm.tick%200 == 0 {
+		rm.setDirty() // Raids.tick: if (this.tick % 200 == 0) this.setDirty()
 	}
 }
 

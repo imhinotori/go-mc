@@ -157,6 +157,12 @@ type Raid struct {
 	// getPotentialBonusSpawns (the bonus-spawn nextInt) and the wave sound seed. Deterministic per
 	// raid id here (the raid stream is NOT vanilla-seed-pinned; only the draw ORDER is observable).
 	rng *entityRandom
+
+	// heroesOfTheVillage is Raid.heroesOfTheVillage (a Set<UUID>): the players who slew a raid captain,
+	// persisted in Raid.MAP_CODEC as "heroes_of_the_village" (UUIDUtil.CODEC_SET). It is populated by
+	// the (cite-deferred) hero-of-the-village effect grant; carried here so the SavedData round-trips
+	// the set faithfully (raid_persist.go). Empty for a raid that has awarded no heroes yet.
+	heroesOfTheVillage []uuid.UUID
 }
 
 // serverBossEvent is the MODEL half of net.minecraft.server.level.ServerBossEvent: the fields a raid

@@ -243,6 +243,14 @@ func main() {
 	// closes through the existing load path. Started in its own goroutine below (RunChunkSaveLoop).
 	chunkSaver := world.NewChunkSaver(chunkRegionDir)
 	tick.SetChunkSaver(chunkSaver)
+	// SUB-PERSIST (raids/POI): raid + POI SavedData persist under worldDir (data/raids.dat,
+	// poi/*.mca), independent of the SULFUR_PERSIST_CHUNKS chunk gate -- vanilla always persists a
+	// dimension's raids + POI. SetPersistDir arms the periodic dirty-flush (tickSavedData) + the
+	// shutdown flush; LoadPersistedData restores any existing raids/POI into the overworld BEFORE
+	// tick.Run so a reconnecting player joins a world whose raids + POI are already loaded. A missing
+	// file/dir is a clean first-boot no-op. See server/saveddata.go.
+	tick.SetPersistDir(worldDir)
+	tick.LoadPersistedData()
 	// ENT-05: tell the tick where the world spawn surface is so an in-game respawn
 	// re-teleports a player two blocks above it — the same placement the join bootstrap
 	// uses (NewGameTick is handed the same spawnSurfaceY below). For the noise generator

@@ -113,6 +113,10 @@ func (t *TickLoop) tickWorld() {
 	// phase so no new phase is added to the fixed tick order (TestTickPhaseOrder stays green). A
 	// nil/disabled chunkSaver makes it a cheap no-op (tests/ephemeral runs).
 	t.tickChunkSave()
+	// SUB-PERSIST (raids/POI): the periodic raid + POI SavedData flush, on the SAME cadence as the
+	// chunk-save pass. It flushes only DIRTY per-region managers to world/data/raids.dat + world/poi/.
+	// A "" persistDir makes it a cheap no-op (tests/ephemeral runs). See saveddata.go.
+	t.tickSavedData()
 }
 
 // tickChunks issues the per-player chunk requests for this tick (WORLD-05). For each
