@@ -188,6 +188,18 @@ func (t *TickLoop) dispatchRandomTick(r *region, state block.StateID, pos pk.Pos
 		// FarmlandBlock.randomTick: moisture drop / hydrate / turnToDirt. NO RNG draw (deterministic
 		// off the near-water + rain + moisture reads), so it leaves levelRandom untouched.
 		t.farmlandRandomTick(r, state, pos)
+	case block.IsSapling(state):
+		// SaplingBlock.randomTick: light-gated growth. DRAWS levelRandom (random.nextInt(7); the STAGE
+		// advance draws none, the oak grow step draws the tree-feature sequence). See growth_block.go.
+		t.saplingRandomTick(r, state, pos)
+	case block.IsLeaves(state):
+		// LeavesBlock.randomTick: DISTANCE==7 && !PERSISTENT -> decay to air. NO RNG draw (deterministic
+		// off DISTANCE/PERSISTENT), so it leaves levelRandom untouched. See growth_block.go.
+		t.leavesRandomTick(r, state, pos)
+	case block.IsSpreadingSnowy(state):
+		// SpreadingSnowyBlock.randomTick (grass/mycelium): die-to-dirt (no draw) OR spread (draws 12
+		// levelRandom ints — 3 per the 4 spread attempts). See growth_block.go.
+		t.grassRandomTick(r, state, pos)
 	default:
 		// A state whose IsRandomlyTicking is true but whose randomTick handler is not yet ported: no-op
 		// (the family's IsRandomlyTicking should not be true until its handler is wired — kept as a

@@ -53,6 +53,25 @@ func IsRandomlyTicking(s StateID) bool {
 		// MOISTURE (the moisture drop / turnToDirt logic runs each random tick). CITE: FarmlandBlock
 		// randomTick + BlockBehaviour$Properties.randomTicks().
 		return true
+	case OakSapling, SpruceSapling, BirchSapling, JungleSapling,
+		AcaciaSapling, CherrySapling, DarkOakSapling, PaleOakSapling:
+		// SaplingBlock: Properties.randomTicks() -> isRandomlyTicking()==true for every STAGE (the
+		// advanceTree growth roll runs each random tick until the tree grows). CITE: SaplingBlock
+		// properties (.randomTicks()); SaplingBlock.randomTick.
+		return true
+	case OakLeaves, SpruceLeaves, BirchLeaves, JungleLeaves, AcaciaLeaves,
+		CherryLeaves, DarkOakLeaves, PaleOakLeaves, MangroveLeaves,
+		AzaleaLeaves, FloweringAzaleaLeaves:
+		// LeavesBlock overrides isRandomlyTicking() to return DISTANCE==7 && !PERSISTENT — leaves are
+		// randomly ticked ONLY when at the max decay distance and non-persistent (so only decaying
+		// leaves are sampled; a well-anchored or persistent leaf draws no roll). CITE:
+		// LeavesBlock.isRandomlyTicking.
+		return LeavesDecaying(s)
+	case GrassBlock, Mycelium:
+		// SpreadingSnowyBlock (GrassBlock/MyceliumBlock): Properties.randomTicks() ->
+		// isRandomlyTicking()==true for every state (the die/spread logic runs each random tick).
+		// CITE: GrassBlock/MyceliumBlock properties (.randomTicks()); SpreadingSnowyBlock.randomTick.
+		return true
 	default:
 		return false
 	}
