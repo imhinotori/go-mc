@@ -258,6 +258,16 @@ func (t *TickLoop) applyInput(p *tickPlayer, in SubtickInput) {
 		// NEVER deals damage (only the attack path does).
 		t.handleInteract(p, in.Packet)
 
+	case packetid.ServerboundMoveVehicle:
+		// RIDE (passenger.go): the controlling-passenger steer. While a player controls a vehicle
+		// (a harnessed happy ghast), its client sends the vehicle's new absolute position + rotation
+		// each tick (ServerboundMoveVehiclePacket = Vec3 position, Float yRot, Float xRot, Bool
+		// onGround). handleMoveVehicle applies it to the vehicle ONLY when the sender is the vehicle's
+		// controlling passenger (the anti-spoof gate), then re-positions the passengers. A non-riding
+		// player / forged claim is a silent no-op inside the handler. This is the client-authoritative
+		// vehicle-movement model (ServerGamePacketListenerImpl.handleMoveVehicle).
+		t.handleMoveVehicle(p, in.Packet)
+
 	case packetid.ServerboundSwing:
 		// SWING (GAMEPLAY-07): the arm-swing animation. ServerGamePacketListenerImpl.handleAnimate
 		// -> ServerPlayer.swing(hand) broadcasts ClientboundAnimate to the players TRACKING this

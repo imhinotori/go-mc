@@ -151,6 +151,13 @@ func (t *TickLoop) tickDeath(e *Entity) {
 		if e.typ == entity.SulfurCube.ID {
 			t.sulfurCubeSplitOnRemove(e)
 		}
+		// Entity.setRemoved ejects passengers before the store removal: `getPassengers().forEach(Entity::
+		// stopRiding)` — so a player riding this mob (a happy ghast) is dismounted (its SetPassengers list
+		// shrinks + it stops following a despawned vehicle) instead of being orphaned. A mob with no
+		// passengers (every non-vehicle, the oracle pig) is a cheap no-op. Cite Entity.setRemoved.
+		if len(e.passengers) > 0 {
+			t.ejectPassengers(e)
+		}
 		t.regionForEntity(e).entities.remove(e.id)
 	}
 }

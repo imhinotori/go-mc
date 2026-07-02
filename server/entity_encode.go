@@ -592,9 +592,10 @@ func (b rawBytes) WriteTo(w io.Writer) (int64, error) {
 // Mob 15 (1: DATA_MOB_FLAGS_ID), PathfinderMob +0, Monster +0 — so the FIRST EnderMan accessor,
 // DATA_CARRY_STATE, is index 16. (AgeableMob.DATA_BABY_ID is ALSO 16 — accessor indices are
 // PER-CLASS-HIERARCHY; an enderman is not an ageable mob.)
-//   [VERIFIED javap this session: net/minecraft/world/entity/Entity 8 defineId calls; LivingEntity 7;
-//    Mob 1; PathfinderMob 0; Monster 0; EnderMan static{} defines DATA_CARRY_STATE FIRST (OPTIONAL_BLOCK_STATE)
-//    then DATA_CREEPY, DATA_STARED_AT → DATA_CARRY_STATE at accessor index 16.]
+//
+//	[VERIFIED javap this session: net/minecraft/world/entity/Entity 8 defineId calls; LivingEntity 7;
+//	 Mob 1; PathfinderMob 0; Monster 0; EnderMan static{} defines DATA_CARRY_STATE FIRST (OPTIONAL_BLOCK_STATE)
+//	 then DATA_CREEPY, DATA_STARED_AT → DATA_CARRY_STATE at accessor index 16.]
 const dataCarryStateIndex uint8 = 16
 
 // optionalBlockStateSerializerID is the registry id of EntityDataSerializers.OPTIONAL_BLOCK_STATE — the
@@ -602,14 +603,16 @@ const dataCarryStateIndex uint8 = 16
 // EntityDataSerializers static initializer: 0=BYTE, 1=INT, 2=LONG, 3=FLOAT, 4=STRING, 5=COMPONENT,
 // 6=OPTIONAL_COMPONENT, 7=ITEM_STACK, 8=BOOLEAN, 9=ROTATIONS, 10=BLOCK_POS, 11=OPTIONAL_BLOCK_POS,
 // 12=DIRECTION, 13=OPTIONAL_LIVING_ENTITY_REFERENCE, 14=BLOCK_STATE, 15=OPTIONAL_BLOCK_STATE.
-//   [VERIFIED javap net/minecraft/network/syncher/EntityDataSerializers static{} registerSerializer order.]
+//
+//	[VERIFIED javap net/minecraft/network/syncher/EntityDataSerializers static{} registerSerializer order.]
 const optionalBlockStateSerializerID int32 = 15
 
 // optionalBlockStateValue is the pk.FieldEncoder for an Optional<BlockState> synched value — the
 // OPTIONAL_BLOCK_STATE codec == ByteBufCodecs.optional(idMapper(BLOCK_STATE_REGISTRY)): a Boolean present
 // flag, then (only if present) the VarInt block-state id. Empty == a single Boolean(false).
-//   [VERIFIED javap EntityDataSerializers: OPTIONAL_BLOCK_STATE_CODEC = ByteBufCodecs.optional(...) over
-//    idMapper(Block.BLOCK_STATE_REGISTRY); optional writes Boolean(present) then the value if present.]
+//
+//	[VERIFIED javap EntityDataSerializers: OPTIONAL_BLOCK_STATE_CODEC = ByteBufCodecs.optional(...) over
+//	 idMapper(Block.BLOCK_STATE_REGISTRY); optional writes Boolean(present) then the value if present.]
 type optionalBlockStateValue struct {
 	sid     block.StateID
 	present bool
@@ -1114,6 +1117,26 @@ func encodeRemoveEntities(ids []int32) pk.Packet {
 		fields = append(fields, pk.VarInt(id))
 	}
 	return pk.Marshal(int32(packetid.ClientboundRemoveEntities), fields...)
+}
+
+// encodeSetPassengers builds ClientboundSetPassengers (jar: ClientboundSetPassengersPacket) — the
+// mount/dismount packet that tells the client which entities ride a vehicle. Wire layout (javap
+// ClientboundSetPassengersPacket.STREAM_CODEC / write): VarInt vehicleId, then writeVarIntArray of the
+// passenger ids == VarInt count followed by N VarInt ids (the SAME writeIntIdList shape as
+// RemoveEntities). The client attaches each listed passenger to the vehicle and renders it at the
+// vehicle's PASSENGER attachment seat.
+//
+//	[VERIFIED javap ClientboundSetPassengersPacket: private final int vehicle; private final int[]
+//	 passengers; write(buf) { buf.writeVarInt(vehicle); buf.writeVarIntArray(passengers); } — read side
+//	 readVarInt() then readVarIntArray().]
+func encodeSetPassengers(vehicleID int32, passengerIDs []int32) pk.Packet {
+	fields := make([]pk.FieldEncoder, 0, len(passengerIDs)+2)
+	fields = append(fields, pk.VarInt(vehicleID))
+	fields = append(fields, pk.VarInt(int32(len(passengerIDs))))
+	for _, id := range passengerIDs {
+		fields = append(fields, pk.VarInt(id))
+	}
+	return pk.Marshal(int32(packetid.ClientboundSetPassengers), fields...)
 }
 
 // --- SLEEP-01 / cat comfort: the Cat IS_LYING + RELAX_STATE_ONE data-values -------------------------

@@ -68,6 +68,17 @@ func (t *TickLoop) happyGhastAiStep(e *Entity) {
 	if !e.isAlive() || e.dead {
 		return
 	}
+	// RIDDEN suppression (passenger.go): when a controlling passenger steers the ghast (getControlling
+	// Passenger != 0), the CLIENT owns the motion (client-authoritative vehicle movement via Serverbound
+	// MoveVehicle), so the server-side RandomFloatAroundGoal + GhastMoveControl must NOT run — vanilla
+	// routes a ridden mob through travelRidden instead of the moveControl-driven serverAiStep, and
+	// GhastMoveControl.shouldBeStopped returns true while ridden (isOnStillTimeout). Skipping the fly-to
+	// re-roll + the deltaMovement kick here is that shouldBeStopped==true branch: the ghast holds its
+	// wanted state and the client's steer (handleMoveVehicle) is the sole motion. Cite Ghast$GhastMove
+	// Control.tick (shouldBeStopped -> stopInPlace) + HappyGhast.getControllingPassenger.
+	if t.getControllingPassenger(e) != 0 {
+		return
+	}
 	// RandomFloatAroundGoal: re-roll the fly-to target when there is none, or the current one is reached
 	// (<1-sq) or drifted too far (>3600-sq). This is the goal's canUse; when true it runs start(). This
 	// runs for EVERY happy ghast (registerGoals adds RandomFloatAroundGoal@5 un-gated on age — VERIFIED

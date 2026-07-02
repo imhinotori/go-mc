@@ -384,6 +384,29 @@ type Entity struct {
 	// bite animation event is emitted exactly once (the first tick warmup drops below 0).
 	fangsSentSpikeEvent bool
 
+	// --- PASSENGER / VEHICLE (net.minecraft.world.entity.Entity ride subsystem) --------------------
+	//
+	// The ride-subsystem state, mirroring net.minecraft.world.entity.Entity's `passengers`
+	// (ImmutableList<Entity>) and `vehicle` (Entity) fields, plus `boardingCooldown`. Per the
+	// Folia/snapshot rule (like arrowShooterID / vexOwnerID above), the live *Entity references are
+	// reduced to THIN entity ids: passengers is the ordered list of passenger ids (index 0 == the
+	// first/controlling passenger — Entity.getFirstPassenger), vehicle is the ridden entity's id
+	// (0 == not riding). ejectPassengers / startRiding / stopRiding mutate them exactly in the vanilla
+	// order (see passenger.go). Tick-owned plain values (TICK-05); the empty-list / zero-vehicle
+	// default is the un-ridden state EVERY non-ridden entity (the oracle pig) carries — a nil slice
+	// and zero int mutate/read nothing, so the pig oracle's RNG stream is byte-identically unperturbed.
+	//
+	//	[VERIFIED CFR Entity: passengers (ImmutableList<Entity>), vehicle (Entity, @Nullable),
+	//	 boardingCooldown (int); addPassenger prepends a Player ahead of a non-Player first passenger;
+	//	 removePassenger sets passenger.boardingCooldown = 60.]
+	passengers []int32
+	// vehicle is Entity.vehicle reduced to the ridden entity's id (0 == not a passenger).
+	vehicle int32
+	// boardingCooldown is Entity.boardingCooldown — set to 60 by removePassenger; canRide gates on
+	// boardingCooldown <= 0 (a just-dismounted entity cannot immediately re-mount). Decremented each
+	// tick in the ride tick. 0 for a never-ridden entity.
+	boardingCooldown int32
+
 	// ai is the per-mob AI handle (AI-01, Plan 07-01): the mob's goalSelector + the
 	// navigation/look targets a goal writes (server/ai_mob.go). nil for a non-mob entity (a
 	// dropped item, a player's instance) and for a mob with no AI registered. Hung off the

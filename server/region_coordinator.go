@@ -199,6 +199,15 @@ func (t *TickLoop) tickOnce() {
 	// re-resolve the OWNING region by id and apply there (drop if no region owns it — Pitfall 1).
 	t.applyAsyncResults()
 
+	// RIDE (passenger.go): re-position every vehicle's passengers AFTER physics moved the vehicles and
+	// AFTER the cross-region transfer/async rejoin (so the vehicle is in its post-transfer region and at
+	// its settled position), and BEFORE tickEntityMovement/tracker.Tick so this tick's ridden positions
+	// are the ones broadcast. This is the coordinator-side analogue of Entity.rideTick's positionRider
+	// (it touches the GLOBAL player list + per-region entity stores, so it must run single-threaded at
+	// the quiescent barrier, like tickEntities). A store with no vehicles is a cheap no-op (the pig
+	// oracle's world has none, so its RNG stream is unperturbed).
+	t.rideTickVehicles()
+
 	t.tickEntityMovement() // GAMEPLAY-07: ServerEntity.sendChanges → delta move packets to trackers
 	t.tickEquipment()      // GAMEPLAY-07: detectEquipmentUpdates → SetEquipment to trackers
 	t.trace("tracker.Tick")

@@ -765,6 +765,23 @@ type tickPlayer struct {
 	// reads it and a future sprint-flag decode wires it with no formula change). Tick-owned.
 	sprinting bool
 
+	// --- PASSENGER / VEHICLE ride state (net.minecraft.world.entity.Entity ride subsystem) -------
+	// The player-as-passenger side of the ride subsystem (passenger.go). vehicleID is the THIN id of
+	// the entity this player is riding (Entity.vehicle; 0 == not riding — the Folia rule, never a live
+	// *Entity). boardingCooldown mirrors Entity.boardingCooldown (set to 60 on dismount, gates
+	// re-mount via canRide, decremented each tick). lastInput{Forward,Backward,Left,Right,Jump} mirror
+	// the ServerboundPlayerInput flags (net.minecraft.world.entity.player.Input) the client sends; the
+	// controlling-passenger steer (HappyGhast.getRiddenInput) reads them AS the controller's xxa/zza/
+	// isJumping. All tick-owned (TICK-05); 0/false for a player that is not riding — the pig oracle uses
+	// no player ride state so its stream is unperturbed.
+	vehicleID         int32
+	boardingCooldown  int32
+	lastInputForward  bool
+	lastInputBackward bool
+	lastInputLeft     bool
+	lastInputRight    bool
+	lastInputJump     bool
+
 	// swimming is the player's swim pose state (Entity.updateSwimming). While swimming the
 	// hitbox is horizontal (0.6 tall) and the eyes sit at 0.4 above the feet — NOT the standing
 	// 1.62 — so the breath/drowning submersion check must use the swim eye height or the player
@@ -1436,6 +1453,14 @@ func (t *TickLoop) removePlayer(c *Client) {
 		return
 	}
 
+	// RIDE (passenger.go): a leaving player that is riding must dismount so its vehicle's passenger
+	// list shrinks (the SetPassengers broadcast to the remaining trackers drops the gone rider) and no
+	// stale id lingers on the ghast. Entity.setRemoved runs `this.stopRiding()` for a removed passenger;
+	// this is that call for a departing player. A non-riding player (vehicleID == 0) is a no-op.
+	if p.vehicleID != 0 {
+		t.playerStopRiding(p)
+	}
+
 	// ENT-06 save-on-leave (TICK-05 / T-6-15): take the IMMUTABLE snapshot HERE, on the owner
 	// goroutine, while the player is still a live tick-owned value, then hand only that value
 	// copy to the off-tick save consumer. No live tick-owned pointer crosses the boundary, so
@@ -1524,6 +1549,11 @@ func (t *TickLoop) dispatch(c *Client, p pk.Packet) {
 		packetid.ServerboundContainerClick,
 		packetid.ServerboundSetCreativeModeSlot,
 		packetid.ServerboundContainerClose,
+		// ServerboundMoveVehicle (the controlling-passenger steer): the client sends the vehicle's new
+		// absolute position each tick while a player controls it (happy-ghast ride). Routed through the
+		// subtick buffer like the player-movement packets so handleMoveVehicle resolves it on-tick in
+		// chronological order; a non-riding player's stray MoveVehicle is a no-op inside the handler.
+		packetid.ServerboundMoveVehicle,
 		packetid.ServerboundSetCarriedItem:
 		// A subtick-relevant input: stamp it with the SERVER clock (never a client-
 		// supplied timestamp — T-3-07) and append to the bounded per-player buffer.

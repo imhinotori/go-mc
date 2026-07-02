@@ -770,14 +770,22 @@ func (t *TickLoop) withinAttackReach(attacker, victim *tickPlayer) bool {
 func (t *TickLoop) handleInteract(p *tickPlayer, pkt pk.Packet) {
 	// DECODE the ServerboundInteract. Wire layout (javap ServerboundInteractPacket.STREAM_CODEC,
 	// composite of): VarInt entityId ; InteractionHand (VarInt enum) ; Vec3 location (3 doubles) ;
-	// Boolean usingSecondaryAction. We only need the target entityId for the feed path (the held item
-	// is read server-side from the player's selected hand, exactly as the TemptGoal held-read does);
-	// the trailing fields are decoded defensively to consume the frame cleanly and are not used. A
-	// malformed/short payload is a silent no-op (the existing defensive-decode discipline).
+	// Boolean usingSecondaryAction. The feed path needs only the entityId (the held item is read
+	// server-side from the selected hand); the HAPPY-GHAST ride path (below) reads the trailing
+	// usingSecondaryAction boolean (HappyGhast.mobInteract's !player.isSecondaryUseActive() gate — a
+	// shift-right-click must NOT mount). We decode the whole frame defensively: a short payload leaves
+	// usingSecondaryAction at its false zero value (the same cited stub chest_open.go uses) and a
+	// missing entityId is a silent no-op (never panic).
 	var targetID pk.VarInt
 	if err := pkt.Scan(&targetID); err != nil {
 		return // short payload: no entity id -> ignore (never panic)
 	}
+	// Trailing fields: InteractionHand (VarInt), Vec3 location (3 doubles), usingSecondaryAction (Bool).
+	// Decoded defensively — a short frame yields usingSecondaryAction == false (the cited stub default).
+	var interactHand pk.VarInt
+	var locX, locY, locZ pk.Double
+	var usingSecondaryAction pk.Boolean
+	_ = pkt.Scan(&targetID, &interactHand, &locX, &locY, &locZ, &usingSecondaryAction)
 
 	// RESOLVE the target mob through its OWNING region (re-resolve by id; nil if gone/forged), exactly
 	// as handleMobAttack does — NEVER cur() (the dispatch goroutine has no region registered; cur()
@@ -851,6 +859,17 @@ func (t *TickLoop) handleInteract(p *tickPlayer, pkt pk.Packet) {
 	// draw is on the cat's own per-entity stream, so the pig oracle is unperturbed).
 	if mob.typ == entity.Cat.ID && t.tryCatInteract(p, mob) {
 		return // the taming / sit-toggle handled the interact
+	}
+	// HAPPY-GHAST RIDE (net.minecraft.world.entity.animal.happyghast.HappyGhast.mobInteract): an adult,
+	// harnessed happy ghast right-clicked WITHOUT a secondary (shift) action mounts the player as a
+	// passenger (doPlayerRide -> player.startRiding(this)). tryHappyGhastRide returns true when the
+	// interact belongs to the ghast (a successful mount OR the harnessed-but-not-mounting case), so
+	// handleInteract does NOT fall through to the feed path; it returns false ONLY for a BABY ghast
+	// (a ghastling is fed, not ridden). Ghast-gated (typ == entity.HappyGhast.ID) so it is a zero-cost
+	// no-op for a pig/cow/sheep — the pig oracle stream is unperturbed. Cite HappyGhast.mobInteract ride
+	// branch; the harness ITEM requirement is the cited v1 reduction (happyGhastHasHarness const-true).
+	if mob.typ == entity.HappyGhast.ID && t.tryHappyGhastRide(p, mob, bool(usingSecondaryAction)) {
+		return // the ride handled the interact
 	}
 	t.tryFeedAnimal(p, mob)
 }
