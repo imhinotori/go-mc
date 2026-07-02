@@ -1,8 +1,6 @@
 package server
 
 import (
-	"math/rand/v2"
-
 	"github.com/imhinotori/sulfur/level"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
@@ -445,12 +443,22 @@ func (t *TickLoop) submitSpawnScanFor(cat mobCategory, cols []level.ChunkPos, sp
 	// Roll the random in-column candidate positions ON the owner (trivial rand). Vanilla picks a
 	// random chunk + getRandomPosWithin; the random pick spreads spawns across the loaded area so
 	// they don't pile on one block. The EXPENSIVE part (is this column standable?) goes off-tick.
+	//
+	// T-34-11 (COMPLETION): draw the column + in-chunk offsets from the SUBMITTING region's seeded
+	// levelRandom (Level.random analogue), NOT the process-global math/rand/v2 rand.IntN. The mob-TYPE
+	// pick was already moved to levelRandom (async.go pickNaturalSpawnMob); the COLUMN/offset pick was
+	// left on the unseeded global stream, which (a) is shared across every test in the package, so a
+	// prior test's draws desync this one's sequence (the intermittent 0-spawn flake under the full
+	// suite / -count), and (b) is not per-region deterministic. This runs on the owner inside the
+	// fan-out (cur() == the submitting region — TICK-05), so its levelRandom is advanced only on this
+	// region's goroutine (race-clean).
+	lr := t.cur().levelRandom
 	picks := make([]spawnCandidatePick, 0, spawnAttemptsPerCycle)
 	for i := 0; i < spawnAttemptsPerCycle; i++ {
-		col := cols[rand.IntN(len(cols))]
+		col := cols[lr.NextIntN(int32(len(cols)))]
 		picks = append(picks, spawnCandidatePick{
-			x: int(col[0])*16 + rand.IntN(16),
-			z: int(col[1])*16 + rand.IntN(16),
+			x: int(col[0])*16 + int(lr.NextIntN(16)),
+			z: int(col[1])*16 + int(lr.NextIntN(16)),
 		})
 	}
 

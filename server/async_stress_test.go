@@ -287,18 +287,23 @@ func TestBehaviorRegressionMobSpawns(t *testing.T) {
 	loop, _, _ := newSpawnLoop(t)
 	defer loop.Close()
 
-	before := loop.only().entities.len()
+	// Count ACROSS regions (totalEntities), not loop.only() (region 0 only). The natural spawner routes
+	// each spawn into the region that OWNS its random candidate column (regionForColumn = (x^z)&1), so a
+	// spawn can land in EITHER region. A region-0-only guard/assertion intermittently reads 0 when all
+	// placements happen to route into region 1 (the source of the STATE.md "0 -> 0" flake — the mobs DID
+	// spawn, just not into region 0), matching how the sibling cap/placement tests already count.
+	before := totalEntities(loop)
 	// Run several spawn cycles. runSpawnCycle (spawner_test.go) submits the off-tick scan and applies
 	// the single rejoin on the owner — exactly what applyAsyncResults does in the live loop. A bounded
 	// number of cycles must yield at least one spawn under cap.
 	const cycles = 8
-	for i := 0; i < cycles && loop.only().entities.len() == before; i++ {
+	for i := 0; i < cycles && totalEntities(loop) == before; i++ {
 		runSpawnCycle(t, loop)
 	}
 
-	if loop.only().entities.len() <= before {
+	if totalEntities(loop) <= before {
 		t.Fatalf("the async spawner added no mob over %d cycles under cap (%d -> %d) — OPT-03 changed behavior",
-			cycles, before, loop.only().entities.len())
+			cycles, before, totalEntities(loop))
 	}
 	// Plan 34-04: the natural spawner picks among the 4 CREATURE mobs (pig/cow/sheep/chicken), so the
 	// added mob may be any of them — assert the spawn carries a real mobAI regardless of which.
