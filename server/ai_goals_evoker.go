@@ -39,6 +39,7 @@ import (
 	"math"
 
 	"github.com/imhinotori/sulfur/data/entity"
+	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
 // IllagerSpell ids (VERIFIED CFR SpellcasterIllager.IllagerSpell).
@@ -232,23 +233,33 @@ func (g *evokerUseSpellGoal) performSpellCasting(t *TickLoop, e *Entity) {
 }
 
 // evokerSummonVexes ports EvokerSummonSpellGoal.performSpellCasting: loop 3 times, each drawing the offset
-// (nextInt(5) X, nextInt(5) Z) and the limited-life (nextInt(90)). The Vex spawn is cite-deferred (Vex
-// entity unbuilt) but the RNG draws fire IN ORDER so the evoker's stream stays in lockstep with the jar.
+// (nextInt(5) X, nextInt(5) Z), SPAWNING a real Vex at that offset, and setting its limited life
+// (nextInt(90)). The three EVOKER-stream draws (nextInt(5), nextInt(5), nextInt(90)) fire IN ORDER so the
+// evoker's stream stays in lockstep with the jar; the Vex's OWN finalizeSpawn-internal draws are on the
+// VEX's per-entity stream (independent), so the evoker never sees them.
 //
 //	[VERIFIED CFR EvokerSummonSpellGoal.performSpellCasting: for i<3 { offset = blockPosition().offset(
-//	 -2 + nextInt(5), 1, -2 + nextInt(5)); vex = VEX.create(...); vex.snapTo(offset); vex.finalizeSpawn(...);
-//	 vex.setOwner; vex.setBoundOrigin(offset); vex.setLimitedLife(20*(30 + nextInt(90))); addFreshEntity }.]
+//	 -2 + nextInt(5), 1, -2 + nextInt(5)); vex = VEX.create(...); vex.snapTo(offset,0,0); vex.finalizeSpawn(...);
+//	 vex.setOwner(this); vex.setBoundOrigin(offset); vex.setLimitedLife(20*(30 + nextInt(90))); addFreshEntity }.]
 func (t *TickLoop) evokerSummonVexes(e *Entity) {
 	r := mobRandom(e)
+	// blockPosition() == floor of the evoker's position (the origin the +/-2..+2 offsets are relative to).
+	baseX := int(math.Floor(e.x))
+	baseY := int(math.Floor(e.y))
+	baseZ := int(math.Floor(e.z))
 	for i := 0; i < evokerVexSummonCount; i++ {
-		offX := -2 + int(r.nextInt(5)) // DRAW: nextInt(5) X
-		offZ := -2 + int(r.nextInt(5)) // DRAW: nextInt(5) Z
-		_ = offX
-		_ = offZ
-		// Vex.create + snapTo + finalizeSpawn + setOwner + setBoundOrigin: DEFERRED (no Vex entity). The
-		// finalizeSpawn-internal draws are on the VEX's stream (not the evoker's), so their absence does not
-		// desync the evoker. setLimitedLife(20*(30 + nextInt(90))) draws on the EVOKER's stream -> fire it.
-		_ = 20 * (30 + int(r.nextInt(90))) // DRAW: nextInt(90) limited-life
+		// offset = blockPosition().offset(-2 + nextInt(5), 1, -2 + nextInt(5)). The X draw precedes the Z draw
+		// (the offset(...) argument evaluation order), and both are on the EVOKER's stream.
+		offX := baseX + (-2 + int(r.nextInt(5))) // DRAW: nextInt(5) X
+		offZ := baseZ + (-2 + int(r.nextInt(5))) // DRAW: nextInt(5) Z
+		offY := baseY + 1                        // the +1 Y in offset(dx, 1, dz)
+		// setLimitedLife(20*(30 + nextInt(90))): the life draw on the EVOKER's stream (drawn AFTER the vex's
+		// finalizeSpawn in the jar, but finalizeSpawn draws are on the vex's own stream, so the evoker order
+		// is exactly nextInt(5), nextInt(5), nextInt(90) -- preserved).
+		life := 20 * (30 + int(r.nextInt(90))) // DRAW: nextInt(90) limited-life
+		// vex.snapTo(offset, 0, 0): the vex spawns at the block CENTER (x+0.5, y, z+0.5). setOwner(this) +
+		// setBoundOrigin(offset) + setLimitedLife(life) are folded into spawnVex.
+		t.spawnVex(e.id, float64(offX)+0.5, float64(offY), float64(offZ)+0.5, offX, offY, offZ, life)
 	}
 }
 
@@ -289,19 +300,36 @@ func (t *TickLoop) evokerAttackFangs(e *Entity) {
 	}
 }
 
-// evokerCreateFang ports Evoker.createSpellEntity: scan down for a sturdy floor and (would) spawn an
-// EvokerFangs at (x, floorY, z, yRot, warmupDelay). The EvokerFangs entity is unbuilt -> DEFERRED. NO RNG,
-// so this is a pure no-op stub carrying the faithful geometry for the day the fangs entity lands.
+// evokerCreateFang ports Evoker.createSpellEntity: scan DOWN from y=maxY for a sturdy floor and, on success,
+// spawn an EvokerFangs at (x, floorY, z, yRot, warmupDelay). NO RandomSource draws (the fangs geometry is
+// deterministic), so this never perturbs the evoker's lockstep stream. Cite Evoker.createSpellEntity.
+//
+//	[VERIFIED CFR Evoker.createSpellEntity: pos = BlockPos.containing(x, maxY, z); do {
+//	  below = pos.below(); if (belowState.isFaceSturdy(UP)) { if (!isEmptyBlock(pos) && !collisionShape.isEmpty)
+//	    topOffset = shape.max(Y); success = true; break; } } while ((pos = pos.below()).getY() >= floor(minY)-1);
+//	  if (success) level.addFreshEntity(new EvokerFangs(level, x, pos.getY()+topOffset, z, angle, delayTicks, this)).]
 func (t *TickLoop) evokerCreateFang(e *Entity, x, z, minY, maxY, yRot float64, warmupDelay int) {
-	_ = x
-	_ = z
-	_ = minY
-	_ = maxY
-	_ = yRot
-	_ = warmupDelay
-	// new EvokerFangs(level, x, floorY+yOffset, z, yRot, warmupDelay, evoker) + addFreshEntity + ENTITY_PLACE:
-	// DEFERRED (no EvokerFangs entity). The sturdy-floor scan needs the block/collision query too; both land
-	// with the EvokerFangs entity.
+	// Scan DOWN from the ceiling cell (containing(x, maxY, z)) to floor(minY)-1, looking for the first cell
+	// whose block BELOW is a sturdy up-face (a solid floor). v1 uses isSolidAt as the sturdy-floor stand-in
+	// (the same block-solidity simplification the arrow's clip uses -- the full isFaceSturdy(UP) VoxelShape
+	// face test is cite-deferred; the observable "fangs erupt from the ground under the arc" holds). The
+	// vanilla topOffset (the below-block collision-shape max on Y) is 0 in the common flat-floor case.
+	topPosY := int(math.Floor(maxY))
+	bottomPosY := int(math.Floor(minY)) - 1
+	bx := int(math.Floor(x))
+	bz := int(math.Floor(z))
+	for py := topPosY; py >= bottomPosY; py-- {
+		// below = pos.below(); isFaceSturdy(UP) stand-in: the block one cell down is solid (a floor).
+		if !t.isSolidAt(pk.Position{X: bx, Y: py - 1, Z: bz}) {
+			continue
+		}
+		// success: the fangs erupt at this floor cell's TOP. new EvokerFangs(level, x, pos.getY()+topOffset,
+		// z, angle, delayTicks, evoker) + addFreshEntity + ENTITY_PLACE (the gameEvent is a cite-deferred POI
+		// signal; the spawn + AddEntity are the observable). topOffset == 0 (flat-floor v1 stand-in).
+		t.spawnEvokerFangs(e.id, x, float64(py), z, yRot, warmupDelay)
+		return
+	}
+	// No sturdy floor found in the [floor(minY)-1, maxY] column: no fangs here (vanilla success==false).
 }
 
 // evokerWololoRecolor ports EvokerWololoSpellGoal.performSpellCasting: recolor the picked BLUE sheep to RED.

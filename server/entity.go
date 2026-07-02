@@ -313,6 +313,77 @@ type Entity struct {
 	currentSpell          int32
 	evokerWololoTarget    int32
 
+	// --- VEX state (net.minecraft.world.entity.monster.Vex) ----------------------------------------
+	//
+	// Tick-owned plain values, set/read ONLY for a Vex (the code-spawned Vex tick gates on isVex). A Vex
+	// is a flying Monster the evoker's SUMMON_VEX spell spawns (setOwner/setBoundOrigin/setLimitedLife).
+	// It flies (VexMoveControl), charges its target (VexChargeAttackGoal), wanders (VexRandomMoveGoal),
+	// copies the evoker's target (VexCopyOwnerTargetGoal), and STARVES to death when its limited life
+	// runs out (Vex.tick: hurt(starve, 1.0) every 20 ticks once hasLimitedLife && --limitedLifeTicks<=0).
+	//	[VERIFIED CFR Vex + Vex$VexMoveControl/VexChargeAttackGoal/VexRandomMoveGoal/VexCopyOwnerTargetGoal.]
+
+	// isVex marks this entity as a Vex. The Vex tick (flight + charge + random-move + copy-owner-target +
+	// limited-life starve) runs ONLY for entities with this set. Set at spawn by spawnVex.
+	isVex bool
+
+	// vexOwnerID is Vex.owner modeled as the summoning evoker's entity id (NEVER a live pointer -- the
+	// Folia/snapshot rule). setOwner(evoker) records it; VexCopyOwnerTargetGoal reads the owner's target.
+	vexOwnerID int32
+
+	// vexBoundOrigin{X,Y,Z} + vexHasBoundOrigin mirror Vex.boundOrigin (a BlockPos, nullable). The
+	// SUMMON_VEX spell sets it to the spawn cell; VexRandomMoveGoal wanders within +/-(7,5,7) of it (or the
+	// vex's current block position when unset). Integer block coords (the vanilla BlockPos).
+	vexBoundOriginX, vexBoundOriginY, vexBoundOriginZ int
+	vexHasBoundOrigin                                 bool
+
+	// vexHasLimitedLife + vexLimitedLifeTicks mirror Vex.hasLimitedLife / Vex.limitedLifeTicks. setLimited
+	// Life(20*(30+nextInt(90))) arms the countdown; Vex.tick decrements it and, at <=0, resets it to 20 and
+	// deals 1.0 starve damage (so a limited-life vex slowly starves out). Zero/false for a non-summoned vex.
+	vexHasLimitedLife   bool
+	vexLimitedLifeTicks int32
+
+	// vexCharging mirrors Vex FLAG_IS_CHARGING (DATA_FLAGS_ID bit 1) -- set while VexChargeAttackGoal is
+	// mid-charge (drives the client charge visual; server-side it gates canContinueToUse). A plain bool.
+	vexCharging bool
+
+	// vexWantX/Y/Z + vexHasWant mirror the VexMoveControl target (MoveControl.wantedX/Y/Z + Operation.
+	// MOVE_TO). The charge/random-move goals set them via setWantedPosition; the move-control tick flies
+	// the vex toward them and clears vexHasWant on arrival (deltaLength < boundingBox.getSize()). vexWant
+	// Speed is the MoveControl.speedModifier the goal requested (1.0 charge, 0.25 random-move).
+	vexWantX, vexWantY, vexWantZ float64
+	vexHasWant                   bool
+	vexWantSpeed                 float64
+
+	// --- EVOKER FANGS state (net.minecraft.world.entity.projectile.EvokerFangs) --------------------
+	//
+	// Tick-owned plain values, set/read ONLY for an EvokerFangs (the code-spawned fangs tick gates on
+	// isFangs). EvokerFangs is a NON-mob projectile the evoker's FANGS spell spawns at a sturdy floor. It
+	// counts down warmupDelayTicks; at warmupDelayTicks==-8 it deals 6.0 magic damage to every LivingEntity
+	// in its inflated (0.2,0,0.2) box (dealDamageTo), broadcasts the spike event ONCE, then counts down
+	// lifeTicks (default 22) and discards at <0.
+	//	[VERIFIED CFR EvokerFangs.tick: --warmupDelayTicks<0 { at -8 dealDamageTo(box.inflate(0.2,0,0.2));
+	//	 broadcast spike once; --lifeTicks<0 discard }. ATTACK_TRIGGER_TICKS=14, LIFE_OFFSET=2, lifeTicks=22.]
+
+	// isFangs marks this entity as an EvokerFangs. The fangs tick (warmup countdown -> attack -> despawn)
+	// runs ONLY for entities with this set. Set at spawn by spawnEvokerFangs.
+	isFangs bool
+
+	// fangsOwnerID is EvokerFangs.owner modeled as the casting evoker's entity id (NEVER a live pointer --
+	// the Folia/snapshot rule). setOwner records it; dealDamageTo skips the owner and attributes the hit.
+	fangsOwnerID int32
+
+	// fangsWarmupDelayTicks mirrors EvokerFangs.warmupDelayTicks (the ctor arg -- 0 for the arc's first ring,
+	// the per-fang stagger for the ARC/LINE). The tick decrements it below zero; the attack fires at -8.
+	fangsWarmupDelayTicks int32
+
+	// fangsLifeTicks mirrors EvokerFangs.lifeTicks (default 22). Once warmup drops below 0 the tick counts
+	// it down each tick; the fangs discards when it goes below 0 (the ~22-tick lifetime).
+	fangsLifeTicks int32
+
+	// fangsSentSpikeEvent mirrors EvokerFangs.sentSpikeEvent -- the broadcastEntityEvent(4) latch so the
+	// bite animation event is emitted exactly once (the first tick warmup drops below 0).
+	fangsSentSpikeEvent bool
+
 	// ai is the per-mob AI handle (AI-01, Plan 07-01): the mob's goalSelector + the
 	// navigation/look targets a goal writes (server/ai_mob.go). nil for a non-mob entity (a
 	// dropped item, a player's instance) and for a mob with no AI registered. Hung off the

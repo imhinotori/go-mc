@@ -152,6 +152,19 @@ func silverfishSupplier() *Supplier {
 		Build()
 }
 
+// vexSupplier is the port of Vex.createAttributes() : Monster.createMonsterAttributes() + MAX_HEALTH
+// 14.0 + ATTACK_DAMAGE 4.0 (jar bytecode this session: net/minecraft/world/entity/monster/Vex
+// .createAttributes -> Monster.createMonsterAttributes().add(MAX_HEALTH, 14.0).add(ATTACK_DAMAGE, 4.0)).
+// NOTE Vex does NOT override MOVEMENT_SPEED (it flies via VexMoveControl, not the ground navigation), so
+// MOVEMENT_SPEED stays at the createLivingAttributes registration default 0.7 -- the Vex flight math
+// reads a per-request speedModifier (1.0 charge / 0.25 wander) times 0.05, NOT the MOVEMENT_SPEED attr.
+func vexSupplier() *Supplier {
+	return createMonsterAttributes().
+		AddValue(MaxHealth, 14.0).
+		AddValue(AttackDamage, 4.0).
+		Build()
+}
+
 // pigSupplier is the port of Pig.createAttributes() : Animal.createAnimalAttributes() + MAX_HEALTH
 // 10.0 + MOVEMENT_SPEED 0.25 (jar bytecode this session:
 // net/minecraft/world/entity/animal/pig/Pig.createAttributes — ldc2_w 10.0d, 0.25d).
@@ -498,6 +511,10 @@ var suppliers = map[string]*Supplier{
 	"vindicator": vindicatorSupplier(),
 	"evoker":     evokerSupplier(),
 	"ravager":    ravagerSupplier(),
+	// VEX + FANGS (Task): the Vex is the evoker's summoned flying Monster (Vex.createAttributes:
+	// MAX_HEALTH 14.0 + ATTACK_DAMAGE 4.0). EvokerFangs is a NON-living projectile ("misc"), so it has
+	// NO supplier -- it falls to nil (like arrow/potion) via isLivingType, the faithful outcome.
+	"vex": vexSupplier(),
 }
 
 // livingCategories is the set of data/entity.Entity.Type values that correspond to a vanilla

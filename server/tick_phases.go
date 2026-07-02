@@ -267,6 +267,12 @@ func (t *TickLoop) tickEntities() {
 	// nearby players. ADDITIVE + potion-gated (zero cost when no potion is in flight).
 	t.tickPotions()
 
+	// VEX + FANGS (Task): the EvokerFangs warmup -> attack -> despawn lifecycle (EvokerFangs.tick). Sibling
+	// of tickArrows/tickPotions; a code-spawned projectile the evoker's FANGS spell places. ADDITIVE +
+	// fangs-gated (zero cost when no fangs are active). Placed AFTER tickPotions and BEFORE tracker.Tick so a
+	// despawned fangs' removal is reflected in this tick's near() and the tracker emits RemoveEntities.
+	t.tickFangs()
+
 	// Plan 17-21 block-break dig-time: the ServerPlayerGameMode.tick() port — advance any pending
 	// delayed-destroy (finish the break at progress>=1.0) and refresh the in-progress crack overlay
 	// for each digging player. A single ADDITIVE call inside this existing phase keeps the tick order
@@ -500,6 +506,13 @@ func (t *TickLoop) tickAI() {
 		if e.typ == entity.Evoker.ID {
 			t.evokerAiStep(e)
 		}
+		// VEX (Task): the Vex.tick + the vex goals (charge/random-move/copy-owner-target) + VexMoveControl
+		// flight, driven per-type like the evoker/ravager, AFTER serverAiStep (the vex's empty goalSelector
+		// no-op). ADDITIVE + vex-gated: every non-vex entity is a zero-cost skip, and all the vex's RNG draws
+		// are on its OWN per-entity stream, so no other mob's lockstep (the pig oracle) is perturbed.
+		if e.typ == entity.Vex.ID {
+			t.vexAiStep(e)
+		}
 	}
 
 	// Throttled natural spawner: vanilla attempts every tick (most no-op under cap); v1 runs the
@@ -547,6 +560,15 @@ func (t *TickLoop) tickPhysics() {
 		// despawn and keeps the observable result identical). The corpse is still in the store so the
 		// tracker keeps sending it through the animation.
 		if e.dead {
+			continue
+		}
+
+		// VEX (Task): a Vex is a FLYING mob (Vex.tick sets noPhysics=true + setNoGravity(true)) whose
+		// movement is integrated in vexAiStep (the VexMoveControl delta + the direct entities.move flight,
+		// no collision, no gravity). Skip it here so the generic gravity/drag/collision path never touches
+		// it -- the observable "the vex flies freely toward its wanted position, unaffected by gravity".
+		// Cite Vex.tick (noPhysics=true; setNoGravity(true)).
+		if e.isVex {
 			continue
 		}
 
