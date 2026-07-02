@@ -560,6 +560,14 @@ func (t *TickLoop) spawnDeclaredMob(decl *mobDecl, x, y, z float64) *Entity {
 	if e.typ == entity.HappyGhast.ID {
 		attachHappyGhastBrain(e)
 	}
+	// VILLAGER BRAIN attach: Villager makes its brain in Mob.<init> via BRAIN_PROVIDER.makeBrain. Attach
+	// here in the shared spawn path AFTER reseedMobAI (the brain's per-mob RNG is e.ai.rng, now seeded).
+	// Villager-gated: no other declared mob gets a villager brain, so the classic-goal mobs (and the pig
+	// oracle) are wholly unperturbed. attachVillagerBrain also seeds the VillagerData defaults (type
+	// "plains", profession "none", level 1). Cite Villager.makeBrain.
+	if e.typ == entity.Villager.ID {
+		attachVillagerBrain(e)
+	}
 	// MOB-PASS-03 (Phase 34): the Chicken egg-lay timer init — net.minecraft.world.entity.animal.chicken
 	// .Chicken.<init> seeds `eggTime = random.nextInt(6000) + 6000` (the next lay is 5..10 minutes out).
 	// Drawn HERE (after reseedMobAI gives the chicken its per-entity stream), so it is the chicken's FIRST

@@ -520,6 +520,15 @@ func (t *TickLoop) tickAI() {
 		if e.typ == entity.IronGolem.ID {
 			t.ironGolemAiStep(e)
 		}
+		// VILLAGER (Task): the Villager.customServerAiStep brain tick — the villager is a BRAIN mob (no
+		// classic goals), so the brain (Swim/LookAtTargetSink/MoveToTargetSink + AcquirePoi(JOB_SITE) +
+		// AssignProfessionFromJobSite) is the sole AI driver. Per-type-gated like the golem, AFTER
+		// serverAiStep (the villager's empty goalSelector is a no-op). ADDITIVE + villager-gated (zero cost /
+		// zero RNG for every non-villager — the pig oracle stream is untouched; the AcquirePoi rate jitter
+		// draws off the region levelRandom, never the mob stream). Cite Villager.customServerAiStep.
+		if e.typ == entity.Villager.ID {
+			t.villagerBrainTick(e)
+		}
 	}
 
 	// Throttled natural spawner: vanilla attempts every tick (most no-op under cap); v1 runs the

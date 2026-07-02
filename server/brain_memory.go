@@ -55,6 +55,19 @@ const (
 	memIsTempted                memoryKey = 48 // minecraft:is_tempted
 	memIsInWater                memoryKey = 54 // minecraft:is_in_water
 	memIsPanicking              memoryKey = 56 // minecraft:is_panicking
+
+	// Villager POI + panic memories (registry indices from data/registryid/memorymoduletype.go; distinct
+	// from the keys above). The brain uses these as unique slot keys — the AcquirePoi/AssignProfession/
+	// updateActivity behaviors read/write them.
+	//
+	//	[VERIFIED data/registryid/memorymoduletype.go: home=1, job_site=2, potential_job_site=3,
+	//	 meeting_point=4, hurt_by_entity=24, nearest_hostile=26.]
+	memHome             memoryKey = 1  // minecraft:home
+	memJobSite          memoryKey = 2  // minecraft:job_site
+	memPotentialJobSite memoryKey = 3  // minecraft:potential_job_site
+	memMeetingPoint     memoryKey = 4  // minecraft:meeting_point
+	memHurtByEntity     memoryKey = 24 // minecraft:hurt_by_entity
+	memNearestHostile   memoryKey = 26 // minecraft:nearest_hostile
 )
 
 // memNeverExpire is MemorySlot.NEVER_EXPIRE (Long.MAX_VALUE) — a slot with this ttl is permanent

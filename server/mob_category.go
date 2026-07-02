@@ -214,6 +214,13 @@ func categoryOf(t entity.ID) mobCategory {
 		// mobs are NOT placed by the uniform natural spawner, so the golem stays OUT of the natural pool — it is
 		// village-summoned or manually placed (/dbg). Explicit (rather than the misc default) for recipe parity.
 		return categoryMisc
+	case entity.Villager.ID:
+		// VILLAGER (Task): Villager is MobCategory.MISC (vanilla EntityType.VILLAGER = Builder.of(...,
+		// MobCategory.MISC); data/entity Villager.Type == "misc", id 140). MISC's cap is -1 (uncapped) and MISC
+		// mobs are NOT placed by the uniform natural spawner, so the villager stays OUT of the natural pool — a
+		// real villager spawns from a village structure or breeding (both cite-deferred: no village worldgen).
+		// Explicit (rather than the misc default) for recipe parity with the iron golem.
+		return categoryMisc
 	default:
 		return categoryMisc
 	}

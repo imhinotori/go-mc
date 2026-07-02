@@ -190,6 +190,16 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned iron_golem eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
 		}
+	case "villager":
+		// VILLAGER (Task): spawn a vanilla villager (BRAIN mob, Villager wire type). It runs the ported CORE
+		// brain (Swim/LookAtTargetSink/MoveToTargetSink + AcquirePoi(JOB_SITE) + AssignProfessionFromJobSite):
+		// place a job-site block (e.g. composter) near it and it claims the POI (-> IS_OCCUPIED -> the area
+		// isVillage() -> a REAL bad-omen raid can fire) and takes the matching profession. Trades + merchant
+		// menu are cite-deferred (no merchant-menu subsystem). Spawns professionless at level 1.
+		e := t.spawnVanillaMob(vanillaVillagerMobName, p.x, p.y, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned villager eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
+		}
 	case "ravager":
 		// RAIDER (Task): spawn a vanilla ravager (raid beast, Ravager wire type). Hunts + melees + roars
 		// (ravagerAiStep: attackTick/roar AoE/stun; the leaf-trample + stun-trigger are cite-deferred).

@@ -77,10 +77,10 @@ func newAnimalPanic(speed float32) *behavior {
 	b.start = func(t *TickLoop, e *Entity, _ int64) {
 		e.brain.setMemory(memIsPanicking, true)
 		e.brain.eraseMemory(memWalkTarget)
-		happyGhastNavStop(e)
+		brainNavStop(e)
 	}
 	b.tick = func(t *TickLoop, e *Entity, _ int64) {
-		if !happyGhastNavDone(e) {
+		if !brainNavDone(e) {
 			return
 		}
 		px, py, pz, ok := happyGhastAirRandomPos(t, e)
@@ -172,13 +172,13 @@ func newMoveToTargetSink(minTimeout, maxTimeout int) *behavior {
 		if !ok {
 			return false
 		}
-		if happyGhastReachedTarget(t, e, wt) {
+		if brainReachedTarget(t, e, wt) {
 			e.brain.eraseMemory(memWalkTarget)
 			e.brain.eraseMemory(memCantReachWalkTargetSince)
 			return false
 		}
-		// tryComputePath (flyer): commit the walk target to the ghast move-control.
-		happyGhastMoveTo(t, e, wt)
+		// tryComputePath: commit the walk target to the mob's navigation (flyer move-control or ground A*).
+		brainMoveTo(t, e, wt)
 		e.brain.eraseMemory(memCantReachWalkTargetSince)
 		return true
 	}
@@ -187,24 +187,24 @@ func newMoveToTargetSink(minTimeout, maxTimeout int) *behavior {
 		if !ok {
 			return false
 		}
-		return !happyGhastNavDone(e) && !happyGhastReachedTarget(t, e, wt)
+		return !brainNavDone(e) && !brainReachedTarget(t, e, wt)
 	}
 	b.start = func(t *TickLoop, e *Entity, _ int64) {
 		// navigation.moveTo(path, speed) analogue: (re)commit the wanted point.
 		if wt, ok := e.brain.getMemoryWalkTarget(memWalkTarget); ok {
-			happyGhastMoveTo(t, e, wt)
+			brainMoveTo(t, e, wt)
 		}
 	}
 	b.stop = func(t *TickLoop, e *Entity, _ int64) {
-		happyGhastNavStop(e)
+		brainNavStop(e)
 		e.brain.eraseMemory(memWalkTarget)
 		e.brain.eraseMemory(memPath)
 	}
 	b.tick = func(t *TickLoop, e *Entity, _ int64) {
 		// Re-point at the (possibly moved) target each tick (vanilla re-paths when the target moves >2
-		// blocks; the flyer re-commit is cheap and idempotent, so re-point every tick — same observable).
+		// blocks; the re-commit is cheap and idempotent, so re-point every tick — same observable).
 		if wt, ok := e.brain.getMemoryWalkTarget(memWalkTarget); ok {
-			happyGhastMoveTo(t, e, wt)
+			brainMoveTo(t, e, wt)
 		}
 	}
 	return b
@@ -340,29 +340,57 @@ func newSetWalkTargetFromLookTarget(speed float32, closeEnough int) *oneShot {
 	})
 }
 
-// --- flyer movement/look/pos helpers (the vanilla nav/look primitives, reduced to the ghast hover) -----
+// --- brain movement bridge (MoveToTargetSink's navigation.moveTo/stop/isDone) --------------------------
+// The bridge dispatches on happyGhastIsFlyer(e): a FLYER (happy ghast) commits the WALK_TARGET to the
+// ghast move-control (ghastWanted*, the hover accel); a GROUND mob (villager, ...) commits it to the
+// ground A* navigation (mobAI.setWantTargetSpeed -> requestPath). This is the ONE seam that lets the SAME
+// ported Brain (Swim/MoveToTargetSink/RandomStroll/...) drive either a flyer or a walker — vanilla's
+// MoveToTargetSink calls body.getNavigation().moveTo(...), and the mob's navigation IS its ground or
+// flying nav; here we pick by mob type. Cite MoveToTargetSink (navigation.moveTo(path, speedModifier)).
 
-// happyGhastMoveTo bridges a WALK_TARGET to the ghast move-control (ghastWanted*): resolve the target
-// current world position and commit it as the wanted point. ghastMoveControlTick (ai_goals_happy_ghast.go)
-// then accelerates the ghast toward it — the flyer analogue of navigation.moveTo(path, speed).
-func happyGhastMoveTo(t *TickLoop, e *Entity, wt walkTarget) {
+// brainMoveTo bridges a WALK_TARGET to the mob's navigation: the ghast move-control for a flyer, or the
+// ground A* (setWantTargetSpeed) for a walker. The ground speed = MOVEMENT_SPEED * walkTarget.speedModifier
+// (navigation.moveTo(target, speedModifier) multiplies the mob's speed attribute), matching the classic
+// chase-goal pattern (ai_goals_attack.go setWantTargetSpeed(MOVEMENT_SPEED*modifier)).
+func brainMoveTo(t *TickLoop, e *Entity, wt walkTarget) {
 	x, y, z := wt.target.currentPosition(t)
-	e.ghastWantedX, e.ghastWantedY, e.ghastWantedZ = x, y, z
-	e.ghastHasWanted = true
+	if happyGhastIsFlyer(e) {
+		e.ghastWantedX, e.ghastWantedY, e.ghastWantedZ = x, y, z
+		e.ghastHasWanted = true
+		return
+	}
+	if e.ai == nil {
+		return
+	}
+	speed := e.getAttributeValue(attribute.MovementSpeed) * float64(wt.speedModifier)
+	e.ai.setWantTargetSpeed(x, y, z, speed)
 }
 
-// happyGhastNavStop ports navigation.stop() for the flyer: clear the wanted point (WAIT).
-func happyGhastNavStop(e *Entity) { e.ghastHasWanted = false }
+// brainNavStop ports navigation.stop(): clear the flyer wanted point, or the ground want target.
+func brainNavStop(e *Entity) {
+	if happyGhastIsFlyer(e) {
+		e.ghastHasWanted = false
+		return
+	}
+	if e.ai != nil {
+		e.ai.clearWantTarget()
+	}
+}
 
-// happyGhastNavDone ports navigation.isDone() for the flyer: no wanted point committed.
-func happyGhastNavDone(e *Entity) bool { return !e.ghastHasWanted }
+// brainNavDone ports navigation.isDone(): the flyer has no wanted point, or the ground nav has no target.
+func brainNavDone(e *Entity) bool {
+	if happyGhastIsFlyer(e) {
+		return !e.ghastHasWanted
+	}
+	return e.ai == nil || !e.ai.hasTarget
+}
 
-// happyGhastReachedTarget ports MoveToTargetSink.reachedTarget: distManhattan(target.currentBlockPosition(),
-// body.blockPosition()) <= walkTarget.closeEnoughDist.
+// brainReachedTarget ports MoveToTargetSink.reachedTarget: distManhattan(target.currentBlockPosition(),
+// body.blockPosition()) <= walkTarget.closeEnoughDist (mob-type-agnostic — pure position math).
 //
 //	[VERIFIED CFR MoveToTargetSink.reachedTarget: distManhattan(walkTarget.target.currentBlockPosition(),
 //	 body.blockPosition()) <= walkTarget.getCloseEnoughDist().]
-func happyGhastReachedTarget(t *TickLoop, e *Entity, wt walkTarget) bool {
+func brainReachedTarget(t *TickLoop, e *Entity, wt walkTarget) bool {
 	tx, ty, tz := wt.target.currentPosition(t)
 	return distManhattanBlocks(tx, ty, tz, e.x, e.y, e.z) <= wt.closeEnoughDist
 }

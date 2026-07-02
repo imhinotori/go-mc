@@ -229,9 +229,24 @@ type Entity struct {
 	// brain is the ported net.minecraft.world.entity.ai.Brain (brain.go). It is NON-NIL only for a mob
 	// that runs the behavior subsystem — currently the BABY HappyGhast (HappyGhast.customServerAiStep
 	// ticks the brain ONLY when isBaby()); every other entity leaves it nil (a nil brain is never ticked,
-	// so the classic-goal mobs are wholly unaffected). Attached at spawn by attachHappyGhastBrain.
-	// Tick-owned (TICK-05).
+	// so the classic-goal mobs are wholly unaffected). Attached at spawn by attachHappyGhastBrain (happy
+	// ghast baby) or attachVillagerBrain (villager). Tick-owned (TICK-05).
 	brain *brain
+	// --- VILLAGER STATE (net.minecraft.world.entity.npc.villager.Villager + VillagerData) ------------
+	//
+	// Tick-owned plain values, set/read ONLY for a Villager (typ == entity.Villager.ID). villagerProfession
+	// + villagerLevel + villagerType mirror VillagerData(type, profession, level) (VillagerData is a record;
+	// Villager holds it in the DATA_VILLAGER_DATA entity-data accessor). villagerLevel is clamped MIN=1..
+	// MAX=5 (VillagerData ctor Math.max(1,level); MAX_VILLAGER_LEVEL=5). villagerJobSite* + villagerHasJobSite
+	// mirror the JOB_SITE memory module (a GlobalPos): the claimed job-site POI position. Zero for every
+	// non-villager entity. Cite VillagerData + Villager.getVillagerData/setVillagerData.
+	villagerType       string // VillagerData.type() path (biome variant; "plains" default) — cosmetic
+	villagerProfession string // VillagerData.profession() path ("none" until AcquirePoi assigns one)
+	villagerLevel      int    // VillagerData.level() (1..5)
+	villagerJobSiteX   int
+	villagerJobSiteY   int
+	villagerJobSiteZ   int
+	villagerHasJobSite bool // the JOB_SITE memory is present (a job site is claimed)
 	// --- FOX CHARACTER STATE (net.minecraft.world.entity.animal.fox.Fox) ---------------------------
 	//
 	// Tick-owned plain values, set/read ONLY for a Fox. foxFlags is the DATA_FLAGS_ID byte the fox

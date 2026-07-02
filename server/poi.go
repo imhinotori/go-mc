@@ -54,27 +54,99 @@ type poiType struct {
 	validRange int
 }
 
-// The two village-relevant POI types (VERIFIED PoiTypes.bootstrap):
-//   HOME    = register(HOME,    BEDS,          1,  1)
-//   MEETING = register(MEETING, Blocks.BELL,   32, 6)
-// Job-site types (ARMORER..WEAPONSMITH, the #acquirable_job_site members) are cite-deferred (no villagers).
+// The two core village POI types (VERIFIED PoiTypes.bootstrap):
+//
+//	HOME    = register(HOME,    BEDS,          1,  1)
+//	MEETING = register(MEETING, Blocks.BELL,   32, 6)
 var (
 	poiTypeHome    = &poiType{key: "minecraft:home", maxTickets: 1, validRange: 1}
 	poiTypeMeeting = &poiType{key: "minecraft:meeting", maxTickets: 32, validRange: 6}
 )
 
-// poiTypeVillage reports whether a poiType is a member of PoiTypeTags.VILLAGE. VERIFIED
-// registrydata/tags/point_of_interest_type/village.json = {#acquirable_job_site, home, meeting}. With the
-// job sites deferred, the landed village members are HOME and MEETING; the #acquirable_job_site branch is
-// cite-deferred (adds the job-site keys here when villager POIs land). This is the holder.is(#village)
-// predicate the raid center query and isVillageCenter use.
-func poiTypeVillage(pt *poiType) bool {
-	return pt == poiTypeHome || pt == poiTypeMeeting
+// The 13 JOB-SITE POI types — the #minecraft:acquirable_job_site tag members. Every job-site type is
+// register(KEY, <block(s)>, maxTickets=1, validRange=1) (VERIFIED PoiTypes.bootstrap: each register call
+// passes 1, 1 for the two int args). A villager claims one via AcquirePoi (poiManager.take ->
+// acquireTicket), which drops its freeTickets 1->0 => isOccupied() true => the section becomes an
+// IS_OCCUPIED #village center (isVillageCenter) — which unblocks the raid auto-trigger (createOrExtendRaid
+// getInRange(#village,...,IS_OCCUPIED)). THIS is the villager-claim -> real-raid payoff.
+//
+//	[VERIFIED CFR PoiTypes.bootstrap: ARMORER=BLAST_FURNACE, BUTCHER=SMOKER, CARTOGRAPHER=CARTOGRAPHY_TABLE,
+//	 CLERIC=BREWING_STAND, FARMER=COMPOSTER, FISHERMAN=BARREL, FLETCHER=FLETCHING_TABLE, LEATHERWORKER=
+//	 CAULDRONS(set), LIBRARIAN=LECTERN, MASON=STONECUTTER, SHEPHERD=LOOM, TOOLSMITH=SMITHING_TABLE,
+//	 WEAPONSMITH=GRINDSTONE; all register(...,1,1).]
+var (
+	poiTypeArmorer       = &poiType{key: "minecraft:armorer", maxTickets: 1, validRange: 1}
+	poiTypeButcher       = &poiType{key: "minecraft:butcher", maxTickets: 1, validRange: 1}
+	poiTypeCartographer  = &poiType{key: "minecraft:cartographer", maxTickets: 1, validRange: 1}
+	poiTypeCleric        = &poiType{key: "minecraft:cleric", maxTickets: 1, validRange: 1}
+	poiTypeFarmer        = &poiType{key: "minecraft:farmer", maxTickets: 1, validRange: 1}
+	poiTypeFisherman     = &poiType{key: "minecraft:fisherman", maxTickets: 1, validRange: 1}
+	poiTypeFletcher      = &poiType{key: "minecraft:fletcher", maxTickets: 1, validRange: 1}
+	poiTypeLeatherworker = &poiType{key: "minecraft:leatherworker", maxTickets: 1, validRange: 1}
+	poiTypeLibrarian     = &poiType{key: "minecraft:librarian", maxTickets: 1, validRange: 1}
+	poiTypeMason         = &poiType{key: "minecraft:mason", maxTickets: 1, validRange: 1}
+	poiTypeShepherd      = &poiType{key: "minecraft:shepherd", maxTickets: 1, validRange: 1}
+	poiTypeToolsmith     = &poiType{key: "minecraft:toolsmith", maxTickets: 1, validRange: 1}
+	poiTypeWeaponsmith   = &poiType{key: "minecraft:weaponsmith", maxTickets: 1, validRange: 1}
+)
+
+// acquirableJobSitePois is the #minecraft:acquirable_job_site tag membership set (the 13 job-site POI
+// types). It is the acquirableJobSite() predicate the villager CORE AcquirePoi uses (a villager with NO
+// profession can claim ANY job site — VillagerProfession.NONE.acquirableJobSite() is ALL_ACQUIRABLE_JOBS =
+// holder.is(#acquirable_job_site)). VERIFIED CFR VillagerProfession.ALL_ACQUIRABLE_JOBS + bootstrap.
+var acquirableJobSitePois = map[*poiType]bool{
+	poiTypeArmorer: true, poiTypeButcher: true, poiTypeCartographer: true, poiTypeCleric: true,
+	poiTypeFarmer: true, poiTypeFisherman: true, poiTypeFletcher: true, poiTypeLeatherworker: true,
+	poiTypeLibrarian: true, poiTypeMason: true, poiTypeShepherd: true, poiTypeToolsmith: true,
+	poiTypeWeaponsmith: true,
 }
 
+// jobSitePoiForBlockID maps a block id (minecraft:<name>) to its job-site PoiType. This is the runtime
+// half of PoiTypes.registerBlockStates (every state of the block -> the POI type). Matched by block id —
+// like isBellBlock — because a block's placement/facing/lit properties are all the same POI type.
+//
+//	[VERIFIED CFR PoiTypes.bootstrap block-set order == the register key order above.]
+var jobSitePoiForBlockID = map[string]*poiType{
+	"minecraft:blast_furnace":     poiTypeArmorer,
+	"minecraft:smoker":            poiTypeButcher,
+	"minecraft:cartography_table": poiTypeCartographer,
+	"minecraft:brewing_stand":     poiTypeCleric,
+	"minecraft:composter":         poiTypeFarmer,
+	"minecraft:barrel":            poiTypeFisherman,
+	"minecraft:fletching_table":   poiTypeFletcher,
+	// LEATHERWORKER = the cauldron set (CAULDRON/WATER/LAVA/POWDER_SNOW cauldrons all -> leatherworker).
+	"minecraft:cauldron":             poiTypeLeatherworker,
+	"minecraft:water_cauldron":       poiTypeLeatherworker,
+	"minecraft:lava_cauldron":        poiTypeLeatherworker,
+	"minecraft:powder_snow_cauldron": poiTypeLeatherworker,
+	"minecraft:lectern":              poiTypeLibrarian,
+	"minecraft:stonecutter":          poiTypeMason,
+	"minecraft:loom":                 poiTypeShepherd,
+	"minecraft:smithing_table":       poiTypeToolsmith,
+	"minecraft:grindstone":           poiTypeWeaponsmith,
+}
+
+// poiTypeVillage reports whether a poiType is a member of PoiTypeTags.VILLAGE. VERIFIED
+// registrydata/tags/point_of_interest_type/village.json = {#acquirable_job_site, home, meeting}. The
+// landed village members are HOME, MEETING and the 13 #acquirable_job_site job sites. This is the
+// holder.is(#village) predicate the raid center query and isVillageCenter use.
+func poiTypeVillage(pt *poiType) bool {
+	return pt == poiTypeHome || pt == poiTypeMeeting || acquirableJobSitePois[pt]
+}
+
+// poiTypeIsAcquirableJobSite is the #minecraft:acquirable_job_site predicate the villager CORE
+// AcquirePoi(profession.acquirableJobSite(), JOB_SITE) uses. VERIFIED acquirable_job_site.json.
+func poiTypeIsAcquirableJobSite(pt *poiType) bool { return acquirableJobSitePois[pt] }
+
+// poiTypeIsHome / poiTypeIsMeeting are the p.is(PoiTypes.HOME)/p.is(PoiTypes.MEETING) predicates the
+// villager CORE AcquirePoi(HOME/MEETING) uses.
+func poiTypeIsHome(pt *poiType) bool    { return pt == poiTypeHome }
+func poiTypeIsMeeting(pt *poiType) bool { return pt == poiTypeMeeting }
+
 // poiTypeForState is PoiTypes.forState(BlockState): the block-state -> PoiType map (Optional). A bed state
-// -> HOME, a bell state -> MEETING, else no POI. VERIFIED PoiTypes.bootstrap block sets (BEDS via
-// #minecraft:beds; MEETING via Blocks.BELL). The job-site block sets (composter/lectern/...) are deferred.
+// -> HOME, a bell state -> MEETING, a job-site block -> its job-site POI, else no POI. VERIFIED
+// PoiTypes.bootstrap block sets (BEDS via #minecraft:beds; MEETING via Blocks.BELL; job sites via
+// getBlockStates(<block>)).
 func poiTypeForState(s block.StateID) *poiType {
 	if isBedBlock(s) { // #minecraft:beds -> HOME
 		return poiTypeHome
@@ -82,7 +154,19 @@ func poiTypeForState(s block.StateID) *poiType {
 	if isBellBlock(s) { // Blocks.BELL -> MEETING
 		return poiTypeMeeting
 	}
+	if jt := jobSitePoiForState(s); jt != nil { // #acquirable_job_site block -> its job-site POI
+		return jt
+	}
 	return nil
+}
+
+// jobSitePoiForState maps a block state to its job-site PoiType via the block id (PoiTypes.
+// registerBlockStates registers EVERY state of the job-site block). Returns nil for a non-job-site block.
+func jobSitePoiForState(s block.StateID) *poiType {
+	if int(s) < 0 || int(s) >= len(block.StateList) {
+		return nil
+	}
+	return jobSitePoiForBlockID[block.StateList[s].ID()]
 }
 
 // isBellBlock reports whether the state is a bell (every bell state maps to MEETING, exactly as
@@ -274,6 +358,31 @@ func (m *poiManager) recordAt(pos pk.Position) *poiRecord {
 		return s.records[sectionRelativePos(pos)]
 	}
 	return nil
+}
+
+// take ports PoiManager.take(typePredicate, posPredicate, pos, radius): the villager-claim primitive.
+// AcquirePoi calls it after it has selected a target job-site pos; it looks up the record at pos, and if it
+// still matches the type predicate AND has a free ticket, it acquires the ticket (freeTickets-- ->
+// IS_OCCUPIED) and returns the claimed pos. Occupancy flipping to IS_OCCUPIED is what makes the section a
+// #village center (isVillageCenter) and thus unblocks the raid auto-trigger. VERIFIED CFR PoiManager.take:
+// getInSquare(typePredicate, posPredicate?, pos, 1, HAS_SPACE).findFirst().map(r -> { r.acquireTicket();
+// return r.getPos(); }). Here the caller passes the exact target pos, so the probe is the single cell.
+//
+//	[VERIFIED CFR PoiManager.take -> PoiRecord.acquireTicket (freeTickets-- when >0); setDirty on success.]
+func (m *poiManager) take(predicate func(*poiType) bool, pos pk.Position) (pk.Position, bool) {
+	rec := m.recordAt(pos)
+	if rec == nil {
+		return pk.Position{}, false
+	}
+	if predicate != nil && !predicate(rec.poiType) {
+		return pk.Position{}, false
+	}
+	if !rec.acquireTicket() {
+		return pk.Position{}, false
+	}
+	m.setDirty()
+	m.villageDist = map[int64]int{} // occupancy changed -> the village-distance cache is stale
+	return rec.pos, true
 }
 
 // getInSquare ports PoiManager.getInSquare(predicate, center, radius, occupancy): every record whose type

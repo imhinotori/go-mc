@@ -1,0 +1,11 @@
+name = "vanilla_villager"
+version = "0.1.0"
+entrypoint = "main.star"
+runtime = "starlark"
+# Least-privilege caps: NONE. The villager is a BRAIN mob (net.minecraft.world.entity.npc.villager.Villager
+# has NO registerGoals override — its AI is Brain-driven). Every ported behavior (Swim, LookAtTargetSink,
+# MoveToTargetSink, AcquirePoi(JOB_SITE), AssignProfessionFromJobSite) is HOST-side Go (server/
+# brain_villager.go), so the .star declares the mob (base_type + attributes) with an EMPTY goal list and
+# needs no capability grant — there are no .star goal callbacks to gate. Cite Villager.makeBrain /
+# registerBrainGoals (brain mob, empty goalSelector).
+capabilities = []

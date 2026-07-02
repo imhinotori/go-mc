@@ -116,6 +116,12 @@ var allFourMobs = []struct {
 	// ResetUniversalAnger@4) are cite-deferred in the .star header — each needs a not-yet-built villager/POI
 	// piece; NOT counted here (they ship with their targets/subsystems). Cite IronGolem.registerGoals.
 	{vanillaIronGolemMobName, entity.IronGolem.ID, 4, 3},
+	// VILLAGER (Task): the village NPC. A BRAIN mob — net.minecraft.world.entity.npc.villager.Villager has
+	// NO registerGoals override (its AI is the ported Brain, host-native), so its classic goalSelector +
+	// targetSelector are BOTH empty (0, 0). The brain (Swim/LookAtTargetSink/MoveToTargetSink + AcquirePoi(
+	// JOB_SITE) + AssignProfessionFromJobSite) is server/brain_villager.go, not a .star goal. Cite
+	// Villager.registerBrainGoals (empty goalSelector).
+	{vanillaVillagerMobName, entity.Villager.ID, 0, 0},
 }
 
 // TestAllFourMobsBootLoad: loadVanillaMobRegistry returns ONE registry holding the passive + hostile +
@@ -130,9 +136,9 @@ func TestAllFourMobsBootLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadVanillaMobRegistry: %v", err)
 	}
-	const wantTotal = 27 // + the IronGolem (village defender) added to the 26 (22 + pillager/vindicator/evoker/ravager)
+	const wantTotal = 28 // + the Villager (village NPC, brain mob) added to the 27 (26 + iron_golem)
 	if got := len(r.byName); got != wantTotal {
-		t.Fatalf("registry holds %d declarations, want %d (27: the 26 + iron_golem)", got, wantTotal)
+		t.Fatalf("registry holds %d declarations, want %d (28: the 27 + vanilla_villager)", got, wantTotal)
 	}
 	for _, m := range allFourMobs {
 		decl, ok := r.byName[m.name]
