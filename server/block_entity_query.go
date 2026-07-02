@@ -66,3 +66,81 @@ func (t *TickLoop) chestOpenCount(pos pk.Position) int {
 	}
 	return n
 }
+
+// isBlastFurnaceBlock / isSmokerBlock recognize the two AbstractFurnaceBlock subclasses that also drive a
+// furnace block-entity (GAMEPLAY-05). Siblings of isFurnaceBlock. CITE BlastFurnaceBlock / SmokerBlock.
+func isBlastFurnaceBlock(s block.StateID) bool {
+	if int(s) < 0 || int(s) >= len(block.StateList) {
+		return false
+	}
+	_, ok := block.StateList[s].(block.BlastFurnace)
+	return ok
+}
+
+func isSmokerBlock(s block.StateID) bool {
+	if int(s) < 0 || int(s) >= len(block.StateList) {
+		return false
+	}
+	_, ok := block.StateList[s].(block.Smoker)
+	return ok
+}
+
+// isAnyFurnaceBlock reports whether s is any of the three AbstractFurnaceBlock blocks (furnace,
+// blast_furnace, smoker) — the open/tick gate for the furnace block-entity subsystem.
+func isAnyFurnaceBlock(s block.StateID) bool {
+	return isFurnaceBlock(s) || isBlastFurnaceBlock(s) || isSmokerBlock(s)
+}
+
+// furnaceSubtypeOf returns the cook RecipeType a block state's furnace block-entity uses: smelting for a
+// furnace, blasting for a blast_furnace, smoking for a smoker (the AbstractFurnaceBlockEntity ctor's
+// recipeType per subclass). The second return is whether s is a furnace-family block at all.
+func furnaceSubtypeOf(s block.StateID) (cookSubtype, bool) {
+	switch {
+	case isFurnaceBlock(s):
+		return cookSmelting, true
+	case isBlastFurnaceBlock(s):
+		return cookBlasting, true
+	case isSmokerBlock(s):
+		return cookSmoking, true
+	}
+	return "", false
+}
+
+// furnaceWithLit ports state.setValue(AbstractFurnaceBlock.LIT, lit) for any of the three furnace-family
+// blocks: read the state's struct, flip its Lit boolean preserving Facing, and resolve the resulting
+// stateID via block.ToStateID. Returns (newState, true) on success, or (s, false) if s is not a
+// furnace-family state (the caller gates on isAnyFurnaceBlock, so false only guards a corrupt id).
+//
+// 1:1 net.minecraft.world.level.block.AbstractFurnaceBlock LIT property setValue.
+func furnaceWithLit(s block.StateID, lit bool) (block.StateID, bool) {
+	if int(s) < 0 || int(s) >= len(block.StateList) {
+		return s, false
+	}
+	switch b := block.StateList[s].(type) {
+	case block.Furnace:
+		b.Lit = block.Boolean(lit)
+		if id, ok := block.ToStateID[b]; ok {
+			return id, true
+		}
+	case block.BlastFurnace:
+		b.Lit = block.Boolean(lit)
+		if id, ok := block.ToStateID[b]; ok {
+			return id, true
+		}
+	case block.Smoker:
+		b.Lit = block.Boolean(lit)
+		if id, ok := block.ToStateID[b]; ok {
+			return id, true
+		}
+	}
+	return s, false
+}
+
+// setFurnaceBlockLit writes the LIT-toggled furnace state at pos into the world (level.setBlock(pos, state,
+// 3) in serverTick's wasLit != isLit branch). A nil world (tests without a world) is a cheap no-op.
+func (t *TickLoop) setFurnaceBlockLit(pos pk.Position, state block.StateID) {
+	if t.world() == nil {
+		return
+	}
+	t.world().SetBlock(pos, state, dimMinY)
+}

@@ -113,11 +113,24 @@ type Shapeless struct {
 }
 
 // Cooking is a smelting/blasting/smoking/campfire_cooking recipe — a single
-// ingredient + result (+ the cook metadata, recorded for the furnace subsystem).
+// ingredient + result (+ the cook metadata the furnace block-entity drive reads).
+//
+// Experience + CookingTime are the AbstractCookingRecipe fields the furnace
+// serverTick + result-take XP need:
+//   - Experience is the JSON "experience" float (default 0.0f — the
+//     AbstractCookingRecipe.cookingMapCodec optionalFieldOf("experience", 0.0f)).
+//   - CookingTime is the JSON "cookingtime" int, defaulting PER-SUBTYPE via the
+//     per-recipe-class MAP_CODEC default: smelting 200 (SmeltingRecipe.MAP_CODEC =
+//     cookingMapCodec(..., 200)), blasting/smoking/campfire 100
+//     (BlastingRecipe/SmokingRecipe/CampfireCookingRecipe = cookingMapCodec(...,
+//     100)). This is the furnace's getTotalCookTime source
+//     (AbstractCookingRecipe.cookingTime()).
 type Cooking struct {
-	Ingredient Ingredient
-	Result     Stack
-	Subtype    string // "smelting" | "blasting" | "smoking" | "campfire_cooking"
+	Ingredient  Ingredient
+	Result      Stack
+	Subtype     string  // "smelting" | "blasting" | "smoking" | "campfire_cooking"
+	Experience  float64 // JSON "experience", default 0.0 (AbstractCookingRecipe.experience)
+	CookingTime int     // JSON "cookingtime", default 200 (smelting) / 100 (others)
 }
 
 // Stonecutting is a single-ingredient cut recipe.

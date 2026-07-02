@@ -90,6 +90,14 @@ type openContainer struct {
 	mresult            component.SlotData
 	mselectionHint     int
 	mactiveOffer       int
+
+	// furnacePos is the world position of the open furnace/blast_furnace/smoker (kind ==
+	// containerKindFurnace, GAMEPLAY-05). The window's 3 slots (input/fuel/result) + the 2 progress data
+	// slots back onto the tick-owned furnaceBE at t.furnaces[furnacePos] — NO transient copy (unlike the
+	// crafting/stonecutter grids): the furnace container IS the block-entity (AbstractFurnaceMenu wraps the
+	// BE's SimpleContainer + ContainerData), so a click mutates the same items the cook drive ticks, and
+	// close just frees the window (the items persist in the BE, like a chest). ContainerLevelAccess reach.
+	furnacePos pk.Position
 }
 
 // containerKind discriminates an open non-inventory window.
@@ -100,6 +108,7 @@ const (
 	containerKindCrafting                         // a transient crafting-table 3x3 (craftGrid)
 	containerKindStonecutter                      // a transient stonecutter single-input picker (cutInput)
 	containerKindMerchant                         // a villager merchant window (2 payment + 1 result)
+	containerKindFurnace                          // a furnace/blast_furnace/smoker BE (furnacePos)
 )
 
 // chestMenuSize is the chest-window slot count: 27 chest container slots + 27 player main + 9
@@ -166,8 +175,9 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 	isCraft := isCraftingTableBlock(state)
 	isCut := isStonecutterBlock(state)
 	isBed := isBedBlock(state)
-	if !isChest && !isCraft && !isCut && !isBed {
-		return false // not an interactive block (chest/crafting_table/stonecutter/bed): PASS → placement runs
+	isFurnace := isAnyFurnaceBlock(state)
+	if !isChest && !isCraft && !isCut && !isBed && !isFurnace {
+		return false // not an interactive block (chest/crafting_table/stonecutter/bed/furnace): PASS → placement runs
 	}
 	// Reach-gate the interaction (the same server-authoritative reach the place/break paths use):
 	// a far block is not openable. Vanilla gates the whole useItemOn behind the interaction
@@ -191,6 +201,12 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 		// consumes the action on any bed click (the bl9 sneak guard collapses to false in v1, like the
 		// chest path), so placement is skipped whenever the target is a bed.
 		return t.useBed(p, hitPos)
+	}
+	if isFurnace {
+		// AbstractFurnaceBlock.useWithoutItem -> player.openMenu(furnace/blast_furnace/smoker). The 3-slot
+		// furnace menu opens on any right-click (the bl9 sneak guard collapses to false in v1, like the
+		// chest path), so placement is skipped whenever the target is a furnace-family block.
+		return t.openFurnace(p, hitPos)
 	}
 	return t.openChest(p, hitPos)
 }

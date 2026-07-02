@@ -360,6 +360,15 @@ type TickLoop struct {
 	// on-tick). A future plan flushes this back to the chunk BE NBT on unload/save.
 	openChests map[pk.Position]*chestLoot
 
+	// furnaces is the runtime store of furnace/blast_furnace/smoker BLOCK-ENTITIES keyed by world position
+	// (GAMEPLAY-05 furnace, the openChests twin). A furnace's per-tick drive (furnace_be.go
+	// furnaceServerTick) reads/writes its furnaceBE here every tick (tickWorld); the menu (furnace_menu.go)
+	// resolves the SAME furnaceBE on open so clicks + the cook drive share one state. Lazily constructed;
+	// tick-owned (TICK-05 — resolved/mutated only on the tick goroutine). Like openChests, the BE NBT
+	// save/load seam (AbstractFurnaceBlockEntity.loadAdditional/saveAdditional) is a persistence follow-up;
+	// the live in-memory drive is fully faithful.
+	furnaces map[pk.Position]*furnaceBE
+
 	// chunkSaver is the off-tick chunk-persistence consumer (SUB-PERSIST). It is nil until
 	// SetChunkSaver wires it (tests/ephemeral runs leave it nil → no chunk saves). The tick's save
 	// phase (tickChunkSave) drains the manager's dirty set, SERIALIZES each dirty/unloaded chunk ON

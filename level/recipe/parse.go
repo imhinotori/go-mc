@@ -189,6 +189,12 @@ type rawRecipe struct {
 	Ingredients []json.RawMessage          `json:"ingredients"`
 	Ingredient  json.RawMessage            `json:"ingredient"`
 	Result      *rawResult                 `json:"result"`
+	// Cooking-only fields (AbstractCookingRecipe): "experience" (float, optional,
+	// default 0.0) + "cookingtime" (int, optional, default is PER-SUBTYPE and
+	// applied in parseCooking, NOT here — a nil pointer means "use the subtype
+	// default"). Pointers so an omitted field is distinguishable from an explicit 0.
+	Experience  *float64 `json:"experience"`
+	CookingTime *int     `json:"cookingtime"`
 }
 
 // parseRecipe decodes one recipe file into a Recipe, dispatching on the "type"
@@ -397,7 +403,40 @@ func (r *resolver) parseCooking(raw rawRecipe, subtype string) (*Cooking, error)
 	if err != nil {
 		return nil, fmt.Errorf("cooking: %w", err)
 	}
-	return &Cooking{Ingredient: ing, Result: result, Subtype: subtype}, nil
+	// experience: JSON "experience", default 0.0 (AbstractCookingRecipe.cookingMapCodec
+	// optionalFieldOf("experience", 0.0f)).
+	exp := 0.0
+	if raw.Experience != nil {
+		exp = *raw.Experience
+	}
+	// cookingtime: JSON "cookingtime", PER-SUBTYPE default when omitted — smelting 200,
+	// blasting/smoking/campfire_cooking 100 (the per-recipe-class MAP_CODEC default arg:
+	// SmeltingRecipe.MAP_CODEC = cookingMapCodec(..., 200);
+	// BlastingRecipe/SmokingRecipe/CampfireCookingRecipe = cookingMapCodec(..., 100)).
+	cookTime := cookingTimeDefault(subtype)
+	if raw.CookingTime != nil {
+		cookTime = *raw.CookingTime
+	}
+	return &Cooking{
+		Ingredient:  ing,
+		Result:      result,
+		Subtype:     subtype,
+		Experience:  exp,
+		CookingTime: cookTime,
+	}, nil
+}
+
+// cookingTimeDefault returns the per-subtype default cookingtime the vanilla
+// per-recipe-class MAP_CODEC uses when the JSON omits "cookingtime": 200 for
+// smelting, 100 for blasting/smoking/campfire_cooking.
+//
+// 1:1 net.minecraft.world.item.crafting.{SmeltingRecipe,BlastingRecipe,
+// SmokingRecipe,CampfireCookingRecipe}.MAP_CODEC (the cookingMapCodec default arg)
+func cookingTimeDefault(subtype string) int {
+	if subtype == "smelting" {
+		return 200
+	}
+	return 100 // blasting / smoking / campfire_cooking
 }
 
 func (r *resolver) parseStonecutting(raw rawRecipe) (*Stonecutting, error) {
@@ -417,4 +456,3 @@ func (r *resolver) parseStonecutting(raw rawRecipe) (*Stonecutting, error) {
 	}
 	return &Stonecutting{Ingredient: ing, Result: result}, nil
 }
-

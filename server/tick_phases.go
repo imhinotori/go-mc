@@ -108,6 +108,11 @@ func (t *TickLoop) tickWorld() {
 		t.tickScheduledBlocks()
 		t.tickFluids()
 	})
+	// SUB-BLOCKENTITY: tick every furnace/blast_furnace/smoker block-entity (GAMEPLAY-05
+	// AbstractFurnaceBlockEntity.serverTick). Furnaces are keyed by world position (t.furnaces, global —
+	// not per-region), so they tick ONCE globally here (the tickChunkSave twin), after the per-region
+	// block/fluid drains. A furnace with no items ticks to a cheap no-op. Nil map = no-op (no furnace open).
+	t.tickFurnaces()
 	// SUB-PERSIST: the periodic chunk-save pass (every chunkSaveIntervalTicks) stays GLOBAL — it
 	// serializes the SHARED world's dirty chunks once, not per region. It lives INSIDE this existing
 	// phase so no new phase is added to the fixed tick order (TestTickPhaseOrder stays green). A
