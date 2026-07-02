@@ -513,6 +513,13 @@ func (t *TickLoop) tickAI() {
 		if e.typ == entity.Vex.ID {
 			t.vexAiStep(e)
 		}
+		// IRON GOLEM (Task): the IronGolem.aiStep countdowns (attackAnimationTick + offerFlowerTick decrements)
+		// + updatePersistentAnger (the gametime-endpoint anger expiry, a no-op read). Per-type-gated like the
+		// ravager/vex, AFTER serverAiStep. ADDITIVE + golem-gated (zero cost / zero RNG for every non-golem —
+		// the pig oracle stream is untouched). Cite IronGolem.aiStep.
+		if e.typ == entity.IronGolem.ID {
+			t.ironGolemAiStep(e)
+		}
 	}
 
 	// Throttled natural spawner: vanilla attempts every tick (most no-op under cap); v1 runs the

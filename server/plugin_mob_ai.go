@@ -205,7 +205,7 @@ func buildAIFromDecl(t *TickLoop, decl *mobDecl) *mobAI {
 				// hunt/attack). spawnDeclaredMob runs on the tick goroutine; a panic here is isolated by
 				// the tickOnce recover backstop, surfacing the bad declaration loudly rather than shipping
 				// a silently-disarmed hostile. (The .star load already validated the rest of the mob.)
-				panic("buildAIFromDecl: unknown goal kind " + gd.nativeKind + " (valid: nearest_attackable_target, hurt_by_target, melee_attack, spider_attack, leap_at_target, avoid_entity, float, climb_on_powder_snow, sit, follow_owner, owner_hurt_by, owner_hurt, angry_player_target, skeleton_target, enderman_look_for_player, enderman_freeze_when_looked_at, silverfish_merge_stone, silverfish_wake_friends, cube_float, cube_random_direction, cube_keep_on_jumping, fox_faceplant, fox_stalk, fox_pounce, fox_seek_shelter, fox_sleep, fox_perch_search, fox_defend_trusted, fox_land_target, fox_search_items, turtle_goto_water, turtle_go_home, turtle_travel, turtle_lay_egg, restrict_sun, flee_sun, nearest_healable_raider_target, cat_relax_on_owner, cat_lie_on_bed, cat_sit_on_block, long_distance_patrol, pillager_crossbow_attack, evoker_casting_spell, evoker_summon_spell, evoker_attack_spell, evoker_wololo_spell)")
+				panic("buildAIFromDecl: unknown goal kind " + gd.nativeKind + " (valid: nearest_attackable_target, hurt_by_target, melee_attack, spider_attack, leap_at_target, avoid_entity, float, climb_on_powder_snow, sit, follow_owner, owner_hurt_by, owner_hurt, angry_player_target, skeleton_target, enderman_look_for_player, enderman_freeze_when_looked_at, silverfish_merge_stone, silverfish_wake_friends, cube_float, cube_random_direction, cube_keep_on_jumping, fox_faceplant, fox_stalk, fox_pounce, fox_seek_shelter, fox_sleep, fox_perch_search, fox_defend_trusted, fox_land_target, fox_search_items, turtle_goto_water, turtle_go_home, turtle_travel, turtle_lay_egg, restrict_sun, flee_sun, nearest_healable_raider_target, cat_relax_on_owner, cat_lie_on_bed, cat_sit_on_block, long_distance_patrol, iron_golem_hostile_target, pillager_crossbow_attack, evoker_casting_spell, evoker_summon_spell, evoker_attack_spell, evoker_wololo_spell)")
 			}
 			// The Go goal's OWN flags() must match the declared flags — a declaration that names, e.g.,
 			// kind="melee_attack" but flags=["TARGET"] would route the goal into the WRONG selector AND
@@ -412,6 +412,12 @@ func buildNativeGoal(kind string, gd goalDecl, decl *mobDecl) Goal {
 		// — {TARGET}, NO anger gate (wolves attack skeletons on sight). findTarget scans entity.Skeleton.ID
 		// within FOLLOW_RANGE.
 		return newSkeletonTargetGoal()
+	case "iron_golem_hostile_target":
+		// IRON GOLEM (Task): IronGolem targetSelector @3 NearestAttackableTargetGoal<Mob>(this, Mob.class, 5,
+		// false, false, Enemy && !Creeper) — {TARGET}, NO anger gate (the golem always hunts hostile mobs).
+		// findTarget scans the nearest Monster-category (Enemy-proxy) mob within FOLLOW_RANGE, excluding
+		// Creeper. Cite IronGolem.registerGoals targetSelector @3 (Mob, Enemy && !Creeper).
+		return newIronGolemHostileTargetGoal()
 	case "enderman_look_for_player":
 		// MOB-HOST-08 (Task #9, gaze): EnderMan.EndermanLookForPlayerGoal — targetSelector @1, {TARGET}.
 		// The REAL gaze-aggro (a player only angers the enderman by LOOKING at it, or by having already

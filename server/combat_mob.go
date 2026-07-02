@@ -143,9 +143,16 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 		//	 .sample(this.random)); UniformInt.sample = minInclusive + nextInt(max-min+1) = 400 + nextInt(381).
 		//	 NeutralMob.setPersistentAngerTarget(entity); setRemainingPersistentAngerTime → angerEndTime =
 		//	 gameTime + sampled. NeutralMob.isAngry(): angerEndTime > 0 && (angerEndTime - gameTime) > 0.]
-		if e.typ == entity.Wolf.ID && t.playerByEntityID(src.attacker) != nil {
-			// DRAW (the anger timer, wolf-gated, player-attacker-gated): UniformInt(400,780).sample =
-			// 400 + nextInt(381). ONE draw per fresh hit on a wolf by a player.
+		// IRON GOLEM (Task): the golem is ALSO a NeutralMob. IronGolem.PERSISTENT_ANGER_TIME =
+		// TimeUtil.rangeOfSeconds(20,39) == UniformInt(400,780) — IDENTICAL to the wolf's, so the same
+		// 400 + nextInt(381) sample applies. A golem hit by a PLAYER becomes angry, and its @3 anger-gated
+		// NearestAttackableTargetGoal<Player> (angry_player_target) then retaliates. Gated on typ ==
+		// entity.Wolf.ID || entity.IronGolem.ID (only these two NeutralMobs get the player-anger timer) AND a
+		// PLAYER attacker. The single nextInt(381) draw is on the mob's OWN mobRandom stream (the pig — never a
+		// wolf/golem — draws ZERO). Cite IronGolem.startPersistentAngerTimer + NeutralMob.isAngry.
+		if (e.typ == entity.Wolf.ID || e.typ == entity.IronGolem.ID) && t.playerByEntityID(src.attacker) != nil {
+			// DRAW (the anger timer, wolf/golem-gated, player-attacker-gated): UniformInt(400,780).sample =
+			// 400 + nextInt(381). ONE draw per fresh hit on a wolf/golem by a player.
 			e.angerEndTime = t.gametime + int64(400+mobRandom(e).nextInt(381))
 			e.angerTarget = src.attacker // setPersistentAngerTarget(the attacking player)
 		}

@@ -110,6 +110,12 @@ var allFourMobs = []struct {
 	{vanillaVindicatorMobName, entity.Vindicator.ID, 6, 2},
 	{vanillaEvokerMobName, entity.Evoker.ID, 9, 2},
 	{vanillaRavagerMobName, entity.Ravager.ID, 6, 2},
+	// IRON GOLEM (Task): the village defender. goalSelector = melee_attack@1 + golem_stroll@4 + look@7 +
+	// around@8 (4); targetSelector = hurt_by@2 + angry_player_target@3 + iron_golem_hostile_target@3 (3). The
+	// 5 village/villager goals (MoveTowardsTarget@2, MoveBackToVillage@2, OfferFlower@5, DefendVillage@1,
+	// ResetUniversalAnger@4) are cite-deferred in the .star header — each needs a not-yet-built villager/POI
+	// piece; NOT counted here (they ship with their targets/subsystems). Cite IronGolem.registerGoals.
+	{vanillaIronGolemMobName, entity.IronGolem.ID, 4, 3},
 }
 
 // TestAllFourMobsBootLoad: loadVanillaMobRegistry returns ONE registry holding the passive + hostile +
@@ -124,9 +130,9 @@ func TestAllFourMobsBootLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadVanillaMobRegistry: %v", err)
 	}
-	const wantTotal = 26 // + the 4 RaiderType mobs (pillager/vindicator/evoker/ravager) added to the 22
+	const wantTotal = 27 // + the IronGolem (village defender) added to the 26 (22 + pillager/vindicator/evoker/ravager)
 	if got := len(r.byName); got != wantTotal {
-		t.Fatalf("registry holds %d declarations, want %d (26: the 22 + pillager/vindicator/evoker/ravager)", got, wantTotal)
+		t.Fatalf("registry holds %d declarations, want %d (27: the 26 + iron_golem)", got, wantTotal)
 	}
 	for _, m := range allFourMobs {
 		decl, ok := r.byName[m.name]

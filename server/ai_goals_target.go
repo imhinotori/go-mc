@@ -68,6 +68,12 @@ const (
 	// within FOLLOW_RANGE (the same mob-vs-mob nearestEntityOfTypeAt the skeleton branch uses). Cite
 	// Fox.registerGoals landTargetGoal.
 	targetClassFoxPrey
+	// targetClassHostileMob is the IronGolem @3 NearestAttackableTargetGoal<Mob>(this, Mob.class, 5, false,
+	// false, (target, level) -> target instanceof Enemy && !(target instanceof Creeper)) branch: findTarget
+	// scans the entity store for the nearest Enemy (Monster-category) mob within FOLLOW_RANGE that is NOT a
+	// Creeper — the golem hunts zombies/skeletons/spiders/husks/silverfish/witches/... but never a creeper.
+	// Cite IronGolem.registerGoals targetSelector @3 (Mob, Enemy && !Creeper).
+	targetClassHostileMob
 )
 
 // nearestAttackableTargetGoal ports NearestAttackableTargetGoal<T> (flags {TARGET}). It acquires the
@@ -151,6 +157,20 @@ func newFoxLandTargetGoal() *nearestAttackableTargetGoal {
 	}
 }
 
+// newIronGolemHostileTargetGoal builds the IronGolem @3 NearestAttackableTargetGoal<Mob>(this, Mob.class,
+// 5, false, false, Enemy && !Creeper) — the HOSTILE-MOB class, NO anger gate (the golem always hunts
+// hostiles). findTarget scans the entity store for the nearest Enemy (Monster-category) mob within
+// FOLLOW_RANGE, excluding Creeper (targetClassHostileMob). The randomInterval stays the shared
+// nearestTargetRandomInterval (the full-rate 10). Cite IronGolem.registerGoals targetSelector @3 (Mob,
+// Enemy && !Creeper).
+func newIronGolemHostileTargetGoal() *nearestAttackableTargetGoal {
+	return &nearestAttackableTargetGoal{
+		baseGoal:       newBaseGoal(flagTarget),
+		randomInterval: nearestTargetRandomInterval,
+		targetClass:    targetClassHostileMob,
+	}
+}
+
 // canUse ports NearestAttackableTargetGoal.canUse (bytecode-verified this session):
 //
 //	if (randomInterval > 0 && mob.getRandom().nextInt(randomInterval) != 0) return false;  // RNG GATE
@@ -220,6 +240,34 @@ func (g *nearestAttackableTargetGoal) findTarget(t *TickLoop, e *Entity) {
 			g.target = id
 			return
 		}
+	case targetClassHostileMob:
+		// The IronGolem hostile-mob branch: the nearest Enemy (Monster-category) mob within FOLLOW_RANGE that
+		// is NOT a Creeper. The Enemy interface in vanilla is implemented by the Monster subclasses; v1 uses
+		// categoryOf(typ) == categoryMonster as the faithful Enemy proxy (the same MobCategory the natural
+		// spawner + the cap accounting read), excluding entity.Creeper.ID exactly as the jar predicate does.
+		// Cite IronGolem.registerGoals targetSelector @3 (target instanceof Enemy && !(target instanceof Creeper)).
+		bestID, bestOK := int32(0), false
+		best := follow * follow
+		for _, other := range t.cur().entities.near(e.x, e.z, int(math.Ceil(follow/16.0))) {
+			if other == e || other.dead {
+				continue
+			}
+			if other.typ == entity.Creeper.ID { // !(target instanceof Creeper)
+				continue
+			}
+			if categoryOf(other.typ) != categoryMonster { // target instanceof Enemy (Monster-category proxy)
+				continue
+			}
+			d := entityDistSqr(e, other)
+			if d <= best {
+				best = d
+				bestID, bestOK = other.id, true
+			}
+		}
+		if bestOK {
+			g.target = bestID
+			return
+		}
 	case targetClassFoxPrey:
 		// The Fox landTarget branch: the nearest Chicken OR Rabbit within FOLLOW_RANGE. Scans both prey
 		// types and keeps the closer (the getNearestEntity(getEntitiesOfClass(Animal, area, chicken||rabbit))
@@ -272,7 +320,7 @@ func (g *nearestAttackableTargetGoal) canContinueToUse(t *TickLoop, e *Entity) b
 		return false
 	}
 	follow := e.getAttributeValue(attribute.FollowRange)
-	if g.targetClass == targetClassSkeleton || g.targetClass == targetClassFoxPrey {
+	if g.targetClass == targetClassSkeleton || g.targetClass == targetClassFoxPrey || g.targetClass == targetClassHostileMob {
 		// SKELETON class: resolve the target through the OWNING-region entity store (a skeleton is an
 		// *Entity, not a player) + the live FOLLOW_RANGE distance bound. t.cur() is the region whose
 		// fan-out is running this goal — the SAME store nearestEntityOfTypeAt scanned (the v5 same-region

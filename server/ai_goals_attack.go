@@ -318,6 +318,15 @@ func (g *meleeAttackGoal) checkAndPerformAttack(t *TickLoop, e *Entity, target *
 	if e.typ == entity.Ravager.ID {
 		t.ravagerDidHurt(e)
 	}
+	// IronGolem.doHurtTarget is a FULL OVERRIDE (IRON GOLEM Task): its damage is the range formula
+	// (ad/2 + nextInt(ad), NOT the flat ATTACK_DAMAGE) and it ADDS a vertical fling on top of hurtServer's
+	// own knockback — a completely different shape from the shared Mob.doHurtTarget. So for a golem we call
+	// the golem override INSTEAD of g.doHurtTarget (never both). Golem-gated (zero cost for every other mob).
+	// Cite IronGolem.doHurtTarget (ai_goals_iron_golem.go).
+	if e.typ == entity.IronGolem.ID {
+		t.ironGolemDoHurtTarget(e, target)
+		return
+	}
 	g.doHurtTarget(t, e, target)
 }
 

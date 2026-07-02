@@ -299,6 +299,21 @@ type Entity struct {
 	ravagerStunnedTick int32
 	ravagerRoarTick    int32
 
+	// --- IRON GOLEM state (net.minecraft.world.entity.animal.golem.IronGolem) ----------------------
+	//
+	// Tick-owned plain values, set/read ONLY for an IronGolem (ironGolemAiStep + the doHurtTarget override
+	// gate on typ == entity.IronGolem.ID). ironGolemAttackAnimationTick mirrors IronGolem.attackAnimationTick
+	// (set to 10 in doHurtTarget + on handleEntityEvent(4), counted down in aiStep — the swing animation);
+	// ironGolemOfferFlowerTick mirrors IronGolem.offerFlowerTick (OFFER_TICKS 400, counted down in aiStep —
+	// the poppy-offer animation, cite-deferred goal); ironGolemPlayerCreated mirrors the DATA_FLAGS_ID bit
+	// 0x01 (isPlayerCreated — a player-built golem never hunts players; no construction path in v1 so it stays
+	// false for village/dbg golems). Zero/false for every non-golem entity.
+	//	[VERIFIED CFR IronGolem: attackAnimationTick=10 in doHurtTarget/handleEntityEvent(4); offerFlowerTick
+	//	 OFFER_TICKS=400; isPlayerCreated (DATA_FLAGS_ID & 1); aiStep decrements both ticks.]
+	ironGolemAttackAnimationTick int32
+	ironGolemOfferFlowerTick     int32
+	ironGolemPlayerCreated       bool
+
 	// --- EVOKER / SpellcasterIllager state (net.minecraft.world.entity.monster.illager.Evoker) ------
 	//
 	// Tick-owned plain values, set/read ONLY for an Evoker (the evoker spell goals + evokerAiStep gate on

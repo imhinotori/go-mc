@@ -208,6 +208,12 @@ func categoryOf(t entity.ID) mobCategory {
 		// MobCategory.MONSTER).sized(1.95, 2.2); data/entity Ravager.Type == "monster", id 109). Same MONSTER-
 		// budget accounting. (Ravager spawns ONLY in raids - never a uniform natural spawn - so it stays OUT.)
 		return categoryMonster
+	case entity.IronGolem.ID:
+		// IRON GOLEM (Task): IronGolem is MobCategory.MISC (vanilla EntityTypes.IRON_GOLEM = Builder.of(...,
+		// MobCategory.MISC); data/entity IronGolem.Type == "misc", id 70). MISC's cap is -1 (uncapped) and MISC
+		// mobs are NOT placed by the uniform natural spawner, so the golem stays OUT of the natural pool — it is
+		// village-summoned or manually placed (/dbg). Explicit (rather than the misc default) for recipe parity.
+		return categoryMisc
 	default:
 		return categoryMisc
 	}

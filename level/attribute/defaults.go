@@ -304,6 +304,23 @@ func ravagerSupplier() *Supplier {
 		Build()
 }
 
+// ironGolemSupplier is IronGolem's attribute supplier. IronGolem.createAttributes = Mob.createMobAttributes()
+// (NOT Monster/Animal — the golem has NO base ATTACK_DAMAGE 2.0 / TEMPT_RANGE; it ADDS ATTACK_DAMAGE 15.0
+// explicitly) .add(MAX_HEALTH 100).add(MOVEMENT_SPEED 0.25).add(KNOCKBACK_RESISTANCE 1.0).add(ATTACK_DAMAGE
+// 15.0).add(STEP_HEIGHT 1.0). No ATTACK_KNOCKBACK override (stays the createLivingAttributes default 0.0 —
+// the golem's fling is the doHurtTarget vertical impulse, NOT an ATTACK_KNOCKBACK modifier). All plain
+// doubles (no float widening). AbstractGolem has NO createAttributes override, so IronGolem builds directly
+// on Mob.createMobAttributes. Cite net.minecraft.world.entity.animal.golem.IronGolem.createAttributes.
+func ironGolemSupplier() *Supplier {
+	return createMobAttributes().
+		AddValue(MaxHealth, 100.0).
+		AddValue(MovementSpeed, 0.25).
+		AddValue(KnockbackResistance, 1.0).
+		AddValue(AttackDamage, 15.0).
+		AddValue(StepHeight, 1.0).
+		Build()
+}
+
 // happyGhastSupplier is the port of HappyGhast.createAttributes(): Animal.createAnimalAttributes()
 // (which adds TEMPT_RANGE 10.0) then .add(MAX_HEALTH 20.0).add(TEMPT_RANGE 16.0).add(FLYING_SPEED 0.05)
 // .add(MOVEMENT_SPEED 0.05).add(FOLLOW_RANGE 16.0).add(CAMERA_DISTANCE 8.0). The later TEMPT_RANGE 16.0
@@ -515,6 +532,11 @@ var suppliers = map[string]*Supplier{
 	// MAX_HEALTH 14.0 + ATTACK_DAMAGE 4.0). EvokerFangs is a NON-living projectile ("misc"), so it has
 	// NO supplier -- it falls to nil (like arrow/potion) via isLivingType, the faithful outcome.
 	"vex": vexSupplier(),
+	// IRON GOLEM (Task): the village defender. IronGolem builds on Mob.createMobAttributes (not Monster/
+	// Animal); ironGolemSupplier is a 1:1 copy of IronGolem.createAttributes. Keyed by registry name so
+	// NewMapForEntity resolves it FIRST (before the living-fallback) even though the golem's MobCategory is
+	// "misc" — a "misc"-category LivingEntity with a dedicated supplier still gets its faithful attributes.
+	"iron_golem": ironGolemSupplier(),
 }
 
 // livingCategories is the set of data/entity.Entity.Type values that correspond to a vanilla

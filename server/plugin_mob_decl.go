@@ -186,6 +186,12 @@ var baseTypeByName = map[string]entity.Entity{
 	"vindicator": entity.Vindicator,
 	"evoker":     entity.Evoker,
 	"ravager":    entity.Ravager,
+	// IRON GOLEM (Task): the village defender. Renders as its OWN wire type (entity.IronGolem, id 70).
+	// IronGolem extends AbstractGolem -> PathfinderMob; its MobCategory is MISC (data/entity IronGolem.Type
+	// == "misc") but it IS a LivingEntity with a dedicated attribute supplier (ironGolemSupplier). Its
+	// combat/target goals are Go-native (kind=); the doHurtTarget damage/fling is ironGolemDidHurt. Cite
+	// net.minecraft.world.entity.animal.golem.IronGolem.registerGoals.
+	"iron_golem": entity.IronGolem,
 }
 
 // resolveBaseType resolves a base_type string to its data/entity record. (record, true) for an
