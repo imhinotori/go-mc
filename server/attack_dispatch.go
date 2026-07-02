@@ -871,7 +871,71 @@ func (t *TickLoop) handleInteract(p *tickPlayer, pkt pk.Packet) {
 	if mob.typ == entity.HappyGhast.ID && t.tryHappyGhastRide(p, mob, bool(usingSecondaryAction)) {
 		return // the ride handled the interact
 	}
+	// VILLAGER MERCHANT MENU (net.minecraft.world.entity.npc.villager.Villager.mobInteract): a right-click on
+	// a live, non-baby, non-trading, non-sleeping villager opens the trading screen (startTrading ->
+	// openMenu(MerchantMenu) + ClientboundMerchantOffers). villagerMobInteract returns true whenever the
+	// interact belongs to the villager (a menu open, an unhappy no-offers/baby consume, or a busy/sleeping
+	// no-op) so handleInteract does NOT fall through to the feed path — a villager is not fed via the pig
+	// tag. Villager-gated (typ == entity.Villager.ID) so it is a zero-cost no-op for a pig/cow/sheep; the
+	// only RNG draw (rewardTradeXp's 3+nextInt(4) on a successful trade-take) is on the villager's OWN
+	// per-entity stream, so the pig oracle is unperturbed. Cite Villager.mobInteract.
+	if mob.typ == entity.Villager.ID && t.villagerMobInteract(p, mob) {
+		return // the villager interact (menu open / unhappy / busy) handled the click
+	}
 	t.tryFeedAnimal(p, mob)
+}
+
+// villagerMobInteract ports net.minecraft.world.entity.npc.villager.Villager.mobInteract for the trading
+// path (the villager-spawn-egg branch is out of the v1 subset — no spawn-egg-on-villager duplicate action —
+// so the leading `!itemStack.is(VILLAGER_SPAWN_EGG)` gate is a cited const-true here):
+//
+//	if (isAlive && !isTrading && !isSleeping) {
+//	    if (isBaby) { setUnhappy(); return SUCCESS; }              // a baby cannot trade
+//	    if (!clientSide) {
+//	        noOffers = getOffers().isEmpty();
+//	        if (hand == MAIN_HAND) { if (noOffers) setUnhappy(); awardStat(TALKED_TO_VILLAGER); }
+//	        if (noOffers) return CONSUME;                          // no offers -> consume, no menu
+//	        startTrading(player);                                  // open the merchant menu
+//	    }
+//	    return SUCCESS;
+//	}
+//	return super.mobInteract(...);   // busy/sleeping -> fall through (v1: no super trading action -> no-op)
+//
+// Returns true when the interact is CONSUMED by the villager (a menu open, an unhappy no-offers/baby, or a
+// busy/sleeping villager that vanilla would still not feed). It returns false ONLY when the villager is not
+// a trading target at all — but a villager is never pig_food-fed, so a false here still must not fall to the
+// feed path; we return true for every villager click to match "a villager click is a trade attempt, not a
+// feed". The v1 isSleeping/isBaby reads: isBaby is the real breedAge<0 read; isSleeping is a cited
+// const-false stub (no villager sleep pose wired) — structured so a real sleep read flips the guard later.
+//
+//	[VERIFIED CFR Villager.mobInteract: the isAlive && !isTrading && !isSleeping gate; isBaby -> setUnhappy
+//	 + SUCCESS; server noOffers gate -> CONSUME or startTrading; SUCCESS.]
+func (t *TickLoop) villagerMobInteract(p *tickPlayer, villager *Entity) bool {
+	// isAlive() (v1: a resolved live entity) && !isTrading() && !isSleeping() (sleep is a cited const-false
+	// stub — no villager sleep pose). A villager already trading with someone is busy: a no-op consume.
+	if villagerIsTrading(villager) {
+		return true // busy -> the click is consumed but opens nothing (vanilla's super.mobInteract no-trade tail)
+	}
+
+	// isBaby -> setUnhappy + SUCCESS (a baby villager cannot trade). setUnhappy (unhappyCounter=40 +
+	// VILLAGER_NO sound) is a cited no-op here (no unhappy-counter/sound subsystem); the CONSUME is what
+	// matters (no feed fall-through).
+	if villager.isBaby() {
+		// setUnhappy(): cited no-op (unhappy counter + VILLAGER_NO sound not wired).
+		return true
+	}
+
+	// server: noOffers = getOffers().isEmpty(). MAIN_HAND: (noOffers ? setUnhappy) + awardStat (v1 no-op).
+	offers := villagerGetOffers(villager)
+	if offers.isEmpty() {
+		// setUnhappy() + CONSUME: cited no-op unhappy, but the interact is consumed (no menu, no feed).
+		return true
+	}
+
+	// startTrading(player): open the merchant menu. If the open fails (no client) the click is still
+	// consumed by the villager (vanilla returns SUCCESS regardless of the menu container id).
+	t.openMerchantMenu(p, villager)
+	return true
 }
 
 // tryFeedAnimal is the port of net.minecraft.world.entity.animal.Animal.mobInteract's FEED branch for

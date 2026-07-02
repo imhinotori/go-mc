@@ -195,9 +195,9 @@ func TestVillagerClaimsJobSiteMakesVillage(t *testing.T) {
 			t.Fatal("after the villager claim, the job-site section must be a village (raid trigger unblocked)")
 		}
 
-		// villagerOffersFor now resolves the FARMER level-1 trades for this villager.
-		if villagerStartTrading(e).isEmpty() {
-			t.Fatal("a FARMER level-1 villager must have non-empty offers (villagerStartTrading)")
+		// villagerGetOffers now resolves the FARMER level-1 trades for this villager (lazy-built + cached).
+		if villagerGetOffers(e).isEmpty() {
+			t.Fatal("a FARMER level-1 villager must have non-empty offers (villagerGetOffers)")
 		}
 	})
 }

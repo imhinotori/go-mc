@@ -73,6 +73,23 @@ type openContainer struct {
 	cutResult   component.SlotData
 	cutResults  []recipe.Stack
 	cutSelected int
+
+	// merchantVillagerID / mpay0 / mpay1 / mresult / mselectionHint / mactiveOffer back the MERCHANT
+	// window (kind == containerKindMerchant, VILLAGER-MENU): the trading Villager's thin entity id
+	// (merchantVillagerID — the Merchant the menu is bound to, resolved back through its owning region on
+	// each click), the two transient PAYMENT input slots (mpay0/mpay1, MerchantContainer.itemStacks[0/1]),
+	// the displayed RESULT (mresult, MerchantContainer.itemStacks[2] — a virtual assembled stack), the
+	// selectionHint (mselectionHint, the ServerboundSelectTrade index → MerchantContainer.selectionHint),
+	// and the currently-active offer index (mactiveOffer, MerchantContainer.activeOffer reduced to the
+	// offer's list index; -1 = none). On close the two payment inputs are returned to the player
+	// (MerchantMenu.removed -> placeItemBackInInventory over slots 0,1; the result is virtual, not returned).
+	// No block-entity (transient).
+	merchantVillagerID int32
+	mpay0              component.SlotData
+	mpay1              component.SlotData
+	mresult            component.SlotData
+	mselectionHint     int
+	mactiveOffer       int
 }
 
 // containerKind discriminates an open non-inventory window.
@@ -80,8 +97,9 @@ type containerKind int
 
 const (
 	containerKindChest       containerKind = iota // a world chest (chestPos)
-	containerKindCrafting                          // a transient crafting-table 3x3 (craftGrid)
-	containerKindStonecutter                       // a transient stonecutter single-input picker (cutInput)
+	containerKindCrafting                         // a transient crafting-table 3x3 (craftGrid)
+	containerKindStonecutter                      // a transient stonecutter single-input picker (cutInput)
+	containerKindMerchant                         // a villager merchant window (2 payment + 1 result)
 )
 
 // chestMenuSize is the chest-window slot count: 27 chest container slots + 27 player main + 9

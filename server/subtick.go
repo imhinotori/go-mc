@@ -242,6 +242,14 @@ func (t *TickLoop) applyInput(p *tickPlayer, in SubtickInput) {
 		// A forged/stale window or out-of-range index is a silent no-op inside the handler.
 		t.handleContainerButtonClick(p, in.Packet)
 
+	case packetid.ServerboundSelectTrade:
+		// INVENTORY (VILLAGER-MENU): the client picked a trade in the merchant menu
+		// (ServerGamePacketListenerImpl.handleSelectTrade -> MerchantMenu.setSelectionHint +
+		// tryMoveItems). The handler resolves the merchant window, validates stillValid (the villager's
+		// tradingPlayer == this player), sets the selection hint, and auto-fills the payment slots with the
+		// picked offer's cost items. A forged/stale window or out-of-range index is a silent no-op.
+		t.handleSelectTrade(p, in.Packet)
+
 	case packetid.ServerboundAttack:
 		// COMBAT (GAMEPLAY-04): the entity ATTACK. In 26.2 the attack is its OWN packet —
 		// ServerboundAttackPacket = a single VarInt entityId (jar-verified) — split out of the

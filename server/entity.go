@@ -247,6 +247,21 @@ type Entity struct {
 	villagerJobSiteY   int
 	villagerJobSiteZ   int
 	villagerHasJobSite bool // the JOB_SITE memory is present (a job site is claimed)
+	// --- VILLAGER TRADING STATE (net.minecraft.world.entity.npc.villager.AbstractVillager + Villager) ---
+	//
+	// Tick-owned, set/read ONLY for a Villager (typ == entity.Villager.ID). offers mirrors
+	// AbstractVillager.offers (the lazily-built MerchantOffers — nil until getOffers() first builds it via
+	// updateTrades). offersBuilt is the "offers != null" gate (a Go nil slice is a valid EMPTY offers, so a
+	// separate bool distinguishes "not yet built" from "built empty"). villagerTradingPlayer mirrors
+	// AbstractVillager.tradingPlayer, reduced to the trading player's THIN entity id (0 == none, the
+	// isTrading() == tradingPlayer != null gate). villagerXp mirrors Villager.villagerXp (accumulates
+	// offer.getXp() on each trade; the level-up read is deferred). Zero for every non-villager.
+	//	[VERIFIED CFR AbstractVillager.getOffers (offers==null -> new MerchantOffers + updateTrades);
+	//	 setTradingPlayer/isTrading (tradingPlayer field); Villager.rewardTradeXp (villagerXp += offer.getXp()).]
+	offers                merchantOffers
+	offersBuilt           bool
+	villagerTradingPlayer int32
+	villagerXp            int
 	// --- FOX CHARACTER STATE (net.minecraft.world.entity.animal.fox.Fox) ---------------------------
 	//
 	// Tick-owned plain values, set/read ONLY for a Fox. foxFlags is the DATA_FLAGS_ID byte the fox

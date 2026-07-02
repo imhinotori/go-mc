@@ -243,6 +243,9 @@ func (t *TickLoop) clicked(p *tickPlayer, containerID int32, slotNum int16, butt
 			case containerKindStonecutter:
 				t.clickedStonecutter(p, p.openContainer, slotNum, button, input)
 				return
+			case containerKindMerchant:
+				t.clickedMerchant(p, p.openContainer, slotNum, button, input)
+				return
 			}
 		}
 		t.sendContent(p) // unknown/stale window: resend authoritative player content
@@ -345,6 +348,13 @@ func (t *TickLoop) handleContainerClose(p *tickPlayer, pkt pk.Packet) {
 	// returned). The input is real and must not be lost.
 	if p.openContainer != nil && p.openContainer.kind == containerKindStonecutter {
 		t.closeStonecutterWindow(p, p.openContainer)
+	}
+	// A MERCHANT window (VILLAGER-MENU) returns its two transient PAYMENT inputs to the player on close
+	// (MerchantMenu.removed -> placeItemBackInInventory over payment slots 0,1) and clears the villager's
+	// tradingPlayer (trader.setTradingPlayer(null)). The result is virtual (not returned). The payments are
+	// real and must not be lost.
+	if p.openContainer != nil && p.openContainer.kind == containerKindMerchant {
+		t.closeMerchantWindow(p, p.openContainer)
 	}
 	// The CARRIED (cursor) item: vanilla AbstractContainerMenu.removed() places a left-on-cursor item
 	// back into the inventory (or drops it) and clears the cursor. v1 previously LEFT it on the cursor —
