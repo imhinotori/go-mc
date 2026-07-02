@@ -80,3 +80,26 @@ func findCookingRecipe(inputID int32, subtype cookSubtype) (recipe.Cooking, bool
 	}
 	return recipe.Cooking{}, false
 }
+
+// findCookingRecipeByResult resolves the FIRST cooking recipe of the given subtype whose RESULT item is
+// resultID — the inverse lookup the RecipesUsed reload uses to re-derive a restored recipe's experience()
+// (block_entity_persist.go furnaceExperienceForKey). This is the load-time analogue of vanilla resolving a
+// persisted ResourceKey through the recipe registry to read experience(): furnaceRecipeKey keys recipesUsed
+// by (subtype, result-item-id), so a persisted key maps back to the recipe by matching its result under its
+// subtype. Returns (zero, false) when no such recipe exists (a removed recipe — its cooks award no XP,
+// faithful to a byKey miss).
+func findCookingRecipeByResult(resultID int32, subtype cookSubtype) (recipe.Cooking, bool) {
+	if resultID <= 0 {
+		return recipe.Cooking{}, false
+	}
+	list := cookingRecipes()
+	for i := range list {
+		if list[i].Subtype != string(subtype) {
+			continue
+		}
+		if int32(list[i].Result.ID) == resultID {
+			return list[i], true
+		}
+	}
+	return recipe.Cooking{}, false
+}

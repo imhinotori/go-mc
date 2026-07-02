@@ -40,6 +40,10 @@ const (
 	furnaceSlotResult = 2 // SLOT_RESULT
 )
 
+// furnaceContainerSize is AbstractFurnaceBlockEntity.getContainerSize() = 3 (input/fuel/result), the size
+// NonNullList.withSize uses in loadAdditional and the "Slot" bound loadAllItems validates against.
+const furnaceContainerSize = 3
+
 // furnaceBurnCoolSpeed is AbstractFurnaceBlockEntity.BURN_COOL_SPEED (the idle cook-progress decay rate).
 const furnaceBurnCoolSpeed = 2
 
@@ -220,6 +224,9 @@ func (t *TickLoop) furnaceServerTick(pos pk.Position, state block.StateID, f *fu
 	// save seam yet, cited above); the authoritative container re-send to any open viewer is the observable
 	// equivalent. broadcastFurnaceChange re-sends the open menu's content + progress data slots.
 	if changed {
+		// setChanged in vanilla marks the block-entity dirty for the region save; the SUB-PERSIST twin
+		// dirties the owning column so the furnace's cook progress + items flush on the next save pass.
+		t.markFurnaceDirty(pos)
 		t.broadcastFurnaceChange(pos, f)
 	}
 }

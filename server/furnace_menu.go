@@ -81,9 +81,17 @@ func (t *TickLoop) resolveFurnace(pos pk.Position, state block.StateID) *furnace
 	if !ok {
 		return nil // not a furnace-family block
 	}
-	f := &furnaceBE{
-		subtype:   sub,
-		blastLike: sub == cookBlasting || sub == cookSmoking, // blast_furnace + smoker halve getBurnDuration
+	blastLike := sub == cookBlasting || sub == cookSmoking // blast_furnace + smoker halve getBurnDuration
+	// Try to restore persisted state from the chunk's BlockEntity list first (the furnace twin of
+	// resolveChest→decodeChestBE): a furnace that was saved mid-cook reloads its Items + cook progress +
+	// RecipesUsed. A furnace with no recorded BE (freshly placed, never saved) synthesizes an EMPTY one —
+	// the analogue of AbstractFurnaceBlockEntity's default ctor state. CITE loadAdditional.
+	f := t.loadFurnaceBE(pos, sub, blastLike)
+	if f == nil {
+		f = &furnaceBE{
+			subtype:   sub,
+			blastLike: blastLike,
+		}
 	}
 	t.furnaces[pos] = f
 	return f
@@ -307,6 +315,10 @@ func (t *TickLoop) clickedFurnace(p *tickPlayer, oc *openContainer, slotNum int1
 		}()
 		t.doFurnaceClick(p, oc, f, inv, int(slotNum), button, int(input))
 	}()
+
+	// A click may have moved items into/out of the furnace container (a persistent state change): dirty
+	// the column so the furnace state flushes on the next save pass, even without a subsequent cook tick.
+	t.markFurnaceDirty(oc.furnacePos)
 
 	t.sendFurnaceContent(p, f)
 	if p.client != nil && !slotDataEqual(carriedBefore, inv.getCarried()) {

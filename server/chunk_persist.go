@@ -89,6 +89,11 @@ func (t *TickLoop) flushColumn(pos level.ChunkPos) bool {
 	// safe), so the subsequent serialize captures the rolled items. Done before SerializeChunkData.
 	t.flushChestItems(pos, ch)
 
+	// FURNACE FLUSH: fold any live furnaceBE in this column into the chunk's BlockEntity list
+	// (AbstractFurnaceBlockEntity.saveAdditional — Items + cook shorts + RecipesUsed). Same owner-side
+	// mutation of the live chunk's BE slice as flushChestItems, before SerializeChunkData.
+	t.flushFurnaceItems(pos, ch)
+
 	data, err := world.SerializeChunkData(t.worker().StructureCache(), pos, ch, t.worker().MinY())
 	if err != nil {
 		// A serialize error is an encode bug, not runtime input; skip this column (do not crash the

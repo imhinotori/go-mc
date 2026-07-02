@@ -41,6 +41,7 @@ import (
 	"github.com/imhinotori/sulfur/level/recipe"
 	"github.com/imhinotori/sulfur/nbt"
 	pk "github.com/imhinotori/sulfur/net/packet"
+	"github.com/imhinotori/sulfur/save"
 )
 
 // openContainer is the tick-owned state of a player's currently-open non-inventory window — the
@@ -333,9 +334,44 @@ func (t *TickLoop) decodeChestBE(pos pk.Position) *chestLoot {
 			// Tolerant decode: a corrupt BE opens empty (no table), never panics.
 			_ = be.Data.Unmarshal(&nbtData)
 		}
-		return &chestLoot{LootTable: nbtData.LootTable, LootTableSeed: nbtData.LootTableSeed}
+		// ChestBlockEntity.loadAdditional: tryLoadLootTable XOR loadAllItems. A BE that still carries a
+		// LootTable is an UN-rolled chest — it opens by rolling later (unpackLootTable), so it needs no
+		// Items decode. A BE with NO LootTable (a rolled/edited chest saved via saveAllItems) has its
+		// container in the "Items" list, which decodeChestItems reads back so a reloaded rolled chest
+		// keeps its contents. CITE ChestBlockEntity.loadAdditional (if !tryLoadLootTable loadAllItems).
+		cl := &chestLoot{LootTable: nbtData.LootTable, LootTableSeed: nbtData.LootTableSeed}
+		if nbtData.LootTable == "" {
+			cl.items = decodeChestItems(be.Data)
+		}
+		return cl
 	}
 	return nil
+}
+
+// decodeChestItems decodes a chest BlockEntity.Data compound's "Items" list back into the 27-slot
+// []component.SlotData container (ContainerHelper.loadAllItems). Each present ItemStackWithSlot's disk id
+// ("minecraft:<name>") resolves to the numeric wire item id; out-of-range slots are dropped by
+// save.LoadAllItems (isValidInContainer). A compound with no "Items" key yields an all-empty container
+// (listOrEmpty tolerance). Phase-A: only id+count round-trip (components were dropped on save).
+//
+// CITE: ContainerHelper.loadAllItems (temp/cache/26.2-inner.jar).
+func decodeChestItems(data nbt.RawMessage) []component.SlotData {
+	loaded, err := save.LoadItemsCompound(data, chestContainerSize)
+	if err != nil {
+		return nil // garbled Items list: open empty (never panic) — ensureContainer pads to 27
+	}
+	out := make([]component.SlotData, chestContainerSize)
+	for i := 0; i < chestContainerSize && i < len(loaded); i++ {
+		it := loaded[i]
+		if it.IsEmpty() {
+			continue
+		}
+		out[i] = component.SlotData{
+			ItemID: toItemID(int(itemNameToID(it.ID))),
+			Count:  toVar(int(it.Count)),
+		}
+	}
+	return out
 }
 
 // chestMenuItems builds the 63-slot ContainerSetContent list for the chest window: chest slots
