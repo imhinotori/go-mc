@@ -31,7 +31,9 @@ import (
 	"github.com/imhinotori/sulfur/chat"
 	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/plugin/host"
+	"github.com/imhinotori/sulfur/save"
 	"github.com/imhinotori/sulfur/server"
+	"github.com/imhinotori/sulfur/server/registrydata"
 	"github.com/imhinotori/sulfur/server/tui"
 	"github.com/imhinotori/sulfur/world"
 )
@@ -131,6 +133,21 @@ func main() {
 	seed := flag.Int64("seed", worldSeed, "overworld world seed (default is the fixed reproducible worldSeed; ignored when SULFUR_SUPERFLAT=1)")
 	onlineMode := flag.Bool("online-mode", false, "authenticate + encrypt logins against Mojang (default false = offline local-dev)")
 	flag.Parse()
+
+	// SUB-ITEMNBT (enchantment resolver): thread the ordered ENCHANTMENT registry resource-id list
+	// (the SAME embedded content the server sends to the client as ClientboundConfigRegistryData) into
+	// the save layer, so item minecraft:enchantments / stored_enchantments persist to disk 1:1 (the
+	// wire numeric id is the registry index; the disk key is the resource id — ItemEnchantments.CODEC).
+	// The list is derived from registrydata (a datapack registry, NOT a hardcoded table). A failure to
+	// load the embedded registry is fatal: a server that silently drops enchantment persistence is
+	// broken, not degraded. Injected before the listener accepts so every later save/load transcode
+	// (chest/block-entity persistence) sees a populated resolver.
+	if order, err := registrydata.EnchantmentOrder(); err != nil {
+		log.Fatalf("enchantment registry order load failed (item enchantments cannot persist): %v", err)
+	} else {
+		save.SetEnchantmentRegistry(order)
+		log.Printf("item enchantments: resolver armed (%d enchantments from datapack registry) — enchantments persist to disk 1:1", len(order))
+	}
 
 	// online-mode is controlled primarily by the --online-mode flag; SULFUR_ONLINE_MODE=1
 	// is an OR'd env escape hatch mirroring the SULFUR_SUPERFLAT/SULFUR_DEBUG pattern in

@@ -9,6 +9,7 @@ import (
 	"github.com/imhinotori/sulfur/level/component"
 	"github.com/imhinotori/sulfur/nbt"
 	pk "github.com/imhinotori/sulfur/net/packet"
+	"github.com/imhinotori/sulfur/server/registrydata"
 )
 
 // item_component_test.go — SUB-ITEMNBT Phase B: the wire↔disk component transcoder round-trip and
@@ -423,4 +424,202 @@ func assertPotionRoundTrip(t *testing.T, span []byte, added int) {
 	decoded, _ := decodeItemsList(raw)
 	out := LoadAllItems(decoded, 1)
 	assertSpanEqual(t, span, added, out[0].WireComponents, out[0].WireAddedCount)
+}
+
+// ---- enchantment transcode (SUB-ITEMNBT enchantment resolver) -----------------------------------
+
+// armEnchantmentRegistry injects the ordered ENCHANTMENT resource-id list (the same embedded content
+// the server sends to the client) and returns the wire numeric id for a resource id so the test can
+// build a wire span WITHOUT hardcoding the datapack index. It restores an EMPTY resolver on cleanup so
+// a test that relies on the DEFERRED fallback is not polluted by injection order.
+func armEnchantmentRegistry(t *testing.T) []string {
+	t.Helper()
+	order, err := registrydata.EnchantmentOrder()
+	if err != nil {
+		t.Fatalf("EnchantmentOrder: %v", err)
+	}
+	if len(order) == 0 {
+		t.Fatal("empty enchantment registry order")
+	}
+	SetEnchantmentRegistry(order)
+	t.Cleanup(func() { SetEnchantmentRegistry(nil) })
+	return order
+}
+
+// enchantWireID resolves an enchantment resource id to its wire/protocol id via the injected resolver
+// (index in the ordered list). Fails the test on an unknown id.
+func enchantWireID(t *testing.T, order []string, id string) int32 {
+	t.Helper()
+	for i, n := range order {
+		if n == id {
+			return int32(i)
+		}
+	}
+	t.Fatalf("enchantment %q not in registry order", id)
+	return -1
+}
+
+// TestTranscode_Enchantments_DiskShape proves an item carrying minecraft:enchantments (sharpness 3 +
+// unbreaking 2) transcodes to the exact ItemEnchantments.CODEC disk shape — a bare compound keyed by
+// the enchantment RESOURCE ID with a TAG_Int level (1..255), no wrapper, no show_in_tooltip — and
+// round-trips byte-stable to the identical wire numeric ids. CITE: ItemEnchantments.CODEC =
+// unboundedMap(Enchantment.CODEC (resource id), Codec.intRange(1,255)); STREAM_CODEC = VarInt(id,level).
+func TestTranscode_Enchantments_DiskShape(t *testing.T) {
+	order := armEnchantmentRegistry(t)
+	sharpID := enchantWireID(t, order, "minecraft:sharpness")
+	unbrID := enchantWireID(t, order, "minecraft:unbreaking")
+
+	ench := &component.Enchantments{Enchantments: []component.EnchantmentEntry{
+		{ID: pk.VarInt(sharpID), Level: 3},
+		{ID: pk.VarInt(unbrID), Level: 2},
+	}}
+	// buildWireSpan re-derives the component's wire typeId via NewComponent, so the span is exactly
+	// what SlotData would carry for this component.
+	span, added := buildWireSpan(t, ench)
+
+	in := []DiskItem{{ID: "minecraft:diamond_sword", Count: 1, WireComponents: span, WireAddedCount: added}}
+	items, dropped := SaveAllItems(in, false)
+	if dropped != 0 {
+		t.Fatalf("dropped = %d, want 0 (enchantments now supported with the resolver armed)", dropped)
+	}
+	if len(items) != 1 || items[0].Components == nil {
+		t.Fatalf("expected 1 item with a components compound, got %+v", items)
+	}
+
+	raw, err := encodeItemsList(items)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	// Assert the exact disk shape: components -> "minecraft:enchantments" -> compound{ id_string: Int }.
+	var generic struct {
+		Items []struct {
+			Components map[string]nbt.RawMessage `nbt:"components"`
+		} `nbt:"Items"`
+	}
+	if _, err := nbt.NewDecoder(bytes.NewReader(raw)).Decode(&generic); err != nil {
+		t.Fatalf("decode generic: %v", err)
+	}
+	comps := generic.Items[0].Components
+	ev, ok := comps["minecraft:enchantments"]
+	if !ok {
+		t.Fatalf("missing minecraft:enchantments key; keys=%v", keysOf(comps))
+	}
+	if ev.Type != nbt.TagCompound {
+		t.Fatalf("enchantments value tag = %d, want TAG_Compound(%d) (unboundedMap)", ev.Type, nbt.TagCompound)
+	}
+	// The compound must be keyed by RESOURCE IDs with TAG_Int levels — NOT by numeric ids, and with
+	// NO wrapper compound / show_in_tooltip (ItemEnchantments.CODEC in 26.2).
+	var levels map[string]nbt.RawMessage
+	if err := ev.Unmarshal(&levels); err != nil {
+		t.Fatalf("unmarshal enchantment map: %v", err)
+	}
+	if len(levels) != 2 {
+		t.Fatalf("enchantment map has %d keys, want 2; keys=%v", len(levels), keysOf(levels))
+	}
+	for _, key := range []string{"minecraft:sharpness", "minecraft:unbreaking"} {
+		lv, ok := levels[key]
+		if !ok {
+			t.Errorf("missing enchantment key %q; keys=%v", key, keysOf(levels))
+			continue
+		}
+		if lv.Type != nbt.TagInt {
+			t.Errorf("level for %q tag = %d, want TAG_Int(%d)", key, lv.Type, nbt.TagInt)
+		}
+	}
+	// No accidental show_in_tooltip / levels wrapper leaked into the compound.
+	if _, bad := levels["show_in_tooltip"]; bad {
+		t.Error("ItemEnchantments.CODEC (26.2) has no show_in_tooltip field; must not be written")
+	}
+	if _, bad := levels["levels"]; bad {
+		t.Error("ItemEnchantments.CODEC (26.2) is a bare map; must not have a 'levels' wrapper key")
+	}
+
+	// Round-trip: load back and confirm the identical wire numeric ids + levels.
+	decoded, err := decodeItemsList(raw)
+	if err != nil {
+		t.Fatalf("decode items: %v", err)
+	}
+	out := LoadAllItems(decoded, 1)
+	assertSpanEqual(t, span, added, out[0].WireComponents, out[0].WireAddedCount)
+}
+
+// TestTranscode_StoredEnchantments_RoundTrip proves minecraft:stored_enchantments (the enchanted-book
+// component, wire typeId 42) transcodes through the SAME ItemEnchantments.CODEC shape and round-trips
+// byte-stable. CITE: DataComponents.STORED_ENCHANTMENTS = ItemEnchantments.CODEC.
+func TestTranscode_StoredEnchantments_RoundTrip(t *testing.T) {
+	order := armEnchantmentRegistry(t)
+	mendID := enchantWireID(t, order, "minecraft:mending")
+
+	stored := &component.StoredEnchantments{Enchantments: []component.EnchantmentEntry{
+		{ID: pk.VarInt(mendID), Level: 1},
+	}}
+	span, added := buildWireSpan(t, stored)
+
+	in := []DiskItem{{ID: "minecraft:enchanted_book", Count: 1, WireComponents: span, WireAddedCount: added}}
+	items, dropped := SaveAllItems(in, false)
+	if dropped != 0 {
+		t.Fatalf("dropped = %d, want 0", dropped)
+	}
+	sv, ok := (*items[0].Components)["minecraft:stored_enchantments"]
+	if !ok {
+		t.Fatalf("missing minecraft:stored_enchantments key; keys=%v", keysOf(*items[0].Components))
+	}
+	if sv.Type != nbt.TagCompound {
+		t.Fatalf("stored_enchantments value tag = %d, want TAG_Compound(%d)", sv.Type, nbt.TagCompound)
+	}
+	raw, _ := encodeItemsList(items)
+	decoded, _ := decodeItemsList(raw)
+	out := LoadAllItems(decoded, 1)
+	assertSpanEqual(t, span, added, out[0].WireComponents, out[0].WireAddedCount)
+}
+
+// TestTranscode_Enchantments_DeferredWhenNoResolver proves the DEFERRED counted-drop fallback is
+// preserved when the enchantment resolver is NOT injected: an enchantments component is counted as
+// dropped (never fabricated) rather than written with a made-up id. This guards the datapack-registry
+// 1:1 mandate for any code path that runs without a wired registry.
+func TestTranscode_Enchantments_DeferredWhenNoResolver(t *testing.T) {
+	SetEnchantmentRegistry(nil) // explicitly empty resolver
+	t.Cleanup(func() { SetEnchantmentRegistry(nil) })
+
+	ench := &component.Enchantments{Enchantments: []component.EnchantmentEntry{
+		{ID: 0, Level: 1}, // any id — with no resolver it cannot resolve to a resource id
+	}}
+	span, added := buildWireSpan(t, ench)
+	in := []DiskItem{{ID: "minecraft:diamond_sword", Count: 1, WireComponents: span, WireAddedCount: added}}
+	items, dropped := SaveAllItems(in, false)
+	if dropped != 1 {
+		t.Fatalf("dropped = %d, want 1 (no resolver -> counted-drop, never fabricated)", dropped)
+	}
+	// The dropped component must NOT appear on disk.
+	if len(items) == 1 && items[0].Components != nil {
+		if _, present := (*items[0].Components)["minecraft:enchantments"]; present {
+			t.Error("enchantments must not be written to disk without a resolver (would be a fabricated id)")
+		}
+	}
+}
+
+// TestEnchantmentRegistry_RoundTrip sanity-checks the injected resolver: name->id->name is stable and
+// index == wire id (mirrors TestTranscode_PotionRegistryIndex for the datapack enchantment registry).
+func TestEnchantmentRegistry_RoundTrip(t *testing.T) {
+	order := armEnchantmentRegistry(t)
+	for _, id := range []string{"minecraft:sharpness", "minecraft:mending", order[0], order[len(order)-1]} {
+		wire := enchantmentID(id)
+		if wire < 0 {
+			t.Errorf("enchantmentID(%q) = -1, want >= 0", id)
+			continue
+		}
+		if got := enchantmentName(wire); got != id {
+			t.Errorf("round-trip name for %q via id %d = %q", id, wire, got)
+		}
+		if int(wire) >= len(order) || order[wire] != id {
+			t.Errorf("wire id %d for %q is not its index in the registry order", wire, id)
+		}
+	}
+	// An out-of-range id and an unknown name resolve to the empty/-1 sentinels.
+	if got := enchantmentName(int32(len(order))); got != "" {
+		t.Errorf("out-of-range enchantmentName = %q, want \"\"", got)
+	}
+	if got := enchantmentID("minecraft:not_an_enchantment"); got != -1 {
+		t.Errorf("unknown enchantmentID = %d, want -1", got)
+	}
 }

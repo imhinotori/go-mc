@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"sort"
 
 	"github.com/imhinotori/sulfur/chat"
 	"github.com/imhinotori/sulfur/data/registryid"
@@ -40,6 +41,8 @@ import (
 //   - minecraft:custom_name  DataComponents.CUSTOM_NAME  = ComponentSerialization.CODEC    -> Component NBT
 //   - minecraft:lore         DataComponents.LORE         = ItemLore.CODEC (list<Component>)-> TAG_List<Component>
 //   - minecraft:potion_contents DataComponents.POTION_CONTENTS = PotionContents.CODEC     -> compound
+//   - minecraft:enchantments        DataComponents.ENCHANTMENTS        = ItemEnchantments.CODEC -> compound{id:level}
+//   - minecraft:stored_enchantments DataComponents.STORED_ENCHANTMENTS = ItemEnchantments.CODEC -> compound{id:level}
 //
 // The Component (custom_name/lore) transcode is direct: chat.Message's WIRE codec is already
 // ComponentSerialization NBT (network format: [tagByte][body], no name — see chat/nbtmessage.go),
@@ -47,16 +50,20 @@ import (
 // So decoding the wire component into a chat.Message and re-marshalling its NBT body is a faithful
 // inverse; no shape translation is needed for text components.
 //
-// DEFERRED (counted-and-dropped, cited seam — never a silent loss):
+// ENCHANTMENTS (now SUPPORTED — the DEFERRED gap closed this session):
 //   - minecraft:enchantments / minecraft:stored_enchantments (ItemEnchantments.CODEC =
-//     Codec.unboundedMap(Enchantment.CODEC, level)): the DATA key is the enchantment IDENTIFIER
-//     STRING, but the WIRE (Enchantment.STREAM_CODEC = VarInt id) carries the numeric protocol id.
-//     Enchantment is a DATAPACK registry (registry/codec.go: Registry[nbt.RawMessage]
-//     `registry:"minecraft:enchantment"`), whose numeric↔string mapping is assigned at registry-sync
-//     time and is NOT available in the save layer (no static data/registryid/enchantment.go, unlike
-//     Item/Potion/MobEffect). Writing a fabricated id would violate the 1:1 mandate, so enchantments
-//     stay in the raw drop bucket, COUNTED. SEAM: when the runtime enchantment registry is threaded
-//     into the save layer (an id→string resolver mirroring itemName/potionName), add case 13/42 here.
+//     Codec.unboundedMap(Enchantment.CODEC, intRange(1,255))): the DATA key is the enchantment
+//     RESOURCE ID string, but the WIRE (Enchantment.STREAM_CODEC = holderRegistry VarInt id) carries
+//     the numeric protocol id (the registry index). Enchantment is a DATAPACK registry (registry/
+//     codec.go: Registry[nbt.RawMessage] `registry:"minecraft:enchantment"`), whose numeric↔string
+//     mapping is the ORDER the server sends the registry to the client (server/registrydata's embedded
+//     content). That ordered list is now injected into the save layer at boot (enchantment_registry.go
+//     SetEnchantmentRegistry <- registrydata.EnchantmentOrder), giving the id→string / string→id
+//     resolver used by the enchantments cases (wireEnchantments=13 / wireStoredEnchantments=42). When
+//     the resolver is NOT injected (or an id is out of range) the component keeps the counted-drop
+//     fallback below — never a fabricated id.
+//
+// DEFERRED (counted-and-dropped, cited seam — never a silent loss):
 //   - the ~100-component long tail: any component whose wire type has no supported DATA transcode
 //     here stays counted-and-dropped. SEAM: DataComponents registry / component.NewComponent — add a
 //     case per type as its DATA codec is ported.
@@ -210,8 +217,20 @@ func diskEncodeComponent(comp component.DataComponent) (id string, val nbt.RawMe
 			return "", nbt.RawMessage{}, false
 		}
 		return c.ID(), v, true
+	case *component.Enchantments: // minecraft:enchantments -> compound{id_string:level} (ItemEnchantments.CODEC)
+		v, ok := enchantmentsValue(c.Enchantments)
+		if !ok {
+			return "", nbt.RawMessage{}, false // resolver not injected / unknown id -> counted-drop (SEAM)
+		}
+		return c.ID(), v, true
+	case *component.StoredEnchantments: // minecraft:stored_enchantments -> same ItemEnchantments.CODEC shape
+		v, ok := enchantmentsValue(c.Enchantments)
+		if !ok {
+			return "", nbt.RawMessage{}, false
+		}
+		return c.ID(), v, true
 	default:
-		return "", nbt.RawMessage{}, false // long tail / enchantments: counted-and-dropped (header SEAM)
+		return "", nbt.RawMessage{}, false // long tail: counted-and-dropped (header SEAM)
 	}
 }
 
@@ -258,6 +277,19 @@ func diskDecodeComponent(typeID int32, val nbt.RawMessage) (body []byte, ok bool
 			return nil, false
 		}
 		return buf.Bytes(), true
+	case wireEnchantments, wireStoredEnchantments: // compound{id_string:level} -> Enchantments/StoredEnchantments wire
+		entries, ok := enchantmentsFromValue(val)
+		if !ok {
+			return nil, false
+		}
+		var buf bytes.Buffer
+		// STREAM_CODEC (ByteBufCodecs.map): VarInt count, count×(VarInt id, VarInt level). Both the
+		// Enchantments and StoredEnchantments wire bodies are the same []EnchantmentEntry (pk.Array),
+		// so the same encode serves both (only the typeId differs, handled by the caller).
+		if _, err := pk.Array(&entries).WriteTo(&buf); err != nil {
+			return nil, false
+		}
+		return buf.Bytes(), true
 	default:
 		return nil, false
 	}
@@ -266,12 +298,14 @@ func diskDecodeComponent(typeID int32, val nbt.RawMessage) (body []byte, ok bool
 // Wire type ids of the supported components (data/registryid/datacomponenttype.go / components.go
 // NewComponent switch). Kept as named constants so diskDecodeComponent reads faithfully.
 const (
-	wireMaxDamage      = 2
-	wireDamage         = 3
-	wireCustomName     = 6
-	wireLore           = 11
-	wireRepairCost     = 19
-	wirePotionContents = 51
+	wireMaxDamage          = 2
+	wireDamage             = 3
+	wireCustomName         = 6
+	wireLore               = 11
+	wireEnchantments       = 13
+	wireRepairCost         = 19
+	wireStoredEnchantments = 42
+	wirePotionContents     = 51
 )
 
 // componentIDByType returns the registry id string for a wire type id, for the SUPPORTED set only
@@ -284,7 +318,12 @@ func componentIDByType(typeID int32) string {
 	// Only the supported set is re-expressible; gate on diskEncodeComponent's coverage so a removed
 	// key is written iff its present form would also transcode (symmetry with the added path).
 	switch typeID {
-	case wireDamage, wireMaxDamage, wireRepairCost, wireCustomName, wireLore, wirePotionContents:
+	case wireDamage, wireMaxDamage, wireRepairCost, wireCustomName, wireLore, wirePotionContents,
+		wireEnchantments, wireStoredEnchantments:
+		// enchantments/stored_enchantments: the REMOVED key is just "!"+id (the component id string,
+		// e.g. "minecraft:enchantments") and carries NO value, so it is always re-expressible on disk
+		// regardless of whether the enchantment id→string resolver is injected — a removal never needs
+		// to resolve individual enchantment ids (unlike the PRESENT form's per-entry map keys).
 		return comp.ID()
 	default:
 		return ""
@@ -306,6 +345,10 @@ func componentTypeByID(id string) (int32, bool) {
 		return wireLore, true
 	case "minecraft:potion_contents":
 		return wirePotionContents, true
+	case "minecraft:enchantments":
+		return wireEnchantments, true
+	case "minecraft:stored_enchantments":
+		return wireStoredEnchantments, true
 	default:
 		return 0, false
 	}
@@ -622,11 +665,78 @@ func diskToDetails(d mobEffectDisk) (component.ItemEffectDetail, bool) {
 	return out, true
 }
 
+// ---- enchantments disk shape --------------------------------------------------------------------
+//
+// minecraft:enchantments and minecraft:stored_enchantments share ItemEnchantments.CODEC (verified
+// 26.2 jar, ItemEnchantments static init):
+//
+//	CODEC = Codec.unboundedMap(Enchantment.CODEC, Codec.intRange(1,255)).xmap(fromMap, toMap)
+//
+// Enchantment.CODEC = RegistryFixedCodec.create(Registries.ENCHANTMENT) — a Holder serialized as its
+// RESOURCE ID string (the registry key). LEVEL_CODEC = Codec.intRange(1,255). The xmap only converts
+// the map ↔ ItemEnchantments; there is NO wrapper compound and NO show_in_tooltip field (tooltip
+// visibility moved to the minecraft:tooltip_display component in 26.2). So the DISK value is a BARE
+// compound { "<enchant resource id>": <level TAG_Int>, ... } keyed by the enchantment resource id.
+//
+// The WIRE body (ItemEnchantments.STREAM_CODEC = ByteBufCodecs.map over Enchantment.STREAM_CODEC
+// (=holderRegistry VarInt id) keys and ByteBufCodecs.VAR_INT levels) is VarInt count, count×(VarInt
+// id, VarInt level) — exactly the level/component.Enchantments/StoredEnchantments []EnchantmentEntry.
+// The transcode is the numeric id ↔ resource id resolver (enchantment_registry.go, injected at boot).
+
+// enchantmentsValue builds the disk value for minecraft:enchantments / stored_enchantments: a compound
+// { resourceId: level }. Returns ok=false when the resolver is not injected or an entry's wire id has
+// no resource id (the counted-drop DEFERRED fallback — never a fabricated id). CITE: ItemEnchantments
+// .CODEC = unboundedMap(Enchantment.CODEC (resource id), intRange(1,255)).
+func enchantmentsValue(entries []component.EnchantmentEntry) (nbt.RawMessage, bool) {
+	root := dynbt.NewCompound()
+	for _, e := range entries {
+		id := enchantmentName(int32(e.ID))
+		if id == "" {
+			return nbt.RawMessage{}, false // resolver missing / unknown id -> counted-drop (header SEAM)
+		}
+		// LEVEL_CODEC = Codec.intRange(1,255): the level is a TAG_Int. The map key is the resource id.
+		root.Set(id, dynbt.NewInt(int32(e.Level)))
+	}
+	v, err := marshalDiskValue(root)
+	if err != nil {
+		return nbt.RawMessage{}, false
+	}
+	return v, true
+}
+
+// enchantmentsFromValue is the inverse: decode a disk { resourceId: level } compound back into the
+// wire []EnchantmentEntry (id resolved via the injected registry order). Returns ok=false when the
+// resolver is not injected or a key is not a known enchantment resource id. A non-compound value is
+// rejected (ItemEnchantments.CODEC always persists a map).
+func enchantmentsFromValue(m nbt.RawMessage) ([]component.EnchantmentEntry, bool) {
+	if m.Type != nbt.TagCompound {
+		return nil, false
+	}
+	var levels map[string]int32
+	if err := m.Unmarshal(&levels); err != nil {
+		return nil, false
+	}
+	entries := make([]component.EnchantmentEntry, 0, len(levels))
+	for id, level := range levels {
+		wireID := enchantmentID(id)
+		if wireID < 0 {
+			return nil, false // resolver missing / unknown resource id
+		}
+		entries = append(entries, component.EnchantmentEntry{ID: pk.VarInt(wireID), Level: pk.VarInt(level)})
+	}
+	// Deterministic wire order: sort by numeric id. The disk compound is an unordered map, but a
+	// round-trip must be byte-stable, and vanilla's Object2IntOpenHashMap iteration order is not
+	// observable on the wire (the STREAM_CODEC re-derives ids from holders); sorting by id gives a
+	// stable, well-defined span so save→load→save is byte-identical.
+	sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
+	return entries, true
+}
+
 // ---- potion / mob_effect registry resolvers -----------------------------------------------------
 //
 // potion and mob_effect are BUILT-IN registries with static protocol-id order (data/registryid), so
 // their numeric↔string mapping is available in the save layer (unlike the datapack enchantment
-// registry — see file header SEAM). index == protocol id.
+// registry, whose order is INJECTED at boot — enchantment_registry.go). index == protocol id.
 
 func potionName(id int32) string {
 	if id >= 0 && int(id) < len(registryid.Potion) {
