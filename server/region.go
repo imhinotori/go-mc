@@ -123,6 +123,25 @@ type region struct {
 	// ComparatorBlockEntity.getOutputSignal/setOutputSignal (private int output = 0).
 	comparatorOutput map[pk.Position]int
 
+	// pistonBlockEvents is the per-level ServerLevel.blockEvents queue slice for the PISTON port
+	// (redstone tier-3): the ObjectLinkedOpenHashSet<BlockEventData> vanilla enqueues from
+	// Level.blockEvent(pos, block, b0, b1) and drains once per tick in ServerLevel.runBlockEvents ->
+	// BlockState.triggerEvent. A piston's checkIfExtend posts a b0=0 (extend) / b0=1|2 (retract) event
+	// here; drainPistonBlockEvents fires each at the end of tickWorld (the vanilla same-tick drain).
+	// Tick-owned (TICK-05): appended/drained only on the region goroutine. CITE: ServerLevel.blockEvents
+	// / blockEvent / runBlockEvents.
+	pistonBlockEvents []pistonBlockEvent
+
+	// movingPistons is the per-level store of live PistonMovingBlockEntity animation state for the
+	// PISTON port (redstone tier-3): keyed by the moving_piston block's world position, it holds the
+	// moved block-state + direction + extending/source flags + the 0.0..1.0 progress the BE ticks over
+	// TICKS_TO_EXTEND(2) ticks (PistonMovingBlockEntity.tick, progress += 0.5) before finalTick places
+	// the moved block and removes the BE. Vanilla holds this in the block-entity; Sulfur keeps it here on
+	// the region (tick-owned, TICK-05) — the animation interpolation is cited-simplified to a faithful
+	// 2-tick block-state completion (the observable END STATE — block moved by 1, head placed/removed —
+	// is 1:1). CITE: PistonMovingBlockEntity (movedState/direction/extending/isSourcePiston/progress).
+	movingPistons map[pk.Position]*movingPistonBE
+
 	// fluidSchedule is the per-region GAMEPLAY-05 scheduled-fluid-tick queue. Lazily constructed
 	// inside tickFluids (a nil queue drains to nothing).
 	fluidSchedule *fluidScheduleQueue

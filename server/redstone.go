@@ -253,6 +253,9 @@ func (t *TickLoop) stateGetSignal(state block.StateID, pos pk.Position, directio
 	case block.IsRepeater(state), block.IsComparator(state):
 		// DiodeBlock.getSignal: ownSignal only out FACING (REDSTONE TIER-2, redstone_diode.go).
 		return t.diodeGetSignal(state, pos, direction)
+	case block.IsObserver(state):
+		// ObserverBlock.getSignal: ownSignal (POWERED?15:0) only out FACING (REDSTONE TIER-3, observer.go).
+		return observerGetSignal(state, direction)
 	default:
 		return 0 // BlockBehaviour default: ownSignal == 0
 	}
@@ -290,6 +293,9 @@ func (t *TickLoop) stateGetDirectSignal(state block.StateID, pos pk.Position, di
 	case block.IsRepeater(state), block.IsComparator(state):
 		// DiodeBlock.getDirectSignal == getSignal (REDSTONE TIER-2, redstone_diode.go).
 		return t.diodeGetDirectSignal(state, pos, direction)
+	case block.IsObserver(state):
+		// ObserverBlock.getDirectSignal == getSignal (REDSTONE TIER-3, observer.go).
+		return observerGetSignal(state, direction)
 	default:
 		return 0
 	}
@@ -706,7 +712,7 @@ func (t *TickLoop) shouldConnectTo(state block.StateID, hasDirection bool) bool 
 // FACING.opposite == dir), not on its two side faces. When `hasDirection` is false (the 1-arg overload
 // passes null), the repeater special case still evaluates against `direction` but that branch is only
 // reached from getConnectingSide's direction-bearing call. CITE: RedStoneWireBlock.shouldConnectTo
-// (REPEATER branch; OBSERVER DEFERRED; generic isSignalSource && direction != null tail).
+// (REPEATER branch; OBSERVER branch dir==FACING; generic isSignalSource && direction != null tail).
 func (t *TickLoop) shouldConnectToDir(state block.StateID, direction block.Direction, hasDirection bool) bool {
 	if block.IsRedstoneWire(state) {
 		return true
@@ -715,6 +721,12 @@ func (t *TickLoop) shouldConnectToDir(state block.StateID, direction block.Direc
 	// hasDirection in vanilla (it does not consult direction != null), so a repeater connects on its
 	// axis regardless. CITE: RedStoneWireBlock.shouldConnectTo REPEATER branch.
 	if connect, isRepeater := block.RepeaterShouldConnectTo(state, direction); isRepeater {
+		return connect
+	}
+	// OBSERVER: direction == FACING (a wire connects only to the observer's output face). Independent of
+	// hasDirection in vanilla, matching the REPEATER branch. CITE: RedStoneWireBlock.shouldConnectTo
+	// OBSERVER branch (REDSTONE TIER-3).
+	if connect, isObserver := block.ObserverShouldConnectTo(state, direction); isObserver {
 		return connect
 	}
 	// Generic tail: isSignalSource() && direction != null. Comparator falls here (connects on any side
@@ -729,8 +741,9 @@ func (t *TickLoop) isSignalSource(state block.StateID) bool {
 	switch {
 	case block.IsRedstoneBlock(state), block.IsLever(state), block.IsButton(state),
 		block.IsRedstoneTorch(state), block.IsRedstoneWallTorch(state), block.IsRedstoneWire(state),
-		block.IsRepeater(state), block.IsComparator(state):
-		// DiodeBlock.isSignalSource == true (REDSTONE TIER-2). CITE: DiodeBlock.isSignalSource.
+		block.IsRepeater(state), block.IsComparator(state), block.IsObserver(state):
+		// DiodeBlock.isSignalSource == true (REDSTONE TIER-2); ObserverBlock.isSignalSource == true
+		// (REDSTONE TIER-3). CITE: DiodeBlock.isSignalSource / ObserverBlock.isSignalSource.
 		return true
 	default:
 		return false
@@ -825,7 +838,13 @@ func (t *TickLoop) drainRedstoneUpdates(q *redstoneUpdateQueue) {
 			// DiodeBlock.neighborChanged -> checkTickOnNeighbor: schedule the delayed output flip if the
 			// diode's input state changed (REDSTONE TIER-2, redstone_diode.go). CITE: DiodeBlock.neighborChanged.
 			t.diodeNeighborChanged(pos, state)
-			// lever / button / redstone_block have no neighborChanged reaction (pure sources).
+		case block.IsPiston(state):
+			// PistonBaseBlock.neighborChanged -> checkIfExtend: post an extend/retract block event if the
+			// piston's powered state crossed its EXTENDED state (REDSTONE TIER-3, piston.go). CITE:
+			// PistonBaseBlock.neighborChanged.
+			t.pistonCheckIfExtend(pos, state)
+			// lever / button / redstone_block / observer have no redstone neighborChanged reaction here
+			// (observer reacts to updateShape via onObserverEdit, not neighborChanged).
 		}
 	}
 }

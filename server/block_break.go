@@ -415,6 +415,10 @@ func (t *TickLoop) destroyBlock(p *tickPlayer, pos pk.Position, air block.StateI
 			// delayed-destroy path skips reconcileEdit, so wake the redstone graph explicitly here so a
 			// slow-broken source/wire still recomputes its neighbours (Level.updateNeighborsAt on removal).
 			t.onRedstoneEdit(pos)
+			// REDSTONE TIER-3 (OBSERVER): the delayed-destroy path also skips reconcileEdit's onObserverEdit,
+			// so wake any observer WATCHING this cell explicitly (its FACING neighbor was removed). CITE:
+			// ObserverBlock.updateShape.
+			t.onObserverEdit(pos)
 		}
 
 		// Spawn the dropped Item entity (ServerPlayerGameMode.destroyBlock's loot path). Creative drops

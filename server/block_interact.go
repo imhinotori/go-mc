@@ -455,6 +455,14 @@ func (t *TickLoop) reconcileEdit(editor *tickPlayer, pos pk.Position, state bloc
 	// across the wire network to its fixpoint. This is what makes placing a lever next to a wire power
 	// it, or breaking a source drop the wire back to 0.
 	t.onRedstoneEdit(pos)
+	// REDSTONE TIER-3 (OBSERVER): Level.updateNeighborsAt/updateShape -> ObserverBlock.updateShape — a
+	// break/place at `pos` also wakes any observer WATCHING `pos` (its FACING neighbor changed), which
+	// startSignal-schedules a 2-tick output pulse. CITE: ObserverBlock.updateShape.
+	t.onObserverEdit(pos)
+	// REDSTONE TIER-3 (OBSERVER): ObserverBlock.onPlace's un-stick edge case for a placed observer that
+	// somehow carries POWERED==true (a structure/schematic restore). A normal getStateForPlacement
+	// observer is POWERED=false, so this is a no-op on ordinary placement. CITE: ObserverBlock.onPlace.
+	t.observerOnPlace(pos, state)
 }
 
 // broadcastBlockUpdate sends a ClientboundBlockUpdate(pos, state) to every player whose view

@@ -107,6 +107,13 @@ func (t *TickLoop) tickWorld() {
 		// the same game-time. A nil manager (no chunk container ever registered) is a cheap no-op.
 		t.tickScheduledBlocks()
 		t.tickFluids()
+		// REDSTONE TIER-3 (PISTON): tick THIS region's live moving_piston block-entities
+		// (PistonMovingBlockEntity.tick — progress 0->1 over 2 ticks, then finalTick completes the move),
+		// then drain the piston block-event queue (ServerLevel.runBlockEvents -> triggerEvent). The BE
+		// tick runs first (a BE created LAST tick advances before this tick's fresh events fire, matching
+		// vanilla's tickBlockEntities-then-runBlockEvents ordering). Both are cheap no-ops when empty.
+		t.tickMovingPistons()
+		t.drainPistonBlockEvents()
 	})
 	// SUB-RANDOMTICK: the UNSCHEDULED random-tick driver (ServerLevel.tickChunk block-sampling pass —
 	// sugar-cane growth + future crops/saplings/grass/leaves). It is a WORLD-GLOBAL pass over the

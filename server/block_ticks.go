@@ -286,6 +286,12 @@ func (t *TickLoop) tickBlock(pos pk.Position, typ blockTickType) {
 			return
 		}
 		t.comparatorTick(state, pos)
+	case observerTickType:
+		// ServerLevel.tickBlock stale guard: only tick if still an observer (REDSTONE TIER-3, observer.go).
+		if !block.IsObserver(state) {
+			return
+		}
+		t.observerTick(state, pos)
 	default:
 		// Buttons schedule under their own block id (13 variants). Route any button tick to the unpress
 		// handler; the IsButton guard is the tickBlock `state.is(block)` stale check.
