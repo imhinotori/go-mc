@@ -411,6 +411,10 @@ func (t *TickLoop) destroyBlock(p *tickPlayer, pos pk.Position, air block.StateI
 		} else {
 			t.broadcastBlockUpdate(pos, air) // delayed-destroy: no sequence to ack, still broadcast the air
 			udebugPlayer(p, "edit", "break(delayed) pos=(%d,%d,%d) -> air (was state=%d)", pos.X, pos.Y, pos.Z, brokenState)
+			// CORE REDSTONE: the ack path funnels this through reconcileEdit -> onRedstoneEdit; the
+			// delayed-destroy path skips reconcileEdit, so wake the redstone graph explicitly here so a
+			// slow-broken source/wire still recomputes its neighbours (Level.updateNeighborsAt on removal).
+			t.onRedstoneEdit(pos)
 		}
 
 		// Spawn the dropped Item entity (ServerPlayerGameMode.destroyBlock's loot path). Creative drops

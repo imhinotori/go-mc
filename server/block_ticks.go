@@ -47,7 +47,40 @@ type blockTickType string
 const (
 	// sugarCaneTickType is the block id sugar-cane ticks are scheduled/dispatched under.
 	sugarCaneTickType blockTickType = "minecraft:sugar_cane"
+
+	// redstoneTorchTickType / redstoneWallTorchTickType are the block ids the redstone-torch burnout
+	// toggle (RedstoneTorchBlock.tick) is scheduled/dispatched under. A standing torch and a wall torch
+	// are distinct block ids but share the same tick handler. CITE: RedstoneTorchBlock /
+	// RedstoneWallTorchBlock.
+	redstoneTorchTickType     blockTickType = "minecraft:redstone_torch"
+	redstoneWallTorchTickType blockTickType = "minecraft:redstone_wall_torch"
 )
+
+// buttonTickTypes is the set of block ids the button-unpress tick (ButtonBlock.tick) is scheduled
+// under — one per button variant. Each button schedules under its own id, so tickBlock must route
+// any of them to buttonTick. CITE: ButtonBlock.press (scheduleTick(pos, this, ticksToStayPressed)).
+var buttonTickTypes = map[blockTickType]struct{}{
+	"minecraft:stone_button":               {},
+	"minecraft:polished_blackstone_button": {},
+	"minecraft:oak_button":                 {},
+	"minecraft:spruce_button":              {},
+	"minecraft:birch_button":               {},
+	"minecraft:jungle_button":              {},
+	"minecraft:acacia_button":              {},
+	"minecraft:cherry_button":              {},
+	"minecraft:dark_oak_button":            {},
+	"minecraft:pale_oak_button":            {},
+	"minecraft:mangrove_button":            {},
+	"minecraft:bamboo_button":              {},
+	"minecraft:crimson_button":             {},
+	"minecraft:warped_button":              {},
+}
+
+// isButtonTickType reports whether a scheduled tick type is one of the button block ids.
+func isButtonTickType(typ blockTickType) bool {
+	_, ok := buttonTickTypes[typ]
+	return ok
+}
 
 // maxAllowedBlockTicks is net.minecraft.server.level.ServerLevel's drain cap — the int 65536
 // passed to blockTicks.tick(gameTime, 65536, this::tickBlock). It bounds how many scheduled
@@ -132,6 +165,17 @@ func (t *TickLoop) hasScheduledBlockTick(pos pk.Position, typ blockTickType) boo
 		return false
 	}
 	return t.cur().blockTicks.HasScheduledTick(pos, typ)
+}
+
+// willTickThisTick reports whether (pos, typ) is already selected to FIRE in the in-progress drain —
+// the LevelTickAccess.willTickThisTick guard RedstoneTorchBlock.neighborChanged uses so it does not
+// schedule a redundant toggle for a torch that is about to tick anyway. A nil manager (nothing ever
+// scheduled) is false. CITE: LevelTicks.willTickThisTick.
+func (t *TickLoop) willTickThisTick(pos pk.Position, typ blockTickType) bool {
+	if t.cur().blockTicks == nil {
+		return false
+	}
+	return t.cur().blockTicks.WillTickThisTick(pos, typ)
 }
 
 // packChunkBlockTicks serializes a chunk's pending block ticks to the on-disk SavedTickNBT list
@@ -219,7 +263,22 @@ func (t *TickLoop) tickBlock(pos pk.Position, typ blockTickType) {
 			return // state.is(SUGAR_CANE) false: stale tick, fire nothing
 		}
 		t.sugarCaneTick(state, pos)
+	case redstoneTorchTickType, redstoneWallTorchTickType:
+		// ServerLevel.tickBlock stale guard: only tick if still a redstone torch of the scheduled kind.
+		if !block.IsRedstoneTorch(state) && !block.IsRedstoneWallTorch(state) {
+			return
+		}
+		t.redstoneTorchTick(state, pos)
 	default:
+		// Buttons schedule under their own block id (13 variants). Route any button tick to the unpress
+		// handler; the IsButton guard is the tickBlock `state.is(block)` stale check.
+		if isButtonTickType(typ) {
+			if !block.IsButton(state) {
+				return
+			}
+			t.buttonTick(state, pos)
+			return
+		}
 		// Unknown scheduled type (a future block whose handler is not yet ported): no-op. The
 		// tick was still dequeued, matching vanilla's `is(block)` guard failing for a stale type.
 	}

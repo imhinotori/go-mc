@@ -106,6 +106,13 @@ type region struct {
 	blockTicks          *ticks.LevelTicks[blockTickType]
 	blockTickSubCounter int64
 
+	// redstoneToggles is the per-level RedstoneTorchBlock.RECENT_TOGGLES list (a (pos, gameTime)
+	// FIFO). Vanilla stores it in a static WeakHashMap<BlockGetter, List<Toggle>> keyed by level; here
+	// it lives on the region (the level) so it is tick-owned (TICK-05) and pruned/appended only on the
+	// region goroutine by the torch tick. Bounds the redstone-torch burnout (>=8 toggles per pos within
+	// a 60-tick window -> 160-tick cooldown). CITE: RedstoneTorchBlock.RECENT_TOGGLES.
+	redstoneToggles []redstoneToggle
+
 	// fluidSchedule is the per-region GAMEPLAY-05 scheduled-fluid-tick queue. Lazily constructed
 	// inside tickFluids (a nil queue drains to nothing).
 	fluidSchedule *fluidScheduleQueue

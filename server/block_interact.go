@@ -449,6 +449,12 @@ func (t *TickLoop) reconcileEdit(editor *tickPlayer, pos pk.Position, state bloc
 	// the block-tick subsystem fires it next tick (tickBlock -> sugarCaneTick). This is the schedule
 	// half of the scheduled-tick round-trip the subsystem exists to drive.
 	t.onBlockTickEdit(pos)
+	// CORE REDSTONE: Level.updateNeighborsAt -> RedStoneWireBlock/RedstoneTorchBlock.neighborChanged —
+	// a break/place also wakes the redstone graph around the changed cell: a wire recomputes its POWER
+	// (max-neighbor-minus-1 spread), a torch reschedules its lit/unlit toggle, and the change propagates
+	// across the wire network to its fixpoint. This is what makes placing a lever next to a wire power
+	// it, or breaking a source drop the wire back to 0.
+	t.onRedstoneEdit(pos)
 }
 
 // broadcastBlockUpdate sends a ClientboundBlockUpdate(pos, state) to every player whose view

@@ -186,14 +186,25 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 	isBed := isBedBlock(state)
 	isFurnace := isAnyFurnaceBlock(state)
 	isBrew := isBrewingStandBlock(state)
-	if !isChest && !isCraft && !isCut && !isBed && !isFurnace && !isBrew {
-		return false // not an interactive block (chest/crafting_table/stonecutter/bed/furnace/brewing_stand): PASS → placement runs
+	// CORE REDSTONE: a lever/button right-click TOGGLES its POWERED state (LeverBlock/ButtonBlock
+	// .useWithoutItem) and consumes the interaction so no block is placed. CITE: LeverBlock.useWithoutItem
+	// (pull), ButtonBlock.useWithoutItem (press).
+	isLever := block.IsLever(state)
+	isButton := block.IsButton(state)
+	if !isChest && !isCraft && !isCut && !isBed && !isFurnace && !isBrew && !isLever && !isButton {
+		return false // not an interactive block: PASS → placement runs
 	}
 	// Reach-gate the interaction (the same server-authoritative reach the place/break paths use):
 	// a far block is not openable. Vanilla gates the whole useItemOn behind the interaction
 	// distance; reusing withinReach keeps the open under the same bound.
 	if !t.withinReach(p, hitPos) {
 		return false
+	}
+	if isLever {
+		return t.useLever(hitPos, state) // LeverBlock.pull: cycle POWERED + updateNeighbours.
+	}
+	if isButton {
+		return t.pressButton(hitPos, state) // ButtonBlock.press: POWERED=true + scheduleTick(unpress).
 	}
 	if isCraft {
 		// CraftingTableBlock.useWithoutItem -> player.openMenu(crafting). The 3x3 transient menu opens
