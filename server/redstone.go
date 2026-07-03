@@ -250,6 +250,9 @@ func (t *TickLoop) stateGetSignal(state block.StateID, pos pk.Position, directio
 		return 0
 	case block.IsRedstoneWire(state):
 		return t.wireGetSignal(state, pos, direction)
+	case block.IsRepeater(state), block.IsComparator(state):
+		// DiodeBlock.getSignal: ownSignal only out FACING (REDSTONE TIER-2, redstone_diode.go).
+		return t.diodeGetSignal(state, pos, direction)
 	default:
 		return 0 // BlockBehaviour default: ownSignal == 0
 	}
@@ -284,6 +287,9 @@ func (t *TickLoop) stateGetDirectSignal(state block.StateID, pos pk.Position, di
 		return 0
 	case block.IsRedstoneWire(state):
 		return t.wireGetDirectSignal(state, pos, direction)
+	case block.IsRepeater(state), block.IsComparator(state):
+		// DiodeBlock.getDirectSignal == getSignal (REDSTONE TIER-2, redstone_diode.go).
+		return t.diodeGetDirectSignal(state, pos, direction)
 	default:
 		return 0
 	}
@@ -655,7 +661,8 @@ func (t *TickLoop) wireConnectingSide(pos pk.Position, direction block.Direction
 		placeableAbove := t.wireCanSurviveOn(rel, relState)
 		if placeableAbove {
 			relAbove := relative(rel, block.Up)
-			if t.shouldConnectTo(t.redstoneBlockAt(relAbove), false) {
+			// shouldConnectTo(getBlockState(rel.above())) — the 1-arg (direction == null) overload.
+			if t.shouldConnectToNull(t.redstoneBlockAt(relAbove)) {
 				// relState.isFaceSturdy(direction.opposite) ? UP : SIDE.
 				if block.IsFaceSturdy(relState, dirOpposite(direction), block.SupportFull) {
 					return block.RedstoneSideUp
@@ -664,11 +671,26 @@ func (t *TickLoop) wireConnectingSide(pos pk.Position, direction block.Direction
 			}
 		}
 	}
-	if t.shouldConnectTo(relState, true /*hasDirection*/) ||
-		(!block.IsRedstoneConductor(relState) && t.shouldConnectTo(t.redstoneBlockAt(relative(rel, block.Down)), false)) {
+	// shouldConnectTo(relState, direction) — the 2-arg overload WITH the direction (so the repeater
+	// axis rule uses the real direction); the .below() call is the 1-arg (null) overload.
+	if t.shouldConnectToDir(relState, direction, true /*hasDirection*/) ||
+		(!block.IsRedstoneConductor(relState) && t.shouldConnectToNull(t.redstoneBlockAt(relative(rel, block.Down)))) {
 		return block.RedstoneSideSide
 	}
 	return block.RedstoneSideNone
+}
+
+// shouldConnectToNull is RedStoneWireBlock.shouldConnectTo(state) — the 1-arg overload that passes a
+// null direction. A repeater with a null direction never connects (facing == null || facing.opposite
+// == null are both false); the generic tail requires direction != null so it is false too; only a wire
+// connects. CITE: RedStoneWireBlock.shouldConnectTo(state) (delegates to (state, null)).
+func (t *TickLoop) shouldConnectToNull(state block.StateID) bool {
+	if block.IsRedstoneWire(state) {
+		return true
+	}
+	// A repeater under the null-direction overload: facing == null is false, facing.opposite == null is
+	// false -> no connection. The generic isSignalSource && (direction != null) tail is also false.
+	return false
 }
 
 // shouldConnectTo is RedStoneWireBlock.shouldConnectTo(state, direction) for the ported blocks: a
@@ -676,10 +698,28 @@ func (t *TickLoop) wireConnectingSide(pos pk.Position, direction block.Direction
 // are DEFERRED. `hasDirection` mirrors the `direction != null` distinction (the 1-arg overload
 // passes null). CITE: RedStoneWireBlock.shouldConnectTo.
 func (t *TickLoop) shouldConnectTo(state block.StateID, hasDirection bool) bool {
-	isWire := block.IsRedstoneWire(state)
-	// isSignalSource(state): redstone_block, lever, button, torches, wire (wire handled above).
-	isSource := t.isSignalSource(state)
-	return block.ShouldConnectTo(isWire, isSource, hasDirection)
+	return t.shouldConnectToDir(state, block.Down, hasDirection)
+}
+
+// shouldConnectToDir is RedStoneWireBlock.shouldConnectTo(state, direction) with the REPEATER axis
+// special case wired in: a wire connects to a repeater only in front/behind it (FACING == dir ||
+// FACING.opposite == dir), not on its two side faces. When `hasDirection` is false (the 1-arg overload
+// passes null), the repeater special case still evaluates against `direction` but that branch is only
+// reached from getConnectingSide's direction-bearing call. CITE: RedStoneWireBlock.shouldConnectTo
+// (REPEATER branch; OBSERVER DEFERRED; generic isSignalSource && direction != null tail).
+func (t *TickLoop) shouldConnectToDir(state block.StateID, direction block.Direction, hasDirection bool) bool {
+	if block.IsRedstoneWire(state) {
+		return true
+	}
+	// REPEATER: FACING == direction || FACING.opposite == direction. This branch is independent of
+	// hasDirection in vanilla (it does not consult direction != null), so a repeater connects on its
+	// axis regardless. CITE: RedStoneWireBlock.shouldConnectTo REPEATER branch.
+	if connect, isRepeater := block.RepeaterShouldConnectTo(state, direction); isRepeater {
+		return connect
+	}
+	// Generic tail: isSignalSource() && direction != null. Comparator falls here (connects on any side
+	// when a direction is supplied), matching vanilla (no comparator special case in shouldConnectTo).
+	return t.isSignalSource(state) && hasDirection
 }
 
 // isSignalSource is BlockState.isSignalSource() for the ported blocks. Wire's isSignalSource is
@@ -688,7 +728,9 @@ func (t *TickLoop) shouldConnectTo(state block.StateID, hasDirection bool) bool 
 func (t *TickLoop) isSignalSource(state block.StateID) bool {
 	switch {
 	case block.IsRedstoneBlock(state), block.IsLever(state), block.IsButton(state),
-		block.IsRedstoneTorch(state), block.IsRedstoneWallTorch(state), block.IsRedstoneWire(state):
+		block.IsRedstoneTorch(state), block.IsRedstoneWallTorch(state), block.IsRedstoneWire(state),
+		block.IsRepeater(state), block.IsComparator(state):
+		// DiodeBlock.isSignalSource == true (REDSTONE TIER-2). CITE: DiodeBlock.isSignalSource.
 		return true
 	default:
 		return false
@@ -779,6 +821,10 @@ func (t *TickLoop) drainRedstoneUpdates(q *redstoneUpdateQueue) {
 			}
 		case block.IsRedstoneTorch(state) || block.IsRedstoneWallTorch(state):
 			t.torchNeighborChanged(pos, state)
+		case block.IsRepeater(state) || block.IsComparator(state):
+			// DiodeBlock.neighborChanged -> checkTickOnNeighbor: schedule the delayed output flip if the
+			// diode's input state changed (REDSTONE TIER-2, redstone_diode.go). CITE: DiodeBlock.neighborChanged.
+			t.diodeNeighborChanged(pos, state)
 			// lever / button / redstone_block have no neighborChanged reaction (pure sources).
 		}
 	}

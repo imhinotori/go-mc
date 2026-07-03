@@ -54,6 +54,12 @@ const (
 	// RedstoneWallTorchBlock.
 	redstoneTorchTickType     blockTickType = "minecraft:redstone_torch"
 	redstoneWallTorchTickType blockTickType = "minecraft:redstone_wall_torch"
+
+	// repeaterTickType / comparatorTickType are the block ids the diode delayed output flip
+	// (DiodeBlock.tick / ComparatorBlock.tick) is scheduled/dispatched under (REDSTONE TIER-2). CITE:
+	// RepeaterBlock / ComparatorBlock.
+	repeaterTickType   blockTickType = "minecraft:repeater"
+	comparatorTickType blockTickType = "minecraft:comparator"
 )
 
 // buttonTickTypes is the set of block ids the button-unpress tick (ButtonBlock.tick) is scheduled
@@ -269,6 +275,17 @@ func (t *TickLoop) tickBlock(pos pk.Position, typ blockTickType) {
 			return
 		}
 		t.redstoneTorchTick(state, pos)
+	case repeaterTickType:
+		// ServerLevel.tickBlock stale guard: only tick if still a repeater (REDSTONE TIER-2).
+		if !block.IsRepeater(state) {
+			return
+		}
+		t.repeaterTick(state, pos)
+	case comparatorTickType:
+		if !block.IsComparator(state) {
+			return
+		}
+		t.comparatorTick(state, pos)
 	default:
 		// Buttons schedule under their own block id (13 variants). Route any button tick to the unpress
 		// handler; the IsButton guard is the tickBlock `state.is(block)` stale check.

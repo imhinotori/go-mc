@@ -2,6 +2,7 @@ package server
 
 import (
 	"github.com/imhinotori/sulfur/level/ticks"
+	pk "github.com/imhinotori/sulfur/net/packet"
 	"github.com/imhinotori/sulfur/world"
 	"github.com/imhinotori/sulfur/world/levelgen"
 )
@@ -112,6 +113,15 @@ type region struct {
 	// region goroutine by the torch tick. Bounds the redstone-torch burnout (>=8 toggles per pos within
 	// a 60-tick window -> 160-tick cooldown). CITE: RedstoneTorchBlock.RECENT_TOGGLES.
 	redstoneToggles []redstoneToggle
+
+	// comparatorOutput is the per-level ComparatorBlockEntity.output store (REDSTONE TIER-2): a map
+	// from a comparator's position to the last output-signal value refreshOutputState computed and the
+	// tick(...) reads back via getOutputSignal. Vanilla holds this int in the comparator's BlockEntity
+	// (ComparatorBlockEntity.output, default 0); Sulfur has no live comparator block-entity, so the
+	// value lives here on the region (the level) — tick-owned (TICK-05), read/written only on the region
+	// goroutine by the comparator diode logic. A pos absent from the map reads 0 (the BE default). CITE:
+	// ComparatorBlockEntity.getOutputSignal/setOutputSignal (private int output = 0).
+	comparatorOutput map[pk.Position]int
 
 	// fluidSchedule is the per-region GAMEPLAY-05 scheduled-fluid-tick queue. Lazily constructed
 	// inside tickFluids (a nil queue drains to nothing).

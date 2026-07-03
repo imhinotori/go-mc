@@ -113,6 +113,42 @@ func ShouldConnectTo(isWire, isSignalSource, hasDirection bool) bool {
 	return isSignalSource && hasDirection
 }
 
+// RepeaterShouldConnectTo is the RedStoneWireBlock.shouldConnectTo REPEATER special case (checked
+// before the generic isSignalSource tail): a wire connects to a repeater at state `s` toward
+// `direction` iff the repeater's FACING lies on the queried axis — FACING == direction ||
+// FACING.opposite == direction. So a wire connects to a repeater only in front of / behind it (the
+// input and output faces), never on the two side faces. Returns (false, false) if s is not a
+// repeater (caller falls through to the generic tail). CITE: RedStoneWireBlock.shouldConnectTo
+// (`state.is(REPEATER)` branch: `facing == dir || facing.getOpposite() == dir`).
+func RepeaterShouldConnectTo(s StateID, direction Direction) (connect bool, isRepeater bool) {
+	facing, ok := RepeaterFacing(s)
+	if !ok {
+		return false, false
+	}
+	return facing == direction || opposite(facing) == direction, true
+}
+
+// opposite is Direction.getOpposite() for the block package's connection logic. CITE:
+// Direction.getOpposite.
+func opposite(d Direction) Direction {
+	switch d {
+	case Down:
+		return Up
+	case Up:
+		return Down
+	case North:
+		return South
+	case South:
+		return North
+	case West:
+		return East
+	case East:
+		return West
+	default:
+		return d
+	}
+}
+
 // ---------------------------------------------------------------------------------------------
 // Redstone torch (RedstoneTorchBlock / RedstoneWallTorchBlock)
 // ---------------------------------------------------------------------------------------------
@@ -399,6 +435,211 @@ func ButtonStayPressedTicks(s StateID) int {
 	default:
 		return 0
 	}
+}
+
+// ---------------------------------------------------------------------------------------------
+// Repeater (RepeaterBlock / DiodeBlock) — REDSTONE TIER-2
+// ---------------------------------------------------------------------------------------------
+//
+// Every value and branch below is a literal 1:1 copy of the unobfuscated 26.2 jar
+// (temp/cache/26.2-inner.jar), decompiled via CFR / `javap -c -p` this session:
+//   net.minecraft.world.level.block.RepeaterBlock  (DELAY 1..4, LOCKED, POWERED, FACING; getDelay=DELAY*2;
+//       useWithoutItem -> state.cycle(DELAY); shouldConnectTo axis rule)
+//   net.minecraft.world.level.block.DiodeBlock     (POWERED, FACING; getSignal only out FACING;
+//       isSignalSource=true; ownSignal = POWERED ? getOutputSignal : 0)
+
+// IsRepeater reports whether a state id is a repeater (any DELAY/LOCKED/POWERED/FACING combination).
+// CITE: RepeaterBlock.
+func IsRepeater(s StateID) bool {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return false
+	}
+	_, ok := StateList[s].(Repeater)
+	return ok
+}
+
+// RepeaterFacing returns the FACING of a repeater (the direction its INPUT is read from and its
+// OUTPUT is emitted toward the OPPOSITE of — DiodeBlock.getSignal emits ownSignal only when the
+// queried face == FACING, and getInputSignal reads pos.relative(FACING)). Returns (Down, false) if
+// not a repeater. CITE: DiodeBlock.getSignal / getInputSignal (state.getValue(FACING)).
+func RepeaterFacing(s StateID) (Direction, bool) {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return Down, false
+	}
+	if b, ok := StateList[s].(Repeater); ok {
+		return b.Facing, true
+	}
+	return Down, false
+}
+
+// RepeaterDelay returns the DELAY property (1..4) of a repeater, or 0 if not a repeater. The tick
+// delay is DELAY*2 (2/4/6/8). CITE: RepeaterBlock.getDelay (state.getValue(DELAY) * 2).
+func RepeaterDelay(s StateID) int {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return 0
+	}
+	if b, ok := StateList[s].(Repeater); ok {
+		return int(b.Delay)
+	}
+	return 0
+}
+
+// RepeaterLocked returns the LOCKED property of a repeater, or false if not a repeater. CITE:
+// RepeaterBlock.LOCKED.
+func RepeaterLocked(s StateID) bool {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return false
+	}
+	if b, ok := StateList[s].(Repeater); ok {
+		return bool(b.Locked)
+	}
+	return false
+}
+
+// RepeaterPowered returns the POWERED property of a repeater, or false if not a repeater. CITE:
+// DiodeBlock.POWERED.
+func RepeaterPowered(s StateID) bool {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return false
+	}
+	if b, ok := StateList[s].(Repeater); ok {
+		return bool(b.Powered)
+	}
+	return false
+}
+
+// RepeaterWithPowered resolves the same repeater with POWERED set to `powered`, preserving
+// DELAY/LOCKED/FACING. Returns (s, false) if not a repeater. CITE: DiodeBlock.tick
+// (state.setValue(POWERED, ...)).
+func RepeaterWithPowered(s StateID, powered bool) (StateID, bool) {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return s, false
+	}
+	if b, ok := StateList[s].(Repeater); ok {
+		b.Powered = Boolean(powered)
+		return lookup(b)
+	}
+	return s, false
+}
+
+// RepeaterWithLocked resolves the same repeater with LOCKED set to `locked`, preserving
+// DELAY/POWERED/FACING. Returns (s, false) if not a repeater. CITE: RepeaterBlock.updateShape /
+// getStateForPlacement (state.setValue(LOCKED, ...)).
+func RepeaterWithLocked(s StateID, locked bool) (StateID, bool) {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return s, false
+	}
+	if b, ok := StateList[s].(Repeater); ok {
+		b.Locked = Boolean(locked)
+		return lookup(b)
+	}
+	return s, false
+}
+
+// RepeaterCycleDelay resolves the repeater with DELAY cycled to the next value (state.cycle(DELAY)):
+// DELAY is IntegerProperty.create("delay", 1, 4), so the possible-values list is {1,2,3,4} and cycle
+// advances to the next entry, wrapping 4 -> 1. Preserves LOCKED/POWERED/FACING. Returns (s, false)
+// if not a repeater. CITE: RepeaterBlock.useWithoutItem (state.cycle(DELAY)); BlockStateProperties.DELAY
+// = IntegerProperty.create(1, 4).
+func RepeaterCycleDelay(s StateID) (StateID, bool) {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return s, false
+	}
+	if b, ok := StateList[s].(Repeater); ok {
+		if b.Delay >= 4 {
+			b.Delay = 1
+		} else {
+			b.Delay++
+		}
+		return lookup(b)
+	}
+	return s, false
+}
+
+// ---------------------------------------------------------------------------------------------
+// Comparator (ComparatorBlock / DiodeBlock) — REDSTONE TIER-2
+// ---------------------------------------------------------------------------------------------
+//
+//   net.minecraft.world.level.block.ComparatorBlock  (MODE compare/subtract, POWERED, FACING;
+//       getDelay=2; useWithoutItem -> state.cycle(MODE); getOutputSignal from the block-entity output)
+
+// IsComparator reports whether a state id is a comparator (any MODE/POWERED/FACING combination).
+// CITE: ComparatorBlock.
+func IsComparator(s StateID) bool {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return false
+	}
+	_, ok := StateList[s].(Comparator)
+	return ok
+}
+
+// ComparatorFacing returns the FACING of a comparator (input read from pos.relative(FACING), output
+// emitted toward FACING per DiodeBlock.getSignal). Returns (Down, false) if not a comparator. CITE:
+// DiodeBlock.getSignal / getInputSignal.
+func ComparatorFacing(s StateID) (Direction, bool) {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return Down, false
+	}
+	if b, ok := StateList[s].(Comparator); ok {
+		return b.Facing, true
+	}
+	return Down, false
+}
+
+// ComparatorGetMode returns the MODE (compare/subtract) of a comparator, or (Compare, false) if not
+// a comparator. CITE: ComparatorBlock.MODE (state.getValue(MODE)).
+func ComparatorGetMode(s StateID) (ComparatorMode, bool) {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return ComparatorModeCompare, false
+	}
+	if b, ok := StateList[s].(Comparator); ok {
+		return b.Mode, true
+	}
+	return ComparatorModeCompare, false
+}
+
+// ComparatorPowered returns the POWERED property of a comparator, or false if not a comparator.
+// CITE: DiodeBlock.POWERED.
+func ComparatorPowered(s StateID) bool {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return false
+	}
+	if b, ok := StateList[s].(Comparator); ok {
+		return bool(b.Powered)
+	}
+	return false
+}
+
+// ComparatorWithPowered resolves the same comparator with POWERED set to `powered`, preserving
+// MODE/FACING. Returns (s, false) if not a comparator. CITE: ComparatorBlock.refreshOutputState
+// (state.setValue(POWERED, ...)).
+func ComparatorWithPowered(s StateID, powered bool) (StateID, bool) {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return s, false
+	}
+	if b, ok := StateList[s].(Comparator); ok {
+		b.Powered = Boolean(powered)
+		return lookup(b)
+	}
+	return s, false
+}
+
+// ComparatorCycleMode resolves the comparator with MODE cycled (state.cycle(MODE)): the enum has two
+// values {COMPARE, SUBTRACT}, so cycle toggles COMPARE <-> SUBTRACT. Preserves POWERED/FACING.
+// Returns (s, false) if not a comparator. CITE: ComparatorBlock.useWithoutItem (state.cycle(MODE)).
+func ComparatorCycleMode(s StateID) (StateID, bool) {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return s, false
+	}
+	if b, ok := StateList[s].(Comparator); ok {
+		if b.Mode == ComparatorModeCompare {
+			b.Mode = ComparatorModeSubtract
+		} else {
+			b.Mode = ComparatorModeCompare
+		}
+		return lookup(b)
+	}
+	return s, false
 }
 
 // ---------------------------------------------------------------------------------------------

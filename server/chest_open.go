@@ -191,7 +191,13 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 	// (pull), ButtonBlock.useWithoutItem (press).
 	isLever := block.IsLever(state)
 	isButton := block.IsButton(state)
-	if !isChest && !isCraft && !isCut && !isBed && !isFurnace && !isBrew && !isLever && !isButton {
+	// REDSTONE TIER-2: a repeater right-click cycles its DELAY (RepeaterBlock.useWithoutItem), a
+	// comparator right-click toggles its MODE compare<->subtract (ComparatorBlock.useWithoutItem); both
+	// consume the interaction so no block is placed. CITE: RepeaterBlock/ComparatorBlock.useWithoutItem.
+	isRepeater := block.IsRepeater(state)
+	isComparator := block.IsComparator(state)
+	if !isChest && !isCraft && !isCut && !isBed && !isFurnace && !isBrew && !isLever && !isButton &&
+		!isRepeater && !isComparator {
 		return false // not an interactive block: PASS → placement runs
 	}
 	// Reach-gate the interaction (the same server-authoritative reach the place/break paths use):
@@ -205,6 +211,12 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 	}
 	if isButton {
 		return t.pressButton(hitPos, state) // ButtonBlock.press: POWERED=true + scheduleTick(unpress).
+	}
+	if isRepeater {
+		return t.useRepeater(hitPos, state) // RepeaterBlock.useWithoutItem: cycle DELAY.
+	}
+	if isComparator {
+		return t.useComparator(hitPos, state) // ComparatorBlock.useWithoutItem: cycle MODE.
 	}
 	if isCraft {
 		// CraftingTableBlock.useWithoutItem -> player.openMenu(crafting). The 3x3 transient menu opens
