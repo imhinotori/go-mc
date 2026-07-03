@@ -439,6 +439,46 @@ type Entity struct {
 	// bite animation event is emitted exactly once (the first tick warmup drops below 0).
 	fangsSentSpikeEvent bool
 
+	// --- LIGHTNING BOLT (net.minecraft.world.entity.LightningBolt) ---------------------------------
+	//
+	// Tick-owned plain values, set/read ONLY for a LightningBolt (isBolt). The bolt is a code-spawned
+	// visual+damage entity (the sibling of EvokerFangs above) the thunder strike (lightning.go
+	// ServerLevel.tickThunder) spawns. Its whole behavior is the life/flashes lifecycle: at life==2 it
+	// spawns ground fire, then damages entities in a 3.0 radius each tick it is alive, then re-flashes
+	// flashes-1 more times before discarding. Zero for every non-bolt entity (the bolt tick gates on
+	// isBolt).
+	//	[VERIFIED CFR LightningBolt: START_LIFE=2, life=2, flashes=nextInt(3)+1, visualOnly; tick()
+	//	 life==2 -> spawnFire(4)+powerLightningRod+clearCopper+gameEvent; --life; life<0 && flashes==0 ->
+	//	 discard; life<0 && life<-nextInt(10) -> --flashes,life=1,seed=nextLong(),spawnFire(0); life>=0 &&
+	//	 !visualOnly -> thunderHit every LivingEntity in AABB(±3,-3..+6+3,±3).]
+
+	// isBolt marks this entity as a LightningBolt. The bolt tick (life/flashes lifecycle -> fire +
+	// damage -> discard) runs ONLY for entities with this set. Set at spawn by spawnLightningBolt.
+	isBolt bool
+
+	// boltLife mirrors LightningBolt.life (START_LIFE=2). The tick spawns the flash at life==2, then
+	// counts it down each tick; at life<0 it discards (flashes==0) or re-flashes (life<-nextInt(10)).
+	boltLife int32
+
+	// boltFlashes mirrors LightningBolt.flashes (ctor: nextInt(3)+1 — 1..3 additional strike flashes).
+	// Each re-flash decrements it and resets life to 1; the bolt discards once flashes hits 0 and life
+	// drops below 0.
+	boltFlashes int32
+
+	// boltVisualOnly mirrors LightningBolt.visualOnly. A visual-only bolt (the skeleton-trap spawn, or a
+	// summoned cosmetic bolt) renders + plays sound but deals NO entity damage and starts NO fire.
+	boltVisualOnly bool
+
+	// boltBlocksSetOnFire mirrors LightningBolt.blocksSetOnFire — a diagnostic counter incremented per
+	// fire block placed by spawnFire (advancement-side in vanilla; kept for fidelity, unread in v1).
+	boltBlocksSetOnFire int32
+
+	// boltHitEntities mirrors LightningBolt.hitEntities — the set of entity ids already struck this
+	// bolt's lifetime, so the same entity is not double-hit across the multi-tick strike window. Modeled
+	// as a set of THIN entity ids (never live *Entity pointers — the Folia/snapshot rule). Lazily created
+	// on first hit; nil for a non-bolt entity.
+	boltHitEntities map[int32]bool
+
 	// --- PASSENGER / VEHICLE (net.minecraft.world.entity.Entity ride subsystem) --------------------
 	//
 	// The ride-subsystem state, mirroring net.minecraft.world.entity.Entity's `passengers`

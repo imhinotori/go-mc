@@ -119,6 +119,15 @@ func (t *TickLoop) tickWorld() {
 	// vanilla's ServerLevel.tick ordering (tickChunk runs in ServerChunkCache.tickChunks, after the
 	// pending block/fluid ticks). CITE: ServerChunkCache.tickChunks -> ServerLevel.tickChunk.
 	t.tickRandomBlocks()
+	// SUB-THUNDER: the WORLD-GLOBAL lightning-strike gate (ServerLevel.tickThunder — the per-chunk
+	// isRaining && isThundering && nextInt(100000)==0 probability that spawns a LightningBolt). In vanilla
+	// tickThunder runs in ServerChunkCache.tickSpawningChunk, a SIBLING of tickChunk (the random-tick pass)
+	// in the same chunk-cache tick — so it belongs right after tickRandomBlocks here, as another
+	// world-global per-loaded-chunk pass over the SHARED ChunkManager on the coordinator. It draws the
+	// GLOBAL levelRandom (like the weather cycle), never a per-entity stream, so the pig oracle (which never
+	// runs this) is unperturbed. A clear/non-thundering world is a cheap early-out (no per-column draw). Its
+	// body lives in lightning.go. CITE: ServerChunkCache.tickSpawningChunk -> ServerLevel.tickThunder.
+	t.tickThunder()
 	// SUB-BLOCKENTITY: tick every furnace/blast_furnace/smoker block-entity (GAMEPLAY-05
 	// AbstractFurnaceBlockEntity.serverTick). Furnaces are keyed by world position (t.furnaces, global —
 	// not per-region), so they tick ONCE globally here (the tickChunkSave twin), after the per-region
@@ -292,6 +301,16 @@ func (t *TickLoop) tickEntities() {
 	// fangs-gated (zero cost when no fangs are active). Placed AFTER tickPotions and BEFORE tracker.Tick so a
 	// despawned fangs' removal is reflected in this tick's near() and the tracker emits RemoveEntities.
 	t.tickFangs()
+
+	// LIGHTNING BOLT: the LightningBolt.tick life/flashes lifecycle (net.minecraft.world.entity
+	// .LightningBolt) for every active bolt the thunder strike (or a future channeling trident) spawned —
+	// at life==2 it starts ground fire; while life>=0 and not visual-only it deals 5.0 lightning damage +
+	// fire to every LivingEntity in a ±3 box; then it re-flashes flashes-1 times and discards. Sibling of
+	// tickFangs (a code-spawned tick-owned entity); ADDITIVE + bolt-gated (zero cost when no bolt is
+	// active). Placed AFTER tickFangs and BEFORE tracker.Tick so a discarded bolt's removal is reflected in
+	// this tick's near() and the tracker emits RemoveEntities promptly. Its body lives in lightning.go.
+	// CITE: LightningBolt.tick.
+	t.tickLightning()
 
 	// Plan 17-21 block-break dig-time: the ServerPlayerGameMode.tick() port — advance any pending
 	// delayed-destroy (finish the break at progress>=1.0) and refresh the in-progress crack overlay

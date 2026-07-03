@@ -66,6 +66,11 @@ var (
 	// damageTypeIndirectMagic is minecraft:indirect_magic — the source a thrown-potion splash deals with a
 	// thrower (damageSources().indirectMagic(potion, owner)). Also a bypasses_armor member.
 	damageTypeIndirectMagic = damageTypeID(tag.DamageTypeIDs["minecraft:indirect_magic"])
+	// damageTypeLightning is minecraft:lightning_bolt — the source Entity.thunderHit deals when a
+	// LightningBolt strikes an entity in range (damageSources().lightningBolt(), 5.0 damage). NOT a
+	// bypasses_armor member (the victim folds the armor curve). Cite Entity.thunderHit + DamageSources
+	// .lightningBolt (DamageTypes.LIGHTNING_BOLT).
+	damageTypeLightning = damageTypeID(tag.DamageTypeIDs["minecraft:lightning_bolt"])
 )
 
 // damageSourceOf builds a DamageSource for an environmental/anonymous source: the given damage-type
@@ -129,4 +134,13 @@ func damageSourceMagic() damageSource {
 // thrower (owner): type indirect_magic, causingEntity = owner. The port of DamageSources.indirectMagic.
 func damageSourceIndirectMagic(ownerID int32) damageSource {
 	return damageSource{typeTag: damageTypeIndirectMagic, attacker: ownerID}
+}
+
+// damageSourceLightning builds the DamageSource a LightningBolt deals via Entity.thunderHit: type
+// lightning_bolt, no causing entity. The port of DamageSources.lightningBolt() — the source is a bare
+// environmental damage type (causingEntity null; the bolt itself is not recorded as the attacker in
+// vanilla's DamageSources.lightningBolt()). Cite Entity.thunderHit: hurtServer(damageSources()
+// .lightningBolt(), 5.0F).
+func damageSourceLightning() damageSource {
+	return damageSource{typeTag: damageTypeLightning, attacker: 0}
 }
