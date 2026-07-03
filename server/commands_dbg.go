@@ -237,8 +237,41 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		rm := t.only().ensureRaidsManager()
 		raid := rm.createRaidAt(int(p.x), int(p.y), int(p.z), difficultyNormal, 1)
 		t.broadcastSystemChat(fmt.Sprintf("[dbg] started raid id=%d at (%d,%d,%d) numGroups=%d (waves spawn after the 300-tick cooldown; all 5 RaiderTypes now spawn real raiders)", raid.id, int(p.x), int(p.y), int(p.z), raid.numGroups))
+	case "rain":
+		// WEATHER (test-only, e2e bot): force the world into raining NOW and broadcast the START_RAINING
+		// game event to every player, so the interaction bot can assert the client receives it. Sets the
+		// weather flags/level directly (the real advanceWeatherCycle path is unit-tested); this is only a
+		// deterministic trigger for the live-client check.
+		t.weather.raining = true
+		t.weather.rainLevel = 1.0
+		t.weather.rainTime = 12000
+		t.broadcastGameEvent(gameEventStartRaining, 0)
+		t.broadcastGameEvent(gameEventRainLevelChange, 1.0)
+		t.broadcastSystemChat("[dbg] forced rain (START_RAINING broadcast)")
+	case "redstone":
+		// REDSTONE (test-only, e2e bot): build a minimal lit rig — a redstone_block (constant-15 source)
+		// with a redstone_wire beside it — then run onRedstoneEdit so the wire recomputes to POWER 15 and
+		// its ClientboundBlockUpdate reaches the client. Proves the signal graph drives a real block-state
+		// change a vanilla client observes. Placed at feet level 2 blocks in front (+X) on the ground.
+		bx, by, bz := int(p.x)+2, int(p.y), int(p.z)
+		srcPos := pk.Position{X: bx, Y: by, Z: bz}
+		wirePos := pk.Position{X: bx + 1, Y: by, Z: bz}
+		src, okS := block.DefaultStateID["minecraft:redstone_block"]
+		wire, okW := block.DefaultStateID["minecraft:redstone_wire"]
+		if !okS || !okW || t.world() == nil {
+			t.broadcastSystemChat("[dbg] redstone: missing block states or world")
+			break
+		}
+		t.world().SetBlock(srcPos, src, dimMinY)
+		t.world().SetBlock(wirePos, wire, dimMinY)
+		t.broadcastBlockUpdate(srcPos, src)
+		t.broadcastBlockUpdate(wirePos, wire)
+		// Recompute the wire's power from its new redstone_block neighbor; the evaluator sets POWER 15 and
+		// broadcasts the wire's updated state.
+		t.onRedstoneEdit(wirePos)
+		t.broadcastSystemChat(fmt.Sprintf("[dbg] placed redstone_block(%d,%d,%d)+wire(%d,%d,%d); wire should be POWER 15", bx, by, bz, bx+1, by, bz))
 	default:
-		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | iron_golem | villager | villager_farmer | vex | fangs | water | pig-in-water | raid")
+		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | iron_golem | villager | villager_farmer | vex | fangs | water | pig-in-water | raid | rain | redstone")
 	}
 }
 
