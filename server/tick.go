@@ -129,6 +129,13 @@ type TickLoop struct {
 
 	gametime int64 // pure tick counter: ++ exactly once per consumed 50ms step (TICK-02)
 
+	// weather is the WORLD-GLOBAL rain/thunder cycle state (weather.go — ServerLevel.advanceWeatherCycle
+	// + WeatherData). Weather is a single world-global phase, so it lives ONCE here on the coordinator
+	// (not per-region): tickWeather advances it on the coordinator before the region fan-out, and the
+	// RNG draws use globalRegion.levelRandom (the ServerLevel this.random analogue). Zero-value = a
+	// fresh clear world (all timers 0, flags false, levels 0.0) — exactly WeatherData()'s default ctor.
+	weather weatherState
+
 	// worldSeed is the overworld seed (WORLD-04), for /seed. Set at boot via SetWorldSeed; 0 if unset.
 	worldSeed int64
 
@@ -1436,6 +1443,16 @@ func (t *TickLoop) drainRegistrations() {
 				// layer (the tracker self-skips this player). displayedSkinParts was captured in
 				// the CONFIG state (BUG-4) before the join, so it is already set here.
 				t.sendSelfSkin(p)
+				// WEATHER (weather.go): tell the joiner the CURRENT weather so it doesn't join to a clear
+				// sky during a storm. Vanilla's PlayerList.sendLevelInfo sends, when isRaining():
+				// START_RAINING(0) -> RAIN_LEVEL_CHANGE(getRainLevel(1)) -> THUNDER_LEVEL_CHANGE(getThunderLevel(1)).
+				// Owner-goroutine send over the joiner's own connection (mutates no tick state). CITE:
+				// PlayerList.sendLevelInfo.
+				if p.client != nil && t.isRaining() {
+					p.client.Send(writeGameEventPacket(gameEventStartRaining, 0))
+					p.client.Send(writeGameEventPacket(gameEventRainLevelChange, t.getRainLevel(1.0)))
+					p.client.Send(writeGameEventPacket(gameEventThunderLevelChange, t.getThunderLevel(1.0)))
+				}
 			}
 		case c := <-t.unregister:
 			t.removePlayer(c)

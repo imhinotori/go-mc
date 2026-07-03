@@ -259,11 +259,54 @@ func (t *TickLoop) farmlandTurnToDirt(pos pk.Position) {
 	}
 }
 
-// isRainingAt is the ServerLevel.isRainingAt(pos) seam. Sulfur has NO weather subsystem (the same
-// deferral cited for the fox thunder gate in ai_goals_fox.go and the fire daylight gate in fire.go),
-// so this is a CITED CONSTANT false — the farmland dry-out path therefore depends only on the real
-// isNearWater scan, never spuriously hydrating from rain. Structured to become a real
-// level.isRainingAt(pos) read once weather exists, never baked away.
+// isRainingAt ports Level.isRainingAt(BlockPos): precipitationAt(pos) == Biome.Precipitation.RAIN. With
+// the weather cycle now real (weather.go), the farmland dry-out path hydrates from rain exactly when
+// vanilla does. It delegates to precipitationAt below.
 //
-//	[DEFERRED: isRainingAt — no weather in v1. CITE: ServerLevel.isRainingAt. Follow-up: real read.]
-func (t *TickLoop) isRainingAt(_ pk.Position) bool { return false }
+//	[VERIFIED javap Level.isRainingAt: precipitationAt(pos) == Biome$Precipitation.RAIN.]
+func (t *TickLoop) isRainingAt(pos pk.Position) bool {
+	return t.precipitationAt(pos) == precipitationRAIN
+}
+
+// precipitation is the net.minecraft.world.level.biome.Biome$Precipitation enum port (NONE/RAIN/SNOW).
+// v1 wires only the NONE/RAIN distinction the isRainingAt gate needs; SNOW is a cited biome-data
+// deferral (below).
+type precipitation int
+
+const (
+	precipitationNONE precipitation = iota
+	precipitationRAIN
+)
+
+// precipitationAt ports Level.precipitationAt(BlockPos): the open-sky/heightmap/biome gate that turns
+// the world-global isRaining() into a per-position rain check:
+//
+//	if (!isRaining())                                   return NONE;
+//	if (!canSeeSky(pos))                                return NONE;
+//	if (getHeightmapPos(MOTION_BLOCKING, pos).getY() > pos.getY()) return NONE; // under the surface top
+//	return getBiome(pos).getPrecipitationAt(pos, seaLevel);
+//
+// The biome branch is a CITED deferral: no biome precipitation data is wired in v1 (the same gap the
+// spawn/precipitation callers cite), so an overworld surface cell that clears the isRaining + open-sky
+// + heightmap gates is treated as RAIN (the overworld default precipitation; SNOW/NONE-by-biome lands
+// with real biome data). The isRaining + canSeeSky + heightmap gates themselves are REAL.
+//
+//	[VERIFIED javap Level.precipitationAt: isRaining -> canSeeSky -> MOTION_BLOCKING heightmap top vs
+//	 pos.Y -> biome.getPrecipitationAt(pos, seaLevel). DEFERRED: per-biome precipitation (SNOW vs RAIN
+//	 vs NONE) pending biome data; overworld surface defaults to RAIN.]
+func (t *TickLoop) precipitationAt(pos pk.Position) precipitation {
+	if !t.isRaining() {
+		return precipitationNONE
+	}
+	if !t.canSeeSkyAt(pos.Y) {
+		return precipitationNONE
+	}
+	// getHeightmapPos(MOTION_BLOCKING, pos).getY() == getFirstAvailable(x,z) == top solid + 1 (the first
+	// air above the surface). If that is ABOVE pos.Y, pos is under the surface top -> no rain reaches it.
+	firstAvailableY := t.ghastMotionBlockingTop(pos.X, pos.Z) + 1
+	if firstAvailableY > pos.Y {
+		return precipitationNONE
+	}
+	// biome.getPrecipitationAt(pos, seaLevel): overworld default RAIN (biome-precipitation deferral).
+	return precipitationRAIN
+}

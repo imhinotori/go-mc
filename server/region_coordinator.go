@@ -121,6 +121,15 @@ func (t *TickLoop) tickOnce() {
 	// so they MUST run exactly once outside the parallel section — running them per-region would race
 	// the shared ChunkManager. only() falls back to globalRegion on the coordinator goroutine, so they
 	// operate over the (shared) world exactly as before. ---
+	// WORLD-GLOBAL weather cycle (weather.go — ServerLevel.advanceWeatherCycle): the rain/thunder
+	// timers + level ramp + the GameEvent broadcasts. It is a single world-global phase (one WeatherData
+	// per world), so it runs ONCE here on the coordinator, BEFORE the region fan-out — never per-region
+	// (a per-region run would advance the cycle N times + double-broadcast). Its RNG draws use
+	// globalRegion.levelRandom, and the pig oracle never calls tickOnce, so the pinned per-entity streams
+	// are unperturbed. Placed first among the world-global phases, mirroring ServerLevel.tick where
+	// advanceWeatherCycle runs early. CITE: ServerLevel.advanceWeatherCycle.
+	t.tickWeather()
+
 	t.tickWorld()  // scheduled blocks/fluids + chunk-save over the shared world
 	t.tickChunks() // per-player ring → world requests
 

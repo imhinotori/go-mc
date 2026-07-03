@@ -32,6 +32,7 @@ func (f *fakeClock) add(d time.Duration) { f.now = f.now.Add(d) }
 // of the tickOnce trace.
 var expectedPhaseOrder = []string{
 	"resolveSubtickInputs",
+	"tickWeather",
 	"tickWorld",
 	"tickChunks",
 	"tickEntities",

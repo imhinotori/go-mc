@@ -338,7 +338,12 @@ func (g *foxSeekShelterGoal) canUse(t *TickLoop, e *Entity) bool {
 	if e.ai != nil && e.ai.getTarget() != 0 {
 		return false
 	}
-	// isThundering() && canSeeSky: a cited constant-false thunder stub (no weather subsystem).
+	// if (isThundering() && canSeeSky(blockPosition())) return setWantedPos(); — the thunder branch runs
+	// BEFORE the interval gate and returns its result directly, so a fox seeks shelter immediately during
+	// a thunderstorm (isThundering is now REAL — weather.go). CITE: Fox$SeekShelterGoal.canUse.
+	if t.isThundering() && t.canSeeSky(e) {
+		return g.setWantedPos(t, e)
+	}
 	if g.interval > 0 {
 		g.interval--
 		return false
@@ -714,8 +719,8 @@ func (t *TickLoop) foxAiStep(e *Entity) {
 	}
 	// --- Fox.tick (isEffectiveAi branch) ---
 	inWater := t.entityInWater(e)
-	if inWater || (e.ai != nil && e.ai.getTarget() != 0) {
-		foxWakeUp(e) // inWater || getTarget()!=null || isThundering() -> wakeUp() (thunder stub false)
+	if inWater || (e.ai != nil && e.ai.getTarget() != 0) || t.isThundering() {
+		foxWakeUp(e) // inWater || getTarget()!=null || isThundering() -> wakeUp() (isThundering now REAL)
 	}
 	if inWater || foxIsSleeping(e) {
 		foxSetSitting(e, false) // inWater || isSleeping() -> setSitting(false)
