@@ -38,12 +38,26 @@ const (
 	// RAID_OMEN.
 	effectBadOmen  = "minecraft:bad_omen"
 	effectRaidOmen = "minecraft:raid_omen"
+	// BEACON effect ids (BEACON-01, BeaconBlockEntity.BEACON_EFFECTS): the six power effects a beacon can
+	// grant a player in range — speed/haste (level 1), resistance/jump_boost (level 2), strength (level 3),
+	// regeneration (level 4 secondary). effectSpeed/effectRegeneration already exist (witch consts); the
+	// remaining four are declared here. VERIFIED CFR MobEffects registrations (attribute modifiers cited on
+	// applyEffectModifiers below).
+	effectHaste      = "minecraft:haste"      // MobEffects.HASTE      (ATTACK_SPEED       +0.1 ADD_MULTIPLIED_TOTAL)
+	effectResistance = "minecraft:resistance" // MobEffects.RESISTANCE (no attribute modifier; damage-reduction)
+	effectJumpBoost  = "minecraft:jump_boost" // MobEffects.JUMP_BOOST (SAFE_FALL_DISTANCE +1.0 ADD_VALUE)
+	effectStrength   = "minecraft:strength"   // MobEffects.STRENGTH   (ATTACK_DAMAGE      +3.0 ADD_VALUE)
 )
 
 // modifier ids (stable identity per effect, matching the vanilla effect.<name> ids).
 const (
 	slownessModifierID = "effect.slowness"
 	weaknessModifierID = "effect.weakness"
+	// BEACON effect modifier ids (VERIFIED CFR MobEffects.*: Identifier.withDefaultNamespace("effect.<name>")).
+	speedModifierID     = "effect.speed"      // SPEED     -> MOVEMENT_SPEED
+	hasteModifierID     = "effect.haste"      // HASTE     -> ATTACK_SPEED
+	strengthModifierID  = "effect.strength"   // STRENGTH  -> ATTACK_DAMAGE
+	jumpBoostModifierID = "effect.jump_boost" // JUMP_BOOST-> SAFE_FALL_DISTANCE
 )
 
 // activeEffect is the Go stand-in for MobEffectInstance (the fields the witch slice needs): the effect id,
@@ -126,6 +140,36 @@ func (t *TickLoop) applyEffectModifiers(p *tickPlayer, id string, amplifier int)
 			Amount:    -4.0 * float64(amplifier+1),
 			Operation: attribute.AddValue,
 		})
+	case effectSpeed:
+		// MobEffects.SPEED: MOVEMENT_SPEED +0.2*(amp+1) ADD_MULTIPLIED_TOTAL (effect.speed).
+		h.addModifier(attrMovementSpeed, attribute.AttributeModifier{
+			ID:        speedModifierID,
+			Amount:    0.2 * float64(amplifier+1),
+			Operation: attribute.AddMultipliedTotal,
+		})
+	case effectHaste:
+		// MobEffects.HASTE: ATTACK_SPEED +0.1*(amp+1) ADD_MULTIPLIED_TOTAL (effect.haste).
+		h.addModifier(attrAttackSpeed, attribute.AttributeModifier{
+			ID:        hasteModifierID,
+			Amount:    0.1 * float64(amplifier+1),
+			Operation: attribute.AddMultipliedTotal,
+		})
+	case effectStrength:
+		// MobEffects.STRENGTH: ATTACK_DAMAGE +3.0*(amp+1) ADD_VALUE (effect.strength).
+		h.addModifier(attrAttackDamage, attribute.AttributeModifier{
+			ID:        strengthModifierID,
+			Amount:    3.0 * float64(amplifier+1),
+			Operation: attribute.AddValue,
+		})
+	case effectJumpBoost:
+		// MobEffects.JUMP_BOOST: SAFE_FALL_DISTANCE +1.0*(amp+1) ADD_VALUE (effect.jump_boost).
+		h.addModifier(attrSafeFallDistance, attribute.AttributeModifier{
+			ID:        jumpBoostModifierID,
+			Amount:    1.0 * float64(amplifier+1),
+			Operation: attribute.AddValue,
+		})
+	// effectResistance / effectRegeneration carry NO attribute modifier (RESISTANCE reduces damage in the
+	// hurt calc; REGENERATION is a periodic heal — handled in effectShouldApplyThisTick/applyEffectTick).
 	}
 }
 
@@ -139,6 +183,14 @@ func (t *TickLoop) removeEffectModifiers(p *tickPlayer, id string) {
 		p.attributes.removeModifier(attrMovementSpeed, slownessModifierID)
 	case effectWeakness:
 		p.attributes.removeModifier(attrAttackDamage, weaknessModifierID)
+	case effectSpeed:
+		p.attributes.removeModifier(attrMovementSpeed, speedModifierID)
+	case effectHaste:
+		p.attributes.removeModifier(attrAttackSpeed, hasteModifierID)
+	case effectStrength:
+		p.attributes.removeModifier(attrAttackDamage, strengthModifierID)
+	case effectJumpBoost:
+		p.attributes.removeModifier(attrSafeFallDistance, jumpBoostModifierID)
 	}
 }
 
@@ -181,8 +233,16 @@ func effectShouldApplyThisTick(id string, remaining, amplifier int) bool {
 		return true // BadOmenMobEffect.shouldApplyEffectTickThisTick -> always true
 	case effectRaidOmen:
 		return remaining == 1 // RaidOmenMobEffect.shouldApplyEffectTickThisTick -> remainingDuration == 1
+	case effectRegeneration:
+		// RegenerationMobEffect.shouldApplyEffectTickThisTick: interval = 50 >> amp (amp0=50, amp1=25, ...);
+		// remaining % interval == 0 (BEACON level-4 secondary can grant regeneration to a player in range).
+		interval := 50 >> amplifier
+		if interval <= 0 {
+			return true
+		}
+		return remaining%interval == 0
 	default:
-		return false // slowness/weakness never tick (pure attribute modifiers)
+		return false // slowness/weakness/speed/haste/strength/jump_boost/resistance never tick (pure modifiers)
 	}
 }
 
@@ -201,6 +261,12 @@ func (t *TickLoop) applyEffectTick(p *tickPlayer, id string, amplifier int) bool
 		return t.applyBadOmenTick(p, amplifier)
 	case effectRaidOmen:
 		return t.applyRaidOmenTick(p)
+	case effectRegeneration:
+		// RegenerationMobEffect.applyEffectTick: if health < maxHealth heal 1.0. (BEACON level-4 secondary.)
+		if p.health < maxHealth {
+			t.heal(p, 1.0)
+		}
+		return true
 	}
 	return true
 }

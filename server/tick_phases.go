@@ -151,6 +151,12 @@ func (t *TickLoop) tickWorld() {
 	// source above ticks to a cheap no-op. Nil map = no-op (no hopper placed). Runs AFTER the item pass so
 	// a hopper sucks an item that already settled this tick. CITE: HopperBlock.getTicker -> pushItemsTick.
 	t.tickHoppers()
+	// SUB-BLOCKENTITY: tick every BEACON block-entity (BeaconBlockEntity.tick — the incremental beam-column
+	// scan + the every-80-tick pyramid-level recompute + the in-range player effect application). Keyed by
+	// world position (t.beacons, global — not per-region), so they tick ONCE globally here (the tickFurnaces
+	// twin). A beacon with no primary effect / obstructed beam ticks to a cheap no-op (no effect applied). Nil
+	// map = no-op (no beacon placed). CITE: BeaconBlock.getTicker -> BeaconBlockEntity.tick.
+	t.tickBeacons()
 	// SUB-PERSIST: the periodic chunk-save pass (every chunkSaveIntervalTicks) stays GLOBAL — it
 	// serializes the SHARED world's dirty chunks once, not per region. It lives INSIDE this existing
 	// phase so no new phase is added to the fixed tick order (TestTickPhaseOrder stays green). A

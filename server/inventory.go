@@ -258,6 +258,9 @@ func (t *TickLoop) clicked(p *tickPlayer, containerID int32, slotNum int16, butt
 			case containerKindHopper:
 				t.clickedHopper(p, p.openContainer, slotNum, button, input)
 				return
+			case containerKindBeacon:
+				t.clickedBeacon(p, p.openContainer, slotNum, button, input)
+				return
 			}
 		}
 		t.sendContent(p) // unknown/stale window: resend authoritative player content
@@ -387,6 +390,13 @@ func (t *TickLoop) handleContainerClose(p *tickPlayer, pkt pk.Packet) {
 	// NOT returned to the player. The carried (cursor) item return below still runs for all window kinds.
 	if p.openContainer != nil && p.openContainer.kind == containerKindHopper {
 		t.closeHopperWindow(p, p.openContainer)
+	}
+	// A BEACON window (BEACON-01) DROPS its payment slot on close (BeaconMenu.removed -> itemStack =
+	// paymentSlot.remove(maxStackSize); if (!empty) player.drop(itemStack, false)). The payment is transient
+	// (it backs the menu's PaymentSlot, not the beacon's long-lived state), so an unpaid ingot is returned to
+	// the world rather than kept. The beacon's selected effect + level persist in the BE.
+	if p.openContainer != nil && p.openContainer.kind == containerKindBeacon {
+		t.closeBeaconWindow(p, p.openContainer)
 	}
 	// The CARRIED (cursor) item: vanilla AbstractContainerMenu.removed() places a left-on-cursor item
 	// back into the inventory (or drops it) and clears the cursor. v1 previously LEFT it on the cursor —

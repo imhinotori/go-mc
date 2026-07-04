@@ -250,6 +250,14 @@ func (t *TickLoop) applyInput(p *tickPlayer, in SubtickInput) {
 		// picked offer's cost items. A forged/stale window or out-of-range index is a silent no-op.
 		t.handleSelectTrade(p, in.Packet)
 
+	case packetid.ServerboundSetBeacon:
+		// BEACON (BEACON-01): the client picked the beacon's primary/secondary effect
+		// (ServerGamePacketListenerImpl.handleSetBeaconPacket -> BeaconMenu.updateEffects). The handler
+		// resolves the beacon window, validates stillValid + BeaconBlockEntity.validateEffects against the
+		// current level, sets the selected effect(s), and CONSUMES one payment ingot. A forged/stale window
+		// or an invalid selection is a silent no-op (vanilla disconnects; v1 no-ops — no invalid effect set).
+		t.handleSetBeacon(p, in.Packet)
+
 	case packetid.ServerboundAttack:
 		// COMBAT (GAMEPLAY-04): the entity ATTACK. In 26.2 the attack is its OWN packet —
 		// ServerboundAttackPacket = a single VarInt entityId (jar-verified) — split out of the

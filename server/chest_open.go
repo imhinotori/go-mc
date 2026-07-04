@@ -119,6 +119,12 @@ type openContainer struct {
 	// dispenser/furnace/chest): the hopper container IS the block-entity, so a click mutates the same items
 	// the transfer drive moves, and close just frees the window (the items persist in the BE).
 	hopperPos pk.Position
+
+	// beaconPos is the world position of the open beacon (kind == containerKindBeacon, BEACON-01). The
+	// window's single payment slot + 3 data slots back onto the tick-owned beaconBE at t.beacons[beaconPos].
+	// The SetBeacon effect selection consumes the payment. On close the payment is DROPPED (BeaconMenu.removed
+	// -> player.drop(payment, false)); the beacon's selected effect + level persist in the BE.
+	beaconPos pk.Position
 }
 
 // containerKind discriminates an open non-inventory window.
@@ -133,6 +139,7 @@ const (
 	containerKindBrewingStand                     // a brewing_stand BE (brewingStandPos)
 	containerKindDispenser                        // a dispenser/dropper BE (dispenserPos)
 	containerKindHopper                           // a hopper BE (hopperPos)
+	containerKindBeacon                           // a beacon BE (beaconPos)
 )
 
 // chestMenuSize is the chest-window slot count: 27 chest container slots + 27 player main + 9
@@ -218,8 +225,11 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 	// A hopper right-click OPENS its 5-slot container menu (HopperBlock.useWithoutItem ->
 	// player.openMenu(hopper)) and consumes the interaction so no block is placed. CITE: HopperBlock.useWithoutItem.
 	isHopper := block.IsHopper(state)
+	// A beacon right-click OPENS its payment/effect-selection menu (BeaconBlock.useWithoutItem ->
+	// player.openMenu(beacon)) and consumes the interaction so no block is placed. CITE: BeaconBlock.useWithoutItem.
+	isBeacon := isBeaconBlock(state)
 	if !isChest && !isCraft && !isCut && !isBed && !isFurnace && !isBrew && !isLever && !isButton &&
-		!isRepeater && !isComparator && !isDispenser && !isHopper {
+		!isRepeater && !isComparator && !isDispenser && !isHopper && !isBeacon {
 		return false // not an interactive block: PASS → placement runs
 	}
 	// Reach-gate the interaction (the same server-authoritative reach the place/break paths use):
@@ -280,6 +290,12 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 		// right-click (the sneak guard collapses to false in v1, like the chest path), so placement is
 		// skipped whenever the target is a hopper.
 		return t.openHopper(p, hitPos)
+	}
+	if isBeacon {
+		// BeaconBlock.useWithoutItem -> player.openMenu(beacon). The payment/effect-selection menu opens on
+		// any right-click (the sneak guard collapses to false in v1, like the chest path), so placement is
+		// skipped whenever the target is a beacon.
+		return t.openBeacon(p, hitPos)
 	}
 	return t.openChest(p, hitPos)
 }
@@ -353,6 +369,15 @@ func (t *TickLoop) createBlockEntityOnPlace(pos pk.Position, state block.StateID
 		t.world().SetBlockEntityAt(pos, block.EntityTypes["minecraft:hopper"], empty, dimMinY)
 		t.resolveHopper(pos, state)
 		t.hopperCheckPoweredState(pos, state)
+		return
+	}
+	if isBeaconBlock(state) {
+		// A placed beacon gets its (level 0, no effect) BeaconBlockEntity + an empty BE compound so the open +
+		// tick drives resolve it. BeaconBlock is a BaseEntityBlock; newBlockEntity = new BeaconBlockEntity(pos,
+		// state). The beam scan + updateBase then run from the next tick. CITE: BeaconBlock (EntityBlock).
+		empty := nbt.RawMessage{Type: nbt.TagCompound, Data: []byte{0x00}}
+		t.world().SetBlockEntityAt(pos, block.EntityTypes["minecraft:beacon"], empty, dimMinY)
+		t.resolveBeacon(pos)
 		return
 	}
 }

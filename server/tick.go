@@ -400,6 +400,13 @@ type TickLoop struct {
 	// (Items + TransferCooldown) round-trips via hopper_persist.go (the dispenser-BE twin).
 	hoppers map[pk.Position]*hopperBE
 
+	// beacons is the runtime store of BEACON block-entities keyed by world position (the furnaces twin,
+	// BEACON-01). A beacon's per-tick drive (beacon_be.go beaconServerTick) reads/writes its beaconBE here
+	// every tick (tickWorld) — the incremental beam-column scan + the every-80-tick pyramid-level recompute +
+	// the in-range player effect application. The menu (beacon_menu.go) resolves the SAME beaconBE on open so
+	// the SetBeacon effect selection + payment share one state. Lazily constructed; tick-owned (TICK-05).
+	beacons map[pk.Position]*beaconBE
+
 	// chunkSaver is the off-tick chunk-persistence consumer (SUB-PERSIST). It is nil until
 	// SetChunkSaver wires it (tests/ephemeral runs leave it nil → no chunk saves). The tick's save
 	// phase (tickChunkSave) drains the manager's dirty set, SERIALIZES each dirty/unloaded chunk ON
@@ -1599,6 +1606,13 @@ func (t *TickLoop) dispatch(c *Client, p pk.Packet) {
 		packetid.ServerboundContainerClick,
 		packetid.ServerboundSetCreativeModeSlot,
 		packetid.ServerboundContainerClose,
+		// ServerboundContainerButtonClick (stonecutter recipe pick), ServerboundSelectTrade (merchant trade
+		// pick) and ServerboundSetBeacon (beacon effect selection) are menu-mutation packets resolved on-tick
+		// by applyInput (subtick.go) — buffered here (server-stamped) like the container clicks so they reach
+		// the tick-goroutine handlers in chronological order. A forged/stale window is a no-op in the handler.
+		packetid.ServerboundContainerButtonClick,
+		packetid.ServerboundSelectTrade,
+		packetid.ServerboundSetBeacon,
 		// ServerboundMoveVehicle (the controlling-passenger steer): the client sends the vehicle's new
 		// absolute position each tick while a player controls it (happy-ghast ride). Routed through the
 		// subtick buffer like the player-movement packets so handleMoveVehicle resolves it on-tick in

@@ -91,6 +91,17 @@ func isAnyFurnaceBlock(s block.StateID) bool {
 	return isFurnaceBlock(s) || isBlastFurnaceBlock(s) || isSmokerBlock(s)
 }
 
+// isBeaconBlock reports whether a block state is Blocks.BEACON (the beacon block that drives a
+// BeaconBlockEntity). The open/tick gate for the beacon block-entity subsystem (BEACON-01). Beacon is a
+// single-state block (no properties), so the check is a plain state-id identity via block.StateList. CITE
+// BeaconBlock (a BaseEntityBlock whose newBlockEntity is BeaconBlockEntity).
+func isBeaconBlock(s block.StateID) bool {
+	if int(s) < 0 || int(s) >= len(block.StateList) {
+		return false
+	}
+	return block.StateList[s].ID() == "minecraft:beacon"
+}
+
 // isBrewingStandBlock reports whether a block state is Blocks.BREWING_STAND (the brewing-stand block that
 // drives a BrewingStandBlockEntity). The open/tick gate for the brewing-stand block-entity subsystem. CITE
 // BrewingStandBlock (an EntityBlock whose newBlockEntity is BrewingStandBlockEntity).
