@@ -307,3 +307,14 @@ func isWaterlogged(b Block) bool {
 	}
 	return f.Bool()
 }
+
+// IsWaterloggedState reports whether a block state id resolves to a waterlogged=true block state — the
+// exported StateID front-end of isWaterlogged. Used by callers outside this package (e.g. the conduit's
+// Level.isWaterAt port, which must count a waterlogged block's cell as water because
+// SimpleWaterloggedBlock.getFluidState returns Fluids.WATER). An out-of-range id returns false.
+func IsWaterloggedState(id StateID) bool {
+	if id < 0 || int(id) >= len(StateList) {
+		return false
+	}
+	return isWaterlogged(StateList[id])
+}

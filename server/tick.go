@@ -407,6 +407,14 @@ type TickLoop struct {
 	// the SetBeacon effect selection + payment share one state. Lazily constructed; tick-owned (TICK-05).
 	beacons map[pk.Position]*beaconBE
 
+	// conduits is the runtime store of CONDUIT block-entities keyed by world position (the beacons twin,
+	// CONDUIT-01). A conduit's per-tick drive (conduit_be.go conduitServerTick) reads/writes its conduitBE
+	// here every tick (tickWorld) — the every-40-tick activation-frame re-scan (updateShape) + the in-range
+	// player CONDUIT_POWER application + the full-frame hostile attack. Unlike the beacon, a conduit has no
+	// menu; it registers on placement (createBlockEntityOnPlace) and ticks passively. Lazily constructed;
+	// tick-owned (TICK-05).
+	conduits map[pk.Position]*conduitBE
+
 	// chunkSaver is the off-tick chunk-persistence consumer (SUB-PERSIST). It is nil until
 	// SetChunkSaver wires it (tests/ephemeral runs leave it nil → no chunk saves). The tick's save
 	// phase (tickChunkSave) drains the manager's dirty set, SERIALIZES each dirty/unloaded chunk ON

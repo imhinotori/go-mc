@@ -47,6 +47,13 @@ const (
 	effectResistance = "minecraft:resistance" // MobEffects.RESISTANCE (no attribute modifier; damage-reduction)
 	effectJumpBoost  = "minecraft:jump_boost" // MobEffects.JUMP_BOOST (SAFE_FALL_DISTANCE +1.0 ADD_VALUE)
 	effectStrength   = "minecraft:strength"   // MobEffects.STRENGTH   (ATTACK_DAMAGE      +3.0 ADD_VALUE)
+	// CONDUIT effect id (CONDUIT-01, ConduitBlockEntity.applyEffects): the beneficial power an active conduit
+	// grants a submerged/rained-on player in range. VERIFIED CFR MobEffects.CONDUIT_POWER =
+	// register("conduit_power", new MobEffect(MobEffectCategory.BENEFICIAL, 1950417)) — a plain duration
+	// effect with NO attribute modifiers (the underwater vision/breathing/mining bonuses are applied by
+	// dedicated ConduitPower checks elsewhere, not by an attribute modifier on the effect), so addPlayerEffect
+	// inserts it as a bare duration effect.
+	effectConduitPower = "minecraft:conduit_power"
 )
 
 // modifier ids (stable identity per effect, matching the vanilla effect.<name> ids).
@@ -168,8 +175,8 @@ func (t *TickLoop) applyEffectModifiers(p *tickPlayer, id string, amplifier int)
 			Amount:    1.0 * float64(amplifier+1),
 			Operation: attribute.AddValue,
 		})
-	// effectResistance / effectRegeneration carry NO attribute modifier (RESISTANCE reduces damage in the
-	// hurt calc; REGENERATION is a periodic heal — handled in effectShouldApplyThisTick/applyEffectTick).
+		// effectResistance / effectRegeneration carry NO attribute modifier (RESISTANCE reduces damage in the
+		// hurt calc; REGENERATION is a periodic heal — handled in effectShouldApplyThisTick/applyEffectTick).
 	}
 }
 

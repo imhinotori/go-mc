@@ -157,6 +157,13 @@ func (t *TickLoop) tickWorld() {
 	// twin). A beacon with no primary effect / obstructed beam ticks to a cheap no-op (no effect applied). Nil
 	// map = no-op (no beacon placed). CITE: BeaconBlock.getTicker -> BeaconBlockEntity.tick.
 	t.tickBeacons()
+	// SUB-BLOCKENTITY: tick every CONDUIT block-entity (ConduitBlockEntity.serverTick — the every-40-tick
+	// activation-frame re-scan + the in-range player CONDUIT_POWER application + the full-frame hostile
+	// attack). Keyed by world position (t.conduits, global — not per-region), so they tick ONCE globally here
+	// (the tickBeacons twin). A conduit whose frame is broken / not submerged ticks to a cheap no-op (no
+	// effect applied). Nil map = no-op (no conduit placed). CITE: ConduitBlock.getTicker ->
+	// ConduitBlockEntity.serverTick.
+	t.tickConduits()
 	// SUB-PERSIST: the periodic chunk-save pass (every chunkSaveIntervalTicks) stays GLOBAL — it
 	// serializes the SHARED world's dirty chunks once, not per region. It lives INSIDE this existing
 	// phase so no new phase is added to the fixed tick order (TestTickPhaseOrder stays green). A

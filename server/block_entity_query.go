@@ -102,6 +102,17 @@ func isBeaconBlock(s block.StateID) bool {
 	return block.StateList[s].ID() == "minecraft:beacon"
 }
 
+// isConduitBlock reports whether a block state is Blocks.CONDUIT (the conduit block that drives a
+// ConduitBlockEntity). The tick gate for the conduit block-entity subsystem (CONDUIT-01). Conduit carries a
+// WATERLOGGED property (multiple states), so the check is a block-id identity via block.StateList (not a
+// single state-id compare). CITE ConduitBlock (a BaseEntityBlock whose newBlockEntity is ConduitBlockEntity).
+func isConduitBlock(s block.StateID) bool {
+	if int(s) < 0 || int(s) >= len(block.StateList) {
+		return false
+	}
+	return block.StateList[s].ID() == "minecraft:conduit"
+}
+
 // isBrewingStandBlock reports whether a block state is Blocks.BREWING_STAND (the brewing-stand block that
 // drives a BrewingStandBlockEntity). The open/tick gate for the brewing-stand block-entity subsystem. CITE
 // BrewingStandBlock (an EntityBlock whose newBlockEntity is BrewingStandBlockEntity).

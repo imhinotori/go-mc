@@ -131,15 +131,15 @@ type openContainer struct {
 type containerKind int
 
 const (
-	containerKindChest       containerKind = iota // a world chest (chestPos)
-	containerKindCrafting                         // a transient crafting-table 3x3 (craftGrid)
-	containerKindStonecutter                      // a transient stonecutter single-input picker (cutInput)
-	containerKindMerchant                         // a villager merchant window (2 payment + 1 result)
-	containerKindFurnace                          // a furnace/blast_furnace/smoker BE (furnacePos)
-	containerKindBrewingStand                     // a brewing_stand BE (brewingStandPos)
-	containerKindDispenser                        // a dispenser/dropper BE (dispenserPos)
-	containerKindHopper                           // a hopper BE (hopperPos)
-	containerKindBeacon                           // a beacon BE (beaconPos)
+	containerKindChest        containerKind = iota // a world chest (chestPos)
+	containerKindCrafting                          // a transient crafting-table 3x3 (craftGrid)
+	containerKindStonecutter                       // a transient stonecutter single-input picker (cutInput)
+	containerKindMerchant                          // a villager merchant window (2 payment + 1 result)
+	containerKindFurnace                           // a furnace/blast_furnace/smoker BE (furnacePos)
+	containerKindBrewingStand                      // a brewing_stand BE (brewingStandPos)
+	containerKindDispenser                         // a dispenser/dropper BE (dispenserPos)
+	containerKindHopper                            // a hopper BE (hopperPos)
+	containerKindBeacon                            // a beacon BE (beaconPos)
 )
 
 // chestMenuSize is the chest-window slot count: 27 chest container slots + 27 player main + 9
@@ -378,6 +378,17 @@ func (t *TickLoop) createBlockEntityOnPlace(pos pk.Position, state block.StateID
 		empty := nbt.RawMessage{Type: nbt.TagCompound, Data: []byte{0x00}}
 		t.world().SetBlockEntityAt(pos, block.EntityTypes["minecraft:beacon"], empty, dimMinY)
 		t.resolveBeacon(pos)
+		return
+	}
+	if isConduitBlock(state) {
+		// A placed conduit gets its (inactive, no target) ConduitBlockEntity + an empty BE compound so the tick
+		// drive resolves it. ConduitBlock is a BaseEntityBlock; newBlockEntity = new ConduitBlockEntity(pos,
+		// state). The activation-frame scan then runs from the next %40 boundary. Unlike the beacon there is no
+		// menu, so registration into t.conduits happens here (resolveConduit) — the tick driver picks it up.
+		// CITE: ConduitBlock (EntityBlock).
+		empty := nbt.RawMessage{Type: nbt.TagCompound, Data: []byte{0x00}}
+		t.world().SetBlockEntityAt(pos, block.EntityTypes["minecraft:conduit"], empty, dimMinY)
+		t.resolveConduit(pos)
 		return
 	}
 }
