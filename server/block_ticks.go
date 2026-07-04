@@ -60,6 +60,12 @@ const (
 	// RepeaterBlock / ComparatorBlock.
 	repeaterTickType   blockTickType = "minecraft:repeater"
 	comparatorTickType blockTickType = "minecraft:comparator"
+
+	// detectorRailTickType is the block id the detector-rail re-check (DetectorRailBlock.tick ->
+	// checkPressed) is scheduled/dispatched under: a POWERED detector rail schedules a tick 20 later that
+	// re-checks whether a minecart is still on it and, if not, clears POWERED. CITE: DetectorRailBlock.tick
+	// (`if (!POWERED) return; checkPressed(...)`) + checkPressed's `level.scheduleTick(pos, this, 20)`.
+	detectorRailTickType blockTickType = "minecraft:detector_rail"
 )
 
 // lightningRodTickTypes is the set of block ids the lightning-rod unpower tick (LightningRodBlock.tick)
@@ -315,6 +321,13 @@ func (t *TickLoop) tickBlock(pos pk.Position, typ blockTickType) {
 			return
 		}
 		t.observerTick(state, pos)
+	case detectorRailTickType:
+		// ServerLevel.tickBlock stale guard: only tick if still a detector rail (minecart.go). The scheduled
+		// tick re-checks whether a cart is still on the rail and clears POWERED if not. CITE: DetectorRailBlock.tick.
+		if !block.IsDetectorRailBlock(state) {
+			return
+		}
+		t.detectorRailCheckPressed(pos, state)
 	case dispenserTickType, dropperTickType:
 		// ServerLevel.tickBlock stale guard: only tick if still a dispenser-family block (REDSTONE TIER-4,
 		// dispenser.go). A dispenser/dropper broken/replaced since the TRIGGERED tick was scheduled fires

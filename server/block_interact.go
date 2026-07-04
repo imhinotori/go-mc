@@ -217,6 +217,21 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 		return
 	}
 
+	// MINECART ITEM (MinecartItem.useOn): a minecart item used ON a RAIL block spawns the matching
+	// AbstractMinecart entity at the rail (x+0.5, y+0.0625+slopeOffset, z+0.5) and shrinks the held item
+	// by 1. A non-block item, so it would otherwise fall through blockStateForItem as a no-op — intercept
+	// it here (like FlintAndSteel) so the placed cart actually spawns. tryPlaceMinecartOnRail returns true
+	// when it consumed the action (a rail was clicked and the cart spawned); false when the held item is
+	// not a minecart item OR the clicked block is not a rail (then placement continues below — a no-op for a
+	// non-block item). CITE MinecartItem.useOn (rail gate + spawnPos + itemStack.shrink(1)).
+	if !slotIsEmpty(held) {
+		if mcType, ok := minecartItemToEntityType(int32(held.ItemID)); ok {
+			if t.tryPlaceMinecartOnRail(p, inv, pos, mcType) {
+				return
+			}
+		}
+	}
+
 	// (2) ItemStack.isEmpty() short-circuit + Block.byItem resolution. An EMPTY hand (or a
 	// non-block item like a tool) resolves to no block -> nothing is placed. THIS fixes the
 	// empty-hand-stone bug (the old code hardcoded stone regardless of the held item).

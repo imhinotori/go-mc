@@ -263,6 +263,13 @@ func (t *TickLoop) stateGetSignal(state block.StateID, pos pk.Position, directio
 	case block.IsObserver(state):
 		// ObserverBlock.getSignal: ownSignal (POWERED?15:0) only out FACING (REDSTONE TIER-3, observer.go).
 		return observerGetSignal(state, direction)
+	case block.IsDetectorRailBlock(state):
+		// DetectorRailBlock.ownSignal (getSignal): POWERED ? 15 : 0 out EVERY face — a detector rail with a
+		// minecart on it is a full 15-out-all-faces weak source. CITE: DetectorRailBlock.ownSignal.
+		if p, ok := block.RailPowered(state); ok && p {
+			return 15
+		}
+		return 0
 	default:
 		return 0 // BlockBehaviour default: ownSignal == 0
 	}
@@ -313,6 +320,13 @@ func (t *TickLoop) stateGetDirectSignal(state block.StateID, pos pk.Position, di
 	case block.IsObserver(state):
 		// ObserverBlock.getDirectSignal == getSignal (REDSTONE TIER-3, observer.go).
 		return observerGetSignal(state, direction)
+	case block.IsDetectorRailBlock(state):
+		// DetectorRailBlock.getDirectSignal: POWERED && direction == UP ? 15 : 0 (the strong signal a detector
+		// rail emits straight UP into the block above). CITE: DetectorRailBlock.getDirectSignal.
+		if p, ok := block.RailPowered(state); ok && p && direction == block.Up {
+			return 15
+		}
+		return 0
 	default:
 		return 0
 	}

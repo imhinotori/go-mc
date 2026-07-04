@@ -960,6 +960,49 @@ type Entity struct {
 	//	 DATA_CARRY_STATE; setCarriedBlock(BlockState)/getCarriedBlock():BlockState over SynchedEntityData.]
 	carriedBlockState block.StateID
 	carriedBlockSet   bool
+
+	// --- MINECART (net.minecraft.world.entity.vehicle.minecart.AbstractMinecart + OldMinecartBehavior) ---
+	//
+	// Tick-owned plain values, set/read ONLY for a minecart (isMinecart). A minecart is a NON-mob rideable
+	// entity whose whole behavior is the rail-follow physics (moveAlongTrack) — the sibling of isArrow /
+	// isItem. Vanilla splits minecart movement into a MinecartBehavior class selected by the
+	// MINECART_IMPROVEMENTS feature flag; that flag is OFF by default, so the DEFAULT vanilla behavior is
+	// OldMinecartBehavior — the one ported here (minecart.go). Zero for every non-minecart entity (the
+	// minecart tick gates on isMinecart), so the pig oracle's stream is byte-identically unperturbed.
+	//	[VERIFIED CFR AbstractMinecart.<init>: `behavior = useExperimentalMovement(level) ? new
+	//	 NewMinecartBehavior(this) : new OldMinecartBehavior(this)`; useExperimentalMovement ==
+	//	 enabledFeatures().contains(FeatureFlags.MINECART_IMPROVEMENTS) (experimental, off by default).]
+
+	// isMinecart marks this entity as an AbstractMinecart. The minecart tick (rail-follow physics + the
+	// off-rail fall) runs ONLY for entities with this set. Set at spawn by spawnMinecart.
+	isMinecart bool
+
+	// minecartFlipped is AbstractMinecart.flipped — the 180deg rotation latch OldMinecartBehavior.tick
+	// toggles when the yaw wraps past +/-170deg (so a minecart reversing direction flips its render
+	// orientation instead of spinning). DEFAULT false. Tick-owned plain bool.
+	//	[VERIFIED CFR AbstractMinecart.flipped (private boolean, DEFAULT_FLIPPED_ROTATION=false);
+	//	 isFlipped/setFlipped; OldMinecartBehavior.tick flips it on a wrapDegrees(yaw-yRotO) >= 170 turn.]
+	minecartFlipped bool
+
+	// minecartXo/Yo/Zo mirror Entity.xo/yo/zo — the PREVIOUS-tick position OldMinecartBehavior.tick reads
+	// to derive the yaw (atan2(zo-z, xo-x)) and the "did the cart cross a block boundary" checks. Updated
+	// to the current position at the START of each minecart tick (Entity.baseTick's xo=x/yo=y/zo=z),
+	// BEFORE moveAlongTrack moves the cart, so the diff reflects this tick's motion.
+	//	[VERIFIED CFR Entity: xo/yo/zo (previous position), set in baseTick before movement.]
+	minecartXo, minecartYo, minecartZo float64
+
+	// minecartYRotO mirrors Entity.yRotO — the previous-tick yaw OldMinecartBehavior.tick compares the new
+	// yaw against (wrapDegrees(yRot - yRotO)) to decide the flip. Set to yaw at the tick start.
+	//	[VERIFIED CFR Entity.yRotO; OldMinecartBehavior.tick: `Mth.wrapDegrees(getYRot() - minecart.yRotO)`.]
+	minecartYRotO float32
+
+	// minecartItems is the container backing a CHEST/HOPPER minecart — AbstractMinecartContainer.itemStacks
+	// (a NonNullList sized by getContainerSize: MinecartChest==27, MinecartHopper==5). Sized at spawn to the
+	// type's container size (minecartContainerSize). nil for a plain minecart. A block hopper pulls from / a
+	// player opens this via the entity-container seam (container.go).
+	//	[VERIFIED CFR AbstractMinecartContainer: `NonNullList<ItemStack> itemStacks`; getContainerSize
+	//	 abstract (MinecartChest.getContainerSize()==27, MinecartHopper.getContainerSize()==5).]
+	minecartItems []component.SlotData
 }
 
 // NewEntity constructs a live entity instance from a data/entity TABLE record at the given

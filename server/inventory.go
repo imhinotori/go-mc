@@ -261,6 +261,9 @@ func (t *TickLoop) clicked(p *tickPlayer, containerID int32, slotNum int16, butt
 			case containerKindBeacon:
 				t.clickedBeacon(p, p.openContainer, slotNum, button, input)
 				return
+			case containerKindMinecartChest:
+				t.clickedMinecartChest(p, p.openContainer, slotNum, button, input)
+				return
 			}
 		}
 		t.sendContent(p) // unknown/stale window: resend authoritative player content

@@ -125,6 +125,15 @@ type openContainer struct {
 	// The SetBeacon effect selection consumes the payment. On close the payment is DROPPED (BeaconMenu.removed
 	// -> player.drop(payment, false)); the beacon's selected effect + level persist in the BE.
 	beaconPos pk.Position
+
+	// minecartEntityID / minecartSlotCount back the CONTAINER-MINECART window (kind ==
+	// containerKindMinecartChest): the open chest/hopper minecart's THIN entity id (resolved back through its
+	// owning region on each click, the Folia rule) and its container slot count (27 chest / 5 hopper). The
+	// window's slots back onto the entity's minecartItems (AbstractMinecartContainer.itemStacks) — no
+	// transient copy (the container IS the entity), so close just frees the window (the items persist on the
+	// entity). CITE AbstractMinecartContainer.
+	minecartEntityID  int32
+	minecartSlotCount int
 }
 
 // containerKind discriminates an open non-inventory window.
@@ -140,6 +149,7 @@ const (
 	containerKindDispenser                         // a dispenser/dropper BE (dispenserPos)
 	containerKindHopper                            // a hopper BE (hopperPos)
 	containerKindBeacon                            // a beacon BE (beaconPos)
+	containerKindMinecartChest                     // a chest/hopper minecart entity (minecartEntityID)
 )
 
 // chestMenuSize is the chest-window slot count: 27 chest container slots + 27 player main + 9

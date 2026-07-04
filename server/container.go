@@ -184,6 +184,14 @@ func (t *TickLoop) getContainerAt(pos pk.Position) containerView {
 			return &hopperContainer{t: t, pos: pos, h: h}
 		}
 	}
+	// getEntityContainer FALLBACK (HopperBlockEntity.getContainerAt: `result == null -> getEntityContainer`).
+	// No block container at pos → look for a CONTAINER-MINECART (chest/hopper minecart) whose box occupies the
+	// block cell at pos, so a block hopper above/below a minecart-with-chest pulls/pushes from it, exactly as
+	// vanilla. Formerly a cited DEFERRAL; now filled. CITE HopperBlockEntity.getEntityContainer +
+	// EntitySelector.CONTAINER_ENTITY_SELECTOR.
+	if mc := t.minecartContainerAt(pos); mc != nil {
+		return mc
+	}
 	return nil
 }
 

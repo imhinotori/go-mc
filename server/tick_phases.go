@@ -323,6 +323,15 @@ func (t *TickLoop) tickEntities() {
 	// nearby players. ADDITIVE + potion-gated (zero cost when no potion is in flight).
 	t.tickPotions()
 
+	// MINECART + RAILS: the AbstractMinecart rail-follow physics (OldMinecartBehavior.tick — the DEFAULT
+	// vanilla movement; the experimental NewMinecartBehavior is off by default and cited-deferred). A
+	// minecart on a rail follows the track (moveAlongTrack: the ascending slide, the EXITS velocity
+	// projection, the position snap, the powered-rail boost/brake, applyNaturalSlowdown 0.997/0.96); off a
+	// rail it falls (comeOffTrack). Sibling of tickArrows/tickPotions; ADDITIVE + minecart-gated (zero cost
+	// when no minecart exists, so the pig oracle stream is unperturbed). Placed AFTER tickPotions and BEFORE
+	// tracker.Tick so a moved/removed minecart is reflected in this tick's near(). Body in minecart.go.
+	t.tickMinecarts()
+
 	// VEX + FANGS (Task): the EvokerFangs warmup -> attack -> despawn lifecycle (EvokerFangs.tick). Sibling
 	// of tickArrows/tickPotions; a code-spawned projectile the evoker's FANGS spell places. ADDITIVE +
 	// fangs-gated (zero cost when no fangs are active). Placed AFTER tickPotions and BEFORE tracker.Tick so a

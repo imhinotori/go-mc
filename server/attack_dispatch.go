@@ -882,6 +882,21 @@ func (t *TickLoop) handleInteract(p *tickPlayer, pkt pk.Packet) {
 	if mob.typ == entity.Villager.ID && t.villagerMobInteract(p, mob) {
 		return // the villager interact (menu open / unhappy / busy) handled the click
 	}
+	// MINECART: a right-click on a CHEST/HOPPER minecart opens its container menu
+	// (AbstractMinecartContainer.interact -> player.openMenu(this)); a right-click on a PLAIN rideable
+	// minecart MOUNTS the player (player.startRiding(this)). Both consume the interact so it does NOT fall
+	// through to the feed path (a minecart is not fed). Minecart-gated (isMinecart), so it is a zero-cost
+	// no-op for a pig/cow/sheep — the pig oracle stream is unperturbed (no RNG draw). CITE MinecartChest /
+	// AbstractMinecartContainer.interact + Minecart ride branch.
+	if mob.isMinecart {
+		if t.tryMinecartChestOpen(p, mob) {
+			return // the chest/hopper minecart menu opened
+		}
+		if t.tryMinecartRide(p, mob, bool(usingSecondaryAction)) {
+			return // the plain minecart was mounted (or already occupied)
+		}
+		return // any other minecart (furnace/tnt): the interact belongs to the cart (no feed)
+	}
 	t.tryFeedAnimal(p, mob)
 }
 
