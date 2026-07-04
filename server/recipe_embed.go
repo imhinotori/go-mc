@@ -53,6 +53,32 @@ func stonecutterRecipes() []recipe.Stonecutting {
 	return stonecutterCache
 }
 
+// smithingTransformOnce caches the parsed smithing_transform recipe subset (GRINDSTONE+SMITHING plan).
+// SmithingMenu.createResult matches the 3 input slots against these (server-side, exactly as vanilla
+// reads them from RecipeAccess.getRecipeFor(RecipeType.SMITHING, ...)). Parsed once, tick-read.
+var (
+	smithingTransformOnce  sync.Once
+	smithingTransformCache []recipe.SmithingTransform
+)
+
+// smithingTransformRecipes returns the parsed smithing_transform recipes (cached). On a parse error it
+// returns an empty list (a smithing table with no recipes opens but produces nothing — never a panic).
+// The Sulfur analogue of RecipeAccess.getRecipeFor(RecipeType.SMITHING, ...) over the transform set.
+func smithingTransformRecipes() []recipe.SmithingTransform {
+	smithingTransformOnce.Do(func() {
+		recipes, err := recipe.ParseAll()
+		if err != nil {
+			return // leave the cache empty (open-but-produce-nothing, never a panic)
+		}
+		for i := range recipes {
+			if recipes[i].Type == recipe.TypeSmithingTransform && recipes[i].SmithingTransform != nil {
+				smithingTransformCache = append(smithingTransformCache, *recipes[i].SmithingTransform)
+			}
+		}
+	})
+	return smithingTransformCache
+}
+
 // craftingFS embeds the bundled crafting plugin. The canonical operator-facing copy also ships at the
 // repo-root plugins/crafting/; this embedded copy (server/assets/crafting/) is the source of truth for
 // the default server (an operator with no plugins/ dir still crafts). Keep the two copies identical.

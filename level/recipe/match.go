@@ -273,6 +273,22 @@ func MatchStonecutting(r *Stonecutting, cell Stack) bool {
 	return testIngredientStack(r.Ingredient, cell)
 }
 
+// MatchSmithingTransform ports SmithingRecipe.matches over a SmithingRecipeInput (template, base,
+// addition slots): the OPTIONAL template + addition ingredients each test their slot via
+// testOptionalIngredient (an absent optional is an EMPTY Ingredient here, matching only an EMPTY slot;
+// a present one tests membership); the required base ingredient tests the base slot.
+//
+//	matches = testOptionalIngredient(template, in.template())
+//	          && base.test(in.base())
+//	          && testOptionalIngredient(addition, in.addition())
+//
+// 1:1 net.minecraft.world.item.crafting.SmithingRecipe.matches (+ Ingredient.testOptionalIngredient).
+func MatchSmithingTransform(r *SmithingTransform, template, base, addition Stack) bool {
+	return testOptionalIngredient(r.Template, template) &&
+		testIngredientStack(r.Base, base) &&
+		testOptionalIngredient(r.Addition, addition)
+}
+
 // Match runs ofPositioned ONCE over the w*h grid, iterates the recipes by type,
 // and returns the first crafting-grid match's result + a per-cell used mask
 // (mapped back through Left/Top to the REAL grid positions — the Wave-2 consume

@@ -124,6 +124,27 @@ func isBrewingStandBlock(s block.StateID) bool {
 	return ok
 }
 
+// isGrindstoneBlock reports whether a block state is Blocks.GRINDSTONE (the grindstone that opens a
+// GrindstoneMenu). Grindstone carries FACE+FACING properties (multiple states), so the check is a
+// block-id identity via block.StateList (not a single state-id compare). CITE GrindstoneBlock.
+func isGrindstoneBlock(s block.StateID) bool {
+	if int(s) < 0 || int(s) >= len(block.StateList) {
+		return false
+	}
+	_, ok := block.StateList[s].(block.Grindstone)
+	return ok
+}
+
+// isSmithingTableBlock reports whether a block state is Blocks.SMITHING_TABLE (the smithing table that
+// opens a SmithingMenu). SmithingTable is a single-state block (no properties), so the check is a plain
+// state-id identity via block.StateList. CITE SmithingTableBlock.
+func isSmithingTableBlock(s block.StateID) bool {
+	if int(s) < 0 || int(s) >= len(block.StateList) {
+		return false
+	}
+	return block.StateList[s].ID() == "minecraft:smithing_table"
+}
+
 // brewingStandWithBottles ports the serverTick HAS_BOTTLE toggle: state.setValue(HAS_BOTTLE[i], bits[i]) for
 // i in 0..2 (BrewingStandBlock.HAS_BOTTLE = {HAS_BOTTLE_0, HAS_BOTTLE_1, HAS_BOTTLE_2}, VERIFIED CFR
 // BrewingStandBlock). Reads the state's BrewingStand struct, writes its three has_bottle_N booleans, and

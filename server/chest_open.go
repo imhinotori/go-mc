@@ -169,6 +169,27 @@ type openContainer struct {
 	enchantClueEnch  [3]int32
 	enchantClueLevel [3]int32
 	enchantPos       pk.Position
+
+	// grind0/grind1/grindResult back the GRINDSTONE window (kind == containerKindGrindstone): the two
+	// transient INPUT slots (GrindstoneMenu.repairSlots[0]/[1]) + the displayed RESULT (a virtual
+	// ResultContainer entry, computeResult of the two inputs). On close the two inputs are returned to
+	// the player (GrindstoneMenu.removed -> clearContainer over repairSlots). The result is virtual (not
+	// returned). grindPos is the world position (ContainerLevelAccess reach + the levelEvent/XP spawn).
+	grind0      component.SlotData
+	grind1      component.SlotData
+	grindResult component.SlotData
+	grindPos    pk.Position
+
+	// smithTemplate/smithBase/smithAddition/smithResult back the SMITHING window (kind ==
+	// containerKindSmithing): the 3 transient INPUT slots (SmithingMenu inputSlots 0 template / 1 base /
+	// 2 addition) + the displayed RESULT (a virtual ResultContainer entry, the matched recipe's
+	// assemble()). On close the 3 inputs are returned to the player (ItemCombinerMenu.removed ->
+	// clearContainer over inputSlots). smithPos is the world position (ContainerLevelAccess reach).
+	smithTemplate component.SlotData
+	smithBase     component.SlotData
+	smithAddition component.SlotData
+	smithResult   component.SlotData
+	smithPos      pk.Position
 }
 
 // containerKind discriminates an open non-inventory window.
@@ -187,6 +208,8 @@ const (
 	containerKindMinecartChest                      // a chest/hopper minecart entity (minecartEntityID)
 	containerKindAnvil                              // a transient anvil (2 input + 1 result + cost)
 	containerKindEnchant                            // a transient enchanting-table (item + lapis + 3 offers)
+	containerKindGrindstone                         // a transient grindstone 2-input combiner (grind0/grind1)
+	containerKindSmithing                           // a transient smithing 3-input combiner (smithTemplate/Base/Addition)
 )
 
 // chestMenuSize is the chest-window slot count: 27 chest container slots + 27 player main + 9
@@ -275,14 +298,17 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 	// A beacon right-click OPENS its payment/effect-selection menu (BeaconBlock.useWithoutItem ->
 	// player.openMenu(beacon)) and consumes the interaction so no block is placed. CITE: BeaconBlock.useWithoutItem.
 	isBeacon := isBeaconBlock(state)
-	// An anvil-family right-click OPENS the AnvilMenu (AnvilBlock.useWithoutItem -> player.openMenu(anvil));
-	// an enchanting_table right-click OPENS the EnchantmentMenu (EnchantingTableBlock.useWithoutItem ->
-	// player.openMenu(enchantment)); both consume the interaction so no block is placed. CITE
-	// AnvilBlock/EnchantingTableBlock.useWithoutItem.
+	// An anvil-family right-click OPENS the AnvilMenu; an enchanting_table opens the EnchantmentMenu;
+	// a grindstone opens its 2-input repair/disenchant menu; a smithing_table opens its 3-input
+	// transform/trim menu — all consume the interaction so no block is placed. CITE Anvil/EnchantingTable/
+	// Grindstone/SmithingTableBlock.useWithoutItem.
 	isAnvil := isAnyAnvilBlock(state)
 	isEnchant := isEnchantingTableBlock(state)
+	isGrindstone := isGrindstoneBlock(state)
+	isSmithing := isSmithingTableBlock(state)
 	if !isChest && !isCraft && !isCut && !isBed && !isFurnace && !isBrew && !isLever && !isButton &&
-		!isRepeater && !isComparator && !isDispenser && !isHopper && !isBeacon && !isAnvil && !isEnchant {
+		!isRepeater && !isComparator && !isDispenser && !isHopper && !isBeacon && !isAnvil && !isEnchant &&
+		!isGrindstone && !isSmithing {
 		return false // not an interactive block: PASS → placement runs
 	}
 	// Reach-gate the interaction (the same server-authoritative reach the place/break paths use):
@@ -359,6 +385,16 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 		// EnchantingTableBlock.useWithoutItem -> player.openMenu(enchantment). The item + lapis + 3-offer
 		// menu opens on any right-click (the sneak guard collapses to false in v1), so placement is skipped.
 		return t.openEnchantTable(p, hitPos)
+	}
+	if isGrindstone {
+		// GrindstoneBlock.useWithoutItem -> player.openMenu(grindstone). The 2-input repair/disenchant menu
+		// opens on any right-click (the sneak guard collapses to false in v1, like the chest path).
+		return t.openGrindstone(p, hitPos)
+	}
+	if isSmithing {
+		// SmithingTableBlock.useWithoutItem -> player.openMenu(smithing). The 3-input transform menu opens on
+		// any right-click (the sneak guard collapses to false in v1, like the chest path).
+		return t.openSmithing(p, hitPos)
 	}
 	return t.openChest(p, hitPos)
 }

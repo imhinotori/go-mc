@@ -61,6 +61,52 @@ func TestRecipeParse(t *testing.T) {
 	if counts[TypeSpecial] == 0 {
 		t.Error("expected at least one special-marker recipe (crafting_special_*, smithing_*, ...)")
 	}
+	// smithing_transform: the netherite upgrade set (sword/pickaxe/axe/shovel/hoe + the armor pieces) —
+	// at least the 5 tools + boots/chestplate/helmet/leggings + horse armor. Assert a conservative floor.
+	if counts[TypeSmithingTransform] < 5 {
+		t.Errorf("smithing_transform count = %d, want >= 5 (the netherite upgrade set)", counts[TypeSmithingTransform])
+	}
+}
+
+// TestSmithingTransformNetherite: the netherite_sword_smithing recipe parses to a SmithingTransform whose
+// match accepts (netherite_upgrade_template, diamond_sword, netherite_ingot) and rejects a wrong addition
+// or a missing template. VERIFIED against SmithingRecipe.matches over SmithingRecipeInput.
+func TestSmithingTransformNetherite(t *testing.T) {
+	all, err := ParseAll()
+	if err != nil {
+		t.Fatalf("ParseAll: %v", err)
+	}
+	var sword *SmithingTransform
+	for i := range all {
+		if all[i].ID == "netherite_sword_smithing" && all[i].SmithingTransform != nil {
+			sword = all[i].SmithingTransform
+			break
+		}
+	}
+	if sword == nil {
+		t.Fatal("netherite_sword_smithing not parsed as a SmithingTransform")
+	}
+	const (
+		diamondSword       = 964
+		netheriteIngot     = 937
+		upgradeTemplate    = 1458
+		book               = 1058
+	)
+	tmpl := Stack{ID: upgradeTemplate, Count: 1}
+	base := Stack{ID: diamondSword, Count: 1}
+	add := Stack{ID: netheriteIngot, Count: 1}
+	if !MatchSmithingTransform(sword, tmpl, base, add) {
+		t.Fatal("MatchSmithingTransform(template, diamond_sword, netherite_ingot) = false, want true")
+	}
+	if MatchSmithingTransform(sword, tmpl, base, Stack{ID: book, Count: 1}) {
+		t.Fatal("MatchSmithingTransform with a book addition = true, want false")
+	}
+	if MatchSmithingTransform(sword, Stack{}, base, add) {
+		t.Fatal("MatchSmithingTransform with no template = true, want false (template is a present optional)")
+	}
+	if sword.Result.ID != 969 { // netherite_sword
+		t.Fatalf("result id = %d, want netherite_sword (969)", sword.Result.ID)
+	}
 }
 
 // TestParseShapedStick: the stick recipe parses to a Shaped with pattern ["#","#"]

@@ -270,6 +270,12 @@ func (t *TickLoop) clicked(p *tickPlayer, containerID int32, slotNum int16, butt
 			case containerKindEnchant:
 				t.clickedEnchant(p, p.openContainer, slotNum, button, input)
 				return
+			case containerKindGrindstone:
+				t.clickedGrindstone(p, p.openContainer, slotNum, button, input)
+				return
+			case containerKindSmithing:
+				t.clickedSmithing(p, p.openContainer, slotNum, button, input)
+				return
 			}
 		}
 		t.sendContent(p) // unknown/stale window: resend authoritative player content
@@ -417,6 +423,18 @@ func (t *TickLoop) handleContainerClose(p *tickPlayer, pkt pk.Packet) {
 	// (EnchantmentMenu.removed -> clearContainer over the enchant slots). Both are real and must not be lost.
 	if p.openContainer != nil && p.openContainer.kind == containerKindEnchant {
 		t.closeEnchantWindow(p, p.openContainer)
+	}
+	// A GRINDSTONE window returns its two transient INPUT slots to the player on close (GrindstoneMenu.
+	// removed -> clearContainer over repairSlots). The result is virtual (not returned). The inputs are
+	// real and must not be lost.
+	if p.openContainer != nil && p.openContainer.kind == containerKindGrindstone {
+		t.closeGrindstoneWindow(p, p.openContainer)
+	}
+	// A SMITHING window returns its three transient INPUT slots to the player on close (ItemCombinerMenu.
+	// removed -> clearContainer over inputSlots). The result is virtual (not returned). The inputs are
+	// real and must not be lost.
+	if p.openContainer != nil && p.openContainer.kind == containerKindSmithing {
+		t.closeSmithingWindow(p, p.openContainer)
 	}
 	// The CARRIED (cursor) item: vanilla AbstractContainerMenu.removed() places a left-on-cursor item
 	// back into the inventory (or drops it) and clears the cursor. v1 previously LEFT it on the cursor —

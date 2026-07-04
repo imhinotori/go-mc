@@ -195,6 +195,12 @@ type rawRecipe struct {
 	// default"). Pointers so an omitted field is distinguishable from an explicit 0.
 	Experience  *float64 `json:"experience"`
 	CookingTime *int     `json:"cookingtime"`
+	// Smithing-transform fields (SmithingTransformRecipe): "template" (optional
+	// ingredient), "base" (required ingredient), "addition" (optional ingredient).
+	// RawMessage so an absent optional (nil) is distinguishable from a present one.
+	Template json.RawMessage `json:"template"`
+	Base     json.RawMessage `json:"base"`
+	Addition json.RawMessage `json:"addition"`
 }
 
 // parseRecipe decodes one recipe file into a Recipe, dispatching on the "type"
@@ -224,7 +230,7 @@ func (r *resolver) parseRecipe(id string, data []byte) (Recipe, error) {
 		"crafting_special_repairitem", "crafting_special_shielddecoration",
 		"crafting_special_shulkerboxcoloring", "crafting_special_suspiciousstew",
 		"crafting_special_tippedarrow", "crafting_decorated_pot", "crafting_dye",
-		"crafting_imbue", "crafting_transmute", "smithing_transform", "smithing_trim":
+		"crafting_imbue", "crafting_transmute", "smithing_trim":
 		// Special types have no plain pattern/ingredient shape — recorded as a
 		// marker (not matchable). The matcher (match.go) only matches
 		// shaped/shapeless/cooking/stonecutting.
@@ -260,6 +266,12 @@ func (r *resolver) parseRecipe(id string, data []byte) (Recipe, error) {
 			return Recipe{}, err
 		}
 		return Recipe{ID: id, Type: TypeStonecutting, Stonecutting: s}, nil
+	case "smithing_transform":
+		s, err := r.parseSmithingTransform(raw)
+		if err != nil {
+			return Recipe{}, err
+		}
+		return Recipe{ID: id, Type: TypeSmithingTransform, SmithingTransform: s}, nil
 	default:
 		return Recipe{}, fmt.Errorf("unknown recipe type %q", head.Type)
 	}
@@ -437,6 +449,47 @@ func cookingTimeDefault(subtype string) int {
 		return 200
 	}
 	return 100 // blasting / smoking / campfire_cooking
+}
+
+// parseSmithingTransform decodes a smithing_transform recipe: the OPTIONAL template + addition
+// ingredients (nil RawMessage -> absent optional), the required base ingredient, and the result item.
+//
+// 1:1 net.minecraft.world.item.crafting.SmithingTransformRecipe.MAP_CODEC (template optionalFieldOf,
+// base fieldOf, addition optionalFieldOf, result ItemStackTemplate). An absent optional ingredient
+// (Has*==false) requires its slot be EMPTY at match time (Ingredient.testOptionalIngredient ->
+// stack.isEmpty()); a present one tests membership.
+func (r *resolver) parseSmithingTransform(raw rawRecipe) (*SmithingTransform, error) {
+	if len(raw.Base) == 0 {
+		return nil, fmt.Errorf("smithing_transform: missing base")
+	}
+	if raw.Result == nil {
+		return nil, fmt.Errorf("smithing_transform: missing result")
+	}
+	base, err := r.parseIngredient(raw.Base)
+	if err != nil {
+		return nil, fmt.Errorf("smithing_transform: base: %w", err)
+	}
+	st := &SmithingTransform{Base: base}
+	if len(raw.Template) > 0 {
+		tmpl, tErr := r.parseIngredient(raw.Template)
+		if tErr != nil {
+			return nil, fmt.Errorf("smithing_transform: template: %w", tErr)
+		}
+		st.Template = tmpl // present optional (empty Ingredient = absent)
+	}
+	if len(raw.Addition) > 0 {
+		add, aErr := r.parseIngredient(raw.Addition)
+		if aErr != nil {
+			return nil, fmt.Errorf("smithing_transform: addition: %w", aErr)
+		}
+		st.Addition = add // present optional (empty Ingredient = absent)
+	}
+	result, err := r.parseResult(*raw.Result)
+	if err != nil {
+		return nil, fmt.Errorf("smithing_transform: %w", err)
+	}
+	st.Result = result
+	return st, nil
 }
 
 func (r *resolver) parseStonecutting(raw rawRecipe) (*Stonecutting, error) {

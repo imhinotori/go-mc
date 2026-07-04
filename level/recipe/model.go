@@ -29,11 +29,12 @@ package recipe
 type Type string
 
 const (
-	TypeShaped       Type = "shaped"
-	TypeShapeless    Type = "shapeless"
-	TypeCooking      Type = "cooking"
-	TypeStonecutting Type = "stonecutting"
-	TypeSpecial      Type = "special"
+	TypeShaped            Type = "shaped"
+	TypeShapeless         Type = "shapeless"
+	TypeCooking           Type = "cooking"
+	TypeStonecutting      Type = "stonecutting"
+	TypeSmithingTransform Type = "smithing_transform"
+	TypeSpecial           Type = "special"
 )
 
 // Stack is a parsed result: an item id + a count. The count defaults to 1 when
@@ -139,15 +140,34 @@ type Stonecutting struct {
 	Result     Stack
 }
 
+// SmithingTransform is a smithing_transform recipe (net.minecraft.world.item.crafting.
+// SmithingTransformRecipe): an OPTIONAL template ingredient (slot 0), a required base ingredient
+// (slot 1), an OPTIONAL addition ingredient (slot 2), and a result item template. matches() tests each
+// slot against its ingredient; an EMPTY optional ingredient matches an EMPTY slot (Ingredient.
+// testOptionalIngredient -> stack.isEmpty()). assemble() produces the result item PRESERVING the base
+// stack's component patch (TransmuteRecipe.createWithOriginalComponents) — the menu layer applies that
+// preservation, so the model carries only the result item id.
+//
+// Template/Addition are the resolved ingredient sets; an ABSENT optional is an EMPTY Ingredient
+// (Ingredient.Empty()), which testOptionalIngredient treats as "the slot must be empty" — the same
+// empty-cell semantics a shaped pattern uses. Base is always a non-empty required ingredient.
+type SmithingTransform struct {
+	Template Ingredient
+	Base     Ingredient
+	Addition Ingredient
+	Result   Stack
+}
+
 // Recipe is the discriminated union of every parsed recipe. Exactly one of the
 // type-specific fields is populated per Type (Special carries only ID+Type, as a
 // recorded-but-not-matchable marker).
 type Recipe struct {
-	ID           string // the recipe registry id (file path sans .json), e.g. "stick"
-	Type         Type
-	Shaped       *Shaped
-	Shapeless    *Shapeless
-	Cooking      *Cooking
-	Stonecutting *Stonecutting
-	SpecialType  string // the raw JSON "type" for a Special marker (e.g. "crafting_special_repairitem")
+	ID                string // the recipe registry id (file path sans .json), e.g. "stick"
+	Type              Type
+	Shaped            *Shaped
+	Shapeless         *Shapeless
+	Cooking           *Cooking
+	Stonecutting      *Stonecutting
+	SmithingTransform *SmithingTransform
+	SpecialType       string // the raw JSON "type" for a Special marker (e.g. "crafting_special_repairitem")
 }
