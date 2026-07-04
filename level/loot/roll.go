@@ -237,6 +237,21 @@ func createItemStack(e *Entry, ctx *LootContext, emit func(ItemStack)) {
 	if normalizeType(e.Type) == "empty" {
 		return
 	}
+	// NestedLootTable.createItemStack: roll the REFERENCED table via getRandomItemsRaw over
+	// the SAME context (same LegacyRandomSource). The referenced table's pools/entries draw from
+	// the shared rng IN ORDER (draw-order faithful). The nested entry's own functions wrap the
+	// recursively-emitted stacks (LootPoolSingletonContainer$1.createItemStack decorate order).
+	// Source: javap NestedLootTable.createItemStack (contents.map(...).getRandomItemsRaw(context, output)).
+	if normalizeType(e.Type) == "loot_table" {
+		if e.Ref == nil {
+			return
+		}
+		getRandomItemsRaw(e.Ref, ctx, func(s ItemStack) {
+			st := applyFunctions(e.Functions, &s, ctx)
+			emit(*st)
+		})
+		return
+	}
 	// LootItem.createItemStack: new ItemStack(item) (count defaults to 1).
 	stack := ItemStack{ItemID: e.itemID, Count: 1}
 	// Apply the entry's functions in order (the compositeFunction decorate wrapper).

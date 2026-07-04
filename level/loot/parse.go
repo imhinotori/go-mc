@@ -52,8 +52,8 @@ func validType(typeStr string, valid []string) bool {
 // JSON shape. NumberProvider fields are json.RawMessage so a bare float and a
 // {type,min,max} object both decode (parseNumberProvider dispatches).
 type rawTable struct {
-	Pools     []rawPool      `json:"pools"`
-	Functions []rawFunction  `json:"functions"`
+	Pools     []rawPool     `json:"pools"`
+	Functions []rawFunction `json:"functions"`
 }
 
 type rawPool struct {
@@ -65,13 +65,14 @@ type rawPool struct {
 }
 
 type rawEntry struct {
-	Type       string          `json:"type"`
-	Name       string          `json:"name"`
-	Weight     *int            `json:"weight"`
-	Quality    *int            `json:"quality"`
-	Functions  []rawFunction   `json:"functions"`
-	Conditions []rawCondition  `json:"conditions"`
-	Children   []rawEntry      `json:"children"`
+	Type       string         `json:"type"`
+	Name       string         `json:"name"`
+	Value      string         `json:"value"` // NestedLootTable reference id (a "loot_table" entry)
+	Weight     *int           `json:"weight"`
+	Quality    *int           `json:"quality"`
+	Functions  []rawFunction  `json:"functions"`
+	Conditions []rawCondition `json:"conditions"`
+	Children   []rawEntry     `json:"children"`
 }
 
 // rawFunction keeps the whole object so each function decoder can pull its own
@@ -163,8 +164,24 @@ func parseEntry(re rawEntry) (*Entry, error) {
 		e.itemID = id
 	case "empty":
 		// no item to resolve
+	case "loot_table":
+		// NestedLootTable: a singleton container whose createItemStack recursively rolls a
+		// REFERENCED loot table (Either<ResourceKey,LootTable>). The 26.2 fishing table uses
+		// the by-id form (`value` = "minecraft:gameplay/fishing/junk" ...). Resolve + parse the
+		// referenced table eagerly (all sub-tables are embedded), storing it on Ref so the roll
+		// engine's createItemStack calls getRandomItemsRaw over it with the SAME context (the
+		// same LegacyRandomSource — vanilla threads context through).
+		// Source: javap NestedLootTable.createItemStack (contents.map(...).getRandomItemsRaw(context, output)).
+		if re.Value == "" {
+			return nil, fmt.Errorf("loot_table entry missing \"value\" reference")
+		}
+		ref, err := LoadTable(re.Value)
+		if err != nil {
+			return nil, fmt.Errorf("loot_table ref %q: %w", re.Value, err)
+		}
+		e.Ref = ref
 	default:
-		// alternatives/group/sequence/tag/loot_table/dynamic/slots: shaped for 20-02.
+		// alternatives/group/sequence/tag/dynamic/slots: shaped for 20-02.
 		// The 5 chest groups never reach here (only item+empty); a non-chest table
 		// that does will have its children parsed below but no roll-engine path yet.
 	}

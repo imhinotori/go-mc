@@ -59,6 +59,42 @@ func (s *SetItemCountFunction) Run(stack *ItemStack, ctx *LootContext) *ItemStac
 	return stack
 }
 
+// setItemDamageFunction mirrors
+// net.minecraft.world.level.storage.loot.functions.SetItemDamageFunction. run (the
+// isDamageableItem branch):
+//
+//	int maxDamage = stack.getMaxDamage();
+//	float base = add ? 1 - (float)stack.getDamageValue()/maxDamage : 0;
+//	float pct = 1 - Mth.clamp(damage.getFloat(context) + base, 0, 1);
+//	stack.setDamageValue(Mth.floor(pct * maxDamage));
+//
+// The RNG draw (damage.getFloat) is the load-bearing part for per-seed reproduction and is
+// performed faithfully. The durability WRITE is a CITED STUB (the roll ItemStack has no
+// max_damage/damage component yet — see the set_damage dispatch note), so setDamageValue is a
+// no-op; the fishing junk/treasure items carrying set_damage are all damageable, so the draw
+// always happens exactly as the jar's isDamageableItem branch.
+//
+// Source: javap SetItemDamageFunction.run.
+type setItemDamageFunction struct {
+	damage NumberProvider
+	add    bool
+}
+
+func (s *setItemDamageFunction) Run(stack *ItemStack, ctx *LootContext) *ItemStack {
+	// isDamageableItem: the fishing set_damage items are all damageable, so draw the float
+	// (the pct/maxDamage math and setDamageValue are the durability-component stub above).
+	_ = s.damage.GetFloat(ctx) // the load-bearing draw (order-faithful); result feeds the stubbed write.
+	_ = s.add
+	return stack
+}
+
+// setPotionFunction mirrors SetPotionFunction.run: a pure component set (POTION_CONTENTS) with NO
+// RNG draw. A faithful no-op over the roll ItemStack until the potion-component subsystem lands.
+// Source: javap SetPotionFunction.run.
+type setPotionFunction struct{}
+
+func (s *setPotionFunction) Run(stack *ItemStack, _ *LootContext) *ItemStack { return stack }
+
 // applyFunctions runs a function list over the stack IN ORDER (the compositeFunction
 // LootItemFunction.decorate folds them left-to-right). Order is load-bearing for
 // per-seed reproduction: each function draws its own RNG in sequence.
@@ -168,6 +204,39 @@ func parseFunction(rf rawFunction) (LootFunction, error) {
 			}
 		}
 		inner = &enchantedCountIncrease{count: np, limit: limit}
+	case "set_damage":
+		// SetItemDamageFunction (the fishing junk/treasure tables' worn-tool durability): for a
+		// DAMAGEABLE item it draws `this.damage.getFloat(context)` once and sets the item's damage
+		// value to floor((1 - clamp(damageFrac + base, 0, 1)) * maxDamage). The junk/treasure items
+		// carrying this (leather_boots/leggings, fishing_rod, bow, tripwire_hook) are ALL damageable,
+		// so the float draw ALWAYS happens — the draw-order-faithful behavior. The durability WRITE
+		// is a CITED STUB: the roll ItemStack carries no max_damage/damage component yet, so the
+		// setDamageValue is a no-op here (structured to write a Damage component when durability lands).
+		// The RNG draw — the load-bearing part for seed reproduction — is faithful.
+		// Source: javap SetItemDamageFunction.run (isDamageableItem branch; damage.getFloat draw).
+		damageRaw, ok := rf["damage"]
+		if !ok {
+			return nil, fmt.Errorf("set_damage missing damage")
+		}
+		np, perr := parseNumberProvider(damageRaw)
+		if perr != nil {
+			return nil, fmt.Errorf("set_damage damage: %w", perr)
+		}
+		add := false
+		if raw, ok := rf["add"]; ok {
+			if err := json.Unmarshal(raw, &add); err != nil {
+				return nil, fmt.Errorf("set_damage add: %w", err)
+			}
+		}
+		inner = &setItemDamageFunction{damage: np, add: add}
+	case "set_potion":
+		// SetPotionFunction (the fishing junk table's water bottle -> water potion): sets the
+		// stack's POTION_CONTENTS component to the named potion. It draws NO RNG (a pure component
+		// set), so for seed reproduction it is a faithful NO-OP over the roll ItemStack (which has
+		// no potion component yet). The item id (potion) is unchanged; only the component differs.
+		// Structured to write a PotionContents component when that component subsystem lands.
+		// Source: javap SetPotionFunction.run (itemStack.update(POTION_CONTENTS, ...) — no rng).
+		inner = &setPotionFunction{}
 	default:
 		// A function type neither the chest groups nor the block tables use
 		// (set_components, ...). Error loudly rather than silently drop the transform.

@@ -725,6 +725,12 @@ type tickPlayer struct {
 	// request is ignored). Tick-owned.
 	dead bool
 
+	// fishingHookID is Player.fishing modeled as the caster's active bobber entity id (THIN id, the
+	// Folia rule — never a live *Entity). 0 == no hook out. Set when a fishing rod cast spawns the
+	// bobber (FishingRodItem.use else-branch), read to pick cast-vs-reel, cleared when the bobber is
+	// retrieved/discarded (FishingHook.updateOwnerInfo(null) -> owner.fishing = null). Tick-owned.
+	fishingHookID int32
+
 	// debugGaveItems marks that the off-by-default debug trigger (SULFUR_DEBUG=1) has already
 	// handed this player the placeable test stack, so the give runs once per session. Tick-owned;
 	// untouched in production (debug off) and in tests.

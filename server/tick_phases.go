@@ -336,6 +336,14 @@ func (t *TickLoop) tickEntities() {
 	// nearby players. ADDITIVE + potion-gated (zero cost when no potion is in flight).
 	t.tickPotions()
 
+	// FISHING HOOK (bobber): the FishingHook.tick state machine (FLYING -> BOBBING float, the
+	// catchingFish wait/lure/hook countdowns ending in a bite). Sibling of tickArrows/tickPotions;
+	// ADDITIVE + fishing-hook-gated (zero cost when no bobber is out, so the pig oracle stream is
+	// unperturbed — a bobber only exists after a rod cast, and its RNG is a dedicated per-bobber
+	// stream). Placed AFTER tickPotions and BEFORE tracker.Tick so a discard/land is reflected in this
+	// tick's near(). Body in fishing.go. CITE FishingHook.tick.
+	t.tickFishingHooks()
+
 	// MINECART + RAILS: the AbstractMinecart rail-follow physics (OldMinecartBehavior.tick — the DEFAULT
 	// vanilla movement; the experimental NewMinecartBehavior is off by default and cited-deferred). A
 	// minecart on a rail follows the track (moveAlongTrack: the ascending slide, the EXITS velocity

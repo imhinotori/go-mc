@@ -48,6 +48,10 @@ type Entry struct {
 	Functions  []LootFunction
 	Conditions []LootCondition // per-entry compositeCondition (location_check in mineshaft)
 	Children   []*Entry        // composite entries (alternatives/group/sequence) — 20-02
+	// Ref is the resolved referenced table for a "loot_table" (NestedLootTable) singleton entry
+	// (the fishing table's junk/treasure/fish sub-tables). nil for every other entry type. Its
+	// createItemStack recursively rolls Ref via getRandomItemsRaw over the SAME LootContext.
+	Ref *LootTable
 }
 
 // NumberProvider mirrors

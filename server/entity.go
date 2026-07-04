@@ -183,6 +183,46 @@ type Entity struct {
 	// getAllEffects). Plain values (no pointers); scaled by proximity at splash time.
 	potionEffects []splashEffect
 
+	// --- FISHING HOOK / BOBBER (net.minecraft.world.entity.projectile.FishingHook) --------------------
+	//
+	// The bobber is a NON-mob projectile (isFishingHook) cast from a fishing rod. Its whole behavior is
+	// the FishingHook.tick state machine (FLYING -> BOBBING -> catchingFish countdown -> a bite) plus the
+	// retrieve roll. Tick-owned plain values, set/read ONLY for a bobber (the fishing tick gates on
+	// isFishingHook). Its RNG is a dedicated per-bobber entityRandom seeded from the bobber id (NEVER a
+	// mob/pig stream — the pig oracle is untouched). Cite FishingHook fields.
+
+	// isFishingHook marks this entity as a FishingHook. The fishing tick runs ONLY for entities with this
+	// set. Set at spawn by spawnFishingHook.
+	isFishingHook bool
+
+	// fishingOwnerID is FishingHook.getPlayerOwner() modeled as the caster's entity id (THIN id, the Folia
+	// rule — never a live *tickPlayer). The retrieve pull/loot is attributed to this player; the bobber
+	// discards if the owner drops the rod / strays > 32 blocks (shouldStopFishing).
+	fishingOwnerID int32
+
+	// fishingRNG is the bobber's dedicated RandomSource (FishingHook.random analogue) — a per-bobber
+	// entityRandom seeded from the bobber id at spawn. All fishing draws (the cast spread, the wait/lure/
+	// hook countdowns, the loot seed) come from HERE, never a mob stream, so the pig oracle is unperturbed.
+	fishingRNG *entityRandom
+
+	// FishingHook state-machine fields (FishingHook.currentState + the countdowns). currentState:
+	// 0=FLYING, 1=HOOKED_IN_ENTITY, 2=BOBBING. life is the on-ground despawn counter (>=1200 -> discard).
+	// nibble/timeUntilLured/timeUntilHooked are the catchingFish countdowns; biting is the DATA_BITING
+	// bite flag; openWater is isOpenWaterFishing() (gates treasure); outOfWaterTime tracks surface float.
+	// fishingHookedID is the hooked entity id (0 == none). Cite FishingHook.
+	fishingState       int32
+	fishingLife        int32
+	fishingNibble      int32
+	fishingLured       int32 // timeUntilLured
+	fishingHooked      int32 // timeUntilHooked
+	fishingBiting      bool
+	fishingOpenWater   bool
+	fishingOutOfWater  int32
+	fishingHookedID    int32
+	fishingLure        int32   // lureSpeed (Lure enchant; v1 cited-stub 0)
+	fishingLuck        int32   // Luck of the Sea (v1 cited-stub 0)
+	fishingWanderAngle float32 // FishingHook.fishAngle (the wander/tease particle heading)
+
 	// --- CREEPER SWELL (net.minecraft.world.entity.monster.Creeper) --------------------------------
 	//
 	// Tick-owned plain values, set/read ONLY for a Creeper. swellDir is the SwellGoal output

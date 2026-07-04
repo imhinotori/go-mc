@@ -81,6 +81,17 @@ type LootContext struct {
 	// AttackerSmeltsLoot reports whether the ATTACKING_ENTITY's mainhand carries a #smelts_loot
 	// enchant (the pig table's furnace_smelt any_of's second term reads it). v1 default false.
 	AttackerSmeltsLoot bool
+
+	// --- FISHING loot context (the fishing rod retrieve roll) --------------------------------------
+	//
+	// The gameplay/fishing table gates its TREASURE sub-table on an entity_properties condition over
+	// THIS_ENTITY (the FishingHook): predicate minecraft:type_specific/fishing_hook.in_open_water ==
+	// true. InOpenWater carries the hook's FishingHook.isOpenWaterFishing() at roll time (the 5x5x4
+	// calculateOpenWater result). false => the treasure entry's condition fails => only junk+fish are
+	// eligible (the vanilla "not in open water, no treasure" behavior). Populated by
+	// NewFishingLootContext; every non-fishing context leaves it false (its tables never read it).
+	// Source: javap FishingHookPredicate.matches (inOpenWater test) + FishingHook.isOpenWaterFishing.
+	InOpenWater bool
 }
 
 // EntityLootParams carries the entity (death) loot-context inputs NewEntityLootContext threads into
@@ -107,6 +118,20 @@ func NewEntityLootContext(seed int64, luck float32, p EntityLootParams) *LootCon
 	c.VictimOnFire = p.VictimOnFire
 	c.AttackerLootingLevel = p.AttackerLootingLevel
 	c.AttackerSmeltsLoot = p.AttackerSmeltsLoot
+	return c
+}
+
+// NewFishingLootContext builds a LootContext for the FISHING loot roll (FishingHook.retrieve): the
+// LegacyRandomSource seeded by seed, the fishing luck (this.luck + owner.getLuck() — the withLuck
+// param), and the hook's open-water flag (isOpenWaterFishing) the treasure entry's entity_properties
+// condition reads. Junk/fish weights are luck-independent (quality-scaled at luck 0); treasure is
+// gated on inOpenWater.
+//
+// Source: javap FishingHook.retrieve (new LootParams.Builder(...).withParameter(ORIGIN/TOOL/THIS_ENTITY)
+// .withLuck(luck + owner.getLuck()).create(FISHING)) + the fishing table's in_open_water condition.
+func NewFishingLootContext(seed int64, luck float32, inOpenWater bool) *LootContext {
+	c := NewLootContext(seed, luck)
+	c.InOpenWater = inOpenWater
 	return c
 }
 

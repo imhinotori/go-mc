@@ -194,6 +194,16 @@ func (t *TickLoop) useItemInHand(p *tickPlayer, hand int32) {
 		return // the boat item handled the use (a boat spawned, or a MISS/FAIL no-op)
 	}
 
+	// FISHING ROD (FishingRodItem.use): a right-click with a fishing rod casts a FishingHook (bobber)
+	// toward the look direction, or — if a hook is already out — reels it in (retrieve: pull a hooked
+	// entity or roll the FISHING loot table + spawn the caught item flying to the player). It runs
+	// BEFORE the food gate (a rod is not food); a non-rod item returns false and falls through.
+	// Fishing-rod-gated (a cheap id compare for every other item — no RNG draw, so the pig oracle is
+	// unperturbed). CITE FishingRodItem.use. Body in fishing.go.
+	if t.tryUseFishingRod(p, held, hand) {
+		return // the rod handled the use (a cast or a reel)
+	}
+
 	// FOOD gate (v1): resolve the held item's FOOD/CONSUMABLE data. Non-food => not eatable => no-op
 	// (cite: other ItemStack.use behaviors out of v1 scope).
 	f, ok := itemFood(int32(held.ItemID))

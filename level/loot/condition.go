@@ -199,6 +199,10 @@ const (
 	// entityPropAttackerSmeltsLoot: entity="direct_attacker" predicate.equipment.mainhand enchants
 	// #smelts_loot — the ATTACKER's weapon smelts loot (reads AttackerSmeltsLoot, v1 default false).
 	entityPropAttackerSmeltsLoot
+	// entityPropInOpenWater: entity="this" predicate.type_specific/fishing_hook.in_open_water==true —
+	// THIS_ENTITY (the FishingHook) is fishing in OPEN water (reads InOpenWater, the retrieve-time
+	// isOpenWaterFishing()). Gates the fishing table's TREASURE sub-table.
+	entityPropInOpenWater
 	// entityPropUnknown: a form this v1 port does not model (a future entity table) — TEST FALSE
 	// (the conservative default: a drop gated on an unmodeled predicate does not fire, never a
 	// wrong/extra drop). Cited so the real EntityPredicate match slots in later.
@@ -218,6 +222,8 @@ func (e *entityPropertyCondition) Test(ctx *LootContext) bool {
 		return ctx.VictimOnFire
 	case entityPropAttackerSmeltsLoot:
 		return ctx.AttackerSmeltsLoot
+	case entityPropInOpenWater:
+		return ctx.InOpenWater
 	default:
 		return false // unmodeled predicate form -> conservative false (no wrong drop).
 	}
@@ -238,6 +244,10 @@ func parseEntityProperties(rc rawCondition) (LootCondition, error) {
 		// predicate.minecraft:flags.is_on_fire == true -> the victim-on-fire form.
 		if entityPredicateWantsOnFire(predRaw) {
 			return &entityPropertyCondition{kind: entityPropOnFire}, nil
+		}
+		// predicate.minecraft:type_specific/fishing_hook.in_open_water == true -> the fishing form.
+		if entityPredicateWantsOpenWater(predRaw) {
+			return &entityPropertyCondition{kind: entityPropInOpenWater}, nil
 		}
 		return &entityPropertyCondition{kind: entityPropUnknown}, nil
 	case "direct_attacker", "attacker":
@@ -263,6 +273,28 @@ func entityPredicateWantsOnFire(predRaw json.RawMessage) bool {
 		return false
 	}
 	return pred.Flags.IsOnFire != nil && *pred.Flags.IsOnFire
+}
+
+// entityPredicateWantsOpenWater reports whether an entity_properties predicate gates on the FishingHook
+// being in open water (predicate.minecraft:type_specific/fishing_hook.in_open_water == true) — the
+// fishing table's treasure entry. Source: the gameplay/fishing.json treasure entry condition +
+// javap FishingHookPredicate (inOpenWater Optional<Boolean> matches).
+func entityPredicateWantsOpenWater(predRaw json.RawMessage) bool {
+	if len(predRaw) == 0 {
+		return false
+	}
+	// The predicate key is the single string "minecraft:type_specific/fishing_hook" (a slash in the
+	// key, NOT a nested object) mapping to { "in_open_water": <bool> }.
+	var pred struct {
+		FishingHook struct {
+			InOpenWater *bool `json:"in_open_water"`
+		} `json:"minecraft:type_specific/fishing_hook"`
+	}
+	if err := json.Unmarshal(predRaw, &pred); err != nil {
+		return false
+	}
+	w := pred.FishingHook.InOpenWater
+	return w != nil && *w
 }
 
 // matchToolWantsSilkTouch reports whether a match_tool condition's predicate gates on a
