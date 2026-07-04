@@ -2,6 +2,7 @@ package server
 
 import (
 	"github.com/imhinotori/sulfur/data/entity"
+	"github.com/imhinotori/sulfur/data/item"
 	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/level/component"
 	pk "github.com/imhinotori/sulfur/net/packet"
@@ -200,6 +201,19 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 			float64(pos.X+dx)+0.5,
 			float64(pos.Y+dy),
 			float64(pos.Z+dz)+0.5)
+		return
+	}
+
+	// FLINT & STEEL (FlintAndSteelItem.useOn): a non-block item, so it would fall through blockStateForItem
+	// as a no-op. Intercept it here: on a valid obsidian frame the relative face completes a NETHER PORTAL
+	// and the interior fills with nether_portal blocks (the ignite path), instead of placing a block.
+	// tryIgnitePortalWithFlintAndSteel returns true when it consumed the action (a portal was made); when
+	// it returns false (no frame completed) v1 places nothing — the plain-fire path is a cited follow-up.
+	// CITE: FlintAndSteelItem.useOn -> BaseFireBlock.canBePlacedAt/isPortal -> FireBlock.onPlace -> PortalShape.
+	// flint_and_steel item id 919 (data/item/item.go). Durability (hurtAndBreak) DEFERRED — no item-durability
+	// subsystem; the ignite still works.
+	if !slotIsEmpty(held) && int32(held.ItemID) == int32(item.FlintAndSteel.ID) {
+		t.tryIgnitePortalWithFlintAndSteel(p, pos, int(direction))
 		return
 	}
 
