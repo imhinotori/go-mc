@@ -228,6 +228,13 @@ func (t *TickLoop) stateGetSignal(state block.StateID, pos pk.Position, directio
 			return 15
 		}
 		return 0
+	case block.IsLightningRod(state):
+		// LightningRodBlock.ownSignal (getSignal): POWERED ? 15 : 0 out EVERY face. A strike-powered rod
+		// is a full 15-out-all-faces source until its 8-tick unpower tick fires. CITE: LightningRodBlock.ownSignal.
+		if block.LightningRodPowered(state) {
+			return 15
+		}
+		return 0
 	case block.IsRedstoneTorch(state):
 		// RedstoneTorchBlock.getSignal: ownSignal (LIT?15:0) out every face EXCEPT UP.
 		// CITE: RedstoneTorchBlock.getSignal (`Direction.UP != direction ? ownSignal : 0`).
@@ -277,6 +284,16 @@ func (t *TickLoop) stateGetDirectSignal(state block.StateID, pos pk.Position, di
 		// ButtonBlock.getDirectSignal: 15 iff POWERED && getConnectedDirection == direction.
 		if block.ButtonPowered(state) {
 			if cd, ok := block.ButtonConnectedDirection(state); ok && cd == direction {
+				return 15
+			}
+		}
+		return 0
+	case block.IsLightningRod(state):
+		// LightningRodBlock.getDirectSignal: 15 iff POWERED && FACING == direction. Unlike the lever/button
+		// (which use getConnectedDirection off FACE/FACING), the rod emits its STRONG signal straight out its
+		// FACING. CITE: LightningRodBlock.getDirectSignal (`state.getValue(FACING) == direction`).
+		if block.LightningRodPowered(state) {
+			if facing, ok := block.LightningRodFacing(state); ok && facing == direction {
 				return 15
 			}
 		}
@@ -741,9 +758,11 @@ func (t *TickLoop) isSignalSource(state block.StateID) bool {
 	switch {
 	case block.IsRedstoneBlock(state), block.IsLever(state), block.IsButton(state),
 		block.IsRedstoneTorch(state), block.IsRedstoneWallTorch(state), block.IsRedstoneWire(state),
+		block.IsLightningRod(state),
 		block.IsRepeater(state), block.IsComparator(state), block.IsObserver(state):
 		// DiodeBlock.isSignalSource == true (REDSTONE TIER-2); ObserverBlock.isSignalSource == true
-		// (REDSTONE TIER-3). CITE: DiodeBlock.isSignalSource / ObserverBlock.isSignalSource.
+		// (REDSTONE TIER-3); LightningRodBlock.isSignalSource == true. CITE: DiodeBlock.isSignalSource /
+		// ObserverBlock.isSignalSource / LightningRodBlock.isSignalSource.
 		return true
 	default:
 		return false

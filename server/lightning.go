@@ -64,10 +64,17 @@ package server
 //     order so the levelRandom stream matches the jar), and it drives the bolt's visualOnly flag; but the
 //     actual trapped-horse SPAWN is deferred (no SkeletonHorse type / trap-charge subsystem in v1). The
 //     bolt-side observable (visualOnly => no damage/fire) is faithful. CITE ServerLevel.tickThunder.
-//   - Lightning rod redirection (findLightningRod POI scan): deferred — no lightning_rod block / POI
-//     manager wired. The heightmap target is REAL. CITE ServerLevel.findLightningRod.
-//   - powerLightningRod / clearCopperOnLightningStrike (LightningBolt.tick): deferred — no lightning-rod
-//     / weathering-copper blocks. CITE LightningBolt.powerLightningRod / clearCopperOnLightningStrike.
+//   - Lightning rod redirection (findLightningRod): IMPLEMENTED as a faithful BLOCK SCAN (a
+//     RANGE=128 cube around the surface center for a lightning_rod whose cell is the WORLD_SURFACE top,
+//     returning the rod's tip == rodPos.above(1)). The vanilla PoiManager POI INDEX (the O(1) village-POI
+//     lookup that backs findClosest) is deferred — v1 has no PoiManager, so the scan reads the block grid
+//     directly; the observable redirect ("a rod near the strike attracts it to the rod tip") is faithful.
+//     CITE ServerLevel.findLightningRod / PoiTypes.LIGHTNING_ROD.
+//   - powerLightningRod (LightningBolt.tick): IMPLEMENTED — the strike position's rod is POWERED
+//     (setBlock POWERED=true, updateNeighbours, scheduleTick 8), wiring the strike into the redstone graph.
+//     clearCopperOnLightningStrike (the copper de-oxidation / weathering-copper progression) remains
+//     deferred (separate weathering subsystem). CITE LightningBolt.powerLightningRod /
+//     clearCopperOnLightningStrike.
 //   - gameEvent(LIGHTNING_STRIKE) + the LIGHTNING_STRIKE/CHANNELED_LIGHTNING advancement triggers:
 //     deferred — no GameEvent (sculk) / advancement subsystem. CITE LightningBolt.tick.
 //   - doFireTick gamerule: CITED-CONSTANT true (the same pattern as randomTickSpeed/doWeatherCycle) —
@@ -199,15 +206,19 @@ func (t *TickLoop) tickThunderChunk(pos level.ChunkPos) {
 	// The && is short-circuit: the nextDouble() draw happens ONLY when SPAWN_MOBS is true (it is, cited
 	// constant). getEffectiveDifficulty() at the strike pos == effectiveDifficulty(NORMAL, gametime, 0, 0)
 	// (getCurrentDifficultyAt: localTime=0, moonBrightness=0 when the inhabited-time/moon are unwired), the
-	// same DifficultyInstance the spawn-armor roll builds (entity_equipment.go). The lightning-rod-below
-	// check is a cited constant false (no lightning_rod block), so the trap gate is (nextDouble < eff*0.01).
+	// same DifficultyInstance the spawn-armor roll builds (entity_equipment.go). The third conjunct
+	// !getBlockState(pos.below()).is(LIGHTNING_RODS) is a REAL read: a lightning rod DIRECTLY BELOW the
+	// strike suppresses the skeleton-trap (the rod is protecting the ground). It is only reached when
+	// nextDouble() already passed (Java && short-circuit), so the draw order is preserved regardless.
 	isTrap := false
 	if t.spawnMobsGameRule() {
 		eff := effectiveDifficulty(serverDifficulty, t.gametime, 0, 0.0)
-		// !getBlockState(pos.below()).is(LIGHTNING_RODS): no lightning_rod block in v1 -> always true (the
-		// block below is never a rod), so the third conjunct never suppresses the trap. Cited deferral.
 		if r.levelRandom.NextDouble() < float64(eff)*0.01 {
-			isTrap = true
+			// !getBlockState(pos.below()).is(BlockTags.LIGHTNING_RODS): a rod below suppresses the trap.
+			below := t.redstoneBlockAt(pk.Position{X: target.X, Y: target.Y - 1, Z: target.Z})
+			if !block.IsLightningRod(below) {
+				isTrap = true
+			}
 		}
 	}
 
@@ -233,9 +244,11 @@ func (t *TickLoop) findLightningTargetAround(seed pk.Position) pk.Position {
 	centerY := t.ghastMotionBlockingTop(seed.X, seed.Z) + 1
 	center := pk.Position{X: seed.X, Y: centerY, Z: seed.Z}
 
-	// Optional<BlockPos> rod = findLightningRod(center); if present return it. DEFERRED — no lightning_rod
-	// block / POI manager in v1, so findLightningRod is always empty. The heightmap target below is REAL.
-	// CITE ServerLevel.findLightningRod.
+	// Optional<BlockPos> rod = findLightningRod(center); if present return it (the strike is redirected to
+	// the rod's tip). CITE ServerLevel.findLightningRod.
+	if rod, ok := t.findLightningRod(center); ok {
+		return rod
+	}
 
 	// AABB search = AABB.encapsulatingFullBlocks(center, center.atY(getMaxY()+1)).inflate(3.0);
 	// The box spans from the heightmap top UP to just above the build ceiling, inflated 3 on every axis.
@@ -381,9 +394,13 @@ func (t *TickLoop) tickBolt(e *Entity) {
 		if serverDifficulty == difficultyNormal || serverDifficulty == difficultyHard {
 			t.boltSpawnFire(e, boltFireSourcesAtStrike)
 		}
-		// powerLightningRod(); clearCopperOnLightningStrike(...); gameEvent(LIGHTNING_STRIKE) — DEFERRED
-		// (no lightning-rod / weathering-copper blocks, no GameEvent/sculk subsystem). CITE
-		// LightningBolt.powerLightningRod / clearCopperOnLightningStrike / tick gameEvent.
+		// powerLightningRod(): if the block at the strike position is a lightning rod, POWER it (setBlock
+		// POWERED=true, updateNeighbours, scheduleTick 8). This runs UNCONDITIONALLY at life==2 (no
+		// difficulty gate, no visualOnly gate — a trap bolt still powers a rod it lands on), in draw order
+		// after spawnFire, exactly as LightningBolt.tick. clearCopperOnLightningStrike(...) +
+		// gameEvent(LIGHTNING_STRIKE) remain DEFERRED (no weathering-copper progression / GameEvent-sculk
+		// subsystem). CITE: LightningBolt.powerLightningRod / clearCopperOnLightningStrike / tick gameEvent.
+		t.powerLightningRod(e)
 	}
 
 	// --this.life;
@@ -410,6 +427,190 @@ func (t *TickLoop) tickBolt(e *Entity) {
 	if e.boltLife >= 0 && !e.boltVisualOnly {
 		t.boltDamageEntitiesInBox(e)
 	}
+}
+
+// boltStrikePosition is LightningBolt.getStrikePosition(): BlockPos.containing(x, y - 1.0E-6, z). The
+// -1e-6 epsilon on Y is load-bearing — a bolt sits with its feet AT the tip cell (rodPos.above(1)), so
+// nudging Y down by a hair before flooring drops the strike cell to the rod's OWN cell (rodPos), which is
+// exactly the block powerLightningRod reads. Without the epsilon a bolt at an integer Y would floor to the
+// tip cell (air above the rod) and never find the rod. CITE: LightningBolt.getStrikePosition.
+func boltStrikePosition(e *Entity) pk.Position {
+	return pk.Position{
+		X: int(math.Floor(e.x)),
+		Y: int(math.Floor(e.y - 1.0e-6)),
+		Z: int(math.Floor(e.z)),
+	}
+}
+
+// powerLightningRod is LightningBolt.powerLightningRod():
+//
+//	BlockPos pos = getStrikePosition();
+//	BlockState state = level().getBlockState(pos);
+//	if (state.getBlock() instanceof LightningRodBlock rod) rod.onLightningStrike(state, level(), pos);
+//
+// The bolt reads the block at its strike position; if it is a lightning rod, the rod's onLightningStrike
+// fires (POWER it + schedule the 8-tick unpower + wake the redstone graph). CITE: LightningBolt.powerLightningRod.
+func (t *TickLoop) powerLightningRod(e *Entity) {
+	if t.world() == nil {
+		return
+	}
+	pos := boltStrikePosition(e)
+	state := t.redstoneBlockAt(pos)
+	if !block.IsLightningRod(state) {
+		return
+	}
+	t.lightningRodOnStrike(state, pos)
+}
+
+// lightningRodOnStrike is LightningRodBlock.onLightningStrike(state, level, pos):
+//
+//	level.setBlock(pos, state.setValue(POWERED, true), 3);
+//	updateNeighbours(state, level, pos);
+//	level.scheduleTick(pos, this, ACTIVATION_TICKS);            // ACTIVATION_TICKS == 8
+//	level.levelEvent(3002, pos, FACING.getAxis().ordinal());   // client render (DEFERRED)
+//
+// setBlock flag 3 == UPDATE_NEIGHBORS|UPDATE_CLIENTS — mirrored with SetBlock + broadcast + the
+// updateNeighbours redstone wake. The levelEvent(3002) is a client-only spark effect (DEFERRED, no
+// gameplay). CITE: LightningRodBlock.onLightningStrike.
+func (t *TickLoop) lightningRodOnStrike(state block.StateID, pos pk.Position) {
+	newState, ok := block.LightningRodWithPowered(state, true)
+	if !ok {
+		return
+	}
+	if t.world().SetBlock(pos, newState, dimMinY) {
+		t.broadcastBlockUpdate(pos, newState)
+	}
+	// updateNeighbours(state, level, pos): the rod notifies the cell it is attached to (FACING.opposite)
+	// AND its own cell so the redstone graph recomputes with the newly-powered rod.
+	t.lightningRodUpdateNeighbours(newState, pos)
+	// scheduleTick(pos, this, ACTIVATION_TICKS): the unpower tick 8 ticks out.
+	typ := blockTickType(block.StateList[newState].ID())
+	t.scheduleBlockTick(pos, typ, lightningRodActivationTicks)
+}
+
+// lightningRodUpdateNeighbours is LightningRodBlock.updateNeighbours(state, level, pos):
+//
+//	Direction dir = state.getValue(FACING).getOpposite();
+//	level.updateNeighborsAt(pos.relative(dir), this, initialOrientation(...));
+//
+// The rod pushes a neighbor update at the cell BEHIND it (pos.relative(FACING.opposite)) — the block it is
+// mounted on / pointing away from. The orientation arg is an experimental-evaluator hint the default
+// evaluator ignores (see redstone.go scope note). v1 also wakes pos itself so any redstone consumer at the
+// rod cell recomputes (onRedstoneEdit notifies the 6 neighbors + pos), which reaches the FACING.opposite
+// cell and every other neighbor a 15-out-all-faces source can power. CITE: LightningRodBlock.updateNeighbours.
+func (t *TickLoop) lightningRodUpdateNeighbours(state block.StateID, pos pk.Position) {
+	// onRedstoneEdit(pos) notifies pos + its 6 neighbors (a superset of the single FACING.opposite cell
+	// vanilla's updateNeighbours targets); since the rod emits its WEAK signal 15 out every face, waking all
+	// 6 neighbors reaches exactly the cells the rod can power, matching the observable propagation.
+	t.onRedstoneEdit(pos)
+}
+
+// lightningRodTick is LightningRodBlock.tick(state, level, pos, random) — the scheduled unpower 8 ticks
+// after a strike:
+//
+//	level.setBlock(pos, state.setValue(POWERED, false), 3);
+//	updateNeighbours(state, level, pos);
+//
+// POWERED->false (flag 3) then the neighbor wake, so the redstone graph drops the rod's 15-signal. CITE:
+// LightningRodBlock.tick.
+func (t *TickLoop) lightningRodTick(state block.StateID, pos pk.Position) {
+	if t.world() == nil {
+		return
+	}
+	newState, ok := block.LightningRodWithPowered(state, false)
+	if !ok {
+		return
+	}
+	if t.world().SetBlock(pos, newState, dimMinY) {
+		t.broadcastBlockUpdate(pos, newState)
+	}
+	t.lightningRodUpdateNeighbours(newState, pos)
+}
+
+// lightningRodActivationTicks is LightningRodBlock.ACTIVATION_TICKS (8) — the powered-pulse duration a
+// struck rod stays POWERED before its scheduled tick unpowers it. CITE: LightningRodBlock.ACTIVATION_TICKS.
+const lightningRodActivationTicks = 8
+
+// lightningRodRange is LightningRodBlock.RANGE (128) — the findLightningRod POI search radius (the block
+// scan below uses it as the cube half-extent). CITE: LightningRodBlock.RANGE.
+const lightningRodRange = 128
+
+// findLightningRod is ServerLevel.findLightningRod(BlockPos): find the closest lightning rod near `center`
+// that (a) exists as a lightning_rod POI and (b) sits at the WORLD_SURFACE top of its column (exposed to
+// sky), within RANGE (128) blocks, and return its TIP == rodPos.above(1). Vanilla backs this with the
+// PoiManager (getPoiManager().findClosest(isLightningRod, atWorldSurface, center, 128, ANY)); v1 has no
+// PoiManager, so this is a faithful BLOCK SCAN over the RANGE cube that applies the identical two
+// predicates and returns the closest match's tip. The POI-INDEX optimization is the only deferral; the
+// observable "a sky-exposed rod within 128 blocks attracts the strike to its tip" is exact. CITE:
+// ServerLevel.findLightningRod (predicates lambda$findLightningRod$0 = POI is LIGHTNING_ROD;
+// lambda$findLightningRod$1 = pos.getY() == getHeight(WORLD_SURFACE, x, z) - 1; map -> pos.above(1)).
+func (t *TickLoop) findLightningRod(center pk.Position) (pk.Position, bool) {
+	if t.world() == nil {
+		return pk.Position{}, false
+	}
+	best := pk.Position{}
+	bestDistSq := int64(-1)
+	found := false
+	// PoiManager.findClosest scans a 128-radius region; the sky-exposed predicate confines real rods to the
+	// surface top of their column, so per column we probe exactly ONE cell (the surface top). We restrict the
+	// scan to LOADED chunks intersecting the RANGE cube — an unloaded column holds no queryable block (and no
+	// rod POI in vanilla either, since POIs live in loaded chunks), so this is both faithful and bounded (in
+	// v1 the world is not sharded, so ForEachReady is the loaded-chunk set). The POI-INDEX O(1) lookup is the
+	// only deferral; the predicates + closest-pick below are exact.
+	minX := center.X - lightningRodRange
+	maxX := center.X + lightningRodRange
+	minZ := center.Z - lightningRodRange
+	maxZ := center.Z + lightningRodRange
+	t.world().ForEachReady(func(cpos level.ChunkPos, _ *level.Chunk) {
+		baseX := int(cpos[0]) << 4
+		baseZ := int(cpos[1]) << 4
+		// Skip a chunk wholly outside the RANGE cube in XZ.
+		if baseX+15 < minX || baseX > maxX || baseZ+15 < minZ || baseZ > maxZ {
+			return
+		}
+		for lx := 0; lx < 16; lx++ {
+			x := baseX + lx
+			if x < minX || x > maxX {
+				continue
+			}
+			for lz := 0; lz < 16; lz++ {
+				z := baseZ + lz
+				if z < minZ || z > maxZ {
+					continue
+				}
+				// lambda$findLightningRod$1: the rod must be at the WORLD_SURFACE top of its column
+				// (pos.getY() == getHeight(WORLD_SURFACE, x, z) - 1). The v1 surface proxy is the
+				// MOTION_BLOCKING top (ghastMotionBlockingTop, the same heightmap the strike target uses); a
+				// rod IS a motion-blocking block, so its cell equals that top when it is the topmost block.
+				surfaceTop := t.ghastMotionBlockingTop(x, z)
+				rodPos := pk.Position{X: x, Y: surfaceTop, Z: z}
+				if rodPos.Y < dimMinY {
+					continue
+				}
+				state := t.redstoneBlockAt(rodPos)
+				if !block.IsLightningRod(state) {
+					continue // lambda$findLightningRod$0: the POI/block is a lightning rod
+				}
+				// findClosest returns the CLOSEST match. Euclidean-squared distance from center to the rod
+				// cell (PoiManager.findClosest orders by distance to the query pos).
+				ddx := int64(rodPos.X - center.X)
+				ddy := int64(rodPos.Y - center.Y)
+				ddz := int64(rodPos.Z - center.Z)
+				distSq := ddx*ddx + ddy*ddy + ddz*ddz
+				if !found || distSq < bestDistSq {
+					found = true
+					bestDistSq = distSq
+					best = rodPos
+				}
+			}
+		}
+	})
+	if !found {
+		return pk.Position{}, false
+	}
+	// map(pos -> pos.above(1)): return the rod's TIP (one cell above the rod), where the bolt snaps to and
+	// from which getStrikePosition (y - 1e-6 floor) recovers the rod cell. CITE: lambda$findLightningRod$2.
+	return pk.Position{X: best.X, Y: best.Y + 1, Z: best.Z}, true
 }
 
 // boltDamageEntitiesInBox is LightningBolt.tick's damage loop: getEntities(this, AABB(x-3, y-3, z-3, x+3,

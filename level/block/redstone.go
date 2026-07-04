@@ -643,6 +643,130 @@ func ComparatorCycleMode(s StateID) (StateID, bool) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Lightning rod (LightningRodBlock) — the strike-powered redstone source
+// ---------------------------------------------------------------------------------------------
+//
+// LightningRodBlock (and its 7 weathering-copper variants — exposed/weathered/oxidized + waxed×)
+// is a redstone SOURCE: when POWERED it emits ownSignal 15 out every face (getSignal) and 15 out
+// its FACING (getDirectSignal), exactly like a pressed button whose connected direction is its
+// FACING. isSignalSource == true. The oxidation state is purely cosmetic for the redstone behavior,
+// so every variant shares the same FACING/POWERED shape and is treated identically. CITE:
+// net.minecraft.world.level.block.LightningRodBlock (FACING, POWERED, WATERLOGGED; ownSignal;
+// getDirectSignal; isSignalSource).
+
+// IsLightningRod reports whether a state id is any lightning-rod block (base + 3 oxidation levels +
+// their 4 waxed twins). All 8 share the LightningRodBlock behaviour and FACING/POWERED/WATERLOGGED
+// shape. CITE: LightningRodBlock (and the ChangeOverTimeBlock weathering-copper variants).
+func IsLightningRod(s StateID) bool {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return false
+	}
+	switch StateList[s].(type) {
+	case LightningRod, ExposedLightningRod, WeatheredLightningRod, OxidizedLightningRod,
+		WaxedLightningRod, WaxedExposedLightningRod, WaxedWeatheredLightningRod, WaxedOxidizedLightningRod:
+		return true
+	default:
+		return false
+	}
+}
+
+// LightningRodPowered returns the POWERED property of a lightning rod, or false if the state is not a
+// lightning rod. CITE: LightningRodBlock.POWERED (BlockStateProperties.POWERED).
+func LightningRodPowered(s StateID) bool {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return false
+	}
+	switch b := StateList[s].(type) {
+	case LightningRod:
+		return bool(b.Powered)
+	case ExposedLightningRod:
+		return bool(b.Powered)
+	case WeatheredLightningRod:
+		return bool(b.Powered)
+	case OxidizedLightningRod:
+		return bool(b.Powered)
+	case WaxedLightningRod:
+		return bool(b.Powered)
+	case WaxedExposedLightningRod:
+		return bool(b.Powered)
+	case WaxedWeatheredLightningRod:
+		return bool(b.Powered)
+	case WaxedOxidizedLightningRod:
+		return bool(b.Powered)
+	default:
+		return false
+	}
+}
+
+// LightningRodFacing returns the FACING of a lightning rod (the direction its tip points, set from
+// the clicked face at placement) — the single direction it emits its DIRECT (strong) signal into
+// when POWERED. Returns (Down, false) if the state is not a lightning rod. CITE: LightningRodBlock.FACING
+// / getDirectSignal (`state.getValue(FACING) == direction`).
+func LightningRodFacing(s StateID) (Direction, bool) {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return Down, false
+	}
+	switch b := StateList[s].(type) {
+	case LightningRod:
+		return b.Facing, true
+	case ExposedLightningRod:
+		return b.Facing, true
+	case WeatheredLightningRod:
+		return b.Facing, true
+	case OxidizedLightningRod:
+		return b.Facing, true
+	case WaxedLightningRod:
+		return b.Facing, true
+	case WaxedExposedLightningRod:
+		return b.Facing, true
+	case WaxedWeatheredLightningRod:
+		return b.Facing, true
+	case WaxedOxidizedLightningRod:
+		return b.Facing, true
+	default:
+		return Down, false
+	}
+}
+
+// LightningRodWithPowered resolves the same lightning rod (preserving FACING/WATERLOGGED and its
+// oxidation/wax variant) with POWERED set to `powered`. Returns (s, false) if the state is not a
+// lightning rod. CITE: LightningRodBlock.onLightningStrike / tick (state.setValue(POWERED, ...)).
+func LightningRodWithPowered(s StateID, powered bool) (StateID, bool) {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return s, false
+	}
+	p := Boolean(powered)
+	switch b := StateList[s].(type) {
+	case LightningRod:
+		b.Powered = p
+		return lookup(b)
+	case ExposedLightningRod:
+		b.Powered = p
+		return lookup(b)
+	case WeatheredLightningRod:
+		b.Powered = p
+		return lookup(b)
+	case OxidizedLightningRod:
+		b.Powered = p
+		return lookup(b)
+	case WaxedLightningRod:
+		b.Powered = p
+		return lookup(b)
+	case WaxedExposedLightningRod:
+		b.Powered = p
+		return lookup(b)
+	case WaxedWeatheredLightningRod:
+		b.Powered = p
+		return lookup(b)
+	case WaxedOxidizedLightningRod:
+		b.Powered = p
+		return lookup(b)
+	default:
+		return s, false
+	}
+}
+
+// ---------------------------------------------------------------------------------------------
 // isRedstoneConductor (the default StatePredicate)
 // ---------------------------------------------------------------------------------------------
 

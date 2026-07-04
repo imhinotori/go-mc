@@ -62,6 +62,29 @@ const (
 	comparatorTickType blockTickType = "minecraft:comparator"
 )
 
+// lightningRodTickTypes is the set of block ids the lightning-rod unpower tick (LightningRodBlock.tick)
+// is scheduled/dispatched under — one per oxidation/wax variant. A rod struck by lightning schedules
+// under its OWN block id (onLightningStrike -> scheduleTick(pos, this, 8)), so tickBlock must route any
+// of them to lightningRodTick. All 8 variants share the same tick handler (POWERED->false + neighbor
+// update). CITE: LightningRodBlock.onLightningStrike (scheduleTick(pos, this, ACTIVATION_TICKS=8)) /
+// LightningRodBlock.tick.
+var lightningRodTickTypes = map[blockTickType]struct{}{
+	"minecraft:lightning_rod":                 {},
+	"minecraft:exposed_lightning_rod":         {},
+	"minecraft:weathered_lightning_rod":       {},
+	"minecraft:oxidized_lightning_rod":        {},
+	"minecraft:waxed_lightning_rod":           {},
+	"minecraft:waxed_exposed_lightning_rod":   {},
+	"minecraft:waxed_weathered_lightning_rod": {},
+	"minecraft:waxed_oxidized_lightning_rod":  {},
+}
+
+// isLightningRodTickType reports whether a scheduled tick type is one of the lightning-rod block ids.
+func isLightningRodTickType(typ blockTickType) bool {
+	_, ok := lightningRodTickTypes[typ]
+	return ok
+}
+
 // buttonTickTypes is the set of block ids the button-unpress tick (ButtonBlock.tick) is scheduled
 // under — one per button variant. Each button schedules under its own id, so tickBlock must route
 // any of them to buttonTick. CITE: ButtonBlock.press (scheduleTick(pos, this, ticksToStayPressed)).
@@ -308,6 +331,16 @@ func (t *TickLoop) tickBlock(pos pk.Position, typ blockTickType) {
 				return
 			}
 			t.buttonTick(state, pos)
+			return
+		}
+		// Lightning rods schedule their unpower under their own block id (8 oxidation/wax variants). Route
+		// any of them to the rod unpower handler; the IsLightningRod guard is the tickBlock `state.is(block)`
+		// stale check (a rod broken/replaced since the strike fires nothing). CITE: LightningRodBlock.tick.
+		if isLightningRodTickType(typ) {
+			if !block.IsLightningRod(state) {
+				return
+			}
+			t.lightningRodTick(state, pos)
 			return
 		}
 		// Unknown scheduled type (a future block whose handler is not yet ported): no-op. The
