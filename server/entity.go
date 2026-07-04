@@ -1098,6 +1098,66 @@ type Entity struct {
 	// the boat ejects its passengers (a capsized boat throws its rider). DEFAULT 0.
 	//	[VERIFIED CFR AbstractBoat.outOfControlTicks (float); tick ejects at >= 60.]
 	boatOutOfControlTicks float32
+
+	// --- DISPLAY ENTITIES: ITEM FRAME + ARMOR STAND (net.minecraft.world.entity.decoration) --------
+	//
+	// Tick-owned plain values, set/read ONLY for a display entity (an ItemFrame/GlowItemFrame, isFrame;
+	// or an ArmorStand, isArmorStand). For every OTHER entity they stay at the zero value and are never
+	// read (each reader gates on the marker flag / typ), preserving the snapshot-friendly contract and
+	// the byte-identical oracle-pig default (a pig draws ZERO of these).
+
+	// isFrame marks this entity as an ItemFrame or GlowItemFrame (a HangingEntity). The frame interact
+	// (place-item / rotate) and break (drop-item) paths gate on this. Set at spawn by spawnItemFrame.
+	isFrame bool
+
+	// frameItem is net.minecraft.world.entity.decoration.ItemFrame's DATA_ITEM (the framed ItemStack,
+	// stored always with Count==1 per setItem's copyWithCount(1)). The zero value (Count==0) is
+	// ItemStack.EMPTY — an empty frame. getItem()/setItem() read/write it (display_entity.go).
+	//	[VERIFIED javap ItemFrame: DATA_ITEM (ITEM_STACK); setItem copyWithCount(1); getItem.]
+	frameItem component.SlotData
+
+	// frameRotation is ItemFrame's DATA_ROTATION (an int 0..7). interact rotates via
+	// setRotation(getRotation()+1) which stores `r % 8`, cycling 0→1→…→7→0. Default 0.
+	//	[VERIFIED javap ItemFrame.setRotation(int,bool): DATA_ROTATION.set(r % 8); NUM_ROTATIONS=8.]
+	frameRotation int32
+
+	// frameDirection is HangingEntity's DATA_DIRECTION reduced to the 3D-data value of the wall face the
+	// frame attaches TO (the clicked block face; Direction.get3DDataValue: DOWN=0,UP=1,NORTH=2,SOUTH=3,
+	// WEST=4,EAST=5). ClientboundAddEntity carries it as the object `data` field (spawnData). The frame
+	// hangs on pos.relative(direction.opposite). Default SOUTH (3).
+	//	[VERIFIED javap HangingEntity: DATA_DIRECTION (DIRECTION), DEFAULT_DIRECTION=SOUTH; ItemFrame
+	//	 recreateFromPacket: setDirection(Direction.from3DDataValue(packet.getData())).]
+	frameDirection int32
+
+	// frameGlow marks a GlowItemFrame (vs a plain ItemFrame): the ONLY behavioral difference is
+	// getFrameItemStack() (glow_item_frame vs item_frame) — all geometry/interact/drop logic is shared.
+	//	[VERIFIED javap GlowItemFrame: only sound + getFrameItemStack overrides; extends ItemFrame.]
+	frameGlow bool
+
+	// frameBlockX/Y/Z is BlockAttachedEntity.pos — the block cell the frame occupies (the clicked block's
+	// adjacent cell). blockPosition()/pos; the break spawns the drop offset from it. Set at spawn.
+	frameBlockX, frameBlockY, frameBlockZ int
+
+	// --- ARMOR STAND (net.minecraft.world.entity.decoration.ArmorStand) -----------------------------
+
+	// isArmorStand marks this entity as an ArmorStand. The armor-stand interact (equip/take a slot) and
+	// break (drop the armor_stand item + every equipped item) paths gate on this. The 6 held/armor slots
+	// live in the shared e.equipment array (LivingEntity.equipment). Set at spawn by spawnArmorStand.
+	isArmorStand bool
+
+	// armorStandFlags is ArmorStand's DATA_CLIENT_FLAGS byte: SMALL=0x01, SHOW_ARMS=0x04, NO_BASEPLATE=
+	// 0x08, MARKER=0x10 (bit 0x02 unused). isSmall/showArms/isMarker read it; showBasePlate is INVERTED
+	// (bit 0x08 clear == baseplate shown). Default 0. Carried in metadata for the client render.
+	//	[VERIFIED javap ArmorStand: CLIENT_FLAG_SMALL=1, SHOW_ARMS=4, NO_BASEPLATE=8, MARKER=16.]
+	armorStandFlags byte
+
+	// armorStandLastHit is net.minecraft.world.entity.decoration.ArmorStand.lastHit — the gameTime tick of
+	// the last (non-breaking) player punch. A SECOND punch within 5 ticks (`time - lastHit <= 5L`) breaks
+	// the stand; the first punch just records the time + wobbles (broadcastEntityEvent 32). Default 0 for a
+	// fresh stand (a first punch's `time - 0` is huge, so it never breaks on the first hit). Tick-owned.
+	//	[VERIFIED javap ArmorStand.hurtServer: `if (time - this.lastHit <= 5L || shouldKill) brokenByPlayer;
+	//	 else broadcastEntityEvent(32); lastHit = time`.]
+	armorStandLastHit int64
 }
 
 // NewEntity constructs a live entity instance from a data/entity TABLE record at the given

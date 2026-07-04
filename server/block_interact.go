@@ -255,6 +255,43 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 		}
 	}
 
+	// ITEM FRAME / GLOW ITEM FRAME (HangingEntityItem.useOn): a frame item used ON a block FACE spawns the
+	// frame on the wall behind that face (if the wall is solid — ItemFrame.survives). A non-block item, so
+	// it would otherwise fall through blockStateForItem as a no-op — intercept it here (like FlintAndSteel /
+	// Minecart). tryPlaceItemFrame returns true when the held item is a frame item AND the placement
+	// consumed the action; false when the held item is not a frame (then placement continues below).
+	// Reach-gated against the frame's cell (the clicked face's adjacent cell). Runs in the region owning
+	// that cell (withRegion) so the spawn's store/tracker resolve correctly. CITE HangingEntityItem.useOn.
+	if !slotIsEmpty(held) &&
+		(int32(held.ItemID) == int32(item.ItemFrame.ID) || int32(held.ItemID) == int32(item.GlowItemFrame.ID)) {
+		dx, dy, dz := directionNormal(int(direction))
+		framePos := pk.Position{X: pos.X + dx, Y: pos.Y + dy, Z: pos.Z + dz}
+		if t.withinReach(p, framePos) {
+			placed := false
+			t.withRegion(t.regionForColumn(columnOf(float64(framePos.X)+0.5, float64(framePos.Z)+0.5)), func() {
+				placed = t.tryPlaceItemFrame(p, inv, pos, int(direction))
+			})
+			_ = placed
+		}
+		return // a frame item (placed or not) consumed the use — never a block-place fall-through.
+	}
+
+	// ARMOR STAND (ArmorStandItem.useOn): an armor_stand item used ON a block (any face except DOWN) spawns
+	// an ArmorStand at the adjacent cell's bottom-center, 45°-yaw-snapped. A non-block item — intercept it
+	// here so the placed stand actually spawns. tryPlaceArmorStand returns true when the held item is an
+	// armor_stand AND the use consumed the action. Reach-gated against the spawn cell; runs in that cell's
+	// owning region. CITE ArmorStandItem.useOn.
+	if !slotIsEmpty(held) && int32(held.ItemID) == int32(item.ArmorStand.ID) {
+		dx, dy, dz := directionNormal(int(direction))
+		standPos := pk.Position{X: pos.X + dx, Y: pos.Y + dy, Z: pos.Z + dz}
+		if int(direction) != 0 && t.withinReach(p, standPos) {
+			t.withRegion(t.regionForColumn(columnOf(float64(standPos.X)+0.5, float64(standPos.Z)+0.5)), func() {
+				t.tryPlaceArmorStand(p, inv, pos, int(direction))
+			})
+		}
+		return // an armor_stand item (placed or not) consumed the use — never a block-place fall-through.
+	}
+
 	// (2) ItemStack.isEmpty() short-circuit + Block.byItem resolution. An EMPTY hand (or a
 	// non-block item like a tool) resolves to no block -> nothing is placed. THIS fixes the
 	// empty-hand-stone bug (the old code hardcoded stone regardless of the held item).

@@ -257,6 +257,30 @@ func (t *TickLoop) handleMobAttack(p *tickPlayer, targetID int32) {
 		return
 	}
 
+	// DISPLAY ENTITIES (ItemFrame / GlowItemFrame / ArmorStand) — a left-click (attack) BREAKS them, but
+	// NOT through the LivingEntity ATTACK_DAMAGE flow: a frame is a HangingEntity whose hurtServer drops
+	// its contents (or itself) on ANY non-explosion hit; an ArmorStand breaks on a DOUBLE hit within 5
+	// game ticks (ArmorStand.hurtServer's `time - lastHit <= 5`), a single hit only wobbles. Routed here
+	// BEFORE the ATTACK_DAMAGE math so a frame/stand does not run the mob crit/knockback/i-frame pipeline
+	// (they are not LivingEntity combat targets in this port's scope). Same-region only: handleMobAttack
+	// already resolved through the OWNING region; a frame/stand attack mutates that region's store (the
+	// break's drop-spawn + remove), so it runs in the owner region context (withRegion) exactly as the mob
+	// hurt path routes to the owner. CITE ItemFrame.hurtServer / ArmorStand.hurtServer.
+	if mob.isFrame {
+		attackerRegion := t.regionForColumn(columnOf(p.x, p.z))
+		if ownerRegion == attackerRegion {
+			t.withRegion(ownerRegion, func() { t.breakItemFrame(mob, p) })
+		}
+		return
+	}
+	if mob.isArmorStand {
+		attackerRegion := t.regionForColumn(columnOf(p.x, p.z))
+		if ownerRegion == attackerRegion {
+			t.withRegion(ownerRegion, func() { t.hitArmorStand(mob, p) })
+		}
+		return
+	}
+
 	// --- The SHARED Player.attack(Entity) damage math (IDENTICAL to the player branch above) -----------
 	// base damage = (float) getAttributeValue(ATTACK_DAMAGE) (the d2f narrowing cast).
 	damage := float32(p.getAttributeValue(attrAttackDamage))
@@ -811,6 +835,23 @@ func (t *TickLoop) handleInteract(p *tickPlayer, pkt pk.Packet) {
 	playerRegion := t.regionForColumn(columnOf(p.x, p.z))
 	if ownerRegion != playerRegion {
 		return // cross-region feed: dropped (accepted v5 same-region cut), never a foreign inline mutation
+	}
+
+	// DISPLAY ENTITIES (ItemFrame / GlowItemFrame / ArmorStand) — NON-mob right-click targets. These are
+	// tried FIRST (before the mob-feed gates) because a frame/stand is not fed via the pig tag; they use
+	// the vec-carrying interact directly. The ItemFrame place-item/rotate (ItemFrame.interact) and the
+	// ArmorStand equip/take (ArmorStand.interact(location)) both mutate only the resolved entity + broadcast
+	// (no store insert/remove), so they are safe on the dispatch path; wrapped in the owner region so any
+	// t.cur() read resolves correctly. locY is the interact Vec3's y (relative to the entity), the clickY
+	// ArmorStand.getClickedSlot consumes. Frame/stand-gated (a pig/cow is untouched — the oracle stream is
+	// unperturbed; these draw ZERO mob RNG). CITE ItemFrame.interact / ArmorStand.interact.
+	if mob.isFrame {
+		t.withRegion(ownerRegion, func() { t.tryItemFrameInteract(p, mob) })
+		return
+	}
+	if mob.isArmorStand {
+		t.withRegion(ownerRegion, func() { t.tryArmorStandInteract(p, mob, float64(locY)) })
+		return
 	}
 
 	// MOB-PASS-02 (Phase 34): the Sheep SHEAR path runs BEFORE the feed path (Sheep.mobInteract tries
