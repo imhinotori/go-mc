@@ -170,6 +170,12 @@ func (t *TickLoop) spawnMinecart(typ entity.ID, x, y, z float64) *Entity {
 	if sz := minecartContainerSize(typ); sz > 0 {
 		e.minecartItems = make([]component.SlotData, sz)
 	}
+	// A TNT minecart starts UN-primed: MinecartTNT.<init> sets fuse = -1 (NO_FUSE). primeFuse (an
+	// activator rail / a high-speed crash / a burning-arrow hit) sets it to 80. CITE MinecartTNT.<init>
+	// (fuse = -1; explosionPowerBase = 4.0; explosionSpeedFactor = 1.0).
+	if typ == entity.TntMinecart.ID {
+		e.mcTntFuse = -1
+	}
 	owner := t.regionForEntity(e)
 	if owner == nil {
 		owner = t.cur()
@@ -248,9 +254,16 @@ func (t *TickLoop) tickMinecart(e *Entity) {
 
 	if onRails {
 		t.minecartMoveAlongTrack(e, pos, state)
-		// ACTIVATOR_RAIL: activateMinecart(pos, POWERED). AbstractMinecart.activateMinecart is EMPTY on the
-		// base/plain/chest cart (only TNT/Spawner/CommandBlock minecarts override it) — a faithful no-op here.
-		// CITE: AbstractMinecart.activateMinecart (empty body); the powered read is preserved for the override.
+		// ACTIVATOR_RAIL: activateMinecart(x, y, z, POWERED). AbstractMinecart.activateMinecart is EMPTY on
+		// the base/plain/chest cart, but MinecartTNT OVERRIDES it: `if (powered && fuse < 0) primeFuse(null)`
+		// — a TNT minecart crossing a POWERED activator rail lights its fuse. Read the rail's POWERED state
+		// at the cart's cell and dispatch the override for a TNT cart. CITE: PoweredRailBlock/ActivatorRail
+		// (Minecart passes over -> BaseRailBlock; the powered read), MinecartTNT.activateMinecart.
+		if block.IsActivatorRailBlock(state) {
+			if pw, ok := block.RailPowered(state); ok && pw {
+				t.tntMinecartActivate(e)
+			}
+		}
 
 		// DETECTOR_RAIL entityInside: a cart on an UNPOWERED detector rail powers it (DetectorRailBlock.
 		// entityInside -> checkPressed). Re-read the rail state at the cart's post-move cell (moveAlongTrack
@@ -290,7 +303,95 @@ func (t *TickLoop) tickMinecart(e *Entity) {
 
 	// pushAndPickupEntities(): CITED DEFERRAL — the minecart<->entity push + mob auto-ride broad phase. The
 	// single-cart rail physics is the target; a ridden cart's passenger is re-positioned by rideTickVehicles.
+
+	// MinecartTNT.tick tail (runs AFTER super.tick() above, which is the rail physics + activateMinecart):
+	// the fuse countdown and, at 0, the velocity-scaled explode. Gated on the TNT-minecart type so every
+	// other cart is unaffected. CITE MinecartTNT.tick.
+	if e.typ == entity.TntMinecart.ID {
+		t.tickTntMinecartFuse(e)
+	}
 }
+
+// tntMinecartActivate is the port of MinecartTNT.activateMinecart(x, y, z, powered): a POWERED activator
+// rail primes an un-primed TNT minecart. Called from tickMinecart's activator-rail branch (already gated
+// on powered==true), so this only needs the fuse<0 (not-yet-primed) guard before priming.
+//
+//	[VERIFIED javap MinecartTNT.activateMinecart: `if (powered && fuse < 0) primeFuse(null);`.]
+func (t *TickLoop) tntMinecartActivate(e *Entity) {
+	if e.mcTntFuse < 0 {
+		t.tntMinecartPrimeFuse(e)
+	}
+}
+
+// tntMinecartPrimeFuse is the port of MinecartTNT.primeFuse(DamageSource): if TNT_EXPLODES is on, set the
+// fuse to 80 (and mark primed) + (in vanilla) play the primed sound (cite-deferred client cue). The
+// ignitionSource bookkeeping (the arrow/attacker attribution) is cite-deferred — v1 attributes the blast
+// generically (the explode call excludes the cart itself, exactly as the entity blast does).
+//
+//	[VERIFIED javap MinecartTNT.primeFuse: if (!TNT_EXPLODES) return; fuse = 80; if (!isClientSide) { ...
+//	 playSound(TNT_PRIMED) ... }.]
+func (t *TickLoop) tntMinecartPrimeFuse(e *Entity) {
+	if !tntExplodes {
+		return
+	}
+	e.mcTntFuse = tntDefaultFuseTime
+	e.mcTntPrimed = true
+	// playSound(SoundEvents.TNT_PRIMED): cite-deferred client cue.
+}
+
+// tickTntMinecartFuse is the port of MinecartTNT.tick's fuse branch: while the fuse is > 0, count it down
+// (the client SMOKE particle is a cite-deferred render cue); at exactly 0, explode with the velocity-scaled
+// power (explode(ignitionSource, deltaMovement.horizontalDistanceSqr())). A fuse < 0 (un-primed) is inert.
+//
+//	[VERIFIED javap MinecartTNT.tick: if (fuse > 0) { --fuse; addParticle(SMOKE...); } else if (fuse == 0)
+//	 explode(ignitionSource, getDeltaMovement().horizontalDistanceSqr()). (The horizontalCollision crash-
+//	 prime branch is cite-deferred — no horizontalCollision seam on the minecart entity; the activator-rail
+//	 prime is the wired path.)]
+func (t *TickLoop) tickTntMinecartFuse(e *Entity) {
+	if e.mcTntFuse > 0 {
+		e.mcTntFuse--
+		// addParticle(SMOKE, x, y+0.5, z, 0,0,0): cite-deferred client render cue.
+	} else if e.mcTntFuse == 0 {
+		// horizontalDistanceSqr() of the deltaMovement (the horizontal speed², vx²+vz²).
+		horizSqr := e.vx*e.vx + e.vz*e.vz
+		t.tntMinecartExplode(e, horizSqr)
+	}
+}
+
+// tntMinecartExplode is the port of MinecartTNT.explode(DamageSource, double horizDistSqr): if TNT_EXPLODES
+// is on, run the ServerExplosion at the cart with a velocity-scaled power then discard the cart. The power
+// formula is EXACT (bytecode): power = explosionPowerBase(4.0) + explosionSpeedFactor(1.0) * nextDouble() *
+// 1.5 * min(sqrt(horizDistSqr), 5.0). The nextDouble() is drawn from the OWNING region's levelRandom
+// (this.random == the entity random in vanilla; here we draw from the region levelRandom, the same stream
+// the entity-blast rays draw from — a cited reduction, gated on a TNT minecart existing so the pig oracle
+// stream is unperturbed). Reuses t.explode (server/explosion.go).
+//
+//	[VERIFIED javap MinecartTNT.explode: if (TNT_EXPLODES) { d = min(sqrt(horizDistSqr), 5.0); level.explode
+//	 (this, source, null, x, y, z, (float)(explosionPowerBase + explosionSpeedFactor*random.nextDouble()*1.5
+//	 *d), false, ExplosionInteraction.TNT); } if (isPrimed()) discard().]
+func (t *TickLoop) tntMinecartExplode(e *Entity, horizDistSqr float64) {
+	if tntExplodes {
+		capped := math.Sqrt(horizDistSqr)
+		if capped > 5.0 {
+			capped = 5.0
+		}
+		roll := 1.0 // explosionSpeedFactor default 1.0
+		if r := t.cur(); r != nil && r.levelRandom != nil {
+			roll = r.levelRandom.NextDouble()
+		}
+		power := tntDefaultExplosionPower + 1.0*roll*1.5*capped // explosionPowerBase 4.0, factor 1.0
+		t.explode(e.id, e.x, e.y, e.z, float32Of(power))
+	}
+	// if (isPrimed()) discard(): a primed minecart is removed after the blast.
+	if e.mcTntPrimed {
+		t.cur().entities.remove(e.id)
+	}
+}
+
+// float32Of narrows a float64 to the float MinecartTNT.explode's (float) cast performs before passing the
+// power to level.explode, then widens it back for t.explode's float64 radius param — preserving the
+// vanilla single-precision truncation of the power.
+func float32Of(v float64) float64 { return float64(float32(v)) }
 
 // minecartCurrentBlockPosOrRailBelow ports AbstractMinecart.getCurrentBlockPosOrRailBelow (the OLD-movement
 // branch): the cart's floored block cell, but decremented by one in Y if the cell directly below is a rail

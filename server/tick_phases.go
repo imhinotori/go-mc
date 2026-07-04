@@ -318,6 +318,19 @@ func (t *TickLoop) tickEntities() {
 	// in this tick's near() and the tracker emits RemoveEntities promptly.
 	t.tickArrows()
 
+	// PRIMED TNT: the PrimedTnt.tick lifecycle — apply gravity (0.04) + drag (0.98) + the on-ground
+	// bounce, then count the fuse (80) down and, at 0, discard the entity and run the ServerExplosion
+	// (radius 4.0, TNT interaction). A single ADDITIVE call inside this existing phase keeps the tick
+	// order unchanged (TestTickPhaseOrder stays green), mirroring the tickArrows seam directly above. Its
+	// body lives in primed_tnt.go. Placed AFTER tickArrows and BEFORE tracker.Tick so a detonation removal
+	// is reflected in this tick's near() and the tracker emits RemoveEntities promptly. tnt-gated (zero
+	// cost when no primed TNT exists, so the pig oracle stream is unperturbed). CITE PrimedTnt.tick.
+	t.tickPrimedTnt()
+
+	// TNT MINECART: the MinecartTNT.tick fuse countdown → velocity-scaled explode, driven inside
+	// tickMinecarts (minecart.go) for a primed TNT minecart. No separate phase call — the minecart tick
+	// already visits it. (Comment kept here for the tick-order narrative.)
+
 	// MOB-EFFECT-01 (Task #9): the thrown-splash-potion arc + splash (AbstractThrownPotion.tick →
 	// onHitAsPotion). Sibling of tickArrows; a potion that hits a block/player applies its effects to
 	// nearby players. ADDITIVE + potion-gated (zero cost when no potion is in flight).

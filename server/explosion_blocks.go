@@ -159,6 +159,24 @@ func (t *TickLoop) interactWithBlocks(toBlow []pk.Position, radius float64) {
 		// setBlock(pos, AIR, 3): remove the block + broadcast the update to trackers.
 		w.SetBlock(pos, air, dimMinY)
 		t.broadcastBlockUpdate(pos, air)
+
+		// Block.wasExploded (the onExplosionHit tail, AFTER the drop + setBlock(AIR)): for a TNT block, the
+		// chain-prime — spawn a PrimedTnt at the (now-air) cell with a random SHORT fuse (getRandomShortFuse:
+		// nextInt(20)+10 for the default fuse) so a TNT cluster detonates in a staggered cascade rather than
+		// in perfect lockstep. Every other block's wasExploded is a no-op here. CITE TntBlock.wasExploded:
+		// `if (TNT_EXPLODES) { PrimedTnt tnt = new PrimedTnt(...); tnt.setFuse(getRandomShortFuse(getFuse(),
+		// random)); addFreshEntity(tnt); }` — the random fuse is drawn from ServerLevel.getRandom() (the
+		// region levelRandom).
+		if isTntBlock(st) && tntExplodes {
+			shortFuse := tntDefaultFuseTime
+			if r := t.cur(); r != nil && r.levelRandom != nil {
+				shortFuse = tntGetRandomShortFuse(tntDefaultFuseTime, r.levelRandom)
+			}
+			cx := float64(pos.X) + 0.5
+			cy := float64(pos.Y)
+			cz := float64(pos.Z) + 0.5
+			t.spawnPrimedTnt(cx, cy, cz, int32(shortFuse))
+		}
 	}
 }
 

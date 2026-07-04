@@ -887,6 +887,17 @@ func (t *TickLoop) drainRedstoneUpdates(q *redstoneUpdateQueue) {
 			// HopperBlock.neighborChanged -> checkPoweredState: a hopper is LOCKED (ENABLED=false) while any
 			// neighbor emits signal, unlocked otherwise (hopper_be.go). CITE: HopperBlock.neighborChanged.
 			t.hopperNeighborChanged(pos, state)
+		case isTntBlock(state):
+			// TntBlock.neighborChanged (shared logic with onPlace): if the block now has a neighbor signal,
+			// prime the TNT (spawn a PrimedTnt) and removeBlock. This fires on a redstone rising edge that
+			// reaches the TNT (a lever/button/wire/torch powering an adjacent cell). CITE: TntBlock
+			// .neighborChanged: `if (hasNeighborSignal(pos) && TntBlock.prime(level, pos)) removeBlock(pos, false)`.
+			if t.hasNeighborSignal(pos) && t.primeTntBlock(pos) {
+				air := t.airState()
+				if t.world().SetBlock(pos, air, dimMinY) {
+					t.broadcastBlockUpdate(pos, air)
+				}
+			}
 		}
 	}
 }

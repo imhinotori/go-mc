@@ -204,6 +204,29 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 		return
 	}
 
+	// TNT BLOCK IGNITE (TntBlock.useItemOn): flint&steel OR a fire charge used ON a placed TNT block PRIMES
+	// it — the block's own useItemOn runs at ServerPlayerGameMode.useItemOn STEP 1 (before the item's
+	// useOn), so this is checked BEFORE the flint&steel PORTAL path below (a flint&steel on TNT primes the
+	// TNT, it does NOT try to make a portal). The vanilla method: prime(level, pos, player); setBlock(pos,
+	// AIR, 11) (remove the TNT block); then hurtAndBreak / consume the fire charge (durability / fire-charge
+	// consume are cite-deferred — no item-durability subsystem, and a fire charge is a stack the consume
+	// would shrink). Reach-gated like every other on-block interaction. CITE TntBlock.useItemOn:
+	// (stack.is(FLINT_AND_STEEL) || stack.is(FIRE_CHARGE)) && prime -> setBlock(AIR,11).
+	if !slotIsEmpty(held) &&
+		(int32(held.ItemID) == int32(item.FlintAndSteel.ID) || int32(held.ItemID) == int32(item.FireCharge.ID)) &&
+		t.world() != nil {
+		if s, ok := t.world().GetBlock(pos, dimMinY); ok && isTntBlock(s) && t.withinReach(p, pos) {
+			if t.primeTntBlock(pos) {
+				// setBlock(pos, AIR, 11): remove the source TNT block + broadcast the update to trackers.
+				air := block.DefaultStateID["minecraft:air"]
+				if t.world().SetBlock(pos, air, dimMinY) {
+					t.broadcastBlockUpdate(pos, air)
+				}
+			}
+			return // the TNT block consumed the interaction (primed) — no placement.
+		}
+	}
+
 	// FLINT & STEEL (FlintAndSteelItem.useOn): a non-block item, so it would fall through blockStateForItem
 	// as a no-op. Intercept it here: on a valid obsidian frame the relative face completes a NETHER PORTAL
 	// and the interior fills with nether_portal blocks (the ignite path), instead of placing a block.

@@ -1003,6 +1003,42 @@ type Entity struct {
 	//	[VERIFIED CFR AbstractMinecartContainer: `NonNullList<ItemStack> itemStacks`; getContainerSize
 	//	 abstract (MinecartChest.getContainerSize()==27, MinecartHopper.getContainerSize()==5).]
 	minecartItems []component.SlotData
+
+	// --- PRIMED TNT (net.minecraft.world.entity.item.PrimedTnt) -----------------------------------
+	//
+	// Tick-owned plain values, set/read ONLY for a PrimedTnt (isTnt). A PrimedTnt is a NON-mob moving
+	// Entity (the sibling of the arrow / item drop): its whole behavior is the gravity+drag fall plus
+	// a fuse countdown that, at 0, discards the entity and runs the ServerExplosion (radius 4.0, TNT
+	// interaction). Zero for every non-tnt entity (the primed-tnt tick gates on isTnt), so the pig
+	// oracle stream is unperturbed. Cite PrimedTnt.tick / PrimedTnt.explode.
+	//
+	// isTnt marks this entity as a PrimedTnt. The primed-tnt tick (gravity 0.04 + drag 0.98 + fuse--
+	// -> discard + explode at 0) runs ONLY for entities with this set. Set at spawn by spawnPrimedTnt.
+	isTnt bool
+
+	// tntFuse is PrimedTnt.fuse (DEFAULT_FUSE_TIME=80): the ticks until detonation. PrimedTnt.tick
+	// decrements it by one each tick and, when it reaches <=0, discards the entity and calls explode().
+	// The block-prime path seeds it to 80; the explosion-chain (wasExploded) path seeds it to the
+	// random-short fuse (getRandomShortFuse). CITE PrimedTnt.fuse / setFuse / DEFAULT_FUSE_TIME.
+	tntFuse int32
+
+	// tntExplosionPower is PrimedTnt.explosionPower (DEFAULT_EXPLOSION_POWER=4.0): the explosion radius
+	// PrimedTnt.explode passes to level.explode. A plain float; every block-primed TNT carries 4.0.
+	// CITE PrimedTnt.explosionPower / explode (level.explode(..., explosionPower, false, TNT)).
+	tntExplosionPower float32
+
+	// --- TNT MINECART (net.minecraft.world.entity.vehicle.minecart.MinecartTNT) -------------------
+	//
+	// Tick-owned plain values, set/read ONLY for a TntMinecart (isMinecart && typ==entity.TntMinecart.ID).
+	// mcTntFuse mirrors MinecartTNT.fuse (DEFAULT -1 == not primed; primeFuse sets it to 80). MinecartTNT
+	// .tick counts it down while >0 and, at ==0, explodes with a velocity-scaled power (explosionPowerBase
+	// 4.0 + explosionSpeedFactor 1.0 * nextDouble() * 1.5 * min(sqrt(horizDistSqr),5.0)). -1/false for a
+	// non-TNT minecart. CITE MinecartTNT.fuse / primeFuse / tick / explode.
+	mcTntFuse int32
+	// mcTntPrimed distinguishes the vanilla fuse<0 "never primed" default (-1) from a primed fuse that
+	// happened to reach a low value — MinecartTNT.isPrimed() == fuse > -1. A plain bool: false until
+	// primeFuse first fires. CITE MinecartTNT.isPrimed (fuse > NO_FUSE(-1)).
+	mcTntPrimed bool
 }
 
 // NewEntity constructs a live entity instance from a data/entity TABLE record at the given
