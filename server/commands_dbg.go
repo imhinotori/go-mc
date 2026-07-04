@@ -248,6 +248,20 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		t.broadcastGameEvent(gameEventStartRaining, 0)
 		t.broadcastGameEvent(gameEventRainLevelChange, 1.0)
 		t.broadcastSystemChat("[dbg] forced rain (START_RAINING broadcast)")
+	case "trade":
+		// MERCHANT (test-only, e2e bot): spawn a FARMER villager AND open its trade screen for the issuer in
+		// one shot — no client interact round-trip (which races the villager's tracker AddEntity on a busy
+		// server). Proves the full ClientboundMerchantOffers path server-side deterministically.
+		e := t.spawnVanillaMob(vanillaVillagerMobName, p.x, p.y, p.z)
+		if e != nil {
+			e.villagerProfession = "farmer"
+			e.villagerLevel = 1
+			if t.openMerchantMenu(p, e) {
+				t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned farmer villager eid=%d + opened trade screen", e.id))
+			} else {
+				t.broadcastSystemChat("[dbg] trade: openMerchantMenu returned false")
+			}
+		}
 	case "redstone":
 		// REDSTONE (test-only, e2e bot): build a minimal lit rig — a redstone_block (constant-15 source)
 		// with a redstone_wire beside it — then run onRedstoneEdit so the wire recomputes to POWER 15 and
@@ -271,7 +285,7 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		t.onRedstoneEdit(wirePos)
 		t.broadcastSystemChat(fmt.Sprintf("[dbg] placed redstone_block(%d,%d,%d)+wire(%d,%d,%d); wire should be POWER 15", bx, by, bz, bx+1, by, bz))
 	default:
-		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | iron_golem | villager | villager_farmer | vex | fangs | water | pig-in-water | raid | rain | redstone")
+		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | iron_golem | villager | villager_farmer | vex | fangs | water | pig-in-water | raid | rain | redstone | trade")
 	}
 }
 
