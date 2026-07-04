@@ -391,6 +391,15 @@ type TickLoop struct {
 	// dispenser_persist.go (the furnace-BE twin).
 	dispensers map[pk.Position]*dispenserBE
 
+	// hoppers is the runtime store of HOPPER block-entities keyed by world position (the furnaces twin).
+	// A hopper's per-tick transfer drive (hopper_be.go hopperPushItemsTick) reads/writes its hopperBE here
+	// every tick (tickWorld) — pulling one item from the container/loose-item above and pushing one item
+	// into the container in FACING, gated by the 8-tick cooldown + the redstone ENABLED property. The menu
+	// (hopper_menu.go) resolves the SAME hopperBE on open so clicks + the transfer drive share one state.
+	// Lazily constructed; tick-owned (TICK-05 — resolved/mutated only on the tick goroutine). Persistence
+	// (Items + TransferCooldown) round-trips via hopper_persist.go (the dispenser-BE twin).
+	hoppers map[pk.Position]*hopperBE
+
 	// chunkSaver is the off-tick chunk-persistence consumer (SUB-PERSIST). It is nil until
 	// SetChunkSaver wires it (tests/ephemeral runs leave it nil → no chunk saves). The tick's save
 	// phase (tickChunkSave) drains the manager's dirty set, SERIALIZES each dirty/unloaded chunk ON

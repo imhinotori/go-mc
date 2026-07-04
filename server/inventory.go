@@ -255,6 +255,9 @@ func (t *TickLoop) clicked(p *tickPlayer, containerID int32, slotNum int16, butt
 			case containerKindDispenser:
 				t.clickedDispenser(p, p.openContainer, slotNum, button, input)
 				return
+			case containerKindHopper:
+				t.clickedHopper(p, p.openContainer, slotNum, button, input)
+				return
 			}
 		}
 		t.sendContent(p) // unknown/stale window: resend authoritative player content
@@ -378,6 +381,12 @@ func (t *TickLoop) handleContainerClose(p *tickPlayer, pkt pk.Packet) {
 	// item return below still runs for all window kinds.
 	if p.openContainer != nil && p.openContainer.kind == containerKindDispenser {
 		t.closeDispenserWindow(p, p.openContainer)
+	}
+	// A HOPPER window is the block-entity container: its 5 slots persist in the tick-owned hopperBE (like a
+	// dispenser/furnace/chest), so close just frees the window (closeHopperWindow is a no-op) — the items are
+	// NOT returned to the player. The carried (cursor) item return below still runs for all window kinds.
+	if p.openContainer != nil && p.openContainer.kind == containerKindHopper {
+		t.closeHopperWindow(p, p.openContainer)
 	}
 	// The CARRIED (cursor) item: vanilla AbstractContainerMenu.removed() places a left-on-cursor item
 	// back into the inventory (or drops it) and clears the cursor. v1 previously LEFT it on the cursor —

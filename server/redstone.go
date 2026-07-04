@@ -869,6 +869,10 @@ func (t *TickLoop) drainRedstoneUpdates(q *redstoneUpdateQueue) {
 			t.dispenserNeighborChanged(pos, state)
 			// lever / button / redstone_block / observer have no redstone neighborChanged reaction here
 			// (observer reacts to updateShape via onObserverEdit, not neighborChanged).
+		case block.IsHopper(state):
+			// HopperBlock.neighborChanged -> checkPoweredState: a hopper is LOCKED (ENABLED=false) while any
+			// neighbor emits signal, unlocked otherwise (hopper_be.go). CITE: HopperBlock.neighborChanged.
+			t.hopperNeighborChanged(pos, state)
 		}
 	}
 }

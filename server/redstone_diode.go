@@ -210,12 +210,50 @@ func (t *TickLoop) diodeGetInputSignal(state block.StateID, pos pk.Position) int
 }
 
 // comparatorGetInputSignal is ComparatorBlock.getInputSignal: super.getInputSignal augmented with the
-// analog output of the block behind it. The analog-output augmentation (chest/furnace fullness, cake,
-// item frame) is DEFERRED (see file header): with no analog-output source available, resultSignal is
-// left at the direct super value, which is the exact vanilla result when the back block has no analog
-// output. CITE: ComparatorBlock.getInputSignal (targetState.hasAnalogOutputSignal() false branch).
+// analog output of the block behind it.
+//
+//	int resultSignal = super.getInputSignal(level, pos, state);
+//	Direction direction = state.getValue(FACING);
+//	BlockPos targetPos = pos.relative(direction);
+//	BlockState targetState = level.getBlockState(targetPos);
+//	if (targetState.hasAnalogOutputSignal()) {
+//	    resultSignal = targetState.getAnalogOutputSignal(level, targetPos, direction.getOpposite());
+//	} else if (resultSignal < 15 && targetState.isRedstoneConductor(...)) { ...item-frame... }
+//	return resultSignal;
+//
+// The analog-output source now covers every CONTAINER block-entity (chest/furnace/dispenser/dropper/
+// brewing/hopper) via the shared getRedstoneSignalFromContainer fullness formula. The item-frame-behind-
+// a-conductor branch stays DEFERRED (no item-frame entity — cited): with no item frame and no analog
+// block two-away, resultSignal keeps its super value there, the exact vanilla result. CITE:
+// ComparatorBlock.getInputSignal.
 func (t *TickLoop) comparatorGetInputSignal(state block.StateID, pos pk.Position) int {
-	return t.diodeGetInputSignal(state, pos)
+	resultSignal := t.diodeGetInputSignal(state, pos)
+	facing, ok := t.diodeFacing(state)
+	if !ok {
+		return resultSignal
+	}
+	targetPos := relative(pos, facing)
+	// targetState.hasAnalogOutputSignal(): true for a container block-entity (chest/furnace/dispenser/
+	// brewing/hopper — AnalogOutputBlock). getAnalogOutputSignal == getRedstoneSignalFromContainer(container).
+	if sig, has := t.containerAnalogOutputSignal(targetPos); has {
+		resultSignal = sig
+	}
+	// else: the item-frame-behind-a-conductor branch is DEFERRED (no item-frame entity — cited header).
+	return resultSignal
+}
+
+// containerAnalogOutputSignal ports AnalogOutputBlock.getAnalogOutputSignal for a CONTAINER block:
+// AbstractContainerMenu.getRedstoneSignalFromContainer(container) == Mth.lerpDiscrete(fillFraction, 0, 15)
+// where fillFraction = (sum over non-empty slots of count / getMaxStackSize(itemStack)) / containerSize.
+// Returns (signal, true) when a container block-entity resolves at pos, (0, false) otherwise (so the
+// comparator keeps its super value). CITE: AbstractContainerMenu.getRedstoneSignalFromContainer (VERIFIED
+// javap) + Mth.lerpDiscrete.
+func (t *TickLoop) containerAnalogOutputSignal(pos pk.Position) (int, bool) {
+	container := t.getContainerAt(pos)
+	if container == nil {
+		return 0, false
+	}
+	return getRedstoneSignalFromContainer(container), true
 }
 
 // diodeShouldTurnOn is DiodeBlock.shouldTurnOn(level, pos, state): getInputSignal > 0. A comparator

@@ -144,6 +144,13 @@ func (t *TickLoop) tickWorld() {
 	// world position (t.brewingStands, global — not per-region), so they tick ONCE globally here (the
 	// tickFurnaces twin). A brewing stand with no items/fuel ticks to a cheap no-op. Nil map = no-op.
 	t.tickBrewingStands()
+	// SUB-BLOCKENTITY: tick every HOPPER block-entity (HopperBlockEntity.pushItemsTick — the 8-tick
+	// single-item transfer drive: pull from the container/loose-item above, push into the container in
+	// FACING, gated by the redstone ENABLED property). Keyed by world position (t.hoppers, global — not
+	// per-region), so they tick ONCE globally here (the tickFurnaces twin). A hopper with no items + no
+	// source above ticks to a cheap no-op. Nil map = no-op (no hopper placed). Runs AFTER the item pass so
+	// a hopper sucks an item that already settled this tick. CITE: HopperBlock.getTicker -> pushItemsTick.
+	t.tickHoppers()
 	// SUB-PERSIST: the periodic chunk-save pass (every chunkSaveIntervalTicks) stays GLOBAL — it
 	// serializes the SHARED world's dirty chunks once, not per region. It lives INSIDE this existing
 	// phase so no new phase is added to the fixed tick order (TestTickPhaseOrder stays green). A

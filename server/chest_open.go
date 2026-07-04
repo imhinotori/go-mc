@@ -113,6 +113,12 @@ type openContainer struct {
 	// the block-entity (DispenserMenu wraps the BE's SimpleContainer), so a click mutates the same items the
 	// dispense drive shoots from, and close just frees the window (the items persist in the BE, like a chest).
 	dispenserPos pk.Position
+
+	// hopperPos is the world position of the open hopper (kind == containerKindHopper). The window's 5 grid
+	// slots back onto the tick-owned hopperBE at t.hoppers[hopperPos] — NO transient copy (like the
+	// dispenser/furnace/chest): the hopper container IS the block-entity, so a click mutates the same items
+	// the transfer drive moves, and close just frees the window (the items persist in the BE).
+	hopperPos pk.Position
 }
 
 // containerKind discriminates an open non-inventory window.
@@ -126,6 +132,7 @@ const (
 	containerKindFurnace                          // a furnace/blast_furnace/smoker BE (furnacePos)
 	containerKindBrewingStand                     // a brewing_stand BE (brewingStandPos)
 	containerKindDispenser                        // a dispenser/dropper BE (dispenserPos)
+	containerKindHopper                           // a hopper BE (hopperPos)
 )
 
 // chestMenuSize is the chest-window slot count: 27 chest container slots + 27 player main + 9
@@ -208,8 +215,11 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 	// (DispenserBlock.useWithoutItem -> player.openMenu(dispenser)) and consumes the interaction so no block
 	// is placed. CITE: DispenserBlock.useWithoutItem.
 	isDispenser := block.IsDispenserFamily(state)
+	// A hopper right-click OPENS its 5-slot container menu (HopperBlock.useWithoutItem ->
+	// player.openMenu(hopper)) and consumes the interaction so no block is placed. CITE: HopperBlock.useWithoutItem.
+	isHopper := block.IsHopper(state)
 	if !isChest && !isCraft && !isCut && !isBed && !isFurnace && !isBrew && !isLever && !isButton &&
-		!isRepeater && !isComparator && !isDispenser {
+		!isRepeater && !isComparator && !isDispenser && !isHopper {
 		return false // not an interactive block: PASS → placement runs
 	}
 	// Reach-gate the interaction (the same server-authoritative reach the place/break paths use):
@@ -265,6 +275,12 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 		// placement is skipped whenever the target is a dispenser-family block.
 		return t.openDispenser(p, hitPos)
 	}
+	if isHopper {
+		// HopperBlock.useWithoutItem -> player.openMenu(hopper). The 5-slot hopper menu opens on any
+		// right-click (the sneak guard collapses to false in v1, like the chest path), so placement is
+		// skipped whenever the target is a hopper.
+		return t.openHopper(p, hitPos)
+	}
 	return t.openChest(p, hitPos)
 }
 
@@ -319,12 +335,26 @@ func (t *TickLoop) openChest(p *tickPlayer, pos pk.Position) bool {
 // Extend the switch as more block-entity blocks land (furnace, etc). CITE: ChestBlock is an
 // EntityBlock; ChestBlock.newBlockEntity = new ChestBlockEntity(pos,state) (empty, on-place).
 func (t *TickLoop) createBlockEntityOnPlace(pos pk.Position, state block.StateID) {
-	if t.world() == nil || !isChestBlock(state) {
+	if t.world() == nil {
 		return
 	}
-	// Empty bare compound: a placed chest has no LootTable and no Items yet.
-	empty := nbt.RawMessage{Type: nbt.TagCompound, Data: []byte{0x00}}
-	t.world().SetBlockEntityAt(pos, block.EntityTypes["minecraft:chest"], empty, dimMinY)
+	if isChestBlock(state) {
+		// Empty bare compound: a placed chest has no LootTable and no Items yet.
+		empty := nbt.RawMessage{Type: nbt.TagCompound, Data: []byte{0x00}}
+		t.world().SetBlockEntityAt(pos, block.EntityTypes["minecraft:chest"], empty, dimMinY)
+		return
+	}
+	if block.IsHopper(state) {
+		// A placed hopper gets its (empty, cooldown -1) HopperBlockEntity + an empty BE compound so the
+		// open/transfer paths resolve it. HopperBlock.onPlace then runs checkPoweredState so the ENABLED
+		// property matches the redstone environment at placement time. CITE: HopperBlock (EntityBlock,
+		// newBlockEntity=HopperBlockEntity) + HopperBlock.onPlace -> checkPoweredState.
+		empty := nbt.RawMessage{Type: nbt.TagCompound, Data: []byte{0x00}}
+		t.world().SetBlockEntityAt(pos, block.EntityTypes["minecraft:hopper"], empty, dimMinY)
+		t.resolveHopper(pos, state)
+		t.hopperCheckPoweredState(pos, state)
+		return
+	}
 }
 
 // resolveChest returns the tick-owned chestLoot container for pos, decoding it from the chunk's
@@ -465,4 +495,19 @@ func (t *TickLoop) sendChestContent(p *tickPlayer, cl *chestLoot) {
 	inv.stateID++
 	p.client.Send(containerSetContent(int32(p.openContainer.windowID), inv.stateID,
 		chestMenuItems(cl, inv), inv.getCarried()))
+}
+
+// broadcastChestChange re-sends the authoritative content to any player whose open window is the chest
+// at pos — the observable equivalent of ChestBlockEntity.setChanged when a hopper pushes/pulls an item
+// through the chest (a viewer must see the slot change). A chest nobody is viewing changes silently (its
+// state is still authoritative in the tick-owned chestLoot). Mirrors broadcastDispenserChange. Tick-owned.
+func (t *TickLoop) broadcastChestChange(pos pk.Position, cl *chestLoot) {
+	for _, p := range t.players {
+		if p == nil || p.openContainer == nil {
+			continue
+		}
+		if p.openContainer.kind == containerKindChest && p.openContainer.chestPos == pos {
+			t.sendChestContent(p, cl)
+		}
+	}
 }

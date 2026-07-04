@@ -171,15 +171,14 @@ func (t *TickLoop) dispenseFrom(pos pk.Position, state block.StateID) {
 			return
 		}
 		// Container into = HopperBlockEntity.getContainerAt(level, pos.relative(direction));
-		// Hopper is DEFERRED (no HopperBlockEntity ported) -> getContainerAt returns null -> the loose-item
-		// DEFAULT shoot. CITE: DropperBlock.dispenseFrom (the `into == null` branch; addItem is the follow-up).
+		// getContainerAt now resolves ANY container block-entity in front (chest/furnace/dispenser/brewing/
+		// hopper) via the shared seam (container.go). into == null -> the loose-item DEFAULT shoot; else the
+		// Hopper.addItem eject into the container. CITE: DropperBlock.dispenseFrom.
 		if into := t.dropperContainerInFront(pos, facing); into == nil {
 			remaining := t.dispenseDefaultBehavior(pos, state, facing, stack)
 			d.items[slot] = remaining
 		} else {
-			// The eject-into-container branch (Hopper.addItem) is the DEFERRED follow-up; unreachable in v1
-			// because dropperContainerInFront always returns nil. Left as the cited seam.
-			remaining := t.dropperEjectInto(d, into, stack, facing)
+			remaining := t.dropperEjectInto(d, into, stack, pos, facing)
 			d.items[slot] = remaining
 		}
 		t.markDispenserDirty(pos)
@@ -271,28 +270,33 @@ func randTriangle(rng interface{ NextDouble() float64 }, center, halfRange float
 }
 
 // dropperContainerInFront ports HopperBlockEntity.getContainerAt(level, pos.relative(FACING)) for the
-// dropper's eject target. Hopper is DEFERRED (no HopperBlockEntity / Container-in-world resolution
-// ported), so this always returns nil (no container in front) and the dropper falls to the loose-item
-// DEFAULT shoot. Structured to become a real container read when Hopper lands. CITE:
-// DropperBlock.dispenseFrom (Container into = HopperBlockEntity.getContainerAt(...)).
-func (t *TickLoop) dropperContainerInFront(_ pk.Position, _ block.Direction) *dispenserBE {
-	return nil // DEFERRED: no Hopper.getContainerAt — the dropper always shoots loose (cited)
+// dropper's eject target — the FILLED Hopper seam: resolve ANY container block-entity (chest / furnace /
+// dispenser / brewing / hopper) at the cell in FACING to the shared containerView. Returns nil when the
+// front cell holds no container (then the dropper falls to the loose-item DEFAULT shoot). CITE:
+// DropperBlock.dispenseFrom (Container into = HopperBlockEntity.getContainerAt(level, pos.relative(dir))).
+func (t *TickLoop) dropperContainerInFront(pos pk.Position, facing block.Direction) containerView {
+	return t.getContainerAt(relative(pos, facing))
 }
 
-// dropperEjectInto ports the DropperBlock.dispenseFrom `into != null` branch (Hopper.addItem one item
-// into the container in front, then compute the remaining source stack). It is UNREACHABLE in v1
-// (dropperContainerInFront always returns nil), left as the cited Hopper follow-up seam so the branch
-// is faithful when Hopper lands. CITE: DropperBlock.dispenseFrom (Hopper.addItem branch).
-func (t *TickLoop) dropperEjectInto(_ *dispenserBE, into *dispenserBE, stack component.SlotData, facing block.Direction) component.SlotData {
-	_ = into
-	_ = facing
-	// remaining = Hopper.addItem(be, into, stack.copyWithCount(1), FACING.opposite());
-	// if (remaining.isEmpty()) { remaining = stack.copy(); remaining.shrink(1); } else remaining = stack.copy();
+// dropperEjectInto ports the DropperBlock.dispenseFrom `into != null` branch: push ONE item into the
+// container in front via HopperBlockEntity.addItem, then compute the remaining source stack.
+//
+//	remaining = HopperBlockEntity.addItem(be, into, itemStack.copyWithCount(1), direction.getOpposite());
+//	if (remaining.isEmpty()) { remaining = itemStack.copy(); remaining.shrink(1); }
+//	else                     { remaining = itemStack.copy(); }
+//
+// VERIFIED CFR DropperBlock.dispenseFrom: the addItem direction is FACING.getOpposite() (the item enters
+// the front container from the dropper's side, i.e. the face pointing back at the dropper). `be` is the
+// dropper's own dispenserBE wrapped as the `from` container. CITE: DropperBlock.dispenseFrom.
+func (t *TickLoop) dropperEjectInto(from *dispenserBE, into containerView, stack component.SlotData, pos pk.Position, facing block.Direction) component.SlotData {
+	// remaining = HopperBlockEntity.addItem(be, into, itemStack.copyWithCount(1), direction.getOpposite());
+	fromView := &dispenserContainer{t: t, pos: pos, d: from}
 	one := stackCopyWithCount(stack, 1)
-	leftover := into.dispenserInsertItem(one)
-	out := stack
-	if stackEmpty(leftover) {
-		out.Count = toVar(int(out.Count) - 1) // one item moved into the container: shrink source by 1
+	remaining := t.hopperAddItem(fromView, into, one, dirOpposite(facing))
+	out := stack // itemStack.copy()
+	if stackEmpty(remaining) {
+		// remaining = itemStack.copy(); remaining.shrink(1);
+		out.Count = toVar(int(out.Count) - 1)
 		if out.Count <= 0 {
 			out = component.SlotData{Count: 0}
 		}
