@@ -460,20 +460,44 @@ func (t *TickLoop) boltDamageEntitiesInBox(e *Entity) {
 	}
 }
 
-// boltThunderHitMob ports Entity.thunderHit for a MOB victim EXACTLY:
+// boltThunderHitMob ports `mob.thunderHit(level, bolt)` for a MOB victim — the VIRTUAL DISPATCH over the
+// per-species thunderHit overrides (lightning_conversion.go). The base Entity.thunderHit is:
 //
 //	setRemainingFireTicks(this.remainingFireTicks + 1);
 //	if (this.remainingFireTicks == 0) igniteForSeconds(8.0F);
 //	hurtServer(damageSources().lightningBolt(), 5.0F);
 //
-// The +1 is a plain field write (setRemainingFireTicks is a bare setter); the `== 0` guard then reads the
-// JUST-incremented field, so igniteForSeconds(8) fires ONLY when the field was -1 before the +1. A mob at
-// the vanilla default 0 (Entity.remainingFireTicks is a plain int, default 0) becomes 1 — NOT 0 — so a
-// single strike does NOT give the 8s burn; instead the mob is on fire for 1 tick, re-bumped each tick the
-// bolt is alive (life 2->0 gives ~3 hits). This is the exact jar behavior; do NOT "improve" it to an
-// unconditional 8s ignite. The 5.0 damage routes through applyDamageEntity (the mob hurt path). CITE:
-// Entity.thunderHit + setRemainingFireTicks (a bare field write, verified this session).
+// but Pig/Villager (convertTo -> ZombifiedPiglin/Witch), MushroomCow (variant toggle) OVERRIDE it and run
+// INSTEAD OF the base (a successful convert / a mooshroom toggle SKIPS the fire+damage — vanilla only calls
+// super.thunderHit when convertTo returns null; MushroomCow never calls super). The Creeper OVERRIDE calls
+// super FIRST (fire+damage) THEN setPowered(true). So: consult the per-species dispatch; if it HANDLED the
+// hit (convert/toggle), return without the base fire/damage; otherwise apply the base Entity.thunderHit,
+// then apply the creeper's setPowered. CITE: Entity.thunderHit + Pig/Villager/Creeper/MushroomCow.thunderHit.
 func (t *TickLoop) boltThunderHitMob(e *Entity, m *Entity) {
+	// Virtual dispatch: a converting species (Pig/Villager) or the Mooshroom handles the hit here and returns
+	// true (the base fire/damage is skipped). A non-overriding species (incl. Creeper, whose override calls
+	// super first) returns false -> apply the base Entity.thunderHit below.
+	if t.boltThunderHitConvert(e, m) {
+		return
+	}
+	t.boltThunderHitBase(m)
+	// Creeper.thunderHit: super.thunderHit(...) THEN setPowered(true). The base hit ran above; now set the
+	// powered flag (the charged creeper -> doubled explosion radius, ai_goals_creeper.go explodeCreeper). The
+	// DATA_IS_POWERED client-metadata broadcast is the existing cited deferral. CITE Creeper.thunderHit.
+	if m.typ == entity.Creeper.ID {
+		m.powered = true
+	}
+}
+
+// boltThunderHitBase ports the base Entity.thunderHit body EXACTLY (fire + 5.0 damage). The +1 is a plain
+// field write (setRemainingFireTicks is a bare setter); the `== 0` guard then reads the JUST-incremented
+// field, so igniteForSeconds(8) fires ONLY when the field was -1 before the +1. A mob at the vanilla default
+// 0 (Entity.remainingFireTicks is a plain int, default 0) becomes 1 — NOT 0 — so a single strike does NOT
+// give the 8s burn; instead the mob is on fire for 1 tick, re-bumped each tick the bolt is alive (life 2->0
+// gives ~3 hits). This is the exact jar behavior; do NOT "improve" it to an unconditional 8s ignite. The 5.0
+// damage routes through applyDamageEntity (the mob hurt path). CITE: Entity.thunderHit + setRemainingFireTicks
+// (a bare field write, verified this session).
+func (t *TickLoop) boltThunderHitBase(m *Entity) {
 	m.remainingFireTicks++
 	if m.remainingFireTicks == 0 {
 		t.igniteForSeconds(m, boltIgniteSeconds)

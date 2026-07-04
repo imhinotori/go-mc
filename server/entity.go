@@ -197,6 +197,18 @@ type Entity struct {
 	powered  bool
 	ignited  bool
 
+	// --- MUSHROOM COW VARIANT (net.minecraft.world.entity.animal.cow.MushroomCow) --------------------
+	//
+	// Tick-owned plain values, set/read ONLY for a Mooshroom (typ == entity.Mooshroom.ID). mooshroomVariant
+	// mirrors the DATA_TYPE entity-data accessor (MushroomCow.Variant.id: RED==0 == Variant.DEFAULT, BROWN==1);
+	// a fresh mooshroom starts RED (0). lastLightningBoltUUID mirrors MushroomCow.lastLightningBoltUUID: the
+	// per-bolt guard in thunderHit so the RED<->BROWN toggle fires ONCE per struck bolt (not once per damage
+	// tick the bolt is alive). hasLastLightningBolt distinguishes the vanilla null default (no bolt seen yet)
+	// from a real all-zero UUID. Zero for every non-mooshroom entity. Cite MushroomCow.thunderHit + Variant.
+	mooshroomVariant      int32     // MushroomCow DATA_TYPE (0=RED default, 1=BROWN)
+	lastLightningBoltUUID uuid.UUID // MushroomCow.lastLightningBoltUUID (the per-bolt toggle guard)
+	hasLastLightningBolt  bool      // the lastLightningBoltUUID field is set (vanilla non-null)
+
 	// --- CUBE MOB (net.minecraft.world.entity.monster.cubemob.AbstractCubeMob / SulfurCube) ---------
 	//
 	// Tick-owned plain values, set/read ONLY for a sulfur cube (typ == entity.SulfurCube.ID). cubeSize is
