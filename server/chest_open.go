@@ -106,6 +106,13 @@ type openContainer struct {
 	// BE's SimpleContainer + ContainerData), so a click mutates the same items the cook drive ticks, and
 	// close just frees the window (the items persist in the BE, like a chest). ContainerLevelAccess reach.
 	furnacePos pk.Position
+
+	// dispenserPos is the world position of the open dispenser/dropper (kind == containerKindDispenser,
+	// REDSTONE TIER-4). The window's 9 grid slots back onto the tick-owned dispenserBE at
+	// t.dispensers[dispenserPos] — NO transient copy (like the furnace/chest): the dispenser container IS
+	// the block-entity (DispenserMenu wraps the BE's SimpleContainer), so a click mutates the same items the
+	// dispense drive shoots from, and close just frees the window (the items persist in the BE, like a chest).
+	dispenserPos pk.Position
 }
 
 // containerKind discriminates an open non-inventory window.
@@ -118,6 +125,7 @@ const (
 	containerKindMerchant                         // a villager merchant window (2 payment + 1 result)
 	containerKindFurnace                          // a furnace/blast_furnace/smoker BE (furnacePos)
 	containerKindBrewingStand                     // a brewing_stand BE (brewingStandPos)
+	containerKindDispenser                        // a dispenser/dropper BE (dispenserPos)
 )
 
 // chestMenuSize is the chest-window slot count: 27 chest container slots + 27 player main + 9
@@ -196,8 +204,12 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 	// consume the interaction so no block is placed. CITE: RepeaterBlock/ComparatorBlock.useWithoutItem.
 	isRepeater := block.IsRepeater(state)
 	isComparator := block.IsComparator(state)
+	// REDSTONE TIER-4: a dispenser/dropper right-click OPENS its 9-slot (3x3) container menu
+	// (DispenserBlock.useWithoutItem -> player.openMenu(dispenser)) and consumes the interaction so no block
+	// is placed. CITE: DispenserBlock.useWithoutItem.
+	isDispenser := block.IsDispenserFamily(state)
 	if !isChest && !isCraft && !isCut && !isBed && !isFurnace && !isBrew && !isLever && !isButton &&
-		!isRepeater && !isComparator {
+		!isRepeater && !isComparator && !isDispenser {
 		return false // not an interactive block: PASS → placement runs
 	}
 	// Reach-gate the interaction (the same server-authoritative reach the place/break paths use):
@@ -246,6 +258,12 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 		// on any right-click (the bl9 sneak guard collapses to false in v1, like the chest path), so
 		// placement is skipped whenever the target is a brewing_stand.
 		return t.openBrewingStand(p, hitPos)
+	}
+	if isDispenser {
+		// DispenserBlock.useWithoutItem -> player.openMenu(dispenser/dropper). The 9-slot (3x3) menu opens
+		// on any right-click (the bl9 sneak guard collapses to false in v1, like the chest path), so
+		// placement is skipped whenever the target is a dispenser-family block.
+		return t.openDispenser(p, hitPos)
 	}
 	return t.openChest(p, hitPos)
 }

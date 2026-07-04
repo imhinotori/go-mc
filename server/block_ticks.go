@@ -292,6 +292,14 @@ func (t *TickLoop) tickBlock(pos pk.Position, typ blockTickType) {
 			return
 		}
 		t.observerTick(state, pos)
+	case dispenserTickType, dropperTickType:
+		// ServerLevel.tickBlock stale guard: only tick if still a dispenser-family block (REDSTONE TIER-4,
+		// dispenser.go). A dispenser/dropper broken/replaced since the TRIGGERED tick was scheduled fires
+		// nothing. CITE: ServerLevel.tickBlock (`state.is(block)`).
+		if !t.tickBlockDispenserGuard(state) {
+			return
+		}
+		t.dispenserTick(state, pos)
 	default:
 		// Buttons schedule under their own block id (13 variants). Route any button tick to the unpress
 		// handler; the IsButton guard is the tickBlock `state.is(block)` stale check.

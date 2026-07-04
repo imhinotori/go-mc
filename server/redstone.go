@@ -843,6 +843,11 @@ func (t *TickLoop) drainRedstoneUpdates(q *redstoneUpdateQueue) {
 			// piston's powered state crossed its EXTENDED state (REDSTONE TIER-3, piston.go). CITE:
 			// PistonBaseBlock.neighborChanged.
 			t.pistonCheckIfExtend(pos, state)
+		case block.IsDispenserFamily(state):
+			// DispenserBlock.neighborChanged (shared by DropperBlock): on a rising power edge (now powered,
+			// not yet TRIGGERED) schedule the dispense 4 ticks out + latch TRIGGERED=true; on a falling edge
+			// clear TRIGGERED (REDSTONE TIER-4, dispenser.go). CITE: DispenserBlock.neighborChanged.
+			t.dispenserNeighborChanged(pos, state)
 			// lever / button / redstone_block / observer have no redstone neighborChanged reaction here
 			// (observer reacts to updateShape via onObserverEdit, not neighborChanged).
 		}

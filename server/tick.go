@@ -383,6 +383,14 @@ type TickLoop struct {
 	// tick-owned (TICK-05). Persistence (Items + BrewTime + Fuel) round-trips via brewing_stand_persist.go.
 	brewingStands map[pk.Position]*brewingStandBE
 
+	// dispensers is the runtime store of dispenser/dropper BLOCK-ENTITIES keyed by world position (REDSTONE
+	// TIER-4, the furnaces twin). A dispenser fires from its 9-slot dispenserBE here when its scheduled
+	// TRIGGERED tick runs (dispenser.go dispenseFrom); the menu (dispenser_menu.go) resolves the SAME
+	// dispenserBE on open so clicks + the dispense drive share one state. Lazily constructed; tick-owned
+	// (TICK-05 — resolved/mutated only on the tick goroutine). Persistence (Items) round-trips via
+	// dispenser_persist.go (the furnace-BE twin).
+	dispensers map[pk.Position]*dispenserBE
+
 	// chunkSaver is the off-tick chunk-persistence consumer (SUB-PERSIST). It is nil until
 	// SetChunkSaver wires it (tests/ephemeral runs leave it nil → no chunk saves). The tick's save
 	// phase (tickChunkSave) drains the manager's dirty set, SERIALIZES each dirty/unloaded chunk ON

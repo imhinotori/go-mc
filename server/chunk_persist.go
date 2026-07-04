@@ -98,6 +98,10 @@ func (t *TickLoop) flushColumn(pos level.ChunkPos) bool {
 	// (BrewingStandBlockEntity.saveAdditional — Items + BrewTime + Fuel). The furnace-flush twin.
 	t.flushBrewingStandItems(pos, ch)
 
+	// DISPENSER/DROPPER FLUSH: fold any live dispenserBE in this column into the chunk's BlockEntity list
+	// (DispenserBlockEntity.saveAdditional — the 9-slot Items list). The furnace-flush twin (REDSTONE TIER-4).
+	t.flushDispenserItems(pos, ch)
+
 	data, err := world.SerializeChunkData(t.worker().StructureCache(), pos, ch, t.worker().MinY())
 	if err != nil {
 		// A serialize error is an encode bug, not runtime input; skip this column (do not crash the

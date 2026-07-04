@@ -252,6 +252,9 @@ func (t *TickLoop) clicked(p *tickPlayer, containerID int32, slotNum int16, butt
 			case containerKindBrewingStand:
 				t.clickedBrewingStand(p, p.openContainer, slotNum, button, input)
 				return
+			case containerKindDispenser:
+				t.clickedDispenser(p, p.openContainer, slotNum, button, input)
+				return
 			}
 		}
 		t.sendContent(p) // unknown/stale window: resend authoritative player content
@@ -368,6 +371,13 @@ func (t *TickLoop) handleContainerClose(p *tickPlayer, pkt pk.Packet) {
 	// still runs for all window kinds.
 	if p.openContainer != nil && p.openContainer.kind == containerKindFurnace {
 		t.closeFurnaceWindow(p, p.openContainer)
+	}
+	// A DISPENSER/DROPPER window (REDSTONE TIER-4) is the block-entity container: its 9 slots persist in the
+	// tick-owned dispenserBE (like a chest/furnace), so close just frees the window (closeDispenserWindow is
+	// a no-op) — the items are NOT returned to the player (they belong to the dispenser). The carried (cursor)
+	// item return below still runs for all window kinds.
+	if p.openContainer != nil && p.openContainer.kind == containerKindDispenser {
+		t.closeDispenserWindow(p, p.openContainer)
 	}
 	// The CARRIED (cursor) item: vanilla AbstractContainerMenu.removed() places a left-on-cursor item
 	// back into the inventory (or drops it) and clears the cursor. v1 previously LEFT it on the cursor —
