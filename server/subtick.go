@@ -250,6 +250,13 @@ func (t *TickLoop) applyInput(p *tickPlayer, in SubtickInput) {
 		// picked offer's cost items. A forged/stale window or out-of-range index is a silent no-op.
 		t.handleSelectTrade(p, in.Packet)
 
+	case packetid.ServerboundRenameItem:
+		// ANVIL: the client typed a new name in the anvil rename field
+		// (ServerGamePacketListenerImpl.handleRenameItem -> AnvilMenu.setItemName). The handler resolves the
+		// open anvil window, validates the name (<= 50 chars), stores it, and re-runs createResult (the rename
+		// adds cost 1). A forged/stale window or an oversize name is a silent no-op.
+		t.handleRenameItem(p, in.Packet)
+
 	case packetid.ServerboundSetBeacon:
 		// BEACON (BEACON-01): the client picked the beacon's primary/secondary effect
 		// (ServerGamePacketListenerImpl.handleSetBeaconPacket -> BeaconMenu.updateEffects). The handler

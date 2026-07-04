@@ -134,22 +134,59 @@ type openContainer struct {
 	// entity). CITE AbstractMinecartContainer.
 	minecartEntityID  int32
 	minecartSlotCount int
+
+	// anvilInput / anvilAdd / anvilResult / anvilCost / anvilRepairUnits / anvilOnlyRenaming /
+	// anvilName / anvilNameSet / anvilPos back the ANVIL window (kind == containerKindAnvil): the two
+	// TRANSIENT input slots (anvilInput = AnvilMenu input slot 0, anvilAdd = additional slot 1 — an
+	// ItemCombinerMenu SimpleContainer returned to the player on close), the displayed RESULT
+	// (anvilResult = the ResultContainer, take-only, recomputed by createResult), the cost DataSlot
+	// (anvilCost = AnvilMenu.cost), the repair-material consume count (anvilRepairUnits =
+	// repairItemCountCost), the pure-rename flag (anvilOnlyRenaming), the pending rename
+	// (anvilName/anvilNameSet = AnvilMenu.itemName; anvilNameSet distinguishes "" from unset), and the
+	// anvil block position (anvilPos — for the 12% break roll on take). No block-entity (transient).
+	anvilInput        component.SlotData
+	anvilAdd          component.SlotData
+	anvilResult       component.SlotData
+	anvilCost         int
+	anvilRepairUnits  int
+	anvilOnlyRenaming bool
+	anvilName         string
+	anvilNameSet      bool
+	anvilPos          pk.Position
+
+	// enchantItem / enchantLapis / enchantSeed / enchantCosts / enchantClueEnch / enchantClueLevel /
+	// enchantPos back the ENCHANTMENT-TABLE window (kind == containerKindEnchant): the two TRANSIENT
+	// slots (enchantItem = EnchantmentMenu enchantSlots[0], enchantLapis = enchantSlots[1] — a
+	// SimpleContainer(2) returned to the player on close), the per-open enchantmentSeed DataSlot
+	// (enchantSeed), the three offer level-costs (enchantCosts = EnchantmentMenu.costs), the three
+	// offered-enchant clues (enchantClueEnch = enchantClue, the wire enchantment id or -1) + level
+	// clues (enchantClueLevel = levelClue), and the enchanting_table block position (enchantPos — for
+	// the bookshelf scan + stillValid). No block-entity (transient).
+	enchantItem      component.SlotData
+	enchantLapis     component.SlotData
+	enchantSeed      int32
+	enchantCosts     [3]int
+	enchantClueEnch  [3]int32
+	enchantClueLevel [3]int32
+	enchantPos       pk.Position
 }
 
 // containerKind discriminates an open non-inventory window.
 type containerKind int
 
 const (
-	containerKindChest        containerKind = iota // a world chest (chestPos)
-	containerKindCrafting                          // a transient crafting-table 3x3 (craftGrid)
-	containerKindStonecutter                       // a transient stonecutter single-input picker (cutInput)
-	containerKindMerchant                          // a villager merchant window (2 payment + 1 result)
-	containerKindFurnace                           // a furnace/blast_furnace/smoker BE (furnacePos)
-	containerKindBrewingStand                      // a brewing_stand BE (brewingStandPos)
-	containerKindDispenser                         // a dispenser/dropper BE (dispenserPos)
-	containerKindHopper                            // a hopper BE (hopperPos)
-	containerKindBeacon                            // a beacon BE (beaconPos)
-	containerKindMinecartChest                     // a chest/hopper minecart entity (minecartEntityID)
+	containerKindChest         containerKind = iota // a world chest (chestPos)
+	containerKindCrafting                           // a transient crafting-table 3x3 (craftGrid)
+	containerKindStonecutter                        // a transient stonecutter single-input picker (cutInput)
+	containerKindMerchant                           // a villager merchant window (2 payment + 1 result)
+	containerKindFurnace                            // a furnace/blast_furnace/smoker BE (furnacePos)
+	containerKindBrewingStand                       // a brewing_stand BE (brewingStandPos)
+	containerKindDispenser                          // a dispenser/dropper BE (dispenserPos)
+	containerKindHopper                             // a hopper BE (hopperPos)
+	containerKindBeacon                             // a beacon BE (beaconPos)
+	containerKindMinecartChest                      // a chest/hopper minecart entity (minecartEntityID)
+	containerKindAnvil                              // a transient anvil (2 input + 1 result + cost)
+	containerKindEnchant                            // a transient enchanting-table (item + lapis + 3 offers)
 )
 
 // chestMenuSize is the chest-window slot count: 27 chest container slots + 27 player main + 9
@@ -238,8 +275,14 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 	// A beacon right-click OPENS its payment/effect-selection menu (BeaconBlock.useWithoutItem ->
 	// player.openMenu(beacon)) and consumes the interaction so no block is placed. CITE: BeaconBlock.useWithoutItem.
 	isBeacon := isBeaconBlock(state)
+	// An anvil-family right-click OPENS the AnvilMenu (AnvilBlock.useWithoutItem -> player.openMenu(anvil));
+	// an enchanting_table right-click OPENS the EnchantmentMenu (EnchantingTableBlock.useWithoutItem ->
+	// player.openMenu(enchantment)); both consume the interaction so no block is placed. CITE
+	// AnvilBlock/EnchantingTableBlock.useWithoutItem.
+	isAnvil := isAnyAnvilBlock(state)
+	isEnchant := isEnchantingTableBlock(state)
 	if !isChest && !isCraft && !isCut && !isBed && !isFurnace && !isBrew && !isLever && !isButton &&
-		!isRepeater && !isComparator && !isDispenser && !isHopper && !isBeacon {
+		!isRepeater && !isComparator && !isDispenser && !isHopper && !isBeacon && !isAnvil && !isEnchant {
 		return false // not an interactive block: PASS → placement runs
 	}
 	// Reach-gate the interaction (the same server-authoritative reach the place/break paths use):
@@ -306,6 +349,16 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 		// any right-click (the sneak guard collapses to false in v1, like the chest path), so placement is
 		// skipped whenever the target is a beacon.
 		return t.openBeacon(p, hitPos)
+	}
+	if isAnvil {
+		// AnvilBlock.useWithoutItem -> player.openMenu(anvil). The 2-input + result menu opens on any
+		// right-click (the sneak guard collapses to false in v1), so placement is skipped for an anvil.
+		return t.openAnvil(p, hitPos)
+	}
+	if isEnchant {
+		// EnchantingTableBlock.useWithoutItem -> player.openMenu(enchantment). The item + lapis + 3-offer
+		// menu opens on any right-click (the sneak guard collapses to false in v1), so placement is skipped.
+		return t.openEnchantTable(p, hitPos)
 	}
 	return t.openChest(p, hitPos)
 }

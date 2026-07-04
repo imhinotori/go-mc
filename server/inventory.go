@@ -264,6 +264,12 @@ func (t *TickLoop) clicked(p *tickPlayer, containerID int32, slotNum int16, butt
 			case containerKindMinecartChest:
 				t.clickedMinecartChest(p, p.openContainer, slotNum, button, input)
 				return
+			case containerKindAnvil:
+				t.clickedAnvil(p, p.openContainer, slotNum, button, input)
+				return
+			case containerKindEnchant:
+				t.clickedEnchant(p, p.openContainer, slotNum, button, input)
+				return
 			}
 		}
 		t.sendContent(p) // unknown/stale window: resend authoritative player content
@@ -400,6 +406,17 @@ func (t *TickLoop) handleContainerClose(p *tickPlayer, pkt pk.Packet) {
 	// the world rather than kept. The beacon's selected effect + level persist in the BE.
 	if p.openContainer != nil && p.openContainer.kind == containerKindBeacon {
 		t.closeBeaconWindow(p, p.openContainer)
+	}
+	// An ANVIL window (ItemCombinerMenu) returns its two TRANSIENT input slots to the player on close
+	// (ItemCombinerMenu.removed -> super.removed -> clearContainer over the input container). The result
+	// (2) is virtual (never returned). The inputs are real and must not be lost.
+	if p.openContainer != nil && p.openContainer.kind == containerKindAnvil {
+		t.closeAnvilWindow(p, p.openContainer)
+	}
+	// An ENCHANTMENT-TABLE window returns its two TRANSIENT slots (item + lapis) to the player on close
+	// (EnchantmentMenu.removed -> clearContainer over the enchant slots). Both are real and must not be lost.
+	if p.openContainer != nil && p.openContainer.kind == containerKindEnchant {
+		t.closeEnchantWindow(p, p.openContainer)
 	}
 	// The CARRIED (cursor) item: vanilla AbstractContainerMenu.removed() places a left-on-cursor item
 	// back into the inventory (or drops it) and clears the cursor. v1 previously LEFT it on the cursor —

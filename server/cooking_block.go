@@ -60,10 +60,17 @@ func (t *TickLoop) handleContainerButtonClick(p *tickPlayer, pkt pk.Packet) {
 		return // malformed: no-op
 	}
 	oc := p.openContainer
-	if oc == nil || oc.kind != containerKindStonecutter || int32(containerID) != int32(oc.windowID) {
-		return // not the player's open stonecutter window: no-op (a forged/stale id is ignored)
+	if oc == nil || int32(containerID) != int32(oc.windowID) {
+		return // not the player's open window: no-op (a forged/stale id is ignored)
 	}
-	t.clickStonecutterButton(p, oc, int(buttonID))
+	switch oc.kind {
+	case containerKindStonecutter:
+		t.clickStonecutterButton(p, oc, int(buttonID))
+	case containerKindEnchant:
+		// EnchantmentMenu.clickMenuButton: apply the chosen offer (button 0/1/2). CITE
+		// ServerGamePacketListenerImpl.handleContainerButtonClick -> EnchantmentMenu.clickMenuButton.
+		t.enchantClickButton(p, oc, int(buttonID))
+	}
 }
 
 // clickStonecutterButton ports StonecutterMenu.clickMenuButton: if buttonId is a valid index into the

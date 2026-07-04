@@ -885,6 +885,17 @@ type tickPlayer struct {
 	lastSentXpTotal    int32
 	xpInit             bool
 
+	// enchantmentSeed / playerEnchantRandom back the ENCHANTMENT subsystem's per-player RNG
+	// (Player.enchantmentSeed + Player.random). enchantmentSeed is the seed the EnchantmentMenu feeds
+	// its LegacyRandomSource to roll the 3 offers (getEnchantmentSeed()); it is re-rolled from
+	// playerEnchantRandom.nextInt() after each enchant (onEnchantmentPerformed) + on each slotsChanged
+	// (EnchantmentMenu.slotsChanged reseeds enchantmentSeed = player.getEnchantmentSeed(), which is
+	// stable across a single open but re-rolled on enchant). playerEnchantRandom is the player's own
+	// RandomSource (java.util.Random) — bit-exact (legacyRandom) so the re-roll matches vanilla. Lazily
+	// initialized (ensurePlayerEnchantState) from a deterministic per-player seed. Tick-owned.
+	enchantmentSeed     int32
+	playerEnchantRandom *legacyRandom
+
 	// --- Breath / drowning 1:1 port (Plan 17-13). Tick-owned (TICK-05): mutated only on the tick
 	// goroutine by tickBreath, so it is -race clean by the same single-owner discipline as the rest
 	// of tickPlayer. ---
@@ -1627,6 +1638,9 @@ func (t *TickLoop) dispatch(c *Client, p pk.Packet) {
 		packetid.ServerboundContainerButtonClick,
 		packetid.ServerboundSelectTrade,
 		packetid.ServerboundSetBeacon,
+		// ServerboundRenameItem (anvil rename field): buffered here (server-stamped) so handleRenameItem
+		// resolves it on-tick in chronological order. A non-anvil/stale window is a no-op in the handler.
+		packetid.ServerboundRenameItem,
 		// ServerboundMoveVehicle (the controlling-passenger steer): the client sends the vehicle's new
 		// absolute position each tick while a player controls it (happy-ghast ride). Routed through the
 		// subtick buffer like the player-movement packets so handleMoveVehicle resolves it on-tick in
