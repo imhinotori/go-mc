@@ -151,6 +151,12 @@ func (e *Entity) vehiclePassengerAttachment(seatIndex int) Pos {
 		}
 		return transformPoint(happyGhastPassengerSeats[idx], e.yaw)
 	}
+	// A boat overrides getPassengerAttachmentPoint with its own (0, rideHeight, xOffset).yRot seat math
+	// (boat.go: boatPassengerAttachment) — the boat rider sits low in the hull, two abreast front-to-back.
+	//	[VERIFIED CFR AbstractBoat.getPassengerAttachmentPoint (boat.go boatPassengerAttachment).]
+	if e.isBoat {
+		return e.boatPassengerAttachment(seatIndex)
+	}
 	// Fallback AT_HEIGHT: a single seat at (0, height, 0), rotated by yRot.
 	return transformPoint(Pos{X: 0, Y: e.height, Z: 0}, e.yaw)
 }
@@ -179,6 +185,17 @@ func (e *Entity) isVehicle() bool { return len(e.passengers) > 0 }
 func (e *Entity) canAddPassengerVehicle() bool {
 	if e.typ == entity.HappyGhast.ID {
 		return len(e.passengers) < happyGhastMaxPassengers
+	}
+	// AbstractBoat.canAddPassenger: `getPassengers().size() < getMaxPassengers() && !isEyeInFluid(WATER)`
+	// (2 seats for a plain boat/raft, 1 for a chest boat/raft; a submerged boat cannot be boarded). The
+	// eye-in-water guard is approximated by the boat's UNDER_WATER/UNDER_FLOWING_WATER status (a boat whose
+	// eye is in water is one the float classifier marks submerged) — a floating boat (IN_WATER/IN_AIR) is
+	// boardable. CITE AbstractBoat.canAddPassenger; boat.go boatMaxPassengersOf.
+	if e.isBoat {
+		if e.boatStatus == boatStatusUnderWater || e.boatStatus == boatStatusUnderFlowingWater {
+			return false
+		}
+		return len(e.passengers) < boatMaxPassengersOf(e)
 	}
 	return len(e.passengers) == 0
 }
@@ -352,6 +369,21 @@ func (t *TickLoop) ejectPassengers(vehicle *Entity) {
 //	 `firstPassenger = getFirstPassenger(); if (isWearingBodyArmor() && !isOnStillTimeout() &&
 //	 firstPassenger instanceof Player p) return p; return super.getControllingPassenger();`.]
 func (t *TickLoop) getControllingPassenger(vehicle *Entity) int32 {
+	// A BOAT's getControllingPassenger is the first passenger when it is a LivingEntity (a player always is)
+	// — AbstractBoat.getControllingPassenger: `entity = getFirstPassenger(); return entity instanceof
+	// LivingEntity ? entity : super.getControllingPassenger();`. This makes a ridden boat client-authoritative
+	// (isClientAuthoritative()), so tickBoat skips the server float physics and the client drives it via
+	// ServerboundMoveVehicle (handleMoveVehicle). CITE AbstractBoat.getControllingPassenger.
+	if vehicle.isBoat {
+		if len(vehicle.passengers) == 0 {
+			return 0
+		}
+		first := vehicle.passengers[0]
+		if t.playerByEntityID(first) != nil {
+			return first
+		}
+		return 0
+	}
 	if vehicle.typ != entity.HappyGhast.ID {
 		return 0
 	}

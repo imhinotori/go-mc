@@ -345,6 +345,14 @@ func (t *TickLoop) tickEntities() {
 	// tracker.Tick so a moved/removed minecart is reflected in this tick's near(). Body in minecart.go.
 	t.tickMinecarts()
 
+	// BOAT: the AbstractBoat surface-float physics (floatBoat — the water buoyancy + the per-status friction +
+	// the air->water surface snap). An EMPTY boat is server-authoritative: the server runs floatBoat + move(SELF)
+	// so it settles onto the water surface and drifts; a RIDDEN boat is client-authoritative (the rider's client
+	// drives it via ServerboundMoveVehicle). Sibling of tickMinecarts; ADDITIVE + boat-gated (zero cost when no
+	// boat exists, so the pig oracle stream is unperturbed). Placed AFTER tickMinecarts and BEFORE tracker.Tick so
+	// a moved boat is reflected in this tick's near(). Body in boat.go.
+	t.tickBoats()
+
 	// VEX + FANGS (Task): the EvokerFangs warmup -> attack -> despawn lifecycle (EvokerFangs.tick). Sibling
 	// of tickArrows/tickPotions; a code-spawned projectile the evoker's FANGS spell places. ADDITIVE +
 	// fangs-gated (zero cost when no fangs are active). Placed AFTER tickPotions and BEFORE tracker.Tick so a

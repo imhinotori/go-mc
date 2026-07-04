@@ -999,9 +999,13 @@ type Entity struct {
 	// minecartItems is the container backing a CHEST/HOPPER minecart — AbstractMinecartContainer.itemStacks
 	// (a NonNullList sized by getContainerSize: MinecartChest==27, MinecartHopper==5). Sized at spawn to the
 	// type's container size (minecartContainerSize). nil for a plain minecart. A block hopper pulls from / a
-	// player opens this via the entity-container seam (container.go).
+	// player opens this via the entity-container seam (container.go). Also reused as the 27-slot backing of a
+	// CHEST BOAT / CHEST RAFT (AbstractChestBoat.itemStacks, getContainerSize()==27) — the boat container
+	// adapter (boat_container.go) shares this same slice, so the identical 27-slot chest click engine and the
+	// getEntityContainer seam serve both vehicle families with no duplicate item store.
 	//	[VERIFIED CFR AbstractMinecartContainer: `NonNullList<ItemStack> itemStacks`; getContainerSize
-	//	 abstract (MinecartChest.getContainerSize()==27, MinecartHopper.getContainerSize()==5).]
+	//	 abstract (MinecartChest.getContainerSize()==27, MinecartHopper.getContainerSize()==5).
+	//	 AbstractChestBoat.itemStacks (NonNullList), getContainerSize()==27.]
 	minecartItems []component.SlotData
 
 	// --- PRIMED TNT (net.minecraft.world.entity.item.PrimedTnt) -----------------------------------
@@ -1039,6 +1043,61 @@ type Entity struct {
 	// happened to reach a low value — MinecartTNT.isPrimed() == fuse > -1. A plain bool: false until
 	// primeFuse first fires. CITE MinecartTNT.isPrimed (fuse > NO_FUSE(-1)).
 	mcTntPrimed bool
+
+	// --- BOAT (net.minecraft.world.entity.vehicle.boat.AbstractBoat + Boat/Raft/ChestBoat/ChestRaft) -----
+	//
+	// Tick-owned plain values, set/read ONLY for a boat (isBoat). A boat is a NON-mob rideable VehicleEntity
+	// whose whole behavior is the surface-float physics (floatBoat) — the sibling of isMinecart. Vanilla
+	// runs floatBoat + move(SELF) on the SERVER only while the boat is server-authoritative (no controlling
+	// passenger); a ridden boat is client-authoritative (the controlling player's client drives it via
+	// ServerboundMoveVehicle, wired in passenger.go). Zero for every non-boat entity (the boat tick gates on
+	// isBoat), so the pig oracle's stream is byte-identically unperturbed.
+	//	[VERIFIED CFR AbstractBoat.tick: `if (isLocalInstanceAuthoritative()) { ...; floatBoat(); ...;
+	//	 move(SELF, getDeltaMovement()); } else setDeltaMovement(Vec3.ZERO);` — server-authoritative iff
+	//	 !isClientAuthoritative() (no controlling passenger).]
+
+	// isBoat marks this entity as an AbstractBoat. The boat tick (floatBoat surface physics + the off-water
+	// gravity fall) runs ONLY for entities with this set. Set at spawn by spawnBoat.
+	isBoat bool
+
+	// boatIsRaft marks a Raft/ChestRaft (bamboo). It changes ONLY the rideHeight seat factor
+	// (Raft.rideHeight == height*0.8888889 vs Boat.rideHeight == height/3.0). DEFAULT false (a boat).
+	//	[VERIFIED CFR Raft.rideHeight: `return dimensions.height() * 0.8888889f;`.]
+	boatIsRaft bool
+
+	// boatStatus / boatOldStatus mirror AbstractBoat.status / oldStatus — the surface state (IN_AIR /
+	// ON_LAND / IN_WATER / UNDER_WATER / UNDER_FLOWING_WATER) computed each tick by getStatus, read by
+	// floatBoat to pick the buoyancy delta + friction. oldStatus is the PREVIOUS tick's status (the
+	// air->water transition that snaps the boat to the surface). DEFAULT boatStatusInAir.
+	//	[VERIFIED CFR AbstractBoat.status/oldStatus (Status enum); tick: oldStatus=status; status=getStatus().]
+	boatStatus    boatStatus
+	boatOldStatus boatStatus
+
+	// boatWaterLevel mirrors AbstractBoat.waterLevel — the water-surface Y (set by checkInWater/getStatus,
+	// read by floatBoat for the IN_WATER buoyancy `(waterLevel - y)/bbHeight`). DEFAULT 0.
+	//	[VERIFIED CFR AbstractBoat.waterLevel (double).]
+	boatWaterLevel float64
+
+	// boatLastYd mirrors AbstractBoat.lastYd — the previous tick's vertical delta, read by getWaterLevelAbove
+	// to bound the upward scan. DEFAULT 0.
+	//	[VERIFIED CFR AbstractBoat.lastYd (double).]
+	boatLastYd float64
+
+	// boatLandFriction mirrors AbstractBoat.landFriction — the averaged block friction under the boat on
+	// land (getGroundFriction), used as the ON_LAND invFriction. DEFAULT 0.
+	//	[VERIFIED CFR AbstractBoat.landFriction (float).]
+	boatLandFriction float32
+
+	// boatDeltaRotation mirrors AbstractBoat.deltaRotation — the per-tick yaw spin the paddle input adds,
+	// decayed by invFriction each floatBoat. The paddle-INPUT that grows it is a cited deferral (the client
+	// drives a ridden boat's rotation directly via MoveVehicle); the decay is ported for fidelity. DEFAULT 0.
+	//	[VERIFIED CFR AbstractBoat.deltaRotation (float); floatBoat: `this.deltaRotation *= invFriction;`.]
+	boatDeltaRotation float32
+
+	// boatOutOfControlTicks mirrors AbstractBoat.outOfControlTicks — the submerged-time counter; at >= 60
+	// the boat ejects its passengers (a capsized boat throws its rider). DEFAULT 0.
+	//	[VERIFIED CFR AbstractBoat.outOfControlTicks (float); tick ejects at >= 60.]
+	boatOutOfControlTicks float32
 }
 
 // NewEntity constructs a live entity instance from a data/entity TABLE record at the given

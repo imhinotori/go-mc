@@ -192,6 +192,12 @@ func (t *TickLoop) getContainerAt(pos pk.Position) containerView {
 	if mc := t.minecartContainerAt(pos); mc != nil {
 		return mc
 	}
+	// getEntityContainer also selects a CHEST BOAT (AbstractChestBoat implements ContainerEntity, so it is in
+	// EntitySelector.CONTAINER_ENTITY_SELECTOR): a block hopper beside/under a chest boat pulls/pushes from its
+	// 27-slot container exactly as from a chest minecart. CITE HopperBlockEntity.getEntityContainer.
+	if b := t.boatContainerAt(pos); b != nil {
+		return b
+	}
 	return nil
 }
 

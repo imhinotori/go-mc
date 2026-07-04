@@ -185,6 +185,15 @@ func (t *TickLoop) useItemInHand(p *tickPlayer, hand int32) {
 		return // empty hand: nothing to use (ItemStack.use on AIR is a PASS no-op in v1 scope)
 	}
 
+	// BOAT ITEM (BoatItem.use): a right-click-air with a boat/raft item raytraces to the water surface
+	// (Fluid.ANY) and spawns the boat there (facing the player), consuming 1 item. It runs BEFORE the food
+	// gate (a boat item is not food) — a non-boat item returns false and falls through to the food path.
+	// Boat-item-gated (zero-cost id switch for every other item — no RNG draw, so the pig oracle is
+	// unperturbed). CITE BoatItem.use (getPlayerPOVHitResult + addFreshEntity + itemStack.consume(1)).
+	if t.tryUseBoatItem(p, inv, held, hand) {
+		return // the boat item handled the use (a boat spawned, or a MISS/FAIL no-op)
+	}
+
 	// FOOD gate (v1): resolve the held item's FOOD/CONSUMABLE data. Non-food => not eatable => no-op
 	// (cite: other ItemStack.use behaviors out of v1 scope).
 	f, ok := itemFood(int32(held.ItemID))

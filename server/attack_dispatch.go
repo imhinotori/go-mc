@@ -897,6 +897,15 @@ func (t *TickLoop) handleInteract(p *tickPlayer, pkt pk.Packet) {
 		}
 		return // any other minecart (furnace/tnt): the interact belongs to the cart (no feed)
 	}
+	// BOAT (net.minecraft.world.entity.vehicle.boat.AbstractBoat.interact / AbstractChestBoat.interact): a
+	// right-click on a boat MOUNTS the player (a free seat, non-secondary) or OPENS the chest boat's 27-slot
+	// container (a full/secondary chest-boat click). tryBoatInteract consumes the interact for any boat so it
+	// does NOT fall through to the feed path (a boat is not fed). Boat-gated (isBoat), a zero-cost no-op for a
+	// pig/cow/sheep — the pig oracle stream is unperturbed (no RNG draw). CITE AbstractBoat.interact.
+	if mob.isBoat {
+		t.tryBoatInteract(p, mob, bool(usingSecondaryAction))
+		return
+	}
 	t.tryFeedAnimal(p, mob)
 }
 
