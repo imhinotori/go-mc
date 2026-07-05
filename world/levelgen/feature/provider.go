@@ -374,10 +374,36 @@ type jsonProvider struct {
 	States    json.RawMessage `json:"states"`     // noise / dual_noise
 	SlowNoise *jsonNoise      `json:"slow_noise"` // dual_noise
 	SlowScale float64         `json:"slow_scale"` // dual_noise
-	Variety   *struct {
+	Variety json.RawMessage `json:"variety"` // dual_noise (optional); InclusiveRange either-codec
+}
+
+// parseInclusiveRange ports the vanilla InclusiveRange<Integer> codec, which is an
+// EITHER-codec: it accepts BOTH the object form {"min_inclusive":m,"max_inclusive":n}
+// AND the list form [m, n]. The DualNoiseProvider `variety` field uses it, and some
+// embedded configs (e.g. flower_meadow) serialize it as the 2-element array — parsing it
+// only as the object form panicked ("cannot unmarshal array into ... variety") and crashed
+// decoration. CITE: net.minecraft.util.valueproviders.InclusiveRange.CODEC.
+func parseInclusiveRange(raw json.RawMessage) (min, max int, ok bool, err error) {
+	if len(raw) == 0 {
+		return 0, 0, false, nil
+	}
+	// List form [min, max].
+	var arr []int
+	if e := json.Unmarshal(raw, &arr); e == nil {
+		if len(arr) != 2 {
+			return 0, 0, false, fmt.Errorf("inclusive_range list form must have 2 elements, got %d", len(arr))
+		}
+		return arr[0], arr[1], true, nil
+	}
+	// Object form {min_inclusive, max_inclusive}.
+	var obj struct {
 		MinInclusive int `json:"min_inclusive"`
 		MaxInclusive int `json:"max_inclusive"`
-	} `json:"variety"` // dual_noise (optional)
+	}
+	if e := json.Unmarshal(raw, &obj); e != nil {
+		return 0, 0, false, fmt.Errorf("inclusive_range: neither list [min,max] nor {min_inclusive,max_inclusive}: %w", e)
+	}
+	return obj.MinInclusive, obj.MaxInclusive, true, nil
 }
 
 // ParseProvider decodes a BlockStateProvider envelope by its "type", resolving inner
@@ -475,9 +501,13 @@ func ParseProvider(raw json.RawMessage) (BlockStateProvider, error) {
 			varietyMin:    len(np.states),
 			varietyMax:    len(np.states),
 		}
-		if j.Variety != nil {
-			dp.varietyMin = j.Variety.MinInclusive
-			dp.varietyMax = j.Variety.MaxInclusive
+		vmin, vmax, ok, err := parseInclusiveRange(j.Variety)
+		if err != nil {
+			return nil, fmt.Errorf("feature: dual_noise_provider variety: %w", err)
+		}
+		if ok {
+			dp.varietyMin = vmin
+			dp.varietyMax = vmax
 		}
 		return dp, nil
 
