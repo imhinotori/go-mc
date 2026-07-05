@@ -304,14 +304,17 @@ func (steepCondition) test(c *Context) bool {
 }
 
 // temperatureCondition ports SurfaceRules$Context$TemperatureHelperCondition:
-// biome.coldEnoughToSnow(pos, seaLevel). The biome temperature/snow model is not yet
-// ported (a Phase-2+ biome-data concern), so this conservatively returns false (never
-// "cold enough to snow"); it only gates a small set of snowy-biome surface branches
-// and a false result simply leaves the underlying grass/dirt/stone surface, which is
-// the safe non-snow default. Documented as a known limitation (no silent wrong block).
+// biome.coldEnoughToSnow(pos, seaLevel). It resolves the current column biome's base
+// temperature + modifier (temperature.go, loaded once from the embedded biome JSON),
+// height-adjusts the temperature through the ported Biome noise model, and reports
+// whether it is cold enough to snow — the gate that makes snowy_plains / snowy_taiga /
+// ice_spikes / grove / snowy_slopes / frozen_ocean / frozen_peaks / jagged_peaks etc.
+// grow their SNOW / ICE / POWDER_SNOW / packed-ice surface layer.
 type temperatureCondition struct{}
 
-func (temperatureCondition) test(c *Context) bool { return false }
+func (temperatureCondition) test(c *Context) bool {
+	return coldEnoughToSnow(c.getBiome(), c.blockX, c.blockY, c.blockZ, c.system.seaLevel)
+}
 
 // ---- VerticalAnchor (absolute / above_bottom) ----
 
