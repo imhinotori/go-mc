@@ -25,6 +25,7 @@ import (
 	"fmt"
 
 	"github.com/imhinotori/sulfur/level/block"
+	"github.com/imhinotori/sulfur/world/levelgen/data"
 )
 
 // BlockPredicate is the gate block_predicate_filter evaluates. Test reports whether
@@ -381,8 +382,10 @@ var predicateBlockTags = map[string][]string{
 }
 
 // resolveBlockTagSet resolves a #block tag id to the set of member state ids. Air is
-// the air block ids; other tags resolve via predicateBlockTags. An unlisted tag errors
-// loudly (a jar bump that adds one fails rather than drifting silently).
+// the air block ids; a handful of common tags resolve via the small predicateBlockTags
+// map; anything else resolves from the AUTHORITATIVE embedded jar tag JSONs via
+// data.BlockTag (recursive nested-tag expansion), so the membership matches vanilla
+// exactly. Only a tag JSON that is genuinely absent from the embedded data errors loudly.
 func resolveBlockTagSet(tag string) (map[block.StateID]bool, error) {
 	if tag == "" {
 		return nil, fmt.Errorf("placement: matching_block_tag missing tag")
@@ -391,11 +394,25 @@ func resolveBlockTagSet(tag string) (map[block.StateID]bool, error) {
 	case "minecraft:air":
 		return idSetToStateSet([]string{"minecraft:air", "minecraft:cave_air", "minecraft:void_air"}), nil
 	default:
-		members, ok := predicateBlockTags[tag]
-		if !ok {
-			return nil, fmt.Errorf("placement: unported block tag %q in predicate "+
-				"(add it constant-for-constant from the jar tag def, carver precedent)", tag)
+		if members, ok := predicateBlockTags[tag]; ok {
+			return idSetToStateSet(members), nil
 		}
-		return idSetToStateSet(members), nil
+		// Fall back to the embedded jar tag data (data.BlockTag resolves the id — with or
+		// without the "minecraft:" prefix — to its flat block-id set, recursively expanding
+		// nested "#..." references). This is the same authoritative tag data the feature
+		// bodies use, so root_system's allowed_tree_position (#replaceable_by_trees /
+		// #azalea_grows_on) and any other real tag resolves correctly.
+		ids, err := data.BlockTag(tag)
+		if err != nil {
+			return nil, fmt.Errorf("placement: unported block tag %q in predicate "+
+				"(no hardcoded members and not in embedded tag data): %w", tag, err)
+		}
+		set := map[block.StateID]bool{}
+		for sid, b := range block.StateList {
+			if ids[b.ID()] {
+				set[block.StateID(sid)] = true
+			}
+		}
+		return set, nil
 	}
 }
