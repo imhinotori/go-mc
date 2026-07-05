@@ -147,3 +147,36 @@ func TestBlockColumnCaveVine(t *testing.T) {
 		t.Fatalf("cave_vine block_column placed no cells over air")
 	}
 }
+
+// TestVegIntProviderBiasedToBottom pins BiasedToBottomInt: sample = min + nextInt(nextInt(
+// max-min+1)+1), TWO nested draws, result always in [min,max]. cactus/sugar_cane block_column
+// carry it — parsing it as "unported" previously PANICKED and crashed generation.
+func TestVegIntProviderBiasedToBottom(t *testing.T) {
+	p, err := parseVegIntProvider([]byte(`{"type":"minecraft:biased_to_bottom","min_inclusive":2,"max_inclusive":4}`))
+	if err != nil {
+		t.Fatalf("parse biased_to_bottom: %v", err)
+	}
+	if p.kind != vegIntBiasedToBottom || p.minVal != 2 || p.maxVal != 4 {
+		t.Fatalf("parsed biased_to_bottom wrong: kind=%d min=%d max=%d", p.kind, p.minVal, p.maxVal)
+	}
+	// Range + determinism: every sample in [2,4]; same seed reproduces.
+	for seed := int64(1); seed <= 50; seed++ {
+		a := p.sample(levelgen.NewWorldgenRandom(seed))
+		b := p.sample(levelgen.NewWorldgenRandom(seed))
+		if a != b {
+			t.Fatalf("biased_to_bottom not deterministic at seed %d: %d != %d", seed, a, b)
+		}
+		if a < 2 || a > 4 {
+			t.Fatalf("biased_to_bottom out of [2,4] at seed %d: %d", seed, a)
+		}
+	}
+	// Draw order: min + nextInt(nextInt(max-min+1)+1). Replay the exact two draws.
+	rng := levelgen.NewWorldgenRandom(12345)
+	oracle := levelgen.NewWorldgenRandom(12345)
+	got := p.sample(rng)
+	inner := int(oracle.NextIntN(int32(4-2+1))) + 1
+	want := 2 + int(oracle.NextIntN(int32(inner)))
+	if got != want {
+		t.Fatalf("biased_to_bottom draw order mismatch: got %d want %d", got, want)
+	}
+}

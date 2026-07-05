@@ -264,6 +264,7 @@ const (
 	vegIntConstant vegIntProviderKind = iota
 	vegIntUniform
 	vegIntWeightedList
+	vegIntBiasedToBottom
 )
 
 type vegIntWeightedEntry struct {
@@ -297,6 +298,12 @@ func (p *vegIntProvider) sample(rng levelgen.RandomSource) int {
 			}
 		}
 		return p.entries[len(p.entries)-1].provider.sample(rng)
+	case vegIntBiasedToBottom:
+		// BiasedToBottomInt.sample: min + nextInt(nextInt(max-min+1) + 1). TWO nested draws
+		// (the inner nextInt bounds the outer), biasing the result toward min. CITE:
+		// net.minecraft.util.valueproviders.BiasedToBottomInt.sample.
+		inner := int(rng.NextIntN(int32(p.maxVal-p.minVal+1))) + 1
+		return p.minVal + int(rng.NextIntN(int32(inner)))
 	}
 	return 0
 }
@@ -341,6 +348,16 @@ func parseVegIntProvider(raw json.RawMessage) (*vegIntProvider, error) {
 			return nil, fmt.Errorf("uniform int: max %d < min %d", *obj.MaxInclusive, *obj.MinInclusive)
 		}
 		return &vegIntProvider{kind: vegIntUniform, minVal: *obj.MinInclusive, maxVal: *obj.MaxInclusive}, nil
+	case "biased_to_bottom":
+		// BiasedToBottomInt: min_inclusive/max_inclusive; sample biases toward min via a
+		// nested nextInt (see sample). CITE: net.minecraft.util.valueproviders.BiasedToBottomInt.
+		if obj.MinInclusive == nil || obj.MaxInclusive == nil {
+			return nil, fmt.Errorf("biased_to_bottom int provider missing min/max_inclusive")
+		}
+		if *obj.MaxInclusive < *obj.MinInclusive {
+			return nil, fmt.Errorf("biased_to_bottom int: max %d < min %d", *obj.MaxInclusive, *obj.MinInclusive)
+		}
+		return &vegIntProvider{kind: vegIntBiasedToBottom, minVal: *obj.MinInclusive, maxVal: *obj.MaxInclusive}, nil
 	case "weighted_list":
 		if len(obj.Distribution) == 0 {
 			return nil, fmt.Errorf("weighted_list int provider has no distribution")
