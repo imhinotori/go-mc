@@ -67,6 +67,10 @@ func treeBody(
 	// below-trunk provider is unaffected).
 	cfg = cfg.BelowTrunkWithExisting(read)
 
+	// Bind the live MOTION_BLOCKING_NO_LEAVES heightmap for the PlaceOnGroundDecorator
+	// buried-position gate (WorldGenLevel.getHeightmapPos) over the 3x3 view.
+	cfg = cfg.WithHeightmapMBNL(func(x, z int) int { return bctx.view.HeightmapMBNL(x, z) })
+
 	origin := feature.TreePos{X: pos.X, Y: pos.Y, Z: pos.Z}
 
 	// TreeFeature.place: draw the trunk height (getTreeHeight — the TWO nextInt draws), then

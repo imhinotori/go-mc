@@ -42,6 +42,11 @@ type DecoratorContext struct {
 	Rng    levelgen.RandomSource
 	Set    SetBlockFn
 	Read   ReadFn
+	// HeightmapMBNL reports the MOTION_BLOCKING_NO_LEAVES heightmap Y at world (x,z)
+	// (WorldGenLevel.getHeightmapPos). Used by PlaceOnGroundDecorator's buried-position
+	// gate. May be nil for callers that carry no live heightmap (tests) — treated as an
+	// always-pass gate then (the surface-Y read is a refinement, not a placement source).
+	HeightmapMBNL func(x, z int) int
 }
 
 // isAir reports whether the live block at pos is air (TreeDecorator.Context.isAir).
@@ -79,6 +84,12 @@ func ParseTreeDecorator(raw json.RawMessage) (TreeDecorator, error) {
 		Type        string          `json:"type"`
 		Probability *float64        `json:"probability"`
 		Provider    json.RawMessage `json:"provider"`
+		// PlaceOnGroundDecorator fields (optionalFieldOf defaults: tries 128, radius 2,
+		// height 1). Pointers so an absent field takes the vanilla codec default.
+		Tries              *int            `json:"tries"`
+		Radius             *int            `json:"radius"`
+		Height             *int            `json:"height"`
+		BlockStateProvider json.RawMessage `json:"block_state_provider"`
 	}
 	if err := json.Unmarshal(raw, &j); err != nil {
 		return nil, fmt.Errorf("feature: tree decorator: %w", err)
@@ -107,6 +118,22 @@ func ParseTreeDecorator(raw json.RawMessage) (TreeDecorator, error) {
 		return LeaveVineDecorator{probability: float32(*j.Probability)}, nil
 	case "trunk_vine":
 		return TrunkVineDecorator{}, nil
+	case "place_on_ground":
+		prov, err := ParseProvider(j.BlockStateProvider)
+		if err != nil {
+			return nil, fmt.Errorf("feature: place_on_ground block_state_provider: %w", err)
+		}
+		tries, radius, height := 128, 2, 1 // ExtraCodecs optionalFieldOf defaults
+		if j.Tries != nil {
+			tries = *j.Tries
+		}
+		if j.Radius != nil {
+			radius = *j.Radius
+		}
+		if j.Height != nil {
+			height = *j.Height
+		}
+		return PlaceOnGroundDecorator{tries: tries, radius: radius, height: height, provider: prov}, nil
 	case "attached_to_leaves":
 		return parseAttachedToLeavesDecorator(raw)
 	case "pale_moss":
@@ -425,6 +452,124 @@ func (d TrunkVineDecorator) place(ctx *DecoratorContext) {
 }
 
 // ============================================================================
+// PlaceOnGroundDecorator (pale_oak / cherry / etc. ground cover — e.g. a moss/leaf-litter
+// carpet scattered on the ground under + around the tree). NEW in 26.2: the common
+// overworld `tree` configs (oak/birch/… via place_on_ground) carry it, so failing to parse
+// it aborted the WHOLE tree config -> no trunk, no leaves. Ported 1:1 from the jar.
+// ============================================================================
+
+// PlaceOnGroundDecorator ports
+// net.minecraft.world.level.levelgen.feature.treedecorators.PlaceOnGroundDecorator.
+// It scatters `tries` block-provider states onto solid ground within a radius/height
+// inflation of the trunk-base bounding box, each landing on the block ABOVE a solid,
+// non-buried, air/vine-topped cell.
+type PlaceOnGroundDecorator struct {
+	tries    int
+	radius   int
+	height   int
+	provider BlockStateProvider
+}
+
+// place ports PlaceOnGroundDecorator.place (javap/CFR 26.2):
+//
+//	positions = TreeFeature.getLowestTrunkOrRootOfTree(ctx); if empty return
+//	origin = positions.getFirst(); minY = origin.Y
+//	// bounding box of the lowest-Y trunk/root ring
+//	for p in positions where p.Y == minY: expand minX/maxX/minZ/maxZ
+//	bb = BoundingBox(minX,minY,minZ, maxX,minY,maxZ).inflatedBy(radius, height, radius)
+//	for i in 0..tries:
+//	    pos = { nextIntBetweenInclusive(bb.minX,bb.maxX),
+//	            nextIntBetweenInclusive(bb.minY,bb.maxY),
+//	            nextIntBetweenInclusive(bb.minZ,bb.maxZ) }
+//	    attemptToPlaceBlockAbove(pos)
+//
+// The per-try three nextIntBetweenInclusive draws (X,Y,Z order) + the provider.getState draw
+// inside a successful attempt are the determinism contract.
+func (d PlaceOnGroundDecorator) place(ctx *DecoratorContext) {
+	positions := lowestTrunkOrRoot(ctx)
+	if len(positions) == 0 {
+		return
+	}
+	origin := positions[0]
+	minY := origin.Y
+	minX, maxX := origin.X, origin.X
+	minZ, maxZ := origin.Z, origin.Z
+	for _, p := range positions {
+		if p.Y != minY {
+			continue
+		}
+		minX = minInt(minX, p.X)
+		maxX = maxInt(maxX, p.X)
+		minZ = minInt(minZ, p.Z)
+		maxZ = maxInt(maxZ, p.Z)
+	}
+	// BoundingBox(minX,minY,minZ, maxX,minY,maxZ).inflatedBy(radius, height, radius):
+	// inflate X/Z by radius, Y by height, symmetrically.
+	bbMinX := minX - d.radius
+	bbMaxX := maxX + d.radius
+	bbMinY := minY - d.height
+	bbMaxY := minY + d.height
+	bbMinZ := minZ - d.radius
+	bbMaxZ := maxZ + d.radius
+	for i := 0; i < d.tries; i++ {
+		px := nextIntBetweenInclusive(ctx.Rng, bbMinX, bbMaxX)
+		py := nextIntBetweenInclusive(ctx.Rng, bbMinY, bbMaxY)
+		pz := nextIntBetweenInclusive(ctx.Rng, bbMinZ, bbMaxZ)
+		d.attemptToPlaceBlockAbove(ctx, TreePos{X: px, Y: py, Z: pz})
+	}
+}
+
+// attemptToPlaceBlockAbove ports PlaceOnGroundDecorator.attemptToPlaceBlockAbove:
+//
+//	above = pos.above()
+//	if isAirOrVine(above) && isSolidRender(pos) &&
+//	   heightmap(MOTION_BLOCKING_NO_LEAVES, pos).Y <= above.Y:
+//	    setBlock(above, provider.getState(above))
+//
+// isSolidRender is reduced to block.IsCollisionShapeFullBlock — for the ground blocks this
+// decorator targets (dirt/grass/podzol/moss/stone), isSolidRender == canOcclude &&
+// isCollisionShapeFullBlock, and those blocks all occlude, so the full-cube test is the
+// faithful seam (same reduction world/feature_dungeon.go dungeonIsSolidRender uses). The
+// heightmap gate rejects buried positions (a solid cell UNDER an overhang whose surface is
+// higher than `above`). The provider.getState draw happens ONLY on a passing cell.
+func (d PlaceOnGroundDecorator) attemptToPlaceBlockAbove(ctx *DecoratorContext, pos TreePos) {
+	above := pos.above(1)
+	if !isAirOrVine(ctx, above) {
+		return
+	}
+	if !block.IsCollisionShapeFullBlock(ctx.Read(pos.X, pos.Y, pos.Z)) {
+		return
+	}
+	if ctx.HeightmapMBNL != nil && ctx.HeightmapMBNL(pos.X, pos.Z) > above.Y {
+		return
+	}
+	st := d.provider.GetState(ctx.Rng, above.X, above.Y, above.Z)
+	ctx.setBlock(above, st)
+}
+
+// isAirOrVine ports the PlaceOnGroundDecorator.attemptToPlaceBlockAbove `above` predicate:
+// state.isAir() || state.is(Blocks.VINE).
+func isAirOrVine(ctx *DecoratorContext, pos TreePos) bool {
+	st := ctx.Read(pos.X, pos.Y, pos.Z)
+	return block.IsAir(st) || treeVineStates[st]
+}
+
+// nextIntBetweenInclusive ports RandomSource.nextIntBetweenInclusive(min,max) =
+// min + nextInt(max - min + 1). Java asserts max >= min; the codec-derived bb is always
+// non-empty (radius/height >= 0), so max >= min holds.
+func nextIntBetweenInclusive(rng levelgen.RandomSource, min, max int) int {
+	return min + int(rng.NextIntN(int32(max-min+1)))
+}
+
+// minInt is a tiny int helper for the bounding-box expansion (maxInt lives in tree_placers.go).
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// ============================================================================
 // block-state helpers (resolve via the Phase-12 resolveBlockState path)
 // ============================================================================
 
@@ -528,4 +673,5 @@ var (
 	_ TreeDecorator = CocoaDecorator{}
 	_ TreeDecorator = LeaveVineDecorator{}
 	_ TreeDecorator = TrunkVineDecorator{}
+	_ TreeDecorator = PlaceOnGroundDecorator{}
 )

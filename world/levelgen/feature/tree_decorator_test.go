@@ -185,6 +185,75 @@ func TestParseTreeDecoratorUnported(t *testing.T) {
 	}
 }
 
+// TestParsePlaceOnGroundDecorator asserts the place_on_ground decorator (NEW in 26.2, carried
+// by the common oak/birch/… tree configs) now PARSES with the codec defaults. Before the port
+// it errored ("unknown tree decorator type") which aborted the WHOLE tree config -> no trunk,
+// no leaves in generated forests (the worldgen regression this test guards against).
+func TestParsePlaceOnGroundDecorator(t *testing.T) {
+	// Minimal form: only block_state_provider (tries/radius/height default 128/2/1).
+	d, err := ParseTreeDecorator(json.RawMessage(`{"type":"minecraft:place_on_ground","tries":64,"radius":3,"height":1,"block_state_provider":{"type":"minecraft:simple_state_provider","state":{"Name":"minecraft:moss_carpet"}}}`))
+	if err != nil {
+		t.Fatalf("ParseTreeDecorator(place_on_ground) = %v, want a parsed decorator", err)
+	}
+	pog, ok := d.(PlaceOnGroundDecorator)
+	if !ok {
+		t.Fatalf("place_on_ground parsed to %T, want PlaceOnGroundDecorator", d)
+	}
+	if pog.tries != 64 || pog.radius != 3 || pog.height != 1 {
+		t.Fatalf("place_on_ground fields = tries %d radius %d height %d, want 64/3/1", pog.tries, pog.radius, pog.height)
+	}
+	// Codec defaults when the optional fields are absent.
+	dd, err := ParseTreeDecorator(json.RawMessage(`{"type":"minecraft:place_on_ground","block_state_provider":{"type":"minecraft:simple_state_provider","state":{"Name":"minecraft:moss_carpet"}}}`))
+	if err != nil {
+		t.Fatalf("ParseTreeDecorator(place_on_ground defaults) = %v", err)
+	}
+	def := dd.(PlaceOnGroundDecorator)
+	if def.tries != 128 || def.radius != 2 || def.height != 1 {
+		t.Fatalf("place_on_ground defaults = tries %d radius %d height %d, want 128/2/1", def.tries, def.radius, def.height)
+	}
+}
+
+// TestPlaceOnGroundDecorator pins the placement: over a solid dirt floor with air above, the
+// decorator scatters the provider block on the block ABOVE the ground within the inflated
+// bounding box, and is deterministic under a replayed rng.
+func TestPlaceOnGroundDecorator(t *testing.T) {
+	mw := newMapWorld()
+	dirt := block.ToStateID[block.Dirt{}] // a full solid-render ground block
+	for dx := -6; dx <= 6; dx++ {
+		for dz := -6; dz <= 6; dz++ {
+			mw.set(dx, 63, dz, dirt) // ground at y=63, air above (y=64+)
+		}
+	}
+	d, err := ParseTreeDecorator(json.RawMessage(`{"type":"minecraft:place_on_ground","tries":128,"radius":3,"height":1,"block_state_provider":{"type":"minecraft:simple_state_provider","state":{"Name":"minecraft:moss_carpet"}}}`))
+	if err != nil {
+		t.Fatalf("parse place_on_ground: %v", err)
+	}
+	logs := trunkLogs(0, 0, 64, 6) // trunk base at y=64 (lowest log)
+	mossCarpet := block.ToStateID[block.MossCarpet{}]
+
+	rng := levelgen.NewWorldgenRandom(0x9017)
+	d.place(decoratorCtx(mw, rng, logs, nil))
+	placed := 0
+	for _, st := range mw.blocks {
+		if st == mossCarpet {
+			placed++
+		}
+	}
+	if placed == 0 {
+		t.Fatalf("place_on_ground scattered no ground cover onto the solid floor")
+	}
+
+	// Determinism: the SAME rng seed reproduces the SAME placement.
+	mw2 := newMapWorld()
+	for dx := -6; dx <= 6; dx++ {
+		for dz := -6; dz <= 6; dz++ {
+			mw2.set(dx, 63, dz, dirt)
+		}
+	}
+	d.place(decoratorCtx(mw2, levelgen.NewWorldgenRandom(0x9017), logs, nil))
+	assertMapWorldsEqual(t, mw, mw2)
+}
+
 // ---- helpers ----
 
 func beeNestStateOrFatal(t *testing.T) block.StateID {

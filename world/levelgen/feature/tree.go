@@ -803,6 +803,20 @@ type TreeConfiguration struct {
 	// accum collects the placed log/leaf positions during placeLog/placeLeaf for the
 	// TreeDecorator.Context. Non-nil only during a single PlaceTree call (set on a copy).
 	accum *treeAccum
+	// heightmapMBNL reports the live MOTION_BLOCKING_NO_LEAVES heightmap Y at world (x,z),
+	// bound by the caller (treeBody) to the 3x3 view. It feeds PlaceOnGroundDecorator's
+	// buried-position gate. nil for callers with no live heightmap (tests) — the gate then
+	// passes (a faithful degrade: the surface-Y read only rejects buried cells).
+	heightmapMBNL func(x, z int) int
+}
+
+// WithHeightmapMBNL returns a copy of cfg carrying the live MOTION_BLOCKING_NO_LEAVES
+// heightmap accessor the PlaceOnGroundDecorator gate reads. The caller (treeBody) binds it
+// to the 3x3 view before PlaceTree.
+func (cfg *TreeConfiguration) WithHeightmapMBNL(h func(x, z int) int) *TreeConfiguration {
+	c := *cfg
+	c.heightmapMBNL = h
+	return &c
 }
 
 // treeAccum collects the placed log + leaf positions (insertion order, deduplicated) for
@@ -1034,12 +1048,13 @@ func PlaceTree(set SetBlockFn, read ReadFn, rng levelgen.RandomSource, cfg *Tree
 	// placed-log/placed-leaf positions (the TreeDecorator.Context). Empty for oak/birch.
 	if len(cfg.decorators) > 0 {
 		dctx := &DecoratorContext{
-			Logs:   cfg.accum.logs,
-			Leaves: cfg.accum.leaves,
-			Roots:  cfg.accum.roots,
-			Rng:    rng,
-			Set:    set,
-			Read:   read,
+			Logs:          cfg.accum.logs,
+			Leaves:        cfg.accum.leaves,
+			Roots:         cfg.accum.roots,
+			Rng:           rng,
+			Set:           set,
+			Read:          read,
+			HeightmapMBNL: cfg.heightmapMBNL,
 		}
 		for _, d := range cfg.decorators {
 			d.place(dctx)

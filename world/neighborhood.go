@@ -79,6 +79,23 @@ func (n *Neighborhood) localIndex(wx, wy, wz int) int {
 	return (wy&15)<<8 | (wz&15)<<4 | (wx & 15)
 }
 
+// HeightmapMBNL returns the MOTION_BLOCKING_NO_LEAVES heightmap Y at world (wx,wz): the
+// world-Y of the first block ABOVE the highest motion-blocking non-leaf block in the
+// column. Outside the 3x3 it returns minY (an unloaded column reads as void). Ports
+// WorldGenLevel.getHeightmapPos(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, pos).getY() for
+// the tree-decorator ground-cover placement gate. The heightmap is the CLIENT MB_NO_LEAVES
+// built by BuildSurface at GenerateTerrain (the pre-decoration surface); decoration does
+// not update it live (feature blocks are leaves/ground-cover, not motion-blocking-non-leaf
+// terrain), so it faithfully reports the terrain surface the gate compares against.
+func (n *Neighborhood) HeightmapMBNL(wx, wz int) int {
+	ch, ok := n.chunkAt(wx, wz)
+	if !ok || ch == nil || ch.HeightMaps.MotionBlockingNoLeaves == nil {
+		return n.minY
+	}
+	col := (wz&15)<<4 | (wx & 15)
+	return ch.HeightMaps.MotionBlockingNoLeaves.Get(col) + n.minY
+}
+
 // GetBlock returns the block state at world (wx,wy,wz). Outside the 3x3 or out of the
 // Y range it returns air (the WorldGenLevel "unloaded reads as air" semantics).
 func (n *Neighborhood) GetBlock(wx, wy, wz int) block.StateID {
