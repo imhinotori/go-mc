@@ -360,6 +360,24 @@ var predicateBlockTags = map[string][]string{
 		"minecraft:moss_block", "minecraft:mud", "minecraft:muddy_mangrove_roots",
 	},
 	"minecraft:sand": {"minecraft:sand", "minecraft:red_sand"},
+	// #minecraft:forest_rock_can_place_on = #substrate_overworld + #base_stone_overworld
+	// (block_blob forest_rock's can_place_on). Flattened constant-for-constant from the jar
+	// tag defs (data/minecraft/tags/block/*.json, 26.2):
+	//   substrate_overworld = #dirt + #mud + #moss_blocks + #grass_blocks
+	//   base_stone_overworld = stone/granite/diorite/andesite/tuff/deepslate
+	"minecraft:forest_rock_can_place_on": {
+		// #dirt
+		"minecraft:dirt", "minecraft:coarse_dirt", "minecraft:rooted_dirt",
+		// #mud
+		"minecraft:mud", "minecraft:muddy_mangrove_roots",
+		// #moss_blocks
+		"minecraft:moss_block", "minecraft:pale_moss_block",
+		// #grass_blocks
+		"minecraft:grass_block", "minecraft:podzol", "minecraft:mycelium",
+		// #base_stone_overworld
+		"minecraft:stone", "minecraft:granite", "minecraft:diorite",
+		"minecraft:andesite", "minecraft:tuff", "minecraft:deepslate",
+	},
 }
 
 // resolveBlockTagSet resolves a #block tag id to the set of member state ids. Air is
