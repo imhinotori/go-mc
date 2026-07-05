@@ -42,6 +42,7 @@ var generators = []generator{
 	{"blockhardness", genBlockHardness},
 	{"blockresistance", genBlockResistance},
 	{"blocksupport", genBlockSupport},
+	{"blocklight", genBlockLight},
 	{"itemfood", genItemFood},
 	{"tags", genTags},
 	{"registryid", genRegistryID},

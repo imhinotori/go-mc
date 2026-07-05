@@ -33,17 +33,9 @@ import (
 //           setBlock(pos, state.setValue(MOISTURE, 7), 2);
 //       }
 
-// cropRawBrightness is the CropBlock.hasSufficientLight seam: vanilla reads
-// level.getRawBrightness(pos, 0) and gates growth on >= 9. Sulfur has NO sky/block-light engine yet
-// (the same locked deferral cited for Spider.getLightLevelDependentMagicValue in ai_goals_attack.go
-// and the daylight fire gate in fire.go), so this is a CITED CONSTANT equal to full brightness (15),
-// which keeps the >= 9 gate PASSING — structured to become a real
-// level.getRawBrightness(pos, 0) read once a light engine exists, never baked away. Using 15 (not
-// the 9 boundary) matches an unobstructed, fully-lit farm cell, the common case.
-//
-//	[DEFERRED: getRawBrightness — no light propagation in v1. CITE: CropBlock.hasSufficientLight
-//	 (getRawBrightness(pos,0) >= 9). Follow-up: swap for the real light read.]
-const cropRawBrightness = 15
+// CropBlock.hasSufficientLight is now a REAL light read: cropGrow gates growth on
+// t.rawBrightness(pos, 0) >= 9, backed by the LevelLightEngine-computed per-section light
+// (world/light.go, server/light.go). CITE: CropBlock.hasSufficientLight (getRawBrightness(pos,0)>=9).
 
 // cropGrowthSpeedDivisor is the 25.0F numerator in CropBlock.randomTick's growth roll:
 // random.nextInt((int)(25.0F / speed) + 1). CITE: CropBlock.randomTick (ldc 25.0f).
@@ -78,8 +70,9 @@ func (t *TickLoop) cropRandomTick(r *region, state block.StateID, pos pk.Positio
 // setBlock(getStateForAge(age+1), 2). Called directly for wheat/carrots/potatoes and (via
 // cropRandomTick's nextInt(3) gate) for beetroots. CITE: CropBlock.randomTick.
 func (t *TickLoop) cropGrow(r *region, state block.StateID, pos pk.Position) {
-	// `if (level.getRawBrightness(pos, 0) >= 9)` — cited-constant light (15) so this passes.
-	if cropRawBrightness < 9 {
+	// `if (level.getRawBrightness(pos, 0) >= 9)` — REAL sky/block light now (world/light.go); ambient
+	// darkness is the literal 0 the vanilla call passes. CITE: CropBlock.hasSufficientLight.
+	if t.rawBrightness(pos, 0) < 9 {
 		return
 	}
 	age := block.CropAge(state)

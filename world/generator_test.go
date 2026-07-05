@@ -61,11 +61,26 @@ func TestSuperflatSectionCount(t *testing.T) {
 		t.Fatalf("WorldSurface heightmap[0] = %d, want %d", got, wantH)
 	}
 
-	// SkyLight must be present (full 2048 bytes) on every section.
-	for i, s := range ch.Sections {
-		if len(s.SkyLight) != 2048 {
-			t.Fatalf("section %d SkyLight len = %d, want 2048", i, len(s.SkyLight))
+	// Real light (LevelLightEngine) now computes sky light instead of the old fullSkyLight seal.
+	// The superflat has solid stone up to SurfaceY (y=-1) and open air above; every AIR section
+	// above the surface is fully sky-lit (carries a 2048-byte 0xFF array), and the open-air cell
+	// directly above the surface reads sky level 15. Sections that are entirely inside the solid
+	// stone are dark (no sky reaches them). CITE: SkyLightEngine.propagateLightSources.
+	surfaceSec, _ := sectionIndex(testMinY, 0, testSurfaceY, 0)
+	for i := surfaceSec + 1; i < len(ch.Sections); i++ {
+		if len(ch.Sections[i].SkyLight) != 2048 {
+			t.Fatalf("above-surface section %d SkyLight len = %d, want 2048 (fully lit)", i, len(ch.Sections[i].SkyLight))
 		}
+	}
+	// the air cell at y = SurfaceY+1 must be full sky light (15).
+	aboveSec, aboveIdx := sectionIndex(testMinY, 0, testSurfaceY+1, 0)
+	sl := ch.Sections[aboveSec].SkyLight
+	if len(sl) != 2048 {
+		t.Fatalf("section above surface has no sky light array")
+	}
+	nib := int(sl[aboveIdx>>1] >> (4 * (aboveIdx & 1)) & 0xF)
+	if nib != 15 {
+		t.Fatalf("sky light at open-air cell above surface = %d, want 15", nib)
 	}
 }
 

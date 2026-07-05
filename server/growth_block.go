@@ -37,17 +37,11 @@ import (
 //           }
 //       }
 
-// growthRawBrightness is the getMaxLocalRawBrightness seam shared by SaplingBlock.randomTick (>=9
-// gate on pos.above()) and SpreadingSnowyBlock.randomTick (>=9 gate on pos.above()). Sulfur has NO
-// light engine yet (the same locked deferral cited for CropBlock.hasSufficientLight in crop_block.go,
-// Spider.getLightLevelDependentMagicValue in ai_goals_attack.go, and the fire daylight gate), so this
-// is a CITED CONSTANT equal to full brightness (15), which keeps the >=9 gates PASSING — structured
-// to become a real level.getMaxLocalRawBrightness(pos.above()) read once a light engine exists, never
-// baked away. Using 15 matches an unobstructed, fully-lit cell (the common case).
-//
-//	[DEFERRED: getMaxLocalRawBrightness — no light propagation in v1. CITE: SaplingBlock.randomTick /
-//	 SpreadingSnowyBlock.randomTick (getMaxLocalRawBrightness(pos.above()) >= 9). Follow-up: real read.]
-const growthRawBrightness = 15
+// getMaxLocalRawBrightness is now a REAL light read: SaplingBlock.randomTick and
+// SpreadingSnowyBlock.randomTick gate on t.maxLocalRawBrightness(pos.above()) >= 9, backed by the
+// LevelLightEngine-computed per-section light (world/light.go, server/light.go). The ambient-darkness
+// term (getSkyDarken) stays the cited DAY default 0 until the day/night env-attribute clock lands
+// (see server/light.go skyDarkenDay). CITE: SaplingBlock.randomTick / SpreadingSnowyBlock.randomTick.
 
 // ---- SAPLING (SaplingBlock.randomTick / advanceTree) ----
 
@@ -60,10 +54,11 @@ func (t *TickLoop) saplingRandomTick(r *region, state block.StateID, pos pk.Posi
 	if t.world() == nil || r == nil || r.levelRandom == nil {
 		return
 	}
-	// `if (getMaxLocalRawBrightness(pos.above()) >= 9 && random.nextInt(7) == 0)` — the light gate
-	// is the LEFT operand (short-circuit): with the cited-constant 15 it passes, then the nextInt(7)
-	// is drawn. If a real light engine later makes the gate fail, the nextInt(7) must NOT be drawn.
-	if growthRawBrightness < 9 {
+	// `if (getMaxLocalRawBrightness(pos.above()) >= 9 && random.nextInt(7) == 0)` — the light gate is
+	// the LEFT operand (short-circuit): the REAL getMaxLocalRawBrightness(pos.above()) read now gates,
+	// and only if it passes is the nextInt(7) below drawn — exactly the vanilla short-circuit. CITE:
+	// SaplingBlock.randomTick.
+	if t.maxLocalRawBrightness(above(pos)) < 9 {
 		return
 	}
 	if r.levelRandom.NextIntN(7) != 0 {
@@ -307,8 +302,9 @@ func (t *TickLoop) grassRandomTick(r *region, state block.StateID, pos pk.Positi
 		}
 		return
 	}
-	// `else if (getMaxLocalRawBrightness(pos.above()) >= 9)` — cited-constant light (15) so this passes.
-	if growthRawBrightness < 9 {
+	// `else if (getMaxLocalRawBrightness(pos.above()) >= 9)` — REAL light read now. CITE:
+	// SpreadingSnowyBlock/GrassBlock.randomTick.
+	if t.maxLocalRawBrightness(above(pos)) < 9 {
 		return
 	}
 	grassDefault, ok := block.SpreadingDefault(state)

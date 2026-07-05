@@ -375,9 +375,9 @@ func (g *NoiseGenerator) Decorate(view *Neighborhood) {
 	// Cite: net.minecraft.world.level.chunk.LevelChunkSection.nonEmptyFluidCount.
 	for i := range ch.Sections {
 		s := &ch.Sections[i]
-		if len(s.SkyLight) != 2048 {
-			s.SkyLight = fullSkyLight()
-		}
+		// Sky/block light is computed by the real LevelLightEngine at chunk finalize
+		// (worker.tryEmit / decorateSingle -> world.ComputeChunkLight) over the fully-decorated
+		// 3x3 — NOT sealed to full-15 here. FluidCount is still recounted on the final chunk.
 		s.FluidCount = level.CountFluidBlocks(s)
 	}
 	ch.Status = level.StatusFull

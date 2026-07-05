@@ -10,6 +10,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/imhinotori/sulfur/level"
+	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/save"
 	"github.com/imhinotori/sulfur/save/region"
 	"github.com/imhinotori/sulfur/world/structure"
@@ -459,6 +460,23 @@ func (w *Worker) tryEmit(ctx context.Context, center level.ChunkPos) {
 			}
 		}
 	}
+	// Compute the real sky+block light over the FINALIZED 3x3 (every wanted neighbor decorated,
+	// per the hold-until-complete gate above) and write the center's per-section DataLayers. This
+	// is the vanilla "light after decoration" ordering: the neighborhood is immutable-complete for
+	// this center at emit time, so cross-chunk edge light is correct. Missing (never-wanted) ring
+	// neighbors read as air, exactly as an unloaded LightChunk. CITE: world.ComputeChunkLight.
+	minY, height := w.gen.Dims()
+	neighbors := make(map[[2]int]*level.Chunk, 9)
+	for dx := -1; dx <= 1; dx++ {
+		for dz := -1; dz <= 1; dz++ {
+			np := level.ChunkPos{center[0] + int32(dx), center[1] + int32(dz)}
+			if ns := w.staging[packPos(np)]; ns != nil && ns.chunk != nil {
+				neighbors[[2]int{int(np[0]), int(np[1])}] = ns.chunk
+			}
+		}
+	}
+	ComputeChunkLight(center, neighbors, minY>>4, height>>4, block.ToStateID[block.Air{}])
+
 	cs.emitted = true
 	w.emit(ctx, ChunkResult{Pos: center, Chunk: cs.chunk, Spawns: cs.spawns})
 	// Keep cs in staging so it still serves as a carved/decorated neighbor for the remaining

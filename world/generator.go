@@ -72,6 +72,9 @@ func decorateSingle(g Generator, pos level.ChunkPos) *level.Chunk {
 	}
 	view := newNeighborhood(pos, chunks, minY, height)
 	g.Decorate(view)
+	// Compute real sky+block light over the freshly-built 3x3 and write the center's per-section
+	// DataLayers (replaces the old fullSkyLight seal). CITE: world.ComputeChunkLight.
+	computeChunkLightFromNeighborhood(view, minY>>4, height>>4, block.ToStateID[block.Air{}])
 	return center
 }
 
@@ -173,7 +176,9 @@ func (g *Superflat) GenerateTerrain(_ level.ChunkPos) *level.Chunk {
 		// a uniform section — matching it (NewBiomesPaletteContainer with plains
 		// as the default value) keeps the wire byte-identical to vanilla here.
 		s.Biomes = level.NewBiomesPaletteContainer(4*4*4, g.plains)
-		s.SkyLight = fullSkyLight()
+		// Sky/block light is computed by the real LevelLightEngine at chunk finalize
+		// (decorateSingle / worker.tryEmit -> world.ComputeChunkLight), NOT sealed to full-15
+		// here. Leaving SkyLight nil lets ComputeChunkLight write the attenuated arrays.
 	}
 
 	// Heightmaps. Vanilla stores per-column the Y of the first block ABOVE the

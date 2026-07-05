@@ -25,6 +25,18 @@ func newRandomTickLoop() (*TickLoop, *world.ChunkManager, *level.Chunk) {
 	loop.only().world = mgr
 	ch := level.EmptyChunk(blockTestSecs)
 	ch.Status = level.StatusFull
+	// Open-sky test column: every section is fully sky-lit (level 15). These fixtures place a
+	// handful of blocks (crops/farmland) into otherwise-empty air, so an open cell reads sky 15 —
+	// exactly what the real LevelLightEngine computes for an unobstructed column. The light-read
+	// seams (crop/growth getRawBrightness) now consult this, so the fixtures must carry the light
+	// their real generated counterparts would. CITE: SkyLightEngine (open column => 15).
+	for i := range ch.Sections {
+		sky := make([]byte, 2048)
+		for j := range sky {
+			sky[j] = 0xFF
+		}
+		ch.Sections[i].SkyLight = sky
+	}
 	mgr.Insert(level.ChunkPos{0, 0}, ch)
 	return loop, mgr, ch
 }

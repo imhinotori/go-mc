@@ -73,18 +73,22 @@ func TestLevelChunkPacketAssembly(t *testing.T) {
 	// does not re-attach them to Section.SkyLight, so we assert on the source — the
 	// bytes that actually go out — and confirm the body fully drains, proving the
 	// light tail was both written and read.)
+	// Real light (LevelLightEngine) now decides per section whether a sky-light array is present:
+	// fully-lit / attenuated sections carry a 2048-byte array; a fully-dark section carries nil
+	// (skipped in the wire light mask, exactly as vanilla). Assert every PRESENT array is 2048
+	// bytes and that at least the open-air sections above the terrain surface are lit — the wire
+	// still round-trips and fully drains regardless. CITE: level/chunk.go WriteTo lightData.
 	var skyCount int
 	for i, s := range ch.Sections {
-		if s.SkyLight == nil {
-			t.Fatalf("source section %d has nil SkyLight", i)
+		if s.SkyLight != nil && len(s.SkyLight) != 2048 {
+			t.Fatalf("source section %d SkyLight len = %d, want 2048 (or nil)", i, len(s.SkyLight))
 		}
-		if len(s.SkyLight) != 2048 {
-			t.Fatalf("source section %d SkyLight len = %d, want 2048", i, len(s.SkyLight))
+		if s.SkyLight != nil {
+			skyCount++
 		}
-		skyCount++
 	}
-	if skyCount != 24 {
-		t.Fatalf("source has %d sections with SkyLight, want 24", skyCount)
+	if skyCount == 0 {
+		t.Fatalf("no section carries sky light — expected the open-air sections to be lit")
 	}
 
 	// The reader must be fully consumed: x + z + heightmaps + sections + block
