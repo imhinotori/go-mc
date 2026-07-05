@@ -116,6 +116,9 @@ const testSetBlockType = "test_set_block"
 // sub-PlacedFeature via reg.ResolvePlaced / reg.ParsePlacedFeature. CRITICAL: the REAL
 // ctx + rng are captured (NOT discarded as in Phase 11) and passed to the body, so the
 // body's draws continue the deterministic decoration sequence.
+//
+// seaLevel is the generator sea level threaded into the bodyContext for the freeze_top_layer
+// body (coldEnoughToSnow(pos, seaLevel)). A zero value falls back to the vanilla 63 there.
 func newConfiguredPlacer(
 	cf *feature.ConfiguredFeature,
 	view *Neighborhood,
@@ -123,12 +126,13 @@ func newConfiguredPlacer(
 	testBlock block.StateID,
 	hasTest bool,
 	invocations *[]featureInvocation,
+	seaLevel int,
 ) placement.PlacerFunc {
 	ftype := ""
 	if cf != nil {
 		ftype = cf.Type
 	}
-	bctx := &bodyContext{view: view, reg: reg}
+	bctx := &bodyContext{view: view, reg: reg, seaLevel: seaLevel}
 	return func(ctx placement.PlacementContext, rng levelgen.RandomSource, pos placement.BlockPos) bool {
 		if invocations != nil {
 			*invocations = append(*invocations, featureInvocation{featureType: ftype, pos: pos})

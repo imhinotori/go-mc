@@ -333,8 +333,9 @@ func (g *NoiseGenerator) Decorate(view *Neighborhood) {
 		}
 		// Production: no test feature, no invocation recording. g.deco.registry is
 		// threaded into the bodyContext so a registered body (12-03's selectors) can
-		// resolve nested sub-features; an unregistered type stays a no-op.
-		return newConfiguredPlacer(cf, view, g.deco.registry, g.air, false, nil)
+		// resolve nested sub-features; an unregistered type stays a no-op. g.surface.SeaLevel()
+		// is the generator sea level the freeze_top_layer body reads (coldEnoughToSnow).
+		return newConfiguredPlacer(cf, view, g.deco.registry, g.air, false, nil, g.surface.SeaLevel())
 	}
 	applyBiomeDecoration(view, biomes, g.deco, ctx, wg, g.seed, makePlacer, nil)
 

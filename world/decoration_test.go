@@ -93,7 +93,7 @@ func TestFeatureSeedTrace(t *testing.T) {
 		if pf != nil {
 			cf = pf.Feature
 		}
-		return newConfiguredPlacer(cf, view, data.registry, block.StateID(0), false, &invocations)
+		return newConfiguredPlacer(cf, view, data.registry, block.StateID(0), false, &invocations, 63)
 	}
 
 	trace := &decorationTrace{}
@@ -174,7 +174,7 @@ func TestTraceOrderIndependent(t *testing.T) {
 		view := build3x3(center, minY, height)
 		ctx := newPlacementContext(view, minY, height, func(_, _, _ int) levelbiome.Type { return a })
 		mk := func(pf *feature.PlacedFeature) placement.PlacerFunc {
-			return newConfiguredPlacer(pf.Feature, view, data.registry, block.StateID(0), false, nil)
+			return newConfiguredPlacer(pf.Feature, view, data.registry, block.StateID(0), false, nil, 63)
 		}
 		tr := &decorationTrace{}
 		applyBiomeDecoration(view, biomes, data, ctx, levelgen.NewWorldgenRandom(seed), seed, mk, tr)
@@ -269,7 +269,7 @@ func TestTestSetBlockFlows(t *testing.T) {
 	ctx := newPlacementContext(view, minY, height, func(_, _, _ int) levelbiome.Type { return pl })
 	stone := block.ToStateID[block.Stone{}]
 	mk := func(p *feature.PlacedFeature) placement.PlacerFunc {
-		return newConfiguredPlacer(p.Feature, view, data.registry, stone, true, nil)
+		return newConfiguredPlacer(p.Feature, view, data.registry, stone, true, nil, 63)
 	}
 	applyBiomeDecoration(view, []levelbiome.Type{pl}, data, ctx, levelgen.NewWorldgenRandom(seed), seed, mk, nil)
 
@@ -350,7 +350,7 @@ func TestFeatureBodiesProduceBlocks(t *testing.T) {
 		if pf != nil {
 			cf = pf.Feature
 		}
-		return newConfiguredPlacer(cf, view, data.registry, block.StateID(0), false, nil)
+		return newConfiguredPlacer(cf, view, data.registry, block.StateID(0), false, nil, 63)
 	}
 	applyBiomeDecoration(view, []levelbiome.Type{plains}, data, ctx,
 		levelgen.NewWorldgenRandom(0x12345), 0x12345, mk, nil)

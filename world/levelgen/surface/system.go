@@ -415,6 +415,12 @@ func (c *Context) worldSurfaceHeight(lx, lz int) int {
 // SeaLevel exposes the system sea level (the temperature condition uses it).
 func (c *Context) SeaLevel() int { return c.system.seaLevel }
 
+// SeaLevel exposes the surface system's sea level. The freeze_top_layer feature body
+// (SnowAndFreezeFeature, via Biome.coldEnoughToSnow(pos, seaLevel)) needs it during
+// decoration, so the generator reads it off the shared SurfaceSystem it already holds
+// (WorldGenLevel.getSeaLevel() == the DimensionType/generator sea level).
+func (s *SurfaceSystem) SeaLevel() int { return s.seaLevel }
+
 // ---- chunkColumn: a *level.Chunk column adapter ----
 
 // chunkColumn adapts one (lx,lz) column of a *level.Chunk to BlockColumn for buildSurface.

@@ -55,6 +55,24 @@ type bodyContext struct {
 	// over the registry's own acyclic-by-construction cycle guard — T-12-11). It is 0
 	// for a top-level body and touched only on the single scheduler goroutine.
 	subDepth int
+	// seaLevel is the generator's sea level (WorldGenLevel.getSeaLevel()). The
+	// freeze_top_layer body (SnowAndFreezeFeature -> Biome.coldEnoughToSnow(pos, seaLevel))
+	// needs it and the fixed featureBody signature has no place for it, so it is threaded
+	// here from newConfiguredPlacer (g.surface.SeaLevel() in production). It is a constant
+	// per generator, read-only on the scheduler goroutine. A zero value means "unset"; the
+	// freeze body reads bctx.seaLevelOr(63) so a bare bodyContext (a unit test) still uses
+	// the vanilla overworld sea level.
+	seaLevel int
+}
+
+// seaLevelOr returns the threaded sea level, or the given default when unset (0). The
+// freeze body uses 63 (the vanilla overworld sea level) as the default so a bare
+// bodyContext behaves like the overworld.
+func (b *bodyContext) seaLevelOr(def int) int {
+	if b.seaLevel == 0 {
+		return def
+	}
+	return b.seaLevel
 }
 
 // featureBodies is the type→body registry. It is populated at init() time by the
@@ -89,6 +107,16 @@ func (b *bodyContext) placeState(pos placement.BlockPos, st block.StateID) bool 
 	}
 	b.view.SetBlock(pos.X, pos.Y, pos.Z, st)
 	return true
+}
+
+// airState returns the air StateID the 3x3 view uses (block.Air), or the package air default
+// when the view is nil (a unit test). The lake carve phase writes it into the cavity above the
+// fluid line (LakeFeature.AIR — CAVE_AIR in the jar, worldgen-equivalent to plain air).
+func (b *bodyContext) airState() block.StateID {
+	if b.view == nil {
+		return block.ToStateID[block.Air{}]
+	}
+	return b.view.air
 }
 
 // getState reads the live block at pos through the 3x3 view (air outside / nil view).

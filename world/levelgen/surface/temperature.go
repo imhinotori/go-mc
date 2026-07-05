@@ -67,9 +67,12 @@ type biomeTemperatureModel struct {
 	biomeInfoNoise   *synth.PerlinSimplexNoise // BIOME_INFO_NOISE (seed 2345, octaves {0})
 
 	// per-biome climate, keyed by biome.Type. temperature is the JSON float; frozen is
-	// (temperature_modifier == "frozen").
-	temperature map[biome.Type]float32
-	frozen      map[biome.Type]bool
+	// (temperature_modifier == "frozen"); precipitation is the JSON has_precipitation
+	// (Biome$ClimateSettings.hasPrecipitation — the SnowAndFreezeFeature snow gate reads it
+	// via Biome.getPrecipitationAt -> hasPrecipitation()).
+	temperature   map[biome.Type]float32
+	frozen        map[biome.Type]bool
+	precipitation map[biome.Type]bool
 }
 
 var (
@@ -85,8 +88,9 @@ var (
 func ensureTemperatureModel() (*biomeTemperatureModel, error) {
 	temperatureModelOnce.Do(func() {
 		m := &biomeTemperatureModel{
-			temperature: map[biome.Type]float32{},
-			frozen:      map[biome.Type]bool{},
+			temperature:   map[biome.Type]float32{},
+			frozen:        map[biome.Type]bool{},
+			precipitation: map[biome.Type]bool{},
 		}
 		// TEMPERATURE_NOISE = new PerlinSimplexNoise(new WorldgenRandom(new LegacyRandomSource(1234L)), of(0))
 		m.temperatureNoise = synth.NewPerlinSimplexNoise(levelgen.NewWorldgenRandom(1234), []int{0})
@@ -110,6 +114,7 @@ func ensureTemperatureModel() (*biomeTemperatureModel, error) {
 type biomeClimateJSON struct {
 	Temperature         float32 `json:"temperature"`
 	TemperatureModifier string  `json:"temperature_modifier"`
+	HasPrecipitation    bool    `json:"has_precipitation"`
 }
 
 // loadBiomeClimate fills the per-biome temperature/frozen tables from the embedded
@@ -140,6 +145,7 @@ func loadBiomeClimate(m *biomeTemperatureModel) error {
 		}
 		m.temperature[bt] = c.Temperature
 		m.frozen[bt] = c.TemperatureModifier == "frozen"
+		m.precipitation[bt] = c.HasPrecipitation
 	}
 	return nil
 }
@@ -218,4 +224,26 @@ func coldEnoughToSnow(bt biome.Type, x, y, z, seaLevel int) bool {
 		panic(fmt.Sprintf("surface: biome temperature model: %v", err))
 	}
 	return !m.warmEnoughToRain(bt, x, y, z, seaLevel)
+}
+
+// ColdEnoughToSnow is the exported wrapper the world-package freeze_top_layer body
+// (SnowAndFreezeFeature, via Biome.coldEnoughToSnow(pos, seaLevel)) calls at each column.
+// It reuses the SAME temperature model + float cast chain as the surface-rule condition —
+// there is NO second port of the temperature math (the mandate: reuse coldEnoughToSnow,
+// do not re-port). It panics on a build-data error (the internal wrapper's discipline).
+func ColdEnoughToSnow(bt biome.Type, x, y, z, seaLevel int) bool {
+	return coldEnoughToSnow(bt, x, y, z, seaLevel)
+}
+
+// HasPrecipitation ports Biome.hasPrecipitation() (== Biome$ClimateSettings.hasPrecipitation,
+// the biome JSON `has_precipitation`). The SnowAndFreezeFeature snow gate reads it through
+// Biome.getPrecipitationAt (NONE when a biome has no precipitation, so no snow lands). An
+// unknown biome (never produced by the source) defaults to false, matching the ClimateSettings
+// default and safe because it can never be tested.
+func HasPrecipitation(bt biome.Type) bool {
+	m, err := ensureTemperatureModel()
+	if err != nil {
+		panic(fmt.Sprintf("surface: biome temperature model: %v", err))
+	}
+	return m.precipitation[bt]
 }

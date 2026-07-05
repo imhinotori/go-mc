@@ -438,6 +438,17 @@ func FluidIsFull(s StateID) bool {
 	}
 }
 
+// IsLog reports whether a state id is any #minecraft:logs member (the flat closure below).
+// The lake feature's #lava_pool_stone_cannot_replace predicate references #logs; this reuses
+// the existing closure rather than duplicating the ~40 log ids. Property-agnostic (every axis
+// variant of a log block is a member), matching BlockState.is(#logs). CITE: BlockTags.LOGS.
+func IsLog(s StateID) bool {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return false
+	}
+	return leafLogBlockIDs[StateList[s].ID()]
+}
+
 // leafLogBlockIDs is the flat #minecraft:logs block-id closure (== #prevents_nearby_leaf_decay),
 // resolved from the 26.2 datagen tags/block/logs.json. The block package cannot import the
 // world/levelgen/data tag resolver (that package imports block — an import cycle), so the closure is
