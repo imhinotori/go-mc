@@ -34,6 +34,15 @@ type Neighborhood struct {
 	air    block.StateID
 	water  block.StateID
 
+	// worldSeed is the raw world seed (WorldGenLevel.getSeed()). It is 0 until the
+	// generator sets it via SetWorldSeed at the start of decoration. The GeodeFeature
+	// port is the sole consumer: vanilla builds a per-LEVEL NormalNoise from a fresh
+	// `new WorldgenRandom(new LegacyRandomSource(level.getSeed()))` (a SEPARATE rng from
+	// the feature random — the distance-field wobble depends only on the world seed, not
+	// the feature draw sequence). No other block-placement path reads this, so a
+	// test-constructed Neighborhood leaving it 0 is harmless.
+	worldSeed int64
+
 	// spawns buffers the structure-inhabitant SpawnRequests recorded during the PLACE pass
 	// (PostProcess -> RecordSpawn). It is the OFF-TICK half of the off-tick->tick seam
 	// (TICK-05 / Pitfall 5): the worker only RECORDS here; placeStructures drains it onto the
@@ -64,6 +73,15 @@ func newNeighborhood(center level.ChunkPos, chunks map[int64]*level.Chunk, minY,
 		water:  block.ToStateID[block.Water{Level: 0}],
 	}
 }
+
+// SetWorldSeed records the raw world seed (WorldGenLevel.getSeed()) on the view so the
+// GeodeFeature body can seed its per-level NormalNoise exactly like vanilla
+// (`new WorldgenRandom(new LegacyRandomSource(level.getSeed()))`). It is set once by the
+// generator at the start of the decoration pass, before any feature body runs.
+func (n *Neighborhood) SetWorldSeed(seed int64) { n.worldSeed = seed }
+
+// WorldSeed returns the recorded world seed (0 if never set — a test view).
+func (n *Neighborhood) WorldSeed() int64 { return n.worldSeed }
 
 // chunkAt maps a world (wx,wz) to its owning chunk in the 3x3, if present. cx=wx>>4,
 // cz=wz>>4; the lookup uses the same packPos packing the staging map uses.

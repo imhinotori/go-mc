@@ -307,6 +307,11 @@ func (g *NoiseGenerator) Decorate(view *Neighborhood) {
 		return
 	}
 
+	// Record the world seed on the view so the GeodeFeature body can seed its per-level
+	// NormalNoise exactly as vanilla does (new WorldgenRandom(new LegacyRandomSource(
+	// level.getSeed()))). No block-placing path other than the geode consumes it.
+	view.SetWorldSeed(g.seed)
+
 	// Build all 3 worldgen heightmaps (WORLD_SURFACE_WG / OCEAN_FLOOR_WG / MOTION_BLOCKING)
 	// from the FINAL post-carve terrain so they reflect carved openings and are live before
 	// the first feature reads them (heightmap-relative placement). The incremental
