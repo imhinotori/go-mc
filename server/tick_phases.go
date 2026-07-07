@@ -811,6 +811,25 @@ func (t *TickLoop) tickPhysics() {
 			continue
 		}
 
+		// B-A4 (fluid current push, EntityFluidInteraction.update + applyCurrentTo): a mob whose
+		// AABB overlaps flowing water/lava is pushed downstream along the summed getFlow vector,
+		// scaled by motionScale (WATER 0.014 / LAVA overworld 0.0023333...). Vanilla runs this in
+		// Entity.baseTick (updateFluidInteraction), BEFORE aiStep->travel, so the current is in
+		// deltaMovement when the move integrates it -- we apply it here, before the travel branch
+		// and moveEntity, mirroring that order. updateFluidCurrent is a NO-OP for a mob with zero
+		// matching fluid cells (dry pig -> zero flow -> immediate skip, no velocity change and no
+		// getFlow call), so the pig oracle stays byte-identical. oldY (== the pre-move getY()) is
+		// captured here for jumpOutOfFluid(oldY) after the move. Cite Entity.updateFluidInteraction.
+		oldY := e.y
+		mobWaterForJump := t.mobInWater(e)
+		mobLavaForJump := t.mobInLava(e)
+		if mobWaterForJump {
+			t.updateFluidCurrent(e, fluidWater, waterCurrentScale)
+		}
+		if mobLavaForJump {
+			t.updateFluidCurrent(e, fluidLava, lavaCurrentScaleOverworld)
+		}
+
 		// LIVE-DEBUG A (the "mobs sink in water" fix): a mob whose AABB is in water runs the
 		// VANILLA water physics (LivingEntity.travelInWater) INSTEAD of the dry travelInAir path —
 		// vertical drag 0.8 (NOT the 0.98 air drag) + reduced gravity baseGravity/16 == 0.005 (NOT
@@ -820,7 +839,7 @@ func (t *TickLoop) tickPhysics() {
 		// Movement (fluid_travel.go, javap-cited); mobInWater is the Phase-30 predicate (fluid_physics
 		// .go). A DRY mob takes the unchanged air branch below. The dead-mob corpse is already frozen
 		// (the `if e.dead { continue }` guard above), so a corpse never swims — the live-mob gate holds.
-		if t.mobInWater(e) {
+		if mobWaterForJump {
 			// Water branch: travelInWater vertical (0.8 drag + 0.005 gravity) replaces gravity +
 			// air drag + the dry horizontal friction (the 0.8 horizontal water drag is applied
 			// inside travelInWaterVertical). FloatGoal's +0.04 impulse (applied in tickAI, before
@@ -887,6 +906,17 @@ func (t *TickLoop) tickPhysics() {
 		// also re-buckets through entities.move and updates onGround / zeroes blocked
 		// velocity components.
 		t.moveEntity(e, e.vx, e.vy, e.vz)
+
+		// B-A9 (jumpOutOfFluid, LivingEntity.jumpOutOfFluid): a mob pressed against a wall while in
+		// water/lava hops out at the edge. Vanilla calls this at the tail of travelInWater/
+		// travelInLava, AFTER the move (so horizontalCollision and getY are the settled values),
+		// with oldY captured before the move. It only fires when horizontalCollision is set AND the
+		// box moved up-and-forward is open air (mobIsFree: no solid, no liquid) -- an open-water mob
+		// or a dry mob never hops. Gated on the pre-move in-fluid flags so a dry mob does zero work.
+		// Cite LivingEntity.jumpOutOfFluid(oldY) -> setDeltaMovement(dm.x, 0.3, dm.z).
+		if mobWaterForJump || mobLavaForJump {
+			t.jumpOutOfFluid(e, oldY)
+		}
 
 		// Entity.checkFallDamage(actualDeltaY, onGround, ...) — run with the resolved displacement, the
 		// freshly-set onGround, and isInWater re-read at the SETTLED position (vanilla reads all three

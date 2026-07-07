@@ -1,6 +1,6 @@
 package server
 
-// collision.go — the VoxelShape collision engine: the 1:1 port of the vanilla movement
+// collision.go - the VoxelShape collision engine: the 1:1 port of the vanilla movement
 // collision call chain (26.2 jar, verified by javap this session):
 //
 //	Entity.move(MoverType, Vec3)
@@ -16,7 +16,7 @@ package server
 // slabs/stairs/fences(1.5)/walls/snow-layers/carpets collide with their REAL vanilla boxes.
 //
 // Deliberately not yet ported (phase 4 of the collision plan; call sites are marked):
-//   - Level.getEntityCollisions (shulker/boat hard boxes) — the entityCollisions list is
+//   - Level.getEntityCollisions (shulker/boat hard boxes) - the entityCollisions list is
 //     always empty here.
 //   - The world-border shape (WorldBorder.getCollisionShape when isInsideCloseToBorder).
 //
@@ -32,7 +32,7 @@ import (
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
-// vec3d is a plain (x,y,z) double triple — net.minecraft.world.phys.Vec3 for the collision
+// vec3d is a plain (x,y,z) double triple - net.minecraft.world.phys.Vec3 for the collision
 // path (no methods beyond what the port needs).
 type vec3d struct{ x, y, z float64 }
 
@@ -61,8 +61,30 @@ func (v vec3d) with(axis int, d float64) vec3d {
 
 func (v vec3d) lengthSqr() float64 { return v.x*v.x + v.y*v.y + v.z*v.z }
 
+// length ports net.minecraft.world.phys.Vec3.length(): sqrt(x^2 + y^2 + z^2).
+func (v vec3d) length() float64 { return math.Sqrt(v.lengthSqr()) }
+
+// add ports net.minecraft.world.phys.Vec3.add(double,double,double): componentwise sum.
+func (v vec3d) add(x, y, z float64) vec3d { return vec3d{v.x + x, v.y + y, v.z + z} }
+
+// scale ports net.minecraft.world.phys.Vec3.scale(double): componentwise multiply by a scalar
+// (== multiply(f,f,f)). Cite Vec3.scale.
+func (v vec3d) scale(f float64) vec3d { return vec3d{v.x * f, v.y * f, v.z * f} }
+
+// normalize ports net.minecraft.world.phys.Vec3.normalize() 1:1: d = sqrt(x^2+y^2+z^2); if
+// d < the 9.999999747378752E-6 literal (a float 1e-5 widened) return ZERO, else divide each
+// component by d. The tiny-length guard returns the zero vector so a still fluid contributes no
+// push. Cite Vec3.normalize (ldc2_w 9.999999747378752E-6d; dcmpg; Math.sqrt).
+func (v vec3d) normalize() vec3d {
+	d := math.Sqrt(v.x*v.x + v.y*v.y + v.z*v.z)
+	if d < 9.999999747378752e-6 {
+		return vec3d{}
+	}
+	return vec3d{v.x / d, v.y / d, v.z / d}
+}
+
 // placedShape is one world-positioned collider: a block-local VoxelShape plus its BlockPos
-// offset — the allocation-free equivalent of vanilla's shape.move(pos).
+// offset - the allocation-free equivalent of vanilla's shape.move(pos).
 type placedShape struct {
 	s       *block.VoxelShape
 	x, y, z float64
@@ -98,7 +120,7 @@ func expandTowards(b block.Box, x, y, z float64) block.Box {
 }
 
 // axisStepOrder is Direction.axisStepOrder(Vec3): Y first, then the horizontal axis with the
-// LARGER |component| (ties → X). CITE: javap net.minecraft.core.Direction.axisStepOrder —
+// LARGER |component| (ties → X). CITE: javap net.minecraft.core.Direction.axisStepOrder -
 // |x| < |z| ? YZX : YXZ.
 func axisStepOrder(m vec3d) [3]int {
 	if math.Abs(m.x) < math.Abs(m.z) {
@@ -111,17 +133,17 @@ func axisStepOrder(m vec3d) [3]int {
 // every block whose collision shape can intersect `box`, yielded as a placedShape. Port of
 // net.minecraft.world.level.BlockCollisions.computeNext:
 //
-//   - Cursor bounds: floor(min-EPSILON)-1 .. floor(max+EPSILON)+1 per axis — the ±1 ring
+//   - Cursor bounds: floor(min-EPSILON)-1 .. floor(max+EPSILON)+1 per axis - the ±1 ring
 //     admits neighbors whose shape exceeds their cell (fence 1.5).
-//   - Ring gating by boundary count (Cursor3D.getNextType): 3 boundary axes (corner) —
-//     skipped; 2 (edge) — only minecraft:moving_piston; 1 (face) — only states with
+//   - Ring gating by boundary count (Cursor3D.getNextType): 3 boundary axes (corner) -
+//     skipped; 2 (edge) - only minecraft:moving_piston; 1 (face) - only states with
 //     hasLargeCollisionShape().
 //   - Shapes.block() IDENTITY fast path: strict AABB.intersects against the unit cell.
 //   - Other shapes: skip when empty, else the joinIsNotEmpty(AND) overlap filter
 //     (VoxelShape.IntersectsBox).
 //
 // An unloaded chunk contributes NO collision (vanilla getChunkForCollisions returns null and
-// the position is skipped) — same policy the old blockSolidAt used.
+// the position is skipped) - same policy the old blockSolidAt used.
 func (t *TickLoop) collectBlockCollisions(box block.Box) []placedShape {
 	if t.world() == nil {
 		return nil
@@ -206,7 +228,7 @@ func shapesCollide(axis int, box block.Box, shapes []placedShape, desired float6
 
 // collideWithShapes is Entity.collideWithShapes(Vec3, AABB, List<VoxelShape>): clip the
 // motion one axis at a time in axisStepOrder, moving the box by the accumulated result
-// before each axis. CITE: javap Entity.collideWithShapes — Vec3.ZERO accumulator,
+// before each axis. CITE: javap Entity.collideWithShapes - Vec3.ZERO accumulator,
 // box.move(result) per axis, Shapes.collide, result.with(axis, clamped).
 func collideWithShapes(m vec3d, box block.Box, shapes []placedShape) vec3d {
 	if len(shapes) == 0 {
@@ -236,7 +258,7 @@ func (t *TickLoop) collideBoundingBox(m vec3d, box block.Box) vec3d {
 
 // collideMovement is Entity.collide(Vec3): the whole-motion resolution including the auto
 // STEP-UP. Entity-entity hard collision (getEntityCollisions) and the world border are
-// phase 4 — the entityCollisions list is empty here. Ported 1:1 from bytecode:
+// phase 4 - the entityCollisions list is empty here. Ported 1:1 from bytecode:
 //
 //	Vec3 collided = vec.lengthSqr() == 0 ? vec : collideBoundingBox(this, vec, box, level, entityCollisions);
 //	boolean xChanged = vec.x != collided.x, yChanged = vec.y != collided.y, zChanged = vec.z != collided.z;
@@ -295,7 +317,7 @@ func (t *TickLoop) collideMovement(m vec3d, box block.Box, stepHeight float32, o
 
 // collectCandidateStepUpHeights is Entity.collectCandidateStepUpHeights(AABB, List
 // <VoxelShape>, float, float): every collider Y slice boundary, as a height above the base
-// box's bottom, that is a plausible step target — h >= 0, h != the already-collided Y, and
+// box's bottom, that is a plausible step target - h >= 0, h != the already-collided Y, and
 // h <= maxUpStep (the coords are ascending, so the first h beyond maxUpStep breaks out of
 // that shape's list). Deduplicated (FloatArraySet) and sorted ascending
 // (FloatArrays.unstableSort). All float32 math exactly as the bytecode's d2f/float compares.
@@ -326,11 +348,11 @@ func collectCandidateStepUpHeights(base block.Box, colliders []placedShape, maxU
 }
 
 // entityMaxUpStep is the per-entity maxUpStep() dispatch: non-living entities (item/orb/
-// arrow/potion/throwable/hurting-projectile/fishing-hook/fangs/bolt/TNT/minecart/boat — the
+// arrow/potion/throwable/hurting-projectile/fishing-hook/fangs/bolt/TNT/minecart/boat - the
 // same set tick_phases.go excludes from the mob physics phase) use base Entity.maxUpStep()
 // == 0.0F; living mobs use LivingEntity.maxUpStep() == (float)getAttributeValue(STEP_HEIGHT)
 // (registration default 0.6; some types register 1.0). The player-ridden max(…, 1.0F) branch
-// is deferred with server-side ridden movement (no getControllingPassenger yet) — for every
+// is deferred with server-side ridden movement (no getControllingPassenger yet) - for every
 // entity that moves through this engine today the branch is dead. CITE: javap
 // Entity.maxUpStep (fconst_0), LivingEntity.maxUpStep (getAttributeValue(STEP_HEIGHT), d2f).
 func entityMaxUpStep(e *Entity) float32 {
@@ -342,7 +364,7 @@ func entityMaxUpStep(e *Entity) float32 {
 	return float32(e.getAttributeValue(attribute.StepHeight))
 }
 
-// mthEqual is Mth.equal(double, double): |b - a| < 9.999999747378752E-6 ((double)1.0E-5F) —
+// mthEqual is Mth.equal(double, double): |b - a| < 9.999999747378752E-6 ((double)1.0E-5F) -
 // the tolerance Entity.move uses for the horizontalCollision flags. CITE: javap
 // net.minecraft.util.Mth.equal(DD).
 func mthEqual(a, b float64) bool {

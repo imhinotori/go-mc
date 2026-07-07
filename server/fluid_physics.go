@@ -3,6 +3,8 @@ package server
 import (
 	"math"
 
+	"github.com/imhinotori/sulfur/level/block"
+
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
@@ -311,4 +313,179 @@ func (t *TickLoop) moveWithFluidPhysics(p *tickPlayer, targetX, targetY, targetZ
 	dz := targetZ - p.z
 	dx, dy, dz = t.applyFluidPhysics(p, dx, dy, dz)
 	return p.x + dx, p.y + dy, p.z + dz
+}
+
+// Fluid current-push constants - VERIFIED via javap on temp/cache/26.2-inner.jar this session:
+//
+//	net.minecraft.world.entity.Entity.updateFluidInteraction:
+//	  WATER applyCurrentTo motionScale = 0.014d                    (ldc2_w #1815)
+//	  LAVA  applyCurrentTo motionScale = FAST_LAVA(nether) 0.007d  (ldc2_w #1828)
+//	                                     else (overworld) 0.0023333333333333335d (ldc2_w #1830)
+//	net.minecraft.world.entity.EntityFluidInteraction$Tracker.applyCurrentTo:
+//	  accumulatedCurrent.lengthSqr() < 9.999999747378752E-6 -> return (the tiny-current skip)
+//	  non-Player: current = accumulatedCurrent.normalize(); scale(motionScale)
+//	  min-current boost: |dm.x|<0.003 && |dm.z|<0.003 && current.length()<0.0045
+//	                     -> current = current.normalize().scale(0.0045)
+//	net.minecraft.world.entity.EntityFluidInteraction.update:
+//	  per matching fluid cell: getFlow; if tracker.height < 0.4 flow = flow.scale(height);
+//	  accumulateCurrent(flow)   (the shallow-water attenuation)
+const (
+	// waterCurrentScale is Entity.updateFluidInteraction's WATER applyCurrentTo motionScale = 0.014d.
+	waterCurrentScale = 0.014
+
+	// lavaCurrentScaleOverworld is the OVERWORLD (non-fast) LAVA applyCurrentTo motionScale =
+	// 0.0023333333333333335d. Sulfur v1 targets the overworld; the nether FAST_LAVA 0.007 is a
+	// per-dimension EnvironmentAttribute read deferred with the rest of the fast/slow-lava split
+	// (mirrors fluid.go's overworld-only lava flow constants). Cite Entity.updateFluidInteraction.
+	lavaCurrentScaleOverworld = 0.0023333333333333335
+
+	// currentTinySkipSqr is Tracker.applyCurrentTo's accumulatedCurrent.lengthSqr() skip threshold
+	// (9.999999747378752E-6 - the float 1e-5 widened to double). Below it the accumulated current is
+	// negligible and no push is applied.
+	currentTinySkipSqr = 9.999999747378752e-6
+
+	// currentBoostAxisBand / currentBoostFloor are the min-current boost literals: when the entity's
+	// horizontal velocity is nearly still (|dm.x|<0.003 && |dm.z|<0.003) and the scaled current is
+	// weaker than 0.0045, the current is re-normalized to exactly 0.0045 so a stationary entity is
+	// still nudged downstream. Cite Tracker.applyCurrentTo (0.003d ; 0.0045000000000000005d).
+	currentBoostAxisBand = 0.003
+	currentBoostFloor    = 0.0045000000000000005
+
+	// currentShallowHeightCutoff is EntityFluidInteraction.update's per-cell shallow-water flow
+	// attenuation cutoff: while the accumulated fluid height is < 0.4, each cell's getFlow vector is
+	// scaled by that height before accumulation (shallow water pushes less). Cite update (ldc2_w 0.4d).
+	currentShallowHeightCutoff = 0.4
+)
+
+// updateFluidCurrent ports net.minecraft.world.entity.EntityFluidInteraction.update (the flow
+// accumulation over the entity AABB) + Tracker.applyCurrentTo (the normalize + motionScale + min-
+// current boost) for a mob *Entity, applied to e.vx/vy/vz. It scans the entity collision-box cells
+// for the given fluid kind, sums each cell getFlow (attenuated by the running fluid height while
+// that height is < 0.4), normalizes the accumulated vector (the non-Player branch), scales by
+// motionScale (WATER 0.014 / LAVA overworld 0.0023333...), applies the min-current boost, and adds
+// the result to the mob velocity. This is Entity.baseTick fluid-push, run BEFORE the travel/move
+// step (so the current is in deltaMovement when moveEntity integrates it), exactly as vanilla orders
+// updateFluidInteraction (baseTick) before aiStep->travel.
+//
+// ORACLE GATE: a DRY mob has zero matching cells -> accumulatedCurrent stays ZERO -> the count == 0
+// / lengthSqr()<1e-5 skip returns immediately with NO velocity change and NO getFlow call, so a pig
+// on dry land is byte-identical (verified by TestFluidPushDryEntityNoChange). RNG-free.
+//
+//	Cite: net.minecraft.world.entity.EntityFluidInteraction.update / Tracker.accumulateCurrent /
+//	Tracker.applyCurrentTo; Entity.updateFluidInteraction (motionScale constants).
+func (t *TickLoop) updateFluidCurrent(e *Entity, kind fluidKind, motionScale float64) {
+	if e == nil || t.world() == nil {
+		return
+	}
+	hw := e.width / 2
+	minX := int(math.Floor(e.x - hw))
+	maxX := int(math.Floor(e.x + hw))
+	minY := int(math.Floor(e.y))
+	maxY := int(math.Floor(e.y + e.height))
+	minZ := int(math.Floor(e.z - hw))
+	maxZ := int(math.Floor(e.z + hw))
+
+	var accumulated vec3d
+	count := 0
+	height := 0.0 // Tracker.height: running max fluid height over matching cells (== mobFluidHeight)
+	for x := minX; x <= maxX; x++ {
+		for y := minY; y <= maxY; y++ {
+			for z := minZ; z <= maxZ; z++ {
+				cell := pk.Position{X: x, Y: y, Z: z}
+				fs := t.fluidAt(cell)
+				if !fs.matchesKind(kind) {
+					continue
+				}
+				surface := float64(y) + t.fluidSurfaceHeightOf(cell, fs, kind)
+				if h := surface - e.y; h > height {
+					height = h
+				}
+				flow := t.getFlow(cell, fs)
+				if height < currentShallowHeightCutoff {
+					flow = flow.scale(height)
+				}
+				accumulated = accumulated.add(flow.x, flow.y, flow.z)
+				count++
+			}
+		}
+	}
+
+	if count == 0 || accumulated.lengthSqr() < currentTinySkipSqr {
+		return
+	}
+	current := accumulated.normalize()
+	current = current.scale(motionScale)
+	if math.Abs(e.vx) < currentBoostAxisBand && math.Abs(e.vz) < currentBoostAxisBand &&
+		current.length() < currentBoostFloor {
+		current = current.normalize().scale(currentBoostFloor)
+	}
+	e.vx += current.x
+	e.vy += current.y
+	e.vz += current.z
+}
+
+// mobIsFree ports net.minecraft.world.entity.Entity.isFree(double,double,double): the target box
+// (the entity AABB moved by dx,dy,dz) is FREE iff it collides with no solid AND contains no liquid.
+// noCollision -> collectBlockCollisions is empty; containsAnyLiquid -> the block-cell scan of the
+// moved box finds no fluid. So jumpOutOfFluid only fires into OPEN AIR above the wall, never into
+// more fluid. Cite Entity.isFree (noCollision(box.move) && !containsAnyLiquid(box.move)).
+func (t *TickLoop) mobIsFree(e *Entity, dx, dy, dz float64) bool {
+	box := entityBoxOf(e)
+	box.MinX += dx
+	box.MaxX += dx
+	box.MinY += dy
+	box.MaxY += dy
+	box.MinZ += dz
+	box.MaxZ += dz
+	if len(t.collectBlockCollisions(box)) != 0 {
+		return false
+	}
+	return !t.boxContainsLiquid(box)
+}
+
+// boxContainsLiquid ports net.minecraft.world.level.Level.containsAnyLiquid(AABB): scan every block
+// cell the box spans and report true if any holds a fluid (water OR lava). Used by mobIsFree so the
+// water-jump only fires when the space above-forward is truly open air (not more fluid). Cite
+// net.minecraft.world.level.Level.containsAnyLiquid (getFluidState(pos).isEmpty() over the box).
+func (t *TickLoop) boxContainsLiquid(box block.Box) bool {
+	minX := int(math.Floor(box.MinX))
+	maxX := int(math.Ceil(box.MaxX)) - 1
+	minY := int(math.Floor(box.MinY))
+	maxY := int(math.Ceil(box.MaxY)) - 1
+	minZ := int(math.Floor(box.MinZ))
+	maxZ := int(math.Ceil(box.MaxZ)) - 1
+	for x := minX; x <= maxX; x++ {
+		for y := minY; y <= maxY; y++ {
+			for z := minZ; z <= maxZ; z++ {
+				if t.fluidAt(pk.Position{X: x, Y: y, Z: z}).isFluid() {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// jumpOutOfFluid ports net.minecraft.world.entity.LivingEntity.jumpOutOfFluid(double d) 1:1: a mob
+// swimming against a wall in fluid hops out at the edge. Called at the END of travelInWater/
+// travelInLava (AFTER the move, so horizontalCollision and getY are the settled values), with d ==
+// the y captured at the START of travelInFluid (oldY). Verified bytecode:
+//
+//	Vec3 dm = getDeltaMovement();
+//	if horizontalCollision and isFree(dm.x, dm.y + 0.6 - getY() + d, dm.z):
+//	    setDeltaMovement(dm.x, 0.3, dm.z)
+//
+// The y offset (dm.y + 0.6 - getY() + oldY) probes the box moved up to just above the wall lip: 0.6
+// is the step-lip, and (oldY - getY()) corrects for the vertical displacement the move just applied.
+// When that box is FREE (open air, no solid, no liquid - mobIsFree), the mob is launched up at 0.3.
+// GATE: only runs when horizontalCollision is set, i.e. the mob is pressed against a wall - a mob
+// swimming in open water never hops. RNG-free. Cite LivingEntity.jumpOutOfFluid.
+func (t *TickLoop) jumpOutOfFluid(e *Entity, oldY float64) {
+	if !e.horizontalCollision {
+		return
+	}
+	dy := e.vy + 0.6000000238418579 - e.y + oldY
+	if t.mobIsFree(e, e.vx, dy, e.vz) {
+		e.vy = 0.30000001192092896
+	}
 }
