@@ -35,6 +35,21 @@ const (
 	waterSlopeFindDistance = 4 // FlowingFluid.getSlopeFindDistance (WaterFluid -> 4): slope-find radius
 	waterSourceAmount      = 8 // FlowingFluid: a source fluid has amount 8 (full)
 
+	// Lava (OVERWORLD, non-fast) flow constants — VERIFIED from temp/cache/26.2-inner.jar:
+	//
+	//	javap net.minecraft.world.level.material.LavaFluid (isFastLava == false branch, i.e. the
+	//	overworld/default dimension; fast lava is the nether's ultrawarm FAST_LAVA env attribute):
+	//	  getDropOff(LevelReader)           -> isFastLava ? iconst_1 : iconst_2  => 2
+	//	  getTickDelay(LevelReader)         -> isFastLava ? bipush 10 : bipush 30 => 30
+	//	  getSlopeFindDistance(LevelReader) -> isFastLava ? iconst_4 : iconst_2  => 2
+	// Source amount 8 is shared (FlowingFluid). getDropOff=2 gives lava its shorter 3-block spread
+	// (8 -> 6 -> 4 -> 2 -> 0) vs water's 7 (dropOff 1). Sulfur v1 targets the overworld only, so the
+	// non-fast constants are baked (isFastLava is an EnvironmentAttribute read; the fast/nether split
+	// is a later per-dimension concern — cite LavaFluid.isFastLava).
+	lavaDropOff           = 2  // LavaFluid.getDropOff (overworld)
+	lavaTickDelay         = 30 // LavaFluid.getTickDelay (overworld)
+	lavaSlopeFindDistance = 2  // LavaFluid.getSlopeFindDistance (overworld)
+
 	// maxFluidTicksPerTick caps how many scheduled fluid cells we drain in ONE logical tick — the
 	// Go analogue of LevelTicks.tick(long gameTime, int maxAllowedTicks) (ServerLevel passes 65536
 	// and collectTicks/canScheduleMoreTicks stops once the cap is hit, leaving the rest for next
@@ -51,6 +66,12 @@ const (
 // gamerule engine yet, water source conversion is enabled to match vanilla defaults
 // (WaterFluid.canConvertToSource reads this gamerule, default true).
 const waterSourceConversion = true
+
+// lavaSourceConversion is the gamerule default (GameRules.LAVA_SOURCE_CONVERSION). LavaFluid.
+// canConvertToSource reads this gamerule, whose vanilla default is FALSE — lava does NOT form new
+// source blocks from two adjacent sources (unlike water). Baked as false until a gamerule engine
+// exists. Cite: net.minecraft.world.level.material.LavaFluid.canConvertToSource.
+const lavaSourceConversion = false
 
 // getLegacyLevel maps a fluid (amount, falling, source) to the wire "level" property carried by
 // block.Water{Level}. PORT of FlowingFluid.getLegacyLevel (verified bytecode):
@@ -131,6 +152,52 @@ type fluidState struct {
 	source  bool
 	falling bool
 	amount  int // 1..8; the FlowingFluid "amount" (8 = full source-equivalent height)
+}
+
+// isFluid reports whether this cell holds ANY flowing fluid (water OR lava). Replaces the
+// water-only `f.isWater` gate now that the sim runs both fluids through the shared FlowingFluid
+// geometry.
+func (f fluidState) isFluid() bool { return f.isWater || f.isLava }
+
+// sameKind reports whether two states are the same fluid TYPE (both water, both lava, or both
+// non-fluid). FlowingFluid.isSame — a cell only interacts (merges, converts to source, is
+// replaced by a stronger flow) with its OWN fluid; water and lava never merge.
+func (f fluidState) sameKind(o fluidState) bool {
+	return f.isWater == o.isWater && f.isLava == o.isLava
+}
+
+// makeFluid builds a fluidState of the same KIND as f (used to synthesize down/side flow states
+// that inherit the flowing fluid's type).
+func (f fluidState) makeFluid(amount int, falling, source bool) fluidState {
+	return fluidState{isWater: f.isWater, isLava: f.isLava, source: source, falling: falling, amount: amount}
+}
+
+// dropOff / tickDelay / slopeFindDistance / sourceConversion return the per-KIND flow constants.
+// Water and lava share FlowingFluid's geometry but differ in these four numbers (LavaFluid
+// overrides getDropOff/getTickDelay/getSlopeFindDistance/canConvertToSource — javap-verified).
+func (f fluidState) dropOff() int {
+	if f.isLava {
+		return lavaDropOff
+	}
+	return waterDropOff
+}
+func (f fluidState) tickDelay() int {
+	if f.isLava {
+		return lavaTickDelay
+	}
+	return waterTickDelay
+}
+func (f fluidState) slopeFindDistance() int {
+	if f.isLava {
+		return lavaSlopeFindDistance
+	}
+	return waterSlopeFindDistance
+}
+func (f fluidState) sourceConversion() bool {
+	if f.isLava {
+		return lavaSourceConversion
+	}
+	return waterSourceConversion
 }
 
 // decodeFluid reads the fluid at a state id. The legacy "level" property is inverted back to
@@ -272,10 +339,22 @@ func (t *TickLoop) postProcessChunkFluids(pos level.ChunkPos, ch *level.Chunk) {
 // scheduleFluidTick schedules pos to re-evaluate getTickDelay(=5) ticks from now — the
 // getTickDelay-spaced propagation (never a per-tick full-water scan). Lazily inits the queue.
 func (t *TickLoop) scheduleFluidTick(pos pk.Position) {
+	t.scheduleFluidTickKind(pos, t.fluidAt(pos))
+}
+
+// scheduleFluidTickKind schedules pos to re-evaluate getTickDelay ticks from now using the delay
+// of the GIVEN fluid kind (water 5, lava 30 — LavaFluid.getTickDelay). Callers that already hold
+// the decoded fluid pass it directly; scheduleFluidTick re-reads the cell for callers that don't.
+// A non-fluid (empty) cell falls back to the water delay — harmless, the cell no-ops when ticked.
+func (t *TickLoop) scheduleFluidTickKind(pos pk.Position, f fluidState) {
 	if t.cur().fluidSchedule == nil {
 		t.cur().fluidSchedule = newFluidScheduleQueue()
 	}
-	t.cur().fluidSchedule.schedule(pos, t.gametime+waterTickDelay)
+	delay := waterTickDelay
+	if f.isFluid() {
+		delay = f.tickDelay()
+	}
+	t.cur().fluidSchedule.schedule(pos, t.gametime+int64(delay))
 }
 
 // scheduleEmpty reports whether the fluid queue has no pending ticks (a fixed point). Used by
@@ -320,13 +399,13 @@ func (t *TickLoop) isSolidAt(pos pk.Position) bool {
 	if _, isWater := waterLevelOf(id); isWater {
 		return false
 	}
+	// Lava, like water, does not block motion or fluid passage (BlockState.blocksMotion() is false
+	// for both liquids). Treat a lava cell as non-solid so the fluid sim can pass/replace it and so
+	// isSolidAt's other consumers (mob/projectile passability) see lava as open, matching vanilla.
+	if _, isLava := lavaLevelOf(id); isLava {
+		return false
+	}
 	return true
-}
-
-// canReplace reports whether the fluid can flow INTO pos: the cell is air or already this
-// fluid (a solid blocks it). The v1 subset of FluidState.canBeReplacedWith + canHoldSpecificFluid.
-func (t *TickLoop) canReplace(pos pk.Position) bool {
-	return !t.isSolidAt(pos)
 }
 
 // fluidTick is the per-position FlowingFluid.tick body (net.minecraft.world.level.material.
@@ -335,14 +414,14 @@ func (t *TickLoop) canReplace(pos pk.Position) bool {
 // spread. A source never recomputes its own level (it stays full) but still spreads.
 func (t *TickLoop) fluidTick(pos pk.Position) {
 	cur := t.fluidAt(pos)
-	if !cur.isWater {
+	if !cur.isFluid() {
 		return // nothing to tick here (block changed since it was scheduled)
 	}
 
 	if !cur.source {
 		next := t.getNewLiquid(pos)
 		if !sameFluid(cur, next) {
-			if !next.isWater {
+			if !next.isFluid() {
 				// drained to nothing -> air
 				t.setFluidBlock(pos, airStateID())
 				// neighbors may now need to re-flow into/around this newly-empty cell
@@ -350,7 +429,7 @@ func (t *TickLoop) fluidTick(pos pk.Position) {
 				return
 			}
 			t.setFluidBlock(pos, encodeFluid(next))
-			t.scheduleFluidTick(pos)
+			t.scheduleFluidTickKind(pos, cur)
 			cur = next
 		}
 	}
@@ -379,11 +458,11 @@ func (t *TickLoop) setFluidBlock(pos pk.Position, state block.StateID) bool {
 // sameFluid reports whether two fluid states encode the same wire block (so no write/reschedule
 // is needed). Air-vs-air and identical water states are "same".
 func sameFluid(a, b fluidState) bool {
-	if a.isWater != b.isWater {
+	if !a.sameKind(b) {
 		return false
 	}
-	if !a.isWater {
-		return true
+	if !a.isFluid() {
+		return true // both non-fluid (air-vs-air)
 	}
 	return getLegacyLevel(a.amount, a.falling, a.source) == getLegacyLevel(b.amount, b.falling, b.source)
 }
@@ -399,13 +478,34 @@ func sameFluid(a, b fluidState) bool {
 //  3. if the same fluid is directly above and can pass down -> falling, full (amount 8).
 //  4. else amount = maxAmount - dropOff; if <= 0 -> empty; else flowing at that amount.
 func (t *TickLoop) getNewLiquid(pos pk.Position) fluidState {
+	// Determine which fluid this cell is being recomputed FOR. FlowingFluid.getNewLiquid runs on a
+	// specific fluid instance (`this`) and only counts neighbors whose type == this. When the cell
+	// already holds a fluid, that fixes the kind; when it is air (a cell being flowed INTO), the
+	// kind is the fluid of the neighbors driving the flow — we take the fluid directly above, else
+	// the first same-fluid horizontal neighbor, matching vanilla's "this is the flowing fluid".
+	cur := t.fluidAt(pos)
+	if !cur.isFluid() {
+		if af := t.fluidAt(above(pos)); af.isFluid() {
+			cur = af.makeFluid(0, false, false)
+		} else {
+			for _, d := range horizontalDirs {
+				if nf := t.fluidAt(plus(pos, d)); nf.isFluid() {
+					cur = nf.makeFluid(0, false, false)
+					break
+				}
+			}
+		}
+		if !cur.isFluid() {
+			return fluidState{} // no fluid anywhere adjacent to recompute
+		}
+	}
 	maxAmount := 0
 	sourceCount := 0
 	for _, d := range horizontalDirs {
 		np := plus(pos, d)
 		nf := t.fluidAt(np)
-		if !nf.isWater {
-			continue
+		if !nf.sameKind(cur) || !nf.isFluid() {
+			continue // only the SAME fluid contributes (FlowingFluid.getNewLiquid: isSame check)
 		}
 		// canPassThroughWall subset: the neighbor cell is fluid, so it can reach us unless a
 		// solid wall sits between (no sub-block walls in v1 -> always passable here).
@@ -417,28 +517,29 @@ func (t *TickLoop) getNewLiquid(pos pk.Position) fluidState {
 		}
 	}
 
-	// Source conversion (FlowingFluid.getNewLiquid >= 2 sources branch).
-	if sourceCount >= 2 && waterSourceConversion {
+	// Source conversion (FlowingFluid.getNewLiquid >= 2 sources branch). Gated on the fluid's OWN
+	// canConvertToSource (water default true; lava default false — LavaFluid never converts here).
+	if sourceCount >= 2 && cur.sourceConversion() {
 		belowPos := below(pos)
 		belowSolid := t.isSolidAt(belowPos)
 		belowFluid := t.fluidAt(belowPos)
-		if belowSolid || (belowFluid.isWater && belowFluid.source) {
-			return fluidState{isWater: true, source: true, amount: waterSourceAmount}
+		if belowSolid || (belowFluid.sameKind(cur) && belowFluid.source) {
+			return cur.makeFluid(waterSourceAmount, false, true)
 		}
 	}
 
 	// Falling rule: same fluid directly above + can pass down -> falling, full.
 	abovePos := above(pos)
 	af := t.fluidAt(abovePos)
-	if af.isWater {
-		return fluidState{isWater: true, falling: true, amount: waterSourceAmount}
+	if af.sameKind(cur) && af.isFluid() {
+		return cur.makeFluid(waterSourceAmount, true, false)
 	}
 
-	newAmount := maxAmount - waterDropOff
+	newAmount := maxAmount - cur.dropOff()
 	if newAmount <= 0 {
 		return fluidState{} // empty
 	}
-	return fluidState{isWater: true, amount: newAmount}
+	return cur.makeFluid(newAmount, false, false)
 }
 
 // spread propagates the fluid at pos. PORT of FlowingFluid.spread (verified bytecode):
@@ -450,24 +551,41 @@ func (t *TickLoop) getNewLiquid(pos pk.Position) fluidState {
 //  3. otherwise (down is blocked): if this fluid is a source OR the below cell is not a "water
 //     hole" (cannot drain further) -> spreadToSides.
 func (t *TickLoop) spread(pos pk.Position, f fluidState) {
-	if !f.isWater {
+	if !f.isFluid() {
 		return
 	}
 	belowPos := below(pos)
-	if t.canReplace(belowPos) {
-		// Flow down: the cell below becomes falling, full.
-		downState := fluidState{isWater: true, falling: true, amount: waterSourceAmount}
+	if t.canSpreadInto(belowPos, f) {
+		// Flow down: the cell below becomes falling, full (same kind as f).
+		downState := f.makeFluid(waterSourceAmount, true, false)
 		t.spreadTo(belowPos, downState)
-		if t.sourceNeighborCount(pos) >= 3 {
+		if t.sourceNeighborCount(pos, f) >= 3 {
 			t.spreadToSides(pos, f)
 		}
 		return
 	}
 	// Down is blocked. Spread sideways unless the below cell is a drainable hole that a
 	// non-source flow should pour into instead of spreading.
-	if f.source || !t.isHole(belowPos) {
+	if f.source || !t.isHole(belowPos, f) {
 		t.spreadToSides(pos, f)
 	}
+}
+
+// canSpreadInto reports whether fluid f can flow into pos: the cell must not be solid AND, if it
+// already holds a fluid, that fluid must be REPLACEABLE by f (canBeReplacedWith). This is the
+// pass-through gate the flow arithmetic uses; the actual write still re-checks in spreadTo.
+// Crucially it treats a cell holding the OTHER fluid as spreadable-into for the down direction so
+// lava can flow down onto water (spreadTo turns that into stone) — cross-kind cells are handled by
+// canBeReplacedWith / LavaFluid.spreadTo, not blocked here.
+func (t *TickLoop) canSpreadInto(pos pk.Position, f fluidState) bool {
+	if t.isSolidAt(pos) {
+		return false
+	}
+	cur := t.fluidAt(pos)
+	if !cur.isFluid() {
+		return true // air
+	}
+	return canBeReplacedWith(cur, f)
 }
 
 // spreadToSides flows to the horizontal neighbor(s) biased toward the nearest drop-off. PORT of
@@ -475,16 +593,16 @@ func (t *TickLoop) spread(pos pk.Position, f fluidState) {
 // amount is amount-dropOff (or 7 when falling); getSpread keeps only the directions with the
 // minimum slope distance to a hole within getSlopeFindDistance(=4).
 func (t *TickLoop) spreadToSides(pos pk.Position, f fluidState) {
-	outAmount := f.amount - waterDropOff
+	outAmount := f.amount - f.dropOff()
 	if f.falling {
-		outAmount = waterSourceAmount - waterDropOff // falling spreads at the full-minus-dropoff level (jar: 7)
+		outAmount = waterSourceAmount - f.dropOff() // falling spreads at full-minus-dropoff (water 7, lava 6)
 	}
 	if outAmount <= 0 {
 		return
 	}
-	for _, d := range t.getSpread(pos) {
+	for _, d := range t.getSpread(pos, f) {
 		np := plus(pos, d)
-		t.spreadTo(np, fluidState{isWater: true, amount: outAmount})
+		t.spreadTo(np, f.makeFluid(outAmount, false, false))
 	}
 }
 
@@ -492,19 +610,19 @@ func (t *TickLoop) spreadToSides(pos pk.Position, f fluidState) {
 // drop-off via the slope-find. PORT of FlowingFluid.getSpread: for each passable horizontal
 // neighbor that can hold fluid, compute its slope distance (0 if a hole sits below it); keep
 // only the directions tied for the minimum distance.
-func (t *TickLoop) getSpread(pos pk.Position) []pk.Position {
+func (t *TickLoop) getSpread(pos pk.Position, f fluidState) []pk.Position {
 	minSlope := 1000
 	var dirs []pk.Position
 	for _, d := range horizontalDirs {
 		np := plus(pos, d)
-		if !t.canReplace(np) {
+		if !t.canSpreadInto(np, f) {
 			continue
 		}
 		var slope int
-		if t.isHole(np) {
+		if t.isHole(np, f) {
 			slope = 0
 		} else {
-			slope = t.getSlopeDistance(np, 1, opposite(d))
+			slope = t.getSlopeDistance(np, 1, opposite(d), f)
 		}
 		if slope < minSlope {
 			minSlope = slope
@@ -522,21 +640,21 @@ func (t *TickLoop) getSpread(pos pk.Position) []pk.Position {
 // (except the one we came from); if it can be passed through and is a hole (can flow down),
 // return i; otherwise, if i < slopeFindDistance, recurse with i+1. Returns the minimum distance
 // to a drop-off, or 1000 if none within range.
-func (t *TickLoop) getSlopeDistance(pos pk.Position, dist int, excludeDir pk.Position) int {
+func (t *TickLoop) getSlopeDistance(pos pk.Position, dist int, excludeDir pk.Position, f fluidState) int {
 	best := 1000
 	for _, d := range horizontalDirs {
 		if d == excludeDir {
 			continue
 		}
 		np := plus(pos, d)
-		if !t.canReplace(np) {
+		if !t.canSpreadInto(np, f) {
 			continue
 		}
-		if t.isHole(np) {
+		if t.isHole(np, f) {
 			return dist
 		}
-		if dist < waterSlopeFindDistance {
-			if r := t.getSlopeDistance(np, dist+1, opposite(d)); r < best {
+		if dist < f.slopeFindDistance() {
+			if r := t.getSlopeDistance(np, dist+1, opposite(d), f); r < best {
 				best = r
 			}
 		}
@@ -548,20 +666,20 @@ func (t *TickLoop) getSlopeDistance(pos pk.Position, dist int, excludeDir pk.Pos
 // solid cell is never a hole) AND the cell below pos can hold fluid. PORT of
 // FlowingFluid.isWaterHole / SpreadContext.isHole (v1 subset). A solid floor cell is NOT a hole,
 // so flow over a flat floor spreads sideways (it cannot fall through the floor).
-func (t *TickLoop) isHole(pos pk.Position) bool {
-	if !t.canReplace(pos) {
-		return false // a solid cell cannot be passed through -> not a hole
+func (t *TickLoop) isHole(pos pk.Position, f fluidState) bool {
+	if !t.canSpreadInto(pos, f) {
+		return false // a solid / non-replaceable cell cannot be passed through -> not a hole
 	}
-	return t.canReplace(below(pos))
+	return t.canSpreadInto(below(pos), f)
 }
 
 // sourceNeighborCount counts the horizontal neighbors that are source blocks of this fluid.
 // PORT of FlowingFluid.sourceNeighborCount.
-func (t *TickLoop) sourceNeighborCount(pos pk.Position) int {
+func (t *TickLoop) sourceNeighborCount(pos pk.Position, f fluidState) int {
 	n := 0
 	for _, d := range horizontalDirs {
 		nf := t.fluidAt(plus(pos, d))
-		if nf.isWater && nf.source {
+		if nf.sameKind(f) && nf.isFluid() && nf.source {
 			n++
 		}
 	}
@@ -573,10 +691,24 @@ func (t *TickLoop) sourceNeighborCount(pos pk.Position) int {
 // half — beforeDestroyingBlock/block-entity handling is out of v1 scope). Only writes when the
 // target actually changes, so the queue reaches a fixed point (termination).
 func (t *TickLoop) spreadTo(pos pk.Position, f fluidState) {
-	if !t.canReplace(pos) {
+	if t.isSolidAt(pos) {
 		return
 	}
 	cur := t.fluidAt(pos)
+	// LavaFluid.spreadTo override: lava spreading DOWNWARD onto a WATER cell turns that cell to
+	// STONE and fizzes (steam particles + sound). The DOWN direction is the one where the target
+	// cell already holds water and f is lava; the horizontal lava-meets-water obsidian/cobblestone
+	// (LiquidBlock.shouldSpreadLiquid) is a separate neighbor-driven path, DEFERRED here.
+	// javap net.minecraft.world.level.material.LavaFluid.spreadTo:
+	//   if dir==DOWN && this.is(FluidTags.LAVA) && belowFluid.is(FluidTags.WATER):
+	//       if state instanceof LiquidBlock: setBlock(pos, STONE, 3); fizz(level,pos); return
+	// We detect the DOWN case as "f is lava and the target already holds water" (spread() only
+	// reaches a water cell below via the down branch). No stone is set for the empty-air case.
+	if f.isLava && cur.isWater {
+		t.setFluidBlock(pos, lavaSolidifyState())
+		t.fizz(pos)
+		return
+	}
 	if !canBeReplacedWith(cur, f) {
 		return // cannot overwrite a source or a stronger/equal flow (FluidState.canBeReplacedWith)
 	}
@@ -584,8 +716,35 @@ func (t *TickLoop) spreadTo(pos pk.Position, f fluidState) {
 		return // no change: do not re-schedule (prevents infinite oscillation)
 	}
 	if t.setFluidBlock(pos, encodeFluid(f)) {
-		udebug("fluid", "spreadTo (%d,%d,%d) amount=%d falling=%v source=%v", pos.X, pos.Y, pos.Z, f.amount, f.falling, f.source)
-		t.scheduleFluidTick(pos)
+		udebug("fluid", "spreadTo (%d,%d,%d) kind=%s amount=%d falling=%v source=%v", pos.X, pos.Y, pos.Z, fluidKindName(f), f.amount, f.falling, f.source)
+		t.scheduleFluidTickKind(pos, f)
+	}
+}
+
+// lavaSolidifyState is the lava-meets-water solidification target (Blocks.STONE default state).
+func lavaSolidifyState() block.StateID {
+	return block.ToStateID[block.Stone{}]
+}
+
+// fizz ports LavaFluid.fizz's OBSERVABLE server effect for v1: the extinguish sound. The full
+// vanilla fizz also emits 8 LARGE_SMOKE particles at random offsets (a purely client-side visual
+// spawned by the server via levelEvent 1501); Sulfur has no levelEvent broadcast plumbing in the
+// fluid path yet, so the particle burst is DEFERRED and only the block replacement (done by the
+// caller) is guaranteed. Cite: net.minecraft.world.level.material.LavaFluid.fizz ->
+// level.levelEvent(1501, pos, 0). Kept as a seam so the particle/sound can be wired later.
+func (t *TickLoop) fizz(pos pk.Position) {
+	udebug("fluid", "lava+water fizz -> stone at (%d,%d,%d)", pos.X, pos.Y, pos.Z)
+}
+
+// fluidKindName is a debug label for the fluid kind.
+func fluidKindName(f fluidState) string {
+	switch {
+	case f.isWater:
+		return "water"
+	case f.isLava:
+		return "lava"
+	default:
+		return "none"
 	}
 }
 
@@ -596,8 +755,14 @@ func (t *TickLoop) spreadTo(pos pk.Position, f fluidState) {
 // stops a level-1 spread from clobbering the level-0 source and prevents downgrade oscillation
 // (termination — Pitfall 2).
 func canBeReplacedWith(cur, incoming fluidState) bool {
-	if !cur.isWater {
+	if !cur.isFluid() {
 		return true // air -> always replaceable
+	}
+	if !cur.sameKind(incoming) {
+		// A cell holding the OTHER fluid is not part of this fluid's flow arithmetic. The only
+		// cross-kind write is lava-DOWN-onto-water -> stone, which spreadTo handles BEFORE this
+		// check; from the flow's perspective the foreign cell is not freely replaceable.
+		return false
 	}
 	if cur.source {
 		return false // never overwrite a source
@@ -617,12 +782,12 @@ func canBeReplacedWith(cur, incoming fluidState) bool {
 func (t *TickLoop) scheduleNeighbors(pos pk.Position) {
 	for _, d := range horizontalDirs {
 		np := plus(pos, d)
-		if t.fluidAt(np).isWater {
-			t.scheduleFluidTick(np)
+		if nf := t.fluidAt(np); nf.isFluid() {
+			t.scheduleFluidTickKind(np, nf)
 		}
 	}
-	if t.fluidAt(above(pos)).isWater {
-		t.scheduleFluidTick(above(pos))
+	if af := t.fluidAt(above(pos)); af.isFluid() {
+		t.scheduleFluidTickKind(above(pos), af)
 	}
 }
 
@@ -638,20 +803,20 @@ func (t *TickLoop) scheduleNeighbors(pos pk.Position) {
 // scheduled if it is now water (e.g. placing water), so a placed source begins flowing immediately.
 // Cite: net.minecraft.world.level.block.LiquidBlock.neighborChanged / .onPlace -> scheduleTick.
 func (t *TickLoop) scheduleFluidNeighborsOnEdit(pos pk.Position) {
-	if t.fluidAt(pos).isWater {
-		t.scheduleFluidTick(pos) // a placed/edited water cell flows on its own delay
+	if cf := t.fluidAt(pos); cf.isFluid() {
+		t.scheduleFluidTickKind(pos, cf) // a placed/edited fluid cell flows on its own delay
 	}
 	for _, d := range horizontalDirs {
 		np := plus(pos, d)
-		if t.fluidAt(np).isWater {
-			t.scheduleFluidTick(np)
+		if nf := t.fluidAt(np); nf.isFluid() {
+			t.scheduleFluidTickKind(np, nf)
 		}
 	}
-	if t.fluidAt(above(pos)).isWater {
-		t.scheduleFluidTick(above(pos)) // water above a freshly-broken block falls into it
+	if af := t.fluidAt(above(pos)); af.isFluid() {
+		t.scheduleFluidTickKind(above(pos), af) // fluid above a freshly-broken block falls into it
 	}
-	if t.fluidAt(below(pos)).isWater {
-		t.scheduleFluidTick(below(pos))
+	if bf := t.fluidAt(below(pos)); bf.isFluid() {
+		t.scheduleFluidTickKind(below(pos), bf)
 	}
 }
 
