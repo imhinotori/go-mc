@@ -201,11 +201,20 @@ func (t *TickLoop) handleBlockBreakAction(p *tickPlayer, pos pk.Position, action
 		return
 	}
 
-	// Pre-check 3 — spawn-protection / mayInteract / blockActionRestricted: v1 has no spawn protection,
-	// no per-region interaction rules, and no game-mode block restriction beyond creative (handled
-	// below), so these are a faithful CITED PASS (always allowed). Structured to become real region/
-	// permission checks later; cite ServerPlayerGameMode.handleBlockBreakAction (isUnderSpawnProtection
-	// / ServerLevel.mayInteract / ServerPlayer.blockActionRestricted).
+	// Pre-check 3 — spawn-protection / mayInteract: v1 has no spawn protection and no per-region
+	// interaction rules, so those are a faithful CITED PASS (always allowed). Structured to become real
+	// region checks later; cite ServerPlayerGameMode.handleBlockBreakAction (isUnderSpawnProtection /
+	// ServerLevel.mayInteract).
+	//
+	// blockActionRestricted (F-G2): a spectator (or an adventure player without item break permissions —
+	// unported in v1, so all adventure) cannot break blocks. Vanilla's ServerPlayerGameMode
+	// .handleBlockBreakAction returns early (and re-asserts the block to the client) when
+	// blockActionRestricted is true. Re-send the true block state so the client's predicted break rolls
+	// back, then return.
+	if blockActionRestricted(p) {
+		t.broadcastBlockUpdate(pos, t.digBlockState(p, pos))
+		return
+	}
 
 	switch action {
 	case actionStartDestroyBlock:

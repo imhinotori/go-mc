@@ -297,6 +297,15 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 	// (2) ItemStack.isEmpty() short-circuit + Block.byItem resolution. An EMPTY hand (or a
 	// non-block item like a tool) resolves to no block -> nothing is placed. THIS fixes the
 	// empty-hand-stone bug (the old code hardcoded stone regardless of the held item).
+	// blockActionRestricted (F-G2): a spectator (or an adventure player without item place permissions —
+	// unported in v1, so all adventure) cannot PLACE blocks. The block INTERACTION above (chest open)
+	// already ran — a spectator may still view a container — but the placement path is gated here, exactly
+	// as vanilla's BlockItem.place fails for a restricted game mode. The sequence ack already fired at the
+	// top, so the client rolls its predicted block back. Cite Player.blockActionRestricted.
+	if blockActionRestricted(p) {
+		return
+	}
+
 	placeState, ok := blockStateForItem(held)
 	if !ok {
 		return // empty hand / non-block item: PASS, no placement

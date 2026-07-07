@@ -97,6 +97,11 @@ func (t *TickLoop) handleAttack(p *tickPlayer, pkt pk.Packet) {
 	if err := pkt.Scan(&targetID); err != nil {
 		return // malformed/short payload: no-op, never panic (defensive decode)
 	}
+	// A spectator cannot attack (ServerGamePacketListenerImpl.handleInteract isSpectator early-return).
+	// Adventure MAY attack, so this gates on spectator only, not blockActionRestricted. Cite F-G2.
+	if isSpectatorMode(p) {
+		return
+	}
 
 	victim := t.lookupPlayerByEntityID(int32(targetID))
 	if victim == nil {
