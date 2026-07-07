@@ -348,6 +348,19 @@ type Entity struct {
 	ghastWantedX, ghastWantedY, ghastWantedZ float64
 	ghastHasWanted                           bool
 	ghastFloatDuration                       int32
+	// --- HOSTILE GHAST (net.minecraft.world.entity.monster.Ghast) ----------------------------------
+	//
+	// Tick-owned plain values, set/read ONLY for a hostile Ghast (ghastAiStep gates on typ ==
+	// entity.Ghast.ID). The hostile Ghast REUSES the ghastWantedX/Y/Z + ghastHasWanted + ghastFloat
+	// Duration fields above for its GhastMoveControl + RandomFloatAroundGoal (an entity is either a happy
+	// ghast OR a hostile ghast, never both, so the shared fields never collide). isGhast marks the entity;
+	// ghastChargeTime mirrors GhastShootFireballGoal.chargeTime (0..20 charge, then -40 cooldown);
+	// ghastCharging mirrors DATA_IS_CHARGING (set to chargeTime > 10). ghastExplosionPower mirrors
+	// Ghast.explosionPower (default 1) -- the LargeFireball's blast radius. Zero for every non-ghast entity.
+	isGhast             bool
+	ghastChargeTime     int32
+	ghastCharging       bool
+	ghastExplosionPower int
 	// brain is the ported net.minecraft.world.entity.ai.Brain (brain.go). It is NON-NIL only for a mob
 	// that runs the behavior subsystem — currently the BABY HappyGhast (HappyGhast.customServerAiStep
 	// ticks the brain ONLY when isBaby()); every other entity leaves it nil (a nil brain is never ticked,

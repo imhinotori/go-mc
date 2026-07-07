@@ -681,6 +681,14 @@ func (t *TickLoop) tickAI() {
 		if e.typ == entity.HappyGhast.ID {
 			t.happyGhastAiStep(e)
 		}
+		// GHAST (Task): the hostile Ghast tick + goals (RandomFloatAroundGoal fly-to + GhastMoveControl
+		// kick + GhastLookGoal face + GhastShootFireballGoal charge/shoot). Per-type-gated like the
+		// happy ghast, AFTER serverAiStep (the empty goalSelector no-op). The 0.91 flying drag + no-gravity
+		// integration land in tickPhysics (also ghast-gated). ADDITIVE + ghast-gated (zero cost / zero RNG
+		// for every non-ghast -- the pig oracle stream is untouched).
+		if e.typ == entity.Ghast.ID {
+			t.ghastAiStep(e)
+		}
 		// The Fox character-layer per-tick extras (Fox.tick + Fox.aiStep server branch): the crouch/
 		// interested animation lerp, ++ticksSinceEaten, the wake/sit-in-water/target-lost state clears,
 		// and the sleep immobility (jump+horizontal-velocity zero). Per-type-gated like the creeper/chicken,
@@ -915,8 +923,8 @@ func (t *TickLoop) tickPhysics() {
 			continue
 		}
 
-		if happyGhastIsFlyer(e) {
-			// happy_ghast (Task): the travelFlying AIR branch (HappyGhast.travel -> LivingEntity.travelFlying).
+		if happyGhastIsFlyer(e) || ghastIsFlyer(e) {
+			// happy_ghast + GHAST (Task): the travelFlying AIR branch (HappyGhast.travel -> LivingEntity.travelFlying).
 			// There is NO gravity for a hovering ghast; deltaMovement is scaled by 0.91 on ALL three axes
 			// (deltaMovement *= 0.91f) so the moveControl kick (happyGhastAiStep) drifts and settles. The
 			// ghast keeps its Y (does not sink). Cite HappyGhast.travel / LivingEntity.travelFlying (air

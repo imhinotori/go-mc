@@ -338,6 +338,21 @@ func happyGhastSupplier() *Supplier {
 		Build()
 }
 
+// ghastSupplier is the port of Ghast.createAttributes(): Mob.createMobAttributes() (NOT Monster --
+// the hostile Ghast has NO ATTACK_DAMAGE; it attacks via a fireball projectile) then .add(MAX_HEALTH
+// 10.0).add(FOLLOW_RANGE 100.0).add(CAMERA_DISTANCE 8.0).add(FLYING_SPEED 0.06). Cite
+// net.minecraft.world.entity.monster.Ghast.createAttributes (javap: createMobAttributes, ldc2_w 10.0d
+// MAX_HEALTH, 100.0d FOLLOW_RANGE, 8.0d CAMERA_DISTANCE, 0.06d FLYING_SPEED). The FOLLOW_RANGE 100.0
+// override (over the createMobAttributes 16.0) is the ghast's long acquisition range.
+func ghastSupplier() *Supplier {
+	return createMobAttributes().
+		AddValue(MaxHealth, 10.0).
+		AddValue(FollowRange, 100.0).
+		AddValue(CameraDistance, 8.0).
+		AddValue(FlyingSpeed, 0.06).
+		Build()
+}
+
 // endermanSupplier is EnderMan's attribute supplier. EnderMan.createAttributes = Monster
 // .createMonsterAttributes().add(MAX_HEALTH 40).add(MOVEMENT_SPEED 0.3).add(ATTACK_DAMAGE 7)
 // .add(FOLLOW_RANGE 64).add(STEP_HEIGHT 1.0). Cite EnderMan.createAttributes
@@ -518,6 +533,11 @@ var suppliers = map[string]*Supplier{
 	// happy_ghast (Task): HappyGhast is a flying Animal; happyGhastSupplier is a 1:1 copy of
 	// HappyGhast.createAttributes (FLYING_SPEED + CAMERA_DISTANCE + the 16.0 tempt/follow range).
 	"happy_ghast": happyGhastSupplier(),
+	// GHAST (Task): the hostile flying Ghast (Ghast.createAttributes: Mob.createMobAttributes +
+	// MAX_HEALTH 10.0 + FOLLOW_RANGE 100.0 + CAMERA_DISTANCE 8.0 + FLYING_SPEED 0.06). Keyed by its
+	// registry name so NewMapForEntity resolves it (the ghast MobCategory is monster, so the living
+	// fallback would also apply -- but the dedicated supplier gives the faithful 10/100 values).
+	"ghast": ghastSupplier(),
 	// MOB-PREY (Task #9): the 3 prey mobs. Endermite (Monster), Turtle + Ocelot (Animal), each a 1:1 jar
 	// copy of its createAttributes (verified bytecode this session).
 	"endermite": endermiteSupplier(),
