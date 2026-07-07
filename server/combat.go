@@ -273,6 +273,17 @@ func (t *TickLoop) applyDamage(p *tickPlayer, src damageSource, amount float32) 
 		amount = maxFloat32
 	}
 
+	// SHIELD / minecraft:blocks_attacks blocking (LivingEntity.hurtServer offsets 69-101, BEFORE the
+	// i-frame gate at offset 184): ItemStack useItem = getUseItem(); float f6 = applyItemBlocking(level,
+	// source, amount); amount -= f6;. applyItemBlocking reduces the incoming damage per the shield
+	// damage_reductions curve when the player is actively blocking (using a blocks_attacks item past its
+	// block delay) and the hit is from the front and not #bypasses_shield. It also damages the shield and
+	// starts the axe-disable cooldown. Placed here so the surviving amount is what the i-frame gate then
+	// rate-limits, exactly as vanilla. Cite LivingEntity.hurtServer (applyItemBlocking placement).
+	if blocked := t.applyItemBlocking(p, src, amount); blocked > 0.0 {
+		amount -= blocked
+	}
+
 	// The invulnerableTime i-frame gate (bytecode 184–272): the anti-spam rate limit. While the
 	// grace window is in its upper half ((float) invulnerableTime > 10.0F) and the source does not
 	// bypass the cooldown (v1 has no BYPASSES_COOLDOWN damage types — always false), a new hit only
