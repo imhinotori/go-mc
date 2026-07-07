@@ -30,6 +30,7 @@ import (
 const (
 	actionStartDestroyBlock = 0 // survival dig BEGIN (button pressed) — NOT a break; no-op for v1
 	actionAbortDestroyBlock = 1 // dig cancelled — no-op for v1
+	actionReleaseUseItem    = 5 // RELEASE_USE_ITEM: the bow/crossbow release (Item.releaseUsing) trigger
 	actionStopDestroyBlock  = 2 // survival dig FINISH — the break trigger
 )
 
@@ -104,6 +105,12 @@ func (t *TickLoop) handlePlayerAction(p *tickPlayer, pkt pk.Packet) {
 	switch int(action) {
 	case actionStartDestroyBlock, actionAbortDestroyBlock, actionStopDestroyBlock:
 		t.handleBlockBreakAction(p, pos, int(action), int32(sequence))
+	case actionReleaseUseItem:
+		// RELEASE_USE_ITEM: the player let go of a drawn bow/crossbow (or any use-item). LivingEntity
+		// .releaseUsingItem -> Item.releaseUsing fires the bow arrow / loads-fires the crossbow bolt; for a
+		// non-charge item it clears the use state. pos/direction are unused for a release (vanilla ignores
+		// them for RELEASE_USE_ITEM). CITE ServerGamePacketListenerImpl.handlePlayerAction (RELEASE_USE_ITEM).
+		t.releaseUsingItem(p)
 	}
 }
 

@@ -1168,6 +1168,11 @@ type tickPlayer struct {
 	// use began on): 0 == MAIN_HAND, 1 == OFF_HAND. completeUsingItem writes the shrunk stack back to
 	// this hand. Meaningful only while useItem is non-empty.
 	useItemHand int32
+
+	// crossbowCharged is the player-side model of the CrossbowItem CHARGED_PROJECTILES component: true once a
+	// full crossbow draw loaded a bolt (CrossbowItem.onUseTick tryLoadProjectiles). The next CrossbowItem.use
+	// fires the loaded bolt and clears this. Tick-owned. Cite CrossbowItem (DataComponents.CHARGED_PROJECTILES).
+	crossbowCharged bool
 }
 
 // Health constants for a fresh survival player (the ENT-05 defaults). maxHealth is the vanilla

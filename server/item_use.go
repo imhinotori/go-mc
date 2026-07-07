@@ -242,6 +242,15 @@ func (t *TickLoop) useItemInHand(p *tickPlayer, hand int32) {
 		return
 	}
 
+	// BOW / CROSSBOW (BowItem.use / CrossbowItem.use): a right-click with a bow/crossbow begins the draw
+	// (startUsingItem), or -- for a charged crossbow -- fires the loaded bolt immediately. The release (the
+	// RELEASE_USE_ITEM player action) fires the bow arrow. Runs before the food gate (a bow is not food); a
+	// non-bow item returns false and falls through. Bow/crossbow-gated (a cheap id compare, no RNG draw -- the
+	// pig oracle is unperturbed). CITE BowItem.use / CrossbowItem.use. Body in bow.go.
+	if t.tryStartBowUse(p, inv, held, hand) {
+		return
+	}
+
 	// FOOD gate (v1): resolve the held item's FOOD/CONSUMABLE data. Non-food => not eatable => no-op
 	// (cite: other ItemStack.use behaviors out of v1 scope).
 	f, ok := itemFood(int32(held.ItemID))
@@ -429,6 +438,9 @@ func (t *TickLoop) stopUsingItem(p *tickPlayer) {
 // reduces to clearing the use state — identical to stopUsingItem in v1 (cite: no charge-release items
 // in v1 scope). Tick-owned.
 func (t *TickLoop) releaseUsingItem(p *tickPlayer) {
+	if t.releaseBowOrCrossbow(p) {
+		return // the bow/crossbow handled the release (fired/loaded + cleared the use state)
+	}
 	t.stopUsingItem(p)
 }
 

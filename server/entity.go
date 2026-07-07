@@ -205,6 +205,12 @@ type Entity struct {
 	// A grounded arrow skips flight physics and counts toward despawn (tickDespawn).
 	arrowInGround bool
 
+	// arrowCrit is AbstractArrow.isCritArrow (setCritArrow): set true by a full-draw player bow shot
+	// (BowItem.releaseUsing power==1.0f -> setCritArrow(true)). A crit arrow deals extra damage in vanilla
+	// and shows the crit particle trail. The extra-damage read is a cited follow-up (onHitEntity currently
+	// deals the base damage); the flag is carried for that read + the client visual. Cite AbstractArrow.setCritArrow.
+	arrowCrit bool
+
 	// spawnData is the ClientboundAddEntity "data" field (object-specific). For an arrow vanilla sets it to
 	// ownerId+1 (the client owner link for crit visuals); 0 for a plain mob. Set at spawn.
 	spawnData int32
