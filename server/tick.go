@@ -907,6 +907,21 @@ type tickPlayer struct {
 	// effect slots in with no formula change. Tick-owned.
 	absorptionAmount float32
 
+	// lastEquipment is net.minecraft.world.entity.LivingEntity.lastEquipmentItems (the EnumMap
+	// seeded with EMPTY per slot) restricted to the six player EquipmentSlots (MAINHAND, OFFHAND,
+	// FEET, LEGS, CHEST, HEAD — playerEquipmentSlots order/indices). detectEquipmentUpdates
+	// (equipment_attributes.go) diffs the live inventory against it every tick and swaps item
+	// attribute modifiers on a change; the zero value (all-EMPTY) is exactly vanilla's fresh map,
+	// so a joining player's pre-loaded armor applies on the first tick. Tick-owned (TICK-05).
+	lastEquipment [playerEquipmentSlotCount]component.SlotData
+
+	// lastItemInMainHand is net.minecraft.world.entity.player.Player.lastItemInMainHand: the
+	// mainhand stack as of the previous tick, used by the Player.tick swap check to reset the
+	// attack-strength ticker when the held ITEM changes (playerTickHandSwap,
+	// equipment_attributes.go). Zero value == ItemStack.EMPTY (the vanilla field default).
+	// Tick-owned (TICK-05).
+	lastItemInMainHand component.SlotData
+
 	// --- Experience (WR-06, the XP-orb pickup path). ALL tick-owned (TICK-05): mutated only on the
 	// tick goroutine by the orb pickup path (playerTouchOrb -> giveExperiencePoints), so they are
 	// -race clean by the same single-owner discipline as the rest of tickPlayer. They mirror the

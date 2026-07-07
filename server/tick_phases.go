@@ -317,6 +317,15 @@ func (t *TickLoop) tickEntities() {
 	// minimal so the sibling Wave edits (subtick.go fluid, block_drop.go drops) do not conflict.
 	t.tickPlayerCombat()
 
+	// E-1 ITEM ATTRIBUTE MODIFIERS: the per-tick equipment scan — LivingEntity.tick's
+	// detectEquipmentUpdates (a changed held/worn item swaps its attribute modifiers on the player
+	// holder: sword ATTACK_DAMAGE/ATTACK_SPEED, armor ARMOR/ARMOR_TOUGHNESS/KNOCKBACK_RESISTANCE)
+	// plus the Player.tick mainhand-swap cooldown reset. ADDITIVE, sibling of tickPlayerCombat and
+	// placed AFTER it because vanilla increments attackStrengthTicker BEFORE the swap check (a
+	// swap-reset must leave the ticker at 0 at tick end, not 1). Its body lives in
+	// equipment_attributes.go; untraced like tickPlayerCombat (TestTickPhaseOrder unaffected).
+	t.tickPlayerEquipment()
+
 	// Plan 17-14 ITEM-PICKUP: the dropped-item lifecycle — ItemEntity.tick (0.04 gravity, age,
 	// 6000-tick despawn) for every ground item, then the Player.aiStep item-collection scan that
 	// picks up nearby pickable items (ItemEntity.playerTouch + Inventory.add + the take-item
