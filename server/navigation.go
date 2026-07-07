@@ -76,6 +76,14 @@ const (
 	// in the per-node budget (`distance / getSpeed * 20.0` — ldc2_w 20.0 dmul).
 	navTimeoutMultiplier = 3.0
 	navTimeoutSpeedScale = 20.0
+
+	// navAirFlyingSpeed is LivingEntity.getFlyingSpeed() for a non-ridden mob (0.02f): the moveRelative
+	// speed travelInAir uses when the mob is AIRBORNE (off the ground mid step-up). On the ground the
+	// getFrictionInfluencedSpeed getSpeed() branch is used instead, so this only shapes the tiny air
+	// control during a ledge hop. Cited-constant standing in for getFlyingSpeed() until it is a real
+	// per-entity read.
+	//	[VERIFIED javap LivingEntity.getFlyingSpeed: non-Player controller -> ldc 0.02f.]
+	navAirFlyingSpeed = float32(0.02)
 )
 
 // groundNavigation is the per-mob path follower (ported GroundPathNavigation). It holds the
@@ -471,55 +479,37 @@ func (n *groundNavigation) tick(t *TickLoop, e *Entity) {
 		e.headYaw = e.yaw
 	}
 
-	// MOVEMENT = the ported LivingEntity.travel ground-physics (momentum + friction), NOT a fixed
-	// kinematic step. Vanilla accelerates the mob ALONG its yaw each tick and lets block+air friction
-	// build to a terminal velocity; a fixed step toward the waypoint (independent of the yaw and with no
-	// momentum) is what made the mob feel "raro" (lunge on start, slide, moonwalk). The faithful chain:
+	// MOVEMENT = the ported LivingEntity.travelInAir (moveRelative -> move -> gravity -> drag), the
+	// SINGLE per-tick travel for a walking mob. Pre-fix, this file added the friction-scaled forward
+	// input to velocity, called moveEntity, then multiplied by 0.546 -- and tickPhysics ran gravity +
+	// drag + moveEntity AGAIN the same tick (audit B-A2: move + friction applied TWICE), with the wrong
+	// order (drag before move, audit B-A1). Routing through t.travelInAir does moveRelative(input) ->
+	// move -> gravity -> drag ONCE in the exact vanilla order, and sets e.traveledThisTick so tickPhysics
+	// skips its redundant second pass for this mob. The move + gravity + drag are all inside travelInAir.
 	//
-	//   frictionSpeed = getSpeed × (0.216 / blockFriction³)          [getFrictionInfluencedSpeed, ground]
-	//   deltaMovement += getInputVector(forward=(0,0,1), frictionSpeed, yaw)   [moveRelative]
-	//   move(deltaMovement)                                          [our moveEntity — swept collision]
-	//   deltaMovement.xz ×= blockFriction × airDrag(0.91)            [travelInAir tail]
-	//
-	// getSpeed = speedModifier × MOVEMENT_SPEED (MoveControl.setSpeed), carried in n.speed. blockFriction
-	// for a normal block is 0.6 → frictionSpeed = getSpeed × (0.216/0.216) = getSpeed, and the terminal
-	// horizontal speed is getSpeed × 0.546/(1−0.546) ≈ getSpeed × 1.203 (a zombie ≈ 0.277 b/tick).
-	//	[VERIFIED CFR LivingEntity.travelInAir/handleRelativeFrictionAndCalculateMovement/getFrictionInfluencedSpeed;
-	//	 Entity.moveRelative/getInputVector: delta = forward.scale(speed) rotated by yaw (x·cos−z·sin, z·cos+x·sin).]
-	const blockFriction = 0.6
-	const airDrag = 0.91
-	const friction = blockFriction * airDrag // 0.546
-	frictionSpeed := n.speed * (0.21600002 / (blockFriction * blockFriction * blockFriction))
+	// Input is the walking-forward vector (0, 0, 1); travelInAir applies getFrictionInfluencedSpeed(f3)
+	// internally (getSpeed = n.speed carried from MoveControl.setSpeed = speedModifier x MOVEMENT_SPEED),
+	// so the frictionSpeed scaling and yaw rotation now live in the 1:1 physics port, not here.
+	//	[VERIFIED javap LivingEntity.travelInAir / handleRelativeFrictionAndCalculateMovement /
+	//	 getFrictionInfluencedSpeed; Entity.moveRelative/getInputVector -- see physics.go travelInAir.]
 
-	// getInputVector(forward=(0,0,1) scaled by frictionSpeed, rotated by yaw). With input.z=1: the rotated
-	// delta is (−sin·s, +cos·s) — i.e. frictionSpeed along the FACING. (input.x=0, so the x·cos/z·sin form
-	// reduces to this.) Accumulate onto the horizontal velocity (deltaMovement += delta).
-	yawRad := float64(e.yaw) * math.Pi / 180.0
-	sinY := math.Sin(yawRad)
-	cosY := math.Cos(yawRad)
-	e.vx += -sinY * frictionSpeed
-	e.vz += cosY * frictionSpeed
-
-	// Jump when the next node is one block UP: a small upward Δ lifts the mob onto the ledge (gravity
-	// in tickPhysics settles it). Kept as a direct Δy on the move — the vertical momentum model stays
-	// with the existing physics. ORTHOGONAL to the collision engine's auto step-up (collision.go):
-	// step-up covers obstacles up to maxUpStep (0.6 — slabs/stairs/snow layers) exactly as vanilla
-	// Entity.collide does, while a FULL 1-block ledge is what vanilla clears by JUMPING (JumpControl);
-	// this Δy is that jump's emulation, so it stays until the real jump impulse replaces it.
-	var stepY float64
+	// Jump when the next node is one block UP: fold a small upward velocity so travelInAir's move lifts
+	// the mob onto the ledge (gravity in the same travelInAir settles it). ORTHOGONAL to the collision
+	// engine's auto step-up (collision.go): step-up covers obstacles up to maxUpStep (0.6 -- slabs/stairs/
+	// snow layers) exactly as vanilla Entity.collide does, while a FULL 1-block ledge is what vanilla
+	// clears by JUMPING (JumpControl); this vy nudge is that jump's emulation until the real jump impulse
+	// replaces it. Applied to e.vy BEFORE travelInAir so the single move consumes it.
 	if next.y > floorI(e.y) {
-		stepY = float64(next.y) - e.y
+		if stepY := float64(next.y) - e.y; stepY > e.vy {
+			e.vy = stepY
+		}
 	}
 
-	// move(deltaMovement): step the mob by its accumulated horizontal velocity through the EXISTING
-	// moveEntity (per-axis swept collision + onGround + re-bucket). Horizontal only here; gravity is
-	// tickPhysics (Pattern 3).
-	t.moveEntity(e, e.vx, stepY, e.vz)
-
-	// travelInAir tail: apply friction so the velocity decays toward the terminal speed instead of
-	// growing unbounded. (Vertical friction is handled by the physics/gravity pass.)
-	e.vx *= friction
-	e.vz *= friction
+	// travelInAir(input=(0,0,1), speed=n.speed, flyingSpeed=0.02): the ONE ordered travel. It reads e.yaw
+	// (turned toward the node above), does moveRelative + the swept-collision move + gravity + drag, and
+	// marks traveledThisTick so tickPhysics does not travel this mob a second time.
+	t.travelInAir(e, 0, 0, 1, float32(n.speed), navAirFlyingSpeed)
+	e.traveledThisTick = true
 }
 
 // doStuckDetection ports net.minecraft.world.entity.ai.navigation.PathNavigation.doStuckDetection(Vec3)

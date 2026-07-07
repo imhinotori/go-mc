@@ -839,12 +839,38 @@ func (t *TickLoop) tickPhysics() {
 		// Movement (fluid_travel.go, javap-cited); mobInWater is the Phase-30 predicate (fluid_physics
 		// .go). A DRY mob takes the unchanged air branch below. The dead-mob corpse is already frozen
 		// (the `if e.dead { continue }` guard above), so a corpse never swims — the live-mob gate holds.
+		// B-A2: a NAVIGATING mob already ran its full per-tick travel (moveRelative -> move -> gravity ->
+		// drag) inside navigation.followThePath during serverAiStep (tickAI), which set traveledThisTick.
+		// Do NOT travel it a second time here -- that was the double move + double friction the audit
+		// flagged. Clear the flag and skip straight to this mob's post-move upkeep is unnecessary because
+		// navigation already ran the move + gravity + drag + (its own) collision; the fall-damage/fluid
+		// upkeep for a navigating land mob is a no-op on flat ground, so we simply skip to the next mob.
+		if e.traveledThisTick {
+			e.traveledThisTick = false
+			continue
+		}
+
 		if mobWaterForJump {
 			// Water branch: travelInWater vertical (0.8 drag + 0.005 gravity) replaces gravity +
 			// air drag + the dry horizontal friction (the 0.8 horizontal water drag is applied
 			// inside travelInWaterVertical). FloatGoal's +0.04 impulse (applied in tickAI, before
 			// this) survives the gentle 0.005 pull, so the mob bobs at the surface instead of sinking.
 			travelInWaterVertical(e)
+			// Shared fluid-vertical move tail (water + lava). VANILLA ORDER: Entity.move() integrates the
+			// motion AND, at its tail, calls checkFallDamage with the ACTUAL resolved vertical displacement
+			// -- NOT the pre-move velocity intent. So: capture y, move, then accumulate from the REAL
+			// displacement.
+			yBefore := e.y
+			t.moveEntity(e, e.vx, e.vy, e.vz)
+			// B-A9 (jumpOutOfFluid): a mob pressed against a wall while in water/lava hops out at the edge.
+			if mobWaterForJump || mobLavaForJump {
+				t.jumpOutOfFluid(e, oldY)
+			}
+			actualDeltaY := e.y - yBefore
+			mobWet := t.mobInWater(e)
+			t.accumulateMobFallDistance(e, actualDeltaY, mobWet)
+			t.landMobFallDamage(e, mobWet)
+			continue
 		} else if mobLavaForJump {
 			// B-A5 (travelInLava): a mob whose AABB is in lava (and NOT in water -- vanilla
 			// travelInFluid dispatches to travelInWater first, else travelInLava, so water wins)
@@ -852,88 +878,55 @@ func (t *TickLoop) tickPhysics() {
 			// 0.5 drag + the reduced /16 gravity (shallow) and the outer -baseGravity/4 == -0.02
 			// lava sink. Without this a mob in lava used dry-land physics (0.08 gravity, 0.98 air
 			// drag). travelInLavaVertical mirrors travelInWaterVertical's architecture (velocity ops
-			// only; the shared moveEntity + jumpOutOfFluid at the loop tail handle the rest). A DRY
+			// only; the shared moveEntity + jumpOutOfFluid tail below handle the rest). A DRY
 			// mob never enters this branch, so the pig oracle stays byte-identical. Cite
 			// LivingEntity.travelInLava / getFluidFallingAdjustedMovement / isInShallowFluid.
 			t.travelInLavaVertical(e)
-		} else if happyGhastIsFlyer(e) {
-			// happy_ghast (Task): the travelFlying AIR branch (HappyGhast.travel → LivingEntity.travelFlying).
+			yBefore := e.y
+			t.moveEntity(e, e.vx, e.vy, e.vz)
+			if mobWaterForJump || mobLavaForJump {
+				t.jumpOutOfFluid(e, oldY)
+			}
+			actualDeltaY := e.y - yBefore
+			mobWet := t.mobInWater(e)
+			t.accumulateMobFallDistance(e, actualDeltaY, mobWet)
+			t.landMobFallDamage(e, mobWet)
+			continue
+		}
+
+		if happyGhastIsFlyer(e) {
+			// happy_ghast (Task): the travelFlying AIR branch (HappyGhast.travel -> LivingEntity.travelFlying).
 			// There is NO gravity for a hovering ghast; deltaMovement is scaled by 0.91 on ALL three axes
 			// (deltaMovement *= 0.91f) so the moveControl kick (happyGhastAiStep) drifts and settles. The
-			// ghast keeps its Y (does not sink) — this is the whole point of the mob. Cite HappyGhast.travel /
-			// LivingEntity.travelFlying (air branch: move(deltaMovement); deltaMovement *= 0.91f; no gravity).
+			// ghast keeps its Y (does not sink). Cite HappyGhast.travel / LivingEntity.travelFlying (air
+			// branch: move(deltaMovement); deltaMovement *= 0.91f; no gravity).
 			e.vx *= ghastFlyingDrag
 			e.vy *= ghastFlyingDrag
 			e.vz *= ghastFlyingDrag
-		} else {
-			// Dry (travelInAir) branch: accelerate downward, then air drag so vertical speed
-			// converges to a terminal velocity (06-RESEARCH A1 — tunable, wire-irrelevant constants).
-			//
-			// MOVEMENT EFFECTS (LivingEntity.travelInAir + getEffectiveGravity, javap-cited):
-			//   - LEVITATION: instead of subtracting gravity, drift UP:
-			//       d5 += (0.05 * (amplifier + 1) - deltaMovement.y) * 0.2
-			//     This REPLACES the gravity subtraction entirely (the `else` gravity branch in
-			//     travelInAir is only taken when the mob has NO levitation). CITE javap
-			//     LivingEntity.travelInAir: getEffect(LEVITATION) != null ? d5 += (0.05*(amp+1) -
-			//     vec.y)*0.2 : d5 -= getEffectiveGravity().
-			//   - SLOW_FALLING: gravity is reduced. getEffectiveGravity() = (deltaMovement.y <= 0 &&
-			//     hasEffect(SLOW_FALLING)) ? min(getGravity(), 0.01) : getGravity(). getGravity() is
-			//     the GRAVITY attribute (default gravityPerTick, 0.08). CITE javap
-			//     LivingEntity.getEffectiveGravity.
-			// A mob with NEITHER effect takes the IDENTICAL old path (grav then air drag), so the
-			// pig oracle (no effects) is byte-for-byte unperturbed.
-			if amp, ok := entityEffectAmplifier(e, effectLevitation); ok {
-				// travelInAir LEVITATION branch: upward drift overriding gravity.
-				e.vy += (0.05*float64(amp+1) - e.vy) * 0.2
-			} else {
-				// getEffectiveGravity(): SLOW_FALLING clamps gravity to 0.01 while falling.
-				grav := gravityPerTick // getGravity() == GRAVITY attribute default (0.08)
-				if e.vy <= 0 && entityHasEffect(e, effectSlowFalling) {
-					// getEffectiveGravity(): min(getGravity(), 0.01). Inline min (no math import).
-					if grav > 0.01 {
-						grav = 0.01
-					}
-				}
-				e.vy -= grav
-			}
-			e.vy *= airDrag
 
-			// Horizontal friction: a moving entity slows instead of sliding forever.
-			e.vx *= horizontalFriction
-			e.vz *= horizontalFriction
+			yBefore := e.y
+			t.moveEntity(e, e.vx, e.vy, e.vz)
+			actualDeltaY := e.y - yBefore
+			mobWet := t.mobInWater(e)
+			t.accumulateMobFallDistance(e, actualDeltaY, mobWet)
+			t.landMobFallDamage(e, mobWet)
+			continue
 		}
 
-		// LIVE-DEBUG B (mob fall damage). VANILLA ORDER: Entity.move() integrates the motion AND, at its
-		// tail, calls checkFallDamage(this.getY() - yBefore, onGround, ...) with the ACTUAL resolved
-		// vertical displacement — NOT the pre-move velocity intent. This distinction is load-bearing: a
-		// mob STANDING on the ground still has gravity pull vy to -0.08 each tick, but moveEntity clips
-		// that against the floor so the ACTUAL moved deltaY ≈ 0. Accumulating the pre-move intent (-0.08)
-		// instead added phantom fall distance every tick on flat ground (the "mobs on land taking
-		// constant fall damage" bug — fallDistance climbed 0.0784/tick from gravity*airDrag even at rest).
-		// So: capture y, move, then accumulate from the REAL displacement.
+		// DRY (travelInAir) branch: the 1:1 net.minecraft.world.entity.LivingEntity.travelInAir in the
+		// EXACT vanilla order -- moveRelative -> move -> gravity -> drag (B-A1). An IDLE mob (no active
+		// path, so navigation did not travel it) still needs its gravity + drag integrated, so travelInAir
+		// runs with a ZERO movement input (getInputVector returns the zero vector for lengthSqr < 1e-7, so
+		// speed is irrelevant here). travelInAir does the move + gravity + drag + the collision inside; the
+		// levitation / slow-falling / jump-boost hooks live in the physics port in their correct order
+		// slot, so a mob with NO effect is byte-identical to the old numbers -- only the ORDER changed.
+		// A mob with effects now applies them AFTER the move (vanilla), not before.
+		//	[VERIFIED javap LivingEntity.travelInAir / getEffectiveGravity -- see physics.go travelInAir.]
 		yBefore := e.y
-
-		// Integrate via the per-axis swept resolver (the anti-tunneling discipline). This
-		// also re-buckets through entities.move and updates onGround / zeroes blocked
-		// velocity components.
-		t.moveEntity(e, e.vx, e.vy, e.vz)
-
-		// B-A9 (jumpOutOfFluid, LivingEntity.jumpOutOfFluid): a mob pressed against a wall while in
-		// water/lava hops out at the edge. Vanilla calls this at the tail of travelInWater/
-		// travelInLava, AFTER the move (so horizontalCollision and getY are the settled values),
-		// with oldY captured before the move. It only fires when horizontalCollision is set AND the
-		// box moved up-and-forward is open air (mobIsFree: no solid, no liquid) -- an open-water mob
-		// or a dry mob never hops. Gated on the pre-move in-fluid flags so a dry mob does zero work.
-		// Cite LivingEntity.jumpOutOfFluid(oldY) -> setDeltaMovement(dm.x, 0.3, dm.z).
-		if mobWaterForJump || mobLavaForJump {
-			t.jumpOutOfFluid(e, oldY)
-		}
-
-		// Entity.checkFallDamage(actualDeltaY, onGround, ...) — run with the resolved displacement, the
-		// freshly-set onGround, and isInWater re-read at the SETTLED position (vanilla reads all three
-		// fresh here). actualDeltaY = e.y - yBefore: ~0 for a grounded mob (no phantom accumulation),
-		// negative for a real fall. `if (!isInWater && actualDeltaY<0) fallDistance -= (float)
-		// actualDeltaY; if (onGround) { if (fallDistance>0) causeFallDamage(...); resetFallDistance(); }`.
+		t.travelInAir(e, 0, 0, 0, 0, navAirFlyingSpeed)
+		// Entity.checkFallDamage(actualDeltaY, onGround, ...) -- run with the resolved displacement (the
+		// move inside travelInAir already updated e.y + onGround), the freshly-set onGround, and isInWater
+		// re-read at the SETTLED position. actualDeltaY ~ 0 for a grounded mob, negative for a real fall.
 		actualDeltaY := e.y - yBefore
 		mobWet := t.mobInWater(e)
 		t.accumulateMobFallDistance(e, actualDeltaY, mobWet)

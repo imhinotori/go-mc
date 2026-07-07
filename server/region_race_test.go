@@ -49,7 +49,12 @@ func newRegionizedRaceLoop(t *testing.T, radius, floorY int) *TickLoop {
 // owning region. Under -race (Task 4) this whole fan-out + barrier + cross-region read is clean.
 func TestRegionizedTickRace(t *testing.T) {
 	const floorY = 64
-	loop := newRegionizedRaceLoop(t, 4, floorY)
+	// radius 8 (floor spans blocks -128..143): the B-A1/B-A2 travel-order fix restored the correct,
+	// faster vanilla ground speed (a single friction pass instead of the old double), so a radius-4
+	// floor let the fastest wanderer walk off the generated edge and fall past the despawn radius
+	// (checkDespawn instant-cull) before 300 ticks. A radius-8 floor keeps every mob on ground for the
+	// full cross-region transfer scenario this test actually exercises.
+	loop := newRegionizedRaceLoop(t, 8, floorY)
 
 	r := loadMobRegistry(t, mobpluginsRoot)
 	decl := r.byName["wanderer"]

@@ -84,6 +84,14 @@ type Entity struct {
 	//	[VERIFIED javap LivingEntity.setJumping(boolean): `this.jumping = b;` — a bare field write.]
 	jumping bool
 
+	// traveledThisTick marks that this mob already ran its per-tick travel (moveRelative ->
+	// move -> gravity -> drag via travelInAir) inside navigation.followThePath during serverAiStep
+	// (tickAI phase). tickPhysics reads + clears it so a NAVIGATING mob is not moved a SECOND time
+	// that same tick (audit B-A2: navigating mobs got move()+friction applied twice). An IDLE mob
+	// (no active path) never sets it, so tickPhysics runs its travelInAir(zero-input) gravity pass
+	// as usual. Tick-owned, RNG-free, reset every tick -- not persisted.
+	traveledThisTick bool
+
 	// width, height are the entity's AABB footprint, COPIED from the data/entity table at
 	// spawn (NewEntity) so the AABB helper and physics never re-look-up the table. Plain
 	// values, snapshot-friendly.

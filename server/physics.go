@@ -36,12 +36,6 @@ const (
 	// airDrag scales vertical velocity each tick AFTER gravity, so vertical speed converges
 	// to a terminal velocity instead of growing unbounded. Vanilla ≈ 0.98. [ASSUMED.]
 	airDrag = 0.98
-
-	// horizontalFriction scales horizontal velocity each tick. Vanilla derives it from the
-	// block beneath (≈ 0.6) times a base 0.91; v1 uses a single constant for the visible
-	// "entities don't slide forever" behavior. [ASSUMED — wire-irrelevant.]
-	horizontalFriction = 0.6 * 0.91
-
 )
 
 // The auto step-up (Entity.collide's maxUpStep branch) IS applied now: moveEntity /
@@ -236,6 +230,183 @@ func (t *TickLoop) moveEntity(e *Entity, dx, dy, dz float64) {
 	}
 }
 
+// --- LivingEntity.travelInAir 1:1 (B-A1 / B-A2) ------------------------------------------------
+//
+// The air/ground travel chain, ported byte-exact from net.minecraft.world.entity.LivingEntity
+// .travelInAir / handleRelativeFrictionAndCalculateMovement / getFrictionInfluencedSpeed /
+// computeModifiedFriction (26.2, javap -c -p this session). The ORDER is the crux the audit
+// (B-A1) flagged: vanilla is moveRelative -> move -> gravity -> drag. The pre-port code applied
+// drag BEFORE the move and used the grounded horizontal friction (0.546) even when airborne (the
+// airborne value is 0.91); it also let a navigating mob move()+friction TWICE per tick (B-A2).
+// travelInAir is the SINGLE authority for a dry mob per-tick travel so both are impossible.
+//
+// The move itself routes through moveEntity (Entity.move == the per-axis swept collision), so the
+// collision half is unchanged; this function only fixes the surrounding travel ORDER + constants.
+
+// frictionModifierDefault is the FRICTION_MODIFIER attribute default (RangedAttribute default 1.0).
+// airDragModifierDefault is the AIR_DRAG_MODIFIER attribute default (also 1.0). Both are cited
+// constants standing in for getAttributeValue(...) until the attribute is a real per-entity read
+// (CLAUDE.md: cite the vanilla default, never bake it away). computeModifiedFriction(f, 1.0) == f,
+// so with the defaults the grounded horizontal drag is blockFriction*0.91 and the vertical is 0.98
+// -- the exact vanilla numbers.
+//
+//	[VERIFIED javap Attributes clinit: new RangedAttribute(friction_modifier, 1.0, 0.0, 2048.0)
+//	 and new RangedAttribute(air_drag_modifier, 1.0, 0.0, 2048.0) -> getAttributeValue default 1.0.]
+const (
+	frictionModifierDefault = float32(1.0)
+	airDragModifierDefault  = float32(1.0)
+)
+
+// travelBlockFrictionDefault is BlockBehaviour.Properties default friction (0.6f) -- the value
+// Block.getFriction() returns for a normal block (grass/stone/dirt). Sulfur has no per-block
+// getFriction() table yet, so travelInAir reads this default (structured to become a real
+// getBlockState(blockPosBelow).getBlock().getFriction() read later; ice/slime/honey then diverge).
+//
+//	[VERIFIED CFR Block.getFriction: return this.friction; -- Properties default friction 0.6f.]
+const travelBlockFrictionDefault = float32(0.6)
+
+// computeModifiedFriction ports LivingEntity.computeModifiedFriction(float, float) 1:1:
+// Mth.clamp(1.0f - (1.0f - f) * mod, 0.0f, 1.0f). With mod == 1.0 (the attribute default) this is
+// just clamp(f, 0, 1) == f.
+//
+//	[VERIFIED javap LivingEntity.computeModifiedFriction: fconst_1; (1.0 - f); * mod; 1.0 - that;
+//	 Mth.clamp(v, 0.0f, 1.0f).]
+func computeModifiedFriction(f, mod float32) float32 {
+	v := float32(1.0) - (float32(1.0)-f)*mod
+	if v < 0.0 {
+		return 0.0
+	}
+	if v > 1.0 {
+		return 1.0
+	}
+	return v
+}
+
+// frictionInfluencedSpeed ports LivingEntity.getFrictionInfluencedSpeed(float) 1:1. On the ground
+// with blockFriction f > 0.6, walk speed is scaled UP by 0.21600002f / f^3 (so a slippery block --
+// smaller f -- accelerates the mob faster); at f <= 0.6 it is the bare getSpeed(); airborne it is
+// getFlyingSpeed(). Note the 26.2 f > 0.6 guard and the exact literal 0.21600002f.
+//
+//	[VERIFIED javap LivingEntity.getFrictionInfluencedSpeed: onGround ? ((f > 0.6) ? getSpeed() *
+//	 (0.21600002f / (f*f*f)) : getSpeed()) : getFlyingSpeed().]
+func frictionInfluencedSpeed(onGround bool, f, speed, flyingSpeed float32) float32 {
+	if onGround {
+		if f > 0.6 {
+			return speed * (0.21600002 / (f * f * f))
+		}
+		return speed
+	}
+	return flyingSpeed
+}
+
+// travelInAir ports net.minecraft.world.entity.LivingEntity.travelInAir(Vec3) 1:1 for the DRY
+// air/ground branch (water/lava is travelInFluid, owned elsewhere; flying is travelFlying). It is
+// the SINGLE per-tick travel for a dry mob. speed is getSpeed() (speedModifier x MOVEMENT_SPEED),
+// flyingSpeed is getFlyingSpeed(); (inX,inY,inZ) is the movement input (moveRelative Vec3) -- for
+// a walking mob (0, 0, forward). The EXACT vanilla sequence:
+//
+//	f3   = onGround ? computeModifiedFriction(blockBelow.getFriction, FRICTION_MODIFIER) : 1.0
+//	// handleRelativeFrictionAndCalculateMovement(input, f3):
+//	moveRelative(getFrictionInfluencedSpeed(f3), input)   // deltaMovement += yaw-rotated(input*speed)
+//	move(SELF, deltaMovement)                             // the ONE swept-collision move
+//	d0   = deltaMovement.y                                // vec3.y AFTER the move
+//	// gravity / levitation / slow-falling on d0 (getEffectiveGravity), preserving the ported hooks
+//	// drag (only when !shouldDiscardFriction):
+//	f9   = computeModifiedFriction(0.91, AIR_DRAG_MODIFIER)
+//	f10  = f3 * f9                                        // horizontal drag (grounded 0.546, air 0.91)
+//	f11  = omnidirectional ? f9 : computeModifiedFriction(0.98, AIR_DRAG_MODIFIER)  // vertical 0.98
+//	setDeltaMovement(vec3.x * f10, d0 * f11, vec3.z * f10)
+//
+// The levitation / slow-falling gravity branches are the same jar-cited logic tickPhysics already
+// ran; they land in the SAME order slot (gravity AFTER the move, BEFORE the drag). A mob with no
+// effect takes the plain d5 -= getEffectiveGravity() path -- byte-identical to the old numbers,
+// only the ORDER (move-then-gravity-then-drag) changed.
+//
+//	[VERIFIED javap LivingEntity.travelInAir (offsets 0-263), handleRelativeFrictionAndCalculateMovement,
+//	 getFrictionInfluencedSpeed, computeModifiedFriction, getEffectiveGravity; Entity.moveRelative/
+//	 getInputVector (input.normalize() if lengthSqr>1; scale(speed); rotate by yaw: x*cos-z*sin, z*cos+x*sin).]
+func (t *TickLoop) travelInAir(e *Entity, inX, inY, inZ, speed, flyingSpeed float32) {
+	// f3 = block friction below (onGround) or 1.0 (airborne). computeModifiedFriction(0.6, 1.0)==0.6.
+	f3 := float32(1.0)
+	if e.onGround {
+		f3 = computeModifiedFriction(travelBlockFrictionDefault, frictionModifierDefault)
+	}
+
+	// handleRelativeFrictionAndCalculateMovement: moveRelative then the single move.
+	// moveRelative(fricSpeed, input): deltaMovement += getInputVector(input, fricSpeed, yaw).
+	fricSpeed := frictionInfluencedSpeed(e.onGround, f3, speed, flyingSpeed)
+	ivX, ivY, ivZ := getInputVector(inX, inY, inZ, fricSpeed, e.yaw)
+	e.vx += float64(ivX)
+	e.vy += float64(ivY)
+	e.vz += float64(ivZ)
+
+	// move(SELF, deltaMovement): the ONE per-axis swept-collision move (Entity.move). This zeroes a
+	// blocked velocity component + updates onGround (moveEntity), exactly as vanilla move() does.
+	t.moveEntity(e, e.vx, e.vy, e.vz)
+
+	// d0 = deltaMovement.y AFTER the move (vec3.y). Gravity / levitation / slow-falling applied here,
+	// AFTER the move, BEFORE the drag (the B-A1 order fix). These are the ported effect hooks in the
+	// exact vanilla slot; a no-effect mob takes the plain gravity subtraction.
+	d0 := e.vy
+	if amp, ok := entityEffectAmplifier(e, effectLevitation); ok {
+		// travelInAir LEVITATION branch: upward drift overriding gravity.
+		//   d0 += (0.05 * (amplifier + 1) - deltaMovement.y) * 0.2
+		d0 += (0.05*float64(amp+1) - e.vy) * 0.2
+	} else {
+		// getEffectiveGravity(): SLOW_FALLING (while falling) clamps gravity to min(getGravity(), 0.01).
+		grav := gravityPerTick // getGravity() == GRAVITY attribute default (0.08)
+		if e.vy <= 0 && entityHasEffect(e, effectSlowFalling) {
+			if grav > 0.01 {
+				grav = 0.01
+			}
+		}
+		d0 -= grav
+	}
+	// (The client-side / below-minY sub-branches of travelInAir do not apply on the server hot path:
+	// isClientSide is always false here, so the vanilla else -> d5 -= getEffectiveGravity() is the
+	// taken branch. The minY==getY floor-clamp is a client-prediction guard, not server logic.)
+
+	// Drag: horizontal *= f3 * computeModifiedFriction(0.91, AIR_DRAG_MODIFIER); vertical *=
+	// computeModifiedFriction(0.98, AIR_DRAG_MODIFIER). (shouldDiscardFriction -- knockback-resistance
+	// edge -- is not yet wired; the default is false, the drag branch, so this is the vanilla path.)
+	f9 := computeModifiedFriction(0.91, airDragModifierDefault)
+	f10 := f3 * f9
+	f11 := computeModifiedFriction(0.98, airDragModifierDefault)
+	e.vx *= float64(f10)
+	e.vy = d0 * float64(f11)
+	e.vz *= float64(f10)
+}
+
+// getInputVector ports net.minecraft.world.entity.Entity.getInputVector(Vec3, float, float) 1:1
+// (via moveRelative, which calls it with getYRot()). It normalizes the input when lengthSqr > 1,
+// scales by speed, and rotates by the yaw: (x*cos - z*sin, y, z*cos + x*sin) where the angle is
+// yaw * (pi/180). An input with lengthSqr < 1e-7 yields the zero vector (an idle mob adds nothing).
+//
+//	[VERIFIED javap Entity.getInputVector: lengthSqr<1e-7 -> ZERO; (lengthSqr>1 ? normalize : self)
+//	 .scale(speed); sin/cos of yaw*0.017453292f; new Vec3(s.x*cos - s.z*sin, s.y, s.z*cos + s.x*sin).]
+func getInputVector(inX, inY, inZ, speed, yawDeg float32) (x, y, z float32) {
+	lenSqr := float64(inX)*float64(inX) + float64(inY)*float64(inY) + float64(inZ)*float64(inZ)
+	if lenSqr < 1.0e-7 {
+		return 0, 0, 0
+	}
+	sx, sy, sz := float64(inX), float64(inY), float64(inZ)
+	if lenSqr > 1.0 {
+		inv := 1.0 / math.Sqrt(lenSqr)
+		sx, sy, sz = sx*inv, sy*inv, sz*inv
+	}
+	sp := float64(speed)
+	sx, sy, sz = sx*sp, sy*sp, sz*sp
+	// Mth.sin/cos take a float radians arg (yaw * 0.017453292f). Compute the angle as a float32
+	// product first (matching the jar float multiply) before the trig.
+	rad := float64(yawDeg * 0.017453292)
+	sin := math.Sin(rad)
+	cos := math.Cos(rad)
+	x = float32(sx*cos - sz*sin)
+	y = float32(sy)
+	z = float32(sz*cos + sx*sin)
+	return x, y, z
+}
+
 // collidePlayer is the AUTHORITATIVE validation of a client-sent player position (06-RESEARCH
 // Pattern 2 'When to use' / threat T-6-06). The client SENDS the position it claims to be at;
 // the server collides the claimed DELTA (from the last accepted position) against the real
@@ -291,4 +462,3 @@ func playerBoxAt(x, y, z float64) bvh.AABB[float64, bvh.Vec3[float64]] {
 		Upper: bvh.Vec3[float64]{x + hw, y + playerHeight, z + hw},
 	}
 }
-
