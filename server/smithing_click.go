@@ -195,8 +195,14 @@ func (t *TickLoop) doSmithingClick(p *tickPlayer, oc *openContainer, inv *Invent
 		} else {
 			t.smithingQuickMove(p, oc, inv, i)
 		}
+	case containerInputSwap:
+		t.menuDoSwap(p, t.smithingMenuViewClick(oc, inv), i, j)
+	case containerInputClone:
+		t.menuDoClone(p, t.smithingMenuViewClick(oc, inv), i)
 	case containerInputThrow:
 		t.smithingThrow(p, oc, inv, i, j)
+	case containerInputPickupAll:
+		t.menuDoPickupAll(p, t.smithingMenuViewClick(oc, inv), i, j)
 	}
 }
 
@@ -497,3 +503,36 @@ func smithingShrinkOne(s component.SlotData) component.SlotData {
 // smithingLevelEvent is the cited faithful no-op seam for SmithingMenu.onTake's level.levelEvent(1044)
 // (the smithing-table use sound), mirroring grindstoneLevelEvent — no ClientboundLevelEvent wire yet.
 func (t *TickLoop) smithingLevelEvent(_ pk.Position, _ int) {}
+
+// smithingMenuViewClick adapts the OPEN SMITHING window (template 0 / base 1 / addition 2 / result 3 /
+// player 4..39) to the generic menuView. The RESULT slot (3) is take-only (mayPlace false) and fires
+// onTakeSmithing on take (consume inputs); the 3 input slots gate mayPlace via smithingSlotRef.mayPlace
+// (per-slot RecipePropertySet); player cells are plain. The clickedSmithing wrapper recomputes after.
+func (t *TickLoop) smithingMenuViewClick(oc *openContainer, inv *Inventory) menuView {
+	return menuView{
+		size: smithingMenuSize,
+		inv:  inv,
+		slotAt: func(idx int) menuSlotView {
+			ref := smithingResolveSlot(oc, inv, idx)
+			if !ref.ok {
+				return menuSlotView{}
+			}
+			isResult := ref.result
+			return menuSlotView{
+				ok:            true,
+				getItem:       func() component.SlotData { return ref.get() },
+				setByPlayer:   func(s component.SlotData) { ref.set(s) },
+				mayPickupFn:   func(*tickPlayer) bool { return true },
+				mayPlaceFn:    func(s component.SlotData) bool { return ref.mayPlace(s) },
+				maxStackFn:    func(s component.SlotData) int { return chestSlotMax(s) },
+				onSwapCraftFn: func(int) {},
+				onTakeFn: func(pl *tickPlayer, _ component.SlotData) {
+					if isResult {
+						t.onTakeSmithing(pl, oc, inv)
+					}
+				},
+			}
+		},
+		canTakeItemForPickAll: func(component.SlotData, int) bool { return true },
+	}
+}

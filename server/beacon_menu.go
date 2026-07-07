@@ -231,7 +231,7 @@ func (t *TickLoop) sendBeaconContent(p *tickPlayer, b *beaconBE) {
 		return
 	}
 	inv := ensureInventory(p)
-	inv.stateID++
+	inv.incrementStateId()
 	p.client.Send(containerSetContent(int32(p.openContainer.windowID), inv.stateID,
 		beaconMenuItems(b, inv), inv.getCarried()))
 }
@@ -306,8 +306,14 @@ func (t *TickLoop) doBeaconClick(p *tickPlayer, b *beaconBE, inv *Inventory, i, 
 		t.beaconPickup(b, inv, i, j)
 	case containerInputQuickMove:
 		t.beaconQuickMove(b, inv, i)
+	case containerInputSwap:
+		t.menuDoSwap(p, beaconMenuViewClick(b, inv), i, j)
+	case containerInputClone:
+		t.menuDoClone(p, beaconMenuViewClick(b, inv), i)
 	case containerInputThrow:
 		t.beaconThrow(p, b, inv, i, j)
+	case containerInputPickupAll:
+		t.menuDoPickupAll(p, beaconMenuViewClick(b, inv), i, j)
 	}
 }
 
@@ -632,4 +638,47 @@ func beaconReadOptionalHolder(r *bytes.Reader) (dataID int, ok bool) {
 		return 0, false
 	}
 	return int(holderID) + 1, true // present -> the +1 DATA-slot form (decodeEffect(v) = byId(v-1))
+}
+
+// beaconMenuViewClick adapts the OPEN BEACON window (payment 0 / player 1..36) to the generic menuView.
+// The payment slot (0) accepts only beacon-payment items (beaconPaymentMayPlace) and caps at max stack 1
+// (PaymentSlot.getMaxStackSize); player cells are plain. No result slot (the effect selection is a
+// SetBeacon packet), so onTake / onSwapCraft are no-ops.
+func beaconMenuViewClick(b *beaconBE, inv *Inventory) menuView {
+	return menuView{
+		size: beaconMenuSize,
+		inv:  inv,
+		slotAt: func(idx int) menuSlotView {
+			if idx < 0 || idx >= beaconMenuSize {
+				return menuSlotView{}
+			}
+			if beaconSlotIsPayment(idx) {
+				return menuSlotView{
+					ok:            true,
+					getItem:       func() component.SlotData { return b.payment },
+					setByPlayer:   func(s component.SlotData) { b.payment = s },
+					mayPickupFn:   func(*tickPlayer) bool { return true },
+					mayPlaceFn:    func(s component.SlotData) bool { return beaconPaymentMayPlace(s) },
+					maxStackFn:    func(component.SlotData) int { return 1 },
+					onSwapCraftFn: func(int) {},
+					onTakeFn:      func(*tickPlayer, component.SlotData) {},
+				}
+			}
+			ws, ok := beaconPlayerWindowSlot(idx)
+			if !ok {
+				return menuSlotView{}
+			}
+			return menuSlotView{
+				ok:            true,
+				getItem:       func() component.SlotData { return inv.get(ws) },
+				setByPlayer:   func(s component.SlotData) { inv.set(ws, s) },
+				mayPickupFn:   func(*tickPlayer) bool { return true },
+				mayPlaceFn:    func(component.SlotData) bool { return true },
+				maxStackFn:    func(s component.SlotData) int { return chestSlotMax(s) },
+				onSwapCraftFn: func(int) {},
+				onTakeFn:      func(*tickPlayer, component.SlotData) {},
+			}
+		},
+		canTakeItemForPickAll: func(component.SlotData, int) bool { return true },
+	}
 }

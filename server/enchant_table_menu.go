@@ -124,7 +124,7 @@ func (t *TickLoop) sendEnchantContent(p *tickPlayer, oc *openContainer) {
 		return
 	}
 	inv := ensureInventory(p)
-	inv.stateID++
+	inv.incrementStateId()
 	p.client.Send(containerSetContent(int32(oc.windowID), inv.stateID, enchantMenuItems(oc, inv), inv.getCarried()))
 }
 

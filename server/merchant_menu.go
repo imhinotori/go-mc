@@ -243,7 +243,7 @@ func (t *TickLoop) sendMerchantContent(p *tickPlayer) {
 		return
 	}
 	inv := ensureInventory(p)
-	inv.stateID++
+	inv.incrementStateId()
 	p.client.Send(containerSetContent(int32(p.openContainer.windowID), inv.stateID,
 		merchantMenuItems(p.openContainer, inv), inv.getCarried()))
 }

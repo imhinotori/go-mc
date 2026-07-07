@@ -112,7 +112,7 @@ func ensureInventory(p *tickPlayer) *Inventory {
 // the bounded outbound queue. Bumps the state id so the client tracks the authoritative state.
 func (t *TickLoop) sendContent(p *tickPlayer) {
 	inv := ensureInventory(p)
-	inv.stateID++
+	inv.incrementStateId()
 	p.client.Send(containerSetContent(playerContainerID, inv.stateID, inv.snapshot(), inv.getCarried()))
 }
 
@@ -145,7 +145,7 @@ func (t *TickLoop) broadcastInventoryChanges(p *tickPlayer, inv *Inventory, befo
 	}
 	now := inv.slots
 	// incrementStateId(): (stateId + 1) & 32767, bumped once for the whole broadcast.
-	inv.stateID = (inv.stateID + 1) & 0x7FFF
+	inv.incrementStateId()
 	for i := range now {
 		var prev component.SlotData
 		if i < len(before) {

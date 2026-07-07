@@ -148,8 +148,14 @@ func (t *TickLoop) doMerchantClick(p *tickPlayer, oc *openContainer, inv *Invent
 		} else {
 			t.merchantQuickMove(p, oc, inv, villager, offers, i)
 		}
+	case containerInputSwap:
+		t.menuDoSwap(p, t.merchantMenuViewClick(oc, inv, villager, offers), i, j)
+	case containerInputClone:
+		t.menuDoClone(p, t.merchantMenuViewClick(oc, inv, villager, offers), i)
 	case containerInputThrow:
 		t.merchantThrow(p, oc, inv, villager, offers, i, j)
+	case containerInputPickupAll:
+		t.menuDoPickupAll(p, t.merchantMenuViewClick(oc, inv, villager, offers), i, j)
 	}
 }
 
@@ -468,3 +474,37 @@ func (t *TickLoop) rewardTradeXp(villager *Entity, offer *merchantOffer) {
 // a cited stub equal to the "cannot yet level" default, structured so a real canLevelUp + xp-threshold read
 // replaces it with no caller change (CLAUDE.md: never bake the value away). CITE Villager.shouldIncreaseLevel.
 func villagerShouldIncreaseLevel(_ *Entity) bool { return false }
+
+// merchantMenuViewClick adapts the OPEN MERCHANT window (payment 0/1 / result 2 / player 3..38) to the
+// generic menuView. The RESULT slot (2) is take-only (mayPlace false) and fires onTakeMerchant on take
+// (run the trade). Payment + player cells are plain. canTakeItemForPickAll is ALWAYS false
+// (MerchantMenu.canTakeItemForPickAll returns false), so a double-click gather is a no-op on this window.
+// The clickedMerchant wrapper recomputes the sell item after the click.
+func (t *TickLoop) merchantMenuViewClick(oc *openContainer, inv *Inventory, villager *Entity, offers merchantOffers) menuView {
+	return menuView{
+		size: merchantMenuSize,
+		inv:  inv,
+		slotAt: func(idx int) menuSlotView {
+			ref := merchantResolveSlot(oc, inv, idx)
+			if !ref.ok {
+				return menuSlotView{}
+			}
+			isResult := ref.result
+			return menuSlotView{
+				ok:            true,
+				getItem:       func() component.SlotData { return ref.get() },
+				setByPlayer:   func(s component.SlotData) { ref.set(s) },
+				mayPickupFn:   func(*tickPlayer) bool { return true },
+				mayPlaceFn:    func(component.SlotData) bool { return !isResult },
+				maxStackFn:    func(s component.SlotData) int { return chestSlotMax(s) },
+				onSwapCraftFn: func(int) {},
+				onTakeFn: func(pl *tickPlayer, _ component.SlotData) {
+					if isResult {
+						t.onTakeMerchant(pl, oc, inv, villager, offers)
+					}
+				},
+			}
+		},
+		canTakeItemForPickAll: func(component.SlotData, int) bool { return false },
+	}
+}

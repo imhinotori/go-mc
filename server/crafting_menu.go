@@ -130,7 +130,7 @@ func (t *TickLoop) sendCraftingContent(p *tickPlayer) {
 		return
 	}
 	inv := ensureInventory(p)
-	inv.stateID++
+	inv.incrementStateId()
 	p.client.Send(containerSetContent(int32(p.openContainer.windowID), inv.stateID,
 		craftingMenuItems(p.openContainer, inv), inv.getCarried()))
 }

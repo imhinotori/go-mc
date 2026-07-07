@@ -127,6 +127,10 @@ func (t *TickLoop) doChestClick(p *tickPlayer, cl *chestLoot, inv *Inventory, i,
 		} else {
 			t.chestQuickMove(p, cl, inv, i)
 		}
+	case containerInputSwap:
+		t.menuDoSwap(p, chestMenuView(cl, inv), i, j)
+	case containerInputClone:
+		t.menuDoClone(p, chestMenuView(cl, inv), i)
 	case containerInputThrow:
 		t.chestThrow(p, cl, inv, i, j)
 	case containerInputPickupAll:
@@ -541,4 +545,33 @@ func (t *TickLoop) chestThrow(p *tickPlayer, cl *chestLoot, inv *Inventory, i, j
 	}
 	ref.set(cur)
 	t.playerDrop(p, taken, true)
+}
+
+// chestMenuView adapts the OPEN CHEST window (chest 0..26 + player 27..62) to the generic menuView so
+// the shared SWAP / CLONE / PICKUP_ALL branches (menu_click.go) drive it. Every chest + player cell is
+// a plain Slot: mayPickup / mayPlace true, getMaxStackSize = chestSlotMax, onSwapCraft / onTake no-ops
+// (a plain ChestMenu/Inventory Slot). canTakeItemForPickAll is the base true (no result slot). CITE
+// AbstractContainerMenu.doClick over the ChestMenu slot layout.
+func chestMenuView(cl *chestLoot, inv *Inventory) menuView {
+	return menuView{
+		size: chestMenuSize,
+		inv:  inv,
+		slotAt: func(idx int) menuSlotView {
+			ref := chestResolveSlot(cl, inv, idx)
+			if !ref.ok {
+				return menuSlotView{}
+			}
+			return menuSlotView{
+				ok:            true,
+				getItem:       func() component.SlotData { return ref.get() },
+				setByPlayer:   func(s component.SlotData) { ref.set(s) },
+				mayPickupFn:   func(*tickPlayer) bool { return true },
+				mayPlaceFn:    func(component.SlotData) bool { return true },
+				maxStackFn:    func(s component.SlotData) int { return chestSlotMax(s) },
+				onSwapCraftFn: func(int) {},
+				onTakeFn:      func(*tickPlayer, component.SlotData) {},
+			}
+		},
+		canTakeItemForPickAll: func(component.SlotData, int) bool { return true },
+	}
 }

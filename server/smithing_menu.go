@@ -90,7 +90,7 @@ func (t *TickLoop) sendSmithingContent(p *tickPlayer) {
 		return
 	}
 	inv := ensureInventory(p)
-	inv.stateID++
+	inv.incrementStateId()
 	p.client.Send(containerSetContent(int32(p.openContainer.windowID), inv.stateID,
 		smithingMenuItems(p.openContainer, inv), inv.getCarried()))
 }

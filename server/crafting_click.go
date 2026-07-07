@@ -320,8 +320,14 @@ func (t *TickLoop) doCraftingClick(p *tickPlayer, oc *openContainer, inv *Invent
 				moved = t.craftQuickMove(p, oc, inv, i)
 			}
 		}
+	case containerInputSwap:
+		t.menuDoSwap(p, t.craftingMenuViewClick(oc, inv), i, j)
+	case containerInputClone:
+		t.menuDoClone(p, t.craftingMenuViewClick(oc, inv), i)
 	case containerInputThrow:
 		t.craftThrow(p, oc, inv, i, j)
+	case containerInputPickupAll:
+		t.menuDoPickupAll(p, t.craftingMenuViewClick(oc, inv), i, j)
 	}
 }
 
@@ -622,4 +628,39 @@ func (t *TickLoop) closeCraftingWindow(p *tickPlayer, oc *openContainer) {
 		}
 	}
 	oc.craftResult = component.SlotData{Count: 0}
+}
+
+// craftingMenuViewClick adapts the OPEN CRAFTING-TABLE window (result 0 / grid 1..9 / player 10..45) to
+// the generic menuView so the shared SWAP / CLONE / PICKUP_ALL branches (menu_click.go) drive it. The
+// RESULT slot (0) is take-only (mayPlace false) and fires onTakeCraft on take (the 3x3 consume); the grid
+// + player cells are plain. canTakeItemForPickAll returns false for the result slot (CraftingMenu.
+// canTakeItemForPickAll: slot.container != resultSlots). The clickedCrafting wrapper re-runs
+// slotChangedCraftingGrid after the click, so a SWAP into a grid cell re-assembles the result.
+func (t *TickLoop) craftingMenuViewClick(oc *openContainer, inv *Inventory) menuView {
+	return menuView{
+		size: craftingMenuSize,
+		inv:  inv,
+		slotAt: func(idx int) menuSlotView {
+			ref := craftingResolveSlot(oc, inv, idx)
+			if !ref.ok {
+				return menuSlotView{}
+			}
+			isResult := ref.result
+			return menuSlotView{
+				ok:            true,
+				getItem:       func() component.SlotData { return ref.get() },
+				setByPlayer:   func(s component.SlotData) { ref.set(s) },
+				mayPickupFn:   func(*tickPlayer) bool { return true },
+				mayPlaceFn:    func(component.SlotData) bool { return !isResult },
+				maxStackFn:    func(s component.SlotData) int { return chestSlotMax(s) },
+				onSwapCraftFn: func(int) {},
+				onTakeFn: func(pl *tickPlayer, _ component.SlotData) {
+					if isResult {
+						t.onTakeCraft(pl, inv, craftingTableView(oc)) // ResultSlot.onTake (3x3 consume)
+					}
+				},
+			}
+		},
+		canTakeItemForPickAll: func(_ component.SlotData, i int) bool { return i != 0 },
+	}
 }

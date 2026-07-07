@@ -752,7 +752,7 @@ func (t *TickLoop) syncAfterEat(p *tickPlayer, inv *Inventory, slot int16, resul
 	t.syncFood(p)
 	// The held slot shrank: send an authoritative SetSlot so the client reflects the consumed item.
 	if p.client != nil {
-		inv.stateID = (inv.stateID + 1) & 0x7FFF
+		inv.incrementStateId()
 		p.client.Send(containerSetSlot(playerContainerID, inv.stateID, slot, result))
 	}
 }

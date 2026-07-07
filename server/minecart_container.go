@@ -189,7 +189,7 @@ func (t *TickLoop) sendMinecartChestContent(p *tickPlayer, cart *Entity) {
 		return
 	}
 	inv := ensureInventory(p)
-	inv.stateID++
+	inv.incrementStateId()
 	size := len(cart.minecartItems)
 	out := make([]component.SlotData, size+27+9)
 	for i := 0; i < size; i++ {

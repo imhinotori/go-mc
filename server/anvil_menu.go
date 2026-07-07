@@ -108,7 +108,7 @@ func (t *TickLoop) sendAnvilContent(p *tickPlayer, oc *openContainer) {
 		return
 	}
 	inv := ensureInventory(p)
-	inv.stateID++
+	inv.incrementStateId()
 	p.client.Send(containerSetContent(int32(oc.windowID), inv.stateID, anvilMenuItems(oc, inv), inv.getCarried()))
 }
 
@@ -232,8 +232,14 @@ func (t *TickLoop) doAnvilClick(p *tickPlayer, oc *openContainer, inv *Inventory
 		t.anvilPickup(p, oc, inv, i, j)
 	case containerInputQuickMove:
 		t.anvilQuickMove(p, oc, inv, i)
+	case containerInputSwap:
+		t.menuDoSwap(p, t.anvilMenuViewClick(oc, inv), i, j)
+	case containerInputClone:
+		t.menuDoClone(p, t.anvilMenuViewClick(oc, inv), i)
 	case containerInputThrow:
 		t.anvilThrow(p, oc, inv, i, j)
+	case containerInputPickupAll:
+		t.menuDoPickupAll(p, t.anvilMenuViewClick(oc, inv), i, j)
 	}
 }
 
@@ -632,3 +638,42 @@ func (t *TickLoop) closeAnvilWindow(p *tickPlayer, oc *openContainer) {
 
 // renameItemPacketID is the ServerboundRenameItem id (re-exported for the subtick dispatch).
 var _ = packetid.ServerboundRenameItem
+
+// anvilMenuViewClick adapts the OPEN ANVIL window (input 0 / additional 1 / result 2 / player 3..38) to
+// the generic menuView. The RESULT slot (2) is take-only (mayPlace false), its mayPickup gates on
+// anvilMayPickupResult (creative || xpLevel >= cost) and a take fires onTakeAnvil (consume levels + shrink
+// additional + clear input + maybe break). Input + player cells are plain (getMaxStackSize = chestSlotMax).
+// The clickedAnvil wrapper rebuilds the result after the click when an input changed.
+func (t *TickLoop) anvilMenuViewClick(oc *openContainer, inv *Inventory) menuView {
+	return menuView{
+		size: anvilMenuSize,
+		inv:  inv,
+		slotAt: func(idx int) menuSlotView {
+			ref := anvilResolveSlot(oc, inv, idx)
+			if !ref.ok {
+				return menuSlotView{}
+			}
+			isResult := ref.slot == anvilSlotResult
+			return menuSlotView{
+				ok:          true,
+				getItem:     func() component.SlotData { return ref.get() },
+				setByPlayer: func(s component.SlotData) { ref.set(s) },
+				mayPickupFn: func(pl *tickPlayer) bool {
+					if isResult {
+						return t.anvilMayPickupResult(pl, oc)
+					}
+					return true
+				},
+				mayPlaceFn:    func(component.SlotData) bool { return !isResult },
+				maxStackFn:    func(s component.SlotData) int { return chestSlotMax(s) },
+				onSwapCraftFn: func(int) {},
+				onTakeFn: func(pl *tickPlayer, _ component.SlotData) {
+					if isResult {
+						t.onTakeAnvil(pl, oc)
+					}
+				},
+			}
+		},
+		canTakeItemForPickAll: func(component.SlotData, int) bool { return true },
+	}
+}

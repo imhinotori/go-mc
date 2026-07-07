@@ -99,7 +99,7 @@ func (t *TickLoop) sendGrindstoneContent(p *tickPlayer) {
 		return
 	}
 	inv := ensureInventory(p)
-	inv.stateID++
+	inv.incrementStateId()
 	p.client.Send(containerSetContent(int32(p.openContainer.windowID), inv.stateID,
 		grindstoneMenuItems(p.openContainer, inv), inv.getCarried()))
 }

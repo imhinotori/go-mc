@@ -131,8 +131,14 @@ func (t *TickLoop) doEnchantClick(p *tickPlayer, oc *openContainer, inv *Invento
 		t.enchantPickup(p, oc, inv, i, j)
 	case containerInputQuickMove:
 		t.enchantQuickMove(p, oc, inv, i)
+	case containerInputSwap:
+		t.menuDoSwap(p, enchantMenuViewClick(oc, inv), i, j)
+	case containerInputClone:
+		t.menuDoClone(p, enchantMenuViewClick(oc, inv), i)
 	case containerInputThrow:
 		t.enchantThrow(p, oc, inv, i, j)
+	case containerInputPickupAll:
+		t.menuDoPickupAll(p, enchantMenuViewClick(oc, inv), i, j)
 	}
 }
 
@@ -433,4 +439,44 @@ func enchantApplyOffers(item component.SlotData, offers []enchantInstance) compo
 		edit.setEnchantments(current)
 	}
 	return edit.materialize()
+}
+
+// enchantMenuViewClick adapts the OPEN ENCHANTING-TABLE window (item 0 / lapis 1 / player 2..37) to the
+// generic menuView. The item slot (0) caps at max stack 1 (Slot.getMaxStackSize override); the lapis slot
+// (1) accepts only lapis_lazuli (mayPlace); player cells are plain. No result slot (enchanting is a
+// ClickButton, not a slot take), so onTake / onSwapCraft are no-ops. The clickedEnchant wrapper rebuilds
+// the offers after the click when an enchant slot changed.
+func enchantMenuViewClick(oc *openContainer, inv *Inventory) menuView {
+	return menuView{
+		size: enchantMenuSize,
+		inv:  inv,
+		slotAt: func(idx int) menuSlotView {
+			ref := enchantResolveSlot(oc, inv, idx)
+			if !ref.ok {
+				return menuSlotView{}
+			}
+			beSlot := ref.slot
+			return menuSlotView{
+				ok:          true,
+				getItem:     func() component.SlotData { return ref.get() },
+				setByPlayer: func(s component.SlotData) { ref.set(s) },
+				mayPickupFn: func(*tickPlayer) bool { return true },
+				mayPlaceFn: func(s component.SlotData) bool {
+					if beSlot < 0 {
+						return true
+					}
+					return enchantSlotMayPlace(beSlot, s)
+				},
+				maxStackFn: func(s component.SlotData) int {
+					if beSlot < 0 {
+						return chestSlotMax(s)
+					}
+					return enchantSlotMaxStack(beSlot, s)
+				},
+				onSwapCraftFn: func(int) {},
+				onTakeFn:      func(*tickPlayer, component.SlotData) {},
+			}
+		},
+		canTakeItemForPickAll: func(component.SlotData, int) bool { return true },
+	}
 }

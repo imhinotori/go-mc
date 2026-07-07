@@ -148,7 +148,7 @@ func (t *TickLoop) syncHeldAfterThrow(p *tickPlayer, hand int32) {
 	}
 	slot := heldMenuSlot(p, hand)
 	inv := ensureInventory(p)
-	inv.stateID = (inv.stateID + 1) & 0x7FFF
+	inv.incrementStateId()
 	p.client.Send(containerSetSlot(playerContainerID, inv.stateID, slot, inv.get(slot)))
 }
 

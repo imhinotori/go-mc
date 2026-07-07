@@ -159,7 +159,7 @@ func (t *TickLoop) sendFurnaceContent(p *tickPlayer, f *furnaceBE) {
 		return
 	}
 	inv := ensureInventory(p)
-	inv.stateID++
+	inv.incrementStateId()
 	p.client.Send(containerSetContent(int32(p.openContainer.windowID), inv.stateID,
 		furnaceMenuItems(f, inv), inv.getCarried()))
 }
@@ -336,8 +336,14 @@ func (t *TickLoop) doFurnaceClick(p *tickPlayer, oc *openContainer, f *furnaceBE
 		t.furnacePickup(p, oc, f, inv, i, j)
 	case containerInputQuickMove:
 		t.furnaceQuickMove(p, oc, f, inv, i)
+	case containerInputSwap:
+		t.menuDoSwap(p, t.furnaceMenuView(f, inv), i, j)
+	case containerInputClone:
+		t.menuDoClone(p, t.furnaceMenuView(f, inv), i)
 	case containerInputThrow:
 		t.furnaceThrow(p, oc, f, inv, i, j)
+	case containerInputPickupAll:
+		t.menuDoPickupAll(p, t.furnaceMenuView(f, inv), i, j)
 	}
 }
 
@@ -707,5 +713,46 @@ func (t *TickLoop) awardExperienceOrbsAt(x, y, z float64, value int) {
 		if owner != nil {
 			owner.entities.add(orb)
 		}
+	}
+}
+
+// furnaceMenuView adapts the OPEN FURNACE window (input 0 / fuel 1 / result 2 + player 3..38) to the
+// generic menuView so the shared SWAP / CLONE / PICKUP_ALL branches (menu_click.go) drive it. The BE
+// slots carry the AbstractFurnaceBlockEntity per-slot rules: mayPlace = furnaceMayPlace (result rejects
+// any place, fuel accepts fuel/bucket, input accepts anything); the RESULT slot (2) fires the
+// FurnaceResultSlot XP award on take (onTakeFurnaceResult). Player cells are plain (mayPlace true).
+// getMaxStackSize = chestSlotMax; mayPickup true everywhere. CITE AbstractContainerMenu.doClick over the
+// FurnaceMenu slot layout + FurnaceResultSlot.onTake.
+func (t *TickLoop) furnaceMenuView(f *furnaceBE, inv *Inventory) menuView {
+	return menuView{
+		size: furnaceMenuSize,
+		inv:  inv,
+		slotAt: func(idx int) menuSlotView {
+			ref := furnaceResolveSlot(f, inv, idx)
+			if !ref.ok {
+				return menuSlotView{}
+			}
+			beSlot := ref.beSlot
+			return menuSlotView{
+				ok:          true,
+				getItem:     func() component.SlotData { return ref.get() },
+				setByPlayer: func(s component.SlotData) { ref.set(s) },
+				mayPickupFn: func(*tickPlayer) bool { return true },
+				mayPlaceFn: func(s component.SlotData) bool {
+					if beSlot < 0 {
+						return true // player cell
+					}
+					return furnaceMayPlace(f, beSlot, s)
+				},
+				maxStackFn:    func(s component.SlotData) int { return chestSlotMax(s) },
+				onSwapCraftFn: func(int) {},
+				onTakeFn: func(pl *tickPlayer, taken component.SlotData) {
+					if beSlot == furnaceSlotResult {
+						t.onTakeFurnaceResult(pl, f, taken.Count) // FurnaceResultSlot.onTake XP award
+					}
+				},
+			}
+		},
+		canTakeItemForPickAll: func(component.SlotData, int) bool { return true },
 	}
 }

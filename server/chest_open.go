@@ -627,7 +627,7 @@ func (t *TickLoop) sendChestContent(p *tickPlayer, cl *chestLoot) {
 		return
 	}
 	inv := ensureInventory(p)
-	inv.stateID++
+	inv.incrementStateId()
 	p.client.Send(containerSetContent(int32(p.openContainer.windowID), inv.stateID,
 		chestMenuItems(cl, inv), inv.getCarried()))
 }

@@ -329,6 +329,17 @@ func (inv *Inventory) setCarried(s component.SlotData) {
 	inv.carried = s
 }
 
+// incrementStateId ports AbstractContainerMenu.incrementStateId(): stateId = (stateId + 1) & 32767;
+// return stateId. The client echoes this id in the NEXT ServerboundContainerClick; the server compares
+// it to detect desync. Every authoritative container packet (ContainerSetContent / SetSlot for window 0
+// AND every open non-player window) MUST carry an id from this single masked counter — a bare `stateId++`
+// eventually overflows past 32767 and diverges from the client's `& 32767` expectation, so all senders
+// route through here. CITE (VERIFIED javap): (stateId + 1) & 32767.
+func (inv *Inventory) incrementStateId() int32 {
+	inv.stateID = (inv.stateID + 1) & 0x7FFF
+	return inv.stateID
+}
+
 // resetQuickCraft ports AbstractContainerMenu.resetQuickCraft(): status=0, clear the drag set.
 func (inv *Inventory) resetQuickCraft() {
 	inv.quickcraftStatus = 0

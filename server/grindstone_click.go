@@ -136,8 +136,14 @@ func (t *TickLoop) doGrindstoneClick(p *tickPlayer, oc *openContainer, inv *Inve
 		} else {
 			t.grindstoneQuickMove(p, oc, inv, i)
 		}
+	case containerInputSwap:
+		t.menuDoSwap(p, t.grindstoneMenuViewClick(oc, inv), i, j)
+	case containerInputClone:
+		t.menuDoClone(p, t.grindstoneMenuViewClick(oc, inv), i)
 	case containerInputThrow:
 		t.grindstoneThrow(p, oc, inv, i, j)
+	case containerInputPickupAll:
+		t.menuDoPickupAll(p, t.grindstoneMenuViewClick(oc, inv), i, j)
 	}
 }
 
@@ -411,3 +417,36 @@ func (t *TickLoop) onTakeGrindstone(p *tickPlayer, oc *openContainer, inv *Inven
 // (the grindstone-use sound), mirroring dispenserLevelEvent/brewLevelEvent — no ClientboundLevelEvent wire
 // is emitted yet, so the sound is a documented no-op the take still fires.
 func (t *TickLoop) grindstoneLevelEvent(_ pk.Position, _ int) {}
+
+// grindstoneMenuViewClick adapts the OPEN GRINDSTONE window (input0 0 / input1 1 / result 2 / player
+// 3..38) to the generic menuView. The RESULT slot (2) is take-only (mayPlace false) and fires
+// onTakeGrindstone on take (consume inputs + XP + level event); input slots gate mayPlace via
+// grindstoneMayPlace; player cells are plain. The clickedGrindstone wrapper recomputes the result after.
+func (t *TickLoop) grindstoneMenuViewClick(oc *openContainer, inv *Inventory) menuView {
+	return menuView{
+		size: grindstoneMenuSize,
+		inv:  inv,
+		slotAt: func(idx int) menuSlotView {
+			ref := grindstoneResolveSlot(oc, inv, idx)
+			if !ref.ok {
+				return menuSlotView{}
+			}
+			isResult := ref.result
+			return menuSlotView{
+				ok:            true,
+				getItem:       func() component.SlotData { return ref.get() },
+				setByPlayer:   func(s component.SlotData) { ref.set(s) },
+				mayPickupFn:   func(*tickPlayer) bool { return true },
+				mayPlaceFn:    func(s component.SlotData) bool { return ref.mayPlace(s) },
+				maxStackFn:    func(s component.SlotData) int { return chestSlotMax(s) },
+				onSwapCraftFn: func(int) {},
+				onTakeFn: func(pl *tickPlayer, _ component.SlotData) {
+					if isResult {
+						t.onTakeGrindstone(pl, oc, inv)
+					}
+				},
+			}
+		},
+		canTakeItemForPickAll: func(component.SlotData, int) bool { return true },
+	}
+}

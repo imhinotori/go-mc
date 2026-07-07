@@ -90,7 +90,7 @@ func (t *TickLoop) sendHopperContent(p *tickPlayer, h *hopperBE) {
 		return
 	}
 	inv := ensureInventory(p)
-	inv.stateID++
+	inv.incrementStateId()
 	p.client.Send(containerSetContent(int32(p.openContainer.windowID), inv.stateID,
 		hopperMenuItems(h, inv), inv.getCarried()))
 }
@@ -194,8 +194,14 @@ func (t *TickLoop) doHopperClick(p *tickPlayer, oc *openContainer, h *hopperBE, 
 		t.hopperPickup(p, h, inv, i, j)
 	case containerInputQuickMove:
 		t.hopperQuickMove(p, h, inv, i)
+	case containerInputSwap:
+		t.menuDoSwap(p, hopperMenuView(h, inv), i, j)
+	case containerInputClone:
+		t.menuDoClone(p, hopperMenuView(h, inv), i)
 	case containerInputThrow:
 		t.hopperThrow(p, h, inv, i, j)
+	case containerInputPickupAll:
+		t.menuDoPickupAll(p, hopperMenuView(h, inv), i, j)
 	}
 }
 
@@ -384,3 +390,31 @@ func (t *TickLoop) hopperThrow(p *tickPlayer, h *hopperBE, inv *Inventory, i, j 
 // block-entity container (already authoritative in the tick-owned hopperBE), so close just FREES the
 // window. Mirrors closeDispenserWindow.
 func (t *TickLoop) closeHopperWindow(_ *tickPlayer, _ *openContainer) {}
+
+// hopperMenuView adapts the OPEN HOPPER window (grid 0..4 + player 5..40) to the generic menuView so the
+// shared SWAP / CLONE / PICKUP_ALL branches (menu_click.go) drive it. Every hopper + player cell is a
+// plain Slot (mayPickup / mayPlace true, getMaxStackSize = chestSlotMax, onSwapCraft / onTake no-ops).
+// CITE AbstractContainerMenu.doClick over the HopperMenu slot layout.
+func hopperMenuView(h *hopperBE, inv *Inventory) menuView {
+	return menuView{
+		size: hopperMenuSize,
+		inv:  inv,
+		slotAt: func(idx int) menuSlotView {
+			ref := hopperResolveSlot(h, inv, idx)
+			if !ref.ok {
+				return menuSlotView{}
+			}
+			return menuSlotView{
+				ok:            true,
+				getItem:       func() component.SlotData { return ref.get() },
+				setByPlayer:   func(s component.SlotData) { ref.set(s) },
+				mayPickupFn:   func(*tickPlayer) bool { return true },
+				mayPlaceFn:    func(component.SlotData) bool { return true },
+				maxStackFn:    func(s component.SlotData) int { return chestSlotMax(s) },
+				onSwapCraftFn: func(int) {},
+				onTakeFn:      func(*tickPlayer, component.SlotData) {},
+			}
+		},
+		canTakeItemForPickAll: func(component.SlotData, int) bool { return true },
+	}
+}
