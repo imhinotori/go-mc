@@ -539,13 +539,18 @@ func (t *TickLoop) getDamageAfterArmorAbsorb(p *tickPlayer, amount float32) floa
 
 // getDamageAfterMagicAbsorb is the port of
 // LivingEntity.getDamageAfterMagicAbsorb(DamageSource, float): the RESISTANCE mob-effect reduction
-// (a v1-cited no-op — the effect subsystem carries no RESISTANCE holder on players yet) then the
-// ENCHANTMENT damage protection (E-3): protection = EnchantmentHelper.getDamageProtection(level,
-// this, source) — the EPF sum over the victim's equipped Protection-family enchants — feeding the
-// CombatRules curve when positive.
+// (E-7 — beacon grants RESISTANCE to a player, and getEffect(RESISTANCE).getAmplifier() drives the
+// amplifier-scaled curve) then the ENCHANTMENT damage protection (E-3): protection =
+// EnchantmentHelper.getDamageProtection(level, this, source) — the EPF sum over the victim's equipped
+// Protection-family enchants — feeding the CombatRules curve when positive.
 //
 //	if (source.is(BYPASSES_EFFECTS)) return amount;
-//	if (hasEffect(RESISTANCE) && !source.is(BYPASSES_RESISTANCE)) { ... resistance curve ... }  // v1: no effects
+//	if (hasEffect(RESISTANCE) && !source.is(BYPASSES_RESISTANCE)) {
+//	    int k = (getEffect(RESISTANCE).getAmplifier() + 1) * 5;
+//	    int j = 25 - k;
+//	    float f = amount * (float) j;
+//	    amount = Math.max(f / 25.0F, 0.0F);
+//	}
 //	if (amount <= 0.0F) return 0.0F;
 //	if (source.is(BYPASSES_ENCHANTMENTS)) return amount;
 //	float protection = (float) EnchantmentHelper.getDamageProtection(level, this, source);
@@ -556,12 +561,21 @@ func (t *TickLoop) getDamageAfterMagicAbsorb(p *tickPlayer, src damageSource, am
 	if src.is("bypasses_effects") {
 		return amount
 	}
-	// hasEffect(RESISTANCE): v1 has no player RESISTANCE holder — the resistance branch is skipped.
-	const hasResistance = false
-	if hasResistance {
-		// Resistance curve (amplifier-scaled): preserved as a documented no-op branch. When it
-		// arrives: k = (amplifier+1)*5; amount = max(amount * (25-k)/25, 0).
-		_ = p
+	// hasEffect(RESISTANCE) && !source.is(BYPASSES_RESISTANCE): the RESISTANCE mob-effect damage
+	// reduction. Beacon (BEACON-01) grants RESISTANCE to a player in range; getEffect(RESISTANCE)
+	// .getAmplifier() drives the amplifier-scaled curve. BYPASSES_RESISTANCE (out_of_world/generic_kill)
+	// is a genuine tag read, mirroring the bypasses_effects read above. Cite LivingEntity
+	// .getDamageAfterMagicAbsorb: k = (amplifier+1)*5; j = 25-k; f = amount*(float)j; amount =
+	// Math.max(f/25.0F, 0.0F). Resistance I (amp 0) -> k=5 -> 20% off; Resistance IV (amp 3) -> k=20
+	// -> 80% off; Resistance V (amp 4) -> k=25 -> j=0 -> full immunity.
+	if amp, ok := playerEffectAmplifier(p, effectResistance); ok && !src.is("bypasses_resistance") {
+		k := (amp + 1) * 5
+		j := 25 - k
+		f := amount * float32(j)
+		amount = f / 25.0
+		if amount < 0.0 {
+			amount = 0.0
+		}
 	}
 	// `if (amount <= 0.0F) return 0.0F;` (bytecode: fload_2 fconst_0 fcmpg ifgt -> fconst_0 freturn).
 	if amount <= 0.0 {

@@ -334,6 +334,21 @@ func playerHasEffect(p *tickPlayer, id string) bool {
 	return ok
 }
 
+// playerEffectAmplifier is the port of LivingEntity.getEffect(Holder).getAmplifier(): the 0-based amplifier
+// of the player's active effect (Resistance I = 0, Resistance IV = 3). Returns (0, false) when the player
+// does not carry the effect — callers must gate on playerHasEffect (or the returned ok) before trusting the
+// amplifier, exactly as the vanilla `hasEffect(...) ? getEffect(...).getAmplifier()` guard requires.
+func playerEffectAmplifier(p *tickPlayer, id string) (int, bool) {
+	if p == nil || p.activeEffects == nil {
+		return 0, false
+	}
+	e, ok := p.activeEffects[id]
+	if !ok {
+		return 0, false
+	}
+	return e.amplifier, true
+}
+
 // splashPotionScale is the proximity factor for a splashed entity: scale = 1 - sqrt(dist)/4, where dist is
 // the squared distance from the potion AABB to the entity AABB. Clamped to [0,1]. Cite ThrownSplashPotion
 // .onHitAsPotion (d0 = 1 - sqrt(dist)/4).
