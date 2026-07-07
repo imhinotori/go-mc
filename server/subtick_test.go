@@ -246,3 +246,34 @@ func TestMovePlayerRotUpdatesHeadYaw(t *testing.T) {
 		t.Fatalf("after PosRot headYaw = %v, want -90 (mirrored to body yaw %v)", p.headYaw, p.yaw)
 	}
 }
+
+// TestJumpExhaustion: a jump (server on-ground → packet airborne with dy>0) costs 0.05 exhaustion
+// walking, 0.2 sprinting (ServerPlayer.jumpFromGround). No jump (stays on ground) costs nothing.
+func TestJumpExhaustion(t *testing.T) {
+	jumpExhaust := func(sprint bool) float32 {
+		loop := NewTickLoop(newFakeClock())
+		p := &tickPlayer{client: captureClient(8), confirmedTeleport: true, x: 0, y: 64, z: 0, onGround: true, sprinting: sprint}
+		// MovePlayerPos to y+1 with the onGround flag OFF (airborne) → a jump.
+		jump := pk.Marshal(int32(packetid.ServerboundMovePlayerPos),
+			pk.Double(0), pk.Double(65), pk.Double(0), pk.UnsignedByte(0))
+		loop.applyInput(p, SubtickInput{Packet: jump})
+		return p.exhaustion
+	}
+
+	if got := jumpExhaust(false); got != jumpExhaustionWalk {
+		t.Fatalf("walking jump exhaustion = %v, want %v", got, jumpExhaustionWalk)
+	}
+	if got := jumpExhaust(true); got != jumpExhaustionSprint {
+		t.Fatalf("sprinting jump exhaustion = %v, want %v", got, jumpExhaustionSprint)
+	}
+
+	// Staying on the ground (packet onGround = true) → no jump, no exhaustion.
+	loop := NewTickLoop(newFakeClock())
+	p := &tickPlayer{client: captureClient(8), confirmedTeleport: true, x: 0, y: 64, z: 0, onGround: true}
+	move := pk.Marshal(int32(packetid.ServerboundMovePlayerPos),
+		pk.Double(1), pk.Double(64), pk.Double(0), pk.UnsignedByte(movementFlagOnGround))
+	loop.applyInput(p, SubtickInput{Packet: move})
+	if p.exhaustion != 0 {
+		t.Fatalf("ground move accrued jump exhaustion %v, want 0", p.exhaustion)
+	}
+}

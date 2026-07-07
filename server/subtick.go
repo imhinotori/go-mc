@@ -128,6 +128,29 @@ func clampHorizontal(d float64) float64 { return math.Max(-3.0e7, math.Min(3.0e7
 // Cite clampVertical (ldc2_w ±2.0E7).
 func clampVertical(d float64) float64 { return math.Max(-2.0e7, math.Min(2.0e7, d)) }
 
+// jumpExhaustionSprint / jumpExhaustionWalk are ServerPlayer.jumpFromGround's food cost: 0.2 when
+// sprinting, 0.05 otherwise (ldc_w #2508/#2509). Cite ServerPlayer.jumpFromGround.
+const (
+	jumpExhaustionSprint float32 = 0.2
+	jumpExhaustionWalk   float32 = 0.05
+)
+
+// detectJumpExhaustion ports the handleMovePlayer jump-edge check (bytecode 631-657): if the server
+// believed the player was on the ground (pre-update p.onGround), the packet reports airborne
+// (!packetOnGround), and the vertical delta is positive (dy > 0), the client jumped — award the
+// jumpFromGround food exhaustion (0.2 sprinting / 0.05 walking). The jump VELOCITY is client-side
+// (already applied); only the exhaustion is server-authoritative. causeFoodExhaustion self-gates on
+// creative/spectator. Must be called BEFORE p.onGround is reassigned.
+func (t *TickLoop) detectJumpExhaustion(p *tickPlayer, dy float64, packetOnGround bool) {
+	if p.onGround && !packetOnGround && dy > 0.0 {
+		if p.sprinting {
+			t.causeFoodExhaustion(p, jumpExhaustionSprint)
+		} else {
+			t.causeFoodExhaustion(p, jumpExhaustionWalk)
+		}
+	}
+}
+
 // disconnectInvalidMovement mirrors handleMovePlayer's disconnect("invalid_player_movement"): record
 // the reason for the leave log and close the connection. The subtick caller returns WITHOUT mutating
 // position, so the NaN/Inf never reaches chunkCenterOf / the broad-phase / the tracker broadcast.
@@ -192,6 +215,12 @@ func (t *TickLoop) applyInput(p *tickPlayer, in SubtickInput) {
 		// runs CLIENT-side for the local player; the client already sends its slowed
 		// position. Re-applying that slowdown server-side produced an unpredicted position
 		// and the client closed the connection (the water-jump disconnect).
+		// Jump-from-ground exhaustion (handleMovePlayer bytecode 631-657): the server believed the player
+		// was on the ground, the packet reports airborne, and the vertical delta is positive → the client
+		// jumped. jumpFromGround awards the hunger cost (sprinting 0.2, else 0.05). Detected BEFORE onGround
+		// is reassigned (it reads the PREVIOUS onGround). The jump velocity itself is client-authoritative
+		// (already applied); only the exhaustion is server-side. Cite ServerPlayer.jumpFromGround.
+		t.detectJumpExhaustion(p, ny-p.y, flags&movementFlagOnGround != 0)
 		p.x, p.y, p.z = nx, ny, nz
 		p.onGround = flags&movementFlagOnGround != 0
 		t.maybeRecenter(p)
@@ -216,6 +245,9 @@ func (t *TickLoop) applyInput(p *tickPlayer, in SubtickInput) {
 		// per-axis before accepting it (same as the Pos variant). Look angles are accepted
 		// as sent — only the POSITION is collided.
 		nx, ny, nz := t.collidePlayer(p, cx, cy, cz)
+		// Jump-from-ground exhaustion (same as the Pos variant): read the PREVIOUS onGround before it is
+		// reassigned. Cite ServerPlayer.jumpFromGround (handleMovePlayer 631-657).
+		t.detectJumpExhaustion(p, ny-p.y, flags&movementFlagOnGround != 0)
 		// VANILLA AUTHORITY MODEL (BUG-1 fix): accept the client's submitted position
 		// verbatim (same as the Pos variant) — the server never re-applies water physics
 		// to a client-authoritative player; LivingEntity.travelInFluid runs client-side.
