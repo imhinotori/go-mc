@@ -398,6 +398,14 @@ func (m *mobAI) serverAiStep(t *TickLoop, e *Entity) {
 	// cancelled the same tick.
 	m.jumpControl.tick(e)
 	t.entityJumpStep(e)
+
+	// B-A3 — the LivingEntity.aiStep pushEntities() slot: shove overlapping pushable entities apart
+	// (the 0.05 vanilla impulse) and apply cramming damage when a crowd exceeds maxEntityCramming. In
+	// vanilla this is the tail of LivingEntity.aiStep (after checkAutoSpinAttack, before the profiler
+	// pop). A single minimal hook (entity_collision.go). PIG ORACLE: a lone pig has no overlapping
+	// pushable neighbour, so pushNearbyEntities early-outs on the empty list with ZERO new RNG draw
+	// and ZERO impulse — byte-identical. Cite LivingEntity.aiStep (offset 817: pushEntities()).
+	t.pushNearbyEntities(e)
 }
 
 // applyAnimalPathfindingMalus ports net.minecraft.world.entity.animal.Animal.<init>'s two

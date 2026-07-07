@@ -100,6 +100,12 @@ var (
 	// causingEntity = the enchanted item's owner). A bypasses_shield + NO_KNOCKBACK-less member per
 	// the damage_type JSON. Cite effects.DamageEntity.apply (new DamageSource(damageType, owner)).
 	damageTypeThorns = damageTypeID(tag.DamageTypeIDs["minecraft:thorns"])
+	// damageTypeCramming is minecraft:cramming — the source LivingEntity.pushEntities deals (6.0) when
+	// too many entities overlap: `hurtServer(damageSources().cramming(), 6.0F)` once
+	// list.size() > maxEntityCramming-1 non-passenger neighbours crowd the mob. No causing entity
+	// (DamageSources.cramming() — causingEntity null). Cite LivingEntity.pushEntities /
+	// DamageSources.cramming (DamageTypes.CRAMMING).
+	damageTypeCramming = damageTypeID(tag.DamageTypeIDs["minecraft:cramming"])
 )
 
 // damageSourceOf builds a DamageSource for an environmental/anonymous source: the given damage-type
@@ -230,4 +236,12 @@ func damageSourceIndirectMagic(ownerID int32) damageSource {
 // .lightningBolt(), 5.0F).
 func damageSourceLightning() damageSource {
 	return damageSource{typeTag: damageTypeLightning, attacker: 0}
+}
+
+// damageSourceCramming builds the DamageSource entity cramming deals: type cramming, no attacker
+// (DamageSources.cramming() — causingEntity null). The 6.0 hit LivingEntity.pushEntities applies
+// when list.size() > maxEntityCramming-1 non-passenger neighbours crowd the mob. Cite
+// LivingEntity.pushEntities: hurtServer(damageSources().cramming(), 6.0F).
+func damageSourceCramming() damageSource {
+	return damageSource{typeTag: damageTypeCramming, attacker: 0}
 }
