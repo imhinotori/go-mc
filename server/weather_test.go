@@ -263,3 +263,69 @@ func TestIsThunderingThreshold(t *testing.T) {
 		t.Fatal("thunder without rain: isThundering() must be false (thunder gated by rain)")
 	}
 }
+
+// TestWeatherDoWeatherCycleFalseFreezesTimers: with the ADVANCE_WEATHER gamerule off, the countdown/reroll
+// block is skipped entirely -- the rainTime/thunderTime/clearWeatherTime timers and the raining/thundering
+// flags are frozen, and no RNG is drawn off levelRandom. This is the getGameRules().getBoolean(ADVANCE_WEATHER)
+// guard in ServerLevel.advanceWeatherCycle.
+func TestWeatherDoWeatherCycleFalseFreezesTimers(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	loop.regions[globalRegion].levelRandom = levelgen.NewLegacyRandomSource(0xABCD)
+	loop.gamerules = newGameRules()
+	loop.gamerules.setBool(ruleAdvanceWeather, false)
+
+	// Arm timers that WOULD count down / re-roll if the cycle ran.
+	loop.weather.clearWeatherTime = 0
+	loop.weather.rainTime = 5
+	loop.weather.thunderTime = 5
+	loop.weather.raining = false
+	loop.weather.thundering = false
+
+	// A parallel reference random advanced by the SAME number of draws the cycle would make if it ran --
+	// which is zero, because the guard skips the whole block. We assert the loop's levelRandom is UNTOUCHED
+	// by comparing its next draw against a fresh reference's first draw.
+	ref := levelgen.NewLegacyRandomSource(0xABCD)
+
+	loop.tickWeather()
+
+	// Timers frozen (no decrement, no reroll).
+	if loop.weather.rainTime != 5 {
+		t.Fatalf("rainTime = %d, want 5 (frozen by advance_weather=false)", loop.weather.rainTime)
+	}
+	if loop.weather.thunderTime != 5 {
+		t.Fatalf("thunderTime = %d, want 5 (frozen by advance_weather=false)", loop.weather.thunderTime)
+	}
+	if loop.weather.raining || loop.weather.thundering {
+		t.Fatalf("flags must not flip when frozen: raining=%v thundering=%v", loop.weather.raining, loop.weather.thundering)
+	}
+
+	// levelRandom untouched: its first draw equals a fresh reference's first draw.
+	if got, want := loop.regions[globalRegion].levelRandom.NextIntN(1000000), ref.NextIntN(1000000); got != want {
+		t.Fatalf("levelRandom draw = %d, want %d (weather must draw NOTHING when frozen)", got, want)
+	}
+}
+
+// TestWeatherDoWeatherCycleFalseStillRamps: freezing the cycle does NOT freeze the rain/thunder LEVEL ramp
+// -- the ramp + broadcast tail runs unconditionally inside canHaveWeather(), so a storm frozen mid-flag
+// keeps draining its level toward the (frozen) flag target. With raining==true frozen, rainLevel still
+// climbs +0.01. This mirrors advanceWeatherCycle where only the countdown/reroll is gamerule-gated.
+func TestWeatherDoWeatherCycleFalseStillRamps(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	loop.regions[globalRegion].levelRandom = levelgen.NewLegacyRandomSource(1)
+	loop.gamerules = newGameRules()
+	loop.gamerules.setBool(ruleAdvanceWeather, false)
+
+	loop.weather.raining = true
+	loop.weather.rainTime = 5
+	loop.weather.rainLevel = 0.0
+
+	loop.tickWeather()
+
+	if loop.weather.rainLevel != 0.01 {
+		t.Fatalf("rainLevel = %v, want 0.01 (ramp runs even when the cycle is frozen)", loop.weather.rainLevel)
+	}
+	// The timer stayed frozen (proving the gate applied) while the level still ramped.
+	if loop.weather.rainTime != 5 {
+		t.Fatalf("rainTime = %d, want 5 (frozen)", loop.weather.rainTime)
+	}
+}

@@ -99,13 +99,15 @@ type weatherState struct {
 //	 satisfies all three. DEFERRED: real dimensionType read pending nether/end.]
 func (t *TickLoop) canHaveWeather() bool { return true }
 
-// advanceWeatherCycleGameRule is the GameRules.ADVANCE_WEATHER (doWeatherCycle) read. No gamerule store
-// exists in v1 (random_tick.go's randomTickSpeed is the same cited-constant pattern), so this is the
-// vanilla default true. Becomes a real gamerule read once the store lands.
+// advanceWeatherCycleGameRule is the GameRules.get(ADVANCE_WEATHER) read (ex-doWeatherCycle). It routes
+// through the real GameRules store (gamerules.go), so /gamerule advance_weather false freezes the whole
+// cycle (timers stop counting down, no re-rolls, no flag flips) exactly as vanilla -- the ramp + broadcast
+// tail still runs so a mid-storm freeze keeps draining the level toward its current flag target.
 //
-//	[VERIFIED javap GameRules: ADVANCE_WEATHER (rule "doWeatherCycle") default true. DEFERRED: real
-//	 gamerule store; default true is the vanilla registerBoolean("doWeatherCycle", true).]
-func (t *TickLoop) advanceWeatherCycleGameRule() bool { return true }
+//	[VERIFIED javap ServerLevel.advanceWeatherCycle: the countdown/reroll block is guarded by
+//	 getGameRules().getBoolean(GameRules.ADVANCE_WEATHER); default true (registerBoolean, 26.2 id
+//	 "advance_weather").]
+func (t *TickLoop) advanceWeatherCycleGameRule() bool { return t.gameRule(ruleAdvanceWeather) }
 
 // tickWeather is the 1:1 port of ServerLevel.advanceWeatherCycle. It runs on the COORDINATOR, once per
 // tick, BEFORE the region fan-out (like tickWorld) — weather is world-global, so it must run exactly
