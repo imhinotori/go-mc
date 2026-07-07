@@ -434,6 +434,16 @@ func (t *TickLoop) fluidTick(pos pk.Position) {
 		}
 	}
 
+	// LiquidBlock.shouldSpreadLiquid gate (LAVA only): before a lava cell flows, vanilla checks its
+	// neighbours for water and, if found, SOLIDIFIES this cell (obsidian if source, else cobblestone)
+	// instead of spreading. shouldSpreadLiquid does the replacement + fizz and returns false; the
+	// scheduled spread is then skipped. Water always returns true (no-op) so its flow is unperturbed.
+	// Cite: net.minecraft.world.level.block.LiquidBlock.shouldSpreadLiquid (called from onPlace/
+	// neighborChanged/the scheduleTick gate; here folded into the per-cell tick before spread()).
+	if !t.shouldSpreadLiquid(pos, cur) {
+		return
+	}
+
 	t.spread(pos, cur)
 }
 
@@ -721,19 +731,104 @@ func (t *TickLoop) spreadTo(pos pk.Position, f fluidState) {
 	}
 }
 
-// lavaSolidifyState is the lava-meets-water solidification target (Blocks.STONE default state).
+// lavaSolidifyState is the lava-meets-water solidification target for the VERTICAL case
+// (LavaFluid.spreadTo DOWN override): lava flowing DOWN onto water -> Blocks.STONE default state.
 func lavaSolidifyState() block.StateID {
 	return block.ToStateID[block.Stone{}]
 }
 
-// fizz ports LavaFluid.fizz's OBSERVABLE server effect for v1: the extinguish sound. The full
-// vanilla fizz also emits 8 LARGE_SMOKE particles at random offsets (a purely client-side visual
-// spawned by the server via levelEvent 1501); Sulfur has no levelEvent broadcast plumbing in the
-// fluid path yet, so the particle burst is DEFERRED and only the block replacement (done by the
-// caller) is guaranteed. Cite: net.minecraft.world.level.material.LavaFluid.fizz ->
-// level.levelEvent(1501, pos, 0). Kept as a seam so the particle/sound can be wired later.
+// obsidianState / cobblestoneState / basaltState are the HORIZONTAL solidification targets
+// (LiquidBlock.shouldSpreadLiquid): a SOURCE lava beside water -> Blocks.OBSIDIAN, a FLOWING lava
+// beside water -> Blocks.COBBLESTONE, and (nether) lava over soul_soil beside blue_ice ->
+// Blocks.BASALT. All use the block's defaultBlockState(): obsidian/cobblestone are propertyless;
+// basalt's RotatedPillarBlock default sets AXIS=Y (javap RotatedPillarBlock.<init>), so we pin
+// Axis:Y rather than the Go zero value (X). Cite Blocks.OBSIDIAN / .COBBLESTONE / .BASALT.
+func obsidianState() block.StateID    { return block.ToStateID[block.Obsidian{}] }
+func cobblestoneState() block.StateID { return block.ToStateID[block.Cobblestone{}] }
+func basaltState() block.StateID      { return block.ToStateID[block.Basalt{Axis: block.Y}] }
+
+// isBlockAt reports whether the world block at pos is exactly the given (default-state) block id.
+// Used by shouldSpreadLiquid for the soul_soil (below) and blue_ice (neighbour) checks
+// (BlockState.is(Block)).
+func (t *TickLoop) isBlockAt(pos pk.Position, id block.StateID) bool {
+	cur, ok := t.world().GetBlock(pos, dimMinY)
+	return ok && cur == id
+}
+
+// shouldSpreadLiquid ports net.minecraft.world.level.block.LiquidBlock.shouldSpreadLiquid — the
+// horizontal lava/water solidification gate. It runs ONLY for lava (water always returns true, so
+// water flow is unperturbed) and returns false when the cell solidified (the caller then skips the
+// spread), true when the cell should flow normally. Verified bytecode (26.2 jar):
+//
+//	if this.fluid.is(FluidTags.LAVA):
+//	    flowsIntoSoulSoil = level.getBlockState(pos.below()).is(SOUL_SOIL)
+//	    for d in POSSIBLE_FLOW_DIRECTIONS = [DOWN, SOUTH, NORTH, EAST, WEST]:
+//	        neighbor = pos.relative(d.getOpposite())          // = [UP, NORTH, SOUTH, WEST, EAST]
+//	        if level.getFluidState(neighbor).is(FluidTags.WATER):
+//	            block = level.getFluidState(pos).isSource() ? OBSIDIAN : COBBLESTONE
+//	            level.setBlockAndUpdate(pos, block.defaultBlockState())
+//	            fizz(level, pos); return false
+//	        if flowsIntoSoulSoil && level.getBlockState(neighbor).is(BLUE_ICE):
+//	            level.setBlockAndUpdate(pos, BASALT.defaultBlockState())
+//	            fizz(level, pos); return false
+//	return true
+//
+// So the checked neighbours are UP + the four horizontals (NOT below); the source-vs-flowing test
+// reads the fluidstate AT pos (the lava cell) — a SOURCE lava produces OBSIDIAN, a FLOWING lava
+// produces COBBLESTONE. The soul_soil/blue_ice -> BASALT branch is the nether interaction, ported
+// 1:1 (harmless in the overworld where blue_ice/soul_soil rarely coincide).
+func (t *TickLoop) shouldSpreadLiquid(pos pk.Position, f fluidState) bool {
+	if !f.isLava {
+		return true // LiquidBlock.shouldSpreadLiquid is a no-op for non-lava (water)
+	}
+	flowsIntoSoulSoil := t.isBlockAt(below(pos), block.ToStateID[block.SoulSoil{}])
+	// POSSIBLE_FLOW_DIRECTIONS opposites: DOWN->UP, SOUTH->NORTH, NORTH->SOUTH, EAST->WEST, WEST->EAST.
+	// Iterate in the SAME order as the jar's ImmutableList so the first water-adjacent neighbour
+	// (and therefore which solidification fires) is deterministic and matches vanilla.
+	neighbors := [5]pk.Position{
+		above(pos),          // DOWN.getOpposite() = UP
+		{X: pos.X, Y: pos.Y, Z: pos.Z - 1}, // SOUTH.getOpposite() = NORTH
+		{X: pos.X, Y: pos.Y, Z: pos.Z + 1}, // NORTH.getOpposite() = SOUTH
+		{X: pos.X - 1, Y: pos.Y, Z: pos.Z}, // EAST.getOpposite()  = WEST
+		{X: pos.X + 1, Y: pos.Y, Z: pos.Z}, // WEST.getOpposite()  = EAST
+	}
+	for _, np := range neighbors {
+		if t.fluidAt(np).isWater {
+			// source lava -> obsidian, flowing lava -> cobblestone (fluidstate AT the lava cell).
+			solid := cobblestoneState()
+			if t.fluidAt(pos).source {
+				solid = obsidianState()
+			}
+			t.setFluidBlock(pos, solid)
+			t.fizz(pos)
+			return false
+		}
+		if flowsIntoSoulSoil && t.isBlockAt(np, block.ToStateID[block.BlueIce{}]) {
+			t.setFluidBlock(pos, basaltState())
+			t.fizz(pos)
+			return false
+		}
+	}
+	return true
+}
+
+// lavaExtinguishEvent is the levelEvent id vanilla fires when lava solidifies against water
+// (LiquidBlock.fizz / LavaFluid.spreadTo -> level.levelEvent(1501, pos, 0)). On the client, case
+// 1501 resolves to the LAVA_EXTINGUISH sound + a burst of 8 LARGE_SMOKE particles at random
+// offsets. Cite: net.minecraft.world.level.block.LiquidBlock.fizz.
+const lavaExtinguishEvent = 1501
+
+// fizz ports net.minecraft.world.level.block.LiquidBlock.fizz -> level.levelEvent(1501, pos, 0):
+// the extinguish sound + smoke burst emitted when lava turns to stone/obsidian/cobblestone/basalt
+// against water (and reused for the vertical LavaFluid.spreadTo->stone case). Sulfur has no
+// ClientboundLevelEvent broadcast plumbing in the fluid path yet, so the client-facing sound +
+// particle burst is DEFERRED (documented seam); the block replacement is done by the caller and the
+// levelEvent is surfaced through fizzHook so tests can assert the fizzle fired at the right cell.
 func (t *TickLoop) fizz(pos pk.Position) {
-	udebug("fluid", "lava+water fizz -> stone at (%d,%d,%d)", pos.X, pos.Y, pos.Z)
+	udebug("fluid", "lava+water fizz (levelEvent %d) at (%d,%d,%d)", lavaExtinguishEvent, pos.X, pos.Y, pos.Z)
+	if t.fizzHook != nil {
+		t.fizzHook(pos, lavaExtinguishEvent)
+	}
 }
 
 // fluidKindName is a debug label for the fluid kind.

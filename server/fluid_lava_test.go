@@ -197,3 +197,104 @@ func TestLavaFallsDownColumn(t *testing.T) {
 		t.Fatalf("lava source spread sideways while it could still fall (should flow down first)")
 	}
 }
+
+
+// --- D-F2: horizontal lava+water solidification (LiquidBlock.shouldSpreadLiquid) ---
+
+// TestLavaSourceBesideWaterMakesObsidian: a SOURCE lava cell horizontally adjacent to water
+// solidifies IN PLACE to OBSIDIAN and fires the fizzle levelEvent (1501), instead of spreading.
+// Port gate for LiquidBlock.shouldSpreadLiquid (isSource -> Blocks.OBSIDIAN).
+func TestLavaSourceBesideWaterMakesObsidian(t *testing.T) {
+	loop, mgr := newFluidLoop()
+	lavaPos := pk.Position{X: 4, Y: 64, Z: 4}
+	setLava(mgr, lavaPos, 0)                                   // SOURCE lava (legacy 0)
+	setWater(mgr, pk.Position{X: 5, Y: 64, Z: 4}, 0)           // water to the EAST (horizontal)
+	var fizzes []pk.Position
+	var fizzEvent int
+	loop.fizzHook = func(pos pk.Position, event int) { fizzes = append(fizzes, pos); fizzEvent = event }
+
+	loop.fluidTick(lavaPos)
+
+	if _, isL := lavaLevelAt(mgr, lavaPos); isL {
+		t.Fatalf("source lava beside water was not solidified (still lava)")
+	}
+	id, ok := mgr.GetBlock(lavaPos, dimMinY)
+	if !ok || id != block.ToStateID[block.Obsidian{}] {
+		t.Fatalf("source lava beside water = %v (ok=%v), want OBSIDIAN %v", id, ok, block.ToStateID[block.Obsidian{}])
+	}
+	if len(fizzes) != 1 || fizzes[0] != lavaPos {
+		t.Fatalf("fizz not fired at the lava cell: %+v", fizzes)
+	}
+	if fizzEvent != 1501 {
+		t.Fatalf("fizz levelEvent = %d, want 1501 (LiquidBlock.fizz)", fizzEvent)
+	}
+}
+
+// TestFlowingLavaBesideWaterMakesCobblestone: a FLOWING lava cell horizontally adjacent to water
+// solidifies IN PLACE to COBBLESTONE and fizzes (LiquidBlock.shouldSpreadLiquid, non-source ->
+// Blocks.COBBLESTONE). The flowing lava is placed via a source neighbour so getNewLiquid keeps it
+// flowing (level 2), then the shouldSpreadLiquid gate solidifies it against the water.
+func TestFlowingLavaBesideWaterMakesCobblestone(t *testing.T) {
+	loop, mgr := newFluidLoop()
+	lavaPos := pk.Position{X: 4, Y: 64, Z: 4}
+	setLava(mgr, lavaPos, 2)                                   // FLOWING lava (legacy 2 -> amount 6)
+	setLava(mgr, pk.Position{X: 3, Y: 64, Z: 4}, 0)           // a lava SOURCE to the WEST feeds it
+	setWater(mgr, pk.Position{X: 4, Y: 64, Z: 5}, 0)          // water to the SOUTH (horizontal)
+	var fizzed bool
+	loop.fizzHook = func(pos pk.Position, event int) { fizzed = fizzed || (pos == lavaPos && event == 1501) }
+
+	loop.fluidTick(lavaPos)
+
+	if _, isL := lavaLevelAt(mgr, lavaPos); isL {
+		t.Fatalf("flowing lava beside water was not solidified (still lava)")
+	}
+	id, ok := mgr.GetBlock(lavaPos, dimMinY)
+	if !ok || id != block.ToStateID[block.Cobblestone{}] {
+		t.Fatalf("flowing lava beside water = %v (ok=%v), want COBBLESTONE %v", id, ok, block.ToStateID[block.Cobblestone{}])
+	}
+	if !fizzed {
+		t.Fatalf("flowing lava solidification did not fire the 1501 fizzle at the lava cell")
+	}
+}
+
+// TestLavaBesideWaterAboveMakesObsidian: the neighbour set includes UP (DOWN.getOpposite()), not
+// below — a source lava with water directly ABOVE solidifies to obsidian.
+func TestLavaBesideWaterAboveMakesObsidian(t *testing.T) {
+	loop, mgr := newFluidLoop()
+	lavaPos := pk.Position{X: 4, Y: 64, Z: 4}
+	setLava(mgr, lavaPos, 0)
+	setWater(mgr, pk.Position{X: 4, Y: 65, Z: 4}, 0) // water directly above
+	loop.fluidTick(lavaPos)
+	id, ok := mgr.GetBlock(lavaPos, dimMinY)
+	if !ok || id != block.ToStateID[block.Obsidian{}] {
+		t.Fatalf("lava with water above = %v, want OBSIDIAN (UP is in the neighbour set)", id)
+	}
+}
+
+// TestLavaBesideWaterBelowDoesNotSolidify: below is NOT in shouldSpreadLiquid's neighbour set, so a
+// lava cell with water ONLY below is not solidified by the HORIZONTAL rule (the vertical case is
+// LavaFluid.spreadTo, exercised separately). The lava should stay lava and flow normally.
+func TestLavaBesideWaterBelowDoesNotSolidify(t *testing.T) {
+	loop, mgr := newFluidLoop()
+	lavaPos := pk.Position{X: 4, Y: 64, Z: 4}
+	setLava(mgr, lavaPos, 0)
+	setWater(mgr, pk.Position{X: 4, Y: 63, Z: 4}, 0) // water directly below (not a shouldSpreadLiquid neighbour)
+	if loop.shouldSpreadLiquid(lavaPos, fluidState{isLava: true, source: true, amount: waterSourceAmount}) == false {
+		t.Fatalf("water only-below wrongly triggered horizontal solidification (below is not a neighbour)")
+	}
+	if _, isL := lavaLevelAt(mgr, lavaPos); !isL {
+		t.Fatalf("lava was solidified by water below via the horizontal rule; it must not be")
+	}
+}
+
+// TestWaterBesideLavaDoesNotSolidifyViaShouldSpread: shouldSpreadLiquid is a no-op for water (only
+// lava solidifies). A water cell next to lava returns true and is untouched by this gate.
+func TestWaterBesideLavaDoesNotSolidifyViaShouldSpread(t *testing.T) {
+	loop, mgr := newFluidLoop()
+	waterPos := pk.Position{X: 4, Y: 64, Z: 4}
+	setWater(mgr, waterPos, 0)
+	setLava(mgr, pk.Position{X: 5, Y: 64, Z: 4}, 0)
+	if !loop.shouldSpreadLiquid(waterPos, fluidState{isWater: true, source: true, amount: waterSourceAmount}) {
+		t.Fatalf("shouldSpreadLiquid returned false for water; it must be a no-op for non-lava")
+	}
+}

@@ -365,6 +365,14 @@ type TickLoop struct {
 	// as applyInputHook/phaseTrace.
 	onGoalCall func(e *Entity)
 
+	// fizzHook is a TEST-ONLY observability seam for the lava/water solidification fizzle
+	// (LiquidBlock.fizz -> level.levelEvent(1501, pos, 0)). When non-nil, TickLoop.fizz invokes it
+	// with the fizz position and the levelEvent id (1501) so a test can assert the fizzle fired at
+	// the right cell — the client-facing ClientboundLevelEvent broadcast is still a documented seam
+	// (no v1 levelEvent wire in the fluid path). In production it stays nil and costs one nil-check
+	// per fizz — the same zero-cost discipline as applyInputHook/phaseTrace/onGoalCall.
+	fizzHook func(pos pk.Position, event int)
+
 	// spawnSurfaceY is the world spawn column's top-solid block world-Y (the superflat
 	// generator's SurfaceY — the same value gameTick threads into the join bootstrap). It
 	// is set once before Run via SetSpawn and read only on the tick goroutine by
