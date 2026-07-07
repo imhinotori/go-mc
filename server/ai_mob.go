@@ -3,14 +3,16 @@ package server
 // ai_mob.go — AI-01: per-mob AI state + the serverAiStep-order driver.
 //
 // PORTED (the STANDING MANDATE) from the unobfuscated 26.2 jar (javap, this session):
-//   - net.minecraft.world.entity.Mob.serverAiStep  — the tick ORDER (bytecode-confirmed):
-//       sensing.tick -> targetSelector.tick -> goalSelector.tick
-//         -> targetSelector.tickRunningGoals(true) -> goalSelector.tickRunningGoals(true)
-//         -> navigation.tick -> customServerAiStep -> moveControl/lookControl/jumpControl.
-//     For a v1 PASSIVE Pig there is no targetSelector (no attack targets) and no sensing
-//     beyond the goals' own probes, so the driver runs goalSelector.tick THEN
-//     goalSelector.tickRunningGoals. navigation.tick + the move/look controls are added in
-//     Plan 07-02 (a goal here only SETS a target; it never moves the mob).
+//   - net.minecraft.world.entity.Mob.serverAiStep  — the tick ORDER + DECIMATION (bytecode-confirmed):
+//       sensing.tick (every tick) -> the (tickCount+id)%2 goal-DECIMATION branch (C-1):
+//         FULL phase  ((i%2==0) || tickCount<=1): targetSelector.tick()  -> goalSelector.tick()
+//         LIGHT phase (i%2!=0 && tickCount>1):    targetSelector.tickRunningGoals(false) -> goalSelector.tickRunningGoals(false)
+//       -> navigation.tick -> customServerAiStep -> moveControl/lookControl/jumpControl (all EVERY tick).
+//     So goal START/STOP re-eval + canUse (and any RNG canUse draws) run every OTHER tick, while
+//     movement/controls run full-rate. A running goal ticks on FULL phases via tick()'s tail
+//     tickRunningGoals(true); on LIGHT phases only if it requiresUpdateEveryTick() (e.g. @8
+//     RandomLookAroundGoal). See serverAiStep below for the exact javap condition + the (C-1) cite.
+//     For a v1 PASSIVE Pig the targetSelector is empty (no attack goals), so its branch is a no-op.
 //   - net.minecraft.world.entity.animal.pig.Pig.registerGoals — the exact passive goal set +
 //     priorities (the MOVED package animal/pig/Pig.class):
 //       0 FloatGoal, 1 PanicGoal(1.25), 3 BreedGoal(1.0), 4 TemptGoal(1.2, PIG_FOOD)×2,
@@ -111,6 +113,19 @@ type mobAI struct {
 	// step (clamped at 0, never negative). A plain int, RNG-FREE, tick-owned. Cite LivingEntity.aiStep
 	// (the `if (noJumpDelay > 0) noJumpDelay--;` at the top + the `noJumpDelay = 10` after a land jump).
 	noJumpDelay int
+
+	// aiTickCount is the mob's net.minecraft.world.entity.Entity.tickCount as read by
+	// Mob.serverAiStep for the AI tick-DECIMATION gate (C-1). Vanilla increments Entity.tickCount
+	// once per Entity.tick() (in baseTick, BEFORE aiStep -> serverAiStep), so by the time
+	// serverAiStep reads it the counter has already advanced this tick. We increment aiTickCount at
+	// the TOP of serverAiStep (before the decimation read) to reproduce that ordering exactly: a
+	// freshly built mob's first serverAiStep sees aiTickCount==1 (vanilla: tickCount==1 after the
+	// first baseTick), which the `tickCount > 1` guard turns into a FULL goal re-eval on tick 1.
+	// The decimation is `i = tickCount + getId(); if (i%2 != 0 && tickCount > 1)` — so the phase is
+	// the mob's OWN tickCount (NOT the world gametime): a mob spawned mid-game starts its cadence
+	// from 1, exactly like vanilla. PURE INTEGER MATH (no RNG draw), tick-owned (TICK-05). Cite
+	// Mob.serverAiStep (Entity.tickCount + getId()) % 2.
+	aiTickCount int
 
 	// noActionTime is net.minecraft.world.entity.Mob.noActionTime — the "how long since a player was
 	// near" counter that gates the random despawn (checkDespawn: `noActionTime > 600 &&
@@ -310,6 +325,13 @@ func (m *mobAI) serverAiStep(t *TickLoop, e *Entity) {
 	// the despawn idle counter checkDespawn reads/resets. Cite Mob.serverAiStep (bytecode offset 0-9).
 	m.noActionTime++
 
+	// C-1 — the mob's Entity.tickCount, advanced here (once per serverAiStep) so the decimation gate
+	// below reads the SAME already-incremented value vanilla reads (Entity.tickCount is bumped in
+	// baseTick, ahead of aiStep -> serverAiStep). PURE INTEGER MATH (no RNG draw). The first call
+	// sees aiTickCount==1 (vanilla tickCount==1 after the first baseTick) -> the `> 1` guard forces a
+	// full goal re-eval on tick 1. Cite Mob.serverAiStep (Entity.tickCount).
+	m.aiTickCount++
+
 	// MOB-SUB-04 — the noJumpDelay decrement at the TOP of LivingEntity.aiStep (`if (noJumpDelay > 0)
 	// noJumpDelay--;`). It is PURE INTEGER MATH (no RNG draw), so it cannot perturb the per-mob RNG
 	// stream the pig oracle pins. Clamped at 0 — never negative.
@@ -328,27 +350,43 @@ func (m *mobAI) serverAiStep(t *TickLoop, e *Entity) {
 	}
 
 	// (sensing.tick — skipped: the v1 goals probe the world directly in their canUse.)
-	// Mob.serverAiStep order (bytecode-confirmed, the file header doc lines 7-8): the targetSelector
-	// (combat-target goals) ticks BEFORE the goalSelector (action goals), then BOTH explicit
-	// tickRunningGoals run in the same order. Each goalSelector.tick already runs its OWN
-	// tickRunningGoals at its tail (ai_goal.go), and the existing single-selector code then called an
-	// explicit tickRunningGoals AFTER tick — matching vanilla's goalSelector.tick() then
-	// tickRunningGoals(canSimulate). The SAME shape is applied to BOTH selectors here. For a passive
-	// Pig the targetSelector is empty (zero TARGET goals declared), so its tick/tickRunningGoals are
-	// no-ops that draw NO RNG — the pig oracle stays byte-identical.
-	// jar order: target goals FIRST (combat targeting), then the action goals. Each goalSelector.tick()
-	// ENDS WITH its own tickRunningGoals(true) (the last line of vanilla GoalSelector.tick — javap-
-	// confirmed), so calling tick() already ticks every running goal exactly ONCE. The earlier code ALSO
-	// called an explicit tickRunningGoals(true) after each tick() — that DOUBLE-ticked every running goal
-	// per serverAiStep (e.g. MeleeAttackGoal decremented ticksUntilNextAttack twice + checkAndPerformAttack
-	// ran twice → the zombie attacked ~2× too fast). In vanilla, tick() and the explicit tickRunningGoals
-	// are MUTUALLY EXCLUSIVE per the Mob.serverAiStep (tickCount+id)%2 decimation: even-tick → tick()
-	// (which internally ticks once); odd-tick → tickRunningGoals(false). Our driver runs every tick with no
-	// decimation, so the faithful single-tick-per-step is just tick() alone (its built-in tickRunningGoals).
-	//	[VERIFIED javap GoalSelector.tick: ... ; this.tickRunningGoals(true);  // the final line.
-	//	 Mob.serverAiStep: if ((tickCount+id)%2==0) goalSelector.tick(); else goalSelector.tickRunningGoals(false).]
-	m.targetSelector.tick(t, e) // target goals (combat targeting) — ticks its running goals once at its tail
-	m.goals.tick(t, e)          // action goals — ticks its running goals once at its tail
+	//
+	// C-1 TICK DECIMATION — ported 1:1 from net.minecraft.world.entity.Mob.serverAiStep. Vanilla does
+	// NOT re-evaluate the goal/target selectors every tick: it splits the work by an odd/even parity of
+	// (Entity.tickCount + getId()). The full GoalSelector.tick() (goalCleanup start/stop re-eval + a
+	// tickRunningGoals(true) at its tail) runs on the "even" phase (or the first tick); the "odd" phase
+	// runs only tickRunningGoals(false) — no start/stop re-eval, and only goals that
+	// requiresUpdateEveryTick() get ticked. So a running goal's canUse/canContinueToUse (and any RNG it
+	// draws there) fires every OTHER tick, not every tick. Movement (navigation/controls, below) stays
+	// FULL rate — it is outside this branch. Order within each branch: targetSelector FIRST, then the
+	// action goalSelector (jar order). For a passive Pig the targetSelector is empty (zero TARGET goals),
+	// so its tick/tickRunningGoals are no-ops drawing NO RNG.
+	//
+	// The exact bytecode condition (javap Mob.serverAiStep offsets 36-153):
+	//   int i = this.tickCount + this.getId();
+	//   if (i % 2 != 0 && this.tickCount > 1) { targetSelector.tickRunningGoals(false); goalSelector.tickRunningGoals(false); }
+	//   else                                   { targetSelector.tick();                  goalSelector.tick(); }
+	// i.e. FULL tick when (i%2==0) OR (tickCount<=1); LIGHT (tickRunningGoals(false)) otherwise. The
+	// `tickCount > 1` guard makes the mob's first two AI steps always do a full re-eval so a freshly
+	// spawned mob acquires its first goals immediately. GoalSelector.tick() ends with its OWN
+	// tickRunningGoals(true) (javap-confirmed), so the FULL branch ticks each running goal exactly once;
+	// the two branches are MUTUALLY EXCLUSIVE, so no goal is ever double-ticked in a step.
+	//	[VERIFIED javap Mob.serverAiStep: istore_2 (i=tickCount+getId()); iload_2 iconst_2 irem ifeq ->tick;
+	//	 iload tickCount iconst_1 if_icmpgt ->light; else ->tick. GoalSelector.tick tail: tickRunningGoals(true).
+	//	 GoalSelector.tickRunningGoals(z): tick a running goal iff z || requiresUpdateEveryTick().]
+	i := m.aiTickCount + int(e.id)
+	if i%2 != 0 && m.aiTickCount > 1 {
+		// ODD phase (past the first tick): tick already-running goals only, no start/stop re-eval and no
+		// canUse draws. Only goals whose requiresUpdateEveryTick() is true actually tick (e.g. the pig's
+		// @8 RandomLookAroundGoal); the rest idle this tick. targetSelector FIRST (jar order).
+		m.targetSelector.tickRunningGoals(t, e, false)
+		m.goals.tickRunningGoals(t, e, false)
+	} else {
+		// EVEN phase (or the first tick): full re-eval. GoalSelector.tick() stops/starts goals by priority
+		// + flag locks and ticks every running goal once at its tail. targetSelector FIRST (jar order).
+		m.targetSelector.tick(t, e)
+		m.goals.tick(t, e)
+	}
 
 	// Phase 30.1 — the RNG-FREE stroll snap: a MOVE goal (Go stroll start() or the plugin pig's
 	// overloaded path_to(31 floats: 10 candidates + landMode)) emitted 10 RAW candidates this tick (hasWantCands). Validate +

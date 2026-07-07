@@ -20,7 +20,12 @@ func TestPigStrollsWithoutWedging(t *testing.T) {
 		floorY = 63
 		startY = 64.0
 		x, z   = 8.5, 8.5
-		ticks  = 600
+		// 2000 ticks: the C-1 Mob.serverAiStep decimation runs RandomStrollGoal.canUse (the re-roll
+		// gate) only every OTHER tick, so the mean real-tick gap between stroll fires roughly DOUBLES
+		// (nextInt(60) rolled every 2 ticks). A 600-tick window is then too short to reliably clear a
+		// legitimate (vanilla-faithful) dry spell; 2000 ticks gives many re-roll fires so a PERMANENT
+		// wedge (the bug under test) is unambiguously distinguishable from an unlucky dry spell.
+		ticks  = 2000
 	)
 	clock := newFakeClock()
 	loop := NewTickLoop(clock)
@@ -86,10 +91,15 @@ func TestPigStrollsWithoutWedging(t *testing.T) {
 		pig.x, pig.y, pig.z, maxStuck, len(seen))
 
 	// REGRESSION ASSERTION (Phase 30.1): a pig strolling on flat ground must NOT wedge permanently.
-	// Vanilla RandomStrollGoal re-rolls a reachable target every ~interval ticks, so the mob is never
-	// motionless for hundreds of ticks. Pre-fix, getPosition returns an unreachable underground Y and
-	// the mob jams forever (maxStuck == ticks). Post-fix, it ambles and visits many distinct columns.
-	const maxAcceptableStuck = strollDefaultInterval * 3 // generous: ~3 re-roll intervals
+	// Vanilla RandomStrollGoal re-rolls a reachable target periodically, so the mob is never motionless
+	// for the whole run. Pre-fix (the Phase-30.1 bug), getPosition returned an unreachable underground Y
+	// and the mob jammed FOREVER (maxStuck == ticks). Post-fix, it ambles and visits many distinct
+	// columns. The threshold is keyed to the C-1 decimated cadence: with Mob.serverAiStep running the
+	// re-roll gate every OTHER tick, the mean real-tick gap between fires is ~2× the raw interval, and a
+	// legitimate dry spell can reach several hundred ticks. strollDefaultInterval*6 (720) comfortably
+	// clears the longest observed vanilla-faithful dry spell yet is FAR below a permanent wedge over the
+	// 2000-tick window — so a true "never re-rolls" regression (maxStuck→2000) still trips it.
+	const maxAcceptableStuck = strollDefaultInterval * 6 // ~6 raw intervals (decimation ~2×s the gap)
 	if maxStuck > maxAcceptableStuck {
 		t.Fatalf("pig wedged: longest motionless run=%d ticks (> %d) — RandomStrollGoal picked an "+
 			"unreachable target and never re-rolled (see Phase 30.1: LandRandomPos.getPos ground-snap)",
