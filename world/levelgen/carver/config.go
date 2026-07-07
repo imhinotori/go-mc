@@ -51,6 +51,10 @@ const (
 	KindCave CarverKind = iota
 	// KindCanyon is the CanyonWorldCarver shape (a tall narrow ravine).
 	KindCanyon
+	// KindNetherCave is the NetherWorldCarver shape: the same winding-tunnel walk as KindCave with
+	// getCaveBound()=10, getYScale()=5.0, a doubled getThickness(), and a lava-floor carveBlock
+	// (LAVA at/below minGenY+31, else CAVE_AIR — no aquifer). CITE: NetherWorldCarver.
+	KindNetherCave
 )
 
 // floatProvider ports the subset of net.minecraft.util.valueproviders.FloatProvider
@@ -303,8 +307,14 @@ func parseCarverConfigBytes(raw []byte) (*CarverConfig, error) {
 	}
 
 	switch jc.Type {
-	case "minecraft:cave", "cave":
-		cfg.Kind = KindCave
+	case "minecraft:cave", "cave", "minecraft:nether_cave", "nether_cave":
+		// nether_cave is CaveCarverConfiguration too — same fields as cave; only the carver's
+		// bound/yscale/thickness/carveBlock differ (KindNetherCave selects that impl).
+		if jc.Type == "minecraft:nether_cave" || jc.Type == "nether_cave" {
+			cfg.Kind = KindNetherCave
+		} else {
+			cfg.Kind = KindCave
+		}
 		if cfg.HorizontalRadiusMultiplier, err = parseFloatProvider(jc.Config.HorizontalRadiusMultiplier); err != nil {
 			return nil, fmt.Errorf("carver: horizontal_radius_multiplier: %w", err)
 		}

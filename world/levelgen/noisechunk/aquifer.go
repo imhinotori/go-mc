@@ -47,6 +47,13 @@ import (
 type Aquifer struct {
 	nc *NoiseChunk
 
+	// disabled selects Aquifer.createDisabled: computeSubstance short-circuits to the global fluid
+	// picker (density>0 => solid, else the sea fluid below seaLevel) with NO grid sampling. The nether
+	// (aquifers_enabled:false) uses this; disabledFluid is its sea fluid (lava for the nether). CITE:
+	// Aquifer.createDisabled + NoiseBasedChunkGenerator.createFluidPicker.
+	disabled      bool
+	disabledFluid block.StateID
+
 	barrierNoise          density.Function
 	fluidLevelFloodedness density.Function
 	fluidLevelSpread      density.Function
@@ -227,6 +234,21 @@ func NewAquifer(r *router.Router, nc *NoiseChunk, pos level.ChunkPos) *Aquifer {
 	return a
 }
 
+// NewDisabledAquifer builds an Aquifer.createDisabled for a dimension whose noise settings have
+// aquifers_enabled:false (the nether). It does NO grid sampling and needs no router noises: every
+// non-solid cell below seaLevel is disabledFluid (the settings default_fluid — lava for the nether),
+// above it is air. seaLevel is the settings sea_level (nether 32). CITE: Aquifer.createDisabled.
+func NewDisabledAquifer(seaLevel int, disabledFluid block.StateID) *Aquifer {
+	return &Aquifer{
+		disabled:      true,
+		disabledFluid: disabledFluid,
+		seaLevel:      seaLevel,
+		air:           block.ToStateID[block.Air{}],
+		water:         block.ToStateID[block.Water{Level: 0}],
+		lava:          block.ToStateID[block.Lava{Level: 0}],
+	}
+}
+
 // dimensionMinY is DimensionType.MIN_Y for the overworld (-64). MIN_Y*2 = the air fluid
 // status's fluid level (everything is above it, so the global air status returns air).
 const dimensionMinY = -64
@@ -274,6 +296,17 @@ func (a *Aquifer) computeSubstance(blockX, blockY, blockZ int, dens float64) (bl
 	if dens > 0 {
 		a.shouldScheduleFluidUpdate = false // bytecode 6-8
 		return 0, false
+	}
+
+	// DisabledAquifer.computeSubstance (Aquifer.createDisabled): no grid sampling — a non-solid cell
+	// is the global fluid picker's fluid at y. For the nether the picker is `y < seaLevel ? lava : air`
+	// (default_fluid == lava), so below sea level (32) the cell is lava, above it is air.
+	if a.disabled {
+		a.shouldScheduleFluidUpdate = false
+		if blockY < a.seaLevel {
+			return a.disabledFluid, true
+		}
+		return 0, false // air above the sea
 	}
 
 	global := a.globalComputeFluid(blockY)

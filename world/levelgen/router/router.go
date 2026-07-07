@@ -245,13 +245,24 @@ type Router struct {
 // final_density) so a missing/unported node type surfaces at construction, not at
 // some later runtime sample (T-9-07).
 func NewRouter(seed int64) (*Router, error) {
-	raw, err := data.NoiseSettings("minecraft:overworld")
+	return NewRouterFor(seed, "minecraft:overworld")
+}
+
+// NewRouterFor parses the wired noise graph for a SPECIFIC noise_settings registry id
+// (e.g. "minecraft:overworld" or "minecraft:the_nether") and binds it to the seeded
+// primitives. It is the dimension-parameterized form of NewRouter: the overworld path is
+// NewRouter's alias; the nether generator passes "minecraft:the_nether" so the router,
+// geometry (min_y/height/sea_level), default block/fluid, and surface_rule all come from
+// nether.json. PURE over (seed, settingsID). CITE: NoiseBasedChunkGenerator binds the
+// per-dimension NoiseGeneratorSettings the LevelStem references.
+func NewRouterFor(seed int64, settingsID string) (*Router, error) {
+	raw, err := data.NoiseSettings(settingsID)
 	if err != nil {
-		return nil, fmt.Errorf("router: load overworld noise settings: %w", err)
+		return nil, fmt.Errorf("router: load noise settings %q: %w", settingsID, err)
 	}
 	var js noiseGeneratorSettingsJSON
 	if err := json.Unmarshal(raw, &js); err != nil {
-		return nil, fmt.Errorf("router: parse overworld noise settings: %w", err)
+		return nil, fmt.Errorf("router: parse noise settings %q: %w", settingsID, err)
 	}
 	settings := NoiseGeneratorSettings{
 		Noise:              js.Noise,
@@ -273,7 +284,7 @@ func NewRouter(seed int64) (*Router, error) {
 	for _, name := range routerFunctionNames {
 		rawFn, ok := js.NoiseRouter[name]
 		if !ok {
-			return nil, fmt.Errorf("router: overworld noise_router missing %q", name)
+			return nil, fmt.Errorf("router: noise_router missing %q", name)
 		}
 		fn, err := reg.Parse(rawFn)
 		if err != nil {

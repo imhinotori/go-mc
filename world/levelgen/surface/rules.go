@@ -215,7 +215,7 @@ func (y yCondition) test(c *Context) bool {
 	if y.addStoneDepth {
 		add = c.stoneDepthAbove
 	}
-	return c.blockY+add >= y.anchor.resolveY(c.minY)+c.surfaceDepth*y.surfaceDepthMultiplier
+	return c.blockY+add >= y.anchor.resolveY(c.minY, c.height)+c.surfaceDepth*y.surfaceDepthMultiplier
 }
 
 // verticalGradientCondition ports SurfaceRules$VerticalGradientConditionSource: a
@@ -230,8 +230,8 @@ type verticalGradientCondition struct {
 }
 
 func (v verticalGradientCondition) test(c *Context) bool {
-	trueAtAndBelow := v.trueAtAndBelowAnchor.resolveY(c.minY)
-	falseAtAndAbove := v.falseAtAndAboveAnchor.resolveY(c.minY)
+	trueAtAndBelow := v.trueAtAndBelowAnchor.resolveY(c.minY, c.height)
+	falseAtAndAbove := v.falseAtAndAboveAnchor.resolveY(c.minY, c.height)
 	y := c.blockY
 	if y <= trueAtAndBelow {
 		return true
@@ -318,21 +318,41 @@ func (temperatureCondition) test(c *Context) bool {
 
 // ---- VerticalAnchor (absolute / above_bottom) ----
 
-// verticalAnchor ports net.minecraft.world.level.levelgen.VerticalAnchor for the two
-// kinds the surface_rule uses: an absolute Y, or an offset above the world bottom.
+// verticalAnchor ports net.minecraft.world.level.levelgen.VerticalAnchor for the three
+// kinds the surface_rule uses: an absolute Y, an offset above the world bottom, or an offset
+// below the world top (the nether's bedrock-roof gradient uses below_top).
 type verticalAnchor struct {
-	absolute bool
-	value    int
+	kind  anchorKind
+	value int
 }
 
-// resolveY ports VerticalAnchor.resolveY(WorldGenerationContext): an absolute anchor is
-// its value; an above_bottom anchor is minGenY + value (the surface walk's minY is the
-// gen bottom). (Only absolute + above_bottom appear in the overworld surface_rule.)
-func (a verticalAnchor) resolveY(minY int) int {
-	if a.absolute {
+// anchorKind selects the VerticalAnchor record variant.
+type anchorKind int
+
+const (
+	anchorAbsolute    anchorKind = iota // VerticalAnchor.Absolute
+	anchorAboveBottom                   // VerticalAnchor.AboveBottom
+	anchorBelowTop                      // VerticalAnchor.BelowTop
+)
+
+// resolveY ports VerticalAnchor.resolveY(WorldGenerationContext):
+//
+//	Absolute.resolveY    = y
+//	AboveBottom.resolveY = getMinGenY() + offset
+//	BelowTop.resolveY    = getGenDepth() - 1 + getMinGenY() - offset
+//
+// where getMinGenY() is the surface walk's minY and getGenDepth() is the dimension height. The
+// overworld surface_rule uses only absolute + above_bottom; the nether adds below_top (bedrock
+// roof). CITE: VerticalAnchor.{Absolute,AboveBottom,BelowTop}.resolveY (26.2 jar).
+func (a verticalAnchor) resolveY(minY, height int) int {
+	switch a.kind {
+	case anchorAbsolute:
 		return a.value
+	case anchorBelowTop:
+		return height - 1 + minY - a.value
+	default: // anchorAboveBottom
+		return minY + a.value
 	}
-	return minY + a.value
 }
 
 // ---- math helpers (ported from net.minecraft.util.Mth) ----
@@ -623,13 +643,13 @@ func parseBiomeList(raw json.RawMessage) ([]string, error) {
 func parseAnchor(a anchorJSON) (verticalAnchor, error) {
 	switch {
 	case a.Absolute != nil:
-		return verticalAnchor{absolute: true, value: *a.Absolute}, nil
+		return verticalAnchor{kind: anchorAbsolute, value: *a.Absolute}, nil
 	case a.AboveBottom != nil:
-		return verticalAnchor{absolute: false, value: *a.AboveBottom}, nil
+		return verticalAnchor{kind: anchorAboveBottom, value: *a.AboveBottom}, nil
 	case a.BelowTop != nil:
-		// below_top would need the gen top; it does not appear in the overworld
-		// surface_rule, so reject it loudly rather than guess.
-		return verticalAnchor{}, fmt.Errorf("vertical anchor below_top is unsupported by the surface port")
+		// below_top resolves against the gen top (getGenDepth-1+minGenY-offset); the nether's
+		// bedrock-roof gradient uses it. Threaded through Context.height at test time.
+		return verticalAnchor{kind: anchorBelowTop, value: *a.BelowTop}, nil
 	default:
 		return verticalAnchor{}, fmt.Errorf("vertical anchor has no absolute/above_bottom/below_top key")
 	}

@@ -306,6 +306,9 @@ type Context struct {
 	nc      *noisechunk.NoiseChunk
 	biomeOf BiomeGetter
 	minY    int
+	// height is the dimension gen depth (nc.Height()) — needed by VerticalAnchor.BelowTop.resolveY
+	// (getGenDepth-1+minGenY-offset), which the nether's bedrock-roof vertical_gradient uses.
+	height int
 
 	// per-XZ state
 	blockX, blockZ int
@@ -485,6 +488,7 @@ func BuildSurface(s *SurfaceSystem, rule RuleSource, ch *level.Chunk, nc *noisec
 		nc:      nc,
 		biomeOf: biomeOf,
 		minY:    minY,
+		height:  nc.Height(),
 	}
 
 	// Make sure WORLD_SURFACE_WG reflects the filled+carved terrain before the walk

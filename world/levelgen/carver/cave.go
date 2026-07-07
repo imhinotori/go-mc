@@ -15,13 +15,34 @@ import (
 //
 // Source: CaveWorldCarver.{carve, createRoom, createTunnel, getThickness,
 // getCaveBound, getYScale, shouldSkip} + WorldCarver.carveEllipsoid/canReach.
-type caveWorldCarver struct{}
+// caveWorldCarver carries the four hooks that differ between CaveWorldCarver and its NetherWorldCarver
+// subclass: the tunnel-count bound (getCaveBound), the vertical stretch (getYScale), the per-branch
+// thickness draw (getThickness), and whether carveBlock uses the nether lava-floor rule instead of the
+// aquifer. The overworld cave uses caveWorldCarver{bound:15, yScale:1.0, thicknessFn:caveThickness};
+// the nether uses {bound:10, yScale:5.0, thicknessFn:netherThickness, nether:true}.
+type caveWorldCarver struct {
+	bound       int
+	yScale      float64
+	thicknessFn func(*legacyRandom) float32
+	nether      bool
+}
 
 // getCaveBound ports CaveWorldCarver.getCaveBound() = 15.
 const caveBound = 15
 
 // getYScale ports CaveWorldCarver.getYScale() = 1.0.
 const caveYScale = 1.0
+
+// newCaveWorldCarver is the overworld cave carver (bound 15, yScale 1.0, overworld thickness).
+func newCaveWorldCarver() caveWorldCarver {
+	return caveWorldCarver{bound: caveBound, yScale: caveYScale, thicknessFn: getThickness}
+}
+
+// newNetherWorldCarver is the NetherWorldCarver: getCaveBound()=10, getYScale()=5.0, the doubled
+// getThickness, and the lava-floor carveBlock. CITE: NetherWorldCarver overrides.
+func newNetherWorldCarver() caveWorldCarver {
+	return caveWorldCarver{bound: 10, yScale: 5.0, thicknessFn: getNetherThickness, nether: true}
+}
 
 // isStartChunk ports CaveWorldCarver.isStartChunk = rng.nextFloat() <= probability.
 func (caveWorldCarver) isStartChunk(cfg *CarverConfig, rng *legacyRandom) bool {
@@ -40,12 +61,14 @@ func caveSkip(floorLevel float64) skipChecker {
 }
 
 // carve ports CaveWorldCarver.carve. rng is the per-source-chunk legacy random.
-func (caveWorldCarver) carve(cfg *CarverConfig, cc *carveContext, rng *legacyRandom, src level.ChunkPos) bool {
+func (w caveWorldCarver) carve(cfg *CarverConfig, cc *carveContext, rng *legacyRandom, src level.ChunkPos) bool {
+	// A nether carve uses the lava-floor carveBlock rule for every ellipsoid it writes.
+	cc.netherCarve = w.nether
 	// j = SectionPos.sectionToBlockCoord(getRange()*2 - 1) = (7) << 4 = 112.
 	j := (carverRange*2 - 1) << 4
 
 	// tunnelCount = nextInt(nextInt(nextInt(getCaveBound())+1)+1).
-	tunnelCount := int(rng.nextIntN(int32(rng.nextIntN(int32(rng.nextIntN(caveBound)+1))+1)))
+	tunnelCount := int(rng.nextIntN(int32(rng.nextIntN(int32(rng.nextIntN(int32(w.bound))+1)) + 1)))
 
 	carvedAny := false
 	for k := 0; k < tunnelCount; k++ {
@@ -70,11 +93,11 @@ func (caveWorldCarver) carve(cfg *CarverConfig, cc *carveContext, rng *legacyRan
 		for branch := 0; branch < branchCount; branch++ {
 			yaw := float64(rng.nextFloat()) * (math.Pi * 2)
 			pitch := float64((rng.nextFloat() - 0.5) / 4.0)
-			thickness := getThickness(rng)
+			thickness := w.thicknessFn(rng)
 			branchStart := j - int(rng.nextIntN(int32(j/4)))
 			seed := rng.nextLong()
 			if createTunnel(cfg, cc, seed, x, y, z, horizMul, vertMul,
-				thickness, float32(yaw), float32(pitch), 0, branchStart, caveYScale, skip) {
+				thickness, float32(yaw), float32(pitch), 0, branchStart, w.yScale, skip) {
 				carvedAny = true
 			}
 		}
@@ -99,6 +122,13 @@ func getThickness(rng *legacyRandom) float32 {
 		f *= rng.nextFloat()*rng.nextFloat()*3.0 + 1.0
 	}
 	return f
+}
+
+// getNetherThickness ports NetherWorldCarver.getThickness: (nextFloat()*2 + nextFloat()) * 2. NOTE
+// the nether override does NOT include the base's nextInt(10)==0 fatten branch — it draws exactly two
+// nextFloat()s (RNG draw order preserved). CITE: NetherWorldCarver.getThickness.
+func getNetherThickness(rng *legacyRandom) float32 {
+	return (rng.nextFloat()*2.0 + rng.nextFloat()) * 2.0
 }
 
 // createTunnel ports CaveWorldCarver.createTunnel: the ellipsoid-segment random walk.

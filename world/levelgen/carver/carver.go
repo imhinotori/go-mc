@@ -101,6 +101,11 @@ type carveContext struct {
 	water   block.StateID
 	lava    block.StateID
 	minGenY int
+
+	// netherCarve selects NetherWorldCarver.carveBlock instead of the aquifer-aware base rule: the
+	// carve state is LAVA at/below minGenY+31 and CAVE_AIR above it, with NO aquifer query. Set by the
+	// nether cave carver's carve() for the duration of its walk. CITE: NetherWorldCarver.carveBlock.
+	netherCarve bool
 }
 
 // skipChecker ports WorldCarver$CarveSkipChecker.shouldSkip(ctx, dx, dy, dz, y): the
@@ -119,6 +124,14 @@ func (cc *carveContext) canReplaceBlock(state block.StateID) bool {
 // config's lava level -> lava; otherwise the aquifer substance at density 0 (water/
 // lava if flooded, else air/cave_air). A nil (air) substance carves cave_air.
 func (cc *carveContext) getCarveState(cfg *CarverConfig, wx, wy, wz int) block.StateID {
+	// NetherWorldCarver.carveBlock: LAVA at/below minGenY+31, else CAVE_AIR — no lava_level anchor,
+	// no aquifer. (The nether lava sea floor is a fixed 31 blocks above the gen bottom.)
+	if cc.netherCarve {
+		if wy <= cc.minGenY+31 {
+			return cc.lava
+		}
+		return cc.caveAir
+	}
 	if wy <= cfg.LavaLevel.resolveY(cc.minGenY) {
 		return cc.lava
 	}
@@ -236,8 +249,10 @@ func carverFor(cfg *CarverConfig) worldCarver {
 	switch cfg.Kind {
 	case KindCanyon:
 		return canyonWorldCarver{}
+	case KindNetherCave:
+		return newNetherWorldCarver()
 	default:
-		return caveWorldCarver{}
+		return newCaveWorldCarver()
 	}
 }
 
@@ -259,6 +274,23 @@ func NewConfiguredCarver(cfg *CarverConfig) *ConfiguredCarver {
 // order (the order is load-bearing — it salts each carver's per-chunk seed).
 func LoadOverworldCarvers() ([]*ConfiguredCarver, error) {
 	ids := []string{"minecraft:cave", "minecraft:cave_extra_underground", "minecraft:canyon"}
+	out := make([]*ConfiguredCarver, 0, len(ids))
+	for _, id := range ids {
+		cfg, err := ParseCarverConfig(id)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, NewConfiguredCarver(cfg))
+	}
+	return out, nil
+}
+
+// LoadNetherCarvers parses the nether biomes' carver list. Every nether biome (nether_wastes,
+// soul_sand_valley, crimson_forest, warped_forest, basalt_deltas) declares the SAME single carver
+// `minecraft:nether_cave` in its `carvers.air` list, so the nether carver set is exactly that one
+// carver. Its index (0) salts its per-chunk seed. CITE: the nether biome JSON `carvers` field.
+func LoadNetherCarvers() ([]*ConfiguredCarver, error) {
+	ids := []string{"minecraft:nether_cave"}
 	out := make([]*ConfiguredCarver, 0, len(ids))
 	for _, id := range ids {
 		cfg, err := ParseCarverConfig(id)

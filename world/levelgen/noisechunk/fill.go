@@ -36,10 +36,43 @@ import (
 // NoiseBasedChunkGenerator.fillFromNoise -> ChunkAccess.markPosForPostProcessing. nil is a
 // no-op (test/standalone callers that don't collect post-process marks).
 func Fill(nc *NoiseChunk, aq *Aquifer, ov *OreVeinifier, set func(localX, worldY, localZ int, state block.StateID), mark func(localX, worldY, localZ int)) {
-	stone := block.ToStateID[block.Stone{}]
-	deepslate := block.ToStateID[block.Deepslate{Axis: block.Y}]
-	bedrock := block.ToStateID[block.Bedrock{}]
+	FillWith(nc, aq, ov, overworldFillParams(), set, mark)
+}
 
+// FillParams carries the per-dimension solid-fill blocks: the default solid block (settings
+// default_block), the deepslate band (nil-equivalent when the dimension has none), the bedrock floor,
+// and whether the deepslate transition applies. The overworld uses stone+deepslate; the nether uses
+// netherrack with NO deepslate band. CITE: NoiseGeneratorSettings.defaultBlock + the deepslate
+// surface rule (overworld only).
+type FillParams struct {
+	defaultBlock block.StateID
+	deepslate    block.StateID
+	bedrock      block.StateID
+	hasDeepslate bool
+}
+
+// overworldFillParams is the stone/deepslate/bedrock set the original Fill hardcoded.
+func overworldFillParams() FillParams {
+	return FillParams{
+		defaultBlock: block.ToStateID[block.Stone{}],
+		deepslate:    block.ToStateID[block.Deepslate{Axis: block.Y}],
+		bedrock:      block.ToStateID[block.Bedrock{}],
+		hasDeepslate: true,
+	}
+}
+
+// NetherFillParams is the nether solid-fill set: netherrack (default_block), no deepslate band, a
+// bedrock floor. CITE: nether.json default_block == netherrack; the nether has no deepslate.
+func NetherFillParams() FillParams {
+	return FillParams{
+		defaultBlock: block.ToStateID[block.Netherrack{}],
+		bedrock:      block.ToStateID[block.Bedrock{}],
+		hasDeepslate: false,
+	}
+}
+
+// FillWith is Fill parameterized by the dimension's solid-fill blocks (FillParams).
+func FillWith(nc *NoiseChunk, aq *Aquifer, ov *OreVeinifier, fp FillParams, set func(localX, worldY, localZ int, state block.StateID), mark func(localX, worldY, localZ int)) {
 	minY := nc.MinY()
 	maxY := minY + nc.Height()
 
@@ -48,7 +81,7 @@ func Fill(nc *NoiseChunk, aq *Aquifer, ov *OreVeinifier, set func(localX, worldY
 		for lz := 0; lz < 16; lz++ {
 			wz := nc.WorldZ(lz)
 			for y := minY; y < maxY; y++ {
-				set(lx, y, lz, blockState(nc, aq, ov, lx, y, lz, wx, wz, stone, deepslate, bedrock, mark))
+				set(lx, y, lz, blockState(nc, aq, ov, lx, y, lz, wx, wz, fp, mark))
 			}
 		}
 	}
@@ -73,12 +106,12 @@ func (nc *NoiseChunk) beardAt(wx, wy, wz int) float64 {
 func blockState(
 	nc *NoiseChunk, aq *Aquifer, ov *OreVeinifier,
 	lx, y, lz, wx, wz int,
-	stone, deepslate, bedrock block.StateID,
+	fp FillParams,
 	mark func(localX, worldY, localZ int),
 ) block.StateID {
 	// Bedrock floor (provisional; the real RandomBedrockFloor is a Wave-7 surface concern).
 	if y == nc.MinY() {
-		return bedrock
+		return fp.bedrock
 	}
 
 	d := nc.FinalDensity(lx, y, lz)
@@ -96,15 +129,17 @@ func blockState(
 	}
 
 	if d > 0 {
-		// SOLID: Rule 2 = ore veinifier (a vein block overrides the default rock).
+		// SOLID: Rule 2 = ore veinifier (a vein block overrides the default rock). The nether passes a
+		// disabled veinifier (ore_veins_enabled:false), so vein() never fires there.
 		if st, ok := ov.vein(wx, y, wz); ok {
 			return st
 		}
-		// Rule 3 = default solid block: stone, deepslate at/below the transition.
-		if y <= deepslateTopY {
-			return deepslate
+		// Rule 3 = default solid block: the settings default_block (stone/netherrack), with the
+		// deepslate band at/below the transition ONLY where the dimension has deepslate (overworld).
+		if fp.hasDeepslate && y <= deepslateTopY {
+			return fp.deepslate
 		}
-		return stone
+		return fp.defaultBlock
 	}
 
 	// NON-SOLID with no aquifer fluid -> air (dry cave / above the water table).
@@ -116,6 +151,12 @@ func blockState(
 // the Wave-8 Generator can hand the column to the wire path. It is the real replacement for
 // FillProvisional: same finishing, real aquifer + ore-vein placement.
 func FillChunk(nc *NoiseChunk, aq *Aquifer, ov *OreVeinifier) *level.Chunk {
+	return FillChunkWith(nc, aq, ov, overworldFillParams())
+}
+
+// FillChunkWith is FillChunk parameterized by the dimension's solid-fill blocks (the nether passes
+// NetherFillParams()).
+func FillChunkWith(nc *NoiseChunk, aq *Aquifer, ov *OreVeinifier, fp FillParams) *level.Chunk {
 	secs := nc.height / 16
 	ch := level.EmptyChunk(secs)
 
@@ -126,7 +167,7 @@ func FillChunk(nc *NoiseChunk, aq *Aquifer, ov *OreVeinifier) *level.Chunk {
 		heights[i] = nc.minY // default: floor (nothing solid)
 	}
 
-	Fill(nc, aq, ov, func(lx, y, lz int, st block.StateID) {
+	FillWith(nc, aq, ov, fp, func(lx, y, lz int, st block.StateID) {
 		if st == nc.air {
 			return
 		}

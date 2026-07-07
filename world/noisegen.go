@@ -76,6 +76,11 @@ type NoiseGenerator struct {
 
 	// air state id, reused by the carve adapter's out-of-range Get (resolved once).
 	air block.StateID
+
+	// nether selects the nether fill path in GenerateTerrain: FillParams == netherrack (no deepslate),
+	// a DISABLED aquifer (aquifers_enabled:false — lava sea below sea_level 32), and NO ore veinifier
+	// (ore_veins_enabled:false). Set only by NewNetherGenerator. CITE: nether.json settings.
+	nether bool
 }
 
 // NewNoiseGenerator builds the per-world generator: it parses + seeds the router from the
@@ -204,6 +209,72 @@ func NewNoiseGenerator(seed int64, secs, minY int) *NoiseGenerator {
 	}
 }
 
+// NewNetherGenerator builds the per-world generator for the_nether: same PURE single-chunk
+// pipeline as NewNoiseGenerator, but bound to the NETHER worldgen graph — the nether.json noise
+// router + geometry (min_y 0, height 128, sea_level 32, default_block netherrack, default_fluid
+// lava), the hardcoded NETHER 5-biome multi-noise source, the nether surface rule, and the single
+// nether_cave carver. It shares the world-wide decoration data (buildDecorationData loads EVERY
+// biome's features, nether included) so nether biome features decorate automatically. Structures are
+// INERT (NoopStartGenerator) — nether fortresses/bastions are a later structure phase; terrain +
+// biomes + carvers + features are the faithful nether core. A build-data error panics (asset bug),
+// exactly like NewNoiseGenerator. secs/minY are the nether geometry (secs 8, minY 0). CITE:
+// NoiseBasedChunkGenerator bound to the the_nether LevelStem (Preset.NETHER + nether.json settings).
+func NewNetherGenerator(seed int64, secs, minY int) *NoiseGenerator {
+	// NOTE: the DIMENSION key is "minecraft:the_nether" but the NoiseGeneratorSettings registry id is
+	// "minecraft:nether" (jar: NoiseGeneratorSettings.NETHER == ResourceKey "nether"; the file is
+	// noise_settings/nether.json). Do not confuse the two.
+	r, err := router.NewRouterFor(seed, "minecraft:nether")
+	if err != nil {
+		panic("world: NetherGenerator: build router: " + err.Error())
+	}
+	bs, err := biome.NewNetherBiomeSource(r)
+	if err != nil {
+		panic("world: NetherGenerator: build biome source: " + err.Error())
+	}
+	ss, err := surface.NewSurfaceSystem(r)
+	if err != nil {
+		panic("world: NetherGenerator: build surface system: " + err.Error())
+	}
+	rule, err := surface.ParseRuleSource(r.Settings.SurfaceRule)
+	if err != nil {
+		panic("world: NetherGenerator: parse surface_rule: " + err.Error())
+	}
+	carvers, err := carver.LoadNetherCarvers()
+	if err != nil {
+		panic("world: NetherGenerator: load carvers: " + err.Error())
+	}
+	rep, err := carver.ParseReplaceables()
+	if err != nil {
+		panic("world: NetherGenerator: parse carver replaceables: " + err.Error())
+	}
+	deco, err := buildDecorationData()
+	if err != nil {
+		panic("world: NetherGenerator: build feature/decoration data: " + err.Error())
+	}
+	// Structures are inert in the nether core: a router-backed surface sampler + the nether biome
+	// lookup back the (empty) structure cache, and the StartGenerator is the noop set (zero starts).
+	sampler := structure.NewRouterSurfaceSampler(r)
+	biomeAt := func(wx, wy, wz int) levelbiome.Type { return bs.GetBiome(wx, wy, wz) }
+	structCache := structure.NewCache(sampler, biomeAt)
+
+	return &NoiseGenerator{
+		seed:        seed,
+		secs:        secs,
+		minY:        minY,
+		router:      r,
+		biomes:      bs,
+		surface:     ss,
+		rule:        rule,
+		carvers:     carvers,
+		rep:         rep,
+		deco:        deco,
+		structCache: structCache,
+		structGen:   structure.NoopStartGenerator(),
+		air:         block.ToStateID[block.Air{}],
+		nether:      true,
+	}
+}
+
 // GenerateTerrain drives the PURE single-chunk terrain pipeline into a fresh
 // capture-diff-sealed level.Chunk and returns it at StatusCarvers. PURE over (seed, pos).
 //
@@ -236,14 +307,28 @@ func (g *NoiseGenerator) GenerateTerrain(pos level.ChunkPos) *level.Chunk {
 	// Compute returns 0 everywhere -> the fill is byte-identical (the NONE regression guard).
 	beardifier := g.beardifierFor(pos)
 	nc := noisechunk.NewNoiseChunkWithBeard(g.router, pos, beardifier.Compute)
-	aq := noisechunk.NewAquifer(g.router, nc, pos)
 	ov := noisechunk.NewOreVeinifier(
 		g.router.NoiseRouter.VeinToggle,
 		g.router.NoiseRouter.VeinRidged,
 		g.router.NoiseRouter.VeinGap,
 		g.router.Random,
 	)
-	ch := noisechunk.FillChunk(nc, aq, ov)
+	var (
+		ch *level.Chunk
+		aq *noisechunk.Aquifer
+	)
+	if g.nether {
+		// Nether: aquifers_enabled:false -> DISABLED aquifer (lava sea below sea_level 32); default_block
+		// netherrack, no deepslate; ore_veins_enabled:false -> the veinifier's rule never fires (its
+		// nether router functions evaluate to no vein), so passing it is inert but harmless. The disabled
+		// aquifer is also the carve fluid source (ApplyCarvers below) — the nether carver overrides the
+		// carve state to lava/cave_air anyway, so CarveFluid is not consulted there.
+		aq = noisechunk.NewDisabledAquifer(g.router.Settings.SeaLevel, block.ToStateID[block.Lava{Level: 0}])
+		ch = noisechunk.FillChunkWith(nc, aq, ov, noisechunk.NetherFillParams())
+	} else {
+		aq = noisechunk.NewAquifer(g.router, nc, pos)
+		ch = noisechunk.FillChunk(nc, aq, ov)
+	}
 
 	// (2) SURFACE — biome-correct surface on the UN-CARVED terrain top + the 3 CLIENT
 	// heightmaps, then the varied per-section biome containers. This mirrors vanilla's

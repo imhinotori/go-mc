@@ -97,6 +97,73 @@ func NewMultiNoiseBiomeSource(r *router.Router) (*MultiNoiseBiomeSource, error) 
 	}, nil
 }
 
+// netherPresetEntry is one biome of the hardcoded NETHER multi-noise preset — its id and its
+// 7-tuple Climate.parameters(temp, humidity, continentalness, erosion, depth, weirdness, offset).
+// The first six are POINT values (Parameter.min == max == quantize(v)); offset is a single
+// quantized coord. CITE: MultiNoiseBiomeSourceParameterList$Preset.NETHER (Climate.parameters
+// tuples, verified against the 26.2 jar).
+type netherPresetEntry struct {
+	biome                    string
+	t, h, c, e, d, w, offset float32
+}
+
+// netherPreset is the 5-biome NETHER preset, EXACT from the jar's Preset.NETHER static init:
+//
+//	NETHER_WASTES     (0.0,  0.0, 0,0,0,0, 0.0)
+//	SOUL_SAND_VALLEY  (0.0, -0.5, 0,0,0,0, 0.0)
+//	CRIMSON_FOREST    (0.4,  0.0, 0,0,0,0, 0.0)
+//	WARPED_FOREST     (0.0,  0.5, 0,0,0,0, 0.375)
+//	BASALT_DELTAS    (-0.5,  0.0, 0,0,0,0, 0.175)
+var netherPreset = []netherPresetEntry{
+	{"minecraft:nether_wastes", 0.0, 0.0, 0, 0, 0, 0, 0.0},
+	{"minecraft:soul_sand_valley", 0.0, -0.5, 0, 0, 0, 0, 0.0},
+	{"minecraft:crimson_forest", 0.4, 0.0, 0, 0, 0, 0, 0.0},
+	{"minecraft:warped_forest", 0.0, 0.5, 0, 0, 0, 0, 0.375},
+	{"minecraft:basalt_deltas", -0.5, 0.0, 0, 0, 0, 0, 0.175},
+}
+
+// point re-quantizes a single climate float into a POINT Parameter (min == max) — the form
+// Climate.parameters(...) produces for each of its six non-offset axes (Climate.Parameter.point).
+func point(f float32) Parameter { return Parameter{Min: quantizeCoord(f), Max: quantizeCoord(f)} }
+
+// NewNetherBiomeSource builds the MultiNoiseBiomeSource for the NETHER preset (5 fixed biomes) and
+// binds the same six climate density functions the router exposes — the nether router (nether.json)
+// supplies the temperature/humidity/etc. functions. It is the dimension-parameterized sibling of
+// NewMultiNoiseBiomeSource: instead of the embedded overworld parameter list it uses the jar's
+// hardcoded NETHER preset. PURE over the router seed. CITE: MultiNoiseBiomeSource(Preset.NETHER)
+// wired by the_nether LevelStem.
+func NewNetherBiomeSource(r *router.Router) (*MultiNoiseBiomeSource, error) {
+	boxes := make([]ParameterPoint, len(netherPreset))
+	for i, e := range netherPreset {
+		var bt levelbiome.Type
+		if err := bt.UnmarshalText([]byte(e.biome)); err != nil {
+			return nil, fmt.Errorf("nether biome source: unknown biome %q: %w", e.biome, err)
+		}
+		boxes[i] = ParameterPoint{
+			Temperature:     point(e.t),
+			Humidity:        point(e.h),
+			Continentalness: point(e.c),
+			Erosion:         point(e.e),
+			Depth:           point(e.d),
+			Weirdness:       point(e.w),
+			Offset:          quantizeCoord(e.offset),
+			Biome:           bt,
+		}
+	}
+	nr := r.NoiseRouter
+	return &MultiNoiseBiomeSource{
+		params: NewParameterList(boxes),
+		sampler: Sampler{
+			Temperature:     nr.Temperature,
+			Humidity:        nr.Vegetation,
+			Continentalness: nr.Continents,
+			Erosion:         nr.Erosion,
+			Depth:           nr.Depth,
+			Weirdness:       nr.Ridges,
+		},
+	}, nil
+}
+
 // Params exposes the parsed parameter list (tests inspect the box count / biomes).
 func (s *MultiNoiseBiomeSource) Params() *ParameterList { return s.params }
 
