@@ -275,6 +275,13 @@ func (t *TickLoop) tickEntities() {
 	// mirroring the tickFallDamage seam above.
 	t.tickSuffocation()
 
+	// World border: the LivingEntity.baseTick border branch (PLAYER-only, `if isPlayer`) — a player whose
+	// bounding box leaves the border past the safe zone takes max(1, floor(-distance * damagePerBlock))
+	// outside_border damage/tick. Sibling of tickSuffocation (both are baseTick isPlayer-block checks);
+	// ADDITIVE, no new trace entry. Its body lives in world_border.go. Deep inside the default 6e7 border
+	// this is a no-op (the pig, being a mob, is never in the player branch at all). Cite LivingEntity.baseTick.
+	t.tickWorldBorder()
+
 	// Plan 17-13 breath/drowning: the LivingEntity.baseTick air branch (air drains while the eyes
 	// are submerged, refills otherwise, 2.0 DROWN damage at the air<=-20 threshold). Its body lives
 	// in breath.go; a single ADDITIVE call inside this existing phase keeps the tick order unchanged

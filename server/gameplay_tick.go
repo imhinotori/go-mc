@@ -280,6 +280,11 @@ func (g *gameTick) AcceptPlayer(
 		spawnY:   spawnY,
 		spawnZ:   spawnZ,
 		hasSpawn: true,
+		// WORLD-BORDER: snapshot the world-global border so the join burst ships
+		// ClientboundInitializeBorderPacket (vanilla PlayerList.placeNewPlayer). Read off-tick
+		// here as a value — the border never changes after boot in v1, so this read crosses no
+		// tick-owned mutable state (T-3-03/TICK-05).
+		worldBorder: g.loop.worldBorder,
 	})
 
 	// CMD-01 join-time send: serialize the shared command graph to THIS client as
@@ -351,18 +356,18 @@ func (g *gameTick) AcceptPlayer(
 		// The food/saturation/health dirty-send trackers seed to the spawn values so the first
 		// SetHealth fires only on a real change (matching the bootstrap SetHealth the join already
 		// sent), mirroring the air dirty-tracker.
-		exhaustion:         0,
-		foodTickTimer:      0,
-		prevX:              spawnX,
-		prevY:              spawnY,
-		prevZ:              spawnZ,
+		exhaustion:    0,
+		foodTickTimer: 0,
+		prevX:         spawnX,
+		prevY:         spawnY,
+		prevZ:         spawnZ,
 		// lastY is the fall-damage baseline (deltaY = y - lastY). It MUST seed to the spawn Y, not the
 		// zero value: otherwise the FIRST physics tick computes deltaY = spawnY - 0 (e.g. -46 on a
 		// superflat floor at y=-46) and the player "falls" its entire world-Y on join, taking lethal
 		// fall damage the instant it lands. wasOnGround seeds true (the player spawns standing on the
 		// floor, mid-air-less), so the first checkFallDamage sees a grounded, zero-delta start.
-		lastY:              spawnY,
-		wasOnGround:        true,
+		lastY:                  spawnY,
+		wasOnGround:            true,
 		lastFoodSent:           maxFood,
 		lastFoodSaturationZero: defaultSaturation == 0, // seeded from spawn saturation (vanilla lastFoodSaturationZero)
 		lastHealthSent:         maxHealth,

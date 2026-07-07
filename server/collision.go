@@ -15,10 +15,14 @@ package server
 // The shapes come from the extracted per-state grids (level/block/collision_shapes.go), so
 // slabs/stairs/fences(1.5)/walls/snow-layers/carpets collide with their REAL vanilla boxes.
 //
+// The world-border collider IS wired: collideBoundingBox applies the WorldBorder clamp
+// (world_border.go getWorldBorderCollision) after the block clip, gated on the resolved box
+// leaving the border — the port of collectColliders appending worldBorder.getCollisionShape()
+// when worldBorder.isInsideCloseToBorder. Deep inside the default border it is skipped (no-op).
+//
 // Deliberately not yet ported (phase 4 of the collision plan; call sites are marked):
 //   - Level.getEntityCollisions (shulker/boat hard boxes) - the entityCollisions list is
 //     always empty here.
-//   - The world-border shape (WorldBorder.getCollisionShape when isInsideCloseToBorder).
 //
 // Everything runs on the tick goroutine over tick-owned chunk state (TICK-05), exactly like
 // the old sweep it replaces.
@@ -247,13 +251,37 @@ func collideWithShapes(m vec3d, box block.Box, shapes []placedShape) vec3d {
 }
 
 // collideBoundingBox is Entity.collideBoundingBox(entity, vec, box, level, entityCollisions)
-// with the (phase-4) entityCollisions list empty and the world-border collider not yet
-// wired: collect the block shapes in the motion-expanded box, then clip per axis.
-// CITE: javap Entity.collideBoundingBox → collectCollidersIgnoringWorldBorder(box.
-// expandTowards(vec)) → collideWithShapes.
+// with the (phase-4) entityCollisions list empty: collect the block shapes in the motion-
+// expanded box, clip per axis, then apply the WORLD-BORDER collider. In vanilla the border is
+// one of the colliders collectColliders appends (worldBorder.getCollisionShape() when
+// worldBorder.isInsideCloseToBorder(box)); the resolved position can never cross the border
+// edge. Sulfur folds that into a minimal getWorldBorderCollision clamp of the resolved box's
+// horizontal position — observably identical (a move that would leave the border is pinned at
+// the edge). The clamp is GATED on the resolved box leaving the border, so deep inside the
+// default 6e7 border it is skipped entirely and the delta is returned UNTOUCHED (byte-identical
+// to no border — the collision flags never see a spurious change). CITE: javap
+// Entity.collideBoundingBox / collectColliders (worldBorder.getCollisionShape).
 func (t *TickLoop) collideBoundingBox(m vec3d, box block.Box) vec3d {
 	shapes := t.collectBlockCollisions(expandTowards(box, m.x, m.y, m.z))
-	return collideWithShapes(m, box, shapes)
+	c := collideWithShapes(m, box, shapes)
+	// World-border clamp, GATED like vanilla's border collider (only appended when the entity is
+	// close to / outside the border). The resolved box (box moved by c) that is still fully inside
+	// the border needs NO clamp — skipping it leaves c UNTOUCHED (byte-identical delta), so a normal
+	// entity deep inside the default 6e7 border (the pig, an orb at spawn) never has its velocity
+	// perturbed (the collision flags read c==requested, so vx/vz are not spuriously zeroed). Only
+	// when the resolved box leaves the border do we pin the horizontal position back to the edge
+	// (clampVec3ToBound) and re-derive the delta. CITE: javap Entity.collectColliders
+	// (worldBorder.getCollisionShape appended only when worldBorder.isInsideCloseToBorder(box)).
+	movedMinX := box.MinX + c.x
+	movedMinZ := box.MinZ + c.z
+	movedMaxX := box.MaxX + c.x
+	movedMaxZ := box.MaxZ + c.z
+	if !t.worldBorder.isWithinBoundsAABB(movedMinX, movedMinZ, movedMaxX, movedMaxZ) {
+		rx, rz := t.getWorldBorderCollision(movedMinX, movedMinZ)
+		c.x = rx - box.MinX
+		c.z = rz - box.MinZ
+	}
+	return c
 }
 
 // collideMovement is Entity.collide(Vec3): the whole-motion resolution including the auto

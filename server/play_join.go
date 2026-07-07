@@ -576,6 +576,15 @@ type bootstrapParams struct {
 	// its real skin — the joiner sees itself with the online skin, not Steve/Alex. Empty in
 	// offline-mode (nil -> property count 0, byte-identical to before).
 	properties []user.Property
+
+	// worldBorder is the WORLD-GLOBAL border snapshot AcceptPlayer reads from the loop
+	// (g.loop.worldBorder) and threads in so sendPlayBootstrap can ship its
+	// ClientboundInitializeBorderPacket in the join burst — vanilla sends the initialize-border
+	// packet to a joining player (PlayerList.placeNewPlayer -> connection.send(new
+	// ClientboundInitializeBorderPacket(level.getWorldBorder()))). It is a value snapshot (no
+	// tick-owned state crosses the boundary). Zero-valued (a 0-wide border) only in a test that
+	// leaves it unset; production always fills it from the loop's defaultWorldBorder.
+	worldBorder worldBorder
 }
 
 // sendPlayBootstrap enqueues the full early-Play bootstrap on the connection's outbound
@@ -632,4 +641,9 @@ func sendPlayBootstrap(c *Client, viewDist int, center level.ChunkPos, surfaceY 
 	// would see itself as Steve/Alex. Offline-mode params.properties is nil -> count 0 (unchanged).
 	c.Send(writePlayerInfoUpdateAdd(params.id, params.name, params.gameMode, params.properties))
 	c.Send(writeSetDefaultSpawnPosition(overworldDimensionName, spawnPos, 0, 0))
+	// ClientboundInitializeBorderPacket: vanilla sends the border snapshot to a joining player
+	// (PlayerList.placeNewPlayer). One additive send at the tail of the join burst — the default
+	// 6e7 border tells the client the play area is effectively unbounded (no red vignette at
+	// spawn). Cite PlayerList.placeNewPlayer (ClientboundInitializeBorderPacket(getWorldBorder())).
+	c.Send(writeInitializeBorderPacket(params.worldBorder))
 }

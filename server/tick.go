@@ -157,6 +157,15 @@ type TickLoop struct {
 	// fresh clear world (all timers 0, flags false, levels 0.0) — exactly WeatherData()'s default ctor.
 	weather weatherState
 
+	// worldBorder is the WORLD-GLOBAL net.minecraft.world.level.border.WorldBorder state (world_border.go —
+	// the static, non-moving extent v1 uses). Like weather it is a single world-global phase, so it lives
+	// ONCE here on the coordinator: tickWorldBorder reads it in tickEntities to deal out-of-bounds damage to
+	// players outside the safe zone, and collision.go consults getWorldBorderCollision to clamp movement at the
+	// edge. The on-join ClientboundInitializeBorderPacket snapshots it. Seeded to the vanilla ctor default
+	// (defaultWorldBorder: 5.9999968E7 wide, centered at (0,0), damagePerBlock 0.2, safeZone 5.0) in
+	// NewTickLoop so every player near origin (and the pig) is deep inside — the border checks are a no-op.
+	worldBorder worldBorder
+
 	// worldSeed is the overworld seed (WORLD-04), for /seed. Set at boot via SetWorldSeed; 0 if unset.
 	worldSeed int64
 
@@ -1159,6 +1168,11 @@ func NewTickLoop(clock Clock) *TickLoop {
 		// from day one; a server with no watcher simply never sends, and t.plugins stays whatever
 		// SetPlugins set (possibly nil).
 		pluginSwap: make(chan *host.Manager, 1),
+		// WorldBorder seeded to the vanilla WorldBorder() ctor default (world_border.go): a
+		// 5.9999968E7-wide static border centered at (0,0) with damagePerBlock 0.2 / safeZone 5.0.
+		// Every player near origin (and the pig) is deep inside, so the tickWorldBorder damage check
+		// and the collision clamp are both no-ops. A future /worldborder command mutates this field.
+		worldBorder: defaultWorldBorder(),
 	}
 	// Phase-27 STEP-3 (the N=2 flip): construct regionCount (==2) regions that statically split the
 	// world (regionOf — region_transfer.go). Each region holds its OWN entity store + (never-shared)

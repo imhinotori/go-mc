@@ -106,6 +106,13 @@ var (
 	// (DamageSources.cramming() — causingEntity null). Cite LivingEntity.pushEntities /
 	// DamageSources.cramming (DamageTypes.CRAMMING).
 	damageTypeCramming = damageTypeID(tag.DamageTypeIDs["minecraft:cramming"])
+	// damageTypeOutsideBorder is minecraft:outside_border — the source DamageSources.outOfBorder()
+	// deals when a player's bounding box leaves the world border past the safe zone: the
+	// LivingEntity.baseTick border branch hurts the player with max(1, floor(-distance * damagePerBlock)).
+	// NOT a bypasses_invulnerability member, so a creative/spectator player (abilities.invulnerable) is
+	// immune (matching vanilla — the border only bites survival). Cite LivingEntity.baseTick /
+	// DamageSources.outOfBorder (DamageTypes.OUTSIDE_BORDER).
+	damageTypeOutsideBorder = damageTypeID(tag.DamageTypeIDs["minecraft:outside_border"])
 )
 
 // damageSourceOf builds a DamageSource for an environmental/anonymous source: the given damage-type
