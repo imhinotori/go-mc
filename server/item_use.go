@@ -161,9 +161,21 @@ func (t *TickLoop) handleUseItem(p *tickPlayer, pkt pk.Packet) {
 		return
 	}
 
-	// NOTE: the gate spawn egg is handled ONLY on the block path (handleUseItemOn), mirroring vanilla
-	// SpawnEggItem.useOn — a spawn egg spawns on the clicked BLOCK, never on right-click-air. The
-	// air path (this handler) must NOT spawn (a right-click on nothing does nothing for a spawn egg).
+	// GATE-ONLY (SULFUR_TEST_KIT=1) egg AIR trigger: vanilla SpawnEggItem.useOn spawns on a clicked
+	// BLOCK, never on right-click-air, so prod NEVER spawns here (the kit is off + no prod player holds
+	// the egg — T-28-03). But the PLUGIN-07 bot (gateItem1CustomMob) fires the egg via ServerboundUseItem
+	// (right-click air), so the gate-only air path must honor it: if the kit is on and the held item is
+	// the gate spawn egg, spawn the declared mob in front and consume the use. handleGateSpawnEgg itself
+	// early-returns when the kit is off, so this is a hard no-op in prod. Placed BEFORE useItemInHand so
+	// the egg never falls through to the food/boat/rod resolution.
+	if testKitEnabled() {
+		inv := ensureInventory(p)
+		held := inv.get(heldMenuSlot(p, h))
+		if !slotIsEmpty(held) && item.ID(held.ItemID) == gateSpawnEggID {
+			t.handleGateSpawnEgg(p)
+			return
+		}
+	}
 
 	t.useItemInHand(p, h)
 }
