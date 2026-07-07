@@ -408,6 +408,17 @@ func (t *TickLoop) tickBlock(pos pk.Position, typ blockTickType) {
 			t.lightningRodTick(state, pos)
 			return
 		}
+		// Leaves schedule their DISTANCE-recompute tick under their own block id (11 leaf variants). Route
+		// any of them to the leaves tick handler; the IsLeaves guard is the tickBlock state.is(block) stale
+		// check (a leaf broken/replaced since updateShape scheduled the tick fires nothing). CITE:
+		// LeavesBlock.updateShape (scheduleTick(pos, this, TICK_DELAY)) / LeavesBlock.tick.
+		if isLeavesTickType(typ) {
+			if !block.IsLeaves(state) {
+				return
+			}
+			t.leavesTick(state, pos)
+			return
+		}
 		// Unknown scheduled type (a future block whose handler is not yet ported): no-op. The
 		// tick was still dequeued, matching vanilla's `is(block)` guard failing for a stale type.
 	}

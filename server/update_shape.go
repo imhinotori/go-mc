@@ -97,6 +97,12 @@ func (t *TickLoop) updateShapeOnEdit(pos pk.Position, newState block.StateID) {
 	// (B) + (C): the 6 neighbours.
 	t.updateNeighbourShapes(pos, updateShapeRecursionLimit)
 	t.updateNeighborsAt(pos, updateShapeRecursionLimit)
+	// (D) LEAVES: the changed cell also runs LeavesBlock.updateShape on each of its six neighbour leaves
+	// (getDistanceAt(newState) feeds their DISTANCE recompute). This is what makes a chopped log wake the
+	// surrounding canopy: the log removal raises each neighbour leaf DISTANCE toward 7 and, over the
+	// scheduled ticks, decays it. Kept as a dedicated hook (like the fluid/vegetation/redstone seams) so
+	// the general dispatcher stays the CrossCollisionBlock+attachment subset. CITE: LeavesBlock.updateShape.
+	t.onLeavesEdit(pos, newState)
 }
 
 // recomputeCrossConnections is the changed-cell half: a CrossCollisionBlock at pos re-derives each
