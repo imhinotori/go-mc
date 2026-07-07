@@ -25,7 +25,11 @@ package server
 // SINGLE-OWNER (TICK-05): mobAI is tick-owned game state mutated ONLY on the tick goroutine.
 // No goroutine, no xsync — plain Go.
 
-import "github.com/imhinotori/sulfur/data/entity"
+import (
+	"math"
+
+	"github.com/imhinotori/sulfur/data/entity"
+)
 
 // mobAI is the per-mob AI state that hangs off an Entity (entity.ai). It holds the mob's
 // goalSelector and the navigation/look TARGETS a goal writes — the wantTarget that Plan
@@ -345,6 +349,31 @@ func (m *mobAI) serverAiStep(t *TickLoop, e *Entity) {
 	//	 putfield noJumpDelay — i.e. `if (noJumpDelay > 0) noJumpDelay--;`.]
 	if m.noJumpDelay > 0 {
 		m.noJumpDelay--
+	}
+
+	// B-M3 - the LivingEntity.aiStep small-velocity clamp: zero each deltaMovement axis whose abs is
+	// below 0.003 so a mob does not drift with sub-threshold residual velocity. Ported 1:1 from
+	// net.minecraft.world.entity.LivingEntity.aiStep. It runs EARLY in aiStep (after the noJumpDelay
+	// decrement above, BEFORE applyInput/the goal+navigation work below) so downstream physics
+	// integrates the clamped velocity - exactly vanilla's position (javap offsets 92-199, ahead of
+	// applyInput at 217 and the serverAiStep body at 273). PURE FLOAT MATH, no RNG draw, so it cannot
+	// perturb the per-mob RNG stream the pig oracle pins.
+	//
+	// Vanilla splits by entity type: a PLAYER zeroes BOTH x and z together when horizontalDistanceSqr
+	// (x*x + z*z) < 9.0E-6; every OTHER entity (the pig, all mobs) clamps x and z INDEPENDENTLY at the
+	// 0.003 epsilon. The y axis is clamped at 0.003 on BOTH paths. An AI mob here is never a player, so
+	// this is the non-player (per-axis independent) branch plus the common y clamp.
+	//	[VERIFIED javap LivingEntity.aiStep offsets 143-193: (else, non-PLAYER) abs(dm.x)<0.003 -> x=0;
+	//	 abs(dm.z)<0.003 -> z=0; (common) abs(dm.y)<0.003 -> y=0; then setDeltaMovement(x,y,z). The
+	//	 epsilon 0.003d is ldc2_w #3158; the compare is Math.abs(...) dcmpg ifge - i.e. abs < 0.003.]
+	if math.Abs(e.vx) < 0.003 {
+		e.vx = 0
+	}
+	if math.Abs(e.vz) < 0.003 {
+		e.vz = 0
+	}
+	if math.Abs(e.vy) < 0.003 {
+		e.vy = 0
 	}
 
 	// Mob.aiStep daylight-burn (fire.go sunBurnTick): a sun-sensitive mob (zombie/skeleton) in open
