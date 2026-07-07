@@ -41,13 +41,19 @@ const (
 	// LOUD LOAD error (fail-closed), the parse-time twin of capError. The design doc names it a reserved
 	// verb; M2 lands it. (models.animate — play_animation + animation triggers — is the M3/M4 sibling.)
 	capModelsDeclare
+	// capModelsAnimate grants the native-model animation verbs (MODEL-M3): the play_animation mechanic
+	// (plugin_skill_decl.go) + the animation_frame/animation_end skill triggers. Like the other skill/
+	// model caps it is enforced at LOAD (animations are data): a mechanic("play_animation") — or a
+	// skill(trigger="animation_frame") — under a manifest without models.animate is a LOUD LOAD error
+	// (fail-closed). The M2 sibling of models.declare; the design doc names it a reserved verb.
+	capModelsAnimate
 )
 
 // capAll is every capability — used by tests that exercise the handle ops without a denial, and by a
 // trusted/internal handle. Wave 2 derives a real per-plugin capSet from the manifest via
 // parseCapabilities.
 const capAll = capEntitiesRead | capEntitiesWrite | capWorldRead | capWorldWrite | capNav |
-	capSkillDamage | capSkillEffects | capModelsDeclare
+	capSkillDamage | capSkillEffects | capModelsDeclare | capModelsAnimate
 
 // capByName maps a manifest capability STRING to its bit. The LOCKED vocabulary (CONTEXT decision 4):
 // entities.read / entities.write / world.read / world.write / nav. A manifest capability not in this
@@ -62,6 +68,7 @@ var capByName = map[string]capSet{
 	"skills.damage":  capSkillDamage,
 	"skills.effects": capSkillEffects,
 	"models.declare": capModelsDeclare,
+	"models.animate": capModelsAnimate,
 }
 
 // parseCapabilities ORs the bits for a manifest's capability strings, returning an error that names
@@ -72,7 +79,7 @@ func parseCapabilities(strs []string) (capSet, error) {
 	for _, s := range strs {
 		bit, ok := capByName[s]
 		if !ok {
-			return 0, fmt.Errorf("unknown capability %q (valid: entities.read, entities.write, world.read, world.write, nav, skills.damage, skills.effects, models.declare)", s)
+			return 0, fmt.Errorf("unknown capability %q (valid: entities.read, entities.write, world.read, world.write, nav, skills.damage, skills.effects, models.declare, models.animate)", s)
 		}
 		c |= bit
 	}

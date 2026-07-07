@@ -40,14 +40,21 @@ const (
 	triggerSpawn                       // once, at spawnDeclaredMob
 	triggerDamaged                     // after a hit LANDS and the mob SURVIVES (applyDamageEntity tail)
 	triggerDeath                       // in dieEntity (after the loot + status-3 broadcast)
+	// MODEL-M3 (H.2.1): the model drives skills. animation_frame fires when the animator clock crosses
+	// the declared `frame` tick of the named clip; animation_end fires at that clip's end. Dispatched by
+	// tickModelAnimator (BEFORE tickMobSkills, so a keyframe skill lands the SAME tick the frame lands).
+	triggerAnimationFrame
+	triggerAnimationEnd
 )
 
 // triggerByName maps the Starlark trigger string to its enum. Unknown = loud load error.
 var triggerByName = map[string]skillTrigger{
-	"timer":   triggerTimer,
-	"spawn":   triggerSpawn,
-	"damaged": triggerDamaged,
-	"death":   triggerDeath,
+	"timer":           triggerTimer,
+	"spawn":           triggerSpawn,
+	"damaged":         triggerDamaged,
+	"death":           triggerDeath,
+	"animation_frame": triggerAnimationFrame,
+	"animation_end":   triggerAnimationEnd,
 }
 
 // targeterDecl is one captured targeter (the MythicMobs @targeter analogue). kind is one of the
@@ -67,6 +74,12 @@ type mechanicDecl struct {
 	effect    string // effect: the registry id ("minecraft:poison") — validated against skillEffectIDs
 	duration  int    // effect: duration ticks (>= 1)
 	amplifier int    // effect: amplifier (>= 0)
+	// play_animation (MODEL-M3): the clip to queue on the caster's animator + how it ends. CASTER-scoped
+	// (dispatched before the per-target loop; targeter ignored). Effect: e.model.animator.pending = clip
+	// (H.0 reentrancy — never advanced synchronously). clip is load-validated against the mob's rig when
+	// the declaring mob names a model.
+	animName string   // play_animation: the clip name
+	animMode animMode // play_animation: once/loop/hold (default once)
 }
 
 // conditionDecl is one captured condition (AND-ed; all must hold for the skill to fire).
@@ -84,6 +97,12 @@ type skillDecl struct {
 	conditions []conditionDecl
 	targeter   targeterDecl
 	mechanics  []mechanicDecl
+	// MODEL-M3 (H.2.1) coupled args for animation triggers: animClip is REQUIRED for both
+	// animation_frame + animation_end (the clip whose frame/end fires this skill); animFrame is the
+	// tick offset REQUIRED iff animation_frame (matched against the animator clock crossing). Zero for
+	// every non-animation trigger.
+	animClip  string
+	animFrame int
 }
 
 // skillEffectIDs is the closed set of effect registry ids the "effect" mechanic accepts — exactly
@@ -176,12 +195,15 @@ func (r *mobRegistry) mechanicBuiltin() *starlark.Builtin {
 		amplifier := 0
 		amplifierSet := false
 		var amplifierV starlark.Value
+		var animName, modeName string
 		if err := starlark.UnpackArgs(b.Name(), args, kwargs,
 			"kind", &kind,
 			"amount?", &amount,
 			"effect?", &effect,
 			"duration?", &duration,
 			"amplifier?", &amplifierV,
+			"name?", &animName,
+			"mode?", &modeName,
 		); err != nil {
 			return nil, err
 		}
@@ -200,16 +222,16 @@ func (r *mobRegistry) mechanicBuiltin() *starlark.Builtin {
 			if amount <= 0 {
 				return nil, fmt.Errorf("mechanic %q: amount must be > 0", kind)
 			}
-			if effect != "" || duration != 0 || amplifierSet {
-				return nil, fmt.Errorf("mechanic %q: effect/duration/amplifier are not valid for a damage mechanic", kind)
+			if effect != "" || duration != 0 || amplifierSet || animName != "" || modeName != "" {
+				return nil, fmt.Errorf("mechanic %q: effect/duration/amplifier/name/mode are not valid for a damage mechanic", kind)
 			}
 			return &mechanicValue{decl: mechanicDecl{kind: kind, amount: amount}}, nil
 		case "effect":
 			if !r.caps.has(capSkillEffects) {
 				return nil, fmt.Errorf("mechanic %q: this plugin lacks the %q capability (declare it in plugin.toml)", kind, "skills.effects")
 			}
-			if amount != 0 {
-				return nil, fmt.Errorf("mechanic %q: amount is not valid for an effect mechanic", kind)
+			if amount != 0 || animName != "" || modeName != "" {
+				return nil, fmt.Errorf("mechanic %q: amount/name/mode are not valid for an effect mechanic", kind)
 			}
 			if effect == "" {
 				return nil, fmt.Errorf("mechanic %q: effect=<id> is required (e.g. \"poison\")", kind)
@@ -225,8 +247,30 @@ func (r *mobRegistry) mechanicBuiltin() *starlark.Builtin {
 				return nil, fmt.Errorf("mechanic %q: amplifier must be >= 0", kind)
 			}
 			return &mechanicValue{decl: mechanicDecl{kind: kind, effect: id, duration: duration, amplifier: amplifier}}, nil
+		case "play_animation":
+			// MODEL-M3: queue a clip on the caster's rig animator. Requires models.animate (enforced at
+			// LOAD, fail-closed). CASTER-scoped — a targeter is irrelevant (documented). Only name/mode
+			// are valid args; the damage/effect fields are loud errors here (never a silently-dead arg).
+			if !r.caps.has(capModelsAnimate) {
+				return nil, fmt.Errorf("mechanic %q: this plugin lacks the %q capability (declare it in plugin.toml)", kind, "models.animate")
+			}
+			if animName == "" {
+				return nil, fmt.Errorf("mechanic %q: name=<clip> is required", kind)
+			}
+			if amount != 0 || effect != "" || duration != 0 || amplifierSet {
+				return nil, fmt.Errorf("mechanic %q: amount/effect/duration/amplifier are not valid for a play_animation mechanic", kind)
+			}
+			mode := animModeOnce
+			if modeName != "" {
+				mv, ok := animModeByName[modeName]
+				if !ok {
+					return nil, fmt.Errorf("mechanic %q: unknown mode %q (valid: once, loop, hold)", kind, modeName)
+				}
+				mode = mv
+			}
+			return &mechanicValue{decl: mechanicDecl{kind: kind, animName: animName, animMode: mode}}, nil
 		default:
-			return nil, fmt.Errorf("mechanic: unknown kind %q (valid: damage, effect)", kind)
+			return nil, fmt.Errorf("mechanic: unknown kind %q (valid: damage, effect, play_animation)", kind)
 		}
 	})
 }
@@ -297,6 +341,8 @@ func (r *mobRegistry) skillBuiltin() *starlark.Builtin {
 		var conditionsList *starlark.List
 		var targeterV starlark.Value
 		var mechanicsList *starlark.List
+		var animation string
+		var frameV starlark.Value
 		if err := starlark.UnpackArgs(b.Name(), args, kwargs,
 			"trigger", &triggerName,
 			"interval?", &interval,
@@ -304,13 +350,15 @@ func (r *mobRegistry) skillBuiltin() *starlark.Builtin {
 			"conditions?", &conditionsList,
 			"targeter", &targeterV,
 			"mechanics", &mechanicsList,
+			"animation?", &animation,
+			"frame?", &frameV,
 		); err != nil {
 			return nil, err
 		}
 
 		trig, ok := triggerByName[triggerName]
 		if !ok {
-			return nil, fmt.Errorf("skill: unknown trigger %q (valid: timer, spawn, damaged, death)", triggerName)
+			return nil, fmt.Errorf("skill: unknown trigger %q (valid: timer, spawn, damaged, death, animation_frame, animation_end)", triggerName)
 		}
 		if trig == triggerTimer {
 			if interval < 1 {
@@ -321,6 +369,34 @@ func (r *mobRegistry) skillBuiltin() *starlark.Builtin {
 		}
 		if chance <= 0 || chance > 1 {
 			return nil, fmt.Errorf("skill: chance must be in (0, 1]")
+		}
+
+		// MODEL-M3 (H.2.1) coupled args, validated like interval-iff-timer: animation is REQUIRED for
+		// animation_frame + animation_end and FORBIDDEN otherwise; frame is REQUIRED iff animation_frame
+		// and FORBIDDEN otherwise (never a silently-dead arg).
+		frameSet := frameV != nil
+		frame := 0
+		if frameSet {
+			n, err := starlark.AsInt32(frameV)
+			if err != nil {
+				return nil, fmt.Errorf("skill: frame must be an int, got %s", frameV.Type())
+			}
+			frame = int(n)
+		}
+		isAnimTrig := trig == triggerAnimationFrame || trig == triggerAnimationEnd
+		if isAnimTrig {
+			if animation == "" {
+				return nil, fmt.Errorf("skill: trigger %q requires animation=<clip>", triggerName)
+			}
+		} else if animation != "" {
+			return nil, fmt.Errorf("skill: animation is only valid with trigger \"animation_frame\"/\"animation_end\"")
+		}
+		if trig == triggerAnimationFrame {
+			if !frameSet || frame < 0 {
+				return nil, fmt.Errorf("skill: trigger \"animation_frame\" requires frame >= 0 (a tick offset into the clip)")
+			}
+		} else if frameSet {
+			return nil, fmt.Errorf("skill: frame is only valid with trigger \"animation_frame\"")
 		}
 
 		tv, ok := targeterV.(*targeterValue)
@@ -359,6 +435,8 @@ func (r *mobRegistry) skillBuiltin() *starlark.Builtin {
 			conditions: conds,
 			targeter:   tv.decl,
 			mechanics:  mechs,
+			animClip:   animation,
+			animFrame:  frame,
 		}}, nil
 	})
 }

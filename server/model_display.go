@@ -239,3 +239,151 @@ func (t *TickLoop) tickModelRig(e *Entity) {
 	}
 }
 
+// --- MODEL-M3: the keyframe animator ---------------------------------------------------------------
+//
+// modelAnimPushInterval is N in the spec ("N-tick pushes"): every N ticks the animator re-encodes and
+// pushes each due bone's transform with DATA_TRANSFORMATION_INTERPOLATION_DURATION == N and
+// START_DELTA_TICKS == 0, so the CLIENT interpolates between the server keyframes (smooth motion,
+// bandwidth bounded to one burst every N ticks instead of every tick). N=2 per the M1 spec Section E
+// amendment (b) / H.2.
+const modelAnimPushInterval = 2
+
+// tickModelAnimator is the MODEL-M3 per-mob animator tick (H.0 tick ordering: runs BEFORE tickMobSkills
+// so an animation_frame-triggered skill lands the SAME tick the frame crosses). It (1) mirrors the bone
+// world coords onto the base (the M2 tickModelRig job, folded in so the model path is one call), then
+// (2) if an animator exists: applies any pending clip (H.0 reentrancy — pending is swapped in HERE, not
+// synchronously by play_animation), advances the clock, interpolates + pushes due bone transforms every
+// N ticks, fires animation_frame triggers on frame crossings and animation_end at clip end, and handles
+// once/loop/hold end semantics. Gated at the call site by e.model != nil (the pig oracle pays one
+// nil-check). A mob with a rig but no active clip still runs the coordinate mirror.
+func (t *TickLoop) tickModelAnimator(e *Entity) {
+	m := e.model
+	if m == nil {
+		return
+	}
+	// (1) M2 coordinate mirror: keep every bone's server x/y/z on the base (tracker distance + G.1 AABBs).
+	t.tickModelRig(e)
+
+	a := m.animator
+	if a == nil {
+		return
+	}
+	// (2a) H.0 reentrancy: apply a queued clip at the START of the tick (never synchronously in the
+	// play_animation mechanic). A newly-applied clip starts at t=0 and applies its frame-0 pose this tick.
+	if a.pending != nil {
+		a.clip = a.pending
+		a.mode = a.pendingMode
+		a.t = 0
+		a.pending = nil
+		a.endFired = false
+	}
+	if a.clip == nil {
+		return
+	}
+	clip := a.clip
+	length := int(clip.length)
+
+	// (2b) Frame crossing for animation_frame triggers: a declared frame N fires when the clock REACHES
+	// N (t == N), evaluated on the current tick before any end handling wraps/stops the clock. Fire for
+	// the current t (which starts at 0 on the apply tick and increments each subsequent tick).
+	if a.t <= length {
+		t.fireMobSkillTriggerAnim(e, clip.name, a.t)
+	}
+
+	// (2c) Push interpolated transforms every N ticks (and on the very first frame t==0). Each channel
+	// writes its bone's Display transform + interp pair, then one pushItemDisplayData per touched bone.
+	if a.t%modelAnimPushInterval == 0 {
+		t.pushModelFrame(e, m, clip, float32(a.t))
+	}
+
+	// (2d) End handling: at t >= length the clip has played its full span.
+	if a.t >= length {
+		switch a.mode {
+		case animModeLoop:
+			t.fireMobSkillTriggerAnim(e, clip.name, animEndFrame)
+			a.t = 0 // wrap; next tick re-applies frame 0
+			return
+		case animModeOnce:
+			if !a.endFired {
+				t.fireMobSkillTriggerAnim(e, clip.name, animEndFrame)
+				a.endFired = true
+			}
+			a.clip = nil // stop (idle) — the last pushed pose stays on the client
+			return
+		case animModeHold:
+			if !a.endFired {
+				t.fireMobSkillTriggerAnim(e, clip.name, animEndFrame)
+				a.endFired = true
+			}
+			// clamp: keep clip set, do NOT advance t past length (the client holds the last frame).
+			return
+		}
+	}
+	a.t++
+}
+
+// pushModelFrame interpolates every animated bone's transform at clip tick `at` and pushes the due
+// bones' Display metadata with interp_duration=N so the client lerps to the new pose over N ticks.
+// Linear interpolation between the surrounding keyframes per channel (position->translation vec3,
+// scale->scale vec3, rotation->left_rotation quaternion built from the euler xyz via eulerXYZToQuat).
+func (t *TickLoop) pushModelFrame(e *Entity, m *modelInstance, clip *animClip, at float32) {
+	for ci := range clip.channels {
+		ch := &clip.channels[ci]
+		bone := t.modelBoneEntity(m, ch.bone)
+		if bone == nil {
+			continue
+		}
+		x, y, z := sampleChannel(ch, at)
+		switch ch.kind {
+		case channelPosition:
+			bone.setDisplayTranslation(x, y, z)
+		case channelScale:
+			bone.setDisplayScale(x, y, z)
+		case channelRotation:
+			bone.setDisplayLeftRotation(eulerXYZToQuat(x, y, z))
+		}
+		// Client-interp seam: lerp over N ticks starting now (H.2 / M1 Section E amendment (b)).
+		bone.setDisplayInterpolation(modelAnimPushInterval, 0)
+		t.pushItemDisplayData(bone)
+	}
+}
+
+// sampleChannel linearly interpolates a channel's 3-component value at clip tick `at` between the two
+// surrounding keyframes. Before the first / after the last keyframe it clamps to the endpoint value
+// (hold). Keyframes are load-sorted ascending by time (collectAnimClips guarantees it).
+func sampleChannel(ch *animChannel, at float32) (float32, float32, float32) {
+	kf := ch.keyframes
+	if len(kf) == 0 {
+		return 0, 0, 0
+	}
+	if at <= kf[0].time {
+		return kf[0].x, kf[0].y, kf[0].z
+	}
+	last := kf[len(kf)-1]
+	if at >= last.time {
+		return last.x, last.y, last.z
+	}
+	for i := 1; i < len(kf); i++ {
+		if at <= kf[i].time {
+			a, b := kf[i-1], kf[i]
+			span := b.time - a.time
+			if span <= 0 {
+				return b.x, b.y, b.z
+			}
+			f := (at - a.time) / span
+			return a.x + (b.x-a.x)*f, a.y + (b.y-a.y)*f, a.z + (b.z-a.z)*f
+		}
+	}
+	return last.x, last.y, last.z
+}
+
+// modelBoneEntity resolves a bone name to its live item_display entity via the instance's boneRuntime
+// ids (the animator's bone lookup). Nil if the bone despawned (defensive).
+func (t *TickLoop) modelBoneEntity(m *modelInstance, name string) *Entity {
+	for i := range m.bones {
+		if m.bones[i].decl != nil && m.bones[i].decl.name == name {
+			return t.entityByIDAnyRegion(m.bones[i].id)
+		}
+	}
+	return nil
+}

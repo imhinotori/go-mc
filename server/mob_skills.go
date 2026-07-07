@@ -28,6 +28,22 @@ package server
 
 import "github.com/imhinotori/sulfur/level/attribute"
 
+// skillTriggerCtx threads per-fire context through the trigger -> execMobSkill -> skillConditionHolds
+// chain (MODEL-M3 H.2.2). attackerID is the entity that caused the fire (a damageSource attacker for
+// the P4 <trigger.name> threading — 0 when none); boneName is the model bone a per-bone hit resolved
+// to (M5 G.1 — "" until M5 wires per-bone hits). Slice-1 call sites pass the zero value (no behavior
+// change — conditions today read only the caster). One struct serves both the trigger-target threading
+// and the model bridge.
+type skillTriggerCtx struct {
+	attackerID int32
+	boneName   string
+}
+
+// animEndFrame is the sentinel `frame` value fireMobSkillTriggerAnim uses for a clip END (the
+// animation_end trigger). A negative value can never equal a declared frame (>= 0), so an
+// animation_frame skill never matches it and an animation_end skill matches on it exclusively.
+const animEndFrame = -1
+
 // skillRunner is the per-mob mutable skill state: the countdowns for the decl's timer skills + the
 // reentrancy guard. The decl (and its skills slice) is SHARED immutable data; only this struct is
 // per-mob (the skillDecl/starlarkGoal split, Pattern 4's data analogue). Tick-owned.
@@ -74,13 +90,13 @@ func (t *TickLoop) tickMobSkills(e *Entity) {
 			continue
 		}
 		r.timers[i] = s.interval // re-arm BEFORE executing (a mechanic that kills the caster stops future ticks via e.dead)
-		t.execMobSkill(e, s)
+		t.execMobSkill(e, s, skillTriggerCtx{})
 	}
 }
 
 // fireMobSkillTrigger fires every declared skill bound to a DISCRETE trigger (spawn/damaged/death).
 // Cheap no-op for a mob without a runner; reentrancy-guarded (see skillRunner.firing).
-func (t *TickLoop) fireMobSkillTrigger(e *Entity, trig skillTrigger) {
+func (t *TickLoop) fireMobSkillTrigger(e *Entity, trig skillTrigger, ctx skillTriggerCtx) {
 	r := e.skills
 	if r == nil || r.firing {
 		return
@@ -90,14 +106,38 @@ func (t *TickLoop) fireMobSkillTrigger(e *Entity, trig skillTrigger) {
 		if s.trigger != trig {
 			continue
 		}
-		t.execMobSkill(e, s)
+		t.execMobSkill(e, s, ctx)
+	}
+}
+
+// fireMobSkillTriggerAnim is the MODEL-M3 filtered trigger the animator calls: it fires every skill
+// bound to animation_frame (matching clip name + declared frame) or, when frame == animEndFrame, every
+// animation_end skill for the clip. Same shape + reentrancy guard as fireMobSkillTrigger. Called from
+// tickModelAnimator BEFORE tickMobSkills (H.0), so the damage mechanic lands on the exact keyframe.
+func (t *TickLoop) fireMobSkillTriggerAnim(e *Entity, clip string, frame int) {
+	r := e.skills
+	if r == nil || r.firing {
+		return
+	}
+	for i := range r.decl.skills {
+		s := &r.decl.skills[i]
+		if frame == animEndFrame {
+			if s.trigger != triggerAnimationEnd || s.animClip != clip {
+				continue
+			}
+		} else {
+			if s.trigger != triggerAnimationFrame || s.animClip != clip || s.animFrame != frame {
+				continue
+			}
+		}
+		t.execMobSkill(e, s, skillTriggerCtx{})
 	}
 }
 
 // execMobSkill runs one skill for one caster: conditions (AND-ed) -> chance gate -> targeter
 // resolve -> mechanics in declared order per target. The firing guard wraps the whole execution so
 // a mechanic's side effects (self-damage) cannot cascade back into this mob's triggers.
-func (t *TickLoop) execMobSkill(e *Entity, s *skillDecl) {
+func (t *TickLoop) execMobSkill(e *Entity, s *skillDecl, ctx skillTriggerCtx) {
 	r := e.skills
 	if r == nil {
 		return
@@ -106,7 +146,7 @@ func (t *TickLoop) execMobSkill(e *Entity, s *skillDecl) {
 	defer func() { r.firing = false }()
 
 	for i := range s.conditions {
-		if !t.skillConditionHolds(e, &s.conditions[i]) {
+		if !t.skillConditionHolds(e, &s.conditions[i], ctx) {
 			return
 		}
 	}
@@ -121,6 +161,12 @@ func (t *TickLoop) execMobSkill(e *Entity, s *skillDecl) {
 	players, mobs := t.resolveSkillTargets(e, &s.targeter)
 	for i := range s.mechanics {
 		m := &s.mechanics[i]
+		// CASTER-scoped mechanics run once, before the per-target loop, and ignore the targeter
+		// (play_animation queues a clip on the caster's own rig — MODEL-M3 H.1.3).
+		if m.kind == "play_animation" {
+			t.applyPlayAnimation(e, m)
+			continue
+		}
 		for _, p := range players {
 			t.applySkillMechanicToPlayer(e, m, p)
 		}
@@ -130,9 +176,31 @@ func (t *TickLoop) execMobSkill(e *Entity, s *skillDecl) {
 	}
 }
 
+// applyPlayAnimation queues a clip on the caster's rig animator (MODEL-M3). Effect is pending-ONLY —
+// the animator swaps it in at the NEXT tickModelAnimator (H.0 reentrancy: no synchronous clip advance,
+// so animator -> keyframe trigger -> play_animation -> animator can never recurse). A no-op for a
+// caster with no rig, or a clip the caster's model does not declare (load-validated when the declaring
+// mob names a model; this guard is defensive for a cross-model or rig-less caster).
+func (t *TickLoop) applyPlayAnimation(e *Entity, m *mechanicDecl) {
+	inst := e.model
+	if inst == nil || inst.decl == nil {
+		return
+	}
+	clip, ok := inst.decl.clipOf(m.animName)
+	if !ok {
+		return
+	}
+	if inst.animator == nil {
+		inst.animator = &modelAnimator{}
+	}
+	inst.animator.pending = clip
+	inst.animator.pendingMode = m.animMode
+}
+
 // skillConditionHolds evaluates one condition against the CASTER. Unknown kinds cannot reach here
 // (rejected at load); the switch is exhaustive over the slice-1 set.
-func (t *TickLoop) skillConditionHolds(e *Entity, c *conditionDecl) bool {
+func (t *TickLoop) skillConditionHolds(e *Entity, c *conditionDecl, ctx skillTriggerCtx) bool {
+	_ = ctx // MODEL-M3 H.2.2: threaded now (bone/attacker conditions land in M5); no slice-1 reader yet.
 	switch c.kind {
 	case "health_below":
 		max := float32(entityMaxHealth(e))

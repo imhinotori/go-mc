@@ -723,7 +723,7 @@ func (t *TickLoop) tickAI() {
 		// FIELD (e.model != nil), not per type: every vanilla mob (the pig oracle) pays exactly this
 		// nil-check — no bones, no new work, no new RNG draws.
 		if e.model != nil {
-			t.tickModelRig(e)
+			t.tickModelAnimator(e)
 		}
 		if e.skills != nil {
 			t.tickMobSkills(e)

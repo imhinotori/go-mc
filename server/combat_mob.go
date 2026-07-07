@@ -222,7 +222,7 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 	// Gated on e.skills != nil: every vanilla mob (the pig oracle) pays one nil-check and NOTHING
 	// else — zero new draws on any vanilla stream.
 	if e.skills != nil && e.health > 0 {
-		t.fireMobSkillTrigger(e, triggerDamaged)
+		t.fireMobSkillTrigger(e, triggerDamaged, skillTriggerCtx{attackerID: src.attacker})
 	}
 }
 

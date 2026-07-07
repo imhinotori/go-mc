@@ -531,6 +531,9 @@ func (r *mobRegistry) builtinsDict() starlark.StringDict {
 		"condition":     r.conditionBuiltin(),
 		"declare_model": r.models.declareModelBuiltin(),
 		"bone":          r.models.boneBuiltin(),
+		"animation":     r.models.animationBuiltin(),
+		"channel":       r.models.channelBuiltin(),
+		"keyframe":      r.models.keyframeBuiltin(),
 	}
 }
 
@@ -770,7 +773,7 @@ func (t *TickLoop) spawnDeclaredMob(decl *mobDecl, x, y, z float64) *Entity {
 	// here, after the store add (the mob is live + resolvable by targeters).
 	if len(decl.skills) > 0 {
 		e.skills = newSkillRunner(decl)
-		t.fireMobSkillTrigger(e, triggerSpawn)
+		t.fireMobSkillTrigger(e, triggerSpawn, skillTriggerCtx{})
 	}
 	return e
 }

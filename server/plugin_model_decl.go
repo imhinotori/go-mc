@@ -24,6 +24,7 @@ package server
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/imhinotori/sulfur/data/item"
@@ -68,10 +69,10 @@ type boneDecl struct {
 type modelDecl struct {
 	name  string
 	bones []boneDecl
-	// animations is the declared clip-name list. M2 CAPTURES it (so a model author writes the full
-	// declaration once) but does NOT interpret it — M3's animator consumes it. Empty for an M2-only
-	// static rig.
-	animations []string
+	// animations is the declared clip set (MODEL-M3). M2 captured only names; M3 flesh­es them into
+	// full animClips (per-bone-per-kind sorted keyframe lists), load-validated (channel bone exists,
+	// keyframe times ascending and in [0,length]). Empty for an M2-only static rig.
+	animations []animClip
 	// caps is the owning plugin's capability set at capture time (mirrors mobDecl.caps). Unused in M2
 	// (declare_model's own gate already fired at parse) but carried for the M4 animate-capability wiring.
 	caps capSet
@@ -83,6 +84,17 @@ func (m *modelDecl) boneOf(name string) (*boneDecl, bool) {
 	for i := range m.bones {
 		if m.bones[i].name == name {
 			return &m.bones[i], true
+		}
+	}
+	return nil, false
+}
+
+// clipOf returns the animClip with the given name, or (nil,false) — the play_animation mechanic and
+// the animation_frame/animation_end trigger validation resolve clips against the rig through it.
+func (m *modelDecl) clipOf(name string) (*animClip, bool) {
+	for i := range m.animations {
+		if m.animations[i].name == name {
+			return &m.animations[i], true
 		}
 	}
 	return nil, false
@@ -146,10 +158,118 @@ type modelInstance struct {
 	animator *modelAnimator
 }
 
-// modelAnimator is the M3 keyframe animator. RESERVED type — an empty placeholder in M2 so the
-// modelInstance.animator field type exists (H.0 tick ordering / play_animation land in M3). No fields
-// yet; M3 adds the clip clock, pending clip, and keyframe trigger dispatch.
-type modelAnimator struct{}
+// ----------------------------------------------------------------------------------------------
+// MODEL-M3 clip data model — the captured animation (name, loop, length, per-bone-per-kind keyframes)
+// ----------------------------------------------------------------------------------------------
+
+// channelKind is the transform channel a keyframe channel drives. Each maps to one Display$ItemDisplay
+// SynchedEntityData index the animator pushes: position->DATA_TRANSLATION (11), rotation->
+// DATA_LEFT_ROTATION (13), scale->DATA_SCALE (12).
+type channelKind uint8
+
+const (
+	channelPosition channelKind = iota // vec3 -> DATA_TRANSLATION
+	channelRotation                    // euler xyz (radians) -> quaternion -> DATA_LEFT_ROTATION
+	channelScale                       // vec3 -> DATA_SCALE
+)
+
+// channelKindByName maps the Starlark kind string to its enum. Unknown = loud load error.
+var channelKindByName = map[string]channelKind{
+	"position": channelPosition,
+	"rotation": channelRotation,
+	"scale":    channelScale,
+}
+
+// keyframe is one captured keyframe: a tick offset into the clip and a 3-component value. For
+// position/scale the value is (x,y,z); for rotation it is the euler (x,y,z) in RADIANS the animator
+// converts to a quaternion at interpolation time (H.1 amendment: authoring is euler xyz, the Go side
+// builds the quaternion via JOML Quaternionf.rotationXYZ — cited in eulerXYZToQuat). Immutable.
+type keyframe struct {
+	time    float32 // tick offset into the clip, ascending within a channel, in [0, clip.length]
+	x, y, z float32 // position/scale components, OR euler xyz radians for a rotation channel
+}
+
+// animChannel is one bone's one-kind keyframe track (e.g. bone "arm" position). keyframes are sorted
+// ascending by time at load (load-validated: strictly ascending, each in [0,length]).
+type animChannel struct {
+	bone      string // the rig bone this channel drives (load-validated to exist in the model)
+	kind      channelKind
+	keyframes []keyframe
+}
+
+// animClip is one captured animation: its name, loop flag, length in ticks, and the channels. A
+// modelDecl holds a slice of these (modelDecl.animations). Immutable after load; shared by every mob.
+type animClip struct {
+	name     string
+	loop     bool
+	length   float32 // clip length in ticks (> 0)
+	channels []animChannel
+}
+
+// animMode is how a played clip ends (BetterModel AnimationIterator$Type analogue): once stops and
+// clears the clip, loop restarts, hold clamps at the last frame. Each fires animation_end at length.
+type animMode uint8
+
+const (
+	animModeOnce animMode = iota // play once, then stop (clip cleared) + fire animation_end
+	animModeLoop                 // restart at length (t wraps to 0)
+	animModeHold                 // clamp at the last frame + fire animation_end (once)
+)
+
+// animModeByName maps the play_animation mode string to its enum. Unknown = loud load error.
+var animModeByName = map[string]animMode{
+	"once": animModeOnce,
+	"loop": animModeLoop,
+	"hold": animModeHold,
+}
+
+// modelAnimator is the MODEL-M3 keyframe animator, the per-mob live clip clock (a field on
+// modelInstance, nil until a clip plays). H.0 reentrancy: play_animation only WRITES pending; the
+// animator swaps pending into clip at the NEXT tickModelAnimator, so no synchronous clip advance and
+// no animator recursion. Tick-owned.
+type modelAnimator struct {
+	// clip is the currently-playing clip (nil when idle). Shared frozen decl data (per-mob state is
+	// only the clock t + mode + pending).
+	clip *animClip
+	// t is the tick clock: ticks elapsed since the clip started (0 on the tick the clip is applied).
+	t int
+	// mode is how the current clip ends (once/loop/hold).
+	mode animMode
+	// pending is a clip queued by play_animation to START at the next tickModelAnimator (H.0
+	// reentrancy — never advanced synchronously). Nil when nothing is queued.
+	pending     *animClip
+	pendingMode animMode
+	// endFired guards animation_end so a hold-clamped clip fires it exactly once.
+	endFired bool
+}
+
+// eulerXYZToQuat builds a quaternion (x,y,z,w order — the Display DATA_LEFT_ROTATION wire order) from
+// an euler xyz rotation in radians, a 1:1 port of JOML Quaternionf.rotationXYZ (joml 1.10.8, the exact
+// method the vanilla Display transform stack uses). VERIFIED javap org.joml.Quaternionf.rotationXYZ:
+//
+//	sx=sin(x*0.5); cx=cosFromSin(sx, x*0.5);  (cosFromSin == cos, computed from the sin + angle)
+//	sy=sin(y*0.5); cy=cosFromSin(sy, y*0.5);
+//	sz=sin(z*0.5); cz=cosFromSin(sz, z*0.5);
+//	cycz=cy*cz; sysz=sy*sz; sycz=sy*cz; cysz=cy*sz;
+//	w = cx*cycz - sx*sysz;  x = sx*cycz + cx*sysz;  y = cx*sycz - sx*cysz;  z = cx*cysz + sx*sycz;
+//
+// We compute cos directly (math.Cos of the same half-angle) — cosFromSin(sin(a),a) == cos(a) exactly
+// by JOML's contract, so the observable quaternion is identical.
+func eulerXYZToQuat(ex, ey, ez float32) [4]float32 {
+	hx, hy, hz := float64(ex)*0.5, float64(ey)*0.5, float64(ez)*0.5
+	sx, cx := math.Sin(hx), math.Cos(hx)
+	sy, cy := math.Sin(hy), math.Cos(hy)
+	sz, cz := math.Sin(hz), math.Cos(hz)
+	cycz := cy * cz
+	sysz := sy * sz
+	sycz := sy * cz
+	cysz := cy * sz
+	w := cx*cycz - sx*sysz
+	x := sx*cycz + cx*sysz
+	y := cx*sycz - sx*cysz
+	z := cx*cysz + sx*sycz
+	return [4]float32{float32(x), float32(y), float32(z), float32(w)}
+}
 
 // ----------------------------------------------------------------------------------------------
 // bone item resolver (name -> item id), lazily indexed
@@ -199,6 +319,36 @@ func (v *boneValue) Type() string          { return "bone" }
 func (v *boneValue) Freeze()               {}
 func (v *boneValue) Truth() starlark.Bool  { return starlark.True }
 func (v *boneValue) Hash() (uint32, error) { return 0, nil }
+
+// MODEL-M3 clip wrapper values: keyframe()/channel()/animation() build these; declare_model unwraps
+// them (the goalValue/boneValue pattern — type errors fire at the precise call site).
+type keyframeValue struct{ kf keyframe }
+type channelValue struct{ ch animChannel }
+type animationValue struct{ clip animClip }
+
+var (
+	_ starlark.Value = (*keyframeValue)(nil)
+	_ starlark.Value = (*channelValue)(nil)
+	_ starlark.Value = (*animationValue)(nil)
+)
+
+func (v *keyframeValue) String() string        { return "<keyframe>" }
+func (v *keyframeValue) Type() string          { return "keyframe" }
+func (v *keyframeValue) Freeze()               {}
+func (v *keyframeValue) Truth() starlark.Bool  { return starlark.True }
+func (v *keyframeValue) Hash() (uint32, error) { return 0, nil }
+
+func (v *channelValue) String() string        { return "<channel " + v.ch.bone + ">" }
+func (v *channelValue) Type() string          { return "channel" }
+func (v *channelValue) Freeze()               {}
+func (v *channelValue) Truth() starlark.Bool  { return starlark.True }
+func (v *channelValue) Hash() (uint32, error) { return 0, nil }
+
+func (v *animationValue) String() string        { return "<animation " + v.clip.name + ">" }
+func (v *animationValue) Type() string          { return "animation" }
+func (v *animationValue) Freeze()               {}
+func (v *animationValue) Truth() starlark.Bool  { return starlark.True }
+func (v *animationValue) Hash() (uint32, error) { return 0, nil }
 
 // ----------------------------------------------------------------------------------------------
 // The builtins (methods on modelRegistry so declare_model captures into byName + enforces caps)
@@ -338,33 +488,159 @@ func (r *modelRegistry) declareModelBuiltin() *starlark.Builtin {
 				return nil, fmt.Errorf("declare_model %q: bone %q parent %q is not a bone in this model", name, bones[i].name, p)
 			}
 		}
-		anims, err := parseStringList(animationsList)
+		clips, err := collectAnimClips(animationsList, seen)
 		if err != nil {
 			return nil, fmt.Errorf("declare_model %q: %w", name, err)
 		}
 		r.byName[name] = &modelDecl{
 			name:       name,
 			bones:      bones,
-			animations: anims,
+			animations: clips,
 			caps:       r.caps,
 		}
 		return starlark.None, nil
 	})
 }
 
-// parseStringList converts a Starlark list of strings to a Go slice. A nil list yields nil (no
-// animations — the M2-only static rig). A non-string element is a loud error (rejected at load).
-func parseStringList(list *starlark.List) ([]string, error) {
+// collectAnimClips unwraps each element of the declare_model animations list (each MUST be an
+// animation(...) value) and load-VALIDATES it against the rig (MODEL-M3 H.0.1): every channel bone
+// must exist in the model (boneNames), keyframe times must be strictly ascending, and each time must
+// lie in [0, length]. A nil list yields nil (an M2-only static rig). Loud error on any violation.
+func collectAnimClips(list *starlark.List, boneNames map[string]struct{}) ([]animClip, error) {
 	if list == nil {
 		return nil, nil
 	}
-	out := make([]string, 0, list.Len())
+	out := make([]animClip, 0, list.Len())
+	seen := make(map[string]struct{}, list.Len())
 	for i := 0; i < list.Len(); i++ {
-		s, ok := starlark.AsString(list.Index(i))
+		av, ok := list.Index(i).(*animationValue)
 		if !ok {
-			return nil, fmt.Errorf("animations[%d] must be a string, got %s", i, list.Index(i).Type())
+			return nil, fmt.Errorf("animations[%d] must be an animation(...) value, got %s", i, list.Index(i).Type())
 		}
-		out = append(out, s)
+		clip := av.clip
+		if _, dup := seen[clip.name]; dup {
+			return nil, fmt.Errorf("duplicate animation name %q", clip.name)
+		}
+		seen[clip.name] = struct{}{}
+		for ci := range clip.channels {
+			ch := &clip.channels[ci]
+			if _, ok := boneNames[ch.bone]; !ok {
+				return nil, fmt.Errorf("animation %q: channel bone %q is not a bone in this model", clip.name, ch.bone)
+			}
+			var prev float32 = -1
+			for ki := range ch.keyframes {
+				kf := ch.keyframes[ki]
+				if kf.time < 0 || kf.time > clip.length {
+					return nil, fmt.Errorf("animation %q: bone %q keyframe time %g out of [0, %g]", clip.name, ch.bone, kf.time, clip.length)
+				}
+				if ki > 0 && kf.time <= prev {
+					return nil, fmt.Errorf("animation %q: bone %q keyframe times must be strictly ascending (got %g after %g)", clip.name, ch.bone, kf.time, prev)
+				}
+				prev = kf.time
+			}
+		}
+		out = append(out, clip)
 	}
 	return out, nil
+}
+
+// keyframeBuiltin returns the `keyframe(time, value=(x,y,z))` builtin. value is a 3-tuple: for a
+// position/scale channel it is (x,y,z); for a rotation channel it is the euler (x,y,z) in RADIANS the
+// animator converts to a quaternion (eulerXYZToQuat). Non-numeric/non-3-element values are loud errors.
+func (r *modelRegistry) keyframeBuiltin() *starlark.Builtin {
+	return starlark.NewBuiltin("keyframe", func(_ *starlark.Thread, b *starlark.Builtin,
+		args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+		var timeF float64
+		var valueV starlark.Value
+		if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+			"time", &timeF,
+			"value", &valueV,
+		); err != nil {
+			return nil, err
+		}
+		if timeF < 0 {
+			return nil, fmt.Errorf("keyframe: time must be >= 0")
+		}
+		x, y, z, err := parsePivotTuple(valueV)
+		if err != nil {
+			return nil, fmt.Errorf("keyframe: value %w", err)
+		}
+		return &keyframeValue{kf: keyframe{time: float32(timeF), x: x, y: y, z: z}}, nil
+	})
+}
+
+// channelBuiltin returns the `channel(bone, kind, keyframes=[keyframe(...)])` builtin. kind is one of
+// position/rotation/scale; keyframes must be a non-empty list of keyframe(...) values. The bone
+// reference + keyframe ascending/range checks happen at declare_model (the whole rig is known then).
+func (r *modelRegistry) channelBuiltin() *starlark.Builtin {
+	return starlark.NewBuiltin("channel", func(_ *starlark.Thread, b *starlark.Builtin,
+		args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+		var bone, kindName string
+		var kfList *starlark.List
+		if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+			"bone", &bone,
+			"kind", &kindName,
+			"keyframes", &kfList,
+		); err != nil {
+			return nil, err
+		}
+		if bone == "" {
+			return nil, fmt.Errorf("channel: bone must be non-empty")
+		}
+		kind, ok := channelKindByName[kindName]
+		if !ok {
+			return nil, fmt.Errorf("channel %q: unknown kind %q (valid: position, rotation, scale)", bone, kindName)
+		}
+		if kfList == nil || kfList.Len() == 0 {
+			return nil, fmt.Errorf("channel %q: keyframes must be a non-empty list of keyframe(...) values", bone)
+		}
+		kfs := make([]keyframe, 0, kfList.Len())
+		for i := 0; i < kfList.Len(); i++ {
+			kv, ok := kfList.Index(i).(*keyframeValue)
+			if !ok {
+				return nil, fmt.Errorf("channel %q: keyframes[%d] must be a keyframe(...) value, got %s", bone, i, kfList.Index(i).Type())
+			}
+			kfs = append(kfs, kv.kf)
+		}
+		return &channelValue{ch: animChannel{bone: bone, kind: kind, keyframes: kfs}}, nil
+	})
+}
+
+// animationBuiltin returns the `animation(name, loop=False, length, channels=[channel(...)])` builtin.
+// length is the clip length in ticks (> 0); channels a non-empty list of channel(...) values. The
+// bone/keyframe validation is deferred to declare_model (collectAnimClips), where the rig is known.
+func (r *modelRegistry) animationBuiltin() *starlark.Builtin {
+	return starlark.NewBuiltin("animation", func(_ *starlark.Thread, b *starlark.Builtin,
+		args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+		var name string
+		loop := false
+		var lengthF float64
+		var chList *starlark.List
+		if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+			"name", &name,
+			"length", &lengthF,
+			"loop?", &loop,
+			"channels", &chList,
+		); err != nil {
+			return nil, err
+		}
+		if name == "" {
+			return nil, fmt.Errorf("animation: name must be non-empty")
+		}
+		if lengthF <= 0 {
+			return nil, fmt.Errorf("animation %q: length must be > 0 ticks", name)
+		}
+		if chList == nil || chList.Len() == 0 {
+			return nil, fmt.Errorf("animation %q: channels must be a non-empty list of channel(...) values", name)
+		}
+		chs := make([]animChannel, 0, chList.Len())
+		for i := 0; i < chList.Len(); i++ {
+			cv, ok := chList.Index(i).(*channelValue)
+			if !ok {
+				return nil, fmt.Errorf("animation %q: channels[%d] must be a channel(...) value, got %s", name, i, chList.Index(i).Type())
+			}
+			chs = append(chs, cv.ch)
+		}
+		return &animationValue{clip: animClip{name: name, loop: loop, length: float32(lengthF), channels: chs}}, nil
+	})
 }

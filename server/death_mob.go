@@ -106,7 +106,7 @@ func (t *TickLoop) dieEntity(e *Entity, src damageSource) {
 	// the status-3 broadcast, while the corpse is still in the store (targeters resolve at the death
 	// position). Gated on e.skills != nil — every vanilla mob pays one nil-check and nothing else.
 	if e.skills != nil {
-		t.fireMobSkillTrigger(e, triggerDeath)
+		t.fireMobSkillTrigger(e, triggerDeath, skillTriggerCtx{})
 	}
 }
 
