@@ -194,6 +194,11 @@ type TickLoop struct {
 	netherWorld  *world.ChunkManager
 	netherWorker *world.Worker
 
+	// gamerules is the per-level GameRules store (gamerules.go): the authoritative keyed set of
+	// boolean/integer rules with vanilla defaults. Read through t.gameRule/t.gameRuleInt (lazily seeded to
+	// the defaults on first read, so a test-constructed loop still reads vanilla values). Cite GameRules.
+	gamerules *gameRules
+
 	// currentRegion is the Phase-27 STEP-3 (N=2) per-goroutine current-region registry: when a
 	// region's fan-out goroutine is running its tick, it registers itself here keyed by its goroutine
 	// id (region.tick does this on entry, clears on exit). only() consults it so the ~200 existing

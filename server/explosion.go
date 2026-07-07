@@ -44,7 +44,7 @@ func (t *TickLoop) explode(srcID int32, x, y, z, radius float64) {
 	// — when off, NO block is removed (the vanilla KEEP path). The ray nextFloats above are still drawn
 	// (calculateExplodedPositions runs unconditionally in vanilla), so level.random stays in lockstep
 	// regardless of the gamerule. Cite ServerExplosion.explode + interactsWithBlocks + ServerLevel.explode.
-	if mobGriefing {
+	if t.gameRule(ruleMobGriefing) {
 		t.interactWithBlocks(toBlow, radius)
 	}
 }

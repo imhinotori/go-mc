@@ -168,8 +168,9 @@ func TestEndermanTakeNoGriefing(t *testing.T) {
 	})
 
 	// Turn mobGriefing OFF for the duration of this test (restore the vanilla default after).
-	mobGriefing = false
-	defer func() { mobGriefing = true }()
+	loop.gamerules = newGameRules()
+	loop.gamerules.setBool(ruleMobGriefing, false)
+	defer func() { loop.gamerules.setBool(ruleMobGriefing, true) }()
 
 	tookAny := false
 	loop.withRegion(loop.only(), func() {

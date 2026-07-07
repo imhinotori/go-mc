@@ -112,11 +112,11 @@ func newEndermanTakeBlockGoal() *endermanTakeBlockGoal {
 //
 //	[VERIFIED CFR EndermanTakeBlockGoal.canUse: if (getCarriedBlock()!=null) return false;
 //	 if (!mobGriefing) return false; return getRandom().nextInt(reducedTickDelay(20))==0.]
-func (g *endermanTakeBlockGoal) canUse(_ *TickLoop, e *Entity) bool {
+func (g *endermanTakeBlockGoal) canUse(t *TickLoop, e *Entity) bool {
 	if e.carriedBlockSet {
 		return false // getCarriedBlock() != null
 	}
-	if !mobGriefing {
+	if !t.gameRule(ruleMobGriefing) {
 		return false // MOB_GRIEFING gamerule off
 	}
 	return mobRandom(e).nextInt(reducedTickDelay(endermanTakeBlockInterval)) == 0
@@ -177,11 +177,11 @@ func newEndermanLeaveBlockGoal() *endermanLeaveBlockGoal {
 //
 //	[VERIFIED CFR EndermanLeaveBlockGoal.canUse: if (getCarriedBlock()==null) return false;
 //	 if (!mobGriefing) return false; return getRandom().nextInt(reducedTickDelay(2000))==0.]
-func (g *endermanLeaveBlockGoal) canUse(_ *TickLoop, e *Entity) bool {
+func (g *endermanLeaveBlockGoal) canUse(t *TickLoop, e *Entity) bool {
 	if !e.carriedBlockSet {
 		return false // getCarriedBlock() == null
 	}
-	if !mobGriefing {
+	if !t.gameRule(ruleMobGriefing) {
 		return false
 	}
 	return mobRandom(e).nextInt(reducedTickDelay(endermanLeaveBlockInterval)) == 0

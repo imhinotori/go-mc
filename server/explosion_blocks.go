@@ -26,14 +26,6 @@ import (
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
-// mobGriefing is the GameRules.MOB_GRIEFING gamerule value. v1 has no gamerule engine; it is the
-// vanilla default (TRUE — javap GameRules.<clinit> registerBoolean("mobGriefing", MOBS, true)),
-// structured as a package var so a future gamerule subsystem installs the real per-level read
-// with no call-site change. A creeper (ExplosionInteraction.MOB) destroys blocks only when true.
-//
-//	[VERIFIED javap net.minecraft.world.level.gamerules.GameRules.<clinit>: MOB_GRIEFING == true.]
-var mobGriefing = true
-
 // mobExplosionDropDecay is the GameRules.MOB_EXPLOSION_DROP_DECAY gamerule value (vanilla default
 // TRUE — javap GameRules.<clinit>). It selects the MOB destroy type: TRUE -> DESTROY_WITH_DECAY
 // (each drop rolls the 1/radius explosion-decay survival), FALSE -> DESTROY (all drops survive).

@@ -362,7 +362,7 @@ func (g *evokerUseSpellGoal) wololoCanUse(t *TickLoop, e *Entity) bool {
 	if t.gametime < g.nextAttackTickCount { // tickCount < nextAttackTickCount
 		return false
 	}
-	if !mobGriefing { // gamerule mobGriefing off -> no wololo
+	if !t.gameRule(ruleMobGriefing) { // gamerule mobGriefing off -> no wololo
 		return false
 	}
 	// getNearbyEntities(Sheep.class, wololoTargeting, this, getBoundingBox().inflate(16,4,16)): collect every

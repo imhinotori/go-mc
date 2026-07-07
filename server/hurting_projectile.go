@@ -275,7 +275,7 @@ func (t *TickLoop) hurtingOnHitBlock(e *Entity, endX, endY, endZ, hx, hy, hz flo
 	// The owner-not-a-Mob gate: a player owner always places fire; a mob owner only under MOB_GRIEFING. v1
 	// tracks the owner as a thin id — a player id resolves via playerByEntityID; anything else is a mob.
 	ownerIsMob := e.hurtOwnerID == 0 || t.playerByEntityID(e.hurtOwnerID) == nil
-	if ownerIsMob && !mobGriefing {
+	if ownerIsMob && !t.gameRule(ruleMobGriefing) {
 		return
 	}
 	// Place fire in the block adjacent to the hit face (BlockPos.relative(direction)). v1 approximates the

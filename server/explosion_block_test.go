@@ -62,8 +62,8 @@ func TestExplosionDestroysBlocks(t *testing.T) {
 
 		// Deterministic RNG: reseed the fallback region's levelRandom.
 		loop.regions[globalRegion].levelRandom = levelgen.NewLegacyRandomSource(12345)
-		mobGriefing = griefing
-		defer func() { mobGriefing = true }() // restore the vanilla default for other tests.
+		loop.gamerules = newGameRules()
+		loop.gamerules.setBool(ruleMobGriefing, griefing)
 
 		loop.withRegion(loop.only(), func() {
 			// Blast at the block center (+0.5 so BlockPos.containing lands on the center block).
