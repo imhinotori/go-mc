@@ -357,7 +357,12 @@ func (t *TickLoop) checkMovementStatistics(p *tickPlayer, dx, dy, dz float64) {
 			}
 		}
 	}
-	// (isFallFlying / vehicle branches omitted — elytra and vehicles are out of v1 scope.)
+	// isFallFlying branch (ServerPlayer.checkMovementStatistics, javap-verified offsets 369-411): a
+	// gliding player awards the AVIATE_ONE_CM stat from the 3D distance and costs NO food exhaustion
+	// (causeFoodExhaustion is never called in that branch -- like the onClimbable branch). Sulfur does
+	// not track stats yet, so this branch is a faithful no-op; the FALL_FLYING flag + elytra durability
+	// are handled by tickPlayerFallFlying (elytra.go), not here. (The vehicle branch stays out of v1
+	// scope.) Cite ServerPlayer.checkMovementStatistics isFallFlying branch (AVIATE_ONE_CM, no exhaustion).
 }
 
 // round3D is `Math.round((float)(Math.sqrt(dx*dx+dy*dy+dz*dz)) * 100.0f)` — the 3D centimetre count

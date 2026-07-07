@@ -353,6 +353,17 @@ func (t *TickLoop) tickEntities() {
 	// equipment_attributes.go; untraced like tickPlayerCombat (TestTickPhaseOrder unaffected).
 	t.tickPlayerEquipment()
 
+	// gap-reaudit #8 ELYTRA: the per-player fall-flying upkeep -- LivingEntity.aiStep -> updateFallFlying
+	// (the canGlide gate that clears the FALL_FLYING flag on landing/no-elytra + the once-per-second
+	// elytra durability drain) THEN LivingEntity.tick fallFlyTicks increment/reset, in that vanilla
+	// order. ADDITIVE sibling of tickPlayerEquipment, inside this existing phase so no new phase is added
+	// to the fixed tick order (TestTickPhaseOrder stays green). The glide PHYSICS (travelFallFlying) runs
+	// client-side for the local player (client-authoritative movement); the server owns the flag + the
+	// durability. Its body lives in elytra.go. Cite LivingEntity.aiStep/tick fall-flying branch.
+	for _, p := range t.players {
+		t.tickPlayerFallFlying(p)
+	}
+
 	// Plan 17-14 ITEM-PICKUP: the dropped-item lifecycle — ItemEntity.tick (0.04 gravity, age,
 	// 6000-tick despawn) for every ground item, then the Player.aiStep item-collection scan that
 	// picks up nearby pickable items (ItemEntity.playerTouch + Inventory.add + the take-item

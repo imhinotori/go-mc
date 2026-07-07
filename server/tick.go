@@ -899,6 +899,29 @@ type tickPlayer struct {
 	// (fall_damage.go).
 	lastY float64
 
+	// --- Elytra fall-flying (gliding) state (gap-reaudit #8). ALL tick-owned (TICK-05). ---
+	//
+	// fallFlying is net.minecraft.world.entity.LivingEntity DATA_SHARED_FLAGS bit 7 (FALL_FLYING) for
+	// this player: whether the player is currently gliding. Set by tryToStartFallFlying (the
+	// ServerboundPlayerCommand START_FALL_FLYING trigger), cleared by updateFallFlying/stopFallFlying
+	// (canGlide gate: landing / lost the elytra / levitation). Broadcast to trackers via
+	// broadcastPlayerSharedFlags so other clients render the glide pose. false = not gliding (the zero
+	// value). Cite LivingEntity.isFallFlying (getSharedFlag(7)) + Player.startFallFlying.
+	fallFlying bool
+
+	// fallFlyTicks is net.minecraft.world.entity.LivingEntity.fallFlyTicks: the tick counter that climbs
+	// while gliding (LivingEntity.tick: isFallFlying() ? fallFlyTicks++ : 0). updateFallFlying reads i =
+	// fallFlyTicks+1 to gate the elytra durability drain to once per 20 ticks (1/second). 0 when not
+	// gliding. Cite LivingEntity.tick + LivingEntity.updateFallFlying. Tick-owned.
+	fallFlyTicks int
+
+	// fallFlyRand is this player's lazily-seeded RandomSource for the updateFallFlying durability slot
+	// pick (Util.getRandom(list, random)). Seeded from entityID so it is deterministic per player and
+	// never perturbs the enchant stream. In practice the glide-slot list has one element (the CHEST
+	// elytra), so the draw is nextInt(1)==0 and the seed is immaterial -- but the draw is CONSUMED
+	// faithfully. Accessed via fallFlyRandom(). nil until first glide-durability tick.
+	fallFlyRand *entityRandom
+
 	// --- Melee combat 1:1 port (Plan 17-11). ALL tick-owned (TICK-05): mutated only on the tick
 	// goroutine by the attack/damage/tick-decrement paths, so they are -race clean by the same
 	// single-owner discipline as the rest of tickPlayer. ---
@@ -1973,6 +1996,14 @@ func (t *TickLoop) dispatch(c *Client, p pk.Packet) {
 					player.sprinting = true
 				case 2: // STOP_SPRINTING
 					player.sprinting = false
+				case 6: // START_FALL_FLYING (Action ordinal 6, the wire value)
+					// handlePlayerCommand START_FALL_FLYING: the double-jump-in-air-with-elytra glide start.
+					// ServerGamePacketListenerImpl.handlePlayerCommand -> ServerPlayer.tryToStartFallFlying():
+					// if not already fall-flying AND canGlide() (airborne, not a passenger, not levitating, an
+					// undamaged elytra worn) AND not in water, set the FALL_FLYING shared flag (broadcast to
+					// trackers). A player with no elytra / on the ground / in water cannot start (guarded inside).
+					// Cite ServerGamePacketListenerImpl.handlePlayerCommand + Player.tryToStartFallFlying.
+					t.tryToStartFallFlying(player)
 				}
 			}
 		}

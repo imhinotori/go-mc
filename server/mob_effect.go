@@ -181,11 +181,10 @@ func (t *TickLoop) onPlayerEffectStarted(p *tickPlayer, id string, amplifier int
 // vanilla player with no other flags would rewrite it. Mirrors broadcastEntityFireFlag (BYTE serializer
 // at index 0). Cite LivingEntity.updateInvisibilityStatus + Entity.setInvisible (setSharedFlag(5,...)).
 func (t *TickLoop) broadcastPlayerInvisibleFlag(p *tickPlayer) {
-	var flags int8
-	if playerHasEffect(p, effectInvisibility) {
-		flags |= invisibleSharedFlagBit
-	}
-	t.broadcastToTrackers(p.entityID, encodeSetEntityDataByID(p.entityID, sharedFlagsDataEntry(flags)))
+	// Delegate to the unified shared-flags broadcast so the invisible and fall-flying (elytra) bits
+	// coexist in the single DATA_SHARED_FLAGS byte -- rewriting it from only the invisible bit here
+	// would clobber a concurrent FALL_FLYING flag (and vice-versa). playerSharedFlags composes both.
+	t.broadcastPlayerSharedFlags(p)
 }
 
 // applyInstantEffect is the port of HealOrHarmMobEffect.applyInstantaneousEffect for a player victim: the
