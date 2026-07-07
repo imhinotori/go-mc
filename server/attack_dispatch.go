@@ -197,7 +197,7 @@ func (t *TickLoop) handleAttack(p *tickPlayer, pkt pk.Packet) {
 	//                     + sprint) impulse on top. Use the no-send core for the extra too, then emit the
 	//                     SINGLE SetEntityMotion reflecting the combined base+extra velocity — vanilla's
 	//                     ServerPlayer needsSync single-flush, not one packet per knockback call.
-	extraKb := t.getKnockback(victim)
+	extraKb := t.getKnockback(p)
 	if sprintKb {
 		extraKb += 0.5
 	}
@@ -309,7 +309,6 @@ func (t *TickLoop) handleMobAttack(p *tickPlayer, targetID int32) {
 	// consumed for a mob victim.
 	fullStrength := scale > 0.9
 	sprintKb := p.sprinting && fullStrength
-	_ = sprintKb // consumed by the deferred mob-knockback/sweep tail (cited below)
 	// boolean crit = fullStrength && canCriticalAttack(target); if (crit) damage *= 1.5F. The mob is a
 	// LivingEntity (targetIsLivingEntity true, like a player victim), so canCriticalAttackEntity reuses
 	// the SAME attacker-side conditions as canCriticalAttack (none depend on the victim beyond the
@@ -320,6 +319,13 @@ func (t *TickLoop) handleMobAttack(p *tickPlayer, targetID int32) {
 	}
 	// float total = damage + enchBonus (enchBonus 0 in v1).
 	total := damage + enchBonus
+
+	// boolean sweep = isSweepAttack(fullStrength, crit, sprintKb). The sweep gate is ATTACKER-only (it
+	// reads onGround, knownMovement, getSpeed and the held-item SWORDS tag — none depend on the victim
+	// type), so it reuses the SAME isSweepAttack the player branch uses (holdingSword false in v1 -> the
+	// gate resolves to false today, but the full structure is preserved so a sword-item port flips only
+	// the final tag check for a mob victim exactly as for a player victim).
+	sweep := t.isSweepAttack(p, fullStrength, crit, sprintKb)
 
 	// src = DamageSources.playerAttack(player) — type player_attack, causingEntity = the attacker id
 	// (javap DamageSources.playerAttack: DamageTypes.PLAYER_ATTACK + the player). The genuine ported
@@ -348,14 +354,33 @@ func (t *TickLoop) handleMobAttack(p *tickPlayer, targetID int32) {
 		return
 	}
 
-	// causeExtraKnockback / doSweepAttack tail for a SAME-region mob victim: knockback of a mob is the
-	// LivingEntity.knockback port over the mob's vx/vy/vz. The player-victim knockback (causeExtraKnockback)
-	// is typed on *tickPlayer; a mob-target knockback is a thin sibling. For this plan the routing +
-	// damage are the deliverable (MOB-SUB-01); the mob-knockback impulse + sweep-over-mobs are a cited
-	// follow-on (no consumer reads a mob's post-hit velocity yet — the tracker syncs position, and the
-	// mob hurt/death pipeline drives the gameplay). The hit LANDED (applyMobAttackDamage returned true),
-	// damage + lastDamageSource + the on_damage emit all fired in applyDamageEntity. causeFoodExhaustion
-	// for the attacker still applies (the attack costs the player hunger regardless of the victim type).
+	// causeExtraKnockback(target, getKnockback(target, source) + (sprintKb ? 0.5F : 0.0F), targetDelta,
+	// source, total, true) for a SAME-region mob victim. The BASE knockback (dealDefaultKnockback 0.4)
+	// already ran inside applyMobAttackDamage->applyDamageEntity->dealDefaultKnockbackEntity, mutating the
+	// mob's vx/vy/vz; this adds the EXTRA (attacker ATTACK_KNOCKBACK + sprint) impulse ON TOP, exactly as
+	// vanilla calls the target's knockback a second time. getKnockback reads the ATTACKER's
+	// ATTACK_KNOCKBACK (0.0 base -> 0.0 in v1); sprintKb adds +0.5. With no sprint and no knockback attr
+	// the strength is 0 and causeExtraKnockbackEntity's guard applies nothing — only a sprint-full-strength
+	// hit adds the +0.5 pop. No SetEntityMotion send: the entity tracker resyncs the mob's velocity/position
+	// next tick (mob knockback has no per-hit send — cf. ravagerStrongKnockback).
+	extraKb := t.getKnockback(p)
+	if sprintKb {
+		extraKb += 0.5
+	}
+	t.causeExtraKnockbackEntity(p, mob, extraKb)
+
+	// if (sweep) doSweepAttack(target, damage, source, scale). The sweep scans nearby LivingEntities
+	// (mobs AND players) around the primary mob and deals the 1.0×scale sweep hit + a 0.4 knockback to
+	// each in a 3-block radius of the attacker. Skips the primary (target) and dead entities. sweep is
+	// false in v1 (no sword items -> isSweepAttack short-circuits) but the call is wired so a sword-item
+	// port lands the mob-inclusive sweep with no further change.
+	if sweep {
+		t.doSweepAttackMob(p, mob, damage, scale)
+	}
+
+	// The hit LANDED (applyMobAttackDamage returned true), damage + lastDamageSource + the on_damage emit
+	// all fired in applyDamageEntity. causeFoodExhaustion for the attacker still applies (the attack costs
+	// the player hunger regardless of the victim type).
 
 	// setLastHurtMob(target): the OWNER-SIDE attack bookkeeping (the formerly-stubbed setLastHurtMob from
 	// the player branch, line 205) — record the mob this player just hit + the gameTime stamp. A tamed
@@ -566,11 +591,22 @@ func (t *TickLoop) isSweepAttack(p *tickPlayer, fullStrength, crit, sprintKb boo
 //	// (ServerLevel enchant modifyKnockback branch -> v1: f unchanged, no enchantments)
 //	return f / 2.0F;
 //
-// ATTACK_KNOCKBACK base is 0.0 for a player, so this returns 0.0 in v1 — the base knockback is
-// entirely from the sprint bonus and the knockback() impulse. The /2.0F and the d2f cast are
-// ported verbatim so a future ATTACK_KNOCKBACK modifier (e.g. the Knockback enchant) reads through.
-func (t *TickLoop) getKnockback(victim *tickPlayer) float32 {
-	f := float32(victim.getAttributeValue(attrAttackKnockback))
+// It reads the ATTACK_KNOCKBACK attribute of the ATTACKER (the entity getKnockback is invoked on),
+// NOT the victim. Player.attack calls `getKnockback(target, source)` on `this` (the attacker) —
+// javap offset 254 aload_0 (this/attacker) is the receiver, 255 aload_1 (target) + 256 aload 4
+// (source) are the args; getKnockback's body reads `aload_0 getstatic ATTACK_KNOCKBACK
+// getAttributeValue` on that receiver, and modifyKnockback's ItemStack is the attacker's
+// getWeaponItem(). ATTACK_KNOCKBACK base is 0.0 for a player, so this returns 0.0 in v1 — the base
+// knockback is entirely from the sprint bonus and the knockback() impulse. The /2.0F and the d2f
+// cast are ported verbatim so a future ATTACK_KNOCKBACK modifier (e.g. the Knockback enchant) reads
+// through.
+//
+//	[VERIFIED javap Player.attack: 254 aload_0 ; 255 aload_1 ; 256 aload 4 ; 258 invokevirtual
+//	 getKnockback(Entity,DamageSource)F — receiver is the attacker. getKnockback: 0 aload_0 ; 1
+//	 getstatic ATTACK_KNOCKBACK ; 4 getAttributeValue ; 7 d2f ; ServerLevel? modifyKnockback ; fconst_2
+//	 fdiv.]
+func (t *TickLoop) getKnockback(attacker *tickPlayer) float32 {
+	f := float32(attacker.getAttributeValue(attrAttackKnockback))
 	// EnchantmentHelper.modifyKnockback: v1 has no enchantments -> f unchanged.
 	return f / 2.0
 }
@@ -602,6 +638,43 @@ func (t *TickLoop) causeExtraKnockback(attacker, victim *tickPlayer, strength fl
 		// (already applied to the victim's velocity in applyDamage). The caller emits ONE SetEntityMotion
 		// for the combined base+extra velocity (vanilla's ServerPlayer needsSync single-flush per tick).
 		t.knockbackNoSend(victim, float64(strength), dx, dz)
+	}
+	// Attacker recoil (deltaMovement *0.6/1/0.6) + setSprinting(false): v1 stubs (no attacker velocity
+	// model / sprint flag).
+}
+
+// causeExtraKnockbackEntity is the MOB-victim sibling of causeExtraKnockback — the LivingEntity-target
+// path of Player.causeExtraKnockback(Entity, float strength, Vec3 targetDelta, DamageSource, float
+// damage, boolean alwaysApplyKnockback), where the target is a Go-native mob (*Entity):
+//
+//	if (strength > 0.0F) {
+//	    // target instanceof LivingEntity:
+//	    ((LivingEntity) target).knockback((double) strength,
+//	        (double) Mth.sin(getYRot() * 0.017453292F),
+//	        (double) -Mth.cos(getYRot() * 0.017453292F),
+//	        source, damage);
+//	    // (attacker delta-movement *0.6/1/0.6 and setSprinting(false): the ATTACKER's recoil)
+//	}
+//
+// The knockback DIRECTION is the ATTACKER's yaw: dx = sin(yaw·π/180), dz = -cos(yaw·π/180) — the mob
+// is pushed away along the direction the attacker faces. This EXTRA impulse STACKS on the BASE
+// dealDefaultKnockback (0.4) already applied inside applyDamageEntity->dealDefaultKnockbackEntity, the
+// same way vanilla calls the target's knockback a SECOND time for the extra (the base ran inside
+// hurtServer; causeExtraKnockback then calls knockback again). knockbackEntity mutates the mob's
+// vx/vy/vz directly (combat_mob.go); no SetEntityMotion send is needed — the entity tracker resyncs
+// the mob's velocity/position next tick, exactly as ravagerStrongKnockback and every other mob
+// knockback caller rely on. The strength>0 guard is preserved: with ATTACK_KNOCKBACK 0 and no sprint,
+// strength is 0 and NO extra impulse is applied — exactly vanilla.
+//
+// RNG NOTE: knockbackEntity draws the mob RNG (mobRandom(e)) ONLY inside the degenerate xd²+zd²<1e-5
+// guard loop. The (sin, -cos) yaw direction is unit-length (magnitude 1), so xd²+zd² == 1.0 always
+// clears the 1e-5 floor and the loop never executes — this path draws NO RNG, so it cannot perturb
+// the pig oracle's pinned stream.
+func (t *TickLoop) causeExtraKnockbackEntity(attacker *tickPlayer, mob *Entity, strength float32) {
+	if strength > 0.0 {
+		dx := float64(float32(math.Sin(float64(attacker.yaw * degToRad))))
+		dz := float64(-float32(math.Cos(float64(attacker.yaw * degToRad))))
+		t.knockbackEntity(mob, float64(strength), dx, dz)
 	}
 	// Attacker recoil (deltaMovement *0.6/1/0.6) + setSprinting(false): v1 stubs (no attacker velocity
 	// model / sprint flag).
@@ -716,8 +789,10 @@ func normalizeHoriz(dx, dz float64) (float64, float64) {
 //
 // SWEEPING_DAMAGE_RATIO base is 0.0 in v1 (no sweeping-edge enchant), so sweepDamage == 1.0F. The
 // per-target distanceToSqr < 9.0 (3-block radius) and the inflate(1.0, 0.25, 1.0) box are ported
-// verbatim. The sweep targets are other PLAYERS in range (v1's LivingEntity population); each is
-// hurt via applyDamage (the hurtServer port) and knocked back with the 0.4 vertical sweep impulse.
+// verbatim. getEntitiesOfClass(LivingEntity, ...) collects BOTH players AND mobs — so the sweep hits
+// nearby players (scanned over t.players) AND nearby mobs (scanned over the attacker's region store);
+// each is hurt via the hurtServer port and knocked back with the 0.4 sweep impulse. The primary
+// PLAYER target is skipped; mobs are all secondary here.
 func (t *TickLoop) doSweepAttack(attacker, primary *tickPlayer, damage, scale float32) {
 	// sweepDamage = 1.0F + SWEEPING_DAMAGE_RATIO * damage. With ratio 0.0, sweepDamage == 1.0.
 	sweepDamage := 1.0 + float32(attacker.getAttributeValue(attrSweepingDamageRatio))*damage
@@ -756,6 +831,95 @@ func (t *TickLoop) doSweepAttack(attacker, primary *tickPlayer, damage, scale fl
 			kdx := float64(float32(math.Sin(float64(attacker.yaw * degToRad))))
 			kdz := float64(-float32(math.Cos(float64(attacker.yaw * degToRad))))
 			t.knockback(e, 0.4, kdx, kdz)
+		}
+	}
+
+	// getEntitiesOfClass(LivingEntity, ...) also yields MOBS in range — sweep them too. Resolve the
+	// attacker's region by its column (handleAttack runs on the dispatch goroutine with NO region
+	// registered, so NEVER cur()); scan that region's store within the 3-block radius. skipID is -1
+	// (a player-primary sweep struck no mob, so no mob is the primary to skip).
+	attackerRegion := t.regionForColumn(columnOf(attacker.x, attacker.z))
+	t.sweepMobsNear(attacker, attackerRegion, -1, sweepDamage, scale)
+}
+
+// doSweepAttackMob is the MOB-primary sibling of doSweepAttack: a player whose primary sweep target is
+// a mob. Vanilla's getEntitiesOfClass(LivingEntity, primary.getBoundingBox().inflate(1,0.25,1)) yields
+// every LivingEntity around the primary — players AND mobs — so the sweep hits nearby PLAYERS (scanned
+// over t.players) AND other nearby MOBS (scanned over the owner region store), skipping the primary mob
+// itself. Same math as doSweepAttack: sweepDamage=1.0+SWEEPING_DAMAGE_RATIO*damage (1.0 in v1), the
+// distanceToSqr<9.0 gate from the attacker, d=sweepDamage*scale, per-target 0.4 knockback along the
+// attacker facing. Runs in the SAME-region context (attacker==owner) established by handleMobAttack, so
+// the owner store is the attacker's region store.
+func (t *TickLoop) doSweepAttackMob(attacker *tickPlayer, primary *Entity, damage, scale float32) {
+	sweepDamage := 1.0 + float32(attacker.getAttributeValue(attrSweepingDamageRatio))*damage
+
+	// Nearby PLAYERS are sweep targets too (getEntitiesOfClass(LivingEntity) includes players). The
+	// primary here is a mob, so no player is the primary to skip — only self (the attacker).
+	for _, e := range t.players {
+		if e == attacker || e.dead {
+			continue
+		}
+		dx := e.x - attacker.x
+		dy := e.y - attacker.y
+		dz := e.z - attacker.z
+		if dx*dx+dy*dy+dz*dz >= 9.0 {
+			continue
+		}
+		d := sweepDamage * scale
+		if t.applyAttackDamage(e, attacker.entityID, d) {
+			kdx := float64(float32(math.Sin(float64(attacker.yaw * degToRad))))
+			kdz := float64(-float32(math.Cos(float64(attacker.yaw * degToRad))))
+			t.knockback(e, 0.4, kdx, kdz)
+		}
+	}
+
+	// Nearby MOBS, skipping the struck primary mob (primary.id). The owner region == attacker region
+	// (same-region path), so scan the owner's store.
+	ownerRegion := t.owningRegion(primary.id)
+	if ownerRegion != nil {
+		t.sweepMobsNear(attacker, ownerRegion, primary.id, sweepDamage, scale)
+	}
+}
+
+// sweepMobsNear applies the mob half of doSweepAttack: scan region `r`'s entity store for LivingEntity
+// mobs within the 3-block sweep radius of the attacker (distanceToSqr < 9.0), hurt each via
+// applyMobAttackDamage (the hurtServer port gate), and knock landed hits back with the 0.4 sweep
+// impulse along the attacker facing. skipID is the primary mob's id to skip (-1 for a player-primary
+// sweep, where no mob is the primary). Frames/armor-stands are skipped (they are not LivingEntity
+// combat targets in this port; vanilla's ArmorStand-marker skip + the fact a frame is not a
+// LivingEntity subclass both exclude them). NO RNG on this path (knockbackEntity's yaw direction is
+// unit-length, never tripping the degenerate RNG guard).
+func (t *TickLoop) sweepMobsNear(attacker *tickPlayer, r *region, skipID int32, sweepDamage, scale float32) {
+	if r == nil {
+		return
+	}
+	// near takes a CHUNK-column range; the 3-block radius fits within the containing column plus its
+	// immediate neighbours (a mob just across a chunk boundary can still be < 3 blocks away), so scan a
+	// 1-column Chebyshev radius and re-check the precise distanceToSqr < 9.0 inside the loop.
+	src := damageSourcePlayerAttack(attacker.entityID)
+	for _, e := range r.entities.near(attacker.x, attacker.z, 1) {
+		if e == nil || e.id == skipID || e.dead || !e.isAlive() {
+			continue // skip the primary mob, corpses, and non-live entities
+		}
+		if e.isFrame || e.isArmorStand {
+			continue // not LivingEntity combat targets (frame is not LivingEntity; stand-marker skip)
+		}
+		// distanceToSqr(e) < 9.0 from the attacker (vanilla's `this.distanceToSqr(e)`).
+		dx := e.x - attacker.x
+		dy := e.y - attacker.y
+		dz := e.z - attacker.z
+		if dx*dx+dy*dy+dz*dz >= 9.0 {
+			continue
+		}
+		// d = getEnchantedDamage(e, sweepDamage, source) * scale -> sweepDamage*scale in v1.
+		d := sweepDamage * scale
+		// e.hurtServer(...) -> applyMobAttackDamage so the per-target knockback is gated on the hit
+		// landing (vanilla's `if (e.hurtServer(...))`).
+		if t.applyMobAttackDamage(e, src, d) {
+			// e.knockback(0.4, sin(yaw·π/180), -cos(yaw·π/180), source, d) — the 0.4 sweep impulse.
+			kdx := float64(float32(math.Sin(float64(attacker.yaw * degToRad))))
+			kdz := float64(-float32(math.Cos(float64(attacker.yaw * degToRad))))
+			t.knockbackEntity(e, 0.4, kdx, kdz)
 		}
 	}
 }
