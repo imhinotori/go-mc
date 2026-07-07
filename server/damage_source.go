@@ -95,6 +95,11 @@ var (
 	// while an entity is in lava. An is_fire member, so a FIRE_RESISTANCE holder is immune via the
 	// applyDamage/applyDamageEntity fire guard. Cite Entity.lavaHurt / DamageSources.lava.
 	damageTypeLava = damageTypeID(tag.DamageTypeIDs["minecraft:lava"])
+	// damageTypeThorns is minecraft:thorns — the source the Thorns enchant's DamageEntity effect
+	// deals to the attacker (thorns.json post_attack: damage_entity damage_type minecraft:thorns,
+	// causingEntity = the enchanted item's owner). A bypasses_shield + NO_KNOCKBACK-less member per
+	// the damage_type JSON. Cite effects.DamageEntity.apply (new DamageSource(damageType, owner)).
+	damageTypeThorns = damageTypeID(tag.DamageTypeIDs["minecraft:thorns"])
 )
 
 // damageSourceOf builds a DamageSource for an environmental/anonymous source: the given damage-type
@@ -121,6 +126,36 @@ type damageSource struct {
 // yields false (the zero value of the inner map read), exactly as Holder.is over a tag with no members.
 func (s damageSource) is(tagName string) bool {
 	return tag.DamageTypeTags[tagName][int32(s.typeTag)]
+}
+
+// indirectDamageTypes are the damage types this server constructs with a DIRECT entity (the
+// projectile/potion) DISTINCT from the CAUSING entity (the shooter/thrower). DamageSource.isDirect()
+// == (causingEntity == directEntity) [VERIFIED javap DamageSource.isDirect]; the thin damageSource
+// value carries only the causing entity, so directness is derived from HOW each source is built:
+// every melee/environmental constructor sets directEntity == causingEntity in vanilla (isDirect
+// true — for an environmental source both are null, and null == null), while the projectile
+// constructors (DamageSources.arrow/fireball/witherSkull/windCharge/indirectMagic) pass the
+// projectile as the direct entity and the owner as causing (isDirect false).
+var indirectDamageTypes = map[damageTypeID]bool{
+	damageTypeArrow:         true,
+	damageTypeFireball:      true,
+	damageTypeWitherSkull:   true,
+	damageTypeWindCharge:    true,
+	damageTypeIndirectMagic: true,
+}
+
+// isDirect ports DamageSource.isDirect(): causingEntity == directEntity — derived per the
+// indirectDamageTypes table above (the Fire Aspect / Bane post-attack `is_direct` predicate read).
+func (s damageSource) isDirect() bool {
+	return !indirectDamageTypes[s.typeTag]
+}
+
+// damageSourceByTypeName builds a DamageSource for a datapack-named damage type (the enchant
+// DamageEntity effect's `damage_type` field, e.g. "minecraft:thorns") with the given causing
+// entity. An unknown name maps to id 0 only if absent from the generated table — the embedded
+// 26.2 table carries every vanilla type, so this is a faithful direct construction.
+func damageSourceByTypeName(name string, attackerID int32) damageSource {
+	return damageSource{typeTag: damageTypeID(tag.DamageTypeIDs[name]), attacker: attackerID}
 }
 
 // damageSourcePlayerAttack builds the DamageSource for a player melee hit: type player_attack with the

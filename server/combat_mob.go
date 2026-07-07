@@ -721,9 +721,10 @@ func (t *TickLoop) getDamageAfterMagicAbsorbEntity(e *Entity, src damageSource, 
 	if src.is("bypasses_enchantments") {
 		return amount
 	}
-	// Enchantment damage protection: v1 has no enchantments -> protection 0 -> the
-	// CombatRules.getDamageAfterMagicAbsorb call is skipped (the `if (protection > 0)` guard).
-	const protection float32 = 0.0
+	// EnchantmentHelper.getDamageProtection(level, this, source) (E-3): the EPF sum across the
+	// MOB's equipment (a zombie in Protection armor reduces exactly as a player would). A mob with
+	// no enchanted gear sums 0 and skips the curve — the pre-E-3 path, RNG-free.
+	protection := t.enchDamageProtection(enchEntityRef{mob: e}, mobEquipRead(e), src)
 	if protection > 0.0 {
 		amount = combatRulesGetDamageAfterMagicAbsorb(amount, protection)
 	}

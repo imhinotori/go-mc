@@ -372,8 +372,36 @@ func (g *meleeAttackGoal) doHurtTarget(t *TickLoop, e *Entity, target *tickPlaye
 	dmg := float32(e.getAttributeValue(attribute.AttackDamage)) // (float) getAttributeValue(ATTACK_DAMAGE)
 	// getWeaponItem().getDamageSource(this): a no-weapon mob's weapon item is empty, whose getDamageSource
 	// is the generic mob attack source DamageSources.mobAttack(this) — carrying attacker = the mob id.
+	weapon := e.getMainHandItem()
 	src := damageSourceMobAttack(e.id)
+	// dmg = EnchantmentHelper.modifyDamage(level, weapon, target, src, dmg) (E-3): a mob wielding an
+	// enchanted weapon (a Sharpness zombie sword) folds its DAMAGE effects. An un-enchanted/empty
+	// weapon returns dmg unchanged. Cite Mob.doHurtTarget offsets 23-33.
+	dmg = t.enchModifyDamage(weapon, enchEntityRef{player: target}, src, dmg)
+	// Item.getAttackDamageBonus: no held item carries one in scope — a cited no-op add (offset 34-48).
+
+	// boolean hurt = target.hurtServer(level, src, dmg): applyDamage is void, so the landed boolean
+	// is snapshotted the same way applyAttackDamage derives it (the i-frame excess gate) BEFORE the
+	// state mutates — it gates the doPostAttackEffects tail exactly as Mob.doHurtTarget's `if (flag)`.
+	hurt := !target.dead
+	if hurt && float32(target.invulnerableTime) > hurtCooldownConst {
+		amt := dmg
+		if amt < 0 {
+			amt = 0
+		}
+		hurt = amt > target.lastHurt
+	}
 	t.applyDamage(target, src, dmg) // the PLAYER hurt path (victim is a player)
+	if hurt {
+		// causeExtraKnockback(getKnockback(target, src) ...): a base mob's ATTACK_KNOCKBACK is 0 and
+		// no mob weapon carries the Knockback enchant in scope — a cited no-op (the base 0.4 recoil
+		// already ran via dealDefaultKnockbackPlayer inside applyDamage). weapon.hurtEnemy: stub.
+		// EnchantmentHelper.doPostAttackEffects(level, target, src) (E-3): the PLAYER victim's
+		// Thorns armor reflects onto this mob; a mob weapon's Fire Aspect would ignite the player
+		// (cited player-fire deferral inside eeIgnite). Cite Mob.doHurtTarget offset 110-114.
+		t.doPostAttackEffects(enchEntityRef{player: target}, src)
+		// setLastHurtMob / playAttackSound: cited stubs (mob-side bookkeeping/sound).
+	}
 }
 
 // isBright is the SpiderAttackGoal daylight gate's day/night proxy: a spider in BRIGHT light (vanilla

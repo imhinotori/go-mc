@@ -250,8 +250,8 @@ func (t *TickLoop) scanOrbPickup(p *tickPlayer) {
 // playerTouchOrb ports ExperienceOrb.playerTouch(Player) (WR-06): if the player's takeXpDelay is 0,
 // arm it to 2, play the orb-suck animation (player.take -> ClientboundTakeItemEntity, reusing
 // encodeTakeItemEntity), award the orb's value to the player (giveExperiencePoints), then discard the
-// orb. The mending repair (repairPlayerItems) is a CITED v1 stub (no enchantments), so the full value
-// is awarded. Tick-owned.
+// orb. The mending repair (repairPlayerItems, E-3) consumes the value first; only the remainder is
+// awarded. Tick-owned.
 //
 // Vanilla (javap ExperienceOrb.playerTouch, server side):
 //
@@ -274,9 +274,11 @@ func (t *TickLoop) playerTouchOrb(p *tickPlayer, e *Entity) {
 	// the same ClientboundTakeItemEntity packet). count is always 1 for an orb take.
 	t.takeItem(p, e, 1)
 
-	// repairPlayerItems(sp, getValue()): mending durability repair — a v1 stub (no enchantment subsystem),
-	// so NOTHING is consumed for repair and the full value is awarded. Cited deferral.
-	remaining := e.xpValue
+	// int remaining = repairPlayerItems(sp, getValue()) (E-3): the MENDING repair — a random damaged
+	// equipped item carrying a repair_with_xp enchant converts the orb value to durability (x2 via
+	// the multiply-2.0 effect), recursing with the remainder; only what is left over lands on the XP
+	// bar. A player with no mending gear returns the full value (and draws NO RNG) — the pre-E-3 path.
+	remaining := t.repairPlayerItems(p, e.xpValue)
 	if remaining > 0 {
 		t.giveExperiencePoints(p, remaining)
 	}

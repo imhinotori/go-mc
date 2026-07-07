@@ -454,7 +454,7 @@ func (t *TickLoop) actuallyHurt(p *tickPlayer, src damageSource, amount float32)
 
 	// Armor-points reduction, then magic (resistance/protection) reduction — in vanilla's order.
 	amount = t.getDamageAfterArmorAbsorb(p, amount)
-	amount = t.getDamageAfterMagicAbsorb(p, amount)
+	amount = t.getDamageAfterMagicAbsorb(p, src, amount)
 
 	// Absorption folding (Math.max(amount - absorption, 0); setAbsorption(absorption - (f1 - amount))).
 	// getAbsorptionAmount() is 0 in v1 (no MAX_ABSORPTION wired), so withAbsorb == amount and the
@@ -538,41 +538,42 @@ func (t *TickLoop) getDamageAfterArmorAbsorb(p *tickPlayer, amount float32) floa
 }
 
 // getDamageAfterMagicAbsorb is the port of
-// LivingEntity.getDamageAfterMagicAbsorb(DamageSource, float). The full vanilla method applies the
-// RESISTANCE mob-effect reduction and enchantment damage protection. v1 has neither effects nor
-// enchantments, so every guarded branch is skipped and amount passes through unchanged — the
-// structure is preserved (constant-false guards) so effects/enchants slot in here later.
+// LivingEntity.getDamageAfterMagicAbsorb(DamageSource, float): the RESISTANCE mob-effect reduction
+// (a v1-cited no-op — the effect subsystem carries no RESISTANCE holder on players yet) then the
+// ENCHANTMENT damage protection (E-3): protection = EnchantmentHelper.getDamageProtection(level,
+// this, source) — the EPF sum over the victim's equipped Protection-family enchants — feeding the
+// CombatRules curve when positive.
 //
-//	if (source.is(BYPASSES_EFFECTS)) return amount;          // v1: false
+//	if (source.is(BYPASSES_EFFECTS)) return amount;
 //	if (hasEffect(RESISTANCE) && !source.is(BYPASSES_RESISTANCE)) { ... resistance curve ... }  // v1: no effects
 //	if (amount <= 0.0F) return 0.0F;
-//	if (source.is(BYPASSES_ENCHANTMENTS)) return amount;     // v1: false
-//	float protection = <enchant damage protection>;          // v1: 0
+//	if (source.is(BYPASSES_ENCHANTMENTS)) return amount;
+//	float protection = (float) EnchantmentHelper.getDamageProtection(level, this, source);
 //	if (protection > 0.0F) amount = CombatRules.getDamageAfterMagicAbsorb(amount, protection);
 //	return amount;
-func (t *TickLoop) getDamageAfterMagicAbsorb(p *tickPlayer, amount float32) float32 {
-	const bypassesEffects = false
-	if bypassesEffects {
+func (t *TickLoop) getDamageAfterMagicAbsorb(p *tickPlayer, src damageSource, amount float32) float32 {
+	// source.is(BYPASSES_EFFECTS): a genuine tag read (the starve/out_of_world family).
+	if src.is("bypasses_effects") {
 		return amount
 	}
-	// hasEffect(RESISTANCE): v1 has no mob effects — the resistance reduction branch is skipped.
+	// hasEffect(RESISTANCE): v1 has no player RESISTANCE holder — the resistance branch is skipped.
 	const hasResistance = false
 	if hasResistance {
-		// Resistance curve (amplifier-scaled): preserved as a documented no-op branch. When mob
-		// effects arrive: k = (amplifier+1)*5; amount = max(amount * (25-k)/25, 0).
+		// Resistance curve (amplifier-scaled): preserved as a documented no-op branch. When it
+		// arrives: k = (amplifier+1)*5; amount = max(amount * (25-k)/25, 0).
 		_ = p
 	}
 	// `if (amount <= 0.0F) return 0.0F;` (bytecode: fload_2 fconst_0 fcmpg ifgt -> fconst_0 freturn).
 	if amount <= 0.0 {
 		return 0.0
 	}
-	const bypassesEnchantments = false
-	if bypassesEnchantments {
+	if src.is("bypasses_enchantments") {
 		return amount
 	}
-	// Enchantment damage protection: v1 has no enchantments -> protection 0 -> the
-	// CombatRules.getDamageAfterMagicAbsorb call is skipped (the `if (protection > 0)` guard).
-	const protection float32 = 0.0
+	// EnchantmentHelper.getDamageProtection(level, this, source): the EPF sum across the player's
+	// equipment (Protection add 1/level per piece; the specialized protections' source-tag
+	// conditions read src). An un-enchanted player sums 0 and skips the curve — the pre-E-3 path.
+	protection := t.enchDamageProtection(enchEntityRef{player: p}, playerEquipRead(p), src)
 	if protection > 0.0 {
 		amount = combatRulesGetDamageAfterMagicAbsorb(amount, protection)
 	}

@@ -129,6 +129,13 @@ func (t *TickLoop) handleAttack(p *tickPlayer, pkt pk.Packet) {
 	// is the faithful one. The d2f narrowing cast is applied here exactly where the bytecode does.
 	damage := float32(p.getAttributeValue(attrAttackDamage))
 
+	// ItemStack weapon = getWeaponItem(); DamageSource source = createAttackSource(weapon) — the
+	// mainhand stack + the player_attack source (a mace's special source is a cited deferral; every
+	// current weapon resolves to DamageSources.playerAttack). Read BEFORE the scale, exactly the
+	// bytecode order (offsets 32-42 precede getAttackStrengthScale at 44).
+	weapon := playerItemBySlot(p, eqSlotMainHand)
+	src := damageSourcePlayerAttack(p.entityID)
+
 	// float scale = getAttackStrengthScale(0.5F) — the cooldown ramp position (0..1). Read with the
 	// CURRENT attackStrengthTicker (BEFORE the swing reset below), exactly as vanilla: attack()
 	// computes the scale, and ServerPlayer.swing() — sent alongside the attack — resets the ticker.
@@ -136,11 +143,15 @@ func (t *TickLoop) handleAttack(p *tickPlayer, pkt pk.Packet) {
 	// at the END of this handler (resetAttackStrengthTicker), AFTER the scale is read.
 	scale := p.getAttackStrengthScale(attackStrengthScaleArg)
 
-	// enchBonus = (getEnchantedDamage(target, damage, source) - damage) * scale. v1 has no
-	// enchantments, so getEnchantedDamage returns damage unchanged -> the difference is 0 ->
-	// enchBonus is 0. Kept as an explicit term so an enchantment port slots in here unchanged.
-	const enchantedDamage = float32(0.0) // getEnchantedDamage(...) - damage == 0 in v1
-	enchBonus := enchantedDamage * scale
+	// enchBonus = (getEnchantedDamage(target, damage, source) - damage) * scale (E-3).
+	// ServerPlayer.getEnchantedDamage(target, damage, source) == EnchantmentHelper.modifyDamage(
+	// serverLevel(), getWeaponItem(), target, source, damage) — the Sharpness/Smite/Bane DAMAGE
+	// effects folded over the weapon's enchantments (an un-enchanted weapon returns damage
+	// unchanged -> bonus 0, the pre-E-3 behavior).
+	//	[VERIFIED javap ServerPlayer.getEnchantedDamage -> EnchantmentHelper.modifyDamage;
+	//	 Player.attack offsets 53-66: (getEnchantedDamage(...) - damage) * scale.]
+	enchantedDamage := t.enchModifyDamage(weapon, enchEntityRef{player: victim}, src, damage)
+	enchBonus := (enchantedDamage - damage) * scale
 
 	// damage *= baseDamageScaleFactor() == 0.2F + scale*scale*0.8F — the attack-strength damage
 	// ramp: a just-attacked swing (scale~0) deals ~0.2x, a fully recharged swing (scale==1) 1.0x.
@@ -202,7 +213,7 @@ func (t *TickLoop) handleAttack(p *tickPlayer, pkt pk.Packet) {
 	//                     + sprint) impulse on top. Use the no-send core for the extra too, then emit the
 	//                     SINGLE SetEntityMotion reflecting the combined base+extra velocity — vanilla's
 	//                     ServerPlayer needsSync single-flush, not one packet per knockback call.
-	extraKb := t.getKnockback(p)
+	extraKb := t.getKnockback(p, enchEntityRef{player: victim}, src)
 	if sprintKb {
 		extraKb += 0.5
 	}
@@ -219,8 +230,18 @@ func (t *TickLoop) handleAttack(p *tickPlayer, pkt pk.Packet) {
 		t.doSweepAttack(p, victim, damage, scale)
 	}
 
-	// attackVisualEffects / setLastHurtMob / itemAttackInteraction / damageStatsAndHearts: v1 stubs
-	// (no crit particles, no mob-attribution, no item-on-hit, no stats yet).
+	// attackVisualEffects / setLastHurtMob / damageStatsAndHearts: v1 stubs (no crit particles, no
+	// mob-attribution, no stats yet).
+
+	// itemAttackInteraction(target, weapon, source, true) — the on-hit item interaction (E-3):
+	// weapon.hurtEnemy (a stub — no item carries a hurtEnemy behavior in scope), THEN
+	// EnchantmentHelper.doPostAttackEffectsWithItemSource(level, target, source, weapon) — Fire
+	// Aspect from the attacker's weapon + Thorns from the VICTIM's armor — THEN postHurtEnemy
+	// (the weapon durability below), exactly the bytecode order.
+	//	[VERIFIED javap Player.itemAttackInteraction: hurtEnemy at 66; if (hurt)
+	//	 doPostAttackEffectsWithItemSource at 81; postHurtEnemy at 121.]
+	_, weaponInUse := t.enchWeaponInUse(enchEntityRef{player: p})
+	t.doPostAttackEffectsWithItemSource(enchEntityRef{player: victim}, src, weapon, weaponInUse, enchEntityRef{player: p})
 
 	// WEAPON DURABILITY (ItemStack.postHurtEnemy): a landed hit wears a held weapon by its
 	// item_damage_per_attack (a sword loses 1/hit, breaks at max). No-op for a fist / non-weapon / creative.
@@ -294,11 +315,18 @@ func (t *TickLoop) handleMobAttack(p *tickPlayer, targetID int32) {
 	// --- The SHARED Player.attack(Entity) damage math (IDENTICAL to the player branch above) -----------
 	// base damage = (float) getAttributeValue(ATTACK_DAMAGE) (the d2f narrowing cast).
 	damage := float32(p.getAttributeValue(attrAttackDamage))
+	// ItemStack weapon = getWeaponItem(); source = createAttackSource(weapon) — hoisted before the
+	// scale read exactly as the player branch (the source is consumed by the enchant seams AND the
+	// hurt application below; identical value either way).
+	weapon := playerItemBySlot(p, eqSlotMainHand)
+	src := damageSourcePlayerAttack(p.entityID)
 	// float scale = getAttackStrengthScale(0.5F) — read BEFORE the swing reset.
 	scale := p.getAttackStrengthScale(attackStrengthScaleArg)
-	// enchBonus = (getEnchantedDamage - damage) * scale == 0 in v1 (no enchantments).
-	const enchantedDamage = float32(0.0)
-	enchBonus := enchantedDamage * scale
+	// enchBonus = (getEnchantedDamage - damage) * scale (E-3): ServerPlayer.getEnchantedDamage ==
+	// EnchantmentHelper.modifyDamage(level, weapon, target, source, damage) — the Sharpness add,
+	// the Smite/Bane adds gated on the MOB victim's entity type (sensitive_to_* tags).
+	enchantedDamage := t.enchModifyDamage(weapon, enchEntityRef{mob: mob}, src, damage)
+	enchBonus := (enchantedDamage - damage) * scale
 	// damage *= baseDamageScaleFactor() == 0.2F + scale*scale*0.8F.
 	damage *= p.baseDamageScaleFactor()
 	// ServerPlayer.swing() resets the attack-strength ticker (every swing, even a no-damage one) — done
@@ -334,8 +362,8 @@ func (t *TickLoop) handleMobAttack(p *tickPlayer, targetID int32) {
 
 	// src = DamageSources.playerAttack(player) — type player_attack, causingEntity = the attacker id
 	// (javap DamageSources.playerAttack: DamageTypes.PLAYER_ATTACK + the player). The genuine ported
-	// source so PanicGoal (P31) reads its tag and wolf anger (P36) its attacker.
-	src := damageSourcePlayerAttack(p.entityID)
+	// source so PanicGoal (P31) reads its tag and wolf anger (P36) its attacker. (Hoisted above the
+	// damage math for the E-3 enchant seams — same value.)
 
 	// ROUTING (the FIRST true cross-region write — Pitfall 2). Resolve the ATTACKER's region by its
 	// column (NEVER cur() — handleAttack runs on the dispatch goroutine with NO region registered, where
@@ -368,7 +396,7 @@ func (t *TickLoop) handleMobAttack(p *tickPlayer, targetID int32) {
 	// the strength is 0 and causeExtraKnockbackEntity's guard applies nothing — only a sprint-full-strength
 	// hit adds the +0.5 pop. No SetEntityMotion send: the entity tracker resyncs the mob's velocity/position
 	// next tick (mob knockback has no per-hit send — cf. ravagerStrongKnockback).
-	extraKb := t.getKnockback(p)
+	extraKb := t.getKnockback(p, enchEntityRef{mob: mob}, src)
 	if sprintKb {
 		extraKb += 0.5
 	}
@@ -399,6 +427,13 @@ func (t *TickLoop) handleMobAttack(p *tickPlayer, targetID int32) {
 	//	 lastHurtMobTimestamp = tickCount.]
 	p.lastHurtMob = mob.id
 	p.lastHurtMobTimestamp = int32(t.gametime)
+
+	// itemAttackInteraction(target, weapon, source, true) — the on-hit item interaction (E-3):
+	// EnchantmentHelper.doPostAttackEffectsWithItemSource(level, target, source, weapon): Fire
+	// Aspect from the player's weapon ignites the mob; a Thorns-wearing mob reflects onto the
+	// player. Runs BEFORE postHurtEnemy (the weapon durability), the bytecode order.
+	_, weaponInUse := t.enchWeaponInUse(enchEntityRef{player: p})
+	t.doPostAttackEffectsWithItemSource(enchEntityRef{mob: mob}, src, weapon, weaponInUse, enchEntityRef{player: p})
 
 	// WEAPON DURABILITY (ItemStack.postHurtEnemy): on a landed hit, a held weapon takes its
 	// item_damage_per_attack durability (a sword wears 1/hit, breaks at max). No-op for a fist / non-weapon
@@ -593,26 +628,25 @@ func (t *TickLoop) isSweepAttack(p *tickPlayer, fullStrength, crit, sprintKb boo
 // getKnockback is the port of LivingEntity.getKnockback(Entity, DamageSource):
 //
 //	float f = (float) getAttributeValue(ATTACK_KNOCKBACK);
-//	// (ServerLevel enchant modifyKnockback branch -> v1: f unchanged, no enchantments)
-//	return f / 2.0F;
+//	return level instanceof ServerLevel
+//	    ? EnchantmentHelper.modifyKnockback(serverLevel, getWeaponItem(), target, source, f) / 2.0F
+//	    : f / 2.0F;
 //
 // It reads the ATTACK_KNOCKBACK attribute of the ATTACKER (the entity getKnockback is invoked on),
 // NOT the victim. Player.attack calls `getKnockback(target, source)` on `this` (the attacker) —
 // javap offset 254 aload_0 (this/attacker) is the receiver, 255 aload_1 (target) + 256 aload 4
 // (source) are the args; getKnockback's body reads `aload_0 getstatic ATTACK_KNOCKBACK
 // getAttributeValue` on that receiver, and modifyKnockback's ItemStack is the attacker's
-// getWeaponItem(). ATTACK_KNOCKBACK base is 0.0 for a player, so this returns 0.0 in v1 — the base
-// knockback is entirely from the sprint bonus and the knockback() impulse. The /2.0F and the d2f
-// cast are ported verbatim so a future ATTACK_KNOCKBACK modifier (e.g. the Knockback enchant) reads
-// through.
+// getWeaponItem(). ATTACK_KNOCKBACK base is 0.0 for a player; the Knockback enchant's KNOCKBACK
+// effect (add linear 1.0 + 1.0/level) folds in via enchModifyKnockback (E-3), THEN the /2.0F —
+// Knockback I on a bare-attribute player yields (0+1)/2 = 0.5 extra strength.
 //
-//	[VERIFIED javap Player.attack: 254 aload_0 ; 255 aload_1 ; 256 aload 4 ; 258 invokevirtual
-//	 getKnockback(Entity,DamageSource)F — receiver is the attacker. getKnockback: 0 aload_0 ; 1
-//	 getstatic ATTACK_KNOCKBACK ; 4 getAttributeValue ; 7 d2f ; ServerLevel? modifyKnockback ; fconst_2
-//	 fdiv.]
-func (t *TickLoop) getKnockback(attacker *tickPlayer) float32 {
+//	[VERIFIED javap LivingEntity.getKnockback: 0 aload_0 ; getstatic ATTACK_KNOCKBACK ;
+//	 getAttributeValue ; d2f ; instanceof ServerLevel -> EnchantmentHelper.modifyKnockback(level,
+//	 getWeaponItem(), target, source, f) ; fconst_2 fdiv.]
+func (t *TickLoop) getKnockback(attacker *tickPlayer, victim enchEntityRef, src damageSource) float32 {
 	f := float32(attacker.getAttributeValue(attrAttackKnockback))
-	// EnchantmentHelper.modifyKnockback: v1 has no enchantments -> f unchanged.
+	f = t.enchModifyKnockback(playerItemBySlot(attacker, eqSlotMainHand), victim, src, f)
 	return f / 2.0
 }
 
