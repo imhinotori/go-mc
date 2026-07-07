@@ -181,6 +181,71 @@ func encodeAddEntity(e *Entity) pk.Packet {
 	)
 }
 
+// --- MODEL-M1 (Display entity): the VECTOR3 / QUATERNION / FLOAT serializers -------------
+//
+// net.minecraft.world.entity.Display synchs its render transform through EntityDataSerializers
+// .VECTOR3 (a JOML Vector3f) and .QUATERNION (a JOML Quaternionf), plus several .FLOAT fields.
+// The three registry ids below are the registerSerializer() call order in the EntityDataSerializers
+// static initializer (the SAME order itemStackSerializerID==7 / intSerializerID==1 / byteSerializerID==0
+// are derived from): 0=BYTE, 1=INT, 2=LONG, 3=FLOAT, 4=STRING, 5=COMPONENT, 6=OPTIONAL_COMPONENT,
+// 7=ITEM_STACK, 8=BOOLEAN, 9=ROTATIONS, 10=BLOCK_POS, 11=OPTIONAL_BLOCK_POS, 12=DIRECTION,
+// 13=OPTIONAL_LIVING_ENTITY_REFERENCE, 14=BLOCK_STATE, 15=OPTIONAL_BLOCK_STATE, ... 39=VECTOR3,
+// 40=QUATERNION.
+//
+//	[VERIFIED javap net.minecraft.network.syncher.EntityDataSerializers static{}: registerSerializer
+//	 order; FLOAT = forValueType(ByteBufCodecs.FLOAT); VECTOR3/QUATERNION codecs = ByteBufCodecs.VECTOR3F
+//	 / .QUATERNIONF (consecutive big-endian float32 components).]
+
+// floatSerializerID is the registry id of EntityDataSerializers.FLOAT — the 4th registered serializer
+// (id 3). Its value codec is ByteBufCodecs.FLOAT: a single big-endian 32-bit IEEE-754 float (pk.Float).
+const floatSerializerID int32 = 3
+
+// vector3SerializerID is the registry id of EntityDataSerializers.VECTOR3 (JOML Vector3f), id 39. Its
+// value codec is ByteBufCodecs.VECTOR3F: 3 consecutive big-endian float32 in x,y,z order (vec3f below).
+const vector3SerializerID int32 = 39
+
+// quaternionSerializerID is the registry id of EntityDataSerializers.QUATERNION (JOML Quaternionf), id
+// 40. Its value codec is ByteBufCodecs.QUATERNIONF: 4 consecutive big-endian float32 in x,y,z,w order
+// (quatf below).
+const quaternionSerializerID int32 = 40
+
+// vec3f is the pk.FieldEncoder for a VECTOR3 (Vector3f) synched value: 3 consecutive big-endian float32
+// in x,y,z order, exactly ByteBufCodecs.VECTOR3F. (lpVec3 above is NOT reusable — it writes the LP
+// movement quantizer's variable-width header+bytes over doubles, not 3 plain float32.)
+//
+//	[VERIFIED javap ByteBufCodecs.VECTOR3F = composite of 3 FLOAT codecs (readFloat x, y, z).]
+type vec3f struct{ x, y, z float32 }
+
+func (v vec3f) WriteTo(w io.Writer) (int64, error) {
+	var n int64
+	for _, f := range [3]float32{v.x, v.y, v.z} {
+		c, err := pk.Float(f).WriteTo(w)
+		n += c
+		if err != nil {
+			return n, err
+		}
+	}
+	return n, nil
+}
+
+// quatf is the pk.FieldEncoder for a QUATERNION (Quaternionf) synched value: 4 consecutive big-endian
+// float32 in x,y,z,w order, exactly ByteBufCodecs.QUATERNIONF.
+//
+//	[VERIFIED javap ByteBufCodecs.QUATERNIONF = composite of 4 FLOAT codecs (readFloat x, y, z, w).]
+type quatf struct{ x, y, z, w float32 }
+
+func (q quatf) WriteTo(w io.Writer) (int64, error) {
+	var n int64
+	for _, f := range [4]float32{q.x, q.y, q.z, q.w} {
+		c, err := pk.Float(f).WriteTo(w)
+		n += c
+		if err != nil {
+			return n, err
+		}
+	}
+	return n, nil
+}
+
 // entityDataEntry is one SynchedEntityData$DataValue on the wire (06-CAPTURE-DIFF §4):
 // Byte index, VarInt serializerId, then the serializer-specific value bytes. v1 emits no
 // entries (the empty-list path), but the type exists so 06-07 can add the single

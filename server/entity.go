@@ -1272,6 +1272,51 @@ type Entity struct {
 	//	[VERIFIED javap ArmorStand.hurtServer: `if (time - this.lastHit <= 5L || shouldKill) brokenByPlayer;
 	//	 else broadcastEntityEvent(32); lastHit = time`.]
 	armorStandLastHit int64
+
+	// --- DISPLAY ENTITIES: ITEM DISPLAY (net.minecraft.world.entity.Display + Display$ItemDisplay) ----
+	//
+	// MODEL-M1 foundation. Tick-owned plain values, set/read ONLY for an ItemDisplay (isItemDisplay). For
+	// every OTHER entity they stay at the zero value and are never read (readers gate on the marker/typ),
+	// preserving the snapshot-friendly contract and the byte-identical oracle-pig default (a pig draws ZERO
+	// of these). Seeded to the Display defaults (scale (1,1,1), rotations identity (0,0,0,1)) in
+	// spawnItemDisplay (NewEntity stays generic).
+
+	// isItemDisplay marks this entity as a Display$ItemDisplay. The metadata encoder + transform setters
+	// gate on this. Set at spawn by spawnItemDisplay.
+	isItemDisplay bool
+
+	// displayItem is Display$ItemDisplay's DATA_ITEM_STACK (the shown ItemStack, ITEM_STACK serializer).
+	// The zero value (Count==0) is ItemStack.EMPTY.
+	//	[VERIFIED javap Display$ItemDisplay: DATA_ITEM_STACK (ITEM_STACK) index 23, default EMPTY.]
+	displayItem component.SlotData
+
+	// displayContext is Display$ItemDisplay's DATA_ITEM_DISPLAY (the ItemDisplayContext ordinal, BYTE
+	// serializer). Default 0 (ItemDisplayContext.NONE).
+	//	[VERIFIED javap Display$ItemDisplay: DATA_ITEM_DISPLAY (BYTE) index 24, default 0 (NONE).]
+	displayContext int8
+
+	// dispTransX/Y/Z is Display's DATA_TRANSLATION (VECTOR3, index 11). Default (0,0,0) — the Display
+	// defineSynchedData `new Vector3f()`.
+	dispTransX, dispTransY, dispTransZ float32
+
+	// dispScaleX/Y/Z is Display's DATA_SCALE (VECTOR3, index 12). Default (1,1,1) — the Display
+	// defineSynchedData `new Vector3f(1,1,1)`. Seeded in spawnItemDisplay.
+	dispScaleX, dispScaleY, dispScaleZ float32
+
+	// dispLeftRot is Display's DATA_LEFT_ROTATION (QUATERNION, index 13) as [x,y,z,w]. Default identity
+	// (0,0,0,1) — the Display defineSynchedData `new Quaternionf()`. Seeded in spawnItemDisplay.
+	dispLeftRot [4]float32
+
+	// dispRightRot is Display's DATA_RIGHT_ROTATION (QUATERNION, index 14) as [x,y,z,w]. Default identity
+	// (0,0,0,1). Seeded in spawnItemDisplay.
+	dispRightRot [4]float32
+
+	// dispInterpDuration is Display's DATA_TRANSFORMATION_INTERPOLATION_DURATION_ID (INT, index 9). Default 0.
+	dispInterpDuration int32
+
+	// dispInterpStartDelta is Display's DATA_TRANSFORMATION_INTERPOLATION_START_DELTA_TICKS_ID (INT,
+	// index 8). Default 0.
+	dispInterpStartDelta int32
 }
 
 // NewEntity constructs a live entity instance from a data/entity TABLE record at the given
