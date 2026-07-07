@@ -5,8 +5,8 @@ package server
 // are the LOCKSTEP gates the plan pins:
 //
 //   - TestNearestAttackableTargetGateUsesTen — the canUse RNG gate draws EXACTLY one nextInt with bound
-//     10 (the FULL DEFAULT_RANDOM_INTERVAL, NOT the halved reducedTickDelay 5), and the gate outcome
-//     matches nextInt(10) == 0. This is the LOCKSTEP-CRITICAL bound (35-JARNOTES.md:149-164).
+//     reducedTickDelay(10) == 5 (the jar ctor's halved DEFAULT_RANDOM_INTERVAL; the selector is now
+//     decimated, C-1), and the gate outcome matches nextInt(5) == 0. This is the LOCKSTEP-CRITICAL bound.
 //   - TestNearestAttackableTargetAcquiresPlayer — a player in FOLLOW_RANGE is acquired as the target
 //     (attackTargetID set); start() commits it to mobAI.getTarget().
 //   - TestHurtByTargetNoRNG — hurtByTargetGoal.canUse draws ZERO RNG and gates on the
@@ -56,15 +56,18 @@ func addTestPlayer(loop *TickLoop, entityID int32, x, y, z float64) *tickPlayer 
 // --- TestNearestAttackableTargetGateUsesTen ----------------------------------------------------
 
 // TestNearestAttackableTargetGateUsesTen pins the LOCKSTEP-CRITICAL bound: NearestAttackableTargetGoal
-// .canUse draws EXACTLY ONE nextInt(10) — the FULL interval, NOT the reducedTickDelay 5 — and the gate
-// outcome equals nextInt(10) == 0. Proven by lockstep with a reference rng: the reference draws ONE
-// nextInt(10) (whose value decides the gate); after canUse, the mob's rng and the reference must agree
-// on the NEXT draw iff the goal consumed exactly one nextInt(10). A nextInt(5) gate would consume a
-// DIFFERENT amount of the stream, desynchronizing the follow-up draw.
+// .canUse draws EXACTLY ONE nextInt(reducedTickDelay(10)) == nextInt(5) — the jar ctor's halved
+// DEFAULT_RANDOM_INTERVAL (the selector is now decimated, C-1) — and the gate outcome equals
+// nextInt(5) == 0. Proven by lockstep with a reference rng: the reference draws ONE nextInt(5) (whose
+// value decides the gate); after canUse, the mob's rng and the reference must agree on the NEXT draw iff
+// the goal consumed exactly one nextInt(5). A wrong bound (the un-halved 10) would consume a DIFFERENT
+// amount of the stream, desynchronizing the follow-up draw.
 func TestNearestAttackableTargetGateUsesTen(t *testing.T) {
-	const bound = nearestTargetRandomInterval
-	if bound != 10 {
-		t.Fatalf("nearestTargetRandomInterval = %d, want 10 (the FULL DEFAULT_RANDOM_INTERVAL, NOT reducedTickDelay 5)", bound)
+	bound := nearestTargetRandomInterval
+	// The jar ctor stores randomInterval = reducedTickDelay(DEFAULT_RANDOM_INTERVAL=10) == 5; the
+	// decimated selector (C-1) makes the halved value 1:1, so assert against reducedTickDelay(10).
+	if bound != reducedTickDelay(10) {
+		t.Fatalf("nearestTargetRandomInterval = %d, want %d (reducedTickDelay(10); the jar ctor's halved DEFAULT_RANDOM_INTERVAL, NOT the raw 10)", bound, reducedTickDelay(10))
 	}
 
 	clock := newFakeClock()
@@ -72,15 +75,15 @@ func TestNearestAttackableTargetGateUsesTen(t *testing.T) {
 
 	// Place a player far outside FOLLOW_RANGE so findTarget cannot acquire — this isolates the GATE
 	// (when the gate passes, findTarget runs and returns no target -> canUse false; when the gate fails,
-	// findTarget never runs). Either way the gate draws exactly one nextInt(10).
+	// findTarget never runs). Either way the gate draws exactly one nextInt(reducedTickDelay(10))=nextInt(5).
 	addTestPlayer(loop, 9000, 100000, 64, 100000)
 
 	e := targetTestMob(7001, 8.5, 64, 8.5)
 	ref := referenceRng(e.id)
 
-	// The reference draws the SAME first nextInt(10) the gate draws (the gate value).
+	// The reference draws the SAME first nextInt(bound=reducedTickDelay(10)=5) the gate draws (the gate value).
 	gateRoll := ref.nextInt(bound)
-	wantGatePassed := gateRoll == 0 // gate "passes" (proceeds to findTarget) iff nextInt(10) == 0
+	wantGatePassed := gateRoll == 0 // gate "passes" (proceeds to findTarget) iff nextInt(5) == 0
 
 	g := newNearestAttackableTargetGoal()
 	got := g.canUse(loop, e)
@@ -92,12 +95,12 @@ func TestNearestAttackableTargetGateUsesTen(t *testing.T) {
 		t.Fatalf("canUse should be false (no in-range player), got true")
 	}
 
-	// LOCKSTEP: after canUse consumed exactly one nextInt(10), the mob's rng and the reference must
-	// produce the IDENTICAL next draw. If canUse had drawn nextInt(5) (the wrong bound) OR drawn twice,
+	// LOCKSTEP: after canUse consumed exactly one nextInt(5), the mob's rng and the reference must
+	// produce the IDENTICAL next draw. If canUse had drawn nextInt(10) (the un-halved bound) OR drawn twice,
 	// this would diverge.
 	if a, b := e.ai.rng.nextInt(1_000_000), ref.nextInt(1_000_000); a != b {
-		t.Fatalf("draw desync after canUse: mob rng next=%d, reference next=%d — canUse did NOT draw exactly one nextInt(10) "+
-			"(a nextInt(5) gate or a double draw would desync this)", a, b)
+		t.Fatalf("draw desync after canUse: mob rng next=%d, reference next=%d — canUse did NOT draw exactly one nextInt(5) "+
+			"(the un-halved nextInt(10) bound or a double draw would desync this)", a, b)
 	}
 
 	// Cross-check the gate decision matched nextInt(10)==0: re-run from a fresh identical mob, this time
@@ -107,7 +110,7 @@ func TestNearestAttackableTargetGateUsesTen(t *testing.T) {
 	e2 := targetTestMob(7001, 8.5, 64, 8.5)  // SAME id -> SAME seed -> SAME first roll
 	g2 := newNearestAttackableTargetGoal()
 	if got2 := g2.canUse(loop2, e2); got2 != wantGatePassed {
-		t.Fatalf("gate outcome = %v, want %v (canUse must proceed to findTarget iff nextInt(10) == 0; gateRoll was %d)", got2, wantGatePassed, gateRoll)
+		t.Fatalf("gate outcome = %v, want %v (canUse must proceed to findTarget iff nextInt(5) == 0; gateRoll was %d)", got2, wantGatePassed, gateRoll)
 	}
 }
 

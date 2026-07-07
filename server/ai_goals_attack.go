@@ -478,8 +478,8 @@ func isWithinMeleeAttackRange(e *Entity, target *tickPlayer) bool {
 // distance-band + on-ground guards pass), and start() applies the impulse.
 //
 //	⚠ THE GATE IS nextInt, NOT nextFloat (the 35-JARNOTES pre-decompile guess said "nextFloat" — the
-//	exec-time decompile this session CORRECTS that to nextInt(reducedTickDelay(5))). The 1:1-with-the-
-//	jar mandate is absolute, so this ports the REAL bytecode: getRandom().nextInt(reducedTickDelay(5)).
+//	exec-time decompile this session CORRECTS that to nextInt(reducedTickDelay(5)=3)). The 1:1-with-the-
+//	jar mandate is absolute, so this ports the REAL bytecode: getRandom().nextInt(reducedTickDelay(5))=3.
 //
 // THE PIG ORACLE IS UNTOUCHED: a passive pig declares no leap goal, so this never ticks on it — no
 // draw reaches the pinned pig stream.
@@ -489,14 +489,16 @@ type leapAtTargetGoal struct {
 	target int32   // LeapAtTargetGoal.target — captured in canUse, used by start()'s impulse
 }
 
-// leapReducedInterval is the FAITHFUL Go RNG-gate bound for LeapAtTargetGoal.canUse: the FULL value
-// (5), NOT the jar's reducedTickDelay(5) == Mth.positiveCeilDiv(5,2) == 3. The jar halves it to
+// leapReducedInterval is the FAITHFUL Go RNG-gate bound for LeapAtTargetGoal.canUse: the jar's
+// reducedTickDelay(5) == Mth.positiveCeilDiv(5,2) == 3, NOT the raw 5. The jar halves the interval to
 // compensate for vanilla evaluating goals every-OTHER server tick (the Mob.serverAiStep (tickCount+id)
-// %2 decimation); our full-rate serverAiStep does not decimate, so the raw 5 is the 1:1-faithful value
-// run every tick — EXACTLY the same identity rule nearestTargetRandomInterval (10, not 5) follows.
+// %2 decimation); our serverAiStep NOW ports that same decimation (C-1, ai_decimation_test.go), so the
+// halved reducedTickDelay(5)=3 is the 1:1 value — the raw 5 would be a DOUBLE correction (decimated AND
+// un-halved) — EXACTLY the same rule nearestTargetRandomInterval (reducedTickDelay(10)=5) now follows.
 //
-//	[VERIFIED javap LeapAtTargetGoal.canUse: ... iconst_5; invokestatic reducedTickDelay; nextInt; ifeq.]
-const leapReducedInterval = 5
+//	[VERIFIED javap LeapAtTargetGoal.canUse: ... iconst_5; invokestatic reducedTickDelay; nextInt; ifeq.
+//	 javap Goal.reducedTickDelay: Mth.positiveCeilDiv(ticks, 2); positiveCeilDiv(5,2) == 3.]
+var leapReducedInterval = reducedTickDelay(5) // == 3 (jar canUse: nextInt(reducedTickDelay(5))); var, not const — reducedTickDelay is a func
 
 // leapMinDistSqr / leapMaxDistSqr are the LeapAtTargetGoal.canUse distance band: the mob leaps only
 // when 4.0 <= distanceToSqr(target) <= 16.0 (too close -> no leap, too far -> no leap).
@@ -539,7 +541,7 @@ func newLeapAtTargetGoal(yd float64) *leapAtTargetGoal {
 //	double d = mob.distanceToSqr(target);
 //	if (d < 4.0 || d > 16.0) return false;                      // the leap distance band
 //	if (!mob.onGround()) return false;                          // must be grounded to leap
-//	return mob.getRandom().nextInt(reducedTickDelay(5)) == 0;   // RNG GATE (the raw 5, our full-rate value)
+//	return mob.getRandom().nextInt(reducedTickDelay(5)) == 0;   // RNG GATE (==3; selector decimated, C-1)
 //
 // The RNG gate is the LAST check — it draws EXACTLY ONE nextInt(5), and ONLY when the passenger +
 // target + distance-band + on-ground guards all pass (an out-of-band / airborne reject draws ZERO RNG).
@@ -571,9 +573,9 @@ func (g *leapAtTargetGoal) canUse(t *TickLoop, e *Entity) bool {
 	if !e.onGround { // !mob.onGround() -> false (must be grounded)
 		return false
 	}
-	// DRAW (the gate, LAST): getRandom().nextInt(reducedTickDelay(5)). reducedTickDelay(5)==3 in the
-	// jar, but our full-rate tick uses the raw 5 (the leapReducedInterval identity, see its doc). The
-	// leap fires iff the roll == 0.
+	// DRAW (the gate, LAST): getRandom().nextInt(reducedTickDelay(5)) == nextInt(3). The selector is
+	// now decimated (C-1), so leapReducedInterval == reducedTickDelay(5) == 3 matches the jar byte-for-
+	// byte (see its doc). The leap fires iff the roll == 0.
 	return mobRandom(e).nextInt(leapReducedInterval) == 0
 }
 

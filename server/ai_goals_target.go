@@ -21,12 +21,14 @@ package server
 // empty and neither goal ever ticks on it — no new RNG draw reaches the pinned pig stream.
 //
 //   ⚠ LOCKSTEP-CRITICAL (NearestAttackableTargetGoal): the jar ctor does randomInterval =
-//   reducedTickDelay(10) = ceilDiv(10,2) = 5, to compensate for vanilla evaluating TARGET goals every
-//   OTHER server tick (the Mob.serverAiStep (tickCount+id)%2 decimation). The Go driver ticks
-//   serverAiStep EVERY tick (tick_phases.go — no decimation), so to fire at the vanilla real-world
-//   rate the Go gate MUST use the FULL interval = nextInt(10), NOT the halved nextInt(5) — exactly the
-//   same identity rule adjustedTickDelay follows. DO NOT call reducedTickDelay here; use the raw 10.
-//   (35-JARNOTES.md:149-164; pinned by TestNearestAttackableTargetGateUsesTen.)
+//   reducedTickDelay(10) = positiveCeilDiv(10,2) = 5, to compensate for vanilla evaluating TARGET goals
+//   every OTHER server tick (the Mob.serverAiStep (tickCount+id)%2 decimation). The Go driver NOW ports
+//   that same decimation (mobAI.serverAiStep, C-1: a running goal without requiresUpdateEveryTick ticks
+//   ONLY on FULL phases, and canUse re-eval fires ONLY on FULL phases — ai_decimation_test.go), so the
+//   goal is evaluated every OTHER tick exactly as vanilla. The FAITHFUL gate is therefore the halved
+//   reducedTickDelay(10) = 5, NOT the raw 10: running the raw 10 under a decimated selector would be a
+//   DOUBLE correction (decimated AND un-halved → ~½ the vanilla firing rate). Call reducedTickDelay(10),
+//   matching the jar ctor byte-for-byte. (Pinned by TestNearestAttackableTargetGateUsesTen.)
 
 import (
 	"math"
@@ -38,14 +40,17 @@ import (
 // --- nearestAttackableTargetGoal -------------------------------------------------------------
 
 // nearestTargetRandomInterval is the FAITHFUL Go RNG-gate bound for NearestAttackableTargetGoal:
-// the FULL net.minecraft.world.entity.ai.goal.target.NearestAttackableTargetGoal.DEFAULT_RANDOM_INTERVAL
-// (== 10), NOT the jar ctor's reducedTickDelay(10) == 5. See the LOCKSTEP-CRITICAL note in the file
-// header: the jar halves it to compensate for its every-other-tick TARGET evaluation; our full-rate
-// serverAiStep does not decimate, so the raw 10 is the 1:1-faithful value run every tick.
+// the jar ctor's reducedTickDelay(DEFAULT_RANDOM_INTERVAL) == reducedTickDelay(10) ==
+// positiveCeilDiv(10,2) == 5. The jar halves DEFAULT_RANDOM_INTERVAL (10) because its TARGET selector
+// is evaluated every OTHER server tick (Mob.serverAiStep (tickCount+id)%2 decimation); our serverAiStep
+// NOW ports that same decimation (C-1, ai_decimation_test.go), so the halved reducedTickDelay(10)=5 is
+// the 1:1 value — the raw 10 would be a DOUBLE correction (decimated AND un-halved). See the
+// LOCKSTEP-CRITICAL note in the file header.
 //
 //	[VERIFIED javap NearestAttackableTargetGoal.<init>(...,int,...): randomInterval =
-//	 reducedTickDelay(10); DEFAULT_RANDOM_INTERVAL == 10. canUse: getRandom().nextInt(randomInterval).]
-const nearestTargetRandomInterval = 10
+//	 reducedTickDelay(10); DEFAULT_RANDOM_INTERVAL == 10. canUse: getRandom().nextInt(randomInterval).
+//	 javap Goal.reducedTickDelay: Mth.positiveCeilDiv(ticks, 2); positiveCeilDiv(10,2) == 5.]
+var nearestTargetRandomInterval = reducedTickDelay(10) // == 5 (jar ctor: reducedTickDelay(DEFAULT_RANDOM_INTERVAL=10)); var, not const — reducedTickDelay is a func
 
 // nearestTargetClass parameterizes WHICH class of entity the goal acquires (the B1/B2 fix, Phase 36-01,
 // cite NearestAttackableTargetGoal<T> — the generic target type). The Phase-35 goal was hard-coded to
@@ -147,8 +152,8 @@ func newSkeletonTargetGoal() *nearestAttackableTargetGoal {
 // newFoxLandTargetGoal builds the Fox landTargetGoal: NearestAttackableTargetGoal<Animal>(this,
 // Animal.class, 10, false, false, chicken||rabbit). It scans the entity store for the nearest Chicken or
 // Rabbit within FOLLOW_RANGE (targetClassFoxPrey), NO anger gate. The randomInterval stays the shared
-// nearestTargetRandomInterval (the full-rate 10 the goal uses everywhere — matching the vanilla reachRange
-// arg of 10 that also seeds the DEFAULT_RANDOM_INTERVAL). Cite Fox.registerGoals landTargetGoal.
+// nearestTargetRandomInterval (reducedTickDelay(10)==5 — the jar seeds DEFAULT_RANDOM_INTERVAL 10 and the
+// ctor halves it). Cite Fox.registerGoals landTargetGoal.
 func newFoxLandTargetGoal() *nearestAttackableTargetGoal {
 	return &nearestAttackableTargetGoal{
 		baseGoal:       newBaseGoal(flagTarget),
@@ -161,8 +166,8 @@ func newFoxLandTargetGoal() *nearestAttackableTargetGoal {
 // 5, false, false, Enemy && !Creeper) — the HOSTILE-MOB class, NO anger gate (the golem always hunts
 // hostiles). findTarget scans the entity store for the nearest Enemy (Monster-category) mob within
 // FOLLOW_RANGE, excluding Creeper (targetClassHostileMob). The randomInterval stays the shared
-// nearestTargetRandomInterval (the full-rate 10). Cite IronGolem.registerGoals targetSelector @3 (Mob,
-// Enemy && !Creeper).
+// nearestTargetRandomInterval (reducedTickDelay(10)==5). Cite IronGolem.registerGoals targetSelector @3
+// (Mob, Enemy && !Creeper).
 func newIronGolemHostileTargetGoal() *nearestAttackableTargetGoal {
 	return &nearestAttackableTargetGoal{
 		baseGoal:       newBaseGoal(flagTarget),
@@ -177,17 +182,17 @@ func newIronGolemHostileTargetGoal() *nearestAttackableTargetGoal {
 //	findTarget();
 //	return target != null;
 //
-// The RNG gate draws EXACTLY ONE nextInt(randomInterval) per canUse, with randomInterval == 10 (the
-// faithful full interval — see the header LOCKSTEP note; NOT reducedTickDelay's 5). When the gate
-// fails (nextInt(10) != 0) it returns BEFORE the scan (no findTarget call). The scan is a pure world
-// read (no RNG).
+// The RNG gate draws EXACTLY ONE nextInt(randomInterval) per canUse, with randomInterval ==
+// reducedTickDelay(10) == 5 (the jar ctor's halved DEFAULT_RANDOM_INTERVAL — see the header LOCKSTEP
+// note). When the gate fails (nextInt(5) != 0) it returns BEFORE the scan (no findTarget call). The
+// scan is a pure world read (no RNG).
 //
 //	[VERIFIED javap NearestAttackableTargetGoal.canUse: getfield randomInterval; ifle; getRandom();
 //	 nextInt(randomInterval); ifeq -> findTarget; else iconst_0 ireturn; findTarget; target ifnull?0:1.]
 func (g *nearestAttackableTargetGoal) canUse(t *TickLoop, e *Entity) bool {
 	if !g.forceTrigger {
-		// DRAW 1 (the gate): getRandom().nextInt(randomInterval). randomInterval == 10 (the FULL
-		// DEFAULT_RANDOM_INTERVAL, our full-rate-tick compensation for the jar's reducedTickDelay(10)=5).
+		// DRAW 1 (the gate): getRandom().nextInt(randomInterval). randomInterval == reducedTickDelay(10)
+		// == 5 (the jar ctor's halved DEFAULT_RANDOM_INTERVAL; the selector is now decimated, C-1).
 		if g.randomInterval > 0 && mobRandom(e).nextInt(g.randomInterval) != 0 {
 			return false
 		}

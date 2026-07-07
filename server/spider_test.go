@@ -11,7 +11,7 @@ package server
 // ai_goals_target_test.go; the .star is a separate boot-load gate):
 //
 //   - The Go-native leapAtTargetGoal + spiderAttackGoal (ai_goals_attack.go) — the CANONICAL ports,
-//     exercised here with focused lockstep RNG tests (the leap nextInt(reducedTickDelay(5)=>raw 5)
+//     exercised here with focused lockstep RNG tests (the leap nextInt(reducedTickDelay(5)=3)
 //     gate, the SpiderAttackGoal daylight-flee nextInt(100), the leap setDeltaMovement impulse).
 //   - The vanilla_spider .star pair — boot-loads the declared goal set (6 goalSelector + 2
 //     targetSelector) with the TARGET routing.
@@ -50,14 +50,16 @@ func spiderTestMob(id int32, x, y, z float64) *Entity {
 
 // TestLeapAtTargetGateRNG pins the LeapAtTargetGoal.canUse RNG gate: with a target acquired, the mob
 // on-ground, and the target in the [4.0, 16.0] distanceToSqr band, canUse draws EXACTLY ONE
-// nextInt(leapReducedInterval) — the FULL raw 5 (NOT the jar's reducedTickDelay(5)=3, the same
-// full-rate-tick identity rule the NearestAttackableTargetGoal gate follows). The gate "passes"
-// (returns true) iff that draw == 0.
+// nextInt(leapReducedInterval) — the jar's reducedTickDelay(5) == 3 (the selector is now decimated,
+// C-1; the same rule the NearestAttackableTargetGoal gate follows). The gate "passes" (returns true)
+// iff that draw == 0.
 //
 //	[VERIFIED javap LeapAtTargetGoal.canUse: ... getRandom().nextInt(reducedTickDelay(5)); ifeq -> true.]
 func TestLeapAtTargetGateRNG(t *testing.T) {
-	if leapReducedInterval != 5 {
-		t.Fatalf("leapReducedInterval = %d, want 5 (the FULL DEFAULT, NOT reducedTickDelay(5)=3)", leapReducedInterval)
+	// The jar canUse gates on nextInt(reducedTickDelay(5)) == nextInt(3); the decimated selector (C-1)
+	// makes the halved value 1:1, so assert against reducedTickDelay(5).
+	if leapReducedInterval != reducedTickDelay(5) {
+		t.Fatalf("leapReducedInterval = %d, want %d (reducedTickDelay(5); the jar canUse bound, NOT the raw 5)", leapReducedInterval, reducedTickDelay(5))
 	}
 
 	loop := NewTickLoop(newFakeClock())
@@ -68,20 +70,21 @@ func TestLeapAtTargetGateRNG(t *testing.T) {
 	p := addTestPlayer(loop, 9400, 8.5+2.0, 64, 8.5)
 	e.ai.setTarget(p.entityID)
 
-	// The reference draws the SAME nextInt(5) the gate draws (the gate value).
+	// The reference draws the SAME nextInt(leapReducedInterval)=nextInt(3) the gate draws (the gate value).
 	gateRoll := ref.nextInt(leapReducedInterval)
 	wantPassed := gateRoll == 0
 
 	g := newLeapAtTargetGoal(0.4)
 	got := g.canUse(loop, e)
 	if got != wantPassed {
-		t.Fatalf("canUse = %v, want %v (the leap gate passes iff nextInt(5)==0; gateRoll was %d)", got, wantPassed, gateRoll)
+		t.Fatalf("canUse = %v, want %v (the leap gate passes iff nextInt(3)==0; gateRoll was %d)", got, wantPassed, gateRoll)
 	}
 
-	// LOCKSTEP: canUse consumed exactly one nextInt(5), so the mob's rng and the reference must now
-	// produce the IDENTICAL next draw. A nextFloat gate or a wrong bound (3) or a double draw would desync.
+	// LOCKSTEP: canUse consumed exactly one nextInt(reducedTickDelay(5))=nextInt(3), so the mob's rng and
+	// the reference must now produce the IDENTICAL next draw. A nextFloat gate or the un-halved bound (5)
+	// or a double draw would desync.
 	if a, b := e.ai.rng.nextInt(1_000_000), ref.nextInt(1_000_000); a != b {
-		t.Fatalf("draw desync after canUse: mob rng next=%d, reference next=%d — canUse did NOT draw exactly one nextInt(5)", a, b)
+		t.Fatalf("draw desync after canUse: mob rng next=%d, reference next=%d — canUse did NOT draw exactly one nextInt(3)", a, b)
 	}
 }
 
