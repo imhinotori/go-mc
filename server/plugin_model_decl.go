@@ -73,6 +73,13 @@ type modelDecl struct {
 	// full animClips (per-bone-per-kind sorted keyframe lists), load-validated (channel bone exists,
 	// keyframe times ascending and in [0,length]). Empty for an M2-only static rig.
 	animations []animClip
+	// states binds a nav-state (idle/walk/run/attack/death) to a default clip name (MODEL-M4). The
+	// animator's state selector maps the mob's REAL AI state to a clip through it. Populated at
+	// declare_model from the optional states={"walk": "walk_clip", ...} dict; when the dict is absent
+	// (or omits a state) it falls back to the NAMING CONVENTION — a clip literally named "idle"/"walk"/
+	// "run"/"attack"/"death" auto-binds to the same-named state. Nil/empty ⇒ the model has no state
+	// machine (a static or purely-explicit rig): the selector never swaps a default clip in. Immutable.
+	states map[modelState]string
 	// caps is the owning plugin's capability set at capture time (mirrors mobDecl.caps). Unused in M2
 	// (declare_model's own gate already fired at parse) but carried for the M4 animate-capability wiring.
 	caps capSet
@@ -223,6 +230,56 @@ var animModeByName = map[string]animMode{
 	"hold": animModeHold,
 }
 
+// ----------------------------------------------------------------------------------------------
+// MODEL-M4 nav-state machine — the animation state auto-selected from the mob's REAL AI state
+// ----------------------------------------------------------------------------------------------
+
+// modelState is the animation state the M4 selector computes from the mob's live AI each tick
+// (spec H.1.4). It maps to a default clip via modelDecl.states; the highest-precedence active state
+// wins (death > attack > run > walk > idle), exactly the priority the selector walks top-down.
+type modelState uint8
+
+const (
+	modelStateIdle   modelState = iota // no target, not moving
+	modelStateWalk                     // navigating / moving at the passive amble
+	modelStateRun                      // navigating at a chase (faster-than-amble) pace
+	modelStateAttack                   // has an attack target (getTarget() != 0)
+	modelStateDeath                    // e.dead
+)
+
+// modelStateName maps a state to its canonical clip name for the naming-convention auto-bind (a clip
+// literally named "idle"/"walk"/"run"/"attack"/"death" binds to that state when no states= dict does).
+var modelStateName = map[modelState]string{
+	modelStateIdle:   "idle",
+	modelStateWalk:   "walk",
+	modelStateRun:    "run",
+	modelStateAttack: "attack",
+	modelStateDeath:  "death",
+}
+
+// modelStateByName is the states= dict key parser: the Starlark state string -> modelState. Unknown
+// keys are a loud load error (a typo'd state binds nothing, so reject it at declare_model).
+var modelStateByName = map[string]modelState{
+	"idle":   modelStateIdle,
+	"walk":   modelStateWalk,
+	"run":    modelStateRun,
+	"attack": modelStateAttack,
+	"death":  modelStateDeath,
+}
+
+// clipForState resolves a nav-state to its bound clip, or (nil,false) if the model binds no clip for
+// it (the selector then leaves the current clip alone). Reads the frozen states map (built at load).
+func (m *modelDecl) clipForState(st modelState) (*animClip, bool) {
+	if m == nil || m.states == nil {
+		return nil, false
+	}
+	name, ok := m.states[st]
+	if !ok {
+		return nil, false
+	}
+	return m.clipOf(name)
+}
+
 // modelAnimator is the MODEL-M3 keyframe animator, the per-mob live clip clock (a field on
 // modelInstance, nil until a clip plays). H.0 reentrancy: play_animation only WRITES pending; the
 // animator swaps pending into clip at the NEXT tickModelAnimator, so no synchronous clip advance and
@@ -241,6 +298,16 @@ type modelAnimator struct {
 	pendingMode animMode
 	// endFired guards animation_end so a hold-clamped clip fires it exactly once.
 	endFired bool
+	// explicit marks the currently-playing clip as an EXPLICIT play_animation clip (MODEL-M4): the
+	// nav-state selector must NOT override it until it ends. Set when applyPlayAnimation queues a clip;
+	// a once/hold explicit clip clears it on animation_end (the H.2.4 handoff — control returns to the
+	// nav-selected default), while a LOOP explicit clip stays explicit until another play_animation
+	// replaces it (spec: "explicit overrides default until the clip ends"; a loop clip has no end, so
+	// it holds until explicitly changed). Zero (false) on a clip the state selector itself installed —
+	// that clip IS the default and is freely re-selected each tick.
+	explicit bool
+	// pendingExplicit is the explicit-flag to stamp when pending is swapped in (mirrors pendingMode).
+	pendingExplicit bool
 }
 
 // eulerXYZToQuat builds a quaternion (x,y,z,w order — the Display DATA_LEFT_ROTATION wire order) from
@@ -442,10 +509,12 @@ func (r *modelRegistry) declareModelBuiltin() *starlark.Builtin {
 		args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 		var name string
 		var bonesList, animationsList *starlark.List
+		var statesDict *starlark.Dict
 		if err := starlark.UnpackArgs(b.Name(), args, kwargs,
 			"name", &name,
 			"bones", &bonesList,
 			"animations?", &animationsList,
+			"states?", &statesDict,
 		); err != nil {
 			return nil, err
 		}
@@ -492,10 +561,15 @@ func (r *modelRegistry) declareModelBuiltin() *starlark.Builtin {
 		if err != nil {
 			return nil, fmt.Errorf("declare_model %q: %w", name, err)
 		}
+		states, err := buildModelStates(statesDict, clips)
+		if err != nil {
+			return nil, fmt.Errorf("declare_model %q: %w", name, err)
+		}
 		r.byName[name] = &modelDecl{
 			name:       name,
 			bones:      bones,
 			animations: clips,
+			states:     states,
 			caps:       r.caps,
 		}
 		return starlark.None, nil
@@ -540,6 +614,61 @@ func collectAnimClips(list *starlark.List, boneNames map[string]struct{}) ([]ani
 			}
 		}
 		out = append(out, clip)
+	}
+	return out, nil
+}
+
+// buildModelStates builds the frozen state->clip binding (MODEL-M4) for a declared model. It merges
+// two sources, EXPLICIT-WINS:
+//
+//  1. the optional states={"walk": "walk_clip", ...} dict — the primary, explicit API. Each key MUST
+//     be a known state (idle/walk/run/attack/death) and each value MUST name a clip declared in the
+//     model's animations list. An unknown state key or a dangling clip reference is a loud load error
+//     (a mis-bound state would silently animate nothing — reject it at declare_model).
+//  2. the NAMING-CONVENTION fallback — for any state NOT bound by the dict, a clip literally named
+//     "idle"/"walk"/"run"/"attack"/"death" auto-binds to the same-named state.
+//
+// Returns nil (no state machine) when neither source binds anything — a static or purely-explicit rig
+// whose selector never swaps a default clip. clips is the already-collected animation set (the clip
+// names to validate against); statesDict may be nil.
+func buildModelStates(statesDict *starlark.Dict, clips []animClip) (map[modelState]string, error) {
+	clipByName := make(map[string]struct{}, len(clips))
+	for i := range clips {
+		clipByName[clips[i].name] = struct{}{}
+	}
+	out := make(map[modelState]string)
+	// (1) explicit states= dict (validated, wins over the convention).
+	if statesDict != nil {
+		for _, item := range statesDict.Items() {
+			key, ok := starlark.AsString(item[0])
+			if !ok {
+				return nil, fmt.Errorf("states: key must be a string, got %s", item[0].Type())
+			}
+			st, ok := modelStateByName[key]
+			if !ok {
+				return nil, fmt.Errorf("states: unknown state %q (valid: idle, walk, run, attack, death)", key)
+			}
+			clipName, ok := starlark.AsString(item[1])
+			if !ok {
+				return nil, fmt.Errorf("states[%q]: value must be a clip name string, got %s", key, item[1].Type())
+			}
+			if _, ok := clipByName[clipName]; !ok {
+				return nil, fmt.Errorf("states[%q]: clip %q is not an animation in this model", key, clipName)
+			}
+			out[st] = clipName
+		}
+	}
+	// (2) naming-convention fallback for any state the dict left unbound.
+	for st, convName := range modelStateName {
+		if _, bound := out[st]; bound {
+			continue
+		}
+		if _, ok := clipByName[convName]; ok {
+			out[st] = convName
+		}
+	}
+	if len(out) == 0 {
+		return nil, nil // no state machine — static / explicit-only rig
 	}
 	return out, nil
 }

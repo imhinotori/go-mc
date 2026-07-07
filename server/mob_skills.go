@@ -195,6 +195,10 @@ func (t *TickLoop) applyPlayAnimation(e *Entity, m *mechanicDecl) {
 	}
 	inst.animator.pending = clip
 	inst.animator.pendingMode = m.animMode
+	// MODEL-M4: a play_animation clip is EXPLICIT — it overrides the nav-state selector until it ends
+	// (H.1.4 priority rule: mechanic-played > state-machine default). Stamped as pending so it lands
+	// when the animator swaps the clip in at the next tickModelAnimator (H.0 reentrancy — never sync).
+	inst.animator.pendingExplicit = true
 }
 
 // skillConditionHolds evaluates one condition against the CASTER. Unknown kinds cannot reach here

@@ -265,6 +265,18 @@ func (t *TickLoop) tickModelAnimator(e *Entity) {
 	t.tickModelRig(e)
 
 	a := m.animator
+
+	// (1b) MODEL-M4 nav-state selector: pick the default clip from the mob's REAL AI (idle/walk/run/
+	// attack/death) and queue it when it differs from what is playing — UNLESS an explicit
+	// play_animation clip currently owns the animator (priority: mechanic-played > state default,
+	// H.1.4). Runs BEFORE the pending-swap so a newly-selected default rides the SAME uniform swap
+	// path a play_animation clip does. Lazily creates the animator (a modeled mob with a state binding
+	// but no clip yet). A model with no state binding (modelDecl.states nil) never enters here.
+	if a == nil || (!a.explicit && a.pending == nil) {
+		if a = t.selectModelState(e, m, a); a == nil {
+			return // no state machine and no active animator — nothing to advance
+		}
+	}
 	if a == nil {
 		return
 	}
@@ -273,8 +285,10 @@ func (t *TickLoop) tickModelAnimator(e *Entity) {
 	if a.pending != nil {
 		a.clip = a.pending
 		a.mode = a.pendingMode
+		a.explicit = a.pendingExplicit
 		a.t = 0
 		a.pending = nil
+		a.pendingExplicit = false
 		a.endFired = false
 	}
 	if a.clip == nil {
@@ -308,18 +322,92 @@ func (t *TickLoop) tickModelAnimator(e *Entity) {
 				t.fireMobSkillTriggerAnim(e, clip.name, animEndFrame)
 				a.endFired = true
 			}
-			a.clip = nil // stop (idle) — the last pushed pose stays on the client
+			a.clip = nil       // stop (idle) — the last pushed pose stays on the client
+			a.explicit = false // MODEL-M4 H.2.4 handoff: a non-loop explicit clip ended — the selector resumes next tick
 			return
 		case animModeHold:
 			if !a.endFired {
 				t.fireMobSkillTriggerAnim(e, clip.name, animEndFrame)
 				a.endFired = true
+				a.explicit = false // MODEL-M4 H.2.4 handoff: control returns to the selector (the client still holds the last frame until the selector swaps a default in)
 			}
 			// clamp: keep clip set, do NOT advance t past length (the client holds the last frame).
 			return
 		}
 	}
 	a.t++
+}
+
+// modelStateMoveEpsilon is the horizontal speed (blocks/tick squared, compared against vx^2+vz^2)
+// above which the selector treats a mob with no explicit nav target as "moving" (walk). A small
+// epsilon so numerical drift / a settling mob reads as idle, but a mob being pushed or sliding reads
+// as walking. Wire-irrelevant (a client-side clip choice), tuned for a visibly-alive amble.
+const modelStateMoveEpsilon = 0.0025 * 0.0025 // ~0.0025 blocks/tick, squared
+
+// computeModelState maps the mob's REAL AI state to the desired nav-state (MODEL-M4 spec H.1.4),
+// highest-precedence first: dead > has-attack-target > running (chase pace) > walking (navigating or
+// moving) > idle. It reads the CURRENT mobAI fields (ai_mob.go): e.dead, ai.getTarget() (the attack
+// target id), ai.navigation.active()/ai.hasTarget (a path is wanted/in-progress), ai.wantSpeed (a
+// chase goal set a faster-than-amble pace ⇒ run), and the entity's horizontal velocity (a mob moving
+// without a nav want — e.g. knockback). A mob with no AI (ai == nil) is only ever idle or dead.
+func computeModelState(e *Entity) modelState {
+	if e.dead {
+		return modelStateDeath
+	}
+	ai := e.ai
+	if ai == nil {
+		return modelStateIdle
+	}
+	if ai.getTarget() != 0 {
+		return modelStateAttack
+	}
+	navigating := ai.hasTarget || ai.navigation.active()
+	if navigating {
+		if ai.wantSpeed > 0 { // a chase goal (setWantTargetSpeed) set a faster-than-amble pace
+			return modelStateRun
+		}
+		return modelStateWalk
+	}
+	// No nav want, but physically moving (pushed / sliding) — read as walk so a shoved mob animates.
+	if e.vx*e.vx+e.vz*e.vz > modelStateMoveEpsilon {
+		return modelStateWalk
+	}
+	return modelStateIdle
+}
+
+// selectModelState runs the MODEL-M4 nav-state machine: compute the desired state, resolve its bound
+// clip via the model's states map, and — if that clip differs from the one currently playing — QUEUE
+// it (as a NON-explicit pending swap so it rides the same uniform apply path a play_animation clip
+// does). Death holds on its last frame (a corpse freezes); every other default loops. Returns the
+// animator (lazily created when the model has a state binding but no animator yet), or the passed-in
+// animator unchanged when the model declares no state machine. Called only when the animator is NOT
+// under explicit play_animation control (the caller's priority gate). No RNG, no skill dispatch — a
+// pure read of AI state + a data write of pending (H.0 reentrancy: never advances the clock).
+func (t *TickLoop) selectModelState(e *Entity, m *modelInstance, a *modelAnimator) *modelAnimator {
+	if m.decl == nil || m.decl.states == nil {
+		return a // no state machine — leave the animator (possibly nil) as is
+	}
+	st := computeModelState(e)
+	clip, ok := m.decl.clipForState(st)
+	if !ok {
+		return a // this model binds no clip for the desired state — keep the current clip
+	}
+	if a == nil {
+		a = &modelAnimator{}
+		m.animator = a
+	}
+	// Already playing (or already queued) this exact default clip? Nothing to do — let it run/loop.
+	if a.clip == clip || a.pending == clip {
+		return a
+	}
+	mode := animModeLoop
+	if st == modelStateDeath {
+		mode = animModeHold // a death clip freezes on its last frame
+	}
+	a.pending = clip
+	a.pendingMode = mode
+	a.pendingExplicit = false // a selector-chosen default is freely re-selected (never suppresses itself)
+	return a
 }
 
 // pushModelFrame interpolates every animated bone's transform at clip tick `at` and pushes the due
