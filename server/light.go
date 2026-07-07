@@ -40,6 +40,10 @@ func (t *TickLoop) relightOnEdit(p *tickPlayer, pos pk.Position, oldState, newSt
 		minSec = dimNetherMinY >> 4
 		secs = dimNetherSecs
 	}
+	if p != nil && p.dimension == dimEnd {
+		minSec = dimEndMinY >> 4
+		secs = dimEndSecs
+	}
 	air := block.ToStateID[block.Air{}]
 	changed := w.RelightEdit(pos, minSec, secs, air)
 	for _, cl := range changed {

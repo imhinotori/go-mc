@@ -21,7 +21,14 @@ type NoiseBinder interface {
 	// BlendedNoise returns the seeded legacy BlendedNoise for old_blended_noise with
 	// the given base_3d_noise scales.
 	BlendedNoise(xzScale, yScale, xzFactor, yFactor, smearScaleMultiplier float64) (*synth.BlendedNoise, error)
+	// EndIslandsNoise returns the per-world "island noise" SimplexNoise for the
+	// end_islands node, built as LegacyRandomSource(worldSeed).consumeCount(17292) ->
+	// SimplexNoise (the EndIslandDensityFunction(seed) replacement the RandomState
+	// noise-wiring visitor performs -- the End-only node the overworld/nether graphs
+	// never reference).
+	EndIslandsNoise() (*synth.SimplexNoise, error)
 }
+
 
 // DataSource loads the raw JSON bytes for a density-function registry ref. The Wave-1
 // data package implements this (data.DensityFunction); tests may supply an in-memory
@@ -407,8 +414,19 @@ func (r *Registry) parseObject(raw json.RawMessage) (Function, error) {
 		}
 		return &blendDensity{argument: a}, nil
 
+	// --- end_islands (End-only DEFERRED node, now ported) ---
+	case "end_islands":
+		if r.binder == nil {
+			return nil, fmt.Errorf("density: end_islands node needs a NoiseBinder")
+		}
+		noise, err := r.binder.EndIslandsNoise()
+		if err != nil {
+			return nil, fmt.Errorf("density: end_islands: %w", err)
+		}
+		return newEndIsland(noise), nil
+
 	default:
-		// Unsupported type — error loudly naming it (T-9-07). end_islands lands here.
+		// Unsupported type -- error loudly naming it (T-9-07). end_islands is now ported.
 		return nil, fmt.Errorf("density: unsupported density node type %q (only the overworld node set is ported; end_islands and others are deferred)", head.Type)
 	}
 }

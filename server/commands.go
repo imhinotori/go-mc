@@ -243,6 +243,8 @@ func buildCommandGraph() *command.Graph {
 			switch strings.TrimSpace(strings.ToLower(target)) {
 			case "nether", "the_nether":
 				e.t.changeDimension(e.p, dimNether)
+			case "end", "the_end":
+				e.t.changeDimension(e.p, dimEnd)
 			case "overworld":
 				e.t.changeDimension(e.p, dimOverworld)
 			default:

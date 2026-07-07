@@ -74,6 +74,13 @@ func (t *TickLoop) changeDimension(p *tickPlayer, targetDim int) {
 	// (3-pre) Coordinate-scale the destination from the CURRENT position before we overwrite dimension.
 	tx, tz := scaledDimensionPos(p.x, p.z, fromDim, targetDim)
 
+	// END arrival (overworld/nether -> the_end): EndPortalBlock.getPortalDestination places the
+	// player at the obsidian spawn platform (atBottomCenterOf(END_SPAWN_POINT) == 100.5, _, 0.5),
+	// NOT the coordinate-scaled position. Override X/Z here; the platform blocks are laid in step (5).
+	if targetDim == dimEnd {
+		tx, tz = endSpawnX, endSpawnZ
+	}
+
 	// (1) Respawn into the target dimension's spawn-info. KEEP_ALL_DATA(3): a dimension change keeps
 	// the player's attributes/inventory, only rebuilding the level.
 	p.client.Send(changeDimensionRespawnPacket(targetDim))
@@ -98,6 +105,15 @@ func (t *TickLoop) changeDimension(p *tickPlayer, targetDim int) {
 	// (4) Reset the streamer so the TARGET world's ring streams into the fresh ClientLevel.
 	p.centerSent = false
 	p.sentChunks = make(map[level.ChunkPos]bool)
+
+	// (5) END: lay the obsidian spawn platform under the arrival point so the player does not
+	// fall into the void. Vanilla runs EndPlatformFeature.createEndPlatform during the transition
+	// (PLACE_PORTAL_TICKET force-loads the destination chunk); here we build it directly on the End
+	// world once its chunk is present (ensureEndPlatform force-generates the platform chunk if the
+	// async worker has not produced it yet).
+	if targetDim == dimEnd {
+		t.ensureEndPlatform()
+	}
 
 	udebugPlayer(p, "dimension", "changed %d -> %d at (%.1f,%.1f,%.1f)", fromDim, targetDim, tx, ty, tz)
 }
@@ -205,6 +221,13 @@ func changeDimensionRespawnPacket(targetDim int) pk.Packet {
 			isFlatSet: true, isFlat: false, // the nether is not flat-rendered
 			seaLevel: netherSeaLevelWire,
 		}
+	} else if targetDim == dimEnd {
+		info = commonPlayerSpawnInfoEncoder{
+			dimTypeID: endDimensionTypeID,
+			dimName:   endDimensionName,
+			isFlatSet: true, isFlat: false, // the End is not flat-rendered
+			seaLevel: endSeaLevelWire, seaLevelSet: true, // end.json sea_level 0 (report the real 0)
+		}
 	}
 	return pk.Marshal(int32(packetid.ClientboundRespawn), info, pk.Byte(respawnDataKeepAll))
 }
@@ -216,6 +239,12 @@ func changeDimensionRespawnPacket(targetDim int) pk.Packet {
 func changeDimensionTargetY(t *TickLoop, targetDim int) float64 {
 	if targetDim == dimNether {
 		return 64.0
+	}
+	if targetDim == dimEnd {
+		// The obsidian spawn platform: ServerLevel.END_SPAWN_POINT is (100,50,0); the player is
+		// placed at atBottomCenterOf(END_SPAWN_POINT).subtract(0,1,0) == y 49, standing on the
+		// obsidian floor createEndPlatform lays at y 48. CITE: EndPortalBlock.getPortalDestination.
+		return endSpawnY
 	}
 	if t.hasSpawnPoint {
 		return t.spawnPoint.Y

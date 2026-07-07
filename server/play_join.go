@@ -67,6 +67,18 @@ const (
 	netherSeaLevelWire = 32
 )
 
+// endDimensionTypeID / endDimensionName: the_end's dimension_type registry index (2, per the
+// alphabetical order overworld(0)/overworld_caves(1)/the_end(2)/the_nether(3)) and its level
+// ResourceKey. changeDimension uses these in the Respawn packet's spawn-info so the client rebuilds
+// the End ClientLevel (black sky, end skybox, no normal terrain rendering).
+const (
+	endDimensionTypeID = 2
+	endDimensionName   = "minecraft:the_end"
+	// endSeaLevelWire is the End's reported sea level in the spawn info. end.json has no meaningful
+	// sea (default_fluid air); vanilla reports the settings sea_level, which for end.json is 0.
+	endSeaLevelWire = 0
+)
+
 // gameEventLevelChunksLoadStart is the ClientboundGameEvent Type.id for
 // LEVEL_CHUNKS_LOAD_START — jar-verified id 13 (bipush 13 in the packet's static
 // initializer). Its float param is unused (0) for this event.
@@ -118,7 +130,7 @@ func writeLoginPacket(entityID int32, viewDist int) pk.Packet {
 		int32(packetid.ClientboundLogin),
 		pk.Int(entityID),  // playerId (allocated, not the old const 1)
 		pk.Boolean(false), // hardcore
-		levelsEncoder{overworldDimensionName, netherDimensionName}, // levels: Set<ResourceKey<Level>> (overworld + nether)
+		levelsEncoder{overworldDimensionName, netherDimensionName, endDimensionName}, // levels: Set<ResourceKey<Level>> (overworld + nether + end)
 		pk.VarInt(maxPlayersJoin),                                  // maxPlayers
 		pk.VarInt(int32(viewDist)),                                 // chunkRadius (server-clamped view distance)
 		pk.VarInt(int32(viewDist)),                                 // simulationDistance
@@ -188,8 +200,11 @@ type commonPlayerSpawnInfoEncoder struct {
 	// uses false. A zero value keeps the overworld's true via the encoder's default below.
 	isFlatSet bool // when false, default overworld isFlat=true is written
 	isFlat    bool
-	// seaLevel overrides the reported sea level; 0 == overworld default (63).
-	seaLevel int
+	// seaLevel overrides the reported sea level; when seaLevelSet is false, 0 == overworld
+	// default (63). seaLevelSet lets a dimension report a real 0 sea level (the End: end.json
+	// sea_level 0) instead of falling back to 63.
+	seaLevel    int
+	seaLevelSet bool
 }
 
 func (e commonPlayerSpawnInfoEncoder) WriteTo(w io.Writer) (int64, error) {
@@ -209,7 +224,9 @@ func (e commonPlayerSpawnInfoEncoder) WriteTo(w io.Writer) (int64, error) {
 		isFlat = e.isFlat
 	}
 	seaLevel := overworldSeaLevel
-	if e.seaLevel != 0 {
+	if e.seaLevelSet {
+		seaLevel = e.seaLevel
+	} else if e.seaLevel != 0 {
 		seaLevel = e.seaLevel
 	}
 	// dimensionType: Holder<DimensionType> as a registry reference. The vanilla

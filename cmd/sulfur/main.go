@@ -261,12 +261,22 @@ func main() {
 	// Only when the full-parity NoiseGenerator is armed (the Superflat stub is a single-dimension test
 	// world). The nether shares the overworld seed (vanilla derives both worlds from the one world seed).
 	var netherWorker *world.Worker
+	var endWorker *world.Worker
 	if _, superflat := os.LookupEnv("SULFUR_SUPERFLAT"); !superflat {
 		netherGen := world.NewNetherGenerator(*seed, 8, 0) // nether geometry: 8 sections, minY 0
 		netherWorker = world.NewWorker(netherGen, "", workerBuf)
 		netherMgr := world.NewChunkManager()
 		tick.SetNetherWorld(netherMgr, netherWorker)
 		log.Printf("second dimension armed: the_nether (seed=%d, netherrack terrain + lava sea + 5 nether biomes); reachable via /dimension nether", *seed)
+
+		// THIRD DIMENSION (the_end): a dedicated End generator + worker + ChunkManager so a player
+		// who travels to the End (/dimension end, or an End portal) streams the central-island end_stone
+		// terrain and lands on the obsidian spawn platform. Shares the overworld seed. Dragon fight deferred.
+		endGen := world.NewEndGenerator(*seed, 8, 0) // End geometry: 8 sections, minY 0
+		endWorker = world.NewWorker(endGen, "", workerBuf)
+		endMgr := world.NewChunkManager()
+		tick.SetEndWorld(endMgr, endWorker, endGen)
+		log.Printf("third dimension armed: the_end (seed=%d, central-island end_stone + obsidian spawn platform); reachable via /dimension end", *seed)
 	}
 	// SUB-PERSIST: wire the off-tick chunk-save consumer (a no-op disabled saver when chunkRegionDir
 	// is "" — the default). It writes to the SAME region dir the worker reads, so the round-trip
@@ -420,6 +430,9 @@ func main() {
 	go worker.Run(ctx)
 	if netherWorker != nil {
 		go netherWorker.Run(ctx) // second-dimension chunk generator/loader
+	}
+	if endWorker != nil {
+		go endWorker.Run(ctx) // third-dimension chunk generator/loader
 	}
 
 	// The real GamePlay bridges an accepted connection to the running tick + keep-alive.

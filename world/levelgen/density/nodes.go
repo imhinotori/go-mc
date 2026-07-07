@@ -497,3 +497,108 @@ func (f *blendDensity) Compute(c Context) float64 { return f.argument.Compute(c)
 // keep the wide bounds Mojang declares so downstream short-circuits stay conservative.
 func (f *blendDensity) MinValue() float64 { return math.Inf(-1) }
 func (f *blendDensity) MaxValue() float64 { return math.Inf(1) }
+
+// ---- end_islands (DensityFunctions$EndIslandDensityFunction) ----
+
+// endIsland is the 1:1 port of net.minecraft.world.level.levelgen.DensityFunctions$
+// EndIslandDensityFunction -- the DEFERRED End-only density node the overworld graph
+// never references. It is a SimpleFunction backed by a SimplexNoise (the "island noise")
+// seeded per-world; its compute returns the End's central-island + outer-island height
+// field mapped to a density.
+//
+// Seeding (RandomState$1NoiseWiringHelper.apply, which replaces the codec's unit(0L)
+// instance): new EndIslandDensityFunction(seed) => LegacyRandomSource(seed).consumeCount(
+// 17292); islandNoise = new SimplexNoise(that random). The seed is the RAW world seed
+// (val$seed on the wiring helper), NOT a positional fork -- so the router hands us the
+// world seed and we build the SimplexNoise here exactly as the constructor does.
+//
+// compute(ctx) = (getHeightValue(islandNoise, blockX/8, blockZ/8) - 8.0) / 128.0
+// minValue = -0.84375, maxValue = 0.5625 (the jar's declared static bounds).
+type endIsland struct {
+	islandNoise *synth.SimplexNoise
+}
+
+// newEndIsland wraps the per-world SimplexNoise (the "island noise") the binder built
+// from LegacyRandomSource(seed).consumeCount(17292) -- see NoiseBinder.EndIslandsNoise.
+func newEndIsland(islandNoise *synth.SimplexNoise) *endIsland {
+	return &endIsland{islandNoise: islandNoise}
+}
+
+// endIslandGetHeightValue ports the private static getHeightValue(SimplexNoise, int, int):
+// the 100-block central island + the scattered outer-island height field, all in float32
+// (Java `float`) arithmetic -- the last-bit float semantics are load-bearing, so this uses
+// Go float32 throughout to match the jar's fmul/fsub/frem/f2f ops constant-for-constant.
+func endIslandGetHeightValue(noise *synth.SimplexNoise, x, z int) float32 {
+	xCell := x / 2 // idiv (truncating), matches Java int division
+	zCell := z / 2
+	xRem := x % 2 // irem, matches Java int remainder
+	zRem := z % 2
+
+	// h = clamp(100.0 - sqrt((float)(x*x + z*z)) * 8.0, -100.0, 80.0)
+	h := float32(100.0) - mthSqrtF(float32(x*x+z*z))*float32(8.0)
+	h = mthClampF(h, -100.0, 80.0)
+
+	for dx := -12; dx <= 12; dx++ {
+		for dz := -12; dz <= 12; dz++ {
+			cx := int64(xCell + dx)
+			cz := int64(zCell + dz)
+			if cx*cx+cz*cz > 4096 && noise.GetValue2D(float64(cx), float64(cz)) < -0.8999999761581421 {
+				// noiseVal = (abs((float)cx)*3439.0 + abs((float)cz)*147.0) % 13.0 + 9.0
+				noiseVal := mthAbsF(float32(cx))*float32(3439.0) + mthAbsF(float32(cz))*float32(147.0)
+				noiseVal = fremF(noiseVal, float32(13.0)) + float32(9.0)
+				// ox = (float)(xRem - dx*2); oz = (float)(zRem - dz*2)
+				ox := float32(xRem - dx*2)
+				oz := float32(zRem - dz*2)
+				// cand = clamp(100.0 - sqrt(ox*ox + oz*oz)*noiseVal, -100.0, 80.0)
+				cand := float32(100.0) - mthSqrtF(ox*ox+oz*oz)*noiseVal
+				cand = mthClampF(cand, -100.0, 80.0)
+				h = maxF(h, cand)
+			}
+		}
+	}
+	return h
+}
+
+func (f *endIsland) Compute(c Context) float64 {
+	// blockX/8, blockZ/8 (idiv), then f2d, subtract 8.0, divide by 128.0.
+	hv := endIslandGetHeightValue(f.islandNoise, c.X/8, c.Z/8)
+	return (float64(hv) - 8.0) / 128.0
+}
+
+func (f *endIsland) MinValue() float64 { return -0.84375 }
+func (f *endIsland) MaxValue() float64 { return 0.5625 }
+
+// float32 Mth helpers for the end_island height field -- Java `float` ops.
+
+// mthSqrtF = Mth.sqrt(float) = (float)Math.sqrt((double)f).
+func mthSqrtF(f float32) float32 { return float32(math.Sqrt(float64(f))) }
+
+// mthClampF = Mth.clamp(float,float,float): f<lo?lo : f>hi?hi : f.
+func mthClampF(f, lo, hi float32) float32 {
+	if f < lo {
+		return lo
+	}
+	if f > hi {
+		return hi
+	}
+	return f
+}
+
+// mthAbsF = Mth.abs(float) = Math.abs(float).
+func mthAbsF(f float32) float32 {
+	if f < 0 {
+		return -f
+	}
+	return f
+}
+
+// maxF = Math.max(float,float).
+func maxF(a, b float32) float32 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// fremF = the JVM `frem` op = Java float % -- Go's math.Mod truncated to float32.
+func fremF(a, b float32) float32 { return float32(math.Mod(float64(a), float64(b))) }

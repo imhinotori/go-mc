@@ -71,7 +71,22 @@ func NetherFillParams() FillParams {
 	}
 }
 
+// EndFillParams is the End solid-fill set: end_stone (default_block), no deepslate band, and
+// NO bedrock floor -- the End has no bedrock layer (the central + outer islands are pure
+// end_stone floating in the void). The bedrock field is set to end_stone so the minY row
+// (the bedrock seam in blockState) is end_stone, not bedrock, matching a bedrock-free End.
+// CITE: end.json default_block == end_stone, default_fluid == air, aquifers_enabled == false;
+// the End LevelStem has no RandomBedrockFloor.
+func EndFillParams() FillParams {
+	return FillParams{
+		defaultBlock: block.ToStateID[block.EndStone{}],
+		bedrock:      block.ToStateID[block.EndStone{}],
+		hasDeepslate: false,
+	}
+}
+
 // FillWith is Fill parameterized by the dimension's solid-fill blocks (FillParams).
+
 func FillWith(nc *NoiseChunk, aq *Aquifer, ov *OreVeinifier, fp FillParams, set func(localX, worldY, localZ int, state block.StateID), mark func(localX, worldY, localZ int)) {
 	minY := nc.MinY()
 	maxY := minY + nc.Height()

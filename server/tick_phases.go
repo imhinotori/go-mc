@@ -206,6 +206,10 @@ func (t *TickLoop) tickChunks() {
 		t.netherWorld.Tick()
 		t.netherWorld.RetryStale(chunkLoadGraceTicks)
 	}
+	if t.endWorld != nil {
+		t.endWorld.Tick()
+		t.endWorld.RetryStale(chunkLoadGraceTicks)
+	}
 	for _, p := range t.players {
 		// NETHER: a player in the nether streams from the nether world/worker; an overworld player from
 		// the overworld's. dimWorld(p) picks the manager; the request goes to the matching worker so the
@@ -214,6 +218,9 @@ func (t *TickLoop) tickChunks() {
 		wk := t.worker()
 		if p.dimension == dimNether && t.netherWorker != nil {
 			wk = t.netherWorker
+		}
+		if p.dimension == dimEnd && t.endWorker != nil {
+			wk = t.endWorker
 		}
 		if mgr == nil || wk == nil {
 			continue

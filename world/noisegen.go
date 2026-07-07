@@ -81,7 +81,15 @@ type NoiseGenerator struct {
 	// a DISABLED aquifer (aquifers_enabled:false — lava sea below sea_level 32), and NO ore veinifier
 	// (ore_veins_enabled:false). Set only by NewNetherGenerator. CITE: nether.json settings.
 	nether bool
+
+	// end selects the END fill path in GenerateTerrain: FillParams == end_stone (no
+	// deepslate, NO bedrock floor), a DISABLED aquifer whose "fluid" is AIR (end.json
+	// default_fluid == air, aquifers_enabled == false), and NO carvers (the End has no
+	// cave carvers -- the central + outer islands float in the void). Set only by
+	// NewEndGenerator. CITE: end.json settings + the the_end LevelStem.
+	end bool
 }
+
 
 // NewNoiseGenerator builds the per-world generator: it parses + seeds the router from the
 // world seed (NewRouter), builds the multi-noise biome source, the surface system + the
@@ -275,6 +283,68 @@ func NewNetherGenerator(seed int64, secs, minY int) *NoiseGenerator {
 	}
 }
 
+// NewEndGenerator builds the per-world generator for the_end: same PURE single-chunk pipeline
+// as NewNoiseGenerator/NewNetherGenerator, but bound to the END worldgen graph -- the end.json
+// noise router (the end_islands density node + the end/sloped_cheese function) + geometry
+// (min_y 0, height 128, default_block end_stone, default_fluid air, legacy_random_source true),
+// the TheEndBiomeSource (central-island the_end + erosion-thresholded outer-island biomes), the
+// End surface rule, NO carvers (the End has no cave carvers), and NO structures (end cities are
+// a later phase -- the central-island terrain is the faithful End core). It shares the world-wide
+// decoration data. A build-data error panics (asset bug), exactly like the other constructors.
+// secs/minY are the End geometry (secs 8, minY 0). CITE: NoiseBasedChunkGenerator bound to the
+// the_end LevelStem (TheEndBiomeSource + end.json settings).
+func NewEndGenerator(seed int64, secs, minY int) *NoiseGenerator {
+	// The NoiseGeneratorSettings registry id is "minecraft:end" (jar: NoiseGeneratorSettings.END
+	// == ResourceKey "end"; the file is noise_settings/end.json), while the DIMENSION key is
+	// "minecraft:the_end". Do not confuse the two.
+	r, err := router.NewRouterFor(seed, "minecraft:end")
+	if err != nil {
+		panic("world: EndGenerator: build router: " + err.Error())
+	}
+	bs, err := biome.NewEndBiomeSource(r)
+	if err != nil {
+		panic("world: EndGenerator: build biome source: " + err.Error())
+	}
+	ss, err := surface.NewSurfaceSystem(r)
+	if err != nil {
+		panic("world: EndGenerator: build surface system: " + err.Error())
+	}
+	rule, err := surface.ParseRuleSource(r.Settings.SurfaceRule)
+	if err != nil {
+		panic("world: EndGenerator: parse surface_rule: " + err.Error())
+	}
+	rep, err := carver.ParseReplaceables()
+	if err != nil {
+		panic("world: EndGenerator: parse carver replaceables: " + err.Error())
+	}
+	deco, err := buildDecorationData()
+	if err != nil {
+		panic("world: EndGenerator: build feature/decoration data: " + err.Error())
+	}
+	// Structures are inert in the End core: a router-backed surface sampler + the End biome
+	// lookup back the (empty) structure cache, and the StartGenerator is the noop set.
+	sampler := structure.NewRouterSurfaceSampler(r)
+	biomeAt := func(wx, wy, wz int) levelbiome.Type { return bs.GetBiome(wx, wy, wz) }
+	structCache := structure.NewCache(sampler, biomeAt)
+
+	return &NoiseGenerator{
+		seed:        seed,
+		secs:        secs,
+		minY:        minY,
+		router:      r,
+		biomes:      bs,
+		surface:     ss,
+		rule:        rule,
+		carvers:     nil, // the End has no cave carvers
+		rep:         rep,
+		deco:        deco,
+		structCache: structCache,
+		structGen:   structure.NoopStartGenerator(),
+		air:         block.ToStateID[block.Air{}],
+		end:         true,
+	}
+}
+
 // GenerateTerrain drives the PURE single-chunk terrain pipeline into a fresh
 // capture-diff-sealed level.Chunk and returns it at StatusCarvers. PURE over (seed, pos).
 //
@@ -317,7 +387,14 @@ func (g *NoiseGenerator) GenerateTerrain(pos level.ChunkPos) *level.Chunk {
 		ch *level.Chunk
 		aq *noisechunk.Aquifer
 	)
-	if g.nether {
+	if g.end {
+		// End: aquifers_enabled:false -> DISABLED aquifer whose "fluid" is AIR (end.json
+		// default_fluid == air, there is no lava/water sea in the End); default_block
+		// end_stone, no deepslate, no bedrock floor. ore_veins_enabled:false -> the veinifier
+		// never fires. No carvers run below (g.carvers is empty for the End).
+		aq = noisechunk.NewDisabledAquifer(g.router.Settings.SeaLevel, g.air)
+		ch = noisechunk.FillChunkWith(nc, aq, ov, noisechunk.EndFillParams())
+	} else if g.nether {
 		// Nether: aquifers_enabled:false -> DISABLED aquifer (lava sea below sea_level 32); default_block
 		// netherrack, no deepslate; ore_veins_enabled:false -> the veinifier's rule never fires (its
 		// nether router functions evaluate to no vein), so passing it is inert but harmless. The disabled

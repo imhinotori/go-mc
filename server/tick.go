@@ -87,6 +87,17 @@ type chunkReady struct {
 func (r chunkReady) applyTo(t *TickLoop) {
 	// NETHER: a nether chunk result inserts into netherWorld (no region routing — the nether is a
 	// single manager). block-ticks/fluids/structure-spawns in the nether are a follow-up phase.
+	if r.dimension == dimEnd {
+		if t.endWorld == nil {
+			return
+		}
+		if r.res.Err != nil {
+			t.endWorld.MarkEmpty(r.res.Pos)
+			return
+		}
+		t.endWorld.Insert(r.res.Pos, r.res.Chunk)
+		return
+	}
 	if r.dimension == dimNether {
 		if t.netherWorld == nil {
 			return
@@ -202,6 +213,17 @@ type TickLoop struct {
 	// coordinator chunkReady drain (tagged dimension:dimNether so applyTo inserts into netherWorld).
 	netherWorld  *world.ChunkManager
 	netherWorker *world.Worker
+
+	// endWorld / endWorker are the THIRD dimension (the_end): a dedicated ChunkManager +
+	// off-tick generate/load worker, separate from the region-partitioned overworld and the
+	// nether. nil until SetEndWorld wires them. A player in dimEnd streams + edits through
+	// endWorld (t.dimWorld). The End worker's chunk-load results bridge onto the SAME
+	// coordinator chunkReady drain (tagged dimEnd so applyTo inserts into endWorld).
+	endWorld  *world.ChunkManager
+	endWorker *world.Worker
+	// endGen is the End's chunk generator, kept so ensureEndPlatform can SYNCHRONOUSLY
+	// generate the platform chunk on arrival (the async worker may not have produced it yet).
+	endGen *world.NoiseGenerator
 
 	// gamerules is the per-level GameRules store (gamerules.go): the authoritative keyed set of
 	// boolean/integer rules with vanilla defaults. Read through t.gameRule/t.gameRuleInt (lazily seeded to
@@ -1359,6 +1381,7 @@ const asyncBridgeBuffer = 256
 const (
 	dimOverworld = 0
 	dimNether    = 1
+	dimEnd       = 2
 )
 
 // dimNetherMinY / dimNetherSecs are the nether geometry (nether.json: min_y 0, height 128 -> 8
@@ -1366,6 +1389,13 @@ const (
 const (
 	dimNetherMinY = 0
 	dimNetherSecs = 8
+)
+
+// dimEndMinY / dimEndSecs are the End geometry (end.json: min_y 0, height 128 -> 8 sections).
+// CITE: end.json noise.min_y 0 / height 128.
+const (
+	dimEndMinY = 0
+	dimEndSecs = 8
 )
 
 // SetNetherWorld wires the second-dimension (the_nether) ChunkManager + worker, mirroring SetWorld
@@ -1383,6 +1413,22 @@ func (t *TickLoop) SetNetherWorld(mgr *world.ChunkManager, worker *world.Worker)
 	go func() {
 		for res := range worker.Results() {
 			t.asyncIn2 <- chunkReady{res: res, dimension: dimNether}
+		}
+	}()
+}
+
+// SetEndWorld wires the third-dimension (the_end) ChunkManager + worker, mirroring
+// SetNetherWorld. The End world's async chunk results bridge onto the coordinator's general
+// async-result channel (asyncIn2, drained every tick by applyAsyncResults). Each result is
+// tagged dimEnd so applyTo inserts into endWorld. nil until main() constructs the End
+// generator/worker.
+func (t *TickLoop) SetEndWorld(mgr *world.ChunkManager, worker *world.Worker, gen *world.NoiseGenerator) {
+	t.endWorld = mgr
+	t.endWorker = worker
+	t.endGen = gen
+	go func() {
+		for res := range worker.Results() {
+			t.asyncIn2 <- chunkReady{res: res, dimension: dimEnd}
 		}
 	}()
 }
@@ -1406,6 +1452,9 @@ func (t *TickLoop) dimWorld(p *tickPlayer) *world.ChunkManager {
 	if p != nil && p.dimension == dimNether && t.netherWorld != nil {
 		return t.netherWorld
 	}
+	if p != nil && p.dimension == dimEnd && t.endWorld != nil {
+		return t.endWorld
+	}
 	return t.world()
 }
 
@@ -1414,6 +1463,9 @@ func (t *TickLoop) dimWorld(p *tickPlayer) *world.ChunkManager {
 func (t *TickLoop) dimWorldByID(dim int) *world.ChunkManager {
 	if dim == dimNether && t.netherWorld != nil {
 		return t.netherWorld
+	}
+	if dim == dimEnd && t.endWorld != nil {
+		return t.endWorld
 	}
 	return t.world()
 }
@@ -1424,12 +1476,18 @@ func dimMinYFor(dim int) int {
 	if dim == dimNether {
 		return dimNetherMinY
 	}
+	if dim == dimEnd {
+		return dimEndMinY
+	}
 	return dimMinY
 }
 
 func dimSecsFor(dim int) int {
 	if dim == dimNether {
 		return dimNetherSecs
+	}
+	if dim == dimEnd {
+		return dimEndSecs
 	}
 	return 24
 }

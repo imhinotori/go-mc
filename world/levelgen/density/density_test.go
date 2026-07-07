@@ -45,6 +45,10 @@ func (b *testBinder) BlendedNoise(xz, y, xzf, yf, smear float64) (*synth.Blended
 	return synth.NewBlendedNoise(rs, xz, y, xzf, yf, smear), nil
 }
 
+func (b *testBinder) EndIslandsNoise() (*synth.SimplexNoise, error) {
+	return synth.NewSimplexNoise(levelgen.NewLegacyRandomSource(0)), nil
+}
+
 // parseInline parses a JSON literal with no ref source (constant/arithmetic trees).
 func parseInline(t *testing.T, jsonStr string) Function {
 	t.Helper()
@@ -276,13 +280,16 @@ func TestInterpolatedMarkerPreserved(t *testing.T) {
 }
 
 // Test 7: Parse on an unsupported type errors clearly naming it (T-9-07).
+// end_islands is now ported (End dimension), so this uses weird_scaled_sampler --
+// a node type deliberately NOT ported (caves come from the standard node set, not
+// weird_scaled_sampler).
 func TestUnsupportedNodeErrors(t *testing.T) {
 	r := NewRegistry(nil, nil)
-	_, err := r.Parse(json.RawMessage(`{"type":"minecraft:end_islands"}`))
+	_, err := r.Parse(json.RawMessage(`{"type":"minecraft:weird_scaled_sampler"}`))
 	if err == nil {
-		t.Fatalf("expected error for unsupported node type end_islands, got nil")
+		t.Fatalf("expected error for unsupported node type weird_scaled_sampler, got nil")
 	}
-	if !contains(err.Error(), "end_islands") || !contains(err.Error(), "unsupported") {
+	if !contains(err.Error(), "weird_scaled_sampler") || !contains(err.Error(), "unsupported") {
 		t.Errorf("error %q should name the unsupported type and say 'unsupported'", err.Error())
 	}
 }

@@ -43,7 +43,16 @@ func span(p [2]float32) Parameter {
 type MultiNoiseBiomeSource struct {
 	params  *ParameterList
 	sampler Sampler
+
+	// endErosion, when non-nil, marks this as a TheEndBiomeSource (NOT a multi-noise
+	// source): getNoiseBiome then ports net.minecraft.world.level.biome.TheEndBiomeSource
+	// .getNoiseBiome (the section-distance central-island test + the erosion-thresholded
+	// outer-island biomes) instead of the parameter-list climate lookup. It holds the
+	// router's erosion density function (the End source samples ONLY erosion). params is
+	// nil for an End source.
+	endErosion density.Function
 }
+
 
 // NewMultiNoiseBiomeSource parses the embedded overworld biome parameter list and binds
 // the climate sampler to the router's six climate functions. PURE over the router seed:
@@ -164,7 +173,85 @@ func NewNetherBiomeSource(r *router.Router) (*MultiNoiseBiomeSource, error) {
 	}, nil
 }
 
+// endBiomeConst maps the five End biome ids to their levelbiome.Type once at init, so
+// the End getNoiseBiome path is allocation-free. A bad id here is a build/asset bug.
+var (
+	endBiomeTheEnd          = mustEndBiome("minecraft:the_end")
+	endBiomeHighlands       = mustEndBiome("minecraft:end_highlands")
+	endBiomeMidlands        = mustEndBiome("minecraft:end_midlands")
+	endBiomeSmallIslands    = mustEndBiome("minecraft:small_end_islands")
+	endBiomeBarrens         = mustEndBiome("minecraft:end_barrens")
+)
+
+func mustEndBiome(id string) levelbiome.Type {
+	var bt levelbiome.Type
+	if err := bt.UnmarshalText([]byte(id)); err != nil {
+		panic("biome: end biome id " + id + ": " + err.Error())
+	}
+	return bt
+}
+
+// NewEndBiomeSource builds the TheEndBiomeSource for the END dimension. Unlike the
+// overworld/nether multi-noise sources it is NOT parameter-list driven: it is a fixed
+// geometric selector over the router's erosion density function. It binds ONLY erosion
+// (the sole function TheEndBiomeSource samples). PURE over the router seed. CITE:
+// net.minecraft.world.level.biome.TheEndBiomeSource (wired by the the_end LevelStem).
+func NewEndBiomeSource(r *router.Router) (*MultiNoiseBiomeSource, error) {
+	if r == nil || r.NoiseRouter == nil {
+		return nil, fmt.Errorf("end biome source: nil router")
+	}
+	return &MultiNoiseBiomeSource{
+		endErosion: r.NoiseRouter.Erosion,
+		sampler: Sampler{
+			// Only erosion is consulted; the rest are set so NewClimateCachedView copies a
+			// complete sampler even though the End path never reads them.
+			Temperature:     r.NoiseRouter.Temperature,
+			Humidity:        r.NoiseRouter.Vegetation,
+			Continentalness: r.NoiseRouter.Continents,
+			Erosion:         r.NoiseRouter.Erosion,
+			Depth:           r.NoiseRouter.Depth,
+			Weirdness:       r.NoiseRouter.Ridges,
+		},
+	}, nil
+}
+
+// getEndBiome ports TheEndBiomeSource.getNoiseBiome(quartX, quartY, quartZ, sampler):
+//
+//	blockX = QuartPos.toBlock(quartX) = quartX<<2 (same for Y, Z)
+//	secX   = SectionPos.blockToSectionCoord(blockX) = blockX>>4 (same for Z)
+//	if secX*secX + secZ*secZ <= 4096L -> the_end (the central-island region)
+//	else erosion = router.erosion.compute(SinglePointContext((secX*2+1)*8, blockY,
+//	     (secZ*2+1)*8))
+//	     erosion  > 0.25    -> end_highlands
+//	     erosion >= -0.0625 -> end_midlands
+//	     erosion  < -0.21875-> small_end_islands
+//	     else               -> end_barrens
+func (s *MultiNoiseBiomeSource) getEndBiome(quartX, quartY, quartZ int) levelbiome.Type {
+	blockX := quartX << 2
+	blockY := quartY << 2
+	blockZ := quartZ << 2
+	secX := blockX >> 4
+	secZ := blockZ >> 4
+	if int64(secX)*int64(secX)+int64(secZ)*int64(secZ) <= 4096 {
+		return endBiomeTheEnd
+	}
+	sampleX := (secX*2 + 1) * 8
+	sampleZ := (secZ*2 + 1) * 8
+	erosion := s.endErosion.Compute(density.Context{X: sampleX, Y: blockY, Z: sampleZ})
+	if erosion > 0.25 {
+		return endBiomeHighlands
+	}
+	if erosion >= -0.0625 {
+		return endBiomeMidlands
+	}
+	if erosion < -0.21875 {
+		return endBiomeSmallIslands
+	}
+	return endBiomeBarrens
+}
+
 // Params exposes the parsed parameter list (tests inspect the box count / biomes).
+
 func (s *MultiNoiseBiomeSource) Params() *ParameterList { return s.params }
 
 // getNoiseBiome ports MultiNoiseBiomeSource.getNoiseBiome(x,y,z,Sampler) (x/y/z in QUART
@@ -172,6 +259,9 @@ func (s *MultiNoiseBiomeSource) Params() *ParameterList { return s.params }
 // Returns plains as a never-reached fallback only for an empty list (NewMultiNoiseBiomeSource
 // rejects that), so callers always get a real biome.
 func (s *MultiNoiseBiomeSource) getNoiseBiome(quartX, quartY, quartZ int) levelbiome.Type {
+	if s.endErosion != nil {
+		return s.getEndBiome(quartX, quartY, quartZ)
+	}
 	t := s.sampler.sample(quartX, quartY, quartZ)
 	bt, ok := s.params.findValue(t)
 	if !ok {
@@ -203,7 +293,8 @@ func (s *MultiNoiseBiomeSource) GetBiome(x, y, z int) levelbiome.Type {
 // The BLOCK-position GetBiome contract is unchanged, so callers use it as a drop-in source.
 func (s *MultiNoiseBiomeSource) NewClimateCachedView() *MultiNoiseBiomeSource {
 	return &MultiNoiseBiomeSource{
-		params: s.params,
+		params:     s.params,
+		endErosion: s.endErosion,
 		sampler: Sampler{
 			Temperature:     density.WrapClimateFlatCaches(s.sampler.Temperature),
 			Humidity:        density.WrapClimateFlatCaches(s.sampler.Humidity),

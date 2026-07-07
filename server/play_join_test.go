@@ -40,6 +40,7 @@ func TestLoginPacketWireLayout(t *testing.T) {
 		levelCount       pk.VarInt
 		levelName        pk.Identifier // levels[0] == overworld
 		levelName2       pk.Identifier // levels[1] == the_nether (second dimension)
+		levelName3       pk.Identifier // levels[2] == the_end (third dimension)
 		maxPlayers       pk.VarInt
 		chunkRadius      pk.VarInt
 		simDistance      pk.VarInt
@@ -62,7 +63,7 @@ func TestLoginPacketWireLayout(t *testing.T) {
 
 	if err := p.Scan(
 		&playerID, &hardcore,
-		&levelCount, &levelName, &levelName2, // Set<ResourceKey<Level>> with two elements (overworld + nether)
+		&levelCount, &levelName, &levelName2, &levelName3, // Set<ResourceKey<Level>> (overworld + nether + end)
 		&maxPlayers, &chunkRadius, &simDistance,
 		&reducedDebug, &showDeath, &limitedCrafting,
 		// CommonPlayerSpawnInfo (nested record, inlined into the Login body):
@@ -80,14 +81,17 @@ func TestLoginPacketWireLayout(t *testing.T) {
 	if hardcore {
 		t.Errorf("hardcore = true, want false")
 	}
-	if levelCount != 2 {
-		t.Errorf("levels count = %d, want 2 (overworld + the_nether)", levelCount)
+	if levelCount != 3 {
+		t.Errorf("levels count = %d, want 3 (overworld + the_nether + the_end)", levelCount)
 	}
 	if string(levelName) != overworldDimensionName {
 		t.Errorf("levels[0] = %q, want %q", string(levelName), overworldDimensionName)
 	}
 	if string(levelName2) != netherDimensionName {
 		t.Errorf("levels[1] = %q, want %q", string(levelName2), netherDimensionName)
+	}
+	if string(levelName3) != endDimensionName {
+		t.Errorf("levels[2] = %q, want %q", string(levelName3), endDimensionName)
 	}
 	if chunkRadius != viewDist {
 		t.Errorf("chunkRadius = %d, want %d", chunkRadius, viewDist)
@@ -123,7 +127,7 @@ func TestLoginPacketWireLayout(t *testing.T) {
 	// Every byte must be consumed: a trailing-bytes mismatch means the field set is
 	// wrong even if each decoded field happened to parse.
 	if used := decodedLen(t, p.Data,
-		&playerID, &hardcore, &levelCount, &levelName, &levelName2, &maxPlayers, &chunkRadius,
+		&playerID, &hardcore, &levelCount, &levelName, &levelName2, &levelName3, &maxPlayers, &chunkRadius,
 		&simDistance, &reducedDebug, &showDeath, &limitedCrafting, &dimTypeHolder,
 		&dimensionName, &seed, &gameType, &prevGameType, &isDebug, &isFlat,
 		&hasDeathLocation, &portalCooldown, &seaLevel, &onlineMode, &enforcesSecure,

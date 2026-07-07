@@ -148,6 +148,11 @@ func (r *NoiseRouter) Function(name string) (density.Function, bool) {
 // the world seed and every noise is seeded via factory.FromHashOf(id).
 type RandomState struct {
 	factory levelgen.PositionalRandomFactory
+	// seed is the RAW world seed (kept for the End island noise, which
+	// RandomState's noise-wiring visitor seeds directly from the world seed
+	// via LegacyRandomSource(seed).consumeCount(17292) -> SimplexNoise, NOT via
+	// the positional factory). See EndIslandsNoise.
+	seed int64
 
 	mu     sync.Mutex
 	noises map[string]*synth.NormalNoise
@@ -184,6 +189,7 @@ func NewRandomState(seed int64, useLegacyRandomSource bool) *RandomState {
 	}
 	return &RandomState{
 		factory: base.ForkPositional(),
+		seed:    seed,
 		noises:  make(map[string]*synth.NormalNoise),
 	}
 }
@@ -252,7 +258,25 @@ func (s *RandomState) BlendedNoise(xzScale, yScale, xzFactor, yFactor, smearScal
 	return synth.NewBlendedNoise(rs, xzScale, yScale, xzFactor, yFactor, smearScaleMultiplier), nil
 }
 
+// EndIslandsNoise builds the End "island noise" SimplexNoise for the end_islands density
+// node. It is the Go realization of RandomState$1NoiseWiringHelper.apply's replacement of
+// the codec's unit(0L) EndIslandDensityFunction with `new EndIslandDensityFunction(seed)`,
+// whose constructor is: new LegacyRandomSource(seed).consumeCount(17292); then
+// new SimplexNoise(that random). The seed is the RAW world seed (val$seed on the wiring
+// helper) -- NOT a positional fork -- so we build a fresh LegacyRandomSource(s.seed) here.
+//
+// Sources (javap -c, 26.2-inner.jar):
+//   - net.minecraft.world.level.levelgen.DensityFunctions$EndIslandDensityFunction.<init>(J)
+//   - net.minecraft.world.level.levelgen.RandomState$1NoiseWiringHelper.apply (the
+//     EndIslandDensityFunction instanceof branch: new EndIslandDensityFunction(val$seed))
+func (s *RandomState) EndIslandsNoise() (*synth.SimplexNoise, error) {
+	rng := levelgen.NewLegacyRandomSource(s.seed)
+	rng.ConsumeCount(17292)
+	return synth.NewSimplexNoise(rng), nil
+}
+
 var _ density.NoiseBinder = (*RandomState)(nil)
+
 
 // Router is the assembled, evaluable world generator graph: the parsed settings (DATA),
 // the bound NoiseRouter (the 15 functions), and the RandomState that seeded them.
