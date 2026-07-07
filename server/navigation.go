@@ -428,9 +428,12 @@ func (n *groundNavigation) tick(t *TickLoop, e *Entity) {
 	e.vx += -sinY * frictionSpeed
 	e.vz += cosY * frictionSpeed
 
-	// Jump when the next node is one block UP (a step the swept collision will not auto-climb): a small
-	// upward Δ lifts the mob onto the ledge (gravity in tickPhysics settles it). Kept as a direct Δy on
-	// the move — the vertical momentum model stays with the existing physics.
+	// Jump when the next node is one block UP: a small upward Δ lifts the mob onto the ledge (gravity
+	// in tickPhysics settles it). Kept as a direct Δy on the move — the vertical momentum model stays
+	// with the existing physics. ORTHOGONAL to the collision engine's auto step-up (collision.go):
+	// step-up covers obstacles up to maxUpStep (0.6 — slabs/stairs/snow layers) exactly as vanilla
+	// Entity.collide does, while a FULL 1-block ledge is what vanilla clears by JUMPING (JumpControl);
+	// this Δy is that jump's emulation, so it stays until the real jump impulse replaces it.
 	var stepY float64
 	if next.y > floorI(e.y) {
 		stepY = float64(next.y) - e.y

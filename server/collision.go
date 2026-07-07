@@ -25,7 +25,9 @@ package server
 
 import (
 	"math"
+	"sort"
 
+	"github.com/imhinotori/sulfur/level/attribute"
 	"github.com/imhinotori/sulfur/level/block"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
@@ -232,15 +234,112 @@ func (t *TickLoop) collideBoundingBox(m vec3d, box block.Box) vec3d {
 	return collideWithShapes(m, box, shapes)
 }
 
-// collideMovement is Entity.collide(Vec3): the whole-motion resolution. Step-up
-// (maxUpStep/collectCandidateStepUpHeights) is phase 3 of the collision plan and
-// entity-entity hard collision phase 4 — this is the vec.lengthSqr()==0-guarded
-// collideBoundingBox core. CITE: javap Entity.collide bytecode 0-43 (the pre-step-up part).
-func (t *TickLoop) collideMovement(m vec3d, box block.Box) vec3d {
-	if m.lengthSqr() == 0 {
-		return m
+// collideMovement is Entity.collide(Vec3): the whole-motion resolution including the auto
+// STEP-UP. Entity-entity hard collision (getEntityCollisions) and the world border are
+// phase 4 — the entityCollisions list is empty here. Ported 1:1 from bytecode:
+//
+//	Vec3 collided = vec.lengthSqr() == 0 ? vec : collideBoundingBox(this, vec, box, level, entityCollisions);
+//	boolean xChanged = vec.x != collided.x, yChanged = vec.y != collided.y, zChanged = vec.z != collided.z;
+//	boolean movingDownBlocked = yChanged && vec.y < 0;
+//	if (maxUpStep() > 0 && (movingDownBlocked || onGround()) && (xChanged || zChanged)) {
+//	    AABB base = movingDownBlocked ? box.move(0, collided.y, 0) : box;
+//	    AABB search = base.expandTowards(vec.x, maxUpStep(), vec.z);
+//	    if (!movingDownBlocked) search = search.expandTowards(0, -1.0E-5F, 0);
+//	    List<VoxelShape> colliders = collectCollidersIgnoringWorldBorder(this, level, entityCollisions, search);
+//	    for (float h : collectCandidateStepUpHeights(base, colliders, maxUpStep(), (float)collided.y)) {
+//	        Vec3 stepped = collideWithShapes(new Vec3(vec.x, h, vec.z), base, colliders);
+//	        if (stepped.horizontalDistanceSqr() > collided.horizontalDistanceSqr())
+//	            return stepped.subtract(0, box.minY - base.minY, 0);
+//	    }
+//	}
+//	return collided;
+//
+// stepHeight is the entity's maxUpStep() as the FLOAT vanilla returns (LivingEntity:
+// (float)getAttributeValue(STEP_HEIGHT); base Entity: 0); every widening back to double
+// happens exactly at the bytecode's f2d sites. onGround is the entity's PRE-move flag (last
+// move's result), exactly as this.onGround() reads it. CITE: javap Entity.collide (26.2).
+func (t *TickLoop) collideMovement(m vec3d, box block.Box, stepHeight float32, onGround bool) vec3d {
+	collided := m
+	if m.lengthSqr() != 0 {
+		collided = t.collideBoundingBox(m, box)
 	}
-	return t.collideBoundingBox(m, box)
+	xChanged := m.x != collided.x
+	yChanged := m.y != collided.y
+	zChanged := m.z != collided.z
+	movingDownBlocked := yChanged && m.y < 0
+	if stepHeight > 0 && (movingDownBlocked || onGround) && (xChanged || zChanged) {
+		base := box
+		if movingDownBlocked {
+			base = boxMove(box, 0, collided.y, 0)
+		}
+		search := expandTowards(base, m.x, float64(stepHeight), m.z)
+		if !movingDownBlocked {
+			// expandTowards(0, (double)-1.0E-5F, 0): the tiny downward pad that admits the
+			// floor the entity is standing on into the candidate set.
+			search = expandTowards(search, 0, -9.999999747378752e-6, 0)
+		}
+		colliders := t.collectBlockCollisions(search)
+		collidedY := float32(collided.y)
+		for _, h := range collectCandidateStepUpHeights(base, colliders, stepHeight, collidedY) {
+			stepped := collideWithShapes(vec3d{m.x, float64(h), m.z}, base, colliders)
+			if stepped.x*stepped.x+stepped.z*stepped.z > collided.x*collided.x+collided.z*collided.z {
+				// subtract(0, box.minY - base.minY, 0): rebase from the moved-down base box
+				// back onto the original box's Y.
+				dy := box.MinY - base.MinY
+				return vec3d{stepped.x, stepped.y - dy, stepped.z}
+			}
+		}
+	}
+	return collided
+}
+
+// collectCandidateStepUpHeights is Entity.collectCandidateStepUpHeights(AABB, List
+// <VoxelShape>, float, float): every collider Y slice boundary, as a height above the base
+// box's bottom, that is a plausible step target — h >= 0, h != the already-collided Y, and
+// h <= maxUpStep (the coords are ascending, so the first h beyond maxUpStep breaks out of
+// that shape's list). Deduplicated (FloatArraySet) and sorted ascending
+// (FloatArrays.unstableSort). All float32 math exactly as the bytecode's d2f/float compares.
+// CITE: javap Entity.collectCandidateStepUpHeights (26.2).
+func collectCandidateStepUpHeights(base block.Box, colliders []placedShape, maxUpStep, collidedY float32) []float32 {
+	var out []float32
+	for _, ps := range colliders {
+		ps.s.ForEachCoordY(ps.y, func(y float64) bool {
+			h := float32(y - base.MinY)
+			if h < 0 || h == collidedY {
+				return true // skip, keep scanning this shape's coords
+			}
+			if h > maxUpStep {
+				return false // coords ascend: nothing further in this shape qualifies
+			}
+			for _, v := range out {
+				if v == h {
+					return true // FloatArraySet dedupe
+				}
+			}
+			out = append(out, h)
+			return true
+		})
+	}
+	// FloatArrays.unstableSort: ascending.
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// entityMaxUpStep is the per-entity maxUpStep() dispatch: non-living entities (item/orb/
+// arrow/potion/throwable/hurting-projectile/fishing-hook/fangs/bolt/TNT/minecart/boat — the
+// same set tick_phases.go excludes from the mob physics phase) use base Entity.maxUpStep()
+// == 0.0F; living mobs use LivingEntity.maxUpStep() == (float)getAttributeValue(STEP_HEIGHT)
+// (registration default 0.6; some types register 1.0). The player-ridden max(…, 1.0F) branch
+// is deferred with server-side ridden movement (no getControllingPassenger yet) — for every
+// entity that moves through this engine today the branch is dead. CITE: javap
+// Entity.maxUpStep (fconst_0), LivingEntity.maxUpStep (getAttributeValue(STEP_HEIGHT), d2f).
+func entityMaxUpStep(e *Entity) float32 {
+	if e.isItem || e.isOrb || e.isArrow || e.isPotion || e.isThrowable ||
+		e.isHurting || e.isFishingHook || e.isFangs || e.isBolt ||
+		e.isTnt || e.isMinecart || e.isBoat {
+		return 0
+	}
+	return float32(e.getAttributeValue(attribute.StepHeight))
 }
 
 // mthEqual is Mth.equal(double, double): |b - a| < 9.999999747378752E-6 ((double)1.0E-5F) —

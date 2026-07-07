@@ -42,15 +42,13 @@ const (
 	// "entities don't slide forever" behavior. [ASSUMED — wire-irrelevant.]
 	horizontalFriction = 0.6 * 0.91
 
-	// stepHeight is the auto-step-up players/most mobs get over a 1-block edge. It equals the
-	// STEP_HEIGHT attribute registration default (attribute.StepHeight, RangedAttribute default 0.6 -
-	// verified in Attributes.<clinit>). Recorded for completeness/tuning; v1's visible collision gate
-	// (land, blocked, no clip-through) does not consume stepping yet, so it is not applied in the
-	// sweep. When the sweep gains step-up, it must read the PER-ENTITY value
-	// getAttributeValue(attribute.StepHeight) (== Entity.maxUpStep, 0.6 for a plain living entity, 1.0
-	// for an EnderMan) rather than this base constant - the attribute is the real source of truth.
-	stepHeight = 0.6
 )
+
+// The auto step-up (Entity.collide's maxUpStep branch) IS applied now: moveEntity /
+// collidePlayer read the PER-ENTITY value — entityMaxUpStep(e) for mobs (LivingEntity.
+// maxUpStep == (float)getAttributeValue(attribute.StepHeight), registration default 0.6) and
+// p.getAttributeValue(attrStepHeight) for players — so the attribute is the single source of
+// truth (no separate constant). See collision.go collideMovement.
 
 // dimMinY is the dimension floor used to map a world Y to its chunk-section index. The
 // overworld floor is -64 (mirrors cmd/sulfur/main.go overworldMinY). It is a named const
@@ -206,7 +204,11 @@ func entityBoxOf(e *Entity) block.Box {
 // respective movers, so the observable result is identical). Runs only on the tick goroutine.
 func (t *TickLoop) moveEntity(e *Entity, dx, dy, dz float64) {
 	m := vec3d{dx, dy, dz}
-	c := t.collideMovement(m, entityBoxOf(e))
+	// e.onGround is read BEFORE the flags below reassign it — Entity.collide's step-up gate
+	// consults this.onGround(), the PREVIOUS move's result. entityMaxUpStep dispatches the
+	// vanilla maxUpStep(): 0 for non-living entities, (float)STEP_HEIGHT for mobs — so a
+	// walking mob now auto-steps slabs/stairs/snow layers up to 0.6 exactly like vanilla.
+	c := t.collideMovement(m, entityBoxOf(e), entityMaxUpStep(e), e.onGround)
 
 	// setPos: one write through the store keeps the tracker bucket consistent.
 	t.cur().entities.move(e, e.x+c.x, e.y+c.y, e.z+c.z)
@@ -257,8 +259,11 @@ func (t *TickLoop) collidePlayer(p *tickPlayer, newX, newY, newZ float64) (x, y,
 	// The claimed position intersects a collider. Clip the claimed delta from the player's
 	// CURRENT accepted position through the vanilla collide chain (Y then larger-horizontal
 	// axis order, real shapes) and accept the clipped result.
+	// The player's maxUpStep is LivingEntity.maxUpStep(): (float)getAttributeValue(
+	// STEP_HEIGHT) (player default 0.6) — the same collide the vanilla server runs for the
+	// player entity; onGround is the client-reported flag the last accepted packet set.
 	m := vec3d{newX - p.x, newY - p.y, newZ - p.z}
-	c := t.collideMovement(m, playerBoxD(p.x, p.y, p.z))
+	c := t.collideMovement(m, playerBoxD(p.x, p.y, p.z), float32(p.getAttributeValue(attrStepHeight)), p.onGround)
 	x, y, z = p.x+c.x, p.y+c.y, p.z+c.z
 	// ULTRA_DEBUG: a clamp fired — the claimed position was inside a collider and got corrected.
 	// The most useful single line for a "stuck on water surface / can't swim up" report: it shows
