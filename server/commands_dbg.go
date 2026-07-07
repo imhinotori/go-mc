@@ -182,6 +182,15 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned hostile ghast eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+5, p.z))
 		}
+	case "blaze":
+		// BLAZE (Task): spawn a hostile Blaze directly (the nether melee-or-fireball-burst hostile). It
+		// acquires the nearest player within FOLLOW_RANGE (48), meleees for 6.0 when adjacent, and at range
+		// fires a 3-SmallFireball burst (attack-step cadence) that ignites + deals 5.0 fire damage. It takes
+		// 1.0 drown damage per tick in water/rain (isSensitiveToWater). Spawned 1 block up.
+		e := t.spawnBlaze(p.x, p.y+1, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned blaze eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+1, p.z))
+		}
 	case "fangs":
 		// VEX + FANGS (Task): spawn an EvokerFangs directly (the code-spawned projectile the evoker's FANGS
 		// spell places). It warms up, bites for 6.0 magic at warmupDelayTicks==-8, then despawns (~22 ticks).
@@ -293,7 +302,7 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		t.onRedstoneEdit(wirePos)
 		t.broadcastSystemChat(fmt.Sprintf("[dbg] placed redstone_block(%d,%d,%d)+wire(%d,%d,%d); wire should be POWER 15", bx, by, bz, bx+1, by, bz))
 	default:
-		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | iron_golem | villager | villager_farmer | vex | ghast_hostile | fangs | water | pig-in-water | raid | rain | redstone | trade")
+		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | iron_golem | villager | villager_farmer | vex | ghast_hostile | blaze | fangs | water | pig-in-water | raid | rain | redstone | trade")
 	}
 }
 

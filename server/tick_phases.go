@@ -689,6 +689,13 @@ func (t *TickLoop) tickAI() {
 		if e.typ == entity.Ghast.ID {
 			t.ghastAiStep(e)
 		}
+		// BLAZE (Task): the nether hostile + its melee-or-fireball-burst attack goal (BlazeAttackGoal) +
+		// the water-sensitivity drown tail. Per-type-gated like the ghast, AFTER serverAiStep (the empty
+		// goalSelector no-op). Blaze is a normal GROUND mob for physics (no flyer branch). ADDITIVE +
+		// blaze-gated (zero cost / zero RNG for every non-blaze -- the pig oracle stream is untouched).
+		if e.typ == entity.Blaze.ID {
+			t.blazeAiStep(e)
+		}
 		// The Fox character-layer per-tick extras (Fox.tick + Fox.aiStep server branch): the crouch/
 		// interested animation lerp, ++ticksSinceEaten, the wake/sit-in-water/target-lost state clears,
 		// and the sleep immobility (jump+horizontal-velocity zero). Per-type-gated like the creeper/chicken,

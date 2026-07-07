@@ -367,6 +367,20 @@ type Entity struct {
 	ghastChargeTime     int32
 	ghastCharging       bool
 	ghastExplosionPower int
+	// --- BLAZE (net.minecraft.world.entity.monster.Blaze) ------------------------------------------
+	//
+	// Tick-owned plain values, set/read ONLY for a Blaze (blazeAiStep gates on typ == entity.Blaze.ID).
+	// isBlaze marks the entity. blazeAttackStep mirrors Blaze$BlazeAttackGoal.attackStep (the 0..>4
+	// fireball-burst counter: step 1 charges, steps 2..4 each shoot one SmallFireball, then reset);
+	// blazeAttackTime mirrors BlazeAttackGoal.attackTime (the per-step cadence countdown: 60 at charge,
+	// 6 between the burst shots, 100 cooldown, 20 the melee swing); blazeLastSeen mirrors
+	// BlazeAttackGoal.lastSeen (ticks since the target was last in line-of-sight, gates the pursue move).
+	// blazeCharged mirrors DATA_FLAGS_ID bit 1 (setCharged -> the on-fire visual). Zero for non-blazes.
+	isBlaze         bool
+	blazeAttackStep int32
+	blazeAttackTime int32
+	blazeLastSeen   int32
+	blazeCharged    bool
 	// brain is the ported net.minecraft.world.entity.ai.Brain (brain.go). It is NON-NIL only for a mob
 	// that runs the behavior subsystem — currently the BABY HappyGhast (HappyGhast.customServerAiStep
 	// ticks the brain ONLY when isBaby()); every other entity leaves it nil (a nil brain is never ticked,

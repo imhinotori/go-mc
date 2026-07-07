@@ -353,6 +353,19 @@ func ghastSupplier() *Supplier {
 		Build()
 }
 
+// blazeSupplier is the port of Blaze.createAttributes(): Monster.createMonsterAttributes() then
+// .add(ATTACK_DAMAGE 6.0).add(MOVEMENT_SPEED 0.23000000417232513).add(FOLLOW_RANGE 48.0). MAX_HEALTH
+// is the createLivingAttributes default 20.0 (Blaze has NO MAX_HEALTH override). Cite
+// net.minecraft.world.entity.monster.Blaze.createAttributes (javap: createMonsterAttributes, ldc2_w
+// 6.0d ATTACK_DAMAGE, 0.23000000417232513d MOVEMENT_SPEED, 48.0d FOLLOW_RANGE).
+func blazeSupplier() *Supplier {
+	return createMonsterAttributes().
+		AddValue(AttackDamage, 6.0).
+		AddValue(MovementSpeed, 0.23000000417232513).
+		AddValue(FollowRange, 48.0).
+		Build()
+}
+
 // endermanSupplier is EnderMan's attribute supplier. EnderMan.createAttributes = Monster
 // .createMonsterAttributes().add(MAX_HEALTH 40).add(MOVEMENT_SPEED 0.3).add(ATTACK_DAMAGE 7)
 // .add(FOLLOW_RANGE 64).add(STEP_HEIGHT 1.0). Cite EnderMan.createAttributes
@@ -538,6 +551,10 @@ var suppliers = map[string]*Supplier{
 	// registry name so NewMapForEntity resolves it (the ghast MobCategory is monster, so the living
 	// fallback would also apply -- but the dedicated supplier gives the faithful 10/100 values).
 	"ghast": ghastSupplier(),
+	// BLAZE (Task): the nether hostile that drops blaze rods. Blaze.createAttributes: Monster
+	// .createMonsterAttributes + ATTACK_DAMAGE 6.0 + MOVEMENT_SPEED 0.23 + FOLLOW_RANGE 48.0 (MAX_HEALTH
+	// is the createLivingAttributes default 20.0). Keyed by its registry name so NewMapForEntity resolves it.
+	"blaze": blazeSupplier(),
 	// MOB-PREY (Task #9): the 3 prey mobs. Endermite (Monster), Turtle + Ocelot (Animal), each a 1:1 jar
 	// copy of its createAttributes (verified bytecode this session).
 	"endermite": endermiteSupplier(),
