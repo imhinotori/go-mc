@@ -112,6 +112,20 @@ type mobAI struct {
 	// (the `if (noJumpDelay > 0) noJumpDelay--;` at the top + the `noJumpDelay = 10` after a land jump).
 	noJumpDelay int
 
+	// noActionTime is net.minecraft.world.entity.Mob.noActionTime — the "how long since a player was
+	// near" counter that gates the random despawn (checkDespawn: `noActionTime > 600 &&
+	// random.nextInt(800) == 0 && ...`). Incremented by 1 at the top of Mob.serverAiStep and reset to 0
+	// by checkDespawn whenever a player is within noDespawnDistance² (or the mob is persistence-required).
+	// A plain int, RNG-FREE, tick-owned. Cite Mob.serverAiStep (`++noActionTime`) + Mob.checkDespawn.
+	noActionTime int
+
+	// persistenceRequired is net.minecraft.world.entity.Mob.persistenceRequired — the "never despawn"
+	// flag (name-tagged, bucketed, /summon Persistent, spawner-forbidden). checkDespawn returns early
+	// (resetting noActionTime) when it is set. v1 has no source that SETS it yet (no name tags / buckets),
+	// so it defaults false — but the read is the genuine isPersistenceRequired() so a future setter slots
+	// in with no call-site change. Cite Mob.isPersistenceRequired.
+	persistenceRequired bool
+
 	// rabbit holds the per-mob Rabbit hop state machine (RabbitJumpControl + RabbitMoveControl +
 	// Rabbit.aiStep/customServerAiStep counters). NON-NIL only for a rabbit (rabbitAiStep lazily
 	// allocates it, gated on typ == entity.Rabbit.ID); nil for every other mob so the pig oracle stream
@@ -291,6 +305,11 @@ func (m *mobAI) setWantCandidates(c [10][3]float64, landMode bool) {
 // there is no second GoalSelector to tick (07-RESEARCH AI-01 row 5). Plan 07-03 calls this
 // from the tickAI() slot for every AI mob; this plan delivers the driver, not the call site.
 func (m *mobAI) serverAiStep(t *TickLoop, e *Entity) {
+	// Mob.serverAiStep top: `++this.noActionTime;` (the very first statement, before LivingEntity.aiStep).
+	// PURE INTEGER MATH (no RNG draw) — cannot perturb the per-mob RNG stream the pig oracle pins. It is
+	// the despawn idle counter checkDespawn reads/resets. Cite Mob.serverAiStep (bytecode offset 0-9).
+	m.noActionTime++
+
 	// MOB-SUB-04 — the noJumpDelay decrement at the TOP of LivingEntity.aiStep (`if (noJumpDelay > 0)
 	// noJumpDelay--;`). It is PURE INTEGER MATH (no RNG draw), so it cannot perturb the per-mob RNG
 	// stream the pig oracle pins. Clamped at 0 — never negative.

@@ -73,6 +73,22 @@ func (c mobCategory) maxInstancesPerChunk() int {
 	}
 }
 
+// despawnDistance ports MobCategory.getDespawnDistance() — the hard cull radius in blocks past which
+// checkDespawn removes the mob outright (`d > despawn*despawn`). The value is the last constructor int
+// arg read from the static-initializer bytecode: 128 for every category except WATER_AMBIENT (64).
+// Cite net.minecraft.world.entity.MobCategory.getDespawnDistance.
+func (c mobCategory) despawnDistance() int {
+	if c == categoryWaterAmbient {
+		return 64
+	}
+	return 128
+}
+
+// noDespawnDistance ports MobCategory.getNoDespawnDistance() — inside this radius a mob NEVER despawns
+// and its idle counter resets. The getter ignores the per-category field and returns the literal 32
+// for ALL categories (javap: `bipush 32; ireturn`). Cite MobCategory.getNoDespawnDistance.
+func (c mobCategory) noDespawnDistance() int { return 32 }
+
 // categoryOf maps a live entity's wire type to its MobCategory. In vanilla this is the
 // EntityType.category field set at registration (e.g. EntityType.PIG is built with
 // MobCategory.CREATURE). v1 only needs the Pig -> CREATURE mapping for the cap accounting;

@@ -554,6 +554,13 @@ func (t *TickLoop) tickAI() {
 	}
 
 	for _, e := range snapshot {
+		// Mob.checkDespawn — the top-of-frame idle cull (runs BEFORE the entity's own tick in vanilla's
+		// ServerLevel.tick consumer). On a cull it sets e.dead + removes the mob from its region; skip the
+		// rest of this mob's frame (serverAiStep/pickup) so a just-despawned mob does no further work.
+		t.checkDespawn(e)
+		if e.dead {
+			continue
+		}
 		e.ai.serverAiStep(t, e) // 07-01 goals + 07-02 navigation: the real ported AI walk
 		// MOB item-pickup (net.minecraft.world.entity.Mob.aiStep looting block): a mob that canPickUpLoot()
 		// scans getBoundingBox().inflate(1,0,1) for dropped items and picks them up (item_entity_mob.go). Runs
