@@ -1817,6 +1817,16 @@ func (t *TickLoop) dispatch(c *Client, p pk.Packet) {
 			var entityID, actionID, data pk.VarInt
 			if err := p.Scan(&entityID, &actionID, &data); err == nil {
 				switch actionID {
+				case 0: // STOP_SLEEPING (Action ordinal 0, the wire value)
+					// handlePlayerCommand STOP_SLEEPING (bytecode case: isSleeping ifeq skip;
+					// stopSleepInBed(false, true)): the "Leave bed" button. Without this the player is
+					// stuck in bed until dawn and its movement stays immobilized. wakeImmediately=false
+					// (sleepCounter -> 100, the normal waking unwind), updateLevelForSleepingPlayers=true
+					// (a v1 no-op — no sleep-vote subsystem). Cite ServerGamePacketListenerImpl
+					// .handlePlayerCommand STOP_SLEEPING.
+					if player.isSleeping() {
+						t.stopSleepInBed(player, false)
+					}
 				case 1: // START_SPRINTING
 					player.sprinting = true
 				case 2: // STOP_SPRINTING
