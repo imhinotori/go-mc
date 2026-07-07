@@ -66,6 +66,34 @@ func (t *TickLoop) tickEntityFire(e *Entity) {
 	}
 }
 
+// tickEntityLava ports the lava-in-block effects (26.2 LavaFluid.entityInside): while a living mob is in
+// lava, apply lavaIgnite (igniteForSeconds 15) then lavaHurt (hurt(lava, 4.0)), and halve fallDistance
+// (Entity.baseTick: `if (isInLava()) fallDistance *= 0.5`). In 26.2 lava damage moved into the deferred
+// InsideBlockEffect system, but both effects fire unconditionally whenever isInLava() holds, so a
+// per-tick check is observably identical. Gated on a living mob (e.ai != nil, the v1 LivingEntity
+// population) that is alive — items/orbs/projectiles are a no-op (item burn-in-lava is a separate
+// ItemEntity mechanic, not modeled). A dry/non-living entity (the oracle pig on land) draws no RNG.
+//
+//	[VERIFIED javap Entity.lavaIgnite: if(fireImmune)return; igniteForSeconds(15.0f). Entity.lavaHurt:
+//	 if(fireImmune)return; hurtServer(damageSources().lava(), 4.0f). Entity.baseTick: isInLava ->
+//	 fallDistance *= 0.5. LavaFluid.entityInside: apply(LAVA_IGNITE) then runAfter(LAVA_IGNITE, lavaHurt).]
+func (t *TickLoop) tickEntityLava(e *Entity) {
+	if e.ai == nil || e.dead {
+		return // only living mobs take lava damage in v1; a corpse/non-living entity is skipped
+	}
+	if !t.mobInLava(e) {
+		return
+	}
+	// fireImmune() is the v1 constant-false (no fire-immune mob wired), so lavaIgnite/lavaHurt's
+	// `if(fireImmune)return` guards are no-ops. igniteForSeconds(15) FIRST (LAVA_IGNITE applied
+	// immediately), then the 4.0 lava hurt (runAfter callback). FIRE_RESISTANCE (an effect, not
+	// fireImmune) still lets the mob ignite but negates the is_fire lava damage via applyDamageEntity.
+	t.igniteForSeconds(e, 15.0)
+	t.applyDamageEntity(e, damageSourceOf(damageTypeLava), 4.0)
+	// Entity.baseTick: fallDistance *= 0.5 while in lava (unconditional, independent of fireImmune).
+	e.fallDistance *= 0.5
+}
+
 // broadcastEntityFireFlag pushes the on-fire shared-flag (DATA_SHARED_FLAGS bit 0x01) to every player
 // tracking e, so the client shows/hides the flames. Mirrors the wool/wolf-flag byte broadcast (BYTE
 // serializer at index 0). Other shared-flag bits (sneaking/sprinting/…) are not modeled in v1, so the

@@ -263,6 +263,11 @@ func (t *TickLoop) tickEntities() {
 	// trace entry (TestTickPhaseOrder unaffected). Its body lives in fall_damage.go.
 	t.tickBelowWorld()
 
+	// Lava (player): LavaFluid.entityInside — ignite 15s + 4.0 lava damage/tick + fallDistance halved
+	// while the player is in lava. Sibling of tickBelowWorld; ADDITIVE, no new trace entry. Body in
+	// fall_damage.go.
+	t.tickLavaPlayers()
+
 	// Suffocation: the IN_WALL branch of LivingEntity.baseTick (`if isInWall() hurtServer(inWall(),
 	// 1.0F)`). In vanilla baseTick this check runs BEFORE the air/drowning branch, so it is placed
 	// here ahead of tickBreath. Its body lives in suffocation.go; a single ADDITIVE call inside this
@@ -516,6 +521,12 @@ func (t *TickLoop) tickAI() {
 		// NO RNG draw, and a non-burning entity (remainingFireTicks==0, the oracle pig) is an early-return
 		// no-op → the pig oracle's pinned stream is unperturbed (PITFALLS Pitfall 5).
 		t.tickEntityFire(e)
+		// Lava: LavaFluid.entityInside → lavaIgnite (igniteForSeconds 15) + lavaHurt (hurt(lava, 4.0)).
+		// In 26.2 lava damage moved into the InsideBlockEffect system, but both effects are unconditional
+		// given isInLava(), so a per-tick check is observably identical. Body in fire.go (tickEntityLava);
+		// gated on a living mob in lava — a non-living/dry entity is a no-op, so the pig oracle (never in
+		// lava) draws no RNG. Placed after tickEntityFire (lava suppresses the on_fire tick, already gated).
+		t.tickEntityLava(e)
 		// MOB-SUB-08 (Plan 33-01): AgeableMob aging, in the SAME OUTSIDE-serverAiStep per-mob loop as the
 		// i-frame decrement (vanilla runs aging in aiStep; we run it here — pure-int, no draw — to keep it
 		// off the per-mob RNG stream the pig oracle pins; the cited oracle-preserving optimization). A baby

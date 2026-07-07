@@ -197,6 +197,29 @@ func (t *TickLoop) tickBelowWorld() {
 	}
 }
 
+// tickLavaPlayers ports the lava-in-block effects (LavaFluid.entityInside) for a player: while the
+// player is in lava, ignite it for 15s (lavaIgnite) and deal 4.0 lava damage/tick (lavaHurt), and halve
+// fallDistance (baseTick `isInLava -> fallDistance *= 0.5`). Sibling of tickBelowWorld; runs in
+// tickEntities. The 4.0 damage is fully faithful; the player fire flag is set on the player's store
+// Entity so trackers render flames (the ongoing player fire-BURN after leaving lava is a pre-existing
+// v1 deferral — there is no player-side fire tick — but the lava damage while submerged is complete).
+// Cite Entity.lavaIgnite / Entity.lavaHurt / Entity.baseTick.
+func (t *TickLoop) tickLavaPlayers() {
+	for _, p := range t.players {
+		if p == nil || p.dead {
+			continue
+		}
+		if !t.playerInLava(p) {
+			continue
+		}
+		if p.playerEntity != nil {
+			t.igniteForSeconds(p.playerEntity, 15.0) // lavaIgnite: set the flame flag on the store entity
+		}
+		t.applyDamage(p, damageSourceOf(damageTypeLava), 4.0) // lavaHurt: hurt(lava, 4.0)
+		p.fallDistance *= 0.5                                 // baseTick: fallDistance halved in lava
+	}
+}
+
 // checkFallDamage mirrors Entity.checkFallDamage(double deltaY, boolean onGround, BlockState, BlockPos):
 //
 //	if (!isInWater() && deltaY < 0.0) this.fallDistance -= (double)(float) deltaY;

@@ -72,6 +72,33 @@ func (t *TickLoop) playerInWater(p *tickPlayer) bool {
 	return false
 }
 
+// playerInLava reports whether the player's AABB intersects any lava cell — the player port of
+// Entity.isInLava (EntityFluidInteraction.isInFluid(FluidTags.LAVA)). Identical AABB cell walk to
+// playerInWater, testing the lava flag instead. Players have no firstTick field (never sampled on the
+// spawn tick), so the vanilla `!firstTick` guard is not needed here. Cite Entity.isInLava.
+func (t *TickLoop) playerInLava(p *tickPlayer) bool {
+	if t.world() == nil {
+		return false
+	}
+	hw := playerWidth / 2
+	minX := int(math.Floor(p.x - hw))
+	maxX := int(math.Floor(p.x + hw))
+	minY := int(math.Floor(p.y))
+	maxY := int(math.Floor(p.y + playerHeight))
+	minZ := int(math.Floor(p.z - hw))
+	maxZ := int(math.Floor(p.z + hw))
+	for x := minX; x <= maxX; x++ {
+		for y := minY; y <= maxY; y++ {
+			for z := minZ; z <= maxZ; z++ {
+				if t.fluidAt(pk.Position{X: x, Y: y, Z: z}).isLava {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 // fluidKind selects which fluid tag a mob fluid scan/height read targets — the Go analogue of the
 // FluidTags.WATER / FluidTags.LAVA TagKey passed to Entity.getFluidHeight(TagKey) / isInFluid(TagKey).
 type fluidKind int

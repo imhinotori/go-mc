@@ -91,6 +91,10 @@ var (
 	// hurt(fellOutOfWorld(), 4.0F)). A bypasses_invulnerability member, so it kills even a creative
 	// player. Cite Entity.checkBelowWorld / LivingEntity.onBelowWorld / DamageSources.fellOutOfWorld.
 	damageTypeOutOfWorld = damageTypeID(tag.DamageTypeIDs["minecraft:out_of_world"])
+	// damageTypeLava is minecraft:lava — the source Entity.lavaHurt deals (hurtServer(lava(), 4.0F))
+	// while an entity is in lava. An is_fire member, so a FIRE_RESISTANCE holder is immune via the
+	// applyDamage/applyDamageEntity fire guard. Cite Entity.lavaHurt / DamageSources.lava.
+	damageTypeLava = damageTypeID(tag.DamageTypeIDs["minecraft:lava"])
 )
 
 // damageSourceOf builds a DamageSource for an environmental/anonymous source: the given damage-type
