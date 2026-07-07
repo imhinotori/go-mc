@@ -263,6 +263,9 @@ func (t *TickLoop) clickedBrewingStand(p *tickPlayer, oc *openContainer, slotNum
 
 // doBrewingStandClick dispatches the supported click inputs over the brewing-stand window.
 func (t *TickLoop) doBrewingStandClick(p *tickPlayer, oc *openContainer, b *brewingStandBE, inv *Inventory, i, j, input int) {
+	if t.menuOutsideDrop(p, inv, i, j, input) {
+		return
+	}
 	switch input {
 	case containerInputPickup:
 		t.brewPickup(p, oc, b, inv, i, j)

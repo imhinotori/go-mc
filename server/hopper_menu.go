@@ -186,6 +186,9 @@ func (t *TickLoop) clickedHopper(p *tickPlayer, oc *openContainer, slotNum int16
 // doHopperClick dispatches the supported click inputs over the hopper window (PICKUP/QUICK_MOVE/THROW).
 // Mirrors doDispenserClick.
 func (t *TickLoop) doHopperClick(p *tickPlayer, oc *openContainer, h *hopperBE, inv *Inventory, i, j, input int) {
+	if t.menuOutsideDrop(p, inv, i, j, input) {
+		return
+	}
 	switch input {
 	case containerInputPickup:
 		t.hopperPickup(p, h, inv, i, j)

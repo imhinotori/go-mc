@@ -235,6 +235,9 @@ func (t *TickLoop) clickedStonecutter(p *tickPlayer, oc *openContainer, slotNum 
 // result slot (1) is take-only — a place INTO it is rejected, a take fires onTakeStonecut. PICKUP,
 // QUICK_MOVE, THROW are supported; an unsupported input is a no-op (content re-sent regardless).
 func (t *TickLoop) doStonecutterClick(p *tickPlayer, oc *openContainer, inv *Inventory, i, j, input int) {
+	if t.menuOutsideDrop(p, inv, i, j, input) {
+		return
+	}
 	switch input {
 	case containerInputPickup:
 		t.stonecutterPickup(p, oc, inv, i, j)

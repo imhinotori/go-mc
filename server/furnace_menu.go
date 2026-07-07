@@ -328,6 +328,9 @@ func (t *TickLoop) clickedFurnace(p *tickPlayer, oc *openContainer, slotNum int1
 
 // doFurnaceClick dispatches the supported click inputs over the furnace window.
 func (t *TickLoop) doFurnaceClick(p *tickPlayer, oc *openContainer, f *furnaceBE, inv *Inventory, i, j, input int) {
+	if t.menuOutsideDrop(p, inv, i, j, input) {
+		return
+	}
 	switch input {
 	case containerInputPickup:
 		t.furnacePickup(p, oc, f, inv, i, j)

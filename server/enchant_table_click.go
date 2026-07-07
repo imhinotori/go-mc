@@ -123,6 +123,9 @@ func (t *TickLoop) clickedEnchant(p *tickPlayer, oc *openContainer, slotNum int1
 
 // doEnchantClick dispatches the supported click inputs over the enchant window.
 func (t *TickLoop) doEnchantClick(p *tickPlayer, oc *openContainer, inv *Inventory, i, j, input int) {
+	if t.menuOutsideDrop(p, inv, i, j, input) {
+		return
+	}
 	switch input {
 	case containerInputPickup:
 		t.enchantPickup(p, oc, inv, i, j)

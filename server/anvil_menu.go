@@ -224,6 +224,9 @@ func (t *TickLoop) clickedAnvil(p *tickPlayer, oc *openContainer, slotNum int16,
 
 // doAnvilClick dispatches the supported click inputs over the anvil window.
 func (t *TickLoop) doAnvilClick(p *tickPlayer, oc *openContainer, inv *Inventory, i, j, input int) {
+	if t.menuOutsideDrop(p, inv, i, j, input) {
+		return
+	}
 	switch input {
 	case containerInputPickup:
 		t.anvilPickup(p, oc, inv, i, j)

@@ -181,6 +181,9 @@ func (t *TickLoop) clickedSmithing(p *tickPlayer, oc *openContainer, slotNum int
 
 // doSmithingClick ports the AbstractContainerMenu.doClick branches over the smithing window.
 func (t *TickLoop) doSmithingClick(p *tickPlayer, oc *openContainer, inv *Inventory, i, j, input int) {
+	if t.menuOutsideDrop(p, inv, i, j, input) {
+		return
+	}
 	switch input {
 	case containerInputPickup, containerInputQuickMove:
 		if inv.quickcraftStatus != 0 {

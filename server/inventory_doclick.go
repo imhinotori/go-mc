@@ -235,6 +235,34 @@ func (t *TickLoop) doClickPickupOrQuickMove(p *tickPlayer, inv *Inventory, i, j,
 	}
 }
 
+// menuOutsideDrop ports the doClick PICKUP i==-999 arm (offsets 561-660) — a click OUTSIDE any container
+// window drops the carried cursor into the world: PRIMARY (j==0) drops the whole cursor stack, SECONDARY
+// (j==1) drops one. It is GENERIC over every menu (the drop only touches the cursor + the world), so each
+// per-menu doXClick calls it up-front and returns when it handled the click. Returns true iff this was the
+// outside-drop case (input==PICKUP && i==-999). CITE AbstractContainerMenu.doClick (the i==-999 branch).
+func (t *TickLoop) menuOutsideDrop(p *tickPlayer, inv *Inventory, i, j, input int) bool {
+	if input != containerInputPickup || i != -999 {
+		return false
+	}
+	if j != 0 && j != 1 {
+		return true // still the outside case, but an invalid button: no-op (the @575 guard)
+	}
+	carried := inv.getCarried()
+	if stackEmpty(carried) {
+		return true
+	}
+	if j == 0 {
+		t.playerDrop(p, carried, true) // drop the whole cursor stack
+		inv.setCarried(component.SlotData{Count: 0})
+	} else {
+		c := inv.getCarried()
+		one := stackSplit(&c, 1) // drop one; the cursor keeps the remainder
+		inv.setCarried(c)
+		t.playerDrop(p, one, true)
+	}
+	return true
+}
+
 // doClickSwap ports the SWAP branch (doClick offsets 1079-1382). j indexes the PLAYER INVENTORY (hotbar
 // 0-8 or offhand 40), mapped to menu cells via invGetItem/invSetItem.
 func (t *TickLoop) doClickSwap(p *tickPlayer, inv *Inventory, i, j int) {

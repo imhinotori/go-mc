@@ -108,6 +108,10 @@ func (t *TickLoop) clickedChest(p *tickPlayer, cl *chestLoot, slotNum int16, but
 // receives. QUICK_CRAFT/SWAP/CLONE/PICKUP_ALL on a chest are out of the v1 chest subset (a forged
 // or unsupported input is a no-op, never a panic — the authoritative content is re-sent regardless).
 func (t *TickLoop) doChestClick(p *tickPlayer, cl *chestLoot, inv *Inventory, i, j, input int) {
+	// Outside-drop (PICKUP, slot -999): drop the cursor into the world. Generic across menus.
+	if t.menuOutsideDrop(p, inv, i, j, input) {
+		return
+	}
 	switch input {
 	case containerInputQuickCraft:
 		t.doChestQuickCraft(p, cl, inv, i, j)

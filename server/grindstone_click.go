@@ -122,6 +122,9 @@ func (t *TickLoop) clickedGrindstone(p *tickPlayer, oc *openContainer, slotNum i
 
 // doGrindstoneClick ports the AbstractContainerMenu.doClick branches over the grindstone window.
 func (t *TickLoop) doGrindstoneClick(p *tickPlayer, oc *openContainer, inv *Inventory, i, j, input int) {
+	if t.menuOutsideDrop(p, inv, i, j, input) {
+		return
+	}
 	switch input {
 	case containerInputPickup, containerInputQuickMove:
 		if inv.quickcraftStatus != 0 {

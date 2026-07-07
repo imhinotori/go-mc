@@ -294,6 +294,9 @@ func (t *TickLoop) clickedCrafting(p *tickPlayer, oc *openContainer, slotNum int
 // content is re-sent regardless). The result slot (0) is take-only — a place INTO it is rejected, and a
 // take fires onTakeCraft.
 func (t *TickLoop) doCraftingClick(p *tickPlayer, oc *openContainer, inv *Inventory, i, j, input int) {
+	if t.menuOutsideDrop(p, inv, i, j, input) {
+		return
+	}
 	switch input {
 	case containerInputPickup, containerInputQuickMove:
 		if inv.quickcraftStatus != 0 {

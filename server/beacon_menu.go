@@ -298,6 +298,9 @@ func (t *TickLoop) clickedBeacon(p *tickPlayer, oc *openContainer, slotNum int16
 // doBeaconClick dispatches the supported click inputs over the beacon window (PICKUP/QUICK_MOVE/THROW). An
 // unsupported input is a no-op (authoritative content re-sent regardless). Mirrors doDispenserClick.
 func (t *TickLoop) doBeaconClick(p *tickPlayer, b *beaconBE, inv *Inventory, i, j, input int) {
+	if t.menuOutsideDrop(p, inv, i, j, input) {
+		return
+	}
 	switch input {
 	case containerInputPickup:
 		t.beaconPickup(b, inv, i, j)

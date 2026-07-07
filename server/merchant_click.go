@@ -134,6 +134,9 @@ func (t *TickLoop) clickedMerchant(p *tickPlayer, oc *openContainer, slotNum int
 // re-sent regardless). The result slot (2) is take-only — a place INTO it is rejected, and a take fires
 // onTakeMerchant.
 func (t *TickLoop) doMerchantClick(p *tickPlayer, oc *openContainer, inv *Inventory, villager *Entity, offers merchantOffers, i, j, input int) {
+	if t.menuOutsideDrop(p, inv, i, j, input) {
+		return
+	}
 	switch input {
 	case containerInputPickup, containerInputQuickMove:
 		if inv.quickcraftStatus != 0 {

@@ -58,7 +58,7 @@ func chestClickPacket(window int32, stateID int32, slotNum int16, button int8, i
 		pk.Short(slotNum),
 		pk.Byte(button),
 		pk.VarInt(input),
-		pk.VarInt(0),     // changedSlots count = 0
+		pk.VarInt(0),      // changedSlots count = 0
 		pk.Boolean(false), // carried HashedStack: not present
 	)
 }
@@ -228,6 +228,50 @@ func TestChestClickMovesItemToPlayer(t *testing.T) {
 	}
 	if p.inventory.getCarried().Count != 0 {
 		t.Fatalf("cursor still holds %d after deposit, want empty", p.inventory.getCarried().Count)
+	}
+}
+
+// TestChestOutsideDropDropsCursor: clicking OUTSIDE the chest window (slot -999) with a carried item drops
+// it into the world — the cursor empties and an ItemEntity spawns. Previously the outside-drop was a no-op
+// on non-player menus, so the client's local drop was reverted (a "cancellation").
+func TestChestOutsideDropDropsCursor(t *testing.T) {
+	loop, mgr := newBlockLoop()
+	ch, _ := mgr.Get(level.ChunkPos{0, 0})
+	p := blockPlayer(loop, 1.5, 65.0, 1.5)
+	pos := pk.Position{X: 1, Y: 64, Z: 1}
+	placeChestBE(loop, ch, pos, "minecraft:chests/simple_dungeon", 123456789)
+
+	ui := useItemOnPacket(0, pos, 1, 0.5, 1.0, 0.5, false, false, 9)
+	loop.applyInput(p, SubtickInput{At: loop.clock.Now(), Packet: ui})
+	cl := loop.openChests[pos]
+	win := int32(p.openContainer.windowID)
+
+	// Put a known item on the cursor (pick up the first non-empty chest slot).
+	src := -1
+	for i, s := range cl.items {
+		if s.Count > 0 {
+			src = i
+			break
+		}
+	}
+	if src < 0 {
+		t.Skip("no item in the chest to carry")
+	}
+	loop.handleContainerClick(p, chestClickPacket(win, 0, int16(src), 0, containerInputPickup))
+	inv := ensureInventory(p)
+	if stackEmpty(inv.getCarried()) {
+		t.Fatal("setup: expected an item on the cursor")
+	}
+
+	dropsBefore := countItemEntities(loop)
+	// PRIMARY click outside the window (slot -999): drop the whole cursor.
+	loop.handleContainerClick(p, chestClickPacket(win, 0, -999, 0, containerInputPickup))
+
+	if !stackEmpty(inv.getCarried()) {
+		t.Fatalf("outside-drop left the cursor non-empty (count %d)", inv.getCarried().Count)
+	}
+	if got := countItemEntities(loop); got != dropsBefore+1 {
+		t.Fatalf("outside-drop spawned %d item entities, want 1 (before=%d)", got-dropsBefore, dropsBefore)
 	}
 }
 
@@ -458,4 +502,3 @@ func TestChestQuickMoveToPlayer(t *testing.T) {
 		t.Fatalf("player gained %d of item %d, want %d (shift-move)", after-before, want.ItemID, want.Count)
 	}
 }
-

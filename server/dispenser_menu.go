@@ -217,6 +217,9 @@ func (t *TickLoop) clickedDispenser(p *tickPlayer, oc *openContainer, slotNum in
 // THROW) — the operations a dispenser receives. An unsupported input is a no-op (authoritative content
 // re-sent regardless). Mirrors doChestClick.
 func (t *TickLoop) doDispenserClick(p *tickPlayer, oc *openContainer, d *dispenserBE, inv *Inventory, i, j, input int) {
+	if t.menuOutsideDrop(p, inv, i, j, input) {
+		return
+	}
 	switch input {
 	case containerInputPickup:
 		t.dispenserPickup(p, d, inv, i, j)
