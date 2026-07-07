@@ -252,3 +252,151 @@ func (s *VoxelShape) ForEachCoordY(oy float64, fn func(y float64) bool) {
 		}
 	}
 }
+
+// clipEps is the AABB.clip / clipPoint epsilon (1.0E-7): the cross-axis slack that lets a ray
+// grazing a box face still count as entering it. CITE: javap AABB.clipPoint (ldc2_w 1.0E-7d).
+const clipEps = 1.0e-7
+
+// ClipStartInside is the VoxelShape.clip start-point fast path: isFullWide(findIndex(X,sp.x-ox),
+// findIndex(Y,sp.y-oy), findIndex(Z,sp.z-oz)) for the shape placed at world offset (ox,oy,oz) —
+// i.e. whether the discrete cell containing the pushed start point (from + delta*0.001) is a FULL
+// cell of the shape. When true, VoxelShape.clip returns an immediate BlockHitResult (a hit).
+// CITE: javap VoxelShape.clip offsets 44-140 (findIndex per axis on (startPoint - pos) ->
+// DiscreteVoxelShape.isFullWide -> BlockHitResult).
+func (s *VoxelShape) ClipStartInside(ox, oy, oz, spx, spy, spz float64) bool {
+	if s.IsEmpty() {
+		return false
+	}
+	ix := s.findIndex(AxisX, ox, spx)
+	iy := s.findIndex(AxisY, oy, spy)
+	iz := s.findIndex(AxisZ, oz, spz)
+	// isFullWide(ix,iy,iz): the (X,Y,Z)-ordered full-cell test (isFullAxes with the identity cycle).
+	return s.isFullAxes(AxisX, AxisY, AxisZ, ix, iy, iz)
+}
+
+// ClipSegment is VoxelShape.clip's AABB.clip(toAabbs(), from, to, pos) tail as a hit/miss boolean:
+// for each FULL cell of the shape (its block-local AABB moved to the world cell at offset ox,oy,oz),
+// run the slab clip of the segment from->to and report whether ANY box is entered within the
+// segment (0 <= t < best). It tracks the nearest t across boxes exactly as AABB.clip's traceDist[0]
+// does, but returns only the boolean hasLineOfSight needs (getType() != MISS).
+// CITE: javap AABB.clip(Iterable,Vec3,Vec3,BlockPos) + AABB.getDirection/clipPoint (the per-axis
+// slab test with the 1.0E-7 cross-axis slack; traceDist[0] seeded at 1.0).
+func (s *VoxelShape) ClipSegment(ox, oy, oz, fx, fy, fz, tx, ty, tz float64) bool {
+	if s.IsEmpty() {
+		return false
+	}
+	dx := tx - fx
+	dy := ty - fy
+	dz := tz - fz
+	best := 1.0 // traceDist[0] seed (double[]{1.0})
+	hitAny := false
+	sx, sy, sz := s.size(0), s.size(1), s.size(2)
+	for x := 0; x < sx; x++ {
+		for y := 0; y < sy; y++ {
+			for z := 0; z < sz; z++ {
+				bit := (x*sy+y)*sz + z
+				if s.Full[bit>>6]&(1<<uint(bit&63)) == 0 {
+					continue
+				}
+				// The full cell's world-placed AABB (block-local coords + offset).
+				minX := s.coord(AxisX, x) + ox
+				maxX := s.coord(AxisX, x+1) + ox
+				minY := s.coord(AxisY, y) + oy
+				maxY := s.coord(AxisY, y+1) + oy
+				minZ := s.coord(AxisZ, z) + oz
+				maxZ := s.coord(AxisZ, z+1) + oz
+				if clipBoxSlab(minX, minY, minZ, maxX, maxY, maxZ, fx, fy, fz, dx, dy, dz, &best) {
+					hitAny = true
+				}
+			}
+		}
+	}
+	return hitAny
+}
+
+// clipBoxSlab is AABB.getDirection -> clipPoint for one box: test the six faces (X-,X+,Y-,Y+,Z-,Z+)
+// in the bytecode order, updating best (traceDist[0]) to the nearest valid entry t and returning
+// whether this box was entered nearer than the prior best. A face is valid when 0 <= t < best AND
+// the two cross-axis coordinates at t lie within [min-eps, max+eps]. CITE: javap AABB.getDirection
+// (the WEST/EAST, DOWN/UP, NORTH/SOUTH clipPoint calls with the dx>1E-7 / dx<-1E-7 direction gates)
+// + clipPoint (t = (plane-origin)/dir; cross coords; the 0<=t<best and eps-slack window; traceDist[0]=t).
+func clipBoxSlab(minX, minY, minZ, maxX, maxY, maxZ, ox, oy, oz, dx, dy, dz float64, best *float64) bool {
+	hit := false
+	// X faces (gate on |dx| > eps; WEST uses minX, EAST uses maxX).
+	if dx > clipEps {
+		if clipFaceX(minX, minY, minZ, maxY, maxZ, ox, oy, oz, dx, dy, dz, best) {
+			hit = true
+		}
+	} else if dx < -clipEps {
+		if clipFaceX(maxX, minY, minZ, maxY, maxZ, ox, oy, oz, dx, dy, dz, best) {
+			hit = true
+		}
+	}
+	// Y faces (DOWN uses minY, UP uses maxY).
+	if dy > clipEps {
+		if clipFaceY(minY, minX, minZ, maxX, maxZ, ox, oy, oz, dx, dy, dz, best) {
+			hit = true
+		}
+	} else if dy < -clipEps {
+		if clipFaceY(maxY, minX, minZ, maxX, maxZ, ox, oy, oz, dx, dy, dz, best) {
+			hit = true
+		}
+	}
+	// Z faces (NORTH uses minZ, SOUTH uses maxZ).
+	if dz > clipEps {
+		if clipFaceZ(minZ, minX, minY, maxX, maxY, ox, oy, oz, dx, dy, dz, best) {
+			hit = true
+		}
+	} else if dz < -clipEps {
+		if clipFaceZ(maxZ, minX, minY, maxX, maxY, ox, oy, oz, dx, dy, dz, best) {
+			hit = true
+		}
+	}
+	return hit
+}
+
+// clipFaceX is clipPoint for an X-perpendicular face at plane=px: t = (px-ox)/dx; the entry is valid
+// when 0 <= t < best and the y,z coords at t are within [min-eps, max+eps]. Updates best on a hit.
+func clipFaceX(px, minY, minZ, maxY, maxZ, ox, oy, oz, dx, dy, dz float64, best *float64) bool {
+	tt := (px - ox) / dx
+	if tt < 0 || tt >= *best {
+		return false
+	}
+	y := oy + tt*dy
+	z := oz + tt*dz
+	if minY-clipEps < y && y < maxY+clipEps && minZ-clipEps < z && z < maxZ+clipEps {
+		*best = tt
+		return true
+	}
+	return false
+}
+
+// clipFaceY is clipPoint for a Y-perpendicular face at plane=py.
+func clipFaceY(py, minX, minZ, maxX, maxZ, ox, oy, oz, dx, dy, dz float64, best *float64) bool {
+	tt := (py - oy) / dy
+	if tt < 0 || tt >= *best {
+		return false
+	}
+	x := ox + tt*dx
+	z := oz + tt*dz
+	if minX-clipEps < x && x < maxX+clipEps && minZ-clipEps < z && z < maxZ+clipEps {
+		*best = tt
+		return true
+	}
+	return false
+}
+
+// clipFaceZ is clipPoint for a Z-perpendicular face at plane=pz.
+func clipFaceZ(pz, minX, minY, maxX, maxY, ox, oy, oz, dx, dy, dz float64, best *float64) bool {
+	tt := (pz - oz) / dz
+	if tt < 0 || tt >= *best {
+		return false
+	}
+	x := ox + tt*dx
+	y := oy + tt*dy
+	if minX-clipEps < x && x < maxX+clipEps && minY-clipEps < y && y < maxY+clipEps {
+		*best = tt
+		return true
+	}
+	return false
+}

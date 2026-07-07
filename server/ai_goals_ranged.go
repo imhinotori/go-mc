@@ -131,8 +131,9 @@ func (g *rangedBowAttackGoal) tick(t *TickLoop, e *Entity) {
 	}
 
 	targetDistSqr := distanceToSqrPlayer(target, e)
-	// hasLineOfSight: v1 cited constant true (no sensing subsystem). seeTime therefore only counts up.
-	hasLineOfSight := true
+	// hasLineOfSight: the real per-tick-cached raycast (sensing.go, divergence C-4). seeTime now
+	// tracks true visibility, so a skeleton behind a wall stops closing/firing until it sees the target.
+	hasLineOfSight := t.sensingHasLineOfSight(e, target)
 	hadLineOfSight := g.seeTime > 0
 	if hasLineOfSight != hadLineOfSight {
 		g.seeTime = 0

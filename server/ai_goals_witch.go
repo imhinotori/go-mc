@@ -87,7 +87,7 @@ func (g *rangedAttackGoal) tick(t *TickLoop, e *Entity) {
 		return
 	}
 	targetDistSqr := distanceToSqrPlayer(target, e)
-	hasLineOfSight := true // v1 always-true stub
+	hasLineOfSight := t.sensingHasLineOfSight(e, target) // real per-tick-cached raycast (C-4)
 	if hasLineOfSight {
 		g.seeTime++
 	} else {

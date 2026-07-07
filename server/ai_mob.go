@@ -45,6 +45,12 @@ type mobAI struct {
 	// stays byte-identical). Cite Mob.serverAiStep (the targetSelector.tick BEFORE goalSelector.tick).
 	targetSelector goalSelector
 
+	// sense is the mob's ported net.minecraft.world.entity.ai.sensing.Sensing (sensing.go): the
+	// per-tick line-of-sight memo the attack/target/ranged goals consult before firing (divergence
+	// C-4). Zero value is valid (lazily initialized on the first hasLineOfSight query); a pig never
+	// queries it, so it stays untouched on the pig oracle path. Tick-owned (TICK-05).
+	sense sensing
+
 	// navigation is the mob's ported GroundPathNavigation (navigation.go, Plan 07-02): the per-
 	// mob path follower. serverAiStep CONSUMES wantTarget below — when a MOVE goal sets a new
 	// wantTarget, it calls navigation.requestPath (snapshot -> computePath -> Path), then

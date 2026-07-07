@@ -120,7 +120,7 @@ func (g *rangedCrossbowAttackGoal) tick(t *TickLoop, e *Entity) {
 	if target == nil {
 		return
 	}
-	hasLineOfSight := true // v1 stub (no sensing)
+	hasLineOfSight := t.sensingHasLineOfSight(e, target) // real per-tick-cached raycast (C-4)
 	hadLineOfSight := g.seeTime > 0
 	if hasLineOfSight != hadLineOfSight {
 		g.seeTime = 0

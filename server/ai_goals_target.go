@@ -217,11 +217,11 @@ func (g *nearestAttackableTargetGoal) canUse(t *TickLoop, e *Entity) bool {
 // applies the SAME radius as a sphere bound (the player scan the lookAtPlayerGoal/world.nearest_player
 // seam already uses). NO RNG.
 //
+// mustSee line-of-sight (divergence C-4): TargetingConditions.forCombat() carries a LoS check, now
+// REAL — the player branch below gates the acquired candidate on t.sensingHasLineOfSight (a player
+// behind a wall is not acquired). NO RNG (the raycast is deterministic).
+//
 // CITE-DEFERRED sub-behavior (recorded, NEVER silently dropped):
-//   - mustSee line-of-sight: TargetingConditions.forCombat() carries a LoS check; no raycast/LoS
-//     subsystem exists in v1 (the passive goals have no LoS check either), so the LoS gate is a cited
-//     stub equal to "visible" — every player in FOLLOW_RANGE is acquirable. Upgrade: gate on a real
-//     hasLineOfSight raycast when sensing lands (35-JARNOTES OPEN: TargetingConditions).
 //   - the TargetingConditions team/invisibility/selector filters: v1 has no teams/invisibility; the
 //     range bound is the only active filter, the rest are cited no-ops.
 //
@@ -296,8 +296,16 @@ func (g *nearestAttackableTargetGoal) findTarget(t *TickLoop, e *Entity) {
 		// field (refreshDimensions notes the cited eye-height gap), so the scan anchors at the mob feet y
 		// — the same anchor lookAtPlayerGoal/nearestPlayerWithin use. The FOLLOW_RANGE bound is faithful.
 		if id, ok := nearestPlayerIDAt(t, e.x, e.y, e.z, follow); ok {
-			g.target = id
-			return
+			// mustSee (TargetingConditions.forCombat carries a line-of-sight check): the acquired
+			// player is only a valid target if the mob can SEE it (divergence C-4). A player behind a
+			// wall inside FOLLOW_RANGE is NOT acquired — 1:1 with getNearestEntity filtering on the
+			// forCombat conditions' hasLineOfSight test. If blocked, fall through to no target.
+			//	[VERIFIED javap TargetingConditions.forCombat(): checkLineOfSight defaults true; test()
+			//	 runs attacker.getSensing().hasLineOfSight(target) as the final gate.]
+			if p := t.playerByEntityID(id); p != nil && t.sensingHasLineOfSight(e, p) {
+				g.target = id
+				return
+			}
 		}
 	}
 	g.target = 0

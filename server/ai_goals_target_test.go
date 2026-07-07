@@ -117,7 +117,10 @@ func TestNearestAttackableTargetGateUsesTen(t *testing.T) {
 // FOLLOW_RANGE is acquired (canUse true, target set), and start() commits it to mobAI.getTarget(). A
 // player OUTSIDE follow range is not acquired.
 func TestNearestAttackableTargetAcquiresPlayer(t *testing.T) {
-	loop := NewTickLoop(newFakeClock())
+	// A world is required now that findTarget gates the acquired player on line of sight (C-4): the
+	// physics loop wires a ChunkManager, and with no blocks placed the eye-to-eye ray is clear air
+	// (unloaded/empty cells contribute no collider), so an in-range player is visible and acquired.
+	loop, _ := newPhysicsLoop()
 	e := targetTestMob(7010, 8.5, 64, 8.5)
 	follow := e.getAttributeValue(attribute.FollowRange)
 	if follow <= 0 {
@@ -140,8 +143,8 @@ func TestNearestAttackableTargetAcquiresPlayer(t *testing.T) {
 		t.Fatalf("start() must commit the target to mobAI.getTarget(): got %d, want %d", e.ai.getTarget(), p.entityID)
 	}
 
-	// A player OUTSIDE follow range is not acquired.
-	loop2 := NewTickLoop(newFakeClock())
+	// A player OUTSIDE follow range is not acquired (the range gate rejects before LoS is consulted).
+	loop2, _ := newPhysicsLoop()
 	addTestPlayer(loop2, 9101, 8.5, 64, 8.5+follow+5)
 	e2 := targetTestMob(7011, 8.5, 64, 8.5)
 	g2 := newNearestAttackableTargetGoal()

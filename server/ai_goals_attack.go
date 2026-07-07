@@ -307,7 +307,7 @@ func (g *meleeAttackGoal) tick(t *TickLoop, e *Entity) {
 //	[VERIFIED javap MeleeAttackGoal.checkAndPerformAttack: canPerformAttack ifeq return;
 //	 resetAttackCooldown; mob.swing(MAIN_HAND); mob.doHurtTarget(getServerLevel(mob), target).]
 func (g *meleeAttackGoal) checkAndPerformAttack(t *TickLoop, e *Entity, target *tickPlayer) {
-	if !g.canPerformAttack(e, target) {
+	if !g.canPerformAttack(t, e, target) {
 		return
 	}
 	g.resetAttackCooldown()
@@ -331,17 +331,21 @@ func (g *meleeAttackGoal) checkAndPerformAttack(t *TickLoop, e *Entity, target *
 }
 
 // canPerformAttack ports MeleeAttackGoal.canPerformAttack: isTimeToAttack() (ticksUntilNextAttack <= 0)
-// && isWithinMeleeAttackRange(target) && getSensing().hasLineOfSight(target). The LoS half is a cited
-// no-op in v1 (no sensing/LoS subsystem — every in-reach target is visible), leaving the cooldown +
-// reach gate. NO RNG.
+// && isWithinMeleeAttackRange(target) && getSensing().hasLineOfSight(target). The LoS half is now a
+// REAL per-tick-cached raycast (sensing.go, divergence C-4): a mob will NOT swing at a target it cannot
+// see (a wall between eye and target blocks the attack), 1:1 with the jar. NO RNG (the raycast is
+// deterministic; the per-tick memo draws nothing).
 //
 //	[VERIFIED javap MeleeAttackGoal.canPerformAttack: isTimeToAttack ifeq false;
 //	 isWithinMeleeAttackRange ifeq false; getSensing().hasLineOfSight ifeq false; true.]
-func (g *meleeAttackGoal) canPerformAttack(e *Entity, target *tickPlayer) bool {
+func (g *meleeAttackGoal) canPerformAttack(t *TickLoop, e *Entity, target *tickPlayer) bool {
 	if g.ticksUntilNextAttack > 0 { // !isTimeToAttack()
 		return false
 	}
-	return isWithinMeleeAttackRange(e, target)
+	if !isWithinMeleeAttackRange(e, target) {
+		return false
+	}
+	return t.sensingHasLineOfSight(e, target) // getSensing().hasLineOfSight(target)
 }
 
 // resetAttackCooldown ports MeleeAttackGoal.resetAttackCooldown: ticksUntilNextAttack =
