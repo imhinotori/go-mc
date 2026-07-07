@@ -269,6 +269,12 @@ func (t *TickLoop) tickModelAnimator(e *Entity) {
 	// (1) M2 coordinate mirror: keep every bone's server x/y/z on the base (tracker distance + G.1 AABBs).
 	t.tickModelRig(e)
 
+	// (1a) MODEL-M6 (spec G.4): apply pose-driven REAL dimensions. When the mob's active nav-state changes
+	// and the model declares state_dims for it, this resizes the ACTUAL collision/hitbox AABB via
+	// refreshDimensions (the native-advantage payoff a client-illusion plugin cannot do). A no-op for a
+	// model without state_dims (the applier early-returns), so an M2/M3/M4-only rig is unaffected.
+	t.tickModelPoseDimensions(e)
+
 	a := m.animator
 
 	// (1b) MODEL-M4 nav-state selector: pick the default clip from the mob's REAL AI (idle/walk/run/

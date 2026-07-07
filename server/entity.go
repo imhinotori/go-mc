@@ -1496,6 +1496,23 @@ func (e *Entity) isBaby() bool { return e.breedAge < 0 }
 //	[VERIFIED javap Pig.getDefaultDimensions: isBaby() ? BABY_DIMENSIONS : super; BABY_DIMENSIONS is the
 //	 adult dims scaled 0.5 — so baby width/height = adultWidth/adultHeight * babyDimensionScale.]
 func (e *Entity) refreshDimensions() {
+	// MODEL-M6 (spec G.4): a declared model whose ACTIVE nav-state carries a real bounding-box override
+	// resizes the mob's ACTUAL collision/hitbox AABB -- the native-advantage payoff (a Bukkit plugin can
+	// only swap the cosmetic Pose byte; the server box never moves for it). This is the Sulfur analogue of
+	// vanilla getDimensions(getPose()): the active model state is the "pose", modelPoseDimensions is the
+	// per-pose EntityDimensions table. Gated on a NON-NIL override -- a modelless mob (e.model==nil) and a
+	// model without state_dims both fall through to the vanilla baby/adult logic below, byte-identical to
+	// the pre-M6 path (the pig oracle draws nothing new; it never has e.model). The override wins over
+	// baby-scaling exactly as a vanilla per-Pose dims entry wins over the type default.
+	//
+	//	[VERIFIED javap Entity.refreshDimensions: dimensions = getDimensions(getPose()); the pose selects
+	//	 the EntityDimensions, then makeBoundingBox rebuilds the AABB from (width,height). Sulfur's AABB()
+	//	 derives from width/height, so writing them here IS the makeBoundingBox recompute.]
+	if w, h, ok := modelPoseDimensions(e); ok {
+		e.width = float64(w)
+		e.height = float64(h)
+		return
+	}
 	if e.isBaby() {
 		e.width = e.adultWidth * babyDimensionScale
 		e.height = e.adultHeight * babyDimensionScale

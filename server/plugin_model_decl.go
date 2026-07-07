@@ -100,6 +100,27 @@ type modelDecl struct {
 	// "run"/"attack"/"death" auto-binds to the same-named state. Nil/empty ⇒ the model has no state
 	// machine (a static or purely-explicit rig): the selector never swaps a default clip in. Immutable.
 	states map[modelState]string
+	// stateDims binds a nav-state (idle/walk/run/attack/death) to a REAL server-side bounding-box override
+	// (width, height in blocks) -- the MODEL-M6 (spec G.4) native-advantage payoff. When the mob's active
+	// nav state has an entry here, refreshDimensions resizes the mob's ACTUAL collision/hitbox AABB (not
+	// just the cosmetic Display transform), so e.g. an "attack" lunge/crouch state genuinely shrinks the
+	// box a projectile must hit -- a thing a Bukkit client-illusion plugin structurally cannot do (it can
+	// only swap the cosmetic Pose byte; the server box never moves for it). Populated at declare_model from
+	// the optional state_dims={"attack": (0.9, 0.5), ...} dict; nil/empty means the model overrides no
+	// dimensions and every state keeps the mob's default (baby/adult) box, byte-identical to the pre-M6
+	// path. Each value is [2]float32{width, height}. Immutable after load; shared by every spawned mob.
+	//
+	// VANILLA PRECEDENT: net.minecraft.world.entity.Entity.refreshDimensions() -> getDimensions(getPose())
+	// -> EntityDimensions -> new width/height is exactly how vanilla resizes the REAL AABB by pose (the
+	// crouching/sleeping player, EnderDragonPart's fixed per-part size). The active model state is the
+	// Sulfur analogue of the vanilla Pose; stateDims is its per-pose EntityDimensions table.
+	//
+	//	[VERIFIED javap Entity.refreshDimensions: dimensions = getDimensions(getPose()); eyeHeight =
+	//	 dimensions.eyeHeight(); reapplyPosition(). getDimensions(Pose) returns type.getDimensions();
+	//	 EntityDimensions.makeBoundingBox builds a box (width x height) centered on x/z with feet at y --
+	//	 Sulfur's Entity.AABB() derives the identical box from width/height, so writing width/height IS the
+	//	 makeBoundingBox recompute; Sulfur caches no AABB, so reapplyPosition is a structural no-op.]
+	stateDims map[modelState][2]float32
 	// caps is the owning plugin's capability set at capture time (mirrors mobDecl.caps). Unused in M2
 	// (declare_model's own gate already fired at parse) but carried for the M4 animate-capability wiring.
 	caps capSet
@@ -183,6 +204,14 @@ type modelInstance struct {
 	// animator is the M3 animator (clip clock + pending clip + keyframe dispatch). RESERVED slot — nil
 	// in M2 (a static rig has no clock). Kept here so M3 attaches, never restructures modelInstance.
 	animator *modelAnimator
+	// poseState is the LAST nav-state (MODEL-M6, spec G.4) whose real dimensions were applied to the base
+	// mob, and poseInit marks it as valid. tickModelPoseDimensions compares the current computeModelState
+	// against poseState and, on a CHANGE for a model that declares state_dims, calls refreshDimensions so
+	// the mob's ACTUAL AABB resizes to the new state's box (and restores the default box when the active
+	// state has no override). Zero-cost for a model without state_dims (the applier early-returns). This is
+	// the per-mob "current pose" the vanilla Entity keeps in DATA_POSE; here it drives the real hitbox.
+	poseState modelState
+	poseInit  bool
 }
 
 // ----------------------------------------------------------------------------------------------
@@ -586,12 +615,13 @@ func (r *modelRegistry) declareModelBuiltin() *starlark.Builtin {
 		args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 		var name string
 		var bonesList, animationsList *starlark.List
-		var statesDict *starlark.Dict
+		var statesDict, stateDimsDict *starlark.Dict
 		if err := starlark.UnpackArgs(b.Name(), args, kwargs,
 			"name", &name,
 			"bones", &bonesList,
 			"animations?", &animationsList,
 			"states?", &statesDict,
+			"state_dims?", &stateDimsDict,
 		); err != nil {
 			return nil, err
 		}
@@ -642,11 +672,16 @@ func (r *modelRegistry) declareModelBuiltin() *starlark.Builtin {
 		if err != nil {
 			return nil, fmt.Errorf("declare_model %q: %w", name, err)
 		}
+		stateDims, err := buildModelStateDims(stateDimsDict)
+		if err != nil {
+			return nil, fmt.Errorf("declare_model %q: %w", name, err)
+		}
 		r.byName[name] = &modelDecl{
 			name:       name,
 			bones:      bones,
 			animations: clips,
 			states:     states,
+			stateDims:  stateDims,
 			caps:       r.caps,
 		}
 		return starlark.None, nil
@@ -746,6 +781,45 @@ func buildModelStates(statesDict *starlark.Dict, clips []animClip) (map[modelSta
 	}
 	if len(out) == 0 {
 		return nil, nil // no state machine — static / explicit-only rig
+	}
+	return out, nil
+}
+
+// buildModelStateDims builds the frozen state->dimensions (width,height) binding (MODEL-M6, spec G.4)
+// from the optional state_dims={"attack": (0.9, 0.5), ...} dict. Each key MUST be a known state
+// (idle/walk/run/attack/death) and each value MUST be a (width, height) tuple/list of two POSITIVE
+// numbers. An unknown state key, a malformed tuple, or a non-positive size is a loud load error (a
+// mis-bound state or a zero box would silently break the mob's real hitbox -- reject it at
+// declare_model). Returns nil when the dict is absent/empty -- the model overrides no dimensions and
+// refreshDimensions keeps its default (baby/adult) box for every state, byte-identical to the pre-M6
+// path. UNLIKE states=, there is NO naming-convention fallback: a real-collision override is an
+// explicit opt-in only (never inferred), so a model without state_dims never touches the AABB.
+//
+// This is the declaration side of the vanilla getDimensions(Pose) table: state_dims IS the per-pose
+// EntityDimensions map (Entity.refreshDimensions -> getDimensions(getPose()) -> EntityDimensions).
+func buildModelStateDims(dict *starlark.Dict) (map[modelState][2]float32, error) {
+	if dict == nil || dict.Len() == 0 {
+		return nil, nil
+	}
+	out := make(map[modelState][2]float32, dict.Len())
+	for _, item := range dict.Items() {
+		key, ok := starlark.AsString(item[0])
+		if !ok {
+			return nil, fmt.Errorf("state_dims: key must be a string, got %s", item[0].Type())
+		}
+		st, ok := modelStateByName[key]
+		if !ok {
+			return nil, fmt.Errorf("state_dims: unknown state %q (valid: idle, walk, run, attack, death)", key)
+		}
+		w, h, err := parseHitboxTuple(item[1])
+		if err != nil {
+			return nil, fmt.Errorf("state_dims[%q]: %w", key, err)
+		}
+		if w == 0 && h == 0 {
+			// parseHitboxTuple returns (0,0) only for a nil value; a dict value is never nil.
+			return nil, fmt.Errorf("state_dims[%q]: dimensions must be a (width, height) tuple of positive numbers", key)
+		}
+		out[st] = [2]float32{w, h}
 	}
 	return out, nil
 }
