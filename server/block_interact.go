@@ -584,6 +584,13 @@ func (t *TickLoop) reconcileEdit(editor *tickPlayer, pos pk.Position, state bloc
 	// somehow carries POWERED==true (a structure/schematic restore). A normal getStateForPlacement
 	// observer is POWERED=false, so this is a no-op on ordinary placement. CITE: ObserverBlock.onPlace.
 	t.observerOnPlace(pos, state)
+	// FALLING BLOCK: Level.updateNeighborsAt + Block.onPlace -> FallingBlock.onPlace / FallingBlock
+	// .updateShape -> scheduleTick(pos, this, getDelayAfterPlace()==2). A place of a FallingBlock
+	// (sand/red_sand/gravel) at `pos`, OR a break/place that changes the support of a FallingBlock in a
+	// neighboring cell (most importantly the cell ABOVE, whose floor just changed), schedules a 2-tick
+	// FallingBlock.tick. That tick (fallingBlockTick) spawns the FallingBlockEntity if the cell below is
+	// free. This is the schedule half of the fall round-trip. CITE: FallingBlock.onPlace / updateShape.
+	t.onFallingBlockEdit(pos)
 }
 
 // broadcastBlockUpdate sends a ClientboundBlockUpdate(pos, state) to every player whose view

@@ -361,6 +361,16 @@ func (t *TickLoop) tickEntities() {
 	// cost when no primed TNT exists, so the pig oracle stream is unperturbed). CITE PrimedTnt.tick.
 	t.tickPrimedTnt()
 
+	// FALLING BLOCK: the FallingBlockEntity.tick lifecycle -- apply gravity (0.04), move along the
+	// deltaMovement, apply air drag (0.98), then (once at rest / off-world) either write the carried
+	// block state back into the landing cell or drop it as the block's item. A single ADDITIVE call
+	// inside this existing phase keeps the tick order unchanged (TestTickPhaseOrder stays green),
+	// mirroring the tickPrimedTnt seam directly above. Its body lives in falling_block.go. Placed
+	// AFTER tickPrimedTnt and BEFORE tracker.Tick so a land/break removal is reflected in this tick's
+	// near() and the tracker emits RemoveEntities promptly. falling-gated (zero cost when no falling
+	// block exists, so the pig oracle stream is unperturbed). CITE FallingBlockEntity.tick.
+	t.tickFallingBlocks()
+
 	// TNT MINECART: the MinecartTNT.tick fuse countdown → velocity-scaled explode, driven inside
 	// tickMinecarts (minecart.go) for a primed TNT minecart. No separate phase call — the minecart tick
 	// already visits it. (Comment kept here for the tick-order narrative.)
@@ -778,7 +788,7 @@ func (t *TickLoop) tickPhysics() {
 		// are stationary code-spawned entities with no motion, folded in for completeness.) Fable audit B-C1.
 		if e.isItem || e.isOrb || e.isArrow || e.isPotion || e.isThrowable ||
 			e.isHurting || e.isFishingHook || e.isFangs || e.isBolt ||
-			e.isTnt || e.isMinecart || e.isBoat {
+			e.isTnt || e.isMinecart || e.isBoat || e.isFalling {
 			continue
 		}
 

@@ -1115,6 +1115,36 @@ type Entity struct {
 	// CITE PrimedTnt.explosionPower / explode (level.explode(..., explosionPower, false, TNT)).
 	tntExplosionPower float32
 
+	// --- FALLING BLOCK (net.minecraft.world.entity.item.FallingBlockEntity) -----------------------
+	//
+	// Tick-owned plain values, set/read ONLY for a FallingBlockEntity (isFalling). A FallingBlockEntity
+	// is a NON-mob moving Entity (the sibling of the PrimedTnt / item drop): its whole behavior is the
+	// gravity (0.04) + air drag (0.98) fall plus, on landing, either setBlock(blockState) at the target
+	// cell or (when the cell won't accept it) a drop as the block's item. Zero for every non-falling
+	// entity (the falling tick gates on isFalling), so the pig oracle stream is unperturbed. CITE
+	// FallingBlockEntity.tick / getDefaultGravity (0.04) / getAirDrag (0.98).
+	//
+	// isFalling marks this entity as a FallingBlockEntity. The falling tick (gravity 0.04 + drag 0.98 +
+	// land-or-break at rest) runs ONLY for entities with this set. Set at spawn by spawnFallingBlock.
+	// The generic MOB-ONLY physics pass (tick_phases.go non-mob skip list) skips this entity
+	// (`|| e.isFalling`) so it is not double-integrated. CITE FallingBlockEntity.tick.
+	isFalling bool
+
+	// fallingBlockState is FallingBlockEntity.blockState: the block state the entity carries and, on a
+	// clean landing, writes back into the world via setBlock. Seeded at spawn from the source block's
+	// state. On break it maps to the block's item form for the drop. CITE FallingBlockEntity.blockState.
+	fallingBlockState block.StateID
+
+	// fallingTime is FallingBlockEntity.time: the age (ticks) since spawn, incremented once per tick.
+	// FallingBlockEntity.tick uses it for the "fell too long" (>100 outside world bounds, or >600)
+	// despawn guard. CITE FallingBlockEntity.time.
+	fallingTime int32
+
+	// fallingDropItem is FallingBlockEntity.dropItem (DEFAULT true): whether the entity drops its block
+	// item when it breaks (can't land) or falls too long. Every block-triggered fall carries true.
+	// CITE FallingBlockEntity.dropItem (default true).
+	fallingDropItem bool
+
 	// --- TNT MINECART (net.minecraft.world.entity.vehicle.minecart.MinecartTNT) -------------------
 	//
 	// Tick-owned plain values, set/read ONLY for a TntMinecart (isMinecart && typ==entity.TntMinecart.ID).

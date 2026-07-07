@@ -71,6 +71,16 @@ const (
 	// under: a LIT lamp that loses its neighbor signal schedules a tick 4 later (RedstoneLampBlock
 	// .neighborChanged) that, if still lit and still unpowered, clears LIT (RedstoneLampBlock.tick).
 	redstoneLampTickType blockTickType = "minecraft:redstone_lamp"
+
+	// sandTickType / redSandTickType / gravelTickType are the block ids the FallingBlock tick
+	// (FallingBlock.tick -> FallingBlockEntity.fall) is scheduled/dispatched under. Each FallingBlock
+	// schedules under its OWN block id (FallingBlock.onPlace / updateShape -> scheduleTick(pos, this,
+	// getDelayAfterPlace()==2)), so tickBlock must route all three to the shared fallingBlockTick
+	// handler. sand/red_sand are SandBlock, gravel is ColoredFallingBlock -- all extend FallingBlock.
+	// CITE: FallingBlock.onPlace / FallingBlock.tick; Blocks.SAND/RED_SAND/GRAVEL.
+	sandTickType    blockTickType = "minecraft:sand"
+	redSandTickType blockTickType = "minecraft:red_sand"
+	gravelTickType  blockTickType = "minecraft:gravel"
 )
 
 // lightningRodTickTypes is the set of block ids the lightning-rod unpower tick (LightningRodBlock.tick)
@@ -355,6 +365,14 @@ func (t *TickLoop) tickBlock(pos pk.Position, typ blockTickType) {
 				}
 			}
 		}
+	case sandTickType, redSandTickType, gravelTickType:
+		// ServerLevel.tickBlock stale guard: only tick if still a FallingBlock kind (sand/red_sand/gravel).
+		// A FallingBlock broken/replaced since the tick was scheduled fires nothing. Routes to the shared
+		// FallingBlock.tick handler (falling_block.go). CITE: ServerLevel.tickBlock (`state.is(block)`).
+		if !isFallingBlockKind(state) {
+			return
+		}
+		t.fallingBlockTick(state, pos)
 	default:
 		// Buttons schedule under their own block id (13 variants). Route any button tick to the unpress
 		// handler; the IsButton guard is the tickBlock `state.is(block)` stale check.
