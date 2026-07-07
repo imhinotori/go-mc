@@ -113,6 +113,17 @@ func isConduitBlock(s block.StateID) bool {
 	return block.StateList[s].ID() == "minecraft:conduit"
 }
 
+// isSpawnerBlock reports whether a block state is Blocks.SPAWNER (the monster-spawner block that drives a
+// SpawnerBlockEntity / BaseSpawner). The tick gate for the spawner block-entity subsystem (SPAWNER-01).
+// Spawner is a single-state block (no properties), so the check is a block-id identity via block.StateList.
+// CITE SpawnerBlock (a BaseEntityBlock whose newBlockEntity is SpawnerBlockEntity).
+func isSpawnerBlock(s block.StateID) bool {
+	if int(s) < 0 || int(s) >= len(block.StateList) {
+		return false
+	}
+	return block.StateList[s].ID() == "minecraft:spawner"
+}
+
 // isBrewingStandBlock reports whether a block state is Blocks.BREWING_STAND (the brewing-stand block that
 // drives a BrewingStandBlockEntity). The open/tick gate for the brewing-stand block-entity subsystem. CITE
 // BrewingStandBlock (an EntityBlock whose newBlockEntity is BrewingStandBlockEntity).

@@ -474,6 +474,14 @@ type TickLoop struct {
 	// tick-owned (TICK-05).
 	conduits map[pk.Position]*conduitBE
 
+	// spawners is the runtime store of MOB-SPAWNER block-entities keyed by world position (the conduits
+	// twin, SPAWNER-01). A spawner per-tick drive (spawner_block.go spawnerServerTick == BaseSpawner
+	// .serverTick) reads/writes its spawnerBE here every tick (tickWorld) - the isNearPlayer gate, the
+	// spawnDelay countdown, and the spawnCount burst that adds mobs under the maxNearbyEntities cap. A
+	// spawner registers on placement (createBlockEntityOnPlace) and ticks passively (no menu). Lazily
+	// constructed; tick-owned (TICK-05).
+	spawners map[pk.Position]*spawnerBE
+
 	// chunkSaver is the off-tick chunk-persistence consumer (SUB-PERSIST). It is nil until
 	// SetChunkSaver wires it (tests/ephemeral runs leave it nil → no chunk saves). The tick's save
 	// phase (tickChunkSave) drains the manager's dirty set, SERIALIZES each dirty/unloaded chunk ON

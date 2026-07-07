@@ -512,6 +512,17 @@ func (t *TickLoop) createBlockEntityOnPlace(pos pk.Position, state block.StateID
 		t.resolveConduit(pos)
 		return
 	}
+	if isSpawnerBlock(state) {
+		// A placed spawner gets its (default, empty mobName) SpawnerBlockEntity + an empty BE compound so
+		// the tick drive resolves it. SpawnerBlock is a BaseEntityBlock; newBlockEntity = new
+		// SpawnerBlockEntity(pos, state) whose BaseSpawner holds the ctor defaults (spawnDelay 20, etc). A
+		// placed spawner is empty until configured (a spawn egg / NBT sets the entity), so mobName is "" and
+		// the burst no-ops. Registration into t.spawners happens here (resolveSpawner). CITE SpawnerBlock.
+		empty := nbt.RawMessage{Type: nbt.TagCompound, Data: []byte{0x00}}
+		t.world().SetBlockEntityAt(pos, block.EntityTypes["minecraft:mob_spawner"], empty, dimMinY)
+		t.resolveSpawner(pos, "")
+		return
+	}
 	if isSignBlock(state) {
 		// SignBlock is a BaseEntityBlock; newBlockEntity = new SignBlockEntity(pos, state) (empty:
 		// default front/back SignText, not waxed). Write an empty BE compound so the open-editor +

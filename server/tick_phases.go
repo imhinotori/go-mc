@@ -164,6 +164,13 @@ func (t *TickLoop) tickWorld() {
 	// effect applied). Nil map = no-op (no conduit placed). CITE: ConduitBlock.getTicker ->
 	// ConduitBlockEntity.serverTick.
 	t.tickConduits()
+	// SUB-BLOCKENTITY: tick every MOB-SPAWNER block-entity (SpawnerBlockEntity.serverTick ->
+	// BaseSpawner.serverTick - the isNearPlayer gate, the spawnDelay countdown, and the spawnCount burst
+	// under the maxNearbyEntities cap). Keyed by world position (t.spawners, global - not per-region), so
+	// they tick ONCE globally here (the tickConduits twin). A spawner with no nearby player / at cap ticks
+	// to a cheap no-op. Nil map = no-op (no spawner placed). CITE SpawnerBlock.getTicker ->
+	// SpawnerBlockEntity.serverTick.
+	t.tickSpawners()
 	// SUB-PERSIST: the periodic chunk-save pass (every chunkSaveIntervalTicks) stays GLOBAL — it
 	// serializes the SHARED world's dirty chunks once, not per region. It lives INSIDE this existing
 	// phase so no new phase is added to the fixed tick order (TestTickPhaseOrder stays green). A
