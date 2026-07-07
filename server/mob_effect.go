@@ -46,6 +46,11 @@ const (
 	effectHaste      = "minecraft:haste"      // MobEffects.HASTE      (ATTACK_SPEED       +0.1 ADD_MULTIPLIED_TOTAL)
 	effectResistance = "minecraft:resistance" // MobEffects.RESISTANCE (no attribute modifier; damage-reduction)
 	effectJumpBoost  = "minecraft:jump_boost" // MobEffects.JUMP_BOOST (SAFE_FALL_DISTANCE +1.0 ADD_VALUE)
+	// MOVEMENT effect ids read by the mob physics path (server/physics.go tickPhysics + jump.go). These
+	// have no attribute modifier — they are read directly by LivingEntity.getEffectiveGravity / travelInAir
+	// / getJumpBoostPower. VERIFIED CFR MobEffects.SLOW_FALLING / LEVITATION registrations (plain effects).
+	effectSlowFalling = "minecraft:slow_falling" // MobEffects.SLOW_FALLING (getEffectiveGravity min 0.01)
+	effectLevitation  = "minecraft:levitation"   // MobEffects.LEVITATION  (travelInAir upward drift)
 	effectStrength   = "minecraft:strength"   // MobEffects.STRENGTH   (ATTACK_DAMAGE      +3.0 ADD_VALUE)
 	// CONDUIT effect id (CONDUIT-01, ConduitBlockEntity.applyEffects): the beneficial power an active conduit
 	// grants a submerged/rained-on player in range. VERIFIED CFR MobEffects.CONDUIT_POWER =
@@ -502,6 +507,22 @@ func entityHasEffect(e *Entity, id string) bool {
 	}
 	_, ok := e.mobEffects[id]
 	return ok
+}
+
+// entityEffectAmplifier is the port of LivingEntity.getEffect(Holder).getAmplifier() for a mob: the
+// 0-based amplifier of the entity's active effect (Levitation I = 0, Jump Boost II = 1). Returns
+// (0, false) when the mob does not carry the effect — callers gate on the returned ok (or entityHasEffect)
+// before trusting the amplifier, exactly as the vanilla `hasEffect(...) ? getEffect(...).getAmplifier()`
+// guard requires. Sibling of playerEffectAmplifier over the entity-side mobEffects map.
+func entityEffectAmplifier(e *Entity, id string) (int, bool) {
+	if e == nil || e.mobEffects == nil {
+		return 0, false
+	}
+	inst, ok := e.mobEffects[id]
+	if !ok {
+		return 0, false
+	}
+	return inst.amplifier, true
 }
 
 // addEntityEffect ports LivingEntity.addEffect for a mob self-target: an INSTANT effect (HEALING) applies

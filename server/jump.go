@@ -144,6 +144,23 @@ func jumpInLiquid(e *Entity) {
 	e.vy += fluidJumpImpulse
 }
 
+// entityJumpBoostPower is the port of LivingEntity.getJumpBoostPower() for a mob: JUMP_BOOST raises the
+// land-jump power by 0.1 per amplifier level. Returns 0 when the mob has no jump_boost effect — so a
+// default mob's getJumpPower() is exactly 0.42 (the pig oracle is unperturbed). Read by jumpFromGround.
+//
+// Player jumps are CLIENT-authoritative (the client applies its own jump-boost to the jump impulse and
+// SENDS the resulting position), so the server never computes a player jump — this is a MOB-only read.
+//
+//	[VERIFIED javap LivingEntity.getJumpBoostPower():
+//	   return hasEffect(JUMP_BOOST) ? 0.1f * (float)(getEffect(JUMP_BOOST).getAmplifier() + 1) : 0.0f;
+//	 (ldc_w 0.1f; getAmplifier; i2f; fconst_1; fadd; fmul.)]
+func entityJumpBoostPower(e *Entity) float32 {
+	if amp, ok := entityEffectAmplifier(e, effectJumpBoost); ok {
+		return 0.1 * float32(amp+1)
+	}
+	return 0.0
+}
+
 // jumpFromGround is LivingEntity.jumpFromGround: the land jump. f = getJumpPower() (= 0.42); if it is
 // at/below the epsilon do nothing; else set vy = max(f, vy) (vanilla uses Math.max(f, dm.y), NOT a
 // plain assignment — a mob already rising faster than the jump keeps its speed); then, if sprinting,
@@ -163,12 +180,18 @@ func jumpInLiquid(e *Entity) {
 //	                        addDeltaMovement(new Vec3(-sin(yr)*0.2, 0.0, cos(yr)*0.2)); }
 //	   this.needsSync = true;.]
 func jumpFromGround(e *Entity) {
-	const f = baseJumpPower // getJumpPower() == 0.42f for a default living entity (cited above)
-	if f <= jumpPowerEpsilon {
+	// getJumpPower() == (float)getAttributeValue(JUMP_STRENGTH)*1.0f*getBlockJumpFactor() +
+	// getJumpBoostPower(). baseJumpPower folds the first term (0.42, cited above); entityJumpBoostPower
+	// adds the JUMP_BOOST contribution (0 when the mob has no jump_boost — a bare mob keeps 0.42, so the
+	// pig oracle is unperturbed). CITE javap LivingEntity.getJumpPower(float): the fadd of getJumpBoostPower.
+	// getJumpPower() returns a FLOAT: (float)0.42 + getJumpBoostPower() (also a float), so the fold
+	// is done in float32 exactly like the jar before the `(double)f` widening in the max below.
+	f := float32(baseJumpPower) + entityJumpBoostPower(e) // getJumpPower() for this mob (float)
+	if f <= float32(jumpPowerEpsilon) {
 		return
 	}
-	// setDeltaMovement(x, max(f, y), z) — vanilla preserves a faster-than-jump upward velocity.
-	e.vy = math.Max(f, e.vy)
+	// setDeltaMovement(x, max((double)f, y), z) — vanilla preserves a faster-than-jump upward velocity.
+	e.vy = math.Max(float64(f), e.vy)
 
 	// isSprinting() — const false for a v1 mob (no sprint flag). The yaw-aligned 0.2 horizontal nudge
 	// is the vanilla sprint-jump bonus; it is a no-op until a mob sprint flag exists. Structured to

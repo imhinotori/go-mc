@@ -819,7 +819,34 @@ func (t *TickLoop) tickPhysics() {
 		} else {
 			// Dry (travelInAir) branch: accelerate downward, then air drag so vertical speed
 			// converges to a terminal velocity (06-RESEARCH A1 — tunable, wire-irrelevant constants).
-			e.vy -= gravityPerTick
+			//
+			// MOVEMENT EFFECTS (LivingEntity.travelInAir + getEffectiveGravity, javap-cited):
+			//   - LEVITATION: instead of subtracting gravity, drift UP:
+			//       d5 += (0.05 * (amplifier + 1) - deltaMovement.y) * 0.2
+			//     This REPLACES the gravity subtraction entirely (the `else` gravity branch in
+			//     travelInAir is only taken when the mob has NO levitation). CITE javap
+			//     LivingEntity.travelInAir: getEffect(LEVITATION) != null ? d5 += (0.05*(amp+1) -
+			//     vec.y)*0.2 : d5 -= getEffectiveGravity().
+			//   - SLOW_FALLING: gravity is reduced. getEffectiveGravity() = (deltaMovement.y <= 0 &&
+			//     hasEffect(SLOW_FALLING)) ? min(getGravity(), 0.01) : getGravity(). getGravity() is
+			//     the GRAVITY attribute (default gravityPerTick, 0.08). CITE javap
+			//     LivingEntity.getEffectiveGravity.
+			// A mob with NEITHER effect takes the IDENTICAL old path (grav then air drag), so the
+			// pig oracle (no effects) is byte-for-byte unperturbed.
+			if amp, ok := entityEffectAmplifier(e, effectLevitation); ok {
+				// travelInAir LEVITATION branch: upward drift overriding gravity.
+				e.vy += (0.05*float64(amp+1) - e.vy) * 0.2
+			} else {
+				// getEffectiveGravity(): SLOW_FALLING clamps gravity to 0.01 while falling.
+				grav := gravityPerTick // getGravity() == GRAVITY attribute default (0.08)
+				if e.vy <= 0 && entityHasEffect(e, effectSlowFalling) {
+					// getEffectiveGravity(): min(getGravity(), 0.01). Inline min (no math import).
+					if grav > 0.01 {
+						grav = 0.01
+					}
+				}
+				e.vy -= grav
+			}
 			e.vy *= airDrag
 
 			// Horizontal friction: a moving entity slows instead of sliding forever.
