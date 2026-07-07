@@ -27,12 +27,18 @@ import (
 	"github.com/imhinotori/sulfur/level/component"
 )
 
-// compTool / compWeapon are the minecraft:tool / minecraft:weapon data-component wire type ids
-// (level/component components table indices 28 and 29).
+// compTool / compWeapon / compEquippable are the minecraft:tool / minecraft:weapon / minecraft:equippable
+// data-component wire type ids (level/component components table indices 28, 29, 32).
 const (
-	compTool   = 28
-	compWeapon = 29
+	compTool       = 28
+	compWeapon     = 29
+	compEquippable = 32
 )
+
+// armorMenuSlots are the four worn-armor slots in the 46-slot player inventory window (head=5, chest=6,
+// legs=7, feet=8), in the FEET,LEGS,CHEST,HEAD order Player.hurtArmor passes to doHurtEquipment. Cite
+// Player.hurtArmor(source, amount, EquipmentSlot.FEET, LEGS, CHEST, HEAD).
+var armorMenuSlots = [4]int16{8, 7, 6, 5} // FEET, LEGS, CHEST, HEAD
 
 // enchantDurabilityChange is the EnchantmentHelper.processDurabilityChange seam: the Unbreaking-style
 // reduction of a positive durability hit. v1 has no durability enchantment effect wired, so it returns the
@@ -148,6 +154,54 @@ func (t *TickLoop) postHurtEnemyDurability(p *tickPlayer) {
 		return
 	}
 	t.hurtHeldItem(p, inv, dmg) // hurtAndBreak(weapon.itemDamagePerAttack(), attacker, MAINHAND)
+}
+
+// doHurtEquipment ports LivingEntity.doHurtEquipment for the player-armor path (Player.hurtArmor passes
+// FEET,LEGS,CHEST,HEAD): compute the per-slot armor durability damage = max(1, floor(damage/4)) and, for
+// each worn piece whose EQUIPPABLE component has damage_on_hurt=true and is a damageable item (and can be
+// hurt by the source — v1 has no bypassing damage type so this is always true for a combat hit),
+// hurtAndBreak(armorDamage, wearer, slot). A broken piece shrinks to empty. Creative wears nothing. Cite
+// LivingEntity.doHurtEquipment (armorDamage = Mth.floor(Math.max(1.0F, damage/4.0F))).
+func (t *TickLoop) doHurtEquipment(p *tickPlayer, damage float32) {
+	if damage <= 0 || p == nil || p.gameMode == gameModeCreative {
+		return
+	}
+	// armorDamage = (int) Math.max(1.0F, damage / 4.0F). The f2i truncation matches Mth.floor for a
+	// positive value.
+	armorDamage := int(maxF32(1.0, damage/4.0))
+	inv := ensureInventory(p)
+	changed := false
+	before := inv.snapshot()
+	for _, slot := range armorMenuSlots {
+		cur := inv.get(slot)
+		if stackEmpty(cur) {
+			continue
+		}
+		pt := component.DecodePatch(cur)
+		eq, ok := pt.Get(compEquippable).(*component.Equippable)
+		if !ok || !bool(eq.Damageable) { // getEquippable() != null && damageOnHurt()
+			continue
+		}
+		if !stackIsDamageableItem(cur) { // isDamageableItem()
+			continue
+		}
+		// canBeHurtBy(source): v1 has no fire/etc-immune armor damage types wired — always true for a
+		// combat hit (a cited constant, structured to become a real is-immune-tag read later).
+		next, _ := t.stackHurtAndBreak(cur, armorDamage, false)
+		inv.set(slot, next)
+		changed = true
+	}
+	if changed {
+		t.broadcastInventoryChanges(p, inv, before)
+	}
+}
+
+// maxF32 is Math.max for float32 (the armor-damage max(1.0F, damage/4.0F)).
+func maxF32(a, b float32) float32 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // hurtHeldItem is the player-facing hurtAndBreak for the MAIN-HAND stack (the common caller: flint&steel,

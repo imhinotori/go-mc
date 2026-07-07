@@ -478,7 +478,11 @@ func (t *TickLoop) getDamageAfterArmorAbsorb(p *tickPlayer, amount float32) floa
 	// always applies (the common melee/fall case).
 	const bypassesArmor = false
 	if !bypassesArmor {
-		// hurtArmor(source, amount): armor-durability damage — v1 stub (no armor items to damage).
+		// hurtArmor(source, amount) -> Player.hurtArmor -> doHurtEquipment(FEET,LEGS,CHEST,HEAD): each worn
+		// damageable armor piece with damage_on_hurt takes max(1, floor(amount/4)) durability and breaks at
+		// max. v1 has no BYPASSES_ARMOR source so this always runs for a combat hit; the source-immune
+		// (canBeHurtBy) check is a cited constant-true (durability.go). Runs BEFORE the absorb curve, as vanilla.
+		t.doHurtEquipment(p, amount)
 		// getArmorValue() == Mth.floor(getAttributeValue(ARMOR)); ARMOR_TOUGHNESS read as a double
 		// then d2f, exactly as vanilla.
 		armorValue := float32(p.getArmorValue())
