@@ -209,6 +209,15 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 	if e.typ == entity.Silverfish.ID {
 		t.silverfishNotifyHurt(e, src)
 	}
+
+	// SKILLS-01 (mob_skills.go): the declared-skill "damaged" trigger — the MythicMobs ~onDamaged
+	// analogue. Fires AFTER the shared hit fully landed (the per-type post-hurt hooks above are its
+	// siblings), SURVIVOR only (a lethal hit routes the "death" trigger through dieEntity instead).
+	// Gated on e.skills != nil: every vanilla mob (the pig oracle) pays one nil-check and NOTHING
+	// else — zero new draws on any vanilla stream.
+	if e.skills != nil && e.health > 0 {
+		t.fireMobSkillTrigger(e, triggerDamaged)
+	}
 }
 
 // playMobHurtSound is the port of LivingEntity.playHurtSound(DamageSource) -> makeSound(getHurtSound(

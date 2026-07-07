@@ -690,6 +690,15 @@ func (t *TickLoop) tickAI() {
 		if e.typ == entity.Villager.ID {
 			t.villagerBrainTick(e)
 		}
+		// SKILLS-01 (mob_skills.go): the declared-skill TIMER tick — the MythicMobs ~onTimer analogue,
+		// interpreted as pure data by the Go hot path (ZERO starlark.Calls, the skills-are-data
+		// invariant). Gated PER FIELD (e.skills != nil), not per type: only a mob whose declaration
+		// carries skills has a runner; every vanilla mob (the pig oracle) pays exactly this nil-check —
+		// no new work, no new RNG draws (the chance gate draws only on the declaring mob's own stream,
+		// and only when a skill declares chance < 1.0).
+		if e.skills != nil {
+			t.tickMobSkills(e)
+		}
 	}
 
 	// Throttled natural spawner: vanilla attempts every tick (most no-op under cap); v1 runs the

@@ -12,8 +12,9 @@ import "fmt"
 // capSet is a bitset of the capabilities a plugin has been granted by its manifest `capabilities`
 // field. It is the least-privilege grant the handle enforces per-op. Stored on each handle
 // (entityHandle/worldHandle) so the check is local to the op — no back-reference to the manifest at
-// call time.
-type capSet uint8
+// call time. uint16 (widened from uint8 with the SKILL verbs) leaves headroom for the reserved
+// skills.spawn / skills.projectile / models.declare verbs the design doc plans.
+type capSet uint16
 
 const (
 	// capEntitiesRead grants reading entity state (health/pos/type/on_ground/velocity/attribute).
@@ -26,12 +27,21 @@ const (
 	capWorldWrite
 	// capNav grants issuing navigation requests (move_to routes through the nav requestPath seam).
 	capNav
+	// capSkillDamage grants the declared-skill "damage" mechanic (plugin_skill_decl.go): a skill that
+	// deals damage through the ported applyDamage/applyDamageEntity paths. Enforced at LOAD (skills are
+	// data — a mechanic("damage") under a manifest without skills.damage is a loud load error, the
+	// fail-closed twin of the handle-op denial).
+	capSkillDamage
+	// capSkillEffects grants the declared-skill "effect" mechanic: applying mob effects (potion buffs/
+	// debuffs) through addPlayerEffect/addEntityEffect. Enforced at LOAD like capSkillDamage.
+	capSkillEffects
 )
 
 // capAll is every capability — used by tests that exercise the handle ops without a denial, and by a
 // trusted/internal handle. Wave 2 derives a real per-plugin capSet from the manifest via
 // parseCapabilities.
-const capAll = capEntitiesRead | capEntitiesWrite | capWorldRead | capWorldWrite | capNav
+const capAll = capEntitiesRead | capEntitiesWrite | capWorldRead | capWorldWrite | capNav |
+	capSkillDamage | capSkillEffects
 
 // capByName maps a manifest capability STRING to its bit. The LOCKED vocabulary (CONTEXT decision 4):
 // entities.read / entities.write / world.read / world.write / nav. A manifest capability not in this
@@ -43,6 +53,8 @@ var capByName = map[string]capSet{
 	"world.read":     capWorldRead,
 	"world.write":    capWorldWrite,
 	"nav":            capNav,
+	"skills.damage":  capSkillDamage,
+	"skills.effects": capSkillEffects,
 }
 
 // parseCapabilities ORs the bits for a manifest's capability strings, returning an error that names
@@ -53,7 +65,7 @@ func parseCapabilities(strs []string) (capSet, error) {
 	for _, s := range strs {
 		bit, ok := capByName[s]
 		if !ok {
-			return 0, fmt.Errorf("unknown capability %q (valid: entities.read, entities.write, world.read, world.write, nav)", s)
+			return 0, fmt.Errorf("unknown capability %q (valid: entities.read, entities.write, world.read, world.write, nav, skills.damage, skills.effects)", s)
 		}
 		c |= bit
 	}

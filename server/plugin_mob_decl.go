@@ -93,6 +93,11 @@ type mobDecl struct {
 	attrs    map[string]float64
 	goals    []goalDecl
 	caps     capSet
+	// skills is the captured declared-skill list (SKILLS-01, plugin_skill_decl.go) — PURE DATA (no
+	// Starlark callables), interpreted by the Go hot path (mob_skills.go). nil for a mob that declares
+	// none (every vanilla mob): the spawned mob then carries NO skillRunner and the runtime adds zero
+	// work — the pig oracle is byte-identically untouched.
+	skills []skillDecl
 }
 
 // mobRegistry is the tick-readable store of captured declarations. byName is WRITTEN only at load
@@ -427,11 +432,13 @@ func (r *mobRegistry) declareMobBuiltin() *starlark.Builtin {
 		var name, baseTypeName string
 		var attrsDict *starlark.Dict
 		var goalsList *starlark.List
+		var skillsList *starlark.List
 		if err := starlark.UnpackArgs(b.Name(), args, kwargs,
 			"name", &name,
 			"base_type", &baseTypeName,
 			"attributes?", &attrsDict,
 			"goals?", &goalsList,
+			"skills?", &skillsList,
 		); err != nil {
 			return nil, err
 		}
@@ -455,15 +462,36 @@ func (r *mobRegistry) declareMobBuiltin() *starlark.Builtin {
 			return nil, fmt.Errorf("declare_mob %q: %w", name, err)
 		}
 
+		skills, err := collectSkillDecls(skillsList)
+		if err != nil {
+			return nil, fmt.Errorf("declare_mob %q: %w", name, err)
+		}
+
 		r.byName[name] = &mobDecl{
 			name:     name,
 			baseType: baseType,
 			attrs:    attrs,
 			goals:    goals,
 			caps:     r.caps,
+			skills:   skills,
 		}
 		return starlark.None, nil
 	})
+}
+
+// builtinsDict returns the FULL server-owned declaration builtin set a mob plugin load injects as
+// `extra` into LoadDirWith: declare_mob/goal (PLUGIN-03) + skill/mechanic/targeter/condition
+// (SKILLS-01). The embed loaders (vanilla_pig_embed.go, wandermob_embed.go) use it so every
+// dogfooded/embedded plugin sees one uniform vocabulary; tests may still inject subsets directly.
+func (r *mobRegistry) builtinsDict() starlark.StringDict {
+	return starlark.StringDict{
+		"declare_mob": r.declareMobBuiltin(),
+		"goal":        r.goalBuiltin(),
+		"skill":       r.skillBuiltin(),
+		"mechanic":    r.mechanicBuiltin(),
+		"targeter":    r.targeterBuiltin(),
+		"condition":   r.conditionBuiltin(),
+	}
 }
 
 // parseAttributesDict converts a Starlark attribute dict (string -> number) to a Go map. A nil dict
@@ -685,5 +713,13 @@ func (t *TickLoop) spawnDeclaredMob(decl *mobDecl, x, y, z float64) *Entity {
 	// store mutation on the owning region; spawn callers run single-threaded (coordinator use-path
 	// or inside withRegion at the barrier-adjacent natural-spawn apply).
 	t.regionForEntity(e).entities.add(e)
+	// SKILLS-01 (mob_skills.go): attach the per-mob skill runner IFF the declaration carries skills —
+	// pure data attach, NO RNG, and skipped entirely for every skill-less declaration (every vanilla
+	// mob, so the pig oracle stream is byte-identically unperturbed). The "spawn" trigger fires ONCE,
+	// here, after the store add (the mob is live + resolvable by targeters).
+	if len(decl.skills) > 0 {
+		e.skills = newSkillRunner(decl)
+		t.fireMobSkillTrigger(e, triggerSpawn)
+	}
 	return e
 }

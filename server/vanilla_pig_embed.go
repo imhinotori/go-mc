@@ -184,10 +184,10 @@ var vanillaMobNames = []string{
 func loadVanillaMobRegistry() (*mobRegistry, error) {
 	r := newMobRegistry()
 	mgr := host.New()
-	extra := starlark.StringDict{
-		"declare_mob": r.declareMobBuiltin(),
-		"goal":        r.goalBuiltin(),
-	}
+	// The FULL declaration vocabulary (declare_mob/goal + the SKILLS-01 skill/mechanic/targeter/
+	// condition builtins) — the vanilla mobs declare no skills today, but the dogfooded plugins see
+	// one uniform surface (builtinsDict, plugin_mob_decl.go).
+	extra := r.builtinsDict()
 
 	for _, name := range vanillaMobNames {
 		if err := loadOneVanillaMob(r, mgr, extra, name); err != nil {

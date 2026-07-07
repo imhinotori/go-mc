@@ -100,6 +100,14 @@ func (t *TickLoop) dieEntity(e *Entity, src damageSource) {
 	// deathTime each tick and removes the entity at >= 20 (broadcasting the status-60 poof first). The
 	// removal is DELIBERATELY NOT done here (vanilla die() has no remove()) — see tickDeath below.
 	e.deathTime = 0
+
+	// SKILLS-01 (mob_skills.go): the declared-skill "death" trigger — the MythicMobs ~onDeath analogue.
+	// Fires ONCE per death (the e.dead guard above makes dieEntity single-entry), after the loot roll +
+	// the status-3 broadcast, while the corpse is still in the store (targeters resolve at the death
+	// position). Gated on e.skills != nil — every vanilla mob pays one nil-check and nothing else.
+	if e.skills != nil {
+		t.fireMobSkillTrigger(e, triggerDeath)
+	}
 }
 
 // tickDeath is the port of net.minecraft.world.entity.LivingEntity.tickDeath() — the per-tick death

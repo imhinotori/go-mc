@@ -27,7 +27,6 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/imhinotori/sulfur/plugin/host"
-	"go.starlark.net/starlark"
 )
 
 // wanderMobFS embeds the bundled custom wander-mob plugin (plugin.toml + main.star). Keep this copy
@@ -73,10 +72,8 @@ func loadWanderMobRegistry() (*mobRegistry, error) {
 	r.setLoadCaps(caps)
 
 	mgr := host.New()
-	extra := starlark.StringDict{
-		"declare_mob": r.declareMobBuiltin(),
-		"goal":        r.goalBuiltin(),
-	}
+	// The FULL declaration vocabulary (declare_mob/goal + the SKILLS-01 builtins — builtinsDict).
+	extra := r.builtinsDict()
 	if err := mgr.LoadDirWith(dir, extra); err != nil {
 		return nil, fmt.Errorf("wandermob boot-load: %w", err)
 	}

@@ -407,6 +407,13 @@ type Entity struct {
 	// the witch writes it in v1. Effect ids -> the active instance (duration counts DOWN). Tick-owned.
 	mobEffects map[string]*activeEffect
 
+	// skills is the per-mob declared-skill runner (SKILLS-01, mob_skills.go): the per-mob timers +
+	// reentrancy guard over the SHARED immutable []skillDecl the declaration captured. nil for every
+	// mob whose declaration carries no skills (every vanilla mob — the pig oracle pays one nil-check
+	// in the tick loop and nothing else). Attached in spawnDeclaredMob; tick-owned (TICK-05); like ai
+	// it is a pointer to mutable tick-owned state outside the tracker's snapshot value-set.
+	skills *skillRunner
+
 	// --- RAVAGER state (net.minecraft.world.entity.monster.Ravager) --------------------------------
 	//
 	// Tick-owned plain values, set/read ONLY for a Ravager (ravagerAiStep gates on typ ==
