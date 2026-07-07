@@ -187,6 +187,18 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 	inv := ensureInventory(p)
 	held := inv.get(heldWindowSlot(inv.heldSlot))
 
+	// BONE MEAL on a CROP (BoneMealItem.useOn -> growCrop). A non-block item, so it would otherwise
+	// fall through blockStateForItem as a no-op -- intercept it here (like FlintAndSteel / Minecart)
+	// BEFORE placement. tryBoneMealCrop returns true when the held item is bone_meal AND the clicked
+	// block is a growable crop below MAX_AGE (the use consumed the action): it ages the crop by the
+	// vanilla random amount (clamped), spawns the happy_villager burst, and consumes 1 bone meal
+	// (creative keeps it). Returns false (placement continues, a no-op for the non-block bone_meal
+	// item) when the held item is not bone_meal or the target is not a sub-max-age crop. CITE:
+	// BoneMealItem.useOn / growCrop; CropBlock.performBonemeal (bone_meal.go).
+	if t.tryBoneMealCrop(p, inv, held, pos) {
+		return
+	}
+
 	// PLUGIN-07 (Plan 28-01) GATE-ONLY trigger — the spawn-egg path. A vanilla spawn egg spawns ON
 	// the CLICKED BLOCK (SpawnEggItem.useOn), not on right-click-air, so the gate egg must hook the
 	// UseItemOn (block) path — this is how a player actually uses a spawn egg. Spawn at the adjacent
