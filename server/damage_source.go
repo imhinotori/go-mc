@@ -73,6 +73,14 @@ var (
 	// bypasses_armor member (the victim folds the armor curve). Cite Entity.thunderHit + DamageSources
 	// .lightningBolt (DamageTypes.LIGHTNING_BOLT).
 	damageTypeLightning = damageTypeID(tag.DamageTypeIDs["minecraft:lightning_bolt"])
+	// damageTypeFireball is minecraft:fireball — the source a Fireball (small/large ghast fireball) deals
+	// via DamageSources.fireball(Fireball, Entity): type FIREBALL, causingEntity = the fireball's owner
+	// (the ghast/blaze). An is_fire + is_projectile member. Cite SmallFireball/LargeFireball.onHitEntity.
+	damageTypeFireball = damageTypeID(tag.DamageTypeIDs["minecraft:fireball"])
+	// damageTypeWitherSkull is minecraft:wither_skull — the source WitherSkull.onHitEntity deals via
+	// DamageSources.witherSkull(WitherSkull, Entity): type WITHER_SKULL, causingEntity = the owner (the
+	// wither). An is_projectile member. Cite WitherSkull.onHitEntity (hurtServer(witherSkull, 8.0)).
+	damageTypeWitherSkull = damageTypeID(tag.DamageTypeIDs["minecraft:wither_skull"])
 )
 
 // damageSourceOf builds a DamageSource for an environmental/anonymous source: the given damage-type
@@ -130,6 +138,21 @@ func damageSourceArrow(attackerID int32) damageSource {
 // no attacker (the pearl damages its own thrower). CITE: ThrownEnderpearl.onHit hurtServer(enderPearl(), 5).
 func damageSourceEnderPearl() damageSource {
 	return damageSource{typeTag: damageTypeEnderPearl, attacker: 0}
+}
+
+// damageSourceFireball builds the DamageSource for a fireball hit: type fireball with the SHOOTER's
+// entity id as the causing entity. The port of DamageSources.fireball(Fireball, Entity) — type FIREBALL,
+// causingEntity = the owner (the ghast/blaze). ownerID 0 means an ownerless fireball. Cite
+// SmallFireball/LargeFireball.onHitEntity: damageSources().fireball(this, owner).
+func damageSourceFireball(ownerID int32) damageSource {
+	return damageSource{typeTag: damageTypeFireball, attacker: ownerID}
+}
+
+// damageSourceWitherSkull builds the DamageSource for a wither-skull hit: type wither_skull with the
+// SHOOTER's entity id. The port of DamageSources.witherSkull(WitherSkull, Entity) — type WITHER_SKULL,
+// causingEntity = the owner (the wither). Cite WitherSkull.onHitEntity: damageSources().witherSkull(this, living).
+func damageSourceWitherSkull(ownerID int32) damageSource {
+	return damageSource{typeTag: damageTypeWitherSkull, attacker: ownerID}
 }
 
 // damageSourceMagic builds the DamageSource for a direct magic effect (instant_damage / poison self-tick):

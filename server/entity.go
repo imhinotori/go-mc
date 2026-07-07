@@ -198,6 +198,21 @@ type Entity struct {
 	throwOldZ     float64 // oldPosition() — the ender_pearl teleports the owner to the PRE-move position
 	throwLife     int32   // ticks alive; a throwable that never lands discards at a hard cap
 
+	// --- HURTING PROJECTILE (net.minecraft.world.entity.projectile.hurtingprojectile.*) ----------------
+	//
+	// A hurting projectile (small/large fireball, wither skull) is a NON-mob projectile (isHurting) with
+	// NO gravity — it flies STRAIGHT with a self-acceleration term: each tick applyInertia does
+	// deltaMovement = (deltaMovement + deltaMovement.normalize()*accelerationPower) * inertia. It ignites
+	// on contact and runs a per-kind onHit (fire damage / explosion / wither). Tick-owned plain values, set
+	// and read ONLY for a hurting projectile (the hurting tick gates on isHurting). Cite AbstractHurtingProjectile.
+	isHurting     bool
+	hurtingKind   int     // hurtSmallFireball / hurtLargeFireball / hurtWitherSkull
+	hurtOwnerID   int32   // getOwner() as a THIN id (never a live pointer — the Folia rule)
+	hurtAccelPow  float64 // AbstractHurtingProjectile.accelerationPower (default 0.1)
+	hurtExplosion int     // LargeFireball.explosionPower (default 1); unused by other kinds
+	hurtDangerous bool    // WitherSkull.isDangerous() — a wither-boss "dangerous" skull (inertia 0.73)
+	hurtLife      int32   // ticks alive; a hurting projectile that never lands discards at a hard cap
+
 	// --- FISHING HOOK / BOBBER (net.minecraft.world.entity.projectile.FishingHook) --------------------
 	//
 	// The bobber is a NON-mob projectile (isFishingHook) cast from a fishing rod. Its whole behavior is

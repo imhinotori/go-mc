@@ -356,6 +356,14 @@ func (t *TickLoop) tickEntities() {
 	// owner). Sibling of tickArrows/tickPotions; ADDITIVE + throwable-gated (zero cost when none is in flight).
 	t.tickThrowables()
 
+	// HURTING PROJECTILES: the AbstractHurtingProjectile.tick port for small/large fireball + wither skull —
+	// STRAIGHT accelerated flight (no gravity; deltaMovement re-accelerates along its heading and scales by
+	// inertia 0.95/0.8) + resolve on the first block/entity hit (fire damage / explosion / wither). Sibling of
+	// tickArrows/tickThrowables; ADDITIVE + hurting-gated (zero cost when none is in flight, so the pig oracle
+	// stream is unperturbed). Placed AFTER tickThrowables and BEFORE tracker.Tick so a discard/explosion is
+	// reflected in this tick's near(). Body in hurting_projectile.go. CITE AbstractHurtingProjectile.tick.
+	t.tickHurtingProjectiles()
+
 	// FISHING HOOK (bobber): the FishingHook.tick state machine (FLYING -> BOBBING float, the
 	// catchingFish wait/lure/hook countdowns ending in a bite). Sibling of tickArrows/tickPotions;
 	// ADDITIVE + fishing-hook-gated (zero cost when no bobber is out, so the pig oracle stream is

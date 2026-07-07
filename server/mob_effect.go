@@ -54,6 +54,12 @@ const (
 	// dedicated ConduitPower checks elsewhere, not by an attribute modifier on the effect), so addPlayerEffect
 	// inserts it as a bare duration effect.
 	effectConduitPower = "minecraft:conduit_power"
+	// WITHER effect id (WitherSkull.onHitEntity applies it on a NORMAL/HARD hit): MobEffects.WITHER =
+	// register("wither", new MobEffect(MobEffectCategory.HARMFUL, ...)). A duration effect whose per-tick
+	// damage-over-time (WitherMobEffect.applyEffectTick: hurt 1.0 magic every 40>>amp ticks) is CITE-DEFERRED
+	// — like the movement-buff no-ops, presence is stored via addEntityEffect and the periodic DoT lands when
+	// the mob effect-tick table grows a wither branch. The 8.0 skull hit is the visible gameplay here.
+	effectWither = "minecraft:wither"
 )
 
 // modifier ids (stable identity per effect, matching the vanilla effect.<name> ids).

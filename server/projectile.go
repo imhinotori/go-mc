@@ -167,14 +167,22 @@ func (t *TickLoop) tickArrow(e *Entity) {
 // It returns the nearest such player (sorted by distance from the segment origin, matching stepMoveAndHit's
 // entitiesHit.sort). v1 tests players only (mobs are not arrow victims yet — a cited scope note).
 func (t *TickLoop) arrowFindHitPlayer(e *Entity, ox, oy, oz, nx, ny, nz float64) *tickPlayer {
+	return t.projectileFindHitPlayer(e.arrowShooterID, ox, oy, oz, nx, ny, nz)
+}
+
+// projectileFindHitPlayer is the shooter-id-keyed core of arrowFindHitPlayer: the nearest player whose
+// collision AABB the flight segment (origin→next) passes through, excluding the owner (ownerID). Shared by
+// every projectile family (arrow/throwable/potion/hurting) — the only per-family variance is which owner id
+// to exclude, so the geometry lives here once. v1 tests players only (mobs are a cited scope note).
+func (t *TickLoop) projectileFindHitPlayer(ownerID int32, ox, oy, oz, nx, ny, nz float64) *tickPlayer {
 	var best *tickPlayer
 	bestT := math.Inf(1)
 	for _, p := range t.players {
 		if p == nil || p.dead {
 			continue
 		}
-		if p.entityID == e.arrowShooterID {
-			continue // the arrow never hits its own shooter (checkLeftOwner guard)
+		if p.entityID == ownerID {
+			continue // the projectile never hits its own shooter (checkLeftOwner guard)
 		}
 		// Build the player's collision AABB (0.6×1.8, base at feet), inflated by the arrow's half-size
 		// (0.3) — ProjectileUtil inflates the target box by the projectile's bounding box before the clip.
