@@ -2,6 +2,7 @@ package server
 
 import (
 	"github.com/imhinotori/sulfur/data/item"
+	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/level/component"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
@@ -232,6 +233,15 @@ func (t *TickLoop) useItemInHand(p *tickPlayer, hand int32) {
 		return // the rod handled the use (a cast or a reel)
 	}
 
+	// BUCKET (BucketItem.use): a right-click-air with a water/lava bucket empties the fluid at the
+	// raycast target (a source placed at pos.relative(face)), and an EMPTY bucket over a fluid SOURCE
+	// picks it up (→ the filled bucket). Runs BEFORE the food gate (a bucket is not food); a non-bucket
+	// item returns false and falls through. Bucket-gated (a cheap id compare — no RNG draw, so the pig
+	// oracle is unperturbed). CITE BucketItem.use. Body below.
+	if t.tryUseBucket(p, inv, held, hand) {
+		return
+	}
+
 	// FOOD gate (v1): resolve the held item's FOOD/CONSUMABLE data. Non-food => not eatable => no-op
 	// (cite: other ItemStack.use behaviors out of v1 scope).
 	f, ok := itemFood(int32(held.ItemID))
@@ -420,6 +430,315 @@ func (t *TickLoop) stopUsingItem(p *tickPlayer) {
 // in v1 scope). Tick-owned.
 func (t *TickLoop) releaseUsingItem(p *tickPlayer) {
 	t.stopUsingItem(p)
+}
+
+// bucketContent discriminates what a bucket item carries: EMPTY (pick up a fluid), WATER, or LAVA
+// (empty out that fluid). It is the Go stand-in for BucketItem.content (Fluids.EMPTY / WATER / LAVA).
+type bucketContent int
+
+const (
+	bucketEmpty bucketContent = iota // an empty bucket (Fluids.EMPTY) — picks up a fluid source
+	bucketWater                      // a water bucket (Fluids.WATER) — empties a water source
+	bucketLava                       // a lava bucket (Fluids.LAVA)  — empties a lava source
+)
+
+// bucketContentOf maps an item id to its BucketItem.content, reporting ok=false for a non-bucket
+// item. Only the three fluid buckets (empty/water/lava) are handled — the mob/milk/powder-snow
+// buckets are not BucketItem-with-a-fluid and fall through (ok=false). Tick-owned read.
+func bucketContentOf(itemID int32) (bucketContent, bool) {
+	switch item.ID(itemID) {
+	case item.Bucket.ID:
+		return bucketEmpty, true
+	case item.WaterBucket.ID:
+		return bucketWater, true
+	case item.LavaBucket.ID:
+		return bucketLava, true
+	}
+	return 0, false
+}
+
+// tryUseBucket is the BucketItem.use port for the right-click-air path (net.minecraft.world.item.
+// BucketItem.use). It raycasts from the player's eyes (getPlayerPOVHitResult with the bucket's
+// ClipContext.Fluid: SOURCE_ONLY for an empty bucket so the ray stops on a fluid source, NONE for a
+// filled bucket so the ray passes through fluid to the first solid), and then:
+//
+//   - MISS -> PASS (no-op, but the use belongs to the bucket -> return true).
+//   - EMPTY bucket over a fluid SOURCE at the hit block: BucketPickup.pickupBlock removes the source
+//     (→ AIR) and yields the filled bucket; swap the hand via ItemUtils.createFilledResult.
+//   - FILLED bucket: emptyContents places the fluid SOURCE at pos.relative(face) (v1 has no
+//     LiquidBlockContainer, so the place pos is always the relative cell), then swap the hand to the
+//     empty Bucket via ItemUtils.createFilledResult(getEmptySuccessItem(...)).
+//
+// Creative-gated exactly as vanilla: getEmptySuccessItem / createFilledResult only consume/swap the
+// hand when !player.hasInfiniteMaterials() (creative keeps the bucket unchanged). Bucket-gated (a
+// cheap id compare — no RNG draw, so the pig oracle is unperturbed). Returns true when the use
+// belonged to a bucket (handled or a MISS/FAIL no-op), false to fall through. Tick-owned.
+//
+//	[VERIFIED javap BucketItem.use: hit = getPlayerPOVHitResult(level, player, getFluidContext());
+//	 if hit.type==MISS return PASS; if hit.type!=BLOCK return PASS; blockPos=hit.getBlockPos();
+//	 dir=hit.getDirection(); relPos=blockPos.relative(dir);
+//	 // FILLED: if emptyContents(player, level, LiquidBlockContainer?blockPos:relPos, hit) ->
+//	 //   checkExtraContent (no-op); awardStat; return createFilledResult(hand, player,
+//	 //   getEmptySuccessItem(hand, player)).
+//	 // EMPTY: if content==EMPTY { state=getBlockState(blockPos); if block instanceof BucketPickup:
+//	 //   filled = pickupBlock(player, level, blockPos, state); if !filled.isEmpty() { awardStat;
+//	 //   getPickupSound; gameEvent(FLUID_PICKUP); return createFilledResult(hand, player, filled); } }
+//	 // else FAIL.  getFluidContext: content==EMPTY ? SOURCE_ONLY : NONE.
+//	 // getEmptySuccessItem: hasInfiniteMaterials ? hand : new ItemStack(BUCKET).]
+func (t *TickLoop) tryUseBucket(p *tickPlayer, inv *Inventory, held component.SlotData, hand int32) bool {
+	content, ok := bucketContentOf(int32(held.ItemID))
+	if !ok {
+		return false // not a fluid bucket: fall through
+	}
+	if t.world() == nil {
+		return false
+	}
+
+	// getPlayerPOVHitResult(getFluidContext()): SOURCE_ONLY for the empty bucket (stop on a fluid
+	// source), NONE for a filled bucket (fluid is passable — stop on the first solid).
+	fluidMode := clipFluidNone
+	if content == bucketEmpty {
+		fluidMode = clipFluidSourceOnly
+	}
+	blockPos, dir, hit := t.bucketPovHitResult(p, fluidMode)
+	if !hit {
+		return true // MISS -> PASS (the use is still "for" the bucket — no fall-through)
+	}
+	dx, dy, dz := directionNormal(dir)
+	relPos := pk.Position{X: blockPos.X + dx, Y: blockPos.Y + dy, Z: blockPos.Z + dz}
+
+	if content == bucketEmpty {
+		// EMPTY bucket: BucketPickup.pickupBlock on the HIT block (the source). v1's fluids are
+		// FlowingFluid (water/lava) whose block IS the BucketPickup (LiquidBlock.pickupBlock removes
+		// a SOURCE only, returning the filled bucket; a flowing cell returns EMPTY). Mirror that:
+		// only a SOURCE cell is pickupable.
+		fs := t.fluidAt(blockPos)
+		var filledID item.ID
+		switch {
+		case fs.isWater && fs.source:
+			filledID = item.WaterBucket.ID
+		case fs.isLava && fs.source:
+			filledID = item.LavaBucket.ID
+		default:
+			return true // no source at the hit block -> FAIL (BucketPickup returns EMPTY / not a source)
+		}
+		// pickupBlock: remove the source (LiquidBlock.pickupBlock sets the cell to AIR).
+		t.setFluidBlock(blockPos, airStateID())
+		// A picked-up source opens a hole its fluid neighbors must re-flow into: kick the neighbors so
+		// adjacent flowing water/lava re-evaluates (LiquidBlock neighborChanged -> scheduleTick).
+		t.scheduleFluidNeighborsOnEdit(blockPos)
+		// awardStat / getPickupSound / gameEvent(FLUID_PICKUP): v1 no-ops (no stats/sound/game-event).
+		filled := component.SlotData{Count: 1, ItemID: pk.VarInt(filledID)}
+		t.bucketCreateFilledResult(p, inv, hand, held, filled)
+		return true
+	}
+
+	// FILLED bucket: emptyContents places the fluid source. v1 has no LiquidBlockContainer, so the
+	// place pos is always relPos (the cell adjacent to the hit face). emptyContents places when the
+	// target cell can be replaced (air or a fluid — never inside a solid).
+	if !t.bucketCanEmptyInto(relPos) {
+		return true // FAIL: cannot place here (target is a solid) — the interact is still the bucket's
+	}
+	var srcState block.StateID
+	switch content {
+	case bucketWater:
+		srcState = waterStateID(0) // FlowingFluid.getSource(false).createLegacyBlock() -> level 0 source
+	case bucketLava:
+		srcState = lavaStateID(0)
+	}
+	// Level.setBlock(relPos, sourceState, UPDATE_CLIENTS): write + broadcast, then kick the fluid sim
+	// so the placed source begins flowing (LiquidBlock.onPlace -> scheduleTick). setFluidBlock is the
+	// shared write+broadcast primitive.
+	t.setFluidBlock(relPos, srcState)
+	t.scheduleFluidNeighborsOnEdit(relPos)
+	// checkExtraContent (no-op) / awardStat (no-op). getEmptySuccessItem: creative keeps the filled
+	// bucket, survival yields a new empty Bucket. createFilledResult then swaps/consumes the hand.
+	empty := component.SlotData{Count: 1, ItemID: pk.VarInt(item.Bucket.ID)}
+	t.bucketCreateFilledResult(p, inv, hand, held, empty)
+	return true
+}
+
+// bucketCanEmptyInto is the v1 subset of BucketItem.emptyContents's replaceable test
+// (blockState.canBeReplaced(content) || blockState.isAir()): a fluid source may be emptied into a
+// cell that is AIR or already a fluid (water or lava) — never into a solid. Cite: BlockState
+// .canBeReplaced for fluids/air is true, for solids false. Tick-owned.
+func (t *TickLoop) bucketCanEmptyInto(pos pk.Position) bool {
+	id, ok := t.world().GetBlock(pos, dimMinY)
+	if !ok {
+		return false // unloaded: do not place (no column to mutate)
+	}
+	if block.IsAir(id) {
+		return true
+	}
+	fs := decodeFluid(id)
+	return fs.isWater || fs.isLava
+}
+
+// bucketCreateFilledResult is the ItemUtils.createFilledResult(hand, player, filled) port for the
+// bucket hand-swap (net.minecraft.world.item.ItemUtils.createFilledResult, the 3-arg overload that
+// defaults putFilledIfInfinite=true):
+//
+//	if (player.hasInfiniteMaterials()) { if (!inventory.contains(filled)) inventory.add(filled); return hand; }
+//	hand.consume(1, player);            // shrink the source bucket by 1
+//	if (hand.isEmpty()) return filled;  // the whole stack was the bucket -> the hand becomes `filled`
+//	if (!inventory.add(filled)) player.drop(filled, false); // else route `filled` to the inventory
+//	return hand;
+//
+// v1 has no ItemEntity-from-player drop for a full inventory, so a failed add is a cited no-op (the
+// item is lost only when the inventory is full — a rare edge; the drop is a follow-up). It writes the
+// resulting hand stack back and broadcasts the changed slots. Creative (hasInfiniteMaterials) never
+// consumes the source bucket and only tops up `filled` if absent. Tick-owned.
+func (t *TickLoop) bucketCreateFilledResult(p *tickPlayer, inv *Inventory, hand int32, handStack, filled component.SlotData) {
+	slot := heldMenuSlot(p, hand)
+	before := inv.snapshot()
+
+	if p.gameMode == gameModeCreative {
+		// hasInfiniteMaterials: keep the source bucket; add `filled` only if not already present.
+		if !inv.bucketContains(filled) {
+			inv.bucketAdd(filled)
+		}
+		t.broadcastInventoryChanges(p, inv, before)
+		return
+	}
+
+	// hand.consume(1): shrink the source bucket by 1.
+	consumed := handStack
+	consumed.Count--
+	if consumed.Count <= 0 {
+		// hand.isEmpty(): the hand becomes `filled` (the common single-bucket case).
+		inv.set(slot, filled)
+		t.broadcastInventoryChanges(p, inv, before)
+		return
+	}
+	// The hand still holds >1 bucket: keep the shrunk stack in the hand, route `filled` to inventory.
+	inv.set(slot, consumed)
+	if !inv.bucketAdd(filled) {
+		// inventory.add failed (full): vanilla drops it as an ItemEntity. No ItemEntity-from-player
+		// drop in v1 -> cited no-op (the filled bucket is only lost when the inventory is full).
+		_ = filled
+	}
+	t.broadcastInventoryChanges(p, inv, before)
+}
+
+// bucketContains is the v1 Inventory.contains(stack) subset used by createFilledResult's creative
+// top-up: any main/hotbar slot already holds an item with the same id. (Vanilla compares item
+// identity; the bucket `filled` carries no distinguishing components.) Tick-owned.
+func (inv *Inventory) bucketContains(stack component.SlotData) bool {
+	for i := int16(9); i < playerInventorySize; i++ {
+		s := inv.get(i)
+		if s.Count > 0 && s.ItemID == stack.ItemID {
+			return true
+		}
+	}
+	return false
+}
+
+// bucketAdd is the v1 Inventory.add(stack) subset: place the single-count `filled` bucket into the
+// first empty slot, hotbar (36..44) first then the main inventory (9..35), matching vanilla's
+// hotbar-first fill preference. (Water/lava/empty buckets do not stack in a merge-relevant way here,
+// so no partial-merge is attempted.) Returns false when there is no free main/hotbar slot (the
+// caller then drops it — a v1 no-op). Tick-owned.
+func (inv *Inventory) bucketAdd(filled component.SlotData) bool {
+	for i := hotbarMenuSlotBase; i < playerInventorySize; i++ {
+		if inv.get(i).Count <= 0 {
+			inv.set(i, filled)
+			return true
+		}
+	}
+	for i := int16(9); i < hotbarMenuSlotBase; i++ {
+		if inv.get(i).Count <= 0 {
+			inv.set(i, filled)
+			return true
+		}
+	}
+	return false
+}
+
+// clipFluidMode is the ClipContext.Fluid subset the bucket raycast needs: NONE (fluid is passable —
+// stop on the first solid) or SOURCE_ONLY (stop on a fluid SOURCE cell). (ANY, used by the boat, is
+// a third mode not needed here.) Cite: net.minecraft.world.level.ClipContext$Fluid.
+type clipFluidMode int
+
+const (
+	clipFluidNone       clipFluidMode = iota // fluid passable (filled bucket: ray hits the first solid)
+	clipFluidSourceOnly                      // stop on a fluid source (empty bucket: ray hits a source)
+)
+
+// bucketPovHitResult is the v1 port of Item.getPlayerPOVHitResult(level, player, ClipContext.Fluid)
+// for the bucket use: a voxel-stepped raytrace from the player's eye along the view vector for the
+// interaction range, returning the first block cell the ray enters that stops it (per the fluid
+// mode) AND the face Direction the ray crossed to enter it (needed for pos.relative(face)). Vanilla
+// runs a precise voxel-DDA ClipContext clip; v1 uses a fine fixed-step march (0.02-block steps) and
+// derives the entered face from the axis whose integer cell changed on the crossing step — the
+// observable result (which block + which face the player is aiming at) is identical for the block
+// grid a bucket interacts with. A finer DDA is a cited follow-up if a partial-height fluid edge ever
+// matters.
+//
+//	[VERIFIED javap Item.getPlayerPOVHitResult: from = getEyePosition(); to = from + viewVector *
+//	 blockInteractionRange(); return level.clip(new ClipContext(from, to, OUTLINE, fluidMode, player))
+//	 -> BlockHitResult with getBlockPos() and getDirection().]
+func (t *TickLoop) bucketPovHitResult(p *tickPlayer, mode clipFluidMode) (pos pk.Position, dir int, hit bool) {
+	ex := p.x
+	ey := p.y + playerStandingEyeHeight
+	ez := p.z
+	vx, vy, vz := playerViewVector(p.yaw, p.pitch)
+
+	const step = 0.02
+	reach := float64(blockReach)
+	prevX, prevY, prevZ := mthFloor(ex), mthFloor(ey), mthFloor(ez)
+	for d := step; d <= reach; d += step {
+		cx := ex + vx*d
+		cy := ey + vy*d
+		cz := ez + vz*d
+		bx, by, bz := mthFloor(cx), mthFloor(cy), mthFloor(cz)
+		if bx == prevX && by == prevY && bz == prevZ {
+			continue // still in the same cell as the last step
+		}
+
+		// Determine what stops the ray at this cell.
+		stops := false
+		if t.blockSolidAt(bx, by, bz) {
+			stops = true // OUTLINE: a solid block always stops the ray.
+		} else if mode == clipFluidSourceOnly {
+			// SOURCE_ONLY: a fluid SOURCE cell (water or lava source) stops the ray.
+			fs := t.fluidAt(pk.Position{X: bx, Y: by, Z: bz})
+			if (fs.isWater || fs.isLava) && fs.source {
+				stops = true
+			}
+		}
+		if !stops {
+			prevX, prevY, prevZ = bx, by, bz
+			continue
+		}
+
+		// The ray entered (bx,by,bz) from (prevX,prevY,prevZ). The crossed face is the axis whose cell
+		// changed on this step; the Direction is the face the ray entered THROUGH (Direction pointing
+		// back toward the ray origin). Map the changed axis to a Direction 3D-data value (0 DOWN,1 UP,
+		// 2 NORTH,3 SOUTH,4 WEST,5 EAST): the face normal points opposite the ray's travel on that axis.
+		face := 1 // default UP (degenerate: ray started already inside the cell)
+		switch {
+		case bx != prevX:
+			if bx > prevX {
+				face = 4 // ray moving +X entered through the WEST face
+			} else {
+				face = 5 // ray moving -X entered through the EAST face
+			}
+		case by != prevY:
+			if by > prevY {
+				face = 0 // ray moving +Y entered through the DOWN face
+			} else {
+				face = 1 // ray moving -Y entered through the UP face
+			}
+		case bz != prevZ:
+			if bz > prevZ {
+				face = 2 // ray moving +Z entered through the NORTH face
+			} else {
+				face = 3 // ray moving -Z entered through the SOUTH face
+			}
+		}
+		return pk.Position{X: bx, Y: by, Z: bz}, face, true
+	}
+	return pk.Position{}, 0, false
 }
 
 // syncAfterEat pushes the authoritative state the client needs after a completed eat: the food bar
