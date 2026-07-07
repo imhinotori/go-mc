@@ -89,6 +89,23 @@ func (c mobCategory) despawnDistance() int {
 // for ALL categories (javap: `bipush 32; ireturn`). Cite MobCategory.getNoDespawnDistance.
 func (c mobCategory) noDespawnDistance() int { return 32 }
 
+// maxSpawnClusterSize ports Mob.getMaxSpawnClusterSize() — the cap on how many mobs the natural
+// spawner's OUTER pack-group loop places at ONE candidate position before it returns
+// (spawnCategoryForPosition: `if (spawnedInGroup >= mob.getMaxSpawnClusterSize()) return;`). The base
+// Mob impl returns the literal 4 (javap `iconst_4; ireturn`); the per-species overrides
+// (e.g. animals, fish schools) tune it. v1 has no per-species Mob override yet, so this is the cited
+// base constant 4, structured as a helper so a per-type override slots in later without a call-site
+// change. Cite net.minecraft.world.entity.Mob.getMaxSpawnClusterSize.
+const maxSpawnClusterSize = 4
+
+// isMaxGroupSizeReached ports Mob.isMaxGroupSizeReached(int) — the INNER pack-loop break gate
+// (spawnCategoryForPosition: `if (mob.isMaxGroupSizeReached(spawnedInPack)) break;`). The base Mob
+// impl returns false unconditionally (javap `iconst_0; ireturn`); Animal/PathfinderMob overrides
+// bound the pack size by the biome spawn-group max. v1 uses the base false (the pack size is bounded
+// only by the drawn packSize + maxSpawnClusterSize), structured as a helper so a per-type override
+// slots in later. Cite net.minecraft.world.entity.Mob.isMaxGroupSizeReached.
+func isMaxGroupSizeReached(spawnedInPack int) bool { return false }
+
 // categoryOf maps a live entity's wire type to its MobCategory. In vanilla this is the
 // EntityType.category field set at registration (e.g. EntityType.PIG is built with
 // MobCategory.CREATURE). v1 only needs the Pig -> CREATURE mapping for the cap accounting;

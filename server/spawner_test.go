@@ -163,10 +163,17 @@ func TestSpawnCapAccounting(t *testing.T) {
 	}
 	below := totalEntities(loop)
 	runSpawnCycle(t, loop)
-	// The spawned mob is routed into the region OWNING its (random) candidate column — either
-	// region — so count across regions, not just region 0 (loop.only()).
-	if totalEntities(loop) != below+1 {
-		t.Fatalf("below cap, naturalSpawn should add exactly one mob: count %d -> %d", below, totalEntities(loop))
+	// The spawned mob(s) are routed into the region OWNING the candidate column — either region — so
+	// count across regions, not just region 0 (loop.only()). C-6: the apply now places a vanilla
+	// PACK-GROUP (NaturalSpawner.spawnCategoryForPosition, up to getMaxSpawnClusterSize=4) instead of a
+	// single mob, so below cap the cycle adds AT LEAST one (the exact count is the drawn packSize,
+	// bounded by the group cap). The load-bearing assertion is "below cap, a spawn happens".
+	added := totalEntities(loop) - below
+	if added < 1 {
+		t.Fatalf("below cap, naturalSpawn should add at least one mob (a pack): count %d -> %d", below, totalEntities(loop))
+	}
+	if added > maxSpawnClusterSize {
+		t.Fatalf("the pack-group cap (getMaxSpawnClusterSize=%d) must bound one apply: added %d", maxSpawnClusterSize, added)
 	}
 }
 
@@ -219,10 +226,15 @@ func TestSpawnAddsToStore(t *testing.T) {
 
 	before := totalEntities(loop)
 	runSpawnCycle(t, loop)
-	// The spawned mob is routed into the region owning its random candidate column — count + scan
-	// across regions (loop.only() is region 0 only and would miss a region-1 spawn).
-	if totalEntities(loop) != before+1 {
-		t.Fatalf("a valid spawn must add exactly one entity: %d -> %d", before, totalEntities(loop))
+	// The spawned mob(s) are routed into the region owning the candidate column — count + scan across
+	// regions (loop.only() is region 0 only and would miss a region-1 spawn). C-6: a valid apply now
+	// places a vanilla PACK-GROUP (up to getMaxSpawnClusterSize=4), so it adds AT LEAST one.
+	added := totalEntities(loop) - before
+	if added < 1 {
+		t.Fatalf("a valid spawn must add at least one entity (a pack): %d -> %d", before, totalEntities(loop))
+	}
+	if added > maxSpawnClusterSize {
+		t.Fatalf("the pack-group cap (getMaxSpawnClusterSize=%d) must bound one apply: added %d", maxSpawnClusterSize, added)
 	}
 	mob := findAnyNaturalCreature(loop)
 	if mob == nil {
@@ -438,10 +450,15 @@ func TestAsyncSpawnRejoinsAndAdds(t *testing.T) {
 	if loop.only().spawnScanPending {
 		t.Fatal("applyTo must CLEAR the single-in-flight gate so the next cycle can submit")
 	}
-	// The mob is routed into the region owning its random candidate column — count + scan across
-	// regions (loop.only() is region 0 only and would miss a region-1 spawn).
-	if totalEntities(loop) != before+1 {
-		t.Fatalf("the async scan + owner add must add exactly one mob: %d -> %d", before, totalEntities(loop))
+	// The mob(s) are routed into the region owning the candidate column — count + scan across regions
+	// (loop.only() is region 0 only and would miss a region-1 spawn). C-6: the apply now places a
+	// vanilla PACK-GROUP (up to getMaxSpawnClusterSize=4), so it adds AT LEAST one.
+	addedAsync := totalEntities(loop) - before
+	if addedAsync < 1 {
+		t.Fatalf("the async scan + owner add must add at least one mob (a pack): %d -> %d", before, totalEntities(loop))
+	}
+	if addedAsync > maxSpawnClusterSize {
+		t.Fatalf("the pack-group cap (getMaxSpawnClusterSize=%d) must bound one apply: added %d", maxSpawnClusterSize, addedAsync)
 	}
 	// Plan 34-04: the natural spawn picks among the 4 CREATURE mobs, so accept any of them.
 	mob := findAnyNaturalCreature(loop)

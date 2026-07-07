@@ -360,14 +360,18 @@ func (r spawnCandidatesReady) applyTo(t *TickLoop) {
 		// unseeded global rand.IntN that caused the STATE.md async-spawner flake, T-34-11).
 		dest := t.regionForColumn(columnOf(float64(c.x)+0.5, float64(c.z)+0.5))
 		t.withRegion(dest, func() {
-			// Phase 35-02 (SC#3): pick from the species list for the category this scan was submitted
-			// under — pickNaturalCreatureMob (pig/cow/sheep/chicken) for CREATURE, pickNaturalMonsterMob
-			// (zombie/skeleton/spider) for MONSTER. Both draw from THIS region's seeded levelRandom inside
-			// the withRegion scope (race-clean, deterministic per region — T-34-11).
-			name := t.pickNaturalSpawnMob(r.category)
-			t.spawnVanillaMob(name, float64(c.x)+0.5, float64(c.y), float64(c.z)+0.5)
+			// C-6: place the vanilla PACK-GROUP at this candidate (NaturalSpawner.spawnCategoryForPosition
+			// group+pack loops) instead of a single mob. spawnPackAt (natural_spawner.go) runs the 1:1
+			// group/pack loops: the Mth.ceil(nextFloat*4) packSize draw, the nextInt(6)-nextInt(6) cluster
+			// spread, the MIN_SPAWN_DISTANCE=24 (squared) per-position guard, the per-member ON_GROUND re-check, the
+			// yaw draw, the per-member pickNaturalSpawnMob (the weighted-pick stub), and the group/pack
+			// caps (getMaxSpawnClusterSize=4 / isMaxGroupSizeReached). All draws are on THIS region's
+			// seeded levelRandom inside the withRegion scope (race-clean, deterministic per region —
+			// T-34-11), in the EXACT vanilla order. The candidate (c.x,c.y,c.z) is the ON_GROUND-validated
+			// origin the off-tick scan found; the pack clusters around it.
+			t.spawnPackAt(c.x, c.y, c.z, r.category)
 		})
-		return // one placement per apply (the throttle)
+		return // one pack-group placement per apply (the throttle)
 	}
 }
 
