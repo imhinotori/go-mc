@@ -216,6 +216,15 @@ func (t *TickLoop) applyDamage(p *tickPlayer, src damageSource, amount float32) 
 		return
 	}
 
+	// FIRE_RESISTANCE guard (LivingEntity.hurtServer bytecode 20-41): a fire-tagged source is fully
+	// negated for an entity holding MobEffects.FIRE_RESISTANCE. `if (source.is(IS_FIRE) &&
+	// hasEffect(FIRE_RESISTANCE)) return false;` — AFTER isDeadOrDying, BEFORE the amount<0 clamp.
+	// (Player fire sources are a cited v1 deferral, so this is dormant until one lands, but the 1:1
+	// guard belongs here now.)
+	if src.is("is_fire") && playerHasEffect(p, effectFireResistance) {
+		return
+	}
+
 	// `if (amount < 0.0F) amount = 0.0F;` (bytecode: fload_3 fconst_0 fcmpg ifge -> fconst_0 fstore_3).
 	if amount < 0.0 {
 		amount = 0.0

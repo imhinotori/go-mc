@@ -58,6 +58,14 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 		return
 	}
 
+	// FIRE_RESISTANCE guard (LivingEntity.hurtServer bytecode 20-41): `if (source.is(IS_FIRE) &&
+	// hasEffect(FIRE_RESISTANCE)) return false;` — AFTER isDeadOrDying, BEFORE the amount<0 clamp.
+	// Live for mobs: the on_fire tick routes through here (fire.go) and the witch self-drinks a
+	// fire-resistance potion (ai_goals_witch.go), so a fire-resistant mob must ignore fire damage.
+	if src.is("is_fire") && entityHasEffect(e, effectFireResistance) {
+		return
+	}
+
 	// `if (amount < 0.0F) amount = 0.0F;`
 	if amount < 0.0 {
 		amount = 0.0

@@ -113,6 +113,24 @@ func TestAirDecrementsUnderwater(t *testing.T) {
 	}
 }
 
+// TestWaterBreathingHoldsAir: a submerged player holding WATER_BREATHING does NOT drain air — the
+// baseTick `flag` local (offset 244-280) folds !hasWaterBreathing, so the drain branch is skipped and
+// the sub-max bar even refills (MobEffectUtil.hasWaterBreathing gate). Cite LivingEntity.baseTick.
+func TestWaterBreathingHoldsAir(t *testing.T) {
+	loop, mgr := newFluidLoop()
+	setWater(mgr, pk.Position{X: 8, Y: 65, Z: 8}, 0)
+	p := breathPlayer(8.5, 64.0, 8.5)
+	p.airSupply = 100 // sub-max so the else-if refill is observable
+	p.activeEffects = map[string]*activeEffect{effectWaterBreathing: {id: effectWaterBreathing, duration: 600}}
+	loop.players = append(loop.players, p)
+
+	loop.tickBreath()
+	// !flag -> not drained; air < max -> increaseAirSupply(+4).
+	if p.airSupply != 104 {
+		t.Fatalf("WATER_BREATHING submerged air = %d, want 104 (no drain, refill +4)", p.airSupply)
+	}
+}
+
 // TestAirRefillsAboveWater: out of water, air climbs by 4/tick (increaseAirSupply) clamped to
 // maxAirSupply, and a full bar stays full.
 func TestAirRefillsAboveWater(t *testing.T) {

@@ -45,6 +45,32 @@ func TestIgniteAndFireCountdown(t *testing.T) {
 	loop.tickEntityFire(e)
 }
 
+// TestFireResistanceNegatesFireDamage: a mob holding FIRE_RESISTANCE takes NO on_fire tick damage
+// (LivingEntity.hurtServer bytecode 20-41: source.is(IS_FIRE) && hasEffect(FIRE_RESISTANCE) -> return
+// false). Without the effect the same on-fire tick lands 1 damage.
+func TestFireResistanceNegatesFireDamage(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+
+	// Baseline: a burning mob with NO effect takes 1 fire damage on the %20==0 tick.
+	bare := NewEntity(1, entity.Zombie, 8.5, 100, 8.5)
+	bare.health = 20
+	loop.igniteForSeconds(bare, 8.0) // remainingFireTicks 160 -> %20==0 on the first tick
+	loop.tickEntityFire(bare)
+	if bare.health >= 20 {
+		t.Fatalf("bare burning mob should take fire damage (health %v, want < 20)", bare.health)
+	}
+
+	// With FIRE_RESISTANCE the on_fire hit is fully negated.
+	fr := NewEntity(2, entity.Zombie, 8.5, 100, 8.5)
+	fr.health = 20
+	loop.addEntityEffect(fr, effectFireResistance, 600, 0)
+	loop.igniteForSeconds(fr, 8.0)
+	loop.tickEntityFire(fr)
+	if fr.health != 20 {
+		t.Fatalf("FIRE_RESISTANCE mob took fire damage: health %v, want 20 (source.is(IS_FIRE) && hasEffect(FIRE_RESISTANCE) -> return false)", fr.health)
+	}
+}
+
 // TestSunSensitiveGate: only zombie/skeleton are sun-sensitive; a pig/cow is not (so sunBurnTick
 // never draws RNG on them — the pig-oracle guard).
 func TestSunSensitiveGate(t *testing.T) {

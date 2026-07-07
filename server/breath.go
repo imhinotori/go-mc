@@ -73,6 +73,20 @@ func shouldTakeDrowningDamage(air int32) bool {
 	return air <= drowningThreshold
 }
 
+// effectBreathOfTheNautilus is MobEffects.BREATH_OF_THE_NAUTILUS — the third id in the
+// hasWaterBreathing OR-chain. No v1 source grants it yet; included so the port is the exact chain.
+const effectBreathOfTheNautilus = "minecraft:breath_of_the_nautilus"
+
+// playerHasWaterBreathing ports MobEffectUtil.hasWaterBreathing(LivingEntity): the air-loss gate in
+// baseTick (the `flag` local, offset 251) — true if the entity holds WATER_BREATHING, CONDUIT_POWER,
+// or BREATH_OF_THE_NAUTILUS. A plain hasEffect OR-chain, NO RNG. When true, submerged air neither
+// drains nor drowns. CITE net.minecraft.world.entity.ai.attributes/MobEffectUtil.hasWaterBreathing.
+func playerHasWaterBreathing(p *tickPlayer) bool {
+	return playerHasEffect(p, effectWaterBreathing) ||
+		playerHasEffect(p, effectConduitPower) ||
+		playerHasEffect(p, effectBreathOfTheNautilus)
+}
+
 // eyeInWater reports whether the player's EYES are submerged in water — the v1 port of
 // Entity.isEyeInFluid(FluidTags.WATER) that baseTick's air branch gates on. Vanilla samples the
 // fluid at the block containing getEyeY(); we mirror that by reading the single block cell at
@@ -183,8 +197,12 @@ func (t *TickLoop) tickBreath() {
 		// eye height (0.4 swimming, 1.62 standing).
 		t.updateSwimming(p)
 
-		if t.eyeInWater(p) {
-			// setAirSupply(decreaseAirSupply(getAirSupply())): air-1 for a bare player.
+		if t.eyeInWater(p) && !playerHasWaterBreathing(p) {
+			// setAirSupply(decreaseAirSupply(getAirSupply())): air-1 for a bare player. Gated on
+			// !hasWaterBreathing (baseTick's `flag` local, offset 244-280): submerged WITH Water
+			// Breathing / Conduit Power leaves flag false, so air is NOT drained — it falls to the
+			// else-if refill below, exactly as vanilla (the refill's shouldEffectsRefillAirsupply
+			// sub-gate is a separate BREATH_OF_THE_NAUTILUS path, still omitted for v1).
 			p.airSupply = decreaseAirSupply(p.airSupply)
 			if shouldTakeDrowningDamage(p.airSupply) {
 				// setAirSupply(0); hurtServer(DROWN, 2.0F).
