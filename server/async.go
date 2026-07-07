@@ -176,6 +176,12 @@ func (r pathReady) applyTo(t *TickLoop) {
 	// Still-valid: adopt the late path on the owner; the mob starts following it next tick.
 	nav.path = r.path
 	nav.pending = false
+	// PathNavigation.createPath resets the stuck/timeout bookkeeping whenever it commits a fresh path
+	// (resetStuckTimeout on a non-null result). This port computes the path off-tick and adopts it here,
+	// so the faithful place to reset the per-path timeout accumulator is on adoption — a new path must
+	// not inherit the previous path's timeoutTimer/cachedNode (C-3). (javap PathNavigation.createPath:
+	// on target!=null it calls resetStuckTimeout().)
+	nav.resetStuckTimeout()
 	// GroundPathNavigation.trimPath avoid-sun tail (VERIFIED CFR): a day-time restricted skeleton
 	// (RestrictSunGoal set avoidSun) has its fresh path truncated at the first sky-exposed node so it
 	// routes only as far as the shade extends. Runs HERE on the owner (a live *TickLoop canSeeSky read),
@@ -397,6 +403,7 @@ var naturalCreatureMobNames = []string{
 //     withRegion(dest) on that owner (the apply-time barrier is quiescent — TICK-05);
 //   - deterministic for a given region seed + draw order, so a test that seeds the region's levelRandom
 //     gets a reproducible pick sequence.
+//
 // It must be called ONLY inside a withRegion scope (cur() resolves the owning region); off a region it
 // would fall back to region 0 / panic under strictRegion — exactly the discipline the rest of the
 // per-region spawn path follows.

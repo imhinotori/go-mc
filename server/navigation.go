@@ -59,6 +59,23 @@ const (
 	// path is requested at most once per this many ticks unless the target changed (Pitfall 6 /
 	// T-7-04 — an unreachable-target flood cannot blow the budget).
 	navRecomputeCooldown = 20
+
+	// navStuckCheckInterval is PathNavigation.STUCK_CHECK_INTERVAL (100): the progress check in
+	// doStuckDetection runs only when tickCount-lastStuckCheck > this. (javap doStuckDetection: the
+	// `tick - lastStuckCheck > 100` gate — bipush 100 / if_icmple.)
+	navStuckCheckInterval = 100
+
+	// navStuckThresholdFactor is PathNavigation.STUCK_THRESHOLD_DISTANCE_FACTOR (0.25f): the
+	// distance-progress threshold is (speedFactor * 100 * 0.25); the mob is stuck if it moved less
+	// than that (squared) since the last check. (javap doStuckDetection: ldc 100.0f fmul, ldc 0.25f
+	// fmul.)
+	navStuckThresholdFactor = 0.25
+
+	// navTimeoutMultiplier is the `3.0` factor in the timeout gate (PathNavigation.doStuckDetection:
+	// `timeoutTimer > timeoutLimit * 3.0` — ldc2_w 3.0 dmul), and navTimeoutSpeedScale is the `20.0`
+	// in the per-node budget (`distance / getSpeed * 20.0` — ldc2_w 20.0 dmul).
+	navTimeoutMultiplier = 3.0
+	navTimeoutSpeedScale = 20.0
 )
 
 // groundNavigation is the per-mob path follower (ported GroundPathNavigation). It holds the
@@ -95,6 +112,53 @@ type groundNavigation struct {
 	// effect (previously a cited deferral). Plain bool, tick-owned.
 	//	[VERIFIED CFR RestrictSunGoal: start setAvoidSun(true); stop setAvoidSun(false).]
 	avoidSun bool
+
+	// --- stuck detection + path timeout (PathNavigation.doStuckDetection, ported 1:1, C-3) -----
+	// These track whether the mob is making progress along its path and time out a path that is
+	// blocked (a node the mob cannot reach) so stop() nulls it and the goal recomputes, instead of
+	// the mob grinding against the obstacle forever. Tick-owned (updated only in tick's followThePath
+	// tail via doStuckDetection, reset on path adoption). Ported from PathNavigation fields of the
+	// same name:
+	//
+	//	private static final int STUCK_CHECK_INTERVAL = 100;                 (navStuckCheckInterval)
+	//	private static final float STUCK_THRESHOLD_DISTANCE_FACTOR = 0.25f;  (navStuckThresholdFactor)
+	//	private static final int MAX_TIME_RECOMPUTE = 20;                    (the recompute throttle above)
+	//	[VERIFIED javap PathNavigation.doStuckDetection / resetStuckTimeout / timeoutPath, this session.]
+
+	// tickCount is the ever-incrementing per-mob tick counter (PathNavigation.tick, the int field).
+	// It is bumped once per navigation.tick and drives the STUCK_CHECK_INTERVAL gate (every 100 ticks).
+	tickCount int
+
+	// lastStuckCheck is the tick at which the progress check last ran; the check fires when
+	// tickCount - lastStuckCheck > 100 (PathNavigation.lastStuckCheck).
+	lastStuckCheck int
+
+	// lastStuckCheckPos is the mob position recorded at the last progress check; the mob is "stuck"
+	// if it has moved less than the speed-scaled threshold since then (PathNavigation.lastStuckCheckPos,
+	// initialized to Vec3.ZERO — modeled as the {0,0,0} zero value, faithful to the ZERO init).
+	lastStuckCheckPos [3]float64
+
+	// isStuck mirrors PathNavigation.isStuck: set true when the progress check found no progress
+	// (and stop() was called), cleared otherwise and by resetStuckTimeout.
+	isStuck bool
+
+	// timeoutCachedNode is the next-node position the timeout timer accumulates against
+	// (PathNavigation.timeoutCachedNode, initialized to Vec3i.ZERO). When the mob's next node changes,
+	// a fresh timeoutLimit is computed from the distance to it; while it stays the same the
+	// timeoutTimer accumulates elapsed game time.
+	timeoutCachedNode [3]int
+
+	// timeoutTimer accumulates elapsed game time (ticks) while the mob's next node is unchanged
+	// (PathNavigation.timeoutTimer, a long). Reset to 0 by resetStuckTimeout.
+	timeoutTimer int64
+
+	// lastTimeoutCheck is the game time of the last timeout check, so timeoutTimer can accumulate
+	// the delta since (PathNavigation.lastTimeoutCheck, a long).
+	lastTimeoutCheck int64
+
+	// timeoutLimit is the per-node timeout budget in ticks (PathNavigation.timeoutLimit, a double):
+	// distanceToNextNode / getSpeed * 20.0. The path times out when timeoutTimer > timeoutLimit*3.
+	timeoutLimit float64
 
 	// pending is set when an async path compute is in flight (OPT-01, 08-02): requestPath
 	// SUBMITS computePath to the off-tick pathPool and sets pending=true, then pathReady.applyTo
@@ -327,6 +391,9 @@ func (n *groundNavigation) markArrived(e *Entity) {
 }
 
 func (n *groundNavigation) tick(t *TickLoop, e *Entity) {
+	// PathNavigation.tick: ++this.tick is the FIRST thing every tick (before the isDone early-outs), so
+	// the STUCK_CHECK_INTERVAL gate advances even while idle. (javap tick: getfield tick / iadd first.)
+	n.tickCount++
 	if n.cooldown > 0 {
 		n.cooldown--
 	}
@@ -378,6 +445,11 @@ func (n *groundNavigation) tick(t *TickLoop, e *Entity) {
 		if closeEnough || n.shouldTargetNextNodeInDirection(e) {
 			n.path.advance()
 		}
+		// followThePath's tail (PathNavigation.followThePath: doStuckDetection(mobPos) is the LAST call):
+		// track progress + time out a blocked path. It may stop() (null n.path) here, which the isDone
+		// recheck immediately below picks up so a stuck mob stops walking this same tick and its goal
+		// recomputes instead of grinding against the obstacle forever (C-3).
+		n.doStuckDetection(t, e)
 	}
 	if n.path.done() {
 		n.markArrived(e) // arrived: clear so the stroll goal's canContinueToUse ends it + it re-rolls
@@ -448,6 +520,119 @@ func (n *groundNavigation) tick(t *TickLoop, e *Entity) {
 	// growing unbounded. (Vertical friction is handled by the physics/gravity pass.)
 	e.vx *= friction
 	e.vz *= friction
+}
+
+// doStuckDetection ports net.minecraft.world.entity.ai.navigation.PathNavigation.doStuckDetection(Vec3)
+// 1:1 (javap, this session). It runs at the tail of followThePath (navigation.tick) and does two
+// independent things:
+//
+//  1. PROGRESS CHECK (every STUCK_CHECK_INTERVAL=100 ticks): if the mob has moved less than a
+//     speed-scaled threshold since the last check it is declared stuck and stop() nulls the path.
+//     speedFactor f = getSpeed()>=1 ? getSpeed() : getSpeed()*getSpeed(); threshold = f*100*0.25;
+//     stuck iff distanceToSqr(lastStuckCheckPos) < threshold*threshold. Then record tick + pos.
+//
+//  2. TIMEOUT (every tick, only with a live not-done path): while the next node is unchanged the
+//     timeoutTimer accumulates elapsed game time; on a new next node a fresh budget is computed
+//     (timeoutLimit = distance / getSpeed * 20.0, or 0 when getSpeed()<=0). If timeoutLimit>0 and
+//     timeoutTimer > timeoutLimit*3.0 the path times out (timeoutPath -> resetStuckTimeout+stop).
+//
+// The mob position is the port's mob-pos proxy (e.x,e.y,e.z), matching the followThePath idiom this
+// file already uses (vanilla's getTempMobPos uses getSurfaceY for y; the port models mob pos as the
+// entity coords throughout navigation, so the same proxy is used here for consistency). getSpeed()
+// maps to n.speed (the goal's speedModifier x MOVEMENT_SPEED carried by setWantTargetSpeed), the
+// exact scalar MoveControl.setSpeed feeds Mob.setSpeed in vanilla.
+//
+//	[VERIFIED javap PathNavigation.doStuckDetection: tick-lastStuckCheck>100 gate; f = getSpeed()>=1?
+//	 getSpeed():getSpeed()*getSpeed(); f2 = f*100.0f*0.25f; distanceToSqr(lastStuckCheckPos)<f2*f2 ->
+//	 isStuck=true, stop(); else isStuck=false; lastStuckCheck=tick; lastStuckCheckPos=pos. Then if
+//	 path!=null && !path.isDone(): blockpos=getNextNodePos(); gameTime=getGameTime(); if blockpos
+//	 .equals(timeoutCachedNode) timeoutTimer += gameTime-lastTimeoutCheck; else { timeoutCachedNode=
+//	 blockpos; d = pos.distanceTo(Vec3.atBottomCenterOf(timeoutCachedNode)); timeoutLimit = getSpeed()
+//	 >0 ? d/getSpeed()*20.0 : 0; } if timeoutLimit>0 && timeoutTimer>timeoutLimit*3.0 timeoutPath();
+//	 lastTimeoutCheck=gameTime.]
+func (n *groundNavigation) doStuckDetection(t *TickLoop, e *Entity) {
+	mobX, mobY, mobZ := e.x, e.y, e.z
+
+	// (1) The progress check, gated to every STUCK_CHECK_INTERVAL ticks.
+	if n.tickCount-n.lastStuckCheck > navStuckCheckInterval {
+		speed := n.speed
+		var f float64
+		if speed >= 1.0 {
+			f = speed
+		} else {
+			f = speed * speed
+		}
+		// f2 = f * 100.0 * 0.25 (STUCK_THRESHOLD_DISTANCE_FACTOR). The comparison is against f2*f2
+		// (a squared distance vs a squared threshold).
+		f2 := f * 100.0 * navStuckThresholdFactor
+		dx := mobX - n.lastStuckCheckPos[0]
+		dy := mobY - n.lastStuckCheckPos[1]
+		dz := mobZ - n.lastStuckCheckPos[2]
+		distSqr := dx*dx + dy*dy + dz*dz
+		if distSqr < f2*f2 {
+			n.isStuck = true
+			n.stop() // no progress in 100 ticks: null the path so the goal recomputes
+		} else {
+			n.isStuck = false
+		}
+		n.lastStuckCheck = n.tickCount
+		n.lastStuckCheckPos = [3]float64{mobX, mobY, mobZ}
+	}
+
+	// (2) The per-node timeout, only while a live not-done path exists.
+	if n.path == nil || n.path.done() {
+		return
+	}
+	next := n.path.nextNode() // getNextNodePos(): the current next node's BlockPos
+	gameTime := t.GameTime()  // Level.getGameTime()
+	if n.timeoutCachedNode == [3]int{next.x, next.y, next.z} {
+		n.timeoutTimer += gameTime - n.lastTimeoutCheck
+	} else {
+		n.timeoutCachedNode = [3]int{next.x, next.y, next.z}
+		// distance to Vec3.atBottomCenterOf(node) = (x+0.5, y, z+0.5) — a full 3D distanceTo.
+		cx := float64(next.x) + 0.5
+		cy := float64(next.y)
+		cz := float64(next.z) + 0.5
+		d := math.Sqrt((mobX-cx)*(mobX-cx) + (mobY-cy)*(mobY-cy) + (mobZ-cz)*(mobZ-cz))
+		if n.speed > 0 {
+			n.timeoutLimit = d / n.speed * navTimeoutSpeedScale
+		} else {
+			n.timeoutLimit = 0
+		}
+	}
+	if n.timeoutLimit > 0 && float64(n.timeoutTimer) > n.timeoutLimit*navTimeoutMultiplier {
+		n.timeoutPath()
+	}
+	n.lastTimeoutCheck = gameTime
+}
+
+// timeoutPath ports PathNavigation.timeoutPath(): a blocked path exceeded its budget — reset the
+// stuck/timeout bookkeeping and stop() (null the path) so the mob recomputes rather than grinding.
+//
+//	[VERIFIED javap PathNavigation.timeoutPath: resetStuckTimeout(); stop().]
+func (n *groundNavigation) timeoutPath() {
+	n.resetStuckTimeout()
+	n.stop()
+}
+
+// resetStuckTimeout ports PathNavigation.resetStuckTimeout(): clear the timeout accumulator, the
+// cached node (back to the Vec3i.ZERO zero value), the limit, and the isStuck flag. Called by
+// timeoutPath and on adopting a fresh path (vanilla createPath calls it on a successful new path;
+// this port calls it in pathReady.applyTo where the late path is adopted — async.go).
+//
+//	[VERIFIED javap PathNavigation.resetStuckTimeout: timeoutCachedNode=Vec3i.ZERO; timeoutTimer=0;
+//	 timeoutLimit=0.0; isStuck=false.]
+func (n *groundNavigation) resetStuckTimeout() {
+	n.timeoutCachedNode = [3]int{}
+	n.timeoutTimer = 0
+	n.timeoutLimit = 0
+	n.isStuck = false
+}
+
+// stop ports PathNavigation.stop(): null the active path. The mob then stands until a goal requests
+// a fresh path (the recompute). (javap stop: this.path = null.)
+func (n *groundNavigation) stop() {
+	n.path = nil
 }
 
 // shouldTargetNextNodeInDirection ports PathNavigation.shouldTargetNextNodeInDirection — the corner-cut
