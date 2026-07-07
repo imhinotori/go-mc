@@ -210,6 +210,15 @@ const damageFoodExhaustion float32 = 0.1
 //	// death sounds: world-side/visual — the death drive is the die() call after actuallyHurt
 //	// reduces health to 0.
 func (t *TickLoop) applyDamage(p *tickPlayer, src damageSource, amount float32) {
+	// isInvulnerableTo guard (Entity.isInvulnerableToBase, the FIRST hurtServer check): a creative or
+	// spectator player has abilities.invulnerable == true, so it absorbs ALL damage EXCEPT the sources
+	// tagged BYPASSES_INVULNERABILITY (generic_kill from /kill, out_of_world from the void). This is why
+	// a creative player takes no attack/fall/lava/drown/lightning damage yet still dies to /kill and the
+	// void. Cite Entity.isInvulnerableToBase (invulnerable && !is(BYPASSES_INVULNERABILITY)).
+	if (p.gameMode == gameModeCreative || p.gameMode == gameModeSpectator) && !src.is("bypasses_invulnerability") {
+		return
+	}
+
 	// isDeadOrDying() guard (bytecode: isDeadOrDying ifeq -> iconst_0 ireturn): a corpse takes no
 	// further damage until it respawns.
 	if p.dead {

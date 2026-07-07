@@ -4,9 +4,59 @@ import (
 	"testing"
 
 	"github.com/imhinotori/sulfur/data/packetid"
+	"github.com/imhinotori/sulfur/data/tag"
 	"github.com/imhinotori/sulfur/level"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
+
+// TestCreativeInvulnerable: a creative player absorbs all damage EXCEPT sources tagged
+// BYPASSES_INVULNERABILITY (out_of_world/generic_kill). Cite Entity.isInvulnerableToBase.
+func TestCreativeInvulnerable(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	p := combatPlayer(loop, 1)
+	p.gameMode = gameModeCreative
+
+	// Generic (attack/fall/etc.) damage is fully negated in creative.
+	loop.applyDamage(p, damageSourceOf(damageTypeGeneric), 6)
+	if p.health != maxHealth {
+		t.Fatalf("creative took generic damage: health = %v, want %v", p.health, maxHealth)
+	}
+
+	// A BYPASSES_INVULNERABILITY source (the void) STILL kills a creative player.
+	outOfWorld := damageTypeID(tag.DamageTypeIDs["minecraft:out_of_world"])
+	loop.applyDamage(p, damageSourceOf(outOfWorld), 6)
+	if p.health != maxHealth-6 {
+		t.Fatalf("out_of_world (bypasses_invulnerability) did NOT hurt creative: health = %v, want %v", p.health, maxHealth-6)
+	}
+
+	// A spectator is likewise invulnerable to generic damage.
+	sp := combatPlayer(loop, 2)
+	sp.gameMode = gameModeSpectator
+	loop.applyDamage(sp, damageSourceOf(damageTypeGeneric), 6)
+	if sp.health != maxHealth {
+		t.Fatalf("spectator took generic damage: health = %v, want %v", sp.health, maxHealth)
+	}
+}
+
+// TestCreativeNoFoodExhaustion: a creative player never accrues exhaustion (Player.causeFoodExhaustion
+// early-returns on abilities.invulnerable); a survival player does.
+func TestCreativeNoFoodExhaustion(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+
+	creative := combatPlayer(loop, 1)
+	creative.gameMode = gameModeCreative
+	loop.causeFoodExhaustion(creative, 0.1)
+	if creative.exhaustion != 0 {
+		t.Fatalf("creative accrued exhaustion %v, want 0", creative.exhaustion)
+	}
+
+	survival := combatPlayer(loop, 2)
+	survival.gameMode = gameModeSurvival
+	loop.causeFoodExhaustion(survival, 0.1)
+	if survival.exhaustion == 0 {
+		t.Fatalf("survival did not accrue exhaustion, want > 0")
+	}
+}
 
 // combat_test.go covers ENT-05: the server-owned health/damage/death/respawn loop. Health
 // is SERVER-owned (T-6-05) — the client has NO health-setting packet, it only REQUESTS a

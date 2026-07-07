@@ -938,8 +938,9 @@ func (t *TickLoop) sweepMobsNear(attacker *tickPlayer, r *region, skipID int32, 
 // attack (causeFoodExhaustion(0.1) in handleAttack), the actuallyHurt damage tail (combat.go), and
 // the movement ladder (checkMovementStatistics in food.go).
 func (t *TickLoop) causeFoodExhaustion(p *tickPlayer, exhaustion float32) {
-	const invulnerable = false // Player.abilities.invulnerable: creative/invuln not wired in v1 (CITED stub)
-	if invulnerable {
+	// `if (abilities.invulnerable) return;` — a creative (or spectator) player's abilities.invulnerable
+	// is true, so it never accrues exhaustion (hunger is frozen in creative). Cite Player.causeFoodExhaustion.
+	if p.gameMode == gameModeCreative || p.gameMode == gameModeSpectator {
 		return
 	}
 	// !level.isClientSide() is always true on the server: foodData.addExhaustion(exhaustion).
