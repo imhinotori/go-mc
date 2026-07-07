@@ -150,6 +150,24 @@ func (t *TickLoop) onBlockTickEdit(pos pk.Position) {
 	if block.IsSugarCane(aboveState) {
 		t.updateShapeSugarCane(abovePos)
 	}
+	// REDSTONE BLOCKS: a place/break at pos also starts the per-block scheduled behavior of the CHANGED
+	// cell when it is a daylight detector (starts its 20-tick sky-light recompute, DaylightDetectorBlock
+	// .getTicker on load) or a tripwire hook (TripWireHookBlock.setPlacedBy -> calculateState) or a
+	// tripwire (TripWireBlock.onPlace -> updateSource). These are the schedule/circuit-seed halves of the
+	// redstone_blocks.go reactions, driven off the same edit hook the sugar-cane/falling seams use.
+	changedState, okc := t.world().GetBlock(pos, dimMinY)
+	if okc {
+		switch {
+		case block.IsDaylightDetector(changedState):
+			t.scheduleDaylightTick(pos) // DaylightDetectorBlock.getTicker: begin the 20-tick recompute
+		case block.IsTripwireHook(changedState):
+			// TripWireHookBlock.setPlacedBy: calculateState(level, pos, state, false, false, -1, null).
+			t.tripwireHookCalculateState(pos, changedState, false, -1, 0, false)
+		case block.IsTripwire(changedState):
+			// TripWireBlock.onPlace: updateSource(level, pos, state) - re-drive the bounding hooks.
+			t.tripwireUpdateSource(pos, changedState)
+		}
+	}
 }
 
 // sugarCaneRandomTick is SugarCaneBlock.randomTick: grow the cane. If the cell ABOVE is empty

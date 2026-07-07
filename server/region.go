@@ -114,6 +114,12 @@ type region struct {
 	// a 60-tick window -> 160-tick cooldown). CITE: RedstoneTorchBlock.RECENT_TOGGLES.
 	redstoneToggles []redstoneToggle
 
+	// notesPlayed is the per-tick list of note-block positions that played this tick (NoteBlock
+	// .playNote blockEvent, an audible/vibration client effect that is a cited no-op). Test/observability
+	// seam: the note-play has no server gameplay, so this records the rising-edge play for assertions.
+	// Tick-owned. CITE: NoteBlock.playNote (blockEvent 0,0).
+	notesPlayed []pk.Position
+
 	// comparatorOutput is the per-level ComparatorBlockEntity.output store (REDSTONE TIER-2): a map
 	// from a comparator's position to the last output-signal value refreshOutputState computed and the
 	// tick(...) reads back via getOutputSignal. Vanilla holds this int in the comparator's BlockEntity

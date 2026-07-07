@@ -263,6 +263,18 @@ func (t *TickLoop) stateGetSignal(state block.StateID, pos pk.Position, directio
 	case block.IsObserver(state):
 		// ObserverBlock.getSignal: ownSignal (POWERED?15:0) only out FACING (REDSTONE TIER-3, observer.go).
 		return observerGetSignal(state, direction)
+	case block.IsTargetBlock(state):
+		// TargetBlock.ownSignal (getSignal): OUTPUT_POWER out EVERY face. CITE: TargetBlock.ownSignal.
+		return block.TargetOutputPower(state)
+	case block.IsDaylightDetector(state):
+		// DaylightDetectorBlock.ownSignal (getSignal): POWER out EVERY face. CITE: DaylightDetectorBlock.ownSignal.
+		return block.DaylightPower(state)
+	case block.IsTripwireHook(state):
+		// TripWireHookBlock.ownSignal (getSignal): POWERED ? 15 : 0 out EVERY face. CITE: TripWireHookBlock.ownSignal.
+		if block.TripwireHookPowered(state) {
+			return 15
+		}
+		return 0
 	case block.IsDetectorRailBlock(state):
 		// DetectorRailBlock.ownSignal (getSignal): POWERED ? 15 : 0 out EVERY face — a detector rail with a
 		// minecart on it is a full 15-out-all-faces weak source. CITE: DetectorRailBlock.ownSignal.
@@ -320,6 +332,16 @@ func (t *TickLoop) stateGetDirectSignal(state block.StateID, pos pk.Position, di
 	case block.IsObserver(state):
 		// ObserverBlock.getDirectSignal == getSignal (REDSTONE TIER-3, observer.go).
 		return observerGetSignal(state, direction)
+	case block.IsTripwireHook(state):
+		// TripWireHookBlock.getDirectSignal: POWERED && FACING == direction ? 15 : 0 (strong out FACING
+		// only). Target/daylight have no getDirectSignal override (weak-only, default 0). CITE:
+		// TripWireHookBlock.getDirectSignal.
+		if block.TripwireHookPowered(state) {
+			if f, ok := block.TripwireHookFacing(state); ok && f == direction {
+				return 15
+			}
+		}
+		return 0
 	case block.IsDetectorRailBlock(state):
 		// DetectorRailBlock.getDirectSignal: POWERED && direction == UP ? 15 : 0 (the strong signal a detector
 		// rail emits straight UP into the block above). CITE: DetectorRailBlock.getDirectSignal.
@@ -773,7 +795,8 @@ func (t *TickLoop) isSignalSource(state block.StateID) bool {
 	case block.IsRedstoneBlock(state), block.IsLever(state), block.IsButton(state),
 		block.IsRedstoneTorch(state), block.IsRedstoneWallTorch(state), block.IsRedstoneWire(state),
 		block.IsLightningRod(state),
-		block.IsRepeater(state), block.IsComparator(state), block.IsObserver(state):
+		block.IsRepeater(state), block.IsComparator(state), block.IsObserver(state),
+		block.IsTargetBlock(state), block.IsDaylightDetector(state), block.IsTripwireHook(state):
 		// DiodeBlock.isSignalSource == true (REDSTONE TIER-2); ObserverBlock.isSignalSource == true
 		// (REDSTONE TIER-3); LightningRodBlock.isSignalSource == true. CITE: DiodeBlock.isSignalSource /
 		// ObserverBlock.isSignalSource / LightningRodBlock.isSignalSource.
@@ -903,6 +926,10 @@ func (t *TickLoop) drainRedstoneUpdates(q *redstoneUpdateQueue) {
 					}
 				}
 			}
+		case block.IsNoteBlock(state):
+			// NoteBlock.neighborChanged: on a rising redstone edge play the note + set POWERED; on a falling
+			// edge clear POWERED (redstone_blocks.go). CITE: NoteBlock.neighborChanged.
+			t.noteBlockNeighborChanged(pos, state)
 		case isTntBlock(state):
 			// TntBlock.neighborChanged (shared logic with onPlace): if the block now has a neighbor signal,
 			// prime the TNT (spawn a PrimedTnt) and removeBlock. This fires on a redstone rising edge that

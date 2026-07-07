@@ -72,6 +72,24 @@ const (
 	// .neighborChanged) that, if still lit and still unpowered, clears LIT (RedstoneLampBlock.tick).
 	redstoneLampTickType blockTickType = "minecraft:redstone_lamp"
 
+	// targetTickType is the block id the TargetBlock output-power reset (TargetBlock.tick) is scheduled
+	// under: a hit target schedules a tick (20 ticks for an arrow, 8 for other projectiles) that resets
+	// OUTPUT_POWER to 0. CITE: TargetBlock.setOutputPower (scheduleTick(pos, this, activationTicks)).
+	targetTickType blockTickType = "minecraft:target"
+
+	// daylightDetectorTickType is the block id the DaylightDetector signal recompute (daylightTick ->
+	// updateSignalStrength) is scheduled under. The detector self-reschedules onto the next game-time
+	// multiple of 20, matching DaylightDetectorBlockEntity.tickEntity (gameTime % 20 == 0). CITE:
+	// DaylightDetectorBlock.tickEntity.
+	daylightDetectorTickType blockTickType = "minecraft:daylight_detector"
+
+	// tripwireTickType is the block id both the tripwire (TripWireBlock.tick) and the tripwire-hook
+	// (TripWireHookBlock.tick) recheck ticks are scheduled under. A pressed wire reschedules 10 ticks
+	// out; a released wire schedules a 0-tick recheck. calculateState also schedules the changed wire.
+	// Both blocks share the handler (routed by the state at pos). CITE: TripWireBlock.checkPressed /
+	// TripWireHookBlock.calculateState (scheduleTick(pos, block, 10)).
+	tripwireTickType blockTickType = "minecraft:tripwire"
+
 	// fireTickType is the block id the FIRE spread/burn-out tick (FireBlock.tick) is scheduled/
 	// dispatched under. Fire is a SCHEDULED ticker: onPlace / tick reschedule via scheduleTick(pos,
 	// this, getFireTickDelay()==30+nextInt(10)), so it drains through this general LevelTicks (like
@@ -371,6 +389,34 @@ func (t *TickLoop) tickBlock(pos pk.Position, typ blockTickType) {
 				}
 			}
 		}
+	case targetTickType:
+		// TargetBlock.tick stale guard: only tick if still a target block. The scheduled tick resets
+		// OUTPUT_POWER to 0 (redstone_blocks.go). CITE: ServerLevel.tickBlock / TargetBlock.tick.
+		if !block.IsTargetBlock(state) {
+			return
+		}
+		t.targetTick(state, pos)
+	case daylightDetectorTickType:
+		// DaylightDetector stale guard: only tick if still a daylight detector. The tick recomputes POWER
+		// from the sky brightness and self-reschedules (redstone_blocks.go). CITE: DaylightDetectorBlock.tickEntity.
+		if !block.IsDaylightDetector(state) {
+			return
+		}
+		t.daylightTick(state, pos)
+	case tripwireTickType:
+		// TripWire/TripWireHook stale guard: the scheduled tick is shared by both blocks (both schedule
+		// under minecraft:tripwire); route by the state at pos. A wire recheck (TripWireBlock.tick) or a
+		// hook recalc (TripWireHookBlock.tick) fires depending on which block is there now. CITE:
+		// ServerLevel.tickBlock / TripWireBlock.tick / TripWireHookBlock.tick.
+		if block.IsTripwire(state) {
+			t.tripwireTick(state, pos)
+			return
+		}
+		if block.IsTripwireHook(state) {
+			t.tripwireHookCalculateState(pos, state, false, -1, 0, false)
+			return
+		}
+		return
 	case fireTickType:
 		// ServerLevel.tickBlock stale guard: only tick if still fire (any age/attach flags). A fire that
 		// burned out / was extinguished since the tick was scheduled fires nothing. Routes to the FireBlock
@@ -380,7 +426,7 @@ func (t *TickLoop) tickBlock(pos pk.Position, typ blockTickType) {
 			return
 		}
 		t.fireTick(t.only(), state, pos)
-		case sandTickType, redSandTickType, gravelTickType:
+	case sandTickType, redSandTickType, gravelTickType:
 		// ServerLevel.tickBlock stale guard: only tick if still a FallingBlock kind (sand/red_sand/gravel).
 		// A FallingBlock broken/replaced since the tick was scheduled fires nothing. Routes to the shared
 		// FallingBlock.tick handler (falling_block.go). CITE: ServerLevel.tickBlock (`state.is(block)`).
