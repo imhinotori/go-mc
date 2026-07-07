@@ -97,6 +97,47 @@ const (
 // Every Scan returns on error WITHOUT mutating position (T-5-02): a malformed/short
 // payload is a no-op, never a panic. Runs only on the owner goroutine over tick-owned
 // state (TICK-05 / T-5-06).
+// movementHasInvalidValues is the port of ServerGamePacketListenerImpl.containsInvalidValues(double
+// x, double y, double z, float yRot, float xRot): true when x/y/z is NaN (Double.isNaN) or either
+// look angle is NOT finite (Floats.isFinite == !NaN && !Inf). Vanilla treats such a movement packet
+// as a protocol violation and disconnects the client. Cite containsInvalidValues (bytecode 0-37).
+func movementHasInvalidValues(x, y, z float64, yaw, pitch float32) bool {
+	// x/y/z: Double.isNaN ONLY (bytecode 0-19 — an infinite coordinate is NOT rejected here; it is
+	// clamped by clampHorizontal/clampVertical afterward, so do NOT add an isInfinite check).
+	if math.IsNaN(x) || math.IsNaN(y) || math.IsNaN(z) {
+		return true
+	}
+	// yaw/pitch: Floats.isFinite (bytecode 22-37) — finite iff not NaN and not ±Inf.
+	if !floatIsFinite(yaw) || !floatIsFinite(pitch) {
+		return true
+	}
+	return false
+}
+
+// floatIsFinite is com.google.common.primitives.Floats.isFinite(float): !NaN && !Inf.
+func floatIsFinite(f float32) bool {
+	d := float64(f)
+	return !math.IsNaN(d) && !math.IsInf(d, 0)
+}
+
+// clampHorizontal ports ServerGamePacketListenerImpl.clampHorizontal(double): Mth.clamp(d, -3.0E7,
+// 3.0E7) — the world-coordinate horizontal (x,z) limit. Cite clampHorizontal (ldc2_w ±3.0E7).
+func clampHorizontal(d float64) float64 { return math.Max(-3.0e7, math.Min(3.0e7, d)) }
+
+// clampVertical ports clampVertical(double): Mth.clamp(d, -2.0E7, 2.0E7) — the vertical (y) limit.
+// Cite clampVertical (ldc2_w ±2.0E7).
+func clampVertical(d float64) float64 { return math.Max(-2.0e7, math.Min(2.0e7, d)) }
+
+// disconnectInvalidMovement mirrors handleMovePlayer's disconnect("invalid_player_movement"): record
+// the reason for the leave log and close the connection. The subtick caller returns WITHOUT mutating
+// position, so the NaN/Inf never reaches chunkCenterOf / the broad-phase / the tracker broadcast.
+func (t *TickLoop) disconnectInvalidMovement(p *tickPlayer) {
+	if p.client != nil {
+		p.client.SetDisconnectReason("invalid_player_movement")
+		p.client.Close()
+	}
+}
+
 func (t *TickLoop) applyInput(p *tickPlayer, in SubtickInput) {
 	// Hook FIRST (before the gate): preserves the Phase-3 subtick-ordering observability
 	// for unconfirmed players (the existing TestSubtickOrdering/TestSubtickBufferCap rely
@@ -124,11 +165,24 @@ func (t *TickLoop) applyInput(p *tickPlayer, in SubtickInput) {
 		if err := in.Packet.Scan(&x, &y, &z, &flags); err != nil {
 			return // malformed/short: no mutation (T-5-02)
 		}
+		// containsInvalidValues gate (ServerGamePacketListenerImpl.handleMovePlayer bytecode 37-50):
+		// NaN/Inf position poisons chunkCenterOf, the broad-phase bucket, and the movement broadcast to
+		// EVERY tracker (a NaN propagated to other clients). Vanilla disconnects with
+		// "invalid_player_movement"; mirror that (reject the packet + tear the connection down) instead
+		// of assigning the poison. yaw/pitch unchanged in this variant, so pass the current look.
+		if movementHasInvalidValues(float64(x), float64(y), float64(z), p.yaw, p.pitch) {
+			t.disconnectInvalidMovement(p)
+			return
+		}
+		// clampHorizontal(x,z) ±3.0E7, clampVertical(y) ±2.0E7 (handleMovePlayer, the Mth.clamp calls
+		// after the validity gate): a finite-but-absurd coordinate is clamped to the world-coordinate
+		// limit rather than trusted, so an Inf/huge value can never blow the chunk math.
+		cx, cy, cz := clampHorizontal(float64(x)), clampVertical(float64(y)), clampHorizontal(float64(z))
 		// Authoritative anti-clip-through (ENT-02 / T-6-06): collide the client-CLAIMED
 		// position per-axis against solid world blocks BEFORE accepting it. The server
 		// corrects a clip-through claim rather than trusting the raw position. In an empty
 		// world (no solid blocks in the path) the claim is returned verbatim.
-		nx, ny, nz := t.collidePlayer(p, float64(x), float64(y), float64(z))
+		nx, ny, nz := t.collidePlayer(p, cx, cy, cz)
 		// VANILLA AUTHORITY MODEL (BUG-1 fix): accept the client's submitted
 		// (collide-clamped) position VERBATIM — do NOT re-apply water drag/buoyancy.
 		// In ServerGamePacketListenerImpl.handleMovePlayer the server calls
@@ -150,10 +204,18 @@ func (t *TickLoop) applyInput(p *tickPlayer, in SubtickInput) {
 		if err := in.Packet.Scan(&x, &y, &z, &yaw, &pitch, &flags); err != nil {
 			return
 		}
+		// containsInvalidValues gate (handleMovePlayer 37-50): reject+disconnect on NaN/Inf in any of
+		// x/y/z (Double.isNaN) or yaw/pitch (Floats.isFinite) before it poisons the tracker broadcast.
+		if movementHasInvalidValues(float64(x), float64(y), float64(z), float32(yaw), float32(pitch)) {
+			t.disconnectInvalidMovement(p)
+			return
+		}
+		// clampHorizontal(x,z)/clampVertical(y) — same as the Pos variant.
+		cx, cy, cz := clampHorizontal(float64(x)), clampVertical(float64(y)), clampHorizontal(float64(z))
 		// Authoritative anti-clip-through (ENT-02 / T-6-06): collide the claimed position
 		// per-axis before accepting it (same as the Pos variant). Look angles are accepted
 		// as sent — only the POSITION is collided.
-		nx, ny, nz := t.collidePlayer(p, float64(x), float64(y), float64(z))
+		nx, ny, nz := t.collidePlayer(p, cx, cy, cz)
 		// VANILLA AUTHORITY MODEL (BUG-1 fix): accept the client's submitted position
 		// verbatim (same as the Pos variant) — the server never re-applies water physics
 		// to a client-authoritative player; LivingEntity.travelInFluid runs client-side.
@@ -173,6 +235,12 @@ func (t *TickLoop) applyInput(p *tickPlayer, in SubtickInput) {
 		var yaw, pitch pk.Float
 		var flags pk.UnsignedByte
 		if err := in.Packet.Scan(&yaw, &pitch, &flags); err != nil {
+			return
+		}
+		// containsInvalidValues gate (handleMovePlayer 37-50): a Rot-only packet still validates the
+		// look angles (Floats.isFinite on yaw/pitch); the position args are the current (valid) pos.
+		if movementHasInvalidValues(p.x, p.y, p.z, float32(yaw), float32(pitch)) {
+			t.disconnectInvalidMovement(p)
 			return
 		}
 		p.yaw, p.pitch = float32(yaw), float32(pitch)

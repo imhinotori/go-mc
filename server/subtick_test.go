@@ -1,12 +1,68 @@
 package server
 
 import (
+	"math"
 	"testing"
 	"time"
 
 	"github.com/imhinotori/sulfur/data/packetid"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
+
+// TestMovementHasInvalidValues pins containsInvalidValues: NaN/Inf in x/y/z (Double.isNaN) or a
+// non-finite yaw/pitch (Floats.isFinite) is invalid; finite values pass.
+func TestMovementHasInvalidValues(t *testing.T) {
+	if movementHasInvalidValues(1, 64, 1, 90, 0) {
+		t.Fatal("finite movement flagged invalid")
+	}
+	nan := math.NaN()
+	inf := math.Inf(1)
+	cases := []struct {
+		name       string
+		x, y, z    float64
+		yaw, pitch float32
+	}{
+		{"nanX", nan, 64, 1, 0, 0},
+		{"nanY", 1, nan, 1, 0, 0},
+		{"nanZ", 1, 64, nan, 0, 0},
+		{"nanYaw", 1, 64, 1, float32(nan), 0},
+		{"infPitch", 1, 64, 1, 0, float32(inf)},
+	}
+	for _, c := range cases {
+		if !movementHasInvalidValues(c.x, c.y, c.z, c.yaw, c.pitch) {
+			t.Errorf("%s: expected invalid", c.name)
+		}
+	}
+	// An INFINITE coordinate is NOT rejected here (vanilla only NaN-checks x/y/z); it is clamped.
+	if movementHasInvalidValues(inf, 64, 1, 0, 0) {
+		t.Error("infinite coordinate must NOT be rejected by containsInvalidValues (it is clamped instead)")
+	}
+	if clampHorizontal(inf) != 3.0e7 || clampHorizontal(-inf) != -3.0e7 {
+		t.Errorf("clampHorizontal(±inf) = (%v,%v), want (3e7,-3e7)", clampHorizontal(inf), clampHorizontal(-inf))
+	}
+	if clampVertical(1e9) != 2.0e7 {
+		t.Errorf("clampVertical(1e9) = %v, want 2e7", clampVertical(1e9))
+	}
+}
+
+// TestMoveNaNRejectedNoPoison: a MovePlayerPos carrying a NaN coordinate must NOT overwrite the
+// player position (which would poison chunkCenterOf + the tracker broadcast) — the packet is rejected
+// and the client is disconnected with "invalid_player_movement" (handleMovePlayer containsInvalidValues).
+func TestMoveNaNRejectedNoPoison(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	p := &tickPlayer{client: captureClient(4), confirmedTeleport: true, x: 10, y: 64, z: 10}
+
+	posNaN := pk.Marshal(int32(packetid.ServerboundMovePlayerPos),
+		pk.Double(math.NaN()), pk.Double(64), pk.Double(10), pk.UnsignedByte(1))
+	loop.applyInput(p, SubtickInput{Packet: posNaN})
+
+	if p.x != 10 || p.y != 64 || p.z != 10 {
+		t.Fatalf("NaN move mutated position to (%v,%v,%v), want unchanged (10,64,10)", p.x, p.y, p.z)
+	}
+	if got := p.client.DisconnectReason(); got != "invalid_player_movement" {
+		t.Fatalf("disconnect reason = %q, want invalid_player_movement", got)
+	}
+}
 
 // TestSubtickOrdering proves TICK-03's chronological-resolution contract: inputs are
 // drained from a player's buffer in strict order of their server-arrival stamp (At),

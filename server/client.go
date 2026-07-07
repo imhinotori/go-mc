@@ -201,7 +201,9 @@ func (c *Client) Close() {
 		c.closed.Store(true)
 		close(c.quit)      // release readLoop from any in-flight inbound send
 		c.outbound.Close() // stop the single writer (writeLoop Pull returns ok=false)
-		_ = c.conn.Close() // unblock readLoop's ReadPacket
+		if c.conn != nil {
+			_ = c.conn.Close() // unblock readLoop's ReadPacket
+		}
 	})
 }
 
