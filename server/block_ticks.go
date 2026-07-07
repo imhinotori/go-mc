@@ -360,6 +360,14 @@ func (t *TickLoop) tickBlock(pos pk.Position, typ blockTickType) {
 			return
 		}
 		t.observerTick(state, pos)
+	case plateTickType:
+		// BasePressurePlateBlock.tick stale guard: only tick if still a pressure plate (any family). The
+		// scheduled tick re-checks the entity count and unpresses once the entities have left. CITE:
+		// ServerLevel.tickBlock / BasePressurePlateBlock.tick.
+		if !block.IsPressurePlate(state) && !block.IsWeightedPressurePlate(state) {
+			return
+		}
+		t.plateTick(state, pos)
 	case detectorRailTickType:
 		// ServerLevel.tickBlock stale guard: only tick if still a detector rail (minecart.go). The scheduled
 		// tick re-checks whether a cart is still on the rail and clears POWERED if not. CITE: DetectorRailBlock.tick.

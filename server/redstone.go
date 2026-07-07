@@ -282,6 +282,17 @@ func (t *TickLoop) stateGetSignal(state block.StateID, pos pk.Position, directio
 			return 15
 		}
 		return 0
+	case block.IsPressurePlate(state):
+		// PressurePlateBlock.ownSignal (getSignal): getSignalForState == POWERED ? 15 : 0 out EVERY face.
+		// CITE: BasePressurePlateBlock.ownSignal -> getSignalForState.
+		if block.PressurePlatePowered(state) {
+			return 15
+		}
+		return 0
+	case block.IsWeightedPressurePlate(state):
+		// WeightedPressurePlateBlock.ownSignal (getSignal): getSignalForState == POWER (0..15) out EVERY face.
+		// CITE: BasePressurePlateBlock.ownSignal -> WeightedPressurePlateBlock.getSignalForState.
+		return block.WeightedPressurePlatePower(state)
 	default:
 		return 0 // BlockBehaviour default: ownSignal == 0
 	}
@@ -347,6 +358,14 @@ func (t *TickLoop) stateGetDirectSignal(state block.StateID, pos pk.Position, di
 		// rail emits straight UP into the block above). CITE: DetectorRailBlock.getDirectSignal.
 		if p, ok := block.RailPowered(state); ok && p && direction == block.Up {
 			return 15
+		}
+		return 0
+	case block.IsPressurePlate(state), block.IsWeightedPressurePlate(state):
+		// BasePressurePlateBlock.getDirectSignal: UP == direction ? getSignalForState : 0 (the strong signal
+		// a plate emits straight UP into the block above; every other face is weak-only). CITE:
+		// BasePressurePlateBlock.getDirectSignal.
+		if direction == block.Up {
+			return t.stateGetSignal(state, pos, direction)
 		}
 		return 0
 	default:
@@ -796,7 +815,8 @@ func (t *TickLoop) isSignalSource(state block.StateID) bool {
 		block.IsRedstoneTorch(state), block.IsRedstoneWallTorch(state), block.IsRedstoneWire(state),
 		block.IsLightningRod(state),
 		block.IsRepeater(state), block.IsComparator(state), block.IsObserver(state),
-		block.IsTargetBlock(state), block.IsDaylightDetector(state), block.IsTripwireHook(state):
+		block.IsTargetBlock(state), block.IsDaylightDetector(state), block.IsTripwireHook(state),
+		block.IsPressurePlate(state), block.IsWeightedPressurePlate(state):
 		// DiodeBlock.isSignalSource == true (REDSTONE TIER-2); ObserverBlock.isSignalSource == true
 		// (REDSTONE TIER-3); LightningRodBlock.isSignalSource == true. CITE: DiodeBlock.isSignalSource /
 		// ObserverBlock.isSignalSource / LightningRodBlock.isSignalSource.

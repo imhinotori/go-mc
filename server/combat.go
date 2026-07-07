@@ -320,7 +320,7 @@ func (t *TickLoop) applyDamage(p *tickPlayer, src damageSource, amount float32) 
 	// Death drive: actuallyHurt has set the authoritative health (and sent SetHealth); if it
 	// reached 0 raise the death screen. Mirrors hurtServer's isDeadOrDying() tail that plays the
 	// death sound and the eventual death handling — v1's die() sends the PlayerCombatKill.
-	if p.health <= 0 {
+	if p.health <= 0 && !t.checkTotemDeathProtection(p, src) {
 		t.die(p)
 	}
 }
@@ -860,3 +860,100 @@ func maxF(a, b float32) float32 {
 // (NaN and ±Inf survive the widening, so the math.IsNaN/IsInf checks are exact).
 func isNaN32(f float32) bool { return math.IsNaN(float64(f)) }
 func isInf32(f float32) bool { return math.IsInf(float64(f), 0) }
+
+// checkTotemDeathProtection is the port of net.minecraft.world.entity.LivingEntity
+// .checkTotemDeathProtection(DamageSource) for a PLAYER victim. When the player would die holding a
+// Totem of Undying (an item carrying the DEATH_PROTECTION component) in either hand, the totem is
+// consumed (shrink 1), the player is revived at 1 HP, all effects are cleared and the totem
+// death_protection effects applied, and the totem-pop entity event (35) is broadcast; the death is
+// then CANCELLED (returns true). Returns false (death proceeds) when the source bypasses
+// invulnerability or no totem is held. Called from applyDamage: if (health<=0 &&
+// !checkTotemDeathProtection(src)) die(). Gated on a totem actually held -- no totem -> scans both
+// hands, finds nothing, returns false with zero side effects (the identical old death path).
+//
+// Faithful bytecode (javap LivingEntity.checkTotemDeathProtection this session):
+//   if (source.is(BYPASSES_INVULNERABILITY)) return false;   // /kill + the void ignore the totem
+//   for (InteractionHand hand : InteractionHand.values()) {  // MAINHAND then OFFHAND
+//     dp = getItemInHand(hand).get(DataComponents.DEATH_PROTECTION);
+//     if (dp != null) { totem = held.copy(); held.shrink(1); break; } }
+//   if (totem != null) { if (ServerPlayer) { awardStat; USED_TOTEM.trigger; causeUseVibration; }
+//     setHealth(1.0F); dp.applyEffects(totem, this); level().broadcastEntityEvent(this,(byte)35); }
+//   return dp != null;
+// DEATH_PROTECTION effects (javap DeathProtection clinit): ClearAllStatusEffects then
+// ApplyStatusEffects[REGENERATION(900,1), ABSORPTION(100,1), FIRE_RESISTANCE(800,0)] (ticks;
+// 0-based amplifiers). awardStat/USED_TOTEM/causeUseVibration are v1 no-ops (no stats/advancement/
+// game-event subsystem); the player is always a ServerPlayer here.
+//   [VERIFIED javap LivingEntity.checkTotemDeathProtection + DeathProtection clinit; item id 1333.]
+func (t *TickLoop) checkTotemDeathProtection(p *tickPlayer, src damageSource) bool {
+	if src.is("bypasses_invulnerability") {
+		return false
+	}
+	found := false
+	var totemHand int32
+	for _, hand := range []int32{interactionHandMain, interactionHandOff} {
+		held := playerItemBySlot(p, handEquipSlot(hand))
+		if held.Count > 0 && int32(held.ItemID) == totemOfUndyingItemID {
+			found = true
+			totemHand = hand
+			break
+		}
+	}
+	if !found {
+		return false
+	}
+	t.shrinkHeldItemHand(p, ensureInventory(p), totemHand)
+	p.health = 1.0
+	if p.client != nil {
+		p.client.Send(setHealth(p.health, p.food, p.saturation))
+	}
+	t.playerRemoveAllEffects(p)
+	t.addPlayerEffect(p, 0, effectRegeneration, totemRegenerationDuration, totemRegenerationAmplifier, 1.0)
+	t.addPlayerEffect(p, 0, effectAbsorption, totemAbsorptionDuration, totemAbsorptionAmplifier, 1.0)
+	t.addPlayerEffect(p, 0, effectFireResistance, totemFireResistanceDuration, totemFireResistanceAmplifier, 1.0)
+	pop := encodeEntityEvent(p.entityID, entityEventTotemOfUndying)
+	if p.client != nil {
+		p.client.Send(pop)
+	}
+	t.broadcastToTrackers(p.entityID, pop)
+	return true
+}
+
+// handEquipSlot maps an InteractionHand (MAIN/OFF) to the EquipmentSlot ordinal playerItemBySlot reads,
+// mirroring LivingEntity.getItemInHand(hand): MAIN_HAND -> MAINHAND, else OFFHAND.
+func handEquipSlot(hand int32) int {
+	if hand == interactionHandOff {
+		return eqSlotOffHand
+	}
+	return eqSlotMainHand
+}
+
+// playerRemoveAllEffects is the port of LivingEntity.removeAllEffects() for a player -- the
+// ClearAllStatusEffectsConsumeEffect the totem death_protection applies first: detach every active
+// effect modifier (onEffectsRemoved) + run the removal hook, then clear the map.
+func (t *TickLoop) playerRemoveAllEffects(p *tickPlayer) {
+	if p == nil || len(p.activeEffects) == 0 {
+		return
+	}
+	for id := range p.activeEffects {
+		delete(p.activeEffects, id)
+		t.removeEffectModifiers(p, id)
+		t.onPlayerEffectRemoved(p, id)
+	}
+}
+
+// totemOfUndyingItemID is Items.TOTEM_OF_UNDYING (data/item/item.go TotemOfUndying.ID == 1333) -- the
+// item carrying the vanilla DEATH_PROTECTION component; a hand holding it is the dp-not-null case.
+const totemOfUndyingItemID int32 = 1333
+
+// entityEventTotemOfUndying is the ClientboundEntityEvent status byte for the totem-pop animation
+// (broadcastEntityEvent(this, (byte)35)); the client handleEntityEvent(35) spawns the particle burst.
+const entityEventTotemOfUndying byte = 35
+
+const (
+	totemRegenerationDuration    = 900
+	totemRegenerationAmplifier   = 1
+	totemAbsorptionDuration      = 100
+	totemAbsorptionAmplifier     = 1
+	totemFireResistanceDuration  = 800
+	totemFireResistanceAmplifier = 0
+)

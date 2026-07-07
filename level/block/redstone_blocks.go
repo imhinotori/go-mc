@@ -245,3 +245,209 @@ func TripwireWithAttached(s StateID, attached bool) (StateID, bool) {
 func NoteInstrumentWorksAboveNoteBlock(i NoteBlockInstrument) bool {
 	return i >= NoteBlockInstrumentZombie
 }
+
+// ---------------------------------------------------------------------------------------------
+// Pressure plates (BasePressurePlateBlock subclasses). 1:1 with the 26.2 jar. See
+// server/pressure_plate.go for the reactions. Two families:
+//   - PressurePlateBlock (stone/wooden/polished_blackstone): a POWERED boolean -> getSignalForState
+//     0/15. Stone + polished_blackstone use MOBS sensitivity (LivingEntity); the wooden variants use
+//     EVERYTHING (Entity, includes items).
+//   - WeightedPressurePlateBlock (light/heavy): a POWER integer 0..15 -> getSignalForState == POWER;
+//     EVERYTHING sensitivity, maxWeight 15 (light) / 150 (heavy).
+// CITE: PressurePlateBlock.getSignalForState/setSignalForState; WeightedPressurePlateBlock.*.
+// ---------------------------------------------------------------------------------------------
+
+// IsPressurePlate reports whether a state id is any boolean-POWERED pressure plate (stone / wooden /
+// polished_blackstone). CITE: PressurePlateBlock.
+func IsPressurePlate(s StateID) bool {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return false
+	}
+	switch StateList[s].(type) {
+	case StonePressurePlate, PolishedBlackstonePressurePlate,
+		OakPressurePlate, SprucePressurePlate, BirchPressurePlate, JunglePressurePlate,
+		AcaciaPressurePlate, CherryPressurePlate, DarkOakPressurePlate, PaleOakPressurePlate,
+		MangrovePressurePlate, BambooPressurePlate, CrimsonPressurePlate, WarpedPressurePlate:
+		return true
+	default:
+		return false
+	}
+}
+
+// PressurePlateMobsOnly reports whether a plate uses MOBS sensitivity (LivingEntity-only trigger):
+// stone + polished_blackstone. All wooden variants use EVERYTHING (any Entity, includes items).
+// CITE: BlockSetType.STONE/POLISHED_BLACKSTONE pressurePlateSensitivity == MOBS; OAK/... == EVERYTHING.
+func PressurePlateMobsOnly(s StateID) bool {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return false
+	}
+	switch StateList[s].(type) {
+	case StonePressurePlate, PolishedBlackstonePressurePlate:
+		return true
+	default:
+		return false
+	}
+}
+
+// PressurePlatePowered returns the POWERED property of a boolean pressure plate, or false if not one.
+// CITE: PressurePlateBlock.POWERED.
+func PressurePlatePowered(s StateID) bool {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return false
+	}
+	switch b := StateList[s].(type) {
+	case StonePressurePlate:
+		return bool(b.Powered)
+	case PolishedBlackstonePressurePlate:
+		return bool(b.Powered)
+	case OakPressurePlate:
+		return bool(b.Powered)
+	case SprucePressurePlate:
+		return bool(b.Powered)
+	case BirchPressurePlate:
+		return bool(b.Powered)
+	case JunglePressurePlate:
+		return bool(b.Powered)
+	case AcaciaPressurePlate:
+		return bool(b.Powered)
+	case CherryPressurePlate:
+		return bool(b.Powered)
+	case DarkOakPressurePlate:
+		return bool(b.Powered)
+	case PaleOakPressurePlate:
+		return bool(b.Powered)
+	case MangrovePressurePlate:
+		return bool(b.Powered)
+	case BambooPressurePlate:
+		return bool(b.Powered)
+	case CrimsonPressurePlate:
+		return bool(b.Powered)
+	case WarpedPressurePlate:
+		return bool(b.Powered)
+	default:
+		return false
+	}
+}
+
+// PressurePlateWithPowered resolves the plate state with POWERED set to `powered`. Returns (s, false)
+// if not a boolean plate. CITE: PressurePlateBlock.setSignalForState (setValue(POWERED, i > 0)).
+func PressurePlateWithPowered(s StateID, powered bool) (StateID, bool) {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return s, false
+	}
+	p := Boolean(powered)
+	switch b := StateList[s].(type) {
+	case StonePressurePlate:
+		b.Powered = p
+		return lookup(b)
+	case PolishedBlackstonePressurePlate:
+		b.Powered = p
+		return lookup(b)
+	case OakPressurePlate:
+		b.Powered = p
+		return lookup(b)
+	case SprucePressurePlate:
+		b.Powered = p
+		return lookup(b)
+	case BirchPressurePlate:
+		b.Powered = p
+		return lookup(b)
+	case JunglePressurePlate:
+		b.Powered = p
+		return lookup(b)
+	case AcaciaPressurePlate:
+		b.Powered = p
+		return lookup(b)
+	case CherryPressurePlate:
+		b.Powered = p
+		return lookup(b)
+	case DarkOakPressurePlate:
+		b.Powered = p
+		return lookup(b)
+	case PaleOakPressurePlate:
+		b.Powered = p
+		return lookup(b)
+	case MangrovePressurePlate:
+		b.Powered = p
+		return lookup(b)
+	case BambooPressurePlate:
+		b.Powered = p
+		return lookup(b)
+	case CrimsonPressurePlate:
+		b.Powered = p
+		return lookup(b)
+	case WarpedPressurePlate:
+		b.Powered = p
+		return lookup(b)
+	default:
+		return s, false
+	}
+}
+
+// IsWeightedPressurePlate reports whether a state id is a weighted pressure plate (light/heavy). CITE:
+// WeightedPressurePlateBlock.
+func IsWeightedPressurePlate(s StateID) bool {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return false
+	}
+	switch StateList[s].(type) {
+	case LightWeightedPressurePlate, HeavyWeightedPressurePlate:
+		return true
+	default:
+		return false
+	}
+}
+
+// WeightedPressurePlateMaxWeight is the maxWeight ctor arg: 15 for light, 150 for heavy. CITE:
+// Blocks.LIGHT_WEIGHTED_PRESSURE_PLATE(15) / HEAVY_WEIGHTED_PRESSURE_PLATE(150).
+func WeightedPressurePlateMaxWeight(s StateID) int {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return 0
+	}
+	switch StateList[s].(type) {
+	case LightWeightedPressurePlate:
+		return 15
+	case HeavyWeightedPressurePlate:
+		return 150
+	default:
+		return 0
+	}
+}
+
+// WeightedPressurePlatePower returns the POWER property of a weighted plate, or 0 if not one. CITE:
+// WeightedPressurePlateBlock.getSignalForState (getValue(POWER)).
+func WeightedPressurePlatePower(s StateID) int {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return 0
+	}
+	switch b := StateList[s].(type) {
+	case LightWeightedPressurePlate:
+		return int(b.Power)
+	case HeavyWeightedPressurePlate:
+		return int(b.Power)
+	default:
+		return 0
+	}
+}
+
+// WeightedPressurePlateWithPower resolves the weighted plate state with POWER set to `power` (0..15).
+// Returns (s, false) if not one or the power is out of range. CITE: WeightedPressurePlateBlock
+// .setSignalForState (setValue(POWER, i)).
+func WeightedPressurePlateWithPower(s StateID, power int) (StateID, bool) {
+	if power < 0 || power > 15 {
+		return s, false
+	}
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return s, false
+	}
+	switch b := StateList[s].(type) {
+	case LightWeightedPressurePlate:
+		b.Power = Integer(power)
+		return lookup(b)
+	case HeavyWeightedPressurePlate:
+		b.Power = Integer(power)
+		return lookup(b)
+	default:
+		return s, false
+	}
+}

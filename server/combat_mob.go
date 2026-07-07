@@ -19,6 +19,7 @@ import (
 	"math"
 	"math/rand/v2"
 
+	"github.com/imhinotori/sulfur/level/component"
 	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/level/attribute"
 	"github.com/imhinotori/sulfur/plugin/host"
@@ -185,10 +186,11 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 	//	 the killing blow, BEFORE die(); the HURT sound only on survival. Reaching this `if e.health <= 0`
 	//	 here means tookFullDamage was true (the only non-tookFullDamage path, the `amount <= lastHurt`
 	//	 i-frame rejection, returned early above), so the death-sound branch is unconditional on a kill.]
-	if e.health <= 0 {
+	if e.health <= 0 && !t.checkTotemDeathProtectionEntity(e, src) {
 		// makeSound(getDeathSound()): the pig's death sound (entity.pig.death, id 1270), played BEFORE
-		// die() exactly as the bytecode orders it (offset 390-395 makeSound, 403-405 die). checkTotem...
-		// is a v1 no-op (no totem subsystem) so the death sound + die always run on a kill.
+		// die() exactly as the bytecode orders it (offset 390-395 makeSound, 403-405 die). checkTotem-
+		// DeathProtection runs FIRST (bytecode 377-382): a mob holding a Totem of Undying survives at 1 HP
+		// and CANCELS the death (gated on a totem actually held -- no totem -> the identical old kill path).
 		t.playMobDeathSound(e)
 		t.dieEntity(e, src)
 	} else {
@@ -916,3 +918,75 @@ func (t *TickLoop) broadcastBabyFlag(e *Entity) {
 // dieEntity is implemented in death_mob.go (Plan 29-04): the full LivingEntity.die port (loot + XP
 // + the death-status broadcast + owner-region store removal). applyDamageEntity's lethal tail calls
 // it; the seam Plan 02 left here is replaced there with no call-site change.
+
+// checkTotemDeathProtectionEntity is the port of net.minecraft.world.entity.LivingEntity
+// .checkTotemDeathProtection(DamageSource) for a mob *Entity victim -- the sibling of the *tickPlayer
+// checkTotemDeathProtection (combat.go). When the mob would die holding a Totem of Undying in either hand
+// (EntityEquipment MAINHAND/OFFHAND), the totem is consumed, the mob is revived at 1 HP, all its effects
+// are cleared and the totem death_protection effects applied, and the totem-pop entity event (35) is
+// broadcast to trackers -- the death is CANCELLED (returns true). Returns false (death proceeds) when the
+// source bypasses invulnerability or no totem is held. Runs on the owning region goroutine (TICK-05).
+//
+// Faithful bytecode (javap LivingEntity.checkTotemDeathProtection this session): BYPASSES_INVULNERABILITY
+// early-out; the InteractionHand.values scan (getItemInHand == getMainHandItem/getOffhandItem) reading
+// DataComponents.DEATH_PROTECTION; on a hit copy + shrink(1); the ServerPlayer stats branch is skipped for
+// a mob (a mob is not a ServerPlayer); setHealth(1.0F); DeathProtection.applyEffects (ClearAllStatusEffects
+// + ApplyStatusEffects REGENERATION 900/1, ABSORPTION 100/1, FIRE_RESISTANCE 800/0); broadcastEntityEvent(
+// this, 35). A mob has NO client, so unlike the player path there is no self-send / SetHealth wire -- just
+// the tracker broadcast + the health mutation. The totem is identified by its item id (Items.TOTEM_OF_
+// UNDYING == 1333), the DEATH_PROTECTION == TOTEM_OF_UNDYING component (v1 has no per-item component store).
+//
+//	[VERIFIED javap LivingEntity.checkTotemDeathProtection (shared with the player port); the mob differs
+//	 ONLY in: the ServerPlayer branch is skipped, and there is no client (no SetHealth send). Effect table
+//	 from DeathProtection <clinit> (REGENERATION 900/1, ABSORPTION 100/1, FIRE_RESISTANCE 800/0).]
+func (t *TickLoop) checkTotemDeathProtectionEntity(e *Entity, src damageSource) bool {
+	// if (source.is(BYPASSES_INVULNERABILITY)) return false -- /kill and the void ignore the totem.
+	if src.is("bypasses_invulnerability") {
+		return false
+	}
+	// Scan MAINHAND then OFFHAND for a totem. No totem in either hand -> return false (the identical old
+	// kill path, zero side effects -- the oracle pig holds no totem, so it always takes this false branch).
+	found := false
+	var totemSlot int
+	for _, slot := range []int{eqSlotMainHand, eqSlotOffHand} {
+		held := e.getItemBySlot(slot)
+		if held.Count > 0 && int32(held.ItemID) == totemOfUndyingItemID {
+			found = true
+			totemSlot = slot
+			break
+		}
+	}
+	if !found {
+		return false
+	}
+	// held.shrink(1): consume one totem from the holding slot (setItemSlot after decrement).
+	held := e.getItemBySlot(totemSlot)
+	held.Count--
+	if held.Count <= 0 {
+		held = component.SlotData{Count: 0}
+	}
+	e.setItemSlot(totemSlot, held)
+	// setHealth(1.0F): revive at 1 HP (a mob has no client, so no SetHealth wire -- just the mutation).
+	e.health = 1.0
+	// DeathProtection.applyEffects: ClearAllStatusEffects then the three ApplyStatusEffects.
+	t.entityRemoveAllEffects(e)
+	t.addEntityEffect(e, effectRegeneration, totemRegenerationDuration, totemRegenerationAmplifier)
+	t.addEntityEffect(e, effectAbsorption, totemAbsorptionDuration, totemAbsorptionAmplifier)
+	t.addEntityEffect(e, effectFireResistance, totemFireResistanceDuration, totemFireResistanceAmplifier)
+	// level().broadcastEntityEvent(this, (byte) 35): the totem-pop animation, fanned to every tracking
+	// player (a mob has no self-client, so this is the whole broadcast -- the "and self" is a no-op).
+	t.broadcastToTrackers(e.id, encodeEntityEvent(e.id, entityEventTotemOfUndying))
+	return true
+}
+
+// entityRemoveAllEffects is the port of LivingEntity.removeAllEffects() for a mob -- the ClearAllStatus-
+// EffectsConsumeEffect the totem death_protection applies first. v1 mobs attach no attribute modifiers for
+// the self-buff effects (see mob_effect.go tickMobEffects), so removal is a plain map clear.
+func (t *TickLoop) entityRemoveAllEffects(e *Entity) {
+	if e == nil || len(e.mobEffects) == 0 {
+		return
+	}
+	for id := range e.mobEffects {
+		delete(e.mobEffects, id)
+	}
+}

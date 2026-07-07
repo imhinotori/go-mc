@@ -282,6 +282,12 @@ func (t *TickLoop) tickEntities() {
 	// fall_damage.go.
 	t.tickLavaPlayers()
 
+	// Pressure plates (PLATE-01): the BasePressurePlateBlock.entityInside press-detection scan -- an entity
+	// standing on a plate presses it (redstone input). Sibling of tickLavaPlayers; ADDITIVE, no new trace
+	// entry. Body in pressure_plate.go. Gated on a plate at an entity feet, so the oracle pig (no plate
+	// near it) takes a pure block-id lookup and nothing else. CITE: BasePressurePlateBlock.entityInside.
+	t.tickPressurePlates()
+
 	// Suffocation: the IN_WALL branch of LivingEntity.baseTick (`if isInWall() hurtServer(inWall(),
 	// 1.0F)`). In vanilla baseTick this check runs BEFORE the air/drowning branch, so it is placed
 	// here ahead of tickBreath. Its body lives in suffocation.go; a single ADDITIVE call inside this
