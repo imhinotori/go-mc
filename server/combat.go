@@ -173,13 +173,40 @@ const hurtInvulnerableTicks int32 = 20
 // (`this.hurtDuration = 10; this.hurtTime = this.hurtDuration`).
 const hurtDurationTicks int32 = 10
 
-// damageFoodExhaustion is the CITED stub for DamageSource.getFoodExhaustion() at the
-// Player.actuallyHurt food-exhaustion site (Plan 17-19): the vanilla DamageSource DEFAULT food
-// exhaustion is 0.1f (the value most sources carry). Taking damage drains hunger by this amount.
-// v1 has no per-source DamageType table wired into the damage path, so this default stands in for
-// every source; it is structured so a real `damageSource.getFoodExhaustion()` per-source read slots
-// in here later with no call-site change.
+// damageFoodExhaustion is the DamageType DEFAULT food exhaustion (0.1f) — the value carried by the
+// attack/combat sources. It is the fallback for a source not in damageExhaustionZero below.
 const damageFoodExhaustion float32 = 0.1
+
+// damageExhaustionZero is the set of damage types whose DamageType JSON carries "exhaustion": 0.0
+// (registrydata/registries/damage_type/*.json) — environmental/DoT sources that do NOT drain hunger.
+// getFoodExhaustion(src) returns 0.0 for these and the 0.1 default otherwise. Read from the JSON this
+// session (fall/drown/starve/on_fire/in_wall/magic/... = 0.0; player_attack/mob_attack/lava = 0.1).
+// Building the set explicitly avoids taking the whole DamageType registry into the runtime for one
+// scalar; it is the exact per-source read Player.actuallyHurt does via source.getFoodExhaustion().
+// Cite DamageType.exhaustion (the damage_type registry JSON). E-6.
+var damageExhaustionZero = map[damageTypeID]bool{
+	damageTypeFall:          true,
+	damageTypeDrown:         true,
+	damageTypeStarve:        true,
+	damageTypeOnFire:        true,
+	damageTypeInWall:        true,
+	damageTypeMagic:         true,
+	damageTypeIndirectMagic: true,
+	damageTypeOutOfWorld:    true,
+	damageTypeLightning:     true,
+	damageTypeExplosion:     true,
+	damageTypeGeneric:       true,
+}
+
+// getFoodExhaustion ports DamageSource.getFoodExhaustion() (== the source's DamageType.exhaustion): the
+// per-source hunger cost of taking damage. 0.0 for the environmental/DoT sources in damageExhaustionZero,
+// else the 0.1 default (attack/combat). Cite DamageType.exhaustion.
+func getFoodExhaustion(src damageSource) float32 {
+	if damageExhaustionZero[src.typeTag] {
+		return 0.0
+	}
+	return damageFoodExhaustion
+}
 
 // applyDamage is the port of net.minecraft.world.entity.LivingEntity.hurtServer(ServerLevel,
 // DamageSource, float). It is the server-authoritative entry point for every damage source (fall,
@@ -264,14 +291,14 @@ func (t *TickLoop) applyDamage(p *tickPlayer, src damageSource, amount float32) 
 		// branch is SILENT — no hurt flash, no knockback, no sound. Spamming greater-damage hits inside the
 		// i-frame window applies each excess quietly; only the fresh hit animates. (E-5: the prior code
 		// wrongly broadcast + knocked back on excess.) Cite LivingEntity.hurtServer (tookFullDamage=false).
-		t.actuallyHurt(p, amount-p.lastHurt)
+		t.actuallyHurt(p, src, amount-p.lastHurt)
 		p.lastHurt = amount
 	} else {
 		// Fresh hit (bytecode 240–271): record lastHurt, arm the 20-tick window, apply full damage,
 		// set the hurt-flash duration/time.
 		p.lastHurt = amount
 		p.invulnerableTime = hurtInvulnerableTicks
-		t.actuallyHurt(p, amount)
+		t.actuallyHurt(p, src, amount)
 		p.hurtDuration = hurtDurationTicks
 		p.hurtTime = p.hurtDuration
 		// tookFullDamage == true on the fresh sub-branch too — broadcast the hurt animation.
@@ -417,7 +444,7 @@ func (t *TickLoop) broadcastPlayerDamageEvent(p *tickPlayer, src damageSource) {
 // folding is a faithful no-op today — the FORMULA is present and correct so a future MAX_ABSORPTION
 // + golden-apple effect slots in unchanged. Health is clamped at 0 (never negative) as the wire
 // requires; the authoritative SetHealth is sent so the client HUD follows.
-func (t *TickLoop) actuallyHurt(p *tickPlayer, amount float32) {
+func (t *TickLoop) actuallyHurt(p *tickPlayer, src damageSource, amount float32) {
 	// isInvulnerableTo guard: v1 has no invulnerability command/flag, so this is never true — the
 	// branch is preserved (constant-false) so a future creative/invuln flag slots in here.
 	const isInvulnerableTo = false
@@ -442,14 +469,13 @@ func (t *TickLoop) actuallyHurt(p *tickPlayer, amount float32) {
 		return
 	}
 
-	// Plan 17-19: causeFoodExhaustion(damageSource.getFoodExhaustion()) — taking damage costs
-	// hunger. In Player.actuallyHurt this sits AFTER the `amount == 0.0F` guard and BEFORE the
-	// setHealth subtraction (recordDamage in between is a v1 combat-log stub), so it runs ONLY when
-	// residual damage actually lands. getFoodExhaustion() is the per-source value; the vanilla
-	// DamageSource default is 0.1f (most sources). v1 has no per-source DamageType wired here, so the
-	// CITED constant damageFoodExhaustion (0.1f) stands in — structured so a per-source read slots in
-	// later. The exhaustion routes through causeFoodExhaustion (the invulnerable guard + addExhaustion).
-	t.causeFoodExhaustion(p, damageFoodExhaustion)
+	// Plan 17-19: causeFoodExhaustion(damageSource.getFoodExhaustion()) — taking damage costs hunger.
+	// In Player.actuallyHurt this sits AFTER the `amount == 0.0F` guard and BEFORE the setHealth
+	// subtraction, so it runs ONLY when residual damage lands. getFoodExhaustion(src) is the per-source
+	// value from the DamageType JSON: 0.1 for attack/combat, 0.0 for fall/drown/starve/on_fire/magic/etc.
+	// (E-6 — previously a flat 0.1 for every source, which made starvation self-accelerate and fall/drown
+	// wrongly drain hunger). The exhaustion routes through causeFoodExhaustion (creative guard + accrue).
+	t.causeFoodExhaustion(p, getFoodExhaustion(src))
 
 	// setHealth(getHealth() - amount): the actual HP subtraction. Clamp at 0 (the wire never
 	// carries negative health) and push the authoritative SetHealth so the client HUD follows.

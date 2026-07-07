@@ -38,6 +38,39 @@ func TestCreativeInvulnerable(t *testing.T) {
 	}
 }
 
+// TestDamageExhaustionPerSource: taking damage costs hunger per the DamageType.exhaustion JSON — 0.1 for
+// attack/combat sources, 0.0 for fall/drown/starve/etc. (E-6). Previously every source drained a flat 0.1.
+func TestDamageExhaustionPerSource(t *testing.T) {
+	// A combat source (generic, default 0.1) drains hunger.
+	loop := NewTickLoop(newFakeClock())
+	pc := combatPlayer(loop, 1)
+	loop.applyDamage(pc, damageSourceOf(damageTypeGeneric), 4)
+	if pc.exhaustion != 0 { // generic is in the zero set — verify the table, not the default
+		t.Fatalf("generic exhaustion = %v, want 0 (generic is 0.0 in the table)", pc.exhaustion)
+	}
+
+	// player_attack (0.1) drains.
+	pa := combatPlayer(loop, 2)
+	loop.applyDamage(pa, damageSourcePlayerAttack(999), 4)
+	if pa.exhaustion != damageFoodExhaustion {
+		t.Fatalf("player_attack exhaustion = %v, want %v", pa.exhaustion, damageFoodExhaustion)
+	}
+
+	// fall (0.0) drains NOTHING.
+	pf := combatPlayer(loop, 3)
+	loop.applyDamage(pf, damageSourceOf(damageTypeFall), 4)
+	if pf.exhaustion != 0 {
+		t.Fatalf("fall exhaustion = %v, want 0 (fall is 0.0)", pf.exhaustion)
+	}
+
+	// starve (0.0) drains nothing — the anti-self-acceleration fix.
+	ps := combatPlayer(loop, 4)
+	loop.applyDamage(ps, damageSourceOf(damageTypeStarve), 1)
+	if ps.exhaustion != 0 {
+		t.Fatalf("starve exhaustion = %v, want 0 (must not self-accelerate)", ps.exhaustion)
+	}
+}
+
 // TestIFrameExcessIsSilent: the E-5 fix — an i-frame EXCESS hit (a larger hit inside the grace window)
 // applies its excess damage but is SILENT: no ClientboundDamageEvent (hurt flash), matching vanilla's
 // tookFullDamage=false gate. Only the fresh hit emits the event.
