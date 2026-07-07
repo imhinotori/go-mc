@@ -239,14 +239,19 @@ func forEachItemModifier(s component.SlotData, slot int, fn func(attributeKey, a
 			Operation: attribute.Operation(m.Operation),
 		})
 	}
-	// SEAM (E-3, still open after the effect-runtime landed): EnchantmentHelper.forEachModifier(
-	// stack, slot, consumer) — the minecraft:attributes enchant effects (aqua_affinity/
-	// blast_protection/depth_strider/efficiency/fire_protection/respiration/sweeping_edge/
-	// swift_sneak in the 26.2 data). Every one targets an attribute NOT modeled on the player
-	// holder (mining_efficiency, oxygen_bonus, burning_time, sneaking_speed, water_movement_
-	// efficiency, submerged_mining_speed, explosion_knockback_resistance) except sweeping_edge's
-	// sweeping_damage_ratio, whose consumer (the sweep attack) is itself a constant-false stub —
-	// so the tail contributes nothing observable today. It slots in here when those attributes land.
+	// EnchantmentHelper.forEachModifier(stack, slot, consumer) — the enchant tail of
+	// ItemStack.forEachModifier (E-3). Each enchantment's minecraft:attributes effect (Swift Sneak's
+	// sneaking_speed, Efficiency's mining_efficiency, Sweeping Edge's sweeping_damage_ratio, ...),
+	// gated on Enchantment.matchingSlot(slot), grants a per-slot AttributeModifier. The attribute
+	// resource id maps through attributeKeyByResource; an id NOT modeled on the holder is skipped
+	// (the vanilla getInstance(holder) == null guard) — exactly as the item-modifier loop above does.
+	enchForEachAttributeModifier(s, slot, func(attributeID string, m attribute.AttributeModifier) {
+		key, ok := attributeKeyByResource[attributeID]
+		if !ok {
+			return // no AttributeInstance for this attribute on the holder — vanilla null-guard
+		}
+		fn(key, m)
+	})
 }
 
 // detectEquipmentUpdates is the 1:1 port of LivingEntity.detectEquipmentUpdates +

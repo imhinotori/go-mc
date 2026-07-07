@@ -34,6 +34,7 @@ import (
 	"sync"
 
 	"github.com/imhinotori/sulfur/data/registryid"
+	"github.com/imhinotori/sulfur/level/attribute"
 	"github.com/imhinotori/sulfur/level/component"
 	"github.com/imhinotori/sulfur/server/registrydata"
 )
@@ -177,10 +178,13 @@ func parseLevelValue(raw json.RawMessage) enchLevelValue {
 // EnchantmentValueEffect — net.minecraft.world.item.enchantment.effects.*
 // ============================================================================================
 
-// enchRNG is the RandomSource slice the value/entity effects draw from (nextFloat only — the
-// consumed effects draw no other shape). Adapters wrap the player/mob/level sources below.
+// enchRNG is the RandomSource slice the value/entity effects draw from. nextFloat backs the
+// FloatAction value/entity effects (thorns/damage_entity, apply_mob_effect's Mth.randomBetween);
+// nextInt backs HolderSet.getRandomElement (Util.getRandomSafe -> list.get(random.nextInt(size)))
+// in apply_mob_effect. Adapters wrap the player/mob/level sources below.
 type enchRNG interface {
 	nextFloat() float32
+	nextInt(n int) int
 }
 
 // enchValueEffect is EnchantmentValueEffect.process(int level, RandomSource, float value).
@@ -588,6 +592,7 @@ func (r enchEntityRef) getRandom() enchRNG {
 type legacyRNGAdapter struct{ r *legacyRandom }
 
 func (a legacyRNGAdapter) nextFloat() float32 { return a.r.nextFloat() }
+func (a legacyRNGAdapter) nextInt(n int) int  { return int(a.r.nextIntN(int32(n))) }
 
 // enchLevelRNG is LootContext.getRandom() / ServerLevel.getRandom(): the resolved region's
 // levelRandom via the TOLERANT only() resolver — never a panic off the fan-out (a dispatch-time
@@ -600,9 +605,15 @@ func (t *TickLoop) enchLevelRNG() enchRNG {
 	return nil
 }
 
-type levelRNGAdapter struct{ r interface{ NextFloat() float32 } }
+type levelRNGAdapter struct {
+	r interface {
+		NextFloat() float32
+		NextIntN(int32) int32
+	}
+}
 
 func (a levelRNGAdapter) nextFloat() float32 { return a.r.NextFloat() }
+func (a levelRNGAdapter) nextInt(n int) int  { return int(a.r.NextIntN(int32(n))) }
 
 // enchItemInUse is net.minecraft.world.item.enchantment.EnchantedItemInUse: the enchanted stack,
 // its equipment slot, its owner, and a write-back for a stack mutation (ChangeItemDamage). A nil
@@ -689,6 +700,72 @@ func (e eeChangeItemDamage) apply(t *TickLoop, level int, inUse *enchItemInUse, 
 	}
 }
 
+// eeApplyMobEffect is ApplyMobEffect (Bane-of-Arthropods' post-attack SLOWNESS):
+//
+//	if (entity instanceof LivingEntity le) {
+//	    RandomSource rng = le.getRandom();
+//	    Optional<Holder<MobEffect>> pick = toApply.getRandomElement(rng);   // draws nextInt(size)
+//	    if (pick.isPresent()) {
+//	        int dur = Math.round(Mth.randomBetween(rng, minDuration.calc(lvl), maxDuration.calc(lvl)) * 20.0F);
+//	        int amp = Math.max(0, Math.round(Mth.randomBetween(rng, minAmplifier.calc(lvl), maxAmplifier.calc(lvl))));
+//	        le.addEffect(new MobEffectInstance(pick.get(), dur, amp));
+//	    }
+//	}
+//
+// RNG DRAW ORDER (jar-exact, off entity.getRandom()): (1) getRandomElement -> Util.getRandomSafe ->
+// list.get(rng.nextInt(size)) draws one nextInt EVEN for a single-element to_apply (nextInt(1) still
+// advances the source); (2) Mth.randomBetween for the duration draws one nextFloat; (3) Mth.randomBetween
+// for the amplifier draws one nextFloat. Mth.randomBetween(rng, min, max) == rng.nextFloat()*(max-min)+min
+// [VERIFIED javap]. Math.round(float) == Mth.floor(f + 0.5F) — the java.lang.Math.round port (mathRoundF).
+type eeApplyMobEffect struct {
+	toApply      []string // the HolderSet contents (effect resource ids), in list order
+	minDuration  enchLevelValue
+	maxDuration  enchLevelValue
+	minAmplifier enchLevelValue
+	maxAmplifier enchLevelValue
+}
+
+func (e eeApplyMobEffect) apply(t *TickLoop, level int, _ *enchItemInUse, affected enchEntityRef) {
+	rng := affected.getRandom()
+	if rng == nil {
+		return
+	}
+	// toApply.getRandomElement(rng): Util.getRandomSafe returns empty for an empty list (no draw);
+	// otherwise list.get(nextInt(size)) — the nextInt draw happens for any non-empty set.
+	if len(e.toApply) == 0 {
+		return
+	}
+	idx := rng.nextInt(len(e.toApply))
+	if idx < 0 || idx >= len(e.toApply) {
+		return
+	}
+	effectID := e.toApply[idx]
+	// dur = Math.round(Mth.randomBetween(rng, minDur, maxDur) * 20.0F).
+	minD, maxD := e.minDuration.calculate(level), e.maxDuration.calculate(level)
+	dur := int(mathRoundF(mthRandomBetween(rng, minD, maxD) * 20.0))
+	// amp = Math.max(0, Math.round(Mth.randomBetween(rng, minAmp, maxAmp))).
+	minA, maxA := e.minAmplifier.calculate(level), e.maxAmplifier.calculate(level)
+	amp := int(mathRoundF(mthRandomBetween(rng, minA, maxA)))
+	if amp < 0 {
+		amp = 0
+	}
+	// le.addEffect(new MobEffectInstance(pick, dur, amp)): a player victim routes through the player
+	// effect map (scale 1.0, no owner — MobEffectInstance carries no source entity), a mob victim
+	// through the entity effect map. Both are the ported LivingEntity.addEffect merge.
+	if affected.player != nil {
+		t.addPlayerEffect(affected.player, 0, effectID, dur, amp, 1.0)
+	} else if affected.mob != nil {
+		t.addEntityEffect(affected.mob, effectID, dur, amp)
+	}
+}
+
+// mthRandomBetween ports net.minecraft.util.Mth.randomBetween(RandomSource, float, float):
+// `return rng.nextFloat() * (max - min) + min;` — the nextFloat draw happens FIRST (jar op order),
+// then the (max-min) scale and +min. [VERIFIED javap Mth.randomBetween.]
+func mthRandomBetween(rng enchRNG, min, max float32) float32 {
+	return rng.nextFloat()*(max-min) + min
+}
+
 // eeAllOfEntity is AllOf$EntityEffects: apply each inner effect in list order with the same args.
 type eeAllOfEntity struct{ effects []enchEntityEffect }
 
@@ -743,6 +820,29 @@ func parseEntityEffect(raw json.RawMessage) enchEntityEffect {
 		if v := parseLevelValue(body.Amount); v != nil {
 			return eeChangeItemDamage{amount: v}
 		}
+	case "minecraft:apply_mob_effect":
+		var body struct {
+			ToApply      json.RawMessage `json:"to_apply"`
+			MinDuration  json.RawMessage `json:"min_duration"`
+			MaxDuration  json.RawMessage `json:"max_duration"`
+			MinAmplifier json.RawMessage `json:"min_amplifier"`
+			MaxAmplifier json.RawMessage `json:"max_amplifier"`
+		}
+		if json.Unmarshal(raw, &body) != nil {
+			return nil
+		}
+		apply := parseHolderSetIDs(body.ToApply)
+		if len(apply) == 0 {
+			return nil // an empty/#tag HolderSet -> nothing to apply (cited: no shipped enchant uses a #tag here)
+		}
+		minD := parseLevelValue(body.MinDuration)
+		maxD := parseLevelValue(body.MaxDuration)
+		minA := parseLevelValue(body.MinAmplifier)
+		maxA := parseLevelValue(body.MaxAmplifier)
+		if minD == nil || maxD == nil || minA == nil || maxA == nil {
+			return nil
+		}
+		return eeApplyMobEffect{toApply: apply, minDuration: minD, maxDuration: maxD, minAmplifier: minA, maxAmplifier: maxA}
 	case "minecraft:all_of":
 		var body struct {
 			Effects []json.RawMessage `json:"effects"`
@@ -761,6 +861,163 @@ func parseEntityEffect(raw json.RawMessage) enchEntityEffect {
 		return out
 	}
 	return nil
+}
+
+// parseHolderSetIDs decodes a HolderSet<T> JSON form used by apply_mob_effect's `to_apply`: a bare
+// id string (a single-element homogeneous list), or an array of id strings. A "#tag" reference is a
+// cited deferral (no shipped enchantment's apply_mob_effect uses one — bane_of_arthropods names
+// minecraft:slowness directly) and yields an empty list so the effect stays dormant rather than
+// half-applying. The list ORDER is preserved (getRandomElement indexes into it).
+func parseHolderSetIDs(raw json.RawMessage) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var single string
+	if json.Unmarshal(raw, &single) == nil {
+		if len(single) > 0 && single[0] == '#' {
+			return nil // #tag HolderSet: cited deferral
+		}
+		return []string{single}
+	}
+	var list []string
+	if json.Unmarshal(raw, &list) == nil {
+		var out []string
+		for _, id := range list {
+			if len(id) > 0 && id[0] == '#' {
+				continue // skip nested tag entries (cited deferral)
+			}
+			out = append(out, id)
+		}
+		return out
+	}
+	return nil
+}
+
+// ============================================================================================
+// EnchantmentAttributeEffect — the minecraft:attributes location-based effects (equip modifiers)
+// ============================================================================================
+
+// enchAttrEffect is net.minecraft.world.item.enchantment.effects.EnchantmentAttributeEffect: a
+// LEVEL-scaled AttributeModifier the enchant grants while the item is equipped and matchingSlot(slot)
+// accepts the slot (Swift Sneak's sneaking_speed, Efficiency's mining_efficiency, ...). It is applied
+// via EnchantmentHelper.forEachModifier (the ItemStack.forEachModifier enchant tail), keyed alongside
+// the item's own ATTRIBUTE_MODIFIERS so equip adds and unequip removes cleanly by modifier id.
+//
+//	[VERIFIED javap EnchantmentAttributeEffect(id, attribute, amount, operation);
+//	 getModifier(int level, StringRepresentable slot) = new AttributeModifier(idForSlot(slot),
+//	   (double) amount.calculate(level), operation);
+//	 idForSlot(slot) = id.withSuffix("/" + slot.getSerializedName()).]
+type enchAttrEffect struct {
+	id        string         // the base modifier id ("minecraft:enchantment.swift_sneak")
+	attribute string         // the target attribute resource id ("minecraft:sneaking_speed")
+	amount    enchLevelValue // LevelBasedValue
+	operation attribute.Operation
+}
+
+// getModifier is EnchantmentAttributeEffect.getModifier(int level, StringRepresentable slot): the
+// per-slot AttributeModifier. The id is idForSlot(slot) = base id + "/" + slot.getSerializedName();
+// the amount is amount.calculate(level) widened f2d, exactly the bytecode.
+func (e enchAttrEffect) getModifier(level, slot int) attribute.AttributeModifier {
+	return attribute.AttributeModifier{
+		ID:        e.id + "/" + equipmentSlotSerializedName(slot),
+		Amount:    float64(e.amount.calculate(level)), // f2d after the float LevelBasedValue.calculate
+		Operation: e.operation,
+	}
+}
+
+// equipmentSlotSerializedName is EquipmentSlot.getSerializedName() (the enum ctor's lowercase name),
+// indexed by the eqSlot* ordinal — the suffix EnchantmentAttributeEffect.idForSlot appends.
+//
+//	[VERIFIED javap EquipmentSlot.<clinit>: mainhand/offhand/feet/legs/chest/head/body/saddle.]
+func equipmentSlotSerializedName(slot int) string {
+	switch slot {
+	case eqSlotMainHand:
+		return "mainhand"
+	case eqSlotOffHand:
+		return "offhand"
+	case eqSlotFeet:
+		return "feet"
+	case eqSlotLegs:
+		return "legs"
+	case eqSlotChest:
+		return "chest"
+	case eqSlotHead:
+		return "head"
+	case eqSlotBody:
+		return "body"
+	case eqSlotSaddle:
+		return "saddle"
+	}
+	return ""
+}
+
+// enchForEachAttributeModifier is EnchantmentHelper.forEachModifier(ItemStack, EquipmentSlot,
+// BiConsumer) — the enchant tail of ItemStack.forEachModifier. For each enchantment on the stack it
+// visits the ATTRIBUTES effect list and, gated on Enchantment.matchingSlot(slot) (lambda$forEachModifier$3),
+// emits consumer.accept(effect.attribute(), effect.getModifier(level, slot)). The attribute is passed as
+// its resource id string; the caller maps it to an AttributeInstance (the vanilla getInstance null-guard)
+// and applies remove-by-id-then-add exactly as the item-modifier path does.
+//
+//	[VERIFIED javap EnchantmentHelper.forEachModifier(EquipmentSlot overload) -> runIterationOnItem ->
+//	 lambda$forEachModifier$2: getEffects(ATTRIBUTES).forEach -> lambda$forEachModifier$3:
+//	 matchingSlot(slot) ? consumer.accept(effect.attribute(), effect.getModifier(level, slot)).]
+func enchForEachAttributeModifier(s component.SlotData, slot int, fn func(attributeID string, m attribute.AttributeModifier)) {
+	forEachItemEnchant(s, func(wireID, level int) {
+		set := enchEffectsFor(wireID)
+		if set == nil || len(set.attributes) == 0 || !enchMatchingSlot(set, slot) {
+			return
+		}
+		for _, eff := range set.attributes {
+			fn(eff.attribute, eff.getModifier(level, slot))
+		}
+	})
+}
+
+// parseAttributeEffects decodes the minecraft:attributes effect list (a plain list of
+// EnchantmentAttributeEffect records — NOT ConditionalEffect-wrapped). An unknown operation or an
+// unparseable amount skips that entry (the record would fail its codec).
+func parseAttributeEffects(raw json.RawMessage) []enchAttrEffect {
+	if len(raw) == 0 {
+		return nil
+	}
+	var entries []struct {
+		ID        string          `json:"id"`
+		Attribute string          `json:"attribute"`
+		Amount    json.RawMessage `json:"amount"`
+		Operation string          `json:"operation"`
+	}
+	if json.Unmarshal(raw, &entries) != nil {
+		return nil
+	}
+	var out []enchAttrEffect
+	for _, e := range entries {
+		amt := parseLevelValue(e.Amount)
+		if amt == nil {
+			continue
+		}
+		op, ok := attributeOperationByName(e.Operation)
+		if !ok {
+			continue
+		}
+		out = append(out, enchAttrEffect{id: e.ID, attribute: e.Attribute, amount: amt, operation: op})
+	}
+	return out
+}
+
+// attributeOperationByName maps the AttributeModifier$Operation serialized name to the ported enum.
+//
+//	[VERIFIED javap AttributeModifier$Operation.<clinit>: add_value(0), add_multiplied_base(1),
+//	 add_multiplied_total(2).]
+func attributeOperationByName(name string) (attribute.Operation, bool) {
+	switch name {
+	case "add_value":
+		return attribute.AddValue, true
+	case "add_multiplied_base":
+		return attribute.AddMultipliedBase, true
+	case "add_multiplied_total":
+		return attribute.AddMultipliedTotal, true
+	}
+	return 0, false
 }
 
 // ============================================================================================
@@ -789,9 +1046,10 @@ type enchEffectSet struct {
 	damage             []enchCondValue
 	damageProtection   []enchCondValue
 	knockback          []enchCondValue
-	armorEffectiveness []enchCondValue // parsed for completeness; consumer is a cited deferral (breach)
+	armorEffectiveness []enchCondValue // consumed by enchModifyArmorEffectiveness (breach — E-3)
 	repairWithXP       []enchCondValue
 	postAttack         []enchPostAttack
+	attributes         []enchAttrEffect // minecraft:attributes location-based modifiers (equip/unequip)
 }
 
 var (
@@ -817,6 +1075,7 @@ func enchantEffectTable() []*enchEffectSet {
 			set.armorEffectiveness = parseCondValueList(def.Effects["minecraft:armor_effectiveness"])
 			set.repairWithXP = parseCondValueList(def.Effects["minecraft:repair_with_xp"])
 			set.postAttack = parsePostAttackList(def.Effects["minecraft:post_attack"])
+			set.attributes = parseAttributeEffects(def.Effects["minecraft:attributes"])
 			table[i] = set
 		}
 		enchEffectTableVal = table
@@ -1024,6 +1283,67 @@ func (t *TickLoop) enchDamageProtection(victim enchEntityRef, equip func(slot in
 		})
 	}
 	return protection
+}
+
+// enchModifyArmorEffectiveness is EnchantmentHelper.modifyArmorEffectiveness(ServerLevel, ItemStack
+// weapon, Entity victim, DamageSource, float f): fold the WEAPON's ARMOR_EFFECTIVENESS effects
+// (Breach: add linear -0.15 -0.15/level) over the raw armor-ratio f (armorClamp/25.0). victim
+// supplies THIS_ENTITY and the FloatAction RandomSource (victim.getRandom() — no shipped
+// armor_effectiveness effect draws, kept for the 1:1 shape). The CombatRules caller then clamps the
+// result into [0,1]; a lower ratio means more damage penetrates.
+//
+//	[VERIFIED javap EnchantmentHelper.modifyArmorEffectiveness -> runIterationOnItem(weapon, visitor)
+//	 -> Enchantment.modifyArmorEffectivness -> modifyDamageFilteredValue(ARMOR_EFFECTIVENESS, ...,
+//	 damageContext) -> applyEffects(getEffects(ARMOR_EFFECTIVENESS), ctx, mutable,
+//	 (eff,v) -> eff.process(lvl, victim.getRandom(), v)). CombatRules.getDamageAfterAbsorb wraps it in
+//	 Mth.clamp(..., 0.0F, 1.0F).]
+func (t *TickLoop) enchModifyArmorEffectiveness(weapon component.SlotData, victim enchEntityRef, src damageSource, f float32) float32 {
+	ctx := &enchDamageCtx{thisType: victim.typeName(), src: src, t: t}
+	forEachItemEnchant(weapon, func(wireID, level int) {
+		set := enchEffectsFor(wireID)
+		if set == nil || len(set.armorEffectiveness) == 0 {
+			return
+		}
+		ctx.level = level
+		f = applyEnchCondValues(set.armorEffectiveness, ctx, victim.getRandom(), f)
+	})
+	return f
+}
+
+// enchArmorEffectivenessFn builds the CombatRules armor-effectiveness closure for a hit: it resolves
+// the attacker's weapon (source.getWeaponItem() == the causing entity's mainhand) and, ONLY when that
+// weapon carries an armor_effectiveness enchant (Breach), returns a closure folding
+// enchModifyArmorEffectiveness. When no such enchant is present it returns nil — the no-enchant hit
+// then takes the vanilla else-branch (f4 = f3) byte-identically, drawing no RNG and touching no
+// enchant state (the pig-oracle discipline). victim supplies THIS_ENTITY for the (unused-by-Breach)
+// damage-source conditions and the FloatAction random.
+func (t *TickLoop) enchArmorEffectivenessFn(victim enchEntityRef, src damageSource) func(float32) float32 {
+	if src.attacker == 0 {
+		return nil // an environmental source has no weapon (source.getWeaponItem() == null)
+	}
+	attacker := t.enchResolveEntity(src.attacker)
+	if !attacker.valid() {
+		return nil
+	}
+	weapon, _ := t.enchWeaponInUse(attacker)
+	if stackEmpty(weapon) {
+		return nil // source.getWeaponItem() == null -> the `ifnull` else branch
+	}
+	// Zero-perturbation gate: only fold when the weapon actually carries an armor_effectiveness effect.
+	// A weapon with unrelated enchants (or none) leaves the vanilla result unchanged (f3 in [0,0.8] is
+	// already inside the [0,1] clamp), so returning nil is observably identical and avoids all work.
+	has := false
+	forEachItemEnchant(weapon, func(wireID, _ int) {
+		if set := enchEffectsFor(wireID); set != nil && len(set.armorEffectiveness) > 0 {
+			has = true
+		}
+	})
+	if !has {
+		return nil
+	}
+	return func(f float32) float32 {
+		return t.enchModifyArmorEffectiveness(weapon, victim, src, f)
+	}
 }
 
 // playerEquipRead adapts the player's 6 populated equipment slots to the 8-ordinal equipment walk

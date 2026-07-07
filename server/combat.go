@@ -464,7 +464,7 @@ func (t *TickLoop) actuallyHurt(p *tickPlayer, src damageSource, amount float32)
 	}
 
 	// Armor-points reduction, then magic (resistance/protection) reduction — in vanilla's order.
-	amount = t.getDamageAfterArmorAbsorb(p, amount)
+	amount = t.getDamageAfterArmorAbsorb(p, src, amount)
 	amount = t.getDamageAfterMagicAbsorb(p, src, amount)
 
 	// Absorption folding (Math.max(amount - absorption, 0); setAbsorption(absorption - (f1 - amount))).
@@ -529,7 +529,7 @@ func (t *TickLoop) actuallyHurt(p *tickPlayer, src damageSource, amount float32)
 // armor items, so getArmorValue() == floor(ARMOR attribute) == 0 and ARMOR_TOUGHNESS == 0, making
 // the curve a full-damage pass-through TODAY. The FORMULA is present and correct so a synthetic or
 // future armor attribute reduces damage exactly as vanilla.
-func (t *TickLoop) getDamageAfterArmorAbsorb(p *tickPlayer, amount float32) float32 {
+func (t *TickLoop) getDamageAfterArmorAbsorb(p *tickPlayer, src damageSource, amount float32) float32 {
 	// source.is(BYPASSES_ARMOR): v1 has no such damage types — constant false, so the armor curve
 	// always applies (the common melee/fall case).
 	const bypassesArmor = false
@@ -543,7 +543,10 @@ func (t *TickLoop) getDamageAfterArmorAbsorb(p *tickPlayer, amount float32) floa
 		// then d2f, exactly as vanilla.
 		armorValue := float32(p.getArmorValue())
 		armorToughness := float32(p.getAttributeValue(attrArmorToughness))
-		amount = combatRulesGetDamageAfterAbsorb(amount, armorValue, armorToughness)
+		// source.getWeaponItem() armor-effectiveness (Breach). nil when the attacker holds no weapon with
+		// an armor_effectiveness enchant — the no-enchant path stays byte-identical (see combatRules...).
+		armorEff := t.enchArmorEffectivenessFn(enchEntityRef{player: p}, src)
+		amount = combatRulesGetDamageAfterAbsorb(amount, armorValue, armorToughness, armorEff)
 	}
 	return amount
 }
@@ -775,13 +778,23 @@ func (t *TickLoop) performRespawn(p *tickPlayer) {
 // inner value is <= 0 and the min is armor*0.2 = 0), f3=0, f5=1.0 -> returns damage (full).
 // With a synthetic armor=20, toughness=0: f=2.0, inner = 20 - damage/2; for damage=10 that is 15,
 // clamped to [4, 20] -> 15, f3=0.6, f5=0.4 -> 10 * 0.4 = 4.0 (vanilla's reduced value).
-func combatRulesGetDamageAfterAbsorb(damage, armor, armorToughness float32) float32 {
+//
+// E-3 armor-effectiveness (Breach): the `weapon != null && level instanceof ServerLevel` branch is
+// modeled by the `armorEff` closure — nil takes the else branch (f4 = f3) BYTE-IDENTICALLY to the old
+// path (f3 is already in [0, 0.8], so vanilla's Mth.clamp(f, 0, 1) around it is a no-op — a no-enchant
+// hit perturbs nothing). A non-nil closure folds the weapon's armor_effectiveness effects then clamps
+// to [0,1]; a Breach weapon lowers f4, raising the landed damage.
+func combatRulesGetDamageAfterAbsorb(damage, armor, armorToughness float32, armorEff func(float32) float32) float32 {
 	f := 2.0 + armorToughness/4.0
 	armorClamp := mthClampF(armor-damage/f, armor*0.2, 20.0)
 	f3 := armorClamp / 25.0
-	// Enchantment armor-effectiveness (modifyArmorEffectiveness) — v1 has no enchantments and no
-	// weapon component to read, so f4 == f3 (the `aload weapon ifnull` / non-ServerLevel branch).
+	// Enchantment armor-effectiveness (modifyArmorEffectiveness). When an enchanted weapon is present
+	// (armorEff != nil) fold its effects then Mth.clamp(f, 0.0F, 1.0F); otherwise f4 == f3 (the
+	// `weapon == null` / non-ServerLevel else branch).
 	f4 := f3
+	if armorEff != nil {
+		f4 = mthClampF(armorEff(f3), 0.0, 1.0)
+	}
 	f5 := 1.0 - f4
 	return damage * f5
 }

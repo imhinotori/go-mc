@@ -130,7 +130,7 @@ func TestArmorAttributesReduceDamage(t *testing.T) {
 	charge(attacker)
 	loop.applyInput(attacker, SubtickInput{At: loop.clock.Now(), Packet: attackPacket(victim.entityID)})
 
-	want := combatRulesGetDamageAfterAbsorb(1.0, 11.0, 5.0)
+	want := combatRulesGetDamageAfterAbsorb(1.0, 11.0, 5.0, nil)
 	if want >= 1.0 || want <= 0.0 {
 		t.Fatalf("test precondition: armor curve must reduce 1.0 to (0,1), got %v", want)
 	}

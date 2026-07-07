@@ -686,7 +686,10 @@ func (t *TickLoop) getDamageAfterArmorAbsorbEntity(e *Entity, src damageSource, 
 		// getArmorValue() == Mth.floor((double) getAttributeValue(ARMOR)) — the d2f-after-floor cast site.
 		armorValue := float32(math.Floor(e.getAttributeValue(attribute.Armor)))
 		armorToughness := float32(e.getAttributeValue(attribute.ArmorToughness))
-		amount = combatRulesGetDamageAfterAbsorb(amount, armorValue, armorToughness)
+		// source.getWeaponItem() armor-effectiveness (Breach): nil unless the attacker's weapon carries an
+		// armor_effectiveness enchant, so a no-enchant hit stays byte-identical (see combatRulesGet...).
+		armorEff := t.enchArmorEffectivenessFn(enchEntityRef{mob: e}, src)
+		amount = combatRulesGetDamageAfterAbsorb(amount, armorValue, armorToughness, armorEff)
 	}
 	return amount
 }

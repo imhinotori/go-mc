@@ -259,3 +259,143 @@ func TestEnchantMendingNoCandidatePassthrough(t *testing.T) {
 		t.Fatalf("no-mending repairPlayerItems = %d, want 7 (full pass-through)", got)
 	}
 }
+
+// TestBaneOfArthropodsAppliesSlowness: a direct hit with a Bane-of-Arthropods weapon on an arthropod
+// victim (spider) runs the apply_mob_effect post-attack effect (enchanted "attacker", affected
+// "victim", gated on #sensitive_to_bane_of_arthropods AND is_direct). For Bane I the durations are
+// min=1.5, max=linear(1.5,0.5)@lvl1=1.5 and amplifiers min=max=3.0, so Mth.randomBetween collapses to
+// the endpoint regardless of the nextFloat draws: dur = round(1.5*20) = 30 ticks, amp = round(3.0) = 3.
+// The single-element to_apply (minecraft:slowness) is picked via getRandomElement's nextInt(1) = 0.
+func TestBaneOfArthropodsAppliesSlowness(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	weapon := enchantedStack(idDiamondSword, 1, enchTestEntry(t, "minecraft:bane_of_arthropods", 1))
+
+	attacker := combatPlayer(loop, 1)
+	holdEnchanted(attacker, weapon)
+	spider := NewEntity(70, entity.Spider, 0.5, 64, 0.5)
+	spider.health = 16.0
+	loop.only().entities.add(spider)
+
+	// doPostAttackEffectsWithItemSource(victim=spider, src=direct player attack, weapon, attacker):
+	// the ATTACKER's weapon POST_ATTACK entry (enchanted "attacker") targets the "victim".
+	src := damageSourcePlayerAttack(attacker.entityID)
+	_, weaponInUse := loop.enchWeaponInUse(enchEntityRef{player: attacker})
+	loop.doPostAttackEffectsWithItemSource(enchEntityRef{mob: spider}, src, weapon, weaponInUse, enchEntityRef{player: attacker})
+
+	amp, ok := entityEffectAmplifier(spider, effectSlowness)
+	if !ok {
+		t.Fatalf("bane on hit did not apply SLOWNESS to the arthropod victim")
+	}
+	if amp != 3 {
+		t.Fatalf("bane SLOWNESS amplifier = %d, want 3 (min==max==3.0 -> round(3.0))", amp)
+	}
+	if got := spider.mobEffects[effectSlowness].duration; got != 30 {
+		t.Fatalf("bane SLOWNESS duration = %d ticks, want 30 (round(1.5s * 20))", got)
+	}
+}
+
+// TestBaneOfArthropodsNonArthropodNoEffect: the SAME weapon hitting a non-arthropod (pig) applies
+// NOTHING — the entity_properties #sensitive_to_bane_of_arthropods requirement fails.
+func TestBaneOfArthropodsNonArthropodNoEffect(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	weapon := enchantedStack(idDiamondSword, 1, enchTestEntry(t, "minecraft:bane_of_arthropods", 1))
+
+	attacker := combatPlayer(loop, 1)
+	pig := NewEntity(71, entity.Pig, 0.5, 64, 0.5)
+	pig.health = 10.0
+	loop.only().entities.add(pig)
+
+	src := damageSourcePlayerAttack(attacker.entityID)
+	_, weaponInUse := loop.enchWeaponInUse(enchEntityRef{player: attacker})
+	loop.doPostAttackEffectsWithItemSource(enchEntityRef{mob: pig}, src, weapon, weaponInUse, enchEntityRef{player: attacker})
+
+	if _, ok := entityEffectAmplifier(pig, effectSlowness); ok {
+		t.Fatalf("bane applied SLOWNESS to a non-arthropod (pig) — the sensitivity gate failed")
+	}
+}
+
+// TestBreachReducesArmorEffectiveness: Breach IV's armor_effectiveness effect (add linear -0.15
+// -0.15/level = -0.60 at IV) lowers the CombatRules armor ratio f3, so MORE damage penetrates. With
+// armor=20, toughness=0, damage=10: f3 = clamp(20 - 10/2, 4, 20)/25 = 15/25 = 0.6. Breach folds
+// 0.6 + (-0.60) then clamps to [0,1] ~= 0.0, so f5 = 1.0 and the full 10.0 lands (vs 4.0 unenchanted).
+func TestBreachReducesArmorEffectiveness(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	weapon := enchantedStack(idDiamondSword, 1, enchTestEntry(t, "minecraft:breach", 4))
+	victim := combatPlayer(loop, 2)
+	src := damageSourcePlayerAttack(1)
+
+	// The armor_effectiveness closure the CombatRules port receives (source.getWeaponItem() fold).
+	breachEff := func(f float32) float32 {
+		return loop.enchModifyArmorEffectiveness(weapon, enchEntityRef{player: victim}, src, f)
+	}
+
+	// Baseline (no enchant): full armor curve.
+	base := combatRulesGetDamageAfterAbsorb(10.0, 20.0, 0.0, nil)
+	if !approxEq(base, 4.0, 1e-4) {
+		t.Fatalf("baseline armor absorb = %v, want ~4.0 (armor=20 curve)", base)
+	}
+
+	// With Breach IV: recompute the exact expected value from the ported ops.
+	got := combatRulesGetDamageAfterAbsorb(10.0, 20.0, 0.0, breachEff)
+	f := float32(2.0) + 0.0/4.0
+	armorClamp := mthClampF(20.0-10.0/f, 20.0*0.2, 20.0)
+	f3 := armorClamp / 25.0
+	f4 := mthClampF(f3+(-0.15+-0.15*3), 0.0, 1.0)
+	want := float32(10.0) * (1.0 - f4)
+	if got != want {
+		t.Fatalf("breach IV armor absorb = %v, want %v (f3=%v folded by -0.60)", got, want, f3)
+	}
+	if got <= base {
+		t.Fatalf("breach did not increase landed damage: got %v, baseline %v", got, base)
+	}
+}
+
+// TestEnchantAttributeModifierEquipUnequip: an attributes-granting enchant (Sweeping Edge II on the
+// mainhand, targeting the MODELED sweeping_damage_ratio) adds its AttributeModifier when the item is
+// equipped (detectEquipmentUpdates) and removes it cleanly on unequip. Sweeping Edge II amount =
+// fraction(num=linear(1,1)@2=2, den=linear(2,1)@2=3) = 2/3 add_value on a 0.0 base.
+func TestEnchantAttributeModifierEquipUnequip(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	p := combatPlayer(loop, 1)
+
+	// Baseline: no weapon -> sweeping_damage_ratio at its 0.0 registration default.
+	if v := p.getAttributeValue(attrSweepingDamageRatio); v != 0.0 {
+		t.Fatalf("baseline sweeping_damage_ratio = %v, want 0.0", v)
+	}
+
+	// Equip a Sweeping Edge II sword and run the per-tick equipment diff (which applies the enchant's
+	// attribute modifier via forEachItemModifier's EnchantmentHelper.forEachModifier tail).
+	holdEnchanted(p, enchantedStack(idDiamondSword, 1, enchTestEntry(t, "minecraft:sweeping_edge", 2)))
+	p.detectEquipmentUpdates()
+
+	wantF := float64(float32(2.0) / float32(3.0))
+	got := p.getAttributeValue(attrSweepingDamageRatio)
+	if got != wantF {
+		t.Fatalf("sweeping_edge II sweeping_damage_ratio on equip = %v, want %v (2/3 add_value)", got, wantF)
+	}
+
+	// Unequip (empty the mainhand) and re-diff: the modifier is removed by id, reverting to 0.0.
+	inv := ensureInventory(p)
+	inv.set(heldWindowSlot(inv.heldSlot), component.SlotData{})
+	p.detectEquipmentUpdates()
+	if v := p.getAttributeValue(attrSweepingDamageRatio); v != 0.0 {
+		t.Fatalf("sweeping_damage_ratio after unequip = %v, want 0.0 (modifier removed by id)", v)
+	}
+}
+
+// TestEnchantAttributeUnmodeledSkipped: an attributes enchant targeting an attribute NOT modeled on
+// the player holder (Swift Sneak -> sneaking_speed) is a no-op on equip — the vanilla getInstance ==
+// null guard skips it — so no panic and no phantom modifier lands.
+func TestEnchantAttributeUnmodeledSkipped(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	p := combatPlayer(loop, 1)
+	// Swift Sneak's slot is "legs"; put it in the worn-legs window slot (7).
+	inv := ensureInventory(p)
+	inv.set(7, enchantedStack(idBook, 1, enchTestEntry(t, "minecraft:swift_sneak", 3)))
+	// Must not panic (the unmodeled attribute is skipped); movement_speed stays untouched.
+	before := p.getAttributeValue(attrMovementSpeed)
+	p.detectEquipmentUpdates()
+	if after := p.getAttributeValue(attrMovementSpeed); after != before {
+		t.Fatalf("swift_sneak perturbed movement_speed: before %v after %v", before, after)
+	}
+}
