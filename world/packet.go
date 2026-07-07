@@ -34,6 +34,51 @@ func WriteLevelChunkWithLight(cx, cz int32, ch *level.Chunk) (pk.Packet, error) 
 	}, nil
 }
 
+// WriteLightUpdate assembles a ClientboundLightUpdate packet for one column's freshly-recomputed light —
+// the incremental-relight push LevelChunk.setBlockState drives after a light-affecting edit (via
+// getLightEngine().checkBlock + the ThreadedLevelLightEngine emitting ClientboundLightUpdatePacket to the
+// column's trackers). Wire order is jar-verified (ClientboundLightUpdatePacket.write):
+//
+//	VarInt chunkX, VarInt chunkZ, <LightUpdatePacketData>
+//
+// where LightUpdatePacketData.write == the SAME skyMask/blockMask/emptySky/emptyBlock/skyArrays/blockArrays
+// layout level.Chunk.WriteTo emits for the in-chunk light (level/chunk.go lightData.WriteTo). We reproduce
+// that layout here from the per-section arrays (a nil section == "no data", its mask bit unset), using the
+// identical mask sizing so the payload is byte-compatible with the chunk-embedded light. CITE:
+// net.minecraft.network.protocol.game.ClientboundLightUpdatePacket.write +
+// ClientboundLightUpdatePacketData.write.
+func WriteLightUpdate(cl ColumnLight) pk.Packet {
+	const maskLongs = (16*16*16-1)>>6 + 1 // identical sizing to level.Chunk.WriteTo's lightData masks
+	skyMask := make(pk.BitSet, maskLongs)
+	blockMask := make(pk.BitSet, maskLongs)
+	var skyArrays, blockArrays []pk.ByteArray
+	for i, a := range cl.Sky {
+		if a != nil {
+			skyMask.Set(i, true)
+			skyArrays = append(skyArrays, a)
+		}
+	}
+	for i, a := range cl.Block {
+		if a != nil {
+			blockMask.Set(i, true)
+			blockArrays = append(blockArrays, a)
+		}
+	}
+	emptySky := make(pk.BitSet, maskLongs)
+	emptyBlock := make(pk.BitSet, maskLongs)
+	for i := range skyMask {
+		emptySky[i] = ^skyMask[i]
+	}
+	for i := range blockMask {
+		emptyBlock[i] = ^blockMask[i]
+	}
+	return pk.Marshal(int32(packetid.ClientboundLightUpdate),
+		pk.VarInt(cl.Pos[0]), pk.VarInt(cl.Pos[1]),
+		skyMask, blockMask, emptySky, emptyBlock,
+		pk.Array(skyArrays), pk.Array(blockArrays),
+	)
+}
+
 // SetChunkCacheCenter tells the client which chunk is the streaming center.
 // Fields: VarInt chunkX, VarInt chunkZ.
 func SetChunkCacheCenter(cx, cz int32) pk.Packet {

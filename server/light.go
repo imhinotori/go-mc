@@ -1,8 +1,51 @@
 package server
 
 import (
+	"github.com/imhinotori/sulfur/level/block"
 	pk "github.com/imhinotori/sulfur/net/packet"
+	"github.com/imhinotori/sulfur/world"
 )
+
+// lightMinSectionY / lightSectionCount are the overworld light geometry the incremental relight passes to
+// ChunkManager.RelightEdit — the same minY>>4 / height>>4 the generator uses to seal a fresh chunk's light
+// (world/generator.go: minY>>4, height>>4 == -4, 24). v1 single-dimension overworld; a future
+// multi-dimension wiring threads the real per-dimension geometry here (mirrors dimMinY's note).
+const (
+	lightMinSectionY  = dimMinY >> 4 // -64 >> 4 == -4
+	lightSectionCount = 384 >> 4     // 24 block sections (overworld height 384)
+)
+
+// relightOnEdit is the incremental-relight seam that fires after a light-affecting block edit — the Go
+// realization of LevelChunk.setBlockState's `if (LightEngine.hasDifferentLightProperties(old, new))
+// getLightEngine().checkBlock(pos)` followed by the ThreadedLevelLightEngine emitting
+// ClientboundLightUpdatePacket to the column's trackers. It gates on LightPropertiesDiffer (no relight when
+// dampening/emission/occlusion are unchanged), recomputes the affected columns' light over the live loaded
+// chunks (world.RelightEdit), and pushes a ClientboundLightUpdate for every column whose light actually
+// changed to every player tracking that column. Tick-owned (runs on the tick goroutine). CITE:
+// LevelChunk.setBlockState (hasDifferentLightProperties -> checkBlock) + ChunkMap's light-update broadcast.
+func (t *TickLoop) relightOnEdit(pos pk.Position, oldState, newState block.StateID) {
+	if !world.LightPropertiesDiffer(oldState, newState) {
+		return // light properties unchanged: no checkBlock, no relight (the hasDifferentLightProperties gate)
+	}
+	w := t.world()
+	if w == nil {
+		return
+	}
+	air := block.ToStateID[block.Air{}]
+	changed := w.RelightEdit(pos, lightMinSectionY, lightSectionCount, air)
+	for _, cl := range changed {
+		packet := world.WriteLightUpdate(cl)
+		col := chunkCenterOf(cl.Pos[0]*16, cl.Pos[1]*16)
+		for _, pl := range t.players {
+			if pl.client == nil {
+				continue
+			}
+			if pl.center == col || (pl.sentChunks != nil && pl.sentChunks[col]) {
+				pl.client.Send(packet)
+			}
+		}
+	}
+}
 
 // server light READ seams — the tick-side getRawBrightness / getMaxLocalRawBrightness now backed by
 // the real per-section light the LevelLightEngine computes at chunk finalize (world/light.go),

@@ -385,6 +385,12 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 
 		t.reconcileEdit(p, placePos, placeState, int32(sequence))
 
+		// LevelChunk.setBlockState light hook: if the placed block changes the cell's light properties
+		// (dampening/emission/occlusion vs the pre-place state), recompute the affected columns' light and
+		// push a ClientboundLightUpdate to their trackers. A placed torch/glowstone lights the room; a
+		// placed solid block casts a shadow. Gated inside relightOnEdit (no-op when properties match).
+		t.relightOnEdit(placePos, prePlaceState, placeState)
+
 		// PLUGIN-02 (Plan 22) on_block_place seam: fire ONCE here at the place call site, AFTER the
 		// authoritative SetBlock+reconcileEdit — NOT from the shared broadcastBlockUpdate (Pitfall 2:
 		// break ALSO routes block updates through that broadcaster, so emitting there would double-fire

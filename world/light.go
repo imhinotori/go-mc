@@ -4,6 +4,7 @@ import (
 	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/level/lighting"
+	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
 // This file wires the 1:1 net.minecraft.world.level.lighting engine into chunk sealing. It replaces
@@ -201,6 +202,153 @@ func ComputeChunkLight(centerPos level.ChunkPos, neighbors map[[2]int]*level.Chu
 		}
 		center.Sections[si].BlockLight = materializeLayer(blk)
 	}
+}
+
+// LightPropertiesDiffer ports net.minecraft.world.level.lighting.LightEngine.hasDifferentLightProperties
+// (old, new) — the gate LevelChunk.setBlockState consults before calling getLightEngine().checkBlock(pos).
+// Vanilla: old==new ? false : (getLightDampening differs || getLightEmission differs ||
+// new.useShapeForLightOcclusion() || old.useShapeForLightOcclusion()). We reproduce the first two exactly
+// (LightBlock == getLightDampening, LightEmission == getLightEmission) and reproduce the occlusion-shape
+// term with the FROM_EMPTY_SHAPE flag (LightShapeIsEmpty == !canOcclude || !useShapeForLightOcclusion):
+// !empty(s) implies s.useShapeForLightOcclusion() is true for an occluding block, so "either state is a
+// non-empty occlusion shape" is a faithful SUPERSET of vanilla's `new.useShape || old.useShape` term. A
+// superset only ever triggers an EXTRA recompute, and a recompute that changes nothing emits no packet
+// (the array diff is empty) — so over-triggering is observably identical, never a missed relight. CITE:
+// LightEngine.hasDifferentLightProperties.
+func LightPropertiesDiffer(oldState, newState block.StateID) bool {
+	if oldState == newState {
+		return false
+	}
+	if block.LightBlock(oldState) != block.LightBlock(newState) {
+		return true
+	}
+	if block.LightEmission(oldState) != block.LightEmission(newState) {
+		return true
+	}
+	// new.useShapeForLightOcclusion() || old.useShapeForLightOcclusion(), via the empty-shape flag.
+	return !block.LightShapeIsEmpty(oldState) || !block.LightShapeIsEmpty(newState)
+}
+
+// ColumnLight carries one column's freshly-recomputed per-section light so the server can assemble a
+// ClientboundLightUpdate for it. Sky/Block are indexed by block-section (0 == the bottom section at
+// minSectionY); a nil entry means "no light data for that section" (the wire leaves its mask bit unset).
+type ColumnLight struct {
+	Pos   level.ChunkPos
+	Sky   [][]byte
+	Block [][]byte
+}
+
+// RelightEdit is the incremental-relight seam LevelChunk.setBlockState drives via
+// getLightEngine().checkBlock(pos) + the ThreadedLevelLightEngine's runLightUpdates. It is called AFTER
+// SetBlock has written newState at pos, ONLY when LightPropertiesDiffer(old,new) is true. Because light is
+// a pure function of the block states in the neighborhood, recomputing the affected columns from the live
+// loaded chunks (via the same ComputeChunkLight that seals a freshly-generated chunk) converges to exactly
+// the values a persistent incremental engine would — the recompute mechanism is the permitted OPTIMIZATION
+// substitution (simpler than a live-seeded persistent engine), producing byte-identical light output.
+//
+// Light propagates up to 15 blocks, so an edit near a chunk border can change a NEIGHBOR column's stored
+// light too. We therefore recompute the edited column AND its 8 neighbors (each ComputeChunkLight uses its
+// own 3x3, so cross-border light flows both ways), snapshot each column's per-section arrays BEFORE, and
+// return a ColumnLight only for the columns whose arrays actually CHANGED. An unloaded column in the 3x3 is
+// skipped (its light is not tracked). minSectionY/secs are the world geometry (minY>>4, height>>4); air is
+// the resolved air StateID. Tick-owned (runs on the tick goroutine over the tick-owned manager).
+func (m *ChunkManager) RelightEdit(pos pk.Position, minSectionY, secs int, air block.StateID) []ColumnLight {
+	col := colOf(pos)
+	// The columns whose light this edit can affect: the edited column and its 8 neighbors.
+	affected := make([]level.ChunkPos, 0, 9)
+	for dx := -1; dx <= 1; dx++ {
+		for dz := -1; dz <= 1; dz++ {
+			affected = append(affected, level.ChunkPos{col[0] + int32(dx), col[1] + int32(dz)})
+		}
+	}
+
+	// Snapshot BEFORE arrays for each affected LOADED column so we can detect real changes.
+	type snap struct {
+		ch     *level.Chunk
+		sky    [][]byte
+		block  [][]byte
+		loaded bool
+	}
+	before := make(map[level.ChunkPos]*snap, len(affected))
+	for _, c := range affected {
+		ch, ok := m.Get(c)
+		if !ok {
+			before[c] = &snap{loaded: false}
+			continue
+		}
+		s := &snap{ch: ch, loaded: true, sky: make([][]byte, len(ch.Sections)), block: make([][]byte, len(ch.Sections))}
+		for i := range ch.Sections {
+			s.sky[i] = cloneNibble(ch.Sections[i].SkyLight)
+			s.block[i] = cloneNibble(ch.Sections[i].BlockLight)
+		}
+		before[c] = s
+	}
+
+	// Recompute each affected column's light from the live loaded neighborhood. Each ComputeChunkLight
+	// reads the CURRENT block states (post-edit) and rewrites that center column's stored arrays.
+	for _, c := range affected {
+		if !before[c].loaded {
+			continue
+		}
+		neighbors := make(map[[2]int]*level.Chunk, 9)
+		for dx := -1; dx <= 1; dx++ {
+			for dz := -1; dz <= 1; dz++ {
+				nc := level.ChunkPos{c[0] + int32(dx), c[1] + int32(dz)}
+				if ch, ok := m.Get(nc); ok {
+					neighbors[[2]int{int(nc[0]), int(nc[1])}] = ch
+				}
+			}
+		}
+		ComputeChunkLight(c, neighbors, minSectionY, secs, air)
+	}
+
+	// Emit a ColumnLight only for columns whose light actually changed (mark them dirty so the recomputed
+	// light persists with the save). An unchanged column produces no packet.
+	var out []ColumnLight
+	for _, c := range affected {
+		s := before[c]
+		if !s.loaded {
+			continue
+		}
+		changed := false
+		sky := make([][]byte, len(s.ch.Sections))
+		blk := make([][]byte, len(s.ch.Sections))
+		for i := range s.ch.Sections {
+			sky[i] = s.ch.Sections[i].SkyLight
+			blk[i] = s.ch.Sections[i].BlockLight
+			if !nibbleEqual(sky[i], s.sky[i]) || !nibbleEqual(blk[i], s.block[i]) {
+				changed = true
+			}
+		}
+		if changed {
+			m.MarkDirty(c)
+			out = append(out, ColumnLight{Pos: c, Sky: sky, Block: blk})
+		}
+	}
+	return out
+}
+
+// cloneNibble copies a 2048-byte light array (nil stays nil) for the before-snapshot.
+func cloneNibble(src []byte) []byte {
+	if src == nil {
+		return nil
+	}
+	out := make([]byte, len(src))
+	copy(out, src)
+	return out
+}
+
+// nibbleEqual reports whether two light arrays are byte-identical (nil == nil; nil != non-nil).
+func nibbleEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // computeChunkLightFromNeighborhood is the single-chunk-path adapter: it lifts a *Neighborhood's 3x3

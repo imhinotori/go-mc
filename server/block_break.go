@@ -421,6 +421,12 @@ func (t *TickLoop) destroyBlock(p *tickPlayer, pos pk.Position, air block.StateI
 			t.onObserverEdit(pos)
 		}
 
+		// LevelChunk.setBlockState light hook: a break to air raises the cell's light (removes a shadow-
+		// caster) or removes an emitter (a broken torch darkens the room). Recompute the affected columns'
+		// light and push a ClientboundLightUpdate to their trackers. Covers BOTH the ack (insta/STOP) and
+		// the delayed-destroy paths — destroyBlock is the single break funnel. Gated inside relightOnEdit.
+		t.relightOnEdit(pos, brokenState, air)
+
 		// Spawn the dropped Item entity (ServerPlayerGameMode.destroyBlock's loot path). Creative drops
 		// nothing (gated inside spawnBlockDrop). Lands in the OWNING region's store (cur().entities.add).
 		t.spawnBlockDrop(p, pos, brokenState)
