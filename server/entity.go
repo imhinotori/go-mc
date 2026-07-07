@@ -126,6 +126,16 @@ type Entity struct {
 	// SAME semantics (ExperienceOrb.age, discard at 6000) — both vanilla entities count an `age`.
 	age int
 
+	// itemTickCount is net.minecraft.world.entity.Entity.tickCount for a dropped Item — the
+	// free-running per-entity tick counter Entity.tick() increments (`tickCount++`) every server
+	// tick. ItemEntity.tick reads it for two vanilla cadences DISTINCT from `age` (which merge
+	// averages to the younger value): the resting-item move throttle `(tickCount + getId()) % 4 == 0`
+	// and the merge interval `tickCount % (moved ? 2 : 40) == 0`. Incremented in tickItem (the
+	// item's super.tick()). Zero/unused for non-item entities.
+	//	[VERIFIED javap Entity.tick: `this.tickCount++`; ItemEntity.tick reads #238 tickCount for
+	//	 both the (tickCount+id)%4 rest-throttle and the tickCount%interval merge gate.]
+	itemTickCount int
+
 	// --- XP-ORB PICKUP (WR-06): the experience-orb lifecycle state -------------------------
 	//
 	// These mirror net.minecraft.world.entity.ExperienceOrb's private fields (decompiled from

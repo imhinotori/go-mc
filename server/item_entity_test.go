@@ -317,3 +317,206 @@ func totalInventoryCount(inv *Inventory) int {
 	}
 	return total
 }
+
+// --- B-A7: ItemEntity physics (buoyancy / merge / despawn / max-stack) ---------------------
+//
+// These gate the divergence-audit B-A7 port of net.minecraft.world.entity.item.ItemEntity.tick:
+// water buoyancy (setUnderwaterMovement), same-item merge (mergeWithNeighbours/tryToMerge/merge
+// respecting max stack size), gravity in air, and the age-6000 despawn. Each asserts the exact
+// vanilla observable (velocity direction, combined count, entity removal).
+
+// dropStackN is a cobblestone stack of count n (the merge tests need non-1 counts).
+func dropStackN(n int) component.SlotData {
+	return component.SlotData{Count: pk.VarInt(n), ItemID: pk.VarInt(item.Cobblestone.ID)}
+}
+
+// TestItemMergeSameItem: two same-item stacks within the (0.5,0,0.5) merge box combine — the
+// counts sum onto the LARGER stack and the drained (smaller) item is removed from the store.
+// Vanilla mergeWithNeighbours -> tryToMerge -> merge (the smaller pours into the larger).
+func TestItemMergeSameItem(t *testing.T) {
+	loop, _ := newDropLoop()
+	// A 5-stack and a 3-stack at the same spot (well inside the 0.5-block merge box).
+	big := NewItemEntity(loop.idAlloc.AllocID(), 8.5, 64.0, 8.5, dropStackN(5))
+	small := NewItemEntity(loop.idAlloc.AllocID(), 8.5, 64.0, 8.5, dropStackN(3))
+	big.pickupDelay, small.pickupDelay = 0, 0 // both mergable (isMergable requires pickupDelay != 32767, not 0)
+	loop.only().entities.add(big)
+	loop.only().entities.add(small)
+
+	loop.mergeItemWithNeighbours(big)
+
+	// big absorbed small: 5 + 3 = 8 on big; small emptied and discarded.
+	if big.itemStack.Count != 8 {
+		t.Fatalf("merged count = %d, want 8 (5 + 3 combined onto the larger stack)", big.itemStack.Count)
+	}
+	if _, ok := loop.only().entities.get(small.id); ok {
+		t.Fatalf("the drained (smaller) item was NOT removed after merging into the larger stack")
+	}
+	if _, ok := loop.only().entities.get(big.id); !ok {
+		t.Fatalf("the surviving (larger) item must remain in the store")
+	}
+}
+
+// TestItemMergeYoungerAgeKept: merge keeps the YOUNGER age (min) and the LARGER pickupDelay (max)
+// on the surviving stack. Vanilla merge(dest, ..., src): age = min(dest.age, src.age);
+// pickupDelay = max(dest.pickupDelay, src.pickupDelay).
+func TestItemMergeYoungerAgeKept(t *testing.T) {
+	loop, _ := newDropLoop()
+	big := NewItemEntity(loop.idAlloc.AllocID(), 8.5, 64.0, 8.5, dropStackN(5))
+	small := NewItemEntity(loop.idAlloc.AllocID(), 8.5, 64.0, 8.5, dropStackN(3))
+	big.pickupDelay, small.pickupDelay = 4, 9 // max -> 9 kept
+	big.age, small.age = 100, 20              // min -> 20 kept
+	loop.only().entities.add(big)
+	loop.only().entities.add(small)
+
+	loop.mergeItemWithNeighbours(big)
+
+	if big.age != 20 {
+		t.Fatalf("merged age = %d, want 20 (min of 100 and 20 — the younger age)", big.age)
+	}
+	if big.pickupDelay != 9 {
+		t.Fatalf("merged pickupDelay = %d, want 9 (max of 4 and 9)", big.pickupDelay)
+	}
+}
+
+// TestItemNoMergeDifferentItems: a cobblestone stack and a dirt stack never merge (different item
+// id). areMergable -> isSameItemSameComponents is false, so both survive with their own counts.
+func TestItemNoMergeDifferentItems(t *testing.T) {
+	loop, _ := newDropLoop()
+	cobble := NewItemEntity(loop.idAlloc.AllocID(), 8.5, 64.0, 8.5, dropStackN(5))
+	dirt := NewItemEntity(loop.idAlloc.AllocID(), 8.5, 64.0, 8.5, component.SlotData{Count: 5, ItemID: pk.VarInt(item.Dirt.ID)})
+	cobble.pickupDelay, dirt.pickupDelay = 0, 0
+	loop.only().entities.add(cobble)
+	loop.only().entities.add(dirt)
+
+	loop.mergeItemWithNeighbours(cobble)
+
+	if cobble.itemStack.Count != 5 || dirt.itemStack.Count != 5 {
+		t.Fatalf("different items merged (cobble=%d dirt=%d), want both 5 (no merge across item types)", cobble.itemStack.Count, dirt.itemStack.Count)
+	}
+	if _, ok := loop.only().entities.get(dirt.id); !ok {
+		t.Fatalf("the dirt item was removed — different items must NOT merge")
+	}
+}
+
+// TestItemMergeRespectsMaxStack: two stacks whose combined count would EXCEED the max stack size
+// do NOT merge at all — ItemEntity never does a partial top-off between two item entities. Vanilla
+// areMergable: `if source.getCount() + destination.getCount() > getMaxStackSize() return false`, so a
+// 62 + 10 pair (sum 72 > 64) is left entirely untouched, both entities surviving with their counts.
+func TestItemMergeRespectsMaxStack(t *testing.T) {
+	loop, _ := newDropLoop()
+	dst := NewItemEntity(loop.idAlloc.AllocID(), 8.5, 64.0, 8.5, dropStackN(62))
+	src := NewItemEntity(loop.idAlloc.AllocID(), 8.5, 64.0, 8.5, dropStackN(10))
+	dst.pickupDelay, src.pickupDelay = 0, 0
+	loop.only().entities.add(dst)
+	loop.only().entities.add(src)
+
+	loop.mergeItemWithNeighbours(dst)
+
+	// 62 + 10 = 72 > 64: not mergable, so NEITHER count changes and BOTH entities survive.
+	if dst.itemStack.Count != 62 {
+		t.Fatalf("destination count = %d, want 62 (over-max sum -> no merge, unchanged)", dst.itemStack.Count)
+	}
+	if src.itemStack.Count != 10 {
+		t.Fatalf("source count = %d, want 10 (over-max sum -> no merge, unchanged)", src.itemStack.Count)
+	}
+	if _, ok := loop.only().entities.get(src.id); !ok {
+		t.Fatalf("the source item must NOT be removed (no merge occurred)")
+	}
+}
+
+// TestItemMergeExactlyToMax: when the combined count fits EXACTLY at the max stack size, the two
+// entities DO merge (sum == max is allowed: the guard is strictly `> max`). 60 + 4 -> a single 64
+// stack, the drained source removed.
+func TestItemMergeExactlyToMax(t *testing.T) {
+	loop, _ := newDropLoop()
+	dst := NewItemEntity(loop.idAlloc.AllocID(), 8.5, 64.0, 8.5, dropStackN(60))
+	src := NewItemEntity(loop.idAlloc.AllocID(), 8.5, 64.0, 8.5, dropStackN(4))
+	dst.pickupDelay, src.pickupDelay = 0, 0
+	loop.only().entities.add(dst)
+	loop.only().entities.add(src)
+
+	loop.mergeItemWithNeighbours(dst)
+
+	if dst.itemStack.Count != 64 {
+		t.Fatalf("destination count = %d, want 64 (60 + 4 == max, exact merge)", dst.itemStack.Count)
+	}
+	if _, ok := loop.only().entities.get(src.id); ok {
+		t.Fatalf("the drained source (emptied into the 64-stack) must be removed")
+	}
+}
+
+// TestItemGravityInAir: an airborne item (not in water/lava) gets its own 0.04 gravity then the
+// 0.98 air drag on the vertical: vy = (0 - 0.04) * 0.98 = -0.0392 (a downward velocity).
+func TestItemGravityInAir(t *testing.T) {
+	loop, _ := newDropLoop()
+	ie := NewItemEntity(loop.idAlloc.AllocID(), 8.5, 200.0, 8.5, dropStack())
+	ie.vx, ie.vy, ie.vz = 0, 0, 0 // cancel the random toss for a deterministic single-axis check
+	loop.only().entities.add(ie)
+
+	loop.tickItem(ie)
+
+	want := (0 - itemGravity) * itemAirDrag
+	if diff := ie.vy - want; diff < -1e-9 || diff > 1e-9 {
+		t.Fatalf("airborne item vy = %v, want %v (0.04 gravity then 0.98 air drag)", ie.vy, want)
+	}
+	if ie.vy >= 0 {
+		t.Fatalf("airborne item vy = %v, want a NEGATIVE (downward) velocity", ie.vy)
+	}
+}
+
+// TestItemBuoyancyInWater: an item submerged in water (getFluidHeight > 0.1) takes the buoyancy
+// branch, NOT gravity — its horizontal velocity is scaled by 0.99 and, while vy < 0.06, it gets a
+// +0.0005 upward bob (so a resting item rises toward the surface). Vanilla setUnderwaterMovement.
+func TestItemBuoyancyInWater(t *testing.T) {
+	loop, mgr := newDropLoop()
+	// Fill a 1x3x1 water column around the item so its whole AABB is submerged and getFluidHeight
+	// (surface above feet) comfortably exceeds the 0.1 threshold.
+	for dy := 0; dy <= 2; dy++ {
+		mgr.SetBlock(pk.Position{X: 8, Y: 63 + dy, Z: 8}, waterStateID(0), dimMinY)
+	}
+	ie := NewItemEntity(loop.idAlloc.AllocID(), 8.5, 64.0, 8.5, dropStack())
+	ie.vx, ie.vy, ie.vz = 0.5, 0.0, 0.0 // a horizontal drift + zero vertical (below the 0.06 bob cutoff)
+	loop.only().entities.add(ie)
+
+	// Sanity: the item must actually read as submerged past 0.1, else this asserts nothing.
+	if !loop.mobInWater(ie) || loop.mobFluidHeight(ie, fluidWater) <= itemFluidHeightThreshold {
+		t.Fatalf("test setup: item not submerged past the 0.1 threshold (inWater=%v height=%v)", loop.mobInWater(ie), loop.mobFluidHeight(ie, fluidWater))
+	}
+
+	loop.tickItem(ie)
+
+	// vy took the +0.0005 bob (buoyancy), NOT the -0.04 gravity: it must be a POSITIVE (upward)
+	// velocity — the item floats up rather than sinking. (Any downward-gravity path would be < 0.)
+	if ie.vy <= 0 {
+		t.Fatalf("submerged item vy = %v, want > 0 (the +0.0005 buoyancy bob, not gravity)", ie.vy)
+	}
+	// The horizontal velocity was scaled by the 0.99 water drag (then integrated), so it is
+	// strictly less than its starting 0.5 and still positive.
+	if !(ie.vx > 0 && ie.vx < 0.5) {
+		t.Fatalf("submerged item vx = %v, want 0 < vx < 0.5 (scaled by the 0.99 water drag)", ie.vx)
+	}
+}
+
+// TestItemDespawnsAtLifetime: the item tick increments age and DISCARDS the item once age reaches
+// LIFETIME (6000). Driven to one tick short, the next tick removes it from the store.
+func TestItemDespawnsAtLifetime(t *testing.T) {
+	loop, _ := newDropLoop()
+	ie := NewItemEntity(loop.idAlloc.AllocID(), 8.5, 200.0, 8.5, dropStack())
+	ie.age = itemLifetime - 1
+	loop.only().entities.add(ie)
+
+	loop.tickItem(ie) // age -> 6000, age >= LIFETIME -> discard
+	if _, ok := loop.only().entities.get(ie.id); ok {
+		t.Fatalf("item still present at age %d, want despawned at LIFETIME %d", ie.age, itemLifetime)
+	}
+}
+
+// TestItemFireImmuneStub pins the fireproof-immunity port: a normal stack is NOT fire-immune
+// (defers to the base Entity.fireImmune == false); the fire-resistant read is the cited stub.
+func TestItemFireImmuneStub(t *testing.T) {
+	loop, _ := newDropLoop()
+	ie := NewItemEntity(loop.idAlloc.AllocID(), 8.5, 64.0, 8.5, dropStack())
+	if loop.itemFireImmune(ie) {
+		t.Fatalf("a normal (non-fire-resistant) item must NOT be fire-immune (defers to base false)")
+	}
+}
