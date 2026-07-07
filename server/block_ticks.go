@@ -72,6 +72,12 @@ const (
 	// .neighborChanged) that, if still lit and still unpowered, clears LIT (RedstoneLampBlock.tick).
 	redstoneLampTickType blockTickType = "minecraft:redstone_lamp"
 
+	// fireTickType is the block id the FIRE spread/burn-out tick (FireBlock.tick) is scheduled/
+	// dispatched under. Fire is a SCHEDULED ticker: onPlace / tick reschedule via scheduleTick(pos,
+	// this, getFireTickDelay()==30+nextInt(10)), so it drains through this general LevelTicks (like
+	// sugar cane / redstone), NOT the random-tick driver. CITE: FireBlock.onPlace / FireBlock.tick.
+	fireTickType blockTickType = "minecraft:fire"
+
 	// sandTickType / redSandTickType / gravelTickType are the block ids the FallingBlock tick
 	// (FallingBlock.tick -> FallingBlockEntity.fall) is scheduled/dispatched under. Each FallingBlock
 	// schedules under its OWN block id (FallingBlock.onPlace / updateShape -> scheduleTick(pos, this,
@@ -365,7 +371,16 @@ func (t *TickLoop) tickBlock(pos pk.Position, typ blockTickType) {
 				}
 			}
 		}
-	case sandTickType, redSandTickType, gravelTickType:
+	case fireTickType:
+		// ServerLevel.tickBlock stale guard: only tick if still fire (any age/attach flags). A fire that
+		// burned out / was extinguished since the tick was scheduled fires nothing. Routes to the FireBlock
+		// spread/burn-out handler (fire_block.go). The scheduled-block drain runs on the coordinator, so the
+		// handler resolves the world-global region for its level random. CITE: ServerLevel.tickBlock.
+		if !block.IsFire(state) {
+			return
+		}
+		t.fireTick(t.only(), state, pos)
+		case sandTickType, redSandTickType, gravelTickType:
 		// ServerLevel.tickBlock stale guard: only tick if still a FallingBlock kind (sand/red_sand/gravel).
 		// A FallingBlock broken/replaced since the tick was scheduled fires nothing. Routes to the shared
 		// FallingBlock.tick handler (falling_block.go). CITE: ServerLevel.tickBlock (`state.is(block)`).
