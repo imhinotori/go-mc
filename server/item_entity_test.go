@@ -46,6 +46,29 @@ func TestItemPickupDelayDecrements(t *testing.T) {
 	}
 }
 
+// TestItemNoDoublePhysics: a dropped item run through the FULL tick pipeline (tickEntities, which
+// invokes tickItem, then tickPhysics) must apply its 0.04 gravity EXACTLY ONCE — tickPhysics is the
+// mob-only LivingEntity.aiStep->travel path and MUST skip non-mob entities, else the item gets a second
+// gravity+drag+move pass and its trajectory diverges from vanilla. Fable audit B-C1 regression guard.
+func TestItemNoDoublePhysics(t *testing.T) {
+	loop, _ := newDropLoop()
+	// High up over the empty (all-air) chunk so it free-falls without hitting the floor this tick.
+	ie := NewItemEntity(loop.idAlloc.AllocID(), 8.5, 200.0, 8.5, dropStack())
+	ie.vx, ie.vy, ie.vz = 0, 0, 0 // cancel the random spawn toss for a deterministic single-axis check
+	loop.only().entities.add(ie)
+
+	// Expected vy after ONE item tick (tickItem): (0 - itemGravity) * airDrag. The double-physics bug
+	// would then run tickPhysics's (vy - 0.08)*0.98 a second time, yielding a much larger fall.
+	wantVY := (0 - itemGravity) * airDrag
+
+	loop.tickEntities() // runs tickItem (the item's own 0.04 gravity + move)
+	loop.tickPhysics()  // must SKIP the item (isItem) — no second integration
+
+	if diff := ie.vy - wantVY; diff < -1e-9 || diff > 1e-9 {
+		t.Fatalf("item vy after full tick = %v, want %v (single 0.04 gravity pass; a mismatch means tickPhysics double-integrated)", ie.vy, wantVY)
+	}
+}
+
 // TestItemAgesAndDespawns: the item tick increments age each tick and DISCARDS the item from
 // the store once age reaches LIFETIME (6000). Driving age to the threshold removes the entity.
 func TestItemAgesAndDespawns(t *testing.T) {

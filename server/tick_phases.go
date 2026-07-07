@@ -733,6 +733,21 @@ func (t *TickLoop) tickPhysics() {
 			continue
 		}
 
+		// NON-MOB ENTITIES run their OWN full physics in their dedicated .tick during tickEntities
+		// (tickItems/tickOrbs/tickArrows/tickPrimedTnt/tickPotions/tickThrowables/tickHurtingProjectiles/
+		// tickFishingHooks/tickMinecarts/tickBoats — each a 1:1 port of ItemEntity.tick / ExperienceOrb.tick
+		// / AbstractArrow.tick / PrimedTnt.tick / ThrowableProjectile.tick / AbstractHurtingProjectile.tick /
+		// FishingHook.tick / AbstractMinecart.tick / AbstractBoat.tick that already applies that entity's
+		// gravity + drag + moveEntity). This generic path (LivingEntity.aiStep->travel) is MOB-ONLY in
+		// vanilla, so running it over a non-mob here double-integrates gravity/drag/move — a second pass that
+		// warps every item/projectile/vehicle trajectory. Skip them: their physics is done. (isFangs/isBolt
+		// are stationary code-spawned entities with no motion, folded in for completeness.) Fable audit B-C1.
+		if e.isItem || e.isOrb || e.isArrow || e.isPotion || e.isThrowable ||
+			e.isHurting || e.isFishingHook || e.isFangs || e.isBolt ||
+			e.isTnt || e.isMinecart || e.isBoat {
+			continue
+		}
+
 		// LIVE-DEBUG A (the "mobs sink in water" fix): a mob whose AABB is in water runs the
 		// VANILLA water physics (LivingEntity.travelInWater) INSTEAD of the dry travelInAir path —
 		// vertical drag 0.8 (NOT the 0.98 air drag) + reduced gravity baseGravity/16 == 0.005 (NOT
