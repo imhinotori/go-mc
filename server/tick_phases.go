@@ -400,6 +400,12 @@ func (t *TickLoop) tickEntities() {
 	// delayed-destroy this tick spawns its drop and the tracker reflects it in this tick's near().
 	t.tickBlockBreak()
 
+	// NETHER PORTAL travel: the Entity.handlePortal port — for each player, process the portal cooldown
+	// and (if standing in a nether_portal) accrue the dwell timer, teleporting to the other dimension at
+	// the transition threshold. A single ADDITIVE call inside this existing phase keeps the tick order
+	// unchanged (mirrors the tickBlockBreak / tickBreath seams). No-op until the nether world is armed.
+	t.tickNetherPortal()
+
 	// Plan 17-22 item-use / EATING: the LivingEntity.updatingUsingItem port — for each player using
 	// an item (eating), decrement the use-duration and, on completion, refill the food bar
 	// (FoodData.eat(FoodProperties)) + shrink the held stack (ItemStack.consume). A single ADDITIVE

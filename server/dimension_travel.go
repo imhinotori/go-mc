@@ -5,6 +5,7 @@ import (
 
 	"github.com/imhinotori/sulfur/data/packetid"
 	"github.com/imhinotori/sulfur/level"
+	"github.com/imhinotori/sulfur/level/block"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
@@ -99,6 +100,98 @@ func (t *TickLoop) changeDimension(p *tickPlayer, targetDim int) {
 	p.sentChunks = make(map[level.ChunkPos]bool)
 
 	udebugPlayer(p, "dimension", "changed %d -> %d at (%.1f,%.1f,%.1f)", fromDim, targetDim, tx, ty, tz)
+}
+
+// portalTransitionTicks / portalCooldownTicks are NetherPortalBlock.getPortalTransitionTime + the
+// player's getDimensionChangingDelay. The transition time is the survival portal dwell — the gamerule
+// PLAYERS_NETHER_PORTAL_DEFAULT_DELAY (default 80) for a survival player, PLAYERS_NETHER_PORTAL_CREATIVE_
+// DELAY (default 0, instant) for creative. v1 has no gamerule subsystem, so these are CITED CONSTANTS
+// equal to the vanilla gamerule defaults, structured to become real gamerule reads later — never baked
+// away. The cooldown is Player.getDimensionChangingDelay() == 10. CITE: NetherPortalBlock
+// .getPortalTransitionTime + Player.getDimensionChangingDelay.
+const (
+	portalTransitionTicks         = 80 // survival dwell (PLAYERS_NETHER_PORTAL_DEFAULT_DELAY default)
+	portalTransitionTicksCreative = 0  // creative: instant (PLAYERS_NETHER_PORTAL_CREATIVE_DELAY default)
+	portalCooldownTicks           = 10 // Player.getDimensionChangingDelay()
+)
+
+// playerInNetherPortal reports whether the player is standing IN a nether_portal block, read from the
+// player's-dimension world (dimWorld). Vanilla's entityInside fires for any block the entity's AABB
+// overlaps; v1 checks the feet + eye cells of the player's column (a full-height player overlaps both),
+// which is the faithful common case for a 3+-tall portal. CITE: NetherPortalBlock.entityInside via the
+// AABB block-overlap sweep.
+func (t *TickLoop) playerInNetherPortal(p *tickPlayer) bool {
+	mgr := t.dimWorld(p)
+	if mgr == nil {
+		return false
+	}
+	minY := dimMinYFor(p.dimension)
+	bx := int(mthFloorF(p.x))
+	bz := int(mthFloorF(p.z))
+	feetY := int(mthFloorF(p.y))
+	for _, by := range [2]int{feetY, feetY + 1} { // feet + eye/head cell
+		s, ok := mgr.GetBlock(pk.Position{X: bx, Y: by, Z: bz}, minY)
+		if !ok || int(s) < 0 || int(s) >= len(block.StateList) {
+			continue
+		}
+		if _, isPortal := block.StateList[s].(block.NetherPortal); isPortal {
+			return true
+		}
+	}
+	return false
+}
+
+// tickNetherPortal is the 1:1 port of Entity.handlePortal for every player: process the portal cooldown,
+// then — if the player is inside a nether portal — accrue portalTime and teleport at the transition
+// threshold; if not inside, decay portalTime by 4/tick (PortalProcessor.decayTick) and clear the timer at
+// 0. On teleport it flips the player's dimension (overworld<->nether) and sets the portal cooldown so the
+// player does not immediately bounce back. Tick-owned (called each tick from tickEntities). CITE:
+// Entity.handlePortal + PortalProcessor.processPortalTeleportation + Entity.setPortalCooldown.
+func (t *TickLoop) tickNetherPortal() {
+	// Only when the nether world is wired (the second dimension is armed); otherwise portals are inert.
+	if t.netherWorld == nil {
+		return
+	}
+	for _, p := range t.players {
+		if p == nil || p.client == nil {
+			continue
+		}
+		// processPortalCooldown: decrement the cooldown toward 0 each tick (Entity.processPortalCooldown).
+		if p.portalCooldown > 0 {
+			p.portalCooldown--
+		}
+
+		inside := t.playerInNetherPortal(p)
+		if inside {
+			// canUsePortal(false) == !isOnPortalCooldown(). While on cooldown the timer does not advance
+			// toward a teleport (the just-arrived player standing in the destination portal must not bounce).
+			if p.portalCooldown > 0 {
+				continue
+			}
+			transition := portalTransitionTicks
+			if p.gameMode == gameModeCreative {
+				transition = portalTransitionTicksCreative
+			}
+			// processPortalTeleportation: portalTime++ >= transitionTime -> teleport.
+			reached := p.portalTime >= transition
+			p.portalTime++
+			if reached {
+				target := dimNether
+				if p.dimension == dimNether {
+					target = dimOverworld
+				}
+				p.portalCooldown = portalCooldownTicks // setPortalCooldown (getDimensionChangingDelay == 10)
+				p.portalTime = 0
+				t.changeDimension(p, target)
+			}
+		} else {
+			// decayTick: portalTime = max(portalTime-4, 0) when not inside a portal this tick.
+			p.portalTime -= 4
+			if p.portalTime < 0 {
+				p.portalTime = 0
+			}
+		}
+	}
 }
 
 // changeDimensionRespawnPacket builds ClientboundRespawn for a dimension change to targetDim, using the

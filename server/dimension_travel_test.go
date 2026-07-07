@@ -5,6 +5,7 @@ import (
 
 	"github.com/imhinotori/sulfur/data/packetid"
 	"github.com/imhinotori/sulfur/level"
+	"github.com/imhinotori/sulfur/level/block"
 	pk "github.com/imhinotori/sulfur/net/packet"
 	"github.com/imhinotori/sulfur/world"
 )
@@ -127,6 +128,90 @@ func TestChangeDimensionToNether(t *testing.T) {
 	if !sawPosition {
 		t.Fatalf("no ClientboundPlayerPosition (teleport) sent on dimension change")
 	}
+}
+
+// TestNetherPortalTravelTimer drives tickNetherPortal for a survival player standing in an overworld
+// nether_portal block: portalTime accrues each tick and the player teleports to the nether at the
+// transition threshold (80), with the cooldown set so it does not immediately bounce back.
+func TestNetherPortalTravelTimer(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	ow := world.NewChunkManager()
+	// A loaded overworld chunk at (0,0) with a nether_portal block at the player's feet.
+	readyOverworldChunk(ow)
+	loop.netherWorld = world.NewChunkManager()
+	for _, r := range loop.regions {
+		r.world = ow
+	}
+	portalState := block.ToStateID[block.NetherPortal{Axis: block.X}]
+	feet := pk.Position{X: 8, Y: 70, Z: 8}
+	if !ow.SetBlock(feet, portalState, dimMinY) {
+		t.Fatalf("failed to place nether_portal block for the test")
+	}
+
+	p := &tickPlayer{
+		client:   captureClient(8192),
+		entityID: 1,
+		x:        8.5, y: 70.0, z: 8.5, // standing in the portal cell
+		dimension: dimOverworld,
+		secs:      24, gameMode: gameModeSurvival,
+		viewDist: serverViewDistance,
+	}
+	loop.players = append(loop.players, p)
+
+	// Tick up to (transition+2): the player must NOT travel before 80, and must travel by then.
+	traveled := false
+	for i := 0; i < portalTransitionTicks+2; i++ {
+		loop.tickNetherPortal()
+		if p.dimension == dimNether {
+			traveled = true
+			if i < portalTransitionTicks {
+				t.Fatalf("traveled too early at tick %d (transition is %d)", i, portalTransitionTicks)
+			}
+			break
+		}
+	}
+	if !traveled {
+		t.Fatalf("player never traveled after %d ticks in the portal (portalTime=%d)", portalTransitionTicks+2, p.portalTime)
+	}
+	if p.portalCooldown != portalCooldownTicks {
+		t.Fatalf("portalCooldown = %d after travel, want %d", p.portalCooldown, portalCooldownTicks)
+	}
+}
+
+// TestNetherPortalTimerDecays verifies portalTime decays by 4/tick when the player is NOT in a portal
+// (PortalProcessor.decayTick), so a brief brush with a portal does not accumulate a teleport.
+func TestNetherPortalTimerDecays(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	ow := world.NewChunkManager()
+	readyOverworldChunk(ow)
+	loop.netherWorld = world.NewChunkManager()
+	for _, r := range loop.regions {
+		r.world = ow
+	}
+	p := &tickPlayer{
+		client:   captureClient(8192),
+		entityID: 1,
+		x:        8.5, y: 70.0, z: 8.5, // NO portal block here
+		dimension: dimOverworld, secs: 24, gameMode: gameModeSurvival,
+		viewDist:  serverViewDistance,
+		portalTime: 20, // pretend some accrued time
+	}
+	loop.players = append(loop.players, p)
+
+	loop.tickNetherPortal()
+	if p.portalTime != 16 { // 20 - 4
+		t.Fatalf("portalTime after one decay tick = %d, want 16 (decay by 4)", p.portalTime)
+	}
+	if p.dimension != dimOverworld {
+		t.Fatalf("player traveled while not in a portal")
+	}
+}
+
+// readyOverworldChunk inserts a loaded all-air overworld chunk at (0,0) so SetBlock/GetBlock work.
+func readyOverworldChunk(m *world.ChunkManager) {
+	ch := level.EmptyChunk(24)
+	ch.Status = level.StatusFull
+	m.Insert(level.ChunkPos{0, 0}, ch)
 }
 
 // TestDimWorldRouting verifies dimWorld returns the nether world for a nether player and the overworld

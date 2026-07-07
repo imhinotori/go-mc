@@ -639,6 +639,17 @@ type tickPlayer struct {
 	// variant updates onGround.
 	onGround bool
 
+	// portalTime / insidePortalThisTick / portalCooldown port net.minecraft.world.entity.PortalProcessor
+	// + Entity.portalCooldown for a player standing in a nether_portal block. Each tick the portal-tick
+	// (tickNetherPortal) sets insidePortalThisTick if the player's feet/eyes are in a portal block;
+	// processPortalTeleportation increments portalTime while inside and teleports at
+	// portalTime >= transitionTime (80 survival / 0 creative), else decays portalTime by 4/tick. On a
+	// teleport it sets portalCooldown = getDimensionChangingDelay() (10 for a player); canUsePortal gates
+	// on it. All tick-owned (TICK-05). CITE: PortalProcessor.processPortalTeleportation / Entity.handlePortal.
+	portalTime           int
+	insidePortalThisTick bool
+	portalCooldown       int
+
 	// keep is the independent keep-alive component (TICK-04); keepalive is this
 	// player's KeepAliveClient adapter. dispatch forwards a returning
 	// ServerboundKeepAlive to keep.ClientTick(keepalive) so the keep-alive bookkeeping
