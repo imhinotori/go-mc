@@ -587,15 +587,36 @@ func (t *TickLoop) spread(pos pk.Position, f fluidState) {
 // Crucially it treats a cell holding the OTHER fluid as spreadable-into for the down direction so
 // lava can flow down onto water (spreadTo turns that into stone) - cross-kind cells are handled by
 // canBeReplacedWith / LavaFluid.spreadTo, not blocked here.
+//
+// canHoldAnyFluid is the 1:1 replaceability predicate (block.CanHoldAnyFluid): a REPLACEABLE
+// non-solid (tall grass, flowers, torches, redstone, snow layer, ...) passes and is DESTROYED when
+// the fluid flows in; a solid block, a waterloggable container, and the explicit exceptions (doors,
+// signs, ladder, sugar_cane, bubble_column, portals, structure_void) STOP the fluid. This replaces
+// the crude "not a solid block" subset (isSolidAt) with the exact vanilla gate so flowing water no
+// longer stops dead at grass/flowers. CITE: FlowingFluid.canMaybePassThrough -> canHoldAnyFluid.
 func (t *TickLoop) canSpreadInto(pos pk.Position, f fluidState) bool {
-	if t.isSolidAt(pos) {
+	if !t.canHoldAnyFluidAt(pos) {
 		return false
 	}
 	cur := t.fluidAt(pos)
 	if !cur.isFluid() {
-		return true // air
+		return true // air OR a replaceable non-solid block (destroyed on spreadTo)
 	}
 	return canBeReplacedWith(cur, f)
+}
+
+// canHoldAnyFluidAt reads the block at pos and reports block.CanHoldAnyFluid (the 1:1
+// FlowingFluid.canHoldAnyFluid replaceability gate). An unloaded read is NOT replaceable (the fluid
+// must not flow into a chunk that is not present); a fluid write to an unloaded column is a no-op
+// anyway. Air, water, and lava are all replaceable (IsAir -> not solid, no exception; liquids carry
+// no Waterlogged field and do not blocksMotion), so this is a strict superset of the old air/fluid
+// test PLUS replaceable non-solids.
+func (t *TickLoop) canHoldAnyFluidAt(pos pk.Position) bool {
+	id, ok := t.world().GetBlock(pos, dimMinY)
+	if !ok {
+		return false // unloaded: do not spread into an absent column
+	}
+	return block.CanHoldAnyFluid(id)
 }
 
 // spreadToSides flows to the horizontal neighbor(s) biased toward the nearest drop-off. PORT of
@@ -697,14 +718,19 @@ func (t *TickLoop) sourceNeighborCount(pos pk.Position, f fluidState) int {
 }
 
 // spreadTo writes a fluid into a neighbor cell and schedules it to tick (so the flow continues
-// on the getTickDelay-spaced queue). PORT of FlowingFluid.spreadTo (the setBlock + scheduleTick
-// half - beforeDestroyingBlock/block-entity handling is out of v1 scope). Only writes when the
-// target actually changes, so the queue reaches a fixed point (termination).
+// on the getTickDelay-spaced queue). PORT of FlowingFluid.spreadTo (verified bytecode): if the
+// target is a LiquidBlockContainer -> placeLiquid (waterlog); else if it is not air ->
+// beforeDestroyingBlock (dropResources) then setBlock(fluid). Sulfur has no waterlog sim yet, so a
+// container is stopped by the canHoldAnyFluid gate (kept as-is, per scope); a REPLACEABLE non-solid
+// is dropped + overwritten. Only writes when the target actually changes, so the queue reaches a
+// fixed point (termination).
 func (t *TickLoop) spreadTo(pos pk.Position, f fluidState) {
-	if t.isSolidAt(pos) {
-		return
+	brokenState, loaded := t.world().GetBlock(pos, dimMinY)
+	if !loaded || !block.CanHoldAnyFluid(brokenState) {
+		return // unloaded, or a solid/container/exception block that STOPS the fluid
 	}
 	cur := t.fluidAt(pos)
+
 	// LavaFluid.spreadTo override: lava spreading DOWNWARD onto a WATER cell turns that cell to
 	// STONE and fizzes (steam particles + sound). The DOWN direction is the one where the target
 	// cell already holds water and f is lava; the horizontal lava-meets-water obsidian/cobblestone
@@ -724,6 +750,17 @@ func (t *TickLoop) spreadTo(pos pk.Position, f fluidState) {
 	}
 	if sameFluid(cur, f) {
 		return // no change: do not re-schedule (prevents infinite oscillation)
+	}
+	// beforeDestroyingBlock (FlowingFluid.spreadTo): when the target holds a block that is NOT air
+	// and NOT already this fluid's flow (i.e. a REPLACEABLE non-solid the fluid is about to destroy -
+	// tall grass, flowers, torches, redstone, ...), drop its resources BEFORE overwriting it with the
+	// flowing fluid. WaterFluid.beforeDestroyingBlock == Block.dropResources(state, level, pos, be);
+	// spawnBlockDrop(nil, ...) is the drop-with-no-breaker analogue (the entity arg is null, exactly
+	// as vanilla passes for a fluid-driven destroy). A cell already holding a fluid takes no drop (it
+	// is replaced, not destroyed). CITE: FlowingFluid.spreadTo -> beforeDestroyingBlock; WaterFluid.
+	// beforeDestroyingBlock.
+	if !cur.isFluid() && !block.IsAir(brokenState) {
+		t.spawnBlockDrop(nil, pos, brokenState)
 	}
 	if t.setFluidBlock(pos, encodeFluid(f)) {
 		udebug("fluid", "spreadTo (%d,%d,%d) kind=%s amount=%d falling=%v source=%v", pos.X, pos.Y, pos.Z, fluidKindName(f), f.amount, f.falling, f.source)
