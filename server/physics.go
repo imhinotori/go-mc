@@ -174,163 +174,107 @@ func (t *TickLoop) boxOverlapsSolid(box bvh.AABB[float64, bvh.Vec3[float64]]) bo
 	return false
 }
 
-// clipAxis sweeps a single component of motion against the solid blocks in its swept range
-// and returns the clamped delta. It probes the entity box translated by a candidate delta
-// along ONE axis (the other two fixed at the entity's current position) and, if that lands
-// in a solid block, walks the delta back toward zero in small steps until it is clear — so
-// the returned delta moves the entity flush against the obstructing block face without
-// entering it. axis selects X/Y/Z (0/1/2); the per-axis independence is the anti-tunneling
-// guarantee (each component is clamped against the blocks IT would pass through, never the
-// full vector at once).
-func (t *TickLoop) clipAxis(e *Entity, axis int, delta float64) (clamped float64, blocked bool) {
-	if delta == 0 {
-		return 0, false
+// entityBoxOf builds the entity's current AABB as the block.Box the VoxelShape engine
+// consumes (feet-anchored, half-width on X/Z — the same geometry as entityBoxAt).
+func entityBoxOf(e *Entity) block.Box {
+	hw := e.width / 2
+	return block.Box{
+		MinX: e.x - hw, MinY: e.y, MinZ: e.z - hw,
+		MaxX: e.x + hw, MaxY: e.y + e.height, MaxZ: e.z + hw,
 	}
-	clamped, blocked = sweepAxis(func(d float64) bool {
-		return t.boxOverlapsSolid(boxAlong(e, axis, d))
-	}, delta)
-	return clamped, blocked
 }
 
-// sweepAxis walks a single-axis motion of magnitude |delta| from 0 toward delta in fine
-// increments and returns the largest CLEAR distance (flush against the first obstructing
-// face) plus whether the full delta was blocked. collidesAt(d) reports whether the swept box
-// translated by d overlaps a solid block. It does NOT take a "destination clear → accept full
-// delta" shortcut: a fast move whose endpoint is clear but whose PATH crosses a thin wall
-// must still be clipped at the wall (the anti-tunneling guarantee, Pitfall 4). When the first
-// coarse step that collides is found, a short binary refinement seats the clamp flush against
-// the face (sub-1/16 precision) so an entity comes to rest exactly on a floor top / wall face
-// rather than a 1/16-block gap short of it.
-func sweepAxis(collidesAt func(d float64) bool, delta float64) (clamped float64, blocked bool) {
-	const coarse = 1.0 / 16.0 // path-sampling resolution: fine enough no thin wall is skipped
-	dir := 1.0
-	if delta < 0 {
-		dir = -1.0
-	}
-	mag := math.Abs(delta)
-
-	prev := 0.0 // last known-clear magnitude
-	hit := -1.0 // first colliding magnitude (>=0 once found)
-	for d := coarse; ; d += coarse {
-		if d > mag {
-			d = mag // sample the exact endpoint as the final step
-		}
-		if collidesAt(dir * d) {
-			hit = d
-			break
-		}
-		prev = d
-		if d >= mag {
-			break // reached the endpoint clear: full delta is unobstructed
-		}
-	}
-
-	if hit < 0 {
-		return delta, false // never collided over the whole path: accept the full delta
-	}
-
-	// Binary-refine between the last clear (prev) and the first hit so the entity seats flush
-	// against the face instead of resting up to one coarse step short of it.
-	lo, hi := prev, hit
-	for i := 0; i < 24; i++ { // 24 halvings ≈ sub-micro-block precision
-		mid := (lo + hi) / 2
-		if collidesAt(dir * mid) {
-			hi = mid
-		} else {
-			lo = mid
-		}
-	}
-	return dir * lo, true
-}
-
-// boxAlong returns the entity box translated by delta along a single axis (the other two
-// components stay at the entity's current position). The probe never mutates the entity.
-func boxAlong(e *Entity, axis int, delta float64) bvh.AABB[float64, bvh.Vec3[float64]] {
-	x, y, z := e.x, e.y, e.z
-	switch axis {
-	case 0:
-		x += delta
-	case 1:
-		y += delta
-	case 2:
-		z += delta
-	}
-	return entityBoxAt(e, x, y, z)
-}
-
-// moveEntity resolves a desired motion (dx,dy,dz) for an entity with PER-AXIS swept-AABB
-// collision and applies it through the tick-owned store (06-RESEARCH Pattern 2, the Code
-// Example). Vanilla order: clip Δy and apply, then Δx and apply, then Δz and apply — each
-// component clamped INDEPENDENTLY against the solid blocks in its swept range, never the
-// full vector then test (that tunnels; Pitfall 4). onGround is set when downward motion was
-// clamped (the entity came to rest on a solid block this move). The single position write
-// routes through entities.move so the per-section bucket stays consistent for the tracker's
-// near() (TICK-05 bucket-consistency contract). Runs only on the tick goroutine.
+// moveEntity resolves a desired motion (dx,dy,dz) for an entity against the REAL per-state
+// collision VoxelShapes and applies it through the tick-owned store. This is the
+// Entity.move(MoverType.SELF, movement) core (26.2):
+//
+//   - collideMovement == Entity.collide(Vec3): collect the block shapes in the motion-
+//     expanded box, clip one axis at a time in Direction.axisStepOrder (Y first, then the
+//     larger horizontal component) — see collision.go for the full ported chain. Slabs,
+//     stairs, fences (1.5 tall), walls, snow layers, carpets now collide with their real
+//     vanilla boxes instead of the old full-cube approximation.
+//   - Flags, from Entity.move's "rest" section: horizontalCollision uses the Mth.equal
+//     1e-5f tolerance; verticalCollision the exact != compare; onGround is
+//     setOnGroundWithMovement(verticalCollisionBelow, …) — moving down AND clamped.
+//     CITE: javap Entity.move — Mth.equal for x/z, dcmpl for y, verticalCollisionBelow =
+//     verticalCollision && vec.y < 0.
+//
+// The single position write routes through entities.move so the per-section bucket stays
+// consistent for the tracker's near() (TICK-05 bucket-consistency contract). The
+// velocity-zeroing contract is preserved from v1 (callers — fishing bobber, minecart, item —
+// detect wall/floor hits off a zeroed component; vanilla zeroes deltaMovement in the
+// respective movers, so the observable result is identical). Runs only on the tick goroutine.
 func (t *TickLoop) moveEntity(e *Entity, dx, dy, dz float64) {
-	// Y first: clip vertical motion, then move so the post-Y box is the basis for X/Z.
-	cy, blockedY := t.clipAxis(e, 1, dy)
-	nx, ny, nz := e.x, e.y+cy, e.z
-	t.cur().entities.move(e, nx, ny, nz)
+	m := vec3d{dx, dy, dz}
+	c := t.collideMovement(m, entityBoxOf(e))
 
-	// X next against the post-Y box.
-	cx, _ := t.clipAxis(e, 0, dx)
-	nx = e.x + cx
-	t.cur().entities.move(e, nx, e.y, e.z)
+	// setPos: one write through the store keeps the tracker bucket consistent.
+	t.cur().entities.move(e, e.x+c.x, e.y+c.y, e.z+c.z)
 
-	// Z last against the post-Y/X box.
-	cz, _ := t.clipAxis(e, 2, dz)
-	nz = e.z + cz
-	t.cur().entities.move(e, e.x, e.y, nz)
+	// Entity.move "rest": the collision flags.
+	collidedX := !mthEqual(dx, c.x)
+	collidedZ := !mthEqual(dz, c.z)
+	e.horizontalCollision = collidedX || collidedZ
+	e.verticalCollision = dy != c.y
+	// setOnGroundWithMovement(verticalCollisionBelow, horizontalCollision, …): onGround is
+	// exactly verticalCollisionBelow. CITE: javap Entity.setOnGroundWithMovement(ZZVec3).
+	e.onGround = e.verticalCollision && dy < 0
 
-	// onGround iff we were moving down AND that downward motion was clamped by a solid block.
-	e.onGround = dy < 0 && blockedY
-
-	// Zero out a velocity component that hit a wall so it does not accumulate into the next
-	// tick (a blocked entity stops, it does not keep "pushing"). Vertical too: landing kills
-	// downward velocity so onGround stays stable instead of re-accelerating into the floor.
-	if blockedY {
+	// Zero out a velocity component that was clamped so it does not accumulate into the
+	// next tick (a blocked entity stops; landing kills downward velocity so onGround stays
+	// stable instead of re-accelerating into the floor).
+	if c.y != dy {
 		e.vy = 0
 	}
-	if cx != dx {
+	if c.x != dx {
 		e.vx = 0
 	}
-	if cz != dz {
+	if c.z != dz {
 		e.vz = 0
 	}
 }
 
-// collidePlayer is the AUTHORITATIVE per-axis validation of a client-sent player position
-// (06-RESEARCH Pattern 2 'When to use' / threat T-6-06). The client SENDS the position it
-// claims to be at; the server collides that claim per-axis against solid world blocks and
-// returns a position clamped OUT of any solid block — so a malicious/buggy client claiming a
-// spot inside/through a wall is CORRECTED, not trusted. It sweeps from the player's previous
-// accepted position toward the claimed one, one axis at a time (X, then Z, then Y), clamping
-// each component flush to an obstructing face — the same per-axis discipline as moveEntity,
-// so a claimed delta that would tunnel a wall is clipped at the wall. With no world wired or
-// no solid block in the path, the claimed position is returned unchanged (world-less tests
-// and open-air movement accept the client position verbatim). Runs on the tick goroutine.
+// collidePlayer is the AUTHORITATIVE validation of a client-sent player position (06-RESEARCH
+// Pattern 2 'When to use' / threat T-6-06). The client SENDS the position it claims to be at;
+// the server collides the claimed DELTA (from the last accepted position) against the real
+// collision VoxelShapes and returns a position clamped OUT of any collider — so a
+// malicious/buggy client claiming a spot inside/through a wall is CORRECTED, not trusted.
+// This mirrors what vanilla's ServerGamePacketListenerImpl.handleMovePlayer does when it runs
+// player.move(MoverType.PLAYER, submitted - lastGood): the Entity.collide chain
+// (collideMovement in collision.go) with the player's box.
+//
+// Fast path: if the claimed box intersects NO collision shape (the BlockCollisions iterator
+// yields nothing — vanilla Level.noCollision), the claim is accepted verbatim, so open-air
+// movement (the overwhelming common case) is never nudged by floating-point noise and
+// world-less tests see the decoded position unchanged. Runs on the tick goroutine.
 func (t *TickLoop) collidePlayer(p *tickPlayer, newX, newY, newZ float64) (x, y, z float64) {
 	if t.world() == nil {
 		return newX, newY, newZ // no world: nothing to collide against, accept as-is
 	}
-	// Fast path: if the claimed position is already clear, accept it verbatim. This keeps
-	// open-air movement (the overwhelming common case) exact — the player's position is not
-	// nudged by floating-point sweep noise — so TestMovementDecode/TestTeleportGate, which
-	// move in an empty world, see the decoded position unchanged.
-	if !t.boxOverlapsSolid(playerBoxAt(newX, newY, newZ)) {
-		return newX, newY, newZ
+	if len(t.collectBlockCollisions(playerBoxD(newX, newY, newZ))) == 0 {
+		return newX, newY, newZ // claimed box is clear of every collision shape
 	}
-	// The claimed position is inside/through a solid block. Sweep each axis from the player's
-	// CURRENT accepted position toward the claim and clamp flush. Order X, Z, Y.
-	x, y, z = p.x, p.y, p.z
-	x = clampPlayerAxis(t, 0, x, y, z, newX)
-	z = clampPlayerAxis(t, 2, x, y, z, newZ)
-	y = clampPlayerAxis(t, 1, x, y, z, newY)
-	// ULTRA_DEBUG: a clamp fired — the claimed position was inside a solid and got corrected. The
-	// most useful single line for a "stuck on water surface / can't swim up" report: it shows
+	// The claimed position intersects a collider. Clip the claimed delta from the player's
+	// CURRENT accepted position through the vanilla collide chain (Y then larger-horizontal
+	// axis order, real shapes) and accept the clipped result.
+	m := vec3d{newX - p.x, newY - p.y, newZ - p.z}
+	c := t.collideMovement(m, playerBoxD(p.x, p.y, p.z))
+	x, y, z = p.x+c.x, p.y+c.y, p.z+c.z
+	// ULTRA_DEBUG: a clamp fired — the claimed position was inside a collider and got corrected.
+	// The most useful single line for a "stuck on water surface / can't swim up" report: it shows
 	// whether the server is overriding the client's submitted Y. No-op unless SULFUR_ULTRA_DEBUG=1.
 	udebugPlayer(p, "collide", "claimed=(%.3f,%.3f,%.3f) -> accepted=(%.3f,%.3f,%.3f)", newX, newY, newZ, x, y, z)
 	return x, y, z
+}
+
+// playerBoxD builds the player's collision AABB (0.6 × 1.8) as the block.Box the VoxelShape
+// engine consumes — same geometry as playerBoxAt (which stays for the bvh-typed callers).
+func playerBoxD(x, y, z float64) block.Box {
+	hw := playerWidth / 2
+	return block.Box{
+		MinX: x - hw, MinY: y, MinZ: z - hw,
+		MaxX: x + hw, MaxY: y + playerHeight, MaxZ: z + hw,
+	}
 }
 
 // playerBoxAt builds the player's collision AABB (≈ 0.6 × 1.8) centered on x/z with its base
@@ -343,28 +287,3 @@ func playerBoxAt(x, y, z float64) bvh.AABB[float64, bvh.Vec3[float64]] {
 	}
 }
 
-// clampPlayerAxis sweeps the player box along one axis from (curX,curY,curZ) toward target
-// and returns the clamped coordinate for that axis (flush against any obstructing face). The
-// other two axes stay at the supplied current values. Mirrors clipAxis but for the player's
-// fixed-dim box and absolute (not delta) target.
-func clampPlayerAxis(t *TickLoop, axis int, curX, curY, curZ, target float64) float64 {
-	cur := []float64{curX, curY, curZ}[axis]
-	delta := target - cur
-	if delta == 0 {
-		return cur
-	}
-	collidesAt := func(d float64) bool {
-		x, y, z := curX, curY, curZ
-		switch axis {
-		case 0:
-			x += d
-		case 1:
-			y += d
-		case 2:
-			z += d
-		}
-		return t.boxOverlapsSolid(playerBoxAt(x, y, z))
-	}
-	clamped, _ := sweepAxis(collidesAt, delta)
-	return cur + clamped
-}

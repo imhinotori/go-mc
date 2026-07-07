@@ -70,6 +70,13 @@ type Entity struct {
 	// a solid block (physics, Plan 06-03). Tick-owned.
 	onGround bool
 
+	// horizontalCollision / verticalCollision mirror Entity.horizontalCollision /
+	// Entity.verticalCollision: written by moveEntity's "rest" section on every move —
+	// horizontal with the Mth.equal 1e-5f tolerance, vertical with the exact != compare.
+	// CITE: javap Entity.move (26.2). Tick-owned plain values.
+	horizontalCollision bool
+	verticalCollision   bool
+
 	// jumping is net.minecraft.world.entity.LivingEntity.jumping — the per-tick "this mob WANTS to
 	// jump" flag the JumpControl writes (jumpControl.tick → setJumping(jump)) and the aiStep jump
 	// branch reads (`if (jumping && isAffectedByFluids())`). A plain bool (snapshot-friendly,
