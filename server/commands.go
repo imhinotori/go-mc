@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"math"
-	"strconv"
 	"strings"
 
 	"github.com/imhinotori/sulfur/level"
@@ -186,32 +185,6 @@ func buildCommandGraph() *command.Graph {
 	me := g.Literal("me").AppendArgument(meMsg).Unhandle()
 	g.AppendLiteral(me)
 
-	// /tp <x> <y> <z> — DEV/gate teleport: move the issuing player to the given coordinates. The
-	// args are a single greedy string ("x y z") parsed in the handler (v1 has only StringParser;
-	// a real Vec3Argument lands with the brigadier coord parsers later). Gated on command.tp; the
-	// v1 all-operator policy grants it. The handler re-uses the same authoritative re-teleport the
-	// respawn path uses (writePlayerPositionPacket + the confirm-gate re-arm), so the client snaps
-	// to the new position and the server gates movement until the client echoes the new teleport id.
-	tpArgs := g.Argument("coords", command.StringParser(2)).HandleFunc(permissionGated("command.tp",
-		func(ctx context.Context, args []command.ParsedData) error {
-			e, ok := executorFrom(ctx)
-			if !ok {
-				return nil // no issuer (console/test path): nothing to teleport
-			}
-			if len(args) == 0 {
-				return errTpUsage
-			}
-			raw, _ := args[len(args)-1].(string)
-			x, y, z, perr := parseTpCoords(raw)
-			if perr != nil {
-				return perr
-			}
-			e.t.teleportPlayer(e.p, x, y, z)
-			return nil
-		}))
-	tp := g.Literal("tp").AppendArgument(tpArgs).Unhandle()
-	g.AppendLiteral(tp)
-
 	// /dbg <sub> — DEV debug command (operator). Subcommands:
 	//   pig            — spawn a vanilla pig at the issuer's position
 	//   water          — fill a 5x5x4 water box around+below the issuer (to test FloatGoal)
@@ -258,6 +231,7 @@ func buildCommandGraph() *command.Graph {
 	// The vanilla 26.2 command set (commands_vanilla.go): /gamemode /op /deop /kill /list /seed
 	// /help /msg — each permission-gated on its minecraft.command.<name> node.
 	registerVanillaCommands(g)
+	registerOpsCommands(g)
 
 	return g
 }
@@ -429,33 +403,8 @@ func (t *TickLoop) runChatCommand(p *tickPlayer, packet pk.Packet) {
 	t.runCommand(p, string(s))
 }
 
-// errTpUsage is the /tp parse failure surfaced to the issuer (the runCommand reply path turns a
-// non-nil handler error into a SystemChat). Kept as a sentinel so the usage text is one place.
-var errTpUsage = errors.New("usage: /tp <x> <y> <z>")
-
 // errDimensionUsage is the /dimension parse error (unknown target).
 var errDimensionUsage = errors.New("usage: /dimension <nether|overworld>")
-
-// parseTpCoords parses a "<x> <y> <z>" coordinate triple (whitespace-separated floats) for /tp.
-// It accepts extra surrounding whitespace and rejects a wrong arg count or a non-numeric field.
-// Relative (~) and local (^) coords are NOT supported in v1 (a real Vec3Argument with the
-// brigadier coord parsers lands later) — only absolute decimals.
-func parseTpCoords(raw string) (x, y, z float64, err error) {
-	f := strings.Fields(strings.TrimSpace(raw))
-	if len(f) != 3 {
-		return 0, 0, 0, errTpUsage
-	}
-	if x, err = strconv.ParseFloat(f[0], 64); err != nil {
-		return 0, 0, 0, errTpUsage
-	}
-	if y, err = strconv.ParseFloat(f[1], 64); err != nil {
-		return 0, 0, 0, errTpUsage
-	}
-	if z, err = strconv.ParseFloat(f[2], 64); err != nil {
-		return 0, 0, 0, errTpUsage
-	}
-	return x, y, z, nil
-}
 
 // teleportPlayer moves p to (x,y,z) authoritatively — the DEV/gate /tp body, re-using the exact
 // re-teleport contract performRespawn uses: set the tick-owned position, re-center the view ring,
