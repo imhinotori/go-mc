@@ -409,6 +409,13 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 		// chest has no BE and never opens. CITE: LevelChunk.setBlockState -> EntityBlock.newBlockEntity.
 		t.createBlockEntityOnPlace(placePos, placeState)
 
+		// SIGN PLACE: SignItem.updateCustomBlockEntityTag opens the edit screen for the placer right
+		// after a sign is placed (SignBlock.openTextEdit -> ServerPlayer.openTextEdit sends
+		// ClientboundBlockUpdate + ClientboundOpenSignEditor(pos, isFrontText=true)). createBlockEntityOnPlace
+		// above already registered the (empty) sign BE. A no-op for a non-sign block. CITE
+		// SignItem.updateCustomBlockEntityTag.
+		t.openSignForPlace(p, placePos, placeState)
+
 		t.reconcileEdit(p, placePos, placeState, int32(sequence))
 
 		// D-B1: the general Level.setBlock flag-1+2 neighbour-update dispatch for the CrossCollisionBlock

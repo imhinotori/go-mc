@@ -302,6 +302,13 @@ func (t *TickLoop) applyInput(p *tickPlayer, in SubtickInput) {
 		// acks + broadcasts.
 		t.handleUseItemOn(p, in.Packet)
 
+	case packetid.ServerboundSignUpdate:
+		// SIGN EDIT SUBMIT: resolved on-tick, sequence-ordered. handleSignUpdate decodes
+		// defensively, validates the sign BE + the not-waxed / allowed-editor guards, stores the
+		// 4 lines, and broadcasts the block-entity data to trackers. A malformed/stale/wrong-editor
+		// submit is a silent no-op inside the handler (SignBlockEntity.updateSignText guards).
+		t.handleSignUpdate(p, in.Packet)
+
 	case packetid.ServerboundUseItem:
 		// USE/EAT (Plan 17-22): the right-click-with-item (no block target) path —
 		// ServerPlayer.useItem -> ItemStack.use -> Consumable.startConsuming. For a FOOD item

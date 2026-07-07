@@ -418,6 +418,14 @@ type TickLoop struct {
 	// the live in-memory drive is fully faithful.
 	furnaces map[pk.Position]*furnaceBE
 
+	// signs is the runtime store of SIGN BLOCK-ENTITIES keyed by world position (the openChests/
+	// furnaces twin). A sign carries its front/back SignText (4 lines each, color, glowing) + the
+	// isWaxed lock + the playerWhoMayEdit edit lock; the place/right-click paths (sign.go) resolve
+	// the SAME signBE here so the open-editor + ServerboundSignUpdate share one state. Lazily
+	// constructed; tick-owned (TICK-05). The text round-trips to the chunk BE NBT
+	// (SignBlockEntity.saveAdditional: front_text/back_text/is_waxed) via broadcastSignUpdate.
+	signs map[pk.Position]*signBE
+
 	// brewingStands is the runtime store of brewing-stand BLOCK-ENTITIES keyed by world position (the
 	// furnaces twin). A brewing stand's per-tick brew drive (brewing_stand_be.go brewingStandServerTick)
 	// reads/writes its brewingStandBE here every tick (tickWorld); the menu (brewing_stand_menu.go) resolves
@@ -1795,6 +1803,10 @@ func (t *TickLoop) dispatch(c *Client, p pk.Packet) {
 		// ServerboundRenameItem (anvil rename field): buffered here (server-stamped) so handleRenameItem
 		// resolves it on-tick in chronological order. A non-anvil/stale window is a no-op in the handler.
 		packetid.ServerboundRenameItem,
+		// ServerboundSignUpdate (the sign edit submit): buffered here (server-stamped) so
+		// handleSignUpdate resolves it on-tick in chronological order. A non-sign/stale/wrong-editor
+		// target is a no-op inside the handler (the waxed + playerWhoMayEdit guards).
+		packetid.ServerboundSignUpdate,
 		// ServerboundMoveVehicle (the controlling-passenger steer): the client sends the vehicle's new
 		// absolute position each tick while a player controls it (happy-ghast ride). Routed through the
 		// subtick buffer like the player-movement packets so handleMoveVehicle resolves it on-tick in

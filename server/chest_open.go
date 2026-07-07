@@ -311,9 +311,12 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 	// trapdoors reject a hand click (canOpenByHand=false -> PASS) inside the dispatch. CITE:
 	// DoorBlock/TrapDoorBlock/FenceGateBlock.useWithoutItem.
 	isDoorFamily := block.IsDoor(state) || block.IsTrapdoor(state) || block.IsFenceGate(state)
+	// A sign right-click re-opens its edit screen (unwaxed) or is a silent no-op (waxed); either way
+	// it consumes the interaction so no block is placed. CITE: SignBlock.useWithoutItem.
+	isSign := isSignBlock(state)
 	if !isChest && !isCraft && !isCut && !isBed && !isFurnace && !isBrew && !isLever && !isButton &&
 		!isRepeater && !isComparator && !isDispenser && !isHopper && !isBeacon && !isAnvil && !isEnchant &&
-		!isGrindstone && !isSmithing && !isDoorFamily {
+		!isGrindstone && !isSmithing && !isDoorFamily && !isSign {
 		return false // not an interactive block: PASS → placement runs
 	}
 	// Reach-gate the interaction (the same server-authoritative reach the place/break paths use):
@@ -409,6 +412,12 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 		// any right-click (the sneak guard collapses to false in v1, like the chest path).
 		return t.openSmithing(p, hitPos)
 	}
+	if isSign {
+		// SignBlock.useWithoutItem: re-open the edit screen for an unwaxed sign (or a silent no-op for
+		// a waxed one). Consumes the interaction either way so no block is placed. CITE
+		// SignBlock.useWithoutItem.
+		return t.reopenSignEdit(p, hitPos)
+	}
 	return t.openChest(p, hitPos)
 }
 
@@ -501,6 +510,16 @@ func (t *TickLoop) createBlockEntityOnPlace(pos pk.Position, state block.StateID
 		empty := nbt.RawMessage{Type: nbt.TagCompound, Data: []byte{0x00}}
 		t.world().SetBlockEntityAt(pos, block.EntityTypes["minecraft:conduit"], empty, dimMinY)
 		t.resolveConduit(pos)
+		return
+	}
+	if isSignBlock(state) {
+		// SignBlock is a BaseEntityBlock; newBlockEntity = new SignBlockEntity(pos, state) (empty:
+		// default front/back SignText, not waxed). Write an empty BE compound so the open-editor +
+		// ServerboundSignUpdate paths resolve it, and register the empty signBE in t.signs. CITE
+		// SignBlock (EntityBlock).
+		empty := nbt.RawMessage{Type: nbt.TagCompound, Data: []byte{0x00}}
+		t.world().SetBlockEntityAt(pos, block.EntityTypes["minecraft:sign"], empty, dimMinY)
+		t.resolveSignBE(pos)
 		return
 	}
 }
