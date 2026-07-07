@@ -206,6 +206,14 @@ func (t *TickLoop) useItemInHand(p *tickPlayer, hand int32) {
 		return // the boat item handled the use (a boat spawned, or a MISS/FAIL no-op)
 	}
 
+	// THROWABLE ITEM (SnowballItem/EggItem/EnderpearlItem.use): a right-click-air throws the item as a
+	// ThrowableProjectile from the player's eye toward the look direction (shoot power 1.5), consuming 1.
+	// Runs before the food gate (a throwable is not food); a non-throwable falls through. Throwable-gated
+	// (a cheap id compare, no RNG draw — the pig oracle is unperturbed). CITE: SnowballItem.use etc.
+	if t.tryThrowItem(p, inv, held, hand) {
+		return
+	}
+
 	// FISHING ROD (FishingRodItem.use): a right-click with a fishing rod casts a FishingHook (bobber)
 	// toward the look direction, or — if a hook is already out — reels it in (retrieve: pull a hooked
 	// entity or roll the FISHING loot table + spawn the caught item flying to the player). It runs

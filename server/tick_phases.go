@@ -351,6 +351,11 @@ func (t *TickLoop) tickEntities() {
 	// nearby players. ADDITIVE + potion-gated (zero cost when no potion is in flight).
 	t.tickPotions()
 
+	// THROWABLE ITEM PROJECTILES: the ThrowableProjectile.tick port for snowball / egg / ender_pearl —
+	// arc (gravity 0.03, drag 0.99) + resolve on the first block/entity hit (ender_pearl teleports its
+	// owner). Sibling of tickArrows/tickPotions; ADDITIVE + throwable-gated (zero cost when none is in flight).
+	t.tickThrowables()
+
 	// FISHING HOOK (bobber): the FishingHook.tick state machine (FLYING -> BOBBING float, the
 	// catchingFish wait/lure/hook countdowns ending in a bite). Sibling of tickArrows/tickPotions;
 	// ADDITIVE + fishing-hook-gated (zero cost when no bobber is out, so the pig oracle stream is

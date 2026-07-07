@@ -42,6 +42,8 @@ var (
 	damageTypeMobAttack = damageTypeID(tag.DamageTypeIDs["minecraft:mob_attack"])
 	// damageTypeFall is minecraft:fall — a bypasses_armor + is_fall member (the bypass branch reads it).
 	damageTypeFall = damageTypeID(tag.DamageTypeIDs["minecraft:fall"])
+	// damageTypeEnderPearl is minecraft:ender_pearl — the 5.0 self-hit the ender pearl deals on teleport.
+	damageTypeEnderPearl = damageTypeID(tag.DamageTypeIDs["minecraft:ender_pearl"])
 	// damageTypeDrown is minecraft:drown — the source DROWN carries (hurtServer(DROWN, 2.0F) in breath).
 	damageTypeDrown = damageTypeID(tag.DamageTypeIDs["minecraft:drown"])
 	// damageTypeStarve is minecraft:starve — the source the hunger-starvation tick carries.
@@ -122,6 +124,12 @@ func damageSourceMobAttack(attackerID int32) damageSource {
 // in vanilla; here 0 = anonymous). Cite AbstractArrow.onHitEntity: damageSources().arrow(this, owner).
 func damageSourceArrow(attackerID int32) damageSource {
 	return damageSource{typeTag: damageTypeArrow, attacker: attackerID}
+}
+
+// damageSourceEnderPearl builds the DamageSource for the ender-pearl teleport self-hit: type ender_pearl,
+// no attacker (the pearl damages its own thrower). CITE: ThrownEnderpearl.onHit hurtServer(enderPearl(), 5).
+func damageSourceEnderPearl() damageSource {
+	return damageSource{typeTag: damageTypeEnderPearl, attacker: 0}
 }
 
 // damageSourceMagic builds the DamageSource for a direct magic effect (instant_damage / poison self-tick):

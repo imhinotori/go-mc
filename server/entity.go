@@ -183,6 +183,21 @@ type Entity struct {
 	// getAllEffects). Plain values (no pointers); scaled by proximity at splash time.
 	potionEffects []splashEffect
 
+	// --- THROWABLE ITEM PROJECTILE (net.minecraft.world.entity.projectile.throwableitemprojectile.*) ----
+	//
+	// A snowball / egg / ender_pearl: a NON-mob ThrowableProjectile that arcs (getDefaultGravity 0.03,
+	// getAirDrag 0.99, water 0.8) and resolves on the FIRST block/entity hit. Order per ThrowableProjectile
+	// .tick: applyGravity -> applyInertia(drag) -> getHitResult(move) -> onHit(discard + per-kind effect).
+	// Zero for every non-throwable entity (the throwable tick gates on isThrowable). Cite ThrowableProjectile
+	// / Snowball / ThrownEnderpearl.
+	isThrowable   bool
+	throwableKind int   // throwSnowball / throwEgg / throwEnderPearl
+	throwOwnerID  int32 // getOwner() as a THIN id (never a live pointer — the Folia rule)
+	throwOldX     float64
+	throwOldY     float64
+	throwOldZ     float64 // oldPosition() — the ender_pearl teleports the owner to the PRE-move position
+	throwLife     int32   // ticks alive; a throwable that never lands discards at a hard cap
+
 	// --- FISHING HOOK / BOBBER (net.minecraft.world.entity.projectile.FishingHook) --------------------
 	//
 	// The bobber is a NON-mob projectile (isFishingHook) cast from a fishing rod. Its whole behavior is
