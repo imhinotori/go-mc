@@ -20,6 +20,7 @@ func newOrb(loop *TickLoop, x, y, z float64, value int) *Entity {
 	orb := NewEntity(loop.idAlloc.AllocID(), entity.ExperienceOrb, x, y, z)
 	orb.isOrb = true
 	orb.xpValue = value
+	orb.orbCount = 1 // ExperienceOrb.count default (1), as the real spawn sites set
 	loop.only().entities.add(orb)
 	return orb
 }
@@ -185,5 +186,127 @@ func TestXpNeededForNextLevel(t *testing.T) {
 		if got := getXpNeededForNextLevel(c.level); got != c.want {
 			t.Fatalf("getXpNeededForNextLevel(%d) = %d, want %d", c.level, got, c.want)
 		}
+	}
+}
+
+// TestOrbMergeEqualValue (B-A8): two orbs of the SAME value within merge range combine — the primary
+// absorbs the other one count and the absorbed orb is removed from the store. Drives tickOrb at an
+// age where age%20==1 so scanForMerges runs (ExperienceOrb.scanForMerges every 20 ticks).
+func TestOrbMergeEqualValue(t *testing.T) {
+	loop, _ := newDropLoop()
+
+	primary := newOrb(loop, 8.5, 64.0, 8.5, 3)
+	other := newOrb(loop, 8.6, 64.0, 8.6, 3) // same value, well inside the 0.5-inflated box
+	primary.age = 1                           // age%20==1 -> scanForMerges fires this tick
+
+	loop.tickOrb(primary)
+
+	if _, ok := loop.only().entities.get(other.id); ok {
+		t.Fatalf("second equal-value orb still present, want merged+removed")
+	}
+	if primary.orbCount != 2 {
+		t.Fatalf("primary orbCount = %d, want 2 (1 + the absorbed orb count)", primary.orbCount)
+	}
+}
+
+// TestOrbNoMergeDifferentValue (B-A8): orbs of DIFFERENT value never merge (canMerge gates on equal
+// value), so both survive and the primary count stays 1.
+func TestOrbNoMergeDifferentValue(t *testing.T) {
+	loop, _ := newDropLoop()
+
+	primary := newOrb(loop, 8.5, 64.0, 8.5, 3)
+	other := newOrb(loop, 8.6, 64.0, 8.6, 7) // DIFFERENT value -> not mergeable
+	primary.age = 1
+
+	loop.tickOrb(primary)
+
+	if _, ok := loop.only().entities.get(other.id); !ok {
+		t.Fatalf("different-value orb was merged away, want it left intact")
+	}
+	if primary.orbCount != 1 {
+		t.Fatalf("primary orbCount = %d, want 1 (no merge across differing values)", primary.orbCount)
+	}
+}
+
+// TestOrbGravityInAir (B-A8): an orb in open air (no water) loses vertical velocity by the 0.03 gravity
+// step before the move. With the floor far below, gravity is applied and vy goes negative.
+func TestOrbGravityInAir(t *testing.T) {
+	loop, _ := newDropLoop()
+	orb := newOrb(loop, 8.5, 200.0, 8.5, 3) // high up, nothing under it in the drop loop
+	orb.age = 2                              // avoid the merge-scan tick
+
+	loop.tickOrb(orb)
+
+	if orb.vy >= 0 {
+		t.Fatalf("orb vy = %v after a gravity tick in air, want negative (0.03 gravity minus drag)", orb.vy)
+	}
+}
+
+// TestOrbWaterBuoyancy (B-A8): an orb whose eye is in water gets setUnderwaterMovement instead of
+// gravity — a submerged orb starting at rest drifts UPWARD (vy becomes positive from the +0.0005 rise),
+// the opposite of the in-air gravity case. A water column is placed around the orb so orbEyeInWater is true.
+func TestOrbWaterBuoyancy(t *testing.T) {
+	loop, mgr := newDropLoop()
+	water := block.ToStateID[block.Water{Level: 0}]
+	for y := 63; y <= 66; y++ {
+		mgr.SetBlock(pk.Position{X: 8, Y: y, Z: 8}, water, dimMinY)
+	}
+
+	orb := newOrb(loop, 8.5, 64.0, 8.5, 3)
+	orb.age = 2 // avoid the merge-scan tick
+
+	if !loop.orbEyeInWater(orb) {
+		t.Fatalf("precondition: orbEyeInWater = false, want true (orb eye inside the water column)")
+	}
+	loop.tickOrb(orb)
+
+	if orb.vy <= 0 {
+		t.Fatalf("orb vy = %v underwater, want positive (setUnderwaterMovement buoyant rise, not gravity)", orb.vy)
+	}
+}
+
+// TestOrbLavaPop (B-A8): an orb sitting in a lava cell gets the random horizontal + fixed 0.2 upward
+// pop each tick (getFluidState(blockPosition).is(LAVA)). The vy after the tick is positive (the 0.2 pop
+// minus drag), and the orb draws from its own RNG for the horizontal kick.
+func TestOrbLavaPop(t *testing.T) {
+	loop, mgr := newDropLoop()
+	lava := block.ToStateID[block.Lava{Level: 0}]
+	mgr.SetBlock(pk.Position{X: 8, Y: 64, Z: 8}, lava, dimMinY)
+
+	orb := newOrb(loop, 8.5, 64.5, 8.5, 3)
+	orb.age = 2 // avoid the merge-scan tick
+
+	loop.tickOrb(orb)
+
+	if orb.vy <= 0 {
+		t.Fatalf("orb vy = %v in lava, want positive (the 0.2 lava pop upward impulse)", orb.vy)
+	}
+}
+
+// TestOrbMendingOnPickup (B-A8): a player collecting an orb repairs a damaged mending item FIRST, then
+// the leftover XP lands on the bar. A mending diamond sword at damage 6 collecting a value-5 orb is
+// fully repaired (toRepair=10, repaired=6) and the player gains 2 XP (5 - 6*5/10). Drives the full
+// playerTouchOrb pickup path (not just repairPlayerItems in isolation).
+func TestOrbMendingOnPickup(t *testing.T) {
+	loop, _ := newDropLoop()
+
+	p := blockPlayer(loop, 8.5, 64.0, 8.5)
+	p.entityID = 1000
+	holdEnchanted(p, damageableStack(idDiamondSword, 1, 100, 6, enchTestEntry(t, "minecraft:mending", 1)))
+
+	orb := newOrb(loop, 8.5, 64.0, 8.5, 5)
+	p.tracked = map[int32]bool{orb.id: true}
+
+	loop.playerTouchOrb(p, orb)
+
+	inv := ensureInventory(p)
+	if got := stackDamageValue(inv.get(heldWindowSlot(inv.heldSlot))); got != 0 {
+		t.Fatalf("mending item damage after pickup = %d, want 0 (repaired first)", got)
+	}
+	if p.totalExperience != 2 {
+		t.Fatalf("player totalExperience = %d, want 2 (5 - 6*5/10 int-division remainder)", p.totalExperience)
+	}
+	if _, ok := loop.only().entities.get(orb.id); ok {
+		t.Fatalf("orb still present after pickup, want discarded (count 1 -> 0)")
 	}
 }

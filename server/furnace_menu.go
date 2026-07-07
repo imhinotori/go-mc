@@ -710,6 +710,7 @@ func (t *TickLoop) awardExperienceOrbsAt(x, y, z float64, value int) {
 		orb := NewEntity(t.idAlloc.AllocID(), entity.ExperienceOrb, x, y, z)
 		orb.isOrb = true
 		orb.xpValue = chunk
+		orb.orbCount = 1 // ExperienceOrb.count default (1)
 		if owner != nil {
 			owner.entities.add(orb)
 		}

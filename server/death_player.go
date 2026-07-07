@@ -155,6 +155,7 @@ func (t *TickLoop) awardPlayerExperienceOrbs(p *tickPlayer, value int) {
 		// value (the same WR-06 wiring death_mob.go's awardExperienceOrbs uses).
 		orb.isOrb = true
 		orb.xpValue = chunk
+		orb.orbCount = 1 // ExperienceOrb.count default (1)
 		owner.entities.add(orb)
 	}
 }

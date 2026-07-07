@@ -378,6 +378,7 @@ func (t *TickLoop) awardExperienceOrbs(e *Entity, value int) {
 		// to the collector. Without these the orb spawns + renders but never follows/collects (the bug).
 		orb.isOrb = true
 		orb.xpValue = chunk
+		orb.orbCount = 1 // ExperienceOrb.count default (1); scanForMerges combines equal-value orbs into it
 		owner.entities.add(orb)
 	}
 }

@@ -158,6 +158,21 @@ type Entity struct {
 	// player within 8 blocks and homes the orb toward them; 0 == not currently following. Tick-owned.
 	followingPlayerID int32
 
+	// orbCount is ExperienceOrb.count — the number of logical orbs merged into this single entity
+	// (default 1). scanForMerges combines a nearby equal-value orb by adding its count into this one
+	// and discarding the other; playerTouch decrements count per absorbed sub-orb and discards the
+	// entity once it reaches 0. Zero for a non-orb entity (never read unless isOrb). Tick-owned.
+	//
+	//	[VERIFIED javap ExperienceOrb: `private int count;` initialized to 1 in the ctor; merge()
+	//	 does count += other.count; playerTouch does --count; if (count == 0) discard().]
+	orbCount int
+
+	// orbRNG is the orb's dedicated RandomSource (ExperienceOrb inherits Entity.random) — a per-orb
+	// entityRandom seeded from the orb's entity id (NEVER a mob stream, mirroring fishingRNG). The orb
+	// tick draws from it for the lava-pop impulse (setDeltaMovement random on a lava cell). Nil for a
+	// non-orb entity; lazily initialized on first use so an orb built before this field is still safe.
+	orbRNG *entityRandom
+
 	// --- PROJECTILE / ARROW (net.minecraft.world.entity.projectile.arrow.AbstractArrow) ----------
 	//
 	// Tick-owned plain values, set ONLY for an Arrow (typ==entity.Arrow.ID); zero + never read for any

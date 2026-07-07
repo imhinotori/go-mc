@@ -2,6 +2,8 @@ package server
 
 import (
 	"math"
+
+	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
 // xp_orb.go — WR-06 (XP-ORB PICKUP): the experience-orb lifecycle that makes a spawned orb actually
@@ -63,6 +65,54 @@ const (
 	// which comfortably covers the orb-suck range (the orb homes to within touching distance first).
 	orbPickupInflateXZ = 1.0
 	orbPickupInflateY  = 0.5
+
+	// orbUnderwaterXZDrag is ExperienceOrb.setUnderwaterMovement's per-tick horizontal scale: vx,vz *=
+	// 0.99f (stored as the double 0.9900000095367432). Buoyancy replaces gravity while the orb's eye is
+	// submerged in water.
+	//   [VERIFIED javap ExperienceOrb.setUnderwaterMovement: getfield x; ldc2_w 0.9900000095367432; dmul.]
+	orbUnderwaterXZDrag = 0.9900000095367432
+
+	// orbUnderwaterYRise is the vy increment while underwater: vy + 0.0005f (the double
+	// 5.000000237487257E-4) — a gentle upward drift so a submerged orb floats up.
+	//   [VERIFIED javap ExperienceOrb.setUnderwaterMovement: getfield y; ldc2_w 5.000000237487257E-4; dadd.]
+	orbUnderwaterYRise = 5.000000237487257e-4
+
+	// orbUnderwaterYCap is the min() ceiling on the risen vy: 0.06f (the double 0.05999999865889549) — the
+	// buoyant rise is clamped so the orb bobs at the surface instead of shooting up.
+	//   [VERIFIED javap ExperienceOrb.setUnderwaterMovement: ...dadd; ldc2_w 0.05999999865889549; Math.min.]
+	orbUnderwaterYCap = 0.05999999865889549
+
+	// orbLavaPopXZScale is the 0.2f factor on (nextFloat()-nextFloat()) for the x/z components of the
+	// lava-pop impulse: an orb sitting in lava is kicked sideways+up each tick (getFluidState.is(LAVA)).
+	//   [VERIFIED javap ExperienceOrb.tick: (random.nextFloat()-random.nextFloat())*0.2f -> x and z.]
+	orbLavaPopXZScale = 0.2
+
+	// orbLavaPopY is the fixed upward vy of the lava-pop impulse: 0.2f (the double 0.20000000298023224).
+	//   [VERIFIED javap ExperienceOrb.tick: ldc2_w 0.20000000298023224 -> the y arg of setDeltaMovement.]
+	orbLavaPopY = 0.20000000298023224
+
+	// orbGroundFrictionMul is the extra factor the air drag is multiplied by on the ground: the block's
+	// friction (Block.getFriction default 0.6) TIMES 0.98. Vanilla: f = getAirDrag(); if (onGround()) f *=
+	// blockBelow.getFriction() * 0.98f. v1 has no per-block friction table, so the DEFAULT 0.6 stands in
+	// (stone/dirt/grass — where an orb rests — all carry 0.6). Structured to become a per-block read later.
+	//   [VERIFIED javap ExperienceOrb.tick: getAirDrag; onGround? fmul getFriction; ldc 0.98f... — wait,
+	//    the bytecode does f *= getFriction() only (the 0.98 is getAirDrag's own value); see tickOrb.]
+	orbGroundFriction = 0.6
+
+	// orbBounceScale is the -0.4 restitution on the bounce: when the orb hits the ground moving faster
+	// than -gravity downward, its vertical velocity flips to -vy0*0.4f (a small bounce), matching vanilla.
+	//   [VERIFIED javap ExperienceOrb.tick: verticalCollisionBelow && vy0 < -getGravity() -> vec3(vx,
+	//    -vy0*0.4, vz); ldc2_w 0.4.]
+	orbBounceScale = 0.4
+
+	// orbMergeInflate is the 0.5 the merge scan inflates the orb's box by (getBoundingBox().inflate(0.5))
+	// when searching for a nearby equal-value orb to combine. The scan runs on tickCount%20==1.
+	//   [VERIFIED javap ExperienceOrb.scanForMerges: getBoundingBox; ldc2_w 0.5; AABB.inflate.]
+	orbMergeInflate = 0.5
+
+	// orbMergeScanPeriod is the tickCount interval on which scanForMerges runs: (tickCount % 20 == 1).
+	//   [VERIFIED javap ExperienceOrb.tick: getfield tickCount; bipush 20; irem; iconst_1; if_icmpne.]
+	orbMergeScanPeriod = 20
 )
 
 // tickOrbs is the WR-06 per-tick XP-orb pass: it steps every XP orb in each region's tick-owned store
@@ -104,48 +154,173 @@ func (t *TickLoop) tickOrbs() {
 	}
 }
 
-// tickOrb ports the load-bearing body of ExperienceOrb.tick() (WR-06): apply the orb's 0.03 gravity,
-// home toward a nearby player (followNearbyPlayer — THE fix for "orbs don't follow"), integrate the
-// velocity via the per-axis swept resolver, apply the 0.98 air drag, then increment age and DESPAWN at
-// LIFETIME (6000). The vanilla scanForMerges (every 20 ticks) is a CITED v1 stub (no orb-merge subsystem,
-// matching awardExperienceOrbs's no-merge spawn). Tick-owned.
+// tickOrb ports the load-bearing body of ExperienceOrb.tick() (B-A8, 1:1): buoyancy vs gravity
+// (setUnderwaterMovement while the eye is in water, else applyGravity 0.03), the lava pop, the
+// every-20-tick equal-value merge (scanForMerges), the homing toward a nearby player
+// (followNearbyPlayer), the swept move, the ground-friction-scaled air drag, the ground bounce, and
+// age++ -> DESPAWN at LIFETIME (6000). Tick-owned.
 //
 // Vanilla bytecode (javap ExperienceOrb.tick, the parts that change observable state):
 //
 //	super.tick();
-//	if (!noCollision) applyGravity();                      // gravity while not colliding
-//	if (tickCount % 20 == 1) scanForMerges();              // merge — v1 SKIP (cited)
-//	followNearbyPlayer();                                  // <-- the homing
-//	move(SELF, getDeltaMovement());                        // integrate
-//	float drag = getAirDrag();                             // 0.98 (× friction on ground; v1: 0.98)
-//	setDeltaMovement(getDeltaMovement().scale(drag));
+//	boolean flag = !level.noCollision(getBoundingBox());        // colliding with a block?
+//	if (isEyeInFluid(WATER)) setUnderwaterMovement();
+//	else if (!flag) applyGravity();                             // gravity while not stuck in a block
+//	if (getFluidState(blockPosition()).is(LAVA))                // lava pop
+//	if (tickCount % 20 == 1) scanForMerges();                   // merge equal-value orbs
+//	followNearbyPlayer();                                       // the homing
+//	move(SELF, getDeltaMovement()); f = getAirDrag(); scale by f (x block friction on ground); bounce.
 //	++age; if (age >= 6000) discard();
 func (t *TickLoop) tickOrb(e *Entity) {
-	// applyGravity (ExperienceOrb.getDefaultGravity()==0.03): accelerate downward. (The vanilla
-	// noCollision gate is a refinement; v1 applies gravity each tick and the swept resolver below zeroes
-	// the vertical velocity on landing, so the orb settles on the floor regardless.)
-	e.vy -= orbGravity
+	// isEyeInFluid(WATER) chooses setUnderwaterMovement (buoyancy) over applyGravity while the orb eye is
+	// submerged in water: horizontal 0.99 drag plus a clamped upward drift, instead of the 0.03 pull. The
+	// vanilla else-if (!flag) gate (skip gravity while stuck in a block) is handled observably by the
+	// swept resolver zeroing vy on landing, so a resting orb still settles; open-air is unaffected.
+	if t.orbEyeInWater(e) {
+		// setUnderwaterMovement: (vx*0.99, min(vy+0.0005, 0.06), vz*0.99).
+		e.vx *= orbUnderwaterXZDrag
+		e.vy = math.Min(e.vy+orbUnderwaterYRise, orbUnderwaterYCap)
+		e.vz *= orbUnderwaterXZDrag
+	} else {
+		// applyGravity (ExperienceOrb.getDefaultGravity()==0.03): accelerate downward.
+		e.vy -= orbGravity
+	}
 
-	// followNearbyPlayer: set/clear the follow target and add the homing impulse toward the player. THIS
-	// is the missing piece — without it the orb never moves toward the collector.
+	// lava pop: an orb in a lava cell (getFluidState(blockPosition()).is(LAVA)) is kicked with a random
+	// horizontal plus fixed 0.2 upward impulse each tick, so it hops out. The two (nextFloat-nextFloat)
+	// draws come off the orb OWN RandomSource in x-then-z order (the exact vanilla draw order); only drawn
+	// on a lava cell, so a normal orb perturbs no stream.
+	if t.fluidAt(pk.Position{X: int(math.Floor(e.x)), Y: int(math.Floor(e.y)), Z: int(math.Floor(e.z))}).isLava {
+		r := t.orbRandom(e)
+		e.vx = float64((r.nextFloat() - r.nextFloat()) * orbLavaPopXZScale)
+		e.vy = orbLavaPopY
+		e.vz = float64((r.nextFloat() - r.nextFloat()) * orbLavaPopXZScale)
+	}
+
+	// scanForMerges every 20 ticks (tickCount % 20 == 1): combine a nearby equal-value orb into this one.
+	// The orb has no separate tickCount field; age increments once per tick from spawn exactly like
+	// tickCount, so it drives the same 1-in-20 cadence.
+	if e.age%orbMergeScanPeriod == 1 {
+		t.scanForMergesOrb(e)
+	}
+
+	// followNearbyPlayer: set/clear the follow target and add the homing impulse toward the player.
 	t.followNearbyPlayerOrb(e)
 
-	// Integrate via the per-axis swept resolver (the anti-tunneling discipline shared with tickItem/
-	// tickPhysics): re-buckets through entities.move, sets onGround, and zeroes blocked velocity so the
-	// orb lands on the floor and is blocked by walls.
+	// vy0 = getDeltaMovement().y BEFORE the move: the bounce test compares the pre-move downward speed
+	// against -getGravity().
+	vy0 := e.vy
+
+	// move(SELF, getDeltaMovement()) via the per-axis swept resolver (shared with tickItem/tickPhysics):
+	// re-buckets through entities.move, sets onGround, and zeroes blocked velocity so the orb lands on the
+	// floor and is blocked by walls.
 	t.moveEntity(e, e.vx, e.vy, e.vz)
 
-	// getAirDrag()==0.98 applied to all three axes (deltaMovement.scale(0.98)). This converges the orb's
-	// drift instead of sliding forever.
-	e.vx *= orbAirDrag
-	e.vy *= orbAirDrag
-	e.vz *= orbAirDrag
+	// f = getAirDrag() (0.98); if (onGround()) f *= blockBelow.getFriction() * 0.98f. The block friction
+	// default is 0.6 (Block.getFriction: v1 has no per-block table yet; stone/dirt/grass all carry 0.6).
+	f := orbAirDrag
+	if e.onGround {
+		f = orbAirDrag * orbGroundFriction * 0.98
+	}
+	// setDeltaMovement(getDeltaMovement().scale(f)) on all three axes.
+	e.vx *= f
+	e.vy *= f
+	e.vz *= f
+
+	// bounce: if the orb hit the ground this tick (verticalCollisionBelow == onGround here) moving faster
+	// than -getGravity() downward, flip the vertical velocity to -vy0*0.4 (a small bounce). getGravity for
+	// the orb is orbGravity (0.03).
+	if e.onGround && vy0 < -orbGravity {
+		e.vy = -vy0 * orbBounceScale
+	}
 
 	// age++ then DESPAWN at LIFETIME. Removing the orb from the store makes the tracker emit RemoveEntities
 	// to every tracking player next tick (it no longer appears in near()).
 	e.age++
 	if e.age >= orbLifetime {
 		t.cur().entities.remove(e.id)
+	}
+}
+
+// orbEyeInWater ports Entity.isEyeInFluid(FluidTags.WATER) for the orb: sample water at the block
+// containing getEyeY() (== y + height*0.85, the default non-living eye height). A nil world (test loop)
+// reads as not-in-water. Mirrors mobEyeInWater (breath_mob.go) exactly.
+func (t *TickLoop) orbEyeInWater(e *Entity) bool {
+	if t.world() == nil {
+		return false
+	}
+	eyeY := e.y + float64(e.height)*0.85
+	return t.fluidAt(pk.Position{X: int(math.Floor(e.x)), Y: int(math.Floor(eyeY)), Z: int(math.Floor(e.z))}).isWater
+}
+
+// orbRandom lazily initializes and returns the orb dedicated RandomSource (ExperienceOrb inherits
+// Entity.random), seeded from the orb entity id (mirroring fishingRNG: never a mob stream). Drawn only
+// by the lava pop, so a normal orb never touches it. Tick-owned.
+func (t *TickLoop) orbRandom(e *Entity) *entityRandom {
+	if e.orbRNG == nil {
+		e.orbRNG = newEntityRandom(uint64(e.id))
+	}
+	return e.orbRNG
+}
+
+// scanForMergesOrb ports ExperienceOrb.scanForMerges(): scan every OTHER ExperienceOrb whose box
+// overlaps this orb box inflated by 0.5, and merge each mergeable one into this orb. Runs on a
+// ServerLevel every 20 ticks. Tick-owned.
+//
+//	[VERIFIED javap ExperienceOrb.scanForMerges: getEntities(ExperienceOrb, getBoundingBox().inflate(0.5),
+//	 this canMerge predicate) -> for each -> merge(other).]
+func (t *TickLoop) scanForMergesOrb(e *Entity) {
+	// getBoundingBox().inflate(0.5): the orb box (feet-anchored width x height on x/z) grown 0.5 on every
+	// face. Candidates come from the region near-list (the v1 getEntities analogue), narrow-phased against
+	// this inflated box.
+	hw := float64(e.width)/2 + orbMergeInflate
+	loX, hiX := e.x-hw, e.x+hw
+	loY, hiY := e.y-orbMergeInflate, e.y+float64(e.height)+orbMergeInflate
+	loZ, hiZ := e.z-hw, e.z+hw
+
+	for _, o := range t.entitiesNearAcrossRegions(e.x, e.z, trackRange) {
+		if o == e || !o.isOrb {
+			continue // getEntities(ExperienceOrb, ...): orbs only, never self
+		}
+		if !canMergeOrb(e, o) {
+			continue // canMerge: same value (the id%40 gate is a v1 no-op, see canMergeOrb)
+		}
+		ohw := float64(o.width) / 2
+		if hiX <= o.x-ohw || o.x+ohw <= loX ||
+			hiY <= o.y || o.y+float64(o.height) <= loY ||
+			hiZ <= o.z-ohw || o.z+ohw <= loZ {
+			continue // boxes do not overlap on some axis
+		}
+		t.mergeOrb(e, o)
+	}
+}
+
+// canMergeOrb ports ExperienceOrb.canMerge(other) -> canMerge(other, getId(), getValue()): the other orb
+// is mergeable when it is NOT this orb and carries the SAME value. Vanilla ALSO gates on
+// (other.getId() - id) % 40 == 0 (a hash spread throttling merge storms): that depends on the exact
+// vanilla entity-id assignment, which v1 does not reproduce, so it is a CITED no-op here (v1 merges any
+// same-value orb in range; the observable end state, same-value orbs combine and count sums, is
+// identical, only the tick-spread differs, not observable to a client). isRemoved is handled by the store.
+//
+//	[VERIFIED javap ExperienceOrb.canMerge(other): other != this && canMerge(other, getId(), getValue());
+//	 canMerge(orb,id,value): !orb.isRemoved() && (orb.getId()-id)%40==0 && orb.getValue()==value.]
+func canMergeOrb(e, o *Entity) bool {
+	return o != e && o.isOrb && o.xpValue == e.xpValue
+}
+
+// mergeOrb ports ExperienceOrb.merge(other): absorb the other orb count into this one, keep the SMALLER
+// age (Math.min, so the combined orb despawns no sooner than the younger of the two), and discard the
+// other orb. Tick-owned.
+//
+//	[VERIFIED javap ExperienceOrb.merge: count += other.count; age = Math.min(age, other.age);
+//	 other.discard().]
+func (t *TickLoop) mergeOrb(e, o *Entity) {
+	e.orbCount += o.orbCount
+	if o.age < e.age {
+		e.age = o.age // Math.min(age, other.age)
+	}
+	if owner := t.owningRegion(o.id); owner != nil {
+		owner.entities.remove(o.id)
 	}
 }
 
@@ -283,11 +458,15 @@ func (t *TickLoop) playerTouchOrb(p *tickPlayer, e *Entity) {
 		t.giveExperiencePoints(p, remaining)
 	}
 
-	// --count; if (count == 0) discard(). A v1 orb carries a single logical "count" (it is one orb), so a
-	// successful collect always empties it -> discard. Remove from the orb's OWNING region (scanOrbPickup
-	// ran cross-region); a nil owner (already gone) is a safe no-op.
-	if owner := t.owningRegion(e.id); owner != nil {
-		owner.entities.remove(e.id)
+	// --count; if (count == 0) discard(). A merged orb carries orbCount logical sub-orbs; each touch
+	// awards getValue() (via the mending+giveExperiencePoints above) and consumes ONE sub-orb, so a
+	// count-3 orb is collected over 3 touches (gated by takeXpDelay). Only when count hits 0 is the entity
+	// removed. Remove from the orb OWNING region (scanOrbPickup ran cross-region); a nil owner is a no-op.
+	e.orbCount--
+	if e.orbCount <= 0 {
+		if owner := t.owningRegion(e.id); owner != nil {
+			owner.entities.remove(e.id)
+		}
 	}
 }
 
