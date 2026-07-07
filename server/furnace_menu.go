@@ -322,7 +322,7 @@ func (t *TickLoop) clickedFurnace(p *tickPlayer, oc *openContainer, slotNum int1
 
 	t.sendFurnaceContent(p, f)
 	if p.client != nil && !slotDataEqual(carriedBefore, inv.getCarried()) {
-		p.client.Send(containerSetSlot(-1, inv.stateID, -1, inv.getCarried()))
+		p.client.Send(setCursorItem(inv.getCarried()))
 	}
 }
 
@@ -491,23 +491,44 @@ func (t *TickLoop) furnaceQuickMove(p *tickPlayer, oc *openContainer, f *furnace
 		return
 	}
 
-	// A PLAYER cell: a smeltable item -> input slot 0; a fuel -> fuel slot 1; else main<->hotbar (which for
-	// the BE slots we approximate as: try input if smeltable, else fuel if fuel, else no-op). canSmelt uses
-	// the recipe set for this furnace's subtype (findCookingRecipe); isFuel uses the fuel table.
+	// A PLAYER cell. AbstractFurnaceMenu.quickMoveStack's else branch has FOUR mutually-exclusive
+	// sub-branches, in order (verified bytecode offsets 102-209):
+	//   1. canSmelt(stack)     -> moveItemStackTo(input 0..1);  if it fails, RETURN EMPTY (terminal).
+	//   2. else isFuel(stack)  -> moveItemStackTo(fuel 1..2);   if it fails, RETURN EMPTY (terminal).
+	//   3. else index in main  -> moveItemStackTo(hotbar 30..39).
+	//   4. else index in hotbar-> moveItemStackTo(main 3..30).
+	// (1) and (2) are `else if`, so a smeltable item with a full input aborts — it must NOT fall through to
+	// the fuel slot. canSmelt uses the recipe set for this furnace's subtype (findCookingRecipe); isFuel the
+	// fuel table. The BE-slot moves (furnaceMoveIntoBESlot) mutate work in place; write back + return either
+	// way (a partial/failed move still returns, per the bytecode's `if moved goto tail else return EMPTY`).
 	if _, ok := findCookingRecipe(int32(work.ItemID), f.subtype); ok {
 		if t.furnaceMoveIntoBESlot(f, furnaceSlotInput, &work) {
 			ref.set(work)
-			return
 		}
+		return // canSmelt is terminal: move-or-abort, never try the fuel slot (offset 120 -> 123 areturn).
 	}
 	if furnaceIsFuel(int32(work.ItemID)) {
 		if t.furnaceMoveIntoBESlot(f, furnaceSlotFuel, &work) {
 			ref.set(work)
+		}
+		return // isFuel is terminal too.
+	}
+	// Non-smeltable, non-fuel: the main<->hotbar shuffle (offsets 152-209). Go window mapping: main storage
+	// = slots 9..35 ([windowMainFirst, windowHotbarFirst)), hotbar = 36..44 ([windowHotbarFirst, 45)).
+	//   main   -> hotbar (vanilla moveItemStackTo(stack, 30, 39, false))
+	//   hotbar -> main   (vanilla moveItemStackTo(stack, 3, 30, false))
+	if ref.invSlot >= windowMainFirst && ref.invSlot < windowHotbarFirst {
+		// main storage -> hotbar
+		if !t.moveItemStackTo(inv, &work, windowHotbarFirst, 45, false) {
+			return
+		}
+	} else {
+		// hotbar -> main storage
+		if !t.moveItemStackTo(inv, &work, windowMainFirst, windowHotbarFirst, false) {
 			return
 		}
 	}
-	// else: main<->hotbar shuffle is a client-visible convenience; v1 leaves the item in place (no-op),
-	// faithful to "nothing moved -> quickMoveStack returns EMPTY" (the item is not moved).
+	ref.set(work)
 }
 
 // furnaceMoveIntoBESlot merges *stack into a BE slot (input 0 / fuel 1), honoring furnaceMayPlace + max

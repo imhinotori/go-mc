@@ -227,7 +227,7 @@ func (t *TickLoop) clickedStonecutter(p *tickPlayer, oc *openContainer, slotNum 
 
 	t.sendStonecutterContent(p)
 	if p.client != nil && !slotDataEqual(carriedBefore, inv.getCarried()) {
-		p.client.Send(containerSetSlot(-1, inv.stateID, -1, inv.getCarried()))
+		p.client.Send(setCursorItem(inv.getCarried()))
 	}
 }
 

@@ -24,12 +24,12 @@ import (
 //	2      -> the result slot (oc.grindResult, take-only)
 //	3..38  -> the player inventory window (main 9..35, hotbar 36..44)
 type grindstoneSlotRef struct {
-	oc     *openContainer
-	inv    *Inventory
-	input  int   // 0 or 1 for an input slot, -1 otherwise
-	result bool  // the result slot (2)
+	oc      *openContainer
+	inv     *Inventory
+	input   int   // 0 or 1 for an input slot, -1 otherwise
+	result  bool  // the result slot (2)
 	invSlot int16 // player inventory window slot, -1 otherwise
-	ok     bool
+	ok      bool
 }
 
 func grindstoneResolveSlot(oc *openContainer, inv *Inventory, menuIdx int) grindstoneSlotRef {
@@ -116,7 +116,7 @@ func (t *TickLoop) clickedGrindstone(p *tickPlayer, oc *openContainer, slotNum i
 	t.sendGrindstoneContent(p)
 
 	if !slotDataEqual(carriedBefore, inv.getCarried()) {
-		p.client.Send(containerSetSlot(-1, inv.stateID, -1, inv.getCarried()))
+		p.client.Send(setCursorItem(inv.getCarried()))
 	}
 }
 

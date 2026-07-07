@@ -237,34 +237,28 @@ func TestClickCloneCreativeOnly(t *testing.T) {
 	}
 }
 
-// TestClickCarriedSyncEmitsSetSlotMinus1: a full clicked() that changes the carried item emits a
-// ClientboundContainerSetSlot with containerId -1, slot -1 (synchronizeCarriedToRemote).
-func TestClickCarriedSyncEmitsSetSlotMinus1(t *testing.T) {
+// TestClickCarriedSyncEmitsSetCursorItem: a full clicked() that changes the carried item emits a
+// ClientboundSetCursorItem (the 1.21.2+ cursor sync — the old "SetSlot containerId -1, slot -1" form was
+// removed in 1.21.2 and is silently discarded by the 26.2 client). synchronizeCarriedToRemote.
+func TestClickCarriedSyncEmitsSetCursorItem(t *testing.T) {
 	loop, p, inv := clickLoop(t)
 	inv.set(36, stk(1, 16))
 
-	// clicked() PICKUP primary on slot 36 → carried becomes 16, which must sync.
+	// clicked() PICKUP primary on slot 36 → carried becomes 16, which must sync via SetCursorItem.
 	loop.clicked(p, playerContainerID, 36, 0, containerInputPickup)
 
 	got := drainPackets(p.client)
-	if n := countID(got, packetid.ClientboundContainerSetSlot); n < 1 {
-		t.Fatalf("carried-change clicked sent %d SetSlot, want >=1", n)
+	if n := countID(got, packetid.ClientboundSetCursorItem); n < 1 {
+		t.Fatalf("carried-change clicked sent %d SetCursorItem, want >=1", n)
 	}
-
-	// Confirm at least one SetSlot is the carried sync: containerId -1, slot -1.
-	found := false
+	// The OLD carried-sync form (SetSlot containerId -1) must NOT be emitted anymore.
 	for _, pkt := range got {
 		if pkt.ID != int32(packetid.ClientboundContainerSetSlot) {
 			continue
 		}
-		cid, slot, ok := decodeSetSlotHeader(pkt.Data)
-		if ok && cid == -1 && slot == -1 {
-			found = true
-			break
+		if cid, slot, ok := decodeSetSlotHeader(pkt.Data); ok && cid == -1 && slot == -1 {
+			t.Fatalf("deprecated SetSlot(-1,-1) carried-sync still emitted — client would ignore it")
 		}
-	}
-	if !found {
-		t.Fatalf("no SetSlot(-1, -1) carried-sync emitted")
 	}
 }
 

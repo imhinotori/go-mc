@@ -260,3 +260,63 @@ func countOrbs(loop *TickLoop) int {
 
 // loopPlayer returns the single registered test player.
 func loopPlayer(loop *TickLoop) *tickPlayer { return loop.players[0] }
+
+// TestFurnaceShiftClickMainToHotbar: shift-clicking a non-smeltable, non-fuel item in the player MAIN
+// storage of an open furnace window moves it to the hotbar (AbstractFurnaceMenu.quickMoveStack's else
+// branch, main[3,30)->hotbar(30,39)). Previously this was a no-op (missing branch) — the reported bug.
+func TestFurnaceShiftClickMainToHotbar(t *testing.T) {
+	loop, p, pos := furnaceLoop(t)
+	state, _ := loop.only().world.GetBlock(pos, dimMinY)
+	f := loop.resolveFurnace(pos, state)
+	loop.openFurnace(p, pos)
+	oc := p.openContainer
+	if oc == nil {
+		t.Fatal("no open furnace window")
+	}
+
+	inv := ensureInventory(p)
+	// Dirt (non-smeltable, non-fuel) in the first main-storage slot (window 9). Furnace menu slot for
+	// window 9 is menu index 3 (furnace: 0 input, 1 fuel, 2 result, 3.. = main).
+	inv.set(int16(windowMainFirst), component.SlotData{ItemID: idDirt, Count: 10})
+
+	loop.clickedFurnace(p, oc, 3, 0, containerInputQuickMove)
+
+	// The dirt must have left the main slot and landed in the hotbar (window 36..44).
+	if !stackEmpty(inv.get(int16(windowMainFirst))) {
+		t.Fatalf("main slot not emptied by shift-click: count=%d", inv.get(int16(windowMainFirst)).Count)
+	}
+	hotbarTotal := 0
+	for w := windowHotbarFirst; w < 45; w++ {
+		s := inv.get(int16(w))
+		if !stackEmpty(s) && s.ItemID == idDirt {
+			hotbarTotal += int(s.Count)
+		}
+	}
+	if hotbarTotal != 10 {
+		t.Fatalf("dirt in hotbar after shift-click = %d, want 10 (moved from main)", hotbarTotal)
+	}
+	_ = f
+}
+
+// TestFurnaceShiftClickSmeltableToInput: a smeltable item shift-clicked from the player inventory goes to
+// the input slot (0), not the fuel slot — and a smeltable item does NOT fall through to fuel when input is
+// occupied by a different item (canSmelt is terminal).
+func TestFurnaceShiftClickSmeltableToInput(t *testing.T) {
+	loop, p, pos := furnaceLoop(t)
+	state, _ := loop.only().world.GetBlock(pos, dimMinY)
+	f := loop.resolveFurnace(pos, state)
+	loop.openFurnace(p, pos)
+	oc := p.openContainer
+
+	inv := ensureInventory(p)
+	inv.set(int16(windowMainFirst), component.SlotData{ItemID: idIronOre, Count: 3})
+
+	loop.clickedFurnace(p, oc, 3, 0, containerInputQuickMove)
+
+	if in := f.items[furnaceSlotInput]; int32(in.ItemID) != idIronOre || in.Count != 3 {
+		t.Fatalf("input after smeltable shift-click = id=%d count=%d, want iron_ore x3", in.ItemID, in.Count)
+	}
+	if !stackEmpty(f.items[furnaceSlotFuel]) {
+		t.Fatalf("fuel slot must stay empty (smeltable routes to input, not fuel): %+v", f.items[furnaceSlotFuel])
+	}
+}

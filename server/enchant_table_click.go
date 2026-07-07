@@ -117,7 +117,7 @@ func (t *TickLoop) clickedEnchant(p *tickPlayer, oc *openContainer, slotNum int1
 	t.sendEnchantContent(p, oc)
 	t.sendEnchantData(p, oc)
 	if p.client != nil && !slotDataEqual(carriedBefore, inv.getCarried()) {
-		p.client.Send(containerSetSlot(-1, inv.stateID, -1, inv.getCarried()))
+		p.client.Send(setCursorItem(inv.getCarried()))
 	}
 }
 
@@ -393,7 +393,7 @@ func (t *TickLoop) enchantClickButton(p *tickPlayer, oc *openContainer, buttonID
 	t.sendEnchantData(p, oc)
 	if p.client != nil {
 		inv := ensureInventory(p)
-		p.client.Send(containerSetSlot(-1, inv.stateID, -1, inv.getCarried()))
+		p.client.Send(setCursorItem(inv.getCarried()))
 	}
 }
 

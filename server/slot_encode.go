@@ -58,6 +58,16 @@ func containerSetSlot(containerID, stateID int32, slot int16, item component.Slo
 	)
 }
 
+// setCursorItem builds ClientboundSetCursorItem — the cursor (carried) sync in 1.21.2+ (26.2). The old
+// "ContainerSetSlot with containerId -1, slot -1" carried-sync form was REMOVED in 1.21.2: the modern
+// client discards a SetSlot whose containerId does not match its open menu, so a carried correction sent
+// that way is silently dropped (the persistent cursor-desync / ghost-item bug). ClientboundSetCursorItem is
+// a single-field packet (the ItemStack contents, NO containerId/stateId/slot). Jar-verified:
+// ClientboundSetCursorItemPacket(ItemStack contents). CITE ServerPlayer$1.sendCarriedChange.
+func setCursorItem(item component.SlotData) pk.Packet {
+	return pk.Marshal(int32(packetid.ClientboundSetCursorItem), &item)
+}
+
 // containerSetData builds ClientboundContainerSetData — the DataSlot sync (PLUGIN-05, the stonecutter
 // selectedRecipeIndex). Jar-derived 3-field write (ClientboundContainerSetDataPacket.write, javap'd):
 //

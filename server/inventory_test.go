@@ -236,11 +236,12 @@ func TestContainerClickAuthoritative(t *testing.T) {
 	}
 }
 
-// TestCreativeSetSlot: a SetCreativeModeSlot places an item into the inventory; a subsequent
-// authoritative re-send reflects it.
+// TestCreativeSetSlot: a SetCreativeModeSlot from a CREATIVE player places an item into the inventory; a
+// subsequent authoritative re-send reflects it.
 func TestCreativeSetSlot(t *testing.T) {
 	loop := NewTickLoop(newFakeClock())
 	p := invPlayer(loop)
+	p.gameMode = gameModeCreative // hasInfiniteMaterials(): only a creative player may set a creative slot
 
 	// Creative-set a stack of 64 stone (item id 1) into slot 36.
 	csm := creativeSetSlotPacket(36, component.SlotData{Count: 64, ItemID: 1})
@@ -257,5 +258,29 @@ func TestCreativeSetSlot(t *testing.T) {
 	pkt := containerSetContent(0, 1, p.inventory.snapshot(), component.SlotData{Count: 0})
 	if pkt.ID != int32(packetid.ClientboundContainerSetContent) {
 		t.Fatalf("snapshot packet id wrong")
+	}
+}
+
+// TestCreativeSetSlotSurvivalRejected: a SetCreativeModeSlot from a SURVIVAL player is IGNORED — the gate
+// is a security check (a survival client must not fabricate items). Also verifies the slot-range guard.
+func TestCreativeSetSlotSurvivalRejected(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	p := invPlayer(loop)
+	p.gameMode = gameModeSurvival
+
+	csm := creativeSetSlotPacket(36, component.SlotData{Count: 64, ItemID: 1})
+	loop.applyInput(p, SubtickInput{At: loop.clock.Now(), Packet: csm})
+
+	// Survival: the item must NOT have been placed (no free items).
+	if p.inventory != nil && !stackEmpty(p.inventory.get(36)) {
+		t.Fatalf("survival creative-set fabricated an item: slot 36 = %+v", p.inventory.get(36))
+	}
+
+	// Creative but an out-of-range slot (0 = craft result, never client-settable): rejected.
+	p.gameMode = gameModeCreative
+	csm0 := creativeSetSlotPacket(0, component.SlotData{Count: 1, ItemID: 1})
+	loop.applyInput(p, SubtickInput{At: loop.clock.Now(), Packet: csm0})
+	if p.inventory != nil && !stackEmpty(p.inventory.get(0)) {
+		t.Fatalf("creative-set into the result slot 0 was allowed: %+v", p.inventory.get(0))
 	}
 }

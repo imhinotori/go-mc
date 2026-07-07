@@ -285,7 +285,7 @@ func (t *TickLoop) clickedCrafting(p *tickPlayer, oc *openContainer, slotNum int
 
 	// synchronizeCarriedToRemote: sync the cursor on change (ClientboundContainerSetSlot(-1, ...)).
 	if !slotDataEqual(carriedBefore, inv.getCarried()) {
-		p.client.Send(containerSetSlot(-1, inv.stateID, -1, inv.getCarried()))
+		p.client.Send(setCursorItem(inv.getCarried()))
 	}
 }
 
@@ -303,7 +303,19 @@ func (t *TickLoop) doCraftingClick(p *tickPlayer, oc *openContainer, inv *Invent
 		if input == containerInputPickup {
 			t.craftPickup(p, oc, inv, i, j)
 		} else {
-			t.craftQuickMove(p, oc, inv, i)
+			// doClick QUICK_MOVE loop (bytecode offsets 699-741): move once, then while the source slot has
+			// re-populated with the SAME item (the result re-assembles from the grid, or a stack keeps
+			// feeding), move again — so shift-clicking a craftable result crafts as many as fit / ingredients
+			// allow, and a stack keeps draining. slotChangedCraftingGrid re-assembles the result each pass.
+			ref := craftingResolveSlot(oc, inv, i)
+			moved := t.craftQuickMove(p, oc, inv, i)
+			for !stackEmpty(moved) && ref.ok {
+				t.slotChangedCraftingGrid(craftingTableView(oc)) // re-assemble the result from the grid
+				if !stackSameItem(ref.get(), moved) {
+					break
+				}
+				moved = t.craftQuickMove(p, oc, inv, i)
+			}
 		}
 	case containerInputThrow:
 		t.craftThrow(p, oc, inv, i, j)
@@ -420,53 +432,85 @@ func craftSafeInsert(ref craftSlotRef, stack *component.SlotData, increment int)
 }
 
 // craftQuickMove ports CraftingMenu.quickMoveStack: shift-click moves a stack between the grid/result and
-// the player inventory. From the result (0) it moves the whole result into the player inventory and fires
-// onTakeCraft (the consume) per moved craft; from a grid cell it moves into the player inventory; from a
-// player cell it moves into the grid. v1 ports the common single-craft shift of the result + the
-// grid↔player moves (the result-book "craft as many as fit" multi-loop is a faithful follow-up). CITE
-// CraftingMenu.quickMoveStack.
-func (t *TickLoop) craftQuickMove(p *tickPlayer, oc *openContainer, inv *Inventory, i int) {
+// the player inventory. It returns the MOVED stack copy (EMPTY when nothing moved) so the doClick QUICK_MOVE
+// loop can repeat (craft-as-many-as-fit). Branches (verified CraftingMenu.quickMoveStack bytecode):
+//   - result (0):    moveItemStackTo(player 10..46, reverse=true) + onTakeCraft (the consume). Repeated by
+//     the caller's loop until the grid runs dry (each iteration re-assembles the result).
+//   - grid (1..9):   moveItemStackTo(player 10..46, reverse=FALSE) — fill main-storage-first.
+//   - player (10..): FIRST moveItemStackTo(grid 1..10, false); if that does not fully move, fall through to
+//     the main<->hotbar cross-move (main->hotbar, hotbar->main).
+//
+// CITE CraftingMenu.quickMoveStack (offsets 47-172).
+func (t *TickLoop) craftQuickMove(p *tickPlayer, oc *openContainer, inv *Inventory, i int) component.SlotData {
+	empty := component.SlotData{Count: 0}
 	if i < 0 {
-		return
+		return empty
 	}
 	ref := craftingResolveSlot(oc, inv, i)
 	if !ref.ok {
-		return
+		return empty
 	}
 
 	if ref.result {
 		// Shift-take the result: deposit the whole result into the player inventory, then consume.
 		res := oc.craftResult
 		if stackEmpty(res) {
-			return
+			return empty
 		}
 		work := res
 		if !t.moveItemStackTo(inv, &work, windowMainFirst, 45, true) {
-			return // no room: nothing crafted
+			return empty // no room: nothing crafted (quickMoveStack returns EMPTY)
 		}
-		// The result moved (fully or partly); fire the consume once (one craft). A full recipe-book
-		// "craft until no room" loop is the faithful follow-up.
+		oc.craftResult = work
+		if stackEmpty(work) {
+			oc.craftResult = component.SlotData{Count: 0}
+		}
+		// The result moved (fully or partly); fire the consume (one craft). The caller loops while the
+		// re-assembled result still matches, so this crafts as many as fit / as ingredients allow.
 		t.onTakeCraft(p, inv, craftingTableView(oc))
-		return
+		// Return the moved item so the loop's isSameItem(ref.get(), moved) can re-fire.
+		moved := res
+		moved.Count = res.Count - work.Count
+		if moved.Count <= 0 {
+			return empty
+		}
+		return moved
 	}
 
 	src := ref.get()
 	if stackEmpty(src) {
-		return
+		return empty
 	}
 	work := src
 	if ref.gridIdx >= 0 {
-		// Grid → player inventory (main+hotbar, hotbar-first).
-		if !t.moveItemStackTo(inv, &work, windowMainFirst, 45, true) {
-			return
+		// Grid → player inventory, reverse=FALSE (main-storage-first), per bytecode offset 154.
+		if !t.moveItemStackTo(inv, &work, windowMainFirst, 45, false) {
+			return empty
 		}
 	} else {
-		// Player → the 3x3 grid.
-		if !t.craftMoveIntoGrid(oc, &work) {
-			return
+		// Player cell: FIRST try the 3x3 grid; if it does not fully move, fall through to main<->hotbar.
+		gridMoved := t.craftMoveIntoGrid(oc, &work)
+		if !gridMoved || !stackEmpty(work) {
+			// main storage (window 9..35) -> hotbar (36..45); hotbar (36..44) -> main (9..36). The grid
+			// fill above already shrank `work` if it took part; the cross-move handles the remainder.
+			if ref.invSlot >= windowMainFirst && ref.invSlot < windowHotbarFirst {
+				if !t.moveItemStackTo(inv, &work, windowHotbarFirst, 45, false) && !gridMoved {
+					return empty
+				}
+			} else {
+				if !t.moveItemStackTo(inv, &work, windowMainFirst, windowHotbarFirst, false) && !gridMoved {
+					return empty
+				}
+			}
 		}
 	}
 	ref.set(work)
+	moved := src
+	moved.Count = src.Count - work.Count
+	if moved.Count <= 0 {
+		return empty
+	}
+	return moved
 }
 
 // craftMoveIntoGrid ports moveItemStackTo for the 3x3 grid destination: pass 1 merges *stack into

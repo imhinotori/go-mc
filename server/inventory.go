@@ -312,14 +312,24 @@ func (t *TickLoop) clicked(p *tickPlayer, containerID int32, slotNum int16, butt
 	// ClientboundContainerSetSlot(-1, stateId, -1, carried) (containerId -1, slot -1). Reuses the stateId
 	// just bumped by broadcastInventoryChanges.
 	if !slotDataEqual(carriedBefore, inv.getCarried()) {
-		p.client.Send(containerSetSlot(-1, inv.stateID, -1, inv.getCarried()))
+		p.client.Send(setCursorItem(inv.getCarried()))
 	}
 }
 
 // handleSetCreativeModeSlot resolves a ServerboundSetCreativeModeSlot on-tick (ENT-04): a
-// creative player sets a slot directly with a FULL component-slot ItemStack (server-bound).
-// This is the simple path to a visible item. Decoded defensively; stored into the tick-owned
-// inventory. Jar-derived: Short slot + ItemStack (SlotData).
+// CREATIVE player sets a slot directly with a FULL component-slot ItemStack (server-bound).
+// Decoded defensively; stored into the tick-owned inventory. Jar-derived: Short slot + ItemStack (SlotData).
+//
+// 1:1 net.minecraft.server.network.ServerGamePacketListenerImpl.handleSetCreativeModeSlot:
+//
+//	if (!player.hasInfiniteMaterials()) return;                       // CREATIVE gate (SECURITY: a survival
+//	                                                                  //   client must not fabricate items)
+//	validSlot = slot >= 1 && slot <= 45;
+//	validItem = item.isEmpty() || item.getCount() <= item.getMaxStackSize();
+//	if (validSlot && validItem) { inventoryMenu.getSlot(slot).setByPlayer(item); setRemoteSlot(slot, item); }
+//
+// The slot < 0 branch (drop the item into the world via the dropSpamThrottler) is CITE-DEFERRED (no throttler
+// wired); the security-critical gate + validity checks are the deliverable. CITE handleSetCreativeModeSlot.
 func (t *TickLoop) handleSetCreativeModeSlot(p *tickPlayer, pkt pk.Packet) {
 	r := bytes.NewReader(pkt.Data)
 	var slot pk.Short
@@ -330,9 +340,22 @@ func (t *TickLoop) handleSetCreativeModeSlot(p *tickPlayer, pkt pk.Packet) {
 	if _, err := item.ReadFrom(r); err != nil {
 		return // malformed item: no-op
 	}
+	// hasInfiniteMaterials(): ONLY a creative player may set a creative slot. A survival/adventure client
+	// sending this packet is ignored (it would otherwise be a free item-duplication exploit).
+	if p.gameMode != gameModeCreative {
+		return
+	}
+	// validSlot: the InventoryMenu window is 1..45 (slot 0 is the craft result — never client-settable).
+	// A forged out-of-range slot (or the -1 world-drop, deferred) is rejected.
+	if slot < 1 || slot > 45 {
+		return
+	}
+	// validItem: an empty stack clears the slot; a non-empty one must not exceed its max stack size.
+	if !stackEmpty(item) && int(item.Count) > stackMaxSize(item) {
+		return
+	}
 	ensureInventory(p).set(int16(slot), item)
-	// Echo the authoritative content back so the client renders the slot (sendContent bumps
-	// the state id).
+	// Echo the authoritative content back so the client renders the slot (sendContent bumps the state id).
 	t.sendContent(p)
 }
 

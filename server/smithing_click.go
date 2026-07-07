@@ -175,7 +175,7 @@ func (t *TickLoop) clickedSmithing(p *tickPlayer, oc *openContainer, slotNum int
 	t.sendSmithingContent(p)
 
 	if !slotDataEqual(carriedBefore, inv.getCarried()) {
-		p.client.Send(containerSetSlot(-1, inv.stateID, -1, inv.getCarried()))
+		p.client.Send(setCursorItem(inv.getCarried()))
 	}
 }
 

@@ -291,7 +291,7 @@ func (t *TickLoop) clickedBeacon(p *tickPlayer, oc *openContainer, slotNum int16
 
 	t.sendBeaconContent(p, b)
 	if p.client != nil && !slotDataEqual(carriedBefore, inv.getCarried()) {
-		p.client.Send(containerSetSlot(-1, inv.stateID, -1, inv.getCarried()))
+		p.client.Send(setCursorItem(inv.getCarried()))
 	}
 }
 

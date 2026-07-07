@@ -218,7 +218,7 @@ func (t *TickLoop) clickedAnvil(p *tickPlayer, oc *openContainer, slotNum int16,
 	t.sendAnvilContent(p, oc)
 	t.sendAnvilCost(p, oc)
 	if p.client != nil && !slotDataEqual(carriedBefore, inv.getCarried()) {
-		p.client.Send(containerSetSlot(-1, inv.stateID, -1, inv.getCarried()))
+		p.client.Send(setCursorItem(inv.getCarried()))
 	}
 }
 
