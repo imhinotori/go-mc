@@ -724,6 +724,24 @@ type Entity struct {
 	//	 !isRemoved) { broadcastEntityEvent(this, 60); remove(KILLED); }.]
 	deathTime int32
 
+	// airSupply is net.minecraft.world.entity.Entity's DATA_AIR_SUPPLY_ID (getAirSupply()/setAirSupply()) —
+	// the mob-side twin of tickPlayer.airSupply (breath.go). The Entity ctor seeds DATA_AIR_SUPPLY_ID to
+	// getMaxAirSupply() == 300 (Entity.getMaxAirSupply: `sipush 300; ireturn`), so NewEntity initializes it
+	// to maxAirSupply — a mob is born with a full bubble bar. LivingEntity.baseTick drains it while the eyes
+	// are submerged (decreaseAirSupply == air-1 with OXYGEN_BONUS 0) and refills it out of water
+	// (increaseAirSupply == min(air+4, 300)); at air <= -20 (shouldTakeDrowningDamage) the mob resets it to
+	// 0 and takes 2.0 DROWN damage. A plain int32 (snapshot-friendly), tick-owned (TICK-05): mutated only on
+	// the tick goroutine in tickMobBreath (breath_mob.go). Non-living entities (items/orbs/arrows) keep it at
+	// the 300 seed and never read it — the breath tick self-gates on mobRunsBaseTickEnv.
+	airSupply int32
+
+	// lastAirSent is the last airSupply value pushed to observers via SetEntityData — the mob-side twin of
+	// tickPlayer.lastAirSent. syncMobAirSupply only broadcasts a CHANGED value (vanilla SynchedEntityData
+	// dirty-only semantics), so a mob at a steady bubble level (full out of water, the common case) sends
+	// nothing. Initialized to maxAirSupply alongside airSupply so a fresh full-air mob is already "sent"
+	// (no spurious first-tick packet). Tick-owned (TICK-05).
+	lastAirSent int32
+
 	// fallDistance is net.minecraft.world.entity.Entity.fallDistance — the running descent distance
 	// the entity has accumulated since it was last on the ground (or in water). Entity.checkFallDamage
 	// adds the per-tick drop (`fallDistance -= (float) deltaY` while !isInWater && deltaY < 0) and, on
@@ -1348,6 +1366,11 @@ func NewEntity(id int32, t entity.Entity, x, y, z float64) *Entity {
 		// and restore the adult box exactly on grow-up (Pig.getDefaultDimensions source dims). MOB-SUB-08.
 		adultWidth:  t.Width,
 		adultHeight: t.Height,
+		// Seed the air bubble to Entity.getMaxAirSupply() == 300 exactly as the vanilla Entity ctor does
+		// (`define(DATA_AIR_SUPPLY_ID, getMaxAirSupply())`). lastAirSent mirrors it so a full-air mob is
+		// already "sent" (no spurious first-tick SetEntityData). maxAirSupply is the breath.go const (300).
+		airSupply:   maxAirSupply,
+		lastAirSent: maxAirSupply,
 		// Attach the per-entity AttributeMap from this type's DefaultAttributes supplier (the Go
 		// analogue of LivingEntity's `this.attributes = new AttributeMap(DefaultAttributes.getSupplier(
 		// type))`). NewMapForEntity returns nil for a type with no registered supplier (a dropped Item,

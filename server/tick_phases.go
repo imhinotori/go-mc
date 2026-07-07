@@ -553,6 +553,15 @@ func (t *TickLoop) tickAI() {
 		// (breedAge==0, the oracle pig) is a no-op. Self-gated on breedAge sign, so it is a harmless no-op
 		// for non-animals (items/orbs, breedAge 0).
 		t.tickMobAging(e)
+		// MOB-SUB (B-A6): the air-supply / drowning / suffocation block of LivingEntity.baseTick,
+		// generalized from the player-only path to run for mobs too (breath_mob.go). Same OUTSIDE-
+		// serverAiStep per-mob loop as the i-frame / fire / lava / aging steps; self-gated on
+		// mobRunsBaseTickEnv (LivingEntity only) + !dead, and draws NO RNG (OXYGEN_BONUS 0 -> no
+		// respiration skip), so it cannot perturb the per-mob RNG stream the pig oracle pins. A dry
+		// land mob at full air is a no-op (increaseAirSupply caps at max; no drown/suffocation, no
+		// metadata change) -> the oracle pig, driven directly via serverAiStep in its test and never
+		// here, is byte-identical regardless.
+		t.tickMobBreath(e)
 	}
 
 	// WR death-animation drive: LivingEntity.baseTick runs `if (isDeadOrDying() && shouldTickDeath(this))
