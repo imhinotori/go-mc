@@ -77,12 +77,41 @@ func TestHurtingEntityType(t *testing.T) {
 	}
 }
 
-// TestShouldBurnKind: fireballs burn (shouldBurn true), a wither skull does not.
+// TestShouldBurnKind: fireballs burn (shouldBurn true), a wither skull / wind charge do not.
 func TestShouldBurnKind(t *testing.T) {
 	if !shouldBurnKind(hurtSmallFireball) || !shouldBurnKind(hurtLargeFireball) {
 		t.Fatalf("fireballs must shouldBurn")
 	}
 	if shouldBurnKind(hurtWitherSkull) {
 		t.Fatalf("wither skull must NOT shouldBurn")
+	}
+	if shouldBurnKind(hurtWindCharge) {
+		t.Fatalf("wind charge must NOT shouldBurn")
+	}
+}
+
+// TestWindChargeNoDrag: a wind charge has inertia 1.0 (no drag in air or water) — its speed only grows by
+// the acceleration term. A wind charge thrown at power 1.5 keeps at least its launch speed after a tick
+// (1.5 -> (1.5 + 0.1)*1.0 = 1.6), unlike a fireball whose 0.95 inertia would shrink a fast launch.
+func TestWindChargeNoDrag(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	ow := world.NewChunkManager()
+	for _, r := range loop.regions {
+		r.entities = newEntityStore()
+		r.world = ow
+	}
+	// Player-throw variant: launch speed == power 1.5 (shootFromRotation overrides the accelPow delta).
+	e := loop.spawnHurtingProjectileShot(999, hurtWindCharge, 8.0, 100.0, 8.0, 1.0, 0.0, 0.0, 1.5)
+	if d := e.vx - 1.5; d > 1e-9 || d < -1e-9 {
+		t.Fatalf("wind charge launch speed should be power 1.5, got vx=%.6f", e.vx)
+	}
+	loop.withRegion(loop.regions[globalRegion], func() { loop.tickHurtingProjectile(e) })
+	// (1.5 + 0.1) * 1.0 == 1.6 — accelerate along heading, inertia 1.0 (no drag).
+	want := (1.5 + 0.1) * 1.0
+	if d := e.vx - want; d > 1e-9 || d < -1e-9 {
+		t.Fatalf("wind charge inertia must be 1.0 (no drag): vx=%.6f want=%.6f", e.vx, want)
+	}
+	if e.vy < -1e-9 {
+		t.Fatalf("wind charge must have NO gravity: vy=%.6f", e.vy)
 	}
 }

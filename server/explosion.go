@@ -165,5 +165,79 @@ func (t *TickLoop) explosionRayClear(fx, fy, fz, cx, cy, cz float64) bool {
 	return !blocked
 }
 
+// windBurstKnockbackMult is WindCharge's SimpleExplosionDamageCalculator knockbackMultiplier (1.22f). The
+// wind burst does NO explosion damage (damagesEntities=false) and destroys NO terrain (TRIGGER interaction):
+// its whole effect is a knockback gust scaled by this multiplier. Cite WindCharge static EXPLOSION_DAMAGE_CALCULATOR.
+const windBurstKnockbackMult = 1.22
+
+// windBurstRadius is the WindCharge.explode radius (1.2f). Cite WindCharge.explode.
+const windBurstRadius = 1.2
+
+// explodeWindBurst is the port of WindCharge.explode's Level.explode(WIND_BURST): a radius-1.2 explosion
+// whose damage calculator has damagesEntities=false (NO explosion damage) and whose interaction is TRIGGER
+// (NO terrain destruction) — so the entire observable effect is a knockback GUST. It reuses the exposure +
+// direction math of the standard explosion but applies ONLY the knockback impulse (scaled by kbMult 1.22),
+// never damage and never a block edit. The srcID (the wind charge) is excluded. Players get a SetEntityMotion;
+// mobs get the impulse on their store velocity (the tracker syncs it). The flying-player kbMult=0 special
+// case is CITE-DEFERRED (no player fly-ability state yet — survival players, the common case, all take 1.22).
+// Cite WindCharge.explode + ServerExplosion.hurtEntities (knockback branch) + SimpleExplosionDamageCalculator.
+func (t *TickLoop) explodeWindBurst(srcID int32, x, y, z float64) {
+	if windBurstRadius < explosionRadiusEpsilon {
+		return
+	}
+	doubleRadius := windBurstRadius * 2.0
+
+	// Players.
+	for _, p := range t.players {
+		if p == nil || p.dead || p.playerEntity == nil {
+			continue
+		}
+		dx, dy, dz := p.x-x, p.y-y, p.z-z
+		dist := math.Sqrt(dx*dx+dy*dy+dz*dz) / doubleRadius
+		if dist > 1.0 {
+			continue
+		}
+		exOx, exOy, exOz := p.x, p.y+playerHeight*0.85, p.z
+		exposure := t.explosionSeenPercent(x, y, z, exOx-playerWidth/2, exOy-playerHeight*0.85, exOz-playerWidth/2, playerWidth, playerHeight)
+		// dir(eye - center).normalize() * (1-dist)*exposure*kbMult(1.22). No damage.
+		ddx, ddy, ddz := exOx-x, exOy-y, exOz-z
+		l := math.Sqrt(ddx*ddx + ddy*ddy + ddz*ddz)
+		if l < 1e-9 {
+			continue
+		}
+		power := (1.0 - dist) * float64(exposure) * windBurstKnockbackMult
+		p.playerEntity.vx += ddx / l * power
+		p.playerEntity.vy += ddy / l * power
+		p.playerEntity.vz += ddz / l * power
+		if p.client != nil {
+			p.client.Send(encodeSetEntityMotion(p.playerEntity))
+		}
+	}
+
+	// Mobs (store entities): the gust launches nearby mobs too. Impulse on the store velocity; the tracker
+	// broadcasts the motion. srcID (the wind charge) is excluded.
+	for _, e := range t.cur().entities.byID {
+		if e == nil || e.id == srcID || e.dead {
+			continue
+		}
+		dx, dy, dz := e.x-x, e.y-y, e.z-z
+		dist := math.Sqrt(dx*dx+dy*dy+dz*dz) / doubleRadius
+		if dist > 1.0 {
+			continue
+		}
+		exposure := t.explosionSeenPercent(x, y, z, e.x-e.width/2, e.y, e.z-e.width/2, e.width, e.height)
+		cx, cy, cz := e.x, e.y+float64(e.height)*0.5, e.z
+		ddx, ddy, ddz := cx-x, cy-y, cz-z
+		l := math.Sqrt(ddx*ddx + ddy*ddy + ddz*ddz)
+		if l < 1e-9 {
+			continue
+		}
+		power := (1.0 - dist) * float64(exposure) * windBurstKnockbackMult
+		e.vx += ddx / l * power
+		e.vy += ddy / l * power
+		e.vz += ddz / l * power
+	}
+}
+
 // lerp is Mth.lerp(t, a, b) == a + t*(b-a).
 func lerp(tt, a, b float64) float64 { return a + tt*(b-a) }

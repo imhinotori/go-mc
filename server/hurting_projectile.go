@@ -31,15 +31,22 @@ import (
 	"math"
 
 	"github.com/imhinotori/sulfur/data/entity"
+	"github.com/imhinotori/sulfur/data/item"
 	"github.com/imhinotori/sulfur/level/block"
+	"github.com/imhinotori/sulfur/level/component"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
+
+// windChargeThrowPower is WindChargeItem.use's shoot power (spawnProjectileFromRotation power 1.5f). The
+// eye-height origin matches the throwable throw (Player standingEyeHeight ~1.62). Cite WindChargeItem.use.
+const windChargeThrowPower = 1.5
 
 // hurting-projectile kinds.
 const (
 	hurtSmallFireball = iota
 	hurtLargeFireball
 	hurtWitherSkull
+	hurtWindCharge
 )
 
 // AbstractHurtingProjectile physics constants (verified javap — exact float values).
@@ -48,6 +55,8 @@ const (
 	hurtInertiaAir       = 0.95 // getInertia()
 	hurtInertiaWater     = 0.8  // getLiquidInertia()
 	hurtInertiaDangerous = 0.73 // WitherSkull.getInertia() when isDangerous()
+	hurtInertiaWind      = 1.0  // AbstractWindCharge.getInertia()/getLiquidInertia() (no drag — dead straight)
+	windChargeDamage     = 1.0  // AbstractWindCharge.onHitEntity hurt 1.0F (the gust knockback is separate)
 	hurtDespawnTicks     = 1200 // a hurting projectile that never lands still despawns (lifetime backstop)
 	// smallFireballDamage / largeFireballDamage / witherSkullDamage are the onHitEntity hurt amounts.
 	smallFireballDamage = 5.0 // SmallFireball.onHitEntity hurt 5.0F
@@ -67,6 +76,8 @@ func hurtingEntityType(kind int) entity.Entity {
 		return entity.Fireball // LargeFireball == the "fireball" entity type (ghast)
 	case hurtWitherSkull:
 		return entity.WitherSkull
+	case hurtWindCharge:
+		return entity.WindCharge
 	default:
 		return entity.SmallFireball
 	}
@@ -138,11 +149,17 @@ func (t *TickLoop) tickHurtingProjectiles() {
 // (vanilla: owner removed OR no chunk at blockPosition) is preserved.
 func (t *TickLoop) tickHurtingProjectile(e *Entity) {
 	// (1) applyInertia: deltaMovement = (deltaMovement + deltaMovement.normalize()*accelerationPower) * inertia.
-	inertia := hurtInertiaAir
-	if t.isWaterAt(int(math.Floor(e.x)), int(math.Floor(e.y)), int(math.Floor(e.z))) {
+	var inertia float64
+	switch {
+	case e.hurtingKind == hurtWindCharge:
+		// AbstractWindCharge overrides BOTH getInertia and getLiquidInertia to 1.0 — no drag in air OR water.
+		inertia = hurtInertiaWind
+	case t.isWaterAt(int(math.Floor(e.x)), int(math.Floor(e.y)), int(math.Floor(e.z))):
 		inertia = hurtInertiaWater
-	} else if e.hurtingKind == hurtWitherSkull && e.hurtDangerous {
+	case e.hurtingKind == hurtWitherSkull && e.hurtDangerous:
 		inertia = hurtInertiaDangerous // WitherSkull.getInertia() overrides the AIR inertia when dangerous
+	default:
+		inertia = hurtInertiaAir
 	}
 	speed := math.Sqrt(e.vx*e.vx + e.vy*e.vy + e.vz*e.vz)
 	if speed > 0 {
@@ -227,6 +244,10 @@ func (t *TickLoop) hurtingOnHitEntity(e *Entity, victim *tickPlayer) {
 		if dur := witherSkullEffectTicks(); dur > 0 {
 			t.addPlayerEffect(victim, e.hurtOwnerID, effectWither, dur, 1, 1.0)
 		}
+	case hurtWindCharge:
+		// AbstractWindCharge.onHitEntity: hurt(windCharge(this, owner), 1.0). The gust knockback is the
+		// wind-burst explosion dealt in onHit (explode at position), NOT here.
+		t.applyDamage(victim, damageSourceWindCharge(e.hurtOwnerID), windChargeDamage)
 	}
 }
 
@@ -316,6 +337,10 @@ func (t *TickLoop) hurtingOnHit(e *Entity, x, y, z float64) {
 	case hurtWitherSkull:
 		// explode(this, x, y, z, 1.0, false, MOB). Radius 1, no fire.
 		t.explode(e.id, x, y, z, float64(witherSkullExplosionPower))
+	case hurtWindCharge:
+		// WindCharge.explode: the WIND_BURST — radius 1.2, damagesEntities=false (no explosion damage),
+		// TRIGGER interaction (no terrain destroy). Its whole effect is the knockback gust. Cite WindCharge.explode.
+		t.explodeWindBurst(e.id, x, y, z)
 	}
 	t.cur().entities.remove(e.id) // discard()
 }
@@ -324,4 +349,55 @@ func (t *TickLoop) hurtingOnHit(e *Entity, x, y, z float64) {
 // (false). A burning projectile calls igniteForSeconds(1) each tick — self-ignition is a render/no-op on a
 // projectile with no fire-tick effect of its own, so v1 skips the self-ignite call and keeps the predicate
 // for documentation parity; it does not change any observable projectile behavior. Retained for the port map.
-func shouldBurnKind(kind int) bool { return kind != hurtWitherSkull }
+func shouldBurnKind(kind int) bool { return kind != hurtWitherSkull && kind != hurtWindCharge }
+
+// tryUseWindCharge is the WindChargeItem.use port: a right-click with a wind_charge spawns a WindCharge
+// projectile from the player's eye toward the look direction (shoot power 1.5, no spread) and consumes 1
+// (creative-exempt). Returns true if the held item was a wind charge (so useItemInHand stops), false to fall
+// through. Tick-owned; the spawn rides the store-add path (tracker broadcasts AddEntity). wind-charge-gated
+// (a cheap id compare, no RNG — the pig oracle is unperturbed). CITE WindChargeItem.use.
+func (t *TickLoop) tryUseWindCharge(p *tickPlayer, inv *Inventory, held component.SlotData, hand int32) bool {
+	if item.ID(held.ItemID) != item.WindCharge.ID {
+		return false
+	}
+	// shootFromRotation(player, xRot, yRot, 0, 1.5, 1.0): the launch vector from the look angles.
+	yawRad := float64(p.yaw) * (math.Pi / 180.0)
+	pitchRad := float64(p.pitch) * (math.Pi / 180.0)
+	dirX := -math.Sin(yawRad) * math.Cos(pitchRad)
+	dirY := -math.Sin(pitchRad)
+	dirZ := math.Cos(yawRad) * math.Cos(pitchRad)
+	t.spawnHurtingProjectileShot(p.entityID, hurtWindCharge, p.x, p.y+throwEyeHeight, p.z, dirX, dirY, dirZ, windChargeThrowPower)
+
+	// ItemStack.consume(1): shrink by 1 unless creative.
+	if p.gameMode != gameModeCreative {
+		held.Count--
+		if held.Count <= 0 {
+			held = component.SlotData{Count: 0}
+		}
+		inv.set(heldMenuSlot(p, hand), held)
+		t.syncHeldAfterThrow(p, hand)
+	}
+	return true
+}
+
+// spawnHurtingProjectileShot is the player-throw variant (WindChargeItem.use path): instead of
+// assignDirectionalMovement (speed == accelerationPower), it sets the initial deltaMovement from a
+// shootFromRotation with the given power — Projectile.spawnProjectileFromRotation(factory, level, stack,
+// player, 0, power, inaccuracy) which does shoot(look, power) => deltaMovement = look.normalize()*power. The
+// projectile still re-accelerates by accelerationPower each tick. v1 uses 0 inaccuracy (deterministic). Cite
+// WindChargeItem.use (spawnProjectileFromRotation power 1.5).
+func (t *TickLoop) spawnHurtingProjectileShot(ownerID int32, kind int, x, y, z, dirX, dirY, dirZ, power float64) *Entity {
+	e := t.spawnHurtingProjectile(ownerID, kind, x, y, z, dirX, dirY, dirZ)
+	// Override the delta: shoot(look, power) == look.normalize()*power (replaces the accelPow-scaled delta).
+	mag := math.Sqrt(dirX*dirX + dirY*dirY + dirZ*dirZ)
+	if mag > 0 {
+		e.vx = dirX / mag * power
+		e.vy = dirY / mag * power
+		e.vz = dirZ / mag * power
+	}
+	horiz := math.Sqrt(e.vx*e.vx + e.vz*e.vz)
+	e.yaw = float32(math.Atan2(e.vx, e.vz) * 180.0 / math.Pi)
+	e.pitch = float32(math.Atan2(e.vy, horiz) * 180.0 / math.Pi)
+	e.headYaw = e.yaw
+	return e
+}

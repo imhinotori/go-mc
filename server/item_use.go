@@ -214,6 +214,14 @@ func (t *TickLoop) useItemInHand(p *tickPlayer, hand int32) {
 		return
 	}
 
+	// WIND CHARGE (WindChargeItem.use): a right-click-air fires a WindCharge (a hurting projectile — dead
+	// straight, no gravity) from the player's eye toward the look direction (shoot power 1.5), consuming 1.
+	// Runs before the food gate (a wind charge is not food); a non-wind-charge falls through. Wind-charge-gated
+	// (a cheap id compare, no RNG — the pig oracle is unperturbed). CITE WindChargeItem.use. Body in hurting_projectile.go.
+	if t.tryUseWindCharge(p, inv, held, hand) {
+		return
+	}
+
 	// FISHING ROD (FishingRodItem.use): a right-click with a fishing rod casts a FishingHook (bobber)
 	// toward the look direction, or — if a hook is already out — reels it in (retrieve: pull a hooked
 	// entity or roll the FISHING loot table + spawn the caught item flying to the player). It runs

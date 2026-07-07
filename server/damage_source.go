@@ -81,6 +81,11 @@ var (
 	// DamageSources.witherSkull(WitherSkull, Entity): type WITHER_SKULL, causingEntity = the owner (the
 	// wither). An is_projectile member. Cite WitherSkull.onHitEntity (hurtServer(witherSkull, 8.0)).
 	damageTypeWitherSkull = damageTypeID(tag.DamageTypeIDs["minecraft:wither_skull"])
+	// damageTypeWindCharge is minecraft:wind_charge — the source AbstractWindCharge.onHitEntity deals via
+	// DamageSources.windCharge(Entity, LivingEntity): type WIND_CHARGE, causingEntity = the owner (breeze /
+	// the throwing player). The 1.0 direct hit; the gust knockback is a separate wind-burst explosion. Cite
+	// AbstractWindCharge.onHitEntity (hurtServer(windCharge, 1.0)).
+	damageTypeWindCharge = damageTypeID(tag.DamageTypeIDs["minecraft:wind_charge"])
 )
 
 // damageSourceOf builds a DamageSource for an environmental/anonymous source: the given damage-type
@@ -153,6 +158,13 @@ func damageSourceFireball(ownerID int32) damageSource {
 // causingEntity = the owner (the wither). Cite WitherSkull.onHitEntity: damageSources().witherSkull(this, living).
 func damageSourceWitherSkull(ownerID int32) damageSource {
 	return damageSource{typeTag: damageTypeWitherSkull, attacker: ownerID}
+}
+
+// damageSourceWindCharge builds the DamageSource for a wind-charge direct hit: type wind_charge with the
+// SHOOTER's entity id (breeze / throwing player). The port of DamageSources.windCharge(Entity, LivingEntity)
+// — the 1.0 hit dealt in AbstractWindCharge.onHitEntity (the gust knockback is separate). ownerID 0 = anonymous.
+func damageSourceWindCharge(ownerID int32) damageSource {
+	return damageSource{typeTag: damageTypeWindCharge, attacker: ownerID}
 }
 
 // damageSourceMagic builds the DamageSource for a direct magic effect (instant_damage / poison self-tick):
