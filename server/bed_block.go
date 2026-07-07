@@ -227,15 +227,12 @@ func (t *TickLoop) useBed(p *tickPlayer, pos pk.Position) bool {
 		return true
 	}
 
-	// player.startSleepInBed(pos): gated by ServerPlayer.startSleepInBed. v1 applies the canSleep (night)
-	// gate here — an awake, alive player during the night sleeps; during the day the CONSUME still holds
-	// (the bed is clicked, placement skipped) but no sleep starts (the vanilla "not possible now" problem).
-	if p.isSleeping() || p.dead {
-		return true // OTHER_PROBLEM: already sleeping / not alive -> consume, no re-sleep
-	}
-	if !t.bedRuleCanSleep() {
-		return true // BedRule.canSleep false (day): consume (the "not possible now" problem), no sleep
-	}
-	t.startSleepInBed(p, bedPos)
+	// player.startSleepInBed(pos).ifLeft(problem -> overlay(problem.message())): the full ServerPlayer
+	// gate chain now lives in TickLoop.startSleepInBed (sleep.go) -- the BedSleepingProblem checks
+	// (OTHER_PROBLEM, BedRule night gate, TOO_FAR_AWAY, OBSTRUCTED, the canSetSpawn respawn set,
+	// NOT_SAFE monster scan) + super.startSleepInBed. The returned problem drives an overlay message in
+	// vanilla; v1 has no overlay subsystem, so the result is dropped (a cited no-op) -- either way the
+	// bed click is CONSUMED (return true: placement skipped). bp.facing is the resolved HEAD facing.
+	_ = t.startSleepInBed(p, bedPos, bp.facing)
 	return true
 }

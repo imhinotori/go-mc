@@ -130,6 +130,15 @@ func (t *TickLoop) tickOnce() {
 	// advanceWeatherCycle runs early. CITE: ServerLevel.advanceWeatherCycle.
 	t.tickWeather()
 
+	// WORLD-GLOBAL sleep handling (sleep.go -- the ServerLevel.tick all-players-asleep block): the
+	// players_sleeping_percentage gate -> skip the night to dawn + wake everyone + clear the storm. Like
+	// tickWeather it is a single world-global phase (one SleepStatus per world), so it runs ONCE here on
+	// the coordinator BEFORE the region fan-out -- never per-region. Placed right after the weather cycle,
+	// mirroring ServerLevel.tick where the sleep block runs early (right after advanceWeatherCycle). It
+	// draws NO RNG and the pig oracle never calls tickOnce, so the pinned per-entity streams are
+	// unperturbed. CITE: net.minecraft.server.level.ServerLevel.tick (sleep block).
+	t.tickSleep()
+
 	t.tickWorld()  // scheduled blocks/fluids + chunk-save over the shared world
 	t.tickChunks() // per-player ring → world requests
 

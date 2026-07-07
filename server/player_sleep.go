@@ -49,17 +49,6 @@ func (p *tickPlayer) isSleeping() bool { return p.sleepingPos != nil }
 //	[VERIFIED CFR Player.getSleepTimer: return this.sleepCounter.]
 func (p *tickPlayer) getSleepTimer() int { return p.sleepCounter }
 
-// startSleepInBed ports Player.startSleepInBed(pos): startSleeping(pos); sleepCounter = 0. The
-// ServerPlayer.startSleepInBed BedSleepingProblem pre-checks are applied by the caller useBed BEFORE
-// this, matching vanilla order (the block useWithoutItem + ServerPlayer.startSleepInBed run the gates,
-// then reach super.startSleepInBed).
-//
-//	[VERIFIED javap Player.startSleepInBed: startSleeping(pos); sleepCounter = 0; return Either.right.]
-func (t *TickLoop) startSleepInBed(p *tickPlayer, pos pk.Position) {
-	t.startSleeping(p, pos)
-	p.sleepCounter = 0
-}
-
 // startSleeping ports LivingEntity.startSleeping(pos): if the block at pos is a bed, set its OCCUPIED
 // property true; set the sleeping pos; snap the player onto the bed (setPosToBed). The pose
 // (Pose.SLEEPING) + deltaMovement-zero are set server-side; the pose/pos WIRE render is a cited follow-up

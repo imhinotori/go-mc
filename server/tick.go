@@ -650,6 +650,28 @@ type tickPlayer struct {
 	//	 startSleepInBed sets it to 0.]
 	sleepCounter int
 
+	// --- Player respawn point (ServerPlayer.RespawnConfig -- the "spawn point" a bed/anchor sets).
+	// ServerPlayer.setRespawnPosition records a RespawnConfig{RespawnData{dimension, pos, yRot, xRot},
+	// forced} the death/respawn flow reads to place the player back at their bed. In v1 the death flow
+	// still falls back to the world spawn (performRespawn), so this records the bed the player slept in
+	// (the observable "sleeping in a valid bed sets your respawn point") and is STRUCTURED so the
+	// respawn placement reads it once ENT-05 wires bed respawn. nil == no respawn point set (the
+	// world-spawn default). THIN copy of the block position (the Folia rule). Tick-owned.
+	//	[VERIFIED javap ServerPlayer.startSleepInBed: if canSetSpawn -> setRespawnPosition(new
+	//	 RespawnConfig(LevelData.RespawnData.of(level.dimension(), pos, getYRot(), getXRot()), false), true).]
+	respawnPos       *pk.Position
+	respawnDimension int
+	respawnYaw       float32
+	respawnPitch     float32
+	respawnForced    bool
+
+	// lastPoseSent / lastSleepingPosSent are the sleeping-pose broadcast de-dup twins (the syncAirSupply
+	// pattern): the last DATA_POSE ordinal and the last SLEEPING_POS_ID value pushed to trackers, so a
+	// pose/sleeping-pos push only fires when it actually changed. lastPoseSent seeds to -1 (never sent).
+	// Tick-owned (written only by the sleep broadcast on the owner goroutine).
+	lastPoseSent        int
+	lastSleepingPosSent *pk.Position
+
 	// --- Player position (PLAY-04). ALL tick-owned: decoded and updated only by
 	// applyInput on the tick goroutine, so the position is -race clean by the same
 	// single-owner discipline as the rest of tickPlayer (TICK-05 / T-5-06). The four

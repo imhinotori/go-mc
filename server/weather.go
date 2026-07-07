@@ -290,3 +290,21 @@ func (t *TickLoop) isThundering() bool {
 //
 //	[VERIFIED javap Mth.lerp(f,f,f): start + delta * (end - start).]
 func mthLerpF(delta, start, end float32) float32 { return start + delta*(end-start) }
+
+// resetWeatherCycle ports net.minecraft.server.level.ServerLevel.resetWeatherCycle: zero the rain +
+// thunder timers and clear both flags on the WeatherData (a full clear). The vanilla method does
+// setRainTime(0)/setRaining(false)/setThunderTime(0)/setThundering(false); the ramp fields
+// (rainLevel/thunderLevel) are NOT touched here -- they decay back to 0 over the next ~100 ticks via
+// tickWeather's +-0.01 ramp, so a clear-on-wake fades the rain out smoothly (matching vanilla, where
+// resetWeatherCycle only clears the data and the level ramps down). The all-players-asleep night skip
+// calls this (gated on ADVANCE_WEATHER && isRaining), so waking to a clear morning clears the storm.
+//
+//	[VERIFIED javap ServerLevel.resetWeatherCycle: getWeatherData() -> setRainTime(0); setRaining(false);
+//	 setThunderTime(0); setThundering(false).]
+func (t *TickLoop) resetWeatherCycle() {
+	w := &t.weather
+	w.rainTime = 0
+	w.raining = false
+	w.thunderTime = 0
+	w.thundering = false
+}

@@ -350,6 +350,9 @@ func (g *gameTick) AcceptPlayer(
 		// GAMEPLAY-17 (Plan 17-18): seed the air dirty-tracker to the same full value so the first
 		// SetEntityData fires only on a real change (matching the client's registered air default).
 		lastAirSent: maxAirSupply,
+		// SLEEP-01: seed the pose dirty-tracker to -1 (no pose ever sent) so the first pose broadcast
+		// fires on the awake->sleeping transition; lastSleepingPosSent nil == the awake default.
+		lastPoseSent: -1,
 		// Food/hunger (Plan 17-19): a fresh player spawns at FoodData's ctor defaults — exhaustion 0,
 		// tickTimer 0 (food/saturation already seeded above). prevX/Y/Z seed to the spawn position so
 		// the first tick's movement delta is 0 (no spurious spawn-tick exhaustion from the teleport).

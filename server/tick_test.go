@@ -33,6 +33,7 @@ func (f *fakeClock) add(d time.Duration) { f.now = f.now.Add(d) }
 var expectedPhaseOrder = []string{
 	"resolveSubtickInputs",
 	"tickWeather",
+	"tickSleep",
 	"tickWorld",
 	"tickChunks",
 	"tickEntities",

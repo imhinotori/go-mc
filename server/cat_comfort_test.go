@@ -130,9 +130,9 @@ func TestCatRelaxCanUseGatedOnSleepingOwnerOnBed(t *testing.T) {
 		t.Fatal("relax canUse true with an AWAKE owner, want false (owner.isSleeping() gate)")
 	}
 	// Put the owner to sleep on the bed.
-	loop.startSleepInBed(p, bedPos)
+	loop.startSleeping(p, bedPos)
 	if !p.isSleeping() {
-		t.Fatal("precondition: owner must be sleeping after startSleepInBed")
+		t.Fatal("precondition: owner must be sleeping after startSleeping")
 	}
 	if !g.canUse(loop, cat) {
 		t.Fatal("relax canUse false with a SLEEPING owner on a bed within range, want true")
@@ -178,7 +178,7 @@ func TestCatRelaxTickSettlesToLying(t *testing.T) {
 	loop, mgr, cat, p := catComfortLoop(t, 9.5, 8.5, 42, 9.5, 64, 8.5) // cat AT the owner (dist 0 < 2.5)
 	bedPos := pk.Position{X: 9, Y: 64, Z: 8}
 	mgr.SetBlock(bedPos, redBedHeadState(t), dimMinY)
-	loop.startSleepInBed(p, bedPos)
+	loop.startSleeping(p, bedPos)
 
 	g := newCatRelaxOnOwnerGoal()
 	if !g.canUse(loop, cat) {
@@ -206,7 +206,7 @@ func TestCatMorningGiftNeverFiresAtDefault(t *testing.T) {
 	loop, mgr, cat, p := catComfortLoop(t, 9.5, 8.5, 42, 9.5, 64, 8.5)
 	bedPos := pk.Position{X: 9, Y: 64, Z: 8}
 	mgr.SetBlock(bedPos, redBedHeadState(t), dimMinY)
-	loop.startSleepInBed(p, bedPos)
+	loop.startSleeping(p, bedPos)
 	p.sleepCounter = 100 // getSleepTimer() >= 100 (the gift-eligible half of the gate)
 
 	g := newCatRelaxOnOwnerGoal()
