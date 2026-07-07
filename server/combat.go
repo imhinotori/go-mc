@@ -603,6 +603,15 @@ func (t *TickLoop) die(p *tickPlayer) {
 	p.dead = true
 	p.client.Send(playerCombatKill(p.entityID, chat.Text("You died")))
 
+	// Player.die death-loot + XP tail (death_player.go): the 1:1 port of the LivingEntity.die ->
+	// dropAllDeathLoot path a player runs (dropEquipment drops + clears the inventory when
+	// !KEEP_INVENTORY; dropExperience awards the capped XP orbs and resets the player XP to 0). Gated
+	// on the KEEP_INVENTORY gamerule (default false = drops). Vanilla runs dropAllDeathLoot only when
+	// level instanceof ServerLevel && !isSpectator; the server is always a ServerLevel and v1 has no
+	// spectator death path, so both guards are cited constant-true. Fired ONCE per death here (die is
+	// single-entry: p.dead was just set and applyDamage only reaches die on the lethal transition).
+	t.dropAllDeathLootPlayer(p)
+
 	// PLUGIN-02 (Plan 22) on_entity_death seam: fire ONCE per death here, at the discrete death
 	// occurrence — NEVER from a per-tick scan. Nil-guarded; the payload carries the dead entity's id
 	// + its wire type id (a player's type id is 0 here — the player's own Entity carries the real
