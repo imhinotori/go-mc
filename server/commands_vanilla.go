@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/imhinotori/sulfur/server/command"
@@ -27,8 +28,8 @@ import (
 //	[VERIFIED javap net.minecraft.world.level.GameType: SURVIVAL 0, CREATIVE 1, ADVENTURE 2,
 //	 SPECTATOR 3; ClientboundGameEvent Type.CHANGE_GAME_MODE id == 3.]
 const (
-	gameModeAdventure     = 2
-	gameModeSpectator     = 3
+	gameModeAdventure       = 2
+	gameModeSpectator       = 3
 	gameEventChangeGameMode = 3
 )
 
@@ -42,7 +43,79 @@ func registerVanillaCommands(g *command.Graph) {
 	registerSeed(g)
 	registerHelp(g)
 	registerMsg(g)
+	registerGamerule(g)
 }
+
+// /gamerule <rule> [value] — query or set a game rule on the level's GameRules store (gamerules.go).
+// No value -> query (commands.gamerule.query "%s is currently set to: %s"); a value -> set
+// (commands.gamerule.set "Gamerule %s is now set to: %s"). A boolean rule accepts true/false; an integer
+// rule parses a decimal int. An unknown rule id errors. v1 uses the greedy-string in-handler parse (the /tp
+// posture); a typed brigadier gamerule arg is a follow-up.
+//
+//	[VERIFIED javap net.minecraft.server.commands.GameRuleCommand: query "commands.gamerule.query",
+//	 set "commands.gamerule.set"; GameRule.set / GameRules.getRule.]
+func registerGamerule(g *command.Graph) {
+	h := permissionGated("minecraft.command.gamerule", func(ctx context.Context, args []command.ParsedData) error {
+		e, ok := executorFrom(ctx)
+		if !ok || e.p == nil {
+			return nil
+		}
+		if len(args) == 0 {
+			return errGameruleUsage
+		}
+		raw, _ := args[len(args)-1].(string)
+		fields := strings.Fields(strings.TrimSpace(raw))
+		if len(fields) == 0 {
+			return errGameruleUsage
+		}
+		if e.t.gamerules == nil {
+			e.t.gamerules = newGameRules()
+		}
+		rule := fields[0]
+		gr := e.t.gamerules
+		// A rule is a boolean OR integer rule (or neither -> unknown).
+		_, isBool := gr.bools[rule]
+		_, isInt := gr.ints[rule]
+		if !isBool && !isInt {
+			return fmt.Errorf("unknown game rule: %s", rule)
+		}
+		// Query (no value provided): report the current value.
+		if len(fields) == 1 {
+			if isBool {
+				e.t.sendSystemChat(e.p, fmt.Sprintf("%s is currently set to: %t", rule, gr.getBool(rule)))
+			} else {
+				e.t.sendSystemChat(e.p, fmt.Sprintf("%s is currently set to: %d", rule, gr.getInt(rule)))
+			}
+			return nil
+		}
+		// Set: parse the value against the rule's type.
+		val := fields[1]
+		if isBool {
+			switch strings.ToLower(val) {
+			case "true":
+				gr.setBool(rule, true)
+			case "false":
+				gr.setBool(rule, false)
+			default:
+				return fmt.Errorf("invalid boolean for %s: %s (expected true/false)", rule, val)
+			}
+			e.t.sendSystemChat(e.p, fmt.Sprintf("Gamerule %s is now set to: %t", rule, gr.getBool(rule)))
+		} else {
+			n, perr := strconv.Atoi(val)
+			if perr != nil {
+				return fmt.Errorf("invalid integer for %s: %s", rule, val)
+			}
+			gr.setInt(rule, n)
+			e.t.sendSystemChat(e.p, fmt.Sprintf("Gamerule %s is now set to: %d", rule, gr.getInt(rule)))
+		}
+		return nil
+	})
+	ruleArg := g.Argument("rule", command.StringParser(2)).HandleFunc(h)
+	g.AppendLiteral(g.Literal("gamerule").AppendArgument(ruleArg).Unhandle())
+}
+
+// errGameruleUsage is the /gamerule usage error (no rule given).
+var errGameruleUsage = errors.New("usage: /gamerule <rule> [value]")
 
 // /gamemode <mode> [player] — set the issuer's (or a target's) GameType. mode accepts the vanilla
 // name (survival/creative/adventure/spectator) or its short/number form (s/c/a/sp, 0/1/2/3).
@@ -198,7 +271,7 @@ func registerHelp(g *command.Graph) {
 		if !ok {
 			return nil
 		}
-		e.t.sendSystemChat(e.p, "Commands: /gamemode /op /deop /kill /list /seed /msg /say /me /tp /help")
+		e.t.sendSystemChat(e.p, "Commands: /gamemode /gamerule /op /deop /kill /list /seed /msg /say /me /tp /help")
 		return nil
 	})
 	g.AppendLiteral(g.Literal("help").HandleFunc(h))
@@ -294,4 +367,3 @@ func (t *TickLoop) playerByName(name string) *tickPlayer {
 	}
 	return nil
 }
-
