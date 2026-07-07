@@ -222,7 +222,10 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 	// Gated on e.skills != nil: every vanilla mob (the pig oracle) pays one nil-check and NOTHING
 	// else — zero new draws on any vanilla stream.
 	if e.skills != nil && e.health > 0 {
-		t.fireMobSkillTrigger(e, triggerDamaged, skillTriggerCtx{attackerID: src.attacker})
+		// MODEL-M5 (H.2.3): thread the resolved hit bone into the damaged-trigger context so a
+		// condition("hit_bone", value="head") can gate a headshot skill. src.hitBone is "" for every
+		// non-model hit (the pig oracle path) -> the condition fails closed, no behavior change.
+		t.fireMobSkillTrigger(e, triggerDamaged, skillTriggerCtx{attackerID: src.attacker, boneName: src.hitBone})
 	}
 }
 

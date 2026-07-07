@@ -62,6 +62,26 @@ type boneDecl struct {
 	parent string
 	// displayContext is the ItemDisplayContext id (BYTE, index 24). Default FIXED=8.
 	displayContext int8
+	// hitboxW, hitboxH are the bone's per-bone server-side hitbox size (width, height in blocks) -- the
+	// MODEL-M5 (G.1) native-advantage payoff: a real server AABB per bone so a hit can resolve WHICH
+	// bone it struck (headshots a Bukkit plugin cannot do). Optional hitbox=(w,h) on bone(); when
+	// absent both are 0 and the runtime falls back to boneHitboxDefault (a small cube) so every bone is
+	// still hittable. The box is centered at the bone's world position (base + pivot) each tick
+	// (updateBoneAABBs). VANILLA PRECEDENT: EnderDragonPart carries its own EntityDimensions (a per-part
+	// AABB) and isPickable()==true -- the multi-AABB entity pattern.
+	//
+	//	[VERIFIED javap EnderDragonPart: private final EntityDimensions size; isPickable(){iconst_1;ireturn}.]
+	hitboxW, hitboxH float32
+	// damageMult is the OPTIONAL per-bone damage multiplier applied BEFORE the hurt pipeline when a hit
+	// resolves to this bone (MODEL-M5, spec G.1 item 5): bone(damage_mult=2.0) for a head gives a
+	// server-authoritative headshot bonus. Default 0 == "unset" -> the runtime treats it as 1.0 (no
+	// change), so a bone without the arg leaves damage untouched. VANILLA PRECEDENT: EnderDragon.hurt
+	// applies a per-part damage transform (a non-head part takes damage/4.0f + Math.min(damage,1.0f)) --
+	// a per-part damage scale is a vanilla pattern, not an invention; here it is a generic multiplier.
+	//
+	//	[VERIFIED javap EnderDragon.hurt (offsets 37-57): if (part != this.head) damage = damage/4.0f +
+	//	 Math.min(damage, 1.0f); i.e. a per-part damage transform applied before reallyHurt.]
+	damageMult float32
 }
 
 // modelDecl is one captured model: its name, the ordered bone rig, and the (captured-but-unused in M2)
@@ -421,22 +441,28 @@ func (v *animationValue) Hash() (uint32, error) { return 0, nil }
 // The builtins (methods on modelRegistry so declare_model captures into byName + enforces caps)
 // ----------------------------------------------------------------------------------------------
 
-// boneBuiltin returns the `bone(name, item, pivot=(x,y,z), parent="", context=8)` builtin: it resolves
-// the item (loud error on unknown), reads the optional pivot tuple + parent + display-context, and
+// boneBuiltin returns the `bone(name, item, pivot=(x,y,z), parent="", context=8, hitbox=(w,h),
+// damage_mult=0)` builtin: it resolves the item (loud error on unknown), reads the optional pivot
+// tuple + parent + display-context + the MODEL-M5 per-bone hitbox size + damage multiplier, and
 // returns a boneValue wrapping the boneDecl. Type/item errors fire HERE (at bone()) so the author sees
 // the precise call site. Parent references are validated at declare_model (the whole rig is known then).
+// hitbox=(w,h) is the per-bone server AABB size (a headshot-resolving box, G.1); damage_mult scales the
+// damage of a hit that resolves to this bone (the EnderDragon.hurt per-part transform precedent).
 func (r *modelRegistry) boneBuiltin() *starlark.Builtin {
 	return starlark.NewBuiltin("bone", func(_ *starlark.Thread, b *starlark.Builtin,
 		args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 		var name, itemName, parent string
-		var pivotV starlark.Value
+		var pivotV, hitboxV starlark.Value
 		context := int(itemDisplayContextFixed)
+		damageMult := 0.0
 		if err := starlark.UnpackArgs(b.Name(), args, kwargs,
 			"name", &name,
 			"item", &itemName,
 			"pivot?", &pivotV,
 			"parent?", &parent,
 			"context?", &context,
+			"hitbox?", &hitboxV,
+			"damage_mult?", &damageMult,
 		); err != nil {
 			return nil, err
 		}
@@ -454,6 +480,17 @@ func (r *modelRegistry) boneBuiltin() *starlark.Builtin {
 		if context < -128 || context > 127 {
 			return nil, fmt.Errorf("bone %q: context %d out of byte range", name, context)
 		}
+		// MODEL-M5: the optional (width, height) per-bone hitbox size. A nil hitbox leaves both 0 (the
+		// runtime falls back to boneHitboxDefault). A malformed or non-positive size is a loud load error
+		// (a zero-size explicit box would silently never be hit).
+		hw, hh, err := parseHitboxTuple(hitboxV)
+		if err != nil {
+			return nil, fmt.Errorf("bone %q: %w", name, err)
+		}
+		// damage_mult must be >= 0 (a negative multiplier would heal on a hit — reject at load). 0 == unset.
+		if damageMult < 0 {
+			return nil, fmt.Errorf("bone %q: damage_mult must be >= 0", name)
+		}
 		return &boneValue{decl: boneDecl{
 			name:           name,
 			item:           stack,
@@ -462,6 +499,9 @@ func (r *modelRegistry) boneBuiltin() *starlark.Builtin {
 			pivotZ:         pz,
 			parent:         parent,
 			displayContext: int8(context),
+			hitboxW:        hw,
+			hitboxH:        hh,
+			damageMult:     float32(damageMult),
 		}}, nil
 	})
 }
@@ -497,6 +537,43 @@ func parsePivotTuple(v starlark.Value) (float32, float32, float32, error) {
 		out[i] = float32(f)
 	}
 	return out[0], out[1], out[2], nil
+}
+
+// parseHitboxTuple reads a Starlark (width, height) tuple/list of two positive numbers into two
+// float32s (the MODEL-M5 per-bone hitbox size). A nil hitbox yields (0,0) -> the runtime falls back to
+// boneHitboxDefault. A non-2-element, non-numeric, or non-positive size is a loud load error (rejected
+// at load — a zero/negative box would silently never resolve a hit).
+func parseHitboxTuple(v starlark.Value) (float32, float32, error) {
+	if v == nil {
+		return 0, 0, nil
+	}
+	var seq []starlark.Value
+	switch t := v.(type) {
+	case starlark.Tuple:
+		seq = []starlark.Value(t)
+	case *starlark.List:
+		seq = make([]starlark.Value, t.Len())
+		for i := 0; i < t.Len(); i++ {
+			seq[i] = t.Index(i)
+		}
+	default:
+		return 0, 0, fmt.Errorf("hitbox must be a (width, height) tuple, got %s", v.Type())
+	}
+	if len(seq) != 2 {
+		return 0, 0, fmt.Errorf("hitbox must have exactly 2 elements (width, height), got %d", len(seq))
+	}
+	out := [2]float32{}
+	for i, elem := range seq {
+		f, ok := starlark.AsFloat(elem)
+		if !ok {
+			return 0, 0, fmt.Errorf("hitbox[%d] must be a number, got %s", i, elem.Type())
+		}
+		if f <= 0 {
+			return 0, 0, fmt.Errorf("hitbox[%d] must be > 0", i)
+		}
+		out[i] = float32(f)
+	}
+	return out[0], out[1], nil
 }
 
 // declareModelBuiltin returns the `declare_model(name, bones=[bone(...)], animations=[])` builtin. It

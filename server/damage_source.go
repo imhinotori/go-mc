@@ -124,6 +124,13 @@ type damageSource struct {
 	// attacker is the entity id of the causing entity (DamageSource.getEntity == causingEntity);
 	// 0 = none (an environmental/anonymous source). NEVER a live *Entity pointer (the Folia rule).
 	attacker int32
+	// hitBone is the MODEL-M5 (G.1 / H.2.3) per-bone hit resolution: the name of the model bone a
+	// native per-bone raycast resolved this hit to ("" == an entity-level hit, the vanilla observable).
+	// It is NOT a vanilla DamageSource field -- it is Sulfur plugin-layer surface (the model system is
+	// NEW, free of the 1:1 mandate) threaded here so applyDamageEntity's "damaged" trigger can carry
+	// the bone into the skill-condition context (the hit_bone condition -> headshot skills). Every
+	// vanilla/non-model damage path leaves it "" (the zero value) -> the pig oracle is byte-identical.
+	hitBone string
 }
 
 // is is the port of DamageSource.is(TagKey<DamageType>) == type.is(tag): the source's damage-type id

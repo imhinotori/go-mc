@@ -237,6 +237,11 @@ func (t *TickLoop) tickModelRig(e *Entity) {
 		}
 		bone.x, bone.y, bone.z = e.x, e.y, e.z
 	}
+	// MODEL-M5 (G.1): refresh every bone's server-side hitbox AABB from the base's current position +
+	// the bone pivot, so a melee/projectile hit can resolve WHICH bone it struck (updateBoneAABBs is
+	// gated on e.model != nil internally -- a modelless mob never reaches here). Anchored to the base
+	// each tick exactly as the bone-display coordinate copy above, so the boxes track the mob for free.
+	updateBoneAABBs(e)
 }
 
 // --- MODEL-M3: the keyframe animator ---------------------------------------------------------------

@@ -204,7 +204,6 @@ func (t *TickLoop) applyPlayAnimation(e *Entity, m *mechanicDecl) {
 // skillConditionHolds evaluates one condition against the CASTER. Unknown kinds cannot reach here
 // (rejected at load); the switch is exhaustive over the slice-1 set.
 func (t *TickLoop) skillConditionHolds(e *Entity, c *conditionDecl, ctx skillTriggerCtx) bool {
-	_ = ctx // MODEL-M3 H.2.2: threaded now (bone/attacker conditions land in M5); no slice-1 reader yet.
 	switch c.kind {
 	case "health_below":
 		max := float32(entityMaxHealth(e))
@@ -212,6 +211,12 @@ func (t *TickLoop) skillConditionHolds(e *Entity, c *conditionDecl, ctx skillTri
 			return false
 		}
 		return e.health < float32(c.value)*max
+	case "hit_bone":
+		// MODEL-M5 (H.2.3): the headshot gate. Holds iff the fire's resolved bone (ctx.boneName, threaded
+		// by applyDamageEntity from the per-bone hit raycast) equals the declared bone name. An
+		// entity-level hit (or any non-per-bone trigger) carries boneName "" and FAILS CLOSED -- so a
+		// hit_bone skill never fires on a body/entity hit, only on the named bone.
+		return ctx.boneName != "" && ctx.boneName == c.strValue
 	default:
 		return false // unreachable (load-validated); fail closed
 	}

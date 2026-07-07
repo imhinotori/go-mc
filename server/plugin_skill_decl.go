@@ -84,8 +84,12 @@ type mechanicDecl struct {
 
 // conditionDecl is one captured condition (AND-ed; all must hold for the skill to fire).
 type conditionDecl struct {
-	kind  string  // "health_below"
+	kind  string  // "health_below" | "hit_bone"
 	value float64 // health_below: fraction of MaxHealth in (0, 1]
+	// strValue is the string-typed condition value. hit_bone (MODEL-M5, H.2.3): the bone name a hit must
+	// have resolved to for the skill to fire (the headshot gate -- condition("hit_bone", value="head")).
+	// Empty for the numeric conditions.
+	strValue string
 }
 
 // skillDecl is one captured skill: trigger + gates + targeter + ordered mechanics. Immutable after
@@ -309,21 +313,37 @@ func (r *mobRegistry) conditionBuiltin() *starlark.Builtin {
 	return starlark.NewBuiltin("condition", func(_ *starlark.Thread, b *starlark.Builtin,
 		args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 		var kind string
-		var value float64
+		var valueV starlark.Value
 		if err := starlark.UnpackArgs(b.Name(), args, kwargs,
 			"kind", &kind,
-			"value", &value,
+			"value", &valueV,
 		); err != nil {
 			return nil, err
 		}
 		switch kind {
 		case "health_below":
+			value, ok := starlark.AsFloat(valueV)
+			if !ok {
+				return nil, fmt.Errorf("condition %q: value must be a number, got %s", kind, valueV.Type())
+			}
 			if value <= 0 || value > 1 {
 				return nil, fmt.Errorf("condition %q: value must be a MaxHealth fraction in (0, 1]", kind)
 			}
 			return &conditionValue{decl: conditionDecl{kind: kind, value: value}}, nil
+		case "hit_bone":
+			// MODEL-M5 (H.2.3): the headshot gate. value is the bone NAME the hit must have resolved to
+			// (a string). A non-string or empty value is a loud load error (an empty bone name would gate
+			// on an entity-level hit, which never carries a bone -- reject it at load).
+			bone, ok := starlark.AsString(valueV)
+			if !ok {
+				return nil, fmt.Errorf("condition %q: value must be a bone name string, got %s", kind, valueV.Type())
+			}
+			if bone == "" {
+				return nil, fmt.Errorf("condition %q: value must be a non-empty bone name", kind)
+			}
+			return &conditionValue{decl: conditionDecl{kind: kind, strValue: bone}}, nil
 		default:
-			return nil, fmt.Errorf("condition: unknown kind %q (valid: health_below)", kind)
+			return nil, fmt.Errorf("condition: unknown kind %q (valid: health_below, hit_bone)", kind)
 		}
 	})
 }

@@ -353,6 +353,20 @@ func (t *TickLoop) handleMobAttack(p *tickPlayer, targetID int32) {
 	// float total = damage + enchBonus (enchBonus 0 in v1).
 	total := damage + enchBonus
 
+	// MODEL-M5 (G.1 / H.2.3): NATIVE PER-BONE HIT RESOLUTION. For a MODELED mob, cast the attacker's
+	// eye-line through the mob's per-bone server AABBs and resolve the closest bone struck. This is a
+	// strictly ADDITIONAL layer on top of the vanilla-faithful reach-gated hit above -- the hit/no-hit
+	// observable is unchanged; the bone id only (a) feeds the declared per-bone damage multiplier (the
+	// EnderDragon.hurt per-part transform precedent, applied here BEFORE the hurt pipeline exactly where
+	// the dragon applies its per-part scale) and (b) rides the damage source into the "damaged" trigger
+	// as ctx.boneName (the hit_bone condition -> headshots). A modelless mob resolves to ("", 1.0) so
+	// the whole block is a no-op for the pig oracle -- total unchanged, src.hitBone "".
+	if mob.model != nil {
+		boneName, mult := t.resolveMeleeHitBone(p, mob)
+		src.hitBone = boneName
+		total *= mult
+	}
+
 	// boolean sweep = isSweepAttack(fullStrength, crit, sprintKb). The sweep gate is ATTACKER-only (it
 	// reads onGround, knownMovement, getSpeed and the held-item SWORDS tag — none depend on the victim
 	// type), so it reuses the SAME isSweepAttack the player branch uses (holdingSword false in v1 -> the
