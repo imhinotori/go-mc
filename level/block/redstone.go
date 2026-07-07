@@ -836,6 +836,39 @@ func buttonFaceFacing(s StateID) (AttachFace, Direction, bool) {
 	}
 }
 
+// IsRedstoneLamp reports whether the state is a redstone_lamp. CITE: RedstoneLampBlock.
+func IsRedstoneLamp(s StateID) bool {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return false
+	}
+	_, ok := StateList[s].(RedstoneLamp)
+	return ok
+}
+
+// LampLit returns the LIT property of a redstone_lamp, or false if not a lamp. CITE: RedstoneLampBlock.LIT.
+func LampLit(s StateID) bool {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return false
+	}
+	if b, ok := StateList[s].(RedstoneLamp); ok {
+		return bool(b.Lit)
+	}
+	return false
+}
+
+// LampWithLit resolves the lamp state with LIT set to `lit`. Returns (s, false) if not a lamp.
+// CITE: RedstoneLampBlock.neighborChanged/tick (state.setValue(LIT, ...)).
+func LampWithLit(s StateID, lit bool) (StateID, bool) {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return s, false
+	}
+	if b, ok := StateList[s].(RedstoneLamp); ok {
+		b.Lit = Boolean(lit)
+		return lookup(b)
+	}
+	return s, false
+}
+
 // lookup resolves the state id for a fully-populated block struct via the reverse map.
 func lookup(b Block) (StateID, bool) {
 	sid, ok := ToStateID[b]

@@ -887,6 +887,22 @@ func (t *TickLoop) drainRedstoneUpdates(q *redstoneUpdateQueue) {
 			// HopperBlock.neighborChanged -> checkPoweredState: a hopper is LOCKED (ENABLED=false) while any
 			// neighbor emits signal, unlocked otherwise (hopper_be.go). CITE: HopperBlock.neighborChanged.
 			t.hopperNeighborChanged(pos, state)
+		case block.IsRedstoneLamp(state):
+			// RedstoneLampBlock.neighborChanged: lit = getValue(LIT); if (lit != hasNeighborSignal(pos)) {
+			// if (lit) scheduleTick(pos, this, 4) [delayed unlight]; else setBlock(cycle(LIT)) [instant light] }.
+			// The 4-tick unlight delay routes through the scheduled tickBlock (block_ticks.go). CITE:
+			// RedstoneLampBlock.neighborChanged.
+			lit := block.LampLit(state)
+			signal := t.hasNeighborSignal(pos)
+			if lit != signal {
+				if lit {
+					t.scheduleBlockTick(pos, redstoneLampTickType, 4) // delayed unlight (RedstoneLampBlock.tick)
+				} else if on, ok := block.LampWithLit(state, true); ok {
+					if t.world().SetBlock(pos, on, dimMinY) {
+						t.broadcastBlockUpdate(pos, on)
+					}
+				}
+			}
 		case isTntBlock(state):
 			// TntBlock.neighborChanged (shared logic with onPlace): if the block now has a neighbor signal,
 			// prime the TNT (spawn a PrimedTnt) and removeBlock. This fires on a redstone rising edge that

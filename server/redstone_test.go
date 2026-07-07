@@ -307,3 +307,43 @@ func TestWireStepDownConnection(t *testing.T) {
 		t.Fatalf("stepped-down wire POWER = %d, want 14", got)
 	}
 }
+
+// TestRedstoneLampLightsAndUnlights (D-R2): a redstone lamp lights INSTANTLY when a neighbor powers it
+// (RedstoneLampBlock.neighborChanged: !lit && hasNeighborSignal -> setBlock LIT=true), and unlights after
+// a 4-tick scheduled delay when the signal is removed (lit && !signal -> scheduleTick(4); tick clears LIT).
+func TestRedstoneLampLightsAndUnlights(t *testing.T) {
+	loop, mgr := newRedstoneLoop()
+
+	lampPos := pk.Position{X: 4, Y: 64, Z: 4}
+	mgr.SetBlock(lampPos, block.ToStateID[block.RedstoneLamp{Lit: false}], dimMinY)
+
+	// A powered lever directly east of the lamp (a strong source adjacent to the lamp cell).
+	leverPos := pk.Position{X: 5, Y: 64, Z: 4}
+	mgr.SetBlock(leverPos, block.ToStateID[block.Lever{Face: block.AttachFaceWall, Facing: block.East, Powered: true}], dimMinY)
+
+	// Fire the neighbor update at the lever cell → the lamp (its neighbor) reacts and lights instantly.
+	loop.onRedstoneEdit(leverPos)
+	if s, _ := mgr.GetBlock(lampPos, dimMinY); !block.LampLit(s) {
+		t.Fatal("lamp did not light when an adjacent lever powered it")
+	}
+
+	// Remove the lever's power: neighborChanged sees lit && !signal → schedules a 4-tick unlight.
+	mgr.SetBlock(leverPos, block.ToStateID[block.Lever{Face: block.AttachFaceWall, Facing: block.East, Powered: false}], dimMinY)
+	loop.onRedstoneEdit(leverPos)
+	if !loop.hasScheduledBlockTick(lampPos, redstoneLampTickType) {
+		t.Fatal("lamp should schedule a 4-tick unlight when its power is removed")
+	}
+	// Still lit until the scheduled tick fires.
+	if s, _ := mgr.GetBlock(lampPos, dimMinY); !block.LampLit(s) {
+		t.Fatal("lamp unlit before its 4-tick delay elapsed")
+	}
+
+	// Advance 4 ticks; the scheduled unlight fires and clears LIT.
+	for i := 0; i < 4; i++ {
+		loop.gametime++
+		loop.tickScheduledBlocks()
+	}
+	if s, _ := mgr.GetBlock(lampPos, dimMinY); block.LampLit(s) {
+		t.Fatal("lamp still lit after the 4-tick unlight delay")
+	}
+}

@@ -66,6 +66,11 @@ const (
 	// re-checks whether a minecart is still on it and, if not, clears POWERED. CITE: DetectorRailBlock.tick
 	// (`if (!POWERED) return; checkPressed(...)`) + checkPressed's `level.scheduleTick(pos, this, 20)`.
 	detectorRailTickType blockTickType = "minecraft:detector_rail"
+
+	// redstoneLampTickType is the block id the redstone-lamp DELAYED UNLIGHT is scheduled/dispatched
+	// under: a LIT lamp that loses its neighbor signal schedules a tick 4 later (RedstoneLampBlock
+	// .neighborChanged) that, if still lit and still unpowered, clears LIT (RedstoneLampBlock.tick).
+	redstoneLampTickType blockTickType = "minecraft:redstone_lamp"
 )
 
 // lightningRodTickTypes is the set of block ids the lightning-rod unpower tick (LightningRodBlock.tick)
@@ -336,6 +341,20 @@ func (t *TickLoop) tickBlock(pos pk.Position, typ blockTickType) {
 			return
 		}
 		t.dispenserTick(state, pos)
+	case redstoneLampTickType:
+		// RedstoneLampBlock.tick (the scheduled 4-tick delayed unlight): `if (LIT && !hasNeighborSignal)
+		// setBlock(cycle(LIT), 3)`. The stale guard is IsRedstoneLamp; a lamp re-powered within the 4 ticks
+		// (still lit, now has signal) leaves LIT alone. CITE: RedstoneLampBlock.tick.
+		if !block.IsRedstoneLamp(state) {
+			return
+		}
+		if block.LampLit(state) && !t.hasNeighborSignal(pos) {
+			if off, ok := block.LampWithLit(state, false); ok {
+				if t.world().SetBlock(pos, off, dimMinY) {
+					t.broadcastBlockUpdate(pos, off)
+				}
+			}
+		}
 	default:
 		// Buttons schedule under their own block id (13 variants). Route any button tick to the unpress
 		// handler; the IsButton guard is the tickBlock `state.is(block)` stale check.
