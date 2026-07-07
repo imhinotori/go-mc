@@ -320,3 +320,36 @@ func TestFurnaceShiftClickSmeltableToInput(t *testing.T) {
 		t.Fatalf("fuel slot must stay empty (smeltable routes to input, not fuel): %+v", f.items[furnaceSlotFuel])
 	}
 }
+
+// TestFurnaceSetItemInitializesCookTime (D-BE1): the container setItem path (used by hoppers) must
+// initialize cookingTotalTime when a NEW input item arrives, exactly like AbstractFurnaceBlockEntity
+// .setItem. A virgin furnace fed via setItem (not the menu) previously kept cookingTotalTime==0 and
+// never cooked.
+func TestFurnaceSetItemInitializesCookTime(t *testing.T) {
+	loop, _, pos := furnaceLoop(t)
+	state, _ := loop.only().world.GetBlock(pos, dimMinY)
+	f := loop.resolveFurnace(pos, state)
+	if f == nil {
+		t.Fatal("resolveFurnace nil")
+	}
+	if f.cookingTotalTime != 0 {
+		t.Fatalf("precondition: virgin furnace cookingTotalTime = %d, want 0", f.cookingTotalTime)
+	}
+
+	c := &furnaceContainer{t: loop, pos: pos, f: f}
+	// The hopper path: setItem the input with a smeltable. cookingTotalTime must jump to the recipe time.
+	c.setItem(furnaceSlotInput, component.SlotData{ItemID: idIronOre, Count: 1})
+	if f.cookingTotalTime != 200 {
+		t.Fatalf("after setItem(input, iron_ore) cookingTotalTime = %d, want 200 (getTotalCookTime)", f.cookingTotalTime)
+	}
+	if f.cookingTimer != 0 {
+		t.Fatalf("cookingTimer = %d, want 0 (reset on new input)", f.cookingTimer)
+	}
+
+	// Re-setting the SAME item does NOT reset the timer (flag = isSameItem → no reset).
+	f.cookingTimer = 50
+	c.setItem(furnaceSlotInput, component.SlotData{ItemID: idIronOre, Count: 2})
+	if f.cookingTimer != 50 {
+		t.Fatalf("same-item setItem reset cookingTimer to %d, want 50 (no reset on same item)", f.cookingTimer)
+	}
+}

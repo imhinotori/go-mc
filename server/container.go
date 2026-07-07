@@ -369,10 +369,22 @@ func (c *furnaceContainer) setItem(slot int, stack component.SlotData) {
 	if slot < 0 || slot >= len(c.f.items) {
 		return
 	}
+	// AbstractFurnaceBlockEntity.setItem (bytecode): flag = !stack.isEmpty() &&
+	// isSameItemSameComponents(old, stack) — i.e. the SAME item is being (re)set. Snapshot old BEFORE the
+	// write. This path is used by hoppers (hopperAddItem → setItem) — the menu path does its own reset, so
+	// without this a hopper-fed virgin furnace kept cookingTotalTime == 0 and never cooked (D-BE1).
+	old := c.f.items[slot]
+	sameItem := !stackEmpty(stack) && !stackEmpty(old) && int32(old.ItemID) == int32(stack.ItemID)
 	if stackEmpty(stack) {
 		stack = component.SlotData{Count: 0}
 	}
 	c.f.items[slot] = stack
+	// `if (slot == SLOT_INPUT && !flag) { cookingTotalTime = getTotalCookTime(); cookingTimer = 0;
+	// setChanged(); }` — a NEW input item (re)starts the cook timer. Cite AbstractFurnaceBlockEntity.setItem.
+	if slot == furnaceSlotInput && !sameItem {
+		c.f.cookingTotalTime = c.f.getTotalCookTime()
+		c.f.cookingTimer = 0
+	}
 }
 func (c *furnaceContainer) isEmpty() bool {
 	for _, s := range c.f.items {
