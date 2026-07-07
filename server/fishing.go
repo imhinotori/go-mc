@@ -30,8 +30,8 @@ package server
 //     vanilla no-enchant default). Structured to become a real read when enchants land.
 //   - The DATA_HOOKED_ENTITY / DATA_BITING synced metadata (the client's taut-line + bob visuals) is
 //     CITE-DEFERRED (client cosmetic); the server-side biting flag + hooked id drive the gameplay.
-//   - Durability hurt on the rod (FishingRodItem's hurtAndBreak) is CITE-DEFERRED (no item-durability
-//     subsystem yet); the cast/reel still works.
+//   - Durability hurt on the rod (FishingRodItem's hurtAndBreak) is WIRED (hurtHeldItem, durability.go): the
+//     rod wears by the retrieve return (entity 5 / item 3 / loot 1 / on-ground 2) and breaks at max.
 //   - Hooking a MOB/ItemEntity (checkCollision -> onHitEntity -> setHookedEntity) is CITE-DEFERRED
 //     (needs the swept entity-hit against non-player entities); the retrieve PULL of a hooked entity is
 //     ported and fires when fishingHookedID is set. The FISH catch is the primary target and is REAL.
@@ -109,7 +109,12 @@ func (t *TickLoop) tryUseFishingRod(p *tickPlayer, held component.SlotData, hand
 		// Reel: hook.retrieve(stack) then discard the bobber (retrieve calls discard internally).
 		hook := t.entityByIDAnyRegion(p.fishingHookID)
 		if hook != nil {
-			t.fishingRetrieve(hook, p)
+			// FishingRodItem.use: itemStack.hurtAndBreak(hook.retrieve(itemStack), player, hand). The
+			// retrieve return IS the durability damage (entity 5 / item-entity 3 / loot 1 / on-ground 2 / 0).
+			dmg := t.fishingRetrieve(hook, p)
+			if dmg > 0 {
+				t.hurtHeldItem(p, ensureInventory(p), dmg)
+			}
 		} else {
 			// The bobber vanished (e.g. discarded last tick); clear the stale link so the next
 			// use casts fresh. (updateOwnerInfo(null) sets owner.fishing = null on discard.)

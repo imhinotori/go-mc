@@ -233,10 +233,12 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 	// tryIgnitePortalWithFlintAndSteel returns true when it consumed the action (a portal was made); when
 	// it returns false (no frame completed) v1 places nothing — the plain-fire path is a cited follow-up.
 	// CITE: FlintAndSteelItem.useOn -> BaseFireBlock.canBePlacedAt/isPortal -> FireBlock.onPlace -> PortalShape.
-	// flint_and_steel item id 919 (data/item/item.go). Durability (hurtAndBreak) DEFERRED — no item-durability
-	// subsystem; the ignite still works.
+	// flint_and_steel item id 919 (data/item/item.go). FlintAndSteelItem.useOn calls hurtAndBreak(1, ...)
+	// AFTER a successful ignite — so wear the flint&steel by 1 only when the ignite consumed the action.
 	if !slotIsEmpty(held) && int32(held.ItemID) == int32(item.FlintAndSteel.ID) {
-		t.tryIgnitePortalWithFlintAndSteel(p, pos, int(direction))
+		if t.tryIgnitePortalWithFlintAndSteel(p, pos, int(direction)) {
+			t.hurtHeldItem(p, inv, 1) // ItemStack.hurtAndBreak(1, player, hand)
+		}
 		return
 	}
 

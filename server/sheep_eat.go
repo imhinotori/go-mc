@@ -27,8 +27,8 @@ package server
 //     in ahead of the config pick later. The breed-offspring color (Sheep.getBreedOffspring -> getMixedColor,
 //     which needs the dye-mixing recipe subsystem) is CITE-DEFERRED (the sheep has no host breed path yet;
 //     breed() is pig-specific).
-//   - itemStack.hurtAndBreak(1, ...) (shears durability -1) is realized as a held-item shrink-by-1 (v1 has
-//     no per-item durability subsystem) — see trySheepShear; documented there.
+//   - itemStack.hurtAndBreak(1, ...) (shears durability -1) is now WIRED (hurtHeldItem, durability.go): the
+//     shears take 1 durability and break at max — see trySheepShear; documented there.
 
 import (
 	"math"
@@ -131,7 +131,7 @@ func (t *TickLoop) sheepSetColor(e *Entity, colorID byte) {
 //	    if (ServerLevel && readyForShearing()) {        // readyForShearing = !isSheared() && !isBaby()
 //	        shear(sl, SoundSource.PLAYERS, itemStack);
 //	        gameEvent(GameEvent.SHEAR, player);          // cite-deferred: no gameEvent seam, no net effect
-//	        itemStack.hurtAndBreak(1, player, ...);      // shears durability -1 (v1 = held-item shrink 1)
+//	        itemStack.hurtAndBreak(1, player, ...);      // shears durability -1 (hurtHeldItem: breaks at max)
 //	        return SUCCESS_SERVER;
 //	    }
 //	    return CONSUME;                                  // not ready -> consume, NO fall-through to feed
@@ -153,9 +153,9 @@ func (t *TickLoop) trySheepShear(p *tickPlayer, mob *Entity) bool {
 	if mob.sheared || mob.isBaby() {
 		return true // !readyForShearing() -> CONSUME (no shear, no feed fall-through)
 	}
-	t.shearSheep(mob)        // shear(): SHEEP_SHEAR sound + white-wool drop + setSheared(true)
-	t.shrinkHeldItem(p, inv) // hurtAndBreak(1): v1 held-item shrink by 1 (no durability subsystem)
-	return true              // SUCCESS_SERVER
+	t.shearSheep(mob)         // shear(): SHEEP_SHEAR sound + white-wool drop + setSheared(true)
+	t.hurtHeldItem(p, inv, 1) // itemStack.hurtAndBreak(1, player, hand): shears durability -1 (breaks at max)
+	return true               // SUCCESS_SERVER
 }
 
 // shearSheep is net.minecraft.world.entity.animal.sheep.Sheep.shear(level, src, tool) — the actual shear:

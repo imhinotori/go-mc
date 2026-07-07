@@ -217,6 +217,11 @@ func (t *TickLoop) handleAttack(p *tickPlayer, pkt pk.Packet) {
 	// attackVisualEffects / setLastHurtMob / itemAttackInteraction / damageStatsAndHearts: v1 stubs
 	// (no crit particles, no mob-attribution, no item-on-hit, no stats yet).
 
+	// WEAPON DURABILITY (ItemStack.postHurtEnemy): a landed hit wears a held weapon by its
+	// item_damage_per_attack (a sword loses 1/hit, breaks at max). No-op for a fist / non-weapon / creative.
+	// Cite Player.attack -> ItemStack.postHurtEnemy(target, this).
+	t.postHurtEnemyDurability(p)
+
 	// causeFoodExhaustion(0.1F) — the attack costs hunger. Ported below; v1 applies it to the
 	// attacker's food/saturation faithfully.
 	t.causeFoodExhaustion(p, 0.1)
@@ -364,6 +369,11 @@ func (t *TickLoop) handleMobAttack(p *tickPlayer, targetID int32) {
 	//	 lastHurtMobTimestamp = tickCount.]
 	p.lastHurtMob = mob.id
 	p.lastHurtMobTimestamp = int32(t.gametime)
+
+	// WEAPON DURABILITY (ItemStack.postHurtEnemy): on a landed hit, a held weapon takes its
+	// item_damage_per_attack durability (a sword wears 1/hit, breaks at max). No-op for a fist / non-weapon
+	// / creative. Cite Player.attack -> ItemStack.postHurtEnemy(target, this).
+	t.postHurtEnemyDurability(p)
 
 	t.causeFoodExhaustion(p, 0.1)
 }

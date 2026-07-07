@@ -439,6 +439,12 @@ func (t *TickLoop) destroyBlock(p *tickPlayer, pos pk.Position, air block.StateI
 		// nothing (gated inside spawnBlockDrop). Lands in the OWNING region's store (cur().entities.add).
 		t.spawnBlockDrop(p, pos, brokenState)
 
+		// TOOL DURABILITY (ItemStack.mineBlock -> Item.mineBlock): a survival break with a tool whose TOOL
+		// component has damage_per_block>0 on a non-zero-hardness block wears the tool by that much (and
+		// breaks it at max). Creative / non-tool / zero-hardness wears nothing (gated inside). Covers BOTH
+		// the ack and delayed-destroy paths — destroyBlock is the single break funnel. Cite Item.mineBlock.
+		t.mineBlockDurability(p, brokenState)
+
 		// POI-01: deregister the broken block's Point of Interest (a bed HOME / bell MEETING) — the
 		// LevelChunk.setBlockState -> ServerLevel.updatePOIOnBlockStateChange hook for the break-to-air
 		// transition. A no-op for a non-POI block. Runs in the owning region's context (t.cur()).
