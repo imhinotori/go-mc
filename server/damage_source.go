@@ -86,6 +86,11 @@ var (
 	// the throwing player). The 1.0 direct hit; the gust knockback is a separate wind-burst explosion. Cite
 	// AbstractWindCharge.onHitEntity (hurtServer(windCharge, 1.0)).
 	damageTypeWindCharge = damageTypeID(tag.DamageTypeIDs["minecraft:wind_charge"])
+	// damageTypeOutOfWorld is minecraft:out_of_world — the source DamageSources.fellOutOfWorld() deals
+	// when an entity falls below minY-64 (Entity.checkBelowWorld -> LivingEntity.onBelowWorld:
+	// hurt(fellOutOfWorld(), 4.0F)). A bypasses_invulnerability member, so it kills even a creative
+	// player. Cite Entity.checkBelowWorld / LivingEntity.onBelowWorld / DamageSources.fellOutOfWorld.
+	damageTypeOutOfWorld = damageTypeID(tag.DamageTypeIDs["minecraft:out_of_world"])
 )
 
 // damageSourceOf builds a DamageSource for an environmental/anonymous source: the given damage-type

@@ -38,6 +38,39 @@ func TestCreativeInvulnerable(t *testing.T) {
 	}
 }
 
+// TestVoidDamage: a player below minY-64 takes 4.0 out_of_world damage per tick (Entity.checkBelowWorld
+// -> LivingEntity.onBelowWorld); it bypasses invulnerability so even a creative player takes it.
+func TestVoidDamage(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+
+	deep := combatPlayer(loop, 1)
+	deep.y = float64(dimMinYFor(dimOverworld)-64) - 1 // just below the void threshold
+	loop.players = append(loop.players, deep)
+
+	// A player at normal height takes nothing.
+	high := combatPlayer(loop, 2)
+	high.y = 64
+	loop.players = append(loop.players, high)
+
+	// A creative player in the void still takes it (out_of_world bypasses invulnerability).
+	creativeDeep := combatPlayer(loop, 3)
+	creativeDeep.gameMode = gameModeCreative
+	creativeDeep.y = float64(dimMinYFor(dimOverworld)-64) - 1
+	loop.players = append(loop.players, creativeDeep)
+
+	loop.tickBelowWorld()
+
+	if deep.health != maxHealth-4 {
+		t.Fatalf("void player health = %v, want %v (4.0 out_of_world/tick)", deep.health, maxHealth-4)
+	}
+	if high.health != maxHealth {
+		t.Fatalf("player above the void took damage: health = %v", high.health)
+	}
+	if creativeDeep.health != maxHealth-4 {
+		t.Fatalf("creative void player health = %v, want %v (out_of_world bypasses invulnerability)", creativeDeep.health, maxHealth-4)
+	}
+}
+
 // TestCreativeNoFoodExhaustion: a creative player never accrues exhaustion (Player.causeFoodExhaustion
 // early-returns on abilities.invulnerable); a survival player does.
 func TestCreativeNoFoodExhaustion(t *testing.T) {

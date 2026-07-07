@@ -258,6 +258,11 @@ func (t *TickLoop) tickEntities() {
 	t.syncJoinInventories()
 	t.tickFallDamage()
 
+	// Void damage: Entity.checkBelowWorld (`if (getY() < minY-64) onBelowWorld()`); a player below the
+	// void threshold takes 4.0 out_of_world damage/tick. Sibling of tickFallDamage; ADDITIVE, no new
+	// trace entry (TestTickPhaseOrder unaffected). Its body lives in fall_damage.go.
+	t.tickBelowWorld()
+
 	// Suffocation: the IN_WALL branch of LivingEntity.baseTick (`if isInWall() hurtServer(inWall(),
 	// 1.0F)`). In vanilla baseTick this check runs BEFORE the air/drowning branch, so it is placed
 	// here ahead of tickBreath. Its body lives in suffocation.go; a single ADDITIVE call inside this

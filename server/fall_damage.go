@@ -179,6 +179,24 @@ func (t *TickLoop) tickFallDamage() {
 	}
 }
 
+// tickBelowWorld ports Entity.checkBelowWorld for a player: `if (getY() < level.getMinY() - 64)
+// onBelowWorld()`, and LivingEntity.onBelowWorld = `hurt(fellOutOfWorld(), 4.0F)`. Below the void
+// threshold the player takes 4.0 out_of_world damage per tick until it dies. out_of_world is a
+// bypasses_invulnerability source, so it kills even a creative player (matching vanilla — you fall
+// forever in creative only because the client stops you; server-authoritatively the void still bites).
+// The threshold uses the player's own dimension minY (dimMinYFor). Sibling of tickFallDamage/tickBreath;
+// runs in tickEntities. Cite Entity.checkBelowWorld / LivingEntity.onBelowWorld.
+func (t *TickLoop) tickBelowWorld() {
+	for _, p := range t.players {
+		if p == nil || p.dead {
+			continue
+		}
+		if p.y < float64(dimMinYFor(playerDimOr(p))-64) {
+			t.applyDamage(p, damageSourceOf(damageTypeOutOfWorld), 4.0)
+		}
+	}
+}
+
 // checkFallDamage mirrors Entity.checkFallDamage(double deltaY, boolean onGround, BlockState, BlockPos):
 //
 //	if (!isInWater() && deltaY < 0.0) this.fallDistance -= (double)(float) deltaY;
