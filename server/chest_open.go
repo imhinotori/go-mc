@@ -306,9 +306,14 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 	isEnchant := isEnchantingTableBlock(state)
 	isGrindstone := isGrindstoneBlock(state)
 	isSmithing := isSmithingTableBlock(state)
+	// D-I1: a door / trapdoor / fence-gate right-click TOGGLES its OPEN (DoorBlock/TrapDoorBlock/
+	// FenceGateBlock.useWithoutItem) and consumes the interaction so no block is placed. Iron doors/
+	// trapdoors reject a hand click (canOpenByHand=false -> PASS) inside the dispatch. CITE:
+	// DoorBlock/TrapDoorBlock/FenceGateBlock.useWithoutItem.
+	isDoorFamily := block.IsDoor(state) || block.IsTrapdoor(state) || block.IsFenceGate(state)
 	if !isChest && !isCraft && !isCut && !isBed && !isFurnace && !isBrew && !isLever && !isButton &&
 		!isRepeater && !isComparator && !isDispenser && !isHopper && !isBeacon && !isAnvil && !isEnchant &&
-		!isGrindstone && !isSmithing {
+		!isGrindstone && !isSmithing && !isDoorFamily {
 		return false // not an interactive block: PASS → placement runs
 	}
 	// Reach-gate the interaction (the same server-authoritative reach the place/break paths use):
@@ -316,6 +321,14 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 	// distance; reusing withinReach keeps the open under the same bound.
 	if !t.withinReach(p, hitPos) {
 		return false
+	}
+	if isDoorFamily {
+		// tryDoorInteraction toggles OPEN 1:1 with vanilla (door double-half sync, fence-gate faces the
+		// player, iron material hand-gate). Returns false for an iron door/trapdoor hand-reject (PASS),
+		// so placement continues exactly as vanilla's useItemOn continuation. CITE: door_interact.go.
+		if t.tryDoorInteraction(hitPos, state, p) {
+			return true
+		}
 	}
 	if isLever {
 		return t.useLever(hitPos, state) // LeverBlock.pull: cycle POWERED + updateNeighbours.
