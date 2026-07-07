@@ -74,6 +74,13 @@ type pathRegion struct {
 	// solid (same idx). Built by snapshotRegion; immutable thereafter. A cell may be BOTH a fluid and
 	// non-solid (water/lava are non-solid), so this is a SEPARATE array, not folded into solid.
 	fluid []pathFluid
+	// blockType is the per-cell ported getPathTypeFromState result (path_type.go classifyBlockPathType),
+	// frozen on the tick by snapshotRegion so the pure off-tick A* can classify hazards (cactus, fire,
+	// fence, door, rail, ...) WITHOUT a live world read. int16 with -1 == UNCLASSIFIED: a test region
+	// that only sets solid/fluid leaves it -1, and blockTypeAt then derives the type from solid+fluid
+	// (byte-identical to the pre-C-2 solidity model). snapshotRegion sets every cell, so the live path
+	// reads the real classification.
+	blockType []int16
 }
 
 // newPathRegion allocates an all-air region over the inclusive box. The builder
@@ -92,8 +99,9 @@ func newPathRegion(minX, minY, minZ, maxX, maxY, maxZ int) *pathRegion {
 		minX: minX, minY: minY, minZ: minZ,
 		maxX: maxX, maxY: maxY, maxZ: maxZ,
 		dx: dx, dy: dy, dz: dz,
-		solid: make([]bool, dx*dy*dz),
-		fluid: make([]pathFluid, dx*dy*dz),
+		solid:     make([]bool, dx*dy*dz),
+		fluid:     make([]pathFluid, dx*dy*dz),
+		blockType: newUnclassified(dx * dy * dz),
 	}
 }
 
@@ -206,6 +214,10 @@ func snapshotRegion(w *world.ChunkManager, e *Entity, tx, ty, tz int, followRang
 				} else if _, isWater := waterLevelOf(s); isWater {
 					r.setFluid(x, y, z, pathFluidWater)
 				}
+				// Full block -> PathType classification (path_type.go classifyBlockPathType, the ported
+				// getPathTypeFromState) so the pure off-tick A* can see hazards (cactus/fire/fence/door/rail/
+				// leaves/...) it cannot re-read from a live world. Frozen here on the tick; read via blockTypeAt.
+				r.setBlockType(x, y, z, classifyBlockPathType(s))
 			}
 		}
 	}

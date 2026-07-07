@@ -193,23 +193,27 @@ func mobAirCells(mobH float64) int {
 // v1 superflat only ever produces OPEN/WALKABLE/BLOCKED; WATER/LAVA appear only where those fluids
 // are placed (turtle oceans, nether — the wider worlds), and their jar malus now re-costs the path.
 func getPathType(r *pathRegion, x, y, z int, mobH float64) pathType {
-	// Fluid at the FEET cell (getPathTypeFromState precedence: LAVA before WATER, before solidity).
-	switch r.fluidAt(x, y, z) {
-	case pathFluidLava:
-		return pathLava
-	case pathFluidWater:
-		return pathWater
+	// FEET-cell classification first (getPathTypeStatic precedence: the feet block's own type -- LAVA,
+	// WATER, CACTUS->DAMAGING, FIRE, FENCE, etc -- before the standing/solidity fold). A non-OPEN feet
+	// type (a fluid or a hazard block the mob is standing IN) is returned as-is, exactly as the jar
+	// returns the feet getPathTypeFromState when it is not OPEN.
+	if t := r.blockTypeAt(x, y, z); t != pathOpen {
+		return t
 	}
+	// Feet cell is OPEN (air). Fold the mob body-BB clearance (getPathTypeWithinMobBB): if any body cell
+	// the mob would occupy (y .. y+ceil(h)-1) is a solid collider, the mob cannot stand here -> BLOCKED.
+	// This preserves the pre-C-2 solidity model (a ceiling above the feet still blocks the node).
 	cells := mobAirCells(mobH)
 	for i := 0; i < cells; i++ {
 		if r.solidAt(x, y+i, z) {
 			return pathBlocked // the mob body would intersect a solid block
 		}
 	}
-	if r.solidAt(x, y-1, z) {
-		return pathWalkable // solid floor below, clear body above
-	}
-	return pathOpen // clear body, no floor (a drop / air node)
+	// Body is clear: getPathTypeStatic decides WALKABLE (solid floor below, via checkNeighbourBlocks so
+	// a floor-cell next to lava/fire/cactus becomes a DANGER_* type) vs the ON_TOP_OF_* stacked-hazard
+	// standing types vs OPEN (no floor -> a drop node). This is the C-2 hazard classification: the
+	// per-type malus (path_type.go) then feeds the A* cost so a mob AVOIDS danger and never enters lava.
+	return getPathTypeStatic(r, x, y, z)
 }
 
 // newEvalNode builds a Node at (x,y,z), classifies it via getPathType, and stamps the ported
@@ -244,50 +248,66 @@ func newEvalNode(r *pathRegion, x, y, z int, mobH float64, malus mobMalus) *node
 // maxUpStep allowance in blocks. canFloat is PathNavigation.canFloat (FloatGoal sets it) — it makes
 // WATER a standable surface node (the float-pathing the FloatGoal implies). Reads ONLY the snapshot.
 func findAcceptedNode(r *pathRegion, x, y, z, stepUp int, mobH float64, srcX, srcZ int, malus mobMalus, canFloat bool) *node {
+	// pathType = getCachedPathType(x,y,z) (getPathType over the snapshot); pathCost = mob
+	// .getPathfindingMalus(pathType). VERIFIED WalkNodeEvaluator.findAcceptedNode bytecode this session.
 	nd := newEvalNode(r, x, y, z, mobH, malus)
-	switch nd.ptype {
-	case pathWalkable:
-		return nd // a standable floor here — accept
-	case pathWater:
-		// A water feet cell. For a floating mob (canFloat, e.g. FloatGoal) WATER is standable-into —
-		// return the node with its (mob-adjusted) WATER malus so a swim path costs the WATER malus. For a
-		// non-floating mob vanilla falls to the first non-water floor below (tryFindFirstNonWaterBelow) —
-		// v1 reduces to the same bounded step-down as OPEN (the water column drains to a solid floor).
-		if canFloat && nd.costMalus >= 0 {
-			return nd
-		}
-		for down := 1; down <= 3; down++ {
-			if n := newEvalNode(r, x, y-down, z, mobH, malus); n.ptype == pathWalkable {
-				return n
-			}
-		}
-		return nil
-	case pathOpen:
-		// Clear body, no floor below — the mob FALLS (step DOWN), never jumps. Find the first solid
-		// floor within a bounded drop band (vanilla scans down; v1 caps the band so a mob does not see
-		// a node across a deep chasm). NO step-up is attempted for an OPEN node.
-		for down := 1; down <= 3; down++ {
-			if n := newEvalNode(r, x, y-down, z, mobH, malus); n.ptype == pathWalkable {
-				return n
-			}
-		}
-		return nil
-	default: // pathBlocked / pathLava / other negative-malus classes — the only way through is UP.
-		// JUMP CEILING GUARD (vanilla tryJumpOn): the mob can only rise if its SOURCE column has the
-		// headroom to lift — i.e. the cell directly above the mob body in the column it is LEAVING
-		// must be clear. Without this, a mob pinned under a block "teleports" onto the block. The body
-		// occupies cells y .. y+mobAirCells-1; the lift cell is (srcX, y+mobAirCells, srcZ). If that is
-		// solid, no jump is possible — return nil (the move is rejected; the mob stays / falls).
-		if r.solidAt(srcX, y+mobAirCells(mobH), srcZ) {
-			return nil // ceiling above the mob in its current column — cannot jump up
-		}
-		for up := 1; up <= stepUp; up++ {
-			if n := newEvalNode(r, x, y+up, z, mobH, malus); n.ptype == pathWalkable {
-				return n // a reachable ledge with clear headroom at the destination
+	var best *node
+	// if (pathCost >= 0) best = getNodeAndUpdateCostToMax(...). A node with ANY non-negative malus is a
+	// standable node here -- WALKABLE, WATER, WATER_BORDER, FIRE_IN_NEIGHBOR, DAMAGING_IN_NEIGHBOR,
+	// DAMAGE_CAUTIOUS, etc are all accepted as-is (they only differ in COST, not passability). A
+	// negative-malus type (BLOCKED/LAVA/FENCE/DAMAGING/DOOR_*/LEAVES/POWDER_SNOW/UNPASSABLE_RAIL) leaves
+	// best == nil, so it falls through to the jump-or-step-down fallbacks -- a mob never STANDS on it.
+	if nd.costMalus >= 0 {
+		best = nd
+	}
+	// if (pathType == WALKABLE || (amphibious && pathType == WATER)) return best. canFloat is the
+	// v1 amphibious/water-standable flag (TurtlePathNavigation/FloatGoal). The WALKABLE fast-path and the
+	// amphibious-WATER fast-path both return the accepted standing node directly.
+	if nd.ptype == pathWalkable || (canFloat && nd.ptype == pathWater) {
+		return best
+	}
+	// else if ((best == null || best.costMalus < 0) && jumpSize > 0 && pathType not in
+	// {FENCE, UNPASSABLE_RAIL, TRAPDOOR, POWDER_SNOW}) best = tryJumpOn(...). best == nil means the
+	// destination cell is impassable (negative malus) -- the only way through is UP (a step-up/jump).
+	if best == nil && stepUp > 0 &&
+		nd.ptype != pathFence && nd.ptype != pathUnpassableRail &&
+		nd.ptype != pathTrapdoor && nd.ptype != pathPowderSnow {
+		// tryJumpOn: the mob can only rise if its SOURCE column has the headroom to lift -- the cell
+		// directly above the mob body in the column it is LEAVING must be clear (else it would clip a
+		// ceiling). Body occupies y .. y+cells-1; the lift cell is (srcX, y+cells, srcZ).
+		if !r.solidAt(srcX, y+mobAirCells(mobH), srcZ) {
+			for up := 1; up <= stepUp; up++ {
+				if n := newEvalNode(r, x, y+up, z, mobH, malus); n.ptype == pathWalkable {
+					return n // a reachable ledge with clear headroom at the destination
+				}
 			}
 		}
 		return nil
 	}
+	// else if (!amphibious && pathType == WATER && !canFloat) best = tryFindFirstNonWaterBelow(...). A
+	// non-floating mob falls to the first non-water floor below the water column.
+	if nd.ptype == pathWater && !canFloat {
+		for down := 1; down <= 3; down++ {
+			if n := newEvalNode(r, x, y-down, z, mobH, malus); n.ptype == pathWalkable {
+				return n
+			}
+		}
+		return nil
+	}
+	// else if (pathType == OPEN) best = tryFindFirstGroundNodeBelow(...). Clear body, no floor -> the mob
+	// FALLS (step DOWN, never jumps) to the first solid floor within a bounded drop band.
+	if nd.ptype == pathOpen {
+		for down := 1; down <= 3; down++ {
+			if n := newEvalNode(r, x, y-down, z, mobH, malus); n.ptype == pathWalkable {
+				return n
+			}
+		}
+		return nil
+	}
+	// return best. A positive-malus standing node (WATER_BORDER, FIRE_IN_NEIGHBOR, DANGER, etc) that was
+	// not a fast-path type is returned as the standable-but-costly node -- the A* pays its malus, so the
+	// mob PREFERS a cheaper route (one cell away from the hazard) but can still cross if it must.
+	return best
 }
 
 // getNeighbors ports WalkNodeEvaluator.getNeighbors: the 4 cardinal moves (each via
