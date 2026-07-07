@@ -239,8 +239,14 @@ func forEachItemModifier(s component.SlotData, slot int, fn func(attributeKey, a
 			Operation: attribute.Operation(m.Operation),
 		})
 	}
-	// SEAM (E-3): EnchantmentHelper.forEachModifier(stack, slot, consumer) — enchant-driven
-	// attribute modifiers. No current enchant effect emits one; lands with the enchant-effect layer.
+	// SEAM (E-3, still open after the effect-runtime landed): EnchantmentHelper.forEachModifier(
+	// stack, slot, consumer) — the minecraft:attributes enchant effects (aqua_affinity/
+	// blast_protection/depth_strider/efficiency/fire_protection/respiration/sweeping_edge/
+	// swift_sneak in the 26.2 data). Every one targets an attribute NOT modeled on the player
+	// holder (mining_efficiency, oxygen_bonus, burning_time, sneaking_speed, water_movement_
+	// efficiency, submerged_mining_speed, explosion_knockback_resistance) except sweeping_edge's
+	// sweeping_damage_ratio, whose consumer (the sweep attack) is itself a constant-false stub —
+	// so the tail contributes nothing observable today. It slots in here when those attributes land.
 }
 
 // detectEquipmentUpdates is the 1:1 port of LivingEntity.detectEquipmentUpdates +
