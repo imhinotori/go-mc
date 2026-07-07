@@ -23,9 +23,14 @@ package server
 // seam (enchantDurabilityChange) so it becomes a real read when the enchant-effect layer lands — never baked away.
 
 import (
+	"github.com/imhinotori/sulfur/data/tag"
 	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/level/component"
 )
+
+// enchantUnbreaking is the resource id of the Unbreaking enchantment (the item_damage / remove_binomial
+// effect that reduces durability loss). Cite data/minecraft/enchantment/unbreaking.json.
+const enchantUnbreaking = "minecraft:unbreaking"
 
 // compTool / compWeapon / compEquippable are the minecraft:tool / minecraft:weapon / minecraft:equippable
 // data-component wire type ids (level/component components table indices 28, 29, 32).
@@ -40,13 +45,38 @@ const (
 // Player.hurtArmor(source, amount, EquipmentSlot.FEET, LEGS, CHEST, HEAD).
 var armorMenuSlots = [4]int16{8, 7, 6, 5} // FEET, LEGS, CHEST, HEAD
 
-// enchantDurabilityChange is the EnchantmentHelper.processDurabilityChange seam: the Unbreaking-style
-// reduction of a positive durability hit. v1 has no durability enchantment effect wired, so it returns the
-// amount unchanged (the vanilla result when the stack carries no DigDurabilityEnchantment). CITE:
-// EnchantmentHelper.processDurabilityChange (runIterationOnItem DigDurability visitor). A real read later
-// rolls the Unbreaking probability off the stack's enchantments component.
+// enchantDurabilityChange ports EnchantmentHelper.processDurabilityChange's Unbreaking effect: the stack's
+// minecraft:item_damage enchant effect (only Unbreaking carries it) is a RemoveBinomial that probabilistically
+// removes durability points. For an Unbreaking-L item, chance = LevelBasedValue.calculate(L): armor uses
+// numer(2+2*(L-1))/denom(10+5*(L-1)), a non-armor tool/weapon uses L/(L+1). RemoveBinomial.process for the
+// small durability count (< 128) loops `amount` times, removing a point when nextFloat() < chance, and
+// returns amount - removed. No Unbreaking (or no RNG available) -> amount unchanged. Cite
+// EnchantmentHelper.processDurabilityChange + RemoveBinomial.process + unbreaking.json (item_damage effect).
 func (t *TickLoop) enchantDurabilityChange(s component.SlotData, amount int) int {
-	return amount
+	level := stackEnchantments(s)[enchantUnbreaking]
+	if level <= 0 || amount <= 0 {
+		return amount
+	}
+	rng := t.dispenserRandom() // the per-region levelRandom (ServerLevel.getRandom() analog)
+	if rng == nil {
+		return amount // no region RNG (a test without a region): the Unbreaking roll is skipped
+	}
+	// chance = the item_damage RemoveBinomial's LevelBasedValue.calculate(level), armor vs non-armor.
+	armor := tag.ItemTags["enchantable/armor"][int32(s.ItemID)]
+	var chance float32
+	if armor {
+		chance = float32(2+2*(level-1)) / float32(10+5*(level-1))
+	} else {
+		chance = float32(level) / float32(level+1)
+	}
+	// RemoveBinomial.process small-count path: remove a durability point per nextFloat() < chance draw.
+	removed := 0
+	for i := 0; i < amount; i++ {
+		if rng.NextFloat() < chance {
+			removed++
+		}
+	}
+	return amount - removed
 }
 
 // stackProcessDurabilityChange ports ItemStack.processDurabilityChange: 0 for a non-damageable item or a
