@@ -715,6 +715,16 @@ func (t *TickLoop) tickAI() {
 		// carries skills has a runner; every vanilla mob (the pig oracle) pays exactly this nil-check —
 		// no new work, no new RNG draws (the chance gate draws only on the declaring mob's own stream,
 		// and only when a skill declares chance < 1.0).
+		// MODEL-M2 (plugin_model_decl.go): the native-model rig tick — mirror each bone display's
+		// world x/y/z onto the base so the tracker's add/remove distance + the G.1 per-bone AABBs stay
+		// anchored to the moving base (no wire traffic: the bones ride the base client-side as
+		// passengers). Ticks BEFORE the skills pass (H.0 tick ordering: the M3 animator will advance the
+		// clip + fire animation_frame triggers here, so a keyframe skill lands the same tick). Gated PER
+		// FIELD (e.model != nil), not per type: every vanilla mob (the pig oracle) pays exactly this
+		// nil-check — no bones, no new work, no new RNG draws.
+		if e.model != nil {
+			t.tickModelRig(e)
+		}
 		if e.skills != nil {
 			t.tickMobSkills(e)
 		}

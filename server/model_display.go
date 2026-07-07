@@ -164,3 +164,78 @@ func (e *Entity) setDisplayInterpolation(durationTicks, startDelta int32) {
 	e.dispInterpDuration = durationTicks
 	e.dispInterpStartDelta = startDelta
 }
+
+// --- MODEL-M2: the static rig attach ---------------------------------------------------------------
+//
+// attachModelRig materializes a declared model's STATIC bone rig onto a freshly-spawned base mob and
+// mounts it, the MODEL-M2 hot-path analogue of newSkillRunner. For each bone it spawns an
+// item_display (M1 spawnItemDisplay) carrying the bone item + its FIXED display context, bakes the
+// bone's pivot into DATA_TRANSLATION, mounts the bone as a PASSENGER of the base (the existing
+// passenger seam — the client positions passengers at the vehicle, so the rig rides the base for
+// free), sets the base INVISIBLE (SHARED_FLAGS bit 0x20 — the base is the collision/AI carrier, the
+// rig is the visible body), and attaches the modelInstance. Called from spawnDeclaredMob AFTER the
+// store add and BEFORE the spawn trigger (H.1.2), so a spawn-trigger skill already sees the rig.
+//
+// NO animation (M3): the bones are static — their pivot is a fixed DATA_TRANSLATION offset; the base
+// moves and the passengers move with it. The bone display world x/y/z mirror the base (copied here;
+// re-mirrored each tick by tickModelRig so tracker distance + the G.1 bone AABBs stay correct).
+//
+//	[VERIFIED javap Entity.setInvisible -> setSharedFlag(5, ...) => bit 1<<5 == 0x20; ClientboundSet
+//	 PassengersPacket vehicle + passenger ids; Display$ItemDisplay DATA_TRANSLATION (index 11).]
+func (t *TickLoop) attachModelRig(e *Entity, decl *modelDecl) {
+	inst := &modelInstance{decl: decl, bones: make([]boneRuntime, 0, len(decl.bones))}
+	for i := range decl.bones {
+		b := &decl.bones[i]
+		// Spawn the bone item_display at the base's position (world coord copy — the passenger mount +
+		// DATA_TRANSLATION pivot give the on-screen offset; the server x/y/z mirror the base).
+		bone := t.spawnItemDisplay(e.x, e.y, e.z, b.item, b.displayContext)
+		// Bake the bone's pivot into DATA_TRANSLATION (index 11) and re-encode the spawn metadata BEFORE
+		// the tracker's first AddEntity/SetEntityData (spawnItemDisplay added it this tick; the tracker
+		// broadcasts next tick), so the bone renders at its rig offset from the first frame.
+		bone.setDisplayTranslation(b.pivotX, b.pivotY, b.pivotZ)
+		bone.metadata = encodeItemDisplayMetadata(bone)
+		// Mount the bone on the base via the passenger seam (a non-player passenger — id-only list).
+		t.vehicleAddPassenger(e, bone.id, false)
+		bone.vehicle = e.id
+		inst.bones = append(inst.bones, boneRuntime{id: bone.id, decl: b})
+	}
+	// Set the base INVISIBLE: splice the SHARED_FLAGS byte (bit 0x20) onto the base's spawn metadata so
+	// the tracker's first AddEntity/SetEntityData hides the carrier (the SAME metadata-splice seam the
+	// sheep-wool / wolf-flags carries use — the base has not been broadcast yet). The rig is the visible
+	// body; the base is the invisible collision/AI carrier.
+	var buf bytes.Buffer
+	_, _ = sharedFlagsDataEntry(entityInvisibleFlag).WriteTo(&buf)
+	e.metadata = append(e.metadata, buf.Bytes()...)
+	e.model = inst
+	// Broadcast the passenger list so any already-tracking observer mounts the rig (at spawn the base is
+	// not yet broadcast, so trackers are typically empty — but this keeps the mount correct for any
+	// mid-spawn tracker, mirroring where vanilla addPassenger triggers the SetPassengers packet).
+	t.broadcastSetPassengers(e)
+}
+
+// entityInvisibleFlag is Entity.SHARED_FLAGS bit 5 (1<<5 == 0x20) — setInvisible(true). The base mob of
+// a native model is invisible (the bone rig is the visible body). VERIFIED javap Entity.setInvisible ->
+// setSharedFlag(5, b), and setSharedFlag sets bit (1 << i).
+const entityInvisibleFlag int8 = 0x20
+
+// tickModelRig mirrors every bone display's world x/y/z onto the base's position, the MODEL-M2
+// per-tick coordinate copy (H.1.5). The bones ride the base client-side (passengers), so NO wire
+// traffic is needed for their render position; the SERVER-side copy keeps the tracker's add/remove
+// distance (a bone that drifted from the base could enter/leave a tracker independently) and the G.1
+// per-bone AABBs anchored to the base. Called from the per-mob tick slot gated `e.model != nil`, so a
+// mob with no model pays exactly one nil-check (the pig oracle is untouched). No animation (M3): the
+// bones only follow the base; their transform offset is the static DATA_TRANSLATION pivot.
+func (t *TickLoop) tickModelRig(e *Entity) {
+	m := e.model
+	if m == nil {
+		return
+	}
+	for i := range m.bones {
+		bone := t.entityByIDAnyRegion(m.bones[i].id)
+		if bone == nil {
+			continue // a bone despawned (defensive; M2 never removes bones mid-life)
+		}
+		bone.x, bone.y, bone.z = e.x, e.y, e.z
+	}
+}
+

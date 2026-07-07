@@ -98,6 +98,13 @@ type mobDecl struct {
 	// none (every vanilla mob): the spawned mob then carries NO skillRunner and the runtime adds zero
 	// work — the pig oracle is byte-identically untouched.
 	skills []skillDecl
+	// model is the captured native-model name (MODEL-M2, plugin_model_decl.go) this mob wears, or ""
+	// for a mob with no model (every vanilla mob). Validated at declare_mob parse against the
+	// modelRegistry (unknown = loud load error, the LOCKED capability pattern; load-order rule:
+	// declare_model must precede the declare_mob that references it). The spawned mob then materializes
+	// the rig in spawnDeclaredMob (attachModelRig) BEFORE the spawn trigger. "" => the spawned mob
+	// carries NO modelInstance and adds zero work — the pig oracle is byte-identically untouched.
+	model string
 }
 
 // mobRegistry is the tick-readable store of captured declarations. byName is WRITTEN only at load
@@ -107,19 +114,29 @@ type mobDecl struct {
 type mobRegistry struct {
 	byName map[string]*mobDecl
 	caps   capSet // the capability set the current LoadDirWith is resolving under (set before load)
+	// models is the companion model registry (MODEL-M2, plugin_model_decl.go): declare_model captures
+	// into it and declare_mob(model=) validates its reference against it. Both builtins ship in the SAME
+	// builtinsDict (one uniform vocabulary per load), so a plugin declaring a model + a mob wearing it
+	// resolves in one load. Written only at load (single-threaded), read at spawn (tick goroutine).
+	models *modelRegistry
 }
 
 // newMobRegistry builds an empty registry. The caps default to capAll until a real per-plugin load
 // stamps a narrower set via setLoadCaps (so a test that injects the builtins directly without a
 // manifest still gets working handles).
 func newMobRegistry() *mobRegistry {
-	return &mobRegistry{byName: make(map[string]*mobDecl), caps: capAll}
+	return &mobRegistry{byName: make(map[string]*mobDecl), caps: capAll, models: newModelRegistry()}
 }
 
 // setLoadCaps records the capability set the NEXT declare_mob captures should be stamped with — the
 // owning plugin's parsed manifest capabilities. The server sets this before injecting the builtins
 // for a given plugin so the captured mobDecl carries the right least-privilege grant.
-func (r *mobRegistry) setLoadCaps(c capSet) { r.caps = c }
+func (r *mobRegistry) setLoadCaps(c capSet) {
+	r.caps = c
+	if r.models != nil {
+		r.models.setLoadCaps(c)
+	}
+}
 
 // Count returns the number of captured mob declarations (the boot-load log + any coverage assert).
 func (r *mobRegistry) Count() int { return len(r.byName) }
@@ -433,12 +450,14 @@ func (r *mobRegistry) declareMobBuiltin() *starlark.Builtin {
 		var attrsDict *starlark.Dict
 		var goalsList *starlark.List
 		var skillsList *starlark.List
+		var modelName string
 		if err := starlark.UnpackArgs(b.Name(), args, kwargs,
 			"name", &name,
 			"base_type", &baseTypeName,
 			"attributes?", &attrsDict,
 			"goals?", &goalsList,
 			"skills?", &skillsList,
+			"model?", &modelName,
 		); err != nil {
 			return nil, err
 		}
@@ -467,6 +486,16 @@ func (r *mobRegistry) declareMobBuiltin() *starlark.Builtin {
 			return nil, fmt.Errorf("declare_mob %q: %w", name, err)
 		}
 
+		// MODEL-M2: validate the model= reference against the companion model registry (unknown = loud
+		// load error, the LOCKED capability pattern). Load-order rule: declare_model must precede this
+		// declare_mob (both are load-once registries; the reference is checked at declare_mob parse,
+		// exactly as base_type is resolved above). "" (no model) is the vanilla-mob case — no lookup.
+		if modelName != "" {
+			if r.models == nil || r.models.byName[modelName] == nil {
+				return nil, fmt.Errorf("declare_mob %q: unknown model %q (declare_model it before this declare_mob)", name, modelName)
+			}
+		}
+
 		r.byName[name] = &mobDecl{
 			name:     name,
 			baseType: baseType,
@@ -474,6 +503,7 @@ func (r *mobRegistry) declareMobBuiltin() *starlark.Builtin {
 			goals:    goals,
 			caps:     r.caps,
 			skills:   skills,
+			model:    modelName,
 		}
 		return starlark.None, nil
 	})
@@ -484,13 +514,23 @@ func (r *mobRegistry) declareMobBuiltin() *starlark.Builtin {
 // (SKILLS-01). The embed loaders (vanilla_pig_embed.go, wandermob_embed.go) use it so every
 // dogfooded/embedded plugin sees one uniform vocabulary; tests may still inject subsets directly.
 func (r *mobRegistry) builtinsDict() starlark.StringDict {
+	// MODEL-M2 (plugin_model_decl.go): declare_model + bone come from the companion model registry so a
+	// plugin declaring a model + a mob wearing it (declare_mob model=) sees one uniform vocabulary in a
+	// single load. A mobRegistry always carries a models registry (newMobRegistry), but guard nil for a
+	// test that hand-builds a bare struct.
+	if r.models == nil {
+		r.models = newModelRegistry()
+		r.models.setLoadCaps(r.caps)
+	}
 	return starlark.StringDict{
-		"declare_mob": r.declareMobBuiltin(),
-		"goal":        r.goalBuiltin(),
-		"skill":       r.skillBuiltin(),
-		"mechanic":    r.mechanicBuiltin(),
-		"targeter":    r.targeterBuiltin(),
-		"condition":   r.conditionBuiltin(),
+		"declare_mob":   r.declareMobBuiltin(),
+		"goal":          r.goalBuiltin(),
+		"skill":         r.skillBuiltin(),
+		"mechanic":      r.mechanicBuiltin(),
+		"targeter":      r.targeterBuiltin(),
+		"condition":     r.conditionBuiltin(),
+		"declare_model": r.models.declareModelBuiltin(),
+		"bone":          r.models.boneBuiltin(),
 	}
 }
 
@@ -713,6 +753,17 @@ func (t *TickLoop) spawnDeclaredMob(decl *mobDecl, x, y, z float64) *Entity {
 	// store mutation on the owning region; spawn callers run single-threaded (coordinator use-path
 	// or inside withRegion at the barrier-adjacent natural-spawn apply).
 	t.regionForEntity(e).entities.add(e)
+	// MODEL-M2 (plugin_model_decl.go): attach the native-model rig IFF the declaration names a model —
+	// spawn the bone item_displays, mount them on the (now invisible) base via the passenger seam, and
+	// set e.model. Runs AFTER the store add (the base is live + resolvable) and BEFORE the spawn trigger
+	// below, so a spawn-trigger skill (e.g. a future play_animation) already sees the rig (H.1.2). Gated
+	// on decl.model != "" — every vanilla mob (the pig oracle) skips it entirely: no bones, no passenger
+	// change, no invisible flag, e.model stays nil (zero new code path, byte-identical wire).
+	if decl.model != "" && t.mobRegistry != nil && t.mobRegistry.models != nil {
+		if md := t.mobRegistry.models.byName[decl.model]; md != nil {
+			t.attachModelRig(e, md)
+		}
+	}
 	// SKILLS-01 (mob_skills.go): attach the per-mob skill runner IFF the declaration carries skills —
 	// pure data attach, NO RNG, and skipped entirely for every skill-less declaration (every vanilla
 	// mob, so the pig oracle stream is byte-identically unperturbed). The "spawn" trigger fires ONCE,

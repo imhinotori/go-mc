@@ -421,6 +421,15 @@ type Entity struct {
 	// it is a pointer to mutable tick-owned state outside the tracker's snapshot value-set.
 	skills *skillRunner
 
+	// model is the per-mob native-model instance (MODEL-M2, plugin_model_decl.go): the sibling of
+	// skills. It holds the rig's live bone item_display entity ids (the base's passengers) + the per-bone
+	// server AABBs (G.1) + the reserved M3 animator slot. nil for every mob whose declaration carries no
+	// model (every vanilla mob — the pig oracle pays one nil-check in the tick loop and nothing else; a
+	// nil model = zero new code path, zero RNG, byte-identical wire). Attached in spawnDeclaredMob
+	// BEFORE the spawn trigger; tick-owned (TICK-05), a pointer to mutable tick-owned state outside the
+	// tracker's snapshot value-set, exactly like skills / ai.
+	model *modelInstance
+
 	// --- RAVAGER state (net.minecraft.world.entity.monster.Ravager) --------------------------------
 	//
 	// Tick-owned plain values, set/read ONLY for a Ravager (ravagerAiStep gates on typ ==
