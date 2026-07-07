@@ -153,13 +153,37 @@ type RandomState struct {
 	noises map[string]*synth.NormalNoise
 }
 
-// NewRandomState builds the per-world RandomState: Xoroshiro(seed).forkPositional() is
-// the base random factory every noise seeds from (RandomState <init>:
-// settings.getRandomSource().newInstance(seed).forkPositional()). The overworld uses
-// the Xoroshiro algorithm (legacy_random_source:false).
-func NewRandomState(seed int64) *RandomState {
+// NewRandomState builds the per-world RandomState. The base positional random factory
+// every noise/aquifer/ore/surface random forks from is
+// settings.getRandomSource().newInstance(seed).forkPositional() (RandomState <init>,
+// offsets 4-18). getRandomSource() (NoiseGeneratorSettings.getRandomSource) branches on
+// the parsed useLegacyRandomSource flag: true -> WorldgenRandom.Algorithm.LEGACY
+// (seed -> new LegacyRandomSource(seed)), false -> XOROSHIRO
+// (seed -> new XoroshiroRandomSource(seed)). Newer overworld settings carry
+// legacy_random_source:false (Xoroshiro); the nether, the end, and the pre-1.18-style
+// settings carry legacy_random_source:true and MUST seed from the LCG-backed
+// LegacyRandomSource, else the whole density graph draws off the wrong stream and the
+// terrain diverges from vanilla.
+//
+// Both algorithms are already ported bit-for-bit in package levelgen
+// (levelgen.NewXoroshiro / levelgen.NewLegacyRandomSource, each with a matching
+// forkPositional -> PositionalRandomFactory whose At/FromHashOf mirror the vanilla
+// LegacyPositionalRandomFactory / XoroshiroPositionalRandomFactory), so the router
+// only has to consult the flag and pick.
+//
+// Sources (javap -c, 26.2-inner.jar):
+//   - net.minecraft.world.level.levelgen.RandomState.<init> (getRandomSource().newInstance(seed).forkPositional())
+//   - net.minecraft.world.level.levelgen.NoiseGeneratorSettings.getRandomSource (useLegacyRandomSource ? LEGACY : XOROSHIRO)
+//   - net.minecraft.world.level.levelgen.WorldgenRandom$Algorithm (LEGACY / XOROSHIRO newInstance lambdas)
+func NewRandomState(seed int64, useLegacyRandomSource bool) *RandomState {
+	var base levelgen.RandomSource
+	if useLegacyRandomSource {
+		base = levelgen.NewLegacyRandomSource(seed)
+	} else {
+		base = levelgen.NewXoroshiro(seed)
+	}
 	return &RandomState{
-		factory: levelgen.NewXoroshiro(seed).ForkPositional(),
+		factory: base.ForkPositional(),
 		noises:  make(map[string]*synth.NormalNoise),
 	}
 }
@@ -275,7 +299,9 @@ func NewRouterFor(seed int64, settingsID string) (*Router, error) {
 		SurfaceRule:        js.SurfaceRule,
 	}
 
-	rstate := NewRandomState(seed)
+	// getRandomSource() reads useLegacyRandomSource (js.LegacyRandomSource) to pick the
+	// LEGACY vs XOROSHIRO algorithm — RandomState.<init> seeds every random from it.
+	rstate := NewRandomState(seed, js.LegacyRandomSource)
 	// One registry over the whole graph so shared sub-graphs (the spline-heavy
 	// offset/factor/jaggedness, the cache wrappers) are parsed + bound ONCE (dedup).
 	reg := density.NewRegistry(density.DataSourceFunc(data.DensityFunction), rstate)

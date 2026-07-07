@@ -40,8 +40,10 @@ func TestParseNoiseSettings(t *testing.T) {
 // Test 2: RandomState seeds noises deterministically (Pitfall 1 + 7).
 func TestRandomStateSeedsNoises(t *testing.T) {
 	const seed = int64(987654321)
-	a := NewRandomState(seed)
-	b := NewRandomState(seed)
+	// false = Xoroshiro (the overworld algorithm); this test asserts noise-seeding
+	// determinism, unrelated to the legacy branch.
+	a := NewRandomState(seed, false)
+	b := NewRandomState(seed, false)
 	na, err := a.NormalNoise("minecraft:temperature")
 	if err != nil {
 		t.Fatalf("seed temperature noise (a): %v", err)
