@@ -23,6 +23,11 @@ const (
 	explosionRadiusEpsilon  = 1.0e-5 // radius < 1e-5f skips entity damage
 	explosionDamageConstant = 7.0    // the (p²+p)/2 * 7.0 * doubleRadius + 1.0 formula constant
 	explosionKnockbackMult  = 1.0    // ExplosionDamageCalculator.getKnockbackMultiplier == 1.0f
+	// playerEntityTypeID is entity.Player.ID (156) — the store-entity typ of a player's server-side
+	// Entity. hurtEntities' general (byID) loop skips it because a player's store entity lives in byID
+	// too, and the players loop above already handled it (vanilla's single getEntities list processes a
+	// player exactly once; the Go split must not push it twice). Cite data/entity Player ID 156.
+	playerEntityTypeID = 156
 )
 
 // explode is the port of ServerExplosion.explode for the creeper path (interaction MOB). It mirrors
@@ -38,7 +43,12 @@ const (
 //	 if (interactsWithBlocks()) interactWithBlocks(list); if (fire) createFire(list).]
 func (t *TickLoop) explode(srcID int32, x, y, z, radius float64) {
 	toBlow := t.calculateExplodedPositions(x, y, z, radius)
-	t.hurtEntitiesFromExplosion(srcID, x, y, z, radius)
+	// hurtEntities applies damage + knockback and returns the per-player knockback map the
+	// ClientboundExplode Optional carries. blockCount is the destroyed-block count vanilla's
+	// ServerExplosion.explode() returns and ServerLevel.explode forwards as the packet field. When
+	// the interaction is KEEP (mobGriefing off, below) NO block is destroyed, but vanilla still
+	// returns len(toBlow) from explode() (calculateExplodedPositions ran) — blockCount is that count.
+	hitPlayers := t.hurtEntitiesFromExplosion(srcID, x, y, z, radius)
 	// interactsWithBlocks(): blockInteraction != KEEP. For a creeper (ExplosionInteraction.MOB) the
 	// interaction is KEEP exactly when MOB_GRIEFING is off (ServerLevel.explode); so gate on mobGriefing
 	// — when off, NO block is removed (the vanilla KEEP path). The ray nextFloats above are still drawn
@@ -47,18 +57,57 @@ func (t *TickLoop) explode(srcID int32, x, y, z, radius float64) {
 	if t.gameRule(ruleMobGriefing) {
 		t.interactWithBlocks(toBlow, radius)
 	}
+	// A1: ServerLevel.explode tail — send ClientboundExplode to every player within 64 blocks
+	// (distanceToSqr(center) < 4096.0), each carrying its own knockback Optional (hitPlayers[p], the
+	// SAME vector applied to it; absent for a player not in the hurt set). blockCount == len(toBlow).
+	t.sendExplodePackets(x, y, z, float32(radius), int32(len(toBlow)), hitPlayers)
 }
 
-// hurtEntitiesFromExplosion is the port of ServerExplosion.hurtEntities: for every player + mob within
-// radius*2 of the blast, apply the falloff+exposure damage and the knockback impulse. The exploding
-// entity (srcID) is excluded. Cite ServerExplosion.hurtEntities + ExplosionDamageCalculator.
-func (t *TickLoop) hurtEntitiesFromExplosion(srcID int32, x, y, z, radius float64) {
+// explosionKnockback is one player's stored knockback vector (the Vec3 the server pushed it by),
+// keyed by the player's store-entity id — the ClientboundExplode Optional<Vec3> the client applies.
+type explosionKnockback struct{ x, y, z float64 }
+
+// sendExplodePackets is the ServerLevel.explode player loop: for every player whose distanceToSqr to
+// the blast center is < 4096.0 (64 blocks), send one ClientboundExplode carrying that player's
+// knockback Optional (present only if it is in hitPlayers). Cite ServerLevel.explode tail.
+func (t *TickLoop) sendExplodePackets(cx, cy, cz float64, radius float32, blockCount int32, hitPlayers map[int32]explosionKnockback) {
+	for _, p := range t.players {
+		if p == nil || p.client == nil {
+			continue
+		}
+		// distanceToSqr(center) uses the player's position (feet), exactly as ServerPlayer.distanceToSqr.
+		dx, dy, dz := p.x-cx, p.y-cy, p.z-cz
+		if dx*dx+dy*dy+dz*dz >= explosionSendRadiusSqr {
+			continue
+		}
+		kb, present := hitPlayers[p.entityID]
+		p.client.Send(encodeExplode(cx, cy, cz, radius, blockCount, kb.x, kb.y, kb.z, present))
+	}
+}
+
+// hurtEntitiesFromExplosion is the port of ServerExplosion.hurtEntities. Vanilla iterates
+// level.getEntities(source, box) — EVERY non-ignored entity in the blast AABB — and for each one within
+// radius*2: computes the exposure, applies the falloff damage to entities that accept it, and PUSHES
+// EVERY entity by dir*(1-dist)*exposure*kbMult*(1-kbResist) (Entity.push == deltaMovement += impulse).
+// The Go store splits players (t.players) from other entities (byID); the player's store entity ALSO
+// lives in byID, so the general loop skips typ==Player to avoid double-processing (players are handled
+// in the first loop, exactly as vanilla handles them once). The push is UNIVERSAL — most importantly it
+// pushes primed TNT so a blast chains it (A3), and it launches items/boats/minecarts/arrows too (A2/A3).
+// Returns the per-player knockback vectors (keyed by store-entity id) for the ClientboundExplode Optional.
+//
+// Per-entity knockback ORIGIN (bytecode offsets 224-245): a PrimedTnt uses position() (feet); EVERY
+// other entity (players + mobs + items + ...) uses getEyePosition() == position + (0, eyeHeight, 0).
+// The exploding entity (srcID) is excluded (vanilla's getEntities(source,...) drops the source).
+// Cite ServerExplosion.hurtEntities + Entity.push + ExplosionDamageCalculator.
+func (t *TickLoop) hurtEntitiesFromExplosion(srcID int32, x, y, z, radius float64) map[int32]explosionKnockback {
+	hitPlayers := make(map[int32]explosionKnockback)
 	if radius < explosionRadiusEpsilon {
-		return
+		return hitPlayers
 	}
 	doubleRadius := radius * 2.0
 
-	// Players.
+	// Players. shouldDamageEntity is true (a player accepts explosion damage) and kbMult==1.0, so the
+	// exposure branch always runs; the knockback vector is recorded into hitPlayers for the packet.
 	for _, p := range t.players {
 		if p == nil || p.dead {
 			continue
@@ -79,12 +128,21 @@ func (t *TickLoop) hurtEntitiesFromExplosion(srcID int32, x, y, z, radius float6
 		}
 		// Knockback: dir(eye - center).normalize() * (1-dist)*exposure*kbMult*(1-kbResist). No kbResist
 		// attribute on players in v1 (0). Apply to the player's store entity + send one SetEntityMotion.
-		t.applyExplosionKnockback(p, x, y, z, exOx, exOy, exOz, dist, float64(exposure))
+		kbx, kby, kbz := t.applyExplosionKnockback(p, x, y, z, exOx, exOy, exOz, dist, float64(exposure))
+		// hitPlayers: a non-spectator, non-(creative && flying) player -> its knockback Vec3 (the SAME
+		// vector we pushed by), which the ClientboundExplode Optional carries. v1 has no flying-ability
+		// state (survival, the common case, always records); the creative&&flying exclusion is
+		// cite-deferred. Cite ServerExplosion.hurtEntities (hitPlayers.put(player, wrappedVec22)).
+		if p.gameMode != gameModeSpectator {
+			hitPlayers[p.entityID] = explosionKnockback{x: kbx, y: kby, z: kbz}
+		}
 	}
 
-	// Mobs (store entities). A creeper explosion damages nearby mobs too (chain reactions, farm kills).
+	// Every OTHER entity (mobs, primed TNT, items, boats, minecarts, arrows, ...). Vanilla's
+	// getEntities(source, box) returns these uniformly; the Go split handles players above, so skip
+	// typ==Player here (a player's store entity lives in byID too — skipping it prevents a double push).
 	for _, e := range t.cur().entities.byID {
-		if e == nil || e.id == srcID || e.dead || e.ai == nil {
+		if e == nil || e.id == srcID || e.dead || e.typ == playerEntityTypeID {
 			continue
 		}
 		dx, dy, dz := e.x-x, e.y-y, e.z-z
@@ -93,34 +151,60 @@ func (t *TickLoop) hurtEntitiesFromExplosion(srcID int32, x, y, z, radius float6
 			continue
 		}
 		exposure := t.explosionSeenPercent(x, y, z, e.x-e.width/2, e.y, e.z-e.width/2, e.width, e.height)
-		impact := (1.0 - dist) * float64(exposure)
-		dmg := (impact*impact+impact)/2.0*explosionDamageConstant*doubleRadius + 1.0
-		if dmg > 0 {
-			t.applyDamageEntity(e, damageSourceOf(damageTypeExplosion), float32(dmg))
+		// DAMAGE is gated to entities that accept it (a living mob). A primed TNT / item / boat / arrow
+		// takes NO explosion damage in this v1 path — only the push. (Vanilla gates damage on
+		// shouldDamageEntity; a living mob is the accepting case the store models.)
+		if e.ai != nil {
+			impact := (1.0 - dist) * float64(exposure)
+			dmg := (impact*impact+impact)/2.0*explosionDamageConstant*doubleRadius + 1.0
+			if dmg > 0 {
+				t.applyDamageEntity(e, damageSourceOf(damageTypeExplosion), float32(dmg))
+			}
 		}
+		// PUSH is UNIVERSAL (A2+A3). Origin: a PrimedTnt uses feet position(); everything else uses
+		// getEyePosition() == position + (0, eyeHeight≈0.85*height, 0). dir = (origin-center).normalize();
+		// power = (1-dist)*exposure*kbMult(1.0)*(1-kbResist=0). Entity.push adds the impulse to velocity;
+		// the entity integrates it in its own tick (a chained TNT is nudged, a mob is launched).
+		var origY float64
+		if e.isTnt {
+			origY = e.y // PrimedTnt: position() (feet)
+		} else {
+			origY = e.y + e.height*0.85 // getEyePosition(): position + eyeHeight (≈0.85*height)
+		}
+		ddx, ddy, ddz := e.x-x, origY-y, e.z-z
+		nx, ny, nz := normalizeVec3(ddx, ddy, ddz) // Vec3.normalize() -> zero for a zero vector
+		power := (1.0 - dist) * float64(exposure) * explosionKnockbackMult
+		e.vx += nx * power
+		e.vy += ny * power
+		e.vz += nz * power
 	}
+	return hitPlayers
 }
 
 // applyExplosionKnockback pushes a player away from the blast center by the vanilla impulse and sends the
-// single SetEntityMotion. dir = (eye - center).normalize(); power = (1-dist)*exposure*1.0*(1-0). Cite
-// ServerExplosion.hurtEntities (entity.push(direction.scale(knockbackPower))).
-func (t *TickLoop) applyExplosionKnockback(p *tickPlayer, cx, cy, cz, eyeX, eyeY, eyeZ, dist, exposure float64) {
+// single SetEntityMotion. dir = (eye - center).normalize(); power = (1-dist)*exposure*1.0*(1-0). Returns
+// the applied (dx,dy,dz) impulse so the caller can record it for the player's ClientboundExplode Optional
+// (the vanilla wrapped-vec22 that the client re-applies). Cite ServerExplosion.hurtEntities
+// (entity.push(direction.scale(knockbackPower)) + hitPlayers.put(player, vec)).
+func (t *TickLoop) applyExplosionKnockback(p *tickPlayer, cx, cy, cz, eyeX, eyeY, eyeZ, dist, exposure float64) (float64, float64, float64) {
 	dx, dy, dz := eyeX-cx, eyeY-cy, eyeZ-cz
 	l := math.Sqrt(dx*dx + dy*dy + dz*dz)
 	if l < 1e-9 {
-		return
+		return 0, 0, 0
 	}
 	dx, dy, dz = dx/l, dy/l, dz/l
 	power := (1.0 - dist) * exposure * explosionKnockbackMult // *(1 - kbResist=0)
+	ix, iy, iz := dx*power, dy*power, dz*power
 	if p.playerEntity == nil {
-		return
+		return ix, iy, iz
 	}
-	p.playerEntity.vx += dx * power
-	p.playerEntity.vy += dy * power
-	p.playerEntity.vz += dz * power
+	p.playerEntity.vx += ix
+	p.playerEntity.vy += iy
+	p.playerEntity.vz += iz
 	if p.client != nil {
 		p.client.Send(encodeSetEntityMotion(p.playerEntity))
 	}
+	return ix, iy, iz
 }
 
 // explosionSeenPercent is the port of ServerExplosion.getSeenPercent: sample a grid of points across the
