@@ -845,6 +845,17 @@ func (t *TickLoop) tickPhysics() {
 			// inside travelInWaterVertical). FloatGoal's +0.04 impulse (applied in tickAI, before
 			// this) survives the gentle 0.005 pull, so the mob bobs at the surface instead of sinking.
 			travelInWaterVertical(e)
+		} else if mobLavaForJump {
+			// B-A5 (travelInLava): a mob whose AABB is in lava (and NOT in water -- vanilla
+			// travelInFluid dispatches to travelInWater first, else travelInLava, so water wins)
+			// runs the VANILLA lava physics INSTEAD of the dry travelInAir path -- the thick-lava
+			// 0.5 drag + the reduced /16 gravity (shallow) and the outer -baseGravity/4 == -0.02
+			// lava sink. Without this a mob in lava used dry-land physics (0.08 gravity, 0.98 air
+			// drag). travelInLavaVertical mirrors travelInWaterVertical's architecture (velocity ops
+			// only; the shared moveEntity + jumpOutOfFluid at the loop tail handle the rest). A DRY
+			// mob never enters this branch, so the pig oracle stays byte-identical. Cite
+			// LivingEntity.travelInLava / getFluidFallingAdjustedMovement / isInShallowFluid.
+			t.travelInLavaVertical(e)
 		} else if happyGhastIsFlyer(e) {
 			// happy_ghast (Task): the travelFlying AIR branch (HappyGhast.travel → LivingEntity.travelFlying).
 			// There is NO gravity for a hovering ghast; deltaMovement is scaled by 0.91 on ALL three axes

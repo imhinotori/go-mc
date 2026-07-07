@@ -489,3 +489,84 @@ func (t *TickLoop) jumpOutOfFluid(e *Entity, oldY float64) {
 		e.vy = 0.30000001192092896
 	}
 }
+
+const (
+	// lavaHorizontalDrag is the LAVA horizontal (and DEEP-lava all-axis) velocity multiplier: the
+	// literal 0.5d that travelInLava applies via deltaMovement.multiply(0.5d, _, 0.5d) in the shallow
+	// branch and deltaMovement.scale(0.5d) in the deep branch. Lava is far thicker than water, so its
+	// drag (0.5) is far more aggressive than water's 0.8 (getWaterSlowDown) -- a mob in lava barely
+	// glides. This REPLACES the dry horizontalFriction for an in-lava mob.
+	//	[VERIFIED javap LivingEntity.travelInLava: ldc2_w #424 // double 0.5d on X and Z (shallow
+	//	 multiply) and the single ldc2_w #424 for the deep-lava scale.]
+	lavaHorizontalDrag = 0.5
+
+	// lavaGravityDivisor is travelInLava's OUTER gravity divisor: after the drag, the lava-specific
+	// gravity pull is deltaMovement.add(0.0, -baseGravity/4.0, 0.0) -- baseGravity/4 == 0.08/4 == 0.02.
+	// This is DISTINCT from (and applied ON TOP OF, in the shallow case, alongside) the
+	// getFluidFallingAdjustedMovement baseGravity/16 pull water uses; lava has this extra outer sink.
+	//	[VERIFIED javap LivingEntity.travelInLava: ldc2_w #3046 // double 4.0d ; dneg then ddiv on the
+	//	 gravity add -- d = -baseGravity/4.0, add(0, d, 0), gated on `baseGravity != 0.0`.]
+	lavaGravityDivisor = 4.0
+)
+
+// travelInLavaVertical is the port of the velocity ops of LivingEntity.travelInLava (its drag +
+// getFluidFallingAdjustedMovement + the outer -baseGravity/4 gravity add) for a mob *Entity, called
+// from tickPhysics IN PLACE OF the dry `vy -= 0.08; vy *= 0.98` (and the dry horizontal friction)
+// whenever mobInLava(e) is true. It is the LAVA sibling of travelInWaterVertical (fluid_travel.go):
+// the move(SELF, dm) and the trailing jumpOutOfFluid(oldY) that vanilla runs INSIDE travelInLava are
+// factored out to the shared moveEntity + jumpOutOfFluid at the tail of the tickPhysics loop (the
+// same architecture the water branch uses), so this helper is only the deltaMovement mutation. It
+// mutates e.vx/vy/vz. Verified bytecode of net.minecraft.world.entity.LivingEntity.travelInLava:
+//
+//	moveRelative(0.02f, input); move(SELF, dm);            // horizontal swim input + the move (factored out)
+//	if (isInShallowFluid(FluidTags.LAVA)) {
+//	    dm = dm.multiply(0.5d, 0.800000011920929d, 0.5d);  // shallow: horiz drag 0.5, vert drag 0.8
+//	    dm = getFluidFallingAdjustedMovement(baseGravity, isFalling, dm);  // reduced /16 gravity + neutral guard
+//	} else {
+//	    dm = dm.scale(0.5d);                               // deep: uniform 0.5 on ALL three axes
+//	}
+//	if (baseGravity != 0.0) dm = dm.add(0.0, -baseGravity/4.0, 0.0);  // the outer lava gravity (-0.02)
+//	jumpOutOfFluid(oldY);                                  // (factored out to the shared tail)
+//
+// The shallow/deep split turns on isInShallowFluid(LAVA) == getFluidHeight(LAVA) <=
+// getFluidJumpThreshold() (jump.go). SHALLOW lava applies the (0.5, 0.8, 0.5) drag then
+// getFluidFallingAdjustedMovement (the reduced baseGravity/16 == 0.005 pull, with the neutral-point
+// guard), then the outer -baseGravity/4 == -0.02 add -- BOTH gravity terms. DEEP lava applies a
+// uniform 0.5 scale (vertical drag 0.5, NOT 0.8, and NO getFluidFallingAdjustedMovement), then only
+// the outer -0.02 add. isFalling is `getDeltaMovement().y <= 0.0` from travelInFluid, read on the
+// PRE-drag velocity exactly as vanilla. baseGravity == getEffectiveGravity() == gravityPerTick (0.08)
+// for a default v1 mob (no slow-falling). PURE (no RNG draw): a DRY mob never enters this branch (the
+// mobInLava gate in tickPhysics), so the pig oracle stream is byte-identical -- the dry oracle world
+// has no lava, so travelInLavaVertical never runs there at all.
+//
+//	Cite: net.minecraft.world.entity.LivingEntity.travelInLava / getFluidFallingAdjustedMovement /
+//	isInShallowFluid / getEffectiveGravity (0.08); travelInFluid (isFalling = deltaMovement.y <= 0).
+func (t *TickLoop) travelInLavaVertical(e *Entity) {
+	// isFalling = getDeltaMovement().y <= 0.0 -- read on the CURRENT (pre-drag) velocity, exactly as
+	// travelInFluid computes `var 2` before dispatching to travelInLava. The jumpInLiquid +0.04 impulse
+	// (applied in tickAI, before tickPhysics) has already landed in e.vy, so a freshly-impulsed mob
+	// reads isFalling=false (vy > 0). Only consumed by getFluidFallingAdjustedMovement in the shallow branch.
+	isFalling := e.vy <= 0.0
+
+	if t.isInShallowFluid(e, fluidLava) {
+		// SHALLOW lava: dm.multiply(0.5d, 0.800000011920929d, 0.5d) -- horizontal drag 0.5, vertical
+		// drag 0.8 (the SAME 0.800000011920929d literal water uses on Y). Then the
+		// getFluidFallingAdjustedMovement reduced-gravity adjustment (baseGravity/16 == 0.005).
+		e.vx *= lavaHorizontalDrag
+		e.vy *= waterVerticalDrag
+		e.vz *= lavaHorizontalDrag
+		e.vy = fluidFallingAdjustedY(gravityPerTick, isFalling, e.vy)
+	} else {
+		// DEEP lava: dm.scale(0.5d) -- a uniform 0.5 multiplier on ALL three axes (vertical drag 0.5,
+		// NOT 0.8, and NO getFluidFallingAdjustedMovement). Lava's deep-body physics is a plain half-scale.
+		e.vx *= lavaHorizontalDrag
+		e.vy *= lavaHorizontalDrag
+		e.vz *= lavaHorizontalDrag
+	}
+
+	// The OUTER lava gravity add: `if (baseGravity != 0.0) dm = dm.add(0.0, -baseGravity/4.0, 0.0)`.
+	// baseGravity (0.08) != 0 for a v1 mob, so it always fires: vy -= 0.08/4 == 0.02. This runs in
+	// BOTH the shallow and deep branches (it is after the if/else in the bytecode), so a shallow-lava
+	// mob takes BOTH the reduced /16 pull AND this /4 pull, a deep-lava mob takes only this /4 pull.
+	e.vy += -gravityPerTick / lavaGravityDivisor
+}
