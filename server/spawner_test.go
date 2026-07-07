@@ -15,7 +15,37 @@ import (
 	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/block"
+	"github.com/imhinotori/sulfur/world/levelgen"
 )
+
+// spawnTestSeed is the FIXED per-region levelRandom seed the spawner tests pin so the natural-spawn
+// draws (the candidate column pick + the pack cluster-spread nextInt(6) draws + the packSize/yaw
+// nextFloat draws -- spawner.go/natural_spawner.go) are DETERMINISTIC. Production seeds each region's
+// levelRandom from uniqueLevelRandomSeed() (region.go -- a nanoTime-XOR nondeterministic seed, faithful
+// to vanilla RandomSupport.generateUniqueSeed). That nondeterminism is exactly what made the count
+// assertions flaky: on ~3% of process seeds the randomly-picked spawn column + pack spread landed
+// INSIDE the vanilla 24-block no-spawn bubble around the player (NaturalSpawner.
+// isRightDistanceToPlayerAndSpawnPoint: d <= 576 rejects it), so a valid cycle produced 0 mobs and the
+// "below cap a spawn happens" assertion failed nondeterministically (the STATE.md async-spawner flake).
+// Pinning the seed makes the outcome reproducible WITHOUT changing any production spawn logic -- the
+// same faithful cap/distance/placement gates run; only the RNG stream is fixed. spawnTestSeed is a seed
+// VERIFIED (brute-force over 1..200: 194/200 seeds spawn) to place the pack OUTSIDE the 24-block bubble
+// in newSpawnLoop's 11x11 geometry, so the load-bearing assertion ("below cap, a spawn happens") still
+// holds and still catches a real regression in the cap/placement path.
+const spawnTestSeed = int64(1)
+
+// seedSpawnRegions pins EVERY region's levelRandom to spawnTestSeed so the natural-spawn draws are
+// deterministic across runs / -count / full-suite CPU contention. Applied by newSpawnLoop right after
+// the world+player are wired so the first naturalSpawn draw is reproducible. It seeds ALL regions (not
+// just region 0) because the spawn is routed into whichever region OWNS the randomly-picked column
+// (regionOf(col)=(x^z)&1), so the OWNING region's levelRandom is the one the pack-spread draws read.
+func seedSpawnRegions(loop *TickLoop) {
+	for _, r := range loop.regions {
+		if r != nil {
+			r.levelRandom = levelgen.NewLegacyRandomSource(spawnTestSeed)
+		}
+	}
+}
 
 // totalEntities sums the entity count ACROSS every region. The natural spawner picks RANDOM
 // candidate columns across the loaded 11x11 area and routes the spawned mob into the region that
@@ -110,6 +140,10 @@ func newSpawnLoop(t *testing.T) (*TickLoop, *level.Chunk, int) {
 	// A player on the floor at the column center so spawnableColumns includes (0,0) and the
 	// scan reference Y is the floor surface.
 	loop.players = append(loop.players, &tickPlayer{x: 8.5, y: float64(floorY + 1), z: 8.5})
+	// Pin the per-region RNG so the natural-spawn column pick + pack spread are deterministic (see
+	// spawnTestSeed): production's nondeterministic uniqueLevelRandomSeed() otherwise lands the pack
+	// inside the 24-block no-spawn bubble on a minority of seeds, flaking the count assertions.
+	seedSpawnRegions(loop)
 	return loop, ch, floorY
 }
 
