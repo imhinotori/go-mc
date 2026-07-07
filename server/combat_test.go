@@ -38,6 +38,31 @@ func TestCreativeInvulnerable(t *testing.T) {
 	}
 }
 
+// TestIFrameExcessIsSilent: the E-5 fix — an i-frame EXCESS hit (a larger hit inside the grace window)
+// applies its excess damage but is SILENT: no ClientboundDamageEvent (hurt flash), matching vanilla's
+// tookFullDamage=false gate. Only the fresh hit emits the event.
+func TestIFrameExcessIsSilent(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	p := combatPlayer(loop, 1)
+
+	// Fresh hit: lands, arms the window, and emits the damage event.
+	loop.applyDamage(p, damageSourceOf(damageTypeGeneric), 4)
+	fresh := drainPackets(p.client)
+	if n := countID(fresh, packetid.ClientboundDamageEvent); n != 1 {
+		t.Fatalf("fresh hit emitted %d DamageEvent, want 1", n)
+	}
+
+	// Excess hit inside the window (10 > lastHurt 4): applies the 6 excess but is SILENT.
+	loop.applyDamage(p, damageSourceOf(damageTypeGeneric), 10)
+	if p.health != 20-4-6 {
+		t.Fatalf("excess hit health = %v, want 10 (4 fresh + 6 excess)", p.health)
+	}
+	excess := drainPackets(p.client)
+	if n := countID(excess, packetid.ClientboundDamageEvent); n != 0 {
+		t.Fatalf("excess hit emitted %d DamageEvent, want 0 (tookFullDamage=false → silent)", n)
+	}
+}
+
 // TestVoidDamage: a player below minY-64 takes 4.0 out_of_world damage per tick (Entity.checkBelowWorld
 // -> LivingEntity.onBelowWorld); it bypasses invulnerability so even a creative player takes it.
 func TestVoidDamage(t *testing.T) {

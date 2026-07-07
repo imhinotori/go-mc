@@ -258,13 +258,14 @@ func (t *TickLoop) applyDamage(p *tickPlayer, src damageSource, amount float32) 
 		if amount <= p.lastHurt {
 			return
 		}
-		// `actuallyHurt(amount - lastHurt);` then `lastHurt = amount;` — only the excess lands.
+		// `actuallyHurt(amount - lastHurt);` then `lastHurt = amount; tookFullDamage = false;` — only the
+		// excess lands, and tookFullDamage is set FALSE (bytecode offset 234: iconst_0). tookFullDamage
+		// gates broadcastDamageEvent / markHurt / dealDefaultKnockback / the hurt sound, so the EXCESS
+		// branch is SILENT — no hurt flash, no knockback, no sound. Spamming greater-damage hits inside the
+		// i-frame window applies each excess quietly; only the fresh hit animates. (E-5: the prior code
+		// wrongly broadcast + knocked back on excess.) Cite LivingEntity.hurtServer (tookFullDamage=false).
 		t.actuallyHurt(p, amount-p.lastHurt)
 		p.lastHurt = amount
-		// tookFullDamage == true on this i-frame EXCESS branch (the hit landed its excess), so vanilla
-		// fires the hurt animation. See broadcastPlayerDamageEvent for the full cite.
-		t.broadcastPlayerDamageEvent(p, src)
-		t.dealDefaultKnockbackPlayer(p, src)
 	} else {
 		// Fresh hit (bytecode 240–271): record lastHurt, arm the 20-tick window, apply full damage,
 		// set the hurt-flash duration/time.

@@ -93,21 +93,27 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 			return
 		}
 		// `actuallyHurt(amount - lastHurt);` then `lastHurt = amount; flag2 = false;` — only the excess.
+		// flag2 == tookFullDamage; the EXCESS branch sets it false (bytecode 234), so the hurt-animation
+		// tail below is SKIPPED for an excess hit (no broadcast, no markHurt, no dealDefaultKnockback — the
+		// excess lands silently). Cite LivingEntity.hurtServer (tookFullDamage=false on the i-frame excess).
 		t.actuallyHurtEntity(e, src, amount-e.lastHurt)
 		e.lastHurt = amount
 		flag2 = false
-		// tookFullDamage == true on this sub-branch (the hit was not i-frame-rejected — it landed its
-		// excess), so vanilla fires the hurt animation. See broadcastMobDamageEvent for the full cite.
-		t.broadcastMobDamageEvent(e, src)
 	} else {
 		// Fresh hit (bytecode 240-271): record lastHurt, arm the 20-tick window, apply full damage, set
-		// the hurt-flash duration/time.
+		// the hurt-flash duration/time. flag2 stays true → the hurt-animation tail runs below.
 		e.lastHurt = amount
 		e.invulnerableTime = hurtInvulnerableTicks
 		t.actuallyHurtEntity(e, src, amount)
 		e.hurtDuration = hurtDurationTicks
 		e.hurtTime = e.hurtDuration
-		// tookFullDamage == true on the fresh sub-branch too — broadcast the hurt animation.
+	}
+
+	// tookFullDamage tail (bytecode 285-370): `if (tookFullDamage) { broadcastDamageEvent; markHurt;
+	// dealDefaultKnockback; }`. Gated on flag2 so an i-frame EXCESS hit does NOT re-broadcast the hurt
+	// flash or re-apply the 0.4 knockback (E-5 fix — previously it ran in both branches). Cite
+	// LivingEntity.hurtServer (the tookFullDamage-gated broadcast/markHurt/dealDefaultKnockback block).
+	if flag2 {
 		t.broadcastMobDamageEvent(e, src)
 	}
 
