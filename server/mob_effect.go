@@ -60,7 +60,27 @@ const (
 	// — like the movement-buff no-ops, presence is stored via addEntityEffect and the periodic DoT lands when
 	// the mob effect-tick table grows a wither branch. The 8.0 skull hit is the visible gameplay here.
 	effectWither = "minecraft:wither"
+	// EFFECT-BEHAVIOR-01: the self-contained movement/utility effects with REAL server-side behavior.
+	// ABSORPTION (AbsorptionMobEffect): a MAX_ABSORPTION +4.0*(amp+1) ADD_VALUE modifier raises the
+	// setAbsorptionAmount clamp ceiling, and onEffectStarted fills the hearts to max(current, 4*(amp+1)).
+	// VERIFIED CFR MobEffects.ABSORPTION (addAttributeModifier MAX_ABSORPTION, effect.absorption, 4.0,
+	// ADD_VALUE) + AbsorptionMobEffect.onEffectStarted/applyEffectTick/shouldApplyEffectTickThisTick.
+	effectAbsorption = "minecraft:absorption"
+	// HUNGER (HungerMobEffect): applyEffectTick on a Player -> causeFoodExhaustion(0.005*(amp+1)) every
+	// tick (shouldApplyEffectTickThisTick == true). VERIFIED CFR HungerMobEffect.applyEffectTick.
+	effectHunger = "minecraft:hunger"
+	// INVISIBILITY (plain MobEffect): sets the shared Entity invisible flag (DATA_SHARED_FLAGS bit 5,
+	// 1<<5 == 0x20) via LivingEntity.updateInvisibilityStatus -> setInvisible(hasEffect(INVISIBILITY)),
+	// broadcast to trackers. VERIFIED CFR MobEffects.INVISIBILITY (plain MobEffect) + Entity.setInvisible
+	// (setSharedFlag(5, value)) + LivingEntity.updateInvisibilityStatus.
+	effectInvisibility = "minecraft:invisibility"
 )
+
+// invisibleSharedFlagBit is Entity.FLAG_INVISIBLE — DATA_SHARED_FLAGS (index 0) bit 5 (1<<5 == 0x20):
+// the client renders the entity invisible while set.
+//
+//	[VERIFIED javap Entity.setInvisible(boolean) -> setSharedFlag(5, value); the invisible flag is bit 5.]
+const invisibleSharedFlagBit int8 = 0x20
 
 // modifier ids (stable identity per effect, matching the vanilla effect.<name> ids).
 const (
@@ -71,6 +91,9 @@ const (
 	hasteModifierID     = "effect.haste"      // HASTE     -> ATTACK_SPEED
 	strengthModifierID  = "effect.strength"   // STRENGTH  -> ATTACK_DAMAGE
 	jumpBoostModifierID = "effect.jump_boost" // JUMP_BOOST-> SAFE_FALL_DISTANCE
+	// ABSORPTION modifier id (VERIFIED CFR MobEffects.ABSORPTION addAttributeModifier: MAX_ABSORPTION,
+	// Identifier.withDefaultNamespace("effect.absorption"), 4.0, ADD_VALUE).
+	absorptionModifierID = "effect.absorption" // ABSORPTION -> MAX_ABSORPTION
 )
 
 // activeEffect is the Go stand-in for MobEffectInstance (the fields the witch slice needs): the effect id,
@@ -118,7 +141,46 @@ func (t *TickLoop) addPlayerEffect(p *tickPlayer, ownerID int32, id string, dura
 		t.removeEffectModifiers(p, id) // re-apply the modifier at the new amplifier below
 	}
 	p.activeEffects[id] = &activeEffect{id: id, duration: duration, amplifier: amplifier}
-	t.applyEffectModifiers(p, id, amplifier)
+	t.applyEffectModifiers(p, id, amplifier) // LivingEntity.onEffectAdded -> MobEffect.addAttributeModifiers
+	t.onPlayerEffectStarted(p, id, amplifier) // MobEffectInstance.onEffectStarted -> MobEffect.onEffectStarted
+}
+
+// onPlayerEffectStarted is the port of MobEffect.onEffectStarted (called last in LivingEntity.addEffect,
+// AFTER onEffectAdded attaches the attribute modifiers). ABSORPTION fills the hearts to
+// max(getAbsorptionAmount(), 4*(amp+1)); INVISIBILITY updates the shared invisible flag. The base
+// MobEffect.onEffectStarted is a no-op, so every other effect falls through. Cite
+// AbsorptionMobEffect.onEffectStarted + LivingEntity.updateInvisibilityStatus.
+func (t *TickLoop) onPlayerEffectStarted(p *tickPlayer, id string, amplifier int) {
+	switch id {
+	case effectAbsorption:
+		// AbsorptionMobEffect.onEffectStarted: setAbsorptionAmount(Math.max(getAbsorptionAmount(),
+		// (float)(4*(1+amp)))). The MAX_ABSORPTION +4*(amp+1) modifier attached in applyEffectModifiers
+		// above raised the clamp ceiling first, so setAbsorptionAmount does not clamp the fill back to 0.
+		fill := float32(4 * (1 + amplifier))
+		if cur := p.getAbsorptionAmount(); cur > fill {
+			fill = cur
+		}
+		p.setAbsorptionAmount(fill)
+	case effectInvisibility:
+		// LivingEntity.updateInvisibilityStatus: setInvisible(hasEffect(INVISIBILITY)) -> the invisible
+		// bit is now present, so broadcast the shared-flags byte to trackers.
+		t.broadcastPlayerInvisibleFlag(p)
+	}
+}
+
+// broadcastPlayerInvisibleFlag pushes the DATA_SHARED_FLAGS byte (index 0) to every player tracking p,
+// carrying the invisible bit (0x20) iff the player currently has INVISIBILITY. This is the port of
+// LivingEntity.updateInvisibilityStatus's setInvisible(hasEffect(INVISIBILITY)) broadcast. v1 players
+// carry no other server-side shared flags (no player remainingFireTicks/crouch/sprint wire — see
+// fire.go's cited player-fire deferral), so the byte carries ONLY the invisible bit, exactly as a
+// vanilla player with no other flags would rewrite it. Mirrors broadcastEntityFireFlag (BYTE serializer
+// at index 0). Cite LivingEntity.updateInvisibilityStatus + Entity.setInvisible (setSharedFlag(5,...)).
+func (t *TickLoop) broadcastPlayerInvisibleFlag(p *tickPlayer) {
+	var flags int8
+	if playerHasEffect(p, effectInvisibility) {
+		flags |= invisibleSharedFlagBit
+	}
+	t.broadcastToTrackers(p.entityID, encodeSetEntityDataByID(p.entityID, sharedFlagsDataEntry(flags)))
 }
 
 // applyInstantEffect is the port of HealOrHarmMobEffect.applyInstantaneousEffect for a player victim: the
@@ -181,6 +243,14 @@ func (t *TickLoop) applyEffectModifiers(p *tickPlayer, id string, amplifier int)
 			Amount:    1.0 * float64(amplifier+1),
 			Operation: attribute.AddValue,
 		})
+	case effectAbsorption:
+		// MobEffects.ABSORPTION: MAX_ABSORPTION +4.0*(amp+1) ADD_VALUE (effect.absorption). This raises the
+		// setAbsorptionAmount clamp ceiling so onEffectStarted's heart-fill is not clamped back to 0.
+		h.addModifier(attrMaxAbsorption, attribute.AttributeModifier{
+			ID:        absorptionModifierID,
+			Amount:    4.0 * float64(amplifier+1),
+			Operation: attribute.AddValue,
+		})
 		// effectResistance / effectRegeneration carry NO attribute modifier (RESISTANCE reduces damage in the
 		// hurt calc; REGENERATION is a periodic heal — handled in effectShouldApplyThisTick/applyEffectTick).
 	}
@@ -204,6 +274,14 @@ func (t *TickLoop) removeEffectModifiers(p *tickPlayer, id string) {
 		p.attributes.removeModifier(attrAttackDamage, strengthModifierID)
 	case effectJumpBoost:
 		p.attributes.removeModifier(attrSafeFallDistance, jumpBoostModifierID)
+	case effectAbsorption:
+		// Detach the MAX_ABSORPTION modifier, then re-run setAbsorptionAmount(getAbsorptionAmount()) so the
+		// now-lowered getMaxAbsorption() clamp trims any leftover absorption back to [0, maxAbsorption]. This
+		// is vanilla's behavior: LivingEntity.onEffectsRemoved -> removeAttributeModifiers; the next
+		// setAbsorptionAmount clamps against the reduced ceiling (a bare removal without a refresh would leave
+		// stale hearts above the ceiling until the next hit).
+		p.attributes.removeModifier(attrMaxAbsorption, absorptionModifierID)
+		p.setAbsorptionAmount(p.getAbsorptionAmount())
 	}
 }
 
@@ -216,12 +294,14 @@ func (t *TickLoop) tickPlayerEffects(p *tickPlayer) {
 	}
 	for id, e := range p.activeEffects {
 		// MobEffectInstance.tickServer: if shouldApply, run applyEffectTick; a false return means the effect
-		// consumed itself (BAD_OMEN converting / RAID_OMEN firing) -> remove it now and skip the countdown.
-		// tickCount passed to shouldApplyEffectTickThisTick is the remaining duration (counting DOWN).
+		// consumed itself (BAD_OMEN converting / RAID_OMEN firing, or ABSORPTION depleted) -> remove it now
+		// and skip the countdown. tickCount passed to shouldApplyEffectTickThisTick is the remaining duration
+		// (counting DOWN).
 		if effectShouldApplyThisTick(id, e.duration, e.amplifier) {
 			if !t.applyEffectTick(p, id, e.amplifier) {
 				delete(p.activeEffects, id)
 				t.removeEffectModifiers(p, id)
+				t.onPlayerEffectRemoved(p, id)
 				continue
 			}
 		}
@@ -229,7 +309,20 @@ func (t *TickLoop) tickPlayerEffects(p *tickPlayer) {
 		if e.duration <= 0 {
 			delete(p.activeEffects, id)
 			t.removeEffectModifiers(p, id)
+			t.onPlayerEffectRemoved(p, id)
 		}
+	}
+}
+
+// onPlayerEffectRemoved is the removal-side counterpart of onPlayerEffectStarted: it runs after the
+// effect is deleted from the map + its attribute modifiers detached (LivingEntity.onEffectsRemoved).
+// INVISIBILITY re-broadcasts the shared-flags byte (now with the invisible bit cleared, since
+// hasEffect(INVISIBILITY) is false). Every other effect falls through. Cite
+// LivingEntity.updateInvisibilityStatus (re-run after an effect is removed).
+func (t *TickLoop) onPlayerEffectRemoved(p *tickPlayer, id string) {
+	switch id {
+	case effectInvisibility:
+		t.broadcastPlayerInvisibleFlag(p)
 	}
 }
 
@@ -254,8 +347,12 @@ func effectShouldApplyThisTick(id string, remaining, amplifier int) bool {
 			return true
 		}
 		return remaining%interval == 0
+	case effectAbsorption:
+		return true // AbsorptionMobEffect.shouldApplyEffectTickThisTick -> always true
+	case effectHunger:
+		return true // HungerMobEffect.shouldApplyEffectTickThisTick -> always true
 	default:
-		return false // slowness/weakness/speed/haste/strength/jump_boost/resistance never tick (pure modifiers)
+		return false // slowness/weakness/speed/haste/strength/jump_boost/resistance/invisibility never tick
 	}
 }
 
@@ -279,6 +376,16 @@ func (t *TickLoop) applyEffectTick(p *tickPlayer, id string, amplifier int) bool
 		if p.health < maxHealth {
 			t.heal(p, 1.0)
 		}
+		return true
+	case effectAbsorption:
+		// AbsorptionMobEffect.applyEffectTick: return getAbsorptionAmount() > 0. When the absorption hearts
+		// are depleted (folded away by actuallyHurt), this returns false -> the effect removes itself.
+		return p.getAbsorptionAmount() > 0.0
+	case effectHunger:
+		// HungerMobEffect.applyEffectTick: causeFoodExhaustion(0.005f * (amp+1)). causeFoodExhaustion is the
+		// single exhaustion entry point (attack_dispatch.go): it honors the abilities.invulnerable guard then
+		// routes into FoodData.addExhaustion, exactly Player.causeFoodExhaustion.
+		t.causeFoodExhaustion(p, 0.005*float32(amplifier+1))
 		return true
 	}
 	return true
