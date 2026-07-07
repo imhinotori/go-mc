@@ -332,8 +332,11 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 	// replacing the clicked block, the ADJACENT target must itself be replaceable (air/water/
 	// lava) — placement never overwrites a solid block. An unloaded/unreadable target is treated
 	// as not-replaceable (no-op), matching FAIL.
+	// NETHER: read/write the PLACER's-dimension world at that dimension's minY.
+	pmgr := t.dimWorld(p)
+	pMinY := dimMinYFor(p.dimension)
 	if !replaceClicked {
-		targetState, ok := t.world().GetBlock(placePos, dimMinY)
+		targetState, ok := pmgr.GetBlock(placePos, pMinY)
 		if !ok || !(isReplaceableState(targetState) && placeState != targetState) {
 			return // !canPlace() -> FAIL, silent no-op
 		}
@@ -364,11 +367,11 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 		// placeBlock -> Level.setBlock(getClickedPos(), state). changed=false (unloaded / no-change)
 		// -> no ack, no broadcast (matches placeBlock returning false -> FAIL). Capture the pre-place state
 		// first so the POI hook below sees the old->new transition (LevelChunk.setBlockState reads both).
-		if t.world() == nil {
+		if pmgr == nil {
 			return
 		}
-		prePlaceState, _ := t.world().GetBlock(placePos, dimMinY)
-		if !t.world().SetBlock(placePos, placeState, dimMinY) {
+		prePlaceState, _ := pmgr.GetBlock(placePos, pMinY)
+		if !pmgr.SetBlock(placePos, placeState, pMinY) {
 			return
 		}
 
@@ -389,7 +392,7 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 		// (dampening/emission/occlusion vs the pre-place state), recompute the affected columns' light and
 		// push a ClientboundLightUpdate to their trackers. A placed torch/glowstone lights the room; a
 		// placed solid block casts a shadow. Gated inside relightOnEdit (no-op when properties match).
-		t.relightOnEdit(placePos, prePlaceState, placeState)
+		t.relightOnEdit(p, placePos, prePlaceState, placeState)
 
 		// PLUGIN-02 (Plan 22) on_block_place seam: fire ONCE here at the place call site, AFTER the
 		// authoritative SetBlock+reconcileEdit — NOT from the shared broadcastBlockUpdate (Pitfall 2:

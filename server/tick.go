@@ -70,13 +70,34 @@ type asyncResult interface{ applyTo(*TickLoop) }
 // sole ownership to the tick. applyTo runs on the OWNER goroutine inside
 // applyAsyncResults — the single insert that crosses the off-tick boundary — keeping
 // the rejoin -race clean by construction (threat T-4-05).
-type chunkReady struct{ res world.ChunkResult }
+type chunkReady struct {
+	res world.ChunkResult
+	// dimension tags which world this result belongs to (dimOverworld default, dimNether for the
+	// nether worker's results). applyTo inserts into the matching ChunkManager. Overworld results
+	// (the zero value) keep the original region-owned per-chunk container/fluid/spawn routing; a
+	// nether result inserts into netherWorld and skips region routing (the nether is a single,
+	// non-region-partitioned manager for now).
+	dimension int
+}
 
 // applyTo inserts the worker-produced chunk into the tick-owned ChunkManager. On a
 // generation/region error it reverts the holder to Empty so tickChunks can re-request
 // the column on a later tick (threat W1 retry) — it NEVER inserts a nil chunk. This is
 // the ONLY mutation that crosses the off-tick boundary, and it runs on the owner.
 func (r chunkReady) applyTo(t *TickLoop) {
+	// NETHER: a nether chunk result inserts into netherWorld (no region routing — the nether is a
+	// single manager). block-ticks/fluids/structure-spawns in the nether are a follow-up phase.
+	if r.dimension == dimNether {
+		if t.netherWorld == nil {
+			return
+		}
+		if r.res.Err != nil {
+			t.netherWorld.MarkEmpty(r.res.Pos)
+			return
+		}
+		t.netherWorld.Insert(r.res.Pos, r.res.Chunk)
+		return
+	}
 	if t.world() == nil {
 		return // no world wired (defensive; SetWorld always sets it before feeding asyncIn)
 	}
@@ -164,6 +185,14 @@ type TickLoop struct {
 	// boundary contract. These fields moved OFF TickLoop onto region: asyncIn, world, worker,
 	// asyncBridge, blockTicks, blockTickSubCounter, fluidSchedule, levelRandom, spawnScanPending.
 	regions []*region
+
+	// netherWorld / netherWorker are the SECOND dimension (the_nether): a dedicated ChunkManager +
+	// off-tick generate/load worker, separate from the region-partitioned overworld world. They are
+	// nil until SetNetherWorld wires them. A player in dimNether streams + edits through netherWorld
+	// (t.dimWorld). netherAsyncBridge carries the nether worker's chunk-load results onto the SAME
+	// coordinator chunkReady drain (tagged dimension:dimNether so applyTo inserts into netherWorld).
+	netherWorld  *world.ChunkManager
+	netherWorker *world.Worker
 
 	// currentRegion is the Phase-27 STEP-3 (N=2) per-goroutine current-region registry: when a
 	// region's fan-out goroutine is running its tick, it registers itself here keyed by its goroutine
@@ -627,6 +656,12 @@ type tickPlayer struct {
 	// (a chunk square exists around origin); Phase 5 (PLAY-01/03) sets the real spawn
 	// center and updates it on movement, re-issuing SetChunkCacheCenter.
 	center level.ChunkPos
+
+	// dimension is the player's current dimension (dimOverworld==0 / dimNether==1). It selects which
+	// world (overworld or nether ChunkManager) the player's chunk streaming + block edits read/write,
+	// via t.dimWorld(p). Set at join (overworld) and flipped by changeDimension on nether travel. The
+	// tick-owned single-owner discipline covers it (touched only on the tick goroutine, TICK-05).
+	dimension int
 
 	// viewDist is the SERVER-CLAMPED view distance in chunks (the DoS control, T-4-01).
 	// The needed-ring is (2*viewDist+1)^2 — bounded by the server, never by an untrusted
@@ -1228,6 +1263,86 @@ const asyncBridgeBuffer = 256
 // seam) now drains chunk results on the owner goroutine. MUST be called before Run so
 // asyncIn is non-nil. The adapter touches NO tick state (only re-wraps the immutable
 // result), so it introduces no data race; the manager is mutated solely by the tick.
+// Dimension ids. dimOverworld is the default (0) — every existing single-dimension code path that
+// reads t.world() stays the overworld. dimNether (1) selects the nether ChunkManager via t.dimWorld.
+const (
+	dimOverworld = 0
+	dimNether    = 1
+)
+
+// dimNetherMinY / dimNetherSecs are the nether geometry (nether.json: min_y 0, height 128 -> 8
+// sections). The overworld's dimMinY(-64)/24 sections stay the default for dimOverworld.
+const (
+	dimNetherMinY = 0
+	dimNetherSecs = 8
+)
+
+// SetNetherWorld wires the second-dimension (the_nether) ChunkManager + worker, mirroring SetWorld
+// but stored on dedicated fields rather than fanned into the regions (the region set is the
+// overworld's Folia partitioning). The nether world's async chunk results are bridged onto the SAME
+// chunkReady channel the coordinator drains, so a nether chunk load rejoins the tick exactly like an
+// overworld one (applyTo inserts into whichever manager owns the column — see chunkReady.applyTo,
+// which is made dimension-aware). nil until main() constructs the nether generator/worker.
+func (t *TickLoop) SetNetherWorld(mgr *world.ChunkManager, worker *world.Worker) {
+	t.netherWorld = mgr
+	t.netherWorker = worker
+	// Bridge the nether worker's immutable results onto the coordinator's general async-result channel
+	// (asyncIn2, drained every tick by applyAsyncResults). Each result is tagged dimNether so applyTo
+	// inserts into netherWorld. asyncIn2 is always constructed in NewTickLoop, so it is non-nil here.
+	go func() {
+		for res := range worker.Results() {
+			t.asyncIn2 <- chunkReady{res: res, dimension: dimNether}
+		}
+	}()
+}
+
+// playerDimOr returns a player's dimension, or dimOverworld for a nil player (an AI/non-player caller).
+// It guards the nil-p deref at the block-edit seams shared between player actions and AI (e.g. the fox
+// digs via digBlockState(nil,...)).
+func playerDimOr(p *tickPlayer) int {
+	if p == nil {
+		return dimOverworld
+	}
+	return p.dimension
+}
+
+// dimWorld returns the ChunkManager for a player's current dimension: the nether world for a player
+// in dimNether, the (region-shared) overworld world otherwise. The player-facing paths (chunk
+// streaming, block place/break) read/write through this so an edit in the nether lands in the nether
+// world, not the overworld. A nil nether world (not wired) falls back to the overworld so behavior
+// is unchanged until the nether is set up.
+func (t *TickLoop) dimWorld(p *tickPlayer) *world.ChunkManager {
+	if p != nil && p.dimension == dimNether && t.netherWorld != nil {
+		return t.netherWorld
+	}
+	return t.world()
+}
+
+// dimWorldByID returns the ChunkManager for a dimension id (used by streaming, which iterates by
+// player). dimNether -> nether world (overworld fallback if unset); else overworld.
+func (t *TickLoop) dimWorldByID(dim int) *world.ChunkManager {
+	if dim == dimNether && t.netherWorld != nil {
+		return t.netherWorld
+	}
+	return t.world()
+}
+
+// dimMinYFor / dimSecsFor return a dimension's geometry (minY, section count). The nether is
+// (0, 8); the overworld is (dimMinY, 24).
+func dimMinYFor(dim int) int {
+	if dim == dimNether {
+		return dimNetherMinY
+	}
+	return dimMinY
+}
+
+func dimSecsFor(dim int) int {
+	if dim == dimNether {
+		return dimNetherSecs
+	}
+	return 24
+}
+
 func (t *TickLoop) SetWorld(mgr *world.ChunkManager, worker *world.Worker) {
 	// Phase-27 STEP-3 (N=2): the world (ChunkManager + worker) is SHARED across every region — wire
 	// the same pointers into ALL regions so a region's t.only().world (read on its fan-out goroutine

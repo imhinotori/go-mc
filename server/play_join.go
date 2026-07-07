@@ -57,6 +57,16 @@ const overworldDimensionTypeID = 0
 // an Identifier on the wire), distinct from the dimension TYPE holder above.
 const overworldDimensionName = "minecraft:overworld"
 
+// netherDimensionTypeID / netherDimensionName: the_nether's dimension_type registry index (3, per the
+// alphabetical order above) and its level ResourceKey. changeDimension uses these in the Respawn
+// packet's spawn-info so the client rebuilds the nether ClientLevel (red fog, no sky, ceiling).
+const (
+	netherDimensionTypeID = 3
+	netherDimensionName   = "minecraft:the_nether"
+	// netherSeaLevelWire is the nether's reported sea level in the spawn info (nether.json sea_level 32).
+	netherSeaLevelWire = 32
+)
+
 // gameEventLevelChunksLoadStart is the ClientboundGameEvent Type.id for
 // LEVEL_CHUNKS_LOAD_START — jar-verified id 13 (bipush 13 in the packet's static
 // initializer). Its float param is unused (0) for this event.
@@ -106,18 +116,18 @@ const overworldSeaLevel = 63
 func writeLoginPacket(entityID int32, viewDist int) pk.Packet {
 	return pk.Marshal(
 		int32(packetid.ClientboundLogin),
-		pk.Int(entityID),                      // playerId (allocated, not the old const 1)
-		pk.Boolean(false),                     // hardcore
-		levelsEncoder{overworldDimensionName}, // levels: Set<ResourceKey<Level>>
-		pk.VarInt(maxPlayersJoin),             // maxPlayers
-		pk.VarInt(int32(viewDist)),            // chunkRadius (server-clamped view distance)
-		pk.VarInt(int32(viewDist)),            // simulationDistance
-		pk.Boolean(false),                     // reducedDebugInfo
-		pk.Boolean(true),                      // showDeathScreen (enableRespawnScreen)
-		pk.Boolean(false),                     // doLimitedCrafting
-		commonPlayerSpawnInfoEncoder{},        // commonPlayerSpawnInfo (nested record)
-		pk.Boolean(false),                     // onlineMode (offline server — NET-03)
-		pk.Boolean(false),                     // enforcesSecureChat
+		pk.Int(entityID),  // playerId (allocated, not the old const 1)
+		pk.Boolean(false), // hardcore
+		levelsEncoder{overworldDimensionName, netherDimensionName}, // levels: Set<ResourceKey<Level>> (overworld + nether)
+		pk.VarInt(maxPlayersJoin),                                  // maxPlayers
+		pk.VarInt(int32(viewDist)),                                 // chunkRadius (server-clamped view distance)
+		pk.VarInt(int32(viewDist)),                                 // simulationDistance
+		pk.Boolean(false),                                          // reducedDebugInfo
+		pk.Boolean(true),                                           // showDeathScreen (enableRespawnScreen)
+		pk.Boolean(false),                                          // doLimitedCrafting
+		commonPlayerSpawnInfoEncoder{},                             // commonPlayerSpawnInfo (nested record)
+		pk.Boolean(false),                                          // onlineMode (offline server — NET-03)
+		pk.Boolean(false),                                          // enforcesSecureChat
 	)
 }
 
@@ -163,23 +173,53 @@ func (l levelsEncoder) WriteTo(w io.Writer) (int64, error) {
 //	Optional<GlobalPos>   lastDeathLocation (empty == Boolean(false))
 //	VarInt                portalCooldown
 //	VarInt                seaLevel
-type commonPlayerSpawnInfoEncoder struct{}
+//
+// commonPlayerSpawnInfoEncoder writes CommonPlayerSpawnInfo. The ZERO VALUE encodes the OVERWORLD
+// (dimTypeID 0 -> VarInt(1), name minecraft:overworld, isFlat true, seaLevel 63) so every existing
+// Login/Respawn caller is byte-unchanged. changeDimension fills the fields to encode the nether
+// (dimTypeID for the_nether, name minecraft:the_nether, isFlat false, seaLevel 32).
+type commonPlayerSpawnInfoEncoder struct {
+	// dimTypeID is the dimension_type registry index (overworld 0). Written as VarInt(id+1) per the
+	// holder-registry codec. Zero value == overworld.
+	dimTypeID int
+	// dimName is the ResourceKey<Level> (minecraft:overworld / minecraft:the_nether). Empty == overworld.
+	dimName string
+	// isFlat toggles superflat rendering — overworld uses true here (v1 flat rendering); the nether
+	// uses false. A zero value keeps the overworld's true via the encoder's default below.
+	isFlatSet bool // when false, default overworld isFlat=true is written
+	isFlat    bool
+	// seaLevel overrides the reported sea level; 0 == overworld default (63).
+	seaLevel int
+}
 
-func (commonPlayerSpawnInfoEncoder) WriteTo(w io.Writer) (int64, error) {
+func (e commonPlayerSpawnInfoEncoder) WriteTo(w io.Writer) (int64, error) {
 	var n int64
 	write := func(f pk.FieldEncoder) error {
 		m, err := f.WriteTo(w)
 		n += m
 		return err
 	}
+	dimTypeID := e.dimTypeID // zero == overworldDimensionTypeID (0)
+	dimName := e.dimName
+	if dimName == "" {
+		dimName = overworldDimensionName
+	}
+	isFlat := true // overworld default (v1 flat rendering)
+	if e.isFlatSet {
+		isFlat = e.isFlat
+	}
+	seaLevel := overworldSeaLevel
+	if e.seaLevel != 0 {
+		seaLevel = e.seaLevel
+	}
 	// dimensionType: Holder<DimensionType> as a registry reference. The vanilla
 	// holder-registry codec writes VarInt(registryId + 1) for a referenced entry
 	// (0 is reserved for an inline/direct holder, which a registry-backed dimension
 	// type never is). overworld is index 0 -> VarInt(1).
-	if err := write(pk.VarInt(overworldDimensionTypeID + 1)); err != nil {
+	if err := write(pk.VarInt(dimTypeID + 1)); err != nil {
 		return n, err
 	}
-	if err := write(pk.Identifier(overworldDimensionName)); err != nil { // dimension (level key)
+	if err := write(pk.Identifier(dimName)); err != nil { // dimension (level key)
 		return n, err
 	}
 	if err := write(pk.Long(0)); err != nil { // seed (hashed seed; 0 for the stub world)
@@ -194,7 +234,7 @@ func (commonPlayerSpawnInfoEncoder) WriteTo(w io.Writer) (int64, error) {
 	if err := write(pk.Boolean(false)); err != nil { // isDebug
 		return n, err
 	}
-	if err := write(pk.Boolean(true)); err != nil { // isFlat (superflat rendering)
+	if err := write(pk.Boolean(isFlat)); err != nil { // isFlat (superflat rendering)
 		return n, err
 	}
 	if err := write(pk.Boolean(false)); err != nil { // lastDeathLocation: empty Optional
@@ -203,7 +243,7 @@ func (commonPlayerSpawnInfoEncoder) WriteTo(w io.Writer) (int64, error) {
 	if err := write(pk.VarInt(0)); err != nil { // portalCooldown
 		return n, err
 	}
-	if err := write(pk.VarInt(overworldSeaLevel)); err != nil { // seaLevel
+	if err := write(pk.VarInt(seaLevel)); err != nil { // seaLevel
 		return n, err
 	}
 	return n, nil

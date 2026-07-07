@@ -193,7 +193,7 @@ func foxIsPathClear(t *TickLoop, e *Entity, tx, tz float64) bool {
 			bx := int(math.Floor(e.x + x))
 			by := int(math.Floor(e.y + float64(j)))
 			bz := int(math.Floor(e.z + z))
-			if !isReplaceableState(t.digBlockState(pk.Position{X: bx, Y: by, Z: bz})) {
+			if !isReplaceableState(t.digBlockState(nil, pk.Position{X: bx, Y: by, Z: bz})) {
 				return false
 			}
 		}

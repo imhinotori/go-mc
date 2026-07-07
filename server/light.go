@@ -23,16 +23,25 @@ const (
 // chunks (world.RelightEdit), and pushes a ClientboundLightUpdate for every column whose light actually
 // changed to every player tracking that column. Tick-owned (runs on the tick goroutine). CITE:
 // LevelChunk.setBlockState (hasDifferentLightProperties -> checkBlock) + ChunkMap's light-update broadcast.
-func (t *TickLoop) relightOnEdit(pos pk.Position, oldState, newState block.StateID) {
+func (t *TickLoop) relightOnEdit(p *tickPlayer, pos pk.Position, oldState, newState block.StateID) {
 	if !world.LightPropertiesDiffer(oldState, newState) {
 		return // light properties unchanged: no checkBlock, no relight (the hasDifferentLightProperties gate)
 	}
-	w := t.world()
+	// NETHER: relight the editor's-dimension world at that dimension's geometry so a nether edit
+	// re-propagates the nether world's light (not the overworld's). dimWorld(p) picks the manager;
+	// dimMinYFor/dimSecsFor give the section geometry.
+	w := t.dimWorld(p)
 	if w == nil {
 		return
 	}
+	minSec := lightMinSectionY
+	secs := lightSectionCount
+	if p != nil && p.dimension == dimNether {
+		minSec = dimNetherMinY >> 4
+		secs = dimNetherSecs
+	}
 	air := block.ToStateID[block.Air{}]
-	changed := w.RelightEdit(pos, lightMinSectionY, lightSectionCount, air)
+	changed := w.RelightEdit(pos, minSec, secs, air)
 	for _, cl := range changed {
 		packet := world.WriteLightUpdate(cl)
 		col := chunkCenterOf(cl.Pos[0]*16, cl.Pos[1]*16)

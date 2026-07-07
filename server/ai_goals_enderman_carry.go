@@ -148,7 +148,7 @@ func (g *endermanTakeBlockGoal) tick(t *TickLoop, e *Entity) {
 		// LevelChunk.setBlockState light hook: a stolen holdable (grass/dirt/sand) was opaque, so its
 		// removal raises the cell's light. Relight + push ClientboundLightUpdate. Gated on the property
 		// diff (sid -> air). CITE: LevelChunk.setBlockState -> getLightEngine().checkBlock.
-		t.relightOnEdit(pos, sid, 0)
+		t.relightOnEdit(nil, pos, sid, 0)
 	}
 	// gameEvent(GameEvent.BLOCK_DESTROY, ...): CITE-DEFERRED no-op (no game-event subsystem).
 	// setCarriedBlock(state.getBlock().defaultBlockState()): carry the DEFAULT state of the taken block.
@@ -215,7 +215,7 @@ func (g *endermanLeaveBlockGoal) tick(t *TickLoop, e *Entity) {
 			// LevelChunk.setBlockState light hook: the placed carried block (an opaque holdable) casts a
 			// shadow. Relight + push ClientboundLightUpdate. Gated on the property diff. CITE:
 			// LevelChunk.setBlockState -> getLightEngine().checkBlock.
-			t.relightOnEdit(pos, prePlace, carried)
+			t.relightOnEdit(nil, pos, prePlace, carried)
 		}
 		// gameEvent(GameEvent.BLOCK_PLACE, ...): CITE-DEFERRED no-op.
 		setEndermanCarriedBlock(t, e, 0, false) // setCarriedBlock(null)

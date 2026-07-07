@@ -229,6 +229,30 @@ func buildCommandGraph() *command.Graph {
 	dbg := g.Literal("dbg").AppendArgument(dbgArgs).Unhandle()
 	g.AppendLiteral(dbg)
 
+	// /dimension <nether|overworld> — travel between dimensions (operator). The in-game path is the
+	// nether portal (nether_portal.go builds the blocks); this command is the direct changeDimension
+	// trigger so the second dimension is reachable + testable while the portal's entityInside travel
+	// timer is wired. Permission-gated on command.tp (a travel-class action).
+	dimArgs := g.Argument("target", command.StringParser(2)).HandleFunc(permissionGated("command.tp",
+		func(ctx context.Context, args []command.ParsedData) error {
+			e, ok := executorFrom(ctx)
+			if !ok || e.p == nil || len(args) == 0 {
+				return nil
+			}
+			target, _ := args[len(args)-1].(string)
+			switch strings.TrimSpace(strings.ToLower(target)) {
+			case "nether", "the_nether":
+				e.t.changeDimension(e.p, dimNether)
+			case "overworld":
+				e.t.changeDimension(e.p, dimOverworld)
+			default:
+				return errDimensionUsage
+			}
+			return nil
+		}))
+	dimc := g.Literal("dimension").AppendArgument(dimArgs).Unhandle()
+	g.AppendLiteral(dimc)
+
 	// The vanilla 26.2 command set (commands_vanilla.go): /gamemode /op /deop /kill /list /seed
 	// /help /msg — each permission-gated on its minecraft.command.<name> node.
 	registerVanillaCommands(g)
@@ -406,6 +430,9 @@ func (t *TickLoop) runChatCommand(p *tickPlayer, packet pk.Packet) {
 // errTpUsage is the /tp parse failure surfaced to the issuer (the runCommand reply path turns a
 // non-nil handler error into a SystemChat). Kept as a sentinel so the usage text is one place.
 var errTpUsage = errors.New("usage: /tp <x> <y> <z>")
+
+// errDimensionUsage is the /dimension parse error (unknown target).
+var errDimensionUsage = errors.New("usage: /dimension <nether|overworld>")
 
 // parseTpCoords parses a "<x> <y> <z>" coordinate triple (whitespace-separated floats) for /tp.
 // It accepts extra surrounding whitespace and rejects a wrong arg count or a non-numeric field.

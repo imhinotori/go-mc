@@ -157,12 +157,15 @@ func (t *TickLoop) getDestroyProgress(p *tickPlayer, stateID block.StateID) floa
 // vanilla level.getBlockState always returns a state (an unloaded chunk reads air), so an unreadable
 // column collapsing to air is the faithful behavior: the dig stops and the overlay clears, exactly
 // as if the player dug into air. Tick-owned (called on the tick goroutine).
-func (t *TickLoop) digBlockState(pos pk.Position) block.StateID {
+func (t *TickLoop) digBlockState(p *tickPlayer, pos pk.Position) block.StateID {
 	air := block.ToStateID[block.Air{}]
-	if t.world() == nil {
+	mgr := t.dimWorld(p) // the player's-dimension world (nether for a nether player)
+	if mgr == nil {
 		return air
 	}
-	if s, ok := t.world().GetBlock(pos, dimMinY); ok {
+	// A nil player (an AI caller, e.g. the fox) is the overworld (dimOverworld minY); a real player
+	// uses its dimension's minY. playerDimOr guards the nil-p deref.
+	if s, ok := mgr.GetBlock(pos, dimMinYFor(playerDimOr(p))); ok {
 		return s
 	}
 	return air
@@ -194,7 +197,7 @@ func (t *TickLoop) handleBlockBreakAction(p *tickPlayer, pos pk.Position, action
 	// predicted edit snaps back) and returning. We broadcast the current state to the tracking column,
 	// which includes the breaker — the same snap-back reconciliation broadcastBlockUpdate provides.
 	if pos.Y > maxBuildHeightY {
-		t.broadcastBlockUpdate(pos, t.digBlockState(pos))
+		t.broadcastBlockUpdate(pos, t.digBlockState(p, pos))
 		return
 	}
 
@@ -234,7 +237,7 @@ func (t *TickLoop) startDestroyBlock(p *tickPlayer, pos pk.Position, sequence in
 	// no-ops — no enchants, no per-block attack behavior — so they are omitted as a CITED no-op; cite
 	// handleBlockBreakAction's EnchantmentHelper.onHitBlock / BlockState.attack.)
 	progress := digInstaMineThreshold // 1.0f
-	state := t.digBlockState(pos)
+	state := t.digBlockState(p, pos)
 	air := block.ToStateID[block.Air{}]
 	if state != air && !block.IsAir(state) {
 		progress = t.getDestroyProgress(p, state)
@@ -266,7 +269,7 @@ func (t *TickLoop) stopDestroyBlock(p *tickPlayer, pos pk.Position, sequence int
 		return // STOP for a block we are not digging: no-op (vanilla only acts when pos.equals(destroyPos))
 	}
 	elapsed := int32(t.gametime) - p.destroyProgressStart
-	state := t.digBlockState(pos)
+	state := t.digBlockState(p, pos)
 	if block.IsAir(state) {
 		return // already air: nothing to finish
 	}
@@ -312,7 +315,7 @@ func (t *TickLoop) tickBlockBreak() {
 			continue
 		}
 		if p.hasDelayedDestroy {
-			s := t.digBlockState(p.delayedDestroyPos)
+			s := t.digBlockState(p, p.delayedDestroyPos)
 			if block.IsAir(s) {
 				p.hasDelayedDestroy = false
 				continue
@@ -323,7 +326,7 @@ func (t *TickLoop) tickBlockBreak() {
 				t.destroyBlock(p, p.delayedDestroyPos, air, 0, false)
 			}
 		} else if p.isDestroyingBlock {
-			s := t.digBlockState(p.destroyPos)
+			s := t.digBlockState(p, p.destroyPos)
 			if block.IsAir(s) {
 				t.destroyBlockProgress(p.entityID, p.destroyPos, digOverlayClear)
 				p.lastSentDestroyStage = -1
@@ -369,16 +372,21 @@ func (t *TickLoop) destroyAndAck(p *tickPlayer, pos pk.Position, sequence int32)
 func (t *TickLoop) destroyBlock(p *tickPlayer, pos pk.Position, air block.StateID, sequence int32, ack bool) {
 	// Capture the broken state BEFORE SetBlock overwrites it with air (reading after would see air, so
 	// no drop). A failed read leaves brokenState at air (no drop) — the safe default.
+	// NETHER: read/write the BREAKER's-dimension world (dimWorld(p)) at that dimension's minY so a
+	// nether break lands in the nether world, not the overworld. A nil breaker (a non-player break,
+	// e.g. a test / a future world-driven removal) is the overworld (playerDimOr).
+	mgr := t.dimWorld(p)
+	minY := dimMinYFor(playerDimOr(p))
 	brokenState := air
-	if t.world() != nil {
-		if s, ok := t.world().GetBlock(pos, dimMinY); ok {
+	if mgr != nil {
+		if s, ok := mgr.GetBlock(pos, minY); ok {
 			brokenState = s
 		}
 	}
 
 	// level.removeBlock(pos, false) -> SetBlock to air. changed=false (unloaded column / already air)
 	// means nothing broke: no ack, no broadcast, no drop (matches destroyBlock returning false).
-	if t.world() == nil || !t.world().SetBlock(pos, air, dimMinY) {
+	if mgr == nil || !mgr.SetBlock(pos, air, minY) {
 		return
 	}
 
@@ -425,7 +433,7 @@ func (t *TickLoop) destroyBlock(p *tickPlayer, pos pk.Position, air block.StateI
 		// caster) or removes an emitter (a broken torch darkens the room). Recompute the affected columns'
 		// light and push a ClientboundLightUpdate to their trackers. Covers BOTH the ack (insta/STOP) and
 		// the delayed-destroy paths — destroyBlock is the single break funnel. Gated inside relightOnEdit.
-		t.relightOnEdit(pos, brokenState, air)
+		t.relightOnEdit(p, pos, brokenState, air)
 
 		// Spawn the dropped Item entity (ServerPlayerGameMode.destroyBlock's loot path). Creative drops
 		// nothing (gated inside spawnBlockDrop). Lands in the OWNING region's store (cur().entities.add).
