@@ -444,6 +444,13 @@ func (t *TickLoop) destroyBlock(p *tickPlayer, pos pk.Position, air block.StateI
 		// the delayed-destroy paths — destroyBlock is the single break funnel. Gated inside relightOnEdit.
 		t.relightOnEdit(p, pos, brokenState, air)
 
+		// D-B1: the general Level.setBlock flag-1+2 neighbour-update dispatch for the CrossCollisionBlock
+		// + attachment slices - a break to air makes an adjacent fence/pane/bar drop its connection toward
+		// the now-empty cell (updateNeighbourShapes), and an attachment (torch) whose support was just
+		// removed pops off + drops (neighborChanged canSurvive -> false). Single MINIMAL call so the
+		// break-path integration stays trivial. Cite Level.setBlock -> updateNeighbourShapes / updateNeighborsAt.
+		t.updateShapeOnEdit(pos, air)
+
 		// Spawn the dropped Item entity (ServerPlayerGameMode.destroyBlock's loot path). Creative drops
 		// nothing (gated inside spawnBlockDrop). Lands in the OWNING region's store (cur().entities.add).
 		t.spawnBlockDrop(p, pos, brokenState)

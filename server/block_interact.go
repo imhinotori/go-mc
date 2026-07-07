@@ -411,6 +411,13 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 
 		t.reconcileEdit(p, placePos, placeState, int32(sequence))
 
+		// D-B1: the general Level.setBlock flag-1+2 neighbour-update dispatch for the CrossCollisionBlock
+		// + attachment slices - a placed fence/pane/bar connects to its neighbours (and they to it) via
+		// updateNeighbourShapes, and any neighbour whose support is now the placed cell re-checks
+		// neighborChanged. Single MINIMAL call so the place-path integration stays trivial. Cite
+		// Level.setBlock -> updateNeighbourShapes / updateNeighborsAt.
+		t.updateShapeOnEdit(placePos, placeState)
+
 		// LevelChunk.setBlockState light hook: if the placed block changes the cell's light properties
 		// (dampening/emission/occlusion vs the pre-place state), recompute the affected columns' light and
 		// push a ClientboundLightUpdate to their trackers. A placed torch/glowstone lights the room; a
