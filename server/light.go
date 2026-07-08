@@ -97,3 +97,31 @@ func (t *TickLoop) maxLocalRawBrightness(pos pk.Position) int {
 	}
 	return t.rawBrightness(pos, skyDarkenDay)
 }
+
+// getBrightnessSky ports BlockAndLightGetter.getBrightness(LightLayer.SKY, pos) =
+// getLightEngine().getLayerListener(SKY).getLightValue(pos): the RAW stored sky-light value at pos
+// (NOT sky-darkened -- day/night darkening is applied separately via getSkyDarken() in
+// getRawBrightness). At a surface cell open to the sky this is 15 regardless of time of day; deep
+// underground it is 0. A nil world (unit-test loop with no chunk manager) falls back to 15 so the
+// spawn light gate behaves as it did under the previous cited-constant stub. CITE:
+// net.minecraft.world.level.BlockAndLightGetter.getBrightness(LightLayer, BlockPos).
+func (t *TickLoop) getBrightnessSky(pos pk.Position) int {
+	w := t.world()
+	if w == nil {
+		return 15
+	}
+	return w.SkyBrightness(pos, dimMinY)
+}
+
+// getBrightnessBlock ports BlockAndLightGetter.getBrightness(LightLayer.BLOCK, pos): the stored
+// block-light value at pos (torches/lava/etc.), independent of sky light and day/night. A nil world
+// falls back to 0 (no block light) so the spawn light gate's overworld BLOCK-limit branch (limit 0:
+// any block light blocks the spawn) does not spuriously reject in a manager-less unit test. CITE:
+// net.minecraft.world.level.BlockAndLightGetter.getBrightness(LightLayer, BlockPos).
+func (t *TickLoop) getBrightnessBlock(pos pk.Position) int {
+	w := t.world()
+	if w == nil {
+		return 0
+	}
+	return w.BlockBrightness(pos, dimMinY)
+}

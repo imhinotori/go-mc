@@ -255,7 +255,7 @@ func (g *foxSleepGoal) canSleep(t *TickLoop, e *Entity) bool {
 	}
 	// isBrightOutside via the isDarkEnoughToSpawn day/night proxy; hasShelter (under cover); !alertable;
 	// !isInPowderSnow is a cited constant-false stub (no powder-snow subsystem).
-	return !t.isDarkEnoughToSpawn() && foxHasShelter(t, e) && !foxAlertable(t, e)
+	return !t.isNightByGametime() && foxHasShelter(t, e) && !foxAlertable(t, e)
 }
 
 func (g *foxSleepGoal) canUse(t *TickLoop, e *Entity) bool {
@@ -350,7 +350,7 @@ func (g *foxSeekShelterGoal) canUse(t *TickLoop, e *Entity) bool {
 	}
 	g.interval = 100
 	// isVillage is a cited constant-false stub (no village POI) — a v1 fox is never in a village.
-	return !t.isDarkEnoughToSpawn() && t.canSeeSky(e) && g.setWantedPos(t, e)
+	return !t.isNightByGametime() && t.canSeeSky(e) && g.setWantedPos(t, e)
 }
 
 func (g *foxSeekShelterGoal) canContinueToUse(_ *TickLoop, e *Entity) bool {

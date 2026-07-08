@@ -110,39 +110,95 @@ func categorySpawnCap(cat mobCategory, spawnableChunkCount int) int {
 	return creatureCap(spawnableChunkCount)
 }
 
-// Day/night gametime windows for the FORCED isDarkEnoughToSpawn proxy (35-CONTEXT SC#4). The vanilla
-// day is 24000 ticks; hostiles spawn from dusk (~13000) to dawn (~23000) — the night portion of the
-// day-time cycle. These bound the proxy that stands in for the real sky/block-light read.
+// Day/night gametime windows for the daylight day/night proxy (35-CONTEXT SC#4). The vanilla day is
+// 24000 ticks; hostiles are active from dusk (~13000) to dawn (~23000) -- the night portion of the
+// day-time cycle. These bound the proxy the SPIDER daylight-flee gate (ai_goals_attack.go isBright)
+// still uses for its getLightLevelDependentMagicValue()>=0.5 day/night read; the natural-spawn
+// darkness gate no longer uses this proxy -- it reads the REAL light engine (isDarkEnoughToSpawn).
 const (
 	dayLengthTicks  = 24000 // vanilla day length (one full day/night cycle in ticks)
-	nightStartTicks = 13000 // dusk: monsters begin spawning
-	nightEndTicks   = 23000 // dawn: monster spawning ends
+	nightStartTicks = 13000 // dusk: night begins
+	nightEndTicks   = 23000 // dawn: night ends
 )
 
-// isDarkEnoughToSpawn — THE FORCED PROXY (35-CONTEXT SC#4): no light engine exists yet (the v1 world
-// is flat-stone superflat with NO light propagation — node_evaluator.go:27 / path_region.go:29), so
-// the real Monster.isDarkEnoughToSpawn SKY/BLOCK-brightness read (35-JARNOTES.md:177-192:
-// `if (level.getBrightness(SKY, pos) > random.nextInt(32)) return false; ...
-// `return b <= dimensionType.monsterSpawnLightTest().sample(random)`) is UNAVAILABLE. So this gates
-// hostile spawns on the day/night GAMETIME window instead — the night portion of `t.gametime %
-// dayLengthTicks` (tick.go:130: gametime is the per-tick clock, the only time-of-day signal — no
-// separate dayTime/timeOfDay field is ticked or sent to the client, confirmed). This EQUALS the
-// vanilla night-time default and is STRUCTURED to become a real sky-light read when the lighting
-// engine lands (swap the gametime read for `level.getBrightness(SKY, pos)` + the nextInt(32) sample).
-// It is NEVER a silent daylight flood and NEVER a silent missing gate — daytime hard-blocks the
-// hostile pass.
-//
-// DEFERRED (recorded here + in the SUMMARY, to land with the lighting engine): the full
-// light-propagation engine, block-light/cave hostile spawning, and the light-test RNG — the spawn-
-// attempt nextInt(32) SKY sample + the monsterSpawnLightTest UniformInt(0,7).sample(random) draw
-// (35-JARNOTES.md:179-183). Those are off the per-mob RNG stream (spawn-attempt RNG), so the deferral
-// does not perturb any mob's lockstep draw order; it only changes WHICH light positions are dark.
-// CITE: net.minecraft.world.entity.monster.Monster.isDarkEnoughToSpawn.
-func (t *TickLoop) isDarkEnoughToSpawn() bool {
+// isNightByGametime is the day/night GAMETIME proxy: true during the [13000,23000) night portion of
+// `t.gametime % dayLengthTicks`. It is NOT the spawn darkness gate (that is the real light-based
+// isDarkEnoughToSpawn below). It stands in for the not-yet-built day/night SKY_LIGHT_LEVEL
+// environment-attribute clock for the ONE remaining consumer that has no per-position light read:
+// the Spider daylight-flee proxy (Spider$SpiderAttackGoal getLightLevelDependentMagicValue()>=0.5,
+// ai_goals_attack.go isBright). gametime (tick.go) is a monotonic non-negative tick counter (++ once
+// per consumed step, never decremented), so dayTime is always in [0,24000).
+func (t *TickLoop) isNightByGametime() bool {
 	dayTime := t.gametime % dayLengthTicks
-	// Go's % keeps the sign of the dividend; gametime is a monotonic non-negative tick counter
-	// (tick.go:130 — ++ once per consumed step, never decremented), so dayTime is always in [0,24000).
 	return dayTime >= nightStartTicks && dayTime < nightEndTicks
+}
+
+// Overworld DimensionType monster-spawn light parameters (data/minecraft/dimension_type/overworld.json:
+// monster_spawn_block_light_limit: 0, monster_spawn_light_level: UniformInt{0..7}). These are the
+// DimensionType.monsterSpawnBlockLightLimit() / monsterSpawnLightTest() reads Monster.isDarkEnoughToSpawn
+// consults. v1 is single-dimension overworld; a future multi-dimension wiring threads the per-dimension
+// values here (the nether uses blockLightLimit 15 -> the BLOCK-light branch is skipped, and its own
+// monster_spawn_light_level). CITE: net.minecraft.world.level.dimension.DimensionType.
+const (
+	monsterSpawnBlockLightLimit = 0 // overworld: BLOCK light must be <= 0 (any block light blocks the spawn)
+	monsterSpawnLightTestMin    = 0 // UniformInt min_inclusive
+	monsterSpawnLightTestMax    = 7 // UniformInt max_inclusive
+)
+
+// isDarkEnoughToSpawn ports net.minecraft.world.entity.monster.Monster.isDarkEnoughToSpawn(level, pos,
+// random) 1:1 over the REAL light engine (server/light.go, world/manager_light.go -- the LevelLightEngine
+// ported in the light commits), replacing the former day/night gametime proxy. The bytecode this
+// translates (javap -c -p net.minecraft.world.entity.monster.Monster):
+//
+//	if (level.getBrightness(SKY, pos) > random.nextInt(32)) return false;          // SKY short-circuit
+//	int limit = dimensionType.monsterSpawnBlockLightLimit();
+//	if (limit < 15 && level.getBrightness(BLOCK, pos) > limit) return false;        // BLOCK-light gate
+//	int b = isThundering ? getMaxLocalRawBrightness(pos, 10) : getMaxLocalRawBrightness(pos);
+//	return b <= dimensionType.monsterSpawnLightTest().sample(random);              // light-test sample
+//
+// RNG DRAW ORDER (crucial -- this runs on the spawn stream, cur().levelRandom, the Level.random
+// analogue): the nextInt(32) SKY sample is drawn FIRST and UNCONDITIONALLY (exactly the jar: the
+// getBrightness(SKY) short-circuit is `getBrightness(SKY,pos) > random.nextInt(32)`, so even a skylit
+// cell that returns false HAS drawn the nextInt(32)). Only if the SKY and BLOCK gates BOTH pass is the
+// monsterSpawnLightTest sample drawn -- UniformInt(0,7).sample == Mth.randomBetweenInclusive(r,0,7) ==
+// r.nextInt(7-0+1)+0 == r.nextInt(8) (verified: UniformInt.sample -> Mth.randomBetweenInclusive
+// bytecode). The two draws land at the vanilla isValidSpawnPostitionForType -> checkSpawnRules position
+// inside spawnPackAt (natural_spawner.go), AFTER the biome pick/packSize-reset and BEFORE the yaw draw.
+//
+// getMaxLocalRawBrightness(pos) = getRawBrightness(pos, getSkyDarken()); getSkyDarken() is the level's
+// ambient-darkness term (15 - SKY_LIGHT_LEVEL). The day/night SKY_LIGHT_LEVEL clock is a not-yet-built
+// subsystem, so skyDarken stays at the vanilla DAY default (skyDarkenDay = 0, light.go), which makes a
+// SURFACE cell (raw SKY light 15) read getMaxLocalRawBrightness == 15 > any nextInt(8) sample -> the
+// gate returns false -> NO daytime surface hostile spawn (the reported bug's fix). A dark cave cell
+// (SKY 0, BLOCK 0) reads 0 <= nextInt(8) frequently -> hostiles spawn underground, exactly as vanilla.
+// [DEFERRED: getSkyDarken() day/night clock -> NIGHT surface spawns land when the environment-attribute
+// time clock lands (the SAME skyDarkenDay deferral in light.go); the light read + RNG draws are 1:1 now.]
+// CITE: net.minecraft.world.entity.monster.Monster.isDarkEnoughToSpawn;
+// net.minecraft.world.level.dimension.DimensionType.monsterSpawnLightTest (UniformInt 0..7);
+// net.minecraft.util.valueproviders.UniformInt.sample -> Mth.randomBetweenInclusive.
+func (t *TickLoop) isDarkEnoughToSpawn(pos pk.Position) bool {
+	r := t.cur().levelRandom
+	// if (level.getBrightness(SKY, pos) > random.nextInt(32)) return false; -- the SKY short-circuit.
+	// The nextInt(32) is ALWAYS drawn (it is on the RHS of the comparison), even when SKY is low.
+	skyBrightness := t.getBrightnessSky(pos)
+	if skyBrightness > int(r.NextIntN(32)) {
+		return false
+	}
+	// if (limit < 15 && level.getBrightness(BLOCK, pos) > limit) return false; -- the BLOCK-light gate.
+	// Overworld limit == 0, so any block light (> 0) at the position blocks the spawn. No RNG here.
+	if monsterSpawnBlockLightLimit < 15 && t.getBrightnessBlock(pos) > monsterSpawnBlockLightLimit {
+		return false
+	}
+	// int b = isThundering ? getMaxLocalRawBrightness(pos, 10) : getMaxLocalRawBrightness(pos);
+	var b int
+	if t.isThundering() {
+		b = t.rawBrightness(pos, 10)
+	} else {
+		b = t.maxLocalRawBrightness(pos)
+	}
+	// return b <= monsterSpawnLightTest().sample(random); -- UniformInt(0,7).sample == nextInt(8).
+	sample := int(r.NextIntN(monsterSpawnLightTestMax-monsterSpawnLightTestMin+1)) + monsterSpawnLightTestMin
+	return b <= sample
 }
 
 // countByCategory ranges the tick-owned entityStore and tallies the live mob count per
@@ -403,17 +459,20 @@ func (t *TickLoop) naturalSpawn() {
 	// CITE: net.minecraft.world.entity.Mob.checkDespawn; NaturalSpawner.getFilteredSpawningCategories.
 
 	// Two faithful passes per cycle (vanilla NaturalSpawner iterates the filtered spawning categories):
-	// the CREATURE pass, then the night-gated MONSTER pass (Phase 35-02). The single-in-flight gate
-	// (spawnScanPending) admits ONE scan per cycle, so try CREATURE first; only if it did NOT submit
-	// (at cap / pool overload) does the MONSTER pass get a turn this cycle — the next cycle alternates
-	// naturally. The MONSTER pass is ADDITIONALLY gated by isDarkEnoughToSpawn (the FORCED day/night
-	// proxy, SC#4): in daytime the hostile pass submits NOTHING (never a silent daylight flood).
+	// the CREATURE pass, then the MONSTER pass (Phase 35-02). The single-in-flight gate (spawnScanPending)
+	// admits ONE scan per cycle, so try CREATURE first; only if it did NOT submit (at cap / pool overload)
+	// does the MONSTER pass get a turn this cycle -- the next cycle alternates naturally. The MONSTER
+	// darkness gate is NO LONGER a once-per-cycle pre-submit check: it is the REAL per-candidate-position
+	// Monster.isDarkEnoughToSpawn light read applied inside spawnPackAt (natural_spawner.go), exactly at
+	// the vanilla isValidSpawnPostitionForType -> checkSpawnRules point (the jar runs the light check per
+	// candidate, not per cycle). So the MONSTER scan ALWAYS submits; the light gate rejects the individual
+	// daylit/lit positions on the owner (a daytime SURFACE candidate reads brightness 15 and is dropped;
+	// a dark cave candidate passes). This matches vanilla's per-position darkness discipline and draws the
+	// nextInt(32)+nextInt(8) samples on the spawn stream in the exact vanilla order.
 	if t.submitSpawnScanFor(categoryCreature, cols, spawnableChunkCount, refY) {
 		return // a CREATURE scan is in flight this cycle (the gate is set)
 	}
-	if t.isDarkEnoughToSpawn() {
-		t.submitSpawnScanFor(categoryMonster, cols, spawnableChunkCount, refY)
-	}
+	t.submitSpawnScanFor(categoryMonster, cols, spawnableChunkCount, refY)
 }
 
 // spawnLiveCount returns the GLOBAL live count for a category for naturalSpawn's pre-submit cap gate

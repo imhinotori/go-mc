@@ -150,5 +150,5 @@ func (t *TickLoop) stopSleepInBed(p *tickPlayer, wakeImmediately bool) {
 // (isDarkEnoughToSpawn) as the isDarkOutside analog — the SAME day-phase the spawner/fire subsystems cite
 // for the absent lighting engine. CITE BedRule.CAN_SLEEP_WHEN_DARK + Level.isDarkOutside.
 func (t *TickLoop) bedRuleCanSleep() bool {
-	return t.isDarkEnoughToSpawn()
+	return t.isNightByGametime()
 }

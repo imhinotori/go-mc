@@ -95,7 +95,7 @@ func (g *fleeSunGoal) canUse(t *TickLoop, e *Entity) bool {
 	if e.ai.getTarget() != 0 { // getTarget() != null
 		return false
 	}
-	if t.isDarkEnoughToSpawn() { // !isBrightOutside()
+	if t.isNightByGametime() { // !isBrightOutside()
 		return false
 	}
 	if !fleeSunIsOnFire(e) { // !isOnFire()
@@ -144,7 +144,7 @@ func (g *restrictSunGoal) canUse(t *TickLoop, e *Entity) bool {
 		return false
 	}
 	// isBrightOutside() && getItemBySlot(HEAD).isEmpty() (cited constant-true) && hasGroundPathNavigation.
-	return !t.isDarkEnoughToSpawn()
+	return !t.isNightByGametime()
 }
 
 func (g *restrictSunGoal) start(_ *TickLoop, e *Entity) {

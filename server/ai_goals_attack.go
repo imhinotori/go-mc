@@ -423,9 +423,13 @@ func (g *meleeAttackGoal) doHurtTarget(t *TickLoop, e *Entity, target *tickPlaye
 // proxy — the same FORCED decision the spawn gate made (35-02). It becomes a real light read with the
 // lighting engine, off no mob's lockstep stream (the flee draw stays on the spider's per-entity rng).
 func (g *meleeAttackGoal) isBright(t *TickLoop) bool {
-	// "Bright" (daytime) is the inverse of the night-window dark proxy. isDarkEnoughToSpawn() is true
-	// during the [13000,23000) night window; bright == its negation (daytime).
-	return !t.isDarkEnoughToSpawn()
+	// "Bright" (daytime) is the inverse of the night-window day/night proxy. isNightByGametime() is true
+	// during the [13000,23000) night window; bright == its negation (daytime). This is the SPIDER's own
+	// daylight-flee day/night proxy (getLightLevelDependentMagicValue()>=0.5), distinct from the natural-
+	// spawn darkness gate (which now reads the real per-position light engine, spawner.go
+	// isDarkEnoughToSpawn); the spider gate still uses the gametime proxy until the day/night SKY_LIGHT
+	// clock lands (the cited deferral above).
+	return !t.isNightByGametime()
 }
 
 // mobTarget reads the mob's current attack-target id (the Mob.getTarget() analogue), nil-guarding the

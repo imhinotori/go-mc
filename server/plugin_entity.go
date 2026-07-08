@@ -881,7 +881,7 @@ func (h *worldHandle) isDark(_ *starlark.Thread, b *starlark.Builtin,
 	if err := starlark.UnpackPositionalArgs(b.Name(), args, kwargs, 0); err != nil {
 		return nil, err
 	}
-	return starlark.Bool(h.t.isDarkEnoughToSpawn()), nil
+	return starlark.Bool(h.t.isNightByGametime()), nil
 }
 
 // nearestPlayer(x,y,z,max_dist) READS the nearest PLAYER position in range (world.read). Players are

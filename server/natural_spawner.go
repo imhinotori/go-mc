@@ -1,5 +1,9 @@
 package server
 
+import (
+	pk "github.com/imhinotori/sulfur/net/packet"
+)
+
 // natural_spawner.go - C-6 (divergence audit): the 1:1 port of the placement-rules CORE of
 // net.minecraft.world.level.NaturalSpawner.spawnCategoryForPosition - the pieces the earlier
 // faithful-but-minimal spawner.go DEFERRED (spawner.go:32,369): the per-position
@@ -234,6 +238,21 @@ func (t *TickLoop) spawnPackAt(cx0, cy, cz0 int, cat mobCategory) int {
 			// is skipped (continue), exactly as vanilla isValidSpawnPostitionForType rejects it.
 			if !(t.blockSolidAt(x, cy-1, z) && !t.blockSolidAt(x, cy, z) && !t.blockSolidAt(x, cy+1, z)) {
 				continue
+			}
+			// isValidSpawnPostitionForType -> SpawnPlacements.checkSpawnRules(type, level, NATURAL, pos,
+			// level.random): the per-candidate spawn-rules gate. For a MONSTER-category type this dispatches
+			// to Monster.checkMonsterSpawnRules -> isDarkEnoughToSpawn (the real light read + RNG draws:
+			// nextInt(32) SKY sample, then conditionally nextInt(8) light-test). It runs HERE, at the exact
+			// vanilla draw position (after the biome pick/packSize-reset, before the yaw draw), on THIS
+			// region's seeded levelRandom (cur().levelRandom == r.levelRandom, the Level.random analogue). A
+			// candidate that is too bright (a daylit surface cell) is REJECTED here, so the pack member is
+			// skipped (continue) exactly as vanilla checkSpawnRules returns false. The CREATURE path draws
+			// NO RNG in its spawn-rules gate (Animal.checkAnimalSpawnRules uses isBrightEnoughToSpawn, a pure
+			// getRawBrightness read with no nextInt), so gating monsters here leaves the creature/pig spawn
+			// RNG stream byte-identical (the pig oracle). CITE: net.minecraft.world.entity.SpawnPlacements
+			// .checkSpawnRules; net.minecraft.world.entity.monster.Monster.checkMonsterSpawnRules.
+			if cat == categoryMonster && !t.isDarkEnoughToSpawn(pk.Position{X: x, Y: cy, Z: z}) {
+				continue // not dark enough at this candidate (e.g. daylit surface): reject, exactly as checkSpawnRules
 			}
 			// mob.snapTo(cx, y, cz, random.nextFloat() * 360.0F, 0.0F) - the yaw draw.
 			yaw := r.levelRandom.NextFloat() * 360.0

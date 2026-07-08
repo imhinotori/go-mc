@@ -144,6 +144,17 @@ func newSpawnLoop(t *testing.T) (*TickLoop, *level.Chunk, int) {
 	// spawnTestSeed): production's nondeterministic uniqueLevelRandomSeed() otherwise lands the pack
 	// inside the 24-block no-spawn bubble on a minority of seeds, flaking the count assertions.
 	seedSpawnRegions(loop)
+	// Light the spawn columns to full daylight (SKY 15) by DEFAULT so the per-position monster darkness
+	// gate (Monster.isDarkEnoughToSpawn, spawner.go) treats this as a daylit surface -- the MONSTER pass
+	// then places NO hostile, isolating the CREATURE assertions in these tests from incidental monster
+	// spawns. Monster-specific tests (spawner_monster_test.go) call lightAllSpawnColumns(loop, 0) after
+	// this to open the dark gate. The CREATURE spawn path draws NO light-gate RNG (Animal spawn rules use
+	// a pure brightness read, no nextInt), so lighting here leaves every creature/pig draw byte-identical.
+	for _, col := range loop.spawnableColumns() {
+		if c, ok := mgr.Get(col); ok {
+			setSkyLight(c, 15)
+		}
+	}
 	return loop, ch, floorY
 }
 
