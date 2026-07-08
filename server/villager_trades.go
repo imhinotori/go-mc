@@ -552,7 +552,18 @@ func villagerGetOffers(e *Entity) merchantOffers {
 		return nil
 	}
 	if !e.offersBuilt {
-		e.offers = villagerOffersFor(e.villagerProfession, e.villagerLevel)
+		// WanderingTrader.updateTrades (VERIFIED CFR): getOffers() -> addOffersFromTradeSet for
+		// WANDERING_TRADER_BUYING/UNCOMMON/COMMON. Its offer set is a DIFFERENT trade table than a
+		// Villager's profession/level tables, so the WT branch builds wanderingTraderOffers() instead of
+		// villagerOffersFor. Like the villager path this is a DETERMINISTIC concrete reduction of the
+		// randomized addOffersFromTradeSet pick (a faithful data reduction, not a menu behavior change --
+		// the wire/take/uses logic below is identical regardless of which offers the list holds). CITE
+		// WanderingTrader.updateTrades / AbstractVillager.addOffersFromTradeSet.
+		if e.isWanderingTrader {
+			e.offers = wanderingTraderOffers()
+		} else {
+			e.offers = villagerOffersFor(e.villagerProfession, e.villagerLevel)
+		}
 		e.offersBuilt = true
 	}
 	return e.offers

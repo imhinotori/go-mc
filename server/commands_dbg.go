@@ -487,6 +487,17 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 			e.villagerLevel = 1
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned villager_farmer eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
 		}
+	case "wandering_trader", "wanderingtrader", "trader":
+		// WANDERING TRADER (Task): the roaming merchant (AbstractVillager; MAX_HEALTH 20, MOVEMENT_SPEED 0.7
+		// via createMobAttributes). Right-click it to open the MerchantMenu -- its offers (buying + common +
+		// uncommon slice of the vanilla wandering_trader trade table) are pre-built. It spawns with 2 trader
+		// llamas beside it (the caravan; the leash/follow link is cite-deferred). despawnDelay starts at 0
+		// (never auto-despawns unless armed via setDespawnDelay). The night-invisibility drink + the periodic
+		// WanderingTraderSpawner are cite-deferred (mob-effect subsystem / no per-world spawn timer).
+		e := t.spawnWanderingTrader(p.x, p.y, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned wandering_trader eid=%d (hp=%.1f) + 2 trader llamas at (%.1f,%.1f,%.1f)", e.id, e.health, p.x, p.y, p.z))
+		}
 	case "ravager":
 		// RAIDER (Task): spawn a vanilla ravager (raid beast, Ravager wire type). Hunts + melees + roars
 		// (ravagerAiStep: attackTick/roar AoE/stun; the leaf-trample + stun-trigger are cite-deferred).
@@ -640,7 +651,7 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] placed a simple_dungeon loot chest at (%d,%d,%d); open it", pos.X, pos.Y, pos.Z))
 		}
 	default:
-		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | dragon | iron_golem | villager | villager_farmer | vex | ghast_hostile | blaze | phantom | strider | wither_skeleton | wither | hoglin | bee | goat | frog | camel | sniffer | allay | axolotl | parrot | bat | squid | glow_squid | cod | salmon | pufferfish | tropical_fish | dolphin | tadpole | fangs | water | pig-in-water | raid | rain | redstone | trade | trident | throw-trident | crafter | map | loom | loot")
+		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | dragon | iron_golem | villager | villager_farmer | wandering_trader | vex | ghast_hostile | blaze | phantom | strider | wither_skeleton | wither | hoglin | bee | goat | frog | camel | sniffer | allay | axolotl | parrot | bat | squid | glow_squid | cod | salmon | pufferfish | tropical_fish | dolphin | tadpole | fangs | water | pig-in-water | raid | rain | redstone | trade | trident | throw-trident | crafter | map | loom | loot")
 	}
 }
 

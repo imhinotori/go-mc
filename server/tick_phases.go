@@ -953,6 +953,14 @@ func (t *TickLoop) tickAI() {
 		if e.typ == entity.Villager.ID {
 			t.villagerBrainTick(e)
 		}
+		// WANDERING TRADER (Task): the WanderingTrader.aiStep server tail -- maybeDespawn (--despawnDelay
+		// while !isTrading, discard at 0). Per-type-gated on isWanderingTrader, AFTER serverAiStep (the WT
+		// passive goals have run this tick). ADDITIVE + WT-gated (zero cost / zero RNG for every non-WT --
+		// the pig oracle stream is untouched; the WT never draws RNG in maybeDespawn). Cite
+		// WanderingTrader.aiStep + maybeDespawn.
+		if e.isWanderingTrader {
+			t.wanderingTraderAiStep(e)
+		}
 		// PIGLIN (Task): the Piglin.customServerAiStep brain tick -- the flagship nether mob is a BRAIN mob
 		// (Swim/LookAtTargetSink/MoveToTargetSink CORE + the code-driven fight melee + the off-nether
 		// zombification timer). Per-type-gated like the villager, AFTER serverAiStep (the piglin's empty

@@ -687,6 +687,21 @@ type Entity struct {
 	//	 Villager.rewardTradeXp (lastTradedPlayer = getTradingPlayer()) + customServerAiStep (fires TRADE).]
 	villagerGossips      *gossipContainer
 	lastTradedPlayerUUID uuid.UUID
+	// --- WANDERING TRADER STATE (net.minecraft.world.entity.npc.wanderingtrader.WanderingTrader) -----
+	//
+	// Tick-owned, set/read ONLY for a WanderingTrader (typ == entity.WanderingTrader.ID). isWanderingTrader
+	// gates the WT-specific offer build (villagerGetOffers branch), the WT mobInteract, and the aiStep
+	// maybeDespawn -- the WT is an AbstractVillager, so it REUSES the shared offers/offersBuilt/
+	// villagerTradingPlayer/villagerXp fields above (getOffers/setTradingPlayer/rewardTradeXp live on
+	// AbstractVillager). despawnDelay mirrors WanderingTrader.despawnDelay: a countdown the spawner seeds
+	// (setDespawnDelay(48000)); maybeDespawn decrements it each server tick while !isTrading() and discards
+	// the trader at 0. The ctor sets it to DEFAULT_DESPAWN_DELAY==0 (a trader spawned outside the spawner
+	// never auto-despawns until a delay is set). wanderTarget (WanderToPositionGoal destination) is the
+	// DEFERRED autonomous-goal seam (no field yet -- the goal is cite-deferred). Zero for every non-WT.
+	//	[VERIFIED CFR WanderingTrader: ctor despawnDelay=0; maybeDespawn (despawnDelay>0 && !isTrading() &&
+	//	 --despawnDelay==0 -> discard()); WanderingTraderSpawner.spawn setDespawnDelay(48000).]
+	isWanderingTrader bool
+	despawnDelay      int
 	// --- FOX CHARACTER STATE (net.minecraft.world.entity.animal.fox.Fox) ---------------------------
 	//
 	// Tick-owned plain values, set/read ONLY for a Fox. foxFlags is the DATA_FLAGS_ID byte the fox

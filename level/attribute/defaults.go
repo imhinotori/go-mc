@@ -129,6 +129,18 @@ func villagerSupplier() *Supplier {
 		Build()
 }
 
+// wanderingTraderSupplier is the port of the WANDERING_TRADER DefaultAttributes registration. Unlike
+// Villager (which OVERRIDES MOVEMENT_SPEED to 0.5), the wandering trader registers PLAIN
+// Mob.createMobAttributes() with NO override (VERIFIED CFR DefaultAttributes: EntityType.WANDERING_TRADER
+// -> Mob.createMobAttributes().build()). So it carries MAX_HEALTH 20.0 (living default) and the
+// MOVEMENT_SPEED REGISTRATION DEFAULT 0.7 (createLivingAttributes .add(MOVEMENT_SPEED), no value) -- the
+// jar bytecode is authoritative over the 0.5 figure. WanderingTrader.createAttributes does not exist
+// (AbstractVillager has none either); the supplier lives entirely in the DefaultAttributes map.
+func wanderingTraderSupplier() *Supplier {
+	return createMobAttributes().
+		Build()
+}
+
 // zombieSupplier is the port of Zombie.createAttributes() : Monster.createMonsterAttributes() +
 // FOLLOW_RANGE 35.0 + MOVEMENT_SPEED 0.23000000417232513 + ATTACK_DAMAGE 3.0 + ARMOR 2.0 (+
 // SPAWN_REINFORCEMENTS_CHANCE, omitted — no reinforcement spawning consumer yet; CITED). The
@@ -914,12 +926,13 @@ func livingFallbackSupplier() *Supplier {
 // Built once at package init (the singletons are immutable after Build), mirroring the static
 // SUPPLIERS map. Read-only after init, so concurrent reads from the tick are safe with no lock.
 var suppliers = map[string]*Supplier{
-	"player":     playerSupplier(),
-	"witch":      witchSupplier(),
-	"cat":        catSupplier(),
-	"villager":   villagerSupplier(),
-	"zombie":     zombieSupplier(),
-	"silverfish": silverfishSupplier(),
+	"player":           playerSupplier(),
+	"witch":            witchSupplier(),
+	"cat":              catSupplier(),
+	"villager":         villagerSupplier(),
+	"wandering_trader": wanderingTraderSupplier(),
+	"zombie":           zombieSupplier(),
+	"silverfish":       silverfishSupplier(),
 	// SUB-ATTRIB coverage fix (Phase 23): the common animals/monsters a plugin would plausibly
 	// spawn, each a 1:1 jar copy of that type's createAttributes() (verified bytecode this session).
 	"pig":      pigSupplier(),

@@ -1158,6 +1158,19 @@ func (t *TickLoop) handleInteract(p *tickPlayer, pkt pk.Packet) {
 	if mob.typ == entity.Villager.ID && t.villagerMobInteract(p, mob) {
 		return // the villager interact (menu open / unhappy / busy) handled the click
 	}
+	// WANDERING TRADER MERCHANT MENU (net.minecraft.world.entity.npc.wanderingtrader.WanderingTrader
+	// .mobInteract): a right-click on a live, non-baby, non-trading wandering trader opens the trading
+	// screen (setTradingPlayer + openTradingScreen -> the shared MerchantMenu path). The WT mobInteract is
+	// the AbstractVillager trade path MINUS updateSpecialPrices/setUnhappy (the WT has no gossip economy):
+	// spawn-egg gate (const-true, no WT spawn-egg dup action), isAlive && !isTrading && !isBaby, awardStat
+	// on MAIN_HAND, noOffers -> CONSUME, else setTradingPlayer + open. wanderingTraderMobInteract returns
+	// true whenever the interact belongs to the trader so handleInteract does NOT fall through to the feed
+	// path. WT-gated (typ == entity.WanderingTrader.ID) so it is a zero-cost no-op for a pig/cow/sheep; the
+	// only RNG (rewardTradeXp on a take) is on the WT OWN stream, so the pig oracle is unperturbed. Cite
+	// WanderingTrader.mobInteract.
+	if mob.typ == entity.WanderingTrader.ID && t.wanderingTraderMobInteract(p, mob) {
+		return // the wandering trader interact (menu open / no-offers consume / busy) handled the click
+	}
 	// PIGLIN BARTER (net.minecraft.world.entity.monster.piglin.Piglin.mobInteract -> PiglinAi.mobInteract):
 	// a right-click with a GOLD INGOT on an ADULT piglin consumes 1 ingot and drops a piglin_bartering roll
 	// (the barter). piglinMobInteract returns true when the interact belongs to the piglin (a barter consume)
