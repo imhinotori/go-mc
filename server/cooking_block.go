@@ -70,6 +70,10 @@ func (t *TickLoop) handleContainerButtonClick(p *tickPlayer, pkt pk.Packet) {
 		// EnchantmentMenu.clickMenuButton: apply the chosen offer (button 0/1/2). CITE
 		// ServerGamePacketListenerImpl.handleContainerButtonClick -> EnchantmentMenu.clickMenuButton.
 		t.enchantClickButton(p, oc, int(buttonID))
+	case containerKindLoom:
+		// LoomMenu.clickMenuButton: PICK a selectable banner pattern (button = the pattern index). CITE
+		// ServerGamePacketListenerImpl.handleContainerButtonClick -> LoomMenu.clickMenuButton.
+		t.loomClickButton(p, oc, int(buttonID))
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"github.com/imhinotori/sulfur/data/item"
 	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/level/component"
+	"github.com/imhinotori/sulfur/nbt"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
@@ -620,9 +621,26 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		inv.set(slot, component.SlotData{ItemID: pk.VarInt(item.Map.ID), Count: 1})
 		t.tryUseEmptyMap(p, inv, inv.get(slot), interactionHandMain)
 		t.broadcastSystemChat("[dbg] gave + opened a filled map; hold it to watch the terrain fill in")
+	case "loom":
+		// LOOM (loom_menu.go): give the issuer a white banner + a red dye + a creeper banner pattern so they
+		// can right-click a loom, pick a pattern, and take the layered banner. Exercises the LoomMenu apply.
+		inv := ensureInventory(p)
+		inv.set(int16(windowMainFirst+0), component.SlotData{ItemID: pk.VarInt(item.WhiteBanner.ID), Count: 1})
+		inv.set(int16(windowMainFirst+1), component.SlotData{ItemID: pk.VarInt(item.RedDye.ID), Count: 1})
+		inv.set(int16(windowMainFirst+2), component.SlotData{ItemID: pk.VarInt(item.CreeperBannerPattern.ID), Count: 1})
+		t.sendContent(p)
+		t.broadcastSystemChat("[dbg] gave white_banner + red_dye + creeper_banner_pattern; place them in a loom")
+	case "loot":
+		// LOOT (chest_loot.go): place a simple_dungeon loot chest 2 blocks in front (at the feet), carrying
+		// {LootTable, LootTableSeed} -- opening it rolls the real vanilla loot lazily (unpackLootTable).
+		if t.world() != nil {
+			pos := pk.Position{X: int(p.x), Y: int(p.y), Z: int(p.z) + 2}
+			t.world().SetBlock(pos, block.ToStateID[block.Chest{Facing: block.North, Type: block.ChestTypeSingle, Waterlogged: false}], dimMinY)
+			t.world().SetBlockEntityAt(pos, block.EntityTypes["minecraft:chest"], dbgLootChestNBT("minecraft:chests/simple_dungeon", 0x5EED), dimMinY)
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] placed a simple_dungeon loot chest at (%d,%d,%d); open it", pos.X, pos.Y, pos.Z))
+		}
 	default:
-		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | dragon | iron_golem | villager | villager_farmer | vex | ghast_hostile | blaze | phantom | strider | wither_skeleton | wither | hoglin | bee | goat | frog | camel | sniffer | allay | axolotl | parrot | bat | fangs | water | pig-in-water | raid | rain | redstone | trade | trident | throw-trident | crafter | map")
-		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | dragon | iron_golem | villager | villager_farmer | vex | ghast_hostile | blaze | phantom | strider | wither_skeleton | wither | hoglin | bee | goat | frog | camel | sniffer | allay | axolotl | parrot | bat | squid | glow_squid | cod | salmon | pufferfish | tropical_fish | dolphin | tadpole | fangs | water | pig-in-water | raid | rain | redstone | trade | trident | throw-trident")
+		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | dragon | iron_golem | villager | villager_farmer | vex | ghast_hostile | blaze | phantom | strider | wither_skeleton | wither | hoglin | bee | goat | frog | camel | sniffer | allay | axolotl | parrot | bat | squid | glow_squid | cod | salmon | pufferfish | tropical_fish | dolphin | tadpole | fangs | water | pig-in-water | raid | rain | redstone | trade | trident | throw-trident | crafter | map | loom | loot")
 	}
 }
 
@@ -644,4 +662,18 @@ func (t *TickLoop) dbgFillWater(p *tickPlayer) {
 			}
 		}
 	}
+}
+
+// dbgLootChestNBT builds the bare {LootTable, LootTableSeed} chest-BE compound payload (the 3-byte root
+// header stripped) for /dbg loot -- the same shape world/structure createChest emits, so unpackLootTable
+// rolls it on first open. CITE ChestBlockEntity loot NBT.
+func dbgLootChestNBT(table string, seed int64) nbt.RawMessage {
+	doc, err := nbt.Marshal(struct {
+		LootTable     string `nbt:"LootTable"`
+		LootTableSeed int64  `nbt:"LootTableSeed"`
+	}{LootTable: table, LootTableSeed: seed})
+	if err != nil {
+		return nbt.RawMessage{Type: nbt.TagCompound, Data: []byte{0x00}}
+	}
+	return nbt.RawMessage{Type: nbt.TagCompound, Data: doc[3:]}
 }

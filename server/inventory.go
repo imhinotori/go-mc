@@ -276,6 +276,9 @@ func (t *TickLoop) clicked(p *tickPlayer, containerID int32, slotNum int16, butt
 			case containerKindSmithing:
 				t.clickedSmithing(p, p.openContainer, slotNum, button, input)
 				return
+			case containerKindLoom:
+				t.clickedLoom(p, p.openContainer, slotNum, button, input)
+				return
 			}
 		}
 		t.sendContent(p) // unknown/stale window: resend authoritative player content
@@ -458,6 +461,12 @@ func (t *TickLoop) handleContainerClose(p *tickPlayer, pkt pk.Packet) {
 	// real and must not be lost.
 	if p.openContainer != nil && p.openContainer.kind == containerKindSmithing {
 		t.closeSmithingWindow(p, p.openContainer)
+	}
+	// A LOOM window returns its three transient INPUT slots (banner/dye/pattern) to the player on close
+	// (LoomMenu.removed -> clearContainer over the inputContainer). The result is virtual (not returned).
+	// The inputs are real and must not be lost.
+	if p.openContainer != nil && p.openContainer.kind == containerKindLoom {
+		t.closeLoomWindow(p, p.openContainer)
 	}
 	// The CARRIED (cursor) item: vanilla AbstractContainerMenu.removed() places a left-on-cursor item
 	// back into the inventory (or drops it) and clears the cursor. v1 previously LEFT it on the cursor —

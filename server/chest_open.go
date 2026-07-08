@@ -190,6 +190,21 @@ type openContainer struct {
 	smithAddition component.SlotData
 	smithResult   component.SlotData
 	smithPos      pk.Position
+
+	// loomBanner/loomDye/loomPattern/loomResult/loomPatterns/loomSelected/loomPos back the LOOM window
+	// (kind == containerKindLoom): the three transient INPUT slots (LoomMenu bannerSlot 0 / dyeSlot 1 /
+	// patternSlot 2 -- an inputContainer SimpleContainer(3) returned to the player on close), the displayed
+	// RESULT (loomResult = the outputContainer entry, take-only, recomputed by setupResultSlot), the current
+	// selectable-pattern name list (loomPatterns = LoomMenu.selectablePatterns), the selected index
+	// (loomSelected = the selectedBannerPatternIndex DataSlot; -1 = none), and the loom block position
+	// (loomPos -- for the ContainerLevelAccess reach + the take-sound seam). No block-entity (transient).
+	loomBanner   component.SlotData
+	loomDye      component.SlotData
+	loomPattern  component.SlotData
+	loomResult   component.SlotData
+	loomPatterns []string
+	loomSelected int
+	loomPos      pk.Position
 }
 
 // containerKind discriminates an open non-inventory window.
@@ -210,6 +225,7 @@ const (
 	containerKindEnchant                            // a transient enchanting-table (item + lapis + 3 offers)
 	containerKindGrindstone                         // a transient grindstone 2-input combiner (grind0/grind1)
 	containerKindSmithing                           // a transient smithing 3-input combiner (smithTemplate/Base/Addition)
+	containerKindLoom                               // a transient loom (banner/dye/pattern -> layered banner)
 )
 
 // chestMenuSize is the chest-window slot count: 27 chest container slots + 27 player main + 9
@@ -306,6 +322,9 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 	isEnchant := isEnchantingTableBlock(state)
 	isGrindstone := isGrindstoneBlock(state)
 	isSmithing := isSmithingTableBlock(state)
+	// A loom right-click OPENS its banner/dye/pattern APPLY menu (LoomBlock.useWithoutItem ->
+	// player.openMenu(loom)) and consumes the interaction so no block is placed. CITE LoomBlock.useWithoutItem.
+	isLoom := isLoomBlock(state)
 	// D-I1: a door / trapdoor / fence-gate right-click TOGGLES its OPEN (DoorBlock/TrapDoorBlock/
 	// FenceGateBlock.useWithoutItem) and consumes the interaction so no block is placed. Iron doors/
 	// trapdoors reject a hand click (canOpenByHand=false -> PASS) inside the dispatch. CITE:
@@ -316,7 +335,7 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 	isSign := isSignBlock(state)
 	if !isChest && !isCraft && !isCut && !isBed && !isFurnace && !isBrew && !isLever && !isButton &&
 		!isRepeater && !isComparator && !isDispenser && !isHopper && !isBeacon && !isAnvil && !isEnchant &&
-		!isGrindstone && !isSmithing && !isDoorFamily && !isSign {
+		!isGrindstone && !isSmithing && !isLoom && !isDoorFamily && !isSign {
 		return false // not an interactive block: PASS → placement runs
 	}
 	// Reach-gate the interaction (the same server-authoritative reach the place/break paths use):
@@ -417,6 +436,11 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 		// a waxed one). Consumes the interaction either way so no block is placed. CITE
 		// SignBlock.useWithoutItem.
 		return t.reopenSignEdit(p, hitPos)
+	}
+	if isLoom {
+		// LoomBlock.useWithoutItem -> player.openMenu(loom). The banner/dye/pattern apply menu opens on any
+		// right-click (the sneak guard collapses to false in v1, like the chest path).
+		return t.openLoom(p, hitPos)
 	}
 	return t.openChest(p, hitPos)
 }
