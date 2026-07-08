@@ -808,6 +808,60 @@ func axolotlSupplier() *Supplier {
 		Build()
 }
 
+// squidSupplier is the port of Squid.createAttributes() : Mob.createMobAttributes() + MAX_HEALTH 10.0
+// (jar: net.minecraft.world.entity.animal.squid.Squid.createAttributes -- javap this session:
+// createMobAttributes, ldc2_w 10.0d MAX_HEALTH). Squid extends AgeableWaterCreature -> PathfinderMob
+// -> ... -> Mob (NOT Animal), so it has NO createAnimalAttributes TEMPT_RANGE. GlowSquid extends Squid
+// with NO createAttributes override, so it inherits this exact supplier. Cite Squid.createAttributes.
+func squidSupplier() *Supplier {
+	return createMobAttributes().
+		AddValue(MaxHealth, 10.0).
+		Build()
+}
+
+// abstractFishSupplier is the port of AbstractFish.createAttributes() : Mob.createMobAttributes() +
+// MAX_HEALTH 3.0 (jar: net.minecraft.world.entity.animal.fish.AbstractFish.createAttributes -- javap
+// this session: createMobAttributes, ldc2_w 3.0d MAX_HEALTH). Cod, Salmon, TropicalFish (all extend
+// AbstractSchoolingFish -> AbstractFish) and Pufferfish (extends AbstractFish) inherit this supplier
+// unchanged -- none override createAttributes (javap-confirmed). AbstractFish builds on the Mob base
+// (NOT Animal), so it has NO TEMPT_RANGE. Cite AbstractFish.createAttributes.
+func abstractFishSupplier() *Supplier {
+	return createMobAttributes().
+		AddValue(MaxHealth, 3.0).
+		Build()
+}
+
+// dolphinSupplier is the port of Dolphin.createAttributes() : Mob.createMobAttributes() + MAX_HEALTH
+// 10.0 + MOVEMENT_SPEED 1.2000000476837158 (dconst-widened) + ATTACK_DAMAGE 3.0 (jar:
+// net.minecraft.world.entity.animal.dolphin.Dolphin.createAttributes -- javap this session:
+// createMobAttributes, ldc2_w 10.0d MAX_HEALTH, ldc2_w 1.2000000476837158d MOVEMENT_SPEED, ldc2_w 3.0d
+// ATTACK_DAMAGE). The MOVEMENT_SPEED literal is the vanilla float-widened double, preserved bit-for-bit
+// (a dolphin swims fast). Dolphin extends AgeableWaterCreature -> Mob (NOT Animal), so NO TEMPT_RANGE.
+// The moistness-out-of-water damage + swim-with-player boost + treasure-find are the DEFERRED behavior
+// layer (dolphin.go). Cite Dolphin.createAttributes.
+func dolphinSupplier() *Supplier {
+	return createMobAttributes().
+		AddValue(MaxHealth, 10.0).
+		AddValue(MovementSpeed, 1.2000000476837158).
+		AddValue(AttackDamage, 3.0).
+		Build()
+}
+
+// tadpoleSupplier is the port of Tadpole.createAttributes() : Animal.createAnimalAttributes() +
+// MOVEMENT_SPEED 1.0 (dconst_1) + MAX_HEALTH 6.0 (jar:
+// net.minecraft.world.entity.animal.frog.Tadpole.createAttributes -- javap this session:
+// createAnimalAttributes, dconst_1 MOVEMENT_SPEED, ldc2_w 6.0d MAX_HEALTH). Tadpole is the only water
+// mob built on Animal (it is the frog baby-stage that grows into a Frog), so it carries the
+// createAnimalAttributes TEMPT_RANGE. MOVEMENT_SPEED 1.0 is large -- the swim navigation reads it
+// through the swim scale. The age -> Frog growth (ticksToBeFrog 24000) is in tadpole.go. Cite
+// Tadpole.createAttributes.
+func tadpoleSupplier() *Supplier {
+	return createAnimalAttributes().
+		AddValue(MovementSpeed, 1.0).
+		AddValue(MaxHealth, 6.0).
+		Build()
+}
+
 // livingFallbackSupplier is the port of LivingEntity.createLivingAttributes() (the gameplay subset):
 // the base attribute set EVERY LivingEntity has. Vanilla's DefaultAttributes registers a supplier for
 // every living EntityType; Sulfur ports the common per-type suppliers above and leans on THIS fallback
@@ -970,6 +1024,19 @@ var suppliers = map[string]*Supplier{
 	"mule":         chestedHorseSupplier(),
 	"llama":        chestedHorseSupplier(),
 	"trader_llama": chestedHorseSupplier(),
+	// WATER MOBS (Task): the 8 aquatic mobs. Each a 1:1 jar copy of its createAttributes (verified
+	// bytecode this session). Squid + GlowSquid (Mob + MAX_HEALTH 10; GlowSquid inherits Squid unchanged).
+	// Cod/Salmon/Pufferfish/TropicalFish (all AbstractFish + MAX_HEALTH 3; none override createAttributes).
+	// Dolphin (Mob + MAX_HEALTH 10 + MOVEMENT_SPEED 1.2 + ATTACK_DAMAGE 3). Tadpole (Animal + MOVEMENT_SPEED
+	// 1.0 + MAX_HEALTH 6; the frog baby-stage). Keyed by registry name so NewMapForEntity resolves each.
+	"squid":         squidSupplier(),
+	"glow_squid":    squidSupplier(),
+	"cod":           abstractFishSupplier(),
+	"salmon":        abstractFishSupplier(),
+	"pufferfish":    abstractFishSupplier(),
+	"tropical_fish": abstractFishSupplier(),
+	"dolphin":       dolphinSupplier(),
+	"tadpole":       tadpoleSupplier(),
 }
 
 // livingCategories is the set of data/entity.Entity.Type values that correspond to a vanilla

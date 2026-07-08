@@ -46,6 +46,9 @@ var (
 	damageTypeEnderPearl = damageTypeID(tag.DamageTypeIDs["minecraft:ender_pearl"])
 	// damageTypeDrown is minecraft:drown — the source DROWN carries (hurtServer(DROWN, 2.0F) in breath).
 	damageTypeDrown = damageTypeID(tag.DamageTypeIDs["minecraft:drown"])
+	// damageTypeDryOut is minecraft:dry_out -- the source a Dolphin/Axolotl takes when its moistness
+	// runs out on land (Dolphin.tick: hurt(dryOut(), 1.0F)). Resolved by name from the generated table.
+	damageTypeDryOut = damageTypeID(tag.DamageTypeIDs["minecraft:dry_out"])
 	// damageTypeStarve is minecraft:starve — the source the hunger-starvation tick carries.
 	damageTypeStarve = damageTypeID(tag.DamageTypeIDs["minecraft:starve"])
 	// damageTypeInWall is minecraft:in_wall — the source suffocation (block-in-eye) carries.

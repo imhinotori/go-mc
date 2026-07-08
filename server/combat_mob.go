@@ -190,6 +190,14 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 			e.angerEndTime = t.gametime + int64(400+mobRandom(e).nextInt(381))
 			e.angerTarget = src.attacker // setPersistentAngerTarget(the attacking player)
 		}
+
+		// SQUID (Task): Squid.hurtServer tail -- after a landed hit, if getLastHurtByMob() != null,
+		// spawnInk(). getLastHurtByMob() is non-null exactly when the attacker is a mob/player (src.attacker
+		// != 0, an environmental hit leaves it 0). Squid-gated + inside the flag2 (tookFullDamage) block so
+		// an i-frame excess hit does not re-ink. RNG-free. Cite Squid.hurtServer + Squid.spawnInk.
+		if e.isSquid && src.attacker != 0 {
+			t.squidSpawnInk(e)
+		}
 	}
 
 	// Death-or-hurt-sound drive (bytecode 370-423): `if (isDeadOrDying()) { ...getDeathSound...; die(source); }

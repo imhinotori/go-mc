@@ -568,6 +568,34 @@ type Entity struct {
 	horseHasChest               bool
 	horseInvColumns             int
 	llamaStrength               int
+	// --- WATER MOBS (Squid/GlowSquid/Cod/Salmon/Pufferfish/TropicalFish/Dolphin/Tadpole) -----------
+	//
+	// Tick-owned plain values, set/read ONLY for their own type (each *AiStep gates on typ). isWaterMob
+	// marks any of the 8 aquatic mobs (it drives the WaterAnimal-style out-of-water air drain in the
+	// breath path; a fish/squid/dolphin DROWNS ON LAND, the inversion of a land mob). isSquid/isPufferfish/
+	// isDolphin/isTadpole mark the signature-behavior mobs. squidTentacleMovement/squidTentacleSpeed mirror
+	// Squid.tentacleMovement/tentacleSpeed (the aiStep tentacle-rotation accumulator + its RNG-set speed).
+	// pufferPuffState mirrors Pufferfish PUFF_STATE (0 small / 1 mid / 2 full); pufferInflateCounter/
+	// pufferDeflateTimer mirror Pufferfish.inflateCounter/deflateTimer (the tick() puff/deflate timers).
+	// dolphinMoistness mirrors Dolphin MOISTNESS_LEVEL (2400 in water; drains -1/tick on land -> dryOut
+	// damage at <= 0). tadpoleAge mirrors Tadpole.age (the ++ per tick that grows it into a Frog at
+	// ticksToBeFrog 24000). tropicalVariant mirrors TropicalFish DATA_ID_TYPE_VARIANT (the packed
+	// pattern+2-color int; DEFAULT_VARIANT = KOB/WHITE/WHITE packs to 0). Zero for every other entity.
+	// Cite Squid.aiStep, Pufferfish.tick/PufferfishPuffGoal, Dolphin.tick, Tadpole.aiStep/setAge,
+	// TropicalFish.packVariant, WaterAnimal.handleAirSupply.
+	isWaterMob            bool
+	isSquid               bool
+	isPufferfish          bool
+	isDolphin             bool
+	isTadpole             bool
+	squidTentacleMovement float32
+	squidTentacleSpeed    float32
+	pufferPuffState       int
+	pufferInflateCounter  int
+	pufferDeflateTimer    int
+	dolphinMoistness      int
+	tadpoleAge            int
+	tropicalVariant       int
 	// --- PIGLIN (net.minecraft.world.entity.monster.piglin.Piglin) -------------------------------
 	//
 	// Tick-owned plain values, set/read ONLY for a Piglin (piglinBrainTick gates on typ == entity.Piglin.ID).

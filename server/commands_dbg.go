@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 
+	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/data/item"
 	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/level/component"
@@ -370,6 +371,59 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		e := t.spawnLlama(p.x, p.y+1, p.z, false, true)
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned trader_llama eid=%d (hp=%.1f strength=%d) at (%.1f,%.1f,%.1f)", e.id, e.health, e.llamaStrength, p.x, p.y+1, p.z))
+	case "squid":
+		// SQUID (Task): the ink-jet cephalopod (MAX_HEALTH 10). Breathes underwater, DROWNS ON LAND. Its
+		// aiStep runs the tentacle-rotation accumulator; a hit-by-mob spawns ink. Spawned 1 block up.
+		e := t.spawnSquid(p.x, p.y+1, p.z, false)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned squid eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+1, p.z))
+		}
+	case "glow_squid":
+		// GLOW SQUID (Task): the glowing Squid variant (MAX_HEALTH 10, inherits Squid). The dark-ticks glow
+		// DATA is DEFERRED (needs the glowing effect). Spawned 1 block up.
+		e := t.spawnSquid(p.x, p.y+1, p.z, true)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned glow_squid eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+1, p.z))
+		}
+	case "cod":
+		// COD (Task): a schooling fish (MAX_HEALTH 3). Breathes underwater, DROWNS ON LAND. Spawned 1 up.
+		e := t.spawnFish(entity.Cod, p.x, p.y+1, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned cod eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+1, p.z))
+		}
+	case "salmon":
+		// SALMON (Task): a schooling fish (MAX_HEALTH 3). Breathes underwater, DROWNS ON LAND. Spawned 1 up.
+		e := t.spawnFish(entity.Salmon, p.x, p.y+1, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned salmon eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+1, p.z))
+		}
+	case "pufferfish":
+		// PUFFERFISH (Task): the puff fish (MAX_HEALTH 3). Puffs 0->1->2 when a scary mob nears (deflates
+		// when it leaves) and stings (1+puffState dmg + POISON 60*puffState) on touch. Spawned 1 up.
+		e := t.spawnFish(entity.Pufferfish, p.x, p.y+1, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned pufferfish eid=%d (puff=%d) at (%.1f,%.1f,%.1f)", e.id, e.pufferPuffState, p.x, p.y+1, p.z))
+		}
+	case "tropical_fish":
+		// TROPICAL FISH (Task): a schooling fish (MAX_HEALTH 3) with a packed 2-pattern variant (DEFAULT 0;
+		// the 2-pattern client render is DEFERRED). Breathes underwater, DROWNS ON LAND. Spawned 1 up.
+		e := t.spawnFish(entity.TropicalFish, p.x, p.y+1, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned tropical_fish eid=%d (variant=%d) at (%.1f,%.1f,%.1f)", e.id, e.tropicalVariant, p.x, p.y+1, p.z))
+		}
+	case "dolphin":
+		// DOLPHIN (Task): the fast swimmer (MAX_HEALTH 10, MOVEMENT_SPEED 1.2, ATTACK_DAMAGE 3). Moistness
+		// 2400 in water; out of water it drains and takes dryOut damage at <= 0. Jump/play/treasure DEFERRED.
+		e := t.spawnDolphin(p.x, p.y+1, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned dolphin eid=%d (moist=%d) at (%.1f,%.1f,%.1f)", e.id, e.dolphinMoistness, p.x, p.y+1, p.z))
+		}
+	case "tadpole":
+		// TADPOLE (Task): the frog baby-stage (MOVEMENT_SPEED 1.0, MAX_HEALTH 6). Ages every tick and GROWS
+		// INTO A FROG at ticksToBeFrog (24000). Breathes underwater, DROWNS ON LAND. Spawned 1 up.
+		e := t.spawnTadpole(p.x, p.y+1, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned tadpole eid=%d (age=%d) at (%.1f,%.1f,%.1f)", e.id, e.tadpoleAge, p.x, p.y+1, p.z))
 		}
 	case "zoglin":
 		// ZOGLIN (GAP): the TERMINAL undead a hoglin becomes off-nether. INDISCRIMINATELY hostile -- it
@@ -553,6 +607,7 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		t.broadcastSystemChat("[dbg] gave + opened a filled map; hold it to watch the terrain fill in")
 	default:
 		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | dragon | iron_golem | villager | villager_farmer | vex | ghast_hostile | blaze | phantom | strider | wither_skeleton | wither | hoglin | bee | goat | frog | camel | sniffer | allay | axolotl | fangs | water | pig-in-water | raid | rain | redstone | trade | trident | throw-trident | crafter | map")
+		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | dragon | iron_golem | villager | villager_farmer | vex | ghast_hostile | blaze | phantom | strider | wither_skeleton | wither | hoglin | bee | goat | frog | camel | sniffer | allay | axolotl | squid | glow_squid | cod | salmon | pufferfish | tropical_fish | dolphin | tadpole | fangs | water | pig-in-water | raid | rain | redstone | trade | trident | throw-trident")
 	}
 }
 

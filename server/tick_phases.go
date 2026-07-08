@@ -623,6 +623,11 @@ func (t *TickLoop) tickAI() {
 		// metadata change) -> the oracle pig, driven directly via serverAiStep in its test and never
 		// here, is byte-identical regardless.
 		t.tickMobBreath(e)
+		// WATER MOBS (Task): the WaterAnimal.handleAirSupply INVERSION -- a fish/squid/dolphin DROWNS ON
+		// LAND (out of water: air-1, drown 2.0 at <= -20; in water: air 300). Runs AFTER tickMobBreath (the
+		// standard submerged path) in the SAME env phase. Self-gated on isWaterMob + RNG-free -> the pig
+		// oracle is untouched. Cite WaterAnimal.handleAirSupply.
+		t.tickWaterMobAirSupply(e)
 	}
 
 	// WR death-animation drive: LivingEntity.baseTick runs `if (isDeadOrDying() && shouldTickDeath(this))
@@ -870,6 +875,21 @@ func (t *TickLoop) tickAI() {
 		// AbstractHorse.aiStep.
 		if e.isHorseFamily {
 			t.horseFamilyAiStep(e)
+		// WATER MOBS (Task): the signature per-tick behaviors, each per-type-gated AFTER serverAiStep.
+		// Squid.aiStep tentacle accumulator; Pufferfish.tick puff/deflate + sting; Dolphin.tick moistness;
+		// Tadpole.aiStep age -> Frog at 24000. ADDITIVE + per-type-gated (zero cost / zero RNG for every
+		// non-matching entity -- the pig oracle stream is untouched). Cite Squid/Pufferfish/Dolphin/Tadpole.
+		if e.isSquid {
+			t.squidAiStep(e)
+		}
+		if e.isPufferfish {
+			t.pufferfishAiStep(e)
+		}
+		if e.isDolphin {
+			t.dolphinAiStep(e)
+		}
+		if e.isTadpole {
+			t.tadpoleAiStep(e)
 		}
 		// MOB-PREY (Task #9): the Endermite.aiStep despawn timer (life++ while non-persistent, discard at
 		// life>=2400). Per-type-gated like the creeper/enderman, AFTER serverAiStep. ADDITIVE + endermite-gated
