@@ -1136,6 +1136,16 @@ func (t *TickLoop) handleInteract(p *tickPlayer, pkt pk.Packet) {
 	if mob.typ == entity.Parrot.ID && t.tryParrotInteract(p, mob) {
 		return // the taming / sit-toggle handled the interact
 	}
+	// IRON GOLEM REPAIR (net.minecraft.world.entity.animal.golem.IronGolem.mobInteract): an IRON_INGOT
+	// right-clicked on an iron golem heals it 25.0; if it was already full (health unchanged) the ingot is
+	// NOT consumed (PASS). Otherwise it plays IRON_GOLEM_REPAIR (pitch 1.0f + (nextFloat()-nextFloat())*0.2f
+	// on the golem's OWN stream, DEFERRED sound) and consumes 1 ingot (SUCCESS). tryIronGolemRepair returns
+	// true only on the SUCCESS (consume) path so a full golem / non-ingot falls through. IronGolem-gated
+	// (zero-cost for every other mob; the 2 nextFloat pitch draws are on the golem's own per-entity stream,
+	// so the pig oracle is unperturbed). Cite IronGolem.mobInteract.
+	if mob.typ == entity.IronGolem.ID && t.tryIronGolemRepair(p, mob) {
+		return // the repair-heal handled the interact
+	}
 	// HAPPY-GHAST RIDE (net.minecraft.world.entity.animal.happyghast.HappyGhast.mobInteract): an adult,
 	// harnessed happy ghast right-clicked WITHOUT a secondary (shift) action mounts the player as a
 	// passenger (doPlayerRide -> player.startRiding(this)). tryHappyGhastRide returns true when the
@@ -1253,6 +1263,35 @@ func (t *TickLoop) handleInteract(p *tickPlayer, pkt pk.Packet) {
 //
 //	[VERIFIED CFR Villager.mobInteract: the isAlive && !isTrading && !isSleeping gate; isBaby -> setUnhappy
 //	 + SUCCESS; server noOffers gate -> CONSUME or startTrading; SUCCESS.]
+// tryIronGolemRepair ports IronGolem.mobInteract: an IRON_INGOT feed heals the golem 25.0
+// (LivingEntity.heal, clamped to getMaxHealth() 100.0). If the golem was already at full health the heal
+// is a no-op (health unchanged) and vanilla returns PASS WITHOUT consuming the ingot -> returns false
+// (fall through). Otherwise it draws the IRON_GOLEM_REPAIR pitch (1.0f + (nextFloat()-nextFloat())*0.2f)
+// on the golem's OWN mob stream (the sound emit is DEFERRED, but the 2 draws MUST happen for RNG
+// lockstep) and consumes 1 ingot, returning true (SUCCESS). Cite IronGolem.mobInteract.
+func (t *TickLoop) tryIronGolemRepair(p *tickPlayer, mob *Entity) bool {
+	inv := ensureInventory(p)
+	held := inv.get(heldWindowSlot(inv.heldSlot))
+	if slotIsEmpty(held) || int32(held.ItemID) != int32(item.IronIngot.ID) {
+		return false // not an iron ingot -> PASS (fall through)
+	}
+	before := mob.health
+	maxHealth := float32(mob.getAttributeValue(attribute.MaxHealth))
+	mob.health += 25.0 // heal(25.0f): setHealth(getHealth()+amount) clamped to getMaxHealth()
+	if mob.health > maxHealth {
+		mob.health = maxHealth
+	}
+	if mob.health == before {
+		return false // already full: PASS, no consume (fall through)
+	}
+	// IRON_GOLEM_REPAIR pitch = 1.0f + (nextFloat()-nextFloat())*0.2f, drawn on the golem's OWN stream
+	// (the sound emit is DEFERRED but the draws keep the golem's RNG stream vanilla-faithful).
+	r := mobRandom(mob)
+	_ = 1.0 + (r.nextFloat()-r.nextFloat())*0.2 // pitch (sound emit DEFERRED)
+	t.shrinkHeldItem(p, inv)                    // stack.consume(1, player)
+	return true                                 // SUCCESS
+}
+
 func (t *TickLoop) villagerMobInteract(p *tickPlayer, villager *Entity) bool {
 	// isAlive() (v1: a resolved live entity) && !isTrading() && !isSleeping() (sleep is a cited const-false
 	// stub — no villager sleep pose). A villager already trading with someone is busy: a no-op consume.

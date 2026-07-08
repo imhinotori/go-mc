@@ -8,9 +8,12 @@ package server
 // port + the registry membership. Pig oracle untouched.
 
 import (
+	"math"
 	"testing"
 
 	"github.com/imhinotori/sulfur/data/entity"
+	"github.com/imhinotori/sulfur/data/item"
+	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/attribute"
 )
 
@@ -74,5 +77,47 @@ func TestIronGolemBootLoads(t *testing.T) {
 	}
 	if decl.baseType.ID != entity.IronGolem.ID {
 		t.Fatalf("golem base type = %d, want %d", decl.baseType.ID, entity.IronGolem.ID)
+	}
+}
+
+// TestIronGolemIronIngotRepair: an IRON_INGOT feed heals a DAMAGED golem 25.0 (clamped to MAX_HEALTH
+// 100) and consumes the ingot; a FULL golem is not healed and the ingot is NOT consumed. Cite
+// IronGolem.mobInteract.
+func TestIronGolemIronIngotRepair(t *testing.T) {
+	loop, mgr := newPhysicsLoop()
+	const floorY = 63
+	ch := putChunk(mgr, level.ChunkPos{0, 0})
+	fillFloor(ch, floorY)
+	loop.start(loop.clock.(*fakeClock).Now())
+
+	g := NewEntity(loop.idAlloc.AllocID(), entity.IronGolem, 8.5, float64(floorY+1), 8.5)
+	initSpawnHealth(g)
+	g.ai = &mobAI{rng: newEntityRandom(5)}
+	loop.cur().entities.add(g)
+
+	// Damaged golem: heals 25.0 and consumes the ingot.
+	g.health = 40.0
+	p := newTestPlayerHolding(loop, 91, int32(item.IronIngot.ID))
+	if !loop.tryIronGolemRepair(p, g) {
+		t.Fatal("tryIronGolemRepair returned false for a damaged golem + iron ingot (want consume)")
+	}
+	if math.Abs(float64(g.health)-65.0) > 1e-6 {
+		t.Fatalf("golem heal = %v, want 65.0 (40 + 25)", g.health)
+	}
+	inv := ensureInventory(p)
+	if got := inv.get(heldWindowSlot(inv.heldSlot)); got.Count != 0 {
+		t.Fatalf("iron ingot not consumed: held count = %d, want 0", got.Count)
+	}
+
+	// Full golem: no heal, no consume (PASS).
+	maxHealth := float32(g.getAttributeValue(attribute.MaxHealth))
+	g.health = maxHealth
+	p2 := newTestPlayerHolding(loop, 92, int32(item.IronIngot.ID))
+	if loop.tryIronGolemRepair(p2, g) {
+		t.Fatal("tryIronGolemRepair returned true for a FULL golem (want PASS / no consume)")
+	}
+	inv2 := ensureInventory(p2)
+	if got := inv2.get(heldWindowSlot(inv2.heldSlot)); got.Count != 1 {
+		t.Fatalf("iron ingot consumed on a full golem: held count = %d, want 1 (unchanged)", got.Count)
 	}
 }
