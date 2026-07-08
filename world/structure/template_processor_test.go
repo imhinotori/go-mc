@@ -30,7 +30,7 @@ func TestProcessorMossify(t *testing.T) {
 	// Run the processor over a grid of distinct positions (the seed is positional).
 	for x := 0; x < 20; x++ {
 		for z := 0; z < 20; z++ {
-			out, keep := procs[0].Process(view, x, 64, z, cobble, nil)
+			out, keep := procs[0].Process(view, x, 64, z, Pos{x, 64, z}, Pos{}, cobble, nil)
 			if !keep {
 				t.Fatalf("mossify dropped a block at (%d,%d); rule processors keep", x, z)
 			}
@@ -53,7 +53,7 @@ func TestProcessorMossify(t *testing.T) {
 	}
 
 	// Non-cobblestone (stone) is left untouched (no rule matches).
-	out, keep := procs[0].Process(view, 0, 64, 0, stone, nil)
+	out, keep := procs[0].Process(view, 0, 64, 0, Pos{0, 64, 0}, Pos{}, stone, nil)
 	if !keep || out != stone {
 		t.Errorf("mossify changed stone -> %d (keep=%v); want stone untouched", out, keep)
 	}
@@ -76,7 +76,7 @@ func TestProcessorZombieTagMatch(t *testing.T) {
 	}]
 	view := newMapView()
 	// A door must be replaced with air by the tag_match rule (always_true location).
-	out, keep := procs[0].Process(view, 5, 64, 5, door, nil)
+	out, keep := procs[0].Process(view, 5, 64, 5, Pos{5, 64, 5}, Pos{}, door, nil)
 	if !keep {
 		t.Fatal("zombie_plains dropped the door; want air replacement")
 	}

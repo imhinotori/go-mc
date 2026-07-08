@@ -74,24 +74,20 @@ func TestReferencesPopulatedOnDecorate(t *testing.T) {
 	}
 }
 
-// TestStructurePipelineNoBlocksYet: the structure pipeline is WIRED but INERT — the
-// emitted chunk bytes are IDENTICAL whether placeStructures runs with the inert
-// NoopStartGenerator OR with a FAKE generator that emits real starts. Because the PLACE
-// hook is EMPTY this plan (14-02 fills it), even a non-empty StartGenerator writes ZERO
-// blocks — the pipeline exists and runs (STARTS/REFERENCES populate the cache) but no
-// geometry lands. This is the byte-stability proof for STRUCT-01.
-func TestStructurePipelineNoBlocksYet(t *testing.T) {
+// TestStructurePipelineRunsForCoveringStart: the structure pipeline is WIRED and LIVE.
+// The original STRUCT-01-era assertion (that emitting a start produced byte-IDENTICAL
+// chunks because the PLACE hook was empty) is obsolete: the place pass now runs, and a
+// chunk covered by a start serializes structure start/reference metadata into its NBT, so
+// its bytes DIFFER from the inert baseline. The load-bearing contract this test now pins is
+// that the pipeline actually RAN for the covering generator (the cache populated) -- which
+// is the seam a structure-pipeline regression would break.
+func TestStructurePipelineRunsForCoveringStart(t *testing.T) {
 	center := level.ChunkPos{1, 1}
 
-	// Baseline: the production NoiseGenerator (inert NoopStartGenerator).
-	g1 := NewNoiseGenerator(noiseGenSeed, testSecs, testMinY)
-	var base bytes.Buffer
-	if _, err := decorateChunkVia(g1, center).WriteTo(&base); err != nil {
-		t.Fatalf("baseline WriteTo: %v", err)
-	}
-
-	// A second generator whose StartGenerator EMITS a wide start covering C — but the
-	// PLACE hook is empty, so it must write nothing and produce identical bytes.
+	// A generator whose StartGenerator emits a start covering C. The fixture piece's
+	// PostProcess is a no-op (it places no geometry itself), so any byte difference from
+	// the inert baseline is the structure start/reference metadata the chunk now carries --
+	// exactly what should be present once the pipeline is live.
 	g2 := NewNoiseGenerator(noiseGenSeed, testSecs, testMinY)
 	g2.structGen = &fixedStartGenerator{
 		owner: center,
@@ -102,13 +98,7 @@ func TestStructurePipelineNoBlocksYet(t *testing.T) {
 		t.Fatalf("with-starts WriteTo: %v", err)
 	}
 
-	if !bytes.Equal(base.Bytes(), withStarts.Bytes()) {
-		t.Fatalf("structure pipeline placed blocks (bytes differ by %d): the PLACE hook must be EMPTY this plan",
-			len(base.Bytes())-len(withStarts.Bytes()))
-	}
-
-	// And the cache WAS populated for the emitting generator (proving the pipeline ran,
-	// it just did not place).
+	// The cache WAS populated for the emitting generator (proving the pipeline ran).
 	if _, ok := g2.structCache.StartsCachedFor(center); !ok {
 		t.Fatalf("the structure pipeline did not run (no cached starts) for the emitting generator")
 	}

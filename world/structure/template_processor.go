@@ -34,11 +34,17 @@ import (
 // processBlock). PlaceInWorld runs each processor in order over every template cell:
 // Process returns (newState, keep). keep=false drops the block entirely; otherwise the
 // (possibly replaced) newState is placed. The view + worldPos let a processor inspect the
-// existing world block (the location predicate). rng is the place-time worldgen rng (the
-// rule processor uses a PER-BLOCK seed instead, but the signature carries it for the
-// interface's other potential implementations).
+// existing world block (the location predicate). local is the template-LOCAL block pos
+// (CFR StructureBlockInfo.pos, the PRE-transform coord) and structure is the placement
+// origin (the offset passed to processBlockInfos) -- both feed the position predicate the
+// axis_aligned_linear_pos rule tests (bastion's high_rampart uses one). rng is the
+// place-time worldgen rng (the rule processor uses a PER-BLOCK seed instead, but the
+// signature carries it for the interface's other potential implementations).
+//
+// Source: CFR RuleProcessor.processBlock(LevelReader, offset, structurePos, localPos,
+// transformedInfo, settings) -> ProcessorRule.test(level, state, local, world, structure, rng).
 type TemplateProcessor interface {
-	Process(view WorldGenView, wx, wy, wz int, state block.StateID, rng levelgen.RandomSource) (block.StateID, bool)
+	Process(view WorldGenView, wx, wy, wz int, local, structure Pos, state block.StateID, rng levelgen.RandomSource) (block.StateID, bool)
 }
 
 // ruleProcessor ports RuleProcessor: an ordered rule list. For each block, a fresh
@@ -49,11 +55,13 @@ type ruleProcessor struct {
 }
 
 // processorRule ports ProcessorRule: an input predicate (tested against the TEMPLATE
-// state), a location predicate (tested against the existing WORLD state), and the output
-// state to substitute on a match.
+// state), a location predicate (tested against the existing WORLD state), a POSITION
+// predicate (tested against the local/world/structure positions, default PosAlwaysTrue),
+// and the output state to substitute on a match.
 type processorRule struct {
 	input    ruleTest
 	location ruleTest
+	pos      posRuleTest
 	output   block.StateID
 }
 
@@ -114,6 +122,85 @@ func (t tagMatchTest) test(state block.StateID, _ levelgen.RandomSource) bool {
 	return t.members[stateBlockName(state)]
 }
 
+// --- PosRuleTest implementations (CFR PosAlwaysTrueTest / AxisAlignedLinearPosTest) ---
+
+// posRuleTest ports net.minecraft.world.level.levelgen.structure.templatesystem.PosRuleTest:
+// a predicate over (localPos, worldPos, structurePos, rng). ProcessorRule threads all three
+// positions from RuleProcessor.processBlock (local = StructureBlockInfo.pos PRE-transform,
+// world = the transformed world pos, structure = the placement offset).
+type posRuleTest interface {
+	test(local, world, structure Pos, rng levelgen.RandomSource) bool
+}
+
+// posAlwaysTrueTest ports PosAlwaysTrueTest.INSTANCE: the default position predicate
+// (matches unconditionally, draws nothing). ProcessorRule uses it when a rule omits
+// position_predicate -- the vast majority of bastion rules.
+type posAlwaysTrueTest struct{}
+
+func (posAlwaysTrueTest) test(_, _, _ Pos, _ levelgen.RandomSource) bool { return true }
+
+// axisAlignedLinearPosTest ports AxisAlignedLinearPosTest.test: along the positive step of
+// `axis` (default Y), dist = abs((local - world) . axisStep); the acceptance chance is
+// clampedLerp(inverseLerp((float)dist, minDist, maxDist), minChance, maxChance); the rule
+// matches iff rng.nextFloat() <= chance. Bastion's high_rampart uses one (axis Y, minChance
+// 0 / maxChance 0.05 / minDist 0 / maxDist 100) to fade rampart tops to air with height.
+//
+// Source: CFR AxisAlignedLinearPosTest.test + Mth.inverseLerp / Mth.clampedLerp.
+type axisAlignedLinearPosTest struct {
+	minChance float32
+	maxChance float32
+	minDist   int
+	maxDist   int
+	axis      byte // 0=X, 1=Y, 2=Z (Direction.Axis ordinal; codec default Y)
+}
+
+func (t axisAlignedLinearPosTest) test(local, world, _ Pos, rng levelgen.RandomSource) bool {
+	// Direction.get(POSITIVE, axis).getStep{X,Y,Z}(): the step is 1 on the axis, 0 elsewhere.
+	var stepX, stepY, stepZ int
+	switch t.axis {
+	case 0:
+		stepX = 1
+	case 2:
+		stepZ = 1
+	default:
+		stepY = 1
+	}
+	dx := float32(intAbs((local.X - world.X) * stepX))
+	dy := float32(intAbs((local.Y - world.Y) * stepY))
+	dz := float32(intAbs((local.Z - world.Z) * stepZ))
+	dist := int(dx + dy + dz) // CFR: (int)(f + f2 + f3)
+	chance := mthClampedLerpF(mthInverseLerpF(float32(dist), float32(t.minDist), float32(t.maxDist)), t.minChance, t.maxChance)
+	return rng.NextFloat() <= chance
+}
+
+// intAbs ports Math.abs(int).
+func intAbs(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+// mthInverseLerpF ports the FLOAT Mth.inverseLerp(float,float,float) = (x - a) / (b - a). The
+// AxisAlignedLinearPosTest math is done in float32 (the jar i2f/f2i ops), distinct from the
+// float64 mthInverseLerp beard.go uses -- the F suffix marks the single-precision overload.
+func mthInverseLerpF(x, a, b float32) float32 { return (x - a) / (b - a) }
+
+// mthLerpF ports the FLOAT Mth.lerp(float,float,float) = a + delta*(b - a).
+func mthLerpF(delta, a, b float32) float32 { return a + delta*(b-a) }
+
+// mthClampedLerpF ports the FLOAT Mth.clampedLerp(float,float,float): delta<0 -> a; delta>1 ->
+// b; else lerp.
+func mthClampedLerpF(delta, a, b float32) float32 {
+	if delta < 0 {
+		return a
+	}
+	if delta > 1 {
+		return b
+	}
+	return mthLerpF(delta, a, b)
+}
+
 // Process ports RuleProcessor.processBlock: seed a fresh LegacyRandomSource from
 // Mth.getSeed of the block position, read the existing world block (for the location
 // predicate), then test the rules in order — the FIRST whose input predicate (vs the
@@ -124,11 +211,16 @@ func (t tagMatchTest) test(state block.StateID, _ levelgen.RandomSource) bool {
 // PlaceInWorld passes the WORLD pos here; the per-block seed is POSITIONAL + deterministic
 // either way. Villages' random_block_match only gates mossy/crop variants (visually
 // equivalent under either positional seed), so the draw determinism + order are preserved.
-func (p *ruleProcessor) Process(view WorldGenView, wx, wy, wz int, state block.StateID, _ levelgen.RandomSource) (block.StateID, bool) {
+func (p *ruleProcessor) Process(view WorldGenView, wx, wy, wz int, local, structure Pos, state block.StateID, _ levelgen.RandomSource) (block.StateID, bool) {
 	rng := levelgen.NewLegacyRandomSource(mthGetSeed(wx, wy, wz))
 	existing := view.GetBlock(wx, wy, wz)
+	world := Pos{wx, wy, wz}
 	for _, r := range p.rules {
-		if r.input.test(state, rng) && r.location.test(existing, rng) {
+		// CFR ProcessorRule.test: input(templateState) && loc(worldState) && pos(local,world,structure).
+		// The draws are order-dependent -- input's random_block_match may draw nextFloat BEFORE the
+		// pos predicate's nextFloat, so evaluate left-to-right with the SAME per-block rng (Go's &&
+		// short-circuits exactly as the jar's).
+		if r.input.test(state, rng) && r.location.test(existing, rng) && r.pos.test(local, world, structure, rng) {
 			return r.output, true
 		}
 	}
@@ -213,6 +305,7 @@ func parseRuleProcessor(raw json.RawMessage) (*ruleProcessor, error) {
 		Rules []struct {
 			InputPredicate    json.RawMessage `json:"input_predicate"`
 			LocationPredicate json.RawMessage `json:"location_predicate"`
+			PositionPredicate json.RawMessage `json:"position_predicate"`
 			OutputState       jsonState       `json:"output_state"`
 		} `json:"rules"`
 	}
@@ -229,13 +322,66 @@ func parseRuleProcessor(raw json.RawMessage) (*ruleProcessor, error) {
 		if err != nil {
 			return nil, fmt.Errorf("rule[%d] location: %w", i, err)
 		}
+		pos, err := parsePosRuleTest(r.PositionPredicate)
+		if err != nil {
+			return nil, fmt.Errorf("rule[%d] position: %w", i, err)
+		}
 		st, err := resolveJSONState(r.OutputState)
 		if err != nil {
 			return nil, fmt.Errorf("rule[%d] output_state %q: %w", i, r.OutputState.Name, err)
 		}
-		out.rules = append(out.rules, processorRule{input: in, location: loc, output: st})
+		out.rules = append(out.rules, processorRule{input: in, location: loc, pos: pos, output: st})
 	}
 	return out, nil
+}
+
+// parsePosRuleTest parses a rule's position_predicate. An ABSENT field defaults to
+// PosAlwaysTrueTest.INSTANCE (CFR ProcessorRule's 3-arg constructor). Only the predicate
+// types the bastion pools use are ported (pos_always_true + axis_aligned_linear_pos); an
+// unknown type FAILS LOUD so a new structure's position predicate is caught.
+//
+// Source: CFR PosRuleTest codec + AxisAlignedLinearPosTest CODEC (axis default Y, minChance
+// / minDist optional defaults 0).
+func parsePosRuleTest(raw json.RawMessage) (posRuleTest, error) {
+	if len(raw) == 0 {
+		return posAlwaysTrueTest{}, nil
+	}
+	var head struct {
+		PredicateType string  `json:"predicate_type"`
+		MinChance     float32 `json:"min_chance"`
+		MaxChance     float32 `json:"max_chance"`
+		MinDist       int     `json:"min_dist"`
+		MaxDist       int     `json:"max_dist"`
+		Axis          string  `json:"axis"`
+	}
+	if err := json.Unmarshal(raw, &head); err != nil {
+		return nil, err
+	}
+	switch head.PredicateType {
+	case "", "minecraft:always_true":
+		return posAlwaysTrueTest{}, nil
+	case "minecraft:axis_aligned_linear_pos":
+		var axis byte = 1 // codec default Y
+		switch head.Axis {
+		case "x":
+			axis = 0
+		case "y", "":
+			axis = 1
+		case "z":
+			axis = 2
+		default:
+			return nil, fmt.Errorf("unknown axis %q", head.Axis)
+		}
+		return axisAlignedLinearPosTest{
+			minChance: head.MinChance,
+			maxChance: head.MaxChance,
+			minDist:   head.MinDist,
+			maxDist:   head.MaxDist,
+			axis:      axis,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported pos predicate_type %q", head.PredicateType)
+	}
 }
 
 // parseRuleTest parses a RuleTest JSON object by its predicate_type.

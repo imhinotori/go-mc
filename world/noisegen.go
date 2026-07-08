@@ -272,6 +272,15 @@ func NewNetherGenerator(seed int64, secs, minY int) *NoiseGenerator {
 	if err != nil {
 		panic("world: NetherGenerator: build nether fortress start generator: " + err.Error())
 	}
+	// The BASTION REMNANT shares the nether_complexes structure_set with the fortress (weight
+	// fortress:2 / bastion:3). Both generators run the SAME set-pick RNG stream and each fires
+	// only on its own winning entry, so one nether_complexes chunk places EITHER a fortress OR a
+	// bastion, never both (the jar one-of-set behavior). CITE: bastion_remnant.go / JigsawStructure.
+	bastionGen, err := structure.NewBastionRemnantStartGen()
+	if err != nil {
+		panic("world: NetherGenerator: build bastion remnant start generator: " + err.Error())
+	}
+	netherStructGen := structure.NewCompositeStartGenerator(fortressGen, bastionGen)
 
 	return &NoiseGenerator{
 		seed:        seed,
@@ -285,7 +294,7 @@ func NewNetherGenerator(seed int64, secs, minY int) *NoiseGenerator {
 		rep:         rep,
 		deco:        deco,
 		structCache: structCache,
-		structGen:   fortressGen,
+		structGen:   netherStructGen,
 		air:         block.ToStateID[block.Air{}],
 		nether:      true,
 	}

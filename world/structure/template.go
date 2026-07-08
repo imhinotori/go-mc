@@ -248,11 +248,15 @@ func (t *StructureTemplate) PlaceInWorld(view WorldGenView, origin Pos, rot Rota
 			st = transformState(t.palette[blk.State], mir, rot)
 		}
 
-		// Run the processor chain (each may replace or skip the block).
+		// Run the processor chain (each may replace or skip the block). local is the
+		// template-LOCAL block pos (CFR StructureBlockInfo.pos, PRE-transform); origin is the
+		// placement offset (the structure pos). The rule processor's position predicate tests
+		// (local, world, structure) -- CFR RuleProcessor.processBlock args.
+		local := Pos{blk.Pos[0], blk.Pos[1], blk.Pos[2]}
 		keep := true
 		for _, proc := range processors {
 			var ns block.StateID
-			ns, keep = proc.Process(view, wx, wy, wz, st, rng)
+			ns, keep = proc.Process(view, wx, wy, wz, local, origin, st, rng)
 			if !keep {
 				break
 			}

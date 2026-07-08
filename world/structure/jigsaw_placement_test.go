@@ -96,7 +96,7 @@ func runSelfRefPlacer(t *testing.T, maxDepth, maxDistance int) int {
 	start := &StructureTemplatePool{id: "synth:start", templates: []PoolElement{el}, fallback: "minecraft:empty"}
 	rng := levelgen.NewWorldgenRandom(0)
 	rng.SetLargeFeatureSeed(1234, 0, 0)
-	pieces := addPieces(start, Pos{0, 0, 0}, maxDepth, maxDistance, flatTestSampler{0}, rng)
+	pieces := addPieces(start, Pos{0, 0, 0}, maxDepth, maxDistance, true, flatTestSampler{0}, rng)
 	return len(pieces)
 }
 
@@ -163,7 +163,7 @@ func TestPlacerDepthZeroAttachesOnlyTerminators(t *testing.T) {
 	start := &StructureTemplatePool{id: "synth:start", templates: []PoolElement{el}, fallback: "minecraft:empty"}
 	rng := levelgen.NewWorldgenRandom(0)
 	rng.SetLargeFeatureSeed(1234, 0, 0)
-	pieces := addPieces(start, Pos{0, 0, 0}, 0, 80, flatTestSampler{0}, rng)
+	pieces := addPieces(start, Pos{0, 0, 0}, 0, 80, true, flatTestSampler{0}, rng)
 	if len(pieces) != 1 {
 		t.Fatalf("maxDepth=0 placed %d pieces; want exactly 1 (root only — depth-0 attaches only terminators)", len(pieces))
 	}
@@ -179,7 +179,7 @@ func TestPlacerAssemblesRealVillage(t *testing.T) {
 	}
 	rng := levelgen.NewWorldgenRandom(0)
 	rng.SetLargeFeatureSeed(99, 0, 0)
-	pieces := addPieces(pool, Pos{0, 68, 0}, 6, 80, flatTestSampler{68}, rng)
+	pieces := addPieces(pool, Pos{0, 68, 0}, 6, 80, true, flatTestSampler{68}, rng)
 	if len(pieces) < 2 {
 		t.Fatalf("real plains town_center assembled %d pieces; want a multi-piece graph", len(pieces))
 	}
@@ -200,7 +200,7 @@ func TestPlacerQueueOrderPinned(t *testing.T) {
 		}
 		rng := levelgen.NewWorldgenRandom(0)
 		rng.SetLargeFeatureSeed(99, 0, 0)
-		pieces := addPieces(pool, Pos{0, 68, 0}, 6, 80, flatTestSampler{68}, rng)
+		pieces := addPieces(pool, Pos{0, 68, 0}, 6, 80, true, flatTestSampler{68}, rng)
 		boxes := make([]BoundingBox, len(pieces))
 		for i, p := range pieces {
 			boxes[i] = p.BoundingBox()

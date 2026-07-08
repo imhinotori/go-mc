@@ -209,7 +209,7 @@ func (g *villageStartGen) buildStart(seed int64, pos level.ChunkPos, variant vil
 	startSurfaceY := sampler.SampleSurfaceY(minBlockX+8, minBlockZ+8)
 	startPos := Pos{minBlockX, startSurfaceY, minBlockZ}
 
-	pieces := addPieces(variant.startPool, startPos, variant.maxDepth, variant.maxDistance, sampler, rng)
+	pieces := addPieces(variant.startPool, startPos, variant.maxDepth, variant.maxDistance, true, sampler, rng)
 
 	start := &StructureStart{
 		Structure: variant.structureID,

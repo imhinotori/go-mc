@@ -112,6 +112,15 @@ var worldgenZipPrefixes = []struct {
 	// 3. The 40 processor_list JSONs (small, take all). The block-replace processors
 	//    villages apply at place time (mossify/zombie/street/farm rule lists).
 	{"data/minecraft/worldgen/processor_list/", "processor_list"}, // 40
+	// BASTION (nether jigsaw structure, gap-reaudit): the bastion_remnant JigsawStructure
+	// (nether_complexes structure_set, shared with the fortress at weight fortress:2 /
+	// bastion:3) reads its 60 template_pool/bastion/** JSONs (units / hoglin_stable /
+	// treasure / bridge + the shared blocks/mobs/walls sub-pools) and 167 structure/bastion/**
+	// .nbt piece templates. Same pure-unzip path the village trees use; the .nbt are binary
+	// gzip-wrapped StructureTemplates the world/structure loader gunzips at runtime. The 12
+	// bastion rule processor_lists ride the whole-tree processor_list prefix above.
+	{"data/minecraft/worldgen/template_pool/bastion/", "template_pool/bastion"}, // 60
+	{"data/minecraft/structure/bastion/", "structure/bastion"},                  // 167 binary .nbt
 }
 
 // worldgenSingleFiles names individual jar resources (not whole trees) to copy,

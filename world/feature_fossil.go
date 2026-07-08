@@ -346,7 +346,7 @@ func wrapSingleProcessor(pr json.RawMessage) []byte {
 // template block order. With no rottable_blocks set, EVERY block is subject to the roll.
 type blockRotProcessor struct{ integrity float32 }
 
-func (p *blockRotProcessor) Process(_ structure.WorldGenView, _, _, _ int, state block.StateID, rng levelgen.RandomSource) (block.StateID, bool) {
+func (p *blockRotProcessor) Process(_ structure.WorldGenView, _, _, _ int, _, _ structure.Pos, state block.StateID, rng levelgen.RandomSource) (block.StateID, bool) {
 	if rng.NextFloat() <= p.integrity {
 		return state, true
 	}
@@ -358,7 +358,7 @@ func (p *blockRotProcessor) Process(_ structure.WorldGenView, _, _, _ int, state
 // keep=false), else keep. NO rng draws.
 type protectedBlockProcessor struct{ protected map[block.StateID]bool }
 
-func (p *protectedBlockProcessor) Process(view structure.WorldGenView, wx, wy, wz int, state block.StateID, _ levelgen.RandomSource) (block.StateID, bool) {
+func (p *protectedBlockProcessor) Process(view structure.WorldGenView, wx, wy, wz int, _, _ structure.Pos, state block.StateID, _ levelgen.RandomSource) (block.StateID, bool) {
 	existing := view.GetBlock(wx, wy, wz)
 	if p.protected[existing] {
 		return state, false

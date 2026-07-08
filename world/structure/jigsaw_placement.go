@@ -124,7 +124,7 @@ type placer struct {
 // start position; maxDistance is the max_distance_from_center (80 for villages).
 //
 // Source: CFR JigsawPlacement.addPieces (both overloads).
-func addPieces(startPool *StructureTemplatePool, startPos Pos, maxDepth, maxDistance int, sampler SurfaceSampler, rng levelgen.RandomSource) []*PoolElementStructurePiece {
+func addPieces(startPool *StructureTemplatePool, startPos Pos, maxDepth, maxDistance int, projectStartToHeightmap bool, sampler SurfaceSampler, rng levelgen.RandomSource) []*PoolElementStructurePiece {
 	// Root rotation draw (CFR Rotation.getRandom(rng)) — a load-bearing RNG advance.
 	rot := getRandomRotation(rng)
 
@@ -167,7 +167,10 @@ func addPieces(startPool *StructureTemplatePool, startPos Pos, maxDepth, maxDist
 		sampler:    sampler,
 		rng:        rng,
 		placing:    newSequencedPriorityIterator(),
-		projectTop: true,
+		// projectTop mirrors JigsawStructure.projectStartToHeightmap: villages (WORLD_SURFACE_WG)
+		// project per-jigsaw non-rigid children to the surface; the bastion (Optional.empty) does
+		// NOT -- its rigid pieces stay pinned to the fixed start Y (absolute 33), so it passes false.
+		projectTop: projectStartToHeightmap,
 	}
 	p.pieces = append(p.pieces, root)
 
