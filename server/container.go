@@ -175,6 +175,10 @@ func (t *TickLoop) getContainerAt(pos pk.Position) containerView {
 		if d := t.resolveDispenser(pos, state); d != nil {
 			return &dispenserContainer{t: t, pos: pos, d: d}
 		}
+	case block.IsCrafter(state):
+		if c := t.resolveCrafter(pos, state); c != nil {
+			return &crafterContainer{t: t, pos: pos, c: c}
+		}
 	case isBrewingStandBlock(state):
 		if b := t.resolveBrewingStand(pos, state); b != nil {
 			return &brewingContainer{t: t, pos: pos, b: b}

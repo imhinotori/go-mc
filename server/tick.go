@@ -491,6 +491,21 @@ type TickLoop struct {
 	// dispenser_persist.go (the furnace-BE twin).
 	dispensers map[pk.Position]*dispenserBE
 
+	// crafters is the runtime store of CRAFTER block-entities keyed by world position (the dispensers
+	// twin). A crafter auto-crafts from its 9-slot crafterBE here when its scheduled TRIGGERED tick runs
+	// (crafter.go crafterDispenseFrom); the per-tick serverTick clears CRAFTING when the 6-tick countdown
+	// ends (crafter.go crafterServerTick). Lazily constructed; tick-owned (TICK-05). Persistence (Items +
+	// crafting_ticks_remaining + disabled_slots) round-trips via crafter_persist.go (the dispenser-BE twin).
+	crafters map[pk.Position]*crafterBE
+
+	// maps is the runtime store of MAP saved-data keyed by map id (MapItemSavedData; the ServerLevel
+	// mapData registry). A filled_map item carries a map_id component that indexes here; the per-tick
+	// inventory-tick (map_item.go mapInventoryTick) samples terrain into the held map data and the packet
+	// send (map_packet.go) flushes dirty pixels to the carrier. nextMapID is the ServerLevel.getFreeMapId
+	// counter. Lazily constructed; tick-owned (TICK-05). CITE: ServerLevel.getMapData/setMapData/getFreeMapId.
+	maps      map[int32]*mapItemSavedData
+	nextMapID int32
+
 	// hoppers is the runtime store of HOPPER block-entities keyed by world position (the furnaces twin).
 	// A hopper's per-tick transfer drive (hopper_be.go hopperPushItemsTick) reads/writes its hopperBE here
 	// every tick (tickWorld) — pulling one item from the container/loose-item above and pushing one item

@@ -261,6 +261,14 @@ func (t *TickLoop) useItemInHand(p *tickPlayer, hand int32) {
 		return
 	}
 
+	// EMPTY MAP (EmptyMapItem.use): a right-click-air with an empty map (minecraft:map) creates a fresh
+	// filled_map centered on the player, shrinks the empty map by 1, and puts the filled map in the held
+	// slot (or the inventory). Runs before the food gate (a map is not food); a non-map item falls through.
+	// Empty-map-gated (a cheap id compare, no RNG draw -- the pig oracle is unperturbed). CITE: EmptyMapItem.use.
+	if t.tryUseEmptyMap(p, inv, held, hand) {
+		return
+	}
+
 	// FOOD gate (v1): resolve the held item's FOOD/CONSUMABLE data. Non-food => not eatable => no-op
 	// (cite: other ItemStack.use behaviors out of v1 scope).
 	f, ok := itemFood(int32(held.ItemID))

@@ -383,6 +383,13 @@ func (t *TickLoop) tickBlock(pos pk.Position, typ blockTickType) {
 			return
 		}
 		t.dispenserTick(state, pos)
+	case crafterTickType:
+		// ServerLevel.tickBlock stale guard: only tick if still a crafter. A crafter broken/replaced since
+		// the TRIGGERED tick was scheduled fires nothing. CITE: ServerLevel.tickBlock (state.is(block)).
+		if !block.IsCrafter(state) {
+			return
+		}
+		t.crafterTick(state, pos)
 	case redstoneLampTickType:
 		// RedstoneLampBlock.tick (the scheduled 4-tick delayed unlight): `if (LIT && !hasNeighborSignal)
 		// setBlock(cycle(LIT), 3)`. The stale guard is IsRedstoneLamp; a lamp re-powered within the 4 ticks

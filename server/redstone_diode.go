@@ -239,6 +239,13 @@ func (t *TickLoop) comparatorGetInputSignal(state block.StateID, pos pk.Position
 	// container).
 	if sig, has := t.sculkSensorAnalogOutputSignal(targetPos); has {
 		resultSignal = sig
+	} else if sig, has := t.crafterAnalogOutputSignal(targetPos); has {
+		// targetState.hasAnalogOutputSignal(): true for a CRAFTER; getAnalogOutputSignal ==
+		// CrafterBlockEntity.getRedstoneSignal() = the count of grid slots that are non-empty OR disabled
+		// (0..9). Checked BEFORE the generic container path: a crafter resolves as a containerView but its
+		// analog output is this fill COUNT, NOT the getRedstoneSignalFromContainer fill-ratio. CITE:
+		// CrafterBlock.getAnalogOutputSignal -> CrafterBlockEntity.getRedstoneSignal.
+		resultSignal = sig
 	} else if sig, has := t.containerAnalogOutputSignal(targetPos); has {
 		// targetState.hasAnalogOutputSignal(): true for a container block-entity (chest/furnace/dispenser/
 		// brewing/hopper — AnalogOutputBlock). getAnalogOutputSignal == getRedstoneSignalFromContainer(container).
@@ -260,6 +267,25 @@ func (t *TickLoop) containerAnalogOutputSignal(pos pk.Position) (int, bool) {
 		return 0, false
 	}
 	return getRedstoneSignalFromContainer(container), true
+}
+
+// crafterAnalogOutputSignal ports CrafterBlock.getAnalogOutputSignal: if the block at pos is a crafter,
+// return (CrafterBlockEntity.getRedstoneSignal(), true) -- the count of grid slots that are non-empty OR
+// disabled (0..9). Returns (0, false) when pos is not a crafter (so the comparator falls through to the
+// generic container path / its super value). CITE: CrafterBlock.getAnalogOutputSignal.
+func (t *TickLoop) crafterAnalogOutputSignal(pos pk.Position) (int, bool) {
+	if t.world() == nil {
+		return 0, false
+	}
+	state, ok := t.world().GetBlock(pos, dimMinY)
+	if !ok || !block.IsCrafter(state) {
+		return 0, false
+	}
+	c := t.resolveCrafter(pos, state)
+	if c == nil {
+		return 0, false
+	}
+	return c.crafterGetRedstoneSignal(), true
 }
 
 // diodeShouldTurnOn is DiodeBlock.shouldTurnOn(level, pos, state): getInputSignal > 0. A comparator

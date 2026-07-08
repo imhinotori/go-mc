@@ -940,6 +940,11 @@ func (t *TickLoop) drainRedstoneUpdates(q *redstoneUpdateQueue) {
 			// piston's powered state crossed its EXTENDED state (REDSTONE TIER-3, piston.go). CITE:
 			// PistonBaseBlock.neighborChanged.
 			t.pistonCheckIfExtend(pos, state)
+		case block.IsCrafter(state):
+			// CrafterBlock.neighborChanged: on a rising power edge (now powered, not yet TRIGGERED) schedule
+			// the auto-craft 4 ticks out + latch TRIGGERED=true; on a falling edge clear TRIGGERED + CRAFTING
+			// (crafter.go). CITE: CrafterBlock.neighborChanged.
+			t.crafterNeighborChanged(pos, state)
 		case block.IsDispenserFamily(state):
 			// DispenserBlock.neighborChanged (shared by DropperBlock): on a rising power edge (now powered,
 			// not yet TRIGGERED) schedule the dispense 4 ticks out + latch TRIGGERED=true; on a falling edge

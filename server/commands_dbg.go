@@ -518,8 +518,41 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned thrown trident eid=%d (power 2.5 in look dir)", e.id))
 		}
+	case "crafter":
+		// CRAFTER (crafter.go): place a crafter 2 blocks in front (+X) oriented to eject EAST, pre-load its
+		// 3x3 grid with the 2-plank vertical stick recipe, then place a redstone_block beside it and pulse
+		// crafterNeighborChanged so it auto-crafts on the 4-tick delay -- a stick ItemEntity is ejected out
+		// the front. Proves the redstone-driven auto-craft + eject end to end. CITE: CrafterBlock.
+		if t.world() == nil {
+			t.broadcastSystemChat("[dbg] crafter: no world")
+			break
+		}
+		cx, cy, cz := int(p.x)+2, int(p.y), int(p.z)
+		cpos := pk.Position{X: cx, Y: cy, Z: cz}
+		state := block.ToStateID[block.Crafter{Orientation: block.EastUp}]
+		t.world().SetBlock(cpos, state, dimMinY)
+		t.broadcastBlockUpdate(cpos, state)
+		c := t.resolveCrafter(cpos, state)
+		c.items[0] = component.SlotData{ItemID: pk.VarInt(item.OakPlanks.ID), Count: 1}
+		c.items[3] = component.SlotData{ItemID: pk.VarInt(item.OakPlanks.ID), Count: 1}
+		if src, ok := block.DefaultStateID["minecraft:redstone_block"]; ok {
+			spos := pk.Position{X: cx, Y: cy - 1, Z: cz}
+			t.world().SetBlock(spos, src, dimMinY)
+			t.broadcastBlockUpdate(spos, src)
+		}
+		t.crafterNeighborChanged(cpos, state)
+		t.broadcastSystemChat(fmt.Sprintf("[dbg] placed a loaded crafter at (%d,%d,%d); it should craft 4 sticks in 4 ticks", cx, cy, cz))
+	case "map":
+		// MAP (map_item.go/map_use.go): give the issuer an empty map and immediately convert it to a filled
+		// map centered on them (EmptyMapItem.use), so the terrain fills + the ClientboundMapItemData packet
+		// streams as they hold it. CITE: EmptyMapItem.use + MapItem.inventoryTick.
+		inv := ensureInventory(p)
+		slot := heldWindowSlot(inv.heldSlot)
+		inv.set(slot, component.SlotData{ItemID: pk.VarInt(item.Map.ID), Count: 1})
+		t.tryUseEmptyMap(p, inv, inv.get(slot), interactionHandMain)
+		t.broadcastSystemChat("[dbg] gave + opened a filled map; hold it to watch the terrain fill in")
 	default:
-		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | dragon | iron_golem | villager | villager_farmer | vex | ghast_hostile | blaze | phantom | strider | wither_skeleton | wither | hoglin | bee | goat | frog | camel | sniffer | allay | axolotl | fangs | water | pig-in-water | raid | rain | redstone | trade | trident | throw-trident")
+		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | dragon | iron_golem | villager | villager_farmer | vex | ghast_hostile | blaze | phantom | strider | wither_skeleton | wither | hoglin | bee | goat | frog | camel | sniffer | allay | axolotl | fangs | water | pig-in-water | raid | rain | redstone | trade | trident | throw-trident | crafter | map")
 	}
 }
 

@@ -140,6 +140,11 @@ func (t *TickLoop) tickWorld() {
 	// not per-region), so they tick ONCE globally here (the tickChunkSave twin), after the per-region
 	// block/fluid drains. A furnace with no items ticks to a cheap no-op. Nil map = no-op (no furnace open).
 	t.tickFurnaces()
+	// SUB-BLOCKENTITY: tick every CRAFTER block-entity (CrafterBlockEntity.serverTick -- the 6-tick
+	// CRAFTING-animation countdown that clears the CRAFTING block-state when it ends). Keyed by world
+	// position (t.crafters, the tickFurnaces twin). A crafter not mid-craft ticks to a cheap early-out.
+	// CITE: CrafterBlock.getTicker -> CrafterBlockEntity.serverTick.
+	t.tickCrafters()
 	// SUB-BLOCKENTITY: tick every brewing-stand block-entity (BrewingStandBlockEntity.serverTick). Keyed by
 	// world position (t.brewingStands, global — not per-region), so they tick ONCE globally here (the
 	// tickFurnaces twin). A brewing stand with no items/fuel ticks to a cheap no-op. Nil map = no-op.
@@ -507,6 +512,11 @@ func (t *TickLoop) tickEntities() {
 	// tickFood so the eat's FoodData.eat lands on the post-hunger-tick food value, and AFTER
 	// tickBlockBreak so it sits with the other ServerPlayerGameMode/LivingEntity per-tick seams.
 	t.tickUseItem()
+
+	// MAP inventory-tick (MapItem.inventoryTick): for each player holding a filled_map in hand, sample the
+	// terrain around the holder into the map data and flush any dirty pixels to that carrier. ADDITIVE (no
+	// phase reorder). Its body lives in map_item.go/map_use.go. CITE: MapItem.inventoryTick.
+	t.tickMapsHeld()
 
 	// ULTRA_DEBUG firehose: a throttled per-player state snapshot (pos/vel/in-water/air/food/health/
 	// dig/use), emitted LAST in the per-player phase so it captures the post-tick state. No-op unless

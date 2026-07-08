@@ -106,6 +106,11 @@ func (t *TickLoop) flushColumn(pos level.ChunkPos) bool {
 	// (HopperBlockEntity.saveAdditional — the 5-slot Items list + TransferCooldown). The dispenser-flush twin.
 	t.flushHopperItems(pos, ch)
 
+	// CRAFTER FLUSH: fold any live crafterBE in this column into the chunk BlockEntity list
+	// (CrafterBlockEntity.saveAdditional -- Items + crafting_ticks_remaining + disabled_slots). The
+	// dispenser-flush twin.
+	t.flushCrafterItems(pos, ch)
+
 	data, err := world.SerializeChunkData(t.worker().StructureCache(), pos, ch, t.worker().MinY())
 	if err != nil {
 		// A serialize error is an encode bug, not runtime input; skip this column (do not crash the
