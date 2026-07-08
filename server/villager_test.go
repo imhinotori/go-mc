@@ -86,12 +86,13 @@ func TestFarmerLevel1Offers(t *testing.T) {
 			t.Fatalf("offer %d priceMultiplier = %v, want 0.05", i, o.priceMultiplier)
 		}
 	}
-	// villagerOffersFor routes FARMER/1 to the sample; every other (profession, level) is empty (deferred).
+	// villagerOffersFor routes FARMER/1 to this sample; the full profession tables are now landed, so
+	// other professions are also populated (armorer/1 has the iron-armor listings).
 	if villagerOffersFor("farmer", 1).isEmpty() {
 		t.Fatal("villagerOffersFor(farmer,1) must be non-empty")
 	}
-	if !villagerOffersFor("armorer", 1).isEmpty() {
-		t.Fatal("villagerOffersFor(armorer,1) must be empty (deferred)")
+	if villagerOffersFor("armorer", 1).isEmpty() {
+		t.Fatal("villagerOffersFor(armorer,1) must be non-empty (profession tables landed)")
 	}
 }
 
