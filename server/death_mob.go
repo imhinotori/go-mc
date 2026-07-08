@@ -172,6 +172,12 @@ func (t *TickLoop) tickDeath(e *Entity) {
 		if len(e.passengers) > 0 {
 			t.ejectPassengers(e)
 		}
+		// WITHER BOSS (Task): tear down the boss bar on the wither's removal (ServerBossEvent.removeAllPlayers
+		// runs on the boss entity's removal). Gated on e.wither != nil; a no-op for every other mob. Cite
+		// WitherBoss (ServerBossEvent lifecycle tied to the entity).
+		if e.wither != nil {
+			t.witherBossBarRemoveAll(e)
+		}
 		t.regionForEntity(e).entities.remove(e.id)
 	}
 }
@@ -199,7 +205,12 @@ func (t *TickLoop) dropAllDeathLoot(e *Entity, src damageSource) {
 	const shouldDropLoot = true
 	if shouldDropLoot {
 		t.dropMobLoot(e, src)
-		// dropCustomDeathLoot: per-mob hand-coded extra drops — v1 stub (no mob defines custom loot).
+		// dropCustomDeathLoot: per-mob hand-coded extra drops. WITHER BOSS (Task): WitherBoss
+		// .dropCustomDeathLoot spawns a NETHER_STAR (setExtendedLifetime). Gated on e.wither != nil so every
+		// other mob takes the unchanged v1 no-op path. Cite WitherBoss.dropCustomDeathLoot.
+		if e.wither != nil {
+			t.witherDropNetherStar(e)
+		}
 	}
 	// dropEquipment: a mob's worn/held equipment drop — v1 stub (no mob equipment inventory yet).
 

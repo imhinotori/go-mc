@@ -59,6 +59,19 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 		return
 	}
 
+	// WITHER BOSS (Task): WitherBoss.hurtServer overrides the LivingEntity path with the boss-specific
+	// immunity gates BEFORE the shared pipeline. Gated on e.wither != nil so every other mob is a zero-cost
+	// skip (the pig oracle is untouched). Returns early (no damage) on: a source in WITHER_IMMUNE_TO or from
+	// another WitherBoss; getInvulnerableTicks() > 0 (the charge-up) unless BYPASSES_INVULNERABILITY; the
+	// isPowered() projectile shield vs an arrow/wind-charge; or an attacker in WITHER_FRIENDS. On a surviving
+	// hit it arms destroyBlocksTick = 20 + adds 3 to every idleHeadUpdates entry, then falls through to the
+	// shared pipeline (Monster.hurtServer). Cite WitherBoss.hurtServer.
+	if e.wither != nil {
+		if !t.witherHurtServerGate(e, src) {
+			return // one of the boss immunity gates rejected the hit (WitherBoss.hurtServer -> false)
+		}
+	}
+
 	// FIRE_RESISTANCE guard (LivingEntity.hurtServer bytecode 20-41): `if (source.is(IS_FIRE) &&
 	// hasEffect(FIRE_RESISTANCE)) return false;` — AFTER isDeadOrDying, BEFORE the amount<0 clamp.
 	// Live for mobs: the on_fire tick routes through here (fire.go) and the witch self-drinks a

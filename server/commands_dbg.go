@@ -215,6 +215,17 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned wither_skeleton eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+1, p.z))
 		}
+	case "wither", "wither_boss", "witherboss":
+		// WITHER BOSS (Task): spawn the WitherBoss (300 HP nether boss). On spawn it charges up for 220
+		// invulnerable ticks (immune, boss bar ramping 0->1), then detonates a power-7 explosion and fights:
+		// its 3 heads shoot WitherSkull projectiles at the nearest player (8.0 dmg + WITHER effect + power-1
+		// explosion on hit), it heals +1 every 20 ticks, and below 50%% HP it armors up (arrow/wind-charge
+		// shield + it smashes the blocks in its AABB). Purple boss bar (darkened screen). On death it drops a
+		// NETHER_STAR. Spawned 2 blocks up (its box is 0.9 x 3.5). Use /dbg on a clear area (the spawn explosion).
+		e := t.spawnWither(p.x, p.y+2, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned wither eid=%d at (%.1f,%.1f,%.1f) -- 220-tick invuln charge-up, then it detonates + fights (boss bar sent)", e.id, p.x, p.y+2, p.z))
+		}
 	case "hoglin":
 		// HOGLIN (GAP): spawn an adult Hoglin (the nether beast). MAX_HEALTH 40, hits for a 6.0-base damage
 		// roll and FLINGS the target upward (the knock-up toss). It converts to a Zoglin after > 300 ticks in
@@ -374,7 +385,7 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		t.onRedstoneEdit(wirePos)
 		t.broadcastSystemChat(fmt.Sprintf("[dbg] placed redstone_block(%d,%d,%d)+wire(%d,%d,%d); wire should be POWER 15", bx, by, bz, bx+1, by, bz))
 	default:
-		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | dragon | iron_golem | villager | villager_farmer | vex | ghast_hostile | blaze | strider | wither_skeleton | hoglin | fangs | water | pig-in-water | raid | rain | redstone | trade")
+		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | dragon | iron_golem | villager | villager_farmer | vex | ghast_hostile | blaze | strider | wither_skeleton | wither | hoglin | fangs | water | pig-in-water | raid | rain | redstone | trade")
 	}
 }
 

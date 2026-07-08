@@ -366,6 +366,24 @@ func enderDragonSupplier() *Supplier {
 		Build()
 }
 
+// witherSupplier is the port of WitherBoss.createAttributes(): Monster.createMonsterAttributes() then
+// .add(MAX_HEALTH 300.0).add(MOVEMENT_SPEED 0.6).add(FLYING_SPEED 0.6).add(FOLLOW_RANGE 40.0).add(ARMOR 4.0).
+// It builds on createMonsterAttributes (so it carries the ATTACK_DAMAGE registration default 2.0). MAX_HEALTH
+// 300.0 is the boss health; MOVEMENT_SPEED/FLYING_SPEED are the exact ldc2_w 0.6000000238418579 double. NO
+// KNOCKBACK_RESISTANCE override (the jar's createAttributes does not add one -- it inherits the
+// createLivingAttributes default 0.0). Cite net.minecraft.world.entity.boss.wither.WitherBoss.createAttributes
+// (javap this task: createMonsterAttributes, ldc2_w 300.0d MAX_HEALTH, 0.6000000238418579d MOVEMENT_SPEED,
+// 0.6000000238418579d FLYING_SPEED, 40.0d FOLLOW_RANGE, 4.0d ARMOR).
+func witherSupplier() *Supplier {
+	return createMonsterAttributes().
+		AddValue(MaxHealth, 300.0).
+		AddValue(MovementSpeed, 0.6000000238418579).
+		AddValue(FlyingSpeed, 0.6000000238418579).
+		AddValue(FollowRange, 40.0).
+		AddValue(Armor, 4.0).
+		Build()
+}
+
 // blazeSupplier is the port of Blaze.createAttributes(): Monster.createMonsterAttributes() then
 // .add(ATTACK_DAMAGE 6.0).add(MOVEMENT_SPEED 0.23000000417232513).add(FOLLOW_RANGE 48.0). MAX_HEALTH
 // is the createLivingAttributes default 20.0 (Blaze has NO MAX_HEALTH override). Cite
@@ -721,6 +739,10 @@ var suppliers = map[string]*Supplier{
 	// logic). Keyed by registry name so NewMapForEntity resolves the faithful 200hp. The dragon is a
 	// "misc"-category LivingEntity, so the dedicated supplier (resolved FIRST) gives it the boss health.
 	"ender_dragon": enderDragonSupplier(),
+	// WITHER BOSS (Task): the nether-built boss. WitherBoss.createAttributes: Monster.createMonsterAttributes
+	// + MAX_HEALTH 300.0 + MOVEMENT_SPEED 0.6 + FLYING_SPEED 0.6 + FOLLOW_RANGE 40.0 + ARMOR 4.0. Keyed by
+	// registry name so NewMapForEntity resolves the faithful 300hp boss map (its category is monster).
+	"wither": witherSupplier(),
 }
 
 // livingCategories is the set of data/entity.Entity.Type values that correspond to a vanilla

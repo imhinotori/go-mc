@@ -723,6 +723,16 @@ func (t *TickLoop) tickAI() {
 		if e.dragon != nil {
 			t.enderDragonAiStep(e)
 		}
+			// WITHER BOSS (Task): the boss tick (invuln charge-up + power-7 explosion at 0 + charge-up heal-10,
+			// then the 3-head WitherSkull ranged attack + destroyBlocksTick AABB break + idle heal +1 + boss-bar
+			// progress). Per-type-gated like the dragon, AFTER serverAiStep (the wither's empty goalSelector is a
+			// no-op). The wither is a flyer (witherIsFlyer); its no-gravity hover is gated in tickPhysics.
+			// ADDITIVE + wither-gated (zero cost / zero RNG for every non-wither -- the pig oracle stream is
+			// untouched; the wither's head-cadence nextInt draws only on its OWN mobRandom stream). Cite
+			// WitherBoss.customServerAiStep.
+			if e.wither != nil {
+				t.witherAiStep(e)
+			}
 		// END CRYSTAL (Task): the crystal's ++time counter tick (EndCrystal.tick). Per-type-gated on
 		// e.isEndCrystal. A crystal is NOT a Mob (no e.ai), so it never enters this serverAiStep snapshot
 		// loop -- it is ticked in the separate crystal pass below (see the tickEndCrystal loop after this
@@ -942,6 +952,14 @@ func (t *TickLoop) tickPhysics() {
 		// dragon flies freely, unaffected by gravity"). dragonIsFlyer gates on e.dragon != nil. Cite
 		// EnderDragon ctor noPhysics = true.
 		if dragonIsFlyer(e) {
+			continue
+		}
+
+		// WITHER BOSS (Task): the wither is a FLYING boss (FlyingMoveControl). v1 hovers it where spawned
+		// (its movement is the witherAiStep boss loop, not the generic ground physics), so skip the generic
+		// gravity/drag/collision path here -- the observable "the wither floats". witherIsFlyer gates on
+		// e.wither != nil. Cite WitherBoss(FlyingMoveControl) -- v1 defers the FlyingMoveControl chase.
+		if witherIsFlyer(e) {
 			continue
 		}
 

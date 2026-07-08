@@ -396,6 +396,13 @@ type Entity struct {
 	// non-crystal entity. Cite EndCrystal.tick.
 	isEndCrystal  bool
 	endCrystalTime int32
+	// --- WITHER BOSS (net.minecraft.world.entity.boss.wither.WitherBoss) ----------------------------
+	//
+	// Tick-owned plain values, set/read ONLY for a WitherBoss (witherAiStep + witherDropNetherStar gate
+	// on typ == entity.Wither.ID via e.wither != nil). All the wither state is grouped behind ONE
+	// pointer (e.wither) so a plain mob (the pig oracle) pays exactly one nil pointer and touches NONE
+	// of these fields -- additive-minimal, zero new RNG, byte-identical for every non-wither. Cite WitherBoss.
+	wither *witherState
 	// --- MAGMA CUBE (net.minecraft.world.entity.monster.cubemob.MagmaCube) --------------------------
 	//
 	// Tick-owned plain values, set/read ONLY for a MagmaCube (magmaCubeAiStep gates on typ ==
