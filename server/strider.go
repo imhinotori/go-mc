@@ -59,11 +59,11 @@ const (
 	striderLavaFloatScale = 0.5
 )
 
-// spawnStrider creates a Strider at (x,y,z) and adds it to the owner region store (the tracker broadcasts
-// AddEntity next tick). Minimal e.ai (per-entity rng); NO goalSelector (the lava-walk + cold-state drive is
+// spawnStriderRaw is the bare Strider create (no finalizeSpawn) at (x,y,z): the tracker broadcasts
+// AddEntity next tick. Minimal e.ai (per-entity rng); NO goalSelector (the lava-walk + cold-state drive is
 // the code-driven striderAiStep, like spawnBlaze). initSpawnHealth seeds health from the folded MAX_HEALTH
-// (20.0). Cite Strider(EntityType, Level).
-func (t *TickLoop) spawnStrider(x, y, z float64) *Entity {
+// (20.0). The variant roll (jockey/baby/saddle) is spawnStrider -> striderFinalizeSpawn. Cite Strider(EntityType, Level).
+func (t *TickLoop) spawnStriderRaw(x, y, z float64) *Entity {
 	s := NewEntity(t.idAlloc.AllocID(), entity.Strider, x, y, z)
 	s.isStrider = true
 	initSpawnHealth(s) // setHealth(getMaxHealth()) -> 20.0
@@ -175,4 +175,75 @@ func (t *TickLoop) striderAiStep(e *Entity) {
 	}
 	t.striderTickSuffocation(e) // setSuffocating(!warm) -- the cold-shiver slowdown toggle
 	t.striderFloat(e)           // floatStrider() -- ride/stand on the lava surface (never sink)
+}
+
+// spawnStrider creates a Strider at (x,y,z) then runs the Strider.finalizeSpawn variant roll (jockey /
+// baby / saddle) on level.getRandom(). spawnStriderRaw is the bare create (no finalize) used both here and
+// by the baby-jockey child inside striderFinalizeSpawn so the child never re-rolls. Cite Strider.finalizeSpawn.
+func (t *TickLoop) spawnStrider(x, y, z float64) *Entity {
+	s := t.spawnStriderRaw(x, y, z)
+	t.striderFinalizeSpawn(s)
+	return s
+}
+
+// striderFinalizeSpawn ports Strider.finalizeSpawn 1:1, drawn on level.getRandom() (ServerLevelAccessor
+// .getRandom == t.cur().levelRandom). Draw order:
+//
+//	if (isBaby()) return super.finalizeSpawn(...);                     // no variant draws for a baby
+//	RandomSource r = level.getRandom();
+//	if (r.nextInt(30) == 0) {                                          // 1-in-30 zombified-piglin jockey
+//	    Mob rider = ZOMBIFIED_PIGLIN.create(...); ...
+//	    spawnJockey(..., new Zombie$ZombieGroupData(Zombie.getSpawnAsBabyOdds(r), false));  // nextFloat()<0.05
+//	    rider.setItemSlot(MAINHAND, WARPED_FUNGUS_ON_A_STICK);
+//	    this.setItemSlot(SADDLE, SADDLE); this.setGuaranteedDrop(SADDLE);
+//	} else if (r.nextInt(10) == 0) {                                   // 1-in-10 baby jockey strider
+//	    AgeableMob rider = STRIDER.create(...); rider.setAge(-24000); spawnJockey(..., null);
+//	} else groupData = new AgeableMob$AgeableMobGroupData(0.5f);
+//	return super.finalizeSpawn(...);
+//
+// The DRAWS (nextInt(30); then either getSpawnAsBabyOdds nextFloat() or nextInt(10)) are the lockstep-
+// critical part and happen 1:1. The rider MOUNT (Mob.startRiding via spawnJockey) + the rider/saddle
+// EQUIPMENT slot sets are DEFERRED (no passenger/equipment-slot subsystem in v1); the strider still spawns
+// the jockey/baby entity, sets its baby age, and records striderSaddled. The AgeableMobGroupData / super
+// .finalizeSpawn (Animal) carry no further strider variant draws. striderFinalized guards the one-shot roll;
+// a baby (breedAge < 0) early-returns exactly like isBaby(). Cite Strider.finalizeSpawn + Strider.spawnJockey
+// + Zombie.getSpawnAsBabyOdds (nextFloat() < 0.05f).
+func (t *TickLoop) striderFinalizeSpawn(e *Entity) {
+	if e.striderFinalized {
+		return
+	}
+	e.striderFinalized = true
+	if e.breedAge < 0 { // isBaby(): a baby jockey strider (JOCKEY reason) draws no variant
+		return
+	}
+	lr := t.cur().levelRandom
+	if lr == nil {
+		return
+	}
+	if lr.NextIntN(30) == 0 { // r.nextInt(30) == 0 -> zombified-piglin jockey
+		_ = t.spawnZombifiedPiglin(e.x, e.y, e.z) // ZOMBIFIED_PIGLIN.create(JOCKEY); MOUNT via startRiding DEFERRED
+		_ = striderZombieSpawnAsBabyOdds(lr)      // Zombie.getSpawnAsBabyOdds(r): nextFloat() < 0.05f (the draw)
+		// rider MAINHAND WARPED_FUNGUS_ON_A_STICK + this SADDLE slot set DEFERRED (no equipment-slot subsystem);
+		// record the saddle + guaranteed-drop intent on the strider so it lands when the slot API exists.
+		e.striderSaddled = true
+		return
+	}
+	if lr.NextIntN(10) == 0 { // else r.nextInt(10) == 0 -> baby jockey strider
+		baby := t.spawnStriderRaw(e.x, e.y, e.z) // STRIDER.create(JOCKEY) via the non-finalizing raw create
+		if baby != nil {
+			baby.striderFinalized = true // JOCKEY-reason baby: isBaby() early-return, no re-roll
+			baby.breedAge = babyStartAge // setAge(-24000)
+			baby.refreshDimensions()
+		}
+		// spawnJockey MOUNT (startRiding) DEFERRED.
+		return
+	}
+	// else: AgeableMobGroupData(0.5f) -- no draw, no strider state.
+}
+
+// striderZombieSpawnAsBabyOdds is Zombie.getSpawnAsBabyOdds(RandomSource): rng.nextFloat() < 0.05f. Drawn
+// on level.getRandom() inside Strider.finalizeSpawn when constructing the zombified-piglin jockey's
+// ZombieGroupData; the draw MUST be consumed for lockstep. Cite Zombie.getSpawnAsBabyOdds.
+func striderZombieSpawnAsBabyOdds(lr interface{ NextFloat() float32 }) bool {
+	return lr.NextFloat() < 0.05 // ldc 0.05f; fcmpg < -> true
 }

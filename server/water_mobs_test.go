@@ -12,8 +12,8 @@ import (
 	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/attribute"
-	"github.com/imhinotori/sulfur/world"
 	pk "github.com/imhinotori/sulfur/net/packet"
+	"github.com/imhinotori/sulfur/world"
 )
 
 func waterMobLoop(t *testing.T) (*TickLoop, *world.ChunkManager, int) {
@@ -100,12 +100,23 @@ func TestPufferfishSpawnDefaults(t *testing.T) {
 	}
 }
 
-// TestTropicalFishSpawnDefaults: a fresh TropicalFish carries the packed DEFAULT_VARIANT (0).
+// TestTropicalFishSpawnDefaults: a fresh TropicalFish carries a rolled TropicalFish.finalizeSpawn variant
+// (drawn on level.getRandom()) -- either a COMMON_VARIANTS entry (90%) or a validly-packed rare variant.
+// The packed layout must round-trip: base bit high nibble of the pattern word, two DyeColor ids in bytes 2/3.
 func TestTropicalFishSpawnDefaults(t *testing.T) {
 	loop, _, floorY := waterMobLoop(t)
 	f := loop.spawnFish(entity.TropicalFish, 8.5, float64(floorY+1), 8.5)
-	if f.tropicalVariant != tropicalDefaultVariant {
-		t.Fatalf("tropical_fish variant = %d, want DEFAULT %d", f.tropicalVariant, tropicalDefaultVariant)
+	v := f.tropicalVariant
+	// re-pack the decoded fields (pattern word & 0xFFFF, base color id byte 2, pattern color id byte 3) and
+	// confirm it equals the stored packed variant (packVariant is a stable encoding).
+	patternWord := v & 0xFFFF
+	baseID := (v >> 16) & 0xFF
+	patID := (v >> 24) & 0xFF
+	if got := tropicalPackVariant(patternWord, baseID, patID); got != v {
+		t.Fatalf("tropical_fish variant %d does not round-trip through packVariant (got %d)", v, got)
+	}
+	if baseID > 15 || patID > 15 {
+		t.Fatalf("tropical_fish variant %d has out-of-range DyeColor ids base=%d pat=%d", v, baseID, patID)
 	}
 }
 

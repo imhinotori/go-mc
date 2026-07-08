@@ -523,6 +523,12 @@ type Entity struct {
 	// Strider.setSuffocating / isSuffocating / DATA_SUFFOCATING.
 	isStrider          bool
 	striderSuffocating bool
+	// striderFinalized guards the one-shot Strider.finalizeSpawn variant roll (jockey/baby/saddle) so it
+	// draws exactly once at natural spawn. striderSaddled mirrors the SADDLE equipment slot set on a
+	// zombified-piglin jockey strider (a guaranteed-drop saddle) -- the rider-mount itself is DEFERRED
+	// (no passenger subsystem) but the saddle set + the rng draws happen 1:1. Cite Strider.finalizeSpawn.
+	striderFinalized bool
+	striderSaddled   bool
 	// --- WITHER SKELETON / HOGLIN STATE (nether roster) ---------------------------------------------
 	//
 	// Tick-owned plain values. isWitherSkeleton / isHoglin / isZoglin mark the entity (set/read ONLY by
@@ -676,6 +682,12 @@ type Entity struct {
 	dolphinMoistness      int
 	tadpoleAge            int
 	tropicalVariant       int
+	// salmonVariant mirrors Salmon DATA_TYPE (0 SMALL / 1 MEDIUM / 2 LARGE, weighted 30/50/15 at
+	// finalizeSpawn); salmonScale mirrors the Salmon$Variant.boundingBoxScale (SMALL 0.5 / MEDIUM 1.0 /
+	// LARGE 1.5) folded into the hitbox via getSalmonScale. Zero for every non-salmon. Cite
+	// Salmon.finalizeSpawn + Salmon$Variant + Salmon.getSalmonScale.
+	salmonVariant         int
+	salmonScale           float32
 	// --- NAUTILUS FAMILY (Task, NEW 26.2) ----------------------------------------------------------
 	// AbstractNautilus is a brain-driven TamableAnimal aquatic mount (Nautilus + the zombified
 	// ZombieNautilus). isNautilus gates the (bounded) swim tick; isZombieNautilus marks the undead

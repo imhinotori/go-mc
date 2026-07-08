@@ -120,11 +120,19 @@ func (t *TickLoop) spawnFish(typ entity.Entity, x, y, z float64) *Entity {
 		f.pufferPuffState = pufferStateSmall // DEFAULT_PUFF_STATE
 	}
 	if typ.ID == entity.TropicalFish.ID {
+		// TropicalFish.finalizeSpawn variant roll (drawn on level.getRandom()); DEFAULT until rolled.
 		f.tropicalVariant = tropicalDefaultVariant // DEFAULT_VARIANT (KOB/WHITE/WHITE -> 0); 2-pattern render DEFERRED
+		f.tropicalVariant = t.tropicalFishFinalizeVariant()
 	}
 	initSpawnHealth(f) // setHealth(getMaxHealth()) -> 3.0
 	f.ai = newWaterMobAI(0)
 	reseedMobAI(f.ai, f.id)
+	if typ.ID == entity.Salmon.ID {
+		// Salmon.finalizeSpawn SIZE roll: this.random == the salmon OWN (id-reseeded) stream == mobRandom(f).
+		// Rolled AFTER reseedMobAI so it reads the per-entity seed (a deterministic per-salmon size), 1:1 with
+		// this.random in the bytecode.
+		f.salmonVariant, f.salmonScale = salmonFinalizeVariant(f)
+	}
 	owner := t.regionForEntity(f)
 	if owner == nil {
 		owner = t.cur()
@@ -280,7 +288,7 @@ func (t *TickLoop) pufferfishStingSweep(e *Entity) {
 	// "did the hit land" gate mirrors the bee sting pattern (beeAiStep): a fresh hit or an over-lastHurt
 	// hit lands (LivingEntity.hurtServer i-frame rule). On a landed hit apply POISON 60*puffState (amp 0),
 	// exactly as Pufferfish.touch addEffect(new MobEffectInstance(POISON, 60*puffState, 0)).
-	dmg := float32(1 + state) // (i2f) 1 + puffState
+	dmg := float32(1 + state)                                   // (i2f) 1 + puffState
 	src := damageSourceByTypeName("minecraft:mob_attack", e.id) // damageSources().mobAttack(this)
 	landed := !p.dead && (float32(p.invulnerableTime) <= hurtCooldownConst || dmg > p.lastHurt)
 	t.applyDamage(p, src, dmg)
@@ -307,8 +315,8 @@ func (t *TickLoop) tadpoleAiStep(e *Entity) {
 // (mark dead + remove from store). Mirrors the convertTo create+discard shape (thunderHitTypeSwap). Cite
 // Tadpole.ageUp + Mob.convertTo.
 func (t *TickLoop) tadpoleGrowIntoFrog(e *Entity) {
-	t.spawnFrog(e.x, e.y, e.z, false) // convertTo(FROG): a fresh adult Frog at the tadpole position
-	e.dead = true                     // discard() the tadpole (convertTo removes the source)
+	t.spawnFrogRaw(e.x, e.y, e.z, false) // convertTo(FROG): copies data via finalizeConversion; NO finalizeSpawn re-roll
+	e.dead = true                        // discard() the tadpole (convertTo removes the source)
 	owner := t.regionForEntity(e)
 	if owner == nil {
 		owner = t.cur()
@@ -334,4 +342,133 @@ func (t *TickLoop) dolphinAiStep(e *Entity) {
 			t.applyDamageEntity(e, damageSourceOf(damageTypeDryOut), dolphinDryOutDamage) // hurt(dryOut, 1.0F)
 		}
 	}
+}
+
+// TropicalFish DyeColor ids used by COMMON_VARIANTS + packing (DyeColor.getId order, verified javap
+// DyeColor.<clinit>: WHITE=0..BLACK=15). Only the referenced ids are named. Cite net.minecraft.world.item.DyeColor.
+const (
+	tfWhite     = 0
+	tfOrange    = 1
+	tfLightBlue = 3
+	tfYellow    = 4
+	tfLime      = 5
+	tfPink      = 6
+	tfGray      = 7
+	tfCyan      = 9
+	tfPurple    = 10
+	tfBlue      = 11
+	tfRed       = 14
+)
+
+// TropicalFish$Base ids (SMALL=0, LARGE=1). Cite TropicalFish$Base + TropicalFish$Pattern.<init>.
+const (
+	tropicalBaseSmallID = 0
+	tropicalBaseLargeID = 1
+)
+
+// tropicalPatternPackedIds is TropicalFish$Pattern.values() (12) mapped to getPackedId() in enum order:
+// KOB,SUNSTREAK,SNOOPER,DASHER,BRINELY,SPOTTY (base SMALL id 0, local 0..5) then FLOPPER,STRIPEY,GLITTER,
+// BLOCKFISH,BETTY,CLAYFISH (base LARGE id 1, local 0..5); packedId = (base.id<<8)|local. Cite
+// TropicalFish$Pattern.<init> + TropicalFish.finalizeSpawn (Util.getRandom(Pattern.values(), rng)).
+var tropicalPatternPackedIds = [12]int{
+	(tropicalBaseSmallID << 8) | 0, // KOB
+	(tropicalBaseSmallID << 8) | 1, // SUNSTREAK
+	(tropicalBaseSmallID << 8) | 2, // SNOOPER
+	(tropicalBaseSmallID << 8) | 3, // DASHER
+	(tropicalBaseSmallID << 8) | 4, // BRINELY
+	(tropicalBaseSmallID << 8) | 5, // SPOTTY
+	(tropicalBaseLargeID << 8) | 0, // FLOPPER
+	(tropicalBaseLargeID << 8) | 1, // STRIPEY
+	(tropicalBaseLargeID << 8) | 2, // GLITTER
+	(tropicalBaseLargeID << 8) | 3, // BLOCKFISH
+	(tropicalBaseLargeID << 8) | 4, // BETTY
+	(tropicalBaseLargeID << 8) | 5, // CLAYFISH
+}
+
+// tropicalPackVariant is TropicalFish.packVariant(Pattern, base, patternColor): (pattern.getPackedId()&0xFFFF)
+// | ((base.getId()&0xFF)<<16) | ((patternColor.getId()&0xFF)<<24). Cite TropicalFish.packVariant.
+func tropicalPackVariant(patternPacked, baseColorID, patColorID int) int {
+	return (patternPacked & 0xFFFF) | ((baseColorID & 0xFF) << 16) | ((patColorID & 0xFF) << 24)
+}
+
+// tropicalCommonVariants is TropicalFish.COMMON_VARIANTS: the 22-entry pre-packed List.of table from the
+// clinit (index 0..21), each packed via tropicalPackVariant(pattern, baseColor, patternColor). Cite
+// TropicalFish.<clinit> COMMON_VARIANTS.
+var tropicalCommonVariants = [22]int{
+	tropicalPackVariant(tropicalPatternPackedIds[7], tfOrange, tfGray),    // STRIPEY, ORANGE, GRAY
+	tropicalPackVariant(tropicalPatternPackedIds[6], tfGray, tfGray),      // FLOPPER, GRAY, GRAY
+	tropicalPackVariant(tropicalPatternPackedIds[6], tfGray, tfBlue),      // FLOPPER, GRAY, BLUE
+	tropicalPackVariant(tropicalPatternPackedIds[11], tfWhite, tfGray),    // CLAYFISH, WHITE, GRAY
+	tropicalPackVariant(tropicalPatternPackedIds[1], tfBlue, tfGray),      // SUNSTREAK, BLUE, GRAY
+	tropicalPackVariant(tropicalPatternPackedIds[0], tfOrange, tfWhite),   // KOB, ORANGE, WHITE
+	tropicalPackVariant(tropicalPatternPackedIds[5], tfPink, tfLightBlue), // SPOTTY, PINK, LIGHT_BLUE
+	tropicalPackVariant(tropicalPatternPackedIds[9], tfPurple, tfYellow),  // BLOCKFISH, PURPLE, YELLOW
+	tropicalPackVariant(tropicalPatternPackedIds[11], tfWhite, tfRed),     // CLAYFISH, WHITE, RED
+	tropicalPackVariant(tropicalPatternPackedIds[5], tfWhite, tfYellow),   // SPOTTY, WHITE, YELLOW
+	tropicalPackVariant(tropicalPatternPackedIds[8], tfWhite, tfGray),     // GLITTER, WHITE, GRAY
+	tropicalPackVariant(tropicalPatternPackedIds[11], tfWhite, tfOrange),  // CLAYFISH, WHITE, ORANGE
+	tropicalPackVariant(tropicalPatternPackedIds[3], tfCyan, tfPink),      // DASHER, CYAN, PINK
+	tropicalPackVariant(tropicalPatternPackedIds[4], tfLime, tfLightBlue), // BRINELY, LIME, LIGHT_BLUE
+	tropicalPackVariant(tropicalPatternPackedIds[10], tfRed, tfWhite),     // BETTY, RED, WHITE
+	tropicalPackVariant(tropicalPatternPackedIds[2], tfGray, tfRed),       // SNOOPER, GRAY, RED
+	tropicalPackVariant(tropicalPatternPackedIds[9], tfRed, tfWhite),      // BLOCKFISH, RED, WHITE
+	tropicalPackVariant(tropicalPatternPackedIds[6], tfWhite, tfYellow),   // FLOPPER, WHITE, YELLOW
+	tropicalPackVariant(tropicalPatternPackedIds[0], tfRed, tfWhite),      // KOB, RED, WHITE
+	tropicalPackVariant(tropicalPatternPackedIds[1], tfGray, tfWhite),     // SUNSTREAK, GRAY, WHITE
+	tropicalPackVariant(tropicalPatternPackedIds[3], tfCyan, tfYellow),    // DASHER, CYAN, YELLOW
+	tropicalPackVariant(tropicalPatternPackedIds[6], tfYellow, tfYellow),  // FLOPPER, YELLOW, YELLOW
+}
+
+// tropicalFishFinalizeVariant is TropicalFish.finalizeSpawn variant pick, drawn on level.getRandom()
+// (ServerLevelAccessor.getRandom == t.cur().levelRandom), 1:1 draw order: if nextFloat() < 0.9f ->
+// Util.getRandom(COMMON_VARIANTS, rng) == COMMON_VARIANTS[nextInt(22)]; else new Variant(
+// Util.getRandom(Pattern.values(), rng) [pattern nextInt(12)], DyeColor.values()[nextInt(16)] base,
+// DyeColor.values()[nextInt(16)] pattern). super.finalizeSpawn draws no rng before this. Cite
+// TropicalFish.finalizeSpawn + Util.getRandom.
+func (t *TickLoop) tropicalFishFinalizeVariant() int {
+	lr := t.cur().levelRandom
+	if lr == nil {
+		return tropicalDefaultVariant
+	}
+	if lr.NextFloat() < 0.9 {
+		return tropicalCommonVariants[lr.NextIntN(22)]
+	}
+	patternPacked := tropicalPatternPackedIds[lr.NextIntN(12)]
+	baseColorID := int(lr.NextIntN(16))
+	patColorID := int(lr.NextIntN(16))
+	return tropicalPackVariant(patternPacked, baseColorID, patColorID)
+}
+
+// Salmon$Variant ids + boundingBoxScale (SMALL 0/0.5f, MEDIUM 1/1.0f, LARGE 2/1.5f); finalizeSpawn
+// WeightedList weights SMALL 30 / MEDIUM 50 / LARGE 15 (total 95). Cite Salmon$Variant.<clinit>.
+const (
+	salmonVariantSmall  = 0
+	salmonVariantMedium = 1
+	salmonVariantLarge  = 2
+
+	salmonScaleSmall  float32 = 0.5
+	salmonScaleMedium float32 = 1.0
+	salmonScaleLarge  float32 = 1.5
+
+	salmonWeightSmall  = 30
+	salmonWeightMedium = 50
+	salmonWeightLarge  = 15
+)
+
+// salmonFinalizeVariant is Salmon.finalizeSpawn SIZE pick, drawn on the salmon OWN stream (this.random ==
+// mobRandom(e), getfield #209 random -- NOT level.getRandom). Builds WeightedList.builder().add(SMALL,30)
+// .add(MEDIUM,50).add(LARGE,15).build().getRandom(random): ONE nextInt(95) then cumulative walk in builder
+// order. Returns (variantID, boundingBoxScale) for getSalmonScale. Cite Salmon.finalizeSpawn +
+// Salmon$Variant + WeightedList.getRandom + Salmon.getSalmonScale.
+func salmonFinalizeVariant(e *Entity) (int, float32) {
+	const total = salmonWeightSmall + salmonWeightMedium + salmonWeightLarge
+	draw := mobRandom(e).nextInt(total)
+	if draw < salmonWeightSmall {
+		return salmonVariantSmall, salmonScaleSmall
+	}
+	draw -= salmonWeightSmall
+	if draw < salmonWeightMedium {
+		return salmonVariantMedium, salmonScaleMedium
+	}
+	return salmonVariantLarge, salmonScaleLarge
 }

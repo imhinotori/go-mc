@@ -51,6 +51,10 @@ const (
 	frogStrollSpeed   = 1.0         // RandomStroll speed (brain-deferred; the common stroll pace)
 	frogLookDistance  = 8.0         // LookAtTargetSink distance (the common animal look range)
 	frogFoodTag       = "frog_food" // FROG_FOOD (slimeball): the tempt predicate
+	// FrogAi.TIME_BETWEEN_LONG_JUMPS = UniformInt.of(100, 140): initMemories draws sample(rng) ==
+	// min + nextInt(max-min+1) == 100 + nextInt(41). Cite FrogAi.<clinit> + UniformInt.sample.
+	frogTimeBetweenLongJumpsMin  = 100
+	frogTimeBetweenLongJumpsSpan = 41
 )
 
 // newFrogAI builds the Frog bounded passive AI. Frog is a BRAIN mob in vanilla (the long-jump/tongue-eat/
@@ -75,12 +79,12 @@ func newFrogAI() *mobAI {
 	return m
 }
 
-// spawnFrog creates a Frog at (x,y,z) with the jar attributes and the passive goal AI, then adds it to the
+// spawnFrogRaw is the bare Frog create (no finalizeSpawn) at (x,y,z) with the jar attributes + passive AI
 // owner region store. The variant defaults to temperate (DEFAULT_VARIANT); the biome-derived pick
 // (Frog.finalizeSpawn) is DEFERRED and structured to become a real biome lookup (the frogVariant field,
 // never baked away). baby toggles the AgeableMob baby age + half-scale box. initSpawnHealth seeds health
 // from MAX_HEALTH (10.0). Cite Frog.createAttributes + Frog.finalizeSpawn (DEFAULT_VARIANT temperate).
-func (t *TickLoop) spawnFrog(x, y, z float64, baby bool) *Entity {
+func (t *TickLoop) spawnFrogRaw(x, y, z float64, baby bool) *Entity {
 	f := NewEntity(t.idAlloc.AllocID(), entity.Frog, x, y, z)
 	f.isFrog = true
 	f.frogVariant = frogVariantTemperate // DEFAULT_VARIANT; the biome-derived pick is DEFERRED
@@ -113,4 +117,41 @@ func (t *TickLoop) frogAiStep(e *Entity) {
 	// frogspawn). No bounded per-tick work today beyond the passive goal walk. e.frogVariant carries the
 	// (temperate default) variant for the client texture + the future biome-derived pick.
 	_ = e.frogVariant
+}
+
+// spawnFrog creates a Frog at (x,y,z) then runs Frog.finalizeSpawn (the biome variant pick + the FrogAi
+// .initMemories rng draw). spawnFrogRaw is the bare create used by the Tadpole conversion path (Tadpole
+// .ageUp -> convertTo, which copies data via a finalizeConversion callback and does NOT re-run
+// finalizeSpawn). Cite Frog.finalizeSpawn + Tadpole.ageUp (convertTo).
+func (t *TickLoop) spawnFrog(x, y, z float64, baby bool) *Entity {
+	f := t.spawnFrogRaw(x, y, z, baby)
+	t.frogFinalizeSpawn(f)
+	return f
+}
+
+// frogFinalizeSpawn ports Frog.finalizeSpawn 1:1:
+//
+//	VariantUtils.selectVariantToSpawn(SpawnContext.create(level, blockPosition()), FROG_VARIANT)
+//	    .ifPresent(this::setVariant);                     // biome-derived variant; NO rng draw
+//	FrogAi.initMemories(this, level.getRandom());         // ONE UniformInt.of(100,140).sample(rng)
+//	return super.finalizeSpawn(...);                      // Animal; no further frog draws
+//
+// The variant pick is biome-driven (SpawnContext + the FROG_VARIANT registry spawn conditions, the
+// warm/cold/temperate biome-tag filter) and draws NO rng. The frog-variant biome-tag data is not yet wired,
+// so the biome->variant mapping is DEFERRED (frogVariant stays the DEFAULT_VARIANT temperate, set in
+// spawnFrogRaw, never baked away -- the biome read via biomeIDAt is structured to feed it). The LOCKSTEP-
+// critical part is FrogAi.initMemories' single draw, TIME_BETWEEN_LONG_JUMPS = UniformInt.of(100,140), whose
+// sample(rng) == 100 + rng.nextInt(41), drawn on level.getRandom() (t.cur().levelRandom); it MUST be
+// consumed here. Cite Frog.finalizeSpawn + VariantUtils.selectVariantToSpawn + FrogAi.initMemories +
+// UniformInt.sample.
+func (t *TickLoop) frogFinalizeSpawn(e *Entity) {
+	// Biome-derived variant (SpawnContext + FROG_VARIANT spawn conditions): DEFERRED (no frog-variant biome
+	// tags wired). e.frogVariant stays DEFAULT_VARIANT temperate; the biome read below is the structured hook.
+	// _, _ = t.biomeIDAt(int(math.Floor(e.x)), int(math.Floor(e.y)), int(math.Floor(e.z)))
+	lr := t.cur().levelRandom
+	if lr == nil {
+		return
+	}
+	// FrogAi.initMemories: TIME_BETWEEN_LONG_JUMPS.sample(rng) == 100 + nextInt(140-100+1) == 100 + nextInt(41).
+	_ = frogTimeBetweenLongJumpsMin + int(lr.NextIntN(frogTimeBetweenLongJumpsSpan))
 }
