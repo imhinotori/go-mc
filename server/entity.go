@@ -538,6 +538,36 @@ type Entity struct {
 	isAllay        bool
 	isAxolotl      bool
 	axolotlVariant int
+	// --- HORSE FAMILY (net.minecraft.world.entity.animal.equine.{AbstractHorse,Horse,Donkey,Mule,
+	//     AbstractChestedHorse,Llama,TraderLlama}) ------------------------------------------------
+	//
+	// Tick-owned plain values, set/read ONLY for a horse-family member (each read gates on typ or the
+	// isHorseFamily flag). isHorse/isDonkey/isMule/isLlama mark the concrete kind (isTraderLlama refines a
+	// llama). isHorseFamily is the union flag (any AbstractHorse) so the shared paths (jump launch, taming)
+	// gate once. horseTamed mirrors AbstractHorse DATA_ID_FLAGS bit-2 (isTamed/setTamed). horseTemper mirrors
+	// AbstractHorse.temper (0..getMaxTemper(); modifyTemper clamps). horseJumpStrength mirrors the
+	// JUMP_STRENGTH attribute base value (Sulfur has no JUMP_STRENGTH registered attribute -- the CITED
+	// non-gameplay omission; the launch reads this field, which randomizeAttributes/createBase*Attributes
+	// seed). horsePlayerJumpPendingScale mirrors AbstractHorse.playerJumpPendingScale (the rider-charge
+	// launch multiplier, 0..1). horseHasChest mirrors AbstractChestedHorse DATA_ID_CHEST (donkey/mule/llama
+	// only; a chest opens the inventory columns). horseInvColumns mirrors getInventoryColumns() (0 horse; 5
+	// chested-with-chest; llama = strength when chested). llamaStrength mirrors Llama DATA_STRENGTH_ID (1..5).
+	// Zero for every non-horse entity. The mount packet path + the container GUI are the DEFERRED behavior
+	// layer (horse.go). Cite AbstractHorse (temper/isTamed/playerJumpPendingScale) + AbstractChestedHorse
+	// (hasChest/getInventoryColumns) + Llama (getStrength).
+	isHorse                     bool
+	isDonkey                    bool
+	isMule                      bool
+	isLlama                     bool
+	isTraderLlama               bool
+	isHorseFamily               bool
+	horseTamed                  bool
+	horseTemper                 int
+	horseJumpStrength           float64
+	horsePlayerJumpPendingScale float32
+	horseHasChest               bool
+	horseInvColumns             int
+	llamaStrength               int
 	// --- PIGLIN (net.minecraft.world.entity.monster.piglin.Piglin) -------------------------------
 	//
 	// Tick-owned plain values, set/read ONLY for a Piglin (piglinBrainTick gates on typ == entity.Piglin.ID).

@@ -719,6 +719,49 @@ func camelSupplier() *Supplier {
 		Build()
 }
 
+// horseBaseAttributes is the port of AbstractHorse.createBaseHorseAttributes():
+// Animal.createAnimalAttributes() + JUMP_STRENGTH 0.7 + MAX_HEALTH 53.0 + MOVEMENT_SPEED
+// 0.22499999403953552 + STEP_HEIGHT 1.0 + SAFE_FALL_DISTANCE 6.0 + FALL_DAMAGE_MULTIPLIER 0.5 (verified
+// javap AbstractHorse.createBaseHorseAttributes this session: ldc2_w 0.7d JUMP_STRENGTH, 53.0d MAX_HEALTH,
+// 0.22499999403953552d MOVEMENT_SPEED, dconst_1 STEP_HEIGHT, 6.0d SAFE_FALL_DISTANCE, 0.5d
+// FALL_DAMAGE_MULTIPLIER). These are the pre-randomize registration DEFAULTS -- Horse/Donkey/Mule/Llama
+// then OVERWRITE the base values per-entity at finalizeSpawn via randomizeAttributes (setBaseValue on a
+// live AttributeInstance; horse.go), which is the two-tier local-divergence model (a per-entity instance
+// mutation, NOT a supplier change). JUMP_STRENGTH (0.7) and FALL_DAMAGE_MULTIPLIER (0.5) are NOT registered
+// attributes in Sulfur (no consumer -- the same CITED non-gameplay omission as camelSupplier); the
+// jump-launch reads JUMP_STRENGTH via the horseJumpStrength per-entity field (horse.go) and slots into a
+// real .AddValue read the moment the attribute lands, never baked away. STEP_HEIGHT 1.0 is the living
+// default so it is not re-added. Cite AbstractHorse.createBaseHorseAttributes.
+func horseBaseAttributes() *Builder {
+	return createAnimalAttributes().
+		AddValue(SafeFallDistance, 6.0).             // createBaseHorseAttributes SAFE_FALL_DISTANCE 6.0 (over the living 3.0)
+		AddValue(MaxHealth, 53.0).                   // createBaseHorseAttributes MAX_HEALTH 53.0 (pre-randomize default)
+		AddValue(MovementSpeed, 0.22499999403953552) // createBaseHorseAttributes MOVEMENT_SPEED (float-widened)
+}
+
+// horseSupplier is the port of Horse.createAttributes(): Horse has NO createAttributes override, so it uses
+// AbstractHorse.createBaseHorseAttributes() directly (verified javap Horse this session: no createAttributes
+// method present). The per-horse MAX_HEALTH (15..30) / MOVEMENT_SPEED (0.1125..0.3375) / JUMP_STRENGTH
+// (0.4..1.0) randomization runs at finalizeSpawn (Horse.randomizeAttributes -> setBaseValue), re-expressed
+// as the per-entity spawn draw in horse.go; the supplier here is the pre-randomize base.
+func horseSupplier() *Supplier {
+	return horseBaseAttributes().Build()
+}
+
+// chestedHorseSupplier is the port of AbstractChestedHorse.createBaseChestedHorseAttributes():
+// createBaseHorseAttributes() + MOVEMENT_SPEED 0.17499999701976776 + JUMP_STRENGTH 0.5 (verified javap
+// AbstractChestedHorse.createBaseChestedHorseAttributes this session: ldc2_w 0.17499999701976776d
+// MOVEMENT_SPEED, 0.5d JUMP_STRENGTH). Donkey/Mule use it unchanged; Llama.createAttributes() also returns
+// it unchanged. AbstractChestedHorse.randomizeAttributes randomizes ONLY MAX_HEALTH (15..30) at
+// finalizeSpawn (horse.go) -- MOVEMENT_SPEED/JUMP_STRENGTH stay the chested-base values. The JUMP_STRENGTH
+// 0.5 is cite-omitted (no registered attribute; read via the horseJumpStrength field in horse.go). Cite
+// AbstractChestedHorse.createBaseChestedHorseAttributes.
+func chestedHorseSupplier() *Supplier {
+	return horseBaseAttributes().
+		AddValue(MovementSpeed, 0.17499999701976776). // createBaseChestedHorseAttributes MOVEMENT_SPEED (over horse-base 0.225)
+		Build()
+}
+
 // snifferSupplier is the port of Sniffer.createAttributes() : Animal.createAnimalAttributes() +
 // MOVEMENT_SPEED 0.10000000149011612 + MAX_HEALTH 14.0 (jar:
 // net.minecraft.world.entity.animal.sniffer.Sniffer.createAttributes -- javap this session:
@@ -916,6 +959,17 @@ var suppliers = map[string]*Supplier{
 	"sniffer": snifferSupplier(),
 	"allay":   allaySupplier(),
 	"axolotl": axolotlSupplier(),
+	// HORSE FAMILY (Task): the AbstractHorse tree. Horse (createBaseHorseAttributes, pre-randomize base
+	// MAX_HEALTH 53 / MOVEMENT_SPEED 0.225 / JUMP_STRENGTH 0.7); Donkey/Mule/Llama/TraderLlama
+	// (createBaseChestedHorseAttributes: base + MOVEMENT_SPEED 0.175 + JUMP_STRENGTH 0.5). The per-entity
+	// MAX_HEALTH/MOVEMENT_SPEED/JUMP_STRENGTH randomization runs at finalizeSpawn (horse.go) on the live
+	// instance -- the supplier here is the pre-randomize base. Keyed by registry name. Cite Horse.create
+	// Attributes (none -> createBaseHorseAttributes) + AbstractChestedHorse.createBaseChestedHorseAttributes.
+	"horse":        horseSupplier(),
+	"donkey":       chestedHorseSupplier(),
+	"mule":         chestedHorseSupplier(),
+	"llama":        chestedHorseSupplier(),
+	"trader_llama": chestedHorseSupplier(),
 }
 
 // livingCategories is the set of data/entity.Entity.Type values that correspond to a vanilla

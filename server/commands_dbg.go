@@ -330,6 +330,47 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned axolotl eid=%d (variant=%d) at (%.1f,%.1f,%.1f)", e.id, e.axolotlVariant, p.x, p.y+1, p.z))
 		}
+	case "horse":
+		// HORSE (Task): spawn an adult Horse (the rideable/tameable/breedable AbstractHorse). Attributes are
+		// per-entity RANDOMIZED at spawn: MAX_HEALTH 15..30 (generateMaxHealth), MOVEMENT_SPEED 0.1125..0.3375
+		// (generateSpeed), JUMP_STRENGTH 0.4..1.0 (generateJumpStrength) -- the exact RNG draw order. Passive
+		// goal walk (Float/Panic/Breed/Tempt(horse_tempt_items)/Follow/Stroll/Look). The saddle/armor inventory
+		// + rideable mount + jump-launch are the DEFERRED packet/GUI layer. Spawned 1 block up.
+		e := t.spawnHorse(p.x, p.y+1, p.z, false)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned horse eid=%d (hp=%.1f jump=%.3f) at (%.1f,%.1f,%.1f)", e.id, e.health, e.horseJumpStrength, p.x, p.y+1, p.z))
+		}
+	case "donkey":
+		// DONKEY (Task): spawn an adult Donkey (the chested AbstractChestedHorse). MAX_HEALTH 15..30 randomized;
+		// MOVEMENT_SPEED 0.175 + JUMP_STRENGTH 0.5 (chested base). 5-column chest inventory when a chest is added
+		// (DEFERRED GUI). Breeds with Horse -> MULE. Spawned 1 block up.
+		e := t.spawnDonkey(p.x, p.y+1, p.z, false)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned donkey eid=%d (hp=%.1f) at (%.1f,%.1f,%.1f)", e.id, e.health, p.x, p.y+1, p.z))
+		}
+	case "mule":
+		// MULE (Task): spawn an adult Mule (the STERILE Horse x Donkey hybrid). MAX_HEALTH 15..30 randomized;
+		// chested base speed/jump. canMate is the AbstractHorse false base -> a mule cannot breed. Spawned 1 up.
+		e := t.spawnMule(p.x, p.y+1, p.z, false)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned mule eid=%d (hp=%.1f sterile) at (%.1f,%.1f,%.1f)", e.id, e.health, p.x, p.y+1, p.z))
+		}
+	case "llama":
+		// LLAMA (Task): spawn an adult Llama (the chested spitting AbstractChestedHorse). MAX_HEALTH 15..30
+		// randomized; per-llama STRENGTH 1..5 (setRandomStrength: nextFloat()<0.04 -> 1+nextInt(5) else
+		// 1+nextInt(3)) which sets the chest inventory columns. The spit ranged attack + caravan-follow are
+		// wired as hooks (llamaSpit). Spawned 1 block up.
+		e := t.spawnLlama(p.x, p.y+1, p.z, false, false)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned llama eid=%d (hp=%.1f strength=%d) at (%.1f,%.1f,%.1f)", e.id, e.health, e.llamaStrength, p.x, p.y+1, p.z))
+		}
+	case "trader_llama", "traderllama":
+		// TRADER LLAMA (Task): spawn an adult TraderLlama (the wandering-trader llama variant -- same Llama
+		// stats/spit/strength, flagged as trader). Spawned 1 block up.
+		e := t.spawnLlama(p.x, p.y+1, p.z, false, true)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned trader_llama eid=%d (hp=%.1f strength=%d) at (%.1f,%.1f,%.1f)", e.id, e.health, e.llamaStrength, p.x, p.y+1, p.z))
+		}
 	case "zoglin":
 		// ZOGLIN (GAP): the TERMINAL undead a hoglin becomes off-nether. INDISCRIMINATELY hostile -- it
 		// attacks ANY player OR mob (except other zoglins and creepers) and FLINGS the target upward (the

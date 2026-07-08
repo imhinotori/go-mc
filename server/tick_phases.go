@@ -853,6 +853,14 @@ func (t *TickLoop) tickAI() {
 		if e.typ == entity.Axolotl.ID {
 			t.axolotlAiStep(e)
 		}
+		// HORSE FAMILY (Task): the AbstractHorse customServerAiStep/aiStep extras (the jump-launch apply, the
+		// eating/tail counters, the untamed-mount buck are DEFERRED behind the mount packet path; today a
+		// bounded no-op). Per-type-gated like the camel/axolotl, AFTER serverAiStep. ADDITIVE + isHorseFamily-
+		// gated (zero cost / zero RNG for every non-horse entity -- the pig oracle stream is untouched). Cite
+		// AbstractHorse.aiStep.
+		if e.isHorseFamily {
+			t.horseFamilyAiStep(e)
+		}
 		// MOB-PREY (Task #9): the Endermite.aiStep despawn timer (life++ while non-persistent, discard at
 		// life>=2400). Per-type-gated like the creeper/enderman, AFTER serverAiStep. ADDITIVE + endermite-gated
 		// (zero cost / zero RNG for every non-endermite - the pig oracle stream is untouched).
