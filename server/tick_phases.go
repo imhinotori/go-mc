@@ -169,6 +169,17 @@ func (t *TickLoop) tickWorld() {
 	// effect applied). Nil map = no-op (no conduit placed). CITE: ConduitBlock.getTicker ->
 	// ConduitBlockEntity.serverTick.
 	t.tickConduits()
+	// SUB-BLOCKENTITY: tick every CAMPFIRE block-entity (CampfireBlockEntity.cookTick -- advance each
+	// occupied cooking slot and drop the CampfireCookingRecipe result when it finishes). Keyed by world
+	// position (t.campfires, global), so they tick ONCE globally here (the tickConduits twin). Only a LIT
+	// campfire cooks; an empty/unlit campfire ticks to a cheap no-op. Nil map = no-op. CITE
+	// CampfireBlock.getTicker -> CampfireBlockEntity.cookTick.
+	t.tickCampfires()
+	// SUB-BLOCKENTITY: tick every BELL block-entity (BellBlockEntity.serverTick -- the shaking/ticks
+	// countdown + the resonate machine after a ring). Keyed by world position (t.bells, global), so they
+	// tick ONCE globally here (the tickCampfires twin). An idle bell ticks to a cheap no-op. Nil map =
+	// no-op. CITE BellBlock.getTicker -> BellBlockEntity.serverTick.
+	t.tickBells()
 	// SUB-BLOCKENTITY: tick every MOB-SPAWNER block-entity (SpawnerBlockEntity.serverTick ->
 	// BaseSpawner.serverTick - the isNearPlayer gate, the spawnDelay countdown, and the spawnCount burst
 	// under the maxNearbyEntities cap). Keyed by world position (t.spawners, global - not per-region), so

@@ -239,6 +239,17 @@ func (t *TickLoop) comparatorGetInputSignal(state block.StateID, pos pk.Position
 	// container).
 	if sig, has := t.sculkSensorAnalogOutputSignal(targetPos); has {
 		resultSignal = sig
+	} else if sig, has := t.lecternAnalogOutputSignal(targetPos); has {
+		// targetState.hasAnalogOutputSignal(): true for a LECTERN; getAnalogOutputSignal ==
+		// (HAS_BOOK ? LecternBlockEntity.getRedstoneSignal() : 0) -- the page-fraction signal. Checked before
+		// the generic container path (a lectern is not a container). CITE LecternBlock.getAnalogOutputSignal.
+		resultSignal = sig
+	} else if sig, has := t.jukeboxAnalogOutputSignal(targetPos); has {
+		// targetState.hasAnalogOutputSignal(): true for a JUKEBOX; getAnalogOutputSignal ==
+		// JukeboxBlockEntity.getComparatorOutput() -- the loaded disc song comparator level (0 when empty).
+		// Checked before the generic container path (a jukebox is not a container). CITE
+		// JukeboxBlock.getAnalogOutputSignal.
+		resultSignal = sig
 	} else if sig, has := t.crafterAnalogOutputSignal(targetPos); has {
 		// targetState.hasAnalogOutputSignal(): true for a CRAFTER; getAnalogOutputSignal ==
 		// CrafterBlockEntity.getRedstoneSignal() = the count of grid slots that are non-empty OR disabled

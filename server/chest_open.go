@@ -333,9 +333,22 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 	// A sign right-click re-opens its edit screen (unwaxed) or is a silent no-op (waxed); either way
 	// it consumes the interaction so no block is placed. CITE: SignBlock.useWithoutItem.
 	isSign := isSignBlock(state)
+	// A campfire right-click with a campfire-cooking item PLACES the food into a cooking slot
+	// (CampfireBlock.useItemOn -> placeFood); a non-food hand passes through. CITE CampfireBlock.useItemOn.
+	isCampfire := isCampfireBlock(state)
+	// A bell right-click RINGS it (BellBlock.useWithoutItem -> onHit -> attemptToRing) and consumes the
+	// interaction so no block is placed. CITE BellBlock.useWithoutItem.
+	isBell := isBellBlock(state)
+	// A lectern right-click either OPENS the reading screen (has book -- menu DEFERRED) or PLACES a
+	// #lectern_books item (LecternBlock.useItemOn/useWithoutItem). CITE LecternBlock.useItemOn.
+	isLectern := block.IsLectern(state)
+	// A jukebox right-click INSERTS a music disc (empty) or EJECTS the loaded disc (JukeboxBlock.useItemOn/
+	// useWithoutItem). CITE JukeboxBlock.useItemOn / useWithoutItem.
+	isJukebox := block.IsJukebox(state)
 	if !isChest && !isCraft && !isCut && !isBed && !isFurnace && !isBrew && !isLever && !isButton &&
 		!isRepeater && !isComparator && !isDispenser && !isHopper && !isBeacon && !isAnvil && !isEnchant &&
-		!isGrindstone && !isSmithing && !isLoom && !isDoorFamily && !isSign {
+		!isGrindstone && !isSmithing && !isLoom && !isDoorFamily && !isSign &&
+		!isCampfire && !isBell && !isLectern && !isJukebox {
 		return false // not an interactive block: PASS → placement runs
 	}
 	// Reach-gate the interaction (the same server-authoritative reach the place/break paths use):
@@ -441,6 +454,25 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 		// LoomBlock.useWithoutItem -> player.openMenu(loom). The banner/dye/pattern apply menu opens on any
 		// right-click (the sneak guard collapses to false in v1, like the chest path).
 		return t.openLoom(p, hitPos)
+	}
+	if isCampfire {
+		// CampfireBlock.useItemOn -> placeFood: place a campfire-cooking item into a slot (returns false for a
+		// non-food hand so placement continues). CITE CampfireBlock.useItemOn.
+		return t.useCampfire(p, hitPos, state)
+	}
+	if isBell {
+		// BellBlock.useWithoutItem -> onHit: ring the bell (always consumes the interaction). CITE BellBlock.
+		return t.useBell(p, hitPos, state)
+	}
+	if isLectern {
+		// LecternBlock.useItemOn/useWithoutItem: place a book, or open the reader (menu DEFERRED). Returns
+		// false when the empty lectern is clicked with a non-book hand (placement continues). CITE LecternBlock.
+		return t.useLectern(p, hitPos, state)
+	}
+	if isJukebox {
+		// JukeboxBlock.useItemOn/useWithoutItem: insert a disc, or eject the loaded one. Returns false when the
+		// empty jukebox is clicked with a non-disc hand (placement continues). CITE JukeboxBlock.
+		return t.useJukebox(p, hitPos, state)
 	}
 	return t.openChest(p, hitPos)
 }
@@ -588,6 +620,43 @@ func (t *TickLoop) createBlockEntityOnPlace(pos pk.Position, state block.StateID
 		empty := nbt.RawMessage{Type: nbt.TagCompound, Data: []byte{0x00}}
 		t.world().SetBlockEntityAt(pos, block.EntityTypes["minecraft:sign"], empty, dimMinY)
 		t.resolveSignBE(pos)
+		return
+	}
+	if isCampfireBlock(state) {
+		// CampfireBlock is a BaseEntityBlock; newBlockEntity = new CampfireBlockEntity(pos, state) (empty:
+		// 4 clear cooking slots). Write an empty BE compound so the cook drive resolves it, and register the
+		// empty campfireBE in t.campfires. The cook drive runs from the next tick (a LIT campfire cooks any
+		// placed food). CITE CampfireBlock (EntityBlock). Both campfire + soul_campfire use the campfire BE.
+		empty := nbt.RawMessage{Type: nbt.TagCompound, Data: []byte{0x00}}
+		t.world().SetBlockEntityAt(pos, block.EntityTypes["minecraft:campfire"], empty, dimMinY)
+		t.resolveCampfire(pos)
+		return
+	}
+	if isBellBlock(state) {
+		// BellBlock is a BaseEntityBlock; newBlockEntity = new BellBlockEntity(pos, state) (empty: not
+		// shaking, no click). Write an empty BE compound so the ring + tick drives resolve it, and register
+		// the empty bellBE in t.bells. CITE BellBlock (EntityBlock).
+		empty := nbt.RawMessage{Type: nbt.TagCompound, Data: []byte{0x00}}
+		t.world().SetBlockEntityAt(pos, block.EntityTypes["minecraft:bell"], empty, dimMinY)
+		t.resolveBell(pos)
+		return
+	}
+	if block.IsLectern(state) {
+		// LecternBlock is a BaseEntityBlock; newBlockEntity = new LecternBlockEntity(pos, state) (empty: no
+		// book). Write an empty BE compound so the place-book + comparator paths resolve it, and register the
+		// empty lecternBE in t.lecterns. CITE LecternBlock (EntityBlock).
+		empty := nbt.RawMessage{Type: nbt.TagCompound, Data: []byte{0x00}}
+		t.world().SetBlockEntityAt(pos, block.EntityTypes["minecraft:lectern"], empty, dimMinY)
+		t.resolveLectern(pos)
+		return
+	}
+	if block.IsJukebox(state) {
+		// JukeboxBlock is a BaseEntityBlock; newBlockEntity = new JukeboxBlockEntity(pos, state) (empty: no
+		// disc). Write an empty BE compound so the insert-disc + comparator paths resolve it, and register
+		// the empty jukeboxBE in t.jukeboxes. CITE JukeboxBlock (EntityBlock).
+		empty := nbt.RawMessage{Type: nbt.TagCompound, Data: []byte{0x00}}
+		t.world().SetBlockEntityAt(pos, block.EntityTypes["minecraft:jukebox"], empty, dimMinY)
+		t.resolveJukebox(pos)
 		return
 	}
 }

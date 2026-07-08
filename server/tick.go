@@ -530,6 +530,31 @@ type TickLoop struct {
 	// tick-owned (TICK-05).
 	conduits map[pk.Position]*conduitBE
 
+	// campfires: CAMPFIRE + SOUL_CAMPFIRE block-entities keyed by world position (the conduits twin,
+	// CAMPFIRE-01). A LIT campfire per-tick drive (campfire_be.go campfireCookTick == CampfireBlockEntity
+	// .cookTick) advances each occupied cooking slot and drops the CampfireCookingRecipe result when it
+	// finishes. Placing food (useCampfire == CampfireBlock.useItemOn) fills a slot. Registers on placement
+	// (createBlockEntityOnPlace) and ticks passively (no menu). Lazily constructed; tick-owned.
+	campfires map[pk.Position]*campfireBE
+
+	// bells: BELL block-entities keyed by world position (the campfires twin, BELL-01). A rung bell per-tick
+	// drive (bell_be.go bellServerTick == BellBlockEntity.tick) runs the shaking/ticks countdown + the
+	// resonate machine. Ringing (useBell == BellBlock.onHit -> triggerEvent) starts a shake. Registers on
+	// placement (createBlockEntityOnPlace) and ticks passively. Tick-owned.
+	bells map[pk.Position]*bellBE
+
+	// lecterns: LECTERN block-entities keyed by world position (the bells twin, LECTERN-01). A lectern holds
+	// a book + page (LecternBlockEntity.book/page/pageCount); placing a book (useLectern == LecternBlock
+	// .useItemOn -> tryPlaceBook) sets HAS_BOOK; taking it (takeLecternBook) resets it. The comparator reads
+	// getRedstoneSignal via the analog-output seam. Registers on placement; no per-tick drive. Tick-owned.
+	lecterns map[pk.Position]*lecternBE
+
+	// jukeboxes: JUKEBOX block-entities keyed by world position (the lecterns twin, JUKEBOX-01). A jukebox
+	// holds one disc item (JukeboxBlockEntity.item); inserting a disc (useJukebox == JukeboxPlayable
+	// .tryInsertIntoJukebox -> setTheItem) sets HAS_RECORD, ejecting it (popOutTheItem) clears it. The
+	// comparator reads the disc song getComparatorOutput. Registers on placement; spin ticks DEFERRED.
+	jukeboxes map[pk.Position]*jukeboxBE
+
 	// spawners is the runtime store of MOB-SPAWNER block-entities keyed by world position (the conduits
 	// twin, SPAWNER-01). A spawner per-tick drive (spawner_block.go spawnerServerTick == BaseSpawner
 	// .serverTick) reads/writes its spawnerBE here every tick (tickWorld) - the isNearPlayer gate, the
