@@ -794,9 +794,9 @@ func (t *TickLoop) tickAI() {
 		// AFTER serverAiStep (the empty goalSelector no-op, like blazeAiStep). Guardian is a water mob (the
 		// shared swim nav + the out-of-water flop). ADDITIVE + guardian-gated (zero cost / zero RNG for
 		// every non-guardian -- the pig oracle stream is untouched). Cite Guardian + ElderGuardian.
-			if e.guardian != nil {
-				t.guardianAiStep(e)
-			}
+		if e.guardian != nil {
+			t.guardianAiStep(e)
+		}
 		// PHANTOM (Task): the flying night hostile + its CIRCLE/SWOOP dive-bomb AI (PhantomAttackStrategyGoal
 		// timer -> PhantomSweepAttackGoal dive+melee / PhantomCircleAroundAnchorGoal orbit) + the PhantomMove
 		// Control flight. Per-type-gated like the ghast/blaze on e.phantom != nil, AFTER serverAiStep (the empty
@@ -950,6 +950,23 @@ func (t *TickLoop) tickAI() {
 		}
 		if e.typ == entity.SnowGolem.ID {
 			t.snowGolemAiStep(e)
+		}
+		// ARMADILLO / BREEZE / CREAKING / COPPER_GOLEM (26.x roster, Task): the signature per-tick behaviors,
+		// each per-type-gated AFTER serverAiStep. Armadillo roll-up threat scan + scute shed; Breeze shoot
+		// cadence; Creaking observed-freeze (checkCanMove) + melee; CopperGolem oxidation stepper. ADDITIVE +
+		// per-type-gated (zero cost / zero RNG for every non-matching entity -- the pig oracle stream is
+		// untouched). Cite Armadillo/Breeze/Creaking/CopperGolem customServerAiStep/aiStep/tick.
+		if e.typ == entity.Armadillo.ID {
+			t.armadilloAiStep(e)
+		}
+		if e.typ == entity.Breeze.ID {
+			t.breezeAiStep(e)
+		}
+		if e.typ == entity.Creaking.ID {
+			t.creakingAiStep(e)
+		}
+		if e.typ == entity.CopperGolem.ID {
+			t.copperGolemAiStep(e)
 		}
 		// HORSE FAMILY (Task): the AbstractHorse customServerAiStep/aiStep extras (the jump-launch apply, the
 		// eating/tail counters, the untamed-mount buck are DEFERRED behind the mount packet path; today a

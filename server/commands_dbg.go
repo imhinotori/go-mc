@@ -374,6 +374,36 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned snow_golem eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+1, p.z))
 		}
+	case "armadillo":
+		// ARMADILLO (Task): spawn an adult Armadillo. MAX_HEALTH 12, MOVEMENT_SPEED 0.14. Rolls up when a
+		// sprinting/riding player is nearby (isScaredBy), sheds a scute periodically. Spawned 1 block up.
+		e := t.spawnArmadillo(p.x, p.y+1, p.z, false)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned armadillo eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+1, p.z))
+		}
+	case "breeze":
+		// BREEZE (Task): spawn a hostile Breeze. MAX_HEALTH 30, MOVEMENT_SPEED 0.63, FOLLOW_RANGE 24,
+		// ATTACK_DAMAGE 3. Fires wind charges (projectile DEFERRED) on the shoot cadence. Spawned 1 block up.
+		e := t.spawnBreeze(p.x, p.y+1, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned breeze eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+1, p.z))
+		}
+	case "creaking":
+		// CREAKING (Task): spawn a hostile Creaking. MAX_HEALTH 1, MOVEMENT_SPEED 0.4, ATTACK_DAMAGE 3,
+		// FOLLOW_RANGE 32. FREEZES when a player looks at it; activates + melees when caught unobserved.
+		// Spawned 1 block up.
+		e := t.spawnCreaking(p.x, p.y+1, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned creaking eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+1, p.z))
+		}
+	case "copper_golem":
+		// COPPER GOLEM (Task): spawn a CopperGolem. MAX_HEALTH 12, MOVEMENT_SPEED 0.2, STEP_HEIGHT 1.0.
+		// Oxidizes over time (UNAFFECTED->EXPOSED->WEATHERED->OXIDIZED). Button/chest + statue DEFERRED.
+		// Spawned 1 block up.
+		e := t.spawnCopperGolem(p.x, p.y+1, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned copper_golem eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+1, p.z))
+		}
 	case "bee":
 		// BEE (Task): spawn an adult Bee (the flying passive/neutral animal). MAX_HEALTH 10, FLYING_SPEED 0.6,
 		// MOVEMENT_SPEED 0.3, ATTACK_DAMAGE 2. Passive goal walk (Float/Tempt(bee_food)/Breed/Follow/Wander); the
@@ -775,7 +805,7 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] placed a simple_dungeon loot chest at (%d,%d,%d); open it", pos.X, pos.Y, pos.Z))
 		}
 	default:
-		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | dragon | iron_golem | villager | villager_farmer | wandering_trader | vex | ghast_hostile | blaze | phantom | shulker | strider | wither_skeleton | wither | hoglin | bee | goat | frog | camel | panda | snow_golem | sniffer | allay | axolotl | parrot | bat | squid | glow_squid | cod | salmon | pufferfish | tropical_fish | dolphin | tadpole | fangs | water | pig-in-water | raid | rain | redstone | trade | trident | throw-trident | crafter | map | loom | loot")
+		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | dragon | iron_golem | villager | villager_farmer | wandering_trader | vex | ghast_hostile | blaze | phantom | shulker | strider | wither_skeleton | wither | hoglin | bee | goat | frog | camel | panda | snow_golem | sniffer | allay | axolotl | parrot | bat | squid | glow_squid | cod | salmon | pufferfish | tropical_fish | dolphin | tadpole | armadillo | breeze | creaking | copper_golem | fangs | water | pig-in-water | raid | rain | redstone | trade | trident | throw-trident | crafter | map | loom | loot")
 	}
 }
 

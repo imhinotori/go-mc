@@ -416,6 +416,68 @@ func wardenSupplier() *Supplier {
 		Build()
 }
 
+// armadilloSupplier is the port of Armadillo.createAttributes(): Animal.createAnimalAttributes() then
+// .add(MAX_HEALTH 12.0).add(MOVEMENT_SPEED 0.14). The builder ORDER is exactly MAX_HEALTH, MOVEMENT_SPEED
+// (VERIFIED javap net.minecraft.world.entity.animal.armadillo.Armadillo.createAttributes: createAnimal
+// Attributes, ldc2_w 12.0d MAX_HEALTH, ldc2_w 0.14d MOVEMENT_SPEED). FOLLOW_RANGE stays the
+// createMobAttributes default 16.0 (Armadillo adds no override). Cite Armadillo.createAttributes.
+func armadilloSupplier() *Supplier {
+	return createAnimalAttributes().
+		AddValue(MaxHealth, 12.0).
+		AddValue(MovementSpeed, 0.14).
+		Build()
+}
+
+// breezeSupplier is the port of Breeze.createAttributes(): Mob.createMobAttributes() then
+// .add(MOVEMENT_SPEED 0.6299999952316284).add(MAX_HEALTH 30.0).add(FOLLOW_RANGE 24.0).add(ATTACK_DAMAGE
+// 3.0). The builder ORDER is exactly MOVEMENT_SPEED, MAX_HEALTH, FOLLOW_RANGE, ATTACK_DAMAGE (VERIFIED
+// javap net.minecraft.world.entity.monster.breeze.Breeze.createAttributes: createMobAttributes, ldc2_w
+// 0.6299999952316284d MOVEMENT_SPEED, ldc2_w 30.0d MAX_HEALTH, ldc2_w 24.0d FOLLOW_RANGE, ldc2_w 3.0d
+// ATTACK_DAMAGE). NOTE: Breeze builds on createMobAttributes (NOT createMonsterAttributes), so ATTACK_
+// DAMAGE is added explicitly (the Mob base has no ATTACK_DAMAGE registration). The MOVEMENT_SPEED literal
+// is the exact float-widened double (0.63f promoted). Cite Breeze.createAttributes.
+func breezeSupplier() *Supplier {
+	return createMobAttributes().
+		AddValue(MovementSpeed, 0.6299999952316284).
+		AddValue(MaxHealth, 30.0).
+		AddValue(FollowRange, 24.0).
+		AddValue(AttackDamage, 3.0).
+		Build()
+}
+
+// creakingSupplier is the port of Creaking.createAttributes(): Monster.createMonsterAttributes() then
+// .add(MAX_HEALTH 1.0).add(MOVEMENT_SPEED 0.4000000059604645).add(ATTACK_DAMAGE 3.0).add(FOLLOW_RANGE
+// 32.0).add(STEP_HEIGHT 1.0625). The builder ORDER is exactly MAX_HEALTH, MOVEMENT_SPEED, ATTACK_DAMAGE,
+// FOLLOW_RANGE, STEP_HEIGHT (VERIFIED javap net.minecraft.world.entity.monster.creaking.Creaking.create
+// Attributes: createMonsterAttributes, dconst_1 MAX_HEALTH, ldc2_w 0.4000000059604645d MOVEMENT_SPEED,
+// ldc2_w 3.0d ATTACK_DAMAGE, ldc2_w 32.0d FOLLOW_RANGE, ldc2_w 1.0625d STEP_HEIGHT). MAX_HEALTH 1.0 is the
+// creaking's "one HP but nearly-invulnerable-while-heart-bound" design; MOVEMENT_SPEED is the exact
+// float-widened double (0.4f promoted). Cite Creaking.createAttributes.
+func creakingSupplier() *Supplier {
+	return createMonsterAttributes().
+		AddValue(MaxHealth, 1.0).
+		AddValue(MovementSpeed, 0.4000000059604645).
+		AddValue(AttackDamage, 3.0).
+		AddValue(FollowRange, 32.0).
+		AddValue(StepHeight, 1.0625).
+		Build()
+}
+
+// copperGolemSupplier is the port of CopperGolem.createAttributes(): Mob.createMobAttributes() then
+// .add(MOVEMENT_SPEED 0.20000000298023224).add(STEP_HEIGHT 1.0).add(MAX_HEALTH 12.0). The builder ORDER is
+// exactly MOVEMENT_SPEED, STEP_HEIGHT, MAX_HEALTH (VERIFIED javap net.minecraft.world.entity.animal.golem
+// .CopperGolem.createAttributes: createMobAttributes, ldc2_w 0.20000000298023224d MOVEMENT_SPEED, dconst_1
+// STEP_HEIGHT, ldc2_w 12.0d MAX_HEALTH). CopperGolem is an AbstractGolem -> Mob (NOT Monster/Animal), so it
+// builds on createMobAttributes with NO ATTACK_DAMAGE (a copper golem does not fight -- it presses buttons).
+// MOVEMENT_SPEED is the exact float-widened double (0.2f promoted). Cite CopperGolem.createAttributes.
+func copperGolemSupplier() *Supplier {
+	return createMobAttributes().
+		AddValue(MovementSpeed, 0.20000000298023224).
+		AddValue(StepHeight, 1.0).
+		AddValue(MaxHealth, 12.0).
+		Build()
+}
+
 // blazeSupplier is the port of Blaze.createAttributes(): Monster.createMonsterAttributes() then
 // .add(ATTACK_DAMAGE 6.0).add(MOVEMENT_SPEED 0.23000000417232513).add(FOLLOW_RANGE 48.0). MAX_HEALTH
 // is the createLivingAttributes default 20.0 (Blaze has NO MAX_HEALTH override). Cite
@@ -1249,6 +1311,16 @@ var suppliers = map[string]*Supplier{
 	// KNOCKBACK 1.5 + ATTACK_DAMAGE 30 + FOLLOW_RANGE 24. Keyed by registry name so NewMapForEntity
 	// resolves the faithful 500hp warden map (its category is monster).
 	"warden": wardenSupplier(),
+	// ARMADILLO + BREEZE + CREAKING + COPPER_GOLEM (Task): four 26.x mobs, each a 1:1 jar copy of its
+	// createAttributes (verified bytecode this task). Armadillo (Animal + MAX_HEALTH 12 + MOVEMENT_SPEED
+	// 0.14), Breeze (Mob + MOVEMENT_SPEED 0.63 + MAX_HEALTH 30 + FOLLOW_RANGE 24 + ATTACK_DAMAGE 3),
+	// Creaking (Monster + MAX_HEALTH 1 + MOVEMENT_SPEED 0.4 + ATTACK_DAMAGE 3 + FOLLOW_RANGE 32 +
+	// STEP_HEIGHT 1.0625), CopperGolem (Mob + MOVEMENT_SPEED 0.2 + STEP_HEIGHT 1.0 + MAX_HEALTH 12; misc
+	// AbstractGolem, so a dedicated supplier is required like iron_golem). Keyed by registry name.
+	"armadillo":    armadilloSupplier(),
+	"breeze":       breezeSupplier(),
+	"creaking":     creakingSupplier(),
+	"copper_golem": copperGolemSupplier(),
 	// BEE + GOAT + FROG (Task): the three passive animals. Each a 1:1 jar copy of its createAttributes
 	// (verified bytecode this session). Bee (Animal + MAX_HEALTH 10 + FLYING_SPEED 0.6 + MOVEMENT_SPEED
 	// 0.3 + ATTACK_DAMAGE 2), Goat (Animal + MAX_HEALTH 10 + MOVEMENT_SPEED 0.2 + ATTACK_DAMAGE 2), Frog

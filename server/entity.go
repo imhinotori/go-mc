@@ -1783,6 +1783,52 @@ type Entity struct {
 	// dispInterpStartDelta is Display's DATA_TRANSFORMATION_INTERPOLATION_START_DELTA_TICKS_ID (INT,
 	// index 8). Default 0.
 	dispInterpStartDelta int32
+	// --- ARMADILLO / BREEZE / CREAKING / COPPER_GOLEM (26.x roster, Task) ---------------------------
+	//
+	// Tick-owned plain values, set/read ONLY for their own type (each *AiStep gates on typ). isArmadillo/
+	// isBreeze/isCreaking/isCopperGolem mark the entity.
+	//
+	// ARMADILLO (net.minecraft.world.entity.animal.armadillo.Armadillo): armadilloState mirrors ARMADILLO_
+	// STATE (0 IDLE / 1 ROLLING / 2 SCARED / 3 UNROLLING); armadilloInStateTicks mirrors inStateTicks (the
+	// per-state tick counter, incremented every tick in tick()); armadilloScuteTime mirrors scuteTime (the
+	// customServerAiStep countdown: at <=0 the armadillo sheds a scute + resets to pickNextScuteDropTime =
+	// nextInt(6000)+6000). Cite Armadillo ARMADILLO_STATE + inStateTicks + scuteTime + customServerAiStep.
+	isArmadillo           bool
+	armadilloState        int
+	armadilloInStateTicks int64
+	armadilloScuteTime    int
+	// BREEZE (net.minecraft.world.entity.monster.breeze.Breeze): a Brain mob whose signature is the jump-
+	// around movement + the WindCharge ranged shoot (BreezeAi Shoot behavior). breezeShootCooldown mirrors
+	// the Shoot behavior cadence (SHOOT_COOLDOWN_TICKS 10 between shoots; the WindCharge projectile entity
+	// is the DEFERRED behavior layer). Cite Breeze + BreezeAi Shoot.
+	isBreeze            bool
+	breezeShootCooldown int
+	// CREAKING (net.minecraft.world.entity.monster.creaking.Creaking): the pale-garden mob that FREEZES when
+	// a player looks at it (checkCanMove -> false) and moves only when NOT observed. creakingCanMove mirrors
+	// CAN_MOVE (the observed-freeze flag, default true); creakingActive mirrors IS_ACTIVE (activated when a
+	// player is observed within 12 blocks); creakingHomeX/Y/Z + creakingHeartBound mirror HOME_POS (the
+	// Creaking Heart it is tied to; the heart block-entity is the DEFERRED behavior layer). creakingAttack
+	// AnimTicks mirrors attackAnimationRemainingTicks (the 15-tick attack window). Cite Creaking CAN_MOVE +
+	// IS_ACTIVE + HOME_POS + checkCanMove + aiStep.
+	isCreaking              bool
+	creakingCanMove         bool
+	creakingActive          bool
+	creakingHeartBound      bool
+	creakingHomeX           int
+	creakingHomeY           int
+	creakingHomeZ           int
+	creakingAttackAnimTicks int
+	// COPPER_GOLEM (net.minecraft.world.entity.animal.golem.CopperGolem): the button-pressing golem that
+	// OXIDIZES over time (updateWeathering). copperGolemWeather mirrors DATA_WEATHER_STATE (0 UNAFFECTED /
+	// 1 EXPOSED / 2 WEATHERED / 3 OXIDIZED); copperGolemNextWeatherTick mirrors nextWeatheringTick (-1 =
+	// uninitialized, -2 = disabled, else the gameTime the next oxidation stage fires); copperGolemIsStatue
+	// mirrors the turnToStatue terminal state (an OXIDIZED golem eventually freezes into a statue; the
+	// statue BLOCK conversion is the DEFERRED behavior layer). Cite CopperGolem DATA_WEATHER_STATE +
+	// nextWeatheringTick + updateWeathering + turnToStatue.
+	isCopperGolem              bool
+	copperGolemWeather         int
+	copperGolemNextWeatherTick int64
+	copperGolemIsStatue        bool
 }
 
 // NewEntity constructs a live entity instance from a data/entity TABLE record at the given
