@@ -290,6 +290,24 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned zombified_piglin eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+1, p.z))
 		}
+	case "panda":
+		// PANDA (Task): spawn an adult Panda (the bamboo-jungle Animal, gene/variant system). MOVEMENT_SPEED
+		// 0.15, ATTACK_DAMAGE 6, MAX_HEALTH 20 (a WEAK panda diverges to 10, a LAZY panda to speed 0.07 via
+		// setAttributes). Rolls a main+hidden gene (getRandom x2); the observable variant is getVariantFrom
+		// Genes(main,hidden). Passive goal walk (Float/Panic/Breed/Tempt(panda_food=bamboo)/Follow/Stroll/Look);
+		// the roll/sneeze/sit/lie temperament cosmetics are DEFERRED. Spawned 1 block up.
+		e := t.spawnPanda(p.x, p.y+1, p.z, false)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned panda eid=%d (main=%d hidden=%d variant=%d) at (%.1f,%.1f,%.1f)", e.id, e.pandaMainGene, e.pandaHiddenGene, pandaGetVariant(e), p.x, p.y+1, p.z))
+		}
+	case "snow_golem":
+		// SNOW_GOLEM (Task): spawn a SnowGolem (the snow-trail ranged golem). MAX_HEALTH 4, MOVEMENT_SPEED 0.2.
+		// Leaves a snow trail as it walks (aiStep, MOB_GRIEFING-gated); wears a pumpkin (shearable). The snowball
+		// RangedAttack + melt-in-warm-biome are DEFERRED. Spawned 1 block up.
+		e := t.spawnSnowGolem(p.x, p.y+1, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned snow_golem eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+1, p.z))
+		}
 	case "bee":
 		// BEE (Task): spawn an adult Bee (the flying passive/neutral animal). MAX_HEALTH 10, FLYING_SPEED 0.6,
 		// MOVEMENT_SPEED 0.3, ATTACK_DAMAGE 2. Passive goal walk (Float/Tempt(bee_food)/Breed/Follow/Wander); the
@@ -651,7 +669,7 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] placed a simple_dungeon loot chest at (%d,%d,%d); open it", pos.X, pos.Y, pos.Z))
 		}
 	default:
-		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | dragon | iron_golem | villager | villager_farmer | wandering_trader | vex | ghast_hostile | blaze | phantom | strider | wither_skeleton | wither | hoglin | bee | goat | frog | camel | sniffer | allay | axolotl | parrot | bat | squid | glow_squid | cod | salmon | pufferfish | tropical_fish | dolphin | tadpole | fangs | water | pig-in-water | raid | rain | redstone | trade | trident | throw-trident | crafter | map | loom | loot")
+		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | dragon | iron_golem | villager | villager_farmer | wandering_trader | vex | ghast_hostile | blaze | phantom | strider | wither_skeleton | wither | hoglin | bee | goat | frog | camel | panda | snow_golem | sniffer | allay | axolotl | parrot | bat | squid | glow_squid | cod | salmon | pufferfish | tropical_fish | dolphin | tadpole | fangs | water | pig-in-water | raid | rain | redstone | trade | trident | throw-trident | crafter | map | loom | loot")
 	}
 }
 

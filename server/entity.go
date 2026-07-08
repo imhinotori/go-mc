@@ -613,6 +613,24 @@ type Entity struct {
 	dolphinMoistness      int
 	tadpoleAge            int
 	tropicalVariant       int
+	// --- PANDA / SNOW_GOLEM (Task) ------------------------------------------------------------------
+	//
+	// Tick-owned plain values, set/read ONLY for their own type (each *AiStep / spawn gates on typ).
+	// isPanda / isSnowGolem mark the entity. pandaMainGene / pandaHiddenGene mirror Panda's
+	// DATA_MAIN_GENE_ID / DATA_HIDDEN_GENE_ID (the two Panda.Gene ids 0..6; the OBSERVABLE variant is
+	// getVariantFromGenes(main, hidden) -- a recessive main only shows if main==hidden, else NORMAL).
+	// The genes are rolled at spawn (finalizeSpawn: getRandom x2) or from parents at breed
+	// (setGeneFromParents), then setAttributes() diverges THIS instance (WEAK -> MAX_HEALTH 10, LAZY ->
+	// MOVEMENT_SPEED 0.07) via setBaseValue. snowGolemPumpkin mirrors SnowGolem DATA_PUMPKIN_ID (has-
+	// pumpkin flag, default true; shearing clears it). Zero/false for every other entity. The roll/sneeze/
+	// sit/lie panda cosmetics + the snowball ranged attack are the DEFERRED behavior layer (panda.go /
+	// snow_golem.go). Cite Panda.Gene (main/hidden/getVariantFromGenes) + Panda.setAttributes, SnowGolem
+	// DATA_PUMPKIN_ID.
+	isPanda          bool
+	isSnowGolem      bool
+	pandaMainGene    int
+	pandaHiddenGene  int
+	snowGolemPumpkin bool
 	// --- PIGLIN (net.minecraft.world.entity.monster.piglin.Piglin) -------------------------------
 	//
 	// Tick-owned plain values, set/read ONLY for a Piglin (piglinBrainTick gates on typ == entity.Piglin.ID).

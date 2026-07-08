@@ -731,6 +731,39 @@ func camelSupplier() *Supplier {
 		Build()
 }
 
+// pandaSupplier is the port of Panda.createAttributes() : Animal.createAnimalAttributes() +
+// MOVEMENT_SPEED 0.15000000596046448 + ATTACK_DAMAGE 6.0 (jar:
+// net.minecraft.world.entity.animal.panda.Panda.createAttributes -- javap this session: getstatic
+// MOVEMENT_SPEED, ldc2_w 0.15000000596046448d, getstatic ATTACK_DAMAGE, ldc2_w 6.0d). There is NO
+// MAX_HEALTH override, so MAX_HEALTH stays the createLivingAttributes registration default 20.0. The
+// MOVEMENT_SPEED literal is the vanilla float-widened double, preserved bit-for-bit. NOTE the per-
+// variant divergence (a WEAK panda's MAX_HEALTH 10, a LAZY panda's MOVEMENT_SPEED 0.07) is NOT a
+// supplier override -- it is the live-instance Panda.setAttributes() setBaseValue applied per-entity at
+// spawn/breed (panda.go), the two-tier local-divergence model (like the horse randomize). Cite
+// Panda.createAttributes.
+func pandaSupplier() *Supplier {
+	return createAnimalAttributes().
+		AddValue(MovementSpeed, 0.15000000596046448).
+		AddValue(AttackDamage, 6.0).
+		Build()
+}
+
+// snowGolemSupplier is the port of SnowGolem.createAttributes() : Mob.createMobAttributes() +
+// MAX_HEALTH 4.0 + MOVEMENT_SPEED 0.20000000298023224 (jar:
+// net.minecraft.world.entity.animal.golem.SnowGolem.createAttributes -- javap this session: Mob.create
+// MobAttributes, getstatic MAX_HEALTH, ldc2_w 4.0d, getstatic MOVEMENT_SPEED, ldc2_w 0.20000000298023224d).
+// Built on Mob.createMobAttributes (AbstractGolem has NO createAttributes override) -- NOT Animal/Monster,
+// so NO TEMPT_RANGE / base ATTACK_DAMAGE. The MOVEMENT_SPEED literal is the vanilla float-widened double.
+// SnowGolem's registry Type is "misc" (like the iron_golem), so a dedicated supplier is REQUIRED -- a misc
+// type gets NO living-fallback map, and without this the golem would read the bare registration defaults.
+// Cite SnowGolem.createAttributes + AbstractGolem (no override).
+func snowGolemSupplier() *Supplier {
+	return createMobAttributes().
+		AddValue(MaxHealth, 4.0).
+		AddValue(MovementSpeed, 0.20000000298023224).
+		Build()
+}
+
 // horseBaseAttributes is the port of AbstractHorse.createBaseHorseAttributes():
 // Animal.createAnimalAttributes() + JUMP_STRENGTH 0.7 + MAX_HEALTH 53.0 + MOVEMENT_SPEED
 // 0.22499999403953552 + STEP_HEIGHT 1.0 + SAFE_FALL_DISTANCE 6.0 + FALL_DAMAGE_MULTIPLIER 0.5 (verified
@@ -1065,6 +1098,14 @@ var suppliers = map[string]*Supplier{
 	// MAX_HEALTH/MOVEMENT_SPEED/JUMP_STRENGTH randomization runs at finalizeSpawn (horse.go) on the live
 	// instance -- the supplier here is the pre-randomize base. Keyed by registry name. Cite Horse.create
 	// Attributes (none -> createBaseHorseAttributes) + AbstractChestedHorse.createBaseChestedHorseAttributes.
+	// PANDA + SNOW_GOLEM (Task): the Panda (bamboo-jungle Animal, gene/variant) + the SnowGolem
+	// (snow-trail ranged golem). Each a 1:1 jar copy of its createAttributes (verified bytecode this
+	// session). Panda (Animal + MOVEMENT_SPEED 0.15 + ATTACK_DAMAGE 6; MAX_HEALTH stays the living
+	// default 20; the WEAK/LAZY per-variant setBaseValue is a live-instance divergence, panda.go).
+	// SnowGolem (Mob + MAX_HEALTH 4 + MOVEMENT_SPEED 0.2; misc type, so a dedicated supplier is
+	// required like iron_golem). Keyed by registry name.
+	"panda":        pandaSupplier(),
+	"snow_golem":   snowGolemSupplier(),
 	"horse":        horseSupplier(),
 	"donkey":       chestedHorseSupplier(),
 	"mule":         chestedHorseSupplier(),

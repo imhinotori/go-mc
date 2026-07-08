@@ -879,6 +879,17 @@ func (t *TickLoop) tickAI() {
 		if e.typ == entity.Bat.ID {
 			t.batAiStep(e)
 		}
+		// PANDA + SNOW_GOLEM (Task): the Panda.customServerAiStep temperament hook (roll/sneeze/sit/lie +
+		// eat-bamboo are DEFERRED; today a bounded no-op) and the SnowGolem.aiStep snow-trail place + melt
+		// hook (the snowball RangedAttack is DEFERRED). Each per-type-gated like the bat, AFTER serverAiStep.
+		// ADDITIVE + per-type-gated (zero cost / zero RNG for every non-matching entity -- the pig oracle
+		// stream is untouched). Cite Panda.customServerAiStep + SnowGolem.aiStep.
+		if e.typ == entity.Panda.ID {
+			t.pandaAiStep(e)
+		}
+		if e.typ == entity.SnowGolem.ID {
+			t.snowGolemAiStep(e)
+		}
 		// HORSE FAMILY (Task): the AbstractHorse customServerAiStep/aiStep extras (the jump-launch apply, the
 		// eating/tail counters, the untamed-mount buck are DEFERRED behind the mount packet path; today a
 		// bounded no-op). Per-type-gated like the camel/axolotl, AFTER serverAiStep. ADDITIVE + isHorseFamily-
