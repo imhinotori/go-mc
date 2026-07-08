@@ -227,20 +227,18 @@ func (g *breedGoal) stop(_ *TickLoop, e *Entity) {
 //	 snapTo -> finalizeSpawnChildFromBreeding (setAge(6000)×2, resetLove×2, broadcastEntityEvent(18),
 //	 ExperienceOrb 1+nextInt(7)); Pig.getBreedOffspring: nextBoolean() ? getVariant() : partner.getVariant().]
 func (t *TickLoop) breed(e, partner *Entity) {
-	// spawnChildFromBreeding -> getBreedOffspring: spawn the child at the breeding animal's position
-	// (vanilla snapTo(animal.getX/Y/Z) puts the baby on the parent). spawnVanillaPig builds the same
-	// declared vanilla pig the parents are.
-	child := t.spawnVanillaPig(e.x, e.y, e.z)
-
-	// DRAW 1 (getBreedOffspring): the variant nextBoolean() — which parent's PigVariant the baby
-	// inherits. We CONSUME the draw from e's RNG in lockstep with vanilla (the draw + its order is the
-	// observable contract). The PigVariant subsystem is not yet ported (Entity has no variant field —
-	// cite-deferred, NOT baked away): when a variant field lands, assign
-	// child.variant = (inheritFromInitiator ? e : partner).variant at this exact seam. The selected
-	// parent is computed so the wiring is ready (and to document the faithful branch).
-	inheritFromInitiator := mobRandom(e).nextBoolean()
-	_ = inheritFromInitiator // PigVariant deferred (no variant field) — the DRAW is what the oracle pins.
-	// (When variant lands: variantSource := e; if !inheritFromInitiator { variantSource = partner }; child.variant = variantSource.variant.)
+	// spawnChildFromBreeding -> getBreedOffspring: spawn the SPECIES-CORRECT child at the breeding
+	// animal's position (vanilla snapTo(animal.getX/Y/Z) puts the baby on the parent). spawnBreedOffspring
+	// dispatches on e's type so a cow breeds a COW, a sheep a SHEEP, etc. (the C1 fix — breed() used to
+	// unconditionally spawn a pig), and consumes the EXACT getBreedOffspring RNG draws in the vanilla
+	// order/source per species. The PIG branch is byte-identical to the old code (spawnVanillaPig + one
+	// mobRandom(e).nextBoolean() variant draw) so the pinned pig oracle stream is undisturbed. A nil child
+	// (a pairing with no valid offspring — never reached because canMate already gated it) aborts the
+	// finalize (no cooldown/XP) exactly as vanilla's getBreedOffspring==null early-return does.
+	child := t.spawnBreedOffspring(e, partner)
+	if child == nil {
+		return // getBreedOffspring returned null (no offspring) — vanilla returns before finalize.
+	}
 
 	// setBaby(true): the child is a baby — breedAge = BABY_START_AGE; refresh to the half-scale hitbox
 	// (Plan A refreshDimensions) and push DATA_BABY_ID=true to the child's trackers (Plan A broadcastBabyFlag).

@@ -616,3 +616,142 @@ func (t *TickLoop) horseFamilyAiStep(e *Entity) {
 	// DEFERRED: the aiStep tail/mouth/eating counters + the playerJumpPendingScale -> executeRidersJump
 	// launch (needs the rider mount packet path). No bounded per-tick work today beyond the passive goals.
 }
+
+// --- BREEDING OFFSPRING (C2): AbstractHorse/Horse/Llama getBreedOffspring inheritance ----------------
+//
+// These port the horse-family getBreedOffspring so a foal INHERITS parent-averaged stats (+ Horse
+// variant/markings, Llama strength) instead of running the WILD finalize-spawn randomize roll. Verified
+// javap this session (net.minecraft.world.entity.animal.equine.*).
+
+// createOffspring attribute MIN/MAX bounds (AbstractHorse compile-time constants: each MIN uses the
+// generate* supplier at 0, each MAX at 1). Verified: generateMaxHealth 15+op(8)+op(9) -> [15,17];
+// generateJumpStrength 0.4+3*(s*0.2) -> [0.4,1.0]; generateSpeed (0.45+3*(s*0.3))*0.25 -> [0.1125,0.3375].
+const (
+	horseOffMinHealth = 15.0
+	horseOffMaxHealth = 17.0
+	horseOffMinJump   = 0.4000000059604645
+	horseOffMaxJump   = 1.0000000178813934
+	horseOffMinSpeed  = 0.1125
+	horseOffMaxSpeed  = 0.3375
+	horseOffSpread    = 0.15 // createOffspringAttribute spread factor (0.15 * (max-min))
+)
+
+// createOffspringAttribute ports AbstractHorse.createOffspringAttribute(d0, d1, min, max, random): clamp
+// both parents into [min,max], spread=0.15*(max-min), range=abs(d0-d1)+spread*2, mean=(d0+d1)/2, then
+// factor=(n1+n2+n3)/3 - 0.5 (THREE nextDouble in order), result=mean+range*factor, reflected into bounds.
+// Cite AbstractHorse.createOffspringAttribute.
+func createOffspringAttribute(d0, d1, minV, maxV float64, rng *entityRandom) float64 {
+	d0 = mthClampD(d0, minV, maxV)
+	d1 = mthClampD(d1, minV, maxV)
+	spread := horseOffSpread * (maxV - minV)
+	rng2 := math.Abs(d0-d1) + spread*2.0
+	mean := (d0 + d1) / 2.0
+	factor := (rng.nextDouble()+rng.nextDouble()+rng.nextDouble())/3.0 - 0.5
+	result := mean + rng2*factor
+	if result > maxV {
+		return maxV - (result - maxV)
+	}
+	if result < minV {
+		return minV + (minV - result)
+	}
+	return result
+}
+
+
+// setOffspringAttributes ports AbstractHorse.setOffspringAttributes(other, child): MAX_HEALTH, then
+// JUMP_STRENGTH, then MOVEMENT_SPEED -- each createOffspringAttribute (3 nextDouble) on the INITIATOR
+// stream (this.random). MAX_HEALTH/MOVEMENT_SPEED write the child attribute base; JUMP_STRENGTH writes the
+// horseJumpStrength field (Sulfur has no JUMP_STRENGTH attribute -- the cited omission). 9 nextDouble
+// total, in this exact order. Cite AbstractHorse.setOffspringAttributes + createOffspringAttribute.
+func setOffspringAttributes(e, partner, child *Entity, rng *entityRandom) {
+	// MAX_HEALTH
+	h := createOffspringAttribute(horseAttrBase(e, attribute.MaxHealth, horseOffMinHealth), horseAttrBase(partner, attribute.MaxHealth, horseOffMinHealth), horseOffMinHealth, horseOffMaxHealth, rng)
+	setHorseAttributeBase(child, attribute.MaxHealth, h)
+	// JUMP_STRENGTH (field, not a registered attribute)
+	child.horseJumpStrength = createOffspringAttribute(e.horseJumpStrength, partner.horseJumpStrength, horseOffMinJump, horseOffMaxJump, rng)
+	// MOVEMENT_SPEED
+	sp := createOffspringAttribute(horseAttrBase(e, attribute.MovementSpeed, horseOffMinSpeed), horseAttrBase(partner, attribute.MovementSpeed, horseOffMinSpeed), horseOffMinSpeed, horseOffMaxSpeed, rng)
+	setHorseAttributeBase(child, attribute.MovementSpeed, sp)
+}
+
+// horseAttrBase reads getAttributeBaseValue(attr) with a fallback when the instance is absent.
+func horseAttrBase(e *Entity, attr *attribute.Attribute, fallback float64) float64 {
+	if e.attributes != nil {
+		if inst := e.attributes.GetInstance(attr.Name()); inst != nil {
+			return inst.BaseValue()
+		}
+	}
+	return fallback
+}
+
+// spawnHorseFamilyOffspring ports the horse-family getBreedOffspring (C2). Dispatches the offspring
+// species via horseBreedOffspringType (Horse+Donkey->Mule sterile-mule handled by canMate gate; Horse->
+// Horse; Donkey->Donkey; Llama->Llama), spawns a BABY of that type, then applies the exact inheritance:
+//   - Horse x Horse: nextInt(9) variant + nextInt(5) markings (both cite-deferred, no field) THEN
+//     setOffspringAttributes (9 nextDouble). Horse+Donkey->Mule takes the setOffspringAttributes-only
+//     path (0 variant/markings draws), matching Horse.getBreedOffspring.
+//   - Llama x Llama: setOffspringAttributes (9 nextDouble) THEN nextInt(max(strA,strB))+1 strength +
+//     nextFloat()<0.03 bonus + nextBoolean variant (variant cite-deferred).
+//   - Donkey x Donkey / chested: setOffspringAttributes only.
+// All draws on the INITIATOR stream (this.random == mobRandom(e)). Cite Horse/Llama/Donkey.getBreedOffspring
+// + AbstractHorse.setOffspringAttributes.
+func (t *TickLoop) spawnHorseFamilyOffspring(e, partner *Entity) *Entity {
+	typ, ok := horseBreedOffspringType(e, partner)
+	if !ok {
+		return nil // no valid offspring (e.g. a sterile mule) -- getBreedOffspring returns null.
+	}
+	rng := mobRandom(e)
+	var child *Entity
+	switch {
+	case typ.ID == entity.Horse.ID:
+		child = t.spawnHorse(e.x, e.y, e.z, true)
+		// Horse x Horse: variant + markings draws BEFORE setOffspringAttributes (both cite-deferred).
+		vr := rng.nextInt(9)
+		if vr == 8 {
+			_ = rng.nextInt(horseVariantCount) // Util.getRandom(Variant.values())
+		}
+		mr := rng.nextInt(5)
+		if mr == 4 {
+			_ = rng.nextInt(horseMarkingCount) // Util.getRandom(Markings.values())
+		}
+		setOffspringAttributes(e, partner, child, rng)
+	case typ.ID == entity.Mule.ID:
+		// Horse+Donkey -> Mule: setOffspringAttributes only, 0 variant/markings draws.
+		child = t.spawnMule(e.x, e.y, e.z, true)
+		setOffspringAttributes(e, partner, child, rng)
+	case typ.ID == entity.Donkey.ID:
+		child = t.spawnDonkey(e.x, e.y, e.z, true)
+		setOffspringAttributes(e, partner, child, rng)
+	case typ.ID == entity.Llama.ID:
+		child = t.spawnLlama(e.x, e.y, e.z, true, false)
+		// Llama: attributes FIRST, then strength (nextInt(max)+1, nextFloat<0.03 bonus), then variant.
+		setOffspringAttributes(e, partner, child, rng)
+		maxStr := e.llamaStrength
+		if partner.llamaStrength > maxStr {
+			maxStr = partner.llamaStrength
+		}
+		if maxStr < 1 {
+			maxStr = 1 // guard nextInt bound (a fresh llama has strength >=1)
+		}
+		strength := rng.nextInt(maxStr) + 1
+		if rng.nextFloat() < llamaBreedStrongBonus {
+			strength++
+		}
+		child.llamaSetStrength(strength)
+		_ = rng.nextBoolean() // LlamaVariant coin-flip (cite-deferred -- no variant field)
+	default:
+		return nil
+	}
+	// reset the WILD randomize the spawn helper applied: setOffspringAttributes has overwritten the child
+	// health base, so re-seed health from the inherited MaxHealth (the spawn helper seeded it from the wild
+	// roll). AbstractHorse.getBreedOffspring does NOT re-run finalizeSpawn; the inherited stats stand.
+	initSpawnHealth(child)
+	return child
+}
+
+// horseVariantCount / horseMarkingCount are the enum sizes for the Horse.Variant / Horse.Markings
+// Util.getRandom fallback draws (7 coat variants, 5 markings). Cite Horse.Variant + Horse.Markings.
+const (
+	horseVariantCount = 7
+	horseMarkingCount = 5
+)
