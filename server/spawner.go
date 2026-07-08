@@ -1,18 +1,9 @@
 package server
 
 import (
-	"os"
-
 	"github.com/imhinotori/sulfur/level"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
-
-// noNaturalSpawn is a dev-only kill switch for natural mob spawning, read ONCE from the environment
-// (SULFUR_NO_SPAWN=1) at package init. It exists as a temporary live-playtest workaround for the
-// backpressure-kick bug (task #12): until the entity-tracker burst throttle + spawn cap land, an
-// uncapped spawn accumulation floods the outbound queue and kicks the player. Default (unset) keeps
-// the faithful spawn path byte-identical — the pig oracle never sets it.
-var noNaturalSpawn = os.Getenv("SULFUR_NO_SPAWN") == "1"
 
 // spawner.go — AI-03: a faithful-but-minimal port of net.minecraft.world.level.NaturalSpawner
 // (resolved Open Question 3). PORTED (the STANDING MANDATE, idiomatic non-1:1 Go, never a GPL
@@ -378,13 +369,6 @@ func (t *TickLoop) snapshotSpawnColumns(picks []spawnCandidatePick, refY int) *s
 // LocalMobCapCalculator per-player distance weighting, the per-position MIN_SPAWN_DISTANCE check,
 // biome spawn lists + the creature-probability roll, structure spawns, and light-level rules.
 func (t *TickLoop) naturalSpawn() {
-	// LIVE WORKAROUND (temporary, task #12): SULFUR_NO_SPAWN=1 disables natural mob spawning so a
-	// local playtest is not flooded by the (currently uncapped) spawn accumulation that overflows the
-	// outbound queue -> backpressure kick. This is a dev-only env gate, NOT a gameplay change: unset
-	// (the default) leaves the faithful path byte-identical. Remove once the throttle+cap fix lands.
-	if noNaturalSpawn {
-		return
-	}
 	if t.cur().entities == nil || t.world() == nil {
 		return
 	}
