@@ -114,6 +114,10 @@ func (t *TickLoop) entityJumpStep(e *Entity) {
 		// LivingEntity.jumpFromGround. Cite Rabbit.jumpFromGround (overrides LivingEntity.jumpFromGround).
 		if e.typ == entity.Rabbit.ID && e.ai != nil {
 			t.rabbitJumpFromGround(e)
+		} else if e.typ == entity.MagmaCube.ID {
+			// MOB: a MagmaCube overrides jumpFromGround with a SET (not max) + size-scaled boost:
+			// setDeltaMovement(x, getJumpPower() + getSize()*0.1f, z). getSize() == cubeSize (ID_SIZE).
+			magmaCubeJumpFromGround(e)
 		} else {
 			jumpFromGround(e)
 		}

@@ -84,3 +84,67 @@ func TestShulkerBulletLevitation(t *testing.T) {
 		t.Fatal("player has no LEVITATION after a shulker-bullet hit")
 	}
 }
+
+// TestShulkerFireRangeIs400: the ShulkerAttackGoal.tick fire gate is distanceToSqr(target) < 400.0
+// (Euclidean < 20), NOT the old per-axis <=15 box. A target acquired within FOLLOW_RANGE (16) but > 15 on
+// an axis (which the old gate wrongly REJECTED) now opens the shell and fires. Cite
+// Shulker$ShulkerAttackGoal.tick (ldc2_w 400.0d; iflt) + canUse (no range gate).
+func TestShulkerFireRangeIs400(t *testing.T) {
+	loop, floorY := shulkerLoop(t)
+	s := loop.spawnShulker(8.5, float64(floorY+1), 8.5)
+	// Player at ~15.9 blocks along Z: distanceToSqr ~253 (< 400 -> in fire range) and within FOLLOW_RANGE
+	// (16). The OLD gate (abs(dz) <= 15) would have REJECTED this (15.9 > 15).
+	p := addTestPlayer(loop, 9601, 8.5, float64(floorY+1), 8.5+15.9)
+	p.health = 30
+	p.client = captureClient(64)
+
+	// The scan cadence may defer the first acquire; tick until the shell opens (target acquired + in range).
+	opened := false
+	for i := 0; i < 40; i++ {
+		loop.shulkerAiStep(s)
+		if !shulkerIsClosed(s) {
+			opened = true
+			break
+		}
+	}
+	if !opened {
+		t.Fatal("shulker never opened for a target at ~15.9 blocks (< 20) — the fire/acquire range regressed")
+	}
+	if s.shulker.attackTime <= 0 {
+		// attackTime is armed on the first fire tick; a positive value proves it entered the fire branch.
+		// Tick a few more to let the bullet fire + re-arm the cooldown.
+	}
+
+	// A bullet must be spawned within a handful of ticks (distanceToSqr < 400 gate passes).
+	firedBullet := false
+	for i := 0; i < 40 && !firedBullet; i++ {
+		loop.shulkerAiStep(s)
+		for _, e := range loop.only().entities.byID {
+			if e.shulkerBullet != nil {
+				firedBullet = true
+			}
+		}
+	}
+	if !firedBullet {
+		t.Fatal("shulker fired NO bullet at a target ~15.9 blocks away (< 20) — distanceToSqr<400 fire gate broken")
+	}
+}
+
+// TestShulkerNoFireBeyond20: a target beyond 20 blocks (distanceToSqr >= 400) is NOT fired at (the shell may
+// still open per canUse, but no bullet spawns). Cite Shulker$ShulkerAttackGoal.tick fire gate.
+func TestShulkerNoFireBeyond20(t *testing.T) {
+	loop, floorY := shulkerLoop(t)
+	s := loop.spawnShulker(8.5, float64(floorY+1), 8.5)
+	// FOLLOW_RANGE is 16, so a target at 25 blocks is never even acquired -> never fires. Assert no bullet.
+	p := addTestPlayer(loop, 9602, 8.5, float64(floorY+1), 8.5+25.0)
+	p.health = 30
+	p.client = captureClient(64)
+	for i := 0; i < 60; i++ {
+		loop.shulkerAiStep(s)
+	}
+	for _, e := range loop.only().entities.byID {
+		if e.shulkerBullet != nil {
+			t.Fatal("shulker fired at a target beyond FOLLOW_RANGE/fire range — the range gate is broken")
+		}
+	}
+}

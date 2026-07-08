@@ -31,6 +31,8 @@
 package server
 
 import (
+	"math"
+
 	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/level/attribute"
 )
@@ -48,6 +50,10 @@ const (
 	breezeInnerCircleY   = 10.0               // withinInnerCircleRange closerThan y (ldc2_w 10.0d)
 	breezeFallLandDist   = 3.0                // causeFallDamage: fallDist > 3.0 plays BREEZE_LAND
 	breezeAttackRangeMax = 256.0              // Shoot ATTACK_RANGE_MAX_SQRT source (ldc2_w 256.0d) horizontal cap sq
+	breezeShootPower     = 0.7                // Shoot: spawnProjectileUsingShoot(...) velocity 0.7f (ldc 0.7f)
+	breezeShootBaseInacc = 5.0               // Shoot inaccuracy = 5 - difficulty.getId()*4 (iconst_5; imul 4; isub)
+	breezeFiringYExtra   = 0.30000001192092896 // getFiringYPosition: getY() + getBbHeight()/2 + 0.3d (ldc2_w)
+	breezeTargetAimFrac  = 0.3               // Shoot target aim: target.getY(0.3) (non-passenger) (ldc2_w 0.3d)
 )
 
 // spawnBreeze creates a hostile Breeze at (x,y,z) and adds it to the owner region store. Minimal e.ai
@@ -139,8 +145,39 @@ func (t *TickLoop) breezeAiStep(e *Entity) {
 // subsystem -- the aim + cadence are faithful so the projectile fires the moment BreezeWindCharge lands.
 // Cite BreezeAi Shoot (new BreezeWindCharge(breeze, level)).
 func (t *TickLoop) breezeFireWindCharge(e *Entity, target *tickPlayer) {
-	_ = e
-	_ = target
-	// DEFERRED: new BreezeWindCharge(this, level); shoot toward getFiringYPosition() aim. No bounded
-	// per-tick side effect today beyond the cadence (breezeShootCooldown), which is the observable gate.
+	// getFiringYPosition() = getY() + getBbHeight()/2.0 + 0.30000001192092896 -- the muzzle height.
+	firingY := e.y + e.height/2.0 + breezeFiringYExtra
+
+	// The aim vector: dx = target.getX() - breeze.getX(); dy = target.getY(0.3) - firingY;
+	// dz = target.getZ() - breeze.getZ() (target.getY(0.3) = target feet + height*0.3, non-passenger path).
+	dx := target.x - e.x
+	dy := (target.y + float64(playerHeight)*breezeTargetAimFrac) - firingY
+	dz := target.z - e.z
+
+	// getMovementToShoot(dx, dy, dz, velocity=0.7f, inaccuracy): normalize + triangle(0, 0.0172275*inacc)
+	// per axis, then scale by velocity. inaccuracy = 5 - difficulty.getId()*4 (NORMAL id 2 -> -3; the
+	// triangle is symmetric so the sign only mirrors the draw). RNG on the Breeze OWN stream.
+	inaccuracy := breezeShootBaseInacc - float64(serverDifficulty)*4.0
+	r := mobRandom(e)
+	vx, vy, vz := normalizeVec3(dx, dy, dz)
+	spread := 0.0172275 * inaccuracy
+	vx += arrowTriangle(r, 0, spread)
+	vy += arrowTriangle(r, 0, spread)
+	vz += arrowTriangle(r, 0, spread)
+	// scale by velocity (0.7f) -- but pass the pre-scale vector + power to spawnHurtingProjectileShot,
+	// which itself does look.normalize()*power. To avoid double-normalizing away the spread, scale here
+	// and hand the resulting vector as the direction with power == its magnitude.
+	vx *= breezeShootPower
+	vy *= breezeShootPower
+	vz *= breezeShootPower
+
+	// Spawn the BreezeWindCharge on the existing hurtingprojectile machinery (hurtWindCharge: 1.0 hit
+	// damage + the gust explosion knockback, inertia 1.0). The muzzle is (breeze.x, firingY, breeze.z).
+	// Pass power == the scaled-vector magnitude so spawnHurtingProjectileShot's normalize*power reproduces
+	// exactly (vx,vy,vz). A zero vector (target atop the breeze) degenerates to no launch -- guarded.
+	mag := math.Sqrt(vx*vx + vy*vy + vz*vz)
+	if mag <= 0 {
+		return
+	}
+	t.spawnHurtingProjectileShot(e.id, hurtWindCharge, e.x, firingY, e.z, vx, vy, vz, mag)
 }

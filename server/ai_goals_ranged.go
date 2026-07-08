@@ -28,6 +28,7 @@ package server
 import (
 	"math"
 
+	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/data/item"
 	"github.com/imhinotori/sulfur/level/attribute"
 )
@@ -43,6 +44,15 @@ const (
 	bowLaunchVelocity     = 1.6   // performRangedAttack velocity arg
 	bowLookMaxStep        = 30.0  // lookAt(target, 30, 30) — the head-turn cap
 	arrowLaunchSpeed      = bowLaunchVelocity
+
+	// Illusioner's RangedBowAttackGoal ctor args differ from the skeleton's. Illusioner.registerGoals
+	// builds new RangedBowAttackGoal(this, 0.5d, 20, 15.0f) @6: speedModifier 0.5, attackIntervalMin 20,
+	// attackRadius 15.0 (radiusSqr 225 — same as the skeleton). The skeleton builds (this, 1.0, 20|40,
+	// 15.0). Only speed + interval differ; the radius is shared.
+	//	[VERIFIED javap Illusioner.registerGoals @6: ldc2_w 0.5d; bipush 20; ldc 15.0f;
+	//	 RangedBowAttackGoal.<init>(Monster;DIF). skeleton: 1.0d / 20|40 / 15.0f.]
+	illusionerBowSpeedModifier     = 0.5 // Illusioner RangedBowAttackGoal speedModifier
+	illusionerBowAttackIntervalMin = 20  // Illusioner RangedBowAttackGoal attackIntervalMin
 )
 
 // rangedBowAttackGoal is the ported RangedBowAttackGoal state (the jar's private fields of the same
@@ -55,15 +65,45 @@ type rangedBowAttackGoal struct {
 	strafingBackwards bool
 	strafingTime     int  // RangedBowAttackGoal.strafingTime (start -1)
 	drawTicks        int  // v1 stand-in for getTicksUsingItem(): -1 == not drawing, else 0..20
+	// speedModifier + attackIntervalMin are the per-DECLARATION ctor args (RangedBowAttackGoal(this,
+	// speed, interval, radius)). The skeleton declares 1.0/40, the illusioner 0.5/20. The Go goal is the
+	// SAME class routed for both hostiles from buildNativeGoal (which I do not own), so the values are
+	// resolved lazily from the ticking entity's type via resolveBowParams (first-tick latch) rather than
+	// passed at construction. speedModifier<0 marks "unresolved" so resolveBowParams runs once.
+	speedModifier    float64
+	attackIntervalMin int
 }
 
 // newRangedBowAttackGoal builds the skeleton's bow goal with the vanilla start values (-1 sentinels).
 func newRangedBowAttackGoal() *rangedBowAttackGoal {
 	return &rangedBowAttackGoal{
-		baseGoal:    newBaseGoal(flagMove | flagLook),
-		attackTime:  -1,
+		baseGoal:     newBaseGoal(flagMove | flagLook),
+		attackTime:   -1,
 		strafingTime: -1,
-		drawTicks:   -1,
+		drawTicks:    -1,
+		speedModifier: -1, // < 0 == unresolved; resolveBowParams latches the per-type ctor args on first tick
+	}
+}
+
+// resolveBowParams latches the per-DECLARATION RangedBowAttackGoal ctor args (speedModifier +
+// attackIntervalMin) from the ticking entity's type, once. The skeleton family (Skeleton/Stray/Bogged/
+// WitherSkeleton) builds RangedBowAttackGoal(this, 1.0, 40, 15.0); the Illusioner builds (this, 0.5, 20,
+// 15.0). Because buildNativeGoal (which I do not own) constructs this goal identically for every hostile
+// that declares kind="ranged_bow_attack", the per-type divergence is resolved here on the first tick when
+// the concrete entity is in hand. Idempotent (guarded by speedModifier < 0). RNG-free.
+//	[VERIFIED javap Illusioner.registerGoals @6 RangedBowAttackGoal(this, 0.5d, 20, 15.0f);
+//	 AbstractSkeleton.reassessWeaponGoal @4 RangedBowAttackGoal(this, 1.0d, 20|40, 15.0f).]
+func (g *rangedBowAttackGoal) resolveBowParams(e *Entity) {
+	if g.speedModifier >= 0 {
+		return // already latched
+	}
+	switch e.typ {
+	case entity.Illusioner.ID:
+		g.speedModifier = illusionerBowSpeedModifier      // 0.5
+		g.attackIntervalMin = illusionerBowAttackIntervalMin // 20
+	default:
+		g.speedModifier = bowSpeedModifier     // 1.0 (skeleton family)
+		g.attackIntervalMin = bowAttackIntervalMin // 40 (NORMAL)
 	}
 }
 
@@ -129,6 +169,7 @@ func (g *rangedBowAttackGoal) tick(t *TickLoop, e *Entity) {
 	if target == nil {
 		return
 	}
+	g.resolveBowParams(e) // latch the per-type ctor args (skeleton 1.0/40, illusioner 0.5/20) once
 
 	targetDistSqr := distanceToSqrPlayer(target, e)
 	// hasLineOfSight: the real per-tick-cached raycast (sensing.go, divergence C-4). seeTime now
@@ -146,7 +187,7 @@ func (g *rangedBowAttackGoal) tick(t *TickLoop, e *Entity) {
 
 	// Move toward the target while out of bow range or not yet locked on (seeTime<20); else stop + strafe.
 	if targetDistSqr > bowAttackRadiusSqr || g.seeTime < 20 {
-		getSpeed := e.getAttributeValue(attribute.MovementSpeed) * bowSpeedModifier
+		getSpeed := e.getAttributeValue(attribute.MovementSpeed) * g.speedModifier
 		e.ai.setWantTargetSpeed(target.x, target.y, target.z, getSpeed) // navigation.moveTo(target, speed)
 		g.strafingTime = -1
 	} else {
@@ -189,7 +230,7 @@ func (g *rangedBowAttackGoal) tick(t *TickLoop, e *Entity) {
 			if g.drawTicks >= bowFullDrawTicks { // getTicksUsingItem() >= 20
 				g.drawTicks = -1 // stopUsingItem()
 				t.performRangedAttack(e, target, bowReleasePower)
-				g.attackTime = bowAttackIntervalMin
+				g.attackTime = g.attackIntervalMin
 			}
 		}
 	} else {

@@ -123,6 +123,22 @@ func buildMagmaCubeAI() *mobAI {
 //	[VERIFIED javap MagmaCube.getJumpDelay: invokespecial AbstractCubeMob.getJumpDelay; iconst_4; imul.]
 func magmaCubeGetJumpDelay(e *Entity) int32 { return cubeGetJumpDelay(e) * magmaCubeJumpDelayScale }
 
+// magmaCubeJumpFromGround ports MagmaCube.jumpFromGround(): SET (not max) the vertical delta to
+// getJumpPower() + getSize()*0.1f, a size-scaled land hop. Unlike LivingEntity.jumpFromGround (which does
+// max(f, dm.y)), MagmaCube ASSIGNS the Y, so a bigger cube hops higher regardless of current velocity.
+// getJumpPower() is the LivingEntity default (baseJumpPower 0.42 + jump-boost); getSize() == cubeSize
+// (ID_SIZE). The float fold matches the jar: (float)(getJumpPower()f + (float)getSize()*0.1f) then f2d.
+// No sprint nudge (a cube never sprints). needsSync is a cite-deferred wire detail (tracker re-sends on the
+// velocity change), matching jump.go's jumpFromGround.
+//
+//	[VERIFIED javap MagmaCube.jumpFromGround: f = (float)getSize()*0.1f; setDeltaMovement(dm.x,
+//	 (double)(getJumpPower()+f), dm.z); needsSync = true. (getSize == AbstractCubeMob ID_SIZE getter.)]
+func magmaCubeJumpFromGround(e *Entity) {
+	f := float32(e.cubeSize) * 0.1                                 // (float)getSize() * 0.1f
+	jumpPower := float32(baseJumpPower) + entityJumpBoostPower(e) // getJumpPower() (float; 0.42 + jump-boost)
+	e.vy = float64(jumpPower + f)                                // setDeltaMovement Y = (double)(jumpPower + size*0.1f) -- SET
+}
+
 // magmaCubeMoveControlTick is AbstractCubeMob CubeMobMoveControl.tick() for the MagmaCube. IDENTICAL to the
 // shared cubeMoveControlTick EXCEPT the jump-delay reset uses the magma cube 4x delay. Kept separate +
 // additive so the SulfurCube hot path is untouched.

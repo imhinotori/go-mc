@@ -156,7 +156,9 @@ declare_mob(
         # @1 SpellcasterCastingSpellGoal [MOVE, LOOK] -- kind (the casting lock; the SAME SpellcasterIllager
         # base goal the evoker uses). Cite Illusioner.registerGoals @1 SpellcasterCastingSpellGoal.
         goal(priority = 1, flags = ["MOVE", "LOOK"], kind = "evoker_casting_spell"),
-        # @6 RangedBowAttackGoal(speed, interval, 15.0) -- kind=ranged_bow_attack (the illusioner fires a bow
+        # @6 RangedBowAttackGoal(this, 0.5, 20, 15.0) -- kind=ranged_bow_attack (the illusioner fires a bow;
+        # move 0.5x, fire every 20 ticks -- NOT the skeleton's 1.0/40. The per-type ctor args are latched by
+        # ai_goals_ranged.go resolveBowParams from the entity type, since buildNativeGoal builds one goal class.
         # at range; the bow mainhand is set in finalizeSpawn -- cite-deferred equip, the goal charges+fires an
         # Arrow through the shared ranged path). Cite Illusioner.registerGoals @6 RangedBowAttackGoal.
         goal(priority = 6, flags = ["MOVE", "LOOK"], kind = "ranged_bow_attack"),

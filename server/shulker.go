@@ -43,7 +43,7 @@ const (
 	shulkerPeekClosed       = 0
 	shulkerPeekOpen         = 30
 	shulkerNoColor          = 16
-	shulkerAttackRange      = 15.0
+	shulkerFireDistSqr      = 400.0 // ShulkerAttackGoal.tick fires when distanceToSqr(target) < 400.0 (Euclidean < 20)
 	shulkerAttackBaseTicks  = 20
 	shulkerAttackJitter     = 10
 	shulkerTeleportTries    = 5
@@ -140,24 +140,34 @@ func (t *TickLoop) shulkerAiStep(e *Entity) {
 	if s == nil {
 		return
 	}
+	// ShulkerAttackGoal.canUse: getTarget() != null && getTarget().isAlive() && difficulty != PEACEFUL.
+	// There is NO range gate on canUse -- the goal RUNS (and opens the shell) whenever a live target exists;
+	// it only FIRES a bullet when distanceToSqr(target) < 400.0 (ShulkerAttackGoal.tick). PEACEFUL disarms.
+	//	[VERIFIED javap Shulker$ShulkerAttackGoal.canUse: getTarget() alive && level.getDifficulty() != PEACEFUL
+	//	 (no distance check); tick: distanceToSqr(target) < 400.0d (dcmpg; iflt) gates the bullet.]
+	if serverDifficulty == difficultyPeaceful {
+		if !shulkerIsClosed(e) {
+			t.shulkerSetRawPeek(e, shulkerPeekClosed) // stop(): setRawPeekAmount(0)
+		}
+		return
+	}
 	t.shulkerAcquireTarget(e)
 	target := t.shulkerTarget(e)
-	if target != nil && t.shulkerInRange(e, target) {
+	if target != nil {
+		// canUse true (live target, not peaceful): open the shell (start(): setRawPeekAmount(100)) and run tick.
 		if shulkerIsClosed(e) {
 			t.shulkerSetRawPeek(e, shulkerPeekOpen)
 		}
-		t.shulkerAttackGoal(e, target)
+		t.shulkerAttackGoal(e, target) // tick(): fire only when distanceToSqr < 400.0 + attackTime <= 0
 	} else if !shulkerIsClosed(e) {
-		t.shulkerSetRawPeek(e, shulkerPeekClosed)
+		t.shulkerSetRawPeek(e, shulkerPeekClosed) // stop(): setRawPeekAmount(0)
 	}
 }
 
-// shulkerInRange reports whether the target is within the attack range. Cite Shulker$ShulkerAttackGoal.
-func (t *TickLoop) shulkerInRange(e *Entity, p *tickPlayer) bool {
-	if math.Abs(p.x-e.x) > shulkerAttackRange || math.Abs(p.z-e.z) > shulkerAttackRange {
-		return false
-	}
-	return math.Abs(p.y-e.y) <= shulkerAttackRange
+// shulkerFireInRange ports ShulkerAttackGoal.tick's fire gate: distanceToSqr(target) < 400.0 (Euclidean
+// distance < 20). Cite Shulker$ShulkerAttackGoal.tick (ldc2_w 400.0d; dcmpg; iflt).
+func (t *TickLoop) shulkerFireInRange(e *Entity, p *tickPlayer) bool {
+	return distanceToSqrPlayer(p, e) < shulkerFireDistSqr
 }
 
 // shulkerAcquireTarget scans for the nearest live player in range every scanCadence ticks. RNG-free.
@@ -167,9 +177,15 @@ func (t *TickLoop) shulkerAcquireTarget(e *Entity) {
 		return
 	}
 	s := e.shulker
+	// Acquisition uses the ShulkerNearestAttackGoal's FOLLOW_RANGE (createMobAttributes default 16.0), NOT
+	// the (removed) per-axis 15-block gate. The ATTACK goal has no range gate on canUse; the fire range
+	// (distanceToSqr < 400) is applied in shulkerAttackGoal. Cite Shulker$ShulkerNearestAttackGoal
+	// (NearestAttackableTargetGoal, FOLLOW_RANGE-bounded) + Mob.createMobAttributes FOLLOW_RANGE 16.
+	followRange := e.getAttributeValue(attribute.FollowRange) // 16.0
+	rangeSqr := followRange * followRange
 	if e.ai.attackTargetID != 0 {
 		p := t.playerByEntityID(e.ai.attackTargetID)
-		if p != nil && !p.dead && t.shulkerInRange(e, p) {
+		if p != nil && !p.dead && distanceToSqrPlayer(p, e) <= rangeSqr {
 			return
 		}
 		e.ai.attackTargetID = 0
@@ -180,16 +196,13 @@ func (t *TickLoop) shulkerAcquireTarget(e *Entity) {
 	}
 	s.nextScanTick = int32(reducedTickDelay(shulkerScanCadence))
 	var best *tickPlayer
-	bestSq := math.MaxFloat64
+	bestSq := rangeSqr
 	for _, p := range t.players {
 		if p == nil || p.dead {
 			continue
 		}
-		if !t.shulkerInRange(e, p) {
-			continue
-		}
 		dsq := distanceToSqrPlayer(p, e)
-		if dsq < bestSq {
+		if dsq <= bestSq {
 			bestSq = dsq
 			best = p
 		}
@@ -204,10 +217,14 @@ func (t *TickLoop) shulkerAcquireTarget(e *Entity) {
 // homing ShulkerBullet. Cite Shulker$ShulkerAttackGoal.tick.
 func (t *TickLoop) shulkerAttackGoal(e *Entity, target *tickPlayer) {
 	s := e.shulker
-	if s.attackTime > 0 {
-		s.attackTime--
+	// tick(): attackTime-- (unconditional decrement, matching `attackTime = attackTime - 1`); the LookControl
+	// setLookAt(180,180) is a cite-deferred cosmetic. The bullet fires only when distanceToSqr(target) < 400.0
+	// AND attackTime <= 0, then re-arms attackTime = 20 + nextInt(10)*20/2. Cite Shulker$ShulkerAttackGoal.tick.
+	s.attackTime--
+	if !t.shulkerFireInRange(e, target) { // distanceToSqr(target) < 400.0 (Euclidean < 20)
+		return
 	}
-	if s.attackTime > 0 {
+	if s.attackTime > 0 { // ifgt: only fire when the cooldown has elapsed
 		return
 	}
 	s.attackTime = int32(shulkerAttackBaseTicks + int(mobRandom(e).nextInt(shulkerAttackJitter))*shulkerAttackBaseTicks/2)

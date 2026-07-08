@@ -254,3 +254,42 @@ func TestIllusionerBlindnessCast(t *testing.T) {
 		t.Fatalf("illusioner cooldown = %d after cast, want %d (getCastingInterval)", il.illusionerBlindnessCooldown, illusionerBlindnessInterval)
 	}
 }
+
+// TestPiglinBruteZombifiesOffNether: a PiglinBrute is NOT immune to zombification (PiglinBrute overrides
+// neither isImmuneToZombification nor customServerAiStep's super call), so off-nether its piglinBruteAiStep
+// runs the AbstractPiglin zombification timer and converts it to a ZombifiedPiglin past CONVERSION_TIME
+// (300). Cite PiglinBrute.customServerAiStep (super AbstractPiglin.customServerAiStep) +
+// AbstractPiglin.isImmuneToZombification (DATA default false).
+func TestPiglinBruteZombifiesOffNether(t *testing.T) {
+	loop, floorY := variant2Loop(t)
+	pb := loop.spawnPiglinBrute(8.5, float64(floorY+1), 8.5)
+	if pb.piglinImmuneToZombification {
+		t.Fatal("piglin brute must NOT be immune to zombification (no PiglinBrute override)")
+	}
+	pbID := pb.id
+	reg := loop.regionForEntity(pb)
+	loop.withRegion(reg, func() {
+		// 300 ticks: the timer accumulates without converting.
+		for i := 0; i < piglinConversionTime; i++ {
+			loop.piglinBruteZombificationTick(pb)
+		}
+	})
+	if pb.piglinTimeInOverworld != piglinConversionTime {
+		t.Fatalf("brute timeInOverworld after %d ticks = %d, want %d", piglinConversionTime, pb.piglinTimeInOverworld, piglinConversionTime)
+	}
+	// The 301st tick crosses > 300 -> finishConversion -> ZombifiedPiglin.
+	loop.withRegion(reg, func() { loop.piglinBruteZombificationTick(pb) })
+	if _, present := reg.entities.get(pbID); present {
+		t.Fatal("piglin brute still present after 300+ ticks off-nether (finishConversion did not remove it)")
+	}
+	zp := false
+	for _, e := range reg.entities.byID {
+		if e.typ == entity.ZombifiedPiglin.ID {
+			zp = true
+			break
+		}
+	}
+	if !zp {
+		t.Fatal("no zombified_piglin present after the brute conversion")
+	}
+}

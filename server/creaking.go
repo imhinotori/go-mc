@@ -53,6 +53,17 @@ const (
 	creakingGazeCone       = 0.5                // checkCanMove isLookingAtMe coneSize 0.5 (ldc2_w 0.5d)
 )
 
+// creakingAttackCooldowns holds the per-entity CreakingAi MeleeAttack inter-attack cooldown, keyed by
+// entity id. Creaking.ATTACK_INTERVAL == 40 is the interval arg to CreakingAi's MeleeAttack.create(pred,40):
+// the melee fires at most once per 40 ticks. This is DISTINCT from the 15-tick attackAnimationRemainingTicks
+// (Creaking.ATTACK_ANIMATION_DURATION == 15, an animation-only counter). The cooldown lives here (not on the
+// shared *Entity, whose struct is owned by another domain); a Creaking is a rare code-spawned mob so the map
+// stays tiny, and the key is the entity id. The tick loop is single-threaded over a region's mobs
+// (creakingAiStep runs inside the region step), so a plain map is safe here.
+//	[VERIFIED javap CreakingAi: bipush 40 -> MeleeAttack.create(Predicate,I); Creaking.ATTACK_INTERVAL
+//	 ConstantValue int 40; Creaking.ATTACK_ANIMATION_DURATION ConstantValue int 15 (animation only).]
+var creakingAttackCooldowns = map[int32]int{}
+
 // spawnCreaking creates a hostile Creaking at (x,y,z) and adds it to the owner region store. CAN_MOVE
 // starts true (defineSynchedData CAN_MOVE default); unbound (no Creaking Heart, isHeartBound false).
 // Minimal e.ai (per-entity rng + attack-target slot); NO goalSelector (code-driven creakingAiStep).
@@ -114,6 +125,7 @@ func (t *TickLoop) creakingDeactivate(e *Entity) {
 	if e.ai != nil {
 		e.ai.attackTargetID = 0
 	}
+	delete(creakingAttackCooldowns, e.id) // drop the MeleeAttack cooldown state + reclaim the map slot
 }
 
 // creakingCheckCanMove ports Creaking.checkCanMove(): for each nearby player (empty -> if active
@@ -159,17 +171,24 @@ func (t *TickLoop) creakingAiStep(e *Entity) {
 		return
 	}
 	if e.creakingAttackAnimTicks > 0 {
-		e.creakingAttackAnimTicks-- // attackAnimationRemainingTicks--
+		e.creakingAttackAnimTicks-- // attackAnimationRemainingTicks-- (ANIMATION ONLY, 15 ticks)
+	}
+	// CreakingAi MeleeAttack cooldown (Creaking.ATTACK_INTERVAL == 40): the inter-attack timer. DISTINCT
+	// from the 15-tick animation counter above — the melee may fire at most once per 40 ticks.
+	if cd := creakingAttackCooldowns[e.id]; cd > 0 {
+		creakingAttackCooldowns[e.id] = cd - 1
 	}
 	// aiStep: compute checkCanMove; on a change toggle CAN_MOVE (the freeze/unfreeze event + sound).
 	can := t.creakingCheckCanMove(e)
 	if can != e.creakingCanMove {
 		e.creakingCanMove = can // set CAN_MOVE (ENTITY_ACTION + CREAKING_FREEZE/UNFREEZE deferred sound)
 	}
-	// While active + adjacent, melee the target (Monster.doHurtTarget: ATTACK_DAMAGE 3 + 15-tick anim).
+	// While active + adjacent, melee the target. The FIRE gate is the 40-tick MeleeAttack cooldown
+	// (CreakingAi MeleeAttack.create(pred, 40)) — NOT the 15-tick animation. broadcastEntityEvent(4) still
+	// (re)arms the 15-tick animation each hit for the client swing (Creaking.doHurtTarget).
 	if e.creakingActive && e.ai != nil && e.ai.attackTargetID != 0 {
 		target := t.playerByEntityID(e.ai.attackTargetID)
-		if target != nil && !target.dead && e.creakingAttackAnimTicks == 0 && isWithinMeleeAttackRange(e, target) {
+		if target != nil && !target.dead && creakingAttackCooldowns[e.id] <= 0 && isWithinMeleeAttackRange(e, target) {
 			t.creakingDoHurtTarget(e, target)
 		}
 	}
@@ -178,8 +197,9 @@ func (t *TickLoop) creakingAiStep(e *Entity) {
 // creakingDoHurtTarget ports Creaking.doHurtTarget: attackAnimationRemainingTicks = 15;
 // broadcastEntityEvent(4); Monster.doHurtTarget (ATTACK_DAMAGE 3). Cite Creaking.doHurtTarget.
 func (t *TickLoop) creakingDoHurtTarget(e *Entity, target *tickPlayer) {
-	e.creakingAttackAnimTicks = creakingAttackAnimDur // = 15
-	t.broadcastMobSwing(e)                            // broadcastEntityEvent(4) analogue
+	e.creakingAttackAnimTicks = creakingAttackAnimDur         // = 15 (client swing animation)
+	creakingAttackCooldowns[e.id] = creakingAttackInterval    // = 40 (CreakingAi MeleeAttack re-arm)
+	t.broadcastMobSwing(e)                                    // broadcastEntityEvent(4) analogue
 	dmg := float32(e.getAttributeValue(attribute.AttackDamage)) // == 3.0
 	src := damageSourceMobAttack(e.id)
 	t.applyDamage(target, src, dmg)

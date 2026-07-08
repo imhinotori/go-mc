@@ -78,3 +78,37 @@ func TestBreezeShootCadence(t *testing.T) {
 		t.Fatalf("breeze shoot cooldown did not count down: %d, want %d", b.breezeShootCooldown, wantCooldown-1)
 	}
 }
+
+// TestBreezeFiresWindCharge: on the fire tick the Breeze spawns a real BreezeWindCharge projectile
+// (hurtWindCharge on the shared hurtingprojectile machinery) aimed at the target -- NOT a no-op. The
+// projectile carries the breeze as owner and flies (non-zero velocity). Cite BreezeAi Shoot
+// (spawnProjectileUsingShoot(new BreezeWindCharge(breeze, level), ..., 0.7f, 5 - difficulty*4)).
+func TestBreezeFiresWindCharge(t *testing.T) {
+	loop, floorY := breezeLoop(t)
+	b := loop.spawnBreeze(8.5, float64(floorY+1), 8.5)
+	p := &tickPlayer{x: 12.5, y: float64(floorY + 1), z: 8.5, entityID: 7301}
+	loop.players = append(loop.players, p)
+
+	loop.breezeAiStep(b) // acquires + fires
+
+	var wc *Entity
+	for _, e := range loop.only().entities.byID {
+		if e.isHurting && e.hurtingKind == hurtWindCharge {
+			wc = e
+		}
+	}
+	if wc == nil {
+		t.Fatal("breeze fire tick spawned NO wind charge (breezeFireWindCharge must not be a no-op)")
+	}
+	if wc.hurtOwnerID != b.id {
+		t.Fatalf("wind charge owner = %d, want the breeze id %d", wc.hurtOwnerID, b.id)
+	}
+	speed := wc.vx*wc.vx + wc.vy*wc.vy + wc.vz*wc.vz
+	if speed <= 0 {
+		t.Fatal("wind charge has zero velocity — it must fly toward the target")
+	}
+	// It should head generally toward +X (the target is at +X from the breeze).
+	if wc.vx <= 0 {
+		t.Fatalf("wind charge vx = %v, want > 0 (aimed toward the +X target)", wc.vx)
+	}
+}

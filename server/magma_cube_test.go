@@ -197,3 +197,46 @@ func TestMagmaCubeFireImmune(t *testing.T) {
 		t.Fatalf("fire-immune magma cube ignited in lava: remainingFireTicks = %d, want 0", m.remainingFireTicks)
 	}
 }
+
+// TestMagmaCubeJumpFromGroundSetsSizeScaled: MagmaCube.jumpFromGround SETS vy = getJumpPower() +
+// getSize()*0.1f (NOT max(f, vy) like the generic LivingEntity.jumpFromGround). Size-2 -> 0.42 + 0.2 =
+// 0.62. Crucially it OVERWRITES an existing larger vy (proving the SET, not max). Cite
+// MagmaCube.jumpFromGround (setDeltaMovement(x, getJumpPower()+getSize()*0.1f, z)).
+func TestMagmaCubeJumpFromGroundSetsSizeScaled(t *testing.T) {
+	loop, _, floorY := magmaCubeLoop(t)
+	for _, tc := range []struct {
+		size int32
+		want float64
+	}{
+		{1, float64(float32(baseJumpPower) + 1*0.1)}, // 0.42 + 0.1 = 0.52
+		{2, float64(float32(baseJumpPower) + 2*0.1)}, // 0.42 + 0.2 = 0.62
+		{4, float64(float32(baseJumpPower) + 4*0.1)}, // 0.42 + 0.4 = 0.82
+	} {
+		m := loop.spawnMagmaCube(8.5, float64(floorY+1), 8.5, tc.size)
+		// Seed a LARGER upward velocity than the jump would give: a SET must overwrite it (a max would keep it).
+		m.vy = 5.0
+		magmaCubeJumpFromGround(m)
+		if math.Abs(m.vy-tc.want) > 1e-6 {
+			t.Fatalf("size %d jumpFromGround vy = %v, want %v (SET = jumpPower + size*0.1, overwriting the prior 5.0)", tc.size, m.vy, tc.want)
+		}
+	}
+}
+
+// TestMagmaCubeJumpRoutedFromJumpStep: entityJumpStep routes a grounded MagmaCube's land jump to
+// magmaCubeJumpFromGround (the size-scaled SET), not the generic jumpFromGround (which maxes). Verified by
+// the size-2 result 0.62 through the jump-branch dispatch. Cite jump.go entityJumpStep MagmaCube case.
+func TestMagmaCubeJumpRoutedFromJumpStep(t *testing.T) {
+	loop, _, floorY := magmaCubeLoop(t)
+	m := loop.spawnMagmaCube(8.5, float64(floorY+1), 8.5, 2)
+	m.onGround = true
+	m.jumping = true
+	m.vy = 0
+	if m.ai != nil {
+		m.ai.noJumpDelay = 0
+	}
+	loop.entityJumpStep(m)
+	want := float64(float32(baseJumpPower) + 2*0.1) // 0.62
+	if math.Abs(m.vy-want) > 1e-6 {
+		t.Fatalf("entityJumpStep magma vy = %v, want %v (routed to magmaCubeJumpFromGround)", m.vy, want)
+	}
+}

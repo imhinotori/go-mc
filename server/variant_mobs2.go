@@ -60,9 +60,13 @@ func (t *TickLoop) caveSpiderApplyPoison(e *Entity, target *tickPlayer) {
 // observable maul -- is fully wired). Cite PiglinBrute(EntityType, Level) + PiglinBrute.createAttributes.
 func (t *TickLoop) spawnPiglinBrute(x, y, z float64) *Entity {
 	e := NewEntity(t.idAlloc.AllocID(), entity.PiglinBrute, x, y, z)
-	e.isPiglin = true                    // AbstractPiglin subtype (shared piglin marks)
-	e.piglinImmuneToZombification = true // always hostile + never zombifies
-	_ = piglinBruteXpReward              // PiglinBrute ctor xpReward 20 (cited; not modeled on *Entity yet)
+	e.isPiglin = true // AbstractPiglin subtype (shared piglin marks)
+	// PiglinBrute does NOT override isImmuneToZombification (verified: no such method on PiglinBrute; the
+	// AbstractPiglin default reads DATA_IMMUNE_TO_ZOMBIFICATION, false for a natural/dbg spawn). So a brute
+	// off-nether DOES zombify like any piglin -- piglinImmuneToZombification stays false (default). It is
+	// always HOSTILE (no gold neutrality) but still converts. Cite PiglinBrute (no isImmuneToZombification
+	// override) + AbstractPiglin.isImmuneToZombification (DATA default false).
+	_ = piglinBruteXpReward // PiglinBrute ctor xpReward 20 (cited; not modeled on *Entity yet)
 	initSpawnHealth(e)                   // setHealth(getMaxHealth()) -> 50.0
 	e.ai = &mobAI{}
 	reseedMobAI(e.ai, e.id)
@@ -84,6 +88,19 @@ func (t *TickLoop) piglinBruteAiStep(e *Entity) {
 	}
 	t.piglinBruteAcquireNearestPlayer(e)
 	t.piglinBruteMeleeGoalTick(e)
+	// super.customServerAiStep (AbstractPiglin): the off-nether zombification timer. PiglinBrute.
+	// customServerAiStep ends with invokespecial AbstractPiglin.customServerAiStep, so a brute increments
+	// timeInOverworld off-nether and converts to a ZombifiedPiglin at > 300. Reuses the piglin.go machinery.
+	//	[VERIFIED javap PiglinBrute.customServerAiStep: ... invokespecial AbstractPiglin.customServerAiStep;
+	//	 AbstractPiglin.customServerAiStep: isConverting() ? ++timeInOverworld : 0; if GT 300 finishConversion.]
+	t.piglinBruteZombificationTick(e)
+}
+
+// piglinBruteZombificationTick routes the brute's zombification through the shared piglin.go timer
+// (piglinZombificationTick): a brute is not immune, so off-nether it accumulates timeInOverworld and
+// converts to a ZombifiedPiglin past 300. Cite AbstractPiglin.customServerAiStep tail.
+func (t *TickLoop) piglinBruteZombificationTick(e *Entity) {
+	t.piglinZombificationTick(e)
 }
 
 // piglinBruteTarget reads the brute current attack-target player, or nil. Tick-owned.
