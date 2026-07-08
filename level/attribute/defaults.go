@@ -862,6 +862,34 @@ func tadpoleSupplier() *Supplier {
 		Build()
 }
 
+// parrotSupplier is the port of Parrot.createAttributes() : Animal.createAnimalAttributes() +
+// MAX_HEALTH 6.0 + FLYING_SPEED 0.4000000059604645 + MOVEMENT_SPEED 0.20000000298023224 +
+// ATTACK_DAMAGE 3.0 (jar: net.minecraft.world.entity.animal.parrot.Parrot.createAttributes -- javap
+// this session: createAnimalAttributes, ldc2_w 6.0d MAX_HEALTH, 0.4000000059604645d FLYING_SPEED,
+// 0.20000000298023224d MOVEMENT_SPEED, 3.0d ATTACK_DAMAGE). NO FOLLOW_RANGE override -- FOLLOW_RANGE
+// stays the createMobAttributes 16.0. The FLYING_SPEED + MOVEMENT_SPEED literals are the vanilla
+// float-widened doubles, preserved bit-for-bit. Cite Parrot.createAttributes.
+func parrotSupplier() *Supplier {
+	return createAnimalAttributes().
+		AddValue(MaxHealth, 6.0).
+		AddValue(FlyingSpeed, 0.4000000059604645).
+		AddValue(MovementSpeed, 0.20000000298023224).
+		AddValue(AttackDamage, 3.0).
+		Build()
+}
+
+// batSupplier is the port of Bat.createAttributes() : Mob.createMobAttributes() + MAX_HEALTH 6.0 (jar:
+// net.minecraft.world.entity.ambient.Bat.createAttributes -- javap this session: createMobAttributes,
+// ldc2_w 6.0d MAX_HEALTH; no other override). Bat is an AmbientCreature -> Mob (NOT Animal), so it has
+// NO TEMPT_RANGE and NO ATTACK_DAMAGE (a bat never attacks). MOVEMENT_SPEED stays the createLiving
+// Attributes registration default 0.7 (the bat drifts via customServerAiStep deltaMovement steering,
+// NOT the ground navigation); FOLLOW_RANGE the createMobAttributes 16.0. Cite Bat.createAttributes.
+func batSupplier() *Supplier {
+	return createMobAttributes().
+		AddValue(MaxHealth, 6.0).
+		Build()
+}
+
 // livingFallbackSupplier is the port of LivingEntity.createLivingAttributes() (the gameplay subset):
 // the base attribute set EVERY LivingEntity has. Vanilla's DefaultAttributes registers a supplier for
 // every living EntityType; Sulfur ports the common per-type suppliers above and leans on THIS fallback
@@ -1013,6 +1041,11 @@ var suppliers = map[string]*Supplier{
 	"sniffer": snifferSupplier(),
 	"allay":   allaySupplier(),
 	"axolotl": axolotlSupplier(),
+	// PARROT + BAT (Task): the flying passive Parrot (creature) + the ambient Bat. Each a 1:1 jar copy
+	// of its createAttributes (verified bytecode this session). Parrot (Animal + MAX_HEALTH 6 + FLYING_SPEED
+	// 0.4 + MOVEMENT_SPEED 0.2 + ATTACK_DAMAGE 3), Bat (Mob + MAX_HEALTH 6 only). Keyed by registry name.
+	"parrot": parrotSupplier(),
+	"bat":    batSupplier(),
 	// HORSE FAMILY (Task): the AbstractHorse tree. Horse (createBaseHorseAttributes, pre-randomize base
 	// MAX_HEALTH 53 / MOVEMENT_SPEED 0.225 / JUMP_STRENGTH 0.7); Donkey/Mule/Llama/TraderLlama
 	// (createBaseChestedHorseAttributes: base + MOVEMENT_SPEED 0.175 + JUMP_STRENGTH 0.5). The per-entity

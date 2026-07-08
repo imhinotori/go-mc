@@ -538,6 +538,23 @@ type Entity struct {
 	isAllay        bool
 	isAxolotl      bool
 	axolotlVariant int
+	// --- PARROT / BAT (flying passive + ambient, Task) ----------------------------------------------
+	//
+	// Tick-owned plain values, set/read ONLY for their own type (each *AiStep gates on typ). isParrot/
+	// isBat mark the entity. parrotVariant mirrors Parrot's DATA_VARIANT_ID (0 RED_BLUE / 1 BLUE /
+	// 2 GREEN / 3 YELLOW_BLUE / 4 GRAY -- the 5 plumage variants; Parrot.Variant.byId). batResting
+	// mirrors Bat's DATA_ID_FLAGS bit 0x1 (isResting() == (flags & 1) != 0; setResting flips it) -- a
+	// resting bat hangs from a ceiling with zero velocity; a flying bat picks a random target and drifts
+	// toward it (Bat.customServerAiStep). batTargetX/Y/Z + batHasTarget mirror Bat.targetPosition (the
+	// BlockPos the flying bat drifts toward; null == !batHasTarget). Zero for every other entity.
+	// Cite Parrot DATA_VARIANT_ID + Parrot.Variant, Bat.isResting/setResting + Bat.customServerAiStep.
+	isParrot                           bool
+	isBat                              bool
+	parrotVariant                      int32
+	parrotPerched                      bool
+	batResting                         bool
+	batTargetX, batTargetY, batTargetZ int
+	batHasTarget                       bool
 	// --- HORSE FAMILY (net.minecraft.world.entity.animal.equine.{AbstractHorse,Horse,Donkey,Mule,
 	//     AbstractChestedHorse,Llama,TraderLlama}) ------------------------------------------------
 	//

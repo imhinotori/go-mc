@@ -868,6 +868,17 @@ func (t *TickLoop) tickAI() {
 		if e.typ == entity.Axolotl.ID {
 			t.axolotlAiStep(e)
 		}
+		// PARROT + BAT (Task): the flying passive Parrot shoulder-perch bookkeeping + the ambient Bat
+		// rest/fly toggle (Bat.customServerAiStep). Each per-type-gated AFTER serverAiStep. ADDITIVE +
+		// per-type-gated (zero cost / zero RNG for every non-matching entity -- the pig oracle stream is
+		// untouched; the bat RNG is on the bat OWN stream, drawn only while resting or drifting). Cite
+		// Parrot (no customServerAiStep, perch intent) + Bat.customServerAiStep.
+		if e.typ == entity.Parrot.ID {
+			t.parrotAiStep(e)
+		}
+		if e.typ == entity.Bat.ID {
+			t.batAiStep(e)
+		}
 		// HORSE FAMILY (Task): the AbstractHorse customServerAiStep/aiStep extras (the jump-launch apply, the
 		// eating/tail counters, the untamed-mount buck are DEFERRED behind the mount packet path; today a
 		// bounded no-op). Per-type-gated like the camel/axolotl, AFTER serverAiStep. ADDITIVE + isHorseFamily-
@@ -875,6 +886,7 @@ func (t *TickLoop) tickAI() {
 		// AbstractHorse.aiStep.
 		if e.isHorseFamily {
 			t.horseFamilyAiStep(e)
+		}
 		// WATER MOBS (Task): the signature per-tick behaviors, each per-type-gated AFTER serverAiStep.
 		// Squid.aiStep tentacle accumulator; Pufferfish.tick puff/deflate + sting; Dolphin.tick moistness;
 		// Tadpole.aiStep age -> Frog at 24000. ADDITIVE + per-type-gated (zero cost / zero RNG for every
@@ -1185,6 +1197,24 @@ func (t *TickLoop) tickPhysics() {
 		// SAME no-gravity + deltaMovement *= 0.91 branch the ghast uses. Its move-control (phantomMoveControl
 		// Tick) already set deltaMovement this tick; here that velocity is drag-scaled by 0.91 and integrated
 		// (no gravity, no sink), so the phantom circles + dives freely. Cite Phantom.travel -> travelFlying.
+		// BAT (Task): the Bat is a NO-GRAVITY flyer with its OWN tick() drag (Bat.tick): a RESTING bat has
+		// ZERO velocity and is SNAPPED to hang under the ceiling (y = floor(y)+1 - bbHeight); a FLYING bat
+		// keeps its horizontal velocity and drags the VERTICAL by 0.6 (deltaMovement.multiply(1.0, 0.6, 1.0)),
+		// then integrates -- no gravity, no fall damage (checkFallDamage is a no-op). batAiStep already set the
+		// drift kick this tick. Cite Bat.tick + Bat.checkFallDamage.
+		if batIsFlyer(e) {
+			if batIsResting(e) {
+				e.vx, e.vy, e.vz = 0, 0, 0 // setDeltaMovement(Vec3.ZERO)
+				e.y = batRestSnapY(e)      // setPosRaw(x, floor(y)+1 - bbHeight, z)
+				continue                   // a hanging bat does not integrate motion
+			}
+			e.vy *= batRestFlyDrag // deltaMovement.multiply(1.0, 0.6, 1.0) -- vertical drag only
+			yBefore := e.y
+			t.moveEntity(e, e.vx, e.vy, e.vz)
+			// Bat.checkFallDamage is a no-op: a bat NEVER takes fall damage, so no accumulate/land call.
+			_ = yBefore
+			continue
+		}
 		if happyGhastIsFlyer(e) || ghastIsFlyer(e) || phantomIsFlyer(e) {
 			// happy_ghast + GHAST (Task): the travelFlying AIR branch (HappyGhast.travel -> LivingEntity.travelFlying).
 			// There is NO gravity for a hovering ghast; deltaMovement is scaled by 0.91 on ALL three axes

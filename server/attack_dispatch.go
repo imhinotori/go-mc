@@ -1129,6 +1129,13 @@ func (t *TickLoop) handleInteract(p *tickPlayer, pkt pk.Packet) {
 	if mob.typ == entity.Cat.ID && t.tryCatInteract(p, mob) {
 		return // the taming / sit-toggle handled the interact
 	}
+	// PARROT (Task): the Parrot.mobInteract seed-tame / owner sit-toggle -- the parrot sibling of the
+	// cat/wolf gate (seed-tames at a 1-in-10 chance, no health bump). Parrot-gated (zero-cost for every
+	// other mob; the lone nextInt(10) tame draw is on the parrot own per-entity stream, so the pig oracle
+	// is unperturbed). Cite Parrot.mobInteract.
+	if mob.typ == entity.Parrot.ID && t.tryParrotInteract(p, mob) {
+		return // the taming / sit-toggle handled the interact
+	}
 	// HAPPY-GHAST RIDE (net.minecraft.world.entity.animal.happyghast.HappyGhast.mobInteract): an adult,
 	// harnessed happy ghast right-clicked WITHOUT a secondary (shift) action mounts the player as a
 	// passenger (doPlayerRide -> player.startRiding(this)). tryHappyGhastRide returns true when the

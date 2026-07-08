@@ -112,6 +112,20 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned fox eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
 		}
+	case "parrot":
+		// PARROT (Task): spawn a vanilla parrot (flying passive TamableAnimal, Parrot wire type). It flies via
+		// the soft-flyer nav (gravity applies), rolls 1 of 5 plumage variants at spawn, and is tamed with seeds.
+		e := t.spawnParrot(p.x, p.y+3, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned parrot eid=%d (variant=%d) at (%.1f,%.1f,%.1f)", e.id, e.parrotVariant, p.x, p.y+3, p.z))
+		}
+	case "bat":
+		// BAT (Task): spawn a vanilla bat (ambient flyer, Bat wire type). It spawns RESTING (hanging), wakes
+		// when a player comes within 4 blocks or the ceiling is removed, then drifts to random targets. No attack.
+		e := t.spawnBat(p.x, p.y+3, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned bat eid=%d (resting=%v) at (%.1f,%.1f,%.1f)", e.id, e.batResting, p.x, p.y+3, p.z))
+		}
 	case "sulfur_cube", "sulfurcube":
 		// MOB-CUBE (SulfurCube): spawn a vanilla sulfur cube (jump-move + split-on-death + size scaling,
 		// SulfurCube wire type). Natural spawn size is 2 (SulfurCube.setSpawnSize: adult -> size 2).
@@ -371,6 +385,7 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		e := t.spawnLlama(p.x, p.y+1, p.z, false, true)
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned trader_llama eid=%d (hp=%.1f strength=%d) at (%.1f,%.1f,%.1f)", e.id, e.health, e.llamaStrength, p.x, p.y+1, p.z))
+		}
 	case "squid":
 		// SQUID (Task): the ink-jet cephalopod (MAX_HEALTH 10). Breathes underwater, DROWNS ON LAND. Its
 		// aiStep runs the tentacle-rotation accumulator; a hit-by-mob spawns ink. Spawned 1 block up.
@@ -606,8 +621,8 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		t.tryUseEmptyMap(p, inv, inv.get(slot), interactionHandMain)
 		t.broadcastSystemChat("[dbg] gave + opened a filled map; hold it to watch the terrain fill in")
 	default:
-		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | dragon | iron_golem | villager | villager_farmer | vex | ghast_hostile | blaze | phantom | strider | wither_skeleton | wither | hoglin | bee | goat | frog | camel | sniffer | allay | axolotl | fangs | water | pig-in-water | raid | rain | redstone | trade | trident | throw-trident | crafter | map")
-		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | dragon | iron_golem | villager | villager_farmer | vex | ghast_hostile | blaze | phantom | strider | wither_skeleton | wither | hoglin | bee | goat | frog | camel | sniffer | allay | axolotl | squid | glow_squid | cod | salmon | pufferfish | tropical_fish | dolphin | tadpole | fangs | water | pig-in-water | raid | rain | redstone | trade | trident | throw-trident")
+		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | dragon | iron_golem | villager | villager_farmer | vex | ghast_hostile | blaze | phantom | strider | wither_skeleton | wither | hoglin | bee | goat | frog | camel | sniffer | allay | axolotl | parrot | bat | fangs | water | pig-in-water | raid | rain | redstone | trade | trident | throw-trident | crafter | map")
+		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | dragon | iron_golem | villager | villager_farmer | vex | ghast_hostile | blaze | phantom | strider | wither_skeleton | wither | hoglin | bee | goat | frog | camel | sniffer | allay | axolotl | parrot | bat | squid | glow_squid | cod | salmon | pufferfish | tropical_fish | dolphin | tadpole | fangs | water | pig-in-water | raid | rain | redstone | trade | trident | throw-trident")
 	}
 }
 
