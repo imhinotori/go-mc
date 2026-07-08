@@ -3,6 +3,7 @@ package server
 import (
 	"testing"
 
+	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/data/packetid"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
@@ -289,4 +290,35 @@ func approxEq(a, b, eps float32) bool {
 		d = -d
 	}
 	return d <= eps
+}
+
+// TestMeleeAttackBoxZeroVerticalInflation pins Mob.getAttackBoundingBox(d) = boundingBox.inflate(d, 0.0,
+// d) -- the E-1 fix. The vertical inflation is ZERO (bytecode 103-106: dload_1; dconst_0; dload_1;
+// inflate), NOT reach/2. A player standing a full block ABOVE the mob's head (clear of the mob's own
+// height band) must be OUT of melee range; the same player level with the mob's body is IN range.
+func TestMeleeAttackBoxZeroVerticalInflation(t *testing.T) {
+	// isWithinMeleeAttackRange only reads the mob's AABB + the player's box -- no chunk/loop needed.
+	// A zombie (its type width/height) at the origin.
+	z := NewEntity(1, entity.Zombie, 8.5, 64.0, 8.5)
+	py := z.y
+
+	// A co-located player at the mob's feet is within reach (horizontal + vertical bands overlap).
+	same := &tickPlayer{x: 8.5, y: py, z: 8.5, entityID: 9001}
+	if !isWithinMeleeAttackRange(z, same) {
+		t.Fatal("co-located player must be within melee range")
+	}
+
+	// A player standing well ABOVE the mob's height band: feet at py + height + 1.0. With ZERO vertical
+	// inflation the attack box tops out at py + height, so the player's feet are above it and there is NO
+	// vertical overlap -> OUT of range. (Under the OLD reach/2 vertical inflate this was a false positive.)
+	high := &tickPlayer{x: 8.5, y: py + float64(z.height) + 1.0, z: 8.5, entityID: 9002}
+	if isWithinMeleeAttackRange(z, high) {
+		t.Fatal("player a full block above the mob's head must be OUT of melee range (zero vertical inflation)")
+	}
+
+	// The attack box must NOT extend below the mob's feet: a player fully below py (head under the feet).
+	low := &tickPlayer{x: 8.5, y: py - playerHeight - 0.5, z: 8.5, entityID: 9003}
+	if isWithinMeleeAttackRange(z, low) {
+		t.Fatal("player fully below the mob's feet must be OUT of melee range (zero vertical inflation)")
+	}
 }

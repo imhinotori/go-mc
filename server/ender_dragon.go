@@ -97,6 +97,7 @@ const (
 	dragonDeathXpPeriod     = 5     // ... && dragonDeathTime % 5 == 0
 	dragonDeathXpTotal      = 500   // xp = 500 (12000 first-ever kill -- cited default 500 in v1)
 	dragonDeathXpFraction   = 0.08  // ExperienceOrb.award(Mth.floor(xp * 0.08f)) per award
+	dragonDeathFinalXpFraction = 0.2 // one-shot ExperienceOrb.award(Mth.floor(xp * 0.2f)) at dragonDeathTime == 200
 	dragonHurtMinDamage     = 0.01  // hurt: if (dmg < 0.01f) return false
 	dragonHoldingRadius     = 30.0  // HOLDING circling radius around fightOrigin (v1 flight)
 	dragonHoldingSpeed      = 0.02  // HOLDING angular step per tick (radians)
@@ -197,9 +198,19 @@ func (t *TickLoop) enderDragonAiStep(e *Entity) {
 	}
 	t.dragonRecomputeParts(e)
 
-	// growlTime-- (ctor 100): the ambient-growl cadence. Pure integer, no RNG.
-	if d.growlTime > 0 {
-		d.growlTime--
+	// growlTime cadence (ctor 100): aiStep does `if (--growlTime < 0) { playLocalSound(GROWL, 2.5,
+	// 0.8 + random.nextFloat()*0.3, false); growlTime = 200 + random.nextInt(200); }`. The pre-decrement
+	// ALWAYS happens, then the `< 0` (NOT <= 0) test fires -> play the growl (drawing nextFloat()) and
+	// RESET growlTime = 200 + nextInt(200). TWO draws on the dragon's OWN stream, in that order, BEFORE
+	// checkCrystals' nextInt(10) -- omitting them desyncs the shared stream. The sound is a client visual
+	// (deferred), but the two RNG DRAWS are faithful. Cite EnderDragon.aiStep (bytecode 44-120).
+	//	[VERIFIED javap EnderDragon.aiStep: 46 getfield growlTime; 49 iconst_1; 50 isub; 51 dup_x1; 52
+	//	 putfield growlTime; 55 ifge 123 (runs when < 0); 87-98 nextFloat()*0.3 sound arg; 104 sipush 200;
+	//	 110-119 nextInt(200); iadd; 120 putfield growlTime.]
+	d.growlTime--
+	if d.growlTime < 0 {
+		mobRandom(e).nextFloat()                          // 0.8 + nextFloat()*0.3 growl-sound pitch (sound deferred)
+		d.growlTime = int32(200 + mobRandom(e).nextInt(200)) // growlTime = 200 + nextInt(200)
 	}
 
 	// HOLDING flight: circle around the fight origin at a fixed radius (the v1 flight stub -- the full
@@ -251,18 +262,30 @@ func (t *TickLoop) dragonCheckCrystals(e *Entity) {
 		}
 	}
 	if mobRandom(e).nextInt(10) == 0 { // random.nextInt(10) == 0: rescan
+		// checkCrystals: list = getEntitiesOfClass(EndCrystal, getBoundingBox().inflate(32.0)); then
+		// d3 = Double.MAX_VALUE; for each crystal, distSq = crystal.distanceToSqr(this); if (distSq < d3)
+		// { d3 = distSq; nearest = crystal; }. The 32.0 ONLY bounds the candidate AABB (a pre-filter) --
+		// the SELECTION is strict `<` with an initial +Inf, NOT a `<= 32*32` distance bound. Cite
+		// EnderDragon.checkCrystals (bytecode 82-85 inflate(32.0); 94 Double.MAX_VALUE; 138-140 dcmpg
+		// ifge -> keep only on strict <).
 		var best *Entity
-		bestSq := dragonCrystalScanRadius * dragonCrystalScanRadius
+		bestSq := math.Inf(1)                             // d3 = Double.MAX_VALUE
+		inflate := dragonCrystalScanRadius                // 32.0: the getBoundingBox().inflate(32.0) half-extent
 		owner := t.regionForEntity(e)
 		for _, other := range owner.entities.byID {
 			if other == nil || !other.isEndCrystal || other.dead {
+				continue
+			}
+			// Pre-filter: candidate must lie within the inflated-32 AABB around the dragon's box (the only
+			// role the 32.0 plays -- it does NOT bound the nearest-selection distance).
+			if math.Abs(other.x-e.x) > inflate || math.Abs(other.y-e.y) > inflate || math.Abs(other.z-e.z) > inflate {
 				continue
 			}
 			ddx := other.x - e.x
 			ddy := other.y - e.y
 			ddz := other.z - e.z
 			dsq := ddx*ddx + ddy*ddy + ddz*ddz
-			if dsq <= bestSq {
+			if dsq < bestSq { // strict < (dcmpg; ifge)
 				bestSq = dsq
 				best = other
 			}
@@ -428,8 +451,18 @@ func (t *TickLoop) tickDragonDeath(e *Entity) {
 	// move(SELF, new Vec3(0, 0.1, 0)): the dragon rises while dying.
 	t.regionForEntity(e).entities.move(e, e.x, e.y+0.1, e.z)
 
-	// if (dragonDeathTime == 200) { setDragonKilled -> spawn exit portal + dragon egg; remove(KILLED). }
+	// if (dragonDeathTime == 200) { <one-shot XP>; setDragonKilled -> spawn exit portal + dragon egg;
+	// remove(KILLED); gameEvent(ENTITY_DIE). }
 	if d.dragonDeathTime >= dragonDeathMaxTicks {
+		// E-2 FIX (bytecode 331-394): at dragonDeathTime >= 200, a ONE-SHOT ExperienceOrb.award(level,
+		// position(), Mth.floor(xp * 0.2f)) fires (gated on MOB_DROPS) BEFORE setDragonKilled. This is
+		// SEPARATE from and ADDITIONAL to the per-5-tick floor(xp*0.08) shower above -- the death frame
+		// awards the remaining 0.2 chunk (default xp 500 -> +100). Cite EnderDragon.tickDeath (bytecode
+		// 380-394: fload xp; i2f; ldc 0.2f; fmul; Mth.floor; ExperienceOrb.award).
+		if mobDrops {
+			reward := int(math.Floor(float64(xp) * dragonDeathFinalXpFraction)) // floor(500 * 0.2) == 100
+			t.awardExperienceOrbs(e, reward)
+		}
 		t.dragonSpawnExitPortalAndEgg(e)
 		t.dragonBossBarRemoveAll(e)
 		t.regionForEntity(e).entities.remove(e.id)

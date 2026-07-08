@@ -162,8 +162,14 @@ func (t *TickLoop) witherAiStep(e *Entity) {
 			w.nextHeadUpdate[si] = t.gametime + int64(witherHeadUpdateBase) + int64(mobRandom(e).nextInt(witherHeadUpdateJitter))
 			// NORMAL/HARD only: idleHeadUpdates[si]++ ; if > 15 -> a random scattered dangerous skull volley, reset.
 			if serverDifficulty == difficultyNormal || serverDifficulty == difficultyHard {
+				// aiStep tests `if (idleHeadUpdates[i]++ > 15)` -- a POST-increment: the value COMPARED is
+				// the PRE-increment one (bytecode dup_x2 pushes the old value before storing the +1). Capture
+				// the pre-value, increment unconditionally, then test the PRE-value against 15 (a counter at
+				// 16 fires; the increment still happens on every tick). Cite WitherBoss.aiStep (bytecode
+				// 180-188: dup2; iaload; dup_x2; iconst_1; iadd; iastore; bipush 15; if_icmple).
+				pre := w.idleHeadUpdates[si]
 				w.idleHeadUpdates[si]++
-				if w.idleHeadUpdates[si] > witherIdleShotThreshold {
+				if pre > witherIdleShotThreshold {
 					d5 := witherNextDoubleRange(e, e.x-witherIdleScatterXZ, e.x+witherIdleScatterXZ)
 					d7 := witherNextDoubleRange(e, e.y-witherIdleScatterY, e.y+witherIdleScatterY)
 					d9 := witherNextDoubleRange(e, e.z-witherIdleScatterXZ, e.z+witherIdleScatterXZ)
@@ -279,7 +285,11 @@ func (t *TickLoop) witherPerformRangedAttackTarget(e *Entity, head int, target *
 		return
 	}
 	tx := target.x
-	ty := target.y + playerHeight*0.5 // target.getY() + target.getEyeHeight()*0.5
+	// performRangedAttack aim: target.getY() + target.getEyeHeight()*0.5. For a STANDING player the eye
+	// height is playerStandingEyeHeight (1.62), so the aim Y is target.y + 1.62*0.5 == +0.81 (NOT the
+	// bounding-box height*0.5 == +0.90). Cite WitherBoss.performRangedAttack(int, LivingEntity) (bytecode
+	// 11-19: getEyeHeight; f2d; ldc2_w 0.5; dmul; dadd).
+	ty := target.y + playerStandingEyeHeight*0.5 // target.getY() + target.getEyeHeight()*0.5
 	tz := target.z
 	dangerous := false
 	if head == 0 {

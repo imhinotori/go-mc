@@ -284,3 +284,35 @@ func TestDragonHurtRejectedWhileDying(t *testing.T) {
 		t.Fatalf("DYING dragon lost health (%v -> %v), want no change", before, d.health)
 	}
 }
+
+// TestDragonDeathFinalXpOneShot pins the E-2 fix: at dragonDeathTime == 200 a ONE-SHOT ExperienceOrb
+// .award(floor(xp * 0.2f)) fires (default xp 500 -> +100) IN ADDITION to the per-5-tick floor(xp*0.08)
+// shower, BEFORE the dragon is removed. The final tick's XP delta must be at least the 100 one-shot.
+func TestDragonDeathFinalXpOneShot(t *testing.T) {
+	loop, _ := dragonLoop(t)
+	d := loop.spawnEnderDragon(0, 128, 0)
+	owner := loop.regionForEntity(d)
+
+	// Drive to deathTime 199 (one short of the death frame).
+	loop.withRegion(owner, func() {
+		for d.dragon.dragonDeathTime < 199 {
+			loop.tickDragonDeath(d)
+		}
+	})
+	before := sumOrbXP(loop)
+
+	// The 200th tick: the one-shot floor(500*0.2)=100 award fires (plus the tick-200 %5 shower of 40).
+	loop.withRegion(owner, func() {
+		loop.tickDragonDeath(d)
+	})
+	after := sumOrbXP(loop)
+
+	gained := after - before
+	// The one-shot alone is 100; the tick-200 %5==0 shower adds another 40. So the delta is >= 100.
+	if gained < 100 {
+		t.Fatalf("XP gained on the death frame = %d, want >= 100 (the one-shot floor(500*0.2))", gained)
+	}
+	if _, ok := owner.entities.get(d.id); ok {
+		t.Fatal("dragon still present after the death frame (should be removed)")
+	}
+}

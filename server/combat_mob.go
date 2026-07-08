@@ -153,53 +153,6 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 		// PanicGoal.shouldPanic reads this bool (NOT typeTag==0, which is minecraft:in_fire, a real
 		// panic_causes member — so the id cannot be the unset sentinel; cite data/tag/tags.go:152).
 		e.hasLastDamage = true
-		// Phase 35 (MOB-SUB-10): the attacker-ENTITY bookkeeping HurtByTargetGoal reads — the reader
-		// combat_mob.go's doc (line 108) anticipated ("lastDamageStamp slots in alongside this store when
-		// a reader lands"). LivingEntity.setLastHurtByMob records the causing entity ref + the gameTime
-		// stamp on a fresh hit; here src.attacker is the causing entity id (damage_source.go:71, 0 for an
-		// environmental hit) and t.gametime is the per-tick counter (the same int32 cast block_break.go:230
-		// uses). PURE field writes, NO RNG — cannot perturb the pig oracle (the oracle pig deals/takes no
-		// damage in its window). Cite LivingEntity.actuallyHurt/setLastHurtByMob.
-		e.lastHurtByMob = src.attacker
-		e.lastHurtByMobTimestamp = int32(t.gametime)
-
-		// MOB-NEUT-01 (Phase 36-01): the NeutralMob persistent-anger trigger. A WOLF hit by a PLAYER
-		// becomes angry — startPersistentAngerTimer sets the anger timer, and isAngryAt then gates the
-		// wolf's @4 NearestAttackableTargetGoal<Player> so the provoked wolf retaliates. The anger model
-		// is the gametime-ENDPOINT (W6-DISSOLVED): angerEndTime = gameTime + PERSISTENT_ANGER_TIME.sample,
-		// and isAngry() compares it to gameTime — the anger EXPIRES automatically when gameTime passes it,
-		// with NO per-tick decrement and NO ResetUniversalAngerTargetGoal (both dissolved). Wolf.PERSISTENT_
-		// ANGER_TIME = TimeUtil.rangeOfSeconds(20,39) = UniformInt(400,780); sample = 400 + nextInt(381).
-		//
-		// GATES: typ == entity.Wolf.ID (only a wolf gets angry) AND the attacker is a PLAYER
-		// (playerByEntityID resolves it — a wolf provoked by a mob does not start the player-anger timer;
-		// the HurtByTargetGoal handles the generic retaliation). The single nextInt(381) draw is on the
-		// wolf's OWN mobRandom stream — the pig (never a wolf) draws ZERO (its oracle stream is unperturbed),
-		// and a non-player attacker draws ZERO. Uses the SAME mobRandom(e) the combat kinds draw from AND
-		// the SAME t.gametime the MeleeAttackGoal cooldown reads.
-		//	[VERIFIED javap Wolf.startPersistentAngerTimer: setTimeToRemainAngry(PERSISTENT_ANGER_TIME
-		//	 .sample(this.random)); UniformInt.sample = minInclusive + nextInt(max-min+1) = 400 + nextInt(381).
-		//	 NeutralMob.setPersistentAngerTarget(entity); setRemainingPersistentAngerTime → angerEndTime =
-		//	 gameTime + sampled. NeutralMob.isAngry(): angerEndTime > 0 && (angerEndTime - gameTime) > 0.]
-		// IRON GOLEM (Task): the golem is ALSO a NeutralMob. IronGolem.PERSISTENT_ANGER_TIME =
-		// TimeUtil.rangeOfSeconds(20,39) == UniformInt(400,780) — IDENTICAL to the wolf's, so the same
-		// 400 + nextInt(381) sample applies. A golem hit by a PLAYER becomes angry, and its @3 anger-gated
-		// NearestAttackableTargetGoal<Player> (angry_player_target) then retaliates. Gated on typ ==
-		// entity.Wolf.ID || entity.IronGolem.ID (only these two NeutralMobs get the player-anger timer) AND a
-		// PLAYER attacker. The single nextInt(381) draw is on the mob's OWN mobRandom stream (the pig — never a
-		// wolf/golem — draws ZERO). Cite IronGolem.startPersistentAngerTimer + NeutralMob.isAngry.
-		// ZOMBIFIED PIGLIN (GAP): a NeutralMob too. ZombifiedPiglin.PERSISTENT_ANGER_TIME =
-		// TimeUtil.rangeOfSeconds(20,39) == UniformInt(400,780) -- IDENTICAL to the wolf/golem, so the SAME
-		// 400 + nextInt(381) sample. A zombified piglin hit by a PLAYER becomes angry (neutral-until-
-		// provoked), and its anger-gated target goal + alertOthers pack-spread then retaliate. Added to the
-		// wolf/golem gate; the single nextInt(381) draw is on the mob OWN stream (the pig draws ZERO). Cite
-		// ZombifiedPiglin(NeutralMob).startPersistentAngerTimer.
-		if (e.typ == entity.Wolf.ID || e.typ == entity.IronGolem.ID || e.typ == entity.ZombifiedPiglin.ID) && t.playerByEntityID(src.attacker) != nil {
-			// DRAW (the anger timer, wolf/golem-gated, player-attacker-gated): UniformInt(400,780).sample =
-			// 400 + nextInt(381). ONE draw per fresh hit on a wolf/golem by a player.
-			e.angerEndTime = t.gametime + int64(400+mobRandom(e).nextInt(381))
-			e.angerTarget = src.attacker // setPersistentAngerTarget(the attacking player)
-		}
 
 		// SQUID (Task): Squid.hurtServer tail -- after a landed hit, if getLastHurtByMob() != null,
 		// spawnInk(). getLastHurtByMob() is non-null exactly when the attacker is a mob/player (src.attacker
@@ -207,6 +160,38 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 		// an i-frame excess hit does not re-ink. RNG-free. Cite Squid.hurtServer + Squid.spawnInk.
 		if e.isSquid && src.attacker != 0 {
 			t.squidSpawnInk(e)
+		}
+	}
+
+	// E-4 FIX (bytecode 272-274): hurtServer runs resolveMobResponsibleForDamage UNCONDITIONALLY after the
+	// i-frame branches merge (offset 274) -- NOT inside the flag2 (tookFullDamage) block. An i-frame EXCESS
+	// hit sets flag2=false yet STILL records the causing mob (so HurtByTargetGoal retaliates against a
+	// rapid attacker). Moved out of if-flag2 to match. resolveMobResponsibleForDamage sets lastHurtByMob
+	// only when getEntity() is a LivingEntity AND !NO_ANGER AND (!WIND_CHARGE || !this.is(
+	// NO_ANGER_FROM_WIND_CHARGE)). Cite LivingEntity.resolveMobResponsibleForDamage (bytecode 5-49).
+	//
+	// GUARDS: src.attacker != 0 is the v1 "getEntity() instanceof LivingEntity" proxy (every v1 causing
+	// entity -- a player or a mob -- is a LivingEntity; an environmental hit leaves attacker 0). NO_ANGER
+	// is a damage-type tag (damage_source.go is()). The wind-charge sub-guard reads the HIT entity's
+	// EntityTypeTags.NO_ANGER_FROM_WIND_CHARGE membership (isNoAngerFromWindChargeType). PURE field
+	// writes, NO RNG for the lastHurtByMob store -- the pig oracle (attacker 0 in its window, and never
+	// taking a living-attacker hit) records nothing, its stream untouched.
+	if src.attacker != 0 && !src.is("no_anger") &&
+		(!src.is("wind_charge") || !isNoAngerFromWindChargeType(e.typ)) {
+		// LivingEntity.setLastHurtByMob(source.getEntity()): record the causing entity ref + the timestamp
+		// (this.tickCount; t.gametime is the per-tick proxy, block_break.go:230 uses the same int32 cast).
+		e.lastHurtByMob = src.attacker
+		e.lastHurtByMobTimestamp = int32(t.gametime)
+
+		// MOB-NEUT-01: the NeutralMob persistent-anger trigger keyed off the SAME setLastHurtByMob event
+		// (Wolf/IronGolem/ZombifiedPiglin.startPersistentAngerTimer on a PLAYER hit). Runs unconditionally
+		// now (a rapid i-frame excess hit by a player still angers the neutral mob, matching vanilla). The
+		// single nextInt(381) draw is wolf/golem/piglin-gated AND player-attacker-gated -- the pig (never a
+		// neutral mob) draws ZERO. Cite Wolf/IronGolem/ZombifiedPiglin.startPersistentAngerTimer +
+		// NeutralMob.isAngry (angerEndTime = gameTime + UniformInt(400,780).sample = 400 + nextInt(381)).
+		if (e.typ == entity.Wolf.ID || e.typ == entity.IronGolem.ID || e.typ == entity.ZombifiedPiglin.ID) && t.playerByEntityID(src.attacker) != nil {
+			e.angerEndTime = t.gametime + int64(400+mobRandom(e).nextInt(381))
+			e.angerTarget = src.attacker // setPersistentAngerTarget(the attacking player)
 		}
 	}
 
@@ -1029,5 +1014,21 @@ func (t *TickLoop) entityRemoveAllEffects(e *Entity) {
 	}
 	for id := range e.mobEffects {
 		delete(e.mobEffects, id)
+	}
+}
+
+// isNoAngerFromWindChargeType ports EntityTypeTags.NO_ANGER_FROM_WIND_CHARGE membership -- the entity
+// types that do NOT record a lastHurtByMob (do not anger) when the damage source is a wind charge.
+// resolveMobResponsibleForDamage skips setLastHurtByMob for a WIND_CHARGE source when this.is(that tag).
+// Exact contents of registrydata/tags/entity_type/no_anger_from_wind_charge.json (VERIFIED this task):
+// breeze, skeleton, bogged, stray, zombie, husk, spider, cave_spider, slime. No NeutralMob is a member,
+// so the wolf/golem/piglin anger path is never gated by this. Cite EntityTypeTags.NO_ANGER_FROM_WIND_CHARGE.
+func isNoAngerFromWindChargeType(typ entity.ID) bool {
+	switch typ {
+	case entity.Breeze.ID, entity.Skeleton.ID, entity.Bogged.ID, entity.Stray.ID,
+		entity.Zombie.ID, entity.Husk.ID, entity.Spider.ID, entity.CaveSpider.ID, entity.Slime.ID:
+		return true
+	default:
+		return false
 	}
 }

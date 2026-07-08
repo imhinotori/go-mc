@@ -55,6 +55,8 @@ const (
 	wardenProximityAngerBoost = 35  // v1 proximity feed: a nearby player raises anger by DEFAULT_ANGER (cited)
 
 	wardenMeleeToSonicLock = 40 // TIME_TO_USE_MELEE_UNTIL_SONIC_BOOM: SonicBoom.setCooldown(this, 40) on a melee hit
+	wardenSonicOnAcquire   = 200 // setAttackTarget -> SonicBoom.setCooldown(this, 200) on target ACQUISITION (sipush 200)
+	wardenMeleeCooldown    = 18 // WardenAi.initFightActivity: MeleeAttack.create(18) -> MELEE_ATTACK_COOLDOWN 18 (bipush 18)
 
 	wardenSonicDistanceXZ    = 15.0 // DISTANCE_XZ: closerThan(target, 15.0, 20.0) horizontal gate (ldc2_w 15.0d)
 	wardenSonicDistanceY     = 20.0 // DISTANCE_Y: closerThan(target, 15.0, 20.0) vertical gate (ldc2_w 20.0d)
@@ -82,17 +84,18 @@ const (
 )
 
 // wardenState holds all Warden-specific tick state behind the single e.warden pointer. angerBySuspect is
-// AngerManagement.angerBySuspect (player id -> anger). angerTickAccum counts toward the every-20 anger tick.
+// AngerManagement.angerBySuspect (player id -> anger). (anger ticks on the tickCount%20 phase boundary).
 // emergeTicks is the IS_EMERGING lock (134 -> 0). sonicChargeTicks is the SonicBoom windup (0 idle; >0
 // charging). sonicCooldown is SONIC_BOOM_COOLDOWN (40 after a boom or melee hit). noAngerTicks counts idle
 // ticks toward the dig-away despawn. digTicks is the DIGGING_DURATION countdown (100 -> 0 discard).
 type wardenState struct {
 	angerBySuspect   map[int32]int
-	angerTickAccum   int
 	emergeTicks      int
 	sonicChargeTicks int
 	sonicCooldown    int
+	meleeCooldown    int
 	noAngerTicks     int
+	lastTargetID     int32
 	digTicks         int
 	digging          bool
 }
@@ -209,9 +212,19 @@ func (t *TickLoop) wardenSelectTarget(e *Entity) *tickPlayer {
 		}
 	}
 	if best != nil {
+		// Warden.setAttackTarget(target): when a NEW attack target is set (a transition from a different
+		// or no target), SonicBoom.setCooldown(this, 200) arms SONIC_BOOM_COOLDOWN -- the warden must melee
+		// for TIME_TO_USE_MELEE_UNTIL_SONIC_BOOM=200 ticks before it may boom a freshly acquired target.
+		// sonicCooldown models SONIC_BOOM_COOLDOWN, so set it to 200 on acquisition. Cite Warden
+		// .setAttackTarget (bytecode 31-35 sipush 200; SonicBoom.setCooldown).
+		if ws.lastTargetID != best.entityID {
+			ws.sonicCooldown = wardenSonicOnAcquire // SonicBoom.setCooldown(this, 200)
+			ws.lastTargetID = best.entityID
+		}
 		e.ai.attackTargetID = best.entityID
 		return best
 	}
+	ws.lastTargetID = 0
 	e.ai.attackTargetID = 0
 	return nil
 }
@@ -261,15 +274,21 @@ func (t *TickLoop) wardenAiStep(e *Entity) {
 	if (t.gametime+int64(e.id))%wardenDarknessInterval == 0 {
 		t.wardenApplyDarknessAround(e) // DEFERRED darkness pulse (cited no-op)
 	}
-	ws.angerTickAccum++
-	if ws.angerTickAccum >= wardenAngerTickDelay {
-		ws.angerTickAccum = 0
+	// WardEN-08 FIX: the anger tick gates on tickCount%20==0 directly (like the darkness %120 gate on the
+	// line above), NOT a private accumulator -- angerManagement.tick runs on the every-20 phase boundary.
+	// tickCount is the t.gametime proxy (this warden lives while the fight is active). Cite Warden
+	// .customServerAiStep (ANGERMANAGEMENT_TICK_DELAY=20 gate) + AngerManagement.tick.
+	if t.gametime%wardenAngerTickDelay == 0 {
 		t.wardenSenseNearbyPlayers(e) // v1 anger feed (deferred vibration/smell stand-in)
 		t.wardenTickAnger(e)          // AngerManagement.tick: decay + drop
 	}
 	// SonicBoom cooldown countdown (SONIC_BOOM_COOLDOWN memory expiry).
 	if ws.sonicCooldown > 0 {
 		ws.sonicCooldown--
+	}
+	// MeleeAttack cooldown countdown (ATTACK_COOLING_DOWN memory expiry; MeleeAttack.create(18)).
+	if ws.meleeCooldown > 0 {
+		ws.meleeCooldown--
 	}
 	// (3) target = highest-anger suspect (blind -> anger-only).
 	target := t.wardenSelectTarget(e)
@@ -286,8 +305,13 @@ func (t *TickLoop) wardenAiStep(e *Entity) {
 			t.wardenStartSonicBoom(e)
 			return
 		}
-		if isWithinMeleeAttackRange(e, target) {
+		// WardenAi.initFightActivity: MeleeAttack.create(18) -- the melee behavior sets ATTACK_COOLING_DOWN
+		// with an 18-tick expiry after a swing and will not re-run while it is active. meleeCooldown models
+		// that memory: melee only when it is 0, then re-arm to 18. Cite WardenAi (MeleeAttack.create(18),
+		// MELEE_ATTACK_COOLDOWN=18) + MeleeAttack (ATTACK_COOLING_DOWN gate).
+		if ws.meleeCooldown == 0 && isWithinMeleeAttackRange(e, target) {
 			t.wardenDoHurtTarget(e, target) // 30 dmg + 1.5 kb + set the 40-tick sonic lock
+			ws.meleeCooldown = wardenMeleeCooldown
 		}
 		return
 	}
@@ -464,7 +488,7 @@ const effectDarkness = "minecraft:darkness"
 // v1 which does not yet broadcast UpdateMobEffect). Cite Warden.applyDarknessAround + MobEffectUtil
 // .addEffectToPlayersAround + its lambda$0 (isSurvival && !isAllied && closerThan && reapply-gate).
 func (t *TickLoop) wardenApplyDarknessAround(e *Entity) {
-	radiusSqr := float64(wardenDarknessRadius) * float64(wardenDarknessRadius) // closerThan(pos, 20) == distSqr <= 20*20
+	radiusSqr := float64(wardenDarknessRadius) * float64(wardenDarknessRadius) // closerThan(pos, 20) == distSqr < 20*20 (strict)
 	for _, p := range t.players {
 		if p == nil || p.dead {
 			continue
@@ -476,8 +500,11 @@ func (t *TickLoop) wardenApplyDarknessAround(e *Entity) {
 		// (source == null || !source.isAlliedTo(player)): the warden (source) is never allied to a player, so
 		// this clause is always true here -- a warden pulses DARKNESS onto every nearby survival player.
 		// player.position().closerThan(pos, 20): 3D squared-distance gate from the warden's feet.
+		// Vec3.closerThan(pos, 20) is strict distSq < 20*20 (VERIFIED javap Vec3.closerThan: dcmpg; ifge),
+		// so the pulse SKIPS (continue) exactly when NOT closer, i.e. distSq >= radiusSqr. A player at
+		// EXACTLY the radius is NOT closerThan -> skipped. Cite Vec3.closerThan (strict <).
 		dx, dy, dz := p.x-e.x, p.y-e.y, p.z-e.z
-		if dx*dx+dy*dy+dz*dz > radiusSqr {
+		if dx*dx+dy*dy+dz*dz >= radiusSqr {
 			continue
 		}
 		// The reapply gate (lambda$0 tail): if the player already has DARKNESS whose amplifier >= the new

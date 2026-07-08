@@ -517,25 +517,25 @@ func mobTarget(e *Entity) int32 {
 }
 
 // isWithinMeleeAttackRange ports Mob.isWithinMeleeAttackRange(LivingEntity) for a player victim: the
-// attacker's bounding box, inflated by DEFAULT_ATTACK_REACH horizontally (and reach/2 vertically),
-// must intersect the target's hitbox. The jar builds getAttackBoundingBox(reach) =
-// boundingBox.inflate(reach, reach/2, reach) and tests AABB.intersects(target.getHitbox()); v1 builds
+// attacker's bounding box, inflated by DEFAULT_ATTACK_REACH horizontally and ZERO vertically, must
+// intersect the target's hitbox. The jar builds getAttackBoundingBox(reach) =
+// boundingBox.inflate(reach, 0.0, reach) and tests AABB.intersects(target.getHitbox()); v1 builds
 // the same inflated box from the mob's width/height AABB and the player's collision box
 // (playerWidth × playerHeight, feet at p.y). No held weapon -> the DEFAULT_ATTACK_REACH, min-range 0
 // (the min-range second-box check is skipped for reach-min 0). NO RNG.
 //
-//	[VERIFIED javap Mob.isWithinMeleeAttackRange / getAttackBoundingBox: reach = DEFAULT_ATTACK_REACH;
-//	 getBoundingBox().inflate(reach, reach/2, reach).intersects(target.getHitbox()); min-range 0 ->
-//	 single-box test.]
+//	[VERIFIED javap Mob.getAttackBoundingBox: bytecode 103-106 dload_1; dconst_0; dload_1; inflate ==
+//	 getBoundingBox().inflate(reach, 0.0, reach) -- vertical inflation is ZERO, NOT reach/2.
+//	 Mob.isWithinMeleeAttackRange: reach = DEFAULT_ATTACK_REACH; ...intersects(target.getHitbox());
+//	 min-range 0 -> single-box test.]
 func isWithinMeleeAttackRange(e *Entity, target *tickPlayer) bool {
 	reach := defaultAttackReach
 	// The attacker's inflated attack box (getAttackBoundingBox(reach) = boundingBox.inflate(reach,
-	// reach/2, reach)): horizontal half-width = mob.width/2 + reach, vertical = [y - reach/2, y +
-	// height + reach/2].
+	// 0.0, reach)): horizontal half-width = mob.width/2 + reach, vertical UNCHANGED = [y, y + height].
 	hw := e.width/2 + reach
 	aMinX, aMaxX := e.x-hw, e.x+hw
 	aMinZ, aMaxZ := e.z-hw, e.z+hw
-	aMinY, aMaxY := e.y-reach/2, e.y+e.height+reach/2
+	aMinY, aMaxY := e.y, e.y+e.height
 
 	// The target's hitbox (the player's collision AABB, feet at p.y): playerWidth × playerHeight.
 	phw := playerWidth / 2

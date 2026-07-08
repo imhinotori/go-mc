@@ -213,3 +213,55 @@ func TestWardenDarknessPulse(t *testing.T) {
 		t.Fatalf("creative player should NOT receive DARKNESS (isSurvival gate)")
 	}
 }
+
+// TestWardenSonicLockOnTargetAcquire pins the WardEN-03 fix: Warden.setAttackTarget -> SonicBoom
+// .setCooldown(this, 200). When the warden ACQUIRES a target (wardenSelectTarget transitions to a new
+// suspect) sonicCooldown is armed to 200 (TIME_TO_USE_MELEE_UNTIL_SONIC_BOOM) so it must melee before
+// it may boom.
+func TestWardenSonicLockOnTargetAcquire(t *testing.T) {
+	loop, floorY := wardenLoop(t)
+	py := float64(floorY + 1)
+	w := loop.spawnWarden(8.5, py, 8.5, false)
+
+	// A live player suspect with enough anger to be selected as the top suspect.
+	p := combatTestPlayer(loop, 8.5, py, 8.5, 8801)
+	loop.wardenIncreaseAngerAt(w, p.entityID, wardenDefaultAnger)
+
+	if w.warden.sonicCooldown != 0 {
+		t.Fatalf("sonicCooldown before acquisition = %d, want 0", w.warden.sonicCooldown)
+	}
+	got := loop.wardenSelectTarget(w)
+	if got == nil || got.entityID != p.entityID {
+		t.Fatalf("wardenSelectTarget did not pick the anger suspect")
+	}
+	if w.warden.sonicCooldown != wardenSonicOnAcquire {
+		t.Fatalf("sonicCooldown after acquisition = %d, want %d (SonicBoom.setCooldown(this, 200))", w.warden.sonicCooldown, wardenSonicOnAcquire)
+	}
+	// Re-selecting the SAME target does NOT re-arm the 200 lock (only a NEW target acquisition does).
+	w.warden.sonicCooldown = 5
+	loop.wardenSelectTarget(w)
+	if w.warden.sonicCooldown != 5 {
+		t.Fatalf("sonicCooldown re-armed on same-target reselect = %d, want 5 (unchanged)", w.warden.sonicCooldown)
+	}
+}
+
+// TestWardenMeleeCooldown pins the WardEN-07 fix: WardenAi initFightActivity MeleeAttack.create(18) ->
+// MELEE_ATTACK_COOLDOWN 18. wardenDoHurtTarget does not set the melee cooldown itself (the melee gate
+// does); the constant is 18 and the countdown decrements one per tick in wardenAiStep.
+func TestWardenMeleeCooldown(t *testing.T) {
+	if wardenMeleeCooldown != 18 {
+		t.Fatalf("wardenMeleeCooldown = %d, want 18 (MeleeAttack.create(18))", wardenMeleeCooldown)
+	}
+	loop, floorY := wardenLoop(t)
+	py := float64(floorY + 1)
+	w := loop.spawnWarden(8.5, py, 8.5, false)
+	// Arm the melee cooldown and confirm it decrements exactly one per aiStep tick (not to melee twice
+	// within 18 ticks). Give the warden no target so the aiStep just runs the countdown.
+	w.warden.meleeCooldown = wardenMeleeCooldown
+	loop.withRegion(loop.regionForEntity(w), func() {
+		loop.wardenAiStep(w)
+	})
+	if w.warden.meleeCooldown != wardenMeleeCooldown-1 {
+		t.Fatalf("meleeCooldown after one aiStep = %d, want %d (decrement by 1)", w.warden.meleeCooldown, wardenMeleeCooldown-1)
+	}
+}
