@@ -99,6 +99,25 @@ type weatherState struct {
 //	 satisfies all three. DEFERRED: real dimensionType read pending nether/end.]
 func (t *TickLoop) canHaveWeather() bool { return true }
 
+// setWeatherParameters ports net.minecraft.server.MinecraftServer.setWeatherParameters(int clearTime,
+// int weatherTime, boolean raining, boolean thundering): it writes straight onto the WeatherData
+// (Sulfur's t.weather) -- setClearWeatherTime(clearTime); setRainTime(weatherTime);
+// setThunderTime(weatherTime); setRaining(raining); setThundering(thundering). Both the rainTime and
+// the thunderTime take the SAME weatherTime argument (the jar loads iload_2 for both). Consumed by the
+// /weather command (commands_batch.go). Tick-owned (coordinator).
+//
+//	[VERIFIED javap MinecraftServer.setWeatherParameters(IIZZ): getWeatherData() ->
+//	 setClearWeatherTime(clearTime); setRainTime(weatherTime); setThunderTime(weatherTime);
+//	 setRaining(raining); setThundering(thundering).]
+func (t *TickLoop) setWeatherParameters(clearTime, weatherTime int32, raining, thundering bool) {
+	w := &t.weather
+	w.clearWeatherTime = clearTime
+	w.rainTime = weatherTime
+	w.thunderTime = weatherTime
+	w.raining = raining
+	w.thundering = thundering
+}
+
 // advanceWeatherCycleGameRule is the GameRules.get(ADVANCE_WEATHER) read (ex-doWeatherCycle). It routes
 // through the real GameRules store (gamerules.go), so /gamerule advance_weather false freezes the whole
 // cycle (timers stop counting down, no re-rolls, no flag flips) exactly as vanilla -- the ramp + broadcast

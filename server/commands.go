@@ -232,6 +232,7 @@ func buildCommandGraph() *command.Graph {
 	// /help /msg — each permission-gated on its minecraft.command.<name> node.
 	registerVanillaCommands(g)
 	registerOpsCommands(g)
+	registerBatchCommands(g)
 
 	return g
 }

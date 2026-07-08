@@ -180,6 +180,14 @@ type TickLoop struct {
 	// worldSeed is the overworld seed (WORLD-04), for /seed. Set at boot via SetWorldSeed; 0 if unset.
 	worldSeed int64
 
+	// levelDifficulty is the WorldData.difficulty the /difficulty command reads + writes
+	// (net.minecraft.world.level.storage.WorldData.getDifficulty / MinecraftServer.setDifficulty). The
+	// gameplay hot paths still resolve their difficulty through the serverDifficulty CITED const stub
+	// (food.go == NORMAL); this field carries the settable command state so /difficulty set/query is a
+	// faithful port with no rewire of the const consumers. Zero value == difficultyPeaceful, so it is
+	// seeded to difficultyNormal in NewTickLoop to match the vanilla default the const also uses.
+	levelDifficulty difficulty
+
 	// perms is the LuckPerms-style permission store (permissions.go) the command gate consults
 	// (t.playerHasPermission). nil = the legacy all-players-operator fallback (tests + a server
 	// booted without SetPermStore), so existing behavior is preserved until a store is wired.
@@ -1253,6 +1261,9 @@ func NewTickLoop(clock Clock) *TickLoop {
 		// Every player near origin (and the pig) is deep inside, so the tickWorldBorder damage check
 		// and the collision clamp are both no-ops. A future /worldborder command mutates this field.
 		worldBorder: defaultWorldBorder(),
+		// levelDifficulty seeds to the vanilla WorldData default (NORMAL) -- the same value the
+		// serverDifficulty CITED const carries -- so /difficulty query reports NORMAL until it is set.
+		levelDifficulty: difficultyNormal,
 	}
 	// Phase-27 STEP-3 (the N=2 flip): construct regionCount (==2) regions that statically split the
 	// world (regionOf — region_transfer.go). Each region holds its OWN entity store + (never-shared)

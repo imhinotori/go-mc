@@ -93,3 +93,41 @@ func saturatedAddInt32(a, b int32) int32 {
 	}
 	return int32(sum)
 }
+
+// setExperienceLevels ports net.minecraft.server.level.ServerPlayer.setExperienceLevels(int level):
+//
+//	if (level == experienceLevel) return;   // no-op guard
+//	experienceLevel = level;
+//	lastSentExp = -1;                        // force a resend
+//
+// v1 has no lastSentExp DataSlot on the player; the sendExperience dirty-send discipline (xp_orb.go)
+// plays that role, so the resend is achieved by calling sendExperience after the mutation. Used by the
+// /xp set levels path (LEVELS.set BiPredicate == this, then return true). CITE ServerPlayer
+// .setExperienceLevels.
+func (t *TickLoop) setExperienceLevels(p *tickPlayer, level int) {
+	if int32(level) == p.experienceLevel {
+		return
+	}
+	p.experienceLevel = int32(level)
+	t.sendExperience(p)
+}
+
+// setExperiencePoints ports net.minecraft.server.level.ServerPlayer.setExperiencePoints(int points):
+//
+//	float f = (float) getXpNeededForNextLevel();
+//	float g = (f - 1.0F) / f;
+//	float h = Mth.clamp((float) points / f, 0.0F, g);
+//	if (h != experienceProgress) { experienceProgress = h; lastSentExp = -1; }
+//
+// Used by the /xp set points path (POINTS.set BiPredicate: if points >= getXpNeededForNextLevel()
+// return false, else setExperiencePoints(points) and return true -- see xpSetType in commands_batch.go).
+// The lastSentExp resend is achieved via sendExperience. CITE ServerPlayer.setExperiencePoints.
+func (t *TickLoop) setExperiencePoints(p *tickPlayer, points int) {
+	f := float32(getXpNeededForNextLevel(p.experienceLevel))
+	g := (f - 1.0) / f
+	h := mthClampF(float32(points)/f, 0.0, g)
+	if h != p.experienceProgress {
+		p.experienceProgress = h
+		t.sendExperience(p)
+	}
+}
