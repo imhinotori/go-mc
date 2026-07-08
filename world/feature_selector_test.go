@@ -52,6 +52,16 @@ func leafConfigJSON(blockName string, placementMods string) json.RawMessage {
 	return json.RawMessage(cfg)
 }
 
+func emptyNoOpJSON(placementMods string) json.RawMessage {
+	cfg := fmt.Sprintf(`{"feature":{"type":"%s","config":{}},"placement":[%s]}`,
+		"minecraft:"+testLeafType, placementMods)
+	return json.RawMessage(cfg)
+}
+
+func weightedEntryJSON(weight int, placed json.RawMessage) string {
+	return fmt.Sprintf(`{"data":%s,"weight":%d}`, placed, weight)
+}
+
 // newSelectorCF parses a configured_feature object (type + config) into a
 // *ConfiguredFeature via the registry, the way buildDecorationData does, so the
 // selector body re-decodes the SAME Raw it would in production.
@@ -72,6 +82,14 @@ func runBody(view *Neighborhood, reg *feature.Registry, cf *feature.ConfiguredFe
 	body := lookupFeatureBody(cf.Type)
 	ctx := newPlacementContext(view, -64, 384, nil)
 	return body(bctx, cf, ctx, rng, pos)
+}
+
+func nextInSquarePos(rng levelgen.RandomSource, origin placement.BlockPos) placement.BlockPos {
+	return placement.BlockPos{
+		X: origin.X + int(rng.NextIntN(16)),
+		Y: origin.Y,
+		Z: origin.Z + int(rng.NextIntN(16)),
+	}
 }
 
 // TestRandomSelectorWeightedPick: a 2-entry weighted selector over two distinct leaf
@@ -140,6 +158,83 @@ func TestRandomSelectorFallsToDefault(t *testing.T) {
 	}
 }
 
+// TestSequencePlacesSubFeaturesInOrder: sequence has no picker draw of its own; it
+// places every sub-PlacedFeature in declared order and threads the same rng into each
+// child's placement chain.
+func TestSequencePlacesSubFeaturesInOrder(t *testing.T) {
+	reg := feature.NewEmbeddedRegistry()
+	view := build3x3([2]int{0, 0}, -64, 384)
+	origin := placement.BlockPos{X: 0, Y: 5, Z: 0}
+	inSquare := `{"type":"minecraft:in_square"}`
+	cfg := fmt.Sprintf(`{"features":[%s,%s]}`,
+		leafConfigJSON("minecraft:cobblestone", inSquare),
+		leafConfigJSON("minecraft:diorite", inSquare))
+	cf := newSelectorCF(t, reg, "sequence", cfg)
+
+	seed := int64(0x51E0)
+	var first, second placement.BlockPos
+	var oracle *levelgen.WorldgenRandom
+	for {
+		oracle = levelgen.NewWorldgenRandom(seed)
+		first = nextInSquarePos(oracle, origin)
+		second = nextInSquarePos(oracle, origin)
+		if first != second {
+			break
+		}
+		seed++
+	}
+
+	rng := levelgen.NewWorldgenRandom(seed)
+	if !runBody(view, reg, cf, rng, origin) {
+		t.Fatalf("sequence placed nothing")
+	}
+	if got := view.GetBlock(first.X, first.Y, first.Z); got != block.ToStateID[block.Cobblestone{}] {
+		t.Fatalf("sequence first child placed wrong state at %v: got %v, want cobblestone", first, got)
+	}
+	if got := view.GetBlock(second.X, second.Y, second.Z); got != block.ToStateID[block.Diorite{}] {
+		t.Fatalf("sequence second child placed wrong state at %v: got %v, want diorite", second, got)
+	}
+	if rng.NextLong() != oracle.NextLong() {
+		t.Fatalf("sequence consumed the wrong draw count/order for child placement modifiers")
+	}
+}
+
+// TestSequenceStopsOnFirstFailedSubFeature: SequenceFeature.place returns false at
+// the first child PlacedFeature that returns false, after that child's own modifiers
+// have run, and does not place later children.
+func TestSequenceStopsOnFirstFailedSubFeature(t *testing.T) {
+	reg := feature.NewEmbeddedRegistry()
+	view := build3x3([2]int{0, 0}, -64, 384)
+	origin := placement.BlockPos{X: 2, Y: 5, Z: 2}
+	inSquare := `{"type":"minecraft:in_square"}`
+	cfg := fmt.Sprintf(`{"features":[%s,%s,%s]}`,
+		leafConfigJSON("minecraft:cobblestone", ""),
+		emptyNoOpJSON(inSquare),
+		leafConfigJSON("minecraft:diorite", inSquare))
+	cf := newSelectorCF(t, reg, "sequence", cfg)
+
+	const seed = int64(0x5150)
+	oracle := levelgen.NewWorldgenRandom(seed)
+	_ = nextInSquarePos(oracle, origin) // failing no_op child still runs its placement
+	future := levelgen.NewWorldgenRandom(seed)
+	_ = nextInSquarePos(future, origin)
+	thirdIfNotSkipped := nextInSquarePos(future, origin)
+
+	rng := levelgen.NewWorldgenRandom(seed)
+	if runBody(view, reg, cf, rng, origin) {
+		t.Fatalf("sequence returned true after a failed child")
+	}
+	if got := view.GetBlock(origin.X, origin.Y, origin.Z); got != block.ToStateID[block.Cobblestone{}] {
+		t.Fatalf("sequence first child did not place before failure: got %v, want cobblestone", got)
+	}
+	if got := view.GetBlock(thirdIfNotSkipped.X, thirdIfNotSkipped.Y, thirdIfNotSkipped.Z); got == block.ToStateID[block.Diorite{}] {
+		t.Fatalf("sequence placed a child after the first failure at %v", thirdIfNotSkipped)
+	}
+	if rng.NextLong() != oracle.NextLong() {
+		t.Fatalf("sequence short-circuit consumed the wrong draw count (wanted only the failing child's in_square draws)")
+	}
+}
+
 // TestSimpleRandomSelectorUniform: simple_random_selector draws ONE nextInt(N) and places
 // features[i]. The picked index is pinned by an oracle nextInt.
 func TestSimpleRandomSelectorUniform(t *testing.T) {
@@ -172,6 +267,82 @@ func TestSimpleRandomSelectorUniform(t *testing.T) {
 	}
 	if rng.NextFloat() != oracle.NextFloat() {
 		t.Fatalf("simple_random_selector consumed wrong draw count (want exactly one NextIntN)")
+	}
+}
+
+// TestWeightedRandomSelectorPickAndModifierDrawOrder: weighted_random_selector draws
+// one nextInt(totalWeight), maps the flat index through entries in order, then runs
+// the selected sub-feature's own placement modifiers on the same rng.
+func TestWeightedRandomSelectorPickAndModifierDrawOrder(t *testing.T) {
+	reg := feature.NewEmbeddedRegistry()
+	view := build3x3([2]int{0, 0}, -64, 384)
+	origin := placement.BlockPos{X: 0, Y: 5, Z: 0}
+	inSquare := `{"type":"minecraft:in_square"}`
+	names := []string{"minecraft:stone", "minecraft:cobblestone", "minecraft:diorite", "minecraft:andesite"}
+	weights := []int{0, 2, 3, 4}
+	entries := make([]string, len(names))
+	for i, name := range names {
+		entries[i] = weightedEntryJSON(weights[i], leafConfigJSON(name, inSquare))
+	}
+	cfg := fmt.Sprintf(`{"features":[%s,%s,%s,%s]}`, entries[0], entries[1], entries[2], entries[3])
+	cf := newSelectorCF(t, reg, "weighted_random_selector", cfg)
+
+	const seed = int64(0x776)
+	oracle := levelgen.NewWorldgenRandom(seed)
+	total := 0
+	for _, weight := range weights {
+		total += weight
+	}
+	pick := int(oracle.NextIntN(int32(total)))
+	wantIdx := -1
+	remaining := pick
+	for i, weight := range weights {
+		remaining -= weight
+		if remaining < 0 {
+			wantIdx = i
+			break
+		}
+	}
+	wantPos := nextInSquarePos(oracle, origin)
+
+	rng := levelgen.NewWorldgenRandom(seed)
+	if !runBody(view, reg, cf, rng, origin) {
+		t.Fatalf("weighted_random_selector placed nothing")
+	}
+	wantState, err := blockStateOf(names[wantIdx])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := view.GetBlock(wantPos.X, wantPos.Y, wantPos.Z); got != wantState {
+		t.Fatalf("weighted_random_selector picked/placed wrong entry: flat pick %d idx %d got %v at %v want %s", pick, wantIdx, got, wantPos, names[wantIdx])
+	}
+	if rng.NextLong() != oracle.NextLong() {
+		t.Fatalf("weighted_random_selector consumed the wrong draw order (want pick draw before selected child's in_square draws)")
+	}
+}
+
+// TestWeightedRandomSelectorZeroTotalConsumesNoDraw: WeightedList.getRandom returns
+// Optional.empty without calling nextInt when the total weight is zero.
+func TestWeightedRandomSelectorZeroTotalConsumesNoDraw(t *testing.T) {
+	reg := feature.NewEmbeddedRegistry()
+	view := build3x3([2]int{0, 0}, -64, 384)
+	origin := placement.BlockPos{X: 3, Y: 5, Z: 3}
+	cfg := fmt.Sprintf(`{"features":[%s,%s]}`,
+		weightedEntryJSON(0, leafConfigJSON("minecraft:cobblestone", "")),
+		weightedEntryJSON(0, leafConfigJSON("minecraft:diorite", "")))
+	cf := newSelectorCF(t, reg, "weighted_random_selector", cfg)
+
+	const seed = int64(0x600D)
+	rng := levelgen.NewWorldgenRandom(seed)
+	oracle := levelgen.NewWorldgenRandom(seed)
+	if runBody(view, reg, cf, rng, origin) {
+		t.Fatalf("weighted_random_selector with zero total weight placed")
+	}
+	if got := view.GetBlock(origin.X, origin.Y, origin.Z); got != block.ToStateID[block.Air{}] {
+		t.Fatalf("weighted_random_selector zero-weight path wrote state %v", got)
+	}
+	if rng.NextLong() != oracle.NextLong() {
+		t.Fatalf("weighted_random_selector zero total weight consumed a draw")
 	}
 }
 
