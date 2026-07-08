@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/imhinotori/sulfur/data/registryid"
 	"github.com/imhinotori/sulfur/data/item"
 	"github.com/imhinotori/sulfur/level/component"
 	pk "github.com/imhinotori/sulfur/net/packet"
@@ -580,6 +581,20 @@ func (t *TickLoop) playerTouchItem(p *tickPlayer, e *Entity) {
 	// slot the pickup changed so the client always reflects the picked-up stack (BUG-3).
 	t.takeItem(p, e, count)
 	t.broadcastInventoryChanges(p, inv, before)
+
+	// PROGRESS (advancements.go/stats.go): a pickup is an inventory change. Feed the
+	// minecraft:inventory_changed advancement trigger with the picked-up item id (reaches
+	// story/root crafting_table + the "obtain item" advancement class) and bump the
+	// ITEM_PICKED_UP stat by the count taken. itemID indexes registryid.Item; an out-of-range
+	// id is skipped by the trigger/stat helpers (never a panic). CITE: PickedUpItemTrigger +
+	// Stats.ITEM_PICKED_UP + CriteriaTriggers.INVENTORY_CHANGED.
+	if int(e.itemStack.ItemID) >= 0 && int(e.itemStack.ItemID) < len(registryid.Item) {
+		picked := registryid.Item[e.itemStack.ItemID]
+		t.triggerInventoryChanged(p, picked)
+		if p.stats != nil {
+			p.stats.increment(statKey{typeID: StatTypePickedUp, valueID: int32(e.itemStack.ItemID)}, int32(count))
+		}
+	}
 
 	// If the whole stack was absorbed (leftover empty), discard the item entity now — the
 	// tracker emits RemoveEntities next tick (it leaves near()). A partial pickup leaves the

@@ -257,6 +257,13 @@ func (t *TickLoop) RunSaveLoop(ctx context.Context, worldDir string) {
 			if err := savePlayer(worldDir, snap.uuid, snap.data); err != nil {
 				log.Printf("save player %s: %v", snap.uuid, err)
 			}
+			// STATISTICS (stats.go): persist the player's StatsCounter to world/stats/<uuid>.json off
+			// the tick alongside the .dat, over the immutable snapshot taken on the owner at leave.
+			if snap.stats != nil {
+				if err := saveStats(worldDir, snap.uuid, snap.stats); err != nil {
+					log.Printf("save stats %s: %v", snap.uuid, err)
+				}
+			}
 		}
 	}
 }

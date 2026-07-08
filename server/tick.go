@@ -544,6 +544,12 @@ type TickLoop struct {
 	// raid_persist.go / poi_persist.go for the on-disk shapes.
 	persistDir string
 
+	// advancements is the immutable, boot-loaded advancement DEFINITION tree (advancements.go). It
+	// is shared read-only across all players (the recipe-table discipline): loaded ONCE off the tick
+	// (loadAdvancementTree over the embedded JSON), then only READ on the tick (login sync + grant).
+	// A nil tree makes the login sync a cheap no-op (tests that never join a real client leave it nil).
+	advancements *advancementTree
+
 	// savedDataTickCounter counts ticks toward the next periodic raid/POI save pass, mirroring
 	// chunkSaveTickCounter (independent so a raid/POI flush never blocks on the chunk pass).
 	savedDataTickCounter int
@@ -1215,6 +1221,19 @@ type tickPlayer struct {
 	// full crossbow draw loaded a bolt (CrossbowItem.onUseTick tryLoadProjectiles). The next CrossbowItem.use
 	// fires the loaded bolt and clears this. Tick-owned. Cite CrossbowItem (DataComponents.CHARGED_PROJECTILES).
 	crossbowCharged bool
+
+	// stats is the player's StatsCounter (stats.go): the per-player statistic tallies. Loaded on join
+	// (loadStats), incremented on the tick at discrete events (mob kill, pickup, play_time per tick),
+	// answered to a ServerboundClientCommand(request_stats) with ClientboundAwardStats, and saved on
+	// leave. Tick-owned (mutated only on the tick goroutine, like the inventory). nil for a
+	// test-constructed player that never joined a real world; increments nil-guard so the tick never
+	// panics on a stats-less player.
+	stats *StatsCounter
+
+	// advancements is the player's PlayerAdvancements (advancements.go): the per-advancement criterion
+	// progress. Login sync sends the whole tree + this progress; a criterion grant emits a delta +
+	// toast. Tick-owned. nil for a test-constructed player that never joined; grant paths nil-guard.
+	advancements *playerAdvancements
 }
 
 // Health constants for a fresh survival player (the ENT-05 defaults). maxHealth is the vanilla
@@ -1617,6 +1636,10 @@ func (t *TickLoop) nextTeleportID() int {
 type playerLeaveSnapshot struct {
 	uuid uuid.UUID
 	data save.PlayerData
+	// stats is the player's StatsCounter snapshot (stats.go), deep-copied on the owner at leave so
+	// the off-tick save path writes world/stats/<uuid>.json without touching tick-owned state (the
+	// same immutable-snapshot discipline as data). nil for a player that never had a counter.
+	stats *StatsCounter
 }
 
 // leaveSnapshotBuffer bounds the leave-snapshot channel. Leaves are rare relative to the tick
@@ -1814,6 +1837,19 @@ func (t *TickLoop) drainRegistrations() {
 				// tab-list/weather sync uses. ServerScoreboard startTracking replay; owner-goroutine send over
 				// the joiner connection only (mutates no tick state).
 				t.sendScoreboardStateTo(p)
+				// PROGRESS (stats.go/advancements.go) join seam: load the player's persisted
+				// StatsCounter + init an empty PlayerAdvancements, then send the login advancement
+				// sync (the whole tree + progress, reset=true). Done here on the owner (the SAME
+				// discrete join point), so the per-player progress state is single-owner (TICK-05).
+				// A "" persistDir (tests/ephemeral) still yields an empty counter (loadStats returns
+				// an empty counter on a missing file).
+				if p.stats == nil {
+					p.stats = loadStats(t.persistDir, p.uuid)
+				}
+				if p.advancements == nil {
+					p.advancements = newPlayerAdvancements()
+				}
+				t.sendAdvancementsLogin(p)
 				// WEATHER (weather.go): tell the joiner the CURRENT weather so it doesn't join to a clear
 				// sky during a storm. Vanilla's PlayerList.sendLevelInfo sends, when isRaining():
 				// START_RAINING(0) -> RAIN_LEVEL_CHANGE(getRainLevel(1)) -> THUNDER_LEVEL_CHANGE(getThunderLevel(1)).
@@ -1872,7 +1908,7 @@ func (t *TickLoop) removePlayer(c *Client) {
 	// A nil channel (no save sink wired) or a full buffer is a cheap skipped no-op — a leave
 	// never parks the tick on persistence.
 	if t.leaveSnapshots != nil {
-		snap := playerLeaveSnapshot{uuid: p.uuid, data: snapshotPlayer(p)}
+		snap := playerLeaveSnapshot{uuid: p.uuid, data: snapshotPlayer(p), stats: snapshotStats(p.stats)}
 		select {
 		case t.leaveSnapshots <- snap:
 		default: // buffer full: drop this save rather than stall the tick (rare; leaves are sparse)
@@ -2084,8 +2120,18 @@ func (t *TickLoop) dispatch(c *Client, p pk.Packet) {
 		if player != nil {
 			var action pk.VarInt
 			if err := p.Scan(&action); err == nil {
-				if int32(action) == clientCommandPerformRespawn && player.dead {
-					t.performRespawn(player)
+				switch int32(action) {
+				case clientCommandPerformRespawn:
+					if player.dead {
+						t.performRespawn(player)
+					}
+				case clientCommandRequestStats:
+					// REQUEST_STATS (stats.go): the client opened the statistics screen. Answer with
+					// ClientboundAwardStats carrying the player's whole StatsCounter (VERIFIED wire:
+					// ServerStatsCounter.sendStats). Nil-guarded (a stats-less player sends an empty map).
+					if player.client != nil {
+						player.client.Send(encodeAwardStats(statsOrEmpty(player.stats)))
+					}
 				}
 			}
 		}
@@ -2124,6 +2170,25 @@ func (t *TickLoop) dispatch(c *Client, p pk.Packet) {
 		// (unknown connection) is a cheap no-op.
 		if player != nil {
 			t.handleChat(player, p)
+		}
+	case packetid.ServerboundSeenAdvancements:
+		// The client's advancement-tab action (advancements.go). ServerboundSeenAdvancementsPacket is
+		// jar-verified as: VarInt action (0 == OPENED_TAB, 1 == CLOSED_SCREEN) + (only when OPENED_TAB)
+		// Identifier tab. On OPENED_TAB we echo a ClientboundSelectAdvancementsTab so the client's tab
+		// selection is server-acknowledged (vanilla ServerPlayer.setSelectedTab). CLOSED_SCREEN is a
+		// no-op. Decode defensively — a Scan error is a silent no-op (T-3-02).
+		if player != nil && player.client != nil {
+			var action pk.VarInt
+			if err := p.Scan(&action); err == nil && int32(action) == 0 {
+				// OPENED_TAB carries the tab Identifier after the action VarInt. Scan BOTH in one
+				// call (Scan re-reads from offset 0 each invocation, so the tab must be decoded in
+				// the same pass that consumes the action prefix).
+				var a2 pk.VarInt
+				var tab pk.String
+				if err := p.Scan(&a2, &tab); err == nil {
+					player.client.Send(encodeSelectAdvancementsTab(string(tab)))
+				}
+			}
 		}
 	case packetid.ServerboundChatAck, packetid.ServerboundChatSessionUpdate:
 		// The chat acknowledgement (A6) and the chat-session update (a public-key session the

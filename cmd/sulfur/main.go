@@ -291,6 +291,10 @@ func main() {
 	// file/dir is a clean first-boot no-op. See server/saveddata.go.
 	tick.SetPersistDir(worldDir)
 	tick.LoadPersistedData()
+	// PROGRESS (server/advancements.go): load the embedded advancement DEFINITION tree ONCE at boot
+	// (off the tick, before Run). The join seam then sends each player the whole tree + their
+	// progress (ClientboundUpdateAdvancements, reset=true) so a vanilla client shows the tree screen.
+	tick.SetAdvancements()
 	// ENT-05: tell the tick where the world spawn surface is so an in-game respawn
 	// re-teleports a player two blocks above it — the same placement the join bootstrap
 	// uses (NewGameTick is handed the same spawnSurfaceY below). For the noise generator

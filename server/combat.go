@@ -617,6 +617,13 @@ func (t *TickLoop) die(p *tickPlayer) {
 	p.dead = true
 	p.client.Send(playerCombatKill(p.entityID, chat.Text("You died")))
 
+	// STATISTICS (stats.go): a death bumps the CUSTOM minecraft:deaths counter (the stats-screen
+	// "Deaths" row). Nil-guarded (a test-constructed player has no counter). CITE: Stats.DEATHS
+	// incremented in ServerPlayer.die.
+	if p.stats != nil {
+		p.stats.incrementCustom("minecraft:deaths", 1)
+	}
+
 	// Player.die death-loot + XP tail (death_player.go): the 1:1 port of the LivingEntity.die ->
 	// dropAllDeathLoot path a player runs (dropEquipment drops + clears the inventory when
 	// !KEEP_INVENTORY; dropExperience awards the capped XP orbs and resets the player XP to 0). Gated

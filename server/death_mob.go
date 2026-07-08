@@ -16,6 +16,7 @@ package server
 // RemoveEntities (the tracker's near() no longer returns the gone entity — A2).
 
 import (
+	"github.com/imhinotori/sulfur/data/registryid"
 	"math/rand/v2"
 
 	"github.com/imhinotori/sulfur/data/entity"
@@ -80,6 +81,25 @@ func (t *TickLoop) dieEntity(e *Entity, src damageSource) {
 		e.health = 0
 	}
 	e.lastDamageSource = src
+
+	// STATISTICS (stats.go): if a PLAYER dealt the lethal blow, credit their statistics — the
+	// ENTITY_KILLED[mobType] tally + the CUSTOM minecraft:mob_kills counter (the stats screen
+	// "Mobs Killed" + per-mob rows). src.attacker is the causing entity id (0 == no entity source,
+	// e.g. fall/lava). e.typ indexes registryid.EntityType directly (entity.Pig.ID == the registry
+	// index). Nil-guarded so a mob killed by the environment or a stats-less player is a no-op.
+	//	[VERIFIED javap Player.awardKillScore / LivingEntity.dropAllDeathLoot flow: on a player kill
+	//	 the killer awards Stats.ENTITY_KILLED.get(type) + Stats.MOB_KILLS. The minecraft:player_killed_entity
+	//	 ADVANCEMENT trigger (entity_type predicate) is DEFERRED here — the predicate-condition feed is
+	//	 not parsed (only inventory_changed item ids are), so kill_a_mob et al. are not granted; the
+	//	 kill STAT (the load-bearing stats-screen observable) is wired.]
+	if src.attacker != 0 {
+		if killer := t.playerByEntityID(src.attacker); killer != nil && killer.stats != nil {
+			if int(e.typ) >= 0 && int(e.typ) < len(registryid.EntityType) {
+				killer.stats.increment(statKey{typeID: StatTypeKilled, valueID: int32(e.typ)}, 1)
+			}
+			killer.stats.incrementCustom("minecraft:mob_kills", 1)
+		}
+	}
 
 	// dropAllDeathLoot(level, source) — the loot table + the XP orb. Vanilla rolls loot in die() while
 	// the entity is still in the world, so the drops spawn at the mob's still-current position. The

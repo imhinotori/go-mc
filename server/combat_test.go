@@ -455,14 +455,19 @@ func TestRespawnFlow(t *testing.T) {
 		}
 	})
 
-	t.Run("REQUEST_STATS is a no-op, malformed never panics", func(t *testing.T) {
+	t.Run("REQUEST_STATS answers AwardStats, malformed never panics", func(t *testing.T) {
 		p := combatPlayer(loop, 13)
+		p.stats = newStatsCounter()
 		loop.dispatch(p.client, clientCommandPacket(clientCommandRequestStats))
 		// A malformed (empty-body) ClientCommand: Scan errors -> silent no-op.
 		loop.dispatch(p.client, pk.Packet{ID: int32(packetid.ServerboundClientCommand)})
 		ps := drainPackets(p.client)
 		if n := countID(ps, packetid.ClientboundRespawn); n != 0 {
 			t.Fatalf("REQUEST_STATS / malformed sent %d Respawn, want 0", n)
+		}
+		// REQUEST_STATS now replies with exactly one ClientboundAwardStats (stats.go).
+		if n := countID(ps, packetid.ClientboundAwardStats); n != 1 {
+			t.Fatalf("REQUEST_STATS sent %d AwardStats, want 1", n)
 		}
 	})
 }
