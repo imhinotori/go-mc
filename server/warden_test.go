@@ -162,3 +162,54 @@ func TestWardenDigsAwayAfterNoAnger(t *testing.T) {
 		t.Fatalf("warden did not despawn after the dig-away completed")
 	}
 }
+
+// TestWardenDarknessPulse: wardenApplyDarknessAround (Warden.applyDarknessAround -> MobEffectUtil
+// .addEffectToPlayersAround) gives DARKNESS 260/0 to a SURVIVAL player within 20 blocks (3D) of the
+// warden's feet, and NOT to a player 21 blocks away. The re-application gate leaves a still-long pulse
+// untouched (>199 ticks remaining) but refreshes one about to end (<=199). Verifies id/duration/amplifier
+// and the stored render flags (ambient/visible/showIcon all false). Cite Warden.applyDarknessAround.
+func TestWardenDarknessPulse(t *testing.T) {
+	loop, floorY := wardenLoop(t)
+	py := float64(floorY + 1)
+	w := loop.spawnWarden(8.5, py, 8.5, false)
+
+	near := combatTestPlayer(loop, 8.5+10.0, py, 8.5, 7201) // within 20
+	far := combatTestPlayer(loop, 8.5+21.0, py, 8.5, 7202)  // outside 20
+
+	loop.wardenApplyDarknessAround(w)
+
+	ne := near.activeEffects[effectDarkness]
+	if ne == nil {
+		t.Fatalf("player within 20 did not receive DARKNESS")
+	}
+	if ne.duration != wardenDarknessDuration || ne.amplifier != wardenDarknessAmplifier {
+		t.Fatalf("DARKNESS = dur %d amp %d, want dur %d amp %d", ne.duration, ne.amplifier, wardenDarknessDuration, wardenDarknessAmplifier)
+	}
+	if ne.ambient || ne.visible || ne.showIcon {
+		t.Fatalf("DARKNESS render flags = ambient %v visible %v showIcon %v, want all false", ne.ambient, ne.visible, ne.showIcon)
+	}
+	if far.activeEffects[effectDarkness] != nil {
+		t.Fatalf("player 21 blocks away should NOT receive DARKNESS")
+	}
+
+	// Re-application gate: a still-long pulse (>199 ticks) is NOT reset by a second call.
+	near.activeEffects[effectDarkness].duration = 250 // >199 remaining, amp >= new amp -> gated
+	loop.wardenApplyDarknessAround(w)
+	if got := near.activeEffects[effectDarkness].duration; got != 250 {
+		t.Fatalf("still-long DARKNESS was reset to %d, want left at 250 (reapply gate)", got)
+	}
+	// A pulse about to end (<=199) IS refreshed back to 260.
+	near.activeEffects[effectDarkness].duration = 100 // <=199 -> endsWithin(199) true -> re-apply
+	loop.wardenApplyDarknessAround(w)
+	if got := near.activeEffects[effectDarkness].duration; got != wardenDarknessDuration {
+		t.Fatalf("about-to-end DARKNESS refreshed to %d, want %d", got, wardenDarknessDuration)
+	}
+
+	// A CREATIVE player within range is skipped (lambda$0 isSurvival gate).
+	creative := combatTestPlayer(loop, 8.5+5.0, py, 8.5, 7203)
+	creative.gameMode = gameModeCreative
+	loop.wardenApplyDarknessAround(w)
+	if creative.activeEffects[effectDarkness] != nil {
+		t.Fatalf("creative player should NOT receive DARKNESS (isSurvival gate)")
+	}
+}

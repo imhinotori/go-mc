@@ -4,7 +4,7 @@ package server
 // port from the unobfuscated 26.2 jar. The Warden is the blind, sculk-summoned boss-tier hostile: it
 // tracks by ACCUMULATED ANGER (per-suspect), EMERGES on a sculk-shrieker summon, MELEE-SLAMS for 30
 // (ATTACK_DAMAGE 30 + ATTACK_KNOCKBACK 1.5), fires a ranged SONIC BOOM (10 dmg + knock-up, ignores
-// armor/shields), pulses DARKNESS (deferred), and DIGS AWAY + despawns after no anger. Additive +
+// armor/shields), pulses DARKNESS (now wired), and DIGS AWAY + despawns after no anger. Additive +
 // per-type-gated behind e.warden (nil for every other entity; the pig oracle stays byte-identical).
 //
 // VANILLA (verified javap this task):
@@ -30,8 +30,8 @@ package server
 // lock), SonicBoom (15/20 gate, 34-tick windup, 60 duration, 10 dmg ignoring armor/shields, 0.5/2.5
 // knock-up, 40 cooldown), EMERGE-on-spawn lock, DIG-away despawn. RNG on the warden OWN stream only.
 //
-// DEFERRED (cited): DARKNESS pulse (no DARKNESS effect in this base; server/mob_effect.go owned elsewhere)
-// -- cited no-op keeping the %120 gate + radius 20. The live-warden VibrationSystem/Sniffing anger feed is
+// WIRED: DARKNESS pulse (MobEffectUtil.addEffectToPlayersAround, now that server/mob_effect.go exists) keeps
+// the %120 gate + radius 20. The live-warden VibrationSystem/Sniffing anger feed is
 // DEFERRED -- v1 feeds anger from the DIRECT path (a nearby player within FOLLOW_RANGE + a hit). The full
 // Brain graph is reduced to the code-driven wardenAiStep (the wither/phantom bounded reduction). Emerge/dig
 // ANIMATION states + WARDEN_* sounds are client-cosmetic.
@@ -68,6 +68,12 @@ const (
 
 	wardenDarknessInterval = 120 // applyDarknessAround when (tickCount + getId()) % 120 == 0 (bipush 120)
 	wardenDarknessRadius   = 20  // applyDarknessAround(level, pos, this, 20) (bipush 20)
+	// applyDarknessAround builds new MobEffectInstance(DARKNESS, 260, 0, false, false, false) and hands it to
+	// MobEffectUtil.addEffectToPlayersAround(level, this, this.position(), 20, inst, 200). VERIFIED javap
+	// Warden.applyDarknessAround + MobEffectUtil.addEffectToPlayersAround.
+	wardenDarknessDuration     = 260 // new MobEffectInstance(DARKNESS, 260, ...) (sipush 260)
+	wardenDarknessAmplifier    = 0   // amplifier 0 (iconst_0)
+	wardenDarknessReapplyProb  = 200 // addEffectToPlayersAround(..., 200): the endsWithin gate arg is prob-1 (sipush 200)
 	wardenEmergeDuration   = 134 // WardenAi.EMERGE_DURATION = Mth.ceil(133.59999f) (static init)
 	wardenDiggingDuration  = 100 // WardenAi.DIGGING_DURATION = Mth.ceil(100.0f) (static init)
 
@@ -441,13 +447,67 @@ func (t *TickLoop) wardenTickDig(e *Entity) {
 	}
 }
 
-// wardenApplyDarknessAround ports Warden.applyDarknessAround(level, pos, this, DARKNESS_RADIUS=20): DEFERRED.
-// Vanilla pulses DARKNESS onto players within DARKNESS_RADIUS every DARKNESS_INTERVAL (the %120 gate is kept
-// in wardenAiStep). No DARKNESS MobEffect in this base + server/mob_effect.go owned elsewhere -> cited no-op,
-// structured to become "for each player within 20: addPlayerEffect(DARKNESS, DARKNESS_DURATION, 0)". Cite
-// Warden.applyDarknessAround.
+// effectDarkness is MobEffects.DARKNESS -- the registry id the Warden's pulse carries. Declared here (not in
+// mob_effect.go) so the effect subsystem's logic is untouched; addPlayerEffect stores it as a bare duration
+// effect (DARKNESS has no attribute modifier -- its screen-darken is a client render the v1 effect subsystem
+// does not yet broadcast, so the ambient/visible/showIcon flags below are stored non-observably but faithfully).
+const effectDarkness = "minecraft:darkness"
+
+// wardenApplyDarknessAround ports Warden.applyDarknessAround(level, this.position(), this, DARKNESS_RADIUS=20)
+// -> MobEffectUtil.addEffectToPlayersAround(level, this, pos, 20, new MobEffectInstance(DARKNESS, 260, 0, false,
+// false, false), 200). For every SURVIVAL player NOT allied to the warden (a player is never allied to a
+// warden, so that guard is always true) within 20 blocks (3D closerThan) of the warden's feet, add DARKNESS
+// 260/0 -- UNLESS the player already carries DARKNESS at >= this amplifier AND that instance does not end
+// within reapplyProbability-1 (=199) ticks (the re-application gate that avoids resetting a still-long pulse).
+// addPlayerEffect is the faithful LivingEntity.addEffect; the DARKNESS instance's ambient/visible/showIcon are
+// all false, so the stored effect's flags are corrected after the add (client-render only, non-observable in
+// v1 which does not yet broadcast UpdateMobEffect). Cite Warden.applyDarknessAround + MobEffectUtil
+// .addEffectToPlayersAround + its lambda$0 (isSurvival && !isAllied && closerThan && reapply-gate).
 func (t *TickLoop) wardenApplyDarknessAround(e *Entity) {
-	_ = wardenDarknessRadius // DEFERRED: no-op until the DARKNESS MobEffect lands (owned elsewhere)
+	radiusSqr := float64(wardenDarknessRadius) * float64(wardenDarknessRadius) // closerThan(pos, 20) == distSqr <= 20*20
+	for _, p := range t.players {
+		if p == nil || p.dead {
+			continue
+		}
+		// gameMode.isSurvival(): the pulse only lands on survival players (creative/spectator/adventure skip).
+		if p.gameMode != gameModeSurvival {
+			continue
+		}
+		// (source == null || !source.isAlliedTo(player)): the warden (source) is never allied to a player, so
+		// this clause is always true here -- a warden pulses DARKNESS onto every nearby survival player.
+		// player.position().closerThan(pos, 20): 3D squared-distance gate from the warden's feet.
+		dx, dy, dz := p.x-e.x, p.y-e.y, p.z-e.z
+		if dx*dx+dy*dy+dz*dz > radiusSqr {
+			continue
+		}
+		// The reapply gate (lambda$0 tail): if the player already has DARKNESS whose amplifier >= the new
+		// amplifier AND that instance does NOT end within reapplyProbability-1 ticks, skip -- do not reset a
+		// still-lengthy pulse. hasEffect(false) or a shorter/weaker existing pulse falls through and re-applies.
+		if amp, ok := playerEffectAmplifier(p, effectDarkness); ok && amp >= wardenDarknessAmplifier {
+			if cur := p.activeEffects[effectDarkness]; cur != nil && !effectEndsWithin(cur, wardenDarknessReapplyProb-1) {
+				continue
+			}
+		}
+		// ServerPlayer.addEffect(new MobEffectInstance(DARKNESS, 260, 0), warden): the faithful add. The warden
+		// is the effect source (ownerID = e.id).
+		t.addPlayerEffect(p, e.id, effectDarkness, wardenDarknessDuration, wardenDarknessAmplifier, 1.0)
+		// MobEffectInstance(DARKNESS, 260, 0, ambient=false, visible=false, showIcon=false): correct the render
+		// flags on the stored instance to match the vanilla ctor (addPlayerEffect defaults visible/showIcon=true).
+		if cur := p.activeEffects[effectDarkness]; cur != nil {
+			cur.ambient = false
+			cur.visible = false
+			cur.showIcon = false
+		}
+	}
+}
+
+// effectEndsWithin ports MobEffectInstance.endsWithin(n): !isInfiniteDuration() && duration <= n. An infinite
+// (-1) effect never ends within any finite window. Cite MobEffectInstance.endsWithin.
+func effectEndsWithin(e *activeEffect, n int) bool {
+	if e == nil || e.duration == -1 {
+		return false
+	}
+	return e.duration <= n
 }
 
 // wardenSummonPos resolves a valid nearby spawn position for a warden summoned by a shrieker at pos,

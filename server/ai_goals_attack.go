@@ -359,7 +359,14 @@ func (g *meleeAttackGoal) checkAndPerformAttack(t *TickLoop, e *Entity, target *
 		t.ironGolemDoHurtTarget(e, target)
 		return
 	}
-	g.doHurtTarget(t, e, target)
+	hurt := g.doHurtTarget(t, e, target)
+	// Husk.doHurtTarget override (MOB-VARIANT): after super.doHurtTarget, IF the hit landed AND the husk's
+	// mainhand is empty AND the target is a LivingEntity (a player here), apply HUNGER for
+	// 140 * (int)getEffectiveDifficulty() ticks at amplifier 0. Husk-gated (zero cost for every other mob).
+	// Cite Husk.doHurtTarget.
+	if e.typ == entity.Husk.ID && hurt {
+		t.huskApplyHunger(e, target)
+	}
 }
 
 // canPerformAttack ports MeleeAttackGoal.canPerformAttack: isTimeToAttack() (ticksUntilNextAttack <= 0)
@@ -404,7 +411,10 @@ func (g *meleeAttackGoal) resetAttackCooldown() {
 //
 //	[VERIFIED javap Mob.doHurtTarget: f = getAttributeValue(ATTACK_DAMAGE) d2f; getWeaponItem
 //	 .getDamageSource(this); target.hurtServer(level, src, f); on success getKnockback/causeExtraKnockback.]
-func (g *meleeAttackGoal) doHurtTarget(t *TickLoop, e *Entity, target *tickPlayer) {
+// doHurtTarget now RETURNS the landed boolean (Mob.doHurtTarget's `boolean flag`) so a subclass override
+// (Husk.doHurtTarget) can gate its post-attack effect on it, exactly as vanilla wraps `flag = super
+// .doHurtTarget(...)`.
+func (g *meleeAttackGoal) doHurtTarget(t *TickLoop, e *Entity, target *tickPlayer) bool {
 	dmg := float32(e.getAttributeValue(attribute.AttackDamage)) // (float) getAttributeValue(ATTACK_DAMAGE)
 	// getWeaponItem().getDamageSource(this): a no-weapon mob's weapon item is empty, whose getDamageSource
 	// is the generic mob attack source DamageSources.mobAttack(this) — carrying attacker = the mob id.
@@ -438,6 +448,33 @@ func (g *meleeAttackGoal) doHurtTarget(t *TickLoop, e *Entity, target *tickPlaye
 		t.doPostAttackEffects(enchEntityRef{player: target}, src)
 		// setLastHurtMob / playAttackSound: cited stubs (mob-side bookkeeping/sound).
 	}
+	return hurt // Mob.doHurtTarget returns the landed flag (consumed by the Husk override in checkAndPerformAttack)
+}
+
+// huskHungerDurationBase is Husk.doHurtTarget's HUNGER duration factor: new MobEffectInstance(HUNGER,
+// 140 * (int)getEffectiveDifficulty()) (sipush 140). The duration scales by the truncated effective
+// difficulty; amplifier 0 (the single-arg MobEffectInstance ctor). Cite Husk.doHurtTarget.
+const huskHungerDurationBase = 140
+
+// huskApplyHunger ports the Husk.doHurtTarget tail: on a landed hit with an EMPTY mainhand and a
+// LivingEntity victim, addEffect(new MobEffectInstance(HUNGER, 140 * (int)getEffectiveDifficulty()), husk).
+// getEffectiveDifficulty() reuses the faithful DifficultyInstance port (effectiveDifficulty with the same
+// localGameTime=0 / moonBrightness=0.0 reads the spawn path uses); the (int) cast truncates before *140.
+// The victim is a player, so HUNGER routes through addPlayerEffect (HungerMobEffect drains food each tick).
+// Cite Husk.doHurtTarget + DifficultyInstance.getEffectiveDifficulty.
+func (t *TickLoop) huskApplyHunger(e *Entity, target *tickPlayer) {
+	// getMainHandItem().isEmpty(): a husk in v1 carries no mainhand item, so this is true; the guard is kept
+	// faithful so an equipped husk (a later spawn-equipment roll) correctly skips the hunger, exactly as vanilla.
+	if e.getMainHandItem().Count > 0 {
+		return
+	}
+	// (int)getEffectiveDifficulty(): the truncated effective-difficulty scalar (PEACEFUL -> 0 -> no effect).
+	eff := int(effectiveDifficulty(serverDifficulty, t.gametime, 0, 0.0))
+	dur := huskHungerDurationBase * eff
+	if dur <= 0 {
+		return // (int)effectiveDifficulty == 0 (e.g. PEACEFUL or a fresh EASY world) -> a 0-tick HUNGER is a no-op add
+	}
+	t.addPlayerEffect(target, e.id, effectHunger, dur, 0, 1.0) // MobEffectInstance(HUNGER, 140*(int)effDiff, 0)
 }
 
 // isBright is the SpiderAttackGoal daylight gate's day/night proxy: a spider in BRIGHT light (vanilla
