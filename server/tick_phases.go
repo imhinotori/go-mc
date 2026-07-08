@@ -745,6 +745,15 @@ func (t *TickLoop) tickAI() {
 		if e.typ == entity.Blaze.ID {
 			t.blazeAiStep(e)
 		}
+		// PHANTOM (Task): the flying night hostile + its CIRCLE/SWOOP dive-bomb AI (PhantomAttackStrategyGoal
+		// timer -> PhantomSweepAttackGoal dive+melee / PhantomCircleAroundAnchorGoal orbit) + the PhantomMove
+		// Control flight. Per-type-gated like the ghast/blaze on e.phantom != nil, AFTER serverAiStep (the empty
+		// goalSelector no-op). The daylight burn rides the shared sunBurnTick limb (phantom added to isSunSensitive).
+		// The no-gravity + 0.91-drift integration lands in tickPhysics (also phantom-gated). ADDITIVE + phantom-
+		// gated (zero cost / zero RNG for every non-phantom -- the pig oracle stream is untouched).
+		if e.phantom != nil {
+			t.phantomAiStep(e)
+		}
 		// MAGMA CUBE (Task): the nether cube-mob's per-size slime hop (CubeMobMoveControl.tick) + the
 		// targetSelector acquisition + the CubeMobAttackGoal aggressive hop + the touch damage. Per-type-gated
 		// like the blaze, AFTER serverAiStep so the three cube goals have set the move-control state. ADDITIVE
@@ -1111,7 +1120,11 @@ func (t *TickLoop) tickPhysics() {
 			continue
 		}
 
-		if happyGhastIsFlyer(e) || ghastIsFlyer(e) {
+		// PHANTOM (Task): the Phantom is a flyer -- Phantom.travel calls travelFlying(input, 0.2f), the
+		// SAME no-gravity + deltaMovement *= 0.91 branch the ghast uses. Its move-control (phantomMoveControl
+		// Tick) already set deltaMovement this tick; here that velocity is drag-scaled by 0.91 and integrated
+		// (no gravity, no sink), so the phantom circles + dives freely. Cite Phantom.travel -> travelFlying.
+		if happyGhastIsFlyer(e) || ghastIsFlyer(e) || phantomIsFlyer(e) {
 			// happy_ghast + GHAST (Task): the travelFlying AIR branch (HappyGhast.travel -> LivingEntity.travelFlying).
 			// There is NO gravity for a hovering ghast; deltaMovement is scaled by 0.91 on ALL three axes
 			// (deltaMovement *= 0.91f) so the moveControl kick (happyGhastAiStep) drifts and settles. The

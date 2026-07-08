@@ -397,6 +397,16 @@ func blazeSupplier() *Supplier {
 		Build()
 }
 
+// phantomSupplier is the port of Phantom's DefaultAttributes registration: Monster.createMonsterAttributes()
+// with NO extra overrides (MAX_HEALTH is the createLivingAttributes default 20.0; ATTACK_DAMAGE is the
+// createMonsterAttributes registration default 2.0). updatePhantomSizeInfo() OVERRIDES ATTACK_DAMAGE to
+// 6 + phantomSize at runtime (setPhantomSize in phantom.go), so the base 2.0 here is the pre-size-info
+// value the size-info write replaces. Cite DefaultAttributes.PHANTOM -> Monster.createMonsterAttributes()
+// (javap this task: PHANTOM entry is `Monster.createMonsterAttributes().build()`, no per-attribute add).
+func phantomSupplier() *Supplier {
+	return createMonsterAttributes().Build()
+}
+
 // magmaCubeSupplier is the port of MagmaCube.createAttributes(): Monster.createMonsterAttributes()
 // + MOVEMENT_SPEED 0.20000000298023224 (jar: net.minecraft.world.entity.monster.cubemob.MagmaCube
 // .createAttributes == createMonsterAttributes().add(MOVEMENT_SPEED, 0.20000000298023224d)). MAX_HEALTH
@@ -800,6 +810,11 @@ var suppliers = map[string]*Supplier{
 	// .createMonsterAttributes + ATTACK_DAMAGE 6.0 + MOVEMENT_SPEED 0.23 + FOLLOW_RANGE 48.0 (MAX_HEALTH
 	// is the createLivingAttributes default 20.0). Keyed by its registry name so NewMapForEntity resolves it.
 	"blaze": blazeSupplier(),
+	// PHANTOM (Task): the flying night hostile that dive-bombs sleepless players. Phantom registers
+	// Monster.createMonsterAttributes() (MAX_HEALTH 20.0 default, ATTACK_DAMAGE default 2.0);
+	// updatePhantomSizeInfo sets ATTACK_DAMAGE = 6 + size at spawn (setPhantomSize). Keyed by its
+	// registry name so NewMapForEntity resolves it (its MobCategory is monster). Cite DefaultAttributes.PHANTOM.
+	"phantom": phantomSupplier(),
 	// MAGMA CUBE (Task): the nether cube-mob (MagmaCube.createAttributes: Monster.createMonsterAttributes
 	// + MOVEMENT_SPEED 0.20000000298023224). setSize OVERRIDES MAX_HEALTH (size*size), MOVEMENT_SPEED
 	// (0.2+0.1*size), ATTACK_DAMAGE (size), ARMOR (size*3) at runtime. Keyed by its registry name so

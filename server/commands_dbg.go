@@ -193,6 +193,15 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned blaze eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+1, p.z))
 		}
+	case "phantom":
+		// PHANTOM (Task): spawn a Phantom directly (the flying night hostile that dive-bombs). It scans for the
+		// nearest player every 60 ticks, CIRCLES a high anchor above the target, then periodically SWOOPS down
+		// (dive-bomb) to melee for 6.0 and climbs back. It BURNS in daylight (undead, 8s ignite roll). Spawned
+		// 12 blocks up so it has room to circle + dive. Use at night to avoid the immediate daylight burn.
+		e := t.spawnPhantom(p.x, p.y+12, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned phantom eid=%d at (%.1f,%.1f,%.1f) -- circles then dive-bombs; burns in daylight", e.id, p.x, p.y+12, p.z))
+		}
 	case "magma_cube", "magmacube":
 		// MAGMA CUBE (Task): spawn a hostile MagmaCube (the nether slime that hops, splits on death into
 		// 2..4 smaller cubes, and touches for size+2 damage; per-size MAX_HEALTH size*size, MOVEMENT_SPEED
@@ -458,7 +467,7 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned thrown trident eid=%d (power 2.5 in look dir)", e.id))
 		}
 	default:
-		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | dragon | iron_golem | villager | villager_farmer | vex | ghast_hostile | blaze | strider | wither_skeleton | wither | hoglin | bee | goat | frog | camel | sniffer | allay | axolotl | fangs | water | pig-in-water | raid | rain | redstone | trade | trident | throw-trident")
+		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | dragon | iron_golem | villager | villager_farmer | vex | ghast_hostile | blaze | phantom | strider | wither_skeleton | wither | hoglin | bee | goat | frog | camel | sniffer | allay | axolotl | fangs | water | pig-in-water | raid | rain | redstone | trade | trident | throw-trident")
 	}
 }
 

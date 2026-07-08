@@ -153,7 +153,11 @@ func (t *TickLoop) sunBurnTick(e *Entity) {
 //
 //	[VERIFIED javap Zombie.isSunSensitive == true (base zombie); AbstractSkeleton.aiStep sun-burn.]
 func isSunSensitive(e *Entity) bool {
-	return e.typ == entity.Zombie.ID || e.typ == entity.Skeleton.ID
+	// PHANTOM (Task): the Phantom is in EntityTypeTags.BURN_IN_DAYLIGHT, so Mob.aiStep calls burnUndead()
+	// (isSunBurnTick -> igniteForSeconds(8)) for it exactly like the zombie/skeleton. It has no armor/head
+	// slot in v1 (bare -> always ignites), so adding it here routes it through the same shared sunBurnTick.
+	// Cite Mob.aiStep BURN_IN_DAYLIGHT gate + burn_in_daylight tag (contains minecraft:phantom).
+	return e.typ == entity.Zombie.ID || e.typ == entity.Skeleton.ID || e.typ == entity.Phantom.ID
 }
 
 // entityFireImmune ports Entity.fireImmune() (EntityType.fireImmune()) for the wired fire-immune types.

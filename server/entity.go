@@ -448,6 +448,15 @@ type Entity struct {
 	// pointer (e.wither) so a plain mob (the pig oracle) pays exactly one nil pointer and touches NONE
 	// of these fields -- additive-minimal, zero new RNG, byte-identical for every non-wither. Cite WitherBoss.
 	wither *witherState
+	// --- PHANTOM (net.minecraft.world.entity.monster.Phantom) --------------------------------------
+	//
+	// Tick-owned state, set/read ONLY for a Phantom (phantomAiStep + phantomIsFlyer gate on e.phantom !=
+	// nil). All the phantom state (the CIRCLE/SWOOP attack phase, the anchor point + altitude, the orbit
+	// angle/distance/height/clockwise, the move-target point, the move-control speed, the sweep/scan
+	// timers) is grouped behind ONE pointer (e.phantom) so a plain mob (the pig oracle) pays exactly one
+	// nil pointer and touches NONE of these fields -- additive-minimal, zero new RNG, byte-identical for
+	// every non-phantom. Cite Phantom + its three goals.
+	phantom *phantomState
 	// --- MAGMA CUBE (net.minecraft.world.entity.monster.cubemob.MagmaCube) --------------------------
 	//
 	// Tick-owned plain values, set/read ONLY for a MagmaCube (magmaCubeAiStep gates on typ ==
