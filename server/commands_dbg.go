@@ -239,6 +239,24 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned blaze eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+1, p.z))
 		}
+	case "guardian":
+		// GUARDIAN (Task): spawn an aquatic Guardian (the laser-beam hostile). It acquires the nearest player
+		// within FOLLOW_RANGE (16), CHARGES a beam for 80 ticks in line of sight, then deals 1.0 (+2 on HARD)
+		// indirect-magic damage + a 6.0 melee follow-up. A melee attacker striking it while stationary takes
+		// 2.0 spike thorns. It drowns on land (water mob) + flops. Spawned 1 block up.
+		e := t.spawnGuardian(p.x, p.y+1, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned guardian eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+1, p.z))
+		}
+	case "elder_guardian", "elderguardian":
+		// ELDER GUARDIAN (Task): spawn a boss-tier ElderGuardian (MAX_HEALTH 80, ATTACK_DAMAGE 8, bbox ~2.35x).
+		// Same laser beam (60-tick charge, +2 elder bonus so 3.0 / 5.0-on-HARD indirect + 8.0 melee) + the 2.0
+		// spike thorns, PLUS a MINING_FATIGUE III (6000-tick) AoE to every survival player within 50 blocks
+		// every 1200 ticks. Spawned 1 block up.
+		e := t.spawnElderGuardian(p.x, p.y+1, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned elder_guardian eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+1, p.z))
+		}
 	case "phantom":
 		// PHANTOM (Task): spawn a Phantom directly (the flying night hostile that dive-bombs). It scans for the
 		// nearest player every 60 ticks, CIRCLES a high anchor above the target, then periodically SWOOPS down

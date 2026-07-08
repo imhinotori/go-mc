@@ -45,6 +45,7 @@ const (
 	// remaining four are declared here. VERIFIED CFR MobEffects registrations (attribute modifiers cited on
 	// applyEffectModifiers below).
 	effectHaste      = "minecraft:haste"      // MobEffects.HASTE      (ATTACK_SPEED       +0.1 ADD_MULTIPLIED_TOTAL)
+	effectMiningFatigue = "minecraft:mining_fatigue" // MobEffects.MINING_FATIGUE (ATTACK_SPEED -0.1 ADD_MULTIPLIED_TOTAL)
 	effectResistance = "minecraft:resistance" // MobEffects.RESISTANCE (no attribute modifier; damage-reduction)
 	effectJumpBoost  = "minecraft:jump_boost" // MobEffects.JUMP_BOOST (SAFE_FALL_DISTANCE +1.0 ADD_VALUE)
 	// MOVEMENT effect ids read by the mob physics path (server/physics.go tickPhysics + jump.go). These
@@ -95,6 +96,7 @@ const (
 	// BEACON effect modifier ids (VERIFIED CFR MobEffects.*: Identifier.withDefaultNamespace("effect.<name>")).
 	speedModifierID     = "effect.speed"      // SPEED     -> MOVEMENT_SPEED
 	hasteModifierID     = "effect.haste"      // HASTE     -> ATTACK_SPEED
+	miningFatigueModifierID = "effect.mining_fatigue" // MINING_FATIGUE -> ATTACK_SPEED
 	strengthModifierID  = "effect.strength"   // STRENGTH  -> ATTACK_DAMAGE
 	jumpBoostModifierID = "effect.jump_boost" // JUMP_BOOST-> SAFE_FALL_DISTANCE
 	// ABSORPTION modifier id (VERIFIED CFR MobEffects.ABSORPTION addAttributeModifier: MAX_ABSORPTION,
@@ -108,6 +110,7 @@ const (
 	effectSpeedAmount      = 0.20000000298023224
 	effectSlownessAmount   = -0.15000000596046448
 	effectHasteAmount      = 0.10000000149011612
+	effectMiningFatigueAmount = -0.10000000149011612 // MobEffects.MINING_FATIGUE ATTACK_SPEED modifier per level (verified javap)
 	effectStrengthAmount   = 3.0
 	effectWeaknessAmount   = -4.0
 	effectJumpBoostAmount  = 1.0
@@ -381,6 +384,13 @@ func (t *TickLoop) applyEffectModifiers(p *tickPlayer, id string, amplifier int)
 			Amount:    effectHasteAmount * float64(amplifier+1),
 			Operation: attribute.AddMultipliedTotal,
 		})
+	case effectMiningFatigue:
+		// MobEffects.MINING_FATIGUE: ATTACK_SPEED -0.1*(amp+1) ADD_MULTIPLIED_TOTAL (effect.mining_fatigue).
+		h.addModifier(attrAttackSpeed, attribute.AttributeModifier{
+			ID:        miningFatigueModifierID,
+			Amount:    effectMiningFatigueAmount * float64(amplifier+1),
+			Operation: attribute.AddMultipliedTotal,
+		})
 	case effectStrength:
 		// MobEffects.STRENGTH: ATTACK_DAMAGE +3.0*(amp+1) ADD_VALUE (effect.strength).
 		h.addModifier(attrAttackDamage, attribute.AttributeModifier{
@@ -422,6 +432,8 @@ func (t *TickLoop) removeEffectModifiers(p *tickPlayer, id string) {
 		p.attributes.removeModifier(attrMovementSpeed, speedModifierID)
 	case effectHaste:
 		p.attributes.removeModifier(attrAttackSpeed, hasteModifierID)
+	case effectMiningFatigue:
+		p.attributes.removeModifier(attrAttackSpeed, miningFatigueModifierID)
 	case effectStrength:
 		p.attributes.removeModifier(attrAttackDamage, strengthModifierID)
 	case effectJumpBoost:

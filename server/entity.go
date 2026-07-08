@@ -483,6 +483,14 @@ type Entity struct {
 	// ShulkerBullet (shulkerBulletTick gates on e.shulkerBullet != nil). Additive-minimal; nil for every
 	// other entity. Cite ShulkerBullet.
 	shulkerBullet *shulkerBulletState
+	// --- GUARDIAN / ELDER_GUARDIAN (net.minecraft.world.entity.monster.{Guardian,ElderGuardian}) -----
+	//
+	// Tick-owned Guardian/ElderGuardian beam state, set/read ONLY for a guardian (guardianAiStep +
+	// guardianHurtThorns gate on e.guardian != nil). All the guardian state (the elder subtype flag + the
+	// GuardianAttackGoal.attackTime beam-charge counter) is grouped behind ONE pointer (e.guardian) so a
+	// plain mob (the pig oracle) pays exactly one nil pointer and touches NONE of these fields -- additive-
+	// minimal, zero new RNG, byte-identical for every non-guardian. Cite Guardian + Guardian.GuardianAttackGoal.
+	guardian *guardianState
 	// --- MAGMA CUBE (net.minecraft.world.entity.monster.cubemob.MagmaCube) --------------------------
 	//
 	// Tick-owned plain values, set/read ONLY for a MagmaCube (magmaCubeAiStep gates on typ ==

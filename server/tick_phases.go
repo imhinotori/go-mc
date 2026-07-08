@@ -787,6 +787,16 @@ func (t *TickLoop) tickAI() {
 		if e.typ == entity.Blaze.ID {
 			t.blazeAiStep(e)
 		}
+		// GUARDIAN / ELDER GUARDIAN (Task): the aquatic hostile + its laser-beam attack goal
+		// (GuardianAttackGoal charge 0..80/60 -> indirectMagic + melee doHurtTarget) + the ElderGuardian
+		// MINING_FATIGUE III AoE (every 1200 ticks, 50-block, 6000-tick, via the real addPlayerEffect).
+		// The spike thorns run on the hurt path (guardianHurtThorns). Per-type-gated on e.guardian != nil,
+		// AFTER serverAiStep (the empty goalSelector no-op, like blazeAiStep). Guardian is a water mob (the
+		// shared swim nav + the out-of-water flop). ADDITIVE + guardian-gated (zero cost / zero RNG for
+		// every non-guardian -- the pig oracle stream is untouched). Cite Guardian + ElderGuardian.
+			if e.guardian != nil {
+				t.guardianAiStep(e)
+			}
 		// PHANTOM (Task): the flying night hostile + its CIRCLE/SWOOP dive-bomb AI (PhantomAttackStrategyGoal
 		// timer -> PhantomSweepAttackGoal dive+melee / PhantomCircleAroundAnchorGoal orbit) + the PhantomMove
 		// Control flight. Per-type-gated like the ghast/blaze on e.phantom != nil, AFTER serverAiStep (the empty

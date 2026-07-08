@@ -429,6 +429,33 @@ func blazeSupplier() *Supplier {
 		Build()
 }
 
+// guardianSupplier is the port of Guardian.createAttributes(): Monster.createMonsterAttributes() then
+// .add(ATTACK_DAMAGE 6.0).add(MOVEMENT_SPEED 0.5).add(MAX_HEALTH 30.0). FOLLOW_RANGE stays the
+// createMobAttributes default 16.0 (Guardian adds no override). Cite
+// net.minecraft.world.entity.monster.Guardian.createAttributes (javap: createMonsterAttributes, ldc2_w
+// 6.0d ATTACK_DAMAGE, 0.5d MOVEMENT_SPEED, 30.0d MAX_HEALTH).
+func guardianSupplier() *Supplier {
+	return createMonsterAttributes().
+		AddValue(AttackDamage, 6.0).
+		AddValue(MovementSpeed, 0.5).
+		AddValue(MaxHealth, 30.0).
+		Build()
+}
+
+// elderGuardianSupplier is the port of ElderGuardian.createAttributes(): Guardian.createAttributes() then
+// .add(MOVEMENT_SPEED 0.30000001192092896).add(ATTACK_DAMAGE 8.0).add(MAX_HEALTH 80.0) — the later
+// MOVEMENT_SPEED 0.3 / ATTACK_DAMAGE 8.0 / MAX_HEALTH 80.0 override the Guardian 0.5 / 6.0 / 30.0
+// (buildKeepingLast). MOVEMENT_SPEED is the float-widened double 0.30000001192092896 (0.3f promoted). Cite
+// net.minecraft.world.entity.monster.ElderGuardian.createAttributes (javap: Guardian.createAttributes,
+// ldc2_w 0.30000001192092896d MOVEMENT_SPEED, 8.0d ATTACK_DAMAGE, 80.0d MAX_HEALTH).
+func elderGuardianSupplier() *Supplier {
+	return createMonsterAttributes().
+		AddValue(AttackDamage, 8.0).
+		AddValue(MovementSpeed, 0.30000001192092896).
+		AddValue(MaxHealth, 80.0).
+		Build()
+}
+
 // phantomSupplier is the port of Phantom's DefaultAttributes registration: Monster.createMonsterAttributes()
 // with NO extra overrides (MAX_HEALTH is the createLivingAttributes default 20.0; ATTACK_DAMAGE is the
 // createMonsterAttributes registration default 2.0). updatePhantomSizeInfo() OVERRIDES ATTACK_DAMAGE to
@@ -1075,6 +1102,14 @@ var suppliers = map[string]*Supplier{
 	// .createMonsterAttributes + ATTACK_DAMAGE 6.0 + MOVEMENT_SPEED 0.23 + FOLLOW_RANGE 48.0 (MAX_HEALTH
 	// is the createLivingAttributes default 20.0). Keyed by its registry name so NewMapForEntity resolves it.
 	"blaze": blazeSupplier(),
+	// GUARDIAN (Task): the aquatic hostile. Guardian.createAttributes: Monster.createMonsterAttributes +
+	// ATTACK_DAMAGE 6.0 + MOVEMENT_SPEED 0.5 + MAX_HEALTH 30.0 (FOLLOW_RANGE default 16.0). Keyed by its
+	// registry name so NewMapForEntity resolves it.
+	"guardian": guardianSupplier(),
+	// ELDER GUARDIAN (Task): the boss-tier guardian. ElderGuardian.createAttributes: Guardian.createAttributes
+	// + MOVEMENT_SPEED 0.3 + ATTACK_DAMAGE 8.0 + MAX_HEALTH 80.0. Keyed by its registry name so NewMapForEntity
+	// resolves it.
+	"elder_guardian": elderGuardianSupplier(),
 	// PHANTOM (Task): the flying night hostile that dive-bombs sleepless players. Phantom registers
 	// Monster.createMonsterAttributes() (MAX_HEALTH 20.0 default, ATTACK_DAMAGE default 2.0);
 	// updatePhantomSizeInfo sets ATTACK_DAMAGE = 6 + size at spawn (setPhantomSize). Keyed by its

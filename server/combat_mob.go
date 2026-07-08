@@ -72,6 +72,16 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 		}
 	}
 
+	// GUARDIAN / ELDER GUARDIAN (Task): Guardian.hurtServer runs the SPIKE THORNS at the very top of its
+	// override (before super.hurtServer): a stationary guardian (spikes fully extended) reflects 2.0 thorns
+	// onto the direct LivingEntity attacker, unless the source is AVOIDS_GUARDIAN_THORNS or THORNS itself.
+	// Gated on e.guardian != nil so every other mob is a zero-cost skip (the pig oracle is untouched). This
+	// mirrors the vanilla order (thorns fire even on an i-frame hit, before the shared pipeline). Cite
+	// Guardian.hurtServer.
+	if e.guardian != nil {
+		t.guardianHurtThorns(e, src)
+	}
+
 	// FIRE_RESISTANCE guard (LivingEntity.hurtServer bytecode 20-41): `if (source.is(IS_FIRE) &&
 	// hasEffect(FIRE_RESISTANCE)) return false;` — AFTER isDeadOrDying, BEFORE the amount<0 clamp.
 	// Live for mobs: the on_fire tick routes through here (fire.go) and the witch self-drinks a
