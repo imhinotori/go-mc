@@ -488,6 +488,18 @@ type Entity struct {
 	// size*size, MOVEMENT_SPEED 0.2+0.1*size, ATTACK_DAMAGE size, ARMOR size*3) live in the AttributeMap.
 	// Zero for every non-magma-cube entity. Cite MagmaCube + AbstractCubeMob.
 	isMagmaCube bool
+	// --- SLIME (net.minecraft.world.entity.monster.cubemob.Slime) ----------------------------------
+	//
+	// Tick-owned plain values, set/read ONLY for a Slime (slimeAiStep gates on typ == entity.Slime.ID).
+	// isSlime marks the entity. Slime is an AbstractCubeMob, so it REUSES the shared cube move-control
+	// fields above (cubeSize/cubeMoveYRot/cubeJumpDelay/cubeAggressive/cubeWantMove/cubeWasOnGround) --
+	// an entity is exactly one of SulfurCube / MagmaCube / Slime, never two, so the shared cube fields
+	// never collide. slimeXpReward mirrors the Slime.setSize `xpReward = size` field (Mob.getBaseExperience
+	// Reward returns xpReward; Slime does NOT override it, unlike Animal's 1+nextInt(3)). The per-size
+	// attributes (MAX_HEALTH size*size, MOVEMENT_SPEED 0.2+0.1*size, ATTACK_DAMAGE size -- NO ARMOR)
+	// live in the AttributeMap. Zero for every non-slime entity. Cite Slime + AbstractCubeMob.
+	isSlime       bool
+	slimeXpReward int32
 	// --- STRIDER (net.minecraft.world.entity.monster.Strider) --------------------------------------
 	//
 	// Tick-owned plain values, set/read ONLY for a Strider (striderAiStep gates on typ == entity.Strider.ID).

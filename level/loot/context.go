@@ -92,6 +92,16 @@ type LootContext struct {
 	// NewFishingLootContext; every non-fishing context leaves it false (its tables never read it).
 	// Source: javap FishingHookPredicate.matches (inOpenWater test) + FishingHook.isOpenWaterFishing.
 	InOpenWater bool
+
+	// --- CUBE-MOB (slime/magma_cube) loot context ------------------------------------------------
+	//
+	// The entities/slime + entities/magma_cube tables gate their per-size pools on an
+	// entity_properties condition over THIS_ENTITY: predicate minecraft:type_specific/cube_mob.size
+	// == N (the slimeball pool is size 1; magma_cream is size > 1). CubeMobSize carries the dying
+	// cube's getSize() at roll time so the type_specific/cube_mob size term resolves. 0 for every
+	// non-cube context (its tables never read it). Populated from EntityLootParams.CubeMobSize.
+	// Source: javap CubeMobPredicate (size MinMaxBounds.Ints matches) + entities/slime.json.
+	CubeMobSize int
 }
 
 // EntityLootParams carries the entity (death) loot-context inputs NewEntityLootContext threads into
@@ -102,6 +112,10 @@ type EntityLootParams struct {
 	VictimOnFire         bool
 	AttackerLootingLevel int
 	AttackerSmeltsLoot   bool
+	// CubeMobSize is THIS_ENTITY's getSize() for a cube-mob (slime/magma_cube) death; 0 otherwise.
+	// The type_specific/cube_mob size condition reads it (slimeball pool: size == 1). Cite Slime.remove
+	// -> dropFromLootTable roll while getSize() is still the dying cube's size.
+	CubeMobSize int
 }
 
 // NewEntityLootContext builds a LootContext for an ENTITY (death) loot roll: the LegacyRandomSource
@@ -118,6 +132,7 @@ func NewEntityLootContext(seed int64, luck float32, p EntityLootParams) *LootCon
 	c.VictimOnFire = p.VictimOnFire
 	c.AttackerLootingLevel = p.AttackerLootingLevel
 	c.AttackerSmeltsLoot = p.AttackerSmeltsLoot
+	c.CubeMobSize = p.CubeMobSize
 	return c
 }
 

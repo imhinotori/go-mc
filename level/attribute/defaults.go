@@ -464,6 +464,20 @@ func magmaCubeSupplier() *Supplier {
 		Build()
 }
 
+// slimeSupplier is the port of the SLIME DefaultAttributes registration: DefaultAttributes maps
+// EntityType.SLIME -> Monster.createMonsterAttributes().build() (jar: DefaultAttributes.<clinit>
+// put(SLIME, Monster.createMonsterAttributes().build())). UNLIKE MagmaCube, Slime adds NO MOVEMENT_SPEED
+// in the supplier -- MOVEMENT_SPEED comes from createLivingAttributes (registered, default 0.0) and is
+// set to 0.2+0.1*size at runtime by AbstractCubeMob.setSize. MAX_HEALTH stays the createLivingAttributes
+// default 20.0 in the supplier and ATTACK_DAMAGE the createMonsterAttributes default 2.0 -- BOTH are
+// OVERRIDDEN at runtime by setSize (AbstractCubeMob.setSize: MAX_HEALTH = size*size; Slime.setSize:
+// ATTACK_DAMAGE = size). Slime adds NO ARMOR (MagmaCube's size*3 is MagmaCube-only). FOLLOW_RANGE is the
+// createMobAttributes 16.0 (the target selector range). Cite DefaultAttributes(SLIME) + Slime.setSize.
+func slimeSupplier() *Supplier {
+	return createMonsterAttributes().
+		Build()
+}
+
 // striderSupplier is the port of Strider.createAttributes(): Animal.createAnimalAttributes() +
 // MOVEMENT_SPEED 0.17499999701976776 (jar: net.minecraft.world.entity.monster.Strider.createAttributes
 // == createAnimalAttributes().add(MOVEMENT_SPEED, 0.17499999701976776d)). MAX_HEALTH is the
@@ -1027,6 +1041,12 @@ var suppliers = map[string]*Supplier{
 	// (0.2+0.1*size), ATTACK_DAMAGE (size), ARMOR (size*3) at runtime. Keyed by its registry name so
 	// NewMapForEntity resolves it. Cite MagmaCube.createAttributes.
 	"magma_cube": magmaCubeSupplier(),
+	// SLIME (Task): the overworld/swamp cube-mob (Slime's DefaultAttributes registration:
+	// Monster.createMonsterAttributes().build() -- NO MOVEMENT_SPEED add, unlike MagmaCube). setSize
+	// OVERRIDES MAX_HEALTH (size*size), MOVEMENT_SPEED (0.2+0.1*size), ATTACK_DAMAGE (size) at runtime;
+	// Slime adds NO ARMOR. Keyed by its registry name so NewMapForEntity resolves it. Cite
+	// DefaultAttributes(SLIME) + Slime.setSize.
+	"slime": slimeSupplier(),
 	// STRIDER (Task): the nether lava-walking Animal (Strider.createAttributes: Animal.createAnimalAttributes
 	// + MOVEMENT_SPEED 0.17499999701976776; MAX_HEALTH the createLivingAttributes default 20.0). The
 	// suffocating cold-state applies a transient -0.34 ADD_MULTIPLIED_BASE MOVEMENT_SPEED modifier. Cite

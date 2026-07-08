@@ -826,6 +826,15 @@ func (t *TickLoop) tickAI() {
 		if e.typ == entity.MagmaCube.ID {
 			t.magmaCubeAiStep(e)
 		}
+		// SLIME (Task): the overworld/swamp cube-mob's per-size slime hop (the SHARED CubeMobMoveControl.tick)
+		// + the targetSelector acquisition + the CubeMobAttackGoal hop (aggressive only for a size>1 slime,
+		// since isDealsDamage is size-gated) + the touch damage (a tiny size-1 slime does NOT deal damage).
+		// Per-type-gated like the magma cube, AFTER serverAiStep so the three cube goals have set the
+		// move-control state. ADDITIVE + slime-gated (zero cost / zero RNG for every non-slime -- the pig
+		// oracle stream is untouched). Cite Slime + AbstractCubeMob.
+		if e.typ == entity.Slime.ID {
+			t.slimeAiStep(e)
+		}
 		// STRIDER (Task): the nether lava-walker's cold-state suffocation toggle (Strider.tick) + the lava-
 		// surface float (floatStrider). Per-type-gated like the blaze, AFTER serverAiStep. Its in-lava vertical
 		// motion is owned here (tickPhysics bypasses the generic lava sink via striderIsLavaWalker). ADDITIVE +

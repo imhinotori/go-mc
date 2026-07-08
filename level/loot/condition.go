@@ -147,8 +147,58 @@ func parseCondition(rc rawCondition) (LootCondition, error) {
 		// form this is so the condition reads the matching cited-stub context field (VictimOnFire /
 		// AttackerSmeltsLoot). javap LootItemEntityPropertyCondition.test (EntityPredicate.matches).
 		return parseEntityProperties(rc)
+	case "inverted":
+		// InvertedLootItemCondition.test: NOT the inner term. The slime table wraps a
+		// damage_source_properties(frog) in inverted -> "NOT killed by a frog" gates the slime_ball pool.
+		// javap InvertedLootItemCondition.test: return !this.term.test(ctx).
+		var inner rawCondition
+		if raw, ok := rc["term"]; ok {
+			if err := json.Unmarshal(raw, &inner); err != nil {
+				return nil, fmt.Errorf("inverted term: %w", err)
+			}
+		}
+		term, err := parseCondition(inner)
+		if err != nil {
+			return nil, err
+		}
+		return &invertedCondition{term: term}, nil
+	case "damage_source_properties":
+		// DamageSourceCondition.test: the kill DamageSource matches the predicate. The slime table's only
+		// use is source_entity type == frog (the "killed by a frog" term, wrapped in inverted). v1 has no
+		// frog kills, so this is a cited constant-FALSE (KilledByFrog default false) -> inverted -> true,
+		// the correct v1 slime_ball drop. Structured so a real frog-source read slots in. Cite
+		// DamageSourceCondition.test + DamageSourcePredicate (source_entity entity_type).
+		return &damageSourceCondition{kind: damageSourceUnknown}, nil
 	default:
-		return nil, fmt.Errorf("loot condition %q not ported (location_check/match_tool/survives_explosion/any_of/all_of/killed_by_player/entity_properties in scope)", typeStr)
+		return nil, fmt.Errorf("loot condition %q not ported (location_check/match_tool/survives_explosion/any_of/all_of/killed_by_player/entity_properties/inverted/damage_source_properties in scope)", typeStr)
+	}
+}
+
+// invertedCondition is the port of net.minecraft.world.level.storage.loot.predicates
+// .InvertedLootItemCondition: test == !term.test(ctx). Used by the slime table (NOT killed by a frog).
+type invertedCondition struct{ term LootCondition }
+
+func (c *invertedCondition) Test(ctx *LootContext) bool { return !c.term.Test(ctx) }
+
+// damageSourceKind is which death-source fact a damage_source_properties condition asserts. The only
+// entity-table use (slime) is source_entity==frog, which v1 never satisfies -> damageSourceUnknown.
+type damageSourceKind int
+
+const (
+	// damageSourceUnknown: a source form v1 does not model (source_entity==frog) -> Test FALSE (the
+	// conservative default; wrapped in inverted it yields the correct "not a frog kill" true). Cited so
+	// a real DamageSourcePredicate match slots in.
+	damageSourceUnknown damageSourceKind = iota
+)
+
+// damageSourceCondition is the port of DamageSourceCondition for the entity-table form. Test reads the
+// matching cited-stub context fact; an unmodeled form (source_entity==frog) tests FALSE.
+type damageSourceCondition struct{ kind damageSourceKind }
+
+func (c *damageSourceCondition) Test(ctx *LootContext) bool {
+	switch c.kind {
+	default:
+		return false // unmodeled source form (e.g. killed-by-frog) -> conservative false.
 	}
 }
 
@@ -203,6 +253,11 @@ const (
 	// THIS_ENTITY (the FishingHook) is fishing in OPEN water (reads InOpenWater, the retrieve-time
 	// isOpenWaterFishing()). Gates the fishing table's TREASURE sub-table.
 	entityPropInOpenWater
+	// entityPropCubeMobSize: entity="this" predicate.type_specific/cube_mob.size==N — THIS_ENTITY
+	// (a slime/magma_cube) has getSize()==N (reads CubeMobSize). Gates the per-size pools of the
+	// slime/magma_cube tables (slimeball pool: size 1). The wanted size is carried in the condition.
+	// Source: javap CubeMobPredicate + entities/slime.json type_specific/cube_mob.size.
+	entityPropCubeMobSize
 	// entityPropUnknown: a form this v1 port does not model (a future entity table) — TEST FALSE
 	// (the conservative default: a drop gated on an unmodeled predicate does not fire, never a
 	// wrong/extra drop). Cited so the real EntityPredicate match slots in later.
@@ -214,6 +269,9 @@ const (
 // context field. An unrecognized form tests FALSE (the conservative default — never a wrong drop).
 type entityPropertyCondition struct {
 	kind entityPropertyKind
+	// wantSize is the target getSize() for an entityPropCubeMobSize form (the type_specific/cube_mob
+	// size term). Zero for every other kind.
+	wantSize int
 }
 
 func (e *entityPropertyCondition) Test(ctx *LootContext) bool {
@@ -224,6 +282,8 @@ func (e *entityPropertyCondition) Test(ctx *LootContext) bool {
 		return ctx.AttackerSmeltsLoot
 	case entityPropInOpenWater:
 		return ctx.InOpenWater
+	case entityPropCubeMobSize:
+		return ctx.CubeMobSize == e.wantSize
 	default:
 		return false // unmodeled predicate form -> conservative false (no wrong drop).
 	}
@@ -248,6 +308,10 @@ func parseEntityProperties(rc rawCondition) (LootCondition, error) {
 		// predicate.minecraft:type_specific/fishing_hook.in_open_water == true -> the fishing form.
 		if entityPredicateWantsOpenWater(predRaw) {
 			return &entityPropertyCondition{kind: entityPropInOpenWater}, nil
+		}
+		// predicate.minecraft:type_specific/cube_mob.size == N -> the cube-mob (slime/magma_cube) form.
+		if sz, ok := entityPredicateCubeMobSize(predRaw); ok {
+			return &entityPropertyCondition{kind: entityPropCubeMobSize, wantSize: sz}, nil
 		}
 		return &entityPropertyCondition{kind: entityPropUnknown}, nil
 	case "direct_attacker", "attacker":
@@ -295,6 +359,32 @@ func entityPredicateWantsOpenWater(predRaw json.RawMessage) bool {
 	}
 	w := pred.FishingHook.InOpenWater
 	return w != nil && *w
+}
+
+// entityPredicateCubeMobSize reports whether an entity_properties predicate gates on a cube-mob's
+// getSize() (predicate.minecraft:type_specific/cube_mob.size == N) and returns the wanted size. The
+// slime/magma_cube tables use the EXACT-int form ("size": 1) -- an integer literal (JSON number),
+// which CubeMobPredicate reads as a MinMaxBounds.Ints exact bound. A predicate without a cube_mob
+// size term returns (0, false). Source: entities/slime.json type_specific/cube_mob.size +
+// javap CubeMobPredicate (size MinMaxBounds.Ints).
+func entityPredicateCubeMobSize(predRaw json.RawMessage) (int, bool) {
+	if len(predRaw) == 0 {
+		return 0, false
+	}
+	// The predicate key is the single string "minecraft:type_specific/cube_mob" (a slash in the key)
+	// mapping to { "size": <int> }. The slime table uses the exact-int form.
+	var pred struct {
+		CubeMob struct {
+			Size *int `json:"size"`
+		} `json:"minecraft:type_specific/cube_mob"`
+	}
+	if err := json.Unmarshal(predRaw, &pred); err != nil {
+		return 0, false
+	}
+	if pred.CubeMob.Size == nil {
+		return 0, false
+	}
+	return *pred.CubeMob.Size, true
 }
 
 // matchToolWantsSilkTouch reports whether a match_tool condition's predicate gates on a

@@ -185,6 +185,12 @@ func (t *TickLoop) tickDeath(e *Entity) {
 		if e.typ == entity.MagmaCube.ID {
 			t.magmaCubeSplitOnRemove(e)
 		}
+		// SLIME (Task): AbstractCubeMob.remove split -- a dead size>1 slime spawns 2..4 half-size slimes.
+		// Per-type-gated on typ == entity.Slime.ID; a no-op for a size-1 slime + every other mob. Cite
+		// AbstractCubeMob.remove.
+		if e.typ == entity.Slime.ID {
+			t.slimeSplitOnRemove(e)
+		}
 		// Entity.setRemoved ejects passengers before the store removal: `getPassengers().forEach(Entity::
 		// stopRiding)` — so a player riding this mob (a happy ghast) is dismounted (its SetPassengers list
 		// shrinks + it stops following a despawned vehicle) instead of being orphaned. A mob with no
@@ -274,8 +280,17 @@ func (t *TickLoop) dropMobLoot(e *Entity, src damageSource) {
 
 	// Build the ENTITY loot context (the A4 bounded extension): it carries killed_by_player (the
 	// player-attack proxy) + the v1 entity-flag defaults the gated functions read.
+	// CUBE-MOB (slime/magma_cube): the loot table gates its per-size pools on
+	// type_specific/cube_mob.size (the slimeball pool is size 1). Thread the dying cube's size so the
+	// size-1 slimeball pool fires only for a tiny slime (the roll runs while getSize() is still the
+	// dying cube's size, exactly as vanilla rolls loot in remove()/die). 0 for a non-cube mob.
+	cubeSize := 0
+	if e.isSlime || e.isMagmaCube {
+		cubeSize = int(e.cubeSize)
+	}
 	ctx := loot.NewEntityLootContext(seed, 0, loot.EntityLootParams{
 		KilledByPlayer: killedByPlayer(src),
+		CubeMobSize:    cubeSize,
 		// VictimOnFire / AttackerLootingLevel / AttackerSmeltsLoot default to the v1 vanilla state
 		// (false / 0 / false): no fire/effect/enchant subsystem is wired, so the gated furnace_smelt
 		// and enchanted_count_increase are faithful no-ops. Structured to become real reads when those
@@ -393,6 +408,14 @@ func (t *TickLoop) entityBaseExperienceReward(e *Entity) int {
 	//	[VERIFIED javap net.minecraft.world.entity.animal.Animal.getBaseExperienceReward:
 	//	 iconst_1; aload_0 getfield random; iconst_3; invokeinterface RandomSource.nextInt:(I)I; iadd;
 	//	 ireturn  => 1 + this.random.nextInt(3).]
+	//
+	// SLIME (Task): Slime does NOT override getBaseExperienceReward, so it uses Mob.getBaseExperienceReward
+	// == this.xpReward (the equipment-bonus loop a v1 no-op). Slime.setSize sets xpReward = getSize(), so a
+	// size-N slime drops N XP (NO nextInt draw -- do NOT perturb the mob RNG for a slime). Cite
+	// Mob.getBaseExperienceReward + Slime.setSize (xpReward = getSize()).
+	if e.isSlime {
+		return int(e.slimeXpReward)
+	}
 	return 1 + mobRandom(e).nextInt(3)
 }
 

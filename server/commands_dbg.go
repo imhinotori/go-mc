@@ -246,6 +246,15 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned magma_cube eid=%d size=%d at (%.1f,%.1f,%.1f)", e.id, e.cubeSize, p.x, p.y+1, p.z))
 		}
+	case "slime":
+		// SLIME (Task): spawn a hostile Slime (the cube-mob that HOPS, splits on death into 2..4 half-size
+		// slimes, and touches for size damage only when size>1 -- a tiny size-1 slime deals NO damage). Per-
+		// size MAX_HEALTH size*size, MOVEMENT_SPEED 0.2+0.1*size, ATTACK_DAMAGE size (NO armor). Spawned at
+		// size 2 so the split is visible (a size-2 slime -> 2..4 size-1 slimes, each dropping a slimeball).
+		e := t.spawnSlime(p.x, p.y+1, p.z, slimeSpawnSize)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned slime eid=%d size=%d at (%.1f,%.1f,%.1f) -- kill it to see the split", e.id, e.cubeSize, p.x, p.y+1, p.z))
+		}
 	case "strider":
 		// STRIDER (Task): spawn a Strider (the nether lava-walker). It rides the lava surface without sinking
 		// (canStandOnFluid(LAVA)) and, off a warm block / out of lava, enters the cold suffocating state that

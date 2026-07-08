@@ -58,3 +58,49 @@ func TestEntityLootRoll(t *testing.T) {
 		t.Fatalf("pig roll: item id=%d, want %d (minecraft:porkchop)", int(s.ItemID), wantID)
 	}
 }
+
+// TestSlimeLootCubeMobSize verifies the cube_mob size condition: the entities/slime table gates its
+// slime_ball pool on type_specific/cube_mob.size==1, so a TINY (size 1) slime rolls slime_ball (uniform
+// [0,2]) while a size-2 slime rolls NOTHING. This exercises the entityPropCubeMobSize condition + the
+// CubeMobSize loot-context field.
+func TestSlimeLootCubeMobSize(t *testing.T) {
+	tbl, err := LoadTable("minecraft:entities/slime")
+	if err != nil {
+		t.Fatalf("LoadTable(minecraft:entities/slime): %v", err)
+	}
+	const seed int64 = 777
+
+	// Size-1 (tiny) slime: the slime_ball pool fires (count 0..2). A count-0 roll yields no stack, so we
+	// scan several seeds to prove at least one produces a slime_ball and none produce a wrong item.
+	wantID, ok := itemNameToID["minecraft:slime_ball"]
+	if !ok {
+		t.Fatal("slime_ball item id not resolvable")
+	}
+	sawBall := false
+	for s := int64(0); s < 40; s++ {
+		stacks := Roll(tbl, s, NewEntityLootContext(s, 0, EntityLootParams{CubeMobSize: 1}))
+		for _, st := range stacks {
+			if int32(st.ItemID) != wantID {
+				t.Fatalf("size-1 slime rolled item id=%d, want slime_ball %d", int(st.ItemID), wantID)
+			}
+			if int(st.Count) < 0 || int(st.Count) > 2 {
+				t.Fatalf("size-1 slime slime_ball count=%d, want 0..2 (uniform)", int(st.Count))
+			}
+			if st.Count > 0 {
+				sawBall = true // a >0 roll proves the size-1 pool fired with a real slimeball
+			}
+		}
+	}
+	if !sawBall {
+		t.Fatal("size-1 slime never rolled a slime_ball across 40 seeds (the cube_mob.size==1 pool did not fire)")
+	}
+
+	// Size-2 slime: the cube_mob.size==1 condition FAILS, so the pool is skipped -> NO drops.
+	for s := int64(0); s < 40; s++ {
+		stacks := Roll(tbl, s, NewEntityLootContext(s, 0, EntityLootParams{CubeMobSize: 2}))
+		if len(stacks) != 0 {
+			t.Fatalf("size-2 slime rolled %d stacks, want 0 (cube_mob.size==1 gate fails)", len(stacks))
+		}
+	}
+	_ = seed
+}
