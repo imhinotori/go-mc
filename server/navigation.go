@@ -493,15 +493,20 @@ func (n *groundNavigation) tick(t *TickLoop, e *Entity) {
 	//	[VERIFIED javap LivingEntity.travelInAir / handleRelativeFrictionAndCalculateMovement /
 	//	 getFrictionInfluencedSpeed; Entity.moveRelative/getInputVector -- see physics.go travelInAir.]
 
-	// Jump when the next node is one block UP: fold a small upward velocity so travelInAir's move lifts
-	// the mob onto the ledge (gravity in the same travelInAir settles it). ORTHOGONAL to the collision
-	// engine's auto step-up (collision.go): step-up covers obstacles up to maxUpStep (0.6 -- slabs/stairs/
-	// snow layers) exactly as vanilla Entity.collide does, while a FULL 1-block ledge is what vanilla
-	// clears by JUMPING (JumpControl); this vy nudge is that jump's emulation until the real jump impulse
-	// replaces it. Applied to e.vy BEFORE travelInAir so the single move consumes it.
-	if next.y > floorI(e.y) {
-		if stepY := float64(next.y) - e.y; stepY > e.vy {
-			e.vy = stepY
+	// Jump onto a ledge via the VANILLA jump chain, NOT a direct velocity write. This ports the
+	// MoveControl.tick MOVE_TO branch jump decision (javap net.minecraft.world.entity.ai.control.
+	// MoveControl.tick, offsets 389-491): when the wanted-Y rises more than maxUpStep() above the mob's
+	// feet, vanilla arms `mob.getJumpControl().jump()` and switches to Operation.JUMPING. The serverAiStep
+	// JUMP slot (ai_mob.go jumpControl.tick -> jump.go entityJumpStep) then turns that armed flag into the
+	// CAPPED getJumpPower() impulse (0.42), gated by noJumpDelay=10. This replaces the old, non-vanilla
+	// `e.vy = next.y - e.y` nudge, which wrote an UNCAPPED multi-block upward velocity whenever a climbing
+	// path's waypoint lagged several blocks above the mob's feet -- the "mob rockets 4-5 blocks into the
+	// sky" bug. dy is wantedY - getY() with wantedY the node feet (float64(next.y)); the >maxUpStep gate is
+	// vanilla's `d2 > mob.maxUpStep()`. The extra shape/door/fence refinements in the jar only ADD cases
+	// where it does NOT jump; the load-bearing condition -- and the CAP -- is preserved here.
+	if e.ai != nil && e.onGround {
+		if dy := float64(next.y) - e.y; dy > float64(entityMaxUpStep(e)) {
+			e.ai.jumpControl.doJump()
 		}
 	}
 
