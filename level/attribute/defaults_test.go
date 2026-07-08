@@ -174,28 +174,24 @@ func TestSupplierCoverage(t *testing.T) {
 // supplier (e.g. "fox", a creature) returns the createLivingAttributes() base set (non-nil), NOT
 // nil — every living type gets at least the base living attributes.
 func TestLivingFallback(t *testing.T) {
-	// A living type with NO dedicated supplier falls back to createLivingAttributes(). Earlier examples
-	// (wolf/fox/bee/ender_dragon/wither, then bat/parrot) each gained a dedicated supplier as it was
-	// ported, so the pin here is a still-unported living creature: polar_bear (bat gained a dedicated
-	// supplier when the ambient/flying-passive roster was ported). NOTE the em-dash was removed to keep
-	// ASCII-only source.
-	for _, name := range []string{"polar_bear"} {
-		m := NewMapForEntity(name)
-		if m == nil {
-			t.Fatalf("NewMapForEntity(%q) = nil, want the living fallback base set", name)
-		}
-		// The fallback is createLivingAttributes(): MAX_HEALTH 20, MOVEMENT_SPEED 0.7 (the living
-		// registration defaults), no per-type override.
-		if got := m.GetValue(MaxHealth.Name()); got != 20.0 {
-			t.Errorf("%s (fallback) max_health = %v, want 20.0", name, got)
-		}
-		if got := m.GetValue(MovementSpeed.Name()); got != 0.7 {
-			t.Errorf("%s (fallback) movement_speed = %v, want 0.7 (living default)", name, got)
-		}
-		// The fallback has NO attack_damage (createLivingAttributes is below Monster).
-		if m.HasAttribute(AttackDamage.Name()) {
-			t.Errorf("%s (living fallback) unexpectedly has attack_damage", name)
-		}
+	// The living fallback = createLivingAttributes(): MAX_HEALTH 20, MOVEMENT_SPEED 0.7 (the living
+	// registration defaults), and NO attack_damage (createLivingAttributes is below Monster). This test
+	// pins that base set DIRECTLY via the fallback builder rather than via an entity name -- earlier the
+	// pin used an unported living type (wolf/fox/bee/.../polar_bear), but by now the entire living-mob
+	// roster has a dedicated supplier (full parity), so no name reaches the bare fallback anymore. The
+	// contract being guarded is unchanged: createLivingAttributes yields the 20/0.7/no-attack base.
+	m := NewMap(createLivingAttributes().Build())
+	if m == nil {
+		t.Fatalf("NewMap(createLivingAttributes().Build()) = nil, want the living fallback base set")
+	}
+	if got := m.GetValue(MaxHealth.Name()); got != 20.0 {
+		t.Errorf("living fallback max_health = %v, want 20.0", got)
+	}
+	if got := m.GetValue(MovementSpeed.Name()); got != 0.7 {
+		t.Errorf("living fallback movement_speed = %v, want 0.7 (living default)", got)
+	}
+	if m.HasAttribute(AttackDamage.Name()) {
+		t.Errorf("living fallback unexpectedly has attack_damage")
 	}
 }
 
