@@ -767,6 +767,16 @@ func (t *TickLoop) tickAI() {
 		if e.phantom != nil {
 			t.phantomAiStep(e)
 		}
+		// WARDEN (Task): the blind, sculk-summoned boss-tier hostile -- the per-suspect AngerManagement
+		// (target = highest-anger suspect), the melee doHurtTarget (30 + 1.5 kb + the 40-tick sonic lock),
+		// the SonicBoom ranged attack (15/20 gate, 34-tick charge, 10 dmg + knock-up ignoring armor/shields),
+		// the emerge-on-spawn lock + the dig-away despawn. Per-type-gated on e.warden != nil, AFTER
+		// serverAiStep (the empty goalSelector no-op, like the wither/phantom). ADDITIVE + warden-gated
+		// (zero cost / zero RNG for every non-warden -- the pig oracle stream is untouched). Cite
+		// Warden.customServerAiStep.
+		if e.warden != nil {
+			t.wardenAiStep(e)
+		}
 		// MAGMA CUBE (Task): the nether cube-mob's per-size slime hop (CubeMobMoveControl.tick) + the
 		// targetSelector acquisition + the CubeMobAttackGoal aggressive hop + the touch damage. Per-type-gated
 		// like the blaze, AFTER serverAiStep so the three cube goals have set the move-control state. ADDITIVE

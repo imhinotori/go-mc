@@ -457,6 +457,14 @@ type Entity struct {
 	// nil pointer and touches NONE of these fields -- additive-minimal, zero new RNG, byte-identical for
 	// every non-phantom. Cite Phantom + its three goals.
 	phantom *phantomState
+	// --- WARDEN (net.minecraft.world.entity.monster.warden.Warden, entity id 143) -------------------
+	//
+	// Tick-owned state, set/read ONLY for a Warden (wardenAiStep gates on e.warden != nil). All the
+	// warden state (the per-suspect AngerManagement map, the emerge/dig lifecycle timers, the SonicBoom
+	// charge/cooldown, the dig-away no-anger counter) is grouped behind ONE pointer (e.warden) so a plain
+	// mob (the pig oracle) pays exactly one nil pointer and touches NONE of these fields -- additive-
+	// minimal, zero new RNG, byte-identical for every non-warden. Cite Warden + AngerManagement + SonicBoom.
+	warden *wardenState
 	// --- MAGMA CUBE (net.minecraft.world.entity.monster.cubemob.MagmaCube) --------------------------
 	//
 	// Tick-owned plain values, set/read ONLY for a MagmaCube (magmaCubeAiStep gates on typ ==

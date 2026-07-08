@@ -296,19 +296,30 @@ func TestSculkShriekerNoSummonWithoutCanSummon(t *testing.T) {
 	}
 }
 
-// TestSculkShriekerLevel4SummonTriggerIsDeferred: at warning level 4 the shrieker's tryRespond reaches
-// the summon trigger, which is a DEFERRED no-op (no Warden entity). Assert the trigger gate is at level
-// 4 (trySummonWarden returns false below MAX) so the summon fires at the right level once a Warden lands.
-func TestSculkShriekerLevel4SummonTriggerIsDeferred(t *testing.T) {
+// TestSculkShriekerLevel4SummonsWarden: at warning level 4 (MAX) the shrieker's trySummonWarden spawns a
+// live Warden; below MAX it does nothing. Ports SculkShriekerBlockEntity.trySummonWarden (warningLevel <
+// MAX_WARNING_LEVEL -> false; else Warden.trySpawn). Asserts the level-4 gate + that a warden entity lands.
+func TestSculkShriekerLevel4SummonsWarden(t *testing.T) {
 	loop, _ := newSculkLoop()
+	shPos := pk.Position{X: 8, Y: 64, Z: 8}
 	be := &sculkShriekerBE{warningLevel: 3}
-	if loop.sculkShriekerTrySummonWarden(be) {
+	if loop.sculkShriekerTrySummonWarden(shPos, be) {
 		t.Fatalf("summon fired at warning level 3, want false (below MAX)")
 	}
 	be.warningLevel = 4
-	// At MAX the trigger is reached; the Warden spawn is DEFERRED so it still returns false (no entity),
-	// but this is the summon-level gate: level 4 is where vanilla attempts Warden.trySpawn.
-	if loop.sculkShriekerTrySummonWarden(be) {
-		t.Fatalf("Warden summon should be a deferred no-op (no Warden entity), got true")
+	if !loop.sculkShriekerTrySummonWarden(shPos, be) {
+		t.Fatalf("Warden summon at warning level 4 returned false, want a spawned warden")
+	}
+	// A warden entity must now exist in the loop's regions (spawned emerging at the block above the shrieker).
+	found := false
+	for _, reg := range loop.regions {
+		for _, e := range reg.entities.byID {
+			if e.warden != nil {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no warden entity found after the level-4 summon")
 	}
 }

@@ -202,6 +202,17 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned phantom eid=%d at (%.1f,%.1f,%.1f) -- circles then dive-bombs; burns in daylight", e.id, p.x, p.y+12, p.z))
 		}
+	case "warden":
+		// WARDEN (Task): spawn a Warden directly (the blind, sculk-summoned boss-tier hostile, 500 HP). It
+		// EMERGES for 134 ticks (locked), then tracks by ANGER: a player within FOLLOW_RANGE (24) accrues
+		// anger, and the warden hunts the highest-anger suspect -- MELEE-SLAMMING for 30 (+1.5 knockback)
+		// when adjacent, or firing a SONIC BOOM (10 damage + knock-up, ignores armor/shields) when the
+		// target is within 15 XZ / 20 Y but out of melee reach. With no anger for ~60s it DIGS AWAY +
+		// despawns. Spawned 1 block up (box 0.9 x 2.9). Also summoned at sculk-shrieker warning level 4.
+		e := t.spawnWarden(p.x, p.y+1, p.z, true)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned warden eid=%d at (%.1f,%.1f,%.1f) -- 500hp, emerges then hunts by anger (melee 30 / sonic-boom 10); digs away after ~60s idle", e.id, p.x, p.y+1, p.z))
+		}
 	case "magma_cube", "magmacube":
 		// MAGMA CUBE (Task): spawn a hostile MagmaCube (the nether slime that hops, splits on death into
 		// 2..4 smaller cubes, and touches for size+2 damage; per-size MAX_HEALTH size*size, MOVEMENT_SPEED

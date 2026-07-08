@@ -384,6 +384,26 @@ func witherSupplier() *Supplier {
 		Build()
 }
 
+// wardenSupplier is the port of Warden.createAttributes(): Monster.createMonsterAttributes() then
+// .add(MAX_HEALTH 500.0).add(MOVEMENT_SPEED 0.30000001192092896).add(KNOCKBACK_RESISTANCE 1.0).add(
+// ATTACK_KNOCKBACK 1.5).add(ATTACK_DAMAGE 30.0).add(FOLLOW_RANGE 24.0). The builder ORDER is exactly
+// MAX_HEALTH, MOVEMENT_SPEED, KNOCKBACK_RESISTANCE, ATTACK_KNOCKBACK, ATTACK_DAMAGE, FOLLOW_RANGE
+// (VERIFIED javap net.minecraft.world.entity.monster.warden.Warden.createAttributes: createMonster
+// Attributes, ldc2_w 500.0d MAX_HEALTH, 0.30000001192092896d MOVEMENT_SPEED, dconst_1 KNOCKBACK_
+// RESISTANCE, 1.5d ATTACK_KNOCKBACK, 30.0d ATTACK_DAMAGE, 24.0d FOLLOW_RANGE). The MOVEMENT_SPEED is
+// the exact float64 bits of the 0.3f-widened-to-double 26.2 literal; ATTACK_KNOCKBACK 1.5 overrides
+// the createLivingAttributes registration default 0.0. Cite Warden.createAttributes.
+func wardenSupplier() *Supplier {
+	return createMonsterAttributes().
+		AddValue(MaxHealth, 500.0).
+		AddValue(MovementSpeed, 0.30000001192092896).
+		AddValue(KnockbackResistance, 1.0).
+		AddValue(AttackKnockback, 1.5).
+		AddValue(AttackDamage, 30.0).
+		AddValue(FollowRange, 24.0).
+		Build()
+}
+
 // blazeSupplier is the port of Blaze.createAttributes(): Monster.createMonsterAttributes() then
 // .add(ATTACK_DAMAGE 6.0).add(MOVEMENT_SPEED 0.23000000417232513).add(FOLLOW_RANGE 48.0). MAX_HEALTH
 // is the createLivingAttributes default 20.0 (Blaze has NO MAX_HEALTH override). Cite
@@ -874,6 +894,11 @@ var suppliers = map[string]*Supplier{
 	// + MAX_HEALTH 300.0 + MOVEMENT_SPEED 0.6 + FLYING_SPEED 0.6 + FOLLOW_RANGE 40.0 + ARMOR 4.0. Keyed by
 	// registry name so NewMapForEntity resolves the faithful 300hp boss map (its category is monster).
 	"wither": witherSupplier(),
+	// WARDEN (Task): the sculk-summoned boss-tier hostile. Warden.createAttributes: Monster.create
+	// MonsterAttributes + MAX_HEALTH 500 + MOVEMENT_SPEED 0.3 + KNOCKBACK_RESISTANCE 1.0 + ATTACK_
+	// KNOCKBACK 1.5 + ATTACK_DAMAGE 30 + FOLLOW_RANGE 24. Keyed by registry name so NewMapForEntity
+	// resolves the faithful 500hp warden map (its category is monster).
+	"warden": wardenSupplier(),
 	// BEE + GOAT + FROG (Task): the three passive animals. Each a 1:1 jar copy of its createAttributes
 	// (verified bytecode this session). Bee (Animal + MAX_HEALTH 10 + FLYING_SPEED 0.6 + MOVEMENT_SPEED
 	// 0.3 + ATTACK_DAMAGE 2), Goat (Animal + MAX_HEALTH 10 + MOVEMENT_SPEED 0.2 + ATTACK_DAMAGE 2), Frog

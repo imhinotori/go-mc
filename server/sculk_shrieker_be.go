@@ -358,22 +358,25 @@ func (t *TickLoop) sculkShriekerTryRespond(pos pk.Position, state block.StateID,
 	// Warden mob entity in v1 (data-only). This is the summon TRIGGER seam -- when a Warden entity
 	// lands, replace this stub with Warden.trySpawn(...) at warningLevel 4. Returns false (no summon),
 	// so the reply-sound branch runs (also deferred). CITE: SculkShriekerBlockEntity.trySummonWarden.
-	summoned := t.sculkShriekerTrySummonWarden(be)
+	summoned := t.sculkShriekerTrySummonWarden(pos, be)
 	_ = summoned
 	// playWardenReplySound (deferred). Warden.applyDarknessAround(level, center, null, 40): DEFERRED
-	// (no darkness MobEffect / Warden). Both are secondary to the warning-level state machine.
+	// (no darkness MobEffect). Secondary to the warning-level state machine + the now-live summon.
 }
 
-// sculkShriekerTrySummonWarden ports SculkShriekerBlockEntity.trySummonWarden. DEFERRED: at warning
-// level 4 (MAX) vanilla attempts Warden.trySpawn over WARDEN_SPAWN_ATTEMPTS in a WARDEN_SPAWN_RANGE_XZ
-// / _Y box; with no Warden entity in v1 this is a no-op that reports "not summoned" (so tryRespond
-// falls to the reply-sound path). The level-4 gate is preserved so the summon fires at the correct
-// warning level once a Warden exists. CITE: SculkShriekerBlockEntity.trySummonWarden (warningLevel <
-// MAX_WARNING_LEVEL -> return false).
-func (t *TickLoop) sculkShriekerTrySummonWarden(be *sculkShriekerBE) bool {
+// sculkShriekerTrySummonWarden ports SculkShriekerBlockEntity.trySummonWarden: at warning level 4 (MAX)
+// spawn a WARDEN. Vanilla runs Warden.trySpawn over WARDEN_SPAWN_ATTEMPTS in a WARDEN_SPAWN_RANGE_XZ/_Y
+// box (a random valid nearby pos); v1 spawns the warden at the block above the shrieker (wardenSummonPos,
+// the deterministic stand-in for the random box search) via the TRIGGERED emerge path (spawnWarden emerging=
+// true -> the 134-tick EMERGE lock). Below warning level 4 it is a no-op (return false), so tryRespond falls
+// to the reply-sound path. Returns true when a warden was summoned. CITE: SculkShriekerBlockEntity.trySummonWarden
+// (warningLevel < MAX_WARNING_LEVEL -> false; else Warden.trySpawn -> emerge).
+func (t *TickLoop) sculkShriekerTrySummonWarden(pos pk.Position, be *sculkShriekerBE) bool {
 	if be.warningLevel < sculkShriekerMaxWarningLevel {
 		return false // trySummonWarden: below max warning -> no summon attempt.
 	}
-	// warningLevel == 4: Warden.trySpawn(...) -- DEFERRED (no Warden entity). Cited no-op summon.
-	return false
+	// warningLevel == 4: Warden.trySpawn at a valid nearby pos (the block above the shrieker), emerging.
+	sx, sy, sz := wardenSummonPos(pos)
+	w := t.spawnWarden(sx, sy, sz, true)
+	return w != nil
 }
