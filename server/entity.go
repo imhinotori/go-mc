@@ -376,6 +376,32 @@ type Entity struct {
 	lastLightningBoltUUID uuid.UUID // MushroomCow.lastLightningBoltUUID (the per-bolt toggle guard)
 	hasLastLightningBolt  bool      // the lastLightningBoltUUID field is set (vanilla non-null)
 
+	// --- LAND-MOB SPAWN VARIANTS (Rabbit/Cat/Fox) + Ocelot trust ------------------------------------
+	//
+	// Tick-owned plain values set at finalizeSpawn (plugin_mob_decl.go) and read ONLY for the owning
+	// mob type; zero for every other entity (the pig oracle keeps them 0 and draws no RNG on their
+	// account). Each mirrors the vanilla DATA accessor / trust flag:
+	//   rabbitVariant  -- Rabbit DATA_TYPE (Rabbit.Variant.id: BROWN 0, WHITE 1, BLACK 2, WHITE_SPLOTCHED 3,
+	//                    GOLD 4, SALT 5, EVIL 99). Cite Rabbit.getRandomRabbitVariant + Variant static init.
+	//   catVariant     -- Cat DATA_VARIANT (a cat_variant registry index; v1 stores the biome-select result;
+	//                    default 0). Cite Cat.finalizeSpawn (VariantUtils.selectVariantToSpawn).
+	//   foxVariant     -- Fox DATA_TYPE_ID (Fox.Variant.byBiome: RED 0 default, SNOW 1). Cite Fox.finalizeSpawn.
+	//   ocelotTrusting -- Ocelot.isTrusting()/setTrusting() (DATA_TRUSTING). A trusting ocelot no longer
+	//                    tempt-flees and can breed; set by the feed-trust interact. Cite Ocelot.mobInteract.
+	rabbitVariant  int32
+	catVariant     int32
+	foxVariant     int32
+	ocelotTrusting bool
+
+	// --- ARMADILLO DANGER MEMORY (Brain MemoryModuleType.DANGER_DETECTED_RECENTLY) -------------------
+	//
+	// armadilloDangerExpiry is the v1 stand-in for Brain.getTimeUntilExpiry(DANGER_DETECTED_RECENTLY):
+	// set to 80 (setMemoryWithExpiry(..., 80L)) each tick a threat is scared-by, and decremented toward 0
+	// otherwise. The ArmadilloBallUp state machine reads it (SCARED->UNROLLING when expiry < 30 == the
+	// UNROLLING animation duration; UNROLLING->SCARED when expiry > 30). Zero for every non-armadillo.
+	// Cite Armadillo.onSyncedDataUpdated (setMemoryWithExpiry 80L) + ArmadilloAi.ArmadilloBallUp.tick.
+	armadilloDangerExpiry int
+
 	// --- CUBE MOB (net.minecraft.world.entity.monster.cubemob.AbstractCubeMob / SulfurCube) ---------
 	//
 	// Tick-owned plain values, set/read ONLY for a sulfur cube (typ == entity.SulfurCube.ID). cubeSize is

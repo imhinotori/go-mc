@@ -194,8 +194,8 @@ var baseTypeByName = map[string]entity.Entity{
 	"bogged":          entity.Bogged,
 	"zombie_villager": entity.ZombieVillager,
 	"rabbit":          entity.Rabbit,
-	"enderman":  entity.Enderman,
-	"fox":       entity.Fox,
+	"enderman":        entity.Enderman,
+	"fox":             entity.Fox,
 	// MOB-CUBE (SulfurCube): the size-scaled cube mob (a NEW 26.2 mob). base_type "sulfur_cube" renders as
 	// entity.SulfurCube.ID (id 130); the cube AI (jump-move state machine + split-on-death) is Go-native.
 	"sulfur_cube": entity.SulfurCube,
@@ -765,6 +765,73 @@ func (t *TickLoop) spawnDeclaredMob(decl *mobDecl, x, y, z float64) *Entity {
 	// Cite Mob.canPickUpLoot / Fox.<init> setCanPickUpLoot(true).
 	if e.typ == entity.Fox.ID {
 		e.canPickUpLoot = true
+	}
+	// MOB-PASS (Rabbit variant): net.minecraft.world.entity.animal.rabbit.Rabbit.finalizeSpawn calls
+	// setVariant(getRandomRabbitVariant(level, blockPosition())) BEFORE super.finalizeSpawn. The picker
+	// draws ONE level.getRandom().nextInt(100) and branches on the birth biome tag:
+	//   if biome in SPAWNS_WHITE_RABBITS: n<80 -> WHITE(1) else WHITE_SPLOTCHED(3)
+	//   else if biome in SPAWNS_GOLD_RABBITS: GOLD(4)         // NOTE: gold path takes NO extra draw
+	//   else: n<50 -> BROWN(0); n<90 -> SALT(5); else BLACK(2)
+	// The two biome tags (BiomeTags.SPAWNS_WHITE_RABBITS / SPAWNS_GOLD_RABBITS) are a cited const-false
+	// reduction in v1 (no biome-tag facility, and the default/superflat biome is in NEITHER tag), so the
+	// pick always falls to the BROWN/SALT/BLACK nextInt(100) branch. CRUCIALLY the nextInt(100) draw is
+	// STILL taken on the LEVEL rng (level.getRandom(), == this region's levelRandom) exactly as the jar --
+	// so a co-spawned mob's level-rng stream stays byte-in-lockstep. The draw is on the LEVEL stream, NOT
+	// the rabbit's per-entity stream, so the pig oracle (a different mob, never here) is untouched. A nil
+	// region levelRandom (a bare test loop) skips the draw and leaves the DEFAULT BROWN(0), the graceful
+	// degrade the sheep-color / cat-gift paths use. Rabbit-gated. Cite Rabbit.finalizeSpawn +
+	// getRandomRabbitVariant + Rabbit.Variant static init (BROWN 0, WHITE 1, BLACK 2, WHITE_SPLOTCHED 3,
+	// GOLD 4, SALT 5).
+	if e.typ == entity.Rabbit.ID {
+		if t.cur() != nil && t.cur().levelRandom != nil {
+			n := int(t.cur().levelRandom.NextIntN(100))
+			// biome-tag gates cited const-false (see above) -> the else branch:
+			switch {
+			case n < 50:
+				e.rabbitVariant = 0 // BROWN
+			case n < 90:
+				e.rabbitVariant = 5 // SALT
+			default:
+				e.rabbitVariant = 2 // BLACK
+			}
+		}
+	}
+	// MOB-NEUT (Cat variant + sound-variant): net.minecraft.world.entity.animal.feline.Cat.finalizeSpawn
+	// runs, AFTER super.finalizeSpawn: (1) VariantUtils.selectVariantToSpawn(SpawnContext, CAT_VARIANT)
+	// which does PriorityProvider.pick == deterministic priority-filter THEN Util.getRandomSafe(list,
+	// level.getRandom()) == ONE level.getRandom().nextInt(list.size()) over the highest-priority matching
+	// cat_variant list; then (2) CatSoundVariants.pickRandomSoundVariant(registryAccess, level.getRandom())
+	// == Registry.getRandom(level.getRandom()) == ONE level.getRandom().nextInt(2) over the 2-entry
+	// CAT_SOUND_VARIANT registry (classic/royal). Both draws are on the LEVEL rng. v1 has no CAT_VARIANT
+	// registry / SpawnContext / PriorityProvider subsystem, so the variant SELECTION is a cited reduction:
+	// the biome-priority graph collapses to the always-true fallback (the natural-spawn temperate set), a
+	// single-entry list -> nextInt(1) == 0 draw preserved; the swamp-hut all_black special is a cited
+	// structure-spawn deferral (structure_spawn.go seeds cats but does not carry the all_black override
+	// yet). The lockstep-critical part -- the level-rng DRAW ORDER + COUNT (variant nextInt(1) THEN sound
+	// nextInt(2)) -- is reproduced EXACTLY so a co-spawned swamp-hut witch (which draws the same level rng
+	// right after) stays byte-in-lockstep. catVariant stores 0 (the reduced select result). Cat-gated; the
+	// pig oracle (never a cat) is untouched. Cite Cat.finalizeSpawn + VariantUtils.selectVariantToSpawn +
+	// PriorityProvider.pick (Util.getRandomSafe) + CatSoundVariants.pickRandomSoundVariant (Registry.getRandom).
+	if e.typ == entity.Cat.ID {
+		if t.cur() != nil && t.cur().levelRandom != nil {
+			// selectVariantToSpawn: Util.getRandomSafe over the reduced single-entry list -> nextInt(1).
+			e.catVariant = int32(t.cur().levelRandom.NextIntN(1))
+			// pickRandomSoundVariant: Registry.getRandom over the 2-entry CAT_SOUND_VARIANT registry ->
+			// nextInt(2). Drawn (result discarded -- the sound variant is a cited client-audio deferral) so
+			// the level-rng stream advances exactly as the jar. NOTE: this draw runs AFTER the collar-color
+			// default seed above (that seed takes no RNG), matching the finalizeSpawn ordering.
+			_ = t.cur().levelRandom.NextIntN(2)
+		}
+	}
+	// MOB-PASS (Fox variant): net.minecraft.world.entity.animal.fox.Fox.finalizeSpawn calls
+	// setVariant(Fox.Variant.byBiome(getBiome(blockPosition()))) -- Variant.byBiome is RNG-FREE: SNOW(1)
+	// when the birth biome is in BiomeTags.SPAWNS_SNOW_FOXES, else RED(0, the DEFAULT). The biome-tag gate
+	// is a cited const-false reduction in v1 (no biome-tag facility; the default/superflat biome is not a
+	// snowy-fox biome) so the fox is the RED default -- NO RNG draw either way (byBiome takes none), so no
+	// stream (level or mob) is perturbed. Fox-gated. Cite Fox.finalizeSpawn + Fox.Variant.byBiome
+	// (SPAWNS_SNOW_FOXES -> SNOW 1, else RED 0).
+	if e.typ == entity.Fox.ID {
+		e.foxVariant = 0 // RED default (SNOW branch is the cited const-false biome-tag gate; no RNG)
 	}
 	// MOB-VARIANT (Drowned/Stray/Bogged/ZombieVillager): set the per-type marks + variant spawn init.
 	// Each renders as its own wire type; the mark drives the per-type aiStep (drowned trident throw /

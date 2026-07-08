@@ -1110,6 +1110,21 @@ func (t *TickLoop) handleInteract(p *tickPlayer, pkt pk.Packet) {
 	if mob.typ == entity.Cow.ID && t.tryMilkCow(p, mob) {
 		return // the milk handled the interact
 	}
+	// MOB-VARIANT (Mooshroom): net.minecraft.world.entity.animal.cow.MushroomCow.mobInteract runs its own
+	// bowl/shears/brown-flower branches BEFORE super (AbstractCow.mobInteract == the bucket-milk + feed).
+	// tryMooshroomInteract returns true when it consumes the interact (BOWL->stew, SHEARS->shear-to-cow),
+	// false to fall through to the shared cow paths below (bucket-milk via tryMilkCow, then feed). A
+	// Mooshroom is ALSO milkable with a bucket (AbstractCow), so the tryMilkCow gate must still see it:
+	// tryMooshroomInteract does NOT claim the bucket. Mooshroom-gated (typ == entity.Mooshroom.ID), a
+	// zero-cost no-op for the pig oracle. Cite MushroomCow.mobInteract.
+	if mob.typ == entity.Mooshroom.ID {
+		if t.tryMooshroomInteract(p, mob) {
+			return // the bowl-stew / shear handled the interact
+		}
+		if t.tryMilkCow(p, mob) {
+			return // a bucket on the mooshroom milks it (AbstractCow.mobInteract super path)
+		}
+	}
 	// MOB-NEUT-02 (Phase 36-02): the Wolf TAMING / sit-toggle path runs BEFORE the feed path
 	// (Wolf.mobInteract is tried ahead of super.mobInteract == TamableAnimal/Animal.mobInteract). For an
 	// UNTAMED non-angry wolf right-clicked with a BONE, tryWolfInteract consumes the interact (it consumed
@@ -1129,6 +1144,15 @@ func (t *TickLoop) handleInteract(p *tickPlayer, pkt pk.Packet) {
 	if mob.typ == entity.Cat.ID && t.tryCatInteract(p, mob) {
 		return // the taming / sit-toggle handled the interact
 	}
+	// MOB-PREY (Ocelot trust): the Ocelot.mobInteract feed-trust -- the ocelot sibling of the cat/wolf
+	// gate. A NON-trusting ocelot fed raw cod/salmon (OCELOT_FOOD) within distanceToSqr<9.0 consumes the
+	// fish and rolls a 1-in-3 trust (random.nextInt(3)==0 -> setTrusting(true)); either way SUCCESS. An
+	// already-trusting ocelot, a non-food item, or a too-far player falls through to the super feed.
+	// Ocelot-gated (zero-cost for every other mob; the lone nextInt(3) trust draw is on the ocelot's OWN
+	// per-entity stream, so the pig oracle is unperturbed). Cite Ocelot.mobInteract.
+	if mob.typ == entity.Ocelot.ID && t.tryOcelotInteract(p, mob) {
+		return // the feed-trust handled the interact
+	}
 	// PARROT (Task): the Parrot.mobInteract seed-tame / owner sit-toggle -- the parrot sibling of the
 	// cat/wolf gate (seed-tames at a 1-in-10 chance, no health bump). Parrot-gated (zero-cost for every
 	// other mob; the lone nextInt(10) tame draw is on the parrot own per-entity stream, so the pig oracle
@@ -1145,6 +1169,19 @@ func (t *TickLoop) handleInteract(p *tickPlayer, pkt pk.Packet) {
 	// so the pig oracle is unperturbed). Cite IronGolem.mobInteract.
 	if mob.typ == entity.IronGolem.ID && t.tryIronGolemRepair(p, mob) {
 		return // the repair-heal handled the interact
+	}
+	// SNOW GOLEM SHEAR (net.minecraft.world.entity.animal.golem.SnowGolem.mobInteract): a SHEARS item on a
+	// pumpkin-wearing snow golem shears its carved pumpkin off (SnowGolem.shear -> setPumpkin(false) + the
+	// carved-pumpkin drop [cited-deferred loot]). trySnowGolemShear returns true when the held item is
+	// SHEARS (consuming the interact whether it sheared or the golem had no pumpkin -- the vanilla readyFor
+	// Shearing gate), false otherwise (fall through -- a snow golem is not fed, so a non-shears click is a
+	// PASS/no-op below). SnowGolem-gated (typ == entity.SnowGolem.ID), a zero-cost no-op for the pig oracle
+	// (no RNG draw). Cite SnowGolem.mobInteract + SnowGolem.shear + readyForShearing.
+	if mob.typ == entity.SnowGolem.ID {
+		if t.trySnowGolemShear(p, mob) {
+			return // the shear (or the not-ready consume) handled the interact
+		}
+		return // a snow golem is never pig_food-fed: a non-shears click is a PASS (no feed fall-through)
 	}
 	// HAPPY-GHAST RIDE (net.minecraft.world.entity.animal.happyghast.HappyGhast.mobInteract): an adult,
 	// harnessed happy ghast right-clicked WITHOUT a secondary (shift) action mounts the player as a
@@ -1263,6 +1300,7 @@ func (t *TickLoop) handleInteract(p *tickPlayer, pkt pk.Packet) {
 //
 //	[VERIFIED CFR Villager.mobInteract: the isAlive && !isTrading && !isSleeping gate; isBaby -> setUnhappy
 //	 + SUCCESS; server noOffers gate -> CONSUME or startTrading; SUCCESS.]
+//
 // tryIronGolemRepair ports IronGolem.mobInteract: an IRON_INGOT feed heals the golem 25.0
 // (LivingEntity.heal, clamped to getMaxHealth() 100.0). If the golem was already at full health the heal
 // is a no-op (health unchanged) and vanilla returns PASS WITHOUT consuming the ingot -> returns false
@@ -1513,6 +1551,100 @@ func (t *TickLoop) createFilledResult(p *tickPlayer, inv *Inventory, emptyStack,
 	}
 	// return emptyStack: the hand keeps the remaining bucket(s).
 	return emptyStack
+}
+
+// trySnowGolemShear ports net.minecraft.world.entity.animal.golem.SnowGolem.mobInteract's shears branch:
+// if (itemStack.is(Items.SHEARS) && readyForShearing()) { shear(level, PLAYERS, itemStack); gameEvent(
+// SHEAR); itemStack.hurtAndBreak(1, player, hand); return SUCCESS; } return PASS. Returns true when the
+// held item IS shears (the interact is consumed -- SUCCESS on a shear, or a bare consume when the golem
+// had no pumpkin), false when the held item is NOT shears (PASS -> fall through). The held item is read
+// SERVER-side. NO RNG. Cite SnowGolem.mobInteract + SnowGolem.shear + readyForShearing.
+func (t *TickLoop) trySnowGolemShear(p *tickPlayer, mob *Entity) bool {
+	inv := ensureInventory(p)
+	held := inv.get(heldWindowSlot(inv.heldSlot))
+	if slotIsEmpty(held) || int32(held.ItemID) != int32(item.Shears.ID) {
+		return false // not shears -> PASS (super/fall-through)
+	}
+	// itemStack.is(Items.SHEARS) is TRUE from here. readyForShearing() == isAlive() && hasPumpkin().
+	if !t.snowGolemShear(mob) {
+		// !readyForShearing() (already sheared / dead): the vanilla `is(SHEARS) && readyForShearing()` gate
+		// is false, so control falls to `return PASS`. But a snow golem is never fed, so the caller's
+		// post-gate `return` handles the no-op; report NOT-consumed so the caller takes that PASS path.
+		return false
+	}
+	// shear() succeeded (setPumpkin(false) + the carved-pumpkin drop [cited-deferred loot] + shear sound).
+	// gameEvent(SHEAR) is a cited no-op (no game-event subsystem). hurtAndBreak(1) on the shears.
+	t.hurtHeldItem(p, inv, 1)
+	return true // SUCCESS
+}
+
+// tryMooshroomInteract ports net.minecraft.world.entity.animal.cow.MushroomCow.mobInteract's own branches
+// (BOWL -> stew, SHEARS -> shear-to-cow), the parts BEFORE super (AbstractCow.mobInteract == bucket-milk +
+// feed, which the caller routes through tryMilkCow / tryFeedAnimal). Returns true when it consumes the
+// interact, false to fall through. Held item read SERVER-side. The BROWN-variant + flower suspicious-stew
+// STORE branch is a cited deferral (no SuspiciousStewEffects component subsystem in v1); the flower is not
+// consumed there, so falling through is faithful (the vanilla brown-flower path returns super when the
+// effects Optional is empty, which for the un-ported effect map is the observable v1 result).
+//
+//	[VERIFIED javap MushroomCow.mobInteract: is(BOWL) && !isBaby() -> stew = stewEffects!=null ?
+//	 SUSPICIOUS_STEW(+effects) : MUSHROOM_STEW; createFilledResult + setItemInHand + playSound(MILK[_SUSP])
+//	 -> SUCCESS. else is(SHEARS) && readyForShearing() -> shear(level,PLAYERS,stack)+gameEvent(SHEAR)+
+//	 hurtAndBreak -> SUCCESS. else (BROWN && !isBaby && flower-effects) store stewEffects; else super.]
+func (t *TickLoop) tryMooshroomInteract(p *tickPlayer, mob *Entity) bool {
+	inv := ensureInventory(p)
+	held := inv.get(heldWindowSlot(inv.heldSlot))
+	if slotIsEmpty(held) {
+		return false // empty hand -> super (feed)
+	}
+
+	// itemStack.is(Items.BOWL) && !isBaby(): milk the mooshroom into a bowl of stew.
+	if int32(held.ItemID) == int32(item.Bowl.ID) && !mob.isBaby() {
+		// stew = stewEffects != null ? SUSPICIOUS_STEW(with the stored effects) : MUSHROOM_STEW. v1 has no
+		// SuspiciousStewEffects store (the brown-flower branch below is deferred), so stewEffects is always
+		// null here -> plain MUSHROOM_STEW. The SUSPICIOUS_STEW + effects component path is a cited deferral
+		// (structured to select SUSPICIOUS_STEW once the effect-component store lands). MOOSHROOM_MILK sound
+		// (fixed 1/1, NO RNG); the MOOSHROOM_MILK_SUSPICIOUSLY variant is the deferred suspicious path.
+		r := t.createFilledResult(p, inv, held, component.SlotData{Count: 1, ItemID: pk.VarInt(item.MushroomStew.ID)})
+		inv.set(heldWindowSlot(inv.heldSlot), r)
+		// playSound(MOOSHROOM_MILK): the entity.mooshroom.milk sound on NEUTRAL at 1.0/1.0. Emitted via the
+		// entity-attached sound seam (same as tryMilkCow's COW_MILK); the exact sound id is a cited
+		// client-audio detail -- reuse the cow-milk seam id so a client hears a milk sound (the GAMEPLAY is
+		// the bowl->stew swap). Cite MushroomCow.mobInteract playSound(MOOSHROOM_MILK).
+		t.broadcastToTrackers(mob.id, encodeSoundEntity(449, soundSourceNeutral, mob.id, 1.0, 1.0, 0))
+		t.sendContent(p)
+		return true // SUCCESS
+	}
+
+	// else if itemStack.is(Items.SHEARS) && readyForShearing(): shear the mooshroom -> it becomes a Cow and
+	// drops 5 mushrooms (dropFromShearingLootTable(SHEAR_MOOSHROOM) -- cited-deferred loot). readyForShearing
+	// == !isBaby(). The conversion (convertTo(COW, single)) is the observable gameplay: the mooshroom is
+	// replaced by a cow at its position. Cite MushroomCow.mobInteract SHEARS branch + MushroomCow.shear
+	// (convertTo COW) + readyForShearing (!isBaby).
+	if int32(held.ItemID) == int32(item.Shears.ID) {
+		if mob.isBaby() {
+			// !readyForShearing(): the `is(SHEARS) && readyForShearing()` gate is false; control would fall
+			// to the brown-flower/super path. A baby mooshroom with shears is not a food-feed, and shears are
+			// not a flower, so the brown branch's getEffectsFromItemStack(shears) is empty -> super feed. Let
+			// the caller fall through (tryMilkCow fails on shears, tryFeedAnimal ignores shears). Not consumed.
+			return false
+		}
+		// shear(): MOOSHROOM_SHEAR sound (deferred audio) + convertTo(COW) + the 5-mushroom drop (deferred
+		// loot). The conversion swaps the entity type at its position and discards the mooshroom.
+		newCow := t.thunderHitTypeSwap(mob, entity.Cow) // convertTo(COW, ConversionParams.single(this,false,false))
+		if newCow == nil {
+			return false // convertTo == null (no store, a bare test loop) -> the base PASS/super path
+		}
+		// gameEvent(SHEAR): cited no-op. itemStack.hurtAndBreak(1, player, hand): shears durability -1.
+		t.hurtHeldItem(p, inv, 1)
+		return true // SUCCESS
+	}
+
+	// else: the BROWN-variant brown-flower -> suspicious-stew STORE branch. It requires the SuspiciousStew
+	// Effects component + the flower->effect map (getEffectsFromItemStack), neither ported in v1. When the
+	// effect Optional is empty the vanilla method returns super.mobInteract, so falling through here (to the
+	// shared cow milk/feed) is the faithful v1 result -- the flower is NOT consumed and NOT stored. Cited
+	// deferral. Cite MushroomCow.mobInteract (getVariant()==BROWN && !isBaby && getEffectsFromItemStack).
+	return false
 }
 
 // entityEventWolfTameHearts / entityEventWolfTameSmoke are the EntityEvent ("entity status") bytes
@@ -1835,4 +1967,67 @@ func (t *TickLoop) tryToTameCat(p *tickPlayer, mob *Entity) {
 	}
 	// broadcastEntityEvent(this, (byte)6): the taming-FAIL SMOKE puff. The fish was still consumed.
 	t.broadcastToTrackers(mob.id, encodeEntityEvent(mob.id, entityEventWolfTameSmoke))
+}
+
+// ocelotTrustParticleTrust / ocelotTrustParticleFail are the EntityEvent ("entity status") bytes the
+// Ocelot broadcasts on a trust roll (Ocelot.mobInteract: broadcastEntityEvent(this,(byte)41) on trust,
+// (byte)40 on fail -> Ocelot.handleEntityEvent -> spawnTrustingParticles(true/false), the heart/smoke
+// puff). Client-visual only; the trust GAMEPLAY is the ocelotTrusting flag. Cite Ocelot.mobInteract +
+// Ocelot.handleEntityEvent.
+const (
+	ocelotTrustParticleTrust byte = 41
+	ocelotTrustParticleFail  byte = 40
+)
+
+// ocelotTrustDistSqr is Ocelot.mobInteract's player.distanceToSqr(this) < 9.0 feed-range gate (3 blocks).
+//
+//	[VERIFIED javap Ocelot.mobInteract: player.distanceToSqr(this) ldc2_w 9.0d; dcmpg; ifge.]
+const ocelotTrustDistSqr = 9.0
+
+// tryOcelotInteract ports net.minecraft.world.entity.animal.feline.Ocelot.mobInteract VERBATIM, the ocelot
+// sibling of tryCatInteract. Returns true when it consumes the interact (no fall-through to tryFeedAnimal),
+// false to fall through. Held item read SERVER-side (never trusted from the payload).
+//
+//	[VERIFIED javap Ocelot.mobInteract: if ((temptGoal==null || temptGoal.isRunning()) && !isTrusting() &&
+//	 isFood(stack) && player.distanceToSqr(this) < 9.0) { usePlayerItem; if(!isClientSide){ if(random
+//	 .nextInt(3)==0){ setTrusting(true); spawnTrustingParticles(true); broadcastEntityEvent((byte)41) }
+//	 else { spawnTrustingParticles(false); broadcastEntityEvent((byte)40) } } return SUCCESS; } return
+//	 super.mobInteract(...). isFood = is(ItemTags.OCELOT_FOOD) (cod/salmon).]
+func (t *TickLoop) tryOcelotInteract(p *tickPlayer, mob *Entity) bool {
+	// (temptGoal == null || temptGoal.isRunning()): the leading gate. v1 has no per-goal isRunning() query
+	// exposed here; the observable intent is "the ocelot is either idle or actively being tempted" -- a
+	// cited const-true reduction (a non-trusting ocelot fed in range always accepts the feed-trust, exactly
+	// as the tempt-goal-running case). !isTrusting() is the real gate below. Cite Ocelot.mobInteract.
+	if mob.ocelotTrusting {
+		return false // an already-trusting ocelot falls through to the super feed
+	}
+	inv := ensureInventory(p)
+	held := inv.get(heldWindowSlot(inv.heldSlot))
+	if slotIsEmpty(held) || !itemInTag(int32(held.ItemID), "ocelot_food") {
+		return false // not OCELOT_FOOD (cod/salmon) -> fall through to super feed
+	}
+	// player.distanceToSqr(this) < 9.0 (feet-to-feet squared distance).
+	dx, dy, dz := p.x-mob.x, p.y-mob.y, p.z-mob.z
+	if dx*dx+dy*dy+dz*dz >= ocelotTrustDistSqr {
+		return false // out of feed range -> fall through
+	}
+	// usePlayerItem: consume 1 fish (survival) BEFORE the roll, exactly as the bytecode orders it.
+	t.shrinkHeldItem(p, inv)
+	// the 1-in-3 trust roll on the ocelot's OWN per-entity stream.
+	t.tryToTrustOcelot(mob)
+	return true
+}
+
+// tryToTrustOcelot ports the Ocelot.mobInteract server branch: ONE random.nextInt(3) on the ocelot's
+// per-entity stream; on 0 -> setTrusting(true) + heart particles (byte 41); else smoke particles (byte 40).
+// The fish was already consumed by the caller. Cite Ocelot.mobInteract.
+func (t *TickLoop) tryToTrustOcelot(mob *Entity) {
+	if mobRandom(mob).nextInt(3) == 0 {
+		mob.ocelotTrusting = true // setTrusting(true) == entityData.set(DATA_TRUSTING, true)
+		// broadcastEntityEvent(this, (byte)41) -> spawnTrustingParticles(true): the trust HEART burst.
+		t.broadcastToTrackers(mob.id, encodeEntityEvent(mob.id, ocelotTrustParticleTrust))
+		return
+	}
+	// broadcastEntityEvent(this, (byte)40) -> spawnTrustingParticles(false): the trust-FAIL SMOKE puff.
+	t.broadcastToTrackers(mob.id, encodeEntityEvent(mob.id, ocelotTrustParticleFail))
 }
