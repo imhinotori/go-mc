@@ -619,6 +619,53 @@ func sulfurCubeSupplier() *Supplier {
 		Build()
 }
 
+// beeSupplier is the port of Bee.createAttributes() : Animal.createAnimalAttributes() + MAX_HEALTH
+// 10.0 + FLYING_SPEED 0.6000000238418579 + MOVEMENT_SPEED 0.30000001192092896 + ATTACK_DAMAGE 2.0
+// (jar: net.minecraft.world.entity.animal.bee.Bee.createAttributes -- javap this session: ldc2_w
+// 10.0d MAX_HEALTH, 0.6000000238418579d FLYING_SPEED, 0.30000001192092896d MOVEMENT_SPEED, 2.0d
+// ATTACK_DAMAGE). NO FOLLOW_RANGE override -- FOLLOW_RANGE stays the createMobAttributes 16.0. The
+// MOVEMENT_SPEED + FLYING_SPEED literals are the vanilla float-widened doubles, preserved bit-for-bit.
+func beeSupplier() *Supplier {
+	return createAnimalAttributes().
+		AddValue(MaxHealth, 10.0).
+		AddValue(FlyingSpeed, 0.6000000238418579).
+		AddValue(MovementSpeed, 0.30000001192092896).
+		AddValue(AttackDamage, 2.0).
+		Build()
+}
+
+// goatSupplier is the port of Goat.createAttributes() : Animal.createAnimalAttributes() + MAX_HEALTH
+// 10.0 + MOVEMENT_SPEED 0.20000000298023224 + ATTACK_DAMAGE 2.0 (jar:
+// net.minecraft.world.entity.animal.goat.Goat.createAttributes -- javap this session: ldc2_w 10.0d
+// MAX_HEALTH, 0.20000000298023224d MOVEMENT_SPEED, 2.0d ATTACK_DAMAGE). The MOVEMENT_SPEED literal is
+// the vanilla float-widened double, preserved bit-for-bit. NOTE the "screaming goat runs faster" is
+// NOT a base-attribute override (there is only ONE MOVEMENT_SPEED add in createAttributes); the
+// ram/long-jump speed is the brain LongJump machinery, DEFERRED.
+func goatSupplier() *Supplier {
+	return createAnimalAttributes().
+		AddValue(MaxHealth, 10.0).
+		AddValue(MovementSpeed, 0.20000000298023224).
+		AddValue(AttackDamage, 2.0).
+		Build()
+}
+
+// frogSupplier is the port of Frog.createAttributes() : Animal.createAnimalAttributes() +
+// MOVEMENT_SPEED 1.0 (dconst_1) + MAX_HEALTH 10.0 + ATTACK_DAMAGE 10.0 + STEP_HEIGHT 1.0 (dconst_1)
+// (jar: net.minecraft.world.entity.animal.frog.Frog.createAttributes -- javap this session: dconst_1
+// MOVEMENT_SPEED, ldc2_w 10.0d MAX_HEALTH, ldc2_w 10.0d ATTACK_DAMAGE, dconst_1 STEP_HEIGHT). The frog
+// MOVEMENT_SPEED 1.0 is large because the jump-heavy navigation reads it through a small per-jump
+// scale (a hopping mob, like the rabbit); ATTACK_DAMAGE 10.0 is the tongue-eat kill (a slime/magma-cube
+// is one-shot). STEP_HEIGHT 1.0 OVERRIDES the base createLivingAttributes default 0.6 (a frog hops a
+// full block, like the turtle/enderman).
+func frogSupplier() *Supplier {
+	return createAnimalAttributes().
+		AddValue(MovementSpeed, 1.0).
+		AddValue(MaxHealth, 10.0).
+		AddValue(AttackDamage, 10.0).
+		AddValue(StepHeight, 1.0).
+		Build()
+}
+
 // livingFallbackSupplier is the port of LivingEntity.createLivingAttributes() (the gameplay subset):
 // the base attribute set EVERY LivingEntity has. Vanilla's DefaultAttributes registers a supplier for
 // every living EntityType; Sulfur ports the common per-type suppliers above and leans on THIS fallback
@@ -743,6 +790,13 @@ var suppliers = map[string]*Supplier{
 	// + MAX_HEALTH 300.0 + MOVEMENT_SPEED 0.6 + FLYING_SPEED 0.6 + FOLLOW_RANGE 40.0 + ARMOR 4.0. Keyed by
 	// registry name so NewMapForEntity resolves the faithful 300hp boss map (its category is monster).
 	"wither": witherSupplier(),
+	// BEE + GOAT + FROG (Task): the three passive animals. Each a 1:1 jar copy of its createAttributes
+	// (verified bytecode this session). Bee (Animal + MAX_HEALTH 10 + FLYING_SPEED 0.6 + MOVEMENT_SPEED
+	// 0.3 + ATTACK_DAMAGE 2), Goat (Animal + MAX_HEALTH 10 + MOVEMENT_SPEED 0.2 + ATTACK_DAMAGE 2), Frog
+	// (Animal + MOVEMENT_SPEED 1.0 + MAX_HEALTH 10 + ATTACK_DAMAGE 10 + STEP_HEIGHT 1.0). Keyed by registry name.
+	"bee":  beeSupplier(),
+	"goat": goatSupplier(),
+	"frog": frogSupplier(),
 }
 
 // livingCategories is the set of data/entity.Entity.Type values that correspond to a vanilla

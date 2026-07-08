@@ -394,7 +394,7 @@ type Entity struct {
 	// isEndCrystal). isEndCrystal marks the entity; endCrystalTime mirrors EndCrystal.time (the free-
 	// running ++ counter EndCrystal.tick increments, drives the beam/bob client visual). Zero for every
 	// non-crystal entity. Cite EndCrystal.tick.
-	isEndCrystal  bool
+	isEndCrystal   bool
 	endCrystalTime int32
 	// --- WITHER BOSS (net.minecraft.world.entity.boss.wither.WitherBoss) ----------------------------
 	//
@@ -444,6 +444,24 @@ type Entity struct {
 	// conversion runs everywhere EXCEPT dimNether. Set at spawn (spawnHoglin) from the spawn context; the
 	// entity store is single-dimension in v1, so this is how a hoglin knows it is (not) in the nether.
 	hoglinDimension int
+	// --- BEE / GOAT / FROG (passive animals, Task) --------------------------------------------------
+	//
+	// Tick-owned plain values, set/read ONLY for their own type (each *AiStep gates on typ). isBee/isGoat/
+	// isFrog mark the entity. beeHasStung mirrors Bee.hasStung (DATA_FLAGS bit set on a sting -> the bee then
+	// dies gradually). beeTimeSinceSting mirrors Bee.timeSinceSting (the post-sting death countdown: once
+	// hasStung, ++ every tick, and on (timeSinceSting % 5 == 0 && nextInt(clamp(1200-timeSinceSting,1,1200))
+	// == 0) the bee takes generic getHealth() self-damage -> dies with rising probability). goatScreaming
+	// mirrors Goat.isScreamingGoat (DATA_IS_SCREAMING_GOAT, rolled nextDouble() < 0.02 at finalizeSpawn --
+	// the louder, ram-prone variant). frogVariant mirrors Frog's DATA_VARIANT_ID (0 temperate / 1 warm /
+	// 2 cold, biome-derived at spawn). Zero for every other entity. Cite Bee.hasStung/timeSinceSting +
+	// Bee.customServerAiStep sting-death, Goat.isScreamingGoat + finalizeSpawn, Frog FrogVariant.
+	isBee             bool
+	isGoat            bool
+	isFrog            bool
+	beeHasStung       bool
+	beeTimeSinceSting int
+	goatScreaming     bool
+	frogVariant       int
 	// --- PIGLIN (net.minecraft.world.entity.monster.piglin.Piglin) -------------------------------
 	//
 	// Tick-owned plain values, set/read ONLY for a Piglin (piglinBrainTick gates on typ == entity.Piglin.ID).

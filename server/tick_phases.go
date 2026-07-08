@@ -783,6 +783,27 @@ func (t *TickLoop) tickAI() {
 		if e.typ == entity.Fox.ID {
 			t.foxAiStep(e)
 		}
+		// BEE (Task): the Bee.customServerAiStep sting-death countdown (after a sting, ++timeSinceSting and
+		// on the %% 5 cadence roll generic self-damage -> the bee dies from its own sting). Per-type-gated like
+		// the fox/creeper, AFTER serverAiStep. ADDITIVE + bee-gated (zero cost / zero RNG for every non-bee, and
+		// zero RNG for a never-stung bee -- the pig oracle stream is untouched). Cite Bee.customServerAiStep.
+		if e.typ == entity.Bee.ID {
+			t.beeAiStep(e)
+		}
+		// GOAT (Task): the Goat.customServerAiStep brain hook (the RAM/long-jump behaviors are DEFERRED; today a
+		// bounded no-op reading the screaming flag). Per-type-gated like the bee, AFTER serverAiStep. ADDITIVE +
+		// goat-gated (zero cost / zero RNG for every non-goat -- the pig oracle stream is untouched). Cite
+		// Goat.customServerAiStep + GoatAi (brain deferral note).
+		if e.typ == entity.Goat.ID {
+			t.goatAiStep(e)
+		}
+		// FROG (Task): the Frog.customServerAiStep brain hook (the long-jump + tongue-eat/frogspawn are DEFERRED;
+		// today a bounded no-op reading the variant). Per-type-gated like the goat, AFTER serverAiStep. ADDITIVE +
+		// frog-gated (zero cost / zero RNG for every non-frog -- the pig oracle stream is untouched). Cite
+		// Frog.customServerAiStep + FrogAi (brain deferral note).
+		if e.typ == entity.Frog.ID {
+			t.frogAiStep(e)
+		}
 		// MOB-PREY (Task #9): the Endermite.aiStep despawn timer (life++ while non-persistent, discard at
 		// life>=2400). Per-type-gated like the creeper/enderman, AFTER serverAiStep. ADDITIVE + endermite-gated
 		// (zero cost / zero RNG for every non-endermite - the pig oracle stream is untouched).
@@ -962,7 +983,6 @@ func (t *TickLoop) tickPhysics() {
 		if witherIsFlyer(e) {
 			continue
 		}
-
 
 		// NON-MOB ENTITIES run their OWN full physics in their dedicated .tick during tickEntities
 		// (tickItems/tickOrbs/tickArrows/tickPrimedTnt/tickPotions/tickThrowables/tickHurtingProjectiles/

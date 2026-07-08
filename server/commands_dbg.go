@@ -252,6 +252,30 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned zombified_piglin eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+1, p.z))
 		}
+	case "bee":
+		// BEE (Task): spawn an adult Bee (the flying passive/neutral animal). MAX_HEALTH 10, FLYING_SPEED 0.6,
+		// MOVEMENT_SPEED 0.3, ATTACK_DAMAGE 2. Passive goal walk (Float/Tempt(bee_food)/Breed/Follow/Wander); the
+		// hive/pollination + neutral-anger sting-pursuit are DEFERRED. Spawned 1 block up.
+		e := t.spawnBee(p.x, p.y+1, p.z, false)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned bee eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+1, p.z))
+		}
+	case "goat":
+		// GOAT (Task): spawn an adult Goat (the mountain animal). MAX_HEALTH 10, MOVEMENT_SPEED 0.2, ATTACK_DAMAGE
+		// 2. Passive goal walk (Float/Panic/Breed/Tempt(goat_food)/Follow/Stroll/Look); a rare screaming variant
+		// (nextDouble() < 0.02). The RAM + high goat-jump are DEFERRED (brain). Spawned 1 block up.
+		e := t.spawnGoat(p.x, p.y+1, p.z, false)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned goat eid=%d (screaming=%v) at (%.1f,%.1f,%.1f)", e.id, e.goatScreaming, p.x, p.y+1, p.z))
+		}
+	case "frog":
+		// FROG (Task): spawn an adult Frog (the swamp animal). MOVEMENT_SPEED 1.0, MAX_HEALTH 10, ATTACK_DAMAGE 10,
+		// STEP_HEIGHT 1.0 (full-block hop-up). Passive goal walk (Float/Panic/Breed/Tempt(frog_food)/Follow/Stroll/
+		// Look); temperate variant. The long-jump + tongue-eat/frogspawn are DEFERRED (brain). Spawned 1 block up.
+		e := t.spawnFrog(p.x, p.y+1, p.z, false)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned frog eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+1, p.z))
+		}
 	case "zoglin":
 		// ZOGLIN (GAP): the TERMINAL undead a hoglin becomes off-nether. INDISCRIMINATELY hostile -- it
 		// attacks ANY player OR mob (except other zoglins and creepers) and FLINGS the target upward (the
@@ -385,7 +409,7 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		t.onRedstoneEdit(wirePos)
 		t.broadcastSystemChat(fmt.Sprintf("[dbg] placed redstone_block(%d,%d,%d)+wire(%d,%d,%d); wire should be POWER 15", bx, by, bz, bx+1, by, bz))
 	default:
-		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | dragon | iron_golem | villager | villager_farmer | vex | ghast_hostile | blaze | strider | wither_skeleton | wither | hoglin | fangs | water | pig-in-water | raid | rain | redstone | trade")
+		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | dragon | iron_golem | villager | villager_farmer | vex | ghast_hostile | blaze | strider | wither_skeleton | wither | hoglin | bee | goat | frog | fangs | water | pig-in-water | raid | rain | redstone | trade")
 	}
 }
 

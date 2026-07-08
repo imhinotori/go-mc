@@ -158,11 +158,11 @@ func TestSupplierCoverage(t *testing.T) {
 // supplier (e.g. "fox", a creature) returns the createLivingAttributes() base set (non-nil), NOT
 // nil — every living type gets at least the base living attributes.
 func TestLivingFallback(t *testing.T) {
-	// A living type with NO dedicated supplier falls back to createLivingAttributes(). ("wolf" then "fox"
-	// were fallback examples until their suppliers were ported — Phase 36 for the wolf, Task #9 for the
-	// fox; "ender_dragon" was too, until the boss task ported enderDragonSupplier (MAX_HEALTH 200) — so the
-	// pins here are still-unported living creatures: axolotl, bee, allay.)
-	for _, name := range []string{"axolotl", "bee", "allay"} {
+	// A living type with NO dedicated supplier falls back to createLivingAttributes(). Earlier examples
+	// (wolf/fox/bee/ender_dragon/wither) each gained a dedicated supplier as it was ported, so the pins
+	// here are still-unported living creatures: axolotl, salmon, bat. NOTE the em-dash was removed to keep
+	// ASCII-only source.
+	for _, name := range []string{"axolotl", "salmon", "bat"} {
 		m := NewMapForEntity(name)
 		if m == nil {
 			t.Fatalf("NewMapForEntity(%q) = nil, want the living fallback base set", name)
