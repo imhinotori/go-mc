@@ -359,10 +359,10 @@ func enchantSpawnedEquipment(e *Entity, slot int, rng *entityRandom, chance, mul
 func populateMonsterEquipment(e *Entity, rng *entityRandom, mult float32) {
 	populateDefaultEquipmentSlots(e, rng, mult)
 	switch e.typ {
-	case entity.Skeleton.ID:
-		// AbstractSkeleton: after the super armor roll, unconditionally hold a bow.
+	case entity.Skeleton.ID, entity.Stray.ID, entity.Bogged.ID:
+		// AbstractSkeleton (+ Stray/Bogged, no populate override): after the super armor roll, hold a bow.
 		e.setItemSlot(eqSlotMainHand, itemStackOf(item.Bow))
-	case entity.Zombie.ID:
+	case entity.Zombie.ID, entity.Drowned.ID, entity.ZombieVillager.ID:
 		// Zombie: chance to hold an iron tool/weapon.
 		f2 := float32(0.01)
 		if serverDifficulty == difficultyHard {

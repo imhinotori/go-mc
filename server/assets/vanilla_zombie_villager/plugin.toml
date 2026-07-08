@@ -1,0 +1,12 @@
+name = "vanilla_zombie_villager"
+version = "0.1.0"
+entrypoint = "main.star"
+runtime = "starlark"
+# Least-privilege caps (24-RESEARCH Security Domain / T-24-07). The COMBAT goals are Go-NATIVE
+# (kind=), and the SIGNATURE behavior (tipped arrow / trident throw / conversion) is Go-native too --
+# the .star declares only the PASSIVE goals, which read state + nearest player and write look + nav want:
+#   entities.read  -- read x/y/z + the rng draws (stroll/look gates) + the look-state scratch
+#   entities.write -- set_look_at (LookControl.setLookAt) + set_state (the passive goal scratch)
+#   world.read     -- nearest_player (LookAtPlayerGoal getNearestPlayer)
+#   nav            -- path_to/has_path/stop (RandomStrollGoal navigation)
+capabilities = ["entities.read", "entities.write", "world.read", "nav"]

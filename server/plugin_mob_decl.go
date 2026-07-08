@@ -185,7 +185,15 @@ var baseTypeByName = map[string]entity.Entity{
 	// AbstractCow — each renders as its OWN wire type but reuses the parent's goals + attributes.
 	"husk":      entity.Husk,
 	"mooshroom": entity.Mooshroom,
-	"rabbit":    entity.Rabbit,
+	// MOB-VARIANT (Drowned/Stray/Bogged/ZombieVillager): the 4 zombie/skeleton variants. Each renders as
+	// its OWN wire type but reuses the parent's goals + attributes; the SIGNATURE behavior (trident throw /
+	// tipped arrow / cure conversion) is Go-native (zombie_variants.go). Drowned + ZombieVillager extend
+	// Zombie; Stray + Bogged extend AbstractSkeleton. Cite Drowned/Stray/Bogged/ZombieVillager.
+	"drowned":         entity.Drowned,
+	"stray":           entity.Stray,
+	"bogged":          entity.Bogged,
+	"zombie_villager": entity.ZombieVillager,
+	"rabbit":          entity.Rabbit,
 	"enderman":  entity.Enderman,
 	"fox":       entity.Fox,
 	// MOB-CUBE (SulfurCube): the size-scaled cube mob (a NEW 26.2 mob). base_type "sulfur_cube" renders as
@@ -717,7 +725,9 @@ func (t *TickLoop) spawnDeclaredMob(decl *mobDecl, x, y, z float64) *Entity {
 	// read ONCE from the tick clock (t.gametime), mirroring finalizeSpawn's single read of the
 	// per-mob DifficultyInstance. Cite Mob / AbstractSkeleton / Zombie.populateDefaultEquipmentSlots +
 	// finalizeSpawn ordering (populate slots -> populate enchantments).
-	if e.typ == entity.Zombie.ID || e.typ == entity.Skeleton.ID {
+	if e.typ == entity.Zombie.ID || e.typ == entity.Skeleton.ID ||
+		e.typ == entity.Drowned.ID || e.typ == entity.Stray.ID ||
+		e.typ == entity.Bogged.ID || e.typ == entity.ZombieVillager.ID {
 		populateMonsterEquipment(e, mobRandom(e), specialMultiplierFor(serverDifficulty, t.gametime))
 	}
 	// MOB-PREY (Task #9): Turtle.finalizeSpawn -> setHomePos(this.blockPosition()) — a spawned turtle's
@@ -745,6 +755,22 @@ func (t *TickLoop) spawnDeclaredMob(decl *mobDecl, x, y, z float64) *Entity {
 	// Cite Mob.canPickUpLoot / Fox.<init> setCanPickUpLoot(true).
 	if e.typ == entity.Fox.ID {
 		e.canPickUpLoot = true
+	}
+	// MOB-VARIANT (Drowned/Stray/Bogged/ZombieVillager): set the per-type marks + variant spawn init.
+	// Each renders as its own wire type; the mark drives the per-type aiStep (drowned trident throw /
+	// zombie-villager conversion countdown) and the tipped-arrow tag. Pure field sets + a cited trident
+	// equip roll for the drowned — no NEW RNG for the pig (a different mob). Cite Drowned/Stray/Bogged/
+	// ZombieVillager. (The equipment gate above already ran populateMonsterEquipment for these types.)
+	switch e.typ {
+	case entity.Drowned.ID:
+		e.isDrowned = true
+		initDrownedTridentEquip(e, mobRandom(e))
+	case entity.Stray.ID:
+		e.isStray = true
+	case entity.Bogged.ID:
+		e.isBogged = true
+	case entity.ZombieVillager.ID:
+		e.isZombieVillager = true
 	}
 	// Phase-27 (N=2): add the mob to the region that OWNS its column, NOT t.only().
 	// only() resolves to the CALLING goroutine's region — globalRegion when spawned from the

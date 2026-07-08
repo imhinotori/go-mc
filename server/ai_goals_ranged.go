@@ -239,7 +239,13 @@ func (t *TickLoop) performRangedAttack(e *Entity, target *tickPlayer, power floa
 	vy *= arrowLaunchSpeed
 	vz *= arrowLaunchSpeed
 
-	t.spawnArrow(e.id, e.x, arrowY, e.z, vx, vy, vz, baseDamage)
+	a := t.spawnArrow(e.id, e.x, arrowY, e.z, vx, vy, vz, baseDamage)
+	// Tipped-arrow variants (Stray/Bogged getArrow override): tag the fired Arrow with the variant's
+	// MobEffectInstance so it applies on a landed hit (Arrow.doPostHurtEffects). A plain skeleton's
+	// getArrow returns an un-tipped arrow (no effects). RNG-free; no draw reaches the pig oracle.
+	if fx := variantArrowEffects(e); fx != nil {
+		a.arrowEffects = fx
+	}
 }
 
 // eyeHeightForArrow is the launch-height offset for a mob firing a bow. Vanilla spawns the arrow at

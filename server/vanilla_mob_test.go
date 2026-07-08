@@ -136,9 +136,9 @@ func TestAllFourMobsBootLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadVanillaMobRegistry: %v", err)
 	}
-	const wantTotal = 28 // + the Villager (village NPC, brain mob) added to the 27 (26 + iron_golem)
+	const wantTotal = 32 // 28 + the 4 MOB-VARIANT mobs (drowned/stray/bogged/zombie_villager)
 	if got := len(r.byName); got != wantTotal {
-		t.Fatalf("registry holds %d declarations, want %d (28: the 27 + vanilla_villager)", got, wantTotal)
+		t.Fatalf("registry holds %d declarations, want %d (32: the 28 + drowned/stray/bogged/zombie_villager)", got, wantTotal)
 	}
 	for _, m := range allFourMobs {
 		decl, ok := r.byName[m.name]

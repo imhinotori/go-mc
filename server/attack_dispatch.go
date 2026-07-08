@@ -1155,6 +1155,22 @@ func (t *TickLoop) handleInteract(p *tickPlayer, pkt pk.Packet) {
 	// tag. Villager-gated (typ == entity.Villager.ID) so it is a zero-cost no-op for a pig/cow/sheep; the
 	// only RNG draw (rewardTradeXp's 3+nextInt(4) on a successful trade-take) is on the villager's OWN
 	// per-entity stream, so the pig oracle is unperturbed. Cite Villager.mobInteract.
+	// BOGGED SHEAR (MOB-VARIANT): the shears-on-Bogged interact (Bogged implements Shearable). tryBoggedShear
+	// returns true when the held item is SHEARS (consuming the interact, whether it sheared or the bogged was
+	// already sheared), false otherwise (fall through). Bogged-gated (typ == entity.Bogged.ID), a zero-cost
+	// no-op for every other mob -- the pig oracle is unperturbed. Cite Bogged.shear.
+	if mob.typ == entity.Bogged.ID && t.tryBoggedShear(p, mob) {
+		return // the shear (or the already-sheared consume) handled the interact
+	}
+	// ZOMBIE VILLAGER CURE (MOB-VARIANT): the golden-apple-on-a-weakened-ZombieVillager interact. tryZombie
+	// VillagerCure returns true when the held item is a GOLDEN_APPLE (consuming the interact -- starting the
+	// cure if it also has WEAKNESS, else a bare consume), false otherwise (fall through to the base zombie
+	// interact). ZombieVillager-gated (typ == entity.ZombieVillager.ID), a zero-cost no-op for every other
+	// mob; the lone nextInt(2401) cure roll is on the zombie villager OWN stream, so the pig oracle is
+	// unperturbed. Cite ZombieVillager.mobInteract.
+	if mob.typ == entity.ZombieVillager.ID && t.tryZombieVillagerCure(p, mob) {
+		return // the cure (or the bare golden-apple consume) handled the interact
+	}
 	if mob.typ == entity.Villager.ID && t.villagerMobInteract(p, mob) {
 		return // the villager interact (menu open / unhappy / busy) handled the click
 	}

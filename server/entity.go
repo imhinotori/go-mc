@@ -211,6 +211,12 @@ type Entity struct {
 	// deals the base damage); the flag is carried for that read + the client visual. Cite AbstractArrow.setCritArrow.
 	arrowCrit bool
 
+	// arrowEffects are the tipped-arrow MobEffectInstances an Arrow carries (Arrow.getPotionContents
+	// / addEffect). A Stray fires SLOWNESS 600 arrows; a Bogged fires POISON 100 arrows (getArrow
+	// overrides). On a landed hit arrowOnHitPlayer/Entity applies each to the victim (Arrow
+	// .doPostHurtEffects). Nil for a plain arrow. Cite Arrow.getArrow + Arrow.doPostHurtEffects.
+	arrowEffects []splashEffect
+
 	// spawnData is the ClientboundAddEntity "data" field (object-specific). For an arrow vanilla sets it to
 	// ownerId+1 (the client owner link for crit visuals); 0 for a plain mob. Set at spawn.
 	spawnData int32
@@ -530,6 +536,31 @@ type Entity struct {
 	// conversion runs everywhere EXCEPT dimNether. Set at spawn (spawnHoglin) from the spawn context; the
 	// entity store is single-dimension in v1, so this is how a hoglin knows it is (not) in the nether.
 	hoglinDimension int
+	// --- ZOMBIE/SKELETON VARIANTS (Drowned/Stray/Bogged/ZombieVillager) ------------------------------
+	//
+	// Tick-owned plain values, set/read ONLY for their own type. isDrowned/isStray/isBogged mark the
+	// entity so the per-type aiStep + arrow-tag hooks fire. boggedSheared mirrors Bogged DATA_SHEARED
+	// (a sheared Bogged shows no mushrooms + drops nothing more from shearing). Zero for every other
+	// entity. Cite Drowned / Stray / Bogged.
+	isDrowned    bool
+	// drownedTridentTime mirrors RangedAttackGoal.attackTime for the DrownedTridentAttackGoal cadence:
+	// the inter-throw cooldown (reset to 40 on a throw). Zero for every non-drowned. Cite
+	// net.minecraft.world.entity.ai.goal.RangedAttackGoal.attackTime + DrownedTridentAttackGoal.
+	drownedTridentTime int
+	isStray      bool
+	isBogged     bool
+	boggedSheared bool
+	// ZombieVillager conversion state (net.minecraft.world.entity.monster.zombie.ZombieVillager):
+	// isZombieVillager marks the entity; zvConverting mirrors DATA_CONVERTING_ID (isConverting());
+	// zvConversionTime mirrors villagerConversionTime (the per-tick countdown started by the cure);
+	// zvConversionStarter mirrors conversionStarter (the curer, entity id; 0 == none/natural). At
+	// startConverting: zvConversionTime = random.nextInt(2401)+3600. tick(): zvConversionTime -=
+	// getConversionProgress() (base 1); at <=0 -> finishConversion to a Villager. Zero for every other
+	// entity. Cite ZombieVillager.startConverting + tick + finishConversion.
+	isZombieVillager    bool
+	zvConverting        bool
+	zvConversionTime    int
+	zvConversionStarter int32
 	// --- BEE / GOAT / FROG (passive animals, Task) --------------------------------------------------
 	//
 	// Tick-owned plain values, set/read ONLY for their own type (each *AiStep gates on typ). isBee/isGoat/

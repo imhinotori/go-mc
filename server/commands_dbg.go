@@ -65,6 +65,36 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned husk eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
 		}
+	case "drowned":
+		// MOB-VARIANT (Drowned): spawn a vanilla drowned (Zombie behavior + a trident-throw when it rolls a
+		// TRIDENT at spawn; it hunts + melees like a zombie, and burns in daylight). The water-nav goals are
+		// deferred (no fluid subsystem). Drowned wire type.
+		e := t.spawnVanillaMob(vanillaDrownedMobName, p.x, p.y, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned drowned eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
+		}
+	case "stray":
+		// MOB-VARIANT (Stray): spawn a vanilla stray (Skeleton behavior; its bow fires SLOWNESS-600 tipped
+		// arrows). Stray wire type.
+		e := t.spawnVanillaMob(vanillaStrayMobName, p.x, p.y, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned stray eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
+		}
+	case "bogged":
+		// MOB-VARIANT (Bogged): spawn a vanilla bogged (Skeleton behavior, MAX_HEALTH 16; its bow fires
+		// POISON-100 tipped arrows; shear it for a red mushroom). Bogged wire type.
+		e := t.spawnVanillaMob(vanillaBoggedMobName, p.x, p.y, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned bogged eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
+		}
+	case "zombie_villager", "zombievillager":
+		// MOB-VARIANT (ZombieVillager): spawn a vanilla zombie villager (Zombie behavior). Right-click it with
+		// a golden apple WHILE it has WEAKNESS to start the cure -> after a 3600..6000-tick countdown it turns
+		// into a Villager. ZombieVillager wire type.
+		e := t.spawnVanillaMob(vanillaZombieVillagerMobName, p.x, p.y, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned zombie_villager eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
+		}
 	case "mooshroom":
 		// MOB-VARIANT (Task #9): spawn a vanilla mooshroom (Cow behavior, Mooshroom wire type).
 		e := t.spawnVanillaMob(vanillaMooshroomMobName, p.x, p.y, p.z)

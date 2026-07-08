@@ -240,6 +240,13 @@ func (t *TickLoop) arrowOnHitPlayer(e *Entity, victim *tickPlayer) {
 	dmg := int(math.Ceil(raw)) // Mth.ceil(clamp(...)); clamp upper bound is MAXINT (unreachable here)
 	src := damageSourceArrow(e.arrowShooterID)
 	t.applyDamage(victim, src, float32(dmg))
+	// Arrow.doPostHurtEffects: a tipped arrow (Stray SLOWNESS 600 / Bogged POISON 100, set on the arrow
+	// at spawn from the shooter's getArrow override) applies each carried effect to the LivingEntity hit
+	// (addEffect attributed to the shooter, scale 1.0). Nil for a plain arrow (zero cost). Cite
+	// net.minecraft.world.entity.projectile.arrow.Arrow.doPostHurtEffects.
+	for _, ef := range e.arrowEffects {
+		t.addPlayerEffect(victim, e.arrowShooterID, ef.id, ef.duration, ef.amplifier, 1.0)
+	}
 	t.cur().entities.remove(e.id)
 }
 

@@ -850,6 +850,21 @@ func (t *TickLoop) tickAI() {
 		if e.typ == entity.WitherSkeleton.ID {
 			t.witherSkeletonAiStep(e)
 		}
+		// DROWNED (MOB-VARIANT): the zombie variant that THROWS its trident -- when it holds a TRIDENT and a
+		// target is in trident range with line-of-sight, the DrownedTridentAttackGoal cadence fires a
+		// ThrownTrident (Drowned.performRangedAttack). Per-type-gated on e.isDrowned, AFTER serverAiStep (the
+		// base melee/stroll/look goals run there). ADDITIVE + drowned-gated (zero cost / zero RNG for every
+		// non-drowned -- the pig oracle stream is untouched; RNG only on a throw, on the drowned's OWN stream).
+		if e.isDrowned {
+			t.drownedAiStep(e)
+		}
+		// ZOMBIE VILLAGER (MOB-VARIANT): the conversion countdown -- while curing (started by the golden-apple
+		// interact), it subtracts getConversionProgress() from the timer each tick and finishConversion to a
+		// Villager at <=0. Per-type-gated on e.isZombieVillager, AFTER serverAiStep. ADDITIVE + gated (zero cost
+		// / zero RNG for every non-zombie-villager AND for a non-converting one -- the pig oracle is untouched).
+		if e.isZombieVillager {
+			t.zombieVillagerAiStep(e)
+		}
 		// HOGLIN (GAP): the nether beast -- acquire nearest player + the melee that FLINGS the target
 		// (HoglinBase.hurtAndThrowTarget knock-up toss) + the zoglin-conversion timer (converts to a Zoglin
 		// after > 300 ticks in a non-nether dimension). Per-type-gated like the blaze, AFTER serverAiStep.

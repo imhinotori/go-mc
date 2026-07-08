@@ -602,6 +602,46 @@ func huskSupplier() *Supplier {
 		Build()
 }
 
+// drownedSupplier is a 1:1 copy of Drowned.createAttributes: Zombie.createAttributes() then add
+// STEP_HEIGHT 1.0. All combat/health values are the Zombie base. Cite Drowned.createAttributes.
+func drownedSupplier() *Supplier {
+	return createMonsterAttributes().
+		AddValue(FollowRange, 35.0).
+		AddValue(MovementSpeed, 0.23000000417232513).
+		AddValue(AttackDamage, 3.0).
+		AddValue(Armor, 2.0).
+		AddValue(StepHeight, 1.0).
+		Build()
+}
+
+// zombieVillagerSupplier is a 1:1 copy of ZombieVillager (no createAttributes override) -> Zombie
+// .createAttributes. Cite ZombieVillager (extends Zombie).
+func zombieVillagerSupplier() *Supplier {
+	return createMonsterAttributes().
+		AddValue(FollowRange, 35.0).
+		AddValue(MovementSpeed, 0.23000000417232513).
+		AddValue(AttackDamage, 3.0).
+		AddValue(Armor, 2.0).
+		Build()
+}
+
+// straySupplier is a 1:1 copy of Stray (no createAttributes override) -> AbstractSkeleton
+// .createAttributes (MOVEMENT_SPEED 0.25; MAX_HEALTH/ATTACK_DAMAGE the base). Cite Stray.
+func straySupplier() *Supplier {
+	return createMonsterAttributes().
+		AddValue(MovementSpeed, 0.25).
+		Build()
+}
+
+// boggedSupplier is a 1:1 copy of Bogged.createAttributes: AbstractSkeleton.createAttributes() then
+// add MAX_HEALTH 16.0. Cite Bogged.createAttributes.
+func boggedSupplier() *Supplier {
+	return createMonsterAttributes().
+		AddValue(MovementSpeed, 0.25).
+		AddValue(MaxHealth, 16.0).
+		Build()
+}
+
 // wolfSupplier is the port of Wolf.createAttributes() : Animal.createAnimalAttributes() (Wolf extends
 // TamableAnimal -> Animal) + MOVEMENT_SPEED 0.3 + MAX_HEALTH 8.0 + ATTACK_DAMAGE 4.0 (jar:
 // net/minecraft/world/entity/animal/wolf/Wolf.createAttributes — MOVEMENT_SPEED 0.30000001192092896d,
@@ -1009,6 +1049,14 @@ var suppliers = map[string]*Supplier{
 	// AbstractCow), each a 1:1 inherited-attribute copy of its parent (no createAttributes override).
 	"husk":      huskSupplier(),
 	"mooshroom": mooshroomSupplier(),
+	// MOB-VARIANT (Drowned/Stray/Bogged/ZombieVillager): the 4 zombie/skeleton variants. Drowned +
+	// ZombieVillager extend Zombie (Drowned.createAttributes adds STEP_HEIGHT 1.0; ZombieVillager has no
+	// override); Stray + Bogged extend AbstractSkeleton (Stray no override; Bogged.createAttributes adds
+	// MAX_HEALTH 16.0). Cite Drowned/Stray/Bogged/ZombieVillager.createAttributes.
+	"drowned":         drownedSupplier(),
+	"stray":           straySupplier(),
+	"bogged":          boggedSupplier(),
+	"zombie_villager": zombieVillagerSupplier(),
 	"rabbit":    rabbitSupplier(),
 	"enderman":  endermanSupplier(),
 	"fox":       foxSupplier(),

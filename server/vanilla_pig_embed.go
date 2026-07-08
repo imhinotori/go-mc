@@ -29,7 +29,7 @@ import (
 // embedded manifest governs, T-24-07). Keep each repo-root/embed pair byte-identical. Embedding the
 // dirs covers plugin.toml + main.star for each mob.
 //
-//go:embed assets/vanilla_pig assets/vanilla_cow assets/vanilla_sheep assets/vanilla_chicken assets/vanilla_zombie assets/vanilla_skeleton assets/vanilla_spider assets/vanilla_wolf assets/vanilla_husk assets/vanilla_mooshroom assets/vanilla_silverfish assets/vanilla_creeper assets/vanilla_witch assets/vanilla_rabbit assets/vanilla_enderman assets/vanilla_cat assets/vanilla_fox assets/vanilla_sulfur_cube assets/vanilla_happy_ghast assets/vanilla_endermite assets/vanilla_turtle assets/vanilla_ocelot assets/vanilla_pillager assets/vanilla_vindicator assets/vanilla_evoker assets/vanilla_ravager assets/vanilla_iron_golem assets/vanilla_villager
+//go:embed assets/vanilla_pig assets/vanilla_cow assets/vanilla_sheep assets/vanilla_chicken assets/vanilla_zombie assets/vanilla_skeleton assets/vanilla_spider assets/vanilla_wolf assets/vanilla_husk assets/vanilla_mooshroom assets/vanilla_silverfish assets/vanilla_creeper assets/vanilla_witch assets/vanilla_rabbit assets/vanilla_enderman assets/vanilla_cat assets/vanilla_fox assets/vanilla_sulfur_cube assets/vanilla_happy_ghast assets/vanilla_endermite assets/vanilla_turtle assets/vanilla_ocelot assets/vanilla_pillager assets/vanilla_vindicator assets/vanilla_evoker assets/vanilla_ravager assets/vanilla_iron_golem assets/vanilla_villager assets/vanilla_drowned assets/vanilla_stray assets/vanilla_bogged assets/vanilla_zombie_villager
 var vanillaMobFS embed.FS
 
 // The declared mob names the swap sites look up. Each is the directory name under assets/ AND the
@@ -130,6 +130,16 @@ const (
 	// naturalCreatureMobNames/-MonsterMobNames. Additive to the embed + load order. Renders as
 	// entity.Villager (id 140).
 	vanillaVillagerMobName = "vanilla_villager"
+
+	// MOB-VARIANT (Drowned/Stray/Bogged/ZombieVillager): the 4 zombie/skeleton variants. Each
+	// renders as its OWN wire type (Drowned/Stray/Bogged/ZombieVillager) but reuses the parent's
+	// goals + attributes; the SIGNATURE behavior (trident throw / SLOWNESS+POISON tipped arrows /
+	// the cure conversion) is Go-native (zombie_variants.go). Village/water-spawned or /dbg placed,
+	// NOT uniform natural spawns, so NONE join naturalMonsterMobNames. Additive to the embed + load.
+	vanillaDrownedMobName        = "vanilla_drowned"
+	vanillaStrayMobName          = "vanilla_stray"
+	vanillaBoggedMobName         = "vanilla_bogged"
+	vanillaZombieVillagerMobName = "vanilla_zombie_villager"
 )
 
 // vanillaMobNames is the load order: ALL EIGHT bundled mobs (the 4 passives + the 3 Phase-35 hostiles +
@@ -168,6 +178,10 @@ var vanillaMobNames = []string{
 	vanillaRavagerMobName,
 	vanillaIronGolemMobName,
 	vanillaVillagerMobName,
+	vanillaDrownedMobName,
+	vanillaStrayMobName,
+	vanillaBoggedMobName,
+	vanillaZombieVillagerMobName,
 }
 
 // loadVanillaMobRegistry materializes EACH bundled vanilla mob plugin to a temp dir, parses its
