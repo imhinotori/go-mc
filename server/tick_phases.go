@@ -608,7 +608,7 @@ func (t *TickLoop) tickAI() {
 	// It is PURE INTEGER MATH (no RNG draw), so it cannot perturb the per-mob RNG stream the pig oracle
 	// pins (PITFALLS Pitfall 5), and it stays structurally outside the AI RNG flow (its own loop, before
 	// serverAiStep).
-	for _, e := range t.cur().entities.byID {
+	for _, e := range t.cur().entities.all() {
 		t.tickMobIFrames(e)
 		// Entity.baseTick fire block (fire.go): while burning, deal on_fire damage every 20 ticks +
 		// keep the on-fire shared-flag synced + extinguish in water. Pure-int + a gated damage/broadcast;
@@ -649,15 +649,15 @@ func (t *TickLoop) tickAI() {
 	// block at offsets 450-491, then the isDeadOrDying -> tickDeath gate at 491-513). A dead mob runs
 	// baseTick (so its deathTime counts up and it is removed at 20) but does NOT run aiStep goals — the
 	// fall-over is a CLIENT animation driven by the die() status-3 broadcast, not server movement. We
-	// snapshot the byID values first because tickDeath removes the entity from the byID map at deathTime
-	// >= 20 (ranging the map directly while deleting from it is unsafe).
+	// snapshot the store values first because tickDeath removes the entity from the byID map at deathTime
+	// >= 20. entityStore.all returns them in id order, so simultaneous corpses count down deterministically.
 	//
 	//	[VERIFIED javap LivingEntity.baseTick: after the i-frame decrements, `isDeadOrDying ifeq skip;
 	//	 level.shouldTickDeath(this) ifeq skip; tickDeath()`. The dead corpse stays in the store (aiStep
 	//	 is gated only on !isRemoved, but its goals self-gate and v1 deliberately skips them for a corpse —
 	//	 a dead mob does not path).]
-	deadSnapshot := make([]*Entity, 0, len(t.cur().entities.byID))
-	for _, e := range t.cur().entities.byID {
+	deadSnapshot := make([]*Entity, 0, t.cur().entities.len())
+	for _, e := range t.cur().entities.all() {
 		if e.dead {
 			deadSnapshot = append(deadSnapshot, e)
 		}
@@ -674,12 +674,12 @@ func (t *TickLoop) tickAI() {
 		t.tickDeath(e) // ++deathTime; at >=20 broadcast the status-60 poof + remove via the owner region
 	}
 
-	// Snapshot the AI mobs so the serverAiStep loop is stable even if a spawn (below) or a move
-	// re-buckets mid-range — exactly the discipline tickPhysics uses (copy the byID values, then range).
+	// Snapshot the AI mobs in id order so the serverAiStep loop is stable even if a spawn (below) or a move
+	// re-buckets mid-range — exactly the discipline tickPhysics uses (copy the store values, then range).
 	// A DEAD mob is EXCLUDED: a corpse does not run AI/goals/navigation (it is counting down its death
 	// animation via tickDeath above), matching vanilla where a dying mob's goals self-gate to no-ops.
-	snapshot := make([]*Entity, 0, len(t.cur().entities.byID))
-	for _, e := range t.cur().entities.byID {
+	snapshot := make([]*Entity, 0, t.cur().entities.len())
+	for _, e := range t.cur().entities.all() {
 		if e.ai != nil && !e.dead {
 			snapshot = append(snapshot, e)
 		}
@@ -1118,7 +1118,7 @@ func (t *TickLoop) tickAI() {
 	// Mob -- e.ai == nil), so it is EXCLUDED from the serverAiStep snapshot above; it gets its own pass
 	// here over the region store. Gated on e.isEndCrystal so every non-crystal entity is a cheap skip
 	// (zero cost / zero RNG -- the pig oracle stream is untouched). Pure integer ++time, no movement.
-	for _, e := range t.cur().entities.byID {
+	for _, e := range t.cur().entities.all() {
 		if e.isEndCrystal && !e.dead {
 			t.tickEndCrystal(e)
 		}
@@ -1144,7 +1144,7 @@ func (t *TickLoop) tickAI() {
 //
 // Iterating a snapshot of the store's by-id values is safe: moveEntity re-buckets via
 // entities.move, which only mutates the per-column bucket slices, never the byID map we are
-// ranging — but we copy to a local slice first so the iteration order is stable and immune
+// ranging. entityStore.all copies to a local id-sorted slice first so the iteration order is stable and immune
 // to any future in-loop add/remove.
 func (t *TickLoop) tickPhysics() {
 	t.trace("tickPhysics")
@@ -1152,11 +1152,8 @@ func (t *TickLoop) tickPhysics() {
 		return // defensive: store is non-nil from NewTickLoop, but never panic if absent
 	}
 
-	// Snapshot the live entities so the loop is stable even if a move re-buckets mid-range.
-	snapshot := make([]*Entity, 0, len(t.cur().entities.byID))
-	for _, e := range t.cur().entities.byID {
-		snapshot = append(snapshot, e)
-	}
+	// Snapshot the live entities in id order so the loop is stable even if a move re-buckets mid-range.
+	snapshot := t.cur().entities.all()
 
 	for _, e := range snapshot {
 		// A DEAD mob is frozen for its death-animation window: the ~1s fall-over is a CLIENT animation

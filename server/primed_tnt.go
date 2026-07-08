@@ -166,8 +166,8 @@ func (t *TickLoop) tickPrimedTnt() {
 		if r.entities == nil {
 			continue
 		}
-		snapshot := make([]*Entity, 0, len(r.entities.byID))
-		for _, e := range r.entities.byID {
+		snapshot := make([]*Entity, 0, r.entities.len())
+		for _, e := range r.entities.all() {
 			if e.isTnt {
 				snapshot = append(snapshot, e)
 			}

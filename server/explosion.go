@@ -141,7 +141,7 @@ func (t *TickLoop) hurtEntitiesFromExplosion(srcID int32, x, y, z, radius float6
 	// Every OTHER entity (mobs, primed TNT, items, boats, minecarts, arrows, ...). Vanilla's
 	// getEntities(source, box) returns these uniformly; the Go split handles players above, so skip
 	// typ==Player here (a player's store entity lives in byID too — skipping it prevents a double push).
-	for _, e := range t.cur().entities.byID {
+	for _, e := range t.cur().entities.all() {
 		if e == nil || e.id == srcID || e.dead || e.typ == playerEntityTypeID {
 			continue
 		}
@@ -300,7 +300,7 @@ func (t *TickLoop) explodeWindBurst(srcID int32, x, y, z float64) {
 
 	// Mobs (store entities): the gust launches nearby mobs too. Impulse on the store velocity; the tracker
 	// broadcasts the motion. srcID (the wind charge) is excluded.
-	for _, e := range t.cur().entities.byID {
+	for _, e := range t.cur().entities.all() {
 		if e == nil || e.id == srcID || e.dead {
 			continue
 		}

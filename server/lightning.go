@@ -270,7 +270,7 @@ func (t *TickLoop) findLightningTargetAround(seed pk.Position) pk.Position {
 	// Mob LivingEntities in the tall box.
 	r := t.only()
 	if r != nil && r.entities != nil {
-		for _, m := range r.entities.byID {
+		for _, m := range r.entities.all() {
 			if m == nil || !isLivingMob(m) || !m.isAlive() {
 				continue // e.isAlive() && instanceof LivingEntity
 			}
@@ -361,7 +361,7 @@ func (t *TickLoop) tickLightning() {
 			continue
 		}
 		var snapshot []*Entity
-		for _, e := range r.entities.byID {
+		for _, e := range r.entities.all() {
 			if e.isBolt {
 				snapshot = append(snapshot, e)
 			}

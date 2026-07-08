@@ -104,7 +104,7 @@ func (t *TickLoop) ravagerRoar(e *Entity) {
 		}
 		t.applyDamage(p, src, float32(ravagerRoarDamage))
 	}
-	for _, other := range t.cur().entities.byID {
+	for _, other := range t.cur().entities.all() {
 		if other == nil || other.id == e.id || other.dead || !other.isAlive() {
 			continue
 		}

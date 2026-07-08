@@ -89,7 +89,7 @@ func (t *TickLoop) endCrystalHurt(e *Entity, src damageSource) bool {
 	// region. Each dragon's dragonOnCrystalDestroyed gates on crystal == nearestCrystal, so only the dragon
 	// that was healing off THIS crystal takes the 10.0 head hit (the faithful single-dragon-fight outcome).
 	owner := t.regionForEntity(e)
-	for _, other := range owner.entities.byID {
+	for _, other := range owner.entities.all() {
 		if other != nil && other.dragon != nil && !other.dead {
 			t.dragonOnCrystalDestroyed(other, crystalID, src)
 		}

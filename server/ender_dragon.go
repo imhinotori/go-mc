@@ -272,7 +272,7 @@ func (t *TickLoop) dragonCheckCrystals(e *Entity) {
 		bestSq := math.Inf(1)                             // d3 = Double.MAX_VALUE
 		inflate := dragonCrystalScanRadius                // 32.0: the getBoundingBox().inflate(32.0) half-extent
 		owner := t.regionForEntity(e)
-		for _, other := range owner.entities.byID {
+		for _, other := range owner.entities.all() {
 			if other == nil || !other.isEndCrystal || other.dead {
 				continue
 			}
@@ -594,4 +594,3 @@ func (t *TickLoop) spawnEndDragonFight() *Entity {
 	}
 	return dragon
 }
-

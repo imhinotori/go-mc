@@ -198,7 +198,7 @@ func (r *region) detectTransfers() {
 	if r.entities == nil {
 		return
 	}
-	for _, e := range r.entities.byID {
+	for _, e := range r.entities.all() {
 		if regionOf(columnOf(e.x, e.z)) != r.id {
 			r.pendingTransfers = append(r.pendingTransfers, transferIntent{ent: e, to: regionOf(columnOf(e.x, e.z))})
 		}
@@ -231,8 +231,8 @@ func (t *TickLoop) applyCrossRegionTransfers() {
 			if _, ok := src.entities.get(ti.ent.id); !ok {
 				continue
 			}
-			src.entities.remove(ti.ent.id)               // out of the source region's store
-			t.regions[ti.to].entities.add(ti.ent)        // into the destination region's store (same *Entity)
+			src.entities.remove(ti.ent.id)        // out of the source region's store
+			t.regions[ti.to].entities.add(ti.ent) // into the destination region's store (same *Entity)
 		}
 		src.pendingTransfers = src.pendingTransfers[:0] // reset for next tick (keep the backing array)
 	}
