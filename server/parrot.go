@@ -40,14 +40,16 @@ import (
 
 // Parrot constants (VERIFIED javap Parrot this task).
 const (
-	parrotMaxHealth    = 6.0           // createAttributes MAX_HEALTH 6.0
-	parrotPanicSpeed   = 1.25          // @0 TamableAnimalPanicGoal(this, 1.25) speedModifier (ldc2_w 1.25d)
-	parrotLookDistance = 8.0           // @1 LookAtPlayerGoal(Player, 8.0f) lookDistance (ldc 8.0f)
-	parrotFollowSpeed  = 1.0           // @2 FollowOwnerGoal(this, 1.0, 5.0, 1.0) speedModifier (dconst_1)
-	parrotWanderSpeed  = 1.0           // @2 ParrotWanderGoal(this, 1.0) speedModifier (dconst_1)
-	parrotTameChance   = 10            // mobInteract: nextInt(10) == 0 tame roll (bipush 10)
-	parrotFoodTag      = "parrot_food" // ItemTags.PARROT_FOOD (the seed tame predicate)
-	parrotVariantCount = 5             // Parrot.Variant: RED_BLUE/BLUE/GREEN/YELLOW_BLUE/GRAY (byId 0..4)
+	parrotMaxHealth            = 6.0                     // createAttributes MAX_HEALTH 6.0
+	parrotPanicSpeed           = 1.25                    // @0 TamableAnimalPanicGoal(this, 1.25) speedModifier (ldc2_w 1.25d)
+	parrotLookDistance         = 8.0                     // @1 LookAtPlayerGoal(Player, 8.0f) lookDistance (ldc 8.0f)
+	parrotFollowSpeed          = 1.0                     // @2 FollowOwnerGoal(this, 1.0, 5.0, 1.0) speedModifier (dconst_1)
+	parrotWanderSpeed          = 1.0                     // @2 ParrotWanderGoal(this, 1.0) speedModifier (dconst_1)
+	parrotTameChance           = 10                      // mobInteract: nextInt(10) == 0 tame roll (bipush 10)
+	parrotFoodTag              = "parrot_food"           // ItemTags.PARROT_FOOD (the seed tame predicate)
+	parrotPoisonousFoodTag     = "parrot_poisonous_food" // ItemTags.PARROT_POISONOUS_FOOD (cookie -> poison + death)
+	parrotCookiePoisonDuration = 900                     // MobEffectInstance(POISON, 900) applied by the cookie feed (sipush 900)
+	parrotVariantCount         = 5                       // Parrot.Variant: RED_BLUE/BLUE/GREEN/YELLOW_BLUE/GRAY (byId 0..4)
 	// parrotFlyingSpeed is the Parrot FLYING_SPEED attribute base (0.4000000059604645), the fly-nav seed.
 	parrotFlyingSpeed = 0.4000000059604645
 )
@@ -93,9 +95,11 @@ func (t *TickLoop) spawnParrot(x, y, z float64) *Entity {
 	initSpawnHealth(pr) // setHealth(getMaxHealth()) -> 6.0
 	pr.ai = newParrotAI()
 	reseedMobAI(pr.ai, pr.id)
-	// finalizeSpawn: setVariant(Variant.byId(getRandom().nextInt(Variant.values().length))). ONE nextInt(5)
-	// on the parrots OWN per-entity stream (drawn AFTER reseed so it is deterministic per id).
-	pr.parrotVariant = int32(mobRandom(pr).nextInt(parrotVariantCount))
+	// finalizeSpawn: setVariant(Util.getRandom(Variant.values(), level.getRandom())) ==
+	// Variant.values()[level.getRandom().nextInt(5)]. The draw is on level.getRandom() (the
+	// ServerLevelAccessor.getRandom stream == t.cur().levelRandom) -- NOT the parrot's per-entity
+	// stream. This is load-bearing for co-spawn RNG lockstep. Cite Parrot.finalizeSpawn + Util.getRandom.
+	pr.parrotVariant = int32(t.cur().levelRandom.NextIntN(int32(parrotVariantCount)))
 	owner := t.regionForEntity(pr)
 	if owner == nil {
 		owner = t.cur()
@@ -118,6 +122,22 @@ func parrotIsFlying(e *Entity) bool { return !e.onGround }
 func (t *TickLoop) tryParrotInteract(p *tickPlayer, mob *Entity) bool {
 	inv := ensureInventory(p)
 	held := inv.get(heldWindowSlot(inv.heldSlot))
+
+	// Parrot.mobInteract cookie branch (reached for BOTH tamed and untamed parrots when the held item is
+	// PARROT_POISONOUS_FOOD == cookie, AFTER the !isTame&&PARROT_FOOD seed-tame branch): usePlayerItem;
+	// addEffect(new MobEffectInstance(POISON, 900)); if (!player.isCreative() && !isInvulnerable())
+	// hurt(damageSources().playerAttack(player), Float.MAX_VALUE) -> instant death. Return SUCCESS. The
+	// isInvulnerable() guard is always false for a normally-spawned parrot (no invulnerable NBT flag ported),
+	// so the observable behavior collapses to the !isCreative() gate. RNG-free. Cite Parrot.mobInteract.
+	if !slotIsEmpty(held) && itemInTag(int32(held.ItemID), parrotPoisonousFoodTag) {
+		t.shrinkHeldItem(p, inv) // usePlayerItem: consume 1 cookie (survival) BEFORE the effect+damage
+		t.addEntityEffect(mob, effectPoison, parrotCookiePoisonDuration, 0)
+		if p.gameMode != gameModeCreative {
+			// hurt(playerAttack(player), Float.MAX_VALUE): the finite-clamped huge value is an instant kill.
+			t.applyDamageEntity(mob, damageSourcePlayerAttack(p.entityID), maxFloat32)
+		}
+		return true
+	}
 
 	if mob.tame {
 		// A non-owner cannot command a tamed parrot (isOwnedBy gate). Fall through to the super feed.

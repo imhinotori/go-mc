@@ -163,3 +163,44 @@ func TestParrotShoulderPerchFlag(t *testing.T) {
 		t.Fatal("parrotIsFlying should be true off the ground")
 	}
 }
+
+// TestParrotCookieKills: feeding a parrot (tamed or wild) a COOKIE (PARROT_POISONOUS_FOOD) consumes the
+// cookie, applies POISON 900, and instantly kills the parrot in survival (hurt Float.MAX_VALUE). Cite
+// Parrot.mobInteract cookie branch.
+func TestParrotCookieKills(t *testing.T) {
+	loop, floorY := parrotLoop(t)
+	pr := loop.spawnParrot(0, float64(floorY+1), 0)
+	p := newTestPlayerHolding(loop, 77, int32(item.Cookie.ID))
+
+	consumed := loop.tryParrotInteract(p, pr)
+	if !consumed {
+		t.Fatal("tryParrotInteract did not consume the cookie interact")
+	}
+	// POISON 900 applied.
+	if pr.mobEffects == nil || pr.mobEffects[effectPoison] == nil {
+		t.Fatal("cookie did not apply POISON to the parrot")
+	}
+	// Instant death (hurt Float.MAX_VALUE): the survival player kills it.
+	if pr.health > 0 && !pr.dead {
+		t.Fatalf("parrot survived the cookie: health = %v, dead = %v (want dead)", pr.health, pr.dead)
+	}
+	// The cookie was consumed.
+	inv := ensureInventory(p)
+	if got := inv.get(heldWindowSlot(inv.heldSlot)); got.Count != 0 {
+		t.Fatalf("cookie not consumed: held count = %d, want 0", got.Count)
+	}
+}
+
+// TestParrotVariantOnLevelStream: spawnParrot draws its plumage variant from level.getRandom()
+// (t.cur().levelRandom), NOT the parrot's per-entity stream. Two consecutive spawns advance the shared
+// level stream, so the observable is that the variant is always a valid byId in [0,4]. Cite
+// Parrot.finalizeSpawn (Util.getRandom on level.getRandom()).
+func TestParrotVariantOnLevelStream(t *testing.T) {
+	loop, floorY := parrotLoop(t)
+	for i := 0; i < 50; i++ {
+		pr := loop.spawnParrot(0, float64(floorY+1), 0)
+		if pr.parrotVariant < 0 || pr.parrotVariant >= int32(parrotVariantCount) {
+			t.Fatalf("parrot variant = %d, want a byId in [0,%d)", pr.parrotVariant, parrotVariantCount)
+		}
+	}
+}
