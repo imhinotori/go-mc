@@ -49,10 +49,35 @@ func TestAxolotlSpawnDefaults(t *testing.T) {
 	if got := a.getAttributeValue(attribute.StepHeight); math.Abs(got-1.0) > 1e-9 {
 		t.Fatalf("axolotl STEP_HEIGHT = %v, want 1.0 (override of the 0.6 base)", got)
 	}
-	if a.axolotlVariant != axolotlVariantLucy {
-		t.Fatalf("axolotl variant = %d, want lucy %d (DEFAULT)", a.axolotlVariant, axolotlVariantLucy)
+	// Axolotl.finalizeSpawn draws a COMMON-variant pick (never BLUE, the rare breeding mutation) on
+	// level.getRandom(); the observable invariant is variant in {LUCY,WILD,GOLD,CYAN}.
+	if a.axolotlVariant == axolotlVariantBlue {
+		t.Fatalf("axolotl variant = BLUE %d, but finalizeSpawn only draws COMMON variants", axolotlVariantBlue)
+	}
+	if a.axolotlVariant < axolotlVariantLucy || a.axolotlVariant > axolotlVariantCyan {
+		t.Fatalf("axolotl variant = %d, want a common variant in [%d,%d]", a.axolotlVariant, axolotlVariantLucy, axolotlVariantCyan)
 	}
 	if a.ai == nil || a.ai.rng == nil {
 		t.Fatal("axolotl has no minimal AI / rng")
+	}
+}
+
+// TestAxolotlSpawnVariantCommonDistribution: over many spawns every axolotl draws one of the four COMMON
+// variants (LUCY/WILD/GOLD/CYAN) and BLUE never appears (getCommonSpawnVariant excludes it). Confirms the
+// nextInt(4) common-array pick on level.getRandom(). Cite Axolotl$Variant.getCommonSpawnVariant.
+func TestAxolotlSpawnVariantCommonDistribution(t *testing.T) {
+	loop, floorY := axolotlLoop(t)
+	seen := map[int]int{}
+	for i := 0; i < 400; i++ {
+		a := loop.spawnAxolotl(8.5, float64(floorY+1), 8.5, false)
+		if a.axolotlVariant == axolotlVariantBlue {
+			t.Fatalf("spawn %d drew BLUE, but common spawns never draw the rare mutation", i)
+		}
+		seen[a.axolotlVariant]++
+	}
+	for _, v := range []int{axolotlVariantLucy, axolotlVariantWild, axolotlVariantGold, axolotlVariantCyan} {
+		if seen[v] == 0 {
+			t.Fatalf("common variant %d never drawn over 400 spawns", v)
+		}
 	}
 }

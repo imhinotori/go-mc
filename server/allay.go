@@ -27,6 +27,7 @@ package server
 
 import (
 	"github.com/imhinotori/sulfur/data/entity"
+	"github.com/imhinotori/sulfur/level/attribute"
 )
 
 // Allay constants (VERIFIED javap Allay this session).
@@ -37,6 +38,7 @@ const (
 	allayAttackDamage  = 2.0                 // createAttributes ATTACK_DAMAGE 2.0
 	allayStrollSpeed   = 1.0                 // RandomStroll speed (brain-deferred; the common stroll pace)
 	allayLookDistance  = 8.0                 // LookAtTargetSink distance (the common look range)
+	allayHealAmount    = 1.0                 // Allay.aiStep heal(1.0F) every 10 ticks (LivingEntity.heal)
 )
 
 // newAllayAI builds the Allay bounded flying passive AI. Allay is a BRAIN mob in vanilla (the item-fetch/
@@ -86,7 +88,31 @@ func (t *TickLoop) allayAiStep(e *Entity) {
 	if e.dead || e.health <= 0 {
 		return
 	}
+	// Allay.aiStep (server slice, RNG-free): after PathfinderMob.aiStep, if !isClientSide && isAlive()
+	// && tickCount % 10 == 0 -> heal(1.0F). Vanilla reads Entity.tickCount; the faithful per-entity
+	// counter here is e.ai.aiTickCount (Mob.serverAiStep advances it once per tick, matching
+	// Entity.tickCount). heal(1.0F) is LivingEntity.heal: setHealth(getHealth()+amount) clamped to
+	// getMaxHealth(). The dance-stop (isDancing && shouldStopDancing && tickCount%20==0) and
+	// updateDuplicationCooldown remain DEFERRED (no dancing/duplicate state yet). Cite Allay.aiStep +
+	// LivingEntity.heal.
+	if e.ai != nil && e.ai.aiTickCount%10 == 0 {
+		t.allayHeal(e, allayHealAmount)
+	}
 	// DEFERRED: the AllayAi brain tick (the InventoryCarrier item-pickup/fetch; the VibrationSystem
-	// follow-note pulse; the amethyst-dance DATA_CAN_DUPLICATE duplicate). No bounded per-tick work today
-	// beyond the flying passive goal walk.
+	// follow-note pulse; the amethyst-dance DATA_CAN_DUPLICATE duplicate) + the dance-stop + duplication
+	// cooldown. The regen above is the RNG-free per-tick work vanilla runs on every alive allay.
+}
+
+// allayHeal ports LivingEntity.heal(float): setHealth(getHealth()+amount) clamped to getMaxHealth()
+// (Allay MAX_HEALTH 20.0, read from the attribute map so it stays a real read). NO RNG. Cite
+// LivingEntity.heal.
+func (t *TickLoop) allayHeal(e *Entity, amount float32) {
+	if e.health <= 0 {
+		return
+	}
+	maxHealth := float32(e.getAttributeValue(attribute.MaxHealth))
+	e.health += amount
+	if e.health > maxHealth {
+		e.health = maxHealth
+	}
 }

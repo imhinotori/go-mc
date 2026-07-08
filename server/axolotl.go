@@ -86,7 +86,14 @@ func newAxolotlAI() *mobAI {
 func (t *TickLoop) spawnAxolotl(x, y, z float64, baby bool) *Entity {
 	a := NewEntity(t.idAlloc.AllocID(), entity.Axolotl, x, y, z)
 	a.isAxolotl = true
-	a.axolotlVariant = axolotlVariantLucy // DEFAULT; the breeding-mutation pick is DEFERRED
+	// Axolotl.finalizeSpawn: a non-BUCKET spawn draws its variant via the AxolotlGroupData path, whose
+	// net observable for a solo mob is a common-variant pick == getCommonSpawnVariant(random). That is
+	// getSpawnVariant(random, true) == Util.getRandom(filter(values(), common), random) ==
+	// commons[nextInt(commons.length)] over {LUCY,WILD,GOLD,CYAN} (BLUE is the rare/non-common breeding
+	// mutation, excluded). The draw is on level.getRandom() (ServerLevelAccessor.getRandom ==
+	// t.cur().levelRandom). Cite Axolotl.finalizeSpawn + Axolotl$Variant.getCommonSpawnVariant/
+	// getSpawnVariant + Util.getRandom.
+	a.axolotlVariant = t.axolotlCommonSpawnVariant()
 	if baby {
 		a.breedAge = babyStartAge
 		a.refreshDimensions() // AgeableMob baby half-scale box (getDefaultDimensions baby-scale)
@@ -100,6 +107,21 @@ func (t *TickLoop) spawnAxolotl(x, y, z float64, baby bool) *Entity {
 	}
 	owner.entities.add(a)
 	return a
+}
+
+// axolotlCommonVariants is the COMMON-flagged Axolotl$Variant set in enum declaration order
+// (LUCY, WILD, GOLD, CYAN); BLUE is common==false (the rare breeding mutation) and is excluded, so the
+// filtered array Util.getRandom indexes is exactly these four. Cite Axolotl$Variant (common flag) +
+// getSpawnVariant filter.
+var axolotlCommonVariants = [...]int{axolotlVariantLucy, axolotlVariantWild, axolotlVariantGold, axolotlVariantCyan}
+
+// axolotlCommonSpawnVariant is Axolotl$Variant.getCommonSpawnVariant(RandomSource): the filtered common
+// array indexed by Util.getRandom(array, random) == array[random.nextInt(array.length)]. Drawn on
+// level.getRandom() (t.cur().levelRandom) exactly as ServerLevelAccessor.getRandom feeds it in
+// finalizeSpawn. Cite Axolotl$Variant.getSpawnVariant + Util.getRandom.
+func (t *TickLoop) axolotlCommonSpawnVariant() int {
+	r := t.cur().levelRandom
+	return axolotlCommonVariants[r.NextIntN(int32(len(axolotlCommonVariants)))]
 }
 
 // axolotlAiStep is the Axolotl per-tick extra (Axolotl.customServerAiStep). Vanilla runs the AxolotlAi

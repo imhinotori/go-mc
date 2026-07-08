@@ -53,3 +53,31 @@ func TestAllaySpawnDefaults(t *testing.T) {
 		t.Fatal("allay has no minimal AI / rng")
 	}
 }
+
+// TestAllayAiStepRegen: Allay.aiStep heals 1.0 every 10 ticks (tickCount % 10 == 0) up to MAX_HEALTH.
+// A damaged allay recovers 1 HP on each aiStep whose aiTickCount is a multiple of 10 and does NOT
+// overheal past 20.0. Cite Allay.aiStep + LivingEntity.heal.
+func TestAllayAiStepRegen(t *testing.T) {
+	loop, floorY := allayLoop(t)
+	a := loop.spawnAllay(8.5, float64(floorY+1), 8.5)
+	a.health = 5.0
+	// aiTickCount % 10 != 0 -> no heal.
+	a.ai.aiTickCount = 7
+	loop.allayAiStep(a)
+	if a.health != 5.0 {
+		t.Fatalf("allay healed off-cadence: health = %v, want 5.0", a.health)
+	}
+	// aiTickCount % 10 == 0 -> heal 1.0.
+	a.ai.aiTickCount = 10
+	loop.allayAiStep(a)
+	if a.health != 6.0 {
+		t.Fatalf("allay heal = %v, want 6.0 (5.0 + 1.0)", a.health)
+	}
+	// clamp to MAX_HEALTH 20.0 (no overheal).
+	a.health = 19.5
+	a.ai.aiTickCount = 20
+	loop.allayAiStep(a)
+	if math.Abs(float64(a.health)-20.0) > 1e-6 {
+		t.Fatalf("allay overheal: health = %v, want clamped 20.0", a.health)
+	}
+}
