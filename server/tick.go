@@ -242,6 +242,13 @@ type TickLoop struct {
 	// the defaults on first read, so a test-constructed loop still reads vanilla values). Cite GameRules.
 	gamerules *gameRules
 
+	// scoreboard is the per-level Scoreboard/ServerScoreboard store (scoreboard.go): objectives,
+	// scores, teams, and display slots -- player-facing state that draws NO entity RNG. Seeded in
+	// NewTickLoop; mutated/read only on the tick goroutine (TICK-05). The on* callbacks broadcast
+	// the clientbound scoreboard/team packets; sendScoreboardStateTo replays current state to a
+	// joining player. Cite Scoreboard / ServerScoreboard.
+	scoreboard *Scoreboard
+
 	// currentRegion is the Phase-27 STEP-3 (N=2) per-goroutine current-region registry: when a
 	// region's fan-out goroutine is running its tick, it registers itself here keyed by its goroutine
 	// id (region.tick does this on entry, clears on exit). only() consults it so the ~200 existing
@@ -1268,6 +1275,9 @@ func NewTickLoop(clock Clock) *TickLoop {
 		// levelDifficulty seeds to the vanilla WorldData default (NORMAL) -- the same value the
 		// serverDifficulty CITED const carries -- so /difficulty query reports NORMAL until it is set.
 		levelDifficulty: difficultyNormal,
+		// scoreboard seeds an empty Scoreboard/ServerScoreboard store (scoreboard.go). It is the
+		// per-level objective/score/team/display-slot state; the on* callbacks broadcast to t.players.
+		scoreboard: newScoreboard(),
 	}
 	// Phase-27 STEP-3 (the N=2 flip): construct regionCount (==2) regions that statically split the
 	// world (regionOf — region_transfer.go). Each region holds its OWN entity store + (never-shared)
@@ -1799,6 +1809,11 @@ func (t *TickLoop) drainRegistrations() {
 				// layer (the tracker self-skips this player). displayedSkinParts was captured in
 				// the CONFIG state (BUG-4) before the join, so it is already set here.
 				t.sendSelfSkin(p)
+				// SCOREBOARD (scoreboard.go): replay the current objectives, display slots, scores, and
+				// teams to the joining player -- the SAME "send current world state to the joiner" spot the
+				// tab-list/weather sync uses. ServerScoreboard startTracking replay; owner-goroutine send over
+				// the joiner connection only (mutates no tick state).
+				t.sendScoreboardStateTo(p)
 				// WEATHER (weather.go): tell the joiner the CURRENT weather so it doesn't join to a clear
 				// sky during a storm. Vanilla's PlayerList.sendLevelInfo sends, when isRaining():
 				// START_RAINING(0) -> RAIN_LEVEL_CHANGE(getRainLevel(1)) -> THUNDER_LEVEL_CHANGE(getThunderLevel(1)).
