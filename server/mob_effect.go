@@ -23,6 +23,7 @@ package server
 import (
 	"math"
 
+	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/level/attribute"
 )
 
@@ -51,7 +52,7 @@ const (
 	// / getJumpBoostPower. VERIFIED CFR MobEffects.SLOW_FALLING / LEVITATION registrations (plain effects).
 	effectSlowFalling = "minecraft:slow_falling" // MobEffects.SLOW_FALLING (getEffectiveGravity min 0.01)
 	effectLevitation  = "minecraft:levitation"   // MobEffects.LEVITATION  (travelInAir upward drift)
-	effectStrength   = "minecraft:strength"   // MobEffects.STRENGTH   (ATTACK_DAMAGE      +3.0 ADD_VALUE)
+	effectStrength    = "minecraft:strength"     // MobEffects.STRENGTH   (ATTACK_DAMAGE      +3.0 ADD_VALUE)
 	// CONDUIT effect id (CONDUIT-01, ConduitBlockEntity.applyEffects): the beneficial power an active conduit
 	// grants a submerged/rained-on player in range. VERIFIED CFR MobEffects.CONDUIT_POWER =
 	// register("conduit_power", new MobEffect(MobEffectCategory.BENEFICIAL, 1950417)) — a plain duration
@@ -101,12 +102,137 @@ const (
 	absorptionModifierID = "effect.absorption" // ABSORPTION -> MAX_ABSORPTION
 )
 
-// activeEffect is the Go stand-in for MobEffectInstance (the fields the witch slice needs): the effect id,
-// the remaining duration (ticks, counting down), and the amplifier (0-based).
+// Modifier amounts from MobEffects static init in the 26.2 jar. The non-round decimals are the exact
+// double constants emitted by javap for the vanilla registrations.
+const (
+	effectSpeedAmount      = 0.20000000298023224
+	effectSlownessAmount   = -0.15000000596046448
+	effectHasteAmount      = 0.10000000149011612
+	effectStrengthAmount   = 3.0
+	effectWeaknessAmount   = -4.0
+	effectJumpBoostAmount  = 1.0
+	effectAbsorptionAmount = 4.0
+)
+
+// activeEffect is the Go stand-in for MobEffectInstance: effect id, remaining duration (ticks, counting
+// down; -1 is infinite), amplifier (0-based, clamped to [0,255]), particle/icon flags, and the hidden
+// lower-priority chain used when a shorter stronger effect temporarily overrides a longer weaker one.
+// Ports MobEffectInstance fields/update/tickServer/downgradeToHiddenEffect from the 26.2 jar.
 type activeEffect struct {
 	id        string
 	duration  int
 	amplifier int
+	ambient   bool
+	visible   bool
+	showIcon  bool
+	hidden    *activeEffect
+}
+
+func newActiveEffect(id string, duration, amplifier int) *activeEffect {
+	if amplifier < 0 {
+		amplifier = 0
+	}
+	if amplifier > 255 {
+		amplifier = 255
+	}
+	return &activeEffect{
+		id:        id,
+		duration:  duration,
+		amplifier: amplifier,
+		visible:   true,
+		showIcon:  true,
+	}
+}
+
+func cloneActiveEffect(in *activeEffect) *activeEffect {
+	if in == nil {
+		return nil
+	}
+	return &activeEffect{
+		id:        in.id,
+		duration:  in.duration,
+		amplifier: in.amplifier,
+		ambient:   in.ambient,
+		visible:   in.visible,
+		showIcon:  in.showIcon,
+		hidden:    cloneActiveEffect(in.hidden),
+	}
+}
+
+func activeEffectShorterThan(a, b *activeEffect) bool {
+	if a == nil || b == nil || a.duration == -1 {
+		return false
+	}
+	return a.duration < b.duration || b.duration == -1
+}
+
+func updateActiveEffect(cur, incoming *activeEffect) bool {
+	if cur == nil || incoming == nil {
+		return false
+	}
+	changed := false
+	if incoming.amplifier > cur.amplifier {
+		if activeEffectShorterThan(incoming, cur) {
+			oldHidden := cur.hidden
+			cur.hidden = cloneActiveEffect(cur)
+			cur.hidden.hidden = oldHidden
+		}
+		cur.amplifier = incoming.amplifier
+		cur.duration = incoming.duration
+		changed = true
+	} else if activeEffectShorterThan(cur, incoming) {
+		if incoming.amplifier == cur.amplifier {
+			cur.duration = incoming.duration
+			changed = true
+		} else if cur.hidden == nil {
+			cur.hidden = cloneActiveEffect(incoming)
+		} else {
+			_ = updateActiveEffect(cur.hidden, incoming)
+		}
+	}
+	if (!incoming.ambient && cur.ambient) || changed {
+		cur.ambient = incoming.ambient
+		changed = true
+	}
+	if incoming.visible != cur.visible {
+		cur.visible = incoming.visible
+		changed = true
+	}
+	if incoming.showIcon != cur.showIcon {
+		cur.showIcon = incoming.showIcon
+		changed = true
+	}
+	return changed
+}
+
+func activeEffectHasRemaining(e *activeEffect) bool {
+	return e != nil && (e.duration == -1 || e.duration > 0)
+}
+
+func tickDownActiveEffect(e *activeEffect) {
+	if e == nil {
+		return
+	}
+	if e.hidden != nil {
+		tickDownActiveEffect(e.hidden)
+	}
+	if e.duration != -1 && e.duration != 0 {
+		e.duration--
+	}
+}
+
+func downgradeActiveEffect(e *activeEffect) bool {
+	if e == nil || e.duration != 0 || e.hidden == nil {
+		return false
+	}
+	hidden := e.hidden
+	e.duration = hidden.duration
+	e.amplifier = hidden.amplifier
+	e.ambient = hidden.ambient
+	e.visible = hidden.visible
+	e.showIcon = hidden.showIcon
+	e.hidden = hidden.hidden
+	return true
 }
 
 // splashEffect is one entry of a thrown potion's payload (the PotionContents effect): the effect id, its
@@ -120,7 +246,7 @@ type splashEffect struct {
 // isInstantEffect reports whether an effect id is an InstantaneousMobEffect (applied once at add, never
 // duration-ticked). instant_damage/instant_health are the witch-relevant instants.
 func isInstantEffect(id string) bool {
-	return id == effectInstantDamage
+	return id == effectInstantDamage || id == effectInstantHealth
 }
 
 // addPlayerEffect is the port of LivingEntity.addEffect for a player target: an INSTANT effect applies its
@@ -138,16 +264,23 @@ func (t *TickLoop) addPlayerEffect(p *tickPlayer, ownerID int32, id string, dura
 	if p.activeEffects == nil {
 		p.activeEffects = make(map[string]*activeEffect)
 	}
-	// update merge: keep the stronger (higher amp) or, at equal amp, the longer duration.
+	incoming := newActiveEffect(id, duration, amplifier)
 	if existing, ok := p.activeEffects[id]; ok {
-		if amplifier < existing.amplifier || (amplifier == existing.amplifier && duration <= existing.duration) {
+		oldAmp := existing.amplifier
+		if updateActiveEffect(existing, incoming) {
+			if oldAmp != existing.amplifier {
+				t.removeEffectModifiers(p, id)
+				t.applyEffectModifiers(p, id, existing.amplifier)
+			}
+			t.onPlayerEffectStarted(p, id, existing.amplifier)
 			return
 		}
-		t.removeEffectModifiers(p, id) // re-apply the modifier at the new amplifier below
+		t.onPlayerEffectStarted(p, id, incoming.amplifier)
+		return
 	}
-	p.activeEffects[id] = &activeEffect{id: id, duration: duration, amplifier: amplifier}
-	t.applyEffectModifiers(p, id, amplifier) // LivingEntity.onEffectAdded -> MobEffect.addAttributeModifiers
-	t.onPlayerEffectStarted(p, id, amplifier) // MobEffectInstance.onEffectStarted -> MobEffect.onEffectStarted
+	p.activeEffects[id] = incoming
+	t.applyEffectModifiers(p, id, incoming.amplifier)  // LivingEntity.onEffectAdded -> MobEffect.addAttributeModifiers
+	t.onPlayerEffectStarted(p, id, incoming.amplifier) // MobEffectInstance.onEffectStarted -> MobEffect.onEffectStarted
 }
 
 // onPlayerEffectStarted is the port of MobEffect.onEffectStarted (called last in LivingEntity.addEffect,
@@ -161,7 +294,7 @@ func (t *TickLoop) onPlayerEffectStarted(p *tickPlayer, id string, amplifier int
 		// AbsorptionMobEffect.onEffectStarted: setAbsorptionAmount(Math.max(getAbsorptionAmount(),
 		// (float)(4*(1+amp)))). The MAX_ABSORPTION +4*(amp+1) modifier attached in applyEffectModifiers
 		// above raised the clamp ceiling first, so setAbsorptionAmount does not clamp the fill back to 0.
-		fill := float32(4 * (1 + amplifier))
+		fill := float32(effectAbsorptionAmount * float64(amplifier+1))
 		if cur := p.getAbsorptionAmount(); cur > fill {
 			fill = cur
 		}
@@ -190,6 +323,14 @@ func (t *TickLoop) broadcastPlayerInvisibleFlag(p *tickPlayer) {
 // applyInstantEffect is the port of HealOrHarmMobEffect.applyInstantaneousEffect for a player victim: the
 // harm amount = (int)(scale*(6<<amp)+0.5), dealt as indirect_magic (attributed to the thrower) or magic.
 func (t *TickLoop) applyInstantEffect(p *tickPlayer, ownerID int32, id string, amplifier int, scale float64) {
+	if playerIsInvertedHealAndHarm(p) {
+		switch id {
+		case effectInstantDamage:
+			id = effectInstantHealth
+		case effectInstantHealth:
+			id = effectInstantDamage
+		}
+	}
 	switch id {
 	case effectInstantDamage:
 		amount := int(scale*float64(int(6)<<uint(amplifier)) + 0.5)
@@ -198,7 +339,14 @@ func (t *TickLoop) applyInstantEffect(p *tickPlayer, ownerID int32, id string, a
 			src = damageSourceIndirectMagic(ownerID)
 		}
 		t.applyDamage(p, src, float32(amount))
+	case effectInstantHealth:
+		amount := int(scale*float64(int(4)<<uint(amplifier)) + 0.5)
+		t.heal(p, float32(amount))
 	}
+}
+
+func playerIsInvertedHealAndHarm(_ *tickPlayer) bool {
+	return false
 }
 
 // applyEffectModifiers attaches an effect's attribute modifiers (onEffectAdded → addAttributeModifiers).
@@ -210,41 +358,41 @@ func (t *TickLoop) applyEffectModifiers(p *tickPlayer, id string, amplifier int)
 	case effectSlowness:
 		h.addModifier(attrMovementSpeed, attribute.AttributeModifier{
 			ID:        slownessModifierID,
-			Amount:    -0.15 * float64(amplifier+1),
+			Amount:    effectSlownessAmount * float64(amplifier+1),
 			Operation: attribute.AddMultipliedTotal,
 		})
 	case effectWeakness:
 		h.addModifier(attrAttackDamage, attribute.AttributeModifier{
 			ID:        weaknessModifierID,
-			Amount:    -4.0 * float64(amplifier+1),
+			Amount:    effectWeaknessAmount * float64(amplifier+1),
 			Operation: attribute.AddValue,
 		})
 	case effectSpeed:
 		// MobEffects.SPEED: MOVEMENT_SPEED +0.2*(amp+1) ADD_MULTIPLIED_TOTAL (effect.speed).
 		h.addModifier(attrMovementSpeed, attribute.AttributeModifier{
 			ID:        speedModifierID,
-			Amount:    0.2 * float64(amplifier+1),
+			Amount:    effectSpeedAmount * float64(amplifier+1),
 			Operation: attribute.AddMultipliedTotal,
 		})
 	case effectHaste:
 		// MobEffects.HASTE: ATTACK_SPEED +0.1*(amp+1) ADD_MULTIPLIED_TOTAL (effect.haste).
 		h.addModifier(attrAttackSpeed, attribute.AttributeModifier{
 			ID:        hasteModifierID,
-			Amount:    0.1 * float64(amplifier+1),
+			Amount:    effectHasteAmount * float64(amplifier+1),
 			Operation: attribute.AddMultipliedTotal,
 		})
 	case effectStrength:
 		// MobEffects.STRENGTH: ATTACK_DAMAGE +3.0*(amp+1) ADD_VALUE (effect.strength).
 		h.addModifier(attrAttackDamage, attribute.AttributeModifier{
 			ID:        strengthModifierID,
-			Amount:    3.0 * float64(amplifier+1),
+			Amount:    effectStrengthAmount * float64(amplifier+1),
 			Operation: attribute.AddValue,
 		})
 	case effectJumpBoost:
 		// MobEffects.JUMP_BOOST: SAFE_FALL_DISTANCE +1.0*(amp+1) ADD_VALUE (effect.jump_boost).
 		h.addModifier(attrSafeFallDistance, attribute.AttributeModifier{
 			ID:        jumpBoostModifierID,
-			Amount:    1.0 * float64(amplifier+1),
+			Amount:    effectJumpBoostAmount * float64(amplifier+1),
 			Operation: attribute.AddValue,
 		})
 	case effectAbsorption:
@@ -252,7 +400,7 @@ func (t *TickLoop) applyEffectModifiers(p *tickPlayer, id string, amplifier int)
 		// setAbsorptionAmount clamp ceiling so onEffectStarted's heart-fill is not clamped back to 0.
 		h.addModifier(attrMaxAbsorption, attribute.AttributeModifier{
 			ID:        absorptionModifierID,
-			Amount:    4.0 * float64(amplifier+1),
+			Amount:    effectAbsorptionAmount * float64(amplifier+1),
 			Operation: attribute.AddValue,
 		})
 		// effectResistance / effectRegeneration carry NO attribute modifier (RESISTANCE reduces damage in the
@@ -297,11 +445,21 @@ func (t *TickLoop) tickPlayerEffects(p *tickPlayer) {
 		return
 	}
 	for id, e := range p.activeEffects {
+		if !activeEffectHasRemaining(e) {
+			delete(p.activeEffects, id)
+			t.removeEffectModifiers(p, id)
+			t.onPlayerEffectRemoved(p, id)
+			continue
+		}
 		// MobEffectInstance.tickServer: if shouldApply, run applyEffectTick; a false return means the effect
 		// consumed itself (BAD_OMEN converting / RAID_OMEN firing, or ABSORPTION depleted) -> remove it now
 		// and skip the countdown. tickCount passed to shouldApplyEffectTickThisTick is the remaining duration
 		// (counting DOWN).
-		if effectShouldApplyThisTick(id, e.duration, e.amplifier) {
+		remaining := e.duration
+		if remaining == -1 {
+			remaining = 1 << 30
+		}
+		if effectShouldApplyThisTick(id, remaining, e.amplifier) {
 			if !t.applyEffectTick(p, id, e.amplifier) {
 				delete(p.activeEffects, id)
 				t.removeEffectModifiers(p, id)
@@ -309,8 +467,13 @@ func (t *TickLoop) tickPlayerEffects(p *tickPlayer) {
 				continue
 			}
 		}
-		e.duration--
-		if e.duration <= 0 {
+		oldAmp := e.amplifier
+		tickDownActiveEffect(e)
+		if downgradeActiveEffect(e) && oldAmp != e.amplifier {
+			t.removeEffectModifiers(p, id)
+			t.applyEffectModifiers(p, id, e.amplifier)
+		}
+		if !activeEffectHasRemaining(e) {
 			delete(p.activeEffects, id)
 			t.removeEffectModifiers(p, id)
 			t.onPlayerEffectRemoved(p, id)
@@ -335,6 +498,12 @@ func effectShouldApplyThisTick(id string, remaining, amplifier int) bool {
 	switch id {
 	case effectPoison:
 		interval := 25 >> amplifier // amp0=25, amp1=12, ...
+		if interval <= 0 {
+			return true
+		}
+		return remaining%interval == 0
+	case effectWither:
+		interval := 40 >> amplifier // WitherMobEffect: 40>>amp
 		if interval <= 0 {
 			return true
 		}
@@ -370,6 +539,9 @@ func (t *TickLoop) applyEffectTick(p *tickPlayer, id string, amplifier int) bool
 		if p.health > 1.0 {
 			t.applyDamage(p, damageSourceMagic(), 1.0)
 		}
+		return true
+	case effectWither:
+		t.applyDamage(p, damageSourceWither(), 1.0)
 		return true
 	case effectBadOmen:
 		return t.applyBadOmenTick(p, amplifier)
@@ -524,37 +696,201 @@ func entityEffectAmplifier(e *Entity, id string) (int, bool) {
 	return inst.amplifier, true
 }
 
-// addEntityEffect ports LivingEntity.addEffect for a mob self-target: an INSTANT effect (HEALING) applies
-// its one-shot amount immediately; a DURATION effect is inserted into the mobEffects map (keeping the
-// stronger/longer on a same-id collision). scale is fixed 1.0 for the self-drink (potion.forEachEffect).
-// Cite LivingEntity.addEffect + onEffectAdded.
+// entityCanBeAffected ports LivingEntity.canBeAffected for the tags currently relevant to mob effects.
+// 26.2 jar: INVERTED_HEALING_AND_HARM -> #undead; IGNORES_POISON_AND_REGEN -> #undead;
+// IMMUNE_TO_INFESTED -> silverfish; IMMUNE_TO_OOZING -> slime.
+func entityCanBeAffected(e *Entity, id string) bool {
+	if e == nil {
+		return false
+	}
+	if entityIsUndead(e) && (id == effectPoison || id == effectRegeneration) {
+		return false
+	}
+	switch id {
+	case "minecraft:infested":
+		return e.typ != entity.Silverfish.ID
+	case "minecraft:oozing":
+		return e.typ != entity.Slime.ID
+	default:
+		return true
+	}
+}
+
+func entityIsUndead(e *Entity) bool {
+	if e == nil {
+		return false
+	}
+	switch e.typ {
+	case entity.Skeleton.ID, entity.Stray.ID, entity.WitherSkeleton.ID, entity.SkeletonHorse.ID,
+		entity.Bogged.ID, entity.Parched.ID,
+		entity.ZombieHorse.ID, entity.CamelHusk.ID, entity.Zombie.ID, entity.ZombieVillager.ID,
+		entity.ZombifiedPiglin.ID, entity.Zoglin.ID, entity.Drowned.ID, entity.Husk.ID,
+		entity.ZombieNautilus.ID,
+		entity.Wither.ID, entity.Phantom.ID:
+		return true
+	default:
+		return false
+	}
+}
+
+func entityIsInvertedHealAndHarm(e *Entity) bool {
+	return entityIsUndead(e)
+}
+
+// addEntityEffect ports LivingEntity.addEffect for a mob self-target. scale is fixed 1.0 for self-drink;
+// splash and projectile paths use addEntityEffectWithSource to pass the thrower and proximity scale.
 func (t *TickLoop) addEntityEffect(e *Entity, id string, duration, amplifier int) {
+	t.addEntityEffectWithSource(e, 0, id, duration, amplifier, 1.0)
+}
+
+func (t *TickLoop) addEntityEffectWithSource(e *Entity, ownerID int32, id string, duration, amplifier int, scale float64) {
 	if e == nil || !e.isAlive() || e.dead {
 		return // isAffectedByPotions == !isDeadOrDying()
 	}
+	if !entityCanBeAffected(e, id) {
+		return
+	}
 	if isInstantEntityEffect(id) {
-		t.applyInstantEntityEffect(e, id, amplifier)
+		t.applyInstantEntityEffect(e, ownerID, id, amplifier, scale)
 		return
 	}
 	if e.mobEffects == nil {
 		e.mobEffects = make(map[string]*activeEffect)
 	}
+	incoming := newActiveEffect(id, duration, amplifier)
 	if existing, ok := e.mobEffects[id]; ok {
-		if amplifier < existing.amplifier || (amplifier == existing.amplifier && duration <= existing.duration) {
+		oldAmp := existing.amplifier
+		if updateActiveEffect(existing, incoming) {
+			if oldAmp != existing.amplifier {
+				t.removeEntityEffectModifiers(e, id)
+				t.applyEntityEffectModifiers(e, id, existing.amplifier)
+			}
+			t.onEntityEffectStarted(e, id, existing.amplifier)
 			return
 		}
+		t.onEntityEffectStarted(e, id, incoming.amplifier)
+		return
 	}
-	e.mobEffects[id] = &activeEffect{id: id, duration: duration, amplifier: amplifier}
+	e.mobEffects[id] = incoming
+	t.applyEntityEffectModifiers(e, id, incoming.amplifier)
+	t.onEntityEffectStarted(e, id, incoming.amplifier)
 }
 
-// applyInstantEntityEffect ports HealOrHarmMobEffect.applyInstantaneousEffect for a self-drinking mob:
-// HEALING (!isHarm, self scale 1.0) heals (int)(1.0*(4<<amp)+0.5). isInvertedHealAndHarm()==false (the
-// witch is not undead), so HEALING heals. Cite HealOrHarmMobEffect.applyInstantaneousEffect + heal.
-func (t *TickLoop) applyInstantEntityEffect(e *Entity, id string, amplifier int) {
+// applyInstantEntityEffect ports HealOrHarmMobEffect.applyInstantaneousEffect for mobs. Inverted
+// heal/harm reads the vanilla tag chain inverted_healing_and_harm -> undead.
+func (t *TickLoop) applyInstantEntityEffect(e *Entity, ownerID int32, id string, amplifier int, scale float64) {
+	if entityIsInvertedHealAndHarm(e) {
+		switch id {
+		case effectInstantDamage:
+			id = effectInstantHealth
+		case effectInstantHealth:
+			id = effectInstantDamage
+		}
+	}
 	switch id {
 	case effectInstantHealth:
-		amount := int(1.0*float64(int(4)<<uint(amplifier)) + 0.5)
+		amount := int(scale*float64(int(4)<<uint(amplifier)) + 0.5)
 		entityHeal(e, float32(amount))
+	case effectInstantDamage:
+		amount := int(scale*float64(int(6)<<uint(amplifier)) + 0.5)
+		src := damageSourceMagic()
+		if ownerID != 0 {
+			src = damageSourceIndirectMagic(ownerID)
+		}
+		t.applyDamageEntity(e, src, float32(amount))
+	}
+}
+
+func (t *TickLoop) onEntityEffectStarted(e *Entity, id string, amplifier int) {
+	switch id {
+	case effectAbsorption:
+		fill := float32(effectAbsorptionAmount * float64(amplifier+1))
+		if cur := e.getAbsorptionAmount(); cur > fill {
+			fill = cur
+		}
+		e.setAbsorptionAmount(fill)
+	case effectInvisibility:
+		t.broadcastToTrackers(e.id, encodeSetEntityDataByID(e.id, sharedFlagsDataEntry(entitySharedFlags(e))))
+	}
+}
+
+func (t *TickLoop) onEntityEffectRemoved(e *Entity, id string) {
+	switch id {
+	case effectInvisibility:
+		t.broadcastToTrackers(e.id, encodeSetEntityDataByID(e.id, sharedFlagsDataEntry(entitySharedFlags(e))))
+	}
+}
+
+func entitySharedFlags(e *Entity) int8 {
+	var flags int8
+	if e != nil && e.remainingFireTicks > 0 {
+		flags |= fireSharedFlagBit
+	}
+	if entityHasEffect(e, effectInvisibility) {
+		flags |= invisibleSharedFlagBit
+	}
+	return flags
+}
+
+func (t *TickLoop) applyEntityEffectModifiers(e *Entity, id string, amplifier int) {
+	if e == nil || e.attributes == nil {
+		return
+	}
+	add := func(attr *attribute.Attribute, modID string, amount float64, op attribute.Operation) {
+		inst := e.attributes.GetInstance(attr.Name())
+		if inst == nil {
+			return
+		}
+		inst.RemoveModifier(modID)
+		inst.AddTransientModifier(attribute.AttributeModifier{
+			ID:        modID,
+			Amount:    amount * float64(amplifier+1),
+			Operation: op,
+		})
+	}
+	switch id {
+	case effectSlowness:
+		add(attribute.MovementSpeed, slownessModifierID, effectSlownessAmount, attribute.AddMultipliedTotal)
+	case effectWeakness:
+		add(attribute.AttackDamage, weaknessModifierID, effectWeaknessAmount, attribute.AddValue)
+	case effectSpeed:
+		add(attribute.MovementSpeed, speedModifierID, effectSpeedAmount, attribute.AddMultipliedTotal)
+	case effectHaste:
+		add(attribute.AttackSpeed, hasteModifierID, effectHasteAmount, attribute.AddMultipliedTotal)
+	case effectStrength:
+		add(attribute.AttackDamage, strengthModifierID, effectStrengthAmount, attribute.AddValue)
+	case effectJumpBoost:
+		add(attribute.SafeFallDistance, jumpBoostModifierID, effectJumpBoostAmount, attribute.AddValue)
+	case effectAbsorption:
+		add(attribute.MaxAbsorption, absorptionModifierID, effectAbsorptionAmount, attribute.AddValue)
+	}
+}
+
+func (t *TickLoop) removeEntityEffectModifiers(e *Entity, id string) {
+	if e == nil || e.attributes == nil {
+		return
+	}
+	remove := func(attr *attribute.Attribute, modID string) {
+		if inst := e.attributes.GetInstance(attr.Name()); inst != nil {
+			inst.RemoveModifier(modID)
+		}
+	}
+	switch id {
+	case effectSlowness:
+		remove(attribute.MovementSpeed, slownessModifierID)
+	case effectWeakness:
+		remove(attribute.AttackDamage, weaknessModifierID)
+	case effectSpeed:
+		remove(attribute.MovementSpeed, speedModifierID)
+	case effectHaste:
+		remove(attribute.AttackSpeed, hasteModifierID)
+	case effectStrength:
+		remove(attribute.AttackDamage, strengthModifierID)
+	case effectJumpBoost:
+		remove(attribute.SafeFallDistance, jumpBoostModifierID)
+	case effectAbsorption:
+		remove(attribute.MaxAbsorption, absorptionModifierID)
+		e.setAbsorptionAmount(e.getAbsorptionAmount())
 	}
 }
 
@@ -568,12 +904,34 @@ func (t *TickLoop) tickMobEffects(e *Entity) {
 		return
 	}
 	for id, ef := range e.mobEffects {
-		if entityEffectShouldApplyThisTick(id, ef.duration, ef.amplifier) {
-			t.applyEntityEffectTick(e, id, ef.amplifier)
-		}
-		ef.duration--
-		if ef.duration <= 0 {
+		if !activeEffectHasRemaining(ef) {
 			delete(e.mobEffects, id)
+			t.removeEntityEffectModifiers(e, id)
+			t.onEntityEffectRemoved(e, id)
+			continue
+		}
+		remaining := ef.duration
+		if remaining == -1 {
+			remaining = 1 << 30
+		}
+		if entityEffectShouldApplyThisTick(id, remaining, ef.amplifier) {
+			if !t.applyEntityEffectTick(e, id, ef.amplifier) {
+				delete(e.mobEffects, id)
+				t.removeEntityEffectModifiers(e, id)
+				t.onEntityEffectRemoved(e, id)
+				continue
+			}
+		}
+		oldAmp := ef.amplifier
+		tickDownActiveEffect(ef)
+		if downgradeActiveEffect(ef) && oldAmp != ef.amplifier {
+			t.removeEntityEffectModifiers(e, id)
+			t.applyEntityEffectModifiers(e, id, ef.amplifier)
+		}
+		if !activeEffectHasRemaining(ef) {
+			delete(e.mobEffects, id)
+			t.removeEntityEffectModifiers(e, id)
+			t.onEntityEffectRemoved(e, id)
 		}
 	}
 }
@@ -581,26 +939,56 @@ func (t *TickLoop) tickMobEffects(e *Entity) {
 // entityEffectShouldApplyThisTick ports MobEffect.shouldApplyEffectTickThisTick for the witch self-buffs.
 func entityEffectShouldApplyThisTick(id string, remaining, amplifier int) bool {
 	switch id {
+	case effectPoison:
+		interval := 25 >> amplifier
+		if interval <= 0 {
+			return true
+		}
+		return remaining%interval == 0
+	case effectWither:
+		interval := 40 >> amplifier
+		if interval <= 0 {
+			return true
+		}
+		return remaining%interval == 0
 	case effectRegeneration:
 		interval := 50 >> amplifier // RegenerationMobEffect: 50>>amp (amp0=50, amp1=25, ...)
 		if interval <= 0 {
 			return true
 		}
 		return remaining%interval == 0
+	case effectAbsorption:
+		return true
+	case effectHunger:
+		return true
 	default:
 		return false // speed/water_breathing/fire_resistance never tick (pure presence)
 	}
 }
 
 // applyEntityEffectTick ports MobEffect.applyEffectTick for the witch's periodic self-buffs.
-func (t *TickLoop) applyEntityEffectTick(e *Entity, id string, amplifier int) {
+func (t *TickLoop) applyEntityEffectTick(e *Entity, id string, amplifier int) bool {
 	switch id {
+	case effectPoison:
+		if e.health > 1.0 {
+			t.applyDamageEntity(e, damageSourceMagic(), 1.0)
+		}
+		return true
+	case effectWither:
+		t.applyDamageEntity(e, damageSourceWither(), 1.0)
+		return true
 	case effectRegeneration:
 		// RegenerationMobEffect: if health < maxHealth heal 1.0.
 		if e.health < float32(e.getAttributeValue(attribute.MaxHealth)) {
 			entityHeal(e, 1.0)
 		}
+		return true
+	case effectAbsorption:
+		return e.getAbsorptionAmount() > 0.0
+	case effectHunger:
+		return true
 	}
+	return true
 }
 
 // entityHeal ports LivingEntity.heal(float): if health>0, setHealth(health+heal) clamped to [0,maxHealth].

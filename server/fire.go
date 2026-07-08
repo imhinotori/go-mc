@@ -106,16 +106,11 @@ func (t *TickLoop) tickEntityLava(e *Entity) {
 	e.fallDistance *= 0.5
 }
 
-// broadcastEntityFireFlag pushes the on-fire shared-flag (DATA_SHARED_FLAGS bit 0x01) to every player
-// tracking e, so the client shows/hides the flames. Mirrors the wool/wolf-flag byte broadcast (BYTE
-// serializer at index 0). Other shared-flag bits (sneaking/sprinting/…) are not modeled in v1, so the
-// byte carries only the fire bit.
+// broadcastEntityFireFlag pushes the entity DATA_SHARED_FLAGS byte to every player tracking e, so the
+// client shows/hides flames. The byte is shared with other flags; entitySharedFlags composes the modeled
+// fire and invisibility bits before writing index 0.
 func (t *TickLoop) broadcastEntityFireFlag(e *Entity) {
-	var flags int8
-	if e.remainingFireTicks > 0 {
-		flags |= fireSharedFlagBit
-	}
-	t.broadcastToTrackers(e.id, encodeSetEntityDataByID(e.id, sharedFlagsDataEntry(flags)))
+	t.broadcastToTrackers(e.id, encodeSetEntityDataByID(e.id, sharedFlagsDataEntry(entitySharedFlags(e))))
 }
 
 // sunBurnTick ports Mob.isSunBurnTick for the sun-sensitive mobs (zombie/skeleton): during the day,

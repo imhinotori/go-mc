@@ -21,6 +21,7 @@ package server
 
 import (
 	"math"
+	"sort"
 
 	"github.com/imhinotori/sulfur/data/entity"
 	pk "github.com/imhinotori/sulfur/net/packet"
@@ -366,6 +367,35 @@ func (t *TickLoop) splashPotion(e *Entity) {
 				continue
 			}
 			t.addPlayerEffect(p, e.arrowShooterID, ef.id, dur, ef.amplifier, scale)
+		}
+	}
+	victims := make([]*Entity, 0, len(t.cur().entities.byID))
+	for _, victim := range t.cur().entities.byID {
+		if victim == nil || victim == e || victim.dead || !victim.isAlive() || !isLivingMob(victim) {
+			continue
+		}
+		victims = append(victims, victim)
+	}
+	sort.Slice(victims, func(i, j int) bool { return victims[i].id < victims[j].id })
+	for _, victim := range victims {
+		dx := victim.x - e.x
+		dy := (victim.y + victim.height/2) - e.y
+		dz := victim.z - e.z
+		distSqr := dx*dx + dy*dy + dz*dz
+		if distSqr >= 16.0 {
+			continue
+		}
+		scale := splashPotionScale(distSqr)
+		for _, ef := range e.potionEffects {
+			if isInstantEntityEffect(ef.id) {
+				t.addEntityEffectWithSource(victim, e.arrowShooterID, ef.id, ef.duration, ef.amplifier, scale)
+				continue
+			}
+			dur := int(scale*float64(ef.duration) + 0.5)
+			if dur <= 20 {
+				continue
+			}
+			t.addEntityEffectWithSource(victim, e.arrowShooterID, ef.id, dur, ef.amplifier, scale)
 		}
 	}
 	t.cur().entities.remove(e.id)

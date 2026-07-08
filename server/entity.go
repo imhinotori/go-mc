@@ -994,6 +994,10 @@ type Entity struct {
 	// MaxHealth at the spawn site (a mob born with health 0 would be instantly dead).
 	health float32
 
+	// absorptionAmount is LivingEntity.absorptionAmount: temporary absorption hearts folded before health.
+	// It stays zero unless an ABSORPTION mob effect raises MAX_ABSORPTION and fills it.
+	absorptionAmount float32
+
 	// lastHurt is LivingEntity.lastHurt: the previous hit's amount, the i-frame excess gate in
 	// hurtServer (`if (amount <= lastHurt) return false` within the 10.0F window).
 	lastHurt float32

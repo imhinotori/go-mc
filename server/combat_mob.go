@@ -19,9 +19,9 @@ import (
 	"math"
 	"math/rand/v2"
 
-	"github.com/imhinotori/sulfur/level/component"
 	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/level/attribute"
+	"github.com/imhinotori/sulfur/level/component"
 	"github.com/imhinotori/sulfur/plugin/host"
 )
 
@@ -744,10 +744,12 @@ func (t *TickLoop) getDamageAfterMagicAbsorbEntity(e *Entity, src damageSource, 
 	if src.is("bypasses_effects") {
 		return amount
 	}
-	// hasEffect(RESISTANCE): v1 has no mob effects — the resistance branch is skipped (constant false).
-	const hasResistance = false
-	if hasResistance {
-		_ = e // resistance curve slots in here when mob effects arrive (amplifier-scaled).
+	// hasEffect(RESISTANCE) && !source.is(BYPASSES_RESISTANCE): same amplifier-scaled curve as the
+	// player path. Cite LivingEntity.getDamageAfterMagicAbsorb.
+	if amp, ok := entityEffectAmplifier(e, effectResistance); ok && !src.is("bypasses_resistance") {
+		reduction := (amp + 1) * 5
+		protection := 25 - reduction
+		amount = maxF(amount*float32(protection)/25.0, 0.0)
 	}
 	// `if (amount <= 0.0F) return 0.0F;`
 	if amount <= 0.0 {
@@ -766,26 +768,23 @@ func (t *TickLoop) getDamageAfterMagicAbsorbEntity(e *Entity, src damageSource, 
 	return amount
 }
 
-// getAbsorptionAmount is the port of LivingEntity.getAbsorptionAmount() for a mob: the current
-// absorption shield. No mob absorption source is wired in v1, so it is always 0 — the accessor exists
-// so actuallyHurtEntity's absorption folding reads/writes it faithfully (a future MAX_ABSORPTION +
-// effect stores a non-zero value here). Held off the Entity's absorptionAmount field would mirror the
-// tickPlayer.absorptionAmount; the mob has no such field yet, so this returns the constant 0 — the
-// FORMULA is preserved and behavior-identical (withAbsorb == amount).
+// getAbsorptionAmount is the port of LivingEntity.getAbsorptionAmount() for a mob: the current absorption
+// shield. AbsorptionMobEffect raises MAX_ABSORPTION and fills this field; damage folds it before health.
 func (e *Entity) getAbsorptionAmount() float32 {
-	// No mob absorption field in v1 (a mob never gains a golden-apple shield); the vanilla
-	// getAbsorptionAmount returns the absorptionAmount field, base 0 for a mob with no effect.
-	return 0.0
+	return e.absorptionAmount
 }
 
-// setAbsorptionAmount is the port of LivingEntity.setAbsorptionAmount(float) for a mob: vanilla clamps
-// it to [0, getMaxAbsorption()]. A mob's MAX_ABSORPTION base is 0, so the clamp pins it to 0 in v1 (no
-// mob has an absorption shield). The folding in actuallyHurtEntity always passes 0 here (withAbsorb ==
-// amount), so this is a faithful no-op store — kept so a future absorption field slots in unchanged.
+// setAbsorptionAmount is the port of LivingEntity.setAbsorptionAmount(float) for a mob: clamp to
+// [0, getMaxAbsorption()].
 func (e *Entity) setAbsorptionAmount(amount float32) {
-	// No-op store in v1: a mob carries no absorption shield. The clamp [0, MAX_ABSORPTION=0] would pin
-	// any value to 0; preserved as a documented no-op (the value is never read back while base is 0).
-	_ = amount
+	maxAbsorb := float32(e.getAttributeValue(attribute.MaxAbsorption))
+	if amount < 0 {
+		amount = 0
+	}
+	if amount > maxAbsorb {
+		amount = maxAbsorb
+	}
+	e.absorptionAmount = amount
 }
 
 // tickMobIFrames is the port of the i-frame decrement block of net.minecraft.world.entity.LivingEntity
@@ -827,6 +826,7 @@ func (t *TickLoop) tickMobIFrames(e *Entity) {
 // it cannot perturb the per-mob RNG stream the pig oracle pins (the oracle pig is breedAge 0 -> this
 // is a no-op on it). The observable gameplay is identical to the in-aiStep position (pure-int, no draw);
 // the loop move is the cited oracle-preserving optimization (33-deviations.md).
+//
 //	[VERIFIED javap AgeableMob.aiStep server branch (offsets 74+): isAlive -> getAge -> canAgeUp ?
 //	 iinc 1,1; setAge : (age>0 ? iinc 1,-1; setAge); AgeableMob.canAgeUp = isBaby() && !isAgeLocked().]
 func (t *TickLoop) tickMobAging(e *Entity) {
@@ -895,6 +895,7 @@ func (t *TickLoop) emitInLoveHearts(e *Entity) {
 
 // inLoveHeartGaussianScale is the 0.02 factor Animal.aiStep applies to each nextGaussian() for the
 // heart velocity (xd/yd/zd = nextGaussian() * 0.02).
+//
 //	[VERIFIED javap Animal.aiStep: ldc2_w 0.02d; dmul after each nextGaussian().]
 const inLoveHeartGaussianScale = 0.02
 
@@ -908,6 +909,7 @@ const inLoveHeartGaussianScale = 0.02
 // broadcastToTrackers fan-out the hurt/death sounds and the DATA_BABY_ID flip use (NOT an RNG draw).
 // Called from the FEED path right after e.setInLove() (mirroring setInLove's own broadcastEntityEvent),
 // and reusable by Plan C's breed() after the parents reset inLove.
+//
 //	[VERIFIED javap Animal.setInLove: bipush 18; Level.broadcastEntityEvent(this, 18) -> ServerLevel
 //	 .broadcastEntityEvent -> ClientboundEntityEventPacket(this, 18) to trackers; Animal.handleEntityEvent
 //	 spawns 7 HEART particles on event 18. The encodeLevelParticles encoder (entity_encode.go) is the
@@ -922,6 +924,7 @@ func (t *TickLoop) broadcastHearts(e *Entity) {
 // size (the Plan-D "the baby grows to full size" live criterion). It is NOT an RNG draw — the broadcast
 // is the same tracker fan-out the hurt/death sounds use (broadcastToTrackers). Cite AgeableMob.setAge
 // (the DATA_BABY_ID flip on the 0-crossing) + AgeableMob.ageBoundaryReached.
+//
 //	[VERIFIED javap AgeableMob.setAge: on the sign-crossing it `entityData.set(DATA_BABY_ID, age<0)` then
 //	 ageBoundaryReached(); here age becomes 0 (>=0) so DATA_BABY_ID := false.]
 func (t *TickLoop) onGrewUp(e *Entity) {
@@ -936,6 +939,7 @@ func (t *TickLoop) onGrewUp(e *Entity) {
 // an RNG draw, so it never perturbs the per-mob oracle stream. Fired from onGrewUp on the -1 -> 0
 // grow-up (pushes DATA_BABY_ID=false). Plan C's breed() can reuse it right after setting
 // child.breedAge = BABY_START_AGE to push DATA_BABY_ID=true for a freshly-spawned baby.
+//
 //	[VERIFIED javap AgeableMob.setAge: on the sign-crossing entityData.set(DATA_BABY_ID, Boolean(age<0));
 //	 SynchedEntityData broadcasts the changed value to trackers via ClientboundSetEntityData.]
 func (t *TickLoop) broadcastBabyFlag(e *Entity) {

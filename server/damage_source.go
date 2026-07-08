@@ -75,6 +75,9 @@ var (
 	// damageTypeIndirectMagic is minecraft:indirect_magic — the source a thrown-potion splash deals with a
 	// thrower (damageSources().indirectMagic(potion, owner)). Also a bypasses_armor member.
 	damageTypeIndirectMagic = damageTypeID(tag.DamageTypeIDs["minecraft:indirect_magic"])
+	// damageTypeWither is minecraft:wither -- the source WitherMobEffect.applyEffectTick deals
+	// (damageSources().wither(), 1.0 damage). A magic-like damage type but distinct from wither_skull.
+	damageTypeWither = damageTypeID(tag.DamageTypeIDs["minecraft:wither"])
 	// damageTypeLightning is minecraft:lightning_bolt — the source Entity.thunderHit deals when a
 	// LightningBolt strikes an entity in range (damageSources().lightningBolt(), 5.0 damage). NOT a
 	// bypasses_armor member (the victim folds the armor curve). Cite Entity.thunderHit + DamageSources
@@ -258,6 +261,12 @@ func damageSourceMagic() damageSource {
 // thrower (owner): type indirect_magic, causingEntity = owner. The port of DamageSources.indirectMagic.
 func damageSourceIndirectMagic(ownerID int32) damageSource {
 	return damageSource{typeTag: damageTypeIndirectMagic, attacker: ownerID}
+}
+
+// damageSourceWither builds the DamageSource WitherMobEffect.applyEffectTick uses:
+// DamageSources.wither(), type minecraft:wither, no causing entity.
+func damageSourceWither() damageSource {
+	return damageSource{typeTag: damageTypeWither, attacker: 0}
 }
 
 // damageSourceLightning builds the DamageSource a LightningBolt deals via Entity.thunderHit: type
