@@ -353,6 +353,19 @@ func ghastSupplier() *Supplier {
 		Build()
 }
 
+// enderDragonSupplier is the port of EnderDragon.createAttributes(): Mob.createMobAttributes() then
+// .add(MAX_HEALTH 200.0).add(CAMERA_DISTANCE 16.0). The EnderDragon builds on createMobAttributes (NOT
+// Monster -- its damage is the melee/fireball phase logic, not an ATTACK_DAMAGE attribute), so it has NO
+// ATTACK_DAMAGE. MAX_HEALTH 200.0 is the boss health; CAMERA_DISTANCE 16.0 the render/hitbox distance.
+// Cite net.minecraft.world.entity.boss.enderdragon.EnderDragon.createAttributes (javap this session:
+// Mob.createMobAttributes().add(MAX_HEALTH, 200.0).add(CAMERA_DISTANCE, 16.0)).
+func enderDragonSupplier() *Supplier {
+	return createMobAttributes().
+		AddValue(MaxHealth, 200.0).
+		AddValue(CameraDistance, 16.0).
+		Build()
+}
+
 // blazeSupplier is the port of Blaze.createAttributes(): Monster.createMonsterAttributes() then
 // .add(ATTACK_DAMAGE 6.0).add(MOVEMENT_SPEED 0.23000000417232513).add(FOLLOW_RANGE 48.0). MAX_HEALTH
 // is the createLivingAttributes default 20.0 (Blaze has NO MAX_HEALTH override). Cite
@@ -662,6 +675,11 @@ var suppliers = map[string]*Supplier{
 	// NewMapForEntity resolves it FIRST (before the living-fallback) even though the golem's MobCategory is
 	// "misc" — a "misc"-category LivingEntity with a dedicated supplier still gets its faithful attributes.
 	"iron_golem": ironGolemSupplier(),
+	// ENDER DRAGON (Task): the boss of the_end. EnderDragon.createAttributes: Mob.createMobAttributes
+	// + MAX_HEALTH 200.0 + CAMERA_DISTANCE 16.0 (no ATTACK_DAMAGE -- its damage is the phase melee/fireball
+	// logic). Keyed by registry name so NewMapForEntity resolves the faithful 200hp. The dragon is a
+	// "misc"-category LivingEntity, so the dedicated supplier (resolved FIRST) gives it the boss health.
+	"ender_dragon": enderDragonSupplier(),
 }
 
 // livingCategories is the set of data/entity.Entity.Type values that correspond to a vanilla

@@ -113,6 +113,11 @@ func (t *TickLoop) changeDimension(p *tickPlayer, targetDim int) {
 	// async worker has not produced it yet).
 	if targetDim == dimEnd {
 		t.ensureEndPlatform()
+		// ENDER DRAGON (Task): lazily init the dragon fight on the FIRST player entry into the End (spawn
+		// the boss at the fight origin + the healing-crystal ring + the boss bar). spawnEndDragonFight is
+		// idempotent (t.endDragonFightInit guards it), so subsequent End arrivals do not respawn the dragon.
+		// This is the reduced analogue of EnderDragonFight.tryRespawn/spawnDragon triggered on arrival.
+		t.spawnEndDragonFight()
 	}
 
 	udebugPlayer(p, "dimension", "changed %d -> %d at (%.1f,%.1f,%.1f)", fromDim, targetDim, tx, ty, tz)

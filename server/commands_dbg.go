@@ -278,6 +278,20 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned ravager eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
 		}
+	case "dragon", "ender_dragon", "enderdragon":
+		// ENDER DRAGON (Task): spawn the full End dragon fight -- the EnderDragon boss (200 HP, 8 sub-part
+		// hitboxes, HOLDING circling flight) at the fight origin (0,128,0) plus a ring of 10 EndCrystals
+		// (the healing beacons: while a crystal is the dragon's nearestCrystal it heals +1 every 10 ticks;
+		// destroy a crystal to make the dragon take a 10.0 head hit). Boss bar (PINK/PROGRESS/fog/music) is
+		// sent to every player. The obsidian-pillar towers + exit-portal podium are cite-deferred (the fight
+		// spawns a bare crystal ring + places an END_PORTAL + DRAGON_EGG at the origin on death). One fight
+		// per world (idempotent via t.endDragonFightInit); use spawnEnderDragon directly for a bare dragon.
+		d := t.spawnEndDragonFight()
+		if d != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned ender dragon fight: dragon eid=%d at (0,128,0) + 10 end crystals (destroy a crystal to hit the dragon; boss bar sent)", d.id))
+		} else {
+			t.broadcastSystemChat("[dbg] ender dragon fight already initialized this world (one fight per world)")
+		}
 	case "water":
 		t.dbgFillWater(p)
 		t.broadcastSystemChat("[dbg] filled a water box around you")
@@ -344,7 +358,7 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		t.onRedstoneEdit(wirePos)
 		t.broadcastSystemChat(fmt.Sprintf("[dbg] placed redstone_block(%d,%d,%d)+wire(%d,%d,%d); wire should be POWER 15", bx, by, bz, bx+1, by, bz))
 	default:
-		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | iron_golem | villager | villager_farmer | vex | ghast_hostile | blaze | strider | wither_skeleton | hoglin | fangs | water | pig-in-water | raid | rain | redstone | trade")
+		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | dragon | iron_golem | villager | villager_farmer | vex | ghast_hostile | blaze | strider | wither_skeleton | hoglin | fangs | water | pig-in-water | raid | rain | redstone | trade")
 	}
 }
 

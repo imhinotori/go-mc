@@ -621,6 +621,14 @@ func (t *TickLoop) tickAI() {
 		}
 	}
 	for _, e := range deadSnapshot {
+		// ENDER DRAGON (Task): a dying dragon runs tickDragonDeath INSTEAD of the generic tickDeath (no
+		// 20-tick poof; it rises for 200 ticks then spawns the exit portal + dragon egg + showers XP). Gated
+		// on e.dragon != nil so every other dying mob takes the unchanged tickDeath path. Cite EnderDragon
+		// .tickDeath vs LivingEntity.tickDeath.
+		if e.dragon != nil {
+			t.tickDragonDeath(e)
+			continue
+		}
 		t.tickDeath(e) // ++deathTime; at >=20 broadcast the status-60 poof + remove via the owner region
 	}
 
@@ -706,6 +714,20 @@ func (t *TickLoop) tickAI() {
 		if e.typ == entity.Ghast.ID {
 			t.ghastAiStep(e)
 		}
+		// ENDER DRAGON (Task): the boss tick (HOLDING circling flight + growl decrement + checkCrystals
+		// heal/rescan + boss-bar progress). Per-type-gated like the ghast/blaze, AFTER serverAiStep (the
+		// dragon's empty goalSelector is a no-op). The dragon is a flyer (noPhysics); its no-gravity path is
+		// gated in tickPhysics via dragonIsFlyer. ADDITIVE + dragon-gated (zero cost / zero RNG for every
+		// non-dragon -- the pig oracle stream is untouched; the dragon's checkCrystals nextInt(10) draws only
+		// on its OWN mobRandom stream). A DYING dragon skips this (tickDragonDeath owns it, gated below).
+		if e.dragon != nil {
+			t.enderDragonAiStep(e)
+		}
+		// END CRYSTAL (Task): the crystal's ++time counter tick (EndCrystal.tick). Per-type-gated on
+		// e.isEndCrystal. A crystal is NOT a Mob (no e.ai), so it never enters this serverAiStep snapshot
+		// loop -- it is ticked in the separate crystal pass below (see the tickEndCrystal loop after this
+		// AI loop). This branch is a defensive no-op here (a crystal has e.ai == nil so the snapshot filter
+		// already excludes it); the real crystal tick is wired below.
 		// BLAZE (Task): the nether hostile + its melee-or-fireball-burst attack goal (BlazeAttackGoal) +
 		// the water-sensitivity drown tail. Per-type-gated like the ghast, AFTER serverAiStep (the empty
 		// goalSelector no-op). Blaze is a normal GROUND mob for physics (no flyer branch). ADDITIVE +
@@ -832,6 +854,17 @@ func (t *TickLoop) tickAI() {
 
 	// Throttled natural spawner: vanilla attempts every tick (most no-op under cap); v1 runs the
 	// bounded one-placement attempt every spawnInterval ticks to keep the per-tick cost trivial.
+
+	// END CRYSTAL (Task): the crystal ++time tick (EndCrystal.tick). A crystal is a plain Entity (NOT a
+	// Mob -- e.ai == nil), so it is EXCLUDED from the serverAiStep snapshot above; it gets its own pass
+	// here over the region store. Gated on e.isEndCrystal so every non-crystal entity is a cheap skip
+	// (zero cost / zero RNG -- the pig oracle stream is untouched). Pure integer ++time, no movement.
+	for _, e := range t.cur().entities.byID {
+		if e.isEndCrystal && !e.dead {
+			t.tickEndCrystal(e)
+		}
+	}
+
 	if t.gametime%spawnInterval == 0 {
 		t.naturalSpawn()
 	}
@@ -886,6 +919,16 @@ func (t *TickLoop) tickPhysics() {
 		if e.isVex {
 			continue
 		}
+
+		// ENDER DRAGON (Task): the dragon is a FLYING boss (EnderDragon.noPhysics == true) whose movement is
+		// integrated in enderDragonAiStep (the HOLDING circling entities.move -- no collision, no gravity).
+		// Skip it here so the generic gravity/drag/collision path never touches it (the observable "the
+		// dragon flies freely, unaffected by gravity"). dragonIsFlyer gates on e.dragon != nil. Cite
+		// EnderDragon ctor noPhysics = true.
+		if dragonIsFlyer(e) {
+			continue
+		}
+
 
 		// NON-MOB ENTITIES run their OWN full physics in their dedicated .tick during tickEntities
 		// (tickItems/tickOrbs/tickArrows/tickPrimedTnt/tickPotions/tickThrowables/tickHurtingProjectiles/

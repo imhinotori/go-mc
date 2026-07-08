@@ -381,6 +381,21 @@ type Entity struct {
 	blazeAttackTime int32
 	blazeLastSeen   int32
 	blazeCharged    bool
+	// --- ENDER DRAGON (net.minecraft.world.entity.boss.enderdragon.EnderDragon) --------------------
+	//
+	// Tick-owned plain values, set/read ONLY for an EnderDragon (enderDragonAiStep + dragonHurtPart gate
+	// on typ == entity.EnderDragon.ID via e.dragon != nil). All the dragon state is grouped behind ONE
+	// pointer (e.dragon) so a plain mob (the pig oracle) pays exactly one nil pointer and touches NONE of
+	// these fields -- additive-minimal, zero new RNG, byte-identical for every non-dragon. Cite EnderDragon.
+	dragon *dragonState
+	// --- END CRYSTAL (net.minecraft.world.entity.boss.enderdragon.EndCrystal) -----------------------
+	//
+	// Tick-owned plain values, set/read ONLY for an EndCrystal (tickEndCrystal + endCrystalHurt gate on
+	// isEndCrystal). isEndCrystal marks the entity; endCrystalTime mirrors EndCrystal.time (the free-
+	// running ++ counter EndCrystal.tick increments, drives the beam/bob client visual). Zero for every
+	// non-crystal entity. Cite EndCrystal.tick.
+	isEndCrystal  bool
+	endCrystalTime int32
 	// --- MAGMA CUBE (net.minecraft.world.entity.monster.cubemob.MagmaCube) --------------------------
 	//
 	// Tick-owned plain values, set/read ONLY for a MagmaCube (magmaCubeAiStep gates on typ ==

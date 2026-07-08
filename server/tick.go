@@ -232,6 +232,10 @@ type TickLoop struct {
 	// endGen is the End's chunk generator, kept so ensureEndPlatform can SYNCHRONOUSLY
 	// generate the platform chunk on arrival (the async worker may not have produced it yet).
 	endGen *world.NoiseGenerator
+	// endDragonFightInit guards the lazy Ender Dragon fight init (spawnEndDragonFight): true once the
+	// dragon + crystal ring have been spawned for this world, so a second player entering the End does not
+	// respawn the boss. One fight per world (v1: no per-world EnderDragonFight persistence). Tick-owned.
+	endDragonFightInit bool
 
 	// gamerules is the per-level GameRules store (gamerules.go): the authoritative keyed set of
 	// boolean/integer rules with vanilla defaults. Read through t.gameRule/t.gameRuleInt (lazily seeded to
