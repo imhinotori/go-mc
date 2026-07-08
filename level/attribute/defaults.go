@@ -666,6 +666,75 @@ func frogSupplier() *Supplier {
 		Build()
 }
 
+// camelSupplier is the port of Camel.createAttributes() : AbstractHorse.createBaseHorseAttributes() +
+// MAX_HEALTH 32.0 + MOVEMENT_SPEED 0.09000000357627869 + JUMP_STRENGTH 0.41999998688697815 + STEP_HEIGHT
+// 1.5 (jar: net.minecraft.world.entity.animal.camel.Camel.createAttributes -- javap this session: ldc2_w
+// 32.0d MAX_HEALTH, 0.09000000357627869d MOVEMENT_SPEED, 0.41999998688697815d JUMP_STRENGTH, 1.5d
+// STEP_HEIGHT). createBaseHorseAttributes = Animal.createAnimalAttributes() + JUMP_STRENGTH 0.7 + MAX_HEALTH
+// 53.0 + MOVEMENT_SPEED 0.22499999403953552 + STEP_HEIGHT 1.0 + SAFE_FALL_DISTANCE 6.0 +
+// FALL_DAMAGE_MULTIPLIER 0.5 (verified AbstractHorse.createBaseHorseAttributes this session). Under
+// buildKeepingLast the Camel overrides win: the FINAL supplier is MAX_HEALTH 32.0, MOVEMENT_SPEED
+// 0.09000000357627869, STEP_HEIGHT 1.5, SAFE_FALL_DISTANCE 6.0 (from the horse base, un-overridden), plus
+// the createAnimalAttributes base (TEMPT_RANGE 10.0, FOLLOW_RANGE 16.0). JUMP_STRENGTH (0.42) and
+// FALL_DAMAGE_MULTIPLIER (0.5) are NOT registered attributes in Sulfur (no consumer -- the CITED
+// non-gameplay omission in the file header); each slots in as one .AddValue line the moment its consumer
+// lands, never baked away. The sit/stand + dash + 2-seat rideable are the DEFERRED behavior layer
+// (camel.go). Cite Camel.createAttributes + AbstractHorse.createBaseHorseAttributes.
+func camelSupplier() *Supplier {
+	return createAnimalAttributes().
+		AddValue(SafeFallDistance, 6.0).              // createBaseHorseAttributes SAFE_FALL_DISTANCE 6.0 (over the living 3.0)
+		AddValue(MaxHealth, 32.0).                    // Camel override (over the horse-base 53.0)
+		AddValue(MovementSpeed, 0.09000000357627869). // Camel override (over the horse-base 0.225)
+		AddValue(StepHeight, 1.5).                    // Camel override (over the horse-base 1.0)
+		Build()
+}
+
+// snifferSupplier is the port of Sniffer.createAttributes() : Animal.createAnimalAttributes() +
+// MOVEMENT_SPEED 0.10000000149011612 + MAX_HEALTH 14.0 (jar:
+// net.minecraft.world.entity.animal.sniffer.Sniffer.createAttributes -- javap this session:
+// createAnimalAttributes, ldc2_w 0.10000000149011612d MOVEMENT_SPEED, 14.0d MAX_HEALTH). The MOVEMENT_SPEED
+// literal is the vanilla float-widened double, preserved bit-for-bit. The dig-for-seeds state machine is
+// the DEFERRED behavior layer (sniffer.go). Cite Sniffer.createAttributes.
+func snifferSupplier() *Supplier {
+	return createAnimalAttributes().
+		AddValue(MovementSpeed, 0.10000000149011612).
+		AddValue(MaxHealth, 14.0).
+		Build()
+}
+
+// allaySupplier is the port of Allay.createAttributes() : Mob.createMobAttributes() (NOT Monster/Animal --
+// the Allay builds on the mob base, so it has NO TEMPT_RANGE) + MAX_HEALTH 20.0 + FLYING_SPEED
+// 0.10000000149011612 + MOVEMENT_SPEED 0.10000000149011612 + ATTACK_DAMAGE 2.0 (jar:
+// net.minecraft.world.entity.animal.allay.Allay.createAttributes -- javap this session: createMobAttributes,
+// ldc2_w 20.0d MAX_HEALTH, 0.10000000149011612d FLYING_SPEED, 0.10000000149011612d MOVEMENT_SPEED, 2.0d
+// ATTACK_DAMAGE). The FLYING_SPEED + MOVEMENT_SPEED literals are the vanilla float-widened double, preserved
+// bit-for-bit. Allay is a "misc"-category flyer; the item-pickup/follow-note behavior is the DEFERRED
+// behavior layer (allay.go). Cite Allay.createAttributes.
+func allaySupplier() *Supplier {
+	return createMobAttributes().
+		AddValue(MaxHealth, 20.0).
+		AddValue(FlyingSpeed, 0.10000000149011612).
+		AddValue(MovementSpeed, 0.10000000149011612).
+		AddValue(AttackDamage, 2.0).
+		Build()
+}
+
+// axolotlSupplier is the port of Axolotl.createAttributes() : Animal.createAnimalAttributes() + MAX_HEALTH
+// 14.0 + MOVEMENT_SPEED 1.0 (dconst_1) + ATTACK_DAMAGE 2.0 + STEP_HEIGHT 1.0 (dconst_1) (jar:
+// net.minecraft.world.entity.animal.axolotl.Axolotl.createAttributes -- javap this session:
+// createAnimalAttributes, ldc2_w 14.0d MAX_HEALTH, dconst_1 MOVEMENT_SPEED, 2.0d ATTACK_DAMAGE, dconst_1
+// STEP_HEIGHT). MOVEMENT_SPEED 1.0 is large because the amphibious navigation reads it through the swim
+// scale; STEP_HEIGHT 1.0 OVERRIDES the base createLivingAttributes default 0.6. The 5-color variant +
+// play-dead are the DEFERRED behavior layer (axolotl.go). Cite Axolotl.createAttributes.
+func axolotlSupplier() *Supplier {
+	return createAnimalAttributes().
+		AddValue(MaxHealth, 14.0).
+		AddValue(MovementSpeed, 1.0).
+		AddValue(AttackDamage, 2.0).
+		AddValue(StepHeight, 1.0).
+		Build()
+}
+
 // livingFallbackSupplier is the port of LivingEntity.createLivingAttributes() (the gameplay subset):
 // the base attribute set EVERY LivingEntity has. Vanilla's DefaultAttributes registers a supplier for
 // every living EntityType; Sulfur ports the common per-type suppliers above and leans on THIS fallback
@@ -797,6 +866,16 @@ var suppliers = map[string]*Supplier{
 	"bee":  beeSupplier(),
 	"goat": goatSupplier(),
 	"frog": frogSupplier(),
+	// CAMEL + SNIFFER + ALLAY + AXOLOTL (Task): four passive animals. Each a 1:1 jar copy of its
+	// createAttributes (verified bytecode this session). Camel (createBaseHorseAttributes + MAX_HEALTH 32 +
+	// MOVEMENT_SPEED 0.09 + STEP_HEIGHT 1.5 + SAFE_FALL_DISTANCE 6; JUMP_STRENGTH/FALL_DAMAGE_MULTIPLIER
+	// cite-omitted, no consumer), Sniffer (Animal + MOVEMENT_SPEED 0.1 + MAX_HEALTH 14), Allay (Mob +
+	// MAX_HEALTH 20 + FLYING_SPEED 0.1 + MOVEMENT_SPEED 0.1 + ATTACK_DAMAGE 2), Axolotl (Animal + MAX_HEALTH
+	// 14 + MOVEMENT_SPEED 1.0 + ATTACK_DAMAGE 2 + STEP_HEIGHT 1.0). Keyed by registry name.
+	"camel":   camelSupplier(),
+	"sniffer": snifferSupplier(),
+	"allay":   allaySupplier(),
+	"axolotl": axolotlSupplier(),
 }
 
 // livingCategories is the set of data/entity.Entity.Type values that correspond to a vanilla

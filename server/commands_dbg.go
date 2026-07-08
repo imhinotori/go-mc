@@ -276,6 +276,38 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned frog eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+1, p.z))
 		}
+	case "camel":
+		// CAMEL (Task): spawn an adult Camel (the desert AbstractHorse). MAX_HEALTH 32, MOVEMENT_SPEED 0.09,
+		// STEP_HEIGHT 1.5, SAFE_FALL_DISTANCE 6. Passive goal walk (Float/Panic/Breed/Tempt(camel_food)/Follow/
+		// Stroll/Look). The sit/stand pose + dash + 2-seat rideable are DEFERRED (brain). Spawned 1 block up.
+		e := t.spawnCamel(p.x, p.y+1, p.z, false)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned camel eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+1, p.z))
+		}
+	case "sniffer":
+		// SNIFFER (Task): spawn an adult Sniffer (the ancient dig animal). MAX_HEALTH 14, MOVEMENT_SPEED 0.1.
+		// Passive goal walk (Float/Panic/Breed/Tempt(sniffer_food)/Follow/Stroll/Look). The dig-for-seeds
+		// DATA_STATE machine + ancient-seed drop are DEFERRED (brain). Spawned 1 block up.
+		e := t.spawnSniffer(p.x, p.y+1, p.z, false)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned sniffer eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+1, p.z))
+		}
+	case "allay":
+		// ALLAY (Task): spawn an Allay (the flying helper, a "misc" PathfinderMob). MAX_HEALTH 20, FLYING_SPEED
+		// 0.1, MOVEMENT_SPEED 0.1, ATTACK_DAMAGE 2. Flying passive goal walk (Float/Stroll/Look); NOT Ageable
+		// (no baby, no breed). The item-fetch + follow-note + amethyst duplicate are DEFERRED (brain). Spawned 1 up.
+		e := t.spawnAllay(p.x, p.y+1, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned allay eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+1, p.z))
+		}
+	case "axolotl":
+		// AXOLOTL (Task): spawn an adult Axolotl (the amphibious animal). MAX_HEALTH 14, MOVEMENT_SPEED 1.0,
+		// ATTACK_DAMAGE 2, STEP_HEIGHT 1.0. Passive goal walk (Float/Panic/Breed/Tempt(axolotl_food)/Follow/
+		// Stroll/Look); lucy variant. The play-dead self-regen + 5-color variant are DEFERRED (brain). Spawned 1 up.
+		e := t.spawnAxolotl(p.x, p.y+1, p.z, false)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned axolotl eid=%d (variant=%d) at (%.1f,%.1f,%.1f)", e.id, e.axolotlVariant, p.x, p.y+1, p.z))
+		}
 	case "zoglin":
 		// ZOGLIN (GAP): the TERMINAL undead a hoglin becomes off-nether. INDISCRIMINATELY hostile -- it
 		// attacks ANY player OR mob (except other zoglins and creepers) and FLINGS the target upward (the
@@ -409,7 +441,7 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		t.onRedstoneEdit(wirePos)
 		t.broadcastSystemChat(fmt.Sprintf("[dbg] placed redstone_block(%d,%d,%d)+wire(%d,%d,%d); wire should be POWER 15", bx, by, bz, bx+1, by, bz))
 	default:
-		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | dragon | iron_golem | villager | villager_farmer | vex | ghast_hostile | blaze | strider | wither_skeleton | wither | hoglin | bee | goat | frog | fangs | water | pig-in-water | raid | rain | redstone | trade")
+		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | dragon | iron_golem | villager | villager_farmer | vex | ghast_hostile | blaze | strider | wither_skeleton | wither | hoglin | bee | goat | frog | camel | sniffer | allay | axolotl | fangs | water | pig-in-water | raid | rain | redstone | trade")
 	}
 }
 

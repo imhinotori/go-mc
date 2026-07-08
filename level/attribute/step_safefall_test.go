@@ -42,9 +42,9 @@ func TestStepAndSafeFall_RegistrationDefaults(t *testing.T) {
 // TestLivingBase_CarriesStepAndSafeFall confirms createLivingAttributes adds STEP_HEIGHT (0.6) and
 // SAFE_FALL_DISTANCE (3.0) to EVERY living entity at their registration defaults (exactly as vanilla's
 // LivingEntity.createLivingAttributes does). Checked via a plain living creature that carries no
-// override (pig), a monster (zombie), and the base living fallback (axolotl).
+// override (pig), a monster (zombie), and the base living fallback (salmon; axolotl is now a ported type).
 func TestLivingBase_CarriesStepAndSafeFall(t *testing.T) {
-	for _, name := range []string{"pig", "zombie", "axolotl"} {
+	for _, name := range []string{"pig", "zombie", "salmon"} {
 		m := NewMapForEntity(name)
 		if m == nil {
 			t.Fatalf("%s: no attribute map", name)

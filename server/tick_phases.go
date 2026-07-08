@@ -723,16 +723,16 @@ func (t *TickLoop) tickAI() {
 		if e.dragon != nil {
 			t.enderDragonAiStep(e)
 		}
-			// WITHER BOSS (Task): the boss tick (invuln charge-up + power-7 explosion at 0 + charge-up heal-10,
-			// then the 3-head WitherSkull ranged attack + destroyBlocksTick AABB break + idle heal +1 + boss-bar
-			// progress). Per-type-gated like the dragon, AFTER serverAiStep (the wither's empty goalSelector is a
-			// no-op). The wither is a flyer (witherIsFlyer); its no-gravity hover is gated in tickPhysics.
-			// ADDITIVE + wither-gated (zero cost / zero RNG for every non-wither -- the pig oracle stream is
-			// untouched; the wither's head-cadence nextInt draws only on its OWN mobRandom stream). Cite
-			// WitherBoss.customServerAiStep.
-			if e.wither != nil {
-				t.witherAiStep(e)
-			}
+		// WITHER BOSS (Task): the boss tick (invuln charge-up + power-7 explosion at 0 + charge-up heal-10,
+		// then the 3-head WitherSkull ranged attack + destroyBlocksTick AABB break + idle heal +1 + boss-bar
+		// progress). Per-type-gated like the dragon, AFTER serverAiStep (the wither's empty goalSelector is a
+		// no-op). The wither is a flyer (witherIsFlyer); its no-gravity hover is gated in tickPhysics.
+		// ADDITIVE + wither-gated (zero cost / zero RNG for every non-wither -- the pig oracle stream is
+		// untouched; the wither's head-cadence nextInt draws only on its OWN mobRandom stream). Cite
+		// WitherBoss.customServerAiStep.
+		if e.wither != nil {
+			t.witherAiStep(e)
+		}
 		// END CRYSTAL (Task): the crystal's ++time counter tick (EndCrystal.tick). Per-type-gated on
 		// e.isEndCrystal. A crystal is NOT a Mob (no e.ai), so it never enters this serverAiStep snapshot
 		// loop -- it is ticked in the separate crystal pass below (see the tickEndCrystal loop after this
@@ -803,6 +803,23 @@ func (t *TickLoop) tickAI() {
 		// Frog.customServerAiStep + FrogAi (brain deferral note).
 		if e.typ == entity.Frog.ID {
 			t.frogAiStep(e)
+		}
+		// CAMEL + SNIFFER + ALLAY + AXOLOTL (Task): the customServerAiStep brain hooks (the sit/dash, the
+		// dig-for-seeds, the item-fetch/follow-note, and the play-dead/variant are DEFERRED; today each is a
+		// bounded no-op). Per-type-gated like the goat/frog, AFTER serverAiStep. ADDITIVE + per-type-gated
+		// (zero cost / zero RNG for every non-matching entity -- the pig oracle stream is untouched). Cite
+		// Camel/Sniffer/Allay/Axolotl.customServerAiStep (brain deferral notes).
+		if e.typ == entity.Camel.ID {
+			t.camelAiStep(e)
+		}
+		if e.typ == entity.Sniffer.ID {
+			t.snifferAiStep(e)
+		}
+		if e.typ == entity.Allay.ID {
+			t.allayAiStep(e)
+		}
+		if e.typ == entity.Axolotl.ID {
+			t.axolotlAiStep(e)
 		}
 		// MOB-PREY (Task #9): the Endermite.aiStep despawn timer (life++ while non-persistent, discard at
 		// life>=2400). Per-type-gated like the creeper/enderman, AFTER serverAiStep. ADDITIVE + endermite-gated

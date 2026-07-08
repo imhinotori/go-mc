@@ -462,6 +462,20 @@ type Entity struct {
 	beeTimeSinceSting int
 	goatScreaming     bool
 	frogVariant       int
+	// --- CAMEL / SNIFFER / ALLAY / AXOLOTL (passive animals, Task) ----------------------------------
+	//
+	// Tick-owned plain values, set/read ONLY for their own type (each *AiStep gates on typ). isCamel/
+	// isSniffer/isAllay/isAxolotl mark the entity. axolotlVariant mirrors Axolotl's DATA_VARIANT (0 lucy /
+	// 1 wild / 2 gold / 3 cyan / 4 blue; the blue is the rare breeding mutation, DEFERRED). Zero for every
+	// other entity. Camel/Sniffer/Axolotl are BRAIN Animals (their sit/dash, dig-for-seeds, and play-dead/
+	// variant behaviors are DEFERRED brain hooks); Allay is a BRAIN PathfinderMob flyer (its item-fetch/
+	// follow-note/duplicate is a DEFERRED brain hook). Cite Camel/Sniffer/Allay/Axolotl.customServerAiStep
+	// + the respective *Ai brain (the brain deferral note in each mob file).
+	isCamel        bool
+	isSniffer      bool
+	isAllay        bool
+	isAxolotl      bool
+	axolotlVariant int
 	// --- PIGLIN (net.minecraft.world.entity.monster.piglin.Piglin) -------------------------------
 	//
 	// Tick-owned plain values, set/read ONLY for a Piglin (piglinBrainTick gates on typ == entity.Piglin.ID).
