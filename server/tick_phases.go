@@ -801,6 +801,14 @@ func (t *TickLoop) tickAI() {
 		if e.typ == entity.Villager.ID {
 			t.villagerBrainTick(e)
 		}
+		// PIGLIN (Task): the Piglin.customServerAiStep brain tick -- the flagship nether mob is a BRAIN mob
+		// (Swim/LookAtTargetSink/MoveToTargetSink CORE + the code-driven fight melee + the off-nether
+		// zombification timer). Per-type-gated like the villager, AFTER serverAiStep (the piglin's empty
+		// goalSelector is a no-op). ADDITIVE + piglin-gated (zero cost / zero RNG for every non-piglin -- the
+		// pig oracle stream is untouched). Cite Piglin.customServerAiStep.
+		if e.typ == entity.Piglin.ID {
+			t.piglinBrainTick(e)
+		}
 		// SKILLS-01 (mob_skills.go): the declared-skill TIMER tick — the MythicMobs ~onTimer analogue,
 		// interpreted as pure data by the Go hot path (ZERO starlark.Calls, the skills-are-data
 		// invariant). Gated PER FIELD (e.skills != nil), not per type: only a mob whose declaration

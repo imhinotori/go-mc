@@ -419,6 +419,19 @@ func hoglinSupplier() *Supplier {
 		Build()
 }
 
+// piglinSupplier is the port of Piglin.createAttributes(): Monster.createMonsterAttributes() +
+// MAX_HEALTH 16.0 + MOVEMENT_SPEED 0.3499999940395355 (0.35f widened) + ATTACK_DAMAGE 5.0. Cite
+// net.minecraft.world.entity.monster.piglin.Piglin.createAttributes (javap this session:
+// createMonsterAttributes, ldc2_w 16.0d MAX_HEALTH, 0.3499999940395355d MOVEMENT_SPEED, 5.0d ATTACK_DAMAGE).
+// The MOVEMENT_SPEED literal is the vanilla float-widened double, preserved bit-for-bit.
+func piglinSupplier() *Supplier {
+	return createMonsterAttributes().
+		AddValue(MaxHealth, 16.0).
+		AddValue(MovementSpeed, 0.3499999940395355).
+		AddValue(AttackDamage, 5.0).
+		Build()
+}
+
 // endermanSupplier is EnderMan's attribute supplier. EnderMan.createAttributes = Monster
 // .createMonsterAttributes().add(MAX_HEALTH 40).add(MOVEMENT_SPEED 0.3).add(ATTACK_DAMAGE 7)
 // .add(FOLLOW_RANGE 64).add(STEP_HEIGHT 1.0). Cite EnderMan.createAttributes
@@ -626,6 +639,10 @@ var suppliers = map[string]*Supplier{
 	// KNOCKBACK_RESISTANCE 0.6 + ATTACK_KNOCKBACK 1.0 + ATTACK_DAMAGE 6.0). ATTACK_DAMAGE 6.0 is the adult
 	// value; a baby is 0.5 at runtime (ageBoundaryReached). Keyed by registry name.
 	"hoglin": hoglinSupplier(),
+	// PIGLIN (Task): the flagship nether hostile. Piglin.createAttributes: Monster.createMonsterAttributes
+	// + MAX_HEALTH 16.0 + MOVEMENT_SPEED 0.3499999940395355 + ATTACK_DAMAGE 5.0. Keyed by its registry name
+	// so NewMapForEntity resolves it. Cite Piglin.createAttributes.
+	"piglin": piglinSupplier(),
 	// MOB-PREY (Task #9): the 3 prey mobs. Endermite (Monster), Turtle + Ocelot (Animal), each a 1:1 jar
 	// copy of its createAttributes (verified bytecode this session).
 	"endermite": endermiteSupplier(),

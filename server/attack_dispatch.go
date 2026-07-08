@@ -1151,6 +1151,20 @@ func (t *TickLoop) handleInteract(p *tickPlayer, pkt pk.Packet) {
 	if mob.typ == entity.Villager.ID && t.villagerMobInteract(p, mob) {
 		return // the villager interact (menu open / unhappy / busy) handled the click
 	}
+	// PIGLIN BARTER (net.minecraft.world.entity.monster.piglin.Piglin.mobInteract -> PiglinAi.mobInteract):
+	// a right-click with a GOLD INGOT on an ADULT piglin consumes 1 ingot and drops a piglin_bartering roll
+	// (the barter). piglinMobInteract returns true when the interact belongs to the piglin (a barter consume)
+	// so handleInteract does NOT fall through to the feed path -- a piglin is not fed via the pig tag. A baby
+	// piglin or a non-gold-ingot item returns false (no consume, no feed -- a piglin is never pig_food). Piglin-
+	// gated (typ == entity.Piglin.ID) so it is a zero-cost no-op for a pig/cow/sheep; the only RNG (the barter
+	// loot roll) is a server-seeded draw off no mob stream, so the pig oracle is unperturbed. Cite
+	// Piglin.mobInteract + PiglinAi.mobInteract.
+	if mob.typ == entity.Piglin.ID {
+		if t.piglinMobInteract(p, mob) {
+			return // the barter handled the interact
+		}
+		return // a piglin is never pig_food-fed: a non-barter click is still consumed by the piglin (no feed)
+	}
 	// MINECART: a right-click on a CHEST/HOPPER minecart opens its container menu
 	// (AbstractMinecartContainer.interact -> player.openMenu(this)); a right-click on a PLAIN rideable
 	// minecart MOUNTS the player (player.startRiding(this)). Both consume the interact so it does NOT fall

@@ -422,6 +422,22 @@ type Entity struct {
 	// conversion runs everywhere EXCEPT dimNether. Set at spawn (spawnHoglin) from the spawn context; the
 	// entity store is single-dimension in v1, so this is how a hoglin knows it is (not) in the nether.
 	hoglinDimension int
+	// --- PIGLIN (net.minecraft.world.entity.monster.piglin.Piglin) -------------------------------
+	//
+	// Tick-owned plain values, set/read ONLY for a Piglin (piglinBrainTick gates on typ == entity.Piglin.ID).
+	// isPiglin marks the entity. piglinTimeInOverworld mirrors AbstractPiglin.timeInOverworld (the off-nether
+	// zombification counter: ++ while isConverting(), reset to 0 in the nether; at > CONVERSION_TIME(300) the
+	// piglin convertTo's ZOMBIFIED_PIGLIN). piglinImmuneToZombification mirrors DATA_IMMUNE_TO_ZOMBIFICATION
+	// (a piglin set immune never converts; default false). piglinAttackTime mirrors MeleeAttackGoal's
+	// ticksUntilNextAttack (the RNG-free swing cooldown, reset to adjustedTickDelay(20) after a hit). Zero for
+	// every non-piglin entity. The DATA_IS_CHARGING_CROSSBOW / DATA_IS_DANCING client-metadata flags are
+	// cite-deferred (the crossbow ranged attack + the celebrate dance are in the deferred activity graph).
+	// Cite Piglin / AbstractPiglin (timeInOverworld / isImmuneToZombification) + MeleeAttackGoal.
+	isPiglin                    bool
+	piglinTimeInOverworld       int
+	piglinImmuneToZombification bool
+	piglinInNether              bool // the nether-dimension guard for isConverting (default false == off-nether == converting)
+	piglinAttackTime            int
 	// brain is the ported net.minecraft.world.entity.ai.Brain (brain.go). It is NON-NIL only for a mob
 	// that runs the behavior subsystem — currently the BABY HappyGhast (HappyGhast.customServerAiStep
 	// ticks the brain ONLY when isBaby()); every other entity leaves it nil (a nil brain is never ticked,

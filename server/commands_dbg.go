@@ -223,6 +223,16 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned hoglin eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+1, p.z))
 		}
+	case "piglin":
+		// PIGLIN (Task): spawn an adult Piglin directly (the flagship nether hostile). It acquires the nearest
+		// player NOT wearing gold armor within FOLLOW_RANGE and melees for 5.0 when adjacent; a gold-armored
+		// player is NEUTRAL (never targeted). Right-click it with a gold ingot to BARTER (consumes 1 ingot,
+		// drops a piglin_bartering roll). OFF the nether it zombifies after 300 ticks -> zombified_piglin.
+		// Spawned 1 block up as an adult.
+		e := t.spawnPiglin(p.x, p.y+1, p.z, false)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned piglin eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+1, p.z))
+		}
 	case "fangs":
 		// VEX + FANGS (Task): spawn an EvokerFangs directly (the code-spawned projectile the evoker's FANGS
 		// spell places). It warms up, bites for 6.0 magic at warmupDelayTicks==-8, then despawns (~22 ticks).
