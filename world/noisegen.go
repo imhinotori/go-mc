@@ -259,11 +259,19 @@ func NewNetherGenerator(seed int64, secs, minY int) *NoiseGenerator {
 	if err != nil {
 		panic("world: NetherGenerator: build feature/decoration data: " + err.Error())
 	}
-	// Structures are inert in the nether core: a router-backed surface sampler + the nether biome
-	// lookup back the (empty) structure cache, and the StartGenerator is the noop set (zero starts).
+	// The NETHER FORTRESS is the one nether structure wired here (gap-reaudit #5): a router-backed
+	// surface sampler + the nether biome lookup back the structure cache, and the StartGenerator is
+	// the fortress generator (nether_complexes structure_set: fortress placement salt 30084232 /
+	// spacing 27 / separation 4). Terrain/biomes/carvers/features are unchanged -- the fortress is
+	// ADDED to the (previously inert) structure gen. The bastion remnant is DEFERRED
+	// (nether_fortress.go). CITE: NetherFortressStructure + NetherFortressPieces.
 	sampler := structure.NewRouterSurfaceSampler(r)
 	biomeAt := func(wx, wy, wz int) levelbiome.Type { return bs.GetBiome(wx, wy, wz) }
 	structCache := structure.NewCache(sampler, biomeAt)
+	fortressGen, err := structure.NewNetherFortressStartGen()
+	if err != nil {
+		panic("world: NetherGenerator: build nether fortress start generator: " + err.Error())
+	}
 
 	return &NoiseGenerator{
 		seed:        seed,
@@ -277,7 +285,7 @@ func NewNetherGenerator(seed int64, secs, minY int) *NoiseGenerator {
 		rep:         rep,
 		deco:        deco,
 		structCache: structCache,
-		structGen:   structure.NoopStartGenerator(),
+		structGen:   fortressGen,
 		air:         block.ToStateID[block.Air{}],
 		nether:      true,
 	}
