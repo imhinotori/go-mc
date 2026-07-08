@@ -599,7 +599,12 @@ func (g *NoiseGenerator) placeStructures(view *Neighborhood) {
 	// Neighborhood drops out-of-3x3 writes) — so a chunk-spanning pyramid is placed once per
 	// overlapping chunk, idempotently (the piece RNG is re-derivable over (seed,ownerChunk),
 	// Pitfall #2). Structures overwrite terrain + features (vanilla FEATURES order).
-	g.structCache.PlaceStructures(view, center, g.seed, minY, height)
+	g.structCache.PlaceStructures(structureFeaturePoolView{
+		Neighborhood: view,
+		registry:     g.deco.registry,
+		seaLevel:     g.surface.SeaLevel(),
+		biomeAt:      func(wx, wy, wz int) levelbiome.Type { return g.biomes.GetBiome(wx, wy, wz) },
+	}, center, g.seed, minY, height)
 }
 
 // beardifierFor builds the STRUCT-POLISH-03 structure Beardifier for chunk C: it gathers the
