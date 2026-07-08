@@ -162,7 +162,10 @@ func isSunSensitive(e *Entity) bool {
 // fire OR lava damage and are never ignited. Every OTHER v1 mob is const-false (zombie/skeleton/passives
 // all burn). Gated in tickEntityFire + tickEntityLava. Cite EntityType.fireImmune + {MagmaCube,Strider}.isOnFire.
 func entityFireImmune(e *Entity) bool {
-	return e.typ == entity.MagmaCube.ID || e.typ == entity.Strider.ID
+	// GAP (nether roster): the WitherSkeleton EntityType is registered fireImmune (a nether skeleton), so
+	// it takes NO fire/lava damage and is never ignited -- like the MagmaCube/Strider. Cite
+	// EntityType.fireImmune(wither_skeleton).
+	return e.typ == entity.MagmaCube.ID || e.typ == entity.Strider.ID || e.typ == entity.WitherSkeleton.ID
 }
 
 // isDay reports whether it is daytime (the sun-burn window). The inverse of the night window the

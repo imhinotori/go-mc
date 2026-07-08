@@ -391,6 +391,34 @@ func striderSupplier() *Supplier {
 		Build()
 }
 
+// witherSkeletonSupplier is the port of WitherSkeleton's attribute supplier. WitherSkeleton has NO
+// createAttributes override -- it inherits AbstractSkeleton.createAttributes == Monster.createMonsterAttributes
+// + MOVEMENT_SPEED 0.25 (identical to skeletonSupplier). MAX_HEALTH is the createLivingAttributes default
+// 20.0; FOLLOW_RANGE the createMonsterAttributes 16.0. ATTACK_DAMAGE is the createMonsterAttributes default
+// 2.0 in the supplier -- WitherSkeleton.finalizeSpawn OVERRIDES it to 4.0 at runtime (spawnWitherSkeleton).
+// Cite AbstractSkeleton.createAttributes + WitherSkeleton.finalizeSpawn.
+func witherSkeletonSupplier() *Supplier {
+	return createMonsterAttributes().
+		AddValue(MovementSpeed, 0.25).
+		Build()
+}
+
+// hoglinSupplier is the port of Hoglin.createAttributes(): Monster.createMonsterAttributes() +
+// MAX_HEALTH 40.0 + MOVEMENT_SPEED 0.30000001192092896 + KNOCKBACK_RESISTANCE 0.6000000238418579 +
+// ATTACK_KNOCKBACK 1.0 + ATTACK_DAMAGE 6.0 (jar: net.minecraft.world.entity.monster.hoglin.Hoglin
+// .createAttributes -- ldc2_w 40.0d, 0.30000001192092896d, 0.6000000238418579d, dconst_1, 6.0d). The
+// ATTACK_DAMAGE 6.0 is the ADULT value; Hoglin.ageBoundaryReached sets a baby to 0.5 at runtime
+// (setHoglinAgeAttack). Cite Hoglin.createAttributes.
+func hoglinSupplier() *Supplier {
+	return createMonsterAttributes().
+		AddValue(MaxHealth, 40.0).
+		AddValue(MovementSpeed, 0.30000001192092896).
+		AddValue(KnockbackResistance, 0.6000000238418579).
+		AddValue(AttackKnockback, 1.0).
+		AddValue(AttackDamage, 6.0).
+		Build()
+}
+
 // endermanSupplier is EnderMan's attribute supplier. EnderMan.createAttributes = Monster
 // .createMonsterAttributes().add(MAX_HEALTH 40).add(MOVEMENT_SPEED 0.3).add(ATTACK_DAMAGE 7)
 // .add(FOLLOW_RANGE 64).add(STEP_HEIGHT 1.0). Cite EnderMan.createAttributes
@@ -590,6 +618,14 @@ var suppliers = map[string]*Supplier{
 	// suffocating cold-state applies a transient -0.34 ADD_MULTIPLIED_BASE MOVEMENT_SPEED modifier. Cite
 	// Strider.createAttributes.
 	"strider": striderSupplier(),
+	// WITHER SKELETON (GAP, nether roster): WitherSkeleton shares AbstractSkeleton.createAttributes
+	// (Monster + MOVEMENT_SPEED 0.25); ATTACK_DAMAGE 2.0->4.0 is the finalizeSpawn runtime override
+	// (spawnWitherSkeleton). Keyed by registry name so NewMapForEntity resolves it.
+	"wither_skeleton": witherSkeletonSupplier(),
+	// HOGLIN (GAP, nether roster): Hoglin.createAttributes (Monster + MAX_HEALTH 40 + MOVEMENT_SPEED 0.3 +
+	// KNOCKBACK_RESISTANCE 0.6 + ATTACK_KNOCKBACK 1.0 + ATTACK_DAMAGE 6.0). ATTACK_DAMAGE 6.0 is the adult
+	// value; a baby is 0.5 at runtime (ageBoundaryReached). Keyed by registry name.
+	"hoglin": hoglinSupplier(),
 	// MOB-PREY (Task #9): the 3 prey mobs. Endermite (Monster), Turtle + Ocelot (Animal), each a 1:1 jar
 	// copy of its createAttributes (verified bytecode this session).
 	"endermite": endermiteSupplier(),

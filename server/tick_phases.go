@@ -727,6 +727,22 @@ func (t *TickLoop) tickAI() {
 		if e.typ == entity.Strider.ID {
 			t.striderAiStep(e)
 		}
+		// WITHER SKELETON (GAP): the nether melee skeleton -- acquire nearest player + the MeleeAttackGoal
+		// swing that applies WITHER 200 on a landed hit (WitherSkeleton.doHurtTarget). Per-type-gated like
+		// the blaze, AFTER serverAiStep. It is a normal GROUND mob (no flyer branch). ADDITIVE +
+		// wither-skeleton-gated (zero cost / zero RNG for every non-wither-skeleton -- the pig oracle stream
+		// is untouched).
+		if e.typ == entity.WitherSkeleton.ID {
+			t.witherSkeletonAiStep(e)
+		}
+		// HOGLIN (GAP): the nether beast -- acquire nearest player + the melee that FLINGS the target
+		// (HoglinBase.hurtAndThrowTarget knock-up toss) + the zoglin-conversion timer (converts to a Zoglin
+		// after > 300 ticks in a non-nether dimension). Per-type-gated like the blaze, AFTER serverAiStep.
+		// The brain is deferred (goal-style melee). ADDITIVE + hoglin-gated (the pig oracle stream is
+		// untouched; RNG only on the hoglin OWN stream, drawn only on a landed hit).
+		if e.typ == entity.Hoglin.ID {
+			t.hoglinAiStep(e)
+		}
 		// The Fox character-layer per-tick extras (Fox.tick + Fox.aiStep server branch): the crouch/
 		// interested animation lerp, ++ticksSinceEaten, the wake/sit-in-water/target-lost state clears,
 		// and the sleep immobility (jump+horizontal-velocity zero). Per-type-gated like the creeper/chicken,

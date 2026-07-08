@@ -401,6 +401,27 @@ type Entity struct {
 	// Strider.setSuffocating / isSuffocating / DATA_SUFFOCATING.
 	isStrider          bool
 	striderSuffocating bool
+	// --- WITHER SKELETON / HOGLIN STATE (nether roster) ---------------------------------------------
+	//
+	// Tick-owned plain values. isWitherSkeleton / isHoglin / isZoglin mark the entity (set/read ONLY by
+	// their per-type aiStep, gated on typ). meleeCooldown is the shared MeleeAttackGoal swing countdown
+	// (resetAttackCooldown == 20): decremented each tick, reset to 20 on a swing -- used by BOTH the wither
+	// skeleton and the hoglin (an entity is exactly one type, so no collision). hoglinAttackAnimTicks
+	// mirrors Hoglin.attackAnimationRemainingTicks (the 10-tick attack animation, client cue).
+	// hoglinTimeInOverworld mirrors Hoglin.timeInOverworld (the zoglin-conversion timer: converts at > 300
+	// while in a PIGLINS_ZOMBIFY dimension i.e. NOT the nether). Zero for every other entity. Cite
+	// WitherSkeleton / Hoglin (attackAnimationRemainingTicks / timeInOverworld / CONVERSION_TIME 300).
+	isWitherSkeleton      bool
+	isHoglin              bool
+	isZoglin              bool
+	meleeCooldown         int
+	hoglinAttackAnimTicks int
+	hoglinTimeInOverworld int
+	// hoglinDimension records the dimension the hoglin lives in (dimOverworld default / dimNether), the
+	// bounded stand-in for reading environmentAttributes.PIGLINS_ZOMBIFY at the entity's position: the
+	// conversion runs everywhere EXCEPT dimNether. Set at spawn (spawnHoglin) from the spawn context; the
+	// entity store is single-dimension in v1, so this is how a hoglin knows it is (not) in the nether.
+	hoglinDimension int
 	// brain is the ported net.minecraft.world.entity.ai.Brain (brain.go). It is NON-NIL only for a mob
 	// that runs the behavior subsystem — currently the BABY HappyGhast (HappyGhast.customServerAiStep
 	// ticks the brain ONLY when isBaby()); every other entity leaves it nil (a nil brain is never ticked,
