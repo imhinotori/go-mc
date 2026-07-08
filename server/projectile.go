@@ -93,16 +93,26 @@ func (t *TickLoop) tickArrows() {
 // solid block, despawns a grounded arrow, else flies (segment entity-hit → drag → gravity) and despawns
 // at 1200 ticks.
 func (t *TickLoop) tickArrow(e *Entity) {
+	// TRIDENT pre-tick (ThrownTrident.tick before super.tick()): the dealtDamage latch (inGroundTime>4)
+	// and the Loyalty return-to-owner homing. A returning trident (tridentReturning == noPhysics) is set
+	// up here; a discarded trident (reached/lost owner) short-circuits the whole tick. Cite ThrownTrident.tick.
+	if e.isTrident && t.tickTridentPre(e) {
+		return // the trident was discarded (reached / lost its owner) — no flight this tick
+	}
+
 	// (1) Block latch: if the arrow's cell is solid, stop and stick. (Vanilla tests the collision-shape
 	// AABB contains the position; v1 uses the block-solidity gate isSolidAt — the same observable "an
-	// arrow that reaches a solid block stops there".)
+	// arrow that reaches a solid block stops there".) A returning trident (noPhysics) phases through blocks
+	// (ThrownTrident.setNoPhysics(true)) so it does NOT latch — it flies home unobstructed.
 	cell := pk.Position{X: int(math.Floor(e.x)), Y: int(math.Floor(e.y)), Z: int(math.Floor(e.z))}
-	if !e.arrowInGround && t.isSolidAt(cell) {
+	if !e.arrowInGround && !e.tridentReturning && t.isSolidAt(cell) {
 		e.vx, e.vy, e.vz = 0, 0, 0
 		e.arrowInGround = true
 	}
 
-	// (2) Grounded arrow: tickDespawn (life++ / discard at 1200) and return — no flight.
+	// (2) Grounded arrow: tickDespawn (life++ / discard at 1200) and return — no flight. A grounded trident
+	// still counts inGroundTime toward the dealtDamage latch (handled in the trident pre-tick above), so it
+	// stays grounded here exactly like an arrow until Loyalty pulls it out (which clears arrowInGround).
 	if e.arrowInGround {
 		e.arrowLife++
 		if e.arrowLife >= arrowDespawnTicks {
@@ -114,18 +124,32 @@ func (t *TickLoop) tickArrow(e *Entity) {
 	// (3) Airborne: clip the flight segment against solid blocks FIRST (AbstractArrow.tick calls
 	// clipIncludingBorder before stepMoveAndHit), then test entities only up to that clipped endpoint —
 	// an entity BEHIND a wall the arrow hit first is not hit (stepMoveAndHit uses blockHitResult's
-	// location as the segment end).
+	// location as the segment end). A returning trident phases through blocks (no clip).
 	ox, oy, oz := e.x, e.y, e.z
 	nx, ny, nz := ox+e.vx, oy+e.vy, oz+e.vz
-	hx, hy, hz, blockHit := t.arrowClipSegment(ox, oy, oz, nx, ny, nz)
+	blockHit := false
 	endX, endY, endZ := nx, ny, nz
-	if blockHit {
-		endX, endY, endZ = hx, hy, hz
+	if !e.tridentReturning {
+		hx, hy, hz, hit := t.arrowClipSegment(ox, oy, oz, nx, ny, nz)
+		if hit {
+			blockHit = true
+			endX, endY, endZ = hx, hy, hz
+		}
 	}
 
+	// Entity hit. A trident that has already dealt damage (ThrownTrident.findHitEntity returns null when
+	// dealtDamage) does NOT re-hit — this is the returning/post-hit trident. A trident that hits deals a
+	// FLAT 8 (+ Impaling) and BOUNCES (not consumed); an arrow deals ceil(velocity*baseDamage) and is
+	// consumed. Cite ThrownTrident.onHitEntity / findHitEntity vs AbstractArrow.onHitEntity.
 	if victim := t.arrowFindHitPlayer(e, ox, oy, oz, endX, endY, endZ); victim != nil {
-		t.arrowOnHitPlayer(e, victim)
-		return // v1: no pierce — the arrow is consumed by the hit
+		if e.isTrident {
+			if !e.tridentDealtDamage {
+				t.tridentOnHitEntity(e, victim) // bounces; continues into the flight physics below
+			}
+		} else {
+			t.arrowOnHitPlayer(e, victim)
+			return // v1: no pierce — the arrow is consumed by the hit
+		}
 	}
 
 	if blockHit {

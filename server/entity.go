@@ -215,6 +215,51 @@ type Entity struct {
 	// ownerId+1 (the client owner link for crit visuals); 0 for a plain mob. Set at spawn.
 	spawnData int32
 
+	// --- THROWN TRIDENT (net.minecraft.world.entity.projectile.arrow.ThrownTrident) --------------------
+	//
+	// A ThrownTrident is an AbstractArrow subclass (isArrow is ALSO set, so it flies via the shared arrow
+	// physics), distinguished by isTrident so the trident-specific tick (Loyalty return + dealtDamage
+	// latch) layers on TOP of the arrow flight. It carries the thrown ItemStack's id (the pickup item) and
+	// its enchant levels. Zero for every non-trident entity (the trident branch gates on isTrident).
+	// Cite ThrownTrident.
+
+	// isTrident marks this arrow as a ThrownTrident. When set, tickArrow runs the trident pre-tick
+	// (inGroundTime>4 -> dealtDamage; Loyalty return-to-owner) before the shared AbstractArrow physics.
+	isTrident bool
+
+	// tridentLoyalty is ThrownTrident.ID_LOYALTY -- the byte returned by getLoyaltyFromItem ==
+	// clamp(getTridentReturnToOwnerAcceleration, 0, 127). In vanilla data this equals the Loyalty enchant
+	// level (linear base 1.0, per_level_above_first 1.0). 0 == no Loyalty (the trident stays where it lands).
+	tridentLoyalty int
+
+	// tridentDealtDamage is ThrownTrident.dealtDamage -- true once the trident has hit an entity OR sat in
+	// the ground for >4 ticks (inGroundTime>4). Loyalty return only begins once dealtDamage (or noPhysics).
+	tridentDealtDamage bool
+
+	// tridentInGroundTime is AbstractArrow.inGroundTime -- ticks the trident has been stuck in a block.
+	// ThrownTrident.tick sets dealtDamage once inGroundTime>4 (so a landed trident with Loyalty returns).
+	tridentInGroundTime int
+
+	// tridentReturning is ThrownTrident's noPhysics-return state (setNoPhysics(true) once homing to the
+	// owner). A returning trident ignores block collision and lerps toward the owner's eye each tick.
+	tridentReturning bool
+
+	// tridentImpaling / tridentChanneling are the thrown trident's enchant levels, read at spawn from the
+	// ItemStack's minecraft:enchantments (the same real seam bow.go uses via stackEnchantments). 0 == the
+	// enchant is absent (the vanilla "no enchant" default). onHitEntity reads them for the Impaling damage
+	// bonus (vs #sensitive_to_impaling) and the Channeling lightning strike (when thundering && canSeeSky).
+	tridentImpaling   int
+	tridentChanneling int
+
+	// tridentItemID is the item id of the thrown ItemStack (getPickupItem) -- TRIDENT unless a plugin
+	// thrown a variant. A Loyalty trident that reaches its owner gives this item back to the player.
+	tridentItemID int32
+
+	// tridentCreativeOnly marks the thrown trident's Pickup as CREATIVE_ONLY (a creative owner's throw):
+	// only the creative owner may pick it up, and a lost-owner trident does NOT drop an item (the owner
+	// has infinite tridents). ALLOWED (the survival default) is the false case. Cite AbstractArrow.Pickup.
+	tridentCreativeOnly bool
+
 	// --- THROWN SPLASH POTION (net.minecraft.world.entity.projectile.ThrownSplashPotion) --------------
 	//
 	// A thrown potion is a NON-mob projectile (isPotion) that arcs (gravity 0.05, drag 0.99) and SPLASHES

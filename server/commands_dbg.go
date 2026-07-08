@@ -3,7 +3,9 @@ package server
 import (
 	"fmt"
 
+	"github.com/imhinotori/sulfur/data/item"
 	"github.com/imhinotori/sulfur/level/block"
+	"github.com/imhinotori/sulfur/level/component"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
@@ -440,8 +442,23 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		// broadcasts the wire's updated state.
 		t.onRedstoneEdit(wirePos)
 		t.broadcastSystemChat(fmt.Sprintf("[dbg] placed redstone_block(%d,%d,%d)+wire(%d,%d,%d); wire should be POWER 15", bx, by, bz, bx+1, by, bz))
+	case "trident":
+		// TRIDENT (trident.go): give the issuer a trident so they can right-click to throw a ThrownTrident
+		// (power 2.5) and, in water/rain with Riptide, launch themselves. Loyalty returns the thrown trident;
+		// Channeling strikes lightning on a hit during a thunderstorm. giveItemToPlayer uses the item's
+		// StackSize (1 for a trident) so the trident lands in the first free hotbar/inventory slot.
+		t.giveItemToPlayer(p, &item.Trident, int(item.Trident.StackSize), 1)
+		t.broadcastSystemChat("[dbg] gave you a trident (right-click to throw; enchant Loyalty/Riptide/Channeling to test the rest)")
+	case "throw-trident", "trident-throw":
+		// Spawn a ThrownTrident directly from the player eye in the look direction (bypasses the draw), so the
+		// projectile flight + hit + despawn can be observed without holding right-click. Survival pickup.
+		vx, vy, vz := playerViewVector(p.yaw, p.pitch)
+		e := t.spawnThrownTrident(p.entityID, p.x, p.y+playerStandingEyeHeight, p.z, vx*tridentShootPower, vy*tridentShootPower, vz*tridentShootPower, component.SlotData{ItemID: pk.VarInt(item.Trident.ID), Count: 1}, false)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned thrown trident eid=%d (power 2.5 in look dir)", e.id))
+		}
 	default:
-		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | dragon | iron_golem | villager | villager_farmer | vex | ghast_hostile | blaze | strider | wither_skeleton | wither | hoglin | bee | goat | frog | camel | sniffer | allay | axolotl | fangs | water | pig-in-water | raid | rain | redstone | trade")
+		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | dragon | iron_golem | villager | villager_farmer | vex | ghast_hostile | blaze | strider | wither_skeleton | wither | hoglin | bee | goat | frog | camel | sniffer | allay | axolotl | fangs | water | pig-in-water | raid | rain | redstone | trade | trident | throw-trident")
 	}
 }
 

@@ -59,6 +59,10 @@ var (
 	// damageTypeArrow is minecraft:arrow — the source AbstractArrow.onHitEntity deals
 	// (damageSources().arrow(this, owner)). NOT a bypasses_armor member (the victim folds the armor curve).
 	damageTypeArrow = damageTypeID(tag.DamageTypeIDs["minecraft:arrow"])
+	// damageTypeTrident is minecraft:trident -- the source ThrownTrident.onHitEntity deals
+	// (DamageSources.trident, the projectile as direct entity, the shooter as causing). A member of
+	// is_projectile (an indirect, projectile-attributed source). Cite ThrownTrident.onHitEntity.
+	damageTypeTrident = damageTypeID(tag.DamageTypeIDs["minecraft:trident"])
 	// damageTypeExplosion is minecraft:explosion — the source a MOB explosion (a creeper) deals via
 	// ServerExplosion (Explosion.getDefaultDamageSource: type EXPLOSION, causingEntity = the source mob).
 	damageTypeExplosion = damageTypeID(tag.DamageTypeIDs["minecraft:explosion"])
@@ -158,6 +162,7 @@ func (s damageSource) is(tagName string) bool {
 // projectile as the direct entity and the owner as causing (isDirect false).
 var indirectDamageTypes = map[damageTypeID]bool{
 	damageTypeArrow:         true,
+	damageTypeTrident:       true,
 	damageTypeFireball:      true,
 	damageTypeWitherSkull:   true,
 	damageTypeWindCharge:    true,
@@ -201,6 +206,15 @@ func damageSourceMobAttack(attackerID int32) damageSource {
 // in vanilla; here 0 = anonymous). Cite AbstractArrow.onHitEntity: damageSources().arrow(this, owner).
 func damageSourceArrow(attackerID int32) damageSource {
 	return damageSource{typeTag: damageTypeArrow, attacker: attackerID}
+}
+
+// damageSourceTrident builds the DamageSource for a ThrownTrident hit: type trident with the SHOOTER's
+// entity id as the causing entity. The port of DamageSources.trident(ThrownTrident, Entity) -- type
+// TRIDENT, causingEntity = the owner (the throwing player/mob). attackerID 0 means an ownerless trident
+// (it attributes to the trident itself in vanilla; here 0 = anonymous). Cite ThrownTrident.onHitEntity:
+// damageSources().trident(this, owner == null ? this : owner).
+func damageSourceTrident(attackerID int32) damageSource {
+	return damageSource{typeTag: damageTypeTrident, attacker: attackerID}
 }
 
 // damageSourceEnderPearl builds the DamageSource for the ender-pearl teleport self-hit: type ender_pearl,

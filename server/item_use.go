@@ -251,6 +251,16 @@ func (t *TickLoop) useItemInHand(p *tickPlayer, hand int32) {
 		return
 	}
 
+	// TRIDENT (TridentItem.use): a right-click with a trident begins the draw (startUsingItem), gated on the
+	// riptide water/rain condition (a riptide trident can only be drawn in water or rain) and the near-broken
+	// durability guard. The release (RELEASE_USE_ITEM) throws the ThrownTrident (power 2.5) or, for a riptide
+	// trident, launches the player. Runs before the food gate (a trident is not food); a non-trident item
+	// returns false and falls through. Trident-gated (a cheap id compare, no RNG draw -- the pig oracle is
+	// unperturbed). CITE TridentItem.use. Body in trident.go.
+	if t.tryStartTridentUse(p, inv, held, hand) {
+		return
+	}
+
 	// FOOD gate (v1): resolve the held item's FOOD/CONSUMABLE data. Non-food => not eatable => no-op
 	// (cite: other ItemStack.use behaviors out of v1 scope).
 	f, ok := itemFood(int32(held.ItemID))
@@ -440,6 +450,9 @@ func (t *TickLoop) stopUsingItem(p *tickPlayer) {
 func (t *TickLoop) releaseUsingItem(p *tickPlayer) {
 	if t.releaseBowOrCrossbow(p) {
 		return // the bow/crossbow handled the release (fired/loaded + cleared the use state)
+	}
+	if t.releaseTrident(p) {
+		return // the trident handled the release (thrown / riptide-launched + cleared the use state)
 	}
 	t.stopUsingItem(p)
 }
