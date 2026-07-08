@@ -1147,12 +1147,31 @@ func updateLeavesFixup(set SetBlockFn, read ReadFn, accum *treeAccum) {
 	}
 
 	// list: 7 layers (distance buckets 0..6). Layer 0 is seeded with the logs.
-	list := make([]map[TreePos]bool, 7)
+	// The distance buckets. DETERMINISM: process each bucket as an insertion-ordered FIFO
+	// queue (a slice), NOT a Go map -- ranging a map yields a RANDOM order, which made the
+	// leaf DISTANCE assignment (and therefore the emitted chunk bytes) nondeterministic when a
+	// leaf is reachable at equal distance via different neighbors. Vanilla iterates a HashSet
+	// (JVM-stable but not portable); insertion order (the order neighbors were discovered, the
+	// dirs-scan order below) is the stable, reproducible choice and yields a valid DISTANCE
+	// field (the decay-relevant contract -- no leaf stays 7 within a log's reach -- holds
+	// regardless of intra-bucket order). listSeen dedups adds into a bucket (the Set.add
+	// semantics: a pos is queued at most once per bucket), and headOff is the FIFO read cursor.
+	list := make([][]TreePos, 7)
+	listSeen := make([]map[TreePos]bool, 7)
+	headOff := make([]int, 7)
 	for i := range list {
-		list[i] = map[TreePos]bool{}
+		list[i] = nil
+		listSeen[i] = map[TreePos]bool{}
+	}
+	pushBucket := func(nd int, p TreePos) {
+		if listSeen[nd][p] {
+			return
+		}
+		listSeen[nd][p] = true
+		list[nd] = append(list[nd], p)
 	}
 	for _, p := range accum.logs {
-		list[0][p] = true
+		pushBucket(0, p)
 	}
 
 	// getOptionalDistanceAt(state) -> (value, present): logs -> (0,true);
@@ -1183,18 +1202,14 @@ func updateLeavesFixup(set SetBlockFn, read ReadFn, accum *treeAccum) {
 		// Advance past empty buckets (javap 170-207: while list.get(i).isEmpty() i++, break
 		// at 7). i==0 is never skipped (logs seeded it); an empty layer-0 already returned
 		// early above via len(accum.logs)==0.
-		if len(list[i]) == 0 {
+		if headOff[i] >= len(list[i]) {
 			i++
 			continue
 		}
-		cur := list[i]
-		// Take one position, remove it (it.next(); it.remove()).
-		var pos TreePos
-		for p := range cur {
-			pos = p
-			break
-		}
-		delete(cur, pos)
+		// Take one position in insertion (FIFO) order, advancing the read cursor -- the
+		// deterministic analogue of it.next(); it.remove().
+		pos := list[i][headOff[i]]
+		headOff[i]++
 		if !inside(pos) {
 			// !bb.isInside(pos) -> continue (re-scan the same bucket / advance).
 			continue
@@ -1234,7 +1249,7 @@ func updateLeavesFixup(set SetBlockFn, read ReadFn, accum *treeAccum) {
 				nd = i + 1
 			}
 			if nd < 7 {
-				list[nd][np] = true
+				pushBucket(nd, np)
 				if nd < i {
 					i = nd // re-seed the outer index to the lower distance (javap 509-516)
 				}
