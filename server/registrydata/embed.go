@@ -157,6 +157,22 @@ func Load() ([]Registry, error) {
 	return out, nil
 }
 
+// BiomeFiles returns the sorted *.json file names under registries/worldgen/biome (the
+// embedded 26.2 biome registry). The natural-spawner biome MobSpawnSettings parse
+// (server.loadBiomeSpawners) reads each with ReadBiome to build the per-biome weighted
+// spawn lists. Exposed so the server package can read the SAME embedded biome data the
+// RegistryData send path uses, without a second copy.
+func BiomeFiles() ([]string, error) {
+	return entryFiles(path.Join("registries", "worldgen/biome"))
+}
+
+// ReadBiome returns the raw JSON bytes of one biome registry entry (name is the *.json file
+// name from BiomeFiles, e.g. "plains.json"). It reads ONLY the embedded FS -- the same
+// authoritative jar-derived data the RegistryData path serializes.
+func ReadBiome(name string) ([]byte, error) {
+	return registryFS.ReadFile(path.Join("registries", "worldgen/biome", name))
+}
+
 // entryFiles returns the *.json file names directly under base, sorted.
 func entryFiles(base string) ([]string, error) {
 	ents, err := fs.ReadDir(registryFS, base)

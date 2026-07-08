@@ -362,9 +362,10 @@ func (r spawnCandidatesReady) applyTo(t *TickLoop) {
 		t.withRegion(dest, func() {
 			// C-6: place the vanilla PACK-GROUP at this candidate (NaturalSpawner.spawnCategoryForPosition
 			// group+pack loops) instead of a single mob. spawnPackAt (natural_spawner.go) runs the 1:1
-			// group/pack loops: the Mth.ceil(nextFloat*4) packSize draw, the nextInt(6)-nextInt(6) cluster
-			// spread, the MIN_SPAWN_DISTANCE=24 (squared) per-position guard, the per-member ON_GROUND re-check, the
-			// yaw draw, the per-member pickNaturalSpawnMob (the weighted-pick stub), and the group/pack
+			// group/pack loops: the Mth.ceil(nextFloat*4) fallback packSize draw, the nextInt(6)-nextInt(6)
+			// cluster spread, the MIN_SPAWN_DISTANCE=24 (squared) per-position guard, the biome-weighted mob
+			// pick + SpawnerData packSize re-set (pickBiomeSpawnMob, gap-reaudit #9 - WeightedList.getRandom),
+			// the per-member ON_GROUND re-check, the yaw draw, and the group/pack
 			// caps (getMaxSpawnClusterSize=4 / isMaxGroupSizeReached). All draws are on THIS region's
 			// seeded levelRandom inside the withRegion scope (race-clean, deterministic per region —
 			// T-34-11), in the EXACT vanilla order. The candidate (c.x,c.y,c.z) is the ON_GROUND-validated

@@ -264,6 +264,27 @@ func (m *ChunkManager) GetBlock(pos pk.Position, minY int) (block.StateID, bool)
 	return ch.Sections[sec].GetBlock(local), true
 }
 
+// BiomeAt reads the biome at a world block pos from the loaded chunk's per-section biome
+// container, or ok=false when the column is not loaded/ready or y is outside the section
+// range. It mirrors vanilla ServerLevel.getBiome, which resolves the biome from the loaded
+// chunk's biome storage (LevelChunk.getNoiseBiome) at QUART resolution: a section holds a
+// 4x4x4 biome grid, so the block coords are converted to quart cells (x&15)>>2 etc. and
+// indexed y-major exactly as world/levelgen/surface.FillBiomes writes them --
+// ((y&15>>2)*4 + (z&15>>2))*4 + (x&15>>2) -- so a read here returns the identical Type the
+// generator stored. Pure read over the tick-owned manager (TICK-05), the biome-lookup seam
+// the NaturalSpawner weighted mob pick (server/natural_spawner.go getRandomSpawnMobAt) needs.
+func (m *ChunkManager) BiomeAt(pos pk.Position, minY int) (level.BiomesState, bool) {
+	ch, sec, _, ok := m.columnAndSection(pos, minY)
+	if !ok {
+		return 0, false
+	}
+	bx := (pos.X & 15) >> 2
+	by := (pos.Y & 15) >> 2
+	bz := (pos.Z & 15) >> 2
+	idx := (by*4+bz)*4 + bx
+	return ch.Sections[sec].Biomes.Get(idx), true
+}
+
 // SetBlock writes state at a world block pos and reports whether it CHANGED the world
 // (false when the new state equals the existing one, or — the server-authoritative reject
 // path — when the target column is not loaded/ready or y is out of range, in which case

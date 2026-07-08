@@ -47,12 +47,16 @@ package server
 //     ChunkPos cp = ChunkPos.containing(pos);
 //     return cp.equals(chunk.getPos()) || level.canSpawnEntitiesInChunk(cp);
 //
-// v1 SUBSET / cited deferrals carried from spawner.go (unchanged here):
-//   - the WEIGHTED biome mob pick (getRandomSpawnMobAt -> WeightedList.getRandom) is stubbed by
-//     pickNaturalSpawnMob (uniform among the boot-loaded per-category mob names) - no biome
-//     MobSpawnSettings yet; the packSize re-set from SpawnerData.minCount/maxCount is REPLACED by
-//     the drawn Mth.ceil(nextFloat*4) size (the vanilla FALLBACK size). Structured so the real
-//     WeightedList read + minCount/maxCount re-set slot in when biome spawn data is wired.
+// PORTED (gap-reaudit #9): the WEIGHTED biome mob pick + the SpawnerData packSize re-set are now REAL
+//   (biome_spawners.go), replacing the earlier uniform stub. On the first pack member that clears the
+//   player/distance gate spawnPackAt calls pickBiomeSpawnMob (NaturalSpawner.getRandomSpawnMobAt ->
+//   WeightedList.getRandom: biome MobSpawnSettings lookup + total-weight nextInt + cumulative walk) and
+//   re-sets packSize = minCount + nextInt(1+maxCount-minCount) (packSizeFromSpawnerData), exactly at the
+//   vanilla getOrCreateNextSpawnData point + draw order. The Mth.ceil(nextFloat*4) size drawn per group
+//   is the vanilla FALLBACK, overwritten by the SpawnerData min/max once a pick lands (an empty biome
+//   list breaks the pack loop with NO extra draw, the vanilla if (spawnerData == null) break). The pick
+//   is FILTERED to the ported natural pool (biome_spawners.go V1 SUBSET note) - only implemented mob
+//   types are drawn, so a biome type not yet ported neither spawns nor consumes a weight.
 //   - isValidSpawnPostitionForType (canSpawnFarFromPlayer distance + checkSpawnRules +
 //     isSpawnPositionOk) is collapsed into the ON_GROUND standable check the off-tick scan already
 //     ran (spawner.go findStandableY) + the monster light-gate (isDarkEnoughToSpawn), so a candidate
@@ -142,23 +146,27 @@ func (t *TickLoop) isRightDistanceToPlayerAndSpawnPoint(cx, cy, cz, d float64) b
 // scan found). It runs on the OWNER inside a withRegion scope (async.go applyTo), so cur().levelRandom
 // is this.random and every draw is in the exact vanilla order. Returns the number of mobs placed.
 //
-// The RNG draw order (the crucial spawning-determinism invariant - C-6):
+// The RNG draw order (the crucial spawning-determinism invariant - C-6, now with the biome-weighted
+// pick wired in at its EXACT vanilla position, gap-reaudit #9):
 //
 //	outer group i in 0..2:
-//	  packSize = Mth.ceil(nextFloat() * 4)          - draw #1 (per group)
+//	  packSize = Mth.ceil(nextFloat() * 4)          - the per-group FALLBACK size draw
+//	  spawnerData = null                            - reset per group (no draw)
 //	  inner pack j in 0..packSize-1:
-//	    x += nextInt(6) - nextInt(6)                - draws #2,#3
-//	    z += nextInt(6) - nextInt(6)                - draws #4,#5
+//	    x += nextInt(6) - nextInt(6)                - the cluster spread (2 draws)
+//	    z += nextInt(6) - nextInt(6)                - the cluster spread (2 draws)
 //	    (nearest-player + MIN_SPAWN_DISTANCE gate - no draw)
+//	    if spawnerData == null:                     - the FIRST cleared member fetches the pick
+//	      spawnerData = getRandomSpawnMobAt(...)     - WeightedList.getRandom: nextInt(totalWeight)
+//	                                                   (or NO draw + break the pack loop on empty list)
+//	      packSize = minCount + nextInt(1+max-min)   - the SpawnerData packSize RE-SET draw
 //	    (ON_GROUND re-check of the shifted position - no draw)
-//	    yaw = nextFloat() * 360                     - draw #6 (only when the mob is placed)
+//	    yaw = nextFloat() * 360                      - the yaw draw (only when the mob is placed)
 //
-// The mob TYPE pick (pickNaturalSpawnMob) draws levelRandom too - in vanilla it is getRandomSpawnMobAt
-// (a WeightedList.getRandom draw) taken BEFORE the packSize re-set, on the FIRST pack member. v1 keeps
-// the type pick per-placed-member (the uniform-pick deferral) drawn right after the yaw draw, once the
-// shifted position is validated - documented as the cited weighted-pick stub. cat carries the category
-// the caller already re-checked the cap for; the group/pack caps (getMaxSpawnClusterSize=4,
-// isMaxGroupSizeReached=false) bound the cluster.
+// The mob TYPE pick is now getRandomSpawnMobAt (pickBiomeSpawnMob, biome_spawners.go) drawn ON THE FIRST
+// cleared pack member BEFORE the packSize re-set - the exact vanilla draw position + order, not the old
+// per-placed-member uniform stub. cat carries the category the caller already re-checked the cap for;
+// the group/pack caps (getMaxSpawnClusterSize=4, isMaxGroupSizeReached=false) bound the cluster.
 func (t *TickLoop) spawnPackAt(cx0, cy, cz0 int, cat mobCategory) int {
 	r := t.cur()
 	if r == nil || r.levelRandom == nil {
@@ -168,9 +176,18 @@ func (t *TickLoop) spawnPackAt(cx0, cy, cz0 int, cat mobCategory) int {
 	for i := 0; i < spawnGroupAttempts; i++ {
 		x := cx0
 		z := cz0
-		// packSize = Mth.ceil(random.nextFloat() * 4.0F) - the first per-group draw.
+		// packSize = Mth.ceil(random.nextFloat() * 4.0F) - the first per-group draw (the FALLBACK size,
+		// RE-SET below from the picked SpawnerData min/max once the biome list yields one).
 		packSize := mthCeil(float64(r.levelRandom.NextFloat()) * 4.0)
 		spawnedInPack := 0
+		// spawnerData (var 16) is the biome MobSpawnSettings pick for THIS group, fetched ONCE on the
+		// first pack member that clears the player/distance gate and REUSED for the rest of the group
+		// (vanilla resets it to null at the top of each outer group loop iteration, bytecode aconst_null
+		// astore 16). haveData tracks "already picked" (the ifnonnull 325 guard). mobName is the resolved
+		// declared mob for the pick.
+		var spawnerData biomeSpawnerData
+		var mobName string
+		haveData := false
 		for j := 0; j < packSize; j++ {
 			// x += nextInt(6) - nextInt(6); z += nextInt(6) - nextInt(6) - the cluster spread (4 draws).
 			x += int(r.levelRandom.NextIntN(packSpread)) - int(r.levelRandom.NextIntN(packSpread))
@@ -189,6 +206,28 @@ func (t *TickLoop) spawnPackAt(cx0, cy, cz0 int, cat mobCategory) int {
 			if !t.isRightDistanceToPlayerAndSpawnPoint(cxF, cyF, czF, d) {
 				continue
 			}
+			// getRandomSpawnMobAt + packSize RE-SET (the biome-weighted pick, gap-reaudit #9). Vanilla:
+			//   if (spawnerData == null) {                                  // ifnonnull 325
+			//     spawnerData = getRandomSpawnMobAt(...);                    // WeightedList.getRandom draw
+			//     if (spawnerData == null) break;                           // empty list -> next group
+			//     packSize = minCount + nextInt(1 + maxCount - minCount);   // RE-SET from the picked data
+			//   }
+			// The pick is drawn HERE (after the player/distance gate clears, before the position check),
+			// ONCE per group, on THIS region seeded levelRandom - the EXACT vanilla draw position + order.
+			// pickBiomeSpawnMob draws one nextInt(totalWeight) on a non-empty biome list, or NOTHING and
+			// ok=false on an empty one (mirroring getRandom Optional.empty()); an empty list breaks the
+			// pack loop (the vanilla if (spawnerData == null) break), moving to the next group attempt.
+			if !haveData {
+				sd, name, pickedOK := t.pickBiomeSpawnMob(x, cy, z, cat)
+				if !pickedOK {
+					break // no biome spawn entry for this category here: break the pack loop (next group)
+				}
+				spawnerData = sd
+				mobName = name
+				haveData = true
+				// packSize = minCount + nextInt(1 + maxCount - minCount) - the SpawnerData min/max re-set.
+				packSize = t.packSizeFromSpawnerData(spawnerData)
+			}
 			// isValidSpawnPostitionForType collapse: re-run the ON_GROUND standable check on the
 			// nextInt(6)-shifted position (spawner.go findStandableY logic) so a shifted pack member
 			// still lands on a solid surface with clear feet/head. A shift onto a non-standable column
@@ -196,13 +235,9 @@ func (t *TickLoop) spawnPackAt(cx0, cy, cz0 int, cat mobCategory) int {
 			if !(t.blockSolidAt(x, cy-1, z) && !t.blockSolidAt(x, cy, z) && !t.blockSolidAt(x, cy+1, z)) {
 				continue
 			}
-			// mob.snapTo(cx, y, cz, random.nextFloat() * 360.0F, 0.0F) - the yaw draw (draw #6).
+			// mob.snapTo(cx, y, cz, random.nextFloat() * 360.0F, 0.0F) - the yaw draw.
 			yaw := r.levelRandom.NextFloat() * 360.0
-			// getRandomSpawnMobAt weighted pick (STUB: uniform per-category pick - cited deferral). In
-			// vanilla this draw happens on the first pack member before the packSize re-set; v1 draws it
-			// per placed member. It reads THIS region seeded levelRandom (pickNaturalSpawnMob).
-			name := t.pickNaturalSpawnMob(cat)
-			mob := t.spawnVanillaMob(name, cxF, cyF, czF)
+			mob := t.spawnVanillaMob(mobName, cxF, cyF, czF)
 			if mob == nil {
 				return spawnedInGroup // getMobForSpawn null -> vanilla returns
 			}

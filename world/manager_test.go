@@ -188,3 +188,45 @@ func TestChunkManagerMarkEmpty(t *testing.T) {
 		t.Fatalf("Get after MarkEmpty returned ok=true")
 	}
 }
+
+// TestBiomeAtQuartIndex: BiomeAt reads the biome from a loaded chunk section at the SAME quart-cell
+// index world/levelgen/surface.FillBiomes writes ( ((y&15>>2)*4 + (z&15>>2))*4 + (x&15>>2) ). Writing a
+// distinct biome into one quart cell and reading a block inside that cell returns it, while a block in a
+// different cell returns the section default - so the block->quart mapping BiomeAt ports is pinned, and
+// an unloaded column reports ok=false. This is the ServerLevel.getBiome seam the natural-spawner weighted
+// mob pick (server/natural_spawner.go) reads.
+func TestBiomeAtQuartIndex(t *testing.T) {
+	m := NewChunkManager()
+	readyChunk(m, level.ChunkPos{0, 0})
+	ch, _ := m.Get(level.ChunkPos{0, 0})
+
+	// Target world block (5,70,9): section = (70 - -64)>>4 = 8; in-section quart cell
+	// bx=(5&15)>>2=1, by=(70&15)>>2=1, bz=(9&15)>>2=2; idx = (1*4+2)*4+1 = 25.
+	pos := pk.Position{X: 5, Y: 70, Z: 9}
+	sec := (pos.Y - blockTestMinY) >> 4
+	bx := (pos.X & 15) >> 2
+	by := (pos.Y & 15) >> 2
+	bz := (pos.Z & 15) >> 2
+	idx := (by*4+bz)*4 + bx
+	const marker = level.BiomesState(7) // an arbitrary distinct biome Type
+	ch.Sections[sec].Biomes.Set(idx, marker)
+
+	got, ok := m.BiomeAt(pos, blockTestMinY)
+	if !ok {
+		t.Fatal("BiomeAt on a loaded column must report ok=true")
+	}
+	if got != marker {
+		t.Fatalf("BiomeAt at the written quart cell = %v, want %v (quart-index mismatch vs FillBiomes)", got, marker)
+	}
+
+	// A block in a DIFFERENT quart cell (x=9 -> bx=2) reads the section default (0), not the marker.
+	other := pk.Position{X: 9, Y: 70, Z: 9}
+	if g2, _ := m.BiomeAt(other, blockTestMinY); g2 == marker {
+		t.Fatalf("BiomeAt at a different quart cell returned the marker %v - the cell isolation is wrong", marker)
+	}
+
+	// Unloaded column: ok=false.
+	if _, ok := m.BiomeAt(pk.Position{X: 999, Y: 70, Z: 999}, blockTestMinY); ok {
+		t.Fatal("BiomeAt on an unloaded column must report ok=false")
+	}
+}

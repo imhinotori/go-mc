@@ -92,45 +92,75 @@ func buildFlatPackWorld(t *testing.T) (*TickLoop, int) {
 	return loop, floorY
 }
 
-// TestSpawnPackFirstPackSizeMatchesReference: the FIRST RNG draw spawnPackAt makes is
-// packSize = Mth.ceil(random.nextFloat() * 4.0) off the region levelRandom, matching a seeded
-// reference EXACTLY (the head of the vanilla spawnCategoryForPosition draw order - the crucial
-// spawning-determinism invariant). Asserting the FIRST group's packSize (before any per-mob spawn
-// draw such as Sheep.finalizeSpawn's getRandomSheepColor can perturb the stream) pins the draw ORDER
-// at the point where it is purely spawner-driven: the placed count is >= 1 and <= that first packSize
-// clamped to the group cap.
-func TestSpawnPackFirstPackSizeMatchesReference(t *testing.T) {
+// TestSpawnPackDrawOrderMatchesReference: spawnPackAt draws the region levelRandom in the EXACT vanilla
+// spawnCategoryForPosition order once the biome-weighted pick is wired (gap-reaudit #9). The flat world
+// carries the default biome (Type 0 = badlands, whose CREATURE list holds sheep/pig/chicken/cow - all in
+// the ported pool). A hand-rolled reference replays the head of the draw sequence for the first group's
+// first cleared pack member and asserts spawnPackAt's picked mob + first-group placement count agree - so
+// the draw ORDER (fallback packSize, spread, weighted pick, packSize re-set, yaw) is pinned.
+func TestSpawnPackDrawOrderMatchesReference(t *testing.T) {
 	const seed = int64(0xC6C6C6)
 	loop, floorY := buildFlatPackWorld(t)
 	loop.only().levelRandom = levelgen.NewLegacyRandomSource(seed)
 
-	// The reference computes the FIRST group's packSize the SAME way spawnPackAt does (nextFloat*4,
-	// ceil) - the head of the draw order. spawnPackAt consumes this exact first draw before any spread
-	// or spawn draw, so a placed pack is bounded by min(firstPackSize, groupCap) at minimum from the
-	// first group (later groups can add more up to the cap).
-	ref := levelgen.NewLegacyRandomSource(seed)
-	firstPackSize := mthCeil(float64(ref.NextFloat()) * 4.0)
-	if firstPackSize < 1 {
-		t.Fatalf("Mth.ceil(nextFloat*4) must be >= 1 for a non-zero float, got %d", firstPackSize)
+	// The badlands (Type 0) CREATURE weighted list, filtered to the ported pool, in JSON order:
+	//   sheep w12, pig w10, chicken w10, cow w8  -> totalWeight 40, all min=max=4.
+	type we struct {
+		name   string
+		weight int
+	}
+	kept := []we{{vanillaSheepMobName, 12}, {vanillaPigMobName, 10}, {vanillaChickenMobName, 10}, {vanillaCowMobName, 8}}
+	total := 0
+	for _, e := range kept {
+		total += e.weight
 	}
 
+	// Replay the FIRST group's draw head against a reference stream (all columns standable + player far,
+	// so the first pack member always clears the player/distance gate and triggers the pick):
+	//   packSize = ceil(nextFloat*4)                          (fallback, per group)
+	//   member 0: nextInt(6)-nextInt(6) x, nextInt(6)-nextInt(6) z  (4 spread draws)
+	//             pick: i = nextInt(total); walk sheep/pig/chicken/cow
+	//             packSize re-set: nextInt(1+4-4) = nextInt(1)   (1 draw, returns 0)
+	//             yaw = nextFloat*360                              (1 draw)
+	ref := levelgen.NewLegacyRandomSource(seed)
+	_ = mthCeil(float64(ref.NextFloat()) * 4.0) // fallback packSize (overwritten by the re-set below)
+	ref.NextIntN(packSpread)
+	ref.NextIntN(packSpread) // x spread
+	ref.NextIntN(packSpread)
+	ref.NextIntN(packSpread) // z spread
+	i := int(ref.NextIntN(int32(total)))
+	wantName := kept[len(kept)-1].name
+	for _, e := range kept {
+		i -= e.weight
+		if i < 0 {
+			wantName = e.name
+			break
+		}
+	}
+
+	// Drive spawnPackAt and capture the FIRST placed mob's declared name (the first group's first member).
 	var placed int
 	loop.withRegion(loop.only(), func() {
 		placed = loop.spawnPackAt(8, floorY+1, 8, categoryCreature)
 	})
-
-	// In a fully-standable, far-from-player area every drawn member of the first group is placed until
-	// the group cap. So placed >= min(firstPackSize, groupCap) - the first draw's packSize governs the
-	// first group's placements. (placed can be larger if later groups add members up to the cap.)
-	wantAtLeast := firstPackSize
-	if wantAtLeast > maxSpawnClusterSize {
-		wantAtLeast = maxSpawnClusterSize
-	}
-	if placed < wantAtLeast {
-		t.Fatalf("first-group packSize=%d (seeded) => at least %d placed, got %d (RNG draw-order head mismatch)", firstPackSize, wantAtLeast, placed)
+	if placed < 1 {
+		t.Fatalf("a fully-standable far-from-player pack must place at least one mob, got %d", placed)
 	}
 	if placed > maxSpawnClusterSize {
 		t.Fatalf("the group cap getMaxSpawnClusterSize=%d must bound the pack, got %d", maxSpawnClusterSize, placed)
+	}
+	// The whole group shares ONE picked SpawnerData -> all placed mobs render as the same base type. Map
+	// the expected mob name to its base entity type id and assert every placed entity carries it.
+	wantType := loop.mobRegistry.byName[wantName].baseType.ID
+	for _, r := range loop.regions {
+		if r == nil || r.entities == nil {
+			continue
+		}
+		for _, e := range r.entities.byID {
+			if e.typ != wantType {
+				t.Fatalf("weighted pick mismatch: placed entity type %v, the seeded weighted-walk reference says %q (type %v)", e.typ, wantName, wantType)
+			}
+		}
 	}
 	if got := totalEntities(loop); got != placed {
 		t.Fatalf("the store must hold the placed pack: totalEntities=%d, placed=%d", got, placed)
@@ -224,4 +254,140 @@ func TestSpawnPackGroupCapBounds(t *testing.T) {
 			t.Fatalf("seed %d: spawnPackAt placed %d > group cap %d", seed, placed, maxSpawnClusterSize)
 		}
 	}
+}
+
+// TestBiomeSpawnersParse: loadBiomeSpawners parses the embedded 26.2 biome JSONs into the per-biome,
+// per-category WeightedList[SpawnerData] with the exact weights/min/max the vanilla data carries (in
+// JSON list order). Asserts the badlands CREATURE list (the default Type-0 biome the flat test worlds
+// use) and plains, so the parse + the weight/min/max fields are pinned to the jar-derived data.
+func TestBiomeSpawnersParse(t *testing.T) {
+	table, err := loadBiomeSpawners()
+	if err != nil {
+		t.Fatalf("loadBiomeSpawners: %v", err)
+	}
+	// badlands CREATURE (Type 0): sheep w12 4-4, pig w10 4-4, chicken w10 4-4, cow w8 4-4, armadillo w6 1-2.
+	bad := table["minecraft:badlands"][categoryCreature]
+	want := []biomeSpawnerData{
+		{"sheep", 12, 4, 4},
+		{"pig", 10, 4, 4},
+		{"chicken", 10, 4, 4},
+		{"cow", 8, 4, 4},
+		{"armadillo", 6, 1, 2},
+	}
+	if len(bad) != len(want) {
+		t.Fatalf("badlands creature list len=%d, want %d (%v)", len(bad), len(want), bad)
+	}
+	for i, w := range want {
+		if bad[i] != w {
+			t.Fatalf("badlands creature[%d] = %+v, want %+v (JSON order + weight/min/max)", i, bad[i], w)
+		}
+	}
+	// plains carries the same creature core plus horse/donkey (un-ported) - assert the pig entry is present.
+	plains := table["minecraft:plains"][categoryCreature]
+	found := false
+	for _, sd := range plains {
+		if sd.typeName == "pig" {
+			found = true
+			if sd.weight != 10 || sd.minCount != 4 || sd.maxCount != 4 {
+				t.Fatalf("plains pig = %+v, want weight10 min4 max4", sd)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("plains creature list must contain a pig SpawnerData")
+	}
+}
+
+// TestWeightedPickMatchesCumulativeWalk: pickBiomeSpawnMob draws ONE nextInt(totalWeight) off the region
+// levelRandom and returns the mob the cumulative weighted walk selects for that draw - asserted against
+// a hand-rolled reference over the badlands (Type 0) CREATURE list filtered to the ported pool
+// (sheep w12, pig w10, chicken w10, cow w8; total 40). Pins the total-weight + cumulative-walk algorithm.
+func TestWeightedPickMatchesCumulativeWalk(t *testing.T) {
+	kept := []struct {
+		name   string
+		weight int
+	}{{vanillaSheepMobName, 12}, {vanillaPigMobName, 10}, {vanillaChickenMobName, 10}, {vanillaCowMobName, 8}}
+	total := 0
+	for _, e := range kept {
+		total += e.weight
+	}
+	for _, seed := range []int64{1, 2, 3, 7, 42, 1000, 0xC6C6C6, 0xBEEF} {
+		loop, floorY := buildFlatPackWorld(t)
+		loop.only().levelRandom = levelgen.NewLegacyRandomSource(seed)
+
+		// Reference: the SAME draw pickBiomeSpawnMob makes - i = nextInt(total); walk the kept list.
+		ref := levelgen.NewLegacyRandomSource(seed)
+		i := int(ref.NextIntN(int32(total)))
+		wantName := kept[len(kept)-1].name
+		for _, e := range kept {
+			i -= e.weight
+			if i < 0 {
+				wantName = e.name
+				break
+			}
+		}
+
+		var gotName string
+		loop.withRegion(loop.only(), func() {
+			_, name, ok := loop.pickBiomeSpawnMob(8, floorY+1, 8, categoryCreature)
+			if !ok {
+				t.Fatalf("seed %d: pickBiomeSpawnMob returned ok=false on the badlands creature list", seed)
+			}
+			gotName = name
+		})
+		if gotName != wantName {
+			t.Fatalf("seed %d: pickBiomeSpawnMob = %q, cumulative-walk reference = %q", seed, gotName, wantName)
+		}
+	}
+}
+
+// TestWeightedPickEmptyListNoDraw: pickBiomeSpawnMob over a category whose ported-pool intersection is
+// EMPTY (v1 has no AMBIENT pool) returns ok=false and draws NOTHING - mirroring WeightedList.getRandom's
+// early Optional.empty() on a null selector (totalWeight 0, no nextInt). Asserts the region levelRandom
+// is UNadvanced across the empty-list pick.
+func TestWeightedPickEmptyListNoDraw(t *testing.T) {
+	loop, floorY := buildFlatPackWorld(t)
+	loop.only().levelRandom = levelgen.NewLegacyRandomSource(99)
+	// Snapshot the stream by drawing from a twin seeded the same way; the empty-list pick must not consume.
+	twin := levelgen.NewLegacyRandomSource(99)
+
+	loop.withRegion(loop.only(), func() {
+		if _, _, ok := loop.pickBiomeSpawnMob(8, floorY+1, 8, categoryAmbient); ok {
+			t.Fatal("AMBIENT has no v1 pool: pickBiomeSpawnMob must return ok=false")
+		}
+	})
+	// The region stream must be byte-for-byte where the twin is (no draw happened).
+	if got, want := loop.only().levelRandom.NextIntN(1000), twin.NextIntN(1000); got != want {
+		t.Fatalf("the empty-list pick drew from levelRandom: next draw %d != twin %d", got, want)
+	}
+}
+
+// TestPackSizeFromSpawnerData: packSizeFromSpawnerData ports minCount + nextInt(1 + maxCount - minCount).
+// For a min==max entry it returns min after drawing nextInt(1)==0 (a real draw, consumed exactly once);
+// for a min<max entry it returns min + nextInt(span) matching a seeded reference.
+func TestPackSizeFromSpawnerData(t *testing.T) {
+	// min==max=4 (the badlands passives): result is 4, one nextInt(1) draw consumed.
+	loop, _ := buildFlatPackWorld(t)
+	loop.only().levelRandom = levelgen.NewLegacyRandomSource(5)
+	twin := levelgen.NewLegacyRandomSource(5)
+	loop.withRegion(loop.only(), func() {
+		if got := loop.packSizeFromSpawnerData(biomeSpawnerData{"pig", 10, 4, 4}); got != 4 {
+			t.Fatalf("min==max=4 packSize = %d, want 4", got)
+		}
+	})
+	twin.NextIntN(1) // the nextInt(1) the re-set consumed
+	if got, want := loop.only().levelRandom.NextIntN(777), twin.NextIntN(777); got != want {
+		t.Fatalf("min==max packSize draw count mismatch: %d != %d", got, want)
+	}
+
+	// min=1 max=2 (armadillo-shape): result is 1 + nextInt(2), matching the reference draw.
+	loop2, _ := buildFlatPackWorld(t)
+	loop2.only().levelRandom = levelgen.NewLegacyRandomSource(11)
+	ref := levelgen.NewLegacyRandomSource(11)
+	wantSize := 1 + int(ref.NextIntN(2))
+	loop2.withRegion(loop2.only(), func() {
+		if got := loop2.packSizeFromSpawnerData(biomeSpawnerData{"x", 6, 1, 2}); got != wantSize {
+			t.Fatalf("min=1 max=2 packSize = %d, want %d (1 + nextInt(2))", got, wantSize)
+		}
+	})
 }
