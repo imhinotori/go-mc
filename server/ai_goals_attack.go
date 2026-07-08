@@ -367,6 +367,12 @@ func (g *meleeAttackGoal) checkAndPerformAttack(t *TickLoop, e *Entity, target *
 	if e.typ == entity.Husk.ID && hurt {
 		t.huskApplyHunger(e, target)
 	}
+	// CaveSpider.doHurtTarget override (MOB): after super.doHurtTarget lands, apply POISON for i*20 ticks
+	// (i=7 NORMAL, i=15 HARD, i=0 EASY/PEACEFUL) at amplifier 0. CaveSpider-gated (zero cost for every
+	// other mob). Cite CaveSpider.doHurtTarget.
+	if e.typ == entity.CaveSpider.ID && hurt {
+		t.caveSpiderApplyPoison(e, target)
+	}
 }
 
 // canPerformAttack ports MeleeAttackGoal.canPerformAttack: isTimeToAttack() (ticksUntilNextAttack <= 0)

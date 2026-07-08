@@ -65,6 +65,43 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned husk eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
 		}
+	case "cave_spider":
+		// MOB (CaveSpider): spawn a vanilla cave spider (Spider behavior, CaveSpider wire type, max_health 12).
+		// On a landed melee hit it applies POISON (NORMAL i*20 = 140 ticks, amp 0) via caveSpiderApplyPoison.
+		e := t.spawnVanillaMob(vanillaCaveSpiderMobName, p.x, p.y, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned cave_spider eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
+		}
+	case "illusioner":
+		// MOB (Illusioner): spawn a vanilla illusioner (SpellcasterIllager). It hunts the nearest player,
+		// fires a bow at range, and periodically casts BLINDNESS 400 on its target while turning invisible
+		// (illusionerAiStep). The mirror-image clones are cite-deferred.
+		e := t.spawnVanillaMob(vanillaIllusionerMobName, p.x, p.y, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned illusioner eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
+		}
+	case "polar_bear":
+		// MOB (PolarBear): spawn a vanilla polar bear (NEUTRAL animal, max_health 30). It strolls/looks like a
+		// passive but retaliates (hurt_by_target) with a 6.0 maul when provoked.
+		e := t.spawnVanillaMob(vanillaPolarBearMobName, p.x, p.y, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned polar_bear eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
+		}
+	case "giant":
+		// MOB (Giant): spawn a vanilla giant (INERT giant zombie, max_health 100). It registers NO goals -- it
+		// just stands (Giant.registerGoals adds nothing). ATTACK_DAMAGE 50 is dealt only if it ever hits.
+		e := t.spawnVanillaMob(vanillaGiantMobName, p.x, p.y, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned giant eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))
+		}
+	case "piglin_brute":
+		// MOB (PiglinBrute): spawn a PiglinBrute directly (the always-hostile bastion guard, Go-native spawn
+		// like the blaze/piglin). It acquires the nearest player within FOLLOW_RANGE (12) and melees for 7.0
+		// when adjacent -- ALWAYS hostile (no gold neutrality, no barter, no zombify). Spawned 1 block up.
+		e := t.spawnPiglinBrute(p.x, p.y+1, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned piglin_brute eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+1, p.z))
+		}
 	case "drowned":
 		// MOB-VARIANT (Drowned): spawn a vanilla drowned (Zombie behavior + a trident-throw when it rolls a
 		// TRIDENT at spawn; it hunts + melees like a zombie, and burns in daylight). The water-nav goals are

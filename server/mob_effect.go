@@ -81,6 +81,11 @@ const (
 	// broadcast to trackers. VERIFIED CFR MobEffects.INVISIBILITY (plain MobEffect) + Entity.setInvisible
 	// (setSharedFlag(5, value)) + LivingEntity.updateInvisibilityStatus.
 	effectInvisibility = "minecraft:invisibility"
+	// BLINDNESS (plain MobEffect): the Illusioner's IllusionerBlindnessSpellGoal casts it on its target
+	// (MobEffectInstance(BLINDNESS, 400)). A plain effect (no special modifier), so addPlayerEffect handles
+	// it generically (the client dims the victim's view). VERIFIED javap Illusioner$IllusionerBlindnessSpellGoal
+	// .performSpellCasting: target.addEffect(new MobEffectInstance(MobEffects.BLINDNESS, 400), this).
+	effectBlindness = "minecraft:blindness"
 )
 
 // invisibleSharedFlagBit is Entity.FLAG_INVISIBLE — DATA_SHARED_FLAGS (index 0) bit 5 (1<<5 == 0x20):

@@ -735,6 +735,17 @@ type Entity struct {
 	// Cite ZombifiedPiglin (ticksUntilNextAlert / ALERT_INTERVAL) + NeutralMob (PERSISTENT_ANGER_TIME).
 	isZombifiedPiglin            bool
 	zombifiedPiglinAlertCooldown int
+	// --- ILLUSIONER (net.minecraft.world.entity.monster.illager.Illusioner) --------------------------
+	//
+	// Tick-owned plain values, set/read ONLY for an Illusioner (illusionerAiStep gates on typ ==
+	// entity.Illusioner.ID). illusionerBlindnessCooldown mirrors the IllusionerBlindnessSpellGoal cast
+	// cadence (getCastingInterval 180): decremented per tick while a target is in range, and on <=0 the
+	// spell casts (BLINDNESS 400 on the target) and resets. illusionerCastTicks mirrors the spell WARMUP
+	// (SpellcasterUseSpellGoal spellWarmup 20): while > 0 the illusioner is casting -> setInvisible(true).
+	// Zero for every non-illusioner entity. Cite Illusioner$IllusionerBlindnessSpellGoal (getCastingInterval
+	// 180, spellWarmup 20, performSpellCasting BLINDNESS 400) + Illusioner.aiStep (invisible while casting).
+	illusionerBlindnessCooldown int
+	illusionerCastTicks         int
 	// brain is the ported net.minecraft.world.entity.ai.Brain (brain.go). It is NON-NIL only for a mob
 	// that runs the behavior subsystem — currently the BABY HappyGhast (HappyGhast.customServerAiStep
 	// ticks the brain ONLY when isBaby()); every other entity leaves it nil (a nil brain is never ticked,

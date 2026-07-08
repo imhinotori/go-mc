@@ -29,7 +29,7 @@ import (
 // embedded manifest governs, T-24-07). Keep each repo-root/embed pair byte-identical. Embedding the
 // dirs covers plugin.toml + main.star for each mob.
 //
-//go:embed assets/vanilla_pig assets/vanilla_cow assets/vanilla_sheep assets/vanilla_chicken assets/vanilla_zombie assets/vanilla_skeleton assets/vanilla_spider assets/vanilla_wolf assets/vanilla_husk assets/vanilla_mooshroom assets/vanilla_silverfish assets/vanilla_creeper assets/vanilla_witch assets/vanilla_rabbit assets/vanilla_enderman assets/vanilla_cat assets/vanilla_fox assets/vanilla_sulfur_cube assets/vanilla_happy_ghast assets/vanilla_endermite assets/vanilla_turtle assets/vanilla_ocelot assets/vanilla_pillager assets/vanilla_vindicator assets/vanilla_evoker assets/vanilla_ravager assets/vanilla_iron_golem assets/vanilla_villager assets/vanilla_drowned assets/vanilla_stray assets/vanilla_bogged assets/vanilla_zombie_villager
+//go:embed assets/vanilla_pig assets/vanilla_cow assets/vanilla_sheep assets/vanilla_chicken assets/vanilla_zombie assets/vanilla_skeleton assets/vanilla_spider assets/vanilla_wolf assets/vanilla_husk assets/vanilla_mooshroom assets/vanilla_silverfish assets/vanilla_creeper assets/vanilla_witch assets/vanilla_rabbit assets/vanilla_enderman assets/vanilla_cat assets/vanilla_fox assets/vanilla_sulfur_cube assets/vanilla_happy_ghast assets/vanilla_endermite assets/vanilla_turtle assets/vanilla_ocelot assets/vanilla_pillager assets/vanilla_vindicator assets/vanilla_evoker assets/vanilla_ravager assets/vanilla_iron_golem assets/vanilla_villager assets/vanilla_drowned assets/vanilla_stray assets/vanilla_bogged assets/vanilla_zombie_villager assets/vanilla_cave_spider assets/vanilla_illusioner assets/vanilla_polar_bear assets/vanilla_giant
 var vanillaMobFS embed.FS
 
 // The declared mob names the swap sites look up. Each is the directory name under assets/ AND the
@@ -140,6 +140,17 @@ const (
 	vanillaStrayMobName          = "vanilla_stray"
 	vanillaBoggedMobName         = "vanilla_bogged"
 	vanillaZombieVillagerMobName = "vanilla_zombie_villager"
+
+	// MOB (CaveSpider/Illusioner/PolarBear/Giant): four more vanilla mobs built as declared plugins.
+	// CaveSpider = the vanilla_spider goal set with base_type cave_spider + max_health 12.0 (+ Go-native
+	// poison signature). Illusioner = the SpellcasterIllager (evoker casting-spell base + bow + Go-native
+	// blindness/invisibility signature). PolarBear = a NEUTRAL animal (float/melee/hurt_by + passive).
+	// Giant = INERT (no goals). Additive to the embed + load order below. PiglinBrute is Go-native-spawn
+	// (variant_mobs2.go spawnPiglinBrute, the blaze pattern), so it has NO asset dir / embed / const here.
+	vanillaCaveSpiderMobName = "vanilla_cave_spider"
+	vanillaIllusionerMobName = "vanilla_illusioner"
+	vanillaPolarBearMobName  = "vanilla_polar_bear"
+	vanillaGiantMobName      = "vanilla_giant"
 )
 
 // vanillaMobNames is the load order: ALL EIGHT bundled mobs (the 4 passives + the 3 Phase-35 hostiles +
@@ -182,6 +193,10 @@ var vanillaMobNames = []string{
 	vanillaStrayMobName,
 	vanillaBoggedMobName,
 	vanillaZombieVillagerMobName,
+	vanillaCaveSpiderMobName,
+	vanillaIllusionerMobName,
+	vanillaPolarBearMobName,
+	vanillaGiantMobName,
 }
 
 // loadVanillaMobRegistry materializes EACH bundled vanilla mob plugin to a temp dir, parses its

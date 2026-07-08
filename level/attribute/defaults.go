@@ -620,6 +620,75 @@ func piglinSupplier() *Supplier {
 		Build()
 }
 
+// piglinBruteSupplier is the port of PiglinBrute.createAttributes(): Monster.createMonsterAttributes()
+// + MAX_HEALTH 50.0 + MOVEMENT_SPEED 0.3499999940395355 + ATTACK_DAMAGE 7.0 + FOLLOW_RANGE 12.0.
+//
+//	[VERIFIED javap PiglinBrute.createAttributes: Monster.createMonsterAttributes; MAX_HEALTH 50.0;
+//	 MOVEMENT_SPEED 0.3499999940395355; ATTACK_DAMAGE 7.0; FOLLOW_RANGE 12.0.]
+func piglinBruteSupplier() *Supplier {
+	return createMonsterAttributes().
+		AddValue(MaxHealth, 50.0).
+		AddValue(MovementSpeed, 0.3499999940395355).
+		AddValue(AttackDamage, 7.0).
+		AddValue(FollowRange, 12.0).
+		Build()
+}
+
+// giantSupplier is the port of Giant.createAttributes(): Monster.createMonsterAttributes() + MAX_HEALTH
+// 100.0 + MOVEMENT_SPEED 0.5 + ATTACK_DAMAGE 50.0 + CAMERA_DISTANCE 16.0. CAMERA_DISTANCE is a client
+// camera attribute with no gameplay effect and no Go attribute enum -- OMITTED (cited).
+//
+//	[VERIFIED javap Giant.createAttributes: Monster.createMonsterAttributes; MAX_HEALTH 100.0;
+//	 MOVEMENT_SPEED 0.5; ATTACK_DAMAGE 50.0; CAMERA_DISTANCE 16.0 (client-only, omitted).]
+func giantSupplier() *Supplier {
+	return createMonsterAttributes().
+		AddValue(MaxHealth, 100.0).
+		AddValue(MovementSpeed, 0.5).
+		AddValue(AttackDamage, 50.0).
+		Build()
+}
+
+// polarBearSupplier is the port of PolarBear.createAttributes(): Animal.createAnimalAttributes() +
+// MAX_HEALTH 30.0 + FOLLOW_RANGE 20.0 + MOVEMENT_SPEED 0.25 + ATTACK_DAMAGE 6.0. Animal has no ATTACK_DAMAGE
+// by default, so the polar bear registers it explicitly.
+//
+//	[VERIFIED javap PolarBear.createAttributes: Animal.createAnimalAttributes; MAX_HEALTH 30.0;
+//	 FOLLOW_RANGE 20.0; MOVEMENT_SPEED 0.25; ATTACK_DAMAGE 6.0.]
+func polarBearSupplier() *Supplier {
+	return createAnimalAttributes().
+		AddValue(MaxHealth, 30.0).
+		AddValue(FollowRange, 20.0).
+		AddValue(MovementSpeed, 0.25).
+		AddValue(AttackDamage, 6.0).
+		Build()
+}
+
+// caveSpiderSupplier is the port of CaveSpider.createCaveSpider(): Spider.createAttributes() (Monster base
+// + MAX_HEALTH 16 + MOVEMENT_SPEED 0.3) with the MAX_HEALTH override 12.0. Same as the spider supplier but
+// MAX_HEALTH 12.0.
+//
+//	[VERIFIED javap CaveSpider.createCaveSpider: Spider.createAttributes; MAX_HEALTH 12.0 (override).]
+func caveSpiderSupplier() *Supplier {
+	return createMonsterAttributes().
+		AddValue(MaxHealth, 12.0).
+		AddValue(MovementSpeed, 0.3).
+		Build()
+}
+
+// illusionerSupplier is the port of Illusioner.createAttributes(): Monster.createMonsterAttributes() +
+// MOVEMENT_SPEED 0.5 + FOLLOW_RANGE 18.0 + MAX_HEALTH 32.0 (no ATTACK_DAMAGE override -- the illusioner
+// damage is the bow + the blindness spell).
+//
+//	[VERIFIED javap Illusioner.createAttributes: Monster.createMonsterAttributes; MOVEMENT_SPEED 0.5;
+//	 FOLLOW_RANGE 18.0; MAX_HEALTH 32.0.]
+func illusionerSupplier() *Supplier {
+	return createMonsterAttributes().
+		AddValue(MovementSpeed, 0.5).
+		AddValue(FollowRange, 18.0).
+		AddValue(MaxHealth, 32.0).
+		Build()
+}
+
 // zombifiedPiglinSupplier is the port of ZombifiedPiglin.createAttributes(): Zombie.createAttributes()
 // (createMonsterAttributes + FOLLOW_RANGE 35.0 + MOVEMENT_SPEED 0.23000000417232513 + ATTACK_DAMAGE 3.0 +
 // ARMOR 2.0 + SPAWN_REINFORCEMENTS_CHANCE default 0.0) then .add(SPAWN_REINFORCEMENTS_CHANCE 0.0)
@@ -1269,6 +1338,20 @@ var suppliers = map[string]*Supplier{
 	// + MAX_HEALTH 16.0 + MOVEMENT_SPEED 0.3499999940395355 + ATTACK_DAMAGE 5.0. Keyed by its registry name
 	// so NewMapForEntity resolves it. Cite Piglin.createAttributes.
 	"piglin": piglinSupplier(),
+	// MOB (PiglinBrute): the always-hostile bastion guard. PiglinBrute.createAttributes:
+	// Monster.createMonsterAttributes + MAX_HEALTH 50 + MOVEMENT_SPEED 0.35 + ATTACK_DAMAGE 7 + FOLLOW_RANGE
+	// 12. Keyed by registry name so NewMapForEntity resolves it (spawnPiglinBrute). Cite PiglinBrute.createAttributes.
+	"piglin_brute": piglinBruteSupplier(),
+	// MOB (Giant): the INERT giant zombie. Giant.createAttributes: Monster + MAX_HEALTH 100 +
+	// MOVEMENT_SPEED 0.5 + ATTACK_DAMAGE 50 (CAMERA_DISTANCE 16 client-only, omitted). Cite Giant.createAttributes.
+	"giant": giantSupplier(),
+	// MOB (PolarBear): the NEUTRAL bear. PolarBear.createAttributes: Animal + MAX_HEALTH 30 + FOLLOW_RANGE 20
+	// + MOVEMENT_SPEED 0.25 + ATTACK_DAMAGE 6. Cite PolarBear.createAttributes.
+	"polar_bear": polarBearSupplier(),
+	// MOB (CaveSpider): Spider.createAttributes with MAX_HEALTH 12.0. Cite CaveSpider.createCaveSpider.
+	"cave_spider": caveSpiderSupplier(),
+	// MOB (Illusioner): Monster + MOVEMENT_SPEED 0.5 + FOLLOW_RANGE 18 + MAX_HEALTH 32. Cite Illusioner.createAttributes.
+	"illusioner": illusionerSupplier(),
 	// ZOMBIFIED PIGLIN (GAP): the neutral nether undead (a NeutralMob) + piglin conversion target.
 	// ZombifiedPiglin.createAttributes = Zombie base + SPAWN_REINFORCEMENTS_CHANCE 0 + MOVEMENT_SPEED 0.23 +
 	// ATTACK_DAMAGE 5 (folds MAX_HEALTH 20, FOLLOW_RANGE 35, ARMOR 2). Keyed by registry name. Cite

@@ -241,6 +241,33 @@ func categoryOf(t entity.ID) mobCategory {
 		// MobCategory.MONSTER).sized(1.95, 2.2); data/entity Ravager.Type == "monster", id 109). Same MONSTER-
 		// budget accounting. (Ravager spawns ONLY in raids - never a uniform natural spawn - so it stays OUT.)
 		return categoryMonster
+	case entity.CaveSpider.ID:
+		// MOB (CaveSpider): CaveSpider is MobCategory.MONSTER (vanilla EntityType.CAVE_SPIDER; CaveSpider
+		// extends Spider which is MONSTER; data/entity CaveSpider.Type == "monster", id 22). Same MONSTER-
+		// budget accounting as the spider.
+		return categoryMonster
+	case entity.Illusioner.ID:
+		// MOB (Illusioner): Illusioner is MobCategory.MONSTER (vanilla EntityType.ILLUSIONER; Illusioner
+		// extends SpellcasterIllager -> Monster; data/entity Illusioner.Type == "monster", id 68). Same
+		// MONSTER-budget accounting. (Illusioner is NOT naturally spawned in vanilla -- only via commands/
+		// woodland-mansion-style special paths -- so it stays OUT of the uniform natural pool, like the raiders.)
+		return categoryMonster
+	case entity.Giant.ID:
+		// MOB (Giant): Giant is MobCategory.MONSTER (vanilla EntityType.GIANT; Giant extends Monster;
+		// data/entity Giant.Type == "monster", id 59). Same MONSTER-budget accounting. (Giant has no natural
+		// spawn in vanilla -- commands only -- so it stays OUT of the uniform natural pool.)
+		return categoryMonster
+	case entity.PiglinBrute.ID:
+		// MOB (PiglinBrute): PiglinBrute is MobCategory.MONSTER (vanilla EntityType.PIGLIN_BRUTE; PiglinBrute
+		// extends AbstractPiglin -> Monster; data/entity PiglinBrute.Type == "monster", id 102). Same MONSTER-
+		// budget accounting as the piglin. (PiglinBrute spawns ONLY in bastion remnants -- never a uniform
+		// natural spawn -- so it stays OUT of the natural pool; it is Go-native-spawned via spawnPiglinBrute.)
+		return categoryMonster
+	case entity.PolarBear.ID:
+		// MOB (PolarBear): PolarBear is MobCategory.CREATURE (vanilla EntityType.POLAR_BEAR; PolarBear extends
+		// Animal; data/entity PolarBear.Type == "creature", id 104). Same CREATURE-budget accounting as the cow.
+		// (PolarBear spawns only in snowy/frozen biomes - biome-gated - so it stays OUT of the uniform natural pool.)
+		return categoryCreature
 	case entity.IronGolem.ID:
 		// IRON GOLEM (Task): IronGolem is MobCategory.MISC (vanilla EntityTypes.IRON_GOLEM = Builder.of(...,
 		// MobCategory.MISC); data/entity IronGolem.Type == "misc", id 70). MISC's cap is -1 (uncapped) and MISC

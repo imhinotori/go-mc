@@ -222,6 +222,16 @@ var baseTypeByName = map[string]entity.Entity{
 	// combat/target goals are Go-native (kind=); the doHurtTarget damage/fling is ironGolemDidHurt. Cite
 	// net.minecraft.world.entity.animal.golem.IronGolem.registerGoals.
 	"iron_golem": entity.IronGolem,
+	// MOB (CaveSpider/Illusioner/PolarBear/Giant): four more vanilla mobs built as declared plugins. Each
+	// renders as its OWN wire type. CaveSpider extends Spider (reuses the spider goals verbatim); Illusioner
+	// extends SpellcasterIllager (reuses the evoker casting-spell base); PolarBear extends Animal (a neutral
+	// creature); Giant extends Monster (INERT - no goals). The per-type SIGNATURE (cave-spider poison,
+	// illusioner blindness+invisibility) is Go-native (variant_mobs2.go). Cite CaveSpider/Illusioner/
+	// PolarBear/Giant.
+	"cave_spider": entity.CaveSpider,
+	"illusioner":  entity.Illusioner,
+	"polar_bear":  entity.PolarBear,
+	"giant":       entity.Giant,
 }
 
 // resolveBaseType resolves a base_type string to its data/entity record. (record, true) for an

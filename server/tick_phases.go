@@ -1058,6 +1058,22 @@ func (t *TickLoop) tickAI() {
 		if e.typ == entity.Piglin.ID {
 			t.piglinBrainTick(e)
 		}
+		// MOB (PiglinBrute): the always-hostile bastion guard -- a Go-native spawn (spawnPiglinBrute) with
+		// plain hostile combat (acquire nearest player + melee 7.0), NO barter/neutrality/zombify. Per-type-
+		// gated, AFTER serverAiStep. ADDITIVE + brute-gated (zero cost / zero RNG for every other entity --
+		// the pig oracle stream is untouched). Cite PiglinBrute + AbstractPiglin.
+		if e.typ == entity.PiglinBrute.ID {
+			t.piglinBruteAiStep(e)
+		}
+		// MOB (Illusioner): the SpellcasterIllager blindness + invisibility signature. The .star declaration
+		// runs its goals (float/casting/bow/stroll/look/around + targets) via serverAiStep; this adds the
+		// observable spell GAMEPLAY (BLINDNESS 400 on the target + the casting invisibility) collapsed from
+		// the full spell state machine. Per-type-gated, AFTER serverAiStep. ADDITIVE + illusioner-gated (zero
+		// cost for every other entity -- the pig oracle stream is untouched; RNG only on the illusioner OWN
+		// stream, drawn only on a cast). Cite Illusioner IllusionerBlindnessSpellGoal + Illusioner.aiStep.
+		if e.typ == entity.Illusioner.ID {
+			t.illusionerAiStep(e)
+		}
 		// ZOMBIFIED PIGLIN (GAP): the NEUTRAL nether undead -- neutral-until-provoked, then retaliate +
 		// spread anger to nearby zombified piglins (the anger pack), fire/lava immune, no sun-burn. It is
 		// the conversion target of a piglin zombifying off-nether. Per-type-gated like the piglin, AFTER

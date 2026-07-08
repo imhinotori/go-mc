@@ -1,0 +1,8 @@
+name = "vanilla_giant"
+version = "0.1.0"
+entrypoint = "main.star"
+runtime = "starlark"
+# Least-privilege caps: the Giant registers NO goals (it is INERT -- net.minecraft.world.entity.monster
+# .Giant.registerGoals adds nothing), so it needs NO capabilities at all. An empty grant is the tightest
+# least-privilege set (T-24-07): a mob that never reads/writes/navigates asks for nothing.
+capabilities = []

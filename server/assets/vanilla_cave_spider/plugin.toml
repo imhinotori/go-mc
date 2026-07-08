@@ -1,0 +1,17 @@
+name = "vanilla_cave_spider"
+version = "0.1.0"
+entrypoint = "main.star"
+runtime = "starlark"
+# Least-privilege caps (24-RESEARCH Security Domain / T-24-07). After the 35-01b rewire the spider's
+# COMBAT goals are Go-NATIVE (kind=): the leap velocity impulse (setDeltaMovement), the daylight read
+# (getLightLevelDependentMagicValue proxy), and the melee-hit (doHurtTarget) are HOST-side ops the
+# Go-native goals own -- NOT plugin ops -- so the .star NO LONGER needs set_velocity for the leap or
+# is_dark for the daylight gate. The remaining .star (the PASSIVE goals) reads its own state + the
+# nearest player and writes its look + nav want:
+#   entities.read  -- read x/y/z + the rng draws (the stroll/look gates) + the look-state scratch
+#   entities.write -- set_look_at (LookControl.setLookAt) + set_state (the passive goal scratch)
+#   world.read     -- nearest_player (LookAtPlayerGoal getNearestPlayer)
+#   nav            -- path_to/has_path/stop (WaterAvoidingRandomStrollGoal navigation)
+# The combat damage path needs NO widened cap (it is the Go-native meleeAttackGoal through the player
+# hurt path, 35-01 -- never a plugin op).
+capabilities = ["entities.read", "entities.write", "world.read", "nav"]
