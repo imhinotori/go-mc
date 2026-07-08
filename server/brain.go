@@ -68,6 +68,15 @@ type brain struct {
 	coreActivities   map[activity]bool
 	activeActivities map[activity]bool
 	defaultActivity  activity
+
+	// schedule is Brain.schedule (net.minecraft.world.attribute.EnvironmentAttribute<Activity>): the
+	// day-cycle timeline the villager samples each schedule tick. nil for a mob with no schedule (the
+	// HappyGhast baby), so updateActivityFromSchedule then samples IDLE. VERIFIED Brain.schedule field.
+	schedule *schedule
+
+	// lastScheduleUpdate is Brain.lastScheduleUpdate: the day-time of the last updateActivityFromSchedule
+	// re-sample; the 20-tick SCHEDULE_UPDATE_DELAY guard reads it. VERIFIED Brain.lastScheduleUpdate.
+	lastScheduleUpdate int64
 }
 
 // newBrain constructs an empty brain with the constructor-tail defaults: coreActivities={CORE},

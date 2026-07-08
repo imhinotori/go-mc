@@ -520,6 +520,7 @@ const (
 	sensorNearestLivingEntities sensorType = 2  // minecraft:nearest_living_entities
 	sensorNearestPlayers        sensorType = 3  // minecraft:nearest_players
 	sensorHurtBy                sensorType = 5  // minecraft:hurt_by
+	sensorVillagerHostiles      sensorType = 6  // minecraft:villager_hostiles
 	sensorNearestAdultAnyType   sensorType = 15 // minecraft:nearest_adult_any_type
 	sensorFoodTemptations       sensorType = 17 // minecraft:food_temptations
 )

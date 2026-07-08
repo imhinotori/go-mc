@@ -45,6 +45,7 @@ const (
 	memNearestVisiblePlayer     memoryKey = 10 // minecraft:nearest_visible_player
 	memWalkTarget               memoryKey = 13 // minecraft:walk_target
 	memLookTarget               memoryKey = 14 // minecraft:look_target
+	memInteractionTarget        memoryKey = 17 // minecraft:interaction_target
 	memBreedTarget              memoryKey = 18 // minecraft:breed_target
 	memPath                     memoryKey = 20 // minecraft:path
 	memHurtBy                   memoryKey = 23 // minecraft:hurt_by

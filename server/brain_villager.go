@@ -47,6 +47,14 @@ func attachVillagerBrain(e *Entity) {
 	}
 	e.villagerLevel = clampVillagerLevel(e.villagerLevel)
 	e.brain = newVillagerBrainProvider().makeBrain(e)
+	// registerBrainGoals: setSchedule(isBaby ? BABY_VILLAGER_ACTIVITY : VILLAGER_ACTIVITY). The spawn-time
+	// updateActivityFromSchedule runs on the first CORE-active UpdateActivityFromSchedule behavior tick (the
+	// 20-tick guard starts satisfied since lastScheduleUpdate=0). VERIFIED javap Villager.registerBrainGoals.
+	if e.isBaby() {
+		e.brain.setSchedule(villagerBabySchedule)
+	} else {
+		e.brain.setSchedule(villagerDefaultSchedule)
+	}
 }
 
 // villagerBrainTick ports Villager.customServerAiStep: getBrain().tick(level, this). Called from tickAI for
@@ -83,7 +91,19 @@ func (t *TickLoop) villagerBrainTick(e *Entity) {
 // file header; the CORE activity here drives the job-site acquisition + profession assignment.
 func newVillagerBrainProvider() *brainProvider {
 	p := newBrainProvider()
+	// Sensors: the two the schedule PANIC leg needs (hurt_by -> HURT_BY/HURT_BY_ENTITY, villager_hostiles
+	// -> NEAREST_HOSTILE). The larger villager sensor set (nearest_bed/players/babies/golem) is deferred;
+	// their memories auto-register via the behaviors. Cite Villager.BRAIN_PROVIDER sensors.
+	p.addSensor(sensorHurtBy, sensorVillagerHurtByTick, memHurtBy, memHurtByEntity)
+	p.addSensor(sensorVillagerHostiles, sensorVillagerHostilesTick, memNearestHostile)
+	// Activities (VERIFIED Villager BRAIN_PROVIDER ActivitySupplier): CORE, WORK{JOB_SITE present},
+	// MEET{MEETING_POINT present}, REST, IDLE, PANIC (PLAY/PRE_RAID/RAID/HIDE deferred).
 	p.addActivity(villagerInitCoreActivity())
+	p.addActivity(villagerInitWorkActivity())
+	p.addActivity(villagerInitMeetActivity())
+	p.addActivity(villagerInitRestActivity())
+	p.addActivity(villagerInitIdleActivity())
+	p.addActivity(villagerInitPanicActivity())
 	return p
 }
 
@@ -99,9 +119,12 @@ func villagerInitCoreActivity() activityData {
 	pairs := []prioritizedBehavior{
 		{priority: 0, behavior: newSwim(0.8)},
 		{priority: 0, behavior: newLookAtTargetSink(45, 90)},
+		{priority: 0, behavior: newVillagerPanicTrigger()},
 		{priority: 1, behavior: newMoveToTargetSink(150, 250)},
 		{priority: 6, behavior: newVillagerAcquireJobSite()},
 		{priority: 10, behavior: newAssignProfessionFromJobSite()},
+		{priority: 10, behavior: newVillagerAcquirePoi(poiTypeIsHome, memHome, false)},
+		{priority: 10, behavior: newVillagerAcquirePoi(poiTypeIsMeeting, memMeetingPoint, true)},
 	}
 	return activityDataCreatePairs(activityCore, pairs, nil, nil)
 }
@@ -224,4 +247,136 @@ func villagerCloserToCenterThan(b pk.Position, x, y, z, dist float64) bool {
 	dy := (float64(b.Y) + 0.5) - y
 	dz := (float64(b.Z) + 0.5) - z
 	return dx*dx+dy*dy+dz*dz < dist*dist
+}
+
+// villagerInitWorkActivity ports ActivityData.create(WORK, getWorkPackage(profession), {Pair(JOB_SITE,
+// VALUE_PRESENT)}): WORK requires a claimed JOB_SITE and, at its core, walks the villager TO the job site.
+// The workstation actions (WorkAtPoi, StrollToPoi/StrollToPoiList, SetLookAndInteract) are cite-deferred;
+// the landed behaviors are the walk-to-job-site + UpdateActivityFromSchedule(99).
+//
+//	[VERIFIED javap Villager ActivitySupplier: ActivityData.create(WORK, getWorkPackage(profession),
+//	 ImmutableSet.of(Pair.of(JOB_SITE, VALUE_PRESENT))). getWorkPackage: SetWalkTargetFromBlockMemory
+//	 .create(JOB_SITE, 0.5f, 9, ...) at prio 5; UpdateActivityFromSchedule.create() at prio 99.]
+func villagerInitWorkActivity() activityData {
+	pairs := []prioritizedBehavior{
+		{priority: 5, behavior: newSetWalkTargetFromBlockMemory(memJobSite, 0.5, 9)},
+		{priority: 99, behavior: newUpdateActivityFromSchedule()},
+	}
+	conditions := []memoryCondition{{key: memJobSite, status: memValuePresent}}
+	return activityDataCreatePairs(activityWork, pairs, conditions, nil)
+}
+
+// villagerInitMeetActivity ports ActivityData.create(MEET, getMeetPackage(), {Pair(MEETING_POINT,
+// VALUE_PRESENT)}): MEET requires a claimed MEETING_POINT and walks the villager to the village bell.
+// SocializeAtBell/InteractWith/SetLookAndInteract are cite-deferred; the landed behaviors are the
+// walk-to-bell + UpdateActivityFromSchedule(99).
+//
+//	[VERIFIED javap Villager ActivitySupplier: ActivityData.create(MEET, getMeetPackage(), ImmutableSet.of(
+//	 Pair.of(MEETING_POINT, VALUE_PRESENT))). getMeetPackage: SetWalkTargetFromBlockMemory.create(
+//	 MEETING_POINT, 0.4f, 40, ...) at prio 6; UpdateActivityFromSchedule.create() at prio 99.]
+func villagerInitMeetActivity() activityData {
+	pairs := []prioritizedBehavior{
+		{priority: 6, behavior: newSetWalkTargetFromBlockMemory(memMeetingPoint, 0.4, 40)},
+		{priority: 99, behavior: newUpdateActivityFromSchedule()},
+	}
+	conditions := []memoryCondition{{key: memMeetingPoint, status: memValuePresent}}
+	return activityDataCreatePairs(activityMeet, pairs, conditions, nil)
+}
+
+// villagerInitRestActivity ports ActivityData.create(REST, getRestPackage()): the REST (night) activity
+// walks the villager to its HOME bed. SleepInBed pose + ValidateNearbyPoi/SetClosestHomeAsWalkTarget/
+// InsideBrownianWalk/GoToClosestVillage fallbacks are cite-deferred (mob sleep-pose seam not built); the
+// landed behaviors are the walk-to-bed + UpdateActivityFromSchedule(99). REST has no memory requirement.
+//
+//	[VERIFIED javap Villager ActivitySupplier: ActivityData.create(REST, getRestPackage()). getRestPackage:
+//	 SetWalkTargetFromBlockMemory.create(HOME, 0.6f, 1, 150, 1200) at prio 2; ValidateNearbyPoi(HOME);
+//	 SleepInBed; RunOne{...} (deferred); UpdateActivityFromSchedule.create() at prio 99.]
+func villagerInitRestActivity() activityData {
+	pairs := []prioritizedBehavior{
+		{priority: 2, behavior: newSetWalkTargetFromBlockMemory(memHome, 0.6, 1)},
+		{priority: 99, behavior: newUpdateActivityFromSchedule()},
+	}
+	return activityDataCreatePairs(activityRest, pairs, nil, nil)
+}
+
+// villagerInitIdleActivity ports ActivityData.create(IDLE, getIdlePackage()): the IDLE (default) activity.
+// Its RunOne{InteractWith, VillageBoundRandomStroll, SetWalkTargetFromLookTarget, JumpOnBed, DoNothing},
+// GiveGiftToHero, trade chains and VillagerMakeLove are cite-deferred (interaction/trade-brain subsystems).
+// The landed slice is UpdateActivityFromSchedule(99) so IDLE keeps re-sampling the schedule (leaving IDLE
+// for WORK/MEET/REST when the day-time turns). IDLE is Brain.defaultActivity, so it is always available.
+//
+//	[VERIFIED javap Villager ActivitySupplier: ActivityData.create(IDLE, getIdlePackage()). getIdlePackage:
+//	 RunOne{...}/GiveGiftToHero/trade gates/VillagerMakeLove (deferred); UpdateActivityFromSchedule at 99.]
+func villagerInitIdleActivity() activityData {
+	pairs := []prioritizedBehavior{
+		{priority: 99, behavior: newUpdateActivityFromSchedule()},
+	}
+	return activityDataCreatePairs(activityIdle, pairs, nil, nil)
+}
+
+// villagerInitPanicActivity ports ActivityData.create(PANIC, getPanicPackage()): PANIC runs while the
+// villager is hurt / near a hostile. VillagerCalmDown(0) reverts it to the scheduled activity once the
+// threat clears; SetWalkTargetAwayFrom.entity(HURT_BY_ENTITY / NEAREST_HOSTILE, 1.0, 6) flees the threat.
+// RingBell/spawn-golem/VillageBoundRandomStroll/SetWalkTargetFromBlockMemory(bed)/ResetRaidStatus deferred.
+//
+//	[VERIFIED javap Villager ActivitySupplier: ActivityData.create(PANIC, getPanicPackage()). getPanicPackage:
+//	 Pair.of(0, VillagerCalmDown.create()); Pair.of(1, SetWalkTargetAwayFrom.entity(HURT_BY_ENTITY, 1.0f, 6,
+//	 false)); Pair.of(1, SetWalkTargetAwayFrom.entity(NEAREST_HOSTILE, 1.0f, 6, false)); higher-prio
+//	 VillageBoundRandomStroll/RingBell/ResetRaidStatus (deferred).]
+func villagerInitPanicActivity() activityData {
+	pairs := []prioritizedBehavior{
+		{priority: 0, behavior: newVillagerCalmDown()},
+		{priority: 1, behavior: newSetWalkTargetAwayFromEntity(memHurtByEntity, 1.0, 6, false)},
+		{priority: 1, behavior: newSetWalkTargetAwayFromEntity(memNearestHostile, 1.0, 6, false)},
+	}
+	return activityDataCreatePairs(activityPanic, pairs, nil, nil)
+}
+
+// newVillagerAcquirePoi ports AcquirePoi.create(typePredicate, acquireMemory, onlyIfAdult, empty[, biPred])
+// for the single-target legs (HOME beds, MEETING_POINT bell) -- generalising newVillagerAcquireJobSite.
+// entryCondition absent(acquireMemory); the trigger scans the region PoiManager for the CLOSEST HAS_SPACE
+// POI matching typePredicate within SCAN_RANGE(48), take()s its ticket (freeTickets-- -> IS_OCCUPIED), and
+// sets acquireMemory to the claimed pos. The reachability (findPathToPois.canReach) + JitteredLinearRetry
+// backoff + the rate-jitter batch are cite-reduced exactly as newVillagerAcquireJobSite documents.
+//
+//	[VERIFIED javap AcquirePoi.create: group absent(acquireMemory) [+ registered validate memory]; skip if
+//	 onlyIfAdult && body.isBaby(); nextInt(20) rate; getInRange(typePredicate, pos, 48, HAS_SPACE) closest
+//	 first; poiManager.take -> acquireTicket; acquireMemory.set(GlobalPos.of(dimension, poiPos)). Cite
+//	 AcquirePoi.create + AcquirePoi.SCAN_RANGE + PoiManager.take.]
+func newVillagerAcquirePoi(typePred func(*poiType) bool, acquireMem memoryKey, onlyIfAdult bool) *oneShot {
+	var nextScheduledStart int64
+	cond := []memoryCondition{{key: acquireMem, status: memValueAbsent}}
+	return newOneShot(cond, func(t *TickLoop, e *Entity, timestamp int64) bool {
+		if onlyIfAdult && e.isBaby() {
+			return false
+		}
+		region := t.cur()
+		if region == nil {
+			return false
+		}
+		gameTime := t.GameTime()
+		if nextScheduledStart == 0 {
+			nextScheduledStart = gameTime + int64(villagerRateJitter(region))
+			return false
+		}
+		if gameTime < nextScheduledStart {
+			return false
+		}
+		nextScheduledStart = timestamp + 20 + int64(villagerRateJitter(region))
+		pm := region.poiManager
+		if pm == nil {
+			return false
+		}
+		center := pk.Position{X: floorInt(e.x), Y: floorInt(e.y), Z: floorInt(e.z)}
+		pos, ok := pm.findClosest(typePred, center, acquirePoiScanRange, poiOccupancyHasSpace)
+		if !ok {
+			return false
+		}
+		claimed, took := pm.take(typePred, pos)
+		if !took {
+			return false
+		}
+		e.brain.setMemory(acquireMem, claimed)
+		return true
+	})
 }
