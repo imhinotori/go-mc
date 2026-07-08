@@ -260,6 +260,17 @@ func (e *Entity) setFrameRotation(r int32) {
 	e.frameRotation = ((r % frameNumRotations) + frameNumRotations) % frameNumRotations
 }
 
+// frameGetAnalogOutput is ItemFrame.getAnalogOutput(): the comparator read of a framed item -- 0 when the
+// frame is empty, else (getRotation() % 8) + 1 (a value 1..8). CITE ItemFrame.getAnalogOutput:
+// `getItem().isEmpty() ? 0 : getRotation() % 8 + 1`. (frameRotation is already stored %8 by
+// setFrameRotation, so the extra %8 is a faithful no-op guard.)
+func (e *Entity) frameGetAnalogOutput() int {
+	if slotIsEmpty(e.getFrameItem()) {
+		return 0
+	}
+	return int(e.getFrameRotation()%frameNumRotations) + 1
+}
+
 // frameFrameItemStack is ItemFrame.getFrameItemStack() -> new ItemStack(Items.ITEM_FRAME) (or
 // GLOW_ITEM_FRAME for a glow frame): the frame's OWN drop item. CITE ItemFrame / GlowItemFrame.getFrameItemStack.
 func (e *Entity) frameFrameItemStack() component.SlotData {
@@ -302,6 +313,7 @@ func (t *TickLoop) tryItemFrameInteract(p *tickPlayer, frame *Entity) bool {
 			// cited no-op (never FAILs). CITE ItemFrame.interact map branch.
 			frame.setFrameItem(held)     // setItem(held): store copyWithCount(1)
 			t.pushFrameData(frame)        // gameEvent(BLOCK_CHANGE) + the synched-data broadcast
+			t.frameUpdateComparators(frame) // setItem(stack,true): updateNeighbourForOutputSignal(pos, AIR)
 			if p.gameMode != gameModeCreative {
 				t.shrinkHeldItem(p, inv) // itemStack.consume(1, player): shrink UNLESS creative
 			}
@@ -312,7 +324,16 @@ func (t *TickLoop) tryItemFrameInteract(p *tickPlayer, frame *Entity) bool {
 	// frame already has an item -> rotate (+1, %8).
 	frame.setFrameRotation(frame.getFrameRotation() + 1)
 	t.pushFrameData(frame)
+	t.frameUpdateComparators(frame) // setRotation(r,true): updateNeighbourForOutputSignal(pos, AIR)
 	return true // SUCCESS
+}
+
+// frameUpdateComparators is the ItemFrame setItem/setRotation `updateNeighbours` side effect:
+// level.updateNeighbourForOutputSignal(this.pos, Blocks.AIR) at the frame's ATTACHED block cell (this.pos,
+// the wall cell it hangs in), so a comparator reading the frame's analog output re-evaluates on a live
+// place / rotate / empty. CITE ItemFrame.setItem(stack,true) / setRotation(int,true).
+func (t *TickLoop) frameUpdateComparators(frame *Entity) {
+	t.updateNeighbourForOutputSignal(pk.Position{X: frame.frameBlockX, Y: frame.frameBlockY, Z: frame.frameBlockZ})
 }
 
 // breakItemFrame is the port of the ItemFrame hurt/break drop chain for a player attack
@@ -338,6 +359,7 @@ func (t *TickLoop) breakItemFrame(frame *Entity, attacker *tickPlayer) {
 		// frame stays (emptied). Does NOT remove the entity.
 		t.frameDropItem(frame, creative, false)
 		t.pushFrameData(frame) // gameEvent(BLOCK_CHANGE) + the now-empty DATA_ITEM to the client
+		t.frameUpdateComparators(frame) // dropItem -> setItem(EMPTY,true): comparator falls to 0
 		return
 	}
 	// EMPTY frame: BlockAttachedEntity.hurtServer -> kill + dropItem(withFrame=true) -> drop the frame item.

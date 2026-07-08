@@ -19,6 +19,7 @@ import (
 	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/data/item"
 	"github.com/imhinotori/sulfur/level"
+	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/level/component"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
@@ -485,4 +486,89 @@ func TestArmorStandGetClickedSlotThresholds(t *testing.T) {
 			t.Fatalf("getClickedSlot(%.2f) = %d, want %d (%s)", c.y, got, c.want, c.name)
 		}
 	}
+}
+
+// =================================================================================================
+// ITEM FRAME - COMPARATOR ANALOG OUTPUT
+// =================================================================================================
+
+// TestItemFrameAnalogOutput asserts ItemFrame.getAnalogOutput: 0 for an empty frame, else rotation%8 + 1
+// (1..8) as the framed item is rotated through all eight steps. CITE ItemFrame.getAnalogOutput.
+func TestItemFrameAnalogOutput(t *testing.T) {
+	loop, _ := displayLoop(t)
+	var frame *Entity
+	loop.withRegion(loop.regionColOf(8.5, 8.5), func() {
+		frame = loop.spawnItemFrame(8, 64, 8, 3, false)
+	})
+
+	// Empty frame -> analog 0.
+	if got := frame.frameGetAnalogOutput(); got != 0 {
+		t.Fatalf("empty-frame analog output = %d, want 0", got)
+	}
+
+	// Put an item -> rotation 0 -> analog 1. Then each rotation step yields rotation+1, wrapping 7 -> 8.
+	frame.setFrameItem(component.SlotData{Count: 1, ItemID: pk.VarInt(item.Diamond.ID)})
+	want := []int{1, 2, 3, 4, 5, 6, 7, 8}
+	for r, w := range want {
+		frame.setFrameRotation(int32(r))
+		if got := frame.frameGetAnalogOutput(); got != w {
+			t.Fatalf("analog output at rotation %d = %d, want %d (rotation%%8 + 1)", r, got, w)
+		}
+	}
+	// Rotation 8 wraps to 0 (%8) -> analog 1 again.
+	frame.setFrameRotation(8)
+	if got := frame.frameGetAnalogOutput(); got != 1 {
+		t.Fatalf("analog output at rotation 8 (wraps to 0) = %d, want 1", got)
+	}
+}
+
+// TestComparatorReadsItemFrameThroughConductor asserts ComparatorBlock.getInputSignal's item-frame branch:
+// a comparator FACING a solid conductor, with an item frame hung on the FAR face of that conductor (facing
+// the same direction as the comparator), reads the frame's analog output THROUGH the block. An empty frame
+// gives 0; a framed item at rotation r gives r%8 + 1. CITE ComparatorBlock.getInputSignal + getItemFrame +
+// ItemFrame.getAnalogOutput.
+func TestComparatorReadsItemFrameThroughConductor(t *testing.T) {
+	loop, ch := displayLoop(t)
+	_ = ch
+
+	// Comparator C at (8,64,8) FACING South. C+South is a solid conductor (stone). The frame lives in cell
+	// C+2*South, facing South (3) -- hung on the far face of the conductor, pointing away from C.
+	c := pk.Position{X: 8, Y: 64, Z: 8}
+	mgr := loop.world()
+	mgr.SetBlock(pk.Position{X: 8, Y: 63, Z: 8}, stoneState(), dimMinY)       // sturdy floor under C
+	mgr.SetBlock(c, block.ToStateID[block.Comparator{Facing: block.South, Mode: block.ComparatorModeCompare, Powered: false}], dimMinY)
+	mgr.SetBlock(pk.Position{X: 8, Y: 64, Z: 9}, stoneState(), dimMinY)       // the conductor at C+South
+	comp := loop.redstoneBlockAt(c)
+
+	// Spawn the frame in cell (8,64,10) == C+2*South, facing South.
+	var frame *Entity
+	loop.withRegion(loop.regionColOf(8.5, 10.5), func() {
+		frame = loop.spawnItemFrame(8, 64, 10, 3, false)
+	})
+
+	// Empty frame: getAnalogOutput 0 -> the frame branch's max is 0 (a real value), so input becomes 0.
+	loop.withRegion(loop.regionColOf(8.5, 8.5), func() {
+		if got := loop.comparatorGetInputSignal(comp, c); got != 0 {
+			t.Fatalf("comparator input with an EMPTY frame behind the conductor = %d, want 0", got)
+		}
+	})
+
+	// Framed diamond at rotation 0 -> analog 1 -> comparator input 1, output 1 (compare, no side).
+	frame.setFrameItem(component.SlotData{Count: 1, ItemID: pk.VarInt(item.Diamond.ID)})
+	loop.withRegion(loop.regionColOf(8.5, 8.5), func() {
+		if got := loop.comparatorGetInputSignal(comp, c); got != 1 {
+			t.Fatalf("comparator input with a framed item (rotation 0) = %d, want 1", got)
+		}
+		if got := loop.comparatorCalculateOutputSignal(comp, c); got != 1 {
+			t.Fatalf("comparator output with a framed item (rotation 0) = %d, want 1", got)
+		}
+	})
+
+	// Rotate to 4 -> analog 5 -> comparator output 5.
+	frame.setFrameRotation(4)
+	loop.withRegion(loop.regionColOf(8.5, 8.5), func() {
+		if got := loop.comparatorCalculateOutputSignal(comp, c); got != 5 {
+			t.Fatalf("comparator output with a framed item (rotation 4) = %d, want 5 (rotation%%8 + 1)", got)
+		}
+	})
 }

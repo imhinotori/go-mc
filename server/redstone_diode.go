@@ -250,9 +250,68 @@ func (t *TickLoop) comparatorGetInputSignal(state block.StateID, pos pk.Position
 		// targetState.hasAnalogOutputSignal(): true for a container block-entity (chest/furnace/dispenser/
 		// brewing/hopper — AnalogOutputBlock). getAnalogOutputSignal == getRedstoneSignalFromContainer(container).
 		resultSignal = sig
+	} else if resultSignal < 15 && block.IsRedstoneConductor(t.redstoneBlockAt(targetPos)) {
+		// ComparatorBlock.getInputSignal else-if: the block directly behind is a redstone CONDUCTOR (a full
+		// solid), so the comparator reads THROUGH it -- one cell further along FACING it looks for an item
+		// frame (facing the same way, i.e. hung on the FAR face of the conductor pointing away from the
+		// comparator) AND/OR another analog-output block, taking Math.max of the two (MIN_VALUE when a source
+		// is absent). Only if the max is a real value (!= MIN_VALUE) does it override resultSignal. CITE
+		// ComparatorBlock.getInputSignal (the isRedstoneConductor two-away frame/analog branch) + getItemFrame.
+		twoAway := relative(targetPos, facing)
+		const comparatorMinValue = -1 << 31 // Integer.MIN_VALUE sentinel (no source)
+		frameOut := comparatorMinValue
+		if f := t.comparatorItemFrameBehind(twoAway, facing); f != nil {
+			frameOut = f.frameGetAnalogOutput() // ItemFrame.getAnalogOutput
+		}
+		blockAnalog := comparatorMinValue
+		if sig, has := t.sculkSensorAnalogOutputSignal(twoAway); has {
+			blockAnalog = sig
+		} else if sig, has := t.crafterAnalogOutputSignal(twoAway); has {
+			blockAnalog = sig
+		} else if sig, has := t.containerAnalogOutputSignal(twoAway); has {
+			blockAnalog = sig
+		}
+		maxAnalog := frameOut
+		if blockAnalog > maxAnalog {
+			maxAnalog = blockAnalog
+		}
+		if maxAnalog != comparatorMinValue {
+			resultSignal = maxAnalog
+		}
 	}
-	// else: the item-frame-behind-a-conductor branch is DEFERRED (no item-frame entity — cited header).
 	return resultSignal
+}
+
+// comparatorItemFrameBehind ports ComparatorBlock.getItemFrame(level, direction, pos): the SINGLE ItemFrame
+// occupying the block cell at pos whose getDirection() == direction (the comparator's FACING). Vanilla scans
+// getEntitiesOfClass(ItemFrame, AABB(pos .. pos+1), f -> f.getDirection()==direction) and returns the frame
+// only when EXACTLY ONE matches (size()==1), else null. frameDirection stores the 3D-data value, which for
+// block.Direction is the same ordinal (Down=0,Up=1,North=2,South=3,West=4,East=5), so the facing compare is
+// a direct int match. CITE ComparatorBlock.getItemFrame + its lambda (getDirection()==direction).
+func (t *TickLoop) comparatorItemFrameBehind(pos pk.Position, facing block.Direction) *Entity {
+	cx := float64(pos.X) + 0.5
+	cz := float64(pos.Z) + 0.5
+	var found *Entity
+	count := 0
+	for _, e := range t.entitiesNearAcrossRegions(cx, cz, 1) {
+		if e == nil || !e.isFrame {
+			continue
+		}
+		// AABB(pos, pos+1): the frame's world position must lie within the [pos, pos+1) block cell. The frame
+		// center is shifted 0.46875 toward its wall, so it stays inside its own cell -- floor(pos)==pos matches.
+		if floorInt(e.x) != pos.X || floorInt(e.y) != pos.Y || floorInt(e.z) != pos.Z {
+			continue
+		}
+		if e.frameDirection != int32(facing) {
+			continue // the getDirection()==direction predicate
+		}
+		found = e
+		count++
+	}
+	if count == 1 {
+		return found // size()==1 -> the frame; otherwise (0 or >1) null
+	}
+	return nil
 }
 
 // containerAnalogOutputSignal ports AnalogOutputBlock.getAnalogOutputSignal for a CONTAINER block:
@@ -656,6 +715,38 @@ func (t *TickLoop) diodeUpdateNeighborsInFront(state block.StateID, pos pk.Posit
 			continue // the excepted face (points from oppositePos back to the diode at pos)
 		}
 		q.push(relative(oppositePos, d))
+	}
+	t.drainRedstoneUpdates(q)
+}
+
+// updateNeighbourForOutputSignal ports Level.updateNeighbourForOutputSignal(pos, block): for each of the 4
+// HORIZONTAL neighbors of pos, if that neighbor is a COMPARATOR notify it (neighborChanged), else if it is a
+// redstone CONDUCTOR recurse ONE step into that conductor's own horizontal neighbors looking for a comparator
+// to notify (the read-through-a-solid-block case). This is what an ITEM FRAME calls when its held item /
+// rotation changes (setItem / setRotation both invoke updateNeighbourForOutputSignal(pos, AIR)) so a
+// comparator reading the frame re-evaluates its output. CITE Level.updateNeighbourForOutputSignal.
+func (t *TickLoop) updateNeighbourForOutputSignal(pos pk.Position) {
+	if t.world() == nil {
+		return
+	}
+	q := &redstoneUpdateQueue{}
+	for _, d := range redstoneHorizontal {
+		n := relative(pos, d)
+		s := t.redstoneBlockAt(n)
+		if block.IsComparator(s) {
+			q.push(n) // neighborChanged(comparator): its checkTickOnNeighbor recomputes the output
+			continue
+		}
+		if block.IsRedstoneConductor(s) {
+			// read-through: the block behind the conductor (or a frame on its far face) feeds a comparator on
+			// the OTHER side, so notify the conductor's horizontal neighbors that are comparators.
+			for _, d2 := range redstoneHorizontal {
+				nn := relative(n, d2)
+				if block.IsComparator(t.redstoneBlockAt(nn)) {
+					q.push(nn)
+				}
+			}
+		}
 	}
 	t.drainRedstoneUpdates(q)
 }
