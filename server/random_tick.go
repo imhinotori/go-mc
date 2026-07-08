@@ -198,8 +198,27 @@ func (t *TickLoop) dispatchRandomTick(r *region, state block.StateID, pos pk.Pos
 		t.leavesRandomTick(r, state, pos)
 	case block.IsSpreadingSnowy(state):
 		// SpreadingSnowyBlock.randomTick (grass/mycelium): die-to-dirt (no draw) OR spread (draws 12
-		// levelRandom ints — 3 per the 4 spread attempts). See growth_block.go.
+		// levelRandom ints -- 3 per the 4 spread attempts). See growth_block.go.
 		t.grassRandomTick(r, state, pos)
+	case block.IsCactus(state):
+		// CactusBlock.randomTick: grow/flower. DRAWS levelRandom (one nextDouble, only in the age==8
+		// canSurvive branch). See growth_extra.go. The driver never runs on the pig-oracle path.
+		t.cactusRandomTick(r, state, pos)
+	case block.IsBambooSapling(state):
+		// BambooSaplingBlock.randomTick: grow to a stalk. DRAWS levelRandom (one nextInt(3) always).
+		// See growth_extra.go.
+		t.bambooSaplingRandomTick(r, state, pos)
+	case block.IsBamboo(state):
+		// BambooStalkBlock.randomTick: grow the stalk. DRAWS levelRandom (one nextInt(3) always; one
+		// nextFloat iff the height >= 11). IsRandomlyTicking gates on STAGE==0. See growth_extra.go.
+		t.bambooStalkRandomTick(r, state, pos)
+	case block.IsIce(state):
+		// IceBlock.randomTick: melt to water when block-light > 11 - lightDampening. NO RNG draw. See
+		// growth_extra.go.
+		t.iceRandomTick(state, pos)
+	case block.IsSnowLayer(state):
+		// SnowLayerBlock.randomTick: melt to air when block-light > 11. NO RNG draw. See growth_extra.go.
+		t.snowLayerRandomTick(state, pos)
 	default:
 		// A state whose IsRandomlyTicking is true but whose randomTick handler is not yet ported: no-op
 		// (the family's IsRandomlyTicking should not be true until its handler is wired — kept as a

@@ -72,6 +72,27 @@ func IsRandomlyTicking(s StateID) bool {
 		// isRandomlyTicking()==true for every state (the die/spread logic runs each random tick).
 		// CITE: GrassBlock/MyceliumBlock properties (.randomTicks()); SpreadingSnowyBlock.randomTick.
 		return true
+	case Cactus:
+		// CactusBlock: Properties.randomTicks() -> isRandomlyTicking()==true for every AGE (the
+		// grow/flower logic runs each random tick). CITE: CactusBlock properties (.randomTicks()).
+		return true
+	case BambooSapling:
+		// BambooSaplingBlock: Properties.randomTicks() -> isRandomlyTicking()==true for every state
+		// (the growBamboo roll runs each random tick). CITE: BambooSaplingBlock (.randomTicks()).
+		return true
+	case Bamboo:
+		// BambooStalkBlock overrides isRandomlyTicking() to return STAGE == 0 -- only a still-growing
+		// stalk is random-ticked; a STAGE-1 stalk (done growing) draws no roll. CITE:
+		// BambooStalkBlock.isRandomlyTicking (state.getValue(STAGE) == 0).
+		return BambooStage(s) == 0
+	case Ice:
+		// IceBlock: Properties.randomTicks() -> isRandomlyTicking()==true (the melt check runs each
+		// random tick). CITE: IceBlock properties (.randomTicks()); IceBlock.randomTick.
+		return true
+	case Snow:
+		// SnowLayerBlock: Properties.randomTicks() -> isRandomlyTicking()==true (the block-light melt
+		// check runs each random tick). CITE: SnowLayerBlock properties (.randomTicks()).
+		return true
 	default:
 		return false
 	}
