@@ -228,6 +228,44 @@ func SameDoublePlant(a, b StateID) bool {
 	}
 }
 
+// DoublePlantWithHalf returns the SAME DoublePlantBlock state as s but with its HALF property set
+// to LOWER (upper==false) or UPPER (upper==true). It is the Go realization of
+// state.setValue(DoublePlantBlock.HALF, DoubleBlockHalf.LOWER/UPPER) -- the exact two states
+// DoublePlantBlock.placeAt writes (LOWER at pos, UPPER at pos.above). Each double-plant block
+// carries ONLY the Half property, so reconstructing the struct with the chosen half yields the
+// target state deterministically (matching SameDoublePlant/DoublePlantLowerHalf above). For a
+// non-double-plant s it returns (s, false) -- the caller must gate on IsDoublePlant first.
+// CITE: DoublePlantBlock.placeAt (setValue(HALF, LOWER) at pos, setValue(HALF, UPPER) at pos.above);
+// DoublePlantBlock HALF EnumProperty (DoubleBlockHalf.LOWER/.UPPER).
+func DoublePlantWithHalf(s StateID, upper bool) (StateID, bool) {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return s, false
+	}
+	half := DoubleBlockHalfLower
+	if upper {
+		half = DoubleBlockHalfUpper
+	}
+	var out Block
+	switch StateList[s].(type) {
+	case Sunflower:
+		out = Sunflower{Half: half}
+	case Lilac:
+		out = Lilac{Half: half}
+	case RoseBush:
+		out = RoseBush{Half: half}
+	case Peony:
+		out = Peony{Half: half}
+	case TallGrass:
+		out = TallGrass{Half: half}
+	case LargeFern:
+		out = LargeFern{Half: half}
+	default:
+		return s, false
+	}
+	id, ok := ToStateID[out]
+	return id, ok
+}
+
 // IsVegetationGround reports whether a state id is a block a vegetation feature (sapling/tree,
 // grass, flowers) may sit ON — the vanilla `#minecraft:substrate_overworld` tag (the ground
 // half of `SUPPORTS_VEGETATION`) plus farmland. substrate_overworld nests

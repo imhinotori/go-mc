@@ -157,6 +157,40 @@ func simpleBlockBody(
 		return false
 	}
 
+	// DoublePlantBlock special case (SimpleBlockFeature.place, bytecode offset 53-91,
+	// javap -c net.minecraft.world.level.levelgen.feature.SimpleBlockFeature, 26.2-inner.jar):
+	// if the to-place block is a DoublePlantBlock (sunflower/lilac/rose_bush/peony/tall_grass/
+	// large_fern), the feature places BOTH halves via DoublePlantBlock.placeAt -- but ONLY when
+	// the cell ABOVE the origin is empty; otherwise it places NOTHING and returns false. Placing
+	// only the drawn (single) state left the plant half-formed (a lone LOWER whose partner is
+	// missing), which renders broken and is deleted by DoublePlantBlock.updateShape the moment a
+	// neighbor update touches it. DoublePlantBlock.placeAt writes LOWER at pos and UPPER at
+	// pos.above, each via setBlock(pos, state, flags) with flags == 2 (iconst_2 at bytecode
+	// offset 83 -> BLOCK_UPDATE, no observer/neighbor shape update) -- the worldgen SetBlock
+	// used here is exactly that raw write, so the pair lands atomically and survives updateShape
+	// (each half's partner is present with the matching half).
+	if block.IsDoublePlant(st) {
+		above := placement.BlockPos{X: pos.X, Y: pos.Y + 1, Z: pos.Z}
+		if !block.IsAir(bctx.getState(above)) {
+			// level.isEmptyBlock(origin.above()) is false -> place nothing, return false
+			// (bytecode offset 90-91).
+			return false
+		}
+		// DoublePlantBlock.placeAt: LOWER at pos, UPPER at pos.above (both with the drawn
+		// block's other properties; these blocks carry only HALF, so the pair is fully
+		// determined by the two halves).
+		lower, okL := block.DoublePlantWithHalf(st, false)
+		upper, okU := block.DoublePlantWithHalf(st, true)
+		if !okL || !okU {
+			// Unreachable for a real DoublePlantBlock state (both halves are registered); never
+			// place a malformed single half if the state table were ever inconsistent.
+			return false
+		}
+		bctx.placeState(pos, lower)
+		bctx.placeState(above, upper)
+		return true
+	}
+
 	bctx.placeState(pos, st)
 	return true
 }

@@ -275,3 +275,74 @@ func TestPatchCrossChunkEdge(t *testing.T) {
 		t.Fatalf("no short_grass written into the +x neighbor chunk; cross-chunk spill failed")
 	}
 }
+
+// TestSimpleBlockDoublePlant covers the DoublePlantBlock special case of
+// SimpleBlockFeature.place (bytecode offset 53-91, 26.2-inner.jar): placing a sunflower
+// via simple_block writes BOTH halves -- LOWER at the origin, UPPER at origin.above --
+// using DoublePlantBlock.placeAt semantics, and each half's partner is present with the
+// matching half so neither is deleted by DoublePlantBlock.updateShape. It also asserts the
+// "above not empty -> place nothing, return false" branch. This is the sunflower-renders-
+// wrong bug: before the fix only the lone LOWER half was placed.
+func TestSimpleBlockDoublePlant(t *testing.T) {
+	// The provider yields the vanilla sunflower.json state (half=lower); the feature must
+	// re-derive both halves regardless.
+	cfgJSON := `{"to_place":{"type":"minecraft:simple_state_provider","state":{"Name":"minecraft:sunflower","Properties":{"half":"lower"}}}}`
+
+	t.Run("places both halves", func(t *testing.T) {
+		view := build3x3([2]int{0, 0}, -64, 384)
+		bctx := &bodyContext{view: view, reg: feature.NewEmbeddedRegistry()}
+		const floorY = 64
+		fillFloor(view, [2]int{0, 0}, floorY)
+		origin := placement.BlockPos{X: 5, Y: floorY + 1, Z: 5}
+
+		cf := vegCF(t, "simple_block", cfgJSON)
+		rng := levelgen.NewWorldgenRandom(0x50F1)
+		if !simpleBlockBody(bctx, cf, nil, rng, origin) {
+			t.Fatalf("simple_block returned false for a sunflower over supports_vegetation ground")
+		}
+
+		lower := block.ToStateID[block.Sunflower{Half: block.DoubleBlockHalfLower}]
+		upper := block.ToStateID[block.Sunflower{Half: block.DoubleBlockHalfUpper}]
+		gotLower := view.GetBlock(origin.X, origin.Y, origin.Z)
+		gotUpper := view.GetBlock(origin.X, origin.Y+1, origin.Z)
+		if gotLower != lower {
+			t.Fatalf("sunflower LOWER half not at origin: got %d want %d", gotLower, lower)
+		}
+		if gotUpper != upper {
+			t.Fatalf("sunflower UPPER half not at origin.above: got %d want %d", gotUpper, upper)
+		}
+		// Neither half is deleted by updateShape: LOWER's partner above is the same block in
+		// UPPER, and UPPER's partner below is the same block in LOWER (the vanilla survive
+		// condition -- DoublePlantBlock.updateShape / canSurvive).
+		if !block.SameDoublePlant(gotLower, gotUpper) {
+			t.Fatalf("halves are not the same DoublePlantBlock kind: %d / %d", gotLower, gotUpper)
+		}
+		if !block.DoublePlantLowerHalf(gotLower) {
+			t.Fatalf("origin half is not LOWER")
+		}
+		if block.DoublePlantLowerHalf(gotUpper) {
+			t.Fatalf("origin.above half is not UPPER")
+		}
+	})
+
+	t.Run("above not empty places nothing", func(t *testing.T) {
+		view := build3x3([2]int{0, 0}, -64, 384)
+		bctx := &bodyContext{view: view, reg: feature.NewEmbeddedRegistry()}
+		const floorY = 64
+		fillFloor(view, [2]int{0, 0}, floorY)
+		origin := placement.BlockPos{X: 7, Y: floorY + 1, Z: 7}
+		// Occupy the cell ABOVE the origin so isEmptyBlock(origin.above()) is false.
+		stone := block.ToStateID[block.Stone{}]
+		view.SetBlock(origin.X, origin.Y+1, origin.Z, stone)
+
+		cf := vegCF(t, "simple_block", cfgJSON)
+		rng := levelgen.NewWorldgenRandom(0x50F2)
+		if simpleBlockBody(bctx, cf, nil, rng, origin) {
+			t.Fatalf("simple_block should return false when the cell above the double plant is occupied")
+		}
+		// Origin must be untouched (no lone LOWER half left behind).
+		if got := view.GetBlock(origin.X, origin.Y, origin.Z); !block.IsAir(got) {
+			t.Fatalf("origin should stay air when the double plant cannot place: got %d", got)
+		}
+	})
+}
