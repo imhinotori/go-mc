@@ -713,6 +713,20 @@ func (t *TickLoop) tickAI() {
 		if e.typ == entity.Blaze.ID {
 			t.blazeAiStep(e)
 		}
+		// MAGMA CUBE (Task): the nether cube-mob's per-size slime hop (CubeMobMoveControl.tick) + the
+		// targetSelector acquisition + the CubeMobAttackGoal aggressive hop + the touch damage. Per-type-gated
+		// like the blaze, AFTER serverAiStep so the three cube goals have set the move-control state. ADDITIVE
+		// + magma-cube-gated (zero cost / zero RNG for every non-magma-cube -- the pig oracle stream is untouched).
+		if e.typ == entity.MagmaCube.ID {
+			t.magmaCubeAiStep(e)
+		}
+		// STRIDER (Task): the nether lava-walker's cold-state suffocation toggle (Strider.tick) + the lava-
+		// surface float (floatStrider). Per-type-gated like the blaze, AFTER serverAiStep. Its in-lava vertical
+		// motion is owned here (tickPhysics bypasses the generic lava sink via striderIsLavaWalker). ADDITIVE +
+		// strider-gated (zero cost / zero RNG for every non-strider -- the pig oracle stream is untouched).
+		if e.typ == entity.Strider.ID {
+			t.striderAiStep(e)
+		}
 		// The Fox character-layer per-tick extras (Fox.tick + Fox.aiStep server branch): the crouch/
 		// interested animation lerp, ++ticksSinceEaten, the wake/sit-in-water/target-lost state clears,
 		// and the sleep immobility (jump+horizontal-velocity zero). Per-type-gated like the creeper/chicken,
@@ -925,6 +939,18 @@ func (t *TickLoop) tickPhysics() {
 			t.landMobFallDamage(e, mobWet)
 			continue
 		} else if mobLavaForJump {
+			// STRIDER (Task): a Strider WALKS ON lava (canStandOnFluid(LAVA)=true), so it takes its OWN
+			// lava-surface float (striderFloat, run in striderAiStep) INSTEAD of the generic travelInLava
+			// sink. Its velocity/onGround are already set for the surface ride; here we just integrate the
+			// move with that velocity (NO sink physics) and reset fall distance (Strider.checkFallDamage:
+			// isInLava -> resetFallDistance; no fall damage over lava). Cite Strider.canStandOnFluid +
+			// Strider.floatStrider + Strider.checkFallDamage. ADDITIVE + strider-gated (a non-strider mob
+			// never enters this branch, so the pig oracle + every other in-lava mob stay byte-identical).
+			if striderIsLavaWalker(e) {
+				t.moveEntity(e, e.vx, e.vy, e.vz)
+				e.fallDistance = 0 // Strider.checkFallDamage: isInLava -> resetFallDistance()
+				continue
+			}
 			// B-A5 (travelInLava): a mob whose AABB is in lava (and NOT in water -- vanilla
 			// travelInFluid dispatches to travelInWater first, else travelInLava, so water wins)
 			// runs the VANILLA lava physics INSTEAD of the dry travelInAir path -- the thick-lava

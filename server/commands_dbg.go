@@ -191,6 +191,22 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned blaze eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+1, p.z))
 		}
+	case "magma_cube", "magmacube":
+		// MAGMA CUBE (Task): spawn a hostile MagmaCube (the nether slime that hops, splits on death into
+		// 2..4 smaller cubes, and touches for size+2 damage; per-size MAX_HEALTH size*size, MOVEMENT_SPEED
+		// 0.2+0.1*size, ARMOR size*3). Fire+lava immune. Spawned at size 2.
+		e := t.spawnMagmaCube(p.x, p.y+1, p.z, magmaCubeSpawnSize)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned magma_cube eid=%d size=%d at (%.1f,%.1f,%.1f)", e.id, e.cubeSize, p.x, p.y+1, p.z))
+		}
+	case "strider":
+		// STRIDER (Task): spawn a Strider (the nether lava-walker). It rides the lava surface without sinking
+		// (canStandOnFluid(LAVA)) and, off a warm block / out of lava, enters the cold suffocating state that
+		// slows it (MOVEMENT_SPEED -0.34 ADD_MULTIPLIED_BASE). Fire+lava immune.
+		e := t.spawnStrider(p.x, p.y+1, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned strider eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+1, p.z))
+		}
 	case "fangs":
 		// VEX + FANGS (Task): spawn an EvokerFangs directly (the code-spawned projectile the evoker's FANGS
 		// spell places). It warms up, bites for 6.0 magic at warmupDelayTicks==-8, then despawns (~22 ticks).

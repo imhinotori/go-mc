@@ -366,6 +366,31 @@ func blazeSupplier() *Supplier {
 		Build()
 }
 
+// magmaCubeSupplier is the port of MagmaCube.createAttributes(): Monster.createMonsterAttributes()
+// + MOVEMENT_SPEED 0.20000000298023224 (jar: net.minecraft.world.entity.monster.cubemob.MagmaCube
+// .createAttributes == createMonsterAttributes().add(MOVEMENT_SPEED, 0.20000000298023224d)). MAX_HEALTH
+// stays the createLivingAttributes default 20.0 in the base supplier; ATTACK_DAMAGE the Monster default
+// 2.0 -- BOTH are OVERRIDDEN at runtime by setSize (AbstractCubeMob.setSize: MAX_HEALTH = size*size,
+// MOVEMENT_SPEED base = 0.2 + 0.1*size; MagmaCube.setSize: ATTACK_DAMAGE = size, ARMOR = size*3). Cite
+// MagmaCube.createAttributes.
+func magmaCubeSupplier() *Supplier {
+	return createMonsterAttributes().
+		AddValue(MovementSpeed, 0.20000000298023224).
+		Build()
+}
+
+// striderSupplier is the port of Strider.createAttributes(): Animal.createAnimalAttributes() +
+// MOVEMENT_SPEED 0.17499999701976776 (jar: net.minecraft.world.entity.monster.Strider.createAttributes
+// == createAnimalAttributes().add(MOVEMENT_SPEED, 0.17499999701976776d)). MAX_HEALTH is the
+// createLivingAttributes default 20.0 (Strider has NO MAX_HEALTH override); FOLLOW_RANGE the
+// createMobAttributes default 16.0. The suffocating cold-state applies a transient MOVEMENT_SPEED
+// modifier at runtime (SUFFOCATING_MODIFIER -0.34 ADD_MULTIPLIED_BASE). Cite Strider.createAttributes.
+func striderSupplier() *Supplier {
+	return createAnimalAttributes().
+		AddValue(MovementSpeed, 0.17499999701976776).
+		Build()
+}
+
 // endermanSupplier is EnderMan's attribute supplier. EnderMan.createAttributes = Monster
 // .createMonsterAttributes().add(MAX_HEALTH 40).add(MOVEMENT_SPEED 0.3).add(ATTACK_DAMAGE 7)
 // .add(FOLLOW_RANGE 64).add(STEP_HEIGHT 1.0). Cite EnderMan.createAttributes
@@ -555,6 +580,16 @@ var suppliers = map[string]*Supplier{
 	// .createMonsterAttributes + ATTACK_DAMAGE 6.0 + MOVEMENT_SPEED 0.23 + FOLLOW_RANGE 48.0 (MAX_HEALTH
 	// is the createLivingAttributes default 20.0). Keyed by its registry name so NewMapForEntity resolves it.
 	"blaze": blazeSupplier(),
+	// MAGMA CUBE (Task): the nether cube-mob (MagmaCube.createAttributes: Monster.createMonsterAttributes
+	// + MOVEMENT_SPEED 0.20000000298023224). setSize OVERRIDES MAX_HEALTH (size*size), MOVEMENT_SPEED
+	// (0.2+0.1*size), ATTACK_DAMAGE (size), ARMOR (size*3) at runtime. Keyed by its registry name so
+	// NewMapForEntity resolves it. Cite MagmaCube.createAttributes.
+	"magma_cube": magmaCubeSupplier(),
+	// STRIDER (Task): the nether lava-walking Animal (Strider.createAttributes: Animal.createAnimalAttributes
+	// + MOVEMENT_SPEED 0.17499999701976776; MAX_HEALTH the createLivingAttributes default 20.0). The
+	// suffocating cold-state applies a transient -0.34 ADD_MULTIPLIED_BASE MOVEMENT_SPEED modifier. Cite
+	// Strider.createAttributes.
+	"strider": striderSupplier(),
 	// MOB-PREY (Task #9): the 3 prey mobs. Endermite (Monster), Turtle + Ocelot (Animal), each a 1:1 jar
 	// copy of its createAttributes (verified bytecode this session).
 	"endermite": endermiteSupplier(),

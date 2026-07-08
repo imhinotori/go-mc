@@ -381,6 +381,26 @@ type Entity struct {
 	blazeAttackTime int32
 	blazeLastSeen   int32
 	blazeCharged    bool
+	// --- MAGMA CUBE (net.minecraft.world.entity.monster.cubemob.MagmaCube) --------------------------
+	//
+	// Tick-owned plain values, set/read ONLY for a MagmaCube (magmaCubeAiStep gates on typ ==
+	// entity.MagmaCube.ID). isMagmaCube marks the entity. MagmaCube is an AbstractCubeMob, so it REUSES
+	// the cubeSize/cubeMoveYRot/cubeJumpDelay/cubeAggressive/cubeWantMove/cubeWasOnGround move-control
+	// fields above (an entity is either a SulfurCube OR a MagmaCube, never both, so the shared cube fields
+	// never collide). magmaCubeAttackTime mirrors AbstractCubeMob$CubeMobAttackGoal.growTiredTimer only in
+	// so far as the attack goal drives the move control toward the target; the per-size attributes (MAX_HEALTH
+	// size*size, MOVEMENT_SPEED 0.2+0.1*size, ATTACK_DAMAGE size, ARMOR size*3) live in the AttributeMap.
+	// Zero for every non-magma-cube entity. Cite MagmaCube + AbstractCubeMob.
+	isMagmaCube bool
+	// --- STRIDER (net.minecraft.world.entity.monster.Strider) --------------------------------------
+	//
+	// Tick-owned plain values, set/read ONLY for a Strider (striderAiStep gates on typ == entity.Strider.ID).
+	// isStrider marks the entity. striderSuffocating mirrors DATA_SUFFOCATING (the cold-shiver state: true
+	// when OFF a warm block / out of lava, which applies the SUFFOCATING_MODIFIER -0.34 ADD_MULTIPLIED_BASE
+	// transient MOVEMENT_SPEED modifier via setStriderSuffocating). Zero for every non-strider entity. Cite
+	// Strider.setSuffocating / isSuffocating / DATA_SUFFOCATING.
+	isStrider          bool
+	striderSuffocating bool
 	// brain is the ported net.minecraft.world.entity.ai.Brain (brain.go). It is NON-NIL only for a mob
 	// that runs the behavior subsystem — currently the BABY HappyGhast (HappyGhast.customServerAiStep
 	// ticks the brain ONLY when isBaby()); every other entity leaves it nil (a nil brain is never ticked,

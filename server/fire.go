@@ -55,8 +55,13 @@ func (t *TickLoop) tickEntityFire(e *Entity) {
 		t.broadcastEntityFireFlag(e)
 		return
 	}
-	// fireImmune() is a v1 constant-false (no fire-immune mob wired: zombie/skeleton/spider/passives all
-	// burn). A future fire-immune type gates here.
+	// fireImmune(): a fire-immune mob (MagmaCube/Strider -- nether types) never takes on-fire damage
+	// (Entity.baseTick: `if (fireImmune) clearFire`). Clear the burn + the client flag and return.
+	if entityFireImmune(e) {
+		e.remainingFireTicks = 0
+		t.broadcastEntityFireFlag(e)
+		return
+	}
 	if e.remainingFireTicks%20 == 0 {
 		t.applyDamageEntity(e, damageSourceOf(damageTypeOnFire), 1.0)
 	}
@@ -84,7 +89,14 @@ func (t *TickLoop) tickEntityLava(e *Entity) {
 	if !t.mobInLava(e) {
 		return
 	}
-	// fireImmune() is the v1 constant-false (no fire-immune mob wired), so lavaIgnite/lavaHurt's
+	// fireImmune(): Entity.lavaIgnite/lavaHurt both `if(fireImmune)return` -- a fire-immune mob
+	// (MagmaCube/Strider) is NOT ignited and takes NO lava damage. The fallDistance halving below still
+	// runs (Entity.baseTick: isInLava -> fallDistance *= 0.5 is unconditional, independent of fireImmune).
+	if entityFireImmune(e) {
+		e.fallDistance *= 0.5
+		return
+	}
+	// fireImmune() is the v1 constant-false for every OTHER mob (none wired), so lavaIgnite/lavaHurt's
 	// `if(fireImmune)return` guards are no-ops. igniteForSeconds(15) FIRST (LAVA_IGNITE applied
 	// immediately), then the 4.0 lava hurt (runAfter callback). FIRE_RESISTANCE (an effect, not
 	// fireImmune) still lets the mob ignite but negates the is_fire lava damage via applyDamageEntity.
@@ -142,6 +154,15 @@ func (t *TickLoop) sunBurnTick(e *Entity) {
 //	[VERIFIED javap Zombie.isSunSensitive == true (base zombie); AbstractSkeleton.aiStep sun-burn.]
 func isSunSensitive(e *Entity) bool {
 	return e.typ == entity.Zombie.ID || e.typ == entity.Skeleton.ID
+}
+
+// entityFireImmune ports Entity.fireImmune() (EntityType.fireImmune()) for the wired fire-immune types.
+// A MagmaCube (MagmaCube.isOnFire() const-false + the magma_cube EntityType is registered fireImmune) and
+// a Strider (Strider.isOnFire() const-false + the strider EntityType is registered fireImmune) take NO
+// fire OR lava damage and are never ignited. Every OTHER v1 mob is const-false (zombie/skeleton/passives
+// all burn). Gated in tickEntityFire + tickEntityLava. Cite EntityType.fireImmune + {MagmaCube,Strider}.isOnFire.
+func entityFireImmune(e *Entity) bool {
+	return e.typ == entity.MagmaCube.ID || e.typ == entity.Strider.ID
 }
 
 // isDay reports whether it is daytime (the sun-burn window). The inverse of the night window the

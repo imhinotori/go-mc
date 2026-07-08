@@ -159,6 +159,12 @@ func (t *TickLoop) tickDeath(e *Entity) {
 		if e.typ == entity.SulfurCube.ID {
 			t.sulfurCubeSplitOnRemove(e)
 		}
+		// MAGMA CUBE (Task): AbstractCubeMob.remove() splits a size>1 magma cube into 2..4 (2+nextInt(3))
+		// smaller cubes JUST BEFORE the store removal, exactly like the SulfurCube split. Per-type-gated on
+		// typ == entity.MagmaCube.ID; a no-op for a size-1 cube + every other mob. Cite AbstractCubeMob.remove.
+		if e.typ == entity.MagmaCube.ID {
+			t.magmaCubeSplitOnRemove(e)
+		}
 		// Entity.setRemoved ejects passengers before the store removal: `getPassengers().forEach(Entity::
 		// stopRiding)` — so a player riding this mob (a happy ghast) is dismounted (its SetPassengers list
 		// shrinks + it stops following a despawned vehicle) instead of being orphaned. A mob with no
