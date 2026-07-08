@@ -453,6 +453,18 @@ type Entity struct {
 	piglinImmuneToZombification bool
 	piglinInNether              bool // the nether-dimension guard for isConverting (default false == off-nether == converting)
 	piglinAttackTime            int
+	// --- ZOMBIFIED PIGLIN (net.minecraft.world.entity.monster.zombie.ZombifiedPiglin) ----------------
+	//
+	// Tick-owned plain values, set/read ONLY for a ZombifiedPiglin (zombifiedPiglinAiStep gates on typ ==
+	// entity.ZombifiedPiglin.ID). isZombifiedPiglin marks the entity. The persistent-anger state reuses the
+	// shared NeutralMob fields (angerEndTime / angerTarget, below) the wolf/iron_golem already carry -- a
+	// zombified piglin is a NeutralMob too, with the IDENTICAL PERSISTENT_ANGER_TIME UniformInt(400,780).
+	// zombifiedPiglinAlertCooldown mirrors ZombifiedPiglin.ticksUntilNextAlert (the maybeAlertOthers
+	// throttle, reset to ALERT_INTERVAL.sample = 80 + nextInt(41) on a set target / after an alert pass);
+	// the anger-pack spread (alertOthers) fires when it hits 0. Zero for every non-zombified-piglin entity.
+	// Cite ZombifiedPiglin (ticksUntilNextAlert / ALERT_INTERVAL) + NeutralMob (PERSISTENT_ANGER_TIME).
+	isZombifiedPiglin            bool
+	zombifiedPiglinAlertCooldown int
 	// brain is the ported net.minecraft.world.entity.ai.Brain (brain.go). It is NON-NIL only for a mob
 	// that runs the behavior subsystem — currently the BABY HappyGhast (HappyGhast.customServerAiStep
 	// ticks the brain ONLY when isBaby()); every other entity leaves it nil (a nil brain is never ticked,

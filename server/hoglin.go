@@ -266,13 +266,22 @@ func (t *TickLoop) hoglinConversionTick(e *Entity) {
 
 // hoglinFinishConversion ports Hoglin.finishConversion: convertTo(EntityType.ZOGLIN, ...). v1 mutates the
 // entity type in place (the store keeps the same id/pos/health), the minimal conversion the bounded port
-// needs -- a Zoglin is the overworld hoglin. The NAUSEA-200 client cue on the new zoglin is deferred.
-// Cite Hoglin.finishConversion + Zoglin.
+// needs -- a Zoglin is the overworld hoglin. The resulting Zoglin is a REAL, functioning mob: the type flag
+// flips to zoglin (so zoglinAiStep drives its INDISCRIMINATE hostility + knock-up toss instead of the
+// hoglin melee), and setZoglinAgeAttack refreshes ATTACK_DAMAGE to the zoglin adult/baby value (the hoglin
+// e.ai + attributes are carried in place). The NAUSEA-200 client cue on the new zoglin is deferred. Cite
+// Hoglin.finishConversion + Zoglin.
 func (t *TickLoop) hoglinFinishConversion(e *Entity) {
 	e.typ = entity.Zoglin.ID
 	e.isHoglin = false
 	e.isZoglin = true
 	e.hoglinTimeInOverworld = 0
+	e.hoglinAttackAnimTicks = 0 // reset the shared attack-anim counter for the zoglin
+	setZoglinAgeAttack(e)       // Zoglin adult ATTACK_DAMAGE 6.0 / baby 0.5 (== hoglin values, kept explicit)
+	if e.ai == nil {
+		e.ai = &mobAI{}
+		reseedMobAI(e.ai, e.id)
+	}
 }
 
 // hoglinAiStep is the Hoglin per-tick drive: decrement the attack-anim ticks (Hoglin.aiStep), acquire the

@@ -831,6 +831,22 @@ func (t *TickLoop) tickAI() {
 		if e.typ == entity.Piglin.ID {
 			t.piglinBrainTick(e)
 		}
+		// ZOMBIFIED PIGLIN (GAP): the NEUTRAL nether undead -- neutral-until-provoked, then retaliate +
+		// spread anger to nearby zombified piglins (the anger pack), fire/lava immune, no sun-burn. It is
+		// the conversion target of a piglin zombifying off-nether. Per-type-gated like the piglin, AFTER
+		// serverAiStep. ADDITIVE + zombified-piglin-gated (zero cost / zero RNG for every other entity --
+		// the pig oracle stream is untouched; RNG only on the mob OWN stream on a set-target / alert).
+		if e.typ == entity.ZombifiedPiglin.ID {
+			t.zombifiedPiglinAiStep(e)
+		}
+		// ZOGLIN (GAP): the TERMINAL undead a hoglin becomes off-nether -- INDISCRIMINATELY hostile (attacks
+		// players AND all mobs except zoglins/creepers) + the knock-up toss (shared HoglinBase throw). No
+		// conversion, no anger. Per-type-gated like the hoglin, AFTER serverAiStep. ADDITIVE + zoglin-gated
+		// (zero cost / zero RNG for every non-zoglin -- the pig oracle stream is untouched; RNG only on the
+		// zoglin OWN stream, drawn only on a landed hit).
+		if e.typ == entity.Zoglin.ID {
+			t.zoglinAiStep(e)
+		}
 		// SKILLS-01 (mob_skills.go): the declared-skill TIMER tick — the MythicMobs ~onTimer analogue,
 		// interpreted as pure data by the Go hot path (ZERO starlark.Calls, the skills-are-data
 		// invariant). Gated PER FIELD (e.skills != nil), not per type: only a mob whose declaration

@@ -188,14 +188,27 @@ func (t *TickLoop) piglinZombificationTick(e *Entity) {
 
 // piglinFinishConversion ports Piglin.finishConversion -> AbstractPiglin.finishConversion: convertTo(
 // ZOMBIFIED_PIGLIN, ...). The type-swap spawns a fresh entity at the piglin position with default max
-// health, then discards the piglin (== convertTo create+copyPosition+discard). The afterConversion +
-// zombified-piglin AI are DEFERRED (the SAME deferral lightning_conversion.go pig swap documents). Cite
-// AbstractPiglin.finishConversion + Mob.convertTo + ConversionType.SINGLE.
+// health, then discards the piglin (== convertTo create+copyPosition+discard). The fresh entity is then
+// wired as a REAL, functioning ZombifiedPiglin: its type flag is set and a minimal e.ai is attached so
+// zombifiedPiglinAiStep drives it (neutral-until-provoked anger + pack spread). It starts NEUTRAL
+// (angerEndTime 0). The afterConversion inventory-drop + client sound remain cite-deferred cues. Cite
+// AbstractPiglin.finishConversion + Mob.convertTo + ConversionType.SINGLE + ZombifiedPiglin.
 func (t *TickLoop) piglinFinishConversion(e *Entity) *Entity {
 	if e.dead {
 		return nil // convertTo isRemoved() guard: a removed mob does not convert
 	}
-	return t.thunderHitTypeSwap(e, entity.ZombifiedPiglin)
+	zp := t.thunderHitTypeSwap(e, entity.ZombifiedPiglin)
+	if zp == nil {
+		return nil
+	}
+	// Wire the swapped entity as a real zombified piglin (thunderHitTypeSwap leaves it bare): the type flag
+	// + a minimal e.ai so the per-type aiStep runs. It starts NEUTRAL (angerEndTime 0, no target).
+	zp.isZombifiedPiglin = true
+	if zp.ai == nil {
+		zp.ai = &mobAI{}
+		reseedMobAI(zp.ai, zp.id)
+	}
+	return zp
 }
 
 // piglinTarget reads the piglin current attack-target player (Mob.getTarget() via e.ai.attackTargetID), or

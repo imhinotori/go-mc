@@ -445,6 +445,38 @@ func piglinSupplier() *Supplier {
 		Build()
 }
 
+// zombifiedPiglinSupplier is the port of ZombifiedPiglin.createAttributes(): Zombie.createAttributes()
+// (createMonsterAttributes + FOLLOW_RANGE 35.0 + MOVEMENT_SPEED 0.23000000417232513 + ATTACK_DAMAGE 3.0 +
+// ARMOR 2.0 + SPAWN_REINFORCEMENTS_CHANCE default 0.0) then .add(SPAWN_REINFORCEMENTS_CHANCE 0.0)
+// .add(MOVEMENT_SPEED 0.23000000417232513) .add(ATTACK_DAMAGE 5.0). MAX_HEALTH is the createLivingAttributes
+// default 20.0. So it folds MAX_HEALTH 20, FOLLOW_RANGE 35, MOVEMENT_SPEED 0.23, ATTACK_DAMAGE 5, ARMOR 2.
+// SPAWN_REINFORCEMENTS_CHANCE (0.0) is the vanilla registration default and is not a wired attribute in v1
+// (no reinforcement-spawn subsystem exists); it is omitted here exactly as zombieSupplier omits it, its
+// value being the default 0.0 -- structured to become a real .AddValue(SpawnReinforcementsChance, 0.0) when
+// the attribute is registered. Cite ZombifiedPiglin.createAttributes.
+func zombifiedPiglinSupplier() *Supplier {
+	return createMonsterAttributes().
+		AddValue(FollowRange, 35.0).
+		AddValue(MovementSpeed, 0.23000000417232513).
+		AddValue(AttackDamage, 5.0).
+		AddValue(Armor, 2.0).
+		Build()
+}
+
+// zoglinSupplier is the port of Zoglin.createAttributes(): Monster.createMonsterAttributes() + MAX_HEALTH
+// 40.0 + MOVEMENT_SPEED 0.30000001192092896 + KNOCKBACK_RESISTANCE 0.6000000238418579 + ATTACK_KNOCKBACK 1.0
+// + ATTACK_DAMAGE 6.0. ATTACK_DAMAGE 6.0 is the ADULT value; a baby is 0.5 at runtime (setBaby ->
+// setZoglinAgeAttack). Cite Zoglin.createAttributes.
+func zoglinSupplier() *Supplier {
+	return createMonsterAttributes().
+		AddValue(MaxHealth, 40.0).
+		AddValue(MovementSpeed, 0.30000001192092896).
+		AddValue(KnockbackResistance, 0.6000000238418579).
+		AddValue(AttackKnockback, 1.0).
+		AddValue(AttackDamage, 6.0).
+		Build()
+}
+
 // endermanSupplier is EnderMan's attribute supplier. EnderMan.createAttributes = Monster
 // .createMonsterAttributes().add(MAX_HEALTH 40).add(MOVEMENT_SPEED 0.3).add(ATTACK_DAMAGE 7)
 // .add(FOLLOW_RANGE 64).add(STEP_HEIGHT 1.0). Cite EnderMan.createAttributes
@@ -656,6 +688,15 @@ var suppliers = map[string]*Supplier{
 	// + MAX_HEALTH 16.0 + MOVEMENT_SPEED 0.3499999940395355 + ATTACK_DAMAGE 5.0. Keyed by its registry name
 	// so NewMapForEntity resolves it. Cite Piglin.createAttributes.
 	"piglin": piglinSupplier(),
+	// ZOMBIFIED PIGLIN (GAP): the neutral nether undead (a NeutralMob) + piglin conversion target.
+	// ZombifiedPiglin.createAttributes = Zombie base + SPAWN_REINFORCEMENTS_CHANCE 0 + MOVEMENT_SPEED 0.23 +
+	// ATTACK_DAMAGE 5 (folds MAX_HEALTH 20, FOLLOW_RANGE 35, ARMOR 2). Keyed by registry name. Cite
+	// ZombifiedPiglin.createAttributes.
+	"zombified_piglin": zombifiedPiglinSupplier(),
+	// ZOGLIN (GAP): the terminal undead a hoglin becomes off-nether. Zoglin.createAttributes: MAX_HEALTH 40
+	// + MOVEMENT_SPEED 0.3 + KNOCKBACK_RESISTANCE 0.6 + ATTACK_KNOCKBACK 1.0 + ATTACK_DAMAGE 6.0 (adult;
+	// baby 0.5 at runtime). Keyed by registry name. Cite Zoglin.createAttributes.
+	"zoglin": zoglinSupplier(),
 	// MOB-PREY (Task #9): the 3 prey mobs. Endermite (Monster), Turtle + Ocelot (Animal), each a 1:1 jar
 	// copy of its createAttributes (verified bytecode this session).
 	"endermite": endermiteSupplier(),

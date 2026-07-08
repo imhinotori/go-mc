@@ -165,7 +165,13 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 		// entity.Wolf.ID || entity.IronGolem.ID (only these two NeutralMobs get the player-anger timer) AND a
 		// PLAYER attacker. The single nextInt(381) draw is on the mob's OWN mobRandom stream (the pig — never a
 		// wolf/golem — draws ZERO). Cite IronGolem.startPersistentAngerTimer + NeutralMob.isAngry.
-		if (e.typ == entity.Wolf.ID || e.typ == entity.IronGolem.ID) && t.playerByEntityID(src.attacker) != nil {
+		// ZOMBIFIED PIGLIN (GAP): a NeutralMob too. ZombifiedPiglin.PERSISTENT_ANGER_TIME =
+		// TimeUtil.rangeOfSeconds(20,39) == UniformInt(400,780) -- IDENTICAL to the wolf/golem, so the SAME
+		// 400 + nextInt(381) sample. A zombified piglin hit by a PLAYER becomes angry (neutral-until-
+		// provoked), and its anger-gated target goal + alertOthers pack-spread then retaliate. Added to the
+		// wolf/golem gate; the single nextInt(381) draw is on the mob OWN stream (the pig draws ZERO). Cite
+		// ZombifiedPiglin(NeutralMob).startPersistentAngerTimer.
+		if (e.typ == entity.Wolf.ID || e.typ == entity.IronGolem.ID || e.typ == entity.ZombifiedPiglin.ID) && t.playerByEntityID(src.attacker) != nil {
 			// DRAW (the anger timer, wolf/golem-gated, player-attacker-gated): UniformInt(400,780).sample =
 			// 400 + nextInt(381). ONE draw per fresh hit on a wolf/golem by a player.
 			e.angerEndTime = t.gametime + int64(400+mobRandom(e).nextInt(381))

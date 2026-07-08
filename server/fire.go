@@ -165,7 +165,13 @@ func entityFireImmune(e *Entity) bool {
 	// GAP (nether roster): the WitherSkeleton EntityType is registered fireImmune (a nether skeleton), so
 	// it takes NO fire/lava damage and is never ignited -- like the MagmaCube/Strider. Cite
 	// EntityType.fireImmune(wither_skeleton).
-	return e.typ == entity.MagmaCube.ID || e.typ == entity.Strider.ID || e.typ == entity.WitherSkeleton.ID
+	// ZOMBIFIED PIGLIN + ZOGLIN (GAP): both nether types are registered fireImmune in vanilla
+	// (EntityType.Builder.fireImmune()), so they take NO fire/lava damage and are never ignited. This is
+	// ALSO why a zombified piglin -- which inherits Zombie.isSunSensitive() == true -- does NOT burn in
+	// daylight: the Zombie sun-burn ignite is a no-op under fire immunity. Cite EntityType.fireImmune
+	// (zombified_piglin, zoglin).
+	return e.typ == entity.MagmaCube.ID || e.typ == entity.Strider.ID || e.typ == entity.WitherSkeleton.ID ||
+		e.typ == entity.ZombifiedPiglin.ID || e.typ == entity.Zoglin.ID
 }
 
 // isDay reports whether it is daytime (the sun-burn window). The inverse of the night window the

@@ -233,6 +233,22 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned piglin eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+1, p.z))
 		}
+	case "zombified_piglin", "zpiglin":
+		// ZOMBIFIED PIGLIN (GAP): the NEUTRAL nether undead. It IGNORES players until PROVOKED (hit it, or
+		// hit a pack member nearby) -- then it goes angry, RETALIATES, and SPREADS its anger to nearby
+		// zombified piglins (the anger pack). Fire/lava immune; does NOT burn in daylight. Spawned 1 block up.
+		e := t.spawnZombifiedPiglin(p.x, p.y+1, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned zombified_piglin eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+1, p.z))
+		}
+	case "zoglin":
+		// ZOGLIN (GAP): the TERMINAL undead a hoglin becomes off-nether. INDISCRIMINATELY hostile -- it
+		// attacks ANY player OR mob (except other zoglins and creepers) and FLINGS the target upward (the
+		// knock-up toss). MAX_HEALTH 40, hits for a 6.0-base roll. Never converts. Spawned 1 block up (adult).
+		e := t.spawnZoglin(p.x, p.y+1, p.z, false)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned zoglin eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y+1, p.z))
+		}
 	case "fangs":
 		// VEX + FANGS (Task): spawn an EvokerFangs directly (the code-spawned projectile the evoker's FANGS
 		// spell places). It warms up, bites for 6.0 magic at warmupDelayTicks==-8, then despawns (~22 ticks).
