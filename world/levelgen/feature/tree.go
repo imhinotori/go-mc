@@ -63,8 +63,8 @@ type TreePos struct {
 	X, Y, Z int
 }
 
-func (p TreePos) above(n int) TreePos  { return TreePos{p.X, p.Y + n, p.Z} }
-func (p TreePos) below(n int) TreePos  { return TreePos{p.X, p.Y - n, p.Z} }
+func (p TreePos) above(n int) TreePos { return TreePos{p.X, p.Y + n, p.Z} }
+func (p TreePos) below(n int) TreePos { return TreePos{p.X, p.Y - n, p.Z} }
 func (p TreePos) offset(dx, dy, dz int) TreePos {
 	return TreePos{p.X + dx, p.Y + dy, p.Z + dz}
 }
@@ -825,10 +825,10 @@ func (cfg *TreeConfiguration) WithHeightmapMBNL(h func(x, z int) int) *TreeConfi
 // getFirst()/min-Y logic relies on — more faithful than HashSet iteration order). roots is
 // always empty for the common overworld trees (no root_placer).
 type treeAccum struct {
-	logs   []TreePos
-	leaves []TreePos
-	roots  []TreePos
-	logSet map[TreePos]bool
+	logs    []TreePos
+	leaves  []TreePos
+	roots   []TreePos
+	logSet  map[TreePos]bool
 	leafSet map[TreePos]bool
 }
 
@@ -1060,7 +1060,189 @@ func PlaceTree(set SetBlockFn, read ReadFn, rng levelgen.RandomSource, cfg *Tree
 			d.place(dctx)
 		}
 	}
+	// (10) TreeFeature.updateLeaves distance fixup. Vanilla runs this AFTER trunk+foliage+
+	// decorators over the accumulated positions: it BFS-labels each placed leaf with its true
+	// DISTANCE (1..6) from the nearest log so LeavesBlock.decaying() is false for canopy
+	// leaves. WITHOUT it every placed leaf keeps DISTANCE=7 (the foliage_provider default) and
+	// the random-tick decay driver removes the whole canopy. CITE: TreeFeature.place ->
+	// updateLeaves (javap; see updateLeavesFixup below for the 1:1 algorithm).
+	updateLeavesFixup(set, read, cfg.accum)
+
 	return true
+}
+
+// updateLeavesFixup ports net.minecraft.world.level.levelgen.feature.TreeFeature.updateLeaves
+// (javap -c, 26.2-inner.jar), adapted to the pure SetBlockFn/ReadFn seam (no live
+// LevelAccessor at gen time). It is a BFS from the log positions (distance 0) outward through
+// adjacent leaves, assigning each leaf the smallest DISTANCE reachable (1..6) and rewriting
+// its block state via SetBlockFn (== vanilla setBlockKnownShape, a UPDATE_KNOWN_SHAPE write
+// that triggers NO neighbor cascade -- there is no live neighbor cascade in gen anyway).
+//
+// The vanilla call is updateLeaves(level, bounds, logs, decorationSet, rootPositions) with
+// bounds = encapsulatingPositions(rootPositions, logs, foliage, decorations) (javap: place
+// concat of all four sets). The layer-0 seed is the `logs` set; `Sets.union(decorationSet,
+// rootPositions)` is pre-filled into the shape (marking those positions as already-resolved
+// so the BFS never steps onto them). The FOLIAGE leaves are NOT passed in a set -- they are
+// reached purely by the neighbor scan reading live block states via getOptionalDistanceAt.
+//
+// Our treeAccum tracks logs/leaves/roots (no separate decorator-position set). We build the
+// bounds over logs+leaves+roots (matches vanilla exactly for the no-decorator common trees;
+// a faithful approximation otherwise) and pre-fill the union with roots (decorationSet is
+// untracked -> treated empty, as it is for every generatable common overworld tree).
+func updateLeavesFixup(set SetBlockFn, read ReadFn, accum *treeAccum) {
+	if accum == nil || len(accum.logs) == 0 {
+		return
+	}
+
+	// bounds = min/max over logs + leaves + roots (encapsulatingPositions of all placed
+	// positions). The BFS only touches positions inside bounds (bb.isInside guards).
+	minX, minY, minZ := accum.logs[0].X, accum.logs[0].Y, accum.logs[0].Z
+	maxX, maxY, maxZ := minX, minY, minZ
+	encapsulate := func(ps []TreePos) {
+		for _, p := range ps {
+			if p.X < minX {
+				minX = p.X
+			}
+			if p.Y < minY {
+				minY = p.Y
+			}
+			if p.Z < minZ {
+				minZ = p.Z
+			}
+			if p.X > maxX {
+				maxX = p.X
+			}
+			if p.Y > maxY {
+				maxY = p.Y
+			}
+			if p.Z > maxZ {
+				maxZ = p.Z
+			}
+		}
+	}
+	encapsulate(accum.logs)
+	encapsulate(accum.leaves)
+	encapsulate(accum.roots)
+
+	inside := func(p TreePos) bool {
+		return p.X >= minX && p.X <= maxX &&
+			p.Y >= minY && p.Y <= maxY &&
+			p.Z >= minZ && p.Z <= maxZ
+	}
+
+	// shape: the BitSetDiscreteVoxelShape over bounds (a set of "filled" positions). A map
+	// keyed by the in-bounds TreePos matches the fill/isFull semantics exactly.
+	filled := map[TreePos]bool{}
+	fill := func(p TreePos) { filled[p] = true }
+	isFull := func(p TreePos) bool { return filled[p] }
+
+	// Pre-fill Sets.union(decorationSet, rootPositions) -- here rootPositions only
+	// (decorationSet untracked/empty for common trees). Vanilla fills leaves+discovered; our
+	// foliage set is intentionally NOT pre-filled so the BFS distance-fixes it (matching the
+	// jar, which passes foliage only implicitly via live block reads).
+	for _, p := range accum.roots {
+		if inside(p) {
+			fill(p)
+		}
+	}
+
+	// list: 7 layers (distance buckets 0..6). Layer 0 is seeded with the logs.
+	list := make([]map[TreePos]bool, 7)
+	for i := range list {
+		list[i] = map[TreePos]bool{}
+	}
+	for _, p := range accum.logs {
+		list[0][p] = true
+	}
+
+	// getOptionalDistanceAt(state) -> (value, present): logs -> (0,true);
+	// leaves -> (distance,true); anything else -> (_,false). This mirrors
+	// LeavesBlock.getOptionalDistanceAt (javap): #prevents_nearby_leaf_decay(==#logs) yields
+	// OptionalInt.of(0), a block with the DISTANCE property yields OptionalInt.of(distance),
+	// everything else OptionalInt.empty(). The neighbor scan propagates only where present.
+	getOptionalDistanceAt := func(s block.StateID) (int, bool) {
+		if block.IsLog(s) {
+			return 0, true
+		}
+		if block.IsLeaves(s) {
+			return block.LeavesDistance(s), true
+		}
+		return 0, false
+	}
+
+	dirs := [6]TreePos{
+		{X: 0, Y: -1, Z: 0}, {X: 0, Y: 1, Z: 0}, // down, up
+		{X: 0, Y: 0, Z: -1}, {X: 0, Y: 0, Z: 1}, // north, south
+		{X: -1, Y: 0, Z: 0}, {X: 1, Y: 0, Z: 0}, // west, east
+	}
+
+	// The outer walk over distance buckets. `i` is Math.min(i, nd)-re-seeded mid-scan when a
+	// lower distance is discovered (javap offsets 509-516), so this is a manual index loop,
+	// NOT a range. cur positions are removed as visited (Set.iterator().remove()).
+	for i := 0; i < 7; {
+		// Advance past empty buckets (javap 170-207: while list.get(i).isEmpty() i++, break
+		// at 7). i==0 is never skipped (logs seeded it); an empty layer-0 already returned
+		// early above via len(accum.logs)==0.
+		if len(list[i]) == 0 {
+			i++
+			continue
+		}
+		cur := list[i]
+		// Take one position, remove it (it.next(); it.remove()).
+		var pos TreePos
+		for p := range cur {
+			pos = p
+			break
+		}
+		delete(cur, pos)
+		if !inside(pos) {
+			// !bb.isInside(pos) -> continue (re-scan the same bucket / advance).
+			continue
+		}
+		if i != 0 {
+			// i==0 are the logs -- NOT re-set (the javap `if i != 0` guard wraps ONLY the
+			// getBlockState+setValue(DISTANCE,i)+setBlockKnownShape). For a leaf bucket,
+			// rewrite the leaf's DISTANCE to i.
+			cs := read(pos.X, pos.Y, pos.Z)
+			if ns, ok := block.LeavesWithDistance(cs, i); ok {
+				// setBlockKnownShape: UPDATE_KNOWN_SHAPE (flag 19) -- a plain gen write here.
+				set(pos.X, pos.Y, pos.Z, ns)
+			}
+		}
+		// shape.fill(pos) runs for EVERY processed pos, i==0 included (javap: the fill at
+		// offset 300 is OUTSIDE the `if i != 0` guard). This marks the pos resolved so the
+		// neighbor scan of an adjacent bucket does not revisit it -- and CRUCIALLY it stops
+		// the logs (layer 0) from re-adding each other forever (adjacent logs both yield
+		// getOptionalDistanceAt=0 -> nd=0 -> re-add to layer 0 unless already filled).
+		fill(pos)
+		// Scan the 6 neighbors: propagate distance into any adjacent leaf/log.
+		for _, d := range dirs {
+			np := TreePos{X: pos.X + d.X, Y: pos.Y + d.Y, Z: pos.Z + d.Z}
+			if !inside(np) {
+				continue
+			}
+			if isFull(np) {
+				continue
+			}
+			ns := read(np.X, np.Y, np.Z)
+			od, present := getOptionalDistanceAt(ns)
+			if !present {
+				continue
+			}
+			nd := od
+			if i+1 < nd {
+				nd = i + 1
+			}
+			if nd < 7 {
+				list[nd][np] = true
+				if nd < i {
+					i = nd // re-seed the outer index to the lower distance (javap 509-516)
+				}
+			}
+		}
+		// NOTE: no i++ here -- the loop re-enters at the same i to drain the bucket, exactly
+		// like the jar (the `goto 170` after each Direction scan re-checks list.get(i)).
+	}
 }
 
 // maxFreeTreeHeight ports TreeFeature.getMaxFreeTreeHeight: scan from the base up to

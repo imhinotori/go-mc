@@ -540,3 +540,58 @@ func contains(s, sub string) bool {
 	}
 	return false
 }
+
+// TestUpdateLeavesDistanceFixup is the leaf-decay regression guard (the TreeFeature.updateLeaves
+// port). Before the fix every placed leaf kept DISTANCE=7 (the foliage_provider default), so
+// LeavesBlock.decaying()==true and the random-tick decay driver wiped the whole canopy. After
+// placing a full oak, EVERY placed leaf must carry DISTANCE in 1..6 (never 7) and none may be
+// in the decaying() state; at least one leaf must reach DISTANCE 1 (the BFS propagated out of
+// the trunk). The EXACT per-leaf distance is order-dependent in vanilla too (HashSet iteration
+// order over the distance buckets -- a leaf adjacent to both a log and a nearer leaf can land
+// at 2 depending on processing order), so this asserts the order-INDEPENDENT contract: no
+// canopy leaf is left decaying. CITE: TreeFeature.updateLeaves / LeavesBlock.getOptionalDistanceAt
+// / decaying.
+func TestUpdateLeavesDistanceFixup(t *testing.T) {
+	cfg := oakConfig(t)
+	mw := newMapWorld()
+	cfg = cfg.BelowTrunkWithExisting(mw.read)
+
+	origin := TreePos{X: 8, Y: 70, Z: 8}
+	if !PlaceTree(mw.set, mw.read, levelgen.NewWorldgenRandom(42), cfg, 5, origin) {
+		t.Fatalf("PlaceTree placed nothing for a clear oak")
+	}
+
+	leafCount := 0
+	sawDistance1 := false
+	for cell, st := range mw.blocks {
+		if !block.IsLeaves(st) {
+			continue
+		}
+		leafCount++
+		d := block.LeavesDistance(st)
+
+		// Invariant 1: NO placed leaf may keep DISTANCE 7 (that is the decaying() state).
+		if d == 7 {
+			t.Fatalf("leaf at %v kept DISTANCE=7 (would decay); updateLeaves fixup did not reach it", cell)
+		}
+		// Invariant 2: every leaf is in the valid propagated range 1..6.
+		if d < 1 || d > 6 {
+			t.Fatalf("leaf at %v has out-of-range DISTANCE=%d (want 1..6)", cell, d)
+		}
+		// Invariant 3: no placed leaf is in the decaying() state (== !PERSISTENT && DISTANCE==7).
+		if block.LeavesDecaying(st) {
+			t.Fatalf("placed leaf at %v is in the decaying() state after updateLeaves fixup", cell)
+		}
+		if d == 1 {
+			sawDistance1 = true
+		}
+	}
+	if leafCount == 0 {
+		t.Fatalf("oak placed no leaves")
+	}
+	// Invariant 4: the BFS reached a leaf adjacent to the trunk (DISTANCE 1) -- proof the
+	// fixup propagated out of the logs, not merely a no-op.
+	if !sawDistance1 {
+		t.Fatalf("no placed leaf reached DISTANCE 1 (updateLeaves did not propagate from the trunk)")
+	}
+}
