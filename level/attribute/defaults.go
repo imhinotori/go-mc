@@ -900,6 +900,66 @@ func chestedHorseSupplier() *Supplier {
 		Build()
 }
 
+// skeletonHorseSupplier is the port of SkeletonHorse.createAttributes(): createBaseHorseAttributes() then
+// OVERRIDE MAX_HEALTH 15.0 + MOVEMENT_SPEED 0.20000000298023224 (verified javap
+// net.minecraft.world.entity.animal.equine.SkeletonHorse.createAttributes this session: invokestatic
+// createBaseHorseAttributes, ldc2_w 15.0d MAX_HEALTH, ldc2_w 0.20000000298023224d MOVEMENT_SPEED). The
+// MOVEMENT_SPEED literal is the vanilla float-widened double, preserved bit-for-bit. SkeletonHorse
+// randomizeAttributes overrides the base to randomize ONLY JUMP_STRENGTH (generateJumpStrength; horse.go)
+// -- MAX_HEALTH/MOVEMENT_SPEED stay these fixed supplier values. Cite SkeletonHorse.createAttributes.
+func skeletonHorseSupplier() *Supplier {
+	return horseBaseAttributes().
+		AddValue(MaxHealth, 15.0).                    // SkeletonHorse.createAttributes MAX_HEALTH 15.0 (over base 53.0)
+		AddValue(MovementSpeed, 0.20000000298023224). // SkeletonHorse.createAttributes MOVEMENT_SPEED (float-widened)
+		Build()
+}
+
+// zombieHorseSupplier is the port of ZombieHorse.createAttributes(): createBaseHorseAttributes() then
+// OVERRIDE MAX_HEALTH 25.0 (verified javap
+// net.minecraft.world.entity.animal.equine.ZombieHorse.createAttributes this session: invokestatic
+// createBaseHorseAttributes, ldc2_w 25.0d MAX_HEALTH). MOVEMENT_SPEED stays the horse-base 0.225.
+// ZombieHorse.randomizeAttributes randomizes JUMP_STRENGTH via generateZombieHorseJumpStrength AND
+// MOVEMENT_SPEED via generateZombieHorseSpeed at finalizeSpawn (horse.go) -- MAX_HEALTH stays this fixed
+// supplier value (25.0, unlike the Horse 15..30 randomize). Cite ZombieHorse.createAttributes.
+func zombieHorseSupplier() *Supplier {
+	return horseBaseAttributes().
+		AddValue(MaxHealth, 25.0). // ZombieHorse.createAttributes MAX_HEALTH 25.0 (over base 53.0)
+		Build()
+}
+
+// nautilusSupplier is the port of AbstractNautilus.createAttributes() (Nautilus uses it unchanged):
+// Animal.createAnimalAttributes() + MAX_HEALTH 15.0 + MOVEMENT_SPEED 1.0 + ATTACK_DAMAGE 3.0 +
+// KNOCKBACK_RESISTANCE 0.30000001192092896 (verified javap
+// net.minecraft.world.entity.animal.nautilus.AbstractNautilus.createAttributes this session:
+// createAnimalAttributes, ldc2_w 15.0d MAX_HEALTH, dconst_1 MOVEMENT_SPEED, ldc2_w 3.0d ATTACK_DAMAGE,
+// ldc2_w 0.30000001192092896d KNOCKBACK_RESISTANCE). AbstractNautilus is a brain-driven TamableAnimal
+// aquatic mount (PlayerRideableJumping + HasCustomInventoryScreen); the rideable/inventory/brain layers
+// are DEFERRED (nautilus.go). The KNOCKBACK_RESISTANCE literal is the vanilla float-widened double. Cite
+// AbstractNautilus.createAttributes.
+func nautilusSupplier() *Supplier {
+	return createAnimalAttributes().
+		AddValue(MaxHealth, 15.0).                          // AbstractNautilus.createAttributes MAX_HEALTH 15.0
+		AddValue(MovementSpeed, 1.0).                       // AbstractNautilus.createAttributes MOVEMENT_SPEED 1.0 (dconst_1)
+		AddValue(AttackDamage, 3.0).                        // AbstractNautilus.createAttributes ATTACK_DAMAGE 3.0
+		AddValue(KnockbackResistance, 0.30000001192092896). // AbstractNautilus.createAttributes KNOCKBACK_RESISTANCE (float-widened)
+		Build()
+}
+
+// zombieNautilusSupplier is the port of ZombieNautilus.createAttributes(): AbstractNautilus.createAttributes()
+// then OVERRIDE MOVEMENT_SPEED 1.100000023841858 (verified javap
+// net.minecraft.world.entity.animal.nautilus.ZombieNautilus.createAttributes this session: invokestatic
+// AbstractNautilus.createAttributes, ldc2_w 1.100000023841858d MOVEMENT_SPEED). MAX_HEALTH 15.0 /
+// ATTACK_DAMAGE 3.0 / KNOCKBACK_RESISTANCE 0.3 stay the AbstractNautilus base. The MOVEMENT_SPEED literal
+// is the vanilla float-widened double. Cite ZombieNautilus.createAttributes.
+func zombieNautilusSupplier() *Supplier {
+	return createAnimalAttributes().
+		AddValue(MaxHealth, 15.0).                          // AbstractNautilus base MAX_HEALTH 15.0
+		AddValue(MovementSpeed, 1.100000023841858).         // ZombieNautilus.createAttributes MOVEMENT_SPEED override (float-widened)
+		AddValue(AttackDamage, 3.0).                        // AbstractNautilus base ATTACK_DAMAGE 3.0
+		AddValue(KnockbackResistance, 0.30000001192092896). // AbstractNautilus base KNOCKBACK_RESISTANCE (float-widened)
+		Build()
+}
+
 // snifferSupplier is the port of Sniffer.createAttributes() : Animal.createAnimalAttributes() +
 // MOVEMENT_SPEED 0.10000000149011612 + MAX_HEALTH 14.0 (jar:
 // net.minecraft.world.entity.animal.sniffer.Sniffer.createAttributes -- javap this session:
@@ -1084,9 +1144,9 @@ var suppliers = map[string]*Supplier{
 	"stray":           straySupplier(),
 	"bogged":          boggedSupplier(),
 	"zombie_villager": zombieVillagerSupplier(),
-	"rabbit":    rabbitSupplier(),
-	"enderman":  endermanSupplier(),
-	"fox":       foxSupplier(),
+	"rabbit":          rabbitSupplier(),
+	"enderman":        endermanSupplier(),
+	"fox":             foxSupplier(),
 	// MOB-CUBE (SulfurCube): the size-scaled cube-mob base (createMobAttributes + TEMPT_RANGE 8.0). setSize
 	// overrides MAX_HEALTH (4*size) + MOVEMENT_SPEED (0.2+0.1*size) at runtime. Cite SulfurCube.createSulfurCubeAttributes.
 	"sulfur_cube": sulfurCubeSupplier(),
@@ -1230,6 +1290,16 @@ var suppliers = map[string]*Supplier{
 	"mule":         chestedHorseSupplier(),
 	"llama":        chestedHorseSupplier(),
 	"trader_llama": chestedHorseSupplier(),
+	// UNDEAD HORSES (Task): SkeletonHorse (base horse + MAX_HEALTH 15 + MOVEMENT_SPEED 0.2; JUMP randomized)
+	// and ZombieHorse (base horse + MAX_HEALTH 25; JUMP+SPEED randomized). Both undead (breath/effect gates
+	// already classify them). Cite SkeletonHorse/ZombieHorse.createAttributes.
+	"skeleton_horse": skeletonHorseSupplier(),
+	"zombie_horse":   zombieHorseSupplier(),
+	// NAUTILUS FAMILY (Task, NEW 26.2): AbstractNautilus (TamableAnimal aquatic mount) MAX_HEALTH 15,
+	// MOVEMENT_SPEED 1.0, ATTACK_DAMAGE 3.0, KNOCKBACK_RESISTANCE 0.3. Nautilus uses it unchanged;
+	// ZombieNautilus overrides MOVEMENT_SPEED 1.1. Cite AbstractNautilus/Nautilus/ZombieNautilus.createAttributes.
+	"nautilus":        nautilusSupplier(),
+	"zombie_nautilus": zombieNautilusSupplier(),
 	// WATER MOBS (Task): the 8 aquatic mobs. Each a 1:1 jar copy of its createAttributes (verified
 	// bytecode this session). Squid + GlowSquid (Mob + MAX_HEALTH 10; GlowSquid inherits Squid unchanged).
 	// Cod/Salmon/Pufferfish/TropicalFish (all AbstractFish + MAX_HEALTH 3; none override createAttributes).

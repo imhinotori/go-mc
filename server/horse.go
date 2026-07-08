@@ -62,6 +62,11 @@ const (
 	horseGenJumpBase   = 0.4000000059604645  // generateJumpStrength base
 	horseGenJumpStep   = 0.2                 // generateJumpStrength per-draw coefficient
 
+	zombieHorseGenJumpBase  = 0.5                 // generateZombieHorseJumpStrength base
+	zombieHorseGenJumpStep  = 0.06666666666666667 // generateZombieHorseJumpStrength per-draw coefficient
+	zombieHorseGenSpeedBase = 9.0                 // generateZombieHorseSpeed numerator base
+	zombieHorseGenSpeedDiv  = 42.15999984741211   // generateZombieHorseSpeed divisor
+
 	horseMaxTemper = 100 // AbstractHorse.getMaxTemper
 	llamaMaxTemper = 30  // Llama.getMaxTemper
 
@@ -118,6 +123,46 @@ func generateJumpStrength(rng *entityRandom) float64 {
 	v += rng.nextDouble() * horseGenJumpStep
 	v += rng.nextDouble() * horseGenJumpStep
 	return v
+}
+
+// generateZombieHorseJumpStrength ports ZombieHorse.generateZombieHorseJumpStrength(DoubleSupplier):
+// 0.5 + s()*0.06666666666666667 + s()*0.06666666666666667 + s()*0.06666666666666667, s ==
+// RandomSource.nextDouble -- three draws in order. Distinct from the base generateJumpStrength (0.4 base,
+// 0.2 step). Cite ZombieHorse.generateZombieHorseJumpStrength.
+func generateZombieHorseJumpStrength(rng *entityRandom) float64 {
+	v := zombieHorseGenJumpBase
+	v += rng.nextDouble() * zombieHorseGenJumpStep
+	v += rng.nextDouble() * zombieHorseGenJumpStep
+	v += rng.nextDouble() * zombieHorseGenJumpStep
+	return v
+}
+
+// generateZombieHorseSpeed ports ZombieHorse.generateZombieHorseSpeed(DoubleSupplier): (9.0 + s()*1 +
+// s()*1 + s()*1) / 42.15999984741211, s == RandomSource.nextDouble -- three draws in order. Cite
+// ZombieHorse.generateZombieHorseSpeed.
+func generateZombieHorseSpeed(rng *entityRandom) float64 {
+	sum := zombieHorseGenSpeedBase
+	sum += rng.nextDouble()
+	sum += rng.nextDouble()
+	sum += rng.nextDouble()
+	return sum / zombieHorseGenSpeedDiv
+}
+
+// randomizeSkeletonHorseAttributes ports SkeletonHorse.randomizeAttributes(RandomSource): it OVERRIDES the
+// AbstractHorse base so it randomizes ONLY JUMP_STRENGTH via generateJumpStrength (3 nextDouble). MAX_HEALTH
+// (15.0) and MOVEMENT_SPEED (0.2) stay the fixed createAttributes supplier values -- NO draw. Cite
+// SkeletonHorse.randomizeAttributes.
+func randomizeSkeletonHorseAttributes(e *Entity, rng *entityRandom) {
+	e.horseJumpStrength = generateJumpStrength(rng)
+}
+
+// randomizeZombieHorseAttributes ports ZombieHorse.randomizeAttributes(RandomSource): JUMP_STRENGTH via
+// generateZombieHorseJumpStrength (3 nextDouble) THEN MOVEMENT_SPEED via generateZombieHorseSpeed (3
+// nextDouble) -- the exact draw ORDER (jump first, then speed). MAX_HEALTH (25.0) stays the fixed supplier
+// value. Cite ZombieHorse.randomizeAttributes.
+func randomizeZombieHorseAttributes(e *Entity, rng *entityRandom) {
+	e.horseJumpStrength = generateZombieHorseJumpStrength(rng)
+	setHorseAttributeBase(e, attribute.MovementSpeed, generateZombieHorseSpeed(rng))
 }
 
 // randomizeHorseAttributes ports Horse.randomizeAttributes(RandomSource): MAX_HEALTH via generateMaxHealth,
@@ -494,6 +539,67 @@ func (t *TickLoop) spawnLlama(x, y, z float64, baby, trader bool) *Entity {
 	}
 	owner.entities.add(l)
 	return l
+}
+
+// finalizeSkeletonHorseSpawn / finalizeZombieHorseSpawn are the AbstractHorse.finalizeSpawn analogues for
+// the undead horses: run the type-specific randomizeAttributes (SkeletonHorse: JUMP only; ZombieHorse:
+// JUMP + SPEED) on the per-entity rng, THEN seed health from the (fixed) MaxHealth. MUST run after e.ai is
+// attached. Cite SkeletonHorse/ZombieHorse.randomizeAttributes + AbstractHorse.finalizeSpawn.
+func finalizeSkeletonHorseSpawn(e *Entity) {
+	randomizeSkeletonHorseAttributes(e, mobRandom(e))
+	initSpawnHealth(e)
+}
+
+func finalizeZombieHorseSpawn(e *Entity) {
+	randomizeZombieHorseAttributes(e, mobRandom(e))
+	initSpawnHealth(e)
+}
+
+// spawnSkeletonHorse creates a SkeletonHorse (the undead AbstractHorse). Fixed MAX_HEALTH 15.0 /
+// MOVEMENT_SPEED 0.2 from the supplier; JUMP_STRENGTH randomized 0.4..1.0 (generateJumpStrength). The
+// isTrap flag + SkeletonTrapGoal (a lightning strike on a trapped skeleton horse spawns 4 skeleton riders)
+// is the DEFERRED trap-charge subsystem (see lightning.go) -- a fresh /dbg horse is a plain (non-trap)
+// tameable undead mount. The saddle/rideable layer is the same DEFERRED packet/GUI as Horse. Cite
+// SkeletonHorse(EntityType, Level) + createAttributes. Spawned via the horse-family passive goal AI.
+func (t *TickLoop) spawnSkeletonHorse(x, y, z float64, baby bool) *Entity {
+	h := NewEntity(t.idAlloc.AllocID(), entity.SkeletonHorse, x, y, z)
+	h.isHorseFamily = true
+	if baby {
+		h.breedAge = babyStartAge
+		h.refreshDimensions()
+	}
+	h.ai = newHorseFamilyAI(0.20000000298023224) // SkeletonHorse fixed MOVEMENT_SPEED
+	reseedMobAI(h.ai, h.id)
+	finalizeSkeletonHorseSpawn(h)
+	owner := t.regionForEntity(h)
+	if owner == nil {
+		owner = t.cur()
+	}
+	owner.entities.add(h)
+	return h
+}
+
+// spawnZombieHorse creates a ZombieHorse (the undead AbstractHorse). Fixed MAX_HEALTH 25.0 from the
+// supplier; JUMP_STRENGTH randomized via generateZombieHorseJumpStrength (0.5 base) THEN MOVEMENT_SPEED via
+// generateZombieHorseSpeed ((9+3s)/42.16) -- the exact draw ORDER. Tameable but has no natural spawn in
+// vanilla (spawned via /dbg / spawn egg here). The saddle/rideable layer is the same DEFERRED packet/GUI as
+// Horse. Cite ZombieHorse(EntityType, Level) + createAttributes + randomizeAttributes.
+func (t *TickLoop) spawnZombieHorse(x, y, z float64, baby bool) *Entity {
+	h := NewEntity(t.idAlloc.AllocID(), entity.ZombieHorse, x, y, z)
+	h.isHorseFamily = true
+	if baby {
+		h.breedAge = babyStartAge
+		h.refreshDimensions()
+	}
+	h.ai = newHorseFamilyAI(horseBaseMovementSpeed) // ZombieHorse keeps horse-base speed until randomize overwrites it
+	reseedMobAI(h.ai, h.id)
+	finalizeZombieHorseSpawn(h)
+	owner := t.regionForEntity(h)
+	if owner == nil {
+		owner = t.cur()
+	}
+	owner.entities.add(h)
+	return h
 }
 
 // horseFamilyAiStep is the AbstractHorse per-tick extra (AbstractHorse.aiStep/tick: the tail/mouth/eating

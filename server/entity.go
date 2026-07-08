@@ -550,14 +550,14 @@ type Entity struct {
 	// entity so the per-type aiStep + arrow-tag hooks fire. boggedSheared mirrors Bogged DATA_SHEARED
 	// (a sheared Bogged shows no mushrooms + drops nothing more from shearing). Zero for every other
 	// entity. Cite Drowned / Stray / Bogged.
-	isDrowned    bool
+	isDrowned bool
 	// drownedTridentTime mirrors RangedAttackGoal.attackTime for the DrownedTridentAttackGoal cadence:
 	// the inter-throw cooldown (reset to 40 on a throw). Zero for every non-drowned. Cite
 	// net.minecraft.world.entity.ai.goal.RangedAttackGoal.attackTime + DrownedTridentAttackGoal.
 	drownedTridentTime int
-	isStray      bool
-	isBogged     bool
-	boggedSheared bool
+	isStray            bool
+	isBogged           bool
+	boggedSheared      bool
 	// ZombieVillager conversion state (net.minecraft.world.entity.monster.zombie.ZombieVillager):
 	// isZombieVillager marks the entity; zvConverting mirrors DATA_CONVERTING_ID (isConverting());
 	// zvConversionTime mirrors villagerConversionTime (the per-tick countdown started by the cure);
@@ -676,6 +676,19 @@ type Entity struct {
 	dolphinMoistness      int
 	tadpoleAge            int
 	tropicalVariant       int
+	// --- NAUTILUS FAMILY (Task, NEW 26.2) ----------------------------------------------------------
+	// AbstractNautilus is a brain-driven TamableAnimal aquatic mount (Nautilus + the zombified
+	// ZombieNautilus). isNautilus gates the (bounded) swim tick; isZombieNautilus marks the undead
+	// variant (breath/effect classification). horseTamed is reused for the TamableAnimal tamed flag.
+	// The brain/rideable/inventory layers are DEFERRED. Cite AbstractNautilus.
+	isNautilus       bool
+	isZombieNautilus bool
+	// --- MANNEQUIN (Task, NEW 26.2) ---------------------------------------------------------------
+	// Mannequin extends Avatar (a player-shaped, no-AI display entity). isMannequin gates its (no-op)
+	// tick; mannequinImmovable mirrors DATA_IMMOVABLE (setImmovable) -- a placed mannequin does not get
+	// pushed. The ResolvableProfile / description data + skin layers are DEFERRED. Cite Mannequin.
+	isMannequin        bool
+	mannequinImmovable bool
 	// --- PANDA / SNOW_GOLEM (Task) ------------------------------------------------------------------
 	//
 	// Tick-owned plain values, set/read ONLY for their own type (each *AiStep / spawn gates on typ).

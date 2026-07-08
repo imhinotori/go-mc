@@ -135,6 +135,22 @@ func TestSupplierCoverage(t *testing.T) {
 		// Spider.createAttributes : Monster + MAX_HEALTH 16.0, MOVEMENT_SPEED 0.30000001192092896.
 		{"spider", MaxHealth, 16.0},
 		{"spider", MovementSpeed, 0.30000001192092896},
+		// SkeletonHorse.createAttributes : baseHorse + MAX_HEALTH 15.0, MOVEMENT_SPEED 0.20000000298023224.
+		{"skeleton_horse", MaxHealth, 15.0},
+		{"skeleton_horse", MovementSpeed, 0.20000000298023224},
+		// ZombieHorse.createAttributes : baseHorse + MAX_HEALTH 25.0 (MOVEMENT_SPEED stays horse-base 0.225).
+		{"zombie_horse", MaxHealth, 25.0},
+		{"zombie_horse", MovementSpeed, 0.22499999403953552},
+		// AbstractNautilus.createAttributes : Animal + MAX_HEALTH 15, MOVEMENT_SPEED 1.0, ATTACK_DAMAGE 3.0,
+		// KNOCKBACK_RESISTANCE 0.30000001192092896 (Nautilus uses it unchanged).
+		{"nautilus", MaxHealth, 15.0},
+		{"nautilus", MovementSpeed, 1.0},
+		{"nautilus", AttackDamage, 3.0},
+		{"nautilus", KnockbackResistance, 0.30000001192092896},
+		// ZombieNautilus.createAttributes : AbstractNautilus + MOVEMENT_SPEED override 1.100000023841858.
+		{"zombie_nautilus", MaxHealth, 15.0},
+		{"zombie_nautilus", MovementSpeed, 1.100000023841858},
+		{"zombie_nautilus", AttackDamage, 3.0},
 	}
 	for _, c := range cases {
 		m := NewMapForEntity(c.entity)

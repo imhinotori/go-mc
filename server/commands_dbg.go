@@ -471,6 +471,46 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned trader_llama eid=%d (hp=%.1f strength=%d) at (%.1f,%.1f,%.1f)", e.id, e.health, e.llamaStrength, p.x, p.y+1, p.z))
 		}
+	case "skeleton_horse", "skeletonhorse":
+		// SKELETON HORSE (Task): the undead AbstractHorse. Fixed MAX_HEALTH 15.0 / MOVEMENT_SPEED 0.2;
+		// JUMP_STRENGTH randomized 0.4..1.0 (generateJumpStrength). The skeleton-trap (a lightning strike on a
+		// trapped one spawns 4 skeleton riders) is the DEFERRED trap-charge subsystem -- a /dbg one is a plain
+		// (non-trap) tameable undead mount. Spawned 1 block up.
+		e := t.spawnSkeletonHorse(p.x, p.y+1, p.z, false)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned skeleton_horse eid=%d (hp=%.1f jump=%.3f) at (%.1f,%.1f,%.1f)", e.id, e.health, e.horseJumpStrength, p.x, p.y+1, p.z))
+		}
+	case "zombie_horse", "zombiehorse":
+		// ZOMBIE HORSE (Task): the undead AbstractHorse. Fixed MAX_HEALTH 25.0; JUMP_STRENGTH via
+		// generateZombieHorseJumpStrength (0.5 base) THEN MOVEMENT_SPEED via generateZombieHorseSpeed
+		// ((9+3s)/42.16) -- the exact draw order. Tameable, no natural spawn. Spawned 1 block up.
+		e := t.spawnZombieHorse(p.x, p.y+1, p.z, false)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned zombie_horse eid=%d (hp=%.1f jump=%.3f) at (%.1f,%.1f,%.1f)", e.id, e.health, e.horseJumpStrength, p.x, p.y+1, p.z))
+		}
+	case "nautilus":
+		// NAUTILUS (Task, NEW 26.2): the tameable aquatic mount (TamableAnimal). MAX_HEALTH 15, MOVEMENT_SPEED
+		// 1.0, ATTACK_DAMAGE 3.0, KNOCKBACK_RESISTANCE 0.3. Breathes underwater; the brain/rideable/inventory
+		// are DEFERRED, so it runs the bounded passive swim goals. Spawned 1 block up.
+		e := t.spawnNautilus(p.x, p.y+1, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned nautilus eid=%d (hp=%.1f) at (%.1f,%.1f,%.1f)", e.id, e.health, p.x, p.y+1, p.z))
+		}
+	case "zombie_nautilus", "zombienautilus":
+		// ZOMBIE NAUTILUS (Task, NEW 26.2): the zombified aquatic mount -- same AbstractNautilus base but
+		// MOVEMENT_SPEED 1.1, undead-classified. Bounded swim goals (brain DEFERRED). Spawned 1 block up.
+		e := t.spawnZombieNautilus(p.x, p.y+1, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned zombie_nautilus eid=%d (hp=%.1f) at (%.1f,%.1f,%.1f)", e.id, e.health, p.x, p.y+1, p.z))
+		}
+	case "mannequin":
+		// MANNEQUIN (Task, NEW 26.2): the player-shaped, no-AI display entity (Avatar subclass). No goal AI --
+		// a static display carrying a ResolvableProfile + immovable flag (DEFERRED skin/profile data). Spawned
+		// immovable (a placed mannequin is not pushed). Spawned 1 block up.
+		e := t.spawnMannequin(p.x, p.y+1, p.z, true)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned mannequin eid=%d (hp=%.1f immovable=%v) at (%.1f,%.1f,%.1f)", e.id, e.health, e.mannequinImmovable, p.x, p.y+1, p.z))
+		}
 	case "squid":
 		// SQUID (Task): the ink-jet cephalopod (MAX_HEALTH 10). Breathes underwater, DROWNS ON LAND. Its
 		// aiStep runs the tentacle-rotation accumulator; a hit-by-mob spawns ink. Spawned 1 block up.

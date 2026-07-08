@@ -275,3 +275,85 @@ func TestHorseFamilyAiStepNoop(t *testing.T) {
 		t.Fatalf("horseFamilyAiStep changed health %v -> %v", hpBefore, h.health)
 	}
 }
+
+// TestSkeletonHorseSpawnDefaults: spawnSkeletonHorse renders as entity.SkeletonHorse.ID, is isHorseFamily,
+// has the FIXED MAX_HEALTH 15.0 / MOVEMENT_SPEED 0.2 (SkeletonHorse.createAttributes -- NOT randomized), a
+// randomized JUMP_STRENGTH in [0.4,1.0] (generateJumpStrength), and health seeded from the fixed 15.0.
+func TestSkeletonHorseSpawnDefaults(t *testing.T) {
+	loop, floorY := horseLoop(t)
+	h := loop.spawnSkeletonHorse(8.5, float64(floorY+1), 8.5, false)
+	if h.typ != entity.SkeletonHorse.ID {
+		t.Fatalf("skeleton_horse typ = %d, want entity.SkeletonHorse.ID %d", h.typ, entity.SkeletonHorse.ID)
+	}
+	if !h.isHorseFamily {
+		t.Fatal("skeleton_horse not marked isHorseFamily")
+	}
+	if hp := h.getAttributeValue(attribute.MaxHealth); hp != 15.0 {
+		t.Fatalf("skeleton_horse MAX_HEALTH = %v, want fixed 15.0", hp)
+	}
+	if sp := h.getAttributeValue(attribute.MovementSpeed); sp != 0.20000000298023224 {
+		t.Fatalf("skeleton_horse MOVEMENT_SPEED = %v, want fixed 0.20000000298023224", sp)
+	}
+	if h.horseJumpStrength < 0.4 || h.horseJumpStrength > 1.0 {
+		t.Fatalf("skeleton_horse JUMP_STRENGTH = %v, want in [0.4,1.0] (generateJumpStrength)", h.horseJumpStrength)
+	}
+	if h.health != 15.0 {
+		t.Fatalf("skeleton_horse health = %v, want == fixed MAX_HEALTH 15.0", h.health)
+	}
+	if h.ai == nil || h.ai.rng == nil {
+		t.Fatal("skeleton_horse has no minimal AI / rng")
+	}
+}
+
+// TestZombieHorseSpawnDefaults: spawnZombieHorse renders as entity.ZombieHorse.ID, isHorseFamily, has the
+// FIXED MAX_HEALTH 25.0 (ZombieHorse.createAttributes -- NOT randomized), a randomized MOVEMENT_SPEED in
+// [9/42.16, 12/42.16] (generateZombieHorseSpeed) and JUMP_STRENGTH in [0.5,0.7] (generateZombieHorseJump),
+// with health seeded from the fixed 25.0.
+func TestZombieHorseSpawnDefaults(t *testing.T) {
+	loop, floorY := horseLoop(t)
+	h := loop.spawnZombieHorse(8.5, float64(floorY+1), 8.5, false)
+	if h.typ != entity.ZombieHorse.ID {
+		t.Fatalf("zombie_horse typ = %d, want entity.ZombieHorse.ID %d", h.typ, entity.ZombieHorse.ID)
+	}
+	if !h.isHorseFamily {
+		t.Fatal("zombie_horse not marked isHorseFamily")
+	}
+	if hp := h.getAttributeValue(attribute.MaxHealth); hp != 25.0 {
+		t.Fatalf("zombie_horse MAX_HEALTH = %v, want fixed 25.0", hp)
+	}
+	if h.health != 25.0 {
+		t.Fatalf("zombie_horse health = %v, want == fixed MAX_HEALTH 25.0", h.health)
+	}
+	// generateZombieHorseSpeed envelope: (9 + 3*[0,1)) / 42.15999984741211.
+	sp := h.getAttributeValue(attribute.MovementSpeed)
+	if sp < 9.0/42.15999984741211 || sp > 12.0/42.15999984741211 {
+		t.Fatalf("zombie_horse MOVEMENT_SPEED = %v, want in generateZombieHorseSpeed envelope", sp)
+	}
+	// generateZombieHorseJumpStrength envelope: 0.5 + 3*[0,1)*0.06666666666666667.
+	if h.horseJumpStrength < 0.5 || h.horseJumpStrength > 0.7 {
+		t.Fatalf("zombie_horse JUMP_STRENGTH = %v, want in [0.5,0.7]", h.horseJumpStrength)
+	}
+}
+
+// TestZombieHorseGenerateFormulas pins the ZombieHorse-specific generator formulas at a fixed seed against
+// the exact bytecode: jump = 0.5 + 3 draws * 0.0666...; speed = (9 + 3 draws) / 42.15999984741211. The draw
+// ORDER inside randomizeAttributes is jump-then-speed (ZombieHorse.randomizeAttributes).
+func TestZombieHorseGenerateFormulas(t *testing.T) {
+	for _, seed := range []uint64{1, 42, 12345, 999999} {
+		rng := newEntityRandom(seed)
+		j := generateZombieHorseJumpStrength(rng)
+		if j < 0.5 || j > 0.7 {
+			t.Fatalf("seed %d: generateZombieHorseJumpStrength = %v, out of [0.5,0.7]", seed, j)
+		}
+		s := generateZombieHorseSpeed(rng)
+		if s < 9.0/42.15999984741211 || s > 12.0/42.15999984741211 {
+			t.Fatalf("seed %d: generateZombieHorseSpeed = %v, out of envelope", seed, s)
+		}
+	}
+	// Reproducibility for a fixed seed.
+	a := newEntityRandom(7)
+	b := newEntityRandom(7)
+	if generateZombieHorseJumpStrength(a) != generateZombieHorseJumpStrength(b) {
+		t.Fatal("generateZombieHorseJumpStrength not reproducible for a fixed seed")
+	}
+}
