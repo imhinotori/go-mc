@@ -112,6 +112,38 @@ func newMeleeAttackGoal(speed float64) *meleeAttackGoal {
 	return &meleeAttackGoal{baseGoal: newBaseGoal(flagMove), speedModifier: speed}
 }
 
+// requiresUpdateEveryTick ports MeleeAttackGoal.requiresUpdateEveryTick = true. This is load-bearing:
+// Mob.serverAiStep DECIMATES the goal selector (GoalSelector.tick on the even/first phase,
+// GoalSelector.tickRunningGoals(false) on the odd phase), and tickRunningGoals(false) ONLY ticks a
+// running goal when its requiresUpdateEveryTick() is true. MeleeAttackGoal returns true so its tick()
+// runs EVERY server tick, so ticksUntilNextAttack decrements once per tick and the swing cooldown is a
+// real 20-tick (1s) cadence. Without this override the goal inherits Goal.requiresUpdateEveryTick=false,
+// so it ticks only every OTHER tick and the cooldown counts down at half rate -- a 40-tick cadence, a
+// direct divergence from the jar. (It also halves the path-recompute + look cadence, making the chase
+// jerk.) ZombieAttackGoal/SpiderAttackGoal inherit this true from MeleeAttackGoal (no override).
+//
+//	[VERIFIED javap MeleeAttackGoal.requiresUpdateEveryTick: iconst_1; ireturn. Goal.requiresUpdate
+//	 EveryTick: iconst_0; ireturn. GoalSelector.tickRunningGoals(z): tick a running goal iff z ||
+//	 requiresUpdateEveryTick(). Mob.serverAiStep: odd phase -> goalSelector.tickRunningGoals(false).]
+func (g *meleeAttackGoal) requiresUpdateEveryTick() bool { return true }
+
+// start ports MeleeAttackGoal.start: navigation.moveTo(path, speedModifier) + setAggressive(true) +
+// ticksUntilNextPathRecalculation = 0 + ticksUntilNextAttack = 0. In v1 the nav want is (re)issued by
+// tick() (the async setWantTarget path), so start() carries the two field RESETS vanilla does on
+// (re)engagement: zeroing the path-recalc throttle forces an immediate want on the first tick, and
+// zeroing ticksUntilNextAttack lets the first in-reach swing land without waiting out a stale cooldown
+// carried over from a PRIOR engagement of the SAME goal instance (the goal struct is reused across
+// start/stop cycles, so ticksUntilNextAttack must be reset here, not left at its last value). The
+// setAggressive(true) raise-arm client visual is a cited metadata deferral (DATA_ZOMBIE bit), matching
+// newMeleeAttackGoal's note. NO RNG.
+//
+//	[VERIFIED javap MeleeAttackGoal.start: navigation.moveTo(path, speedModifier); setAggressive(true);
+//	 ticksUntilNextPathRecalculation = 0; ticksUntilNextAttack = 0.]
+func (g *meleeAttackGoal) start(_ *TickLoop, _ *Entity) {
+	g.ticksUntilNextPathRecalculation = 0
+	g.ticksUntilNextAttack = 0
+}
+
 // newSpiderAttackGoal builds the Spider$SpiderAttackGoal delta: a MeleeAttackGoal whose
 // canContinueToUse drops the target 1-in-100 per tick in bright light (the "spiders calm in daylight"
 // flee). The jar ctor is super(spider, 1.0, true) — speedModifier 1.0, followingTargetEvenIfNotSeen

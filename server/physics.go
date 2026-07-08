@@ -283,15 +283,21 @@ func computeModifiedFriction(f, mod float32) float32 {
 }
 
 // frictionInfluencedSpeed ports LivingEntity.getFrictionInfluencedSpeed(float) 1:1. On the ground
-// with blockFriction f > 0.6, walk speed is scaled UP by 0.21600002f / f^3 (so a slippery block --
-// smaller f -- accelerates the mob faster); at f <= 0.6 it is the bare getSpeed(); airborne it is
-// getFlyingSpeed(). Note the 26.2 f > 0.6 guard and the exact literal 0.21600002f.
+// with blockFriction f > 0.6 (compared AS DOUBLE -- the jar does f2d before the compare, so the
+// default 0.6f == 0.6000000238418579d IS > 0.6d), walk speed is scaled by 0.21600002f / f^3 (a slippery
+// block -- smaller f -- accelerates the mob faster; at the default 0.6f the factor is ~1.0 so the walk
+// speed is ~getSpeed()); strictly at f <= 0.6d it is the bare getSpeed(); airborne it is getFlyingSpeed().
+// Note the 26.2 f > 0.6 guard (double compare) and the exact literal 0.21600002f.
 //
 //	[VERIFIED javap LivingEntity.getFrictionInfluencedSpeed: onGround ? ((f > 0.6) ? getSpeed() *
 //	 (0.21600002f / (f*f*f)) : getSpeed()) : getFlyingSpeed().]
 func frictionInfluencedSpeed(onGround bool, f, speed, flyingSpeed float32) float32 {
 	if onGround {
-		if f > 0.6 {
+		// Vanilla WIDENS f to double before the compare (bytecode: fload_1; f2d; ldc2_w 0.6d; dcmpl;
+		// ifle). The default block friction 0.6f widened to double is 0.6000000238418579, which IS > 0.6d,
+		// so the >0.6 branch is TAKEN for a normal block -- a plain `f > 0.6` in float32 would be FALSE
+		// (float32(0.6) == float32(0.6)) and take the wrong branch. Match the jar's f2d widening exactly.
+		if float64(f) > 0.6 {
 			return speed * (0.21600002 / (f * f * f))
 		}
 		return speed
