@@ -459,6 +459,16 @@ func (t *TickLoop) dragonSpawnExitPortalAndEgg(e *Entity) {
 	egg := block.ToStateID[block.DragonEgg{}]
 	mgr.SetBlock(pk.Position{X: bx, Y: by, Z: bz}, portal, minY)  // END_PORTAL at the origin (exit)
 	mgr.SetBlock(pk.Position{X: bx, Y: by + 1, Z: bz}, egg, minY) // DRAGON_EGG one above (trophy)
+
+	// END GATEWAY (Task): EnderDragonFight.setDragonKilled -> spawnNewGateway() places ONE gateway on the
+	// 96-block ring per dragon kill (idx popped from the shuffled ContiguousSet[0,20)). v1 spawns the next
+	// ring slot in index order (a cited simplification -- the RING math is identical, only WHICH slot
+	// differs). This is the delimited death-sequence hook: after the exit portal + egg, place the gateway
+	// so the player can leave for the outer End islands. Cite EnderDragonFight.spawnNewGateway.
+	if t.endGatewaysSpawned < gatewayCount {
+		t.spawnNewGateway(t.endGatewaysSpawned)
+		t.endGatewaysSpawned++
+	}
 }
 
 // --- BOSS BAR (vanilla dragon bar: PINK / PROGRESS / createWorldFog / playBossMusic) ------------------

@@ -236,6 +236,11 @@ type TickLoop struct {
 	// dragon + crystal ring have been spawned for this world, so a second player entering the End does not
 	// respawn the boss. One fight per world (v1: no per-world EnderDragonFight persistence). Tick-owned.
 	endDragonFightInit bool
+	// endGatewaysSpawned counts how many End gateways the dragon-death spawnNewGateway has placed on the
+	// 96-block ring (each dragon kill pops one of the 20 ring slots). v1 spawns them in index order 0..19
+	// (a cited simplification of EnderDragonFight's shuffled ContiguousSet -- the RING placement is
+	// identical; only WHICH slot differs). Cite EnderDragonFight.gateways + spawnNewGateway.
+	endGatewaysSpawned int
 
 	// gamerules is the per-level GameRules store (gamerules.go): the authoritative keyed set of
 	// boolean/integer rules with vanilla defaults. Read through t.gameRule/t.gameRuleInt (lazily seeded to
@@ -521,6 +526,13 @@ type TickLoop struct {
 	// the in-range player effect application. The menu (beacon_menu.go) resolves the SAME beaconBE on open so
 	// the SetBeacon effect selection + payment share one state. Lazily constructed; tick-owned (TICK-05).
 	beacons map[pk.Position]*beaconBE
+
+	// gateways is the runtime store of END_GATEWAY block-entities keyed by world position (the beacons
+	// twin, End-gateway task). A gateway's per-tick drive (end_gateway_be.go gatewayServerTick) ages the
+	// BE, decrements the teleport cooldown, and (once spawned in + off cooldown) teleports any entity
+	// standing in the gateway block to its exit position. Spawned by the dragon-death spawnNewGateway on
+	// the 96-block ring. Lazily constructed; tick-owned (TICK-05). Cite TheEndGatewayBlockEntity.
+	gateways map[pk.Position]*gatewayBE
 
 	// conduits is the runtime store of CONDUIT block-entities keyed by world position (the beacons twin,
 	// CONDUIT-01). A conduit's per-tick drive (conduit_be.go conduitServerTick) reads/writes its conduitBE

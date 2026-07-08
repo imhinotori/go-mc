@@ -162,6 +162,9 @@ func (t *TickLoop) tickWorld() {
 	// twin). A beacon with no primary effect / obstructed beam ticks to a cheap no-op (no effect applied). Nil
 	// map = no-op (no beacon placed). CITE: BeaconBlock.getTicker -> BeaconBlockEntity.tick.
 	t.tickBeacons()
+	// END GATEWAY (Task): tick every live END_GATEWAY block-entity (age + cooldown + teleport-in-gateway
+	// -> exit). The tickBeacons twin. Cheap no-op when no gateway exists. Cite TheEndGatewayBlockEntity.portalTick.
+	t.tickGateways()
 	// SUB-BLOCKENTITY: tick every CONDUIT block-entity (ConduitBlockEntity.serverTick — the every-40-tick
 	// activation-frame re-scan + the in-range player CONDUIT_POWER application + the full-frame hostile
 	// attack). Keyed by world position (t.conduits, global — not per-region), so they tick ONCE globally here
@@ -793,6 +796,19 @@ func (t *TickLoop) tickAI() {
 		if e.phantom != nil {
 			t.phantomAiStep(e)
 		}
+		// SHULKER (Task): the End box-turret hostile -- the peek open/close state (+ the +20 covered-armor
+		// toggle), the target scan, and the ShulkerAttackGoal (attackTime cadence -> homing ShulkerBullet).
+		// Per-type-gated on e.shulker != nil, AFTER serverAiStep (the empty goalSelector no-op). ADDITIVE +
+		// shulker-gated (zero cost / zero RNG for every non-shulker -- the pig oracle stream is untouched).
+		if e.shulker != nil {
+			t.shulkerAiStep(e)
+		}
+		// SHULKER BULLET (Task): the homing projectile the shulker fires -- steer toward the target, and on
+		// contact deal 4.0 + apply 200-tick LEVITATION (via the EXISTING addPlayerEffect). Per-type-gated on
+		// e.shulkerBullet != nil. ADDITIVE + bullet-gated (zero cost for every non-bullet). Cite ShulkerBullet.
+		if e.shulkerBullet != nil {
+			t.shulkerBulletTick(e)
+		}
 		// WARDEN (Task): the blind, sculk-summoned boss-tier hostile -- the per-suspect AngerManagement
 		// (target = highest-anger suspect), the melee doHurtTarget (30 + 1.5 kb + the 40-tick sonic lock),
 		// the SonicBoom ranged attack (15/20 gate, 34-tick charge, 10 dmg + knock-up ignoring armor/shields),
@@ -1110,6 +1126,15 @@ func (t *TickLoop) tickPhysics() {
 		// gravity/drag/collision path here -- the observable "the wither floats". witherIsFlyer gates on
 		// e.wither != nil. Cite WitherBoss(FlyingMoveControl) -- v1 defers the FlyingMoveControl chase.
 		if witherIsFlyer(e) {
+			continue
+		}
+
+		// SHULKER BULLET (Task): the ShulkerBullet is a NO-GRAVITY homing projectile (isNoGravity()==true)
+		// whose movement is integrated in shulkerBulletTick (the direct steer + entities.move, no collision,
+		// no gravity). Skip it here so the generic gravity/drag/collision path never touches it (the
+		// observable "the bullet flies straight at you"). shulkerBulletIsFlyer gates on e.shulkerBullet != nil.
+		// Cite ShulkerBullet ctor (isNoGravity() == true).
+		if shulkerBulletIsFlyer(e) {
 			continue
 		}
 

@@ -370,6 +370,60 @@ func (t *StructureTemplate) Jigsaws(origin Pos, rot Rotation, mir Mirror, pivotX
 	return out, nil
 }
 
+// DataMarker is one placed structure_block DATA marker: its WORLD position (after the pivot
+// rotation + origin translate) and the marker string carried in its block-entity nbt `metadata`
+// field. Vanilla's StructureTemplate.processBlockInfos feeds every structure_block whose mode is
+// DATA into StructurePiece.handleDataMarker(metadata, worldPos, ...). Sulfur's PlaceInWorld skips
+// these blocks (they are not visible), so the piece post-process pulls them out via this method
+// and dispatches the marker (End City: "Chest"/"Sentry"/"Elytra").
+//
+// Source: CFR StructureTemplate.placeInWorld (the StructureBlockEntity.Mode.DATA branch that
+// calls processor.handleDataMarker / StructureTemplate.processEntityInfos) + StructureBlockEntity
+// (the `metadata` string tag).
+type DataMarker struct {
+	WorldPos Pos
+	Metadata string
+}
+
+// dataMarkerNBT is the structure_block DATA-marker block-entity nbt schema: the `metadata` string
+// (CFR StructureBlockEntity.metaData -> the "metadata" tag). Other StructureBlockEntity fields
+// (mode/name/...) are not needed here -- a DATA marker's whole payload is the metadata string.
+type dataMarkerNBT struct {
+	Metadata string `nbt:"metadata"`
+}
+
+// DataMarkers ports the StructureTemplate.placeInWorld DATA-marker pass: for every structure_block
+// in the template, extract its `metadata` string + its WORLD position (calculateRelativePosition
+// then origin translate, exactly as the visible-block loop transforms positions). Markers with an
+// empty metadata (a non-DATA structure_block, e.g. SAVE/LOAD mode) are skipped. The caller
+// dispatches each marker (handleDataMarker). NO clip here -- the piece post-process box-checks each.
+//
+// Source: CFR StructureTemplate.placeInWorld / StructurePiece.handleDataMarker.
+func (t *StructureTemplate) DataMarkers(origin Pos, rot Rotation, mir Mirror, pivotX, pivotZ int) ([]DataMarker, error) {
+	var out []DataMarker
+	for _, blk := range t.blocks {
+		if t.names[blk.State] != structureBlockName {
+			continue
+		}
+		if blk.NBT.Type != nbt.TagCompound {
+			continue
+		}
+		var dm dataMarkerNBT
+		if err := blk.NBT.Unmarshal(&dm); err != nil {
+			return nil, fmt.Errorf("structure: data-marker block-entity nbt: %w", err)
+		}
+		if dm.Metadata == "" {
+			continue // not a DATA marker (or an empty marker) -- skip
+		}
+		rx, ry, rz := calculateRelativePosition(blk.Pos[0], blk.Pos[1], blk.Pos[2], rot, mir, pivotX, pivotZ)
+		out = append(out, DataMarker{
+			WorldPos: Pos{origin.X + rx, origin.Y + ry, origin.Z + rz},
+			Metadata: dm.Metadata,
+		})
+	}
+	return out, nil
+}
+
 // jigsawOrientationFront maps a jigsaw FrontAndTop orientation to its FRONT direction
 // (the connector's facing). FrontAndTop encodes front_top (e.g. north_up = front North,
 // top Up; down_east = front Down, top East). 16-02 aligns the next pool element to this

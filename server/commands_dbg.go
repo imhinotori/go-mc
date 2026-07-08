@@ -218,6 +218,15 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned phantom eid=%d at (%.1f,%.1f,%.1f) -- circles then dive-bombs; burns in daylight", e.id, p.x, p.y+12, p.z))
 		}
+	case "shulker":
+		// SHULKER (Task): spawn a Shulker directly (the End box-turret hostile, 30 HP). It clings CLOSED
+		// with +20 armor, OPENS to fire a homing ShulkerBullet at the nearest player within 15 blocks that
+		// deals 4.0 + inflicts LEVITATION (200 ticks), and TELEPORTS to a new attach surface when disturbed.
+		// Spawned 1 block up on the player column so it has a floor to cling to.
+		e := t.spawnShulker(p.x, p.y+1, p.z)
+		if e != nil {
+			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned shulker eid=%d at (%.1f,%.1f,%.1f) -- closed+armored, opens to fire levitation bullets", e.id, p.x, p.y+1, p.z))
+		}
 	case "warden":
 		// WARDEN (Task): spawn a Warden directly (the blind, sculk-summoned boss-tier hostile, 500 HP). It
 		// EMERGES for 134 ticks (locked), then tracks by ANGER: a player within FOLLOW_RANGE (24) accrues
@@ -669,7 +678,7 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] placed a simple_dungeon loot chest at (%d,%d,%d); open it", pos.X, pos.Y, pos.Z))
 		}
 	default:
-		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | dragon | iron_golem | villager | villager_farmer | wandering_trader | vex | ghast_hostile | blaze | phantom | strider | wither_skeleton | wither | hoglin | bee | goat | frog | camel | panda | snow_golem | sniffer | allay | axolotl | parrot | bat | squid | glow_squid | cod | salmon | pufferfish | tropical_fish | dolphin | tadpole | fangs | water | pig-in-water | raid | rain | redstone | trade | trident | throw-trident | crafter | map | loom | loot")
+		t.broadcastSystemChat("[dbg] usage: /dbg pig | cow | sheep | chicken | zombie | skeleton | spider | wolf | husk | mooshroom | silverfish | creeper | witch | rabbit | enderman | cat | fox | sulfur_cube | happy_ghast | endermite | turtle | ocelot | pillager | vindicator | evoker | ravager | dragon | iron_golem | villager | villager_farmer | wandering_trader | vex | ghast_hostile | blaze | phantom | shulker | strider | wither_skeleton | wither | hoglin | bee | goat | frog | camel | panda | snow_golem | sniffer | allay | axolotl | parrot | bat | squid | glow_squid | cod | salmon | pufferfish | tropical_fish | dolphin | tadpole | fangs | water | pig-in-water | raid | rain | redstone | trade | trident | throw-trident | crafter | map | loom | loot")
 	}
 }
 

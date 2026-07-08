@@ -338,11 +338,17 @@ func NewEndGenerator(seed int64, secs, minY int) *NoiseGenerator {
 	if err != nil {
 		panic("world: EndGenerator: build feature/decoration data: " + err.Error())
 	}
-	// Structures are inert in the End core: a router-backed surface sampler + the End biome
-	// lookup back the (empty) structure cache, and the StartGenerator is the noop set.
+	// END CITY (Task): the End's structure generator is the end_city start gen (end_cities random_spread
+	// placement + the end_highlands/end_midlands biome gate + the EndCityPieces recursive assembler). A
+	// router-backed surface sampler + the End biome lookup back the structure cache. A build-data error
+	// panics (asset bug), exactly like the overworld/nether structure wiring.
 	sampler := structure.NewRouterSurfaceSampler(r)
 	biomeAt := func(wx, wy, wz int) levelbiome.Type { return bs.GetBiome(wx, wy, wz) }
 	structCache := structure.NewCache(sampler, biomeAt)
+	endCityGen, err := structure.NewEndCityStartGen()
+	if err != nil {
+		panic("world: EndGenerator: build end_city start gen: " + err.Error())
+	}
 
 	return &NoiseGenerator{
 		seed:        seed,
@@ -356,7 +362,7 @@ func NewEndGenerator(seed int64, secs, minY int) *NoiseGenerator {
 		rep:         rep,
 		deco:        deco,
 		structCache: structCache,
-		structGen:   structure.NoopStartGenerator(),
+		structGen:   endCityGen,
 		air:         block.ToStateID[block.Air{}],
 		end:         true,
 	}

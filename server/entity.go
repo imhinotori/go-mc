@@ -465,6 +465,18 @@ type Entity struct {
 	// mob (the pig oracle) pays exactly one nil pointer and touches NONE of these fields -- additive-
 	// minimal, zero new RNG, byte-identical for every non-warden. Cite Warden + AngerManagement + SonicBoom.
 	warden *wardenState
+	// --- SHULKER (net.minecraft.world.entity.monster.Shulker, entity id 112) -------------------------
+	//
+	// Tick-owned state, set/read ONLY for a Shulker (shulkerAiStep gates on e.shulker != nil). All the
+	// shulker state (the peek amount 0..100 + the covered-armor toggle, the attach face, the color, the
+	// ranged attack timer, the teleport-on-expose) is grouped behind ONE pointer (e.shulker) so a plain
+	// mob (the pig oracle) pays exactly one nil pointer and touches NONE of these fields -- additive-
+	// minimal, zero new RNG, byte-identical for every non-shulker. Cite Shulker + Shulker$ShulkerAttackGoal.
+	shulker *shulkerState
+	// shulkerBullet is the live ShulkerBullet homing state (owner + target + life), set/read ONLY for a
+	// ShulkerBullet (shulkerBulletTick gates on e.shulkerBullet != nil). Additive-minimal; nil for every
+	// other entity. Cite ShulkerBullet.
+	shulkerBullet *shulkerBulletState
 	// --- MAGMA CUBE (net.minecraft.world.entity.monster.cubemob.MagmaCube) --------------------------
 	//
 	// Tick-owned plain values, set/read ONLY for a MagmaCube (magmaCubeAiStep gates on typ ==

@@ -7,6 +7,7 @@ import (
 
 	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/level/attribute"
+	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/plugin/host"
 	"github.com/imhinotori/sulfur/world"
 )
@@ -74,6 +75,14 @@ func (t *TickLoop) drainStructureSpawns(res world.ChunkResult) {
 		// the declared + oracle spawn paths via the one helper (entity.go) so the gap cannot recur.
 		initSpawnHealth(e)
 		_ = req.PersistenceRequired
+		// SHULKER (Task): a structure-spawned Sentry is a FULL shulker -- attach the shulker state (peek
+		// closed + the +20 covered armor, attachFace DOWN, color none) so the End City turret opens + fires
+		// like a /dbg shulker. The generic drain built the entity + attribute map; this adds the tick state.
+		// Cite Shulker(EntityType, Level) ctor + setRawPeekAmount(0).
+		if e.typ == entity.Shulker.ID {
+			e.shulker = &shulkerState{peek: shulkerPeekClosed, attachFace: block.Down, color: shulkerNoColor}
+			t.shulkerSetRawPeek(e, shulkerPeekClosed)
+		}
 		t.cur().entities.add(e) // the ONLY off-tick-boundary store mutation; tracker broadcasts AddEntity
 
 		// PLUGIN-02 (Plan 22) on_entity_spawn seam: fire ONCE here, immediately after the actual
@@ -133,6 +142,10 @@ var structureSpawnTypes = map[string]entity.Entity{
 	"witch":    entity.Witch,
 	"cat":      entity.Cat,
 	"villager": entity.Villager,
+	// SHULKER (Task): the End City "Sentry" data-marker inhabitant -- the box-turret hostile. Resolving
+	// it here lets drainStructureSpawns build a live shulker; the shulker peek/attack state is attached
+	// below (the drain special-cases it so a structure-spawned sentry is a FULLY functional shulker).
+	"shulker": entity.Shulker,
 }
 
 // resolveSpawnEntity resolves a SpawnRequest entity-type id (e.g. "minecraft:witch" or a bare

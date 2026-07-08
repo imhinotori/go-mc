@@ -439,6 +439,18 @@ func phantomSupplier() *Supplier {
 	return createMonsterAttributes().Build()
 }
 
+// shulkerSupplier is the port of Shulker.createAttributes(): Mob.createMobAttributes() + MAX_HEALTH
+// 30.0 (jar: net.minecraft.world.entity.monster.Shulker.createAttributes ==
+// createMobAttributes().add(MAX_HEALTH, 30.0d)). ARMOR is the createLivingAttributes registration
+// default 0.0 (Shulker adds NO base ARMOR); the +20 "covered" ARMOR is a transient modifier
+// (COVERED_ARMOR_MODIFIER = Identifier "covered", 20.0, ADD_VALUE) applied at spawn + removed while
+// open (Shulker.onDataUpdated / setRawPeekAmount branch). Cite Shulker.createAttributes.
+func shulkerSupplier() *Supplier {
+	return createMobAttributes().
+		AddValue(MaxHealth, 30.0).
+		Build()
+}
+
 // magmaCubeSupplier is the port of MagmaCube.createAttributes(): Monster.createMonsterAttributes()
 // + MOVEMENT_SPEED 0.20000000298023224 (jar: net.minecraft.world.entity.monster.cubemob.MagmaCube
 // .createAttributes == createMonsterAttributes().add(MOVEMENT_SPEED, 0.20000000298023224d)). MAX_HEALTH
@@ -1006,6 +1018,10 @@ var suppliers = map[string]*Supplier{
 	// updatePhantomSizeInfo sets ATTACK_DAMAGE = 6 + size at spawn (setPhantomSize). Keyed by its
 	// registry name so NewMapForEntity resolves it (its MobCategory is monster). Cite DefaultAttributes.PHANTOM.
 	"phantom": phantomSupplier(),
+	// SHULKER (Task): the End box-turret hostile. Shulker.createAttributes: Mob.createMobAttributes
+	// + MAX_HEALTH 30.0 (ARMOR base 0.0; the +20 "covered" ARMOR is a transient modifier applied while
+	// closed). Keyed by its registry name so NewMapForEntity resolves it. Cite Shulker.createAttributes.
+	"shulker": shulkerSupplier(),
 	// MAGMA CUBE (Task): the nether cube-mob (MagmaCube.createAttributes: Monster.createMonsterAttributes
 	// + MOVEMENT_SPEED 0.20000000298023224). setSize OVERRIDES MAX_HEALTH (size*size), MOVEMENT_SPEED
 	// (0.2+0.1*size), ATTACK_DAMAGE (size), ARMOR (size*3) at runtime. Keyed by its registry name so
