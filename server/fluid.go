@@ -422,14 +422,29 @@ func (t *TickLoop) fluidTick(pos pk.Position) {
 		next := t.getNewLiquid(pos)
 		if !sameFluid(cur, next) {
 			if !next.isFluid() {
-				// drained to nothing -> air
+				// FlowingFluid.tick empty branch: setBlock(pos, AIR, flag 3). Flag 3 =
+				// UPDATE_NEIGHBORS|UPDATE_CLIENTS -> Level.updateNeighborsAt fires neighborChanged on
+				// all 6 neighbours, and each neighbouring LiquidBlock.neighborChanged re-schedules its
+				// own fluid tick (getTickDelay). scheduleNeighbors is that 6-neighbour wake, so the
+				// drained cell's neighbours re-flow into/around the newly-empty cell.
 				t.setFluidBlock(pos, airStateID())
-				// neighbors may now need to re-flow into/around this newly-empty cell
 				t.scheduleNeighbors(pos)
 				return
 			}
+			// FlowingFluid.tick diminish branch: setBlock(pos, newLiquid.createLegacyBlock(), flag 3)
+			// THEN scheduleTick(pos, fluid, spreadDelay). The flag-3 write ALSO fires
+			// Level.updateNeighborsAt -> neighborChanged on all 6 neighbours (identical to the empty
+			// branch above - vanilla makes NO distinction, both writes use flag 3). Sulfur previously
+			// rescheduled ONLY this cell here, so a diminishing cell never woke its downstream
+			// neighbours: when a source was removed, the innermost ring re-evaluated once but the
+			// outer rings were never re-scheduled and stayed frozen at their stale level forever (the
+			// "flowing water does not drain" bug). scheduleNeighbors restores the flag-3 6-neighbour
+			// wake so the diminish cascades outward to the fixed point (each ring drops by dropOff per
+			// pass until every flowing cell reaches amount 0 -> air). CITE: FlowingFluid.tick ->
+			// ServerLevel.setBlock(...,3) -> LiquidBlock.neighborChanged -> scheduleTick.
 			t.setFluidBlock(pos, encodeFluid(next))
 			t.scheduleFluidTickKind(pos, cur)
+			t.scheduleNeighbors(pos)
 			cur = next
 		}
 	}
@@ -908,9 +923,14 @@ func canBeReplacedWith(cur, incoming fluidState) bool {
 	return incoming.amount > cur.amount // only a stronger flow replaces a weaker one
 }
 
-// scheduleNeighbors schedules the 4 horizontal neighbors, the cell above, and the cell below to
-// re-evaluate - used when this cell drains to air so adjacent fluid re-flows. Mirrors vanilla's
-// neighborChanged-driven re-scheduling.
+// scheduleNeighbors schedules the 4 horizontal neighbors, the cell above, AND the cell below to
+// re-evaluate - the port of the flag-3 setBlock inside FlowingFluid.tick, whose UPDATE_NEIGHBORS
+// bit runs Level.updateNeighborsAt -> LiquidBlock.neighborChanged (-> scheduleTick) on ALL SIX
+// neighbours of the mutated cell. It wakes each same-fluid neighbour so a drained/diminished cell
+// propagates its change outward (down-column drains, sideways rings recede). The below neighbour
+// matters for a draining falling column: the cell under a cell that just went to air/less must
+// re-evaluate (its sustaining fluid above changed). CITE: Level.updateNeighborsAt (all 6) ->
+// LiquidBlock.neighborChanged.
 func (t *TickLoop) scheduleNeighbors(pos pk.Position) {
 	for _, d := range horizontalDirs {
 		np := plus(pos, d)
@@ -920,6 +940,9 @@ func (t *TickLoop) scheduleNeighbors(pos pk.Position) {
 	}
 	if af := t.fluidAt(above(pos)); af.isFluid() {
 		t.scheduleFluidTickKind(above(pos), af)
+	}
+	if bf := t.fluidAt(below(pos)); bf.isFluid() {
+		t.scheduleFluidTickKind(below(pos), bf)
 	}
 }
 
