@@ -96,7 +96,7 @@ func TestLavaTickDelay30(t *testing.T) {
 	target := pk.Position{X: 5, Y: 64, Z: 4}
 	setSolid(mgr, pk.Position{X: 5, Y: 63, Z: 4})
 	loop.gametime = 100
-	loop.spreadTo(target, fluidState{isLava: true, amount: 6})
+	loop.spreadToDir(target, dirDown, fluidState{isLava: true, amount: 6})
 	q := loop.only().fluidSchedule
 	if q == nil || q.empty() {
 		t.Fatalf("spreadTo did not schedule a lava tick")
@@ -114,7 +114,7 @@ func TestLavaTickDelay30(t *testing.T) {
 	loop2, mgr2 := newFluidLoop()
 	setSolid(mgr2, pk.Position{X: 5, Y: 63, Z: 4})
 	loop2.gametime = 100
-	loop2.spreadTo(target, fluidState{isLava: true, amount: 6})
+	loop2.spreadToDir(target, dirDown, fluidState{isLava: true, amount: 6})
 	early := loop2.only().fluidSchedule.drainDue(100 + 5)
 	for _, st := range early {
 		if st.pos == target {
@@ -153,7 +153,7 @@ func TestLavaOntoWaterMakesStone(t *testing.T) {
 	loop, mgr := newFluidLoop()
 	pos := pk.Position{X: 4, Y: 64, Z: 4}
 	setWater(mgr, pos, 0)
-	loop.spreadTo(pos, fluidState{isLava: true, falling: true, amount: waterSourceAmount})
+	loop.spreadToDir(pos, dirDown, fluidState{isLava: true, falling: true, amount: waterSourceAmount})
 
 	if _, isW := levelAt(mgr, pos); isW {
 		t.Fatalf("water was not consumed by lava-onto-water")
