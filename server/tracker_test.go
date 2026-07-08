@@ -466,3 +466,140 @@ func TestAsyncTrackerSwapPointCompiles(t *testing.T) {
 	var seam interface{ Tick() } = at
 	seam.Tick() // safe inline no-op with no players
 }
+
+
+// --- FIX-A: the per-tick entity-spawn throttle (backpressure kick) ---------------------------
+//
+// The backpressure kick (task #12) was the entity tracker flooding a player's BOUNDED outbound
+// queue with the spawn burst (AddEntity + SetEntityData + equipment + motion) of EVERY nearby
+// entity in ONE tick. On (re)join near a dense area that overran outboundCap and tripped the
+// drop-and-disconnect in Client.Send. These tests assert the tracker now spawns at most
+// maxSpawnsPerTick NEW entities per tick and drains a large backlog over many ticks WITHOUT ever
+// overflowing (never closing) the queue.
+
+// trackerCapPlayer registers a player exactly like newTrackerPlayer but with a caller-chosen
+// outbound queue capacity, so a test can prove the throttle keeps a large backlog under a bounded
+// queue (and, with the throttle off, would overflow it).
+func trackerCapPlayer(loop *TickLoop, entityID int32, x, z float64, cap int) *tickPlayer {
+	p := &tickPlayer{
+		client:   captureClient(cap),
+		entityID: entityID,
+		x:        x, z: z,
+		viewDist: 8,
+	}
+	loop.players = append(loop.players, p)
+	if loop.clientIndex == nil {
+		loop.clientIndex = make(map[*Client]*tickPlayer)
+	}
+	loop.clientIndex[p.client] = p
+	return p
+}
+
+// spawnEntitiesNear adds n entities all within trackRange of (px,pz), returning their ids. They
+// are packed into a small block cluster around the player so every one is in the tracker's
+// broad-phase (near()) window this tick.
+func spawnEntitiesNear(loop *TickLoop, n int, px, pz float64) []int32 {
+	ids := make([]int32, 0, n)
+	for i := 0; i < n; i++ {
+		// Keep the offset small (a few blocks) so all n are inside trackRange columns.
+		dx := float64(i%5) - 2.0
+		dz := float64((i/5)%5) - 2.0
+		e := NewEntity(loop.idAlloc.AllocID(), entity.SulfurCube, px+dx, 64, pz+dz)
+		loop.only().entities.add(e)
+		ids = append(ids, e.id)
+	}
+	return ids
+}
+
+// TestEntitySpawnBudgetPerTick drives the SYNCHRONOUS golden tracker over a large in-range backlog
+// and asserts each tick spawns AT MOST maxSpawnsPerTick new entities (AddEntity count), the client
+// is NEVER closed (no backpressure drop), and the backlog fully drains over multiple ticks with
+// every entity tracked exactly once.
+func TestEntitySpawnBudgetPerTick(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	// A queue far SMALLER than the backlog's total packet count: 300 entities * ~2 pkts = ~600,
+	// well over this 128 cap. Without the throttle a single Tick would overflow it and close the
+	// client (backpressure). With the throttle each tick emits <= maxSpawnsPerTick*~2 packets, so
+	// a freshly-drained queue never overflows.
+	const backlog = 300
+	p := trackerCapPlayer(loop, 1_000_000, 8.5, 8.5, 128)
+	spawnEntitiesNear(loop, backlog, 8.5, 8.5)
+
+	et := &entityTracker{loop: loop}
+	totalSpawned := 0
+	ticks := 0
+	for len(p.tracked) < backlog {
+		ticks++
+		if ticks > 200 {
+			t.Fatalf("backlog did not drain in 200 ticks: tracked=%d/%d", len(p.tracked), backlog)
+		}
+		et.Tick()
+		if p.client.closed.Load() {
+			t.Fatalf("tick %d: client was CLOSED (backpressure kick=%q) — the spawn burst overflowed the bounded queue",
+				ticks, p.client.DisconnectReason())
+		}
+		// Drain this tick's packets and count the spawns; swap in a fresh queue for the next tick
+		// (mirrors writeLoop continuously draining the socket between ticks).
+		pkts := drainPackets(p.client)
+		spawnsThisTick := countID(pkts, packetid.ClientboundAddEntity)
+		if spawnsThisTick > maxSpawnsPerTick {
+			t.Fatalf("tick %d spawned %d entities, exceeds the per-tick budget %d", ticks, spawnsThisTick, maxSpawnsPerTick)
+		}
+		totalSpawned += spawnsThisTick
+		p.client = captureClient(128)
+		loop.clientIndex[p.client] = p
+	}
+
+	// Every entity spawned exactly once, and it genuinely took MORE than one tick (proving the
+	// throttle spread the burst, not that the backlog was trivially small).
+	if totalSpawned != backlog {
+		t.Fatalf("total AddEntity across all ticks = %d, want %d (one per entity, no dups)", totalSpawned, backlog)
+	}
+	if len(p.tracked) != backlog {
+		t.Fatalf("final tracked set = %d, want %d", len(p.tracked), backlog)
+	}
+	wantMinTicks := (backlog + maxSpawnsPerTick - 1) / maxSpawnsPerTick
+	if ticks < wantMinTicks {
+		t.Fatalf("backlog drained in %d ticks, want >= %d (budget %d over %d entities)", ticks, wantMinTicks, maxSpawnsPerTick, backlog)
+	}
+	// Idempotency: a further tick with nothing new spawns nothing.
+	et.Tick()
+	if extra := countID(drainPackets(p.client), packetid.ClientboundAddEntity); extra != 0 {
+		t.Fatalf("a settled tracker re-spawned %d entities, want 0 (idempotent)", extra)
+	}
+}
+
+// TestAsyncSpawnBudgetPerTick asserts the LIVE async tracker (the OPT-02 executor) applies the same
+// per-tick spawn budget: each submitted diff spawns at most maxSpawnsPerTick, the owner-side apply
+// never overflows a bounded queue (client never closed), and the backlog drains over ticks.
+func TestAsyncSpawnBudgetPerTick(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	const backlog = 250
+	p := trackerCapPlayer(loop, 1_000_000, 8.5, 8.5, 128)
+	spawnEntitiesNear(loop, backlog, 8.5, 8.5)
+
+	ticks := 0
+	for len(p.tracked) < backlog {
+		ticks++
+		if ticks > 200 {
+			t.Fatalf("async backlog did not drain in 200 ticks: tracked=%d/%d", len(p.tracked), backlog)
+		}
+		drainAsyncTracker(t, loop, 1) // submit + wait + owner-apply one player's diff
+		if p.client.closed.Load() {
+			t.Fatalf("tick %d: client CLOSED (backpressure=%q) — async spawn burst overflowed the queue",
+				ticks, p.client.DisconnectReason())
+		}
+		spawnsThisTick := countID(drainPackets(p.client), packetid.ClientboundAddEntity)
+		if spawnsThisTick > maxSpawnsPerTick {
+			t.Fatalf("async tick %d spawned %d, exceeds budget %d", ticks, spawnsThisTick, maxSpawnsPerTick)
+		}
+		p.client = captureClient(128)
+		loop.clientIndex[p.client] = p
+	}
+	if len(p.tracked) != backlog {
+		t.Fatalf("async final tracked = %d, want %d", len(p.tracked), backlog)
+	}
+	if wantMin := (backlog + maxSpawnsPerTick - 1) / maxSpawnsPerTick; ticks < wantMin {
+		t.Fatalf("async backlog drained in %d ticks, want >= %d", ticks, wantMin)
+	}
+}

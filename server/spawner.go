@@ -400,18 +400,23 @@ func (t *TickLoop) naturalSpawn() {
 	// Reference Y for the column scan: a player's feet (the surface a near-player spawn sits on).
 	refY := t.spawnRefY()
 
-	// DEFERRED — Mob.checkDespawn (Phase 35-02, SC#3, recorded in code + SUMMARY): vanilla bounds the
-	// hostile POPULATION two ways — the per-category spawn CAP (ported here as monsterCap, the gate that
-	// matters for "a survival night needs hostiles under a cap") AND a per-mob checkDespawn that removes
-	// a mob with no nearby player (Mob.checkDespawn: a noActionTime counter + getNearestPlayer distance
-	// buckets — instant-despawn past EntityType.getCategory() despawn distance, a random.nextInt(800)==0
-	// roll past the soft radius, persistenceRequired/requiresCustomPersistence guards). NONE of that
-	// infrastructure exists yet (no noActionTime counter, no per-mob nearest-player despawn loop, no
-	// persistenceRequired flag — entity.go's `age` is ItemEntity/XP-orb only). Porting it needs those
-	// new subsystems, so it is DEFERRED. The cap re-check (submitSpawnScanFor + spawnCandidatesReady
-	// .applyTo) already bounds SPAWNS — the load-bearing anti-flood — so the world cannot exceed the
-	// MONSTER cap; checkDespawn is the future complement that culls idle mobs far from players. NOT
-	// faked. CITE: net.minecraft.world.entity.Mob.checkDespawn.
+	// POPULATION BOUND -- vanilla bounds the live mob POPULATION two ways, and BOTH are now live in
+	// Sulfur (so the entity count stabilizes at the vanilla cap and never runs to thousands, task #12):
+	//   1. the per-category spawn CAP (creatureCap/monsterCap): submitSpawnScanFor GATES against the
+	//      GLOBAL live count (spawnLiveCount -> countByCategoryAcrossRegions) BEFORE submitting a scan,
+	//      and spawnCandidatesReady.applyTo (async.go) RE-CHECKS the same live count on the owner before
+	//      the add -- so no spawn ever pushes the population past the cap (the load-bearing anti-flood);
+	//   2. the per-mob Mob.checkDespawn cull (despawn.go), run at the TOP of the tickAI per-mob loop
+	//      (tick_phases.go, before serverAiStep) for EVERY live AI mob: it reads the noActionTime idle
+	//      counter (incremented in serverAiStep, ai_mob.go) + getNearestPlayer distance and DISCARDS a
+	//      mob past its EntityType.getCategory() despawn distance (instant cull) or, past the soft
+	//      radius after noActionTime>600, on a random.nextInt(800)==0 roll -- respecting the
+	//      persistenceRequired/requiresCustomPersistence guards. So far mobs are culled continuously and
+	//      the spawner backfills only up to the cap.
+	// Together the cap gate (spawns can't exceed the cap) and checkDespawn (idle/far mobs are removed)
+	// keep the world at the vanilla steady-state. Deferred vs vanilla (documented): the per-biome
+	// MobSpawnSettings spawn weights and the full LocalMobCapCalculator per-player distance weighting.
+	// CITE: net.minecraft.world.entity.Mob.checkDespawn; NaturalSpawner.getFilteredSpawningCategories.
 
 	// Two faithful passes per cycle (vanilla NaturalSpawner iterates the filtered spawning categories):
 	// the CREATURE pass, then the night-gated MONSTER pass (Phase 35-02). The single-in-flight gate

@@ -22,6 +22,27 @@ import pk "github.com/imhinotori/sulfur/net/packet"
 // (2*trackRange+1)^2 candidate columns, never the whole world.
 const trackRange = 6
 
+// maxSpawnsPerTick is the per-player, per-tick budget on NEWLY-tracked entity SPAWNS (the
+// ClientboundAddEntity + SetEntityData + equipment + motion burst). It is the entity-tracker
+// analogue of desiredChunksPerTick (tick_phases.go): chunk streaming is already throttled per-tick,
+// but the entity spawn burst was NOT -- on (re)join near a dense area the tracker enqueued a spawn
+// packet for EVERY nearby entity in ONE tick, and a large backlog (thousands of mobs) overran the
+// bounded per-connection outbound queue (client.go outboundCap == 4096) in a single tick -> the
+// drop-and-disconnect "backpressure" kick (client.go Send).
+//
+// This bounds how many NEW entities are spawned to a player per tick; the rest are simply LEFT out
+// of p.tracked this tick and picked up on subsequent ticks (the next diff sees them still
+// not-tracked and spawns the next batch), so a 4000-entity backlog drains over many ticks instead
+// of overflowing the queue at once. It is the vanilla-shaped incremental behavior (vanilla's
+// ChunkMap.tick sends tracker updates a bounded slice at a time). Removals (RemoveEntities) and the
+// per-entity movement stream are NOT throttled -- only the spawn burst, which is the unbounded one.
+//
+// Each newly-tracked entity costs ~2-4 packets (AddEntity + SetEntityData always, + equipment slots
+// + motion when moving); 40 spawns/tick is ~80-160 packets/tick, comfortably under the 4096 queue
+// alongside the throttled chunk stream, and drains a 4000-entity backlog in ~100 ticks (~5s) with no
+// visible pop-in (entities appear as the player settles, exactly as chunks stream in).
+const maxSpawnsPerTick = 40
+
 // entityTracker is the synchronous tracking executor assigned to TickLoop.tracker. It holds
 // only a back-reference to the loop; all the state it reads/writes lives on the loop and is
 // tick-owned. Phase 8 replaces this type (behind the unchanged interface) with an async
@@ -66,6 +87,13 @@ func (et *entityTracker) Tick() {
 		// NOT seen has left range and is batched into the single RemoveEntities below.
 		seen := make(map[int32]bool, len(visible))
 
+		// spawned counts the NEWLY-tracked entities emitted to this player THIS tick. Once it
+		// reaches maxSpawnsPerTick the remaining new-in-range entities are NOT spawned this tick
+		// (and NOT marked tracked), so the next tick's diff sees them still not-tracked and emits
+		// the next batch -- draining a large backlog over ticks instead of overflowing the bounded
+		// outbound queue in one (the FIX-A per-tick spawn budget).
+		spawned := 0
+
 		for _, e := range visible {
 			if e == nil || e.id == p.entityID {
 				continue // a player never tracks itself
@@ -73,6 +101,12 @@ func (et *entityTracker) Tick() {
 			seen[e.id] = true
 
 			if !p.tracked[e.id] {
+				// FIX-A budget gate: if this player already hit its per-tick spawn budget, DEFER this
+				// entity -- do NOT emit and do NOT mark it tracked, so the next tick re-picks it. seen[e.id]
+				// is already set above, so a deferred (not-yet-spawned) entity is never mistaken for gone.
+				if spawned >= maxSpawnsPerTick {
+					continue
+				}
 				// Newly visible: spawn it. AddEntity, then SetEntityData (always — the 0xFF
 				// terminator keeps the stream aligned), then SetEntityMotion only if moving.
 				p.client.Send(encodeAddEntity(e))
@@ -86,6 +120,7 @@ func (et *entityTracker) Tick() {
 					p.client.Send(encodeSetEntityMotion(e))
 				}
 				p.tracked[e.id] = true
+				spawned++
 				continue
 			}
 
@@ -236,11 +271,25 @@ func computeTrackerDiff(snap []Entity, tracked map[int32]bool) (packets []pk.Pac
 	// seen has left range and is batched into the single RemoveEntities below.
 	seen := make(map[int32]bool, len(snap))
 
+	// spawned counts the NEWLY-tracked entities this diff emits. The async tracker submits ONE
+	// diff per player per tick, so bounding spawns per-diff == bounding them per-tick (the FIX-A
+	// budget). A deferred entity is simply left OUT of `added` (its packets are not appended and
+	// the owner never marks it tracked in applyTo), so the NEXT tick's diff sees it still
+	// not-tracked and spawns the next batch -- the same incremental drain the sync tracker does.
+	spawned := 0
+
 	for i := range snap {
 		e := &snap[i] // worker-owned value; the encoders read it but never retain it
 		seen[e.id] = true
 
 		if !tracked[e.id] {
+			// FIX-A budget gate: once this diff has emitted maxSpawnsPerTick new spawns, DEFER the
+			// rest -- do not append their packets and do not record them in `added`, so applyTo does
+			// not mark them tracked and the next tick's diff re-picks them. seen[e.id] is set above,
+			// so a deferred entity is never mistaken for gone (no spurious RemoveEntities).
+			if spawned >= maxSpawnsPerTick {
+				continue
+			}
 			// Newly visible: spawn it (AddEntity, then SetEntityData always, then SetEntityMotion
 			// only if moving) and record the add in the delta.
 			packets = append(packets, encodeAddEntity(e))
@@ -252,6 +301,7 @@ func computeTrackerDiff(snap []Entity, tracked map[int32]bool) (packets []pk.Pac
 				packets = append(packets, encodeSetEntityMotion(e))
 			}
 			added = append(added, e.id)
+			spawned++
 			continue
 		}
 
