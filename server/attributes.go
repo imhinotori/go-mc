@@ -66,6 +66,7 @@ const (
 	attrEntityInteractionRange
 	attrStepHeight
 	attrSafeFallDistance
+	attrMiningEfficiency
 )
 
 // playerAttributeBase is the per-player BASE value for each attribute — the value
@@ -88,6 +89,7 @@ var playerAttributeBase = map[attributeKey]float64{
 	attrEntityInteractionRange: 3.0,                 // registration default
 	attrStepHeight:             0.6,                 // createLivingAttributes STEP_HEIGHT registration default (Player no override)
 	attrSafeFallDistance:       3.0,                 // createLivingAttributes SAFE_FALL_DISTANCE registration default (Player no override)
+	attrMiningEfficiency:       0.0,                 // Player createAttributes .add(MINING_EFFICIENCY) registration default 0.0 (Efficiency enchant adds level^2+1)
 }
 
 // attributeHolder is a per-player map of attribute -> base value. It is the Go stand-in for

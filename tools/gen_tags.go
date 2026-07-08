@@ -26,6 +26,16 @@
 // Phase 29 — the consumer is Phase 32 (TemptGoal). This is intentional shared-tooling front-
 // loading: the data is real and tested headless (data/tag/tags_test.go), NOT a built-but-unwired
 // violation.
+//
+// BLOCK-TAG NOTE: the current GenTags.java extractor emits ONLY damage_type + item tags into
+// tags.json -- it does NOT yet emit block tags. The BlockTags table in data/tag/tags.go (the
+// recursively-flattened mineable/pickaxe|axe|shovel|hoe membership that the Tool component mining
+// rules read via BlockState.is) is therefore maintained OUT-OF-BAND: extracted directly from the
+// jar's data/minecraft/tags/block/mineable/*.json (recursively resolving nested '#'-refs, the same
+// TagLoader.build semantics GenTags applies to item/damage_type). Until GenTags is extended to add
+// a "block" section to tags.json, a plain regen of this file does NOT reproduce BlockTags -- the
+// block-tag block must be re-appended from the jar. This is a documented follow-up, not a silent
+// gap: the data is real, jar-derived, and tested (data/tag/tags_test.go).
 package main
 
 import (
