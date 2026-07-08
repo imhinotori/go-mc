@@ -109,7 +109,6 @@ func TestTreeFeaturePlaces(t *testing.T) {
 	assertViewsEqual(t, view, view2, center, minY, floorY+1, floorY+40)
 
 	oakLog := block.ToStateID[block.OakLog{Axis: block.Y}]
-	oakLeaves := block.ToStateID[block.OakLeaves{Distance: 7, Persistent: false, Waterlogged: false}]
 
 	// The log column: wantHeight logs from pos.Y up.
 	logs := 0
@@ -126,20 +125,13 @@ func TestTreeFeaturePlaces(t *testing.T) {
 		t.Fatalf("below-trunk block is not dirt")
 	}
 	// Foliage leaves were placed around the top (the blob is 3 high around the attachment).
-	leaves := 0
-	for dy := -3; dy <= 1; dy++ {
-		for dx := -2; dx <= 2; dx++ {
-			for dz := -2; dz <= 2; dz++ {
-				if view.GetBlock(pos.X+dx, pos.Y+wantHeight+dy, pos.Z+dz) == oakLeaves {
-					leaves++
-				}
-			}
-		}
-	}
-	if leaves == 0 {
+	// Count by block FAMILY (any DISTANCE): TreeFeature.updateLeaves now rewrites each placed
+	// leaf's DISTANCE to 1..6 from the nearest log, so an exact Distance:7 stateID match no
+	// longer finds the (correctly distance-fixed) canopy.
+	if !hasBlockFamily(view, placement.BlockPos{X: pos.X, Y: pos.Y + wantHeight, Z: pos.Z}, "minecraft:oak_leaves", -3, 1, 2) {
 		t.Fatalf("no oak leaves placed around the trunk top")
 	}
-	t.Logf("oak: %d logs, %d leaves, height %d", logs, leaves, wantHeight)
+	t.Logf("oak: %d logs, height %d", logs, wantHeight)
 
 	// The live worldgen heightmap rose to cover the trunk top (heightmap-live writes).
 	ch, _ := view.chunkAt(pos.X, pos.Z)
@@ -175,13 +167,13 @@ func TestTreeCrossChunkEdge(t *testing.T) {
 		t.Fatalf("edge tree placed nothing")
 	}
 
-	oakLeaves := block.ToStateID[block.OakLeaves{Distance: 7, Persistent: false, Waterlogged: false}]
-	// Scan the +x neighbor chunk (world x in [16, 18]) for spilled leaves.
+	// Scan the +x neighbor chunk (world x in [16, 18]) for spilled leaves. Count by block
+	// FAMILY (any DISTANCE): updateLeaves rewrites the placed leaves' DISTANCE to 1..6.
 	spilled := 0
 	for x := 16; x <= 17; x++ {
 		for y := floorY; y < floorY+12; y++ {
 			for z := pos.Z - 2; z <= pos.Z+2; z++ {
-				if view.GetBlock(x, y, z) == oakLeaves {
+				if b := block.StateList[view.GetBlock(x, y, z)]; b != nil && b.ID() == "minecraft:oak_leaves" {
 					spilled++
 				}
 			}
@@ -252,21 +244,11 @@ func TestBirchTree(t *testing.T) {
 	}
 
 	birchLog := block.ToStateID[block.BirchLog{Axis: block.Y}]
-	birchLeaves := block.ToStateID[block.BirchLeaves{Distance: 7, Persistent: false, Waterlogged: false}]
 	if view.GetBlock(pos.X, pos.Y, pos.Z) != birchLog {
 		t.Fatalf("birch trunk base is not birch_log")
 	}
-	leaves := 0
-	for dy := 2; dy <= 6; dy++ {
-		for dx := -2; dx <= 2; dx++ {
-			for dz := -2; dz <= 2; dz++ {
-				if view.GetBlock(pos.X+dx, pos.Y+dy, pos.Z+dz) == birchLeaves {
-					leaves++
-				}
-			}
-		}
-	}
-	if leaves == 0 {
+	// Count by block FAMILY (any DISTANCE): updateLeaves rewrites leaf DISTANCE to 1..6.
+	if !hasBlockFamily(view, pos, "minecraft:birch_leaves", 2, 6, 2) {
 		t.Fatalf("no birch leaves placed")
 	}
 }
@@ -308,21 +290,11 @@ func TestSelectorResolvesToRealTree(t *testing.T) {
 
 	// The selector resolved the oak sub-feature -> the live tree body -> real oak blocks.
 	oakLog := block.ToStateID[block.OakLog{Axis: block.Y}]
-	oakLeaves := block.ToStateID[block.OakLeaves{Distance: 7, Persistent: false, Waterlogged: false}]
 	if view.GetBlock(pos.X, pos.Y, pos.Z) != oakLog {
 		t.Fatalf("selector did not grow a real oak trunk (no_op still wired?)")
 	}
-	foundLeaf := false
-	for dy := 2; dy <= 7; dy++ {
-		for dx := -2; dx <= 2; dx++ {
-			for dz := -2; dz <= 2; dz++ {
-				if view.GetBlock(pos.X+dx, pos.Y+dy, pos.Z+dz) == oakLeaves {
-					foundLeaf = true
-				}
-			}
-		}
-	}
-	if !foundLeaf {
+	// Count by block FAMILY (any DISTANCE): updateLeaves rewrites leaf DISTANCE to 1..6.
+	if !hasBlockFamily(view, pos, "minecraft:oak_leaves", 2, 7, 2) {
 		t.Fatalf("selector-grown oak has no leaves (foliage not placed through the recursion)")
 	}
 }
@@ -344,21 +316,6 @@ func growTree(t *testing.T, reg *feature.Registry, id string, seed int64) (*Neig
 		t.Fatalf("%s treeBody placed nothing", id)
 	}
 	return view, pos
-}
-
-// countBlock counts how many cells of state `st` exist in a box around the anchor.
-func countBlock(view *Neighborhood, pos placement.BlockPos, st block.StateID, dyLo, dyHi, r int) int {
-	n := 0
-	for dy := dyLo; dy <= dyHi; dy++ {
-		for dx := -r; dx <= r; dx++ {
-			for dz := -r; dz <= r; dz++ {
-				if view.GetBlock(pos.X+dx, pos.Y+dy, pos.Z+dz) == st {
-					n++
-				}
-			}
-		}
-	}
-	return n
 }
 
 // hasBlockFamily reports whether any cell in the box is a block with the given ID (any state).
@@ -384,11 +341,11 @@ func TestSpruceWithPodzol(t *testing.T) {
 	// spruce: the cone foliage renders (spruce_log + spruce_leaves).
 	view, pos := growTree(t, reg, "minecraft:spruce", 0x59E0)
 	spruceLog := block.ToStateID[block.SpruceLog{Axis: block.Y}]
-	spruceLeaves := block.ToStateID[block.SpruceLeaves{Distance: 7, Persistent: false, Waterlogged: false}]
 	if view.GetBlock(pos.X, pos.Y, pos.Z) != spruceLog {
 		t.Fatalf("spruce trunk base is not spruce_log")
 	}
-	if countBlock(view, pos, spruceLeaves, 1, 12, 4) == 0 {
+	// Count by block FAMILY (any DISTANCE): updateLeaves rewrites leaf DISTANCE to 1..6.
+	if !hasBlockFamily(view, pos, "minecraft:spruce_leaves", 1, 12, 4) {
 		t.Fatalf("spruce grew no cone leaves")
 	}
 
