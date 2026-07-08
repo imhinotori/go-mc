@@ -523,6 +523,39 @@ func (t *TickLoop) createBlockEntityOnPlace(pos pk.Position, state block.StateID
 		t.resolveSpawner(pos, "")
 		return
 	}
+	if isSculkCatalystBlock(state) {
+		// A placed SCULK CATALYST gets its (empty spreader) SculkCatalystBlockEntity + an empty BE compound
+		// so the tick drive resolves it. SculkCatalystBlock is a BaseEntityBlock; newBlockEntity = new
+		// SculkCatalystBlockEntity(pos, state). The spreader cursors run from the next tick (empty until a
+		// nearby mob dies). CITE: SculkCatalystBlock (EntityBlock).
+		empty := nbt.RawMessage{Type: nbt.TagCompound, Data: []byte{0x00}}
+		t.world().SetBlockEntityAt(pos, block.EntityTypes["minecraft:sculk_catalyst"], empty, dimMinY)
+		t.resolveSculkCatalyst(pos)
+		return
+	}
+	if isSculkSensorBlock(state) {
+		// A placed SCULK SENSOR / CALIBRATED SCULK SENSOR gets its (freq 0) SculkSensorBlockEntity + an
+		// empty BE compound so the tick + listener drives resolve it. Both are BaseEntityBlocks;
+		// newBlockEntity = new SculkSensorBlockEntity / CalibratedSculkSensorBlockEntity. CITE:
+		// SculkSensorBlock / CalibratedSculkSensorBlock (EntityBlock).
+		empty := nbt.RawMessage{Type: nbt.TagCompound, Data: []byte{0x00}}
+		if block.IsCalibratedSculkSensor(state) {
+			t.world().SetBlockEntityAt(pos, block.EntityTypes["minecraft:calibrated_sculk_sensor"], empty, dimMinY)
+		} else {
+			t.world().SetBlockEntityAt(pos, block.EntityTypes["minecraft:sculk_sensor"], empty, dimMinY)
+		}
+		t.resolveSculkSensor(pos)
+		return
+	}
+	if isSculkShriekerBlock(state) {
+		// A placed SCULK SHRIEKER gets its (warningLevel 0) SculkShriekerBlockEntity + an empty BE compound
+		// so the tick + step drives resolve it. SculkShriekerBlock is a BaseEntityBlock; newBlockEntity =
+		// new SculkShriekerBlockEntity(pos, state). CITE: SculkShriekerBlock (EntityBlock).
+		empty := nbt.RawMessage{Type: nbt.TagCompound, Data: []byte{0x00}}
+		t.world().SetBlockEntityAt(pos, block.EntityTypes["minecraft:sculk_shrieker"], empty, dimMinY)
+		t.resolveSculkShrieker(pos)
+		return
+	}
 	if isSignBlock(state) {
 		// SignBlock is a BaseEntityBlock; newBlockEntity = new SignBlockEntity(pos, state) (empty:
 		// default front/back SignText, not waxed). Write an empty BE compound so the open-editor +

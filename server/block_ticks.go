@@ -442,6 +442,29 @@ func (t *TickLoop) tickBlock(pos pk.Position, typ blockTickType) {
 			return
 		}
 		t.fallingBlockTick(state, pos)
+	case sculkCatalystTickType:
+		// SculkCatalystBlock.tick stale guard: only tick if still a sculk catalyst. The scheduled 8-tick
+		// tick clears the PULSE (bloom) property (sculk_catalyst_be.go). CITE: SculkCatalystBlock.tick.
+		if !block.IsSculkCatalyst(state) {
+			return
+		}
+		t.sculkCatalystTick(state, pos)
+	case sculkSensorTickType, calibratedSculkSensorTickType:
+		// SculkSensorBlock.tick stale guard: only tick if still a sculk sensor (either variant). The
+		// scheduled tick drives the ACTIVE->COOLDOWN->INACTIVE phase machine (sculk_sensor_be.go). CITE:
+		// SculkSensorBlock.tick.
+		if !block.IsAnySculkSensor(state) {
+			return
+		}
+		t.sculkSensorTick(state, pos)
+	case sculkShriekerTickType:
+		// SculkShriekerBlock.tick stale guard: only tick if still a sculk shrieker. The scheduled 90-tick
+		// tick clears SHRIEKING and runs tryRespond (the warden warning-level response). CITE:
+		// SculkShriekerBlock.tick.
+		if !block.IsSculkShrieker(state) {
+			return
+		}
+		t.sculkShriekerTick(state, pos)
 	default:
 		// Buttons schedule under their own block id (13 variants). Route any button tick to the unpress
 		// handler; the IsButton guard is the tickBlock `state.is(block)` stale check.

@@ -293,6 +293,17 @@ func (t *TickLoop) stateGetSignal(state block.StateID, pos pk.Position, directio
 		// WeightedPressurePlateBlock.ownSignal (getSignal): getSignalForState == POWER (0..15) out EVERY face.
 		// CITE: BasePressurePlateBlock.ownSignal -> WeightedPressurePlateBlock.getSignalForState.
 		return block.WeightedPressurePlatePower(state)
+	case block.IsCalibratedSculkSensor(state):
+		// CalibratedSculkSensorBlock.getSignal: ownSignal (POWER, 0..15) out every face EXCEPT FACING
+		// (direction == FACING -> 0). CITE: CalibratedSculkSensorBlock.getSignal.
+		if facing, ok := block.CalibratedSculkSensorFacing(state); ok && facing == direction {
+			return 0
+		}
+		return block.SculkSensorPower(state)
+	case block.IsSculkSensor(state):
+		// SculkSensorBlock.ownSignal (getSignal): POWER (0..15) out EVERY face. CITE: SculkSensorBlock
+		// (no getSignal override -> BlockBehaviour ownSignal == POWER, all faces).
+		return block.SculkSensorPower(state)
 	default:
 		return 0 // BlockBehaviour default: ownSignal == 0
 	}
@@ -364,6 +375,16 @@ func (t *TickLoop) stateGetDirectSignal(state block.StateID, pos pk.Position, di
 		// BasePressurePlateBlock.getDirectSignal: UP == direction ? getSignalForState : 0 (the strong signal
 		// a plate emits straight UP into the block above; every other face is weak-only). CITE:
 		// BasePressurePlateBlock.getDirectSignal.
+		if direction == block.Up {
+			return t.stateGetSignal(state, pos, direction)
+		}
+		return 0
+	case block.IsAnySculkSensor(state):
+		// SculkSensorBlock.getDirectSignal: UP == direction ? getSignal(...) : 0 (the strong signal a sculk
+		// sensor emits straight UP; CalibratedSculkSensorBlock inherits this, it does NOT override
+		// getDirectSignal). getSignal(UP) is POWER (UP is never the calibrated FACING-exclusion here for a
+		// top-emitting sensor unless FACING==UP, which stateGetSignal already handles). CITE:
+		// SculkSensorBlock.getDirectSignal.
 		if direction == block.Up {
 			return t.stateGetSignal(state, pos, direction)
 		}

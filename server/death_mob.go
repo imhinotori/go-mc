@@ -319,6 +319,17 @@ func (t *TickLoop) dropMobExperience(e *Entity, src damageSource) {
 		return
 	}
 
+	// SCULK CATALYST (sculk_catalyst_be.go): the vanilla ENTITY_DIE game event fires from
+	// LivingEntity.die regardless of the killer, and a SculkCatalystBlockEntity.CatalystListener within
+	// listener range (8, BY_DISTANCE) CONSUMES the mob XP (skipDropExperience) after feeding it into
+	// the catalyst SculkSpreader as spread charge. So before the orb path, offer the death to the
+	// nearest in-range catalyst; if it handles it, no ExperienceOrb spawns (matching vanilla). The
+	// reward draw + the addCursors are the CatalystListener.handleGameEvent body. CITE:
+	// SculkCatalystBlockEntity.CatalystListener.handleGameEvent.
+	if t.sculkCatalystOnEntityDie(e) {
+		return
+	}
+
 	// The player-kill gate: lastHurtByPlayerMemoryTime>0 (the player-attack proxy) && shouldDropExperience
 	// (!isBaby, cited true) && MOB_DROPS (gamerule, cited true).
 	const shouldDropExperience = true

@@ -233,9 +233,15 @@ func (t *TickLoop) comparatorGetInputSignal(state block.StateID, pos pk.Position
 		return resultSignal
 	}
 	targetPos := relative(pos, facing)
-	// targetState.hasAnalogOutputSignal(): true for a container block-entity (chest/furnace/dispenser/
-	// brewing/hopper — AnalogOutputBlock). getAnalogOutputSignal == getRedstoneSignalFromContainer(container).
-	if sig, has := t.containerAnalogOutputSignal(targetPos); has {
+	// targetState.hasAnalogOutputSignal(): a SCULK SENSOR (hasAnalogOutputSignal true) yields its
+	// lastVibrationFrequency while ACTIVE, else 0 -- the comparator reads the FREQUENCY, not the power.
+	// CITE: SculkSensorBlock.getAnalogOutputSignal. Checked before the container path (a sensor is not a
+	// container).
+	if sig, has := t.sculkSensorAnalogOutputSignal(targetPos); has {
+		resultSignal = sig
+	} else if sig, has := t.containerAnalogOutputSignal(targetPos); has {
+		// targetState.hasAnalogOutputSignal(): true for a container block-entity (chest/furnace/dispenser/
+		// brewing/hopper — AnalogOutputBlock). getAnalogOutputSignal == getRedstoneSignalFromContainer(container).
 		resultSignal = sig
 	}
 	// else: the item-frame-behind-a-conductor branch is DEFERRED (no item-frame entity — cited header).
@@ -704,4 +710,24 @@ func (t *TickLoop) useComparator(pos pk.Position, state block.StateID) bool {
 		t.comparatorRefreshOutputState(cur, pos)
 	}
 	return true
+}
+
+// sculkSensorAnalogOutputSignal ports SculkSensorBlock.getAnalogOutputSignal (hasAnalogOutputSignal ==
+// true): (PHASE == ACTIVE) ? SculkSensorBlockEntity.getLastVibrationFrequency() : 0. Returns
+// (signal, true) for a sculk sensor (either variant), (0, false) otherwise (so the comparator falls to
+// its container/super path). CITE: SculkSensorBlock.getAnalogOutputSignal + hasAnalogOutputSignal.
+func (t *TickLoop) sculkSensorAnalogOutputSignal(pos pk.Position) (int, bool) {
+	state, ok := t.world().GetBlock(pos, dimMinY)
+	if !ok || !block.IsAnySculkSensor(state) {
+		return 0, false
+	}
+	phase, ok := block.SculkSensorPhaseOf(state)
+	if !ok || phase != block.SculkSensorPhaseActive {
+		return 0, true // ACTIVE-only: not active -> analog 0 (still hasAnalogOutputSignal true).
+	}
+	be := t.resolveSculkSensor(pos)
+	if be == nil {
+		return 0, true
+	}
+	return be.lastVibrationFrequency, true
 }

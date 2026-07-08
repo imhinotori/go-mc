@@ -171,6 +171,19 @@ func (t *TickLoop) tickWorld() {
 	// to a cheap no-op. Nil map = no-op (no spawner placed). CITE SpawnerBlock.getTicker ->
 	// SpawnerBlockEntity.serverTick.
 	t.tickSpawners()
+	// SUB-BLOCKENTITY: tick every SCULK CATALYST block-entity (SculkCatalystBlockEntity.serverTick --
+	// run its SculkSpreader charge cursors once). Keyed by world position (t.sculkCatalysts), so they
+	// tick ONCE globally here (the tickSpawners twin). A catalyst with no charge ticks to a cheap no-op.
+	// Nil map = no-op. CITE SculkCatalystBlock.getTicker -> SculkCatalystBlockEntity.serverTick.
+	t.tickSculkCatalysts()
+	// SUB-BLOCKENTITY: the SCULK SENSOR STEP-vibration scan (SculkSensorBlock.stepOn): a mob/player
+	// standing on an INACTIVE sensor activates it (phase machine + redstone output). Global per-tick scan
+	// (the pressure-plate twin). Nil sensor map = a cheap early-out. CITE SculkSensorBlock.stepOn.
+	t.tickSculkSensors()
+	// SUB-BLOCKENTITY: the SCULK SHRIEKER STEP scan + the per-player warden-tracker cooldown decay: a
+	// player standing on a shrieker runs tryShriek (the 0..4 warning-level machine). Nil shrieker map = a
+	// cheap early-out. CITE SculkShriekerBlock.stepOn + WardenSpawnTracker.tick.
+	t.tickSculkShriekers()
 	// SUB-PERSIST: the periodic chunk-save pass (every chunkSaveIntervalTicks) stays GLOBAL — it
 	// serializes the SHARED world's dirty chunks once, not per region. It lives INSIDE this existing
 	// phase so no new phase is added to the fixed tick order (TestTickPhaseOrder stays green). A

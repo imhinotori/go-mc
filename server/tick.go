@@ -523,6 +523,32 @@ type TickLoop struct {
 	// constructed; tick-owned (TICK-05).
 	spawners map[pk.Position]*spawnerBE
 
+	// sculkCatalysts is the runtime store of SCULK CATALYST block-entities keyed by world position (the
+	// spawners twin). Each catalyst holds a persistent SculkSpreader (createLevelSpreader); its per-tick
+	// drive (sculk_catalyst_be.go sculkCatalystServerTick == SculkCatalystBlockEntity.serverTick) runs
+	// the spreader charge cursors once (spreadVeins=true). A catalyst gains charge when a mob dies within
+	// its listener range (dropMobExperience -> sculkCatalystOnEntityDie). Registers on placement
+	// (createBlockEntityOnPlace) or on growth; ticks passively (no menu). Lazily constructed; tick-owned.
+	sculkCatalysts map[pk.Position]*sculkCatalystBE
+
+	// sculkSensors is the runtime store of SCULK SENSOR + CALIBRATED SCULK SENSOR block-entities keyed by
+	// world position (the sculkCatalysts twin). Each holds the VibrationSystem listener state (the last
+	// vibration frequency, feeding the redstone analog output). Its per-tick drive scans for STEP
+	// vibrations from nearby entities (SculkSensorBlock.stepOn) and drives the ACTIVE/COOLDOWN/INACTIVE
+	// phase machine. Registers on placement/growth; ticks passively. Lazily constructed; tick-owned.
+	sculkSensors map[pk.Position]*sculkSensorBE
+
+	// sculkShriekers is the runtime store of SCULK SHRIEKER block-entities keyed by world position (the
+	// sculkSensors twin). Each holds the per-BE warning level (0..4) the tryToWarn machine advances on a
+	// player-caused vibration when CAN_SUMMON; at level 4 the warden-summon hook fires (DEFERRED: no
+	// Warden entity). Registers on placement/growth; ticks passively. Lazily constructed; tick-owned.
+	sculkShriekers map[pk.Position]*sculkShriekerBE
+
+	// wardenTrackers is the per-player WardenSpawnTracker side table keyed by player entity id (the
+	// ServerPlayer.wardenSpawnTracker analogue). It holds each player warning level / warn cooldown the
+	// sculk shrieker tryToWarn machine advances. Lazily constructed; tick-owned.
+	wardenTrackers map[int32]*wardenSpawnTracker
+
 	// chunkSaver is the off-tick chunk-persistence consumer (SUB-PERSIST). It is nil until
 	// SetChunkSaver wires it (tests/ephemeral runs leave it nil → no chunk saves). The tick's save
 	// phase (tickChunkSave) drains the manager's dirty set, SERIALIZES each dirty/unloaded chunk ON
