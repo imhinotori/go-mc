@@ -365,7 +365,13 @@ func main() {
 	}
 	log.Printf("crafting: bundled 1:1 vanilla recipe plugin boot-loaded (default crafting is plugin-driven)")
 	if _, err := os.Stat(pluginsDir); err == nil {
-		if err := pluginMgr.LoadDir(pluginsDir); err != nil {
+		// Bug #11 (plugin-loader): RESERVE plugins/mobs/ for the tick-owned MOB registry
+		// (tick.LoadExternalMobs, below) which injects the declare_mob/goal/declare_model builtins the
+		// general hook manager does NOT have. Recursing into mobs/ here loaded every mob .star WITHOUT
+		// those builtins -> "undefined: declare_mob" per dir + boot-log spam. LoadDirExcept skips ONLY
+		// the top-level mobs/ container; every other operator plugin (gate_events, customrecipe, ...) at
+		// the plugins/ root still loads normally. (server.ExternalMobsContainer == "mobs".)
+		if err := pluginMgr.LoadDirExcept(pluginsDir, map[string]bool{server.ExternalMobsContainer: true}); err != nil {
 			log.Printf("plugin host: load %s failed (continuing with the embedded crafting plugin only): %v", pluginsDir, err)
 		} else {
 			log.Printf("plugin host: loaded %d plugin(s) from %s/ (hot-reload watcher armed)", pluginMgr.PluginCount(), pluginsDir)
@@ -413,6 +419,18 @@ func main() {
 	} else {
 		tick.SetMobRegistry(reg)
 		log.Printf("vanilla mobs: %d bundled 1:1 plugins boot-loaded (passives + hostiles + variants — the only mobs are plugin-driven)", reg.Count())
+		// Bug #11 (plugin-loader): load the OPERATOR mob plugins on disk (plugins/mobs/) into the SAME
+		// tick-owned registry, injecting the declare_mob/goal/declare_model builtins. An embedded vanilla
+		// mob whose name a disk copy re-declares is embed-authoritative (the disk duplicate is skipped, so
+		// the pig oracle is untouched); a genuinely NEW operator mob is merged and becomes spawnable +
+		// hot-reloadable. This is why the general LoadDirExcept above skips plugins/mobs/. A missing dir is
+		// a clean no-op; a genuine load error on a NEW mob is logged (not fatal -- the embedded set still works).
+		mobsDir := filepath.Join(pluginsDir, server.ExternalMobsContainer)
+		if n, err := tick.LoadExternalMobs(mobsDir); err != nil {
+			log.Printf("plugin host: external mob load from %s/ failed (embedded vanilla mobs still active): %v", mobsDir, err)
+		} else {
+			log.Printf("plugin host: %d external mob plugin(s) loaded from %s/ (embedded vanilla copies are authoritative + deduped)", n, mobsDir)
+		}
 		// v5: the wandermob (a v4 custom-mob API gate — base_type pig, ONE MOVE goal, no FloatGoal) is
 		// NO LONGER boot-loaded. The dogfood is now the REAL vanilla mobs as plugins (vanilla_pig, then
 		// cow/sheep/etc. in Phase 34), not a toy custom mob — and a second pig-looking mob with no

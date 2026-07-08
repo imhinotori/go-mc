@@ -180,7 +180,21 @@ func New() *Manager {
 // LoadDirWith below is still used by the embedded boot-loads (each over a temp dir
 // with exactly one plugin + its required builtins), where a failure IS fatal.
 func (m *Manager) LoadDir(root string) error {
-	return m.loadDir(root, nil, true /* tolerate per-plugin load failures */)
+	return m.loadDir(root, nil, true /* tolerate per-plugin load failures */, nil)
+}
+
+// LoadDirExcept is LoadDir with a set of IMMEDIATE-child container directory
+// names (relative to root) the scan must NOT recurse into. It is the seam the
+// server uses to reserve plugins/mobs/ for the tick-owned MOB registry
+// (server/vanilla_pig_embed.go loads those with the declare_mob/goal/declare_model
+// builtins injected -- this general hook manager does NOT inject them, so recursing
+// into mobs/ here would fail every mob plugin with "undefined: declare_mob" and
+// spam the boot log). The reserved names are matched only at the TOP level of root
+// (depth 0), not at every nesting depth, so an operator's own nested "mobs" folder
+// deeper in the tree is unaffected. Every other operator plugin (gate_events,
+// customrecipe, ...) at the plugins/ root still loads normally.
+func (m *Manager) LoadDirExcept(root string, reservedContainers map[string]bool) error {
+	return m.loadDir(root, nil, true /* tolerate */, reservedContainers)
 }
 
 // LoadDirWith is LoadDir with extra host builtins injected into every plugin's
@@ -189,7 +203,7 @@ func (m *Manager) LoadDir(root string) error {
 // builtin, and Plan 02's watcher uses to re-load a single plugin. extra keys
 // win on a name collision with the host builtins.
 func (m *Manager) LoadDirWith(root string, extra starlark.StringDict) error {
-	return m.loadDir(root, extra, false /* strict: a load error aborts (boot-load discipline) */)
+	return m.loadDir(root, extra, false /* strict: a load error aborts (boot-load discipline) */, nil)
 }
 
 // loadDir is the shared scan body for LoadDir (tolerate=true) and LoadDirWith
@@ -198,8 +212,8 @@ func (m *Manager) LoadDirWith(root string, extra starlark.StringDict) error {
 // operator path — a single bad/duplicate dir must not silently drop the rest).
 // When false, the first error aborts the whole scan (the embedded boot-load path,
 // where each scan is one plugin in a temp dir and a failure is genuinely fatal).
-func (m *Manager) loadDir(root string, extra starlark.StringDict, tolerate bool) error {
-	return m.loadDirDepth(root, extra, tolerate, 0)
+func (m *Manager) loadDir(root string, extra starlark.StringDict, tolerate bool, reservedContainers map[string]bool) error {
+	return m.loadDirDepth(root, extra, tolerate, reservedContainers, 0)
 }
 
 // maxPluginDirDepth bounds recursion into container directories (dirs with no
@@ -214,7 +228,7 @@ const maxPluginDirDepth = 8
 // scanned recursively. This lets operators organize plugins into subfolders
 // (plugins/mobs/vanilla_zombie/, plugins/mobs/vanilla_cow/, …) while every leaf
 // plugin still loads independently under its own manifest caps.
-func (m *Manager) loadDirDepth(root string, extra starlark.StringDict, tolerate bool, depth int) error {
+func (m *Manager) loadDirDepth(root string, extra starlark.StringDict, tolerate bool, reservedContainers map[string]bool, depth int) error {
 	if depth > maxPluginDirDepth {
 		if tolerate {
 			log.Printf("plugin host: skipping %q (nesting exceeds %d levels)", root, maxPluginDirDepth)
@@ -231,12 +245,22 @@ func (m *Manager) loadDirDepth(root string, extra starlark.StringDict, tolerate 
 			continue
 		}
 		dir := filepath.Join(root, e.Name())
+		// RESERVED CONTAINER (Bug #11): a TOP-LEVEL container the caller has reserved
+		// for a specialized loader (e.g. plugins/mobs/, owned by the tick's mob
+		// registry which injects declare_mob/goal/declare_model). Skip it here so the
+		// general hook manager never tries to load a mob plugin without those builtins
+		// (which errored "undefined: declare_mob" per dir and spammed the boot log).
+		// Only honored at depth 0 (the immediate children of the plugins/ root) so a
+		// deeper operator "mobs" folder is unaffected.
+		if depth == 0 && reservedContainers[e.Name()] {
+			continue
+		}
 		manifestPath := filepath.Join(dir, "plugin.toml")
 		if _, statErr := os.Stat(manifestPath); statErr != nil {
 			// No plugin.toml here: this is a container directory (e.g. plugins/mobs/).
 			// Recurse so nested plugins are discovered. A dir with neither a manifest
 			// nor any nested plugin is simply a no-op.
-			if err := m.loadDirDepth(dir, extra, tolerate, depth+1); err != nil {
+			if err := m.loadDirDepth(dir, extra, tolerate, reservedContainers, depth+1); err != nil {
 				return err
 			}
 			continue
