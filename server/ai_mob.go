@@ -29,6 +29,7 @@ import (
 	"math"
 
 	"github.com/imhinotori/sulfur/data/entity"
+	"github.com/imhinotori/sulfur/level/attribute"
 )
 
 // mobAI is the per-mob AI state that hangs off an Entity (entity.ai). It holds the mob's
@@ -68,9 +69,17 @@ type mobAI struct {
 	// computes a path, steps the mob, and clears hasTarget on arrival.
 	wantX, wantY, wantZ float64
 	hasTarget           bool
-	// wantSpeed is the per-request move speed (blocks/tick) a CHASE goal sets via setWantTargetSpeed;
-	// 0 means "use the navigation default amble" (pigWalkSpeed) — the stroll/passive path leaves it 0.
+	// wantSpeed is the per-request move speed (blocks/tick) a CHASE goal sets via setWantTargetSpeed
+	// (the FINAL getSpeed = speedModifier x MOVEMENT_SPEED, computed by the caller); 0 means "use the
+	// stroll path" whose speed is wantSpeedMod x MOVEMENT_SPEED (the setWantTarget/setWantCandidates seam).
 	wantSpeed float64
+	// wantSpeedMod is the vanilla navigation.moveTo(target, speedModifier) UNITLESS modifier carried by
+	// the setWantTarget/setWantCandidates (stroll/panic/breed/follow) path — the MOVEMENT_SPEED multiply
+	// happens ONCE at the MoveControl.tick seam (serverAiStep), mirroring MoveControl.tick's
+	// setSpeed(speedModifier x getAttributeValue(MOVEMENT_SPEED)). Default 1.0 (RandomStrollGoal's 1.0).
+	// This replaces the fabricated pigWalkSpeed constant so an idle mob strolls at its real
+	// MOVEMENT_SPEED (a pig 0.25, a zombie 0.23) instead of a hardcoded 0.15. Cite MoveControl.tick.
+	wantSpeedMod float64
 
 	// attackTargetID is the thin-id analogue of net.minecraft.world.entity.Mob's current attack target
 	// (the Mob.getTarget() id; 0 == null/no target). The targetSelector goals (HurtByTargetGoal,
@@ -91,6 +100,11 @@ type mobAI struct {
 	// pig and the bit-fragile pig oracle stays byte-identical.
 	wantCands    [10][3]float64
 	hasWantCands bool
+	// wantCandsSpeedMod is the vanilla navigation.moveTo(pos, speedModifier) modifier the stroll/panic
+	// goal carries alongside its candidates (RandomStrollGoal 1.0, PanicGoal 1.25). snapStrollWant
+	// commits the winning candidate at this modifier so an idle stroll and a panic flee move at their
+	// distinct real paces (modifier x MOVEMENT_SPEED), not a single fabricated constant. Default 1.0.
+	wantCandsSpeedMod float64
 	// wantLandMode selects the snap validation (jar-verified, see ai_goals_passive.go getPosition):
 	// true => the COMMON (~99.9%, nextFloat() >= probability) LandRandomPos.getPos path (validate
 	// isOutsideLimits/isRestricted/isNotStable, THEN moveUpOutOfSolid, THEN isWater/hasMalus); false =>
@@ -274,9 +288,19 @@ func (j *jumpControl) tick(e *Entity) {
 // target is the v1 stand-in for navigation.moveTo; 07-02 consumes it. The want SPEED is left at the
 // navigation's default amble (pigWalkSpeed) — the stroll/passive pace the pig oracle pins.
 func (m *mobAI) setWantTarget(x, y, z float64) {
+	m.setWantTargetMod(x, y, z, 1.0)
+}
+
+// setWantTargetMod is setWantTarget carrying the vanilla navigation.moveTo(target, speedModifier)
+// UNITLESS modifier (RandomStrollGoal 1.0, PanicGoal 1.25, TemptGoal 1.2, FollowParentGoal 1.1, ...).
+// wantSpeed stays 0 so serverAiStep takes the stroll branch, where n.speed = wantSpeedMod x
+// getAttributeValue(MOVEMENT_SPEED) -- the MoveControl.tick setSpeed(speedModifier x MOVEMENT_SPEED)
+// port. This restores the per-goal speedModifier the old pigWalkSpeed path silently dropped.
+func (m *mobAI) setWantTargetMod(x, y, z, speedModifier float64) {
 	m.wantX, m.wantY, m.wantZ = x, y, z
 	m.hasTarget = true
-	m.wantSpeed = 0 // 0 == "use the navigation default" (pigWalkSpeed); see serverAiStep's speed route
+	m.wantSpeed = 0 // 0 == "use the stroll path" (wantSpeedMod x MOVEMENT_SPEED); see serverAiStep
+	m.wantSpeedMod = speedModifier
 }
 
 // setWantTargetSpeed is setWantTarget carrying an explicit per-request move speed (blocks/tick) — the
@@ -313,9 +337,10 @@ func (m *mobAI) setTarget(id int32) { m.attackTargetID = id }
 // generateRandomPos loop is for i<10). Tick-owned (TICK-05). Both the Go-native pig's start() and the
 // plugin pig's overloaded path_to(31 floats = 10 candidates + landMode) reach this setter with the SAME
 // wantLandMode for the same probability roll, so both pigs run the SAME snap with identical state.
-func (m *mobAI) setWantCandidates(c [10][3]float64, landMode bool) {
+func (m *mobAI) setWantCandidates(c [10][3]float64, landMode bool, speedModifier float64) {
 	m.wantCands = c
 	m.wantLandMode = landMode
+	m.wantCandsSpeedMod = speedModifier
 	m.hasWantCands = true
 }
 
@@ -432,7 +457,9 @@ func (m *mobAI) serverAiStep(t *TickLoop, e *Entity) {
 	// the wantX/Y/Z the oracle observes) is the SNAPPED reachable column — the wedge-bug root-cause fix.
 	if m.hasWantCands {
 		if wx, wy, wz, ok := m.snapStrollWant(t, e); ok {
-			m.setWantTarget(wx, wy, wz) // commit the snapped, reachable target (sets hasTarget)
+			// commit the snapped, reachable target AT THE GOAL'S speedModifier (stroll 1.0 / panic 1.25);
+			// the seam below multiplies it by MOVEMENT_SPEED (the MoveControl.tick setSpeed port).
+			m.setWantTargetMod(wx, wy, wz, m.wantCandsSpeedMod) // sets hasTarget
 		} else {
 			m.hasTarget = false // no valid candidate (generateRandomPos null) — no want this roll
 		}
@@ -444,13 +471,19 @@ func (m *mobAI) serverAiStep(t *TickLoop, e *Entity) {
 	// shouldRecomputePath so an unreachable target cannot flood the A* (Pitfall 6 / T-7-04).
 	// The target is the floor block under the wanted position (the A* works in block coords).
 	if m.hasTarget {
-		// Route the want SPEED into the navigation: a CHASE goal (setWantTargetSpeed) sets a faster pace
-		// than the passive amble; the stroll/passive path leaves wantSpeed 0 → keep the default (the pig
-		// oracle's pinned pigWalkSpeed). navigation.moveTo(target, speedModifier) — the speed half.
+		// Route the want SPEED into the navigation. Two seams, both == vanilla getSpeed (blocks/tick):
+		//   - a CHASE goal (setWantTargetSpeed) already carries the FINAL getSpeed = speedModifier x
+		//     MOVEMENT_SPEED (its caller did the multiply, e.g. MeleeAttackGoal getSpeed).
+		//   - the stroll/panic/follow path (setWantTarget/setWantTargetMod, wantSpeed==0) carries only the
+		//     UNITLESS speedModifier in wantSpeedMod; the MOVEMENT_SPEED multiply happens HERE, once, the
+		//     port of MoveControl.tick's setSpeed(speedModifier x getAttributeValue(MOVEMENT_SPEED)). An
+		//     idle pig now strolls at 1.0 x 0.25 = 0.25 getSpeed (vanilla), NOT the fabricated 0.15.
+		//	[VERIFIED javap MoveControl.tick MOVE_TO: mob.setSpeed((float)(speedModifier x
+		//	 getAttributeValue(MOVEMENT_SPEED))).]
 		if m.wantSpeed > 0 {
 			m.navigation.speed = m.wantSpeed
 		} else {
-			m.navigation.speed = pigWalkSpeed
+			m.navigation.speed = m.wantSpeedMod * e.getAttributeValue(attribute.MovementSpeed)
 		}
 		tx, ty, tz := floorI(m.wantX), floorI(m.wantY), floorI(m.wantZ)
 		if m.navigation.shouldRecomputePath(tx, ty, tz) {
@@ -553,11 +586,15 @@ func newPigAI() *mobAI {
 	// seed; spawn sites may reseed per entity id (reseedMobAI) for per-mob variety. This is the
 	// determinism fix (TestTickAIDrivesMobs) AND the 1:1 faithful draw-order source.
 	m.rng = newEntityRandom(defaultEntityRandomSeed)
-	// navigation.speed is the mob's walk speed in blocks/tick (the stroll speedModifier 1.0
-	// scaled to a vanilla-ish ground speed). A Pig's movement speed attribute ≈ 0.25, walk pace
-	// ≈ 0.1-0.2 blocks/tick; v1 uses 0.15 for a visibly-alive amble (the tunable knob, like the
-	// physics constants — wire-irrelevant, gated by the real-client visual check).
-	m.navigation.speed = pigWalkSpeed
+	// wantSpeedMod is the vanilla navigation.moveTo speedModifier for the stroll/passive path; the
+	// RandomStrollGoal default is 1.0. The MoveControl.tick seam (serverAiStep) turns this into the real
+	// getSpeed = 1.0 x getAttributeValue(MOVEMENT_SPEED) each tick, so navigation.speed below is only the
+	// pre-first-want seed. Default 1.0 so a mob never strolls at getSpeed 0 before its first want.
+	m.wantSpeedMod = 1.0
+	// navigation.speed seed (overwritten every tick by the MoveControl.tick seam once a want exists):
+	// the stroll speedModifier 1.0 x MOVEMENT_SPEED. Read the attribute so a pig seeds 0.25, not a
+	// fabricated 0.15. Kept explicit so the first pre-want tick has a sane pace.
+	m.navigation.speed = m.wantSpeedMod * 0.25 // pig MOVEMENT_SPEED default (seedAttributes folds 0.25)
 	// FloatGoal ctor: mob.getNavigation().setCanFloat(true) — the mob may path over water (the float
 	// PATHING node-evaluator behavior is deferred + cited on the field; the flag set is the 1:1 port).
 	m.navigation.canFloat = true

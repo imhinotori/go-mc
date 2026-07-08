@@ -183,7 +183,7 @@ func (g *panicGoal) start(_ *TickLoop, e *Entity) {
 	}
 	var arr [10][3]float64
 	copy(arr[:], g.wantCandidates)
-	e.ai.setWantCandidates(arr, false) // landMode=false (DefaultRandomPos)
+	e.ai.setWantCandidates(arr, false, g.speedModifier) // landMode=false (DefaultRandomPos); PanicGoal speedModifier 1.25 (seam x MOVEMENT_SPEED)
 }
 
 // canContinueToUse ports PanicGoal.canContinueToUse = !navigation.isDone(). With the Phase-30.1 nav, "not

@@ -185,7 +185,7 @@ func (g *breedGoal) tick(t *TickLoop, e *Entity) {
 	e.headYaw = yaw
 	e.yaw = yaw
 	// navigation.moveTo(partner, speed): want the partner's position (nav applies speedModifier).
-	e.ai.setWantTarget(g.partner.x, g.partner.y, g.partner.z)
+	e.ai.setWantTargetMod(g.partner.x, g.partner.y, g.partner.z, g.speedModifier) // navigation.moveTo(partner, speedModifier) (seam x MOVEMENT_SPEED)
 	g.loveTime++
 	if g.loveTime >= adjustedTickDelay(breedLoveThreshold) && entityDistSqr(e, g.partner) < breedDistanceSqr {
 		t.breed(e, g.partner)

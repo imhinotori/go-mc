@@ -184,7 +184,12 @@ func (g *starlarkGoal) tick(_ *TickLoop, e *Entity) {
 // bypass, NOT a parallel tick.
 func buildAIFromDecl(t *TickLoop, decl *mobDecl) *mobAI {
 	m := &mobAI{}
-	m.navigation.speed = declaredWalkSpeed(decl)
+	// wantSpeedMod default 1.0 (RandomStrollGoal): the MoveControl.tick seam (ai_mob.go serverAiStep)
+	// turns it into getSpeed = 1.0 x MOVEMENT_SPEED each tick. navigation.speed here is only the
+	// pre-first-want seed = 1.0 x the declared movement_speed (a zombie 0.23, a pig 0.25) -- the REAL
+	// attribute, not the fabricated pigWalkSpeed. Cite MoveControl.tick setSpeed(speedModifier x MOVEMENT_SPEED).
+	m.wantSpeedMod = 1.0
+	m.navigation.speed = m.wantSpeedMod * declaredMovementSpeed(decl)
 	// Per-mob seeded RandomSource (the Mob.getRandom() analogue) — same as newPigAI; the spawn site
 	// reseeds it per entity id (reseedMobAI) so each declared mob has its own deterministic stream.
 	m.rng = newEntityRandom(defaultEntityRandomSeed)
@@ -310,7 +315,7 @@ func buildNativeGoal(kind string, gd goalDecl, decl *mobDecl) Goal {
 		// the UNMODIFIED base FleeSunGoal, keeping the isOnFire() guard the Fox override drops). The
 		// speedModifier routes from the declared movement_speed (declaredWalkSpeed), scaling the ctor's
 		// literal 1.0. Cite AbstractSkeleton.registerGoals @3 FleeSunGoal.
-		return newFleeSunGoal(declaredWalkSpeed(decl))
+		return newFleeSunGoal(declaredMovementSpeed(decl)) // FleeSunGoal speedModifier 1.0 -> 1.0 x MOVEMENT_SPEED
 	case "long_distance_patrol":
 		// PatrollingMonster.registerGoals @4 LongDistancePatrolGoal(this, 0.7, 0.595) — {MOVE}. The long-
 		// distance patrol walk (ai_goals_patrol.go). STRUCTURALLY REAL but INERT in v1: no PatrollingMonster
@@ -385,7 +390,7 @@ func buildNativeGoal(kind string, gd goalDecl, decl *mobDecl) Goal {
 		// MOB-NEUT-01 (Phase 36): Wolf @6 FollowOwnerGoal(this, 1.0, 10.0, 2.0) — {MOVE}, NO RNG. The
 		// speed routes from the declared movement_speed (declaredWalkSpeed), the same want-multiplier the
 		// melee goal uses.
-		return newFollowOwnerGoal(declaredWalkSpeed(decl))
+		return newFollowOwnerGoal(1.0) // FollowOwnerGoal speedModifier 1.0 (seam x MOVEMENT_SPEED)
 	case "owner_hurt_by":
 		// MOB-NEUT-01 (Phase 36): Wolf targetSelector @1 OwnerHurtByTargetGoal — {TARGET}, NO RNG.
 		return newOwnerHurtByTargetGoal()
@@ -401,7 +406,7 @@ func buildNativeGoal(kind string, gd goalDecl, decl *mobDecl) Goal {
 		// MOB-HOST-05 (infest goals): Silverfish @5 SilverfishMergeWithStoneGoal — {MOVE}. The stone->
 		// infested conversion goal; canUse RNG-gates (nextInt(reducedTickDelay(10))) then converts an
 		// adjacent host block, falling back to a bare RandomStroll. Speed routes from movement_speed.
-		return newSilverfishMergeStoneGoal(declaredWalkSpeed(decl))
+		return newSilverfishMergeStoneGoal(1.0) // RandomStrollGoal speedModifier 1.0 (seam x MOVEMENT_SPEED)
 	case "silverfish_wake_friends":
 		// MOB-HOST-05 (infest goals): Silverfish @3 SilverfishWakeUpFriendsGoal — {} (NO flags). The
 		// hurt-armed spiral that de-infests/summons nearby silverfish. notifyHurt is fired from the
@@ -547,4 +552,18 @@ func declaredWalkSpeed(decl *mobDecl) float64 {
 		return pigWalkSpeed * (ms / pigMovementSpeed)
 	}
 	return pigWalkSpeed
+}
+
+// declaredMovementSpeed returns the declared mob's raw MOVEMENT_SPEED attribute (blocks/tick per
+// speedModifier unit) -- a zombie 0.23, a pig 0.25 -- defaulting to the pig baseline 0.25 when the
+// declaration omits it. This is the getAttributeValue(MOVEMENT_SPEED) a goal multiplies its unitless
+// speedModifier by to get the real getSpeed (MoveControl.tick's setSpeed(speedModifier x MOVEMENT_SPEED)),
+// REPLACING the fabricated pigWalkSpeed scaling for the goals that path via setWantTargetSpeed. Cite
+// MoveControl.tick.
+func declaredMovementSpeed(decl *mobDecl) float64 {
+	const pigMovementSpeed = 0.25
+	if ms, ok := decl.attrs["movement_speed"]; ok && ms > 0 {
+		return ms
+	}
+	return pigMovementSpeed
 }

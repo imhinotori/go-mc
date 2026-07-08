@@ -175,7 +175,7 @@ func (g *followOwnerGoal) tick(t *TickLoop, e *Entity) {
 	// the async nav steps the mob — NEVER moveEntity). The speedModifier is stored (the same want-only
 	// posture as MeleeAttackGoal). The teleport branch (tryToTeleportToOwner) is the cited deferral.
 	if e.ai != nil {
-		e.ai.setWantTarget(owner.x, owner.y, owner.z)
+		e.ai.setWantTargetMod(owner.x, owner.y, owner.z, g.speedModifier) // navigation.moveTo(owner, speedModifier) (seam x MOVEMENT_SPEED)
 	}
 }
 

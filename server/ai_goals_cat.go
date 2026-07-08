@@ -199,7 +199,7 @@ func (g *moveToBlockGoal) stop(t *TickLoop, e *Entity) {
 //	[VERIFIED CFR MoveToBlockGoal.moveMobToBlock.]
 func (g *moveToBlockGoal) moveMobToBlock(e *Entity) {
 	if e.ai != nil {
-		e.ai.setWantTargetSpeed(float64(g.blockPos.X)+0.5, float64(g.blockPos.Y+1), float64(g.blockPos.Z)+0.5, g.speedModifier)
+		e.ai.setWantTargetMod(float64(g.blockPos.X)+0.5, float64(g.blockPos.Y+1), float64(g.blockPos.Z)+0.5, g.speedModifier) // (seam x MOVEMENT_SPEED)
 	}
 }
 
@@ -223,7 +223,7 @@ func (g *moveToBlockGoal) tick(t *TickLoop, e *Entity) {
 		g.tryTicks++
 		if g.tryTicks%40 == 0 { // shouldRecalculatePath
 			if e.ai != nil {
-				e.ai.setWantTargetSpeed(float64(mt.X)+0.5, float64(mt.Y), float64(mt.Z)+0.5, g.speedModifier)
+				e.ai.setWantTargetMod(float64(mt.X)+0.5, float64(mt.Y), float64(mt.Z)+0.5, g.speedModifier) // (seam x MOVEMENT_SPEED)
 			}
 		}
 	} else {
@@ -634,7 +634,7 @@ func (g *catRelaxOnOwnerGoal) start(t *TickLoop, e *Entity) {
 	}
 	t.setCatInSittingPose(e, false)
 	if e.ai != nil {
-		e.ai.setWantTargetSpeed(float64(g.goalPos.X), float64(g.goalPos.Y), float64(g.goalPos.Z), catRelaxMoveSpeed)
+		e.ai.setWantTargetMod(float64(g.goalPos.X), float64(g.goalPos.Y), float64(g.goalPos.Z), catRelaxMoveSpeed) // (seam x MOVEMENT_SPEED)
 	}
 }
 
@@ -719,7 +719,7 @@ func (g *catRelaxOnOwnerGoal) tick(t *TickLoop, e *Entity) {
 	}
 	t.setCatInSittingPose(e, false)
 	if e.ai != nil {
-		e.ai.setWantTargetSpeed(float64(g.goalPos.X), float64(g.goalPos.Y), float64(g.goalPos.Z), catRelaxMoveSpeed)
+		e.ai.setWantTargetMod(float64(g.goalPos.X), float64(g.goalPos.Y), float64(g.goalPos.Z), catRelaxMoveSpeed) // (seam x MOVEMENT_SPEED)
 	}
 	dx, dy, dz := owner.x-e.x, owner.y-e.y, owner.z-e.z
 	if dx*dx+dy*dy+dz*dz < catRelaxOnBedNearSqr {

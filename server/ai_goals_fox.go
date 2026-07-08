@@ -102,6 +102,7 @@ const (
 	foxSleepWaitTicks      = 140  // SleepGoal.WAIT_TIME_BEFORE_SLEEP = reducedTickDelay(140) (full-rate 140)
 	foxFaceplantTicks      = 40   // FaceplantGoal.start: countdown = adjustedTickDelay(40)
 	foxSeekShelterInterval = 100  // SeekShelterGoal: interval = reducedTickDelay(100) (full-rate 100)
+	foxSeekShelterSpeed    = 1.25 // FoxSeekShelterGoal extends FleeSunGoal(fox, 1.25): the flee speedModifier
 	foxStalkPreyDistSqr    = 36.0 // StalkPreyGoal: distanceToSqr(target) > 36.0 stalk, <= 36.0 crouch
 	foxPounceHurtDist      = 2.0  // FoxPounceGoal.tick: distanceTo(target) <= 2.0f -> doHurtTarget
 	foxAlertRange          = 12.0 // FoxBehaviorGoal alertableTargeting.range(12) + inflate(12,6,12)
@@ -360,7 +361,7 @@ func (g *foxSeekShelterGoal) canContinueToUse(_ *TickLoop, e *Entity) bool {
 func (g *foxSeekShelterGoal) start(_ *TickLoop, e *Entity) {
 	foxClearStates(e)
 	if g.haveWant && e.ai != nil {
-		e.ai.setWantTarget(g.wantX, g.wantY, g.wantZ)
+		e.ai.setWantTargetMod(g.wantX, g.wantY, g.wantZ, foxSeekShelterSpeed) // FoxSeekShelterGoal:FleeSunGoal(fox,1.25) (seam x MOVEMENT_SPEED)
 	}
 }
 
@@ -425,7 +426,7 @@ func (g *foxStalkPreyGoal) tick(t *TickLoop, e *Entity) {
 			e.ai.clearWantTarget()
 		}
 	} else if e.ai != nil {
-		e.ai.setWantTargetSpeed(tx, ty, tz, foxStalkChaseSpeed)
+		e.ai.setWantTargetMod(tx, ty, tz, foxStalkChaseSpeed) // StalkPreyGoal moveTo(target, 1.5) (seam x MOVEMENT_SPEED)
 	}
 }
 
@@ -852,6 +853,6 @@ func (g *foxSearchForItemsGoal) moveToItem(t *TickLoop, e *Entity) {
 		return
 	}
 	if e.ai != nil {
-		e.ai.setWantTargetSpeed(ix, iy, iz, foxSearchMoveSpeed) // navigation.moveTo(item, 1.2)
+		e.ai.setWantTargetMod(ix, iy, iz, foxSearchMoveSpeed) // navigation.moveTo(item, 1.2) (seam x MOVEMENT_SPEED)
 	}
 }

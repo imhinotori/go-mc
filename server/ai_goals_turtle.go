@@ -249,7 +249,7 @@ func (b *turtleMoveToBlock) mtbMoveMobToBlock(e *Entity) {
 	if e.ai == nil {
 		return
 	}
-	e.ai.setWantTargetSpeed(float64(b.blockPosX)+0.5, float64(b.blockPosY+1), float64(b.blockPosZ)+0.5, turtleNavSpeed(b.speedModifier))
+	e.ai.setWantTargetMod(float64(b.blockPosX)+0.5, float64(b.blockPosY+1), float64(b.blockPosZ)+0.5, b.speedModifier) // (seam x MOVEMENT_SPEED)
 }
 
 // mtbGetMoveToTarget is MoveToBlockGoal.getMoveToTarget = blockPos.above().
@@ -280,7 +280,7 @@ func (b *turtleMoveToBlock) mtbTick(e *Entity, recalc func() bool) {
 		b.reachedTarget = false
 		b.tryTicks++
 		if recalc() && e.ai != nil {
-			e.ai.setWantTargetSpeed(float64(mtx)+0.5, float64(mty), float64(mtz)+0.5, turtleNavSpeed(b.speedModifier))
+			e.ai.setWantTargetMod(float64(mtx)+0.5, float64(mty), float64(mtz)+0.5, b.speedModifier) // (seam x MOVEMENT_SPEED)
 		}
 	} else {
 		b.reachedTarget = true
@@ -342,15 +342,6 @@ func ternaryNextSpiral(y int) int {
 		return -y
 	}
 	return 1 - y
-}
-
-// turtleNavSpeed maps a jar speedModifier (1.0 / a baby's 2.0) to a blocks/tick nav pace via the shared
-// pigWalkSpeed model. The turtle's water-nav reduction rides the SAME ground-nav speed model every other
-// declared mob uses — a tunable, wire-irrelevant pace (not a 1:1 value; gated by the real-client visual
-// check like the physics constants). A modifier of 1.0 maps to the pigWalkSpeed baseline; 2.0 (a baby)
-// doubles it.
-func turtleNavSpeed(speedModifier float64) float64 {
-	return pigWalkSpeed * speedModifier
 }
 
 // ==================================================================================================
@@ -523,7 +514,7 @@ func (g *turtleGoHomeGoal) tick(t *TickLoop, e *Entity) {
 		g.stuck = true
 		return
 	}
-	e.ai.setWantTargetSpeed(next[0], next[1], next[2], turtleNavSpeed(g.speedModifier))
+	e.ai.setWantTargetMod(next[0], next[1], next[2], g.speedModifier) // (seam x MOVEMENT_SPEED)
 }
 
 // ==================================================================================================
@@ -606,7 +597,7 @@ func (g *turtleTravelGoal) tick(t *TickLoop, e *Entity) {
 		g.stuck = true
 		return
 	}
-	e.ai.setWantTargetSpeed(next[0], next[1], next[2], turtleNavSpeed(g.speedModifier))
+	e.ai.setWantTargetMod(next[0], next[1], next[2], g.speedModifier) // (seam x MOVEMENT_SPEED)
 }
 
 // canContinueToUse ports TurtleTravelGoal.canContinueToUse: nav NOT done AND not stuck AND not going-home

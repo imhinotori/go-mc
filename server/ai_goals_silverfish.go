@@ -184,7 +184,7 @@ func (g *silverfishMergeStoneGoal) start(t *TickLoop, e *Entity) {
 		if e.ai != nil && len(g.wantCandidates) == 10 {
 			var arr [10][3]float64
 			copy(arr[:], g.wantCandidates)
-			e.ai.setWantCandidates(arr, false)
+			e.ai.setWantCandidates(arr, false, g.speedModifier) // RandomStrollGoal speedModifier 1.0 (seam x MOVEMENT_SPEED)
 		}
 		return
 	}

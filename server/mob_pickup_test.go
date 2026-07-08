@@ -207,7 +207,13 @@ func TestFoxSearchForItemsGoalMovesToItem(t *testing.T) {
 		t.Fatalf("want-target = (%v,%v,%v), want the item at (%v,%v,%v)",
 			fox.ai.wantX, fox.ai.wantY, fox.ai.wantZ, ie.x, ie.y, ie.z)
 	}
-	if fox.ai.wantSpeed != foxSearchMoveSpeed {
-		t.Fatalf("want-speed = %v, want %v (moveTo 1.2)", fox.ai.wantSpeed, foxSearchMoveSpeed)
+	// The nav-want carries the UNITLESS speedModifier (foxSearchMoveSpeed 1.2); the MoveControl.tick
+	// seam (serverAiStep) multiplies it by MOVEMENT_SPEED to the real getSpeed. wantSpeed stays 0 (the
+	// stroll/modifier path), wantSpeedMod holds the moveTo(item, 1.2) modifier.
+	if fox.ai.wantSpeed != 0 {
+		t.Fatalf("want-speed = %v, want 0 (the modifier path leaves wantSpeed 0)", fox.ai.wantSpeed)
+	}
+	if fox.ai.wantSpeedMod != foxSearchMoveSpeed {
+		t.Fatalf("want-speed-mod = %v, want %v (moveTo 1.2)", fox.ai.wantSpeedMod, foxSearchMoveSpeed)
 	}
 }

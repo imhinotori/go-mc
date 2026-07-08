@@ -306,7 +306,7 @@ func (t *TickLoop) piglinMeleeGoalTick(e *Entity) {
 		}
 	} else {
 		// pursue: MoveToTargetSink drives the nav; here the want-target proxy (the blaze/vex pattern).
-		e.ai.setWantTargetSpeed(target.x, target.y, target.z, 1.0)
+		e.ai.setWantTargetMod(target.x, target.y, target.z, 1.0) // navigation.moveTo(target, 1.0) (seam x MOVEMENT_SPEED)
 	}
 }
 

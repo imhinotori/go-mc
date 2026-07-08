@@ -157,6 +157,6 @@ func (t *TickLoop) patrolMoveTo(e *Entity, x, y, z int, speed float64) bool {
 	if e.ai == nil {
 		return false
 	}
-	e.ai.setWantTargetSpeed(float64(x)+0.5, float64(y), float64(z)+0.5, speed)
+	e.ai.setWantTargetMod(float64(x)+0.5, float64(y), float64(z)+0.5, speed) // PatrolGoal speedModifier (seam x MOVEMENT_SPEED)
 	return true
 }

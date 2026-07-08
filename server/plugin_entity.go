@@ -1195,7 +1195,7 @@ func (h *navHandle) pathTo(_ *starlark.Thread, b *starlark.Builtin,
 		if !lok {
 			return nil, fmt.Errorf("path_to: arg 30 (landMode) must be a number, got %s", args[30].Type())
 		}
-		e.ai.setWantCandidates(cands, landFlag != 0.0)
+		e.ai.setWantCandidates(cands, landFlag != 0.0, 1.0) // path_to carries no speed -> RandomStrollGoal speedModifier 1.0 (seam x MOVEMENT_SPEED)
 	default:
 		return nil, fmt.Errorf("path_to: expected 3 floats (target) or 31 floats (10 candidates + landMode), got %d", len(args))
 	}

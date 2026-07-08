@@ -49,12 +49,14 @@ func newRegionizedRaceLoop(t *testing.T, radius, floorY int) *TickLoop {
 // owning region. Under -race (Task 4) this whole fan-out + barrier + cross-region read is clean.
 func TestRegionizedTickRace(t *testing.T) {
 	const floorY = 64
-	// radius 8 (floor spans blocks -128..143): the B-A1/B-A2 travel-order fix restored the correct,
-	// faster vanilla ground speed (a single friction pass instead of the old double), so a radius-4
-	// floor let the fastest wanderer walk off the generated edge and fall past the despawn radius
-	// (checkDespawn instant-cull) before 300 ticks. A radius-8 floor keeps every mob on ground for the
-	// full cross-region transfer scenario this test actually exercises.
-	loop := newRegionizedRaceLoop(t, 8, floorY)
+	// radius 16 (floor spans blocks -256..271): the faithful walk-speed fix (setWantTargetMod ->
+	// MoveControl.tick's setSpeed(speedModifier x MOVEMENT_SPEED)) restored the REAL vanilla ground
+	// speed -- a wanderer strolls at 1.0 x 0.25 MOVEMENT_SPEED (getSpeed 0.25 ~= 0.55 blocks/tick peak),
+	// not the old fabricated pigWalkSpeed 0.15. Over 300 ticks the fastest wanderer covers far more
+	// ground, so the earlier radius-8 floor (like the pre-B-A1/B-A2 radius-4) let it walk off the
+	// generated edge and fall past the despawn radius (checkDespawn instant-cull). Radius 16 keeps every
+	// mob on ground for the full cross-region transfer scenario this test actually exercises.
+	loop := newRegionizedRaceLoop(t, 16, floorY)
 
 	r := loadMobRegistry(t, mobpluginsRoot)
 	decl := r.byName["wanderer"]
@@ -76,11 +78,18 @@ func TestRegionizedTickRace(t *testing.T) {
 		mobIDs = append(mobIDs, e.id)
 	}
 
-	// A player near a seam with a capturing client so the tracker emits real packets.
+	// A player with a capturing client so the tracker emits real packets, positioned in the MIDDLE of
+	// the mobs' east-west stroll range (regions alternate every chunk, (cx^cz)&1, so the seam-crossing
+	// transfer fires no matter where the player stands). It sits at x=80 so the mobs -- now walking at
+	// the FAITHFUL ~0.55 blocks/tick vanilla speed -- stay inside the 128-block despawn radius for the
+	// full 300 ticks: a mob spanning ~x[-40,186] is always <128 blocks from x=80, so checkDespawn's
+	// instant far-away cull (correct vanilla behavior) does not fire and the transfer scenario -- not a
+	// legitimate despawn -- is what the "no drop" assertion measures. (At the old x=15.5 the fastest
+	// wanderer reached ~x=144, i.e. 128 blocks east, and was correctly despawned mid-run.)
 	p := &tickPlayer{
 		client:   captureClient(8192),
 		entityID: 100000,
-		x:        15.5, y: float64(floorY + 1), z: 0.5,
+		x:        80.5, y: float64(floorY + 1), z: 0.5,
 		viewDist: serverViewDistance,
 	}
 	loop.players = append(loop.players, p)

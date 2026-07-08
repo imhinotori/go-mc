@@ -171,7 +171,7 @@ func (t *TickLoop) blazeAttackGoalTick(e *Entity) {
 			e.blazeAttackTime = blazeMeleeAttackTime
 			t.blazeDoHurtTarget(e, target)
 		}
-		e.ai.setWantTargetSpeed(target.x, target.y, target.z, 1.0)
+		e.ai.setWantTargetMod(target.x, target.y, target.z, 1.0) // navigation.moveTo(target, 1.0) (seam x MOVEMENT_SPEED)
 	case d < followDist*followDist && flag:
 		// RANGED BURST: aim components then the attack-step cadence + the per-shooting-step SmallFireball.
 		dx := target.x - e.x                                                         // target.getX() - getX()
@@ -204,7 +204,7 @@ func (t *TickLoop) blazeAttackGoalTick(e *Entity) {
 		t.blazeFaceTarget(e, target) // setLookAt(target, 10, 10)
 	case e.blazeLastSeen < blazeMaxSeenGap:
 		// PURSUE: recently seen (lastSeen LT 5) -> move toward the last-known target position.
-		e.ai.setWantTargetSpeed(target.x, target.y, target.z, 1.0)
+		e.ai.setWantTargetMod(target.x, target.y, target.z, 1.0) // navigation.moveTo(target, 1.0) (seam x MOVEMENT_SPEED)
 	}
 }
 

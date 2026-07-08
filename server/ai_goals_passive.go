@@ -291,7 +291,7 @@ func (g *randomStrollGoal) start(_ *TickLoop, e *Entity) {
 	}
 	var arr [10][3]float64
 	copy(arr[:], g.wantCandidates)
-	e.ai.setWantCandidates(arr, g.wantLandMode)
+	e.ai.setWantCandidates(arr, g.wantLandMode, g.speedModifier) // RandomStrollGoal speedModifier (seam x MOVEMENT_SPEED)
 }
 
 // stop ports RandomStrollGoal.stop = navigation.stop(): clear the pending target.
@@ -570,7 +570,7 @@ func (g *temptGoal) tick(_ *TickLoop, e *Entity) {
 	if dx*dx+dy*dy+dz*dz < g.stopDistance*g.stopDistance { // 2.5² = 6.25
 		e.ai.clearWantTarget() // stopNavigation()
 	} else {
-		e.ai.setWantTarget(g.px, g.py, g.pz) // navigateTowards(player) @ speedModifier 1.2
+		e.ai.setWantTargetMod(g.px, g.py, g.pz, g.speedModifier) // navigateTowards(player) @ speedModifier 1.2 (seam x MOVEMENT_SPEED)
 	}
 }
 

@@ -160,7 +160,7 @@ func (g *followParentGoal) tick(_ *TickLoop, e *Entity) {
 	if g.parent == nil || e.ai == nil {
 		return
 	}
-	e.ai.setWantTarget(g.parent.x, g.parent.y, g.parent.z)
+	e.ai.setWantTargetMod(g.parent.x, g.parent.y, g.parent.z, g.speedModifier) // navigation.moveTo(parent, speedModifier) (seam x MOVEMENT_SPEED)
 }
 
 // stop ports FollowParentGoal.stop: drop the parent.
