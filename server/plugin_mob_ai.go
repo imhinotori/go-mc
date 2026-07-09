@@ -210,7 +210,7 @@ func buildAIFromDecl(t *TickLoop, decl *mobDecl) *mobAI {
 				// hunt/attack). spawnDeclaredMob runs on the tick goroutine; a panic here is isolated by
 				// the tickOnce recover backstop, surfacing the bad declaration loudly rather than shipping
 				// a silently-disarmed hostile. (The .star load already validated the rest of the mob.)
-				panic("buildAIFromDecl: unknown goal kind " + gd.nativeKind + " (valid: nearest_attackable_target, hurt_by_target, melee_attack, spider_attack, leap_at_target, avoid_entity, float, climb_on_powder_snow, sit, follow_owner, owner_hurt_by, owner_hurt, angry_player_target, skeleton_target, enderman_look_for_player, enderman_freeze_when_looked_at, silverfish_merge_stone, silverfish_wake_friends, cube_float, cube_random_direction, cube_keep_on_jumping, fox_faceplant, fox_stalk, fox_pounce, fox_seek_shelter, fox_sleep, fox_perch_search, fox_defend_trusted, fox_land_target, fox_search_items, fox_eat_berries, fox_follow_parent, fox_fish_target, fox_turtle_egg_target, fox_avoid_player, fox_avoid_wolf, fox_avoid_polar_bear, turtle_goto_water, turtle_go_home, turtle_travel, turtle_lay_egg, restrict_sun, flee_sun, nearest_healable_raider_target, cat_relax_on_owner, cat_lie_on_bed, cat_sit_on_block, long_distance_patrol, iron_golem_hostile_target, pillager_crossbow_attack, evoker_casting_spell, evoker_summon_spell, evoker_attack_spell, evoker_wololo_spell)")
+				panic("buildAIFromDecl: unknown goal kind " + gd.nativeKind + " (valid: nearest_attackable_target, hurt_by_target, melee_attack, spider_attack, leap_at_target, avoid_entity, float, climb_on_powder_snow, sit, follow_owner, owner_hurt_by, owner_hurt, angry_player_target, skeleton_target, enderman_look_for_player, enderman_freeze_when_looked_at, silverfish_merge_stone, silverfish_wake_friends, cube_float, cube_random_direction, cube_keep_on_jumping, fox_faceplant, fox_stalk, fox_pounce, fox_seek_shelter, fox_sleep, fox_perch_search, fox_defend_trusted, fox_land_target, fox_search_items, fox_eat_berries, fox_follow_parent, fox_fish_target, fox_turtle_egg_target, fox_avoid_player, fox_avoid_wolf, fox_avoid_polar_bear, turtle_goto_water, turtle_go_home, turtle_travel, turtle_lay_egg, restrict_sun, flee_sun, nearest_healable_raider_target, cat_relax_on_owner, cat_lie_on_bed, cat_sit_on_block, long_distance_patrol, iron_golem_hostile_target, pillager_crossbow_attack, evoker_casting_spell, evoker_summon_spell, evoker_attack_spell, evoker_wololo_spell, ocelot_attack)")
 			}
 			// The Go goal's OWN flags() must match the declared flags — a declaration that names, e.g.,
 			// kind="melee_attack" but flags=["TARGET"] would route the goal into the WRONG selector AND
@@ -332,9 +332,15 @@ func buildNativeGoal(kind string, gd goalDecl, decl *mobDecl) Goal {
 	case "spider_attack":
 		return newSpiderAttackGoal(declaredWalkSpeed(decl))
 	case "leap_at_target":
-		// Spider.registerGoals @3 LeapAtTargetGoal(this, 0.4) — the ONLY leap user in v1; the 0.4
-		// vertical leap component is the Spider's literal ctor arg (35-JARNOTES.md:226-243).
-		return newLeapAtTargetGoal(spiderLeapYd)
+		// Spider.registerGoals @3 LeapAtTargetGoal(this, 0.4) — the Spider's vertical leap component
+		// is the literal 0.4 ctor arg. Ocelot.registerGoals @7 LeapAtTargetGoal(this, 0.3) — the
+		// Ocelot's vertical leap component is 0.3. The .star passes vy=0.3 for the Ocelot; the
+		// default (no vy=) is the Spider's 0.4. Cite Spider.registerGoals @3 + Ocelot.registerGoals @7.
+		yd := spiderLeapYd
+		if gd.leapYdSet {
+			yd = gd.leapYd
+		}
+		return newLeapAtTargetGoal(yd)
 	case "avoid_entity":
 		// net.minecraft.world.entity.ai.goal.AvoidEntityGoal<T> — the generic flee goal (Creeper avoids
 		// Cat/Ocelot @3, Skeleton flees Wolf, Rabbit/Fox flee threats). The avoided class + maxDist + the
@@ -556,6 +562,13 @@ func buildNativeGoal(kind string, gd goalDecl, decl *mobDecl) Goal {
 		// in v1 (sheep have no color state -> empty search -> canUse false), STRUCTURALLY present + RNG-
 		// faithful. Cite Evoker.registerGoals @6 EvokerWololoSpellGoal.
 		return newEvokerUseSpellGoal(spellKindWololo)
+	case "ocelot_attack":
+		// MOB-PREY (Task #9, Ocelot): Ocelot.registerGoals @8 OcelotAttackGoal(this) — {MOVE, LOOK}. The
+		// 26.2 OcelotAttackGoal is a STANDALONE Goal (extends Goal directly, NOT MeleeAttackGoal) with
+		// its own attackTime countdown + reach² = (2*width)² + 3-band speed branching. NO RNG. The
+		// Ocelot's ATTACK_DAMAGE is 3.0 (Ocelot.createAttributes), applied via seedAttributes. Cite
+		// Ocelot.registerGoals @8 + OcelotAttackGoal.<init>/canUse/canContinueToUse/tick/stop.
+		return newOcelotAttackGoal()
 	default:
 		return nil
 	}

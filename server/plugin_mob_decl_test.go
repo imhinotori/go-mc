@@ -239,3 +239,43 @@ func TestNativeGoalFlagMismatchPanics(t *testing.T) {
 	}()
 	buildAIFromDecl(loop, decl)
 }
+
+// TestVyRejectsNonLeapKind: vy= is only valid with kind="leap_at_target" (the LeapAtTargetGoal
+// ctor's yd arg). A vy= on any other kind is a loud load error (a silently-dead kwarg would ship
+// a mob whose leap height was ignored).
+func TestVyRejectsNonLeapKind(t *testing.T) {
+	star := `
+declare_mob(
+    name = "x",
+    base_type = "zombie",
+    goals = [goal(priority = 1, flags = ["MOVE"], kind = "melee_attack", vy = 0.3)],
+)
+`
+	err := loadMobRegistryExpectErr(t, star)
+	if !contains(err.Error(), "vy=") {
+		t.Fatalf("error %q does not reject vy= on a non-leap kind", err.Error())
+	}
+}
+
+// TestOcelotAttackKindRoutesToOcelotAttackGoal: kind="ocelot_attack" at priority 8 with
+// {MOVE, LOOK} flags instantiates the Go-native ocelotAttackGoal (the 26.2 standalone port). The
+// declared flags MUST match the native goal's own flags() (MOVE|LOOK) or buildAIFromDecl panics.
+func TestOcelotAttackKindRoutesToOcelotAttackGoal(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	decl := &mobDecl{
+		name:     "x",
+		baseType: entity.Ocelot,
+		goals:    []goalDecl{{priority: 8, flags: flagMove | flagLook, nativeKind: "ocelot_attack"}},
+	}
+	m := buildAIFromDecl(loop, decl)
+	if got := len(m.goals.goals); got != 1 {
+		t.Fatalf("goals has %d, want 1 (ocelot_attack@8)", got)
+	}
+	goal, ok := m.goals.goals[0].g.(*ocelotAttackGoal)
+	if !ok {
+		t.Fatalf("priority 8 is %T, want *ocelotAttackGoal", m.goals.goals[0].g)
+	}
+	if goal.flags() != flagMove|flagLook {
+		t.Fatalf("ocelot_attack flags = %b, want %b (MOVE|LOOK, the 26.2 OcelotAttackGoal ctor setFlags)", goal.flags(), flagMove|flagLook)
+	}
+}
