@@ -79,6 +79,16 @@ const (
 	// Creeper — the golem hunts zombies/skeletons/spiders/husks/silverfish/witches/... but never a creeper.
 	// Cite IronGolem.registerGoals targetSelector @3 (Mob, Enemy && !Creeper).
 	targetClassHostileMob
+	// targetClassFoxFish is the Fox fishTargetGoal branch (Fox.registerGoals: NearestAttackableTargetGoal
+	// <AbstractFish>(this, AbstractFish.class, 20, false, false, AbstractSchoolingFish selector)):
+	// findTarget scans the entity store for Cod/Salmon within FOLLOW_RANGE (the AbstractSchoolingFish
+	// schooling-fish allow-list). Cite Fox.registerGoals fishTargetGoal.
+	targetClassFoxFish
+	// targetClassFoxBabyTurtle is the Fox turtleEggTargetGoal branch (Fox.registerGoals:
+	// NearestAttackableTargetGoal<Turtle>(this, Turtle.class, 10, false, false, BABY_ON_LAND_SELECTOR)):
+	// findTarget scans the entity store for a live baby Turtle (breedAge<0) that is NOT in water within
+	// FOLLOW_RANGE. Cite Fox.registerGoals turtleEggTargetGoal + Turtle.BABY_ON_LAND_SELECTOR.
+	targetClassFoxBabyTurtle
 )
 
 // nearestAttackableTargetGoal ports NearestAttackableTargetGoal<T> (flags {TARGET}). It acquires the
