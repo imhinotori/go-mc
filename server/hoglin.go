@@ -273,6 +273,7 @@ func (t *TickLoop) hoglinConversionTick(e *Entity) {
 // Hoglin.finishConversion + Zoglin.
 func (t *TickLoop) hoglinFinishConversion(e *Entity) {
 	e.typ = entity.Zoglin.ID
+	e.fireImmune = entityTypeFireImmune(e.typ)
 	e.isHoglin = false
 	e.isZoglin = true
 	e.hoglinTimeInOverworld = 0

@@ -12,6 +12,7 @@ import (
 	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/attribute"
+	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/world"
 )
 
@@ -22,6 +23,11 @@ func phantomLoop(t *testing.T) (*TickLoop, *world.ChunkManager, int) {
 	const floorY = 63
 	ch := putChunk(mgr, level.ChunkPos{0, 0})
 	fillFloor(ch, floorY)
+	// Tick the chunk through the real light engine so the column carries full sky-light nibbles
+	// (the deterministic tickMobSunBurn path gates on maxLocalRawBrightness >= 14). Pass the
+	// center column's chunk as its own neighbor so the engine has the heightmap/sources it needs.
+	neighbors := map[[2]int]*level.Chunk{{0, 0}: ch}
+	world.ComputeChunkLight(level.ChunkPos{0, 0}, neighbors, dimMinY>>4, 384>>4, block.ToStateID[block.Air{}])
 	loop.start(loop.clock.(*fakeClock).Now())
 	return loop, mgr, floorY
 }
@@ -92,7 +98,7 @@ func TestPhantomDaylightBurn(t *testing.T) {
 	loop.spawnSurfaceY = floorY + 1 // e.y at/above surface -> canSeeSky true
 	loop.gametime = 6000            // noon -> isDay true
 	ph := loop.spawnPhantom(8.5, float64(floorY+1), 8.5)
-	if !isSunSensitive(ph) {
+	if !ph.isSunSensitive() {
 		t.Fatal("phantom must be sun-sensitive (in EntityTypeTags.BURN_IN_DAYLIGHT)")
 	}
 	ignited := false

@@ -1,9 +1,14 @@
 package server
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/imhinotori/sulfur/data/entity"
+	"github.com/imhinotori/sulfur/data/item"
+	"github.com/imhinotori/sulfur/level"
+	pk "github.com/imhinotori/sulfur/net/packet"
+	"github.com/imhinotori/sulfur/world"
 )
 
 // TestIgniteAndFireCountdown: igniteForSeconds sets the countdown (floor(s*20)); tickEntityFire
@@ -76,12 +81,14 @@ func TestFireResistanceNegatesFireDamage(t *testing.T) {
 func TestSunSensitiveGate(t *testing.T) {
 	z := NewEntity(1, entity.Zombie, 0, 0, 0)
 	s := NewEntity(2, entity.Skeleton, 0, 0, 0)
-	p := NewEntity(3, entity.Pig, 0, 0, 0)
-	if !isSunSensitive(z) || !isSunSensitive(s) {
+	if !z.isSunSensitive() || !s.isSunSensitive() {
 		t.Error("zombie + skeleton must be sun-sensitive")
 	}
-	if isSunSensitive(p) {
-		t.Error("pig must NOT be sun-sensitive (pig-oracle RNG guard)")
+	for _, typ := range []entity.Entity{entity.Pig, entity.Husk, entity.Stray, entity.Bogged, entity.ZombieVillager, entity.Drowned} {
+		e := NewEntity(3, typ, 0, 0, 0)
+		if e.isSunSensitive() {
+			t.Fatalf("%s must NOT be sun-sensitive", typ.Name)
+		}
 	}
 }
 
@@ -96,4 +103,94 @@ func TestIsDayWindow(t *testing.T) {
 	if loop.isDay() {
 		t.Error("gametime 18000 (midnight) should be night")
 	}
+}
+
+func TestSkeletonBurnsInDaylight(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	loop.gametime = 6000
+	s := NewEntity(10, entity.Skeleton, 8.5, 64, 8.5)
+	s.health = 20
+
+	loop.tickMobSunBurn(s)
+
+	if s.remainingFireTicks != 160 {
+		t.Fatalf("skeleton daylight burn ticks = %d, want 160", s.remainingFireTicks)
+	}
+}
+
+func TestSkeletonDoesNotBurnAtNight(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	loop.gametime = 18000
+	s := NewEntity(11, entity.Skeleton, 8.5, 64, 8.5)
+	s.health = 20
+
+	loop.tickMobSunBurn(s)
+
+	if s.remainingFireTicks != 0 {
+		t.Fatalf("night skeleton fire ticks = %d, want 0", s.remainingFireTicks)
+	}
+}
+
+func TestSkeletonDoesNotBurnInWater(t *testing.T) {
+	loop, mgr := newSunBurnLightLoop()
+	loop.gametime = 6000
+	setWater(mgr, pk.Position{X: 8, Y: 64, Z: 8}, 0)
+	s := NewEntity(12, entity.Skeleton, 8.5, 64, 8.5)
+	s.health = 20
+
+	loop.tickMobSunBurn(s)
+
+	if s.remainingFireTicks != 0 {
+		t.Fatalf("water skeleton fire ticks = %d, want 0", s.remainingFireTicks)
+	}
+}
+
+func TestZombieWithHelmetDoesNotBurn(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	loop.gametime = 6000
+	z := NewEntity(13, entity.Zombie, 8.5, 64, 8.5)
+	z.health = 20
+	z.setItemSlot(eqSlotHead, itemStackOf(item.IronHelmet))
+
+	loop.tickMobSunBurn(z)
+
+	if z.remainingFireTicks != 0 {
+		t.Fatalf("helmeted zombie fire ticks = %d, want 0", z.remainingFireTicks)
+	}
+}
+
+func TestZombieWithoutHelmetBurns(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	loop.gametime = 6000
+	z := NewEntity(14, entity.Zombie, 8.5, 64, 8.5)
+	z.health = 20
+
+	loop.tickMobSunBurn(z)
+
+	if z.remainingFireTicks != 160 {
+		t.Fatalf("bare zombie fire ticks = %d, want 160", z.remainingFireTicks)
+	}
+}
+
+func TestPigNotSunSensitive(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	loop.gametime = 6000
+	p := NewEntity(15, entity.Pig, 8.5, 64, 8.5)
+	p.health = 10
+
+	loop.tickMobSunBurn(p)
+
+	if p.remainingFireTicks != 0 {
+		t.Fatalf("pig fire ticks = %d, want 0", p.remainingFireTicks)
+	}
+}
+
+func newSunBurnLightLoop() (*TickLoop, *world.ChunkManager) {
+	loop, mgr := newFluidLoop()
+	ch, _ := mgr.Get(level.ChunkPos{0, 0})
+	for i := range ch.Sections {
+		ch.Sections[i].SkyLight = bytes.Repeat([]byte{0xff}, 2048)
+	}
+	loop.spawnSurfaceY = 64
+	return loop, mgr
 }
