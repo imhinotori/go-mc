@@ -210,21 +210,24 @@ func transform(t mappedType, x float64) float64 {
 	return x
 }
 
-// newMapped builds a Mapped and precomputes its bounds as DensityFunctions$Mapped's
-// minValue/maxValue do: transform both endpoints and take min/max — except ABS/SQUARE
-// which clamp the lower bound to 0 when the input straddles zero (Mojang's special
-// cases). We port the conservative-but-correct version Mojang uses.
+// newMapped builds a Mapped and precomputes its bounds exactly as
+// DensityFunctions$Mapped.create (bytecode 94-115 for ABS/SQUARE):
+//
+//	minValue = Math.max(0.0, input.minValue())                     // RAW imn, NOT transformed
+//	maxValue = Math.max(transform(imn), transform(imx))
+//
+// The ABS/SQUARE minValue is the un-transformed max(0, imn) -- Mojang does NOT square it
+// (bytecode pushes dconst_0 and dload_2=imn straight into Math.max, no transform call).
+// All other types use min/max of the two transformed endpoints (the create default at
+// bytecode 116-129 uses dload 6 = t(imn) as min and dload 8 = t(imx) as max; min/max over
+// the pair is the faithful monotone-agnostic form for the CUBE/HALF/QUARTER/SQUEEZE cases).
 func newMapped(typ mappedType, input Function) *mapped {
 	imn, imx := input.MinValue(), input.MaxValue()
 	m := &mapped{typ: typ, input: input}
-	// DensityFunctions$Mapped.minValue/maxValue: for ABS/SQUARE the floor is 0 when
-	// the input spans zero; otherwise it is min/max of the transformed endpoints.
 	switch typ {
 	case mapAbs, mapSquare:
-		lo := math.Max(0, imn)
-		hi := math.Max(math.Abs(imn), math.Abs(imx))
-		m.min = transform(typ, lo)
-		m.max = transform(typ, hi)
+		m.min = math.Max(0, imn)
+		m.max = math.Max(transform(typ, imn), transform(typ, imx))
 	default:
 		t0 := transform(typ, imn)
 		t1 := transform(typ, imx)

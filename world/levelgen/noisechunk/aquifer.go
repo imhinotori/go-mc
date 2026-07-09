@@ -329,11 +329,13 @@ func (a *Aquifer) computeSubstance(blockX, blockY, blockZ int, dens float64) (bl
 
 	// Find the 4 closest aquifer centers by squared distance (dist1<=dist2<=dist3<=dist4),
 	// tracking their cache indices (idx1..idx4). Mirrors the unrolled insertion in the
-	// bytecode over the (-1..1)x(-1..1)x(0..1) neighbour box.
+	// bytecode over the [0,1]x(-1..1)x[0,1] neighbour box (MIN_CELL_SAMPLE_X/Z=0):
+	// Aquifer$NoiseBasedAquifer.computeSubstance bytecode 176-221 inits the dx/dz loop
+	// counters at iconst_0 (0..1), only dy spans -1..1.
 	dist1, dist2, dist3, dist4 := math.MaxInt32, math.MaxInt32, math.MaxInt32, math.MaxInt32
 	idx1, idx2, idx3, idx4 := 0, 0, 0, 0
 
-	for dx := -1; dx <= 1; dx++ {
+	for dx := 0; dx <= 1; dx++ {
 		for dy := -1; dy <= 1; dy++ {
 			for dz := 0; dz <= 1; dz++ {
 				cgx := gx + dx
