@@ -76,8 +76,8 @@ func (t *TickLoop) tickArrows() {
 		if r.entities == nil {
 			continue
 		}
-		snapshot := make([]*Entity, 0, len(r.entities.byID))
-		for _, e := range r.entities.byID {
+		snapshot := make([]*Entity, 0, r.entities.len())
+		for _, e := range r.entities.all() {
 			if e.isArrow {
 				snapshot = append(snapshot, e)
 			}
@@ -286,8 +286,8 @@ func (t *TickLoop) tickPotions() {
 		if r.entities == nil {
 			continue
 		}
-		snapshot := make([]*Entity, 0, len(r.entities.byID))
-		for _, e := range r.entities.byID {
+		snapshot := make([]*Entity, 0, r.entities.len())
+		for _, e := range r.entities.all() {
 			if e.isPotion {
 				snapshot = append(snapshot, e)
 			}
@@ -376,8 +376,8 @@ func (t *TickLoop) splashPotion(e *Entity) {
 			t.addPlayerEffect(p, e.arrowShooterID, ef.id, dur, ef.amplifier, scale)
 		}
 	}
-	victims := make([]*Entity, 0, len(t.cur().entities.byID))
-	for _, victim := range t.cur().entities.byID {
+	victims := make([]*Entity, 0, t.cur().entities.len())
+	for _, victim := range t.cur().entities.all() {
 		if victim == nil || victim == e || victim.dead || !victim.isAlive() || !isLivingMob(victim) {
 			continue
 		}

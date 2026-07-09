@@ -292,7 +292,7 @@ func (t *TickLoop) livingMobsWithin(e *Entity, radius float64) []*Entity {
 	}
 	r2 := radius * radius
 	var out []*Entity
-	for _, v := range region.entities.byID {
+	for _, v := range region.entities.all() {
 		if v == nil || v.id == e.id || v.dead || v.attributes == nil {
 			continue
 		}

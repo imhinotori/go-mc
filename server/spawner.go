@@ -211,7 +211,7 @@ func (t *TickLoop) countByCategory() map[mobCategory]int {
 	if t.cur().entities == nil {
 		return counts
 	}
-	for _, e := range t.cur().entities.byID {
+	for _, e := range t.cur().entities.all() {
 		counts[categoryOf(e.typ)]++
 	}
 	return counts
@@ -228,7 +228,7 @@ func (t *TickLoop) countByCategoryAcrossRegions() map[mobCategory]int {
 		if r.entities == nil {
 			continue
 		}
-		for _, e := range r.entities.byID {
+		for _, e := range r.entities.all() {
 			counts[categoryOf(e.typ)]++
 		}
 	}

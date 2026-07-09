@@ -50,7 +50,7 @@ func (t *TickLoop) tickPressurePlates() {
 		}
 		t.plateEntityInsideAt(blockPosOf(p.x, p.y, p.z))
 	}
-	for _, e := range t.cur().entities.byID {
+	for _, e := range t.cur().entities.all() {
 		if e == nil || e.dead {
 			continue
 		}

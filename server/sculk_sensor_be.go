@@ -102,7 +102,7 @@ func (t *TickLoop) tickSculkSensors() {
 		t.sculkSensorStepOnAt(blockPosOf(p.x, p.y, p.z))
 	}
 	if t.cur() != nil {
-		for _, e := range t.cur().entities.byID {
+		for _, e := range t.cur().entities.all() {
 			if e == nil || e.dead {
 				continue
 			}
