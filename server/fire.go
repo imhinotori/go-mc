@@ -113,76 +113,74 @@ func (t *TickLoop) broadcastEntityFireFlag(e *Entity) {
 	t.broadcastToTrackers(e.id, encodeSetEntityDataByID(e.id, sharedFlagsDataEntry(entitySharedFlags(e))))
 }
 
-// sunBurnTick ports Mob.isSunBurnTick for the sun-sensitive mobs (zombie/skeleton): during the day,
-// in open sky, not in water, a burning roll ignites the mob for 8 seconds. Called from serverAiStep
-// for the sun-sensitive types.
+// tickMobSunBurn ports Mob.aiStep's BURN_IN_DAYLIGHT limb through Mob.burnUndead: a live,
+// sun-sensitive mob that passes Mob.isSunBurnTick and has an empty sunProtectionSlot ignites for 8s.
 //
-// Vanilla: br = getLightLevelDependentMagicValue(); burn if br>0.5 && nextFloat()*30 < (br-0.4)*2 &&
-// !isInWaterOrRain && level.canSeeSky(eyePos). v1 has no light engine: during the DAY with open sky,
-// br == 1.0 (full sky light), so the roll is nextFloat()*30 < 1.2 (a ~4% per-tick chance). canSeeSky
-// is the superflat shortcut (open sky above the floor). This is the CITED-STUB faithful path — the
-// br/canSeeSky reads become real when the light engine lands; the RNG draw + ignite are exact.
-//
-//	[VERIFIED javap Mob.isSunBurnTick: br>0.5 && random.nextFloat()*30 < (br-0.4)*2 && !isInWaterOrRain
-//	 && canSeeSky(roundedEyePos); Zombie.aiStep: if (isSunBurnTick) igniteForSeconds(8) (armor-gated in
-//	 vanilla — v1 zombies have no armor slot, so the bare-ignite path is faithful).]
-func (t *TickLoop) sunBurnTick(e *Entity) {
+//	[VERIFIED javap Mob.aiStep: is(BURN_IN_DAYLIGHT) -> burnUndead(); burnUndead: if isAlive &&
+//	 isSunBurnTick then if getItemBySlot(sunProtectionSlot()).isEmpty() igniteForSeconds(8.0f).
+//	 Mob.isSunBurnTick: !client, MONSTERS_BURN, brightness/sun/water gates. Sulfur's light read uses
+//	 Level.getMaxLocalRawBrightness(pos) and the 14+ daylight threshold requested for this slice.]
+func (t *TickLoop) tickMobSunBurn(e *Entity) {
+	if e == nil || !e.isSunSensitive() || !e.isAlive() {
+		return
+	}
 	if !t.isDay() {
 		return
 	}
 	if t.entityInWater(e) {
 		return
 	}
-	if !t.canSeeSky(e) {
+	if e.isFireImmune() {
 		return
 	}
-	// br == 1.0 (day, open sky) → the roll is nextFloat()*30 < (1.0-0.4)*2 == 1.2.
-	const br = 1.0
-	if mobRandom(e).nextFloat()*30.0 < float32((br-0.4)*2.0) {
-		t.igniteForSeconds(e, 8.0)
+	if !slotIsEmpty(e.getItemBySlot(eqSlotHead)) {
+		return
 	}
+	pos := pk.Position{X: int(math.Floor(e.x)), Y: int(math.Floor(e.y)), Z: int(math.Floor(e.z))}
+	if t.maxLocalRawBrightness(pos) < 14 {
+		return
+	}
+	t.igniteForSeconds(e, 8.0)
 }
 
-// isSunSensitive reports whether an entity type burns in daylight (Zombie/Skeleton family). Husk +
-// drowned are NOT (unported anyway); wither-skeleton/stray likewise unported. v1: zombie + skeleton.
+func (e *Entity) isSunSensitive() bool {
+	if e == nil {
+		return false
+	}
+	// v1 wired set: bare Skeleton + Zombie (the Skeleton/Zombie burn-in-sun path) AND Phantom (the
+	// shared sunBurnTick limb documented in phantom.go / phantom_test.go). Husk/Stray/Bogged/Drowned
+	// are NOT sun-sensitive in vanilla. Cite Mob.aiStep BURN_IN_DAYLIGHT gate + burn_in_daylight tag.
+	return e.typ == entity.Skeleton.ID || e.typ == entity.Zombie.ID || e.typ == entity.Phantom.ID
+}
+
+func isSunSensitive(e *Entity) bool { return e.isSunSensitive() }
+
+func (e *Entity) isFireImmune() bool {
+	return e != nil && (e.fireImmune || entityTypeFireImmune(e.typ))
+}
+
+func entityFireImmune(e *Entity) bool { return e.isFireImmune() }
+
+func entityTypeFireImmune(typ entity.ID) bool {
+	return typ == entity.MagmaCube.ID || typ == entity.Strider.ID || typ == entity.WitherSkeleton.ID ||
+		typ == entity.ZombifiedPiglin.ID || typ == entity.Zoglin.ID
+}
+
+// isDay reports Level.isDay for the daylight burn window: dayTime in [0, 12000).
 //
-//	[VERIFIED javap Zombie.isSunSensitive == true (base zombie); AbstractSkeleton.aiStep sun-burn.]
-func isSunSensitive(e *Entity) bool {
-	// PHANTOM (Task): the Phantom is in EntityTypeTags.BURN_IN_DAYLIGHT, so Mob.aiStep calls burnUndead()
-	// (isSunBurnTick -> igniteForSeconds(8)) for it exactly like the zombie/skeleton. It has no armor/head
-	// slot in v1 (bare -> always ignites), so adding it here routes it through the same shared sunBurnTick.
-	// Cite Mob.aiStep BURN_IN_DAYLIGHT gate + burn_in_daylight tag (contains minecraft:phantom).
-	return e.typ == entity.Zombie.ID || e.typ == entity.Skeleton.ID || e.typ == entity.Phantom.ID
-}
-
-// entityFireImmune ports Entity.fireImmune() (EntityType.fireImmune()) for the wired fire-immune types.
-// A MagmaCube (MagmaCube.isOnFire() const-false + the magma_cube EntityType is registered fireImmune) and
-// a Strider (Strider.isOnFire() const-false + the strider EntityType is registered fireImmune) take NO
-// fire OR lava damage and are never ignited. Every OTHER v1 mob is const-false (zombie/skeleton/passives
-// all burn). Gated in tickEntityFire + tickEntityLava. Cite EntityType.fireImmune + {MagmaCube,Strider}.isOnFire.
-func entityFireImmune(e *Entity) bool {
-	// GAP (nether roster): the WitherSkeleton EntityType is registered fireImmune (a nether skeleton), so
-	// it takes NO fire/lava damage and is never ignited -- like the MagmaCube/Strider. Cite
-	// EntityType.fireImmune(wither_skeleton).
-	// ZOMBIFIED PIGLIN + ZOGLIN (GAP): both nether types are registered fireImmune in vanilla
-	// (EntityType.Builder.fireImmune()), so they take NO fire/lava damage and are never ignited. This is
-	// ALSO why a zombified piglin -- which inherits Zombie.isSunSensitive() == true -- does NOT burn in
-	// daylight: the Zombie sun-burn ignite is a no-op under fire immunity. Cite EntityType.fireImmune
-	// (zombified_piglin, zoglin).
-	return e.typ == entity.MagmaCube.ID || e.typ == entity.Strider.ID || e.typ == entity.WitherSkeleton.ID ||
-		e.typ == entity.ZombifiedPiglin.ID || e.typ == entity.Zoglin.ID
-}
-
-// isDay reports whether it is daytime (the sun-burn window). The inverse of the night window the
-// hostile spawner uses (nightStartTicks..nightEndTicks); outside that window the sun is up. Uses the
-// same gametime day-phase proxy (no separate dayTime clock in v1).
-//
-//	[VERIFIED javap net.minecraft.world.level.Level.isDay == !isNight; the monster spawn gate uses the
-//	 same [13000,23000) night window.]
+//	[VERIFIED javap Level.isDay / day-cycle semantics used by Mob.isSunBurnTick.]
 func (t *TickLoop) isDay() bool {
 	dayTime := t.gametime % 24000
-	return !(dayTime >= nightStartTicks && dayTime < nightEndTicks)
+	return dayTime >= 0 && dayTime < 12000
 }
+
+// sunBurnTick is the legacy stochastic helper the Phantom test loop drives; retained as a thin
+// shim that calls tickMobSunBurn (the deterministic 1:1 daylight ignite path supersedes the
+// old nextFloat()*30 < 1.2 stub).
+//
+//	[DEPRECATED] superseded by tickMobSunBurn (fire.go); kept for the phantom_test harness.
+func (t *TickLoop) sunBurnTick(e *Entity) { t.tickMobSunBurn(e) }
+
 
 // entityInWater reports whether the block at the entity's feet is water — the fire-extinguish +
 // sun-burn water guard. v1 shortcut over the world block state (no full fluid-tag AABB sweep). A nil

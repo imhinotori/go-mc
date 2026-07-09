@@ -1160,8 +1160,17 @@ type Entity struct {
 	// remainingFireTicks is Entity.remainingFireTicks: the burn countdown. igniteForSeconds(n) sets it
 	// to floor(n*20) (only if larger); baseTick decrements it, deals 1 fire damage every 20 ticks, and
 	// broadcasts the on-fire shared-flag (DATA_SHARED_FLAGS bit 0x01). 0 = not on fire. Tick-owned.
+	// remainingFireTicks is Entity.remainingFireTicks: the burn countdown. igniteForSeconds(n) sets it
+	// to floor(n*20) (only if larger); baseTick decrements it, deals 1 fire damage every 20 ticks, and
+	// broadcasts the on-fire shared-flag (DATA_SHARED_FLAGS bit 0x01). 0 = not on fire. Tick-owned.
 	//	[VERIFIED javap Entity.remainingFireTicks / igniteForTicks / baseTick fire block.]
 	remainingFireTicks int32
+
+	// fireImmune mirrors EntityType.fireImmune() / Entity.fireImmune(): fire-immune entity types clear
+	// ordinary fire ticks and ignore lava/fire ignition. Default false for ordinary mobs (Skeleton,
+	// Zombie, Pig, Chicken); NewEntity seeds true for the registered nether fire-immune types.
+	//	[VERIFIED javap Entity.fireImmune delegates to EntityType.fireImmune().]
+	fireImmune bool
 
 	// lastDamageSource is LivingEntity.lastDamageSource — the genuine ported source set in the flag2
 	// (fresh-hit) block of hurtServer (bytecode 449-451). MOB-SUB-02: PanicGoal (P31) reads its tag,
@@ -1938,6 +1947,7 @@ func NewEntity(id int32, t entity.Entity, x, y, z float64) *Entity {
 		// an unported mob) — a nil map is the faithful "no DefaultAttributes" state and every read
 		// helper degrades to the registration default. Keyed by the type's registry name (t.Name).
 		attributes: attribute.NewMapForEntity(t.Name),
+		fireImmune: entityTypeFireImmune(t.ID),
 	}
 }
 
