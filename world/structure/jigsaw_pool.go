@@ -21,8 +21,8 @@ package structure
 //      sub-element list placed together — STUBBED to the first sub-element's geometry;
 //      villages never use it, but it parses)
 //   - net.minecraft.world.level.levelgen.structure.pools.FeaturePoolElement (places a
-//      placed_feature — STUBBED to a no-op; villages reference it only in the
-//      common/animals spawner pools, which carry no structural blocks)
+//      placed_feature via the package-world FeaturePoolElementPlacer adapter, and exposes
+//      its bytecode-verified single bottom jigsaw)
 //   - net.minecraft.world.level.levelgen.structure.pools.EmptyPoolElement (the terminator
 //      INSTANCE — its getShuffledJigsawBlocks is empty and it never places)
 //   - net.minecraft.util.Util.shuffle / shuffledCopy (the Fisher-Yates draw)
@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/world/levelgen"
 	"github.com/imhinotori/sulfur/world/levelgen/data"
 )
@@ -64,7 +65,8 @@ func parseProjection(s string) Projection {
 
 // PoolElement is the StructurePoolElement abstraction (CFR StructurePoolElement): a placed
 // template's geometry source. Single/Legacy delegate to the 16-01 StructureTemplate; List
-// composes; Feature stubs; Empty terminates. The Placer (jigsaw_placement.go) consumes
+// composes; Feature delegates through FeaturePoolElementPlacer; Empty terminates. The Placer
+// (jigsaw_placement.go) consumes
 // BoundingBox / Jigsaws / Place + Projection.
 type PoolElement interface {
 	// BoundingBox returns the element's WORLD bbox at (origin, rot) (pivot ZERO — the jar's
@@ -80,6 +82,15 @@ type PoolElement interface {
 	Projection() Projection
 	// IsEmpty reports the EmptyPoolElement terminator (the Placer breaks on it).
 	IsEmpty() bool
+}
+
+// FeaturePoolElementPlacer is the narrow cross-package seam for FeaturePoolElement.place.
+// The bytecode delegates directly to PlacedFeature.place(level, generator, rng, origin);
+// package structure cannot import package world without a cycle, so the live WorldGenView
+// may provide this adapter. Test-only views that omit it deliberately make feature elements
+// inert and consume no rng draws.
+type FeaturePoolElementPlacer interface {
+	PlaceFeaturePoolElement(feature string, origin Pos, rng levelgen.RandomSource) bool
 }
 
 // singlePoolElement ports SinglePoolElement / LegacySinglePoolElement: a single .nbt
@@ -164,10 +175,15 @@ func (e *listPoolElement) Place(view WorldGenView, origin Pos, rot Rotation, box
 	}
 }
 
-// featurePoolElement ports FeaturePoolElement: places a placed_feature. Villages reference
-// it only in the common/animals + common/iron_golem spawner pools, which place no structural
-// blocks (they spawn entities — a v3 subsystem). STUBBED to a no-op + an empty box/jigsaws,
-// so a village pool that references one resolves without panicking and contributes nothing.
+// featurePoolElement ports FeaturePoolElement: a zero-size placed_feature pool element.
+// Bytecode verified against net.minecraft.world.level.levelgen.structure.pools.
+// FeaturePoolElement in the 26.2 jar:
+//   - getSize returns Vec3i.ZERO;
+//   - getBoundingBox builds [origin..origin+size], so this is the single origin cell;
+//   - getShuffledJigsawBlocks returns List.of(one jigsaw at origin), with orientation
+//     FrontAndTop.fromFrontAndTop(DOWN, SOUTH), default name minecraft:bottom, pool/target
+//     minecraft:empty, final_state minecraft:air, joint rollable, and no shuffle/rng draw;
+//   - place ignores rotation/box/secondary position and delegates to PlacedFeature.place.
 type featurePoolElement struct {
 	feature    string
 	projection Projection
@@ -178,10 +194,23 @@ func (e *featurePoolElement) IsEmpty() bool          { return false }
 func (e *featurePoolElement) BoundingBox(origin Pos, _ Rotation) BoundingBox {
 	return BoundingBox{MinX: origin.X, MinY: origin.Y, MinZ: origin.Z, MaxX: origin.X, MaxY: origin.Y, MaxZ: origin.Z}
 }
-func (e *featurePoolElement) Jigsaws(Pos, Rotation, levelgen.RandomSource) ([]JigsawBlockInfo, error) {
-	return nil, nil
+func (e *featurePoolElement) Jigsaws(origin Pos, _ Rotation, _ levelgen.RandomSource) ([]JigsawBlockInfo, error) {
+	return []JigsawBlockInfo{{
+		WorldPos:    origin,
+		LocalPos:    Pos{0, 0, 0},
+		Name:        "minecraft:bottom",
+		Pool:        "minecraft:empty",
+		Target:      "minecraft:empty",
+		FinalState:  "minecraft:air",
+		Joint:       "rollable",
+		FrontFacing: block.Down,
+		TopFacing:   block.South,
+	}}, nil
 }
-func (e *featurePoolElement) Place(WorldGenView, Pos, Rotation, BoundingBox, levelgen.RandomSource) {
+func (e *featurePoolElement) Place(view WorldGenView, origin Pos, _ Rotation, _ BoundingBox, rng levelgen.RandomSource) {
+	if placer, ok := view.(FeaturePoolElementPlacer); ok {
+		placer.PlaceFeaturePoolElement(e.feature, origin, rng)
+	}
 }
 
 // emptyPoolElement ports EmptyPoolElement.INSTANCE: the terminator. Its bbox is empty, it
@@ -191,9 +220,9 @@ type emptyPoolElement struct{}
 // EmptyPoolElementInstance is the singleton terminator (CFR EmptyPoolElement.INSTANCE).
 var EmptyPoolElementInstance PoolElement = emptyPoolElement{}
 
-func (emptyPoolElement) Projection() Projection                  { return ProjectionRigid }
-func (emptyPoolElement) IsEmpty() bool                           { return true }
-func (emptyPoolElement) BoundingBox(Pos, Rotation) BoundingBox   { return BoundingBox{} }
+func (emptyPoolElement) Projection() Projection                { return ProjectionRigid }
+func (emptyPoolElement) IsEmpty() bool                         { return true }
+func (emptyPoolElement) BoundingBox(Pos, Rotation) BoundingBox { return BoundingBox{} }
 func (emptyPoolElement) Jigsaws(Pos, Rotation, levelgen.RandomSource) ([]JigsawBlockInfo, error) {
 	return nil, nil
 }

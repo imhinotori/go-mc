@@ -169,7 +169,7 @@ func TestPhase16Acceptance(t *testing.T) {
 			t.Fatalf("village fingerprint non-deterministic: 0x%x != 0x%x", fpA, fpB)
 		}
 		// Pinned to the algorithm-derived placement (a Placer/template/RNG regression flips it).
-		const wantFP = uint64(0xcd3845c885976c04)
+		const wantFP = uint64(0xe319b627b141d357)
 		if fpA != wantFP {
 			t.Fatalf("village fingerprint = 0x%x, want pinned 0x%x", fpA, wantFP)
 		}
@@ -329,11 +329,11 @@ func TestAllStructuresPlace(t *testing.T) {
 			wantCount int
 			wantFP    uint64
 		}{
-			{"minecraft:village_plains", "minecraft:plains", 5768, 0xcd3845c885976c04},
-			{"minecraft:village_desert", "minecraft:desert", 3588, 0x433db86bbc8929c9},
-			{"minecraft:village_savanna", "minecraft:savanna", 7444, 0x583d448a5a5d5334},
-			{"minecraft:village_snowy", "minecraft:snowy_plains", 11851, 0x473a285f3db82b03},
-			{"minecraft:village_taiga", "minecraft:taiga", 6278, 0xbd5888cd0b4c30ca},
+			{"minecraft:village_plains", "minecraft:plains", 5427, 0xe319b627b141d357},
+			{"minecraft:village_desert", "minecraft:desert", 3640, 0x73bcd8becba268cd},
+			{"minecraft:village_savanna", "minecraft:savanna", 8466, 0xc25e2bd69c9b690a},
+			{"minecraft:village_snowy", "minecraft:snowy_plains", 11197, 0x6065839d758e4647},
+			{"minecraft:village_taiga", "minecraft:taiga", 4937, 0x4f69d3d1df7bd774},
 		}
 		for _, vv := range variants {
 			t.Run(vv.id, func(t *testing.T) {
