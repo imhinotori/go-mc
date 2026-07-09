@@ -58,6 +58,10 @@ type followParentGoal struct {
 	speedModifier    float64
 	parent           *Entity // FollowParentGoal.parent — the adult being followed
 	timeToRecalcPath int     // FollowParentGoal.timeToRecalcPath — re-path countdown
+	// startHook is an OPTIONAL callback the concrete follow-parent goal runs AFTER super.start()'s
+	// timeToRecalcPath = 0. FoxFollowParentGoal.start calls fox.clearStates() (the broad posture-drop
+	// the fox subclass adds). nil == no extension (the base FollowParentGoal has no extras).
+	startHook func(t *TickLoop, e *Entity)
 }
 
 // newFollowParentGoal builds the FollowParentGoal with EMPTY flags (the ctor never calls setFlags, so
@@ -142,9 +146,12 @@ func (g *followParentGoal) canContinueToUse(_ *TickLoop, e *Entity) bool {
 }
 
 // start ports FollowParentGoal.start: timeToRecalcPath = 0 (so the first tick re-paths immediately:
-// --0 = -1, not > 0).
-func (g *followParentGoal) start(_ *TickLoop, _ *Entity) {
+// --0 = -1, not > 0). Then the concrete startHook (the Fox variant calls fox.clearStates()).
+func (g *followParentGoal) start(t *TickLoop, e *Entity) {
 	g.timeToRecalcPath = 0
+	if g.startHook != nil {
+		g.startHook(t, e)
+	}
 }
 
 // tick ports FollowParentGoal.tick EXACTLY: decrement timeToRecalcPath; if it is still > 0, return

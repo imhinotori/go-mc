@@ -117,6 +117,23 @@ type avoidEntityGoal struct {
 	walkSpeedModifier   float64   // AvoidEntityGoal.walkSpeedModifier — the far-band move speed multiplier
 	sprintSpeedModifier float64   // AvoidEntityGoal.sprintSpeedModifier — the near-band (<7 blocks) multiplier
 
+	// targetPredicate is the OPTIONAL AvoidEntityGoal.<init> selector argument (the 5-arg ctor
+	// `AvoidEntityGoal(Mob, Class<T>, float, double, double, Predicate<LivingEntity>)` form — the
+	// vanilla-only PREDICATE that further filters the target class). nil == no extra filter (the
+	// 4-arg ctor the Creeper/Ocelot avoid uses). When non-nil, canUse DROPS any candidate that
+	// fails the predicate (e.g. Fox's player-avoid drops a player the fox trusts; Fox's wolf-avoid
+	// drops a tamed wolf; the fox's polar-bear-avoid drops the threat when the fox is defending).
+	targetPredicate func(t *TickLoop, mob, candidate *Entity) bool
+	// playerScanPredicate is the fox-PLAYER-avoid predicate (different shape: candidate is a
+	// player id, not an *Entity — players live in t.players, NOT the entity store). nil ==
+	// the standard mob-avoid path. Set by newAvoidEntityGoalPlayer; honored by canUse's player
+	// scan (the isPlayerScan branch).
+	playerScanPredicate func(t *TickLoop, mob *Entity, playerID int32) bool
+	// isPlayerScan is the canUse branch flag (set by newAvoidEntityGoalPlayer; honored by
+	// canUse). The player avoid scans t.players via nearestPlayerIDAt; every other avoid scans
+	// the entity store via nearestEntityOfTypeAt.
+	isPlayerScan bool
+
 	toAvoid int32 // AvoidEntityGoal.toAvoid (the captured threat id, 0 == none) — set by canUse, cleared by stop
 	// wantX/Y/Z is the committed flee pos (the AvoidEntityGoal.path analogue): canUse computes it via
 	// getPosAway + the acceptance gate, start() hands it to the nav. No synchronous Path exists in v1.
@@ -139,6 +156,35 @@ func newAvoidEntityGoal(avoidType entity.ID, maxDist, walkSpeed, sprintSpeed flo
 	}
 }
 
+// newAvoidEntityGoalWithPredicate builds the 5-arg-cform AvoidEntityGoal(Mob, Class<T>, float, double,
+// double, Predicate) — the 5-arg ctor the FOX uses (player: AVOID_PLAYERS + !trusts + !isDefending;
+// wolf: !tame + !isDefending; polar-bear: !isDefending). The walk/sprint speeds default to the
+// shared Creeper literals (1.0/1.2) — the fox's per-callsite speeds (1.6/1.4 for player, 1.6/1.4
+// for wolf, 1.6/1.4 for polar bear) thread through here.
+func newAvoidEntityGoalWithPredicate(avoidType entity.ID, maxDist, walkSpeed, sprintSpeed float64, predicate func(t *TickLoop, mob, candidate *Entity) bool) *avoidEntityGoal {
+	g := newAvoidEntityGoal(avoidType, maxDist, walkSpeed, sprintSpeed)
+	g.targetPredicate = predicate
+	return g
+}
+
+// newAvoidEntityGoalPlayer builds the fox's PLAYER-avoid variant — it scans t.players (the
+// player seam, NOT the entity store) via nearestPlayerIDAt (the existing seam the look-avoid
+// + the NearestAttackableTargetGoal<Player> branch use). Without this special-case the
+// avoidEntityGoal would never find a player (players live in t.players, not entities). Cite
+// AvoidEntityGoal (player) — the player class lives outside the entity store.
+func newAvoidEntityGoalPlayer(maxDist, walkSpeed, sprintSpeed float64, predicate func(t *TickLoop, mob *Entity, playerID int32) bool) *avoidEntityGoal {
+	g := newAvoidEntityGoal(entity.Player.ID, maxDist, walkSpeed, sprintSpeed)
+	// Override canUse via a player-scan shim: the inherited canUse's nearestEntityOfTypeAt
+	// scan would never find a player; we replace it with a Player-scanning canUse (the
+	// player branch of nearestPlayerIDAt + the predicate). The canUse method override on the
+	// goal struct is the cleanest seam; we mark this by setting a sentinel that we read in
+	// the canUse body.
+	g.targetPredicate = nil // player predicate is a different shape (no *Entity, just id)
+	g.playerScanPredicate = predicate
+	g.isPlayerScan = true
+	return g
+}
+
 // canUse ports AvoidEntityGoal.canUse (bytecode-verified this session): find the nearest avoided-class
 // entity within maxDist (toAvoid); if none, return false (BEFORE any RNG). Else draw a flee pos away
 // from it (getPosAway 16,7,+/-pi/2); if none, false. REJECT if the flee pos is closer to the threat than
@@ -152,30 +198,56 @@ func (g *avoidEntityGoal) canUse(t *TickLoop, e *Entity) bool {
 	if e.ai == nil {
 		return false
 	}
-	// toAvoid = getNearestEntity(getEntitiesOfClass(avoidClass, ...), avoidEntityTargeting, mob, ...).
-	// nearestEntityOfTypeAt is the mob-vs-mob getNearestEntity port (ai_goals_target.go): the nearest live
-	// entity of the avoided type within maxDist, or none. Deferrals (search box vertical band, eyeY basis,
-	// forCombat filters) cited in the file header.
-	id, ok := nearestEntityOfTypeAt(t, e, g.avoidType, g.maxDist)
-	if !ok { // toAvoid == null
-		return false
-	}
-	g.toAvoid = id
-	threat, ok2 := t.cur().entities.get(id)
-	if !ok2 || threat == nil { // the candidate vanished between search and read — treat as no threat (no RNG)
-		return false
+	// Resolve the threat (id + position) — the player-avoid scans t.players, every other avoid
+	// scans the entity store. The threat coords are needed for getPosAway (the flee direction).
+	var tx, ty, tz float64
+	if g.isPlayerScan {
+		id, ok := nearestPlayerIDAt(t, e.x, e.y, e.z, g.maxDist)
+		if !ok {
+			return false
+		}
+		g.toAvoid = id
+		if g.playerScanPredicate != nil && !g.playerScanPredicate(t, e, id) {
+			return false
+		}
+		p := t.playerByEntityID(id)
+		if p == nil { // the player left between scan and read (no RNG)
+			return false
+		}
+		tx, ty, tz = p.x, p.y, p.z
+	} else {
+		// toAvoid = getNearestEntity(getEntitiesOfClass(avoidClass, ...), avoidEntityTargeting, mob, ...).
+		// nearestEntityOfTypeAt is the mob-vs-mob getNearestEntity port (ai_goals_target.go): the nearest live
+		// entity of the avoided type within maxDist, or none. Deferrals (search box vertical band, eyeY basis,
+		// forCombat filters) cited in the file header.
+		id, ok := nearestEntityOfTypeAt(t, e, g.avoidType, g.maxDist)
+		if !ok { // toAvoid == null
+			return false
+		}
+		g.toAvoid = id
+		threat, ok2 := t.cur().entities.get(id)
+		if !ok2 || threat == nil { // the candidate vanished between search and read — treat as no threat (no RNG)
+			return false
+		}
+		// The 5-arg-cform AvoidEntityGoal(Mob, Class, float, double, double, Predicate<LivingEntity>)
+		// selector — the fox's per-class predicates (AVOID_PLAYERS+!trusts+!isDefending / !tame+!isDefending
+		// / !isDefending) drop a candidate that fails the gate. nil for the bare 4-arg ctor.
+		if g.targetPredicate != nil && !g.targetPredicate(t, e, threat) {
+			return false
+		}
+		tx, ty, tz = threat.x, threat.y, threat.z
 	}
 	// DefaultRandomPos.getPosAway(mob, 16, 7, toAvoid.position()): the flee pos AWAY from the threat.
 	// This is the ONLY RNG in canUse (best-of-10; per candidate nextFloat + nextDouble + nextInt), drawn
 	// ONLY now that a threat exists.
-	px, py, pz, found := getPosAway(mobRandom(e), e, threat.x, threat.z)
+	px, py, pz, found := getPosAway(mobRandom(e), e, tx, tz)
 	if !found { // posAway == null
 		return false
 	}
 	// REJECT if the flee pos is CLOSER to the threat than the mob is (do not flee TOWARD the threat):
 	// toAvoid.distanceToSqr(posAway) < toAvoid.distanceToSqr(mob). Both distances are from the THREAT.
-	dPos := sqrDist(threat.x, threat.y, threat.z, px, py, pz)
-	dMob := sqrDist(threat.x, threat.y, threat.z, e.x, e.y, e.z)
+	dPos := sqrDist(tx, ty, tz, px, py, pz)
+	dMob := sqrDist(tx, ty, tz, e.x, e.y, e.z)
 	if dPos < dMob {
 		return false
 	}
@@ -217,12 +289,23 @@ func (g *avoidEntityGoal) tick(t *TickLoop, e *Entity) {
 	if e.ai == nil || g.toAvoid == 0 {
 		return
 	}
-	threat, ok := t.cur().entities.get(g.toAvoid)
-	if !ok || threat == nil {
-		return // the threat left the world — hold the current want; canContinueToUse ends it when nav is done
+	// Resolve the threat position (player vs entity).
+	var tx, ty, tz float64
+	if g.isPlayerScan {
+		p := t.playerByEntityID(g.toAvoid)
+		if p == nil {
+			return // the player left — hold the current want; canContinueToUse ends it when nav is done
+		}
+		tx, ty, tz = p.x, p.y, p.z
+	} else {
+		threat, ok := t.cur().entities.get(g.toAvoid)
+		if !ok || threat == nil {
+			return // the threat left the world — hold the current want; canContinueToUse ends it when nav is done
+		}
+		tx, ty, tz = threat.x, threat.y, threat.z
 	}
 	// mob.distanceToSqr(toAvoid): the squared mob->threat distance (feet-y, the entityDistSqr basis).
-	d := sqrDist(e.x, e.y, e.z, threat.x, threat.y, threat.z)
+	d := sqrDist(e.x, e.y, e.z, tx, ty, tz)
 	// setSpeedModifier(sprint | walk): re-set the SPEED of the SAME committed want. Multiply MOVEMENT_SPEED
 	// by the chosen modifier (the setWantTargetSpeed seam), keeping the flee destination unchanged.
 	var mod float64

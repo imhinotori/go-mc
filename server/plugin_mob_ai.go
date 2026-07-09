@@ -210,7 +210,7 @@ func buildAIFromDecl(t *TickLoop, decl *mobDecl) *mobAI {
 				// hunt/attack). spawnDeclaredMob runs on the tick goroutine; a panic here is isolated by
 				// the tickOnce recover backstop, surfacing the bad declaration loudly rather than shipping
 				// a silently-disarmed hostile. (The .star load already validated the rest of the mob.)
-				panic("buildAIFromDecl: unknown goal kind " + gd.nativeKind + " (valid: nearest_attackable_target, hurt_by_target, melee_attack, spider_attack, leap_at_target, avoid_entity, float, climb_on_powder_snow, sit, follow_owner, owner_hurt_by, owner_hurt, angry_player_target, skeleton_target, enderman_look_for_player, enderman_freeze_when_looked_at, silverfish_merge_stone, silverfish_wake_friends, cube_float, cube_random_direction, cube_keep_on_jumping, fox_faceplant, fox_stalk, fox_pounce, fox_seek_shelter, fox_sleep, fox_perch_search, fox_defend_trusted, fox_land_target, fox_search_items, turtle_goto_water, turtle_go_home, turtle_travel, turtle_lay_egg, restrict_sun, flee_sun, nearest_healable_raider_target, cat_relax_on_owner, cat_lie_on_bed, cat_sit_on_block, long_distance_patrol, iron_golem_hostile_target, pillager_crossbow_attack, evoker_casting_spell, evoker_summon_spell, evoker_attack_spell, evoker_wololo_spell)")
+				panic("buildAIFromDecl: unknown goal kind " + gd.nativeKind + " (valid: nearest_attackable_target, hurt_by_target, melee_attack, spider_attack, leap_at_target, avoid_entity, float, climb_on_powder_snow, sit, follow_owner, owner_hurt_by, owner_hurt, angry_player_target, skeleton_target, enderman_look_for_player, enderman_freeze_when_looked_at, silverfish_merge_stone, silverfish_wake_friends, cube_float, cube_random_direction, cube_keep_on_jumping, fox_faceplant, fox_stalk, fox_pounce, fox_seek_shelter, fox_sleep, fox_perch_search, fox_defend_trusted, fox_land_target, fox_search_items, fox_eat_berries, fox_follow_parent, fox_fish_target, fox_turtle_egg_target, fox_avoid_player, fox_avoid_wolf, fox_avoid_polar_bear, turtle_goto_water, turtle_go_home, turtle_travel, turtle_lay_egg, restrict_sun, flee_sun, nearest_healable_raider_target, cat_relax_on_owner, cat_lie_on_bed, cat_sit_on_block, long_distance_patrol, iron_golem_hostile_target, pillager_crossbow_attack, evoker_casting_spell, evoker_summon_spell, evoker_attack_spell, evoker_wololo_spell)")
 			}
 			// The Go goal's OWN flags() must match the declared flags — a declaration that names, e.g.,
 			// kind="melee_attack" but flags=["TARGET"] would route the goal into the WRONG selector AND
@@ -343,6 +343,20 @@ func buildNativeGoal(kind string, gd goalDecl, decl *mobDecl) Goal {
 		// maxDist/speed modifiers use the Creeper's literal args as the v1 default (the ONE consumer wired
 		// so far); a future declaration seam can carry per-goal overrides. Cite Creeper.registerGoals @3.
 		return newAvoidEntityGoal(gd.avoidType, avoidDefaultMaxDist, avoidWalkSpeedModifier, avoidSprintSpeedModifier)
+	case "fox_avoid_player":
+		// Fox.registerGoals @4 AvoidEntityGoal<Player>(fox, 16.0f, 1.6, 1.4, AVOID_PLAYERS + !trusts +
+		// !isDefending). The 5-arg-cform seam (the fox's player-avoid wires the player-shape predicate via
+		// the dedicated player-scan route — players live in t.players, not the entity store).
+		// Cite Fox.registerGoals @4 + Fox.AVOID_PLAYERS.
+		return newFoxAvoidPlayerGoal()
+	case "fox_avoid_wolf":
+		// Fox.registerGoals @4 AvoidEntityGoal<Wolf>(fox, 8.0f, 1.6, 1.4, !wolf.isTame() + !isDefending).
+		// Cite Fox.registerGoals @4 + Fox.lambda$registerGoals$3.
+		return newFoxAvoidWolfGoal()
+	case "fox_avoid_polar_bear":
+		// Fox.registerGoals @4 AvoidEntityGoal<PolarBear>(fox, 8.0f, 1.6, 1.4, !isDefending). Cite
+		// Fox.registerGoals @4 + Fox.lambda$registerGoals$4.
+		return newFoxAvoidPolarBearGoal()
 	case "cube_float":
 		// MOB-CUBE (SulfurCube): AbstractCubeMob.registerGoals @1 CubeMobFloatGoal — {JUMP,MOVE}. Bobs the
 		// cube in water/lava (jump 80% + setWantedMovement(1.2)). Cite AbstractCubeMob$CubeMobFloatGoal.
@@ -456,14 +470,39 @@ func buildNativeGoal(kind string, gd goalDecl, decl *mobDecl) Goal {
 		// Fox.registerGoals targetSelector @3 DefendTrustedTargetGoal — {TARGET}; the nextInt(10) gate.
 		return newFoxDefendTrustedGoal()
 	case "fox_land_target":
-		// Fox.registerGoals landTargetGoal NearestAttackableTargetGoal<Chicken|Rabbit> — {TARGET}; nextInt(10).
+		// Fox.registerGoals landTargetGoal NearestAttackableTargetGoal<Chicken|Rabbit> - {TARGET}; nextInt(10).
 		return newFoxLandTargetGoal()
 	case "fox_search_items":
-		// Fox.registerGoals @11 FoxSearchForItemsGoal — {MOVE}; canUse rolls nextInt(reducedTickDelay(10))
+		// Fox.registerGoals @11 FoxSearchForItemsGoal - {MOVE}; canUse rolls nextInt(reducedTickDelay(10))
 		// == nextInt(5). The forage-walk toward a nearby dropped item; the pickup itself is the shared
 		// Mob.aiStep looting scan (mobPickupItems, item_entity_mob.go). Cite Fox.registerGoals @11
 		// FoxSearchForItemsGoal.
 		return newFoxSearchForItemsGoal()
+	case "fox_eat_berries":
+		// Fox.registerGoals @10 FoxEatBerriesGoal(fox, 1.2, 12, 1) - extends MoveToBlockGoal ({MOVE,
+		// JUMP}, requiresUpdateEveryTick true). The fox walks to the nearest ripe SWEET_BERRY_BUSH
+		// (AGE >= 2) within 12 blocks, then waits 40 ticks before eating. Cite Fox.registerGoals @10
+		// FoxEatBerriesGoal + MoveToBlockGoal.
+		return newFoxEatBerriesGoal()
+	case "fox_follow_parent":
+		// Fox.registerGoals @8 FoxFollowParentGoal(fox, 1.25) - extends FollowParentGoal (flags {}
+		// EMPTY). canUse/canContinueToUse additionally gate on !fox.isDefending(); start calls
+		// fox.clearStates(). The fox-specific speed is 1.25 (NOT the pig's 1.1). Cite Fox.registerGoals
+		// @8 FoxFollowParentGoal + FollowParentGoal.
+		return newFoxFollowParentGoal()
+	case "fox_fish_target":
+		// Fox.setTargetGoals targetSelector fishTargetGoal: NearestAttackableTargetGoal<AbstractFish>
+		// (20, AbstractSchoolingFish selector). The fox pursues Cod/Salmon (the only schooling fish
+		// in 26.2). Added at @6 in RED variant; @4 in SNOW variant. Cite Fox.registerGoals +
+		// Fox.setTargetGoals.
+		return newFoxFishTargetGoal()
+	case "fox_turtle_egg_target":
+		// Fox.setTargetGoals targetSelector turtleEggTargetGoal: NearestAttackableTargetGoal<Turtle>
+		// (10, BABY_ON_LAND_SELECTOR = isBaby && !isInWater). The fox hunts BABY TURTLES on land
+		// (the goal's "turtleEgg" name is misleading; the ldc_class is Turtle). Added at @4 in RED
+		// variant; @6 in SNOW variant. Cite Fox.registerGoals + Fox.setTargetGoals + Turtle.
+		// BABY_ON_LAND_SELECTOR.
+		return newFoxTurtleEggTargetGoal()
 	case "turtle_goto_water":
 		// MOB-PREY (Task #9): Turtle.registerGoals @3 TurtleGoToWaterGoal(this, 1.0) — {MOVE, JUMP}. The
 		// MoveToBlockGoal that finds the nearest WATER cell (range 24) and walks to it (ai_goals_turtle.go).
