@@ -231,8 +231,12 @@ func generateBands(rng lgrandom.RandomSource) ([]block.StateID, error) {
 	for i := range bands {
 		bands[i] = terracotta
 	}
-	// Orange terracotta runs: step by (nextInt(5)+1)*… single cells.
-	for i := 0; i < len(bands); i += int(rng.NextIntN(5)) + 1 {
+	// Orange terracotta runs. SurfaceSystem.generateBands bytecode 14-49: the loop body
+	// INCREMENTS i FIRST (i += nextInt(5)+1 at offset 22-33) THEN assigns bands[i]=orange
+	// (if in bounds) THEN i++ (iinc 2,1 at offset 46). So bands[0] is never assigned and
+	// the effective per-iteration stride is nextInt(5)+2.
+	for i := 0; i < len(bands); i++ {
+		i += int(rng.NextIntN(5)) + 1
 		if i < len(bands) {
 			bands[i] = orange
 		}
@@ -242,14 +246,18 @@ func generateBands(rng lgrandom.RandomSource) ([]block.StateID, error) {
 	makeBands(rng, bands, 1, red)
 
 	// White band run (length 9..15) with optional light-gray edges.
+	// SurfaceSystem.generateBands bytecode 90-184: idx advances by nextInt(16)+4 per
+	// iteration (offset 169-182) and the light-gray edges use nextBoolean() (offset 121,
+	// 148) -- NOT nextFloat()<0.5 (a different RandomSource draw). The lower guard is
+	// (idx-1) > 0 (offset 114-118, strictly greater than zero).
 	whiteCount := nextIntBetweenInclusive(rng, 9, 15)
 	placed := 0
-	for j := 0; placed < whiteCount && j < len(bands); j++ {
+	for j := 0; placed < whiteCount && j < len(bands); j += int(rng.NextIntN(16)) + 4 {
 		bands[j] = white
-		if j-1 > 0 && rng.NextFloat() < 0.5 { // nextBoolean()
+		if j-1 > 0 && rng.NextBoolean() {
 			bands[j-1] = lightGray
 		}
-		if j+1 < len(bands) && rng.NextFloat() < 0.5 {
+		if j+1 < len(bands) && rng.NextBoolean() {
 			bands[j+1] = lightGray
 		}
 		placed++
@@ -531,7 +539,7 @@ func BuildSurface(s *SurfaceSystem, rule RuleSource, ch *level.Chunk, nc *noisec
 						if yy >= minY {
 							bs = col.getBlock(yy)
 						}
-						if !isStone(bs, s.defaultBlock) {
+						if !isStone(bs, air, caveAir, water) {
 							minStoneY = yy + 1
 							break
 						}
@@ -569,15 +577,12 @@ func isAirState(st, air, caveAir block.StateID) bool { return st == air || st ==
 // reaches the top-down water bookkeeping.
 func isFluidState(st, water block.StateID) bool { return st == water }
 
-// isStone reports whether a state is the default surface-buildable rock. Vanilla's
-// SurfaceSystem.isStone tests the block tag; here the surface band is built on the
-// default_block (stone) the noise fill placed (and deepslate below — both count as the
-// stone run for the stoneDepthBelow scan).
-func isStone(st, defaultBlock block.StateID) bool {
-	if st == defaultBlock {
-		return true
-	}
-	return st == deepslateState() || st == stoneState()
+// isStone ports SurfaceSystem.isStone (bytecode 0-22): return true iff the state is
+// NOT air AND its fluid state is empty -- i.e. !isAir(st) && !isFluid(st). It is the
+// stoneDepthBelow scan's run predicate: any non-air, non-fluid block continues the
+// stone run (ore, deepslate, packed_mud, etc. all count), only air/fluid terminate it.
+func isStone(st, air, caveAir, water block.StateID) bool {
+	return !isAirState(st, air, caveAir) && !isFluidState(st, water)
 }
 
 // stoneState / deepslateState resolve the two rock states the noise fill stratifies the
