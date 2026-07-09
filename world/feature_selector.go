@@ -10,11 +10,13 @@ import (
 )
 
 // This file ports the COMPOSITE selector features (FEAT-03 criterion 3, research
-// Pitfall #9): random_selector / simple_random_selector / random_boolean_selector.
-// Each picks a nested sub-PlacedFeature and runs it — the sub-feature's OWN placement
-// modifiers re-apply with the SAME threaded rng (so a biome's weighted feature choice,
-// forest = mostly oak + some birch, threads one deterministic rng end-to-end). Get the
-// recursion or the rng-threading wrong and every forest collapses to a single type.
+// Pitfall #9): random_selector / simple_random_selector / random_boolean_selector /
+// sequence / weighted_random_selector.
+// Each picks or folds nested sub-PlacedFeatures and runs them — the sub-feature's OWN
+// placement modifiers re-apply with the SAME threaded rng (so a biome's weighted
+// feature choice, forest = mostly oak + some birch, threads one deterministic rng
+// end-to-end). Get the recursion or the rng-threading wrong and every forest collapses
+// to a single type.
 //
 // THE REVISED PREMISE (11-01 verified): a selector's nested sub-features are NOT
 // pre-parsed. walkBlockStates (parse.go) resolved only the {Name,Properties} block-state
@@ -141,6 +143,17 @@ type simpleSelectorRaw struct {
 	Features []json.RawMessage `json:"features"`
 }
 
+// weightedRandomSelectorRaw is the WeightedRandomFeatureConfiguration:
+// {"features":[{"data": placed_feature, "weight": n}, ...]}.
+type weightedRandomSelectorRaw struct {
+	Features []weightedRandomEntryRaw `json:"features"`
+}
+
+type weightedRandomEntryRaw struct {
+	Data   json.RawMessage `json:"data"`
+	Weight int             `json:"weight"`
+}
+
 // booleanSelectorRaw is the RandomBooleanFeatureConfiguration: feature_true /
 // feature_false (lush_caves_clay.json). Each is a ref string or an inline object.
 type booleanSelectorRaw struct {
@@ -235,6 +248,32 @@ func resolveAndPlaceSub(bctx *bodyContext, raw json.RawMessage, depth int, ctx p
 // nextFloat() < wp.chance).
 func (w weightedFeatureRaw) chanceOf() float32 { return w.Chance }
 
+// ---- sequence ----
+
+// sequenceBody ports SequenceFeature.place (javap -c): iterate the configured
+// sub-PlacedFeatures in order, placing each one at the same origin with the same
+// threaded rng. Return false immediately on the first child that places nothing;
+// return true only after every child placed. The body itself consumes no rng draws.
+func sequenceBody(
+	bctx *bodyContext,
+	cf *feature.ConfiguredFeature,
+	ctx placement.PlacementContext,
+	rng levelgen.RandomSource,
+	pos placement.BlockPos,
+) bool {
+	var sel simpleSelectorRaw
+	if err := json.Unmarshal(cf.Config.Raw, &sel); err != nil {
+		panic(fmt.Sprintf("world: sequence config %q: %v", cf.ID, err))
+	}
+	depth := bctx.subDepth
+	for _, raw := range sel.Features {
+		if !resolveAndPlaceSub(bctx, raw, depth, ctx, rng, pos) {
+			return false
+		}
+	}
+	return true
+}
+
 // ---- simple_random_selector ----
 
 // simpleRandomSelectorBody ports SimpleRandomSelectorFeature.place (javap -c): draw ONE
@@ -304,10 +343,58 @@ type booleanSource interface {
 	NextBoolean() bool
 }
 
-// init registers the three composite selectors. Disjoint from 12-02's body files; a
+// ---- weighted_random_selector ----
+
+// weightedRandomSelectorBody ports WeightedRandomSelectorFeature.place + WeightedList:
+// if the total weight is zero, return false without drawing; otherwise draw ONE
+// nextInt(totalWeight), map that flat index through the weighted entries in declared
+// order, and place the selected sub-PlacedFeature with the same threaded rng.
+func weightedRandomSelectorBody(
+	bctx *bodyContext,
+	cf *feature.ConfiguredFeature,
+	ctx placement.PlacementContext,
+	rng levelgen.RandomSource,
+	pos placement.BlockPos,
+) bool {
+	var sel weightedRandomSelectorRaw
+	if err := json.Unmarshal(cf.Config.Raw, &sel); err != nil {
+		panic(fmt.Sprintf("world: weighted_random_selector config %q: %v", cf.ID, err))
+	}
+	total := weightedRandomTotal(sel.Features, cf.ID)
+	if total == 0 {
+		return false
+	}
+	i := int(rng.NextIntN(int32(total)))
+	for _, entry := range sel.Features {
+		i -= entry.Weight
+		if i < 0 {
+			return resolveAndPlaceSub(bctx, entry.Data, bctx.subDepth, ctx, rng, pos)
+		}
+	}
+	return false
+}
+
+func weightedRandomTotal(entries []weightedRandomEntryRaw, id string) int {
+	const maxJavaInt = int64(1<<31 - 1)
+	var total int64
+	for _, entry := range entries {
+		if entry.Weight < 0 {
+			panic(fmt.Sprintf("world: weighted_random_selector config %q has negative weight %d", id, entry.Weight))
+		}
+		total += int64(entry.Weight)
+		if total > maxJavaInt {
+			panic(fmt.Sprintf("world: weighted_random_selector config %q total weight exceeds Java int max", id))
+		}
+	}
+	return int(total)
+}
+
+// init registers the composite selectors. Disjoint from 12-02's body files; a
 // duplicate registration panics (12-01's contract).
 func init() {
 	registerFeatureBody("random_selector", randomSelectorBody)
 	registerFeatureBody("simple_random_selector", simpleRandomSelectorBody)
 	registerFeatureBody("random_boolean_selector", randomBooleanSelectorBody)
+	registerFeatureBody("sequence", sequenceBody)
+	registerFeatureBody("weighted_random_selector", weightedRandomSelectorBody)
 }
