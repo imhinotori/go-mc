@@ -2018,12 +2018,33 @@ func (t *TickLoop) tryOcelotInteract(p *tickPlayer, mob *Entity) bool {
 	return true
 }
 
+// setOcelotTrustingData ports the DATA_TRUSTING synched-data push Ocelot.setTrusting(b) does:
+// entityData.set(DATA_TRUSTING, b) is dirty-only AND fans the new DataValue to every tracking
+// client (SynchedEntityData.set -> ClientboundSetEntityData). The Go port mirrors that with a
+// dirty-only guard + encodeSetEntityDataByID / ocelotTrustDataEntry / broadcastToTrackers. Mirrors
+// the setInLove / broadcastHearts split (entity.go:2091 + combat_mob.go:912) and the setCatCollarColor
+// seam (ai_goals_cat.go:55). Tick-owned (TICK-05). The pre-1.14 vanilla Ocelot had no client render
+// reaction to DATA_TRUSTING (the heart burst is the EntityEvent-41 particle); a future Ocelot-aware
+// client can read DATA_TRUSTING to render the trust pose, so the broadcast is structurally live
+// even though no v1 client consumes it.
+//
+//	[VERIFIED javap Ocelot.setTrusting: invokevirtual SynchedEntityData.set.(EntityDataAccessor, Object);
+//	 SynchedEntityData.set broadcasts the dirty DataValue via ClientboundSetEntityData.]
+func (t *TickLoop) setOcelotTrustingData(mob *Entity, trusting bool) {
+	if mob.ocelotTrusting == trusting {
+		return // dirty-only: matches SynchedEntityData's no-broadcast on identical-set
+	}
+	mob.setTrusting(trusting) // field write
+	t.broadcastToTrackers(mob.id, encodeSetEntityDataByID(mob.id, ocelotTrustDataEntry(trusting)))
+}
+
 // tryToTrustOcelot ports the Ocelot.mobInteract server branch: ONE random.nextInt(3) on the ocelot's
 // per-entity stream; on 0 -> setTrusting(true) + heart particles (byte 41); else smoke particles (byte 40).
 // The fish was already consumed by the caller. Cite Ocelot.mobInteract.
 func (t *TickLoop) tryToTrustOcelot(mob *Entity) {
 	if mobRandom(mob).nextInt(3) == 0 {
-		mob.ocelotTrusting = true // setTrusting(true) == entityData.set(DATA_TRUSTING, true)
+		// setTrusting(true) == entityData.set(DATA_TRUSTING, true) + the SetEntityData push.
+		t.setOcelotTrustingData(mob, true)
 		// broadcastEntityEvent(this, (byte)41) -> spawnTrustingParticles(true): the trust HEART burst.
 		t.broadcastToTrackers(mob.id, encodeEntityEvent(mob.id, ocelotTrustParticleTrust))
 		return

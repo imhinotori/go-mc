@@ -86,7 +86,7 @@ func TestTemptGoalFollowsPlayerHoldingPigFood(t *testing.T) {
 	// A player 4 blocks east (+X) — within range, and >2.5 away so tick navigates (distSqr 16 >= 6.25).
 	p := addPlayerHolding(loop, pig.x+4, pig.y, pig.z, 1257, false) // 1257 = carrot, a pig_food member
 
-	g := newTemptGoal(1.2, pigFoodPred, false)
+	g := newTemptGoal(1.2, pigFoodPred, false, nil)
 	if !g.canUse(loop, pig) {
 		t.Fatal("temptGoal.canUse false for a player holding pig_food within range — the pig should be tempted")
 	}
@@ -114,7 +114,7 @@ func TestTemptGoalFollowsPlayerHoldingCarrot(t *testing.T) {
 	// A player 3 blocks north (+Z) holding the carrot in the OFF hand (distSqr 9 >= 6.25 → navigate).
 	p := addPlayerHolding(loop, pig.x, pig.y, pig.z+3, 887, true)
 
-	g := newTemptGoal(1.2, carrotPred, false)
+	g := newTemptGoal(1.2, carrotPred, false, nil)
 	if !g.canUse(loop, pig) {
 		t.Fatal("temptGoal.canUse false for a player holding carrot_on_a_stick in the OFF hand within range")
 	}
@@ -140,10 +140,10 @@ func TestTemptGoalIgnoresNonTemptItem(t *testing.T) {
 	loop, pig := temptTestLoop(t)
 	addPlayerHolding(loop, pig.x+2, pig.y, pig.z, 1, false) // id 1 = dirt, not a tempt item
 
-	if newTemptGoal(1.2, pigFoodPred, false).canUse(loop, pig) {
+	if newTemptGoal(1.2, pigFoodPred, false, nil).canUse(loop, pig) {
 		t.Fatal("pig_food temptGoal.canUse true for a player holding dirt — shouldFollow must gate on the item")
 	}
-	if newTemptGoal(1.2, carrotPred, false).canUse(loop, pig) {
+	if newTemptGoal(1.2, carrotPred, false, nil).canUse(loop, pig) {
 		t.Fatal("carrot temptGoal.canUse true for a player holding dirt — shouldFollow must gate on the item")
 	}
 }
@@ -155,7 +155,7 @@ func TestTemptGoalIgnoresOutOfRange(t *testing.T) {
 	// 15 blocks east — outside the 10.0 TEMPT_RANGE.
 	addPlayerHolding(loop, pig.x+15, pig.y, pig.z, 1257, false)
 
-	if newTemptGoal(1.2, pigFoodPred, false).canUse(loop, pig) {
+	if newTemptGoal(1.2, pigFoodPred, false, nil).canUse(loop, pig) {
 		t.Fatal("temptGoal.canUse true for a pig_food player 15 blocks away — TEMPT_RANGE (10.0) must gate it out")
 	}
 }

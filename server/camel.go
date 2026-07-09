@@ -63,7 +63,7 @@ func newCamelAI() *mobAI {
 	m.goals.addGoal(0, newFloatGoal())
 	m.goals.addGoal(1, newPanicGoal(panicSpeedModifier))
 	m.goals.addGoal(3, newBreedGoal(camelBreedSpeed))
-	m.goals.addGoal(4, newTemptGoal(camelTemptSpeed, func(id int32) bool { return itemInTag(id, camelFoodTag) }, false))
+	m.goals.addGoal(4, newTemptGoal(camelTemptSpeed, func(id int32) bool { return itemInTag(id, camelFoodTag) }, false, nil))
 	m.goals.addGoal(5, newFollowParentGoal(camelFollowSpeed))
 	m.goals.addGoal(6, newWaterAvoidingRandomStrollGoal(camelStrollSpeed))
 	m.goals.addGoal(7, newLookAtPlayerGoal(camelLookDistance))

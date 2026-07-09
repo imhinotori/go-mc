@@ -2090,6 +2090,26 @@ func (e *Entity) canFallInLove() bool { return e.inLove <= 0 }
 //	 bipush 18; Level.broadcastEntityEvent(this, 18).]
 func (e *Entity) setInLove() { e.inLove = defaultInLoveTime }
 
+// isTrusting is net.minecraft.world.entity.animal.feline.Ocelot.isTrusting() ==
+// getEntityData().get(DATA_TRUSTING). The trust flag the OcelotTemptGoal.canScare override reads
+// (OcelotTemptGoal.canScare = super.canScare() && !this.ocelot.isTrusting()). False for a fresh
+// ocelot; true once the feed-trust interact's 1-in-3 roll succeeds. Zero for every non-ocelot.
+//
+//	[VERIFIED javap Ocelot.isTrusting: getfield entityData; getstatic DATA_TRUSTING;
+//	 invokevirtual SynchedEntityData.get.(EntityDataAccessor).]
+func (e *Entity) isTrusting() bool { return e.ocelotTrusting }
+
+// setTrusting is net.minecraft.world.entity.animal.feline.Ocelot.setTrusting(b) reduced to its
+// ocelotTrusting field write (entityData.set(DATA_TRUSTING, b)). The matching broadcast (the
+// SetEntityData push SynchedEntityData.set fans to trackers) is performed by the FEED-path caller
+// (TickLoop.tryToTrustOcelot: setTrusting + broadcastEntityEvent heart/smoke + the DATA_TRUSTING
+// broadcast via setOcelotTrustingData), exactly mirroring the setInLove/broadcastHearts split
+// (entity.go:2091 + combat_mob.go:912). Tick-owned.
+//
+//	[VERIFIED javap Ocelot.setTrusting: getfield entityData; getstatic DATA_TRUSTING;
+//	 invokevirtual SynchedEntityData.set.(EntityDataAccessor, Object); invokevirtual reassessTrustingGoals.]
+func (e *Entity) setTrusting(b bool) { e.ocelotTrusting = b }
+
 // canMate is net.minecraft.world.entity.animal.Animal.canMate(Animal other): the partner gate the
 // BreedGoal's getFreePartner scan applies — `other != this && other.getClass() == this.getClass()
 // && this.isInLove() && other.isInLove()`. Our same-species check is `other.typ == e.typ` (both the

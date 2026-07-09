@@ -52,7 +52,7 @@ func newSnifferAI() *mobAI {
 	m.goals.addGoal(0, newFloatGoal())
 	m.goals.addGoal(1, newPanicGoal(panicSpeedModifier))
 	m.goals.addGoal(3, newBreedGoal(snifferBreedSpeed))
-	m.goals.addGoal(4, newTemptGoal(snifferTemptSpeed, func(id int32) bool { return itemInTag(id, snifferFoodTag) }, false))
+	m.goals.addGoal(4, newTemptGoal(snifferTemptSpeed, func(id int32) bool { return itemInTag(id, snifferFoodTag) }, false, nil))
 	m.goals.addGoal(5, newFollowParentGoal(snifferFollowSpeed))
 	m.goals.addGoal(6, newWaterAvoidingRandomStrollGoal(snifferStrollSpeed))
 	m.goals.addGoal(7, newLookAtPlayerGoal(snifferLookDistance))

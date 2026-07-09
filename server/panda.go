@@ -193,7 +193,7 @@ func newPandaAI() *mobAI {
 	m.goals.addGoal(0, newFloatGoal())
 	m.goals.addGoal(2, newPanicGoal(pandaPanicSpeed))
 	m.goals.addGoal(2, newBreedGoal(pandaBreedSpeed))
-	m.goals.addGoal(4, newTemptGoal(pandaTemptSpeed, func(id int32) bool { return itemInTag(id, pandaFoodTag) }, false))
+	m.goals.addGoal(4, newTemptGoal(pandaTemptSpeed, func(id int32) bool { return itemInTag(id, pandaFoodTag) }, false, nil))
 	m.goals.addGoal(9, newLookAtPlayerGoal(pandaLookDistance))
 	m.goals.addGoal(10, newRandomLookAroundGoal())
 	m.goals.addGoal(13, newFollowParentGoal(pandaFollowSpeed))

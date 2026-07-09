@@ -72,7 +72,7 @@ func newBeeAI() *mobAI {
 	m.navigation.canFloat = true                           // FloatGoal ctor: getNavigation().setCanFloat(true)
 	applyAnimalPathfindingMalus(m)                         // Animal.<init> FIRE malus (no-op on a fire-free world)
 	m.goals.addGoal(2, newBreedGoal(beeBreedSpeed))
-	m.goals.addGoal(3, newTemptGoal(beeTemptSpeed, func(id int32) bool { return itemInTag(id, beeFoodTag) }, false))
+	m.goals.addGoal(3, newTemptGoal(beeTemptSpeed, func(id int32) bool { return itemInTag(id, beeFoodTag) }, false, nil))
 	m.goals.addGoal(5, newFollowParentGoal(beeFollowSpeed))
 	m.goals.addGoal(8, newWaterAvoidingRandomStrollGoal(beeWanderSpeed))
 	m.goals.addGoal(9, newFloatGoal())

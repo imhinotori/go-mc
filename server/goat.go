@@ -60,7 +60,7 @@ func newGoatAI() *mobAI {
 	m.goals.addGoal(0, newFloatGoal())
 	m.goals.addGoal(1, newPanicGoal(panicSpeedModifier))
 	m.goals.addGoal(3, newBreedGoal(goatBreedSpeed))
-	m.goals.addGoal(4, newTemptGoal(goatTemptSpeed, func(id int32) bool { return itemInTag(id, goatFoodTag) }, false))
+	m.goals.addGoal(4, newTemptGoal(goatTemptSpeed, func(id int32) bool { return itemInTag(id, goatFoodTag) }, false, nil))
 	m.goals.addGoal(5, newFollowParentGoal(goatFollowSpeed))
 	m.goals.addGoal(6, newWaterAvoidingRandomStrollGoal(goatStrollSpeed))
 	m.goals.addGoal(7, newLookAtPlayerGoal(goatLookDistance))

@@ -74,7 +74,7 @@ func newArmadilloAI() *mobAI {
 	m.goals.addGoal(0, newFloatGoal())
 	m.goals.addGoal(1, newPanicGoal(panicSpeedModifier))
 	m.goals.addGoal(3, newBreedGoal(armadilloBreedSpeed))
-	m.goals.addGoal(4, newTemptGoal(armadilloTemptSpeed, func(id int32) bool { return itemInTag(id, armadilloFoodTag) }, false))
+	m.goals.addGoal(4, newTemptGoal(armadilloTemptSpeed, func(id int32) bool { return itemInTag(id, armadilloFoodTag) }, false, nil))
 	m.goals.addGoal(5, newFollowParentGoal(armadilloFollowSpeed))
 	m.goals.addGoal(6, newWaterAvoidingRandomStrollGoal(armadilloStrollSpeed))
 	m.goals.addGoal(7, newLookAtPlayerGoal(armadilloLookDistance))

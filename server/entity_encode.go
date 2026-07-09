@@ -1271,3 +1271,40 @@ func catCollarDataEntry(colorID int) entityDataEntry {
 		value:        pk.VarInt(int32(colorID)),
 	}
 }
+
+// --- MOB-PREY (Ocelot trust): the DATA_TRUSTING data-value ---------------------------------------
+//
+// The Ocelot's DATA_TRUSTING synched accessor (BOOLEAN) is the server-authoritative trust flag the
+// OcelotTemptGoal.canScare override reads (OcelotTemptGoal.canScare = super.canScare() &&
+// !this.ocelot.isTrusting()). A trusting ocelot (setTrusting(true) on a successful feed-trust roll)
+// no longer spook-flees from the player and can breed. Both wire numbers below are JAR-DERIVED
+// (javap -c -p this session from temp/cache/26.2-inner.jar), NOT guessed.
+
+// dataOcelotTrustingIndex is the SynchedEntityData accessor index for Ocelot.DATA_TRUSTING. defineId
+// assigns indices sequentially down the class hierarchy: Entity 0..7 (8), LivingEntity 8..14 (7),
+// Mob 15 (1: DATA_MOB_FLAGS_ID), PathfinderMob +0, Animal +0 - the Ocelot extends Animal DIRECTLY
+// (no TamableAnimal in between, so it skips TamableAnimal's 18,19 DATA_FLAGS/DATA_OWNERUUID_ID pair).
+// Ocelot.DATA_TRUSTING is the FIRST (and only) accessor Ocelot defines (javap: getstatic
+// EntityDataSerializers.BOOLEAN; invokestatic SynchedEntityData.defineId), so its index is 18.
+//
+//	[VERIFIED javap Ocelot static{}: defineId(Ocelot.class, BOOLEAN) -> DATA_TRUSTING. Hierarchy
+//	 derivation: Entity(8)+LivingEntity(7)+Mob(1)+AgeableMob(2)+Animal(0)+PathfinderMob(0) = 18, so
+//	 Ocelot.DATA_TRUSTING lands at index 18. TamableAnimal is NOT in the Ocelot's chain (it extends
+//	 Animal directly; Cat extends TamableAnimal, putting Cat's first accessor at 20).]
+const dataOcelotTrustingIndex uint8 = 18
+
+// ocelotTrustDataEntry builds the single SynchedEntityData$DataValue entry carrying Ocelot
+// .DATA_TRUSTING (index 18, BOOLEAN serializer id 8): Byte(18) + VarInt(8) + Boolean(trusting).
+// Broadcast when the feed-trust interact flips the trust state (TickLoop.setOcelotTrustingData),
+// mirroring babyDataEntry's BOOLEAN shape.
+//
+//	[VERIFIED javap Ocelot.DATA_TRUSTING = EntityDataAccessor<Boolean>; BOOLEAN codec ==
+//	 ByteBufCodecs.BOOL. setTrusting(b) = entityData.set(DATA_TRUSTING, b); isTrusting() =
+//	 getEntityData().get(DATA_TRUSTING).]
+func ocelotTrustDataEntry(trusting bool) entityDataEntry {
+	return entityDataEntry{
+		index:        dataOcelotTrustingIndex,
+		serializerID: boolSerializerID,
+		value:        pk.Boolean(trusting),
+	}
+}
