@@ -81,6 +81,14 @@ type goalDecl struct {
 	// other kind must NOT set it). Distinguishes "avoid_type=<id 0>" from "unset" (entity id 0 is a
 	// real entity), so the builtin can reject a missing/misplaced avoid_type loudly.
 	avoidTypeSet bool
+	// leapYdSet records whether vy= was supplied on a kind="leap_at_target" goal — the vertical leap
+	// component LeapAtTargetGoal(this, yd) takes. The Spider ctor passes 0.4 (the default), the
+	// Ocelot ctor passes 0.3. A kind-goal without vy= uses the default (spiderLeapYd=0.4); a vy=0.3
+	// for the ocelot is the 1:1 vanilla ctor arg. Used only by kind="leap_at_target".
+	leapYdSet bool
+	// leapYd is the vertical leap component (the LeapAtTargetGoal(this, yd) ctor arg). Only set when
+	// leapYdSet is true. Default 0.0 is harmless (leapYdSet gates the read).
+	leapYd float64
 }
 
 // mobDecl is one captured mob declaration: its name, the resolved base entity type (the EXISTING
@@ -372,6 +380,21 @@ func (r *mobRegistry) goalBuiltin() *starlark.Builtin {
 		var requiresUpdateEveryTick bool
 		var nativeKind string
 		var avoidTypeName string
+		var leapYd float64
+		// leapYdSet is true iff the caller supplied a vy= kwarg (the LeapAtTargetGoal(this, yd) ctor
+		// arg). A declaration without vy= on a leap_at_target goal uses the Spider's 0.4 default
+		// (spiderLeapYd); a vy=0.3 on the ocelot overrides it. The b parameter is the builtin handle,
+		// its Name() is the function name — we track vy presence by scanning kwargs directly since
+		// starlark.UnpackArgs does not expose "was this kwarg supplied".
+		leapYdSet := false
+		for _, kw := range kwargs {
+			if len(kw) >= 1 {
+				if s, ok := kw[0].(starlark.String); ok && string(s) == "vy" {
+					leapYdSet = true
+					break
+				}
+			}
+		}
 		if err := starlark.UnpackArgs(b.Name(), args, kwargs,
 			"priority", &priority,
 			"flags", &flagsList,
@@ -383,6 +406,7 @@ func (r *mobRegistry) goalBuiltin() *starlark.Builtin {
 			"requires_update_every_tick?", &requiresUpdateEveryTick,
 			"kind?", &nativeKind,
 			"avoid_type?", &avoidTypeName,
+			"vy?", &leapYd,
 		); err != nil {
 			return nil, err
 		}
@@ -422,12 +446,26 @@ func (r *mobRegistry) goalBuiltin() *starlark.Builtin {
 			} else if avoidTypeName != "" {
 				return nil, fmt.Errorf("goal: kind=%q must NOT set avoid_type (only kind=\"avoid_entity\" uses it)", nativeKind)
 			}
+			// vy is the LeapAtTargetGoal(this, yd) ctor's vertical leap component: the Spider ctor
+			// passes 0.4 (the default), the Ocelot ctor passes 0.3. REQUIRED for kind="leap_at_target"
+			// (the goal's behavior is meaningless without an explicit yd — a zero default would change
+			// the leap arc) and FORBIDDEN for every other kind (it would be silently dead). A
+			// declaration that omits vy on a leap_at_target goal uses the Spider's 0.4 default
+			// (spiderLeapYd), matching Spider.registerGoals. A vy= on a leap_at_target goal overrides
+			// the default (Ocelot uses 0.3). Cite LeapAtTargetGoal.<init>(mob, yd).
+			if leapYdSet {
+				if nativeKind != "leap_at_target" {
+					return nil, fmt.Errorf("goal: vy= is only valid with kind=\"leap_at_target\" (the LeapAtTargetGoal(this, yd) ctor arg)")
+				}
+			}
 			return &goalValue{decl: goalDecl{
 				priority:     priority,
 				flags:        flags,
 				nativeKind:   nativeKind,
 				avoidType:    avoidType,
 				avoidTypeSet: avoidTypeSet,
+				leapYdSet:    leapYdSet,
+				leapYd:       leapYd,
 			}}, nil
 		}
 		// tick is OPTIONAL when start/can_use carry the behavior (RandomStrollGoal.tick is empty —

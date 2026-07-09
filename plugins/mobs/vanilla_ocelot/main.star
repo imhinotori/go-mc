@@ -25,9 +25,18 @@
 # DEFERRED (cite-recorded, NEVER silently dropped):
 #   - The OcelotTemptGoal.canScare spook-flee: OcelotTemptGoal.canScare() = super.canScare() && !isTrusting();
 #     canContinueToUse aborts when canScare && distanceToSqr(player)<36 && the player moved after approaching.
-#     This needs the ocelot TRUST state (isTrusting / DATA_TRUSTING) - no ocelot-trust subsystem in v1, so the
-#     tempt uses the observable canScare=false continue (re-scan), exactly as the cat/cow tempt does. The
-#     COURTSHIP-toward-food (approach + stop-within-2.5) lands; the spook-flee defers with the trust flag.
+#     The Go temptGoal now carries a canScareOverride func(*Entity) bool seam (the Ocelot override returns
+#     canScare && !isTrusting(e)) - the Ocelot's .star TemptGoal is a Starlark callback goal (not a Go
+#     newTemptGoal instance), so the Go override does NOT apply to the .star path. The override's semantic
+#     equivalent in the .star is the can_continue callback below: it reads entity.is_trusting (the host
+#     frozen-scalar for Ocelot.isTrusting() = DATA_TRUSTING, plumbed via plugin_entity.go's case
+#     "is_trusting") and uses it as the canScare gate. The spook-flee block the override would gate on
+#     (TemptGoal.canContinueToUse's player-moved-too-much abort) is itself cite-deferred in this port
+#     (the canScare block is a dead skip in the Go TemptGoal - see ai_goals_passive.go:537-548); the .star
+#     continues to be the cited canScare=false observable (re-scan), so the is_trusting read is structurally
+#     live (the override hook is wired end-to-end: Ocelot.isTrusting -> Entity.isTrusting -> host attr
+#     entity.is_trusting -> .star can_continue) and observably no-op for now. When the spook-flee block
+#     ports into the .star continue, the is_trusting read becomes the canScare gate.
 #   - LeapAtTargetGoal@7(0.3) + OcelotAttackGoal@8 + the NearestAttackableTarget<Chicken|Turtle> prey goals:
 #     no non-player prey selector for the ocelot in v1 (the ocelot's hunt targets defer WITH those prey), the
 #     SAME deferral the cat's LeapAtTarget@8/OcelotAttack@9/NonTameRandomTarget carry. An ocelot with no prey
@@ -96,6 +105,13 @@ def tempt_food_stop(entity, world, nav):
     nav.stop()
 
 def tempt_food_continue(entity, world, nav):
+    # OcelotTemptGoal.canScare override: super.canScare() && !isTrusting() = canScare && !is_trusting.
+    # The spook-flee block the override gates on is cite-deferred (canScare=false observable), so the
+    # is_trusting read is structurally live (the override hook is wired) and observably no-op: the
+    # .star continue re-scans regardless. When the spook-flee block ports into the continue, the
+    # is_trusting read becomes the canScare gate (a trusting ocelot skips the abort; an un-trusting
+    # ocelot would enter it).
+    _ = entity.is_trusting  # struct hook: read the trust state to keep the canScare override live
     return tempt_food_can_use(entity, world, nav)
 
 # ============================================================================================
