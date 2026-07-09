@@ -12,8 +12,8 @@ package server
 //     POISON if health≥8 & !poison; WEAKNESS if dist≤3 & !weak & rand<0.25) → spawn a ThrownSplashPotion.
 //
 // v1 STUBS (cited): line-of-sight always-true (no sensing); the Raider heal/regeneration branch is deferred
-// (no raids in v1 — the witch only ever faces a player here). The WITCH_THROW sound + the drinking-potion
-// self-buff are cite-deferred.
+// (no raids in v1 — the witch only ever faces a player here). The drinking-potion self-buff is
+// cite-deferred.
 
 import (
 	"math"
@@ -129,7 +129,19 @@ func (g *rangedAttackGoal) tick(t *TickLoop, e *Entity) {
 // performWitchRangedAttack is the port of Witch.performRangedAttack: choose a harmful potion by the vanilla
 // ladder and spawn a ThrownSplashPotion at the target. The Raider heal/regeneration branch is deferred
 // (v1 target is always a player). Cite Witch.performRangedAttack + Projectile.getMovementToShoot.
+//
+// The opening bytecode guard (offsets 0-7) is `if (isDrinkingPotion()) return;` -- a drinking witch
+// never throws a splash potion, so the WITCH_THROW sound is also skipped in that case. The existing
+// v1 redux did not include this guard, so the splash potion was spawning even mid-drink (a 1:1
+// deviation). The guard closes both deviations at once: the splash spawn is suppressed AND the
+// WITCH_THROW sound (played AFTER the splash spawn in the jar) cannot fire on a drinking witch.
+//
+//	[VERIFIED javap Witch.performRangedAttack offsets 0-7: isDrinkingPotion ifeq -> return.]
 func (t *TickLoop) performWitchRangedAttack(e *Entity, target *tickPlayer, power float64) {
+	// isDrinkingPotion() guard (bytecode 0-7): a drinking witch does not throw.
+	if e.witchDrinking {
+		return
+	}
 	r := mobRandom(e)
 
 	// Aim: target.getEyeY() - 1.1 - getY() (targetMovement lead omitted — v1 has no player delta cache).
@@ -165,6 +177,20 @@ func (t *TickLoop) performWitchRangedAttack(e *Entity, target *tickPlayer, power
 
 	launchY := e.y + e.height*0.85
 	t.spawnSplashPotion(e.id, e.x, launchY, e.z, vx, vy, vz, effects)
+
+	// playSound(WITCH_THROW, x, y, z, HOSTILE, 1.0, 0.8 + nextFloat()*0.4) -- the throw's client feedback
+	// (bytecode offsets 293-342). The pitch jitter nextFloat() draw is on the WITCH own stream (r), so it
+	// MUST fire here in order (witch-gated, never the pig oracle) AFTER the splash spawn -- the
+	// soundSeedGenerator.nextLong() analogue seed is a dedicated non-gameplay draw (rand.Int64) so it
+	// never perturbs the witch stream. Broadcast to every player within getRange(1.0)==16 blocks. isSilent
+	// is a v1 constant-false (no DATA_SILENT mob wired), so the sound always plays -- cited.
+	//
+	//	[VERIFIED javap Witch.performRangedAttack: isSilent ifeq -> ; level() ; aconst_null ; getX/getY/getZ ;
+	//	 getstatic SoundEvents.WITCH_THROW ; getSoundSource() ; fconst_1 (volume 1.0) ; ldc 0.8f +
+	//	 random.nextFloat()*0.4f (pitch) ; Level.playSound(this, x, y, z, sound, source, vol, pitch).
+	//	 SoundEvents.WITCH_THROW id 1779 in data/registryid/soundevent.go.]
+	throwPitch := r.nextFloat()*witchDrinkPitchJitter + witchDrinkPitchBase
+	t.playSound(witchThrowSoundID, soundSourceHostile, e.x, e.y, e.z, witchDrinkSoundVolume, throwPitch, rand.Int64())
 }
 
 // witchPotion* build the effect payloads for the witch's potions (the base variants, amp 0, jar durations).
@@ -220,20 +246,26 @@ func witchPotionWeakness() []splashEffect {
 // == (int)(DEFAULT_CONSUME_SECONDS 1.6f * 20) == 32. Cite Consumable.DEFAULT_CONSUME_SECONDS / consumeTicks.
 const witchPotionUseDuration = 32
 
-// witchDrinkSoundID / witchDrinkSoundVolume are the WITCH_DRINK positional sound Witch.aiStep plays when
-// it starts a self-drink: SoundEvents.WITCH_DRINK ("entity.witch.drink", registry id 1777) at volume 1.0
-// on the witch's own SoundSource (Monster.getSoundSource() == HOSTILE). The pitch is a per-drink jitter
-// random.nextFloat()*0.4 + 0.8 drawn from the WITCH's per-mob stream (r) -- a witch-gated draw (never the
-// pig oracle), which MUST fire in order right after setUsingItem(true). The per-sound seed is a dedicated
-// non-gameplay draw (the Level.soundSeedGenerator analogue), never the witch stream.
+// witchDrinkSoundID / witchThrowSoundID / witchDrinkSoundVolume are the WITCH_DRINK / WITCH_THROW
+// positional sounds Witch.aiStep / Witch.performRangedAttack play: SoundEvents.WITCH_DRINK
+// ("entity.witch.drink", registry id 1777) on a self-drink and SoundEvents.WITCH_THROW
+// ("entity.witch.throw", registry id 1779) on a thrown splash potion. Both at volume 1.0 on the witch's
+// own SoundSource (Monster.getSoundSource() == HOSTILE). The pitch is a per-event jitter
+// random.nextFloat()*0.4 + 0.8 drawn from the WITCH's per-mob stream (r) -- a witch-gated draw (never
+// the pig oracle), which MUST fire in order right after setUsingItem(true) for the drink / after the
+// splash spawn for the throw. The per-sound seed is a dedicated non-gameplay draw (the
+// Level.soundSeedGenerator analogue), never the witch stream.
 //
 //	[VERIFIED javap Witch.aiStep: getX/getY/getZ ; getstatic SoundEvents.WITCH_DRINK ; getSoundSource() ;
 //	 fconst_1 (volume 1.0) ; ldc 0.8f + random.nextFloat()*0.4f (pitch) ; Level.playSound(this, x,y,z,
 //	 sound, source, vol, pitch). SoundEvents.WITCH_DRINK id 1777 in data/registryid/soundevent.go.
-//	 Monster.getSoundSource -> SoundSource.HOSTILE.]
+//	 javap Witch.performRangedAttack offsets 293-342: identical shape, sound = SoundEvents.WITCH_THROW
+//	 (id 1779 in data/registryid/soundevent.go, "entity.witch.throw"); Monster.getSoundSource ->
+//	 SoundSource.HOSTILE.]
 const (
 	witchDrinkSoundID     int32   = 1777 // SoundEvents.WITCH_DRINK ("entity.witch.drink")
-	witchDrinkSoundVolume float32 = 1.0  // Witch.aiStep playSound volume (fconst_1)
+	witchThrowSoundID     int32   = 1779 // SoundEvents.WITCH_THROW ("entity.witch.throw")
+	witchDrinkSoundVolume float32 = 1.0  // Witch.aiStep / Witch.performRangedAttack playSound volume (fconst_1)
 	witchDrinkPitchBase   float32 = 0.8  // 0.8f + nextFloat()*0.4f -> the [0.8,1.2) pitch jitter base
 	witchDrinkPitchJitter float32 = 0.4  // the 0.4f jitter span
 )
