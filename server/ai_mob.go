@@ -622,8 +622,8 @@ func newPigAI() *mobAI {
 	// priority @4 pair, so the carrot goal wins the shared {MOVE,LOOK} flags (the faithful "first-added
 	// wins" arbitration — ai_goal.go canBeReplacedBy needs other.priority < this.priority, 4<4 false).
 	// LOCKSTEP with vanilla_pig/main.star's two @4 TemptGoals (the oracle contract).
-	m.goals.addGoal(4, newTemptGoal(1.2, func(id int32) bool { return id == 887 }, false))                 // Items.CARROT_ON_A_STICK (id 887), canScare=false
-	m.goals.addGoal(4, newTemptGoal(1.2, func(id int32) bool { return itemInTag(id, "pig_food") }, false)) // ItemTags.PIG_FOOD, canScare=false
+	m.goals.addGoal(4, newTemptGoal(1.2, func(id int32) bool { return id == 887 }, false, nil))                 // Items.CARROT_ON_A_STICK (id 887), canScare=false
+	m.goals.addGoal(4, newTemptGoal(1.2, func(id int32) bool { return itemInTag(id, "pig_food") }, false, nil)) // ItemTags.PIG_FOOD, canScare=false
 	// @5 FollowParentGoal(mob, 1.1) [] EMPTY flags — the GO-NATIVE baby follower (Phase 33). canUse gates
 	// on isBaby (false on the adult oracle), then trails the nearest adult same-class; NO RNG, EMPTY flags
 	// (the ctor never setFlags, so it never locks MOVE/LOOK — the selector handles an empty-flag goal,

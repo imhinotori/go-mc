@@ -69,7 +69,7 @@ func newAxolotlAI() *mobAI {
 	m.goals.addGoal(0, newFloatGoal())
 	m.goals.addGoal(1, newPanicGoal(panicSpeedModifier))
 	m.goals.addGoal(3, newBreedGoal(axolotlBreedSpeed))
-	m.goals.addGoal(4, newTemptGoal(axolotlTemptSpeed, func(id int32) bool { return itemInTag(id, axolotlFoodTag) }, false))
+	m.goals.addGoal(4, newTemptGoal(axolotlTemptSpeed, func(id int32) bool { return itemInTag(id, axolotlFoodTag) }, false, nil))
 	m.goals.addGoal(5, newFollowParentGoal(axolotlFollowSpeed))
 	m.goals.addGoal(6, newWaterAvoidingRandomStrollGoal(axolotlStrollSpeed))
 	m.goals.addGoal(7, newLookAtPlayerGoal(axolotlLookDistance))

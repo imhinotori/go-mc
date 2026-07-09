@@ -501,17 +501,35 @@ type temptGoal struct {
 	isRunning     bool
 	hasPlayer     bool
 	px, py, pz    float64 // player pos, captured in canUse/start (TemptGoal.player snapshot)
+
+	// canScareOverride (jar: net.minecraft.world.entity.animal.feline.Ocelot$OcelotTemptGoal.canScare())
+	// is the per-mob canScare re-evaluation TemptGoal subclasses can supply: when non-nil, canContinueToUse
+	// queries the override (passing the owning mob) instead of the raw canScare flag. The Ocelot subclass
+	// returns super.canScare() && !this.ocelot.isTrusting() == canScare && !isTrusting(e). nil for the
+	// pig/cow/chicken/cat/axolotl/bee/camel/armadillo/frog/goat/horse/panda/sniffer callsites (they all
+	// canScare=false, so the override would never change the result anyway — adding it would be dead).
+	// The spook-flee block the override gates on is still a cited dead skip in this port (canScare=false
+	// pig etc. never enter it), so for v1 the override is structurally added (faithful to the jar's
+	// override hook) but observably no-op for every current callsite. The structural addition is what
+	// makes the Ocelot's override (or a future mod's) drop in with no canContinueToUse edit.
+	canScareOverride func(*Entity) bool
 }
 
 // newTemptGoal builds a TemptGoal with the pig's defaults: stopDistance 2.5 (DEFAULT_STOP_DISTANCE),
-// flags {MOVE, LOOK}. speedModifier 1.2 and canScare false for the pig.
-func newTemptGoal(speedModifier float64, pred func(int32) bool, canScare bool) *temptGoal {
+// flags {MOVE, LOOK}. speedModifier 1.2 and canScare false for the pig. canScareOverride is nil for
+// every non-subclassed TemptGoal (the pig/cow/chicken/cat/axolotl/bee/camel/armadillo/frog/goat/horse/
+// panda/sniffer callsites — all canScare=false — pass nil and stay byte-identical to the prior
+// 3-arg ctor). The Ocelot's OcelotTemptGoal subclass would pass a closure here (canScareOverride =
+// func(e *Entity) bool { return g.canScare && !e.isTrusting() }) — see the canScareOverride field
+// doc for the jar cite.
+func newTemptGoal(speedModifier float64, pred func(int32) bool, canScare bool, canScareOverride func(*Entity) bool) *temptGoal {
 	return &temptGoal{
-		baseGoal:      newBaseGoal(flagMove | flagLook),
-		speedModifier: speedModifier,
-		stopDistance:  2.5,
-		canScare:      canScare,
-		pred:          pred,
+		baseGoal:         newBaseGoal(flagMove | flagLook),
+		speedModifier:    speedModifier,
+		stopDistance:     2.5,
+		canScare:         canScare,
+		pred:             pred,
+		canScareOverride: canScareOverride,
 	}
 }
 
@@ -538,11 +556,29 @@ func (g *temptGoal) canUse(t *TickLoop, e *Entity) bool {
 // player-moved-too-much flee-abort block is DEAD (CONTEXT lines 49-52); the port keeps the structure
 // as a cited dead skip and returns canUse() — a pig keeps following as long as a player in TEMPT_RANGE
 // holds a tempt item.
+//
+// canScare gate: when canScareOverride is non-nil (the Ocelot's OcelotTemptGoal subclass), the gate
+// queries the override INSTEAD of the raw canScare flag. The override returns canScare && !isTrusting(e)
+// for the ocelot (per javap OcelotTemptGoal.canScare: super.canScare() && !this.ocelot.isTrusting()),
+// so a trusting ocelot skips the (still-dead) spook-flee block and follows the player normally; an
+// un-trusting ocelot would enter it. With the spook-flee block still cite-DEAD in v1 (it is a future
+// patch that pulls the player-moved-too-much abort into this branch), the override is structurally
+// live (faithful to the jar's override hook) and observably no-op for every current callsite.
+//
+//	[VERIFIED javap OcelotTemptGoal.canScare: invokespecial TemptGoal.canScare; ifeq 21;
+//	 aload_0; getfield ocelot; invokevirtual Ocelot.isTrusting; ifne 21; iconst_1; goto 22;
+//	 iconst_0; ireturn. The local `canScare` variable is the per-tick result of the override.]
 func (g *temptGoal) canContinueToUse(t *TickLoop, e *Entity) bool {
-	if g.canScare {
+	canScare := g.canScare
+	if g.canScareOverride != nil {
+		canScare = g.canScareOverride(e) // Ocelot: canScare && !isTrusting(e)
+	}
+	if canScare {
 		// PIG: canScare=false → DEAD. Vanilla aborts here if the player moved too far from the
 		// goal-start position (the flee-on-approach branch); no pig TemptGoal uses canScare=true, so
 		// this block never runs for the pig. Ported as a cited faithful skip (32-CONTEXT.md line 50).
+		// The override closes the loop for the Ocelot's OcelotTemptGoal subclass (a trusting ocelot
+		// skips it; an un-trusting ocelot would enter it — same dead-skip until the abort block ports).
 	}
 	return g.canUse(t, e)
 }

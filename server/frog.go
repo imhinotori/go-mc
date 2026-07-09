@@ -71,7 +71,7 @@ func newFrogAI() *mobAI {
 	m.goals.addGoal(0, newFloatGoal())
 	m.goals.addGoal(1, newPanicGoal(panicSpeedModifier))
 	m.goals.addGoal(3, newBreedGoal(frogBreedSpeed))
-	m.goals.addGoal(4, newTemptGoal(frogTemptSpeed, func(id int32) bool { return itemInTag(id, frogFoodTag) }, false))
+	m.goals.addGoal(4, newTemptGoal(frogTemptSpeed, func(id int32) bool { return itemInTag(id, frogFoodTag) }, false, nil))
 	m.goals.addGoal(5, newFollowParentGoal(frogFollowSpeed))
 	m.goals.addGoal(6, newWaterAvoidingRandomStrollGoal(frogStrollSpeed))
 	m.goals.addGoal(7, newLookAtPlayerGoal(frogLookDistance))

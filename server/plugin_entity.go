@@ -259,6 +259,14 @@ func (h *entityHandle) Attr(name string) (starlark.Value, error) {
 		// .star follow/breed callbacks to read the same age the Go-native goals read (e.breedAge), so the
 		// two halves agree on the baby/adult/cooldown state. Host-computed, re-resolved via h.store().
 		return starlark.MakeInt(e.breedAge), nil
+	case "is_trusting":
+		// MOB-PREY (Ocelot trust) frozen scalar: net.minecraft.world.entity.animal.feline.Ocelot
+		// .isTrusting() == getEntityData().get(DATA_TRUSTING). The OcelotTemptGoal.canScare override reads
+		// it (OcelotTemptGoal.canScare = super.canScare() && !this.ocelot.isTrusting()). False for a
+		// fresh ocelot; the .star Ocelot TemptGoal can use it to gate the cite-deferred spook-flee abort
+		// (when the spook-flee block is ported into the .star continue). Zero for every non-ocelot.
+		// Host-COMPUTED here, re-resolved through the region-bound h.store() (Pitfall 7).
+		return starlark.Bool(e.isTrusting()), nil
 	}
 	// HasAttrs contract: (nil, nil) == "no such field".
 	return nil, nil
@@ -272,7 +280,7 @@ func (h *entityHandle) AttrNames() []string {
 		"nearest_player_holding_carrot_on_a_stick", "nearest_player_holding_pig_food",
 		"nearest_player_holding_food", "eat_grass_block", "eat_broadcast_byte10",
 		"nearest_breeding_partner", "nearest_adult_parent", "try_breed",
-		"is_in_love", "is_baby", "breed_age",
+		"is_in_love", "is_baby", "breed_age", "is_trusting",
 		"in_water", "fluid_height", "in_lava",
 		"attribute", "move_to", "set_velocity", "set_attribute",
 		"set_look", "set_look_at", "rand_int", "rand_float", "rand_double", "get_state", "set_state",
