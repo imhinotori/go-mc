@@ -393,105 +393,23 @@ func (g *foxFishTargetGoal) canContinueToUse(t *TickLoop, e *Entity) bool {
 }
 
 // =========================================================================================
-// FoxTurtleEggTargetGoal (NearestAttackableTargetGoal<Turtle>(BabyOnLand))
+// FoxTurtleEggTargetGoal — RELOCATED to ai_goals_target.go (ocelot-prey SHARED refactor)
 // =========================================================================================
 //
-// Despite the name "turtleEggTargetGoal", the jar's goal targets BABY TURTLES (the Turtle entity
-// class) that are ON LAND (selector: isBaby && !isInWater) — NOT the turtle_egg block. (The
-// field-name "turtleEggTargetGoal" in Fox.java is misleading; the goal's ldc_class is Turtle.)
-// Cite Fox$setTargetGoals: NearestAttackableTargetGoal(fox, Turtle.class, 10, false, false,
-// BABY_ON_LAND_SELECTOR).
-type foxTurtleEggTargetGoal struct {
-	nearestAttackableTargetGoal
-}
-
-// newFoxTurtleEggTargetGoal builds the fox baby-turtle-on-land target.
-func newFoxTurtleEggTargetGoal() *foxTurtleEggTargetGoal {
-	return &foxTurtleEggTargetGoal{nearestAttackableTargetGoal: nearestAttackableTargetGoal{
-		baseGoal:       newBaseGoal(flagTarget),
-		randomInterval: reducedTickDelay(10), // 10 -> 5 (matches landTarget's interval; jar: reducedTickDelay(10))
-		targetClass:    targetClassFoxBabyTurtle,
-	}}
-}
-
-// findTarget scans for the nearest live Turtle entity (in 26.2 there is exactly ONE turtle
-// entity class) that is isBaby() && !isInWater() within FOLLOW_RANGE.
-func (g *foxTurtleEggTargetGoal) findTarget(t *TickLoop, e *Entity) {
-	follow := e.getAttributeValue(attribute.FollowRange)
-	bestID, bestOK := int32(0), false
-	best := follow * follow
-	for _, other := range t.cur().entities.near(e.x, e.z, int(math.Ceil(follow/16.0))) {
-		if other == e || other.dead {
-			continue
-		}
-		if other.typ != entity.Turtle.ID {
-			continue
-		}
-		// BABY_ON_LAND_SELECTOR: isBaby && !isInWater. v1 reads other.breedAge (negative ==
-		// isBaby) and entityInWater for the !isInWater half.
-		if !other.isBaby() {
-			continue
-		}
-		if t.entityInWater(other) {
-			continue
-		}
-		d := entityDistSqr(e, other)
-		if d <= best {
-			best = d
-			bestID, bestOK = other.id, true
-		}
-	}
-	if bestOK {
-		g.target = bestID
-		return
-	}
-	g.target = 0
-}
-
-// canUse ports NearestAttackableTargetGoal.canUse for the fox baby-turtle goal.
-func (g *foxTurtleEggTargetGoal) canUse(t *TickLoop, e *Entity) bool {
-	if !g.forceTrigger {
-		if g.randomInterval > 0 && mobRandom(e).nextInt(g.randomInterval) != 0 {
-			return false
-		}
-	}
-	g.forceTrigger = false
-	g.findTarget(t, e)
-	return g.target != 0
-}
-
-// start commits the acquired target id to mobAI.attackTargetID.
-func (g *foxTurtleEggTargetGoal) start(_ *TickLoop, e *Entity) {
-	if e.ai != nil {
-		e.ai.setTarget(g.target)
-	}
-}
-
-// stop clears the target.
-func (g *foxTurtleEggTargetGoal) stop(_ *TickLoop, e *Entity) {
-	g.target = 0
-	if e.ai != nil {
-		e.ai.setTarget(0)
-	}
-}
-
-// canContinueToUse mirrors the SKELETON/FOXPREY/HOSTILEMOB shape: live + within range.
-func (g *foxTurtleEggTargetGoal) canContinueToUse(t *TickLoop, e *Entity) bool {
-	if e.ai == nil {
-		return false
-	}
-	id := e.ai.getTarget()
-	if id == 0 {
-		return false
-	}
-	follow := e.getAttributeValue(attribute.FollowRange)
-	other, ok := t.cur().entities.get(id)
-	if !ok || other.dead {
-		return false
-	}
-	return entityDistSqr(e, other) <= follow*follow
-}
-
+// FoxTurtleEggTargetGoal is now an interface-equivalent ALIAS for nearestAttackableTargetGoal over
+// the SHARED enum targetClassFoxBabyTurtle. The constructor (newFoxTurtleEggTargetGoal), the type
+// alias (foxTurtleEggTargetGoal = nearestAttackableTargetGoal), and the SHARED baby-turtle-on-land
+// predicate (Turtle.BABY_ON_LAND_SELECTOR = isBaby && !isInWater — in the parent's findTarget switch)
+// all live in ai_goals_target.go so the Ocelot targetSelector @1 sibling shares the IDENTICAL jar
+// code path.
+//
+// Pre-refactor this section defined the fox-only child struct + findTarget override + duplicated
+// canUse/start/stop/canContinueToUse — DELETED in favor of the parent's SHARED switch path. The
+// type survives as the alias so the existing TestFoxTurtleEggTarget* tests (which reference
+// *foxTurtleEggTargetGoal as the goal type) keep compiling byte-identical.
+//
+// Cite Fox.registerGoals turtleEggTargetGoal @4 + Ocelot.registerGoals targetSelector @1 +
+// Turtle.BABY_ON_LAND_SELECTOR.
 // =========================================================================================
 // Fox AvoidEntityGoal wiring (player / wolf / polar-bear) — Fox$registerGoals @4
 // =========================================================================================

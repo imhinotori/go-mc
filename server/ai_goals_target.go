@@ -84,11 +84,26 @@ const (
 	// findTarget scans the entity store for Cod/Salmon within FOLLOW_RANGE (the AbstractSchoolingFish
 	// schooling-fish allow-list). Cite Fox.registerGoals fishTargetGoal.
 	targetClassFoxFish
-	// targetClassFoxBabyTurtle is the Fox turtleEggTargetGoal branch (Fox.registerGoals:
-	// NearestAttackableTargetGoal<Turtle>(this, Turtle.class, 10, false, false, BABY_ON_LAND_SELECTOR)):
+	// targetClassFoxBabyTurtle is the SHARED baby-turtle-on-land branch used by BOTH the Fox
+	// turtleEggTargetGoal (Fox.registerGoals targetSelector @4: NearestAttackableTargetGoal<Turtle>(this,
+	// Turtle.class, 10, false, false, BABY_ON_LAND_SELECTOR)) AND the Ocelot targetSelector @1 sibling
+	// (NearestAttackableTargetGoal<Turtle>(this, Turtle.class, 10, false, false, BABY_ON_LAND_SELECTOR)).
 	// findTarget scans the entity store for a live baby Turtle (breedAge<0) that is NOT in water within
-	// FOLLOW_RANGE. Cite Fox.registerGoals turtleEggTargetGoal + Turtle.BABY_ON_LAND_SELECTOR.
+	// FOLLOW_RANGE. The selector signature is identical in 26.2 (Turtle.BABY_ON_LAND_SELECTOR is a single
+	// static final isBaby && !isInWater lambda); ONE shared path serves both callsites. Cite Fox.registerGoals
+	// turtleEggTargetGoal + Ocelot.registerGoals targetSelector @1 + Turtle.BABY_ON_LAND_SELECTOR.
 	targetClassFoxBabyTurtle
+	// targetClassOcelotChicken is the Ocelot targetSelector @1 chicken-prey branch (Ocelot.registerGoals:
+	// NearestAttackableTargetGoal<Chicken>(this, Chicken.class, false) — the 3-arg ctor with NO distance
+	// bound override, defaulting to FOLLOW_RANGE). findTarget scans the entity store for entity.Chicken.ID
+	// within FOLLOW_RANGE via nearestEntityOfTypeAt. Cite Ocelot.registerGoals targetSelector @1.
+	targetClassOcelotChicken
+	// targetClassOcelotBabyTurtle is the Ocelot targetSelector @1 turtle-prey branch (ocelot-prey ported
+	// variant of the SHARED baby-turtle-on-land predicate). Same enum value as targetClassFoxBabyTurtle
+	// (the SHARED static initializer) — kept as a separate constant for documentation purposes (callers
+	// can say which registry owner they target). Cite Ocelot.registerGoals targetSelector @1 +
+	// Turtle.BABY_ON_LAND_SELECTOR.
+	targetClassOcelotBabyTurtle
 )
 
 // nearestAttackableTargetGoal ports NearestAttackableTargetGoal<T> (flags {TARGET}). It acquires the
@@ -183,6 +198,52 @@ func newIronGolemHostileTargetGoal() *nearestAttackableTargetGoal {
 		baseGoal:       newBaseGoal(flagTarget),
 		randomInterval: nearestTargetRandomInterval,
 		targetClass:    targetClassHostileMob,
+	}
+}
+
+// foxTurtleEggTargetGoal is the interface-equivalent alias for nearestAttackableTargetGoal used for the
+// Fox turtleEggTargetGoal (Fox.registerGoals @4). The constructor (newFoxTurtleEggTargetGoal) returns
+// a SHARED baby-turtle-on-land goal that BOTH the Fox's @4 callsite AND the Ocelot's @1 sibling acquire
+// via. Post-ocelot-prey SHARED refactor: the prior foxTurtleEggTargetGoal child struct + findTarget
+// override + duplicated canUse/start/stop/canContinueToUse were DELETED in favor of the parent's SHARED
+// switch path. Cite Fox.registerGoals turtleEggTargetGoal + Ocelot.registerGoals targetSelector @1 +
+// Turtle.BABY_ON_LAND_SELECTOR.
+type foxTurtleEggTargetGoal = nearestAttackableTargetGoal
+
+// ocelotChickenTargetGoal / ocelotBabyTurtleTargetGoal are the ocelot-prey aliases used for the Ocelot
+// targetSelector @1 goals (Ocelot.registerGoals NearestAttackableTargetGoal<Chicken> +
+// NearestAttackableTargetGoal<Turtle,BABY_ON_LAND_SELECTOR>). They alias the SHARED parent goal so
+// existing Test* helper signatures keep compiling byte-identical. Cite Ocelot.registerGoals.
+type ocelotChickenTargetGoal = nearestAttackableTargetGoal
+type ocelotBabyTurtleTargetGoal = nearestAttackableTargetGoal
+
+// newFoxTurtleEggTargetGoal builds the fox baby-turtle-on-land target — a vanilla shared-parent
+// nearestAttackableTargetGoal over the SHARED enum targetClassFoxBabyTurtle.
+func newFoxTurtleEggTargetGoal() *foxTurtleEggTargetGoal {
+	return &foxTurtleEggTargetGoal{
+		baseGoal:       newBaseGoal(flagTarget),
+		randomInterval: reducedTickDelay(10), // 10 -> 5 (jar ctor: NearestAttackableTargetGoal.<init> randomInterval = reducedTickDelay(10))
+		targetClass:    targetClassFoxBabyTurtle,
+	}
+}
+
+// newOcelotChickenTargetGoal builds the Ocelot targetSelector @1 NearestAttackableTargetGoal<Chicken>
+// (3-arg ctor: Chicken.class, mustSee=false — defaulting to FOLLOW_RANGE).
+func newOcelotChickenTargetGoal() *ocelotChickenTargetGoal {
+	return &ocelotChickenTargetGoal{
+		baseGoal:       newBaseGoal(flagTarget),
+		randomInterval: nearestTargetRandomInterval, // 5 (jar ctor: NearestAttackableTargetGoal.<init> randomInterval = reducedTickDelay(10))
+		targetClass:    targetClassOcelotChicken,
+	}
+}
+
+// newOcelotBabyTurtleTargetGoal builds the Ocelot targetSelector @1 NearestAttackableTargetGoal<Turtle>
+// (6-arg ctor: Turtle.class, 10, false, false, BABY_ON_LAND_SELECTOR).
+func newOcelotBabyTurtleTargetGoal() *ocelotBabyTurtleTargetGoal {
+	return &ocelotBabyTurtleTargetGoal{
+		baseGoal:       newBaseGoal(flagTarget),
+		randomInterval: reducedTickDelay(10), // 10 -> 5
+		targetClass:    targetClassOcelotBabyTurtle,
 	}
 }
 
@@ -306,6 +367,45 @@ func (g *nearestAttackableTargetGoal) findTarget(t *TickLoop, e *Entity) {
 			g.target = bestID
 			return
 		}
+	case targetClassOcelotChicken:
+		// Ocelot targetSelector @1 NearestAttackableTargetGoal<Chicken> (3-arg ctor: Chicken.class,
+		// mustSee=false). Default distance == FOLLOW_RANGE. Scans for the nearest live Chicken via
+		// nearestEntityOfTypeAt. Cite Ocelot.registerGoals targetSelector @1 +
+		// NearestAttackableTargetGoal.<init>(...,Chicken.class,false).
+		if id, ok := nearestEntityOfTypeAt(t, e, entity.Chicken.ID, follow); ok {
+			g.target = id
+			return
+		}
+	case targetClassFoxBabyTurtle, targetClassOcelotBabyTurtle:
+		// SHARED baby-turtle-on-land branch (Fox @4 / Ocelot @1): the nearest live Turtle within
+		// FOLLOW_RANGE whose isBaby gate holds AND who is NOT in water (BABY_ON_LAND_SELECTOR:
+		// isBaby && !isInWater). Cite Fox.registerGoals turtleEggTargetGoal + Ocelot.registerGoals
+		// targetSelector @1 + Turtle.BABY_ON_LAND_SELECTOR.
+		bestID, bestOK := int32(0), false
+		best := follow * follow
+		for _, other := range t.cur().entities.near(e.x, e.z, int(math.Ceil(follow/16.0))) {
+			if other == e || other.dead {
+				continue
+			}
+			if other.typ != entity.Turtle.ID {
+				continue
+			}
+			if !other.isBaby() { // isBaby gate
+				continue
+			}
+			if t.entityInWater(other) { // !isInWater gate
+				continue
+			}
+			d := entityDistSqr(e, other)
+			if d <= best {
+				best = d
+				bestID, bestOK = other.id, true
+			}
+		}
+		if bestOK {
+			g.target = bestID
+			return
+		}
 	default: // targetClassPlayer (the Phase-35 branch, UNCHANGED)
 		// getNearestPlayer is anchored at (mob.getX(), mob.getEyeY(), mob.getZ()); v1 has no eye-height
 		// field (refreshDimensions notes the cited eye-height gap), so the scan anchors at the mob feet y
@@ -343,7 +443,9 @@ func (g *nearestAttackableTargetGoal) canContinueToUse(t *TickLoop, e *Entity) b
 		return false
 	}
 	follow := e.getAttributeValue(attribute.FollowRange)
-	if g.targetClass == targetClassSkeleton || g.targetClass == targetClassFoxPrey || g.targetClass == targetClassHostileMob {
+	if g.targetClass == targetClassSkeleton || g.targetClass == targetClassFoxPrey || g.targetClass == targetClassHostileMob ||
+		g.targetClass == targetClassOcelotChicken || g.targetClass == targetClassFoxBabyTurtle ||
+		g.targetClass == targetClassOcelotBabyTurtle {
 		// SKELETON class: resolve the target through the OWNING-region entity store (a skeleton is an
 		// *Entity, not a player) + the live FOLLOW_RANGE distance bound. t.cur() is the region whose
 		// fan-out is running this goal — the SAME store nearestEntityOfTypeAt scanned (the v5 same-region

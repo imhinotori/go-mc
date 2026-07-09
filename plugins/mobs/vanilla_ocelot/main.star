@@ -14,8 +14,8 @@
 #     @10 WaterAvoidingRandomStrollGoal(this, 0.8, 1e-5)     <-- .star (shared stroll)
 #     @11 LookAtPlayerGoal(this, Player, 10.0)               <-- .star (shared look, dist 10.0)
 #   targetSelector:
-#     @1  NearestAttackableTargetGoal<Chicken>(this, false)  <-- DEFERRED (no non-player prey selector)
-#     @1  NearestAttackableTargetGoal<Turtle>(this, 10, false, false, BABY_ON_LAND_SELECTOR) <-- DEFERRED
+#     @1  NearestAttackableTargetGoal<Chicken>(this, false)                             <-- .star (kind, target_class="chicken")
+#     @1  NearestAttackableTargetGoal<Turtle>(this, 10, false, false, BABY_ON_LAND_SELECTOR) <-- .star (kind, target_class="turtle", filter="baby_on_land")
 #
 # NOTE (jar reality vs the task brief): 26.2 Ocelot.registerGoals has NO AvoidEntityGoal - the ocelot does
 # NOT flee players (that skittish-cat behavior was replaced by the trust/tempt system in 1.14). The task's
@@ -37,12 +37,16 @@
 #     live (the override hook is wired end-to-end: Ocelot.isTrusting -> Entity.isTrusting -> host attr
 #     entity.is_trusting -> .star can_continue) and observably no-op for now. When the spook-flee block
 #     ports into the .star continue, the is_trusting read becomes the canScare gate.
-#   - LeapAtTargetGoal@7(0.3) + OcelotAttackGoal@8 + the NearestAttackableTarget<Chicken|Turtle> prey goals:
-#     no non-player prey selector for the ocelot in v1 (the ocelot's hunt targets defer WITH those prey), the
-#     SAME deferral the cat's LeapAtTarget@8/OcelotAttack@9/NonTameRandomTarget carry. An ocelot with no prey
-#     target never leaps/attacks anyway.
-#   - The ocelot TRUST + the spawn-egg baby-black-cat conversion + ocelot->cat trust-morph: cite-deferred
-#     (no trust/conversion subsystem). The base ambient ocelot (tempt/breed/stroll/look) lands faithfully.
+#   - LeapAtTargetGoal@7(0.3) + OcelotAttackGoal@8: the ocelot's leap+attack goals defer; the prey targets
+#     NOW acquire (chicken/baby-turtle-on-land), so an ocelot WITH a prey target CAN leap/attack once those
+#     deferrals land. Until then, the prey targets run (acquire + commit attackTargetID), but the leap/attack
+#     goals stay cite-deferred (so the goalSelector never reads the acquired target via canUse).
+#   - The ocelot TRUST (setTrusting + the data field) is cite-deferred (no trust subsystem).
+#   - The SpawnEggItem baby→black-cat morph IS now wired (ocelot-prey #2): a baby ocelot arriving
+#     via the SpawnEggItem path (setBaby(true) + isBaby() check) becomes a Cat (entity.Cat.ID) with
+#     CatVariant BLACK (catVariant=0, the cited 26.2 registry index). The morph seam lives in
+#     spawnDeclaredMob (plugin_mob_decl.go) gated on e.typ == Ocelot.ID && e.isBaby(). Cite
+#     SpawnEggItem.spawnOffspringFromSpawnEgg + Ocelot.finalizeSpawn.
 
 # --- constants (jar-confirmed) -----------------------------------------------------------------
 FLUID_JUMP_THRESHOLD = 0.4     # Entity.getFluidJumpThreshold
@@ -234,6 +238,29 @@ declare_mob(
             tick = tempt_food_tick,
             stop = tempt_food_stop,
             can_continue = tempt_food_continue,
+        ),
+        # @1 - targetSelector @1 NearestAttackableTargetGoal<Chicken>(this, Chicken.class, false)
+        # - 3-arg ctor: default distance == FOLLOW_RANGE. The shared parent goal scans for the nearest
+        # live Chicken via nearestEntityOfTypeAt; the randomInterval is the jar's reducedTickDelay(10)=5.
+        # Cite Ocelot.registerGoals targetSelector @1 + jar offsets 152-164.
+        goal(
+            priority = 1,
+            flags = ["TARGET"],
+            kind = "nearest_attackable_target",
+            target_class = "chicken",
+        ),
+        # @1 - targetSelector @1 NearestAttackableTargetGoal<Turtle>(this, Turtle.class, 10, false, false,
+        # BABY_ON_LAND_SELECTOR) - 6-arg ctor with the SHARED Turtle.BABY_ON_LAND_SELECTOR static
+        # initializer. The SHARED parent goal serves BOTH this Ocelot targetSelector @1 sibling AND the
+        # Fox's @4 turtleEggTargetGoal via the SAME enum + predicate. filter="baby_on_land" selects the
+        # SHARED predicate path. Cite Ocelot.registerGoals targetSelector @1 + jar offsets 171-189 +
+        # Turtle.BABY_ON_LAND_SELECTOR + Fox.registerGoals targetSelector @4.
+        goal(
+            priority = 1,
+            flags = ["TARGET"],
+            kind = "nearest_attackable_target",
+            target_class = "turtle",
+            filter = "baby_on_land",
         ),
         # @1 FloatGoal [JUMP] - requiresUpdateEveryTick=true. Cite Ocelot.registerGoals @1 FloatGoal.
         goal(

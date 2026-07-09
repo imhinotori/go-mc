@@ -285,7 +285,39 @@ func buildAIFromDecl(t *TickLoop, decl *mobDecl) *mobAI {
 func buildNativeGoal(kind string, gd goalDecl, decl *mobDecl) Goal {
 	switch kind {
 	case "nearest_attackable_target":
-		return newNearestAttackableTargetGoal()
+		// The per-goal targetClass + filter kwargs (from the goal() builtin) select which
+		// NearestAttackableTargetGoal variant to build. The bare goal (no target_class=) is the
+		// Phase-35 hostile-vs-Player goal. Any non-player prey selector MUST name the type via
+		// target_class=; the .star passes the right ldc_class for the registered callsite.
+		//
+		// MOB-PREY (ocelot): the Ocelot targetSelector @1 sibling of the Fox @4 turtleEggTargetGoal
+		// uses target_class="turtle" + filter="baby_on_land" (the SHARED Turtle.BABY_ON_LAND_SELECTOR
+		// static initializer in 26.2). target_class="chicken" routes to the Ocelot targetSelector @1
+		// chicken-prey target. Cite NearestAttackableTargetGoal.<init>(mob, Class<T>, ...) +
+		// Ocelot.registerGoals targetSelector @1 + Turtle.BABY_ON_LAND_SELECTOR.
+		switch gd.targetClassName {
+		case "":
+			return newNearestAttackableTargetGoal()
+		case "skeleton":
+			return newSkeletonTargetGoal()
+		case "chicken":
+			if gd.filter != "" {
+				panic("buildNativeGoal: nearest_attackable_target target_class=\"chicken\" must NOT set filter=")
+			}
+			return newOcelotChickenTargetGoal()
+		case "hostile":
+			if gd.filter != "" {
+				panic("buildNativeGoal: nearest_attackable_target target_class=\"hostile\" must NOT set filter=")
+			}
+			return newIronGolemHostileTargetGoal()
+		case "turtle":
+			if gd.filter != "" && gd.filter != "baby_on_land" {
+				panic("buildNativeGoal: nearest_attackable_target target_class=\"turtle\" only supports filter=\"baby_on_land\" (got " + gd.filter + ")")
+			}
+			return newOcelotBabyTurtleTargetGoal()
+		default:
+			panic("buildNativeGoal: unknown nearest_attackable_target target_class " + gd.targetClassName + " (valid: \"\", chicken, skeleton, hostile, turtle)")
+		}
 	case "hurt_by_target":
 		return newHurtByTargetGoal()
 	case "melee_attack":
