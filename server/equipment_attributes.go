@@ -159,6 +159,7 @@ var attributeKeyByResource = map[string]attributeKey{
 	"minecraft:entity_interaction_range": attrEntityInteractionRange,
 	"minecraft:step_height":              attrStepHeight,
 	"minecraft:safe_fall_distance":       attrSafeFallDistance,
+	"minecraft:mining_efficiency":       attrMiningEfficiency,
 }
 
 // equipmentSlotGroupTest ports EquipmentSlotGroup.test(EquipmentSlot) — the per-entry slot filter
