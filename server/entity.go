@@ -1532,6 +1532,33 @@ type Entity struct {
 	//	 `private final EnumMap<EquipmentSlot,ItemStack> items;` get/set over it.]
 	equipment [equipmentSlotCount]component.SlotData
 
+	// equipmentDropChances is the per-slot drop probability used by the on-death dropEquipment
+	// path (slotDropChance reads it; the cited v1 default 0.085f substitutes when the field is
+	// exactly zero). Mirrors the LivingEntity.dropChances EnumMap<EquipmentSlot,Float>
+	// (DropChances.DEFAULT_EQUIPMENT_DROP_CHANCE = 0.085f is the constructor seed). The zero
+	// value (no override) keeps the cited vanilla default; a real override (dropChances.setDropChance
+	// in a future seam) writes a non-zero value to the corresponding index.
+	//	[VERIFIED javap LivingEntity.dropChances field — EnumMap<EquipmentSlot, Float>
+	//	 constructed with the DEFAULT 0.085f seed for every slot.]
+	equipmentDropChances [equipmentSlotCount]float32
+
+	// equipmentLastBroadcast is the per-slot snapshot used by detectMobEquipmentUpdates to diff
+	// against the LIVE e.equipment on each tick and broadcast only the changed slots as
+	// ClientboundSetEquipment. The first-call init (equipmentBroadcastInit == false) records the
+	// current state WITHOUT broadcasting (the spawn-time equipmentSpawnPackets tracker path is the
+	// authoritative initial wire — a seed-then-broadcast would double the equipment packets).
+	// Mirror of LivingEntity.lastEquipmentItems (the EntityEquipment.copy() snapshot held on
+	// LivingEntity, written by handleEquipmentChanges, read by collectEquipmentChanges).
+	equipmentLastBroadcast [equipmentSlotCount]component.SlotData
+
+	// equipmentBroadcastInit gates the first-call seed of equipmentLastBroadcast: while false, a
+	// diff between live + last-broadcast SEEDS last-broadcast WITHOUT broadcasting (the equipInit
+	// mirror). Flips to true after the first non-empty-slot observation (a fresh-spawn mob with
+	// all-empty slots stays at false and stays silent — the byte-identical default the oracle
+	// pig relies on, since its slots are all EMPTY and the init seed would otherwise write EMPTY
+	// over EMPTY which is observably a no-op).
+	equipmentBroadcastInit bool
+
 	// canPickUpLoot is net.minecraft.world.entity.Mob.canPickUpLoot — the boolean field the Mob.aiStep
 	// looting scan gates on. Default FALSE (Mob's ctor: `this.canPickUpLoot = false`), so a passive Animal
 	// (the oracle pig) NEVER runs the pickup scan and draws ZERO new RNG. A mob that overrides it to true

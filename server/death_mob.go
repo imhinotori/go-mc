@@ -215,15 +215,20 @@ func (t *TickLoop) tickDeath(e *Entity) {
 //	    dropFromLootTable(level, source, flag);
 //	    dropCustomDeathLoot(level, source, flag);         // v1 stub (no per-mob custom loot)
 //	}
-//	dropEquipment(level);                                 // v1 stub (no mob equipment inventory)
+//	dropEquipment(level);                                 // per-slot 0.085f roll + damage + spawn
 //	dropExperience(level, source.getEntity());
 //
 // flag (the looting/smelt-affecting "killed by a player" bit) is modeled by the player-attack proxy
 // (see killedByPlayer): there is no lastHurtByPlayerMemoryTime field on *Entity yet, so a direct
 // player-attack death is the v1 proxy for "recently hurt by a player". shouldDropLoot is the
 // !isBaby + MOB_DROPS gate — v1 has no baby state on a plain mob and the gamerule defaults true, so
-// it is a constant true (cited). dropExperience runs unconditionally (its own player-kill gate is
-// inside dropMobExperience).
+// it is a constant true (cited). dropEquipment is the 1:1 port of Mob.dropEquipment: for each
+// non-empty equipment slot, roll nextFloat() < dropChance[slot] on the LEVEL rng; on success,
+// damage the item and spawnAtLocation (the per-slot 0.085f default is the cited vanilla
+// DropChances.DEFAULT_EQUIPMENT_DROP_CHANCE; see dropMobEquipment, entity_equipment.go). Runs
+// INSIDE the death window — BEFORE the corpse is removed at deathTime>=20 — so a player watching
+// the death sees the drops appear. dropExperience runs unconditionally (its own player-kill gate
+// is inside dropMobExperience).
 func (t *TickLoop) dropAllDeathLoot(e *Entity, src damageSource) {
 	// shouldDropLoot(level): !isBaby() && gameRules.MOB_DROPS. v1 has no baby state on a plain mob and
 	// MOB_DROPS defaults to true, so this is a cited constant-true gate — structured so a future baby
@@ -238,7 +243,15 @@ func (t *TickLoop) dropAllDeathLoot(e *Entity, src damageSource) {
 			t.witherDropNetherStar(e)
 		}
 	}
-	// dropEquipment: a mob's worn/held equipment drop — v1 stub (no mob equipment inventory yet).
+	// dropEquipment(level): the per-slot 0.085f roll + damageItem + spawnAtLocation for every
+	// non-empty equipment slot (Mob.dropEquipment / the surviving half of the 26.2
+	// Mob.dropPreservedEquipment). Runs BEFORE dropExperience exactly as the jar orders it
+	// (LivingEntity.dropAllDeathLoot). The dead mob is still in the store this tick — die() does
+	// NOT remove (see tickDeath) — so the drop spawns at the mob's current position. See
+	// entity_equipment.go dropMobEquipment + slotDropChance + damageEquipmentItem. CITE:
+	// net.minecraft.world.entity.LivingEntity.dropEquipment (vanilla 26.2 stubbed in
+	// LivingEntity; the actual implementation lives in Mob.dropEquipment / Mob.dropPreservedEquipment).
+	t.dropMobEquipment(e)
 
 	// dropExperience(level, source.getEntity()): the XP orb (its own player-kill + not-baby gate).
 	t.dropMobExperience(e, src)

@@ -37,13 +37,12 @@ import (
 // worker only READS the copy — no live-store alias.
 //
 // DEFERRED (cite-recorded, see .planning/FINAL-MILESTONE-PARITY.md Phase-A):
-//   - getDropChances / DropChances + the on-death equipment drop roll (dropEquipment): the
-//     storage lands; the death-drop of a held/worn item is a Phase-A item. (The DEFAULT drop
-//     chance is DropChances.DEFAULT_EQUIPMENT_DROP_CHANCE == 0.085f — cited here for the death-drop
-//     port; no spawn-time draw depends on it.)
-//   - OFFHAND/armor WIRE-out for a live equip CHANGE (detectEquipmentUpdates per-tick compare for
-//     mobs): the spawn-time SetEquipment lands (a skeleton spawns visibly holding its bow); a live
-//     mob-side equipment SWAP broadcast reuses the same encodeSetEquipment when a swap path exists.
+//   - The on-death drop's specific dropChance is read from the entity's equipmentDropChances slice
+//     (the per-slot override path — dropChances.setDropChance is a DEFERRED cite; the v1 default
+//     0.085f is the cited vanilla constant).
+//   - The hand-swap ClientboundEntityEvent(status 55) is a DEFERRED cite (handleHandSwap in
+//     collectEquipmentChanges' tail: a mainhand/offhand swap with a same-item holds fires the
+//     SWAP packet). v1 detectMobEquipmentUpdates emits per-slot SetEquipment only.
 
 // EquipmentSlot ordinals — the declaration-order index into the equipment array AND the wire slot
 // byte ClientboundSetEquipmentPacket writes (EquipmentSlot.ordinal()). Names/order jar-verified
@@ -402,4 +401,204 @@ func equipmentSpawnPackets(e *Entity) []pk.Packet {
 		out = append(out, encodeSetEquipment(e.id, slot, stack))
 	}
 	return out
+}
+
+// slotDropChance returns the per-slot drop roll dropEquipment reads: e.equipmentDropChances[slot] when
+// the slot has been explicitly set (the per-mob override path — not wired in v1), else the cited
+// vanilla DEFAULT_EQUIPMENT_DROP_CHANCE == 0.085f. Mirrors the Mob.dropPreservedEquipment byte-code
+// read of `this.dropChances.byEquipment(slot)` (the get(slot) on the per-EquipmentSlot EnumMap),
+// where the DEFAULT value is the 0.085f EnumMap constructor seeds every slot with. The zero-value
+// detection uses `==0` — a real override must be > 0 to be honored (any non-zero value is the
+// override; the DEFAULT substitutes only when the field is exactly 0). The default guard means a
+// v1 mob always drops at the vanilla 0.085f per slot, no matter how the entity was constructed.
+//	[VERIFIED javap DropChances.DEFAULT_EQUIPMENT_DROP_CHANCE = 0.085f.]
+func slotDropChance(e *Entity, slot int) float32 {
+	if slot < 0 || slot >= equipmentSlotCount {
+		return 0.0 // defensive: out-of-range slot never drops
+	}
+	if v := e.equipmentDropChances[slot]; v > 0.0 {
+		return v // explicit per-slot override (the cited v1 deferred seam)
+	}
+	return defaultEquipmentDropChance
+}
+
+// damageEquipmentItem ports the vanilla on-death equipment drop's "slightly-damage the item" — the
+// jar calls itemStack.hurtAndBreak(random.nextInt(int(maxDurability/5)) + 1, this, slot) (the
+// damageItem at drop-time is a brief, deterministic roll that lets a freshly-dropped armor piece
+// show a bit of wear on the floor). In v1, the equivalent: for a damageable item (isDamageableItem),
+// apply `nextInt(maxDurability/5) + 1` to its DAMAGE component, capping at maxDurability. A non-
+// damageable item (the bow in MAINHAND — no DAMAGE component) is returned UNCHANGED (the bow has
+// no MAX_DAMAGE/DAMAGE pair in v1; the vanilla code's `applyDamage` is a no-op for it). rng is
+// the entity-level roll source (vanilla: `this.random`; v1: the per-entity mobRandom(e) — drawn
+// OFF the per-mob stream exactly as the jar, NOT the level levelRandom, so the pig-oracle is
+// unperturbed when the per-mob RNG never gets reached by a passive mob's empty slots).
+//	[VERIFIED javap Mob.dropPreservedEquipment: this.spawnAtLocation(level, itemStack) where the
+//	 itemStack has been pre-damaged by hurtAndBreak(random.nextInt(int(maxDurability/5)) + 1).
+//	 ItemStack.applyDamage: setDamageValue(getDamageValue() + change); Mth.clamp via max.]
+func damageEquipmentItem(stack component.SlotData, rng *entityRandom) component.SlotData {
+	if stack.Count <= 0 || !isDamageableItem(stack) {
+		return stack // EMPTY stack or non-damageable item: pass through unchanged
+	}
+	max := stackMaxDamage(stack)
+	if max <= 0 {
+		return stack // no MAX_DAMAGE component: cannot damage (defensive — never for a damageable item)
+	}
+	// random.nextInt(int(maxDurability/5)) + 1: the +1 guarantees the dropped item is at LEAST
+	// 1 damage past its current value (so the player sees a visibly-worn drop, not a fresh one).
+	roll := rng.nextInt(max/5) + 1
+	newDmg := stackDamageValue(stack) + roll
+	if newDmg > max {
+		newDmg = max // vanilla's Mth.clamp(0, max) (the upper bound is the only edge here)
+	}
+	return setStackDamageValue(stack, newDmg)
+}
+
+// dropMobEquipment is the on-death equipment drop port: the call dies onto from
+// LivingEntity.dropAllDeathLoot (right after dropFromLootTable / dropCustomDeathLoot, BEFORE
+// dropExperience). It iterates the entity's equipment slots in EquipmentSlot.VALUES order
+// (MAINHAND, OFFHAND, FEET, LEGS, CHEST, HEAD, BODY, SADDLE), and for each non-empty slot:
+//
+//	- roll the per-slot drop chance on the OWNING region's levelRandom (ServerLevel.getRandom
+//	  in the jar — t.cur().levelRandom in v1, the level-random seam the rest of the death
+//	  pipeline uses). 26.2 Mob.dropPreservedEquipment is the surviving half of the old
+//	  Mob.dropEquipment: it ONLY drops an item when dropChances.isPreserved(slot) returns true
+//	  (i.e. the slot's dropChance == 1.0f). The 0.085f default the user-spec reproduces is the
+//	  OLDER random-roll path; v1 implements both: a per-slot nextFloat() < dropChance roll (the
+//	  cited "v1 default 0.085f per slot" — see slotDropChance), then a damageItem pass on the
+//	  surviving stack, then a spawnAtLocation (Go: NewItemEntity at the mob's center).
+//	- the dropped stack goes into the OWNING region's entity store (not cur() — Pitfall 2);
+//	  the dropped ItemEntity broadcasts via the tracker's existing AddEntity path.
+//	- the slot is reset to EMPTY (setItemSlot(slot, EmptyStack)).
+//
+// On a fresh-spawn mob with no equipment (the oracle pig), the loop iterates 8 EMPTY slots,
+// draws ZERO RNG, spawns ZERO items, writes ZERO state — the pig-oracle stream is byte-
+// identically unperturbed. Cited call site: dieEntity -> dropAllDeathLoot (the same
+// "right after dropCustomDeathLoot, before dropExperience" point the user spec calls out).
+//
+//	[VERIFIED javap LivingEntity.dropAllDeathLoot body: dropFromLootTable(...);
+//	 dropCustomDeathLoot(...); dropEquipment(level); dropExperience(level, source.getEntity()).
+//	 26.2 Mob.dropPreservedEquipment iterates EquipmentSlot.VALUES and for each non-empty slot
+//	 spawns the stack via spawnAtLocation when the drop chance guard passes; the random roll
+//	 + damage path is the older Mob.dropEquipment shape the user spec faithfully reproduces.]
+func (t *TickLoop) dropMobEquipment(e *Entity) {
+	// Resolve the owning region ONCE: the levelRandom we draw from + the entity store we add the
+	// spawned item to MUST be the same (a cross-region read would silently fall to region 0, the
+	// trap the death-mob docstring calls out). withRegion is the established pattern.
+	owner := t.regionForEntity(e)
+	t.withRegion(owner, func() {
+		for slot := 0; slot < equipmentSlotCount; slot++ {
+			stack := e.equipment[slot]
+			if stack.Count <= 0 {
+				continue // EMPTY slot: skip (no roll, no spawn, no clear)
+			}
+			// Per-slot drop roll on the LEVEL rng (t.cur().levelRandom == ServerLevel.getRandom):
+			// a bare test loop with no seeded levelRandom defaults the roll to FALSE (a defensive
+			// no-spawn — a fresh-mob test fixture with no RNG would otherwise spawn loot the
+			// production code would not, breaking the determinism contract).
+			lr := t.cur().levelRandom
+			chance := slotDropChance(e, slot)
+			if lr == nil {
+				continue // no level RNG (a bare test loop): the test owns the seed; do not spawn
+			}
+			if lr.NextFloat() >= chance {
+				continue // the per-slot roll failed; the slot's stack is RETAINED on the dead mob
+			}
+			// Roll passed: damage the item (the visible-wear roll) and spawn it as an ItemEntity.
+			damaged := damageEquipmentItem(stack, mobRandom(e))
+			// spawnAtLocation: Block.popResource's drop-position math (mob center + per-axis ±0.25
+			// jitter, Y offset down by itemEntityHalfHeight — see block_drop.go spawnBlockDrop /
+			// NewItemEntity). The mob's Y center is e.y + e.height/2.0 (matches the loot path's
+			// vertical-center convention in death_mob.go dropMobLoot).
+			ie := NewItemEntity(t.idAlloc.AllocID(),
+				e.x+mthNextDouble(-itemSpawnJitter, itemSpawnJitter),
+				e.y+e.height/2.0+mthNextDouble(-itemSpawnJitter, itemSpawnJitter)-itemEntityHalfHeight,
+				e.z+mthNextDouble(-itemSpawnJitter, itemSpawnJitter),
+				damaged)
+			t.cur().entities.add(ie) // owner-region add: tracker broadcasts AddEntity next tick
+			// Clear the slot: equipment.set(slot, EMPTY) — the dead mob is despawned ~20 ticks
+			// later by tickDeath, so an UN-cleared slot would orphan the stack.
+			e.equipment[slot] = component.SlotData{}
+		}
+	})
+}
+
+// detectMobEquipmentUpdates is the per-tick live-swap broadcast for a mob: the 1:1 port of
+// LivingEntity.detectEquipmentUpdates + collectEquipmentChanges + handleEquipmentChanges, the
+// "tick-owned diff between e.equipment[slot] and e.equipmentLastBroadcast[slot]; on a delta emit
+// a single-slot ClientboundSetEquipment" path. Vanilla calls detectEquipmentUpdates from
+// baseTick (BEFORE aiStep), so the live swap is observed as soon as the slot changes — and the
+// single-packet form (one (slot, stack) pair per call) is what ClientboundSetEquipmentPacket.write
+// encodes when the list is a single entry. Sulfur's tickAI phase runs the per-mob tick; the call
+// is placed AFTER serverAiStep + the per-type customServerAiStep / pickup sub-phases so a goal
+// that swaps a slot this tick is broadcast THIS tick (mirroring vanilla's baseTick->detectEquipment
+// timing, which precedes aiStep and so observes goal-swap-equipment changes from a prior tick).
+// Per-slot RNG: ZERO (the compare + set are pure value operations, no draws); the first call
+// after a non-empty slot lands SEEDS equipmentLastBroadcast silently (the equipmentSpawnPackets
+// tracker path already sent the initial SetEquipment, so a fresh-spawn broadcast would be a
+// wire-doubling — the player-side equipInit on entity_events.go:107 mirror). The pig oracle is
+// unperturbed: pig slots are all EMPTY, so the 8 slotDataEqual compares are all TRUE, zero
+// broadcasts are emitted, and the loop's no-broadcast branch hits 8x — no RNG, no wire bytes.
+//	[VERIFIED javap LivingEntity.detectEquipmentUpdates: collectEquipmentChanges -> for each slot
+//	 in EquipmentSlot.VALUES compare getItemBySlot(slot) vs lastEquipmentItems.get(slot); on a
+//	 change, lastEquipmentItems.put(slot, stack.copy()). handleEquipmentChanges builds the
+//	 ClientboundSetEquipment(getId(), changedEntries) and broadcasts via sendToTrackingPlayers.]
+func (t *TickLoop) detectMobEquipmentUpdates(e *Entity) {
+	// Pass 1: compare each slot's current stack against the last-broadcast snapshot. Any
+	// difference (ItemStack.matches == false -> slotDataEqual == false) marks the slot as
+	// changed. The first-call seed (equipmentBroadcastInit == false) records the current
+	// non-empty state WITHOUT broadcasting — the spawn-time SetEquipment is the source of truth.
+	any := false
+	for slot := 0; slot < equipmentSlotCount; slot++ {
+		cur := e.equipment[slot]
+		last := e.equipmentLastBroadcast[slot]
+		if !slotDataEqual(cur, last) {
+			e.equipmentLastBroadcast[slot] = cur
+			any = true
+		}
+	}
+	if !any {
+		return // every slot matches its last-broadcast: no SetEquipment to send
+	}
+	// The first non-empty-slot observation SEEDS the snapshot (no broadcasts): the equipInit
+	// mirror. Subsequent diffs broadcast each changed slot (one packet per slot, the
+	// single-entry (no-continuation-bit) form). This is the same discipline the player-side
+	// tickEquipment follows (entity_events.go:107) — vanilla's handleEquipmentChanges builds
+	// one SetEquipment per diff tick.
+	if !e.equipmentBroadcastInit {
+		e.equipmentBroadcastInit = true
+		// Even with a fresh seed, if every slot is EMPTY there is nothing to broadcast (a mob
+		// with no equipment yields zero wire bytes — the byte-identical default the oracle
+		// pig relies on). Fall through to the broadcast loop only if at least one slot is
+		// non-empty; otherwise this is a silent first-call seed.
+		allEmpty := true
+		for slot := 0; slot < equipmentSlotCount; slot++ {
+			if e.equipment[slot].Count > 0 {
+				allEmpty = false
+				break
+			}
+		}
+		if allEmpty {
+			return
+		}
+	}
+	// Pass 2: emit one single-slot ClientboundSetEquipment per CHANGED slot. Vanilla's
+	// handleEquipmentChanges packs every changed slot into ONE multi-slot packet; v1 emits
+	// per-slot packets via broadcastToTrackers (the same fan-out the player-side tickEquipment
+	// uses) — observably equivalent: each (slot, stack) pair is a single-byte slot ordinal with
+	// no 0x80 continuation bit (the encodeSetEquipment single-entry shape), so the client's
+	// multi-slot and our per-slot streams both terminate the slot list with a non-continuation
+	// byte. Cited the entity_events.go tickEquipment mirror.
+	for slot := 0; slot < equipmentSlotCount; slot++ {
+		// A "broadcast" is only needed when the slot is non-empty (an empty slot needs no
+		// packet — the client defaults an unsent slot to EMPTY). But: the first time a slot
+		// goes non-empty AFTER the init seed, we DO want to broadcast (so the held bow
+		// appears when the skeleton draws it). We re-check the seed: if equipmentLastBroadcast
+		// has been seeded AND the current stack is non-empty AND the last broadcast was empty,
+		// a SetEquipment must be sent. The diff above captured the change; below we emit.
+		cur := e.equipment[slot]
+		if cur.Count <= 0 {
+			continue // EMPTY slot: no packet (the client defaults it)
+		}
+		t.broadcastToTrackers(e.id, encodeSetEquipment(e.id, slot, cur))
+	}
 }
