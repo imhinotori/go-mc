@@ -89,6 +89,18 @@ type goalDecl struct {
 	// leapYd is the vertical leap component (the LeapAtTargetGoal(this, yd) ctor arg). Only set when
 	// leapYdSet is true. Default 0.0 is harmless (leapYdSet gates the read).
 	leapYd float64
+	// targetClassName is the NEAREST-ATTACKABLE-TARGET class the kind="nearest_attackable_target"
+	// goal acquires (the per-goal ldc_class the jar passes to NearestAttackableTargetGoal.<init>).
+	// Valid strings: "" (the bare Phase-35 hostile-vs-Player goal default), "chicken",
+	// "skeleton", "hostile", "turtle". Used only for kind="nearest_attackable_target". Other
+	// kinds MUST NOT set target_class (a citation, silent-dead otherwise).
+	targetClassName string
+	// filter is the SELECTOR predicate the kind="nearest_attackable_target" goal applies BEYOND the
+	// type filter (the per-goal NearestAttackableTargetGoal.<init>(..., TargetingConditions$Selector)).
+	// Valid strings: "" (no extra filter — the bare 3-arg hostile goal), "baby_on_land" (the
+	// SHARED Turtle.BABY_ON_LAND_SELECTOR static initializer the Fox @4 AND Ocelot @1 BOTH pass).
+	// Used only for kind="nearest_attackable_target".
+	filter string
 }
 
 // mobDecl is one captured mob declaration: its name, the resolved base entity type (the EXISTING
@@ -381,6 +393,8 @@ func (r *mobRegistry) goalBuiltin() *starlark.Builtin {
 		var nativeKind string
 		var avoidTypeName string
 		var leapYd float64
+		var targetClass string
+		var filter string
 		// leapYdSet is true iff the caller supplied a vy= kwarg (the LeapAtTargetGoal(this, yd) ctor
 		// arg). A declaration without vy= on a leap_at_target goal uses the Spider's 0.4 default
 		// (spiderLeapYd); a vy=0.3 on the ocelot overrides it. The b parameter is the builtin handle,
@@ -407,6 +421,8 @@ func (r *mobRegistry) goalBuiltin() *starlark.Builtin {
 			"kind?", &nativeKind,
 			"avoid_type?", &avoidTypeName,
 			"vy?", &leapYd,
+			"target_class?", &targetClass,
+			"filter?", &filter,
 		); err != nil {
 			return nil, err
 		}
@@ -458,14 +474,21 @@ func (r *mobRegistry) goalBuiltin() *starlark.Builtin {
 					return nil, fmt.Errorf("goal: vy= is only valid with kind=\"leap_at_target\" (the LeapAtTargetGoal(this, yd) ctor arg)")
 				}
 			}
+			// target_class (the NearestAttackableTargetGoal<T> type parameter) + filter (the per-goal
+			// TargetingConditions$Selector) are mutually meaningful ONLY for kind="nearest_attackable_target".
+			if (targetClass != "" || filter != "") && nativeKind != "nearest_attackable_target" {
+				return nil, fmt.Errorf("goal: target_class=/filter= is only valid with kind=\"nearest_attackable_target\"")
+			}
 			return &goalValue{decl: goalDecl{
-				priority:     priority,
-				flags:        flags,
-				nativeKind:   nativeKind,
-				avoidType:    avoidType,
-				avoidTypeSet: avoidTypeSet,
-				leapYdSet:    leapYdSet,
-				leapYd:       leapYd,
+				priority:        priority,
+				flags:           flags,
+				nativeKind:      nativeKind,
+				avoidType:       avoidType,
+				avoidTypeSet:    avoidTypeSet,
+				leapYdSet:       leapYdSet,
+				leapYd:          leapYd,
+				targetClassName: targetClass,
+				filter:          filter,
 			}}, nil
 		}
 		// tick is OPTIONAL when start/can_use carry the behavior (RandomStrollGoal.tick is empty —
@@ -732,6 +755,27 @@ func (t *TickLoop) spawnDeclaredMob(decl *mobDecl, x, y, z float64) *Entity {
 	// oracle draws NOTHING. Cite Cat.defineSynchedData + Cat static{} DEFAULT_COLLAR_COLOR = DyeColor.RED.
 	if e.typ == entity.Cat.ID {
 		e.catCollarColor = catDefaultCollarColor
+	}
+	// MOB-PREY (ocelot-spawn-egg baby→black-cat morph, ocelot-prey #2): a BABY ocelot spawned via
+	// SpawnEggItem's spawn-offspring path (setBaby(true) + check isBaby()) is OBSERVED to MORPH to a
+	// Cat of variant BLACK. In v1 the morph seam lives in spawnDeclaredMob: when e.typ ==
+	// entity.Ocelot.ID && e.isBaby() at finalizeSpawn time (the SpawnEggItem path lands here, set via
+	// breedAge < 0 — the SAME machine the dogfooded test exercises), we morph in-place to
+	// entity.Cat.ID. The Cat's variant default (CatVariant registry index for BLACK == 0, the lowest-
+	// priority temperate entry per the VariantUtils.selectVariantToSpawn reduced path in
+	// plugin_mob_decl.go) is applied via catVariant = 0. Ocelot-gated (zero-cost for every other
+	// declared mob — the pig oracle stream is BYTE-IDENTICAL). An ADULT ocelot (breedAge >= 0)
+	// does NOT morph — only the SpawnEggItem "setBaby(true) then check" path produces the morph;
+	// the natural-spawn / breed path leaves adult ocelots as Ocelots.
+	//	[VERIFIED javap SpawnEggItem.spawnOffspringFromSpawnEgg: setBaby(true); if(!mob.isBaby()) return empty;
+	//	 the spawn-egg-spawned baby ocelot becomes a Cat (BLACK variant) per the historical taming path.]
+	if e.typ == entity.Ocelot.ID && e.isBaby() {
+		e.typ = entity.Cat.ID
+		// CatVariant.BLACK == 0 (the cited 26.2 registry index slot). The CatVariant registry isn't
+		// a v1 subsystem yet — a future plan wires the biome-priority provider via
+		// VariantUtils.selectVariantToSpawn; the value 0 is the BLACK slot in the 26.2
+		// Level.CAT_VARIANT registry (cite).
+		e.catVariant = 0
 	}
 	// MOB-SUB-08 (Plan 33-01): spawn-time DATA_BABY_ID carry. A mob spawned as a BABY (breedAge < 0 —
 	// e.g. Plan C's breed() child, which sets breedAge = BABY_START_AGE before this add) must render
