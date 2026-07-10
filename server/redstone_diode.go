@@ -250,6 +250,11 @@ func (t *TickLoop) comparatorGetInputSignal(state block.StateID, pos pk.Position
 		// Checked before the generic container path (a jukebox is not a container). CITE
 		// JukeboxBlock.getAnalogOutputSignal.
 		resultSignal = sig
+	} else if sig, has := t.decoratedPotAnalogOutputSignal(targetPos); has {
+		// targetState.hasAnalogOutputSignal(): true for a DECORATED_POT; getAnalogOutputSignal ==
+		// getRedstoneSignalFromBlockEntity over the single slot -- the fill-fraction signal (0 when empty).
+		// CITE DecoratedPotBlock.getAnalogOutputSignal.
+		resultSignal = sig
 	} else if sig, has := t.crafterAnalogOutputSignal(targetPos); has {
 		// targetState.hasAnalogOutputSignal(): true for a CRAFTER; getAnalogOutputSignal ==
 		// CrafterBlockEntity.getRedstoneSignal() = the count of grid slots that are non-empty OR disabled

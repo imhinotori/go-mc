@@ -344,6 +344,7 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 	// A jukebox right-click INSERTS a music disc (empty) or EJECTS the loaded disc (JukeboxBlock.useItemOn/
 	// useWithoutItem). CITE JukeboxBlock.useItemOn / useWithoutItem.
 	isJukebox := block.IsJukebox(state)
+	isDecoratedPot := block.IsDecoratedPot(state)
 	// A chiseled bookshelf right-click ADDS a #bookshelf_books item to the clicked slot, or REMOVES the
 	// book already in that slot (ChiseledBookShelfBlock.useItemOn/useWithoutItem). The slot is resolved
 	// from the cursor hit-vector + clicked face (SelectableSlotContainer.getHitSlot). CITE
@@ -477,6 +478,11 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 		// JukeboxBlock.useItemOn/useWithoutItem: insert a disc, or eject the loaded one. Returns false when the
 		// empty jukebox is clicked with a non-disc hand (placement continues). CITE JukeboxBlock.
 		return t.useJukebox(p, hitPos, state)
+	}
+	if isDecoratedPot {
+		// DecoratedPotBlock.useItemOn: insert (or grow) the single held item into the pot. Returns false
+		// (TRY_WITH_EMPTY_HAND / full / mismatched hand) so placement continues. CITE DecoratedPotBlock.
+		return t.useDecoratedPot(p, hitPos, state)
 	}
 	if isBookshelf {
 		// ChiseledBookShelfBlock.useItemOn/useWithoutItem: add/remove a book at the cursor-resolved slot.
@@ -677,6 +683,13 @@ func (t *TickLoop) createBlockEntityOnPlace(pos pk.Position, state block.StateID
 		empty := nbt.RawMessage{Type: nbt.TagCompound, Data: []byte{0x00}}
 		t.world().SetBlockEntityAt(pos, block.EntityTypes["minecraft:jukebox"], empty, dimMinY)
 		t.resolveJukebox(pos)
+		return
+	}
+	if block.IsDecoratedPot(state) {
+		// DecoratedPotBlock is a BaseEntityBlock; newBlockEntity = new DecoratedPotBlockEntity(pos, state)
+		// (empty single slot). Register the empty decoratedPotBE so the insert + comparator paths resolve it.
+		// CITE DecoratedPotBlock (EntityBlock).
+		t.resolveDecoratedPot(pos)
 		return
 	}
 }

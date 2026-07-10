@@ -567,6 +567,11 @@ type TickLoop struct {
 	// comparator reads the disc song getComparatorOutput. Registers on placement; spin ticks DEFERRED.
 	jukeboxes map[pk.Position]*jukeboxBE
 
+	// decoratedPots: DECORATED_POT block-entities keyed by world position (the jukeboxes twin). A pot
+	// holds ONE item (DecoratedPotBlockEntity.item); right-clicking it inserts/grows that item
+	// (useDecoratedPot). The comparator reads the single-slot fill fraction. CITE DecoratedPotBlockEntity.
+	decoratedPots map[pk.Position]*decoratedPotBE
+
 	// bookshelves: CHISELED_BOOKSHELF block-entities keyed by world position (the jukeboxes twin,
 	// BOOKSHELF-01). A chiseled bookshelf holds a 6-slot container (ChiseledBookShelfBlockEntity.items)
 	// + a lastInteractedSlot int; adding a book (useChiseledBookshelf -> addBook -> setItem) sets the

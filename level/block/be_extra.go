@@ -62,6 +62,16 @@ func LecternWithPowered(s StateID, powered bool) (StateID, bool) {
 	return s, false
 }
 
+// IsDecoratedPot reports whether a state id is a decorated_pot (any cracked/facing/waterlogged combo).
+// CITE DecoratedPotBlock.
+func IsDecoratedPot(s StateID) bool {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return false
+	}
+	_, ok := StateList[s].(DecoratedPot)
+	return ok
+}
+
 // IsJukebox reports whether a state id is a jukebox (either HAS_RECORD combo). CITE JukeboxBlock.
 func IsJukebox(s StateID) bool {
 	if int(s) < 0 || int(s) >= len(StateList) {
