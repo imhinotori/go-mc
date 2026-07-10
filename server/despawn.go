@@ -62,17 +62,22 @@ func (t *TickLoop) checkDespawn(e *Entity) {
 	cat := categoryOf(e.typ)
 
 	// Instant cull past despawnDistance²: `if (d > despawn*despawn && removeWhenFarAway(d)) discard();`.
+	// CRITICAL (1:1, javap offsets 89-108): the vanilla instant-cull branch does NOT return -- after
+	// discard() it FALLS THROUGH (ifle 109 on false; the discard at 105-106 flows straight into 109, the
+	// noDespawnDistance block). So the noActionTime>600 random.nextInt(800) draw below STILL RUNS even
+	// after an instant cull. Removing the early return keeps that draw at its exact vanilla position, so
+	// the RNG stream is byte-identical (an idle far mob draws nextInt(800) once, cull or not).
 	despawn := cat.despawnDistance()
 	if d > float64(despawn*despawn) && removeWhenFarAway(e, d) {
 		e.dead = true
-		t.regionForEntity(e).entities.remove(e.id) // discard()
-		return
+		t.regionForEntity(e).entities.remove(e.id) // discard() -- NO return: fall through (javap 109)
 	}
 
 	// Random soft cull vs noDespawnDistance² (== 32² == 1024): the random.nextInt(800) draw is GATED
 	// behind noActionTime > 600, so a mob with a player nearby (which resets noActionTime every tick via
 	// the else-branch) never reaches the draw — the pig oracle's harness keeps a player close, so its
-	// per-mob RNG stream is byte-identically unperturbed. Cite Mob.checkDespawn.
+	// per-mob RNG stream is byte-identically unperturbed. Cite Mob.checkDespawn. This block runs even if
+	// the instant cull above already discarded the mob (vanilla fall-through), matching the draw order.
 	noDespawn := cat.noDespawnDistance()
 	noDespawnSq := float64(noDespawn * noDespawn)
 	if m.noActionTime > 600 && m.rng.nextInt(800) == 0 && d > noDespawnSq && removeWhenFarAway(e, d) {

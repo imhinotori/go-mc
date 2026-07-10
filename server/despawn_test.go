@@ -95,3 +95,33 @@ func TestCheckDespawnSpectatorIgnored(t *testing.T) {
 		t.Fatalf("a spectator must not reset noActionTime: %d, want 1200 (NO_SPECTATORS)", mob.ai.noActionTime)
 	}
 }
+
+// TestCheckDespawnInstantCullStillDrawsRandom locks in the 1:1 fall-through (javap offsets 89-108): the
+// vanilla Mob.checkDespawn instant-cull branch does NOT return after discard() -- it falls through to the
+// noDespawnDistance block, so an idle (noActionTime > 600) mob that is ALSO past despawnDistance STILL
+// draws random.nextInt(800). The Go port must consume that draw exactly as vanilla, or the per-mob RNG
+// stream would desync for any far idle mob. We prove the draw happened by advancing a reference rng one
+// nextInt(800) and asserting the culled mob's rng lands on the SAME next value.
+func TestCheckDespawnInstantCullStillDrawsRandom(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	mob := despawnMob(loop, 1, 0, 64, 0)
+	mob.ai.noActionTime = 1200 // idle > 600: the nextInt(800) gate is open
+	// Player 200 blocks away: d = 40000 > 128^2 = 16384 (instant cull) and > 32^2 (soft gate distance ok).
+	loop.players = append(loop.players, &tickPlayer{x: 200, y: 64, z: 0, health: maxHealth})
+
+	// A reference rng seeded identically to the mob's; consume ONE nextInt(800) (the draw vanilla makes),
+	// then record the NEXT draw. If checkDespawn consumed exactly one nextInt(800), the mob's rng next
+	// draw must equal this.
+	ref := newEntityRandom(defaultEntityRandomSeed)
+	ref.nextInt(800)
+	wantNext := ref.nextInt(800)
+
+	loop.checkDespawn(mob)
+	if !mob.dead {
+		t.Fatal("far idle mob must be instantly culled (d > 128^2)")
+	}
+	gotNext := mob.ai.rng.nextInt(800)
+	if gotNext != wantNext {
+		t.Fatalf("instant cull did not draw nextInt(800) (fall-through broken): mob next=%d, want %d", gotNext, wantNext)
+	}
+}
