@@ -219,7 +219,7 @@ func TestSignRightClickReopensEdit(t *testing.T) {
 	pos := pk.Position{X: 1, Y: 64, Z: 1}
 	placeSignBlock(loop, pos)
 
-	consumed := loop.useBlockInteraction(p, pos, 1)
+	consumed := loop.useBlockInteraction(p, pos, 1, 0, 0, 0)
 	if !consumed {
 		t.Fatal("useBlockInteraction on a sign returned false, want true (interaction consumed)")
 	}

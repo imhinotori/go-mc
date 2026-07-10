@@ -567,6 +567,13 @@ type TickLoop struct {
 	// comparator reads the disc song getComparatorOutput. Registers on placement; spin ticks DEFERRED.
 	jukeboxes map[pk.Position]*jukeboxBE
 
+	// bookshelves: CHISELED_BOOKSHELF block-entities keyed by world position (the jukeboxes twin,
+	// BOOKSHELF-01). A chiseled bookshelf holds a 6-slot container (ChiseledBookShelfBlockEntity.items)
+	// + a lastInteractedSlot int; adding a book (useChiseledBookshelf -> addBook -> setItem) sets the
+	// matching SLOT_N_OCCUPIED state flag, removing one (removeBook -> removeItem) clears it. The
+	// comparator reads getLastInteractedSlot()+1. Registers on placement; does not tick. Tick-owned.
+	bookshelves map[pk.Position]*chiseledBookshelfBE
+
 	// spawners is the runtime store of MOB-SPAWNER block-entities keyed by world position (the conduits
 	// twin, SPAWNER-01). A spawner per-tick drive (spawner_block.go spawnerServerTick == BaseSpawner
 	// .serverTick) reads/writes its spawnerBE here every tick (tickWorld) - the isNearPlayer gate, the

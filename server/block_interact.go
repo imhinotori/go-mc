@@ -184,7 +184,7 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 	// (1) ServerPlayerGameMode.useItemOn step 1 — the BLOCK's own interaction. Interactive blocks
 	// (chests) consume the action via useBlockInteraction and we early-return; non-interactive
 	// blocks pass through to placement.
-	if t.useBlockInteraction(p, pos, int(direction)) {
+	if t.useBlockInteraction(p, pos, int(direction), float32(cursorX), float32(cursorY), float32(cursorZ)) {
 		// The block consumed the interaction (e.g. a chest opened its menu) — NO block is placed.
 		return
 	}

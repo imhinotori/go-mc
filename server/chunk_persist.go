@@ -111,6 +111,11 @@ func (t *TickLoop) flushColumn(pos level.ChunkPos) bool {
 	// dispenser-flush twin.
 	t.flushCrafterItems(pos, ch)
 
+	// CHISELED-BOOKSHELF FLUSH: fold any live chiseledBookshelfBE in this column into the chunk BlockEntity
+	// list (ChiseledBookShelfBlockEntity.saveAdditional -- the 6-slot Items list + last_interacted_slot).
+	// The dispenser-flush twin.
+	t.flushChiseledBookshelfItems(pos, ch)
+
 	data, err := world.SerializeChunkData(t.worker().StructureCache(), pos, ch, t.worker().MinY())
 	if err != nil {
 		// A serialize error is an encode bug, not runtime input; skip this column (do not crash the

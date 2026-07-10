@@ -279,8 +279,7 @@ func isChestBlock(s block.StateID) bool {
 // isSecondaryUseActive() has no sneak-pose decode (cited false stub, mirroring food.go's
 // isCrouching), so bl9 is always false → the block interaction always runs. A chest therefore opens
 // on any right-click. Structured so a real sneak read flips the guard later without touching this.
-func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direction int) bool {
-	_ = direction
+func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direction int, cursorX, cursorY, cursorZ float32) bool {
 	if t.world() == nil {
 		return false
 	}
@@ -345,10 +344,15 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 	// A jukebox right-click INSERTS a music disc (empty) or EJECTS the loaded disc (JukeboxBlock.useItemOn/
 	// useWithoutItem). CITE JukeboxBlock.useItemOn / useWithoutItem.
 	isJukebox := block.IsJukebox(state)
+	// A chiseled bookshelf right-click ADDS a #bookshelf_books item to the clicked slot, or REMOVES the
+	// book already in that slot (ChiseledBookShelfBlock.useItemOn/useWithoutItem). The slot is resolved
+	// from the cursor hit-vector + clicked face (SelectableSlotContainer.getHitSlot). CITE
+	// ChiseledBookShelfBlock.useItemOn / useWithoutItem.
+	isBookshelf := block.IsChiseledBookshelf(state)
 	if !isChest && !isCraft && !isCut && !isBed && !isFurnace && !isBrew && !isLever && !isButton &&
 		!isRepeater && !isComparator && !isDispenser && !isHopper && !isBeacon && !isAnvil && !isEnchant &&
 		!isGrindstone && !isSmithing && !isLoom && !isDoorFamily && !isSign &&
-		!isCampfire && !isBell && !isLectern && !isJukebox {
+		!isCampfire && !isBell && !isLectern && !isJukebox && !isBookshelf {
 		return false // not an interactive block: PASS → placement runs
 	}
 	// Reach-gate the interaction (the same server-authoritative reach the place/break paths use):
@@ -473,6 +477,12 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 		// JukeboxBlock.useItemOn/useWithoutItem: insert a disc, or eject the loaded one. Returns false when the
 		// empty jukebox is clicked with a non-disc hand (placement continues). CITE JukeboxBlock.
 		return t.useJukebox(p, hitPos, state)
+	}
+	if isBookshelf {
+		// ChiseledBookShelfBlock.useItemOn/useWithoutItem: add/remove a book at the cursor-resolved slot.
+		// Returns false (PASS) when the click misses the facing face's 2x3 grid (placement continues).
+		// CITE ChiseledBookShelfBlock.useItemOn / useWithoutItem.
+		return t.useChiseledBookshelf(p, hitPos, state, direction, cursorX, cursorY, cursorZ)
 	}
 	return t.openChest(p, hitPos)
 }
@@ -648,6 +658,16 @@ func (t *TickLoop) createBlockEntityOnPlace(pos pk.Position, state block.StateID
 		empty := nbt.RawMessage{Type: nbt.TagCompound, Data: []byte{0x00}}
 		t.world().SetBlockEntityAt(pos, block.EntityTypes["minecraft:lectern"], empty, dimMinY)
 		t.resolveLectern(pos)
+		return
+	}
+	if block.IsChiseledBookshelf(state) {
+		// ChiseledBookShelfBlock is a BaseEntityBlock; newBlockEntity = new ChiseledBookShelfBlockEntity(
+		// pos, state) (empty: 6 clear slots, lastInteractedSlot -1). Write an empty BE compound so the
+		// add/remove-book + comparator paths resolve it, and register the empty chiseledBookshelfBE in
+		// t.bookshelves. CITE ChiseledBookShelfBlock (EntityBlock).
+		empty := nbt.RawMessage{Type: nbt.TagCompound, Data: []byte{0x00}}
+		t.world().SetBlockEntityAt(pos, block.EntityTypes["minecraft:chiseled_bookshelf"], empty, dimMinY)
+		t.resolveChiseledBookshelf(pos)
 		return
 	}
 	if block.IsJukebox(state) {

@@ -257,6 +257,13 @@ func (t *TickLoop) comparatorGetInputSignal(state block.StateID, pos pk.Position
 		// analog output is this fill COUNT, NOT the getRedstoneSignalFromContainer fill-ratio. CITE:
 		// CrafterBlock.getAnalogOutputSignal -> CrafterBlockEntity.getRedstoneSignal.
 		resultSignal = sig
+	} else if sig, has := t.chiseledBookshelfAnalogOutputSignal(targetPos); has {
+		// targetState.hasAnalogOutputSignal(): true for a CHISELED BOOKSHELF; getAnalogOutputSignal ==
+		// ChiseledBookShelfBlockEntity.getLastInteractedSlot() + 1 (0 when untouched, i.e. -1+1). Checked
+		// BEFORE the generic container path: a bookshelf resolves as a container but its analog output is
+		// the LAST-INTERACTED SLOT (1..6), NOT the getRedstoneSignalFromContainer fill-ratio. CITE
+		// ChiseledBookShelfBlock.getAnalogOutputSignal -> ChiseledBookShelfBlockEntity.getLastInteractedSlot.
+		resultSignal = sig
 	} else if sig, has := t.containerAnalogOutputSignal(targetPos); has {
 		// targetState.hasAnalogOutputSignal(): true for a container block-entity (chest/furnace/dispenser/
 		// brewing/hopper — AnalogOutputBlock). getAnalogOutputSignal == getRedstoneSignalFromContainer(container).
@@ -278,6 +285,11 @@ func (t *TickLoop) comparatorGetInputSignal(state block.StateID, pos pk.Position
 		if sig, has := t.sculkSensorAnalogOutputSignal(twoAway); has {
 			blockAnalog = sig
 		} else if sig, has := t.crafterAnalogOutputSignal(twoAway); has {
+			blockAnalog = sig
+		} else if sig, has := t.chiseledBookshelfAnalogOutputSignal(twoAway); has {
+			// A CHISELED BOOKSHELF two-away (read through a conductor): its analog output is
+			// getLastInteractedSlot()+1, checked before the generic container path (same as the direct
+			// branch). CITE ChiseledBookShelfBlock.getAnalogOutputSignal.
 			blockAnalog = sig
 		} else if sig, has := t.containerAnalogOutputSignal(twoAway); has {
 			blockAnalog = sig

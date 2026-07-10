@@ -69,7 +69,7 @@ func TestDoorOpenClose(t *testing.T) {
 	mgr.SetBlock(lowerPos, loSID, dimMinY)
 	mgr.SetBlock(upperPos, upSID, dimMinY)
 
-	if !loop.useBlockInteraction(p, lowerPos, 1) {
+	if !loop.useBlockInteraction(p, lowerPos, 1, 0, 0, 0) {
 		t.Fatalf("useBlockInteraction on closed door returned false, want consumed")
 	}
 	loNow, _ := mgr.GetBlock(lowerPos, dimMinY)
@@ -85,7 +85,7 @@ func TestDoorOpenClose(t *testing.T) {
 	}
 
 	resetClient(loop, p)
-	if !loop.useBlockInteraction(p, lowerPos, 1) {
+	if !loop.useBlockInteraction(p, lowerPos, 1, 0, 0, 0) {
 		t.Fatalf("useBlockInteraction on open door returned false, want consumed")
 	}
 	loNow, _ = mgr.GetBlock(lowerPos, dimMinY)
@@ -111,7 +111,7 @@ func TestDoorHalfSyncFromUpper(t *testing.T) {
 	mgr.SetBlock(lowerPos, block.ToStateID[block.OakDoor{Facing: block.North, Half: block.DoubleBlockHalfLower, Hinge: block.DoorHingeSideLeft}], dimMinY)
 	mgr.SetBlock(upperPos, block.ToStateID[block.OakDoor{Facing: block.North, Half: block.DoubleBlockHalfUpper, Hinge: block.DoorHingeSideLeft}], dimMinY)
 
-	if !loop.useBlockInteraction(p, upperPos, 1) {
+	if !loop.useBlockInteraction(p, upperPos, 1, 0, 0, 0) {
 		t.Fatalf("useBlockInteraction on upper half returned false")
 	}
 	loNow, _ := mgr.GetBlock(lowerPos, dimMinY)
@@ -132,7 +132,7 @@ func TestDoorIronRejectsHand(t *testing.T) {
 	mgr.SetBlock(lowerPos, loSID, dimMinY)
 	mgr.SetBlock(upperPos, upSID, dimMinY)
 
-	if loop.useBlockInteraction(p, lowerPos, 1) {
+	if loop.useBlockInteraction(p, lowerPos, 1, 0, 0, 0) {
 		t.Fatalf("iron door hand-click was consumed, want false (PASS, not hand-openable)")
 	}
 	loNow, _ := mgr.GetBlock(lowerPos, dimMinY)
@@ -153,7 +153,7 @@ func TestTrapdoorToggle(t *testing.T) {
 	sid := block.ToStateID[block.OakTrapdoor{Facing: block.North, Half: block.Bottom}]
 	mgr.SetBlock(pos, sid, dimMinY)
 
-	if !loop.useBlockInteraction(p, pos, 1) {
+	if !loop.useBlockInteraction(p, pos, 1, 0, 0, 0) {
 		t.Fatalf("trapdoor click returned false, want consumed")
 	}
 	now, _ := mgr.GetBlock(pos, dimMinY)
@@ -165,7 +165,7 @@ func TestTrapdoorToggle(t *testing.T) {
 	}
 
 	resetClient(loop, p)
-	if !loop.useBlockInteraction(p, pos, 1) {
+	if !loop.useBlockInteraction(p, pos, 1, 0, 0, 0) {
 		t.Fatalf("second trapdoor click returned false")
 	}
 	now, _ = mgr.GetBlock(pos, dimMinY)
@@ -186,7 +186,7 @@ func TestTrapdoorIronRejectsHand(t *testing.T) {
 	sid := block.ToStateID[block.IronTrapdoor{Facing: block.North, Half: block.Bottom}]
 	mgr.SetBlock(pos, sid, dimMinY)
 
-	if loop.useBlockInteraction(p, pos, 1) {
+	if loop.useBlockInteraction(p, pos, 1, 0, 0, 0) {
 		t.Fatalf("iron trapdoor hand-click was consumed, want false (PASS)")
 	}
 	now, _ := mgr.GetBlock(pos, dimMinY)
@@ -207,7 +207,7 @@ func TestFenceGateOpensFacingPlayer(t *testing.T) {
 	sid := block.ToStateID[block.OakFenceGate{Facing: block.North}]
 	mgr.SetBlock(pos, sid, dimMinY)
 
-	if !loop.useBlockInteraction(p, pos, 1) {
+	if !loop.useBlockInteraction(p, pos, 1, 0, 0, 0) {
 		t.Fatalf("fence gate click returned false, want consumed")
 	}
 	now, _ := mgr.GetBlock(pos, dimMinY)
@@ -222,7 +222,7 @@ func TestFenceGateOpensFacingPlayer(t *testing.T) {
 	}
 
 	resetClient(loop, p)
-	if !loop.useBlockInteraction(p, pos, 1) {
+	if !loop.useBlockInteraction(p, pos, 1, 0, 0, 0) {
 		t.Fatalf("second fence gate click returned false")
 	}
 	now, _ = mgr.GetBlock(pos, dimMinY)
@@ -244,7 +244,7 @@ func TestFenceGateKeepsFacingWhenAligned(t *testing.T) {
 	sid := block.ToStateID[block.OakFenceGate{Facing: block.South}]
 	mgr.SetBlock(pos, sid, dimMinY)
 
-	if !loop.useBlockInteraction(p, pos, 1) {
+	if !loop.useBlockInteraction(p, pos, 1, 0, 0, 0) {
 		t.Fatalf("fence gate click returned false")
 	}
 	now, _ := mgr.GetBlock(pos, dimMinY)
