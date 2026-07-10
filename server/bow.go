@@ -115,7 +115,10 @@ func (t *TickLoop) bowReleaseUsing(p *tickPlayer, stack component.SlotData, hand
 // draw loads nothing. The next use fires the loaded bolt. Cite CrossbowItem.onUseTick + releaseUsing.
 func (t *TickLoop) crossbowReleaseUsing(p *tickPlayer, stack component.SlotData, hand int32) {
 	charge := bowUseDuration - p.useItemRemaining
-	if charge < crossbowChargeDuration {
+	// CrossbowItem.getChargeDuration(stack, entity) = floor(modifyCrossbowChargingTime(stack, 1.25)*20):
+	// Quick Charge shortens the required draw (I=20, II=15, III=10 ticks; unenchanted = 25). Cite
+	// CrossbowItem.releaseUsing -> getChargeDuration + EnchantmentHelper.modifyCrossbowChargingTime.
+	if charge < t.enchCrossbowChargeDuration(stack) {
 		t.stopUsingItem(p)
 		return
 	}

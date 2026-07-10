@@ -474,3 +474,26 @@ func TestEnchantFishingRodEnchants(t *testing.T) {
 		t.Fatalf("bare rod time reduction = %v, want 0.0", red)
 	}
 }
+
+// TestEnchantQuickChargeDuration: getChargeDuration = floor(modifyCrossbowChargingTime(1.25)*20). Quick
+// Charge (add -0.25-0.25*(lvl-1)) shortens the 1.25s base: I -> 1.0s -> 20 ticks; III -> 0.5s -> 10;
+// an unenchanted crossbow -> floor(1.25*20) = 25. Cite quick_charge.json + CrossbowItem.getChargeDuration.
+func TestEnchantQuickChargeDuration(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	const idCrossbow = 966 // any item id; only the enchant component matters
+
+	bare := component.SlotData{ItemID: pk.VarInt(idCrossbow), Count: 1}
+	if d := loop.enchCrossbowChargeDuration(bare); d != 25 {
+		t.Fatalf("bare crossbow chargeDuration = %d, want 25 (floor(1.25*20))", d)
+	}
+
+	qc1 := enchantedStack(idCrossbow, 1, enchTestEntry(t, "minecraft:quick_charge", 1))
+	if d := loop.enchCrossbowChargeDuration(qc1); d != 20 {
+		t.Fatalf("quick charge I chargeDuration = %d, want 20 (floor(1.0*20))", d)
+	}
+
+	qc3 := enchantedStack(idCrossbow, 1, enchTestEntry(t, "minecraft:quick_charge", 3))
+	if d := loop.enchCrossbowChargeDuration(qc3); d != 10 {
+		t.Fatalf("quick charge III chargeDuration = %d, want 10 (floor(0.5*20))", d)
+	}
+}

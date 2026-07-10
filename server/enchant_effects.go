@@ -31,6 +31,7 @@ package server
 
 import (
 	"encoding/json"
+	"math"
 	"sync"
 
 	"github.com/imhinotori/sulfur/data/registryid"
@@ -1067,6 +1068,7 @@ type enchEffectSet struct {
 	projectileSpawned  []enchCondEntity // minecraft:projectile_spawned (Flame -> ignite the arrow at shoot)
 	fishingLuck        []enchCondValue  // minecraft:fishing_luck_bonus (Luck of the Sea)
 	fishingTime        []enchCondValue  // minecraft:fishing_time_reduction (Lure)
+	crossbowCharge     enchValueEffect  // minecraft:crossbow_charge_time (Quick Charge) — a bare value effect
 }
 
 // enchCondEntity is ConditionalEffect<EnchantmentEntityEffect>: an entity effect + optional requirements.
@@ -1103,6 +1105,7 @@ func enchantEffectTable() []*enchEffectSet {
 			set.projectileSpawned = parseCondEntityList(def.Effects["minecraft:projectile_spawned"])
 			set.fishingLuck = parseCondValueList(def.Effects["minecraft:fishing_luck_bonus"])
 			set.fishingTime = parseCondValueList(def.Effects["minecraft:fishing_time_reduction"])
+			set.crossbowCharge = parseValueEffect(def.Effects["minecraft:crossbow_charge_time"])
 			table[i] = set
 		}
 		enchEffectTableVal = table
@@ -1367,6 +1370,34 @@ func (t *TickLoop) enchFishingTimeReduction(rod component.SlotData) float32 {
 		return 0.0
 	}
 	return f
+}
+
+// enchModifyCrossbowChargingTime is EnchantmentHelper.modifyCrossbowChargingTime(ItemStack crossbow,
+// LivingEntity owner, float base): fold the crossbow's CROSSBOW_CHARGE_TIME effect (Quick Charge: add
+// -0.25 - 0.25/level) over base (1.25s at the caller), via runIterationOnItem (no slot/requirement gate),
+// then Math.max(0.0F, floatValue). Enchantment.modifyCrossbowChargeTime applies the single value effect
+// directly. Cite EnchantmentHelper.modifyCrossbowChargingTime bytecode.
+func (t *TickLoop) enchModifyCrossbowChargingTime(crossbow component.SlotData, base float32) float32 {
+	f := base
+	forEachItemEnchant(crossbow, func(wireID, level int) {
+		set := enchEffectsFor(wireID)
+		if set == nil || set.crossbowCharge == nil {
+			return
+		}
+		// Enchantment.modifyCrossbowChargeTime: mutable = effect.process(level, owner.getRandom(), mutable).
+		// Quick Charge's add draws no RNG (nil source is observably identical, kept RNG-lazy).
+		f = set.crossbowCharge.process(level, nil, f)
+	})
+	if f < 0.0 {
+		return 0.0
+	}
+	return f
+}
+
+// enchCrossbowChargeDuration is CrossbowItem.getChargeDuration(stack, entity): Mth.floor(
+// modifyCrossbowChargingTime(stack, entity, 1.25F) * 20.0F). No Quick Charge -> floor(1.25*20) = 25.
+func (t *TickLoop) enchCrossbowChargeDuration(crossbow component.SlotData) int32 {
+	return int32(math.Floor(float64(t.enchModifyCrossbowChargingTime(crossbow, 1.25) * 20.0)))
 }
 
 // enchDirectAttackerType resolves DamageSource.getDirectEntity()'s entity-type id for the MELEE path,
