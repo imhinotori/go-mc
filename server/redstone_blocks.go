@@ -48,8 +48,9 @@ func (t *TickLoop) noteBlockNeighborChanged(pos pk.Position, state block.StateID
 }
 
 // noteBlockPlayNote is NoteBlock.playNote: play only if the instrument worksAboveNoteBlock OR the cell
-// above is air. The blockEvent(0,0) + NOTE_BLOCK_PLAY are client/vibration effects (cited no-ops); the
-// gate is ported so a covered note block stays silent. CITE: NoteBlock.playNote.
+// above is air. The blockEvent(0,0) is a cited client no-op; the NOTE_BLOCK_PLAY gameEvent is the
+// load-bearing vibration (frequency 10). The gate is ported so a covered note block stays silent. CITE:
+// NoteBlock.playNote (level.blockEvent + level.gameEvent(entity, NOTE_BLOCK_PLAY, pos)).
 func (t *TickLoop) noteBlockPlayNote(pos pk.Position, state block.StateID) {
 	inst, ok := block.NoteBlockInstrumentOf(state)
 	if !ok {
@@ -62,6 +63,9 @@ func (t *TickLoop) noteBlockPlayNote(pos pk.Position, state block.StateID) {
 		}
 	}
 	t.recordNotePlayed(pos)
+	// level.gameEvent(entity, GameEvent.NOTE_BLOCK_PLAY, pos): the redstone-driven play has no entity
+	// source (a hand-strike would pass the player; redstone edge is source 0).
+	t.gameEventAt(geNoteBlockPlay, pos, gameEventContext{})
 }
 
 // recordNotePlayed records that a note block at pos played this tick (the audible blockEvent is a

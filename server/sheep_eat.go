@@ -155,7 +155,10 @@ func (t *TickLoop) trySheepShear(p *tickPlayer, mob *Entity) bool {
 	}
 	t.shearSheep(mob)         // shear(): SHEEP_SHEAR sound + white-wool drop + setSheared(true)
 	t.hurtHeldItem(p, inv, 1) // itemStack.hurtAndBreak(1, player, hand): shears durability -1 (breaks at max)
-	return true               // SUCCESS_SERVER
+	// Sheep.mobInteract shear path: this.gameEvent(GameEvent.SHEAR, player) -- the shear vibration
+	// (frequency 6) at the sheep's position, sourced to the shearing player. Cite Sheep.mobInteract.
+	t.gameEvent(geShear, mob.x, mob.y, mob.z, gameEventContext{sourceEntityID: p.entityID})
+	return true // SUCCESS_SERVER
 }
 
 // shearSheep is net.minecraft.world.entity.animal.sheep.Sheep.shear(level, src, tool) — the actual shear:

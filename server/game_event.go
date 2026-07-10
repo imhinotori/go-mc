@@ -57,13 +57,17 @@ const (
 	gePrimeFuse     gameEventID = "prime_fuse"     // PRIME_FUSE (creeper/tnt fuse start)
 	geExplode       gameEventID = "explode"        // EXPLODE (explosion)
 	geEat           gameEventID = "eat"            // EAT (LivingEntity finish consuming; DRINK shares freq 8)
-	geFluidPickup   gameEventID = "fluid_pickup"   // FLUID_PICKUP (bucket fill)
-	geFluidPlace    gameEventID = "fluid_place"    // FLUID_PLACE (bucket empty)
-	// FOLLOW-UP (cited, not yet wired at an emitter): block_change, block_deactivate, container_open/close,
-	// note_block_play, drink, splash, swim, entity_place, lightning_strike, shear, flap, bounce, hit_ground,
-	// projectile_shoot, instrument_play, entity_action, elytra_glide, unequip, entity_dismount, equip,
-	// entity_mount, entity_damage, block_attach/detach, teleport, item_interact_finish. Every one already
-	// has a frequency in vibrationFrequencyTable; wiring its emitter is a follow-up per subsystem.
+	geFluidPickup   gameEventID = "fluid_pickup"    // FLUID_PICKUP (bucket fill)
+	geFluidPlace    gameEventID = "fluid_place"     // FLUID_PLACE (bucket empty)
+	geNoteBlockPlay gameEventID = "note_block_play" // NOTE_BLOCK_PLAY (note block struck)
+	geShear         gameEventID = "shear"           // SHEAR (shears on a sheep/mob)
+	// FOLLOW-UP (cited, not yet wired at an emitter): block_change (needs the interacting player threaded
+	// through the block-entity updateState chain), block_deactivate, container_open/close (needs the menu
+	// open/close lifecycle hook -- the open-count is derived, not event-driven), drink, splash, swim,
+	// entity_place, lightning_strike, flap, bounce, hit_ground, projectile_shoot, instrument_play,
+	// entity_action, elytra_glide, unequip, entity_dismount, equip, entity_mount, entity_damage,
+	// block_attach/detach, teleport, item_interact_finish. Every one already has a frequency in
+	// vibrationFrequencyTable; wiring its emitter is a follow-up per subsystem.
 )
 
 // gameEventDefaultNotificationRadius is GameEvent.DEFAULT_NOTIFICATION_RADIUS (16). Every core event uses
