@@ -129,7 +129,13 @@ func IsRandomlyTicking(s StateID) bool {
 		// PointedDripstoneBlock / SpeleothemBlock properties (.randomTicks()); SpeleothemBlock.randomTick.
 		return true
 	default:
-		return false
+		// WeatheringCopper family (WeatheringCopperFullBlock/StairBlock/SlabBlock/... and the door/
+		// trapdoor/bulb/chest/bars/grate/chain/lantern/golem-statue/lightning-rod copper variants) override
+		// isRandomlyTicking() to return WeatheringCopper.getNext(block).isPresent() -- true for every
+		// UNWAXED, non-OXIDIZED tier. This is keyed by block identity (not a Go type switch) because the
+		// copper family spans many concrete block structs; CopperCanOxidize is that exact flag. CITE:
+		// WeatheringCopperFullBlock.isRandomlyTicking (getNext(block).isPresent()).
+		return CopperCanOxidize(s)
 	}
 }
 
