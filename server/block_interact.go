@@ -234,6 +234,15 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 		return
 	}
 
+	// SHEARS on a growing-plant HEAD (ShearsItem.useOn): shears on a non-max-age cave_vines/weeping_vines/
+	// twisting_vines head snaps it to AGE=25 (stops growth). A non-block item -- intercept BEFORE placement.
+	// Returns true when the held item is shears AND the clicked block is a sub-max-age vine head; false to
+	// fall through. Pumpkin/beehive/tripwire shears are BLOCK-side useItemOn (cited follow-ups). No RNG
+	// draw -- pig oracle unperturbed. CITE: ShearsItem.useOn (shears.go).
+	if t.tryShearsUseOn(p, inv, held, pos) {
+		return
+	}
+
 	// PLUGIN-07 (Plan 28-01) GATE-ONLY trigger — the spawn-egg path. A vanilla spawn egg spawns ON
 	// the CLICKED BLOCK (SpawnEggItem.useOn), not on right-click-air, so the gate egg must hook the
 	// UseItemOn (block) path — this is how a player actually uses a spawn egg. Spawn at the adjacent
