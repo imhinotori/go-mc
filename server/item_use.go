@@ -242,6 +242,14 @@ func (t *TickLoop) useItemInHand(p *tickPlayer, hand int32) {
 		return
 	}
 
+	// WATERLILY (PlaceOnWaterBlockItem.use): a right-click-air with a lily_pad raytraces to a water SOURCE
+	// and places the lily_pad on the cell ABOVE it (consuming 1 in survival). Runs before the food gate (a
+	// lily_pad is not food); a non-lily_pad falls through. Lily-pad-gated (a cheap id compare, no RNG draw
+	// -- the pig oracle is unperturbed). CITE PlaceOnWaterBlockItem.use. Body in waterlily.go.
+	if t.tryUseWaterlily(p, inv, held, hand) {
+		return
+	}
+
 	// BOW / CROSSBOW (BowItem.use / CrossbowItem.use): a right-click with a bow/crossbow begins the draw
 	// (startUsingItem), or -- for a charged crossbow -- fires the loaded bolt immediately. The release (the
 	// RELEASE_USE_ITEM player action) fires the bow arrow. Runs before the food gate (a bow is not food); a
