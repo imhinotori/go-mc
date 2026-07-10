@@ -852,6 +852,16 @@ type Entity struct {
 	//	 customServerAiStep countdown block + rewardTradeXp arm block.]
 	updateMerchantTimer             int
 	increaseProfessionLevelOnUpdate bool
+	// lastRestockGameTime + numberOfRestocksToday + lastRestockCheckDay mirror Villager's restock-scheduling
+	// fields: the twice-a-day workstation restock cadence (Villager.shouldRestock/allowedToRestock/restock).
+	// lastRestockGameTime is the gameTime of the last restock; numberOfRestocksToday counts restocks in the
+	// current day (reset at the day boundary, cap 2); lastRestockCheckDay is the last day index shouldRestock
+	// saw (0 == never checked). All zero for a non-villager.
+	//	[VERIFIED CFR Villager fields lastRestockGameTime:J / numberOfRestocksToday:I / lastRestockCheckDay:J
+	//	 + shouldRestock/allowedToRestock/restock/resetNumberOfRestocks.]
+	lastRestockGameTime   int64
+	numberOfRestocksToday int
+	lastRestockCheckDay   int64
 	// villagerGossips mirrors Villager.gossips (net.minecraft.world.entity.ai.gossip.GossipContainer): the
 	// per-UUID reputation store that drives the trade-price economy (getPlayerReputation ->
 	// updateSpecialPrices) and receives reputation events (onReputationEventFrom: TRADE/VILLAGER_HURT/

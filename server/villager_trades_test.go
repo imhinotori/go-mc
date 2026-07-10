@@ -314,3 +314,96 @@ func TestVillagerIncreaseMerchantCareer(t *testing.T) {
 		t.Fatalf("career-up past max = %d, want clamp 5", e.villagerLevel)
 	}
 }
+
+
+// TestVillagerRestockScheduling pins the twice-a-day restock cadence: needsToRestock (any offer uses>0),
+// allowedToRestock (1st free, 2nd needs >2400t gap, 3rd never), shouldRestock (12000t window / day-boundary
+// reset), and restock (updateDemand + resetUses + scheduling bookkeeping). VERIFIED Villager.shouldRestock/
+// allowedToRestock/needsToRestock/restock + MerchantOffer.needsRestock.
+func TestVillagerRestockScheduling(t *testing.T) {
+	e := &Entity{villagerProfession: "farmer", villagerLevel: 1}
+	offers := villagerGetOffers(e)
+	if len(offers) == 0 {
+		t.Fatal("farmer/1 must have offers")
+	}
+
+	// needsToRestock: false with all uses 0; true once any offer has uses>0.
+	if villagerNeedsToRestock(e) {
+		t.Fatal("fresh offers (uses 0) must NOT need restock")
+	}
+	offers[0].uses = 1
+	if !villagerNeedsToRestock(e) {
+		t.Fatal("an offer with uses>0 must need restock")
+	}
+
+	// allowedToRestock: numberOfRestocksToday==0 -> always allowed.
+	if !villagerAllowedToRestock(e, 5000) {
+		t.Fatal("0 restocks today must be allowed")
+	}
+	// After 1 restock: a 2nd is allowed only >2400t after lastRestockGameTime.
+	e.numberOfRestocksToday = 1
+	e.lastRestockGameTime = 5000
+	if villagerAllowedToRestock(e, 5000+2400) {
+		t.Fatal("2nd restock at exactly +2400 must NOT be allowed (strict >)")
+	}
+	if !villagerAllowedToRestock(e, 5000+2401) {
+		t.Fatal("2nd restock at +2401 must be allowed")
+	}
+	// After 2 restocks: never allowed (2x/day cap).
+	e.numberOfRestocksToday = 2
+	if villagerAllowedToRestock(e, 5000+99999) {
+		t.Fatal("3rd restock must never be allowed (cap 2)")
+	}
+
+	// restock: resets uses to 0, stamps lastRestockGameTime, increments numberOfRestocksToday.
+	e.numberOfRestocksToday = 0
+	offers[0].uses = 3
+	villagerRestock(e, 8000)
+	if offers[0].uses != 0 {
+		t.Fatalf("restock must resetUses to 0, got %d", offers[0].uses)
+	}
+	if e.lastRestockGameTime != 8000 || e.numberOfRestocksToday != 1 {
+		t.Fatalf("restock bookkeeping wrong: lastRestock %d, count %d (want 8000/1)", e.lastRestockGameTime, e.numberOfRestocksToday)
+	}
+}
+
+// TestVillagerShouldRestockWindow pins shouldRestock's 12000t window + day-boundary reset side effects.
+func TestVillagerShouldRestockWindow(t *testing.T) {
+	e := &Entity{villagerProfession: "farmer", villagerLevel: 1}
+	offers := villagerGetOffers(e)
+	offers[0].uses = 1 // needsToRestock == true
+
+	// First call: lastRestockGameTime 0, gameTime 100 (< 12000 window). lastRestockCheckDay is 0 so the
+	// day-boundary OR is suppressed on the very first check. flag == (100 > 12000) == false -> no reset.
+	// allowedToRestock (0 restocks) && needsToRestock -> true.
+	if !villagerShouldRestock(e, 100) {
+		t.Fatal("first shouldRestock with a depleted offer must be true")
+	}
+	if e.lastRestockCheckDay != 0 { // day(100) = 100/24000 = 0
+		t.Fatalf("lastRestockCheckDay after gameTime 100 = %d, want 0", e.lastRestockCheckDay)
+	}
+
+	// Simulate a restock, then a gameTime PAST the 12000 window -> flag true -> numberOfRestocksToday reset.
+	e.numberOfRestocksToday = 2
+	e.lastRestockGameTime = 100
+	if !villagerShouldRestock(e, 100+12001) { // 12001 > 100+12000
+		t.Fatal("shouldRestock past the 12000t window must reset + return true")
+	}
+	if e.numberOfRestocksToday != 0 {
+		t.Fatalf("window-cross must reset numberOfRestocksToday to 0, got %d", e.numberOfRestocksToday)
+	}
+
+	// Day-boundary reset: prime lastRestockCheckDay to a prior day, then a later day triggers reset even
+	// inside the 12000t window.
+	e.numberOfRestocksToday = 2
+	e.lastRestockGameTime = 24100
+	e.lastRestockCheckDay = 1 // day 1
+	// gameTime in day 2 (48001/24000 = 2) but within 12000t of lastRestockGameTime(24100): window says no,
+	// day-boundary says yes.
+	if !villagerShouldRestock(e, 25000+24000) { // day = 49000/24000 = 2 > 1
+		t.Fatal("crossing a day boundary must reset + allow restock")
+	}
+	if e.numberOfRestocksToday != 0 {
+		t.Fatalf("day-boundary must reset numberOfRestocksToday to 0, got %d", e.numberOfRestocksToday)
+	}
+}

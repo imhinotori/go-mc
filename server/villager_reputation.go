@@ -119,22 +119,95 @@ func villagerUpdateDemand(e *Entity) {
 	}
 }
 
-// villagerRestock ports the demand/uses portion of Villager.restock():
+// villagerRestockGameDay ports the OVERWORLD_DAY timeline day index shouldRestock reads for the daily
+// numberOfRestocksToday reset. Vanilla queries level.registryAccess().get(Timelines.OVERWORLD_DAY).map(t ->
+// t.dayCount(level)).orElse(0). The overworld day is gameTime / DAY_LENGTH(24000) — the elapsed-day count
+// (integer division floors, matching the timeline's per-day bucketing). This reuses the same gameTime-as-
+// day proxy the villager schedule / spider daytime checks already use. CITE Villager.shouldRestock (timeline
+// OVERWORLD_DAY dayCount) + the 24000-tick Minecraft day.
+func villagerRestockGameDay(gameTime int64) int64 { return gameTime / 24000 }
+
+// villagerNeedsToRestock ports Villager.needsToRestock(): true if ANY offer needs a restock (uses > 0).
+//
+//	[VERIFIED CFR Villager.needsToRestock: for offer in getOffers(): if offer.needsRestock() return true.]
+func villagerNeedsToRestock(e *Entity) bool {
+	for _, offer := range villagerGetOffers(e) {
+		if offer.needsRestock() {
+			return true
+		}
+	}
+	return false
+}
+
+// villagerAllowedToRestock ports Villager.allowedToRestock():
+//
+//	return this.numberOfRestocksToday == 0
+//	    || (this.numberOfRestocksToday < 2 && level.getGameTime() > this.lastRestockGameTime + 2400L);
+//
+// The first restock of a day is always allowed; a second is allowed only >2400 ticks after the first; a
+// third+ is never allowed (the 2x/day cap). CITE Villager.allowedToRestock (RESTOCK_LIMIT_2, 2400L gap).
+//
+//	[VERIFIED CFR Villager.allowedToRestock: numberOfRestocksToday==0 OR (numberOfRestocksToday<2 &&
+//	 gameTime > lastRestockGameTime + 2400).]
+func villagerAllowedToRestock(e *Entity, gameTime int64) bool {
+	if e.numberOfRestocksToday == 0 {
+		return true
+	}
+	return e.numberOfRestocksToday < 2 && gameTime > e.lastRestockGameTime+2400
+}
+
+// villagerShouldRestock ports Villager.shouldRestock(ServerLevel):
+//
+//	long nextRestock = this.lastRestockGameTime + 12000L;
+//	long gameTime = level.getGameTime();
+//	boolean flag = gameTime > nextRestock;
+//	long day = <OVERWORLD_DAY timeline dayCount, else 0>;
+//	flag = flag || (this.lastRestockCheckDay != 0 && day > this.lastRestockCheckDay);
+//	this.lastRestockCheckDay = day;
+//	if (flag) { this.lastRestockGameTime = gameTime; this.resetNumberOfRestocks(); }
+//	return this.allowedToRestock() && this.needsToRestock();
+//
+// The 12000-tick window (half a day) OR a crossed day-boundary triggers the daily reset (numberOfRestocksToday
+// -> 0 via resetNumberOfRestocks). Mutates lastRestockCheckDay/lastRestockGameTime/numberOfRestocksToday as
+// side effects, exactly as the jar. CITE Villager.shouldRestock.
+//
+//	[VERIFIED CFR Villager.shouldRestock this session (12000L window; day-boundary OR; reset side effects).]
+func villagerShouldRestock(e *Entity, gameTime int64) bool {
+	nextRestock := e.lastRestockGameTime + 12000
+	flag := gameTime > nextRestock
+	day := villagerRestockGameDay(gameTime)
+	flag = flag || (e.lastRestockCheckDay != 0 && day > e.lastRestockCheckDay)
+	e.lastRestockCheckDay = day
+	if flag {
+		e.lastRestockGameTime = gameTime
+		e.numberOfRestocksToday = 0 // resetNumberOfRestocks(): this.numberOfRestocksToday = 0
+	}
+	return villagerAllowedToRestock(e, gameTime) && villagerNeedsToRestock(e)
+}
+
+// villagerRestock ports Villager.restock() in full:
 //
 //	this.updateDemand();
 //	for offer: offer.resetUses();
 //	this.resendOffersToTradingPlayer();     // v1: the caller resends the merchant content
-//	this.lastRestockGameTime = getGameTime(); ++numberOfRestocksToday;   // v1: restock-scheduling deferred
+//	this.lastRestockGameTime = getGameTime();
+//	++this.numberOfRestocksToday;
 //
-// v1 realizes the LOAD-BEARING price/stock effects (updateDemand + resetUses); the restock SCHEDULING
-// (lastRestockGameTime / numberOfRestocksToday / the twice-a-day work-package trigger) is DEFERRED with the
-// villager work-activity package (brain_villager.go cites the WORK package as deferred). resetUses zeroes
-// each offer's uses (MerchantOffer.resetUses: this.uses = 0). CITE Villager.restock + MerchantOffer.resetUses.
-func villagerRestock(e *Entity) {
+// It realizes the price/stock effects (updateDemand + resetUses) AND the scheduling bookkeeping
+// (lastRestockGameTime stamp + numberOfRestocksToday increment) that gate the 2x/day cap. gameTime is the
+// caller's level.getGameTime(). resetUses zeroes each offer's uses (MerchantOffer.resetUses: this.uses = 0).
+//
+// The CALL SITE (WorkAtPoi.start: if at job-site POI, useWorkstation() + if shouldRestock() restock()) is
+// still a cited deferral -- the WORK activity landed the walk-to-job-site + UpdateActivityFromSchedule but
+// not WorkAtPoi/WorkAtComposter (brain_villager.go cites them deferred). Once WorkAtPoi is wired it calls
+// villagerShouldRestock + villagerRestock with no change here. CITE Villager.restock + WorkAtPoi.start.
+func villagerRestock(e *Entity, gameTime int64) {
 	villagerUpdateDemand(e)
 	for _, offer := range villagerGetOffers(e) {
 		offer.uses = 0 // MerchantOffer.resetUses(): this.uses = 0
 	}
+	e.lastRestockGameTime = gameTime
+	e.numberOfRestocksToday++
 }
 
 // villagerOnReputationEventFrom ports Villager.onReputationEventFrom(ReputationEventType, source):

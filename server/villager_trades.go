@@ -181,6 +181,10 @@ func (m *merchantOffer) getPriceMultiplier() float32 { return m.priceMultiplier 
 // isOutOfStock ports MerchantOffer.isOutOfStock(): uses >= maxUses.
 func (m *merchantOffer) isOutOfStock() bool { return m.uses >= m.maxUses }
 
+// needsRestock ports MerchantOffer.needsRestock(): uses > 0 (any depletion at all). Villager.needsToRestock
+// returns true if ANY offer needsRestock. CITE MerchantOffer.needsRestock (return this.uses > 0).
+func (m *merchantOffer) needsRestock() bool { return m.uses > 0 }
+
 // shrinkStack ports ItemStack.shrink(n): reduce the count by n, clearing to empty at <= 0.
 func shrinkStack(s *component.SlotData, n int) {
 	s.Count -= toVar(n)
@@ -953,8 +957,9 @@ func armorerLevel1Offers() merchantOffers {
 // profession's level_2 tag (armorer, weaponsmith, toolsmith). The tag values in declaration order are
 // smith/2/iron_ingot_emerald then smith/2/emerald_bell. VERIFIED datapack
 // data/minecraft/tags/villager_trade/common_smith/level_2.json + data/minecraft/villager_trade/smith/2/*.json:
-//   iron_ingot_emerald: wants iron_ingot x4 -> gives emerald x1, max_uses 12, xp 10, reputation_discount 0.05
-//   emerald_bell:       wants emerald x36  -> gives bell x1,    max_uses 12, xp 5,  reputation_discount 0.2
+//
+//	iron_ingot_emerald: wants iron_ingot x4 -> gives emerald x1, max_uses 12, xp 10, reputation_discount 0.05
+//	emerald_bell:       wants emerald x36  -> gives bell x1,    max_uses 12, xp 5,  reputation_discount 0.2
 func commonSmithLevel2Offers() merchantOffers {
 	return merchantOffers{
 		newEmeraldForItemsN(item.IronIngot, 4, 12, 10, 0.05), // smith/2/iron_ingot_emerald
