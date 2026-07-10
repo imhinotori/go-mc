@@ -1088,6 +1088,23 @@ type Entity struct {
 	//	 Villager.rewardTradeXp (lastTradedPlayer = getTradingPlayer()) + customServerAiStep (fires TRADE).]
 	villagerGossips      *gossipContainer
 	lastTradedPlayerUUID uuid.UUID
+	// villagerFoodLevel mirrors Villager.foodLevel (the private `foodLevel:I` field, ctor default 0). It
+	// gates breeding: Villager.canBreed() == (foodLevel + countFoodPointsInInventory()) >= 12 && !isSleeping
+	// && getAge()==0. eatAndDigestFood() (VillagerMakeLove.tick, on birth) runs eatUntilFull() then
+	// digestFood(12) == foodLevel -= 12. countFoodPointsInInventory reads the villager SimpleContainer, which
+	// is not built yet, so it is a cited stub == 0 (villagerCountFoodPointsInInventory) — an un-fed villager's
+	// canBreed reduces to foodLevel >= 12, exactly matching a vanilla villager that has never picked up food.
+	// Zero for every non-villager (the field is villager-gated at every read/write).
+	//	[VERIFIED CFR Villager: foodLevel:I (ctor 0); canBreed (foodLevel+countFoodPointsInInventory()>=12
+	//	 && !isSleeping() && getAge()==0); eatAndDigestFood (eatUntilFull(); digestFood(12)); digestFood(int
+	//	 n): foodLevel -= n.]
+	villagerFoodLevel int
+	// lastGossipDecayTime mirrors Villager.lastGossipDecayTime (the `lastGossipDecayTime:J` field, ctor 0):
+	// the gameTime of the last GossipContainer.decay(). Villager.tick() -> maybeDecayGossip() decays the
+	// gossips once the 24000-tick (one-day) window elapses. Zero for every non-villager.
+	//	[VERIFIED CFR Villager: lastGossipDecayTime:J (ctor 0); maybeDecayGossip (if ==0 seed=gameTime,return;
+	//	 if gameTime < lastGossipDecayTime+24000 return; gossips.decay(); lastGossipDecayTime=gameTime).]
+	lastGossipDecayTime int64
 	// --- WANDERING TRADER STATE (net.minecraft.world.entity.npc.wanderingtrader.WanderingTrader) -----
 	//
 	// Tick-owned, set/read ONLY for a WanderingTrader (typ == entity.WanderingTrader.ID). isWanderingTrader

@@ -269,3 +269,92 @@ func villagerHeroOfVillageAmplifier(p *tickPlayer) int {
 	}
 	return -1
 }
+
+// villagerBreedFoodThreshold is the Villager.canBreed food gate (bipush 12): a villager can breed only
+// when foodLevel + countFoodPointsInInventory() >= 12. Also the digestFood amount eatAndDigestFood spends.
+//
+//	[VERIFIED CFR Villager.canBreed: (foodLevel + countFoodPointsInInventory()) >= 12; eatAndDigestFood ->
+//	 digestFood(12).]
+const villagerBreedFoodThreshold = 12
+
+// villagerCountFoodPointsInInventory ports Villager.countFoodPointsInInventory(): the sum of FOOD_POINTS
+// over the villager's SimpleContainer inventory. The villager inventory subsystem is not built (there is
+// no getInventory() seam yet), so this is a CITED STUB == 0 — the exact value for a villager that carries
+// no food (the ctor state). It is structured as a call so it becomes a real inventory scan when the
+// villager container lands, with no change at the canBreed call site. CITE Villager.countFoodPointsInInventory.
+func villagerCountFoodPointsInInventory(_ *Entity) int { return 0 }
+
+// villagerCanBreed ports Villager.canBreed():
+//
+//	return (foodLevel + countFoodPointsInInventory()) >= 12 && !isSleeping() && getAge() == 0;
+//
+// getAge() == 0 (an ADULT off breeding cooldown, breedAge == 0) AND not sleeping AND enough food. isSleeping
+// is the mob sleep-pose seam (villagers do not enter the SLEEPING pose here yet — a bed-sleep is cite-
+// deferred REST work), so it reads the never-sleeping default (false), matching a villager that is awake.
+//
+//	[VERIFIED CFR Villager.canBreed: foodLevel+countFoodPointsInInventory()>=12 && !isSleeping()
+//	 && getAge()==0.]
+func villagerCanBreed(e *Entity) bool {
+	if e.villagerFoodLevel+villagerCountFoodPointsInInventory(e) < villagerBreedFoodThreshold {
+		return false
+	}
+	if villagerIsSleeping(e) {
+		return false
+	}
+	return e.breedAge == 0 // getAge() == 0
+}
+
+// villagerIsSleeping ports Villager.isSleeping() for the canBreed gate. The villager sleep-pose (REST
+// SleepInBed) is cite-deferred (the mob sleep-pose seam is not built), so a villager is never in the
+// SLEEPING pose here — this returns the awake default (false). CITE LivingEntity.isSleeping (villager
+// bed-sleep deferred with the REST SleepInBed behavior).
+func villagerIsSleeping(_ *Entity) bool { return false }
+
+// villagerEatAndDigestFood ports Villager.eatAndDigestFood(): eatUntilFull() then digestFood(12). eatUntilFull
+// tops foodLevel up from the villager inventory (the SimpleContainer scan) — deferred with the villager
+// inventory, so it is a no-op stub here (an un-fed villager has nothing to eat). digestFood(12) subtracts 12
+// from foodLevel. VillagerMakeLove.tick calls this on both parents at birth, spending the breeding food.
+//
+//	[VERIFIED CFR Villager.eatAndDigestFood: eatUntilFull(); digestFood(12). digestFood(int n): foodLevel -= n.
+//	 eatUntilFull reads getInventory() FOOD_POINTS (inventory subsystem deferred -> no-op).]
+func villagerEatAndDigestFood(e *Entity) {
+	// eatUntilFull(): scan the villager inventory for food and top foodLevel up. DEFERRED (no villager
+	// SimpleContainer seam) -> no-op, exactly as a villager with an empty inventory.
+	e.villagerFoodLevel -= villagerBreedFoodThreshold // digestFood(12): foodLevel -= 12
+}
+
+// villagerGossipDecayWindow is the Villager.maybeDecayGossip window (ldc2_w 24000L): the gossip container
+// decays once per this many ticks (one Minecraft day).
+//
+//	[VERIFIED CFR Villager.maybeDecayGossip: gameTime < lastGossipDecayTime + 24000L -> return.]
+const villagerGossipDecayWindow int64 = 24000
+
+// villagerMaybeDecayGossip ports Villager.maybeDecayGossip():
+//
+//	long gameTime = level().getGameTime();
+//	if (this.lastGossipDecayTime == 0L) { this.lastGossipDecayTime = gameTime; return; }
+//	if (gameTime < this.lastGossipDecayTime + 24000L) return;
+//	this.gossips.decay();
+//	this.lastGossipDecayTime = gameTime;
+//
+// The first call seeds lastGossipDecayTime (no decay); thereafter the whole container decays every 24000
+// ticks (GossipContainer.decay -> each EntityGossips.decay: each type -= decayPerDay, drop < 2). Called from
+// Villager.tick() every tick; villager-gated at the call site (villagerBrainTick). e.villagerGossips is nil
+// until first use (villagerEnsureGossips) — a nil container has nothing to decay, so the seed/window logic
+// still runs to stamp lastGossipDecayTime, matching the jar's decay() on an empty container (a no-op).
+//
+//	[VERIFIED CFR Villager.maybeDecayGossip this session (seed-on-zero; 24000L window; gossips.decay();
+//	 stamp lastGossipDecayTime).]
+func villagerMaybeDecayGossip(e *Entity, gameTime int64) {
+	if e.lastGossipDecayTime == 0 {
+		e.lastGossipDecayTime = gameTime
+		return
+	}
+	if gameTime < e.lastGossipDecayTime+villagerGossipDecayWindow {
+		return
+	}
+	if e.villagerGossips != nil {
+		e.villagerGossips.decay()
+	}
+	e.lastGossipDecayTime = gameTime
+}
