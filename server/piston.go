@@ -1,6 +1,8 @@
 package server
 
 import (
+	"math"
+
 	"github.com/imhinotori/sulfur/level/block"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
@@ -26,15 +28,19 @@ import (
 //   PistonMovingBlockEntity TICKS_TO_EXTEND=2 / tick (progress += 0.5) / finalTick
 //
 // SCOPE / DEFERRALS (each jar-cited):
-//   - The moving-piston ANIMATION interpolation (the client-side smooth slide, getProgress lerp,
-//     moveCollidedEntities / moveStuckEntities entity shove, slime bounce) is cited-SIMPLIFIED to a
-//     faithful 2-tick block-state completion: the movingPistonBE ticks progress 0->0.5->1.0 exactly as
-//     PistonMovingBlockEntity.tick, and on completion writes the same END STATE (block moved by 1, head
-//     placed/removed). The ENTITY-shove seam (moveCollidedEntities) is DEFERRED — pushing/dragging
-//     mobs/players is a heavy collision seam; the BLOCK move (the target) is 1:1. CITE:
+//   - The moving-piston ANIMATION interpolation (the client-side smooth slide, getProgress lerp) is
+//     cited-SIMPLIFIED to a faithful 2-tick block-state completion: the movingPistonBE ticks progress
+//     0->0.5->1.0 exactly as PistonMovingBlockEntity.tick, and on completion writes the same END STATE
+//     (block moved by 1, head placed/removed). The ENTITY-shove seam (moveCollidedEntities /
+//     moveStuckEntities / moveEntityByPiston) IS NOW PORTED (pistonMoveCollidedEntities et al. below): a
+//     player/mob/item in the swept push region is translated one block along the push axis over the
+//     2-tick animation. The only shove sub-deferral is the collision SHAPE (Sulfur has no per-state
+//     VoxelShape API, so the moved block is the full cube [0,1]^3 — exact for full-cube blocks + the
+//     piston_head arm pistons carry) and getPistonPushReaction (all entities treated NORMAL). CITE:
 //     PistonMovingBlockEntity.getProgress / moveCollidedEntities / moveStuckEntities.
-//   - Slime/honey adjacent-drag in the push RESOLVER is ported (addBranchingBlocks + isSticky). The
-//     slime bounce / honey stick ENTITY effects are separate and DEFERRED. CITE: PistonStructureResolver.
+//   - Slime/honey adjacent-drag in the push RESOLVER is ported (addBranchingBlocks + isSticky). The slime
+//     bounce (client bob) is a cosmetic DEFERRED; the slime sideways delta-seed + honey top-drag ENTITY
+//     effects ARE ported in pistonMoveCollidedEntities/pistonMoveStuckEntities. CITE: PistonStructureResolver.
 //   - The client blockEntity render packet for the moving_piston (getUpdateTag) is DEFERRED (cosmetic);
 //     the moving_piston BLOCK state is broadcast so the client shows the transient block. CITE:
 //     PistonMovingBlockEntity.getUpdateTag.
@@ -116,7 +122,8 @@ func (t *TickLoop) newMovingBlockEntity(pos pk.Position, movedState block.StateI
 //	if (progressO >= 1.0f) { removeBlockEntity; if (block is MOVING_PISTON) place the final movedState; }
 //	else { progress += 0.5f; if (progress >= 1.0f) progress = 1.0f; }
 //
-// The moveCollidedEntities/moveStuckEntities entity-shove is DEFERRED (see file header). On completion
+// The moveCollidedEntities/moveStuckEntities entity-shove runs each tick as progress advances (see the
+// f := be.progress + 0.5 seam below and pistonMoveCollidedEntities). On completion
 // the moving_piston block becomes the movedState (an air-source arm becomes air; a pushed block becomes
 // its moved state), then the surrounding graph is re-notified so redstone reacts to the moved block.
 // Tick-owned (TICK-05); called from tickWorld after the block/fluid drains (the tickFurnaces twin).
@@ -141,11 +148,428 @@ func (t *TickLoop) tickMovingPistons() {
 			t.movingPistonComplete(pos, be)
 			continue
 		}
-		be.progress += 0.5
+		// PistonMovingBlockEntity.tick (bytecode offsets 196-242): the NEW progress is computed as a
+		// LOCAL (f = progress + 0.5f), the entity shove runs against f WHILE be.progress still holds the
+		// OLD value (progressO) -- so moveCollidedEntities' `d0 = f - be.progress` == 0.5 -- and only
+		// AFTER the shove is f stored back into progress (then clamped to 1.0). CITE:
+		// PistonMovingBlockEntity.tick (progress+=0.5 -> moveCollidedEntities(f) -> moveStuckEntities(f)
+		// -> progress = f -> clamp).
+		f := be.progress + 0.5
+		t.pistonMoveCollidedEntities(pos, be, f)
+		t.pistonMoveStuckEntities(pos, be, f)
+		be.progress = f
 		if be.progress >= 1.0 {
 			be.progress = 1.0
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------------------------
+// moveCollidedEntities / moveStuckEntities (PistonMovingBlockEntity) -- the ENTITY shove
+// ---------------------------------------------------------------------------------------------
+//
+// This is the 1:1 port of PistonMovingBlockEntity.moveCollidedEntities / moveStuckEntities /
+// moveEntityByPiston / fixEntityWithinPistonBase from the unobfuscated 26.2 jar (decompiled this
+// session), the seam that shoves a player / mob / item out of a piston's swept push region. It runs
+// from tickMovingPistons at the exact point PistonMovingBlockEntity.tick advances progress, and it is
+// STRICTLY ADDITIVE: with NO entity in the swept box (getEntities returns empty) it does nothing, so a
+// piston with a clear path behaves byte-identically to before and the pig-oracle (a pig nowhere near a
+// piston) never enters this path.
+//
+// CITED DEFERRAL -- COLLISION SHAPE: vanilla builds the swept box from the moved block's
+// VoxelShape.getCollisionShape (and iterates its sub-AABBs). Sulfur has no per-state VoxelShape API,
+// so the moved block is approximated by the FULL-CUBE collision box [0,1]^3 (Shapes.block().bounds()),
+// which is exact for the full-cube blocks + the piston_head arm that pistons overwhelmingly carry. The
+// per-sub-AABB refinement loop (toAabbs) collapses to the single full-cube pass. CITE:
+// BlockState.getCollisionShape / VoxelShape.toAabbs.
+//
+// CITED DEFERRAL -- getPistonPushReaction: base Entity.getPistonPushReaction() returns PushReaction.NORMAL
+// (jar-verified); the few overrides (armor stand markers etc.) that return IGNORE are not modelled in
+// Sulfur yet, so every entity is treated as NORMAL. Structured to become a real per-entity read when the
+// push-reaction table lands. CITE: Entity.getPistonPushReaction.
+
+// pistonMovementDirection is PistonMovingBlockEntity.getMovementDirection(): extending ? direction :
+// direction.getOpposite(). It is the direction ENTITIES are shoved (a retract drags them the opposite
+// way from a matching extend's direction field). CITE: PistonMovingBlockEntity.getMovementDirection.
+func pistonMovementDirection(be *movingPistonBE) block.Direction {
+	if be.extending {
+		return be.direction
+	}
+	return dirOpposite(be.direction)
+}
+
+// pistonExtendedProgress is PistonMovingBlockEntity.getExtendedProgress(progress): extending ?
+// progress-1 : 1-progress. Used by moveByPositionAndProgress to position the moved block's box at its
+// CURRENT animated offset. CITE: PistonMovingBlockEntity.getExtendedProgress.
+func pistonExtendedProgress(be *movingPistonBE, progress float32) float64 {
+	if be.extending {
+		return float64(progress) - 1.0
+	}
+	return 1.0 - float64(progress)
+}
+
+// pistonAABB is a plain min/max box mirroring net.minecraft.world.phys.AABB for the shove math. The
+// full-cube moved box starts as {0,0,0, 1,1,1} (Shapes.block().bounds()). CITE: AABB.
+type pistonAABB struct {
+	minX, minY, minZ, maxX, maxY, maxZ float64
+}
+
+// pistonMoveByPositionAndProgress is PistonMovingBlockEntity.moveByPositionAndProgress(pos, box, be):
+// translate the box by pos + getExtendedProgress(be.progress) * directionStep. It uses be.progress
+// (the OLD/progressO value at call time), NOT the new f. CITE: PistonMovingBlockEntity.moveByPositionAndProgress.
+func pistonMoveByPositionAndProgress(pos pk.Position, box pistonAABB, be *movingPistonBE) pistonAABB {
+	d := pistonExtendedProgress(be, be.progress)
+	sx, sy, sz := dirVec(be.direction)
+	ox := float64(pos.X) + d*float64(sx)
+	oy := float64(pos.Y) + d*float64(sy)
+	oz := float64(pos.Z) + d*float64(sz)
+	return pistonAABB{
+		minX: box.minX + ox, minY: box.minY + oy, minZ: box.minZ + oz,
+		maxX: box.maxX + ox, maxY: box.maxY + oy, maxZ: box.maxZ + oz,
+	}
+}
+
+// pistonGetMovementArea is PistonMath.getMovementArea(box, direction, delta): the swept extension of
+// box by `delta` blocks along `direction` (the leading face, extended by delta in the push sense). CITE:
+// PistonMath.getMovementArea.
+func pistonGetMovementArea(box pistonAABB, direction block.Direction, delta float64) pistonAABB {
+	step := float64(dirAxisStep(direction))
+	d := delta * step
+	dMin := math.Min(d, 0.0)
+	dMax := math.Max(d, 0.0)
+	switch direction {
+	case block.West:
+		return pistonAABB{box.minX + dMin, box.minY, box.minZ, box.minX + dMax, box.maxY, box.maxZ}
+	case block.East:
+		return pistonAABB{box.maxX + dMin, box.minY, box.minZ, box.maxX + dMax, box.maxY, box.maxZ}
+	case block.Down:
+		return pistonAABB{box.minX, box.minY + dMin, box.minZ, box.maxX, box.minY + dMax, box.maxZ}
+	case block.Up:
+		return pistonAABB{box.minX, box.maxY + dMin, box.minZ, box.maxX, box.maxY + dMax, box.maxZ}
+	case block.North:
+		return pistonAABB{box.minX, box.minY, box.minZ + dMin, box.maxX, box.maxY, box.minZ + dMax}
+	case block.South:
+		return pistonAABB{box.minX, box.minY, box.maxZ + dMin, box.maxX, box.maxY, box.maxZ + dMax}
+	default:
+		return box
+	}
+}
+
+// pistonMinmax is AABB.minmax(other): the union that spans both boxes (min of mins, max of maxes). CITE:
+// AABB.minmax.
+func pistonMinmax(a, b pistonAABB) pistonAABB {
+	return pistonAABB{
+		minX: math.Min(a.minX, b.minX), minY: math.Min(a.minY, b.minY), minZ: math.Min(a.minZ, b.minZ),
+		maxX: math.Max(a.maxX, b.maxX), maxY: math.Max(a.maxY, b.maxY), maxZ: math.Max(a.maxZ, b.maxZ),
+	}
+}
+
+// pistonAABBIntersects is AABB.intersects(other): the two boxes overlap on all three axes (strict on the
+// touching face, matching AABB.intersects's `<`/`>`). CITE: AABB.intersects.
+func pistonAABBIntersects(a, b pistonAABB) bool {
+	return a.minX < b.maxX && a.maxX > b.minX &&
+		a.minY < b.maxY && a.maxY > b.minY &&
+		a.minZ < b.maxZ && a.maxZ > b.minZ
+}
+
+// pistonGetMovement is PistonMovingBlockEntity.getMovement(area, direction, entityBox): the signed
+// overlap distance to push the entity out of the movement area along `direction`. CITE:
+// PistonMovingBlockEntity.getMovement.
+func pistonGetMovement(area pistonAABB, direction block.Direction, entityBox pistonAABB) float64 {
+	switch direction {
+	case block.East:
+		return area.maxX - entityBox.minX
+	case block.West:
+		return entityBox.maxX - area.minX
+	case block.Up:
+		return area.maxY - entityBox.minY
+	case block.Down:
+		return entityBox.maxY - area.minY
+	case block.South:
+		return area.maxZ - entityBox.minZ
+	case block.North:
+		return entityBox.maxZ - area.minZ
+	default: // vanilla default arm falls to the Y-up case.
+		return area.maxY - entityBox.minY
+	}
+}
+
+// dirAxisStep is Direction.getAxisDirection().getStep(): +1 for UP/SOUTH/EAST (positive axis), -1 for
+// DOWN/NORTH/WEST (negative axis). CITE: Direction.AxisDirection.getStep.
+func dirAxisStep(d block.Direction) int {
+	switch d {
+	case block.Up, block.South, block.East:
+		return 1
+	case block.Down, block.North, block.West:
+		return -1
+	default:
+		return 1
+	}
+}
+
+// pistonEntityBox is the entity's world-space AABB as a pistonAABB (feet-anchored, half-width on X/Z).
+// It reads the SAME width/height Entity.AABB() reads.
+func pistonEntityBox(x, y, z, width, height float64) pistonAABB {
+	hw := width / 2
+	return pistonAABB{minX: x - hw, minY: y, minZ: z - hw, maxX: x + hw, maxY: y + height, maxZ: z + hw}
+}
+
+// pistonMoveCollidedEntities is PistonMovingBlockEntity.moveCollidedEntities(level, pos, progress, be):
+//
+//	Direction movementDirection = be.getMovementDirection();
+//	double d0 = progress - be.progress;                                 // == 0.5 (progress is the new f)
+//	VoxelShape shape = be.getCollisionRelatedBlockState().getCollisionShape(...); if (shape.isEmpty()) return;
+//	AABB movedBox = moveByPositionAndProgress(pos, shape.bounds(), be);
+//	List<Entity> ents = level.getEntities(null, getMovementArea(movedBox, movementDirection, d0).minmax(movedBox));
+//	if (ents.isEmpty()) return;
+//	boolean slime = be.movedState.is(SLIME_BLOCK);
+//	for (Entity e : ents) {
+//	    if (e.getPistonPushReaction() == IGNORE) continue;
+//	    if (slime) { if (e is ServerPlayer) continue; else setDeltaMovement(step in axis); }  // slime drag
+//	    double d1 = 0.0;
+//	    for (AABB sub : shape.toAabbs()) {
+//	        AABB area = getMovementArea(moveByPositionAndProgress(pos, sub, be), movementDirection, d0);
+//	        AABB ebox = e.getBoundingBox();
+//	        if (!area.intersects(ebox)) continue;
+//	        d1 = max(d1, getMovement(area, movementDirection, ebox));
+//	        if (d1 >= d0) break;
+//	    }
+//	    if (d1 <= 0.0) continue;
+//	    d1 = min(d1, d0) + 0.01;
+//	    moveEntityByPiston(movementDirection, e, d1, movementDirection);
+//	    if (!be.extending && be.isSourcePiston) fixEntityWithinPistonBase(pos, e, movementDirection, d0);
+//	}
+//
+// Sulfur uses the single full-cube box for both `shape.bounds()` and the toAabbs iteration (the cited
+// collision-shape deferral), so the inner loop runs exactly once. CITE: PistonMovingBlockEntity.moveCollidedEntities.
+func (t *TickLoop) pistonMoveCollidedEntities(pos pk.Position, be *movingPistonBE, progress float32) {
+	movementDirection := pistonMovementDirection(be)
+	d0 := float64(progress) - float64(be.progress) // 0.5
+	// getCollisionRelatedBlockState().getCollisionShape: the source head arm reports the piston_head
+	// shape; every other carried block reports its own. All are approximated by the full cube; an AIR
+	// moved-state (a retract pulling nothing) has an EMPTY collision shape -> return (no shove). CITE:
+	// getCollisionRelatedBlockState / VoxelShape.isEmpty.
+	if block.IsAir(be.movedState) {
+		return
+	}
+	fullCube := pistonAABB{0, 0, 0, 1, 1, 1}
+	movedBox := pistonMoveByPositionAndProgress(pos, fullCube, be)
+	sweep := pistonMinmax(pistonGetMovementArea(movedBox, movementDirection, d0), movedBox)
+
+	ents := t.pistonEntitiesInBox(sweep)
+	if len(ents) == 0 {
+		return // STRICTLY ADDITIVE: a clear path shoves nothing (getEntities empty -> return).
+	}
+
+	slime := pistonIsSlimeBlock(be.movedState)
+	sx, sy, sz := dirVec(movementDirection)
+	for _, ent := range ents {
+		// getPistonPushReaction == IGNORE -> skip. Deferred: all Sulfur entities are NORMAL.
+		if slime {
+			if ent.isPlayer() {
+				continue // ServerPlayer is NOT drag-accelerated by a slime block.
+			}
+			// setDeltaMovement to the single push-axis step (the slime sideways drag seed). Vanilla
+			// switches on movementDirection.getAxis() and overwrites ONLY that axis of the delta with the
+			// direction step, leaving the other two axes untouched. CITE: moveCollidedEntities slime branch.
+			vx, vy, vz := ent.vel()
+			switch movementDirection {
+			case block.West, block.East:
+				ent.setVel(float64(sx), vy, vz)
+			case block.Down, block.Up:
+				ent.setVel(vx, float64(sy), vz)
+			case block.North, block.South:
+				ent.setVel(vx, vy, float64(sz))
+			}
+		}
+		area := pistonGetMovementArea(pistonMoveByPositionAndProgress(pos, fullCube, be), movementDirection, d0)
+		ebox := ent.box()
+		if !pistonAABBIntersects(area, ebox) {
+			continue
+		}
+		d1 := math.Max(0.0, pistonGetMovement(area, movementDirection, ebox))
+		if d1 <= 0.0 {
+			continue
+		}
+		d1 = math.Min(d1, d0) + 0.01
+		t.pistonMoveEntityBy(ent, movementDirection, d1)
+	}
+}
+
+// pistonIsSlimeBlock is BlockState.is(Blocks.SLIME_BLOCK) for the moveCollidedEntities slime-drag gate.
+// CITE: PistonMovingBlockEntity.moveCollidedEntities (be.movedState.is(SLIME_BLOCK)).
+func pistonIsSlimeBlock(state block.StateID) bool {
+	return block.StateList[state].ID() == "minecraft:slime_block"
+}
+
+// pistonMoveStuckEntities is PistonMovingBlockEntity.moveStuckEntities(level, pos, progress, be): the
+// HONEY-block sticky-drag that carries entities standing ON TOP of a horizontally-moving honey block
+// along with it.
+//
+//	if (!be.isStickyForEntities()) return;                                  // movedState.is(HONEY_BLOCK)
+//	Direction movementDirection = be.getMovementDirection();
+//	if (!movementDirection.getAxis().isHorizontal()) return;
+//	double top = be.movedState.getCollisionShape(...).max(Axis.Y);
+//	AABB dragBox = moveByPositionAndProgress(pos, new AABB(0, top, 0, 1, 1.5000010000000001, 1), be);
+//	double d0 = progress - be.progress;                                     // 0.5
+//	for (Entity e : level.getEntities(null, dragBox, matchesStickyCritera(dragBox, pos)))
+//	    moveEntityByPiston(movementDirection, e, d0, movementDirection);
+//
+// CITE: PistonMovingBlockEntity.moveStuckEntities / isStickyForEntities / matchesStickyCritera.
+func (t *TickLoop) pistonMoveStuckEntities(pos pk.Position, be *movingPistonBE, progress float32) {
+	if !block.IsHoneyBlock(be.movedState) {
+		return // isStickyForEntities(): only a HONEY_BLOCK drags entities standing on it.
+	}
+	movementDirection := pistonMovementDirection(be)
+	if !(movementDirection == block.North || movementDirection == block.South ||
+		movementDirection == block.West || movementDirection == block.East) {
+		return // getAxis().isHorizontal(): vertical honey does not top-drag.
+	}
+	// top = collisionShape.max(Y) == 1.0 for the full cube (cited shape deferral).
+	top := 1.0
+	dragBox := pistonMoveByPositionAndProgress(pos, pistonAABB{0, top, 0, 1, 1.5000010000000001, 1}, be)
+	d0 := float64(progress) - float64(be.progress) // 0.5
+	for _, ent := range t.pistonEntitiesInBox(dragBox) {
+		if !pistonMatchesStickyCriteria(dragBox, ent) {
+			continue
+		}
+		t.pistonMoveEntityBy(ent, movementDirection, d0)
+	}
+}
+
+// pistonMatchesStickyCritera is PistonMovingBlockEntity.matchesStickyCritera(box, entity, pos):
+//
+//	return e.getPistonPushReaction() == NORMAL && e.onGround()
+//	    && (e.isSupportedBy(pos) || (e.getX() >= box.minX && e.getX() <= box.maxX
+//	                                && e.getZ() >= box.minZ && e.getZ() <= box.maxZ));
+//
+// The isSupportedBy(pos) branch (Sulfur has no supporting-pos query) is DEFERRED to the AABB-center
+// containment branch, which is the same predicate vanilla falls through to for an entity standing on
+// the honey block. All entities are NORMAL (push-reaction deferral). CITE:
+// PistonMovingBlockEntity.matchesStickyCritera.
+func pistonMatchesStickyCriteria(box pistonAABB, ent pistonEntity) bool {
+	if !ent.onGround() {
+		return false
+	}
+	x, _, z := ent.pos()
+	return x >= box.minX && x <= box.maxX && z >= box.minZ && z <= box.maxZ
+}
+
+// pistonMoveEntityBy is PistonMovingBlockEntity.moveEntityByPiston(pushDirection, entity, movement,
+// movementDirection): translate the entity by `movement` along the push axis via a MoverType.PISTON
+// move (which vanilla runs under a NOCLIP thread-local so the entity slides THROUGH the moving block).
+// Sulfur has no NOCLIP-aware collision pass, so the translation is applied directly to the entity
+// position (the observable "shoved by one block" result) -- a cited simplification of the noclip move.
+// CITE: PistonMovingBlockEntity.moveEntityByPiston (entity.move(MoverType.PISTON, dir.step()*movement)).
+func (t *TickLoop) pistonMoveEntityBy(ent pistonEntity, direction block.Direction, movement float64) {
+	sx, sy, sz := dirVec(direction)
+	ent.translate(t, float64(sx)*movement, float64(sy)*movement, float64(sz)*movement)
+}
+
+// ---------------------------------------------------------------------------------------------
+// pistonEntity -- the uniform push handle over BOTH t.players and the entity store
+// ---------------------------------------------------------------------------------------------
+//
+// Vanilla's Level.getEntities returns players AND non-player entities uniformly; Sulfur keeps players in
+// t.players and mobs/items in the region entity store, so the shove adapts both behind this small
+// interface. A player translate is an authoritative resync (ClientboundPlayerPosition, exactly the
+// teleportPlayer contract); a non-player entity translate is a store move() the tracker broadcasts.
+
+type pistonEntity interface {
+	pos() (x, y, z float64)
+	box() pistonAABB
+	onGround() bool
+	isPlayer() bool
+	vel() (vx, vy, vz float64)
+	setVel(vx, vy, vz float64)
+	translate(t *TickLoop, dx, dy, dz float64)
+}
+
+// pistonEntitiesInBox is the Level.getEntities(null, box) analogue: every player (t.players) and every
+// stored entity whose world AABB intersects `box`. It queries the entity store's per-column buckets
+// around the box (never a full scan) and the global player list. CITE: Level.getEntities(Entity, AABB).
+func (t *TickLoop) pistonEntitiesInBox(box pistonAABB) []pistonEntity {
+	var out []pistonEntity
+	// Players (t.players): the global player list; a player's box is playerWidth x playerHeight.
+	for _, p := range t.players {
+		if p == nil {
+			continue
+		}
+		pb := pistonEntityBox(p.x, p.y, p.z, playerWidth, playerHeight)
+		if pistonAABBIntersects(box, pb) {
+			out = append(out, pistonPlayerHandle{p})
+		}
+	}
+	// Stored entities (mobs/items): query the buckets that can hold an entity overlapping the box. The
+	// bucket radius spans the box's XZ column extent (in chunks) plus 1 for entities straddling a border.
+	if store := t.cur().entities; store != nil {
+		cx := (box.minX + box.maxX) / 2
+		cz := (box.minZ + box.maxZ) / 2
+		spanX := (box.maxX - box.minX) / 2
+		spanZ := (box.maxZ - box.minZ) / 2
+		span := spanX
+		if spanZ > span {
+			span = spanZ
+		}
+		rangeChunks := int(span/16.0) + 1
+		for _, e := range store.near(cx, cz, rangeChunks) {
+			if e == nil {
+				continue
+			}
+			eb := pistonEntityBox(e.x, e.y, e.z, e.width, e.height)
+			if pistonAABBIntersects(box, eb) {
+				out = append(out, pistonEntityHandle{e})
+			}
+		}
+	}
+	return out
+}
+
+// pistonPlayerHandle adapts a *tickPlayer to pistonEntity. isPlayer is true (the slime-drag ServerPlayer
+// skip).
+type pistonPlayerHandle struct{ p *tickPlayer }
+
+func (h pistonPlayerHandle) pos() (float64, float64, float64) { return h.p.x, h.p.y, h.p.z }
+func (h pistonPlayerHandle) box() pistonAABB {
+	return pistonEntityBox(h.p.x, h.p.y, h.p.z, playerWidth, playerHeight)
+}
+func (h pistonPlayerHandle) onGround() bool { return h.p.onGround }
+func (h pistonPlayerHandle) isPlayer() bool { return true }
+
+// vel/setVel are unused for players (the slime-drag branch skips ServerPlayer before touching delta),
+// so they are inert -- Sulfur has no tick-owned server-side player velocity to overwrite here.
+func (h pistonPlayerHandle) vel() (float64, float64, float64) { return 0, 0, 0 }
+func (h pistonPlayerHandle) setVel(vx, vy, vz float64)        {}
+func (h pistonPlayerHandle) translate(t *TickLoop, dx, dy, dz float64) {
+	// A player IS translated (position set), not merely nudged. When the player has a live connection the
+	// move is an authoritative resync via teleportPlayer (ClientboundPlayerPosition, the same contract /tp
+	// uses) so the client snaps to the piston-pushed position; teleportPlayer early-returns on a nil
+	// client (a headless/test player), so the server-side position is set directly first to keep the
+	// tick-owned position authoritative in every case.
+	nx, ny, nz := h.p.x+dx, h.p.y+dy, h.p.z+dz
+	if h.p.client != nil {
+		t.teleportPlayer(h.p, nx, ny, nz)
+		return
+	}
+	h.p.x, h.p.y, h.p.z = nx, ny, nz
+	h.p.prevX, h.p.prevY, h.p.prevZ = nx, ny, nz
+}
+
+// pistonEntityHandle adapts a stored *Entity to pistonEntity. isPlayer is false.
+type pistonEntityHandle struct{ e *Entity }
+
+func (h pistonEntityHandle) pos() (float64, float64, float64) { return h.e.x, h.e.y, h.e.z }
+func (h pistonEntityHandle) box() pistonAABB {
+	return pistonEntityBox(h.e.x, h.e.y, h.e.z, h.e.width, h.e.height)
+}
+func (h pistonEntityHandle) onGround() bool                   { return h.e.onGround }
+func (h pistonEntityHandle) isPlayer() bool                   { return false }
+func (h pistonEntityHandle) vel() (float64, float64, float64) { return h.e.vx, h.e.vy, h.e.vz }
+func (h pistonEntityHandle) setVel(vx, vy, vz float64)        { h.e.vx, h.e.vy, h.e.vz = vx, vy, vz }
+func (h pistonEntityHandle) translate(t *TickLoop, dx, dy, dz float64) {
+	// A store move() re-buckets and updates position; the entity tracker broadcasts the new position on
+	// its next movement pass (the mob/item IS translated by the piston).
+	t.cur().entities.move(h.e, h.e.x+dx, h.e.y+dy, h.e.z+dz)
 }
 
 // movingPistonComplete is the progressO>=1.0 branch of the STATIC PistonMovingBlockEntity.tick: remove
