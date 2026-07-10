@@ -55,8 +55,15 @@ const (
 	hoglinBabyAttackDamage    = 0.5
 	hoglinConversionTime      = 300
 	hoglinAttackAnimTicks     = 10
-	hoglinMeleeCooldown       = meleeAttackResetCooldown
+	hoglinMeleeInterval       = 40 // MeleeAttack.create(40) adult -- ATTACK_INTERVAL (FIGHT activity)
+	hoglinBabyMeleeInterval   = 15 // MeleeAttack.create(15) baby -- BABY_ATTACK_INTERVAL (FIGHT activity)
 	hoglinBabySpawnChance     = 0.2
+	hoglinRepellentRangeH     = 8   // HoglinSpecificSensor.findNearestRepellent horizontal (BlockPos.findClosestMatch xzRange)
+	hoglinRepellentRangeV     = 4   // HoglinSpecificSensor.findNearestRepellent vertical (yRange)
+	hoglinRepellentPacify     = 200 // BecomePassiveIfMemoryPresent(NEAREST_REPELLENT, 200) -- REPELLENT_PACIFY_TIME
+	hoglinFleeSpeedRepellent  = 1.0 // SetWalkTargetAwayFrom.pos(NEAREST_REPELLENT, 1.0f, 8, true) speedModifier
+	hoglinAvoidSpeed          = 1.3 // SetWalkTargetAwayFrom.entity(AVOID_TARGET, 1.3f, 15, false) speedModifier -- SPEED_MULTIPLIER_WHEN_RETREATING
+	hoglinAvoidPiglinSpeed    = 0.4 // SetWalkTargetAwayFrom.entity(NEAREST_VISIBLE_ADULT_PIGLIN, 0.4f, 8, false) (IDLE) speedModifier
 )
 
 // spawnHoglin creates a Hoglin at (x,y,z) with the jar attributes and adds it to the owner region store.
@@ -128,6 +135,13 @@ func (t *TickLoop) hoglinAcquireNearestPlayer(e *Entity) {
 	if e.ai == nil {
 		return
 	}
+	// HoglinAi.findNearestValidAttackTarget: return Optional.empty() if isPacified() OR isBreeding().
+	// A pacified (repellent-passive) or breeding hoglin drops ANY attack target and acquires none.
+	// Cite HoglinAi.findNearestValidAttackTarget + isPacified + isBreeding.
+	if t.hoglinIsPacified(e) || t.hoglinIsBreeding(e) {
+		e.ai.attackTargetID = 0
+		return
+	}
 	followRange := e.getAttributeValue(attribute.FollowRange) // 16.0
 	rangeSqr := followRange * followRange
 	if e.ai.attackTargetID != 0 {
@@ -174,7 +188,8 @@ func (t *TickLoop) hoglinHurtAndThrowTarget(e *Entity, target *tickPlayer) {
 	var dmg float32
 	if !e.isBaby() && int(f) > 0 {
 		// f2 = f/2.0 + nextInt((int)f): the adult damage roll (a random bonus up to the base).
-		dmg = f/2.0 + float32(mobRandom(e).nextInt(int(f)))
+		// RNG is attacker.level().getRandom() -- the region levelRandom (Level.random), NOT the mob stream.
+		dmg = f/2.0 + float32(t.hoglinLevelRandom(e).NextIntN(int32(f)))
 	} else {
 		dmg = f // baby (or f<=0): the flat value
 	}
@@ -213,11 +228,13 @@ func (t *TickLoop) hoglinThrowTarget(e *Entity, target *tickPlayer) {
 	}
 	dx := target.x - e.x // target.getX() - attacker.getX()
 	dz := target.z - e.z // target.getZ() - attacker.getZ()
-	rng := mobRandom(e)
+	// RNG is attacker.level().getRandom() -- the region levelRandom (Level.random), NOT the mob stream.
+	// Draw ORDER is EXACT: nextInt(21), then nextFloat() (horizontal), then nextFloat() (vertical).
+	rng := t.hoglinLevelRandom(e)
 	// f13 = nextInt(21) - 10 (the yRot angle, in RADIANS, passed straight to Vec3.yRot(float)).
-	yRotRad := float32(rng.nextInt(21) - 10)
+	yRotRad := float32(rng.NextIntN(21) - 10)
 	// d14 = delta * (nextFloat() * 0.5 + 0.2): the horizontal scale.
-	horiz := delta * float64(rng.nextFloat()*0.5+0.2)
+	horiz := delta * float64(rng.NextFloat()*0.5+0.2)
 	// Vec3(dx, 0, dz).normalize().scale(horiz).yRot(f13):
 	nx, ny, nz := normalizeVec3(dx, 0.0, dz)
 	sx, _, sz := nx*horiz, ny*horiz, nz*horiz
@@ -226,7 +243,7 @@ func (t *TickLoop) hoglinThrowTarget(e *Entity, target *tickPlayer) {
 	hx := sx*cos + sz*sin // Vec3.yRot: x' = x*cos + z*sin
 	hz := sz*cos - sx*sin // Vec3.yRot: z' = z*cos - x*sin
 	// d17 = delta * nextFloat() * 0.5: the vertical (knock-up) component.
-	vy := delta * float64(rng.nextFloat()) * 0.5
+	vy := delta * float64(rng.NextFloat()) * 0.5
 	// target.push(hx, vy, hz): ADD to the player velocity (LivingEntity.push == addDeltaMovement), then
 	// hurtMarked = true (send SetEntityMotion so the client applies the impulse).
 	if target.playerEntity != nil {
@@ -296,12 +313,49 @@ func (t *TickLoop) hoglinAiStep(e *Entity) {
 	if e.hoglinAttackAnimTicks > 0 {
 		e.hoglinAttackAnimTicks-- // Hoglin.aiStep: if(attackAnimationRemainingTicks>0) --
 	}
+	// Brain.tick order: SENSORS (HoglinSpecificSensor -> NEAREST_REPELLENT) run first, then the CORE/IDLE/
+	// FIGHT/AVOID activities. The repellent sensor + BecomePassiveIfMemoryPresent(NEAREST_REPELLENT, 200)
+	// arm/decay PACIFIED; the AVOID activity expiry counts down. Cite HoglinAi + HoglinSpecificSensor.
+	t.hoglinRepellentSensor(e) // find repellent within (8,4); present -> arm PACIFIED 200t
+	// IDLE piglin-avoid: piglinsOutnumberHoglins -> SetWalkTargetAwayFrom NEAREST_VISIBLE_ADULT_PIGLIN
+	// (the onHitTarget setAvoidTarget path too). An out-numbered adult hoglin sets an AVOID_TARGET.
+	t.hoglinPiglinAvoidCheck(e)
+	// PACIFIED expiry: BecomePassiveIfMemoryPresent re-arms 200 while a repellent is present; else it decays.
+	if e.hoglinPacifiedTicks > 0 {
+		e.hoglinPacifiedTicks--
+	}
+	// AVOID_TARGET expiry (RETREAT_DURATION sample): count down; EraseMemoryIf clears it when it lapses.
+	if e.hoglinAvoidTicks > 0 {
+		e.hoglinAvoidTicks--
+		if e.hoglinAvoidTicks == 0 {
+			e.hoglinAvoidTargetID = 0
+		}
+	}
+	// AVOID activity (highest non-fight priority when active): flee the avoid target at 1.3 speed. While
+	// avoiding, the hoglin acquires NO attack target (the brain runs AVOID over FIGHT). Cite HoglinAi
+	// initRetreatActivity (SetWalkTargetAwayFrom.entity(AVOID_TARGET, 1.3f, 15, false)).
+	if e.hoglinAvoidTargetID != 0 {
+		e.ai.attackTargetID = 0
+		t.hoglinFleeAvoidTarget(e)
+		t.hoglinConversionTick(e)
+		return
+	}
+	// PACIFIED / near-repellent -> flee the repellent at 1.0 speed and acquire no target. Cite HoglinAi
+	// initIdleActivity (SetWalkTargetAwayFrom.pos(NEAREST_REPELLENT, 1.0f, 8, true)) + isPacified.
+	if t.hoglinIsPacified(e) {
+		e.ai.attackTargetID = 0
+	}
 	t.hoglinAcquireNearestPlayer(e)
+	// MeleeAttack.create(40) adult / create(15) baby: the ATTACK_COOLING_DOWN interval between swings.
+	interval := hoglinMeleeInterval
+	if e.isBaby() {
+		interval = hoglinBabyMeleeInterval
+	}
 	if target := t.hoglinTarget(e); target != nil {
 		if e.meleeCooldown > 0 {
 			e.meleeCooldown--
 		} else if isWithinMeleeAttackRange(e, target) && t.sensingHasLineOfSight(e, target) {
-			e.meleeCooldown = hoglinMeleeCooldown
+			e.meleeCooldown = interval
 			t.hoglinDoHurtTarget(e, target)
 		}
 	} else if e.meleeCooldown > 0 {

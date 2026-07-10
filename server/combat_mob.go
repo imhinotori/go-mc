@@ -275,6 +275,17 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 		t.silverfishNotifyHurt(e, src)
 	}
 
+	// HOGLIN (GAP): the HoglinAi.wasHurtBy reaction -- Hoglin.hurtServer calls HoglinAi.wasHurtBy on a
+	// landed living-attacker hit: erase PACIFIED/BREED_TARGET, then a BABY retreats (setAvoidTarget) and
+	// an ADULT maybeRetaliate (target the attacker unless it is a piglin-while-avoiding / another hoglin /
+	// much farther than the current target). A per-type post-hurt hook (gated on typ == entity.Hoglin.ID)
+	// run AFTER the shared hit lands, the sibling of the enderman/silverfish hooks. The AVOID_TARGET
+	// RETREAT_DURATION sample draws on the region levelRandom -- hoglin-gated (zero cost / zero draws for
+	// every non-hoglin, so the pig oracle stream is untouched). Cite Hoglin.hurtServer + HoglinAi.wasHurtBy.
+	if e.typ == entity.Hoglin.ID {
+		t.hoglinWasHurtBy(e, src.attacker)
+	}
+
 	// SKILLS-01 (mob_skills.go): the declared-skill "damaged" trigger — the MythicMobs ~onDamaged
 	// analogue. Fires AFTER the shared hit fully landed (the per-type post-hurt hooks above are its
 	// siblings), SURVIVOR only (a lethal hit routes the "death" trigger through dieEntity instead).

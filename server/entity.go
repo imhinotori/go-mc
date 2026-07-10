@@ -646,6 +646,18 @@ type Entity struct {
 	// conversion runs everywhere EXCEPT dimNether. Set at spawn (spawnHoglin) from the spawn context; the
 	// entity store is single-dimension in v1, so this is how a hoglin knows it is (not) in the nether.
 	hoglinDimension int
+	// hoglinPacifiedTicks / hoglinBreedTarget / hoglinAvoidTicks / hoglinAvoidTargetID are the bounded
+	// stand-ins for the HoglinAi brain memories the target/repellent/piglin-avoid logic reads: PACIFIED
+	// (an expiry countdown seeded 200t by BecomePassiveIfMemoryPresent when NEAREST_REPELLENT is present),
+	// BREED_TARGET (whether the hoglin is currently breeding), and AVOID_TARGET (the retreat target id +
+	// its expiry, seeded RETREAT_DURATION == rangeOfSeconds(5,20) sampled). While pacified OR breeding the
+	// hoglin acquires NO attack target (HoglinAi.findNearestValidAttackTarget); while avoiding it flees the
+	// avoid target at 1.3 speed. Zero for every other entity. Cite HoglinAi (PACIFIED / BREED_TARGET /
+	// AVOID_TARGET, REPELLENT_PACIFY_TIME 200, RETREAT_DURATION).
+	hoglinPacifiedTicks int
+	hoglinBreedTarget   bool
+	hoglinAvoidTicks    int
+	hoglinAvoidTargetID int32
 	// --- ZOMBIE/SKELETON VARIANTS (Drowned/Stray/Bogged/ZombieVillager) ------------------------------
 	//
 	// Tick-owned plain values, set/read ONLY for their own type. isDrowned/isStray/isBogged mark the
