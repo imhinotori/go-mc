@@ -81,6 +81,18 @@ func (t *TickLoop) changeDimension(p *tickPlayer, targetDim int) {
 		tx, tz = endSpawnX, endSpawnZ
 	}
 
+	// END return (the_end -> overworld): EndPortalBlock.getPortalDestination's `flag6` (dimension==END)
+	// branch resolves the destination to `respawnData.dimension()` at `respawnData.pos()` -- the player's
+	// respawn (bed) position, or the world-spawn point when no bed is set -- NOT the carried End coords.
+	// The overworld<->End pair has NO coordinate scale (scaledDimensionPos returns the position unchanged),
+	// so without this the returning player would land at the End's (100.5, _, 0.5) column in the overworld.
+	// Route X/Z to the respawn/world-spawn horizontal position, mirroring vanilla (the Y is resolved to the
+	// same spawn in changeDimensionTargetY step 3). CITE: EndPortalBlock.getPortalDestination (flag6 branch:
+	// respawnData.pos()).
+	if fromDim == dimEnd && targetDim == dimOverworld && t.hasSpawnPoint {
+		tx, tz = t.spawnPoint.X, t.spawnPoint.Z
+	}
+
 	// (1) Respawn into the target dimension's spawn-info. KEEP_ALL_DATA(3): a dimension change keeps
 	// the player's attributes/inventory, only rebuilding the level.
 	p.client.Send(changeDimensionRespawnPacket(targetDim))

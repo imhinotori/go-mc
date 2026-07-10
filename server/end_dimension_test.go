@@ -204,4 +204,12 @@ func TestEndReturnToOverworld(t *testing.T) {
 	if p.y != loop.spawnPoint.Y {
 		t.Fatalf("return Y = %.1f, want world spawn Y %.1f", p.y, loop.spawnPoint.Y)
 	}
+	// The End->overworld return routes X/Z to the respawn/world-spawn horizontal position
+	// (EndPortalBlock.getPortalDestination flag6 branch: respawnData.pos()), NOT the carried End
+	// coords (endSpawnX/endSpawnZ ~= 100.5/0.5). Without the route the player would surface at the
+	// End's column in the overworld.
+	if p.x != loop.spawnPoint.X || p.z != loop.spawnPoint.Z {
+		t.Fatalf("return X/Z = (%.1f,%.1f), want world spawn (%.1f,%.1f) [not the carried End coords %.1f/%.1f]",
+			p.x, p.z, loop.spawnPoint.X, loop.spawnPoint.Z, endSpawnX, endSpawnZ)
+	}
 }
