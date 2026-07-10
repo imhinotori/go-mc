@@ -501,6 +501,27 @@ type Entity struct {
 	ghastWantedX, ghastWantedY, ghastWantedZ float64
 	ghastHasWanted                           bool
 	ghastFloatDuration                       int32
+	// ghastServerStillTimeout mirrors HappyGhast.serverStillTimeout: a countdown (max 10) armed to 10
+	// whenever a non-riding player stands on top of the ghast (scanPlayerAboveGhast). While it is > 0 the
+	// ghast is "on still timeout" (isOnStillTimeout): it holds position (requiresPrecisePosition) and the
+	// harness ride is NOT steerable. ghastStaysStill mirrors the STAYS_STILL synched entity data
+	// (syncStayStillFlag: STAYS_STILL := serverStillTimeout > 0) -- the client-visible frozen flag. Both
+	// are HappyGhast-only; zero for every other entity. Cite HappyGhast.tick / setServerStillTimeout /
+	// syncStayStillFlag / isOnStillTimeout / scanPlayerAboveGhast.
+	ghastServerStillTimeout int32
+	ghastStaysStill         bool
+	// ghastTickCount is the HappyGhast-relevant slice of Entity.tickCount (the free-running per-entity
+	// counter Entity.tick increments each server tick). It gates the still-timeout decrement's on-load
+	// grace: HappyGhast.tick only decrements serverStillTimeout while tickCount > STILL_TIMEOUT_ON_LOAD_
+	// GRACE_PERIOD (60), so a ghast loaded WITH a still_timeout holds it for the first 60 ticks. Ghast-only.
+	// Cite HappyGhast.tick (tickCount > 60 grace) + Entity.tick (tickCount++).
+	ghastTickCount int32
+	// ghastRequiresPrecisePosition mirrors HappyGhast.aiStep's setRequiresPrecisePosition(isOnStillTimeout())
+	// — Entity.requiresPrecisePosition, which forces the tracker to send an exact position sync instead of
+	// the quantized delta while the ghast is frozen. Tracked as a tick-owned bool; the ClientboundEntity
+	// PositionSyncPacket broadcast side effect is client-visual (cite-deferred like DATA_IS_CHARGING). Ghast-
+	// only. Cite HappyGhast.aiStep -> setRequiresPrecisePosition(isOnStillTimeout()).
+	ghastRequiresPrecisePosition bool
 	// --- HOSTILE GHAST (net.minecraft.world.entity.monster.Ghast) ----------------------------------
 	//
 	// Tick-owned plain values, set/read ONLY for a hostile Ghast (ghastAiStep gates on typ ==

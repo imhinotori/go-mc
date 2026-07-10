@@ -64,6 +64,18 @@ const happyGhastFlyingSpeedFactor = 5.0 / 3.0
 // FLIGHT: RandomFloatAroundGoal (pick a fly-to point) + GhastMoveControl.tick (accelerate deltaMovement
 // toward it). Called from tickAI for a live happy ghast (typ == entity.HappyGhast.ID), AFTER serverAiStep.
 // The 0.91 flying drag + the NO-gravity integration happen in tickPhysics (gated on the same type).
+//
+// GOAL-REGISTRATION STUB (cited, HappyGhast.registerGoals verified javap this task): the jar registers
+// @3 new HappyGhast.HappyGhastFloatGoal(this) (a FloatGoal: swim-UP out of water) and @4 new TemptGoal.
+// ForNonPathfinders(this, 1.0, HAPPY_GHAST_TEMPT_ITEMS predicate, canScare=false, closeEnough=7.0)
+// BEFORE the @5 RandomFloatAroundGoal(16) this function inlines. The happy ghast here is driven by THIS
+// per-type hook, NOT a goalSelector (spawnDeclaredMob wires no GoalSelector to the ghast -- see ghast.go
+// "NO goalSelector"), so there is no goal slot to add HappyGhastFloatGoal @3 / TemptGoal @4 into without
+// re-architecting the ghast onto ai_mob.go's goalSelector (which would also perturb the flight RNG order).
+// The floatGoal + temptGoal PORTS exist (ai_goals_float.go / ai_goals_passive.go, ctors newFloatGoal /
+// newTemptGoal(1.0, HAPPY_GHAST_TEMPT_ITEMS, false, ...)) so this wires in verbatim once the ghast gains a
+// goalSelector; leaving a cited stub rather than fabricating a half-wired goal. Cite HappyGhast.registerGoals
+// (@3 HappyGhastFloatGoal, @4 TemptGoal.ForNonPathfinders(1.0, HAPPY_GHAST_TEMPT_ITEMS, false, 7.0)).
 func (t *TickLoop) happyGhastAiStep(e *Entity) {
 	if !e.isAlive() || e.dead {
 		return
@@ -92,6 +104,20 @@ func (t *TickLoop) happyGhastAiStep(e *Entity) {
 	// MoveToTargetSink overwrites ghastWanted* with the walk-target the baby behaviors chose, so the baby
 	// is brain-steered while the adult keeps the classic RandomFloatAroundGoal wanted. Adult: no-op.
 	t.happyGhastBabyBrainTick(e)
+	// GhastMoveControl.tick shouldBeStopped branch: HappyGhast wires shouldBeStopped = isOnStillTimeout()
+	// (VERIFIED HappyGhast.registerGoals -> new Ghast.GhastMoveControl(this, ..., this::isOnStillTimeout)).
+	// When true the moveControl sets operation=WAIT + stopInPlace() and RETURNS BEFORE the floatDuration
+	// nextInt(5) draw (bytecode offset 36 return, ahead of the getRandom().nextInt(5) at 63) -- so the
+	// frozen ghast holds position and draws NOTHING from the kick this tick. The RandomFloatAroundGoal
+	// above STILL ran (its canUse/start draws are the goalSelector slot, independent of shouldBeStopped),
+	// preserving the RNG draw order exactly. Cite Ghast$GhastMoveControl.tick + HappyGhast.isOnStillTimeout.
+	if happyGhastIsOnStillTimeout(e) {
+		e.ghastHasWanted = false // operation := WAIT (moveControl no longer MOVE_TO)
+		// stopInPlace(): setDeltaMovement(0,0,0) -- the freeze (navigation.stop + zero input are ground-nav
+		// no-ops for the flyer). Cite Mob.stopInPlace.
+		e.vx, e.vy, e.vz = 0, 0, 0
+		return
+	}
 	// GhastMoveControl.tick: accelerate deltaMovement toward the (final) wanted point on the floatDuration
 	// cadence — the controls slot, AFTER customServerAiStep.
 	t.ghastMoveControlTick(e)
@@ -256,4 +282,161 @@ func happyGhastAgeScale(e *Entity) float32 {
 		return happyGhastBabyScale
 	}
 	return 1.0 // MAX_SCALE
+}
+
+// --- HAPPY GHAST STILL-TIMEOUT STATE MACHINE -----------------------------------------------------
+//
+// Ported 1:1 from HappyGhast (javap this task). A happy ghast becomes "on still timeout" whenever a
+// non-riding player stands on top of it: it FREEZES (holds position, is not steerable while ridden) for
+// MAX_STILL_TIMEOUT (10) ticks past the last such moment. The state:
+//   serverStillTimeout (int, max 10): counts DOWN; forced to 10 by scanPlayerAboveGhast.
+//   STAYS_STILL (synched bool): syncStayStillFlag sets it to (serverStillTimeout > 0).
+//   isOnStillTimeout(): staysStill() || serverStillTimeout > 0.
+// Cite HappyGhast.tick / setServerStillTimeout / syncStayStillFlag / staysStill / isOnStillTimeout /
+// scanPlayerAboveGhast / aiStep.
+
+const (
+	// happyGhastMaxStillTimeout is HappyGhast.MAX_STILL_TIMEOUT (10): the value scanPlayerAboveGhast forces
+	// serverStillTimeout to, and the effective clamp (it only ever counts down from 10). Verified javap.
+	happyGhastMaxStillTimeout = 10
+	// happyGhastStillLoadGrace is HappyGhast.STILL_TIMEOUT_ON_LOAD_GRACE_PERIOD (60): tick() only decrements
+	// serverStillTimeout once tickCount > 60, so a ghast loaded WITH a still_timeout holds it 60 ticks.
+	happyGhastStillLoadGrace = 60
+	// happyGhastScanTopEpsilon is scanPlayerAboveGhast's maxY inset: 9.999999747378752E-6 (a float 1e-5),
+	// the AABB(minX-1, maxY - 1e-5, minZ-1, maxX+1, maxY + ysize/2, maxZ+1) top slab. Verified javap (ldc2_w).
+	happyGhastScanTopEpsilon = 9.999999747378752e-6
+)
+
+// happyGhastStaysStill ports HappyGhast.staysStill(): reads the STAYS_STILL synched entity data. In v1 that
+// synched bool is the ghastStaysStill field (kept in lockstep by happyGhastSyncStayStillFlag). Cite staysStill.
+func happyGhastStaysStill(e *Entity) bool { return e.ghastStaysStill }
+
+// happyGhastIsOnStillTimeout ports HappyGhast.isOnStillTimeout(): staysStill() || serverStillTimeout > 0.
+// The keystone read: while true the harness ride is NOT steerable (getControllingPassenger) and the flight
+// goals are stopped (GhastMoveControl.shouldBeStopped). Cite HappyGhast.isOnStillTimeout.
+func happyGhastIsOnStillTimeout(e *Entity) bool {
+	return happyGhastStaysStill(e) || e.ghastServerStillTimeout > 0
+}
+
+// happyGhastSyncStayStillFlag ports HappyGhast.syncStayStillFlag(): STAYS_STILL := (serverStillTimeout > 0).
+// v1 keeps the ghastStaysStill field as the synched-data mirror; the SynchedEntityData.set broadcast is the
+// client-visual side (cite-deferred like DATA_IS_CHARGING). Cite HappyGhast.syncStayStillFlag.
+func happyGhastSyncStayStillFlag(e *Entity) {
+	e.ghastStaysStill = e.ghastServerStillTimeout > 0
+}
+
+// happyGhastSetServerStillTimeout ports HappyGhast.setServerStillTimeout(int): assigns serverStillTimeout
+// then syncs the STAYS_STILL flag. The 0->positive transition ALSO fires a ClientboundEntityPositionSync
+// Packet to trackers (so the freeze is not fought by the quantized delta) -- that packet is the client-
+// visual side, cite-deferred; the observable state (the value + the STAYS_STILL flag) is exact. Cite
+// HappyGhast.setServerStillTimeout (the `serverStillTimeout <= 0 && value > 0` position-sync guard).
+func happyGhastSetServerStillTimeout(e *Entity, value int32) {
+	// The `if (serverStillTimeout <= 0 && value > 0) { syncPacketPositionCodec(...); sendToTracking(...) }`
+	// position-resync on the 0->positive edge: client-visual (cite-deferred). The value + flag below is exact.
+	e.ghastServerStillTimeout = value
+	happyGhastSyncStayStillFlag(e)
+}
+
+// happyGhastScanPlayerAboveGhast ports HappyGhast.scanPlayerAboveGhast(): true iff a non-spectator player
+// whose ROOT VEHICLE is not itself a happy ghast stands within the top slab above the ghast's bounding box:
+//   box = getBoundingBox(); slab = AABB(minX-1, maxY - 1e-5, minZ-1, maxX+1, maxY + ysize/2, maxZ+1);
+//   for each level player: if isSpectator continue; root = getRootVehicle(); if root instanceof HappyGhast
+//   continue; if slab.contains(root.position()) return true. RNG-free. Cite HappyGhast.scanPlayerAboveGhast.
+func (t *TickLoop) happyGhastScanPlayerAboveGhast(e *Entity) bool {
+	// getBoundingBox(): centered on (x, y..y+height), width e.width.
+	hw := e.width / 2.0
+	minX, maxX := e.x-hw, e.x+hw
+	minZ, maxZ := e.z-hw, e.z+hw
+	maxY := e.y + float64(e.height)
+	ysize := float64(e.height)
+	// slab = AABB(minX-1, maxY - 1e-5, minZ-1, maxX+1, maxY + ysize/2, maxZ+1).
+	sMinX, sMinY, sMinZ := minX-1.0, maxY-happyGhastScanTopEpsilon, minZ-1.0
+	sMaxX, sMaxY, sMaxZ := maxX+1.0, maxY+ysize/2.0, maxZ+1.0
+	for _, p := range t.players {
+		if p == nil || p.dead {
+			continue
+		}
+		if isSpectatorMode(p) { // Player.isSpectator() -> skip
+			continue
+		}
+		// getRootVehicle() instanceof HappyGhast -> skip (a player RIDING a happy ghast does not freeze it).
+		if t.happyGhastPlayerRootIsHappyGhast(p) {
+			continue
+		}
+		// AABB.contains(position()) is a HALF-OPEN check: minX <= x < maxX (etc). Vanilla AABB.contains.
+		if p.x >= sMinX && p.x < sMaxX && p.y >= sMinY && p.y < sMaxY && p.z >= sMinZ && p.z < sMaxZ {
+			return true
+		}
+	}
+	return false
+}
+
+// happyGhastPlayerRootIsHappyGhast reports whether the player's root vehicle is a happy ghast (getRootVehicle()
+// instanceof HappyGhast). v1 walks the single-level vehicleID chain (a player rides at most one vehicle, and a
+// happy ghast is never itself a passenger). Cite Entity.getRootVehicle.
+func (t *TickLoop) happyGhastPlayerRootIsHappyGhast(p *tickPlayer) bool {
+	if p.vehicleID == 0 {
+		return false
+	}
+	owner := t.cur()
+	if owner == nil || owner.entities == nil {
+		return false
+	}
+	v, ok := owner.entities.get(p.vehicleID)
+	if !ok || v == nil {
+		return false
+	}
+	return v.typ == entity.HappyGhast.ID
+}
+
+// happyGhastStillTimeoutTick ports HappyGhast.tick()'s still-timeout block + aiStep's precise-position set,
+// run once per server tick for a live happy ghast (BEFORE happyGhastAiStep, so isOnStillTimeout gates the
+// flight this tick). tick(): if serverStillTimeout > 0 { if tickCount > 60 serverStillTimeout--;
+// setServerStillTimeout(serverStillTimeout) } ; if scanPlayerAboveGhast() setServerStillTimeout(10).
+// aiStep(): setRequiresPrecisePosition(isOnStillTimeout()). RNG-free. Cite HappyGhast.tick + aiStep.
+func (t *TickLoop) happyGhastStillTimeoutTick(e *Entity) {
+	if !e.isAlive() || e.dead {
+		return
+	}
+	e.ghastTickCount++ // Entity.tick: tickCount++
+	// tick(): the serverStillTimeout decrement (with the on-load 60-tick grace) + the re-sync.
+	if e.ghastServerStillTimeout > 0 {
+		if e.ghastTickCount > happyGhastStillLoadGrace {
+			e.ghastServerStillTimeout--
+		}
+		happyGhastSetServerStillTimeout(e, e.ghastServerStillTimeout)
+	}
+	// tick(): a player standing on top FORCES the timeout back to MAX_STILL_TIMEOUT (10).
+	if t.happyGhastScanPlayerAboveGhast(e) {
+		happyGhastSetServerStillTimeout(e, happyGhastMaxStillTimeout)
+	}
+	// aiStep(): setRequiresPrecisePosition(isOnStillTimeout()). The packet side is cite-deferred; the flag
+	// is exact so a future tracker read honors it.
+	e.ghastRequiresPrecisePosition = happyGhastIsOnStillTimeout(e)
+}
+
+// --- HAPPY GHAST NBT (still_timeout) -------------------------------------------------------------
+//
+// HappyGhast.addAdditionalSaveData(out): out.putInt("still_timeout", serverStillTimeout).
+// HappyGhast.readAdditionalSaveData(in): setServerStillTimeout(in.getIntOr("still_timeout", 0)).
+// (Verified javap this task.) The server has no live per-mob entity-NBT round-trip wired yet (the
+// saveEntities/loadEntities region path exists but no caller builds a save.Entities from a live *Entity),
+// so these are the faithful, unit-testable put/get helpers that the entity-NBT path calls once it lands --
+// NOT a value baked away. Cite HappyGhast.addAdditionalSaveData / readAdditionalSaveData.
+
+// happyGhastSaveStillTimeout ports HappyGhast.addAdditionalSaveData: writes serverStillTimeout under the
+// "still_timeout" key. Cite HappyGhast.addAdditionalSaveData (putInt).
+func happyGhastSaveStillTimeout(e *Entity, out map[string]int32) {
+	out["still_timeout"] = e.ghastServerStillTimeout // putInt("still_timeout", serverStillTimeout)
+}
+
+// happyGhastLoadStillTimeout ports HappyGhast.readAdditionalSaveData: reads "still_timeout" (default 0) and
+// funnels it through setServerStillTimeout so the STAYS_STILL flag re-syncs on load. Cite
+// HappyGhast.readAdditionalSaveData (getIntOr("still_timeout", 0) -> setServerStillTimeout).
+func happyGhastLoadStillTimeout(e *Entity, in map[string]int32) {
+	v, ok := in["still_timeout"] // getIntOr("still_timeout", 0)
+	if !ok {
+		v = 0
+	}
+	happyGhastSetServerStillTimeout(e, v)
 }

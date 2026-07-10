@@ -141,3 +141,104 @@ func TestHappyGhastBabyScale(t *testing.T) {
 		t.Fatalf("baby happy ghast age scale = %v, want %v (BABY_SCALE 0.2375)", s, happyGhastBabyScale)
 	}
 }
+
+// TestHappyGhastFreezesWhenPlayerOnTop: a player standing on top of a happy ghast (scanPlayerAboveGhast)
+// forces serverStillTimeout to 10 and marks it on-still-timeout (frozen: STAYS_STILL + not steerable).
+func TestHappyGhastFreezesWhenPlayerOnTop(t *testing.T) {
+	loop, _, floorY := happyGhastLoop(t)
+	decl := loop.mobRegistry.byName["vanilla_happy_ghast"]
+	gy := float64(floorY + 40)
+	g := loop.spawnDeclaredMob(decl, 8.5, gy, 8.5)
+	// A player perched on top of the ghast (within the top slab: maxY-1e-5 .. maxY+ysize/2, +/-1 in x/z).
+	top := gy + float64(g.height) + 0.1
+	addTestPlayer(loop, 71000, 8.5, top, 8.5)
+
+	loop.happyGhastStillTimeoutTick(g)
+
+	if g.ghastServerStillTimeout != happyGhastMaxStillTimeout {
+		t.Fatalf("serverStillTimeout = %d, want %d after a player stood on top", g.ghastServerStillTimeout, happyGhastMaxStillTimeout)
+	}
+	if !happyGhastIsOnStillTimeout(g) {
+		t.Fatal("ghast not on still timeout with a player on top")
+	}
+	if !happyGhastStaysStill(g) {
+		t.Fatal("STAYS_STILL flag not set (syncStayStillFlag)")
+	}
+	if !g.ghastRequiresPrecisePosition {
+		t.Fatal("requiresPrecisePosition not set while frozen")
+	}
+}
+
+// TestHappyGhastStillTimeoutDecrements: with no player above, serverStillTimeout counts DOWN to 0 (past the
+// 60-tick on-load grace), un-freezing the ghast. Verifies the tickCount>60 grace gate.
+func TestHappyGhastStillTimeoutDecrements(t *testing.T) {
+	loop, _, floorY := happyGhastLoop(t)
+	decl := loop.mobRegistry.byName["vanilla_happy_ghast"]
+	g := loop.spawnDeclaredMob(decl, 8.5, float64(floorY+40), 8.5)
+	// Arm the timeout as if a player had just been on top, and clear the load grace so it can decrement.
+	happyGhastSetServerStillTimeout(g, happyGhastMaxStillTimeout)
+	g.ghastTickCount = happyGhastStillLoadGrace + 1
+	if !happyGhastIsOnStillTimeout(g) {
+		t.Fatal("ghast should start frozen")
+	}
+	// No player above: it should count down to 0 within MAX_STILL_TIMEOUT ticks.
+	for i := 0; i < happyGhastMaxStillTimeout+2; i++ {
+		loop.happyGhastStillTimeoutTick(g)
+	}
+	if g.ghastServerStillTimeout != 0 {
+		t.Fatalf("serverStillTimeout = %d, want 0 after counting down with no player above", g.ghastServerStillTimeout)
+	}
+	if happyGhastIsOnStillTimeout(g) {
+		t.Fatal("ghast still frozen after the timeout decremented to 0")
+	}
+	if g.ghastStaysStill {
+		t.Fatal("STAYS_STILL flag still set after un-freeze")
+	}
+}
+
+// TestHappyGhastStillTimeoutLoadGrace: a ghast loaded WITH a still_timeout holds it for the first 60 ticks
+// (STILL_TIMEOUT_ON_LOAD_GRACE_PERIOD) -- tick() only decrements once tickCount > 60.
+func TestHappyGhastStillTimeoutLoadGrace(t *testing.T) {
+	loop, _, floorY := happyGhastLoop(t)
+	decl := loop.mobRegistry.byName["vanilla_happy_ghast"]
+	g := loop.spawnDeclaredMob(decl, 8.5, float64(floorY+40), 8.5)
+	// Load path: read still_timeout = 10 (readAdditionalSaveData -> setServerStillTimeout).
+	happyGhastLoadStillTimeout(g, map[string]int32{"still_timeout": happyGhastMaxStillTimeout})
+	if g.ghastServerStillTimeout != happyGhastMaxStillTimeout {
+		t.Fatalf("loaded serverStillTimeout = %d, want %d", g.ghastServerStillTimeout, happyGhastMaxStillTimeout)
+	}
+	// First 60 ticks (fresh ghast, tickCount climbing 1..60): NO decrement (still grace).
+	for i := 0; i < happyGhastStillLoadGrace; i++ {
+		loop.happyGhastStillTimeoutTick(g)
+	}
+	if g.ghastServerStillTimeout != happyGhastMaxStillTimeout {
+		t.Fatalf("serverStillTimeout decremented during the 60-tick load grace: got %d, want %d", g.ghastServerStillTimeout, happyGhastMaxStillTimeout)
+	}
+	// The 61st tick (tickCount now 61 > 60): the first decrement.
+	loop.happyGhastStillTimeoutTick(g)
+	if g.ghastServerStillTimeout != happyGhastMaxStillTimeout-1 {
+		t.Fatalf("serverStillTimeout = %d, want %d after the grace period ended", g.ghastServerStillTimeout, happyGhastMaxStillTimeout-1)
+	}
+}
+
+// TestHappyGhastSaveStillTimeoutRoundTrip: addAdditionalSaveData writes still_timeout; readAdditionalSaveData
+// funnels it back through setServerStillTimeout (re-syncing STAYS_STILL).
+func TestHappyGhastSaveStillTimeoutRoundTrip(t *testing.T) {
+	loop, _, floorY := happyGhastLoop(t)
+	decl := loop.mobRegistry.byName["vanilla_happy_ghast"]
+	src := loop.spawnDeclaredMob(decl, 8.5, float64(floorY+40), 8.5)
+	happyGhastSetServerStillTimeout(src, 7)
+	out := map[string]int32{}
+	happyGhastSaveStillTimeout(src, out)
+	if out["still_timeout"] != 7 {
+		t.Fatalf("saved still_timeout = %d, want 7", out["still_timeout"])
+	}
+	dst := loop.spawnDeclaredMob(decl, 20.5, float64(floorY+40), 20.5)
+	happyGhastLoadStillTimeout(dst, out)
+	if dst.ghastServerStillTimeout != 7 {
+		t.Fatalf("loaded serverStillTimeout = %d, want 7", dst.ghastServerStillTimeout)
+	}
+	if !dst.ghastStaysStill {
+		t.Fatal("STAYS_STILL not re-synced on load (setServerStillTimeout should have flipped it)")
+	}
+}

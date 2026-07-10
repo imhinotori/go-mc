@@ -467,10 +467,11 @@ func (t *TickLoop) getControllingPassenger(vehicle *Entity) int32 {
 		return 0
 	}
 	first := vehicle.passengers[0]
-	// isOnStillTimeout(): staysStill() || serverStillTimeout > 0. v1 has no still-timeout field wired for
-	// the ghast (the RandomFloatAroundGoal shouldBeStopped stub is const-false), so this is const-false —
-	// the ride is always steerable while harnessed. Structured to read serverStillTimeout once wired.
-	onStillTimeout := false
+	// isOnStillTimeout(): staysStill() || serverStillTimeout > 0. A harnessed ghast is steerable ONLY when
+	// NOT on the still timeout -- while a player stands on top (scanPlayerAboveGhast -> serverStillTimeout
+	// 10) the ghast FREEZES and the ride cannot steer it. Cite HappyGhast.getControllingPassenger
+	// (isWearingBodyArmor() && !isOnStillTimeout() && firstPassenger instanceof Player).
+	onStillTimeout := happyGhastIsOnStillTimeout(vehicle)
 	if happyGhastHasHarness(vehicle) && !onStillTimeout {
 		if t.playerByEntityID(first) != nil {
 			return first

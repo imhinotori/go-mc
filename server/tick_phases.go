@@ -788,6 +788,10 @@ func (t *TickLoop) tickAI() {
 		// no-gravity integration land in tickPhysics (also happy-ghast-gated). ADDITIVE + ghast-gated
 		// (zero cost / zero RNG for every non-ghast — the pig oracle stream is untouched).
 		if e.typ == entity.HappyGhast.ID {
+			// HappyGhast.tick() still-timeout state machine (serverStillTimeout decrement + scanPlayerAbove
+			// Ghast + STAYS_STILL sync + requiresPrecisePosition), run BEFORE the flight so isOnStillTimeout
+			// gates the moveControl kick this tick. Cite HappyGhast.tick + aiStep.
+			t.happyGhastStillTimeoutTick(e)
 			t.happyGhastAiStep(e)
 		}
 		// GHAST (Task): the hostile Ghast tick + goals (RandomFloatAroundGoal fly-to + GhastMoveControl
