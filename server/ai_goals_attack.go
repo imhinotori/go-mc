@@ -320,7 +320,7 @@ func (g *meleeAttackGoal) tick(t *TickLoop, e *Entity) {
 			// (a zombie 0.23 → terminal ≈ 0.277 b/tick). Pass the attribute directly.
 			//	[VERIFIED javap ZombieAttackGoal.<init>(zombie, 1.0, false) / Spider$SpiderAttackGoal(super, 1.0, true);
 			//	 MoveControl.setSpeed(speedModifier × getAttributeValue(MOVEMENT_SPEED)).]
-			getSpeed := e.getAttributeValue(attribute.MovementSpeed) * meleeChaseSpeedModifier
+			getSpeed := e.getAttributeValue(attribute.MovementSpeed) * g.speedModifier // speedModifier x MOVEMENT_SPEED (goal ctor: Zombie 1.0, WitherSkeleton 1.2)
 			e.ai.setWantTargetSpeed(target.x, target.y, target.z, getSpeed)
 		}
 	}
@@ -372,6 +372,14 @@ func (g *meleeAttackGoal) checkAndPerformAttack(t *TickLoop, e *Entity, target *
 	// other mob). Cite CaveSpider.doHurtTarget.
 	if e.typ == entity.CaveSpider.ID && hurt {
 		t.caveSpiderApplyPoison(e, target)
+	}
+	// WitherSkeleton.doHurtTarget override: after super.doHurtTarget lands, IF the target is a
+	// LivingEntity (a player here) apply WITHER for 200 ticks (amplifier 0) attributed to this mob.
+	// The add is gated on the landed flag exactly as the bytecode wraps it in `if (super.doHurtTarget
+	// (...)) { ... le.addEffect(new MobEffectInstance(WITHER, 200), this); }`. WitherSkeleton-gated
+	// (zero cost for every other mob). Cite WitherSkeleton.doHurtTarget (offset 23-41).
+	if e.typ == entity.WitherSkeleton.ID && hurt {
+		t.witherSkeletonApplyWither(e, target)
 	}
 }
 

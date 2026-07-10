@@ -720,6 +720,14 @@ func entityCanBeAffected(e *Entity, id string) bool {
 	if e == nil {
 		return false
 	}
+	// WitherSkeleton.canBeAffected(MobEffectInstance): returns false for WITHER (a wither skeleton is
+	// immune to its own on-hit effect), THEN falls through to super.canBeAffected (the undead
+	// poison/regen block below). Gated on the wither-skeleton type so it is the exact per-type override
+	// -- the other undead (skeleton/zombie/...) are NOT wither-immune. Cite WitherSkeleton.canBeAffected
+	// (offset 0-11: MobEffectInstance.is(WITHER) -> iconst_0 ireturn; else super.canBeAffected).
+	if e.typ == entity.WitherSkeleton.ID && id == effectWither {
+		return false
+	}
 	if entityIsUndead(e) && (id == effectPoison || id == effectRegeneration) {
 		return false
 	}

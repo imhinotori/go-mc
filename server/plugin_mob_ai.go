@@ -329,7 +329,7 @@ func buildNativeGoal(kind string, gd goalDecl, decl *mobDecl) Goal {
 	case "hurt_by_target":
 		return newHurtByTargetGoal()
 	case "melee_attack":
-		return newMeleeAttackGoal(declaredWalkSpeed(decl))
+		return newMeleeAttackGoal(meleeChaseSpeedModifier) // ZombieAttackGoal(zombie, 1.0, false): the vanilla speedModifier is 1.0, not movement_speed-derived
 	case "ranged_bow_attack":
 		// PROJECTILE-01 (Task #8): AbstractSkeleton's RangedBowAttackGoal(this, 1.0, 20|40, 15.0) — the
 		// bow goal that charges + fires an Arrow (ai_goals_ranged.go). Replaces the skeleton's melee goal
@@ -370,7 +370,7 @@ func buildNativeGoal(kind string, gd goalDecl, decl *mobDecl) Goal {
 		// Cite Witch.registerGoals targetSelector @2 NearestHealableRaiderTargetGoal (ai_goals_witch.go).
 		return newNearestHealableRaiderTargetGoal()
 	case "spider_attack":
-		return newSpiderAttackGoal(declaredWalkSpeed(decl))
+		return newSpiderAttackGoal(meleeChaseSpeedModifier) // Spider$SpiderAttackGoal(spider, 1.0, true): vanilla speedModifier 1.0
 	case "leap_at_target":
 		// Spider.registerGoals @3 LeapAtTargetGoal(this, 0.4) — the Spider's vertical leap component
 		// is the literal 0.4 ctor arg. Ocelot.registerGoals @7 LeapAtTargetGoal(this, 0.3) — the

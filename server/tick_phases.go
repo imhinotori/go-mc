@@ -894,14 +894,11 @@ func (t *TickLoop) tickAI() {
 		if e.typ == entity.Strider.ID {
 			t.striderAiStep(e)
 		}
-		// WITHER SKELETON (GAP): the nether melee skeleton -- acquire nearest player + the MeleeAttackGoal
-		// swing that applies WITHER 200 on a landed hit (WitherSkeleton.doHurtTarget). Per-type-gated like
-		// the blaze, AFTER serverAiStep. It is a normal GROUND mob (no flyer branch). ADDITIVE +
-		// wither-skeleton-gated (zero cost / zero RNG for every non-wither-skeleton -- the pig oracle stream
-		// is untouched).
-		if e.typ == entity.WitherSkeleton.ID {
-			t.witherSkeletonAiStep(e)
-		}
+		// WITHER SKELETON: the nether melee skeleton runs its FULL goal + target selectors (built
+		// code-side in buildWitherSkeletonAI), driven by serverAiStep above -- the chase (MeleeAttackGoal
+		// 1.2), the target acquire (HurtBy/NAT<Player>/NAT<AbstractPiglin>), and the passive wander/look/
+		// sun-flee. The WITHER-200-on-hit is applied by checkAndPerformAttack (witherSkeletonApplyWither),
+		// so NO per-type customServerAiStep is needed. Cite WitherSkeleton.registerGoals.
 		// DROWNED (MOB-VARIANT): the zombie variant that THROWS its trident -- when it holds a TRIDENT and a
 		// target is in trident range with line-of-sight, the DrownedTridentAttackGoal cadence fires a
 		// ThrownTrident (Drowned.performRangedAttack). Per-type-gated on e.isDrowned, AFTER serverAiStep (the

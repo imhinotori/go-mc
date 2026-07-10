@@ -45,8 +45,13 @@ func TestWitherSkeletonSpawnDefaults(t *testing.T) {
 	if got := w.getAttributeValue(attribute.MaxHealth); math.Abs(got-20.0) > 1e-9 {
 		t.Fatalf("wither skeleton MAX_HEALTH = %v, want 20.0", got)
 	}
-	if got := w.getAttributeValue(attribute.AttackDamage); math.Abs(got-4.0) > 1e-9 {
-		t.Fatalf("wither skeleton ATTACK_DAMAGE = %v, want 4.0 (finalizeSpawn override)", got)
+	// ATTACK_DAMAGE == 8.0: the finalizeSpawn base 4.0 + the STONE_SWORD's +4.0 attack_damage modifier
+	// (data/item stone_sword ATTRIBUTE_MODIFIERS, folded by the mob equipment->attribute seam
+	// applyMainHandAttributeModifiers). This is the vanilla effective attack damage a wither skeleton hits
+	// with on NORMAL (Mob.doHurtTarget reads getAttributeValue(ATTACK_DAMAGE), which includes the held
+	// weapon's modifier). Cite WitherSkeleton.finalizeSpawn (base 4.0) + stone_sword base_attack_damage +4.0.
+	if got := w.getAttributeValue(attribute.AttackDamage); math.Abs(got-8.0) > 1e-9 {
+		t.Fatalf("wither skeleton ATTACK_DAMAGE = %v, want 8.0 (finalizeSpawn 4.0 + stone_sword +4.0)", got)
 	}
 	if got := w.getAttributeValue(attribute.MovementSpeed); math.Abs(got-0.25) > 1e-12 {
 		t.Fatalf("wither skeleton MOVEMENT_SPEED = %v, want 0.25", got)
@@ -75,12 +80,18 @@ func TestWitherSkeletonAppliesWither(t *testing.T) {
 	w.ai.attackTargetID = p.entityID
 	w.meleeCooldown = 0 // isTimeToAttack()
 
+	// Drive the shared MeleeAttackGoal's checkAndPerformAttack (the WitherSkeleton @4 meleeGoal): in reach,
+	// with LoS and the attack cooldown ready, it swings + doHurtTarget (dealing the folded 8.0) + applies
+	// WITHER 200 via the WitherSkeleton-gated tail (witherSkeletonApplyWither).
+	g := newMeleeAttackGoal(witherSkeletonMeleeSpeed)
+	g.ticksUntilNextAttack = 0 // isTimeToAttack()
+
 	start := p.health
-	loop.witherSkeletonMeleeAttack(w, p)
+	g.checkAndPerformAttack(loop, w, p)
 
 	dealt := start - p.health
-	if math.Abs(float64(dealt)-4.0) > 1e-6 {
-		t.Fatalf("wither skeleton melee dealt %v damage, want 4.0 (ATTACK_DAMAGE)", dealt)
+	if math.Abs(float64(dealt)-8.0) > 1e-6 {
+		t.Fatalf("wither skeleton melee dealt %v damage, want 8.0 (4.0 base + stone_sword +4.0)", dealt)
 	}
 	if !playerHasEffect(p, effectWither) {
 		t.Fatal("wither skeleton melee did NOT apply WITHER (doHurtTarget addEffect missing)")
@@ -108,7 +119,9 @@ func TestWitherSkeletonNoWitherOutOfReach(t *testing.T) {
 	w.ai.attackTargetID = p.entityID
 	w.meleeCooldown = 0
 
-	loop.witherSkeletonMeleeAttack(w, p)
+	g := newMeleeAttackGoal(witherSkeletonMeleeSpeed)
+	g.ticksUntilNextAttack = 0
+	g.checkAndPerformAttack(loop, w, p)
 	if math.Abs(float64(p.health)-20.0) > 1e-6 {
 		t.Fatalf("out-of-reach player took damage: health = %v, want 20.0", p.health)
 	}

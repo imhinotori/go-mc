@@ -72,6 +72,25 @@ func TestUndeadRejectPoisonAndRegeneration(t *testing.T) {
 	}
 }
 
+// TestWitherSkeletonRejectsWither: WitherSkeleton.canBeAffected returns false for WITHER (a wither
+// skeleton is immune to its own on-hit effect), while a plain undead (a Skeleton) is NOT wither-immune
+// -- entityCanBeAffected gates the WITHER block on the wither-skeleton type only. Cite
+// WitherSkeleton.canBeAffected.
+func TestWitherSkeletonRejectsWither(t *testing.T) {
+	loop, floorY := mobEffectEntityLoop(t)
+	ws := mobEffectTestEntity(loop, entity.WitherSkeleton, 8.5, float64(floorY+1), 8.5)
+	loop.addEntityEffect(ws, effectWither, 200, 0)
+	if entityHasEffect(ws, effectWither) {
+		t.Fatal("wither skeleton accepted WITHER; canBeAffected must reject it (WitherSkeleton.canBeAffected)")
+	}
+	// A plain Skeleton (undead, but NOT a wither skeleton) accepts WITHER -- the immunity is per-type.
+	sk := mobEffectTestEntity(loop, entity.Skeleton, 8.5, float64(floorY+1), 8.5)
+	loop.addEntityEffect(sk, effectWither, 200, 0)
+	if !entityHasEffect(sk, effectWither) {
+		t.Fatal("plain skeleton rejected WITHER; only the wither skeleton is WITHER-immune")
+	}
+}
+
 func TestMobAbsorptionModifierLifecycle(t *testing.T) {
 	loop, floorY := mobEffectEntityLoop(t)
 	pig := mobEffectTestEntity(loop, entity.Pig, 8.5, float64(floorY+1), 8.5)

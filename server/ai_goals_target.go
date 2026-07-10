@@ -104,13 +104,16 @@ const (
 	// can say which registry owner they target). Cite Ocelot.registerGoals targetSelector @1 +
 	// Turtle.BABY_ON_LAND_SELECTOR.
 	targetClassOcelotBabyTurtle
+	// targetClassAbstractPiglin is the WitherSkeleton targetSelector @3 NearestAttackableTargetGoal
+	// <AbstractPiglin>(this, AbstractPiglin.class, true) branch: findTarget scans the entity store for
+	// the nearest AbstractPiglin (Piglin OR PiglinBrute) within FOLLOW_RANGE. mustSee=true is the cited
+	// LoS gate (t.sensingHasLineOfSight). Wither skeletons hunt piglins on sight. Cite
+	// WitherSkeleton.registerGoals targetSelector @3 (AbstractPiglin, mustSee).
+	targetClassAbstractPiglin
 	// targetClassIronGolem is the AbstractSkeleton targetSelector @3 NearestAttackableTargetGoal<IronGolem>
-	// (this, IronGolem.class, true) branch: findTarget scans the entity store for the nearest live
-	// entity.IronGolem.ID within FOLLOW_RANGE (nearestEntityOfTypeAt). The ctor's mustSee=true is the cited
-	// LoS stub (no sensing on mob-vs-mob targets; the range gate is the live filter, the same delta the wolf
-	// skeleton-target goal carries). Distinct from targetClassHostileMob (that is the golem's OWN Enemy-mob
-	// hunt); this is a SKELETON hunting a specific IronGolem. Cite AbstractSkeleton.registerGoals
-	// targetSelector @3 NearestAttackableTargetGoal<IronGolem>(this, true).
+	// (this, IronGolem.class, true): findTarget scans entity.IronGolem.ID within FOLLOW_RANGE
+	// (nearestEntityOfTypeAt). mustSee=true is the cited LoS stub for mob-vs-mob targets. A SKELETON
+	// hunting a specific IronGolem. Cite AbstractSkeleton.registerGoals targetSelector @3.
 	targetClassIronGolem
 )
 
@@ -209,17 +212,25 @@ func newIronGolemHostileTargetGoal() *nearestAttackableTargetGoal {
 	}
 }
 
-// newIronGolemTargetGoal builds the AbstractSkeleton targetSelector @3 NearestAttackableTargetGoal
-// <IronGolem>(this, IronGolem.class, true) â€” the SKELETON hunting a specific IronGolem, NO anger gate.
-// findTarget scans entity.IronGolem.ID within FOLLOW_RANGE. The randomInterval stays the shared
-// nearestTargetRandomInterval (reducedTickDelay(10)==5, the ctor's halved DEFAULT_RANDOM_INTERVAL). The
-// ctor's mustSee=true is the cited LoS stub for mob-vs-mob targets. Cite AbstractSkeleton.registerGoals
-// targetSelector @3.
+// newWitherSkeletonPiglinTargetGoal builds the WitherSkeleton targetSelector @3
+// NearestAttackableTargetGoal<AbstractPiglin>(this, AbstractPiglin.class, true) — the ABSTRACT-PIGLIN
+// class, mustSee=true, NO anger gate. findTarget scans the entity store for the nearest Piglin OR
+// PiglinBrute within FOLLOW_RANGE with line-of-sight (targetClassAbstractPiglin). The randomInterval
+// stays the shared nearestTargetRandomInterval (the 3-arg ctor: NearestAttackableTargetGoal.<init>
+// randomInterval = reducedTickDelay(10) == 5). Cite WitherSkeleton.registerGoals targetSelector @3.
 func newIronGolemTargetGoal() *nearestAttackableTargetGoal {
 	return &nearestAttackableTargetGoal{
 		baseGoal:       newBaseGoal(flagTarget),
 		randomInterval: nearestTargetRandomInterval,
 		targetClass:    targetClassIronGolem,
+	}
+}
+
+func newWitherSkeletonPiglinTargetGoal() *nearestAttackableTargetGoal {
+	return &nearestAttackableTargetGoal{
+		baseGoal:       newBaseGoal(flagTarget),
+		randomInterval: nearestTargetRandomInterval,
+		targetClass:    targetClassAbstractPiglin,
 	}
 }
 
@@ -339,10 +350,6 @@ func (g *nearestAttackableTargetGoal) findTarget(t *TickLoop, e *Entity) {
 			return
 		}
 	case targetClassIronGolem:
-		// The AbstractSkeleton @3 NearestAttackableTargetGoal<IronGolem> branch: getNearestEntity(
-		// getEntitiesOfClass(IronGolem, searchArea), conditions, mob, x, eyeY, z) â€” the nearest
-		// entity.IronGolem.ID within FOLLOW_RANGE. Same mob-vs-mob scan the skeleton branch uses. Cite
-		// AbstractSkeleton.registerGoals targetSelector @3 NearestAttackableTargetGoal<IronGolem>.
 		if id, ok := nearestEntityOfTypeAt(t, e, entity.IronGolem.ID, follow); ok {
 			g.target = id
 			return
@@ -437,6 +444,31 @@ func (g *nearestAttackableTargetGoal) findTarget(t *TickLoop, e *Entity) {
 			g.target = bestID
 			return
 		}
+	case targetClassAbstractPiglin:
+		// WitherSkeleton @3 NearestAttackableTargetGoal<AbstractPiglin>(this, AbstractPiglin.class, true):
+		// the nearest AbstractPiglin (Piglin OR PiglinBrute) within FOLLOW_RANGE with line-of-sight
+		// (mustSee=true). Scans the entity store for both piglin types and keeps the closer, gating each
+		// candidate on t.sensingHasLineOfSight (the forCombat conditions LoS test, divergence C-4). Cite
+		// WitherSkeleton.registerGoals targetSelector @3 (AbstractPiglin, mustSee).
+		bestID, bestOK := int32(0), false
+		best := follow * follow
+		for _, other := range t.cur().entities.near(e.x, e.z, int(math.Ceil(follow/16.0))) {
+			if other == e || other.dead {
+				continue
+			}
+			if other.typ != entity.Piglin.ID && other.typ != entity.PiglinBrute.ID {
+				continue
+			}
+			d := entityDistSqr(e, other)
+			if d <= best {
+				best = d
+				bestID, bestOK = other.id, true
+			}
+		}
+		if bestOK {
+			g.target = bestID
+			return
+		}
 	default: // targetClassPlayer (the Phase-35 branch, UNCHANGED)
 		// getNearestPlayer is anchored at (mob.getX(), mob.getEyeY(), mob.getZ()); v1 has no eye-height
 		// field (refreshDimensions notes the cited eye-height gap), so the scan anchors at the mob feet y
@@ -476,7 +508,7 @@ func (g *nearestAttackableTargetGoal) canContinueToUse(t *TickLoop, e *Entity) b
 	follow := e.getAttributeValue(attribute.FollowRange)
 	if g.targetClass == targetClassSkeleton || g.targetClass == targetClassFoxPrey || g.targetClass == targetClassHostileMob ||
 		g.targetClass == targetClassOcelotChicken || g.targetClass == targetClassFoxBabyTurtle ||
-		g.targetClass == targetClassOcelotBabyTurtle || g.targetClass == targetClassIronGolem {
+		g.targetClass == targetClassOcelotBabyTurtle || g.targetClass == targetClassAbstractPiglin || g.targetClass == targetClassIronGolem {
 		// SKELETON class: resolve the target through the OWNING-region entity store (a skeleton is an
 		// *Entity, not a player) + the live FOLLOW_RANGE distance bound. t.cur() is the region whose
 		// fan-out is running this goal — the SAME store nearestEntityOfTypeAt scanned (the v5 same-region
