@@ -116,6 +116,12 @@ func IsRandomlyTicking(s StateID) bool {
 		// KELP_PLANT (the body) is a separate block and never random-ticks. CITE:
 		// GrowingPlantHeadBlock.isRandomlyTicking (getValue(AGE) < 25).
 		return KelpAge(s) < KelpMaxAge
+	case Vine:
+		// VineBlock does NOT override isRandomlyTicking(), so it uses the baked Properties.randomTicks()
+		// flag -> isRandomlyTicking()==true for every state (the neighbour-spread logic runs each random
+		// tick, gated internally on the SPREAD_VINES gamerule + a nextInt(4) early-out). CITE: VineBlock
+		// properties (.randomTicks()); VineBlock.randomTick.
+		return true
 	default:
 		return false
 	}

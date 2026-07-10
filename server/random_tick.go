@@ -237,6 +237,11 @@ func (t *TickLoop) dispatchRandomTick(r *region, state block.StateID, pos pk.Pos
 		// DRAWS levelRandom (one nextDouble, only for AGE<25). IsRandomlyTicking gates on AGE < 25. See
 		// kelp.go.
 		t.kelpRandomTick(r, state, pos)
+	case block.IsVine(state):
+		// VineBlock.randomTick: SPREAD_VINES-gated (default TRUE) neighbour spread. DRAWS levelRandom
+		// (nextInt(4) early-out, then nextInt(6) direction, then per-branch nextFloat / nextBoolean draws).
+		// IsRandomlyTicking is true for every state. See vine.go.
+		t.vineRandomTick(r, state, pos)
 	default:
 		// A state whose IsRandomlyTicking is true but whose randomTick handler is not yet ported: no-op
 		// (the family's IsRandomlyTicking should not be true until its handler is wired — kept as a
