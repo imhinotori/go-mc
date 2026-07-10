@@ -108,18 +108,16 @@ func (t *TickLoop) beaconWorldSurfaceTop(x, z int) int {
 
 // beaconBeamObstructs ports the beam-scan obstruction test for a NON-beam block: the beam continues through a
 // block whose `getLightDampening() < 15 || is(BEDROCK)` and is OBSTRUCTED (clears checkingBeamSections)
-// otherwise. v1 has no light engine, so getLightDampening()>=15 is proxied by BlockState.isSuffocating (an
-// opaque full-cube — the same proxy growth_block uses for getLightDampeningInto). Air/glass/leaves =
-// transparent (suffocating=false); stone/dirt = opaque (suffocating=true); bedrock is explicitly transparent.
-// CITE BeaconBlockEntity.tick beam branch `state.getLightDampening() < 15 || state.is(Blocks.BEDROCK)`.
-//
-//	[DEFERRED: the numeric getLightDampening read — no light engine in v1. isSuffocating is the faithful
-//	 opaque-full-cube proxy for >=15 (glass/leaves report <15 correctly via their isSuffocating override).]
+// otherwise. getLightDampening() is now the EXACT per-state value from the extracted light table
+// (block.LightBlock, the getLightDampening() column the LevelLightEngine reads) -- no longer the
+// isSuffocating opaque-full-cube proxy. CITE BeaconBlockEntity.tick beam branch
+// `state.getLightDampening() < 15 || state.is(Blocks.BEDROCK)`.
 func (t *TickLoop) beaconBeamObstructs(s block.StateID) bool {
 	if s == block.DefaultStateID["minecraft:bedrock"] {
 		return false // state.is(Blocks.BEDROCK) -> transparent to the beam (never obstructs)
 	}
-	return t.isSuffocating(s) // getLightDampening() >= 15 proxy (opaque full cube)
+	// getLightDampening() < 15 -> the beam continues (NOT obstructed); >= 15 -> obstructed.
+	return block.LightBlock(s) >= 15
 }
 
 // isBeaconBeamBlock reports whether a block state is a BeaconBeamBlock — the interface stained-glass panes,

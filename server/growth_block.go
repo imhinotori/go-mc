@@ -348,18 +348,13 @@ func (t *TickLoop) grassRandomTick(r *region, state block.StateID, pos pk.Positi
 //   - fluidState(above).isFull() -> false (a full fluid over the cell kills it);
 //   - else LightEngine.getLightDampeningInto(above, UP) < 15 -> true (light reaches the top face).
 //
-// The numeric light-dampening read is the one part with no engine yet. Vanilla returns 15 (fully
-// dampened -> grass dies) ONLY when the block above is an OPAQUE, light-occluding full cube (dirt,
-// stone, planks, …); a transparent or non-full block above dampens < 15 -> grass survives. The
-// server-authoritative proxy for "opaque full cube that blocks skylight" is IsSuffocating
-// (blocksMotion && isCollisionShapeFullBlock) — true for dirt/stone/full cubes, false for
-// leaves/glass/air/slabs/snow-layer/water. So: dampens-fully == above IsSuffocating. This keeps the
-// REAL behavior the mandate calls out (a solid opaque block placed over grass -> grass dies) while the
-// numeric light VALUE stays stubbed. An unreadable above reads as air -> not full, not opaque -> alive.
+// The numeric light-dampening read is the EXACT getLightDampening value from the extracted light table
+// (block.LightBlock, the getLightDampening() column the LevelLightEngine reads). Vanilla returns 15
+// (fully dampened -> grass dies) for an opaque light-occluding full cube (dirt/stone/planks) and < 15 for
+// a transparent or non-full block (leaves/glass/slab) -> grass survives. An unreadable above reads as air
+// (LightBlock 0 < 15) -> alive.
 //
-//	[DEFERRED: getLightDampeningInto numeric value — no light engine in v1. The opaque-block-above
-//	 kill IS real (via IsSuffocating). CITE: SpreadingSnowyBlock.canStayAlive; LightEngine.
-//	 getLightDampeningInto. Follow-up: swap the IsSuffocating proxy for the real occlusion/light read.]
+//	CITE: SpreadingSnowyBlock.canStayAlive; LightEngine.getLightDampeningInto (block.LightBlock exact read).
 func (t *TickLoop) grassCanStayAlive(pos pk.Position) bool {
 	abovePos := above(pos)
 	as, ok := t.world().GetBlock(abovePos, dimMinY)
@@ -374,9 +369,10 @@ func (t *TickLoop) grassCanStayAlive(pos pk.Position) bool {
 	if block.FluidIsFull(as) {
 		return false
 	}
-	// getLightDampeningInto(above, UP) < 15 -> alive. Proxy: an opaque full cube dampens fully (== 15,
-	// so >= 15 -> dead); anything else dampens < 15 -> alive.
-	return !block.IsSuffocating(as)
+	// getLightDampeningInto(above, UP) < 15 -> alive. Now the EXACT getLightDampening value from the
+	// extracted light table (block.LightBlock, the column the LevelLightEngine reads) -- no longer the
+	// isSuffocating opaque-full-cube proxy. >= 15 (a fully-dampening block above) -> grass dies.
+	return block.LightBlock(as) < 15
 }
 
 // grassCanPropagate is SpreadingSnowyBlock.canPropagate(grassDefault, level, pos):
