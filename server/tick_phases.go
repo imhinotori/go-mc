@@ -518,6 +518,13 @@ func (t *TickLoop) tickEntities() {
 	// unchanged (mirrors the tickBlockBreak / tickBreath seams). No-op until the nether world is armed.
 	t.tickNetherPortal()
 
+	// END PORTAL travel: the EndPortalBlock.entityInside port -- for each player standing in an end_portal
+	// block, either show the end credits (first End-exit-portal entry, dimension==END, !seenCredits) or
+	// travel to the destination dimension (overworld end_portal -> the_end at the spawn platform; End exit
+	// portal, seenCredits already set -> overworld respawn). End portals have getPortalTransitionTime==0 so
+	// travel is instant (no dwell), gated only by the shared portal cooldown. CITE: EndPortalBlock.entityInside.
+	t.tickEndPortal()
+
 	// Plan 17-22 item-use / EATING: the LivingEntity.updatingUsingItem port — for each player using
 	// an item (eating), decrement the use-duration and, on completion, refill the food bar
 	// (FoodData.eat(FoodProperties)) + shrink the held stack (ItemStack.consume). A single ADDITIVE

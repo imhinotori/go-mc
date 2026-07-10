@@ -102,3 +102,102 @@ func (t *TickLoop) ensureEndPlatform() {
 	}
 	t.createEndPlatform(endPlatformBase)
 }
+
+// gameEventWinGame is ClientboundGameEventPacket.Type.WIN_GAME (enum ordinal 4: NO_RESPAWN_BLOCK_AVAILABLE0
+// START_RAINING1 STOP_RAINING2 CHANGE_GAME_MODE3 WIN_GAME4). showEndCredits sends it with value 0.0
+// (== show credits, not the instant-respawn value 1.0). CITE: ClientboundGameEventPacket.Type static init;
+// ServerPlayer.showEndCredits (send(WIN_GAME, 0.0)).
+const gameEventWinGame = 4
+
+// playerInEndPortal reports whether the player's feet or head cell is an end_portal block, read from the
+// player's-dimension world. This is the AABB-overlap gate EndPortalBlock.entityInside fires on (the twin
+// of playerInNetherPortal). CITE: EndPortalBlock.entityInside via the block-overlap sweep.
+func (t *TickLoop) playerInEndPortal(p *tickPlayer) bool {
+	mgr := t.dimWorld(p)
+	if mgr == nil {
+		return false
+	}
+	minY := dimMinYFor(p.dimension)
+	bx := int(mthFloorF(p.x))
+	bz := int(mthFloorF(p.z))
+	feetY := int(mthFloorF(p.y))
+	for _, by := range [2]int{feetY, feetY + 1} { // feet + eye/head cell
+		s, ok := mgr.GetBlock(pk.Position{X: bx, Y: by, Z: bz}, minY)
+		if !ok || int(s) < 0 || int(s) >= len(block.StateList) {
+			continue
+		}
+		if _, isPortal := block.StateList[s].(block.EndPortal); isPortal {
+			return true
+		}
+	}
+	return false
+}
+
+// tickEndPortal is the 1:1 port of EndPortalBlock.entityInside for every player, driven once per tick
+// after tickNetherPortal (which already decremented the shared portalCooldown this tick). For a player
+// standing in an end_portal block:
+//
+//   - canUsePortal(false) == (!isPassenger() && isAlive()): players are never passengers here, so this
+//     reduces to isAlive() == !p.dead. A dead player (death screen up) does not travel.
+//   - server-side + dimension==END + !seenCredits -> showEndCredits(): send WIN_GAME(0.0) once (guarded
+//     by wonGame) and mark seenCredits/wonGame. The client then drives the post-credits respawn back to
+//     the overworld through the existing respawn flow; a SECOND entry into the End exit portal (seenCredits
+//     now set) falls through to the travel branch and returns the player to the overworld.
+//   - else setAsInsidePortal -> travel. End portals report getPortalTransitionTime()==0, so travel is
+//     INSTANT (no dwell timer, unlike the nether's 80): overworld end_portal -> the_end (spawn platform),
+//     End exit portal -> overworld respawn/world spawn. The shared portalCooldown (set to
+//     getDimensionChangingDelay()==10 on any dimension change) prevents an immediate bounce.
+//
+// Tick-owned. CITE: EndPortalBlock.entityInside + Entity.canUsePortal + Portal.getPortalTransitionTime
+// (default 0) + ServerPlayer.showEndCredits.
+func (t *TickLoop) tickEndPortal() {
+	// Only when the End world is wired; otherwise End portals are inert.
+	if t.endWorld == nil {
+		return
+	}
+	for _, p := range t.players {
+		if p == nil || p.client == nil {
+			continue
+		}
+		// canUsePortal(false) == isAlive() for a non-passenger player.
+		if p.dead {
+			continue
+		}
+		if !t.playerInEndPortal(p) {
+			continue
+		}
+		// While on cooldown the just-arrived player standing in the destination portal must not travel.
+		if p.portalCooldown > 0 {
+			continue
+		}
+		// entityInside: dimension==END && ServerPlayer && !seenCredits -> showEndCredits (no travel).
+		if p.dimension == dimEnd && !p.seenCredits {
+			t.showEndCredits(p)
+			continue
+		}
+		// setAsInsidePortal: instant travel (End getPortalTransitionTime == 0). overworld/nether end_portal
+		// -> the_end; End exit portal (seenCredits set) -> overworld.
+		target := dimEnd
+		if p.dimension == dimEnd {
+			target = dimOverworld
+		}
+		p.portalCooldown = portalCooldownTicks // getDimensionChangingDelay() == 10
+		t.changeDimension(p, target)
+	}
+}
+
+// showEndCredits ports ServerPlayer.showEndCredits: send ClientboundGameEvent(WIN_GAME, 0.0) exactly once
+// (guarded by wonGame) and mark seenCredits so the next End-exit-portal entry returns the player to the
+// overworld. The vanilla unRide + removePlayerImmediately(CHANGED_DIMENSION) teardown is a cite-deferred
+// no-op here (no passenger/removal subsystem on the tick player); the client-driven post-credits respawn
+// re-enters through the existing respawn flow. CITE: ServerPlayer.showEndCredits.
+func (t *TickLoop) showEndCredits(p *tickPlayer) {
+	if p.client == nil {
+		return
+	}
+	if !p.wonGame {
+		p.wonGame = true
+		p.client.Send(writeGameEventPacket(gameEventWinGame, 0.0))
+	}
+	p.seenCredits = true
+}

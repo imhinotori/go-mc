@@ -213,3 +213,105 @@ func TestEndReturnToOverworld(t *testing.T) {
 			p.x, p.z, loop.spawnPoint.X, loop.spawnPoint.Z, endSpawnX, endSpawnZ)
 	}
 }
+
+// TestEndPortalTravelOverworldToEnd drives tickEndPortal for a player standing in an overworld end_portal
+// block: EndPortalBlock.entityInside -> setAsInsidePortal -> instant travel to the_end (transition time 0).
+func TestEndPortalTravelOverworldToEnd(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	ow := world.NewChunkManager()
+	readyOverworldChunk(ow)
+	for _, r := range loop.regions {
+		r.world = ow
+	}
+	loop.endWorld = world.NewChunkManager()
+	loop.endGen = world.NewEndGenerator(1234, dimEndSecs, dimEndMinY)
+
+	portalState := block.ToStateID[block.EndPortal{}]
+	feet := pk.Position{X: 8, Y: 70, Z: 8}
+	if !ow.SetBlock(feet, portalState, dimMinY) {
+		t.Fatalf("failed to place end_portal block")
+	}
+	p := &tickPlayer{
+		client:   captureClient(8192),
+		entityID: 1,
+		x:        8.5, y: 70.0, z: 8.5,
+		dimension: dimOverworld, secs: 24, gameMode: gameModeSurvival,
+		viewDist: serverViewDistance,
+	}
+	loop.players = append(loop.players, p)
+
+	loop.tickEndPortal()
+	if p.dimension != dimEnd {
+		t.Fatalf("player did not travel to the End (dim=%d), end_portal travel is instant", p.dimension)
+	}
+	if p.portalCooldown != portalCooldownTicks {
+		t.Fatalf("portalCooldown = %d after End travel, want %d", p.portalCooldown, portalCooldownTicks)
+	}
+	// Arrived at the End spawn platform column.
+	if p.x != endSpawnX || p.z != endSpawnZ {
+		t.Fatalf("End arrival = (%.1f,%.1f), want (%.1f,%.1f)", p.x, p.z, endSpawnX, endSpawnZ)
+	}
+}
+
+// TestEndPortalShowsCreditsThenReturns drives tickEndPortal for a player in the End standing in an
+// end_portal (the exit portal): the FIRST entry shows the credits (WIN_GAME sent, seenCredits set, no
+// travel); a SECOND entry (cooldown cleared) returns the player to the overworld. CITE:
+// EndPortalBlock.entityInside (dimension==END && !seenCredits -> showEndCredits).
+func TestEndPortalShowsCreditsThenReturns(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	for _, r := range loop.regions {
+		r.world = world.NewChunkManager()
+	}
+	loop.endWorld = world.NewChunkManager()
+	loop.endGen = world.NewEndGenerator(1234, dimEndSecs, dimEndMinY)
+	loop.hasSpawnPoint = true
+	loop.spawnPoint = SpawnPoint{X: 8.5, Y: 72.0, Z: 8.5}
+
+	// An End chunk with an end_portal at the player's feet.
+	ech := level.EmptyChunk(dimEndSecs)
+	ech.Status = level.StatusFull
+	loop.endWorld.Insert(level.ChunkPos{0, 0}, ech)
+	portalState := block.ToStateID[block.EndPortal{}]
+	feet := pk.Position{X: 8, Y: 64, Z: 8}
+	if !loop.endWorld.SetBlock(feet, portalState, dimEndMinY) {
+		t.Fatalf("failed to place End exit end_portal block")
+	}
+	p := &tickPlayer{
+		client:   captureClient(8192),
+		entityID: 1,
+		x:        8.5, y: 64.0, z: 8.5,
+		dimension: dimEnd, secs: dimEndSecs, gameMode: gameModeSurvival,
+		viewDist: serverViewDistance,
+	}
+	loop.players = append(loop.players, p)
+
+	// First entry: credits, no travel.
+	loop.tickEndPortal()
+	if p.dimension != dimEnd {
+		t.Fatalf("player traveled on the FIRST End exit-portal entry (dim=%d), want credits first", p.dimension)
+	}
+	if !p.seenCredits || !p.wonGame {
+		t.Fatalf("seenCredits/wonGame not set after showEndCredits (seen=%v won=%v)", p.seenCredits, p.wonGame)
+	}
+	// A WIN_GAME game event must have been sent.
+	sawWin := false
+	for _, pkt := range drainPackets(p.client) {
+		if packetid.ClientboundPacketID(pkt.ID) == packetid.ClientboundGameEvent {
+			var ev pk.UnsignedByte
+			var param pk.Float
+			if err := pkt.Scan(&ev, &param); err == nil && int(ev) == gameEventWinGame {
+				sawWin = true
+			}
+		}
+	}
+	if !sawWin {
+		t.Fatalf("no WIN_GAME game event sent by showEndCredits")
+	}
+
+	// Second entry (cooldown cleared): travel to the overworld.
+	p.portalCooldown = 0
+	loop.tickEndPortal()
+	if p.dimension != dimOverworld {
+		t.Fatalf("player did not return to the overworld on the SECOND entry (dim=%d)", p.dimension)
+	}
+}

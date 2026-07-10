@@ -842,6 +842,14 @@ type tickPlayer struct {
 	insidePortalThisTick bool
 	portalCooldown       int
 
+	// seenCredits / wonGame port ServerPlayer.seenCredits + ServerPlayer.wonGame. When a player who has
+	// NOT seenCredits stands in an End end_portal block, EndPortalBlock.entityInside calls showEndCredits()
+	// instead of teleporting: it sends ClientboundGameEvent(WIN_GAME, 0.0) once (guarded by wonGame) and
+	// marks seenCredits, so a SECOND entry into the End exit portal returns the player to the overworld.
+	// Tick-owned. CITE: ServerPlayer.seenCredits/wonGame + EndPortalBlock.entityInside/showEndCredits.
+	seenCredits bool
+	wonGame     bool
+
 	// keep is the independent keep-alive component (TICK-04); keepalive is this
 	// player's KeepAliveClient adapter. dispatch forwards a returning
 	// ServerboundKeepAlive to keep.ClientTick(keepalive) so the keep-alive bookkeeping
