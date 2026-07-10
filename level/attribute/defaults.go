@@ -58,7 +58,9 @@ func createLivingAttributes() *Builder {
 		Add(StepHeight).             // registration default 0.6 (createLivingAttributes .add(STEP_HEIGHT))
 		Add(SafeFallDistance).       // registration default 3.0 (createLivingAttributes .add(SAFE_FALL_DISTANCE))
 		Add(EntityInteractionRange). // registration default 3.0
-		Add(AttackKnockback)         // registration default 0.0
+		Add(AttackKnockback).        // registration default 0.0
+		Add(Gravity).                // registration default 0.08 (createLivingAttributes .add(GRAVITY))
+		Add(JumpStrength)            // registration default 0.41999998688697815 (createLivingAttributes .add(JUMP_STRENGTH))
 }
 
 // createMobAttributes is the port of Mob.createMobAttributes(): createLivingAttributes() with

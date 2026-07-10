@@ -109,4 +109,19 @@ var (
 	// The registry default is 4.0; the HappyGhast supplier overrides it to 8.0 (HappyGhast.createAttributes,
 	// the mounted-camera pull-back). Cite net.minecraft.world.entity.ai.attributes.Attributes.CAMERA_DISTANCE.
 	CameraDistance = NewRangedAttribute("camera_distance", 4.0, 0.0, 32.0)
+
+	// Gravity is Attributes.GRAVITY (RangedAttribute "gravity", 0.08, -1.0, 1.0). Registered in
+	// Attributes.<clinit> via `new RangedAttribute("attribute.name.gravity", 0.08d, -1.0d, 1.0d)
+	// .setSyncable(true)` (javap Attributes: ldc2_w 0.08d, ldc2_w -1.0d, dconst_1 - this session).
+	// Added to every LivingEntity by createLivingAttributes; consumed by Entity.getGravity() (the
+	// per-tick downward pull) and by LongJumpUtil.calculateJumpVectorForAngle (the ballistic solve).
+	Gravity = NewRangedAttribute("gravity", 0.08, -1.0, 1.0)
+
+	// JumpStrength is Attributes.JUMP_STRENGTH (RangedAttribute "jump_strength", 0.41999998688697815,
+	// 0.0, 32.0). Registered in Attributes.<clinit> via `new RangedAttribute(
+	// "attribute.name.jump_strength", 0.41999998688697815d, 0.0d, 32.0d).setSyncable(true)` (javap
+	// Attributes: ldc2_w 0.41999998688697815d, dconst_0, ldc2_w 32.0d - this session). Added to every
+	// LivingEntity by createLivingAttributes (Goat does NOT override it); consumed by
+	// LongJumpToRandomPos.calculateOptimalJumpVector (velocity = JUMP_STRENGTH * maxJumpVelocityMultiplier).
+	JumpStrength = NewRangedAttribute("jump_strength", 0.41999998688697815, 0.0, 32.0)
 )

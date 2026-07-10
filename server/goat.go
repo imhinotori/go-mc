@@ -51,7 +51,39 @@ const (
 	goatScreamingChance = 0.02                // GOAT_SCREAMING_CHANCE (ldc2_w 0.02d): nextDouble() < 0.02 -> screaming
 	goatFoodTag         = "goat_food"         // GOAT_FOOD (WHEAT): the tempt predicate
 	goatUnihornChance   = 0.10000000149011612 // UNIHORN_CHANCE (ldc 0.1f, f2d-widened): finalizeSpawn removeOneHorn roll
+	// GoatAi long-jump + ram-sensor brain constants (VERIFIED javap GoatAi + LongJumpToRandomPos +
+	// PrepareRamNearestTarget + RamTarget + LongJumpUtil this session -- ConstantValue attributes +
+	// UniformInt.of(min,max) statics).
+	goatMaxJumpVelocityMult = 3.5714288         // MAX_JUMP_VELOCITY_MULTIPLIER (ConstantValue float 3.5714288f)
+	goatLongJumpPrepareTime = 40                // LongJumpToRandomPos PREPARE_JUMP_DURATION (ConstantValue int 40)
+	goatRamPrepareTime      = 20                // RAM_PREPARE_TIME (ConstantValue int 20)
+	goatRamMaxDistance      = 7                 // RAM_MAX_DISTANCE (ConstantValue int 7)
+	goatJumpScaleFactor     = 0.949999988079071 // calculateJumpVectorForAngle final .scale(0.95f) (ldc2_w)
 )
+
+// goatAllowedJumpAngles is LongJumpToRandomPos.ALLOWED_ANGLES = [65, 70, 75, 80] (javap <clinit>: the
+// four bipush'd Integers). calculateOptimalJumpVector shuffles a copy then returns the first angle that
+// yields a valid ballistic solution. Cite LongJumpToRandomPos.ALLOWED_ANGLES.
+var goatAllowedJumpAngles = [4]int{65, 70, 75, 80}
+
+// goatBrainState groups the TRANSIENT Goat GoatAi brain phase state behind ONE Entity pointer (nil for
+// non-goats). The two cooldown MEMORIES live on the Entity itself: RAM_COOLDOWN_TICKS is goatRamCooldownTicks
+// (the flat field goatAiStep already counts down + goatFinishRam reseeds), LONG_JUMP_COOLDOWN_TICKS is
+// longJumpCooldown here. This struct carries only the per-activity phase (ram prepare/charge, long-jump
+// prepare/mid-jump). Cite GoatAi.initMemories + the LongJump/Ram activities.
+type goatBrainState struct {
+	longJumpCooldown int32 // MemoryModuleType.LONG_JUMP_COOLDOWN_TICKS (CountDownCooldownTicks decrements it)
+	// Ram phase (PrepareRamNearestTarget -> RamTarget). ramTargetID != 0 while a ram is armed/charging.
+	ramTargetID int32   // the selected victim (PrepareRamNearestTarget candidate / RamTarget target)
+	ramPrepare  int32   // ticks remaining before the charge arms (RAM_PREPARE_TIME countdown)
+	ramCharging bool    // RamTarget active (charging toward the victim, dealing the hit on contact)
+	ramDirX     float64 // RamTarget.ramDirection.x (normalized start->target horizontal)
+	ramDirZ     float64 // RamTarget.ramDirection.z
+	// Long-jump phase (LongJumpToRandomPos). ljChosenValid gates the prepare->launch transition.
+	ljPrepare        int32   // PREPARE_JUMP_DURATION countdown before the launch impulse
+	ljChosenValid    bool    // a valid chosenJump velocity was solved (pickCandidate succeeded)
+	ljVX, ljVY, ljVZ float64 // the solved chosenJump velocity vector (calculateOptimalJumpVector)
+}
 
 // newGoatAI builds the Goat bounded passive AI. Goat is a BRAIN mob in vanilla (the RAM/long-jump/tempt
 // behaviors live in GoatAi, DEFERRED per the file header); this supplies the "visibly alive" classic-goal
@@ -105,9 +137,12 @@ func (t *TickLoop) spawnGoat(x, y, z float64, baby bool) *Entity {
 	g.goatHasRightHorn = true
 	// ageBoundaryReached(): ATTACK_DAMAGE base 2.0 adult / 1.0 baby + the baby-scale dims (setGoatAgeAttack).
 	setGoatAgeAttack(g)
-	// GoatAi.initMemories: RAM_COOLDOWN_TICKS sampled from TIME_BETWEEN_RAMS(_SCREAMER) at spawn (the goat
-	// is on cooldown from birth). Drawn on the goat's own stream (finalizeSpawn order: after the screaming
-	// roll). LONG_JUMP_COOLDOWN_TICKS is the DEFERRED long-jump memory (no long-jump machinery yet).
+	// GoatAi.initMemories(this, level.getRandom()): seed LONG_JUMP_COOLDOWN_TICKS = TIME_BETWEEN_LONG_JUMPS
+	// .sample(rng) FIRST, then RAM_COOLDOWN_TICKS = getTimeBetweenRams(goat).sample(rng), IN THAT ORDER, both
+	// on the goat's own stream (finalizeSpawn order: after the screaming roll). sample == min+nextInt(span+1).
+	// Cite GoatAi.initMemories + UniformInt.sample.
+	g.goatBrain = &goatBrainState{}
+	g.goatBrain.longJumpCooldown = int32(goatTimeBetweenLongJumpsMin + mobRandom(g).nextInt(goatTimeBetweenLongJumpsMax-goatTimeBetweenLongJumpsMin+1))
 	g.goatRamCooldownTicks = int32(goatRamCooldownSample(g))
 	// finalizeSpawn tail: if(!isBaby() && random.nextFloat() < 0.1) removeOneHorn (nextBoolean picks L/R).
 	// UNIHORN_CHANCE 0.1. The draw ORDER (nextFloat gate, then nextBoolean side) is the faithful contract.
@@ -126,26 +161,49 @@ func (t *TickLoop) spawnGoat(x, y, z float64, baby bool) *Entity {
 	return g
 }
 
-// goatAiStep is the Goat per-tick extra (Goat.customServerAiStep). Vanilla runs the GoatAi BRAIN here (the
-// RAM/long-jump/tempt behaviors), which is the DEFERRED behavior layer -- so this is a bounded no-op today
-// (the passive goals in newGoatAI drive the visible movement). It is wired + per-type-gated (typ ==
-// entity.Goat.ID) so the ram/long-jump slots in here the moment the brain LongJump machinery lands, never
-// baked away. RNG-free. Cite Goat.customServerAiStep + GoatAi (the brain deferral note).
+// goatAiStep is the Goat per-tick extra (Goat.customServerAiStep -> GoatAi brain). It ticks the two
+// cooldowns (LONG_JUMP_COOLDOWN_TICKS / RAM_COOLDOWN_TICKS) and drives the RAM (PrepareRamNearestTarget
+// -> RamTarget) and LONG_JUMP (LongJumpToRandomPos) activities. Per-type-gated on e.goatBrain != nil
+// (nil for every non-goat, so the pig oracle is untouched). RNG on the goat OWN stream. RAM_COOLDOWN_TICKS
+// is the flat goatRamCooldownTicks field; LONG_JUMP_COOLDOWN_TICKS lives on goatBrain. Cite
+// Goat.customServerAiStep + GoatAi.getActivities.
 func (t *TickLoop) goatAiStep(e *Entity) {
 	if e.dead || e.health <= 0 {
 		return
 	}
-	// GoatAi CORE activity: CountDownCooldownTicks(RAM_COOLDOWN_TICKS) -- tick the ram cooldown down toward
-	// 0 every tick (the memory RamTarget.checkExtraStartConditions gates on being ABSENT/expired). This keeps
-	// the goat's own goatRamCooldownTicks live so the ram can re-arm; when the brain PrepareRamNearestTarget
-	// sensor lands it will select a victim and call goatRam (which reseeds this via goatFinishRam). The
-	// screaming variant (e.goatScreaming) shortens the reseed (goatRamCooldownSample). No RNG in the count-down.
+	if e.goatBrain == nil {
+		return
+	}
+	b := e.goatBrain
+	// CORE activity: CountDownCooldownTicks ticks BOTH cooldowns down every tick (GoatAi initCoreActivity
+	// registers CountDownCooldownTicks(LONG_JUMP_COOLDOWN_TICKS) + (RAM_COOLDOWN_TICKS)).
+	if b.longJumpCooldown > 0 {
+		b.longJumpCooldown--
+	}
 	if e.goatRamCooldownTicks > 0 {
 		e.goatRamCooldownTicks--
 	}
-	// DEFERRED: the brain PrepareRamNearestTarget target sensor + LongJumpToRandomPos high goat-jump. The
-	// numeric RAM core (damage/knockback/horn drop) is ported and callable as goatRam/goatDropHorn -- it
-	// slots in here the moment the sensor selects a victim, never baked away.
+	// RAM activity (PrepareRamNearestTarget -> RamTarget) runs while a ram is armed/charging; else the
+	// LONG_JUMP activity may start. The activities are mutually exclusive; RAM precedes LONG_JUMP in
+	// GoatAi.getActivities. Cite GoatAi.getActivities.
+	if b.ramCharging {
+		t.goatRamCharge(e)
+		return
+	}
+	if b.ramTargetID != 0 {
+		t.goatPrepareRam(e)
+		return
+	}
+	if b.ljChosenValid || b.ljPrepare > 0 {
+		t.goatLongJumpTick(e)
+		return
+	}
+	if e.goatRamCooldownTicks == 0 && t.goatTryStartRam(e) {
+		return
+	}
+	if b.longJumpCooldown == 0 {
+		t.goatTryStartLongJump(e)
+	}
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -294,6 +352,12 @@ func (t *TickLoop) goatFinishRam(g *Entity) {
 	if g.ai != nil {
 		g.ai.setTarget(0) // eraseMemory(RAM_TARGET)
 	}
+	// eraseMemory(RAM_TARGET): also clear the transient brain ram phase so the sensor can re-arm cleanly.
+	if g.goatBrain != nil {
+		g.goatBrain.ramTargetID = 0
+		g.goatBrain.ramPrepare = 0
+		g.goatBrain.ramCharging = false
+	}
 }
 
 // goatHasRammedHornBreakingBlock ports RamTarget.hasRammedHornBreakingBlock(ServerLevel, Goat): project a
@@ -437,4 +501,252 @@ func (t *TickLoop) tryMilkGoat(p *tickPlayer, mob *Entity) bool {
 	inv.set(heldWindowSlot(inv.heldSlot), r)
 	t.sendContent(p)
 	return true
+}
+
+// ---------------------------------------------------------------------------------------------------
+// GoatAi long-jump + ram sensor brain (LongJumpToRandomPos / PrepareRamNearestTarget / RamTarget), 1:1 from
+// the 26.2 jar (javap this session). The numeric RAM core (damage/knockback/horn drop) is goatRam above;
+// this layer is the SENSOR + charge phasing + the high goat-jump that drives it. RAM_COOLDOWN_TICKS is the
+// flat goatRamCooldownTicks field (goatFinishRam reseeds it); LONG_JUMP_COOLDOWN_TICKS is goatBrain.
+
+// goatSampleUniform ports UniformInt.of(min,max).sample(rng) == min + rng.nextInt(max-min+1)
+// (Mth.randomBetweenInclusive). Cite UniformInt.sample.
+func goatSampleUniform(r *entityRandom, lo, hi int) int {
+	return lo + r.nextInt(hi-lo+1)
+}
+
+// goatRamTimeBetween returns the ram-cooldown UniformInt endpoints for THIS goat: a screaming goat uses
+// TIME_BETWEEN_RAMS_SCREAMER (100..300), else TIME_BETWEEN_RAMS (600..6000). Cite GoatAi.initRamActivity.
+func (e *Entity) goatRamTimeBetween() (lo, hi int) {
+	if e.goatScreaming {
+		return goatTimeBetweenRamsScreamerMin, goatTimeBetweenRamsScreamerMax
+	}
+	return goatTimeBetweenRamsMin, goatTimeBetweenRamsMax
+}
+
+// goatFindRamVictim ports PrepareRamNearestTarget candidate pick (NEAREST_VISIBLE_LIVING_ENTITIES feed):
+// the nearest live player within RAM_MAX_DISTANCE (7). Returns the victim id (0 if none). NO RNG. Cite
+// PrepareRamNearestTarget.start + RAM_TARGET_CONDITIONS.
+func (t *TickLoop) goatFindRamVictim(e *Entity) int32 {
+	var best *tickPlayer
+	bestSq := float64(goatRamMaxDistance * goatRamMaxDistance)
+	for _, p := range t.players {
+		if p == nil || p.dead || p.gameMode == gameModeSpectator || p.gameMode == gameModeCreative {
+			continue
+		}
+		d := distanceToSqrPlayer(p, e)
+		if d <= bestSq {
+			bestSq = d
+			best = p
+		}
+	}
+	if best != nil {
+		return best.entityID
+	}
+	return 0
+}
+
+// goatTryStartRam ports PrepareRamNearestTarget.start: pick a ram victim and arm the prepare phase
+// (RAM_PREPARE_TIME). Returns true if a ram was armed. Cite PrepareRamNearestTarget.start.
+func (t *TickLoop) goatTryStartRam(e *Entity) bool {
+	victim := t.goatFindRamVictim(e)
+	if victim == 0 {
+		return false
+	}
+	e.goatBrain.ramTargetID = victim
+	e.goatBrain.ramPrepare = goatRamPrepareTime
+	e.goatBrain.ramCharging = false
+	return true
+}
+
+// goatPrepareRam ports the PrepareRamNearestTarget prepare loop: walk toward the victim and, after
+// RAM_PREPARE_TIME ticks, arm the RamTarget charge (RAM_TARGET set -> RamTarget.start computes
+// ramDirection). The exact pathfind-to-start-position is DEFERRED (reduced to the prepare countdown; the
+// goat homes on the victim so the charge faces it). On a lost victim it re-arms the min cooldown
+// (getCooldownOnFail == TIME_BETWEEN_RAMS.minInclusive). Cite PrepareRamNearestTarget.tick + RamTarget.start.
+func (t *TickLoop) goatPrepareRam(e *Entity) {
+	b := e.goatBrain
+	victim := t.playerByEntityID(b.ramTargetID)
+	if victim == nil || victim.dead {
+		e.goatRamCooldownTicks = int32(goatTimeBetweenRamsMin) // getCooldownOnFail == TIME_BETWEEN_RAMS.min
+		b.ramTargetID = 0
+		b.ramPrepare = 0
+		return
+	}
+	if e.ai != nil {
+		e.ai.setWantTargetMod(victim.x, victim.y, victim.z, 1.25) // PrepareRamNearestTarget walkSpeed 1.25f
+	}
+	if b.ramPrepare > 0 {
+		b.ramPrepare--
+		return
+	}
+	dx := victim.x - e.x
+	dz := victim.z - e.z
+	length := math.Sqrt(dx*dx + dz*dz)
+	if length < 1e-9 {
+		b.ramDirX, b.ramDirZ = 0, 0
+	} else {
+		b.ramDirX, b.ramDirZ = dx/length, dz/length
+	}
+	b.ramCharging = true
+}
+
+// goatRamCharge ports RamTarget.tick: charge toward the victim (SPEED_MULTIPLIER_WHEN_RAMMING 3.0) and,
+// on contact, run the numeric RAM core (goatRam: ATTACK_DAMAGE + the ram knockback + finishRam reseed +
+// the horn-drop on a #snaps_goat_horn block). Cite RamTarget.tick.
+func (t *TickLoop) goatRamCharge(e *Entity) {
+	b := e.goatBrain
+	victim := t.playerByEntityID(b.ramTargetID)
+	if victim == nil || victim.dead {
+		t.goatFinishRam(e)
+		return
+	}
+	if e.ai != nil {
+		e.ai.setWantTargetMod(victim.x, victim.y, victim.z, 3.0)
+	}
+	if !goatTouchesVictim(e, victim) {
+		return
+	}
+	// RamTarget.tick contact: hurtServer(ATTACK_DAMAGE) + the speed/knockback force term along ramDirection,
+	// then finishRam. goatRamPlayer is the tickPlayer twin of goatRam (same numeric pipeline); it reads the
+	// frozen ramDirection from goatBrain. A ram into a #snaps_goat_horn block snaps a horn (dropHorn).
+	t.goatRamPlayer(e, victim)
+}
+
+// goatTouchesVictim reports whether the charging goat footprint overlaps the victim (the bounded
+// RamTarget contact broad-phase). A full AABB-intersect is the exact-parity refinement once the entity
+// broad-phase lands. Cite RamTarget.getNearbyEntities(goat.getBoundingBox()).
+func goatTouchesVictim(e *Entity, victim *tickPlayer) bool {
+	hw := e.width/2.0 + playerWidth/2.0
+	if math.Abs(victim.x-e.x) > hw || math.Abs(victim.z-e.z) > hw {
+		return false
+	}
+	return math.Abs(victim.y-e.y) <= 2.0
+}
+
+// goatRamPlayer ports the RamTarget.tick numeric pipeline against a tickPlayer victim (the goatRam twin;
+// goatRam hits an *Entity, this hits a player). hurtServer(noAggroMobAttack, ATTACK_DAMAGE) + the
+// clamp(getSpeed()*1.65,0.2,3.0)+effF force * blockF(1.0) * getKnockbackForce along the frozen ramDirection,
+// the #snaps_goat_horn horn-drop, then finishRam. Cite RamTarget.tick.
+func (t *TickLoop) goatRamPlayer(g *Entity, victim *tickPlayer) {
+	if g == nil || victim == nil || victim.dead {
+		return
+	}
+	f := float32(g.getAttributeValue(attribute.AttackDamage))
+	t.applyDamage(victim, damageSourceMobAttack(g.id), f)
+	effF := float32(goatRamEffectFactor) * 0.0 // speedAmp - slowAmp == 0 (cited default)
+	force := mthClampF(float32(goatGetSpeed(g))*float32(goatRamSpeedFactor), float32(goatRamSpeedClampLo), float32(goatRamSpeedClampHi)) + effF
+	blockF := float32(1.0)
+	power := float64(blockF*force) * goatRamKnockbackForce(g)
+	// The charge heading is the frozen ramDirection (start->target); knockback drives the victim forward.
+	t.knockback(victim, power, g.goatBrain.ramDirX, g.goatBrain.ramDirZ)
+	// RamTarget.tick: if hasRammedHornBreakingBlock -> dropHorn (+ GOAT_HORN_BREAK sound, deferred).
+	if t.goatHasRammedHornBreakingBlock(g) {
+		t.goatDropHorn(g)
+	}
+	t.goatFinishRam(g)
+}
+
+// goatTryStartLongJump ports LongJumpToRandomPos.start + pickCandidate: choose a random landing pos within
+// MAX_LONG_JUMP_WIDTH/HEIGHT (5) and solve the ballistic jump velocity toward it. On success the goat
+// enters PREPARE_JUMP_DURATION (40). The WeightedRandom candidate list + Path.canReach check is DEFERRED
+// (reduced to a bounded random offset); the ballistic solve is EXACT. RNG on the goat OWN stream. Cite
+// LongJumpToRandomPos.start.
+func (t *TickLoop) goatTryStartLongJump(e *Entity) bool {
+	b := e.goatBrain
+	r := mobRandom(e)
+	for tries := 0; tries < goatMaxLongJumpWidth*2+1; tries++ {
+		ox := r.nextInt(goatMaxLongJumpWidth*2+1) - goatMaxLongJumpWidth
+		oz := r.nextInt(goatMaxLongJumpWidth*2+1) - goatMaxLongJumpWidth
+		if ox == 0 && oz == 0 {
+			continue
+		}
+		oy := r.nextInt(goatMaxLongJumpHeight*2+1) - goatMaxLongJumpHeight
+		tx := math.Floor(e.x) + float64(ox) + 0.5
+		ty := math.Floor(e.y) + float64(oy)
+		tz := math.Floor(e.z) + float64(oz) + 0.5
+		vx, vy, vz, ok := t.goatCalcJumpVector(e, tx, ty, tz)
+		if ok {
+			b.ljVX, b.ljVY, b.ljVZ = vx, vy, vz
+			b.ljChosenValid = true
+			b.ljPrepare = goatLongJumpPrepareTime
+			return true
+		}
+	}
+	return false
+}
+
+// goatLongJumpTick ports LongJumpToRandomPos.tick: after PREPARE_JUMP_DURATION (40) ticks, LAUNCH:
+// deltaMovement = chosenJump.scale((length + jumpBoostPower)/length). jumpBoostPower (JUMP_BOOST) is
+// DEFERRED (== 0) so the launch velocity == chosenJump exactly. After the launch the activity ends and
+// LONG_JUMP_COOLDOWN_TICKS re-samples. Cite LongJumpToRandomPos.tick + LongJumpMidJump.
+func (t *TickLoop) goatLongJumpTick(e *Entity) {
+	b := e.goatBrain
+	if !b.ljChosenValid {
+		b.ljPrepare = 0
+		return
+	}
+	if b.ljPrepare > 0 {
+		b.ljPrepare--
+		return
+	}
+	length := math.Sqrt(b.ljVX*b.ljVX + b.ljVY*b.ljVY + b.ljVZ*b.ljVZ)
+	if length > 0 {
+		jumpBoost := 0.0 // getJumpBoostPower() -- JUMP_BOOST effect DEFERRED == 0
+		scale := (length + jumpBoost) / length
+		e.vx = b.ljVX * scale
+		e.vy = b.ljVY * scale
+		e.vz = b.ljVZ * scale
+	}
+	b.ljChosenValid = false
+	b.ljPrepare = 0
+	b.longJumpCooldown = int32(goatSampleUniform(mobRandom(e), goatTimeBetweenLongJumpsMin, goatTimeBetweenLongJumpsMax))
+}
+
+// goatCalcJumpVector ports LongJumpToRandomPos.calculateOptimalJumpVector -> LongJumpUtil
+// .calculateJumpVectorForAngle: try ALLOWED_ANGLES [65,70,75,80] with maxVelocity = JUMP_STRENGTH *
+// MAX_JUMP_VELOCITY_MULTIPLIER; return the first angle whose ballistic velocity is real and within
+// maxVelocity. The per-step arc collision check (isClearTransition) is DEFERRED (needs LONG_JUMPING pose
+// dims + Level.noCollision); a clear arc yields the SAME scaled vector, so the returned velocity is EXACT.
+// Vanilla shuffles the angle copy; the bounded port keeps the fixed order (the first valid angle wins
+// either way for a clear arc). Cite LongJumpUtil.calculateJumpVectorForAngle.
+func (t *TickLoop) goatCalcJumpVector(e *Entity, targetX, targetY, targetZ float64) (vx, vy, vz float64, ok bool) {
+	maxVel := float64(float32(e.getAttributeValue(attribute.JumpStrength) * goatMaxJumpVelocityMult))
+	gravity := e.getAttributeValue(attribute.Gravity)
+	for _, angle := range goatAllowedJumpAngles {
+		vx, vy, vz, ok = goatJumpVectorForAngle(e.x, e.y, e.z, targetX, targetY, targetZ, maxVel, angle, gravity)
+		if ok {
+			return vx, vy, vz, true
+		}
+	}
+	return 0, 0, 0, false
+}
+
+// goatJumpVectorForAngle ports LongJumpUtil.calculateJumpVectorForAngle ballistic core (clear-arc result).
+// Every op mirrors the bytecode; rad is computed in float32 (i2f; fmul 3.1415927f; fdiv 180.0f) then
+// widened. Cite LongJumpUtil.calculateJumpVectorForAngle.
+func goatJumpVectorForAngle(px, py, pz, targetX, targetY, targetZ, maxVel float64, angle int, gravity float64) (vx, vy, vz float64, ok bool) {
+	dirX, _, dirZ := normalizeVec3(targetX-px, 0, targetZ-pz)
+	dirX *= 0.5
+	dirZ *= 0.5
+	v7x, v7y, v7z := targetX-dirX, targetY-0.0, targetZ-dirZ
+	v8x, v8y, v8z := v7x-px, v7y-py, v7z-pz
+	rad := float64(float32(angle) * 3.1415927 / 180.0)
+	at := math.Atan2(v8z, v8x)
+	hSq := v8x*v8x + v8z*v8z
+	h := math.Sqrt(hSq)
+	dy := v8y
+	num := hSq * gravity
+	den := h*math.Sin(2.0*rad) - 2.0*dy*math.Pow(math.Cos(rad), 2.0)
+	t32 := num / den
+	if t32 < 0 {
+		return 0, 0, 0, false
+	}
+	spd := math.Sqrt(t32)
+	if spd > maxVel {
+		return 0, 0, 0, false
+	}
+	cx := spd * math.Cos(rad)
+	cy := spd * math.Sin(rad)
+	return cx*math.Cos(at) * goatJumpScaleFactor, cy * goatJumpScaleFactor, cx*math.Sin(at) * goatJumpScaleFactor, true
 }

@@ -786,7 +786,13 @@ type Entity struct {
 	goatHasLeftHorn      bool
 	goatHasRightHorn     bool
 	goatRamCooldownTicks int32
-	frogVariant          int
+	// goatBrain groups the TRANSIENT Goat GoatAi brain phase (ram prepare/charge, long-jump prepare/mid-jump
+	// + the LONG_JUMP_COOLDOWN_TICKS memory) behind ONE pointer so a non-goat pays exactly one nil pointer
+	// and touches NONE of these fields (additive-minimal, byte-identical for the pig oracle). Nil for every
+	// non-goat. RAM_COOLDOWN_TICKS stays the flat goatRamCooldownTicks above. Cite GoatAi (LongJumpToRandomPos
+	// / PrepareRamNearestTarget / RamTarget).
+	goatBrain *goatBrainState
+	frogVariant int
 	// --- CAMEL / SNIFFER / ALLAY / AXOLOTL (passive animals, Task) ----------------------------------
 	//
 	// Tick-owned plain values, set/read ONLY for their own type (each *AiStep gates on typ). isCamel/
