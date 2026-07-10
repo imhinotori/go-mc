@@ -26,6 +26,8 @@ import (
 //     BaseFireBlock.canBePlacedAt fire branch (igniteFireAt) and the TntBlock.prime branch are ported;
 //     tryIgniteExplosiveEntities (entity-AABB) and campfire/candle canLight are cited deferrals. On success
 //     the flint-and-steel wears by 1 (stack.hurtAndBreak(1)).
+//   - TNT DispenseItemBehavior ($6): dispense a default-fuse PrimedTnt in the cell in FACING (gated on the
+//     TNT_EXPLODES gamerule), shrink(1).
 //
 // DEFERRED (cited -- need a not-yet-built subsystem, NOT a paraphrase): FIRE_CHARGE/POTION/EXP_BOTTLE/
 // FIREWORK/SPECTRAL+TIPPED ARROW/WIND_CHARGE projectiles (fire-charge draws the LEVEL random; the rest need
@@ -76,6 +78,8 @@ func (t *TickLoop) dispenseSpecialBehavior(pos pk.Position, state block.StateID,
 		return t.dispenseProjectile(pos, state, facing, stack), true
 	case item.FlintAndSteel.ID:
 		return t.dispenseFlintAndSteel(pos, facing, stack), true
+	case item.Tnt.ID:
+		return t.dispenseTnt(pos, facing, stack), true
 	}
 	return stack, false
 }
@@ -216,4 +220,48 @@ func (t *TickLoop) dispenseFlintAndSteel(pos pk.Position, facing block.Direction
 	t.dispenserLevelEvent(pos, 1000)
 	worn, _ := t.stackHurtAndBreak(stack, 1, false)
 	return worn
+}
+
+// dispenseTnt ports the TNT DispenseItemBehavior (DispenseItemBehavior$6.execute): dispense a PrimedTnt in
+// the cell in FACING and shrink the source stack by 1. Gated on the TNT_EXPLODES gamerule (a no-op miss
+// otherwise). The SulfurCube swallow check is false for a TNT item (it is not the SULFUR_CUBE_SWALLOWABLE
+// block dispense), so it is skipped.
+//
+//	if (!level.getGameRules().get(TNT_EXPLODES)) { setSuccess(false); return stack; }
+//	target = pos.relative(FACING);
+//	PrimedTnt tnt = new PrimedTnt(level, target.getX()+0.5, target.getY(), target.getZ()+0.5, null);
+//	level.addFreshEntity(tnt); playSound(TNT_PRIMED); gameEvent(ENTITY_PLACE); stack.shrink(1);
+//	setSuccess(true); return stack.
+//
+// The PrimedTnt(level, x, y, z, null) ctor uses the DEFAULT fuse (80) -- spawnPrimedTnt(tntDefaultFuseTime).
+// It resolves into its OWN region (primed_tnt.go), so its level-random toss draw stays on that region and
+// never perturbs the pig oracle. 1:1 net.minecraft.core.dispenser.DispenseItemBehavior$6.execute.
+func (t *TickLoop) dispenseTnt(pos pk.Position, facing block.Direction, stack component.SlotData) component.SlotData {
+	if t.world() == nil {
+		return stack
+	}
+	// if (!TNT_EXPLODES) { setSuccess(false); return stack; }
+	if !tntExplodes {
+		t.dispenserLevelEvent(pos, 1001) // setSuccess(false) -> the fail sound (cited no-op).
+		return stack
+	}
+	target := relative(pos, facing)
+	cx := float64(target.X) + 0.5
+	cy := float64(target.Y)
+	cz := float64(target.Z) + 0.5
+	// new PrimedTnt(level, cx, cy, cz, null) + addFreshEntity: the default-fuse primed TNT, resolved into
+	// its owning region so the ctor toss draw + the store-add agree.
+	t.withRegion(t.regionForColumn(columnOf(cx, cz)), func() {
+		t.spawnPrimedTnt(cx, cy, cz, tntDefaultFuseTime)
+	})
+	// playSound(TNT_PRIMED) + gameEvent(ENTITY_PLACE): client / vibration cues (cited no-ops).
+	t.dispenserLevelEvent(pos, 1000) // setSuccess(true) -> the dispense sound (cited no-op).
+
+	// stack.shrink(1); return stack.
+	work := stack
+	work.Count = toVar(int(work.Count) - 1)
+	if work.Count <= 0 {
+		return component.SlotData{Count: 0}
+	}
+	return work
 }

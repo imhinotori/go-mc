@@ -204,3 +204,34 @@ func TestDispenseNonRegisteredFallsThrough(t *testing.T) {
 		t.Fatalf("cobblestone dispenser slot count = %d, want 2 (split(1) of 3)", d.items[0].Count)
 	}
 }
+
+// TestDispenseTntPrimes locks the TNT DispenseItemBehavior ($6): a dispenser holding TNT, fired, spawns a
+// PrimedTnt in the cell in front and shrinks the slot by 1. CITE: DispenseItemBehavior$6.execute.
+func TestDispenseTntPrimes(t *testing.T) {
+	loop, pos, d := dispenseProjectileFacing(t, block.East, item.Tnt.ID)
+	disp, _ := loop.only().world.GetBlock(pos, dimMinY)
+
+	before := loop.only().entities.len()
+	loop.dispenseFrom(pos, disp)
+
+	var primed *Entity
+	for _, e := range loop.only().entities.all() {
+		if e.isTnt {
+			primed = e
+			break
+		}
+	}
+	if primed == nil {
+		t.Fatal("TNT dispenser did not spawn a PrimedTnt entity")
+	}
+	if got := loop.only().entities.len(); got != before+1 {
+		t.Fatalf("TNT dispense: %d new entities, want 1 PrimedTnt", got-before)
+	}
+	// The PrimedTnt sits in the cell in front (EAST -> x = pos.X+1 center 6.5).
+	if primed.x < 6.0 || primed.x > 7.0 {
+		t.Fatalf("PrimedTnt x = %v, want ~6.5 (front cell center)", primed.x)
+	}
+	if d.items[0].Count != 2 {
+		t.Fatalf("TNT dispenser slot count = %d, want 2 (shrink(1) of 3)", d.items[0].Count)
+	}
+}
