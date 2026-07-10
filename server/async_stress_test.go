@@ -53,6 +53,15 @@ func newStressLoop(t *testing.T, radius, floorY int) *TickLoop {
 		for cz := -radius; cz <= radius; cz++ {
 			ch := putChunk(mgr, level.ChunkPos{int32(cx), int32(cz)})
 			fillFloor(ch, floorY)
+			// CREATURE spawn-rules gate (992e7f39): the natural spawner's CREATURE pass runs
+			// checkAnimalSpawnRules (below == #animals_spawnable_on == grass_block) + isBrightEnoughToSpawn
+			// (getRawBrightness >= 9). Lay the surface as grass + full sky light so the stress spawner can
+			// actually add a pig under load; on a bare stone/dark floor every candidate is (correctly)
+			// rejected and the "stress was non-trivial" assertion can never pass. Pure block+light reads,
+			// no RNG, so the race-gate draw order is unperturbed. Cite Animal.checkAnimalSpawnRules /
+			// Animal.isBrightEnoughToSpawn.
+			setSurfaceGrass(ch, floorY)
+			setSkyLight(ch, 15)
 		}
 	}
 	return loop
