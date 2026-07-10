@@ -178,8 +178,9 @@ func bedFacingDelta(d block.Direction) (dx, dz int, ok bool) {
 //	return SUCCESS_SERVER;
 //
 // Sulfur subset (all cited): the FOOT->HEAD hop resolves the bed pos exactly (pos.relative(FACING) when
-// the clicked part is the FOOT); the explode branch is a no-op at the default BED_RULE (explodes==false,
-// no dimension carrying EXPLODES in v1); the OCCUPIED branch consumes without sleeping (the villager-kick
+// the clicked part is the FOOT); the explode branch (bed_explode.go) detonates a radius-5.0 fire BLOCK
+// explosion in the nether/end (BedRule.EXPLODES) and returns before sleeping; the OCCUPIED branch
+// consumes without sleeping (the villager-kick
 // + overlay message need subsystems v1 lacks — a cited no-op-with-consume, matching vanilla returning
 // SUCCESS_SERVER on an occupied bed); the BedSleepingProblem overlays are dropped (no overlay subsystem).
 // The ServerPlayer.startSleepInBed pre-checks reduce to the canSleep (night) gate — bedInRange is
@@ -220,7 +221,15 @@ func (t *TickLoop) useBed(p *tickPlayer, pos pk.Position) bool {
 		}
 	}
 
-	// rule.explodes(): default BED_RULE (CAN_SLEEP_WHEN_DARK) does not explode -> skip (cited no-op).
+	// BedRule rule = environmentAttributes().getValue(BED_RULE, pos); if (rule.explodes()) { ... }.
+	// The BED_RULE is dimension-driven (bed_explode.go bedRuleFor): overworld does NOT explode, the
+	// nether + the end DO (EXPLODES). When it explodes, remove the bed + detonate a radius-5.0 fire
+	// BLOCK explosion and return SUCCESS_SERVER -- the player never sleeps. bp.facing is the resolved
+	// HEAD facing. CITE BedBlock.useWithoutItem explode branch.
+	if bedRuleFor(p.dimension).explodes {
+		t.bedExplode(bedPos, bp.facing)
+		return true // SUCCESS_SERVER (action consumed; no sleep, no placement)
+	}
 
 	// OCCUPIED: consume without sleeping (the kick-villager + "bed.occupied" overlay are cited no-ops).
 	if bp.occupied {

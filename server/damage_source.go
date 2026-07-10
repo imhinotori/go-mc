@@ -130,6 +130,14 @@ var (
 	// hurtServer pipeline (combat_mob.go freeze-extra multiply). scaling when_caused_by_living_non_player,
 	// exhaustion 0.0 (freeze.json). Cite DamageSources.freeze / LivingEntity.aiStep freeze block.
 	damageTypeFreeze = damageTypeID(tag.DamageTypeIDs["minecraft:freeze"])
+	// damageTypeBadRespawnPoint is minecraft:bad_respawn_point -- the source the nether/end bed (and a
+	// broken respawn anchor) explosion deals: BedBlock.useWithoutItem's explode branch calls
+	// level.explode(null, damageSources().badRespawnPointExplosion(center), ...). The damage_type JSON is
+	// {scaling: always, exhaustion: 0.1, death_message_type: intentional_game_design} -- damage-math
+	// IDENTICAL to minecraft:explosion (same scaling/exhaustion); the only distinction is the
+	// "(Intentional Game Design)" death message (a message-only concern, no damage effect). Cite
+	// DamageSources.badRespawnPointExplosion (DamageTypes.BAD_RESPAWN_POINT).
+	damageTypeBadRespawnPoint = damageTypeID(tag.DamageTypeIDs["minecraft:bad_respawn_point"])
 )
 
 // damageSourceOf builds a DamageSource for an environmental/anonymous source: the given damage-type

@@ -48,7 +48,7 @@ func (t *TickLoop) explode(srcID int32, x, y, z, radius float64) {
 	// ServerExplosion.explode() returns and ServerLevel.explode forwards as the packet field. When
 	// the interaction is KEEP (mobGriefing off, below) NO block is destroyed, but vanilla still
 	// returns len(toBlow) from explode() (calculateExplodedPositions ran) — blockCount is that count.
-	hitPlayers := t.hurtEntitiesFromExplosion(srcID, x, y, z, radius)
+	hitPlayers := t.hurtEntitiesFromExplosion(srcID, x, y, z, radius, damageSourceOf(damageTypeExplosion))
 	// interactsWithBlocks(): blockInteraction != KEEP. For a creeper (ExplosionInteraction.MOB) the
 	// interaction is KEEP exactly when MOB_GRIEFING is off (ServerLevel.explode); so gate on mobGriefing
 	// — when off, NO block is removed (the vanilla KEEP path). The ray nextFloats above are still drawn
@@ -99,7 +99,7 @@ func (t *TickLoop) sendExplodePackets(cx, cy, cz float64, radius float32, blockC
 // other entity (players + mobs + items + ...) uses getEyePosition() == position + (0, eyeHeight, 0).
 // The exploding entity (srcID) is excluded (vanilla's getEntities(source,...) drops the source).
 // Cite ServerExplosion.hurtEntities + Entity.push + ExplosionDamageCalculator.
-func (t *TickLoop) hurtEntitiesFromExplosion(srcID int32, x, y, z, radius float64) map[int32]explosionKnockback {
+func (t *TickLoop) hurtEntitiesFromExplosion(srcID int32, x, y, z, radius float64, src damageSource) map[int32]explosionKnockback {
 	hitPlayers := make(map[int32]explosionKnockback)
 	if radius < explosionRadiusEpsilon {
 		return hitPlayers
@@ -124,7 +124,7 @@ func (t *TickLoop) hurtEntitiesFromExplosion(srcID int32, x, y, z, radius float6
 		impact := (1.0 - dist) * float64(exposure)
 		dmg := (impact*impact+impact)/2.0*explosionDamageConstant*doubleRadius + 1.0
 		if dmg > 0 {
-			t.applyDamage(p, damageSourceOf(damageTypeExplosion), float32(dmg))
+			t.applyDamage(p, src, float32(dmg))
 		}
 		// Knockback: dir(eye - center).normalize() * (1-dist)*exposure*kbMult*(1-kbResist). No kbResist
 		// attribute on players in v1 (0). Apply to the player's store entity + send one SetEntityMotion.
@@ -158,7 +158,7 @@ func (t *TickLoop) hurtEntitiesFromExplosion(srcID int32, x, y, z, radius float6
 			impact := (1.0 - dist) * float64(exposure)
 			dmg := (impact*impact+impact)/2.0*explosionDamageConstant*doubleRadius + 1.0
 			if dmg > 0 {
-				t.applyDamageEntity(e, damageSourceOf(damageTypeExplosion), float32(dmg))
+				t.applyDamageEntity(e, src, float32(dmg))
 			}
 		}
 		// PUSH is UNIVERSAL (A2+A3). Origin: a PrimedTnt uses feet position(); everything else uses
