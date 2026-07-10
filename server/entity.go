@@ -206,10 +206,16 @@ type Entity struct {
 	arrowInGround bool
 
 	// arrowCrit is AbstractArrow.isCritArrow (setCritArrow): set true by a full-draw player bow shot
-	// (BowItem.releaseUsing power==1.0f -> setCritArrow(true)). A crit arrow deals extra damage in vanilla
-	// and shows the crit particle trail. The extra-damage read is a cited follow-up (onHitEntity currently
-	// deals the base damage); the flag is carried for that read + the client visual. Cite AbstractArrow.setCritArrow.
+	// (BowItem.releaseUsing power==1.0f -> setCritArrow(true)). A crit arrow deals extra damage
+	// (onHitEntity: damage += random.nextInt(damage/2 + 2)) and shows the crit particle trail. Cite
+	// AbstractArrow.setCritArrow / onHitEntity.
 	arrowCrit bool
+
+	// arrowRNG is the arrow's per-entity RandomSource (AbstractArrow.random) -- a dedicated stream seeded
+	// from the arrow id at spawn (NEVER a mob stream, mirroring orbRNG/fishingRNG), so the crit-damage
+	// draw (onHitEntity: random.nextInt(damage/2 + 2)) never perturbs any mob's per-entity stream and the
+	// pig oracle stays byte-identical. Nil until the first crit hit needs it (lazy init).
+	arrowRNG *entityRandom
 
 	// arrowEffects are the tipped-arrow MobEffectInstances an Arrow carries (Arrow.getPotionContents
 	// / addEffect). A Stray fires SLOWNESS 600 arrows; a Bogged fires POISON 100 arrows (getArrow

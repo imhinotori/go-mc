@@ -240,6 +240,21 @@ func (t *TickLoop) arrowOnHitPlayer(e *Entity, victim *tickPlayer) {
 		raw = 0
 	}
 	dmg := int(math.Ceil(raw)) // Mth.ceil(clamp(...)); clamp upper bound is MAXINT (unreachable here)
+	// Crit bonus: if (isCritArrow()) damage = Math.min(random.nextInt(damage/2 + 2) + (long)damage, MAXINT).
+	// A full-draw bow shot (setCritArrow(true)) adds a random 0..(damage/2 + 1) bonus. The draw is from the
+	// arrow's OWN per-entity stream (lazy-seeded from the arrow id) so no mob stream is perturbed. Cite
+	// AbstractArrow.onHitEntity (offsets 193-230: nextInt(damage/2 + 2); Math.min(., 2147483647)).
+	if e.arrowCrit {
+		if e.arrowRNG == nil {
+			e.arrowRNG = newEntityRandom(uint64(e.id))
+		}
+		bonus := e.arrowRNG.nextInt(dmg/2 + 2)
+		if long := int64(bonus) + int64(dmg); long < math.MaxInt32 {
+			dmg = int(long)
+		} else {
+			dmg = math.MaxInt32
+		}
+	}
 	src := damageSourceArrow(e.arrowShooterID)
 	t.applyDamage(victim, src, float32(dmg))
 	// Arrow.doPostHurtEffects: a tipped arrow (Stray SLOWNESS 600 / Bogged POISON 100, set on the arrow

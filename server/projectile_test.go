@@ -105,3 +105,30 @@ func TestArrowNeverHitsShooter(t *testing.T) {
 		t.Fatalf("arrow hit its own shooter (health %v < %v) — the self-skip failed", shooter.health, start)
 	}
 }
+
+// TestArrowCritExtraDamage: a crit arrow (isCritArrow) deals the base ceil damage PLUS a random
+// nextInt(damage/2 + 2) bonus (AbstractArrow.onHitEntity offsets 193-230). With the same launch as a
+// non-crit arrow, the crit hit must deal STRICTLY MORE (the bonus is 0..damage/2+1, and the +2 floor
+// guarantees nextInt(>=2) can exceed 0; over the fixed per-arrow-id stream the bonus here is > 0).
+func TestArrowCritExtraDamage(t *testing.T) {
+	// Non-crit baseline.
+	loopN, floorYN, _ := arrowLoop(t)
+	pN := combatTestPlayer(loopN, 10.5, float64(floorYN+1), 8.5, 4242)
+	startN := pN.health
+	aN := loopN.spawnArrow(999, 7.5, float64(floorYN+1)+1.0, 8.5, 4.0, 0.0, 0.0, 3.0)
+	loopN.tickArrow(aN)
+	dealtN := startN - pN.health
+
+	// Crit shot, identical launch.
+	loopC, floorYC, _ := arrowLoop(t)
+	pC := combatTestPlayer(loopC, 10.5, float64(floorYC+1), 8.5, 4242)
+	startC := pC.health
+	aC := loopC.spawnArrow(999, 7.5, float64(floorYC+1)+1.0, 8.5, 4.0, 0.0, 0.0, 3.0)
+	aC.arrowCrit = true
+	loopC.tickArrow(aC)
+	dealtC := startC - pC.health
+
+	if dealtC <= dealtN {
+		t.Fatalf("crit arrow dealt %v, want > non-crit %v (crit bonus nextInt(damage/2 + 2))", dealtC, dealtN)
+	}
+}
