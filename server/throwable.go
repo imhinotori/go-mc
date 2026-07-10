@@ -33,6 +33,7 @@ const (
 	throwSnowball = iota
 	throwEgg
 	throwEnderPearl
+	throwExperienceBottle
 )
 
 // ThrowableProjectile physics constants (verified javap — exact float values).
@@ -47,6 +48,10 @@ const (
 	throwLaunchPower = 1.5
 	// enderPearlFallDamage is ThrownEnderpearl.onHit: hurtServer(enderPearl(), 5.0) after teleport.
 	enderPearlFallDamage = 5.0
+	// xpBottleGravity is ThrownExperienceBottle.getDefaultGravity() == 0.07d -- the xp bottle overrides the
+	// ThrowableProjectile default 0.03 with a HEAVIER 0.07, so it arcs down faster than a snowball.
+	//   [VERIFIED javap ThrownExperienceBottle.getDefaultGravity: ldc2_w 0.07d; dreturn.]
+	xpBottleGravity = 0.07
 )
 
 // itemToThrowableKind maps a held item id to its throwable kind, ok=false for a non-throwable item.
@@ -59,6 +64,8 @@ func itemToThrowableKind(itemID int32) (int, bool) {
 		return throwEgg, true
 	case item.EnderPearl.ID:
 		return throwEnderPearl, true
+	case item.ExperienceBottle.ID:
+		return throwExperienceBottle, true
 	}
 	return 0, false
 }
@@ -70,6 +77,8 @@ func throwableEntityType(kind int) entity.Entity {
 		return entity.Egg
 	case throwEnderPearl:
 		return entity.EnderPearl
+	case throwExperienceBottle:
+		return entity.ExperienceBottle
 	default:
 		return entity.Snowball
 	}
@@ -178,8 +187,13 @@ func (t *TickLoop) tickThrowables() {
 // tickThrowable is the port of ThrowableProjectile.tick for one throwable: gravity, drag, then the swept
 // block+entity hit test; on a hit it runs the per-kind onHit and discards; else it moves and ages.
 func (t *TickLoop) tickThrowable(e *Entity) {
-	// (1) applyGravity: deltaMovement.y -= getDefaultGravity() (0.03). BEFORE the move (throwable order).
-	e.vy -= throwGravity
+	// (1) applyGravity: deltaMovement.y -= getDefaultGravity(). BEFORE the move (throwable order). The xp
+	// bottle overrides the default 0.03 with 0.07 (ThrownExperienceBottle.getDefaultGravity).
+	gravity := throwGravity
+	if e.throwableKind == throwExperienceBottle {
+		gravity = xpBottleGravity
+	}
+	e.vy -= gravity
 
 	// (2) applyInertia: deltaMovement *= getAirDrag() (0.99), or 0.8 in water.
 	drag := throwAirDrag
@@ -245,14 +259,20 @@ func (t *TickLoop) throwableOnHitEntity(e *Entity, victim *tickPlayer) {
 	case throwEnderPearl:
 		// The pearl teleports its owner regardless of what it hit (block or entity).
 		t.enderPearlTeleport(e)
+	case throwExperienceBottle:
+		// The xp bottle breaks on ANY hit (block or entity), splitting into XP orbs at the impact point.
+		t.experienceBottleBreak(e)
 	}
 }
 
 // throwableOnHitBlock ports the per-kind onHit for a block impact. Snowball/egg: just discard (the
 // caller removes it). Ender pearl: teleport the owner to the pre-move position.
 func (t *TickLoop) throwableOnHitBlock(e *Entity) {
-	if e.throwableKind == throwEnderPearl {
+	switch e.throwableKind {
+	case throwEnderPearl:
 		t.enderPearlTeleport(e)
+	case throwExperienceBottle:
+		t.experienceBottleBreak(e)
 	}
 }
 
@@ -273,3 +293,36 @@ func (t *TickLoop) enderPearlTeleport(e *Entity) {
 	// path so i-frames / death are handled exactly like any other player damage.
 	t.applyDamage(owner, damageSourceEnderPearl(), enderPearlFallDamage)
 }
+
+// --- THROWN EXPERIENCE BOTTLE (ThrownExperienceBottle) --------------------------------------------------
+
+// experienceBottleBreak ports ThrownExperienceBottle.onHit: on the server, emit the break level-event
+// (2002, blockPos, -13083194 -- the potion-color splash particles), roll the XP payload
+//
+//	i = 3 + random.nextInt(5) + random.nextInt(5)
+//
+// and award it as ExperienceOrbs at the impact point (ExperienceOrb.awardWithDirection), then discard. The
+// RNG draw ORDER is nextInt(5) then nextInt(5) (verified javap offsets 35-58) on the bottle's OWN per-entity
+// stream, so the pig oracle stream is never perturbed. CITE ThrownExperienceBottle.onHit.
+func (t *TickLoop) experienceBottleBreak(e *Entity) {
+	if e.throwRNG == nil {
+		e.throwRNG = newEntityRandom(uint64(e.id))
+	}
+	// levelEvent(2002, blockPosition(), -13083194): the splash-particle client event -- a cited no-op seam
+	// (the ClientboundLevelEvent broadcast plumbing is not wired for throwables yet; the observable gameplay
+	// is the XP award below). Kept as a named call so the wire-out slots in when the level-event path lands.
+	t.xpBottleLevelEvent(e)
+
+	// i = 3 + nextInt(5) + nextInt(5) -- the two draws in order.
+	value := 3 + e.throwRNG.nextInt(5) + e.throwRNG.nextInt(5)
+	// ExperienceOrb.awardWithDirection(level, hitLocation, direction, value): split value into orbs at the
+	// impact point (getExperienceValue table) and spawn each. v1 spawns at the bottle position (the hit
+	// location the projectile was moved to before onHit) -- the direction seeds the orb's initial motion
+	// (a metadata/motion nicety), so the observable "XP appears here and can be collected" is preserved.
+	t.awardExperienceOrbsAt(e.x, e.y, e.z, value)
+}
+
+// xpBottleLevelEvent is the cited faithful no-op seam for ThrownExperienceBottle.onHit's levelEvent(2002,
+// blockPos, -13083194) -- the splash-particle client feedback, matching the brewLevelEvent/dispenserLevelEvent
+// no-op seams (no ClientboundLevelEvent broadcast wired for throwables yet).
+func (t *TickLoop) xpBottleLevelEvent(_ *Entity) {}
