@@ -69,6 +69,12 @@ const (
 //	 DEFAULT = new DropChances(makeEnumMap(EquipmentSlot.class, slot -> 0.085f)).]
 const defaultEquipmentDropChance = float32(0.085)
 
+// skeletonCanPickUpLootChance is the AbstractSkeleton.finalizeSpawn setCanPickUpLoot gate literal:
+// setCanPickUpLoot(random.nextFloat() < 0.55f * difficulty.getSpecialMultiplier()). Skeleton-family only.
+//
+//	[VERIFIED javap AbstractSkeleton.finalizeSpawn @46: ldc 0.55f; getSpecialMultiplier(); fmul; fcmpg.]
+const skeletonCanPickUpLootChance = float32(0.55)
+
 // getItemBySlot is net.minecraft.world.entity.LivingEntity.getItemBySlot(EquipmentSlot) ->
 // equipment.get(slot): the stack in the slot, or the EMPTY stack (a zero-value SlotData) for an
 // un-populated slot (EnumMap.getOrDefault(slot, ItemStack.EMPTY)). slot is the ordinal (equip*).
@@ -379,6 +385,24 @@ func populateMonsterEquipment(e *Entity, rng *entityRandom, mult float32) {
 		}
 	}
 	populateDefaultEquipmentEnchantments(e, rng, mult)
+
+	// AbstractSkeleton.finalizeSpawn, AFTER populateDefaultEquipmentSlots + populateDefaultEquipmentEnchantments
+	// (+ the RNG-free reassessWeaponGoal), draws ONE more nextFloat on the spawn RandomSource:
+	//   setCanPickUpLoot(random.nextFloat() < 0.55f * difficulty.getSpecialMultiplier());
+	// This draw is SKELETON-FAMILY ONLY (AbstractSkeleton override) -- Zombie.finalizeSpawn has its OWN
+	// canPickUpLoot roll at a DIFFERENT point in its own draw order, so it is NOT emitted here. The draw is
+	// REQUIRED for RNG parity: it is drawn between the enchant gate and any later spawn draw, so omitting it
+	// desyncs the skeleton spawn stream. `mult` is difficulty.getSpecialMultiplier() (read once by the caller,
+	// exactly as finalizeSpawn reads it once). canPickUpLoot is set on the field (Mob.setCanPickUpLoot); the
+	// looting-scan behavior gate itself remains the cited Mob.canPickUpLoot flag.
+	//	[VERIFIED javap AbstractSkeleton.finalizeSpawn @38-62: getRandom().nextFloat(); ldc 0.55f;
+	//	 DifficultyInstance.getSpecialMultiplier(); fmul; fcmpg; iflt -> iconst_1 else iconst_0;
+	//	 setCanPickUpLoot(Z). Draw order: populateDefaultEquipmentSlots -> populateDefaultEquipmentEnchantments
+	//	 -> reassessWeaponGoal (no RNG) -> THIS nextFloat.]
+	switch e.typ {
+	case entity.Skeleton.ID, entity.Stray.ID, entity.Bogged.ID:
+		e.canPickUpLoot = rng.nextFloat() < skeletonCanPickUpLootChance*mult
+	}
 }
 
 // equipmentSpawnPackets builds the ClientboundSetEquipment packets a newly-tracking observer needs

@@ -172,6 +172,86 @@ func TestZeroMultiplierNoArmor(t *testing.T) {
 	}
 }
 
+// TestSkeletonCanPickUpLootDraw pins the AbstractSkeleton.finalizeSpawn setCanPickUpLoot roll:
+//
+//	setCanPickUpLoot(random.nextFloat() < 0.55f * difficulty.getSpecialMultiplier());
+//
+// drawn AFTER populateDefaultEquipmentSlots + populateDefaultEquipmentEnchantments (+ RNG-free
+// reassessWeaponGoal). It is REQUIRED for RNG parity -- without it every skeleton spawn draw after the
+// enchant gate desyncs from the jar. This test runs a skeleton through populateMonsterEquipment and, on a
+// PARALLEL RNG seeded identically, replays the exact same equipment calls followed by ONE nextFloat; the
+// two streams must then be in lockstep (identical subsequent draws) AND canPickUpLoot must equal
+// refFloat < 0.55*mult. Cite AbstractSkeleton.finalizeSpawn.
+func TestSkeletonCanPickUpLootDraw(t *testing.T) {
+	const mult = float32(1.0) // getSpecialMultiplier == 1.0 (a matured world) so the 0.55 gate is live
+	for seed := uint64(0); seed < 256; seed++ {
+		sk := NewEntity(1, entity.Skeleton, 0, 0, 0)
+		got := newEntityRandom(seed)
+		populateMonsterEquipment(sk, got, mult)
+
+		// Reference: replay the SAME calls populateMonsterEquipment makes for a skeleton, then the
+		// one setCanPickUpLoot nextFloat -- on a parallel entity + RNG from the same seed.
+		ref := newEntityRandom(seed)
+		refSk := NewEntity(2, entity.Skeleton, 0, 0, 0)
+		populateDefaultEquipmentSlots(refSk, ref, mult)
+		refSk.setItemSlot(eqSlotMainHand, itemStackOf(item.Bow))
+		populateDefaultEquipmentEnchantments(refSk, ref, mult)
+		refFloat := ref.nextFloat() // the setCanPickUpLoot draw
+
+		wantPickup := refFloat < skeletonCanPickUpLootChance*mult
+		if sk.canPickUpLoot != wantPickup {
+			t.Fatalf("seed %d: skeleton canPickUpLoot = %v, want %v (nextFloat %v < 0.55*%v)", seed, sk.canPickUpLoot, wantPickup, refFloat, mult)
+		}
+		// Both streams must now be at the SAME position (the skeleton stream consumed the 0.55 draw too).
+		for k := 0; k < 4; k++ {
+			if a, b := got.nextFloat(), ref.nextFloat(); a != b {
+				t.Fatalf("seed %d: skeleton RNG desync at draw %d after canPickUpLoot roll: %v != %v", seed, k, a, b)
+			}
+		}
+	}
+}
+
+// TestZombieNoSkeletonPickupDrawHere: the skeleton-family 0.55 canPickUpLoot roll is AbstractSkeleton-only.
+// A Zombie routed through the SAME populateMonsterEquipment helper must NOT consume that draw here (Zombie
+// .finalizeSpawn has its own canPickUpLoot roll at a different point in its own draw order). This pins that
+// the switch gate does not leak the skeleton draw onto the zombie stream. Cite AbstractSkeleton.finalizeSpawn
+// (the roll is on the AbstractSkeleton override, not Monster/Zombie).
+func TestZombieNoSkeletonPickupDrawHere(t *testing.T) {
+	const mult = float32(1.0)
+	for seed := uint64(0); seed < 128; seed++ {
+		zm := NewEntity(1, entity.Zombie, 0, 0, 0)
+		got := newEntityRandom(seed)
+		populateMonsterEquipment(zm, got, mult)
+
+		// Reference: the zombie equipment calls WITHOUT any trailing canPickUpLoot draw.
+		ref := newEntityRandom(seed)
+		refZm := NewEntity(2, entity.Zombie, 0, 0, 0)
+		populateDefaultEquipmentSlots(refZm, ref, mult)
+		// mirror the zombie weapon override exactly (same draw sequence as populateMonsterEquipment)
+		f2 := float32(0.01)
+		if serverDifficulty == difficultyHard {
+			f2 = 0.05
+		}
+		if ref.nextFloat() < f2 {
+			switch ref.nextInt(6) {
+			case 0:
+				refZm.setItemSlot(eqSlotMainHand, itemStackOf(item.IronSword))
+			case 1:
+				refZm.setItemSlot(eqSlotMainHand, itemStackOf(item.IronSpear))
+			default:
+				refZm.setItemSlot(eqSlotMainHand, itemStackOf(item.IronShovel))
+			}
+		}
+		populateDefaultEquipmentEnchantments(refZm, ref, mult)
+		// NO trailing draw for the zombie in this helper -- the streams must already be in lockstep.
+		for k := 0; k < 4; k++ {
+			if a, b := got.nextFloat(), ref.nextFloat(); a != b {
+				t.Fatalf("seed %d: zombie RNG desync at draw %d (an unexpected skeleton pickup draw leaked?): %v != %v", seed, k, a, b)
+			}
+		}
+	}
+}
+
 // TestSpawnDrawGate: populateDefaultEquipmentSlots draws EXACTLY one nextFloat when the gate fails
 // (mult 0.0 -> 0.15*0 == 0, and nextFloat() in [0,1) is never < 0). Two RNGs from the same seed,
 // one run through populateDefaultEquipmentSlots at mult 0.0 and one drawing a single nextFloat, must
