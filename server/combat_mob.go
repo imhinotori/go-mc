@@ -210,10 +210,11 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 		// MOB-NEUT-01: the NeutralMob persistent-anger trigger keyed off the SAME setLastHurtByMob event
 		// (Wolf/IronGolem/ZombifiedPiglin.startPersistentAngerTimer on a PLAYER hit). Runs unconditionally
 		// now (a rapid i-frame excess hit by a player still angers the neutral mob, matching vanilla). The
-		// single nextInt(381) draw is wolf/golem/piglin-gated AND player-attacker-gated -- the pig (never a
+		// single nextInt(381) draw is wolf/golem/piglin/bee-gated AND player-attacker-gated -- the pig (never a
 		// neutral mob) draws ZERO. Cite Wolf/IronGolem/ZombifiedPiglin.startPersistentAngerTimer +
-		// NeutralMob.isAngry (angerEndTime = gameTime + UniformInt(400,780).sample = 400 + nextInt(381)).
-		if (e.typ == entity.Wolf.ID || e.typ == entity.IronGolem.ID || e.typ == entity.ZombifiedPiglin.ID) && t.playerByEntityID(src.attacker) != nil {
+		// NeutralMob.isAngry (angerEndTime = gameTime + UniformInt(400,780).sample = 400 + nextInt(381)); Bee
+			// PERSISTENT_ANGER_TIME is the SAME UniformInt(400,780), so the bee reuses this exact draw.
+		if (e.typ == entity.Wolf.ID || e.typ == entity.IronGolem.ID || e.typ == entity.ZombifiedPiglin.ID || e.typ == entity.Bee.ID) && t.playerByEntityID(src.attacker) != nil {
 			e.angerEndTime = t.gametime + int64(400+mobRandom(e).nextInt(381))
 			e.angerTarget = src.attacker // setPersistentAngerTarget(the attacking player)
 		}

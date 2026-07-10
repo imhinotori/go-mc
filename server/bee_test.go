@@ -102,7 +102,6 @@ func TestBeeStingDeathCountdown(t *testing.T) {
 	}
 }
 
-
 // TestBeeUnStungDrowns pins the customServerAiStep fix: the underwater-drown block runs UNCONDITIONALLY of
 // sting state. An un-stung bee submerged in water increments underWaterTicks every tick and, once it
 // exceeds 20, takes 1.0F drown damage EVERY tick until it dies. (Regression: the old beeAiStep returned
@@ -172,5 +171,158 @@ func TestBeeDryUnStungNoDamage(t *testing.T) {
 	}
 	if b.health != 10.0 {
 		t.Fatalf("dry un-stung bee took damage: health = %v, want 10.0", b.health)
+	}
+}
+
+// TestBeeAngerOnPlayerHit: a bee HIT by a player becomes angry (angerEndTime = gameTime + 400 + nextInt(381),
+// angerTarget = attacker) via the MOB-NEUT-01 combat store-point -- the SAME UniformInt(400,780) draw the
+// wolf/iron_golem/zombified_piglin use (Bee.PERSISTENT_ANGER_TIME). Then the anger-gated acquire targets it.
+func TestBeeAngerOnPlayerHit(t *testing.T) {
+	loop, floorY := beeLoop(t)
+	loop.gametime = 1000
+	b := loop.spawnBee(8.5, float64(floorY+1), 8.5, false)
+	// Deterministic rng: capture the SAME nextInt(381) a reference draws (ONE draw for the anger timer).
+	b.ai.rng = newEntityRandom(wolfAngerSeed)
+	wantOffset := 400 + newEntityRandom(wolfAngerSeed).nextInt(381)
+	if wantOffset < 400 || wantOffset > 780 {
+		t.Fatalf("precondition: anger offset %d out of [400,780]", wantOffset)
+	}
+	attacker := addTestPlayer(loop, 61000, b.x, b.y, b.z+1)
+
+	// THE HIT via the combat store-point (the same path a real player melee takes).
+	loop.applyDamageEntity(b, damageSourcePlayerAttack(attacker.entityID), 1.0)
+
+	wantEnd := int64(1000) + int64(wantOffset)
+	if b.angerEndTime != wantEnd {
+		t.Fatalf("angerEndTime = %d, want %d (gameTime 1000 + 400 + nextInt(381) = 1000 + %d)", b.angerEndTime, wantEnd, wantOffset)
+	}
+	if b.angerTarget != attacker.entityID {
+		t.Fatalf("angerTarget = %d, want the attacker %d", b.angerTarget, attacker.entityID)
+	}
+	if !isAngryAt(loop, b, attacker.entityID) {
+		t.Fatal("isAngryAt(attacker) false after the hit -- the bee is not angry")
+	}
+	// The angry acquire now targets the attacker (BeeBecomeAngryTargetGoal).
+	loop.beeAcquireAngryTarget(b)
+	if b.ai.attackTargetID != attacker.entityID {
+		t.Fatalf("post-hit target = %d, want the attacker %d", b.ai.attackTargetID, attacker.entityID)
+	}
+}
+
+// TestBeeNeutralUntilHit: a fresh bee next to a player acquires NO target (neutral-until-provoked). The
+// keystone: beeAcquireAngryTarget only fires while isAngry().
+func TestBeeNeutralUntilHit(t *testing.T) {
+	loop, floorY := beeLoop(t)
+	loop.gametime = 1000
+	b := loop.spawnBee(8.5, float64(floorY+1), 8.5, false)
+	addTestPlayer(loop, 61000, b.x, b.y, b.z) // overlapping, well within FOLLOW_RANGE
+
+	loop.beeAiStep(b)
+	if b.ai.attackTargetID != 0 {
+		t.Fatalf("a NEUTRAL bee acquired a target on sight (id=%d) -- must stay neutral until hit", b.ai.attackTargetID)
+	}
+	if b.beeHasStung {
+		t.Fatal("a neutral bee stung without being provoked")
+	}
+}
+
+// TestBeeStingsThenDies: an angered bee adjacent to its target STINGS (beeDoSting: POISON + setHasStung +
+// stopBeingAngry) on the melee cooldown/in-range/LOS gate, then dies from its own sting (the countdown).
+// Drives beeAiStep: acquire -> melee -> sting -> death countdown, end to end.
+func TestBeeStingsThenDies(t *testing.T) {
+	loop, floorY := beeLoop(t)
+	loop.levelDifficulty = difficultyNormal
+	loop.gametime = 1000
+	b := loop.spawnBee(8.5, float64(floorY+1), 8.5, false)
+	b.ai.rng = newEntityRandom(wolfAngerSeed)
+	attacker := combatPlayer(loop, 61000) // capturing client (the sting applies damage to the player)
+	attacker.x, attacker.y, attacker.z = b.x, b.y, b.z // overlapping -> melee range + LOS trivially
+
+	// Provoke: give live anger + the attacker as anger target (as anger-on-hit would).
+	b.angerEndTime = loop.gametime + 500
+	b.angerTarget = attacker.entityID
+
+	// First beeAiStep: acquire the target + sting (meleeCooldown starts at 0).
+	loop.beeAiStep(b)
+	if !b.beeHasStung {
+		t.Fatalf("bee did not sting an adjacent anger target (meleeCooldown=%d, target=%d)", b.meleeCooldown, b.ai.attackTargetID)
+	}
+	if loop.beeIsAngry(b) {
+		t.Fatal("bee still angry after a landed sting -- stopBeingAngry must clear the anger")
+	}
+	if b.angerEndTime != 0 || b.angerTarget != 0 || b.ai.attackTargetID != 0 {
+		t.Fatalf("stopBeingAngry did not clear anger/target: end=%d target=%d attackTarget=%d", b.angerEndTime, b.angerTarget, b.ai.attackTargetID)
+	}
+	if attacker.activeEffects[effectPoison] == nil {
+		t.Fatal("sting did not apply POISON to the victim")
+	}
+	if got := attacker.activeEffects[effectPoison].duration; got != beePoisonSeconds*20 {
+		t.Fatalf("NORMAL sting POISON duration = %d, want %d (10s*20)", got, beePoisonSeconds*20)
+	}
+
+	// The bee no longer attacks (hasStung) and dies from the sting over the countdown.
+	died := false
+	for i := 0; i < 20000 && !died; i++ {
+		loop.beeAiStep(b)
+		if b.dead || b.health <= 0 {
+			died = true
+		}
+	}
+	if !died {
+		t.Fatalf("bee never died from its sting after 20000 ticks (timeSinceSting=%d, health=%v)", b.beeTimeSinceSting, b.health)
+	}
+}
+
+// TestBeeStingPoisonByDifficulty: the sting POISON duration is LIVE-difficulty-scaled -- NORMAL 10s*20,
+// HARD 18s*20 (Bee.doHurtTarget: level().getDifficulty() == NORMAL -> 10, == HARD -> 18). Drive beeDoSting
+// directly under each difficulty against a fresh victim.
+func TestBeeStingPoisonByDifficulty(t *testing.T) {
+	cases := []struct {
+		diff difficulty
+		want int
+	}{
+		{difficultyNormal, beePoisonSeconds * 20},   // 10s * 20 = 200
+		{difficultyHard, beePoisonSecondsHard * 20}, // 18s * 20 = 360
+	}
+	for _, c := range cases {
+		loop, floorY := beeLoop(t)
+		loop.levelDifficulty = c.diff
+		b := loop.spawnBee(8.5, float64(floorY+1), 8.5, false)
+		victim := combatPlayer(loop, 61000) // capturing client (the sting applies damage)
+		victim.x, victim.y, victim.z = b.x, b.y, b.z
+		victim.health = 20
+
+		loop.beeDoSting(b, victim)
+
+		eff := victim.activeEffects[effectPoison]
+		if eff == nil {
+			t.Fatalf("difficulty %d: sting applied no POISON", c.diff)
+		}
+		if eff.duration != c.want {
+			t.Fatalf("difficulty %d: POISON duration %d, want %d", c.diff, eff.duration, c.want)
+		}
+		if !b.beeHasStung {
+			t.Fatalf("difficulty %d: bee not marked hasStung after a landed sting", c.diff)
+		}
+	}
+}
+
+// TestBeeStingNoPoisonOnEasy: on EASY (and PEACEFUL) the sting deals damage + sets hasStung but adds NO
+// POISON (p == 0 -> the ifle skip). Cite Bee.doHurtTarget (else -> p=0).
+func TestBeeStingNoPoisonOnEasy(t *testing.T) {
+	loop, floorY := beeLoop(t)
+	loop.levelDifficulty = difficultyEasy
+	b := loop.spawnBee(8.5, float64(floorY+1), 8.5, false)
+	victim := combatPlayer(loop, 61000) // capturing client (the sting applies damage)
+	victim.x, victim.y, victim.z = b.x, b.y, b.z
+	victim.health = 20
+
+	loop.beeDoSting(b, victim)
+
+	if victim.activeEffects[effectPoison] != nil {
+		t.Fatal("EASY sting must add NO POISON (p == 0)")
+	}
+	if !b.beeHasStung {
+		t.Fatal("EASY sting still sets hasStung (the sting landed)")
 	}
 }

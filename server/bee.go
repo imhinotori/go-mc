@@ -56,10 +56,16 @@ const (
 	beeWanderSpeed    = 1.0                 // BeeWanderGoal ~ WaterAvoidingRandomStroll 1.0 (stroll analogue)
 	beeStingDeathBase = 1200                // Mth.clamp(1200 - timeSinceSting, 1, 1200) window
 	beeStingDeathMod  = 5                   // timeSinceSting % 5 == 0 death-roll cadence
-	beeFoodTag        = "bee_food"          // ItemTags.BEE_FOOD (the tempt predicate)
-	beePoisonSeconds  = 10                  // NORMAL difficulty POISON duration (seconds); *20 = ticks
-	beeDrownThreshold = 20                  // customServerAiStep: underWaterTicks > 20 -> drown (bipush 20, if_icmple)
-	beeDrownDamage    = 1.0                 // hurtServer(drown(), 1.0F) (fconst_1)
+	beeFoodTag           = "bee_food"       // ItemTags.BEE_FOOD (the tempt predicate)
+	beePoisonSeconds     = 10               // NORMAL difficulty POISON duration (seconds); *20 = ticks (bipush 10)
+	beePoisonSecondsHard = 18               // HARD difficulty POISON duration (seconds); *20 = ticks (bipush 18)
+	beeDrownThreshold    = 20               // customServerAiStep: underWaterTicks > 20 -> drown (bipush 20, if_icmple)
+	beeDrownDamage       = 1.0              // hurtServer(drown(), 1.0F) (fconst_1)
+	// BeeBecomeAngryTargetGoal / startPersistentAngerTimer: PERSISTENT_ANGER_TIME = TimeUtil.rangeOfSeconds(
+	// 20,39) = UniformInt(400,780); sample = Mth.randomBetweenInclusive(random,400,780) = 400 + nextInt(381)
+	// (IDENTICAL to Wolf/IronGolem/ZombifiedPiglin). Cite Bee.PERSISTENT_ANGER_TIME + startPersistentAngerTimer.
+	beePersistentAngerBase = 400
+	beePersistentAngerSpan = 381
 )
 
 // newBeeAI builds the Bee passive AI: the "visibly alive" subset of Bee.registerGoals (the hive/flower
@@ -113,35 +119,126 @@ func (t *TickLoop) spawnBee(x, y, z float64, baby bool) *Entity {
 }
 
 // beeDoSting ports Bee.doHurtTarget: hurt the target for (int)ATTACK_DAMAGE via the sting damage source,
-// then -- on a landed hit -- apply POISON, set HasStung, and (deferred) stop being angry. The stinger-
-// count client cue + BEE_STING sound are deferred. After this the bee begins to die (beeAiStep countdown).
-// RNG-free. Cite Bee.doHurtTarget. Exposed so the sting is wired the moment a neutral-anger target lands.
+// then -- on a landed hit -- setStingerCount(+1) (client cue DEFERRED), apply POISON scaled by the LIVE
+// difficulty (NORMAL 10s, HARD 18s, otherwise 0 -> no add), setHasStung(true), and stopBeingAngry (clear
+// the persistent anger endpoint + target). The BEE_STING sound is DEFERRED. After this the bee begins to
+// die (beeAiStep countdown). RNG-free. Cite Bee.doHurtTarget (bytecode: level().getDifficulty() == NORMAL
+// -> 10, == HARD -> 18, else 0; if p>0 addEffect(POISON, p*20, 0); setHasStung(true); stopBeingAngry()).
 func (t *TickLoop) beeDoSting(e *Entity, target *tickPlayer) {
 	dmg := float32(int(e.getAttributeValue(attribute.AttackDamage))) // (float)(int) ATTACK_DAMAGE == 2.0
 	src := damageSourceByTypeName("minecraft:sting", e.id)           // damageSources().sting(this)
 	hurt := !target.dead && (float32(target.invulnerableTime) <= hurtCooldownConst || dmg > target.lastHurt)
 	t.applyDamage(target, src, dmg)
 	if !hurt {
-		return
+		return // if(flag){...} -- nothing on a rejected (i-frame) hit
 	}
-	// POISON p seconds (NORMAL 10). addPlayerEffect(victim, ownerID, id, durationTicks, amplifier, scale).
-	t.addPlayerEffect(target, e.id, effectPoison, beePoisonSeconds*20, 0, 1.0)
+	// int p = (difficulty==NORMAL)?10:(difficulty==HARD)?18:0; the read is level().getDifficulty() (LIVE),
+	// so it tracks a /difficulty change (t.levelDifficulty), not the scope-locked serverDifficulty const.
+	p := 0
+	switch t.levelDifficulty {
+	case difficultyNormal:
+		p = beePoisonSeconds
+	case difficultyHard:
+		p = beePoisonSecondsHard
+	}
+	if p > 0 {
+		// addEffect(new MobEffectInstance(POISON, p*20, 0), this). addPlayerEffect(victim, ownerID, id,
+		// durationTicks, amplifier, scale). EASY/PEACEFUL -> p==0 -> no add (a 0-tick effect, the ifle skip).
+		t.addPlayerEffect(target, e.id, effectPoison, p*20, 0, 1.0)
+	}
 	e.beeHasStung = true // setHasStung(true) -> the bee now dies over ~1200 ticks (beeAiStep)
+	t.beeStopBeingAngry(e) // stopBeingAngry(): setPersistentAngerEndTime(0) + setPersistentAngerTarget(null)
 }
 
-// beeAiStep is the Bee per-tick extra (Bee.customServerAiStep), driven per-type from tickAI (gated on
-// typ == entity.Bee.ID, AFTER serverAiStep). It ports the method 1:1 up to the sting-death branch:
+// beeStopBeingAngry ports NeutralMob.stopBeingAngry(): setRemainingPersistentAngerTime(0) (angerEndTime 0)
+// + setPersistentAngerTarget(null) (angerTarget 0), and drop the live attack target so the stung bee stops
+// pursuing. Called from beeDoSting after a landed sting (a bee stings ONCE, then dies). Cite Bee(NeutralMob)
+// .stopBeingAngry + BeeAttackGoal.canUse (!bee.hasStung() -> no more attacks). RNG-free.
+func (t *TickLoop) beeStopBeingAngry(e *Entity) {
+	e.angerEndTime = 0
+	e.angerTarget = 0
+	if e.ai != nil {
+		e.ai.attackTargetID = 0
+	}
+}
+
+// beeIsAngry ports NeutralMob.isAngry(): angerEndTime > 0 AND (angerEndTime - gameTime) > 0.
+func (t *TickLoop) beeIsAngry(e *Entity) bool {
+	return e.angerEndTime > 0 && (e.angerEndTime-t.gametime) > 0
+}
+
+// beeTarget reads the current attack-target player, or nil.
+func (t *TickLoop) beeTarget(e *Entity) *tickPlayer {
+	if e.ai == nil || e.ai.attackTargetID == 0 {
+		return nil
+	}
+	p := t.playerByEntityID(e.ai.attackTargetID)
+	if p == nil || p.dead {
+		return nil
+	}
+	return p
+}
+
+// beeSetTarget ports BeeBecomeAngryTargetGoal's acquisition (a NearestAttackableTargetGoal<Player>): adopt
+// the player as the attack target and, if not already, seed the persistent anger so isAngryAt holds. NO RNG
+// beyond the single startPersistentAngerTimer draw on a fresh anger. Cite BeeBecomeAngryTargetGoal + Bee
+// .startPersistentAngerTimer (400 + nextInt(381)).
+func (t *TickLoop) beeSetTarget(e *Entity, p *tickPlayer) {
+	if e.ai == nil {
+		return
+	}
+	e.ai.attackTargetID = p.entityID
+	if !isAngryAt(t, e, p.entityID) {
+		e.angerEndTime = t.gametime + int64(beePersistentAngerBase+mobRandom(e).nextInt(beePersistentAngerSpan))
+		e.angerTarget = p.entityID
+	}
+}
+
+// beeAcquireAngryTarget ports the anger-gated BeeBecomeAngryTargetGoal: a bee targets a player only while its
+// anger is LIVE and points at that player (and it has NOT already stung -- a stung bee is done attacking).
+// Neutral (or already-stung) -> no target. NO RNG (the acquire itself; beeSetTarget draws only on a fresh
+// anger). Cite BeeBecomeAngryTargetGoal + BeeAttackGoal.canUse (bee.isAngry() && !bee.hasStung()) + isAngryAt.
+func (t *TickLoop) beeAcquireAngryTarget(e *Entity) {
+	if e.ai == nil || e.beeHasStung {
+		return
+	}
+	followRange := e.getAttributeValue(attribute.FollowRange)
+	rangeSqr := followRange * followRange
+	if e.ai.attackTargetID != 0 {
+		p := t.playerByEntityID(e.ai.attackTargetID)
+		if p == nil || p.dead || distanceToSqrPlayer(p, e) > rangeSqr || !isAngryAt(t, e, e.ai.attackTargetID) {
+			e.ai.attackTargetID = 0
+		} else {
+			return
+		}
+	}
+	if !t.beeIsAngry(e) {
+		return
+	}
+	p := t.playerByEntityID(e.angerTarget)
+	if p == nil || p.dead || distanceToSqrPlayer(p, e) > rangeSqr {
+		return
+	}
+	t.beeSetTarget(e, p)
+}
+
+// beeAiStep is the Bee per-tick extra (Bee.customServerAiStep + the BeeAttackGoal melee pursuit), driven
+// per-type from tickAI (gated on typ == entity.Bee.ID, AFTER serverAiStep). It runs, in order:
 //
-//	boolean hasStung = hasStung();
-//	if (isInWater()) ++underWaterTicks; else underWaterTicks = 0;   // UNCONDITIONAL (runs stung or not)
-//	if (underWaterTicks > 20) hurtServer(drown(), 1.0F);           // an un-stung bee STILL drowns
-//	if (hasStung) { ++timeSinceSting; if (timeSinceSting % 5 == 0 &&
-//	    random.nextInt(Mth.clamp(1200 - timeSinceSting, 1, 1200)) == 0) hurtServer(generic(), getHealth()); }
+//  1. BeeAttackGoal (goalSelector @0, MeleeAttackGoal(1.4,true), canUse = super && isAngry && !hasStung):
+//     while angry and NOT yet stung, pursue the anger target and, on the melee cooldown + in-range + LOS,
+//     doHurtTarget == beeDoSting (which applies POISON, setHasStung, stopBeingAngry -> the sting-once).
+//  2. the sting-death countdown (customServerAiStep hasStung branch): after a sting, ++timeSinceSting and on
+//     the (% 5 == 0) cadence with the rising-probability nextInt gate take generic getHealth() self-damage.
+//  3. updatePersistentAnger(level, FALSE) (customServerAiStep tail): in the gametime-endpoint anger model the
+//     observable effect of the false flag is a bee whose anger has EXPIRED drops its target (no target-retain
+//     without live anger, and no ResetUniversalAngerTargetGoal). beeAcquireAngryTarget already drops a stale
+//     target when !isAngry, so the tail is the same drop expressed at acquire time.
 //
-// The trailing nectar / updatePersistentAnger bookkeeping (ticksWithoutNectarSinceExitingHive++,
-// updatePersistentAnger) is the DEFERRED hive/anger layer (no hive block-entity / neutral-anger machinery
-// yet). The sting-death RNG is on the bee OWN per-entity rng, drawn ONLY after a sting (a never-stung bee
-// draws zero). Cite Bee.customServerAiStep.
+// The underwater-drown + pollination/nectar bookkeeping are DEFERRED. All RNG is on the bee OWN per-entity
+// rng: zero draws on a never-provoked, never-stung passive bee (both the acquire and the sting-death block
+// are dormant); the anger-timer draw is player-provoke-gated, and the sting-death draw is post-sting-gated.
+// Cite Bee.customServerAiStep + BeeAttackGoal + Bee.doHurtTarget + Bee(NeutralMob).updatePersistentAnger.
 func (t *TickLoop) beeAiStep(e *Entity) {
 	if e.dead || e.health <= 0 {
 		return
@@ -154,11 +251,31 @@ func (t *TickLoop) beeAiStep(e *Entity) {
 		e.beeUnderWaterTicks = 0
 	}
 	if e.beeUnderWaterTicks > beeDrownThreshold {
-		// hurtServer(damageSources().drown(), 1.0F) -- the un-stung bee bug fix: this ALWAYS runs.
+		// hurtServer(damageSources().drown(), 1.0F) -- runs regardless of sting state (an un-stung bee STILL drowns).
 		t.applyDamageEntity(e, damageSourceOf(damageTypeDrown), beeDrownDamage)
 	}
+	// (3, expressed at acquire) drop a stale target when the anger endpoint has passed (updatePersistentAnger
+	// false: no target without live anger). Mirrors zombifiedPiglinAiStep's leading drop.
+	if e.ai != nil && e.ai.attackTargetID != 0 && !t.beeIsAngry(e) {
+		e.ai.attackTargetID = 0
+	}
+	// (1) BeeAttackGoal: acquire the anger target (anger-gated, !hasStung-gated) then melee it. A landed
+	// beeDoSting sets hasStung + stopBeingAngry, so from the NEXT tick the acquire is inert and only the
+	// sting-death countdown runs (a bee stings ONCE, then dies).
+	t.beeAcquireAngryTarget(e)
+	if target := t.beeTarget(e); target != nil && !e.beeHasStung {
+		if e.meleeCooldown > 0 {
+			e.meleeCooldown--
+		} else if isWithinMeleeAttackRange(e, target) && t.sensingHasLineOfSight(e, target) {
+			e.meleeCooldown = meleeAttackResetCooldown
+			t.beeDoSting(e, target)
+		}
+	} else if e.meleeCooldown > 0 {
+		e.meleeCooldown--
+	}
+	// (2) the sting-death countdown: only runs once the bee has stung (no RNG draw otherwise).
 	if !hasStung {
-		return // sting-death countdown only runs once the bee has stung (no RNG draw otherwise)
+		return // never stung: no death roll, no RNG draw (the passive/pursuing bee)
 	}
 	e.beeTimeSinceSting++ // ++timeSinceSting
 	if e.beeTimeSinceSting%beeStingDeathMod != 0 {
