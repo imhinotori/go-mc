@@ -122,6 +122,12 @@ func IsRandomlyTicking(s StateID) bool {
 		// tick, gated internally on the SPREAD_VINES gamerule + a nextInt(4) early-out). CITE: VineBlock
 		// properties (.randomTicks()); VineBlock.randomTick.
 		return true
+	case PointedDripstone:
+		// SpeleothemBlock (PointedDripstoneBlock) does NOT override isRandomlyTicking(), so it uses the
+		// baked Properties.randomTicks() flag -> isRandomlyTicking()==true for every state: each random
+		// tick draws maybeTransferFluid's nextFloat + the growth-gate nextFloat (0.011377778f). CITE:
+		// PointedDripstoneBlock / SpeleothemBlock properties (.randomTicks()); SpeleothemBlock.randomTick.
+		return true
 	default:
 		return false
 	}

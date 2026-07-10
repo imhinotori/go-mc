@@ -242,6 +242,11 @@ func (t *TickLoop) dispatchRandomTick(r *region, state block.StateID, pos pk.Pos
 		// (nextInt(4) early-out, then nextInt(6) direction, then per-branch nextFloat / nextBoolean draws).
 		// IsRandomlyTicking is true for every state. See vine.go.
 		t.vineRandomTick(r, state, pos)
+	case block.IsPointedDripstone(state):
+		// PointedDripstoneBlock.randomTick -> SpeleothemBlock.randomTick: two nextFloat draws (fluid
+		// transfer + growth gate 0.011377778f), then the isStalactiteStartPos + canGrow growth core (the
+		// tip traversal + fluid gate are a cited deferral). DRAWS levelRandom. See dripstone.go.
+		t.dripstoneRandomTick(r, state, pos)
 	default:
 		// A state whose IsRandomlyTicking is true but whose randomTick handler is not yet ported: no-op
 		// (the family's IsRandomlyTicking should not be true until its handler is wired — kept as a
