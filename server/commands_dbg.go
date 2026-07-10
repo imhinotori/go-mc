@@ -691,7 +691,8 @@ func (t *TickLoop) runDbgCommand(p *tickPlayer, sub string) {
 		}
 	case "ravager":
 		// RAIDER (Task): spawn a vanilla ravager (raid beast, Ravager wire type). Hunts + melees + roars
-		// (ravagerAiStep: attackTick/roar AoE/stun; the leaf-trample + stun-trigger are cite-deferred).
+		// (ravagerAiStep: attackTick/roar AoE/stun countdowns + leaf-trample; the stun-trigger fires on a
+		// shield-block via Ravager.blockedByItem, stunEffect draws its RNG while stunned).
 		e := t.spawnVanillaMob(vanillaRavagerMobName, p.x, p.y, p.z)
 		if e != nil {
 			t.broadcastSystemChat(fmt.Sprintf("[dbg] spawned ravager eid=%d at (%.1f,%.1f,%.1f)", e.id, p.x, p.y, p.z))

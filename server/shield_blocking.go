@@ -238,10 +238,20 @@ func (t *TickLoop) hurtBlockingItem(p *tickPlayer, blockStack component.SlotData
 	}
 }
 
-// blockUsingItem ports LivingEntity.blockUsingItem -> blockedByItem: the blocked victim knockback is
-// applied to the attacker. Pushing an arbitrary attacker entity is a cited v1 deferral; the
-// damage-negation, item-damage and axe-disable land. Cite LivingEntity.blockUsingItem/blockedByItem.
+// blockUsingItem ports LivingEntity.blockUsingItem(ServerLevel, LivingEntity attacker, DamageSource,
+// float): the jar delegates to attacker.blockedByItem(this, source, amount) -- i.e. the ATTACKER decides
+// what happens when its hit is shield-blocked. The default LivingEntity.blockedByItem knocks the blocker
+// back; the Ravager OVERRIDE stuns the ravager instead (Ravager.blockedByItem). Here `p` is the blocking
+// victim (this) and src.attacker is the attacker; when the attacker is a Ravager, route to its
+// blockedByItem stun trigger. Cite LivingEntity.blockUsingItem/blockedByItem + Ravager.blockedByItem.
 func (t *TickLoop) blockUsingItem(p *tickPlayer, src damageSource, amount float32) {
+	// attacker.blockedByItem(this, source, amount): the RAVAGER stun trigger. src.attacker is the direct
+	// attacker (a mob entity id); resolve it and, if it is a live ravager, fire Ravager.blockedByItem.
+	if src.attacker != 0 {
+		if rav, ok := t.cur().entities.get(src.attacker); ok && rav != nil && rav.typ == entityRavagerID && rav.isAlive() && !rav.dead {
+			t.ravagerBlockedByItem(rav, p)
+		}
+	}
 	// Axe disable: a vanilla axe attack calls BlocksAttacks.disable (ItemCooldowns entry + stopUsingItem).
 	// v1 has no ItemCooldowns / per-weapon disable read; cited stub via stopUsingItem when the attacker
 	// weapon disables blocking. Cite BlocksAttacks.disable.
