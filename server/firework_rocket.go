@@ -226,6 +226,12 @@ func (t *TickLoop) dealFireworkExplosionDamage(e *Entity) {
 		if distSqr > fireworkDamageRadiusSq {
 			continue // distanceToSqr > 25.0 -> out of range
 		}
+		// LOS gate: cast up to 2 COLLIDER rays from the firework to the victim's feet (getY(0)) and mid
+		// (getY(0.5)); damage only if at least one reaches unobstructed (a MISS). Cite dealExplosionDamage
+		// (the j in [0,2) ClipContext loop -> flag; if(flag) hurt).
+		if !t.fireworkHasLineOfSight(e, p.x, p.y, p.z, playerHeight) {
+			continue
+		}
 		dist := math.Sqrt(distSqr)
 		dmg := baseDamage * float32(math.Sqrt((fireworkDamageRadius-dist)/fireworkDamageRadius))
 		t.applyDamage(p, src, dmg)
@@ -244,10 +250,31 @@ func (t *TickLoop) dealFireworkExplosionDamage(e *Entity) {
 		if distSqr > fireworkDamageRadiusSq {
 			continue
 		}
+		if !t.fireworkHasLineOfSight(e, m.x, m.y, m.z, float64(m.height)) {
+			continue
+		}
 		dist := math.Sqrt(distSqr)
 		dmg := baseDamage * float32(math.Sqrt((fireworkDamageRadius-dist)/fireworkDamageRadius))
 		t.applyDamageEntity(m, src, dmg)
 	}
+}
+
+// fireworkHasLineOfSight ports the FireworkRocketEntity.dealExplosionDamage per-victim visibility loop:
+// cast COLLIDER rays from the firework's position to the victim's getY(0.5*j) for j in {0,1} (feet + mid);
+// return true if ANY ray reaches the victim without hitting a collider (level.clip(...).getType() == MISS).
+// A wall between the firework and the target blocks BOTH rays -> no damage. Cite
+// FireworkRocketEntity.dealExplosionDamage (ClipContext COLLIDER/NONE, the j-loop flag).
+func (t *TickLoop) fireworkHasLineOfSight(e *Entity, vx, vy, vz, victimHeight float64) bool {
+	if t.world() == nil {
+		return true // no world to clip against -> permissive (the pre-LoS behaviour)
+	}
+	for j := 0; j < 2; j++ {
+		ty := vy + 0.5*float64(j)*victimHeight // getY(0.5*j): feet at j=0, mid at j=1
+		if !t.clipBlocksCollider(e.x, e.y, e.z, vx, ty, vz) {
+			return true // this ray is a MISS (clear) -> the firework can see the victim
+		}
+	}
+	return false // both rays blocked -> occluded, no damage
 }
 
 // fireworksComponentID is the wire type id of minecraft:fireworks (data/registryid/datacomponenttype.go

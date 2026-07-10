@@ -9,7 +9,46 @@ import (
 	"testing"
 
 	"github.com/imhinotori/sulfur/data/entity"
+	"github.com/imhinotori/sulfur/level"
+	"github.com/imhinotori/sulfur/level/block"
+	pk "github.com/imhinotori/sulfur/net/packet"
 )
+
+// TestFireworkDamageBlockedByWall: a solid wall between the firework and a victim blocks BOTH the feet and
+// mid LoS rays, so the detonation deals NO damage -- the dealExplosionDamage j-loop flag stays false.
+// Removing the wall lets the same blast through. Cite FireworkRocketEntity.dealExplosionDamage.
+func TestFireworkDamageBlockedByWall(t *testing.T) {
+	loop, mgr := newPhysicsLoop()
+	const floorY = 63
+	ch := putChunk(mgr, level.ChunkPos{0, 0})
+	fillFloor(ch, floorY)
+	loop.start(loop.clock.(*fakeClock).Now())
+
+	// Pig two cells north; a stone wall column in the cell between it and the firework.
+	pig := mobEffectTestEntity(loop, entity.Pig, 8.5, float64(floorY+1), 10.5)
+	pig.health = 20.0
+	stone := block.DefaultStateID["minecraft:stone"]
+	for dy := 0; dy <= 2; dy++ {
+		mgr.SetBlock(pk.Position{X: 8, Y: floorY + 1 + dy, Z: 9}, stone, dimMinY)
+	}
+
+	fw := loop.spawnFreeFirework(0, 8.5, float64(floorY+1), 8.5, 1, 1, false)
+	loop.withRegion(loop.only(), func() { loop.dealFireworkExplosionDamage(fw) })
+	if pig.health != 20.0 {
+		t.Fatalf("wall-occluded firework dealt %v damage, want 0 (LoS both rays blocked)", 20.0-float64(pig.health))
+	}
+
+	// Clear the wall: the same blast now hits.
+	air := block.DefaultStateID["minecraft:air"]
+	for dy := 0; dy <= 2; dy++ {
+		mgr.SetBlock(pk.Position{X: 8, Y: floorY + 1 + dy, Z: 9}, air, dimMinY)
+	}
+	fw2 := loop.spawnFreeFirework(0, 8.5, float64(floorY+1), 8.5, 1, 1, false)
+	loop.withRegion(loop.only(), func() { loop.dealFireworkExplosionDamage(fw2) })
+	if pig.health >= 20.0 {
+		t.Fatal("un-occluded firework dealt no damage (LoS false-negative)")
+	}
+}
 
 // TestFireworkLifetimeRNGFormula: the lifetime is 10*(1+flightDuration) + nextInt(6) + nextInt(7), drawn on
 // the firework's own per-entity stream in that ORDER (after the two init-velocity triangle draws). We
