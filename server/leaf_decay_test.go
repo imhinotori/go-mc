@@ -128,3 +128,88 @@ func TestBreakingLogRaisesNeighbourLeafDistance(t *testing.T) {
 		t.Fatal("a decaying leaf must be randomly ticking so the driver can decay it")
 	}
 }
+
+// TestLeafAdjacentToLogSurvivesManyRandomTicks is the DIRECT bug-report proof: a non-persistent leaf
+// anchored next to a log (DISTANCE 1) driven through the REAL random-tick dispatch path
+// (dispatchRandomTick) across many iterations must NEVER decay. This is the "bare trunks" symptom guard:
+// isRandomlyTicking(DISTANCE<7) is false, so the driver never even routes the leaf into leavesRandomTick,
+// and the leaf stays put no matter how many ticks fire. CITE: LeavesBlock.isRandomlyTicking (DISTANCE==7
+// && !PERSISTENT); ServerLevel.tickChunk (only isRandomlyTicking states are randomTick'd).
+func TestLeafAdjacentToLogSurvivesManyRandomTicks(t *testing.T) {
+	loop, mgr := newLeafDecayLoop()
+	pos := pk.Position{X: 5, Y: 71, Z: 5}
+	leaf := oakLeaves(1, false) // anchored: DISTANCE 1 (a log neighbour)
+	mgr.SetBlock(pos, leaf, dimMinY)
+	mgr.SetBlock(below(pos), oakLog(), dimMinY)
+
+	// isRandomlyTicking must be false for an anchored leaf: the driver would never sample it.
+	if block.IsRandomlyTicking(leaf) {
+		t.Fatal("a DISTANCE-1 leaf must not be randomly ticking (would wrongly expose it to decay)")
+	}
+	// Even if the driver DID route it (defensive), dispatchRandomTick -> leavesRandomTick must no-op
+	// because decaying(DISTANCE 1)==false. Drive it directly many times: the leaf must survive.
+	for i := 0; i < 4096; i++ {
+		loop.dispatchRandomTick(loop.only(), leaf, pos)
+	}
+	got := mustGet(t, mgr, pos)
+	if block.IsAir(got) {
+		t.Fatal("a leaf adjacent to a log must NEVER decay, even across thousands of random ticks (bare-trunk bug)")
+	}
+	if !block.IsLeaves(got) || block.LeavesDistance(got) != 1 {
+		t.Fatalf("the anchored leaf must stay a DISTANCE-1 leaf; got distance %d", block.LeavesDistance(got))
+	}
+}
+
+// TestLeafWithinSixOfLogNeverDecays walks DISTANCE 1..6 (a leaf anywhere within a log's reach) and
+// asserts none is decaying / randomly ticking — only DISTANCE 7 (out of reach) decays. Proves the
+// KEY invariant: a leaf within DISTANCE<=6 of a log has distance<7 and MUST NOT decay. CITE:
+// LeavesBlock.decaying (DISTANCE==7 only) / isRandomlyTicking.
+func TestLeafWithinSixOfLogNeverDecays(t *testing.T) {
+	for d := 1; d <= 6; d++ {
+		leaf := oakLeaves(d, false)
+		if block.LeavesDecaying(leaf) {
+			t.Fatalf("a DISTANCE-%d leaf must NOT be decaying (only 7 decays)", d)
+		}
+		if block.IsRandomlyTicking(leaf) {
+			t.Fatalf("a DISTANCE-%d leaf must NOT be randomly ticking", d)
+		}
+	}
+	if !block.LeavesDecaying(oakLeaves(7, false)) {
+		t.Fatal("a DISTANCE-7 non-persistent leaf MUST be decaying")
+	}
+}
+
+// TestLeavesUpdateDistanceRecomputesFromNeighbours proves the DISTANCE recompute (updateDistance) is
+// correct off live neighbours: a leaf two cells from a log (log -> leaf(1) -> subject) recomputes to
+// DISTANCE 2, and a leaf with no log/leaf anchor within reach recomputes to 7. CITE:
+// LeavesBlock.updateDistance / getDistanceAt (min over 6 neighbours of getDistanceAt+1).
+func TestLeavesUpdateDistanceRecomputesFromNeighbours(t *testing.T) {
+	loop, mgr := newLeafDecayLoop()
+
+	// Chain: log at y, anchored leaf(1) at y+1, subject leaf at y+2. Subject recomputes to 2.
+	logP := pk.Position{X: 8, Y: 68, Z: 8}
+	midP := pk.Position{X: 8, Y: 69, Z: 8}
+	topP := pk.Position{X: 8, Y: 70, Z: 8}
+	mgr.SetBlock(logP, oakLog(), dimMinY)
+	mgr.SetBlock(midP, oakLeaves(1, false), dimMinY)
+	mgr.SetBlock(topP, oakLeaves(7, false), dimMinY)
+
+	updated, ok := loop.leavesUpdateDistance(oakLeaves(7, false), topP)
+	if !ok {
+		t.Fatal("leavesUpdateDistance ok=false")
+	}
+	if d := block.LeavesDistance(updated); d != 2 {
+		t.Fatalf("a leaf one cell above a DISTANCE-1 leaf must recompute to 2; got %d", d)
+	}
+
+	// An isolated leaf (all neighbours air) recomputes to DISTANCE 7 (getDistanceAt(air)==7 -> +1 clamp).
+	isoP := pk.Position{X: 12, Y: 75, Z: 12}
+	mgr.SetBlock(isoP, oakLeaves(1, false), dimMinY)
+	iso, ok := loop.leavesUpdateDistance(oakLeaves(1, false), isoP)
+	if !ok {
+		t.Fatal("leavesUpdateDistance ok=false for isolated leaf")
+	}
+	if d := block.LeavesDistance(iso); d != 7 {
+		t.Fatalf("an isolated leaf (no anchor) must recompute to 7; got %d", d)
+	}
+}
