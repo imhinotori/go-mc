@@ -86,25 +86,21 @@ func (g *spellcasterCastingSpellGoal) stop(t *TickLoop, e *Entity) {
 	e.currentSpell = illagerSpellNone
 }
 
-// tick: look at the combat target (or the wololo target) at max head yaw. Head-only turn.
+// tick ports SpellcasterCastingSpellGoal.tick (bytecode 0-43): iff getTarget() != null, setLookAt(target,
+// getMaxHeadYRot(), getMaxHeadXRot()). There is NO wololo-target fallback -- during a wololo cast (no combat
+// target) the evoker does NOT rotate its head toward the sheep. Head-only turn. Cite
+// SpellcasterIllager.tick.
 func (g *spellcasterCastingSpellGoal) tick(t *TickLoop, e *Entity) {
-	var tx, ty, tz float64
-	var ok bool
-	if id := mobTarget(e); id != 0 {
-		if p := t.playerByEntityID(id); p != nil {
-			tx, ty, tz, ok = p.x, p.y, p.z, true
-		}
+	id := mobTarget(e)
+	if id == 0 { // getTarget() == null -> no head turn (the ifnull at offset 7)
+		return
 	}
-	if !ok && e.evokerWololoTarget != 0 {
-		if s, found := t.cur().entities.get(e.evokerWololoTarget); found {
-			tx, ty, tz, ok = s.x, s.y, s.z, true
-		}
+	p := t.playerByEntityID(id)
+	if p == nil {
+		return
 	}
-	if ok {
-		yRotD := yawTowardDeg(tx-e.x, tz-e.z)
-		e.headYaw = rotlerpDeg(e.headYaw, yRotD, evokerMaxHeadYaw)
-		_ = ty
-	}
+	yRotD := yawTowardDeg(p.x-e.x, p.z-e.z)
+	e.headYaw = rotlerpDeg(e.headYaw, yRotD, evokerMaxHeadYaw)
 }
 
 // evokerMaxHeadYaw is Mob.getMaxHeadYRot() (the head-turn clamp the casting goal uses; default 75, but the
