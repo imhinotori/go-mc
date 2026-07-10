@@ -90,7 +90,6 @@ type NoiseGenerator struct {
 	end bool
 }
 
-
 // NewNoiseGenerator builds the per-world generator: it parses + seeds the router from the
 // world seed (NewRouter), builds the multi-noise biome source, the surface system + the
 // parsed surface_rule, and the overworld carver list + the replaceables tag — resolving
@@ -198,7 +197,18 @@ func NewNoiseGenerator(seed int64, secs, minY int) *NoiseGenerator {
 	if err != nil {
 		panic("world: NoiseGenerator: build village start generator: " + err.Error())
 	}
-	structGen := structure.NewCompositeStartGenerator(desertGen, jungleGen, iglooGen, swampGen, mineshaftGen, strongholdGen, villageGen)
+	// STRUCT: ruined_portal (salt 34222645 / spacing 40 / separation 15, LINEAR) + ocean_monument
+	// (salt 10387313 / spacing 32 / separation 5, TRIANGULAR). Both standard random_spread
+	// StartGenerators pure over (seed,pos), registered at the SAME composite site.
+	ruinedPortalGen, err := structure.NewRuinedPortalStartGen()
+	if err != nil {
+		panic("world: NoiseGenerator: build ruined_portal start generator: " + err.Error())
+	}
+	oceanMonumentGen, err := structure.NewOceanMonumentStartGen()
+	if err != nil {
+		panic("world: NoiseGenerator: build ocean_monument start generator: " + err.Error())
+	}
+	structGen := structure.NewCompositeStartGenerator(desertGen, jungleGen, iglooGen, swampGen, mineshaftGen, strongholdGen, villageGen, ruinedPortalGen, oceanMonumentGen)
 
 	return &NoiseGenerator{
 		seed:        seed,
