@@ -206,6 +206,25 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 		return
 	}
 
+	// HOE TILL (HoeItem.useOn -> TILLABLES): a hoe on grass_block/dirt_path/dirt/coarse_dirt (air above)
+	// or rooted_dirt tills it to farmland/dirt (+ drops hanging_roots for rooted_dirt). A non-block item,
+	// so it would otherwise fall through blockStateForItem as a no-op -- intercept it here BEFORE placement,
+	// like BoneMeal / FlintAndSteel. Returns true when the held item is a hoe AND the clicked block is
+	// tillable (the use consumed the action); false to fall through. No RNG draw -- pig oracle unperturbed.
+	// CITE: HoeItem.useOn (hoe.go).
+	if t.tryHoeTill(p, inv, held, pos, int(direction)) {
+		return
+	}
+
+	// SHOVEL PATH (ShovelItem.useOn -> FLATTENABLES): a shovel on grass_block/dirt/podzol/coarse_dirt/
+	// mycelium/rooted_dirt (air above, clicked face != DOWN) flattens it to dirt_path, and on a LIT campfire
+	// dowses it (LIT=false). A non-block item -- intercept BEFORE placement. Returns true when the held item
+	// is a shovel AND the clicked block is flattenable/dowsable; false to fall through. No RNG draw -- pig
+	// oracle unperturbed. CITE: ShovelItem.useOn (shovel.go).
+	if t.tryShovelPath(p, inv, held, pos, int(direction)) {
+		return
+	}
+
 	// PLUGIN-07 (Plan 28-01) GATE-ONLY trigger — the spawn-egg path. A vanilla spawn egg spawns ON
 	// the CLICKED BLOCK (SpawnEggItem.useOn), not on right-click-air, so the gate egg must hook the
 	// UseItemOn (block) path — this is how a player actually uses a spawn egg. Spawn at the adjacent
