@@ -280,7 +280,7 @@ func TestReleaseArrowFromOffhand(t *testing.T) {
 func TestArrowSpawnBaseDamageIsPlayerDefault(t *testing.T) {
 	loop := bowLoop()
 	p := bowPlayer(loop, gameModeCreative)
-	a := loop.shootPlayerArrow(p, 3.0, true)
+	a := loop.shootPlayerArrow(p, 3.0, true, component.SlotData{})
 	if a.arrowBaseDamage != bowArrowBaseDamage {
 		t.Fatalf("arrow baseDamage = %v, want %v", a.arrowBaseDamage, bowArrowBaseDamage)
 	}

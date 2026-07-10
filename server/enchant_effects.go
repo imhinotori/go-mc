@@ -291,10 +291,11 @@ func parseValueEffect(raw json.RawMessage) enchValueEffect {
 // DAMAGE_SOURCE, the ENCHANTMENT_LEVEL param, and the level RandomSource (LootContext.getRandom()
 // == ServerLevel.random — the region levelRandom).
 type enchDamageCtx struct {
-	level    int          // LootContextParams.ENCHANTMENT_LEVEL
-	thisType string       // LootContextParams.THIS_ENTITY's entity-type resource id
-	src      damageSource // LootContextParams.DAMAGE_SOURCE
-	t        *TickLoop    // the loop, for the LAZY level-RNG resolve below
+	level      int          // LootContextParams.ENCHANTMENT_LEVEL
+	thisType   string       // LootContextParams.THIS_ENTITY's entity-type resource id
+	directType string       // LootContextParams.DIRECT_ATTACKER's entity-type id (DamageSource.getDirectEntity)
+	src        damageSource // LootContextParams.DAMAGE_SOURCE
+	t          *TickLoop    // the loop, for the LAZY level-RNG resolve below
 
 	levelRNG         enchRNG // cached LootContext.getRandom() (resolved on first draw)
 	levelRNGResolved bool
@@ -384,18 +385,27 @@ func (c condDamageSourceProps) matches(ctx *enchDamageCtx) bool {
 // the predicate unsupported (parseCondition yields condUnsupported) — none of the consumed effect
 // components carry one (cited: smite/bane use entity_type only).
 type condEntityType struct {
-	ref string // "#minecraft:sensitive_to_smite" or a bare "minecraft:<type>"
+	ref    string // "#minecraft:sensitive_to_smite" or a bare "minecraft:<type>"
+	target string // the LootContext.EntityTarget: "this" (victim) or "direct_attacker"
 }
 
+// condEntityTypeOf resolves which entity's type this predicate reads: THIS_ENTITY (the victim) for the
+// "this" target (smite/bane), or the DIRECT_ATTACKER (DamageSource.getDirectEntity — the arrow itself)
+// for the "direct_attacker" target (Power/Punch's `entity_type: #minecraft:arrows` gate). Cite
+// LootContext.EntityTarget.THIS/DIRECT_ATTACKER + Enchantment.damageContext param population.
 func (c condEntityType) matches(ctx *enchDamageCtx) bool {
-	if ctx.thisType == "" {
-		return false
+	typeName := ctx.thisType
+	if c.target == "direct_attacker" {
+		typeName = ctx.directType
+	}
+	if typeName == "" {
+		return false // the target entity is absent from the context -> the predicate cannot match
 	}
 	if len(c.ref) > 0 && c.ref[0] == '#' {
-		ok, err := registrydata.EntityTypeInTag(ctx.thisType, c.ref)
+		ok, err := registrydata.EntityTypeInTag(typeName, c.ref)
 		return err == nil && ok
 	}
-	return ctx.thisType == c.ref
+	return typeName == c.ref
 }
 
 // condRandomChance is LootItemRandomChanceCondition.test:
@@ -485,9 +495,13 @@ func parseCondition(raw json.RawMessage) enchCondition {
 		if json.Unmarshal(raw, &body) != nil {
 			return condUnsupported{}
 		}
-		// Only the THIS_ENTITY target with a pure entity_type predicate is evaluated (the shipped
-		// smite/bane form). Anything else -> unsupported (never matches).
-		if body.Entity != "this" || len(body.Predicate) != 1 {
+		// A pure entity_type predicate on THIS_ENTITY (smite/bane) or DIRECT_ATTACKER (Power/Punch's
+		// `entity_type: #minecraft:arrows` gate — the arrow is source.getDirectEntity) is evaluated.
+		// Any other target or a compound predicate -> unsupported (never matches).
+		if body.Entity != "this" && body.Entity != "direct_attacker" {
+			return condUnsupported{}
+		}
+		if len(body.Predicate) != 1 {
 			return condUnsupported{}
 		}
 		typeRaw, ok := body.Predicate["minecraft:entity_type"]
@@ -498,7 +512,7 @@ func parseCondition(raw json.RawMessage) enchCondition {
 		if json.Unmarshal(typeRaw, &ref) != nil {
 			return condUnsupported{}
 		}
-		return condEntityType{ref: ref}
+		return condEntityType{ref: ref, target: body.Entity}
 	case "minecraft:random_chance":
 		var body struct {
 			Chance json.RawMessage `json:"chance"`
@@ -1223,7 +1237,15 @@ func applyEnchCondValues(entries []enchCondValue, ctx *enchDamageCtx, rng enchRN
 //	 Enchantment.modifyDamage -> modifyDamageFilteredValue(DAMAGE, ..., damageContext) ->
 //	 applyEffects(getEffects(DAMAGE), ctx, mutable, (eff,v) -> eff.process(lvl, victim.getRandom(), v)).]
 func (t *TickLoop) enchModifyDamage(weapon component.SlotData, victim enchEntityRef, src damageSource, damage float32) float32 {
-	ctx := &enchDamageCtx{thisType: victim.typeName(), src: src, t: t}
+	return t.enchModifyDamageDirect(weapon, victim, src, t.enchDirectAttackerType(src), damage)
+}
+
+// enchModifyDamageDirect is enchModifyDamage with an explicit DIRECT_ATTACKER entity type — the
+// AbstractArrow.onHitEntity path passes the ARROW's type here (source.getDirectEntity() == the arrow),
+// which is what Power's `direct_attacker is #minecraft:arrows` requirement reads. The melee path resolves
+// it from the source (direct == causing entity) via enchDirectAttackerType.
+func (t *TickLoop) enchModifyDamageDirect(weapon component.SlotData, victim enchEntityRef, src damageSource, directType string, damage float32) float32 {
+	ctx := &enchDamageCtx{thisType: victim.typeName(), directType: directType, src: src, t: t}
 	forEachItemEnchant(weapon, func(wireID, level int) {
 		set := enchEffectsFor(wireID)
 		if set == nil || len(set.damage) == 0 {
@@ -1235,6 +1257,18 @@ func (t *TickLoop) enchModifyDamage(weapon component.SlotData, victim enchEntity
 	return damage
 }
 
+// enchDirectAttackerType resolves DamageSource.getDirectEntity()'s entity-type id for the MELEE path,
+// where the direct entity IS the causing entity (isDirect true). For an indirect source (a projectile)
+// the thin damageSource value does not carry the projectile, so this returns "" and the caller that has
+// the projectile (the arrow hit path) passes the type explicitly via enchModifyDamageDirect. No shipped
+// melee DAMAGE/KNOCKBACK effect reads direct_attacker, so "" is observably identical there.
+func (t *TickLoop) enchDirectAttackerType(src damageSource) string {
+	if !src.isDirect() || src.attacker == 0 {
+		return ""
+	}
+	return t.enchResolveEntity(src.attacker).typeName()
+}
+
 // enchModifyKnockback is EnchantmentHelper.modifyKnockback(ServerLevel, ItemStack weapon, Entity
 // victim, DamageSource, float f): fold the weapon's KNOCKBACK effects (the Knockback enchant: add
 // linear 1.0 + 1.0/level) over the raw knockback strength.
@@ -1242,7 +1276,13 @@ func (t *TickLoop) enchModifyDamage(weapon component.SlotData, victim enchEntity
 //	[VERIFIED javap EnchantmentHelper.modifyKnockback -> Enchantment.modifyKnockback ->
 //	 modifyDamageFilteredValue(KNOCKBACK, ...).]
 func (t *TickLoop) enchModifyKnockback(weapon component.SlotData, victim enchEntityRef, src damageSource, f float32) float32 {
-	ctx := &enchDamageCtx{thisType: victim.typeName(), src: src, t: t}
+	return t.enchModifyKnockbackDirect(weapon, victim, src, t.enchDirectAttackerType(src), f)
+}
+
+// enchModifyKnockbackDirect is enchModifyKnockback with an explicit DIRECT_ATTACKER type — the arrow
+// doKnockback path passes the ARROW's type so Punch's `direct_attacker is #minecraft:arrows` gate fires.
+func (t *TickLoop) enchModifyKnockbackDirect(weapon component.SlotData, victim enchEntityRef, src damageSource, directType string, f float32) float32 {
+	ctx := &enchDamageCtx{thisType: victim.typeName(), directType: directType, src: src, t: t}
 	forEachItemEnchant(weapon, func(wireID, level int) {
 		set := enchEffectsFor(wireID)
 		if set == nil || len(set.knockback) == 0 {

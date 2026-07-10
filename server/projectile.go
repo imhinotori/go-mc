@@ -24,6 +24,7 @@ import (
 	"sort"
 
 	"github.com/imhinotori/sulfur/data/entity"
+	"github.com/imhinotori/sulfur/data/registryid"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
@@ -235,7 +236,18 @@ func (t *TickLoop) projectileFindHitPlayer(ownerID int32, ox, oy, oz, nx, ny, nz
 // (attributed to the shooter), then discard the arrow (v1: no pierce). Cite AbstractArrow.onHitEntity.
 func (t *TickLoop) arrowOnHitPlayer(e *Entity, victim *tickPlayer) {
 	pow := math.Sqrt(e.vx*e.vx + e.vy*e.vy + e.vz*e.vz) // getDeltaMovement().length()
-	raw := pow * e.arrowBaseDamage
+	src := damageSourceArrow(e.arrowShooterID)
+	victimRef := enchEntityRef{player: victim}
+	// EnchantmentHelper.modifyDamage(level, getWeaponItem(), victim, source, (float)baseDamage): a bow
+	// with Power adds to the base damage BEFORE the pow*baseDamage scale. The Power effect's requirement
+	// (direct_attacker is #minecraft:arrows) reads THIS arrow's type. A weaponless arrow (empty stack,
+	// e.g. a dispenser shot) skips this — matching AbstractArrow.onHitEntity's `getWeaponItem() != null`
+	// guard, folding zero enchant work. Cite AbstractArrow.onHitEntity offsets 52-96.
+	base := float32(e.arrowBaseDamage)
+	if !stackEmpty(e.arrowWeapon) {
+		base = t.enchModifyDamageDirect(e.arrowWeapon, victimRef, src, arrowDirectType(e), base)
+	}
+	raw := pow * float64(base)
 	if raw < 0 {
 		raw = 0
 	}
@@ -255,8 +267,12 @@ func (t *TickLoop) arrowOnHitPlayer(e *Entity, victim *tickPlayer) {
 			dmg = math.MaxInt32
 		}
 	}
-	src := damageSourceArrow(e.arrowShooterID)
 	t.applyDamage(victim, src, float32(dmg))
+	// AbstractArrow.onHitEntity's hurt-succeeded branch: doKnockback (Punch), the tipped-arrow effects,
+	// and doPostAttackEffects (Fire Aspect on the bow). The v1 arrow path applies these after applyDamage
+	// (the same seam the tipped-arrow effects already used); the i-frame hurt-bool is a shared v1 combat
+	// simplification not specific to enchants.
+	t.arrowDoKnockback(e, victim, src)
 	// Arrow.doPostHurtEffects: a tipped arrow (Stray SLOWNESS 600 / Bogged POISON 100, set on the arrow
 	// at spawn from the shooter's getArrow override) applies each carried effect to the LivingEntity hit
 	// (addEffect attributed to the shooter, scale 1.0). Nil for a plain arrow (zero cost). Cite
@@ -264,7 +280,53 @@ func (t *TickLoop) arrowOnHitPlayer(e *Entity, victim *tickPlayer) {
 	for _, ef := range e.arrowEffects {
 		t.addPlayerEffect(victim, e.arrowShooterID, ef.id, ef.duration, ef.amplifier, 1.0)
 	}
+	// EnchantmentHelper.doPostAttackEffectsWithItemSource(level, victim, source, getWeaponItem()):
+	// the bow's POST_ATTACK effects (Fire Aspect) fire against the victim, and Thorns on the victim's own
+	// gear runs. A weaponless arrow passes an empty weapon (no attacker-side post-attack).
+	t.doPostAttackEffectsWithItemSource(victimRef, src, e.arrowWeapon, nil, t.enchResolveEntity(e.arrowShooterID))
 	t.cur().entities.remove(e.id)
+}
+
+// arrowDirectType is the arrow entity's type resource id (registryid.EntityType index) — the
+// DIRECT_ATTACKER Power/Punch requirements read. An arrow is always "minecraft:arrow"; a spectral arrow
+// its own id. Cite EntityType.getKey.
+func arrowDirectType(e *Entity) string {
+	if t := int(e.typ); t >= 0 && t < len(registryid.EntityType) {
+		return registryid.EntityType[t]
+	}
+	return ""
+}
+
+// arrowDoKnockback ports AbstractArrow.doKnockback for a player victim: knockback = modifyKnockback(
+// getWeaponItem(), victim, source, 0) (Punch adds 1.0 + 1.0/level; a plain bow yields 0). If > 0, push
+// the victim along the arrow's flight direction (deltaMovement horiz, normalized) scaled by
+// knockback*0.6*max(0, 1-KNOCKBACK_RESISTANCE), with a fixed +0.1 vertical. A weaponless arrow does no
+// knockback (the `firedFromWeapon != null` guard). Cite AbstractArrow.doKnockback bytecode.
+func (t *TickLoop) arrowDoKnockback(e *Entity, victim *tickPlayer, src damageSource) {
+	if stackEmpty(e.arrowWeapon) {
+		return // firedFromWeapon == null -> knockback 0, no push
+	}
+	kb := t.enchModifyKnockbackDirect(e.arrowWeapon, enchEntityRef{player: victim}, src, arrowDirectType(e), 0.0)
+	if float64(kb) <= 0.0 {
+		return
+	}
+	resist := math.Max(0.0, 1.0-victim.getAttributeValue(attrKnockbackResistance))
+	// getDeltaMovement().multiply(1,0,1).normalize().scale(kb*0.6*resist).
+	nx, nz := normalizeHoriz(e.vx, e.vz)
+	scale := float64(kb) * 0.6 * resist
+	ix, iz := nx*scale, nz*scale
+	if ix*ix+iz*iz <= 0.0 {
+		return
+	}
+	// victim.push(ix, 0.1, iz): Entity.push == addDeltaMovement (adds to velocity).
+	if victim.playerEntity != nil {
+		victim.playerEntity.vx += ix
+		victim.playerEntity.vy += 0.1
+		victim.playerEntity.vz += iz
+		if victim.client != nil {
+			victim.client.Send(encodeSetEntityMotion(victim.playerEntity))
+		}
+	}
 }
 
 // --- THROWN SPLASH POTION (net.minecraft.world.entity.projectile.ThrownSplashPotion) ------------------

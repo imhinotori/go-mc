@@ -223,6 +223,14 @@ type Entity struct {
 	// .doPostHurtEffects). Nil for a plain arrow. Cite Arrow.getArrow + Arrow.doPostHurtEffects.
 	arrowEffects []splashEffect
 
+	// arrowWeapon is AbstractArrow.firedFromWeapon: the ItemStack the arrow was launched from (the bow /
+	// crossbow), stored so AbstractArrow.onHitEntity/doKnockback can read its enchantments at hit time.
+	// getWeaponItem() returns it; a nil (empty) stack means no firing weapon (a dispenser/summoned arrow).
+	// Power (minecraft:damage) and Punch (minecraft:knockback) are effects on THIS stack, gated on the
+	// DIRECT_ATTACKER being an arrow — so they apply only when the arrow carries its bow here. Cite
+	// AbstractArrow.firedFromWeapon / getWeaponItem / setSoundEvent path in ProjectileWeaponItem.createProjectile.
+	arrowWeapon component.SlotData
+
 	// spawnData is the ClientboundAddEntity "data" field (object-specific). For an arrow vanilla sets it to
 	// ownerId+1 (the client owner link for crit visuals); 0 for a plain mob. Set at spawn.
 	spawnData int32

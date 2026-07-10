@@ -399,3 +399,46 @@ func TestEnchantAttributeUnmodeledSkipped(t *testing.T) {
 		t.Fatalf("swift_sneak perturbed movement_speed: before %v after %v", before, after)
 	}
 }
+
+// TestEnchantPowerDirectAttackerGate: Power's DAMAGE effect carries an entity_properties requirement on
+// entity=direct_attacker == #minecraft:arrows. Fired from a bow (direct entity = the arrow) it adds
+// 1.0+0.5*(lvl-1) = +3.0 at level 5; with a NON-arrow direct attacker (e.g. a melee weapon whose direct
+// == a player) the requirement fails and Power adds nothing. Cite power.json + AbstractArrow.onHitEntity.
+func TestEnchantPowerDirectAttackerGate(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	bow := enchantedStack(idDiamondSword, 1, enchTestEntry(t, "minecraft:power", 5))
+	src := damageSourceArrow(1)
+	victim := NewEntity(60, entity.Pig, 0, 64, 0)
+
+	// direct_attacker == minecraft:arrow -> Power adds +3.0: 1.0 -> 4.0.
+	got := loop.enchModifyDamageDirect(bow, enchEntityRef{mob: victim}, src, "minecraft:arrow", 1.0)
+	if got != 4.0 {
+		t.Fatalf("power V vs arrow direct = %v, want 4.0 (1.0 + 1.0+0.5*4)", got)
+	}
+
+	// A non-arrow direct attacker fails the requirement -> Power is a no-op: 1.0 stays 1.0.
+	got = loop.enchModifyDamageDirect(bow, enchEntityRef{mob: victim}, src, "minecraft:player", 1.0)
+	if got != 1.0 {
+		t.Fatalf("power V with non-arrow direct = %v, want 1.0 (requirement fails)", got)
+	}
+}
+
+// TestEnchantPunchDirectAttackerGate: Punch's KNOCKBACK effect (add linear 1.0 + 1.0*(lvl-1)) is gated on
+// direct_attacker == #minecraft:arrows. Punch II fired from a bow adds +2.0 to the raw 0.0 knockback;
+// a non-arrow direct attacker leaves it 0.0. Cite punch.json + AbstractArrow.doKnockback.
+func TestEnchantPunchDirectAttackerGate(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	bow := enchantedStack(idDiamondSword, 1, enchTestEntry(t, "minecraft:punch", 2))
+	src := damageSourceArrow(1)
+	victim := NewEntity(61, entity.Pig, 0, 64, 0)
+
+	got := loop.enchModifyKnockbackDirect(bow, enchEntityRef{mob: victim}, src, "minecraft:arrow", 0.0)
+	if got != 2.0 {
+		t.Fatalf("punch II vs arrow direct = %v, want 2.0 (0 + 1.0+1.0*1)", got)
+	}
+
+	got = loop.enchModifyKnockbackDirect(bow, enchEntityRef{mob: victim}, src, "minecraft:player", 0.0)
+	if got != 0.0 {
+		t.Fatalf("punch II with non-arrow direct = %v, want 0.0 (requirement fails)", got)
+	}
+}

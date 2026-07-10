@@ -105,7 +105,7 @@ func (t *TickLoop) bowReleaseUsing(p *tickPlayer, stack component.SlotData, hand
 		t.consumeArrow(p, arrowSlot)
 	}
 	crit := float64(power) == bowFullPower
-	t.shootPlayerArrow(p, float64(power)*bowVelocityScale, crit)
+	t.shootPlayerArrow(p, float64(power)*bowVelocityScale, crit, stack)
 	t.hurtHandItem(p, hand, bowDurabilityUse)
 	t.stopUsingItem(p)
 }
@@ -136,8 +136,8 @@ func (t *TickLoop) crossbowReleaseUsing(p *tickPlayer, stack component.SlotData,
 // fireCrossbow ports CrossbowItem.use charged branch -> performShooting: fire the loaded bolt at power 3.15
 // (getShootingPower, non-firework) in the look direction, clear CHARGED, damage the crossbow by 1. Not crit.
 // Multishot is a cited enchant hook. Cite CrossbowItem.use + performShooting + shootProjectile.
-func (t *TickLoop) fireCrossbow(p *tickPlayer, _ *Inventory, _ component.SlotData, hand int32) {
-	t.shootPlayerArrow(p, crossbowShootPower, false)
+func (t *TickLoop) fireCrossbow(p *tickPlayer, _ *Inventory, stack component.SlotData, hand int32) {
+	t.shootPlayerArrow(p, crossbowShootPower, false, stack)
 	p.crossbowCharged = false
 	t.hurtHandItem(p, hand, bowDurabilityUse)
 }
@@ -146,7 +146,7 @@ func (t *TickLoop) fireCrossbow(p *tickPlayer, _ *Inventory, _ component.SlotDat
 // unit view vector scaled by velocity, zero spread in v1 -- the throwable.go simplification) and spawns the
 // Arrow from the player eye via the shared spawnArrow infra. crit sets the crit flag (setCritArrow). Cite
 // Projectile.shootFromRotation + spawnArrow + AbstractArrow.setCritArrow.
-func (t *TickLoop) shootPlayerArrow(p *tickPlayer, velocity float64, crit bool) *Entity {
+func (t *TickLoop) shootPlayerArrow(p *tickPlayer, velocity float64, crit bool, weapon component.SlotData) *Entity {
 	vx, vy, vz := playerViewVector(p.yaw, p.pitch)
 	vx *= velocity
 	vy *= velocity
@@ -155,6 +155,10 @@ func (t *TickLoop) shootPlayerArrow(p *tickPlayer, velocity float64, crit bool) 
 	if crit {
 		a.arrowCrit = true
 	}
+	// ProjectileWeaponItem.createProjectile stores the firing weapon on the arrow (setSoundEvent path
+	// + firedFromWeapon = weapon.copy()) so AbstractArrow.getWeaponItem() reads the bow's Power/Punch/
+	// Fire Aspect at hit time. A dispenser/mob arrow with no weapon leaves this empty.
+	a.arrowWeapon = weapon
 	return a
 }
 
