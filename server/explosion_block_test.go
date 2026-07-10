@@ -157,3 +157,109 @@ func TestExplosionResistanceTable(t *testing.T) {
 		t.Errorf("StateExplosionResistance(water) = %v, want 100 (WaterFluid.getExplosionResistance)", got)
 	}
 }
+
+// TestExplosionInteractionGateBlocksVsMob proves the interactsWithBlocks fix: a TNT- and BLOCK-
+// interaction explosion destroys terrain EVEN WITH mobGriefing OFF (those interactions map to
+// DESTROY_WITH_DECAY unconditionally), whereas the MOB interaction (a creeper) destroys NOTHING
+// with mobGriefing off (the KEEP path). Before the fix explodeWith hardcoded the MOB gate for all
+// callers, so a TNT blast wrongly spared terrain when mobGriefing was off. Cite ServerLevel.explode
+// (BLOCK/TNT -> DESTROY_WITH_DECAY; MOB -> mobGriefing ? DESTROY_WITH_DECAY : KEEP).
+func TestExplosionInteractionGateBlocksVsMob(t *testing.T) {
+	const cx, cy, cz = 8, 70, 8
+
+	run := func(interaction explosionInteraction) int {
+		loop, mgr := newPhysicsLoop()
+		putChunk(mgr, level.ChunkPos{0, 0})
+		fillStoneCube(mgr, cx-3, cx+3, cy-3, cy+3, cz-3, cz+3)
+		mgr.SetBlock(pk.Position{X: cx, Y: cy, Z: cz}, block.DefaultStateID["minecraft:air"], dimMinY)
+
+		clock := loop.clock.(*fakeClock)
+		loop.start(clock.Now())
+		loop.regions[globalRegion].levelRandom = levelgen.NewLegacyRandomSource(12345)
+		loop.gamerules = newGameRules()
+		loop.gamerules.setBool(ruleMobGriefing, false) // mobGriefing OFF for every variant
+
+		loop.withRegion(loop.only(), func() {
+			loop.explodeWith(-1, float64(cx)+0.5, float64(cy)+0.5, float64(cz)+0.5, 3.0, interaction, false)
+		})
+
+		removed := 0
+		for x := cx - 3; x <= cx+3; x++ {
+			for y := cy - 3; y <= cy+3; y++ {
+				for z := cz - 3; z <= cz+3; z++ {
+					p := pk.Position{X: x, Y: y, Z: z}
+					if p == (pk.Position{X: cx, Y: cy, Z: cz}) {
+						continue
+					}
+					if st, ok := mgr.GetBlock(p, dimMinY); ok && block.IsAir(st) {
+						removed++
+					}
+				}
+			}
+		}
+		return removed
+	}
+
+	if got := run(explosionInteractionTNT); got == 0 {
+		t.Fatal("TNT interaction with mobGriefing OFF destroyed nothing (should destroy -- DESTROY_WITH_DECAY)")
+	}
+	if got := run(explosionInteractionBlock); got == 0 {
+		t.Fatal("BLOCK interaction with mobGriefing OFF destroyed nothing (should destroy -- DESTROY_WITH_DECAY)")
+	}
+	if got := run(explosionInteractionMob); got != 0 {
+		t.Fatalf("MOB interaction with mobGriefing OFF destroyed %d blocks (should be KEEP -- 0)", got)
+	}
+	if got := run(explosionInteractionNone); got != 0 {
+		t.Fatalf("NONE interaction destroyed %d blocks (should be KEEP -- 0)", got)
+	}
+}
+
+// TestExplosionCreateFire proves ServerExplosion.createFire: with fire=true, a blast over an air cell
+// that sits on a solid floor places a fire block (nextInt(3)==0 gate). We stack the deck so a fire
+// site exists: solid stone floor with an air cell above it inside the blast, then assert at least one
+// fire block appears. With fire=false NO fire is ever placed. Cite ServerExplosion.createFire.
+func TestExplosionCreateFire(t *testing.T) {
+	const cx, cy, cz = 8, 70, 8
+
+	run := func(fire bool) int {
+		loop, mgr := newPhysicsLoop()
+		putChunk(mgr, level.ChunkPos{0, 0})
+		// A solid stone FLOOR at cy-1 across the blast footprint; air above it (the fire sites).
+		for x := cx - 3; x <= cx+3; x++ {
+			for z := cz - 3; z <= cz+3; z++ {
+				mgr.SetBlock(pk.Position{X: x, Y: cy - 1, Z: z}, block.ToStateID[block.Stone{}], dimMinY)
+			}
+		}
+		clock := loop.clock.(*fakeClock)
+		loop.start(clock.Now())
+		loop.regions[globalRegion].levelRandom = levelgen.NewLegacyRandomSource(999)
+		loop.gamerules = newGameRules()
+
+		loop.withRegion(loop.only(), func() {
+			// A radius-1 BLOCK blast (small footprint) with the fire flag; the toBlow air cells over the
+			// stone floor are the fire candidates.
+			loop.explodeWith(-1, float64(cx)+0.5, float64(cy)+0.5, float64(cz)+0.5, 3.0, explosionInteractionBlock, fire)
+		})
+
+		fires := 0
+		for x := cx - 4; x <= cx+4; x++ {
+			for y := cy - 1; y <= cy+4; y++ {
+				for z := cz - 4; z <= cz+4; z++ {
+					if st, ok := mgr.GetBlock(pk.Position{X: x, Y: y, Z: z}, dimMinY); ok {
+						if int(st) >= 0 && int(st) < len(block.StateList) && block.StateList[st].ID() == "minecraft:fire" {
+							fires++
+						}
+					}
+				}
+			}
+		}
+		return fires
+	}
+
+	if got := run(true); got == 0 {
+		t.Fatal("fire=true blast placed no fire (createFire should light at least one air-over-solid cell)")
+	}
+	if got := run(false); got != 0 {
+		t.Fatalf("fire=false blast placed %d fire blocks (createFire must not run)", got)
+	}
+}

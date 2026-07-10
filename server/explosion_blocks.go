@@ -245,3 +245,48 @@ func explosionInWorldBounds(x, y, z int) bool {
 	}
 	return true
 }
+
+// createExplosionFire is the 1:1 port of ServerExplosion.createFire(List<BlockPos>): after the block
+// destruction, walk the (shuffled) toBlow list and, for each pos, roll level.random.nextInt(3) -- when
+// it is 0 AND the cell is now air AND the block below is a full solid-render cube, place a fire block
+// (BaseFireBlock.getState). ONE nextInt(3) is drawn per pos in list order (so it stays in lockstep with
+// the vanilla RNG). Only reached when the explosion's fire flag is true (a ghast fireball with
+// mobGriefing on; TNT/creeper pass fire=false so this never runs). A nil levelRandom (a bare test loop)
+// draws nothing and places no fire.
+//
+//	[VERIFIED javap ServerExplosion.createFire: for (pos : list) if (random.nextInt(3)==0 &&
+//	 getBlockState(pos).isAir() && getBlockState(pos.below()).isSolidRender())
+//	 setBlockAndUpdate(pos, BaseFireBlock.getState(level, pos)).]
+func (t *TickLoop) createExplosionFire(toBlow []pk.Position) {
+	w := t.world()
+	if w == nil {
+		return
+	}
+	r := t.cur().levelRandom
+	if r == nil {
+		return // no seeded region: draw nothing (fire is a cosmetic-but-gameplay side effect; RNG untouched).
+	}
+	for _, pos := range toBlow {
+		// nextInt(3) is drawn UNCONDITIONALLY per pos (the vanilla short-circuit tests it FIRST), so the
+		// RNG advances once per list entry regardless of the air/below checks.
+		if r.NextIntN(3) != 0 {
+			continue
+		}
+		st, ok := w.GetBlock(pos, dimMinY)
+		if !ok || !block.IsAir(st) {
+			continue // getBlockState(pos).isAir(): only an air cell can catch fire.
+		}
+		below := pk.Position{X: pos.X, Y: pos.Y - 1, Z: pos.Z}
+		if !t.isSolidAt(below) {
+			continue // getBlockState(pos.below()).isSolidRender(): fire needs a full solid floor.
+		}
+		// setBlockAndUpdate(pos, BaseFireBlock.getState(level, pos)): the default fire state for this
+		// location (FireBlock.getStateForPlacement -- age 0; the soul-fire base variant is cite-deferred).
+		sid, ok := t.fireStateForPlacement(pos)
+		if !ok {
+			continue
+		}
+		w.SetBlock(pos, sid, dimMinY)
+		t.broadcastBlockUpdate(pos, sid)
+	}
+}

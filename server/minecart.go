@@ -380,7 +380,8 @@ func (t *TickLoop) tntMinecartExplode(e *Entity, horizDistSqr float64) {
 			roll = r.levelRandom.NextDouble()
 		}
 		power := tntDefaultExplosionPower + 1.0*roll*1.5*capped // explosionPowerBase 4.0, factor 1.0
-		t.explode(e.id, e.x, e.y, e.z, float32Of(power))
+		// ExplosionInteraction.TNT, fire=false (MinecartTNT.explode). Always destroys terrain.
+		t.explodeWith(e.id, e.x, e.y, e.z, float32Of(power), explosionInteractionTNT, false)
 	}
 	// if (isPrimed()) discard(): a primed minecart is removed after the blast.
 	if e.mcTntPrimed {

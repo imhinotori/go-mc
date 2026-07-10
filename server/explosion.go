@@ -16,6 +16,40 @@ package server
 
 import "math"
 
+// explosionInteraction is the port of net.minecraft.world.level.Level$ExplosionInteraction (the enum
+// ServerLevel.explode switches on to pick the Explosion$BlockInteraction). The ordinal order is
+// NONE, BLOCK, MOB, TNT, TRIGGER (javap Level$ExplosionInteraction). It selects whether the blast
+// destroys terrain: NONE -> KEEP (never); BLOCK/TNT -> DESTROY_WITH_DECAY (always, via the
+// *_EXPLOSION_DROP_DECAY gamerule which only picks decay-vs-plain, never KEEP); MOB -> mobGriefing ?
+// DESTROY_WITH_DECAY : KEEP; TRIGGER -> TRIGGER_BLOCK (no terrain destroy). Cite ServerLevel.explode
+// (the interaction tableswitch) + ServerExplosion.interactsWithBlocks (blockInteraction != KEEP).
+type explosionInteraction int
+
+const (
+	explosionInteractionNone    explosionInteraction = iota // KEEP -- no block destruction
+	explosionInteractionBlock                               // BLOCK -- end crystal / bed / respawn anchor (always destroys)
+	explosionInteractionMob                                 // MOB -- creeper / ghast fireball / wither skull (mobGriefing gate)
+	explosionInteractionTNT                                 // TNT -- primed tnt / tnt minecart (always destroys)
+	explosionInteractionTrigger                             // TRIGGER -- wind burst (no terrain destroy)
+)
+
+// explosionInteractsWithBlocks is the port of ServerExplosion.interactsWithBlocks (blockInteraction !=
+// KEEP), resolving the ServerLevel.explode interaction switch: NONE -> KEEP (false); BLOCK/TNT ->
+// DESTROY_WITH_DECAY (true, regardless of mobGriefing); MOB -> mobGriefing ? DESTROY_WITH_DECAY : KEEP;
+// TRIGGER -> TRIGGER_BLOCK (a non-KEEP interaction that DOES destroy the trigger blocks it collected).
+// Only the MOB case reads mobGriefing. Cite ServerLevel.explode + ServerExplosion.interactsWithBlocks.
+func (t *TickLoop) explosionInteractsWithBlocks(interaction explosionInteraction) bool {
+	switch interaction {
+	case explosionInteractionNone:
+		return false
+	case explosionInteractionMob:
+		return t.gameRule(ruleMobGriefing)
+	default: // BLOCK, TNT, TRIGGER -> non-KEEP
+		return true
+	}
+}
+
+
 // Explosion constants (bytecode-verified).
 const (
 	explosionRayPowerBase   = 0.7    // radius * (0.7 + nextFloat()*0.6)
@@ -30,38 +64,48 @@ const (
 	playerEntityTypeID = 156
 )
 
-// explode is the port of ServerExplosion.explode for the creeper path (interaction MOB). It mirrors
-// the vanilla method-and-RNG order EXACTLY: (1) collect the destroyed-block set via
-// calculateExplodedPositions (this draws the 16^3-shell ray nextFloats from level.random — the FIRST
-// RNG use), (2) hurtEntities (falloff+exposure damage + knockback; no RNG), (3) if the explosion
-// interacts with blocks (MOB_GRIEFING gate) interactWithBlocks(toBlow) (Util.shuffle nextInts + the
-// per-block drop rolls). srcID is the exploding entity id (excluded from the hurt set — a creeper does
-// not damage itself; it is already discarded). The gameEvent(EXPLODE) + createFire are cite-deferred
-// (no gameEvent/fire seam; a creeper explosion sets fire=false so createFire never runs anyway).
+// explode is the port of ServerExplosion.explode (via ServerLevel.explode). It mirrors the vanilla
+// method-and-RNG order EXACTLY: (1) collect the destroyed-block set via calculateExplodedPositions
+// (this draws the 16^3-shell ray nextFloats from level.random -- the FIRST RNG use), (2) hurtEntities
+// (falloff+exposure damage + knockback; no RNG), (3) if interactsWithBlocks() interactWithBlocks(toBlow)
+// (Util.shuffle nextInts + the per-block drop rolls), (4) if fire createFire(toBlow) (one nextInt(3)
+// per pos, post-shuffle). srcID is the exploding entity id (excluded from the hurt set). The
+// interaction selects whether terrain is destroyed (interactsWithBlocks: NONE->never, BLOCK/TNT->always,
+// MOB->mobGriefing, TRIGGER->the trigger blocks); the ray nextFloats are drawn UNCONDITIONALLY (so
+// level.random stays in lockstep regardless of the gamerule). gameEvent(EXPLODE) is cite-deferred.
 //
-//	[VERIFIED javap ServerExplosion.explode: calculateExplodedPositions(); hurtEntities();
-//	 if (interactsWithBlocks()) interactWithBlocks(list); if (fire) createFire(list).]
-func (t *TickLoop) explode(srcID int32, x, y, z, radius float64) {
+//	[VERIFIED javap ServerExplosion.explode: gameEvent(EXPLODE); calculateExplodedPositions(); hurtEntities();
+//	 if (interactsWithBlocks()) interactWithBlocks(list); if (fire) createFire(list); return list.size().]
+func (t *TickLoop) explodeWith(srcID int32, x, y, z, radius float64, interaction explosionInteraction, fire bool) {
 	toBlow := t.calculateExplodedPositions(x, y, z, radius)
 	// hurtEntities applies damage + knockback and returns the per-player knockback map the
-	// ClientboundExplode Optional carries. blockCount is the destroyed-block count vanilla's
-	// ServerExplosion.explode() returns and ServerLevel.explode forwards as the packet field. When
-	// the interaction is KEEP (mobGriefing off, below) NO block is destroyed, but vanilla still
-	// returns len(toBlow) from explode() (calculateExplodedPositions ran) — blockCount is that count.
+	// ClientboundExplode Optional carries. blockCount == len(toBlow) even when the interaction is KEEP
+	// (vanilla returns list.size() -- calculateExplodedPositions ran regardless).
 	hitPlayers := t.hurtEntitiesFromExplosion(srcID, x, y, z, radius, damageSourceOf(damageTypeExplosion))
-	// interactsWithBlocks(): blockInteraction != KEEP. For a creeper (ExplosionInteraction.MOB) the
-	// interaction is KEEP exactly when MOB_GRIEFING is off (ServerLevel.explode); so gate on mobGriefing
-	// — when off, NO block is removed (the vanilla KEEP path). The ray nextFloats above are still drawn
-	// (calculateExplodedPositions runs unconditionally in vanilla), so level.random stays in lockstep
-	// regardless of the gamerule. Cite ServerExplosion.explode + interactsWithBlocks + ServerLevel.explode.
-	if t.gameRule(ruleMobGriefing) {
+	// interactsWithBlocks(): blockInteraction != KEEP, resolved per interaction (only MOB reads mobGriefing).
+	// When the interaction destroys terrain, interactWithBlocks shuffles toBlow (Util.shuffle) IN PLACE and
+	// runs the per-block drop+destroy; createFire below then walks the SAME (now-shuffled) list.
+	if t.explosionInteractsWithBlocks(interaction) {
 		t.interactWithBlocks(toBlow, radius)
 	}
-	// A1: ServerLevel.explode tail — send ClientboundExplode to every player within 64 blocks
+	// if (fire) createFire(list): each surviving pos rolls nextInt(3)==0 && air && below solidRender ->
+	// place a fire block. Runs AFTER interactWithBlocks, over the same shuffled list. Cite ServerExplosion.createFire.
+	if fire {
+		t.createExplosionFire(toBlow)
+	}
+	// A1: ServerLevel.explode tail -- send ClientboundExplode to every player within 64 blocks
 	// (distanceToSqr(center) < 4096.0), each carrying its own knockback Optional (hitPlayers[p], the
 	// SAME vector applied to it; absent for a player not in the hurt set). blockCount == len(toBlow).
 	t.sendExplodePackets(x, y, z, float32(radius), int32(len(toBlow)), hitPlayers)
 }
+
+// explode is the MOB-interaction convenience overload (fire=false): the creeper / wither-skull path.
+// The ghast fireball uses explodeWith(MOB, fire=mobGriefing) directly; TNT uses explodeWith(TNT); the
+// end crystal / bed use explodeWith(BLOCK). Cite Creeper.explodeCreeper (ExplosionInteraction.MOB, fire false).
+func (t *TickLoop) explode(srcID int32, x, y, z, radius float64) {
+	t.explodeWith(srcID, x, y, z, radius, explosionInteractionMob, false)
+}
+
 
 // explosionKnockback is one player's stored knockback vector (the Vec3 the server pushed it by),
 // keyed by the player's store-entity id — the ClientboundExplode Optional<Vec3> the client applies.
@@ -152,13 +196,22 @@ func (t *TickLoop) hurtEntitiesFromExplosion(srcID int32, x, y, z, radius float6
 		}
 		exposure := t.explosionSeenPercent(x, y, z, e.x-e.width/2, e.y, e.z-e.width/2, e.width, e.height)
 		// DAMAGE is gated to entities that accept it (a living mob). A primed TNT / item / boat / arrow
-		// takes NO explosion damage in this v1 path — only the push. (Vanilla gates damage on
+		// takes NO explosion damage in this v1 path -- only the push. (Vanilla gates damage on
 		// shouldDamageEntity; a living mob is the accepting case the store models.)
 		if e.ai != nil {
 			impact := (1.0 - dist) * float64(exposure)
 			dmg := (impact*impact+impact)/2.0*explosionDamageConstant*doubleRadius + 1.0
 			if dmg > 0 {
-				t.applyDamageEntity(e, src, float32(dmg))
+				// EnderDragon.hurtServer routes to hurt(this.body, src, dmg): a NON-head part hit, so the
+				// amount is reduced (dmg/4 + min(dmg,1)) and only lands when the source is a Player OR an
+				// ALWAYS_HURTS_ENDER_DRAGONS member (an explosion IS one -- #is_explosion). The generic
+				// applyDamageEntity would apply the FULL amount and bypass the boss reduction/gate, so the
+				// dragon MUST route through dragonHurtPart(body). Cite EnderDragon.hurtServer -> hurt(body,...).
+				if e.dragon != nil {
+					t.dragonHurtPart(e, "", src, float32(dmg))
+				} else {
+					t.applyDamageEntity(e, src, float32(dmg))
+				}
 			}
 		}
 		// PUSH is UNIVERSAL (A2+A3). Origin: a PrimedTnt uses feet position(); everything else uses

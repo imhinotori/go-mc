@@ -18,6 +18,11 @@ import (
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
+// badRespawnPointExplosionRadius is the radius BedBlock.useWithoutItem passes to level.explode when a
+// bed is used in a dimension where it does not work (Nether/End): 5.0f, fire=true, BLOCK interaction.
+// Cite BedBlock.useWithoutItem (ldc 5.0f).
+const badRespawnPointExplosionRadius = 5.0
+
 // bedProps is the (facing, part, occupied) triple read from a bed block state, with ok=false when the
 // state is not a bed. It mirrors reading BedBlock.FACING / BedBlock.PART / BedBlock.OCCUPIED.
 type bedProps struct {
@@ -178,9 +183,8 @@ func bedFacingDelta(d block.Direction) (dx, dz int, ok bool) {
 //	return SUCCESS_SERVER;
 //
 // Sulfur subset (all cited): the FOOT->HEAD hop resolves the bed pos exactly (pos.relative(FACING) when
-// the clicked part is the FOOT); the explode branch (bed_explode.go) detonates a radius-5.0 fire BLOCK
-// explosion in the nether/end (BedRule.EXPLODES) and returns before sleeping; the OCCUPIED branch
-// consumes without sleeping (the villager-kick
+// the clicked part is the FOOT); the explode branch is a no-op at the default BED_RULE (explodes==false,
+// no dimension carrying EXPLODES in v1); the OCCUPIED branch consumes without sleeping (the villager-kick
 // + overlay message need subsystems v1 lacks — a cited no-op-with-consume, matching vanilla returning
 // SUCCESS_SERVER on an occupied bed); the BedSleepingProblem overlays are dropped (no overlay subsystem).
 // The ServerPlayer.startSleepInBed pre-checks reduce to the canSleep (night) gate — bedInRange is
@@ -221,14 +225,34 @@ func (t *TickLoop) useBed(p *tickPlayer, pos pk.Position) bool {
 		}
 	}
 
-	// BedRule rule = environmentAttributes().getValue(BED_RULE, pos); if (rule.explodes()) { ... }.
-	// The BED_RULE is dimension-driven (bed_explode.go bedRuleFor): overworld does NOT explode, the
-	// nether + the end DO (EXPLODES). When it explodes, remove the bed + detonate a radius-5.0 fire
-	// BLOCK explosion and return SUCCESS_SERVER -- the player never sleeps. bp.facing is the resolved
-	// HEAD facing. CITE BedBlock.useWithoutItem explode branch.
-	if bedRuleFor(p.dimension).explodes {
-		t.bedExplode(bedPos, bp.facing)
-		return true // SUCCESS_SERVER (action consumed; no sleep, no placement)
+	// BedRule rule = ...BED_RULE; if (rule.explodes()) { errorMessage overlay; removeBlock(headPos);
+	// removeBlock(footPos = headPos.relative(FACING.opposite())); explode(null, badRespawnPointExplosion,
+	// null, atCenterOf(headPos), 5.0f, true, BLOCK); return SUCCESS_SERVER; }. BedRule.explodes() is true in
+	// dimensions where the bed does NOT work (the Nether and the End) -- a bed click there detonates. v1
+	// resolves the rule from the player's dimension (bedWorks: overworld only). CITE BedBlock.useWithoutItem
+	// (offsets 73-177) + BedRule.explodes.
+	if p.dimension != dimOverworld {
+		// removeBlock(headPos, false): the HEAD (bedPos, already resolved above).
+		air := block.DefaultStateID["minecraft:air"]
+		t.world().SetBlock(bedPos, air, dimMinY)
+		t.broadcastBlockUpdate(bedPos, air)
+		// footPos = headPos.relative(FACING.opposite()): the FOOT is one step OPPOSITE the head's facing.
+		// bedFacingDelta(bp.facing) is the foot->head step, so the head->foot step is its negation.
+		if fdx, fdz, okDir := bedFacingDelta(bp.facing); okDir {
+			footPos := pk.Position{X: bedPos.X - fdx, Y: bedPos.Y, Z: bedPos.Z - fdz}
+			if fs, okF := t.world().GetBlock(footPos, dimMinY); okF && isBedBlock(fs) {
+				t.world().SetBlock(footPos, air, dimMinY)
+				t.broadcastBlockUpdate(footPos, air)
+			}
+		}
+		// explode(null, badRespawnPointExplosion(center), null, atCenterOf(headPos), 5.0f, true, BLOCK):
+		// radius 5.0, fire=true (iconst_1), BLOCK interaction (always destroys terrain). srcID 0 (no source
+		// entity -- a null-source blast). Cite BedBlock.useWithoutItem (ldc 5.0f; iconst_1; BLOCK).
+		cx := float64(bedPos.X) + 0.5
+		cy := float64(bedPos.Y) + 0.5
+		cz := float64(bedPos.Z) + 0.5
+		t.explodeWith(0, cx, cy, cz, float64(badRespawnPointExplosionRadius), explosionInteractionBlock, true)
+		return true // SUCCESS_SERVER
 	}
 
 	// OCCUPIED: consume without sleeping (the kick-villager + "bed.occupied" overlay are cited no-ops).

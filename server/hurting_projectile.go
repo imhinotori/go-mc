@@ -330,13 +330,15 @@ func hurtingFireCell(endX, endY, endZ, hx, hy, hz float64) (int, int, int) {
 func (t *TickLoop) hurtingOnHit(e *Entity, x, y, z float64) {
 	switch e.hurtingKind {
 	case hurtLargeFireball:
-		// explode(this, x, y, z, explosionPower, mobGriefing, MOB). v1 explode is the MOB path (fire=false,
-		// block interaction gated on mobGriefing internally); the fire=mobGriefing arg is the createFire
-		// seam, cite-deferred (explosion.go notes createFire is deferred). Radius = explosionPower.
-		t.explode(e.id, x, y, z, float64(e.hurtExplosion))
+		// LargeFireball.onHit: level.explode(this, x, y, z, explosionPower, mobGriefing, MOB). The SAME
+		// mobGriefing boolean drives BOTH the fire flag AND (via the MOB interaction) the terrain destroy --
+		// so a ghast blast only scorches/creates fire when mobGriefing is on. Radius = explosionPower.
+		// Cite LargeFireball.onHit (offsets 22-65: boolean b = mobGriefing; explode(..., power, b, MOB)).
+		griefing := t.gameRule(ruleMobGriefing)
+		t.explodeWith(e.id, x, y, z, float64(e.hurtExplosion), explosionInteractionMob, griefing)
 	case hurtWitherSkull:
-		// explode(this, x, y, z, 1.0, false, MOB). Radius 1, no fire.
-		t.explode(e.id, x, y, z, float64(witherSkullExplosionPower))
+		// WitherSkull.onHit: level.explode(this, x, y, z, 1.0, false, MOB). Radius 1, no fire; MOB-gated terrain.
+		t.explodeWith(e.id, x, y, z, float64(witherSkullExplosionPower), explosionInteractionMob, false)
 	case hurtWindCharge:
 		// WindCharge.explode: the WIND_BURST — radius 1.2, damagesEntities=false (no explosion damage),
 		// TRIGGER interaction (no terrain destroy). Its whole effect is the knockback gust. Cite WindCharge.explode.
