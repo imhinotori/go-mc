@@ -38,9 +38,6 @@ const (
 	piglinBarterItemID    = 936 // PiglinAi.BARTERING_ITEM == Items.GOLD_INGOT (data/item id 936)
 )
 
-// piglinMeleeRangeSqr is the MeleeAttackGoal getAttackReachSqr slack proxy sized to the piglin 0.6 width
-// (the same adjacency proxy blaze d LT 4.0 melee branch uses). Cite MeleeAttackGoal.getAttackReachSqr.
-const piglinMeleeRangeSqr = 4.0
 
 // spawnPiglin creates a Piglin at (x,y,z) and adds it to the owner region store (the tracker broadcasts
 // AddEntity next tick). It attaches a minimal e.ai + a Brain (the PiglinAi core recipe, bounded) --
@@ -298,8 +295,10 @@ func (t *TickLoop) piglinMeleeGoalTick(e *Entity) {
 	if target == nil {
 		return
 	}
-	d := distanceToSqrPlayer(target, e)
-	if d <= piglinMeleeRangeSqr {
+	// MeleeAttack.canAttack / Mob.isWithinMeleeAttackRange: the inflated-attack-box vs target-hitbox
+	// intersection (the faithful reach hoglin/zombified_piglin already use), NOT a fixed 4.0 center
+	// distance. Cite Mob.isWithinMeleeAttackRange + PiglinAi MeleeAttack behavior.
+	if isWithinMeleeAttackRange(e, target) {
 		if e.piglinAttackTime <= 0 {
 			e.piglinAttackTime = piglinMeleeAttackTime // resetAttackCooldown: adjustedTickDelay(20)
 			t.piglinDoHurtTarget(e, target)

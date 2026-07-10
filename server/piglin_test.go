@@ -245,3 +245,34 @@ func TestBarterGoldIngotDrops(t *testing.T) {
 		t.Fatal("a baby piglin bartered (want false -- canAdmire requires isAdult())")
 	}
 }
+
+// TestPiglinMeleeUsesHitboxReach: the piglin melee now gates on Mob.isWithinMeleeAttackRange (the inflated
+// attack-box vs target-hitbox intersection ~1.43 blocks for two 0.6-wide entities), NOT a fixed 2.0-block
+// (dist^2 <= 4.0) proxy. A target at 1.7 blocks -- inside the old 4.0-sq proxy but OUTSIDE the true reach --
+// must NOT be hit; a target at 0.9 blocks (inside reach) IS hit. Cite Mob.isWithinMeleeAttackRange.
+func TestPiglinMeleeUsesHitboxReach(t *testing.T) {
+	loop, _, floorY := piglinLoop(t)
+	py := float64(floorY + 1)
+
+	// 1.7 blocks away: dist^2 = 2.89 <= 4.0 (old proxy would swing) but > the ~1.43-block hitbox reach.
+	far := combatTestPlayer(loop, 8.5+1.7, py, 8.5, 7060)
+	far.health = 20.0
+	pgFar := loop.spawnPiglin(8.5, py, 8.5, false)
+	pgFar.ai.attackTargetID = far.entityID
+	pgFar.piglinAttackTime = 0
+	loop.piglinMeleeGoalTick(pgFar)
+	if math.Abs(float64(far.health)-20.0) > 1e-6 {
+		t.Fatalf("piglin hit a target 1.7 blocks away (dealt %v) -- must use hitbox reach, not the 2.0-block proxy", 20.0-far.health)
+	}
+
+	// 0.9 blocks away: within the hitbox reach -> hit.
+	near := combatTestPlayer(loop, 8.5+0.9, py, 8.5, 7061)
+	near.health = 20.0
+	pgNear := loop.spawnPiglin(8.5, py, 8.5, false)
+	pgNear.ai.attackTargetID = near.entityID
+	pgNear.piglinAttackTime = 0
+	loop.piglinMeleeGoalTick(pgNear)
+	if math.Abs((20.0-float64(near.health))-5.0) > 1e-6 {
+		t.Fatalf("piglin did NOT hit a target 0.9 blocks away (dealt %v, want 5.0) -- inside hitbox reach", 20.0-near.health)
+	}
+}
