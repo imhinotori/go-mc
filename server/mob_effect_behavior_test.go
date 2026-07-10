@@ -74,6 +74,39 @@ func TestAbsorptionAbsorbsHit(t *testing.T) {
 	}
 }
 
+// TestWitherDoTHurtsEvery40Ticks: WITHER deals 1.0 wither damage on the WitherMobEffect
+// shouldApplyEffectTickThisTick cadence (40>>amp ticks), and -- unlike poison -- it CAN kill (no
+// health>1.0 floor). VERIFIED WitherMobEffect.applyEffectTick (hurtServer(wither(), 1.0F)) +
+// shouldApplyEffectTickThisTick (40>>amp).
+func TestWitherDoTHurtsEvery40Ticks(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	p := combatPlayer(loop, 1)
+	p.health = maxHealth
+	// A long-duration amp-0 wither: the DoT fires when remaining % 40 == 0. Drive the effect ticker and
+	// count the health lost across a window covering at least one 40-tick boundary.
+	loop.addPlayerEffect(p, 0, effectWither, 200, 0, 1.0)
+	start := p.health
+	for i := 0; i < 41; i++ {
+		p.invulnerableTime = 0 // clear the i-frame grace so each scheduled DoT hit lands
+		loop.tickPlayerEffects(p)
+	}
+	if p.health >= start {
+		t.Fatalf("WITHER dealt no damage over 41 ticks (health %v -> %v); DoT not wired", start, p.health)
+	}
+
+	// WITHER can KILL (no health>1.0 floor, unlike poison). A near-dead player afflicted by wither dies.
+	p2 := combatPlayer(loop, 2)
+	p2.health = 1.0
+	loop.addPlayerEffect(p2, 0, effectWither, 200, 3, 1.0) // amp 3 -> 40>>3 == 5-tick cadence
+	for i := 0; i < 60 && p2.health > 0 && !p2.dead; i++ {
+		p2.invulnerableTime = 0
+		loop.tickPlayerEffects(p2)
+	}
+	if p2.health > 0 && !p2.dead {
+		t.Fatalf("WITHER did not kill a 1.0-health player (health %v); it must have no poison-style floor", p2.health)
+	}
+}
+
 // TestHungerTickAccruesExhaustion: each HUNGER tick calls causeFoodExhaustion(0.005*(amp+1)), routed
 // into FoodData.exhaustion. VERIFIED HungerMobEffect.applyEffectTick + Player.causeFoodExhaustion.
 func TestHungerTickAccruesExhaustion(t *testing.T) {

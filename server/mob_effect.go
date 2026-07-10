@@ -62,10 +62,11 @@ const (
 	// inserts it as a bare duration effect.
 	effectConduitPower = "minecraft:conduit_power"
 	// WITHER effect id (WitherSkull.onHitEntity applies it on a NORMAL/HARD hit): MobEffects.WITHER =
-	// register("wither", new MobEffect(MobEffectCategory.HARMFUL, ...)). A duration effect whose per-tick
-	// damage-over-time (WitherMobEffect.applyEffectTick: hurt 1.0 magic every 40>>amp ticks) is CITE-DEFERRED
-	// — like the movement-buff no-ops, presence is stored via addEntityEffect and the periodic DoT lands when
-	// the mob effect-tick table grows a wither branch. The 8.0 skull hit is the visible gameplay here.
+	// register("wither", new MobEffect(MobEffectCategory.HARMFUL, ...)). The per-tick damage-over-time is
+	// WIRED (WitherMobEffect.applyEffectTick: hurtServer(wither(), 1.0F) every WitherMobEffect
+	// .shouldApplyEffectTickThisTick 40>>amp ticks) on BOTH the player path (applyEffectTick/
+	// effectShouldApplyThisTick) and the entity path (applyEntityEffectTick/entityEffectShouldApplyThisTick).
+	// Unlike POISON, wither CAN kill (no health>1.0 floor). The 8.0 skull hit is the direct-hit gameplay.
 	effectWither = "minecraft:wither"
 	// EFFECT-BEHAVIOR-01: the self-contained movement/utility effects with REAL server-side behavior.
 	// ABSORPTION (AbsorptionMobEffect): a MAX_ABSORPTION +4.0*(amp+1) ADD_VALUE modifier raises the
