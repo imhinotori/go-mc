@@ -49,7 +49,7 @@ const (
 	breezeInnerCircleXZ  = 4.0                // withinInnerCircleRange closerThan x/z (ldc2_w 4.0d)
 	breezeInnerCircleY   = 10.0               // withinInnerCircleRange closerThan y (ldc2_w 10.0d)
 	breezeFallLandDist   = 3.0                // causeFallDamage: fallDist > 3.0 plays BREEZE_LAND
-	breezeAttackRangeMax = 256.0              // Shoot ATTACK_RANGE_MAX_SQRT source (ldc2_w 256.0d) horizontal cap sq
+	breezeAttackRangeMaxSqr = 256.0           // Shoot.isTargetWithinRange: distanceToSqr < 256.0 (range = sqrt(256) = 16 blocks); the value is compared against the ALREADY-SQUARED distance -- do NOT square it again
 	breezeShootPower     = 0.7                // Shoot: spawnProjectileUsingShoot(...) velocity 0.7f (ldc 0.7f)
 	breezeShootBaseInacc = 5.0               // Shoot inaccuracy = 5 - difficulty.getId()*4 (iconst_5; imul 4; isub)
 	breezeFiringYExtra   = 0.30000001192092896 // getFiringYPosition: getY() + getBbHeight()/2 + 0.3d (ldc2_w)
@@ -130,8 +130,10 @@ func (t *TickLoop) breezeAiStep(e *Entity) {
 	if target == nil {
 		return
 	}
-	// Shoot.canUse: target within the attack range (horizontal distanceToSqr <= ATTACK_RANGE_MAX_SQRT^2).
-	if distanceToSqrPlayer(target, e) > breezeAttackRangeMax*breezeAttackRangeMax {
+	// Shoot.isTargetWithinRange (bytecode 8-25): position().distanceToSqr(target.position()) < 256.0
+	// (== range 16 blocks). ATTACK_RANGE_MAX_SQRT (256) is compared DIRECTLY against the squared
+	// distance -- it is NOT re-squared (the field name is misleading; the constant is already dist^2).
+	if distanceToSqrPlayer(target, e) >= breezeAttackRangeMaxSqr {
 		return
 	}
 	if e.breezeShootCooldown == 0 {

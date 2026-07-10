@@ -112,3 +112,32 @@ func TestBreezeFiresWindCharge(t *testing.T) {
 		t.Fatalf("wind charge vx = %v, want > 0 (aimed toward the +X target)", wc.vx)
 	}
 }
+
+// TestBreezeShootRangeGate: the Shoot.isTargetWithinRange gate (distanceToSqr < 256.0 == 16 blocks)
+// must NOT fire on a target that is acquired within FOLLOW_RANGE (24) but sits BEYOND the 16-block
+// shoot range. A player 20 blocks away is a valid target (acquired) but out of shoot range, so the
+// breeze must NOT arm its cooldown (no wind charge). Regression guard: the port previously compared
+// against 256^2 (=65536), giving a bogus 256-block shoot range. Cite Breeze Shoot.isTargetWithinRange.
+func TestBreezeShootRangeGate(t *testing.T) {
+	loop, floorY := breezeLoop(t)
+	b := loop.spawnBreeze(8.5, float64(floorY+1), 8.5)
+
+	// Player 20 blocks north: inside FOLLOW_RANGE (24) so acquired, but beyond the 16-block shoot range.
+	p := &tickPlayer{x: 8.5, y: float64(floorY + 1), z: 28.5, entityID: 7401}
+	loop.players = append(loop.players, p)
+
+	loop.breezeAiStep(b)
+	if b.ai == nil || b.ai.attackTargetID != p.entityID {
+		t.Fatalf("breeze should still ACQUIRE a target within FOLLOW_RANGE 24: got %d", b.ai.attackTargetID)
+	}
+	if b.breezeShootCooldown != 0 {
+		t.Fatalf("breeze armed its shoot cooldown (%d) against a target 20 blocks away -- Shoot.isTargetWithinRange (<256 sq == 16 blocks) must gate it out", b.breezeShootCooldown)
+	}
+
+	// Now move the player to 15 blocks (inside 16-block range, dist^2 = 225 < 256): the breeze fires.
+	p.z = 23.5
+	loop.breezeAiStep(b)
+	if b.breezeShootCooldown == 0 {
+		t.Fatal("breeze did NOT fire at a target 15 blocks away (dist^2=225 < 256) -- the shoot gate is too tight")
+	}
+}
