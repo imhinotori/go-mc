@@ -155,6 +155,15 @@ type randomStrollGoal struct {
 	// The DRAW COUNT is identical in both branches (the probability nextFloat + 30 direction draws), so
 	// the bit-fragile pig oracle stays in lockstep regardless of which branch the mode picks.
 	wantLandMode bool
+
+	// waterAvoiding selects the CONCRETE goal class: true == WaterAvoidingRandomStrollGoal (the Pig/
+	// Sniffer/Frog stroll -- getPosition draws the probability nextFloat then LandRandomPos/DefaultRandomPos);
+	// false == the BARE RandomStrollGoal (the Strider's `new RandomStrollGoal(this, 1.0, 60)` -- getPosition
+	// goes STRAIGHT to DefaultRandomPos.getPos(mob, 10, 7) with NO probability nextFloat, i.e. wantLandMode
+	// is always false and one fewer draw). Defaults to true so every existing water-avoiding caller is
+	// byte-identical; the strider sets it false. Cite RandomStrollGoal.getPosition vs
+	// WaterAvoidingRandomStrollGoal.getPosition.
+	waterAvoiding bool
 }
 
 // strollWaterAvoidingProbability is WaterAvoidingRandomStrollGoal.PROBABILITY — the default the
@@ -170,6 +179,20 @@ func newWaterAvoidingRandomStrollGoal(speed float64) *randomStrollGoal {
 		speedModifier: speed,
 		interval:      strollDefaultInterval,
 		probability:   strollWaterAvoidingProbability,
+		waterAvoiding: true,
+	}
+}
+
+// newRandomStrollGoal builds the BARE RandomStrollGoal (mob, speed, interval) -- the Strider's
+// `new RandomStrollGoal(this, 1.0, 60)`. It is NOT water-avoiding: getPosition goes straight to
+// DefaultRandomPos.getPos(mob, 10, 7) with no probability nextFloat (waterAvoiding=false, so the
+// getPosition draw is skipped and wantLandMode stays false). Cite Strider.registerGoals +
+// RandomStrollGoal(PathfinderMob, double, int).
+func newRandomStrollGoal(speed float64, interval int) *randomStrollGoal {
+	return &randomStrollGoal{
+		baseGoal:      newBaseGoal(flagMove),
+		speedModifier: speed,
+		interval:      interval,
 	}
 }
 
@@ -245,7 +268,13 @@ func (g *randomStrollGoal) getPosition(_ *TickLoop, e *Entity) (candidates [][3]
 	// (the COMMON ~99.9% up-snap path, wantLandMode=true); nextFloat() < probability → DefaultRandomPos
 	// (the RARE ~0.1% no-up-snap path, wantLandMode=false). The SAME single nextFloat() draw yields the
 	// flag — only which boolean it maps to is corrected here; the draw count/order is unchanged.
-	g.wantLandMode = r.nextFloat() >= g.probability
+	if g.waterAvoiding {
+		g.wantLandMode = r.nextFloat() >= g.probability
+	} else {
+		// BARE RandomStrollGoal.getPosition: DefaultRandomPos.getPos(mob, 10, 7) directly -- NO probability
+		// nextFloat draw, and the no-up-snap (DefaultRandomPos) validation mode. Cite RandomStrollGoal.getPosition.
+		g.wantLandMode = false
+	}
 	cands := make([][3]float64, 0, 10)
 	for i := 0; i < 10; i++ { // RandomPos.generateRandomPos: for i<10, NO break (always 10 supplier calls)
 		xt, yt, zt := generateRandomDirection(r, strollHorizontalRadius, strollVerticalRadius)

@@ -625,6 +625,13 @@ type Entity struct {
 	// (no passenger subsystem) but the saddle set + the rng draws happen 1:1. Cite Strider.finalizeSpawn.
 	striderFinalized bool
 	striderSaddled   bool
+	// striderBoosting / striderBoostTime / striderBoostTimeTotal port ItemBasedSteering (the DATA_BOOST_TIME
+	// steering timer): boost(rng) sets boosting=true, boostTime=0, boostTimeTotal=nextInt(841)+140; tickBoost()
+	// increments boostTime and clears boosting past total; boostFactor() = boosting ? 1.0+1.15f*sin(boostTime/
+	// total*PI) : 1.0. DATA_BOOST_TIME (the synced total) is striderBoostTimeTotal here. Cite ItemBasedSteering.
+	striderBoosting       bool
+	striderBoostTime      int
+	striderBoostTimeTotal int
 	// --- WITHER SKELETON / HOGLIN STATE (nether roster) ---------------------------------------------
 	//
 	// Tick-owned plain values. isWitherSkeleton / isHoglin / isZoglin mark the entity (set/read ONLY by

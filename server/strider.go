@@ -31,12 +31,23 @@ package server
 // FIRE IMMUNITY: Strider.isOnFire const-false; a strider is fire+lava immune (entityFireImmune gates it out
 // of fire.go tickEntityFire/tickEntityLava). Cite Strider.isOnFire + EntityType.fireImmune.
 //
-// v1 STUBS (cite-deferred, recorded): the full riding (getControllingPassenger warped-fungus-on-a-stick +
-// tickRidden + getRiddenSpeed + saddle) and breeding (BreedGoal/FollowParentGoal/TemptGoal + isFood
-// STRIDER_FOOD) -- the task scopes the lava-walk + cold-state + attributes; riding/breeding are cited-deferred.
-// The StriderPathNavigation lava-pathfinding + the PanicGoal/StriderGoToLavaGoal + the STRIDER_HAPPY/RETREAT
-// ambient sounds are the deferred goal/nav layer (the strider still lava-walks + cold-shivers + slows). The
-// getWalkTargetValue lava-preference is the nav layer.
+// RIDING + BREEDING + GOALS (this session, 1:1 javap-verified):
+//   getControllingPassenger(): isSaddled() && firstPassenger instanceof Player p && p.isHolding(
+//     WARPED_FUNGUS_ON_A_STICK) -> p; else super. Wired into passenger.go getControllingPassenger (strider branch).
+//   getRiddenSpeed(player) = getAttributeValue(MOVEMENT_SPEED) * (isSuffocating() ? 0.35f : 0.55f) * boostFactor().
+//   getRiddenInput(player, in) = new Vec3(0,0,1). tickRidden: setRot + steering.tickBoost() + super.
+//   ItemBasedSteering.boost(rng): boostTimeTotal = nextInt(841)+140; tickBoost/boostFactor curve
+//     (1.0 + 1.15f*sin(boostTime/total * PI)) -- striderBoost/striderBoostFactor.
+//   mobInteract: !isFood && isSaddled && !isVehicle && !isSecondaryUseActive -> startRiding + SUCCESS;
+//     else super feed; a SADDLE item equips the SADDLE slot (v1: striderSaddled flag). STRIDER_EAT sound draw.
+//   isFood(stack) = stack.is(STRIDER_FOOD) (tag: [warped_fungus]). getBreedOffspring -> a STRIDER.
+//   registerGoals: PanicGoal(1.65)@1, BreedGoal(1.0)@2, TemptGoal(1.4, STRIDER_FOOD)@3,
+//     StriderGoToLavaGoal(1.0)@4, FollowParentGoal(1.0)@5, RandomStrollGoal(1.0,60)@7, LookAtPlayer(8.0)@8,
+//     RandomLookAround@8, LookAtPlayer(Strider,8.0)@9. (newStriderAI.)
+//
+// v1 STUBS (cite-deferred): the StriderPathNavigation lava-pathfinding + StriderGoToLavaGoal target-seek + the
+// STRIDER_HAPPY/RETREAT ambient sounds are the deferred nav layer. The SADDLE/MAINHAND equipment SLOT item sets
+// (finalizeSpawn jockey + mobInteract saddle) fold to the striderSaddled bool until the equipment-slot API exists.
 
 import (
 	"math"
@@ -57,6 +68,28 @@ const (
 	striderLavaFloatUp = 0.05
 	// striderLavaFloatScale is floatStrider's deltaMovement.scale(0.5) when riding the lava surface.
 	striderLavaFloatScale = 0.5
+
+	// striderFoodTag is the ItemTags.STRIDER_FOOD tag (value: [minecraft:warped_fungus]) -- isFood(stack)
+	// == stack.is(STRIDER_FOOD). Cite Strider.isFood.
+	striderFoodTag = "strider_food"
+	// itemWarpedFungusOnAStick is Items.WARPED_FUNGUS_ON_A_STICK (item id 888): the control item a rider must
+	// hold for getControllingPassenger to steer the strider. Cite Strider.getControllingPassenger.
+	itemWarpedFungusOnAStick = 888
+	// itemSaddle is Items.SADDLE (item id 865) -- equipping it into the SADDLE slot saddles the strider.
+	itemSaddle = 865
+
+	// Strider.getRiddenSpeed steering factors (VERIFIED javap Strider.getRiddenSpeed):
+	//   getAttributeValue(MOVEMENT_SPEED) * (isSuffocating() ? 0.35f : 0.55f) * boostFactor().
+	striderSuffocateSteerModifier = float32(0.35) // SUFFOCATE_STEERING_MODIFIER (ldc 0.35f)
+	striderSteerModifier          = float32(0.55) // STEERING_MODIFIER          (ldc 0.55f)
+
+	// ItemBasedSteering boost timer bounds (VERIFIED javap ItemBasedSteering.boost): boostTimeTotal =
+	// rng.nextInt(841) + 140. MIN_BOOST_TIME 140, MAX_BOOST_TIME (140 + 840) == 980.
+	striderBoostMinTime  = 140 // + nextInt(841) -> [140, 980]
+	striderBoostRandSpan = 841 // nextInt(841)
+	// striderBoostFactorAmp is ItemBasedSteering.boostFactor's amplitude (ldc 1.15f): factor = 1.0 +
+	// 1.15f * sin(boostTime/boostTimeTotal * PI). Cite ItemBasedSteering.boostFactor.
+	striderBoostFactorAmp = float32(1.15)
 )
 
 // spawnStriderRaw is the bare Strider create (no finalizeSpawn) at (x,y,z): the tracker broadcasts
@@ -67,7 +100,7 @@ func (t *TickLoop) spawnStriderRaw(x, y, z float64) *Entity {
 	s := NewEntity(t.idAlloc.AllocID(), entity.Strider, x, y, z)
 	s.isStrider = true
 	initSpawnHealth(s) // setHealth(getMaxHealth()) -> 20.0
-	s.ai = &mobAI{}
+	s.ai = newStriderAI() // registerGoals: Panic/Breed/Tempt/GoToLava/FollowParent/Stroll/Look
 	reseedMobAI(s.ai, s.id)
 	owner := t.regionForEntity(s)
 	if owner == nil {
@@ -246,4 +279,183 @@ func (t *TickLoop) striderFinalizeSpawn(e *Entity) {
 // ZombieGroupData; the draw MUST be consumed for lockstep. Cite Zombie.getSpawnAsBabyOdds.
 func striderZombieSpawnAsBabyOdds(lr interface{ NextFloat() float32 }) bool {
 	return lr.NextFloat() < 0.05 // ldc 0.05f; fcmpg < -> true
+}
+
+// striderBoostFactor ports ItemBasedSteering.boostFactor(): while boosting, 1.0f + 1.15f *
+// sin((boostTime / boostTimeTotal) * PI); otherwise 1.0f. The sin curve ramps the boost up to a
+// peak (~2.15x at the midpoint) then back to 1.0 as the timer runs out. NO RNG. Cite
+// ItemBasedSteering.boostFactor.
+func striderBoostFactor(e *Entity) float32 {
+	if !e.striderBoosting {
+		return 1.0 // fconst_1
+	}
+	total := e.striderBoostTimeTotal
+	if total == 0 {
+		return 1.0 // guard div-by-zero (boostTimeTotal is >=140 once boost() ran)
+	}
+	// 1.0f + 1.15f * Mth.sin((boostTime/boostTimeTotal) * PI) -- float math mirroring the jar (i2f then fdiv).
+	frac := float32(e.striderBoostTime) / float32(total)
+	return 1.0 + striderBoostFactorAmp*float32(math.Sin(float64(frac)*math.Pi))
+}
+
+// striderTickBoost ports ItemBasedSteering.tickBoost(): if boosting, boostTime++ and if it passes
+// boostTimeTotal, clear boosting. Called from tickRidden each tick the strider is ridden. NO RNG.
+// Cite ItemBasedSteering.tickBoost.
+func striderTickBoost(e *Entity) {
+	if !e.striderBoosting {
+		return
+	}
+	e.striderBoostTime++
+	if e.striderBoostTime > e.striderBoostTimeTotal {
+		e.striderBoosting = false
+	}
+}
+
+// striderBoost ports ItemBasedSteering.boost(RandomSource): if already boosting, no-op (returns false);
+// else start a boost -- boosting=true, boostTime=0, boostTimeTotal = rng.nextInt(841) + 140 (DATA_BOOST_TIME
+// set). Returns true iff a new boost started. The warped_fungus_on_a_stick item calls this when a rider uses
+// it. Cite ItemBasedSteering.boost.
+func striderBoost(e *Entity, r *entityRandom) bool {
+	if e.striderBoosting {
+		return false // iconst_0 ireturn
+	}
+	e.striderBoosting = true
+	e.striderBoostTime = 0
+	e.striderBoostTimeTotal = r.nextInt(striderBoostRandSpan) + striderBoostMinTime // nextInt(841)+140
+	return true
+}
+
+// striderGetRiddenSpeed ports Strider.getRiddenSpeed(player): getAttributeValue(MOVEMENT_SPEED) *
+// (isSuffocating() ? 0.35f : 0.55f) * steering.boostFactor(). The MOVEMENT_SPEED attribute value already
+// folds the SUFFOCATING_MODIFIER (-0.34 ADD_MULTIPLIED_BASE) when suffocating, and the 0.35/0.55 steering
+// factor is applied ON TOP -- both stack, exactly as in the jar. Returns a float32 (the jar's d2f). Cite
+// Strider.getRiddenSpeed.
+func striderGetRiddenSpeed(e *Entity) float32 {
+	base := e.getAttributeValue(attribute.MovementSpeed) // getAttributeValue(MOVEMENT_SPEED) (double)
+	var steer float32
+	if e.striderSuffocating { // isSuffocating() ? 0.35f : 0.55f
+		steer = striderSuffocateSteerModifier
+	} else {
+		steer = striderSteerModifier
+	}
+	// (double base) * (float steer widened to double) * (float boostFactor widened to double), then d2f.
+	return float32(base * float64(steer) * float64(striderBoostFactor(e)))
+}
+
+// striderIsSaddled ports Strider.isSaddled() (EquipmentSlot.SADDLE presence). v1 has no equipment-slot item
+// store, so the SADDLE slot is folded to the striderSaddled bool (set by finalizeSpawn's jockey saddle and by
+// mobInteract equipping a SADDLE). Structured to become a real hasItemInSlot(SADDLE) read. Cite
+// AbstractHorse.isSaddled (the shared isSaddled seam) + Strider.getControllingPassenger's isSaddled() gate.
+func striderIsSaddled(e *Entity) bool { return e.striderSaddled }
+
+// striderIsFood ports Strider.isFood(stack): stack.is(ItemTags.STRIDER_FOOD) (tag value [warped_fungus]).
+// Cite Strider.isFood.
+func striderIsFood(itemID int32) bool { return itemInTag(itemID, striderFoodTag) }
+
+// newStriderAI builds the Strider goalSelector 1:1 from Strider.registerGoals (VERIFIED javap):
+//
+//	addGoal(1, new PanicGoal(this, 1.65));
+//	addGoal(2, new BreedGoal(this, 1.0));
+//	this.temptGoal = new TemptGoal(this, 1.4, stack -> stack.is(STRIDER_TEMPT_ITEMS), false);
+//	addGoal(3, this.temptGoal);
+//	addGoal(4, new StriderGoToLavaGoal(this, 1.0));
+//	addGoal(5, new FollowParentGoal(this, 1.0));
+//	addGoal(7, new RandomStrollGoal(this, 1.0, 60));
+//	addGoal(8, new LookAtPlayerGoal(this, Player.class, 8.0f));
+//	addGoal(8, new RandomLookAroundGoal(this));
+//	addGoal(9, new LookAtPlayerGoal(this, Strider.class, 8.0f));
+//
+// TemptGoal predicate uses STRIDER_TEMPT_ITEMS (== STRIDER_FOOD tag [warped_fungus] + warped_fungus_on_a_stick).
+// The StriderGoToLavaGoal target-seek is bounded to a stroll placeholder (the lava-nav layer is deferred): it
+// still contributes the priority-4 goal SLOT so the goal set is complete. LookAtPlayer(Strider) is a second
+// look goal at priority 9. NO RNG at construction. Cite Strider.registerGoals.
+func newStriderAI() *mobAI {
+	m := &mobAI{}
+	m.goals.addGoal(1, newPanicGoal(striderPanicSpeed))
+	m.goals.addGoal(2, newBreedGoal(striderBreedSpeed))
+	m.goals.addGoal(3, newTemptGoal(striderTemptSpeed, func(id int32) bool { return striderTemptItem(id) }, false, nil))
+	m.goals.addGoal(4, newRandomStrollGoal(striderGoToLavaSpeed, striderStrollInterval)) // StriderGoToLavaGoal(1.0) SLOT (lava-seek nav deferred)
+	m.goals.addGoal(5, newFollowParentGoal(striderFollowSpeed))
+	m.goals.addGoal(7, newRandomStrollGoal(striderStrollSpeed, striderStrollInterval)) // bare RandomStrollGoal(1.0, 60)
+	m.goals.addGoal(8, newLookAtPlayerGoal(striderLookDistance))
+	m.goals.addGoal(8, newRandomLookAroundGoal())
+	m.goals.addGoal(9, newLookAtPlayerGoal(striderLookDistance)) // LookAtPlayerGoal(Strider.class, 8.0)
+	return m
+}
+
+// striderTemptItem reports whether an item is in STRIDER_TEMPT_ITEMS: the STRIDER_FOOD tag [warped_fungus]
+// PLUS warped_fungus_on_a_stick (the control item also tempts). Cite Strider.registerGoals temptGoal predicate
+// (STRIDER_TEMPT_ITEMS = STRIDER_FOOD + WARPED_FUNGUS_ON_A_STICK).
+func striderTemptItem(id int32) bool {
+	return striderIsFood(id) || id == itemWarpedFungusOnAStick
+}
+
+// Strider goal priorities/speeds (VERIFIED javap Strider.registerGoals).
+const (
+	striderPanicSpeed     = 1.65 // PanicGoal(this, 1.65)
+	striderBreedSpeed     = 1.0  // BreedGoal(this, 1.0)
+	striderTemptSpeed     = 1.4  // TemptGoal(this, 1.4, ...)
+	striderGoToLavaSpeed  = 1.0  // StriderGoToLavaGoal(this, 1.0)
+	striderFollowSpeed    = 1.0  // FollowParentGoal(this, 1.0)
+	striderStrollSpeed    = 1.0  // RandomStrollGoal(this, 1.0, 60)
+	striderStrollInterval = 60   // RandomStrollGoal interval
+	striderLookDistance   = float32(8.0)
+)
+
+// tryStriderInteract ports Strider.mobInteract's ride branch for the v1 right-click mount. Vanilla:
+//
+//	boolean isFood = isFood(getItemInHand(hand));
+//	if (!isFood && isSaddled() && !isVehicle() && !player.isSecondaryUseActive()) {
+//	    if (!level().isClientSide()) player.startRiding(this);
+//	    return SUCCESS;
+//	}
+//	InteractionResult r = super.mobInteract(player, hand);   // Animal feed/breed path
+//	if (!r.consumesAction()) {
+//	    ItemStack stack = getItemInHand(hand);
+//	    return isEquippableInSlot(stack, SADDLE) ? stack.interactLivingEntity(...) : PASS;
+//	}
+//	if (isFood && !isSilent()) level().playSound(..., STRIDER_EAT, ...);   // eat sound draw
+//	return r;
+//
+// Returns true when the interact belongs to the strider (a mount OR a saddle-equip); false to fall through
+// to the shared feed path (handleInteract's tryFeedAnimal) for the isFood case. The mount is the load-bearing
+// v1 ride; the SADDLE-equip folds to the striderSaddled bool (no equipment-slot item store). Cite
+// Strider.mobInteract.
+func (t *TickLoop) tryStriderInteract(p *tickPlayer, mob *Entity, usingSecondaryAction bool) bool {
+	inv := ensureInventory(p)
+	held := inv.get(heldWindowSlot(inv.heldSlot)) // player.getItemInHand(hand)
+	isFood := !slotIsEmpty(held) && striderIsFood(int32(held.ItemID))
+
+	// RIDE branch: !isFood && isSaddled() && !isVehicle() && !isSecondaryUseActive().
+	if !isFood && striderIsSaddled(mob) && !mob.isVehicle() && !usingSecondaryAction {
+		// doPlayerRide: if (!isClientSide) player.startRiding(this). Broadcast the passenger list so the
+		// rider's client attaches and every tracker renders the seated player.
+		if t.playerStartRiding(p, mob, false) {
+			t.broadcastSetPassengers(mob)
+		}
+		return true // SUCCESS -- the mount belongs to the strider
+	}
+	// SADDLE-equip branch (after super.mobInteract does not consume): a SADDLE item saddles the strider. v1
+	// folds the SADDLE equipment slot to the striderSaddled bool. isFood falls through to the shared feed path.
+	if !isFood && !slotIsEmpty(held) && int32(held.ItemID) == itemSaddle && !striderIsSaddled(mob) {
+		mob.striderSaddled = true
+		// stack.interactLivingEntity == SaddleItem equip: consume 1 from the stack (server-side).
+		held.Count--
+		inv.set(heldWindowSlot(inv.heldSlot), held)
+		return true // the saddle-equip belongs to the strider
+	}
+	// isFood -> fall through to tryFeedAnimal (the super.mobInteract Animal feed/breed path). The STRIDER_EAT
+	// eat-sound + its 2 nextFloat draws are DEFERRED with the sound subsystem (cited); the feed RNG (setInLove)
+	// is on the shared feed path unchanged.
+	return false
+}
+
+// striderRiderHoldingControlItem ports the Player.isHolding(WARPED_FUNGUS_ON_A_STICK) check inside
+// Strider.getControllingPassenger: the strider is steerable ONLY while its rider holds the control item.
+// isHolding checks MAINHAND (v1 reads the selected hotbar slot, the established held read). Cite
+// Strider.getControllingPassenger + Player.isHolding.
+func (t *TickLoop) striderRiderHoldingControlItem(p *tickPlayer) bool {
+	inv := ensureInventory(p)
+	held := inv.get(heldWindowSlot(inv.heldSlot))
+	return !slotIsEmpty(held) && int32(held.ItemID) == itemWarpedFungusOnAStick
 }

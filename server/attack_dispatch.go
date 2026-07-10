@@ -1212,6 +1212,15 @@ func (t *TickLoop) handleInteract(p *tickPlayer, pkt pk.Packet) {
 	if mob.typ == entity.Camel.ID && t.tryCamelRide(p, mob) {
 		return // the ride handled the interact
 	}
+	// STRIDER RIDE (net.minecraft.world.entity.monster.Strider.mobInteract): a saddled, non-ridden strider
+	// right-clicked WITHOUT a secondary action and WITHOUT strider_food in hand mounts the player (startRiding);
+	// a SADDLE item saddles it. tryStriderInteract returns true when the interact belongs to the strider (a
+	// mount or saddle-equip) so handleInteract does NOT fall through to the feed path; it returns false for the
+	// isFood case (fall through to tryFeedAnimal == super.mobInteract feed/breed). Strider-gated (typ ==
+	// entity.Strider.ID) so it is a zero-cost no-op for the pig oracle. Cite Strider.mobInteract.
+	if mob.typ == entity.Strider.ID && t.tryStriderInteract(p, mob, bool(usingSecondaryAction)) {
+		return // the strider ride/saddle handled the interact
+	}
 	// VILLAGER MERCHANT MENU (net.minecraft.world.entity.npc.villager.Villager.mobInteract): a right-click on
 	// a live, non-baby, non-trading, non-sleeping villager opens the trading screen (startTrading ->
 	// openMenu(MerchantMenu) + ClientboundMerchantOffers). villagerMobInteract returns true whenever the

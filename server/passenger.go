@@ -448,6 +448,21 @@ func (t *TickLoop) getControllingPassenger(vehicle *Entity) int32 {
 	if vehicle.typ != entity.HappyGhast.ID {
 		return 0
 	}
+	// A SADDLED STRIDER's getControllingPassenger is the first passenger when it is a Player holding
+	// WARPED_FUNGUS_ON_A_STICK: `if (isSaddled()) { first = getFirstPassenger(); if (first instanceof Player p
+	// && p.isHolding(WARPED_FUNGUS_ON_A_STICK)) return p; } return super.getControllingPassenger();`. This makes
+	// a steered strider client-authoritative (the client drives it via ServerboundMoveVehicle, like the boat/
+	// ghast). Cite Strider.getControllingPassenger.
+	if vehicle.typ == entity.Strider.ID {
+		if !striderIsSaddled(vehicle) || len(vehicle.passengers) == 0 {
+			return 0
+		}
+		first := vehicle.passengers[0]
+		if rp := t.playerByEntityID(first); rp != nil && t.striderRiderHoldingControlItem(rp) {
+			return first // Player p holding WARPED_FUNGUS_ON_A_STICK -> the controlling passenger
+		}
+		return 0 // super.getControllingPassenger() (Animal) -> null
+	}
 	if len(vehicle.passengers) == 0 {
 		return 0
 	}

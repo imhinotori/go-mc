@@ -104,6 +104,18 @@ func (t *TickLoop) spawnBreedOffspring(e, partner *Entity) *Entity {
 		return t.spawnBee(e.x, e.y, e.z, true)
 	case entity.Camel.ID:
 		return t.spawnCamel(e.x, e.y, e.z, true)
+	case entity.Strider.ID:
+		// Strider.getBreedOffspring: EntityTypes.STRIDER.create(level, BREEDING) -- a plain baby STRIDER, NO RNG
+		// draw (no variant). spawnStriderRaw is the non-finalizing create (finalizeSpawn's jockey/saddle roll is
+		// for a NATURAL spawn, not a bred baby); mark it finalized + baby so it never re-rolls. Cite
+		// Strider.getBreedOffspring.
+		baby := t.spawnStriderRaw(e.x, e.y, e.z)
+		if baby != nil {
+			baby.striderFinalized = true
+			baby.breedAge = babyStartAge
+			baby.refreshDimensions()
+		}
+		return baby
 	case entity.Armadillo.ID:
 		return t.spawnArmadillo(e.x, e.y, e.z, true)
 	case entity.Sniffer.ID:
