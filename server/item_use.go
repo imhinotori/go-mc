@@ -277,26 +277,33 @@ func (t *TickLoop) useItemInHand(p *tickPlayer, hand int32) {
 		return
 	}
 
-	// FOOD gate (v1): resolve the held item's FOOD/CONSUMABLE data. Non-food => not eatable => no-op
-	// (cite: other ItemStack.use behaviors out of v1 scope).
-	f, ok := itemFood(int32(held.ItemID))
+	// CONSUMABLE gate: resolve the held item CONSUMABLE data (data/item/consume.go). A non-consumable
+	// item is a no-op (cite: other ItemStack.use behaviors out of v1 scope). SCOPE: only items that
+	// carry a FOOD component OR a consume-effect payload (bad_omen / on_consume_effects) are handled --
+	// a bare drinkable (plain minecraft:potion, whose behavior is the PotionContents subsystem, not
+	// consume_effects) stays deferred so this does not half-implement potion drinking.
+	c, ok := itemConsumable(int32(held.ItemID))
 	if !ok {
 		return
 	}
-
-	// Consumable.canConsume → Player.canEat(canAlwaysEat):
-	//   abilities.invulnerable || canAlwaysEat || foodData.needsFood()
-	// abilities.invulnerable maps to creative in v1 (the same hasInfiniteMaterials gate the dig/place
-	// paths use). needsFood() == food < 20 (FoodData.needsFood). If canEat is false, startConsuming
-	// returns FAIL and nothing happens.
-	invulnerable := p.gameMode == gameModeCreative
-	if !invulnerable && !f.CanAlwaysEat && !p.foodNeedsFood() {
-		return // canEat == false: cannot eat at full hunger (and not a canAlwaysEat food)
+	if !c.HasFood && len(c.OnConsumeEffects) == 0 && c.OminousBottleAmplifier == nil {
+		return // consumable but out of v1 scope (e.g. a plain potion) -- deferred
 	}
 
-	// consumeTicks() = (int)(consumeSeconds * 20.0f). For food this is 32 (> 0), so startConsuming
-	// goes through startUsingItem (the timed-use path) rather than an immediate onConsume.
-	consumeTicks := int32(f.ConsumeSeconds * useDurationTicksPerSecond)
+	// Consumable.canConsume -> if (food == null) return true; else Player.canEat(canAlwaysEat):
+	//   abilities.invulnerable || canAlwaysEat || foodData.needsFood()
+	// A no-food consumable (milk_bucket, ominous_bottle) always passes canConsume. abilities.invulnerable
+	// maps to creative in v1. needsFood() == food < 20. If canEat is false, startConsuming returns FAIL.
+	if c.HasFood {
+		invulnerable := p.gameMode == gameModeCreative
+		if !invulnerable && !c.CanAlwaysEat && !p.foodNeedsFood() {
+			return // canEat == false: cannot eat at full hunger (and not a canAlwaysEat food)
+		}
+	}
+
+	// consumeTicks() = (int)(consumeSeconds * 20.0f). For every v1 consumable this is >= 16 (>0), so
+	// startConsuming goes through startUsingItem (the timed-use path) rather than an immediate onConsume.
+	consumeTicks := int32(c.ConsumeSeconds * useDurationTicksPerSecond)
 	if consumeTicks <= 0 {
 		// consumeTicks == 0: vanilla onConsume's run immediately. No v1 food has consumeTicks 0
 		// (all are >= 16), but mirror the branch faithfully so a 0-tick consumable still eats at once.
@@ -411,14 +418,21 @@ func (t *TickLoop) completeUsingItem(p *tickPlayer) {
 // sound, and the EAT/DRINK gameEvent are all faithful no-ops, structured to become real later.
 // Tick-owned.
 func (t *TickLoop) finishUsingItem(p *tickPlayer, stack component.SlotData) component.SlotData {
-	f, ok := itemFood(int32(stack.ItemID))
-	if ok {
+	// ConsumableListener step of Consumable.onConsume: FoodProperties.onConsume runs FIRST (the
+	// FoodData.eat), so a FOOD item refills the hunger bar here.
+	if f, ok := itemFood(int32(stack.ItemID)); ok {
 		// FoodProperties.onConsume -> FoodData.eat(FoodProperties) -> add(nutrition, saturation).
 		// ABSOLUTE saturation (the FOOD component value), applied via the ported FoodData.add
 		// (foodAdd: clamp food to [0,20], saturation to [0, food]). NOT saturationByModifier.
 		p.foodAdd(f.Nutrition, f.Saturation)
-		// onConsumeEffects (status effects), the burp sound, and the EAT/DRINK gameEvent: v1 no-ops
-		// (no effects/sound/game-event systems yet) — cited, structured to become real later.
+	}
+
+	// The rest of Consumable.onConsume: the OminousBottleAmplifier ConsumableListener (bad_omen) then
+	// the onConsumeEffects list (apply/remove/clear/teleport/play_sound status effects). Data-driven off
+	// the item CONSUMABLE component (data/item/consume.go). A non-consumable item (no entry) is a no-op.
+	// See consume_effects.go. The burp/eat sound + EAT/DRINK gameEvent remain cited v1 no-ops.
+	if c, ok := itemConsumable(int32(stack.ItemID)); ok {
+		t.applyConsumeEffects(p, c)
 	}
 
 	// ItemStack.consume(1, player): shrink by 1 UNLESS the player has infinite materials (creative).
