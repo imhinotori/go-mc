@@ -418,3 +418,14 @@ func IsWaterloggedState(id StateID) bool {
 	}
 	return isWaterlogged(StateList[id])
 }
+
+// IsMud reports Blocks.MUD -- the block PointedDripstoneBlock.maybeTransferFluid converts to CLAY when
+// a WATER drip lands on it (and the source getFluidAboveStalactite treats as a WATER source). CITE:
+// PointedDripstoneBlock.maybeTransferFluid (state.is(MUD)); lambda getFluidAboveStalactite 0.
+func IsMud(s StateID) bool {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return false
+	}
+	_, ok := StateList[s].(Mud)
+	return ok
+}
