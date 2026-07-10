@@ -442,3 +442,35 @@ func TestEnchantPunchDirectAttackerGate(t *testing.T) {
 		t.Fatalf("punch II with non-arrow direct = %v, want 0.0 (requirement fails)", got)
 	}
 }
+
+// TestEnchantFishingRodEnchants: Luck of the Sea III folds FISHING_LUCK_BONUS (add 1.0+1.0*(lvl-1)) over
+// 0 -> 3.0 -> int 3 (getFishingLuckBonus). Lure II folds FISHING_TIME_REDUCTION (add 5.0+5.0*(lvl-1))
+// over 0 -> 10.0 (getFishingTimeReduction), which the caster multiplies by 20 -> 200 lureSpeed. A bare
+// rod folds zero entries -> 0/0. Cite luck_of_the_sea.json + lure.json + EnchantmentHelper.
+func TestEnchantFishingRodEnchants(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	const idFishingRod = 1082
+
+	rod := enchantedStack(idFishingRod, 1,
+		enchTestEntry(t, "minecraft:luck_of_the_sea", 3),
+		enchTestEntry(t, "minecraft:lure", 2))
+
+	if luck := loop.enchFishingLuckBonus(rod); luck != 3 {
+		t.Fatalf("luck of the sea III getFishingLuckBonus = %d, want 3 (1.0 + 1.0*2)", luck)
+	}
+	if red := loop.enchFishingTimeReduction(rod); red != 10.0 {
+		t.Fatalf("lure II getFishingTimeReduction = %v, want 10.0 (5.0 + 5.0*1)", red)
+	}
+	if lureSpeed := int32(loop.enchFishingTimeReduction(rod) * 20.0); lureSpeed != 200 {
+		t.Fatalf("lure II lureSpeed = %d, want 200 (10.0*20 f2i)", lureSpeed)
+	}
+
+	// A bare (un-enchanted) rod folds nothing -> the vanilla no-enchant defaults.
+	bare := component.SlotData{ItemID: pk.VarInt(idFishingRod), Count: 1}
+	if luck := loop.enchFishingLuckBonus(bare); luck != 0 {
+		t.Fatalf("bare rod luck = %d, want 0", luck)
+	}
+	if red := loop.enchFishingTimeReduction(bare); red != 0.0 {
+		t.Fatalf("bare rod time reduction = %v, want 0.0", red)
+	}
+}

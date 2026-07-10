@@ -1065,6 +1065,8 @@ type enchEffectSet struct {
 	postAttack         []enchPostAttack
 	attributes         []enchAttrEffect // minecraft:attributes location-based modifiers (equip/unequip)
 	projectileSpawned  []enchCondEntity // minecraft:projectile_spawned (Flame -> ignite the arrow at shoot)
+	fishingLuck        []enchCondValue  // minecraft:fishing_luck_bonus (Luck of the Sea)
+	fishingTime        []enchCondValue  // minecraft:fishing_time_reduction (Lure)
 }
 
 // enchCondEntity is ConditionalEffect<EnchantmentEntityEffect>: an entity effect + optional requirements.
@@ -1099,6 +1101,8 @@ func enchantEffectTable() []*enchEffectSet {
 			set.postAttack = parsePostAttackList(def.Effects["minecraft:post_attack"])
 			set.attributes = parseAttributeEffects(def.Effects["minecraft:attributes"])
 			set.projectileSpawned = parseCondEntityList(def.Effects["minecraft:projectile_spawned"])
+			set.fishingLuck = parseCondValueList(def.Effects["minecraft:fishing_luck_bonus"])
+			set.fishingTime = parseCondValueList(def.Effects["minecraft:fishing_time_reduction"])
 			table[i] = set
 		}
 		enchEffectTableVal = table
@@ -1320,6 +1324,49 @@ func (t *TickLoop) enchModifyDamageDirect(weapon component.SlotData, victim ench
 		damage = applyEnchCondValues(set.damage, ctx, victim.getRandom(), damage)
 	})
 	return damage
+}
+
+// enchFishingLuckBonus is EnchantmentHelper.getFishingLuckBonus(ServerLevel, ItemStack rod, Entity
+// owner): fold the rod's FISHING_LUCK_BONUS effects (Luck of the Sea: add linear 1.0 + 1.0/level) over
+// 0.0 via runIterationOnItem (no slot/requirement gate), then Math.max(0, (int)floatValue) — the
+// MutableFloat.intValue f2i truncation. Cite EnchantmentHelper.getFishingLuckBonus bytecode.
+func (t *TickLoop) enchFishingLuckBonus(rod component.SlotData) int {
+	f := float32(0.0)
+	ctx := &enchDamageCtx{t: t}
+	forEachItemEnchant(rod, func(wireID, level int) {
+		set := enchEffectsFor(wireID)
+		if set == nil || len(set.fishingLuck) == 0 {
+			return
+		}
+		ctx.level = level
+		f = applyEnchCondValues(set.fishingLuck, ctx, nil, f)
+	})
+	v := int(f) // MutableFloat.intValue() f2i truncation
+	if v < 0 {
+		return 0
+	}
+	return v
+}
+
+// enchFishingTimeReduction is EnchantmentHelper.getFishingTimeReduction(ServerLevel, ItemStack rod,
+// Entity owner): fold the rod's FISHING_TIME_REDUCTION effects (Lure: add linear 5.0 + 5.0/level) over
+// 0.0 via runIterationOnItem, then Math.max(0.0F, floatValue). The FishingRodItem.use caller multiplies
+// by 20.0F and f2i-truncates to the lureSpeed tick reduction. Cite getFishingTimeReduction bytecode.
+func (t *TickLoop) enchFishingTimeReduction(rod component.SlotData) float32 {
+	f := float32(0.0)
+	ctx := &enchDamageCtx{t: t}
+	forEachItemEnchant(rod, func(wireID, level int) {
+		set := enchEffectsFor(wireID)
+		if set == nil || len(set.fishingTime) == 0 {
+			return
+		}
+		ctx.level = level
+		f = applyEnchCondValues(set.fishingTime, ctx, nil, f)
+	})
+	if f < 0.0 {
+		return 0.0
+	}
+	return f
 }
 
 // enchDirectAttackerType resolves DamageSource.getDirectEntity()'s entity-type id for the MELEE path,

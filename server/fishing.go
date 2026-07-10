@@ -25,9 +25,11 @@ package server
 //     it is a pure cosmetic (the catchingFish RNG draws that DO gate state — the fishAngle triangle, the
 //     teaseChance roll, the nibble reset — are all preserved in order; only the sendParticles calls are
 //     dropped, and sendParticles draws no RNG).
-//   - The Lure (lureSpeed) and Luck of the Sea (luck) ENCHANT reads are cited-stub 0 (v1 has no
-//     enchantment subsystem — EnchantmentHelper.getFishingTimeReduction/getFishingLuckBonus == the
-//     vanilla no-enchant default). Structured to become a real read when enchants land.
+//   - The Lure (lureSpeed) and Luck of the Sea (luck) ENCHANT reads are WIRED (enchant_effects.go:
+//     enchFishingTimeReduction / enchFishingLuckBonus) — the data-driven FISHING_TIME_REDUCTION /
+//     FISHING_LUCK_BONUS value effects folded over the held rod's enchantments, exactly
+//     EnchantmentHelper.getFishingTimeReduction/getFishingLuckBonus. An UN-enchanted rod folds zero
+//     entries -> luck 0 / lureSpeed 0 (the vanilla no-enchant default), the pig-oracle-safe path.
 //   - The DATA_HOOKED_ENTITY / DATA_BITING synced metadata (the client's taut-line + bob visuals) is
 //     CITE-DEFERRED (client cosmetic); the server-side biting flag + hooked id drive the gameplay.
 //   - Durability hurt on the rod (FishingRodItem's hurtAndBreak) is WIRED (hurtHeldItem, durability.go): the
@@ -124,10 +126,12 @@ func (t *TickLoop) tryUseFishingRod(p *tickPlayer, held component.SlotData, hand
 		return true
 	}
 
-	// Cast: new FishingHook(player, level, luck, lureSpeed) + Projectile.spawnProjectile.
-	// EnchantmentHelper.getFishingLuckBonus / getFishingTimeReduction: cited-stub 0 (no enchants in v1).
-	const luck = 0      // Luck of the Sea (EnchantmentHelper.getFishingLuckBonus) — v1 cited-stub default.
-	const lureSpeed = 0 // Lure (getFishingTimeReduction*20 f2i) — v1 cited-stub default.
+	// Cast: new FishingHook(player, level, luck, lureSpeed) + Projectile.spawnProjectile. The ctor args
+	// are read off the held rod's enchantments (FishingRodItem.use offsets 154-176):
+	//   luck      = EnchantmentHelper.getFishingLuckBonus(level, rod, player)      (Luck of the Sea)
+	//   lureSpeed = (int)(getFishingTimeReduction(level, rod, player) * 20.0F)     (Lure)
+	luck := int32(t.enchFishingLuckBonus(held))
+	lureSpeed := int32(t.enchFishingTimeReduction(held) * 20.0) // f2i truncation, exactly the bytecode
 	t.spawnFishingHook(p, luck, lureSpeed)
 	// FishingRodItem.use: Level.playSound(FISHING_BOBBER_THROW ...) + awardStat — cited deferral (cosmetic).
 	return true
