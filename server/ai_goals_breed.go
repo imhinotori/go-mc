@@ -1,6 +1,13 @@
 package server
 
-import "bytes"
+import (
+	"bytes"
+
+	"github.com/imhinotori/sulfur/data/entity"
+	"github.com/imhinotori/sulfur/data/item"
+	"github.com/imhinotori/sulfur/level/component"
+	pk "github.com/imhinotori/sulfur/net/packet"
+)
 
 // ai_goals_breed.go — MOB-SUB-09 (Phase 33, Plan 03, C1): the GO-NATIVE BreedGoal@3 plus the
 // shared identity helper adjustedTickDelay, the faithful Mob.isPanicking read, the Animal.canMate
@@ -227,6 +234,38 @@ func (g *breedGoal) stop(_ *TickLoop, e *Entity) {
 //	 snapTo -> finalizeSpawnChildFromBreeding (setAge(6000)×2, resetLove×2, broadcastEntityEvent(18),
 //	 ExperienceOrb 1+nextInt(7)); Pig.getBreedOffspring: nextBoolean() ? getVariant() : partner.getVariant().]
 func (t *TickLoop) breed(e, partner *Entity) {
+	// Sniffer OVERRIDES Animal.spawnChildFromBreeding: it does NOT create a live baby -- it drops a
+	// SNIFFER_EGG ItemEntity, runs finalizeSpawnChildFromBreeding(level, otherParent, null), plays
+	// SNIFFER_EGG_PLOP, then addFreshEntity(egg). So the Sniffer path never goes through the getBreedOffspring
+	// child dispatcher; intercept here. RNG: the SNIFFER_EGG_PLOP pitch draws two nextFloat on this.random
+	// (= e's stream) -- consumed here to keep e's draw order 1:1 even though the sound is DEFERRED. The XP
+	// orb (1 + nextInt(7)) is the finalize draw. Sniffer-gated (the pig oracle never breeds -- untouched).
+	// Cite Sniffer.spawnChildFromBreeding + Animal.finalizeSpawnChildFromBreeding.
+	if e.typ == entity.Sniffer.ID {
+		// new ItemEntity(SNIFFER_EGG) at the initiator position + setDefaultPickUpDelay (NewItemEntity does
+		// the toss velocity + pickup delay). Item id via item.SnifferEgg.
+		eggStack := component.SlotData{Count: 1, ItemID: pk.VarInt(item.SnifferEgg.ID)}
+		egg := NewItemEntity(t.idAlloc.AllocID(), e.x, e.y, e.z, eggStack)
+		owner := t.regionForEntity(e)
+		if owner == nil {
+			owner = t.cur()
+		}
+		// finalizeSpawnChildFromBreeding(level, otherParent, null): setAge(6000) both parents; resetLove
+		// both; broadcastEntityEvent(18) (hearts); XP orb 1 + nextInt(7) on e's RNG.
+		e.breedAge = breedingCooldownAge
+		partner.breedAge = breedingCooldownAge
+		e.inLove = 0
+		partner.inLove = 0
+		t.broadcastHearts(e)
+		t.awardExperienceOrbs(e, 1+mobRandom(e).nextInt(7))
+		// SNIFFER_EGG_PLOP: pitch = (nextFloat() - nextFloat()) * 0.2f + 0.5f (sound DEFERRED; consume the
+		// two nextFloat draws to preserve e's RNG order).
+		_ = mobRandom(e).nextFloat()
+		_ = mobRandom(e).nextFloat()
+		// addFreshEntity(egg): the egg drops into the owning region store.
+		owner.entities.add(egg)
+		return
+	}
 	// spawnChildFromBreeding -> getBreedOffspring: spawn the SPECIES-CORRECT child at the breeding
 	// animal's position (vanilla snapTo(animal.getX/Y/Z) puts the baby on the parent). spawnBreedOffspring
 	// dispatches on e's type so a cow breeds a COW, a sheep a SHEEP, etc. (the C1 fix — breed() used to

@@ -107,7 +107,10 @@ func (t *TickLoop) spawnBreedOffspring(e, partner *Entity) *Entity {
 	case entity.Armadillo.ID:
 		return t.spawnArmadillo(e.x, e.y, e.z, true)
 	case entity.Sniffer.ID:
-		return t.spawnSniffer(e.x, e.y, e.z, true)
+		// Sniffer OVERRIDES spawnChildFromBreeding to drop a SNIFFER_EGG ItemEntity (NOT a live baby); that
+		// override is handled in breed() BEFORE this dispatcher, so this case is unreachable. Kept as a
+		// defensive guard: if ever reached, drop the egg rather than a live baby. Cite Sniffer.spawnChildFromBreeding.
+		return nil
 	case entity.Axolotl.ID:
 		// Axolotl.getBreedOffspring: nextInt(500)==0 -> rare variant else a parent variant, on the
 		// initiator stream. axolotlVariant is REAL; keep the initiator on the common 499/500 branch.

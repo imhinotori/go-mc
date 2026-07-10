@@ -741,6 +741,24 @@ type Entity struct {
 	camelDashCooldown       int32
 	camelDashing            bool
 	camelLastPoseChangeTick int64
+	// --- SNIFFER dig state machine (net.minecraft.world.entity.animal.sniffer.Sniffer + SnifferAi) ------
+	//
+	// Tick-owned plain values, set/read ONLY for the Sniffer (snifferAiStep gates on typ == entity.Sniffer.ID).
+	// snifferState mirrors Sniffer.DATA_STATE (the Sniffer$State enum id: 0 IDLING / 1 FEELING_HAPPY /
+	// 2 SCENTING / 3 SNIFFING / 4 SEARCHING / 5 DIGGING / 6 RISING). snifferStateTimer counts down the
+	// current behavior's duration (the brain schedules each behavior for a UniformInt(min,max) tick budget;
+	// re-expressed as a per-mob timer since the brain is DEFERRED). snifferDropSeedAtTick mirrors
+	// DATA_DROP_SEED_AT_TICK (onDiggingStart sets it to tickCount+120; dropSeed fires when tickCount ==
+	// snifferDropSeedAtTick). snifferCooldown mirrors the SnifferAi dig cooldown (SNIFFING_COOLDOWN_TICKS
+	// = 9600 ticks between dig cycles). snifferExplored is the SNIFFER_EXPLORED_POSITIONS memory (a
+	// capped-at-20, evict-oldest list of packed BlockPos longs so a sniffer never re-digs an explored
+	// spot). Zero for every other entity. Cite Sniffer (DATA_STATE / DATA_DROP_SEED_AT_TICK /
+	// storeExploredPosition) + SnifferAi (SNIFFING_COOLDOWN_TICKS + the behavior durations).
+	snifferState          int
+	snifferStateTimer     int
+	snifferDropSeedAtTick int
+	snifferCooldown       int
+	snifferExplored       []int64
 	// --- PARROT / BAT (flying passive + ambient, Task) ----------------------------------------------
 	//
 	// Tick-owned plain values, set/read ONLY for their own type (each *AiStep gates on typ). isParrot/
