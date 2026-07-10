@@ -473,6 +473,8 @@ func villagerOffersFor(profession string, level int) merchantOffers {
 		switch level {
 		case 1:
 			return weaponsmithLevel1Offers()
+		case 2:
+			return weaponsmithLevel2Offers()
 		case 3:
 			return weaponsmithLevel3Offers()
 		case 4:
@@ -484,6 +486,8 @@ func villagerOffersFor(profession string, level int) merchantOffers {
 		switch level {
 		case 1:
 			return toolsmithLevel1Offers()
+		case 2:
+			return toolsmithLevel2Offers()
 		case 3:
 			return toolsmithLevel3Offers()
 		case 4:
@@ -945,11 +949,26 @@ func armorerLevel1Offers() merchantOffers {
 	}
 }
 
-func armorerLevel2Offers() merchantOffers {
+// commonSmithLevel2Offers ports the shared #minecraft:common_smith/level_2 trade tag included by every smith
+// profession's level_2 tag (armorer, weaponsmith, toolsmith). The tag values in declaration order are
+// smith/2/iron_ingot_emerald then smith/2/emerald_bell. VERIFIED datapack
+// data/minecraft/tags/villager_trade/common_smith/level_2.json + data/minecraft/villager_trade/smith/2/*.json:
+//   iron_ingot_emerald: wants iron_ingot x4 -> gives emerald x1, max_uses 12, xp 10, reputation_discount 0.05
+//   emerald_bell:       wants emerald x36  -> gives bell x1,    max_uses 12, xp 5,  reputation_discount 0.2
+func commonSmithLevel2Offers() merchantOffers {
 	return merchantOffers{
+		newEmeraldForItemsN(item.IronIngot, 4, 12, 10, 0.05), // smith/2/iron_ingot_emerald
+		newItemsForEmeraldN(36, item.Bell, 1, 12, 5, 0.2),    // smith/2/emerald_bell
+	}
+}
+
+func armorerLevel2Offers() merchantOffers {
+	// armorer/level_2 tag order: #common_smith/level_2 FIRST, then the two chainmail trades.
+	// VERIFIED data/minecraft/tags/villager_trade/armorer/level_2.json.
+	return append(commonSmithLevel2Offers(),
 		newItemsForEmeraldN(1, item.ChainmailBoots, 1, 12, 5, 0.2),    // emerald_chainmail_boots
 		newItemsForEmeraldN(3, item.ChainmailLeggings, 1, 12, 5, 0.2), // emerald_chainmail_leggings
-	}
+	)
 }
 
 func armorerLevel3Offers() merchantOffers {
@@ -983,6 +1002,12 @@ func weaponsmithLevel1Offers() merchantOffers {
 	}
 }
 
+// weaponsmithLevel2Offers ports the weaponsmith/level_2 tag = ONLY #common_smith/level_2 (no
+// profession-specific L2 trades). VERIFIED data/minecraft/tags/villager_trade/weaponsmith/level_2.json.
+func weaponsmithLevel2Offers() merchantOffers {
+	return commonSmithLevel2Offers()
+}
+
 func weaponsmithLevel3Offers() merchantOffers {
 	return merchantOffers{
 		newEmeraldForItemsN(item.Flint, 24, 12, 20, 0.05), // flint_emerald
@@ -1009,6 +1034,12 @@ func toolsmithLevel1Offers() merchantOffers {
 		newItemsForEmeraldN(1, item.StonePickaxe, 1, 12, 0, 0.2), // emerald_stone_pickaxe
 		newItemsForEmeraldN(1, item.StoneShovel, 1, 12, 0, 0.2),  // emerald_stone_shovel
 	}
+}
+
+// toolsmithLevel2Offers ports the toolsmith/level_2 tag = ONLY #common_smith/level_2 (no
+// profession-specific L2 trades). VERIFIED data/minecraft/tags/villager_trade/toolsmith/level_2.json.
+func toolsmithLevel2Offers() merchantOffers {
+	return commonSmithLevel2Offers()
 }
 
 func toolsmithLevel3Offers() merchantOffers {

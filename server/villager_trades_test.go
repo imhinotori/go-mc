@@ -113,9 +113,48 @@ func TestWeaponsmithIronSwordOffer(t *testing.T) {
 	if axe == nil || axe.baseCostA.count != 3 {
 		t.Fatalf("weaponsmith/1 missing emerald x3 -> iron_axe (got %v)", axe)
 	}
-	// weaponsmith has NO level 2 in the base data.
-	if !villagerOffersFor("weaponsmith", 2).isEmpty() {
-		t.Fatal("weaponsmith/2 must be empty (no base data)")
+	// weaponsmith/2 = ONLY the shared #common_smith/level_2 tag (iron_ingot_emerald + emerald_bell); there
+	// are no weaponsmith-specific L2 trades. VERIFIED data/minecraft/tags/villager_trade/weaponsmith/level_2.json.
+	l2 := villagerOffersFor("weaponsmith", 2)
+	if len(l2) != 2 {
+		t.Fatalf("weaponsmith/2 want 2 common_smith offers, got %d", len(l2))
+	}
+	if ii := findOffer(l2, int32(item.IronIngot.ID), int32(item.Emerald.ID)); ii == nil || ii.baseCostA.count != 4 || ii.maxUses != 12 || ii.xp != 10 || ii.priceMultiplier != 0.05 {
+		t.Fatalf("weaponsmith/2 iron_ingot x4 -> emerald wrong (got %v)", ii)
+	}
+	if b := findOffer(l2, int32(item.Emerald.ID), int32(item.Bell.ID)); b == nil || b.baseCostA.count != 36 || b.maxUses != 12 || b.xp != 5 || b.priceMultiplier != 0.2 {
+		t.Fatalf("weaponsmith/2 emerald x36 -> bell wrong (got %v)", b)
+	}
+}
+
+// TestSmithCommonLevel2 asserts all three smith professions include the shared #common_smith/level_2 trades
+// at level 2, and that armorer/2 ADDITIONALLY carries its two chainmail trades AFTER the common ones.
+// VERIFIED data/minecraft/tags/villager_trade/{armorer,weaponsmith,toolsmith}/level_2.json +
+// data/minecraft/tags/villager_trade/common_smith/level_2.json.
+func TestSmithCommonLevel2(t *testing.T) {
+	for _, prof := range []string{"armorer", "weaponsmith", "toolsmith"} {
+		l2 := villagerOffersFor(prof, 2)
+		if ii := findOffer(l2, int32(item.IronIngot.ID), int32(item.Emerald.ID)); ii == nil || ii.baseCostA.count != 4 || ii.xp != 10 {
+			t.Fatalf("%s/2 missing iron_ingot x4 -> emerald (got %v)", prof, ii)
+		}
+		if b := findOffer(l2, int32(item.Emerald.ID), int32(item.Bell.ID)); b == nil || b.baseCostA.count != 36 || b.xp != 5 {
+			t.Fatalf("%s/2 missing emerald x36 -> bell (got %v)", prof, b)
+		}
+	}
+	// weaponsmith/2 and toolsmith/2 are ONLY the two common trades.
+	if len(villagerOffersFor("toolsmith", 2)) != 2 {
+		t.Fatalf("toolsmith/2 want exactly 2 offers, got %d", len(villagerOffersFor("toolsmith", 2)))
+	}
+	// armorer/2 = common (iron_ingot_emerald, emerald_bell) FIRST, then chainmail boots + leggings.
+	a2 := villagerOffersFor("armorer", 2)
+	if len(a2) != 4 {
+		t.Fatalf("armorer/2 want 4 offers (2 common + 2 chainmail), got %d", len(a2))
+	}
+	if int32(a2[0].baseCostA.item.ID) != int32(item.IronIngot.ID) {
+		t.Fatalf("armorer/2[0] want iron_ingot cost (common trade first), got %v", a2[0].baseCostA.item)
+	}
+	if findOffer(a2, int32(item.Emerald.ID), int32(item.ChainmailBoots.ID)) == nil {
+		t.Fatal("armorer/2 missing emerald -> chainmail_boots")
 	}
 }
 
@@ -187,8 +226,8 @@ func TestProfessionCoverage(t *testing.T) {
 	populated := map[string][]int{
 		"farmer": {1, 2, 3, 4, 5}, "fisherman": {1, 2, 3, 4, 5}, "shepherd": {1, 2, 3, 4, 5},
 		"fletcher": {1, 2, 3, 4, 5}, "librarian": {1, 2, 3, 4, 5}, "cartographer": {1, 2, 3, 4, 5},
-		"cleric": {1, 2, 3, 4, 5}, "armorer": {1, 2, 3, 4, 5}, "weaponsmith": {1, 3, 4, 5},
-		"toolsmith": {1, 3, 4, 5}, "butcher": {1, 2, 3, 4, 5}, "leatherworker": {1, 2, 3, 4, 5},
+		"cleric": {1, 2, 3, 4, 5}, "armorer": {1, 2, 3, 4, 5}, "weaponsmith": {1, 2, 3, 4, 5},
+		"toolsmith": {1, 2, 3, 4, 5}, "butcher": {1, 2, 3, 4, 5}, "leatherworker": {1, 2, 3, 4, 5},
 		"mason": {1, 2, 3, 4, 5},
 	}
 	for prof, levels := range populated {
