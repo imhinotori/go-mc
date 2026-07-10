@@ -719,6 +719,17 @@ func (t *TickLoop) tickAI() {
 		// unperturbed. Placed like the chicken/creeper per-type hooks (an aiStep sub-behavior, before the
 		// per-type branches). Cite LivingEntity.aiStep freeze block.
 		t.tickEntityFreeze(e)
+		// checkInsideBlocks (check_inside_blocks.go): the Entity.checkInsideBlocks / BlockState.entityInside
+		// dispatch for the blocks the mob STANDS IN (cactus contact damage, cobweb slow, sweet-berry slow +
+		// damage-on-move, wither-rose effect, tripwire trigger). Vanilla runs it inside Entity.move at the
+		// landed position; we run it HERE, in the same per-mob phase as tickEntityFreeze and AFTER
+		// serverAiStep (which committed this tick's move), so it observes the post-move position. It is a
+		// pure block-id scan with ZERO RNG draws on every path, and it fires nothing for a mob standing on a
+		// non-effect block (the oracle pig on grass over air) -- so the pig oracle stream is unperturbed
+		// (that test drives serverAiStep directly and never reaches this loop anyway). POWDER_SNOW and LAVA
+		// are intentionally NOT dispatched here (tickEntityFreeze + tickEntityLava already own them) to avoid
+		// double-applying. Cite Entity.checkInsideBlocks / BlockState.entityInside.
+		t.checkInsideBlocks(e)
 		// MOB-PASS-03 (Phase 34): the Chicken.aiStep server extras (slow-fall + egg-lay). Vanilla runs
 		// aiStep INDEPENDENTLY of the running goals (Mob.aiStep -> customServerAiStep), so it fires every
 		// tick for a live chicken regardless of which goal is active. It is gated on typ == entity.Chicken.ID

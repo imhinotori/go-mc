@@ -138,6 +138,16 @@ var (
 	// "(Intentional Game Design)" death message (a message-only concern, no damage effect). Cite
 	// DamageSources.badRespawnPointExplosion (DamageTypes.BAD_RESPAWN_POINT).
 	damageTypeBadRespawnPoint = damageTypeID(tag.DamageTypeIDs["minecraft:bad_respawn_point"])
+	// damageTypeCactus is minecraft:cactus -- the source CactusBlock.entityInside deals to any entity
+	// overlapping a cactus: entity.hurt(damageSources().cactus(), 1.0F). Unconditional (no living gate,
+	// no difficulty gate). damage_type JSON {scaling: when_caused_by_living_non_player, exhaustion: 0.1}.
+	// Cite DamageSources.cactus / CactusBlock.entityInside.
+	damageTypeCactus = damageTypeID(tag.DamageTypeIDs["minecraft:cactus"])
+	// damageTypeSweetBerryBush is minecraft:sweet_berry_bush -- the source SweetBerryBushBlock.entityInside
+	// deals to a moving LivingEntity in a grown (AGE!=0) bush: hurtServer(damageSources().sweetBerryBush(),
+	// 1.0F). damage_type JSON {scaling: when_caused_by_living_non_player, exhaustion: 0.1}. Cite
+	// DamageSources.sweetBerryBush / SweetBerryBushBlock.entityInside.
+	damageTypeSweetBerryBush = damageTypeID(tag.DamageTypeIDs["minecraft:sweet_berry_bush"])
 )
 
 // damageSourceOf builds a DamageSource for an environmental/anonymous source: the given damage-type

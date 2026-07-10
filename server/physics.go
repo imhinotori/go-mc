@@ -197,6 +197,27 @@ func entityBoxOf(e *Entity) block.Box {
 // detect wall/floor hits off a zeroed component; vanilla zeroes deltaMovement in the
 // respective movers, so the observable result is identical). Runs only on the tick goroutine.
 func (t *TickLoop) moveEntity(e *Entity, dx, dy, dz float64) {
+	// Entity.move stuck-speed consumption (bytecode 96-140): if stuckSpeedMultiplier.lengthSqr() > 1e-7
+	// AND moverType != PISTON, scale the requested movement by the per-axis multiplier a cobweb /
+	// sweet-berry-bush entityInside armed on the PREVIOUS tick (via makeStuckInBlock), then reset the
+	// multiplier to ZERO and setDeltaMovement(ZERO). All mob/AI moveEntity calls are MoverType.SELF (never
+	// PISTON), so the PISTON exclusion is a constant-skip. e.stuck is the "armed" flag; an un-armed entity
+	// (the oracle pig, never in a stuck block) skips this entirely and moveEntity is byte-identical to before.
+	//	[VERIFIED javap Entity.move: stuckSpeedMultiplier.lengthSqr()>1e-7 && moverType!=PISTON ->
+	//	 movement=movement.multiply(stuck); stuckSpeedMultiplier=Vec3.ZERO; setDeltaMovement(Vec3.ZERO).]
+	if e.stuck {
+		lenSqr := e.stuckSpeedMultiplierX*e.stuckSpeedMultiplierX +
+			e.stuckSpeedMultiplierY*e.stuckSpeedMultiplierY +
+			e.stuckSpeedMultiplierZ*e.stuckSpeedMultiplierZ
+		if lenSqr > 1.0E-7 {
+			dx *= e.stuckSpeedMultiplierX
+			dy *= e.stuckSpeedMultiplierY
+			dz *= e.stuckSpeedMultiplierZ
+			e.vx, e.vy, e.vz = 0, 0, 0 // setDeltaMovement(Vec3.ZERO)
+		}
+		e.stuck = false
+		e.stuckSpeedMultiplierX, e.stuckSpeedMultiplierY, e.stuckSpeedMultiplierZ = 0, 0, 0 // stuckSpeedMultiplier=Vec3.ZERO
+	}
 	m := vec3d{dx, dy, dz}
 	// e.onGround is read BEFORE the flags below reassign it — Entity.collide's step-up gate
 	// consults this.onGround(), the PREVIOUS move's result. entityMaxUpStep dispatches the

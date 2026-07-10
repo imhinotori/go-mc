@@ -62,6 +62,20 @@ type Entity struct {
 	// integrates these into the position. Zero for a freshly spawned entity.
 	vx, vy, vz float64
 
+	// stuckSpeedMultiplier* is net.minecraft.world.entity.Entity.stuckSpeedMultiplier (a Vec3): the
+	// per-axis movement scale a cobweb / sweet-berry-bush / powder-snow entityInside sets via
+	// makeStuckInBlock(state, Vec3). Entity.move consumes it at the START of the NEXT move (if
+	// lengthSqr > 1e-7 and moverType != PISTON: movement *= stuckSpeedMultiplier, then reset to ZERO
+	// and setDeltaMovement(ZERO)); makeStuckInBlock also resetFallDistance(). stuck is the "armed"
+	// flag (Vec3.ZERO in vanilla means "not stuck" -- lengthSqr 0 <= 1e-7 skips the multiply); we keep
+	// an explicit bool so the zero-value Entity is unambiguously NOT stuck and moveEntity is a strict
+	// no-op until checkInsideBlocks arms it. Tick-owned plain values (snapshot-friendly).
+	//	[VERIFIED javap Entity.move: stuckSpeedMultiplier.lengthSqr() > 1e-7 && moverType != PISTON ->
+	//	 movement = movement.multiply(stuckSpeedMultiplier); stuckSpeedMultiplier = Vec3.ZERO;
+	//	 setDeltaMovement(Vec3.ZERO). Entity.makeStuckInBlock: resetFallDistance(); stuckSpeedMultiplier=v.]
+	stuckSpeedMultiplierX, stuckSpeedMultiplierY, stuckSpeedMultiplierZ float64
+	stuck                                                              bool
+
 	// yaw, pitch are the body look angles in degrees; headYaw is the separate head rotation
 	// living entities carry (Float on the wire). Tick-owned plain values.
 	yaw, pitch, headYaw float32
