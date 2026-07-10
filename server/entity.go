@@ -584,9 +584,15 @@ type Entity struct {
 	// entity. Cite Drowned / Stray / Bogged.
 	isDrowned bool
 	// drownedTridentTime mirrors RangedAttackGoal.attackTime for the DrownedTridentAttackGoal cadence:
-	// the inter-throw cooldown (reset to 40 on a throw). Zero for every non-drowned. Cite
+	// the inter-throw cooldown, decremented EVERY tick and re-armed to floor(dist*(max-min)+min) (==40 for
+	// the drowned, min==max==40) on a throw. Starts -1 (the RangedAttackGoal ctor sentinel). Cite
 	// net.minecraft.world.entity.ai.goal.RangedAttackGoal.attackTime + DrownedTridentAttackGoal.
 	drownedTridentTime int
+	// drownedTridentSeeTime mirrors RangedAttackGoal.seeTime: the line-of-sight run length (++ while the
+	// target is visible, RESET to 0 the moment it is not -- the base RangedAttackGoal resets, it does NOT
+	// decrement like RangedBowAttackGoal). Gates the chase-vs-stop move (seeTime<5 -> keep closing). Cite
+	// net.minecraft.world.entity.ai.goal.RangedAttackGoal.seeTime.
+	drownedTridentSeeTime int
 	isStray            bool
 	isBogged           bool
 	boggedSheared      bool

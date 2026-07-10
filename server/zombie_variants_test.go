@@ -115,7 +115,10 @@ func TestDrownedThrowsTrident(t *testing.T) {
 	}
 	p := combatTestPlayer(loop, 12.5, by, 8.5, 8801) // ~4 blocks away, within trident radius 10
 	d.ai.attackTargetID = p.entityID
-	d.drownedTridentTime = 0 // ready to throw
+	// RangedAttackGoal.tick fires on `--attackTime == 0` (with line-of-sight): set attackTime=1 so a single
+	// drownedAiStep decrements it to 0 and throws. (Setting 0 would decrement to -1 -> the re-arm branch, no
+	// throw -- the OLD code fired on a 0 start, which was the divergence.) Cite RangedAttackGoal.tick.
+	d.drownedTridentTime = 1
 
 	loop.drownedAiStep(d)
 
@@ -149,6 +152,67 @@ func TestDrownedNoTridentNoThrow(t *testing.T) {
 			t.Fatal("a drowned without a trident threw one (should not)")
 		}
 	}
+}
+
+// TestDrownedCadenceKeepsCountingOutOfLoS proves the faithful RangedAttackGoal cadence: attackTime is
+// decremented EVERY tick and is NOT reset when line-of-sight is lost -- so once the drowned re-acquires the
+// target its throw fires as soon as the (already-counted-down) attackTime hits 0, WITHOUT waiting a fresh
+// full 40-tick cooldown. Also proves seeTime RESETS to 0 on LoS loss (base RangedAttackGoal, not the bow
+// goal's decrement). Cite net.minecraft.world.entity.ai.goal.RangedAttackGoal.tick.
+func TestDrownedCadenceKeepsCountingOutOfLoS(t *testing.T) {
+	loop, floorY, _ := variantLoop(t, vanillaDrownedMobName)
+	by := float64(floorY + 1)
+	d := spawnVariant(loop, vanillaDrownedMobName, 8.5, by, 8.5)
+	d.setItemSlot(eqSlotMainHand, itemStackOf(item.Trident))
+	p := combatTestPlayer(loop, 12.5, by, 8.5, 8803) // in trident range (radius 10), line-of-sight clear
+	d.ai.attackTargetID = p.entityID
+
+	// Build up a see-time run (LoS present each tick) and let attackTime count down from the -1 sentinel.
+	d.drownedTridentTime = -1
+	d.drownedTridentSeeTime = 0
+	loop.drownedAiStep(d) // -1 -> re-arm to 40; seeTime -> 1
+	if d.drownedTridentTime != drownedTridentAttackInterval {
+		t.Fatalf("after arm: attackTime = %d, want %d", d.drownedTridentTime, drownedTridentAttackInterval)
+	}
+	// Advance a few ticks with LoS: attackTime decrements, seeTime climbs.
+	for i := 0; i < 5; i++ {
+		loop.drownedAiStep(d)
+	}
+	if d.drownedTridentTime != drownedTridentAttackInterval-5 {
+		t.Fatalf("attackTime = %d, want it decremented to %d (one per tick)", d.drownedTridentTime, drownedTridentAttackInterval-5)
+	}
+	if d.drownedTridentSeeTime < 5 {
+		t.Fatalf("seeTime = %d, want >= 5 after a LoS run", d.drownedTridentSeeTime)
+	}
+
+	// Now snapshot attackTime, remember it, and prove it KEEPS counting toward 0 (never resets) even if the
+	// drowned is momentarily out of trident range -- set it to 2 and drive two ticks with LoS: the second
+	// tick reaches 0 and THROWS, re-arming to 40. If the old (buggy) reset-on-range logic were present, an
+	// out-of-range tick would have zeroed attackTime and fired immediately.
+	d.drownedTridentTime = 2
+	before := countTridents(loop)
+	loop.drownedAiStep(d) // 2 -> 1, no throw
+	if got := countTridents(loop); got != before {
+		t.Fatalf("threw early: tridents %d -> %d on the attackTime=1 tick", before, got)
+	}
+	loop.drownedAiStep(d) // 1 -> 0, THROW
+	if got := countTridents(loop); got != before+1 {
+		t.Fatalf("did NOT throw when attackTime hit 0: tridents %d -> %d", before, got)
+	}
+	if d.drownedTridentTime != drownedTridentAttackInterval {
+		t.Fatalf("after throw: attackTime = %d, want re-armed to %d", d.drownedTridentTime, drownedTridentAttackInterval)
+	}
+}
+
+// countTridents counts the live ThrownTrident projectiles across the loop's single region.
+func countTridents(loop *TickLoop) int {
+	n := 0
+	for _, e := range loop.only().entities.byID {
+		if e.isTrident {
+			n++
+		}
+	}
+	return n
 }
 
 // --- Stray -------------------------------------------------------------------------------------

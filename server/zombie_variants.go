@@ -48,6 +48,8 @@ const (
 	drownedTridentAttackInterval = 40
 	drownedTridentAttackRadius   = 10.0
 	drownedTridentAttackRadiusSq = drownedTridentAttackRadius * drownedTridentAttackRadius
+	// DrownedTridentAttackGoal(this, 1.0, 40, 10.0f): speedModifier 1.0 (the RangedAttackGoal chase speed).
+	drownedTridentSpeedModifier = 1.0
 	// Drowned.performRangedAttack: shoot(..., 1.6f, 14 - difficulty*4). velocity 1.6, inaccuracy 14-diff*4.
 	drownedTridentVelocity = 1.6
 
@@ -146,28 +148,75 @@ func (t *TickLoop) drownedAiStep(e *Entity) {
 	if !e.isAlive() || e.dead {
 		return
 	}
+	// DrownedTridentAttackGoal.canUse == RangedAttackGoal.canUse (target != null && alive) && getMainHandItem
+	// ().is(TRIDENT). When it is false the goal is STOPPED -> RangedAttackGoal.stop: seeTime=0, attackTime=-1.
 	if !drownedHoldsTrident(e) {
-		e.drownedTridentTime = 0 // not holding a trident -> the ranged goal is inactive
+		e.drownedTridentSeeTime = 0
+		e.drownedTridentTime = -1 // stop(): attackTime = -1
 		return
 	}
 	target := t.variantTarget(e)
 	if target == nil {
-		e.drownedTridentTime = 0
+		e.drownedTridentSeeTime = 0
+		e.drownedTridentTime = -1 // stop(): attackTime = -1
 		return
 	}
-	// RangedAttackGoal.tick: gate on distance <= attackRadiusSqr && hasLineOfSight; decrement attackTime;
-	// on <=0 perform the attack + reset to attackInterval. (v1: hasLineOfSight via the cached raycast.)
+
+	// RangedAttackGoal.tick (VERIFIED javap net.minecraft.world.entity.ai.goal.RangedAttackGoal.tick), ported
+	// 1:1. This is the SAME cadence the witch's rangedAttackGoal.tick runs -- the base RangedAttackGoal shared
+	// by every RangedAttackMob. DrownedTridentAttackGoal does NOT override tick (only canUse/start/stop), so it
+	// inherits this verbatim. The v1 hook drives it per-tick for a drowned holding a trident with a target.
 	distSq := distanceToSqrPlayer(target, e)
-	if distSq > drownedTridentAttackRadiusSq || !t.sensingHasLineOfSight(e, target) {
-		e.drownedTridentTime = 0
-		return
+	hasLineOfSight := t.sensingHasLineOfSight(e, target) // Sensing.hasLineOfSight (the cached raycast, C-4)
+	// if hasLineOfSight: seeTime++ else seeTime = 0 (the BASE RangedAttackGoal RESETS to 0 -- it does NOT
+	// decrement like RangedBowAttackGoal). VERIFIED javap offsets 44-63.
+	if hasLineOfSight {
+		e.drownedTridentSeeTime++
+	} else {
+		e.drownedTridentSeeTime = 0
 	}
-	if e.drownedTridentTime > 0 {
-		e.drownedTridentTime--
-		return
+	// Chase while out of trident range OR not-yet-locked-on (seeTime < 5), else stop the nav. moveTo speed is
+	// getAttributeValue(MOVEMENT_SPEED) * speedModifier (1.0). VERIFIED javap offsets 66-115. Both the melee
+	// goal and this ranged goal share priority @2 in the jar (arbitrated) and both aim at the SAME target, so
+	// re-issuing the want here is consistent with the drowned's melee chase.
+	if e.ai != nil {
+		if distSq > drownedTridentAttackRadiusSq || e.drownedTridentSeeTime < 5 {
+			getSpeed := e.getAttributeValue(attribute.MovementSpeed) * drownedTridentSpeedModifier
+			e.ai.setWantTargetSpeed(target.x, target.y, target.z, getSpeed) // navigation.moveTo(target, speed)
+		} else {
+			e.ai.clearWantTarget() // navigation.stop()
+		}
 	}
-	t.drownedPerformRangedAttack(e, target)
-	e.drownedTridentTime = drownedTridentAttackInterval // resetAttackCooldown -> attackInterval 40
+	// lookAt(target, 30, 30): head-only turn (the LOOK flag). VERIFIED javap offsets 116-131.
+	yRotD := yawTowardDeg(target.x-e.x, target.z-e.z)
+	e.headYaw = rotlerpDeg(e.headYaw, yRotD, meleeLookMaxYawStep)
+
+	// attackTime = --attackTime; if it hits 0 with line-of-sight, THROW (performRangedAttack) and re-arm the
+	// cooldown to floor(dist*(max-min)+min); if it drops below 0 (a fresh acquire from the -1 sentinel) arm it
+	// to floor(lerp(sqrt(distSqr)/radius, min, max)). For the drowned min==max==40, so both branches give 40.
+	// The fire does NOT re-check range -- only hasLineOfSight (VERIFIED javap offsets 134-256). This is the
+	// fix: the old code reset attackTime to 0 when out of range/LoS and fired on the first eligible tick.
+	e.drownedTridentTime--
+	if e.drownedTridentTime == 0 {
+		if !hasLineOfSight { // offset 148: iload_3 ifne -> return
+			return
+		}
+		distF := math.Sqrt(distSq) / drownedTridentAttackRadius
+		power := distF // Mth.clamp(distF, 0.1f, 1.0f) -- Drowned.performRangedAttack ignores power, but the
+		if power < 0.1 { // cadence still computes + clamps it (the arm formula reuses distF, not the clamp).
+			power = 0.1
+		} else if power > 1.0 {
+			power = 1.0
+		}
+		_ = power // Drowned.performRangedAttack(target, power) ignores power (fixed trident throw); kept for cadence fidelity.
+		t.drownedPerformRangedAttack(e, target)
+		// attackTime = Mth.floor(distF*(max-min)+min) == 40 (max==min==40). VERIFIED javap offsets 190-213.
+		e.drownedTridentTime = int(math.Floor(distF*float64(drownedTridentAttackInterval-drownedTridentAttackInterval) + float64(drownedTridentAttackInterval)))
+	} else if e.drownedTridentTime < 0 {
+		// attackTime = Mth.floor(Mth.lerp(sqrt(distSqr)/radius, min, max)) == 40. VERIFIED javap offsets 219-253.
+		distF := math.Sqrt(distSq) / drownedTridentAttackRadius
+		e.drownedTridentTime = int(math.Floor(mthLerpD(distF, float64(drownedTridentAttackInterval), float64(drownedTridentAttackInterval))))
+	}
 }
 
 // drownedPerformRangedAttack ports Drowned.performRangedAttack(target, power): build a ThrownTrident aimed
