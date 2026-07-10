@@ -10,8 +10,7 @@ package server
 //   - Creeper.tick advances swell by swellDir each tick and, at swell>=maxSwell (30), explodeCreeper()
 //     (creeperAiStep below — the per-type hook, the sibling of chickenAiStep).
 //
-// v1 STUBS (cited): line-of-sight (Sensing.hasLineOfSight) is the always-true stub (no sensing subsystem),
-// so tick's !hasLineOfSight disarm never fires; the primed-fuse SOUND + the swell client METADATA
+// v1 STUBS (cited): the primed-fuse SOUND + the swell client METADATA
 // (DATA_SWELL_DIR/DATA_IS_POWERED/DATA_IS_IGNITED) are cite-deferred client visuals (the creeper still
 // fuses + explodes with REAL damage/blocks — the gameplay — exactly as the zombie's raise-arm bit was
 // deferred). The explosion math lives in explosion.go (level.explode port).
@@ -77,7 +76,13 @@ func (g *swellGoal) tick(t *TickLoop, e *Entity) {
 		e.swellDir = -1
 		return
 	}
-	// !getSensing().hasLineOfSight(target): v1 always-true stub — the disarm never fires here.
+	// !getSensing().hasLineOfSight(target): the creeper disarms if it cannot see the target (a wall
+	// between eye and target aborts the swell). Now a REAL per-tick-cached raycast (sensing.go), 1:1 with
+	// the jar SwellGoal.tick offsets 53-78.
+	if !t.sensingHasLineOfSight(e, target) {
+		e.swellDir = -1
+		return
+	}
 	e.swellDir = 1
 }
 

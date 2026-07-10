@@ -136,3 +136,38 @@ func TestExplosionDamageFalloff(t *testing.T) {
 		t.Fatalf("the out-of-range player took damage %v (should be 0 — beyond radius*2)", o0-out.health)
 	}
 }
+
+// TestCreeperSwellDisarmsWhenLineOfSightBlocked: with a solid wall between the creeper and a nearby
+// player, the SwellGoal.tick disarm branch (offsets 53-78: !getSensing().hasLineOfSight -> setSwellDir(-1))
+// fires every tick, so the fuse NEVER arms (swellDir stays <=0) and the creeper NEVER explodes -- 1:1 with
+// the jar SwellGoal.tick line-of-sight guard (previously a stubbed always-true no-op).
+func TestCreeperSwellDisarmsWhenLineOfSightBlocked(t *testing.T) {
+	loop, mgr := newPhysicsLoop()
+	const floorY = 64
+	ch := putChunk(mgr, level.ChunkPos{0, 0})
+	fillFloor(ch, floorY)
+	loop.SetMobRegistry(loadVanillaCreeperRegistry(t))
+	clock := loop.clock.(*fakeClock)
+	loop.start(clock.Now())
+
+	decl := loop.mobRegistry.byName["vanilla_creeper"]
+	cr := loop.spawnDeclaredMob(decl, 8.5, float64(floorY+1), 8.5)
+	cr.onGround = true
+
+	// Player 2 blocks north (within the 3-block arm range, dist^2 = 4 < 9), so canUse would arm --
+	// but a solid stone wall at z=10 blocks the eye ray, so tick must disarm every tick.
+	p := combatTestPlayer(loop, 8.5, float64(floorY+1), 10.5, 7374)
+	_ = p
+	fillWall(ch, 8, 9, floorY, floorY+4)
+
+	for i := 0; i < 120; i++ {
+		clock.add(tickStep)
+		loop.advance(clock.Now())
+		if cr.swellDir > 0 {
+			t.Fatalf("the creeper ARMED its fuse (swellDir=%d) despite a wall blocking line of sight -- SwellGoal.tick LoS disarm did not fire", cr.swellDir)
+		}
+		if _, ok := loop.only().entities.byID[cr.id]; !ok {
+			t.Fatal("the creeper EXPLODED despite no line of sight -- the LoS disarm should keep the fuse at swellDir<=0")
+		}
+	}
+}
