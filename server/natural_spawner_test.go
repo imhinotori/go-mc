@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/imhinotori/sulfur/level"
+	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/world/levelgen"
 )
 
@@ -85,11 +86,39 @@ func buildFlatPackWorld(t *testing.T) (*TickLoop, int) {
 		for dz := -3; dz <= 3; dz++ {
 			ch := putChunk(mgr, level.ChunkPos{int32(dx), int32(dz)})
 			fillFloor(ch, floorY)
+			// The floor's SURFACE block (world-Y == floorY, the block directly BELOW a feet-Y==floorY+1
+			// spawn) must be a grass_block so the CREATURE spawn-rules gate passes: the natural spawner's
+			// CREATURE pass runs Animal.checkAnimalSpawnRules (below is #animals_spawnable_on == grass_block)
+			// / Rabbit.checkRabbitSpawnRules (#rabbits_spawnable_on, which also contains grass_block) at the
+			// isValidSpawnPostitionForType -> checkSpawnRules point inside spawnPackAt. On the default stone
+			// floor those rules (correctly) reject every candidate, so the surface is laid as grass here.
+			// Cite net.minecraft.world.entity.animal.Animal.checkAnimalSpawnRules;
+			// net.minecraft.world.entity.animal.rabbit.Rabbit.checkRabbitSpawnRules.
+			setSurfaceGrass(ch, floorY)
+			// isBrightEnoughToSpawn (the other half of both creature rules) is getRawBrightness(pos,0) >= 9,
+			// so light the whole column to full daylight (SKY 15) -- a bright surface where animals spawn in
+			// vanilla. This is a pure light read (no RNG), so it does NOT perturb the draw ORDER these tests
+			// pin. Cite net.minecraft.world.entity.animal.Animal.isBrightEnoughToSpawn.
+			setSkyLight(ch, 15)
 		}
 	}
 	loop.players = append(loop.players, &tickPlayer{x: 100.5, y: float64(floorY + 1), z: 100.5, gameMode: gameModeSurvival})
 	loop.hasSpawnPoint = false
 	return loop, floorY
+}
+
+// setSurfaceGrass overwrites the whole 16x16 surface layer at world-Y == y with grass_block, so the
+// block directly below a feet-Y==y+1 natural spawn is #animals_spawnable_on / #rabbits_spawnable_on (the
+// CREATURE spawn-rules ground check). Mirrors setBlock but with a grass_block state instead of stone.
+func setSurfaceGrass(ch *level.Chunk, y int) {
+	grass := block.ToStateID[block.GrassBlock{Snowy: false}]
+	sec := (y - dimMinY) >> 4
+	for x := 0; x < 16; x++ {
+		for z := 0; z < 16; z++ {
+			local := (y&15)<<8 | (z&15)<<4 | (x & 15)
+			ch.Sections[sec].SetBlock(local, grass)
+		}
+	}
 }
 
 // TestSpawnPackDrawOrderMatchesReference: spawnPackAt draws the region levelRandom in the EXACT vanilla

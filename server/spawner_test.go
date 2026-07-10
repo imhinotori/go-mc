@@ -122,6 +122,13 @@ func newSpawnLoop(t *testing.T) (*TickLoop, *level.Chunk, int) {
 	const floorY = 64
 	ch := putChunk(mgr, level.ChunkPos{0, 0})
 	fillFloor(ch, floorY) // solid [floorY,floorY+1); standable feet Y is floorY+1
+	// The floor SURFACE (world-Y == floorY, the block below a feet-Y==floorY+1 spawn) is laid as
+	// grass_block so the CREATURE spawn-rules gate passes: the natural spawner's CREATURE pass runs
+	// Animal.checkAnimalSpawnRules (below is #animals_spawnable_on == grass_block) at the
+	// isValidSpawnPostitionForType -> checkSpawnRules point inside spawnPackAt; on a stone floor those
+	// rules (correctly) reject every candidate. RNG-free (a pure tag + brightness read), so the pig/
+	// creature draw stream stays byte-identical. Cite Animal.checkAnimalSpawnRules.
+	setSurfaceGrass(ch, floorY)
 	// The vanilla CREATURE cap is maxInstancesPerChunk * spawnableChunkCount / MAGIC_NUMBER(289)
 	// (creatureCap). A single loaded column yields cap = 10*1/289 = 0 — no spawn is ever allowed,
 	// which is correct vanilla behavior but makes a "must spawn" test impossible. Load enough columns
@@ -135,6 +142,7 @@ func newSpawnLoop(t *testing.T) (*TickLoop, *level.Chunk, int) {
 			}
 			c := putChunk(mgr, level.ChunkPos{int32(dx), int32(dz)})
 			fillFloor(c, floorY)
+			setSurfaceGrass(c, floorY) // grass surface so the CREATURE spawn-rules ground check passes
 		}
 	}
 	// A player on the floor at the column center so spawnableColumns includes (0,0) and the

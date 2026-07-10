@@ -254,6 +254,18 @@ func (t *TickLoop) spawnPackAt(cx0, cy, cz0 int, cat mobCategory) int {
 			if cat == categoryMonster && !t.isDarkEnoughToSpawn(pk.Position{X: x, Y: cy, Z: z}) {
 				continue // not dark enough at this candidate (e.g. daylit surface): reject, exactly as checkSpawnRules
 			}
+			// CREATURE spawn-rules gate (the same isValidSpawnPostitionForType -> checkSpawnRules point, for
+			// the CREATURE pass). For pig/cow/sheep/chicken this is Animal.checkAnimalSpawnRules (grass below +
+			// isBrightEnoughToSpawn light>=9); for rabbit it is Rabbit.checkRabbitSpawnRules (a wider spawnable
+			// tag + the same light read). BOTH draw NO RNG (isBrightEnoughToSpawn is a pure getRawBrightness
+			// read, no nextInt), so this gate does NOT advance levelRandom and leaves the yaw draw position and
+			// the pig oracle stream byte-identical. A candidate on the wrong ground (e.g. stone/sand) or too
+			// dark (light < 9) is REJECTED here, exactly as vanilla checkSpawnRules returns false. Cite
+			// net.minecraft.world.entity.animal.Animal.checkAnimalSpawnRules;
+			// net.minecraft.world.entity.animal.rabbit.Rabbit.checkRabbitSpawnRules.
+			if cat == categoryCreature && !t.checkCreatureSpawnRules(mobName, x, cy, z) {
+				continue // wrong ground or too dark for this creature: reject, exactly as checkSpawnRules
+			}
 			// mob.snapTo(cx, y, cz, random.nextFloat() * 360.0F, 0.0F) - the yaw draw.
 			yaw := r.levelRandom.NextFloat() * 360.0
 			mob := t.spawnVanillaMob(mobName, cxF, cyF, czF)
@@ -288,4 +300,38 @@ func (t *TickLoop) spawnPackAt(cx0, cy, cz0 int, cat mobCategory) int {
 		}
 	}
 	return spawnedInGroup
+}
+
+// isBrightEnoughToSpawn ports Animal.isBrightEnoughToSpawn(level, pos): getRawBrightness(pos, 0) > 8
+// (i.e. light level >= 9). A pure light read over the tick-owned world (server/light.go rawBrightness),
+// NO RNG. Cite net.minecraft.world.entity.animal.Animal.isBrightEnoughToSpawn.
+func (t *TickLoop) isBrightEnoughToSpawn(x, y, z int) bool {
+	return t.rawBrightness(pk.Position{X: x, Y: y, Z: z}, 0) > 8
+}
+
+// checkCreatureSpawnRules ports the per-type CREATURE SpawnPlacements.checkSpawnRules predicate for the
+// natural spawner's CREATURE pass. It dispatches by the DECLARED mob name to the vanilla static rule:
+//   - vanilla_rabbit -> Rabbit.checkRabbitSpawnRules: below is #rabbits_spawnable_on (grass_block, snow,
+//     snow_block, sand) AND isBrightEnoughToSpawn.
+//   - pig/cow/sheep/chicken (and any other CREATURE) -> Animal.checkAnimalSpawnRules: below is
+//     #animals_spawnable_on (grass_block) AND isBrightEnoughToSpawn.
+// Both predicates are RNG-FREE (isBrightEnoughToSpawn is a pure getRawBrightness read), so calling this
+// gate at the isValidSpawnPostitionForType -> checkSpawnRules position draws NOTHING from levelRandom -
+// the yaw draw that follows lands at the exact vanilla stream offset and the pig oracle is unperturbed.
+// The below-block tag test reads the world block state at (x, y-1, z) through blockInTag (the runtime
+// BlockState.is(TagKey<Block>) analogue). Cite Animal.checkAnimalSpawnRules; Rabbit.checkRabbitSpawnRules;
+// net.minecraft.tags.BlockTags.ANIMALS_SPAWNABLE_ON / RABBITS_SPAWNABLE_ON.
+func (t *TickLoop) checkCreatureSpawnRules(mobName string, x, y, z int) bool {
+	if t.world() == nil {
+		return false
+	}
+	below, ok := t.world().GetBlock(pk.Position{X: x, Y: y - 1, Z: z}, dimMinY)
+	if !ok {
+		return false // unloaded below -> BlockState.is(tag) is false (no valid surface)
+	}
+	tag := "animals_spawnable_on"
+	if mobName == vanillaRabbitMobName {
+		tag = "rabbits_spawnable_on"
+	}
+	return blockInTag(below, tag) && t.isBrightEnoughToSpawn(x, y, z)
 }
