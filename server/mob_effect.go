@@ -764,6 +764,12 @@ func (t *TickLoop) addEntityEffectWithSource(e *Entity, ownerID int32, id string
 	if e == nil || !e.isAlive() || e.dead {
 		return // isAffectedByPotions == !isDeadOrDying()
 	}
+	// WitherBoss.addEffect(MobEffectInstance, Entity) { return false; } -- the wither is immune to EVERY mob
+	// effect (unconditional override, checked before canBeAffected). VERIFIED javap WitherBoss.addEffect:
+	// iconst_0; ireturn. Cite WitherBoss.addEffect.
+	if e.wither != nil {
+		return
+	}
 	if !entityCanBeAffected(e, id) {
 		return
 	}

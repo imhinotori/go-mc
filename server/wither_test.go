@@ -193,3 +193,106 @@ func TestWitherDeathDropsNetherStar(t *testing.T) {
 		t.Fatalf("nether star age = %d, want %d (setExtendedLifetime)", star.age, itemExtendedLifetimeAge)
 	}
 }
+
+// TestWitherCenterHeadFiresEvery40Ticks: with a live player in LoS and range, the CENTER head (head 0,
+// driven by the priority-2 RangedAttackGoal(1.0, 40, 20)) fires a WitherSkull on a ~40-tick cadence.
+// RangedAttackGoal.attackTime starts -1 -> first tick sets it to 40 -> the 40th tick after fires, then
+// re-arms to 40. So over N ticks the center head fires floor((N - firstArm)/40) times. This pins that the
+// center head fires AT ALL (the dead-channel bug) and on the 40-tick period. Cite WitherBoss.registerGoals
+// @2 RangedAttackGoal + RangedAttackGoal.tick + WitherBoss.performRangedAttack(LivingEntity, float).
+func TestWitherCenterHeadFiresEvery40Ticks(t *testing.T) {
+	loop, floorY := witherLoop(t)
+	w := loop.spawnWither(8.5, float64(floorY+2), 8.5)
+	w.wither.invulnerableTicks = 0 // skip the charge-up: enter the fight arm immediately
+	// A player 10 blocks away at the wither's height -> within 20-block attackRadius + clear LoS above the floor.
+	p := combatTestPlayer(loop, 8.5, float64(floorY+2), 18.5, 8010)
+	_ = p
+	owner := loop.regionForEntity(w)
+
+	// Count center-head (head 0) skulls. The center head's muzzle is at getHeadX/Z(0) == the body (e.x, e.z);
+	// the side heads orbit at radius 1.3, so a skull spawned at the wither's exact X/Z is a CENTER-head shot.
+	countCenterSkulls := func() int {
+		n := 0
+		for _, e := range owner.entities.byID {
+			if e.isHurting && e.hurtingKind == hurtWitherSkull {
+				if math.Abs(e.x-w.x) < 1e-6 && math.Abs(e.z-w.z) < 1e-6 {
+					n++
+				}
+			}
+		}
+		return n
+	}
+
+	// Drive 45 ticks. attackTime: tick1 -1->-2 (reset 40); ticks 2..41 count 40->0; on the tick it hits 0
+	// (the 41st active tick, gametime advanced 41x) it FIRES if seeing. So within 45 ticks we expect >= 1.
+	loop.withRegion(owner, func() {
+		for i := 0; i < 45; i++ {
+			loop.gametime++
+			loop.witherAiStep(w)
+		}
+	})
+	first := countCenterSkulls()
+	if first < 1 {
+		t.Fatalf("center head fired %d skulls in 45 ticks, want >= 1 (RangedAttackGoal must drive head 0)", first)
+	}
+
+	// Drive 40 MORE ticks: the center head re-arms to 40 and fires once more (cadence == 40).
+	loop.withRegion(owner, func() {
+		for i := 0; i < 40; i++ {
+			loop.gametime++
+			loop.witherAiStep(w)
+		}
+	})
+	second := countCenterSkulls()
+	if second <= first {
+		t.Fatalf("center head fired %d then %d skulls (delta %d) over the next 40 ticks, want another shot (40-tick cadence)", first, second, second-first)
+	}
+}
+
+// TestWitherCenterHeadNoTargetNoFire: with NO player target the center-head RangedAttackGoal.canUse() is
+// false, so it never fires (and its attackTime stays reset to -1). Guards the goal's canUse gate.
+func TestWitherCenterHeadNoTargetNoFire(t *testing.T) {
+	loop, floorY := witherLoop(t)
+	w := loop.spawnWither(8.5, float64(floorY+2), 8.5)
+	w.wither.invulnerableTicks = 0
+	owner := loop.regionForEntity(w)
+	loop.withRegion(owner, func() {
+		for i := 0; i < 100; i++ {
+			loop.gametime++
+			loop.witherAiStep(w)
+		}
+	})
+	skulls := 0
+	for _, e := range owner.entities.byID {
+		if e.isHurting && e.hurtingKind == hurtWitherSkull {
+			skulls++
+		}
+	}
+	if skulls != 0 {
+		t.Fatalf("wither with no target fired %d skulls in 100 ticks, want 0 (RangedAttackGoal.canUse == false)", skulls)
+	}
+	if w.wither.centerAttackTime != -1 {
+		t.Fatalf("centerAttackTime = %d with no target, want -1 (goal stop() reset)", w.wither.centerAttackTime)
+	}
+}
+
+// TestWitherImmuneToAllEffects: WitherBoss.addEffect(...) { return false; } -- the wither rejects EVERY mob
+// effect. poison + slowness + strength (a DoT, a debuff, a buff) all fail to attach. Cite WitherBoss.addEffect.
+func TestWitherImmuneToAllEffects(t *testing.T) {
+	loop, floorY := witherLoop(t)
+	w := loop.spawnWither(8.5, float64(floorY+2), 8.5)
+	w.wither.invulnerableTicks = 0
+	owner := loop.regionForEntity(w)
+	loop.withRegion(owner, func() {
+		loop.addEntityEffect(w, effectPoison, 200, 0)
+		loop.addEntityEffect(w, effectSlowness, 200, 0)
+		loop.addEntityEffect(w, "minecraft:strength", 200, 0)
+		loop.addEntityEffect(w, "minecraft:levitation", 200, 0)
+	})
+	if len(w.mobEffects) != 0 {
+		t.Fatalf("wither carries %d effects, want 0 (WitherBoss.addEffect returns false for ALL)", len(w.mobEffects))
+	}
+	if _, ok := w.mobEffects[effectPoison]; ok {
+		t.Fatal("wither has poison, want immune")
+	}
+}

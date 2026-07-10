@@ -14,7 +14,8 @@ package server
 // makeInvulnerable (220 invuln ticks + progress 0 + health = maxHealth/3), the invuln countdown + the
 // power-7 explosion at 0 + the tickCount%10 heal-10 during charge-up, the boss bar (PURPLE/PROGRESS/darken),
 // customServerAiStep head-aiming (3 heads, nextHeadUpdate/idleHeadUpdates cadence) + the per-head WitherSkull
-// ranged attack (center head 0 vs side heads 1/2, the 0.001 dangerous roll on the center), the isPowered()
+// ranged attack -- side heads 1/2 via the customServerAiStep cadence, CENTER head 0 via the priority-2
+// RangedAttackGoal(1.0, 40, 20) driven in witherAiStep BEFORE the side loop (the 0.001 dangerous roll on center), the isPowered()
 // under-50-percent flag + the destroyBlocksTick block-destroy in the AABB (under MOB_GRIEFING), the idle heal
 // +1 every tickCount%20, and the death NETHER_STAR drop (witherDropNetherStar off dropCustomDeathLoot). The
 // WitherSkull projectile (dangerous inertia, homing, explosion power 1, WITHER effect on hit) is ALREADY in
@@ -70,6 +71,14 @@ const (
 	witherHeadCenterY        = 3.0   // getHeadY(0) center head Y offset (ldc_w 3.0f)
 	witherHeadSideY          = 2.2   // getHeadY(i>0) side head Y offset (ldc_w 2.2f)
 	witherDangerousRoll      = 0.001 // center head: nextFloat() < 0.001f -> dangerous skull (ldc_w 0.001f)
+	// CENTER-head RangedAttackGoal(this, 1.0, 40, 20.0f) params (registerGoals @ priority 2: dconst_1;
+	// bipush 40; ldc 20.0f). The single-int ctor forwards int -> (attackIntervalMin, attackIntervalMax),
+	// so BOTH == 40 (attackTime reset always lands on 40); attackRadius 20.0 (attackRadiusSqr 400.0).
+	// Cite RangedAttackGoal(RangedAttackMob, double, int, float) + RangedAttackGoal(_, _, int, int, float).
+	witherCenterAttackInterval = 40   // RangedAttackGoal attackIntervalMin == attackIntervalMax (bipush 40)
+	witherCenterAttackRadius   = 20.0 // RangedAttackGoal attackRadius (ldc 20.0f); Sqr == 400.0
+	witherCenterSeeTimeReady   = 5    // RangedAttackGoal nav gate seeTime >= 5 (iconst_5); nav deferred (flyer hover)
+	witherCenterLookMaxStep    = 30.0 // RangedAttackGoal.tick lookControl.setLookAt(target, 30, 30) (ldc 30.0f)
 )
 
 // witherState holds all WitherBoss-specific tick state behind the single e.wither pointer (a non-wither
@@ -84,6 +93,13 @@ type witherState struct {
 	idleHeadUpdates   [witherSideHeadCount]int32
 	bossBarID         uuid.UUID
 	bossProgress      float32
+	// CENTER-head RangedAttackGoal(this, 1.0, 40, 20.0f) state: attackTime is the inter-shot countdown
+	// (starts -1), seeTime is the LoS run length. These mirror RangedAttackGoal.attackTime / .seeTime for
+	// the priority-2 goal that drives head 0. goalActive tracks canUse()/stop() so a lost target resets
+	// attackTime=-1 + seeTime=0 exactly as RangedAttackGoal.stop() does. Cite RangedAttackGoal fields.
+	centerAttackTime  int32
+	centerSeeTime     int32
+	centerGoalActive  bool
 }
 
 // spawnWither creates the WitherBoss at (x,y,z), runs makeInvulnerable (220 invuln ticks + health =
@@ -96,7 +112,8 @@ type witherState struct {
 func (t *TickLoop) spawnWither(x, y, z float64) *Entity {
 	w := NewEntity(t.idAlloc.AllocID(), entity.Wither, x, y, z)
 	initSpawnHealth(w) // LivingEntity ctor setHealth(getMaxHealth()) -> 300.0
-	w.wither = &witherState{bossBarID: uuid.New(), bossProgress: 0.0}
+	// centerAttackTime = -1 mirrors RangedAttackGoal.attackTime iconst_m1 (goal inactive until first target). Cite RangedAttackGoal ctor.
+	w.wither = &witherState{bossBarID: uuid.New(), bossProgress: 0.0, centerAttackTime: -1}
 	w.ai = &mobAI{}
 	reseedMobAI(w.ai, w.id)
 	w.ai.persistenceRequired = true // WitherBoss.removeWhenFarAway == false (a boss never despawns)
@@ -136,6 +153,14 @@ func (t *TickLoop) witherAiStep(e *Entity) {
 	if w == nil || e.dead || e.health <= 0 {
 		return
 	}
+
+	// (0) CENTER-head RangedAttackGoal(this, 1.0, 40, 20.0f): the priority-2 goal that drives head 0. In
+	// vanilla it runs in the goalSelector via Mob.serverAiStep BEFORE customServerAiStep every tick (see
+	// Mob.serverAiStep: goalSelector.tickRunningGoals(...) precedes customServerAiStep(...)), so its RNG (the
+	// 0.001 dangerous nextFloat drawn ONLY on a firing tick) is consumed BEFORE the side-head nextInt draws
+	// below -- the interleave is exact. It runs regardless of the invuln charge-up (the goalSelector is not
+	// gated by getInvulnerableTicks). Cite WitherBoss.registerGoals @2 RangedAttackGoal + Mob.serverAiStep.
+	t.witherCenterAttackGoalTick(e)
 
 	// (1) CHARGE-UP: if (getInvulnerableTicks() > 0) { t--; setProgress(1-t/220); if(t<=0) explode; setInvuln(t); if(t%10==0) heal(10); return; }
 	if w.invulnerableTicks > 0 {
@@ -177,9 +202,12 @@ func (t *TickLoop) witherAiStep(e *Entity) {
 					w.idleHeadUpdates[si] = 0
 				}
 			}
-			// getAlternativeTarget reduced to the single getTarget() (bounded): shoot if within range + LoS.
+			// getAlternativeTarget reduced to the single getTarget() (bounded): the jar's customServerAiStep
+			// side-head guard is canAttack(target) && distanceToSqr(target) <= 900.0 && hasLineOfSight(target)
+			// (bytecode 323-351) checked BEFORE performRangedAttack(i+1, target). witherCanAttack folds all
+			// three (alive + <=900 + LoS). Cite WitherBoss.customServerAiStep side-head guard block.
 			target := t.witherTarget(e)
-			if target != nil && witherCanAttackDist(e, target) {
+			if t.witherCanAttack(e, target) {
 				t.witherPerformRangedAttackTarget(e, i, target) // performRangedAttack(i+1, target)
 				w.nextHeadUpdate[si] = t.gametime + int64(witherFireAfterAim) + int64(mobRandom(e).nextInt(witherFireAfterJitter))
 				w.idleHeadUpdates[si] = 0
@@ -201,6 +229,80 @@ func (t *TickLoop) witherAiStep(e *Entity) {
 	}
 
 	t.witherBossBarUpdateProgress(e) // bossEvent.setProgress(getHealth()/getMaxHealth())
+}
+
+// witherCenterAttackGoalTick ports the RangedAttackGoal(this, 1.0, 40, 20.0f) that drives the CENTER head
+// (head 0). It folds RangedAttackGoal.canUse/stop/tick for the one wither goal:
+//
+//	canUse():  target = mob.getTarget(); return target != null && target.isAlive();
+//	stop():    target = null; seeTime = 0; attackTime = -1;
+//	tick():    d = distanceToSqr(target); seeing = sensing.hasLineOfSight(target);
+//	           if (seeing) seeTime++ else seeTime = 0;
+//	           // nav (moveTo/stop) DEFERRED -- the wither is a stationary-hover flyer in v1;
+//	           // lookControl.setLookAt(target, 30, 30) mapped to a head-yaw turn toward the target.
+//	           if (--attackTime == 0) { if (!seeing) return;
+//	               f = Mth.clamp(sqrt(d)/attackRadius, 0.1, 1.0);
+//	               performRangedAttack(target, f);  // -> performRangedAttack(0, target): head 0 + 0.001 roll
+//	               attackTime = Mth.floor(f*(max-min)+min);  // min==max==40 -> always 40
+//	           } else if (attackTime < 0) {
+//	               attackTime = Mth.floor(Mth.lerp(sqrt(d)/attackRadius, min, max));  // ==40
+//	           }
+//
+// The ONLY RNG this draws is the 0.001 dangerous nextFloat inside performRangedAttack(0, target) -- and only
+// on the tick attackTime hits 0 WITH line-of-sight, exactly as the jar. This runs BEFORE the side-head loop
+// so the center draw precedes the side nextInt draws (the vanilla goalSelector-before-customServerAiStep
+// order). Cite RangedAttackGoal(RangedAttackMob, double, int, float).tick + WitherBoss.performRangedAttack.
+func (t *TickLoop) witherCenterAttackGoalTick(e *Entity) {
+	w := e.wither
+	if w == nil {
+		return
+	}
+	// canUse(): target = mob.getTarget(); active iff non-null and alive. witherTarget acquires/keeps the
+	// FOLLOW_RANGE (40) target (the bounded NearestAttackableTargetGoal reduction shared with the side heads).
+	target := t.witherTarget(e)
+	if target == nil || target.dead {
+		// !canUse() (and !canContinueToUse): the goal stops. stop(): target=null; seeTime=0; attackTime=-1.
+		if w.centerGoalActive {
+			w.centerGoalActive = false
+			w.centerSeeTime = 0
+			w.centerAttackTime = -1
+		}
+		return
+	}
+	w.centerGoalActive = true
+
+	// tick(): d = mob.distanceToSqr(target); seeing = sensing.hasLineOfSight(target).
+	d := distanceToSqrPlayer(target, e)
+	seeing := t.sensingHasLineOfSight(e, target)
+	if seeing {
+		w.centerSeeTime++ // seeTime++
+	} else {
+		w.centerSeeTime = 0 // seeTime = 0
+	}
+	// nav moveTo/stop is DEFERRED (the wither hovers stationary in v1; witherCenterSeeTimeReady / attackRadius
+	// govern only the deferred navigation, not the fire gate). lookControl.setLookAt(target, 30, 30): turn the
+	// head toward the target (the LOOK flag).
+	yRotD := yawTowardDeg(target.x-e.x, target.z-e.z)
+	e.headYaw = rotlerpDeg(e.headYaw, yRotD, witherCenterLookMaxStep)
+
+	sqrtD := math.Sqrt(d)
+	// if (--attackTime == 0) { ... } else if (attackTime < 0) { ... }
+	w.centerAttackTime--
+	if w.centerAttackTime == 0 {
+		if !seeing {
+			return // no LoS -> no shot (attackTime stays 0; next tick --attackTime goes negative -> reset)
+		}
+		// f = Mth.clamp((float)(sqrt(d)/attackRadius), 0.1f, 1.0f)
+		f := mthClampF(float32(sqrtD/witherCenterAttackRadius), 0.1, 1.0)
+		// performRangedAttack(target, f) -> performRangedAttack(0, target): head 0 with the 0.001 roll.
+		t.witherPerformRangedAttack(e, target)
+		// attackTime = Mth.floor(f*(attackIntervalMax-attackIntervalMin)+attackIntervalMin); min==max==40 -> 40.
+		w.centerAttackTime = int32(mthFloorF(float64(f*float32(witherCenterAttackInterval-witherCenterAttackInterval)) + float64(witherCenterAttackInterval)))
+	} else if w.centerAttackTime < 0 {
+		// attackTime = Mth.floor(Mth.lerp(sqrt(d)/attackRadius, attackIntervalMin, attackIntervalMax)); ==40.
+		lerp := mthLerpD(sqrtD/witherCenterAttackRadius, float64(witherCenterAttackInterval), float64(witherCenterAttackInterval))
+		w.centerAttackTime = int32(mthFloorF(lerp))
+	}
 }
 
 // witherHeal ports LivingEntity.heal(float): setHealth(getHealth()+amount) clamped to getMaxHealth(). NO RNG.
@@ -267,23 +369,17 @@ func (t *TickLoop) witherCanAttack(e *Entity, target *tickPlayer) bool {
 	return t.sensingHasLineOfSight(e, target)
 }
 
-// witherCanAttackDist is the cheap distance pre-gate witherAiStep checks (the d <= 900.0 branch order); the
-// full guard (canAttack + LoS) is re-checked in witherPerformRangedAttackTarget. Cite WitherBoss.customServerAiStep.
-func witherCanAttackDist(e *Entity, target *tickPlayer) bool {
-	if target == nil || target.dead {
-		return false
-	}
-	return distanceToSqrPlayer(target, e) <= witherTargetRangeSqr
-}
-
 // witherPerformRangedAttackTarget ports WitherBoss.performRangedAttack(int head, LivingEntity target): aim at
 // (target.getX(), target.getY()+target.getEyeHeight()*0.5, target.getZ()); head 0 (center) is dangerous with
 // probability 0.001 (nextFloat() < 0.001f), heads 1/2 not dangerous here (their danger comes from the idle
 // volley). Cite WitherBoss.performRangedAttack(int, LivingEntity).
 func (t *TickLoop) witherPerformRangedAttackTarget(e *Entity, head int, target *tickPlayer) {
-	if !t.witherCanAttack(e, target) {
+	if target == nil {
 		return
 	}
+	// NO canAttack/distance/LoS guard here: WitherBoss.performRangedAttack(int, LivingEntity) unconditionally
+	// aims + draws the 0.001 dangerous roll (head 0) + spawns the skull. Both callers (the center-head goal's
+	// `seeing` gate; the side-head loop's witherCanAttack) do the gating BEFORE this call, exactly as the jar.
 	tx := target.x
 	// performRangedAttack aim: target.getY() + target.getEyeHeight()*0.5. For a STANDING player the eye
 	// height is playerStandingEyeHeight (1.62), so the aim Y is target.y + 1.62*0.5 == +0.81 (NOT the
@@ -396,10 +492,11 @@ func (t *TickLoop) witherDestroyBlockAt(x, y, z int) {
 	}
 }
 
-// witherPerformRangedAttack is the RangedAttackMob.performRangedAttack(LivingEntity, float) contract entry
-// (the vanilla RangedAttackGoal calls it): it forwards to head 0 (center) at the target. The bounded v1 goal
-// path uses witherAiStep's per-head cadence instead, so this exists for contract parity, not the hot loop.
-// Cite WitherBoss.performRangedAttack(LivingEntity, float).
+// witherPerformRangedAttack ports WitherBoss.performRangedAttack(LivingEntity, float), the RangedAttackMob
+// contract the priority-2 RangedAttackGoal invokes: it forwards to performRangedAttack(0, target) -- the
+// CENTER head (head 0) with the 0.001 dangerous roll (bytecode iconst_0; aload target; invokevirtual
+// performRangedAttack(I,LivingEntity)). Live caller: witherCenterAttackGoalTick on a firing tick. The float
+// power arg only scales attackTime in the goal (dropped here, as the jar does). Cite WitherBoss.performRangedAttack(LivingEntity, float).
 func (t *TickLoop) witherPerformRangedAttack(e *Entity, target *tickPlayer) {
 	t.witherPerformRangedAttackTarget(e, 0, target)
 }
