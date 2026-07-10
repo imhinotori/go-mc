@@ -35,6 +35,7 @@ var copperTiers = [][4]string{
 var (
 	copperWeatherByBlockID = map[string]int{}
 	copperNextByBlockID    = map[string]string{}
+	copperPrevByBlockID    = map[string]string{}
 )
 
 func init() {
@@ -44,8 +45,30 @@ func init() {
 			if i < 3 {
 				copperNextByBlockID[id] = tier[i+1]
 			}
+			if i > 0 {
+				copperPrevByBlockID[id] = tier[i-1]
+			}
 		}
 	}
+}
+
+// CopperGetPrevious is WeatheringCopper.getPrevious(state): the LESS-oxidized (one tier down) copper
+// state, carrying the source state's shared properties (withPropertiesOf). ok=false for an UNAFFECTED
+// tier (no previous) or a non-weathering-copper block. This is the AxeItem SCRAPE target. CITE:
+// WeatheringCopper.getPrevious (PREVIOUS_BY_BLOCK, the inverse of NEXT_BY_BLOCK).
+func CopperGetPrevious(s StateID) (StateID, bool) {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return s, false
+	}
+	prevID, ok := copperPrevByBlockID[StateList[s].ID()]
+	if !ok {
+		return s, false // UNAFFECTED (no previous) or not copper
+	}
+	prevDefault, ok := DefaultStateID[prevID]
+	if !ok {
+		return s, false
+	}
+	return copperWithPropertiesOf(prevDefault, s)
 }
 
 // IsWeatheringCopper reports whether s is an UNWAXED weathering-copper block (a ChangeOverTimeBlock

@@ -225,6 +225,15 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 		return
 	}
 
+	// AXE STRIP / SCRAPE (AxeItem.useOn -> evaluateNewBlockState): an axe on a strippable log/wood/stem/
+	// hyphae/bamboo strips it (preserving AXIS), and on an oxidized copper de-oxidizes it one tier. A
+	// non-block item -- intercept BEFORE placement. Returns true when the held item is an axe AND the
+	// clicked block yields a new state; false to fall through. Wax-off arm is a cited follow-up. No RNG
+	// draw -- pig oracle unperturbed. CITE: AxeItem.useOn (axe.go).
+	if t.tryAxeUseOn(p, inv, held, pos) {
+		return
+	}
+
 	// PLUGIN-07 (Plan 28-01) GATE-ONLY trigger — the spawn-egg path. A vanilla spawn egg spawns ON
 	// the CLICKED BLOCK (SpawnEggItem.useOn), not on right-click-air, so the gate egg must hook the
 	// UseItemOn (block) path — this is how a player actually uses a spawn egg. Spawn at the adjacent
