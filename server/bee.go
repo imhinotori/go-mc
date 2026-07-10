@@ -88,9 +88,17 @@ func newBeeAI() *mobAI {
 	m.navigation.speed = m.wantSpeedMod * beeMovementSpeed // seed with MOVEMENT_SPEED (0.3)
 	m.navigation.canFloat = true                           // FloatGoal ctor: getNavigation().setCanFloat(true)
 	applyAnimalPathfindingMalus(m)                         // Animal.<init> FIRE malus (no-op on a fire-free world)
+	// @1 BeeEnterHiveGoal, @4 BeePollinateGoal, @5 BeeLocateHiveGoal, @5 BeeGoToHiveGoal,
+	// @6 BeeGoToKnownFlowerGoal: the hive/pollination cluster (bee_hive.go, BEEHIVE-02) wired at the
+	// vanilla priorities from Bee.registerGoals. CITE Bee.registerGoals.
+	m.goals.addGoal(1, newBeeEnterHiveGoal())
 	m.goals.addGoal(2, newBreedGoal(beeBreedSpeed))
 	m.goals.addGoal(3, newTemptGoal(beeTemptSpeed, func(id int32) bool { return itemInTag(id, beeFoodTag) }, false, nil))
+	m.goals.addGoal(4, newBeePollinateGoal())
 	m.goals.addGoal(5, newFollowParentGoal(beeFollowSpeed))
+	m.goals.addGoal(5, newBeeLocateHiveGoal())
+	m.goals.addGoal(5, newBeeGoToHiveGoal())
+	m.goals.addGoal(6, newBeeGoToKnownFlowerGoal())
 	m.goals.addGoal(8, newWaterAvoidingRandomStrollGoal(beeWanderSpeed))
 	m.goals.addGoal(9, newFloatGoal())
 	return m
@@ -273,6 +281,11 @@ func (t *TickLoop) beeAiStep(e *Entity) {
 	} else if e.meleeCooldown > 0 {
 		e.meleeCooldown--
 	}
+	// Bee.aiStep hive/flower bookkeeping (VERIFIED javap): decrement each live cooldown, and every 20 ticks
+	// drop an invalid hive. Then customServerAiStep: ++ticksWithoutNectarSinceExitingHive when !hasNectar.
+	// These run for EVERY live bee (not gated on hasStung) so the goal cooldowns + tired-of-nectar timer
+	// advance. The setRolling client cue is cosmetic (deferred). CITE Bee.aiStep + Bee.customServerAiStep.
+	t.beeHiveBookkeeping(e)
 	// (2) the sting-death countdown: only runs once the bee has stung (no RNG draw otherwise).
 	if !hasStung {
 		return // never stung: no death roll, no RNG draw (the passive/pursuing bee)

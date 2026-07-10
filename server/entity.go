@@ -760,6 +760,23 @@ type Entity struct {
 	beeHasNectar      bool
 	beeSavedFlowerPos *pk.Position
 	beeHivePos        *pk.Position
+	// Bee hive/pollination timers (Bee instance fields, VERIFIED javap this session). All bee-gated
+	// (read/written only by the bee goals + beeAiStep), distinct from the anger commit fields.
+	// stayOutOfHiveCountdown (Bee.stayOutOfHiveCountdown, set to 400 by emptyAllLivingFromHive; decrements
+	// each customServerAiStep), ticksWithoutNectarSinceExitingHive (Bee.ticksWithoutNectarSinceExitingHive;
+	// ++ each customServerAiStep, reset on setHasNectar(true)), remainingCooldownBeforeLocatingNewFlower /
+	// NewHive (the two locate cooldowns, decremented each customServerAiStep). beePollinating mirrors
+	// BeePollinateGoal.pollinating (wantsToEnterHive reads it via isPollinating). CITE Bee.customServerAiStep.
+	beeStayOutOfHiveCountdown            int
+	beeTicksWithoutNectarSinceExiting    int
+	beeRemainingCooldownLocatingFlower   int
+	beeRemainingCooldownLocatingHive     int
+	beePollinating                       bool
+	// beeHiveBlacklist mirrors BeeGoToHiveGoal.blacklistedTargets (max 3, FIFO): hive positions the bee
+	// failed to path to, shared between the locate + go-to-hive goals (in vanilla it lives on the goToHiveGoal
+	// instance the locate goal reaches via bee.goToHiveGoal; here it is bee-owned so both goals see it). CITE
+	// BeeGoToHiveGoal.{blacklistedTargets,blacklistTarget,isTargetBlacklisted,clearBlacklist}.
+	beeHiveBlacklist []pk.Position
 	goatScreaming     bool
 	// goatHasLeftHorn / goatHasRightHorn mirror Goat's DATA_HAS_LEFT_HORN / DATA_HAS_RIGHT_HORN (both
 	// default true; finalizeSpawn's UNIHORN roll can clear one; RamTarget.dropHorn clears one on a ram into
