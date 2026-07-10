@@ -103,6 +103,13 @@ func IsRandomlyTicking(s StateID) bool {
 		// ONLY while maturing; a full (AGE 3) bush draws no roll. CITE: SweetBerryBushBlock
 		// .isRandomlyTicking (state.getValue(AGE) < 3).
 		return SweetBerryAge(s) < SweetBerryMaxAge
+	case PumpkinStem, MelonStem:
+		// StemBlock does NOT override isRandomlyTicking() (VegetationBlock has no override either), so it
+		// uses the baked Properties.randomTicks() flag -> isRandomlyTicking()==true for every AGE (0..7):
+		// the growth roll and, at AGE 7, the fruit-spawn path run each random tick. The ATTACHED_*_STEM
+		// blocks (AttachedStemBlock) do NOT randomTick and are excluded. CITE: StemBlock properties
+		// (.randomTicks()); StemBlock.randomTick.
+		return true
 	default:
 		return false
 	}

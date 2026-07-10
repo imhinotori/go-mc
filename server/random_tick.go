@@ -227,6 +227,11 @@ func (t *TickLoop) dispatchRandomTick(r *region, state block.StateID, pos pk.Pos
 		// SweetBerryBushBlock.randomTick: 1-in-5 AGE advance gated on light>=9. DRAWS levelRandom (one
 		// nextInt(5), only for age<3). IsRandomlyTicking gates on AGE < 3. See growth_extra.go.
 		t.sweetBerryRandomTick(r, state, pos)
+	case block.IsStem(state):
+		// StemBlock.randomTick (pumpkin + melon): light-gated growth roll (one nextInt((int)(25/speed)+1));
+		// at AGE 7 a SECOND draw (getRandomDirection == nextInt(4)) picks the fruit-spawn direction. DRAWS
+		// levelRandom. IsRandomlyTicking is true for every AGE. See stem.go.
+		t.stemRandomTick(r, state, pos)
 	default:
 		// A state whose IsRandomlyTicking is true but whose randomTick handler is not yet ported: no-op
 		// (the family's IsRandomlyTicking should not be true until its handler is wired — kept as a
