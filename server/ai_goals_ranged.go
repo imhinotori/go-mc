@@ -27,6 +27,7 @@ package server
 
 import (
 	"math"
+	"math/rand/v2"
 
 	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/data/item"
@@ -58,6 +59,12 @@ const (
 	//	 RangedBowAttackGoal.<init>(Monster;DIF). skeleton: 1.0d / 20|40 / 15.0f.]
 	illusionerBowSpeedModifier     = 0.5 // Illusioner RangedBowAttackGoal speedModifier
 	illusionerBowAttackIntervalMin = 20  // Illusioner RangedBowAttackGoal attackIntervalMin
+
+	// AbstractSkeleton.performRangedAttack shoot-sound (playSound(SKELETON_SHOOT, 1.0f, 1/(nextFloat()*0.4+0.8))).
+	skeletonShootSoundID   = 1491 // SoundEvents.SKELETON_SHOOT (data/soundid: "entity.skeleton.shoot")
+	skeletonShootVolume    = 1.0  // fconst_1 volume arg
+	skeletonShootPitchScale = 0.4 // ldc 0.4f (nextFloat()*0.4 ...)
+	skeletonShootPitchBase  = 0.8 // ldc 0.8f (... + 0.8)
 )
 
 // rangedBowAttackGoal is the ported RangedBowAttackGoal state (the jar's private fields of the same
@@ -312,6 +319,20 @@ func (t *TickLoop) performRangedAttack(e *Entity, target *tickPlayer, power floa
 	if fx := variantArrowEffects(e); fx != nil {
 		a.arrowEffects = fx
 	}
+
+	// AbstractSkeleton.performRangedAttack ends with:
+	//   playSound(SoundEvents.SKELETON_SHOOT, 1.0f, 1.0f / (getRandom().nextFloat() * 0.4f + 0.8f));
+	// The nextFloat() is ONE draw on the MOB's per-entity RandomSource, drawn AFTER the four arrow-spread
+	// triangles above (setBaseDamageFromMob + the 3 getMovementToShoot axes) -- it is the LAST draw of the
+	// shot. This draw is REQUIRED for RNG lockstep: without it, every draw after shot #1 desyncs from the
+	// jar. The pitch = 1.0 / (nextFloat()*0.4 + 0.8); volume = 1.0; sound source = HOSTILE (Monster.
+	// getSoundSource). Broadcast to the mob's trackers on a fresh server sound seed (the Level.playSound
+	// soundSeedGenerator.nextLong() analogue -- never the mob stream, matching playMobHurtSound).
+	//	[VERIFIED javap AbstractSkeleton.performRangedAttack tail @143-170: getstatic SoundEvents.
+	//	 SKELETON_SHOOT; fconst_1; fconst_1; getRandom().nextFloat(); ldc 0.4f; fmul; ldc 0.8f; fadd;
+	//	 fdiv; playSound(SoundEvent,F,F). soundid 1491 "entity.skeleton.shoot".]
+	shootPitch := float32(1.0) / (r.nextFloat()*skeletonShootPitchScale + skeletonShootPitchBase)
+	t.broadcastToTrackers(e.id, encodeSoundEntity(skeletonShootSoundID, soundSourceHostile, e.id, skeletonShootVolume, shootPitch, rand.Int64()))
 }
 
 // eyeHeightForArrow is the launch-height offset for a mob firing a bow. Vanilla spawns the arrow at
