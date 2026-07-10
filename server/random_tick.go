@@ -232,6 +232,11 @@ func (t *TickLoop) dispatchRandomTick(r *region, state block.StateID, pos pk.Pos
 		// at AGE 7 a SECOND draw (getRandomDirection == nextInt(4)) picks the fruit-spawn direction. DRAWS
 		// levelRandom. IsRandomlyTicking is true for every AGE. See stem.go.
 		t.stemRandomTick(r, state, pos)
+	case block.IsKelp(state):
+		// KelpBlock / GrowingPlantHeadBlock.randomTick: 0.14 grow-up chance while the cell above is water.
+		// DRAWS levelRandom (one nextDouble, only for AGE<25). IsRandomlyTicking gates on AGE < 25. See
+		// kelp.go.
+		t.kelpRandomTick(r, state, pos)
 	default:
 		// A state whose IsRandomlyTicking is true but whose randomTick handler is not yet ported: no-op
 		// (the family's IsRandomlyTicking should not be true until its handler is wired — kept as a

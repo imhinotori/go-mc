@@ -110,6 +110,12 @@ func IsRandomlyTicking(s StateID) bool {
 		// blocks (AttachedStemBlock) do NOT randomTick and are excluded. CITE: StemBlock properties
 		// (.randomTicks()); StemBlock.randomTick.
 		return true
+	case Kelp:
+		// GrowingPlantHeadBlock (KelpBlock) overrides isRandomlyTicking() to return AGE < MAX_AGE (25) --
+		// a kelp HEAD is random-ticked ONLY while below max age; a full (AGE 25) head draws no roll.
+		// KELP_PLANT (the body) is a separate block and never random-ticks. CITE:
+		// GrowingPlantHeadBlock.isRandomlyTicking (getValue(AGE) < 25).
+		return KelpAge(s) < KelpMaxAge
 	default:
 		return false
 	}
