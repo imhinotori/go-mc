@@ -453,7 +453,26 @@ func (t *TickLoop) destroyBlock(p *tickPlayer, pos pk.Position, air block.StateI
 
 		// Spawn the dropped Item entity (ServerPlayerGameMode.destroyBlock's loot path). Creative drops
 		// nothing (gated inside spawnBlockDrop). Lands in the OWNING region's store (cur().entities.add).
-		t.spawnBlockDrop(p, pos, brokenState)
+		//
+		// CORRECT-TOOL-FOR-DROPS GATE (ServerPlayerGameMode.destroyBlock offsets 217-269): the flag
+		// `boolean flag = player.hasCorrectToolForDrops(state)` is computed up front, and drops are only
+		// rolled when `removed && flag` (`iload removed; ifeq skip; iload flag; ifeq skip;
+		// Block.playerDestroy -> dropResources`). A block tagged requiresCorrectToolForDrops (stone,
+		// every ore, deepslate, metal blocks, ...) broken with the WRONG tool (a bare hand in v1) drops
+		// NOTHING — the loot TABLE does not re-check the tool (it only branches on silk_touch), so this
+		// gate is the sole place tool-correctness suppresses the drop. Without it, punching stone/ore
+		// bare-handed wrongly yielded cobblestone/raw ore. Applied only for a player break (real p);
+		// a nil-breaker (a non-player Block.destroyBlock with entity=null: support cascade, fluid, piston)
+		// drops regardless of tool, so it is unaffected. CITE: ServerPlayerGameMode.destroyBlock;
+		// Player.hasCorrectToolForDrops.
+		dropAllowed := true
+		if p != nil {
+			_, requiresTool := blockHardness(brokenState)
+			dropAllowed = hasCorrectToolForDrops(p, requiresTool)
+		}
+		if dropAllowed {
+			t.spawnBlockDrop(p, pos, brokenState)
+		}
 
 		// TOOL DURABILITY (ItemStack.mineBlock -> Item.mineBlock): a survival break with a tool whose TOOL
 		// component has damage_per_block>0 on a non-zero-hardness block wears the tool by that much (and

@@ -110,16 +110,19 @@ func newDropLoop() (*TickLoop, *world.ChunkManager) {
 	return loop, mgr
 }
 
-// TestBlockDropSpawnsItem: breaking a stone block spawns an entity.Item (typ==71) in the
-// store, positioned with the vanilla Block.popResource jitter (block center ± 0.25 per axis,
-// Y additionally offset down by the item half-height 0.125), carrying a random toss velocity
-// in [-0.1, 0.1) per axis, the default 10-tick pickup delay, and non-empty ITEM metadata.
+// TestBlockDropSpawnsItem: breaking a DIRT block (a non-tool-requiring block that drops itself
+// bare-handed) spawns an entity.Item (typ==71) in the store, positioned with the vanilla
+// Block.popResource jitter (block center ± 0.25 per axis, Y additionally offset down by the item
+// half-height 0.125), carrying a random toss velocity in [-0.1, 0.1) per axis, the default 10-tick
+// pickup delay, and non-empty ITEM metadata. (Stone is NOT used here: it is tagged
+// requiresCorrectToolForDrops, so a bare-handed break drops nothing per
+// ServerPlayerGameMode.destroyBlock's hasCorrectToolForDrops gate.)
 func TestBlockDropSpawnsItem(t *testing.T) {
 	loop, mgr := newDropLoop()
 	p := blockPlayer(loop, 1.5, 65.0, 1.5)
 
 	target := pk.Position{X: 1, Y: 64, Z: 1}
-	mgr.SetBlock(target, block.ToStateID[block.Stone{}], dimMinY)
+	mgr.SetBlock(target, block.ToStateID[block.Dirt{}], dimMinY)
 
 	before := loop.only().entities.len()
 	// Plan 17-21: a survival break is a dig-timer now (START -> elapse -> STOP at progress>=0.7),
@@ -177,6 +180,50 @@ func TestBlockDropSpawnsItem(t *testing.T) {
 	}
 }
 
+// TestBlockDropCorrectToolGate: a survival player mining a requiresCorrectToolForDrops block
+// (stone) BARE-HANDED via the full player-mining path (ServerPlayerGameMode.destroyBlock) drops
+// NOTHING — the loot table only branches on silk_touch, so the tool-correctness gate in
+// destroyBlock (`removed && player.hasCorrectToolForDrops(state)`) is the sole suppressor. A
+// non-tool block (dirt) broken the same way DOES drop. Regression for the missing drop gate that
+// previously let bare-handed stone/ore drops through. CITE: ServerPlayerGameMode.destroyBlock
+// (offsets 217-269); Player.hasCorrectToolForDrops.
+func TestBlockDropCorrectToolGate(t *testing.T) {
+	// STONE bare-handed -> requiresCorrectToolForDrops, wrong tool -> NO drop.
+	{
+		loop, mgr := newDropLoop()
+		p := blockPlayer(loop, 1.5, 65.0, 1.5)
+		p.gameMode = gameModeSurvival
+		target := pk.Position{X: 1, Y: 64, Z: 1}
+		mgr.SetBlock(target, block.ToStateID[block.Stone{}], dimMinY)
+
+		before := loop.only().entities.len()
+		completeSurvivalDig(loop, p, target)
+
+		// The block must have broken (air) but dropped nothing.
+		if got, ok := mgr.GetBlock(target, dimMinY); !ok || !block.IsAir(got) {
+			t.Fatalf("stone did not break: GetBlock=(%v, ok=%v), want air", got, ok)
+		}
+		if got := loop.only().entities.len(); got != before {
+			t.Fatalf("bare-handed stone break spawned %d items, want 0 (wrong tool for a tool-requiring block)", got-before)
+		}
+	}
+	// DIRT bare-handed -> not tool-requiring -> DOES drop (the gate passes).
+	{
+		loop, mgr := newDropLoop()
+		p := blockPlayer(loop, 1.5, 65.0, 1.5)
+		p.gameMode = gameModeSurvival
+		target := pk.Position{X: 1, Y: 64, Z: 1}
+		mgr.SetBlock(target, block.ToStateID[block.Dirt{}], dimMinY)
+
+		before := loop.only().entities.len()
+		completeSurvivalDig(loop, p, target)
+
+		if got := loop.only().entities.len(); got != before+1 {
+			t.Fatalf("bare-handed dirt break spawned %d items, want 1 (dirt does not require a tool)", got-before)
+		}
+	}
+}
+
 // TestBlockDropTracked: after a break, a nearby player's tracker tick emits an AddEntity for
 // the new item id (the GAMEPLAY-01 broadcast path works for the dropped item).
 func TestBlockDropTracked(t *testing.T) {
@@ -185,7 +232,8 @@ func TestBlockDropTracked(t *testing.T) {
 	editor.entityID = 1000 // distinct id so the tracker does not skip the item as "self"
 
 	target := pk.Position{X: 1, Y: 64, Z: 1}
-	mgr.SetBlock(target, block.ToStateID[block.Stone{}], dimMinY)
+	// Dirt: non-tool block that drops itself bare-handed (stone would need a tool -> no drop).
+	mgr.SetBlock(target, block.ToStateID[block.Dirt{}], dimMinY)
 
 	// Plan 17-21: complete a survival dig (START -> elapse -> STOP) so the block breaks and drops.
 	completeSurvivalDig(loop, editor, target)
