@@ -33,7 +33,7 @@ func TestRegisterAndDispatch(t *testing.T) {
 
 	cf := &feature.ConfiguredFeature{ID: "minecraft:synthetic", Type: synthType}
 	view := build3x3([2]int{0, 0}, -64, 384)
-	placer := newConfiguredPlacer(cf, view, reg, block.StateID(0), false, nil, 63)
+	placer := newConfiguredPlacer(cf, view, reg, block.StateID(0), false, nil, 63, 0)
 
 	ctx := newPlacementContext(view, -64, 384, nil)
 	rng := levelgen.NewLegacyRandomSource(99)
@@ -79,7 +79,7 @@ func TestBodyContextRegistryPlumbed(t *testing.T) {
 
 	cf := &feature.ConfiguredFeature{Type: synthType}
 	view := build3x3([2]int{0, 0}, -64, 384)
-	placer := newConfiguredPlacer(cf, view, reg, block.StateID(0), false, nil, 63)
+	placer := newConfiguredPlacer(cf, view, reg, block.StateID(0), false, nil, 63, 0)
 	ctx := newPlacementContext(view, -64, 384, nil)
 	placer(ctx, levelgen.NewLegacyRandomSource(1), placement.BlockPos{})
 
@@ -97,7 +97,7 @@ func TestUnregisteredIsNoOp(t *testing.T) {
 	cf := &feature.ConfiguredFeature{Type: "tree"} // a real type with no body yet (parser strips the ns)
 	view := build3x3([2]int{0, 0}, -64, 384)
 	var inv []featureInvocation
-	placer := newConfiguredPlacer(cf, view, feature.NewEmbeddedRegistry(), block.StateID(0), false, &inv, 63)
+	placer := newConfiguredPlacer(cf, view, feature.NewEmbeddedRegistry(), block.StateID(0), false, &inv, 63, 0)
 	ctx := newPlacementContext(view, -64, 384, nil)
 	if placer(ctx, levelgen.NewLegacyRandomSource(1), placement.BlockPos{X: 1, Y: 2, Z: 3}) {
 		t.Fatalf("unregistered type returned true (should be a no-op)")
@@ -113,7 +113,7 @@ func TestTestSetBlockStillWorks(t *testing.T) {
 	cf := &feature.ConfiguredFeature{Type: testSetBlockType}
 	view := build3x3([2]int{0, 0}, -64, 384)
 	stone := block.ToStateID[block.Stone{}]
-	placer := newConfiguredPlacer(cf, view, nil, stone, true, nil, 63)
+	placer := newConfiguredPlacer(cf, view, nil, stone, true, nil, 63, 0)
 	ctx := newPlacementContext(view, -64, 384, nil)
 	pos := placement.BlockPos{X: 0, Y: 0, Z: 0}
 	if !placer(ctx, levelgen.NewLegacyRandomSource(1), pos) {

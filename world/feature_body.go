@@ -63,6 +63,12 @@ type bodyContext struct {
 	// freeze body reads bctx.seaLevelOr(63) so a bare bodyContext (a unit test) still uses
 	// the vanilla overworld sea level.
 	seaLevel int
+	// seed is the world seed (WorldGenLevel.getSeed()). The end_spike body
+	// (EndSpikeFeature.getSpikesForLevel) derives the deterministic 10-spike layout from a
+	// thread-local Random seeded with the world seed; the fixed featureBody signature has
+	// no place for it, so it is threaded here from newConfiguredPlacer (g.seed in
+	// production). Read-only on the scheduler goroutine; only end_spike consumes it.
+	seed int64
 }
 
 // seaLevelOr returns the threaded sea level, or the given default when unset (0). The

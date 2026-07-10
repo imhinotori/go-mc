@@ -127,12 +127,13 @@ func newConfiguredPlacer(
 	hasTest bool,
 	invocations *[]featureInvocation,
 	seaLevel int,
+	seed int64,
 ) placement.PlacerFunc {
 	ftype := ""
 	if cf != nil {
 		ftype = cf.Type
 	}
-	bctx := &bodyContext{view: view, reg: reg, seaLevel: seaLevel}
+	bctx := &bodyContext{view: view, reg: reg, seaLevel: seaLevel, seed: seed}
 	return func(ctx placement.PlacementContext, rng levelgen.RandomSource, pos placement.BlockPos) bool {
 		if invocations != nil {
 			*invocations = append(*invocations, featureInvocation{featureType: ftype, pos: pos})

@@ -15,7 +15,11 @@ type structureFeaturePoolView struct {
 	*Neighborhood
 	registry *feature.Registry
 	seaLevel int
-	biomeAt  func(x, y, z int) levelbiome.Type
+	// seed is the world seed threaded into the bodyContext for the end_spike body. Structure
+	// feature pools never place end_spike, so it is present for signature completeness (the
+	// EndSpikeFeature.getSpikesForLevel dependency) and set from g.seed in production.
+	seed    int64
+	biomeAt func(x, y, z int) levelbiome.Type
 }
 
 // PlaceFeaturePoolElement ports the delegate reached by FeaturePoolElement.place:
@@ -37,7 +41,7 @@ func (v structureFeaturePoolView) PlaceFeaturePoolElement(featureID string, orig
 	if pf == nil || pf.Feature == nil {
 		return false
 	}
-	placer := newConfiguredPlacer(pf.Feature, v.Neighborhood, v.registry, v.air, false, nil, v.seaLevel)
+	placer := newConfiguredPlacer(pf.Feature, v.Neighborhood, v.registry, v.air, false, nil, v.seaLevel, v.seed)
 	bound, err := placement.Bind(pf, placer, placement.ModifierDeps{})
 	if err != nil {
 		panic("world: structure feature pool bind " + featureID + ": " + err.Error())
