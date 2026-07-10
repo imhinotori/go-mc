@@ -702,6 +702,16 @@ func (t *TickLoop) tickAI() {
 		// v1. Placed AFTER serverAiStep (mirroring vanilla aiStep, where the looting scan runs after the goal/
 		// nav tick). Cite Mob.aiStep looting block.
 		t.mobPickupItems(e)
+		// FREEZE / POWDER-SNOW (freeze.go): the LivingEntity.aiStep freeze block -- accumulate/decay
+		// ticksFrozen against the powder-snow block read and deal FREEZE damage every 40 ticks once
+		// fully frozen (>=140). Runs as part of aiStep for EVERY live mob, AFTER serverAiStep so
+		// aiTickCount (the per-mob Entity.tickCount) is already incremented this tick -- exactly the
+		// value vanilla's aiStep reads for the tickCount%40 gate. The accumulation is gated on the REAL
+		// powder-snow block read, so a mob not in powder snow (the oracle pig) only ever runs the -2 decay
+		// from 0 (a clamped no-op) with ZERO RNG draws -- the pig oracle stream is byte-identically
+		// unperturbed. Placed like the chicken/creeper per-type hooks (an aiStep sub-behavior, before the
+		// per-type branches). Cite LivingEntity.aiStep freeze block.
+		t.tickEntityFreeze(e)
 		// MOB-PASS-03 (Phase 34): the Chicken.aiStep server extras (slow-fall + egg-lay). Vanilla runs
 		// aiStep INDEPENDENTLY of the running goals (Mob.aiStep -> customServerAiStep), so it fires every
 		// tick for a live chicken regardless of which goal is active. It is gated on typ == entity.Chicken.ID

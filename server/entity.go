@@ -1166,6 +1166,18 @@ type Entity struct {
 	//	[VERIFIED javap Entity.remainingFireTicks / igniteForTicks / baseTick fire block.]
 	remainingFireTicks int32
 
+	// ticksFrozen is Entity.DATA_TICKS_FROZEN (an INT SynchedEntityData accessor, index 7). It is the
+	// powder-snow frost accumulation counter read/written by Entity.getTicksFrozen/setTicksFrozen: it
+	// climbs by 1 each tick a can-freeze entity is inside powder snow (InsideBlockEffectType.FREEZE
+	// lambda: setTicksFrozen(min(getTicksRequiredToFreeze(), getTicksFrozen()+1))) and decays by 2 each
+	// tick it is not (LivingEntity.aiStep: setTicksFrozen(max(0, getTicksFrozen()-2))). At >=140
+	// (getTicksRequiredToFreeze) the entity isFullyFrozen and takes FREEZE damage every 40 ticks. The
+	// client reads DATA_TICKS_FROZEN to draw the freeze/frost vignette (getPercentFrozen). 0 = not
+	// frosted. Tick-owned (mutated only on the owning region goroutine).
+	//	[VERIFIED javap Entity.getTicksFrozen/setTicksFrozen (DATA_TICKS_FROZEN, index 7, INT) +
+	//	 Entity.getTicksRequiredToFreeze (sipush 140) + LivingEntity.aiStep freeze block.]
+	ticksFrozen int32
+
 	// fireImmune mirrors EntityType.fireImmune() / Entity.fireImmune(): fire-immune entity types clear
 	// ordinary fire ticks and ignore lava/fire ignition. Default false for ordinary mobs (Skeleton,
 	// Zombie, Pig, Chicken); NewEntity seeds true for the registered nether fire-immune types.

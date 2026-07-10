@@ -95,6 +95,19 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 		amount = 0.0
 	}
 
+	// FREEZE-extra multiply (LivingEntity.hurtServer bytecode 103-128, AFTER the amount<0 clamp and the
+	// applyItemBlocking step, BEFORE the helmet-damage + NaN/Inf clamp): `if (source.is(IS_FREEZING) &&
+	// this.is(FREEZE_HURTS_EXTRA_TYPES)) amount *= 5.0f;`. FREEZE_HURTS_EXTRA_TYPES is an ENTITY-type tag
+	// whose members are {strider, blaze, magma_cube} (freeze_hurts_extra_types.json) -- a strider standing
+	// in powder snow takes 5x the 1.0 freeze tick. The applyItemBlocking step is a cited pass-through for a
+	// mob (no shield-use on the mob combat path in v1); the helmet-damage step is likewise a mob pass-through
+	// (no mob armor). is_freezing is a GENUINE damage-type tag read (only minecraft:freeze is a member);
+	// isFreezeHurtsExtraType (freeze.go) is the entity-type membership. A non-freeze source or a non-extra
+	// mob (the oracle pig) leaves amount unchanged. Cite LivingEntity.hurtServer (the freeze-extra branch).
+	if src.is("is_freezing") && isFreezeHurtsExtraType(e.typ) {
+		amount *= 5.0
+	}
+
 	// NaN/Infinity clamp to Float.MAX_VALUE (`if (Float.isNaN || Float.isInfinite) amount = 3.4028235E38F`)
 	// — verbatim from the player port, so a degenerate amount becomes the finite max (T-29-05).
 	if isNaN32(amount) || isInf32(amount) {

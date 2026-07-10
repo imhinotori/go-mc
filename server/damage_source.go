@@ -123,6 +123,13 @@ var (
 	// immune (matching vanilla — the border only bites survival). Cite LivingEntity.baseTick /
 	// DamageSources.outOfBorder (DamageTypes.OUTSIDE_BORDER).
 	damageTypeOutsideBorder = damageTypeID(tag.DamageTypeIDs["minecraft:outside_border"])
+	// damageTypeFreeze is minecraft:freeze -- the source DamageSources.freeze() deals every 40 ticks to a
+	// fully-frozen (ticksFrozen >= 140) entity still standing in powder snow (LivingEntity.aiStep:
+	// hurtServer(freeze(), 1.0F)). A member of is_freezing (freeze.go's tickEntityFreeze reads its tag),
+	// so a mob in EntityTypeTags.FREEZE_HURTS_EXTRA_TYPES (strider/blaze/magma_cube) takes amount*5 in the
+	// hurtServer pipeline (combat_mob.go freeze-extra multiply). scaling when_caused_by_living_non_player,
+	// exhaustion 0.0 (freeze.json). Cite DamageSources.freeze / LivingEntity.aiStep freeze block.
+	damageTypeFreeze = damageTypeID(tag.DamageTypeIDs["minecraft:freeze"])
 )
 
 // damageSourceOf builds a DamageSource for an environmental/anonymous source: the given damage-type
