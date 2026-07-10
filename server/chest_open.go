@@ -544,6 +544,11 @@ func (t *TickLoop) openChest(p *tickPlayer, pos pk.Position) bool {
 	// initMenu → broadcastChanges: push the full slot list (chest 0..26 + player 27..62). The
 	// chest-menu state id is the player inventory's state counter (one open window at a time).
 	t.sendChestContent(p, cl)
+	// ChestBlockEntity.startOpen -> ContainerOpenersCounter.incrementOpeners: on the 0->1 transition,
+	// onOpen posts level.gameEvent(player, GameEvent.CONTAINER_OPEN, pos) (frequency 10). v1 tracks a
+	// single viewer per chest, so an open is always the 0->1 edge. Source is the opening player. Cite
+	// ContainerOpenersCounter.onOpen + ChestBlockEntity.startOpen.
+	t.gameEventAt(geContainerOpen, pos, gameEventContext{sourceEntityID: p.entityID})
 	return true
 }
 

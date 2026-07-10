@@ -489,6 +489,13 @@ func (t *TickLoop) handleContainerClose(p *tickPlayer, pkt pk.Packet) {
 		inv.setCarried(component.SlotData{})
 		t.sendContent(p) // re-sync window 0 so the client renders the reconciled inventory + empty cursor
 	}
+	// ChestBlockEntity.stopOpen -> ContainerOpenersCounter.decrementOpeners: on the 1->0 transition, onClose
+	// posts level.gameEvent(player, GameEvent.CONTAINER_CLOSE, pos) (frequency 9). v1 tracks a single viewer
+	// per chest, so a close is always the 1->0 edge. Source is the closing player. Cite
+	// ContainerOpenersCounter.onClose + ChestBlockEntity.stopOpen.
+	if p.openContainer != nil && p.openContainer.kind == containerKindChest {
+		t.gameEventAt(geContainerClose, p.openContainer.chestPos, gameEventContext{sourceEntityID: p.entityID})
+	}
 	p.openContainer = nil
 	_ = pkt
 }
