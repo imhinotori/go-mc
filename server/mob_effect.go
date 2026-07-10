@@ -86,6 +86,21 @@ const (
 	// it generically (the client dims the victim's view). VERIFIED javap Illusioner$IllusionerBlindnessSpellGoal
 	// .performSpellCasting: target.addEffect(new MobEffectInstance(MobEffects.BLINDNESS, 400), this).
 	effectBlindness = "minecraft:blindness"
+	// POTION-DRINK effect ids: the vanilla drinkable-potion effects (Potions static{}) not already declared
+	// above. NIGHT_VISION / SLOW_FALLING / LUCK are plain MobEffects (no attribute modifier, no per-tick
+	// action) whose drink grants presence + duration (v1 observable = hasEffect + duration countdown, the
+	// client renders the vision/fall/loot behavior). WIND_CHARGED / WEAVING / OOZING / INFESTED are the
+	// on-death "explosive/cobweb/slime/silverfish" MobEffects (MobEffectCategory.HARMFUL) applied by drinking
+	// the corresponding potion; their on-expiry spawn behavior (WeavingMobEffect/OozingMobEffect/... .onMobRemoved
+	// or applyEffectTick) is CITE-DEFERRED like the movement no-ops, so v1 attaches+ticks the effect and the
+	// spawn lands once those subsystems exist. VERIFIED CFR net.minecraft.world.effect.MobEffects registrations
+	// + net.minecraft.world.item.alchemy.Potions static block.
+	effectNightVision = "minecraft:night_vision" // Potions.NIGHT_VISION (plain MobEffect)
+	effectLuck        = "minecraft:luck"          // Potions.LUCK        (LUCK -> attribute; v1 presence-only)
+	effectWindCharged = "minecraft:wind_charged"  // Potions.WIND_CHARGED (WindChargedMobEffect)
+	effectWeaving     = "minecraft:weaving"       // Potions.WEAVING      (WeavingMobEffect)
+	effectOozing      = "minecraft:oozing"        // Potions.OOZING       (OozingMobEffect)
+	effectInfested    = "minecraft:infested"      // Potions.INFESTED     (InfestedMobEffect)
 )
 
 // invisibleSharedFlagBit is Entity.FLAG_INVISIBLE — DATA_SHARED_FLAGS (index 0) bit 5 (1<<5 == 0x20):

@@ -289,16 +289,16 @@ func (t *TickLoop) useItemInHand(p *tickPlayer, hand int32) {
 	// FOOD gate (v1): resolve the held item's FOOD/CONSUMABLE data. Non-food => not eatable => no-op
 	// (cite: other ItemStack.use behaviors out of v1 scope).
 	// CONSUMABLE gate: resolve the held item CONSUMABLE data (data/item/consume.go). A non-consumable
-	// item is a no-op (cite: other ItemStack.use behaviors out of v1 scope). SCOPE: only items that
-	// carry a FOOD component OR a consume-effect payload (bad_omen / on_consume_effects) are handled --
-	// a bare drinkable (plain minecraft:potion, whose behavior is the PotionContents subsystem, not
-	// consume_effects) stays deferred so this does not half-implement potion drinking.
+	// item is a no-op (cite: other ItemStack.use behaviors out of v1 scope). SCOPE: items that carry a
+	// FOOD component, a consume-effect payload (bad_omen / on_consume_effects), OR are the drinkable
+	// minecraft:potion (whose effects come from the PotionContents subsystem -- potion_contents.go). A
+	// bare consumable with none of these stays deferred.
 	c, ok := itemConsumable(int32(held.ItemID))
 	if !ok {
 		return
 	}
-	if !c.HasFood && len(c.OnConsumeEffects) == 0 && c.OminousBottleAmplifier == nil {
-		return // consumable but out of v1 scope (e.g. a plain potion) -- deferred
+	if !c.HasFood && len(c.OnConsumeEffects) == 0 && c.OminousBottleAmplifier == nil && !isPotionItem(int32(held.ItemID)) {
+		return // consumable but out of v1 scope -- deferred
 	}
 
 	// Consumable.canConsume -> if (food == null) return true; else Player.canEat(canAlwaysEat):
@@ -443,6 +443,15 @@ func (t *TickLoop) finishUsingItem(p *tickPlayer, stack component.SlotData) comp
 	// the item CONSUMABLE component (data/item/consume.go). A non-consumable item (no entry) is a no-op.
 	// See consume_effects.go. The burp/eat sound + EAT/DRINK gameEvent remain cited v1 no-ops.
 	if c, ok := itemConsumable(int32(stack.ItemID)); ok {
+		// PotionContents ConsumableListener (getAllOfType(ConsumableListener).forEach): a drinkable potion
+		// carries POTION_CONTENTS, which IS a ConsumableListener whose onConsume applies the potion's
+		// effects to the drinker (PotionContents.onConsume -> applyToLivingEntity -> forEachEffect). This
+		// runs in the same listener-iteration step as FoodProperties.onConsume above and BEFORE the
+		// onConsumeEffects list. Potion-gated so a non-potion consumable never enters here (the pig oracle
+		// drinks nothing). Cite Consumable.onConsume + PotionContents.onConsume.
+		if isPotionItem(int32(stack.ItemID)) {
+			t.applyPotionContents(p, stack)
+		}
 		t.applyConsumeEffects(p, c)
 		// Consumable.onConsume tail: entity.gameEvent(getUseAnimation()==DRINK ? DRINK : EAT). EAT and
 		// DRINK carry the IDENTICAL vibration frequency (8), so the observable warden/sculk reaction is the
@@ -458,6 +467,15 @@ func (t *TickLoop) finishUsingItem(p *tickPlayer, stack component.SlotData) comp
 		if result.Count <= 0 {
 			// shrink to empty: the slot becomes the empty stack (ItemStack.EMPTY).
 			result = component.SlotData{Count: 0}
+		}
+		// USE_REMAINDER side effect (ItemStack.applyAfterUseComponentSideEffects ->
+		// UseRemainder.convertIntoRemainder): a drunk potion carries USE_REMAINDER=glass_bottle. Since a
+		// potion has max stack size 1, the shrink above always empties the stack, so convertIntoRemainder's
+		// `stack.isEmpty()` branch returns the glass_bottle template -- the emptied slot becomes a glass
+		// bottle. Creative keeps the potion (convertIntoRemainder returns the unshrunk stack when
+		// hasInfiniteMaterials()). Potion-gated. Cite PotionItem.finishUsingItem chain + UseRemainder.
+		if isPotionItem(int32(stack.ItemID)) && result.Count <= 0 {
+			result = glassBottleResult()
 		}
 	}
 	return result
