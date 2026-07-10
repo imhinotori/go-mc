@@ -132,6 +132,10 @@ var worldgenZipPrefixes = []struct {
 	{"data/minecraft/structure/trial_chambers/", "structure/trial_chambers"},                  // 191 binary .nbt
 	{"data/minecraft/worldgen/template_pool/ancient_city/", "template_pool/ancient_city"},     // 7
 	{"data/minecraft/structure/ancient_city/", "structure/ancient_city"},                      // 58 binary .nbt
+	// WOODLAND MANSION (surface structure, gap-reaudit): the mansion is CODE-generated (grid RNG),
+	// but its room/wall/roof geometry is 73 structure/woodland_mansion/*.nbt templates the
+	// WoodlandMansionPiece placer emits. No template_pool (not a jigsaw structure). Same pure-unzip.
+	{"data/minecraft/structure/woodland_mansion/", "structure/woodland_mansion"}, // 73 binary .nbt
 }
 
 // worldgenSingleFiles names individual jar resources (not whole trees) to copy,

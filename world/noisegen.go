@@ -221,7 +221,14 @@ func NewNoiseGenerator(seed int64, secs, minY int) *NoiseGenerator {
 	if err != nil {
 		panic("world: NoiseGenerator: build ancient city start generator: " + err.Error())
 	}
-	structGen := structure.NewCompositeStartGenerator(desertGen, jungleGen, iglooGen, swampGen, mineshaftGen, strongholdGen, villageGen, ruinedPortalGen, oceanMonumentGen, trialChambersGen, ancientCityGen)
+	// WOODLAND MANSION (gap-reaudit): the code-generated surface mansion (grid RNG + .nbt room
+	// templates), TRIANGULAR random_spread salt 10387319 / spacing 80 / separation 20, dark_forest
+	// biome-gated with the Y<60 surface gate. Registered at the SAME overworld composite site.
+	mansionGen, err := structure.NewWoodlandMansionStartGen()
+	if err != nil {
+		panic("world: NoiseGenerator: build woodland mansion start generator: " + err.Error())
+	}
+	structGen := structure.NewCompositeStartGenerator(desertGen, jungleGen, iglooGen, swampGen, mineshaftGen, strongholdGen, villageGen, ruinedPortalGen, oceanMonumentGen, trialChambersGen, ancientCityGen, mansionGen)
 
 	return &NoiseGenerator{
 		seed:        seed,
