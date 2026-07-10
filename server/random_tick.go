@@ -258,6 +258,11 @@ func (t *TickLoop) dispatchRandomTick(r *region, state block.StateID, pos pk.Pos
 		// levelRandom (one nextInt(10), only for age < MAX_AGE 3). IsRandomlyTicking gates on AGE < 3.
 		// See growth_randomtick.go.
 		t.netherWartRandomTick(r, state, pos)
+	case block.IsChorusFlower(state):
+		// ChorusFlowerBlock.randomTick: grow up / branch / die. DRAWS levelRandom (a conditional
+		// nextInt(4|5) stem-height roll, then in the branch phase a nextInt(4) + one getRandomDirection
+		// nextInt(4) per branch). IsRandomlyTicking gates on AGE < DEAD_AGE 5. See growth_randomtick.go.
+		t.chorusFlowerRandomTick(r, state, pos)
 	default:
 		// A state whose IsRandomlyTicking is true but whose randomTick handler is not yet ported: no-op
 		// (the family's IsRandomlyTicking should not be true until its handler is wired — kept as a

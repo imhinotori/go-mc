@@ -133,6 +133,11 @@ func IsRandomlyTicking(s StateID) bool {
 		// random-ticked ONLY while below max age; a full (AGE 3) wart draws no roll. CITE:
 		// NetherWartBlock.isRandomlyTicking (state.getValue(AGE) < 3).
 		return NetherWartAge(s) < NetherWartMaxAge
+	case ChorusFlower:
+		// ChorusFlowerBlock overrides isRandomlyTicking() to return AGE < DEAD_AGE (5) -- a living
+		// flower is random-ticked; a dead (AGE 5) flower draws no roll. CITE:
+		// ChorusFlowerBlock.isRandomlyTicking (state.getValue(AGE) < 5).
+		return ChorusFlowerAge(s) < ChorusFlowerDeadAge
 	default:
 		// WeatheringCopper family (WeatheringCopperFullBlock/StairBlock/SlabBlock/... and the door/
 		// trapdoor/bulb/chest/bars/grate/chain/lantern/golem-statue/lightning-rod copper variants) override

@@ -80,3 +80,67 @@ func TestNetherWartMaxAgeNotRandomlyTicking(t *testing.T) {
 		t.Fatal("AGE-2 nether wart must be randomly ticking")
 	}
 }
+
+func chorusFlowerState(age int) block.StateID {
+	s, ok := block.ChorusFlowerWithAge(block.ChorusFlowerDefaultState(), age)
+	if !ok {
+		panic("no chorus flower state")
+	}
+	return s
+}
+
+// TestChorusFlowerGrowUpOnEndStone: an AGE-0 flower rooted on END_STONE with all above-neighbours
+// empty grows UP -- self becomes a chorus_plant stem and a new AGE-0 flower is placed above. The
+// end-stone branch draws NO nextInt (canGrowUp is set unconditionally), so no seed tuning is needed.
+// CITE: ChorusFlowerBlock.randomTick (below.is(SUPPORTS_CHORUS_FLOWER) -> canGrowUp).
+func TestChorusFlowerGrowUpOnEndStone(t *testing.T) {
+	loop, mgr, _ := newRandomTickLoop()
+	r := loop.only()
+	r.levelRandom = levelgen.NewLegacyRandomSource(0xC0FFEE)
+	flower := pk.Position{X: 4, Y: 65, Z: 4}
+	mgr.SetBlock(pk.Position{X: 4, Y: 64, Z: 4}, block.ToStateID[block.EndStone{}], dimMinY)
+	mgr.SetBlock(flower, chorusFlowerState(0), dimMinY)
+	loop.chorusFlowerRandomTick(r, chorusFlowerState(0), flower)
+
+	// self -> chorus plant stem
+	if !block.IsChorusPlant(mustGet(t, mgr, flower)) {
+		t.Fatalf("grow-up should convert self to chorus_plant; got %d", mustGet(t, mgr, flower))
+	}
+	// above -> new AGE-0 flower
+	above := pk.Position{X: 4, Y: 66, Z: 4}
+	if !block.IsChorusFlower(mustGet(t, mgr, above)) {
+		t.Fatalf("grow-up should place a flower above; got %d", mustGet(t, mgr, above))
+	}
+	if got := block.ChorusFlowerAge(mustGet(t, mgr, above)); got != 0 {
+		t.Fatalf("grown flower AGE = %d, want 0", got)
+	}
+}
+
+// TestChorusFlowerDeadWhenBlocked: an AGE-4 flower rooted on END_STONE but BLOCKED above (a solid
+// block two above) cannot grow up and (age >= 4) dies -> AGE becomes DEAD_AGE (5). No branch is
+// possible (age not < 4), so it takes the terminal placeDeadFlower path. CITE:
+// ChorusFlowerBlock.randomTick (else placeDeadFlower).
+func TestChorusFlowerDeadWhenBlocked(t *testing.T) {
+	loop, mgr, _ := newRandomTickLoop()
+	r := loop.only()
+	r.levelRandom = levelgen.NewLegacyRandomSource(0xDEAD)
+	flower := pk.Position{X: 4, Y: 65, Z: 4}
+	mgr.SetBlock(pk.Position{X: 4, Y: 64, Z: 4}, block.ToStateID[block.EndStone{}], dimMinY)
+	mgr.SetBlock(flower, chorusFlowerState(4), dimMinY)
+	// Block two above so grow-up fails (isEmptyBlock(pos.above(2)) is false).
+	mgr.SetBlock(pk.Position{X: 4, Y: 67, Z: 4}, block.ToStateID[block.Stone{}], dimMinY)
+	loop.chorusFlowerRandomTick(r, chorusFlowerState(4), flower)
+	if got := block.ChorusFlowerAge(mustGet(t, mgr, flower)); got != block.ChorusFlowerDeadAge {
+		t.Fatalf("blocked age-4 flower should die (AGE 5); got %d", got)
+	}
+}
+
+// TestChorusFlowerDeadAgeNotRandomlyTicking: a dead (AGE 5) flower is not randomly ticking.
+func TestChorusFlowerDeadAgeNotRandomlyTicking(t *testing.T) {
+	if block.IsRandomlyTicking(chorusFlowerState(5)) {
+		t.Fatal("AGE-5 (dead) chorus flower must NOT be randomly ticking")
+	}
+	if !block.IsRandomlyTicking(chorusFlowerState(0)) {
+		t.Fatal("AGE-0 chorus flower must be randomly ticking")
+	}
+}
