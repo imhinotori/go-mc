@@ -54,9 +54,9 @@ const (
 	wardenMaxAnger            = 150 // AngerManagement.MAX_ANGER (increaseAnger min-clamp ceiling; cited)
 	wardenProximityAngerBoost = 35  // v1 proximity feed: a nearby player raises anger by DEFAULT_ANGER (cited)
 
-	wardenMeleeToSonicLock = 40 // TIME_TO_USE_MELEE_UNTIL_SONIC_BOOM: SonicBoom.setCooldown(this, 40) on a melee hit
+	wardenMeleeToSonicLock = 40  // TIME_TO_USE_MELEE_UNTIL_SONIC_BOOM: SonicBoom.setCooldown(this, 40) on a melee hit
 	wardenSonicOnAcquire   = 200 // setAttackTarget -> SonicBoom.setCooldown(this, 200) on target ACQUISITION (sipush 200)
-	wardenMeleeCooldown    = 18 // WardenAi.initFightActivity: MeleeAttack.create(18) -> MELEE_ATTACK_COOLDOWN 18 (bipush 18)
+	wardenMeleeCooldown    = 18  // WardenAi.initFightActivity: MeleeAttack.create(18) -> MELEE_ATTACK_COOLDOWN 18 (bipush 18)
 
 	wardenSonicDistanceXZ    = 15.0 // DISTANCE_XZ: closerThan(target, 15.0, 20.0) horizontal gate (ldc2_w 15.0d)
 	wardenSonicDistanceY     = 20.0 // DISTANCE_Y: closerThan(target, 15.0, 20.0) vertical gate (ldc2_w 20.0d)
@@ -73,11 +73,15 @@ const (
 	// applyDarknessAround builds new MobEffectInstance(DARKNESS, 260, 0, false, false, false) and hands it to
 	// MobEffectUtil.addEffectToPlayersAround(level, this, this.position(), 20, inst, 200). VERIFIED javap
 	// Warden.applyDarknessAround + MobEffectUtil.addEffectToPlayersAround.
-	wardenDarknessDuration     = 260 // new MobEffectInstance(DARKNESS, 260, ...) (sipush 260)
-	wardenDarknessAmplifier    = 0   // amplifier 0 (iconst_0)
-	wardenDarknessReapplyProb  = 200 // addEffectToPlayersAround(..., 200): the endsWithin gate arg is prob-1 (sipush 200)
-	wardenEmergeDuration   = 134 // WardenAi.EMERGE_DURATION = Mth.ceil(133.59999f) (static init)
-	wardenDiggingDuration  = 100 // WardenAi.DIGGING_DURATION = Mth.ceil(100.0f) (static init)
+	wardenDarknessDuration    = 260 // new MobEffectInstance(DARKNESS, 260, ...) (sipush 260)
+	wardenDarknessAmplifier   = 0   // amplifier 0 (iconst_0)
+	wardenDarknessReapplyProb = 200 // addEffectToPlayersAround(..., 200): the endsWithin gate arg is prob-1 (sipush 200)
+	wardenEmergeDuration      = 134 // WardenAi.EMERGE_DURATION = Mth.ceil(133.59999f) (static init)
+	wardenDiggingDuration     = 100 // WardenAi.DIGGING_DURATION = Mth.ceil(100.0f) (static init)
+	wardenRoarDuration        = 84  // WardenAi.ROAR_DURATION = Mth.ceil(84.0f) (static init ldc_w 84.0f)
+	wardenRoarAngerIncrease   = 20  // Roar.ROAR_ANGER_INCREASE: Roar.start -> increaseAngerAt(roarTarget, 20, false) (bipush 20)
+	wardenHurtAngerBoost      = 100 // Warden.hurtServer: increaseAngerAt(attacker, ANGRY.minimumAnger 80 + 20, false) == 100
+	wardenHurtDirectRange     = 5.0 // Warden.hurtServer: (isDirect() || closerThan(attacker, 5.0)) -> setAttackTarget (ldc2_w 5.0d)
 
 	wardenDigCooldownTicks    = 1200 // finalizeSpawn: DIG_COOLDOWN memory 1200 ticks (ldc2_w 1200l)
 	wardenNoAngerDespawnTicks = 1200 // the DIG_COOLDOWN-gated idle window before the dig-away (== 60s)
@@ -98,6 +102,13 @@ type wardenState struct {
 	lastTargetID     int32
 	digTicks         int
 	digging          bool
+	// roarTargetID is MemoryModuleType.ROAR_TARGET (0 = absent). roarTicks is the Roar behavior countdown
+	// (WardenAi.ROAR_DURATION=84 -> 0; 0 = not roaring). The Warden state machine mirrors the Brain activity
+	// priority EMERGE > DIG > ROAR > FIGHT > IDLE: SetRoarTarget arms ROAR_TARGET only when getEntityAngryAt()
+	// (anger >= ANGRY 80) yields a suspect; Roar runs 84 ticks; Roar.stop -> setAttackTarget(roarTarget) hands
+	// the FIGHT activity its ATTACK_TARGET. Cite WardenAi.updateActivity + SetRoarTarget + Roar.
+	roarTargetID int32
+	roarTicks    int
 }
 
 // spawnWarden creates a Warden at (x,y,z) (NewEntity seeds the 500-HP wardenSupplier by the type name
@@ -174,6 +185,67 @@ func (t *TickLoop) wardenIncreaseAngerAt(e *Entity, suspectID int32, amount int)
 	ws.angerBySuspect[suspectID] = na
 }
 
+// wardenCanTargetEntity ports Warden.canTargetEntity(entity) for a PLAYER attacker: a LivingEntity in the
+// same level, NO_CREATIVE_OR_SPECTATOR, not allied, not an armor stand / warden, not invulnerable, not
+// dead-or-dying, within the world border. For a v1 player suspect the live discriminators are: alive AND not
+// creative/spectator (a player is never allied to a warden, is not an armor stand/warden, and the world
+// border / invulnerable gates are not modeled). Cite Warden.canTargetEntity (EntitySelector
+// .NO_CREATIVE_OR_SPECTATOR + isDeadOrDying + isAlliedTo guards).
+func (t *TickLoop) wardenCanTargetPlayer(p *tickPlayer) bool {
+	if p == nil || p.dead {
+		return false // isDeadOrDying() -> false
+	}
+	// EntitySelector.NO_CREATIVE_OR_SPECTATOR: a creative or spectator player is not targetable.
+	if p.gameMode == gameModeCreative || p.gameMode == gameModeSpectator {
+		return false
+	}
+	return true
+}
+
+// wardenHurtServer ports Warden.hurtServer's post-super tail: AFTER the shared hurt pipeline (Monster
+// .hurtServer) lands, if !isNoAi() && !isDiggingOrEmerging(), the warden increaseAngerAt(getEntity(),
+// ANGRY.minimumAnger 80 + 20 = 100, false) at its attacker, then -- if it has NO ATTACK_TARGET yet AND the
+// attacker is a LivingEntity AND (source.isDirect() || closerThan(attacker, 5.0)) -- setAttackTarget(attacker)
+// IMMEDIATELY (bypassing the roar). This is the get-hurt aggro boost: hitting a warden raises its anger at you
+// by 100 (straight to ANGRY) and, for a direct/close hit with no current target, makes you its attack target.
+// Additive + warden-gated (nil for every other entity). Cite Warden.hurtServer (bytecode 9-101) +
+// increaseAngerAt(Entity,int,boolean) + setAttackTarget.
+func (t *TickLoop) wardenHurtServer(e *Entity, src damageSource) {
+	ws := e.warden
+	if ws == nil {
+		return
+	}
+	// isNoAi() (v1 mobs are never noAi) || isDiggingOrEmerging(): a digging/emerging warden ignores the hit.
+	if ws.emergeTicks > 0 || ws.digging {
+		return
+	}
+	// getEntity(): the CAUSING entity (src.attacker). An environmental hit (attacker 0) angers no one.
+	attackerID := src.attacker
+	if attackerID == 0 {
+		return
+	}
+	attacker := t.playerByEntityID(attackerID)
+	// increaseAngerAt(getEntity(), 100, false): the (Entity,int,boolean) form guards on canTargetEntity(entity)
+	// -- a non-targetable attacker (creative/spectator/dead) neither angers nor becomes a target. The
+	// playListeningSound arg is false (no sound). Cite Warden.increaseAngerAt(Entity,int,boolean) (canTargetEntity gate).
+	if !t.wardenCanTargetPlayer(attacker) {
+		return // canTargetEntity(entity) == false -> increaseAngerAt returns before AngerManagement.increaseAnger
+	}
+	t.wardenIncreaseAngerAt(e, attackerID, wardenHurtAngerBoost) // AngerManagement.increaseAnger(entity, 100)
+	// `if (getBrain().getMemory(ATTACK_TARGET).isEmpty() && getEntity() instanceof LivingEntity)`: only when
+	// the warden has NO current attack target. The attacker is a Player (a LivingEntity), so the instanceof
+	// holds. `if (source.isDirect() || closerThan(attacker, 5.0)) setAttackTarget(attacker);` -- a direct
+	// (melee) hit OR a close (<5) indirect hit acquires the attacker immediately, skipping the roar. Cite
+	// Warden.hurtServer (bytecode 45-98).
+	if e.ai != nil && e.ai.attackTargetID == 0 {
+		// closerThan(attacker, 5.0) is the single-arg Entity.closerThan -> Vec3.closerThan(pos, 5.0): a 3D
+		// squared-distance gate distSq < 5.0*5.0 (strict <). Cite Entity.closerThan(Entity,double) + Vec3.closerThan.
+		if src.isDirect() || distanceToSqrPlayer(attacker, e) < wardenHurtDirectRange*wardenHurtDirectRange {
+			t.wardenSetAttackTarget(e, attackerID) // setAttackTarget(attacker) -> ATTACK_TARGET + 200 sonic lock
+		}
+	}
+}
+
 // wardenTickAnger ports AngerManagement.tick (every ANGERMANAGEMENT_TICK_DELAY=20 warden ticks): DECAY
 // every suspect anger by 1, DROP a suspect at anger <= 1. Cite AngerManagement.tick.
 func (t *TickLoop) wardenTickAnger(e *Entity) {
@@ -190,12 +262,14 @@ func (t *TickLoop) wardenTickAnger(e *Entity) {
 	}
 }
 
-// wardenSelectTarget ports the AngerManagement top-suspect selection -> the warden ATTACK_TARGET: pick the
-// highest-anger LIVE player suspect (the warden is BLIND -> NO line-of-sight test). A dead/gone suspect is
-// dropped. Cite AngerManagement.getTopSuspect + the Warden target = the AngerManagement active entity.
-func (t *TickLoop) wardenSelectTarget(e *Entity) *tickPlayer {
+// wardenGetEntityAngryAt ports Warden.getEntityAngryAt(): iff getAngerLevel().isAngry() (anger >= ANGRY 80)
+// return the AngerManagement active entity (the highest-anger LIVE, canTargetEntity suspect); otherwise
+// Optional.empty(). This is the ROAR GATE -- the warden acquires NO target until it reaches ANGRY. The warden
+// is BLIND so there is no line-of-sight test; a dead/gone suspect is dropped. Cite Warden.getEntityAngryAt +
+// AngerLevel.isAngry + AngerManagement.getActiveEntity.
+func (t *TickLoop) wardenGetEntityAngryAt(e *Entity) *tickPlayer {
 	ws := e.warden
-	if ws == nil || e.ai == nil {
+	if ws == nil {
 		return nil
 	}
 	var best *tickPlayer
@@ -203,7 +277,7 @@ func (t *TickLoop) wardenSelectTarget(e *Entity) *tickPlayer {
 	for id, a := range ws.angerBySuspect {
 		p := t.playerByEntityID(id)
 		if p == nil || p.dead {
-			delete(ws.angerBySuspect, id) // getRemovalReason() != null -> dropped
+			delete(ws.angerBySuspect, id) // getRemovalReason() != null -> dropped from AngerManagement
 			continue
 		}
 		if a > bestAnger {
@@ -211,22 +285,54 @@ func (t *TickLoop) wardenSelectTarget(e *Entity) *tickPlayer {
 			best = p
 		}
 	}
-	if best != nil {
-		// Warden.setAttackTarget(target): when a NEW attack target is set (a transition from a different
-		// or no target), SonicBoom.setCooldown(this, 200) arms SONIC_BOOM_COOLDOWN -- the warden must melee
-		// for TIME_TO_USE_MELEE_UNTIL_SONIC_BOOM=200 ticks before it may boom a freshly acquired target.
-		// sonicCooldown models SONIC_BOOM_COOLDOWN, so set it to 200 on acquisition. Cite Warden
-		// .setAttackTarget (bytecode 31-35 sipush 200; SonicBoom.setCooldown).
-		if ws.lastTargetID != best.entityID {
-			ws.sonicCooldown = wardenSonicOnAcquire // SonicBoom.setCooldown(this, 200)
-			ws.lastTargetID = best.entityID
-		}
-		e.ai.attackTargetID = best.entityID
-		return best
+	// getEntityAngryAt(): `if (!getAngerLevel().isAngry()) return Optional.empty();` -- the active anger must be
+	// >= ANGRY (80). getActiveAnger uses the CURRENT top suspect's anger (there is no ATTACK_TARGET during the
+	// IDLE selection). Cite Warden.getEntityAngryAt (AngerLevel.byAnger(getActiveAnger).isAngry()).
+	if best == nil || wardenAngerLevel(bestAnger) < 2 {
+		return nil
 	}
-	ws.lastTargetID = 0
-	e.ai.attackTargetID = 0
-	return nil
+	return best
+}
+
+// wardenSetAttackTarget ports Warden.setAttackTarget(target): erase ROAR_TARGET, set ATTACK_TARGET, erase
+// CANT_REACH_WALK_TARGET_SINCE, then SonicBoom.setCooldown(this, 200). This is the SINGLE point that arms the
+// 200-tick sonic lock (TIME_TO_USE_MELEE_UNTIL_SONIC_BOOM) on target acquisition -- called from Roar.stop and
+// from Warden.hurtServer's close-hit path. Cite Warden.setAttackTarget (bytecode 0-38, sipush 200).
+func (t *TickLoop) wardenSetAttackTarget(e *Entity, targetID int32) {
+	ws := e.warden
+	if ws == nil || e.ai == nil {
+		return
+	}
+	ws.roarTargetID = 0            // eraseMemory(ROAR_TARGET)
+	e.ai.attackTargetID = targetID // setMemory(ATTACK_TARGET, target)
+	ws.lastTargetID = targetID
+	ws.sonicCooldown = wardenSonicOnAcquire // SonicBoom.setCooldown(this, 200)
+}
+
+// wardenTickRoar ports the Roar behavior: it runs for ROAR_DURATION=84 ticks (ATTACK_TARGET stays absent, so
+// the FIGHT activity cannot run -- ROAR outranks FIGHT). On Roar.start (roarTicks armed to 84) the warden calls
+// increaseAngerAt(roarTarget, ROAR_ANGER_INCREASE=20, false). On the final tick (Roar.stop) it calls
+// setAttackTarget(roarTarget) -> ATTACK_TARGET set, ROAR_TARGET erased. Returns true while roaring (the caller
+// must NOT fight). Cite Roar.start + Roar (duration) + Roar.stop.
+func (t *TickLoop) wardenTickRoar(e *Entity) bool {
+	ws := e.warden
+	if ws == nil || ws.roarTicks <= 0 {
+		return false
+	}
+	ws.roarTicks--
+	if ws.roarTicks <= 0 {
+		// Roar.stop: getMemory(ROAR_TARGET).ifPresent(warden::setAttackTarget); eraseMemory(ROAR_TARGET). A
+		// roar target that logged off / died in the 84 ticks yields no attack target (Optional empty). The
+		// suspect is re-derived from the live-suspect map; if gone, ROAR_TARGET is simply cleared.
+		rt := ws.roarTargetID
+		ws.roarTargetID = 0
+		if rt != 0 {
+			if p := t.playerByEntityID(rt); p != nil && !p.dead {
+				t.wardenSetAttackTarget(e, rt) // setAttackTarget(roarTarget)
+			}
+		}
+	}
+	return true // still roaring this tick (or just finished) -- no FIGHT this tick
 }
 
 // wardenSenseNearbyPlayers is the v1 anger FEED standing in for the deferred VibrationSystem.Ticker +
@@ -290,15 +396,42 @@ func (t *TickLoop) wardenAiStep(e *Entity) {
 	if ws.meleeCooldown > 0 {
 		ws.meleeCooldown--
 	}
-	// (3) target = highest-anger suspect (blind -> anger-only).
-	target := t.wardenSelectTarget(e)
+	// (3) ROAR (activity priority ROAR > FIGHT): while roaring the warden CANNOT fight (ATTACK_TARGET is
+	// absent for the 84-tick Roar). wardenTickRoar counts the roar down and, on the final tick (Roar.stop),
+	// calls setAttackTarget(roarTarget) -- handing the FIGHT activity its target on the tick AFTER the roar.
+	if t.wardenTickRoar(e) {
+		// Still roaring (or just handed off the attack target). A charging boom cannot start during a roar
+		// (ATTACK_COOLING_DOWN); a boom already in flight is finished below on a later tick. No fight this tick.
+		if ws.sonicChargeTicks > 0 {
+			var chargeTarget *tickPlayer
+			if e.ai.attackTargetID != 0 {
+				chargeTarget = t.playerByEntityID(e.ai.attackTargetID)
+			}
+			t.wardenTickSonicCharge(e, chargeTarget)
+		}
+		ws.noAngerTicks = 0 // an active roar means the warden is angry -> no dig-away
+		return
+	}
+	// (4) FIGHT: the warden has an ATTACK_TARGET (set by Roar.stop or Warden.hurtServer). Validate it is a
+	// live suspect (StopAttackingIfTargetInvalid); a gone target clears ATTACK_TARGET and falls through to the
+	// idle roar-gate. Cite WardenAi.initFightActivity (StopAttackingIfTargetInvalid) + isTarget.
+	var target *tickPlayer
+	if e.ai.attackTargetID != 0 {
+		target = t.playerByEntityID(e.ai.attackTargetID)
+		if target == nil || target.dead {
+			e.ai.attackTargetID = 0 // onTargetInvalid -> ATTACK_TARGET erased
+			ws.lastTargetID = 0
+			target = nil
+		}
+	}
 	// A charging boom finishes regardless of reselection (DURATION-locked); tick it first.
 	if ws.sonicChargeTicks > 0 {
 		t.wardenTickSonicCharge(e, target)
 		return // ATTACK_COOLING_DOWN: no melee/re-charge while a boom is in flight
 	}
 	if target != nil {
-		// (4) SONIC BOOM vs MELEE. checkExtraStartConditions: closerThan(15,20) AND sonicCooldown==0 (the
+		ws.noAngerTicks = 0
+		// (4a) SONIC BOOM vs MELEE. checkExtraStartConditions: closerThan(15,20) AND sonicCooldown==0 (the
 		// melee-hit lock is sonicCooldown, so a just-melee'd warden cannot immediately boom -- the
 		// TIME_TO_USE_MELEE_UNTIL_SONIC_BOOM intent).
 		if ws.sonicCooldown == 0 && wardenCloserThan(e, target, wardenSonicDistanceXZ, wardenSonicDistanceY) {
@@ -315,7 +448,18 @@ func (t *TickLoop) wardenAiStep(e *Entity) {
 		}
 		return
 	}
-	// (5) NO active anger: count toward the dig-away despawn; reset when anger returns.
+	// (5) IDLE: no ATTACK_TARGET. SetRoarTarget (IDLE/INVESTIGATE/SNIFF) arms ROAR_TARGET ONLY when
+	// getEntityAngryAt() (anger >= ANGRY 80) yields a suspect -- this is the roar gate: an AGITATED (40-79) or
+	// CALM warden acquires nothing and will not attack. On arming ROAR_TARGET the Roar behavior starts next.
+	// Cite SetRoarTarget (getEntityAngryAt) + WardenAi.getActivities (IDLE.SetRoarTarget).
+	if angry := t.wardenGetEntityAngryAt(e); angry != nil {
+		ws.noAngerTicks = 0
+		t.wardenStartRoar(e, angry.entityID) // SetRoarTarget -> ROAR_TARGET; Roar.start
+		return
+	}
+	// (6) NO active anger (below ANGRY): count toward the dig-away despawn; reset when anger returns to ANGRY.
+	// getActiveAnger()==0 is the vanilla no-anger signal; below-ANGRY (but >0) the warden is idle but not
+	// despawning yet -- vanilla's dig-away is gated on the DIG_COOLDOWN + no anger, so mirror the anger==0 gate.
 	if t.wardenActiveAnger(e) == 0 {
 		ws.noAngerTicks++
 		if ws.noAngerTicks >= wardenNoAngerDespawnTicks {
@@ -324,6 +468,21 @@ func (t *TickLoop) wardenAiStep(e *Entity) {
 	} else {
 		ws.noAngerTicks = 0
 	}
+}
+
+// wardenStartRoar ports SetRoarTarget (arm ROAR_TARGET) + Roar.start: set ROAR_TARGET, arm the ROAR_DURATION=84
+// countdown, and increaseAngerAt(roarTarget, ROAR_ANGER_INCREASE=20, false). The warden looks at the target +
+// enters the ROARING pose (client-cosmetic, deferred). ATTACK_TARGET stays absent until Roar.stop. Cite
+// SetRoarTarget.create + Roar.start.
+func (t *TickLoop) wardenStartRoar(e *Entity, targetID int32) {
+	ws := e.warden
+	if ws == nil || targetID == 0 {
+		return
+	}
+	ws.roarTargetID = targetID        // setMemory(ROAR_TARGET, target)
+	ws.roarTicks = wardenRoarDuration // Roar duration 84
+	// Roar.start: increaseAngerAt(roarTarget, ROAR_ANGER_INCREASE=20, false).
+	t.wardenIncreaseAngerAt(e, targetID, wardenRoarAngerIncrease)
 }
 
 // wardenCloserThan ports Entity.closerThan(entity, dx, dz): horizontal lengthSquared(dX,dZ) < dx*dx AND

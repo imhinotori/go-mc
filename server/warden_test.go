@@ -214,34 +214,138 @@ func TestWardenDarknessPulse(t *testing.T) {
 	}
 }
 
-// TestWardenSonicLockOnTargetAcquire pins the WardEN-03 fix: Warden.setAttackTarget -> SonicBoom
-// .setCooldown(this, 200). When the warden ACQUIRES a target (wardenSelectTarget transitions to a new
-// suspect) sonicCooldown is armed to 200 (TIME_TO_USE_MELEE_UNTIL_SONIC_BOOM) so it must melee before
-// it may boom.
+// TestWardenSonicLockOnTargetAcquire pins Warden.setAttackTarget -> SonicBoom.setCooldown(this, 200). When
+// the warden ACQUIRES an ATTACK_TARGET (via wardenSetAttackTarget, the port of setAttackTarget) sonicCooldown
+// is armed to 200 (TIME_TO_USE_MELEE_UNTIL_SONIC_BOOM) so it must melee before it may boom, and ATTACK_TARGET
+// is set. Cite Warden.setAttackTarget (bytecode 31-35 sipush 200; SonicBoom.setCooldown).
 func TestWardenSonicLockOnTargetAcquire(t *testing.T) {
 	loop, floorY := wardenLoop(t)
 	py := float64(floorY + 1)
 	w := loop.spawnWarden(8.5, py, 8.5, false)
 
-	// A live player suspect with enough anger to be selected as the top suspect.
 	p := combatTestPlayer(loop, 8.5, py, 8.5, 8801)
-	loop.wardenIncreaseAngerAt(w, p.entityID, wardenDefaultAnger)
 
 	if w.warden.sonicCooldown != 0 {
 		t.Fatalf("sonicCooldown before acquisition = %d, want 0", w.warden.sonicCooldown)
 	}
-	got := loop.wardenSelectTarget(w)
-	if got == nil || got.entityID != p.entityID {
-		t.Fatalf("wardenSelectTarget did not pick the anger suspect")
+	loop.wardenSetAttackTarget(w, p.entityID)
+	if w.ai.attackTargetID != p.entityID {
+		t.Fatalf("setAttackTarget did not set ATTACK_TARGET to the suspect")
 	}
 	if w.warden.sonicCooldown != wardenSonicOnAcquire {
 		t.Fatalf("sonicCooldown after acquisition = %d, want %d (SonicBoom.setCooldown(this, 200))", w.warden.sonicCooldown, wardenSonicOnAcquire)
 	}
-	// Re-selecting the SAME target does NOT re-arm the 200 lock (only a NEW target acquisition does).
-	w.warden.sonicCooldown = 5
-	loop.wardenSelectTarget(w)
-	if w.warden.sonicCooldown != 5 {
-		t.Fatalf("sonicCooldown re-armed on same-target reselect = %d, want 5 (unchanged)", w.warden.sonicCooldown)
+}
+
+// TestWardenRoarGate pins the roar gate: a warden below ANGRY (anger < 80) acquires NO target and does NOT
+// attack; on reaching ANGRY it does not target IMMEDIATELY -- it runs ROAR (84 ticks) via SetRoarTarget/Roar,
+// and only AFTER the roar (Roar.stop -> setAttackTarget) does it hold an ATTACK_TARGET. Cite Warden
+// .getEntityAngryAt (isAngry gate) + SetRoarTarget + Roar (ROAR_DURATION 84) + Roar.stop (setAttackTarget).
+func TestWardenRoarGate(t *testing.T) {
+	loop, floorY := wardenLoop(t)
+	py := float64(floorY + 1)
+	// Co-locate so melee reach is never the gate -- the ONLY gate under test is the anger/roar state machine.
+	w := loop.spawnWarden(8.5, py, 8.5, false)
+	p := combatTestPlayer(loop, 8.5, py, 8.5, 8901)
+	p.health = 500.0
+	p.gameMode = gameModeSurvival
+
+	// AGITATED (40-79) is BELOW ANGRY: two +35 feeds -> 70 anger. getEntityAngryAt returns nil; no roar, no
+	// attack target, no damage. Drive aiStep off the anger-feed cadence (gametime not %20) so the proximity
+	// feed does not add anger -- isolate the gate.
+	loop.wardenIncreaseAngerAt(w, p.entityID, wardenDefaultAnger)
+	loop.wardenIncreaseAngerAt(w, p.entityID, wardenDefaultAnger)
+	if lvl := wardenAngerLevel(w.warden.angerBySuspect[p.entityID]); lvl != 1 {
+		t.Fatalf("anger 70 level = %d, want 1 (AGITATED, below ANGRY)", lvl)
+	}
+	loop.gametime = 1 // NOT %20 -> the proximity feed + decay are skipped this step
+	start := p.health
+	loop.withRegion(loop.regionForEntity(w), func() { loop.wardenAiStep(w) })
+	if w.ai.attackTargetID != 0 {
+		t.Fatalf("AGITATED warden acquired an ATTACK_TARGET = %d, want 0 (roar gate: not ANGRY)", w.ai.attackTargetID)
+	}
+	if w.warden.roarTicks != 0 {
+		t.Fatalf("AGITATED warden started roaring (roarTicks=%d), want 0 (not ANGRY)", w.warden.roarTicks)
+	}
+	if p.health != start {
+		t.Fatalf("AGITATED warden dealt %v damage, want 0 (must not attack below ANGRY)", start-p.health)
+	}
+
+	// Push to ANGRY (>= 80): one more +35 -> 105. Now aiStep should START THE ROAR (not attack yet).
+	loop.wardenIncreaseAngerAt(w, p.entityID, wardenDefaultAnger)
+	loop.gametime = 1
+	loop.withRegion(loop.regionForEntity(w), func() { loop.wardenAiStep(w) })
+	if w.warden.roarTicks != wardenRoarDuration {
+		t.Fatalf("ANGRY warden roarTicks = %d, want %d (SetRoarTarget arms ROAR_DURATION 84; Roar.tick begins next tick)", w.warden.roarTicks, wardenRoarDuration)
+	}
+	if w.ai.attackTargetID != 0 {
+		t.Fatalf("warden acquired ATTACK_TARGET DURING roar = %d, want 0 (ATTACK_TARGET absent until Roar.stop)", w.ai.attackTargetID)
+	}
+	// Run out the remaining roar. It must NOT deal damage during the roar; on the last tick it sets ATTACK_TARGET.
+	roarStart := p.health
+	for i := 0; i < wardenRoarDuration; i++ {
+		loop.gametime = 1 // keep off the anger cadence so nothing re-arms unexpectedly
+		loop.withRegion(loop.regionForEntity(w), func() { loop.wardenAiStep(w) })
+	}
+	if p.health != roarStart {
+		t.Fatalf("warden dealt %v damage during the roar, want 0", roarStart-p.health)
+	}
+	if w.ai.attackTargetID != p.entityID {
+		t.Fatalf("after ROAR_DURATION the warden ATTACK_TARGET = %d, want the suspect %d (Roar.stop -> setAttackTarget)", w.ai.attackTargetID, p.entityID)
+	}
+	if w.warden.sonicCooldown != wardenSonicOnAcquire {
+		t.Fatalf("post-roar sonicCooldown = %d, want %d (setAttackTarget arms the 200 lock)", w.warden.sonicCooldown, wardenSonicOnAcquire)
+	}
+}
+
+// TestWardenHurtAggro pins the get-hurt anger boost: Warden.hurtServer -> increaseAngerAt(attacker, 100, false)
+// [ANGRY.minimumAnger 80 + 20] AND, for a direct hit with no current ATTACK_TARGET, setAttackTarget(attacker)
+// immediately (bypassing the roar). Hitting a warden must aggro it. Cite Warden.hurtServer + increaseAngerAt.
+func TestWardenHurtAggro(t *testing.T) {
+	loop, floorY := wardenLoop(t)
+	py := float64(floorY + 1)
+	w := loop.spawnWarden(8.5, py, 8.5, false) // no emerge lock -> hurtServer tail runs
+	p := combatTestPlayer(loop, 8.5, py, 8.5, 9001)
+	p.gameMode = gameModeSurvival
+
+	// A player melee hit on the warden (a direct source). applyDamageEntity runs the shared pipeline then the
+	// warden hurt tail.
+	src := damageSourcePlayerAttack(p.entityID)
+	loop.withRegion(loop.regionForEntity(w), func() { loop.applyDamageEntity(w, src, 5.0) })
+
+	if got := w.warden.angerBySuspect[p.entityID]; got != wardenHurtAngerBoost {
+		t.Fatalf("anger after a hit = %d, want %d (increaseAngerAt +100)", got, wardenHurtAngerBoost)
+	}
+	if lvl := wardenAngerLevel(w.warden.angerBySuspect[p.entityID]); lvl != 2 {
+		t.Fatalf("anger level after a hit = %d, want 2 (ANGRY)", lvl)
+	}
+	// A DIRECT hit with no prior target -> setAttackTarget(attacker) immediately (no roar wait).
+	if w.ai.attackTargetID != p.entityID {
+		t.Fatalf("warden did not target its attacker after a direct hit: ATTACK_TARGET = %d, want %d", w.ai.attackTargetID, p.entityID)
+	}
+	if w.warden.sonicCooldown != wardenSonicOnAcquire {
+		t.Fatalf("hurt-acquire sonicCooldown = %d, want %d (setAttackTarget 200 lock)", w.warden.sonicCooldown, wardenSonicOnAcquire)
+	}
+}
+
+// TestWardenHurtWhileEmergingIgnored pins the isDiggingOrEmerging guard: a warden hit DURING the emerge lock
+// does NOT gain anger or a target (Warden.hurtServer only runs its tail when not digging/emerging). Cite
+// Warden.hurtServer (bytecode 16-20 isDiggingOrEmerging ifne).
+func TestWardenHurtWhileEmergingIgnored(t *testing.T) {
+	loop, floorY := wardenLoop(t)
+	py := float64(floorY + 1)
+	w := loop.spawnWarden(8.5, py, 8.5, true) // EMERGING lock armed
+	p := combatTestPlayer(loop, 8.5, py, 8.5, 9101)
+	p.gameMode = gameModeSurvival
+
+	src := damageSourcePlayerAttack(p.entityID)
+	loop.withRegion(loop.regionForEntity(w), func() { loop.applyDamageEntity(w, src, 5.0) })
+
+	if got := w.warden.angerBySuspect[p.entityID]; got != 0 {
+		t.Fatalf("emerging warden gained anger %d from a hit, want 0 (isDiggingOrEmerging guard)", got)
+	}
+	if w.ai.attackTargetID != 0 {
+		t.Fatalf("emerging warden acquired a target %d, want 0", w.ai.attackTargetID)
 	}
 }
 

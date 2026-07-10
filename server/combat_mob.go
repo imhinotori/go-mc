@@ -255,6 +255,17 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 		t.endermanHurtTeleport(e, src)
 	}
 
+	// WARDEN (Task): Warden.hurtServer runs AFTER super.hurtServer (this shared pipeline) -- if the warden is
+	// not noAi and not digging/emerging, increaseAngerAt(attacker, 100, false) [ANGRY.minimumAnger 80 + 20] and,
+	// with no current ATTACK_TARGET, setAttackTarget(attacker) for a direct/close hit. A per-type post-hurt hook
+	// (gated on e.warden != nil), the sibling of the enderman/silverfish hooks. It runs regardless of whether
+	// the hit landed (the vanilla tail is gated only on !isNoAi && !isDiggingOrEmerging, not on the hurt flag).
+	// ADDITIVE + warden-gated (zero cost / zero RNG for every non-warden -- the pig oracle stream is untouched).
+	// Cite Warden.hurtServer + increaseAngerAt(Entity,int,boolean) + setAttackTarget.
+	if e.warden != nil {
+		t.wardenHurtServer(e, src)
+	}
+
 	// MOB-HOST-05 (infest goals): Silverfish.hurtServer arms the SilverfishWakeUpFriendsGoal when hit by
 	// an entity source (or an ALWAYS_TRIGGERS_SILVERFISH source) — a per-type post-hurt hook (gated on
 	// typ == entity.Silverfish.ID) run AFTER the shared hit lands, the sibling of the enderman hook.
