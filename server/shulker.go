@@ -157,6 +157,7 @@ func (t *TickLoop) shulkerAiStep(e *Entity) {
 		// canUse true (live target, not peaceful): open the shell (start(): setRawPeekAmount(100)) and run tick.
 		if shulkerIsClosed(e) {
 			t.shulkerSetRawPeek(e, shulkerPeekOpen)
+			s.attackTime = shulkerAttackBaseTicks // start(): attackTime = 20 (the first-shot warm-up delay)
 		}
 		t.shulkerAttackGoal(e, target) // tick(): fire only when distanceToSqr < 400.0 + attackTime <= 0
 	} else if !shulkerIsClosed(e) {
@@ -221,7 +222,11 @@ func (t *TickLoop) shulkerAttackGoal(e *Entity, target *tickPlayer) {
 	// setLookAt(180,180) is a cite-deferred cosmetic. The bullet fires only when distanceToSqr(target) < 400.0
 	// AND attackTime <= 0, then re-arms attackTime = 20 + nextInt(10)*20/2. Cite Shulker$ShulkerAttackGoal.tick.
 	s.attackTime--
-	if !t.shulkerFireInRange(e, target) { // distanceToSqr(target) < 400.0 (Euclidean < 20)
+	if !t.shulkerFireInRange(e, target) { // distanceToSqr(target) >= 400.0 (Euclidean >= 20)
+		// tick else branch (bytecode 189-194): setTarget(null) -- the shulker DROPS a target that has fled
+		// beyond 20 blocks (the shell then re-closes next tick via the no-target branch). Cite
+		// Shulker$ShulkerAttackGoal.tick offsets 64-194.
+		e.ai.attackTargetID = 0
 		return
 	}
 	if s.attackTime > 0 { // ifgt: only fire when the cooldown has elapsed
@@ -229,6 +234,12 @@ func (t *TickLoop) shulkerAttackGoal(e *Entity, target *tickPlayer) {
 	}
 	s.attackTime = int32(shulkerAttackBaseTicks + int(mobRandom(e).nextInt(shulkerAttackJitter))*shulkerAttackBaseTicks/2)
 	t.spawnShulkerBullet(e, target)
+	// playSound(SHULKER_SHOOT, 2.0F, (nextFloat() - nextFloat()) * 0.2F + 1.0F): the sound is a cited
+	// client-cue deferral, but its TWO nextFloat() pitch draws are on the shulker's own RNG stream and
+	// are observable via draw order -- consume them so the stream stays in lockstep. Cite
+	// Shulker$ShulkerAttackGoal.tick offsets 157-172 (nextFloat - nextFloat).
+	mobRandom(e).nextFloat()
+	mobRandom(e).nextFloat()
 }
 
 // spawnShulkerBullet ports new ShulkerBullet(level, this, target, attachFace.getAxis()) + addFreshEntity.

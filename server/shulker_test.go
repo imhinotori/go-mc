@@ -148,3 +148,20 @@ func TestShulkerNoFireBeyond20(t *testing.T) {
 		}
 	}
 }
+
+// TestShulkerDropsTargetBeyondFiringRange: ShulkerAttackGoal.tick (bytecode 64-194) fires a bullet when
+// distanceToSqr(target) < 400.0, but ELSE (>= 400, i.e. >= 20 blocks) calls setTarget(null) -- the shulker
+// DROPS a target that has fled beyond 20 blocks. The port previously just returned, retaining the target.
+func TestShulkerDropsTargetBeyondFiringRange(t *testing.T) {
+	loop, floorY := shulkerLoop(t)
+	s := loop.spawnShulker(8.5, float64(floorY+1), 8.5)
+
+	// Player 25 blocks away (dist^2 = 625 >= 400): out of firing range.
+	p := combatTestPlayer(loop, 8.5, float64(floorY+1), 33.5, 7050)
+	s.ai.attackTargetID = p.entityID
+
+	loop.shulkerAttackGoal(s, p)
+	if s.ai.attackTargetID != 0 {
+		t.Fatalf("shulker retained target %d beyond 20 blocks -- tick else branch must setTarget(null)", s.ai.attackTargetID)
+	}
+}
