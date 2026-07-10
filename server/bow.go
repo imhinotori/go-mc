@@ -159,6 +159,10 @@ func (t *TickLoop) shootPlayerArrow(p *tickPlayer, velocity float64, crit bool, 
 	// + firedFromWeapon = weapon.copy()) so AbstractArrow.getWeaponItem() reads the bow's Power/Punch/
 	// Fire Aspect at hit time. A dispenser/mob arrow with no weapon leaves this empty.
 	a.arrowWeapon = weapon
+	// ProjectileWeaponItem.shoot -> EnchantmentHelper.onProjectileSpawned(weapon, projectile): Flame's
+	// PROJECTILE_SPAWNED Ignite lights the arrow (igniteForSeconds 100), so a burning arrow ignites what
+	// it hits (AbstractArrow.onHitEntity isOnFire -> igniteForSeconds(5)). A plain bow does nothing.
+	t.enchOnProjectileSpawned(weapon, a)
 	return a
 }
 

@@ -292,3 +292,22 @@ func TestArrowSpawnBaseDamageIsPlayerDefault(t *testing.T) {
 	}
 	_ = bowLookVectorMagnitude(3.0)
 }
+
+// TestEnchantFlameIgnitesArrow: firing from a bow with Flame runs EnchantmentHelper.onProjectileSpawned,
+// whose PROJECTILE_SPAWNED Ignite lights the arrow -> igniteForSeconds(100) = floor(100*20) = 2000
+// remainingFireTicks. A plain bow leaves the arrow unlit. Cite flame.json + ProjectileWeaponItem.shoot.
+func TestEnchantFlameIgnitesArrow(t *testing.T) {
+	loop := bowLoop()
+	p := bowPlayer(loop, gameModeCreative)
+
+	flameBow := enchantedStack(int(item.Bow.ID), 1, component.EnchantmentEntry{ID: pk.VarInt(enchantWireID("minecraft:flame")), Level: 1})
+	a := loop.shootPlayerArrow(p, 3.0, false, flameBow)
+	if a.remainingFireTicks != 2000 {
+		t.Fatalf("flame arrow remainingFireTicks = %d, want 2000 (igniteForSeconds 100)", a.remainingFireTicks)
+	}
+
+	plain := loop.shootPlayerArrow(p, 3.0, false, component.SlotData{})
+	if plain.remainingFireTicks != 0 {
+		t.Fatalf("plain arrow remainingFireTicks = %d, want 0 (no Flame)", plain.remainingFireTicks)
+	}
+}

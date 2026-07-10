@@ -267,6 +267,10 @@ func (t *TickLoop) arrowOnHitPlayer(e *Entity, victim *tickPlayer) {
 			dmg = math.MaxInt32
 		}
 	}
+	// AbstractArrow.onHitEntity offset 268-286: a burning arrow (isOnFire, set by Flame's projectile_
+	// spawned Ignite) ignites a non-enderman victim for 5s. A PLAYER victim's fire is the SAME cited v1
+	// deferral eeIgnite/lightning.go record (players carry no remainingFireTicks yet); the arrow itself
+	// correctly burns via enchOnProjectileSpawned. It lands when the player fire model does.
 	t.applyDamage(victim, src, float32(dmg))
 	// AbstractArrow.onHitEntity's hurt-succeeded branch: doKnockback (Punch), the tipped-arrow effects,
 	// and doPostAttackEffects (Fire Aspect on the bow). The v1 arrow path applies these after applyDamage

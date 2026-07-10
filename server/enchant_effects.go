@@ -1064,6 +1064,14 @@ type enchEffectSet struct {
 	repairWithXP       []enchCondValue
 	postAttack         []enchPostAttack
 	attributes         []enchAttrEffect // minecraft:attributes location-based modifiers (equip/unequip)
+	projectileSpawned  []enchCondEntity // minecraft:projectile_spawned (Flame -> ignite the arrow at shoot)
+}
+
+// enchCondEntity is ConditionalEffect<EnchantmentEntityEffect>: an entity effect + optional requirements.
+// The PROJECTILE_SPAWNED list (Flame) uses it; the effect targets the spawned projectile (the arrow).
+type enchCondEntity struct {
+	effect enchEntityEffect
+	req    enchCondition // nil = no requirements (Flame carries none)
 }
 
 var (
@@ -1090,6 +1098,7 @@ func enchantEffectTable() []*enchEffectSet {
 			set.repairWithXP = parseCondValueList(def.Effects["minecraft:repair_with_xp"])
 			set.postAttack = parsePostAttackList(def.Effects["minecraft:post_attack"])
 			set.attributes = parseAttributeEffects(def.Effects["minecraft:attributes"])
+			set.projectileSpawned = parseCondEntityList(def.Effects["minecraft:projectile_spawned"])
 			table[i] = set
 		}
 		enchEffectTableVal = table
@@ -1151,6 +1160,62 @@ func parsePostAttackList(raw json.RawMessage) []enchPostAttack {
 		out = append(out, enchPostAttack{enchanted: e.Enchanted, affected: e.Affected, effect: eff, req: req})
 	}
 	return out
+}
+
+// parseCondEntityList decodes a ConditionalEffect<EnchantmentEntityEffect> list (the PROJECTILE_SPAWNED
+// form: each entry is {effect, requirements?}). An unsupported entity-effect kind is skipped (cited).
+func parseCondEntityList(raw json.RawMessage) []enchCondEntity {
+	if len(raw) == 0 {
+		return nil
+	}
+	var entries []struct {
+		Effect       json.RawMessage `json:"effect"`
+		Requirements json.RawMessage `json:"requirements"`
+	}
+	if json.Unmarshal(raw, &entries) != nil {
+		return nil
+	}
+	var out []enchCondEntity
+	for _, e := range entries {
+		eff := parseEntityEffect(e.Effect)
+		if eff == nil {
+			continue
+		}
+		var req enchCondition
+		if len(e.Requirements) > 0 {
+			req = parseCondition(e.Requirements)
+		}
+		out = append(out, enchCondEntity{effect: eff, req: req})
+	}
+	return out
+}
+
+// enchOnProjectileSpawned is EnchantmentHelper.onProjectileSpawned(ServerLevel, ItemStack weapon,
+// Projectile, Consumer<Item>): for each enchantment on the firing weapon, run its PROJECTILE_SPAWNED
+// effects against the just-spawned projectile (Flame's Ignite -> projectile.igniteForSeconds(100)). The
+// projectile is the affected entity; the loot context carries no damage source (entityContext), so any
+// damage_source_properties condition is absent — Flame carries no requirements. Cite EnchantmentHelper
+// .onProjectileSpawned -> Enchantment.onProjectileSpawned -> applyEffects(getEffects(PROJECTILE_SPAWNED)).
+func (t *TickLoop) enchOnProjectileSpawned(weapon component.SlotData, projectile *Entity) {
+	if stackEmpty(weapon) || projectile == nil {
+		return
+	}
+	inUse := &enchItemInUse{stack: weapon, slot: eqSlotMainHand}
+	affected := enchEntityRef{mob: projectile}
+	ctx := &enchDamageCtx{thisType: affected.typeName(), t: t}
+	forEachItemEnchant(weapon, func(wireID, level int) {
+		set := enchEffectsFor(wireID)
+		if set == nil || len(set.projectileSpawned) == 0 {
+			return
+		}
+		ctx.level = level
+		for _, e := range set.projectileSpawned {
+			if e.req != nil && !e.req.matches(ctx) {
+				continue
+			}
+			e.effect.apply(t, level, inUse, affected)
+		}
+	})
 }
 
 // enchEffectsFor resolves an enchantment wire id to its parsed effect set (nil for an unknown id).
