@@ -48,6 +48,10 @@ const (
 	ruleMaxMinecartSpeed  = "max_minecart_speed"               // default 8
 	ruleSleepPercent      = "players_sleeping_percentage"      // default 100
 	ruleRespawnRadius     = "respawn_radius"                   // default 10
+	// ruleMaxSnowAccumulation is MAX_SNOW_ACCUMULATION_HEIGHT: the cap on snow LAYERS the precipitation
+	// pass will accumulate (ServerLevel.tickPrecipitation reads min(this,8)). CITE: GameRules.
+	// MAX_SNOW_ACCUMULATION_HEIGHT (registerInteger("max_snow_accumulation_height", UPDATES, 1) -> default 1).
+	ruleMaxSnowAccumulation = "max_snow_accumulation_height" // default 1
 )
 
 // gameRules is the per-level GameRules store: two typed maps keyed on the registry id. A rule not present
@@ -84,12 +88,13 @@ func newGameRules() *gameRules {
 			ruleImmediateRespawn:  false,
 		},
 		ints: map[string]int{
-			ruleRandomTickSpeed:   3,
-			ruleMaxEntityCramming: 24,
-			ruleFireSpreadRadius:  128,
-			ruleMaxMinecartSpeed:  8,
-			ruleSleepPercent:      100,
-			ruleRespawnRadius:     10,
+			ruleRandomTickSpeed:     3,
+			ruleMaxEntityCramming:   24,
+			ruleFireSpreadRadius:    128,
+			ruleMaxMinecartSpeed:    8,
+			ruleSleepPercent:        100,
+			ruleRespawnRadius:       10,
+			ruleMaxSnowAccumulation: 1,
 		},
 	}
 }

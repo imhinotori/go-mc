@@ -253,6 +253,11 @@ func (t *TickLoop) dispatchRandomTick(r *region, state block.StateID, pos pk.Pos
 		// (NEXT_BY_BLOCK). DRAWS levelRandom (one nextFloat always; a second only past the first gate and a
 		// non-halting neighbour scan). IsRandomlyTicking gates on CopperCanOxidize (non-OXIDIZED). See copper.go.
 		t.copperRandomTick(r, state, pos)
+	case block.IsNetherWart(state):
+		// NetherWartBlock.randomTick: age-gated 1-in-10 AGE advance (no light/moisture gate). DRAWS
+		// levelRandom (one nextInt(10), only for age < MAX_AGE 3). IsRandomlyTicking gates on AGE < 3.
+		// See growth_randomtick.go.
+		t.netherWartRandomTick(r, state, pos)
 	default:
 		// A state whose IsRandomlyTicking is true but whose randomTick handler is not yet ported: no-op
 		// (the family's IsRandomlyTicking should not be true until its handler is wired — kept as a

@@ -128,6 +128,11 @@ func IsRandomlyTicking(s StateID) bool {
 		// tick draws maybeTransferFluid's nextFloat + the growth-gate nextFloat (0.011377778f). CITE:
 		// PointedDripstoneBlock / SpeleothemBlock properties (.randomTicks()); SpeleothemBlock.randomTick.
 		return true
+	case NetherWart:
+		// NetherWartBlock overrides isRandomlyTicking() to return AGE < MAX_AGE (3) -- a wart is
+		// random-ticked ONLY while below max age; a full (AGE 3) wart draws no roll. CITE:
+		// NetherWartBlock.isRandomlyTicking (state.getValue(AGE) < 3).
+		return NetherWartAge(s) < NetherWartMaxAge
 	default:
 		// WeatheringCopper family (WeatheringCopperFullBlock/StairBlock/SlabBlock/... and the door/
 		// trapdoor/bulb/chest/bars/grate/chain/lantern/golem-statue/lightning-rod copper variants) override
