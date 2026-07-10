@@ -240,8 +240,11 @@ func TestProfessionCoverage(t *testing.T) {
 	if !villagerOffersFor("nitwit", 1).isEmpty() {
 		t.Fatal("unknown profession must be empty")
 	}
-	if !villagerOffersFor("weaponsmith", 2).isEmpty() {
-		t.Fatal("weaponsmith/2 must be empty (no base data)")
+	// weaponsmith/2's level_2 tag is #minecraft:common_smith/level_2 (iron_ingot->emerald + emerald->bell),
+	// so it is NON-empty (the earlier "no base data" assumption was stale — the shared common_smith trades
+	// apply to armorer/weaponsmith/toolsmith level 2). VERIFIED tags/villager_trade/weaponsmith/level_2.json.
+	if villagerOffersFor("weaponsmith", 2).isEmpty() {
+		t.Fatal("weaponsmith/2 must have the shared common_smith/level_2 offers")
 	}
 }
 
