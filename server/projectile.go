@@ -361,6 +361,31 @@ func (t *TickLoop) spawnSplashPotion(ownerID int32, x, y, z, vx, vy, vz float64,
 	return p
 }
 
+// spawnLingeringPotion creates a ThrownLingeringPotion carrying the given effects, launched with the given
+// velocity + owner. It rides the SAME arc + hit tick as a splash potion (isPotion), but on hit it spawns an
+// AreaEffectCloud instead of splashing (potionLingering gates the splashPotion branch). Cite the
+// ThrownLingeringPotion ctor + Projectile.spawnProjectileUsingShoot(ThrownLingeringPotion::new, ...).
+func (t *TickLoop) spawnLingeringPotion(ownerID int32, x, y, z, vx, vy, vz float64, effects []splashEffect) *Entity {
+	p := NewEntity(t.idAlloc.AllocID(), entity.LingeringPotion, x, y, z)
+	p.isPotion = true
+	p.potionLingering = true
+	p.arrowShooterID = ownerID
+	p.potionEffects = effects
+	p.vx, p.vy, p.vz = vx, vy, vz
+
+	horiz := math.Sqrt(vx*vx + vz*vz)
+	p.yaw = float32(mthAtan2(vx, vz) * float64(mthRadToDeg))
+	p.pitch = float32(mthAtan2(vy, horiz) * float64(mthRadToDeg))
+	p.headYaw = p.yaw
+
+	owner := t.regionForEntity(p)
+	if owner == nil {
+		owner = t.cur()
+	}
+	owner.entities.add(p)
+	return p
+}
+
 // tickPotions drives every thrown potion, the sibling of tickArrows. A potion arcs (gravity 0.05, drag
 // 0.99) and SPLASHES on the first block or entity hit — applying its effects to nearby players — then is
 // discarded. Cite AbstractThrownPotion.tick/onHit + ThrownSplashPotion.onHitAsPotion.
@@ -434,6 +459,14 @@ func (t *TickLoop) tickPotion(e *Entity) {
 // Instant effects apply their scaled amount; duration effects add with duration = (int)(scale*d+0.5),
 // dropped if <=20. Then discard the potion. Cite ThrownSplashPotion.onHitAsPotion.
 func (t *TickLoop) splashPotion(e *Entity) {
+	// LINGERING branch (ThrownLingeringPotion.onHitAsPotion): a lingering potion does NOT splash -- instead
+	// it spawns an AreaEffectCloud at the impact point carrying its effects (radius 3.0, radiusOnUse -0.5,
+	// duration 600, waitTime 10, radiusPerTick = -radius/duration == -0.005), then discards the projectile.
+	// Cite ThrownLingeringPotion.onHitAsPotion.
+	if e.potionLingering {
+		t.spawnLingeringCloud(e)
+		return
+	}
 	for _, p := range t.players {
 		if p == nil || p.dead {
 			continue

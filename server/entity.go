@@ -308,6 +308,47 @@ type Entity struct {
 	// getAllEffects). Plain values (no pointers); scaled by proximity at splash time.
 	potionEffects []splashEffect
 
+	// potionLingering marks a thrown potion as a ThrownLingeringPotion (vs a ThrownSplashPotion). On hit a
+	// lingering potion does NOT splash — it spawns an AreaEffectCloud carrying its effects (radius 3.0,
+	// duration 600, waitTime 10, radiusOnUse -0.5, radiusPerTick -radius/duration). Zero (false) for a
+	// splash potion. Set at spawn by spawnLingeringPotion. Cite ThrownLingeringPotion.onHitAsPotion.
+	potionLingering bool
+
+	// --- AREA EFFECT CLOUD (net.minecraft.world.entity.AreaEffectCloud) ---------------------------------
+	//
+	// A stationary NON-mob Entity (isAreaEffectCloud) that shrinks its radius over time and periodically
+	// applies its potion effects to every LivingEntity inside its radius (tickCount%5==0), tracking a
+	// per-victim reapplication-delay cooldown. Spawned by a lingering potion / DragonFireball. Tick-owned
+	// plain values (the AEC tick gates on isAreaEffectCloud). Cite AreaEffectCloud.serverTick.
+	isAreaEffectCloud bool
+	aecOwnerID        int32          // getOwner() as a THIN id (never a live pointer — the Folia rule)
+	aecEffects        []splashEffect // PotionContents effects (potionContents.forEachEffect scaled)
+	aecRadius         float32        // DATA_RADIUS (Mth.clamp(x, 0, 32) on set)
+	aecDuration       int            // duration (-1 == INFINITE); discard at tickCount-waitTime >= duration
+	aecWaitTime       int            // waitTime (default 20; lingering sets 10)
+	aecReapplyDelay   int            // reapplicationDelay (default 20)
+	aecDurationOnUse  int            // durationOnUse (0 default; lingering leaves 0)
+	aecRadiusOnUse    float32        // radiusOnUse (lingering sets -0.5)
+	aecRadiusPerTick  float32        // radiusPerTick (lingering: -radius/duration == -0.005)
+	aecWaiting        bool           // DATA_WAITING (tickCount < waitTime)
+	aecTickCount      int            // the entity's tickCount (AEC gates on it — separate from throwLife)
+	aecVictims        map[int32]int  // victim entity id -> tickCount at which the reapplication delay expires
+
+	// --- FIREWORK ROCKET (net.minecraft.world.entity.projectile.FireworkRocketEntity) -------------------
+	//
+	// A NON-mob projectile (isFirework). Either free-flying (self-accelerating upward) or ATTACHED to a
+	// fall-flying player (the elytra boost — accelerate the rider along its look direction). At life>=lifetime
+	// it detonates: broadcastEntityEvent(17) + dealExplosionDamage (5 + 2*starCount, falloff by distance).
+	// Tick-owned plain values (the firework tick gates on isFirework). Cite FireworkRocketEntity.tick.
+	isFirework        bool
+	fireworkOwnerID   int32         // getOwner() as a THIN id
+	fireworkAttachID  int32         // attachedToEntity id (a fall-flying player) — 0 == free-flying
+	fireworkLife      int           // life (ticks since spawn)
+	fireworkLifetime  int           // 10*(1+flightDuration) + nextInt(6) + nextInt(7)
+	fireworkStarCount int           // number of firework_explosion stars (the explosion-damage bonus)
+	fireworkShotAngle bool          // isShotAtAngle (crossbow multishot) — free flight has no upward self-accel
+	fireworkRNG       *entityRandom // FireworkRocketEntity.random — the dedicated per-firework stream (lifetime + init velocity draws)
+
 	// --- THROWABLE ITEM PROJECTILE (net.minecraft.world.entity.projectile.throwableitemprojectile.*) ----
 	//
 	// A snowball / egg / ender_pearl: a NON-mob ThrowableProjectile that arcs (getDefaultGravity 0.03,
@@ -320,8 +361,9 @@ type Entity struct {
 	throwOwnerID  int32 // getOwner() as a THIN id (never a live pointer — the Folia rule)
 	throwOldX     float64
 	throwOldY     float64
-	throwOldZ     float64 // oldPosition() — the ender_pearl teleports the owner to the PRE-move position
-	throwLife     int32   // ticks alive; a throwable that never lands discards at a hard cap
+	throwOldZ     float64       // oldPosition() — the ender_pearl teleports the owner to the PRE-move position
+	throwLife     int32         // ticks alive; a throwable that never lands discards at a hard cap
+	throwRNG      *entityRandom // ThrowableProjectile.random — the per-throwable stream (xp bottle orb split draws)
 
 	// --- HURTING PROJECTILE (net.minecraft.world.entity.projectile.hurtingprojectile.*) ----------------
 	//

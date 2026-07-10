@@ -455,6 +455,14 @@ func (t *TickLoop) tickEntities() {
 	// owner). Sibling of tickArrows/tickPotions; ADDITIVE + throwable-gated (zero cost when none is in flight).
 	t.tickThrowables()
 
+	// AREA EFFECT CLOUD: the AreaEffectCloud.serverTick lifecycle -- radius shrink (radiusPerTick /
+	// radiusOnUse), the wait phase, the lifetime cap, and the every-5-tick effect application to every
+	// LivingEntity in the radius (the lingering-potion residue). Sibling of tickPotions; ADDITIVE +
+	// AEC-gated (zero cost when no cloud exists, so the pig oracle stream is unperturbed). Body in
+	// area_effect_cloud.go. CITE AreaEffectCloud.serverTick.
+	t.tickAreaEffectClouds()
+
+
 	// HURTING PROJECTILES: the AbstractHurtingProjectile.tick port for small/large fireball + wither skull —
 	// STRAIGHT accelerated flight (no gravity; deltaMovement re-accelerates along its heading and scales by
 	// inertia 0.95/0.8) + resolve on the first block/entity hit (fire damage / explosion / wither). Sibling of
