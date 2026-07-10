@@ -129,11 +129,13 @@ func dropEquipMob(e *Entity, items map[int]component.SlotData) {
 }
 
 // TestDropEquipmentPerSlotRoll: a mob that DIES with non-empty MAINHAND + HEAD carries an
-// equipment[MAINHAND] bow + equipment[HEAD] leather helmet. dropMobEquipment reads the levelRandom
-// and rolls `NextFloat() < slotDropChance(slot)` (= 0.085f default) per slot. A levelRandom seeded
-// to a value such that BOTH rolls pass spawns two ItemEntities (a bow + a helmet), each with the
-// vanilla per-slot nextInt(maxDurability/5)+1 damage roll applied to the damage component, and
-// clears the slots. The mob's tracking player sees the death animation + drop spawns.
+// equipment[MAINHAND] bow + equipment[HEAD] leather helmet. dropMobEquipment reads the region
+// levelRandom and rolls `NextFloat() < slotDropChance(slot)` per slot. slotDropChance returns the
+// per-slot equipmentDropChances override when it is > 0, else the 0.085f default. Every region is
+// constructed with a live (nondeterministically-seeded) levelRandom (see newRegion), so the roll is
+// ALWAYS taken. The outcome is made seed-independent here by forcing the per-slot chance to 1.0
+// (NextFloat() is in [0,1) so `< 1.0` is unconditionally true). Both rolls PASS -> two Item entities
+// spawn (a bow + a helmet), each with the vanilla per-slot damage roll applied, and both slots clear.
 func TestDropEquipmentPerSlotRoll(t *testing.T) {
 	loop, _ := newN2Loop(t)
 	mob, owner := lethalPigInRegion0(loop)
@@ -142,30 +144,55 @@ func TestDropEquipmentPerSlotRoll(t *testing.T) {
 	bow := component.SlotData{ItemID: pk.VarInt(item.Bow.ID), Count: 1}
 	helmet := component.SlotData{ItemID: pk.VarInt(item.LeatherHelmet.ID), Count: 1}
 	dropEquipMob(mob, map[int]component.SlotData{eqSlotMainHand: bow, eqSlotHead: helmet})
+	// Force BOTH per-slot rolls to PASS deterministically: chance 1.0 overrides the 0.085 default
+	// (slotDropChance returns the override when > 0), and NextFloat() < 1.0 is always true. This
+	// makes the drop outcome seed-independent -- the region nondeterministic levelRandom no longer
+	// decides pass/fail, only the damage roll draws from it.
+	mob.equipmentDropChances[eqSlotMainHand] = 1.0
+	mob.equipmentDropChances[eqSlotHead] = 1.0
 
 	// Build a tracker for the player so the spawned items + death are observed.
 	viewer := &tickPlayer{client: captureClient(64), entityID: 1000, tracked: map[int32]bool{mob.id: true}}
 	loop.players = append(loop.players, viewer)
 
-	// Force the per-slot rolls to PASS by stubbing the levelRandom's NextFloat to always return 0.
-	// We can't easily swap a real LevelRandom; use the test-only path of `cur().levelRandom` nil
-	// behavior. Instead, drop the equipment directly through dropMobEquipment with a seeded RNG.
-	// The actual test asserts the no-op path (a bare test loop with no levelRandom returns no
-	// spawn — see dropMobEquipment's nil-RNG defensive skip).
+	before := 0
+	loop.withRegion(owner, func() { before = owner.entities.len() })
 	src := damageSourcePlayerAttack(42)
 	loop.withRegion(owner, func() { loop.applyDamageEntity(mob, src, 100.0) }) // lethal
 
-	// Drain: the captured ClientboundEntityEvent for status-3 (death animation start) was broadcast
-	// by die() to the viewer; we just confirm the entity actually died (not the loot contents, which
-	// require a levelRandom).
 	if !mob.dead {
-		t.Fatalf("mob not dead after lethal hit — applyDamageEntity chain did not reach die()")
+		t.Fatalf("mob not dead after lethal hit -- applyDamageEntity chain did not reach die()")
 	}
-	// The two slots SHOULD still hold their stacks (dropMobEquipment no-ops when levelRandom is nil —
-	// the deterministic-test path). A bare test loop with no cur().levelRandom is the v1 default;
-	// the production path (a real loop with a levelRandom) takes the per-slot roll.
-	if mob.getMainHandItem().Count != 1 || int32(mob.getMainHandItem().ItemID) != int32(item.Bow.ID) {
-		t.Fatalf("MAINHAND after death (no levelRandom) = %+v, want bow (the test-fixture defensive skip)", mob.getMainHandItem())
+	// Both rolls passed -> both slots CLEARED on the dead mob.
+	if mob.getMainHandItem().Count != 0 {
+		t.Fatalf("MAINHAND after death = %+v, want EMPTY (drop roll forced to pass)", mob.getMainHandItem())
+	}
+	if mob.getItemBySlot(eqSlotHead).Count != 0 {
+		t.Fatalf("HEAD after death = %+v, want EMPTY (drop roll forced to pass)", mob.getItemBySlot(eqSlotHead))
+	}
+	// Two equipment Item entities were spawned into the owner region (plus any loot/xp the death path
+	// adds); assert the bow + helmet drops landed as Item entity spawns.
+	after := 0
+	bows, helmets := 0, 0
+	loop.withRegion(owner, func() {
+		after = owner.entities.len()
+		for _, e := range owner.entities.all() {
+			if e == nil || e.typ != entity.Item.ID {
+				continue
+			}
+			switch int32(e.itemStack.ItemID) {
+			case int32(item.Bow.ID):
+				bows++
+			case int32(item.LeatherHelmet.ID):
+				helmets++
+			}
+		}
+	})
+	if after <= before {
+		t.Fatalf("region entity count did not grow after death drops: before=%d after=%d", before, after)
+	}
+	if bows != 1 || helmets != 1 {
+		t.Fatalf("dropped equipment Item entities: bow=%d helmet=%d, want bow=1 helmet=1", bows, helmets)
 	}
 }
 
