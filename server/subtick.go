@@ -405,6 +405,17 @@ func (t *TickLoop) applyInput(p *tickPlayer, in SubtickInput) {
 		// see arm swings. Decoded defensively; a malformed payload is a silent no-op.
 		t.handleSwing(p, in.Packet)
 
+	case packetid.ServerboundPlayerInput:
+		// PLAYER INPUT (net.minecraft.world.entity.player.Input): a single-byte bitfield of the client's
+		// movement keys -- FLAG_FORWARD 1, FLAG_BACKWARD 2, FLAG_LEFT 4, FLAG_RIGHT 8, FLAG_JUMP 16,
+		// FLAG_SHIFT 32, FLAG_SPRINT 64. handlePlayerInput stores it as lastClientInput (+ setShiftKeyDown).
+		// The controlling-passenger steer reads these AS the controller's xxa/zza/isJumping. The load-bearing
+		// v1 use is the CAMEL DASH: while a player controls a standing camel, a jump keypress arms the dash
+		// (camelOnPlayerJump), the server mirror of LocalPlayer.aiStep -> jumpableVehicle.handleStartJump; the
+		// camel launches on the next grounded tick (camelAiStep -> executeRidersJump). CITE
+		// ServerGamePacketListenerImpl.handlePlayerInput + Input flag layout + Camel.onPlayerJump.
+		t.handlePlayerInput(p, in.Packet)
+
 	default:
 		// Non-movement subtick input with no resolver yet: the hook already observed it;
 		// nothing to apply here.

@@ -1202,6 +1202,16 @@ func (t *TickLoop) handleInteract(p *tickPlayer, pkt pk.Packet) {
 	if mob.typ == entity.HappyGhast.ID && t.tryHappyGhastRide(p, mob, bool(usingSecondaryAction)) {
 		return // the ride handled the interact
 	}
+	// CAMEL RIDE (net.minecraft.world.entity.animal.camel.Camel.mobInteract): a right-click on an adult
+	// camel with fewer than 2 riders mounts the player (doPlayerRide -> startRiding); the first rider steers
+	// client-authoritatively (passenger.go getControllingPassenger camel branch + handleMoveVehicle).
+	// tryCamelRide returns true when the interact belongs to the camel (an adult, non-full camel), false for
+	// a baby / full camel (fall through to the feed path -- a camel IS fed via CAMEL_FOOD). Camel-gated so it
+	// is a zero-cost no-op for every other mob; no RNG draw (the pig oracle stream is unperturbed). CITE
+	// Camel.mobInteract (doPlayerRide fork).
+	if mob.typ == entity.Camel.ID && t.tryCamelRide(p, mob) {
+		return // the ride handled the interact
+	}
 	// VILLAGER MERCHANT MENU (net.minecraft.world.entity.npc.villager.Villager.mobInteract): a right-click on
 	// a live, non-baby, non-trading, non-sleeping villager opens the trading screen (startTrading ->
 	// openMenu(MerchantMenu) + ClientboundMerchantOffers). villagerMobInteract returns true whenever the

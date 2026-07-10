@@ -730,6 +730,17 @@ type Entity struct {
 	isAllay        bool
 	isAxolotl      bool
 	axolotlVariant int
+	// camelDashCooldown mirrors Camel.dashCooldown (the int field): set to 55 (DASH_COOLDOWN_TICKS) by
+	// executeRidersJump, decremented each tick() while > 0, and gating onPlayerJump (a dash only fires when
+	// dashCooldown <= 0). camelDashing mirrors Camel.DASH (the BOOLEAN EntityDataAccessor, default false):
+	// set true on the dash burst, cleared in tick() once the camel lands / is no longer a passenger past the
+	// DASH_MINIMUM_DURATION window. camelLastPoseChangeTick mirrors Camel.LAST_POSE_CHANGE_TICK (the LONG
+	// EntityDataAccessor, default 0): the signed game-time stamp of the last pose change -- NEGATIVE while
+	// sitting (isCamelSitting == stamp < 0), and getPoseTime = gameTime - abs(stamp) is the ticks-since-pose.
+	// Zero for every non-camel entity. Cite Camel.dashCooldown/DASH/LAST_POSE_CHANGE_TICK.
+	camelDashCooldown       int32
+	camelDashing            bool
+	camelLastPoseChangeTick int64
 	// --- PARROT / BAT (flying passive + ambient, Task) ----------------------------------------------
 	//
 	// Tick-owned plain values, set/read ONLY for their own type (each *AiStep gates on typ). isParrot/

@@ -157,8 +157,43 @@ func (e *Entity) vehiclePassengerAttachment(seatIndex int) Pos {
 	if e.isBoat {
 		return e.boatPassengerAttachment(seatIndex)
 	}
+	// A CAMEL overrides getPassengerAttachmentPoint with its own two-seat math (Camel
+	// .getPassengerAttachmentPoint): the seat X/Z offset is +0.5 for the front (index 0) rider and -0.7 for
+	// the rear (index >= 1) rider (an Animal rear passenger gets an extra +0.2, inert for player riders),
+	// rotated by the camel's yRot. The Y is getBodyAnchorAnimationYOffset (the sit/stand animation lift) --
+	// a client-authoritative RENDER offset (like the boat/ghast), so v1 uses the STANDING body-anchor Y
+	// (0.375 above the sit-diff baseline) and CITES the sit-transition lerp as render-only deferral. CITE
+	// Camel.getPassengerAttachmentPoint (seatOffset 0.5 / -0.7; the +0.2 Animal add).
+	if e.typ == entity.Camel.ID {
+		return e.camelPassengerAttachment(seatIndex)
+	}
 	// Fallback AT_HEIGHT: a single seat at (0, height, 0), rotated by yRot.
 	return transformPoint(Pos{X: 0, Y: e.height, Z: 0}, e.yaw)
+}
+
+// camelPassengerAttachment ports Camel.getPassengerAttachmentPoint(passenger, dims, partialTick) for the
+// two seats. The horizontal offset is +0.5 for the front rider (seat 0) and -0.7 for a rear rider (seat >=
+// 1); a rear ANIMAL passenger adds +0.2 (v1 riders are players -> inert, ported for fidelity). The vertical
+// offset is getBodyAnchorAnimationYOffset -- the render lift of the camel's body during the sit/stand
+// animation; v1 uses the STANDING body-anchor Y (dims.height - 0.375, the isCamelSitting==false, non-
+// transition case of getBodyAnchorAnimationYOffset), CITING the mid-transition lerp as a render-only
+// deferral (the seat is client-authoritative, so the delta is unobservable). The whole point is rotated by
+// the camel's yRot (transformPoint). CITE Camel.getPassengerAttachmentPoint + getBodyAnchorAnimationYOffset.
+func (e *Entity) camelPassengerAttachment(seatIndex int) Pos {
+	offset := float64(float32(0.5)) // front seat (index 0)
+	if seatIndex != 0 {
+		offset = float64(float32(-0.7)) // rear seat
+		// An Animal rear passenger sits +0.2 further forward. v1 passengers are players (not Animals), so
+		// this branch is inert; ported for fidelity (a future mob-on-camel passenger would take it).
+	}
+	// getBodyAnchorAnimationYOffset standing, non-transition: dims.height - bodyBaseline (0.375 adult; the
+	// isBaby 0.09375 is the baby camel). height is the entity's collision height.
+	baseline := float64(0.375)
+	if e.isBaby() {
+		baseline = float64(0.09375)
+	}
+	y := e.height - baseline
+	return transformPoint(Pos{X: 0.0, Y: y, Z: offset}, e.yaw)
 }
 
 // passengerIndexOf returns the seat index of the given passenger id in the vehicle's passenger list, or
@@ -196,6 +231,12 @@ func (e *Entity) canAddPassengerVehicle() bool {
 			return false
 		}
 		return len(e.passengers) < boatMaxPassengersOf(e)
+	}
+	// Camel.canAddPassenger: getPassengers().size() <= 2 -> a camel seats TWO riders (canAddPassenger is
+	// called BEFORE the new passenger is appended, so size <= 2 admits mounting onto an empty or 1-seat
+	// camel; a 2-seat camel is full). CITE Camel.canAddPassenger.
+	if e.typ == entity.Camel.ID {
+		return len(e.passengers) <= camelMaxPassengers
 	}
 	return len(e.passengers) == 0
 }
@@ -384,6 +425,26 @@ func (t *TickLoop) getControllingPassenger(vehicle *Entity) int32 {
 		}
 		return 0
 	}
+	// A CAMEL's getControllingPassenger is the first passenger when it is a LivingEntity (a player always
+	// is) AND the camel does not refuseToMove (a sitting / mid-transition camel cannot be steered). This
+	// makes a ridden, standing camel client-authoritative (like the boat): tickPhysics skips its server
+	// walk and the client drives it via ServerboundMoveVehicle (handleMoveVehicle). CITE
+	// Camel.getControllingPassenger (AbstractHorse.getControllingPassenger -> firstPassenger if
+	// LivingEntity) + Camel.refuseToMove gate (getRiddenInput returns ZERO while refuseToMove, so a
+	// sitting camel is effectively un-steerable).
+	if vehicle.typ == entity.Camel.ID {
+		if len(vehicle.passengers) == 0 {
+			return 0
+		}
+		if vehicle.camelRefuseToMove(t.gametime) {
+			return 0
+		}
+		first := vehicle.passengers[0]
+		if t.playerByEntityID(first) != nil {
+			return first
+		}
+		return 0
+	}
 	if vehicle.typ != entity.HappyGhast.ID {
 		return 0
 	}
@@ -548,6 +609,82 @@ func (t *TickLoop) tryHappyGhastRide(p *tickPlayer, ghast *Entity, usingSecondar
 		t.broadcastSetPassengers(ghast)
 	}
 	return true // the interact belongs to the ghast (SUCCESS), whether or not the mount took
+}
+
+// --- PLAYER INPUT: the movement bitfield + the camel dash trigger ----------------------------------
+//
+// handlePlayerInput ports ServerGamePacketListenerImpl.handlePlayerInput: decode the single-byte Input
+// bitfield (net.minecraft.world.entity.player.Input) and store it as the player's lastInput{Forward,...,
+// Jump} flags (the vanilla setLastClientInput). The controlling-passenger steer reads these AS the
+// controller's xxa/zza/isJumping. The v1 load-bearing consumer is the CAMEL DASH: while the player controls
+// a STANDING camel, the RISING EDGE of the jump key (jump now, not-jumping last tick) arms the dash via
+// camelOnPlayerJump -- the server mirror of LocalPlayer.aiStep -> jumpableVehicle.handleStartJump (a full
+// charge, scale 1.0 -> handleStartJump(90)). The camel then launches on its next grounded tick
+// (camelAiStep -> executeRidersJump). A malformed/short payload is a silent no-op.
+//
+//	[VERIFIED javap Input flag layout: FLAG_FORWARD 1, FLAG_BACKWARD 2, FLAG_LEFT 4, FLAG_RIGHT 8,
+//	 FLAG_JUMP 16, FLAG_SHIFT 32, FLAG_SPRINT 64. Camel.handleStartJump/onPlayerJump: a rider jump on a
+//	 saddled, off-cooldown, grounded camel arms the dash launch.]
+func (t *TickLoop) handlePlayerInput(p *tickPlayer, pkt pk.Packet) {
+	var flags pk.UnsignedByte
+	if err := pkt.Scan(&flags); err != nil {
+		return // malformed/short: no mutation
+	}
+	const (
+		inputFlagForward  = 1
+		inputFlagBackward = 2
+		inputFlagLeft     = 4
+		inputFlagRight    = 8
+		inputFlagJump     = 16
+		inputFlagShift    = 32
+		inputFlagSprint   = 64
+	)
+	prevJump := p.lastInputJump
+	p.lastInputForward = flags&inputFlagForward != 0
+	p.lastInputBackward = flags&inputFlagBackward != 0
+	p.lastInputLeft = flags&inputFlagLeft != 0
+	p.lastInputRight = flags&inputFlagRight != 0
+	p.lastInputJump = flags&inputFlagJump != 0
+	_ = inputFlagShift
+	_ = inputFlagSprint
+	// CAMEL DASH: on the rising edge of the jump key, if the player is the controlling passenger of a camel,
+	// arm the dash. LocalPlayer sends a full-charge jump (scale 1.0 == handleStartJump(90)); the server
+	// mirror passes charge 90 to camelOnPlayerJump -> getPlayerJumpPendingScale(90) == 1.0f.
+	if p.lastInputJump && !prevJump && p.vehicleID != 0 {
+		vehicle := t.entityByIDAnyRegion(p.vehicleID)
+		if vehicle != nil && vehicle.typ == entity.Camel.ID && t.getControllingPassenger(vehicle) == p.entityID {
+			vehicle.camelOnPlayerJump(90) // full charge -> pending scale 1.0
+		}
+	}
+}
+
+// --- CAMEL RIDE: the mobInteract mount -------------------------------------------------------------
+//
+// tryCamelRide ports Camel.mobInteract's ride branch (Camel.mobInteract, the doPlayerRide fork). Vanilla,
+// after the secondary-use inventory branch + the held-item interactLivingEntity + the isFood feed branch:
+//
+//	if (getPassengers().size() < 2 && !isBaby()) doPlayerRide(player);
+//	... return CONSUME;
+//
+// doPlayerRide (AbstractHorse.doPlayerRide) == `if (!isClientSide) { player.startRiding(this) ... }`. So an
+// adult camel with fewer than 2 riders mounts the player as a passenger (up to 2 total). tryCamelRide
+// returns true when the interact belongs to the camel (a mount attempt on an adult non-full camel), false
+// for a baby / full camel (fall through to the feed/other path). Camel-gated so it is a zero-cost no-op for
+// every other mob; no RNG draw (the pig oracle stream is unperturbed). CITE Camel.mobInteract (doPlayerRide
+// fork) + AbstractHorse.doPlayerRide.
+func (t *TickLoop) tryCamelRide(p *tickPlayer, camel *Entity) bool {
+	if camel.isBaby() {
+		return false // a baby camel is not rideable -> fall through
+	}
+	if len(camel.passengers) >= camelMaxPassengers {
+		return false // full (2 riders) -> fall through
+	}
+	// doPlayerRide: player.startRiding(this). On a successful mount, broadcast the passenger list so the
+	// rider's client attaches and every tracker renders the seated player.
+	if t.playerStartRiding(p, camel, false) {
+		t.broadcastSetPassengers(camel)
+	}
+	return true // the interact belongs to the camel (CONSUME), whether or not the mount took
 }
 
 // --- SERVERBOUND MOVE VEHICLE: the controlling-passenger steer -------------------------------------
