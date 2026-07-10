@@ -224,3 +224,95 @@ func TestConvertPiglinToZombifiedPiglin(t *testing.T) {
 		t.Fatalf("converted zombified piglin must start NEUTRAL, got angerEndTime=%d", zp.angerEndTime)
 	}
 }
+
+// TestZoglinRetaliatesOnHurt: a zoglin hit by a LivingEntity latches ONTO that attacker (Zoglin.hurtServer
+// -> setAttackTarget), even a would-be excluded type is irrelevant here (the attacker is a plain mob).
+// canAttack + not-much-further -> the 200-tick ATTACK_TARGET grudge is set.
+func TestZoglinRetaliatesOnHurt(t *testing.T) {
+	loop, _, floorY := zoglinLoop(t)
+	by := float64(floorY + 1)
+	zg := loop.spawnZoglin(8.5, by, 8.5, false)
+	// The attacker: a wither skeleton mob standing next to the zoglin (a valid, non-ghast LivingEntity).
+	atk := NewEntity(9001, entity.WitherSkeleton, 9.5, by, 8.5)
+	atk.health = 20.0
+	loop.only().entities.add(atk)
+	loop.gametime = 1000
+
+	if zg.ai.attackTargetID != 0 {
+		t.Fatalf("zoglin started with a target %d", zg.ai.attackTargetID)
+	}
+	src := damageSourceMobAttack(atk.id)
+	loop.applyDamageEntity(zg, src, 3.0)
+
+	if zg.ai.attackTargetID != atk.id {
+		t.Fatalf("zoglin did NOT retaliate: target=%d, want attacker %d", zg.ai.attackTargetID, atk.id)
+	}
+	if want := loop.gametime + int64(zoglinAttackTargetDuration); zg.zoglinAttackTargetExpiry != want {
+		t.Fatalf("zoglin latch expiry = %d, want %d (gametime + 200)", zg.zoglinAttackTargetExpiry, want)
+	}
+}
+
+// TestZoglinLatchHoldsAcrossReacquire: the 200-tick retaliation latch HOLDS the attacker as the target even
+// when the acquire scan would otherwise re-derive a nearer valid target -- the grudge memory wins for its
+// 200-tick life, then the plain nearest-scan resumes after it expires.
+func TestZoglinLatchHoldsAcrossReacquire(t *testing.T) {
+	loop, _, floorY := zoglinLoop(t)
+	by := float64(floorY + 1)
+	zg := loop.spawnZoglin(8.5, by, 8.5, false)
+	// The FAR attacker (a wither skeleton) that hurt the zoglin.
+	far := NewEntity(9001, entity.WitherSkeleton, 20.0, by, 8.5)
+	far.health = 20.0
+	loop.only().entities.add(far)
+	// A NEARER pig the plain scan would prefer.
+	near := NewEntity(9002, entity.Pig, 9.0, by, 8.5)
+	near.health = 10.0
+	loop.only().entities.add(near)
+	loop.gametime = 1000
+
+	loop.applyDamageEntity(zg, damageSourceMobAttack(far.id), 3.0)
+	if zg.ai.attackTargetID != far.id {
+		t.Fatalf("zoglin did not latch the far attacker: target=%d, want %d", zg.ai.attackTargetID, far.id)
+	}
+	// Within the 200-tick window: the acquire scan must NOT swap to the nearer pig.
+	loop.gametime = 1000 + 199
+	loop.zoglinAcquireNearestTarget(zg)
+	if zg.ai.attackTargetID != far.id {
+		t.Fatalf("zoglin dropped the latched grudge early: target=%d, want %d (latch active)", zg.ai.attackTargetID, far.id)
+	}
+	// After expiry (>= 200 ticks): the latch lapses, and the scan re-derives the nearer target.
+	loop.gametime = 1000 + 200
+	loop.zoglinAcquireNearestTarget(zg)
+	if zg.zoglinAttackTargetExpiry != 0 {
+		t.Fatalf("zoglin latch not cleared after 200 ticks (expiry=%d)", zg.zoglinAttackTargetExpiry)
+	}
+	if zg.ai.attackTargetID != near.id {
+		t.Fatalf("after latch expiry, zoglin should scan to the nearer pig: target=%d, want %d", zg.ai.attackTargetID, near.id)
+	}
+}
+
+// TestZoglinMeleeInterval: an ADULT zoglin's swing sets a 40-tick cooldown (MeleeAttack.create(40)); a BABY's
+// sets 15 (MeleeAttack.create(15)) -- NOT the shared MeleeAttackGoal.resetAttackCooldown(20).
+func TestZoglinMeleeInterval(t *testing.T) {
+	loop, _, floorY := zoglinLoop(t)
+	by := float64(floorY + 1)
+
+	adult := loop.spawnZoglin(8.5, by, 8.5, false)
+	pa := combatTestPlayer(loop, 9.1, by, 8.5, 5151)
+	pa.playerEntity = &Entity{id: pa.entityID}
+	adult.ai.attackTargetID = pa.entityID
+	adult.meleeCooldown = 0
+	loop.zoglinAiStep(adult)
+	if adult.meleeCooldown != zoglinMeleeCooldownAdult {
+		t.Fatalf("adult zoglin melee cooldown = %d, want %d (MeleeAttack.create(40))", adult.meleeCooldown, zoglinMeleeCooldownAdult)
+	}
+
+	baby := loop.spawnZoglin(30.5, by, 30.5, true)
+	pb := combatTestPlayer(loop, 31.1, by, 30.5, 5152)
+	pb.playerEntity = &Entity{id: pb.entityID}
+	baby.ai.attackTargetID = pb.entityID
+	baby.meleeCooldown = 0
+	loop.zoglinAiStep(baby)
+	if baby.meleeCooldown != zoglinMeleeCooldownBaby {
+		t.Fatalf("baby zoglin melee cooldown = %d, want %d (MeleeAttack.create(15))", baby.meleeCooldown, zoglinMeleeCooldownBaby)
+	}
+}

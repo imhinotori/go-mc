@@ -675,6 +675,12 @@ type Entity struct {
 	meleeCooldown         int
 	hoglinAttackAnimTicks int
 	hoglinTimeInOverworld int
+	// zoglinAttackTargetExpiry mirrors the Zoglin brain's ATTACK_TARGET memory expiry (gametime tick at
+	// which the latched target lapses). Zoglin.setAttackTarget -> brain.setMemoryWithExpiry(ATTACK_TARGET,
+	// le, 200L): a retaliation-latched target survives for 200 ticks even if it leaves the nearest-scan
+	// radius. 0 == no latch (the plain nearest-scan owns the target). Zoglin-only; zero for every other
+	// entity. Cite Zoglin.setAttackTarget (Brain.setMemoryWithExpiry ATTACK_TARGET, 200L).
+	zoglinAttackTargetExpiry int64
 	// hoglinDimension records the dimension the hoglin lives in (dimOverworld default / dimNether), the
 	// bounded stand-in for reading environmentAttributes.PIGLINS_ZOMBIFY at the entity's position: the
 	// conversion runs everywhere EXCEPT dimNether. Set at spawn (spawnHoglin) from the spawn context; the

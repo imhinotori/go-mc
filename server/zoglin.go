@@ -55,6 +55,20 @@ const (
 	zoglinAttackDamage        = 6.0                 // adult ATTACK_DAMAGE
 	zoglinBabyAttackDamage    = 0.5                 // baby ATTACK_DAMAGE (setBaby sets base 0.5)
 	zoglinAttackAnimTicks     = 10                  // attackAnimationRemainingTicks on a hit
+	// zoglinAttackTargetDuration is the ATTACK_TARGET memory expiry the Zoglin retaliation sets:
+	// Zoglin.setAttackTarget -> brain.setMemoryWithExpiry(ATTACK_TARGET, le, 200L). Verified javap.
+	zoglinAttackTargetDuration = 200 // setMemoryWithExpiry(ATTACK_TARGET, ..., 200L)
+	// zoglinRetaliateMuchFurther is the BehaviorUtils.isOtherTargetMuchFurtherAwayThanCurrentAttackTarget
+	// distance passed by Zoglin.hurtServer: 4.0 (the new attacker latches unless it is >4.0 blocks farther
+	// than the current attack target). Verified javap Zoglin.hurtServer (ldc2_w 4.0d).
+	zoglinRetaliateMuchFurther = 4.0
+	// zoglinMeleeCooldownAdult / zoglinMeleeCooldownBaby are the MeleeAttack.create(cooldownBetweenAttacks)
+	// intervals the Zoglin brain registers: MeleeAttack.create(40) under triggerIf(isAdult) and
+	// MeleeAttack.create(15) for the baby. Each swing sets ATTACK_COOLING_DOWN for that many ticks, so the
+	// effective per-swing interval is 40 (adult) / 15 (baby). Verified javap Zoglin brain (bipush 40 / 15
+	// -> MeleeAttack.create(I)). This REPLACES the shared meleeAttackResetCooldown(20) for the zoglin.
+	zoglinMeleeCooldownAdult = 40 // triggerIf(isAdult) MeleeAttack.create(40)
+	zoglinMeleeCooldownBaby  = 15 // MeleeAttack.create(15)
 )
 
 // spawnZoglin creates a Zoglin at (x,y,z) with the jar attributes and adds it to the owner region store. It
@@ -121,6 +135,26 @@ func (t *TickLoop) zoglinAcquireNearestTarget(e *Entity) {
 	}
 	followRange := e.getAttributeValue(attribute.FollowRange)
 	rangeSqr := followRange * followRange
+	// RETALIATION LATCH (Zoglin.hurtServer -> setMemoryWithExpiry(ATTACK_TARGET, le, 200L)): while the
+	// latch is unexpired AND its target is still a live/present combat target, HOLD it -- do NOT re-scan
+	// for a nearer one and do NOT drop it for leaving FOLLOW_RANGE (the memory expiry, not a distance
+	// check, ends a latched grudge). The memory get() drops the target when it is no longer a present
+	// LivingEntity. Cite Zoglin.setAttackTarget + Brain ATTACK_TARGET expiry semantics.
+	if e.zoglinAttackTargetExpiry != 0 {
+		if t.gametime >= e.zoglinAttackTargetExpiry {
+			// The ATTACK_TARGET memory lapsed after 200 ticks: it clears WITH its value (the brain's
+			// StartAttacking then re-picks the nearest valid target on the fresh scan below). Clearing the
+			// id here is what lets a nearer target win once the grudge ends. Cite Brain expiry (memory + value).
+			e.zoglinAttackTargetExpiry = 0
+			e.ai.attackTargetID = 0
+		} else if e.ai.attackTargetID != 0 && t.zoglinTargetPresent(e, e.ai.attackTargetID) {
+			return // latched grudge still active; keep the current target
+		} else {
+			// the latched target vanished (dead/removed) -> the memory clears with it.
+			e.zoglinAttackTargetExpiry = 0
+			e.ai.attackTargetID = 0
+		}
+	}
 	// Drop a stale current target.
 	if e.ai.attackTargetID != 0 {
 		if !t.zoglinTargetStillValid(e, e.ai.attackTargetID, rangeSqr) {
@@ -291,7 +325,14 @@ func (t *TickLoop) zoglinAiStep(e *Entity) {
 		if e.meleeCooldown > 0 {
 			e.meleeCooldown--
 		} else if t.zoglinWithinMeleeRange(e, targetID) {
-			e.meleeCooldown = meleeAttackResetCooldown
+			// MeleeAttack.create(cooldownBetweenAttacks): the swing sets ATTACK_COOLING_DOWN for the per-age
+			// interval (40 adult / 15 baby) -- NOT the shared MeleeAttackGoal.resetAttackCooldown(20).
+			// Cite Zoglin brain (triggerIf(isAdult) MeleeAttack.create(40) / MeleeAttack.create(15)).
+			if e.isBaby() {
+				e.meleeCooldown = zoglinMeleeCooldownBaby
+			} else {
+				e.meleeCooldown = zoglinMeleeCooldownAdult
+			}
 			t.zoglinDoHurtTarget(e, targetID)
 		}
 	} else if e.meleeCooldown > 0 {
@@ -326,4 +367,127 @@ func (t *TickLoop) zoglinWithinMeleeRange(e *Entity, targetID int32) bool {
 	}
 	// Vertical band: [y - reach/2, y + height + reach/2] must overlap the victim's feet..head.
 	return other.y <= e.y+e.height+reach/2 && other.y+other.height >= e.y-reach/2
+}
+
+// zoglinTargetPresent reports whether the id resolves to a still-PRESENT combat target -- a live player,
+// or a live mob that is not a zoglin/creeper. This is the ATTACK_TARGET memory get() presence check
+// (LivingEntity present + valid), WITHOUT the FOLLOW_RANGE distance gate: a latched (retaliated) target
+// is held by its 200-tick memory expiry, not by distance. Cite Zoglin ATTACK_TARGET memory semantics.
+func (t *TickLoop) zoglinTargetPresent(e *Entity, id int32) bool {
+	if p := t.playerByEntityID(id); p != nil {
+		return !p.dead
+	}
+	owner := t.regionForEntity(e)
+	if owner == nil {
+		owner = t.cur()
+	}
+	if owner == nil || owner.entities == nil {
+		return false
+	}
+	other, ok := owner.entities.get(id)
+	if !ok || other == nil || other.dead || !other.isAlive() {
+		return false
+	}
+	return zoglinValidTarget(other.typ)
+}
+
+// zoglinCanAttack ports Mob.canAttack(LivingEntity) as used by Zoglin.hurtServer's retaliation gate:
+// `!le.is(GHAST) && LivingEntity.canAttack(le)` -- the attacker must not be a ghast AND must be a valid,
+// live combat target (canBeSeenAsEnemy: alive/present). v1 reduces LivingEntity.canAttack to "the
+// attacker is a present, live entity" (the same present-target proxy the acquire scan uses); the GHAST
+// exclusion is a genuine type read. Cite Mob.canAttack (le.is(GHAST) short-circuit -> super.canAttack).
+func (t *TickLoop) zoglinCanAttack(e *Entity, attackerID int32) bool {
+	if p := t.playerByEntityID(attackerID); p != nil {
+		return !p.dead // a player is never a ghast; canAttack(player) reduces to alive/present
+	}
+	owner := t.regionForEntity(e)
+	if owner == nil {
+		owner = t.cur()
+	}
+	if owner == nil || owner.entities == nil {
+		return false
+	}
+	other, ok := owner.entities.get(attackerID)
+	if !ok || other == nil || other.dead || !other.isAlive() {
+		return false
+	}
+	if other.typ == entity.Ghast.ID || other.typ == entity.HappyGhast.ID {
+		return false // Mob.canAttack: le.is(GHAST) -> false
+	}
+	return true
+}
+
+// zoglinPosDistSqr returns the squared position distance from the zoglin to an entity id (player or mob),
+// or (0, false) if the id does not resolve -- the BehaviorUtils.distanceToSqr(position) helper.
+func (t *TickLoop) zoglinPosDistSqr(e *Entity, id int32) (float64, bool) {
+	if p := t.playerByEntityID(id); p != nil {
+		return distanceToSqrPlayer(p, e), true
+	}
+	owner := t.regionForEntity(e)
+	if owner == nil {
+		owner = t.cur()
+	}
+	if owner == nil || owner.entities == nil {
+		return 0, false
+	}
+	other, ok := owner.entities.get(id)
+	if !ok || other == nil {
+		return 0, false
+	}
+	dx, dy, dz := other.x-e.x, other.y-e.y, other.z-e.z
+	return dx*dx + dy*dy + dz*dz, true
+}
+
+// zoglinIsOtherTargetMuchFurther ports BehaviorUtils.isOtherTargetMuchFurtherAwayThanCurrentAttackTarget(
+// this, other, d): if there is NO current ATTACK_TARGET memory -> false (the new attacker always latches);
+// else `otherDistSqr > currentDistSqr + d*d`. Verified javap BehaviorUtils (Optional.isEmpty -> false;
+// else other.distanceToSqr > current.distanceToSqr + d*d). The "current ATTACK_TARGET" here is the zoglin's
+// live attack-target id (the brain's ATTACK_TARGET memory analogue). Cite BehaviorUtils.
+func (t *TickLoop) zoglinIsOtherTargetMuchFurther(e *Entity, otherID int32, d float64) bool {
+	if e.ai == nil || e.ai.attackTargetID == 0 {
+		return false // Optional.isEmpty() -> return false
+	}
+	curSq, ok := t.zoglinPosDistSqr(e, e.ai.attackTargetID)
+	if !ok {
+		return false // the current target vanished -> no "current" to compare against
+	}
+	otherSq, ok := t.zoglinPosDistSqr(e, otherID)
+	if !ok {
+		return false
+	}
+	return otherSq > curSq+d*d
+}
+
+// zoglinSetAttackTarget ports Zoglin.setAttackTarget(LivingEntity): eraseMemory(CANT_REACH_WALK_TARGET_SINCE)
+// then setMemoryWithExpiry(ATTACK_TARGET, le, 200L) -- a retaliation latch that survives 200 ticks even if
+// the attacker leaves FOLLOW_RANGE. In v1 the ATTACK_TARGET memory is e.ai.attackTargetID + the expiry
+// gametime stamp (CANT_REACH_WALK_TARGET_SINCE is a pathfinding memory with no v1 reader -> cited no-op).
+// Cite Zoglin.setAttackTarget.
+func (t *TickLoop) zoglinSetAttackTarget(e *Entity, le int32) {
+	if e.ai == nil {
+		return
+	}
+	// eraseMemory(CANT_REACH_WALK_TARGET_SINCE): pathfinding give-up memory, no v1 reader (cited no-op).
+	e.ai.attackTargetID = le                                                 // setMemory(ATTACK_TARGET, le)
+	e.zoglinAttackTargetExpiry = t.gametime + int64(zoglinAttackTargetDuration) // ...WithExpiry(200L)
+}
+
+// zoglinHurtServerRetaliate ports Zoglin.hurtServer's retaliation tail (run after a landed hit): if the
+// causing entity is a LivingEntity, and canAttack(le), and it is NOT much-further-away (>4.0) than the
+// current attack target, setAttackTarget(le) -- the 200-tick grudge latch. RNG-free. It is a per-type
+// post-hurt hook (the sibling of endermanHurtTeleport / silverfishNotifyHurt), gated on isZoglin and run
+// after the shared applyDamageEntity hit landed. Cite Zoglin.hurtServer (bytecode 41-68).
+func (t *TickLoop) zoglinHurtServerRetaliate(e *Entity, src damageSource) {
+	// getEntity() instanceof LivingEntity: v1's src.attacker != 0 is the living-attacker proxy (a player
+	// or a mob; an environmental hit leaves it 0).
+	if src.attacker == 0 {
+		return
+	}
+	if !t.zoglinCanAttack(e, src.attacker) {
+		return // canAttack(le) == false
+	}
+	if t.zoglinIsOtherTargetMuchFurther(e, src.attacker, zoglinRetaliateMuchFurther) {
+		return // the attacker is >4.0 farther than the current target -> keep the current target
+	}
+	t.zoglinSetAttackTarget(e, src.attacker)
 }

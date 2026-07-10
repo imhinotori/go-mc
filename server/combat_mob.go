@@ -296,6 +296,17 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 		t.piglinWasHurtBy(e, src)
 	}
 
+	// ZOGLIN (Zoglin.hurtServer): the INDISCRIMINATE-hostility retaliation latch -- after a landed hit
+	// (super.hurtServer returned true), if the causing LivingEntity canAttack + is not much-further-away
+	// (>4.0) than the current attack target, setAttackTarget(le) with a 200-tick ATTACK_TARGET expiry.
+	// A per-type post-hurt hook (the sibling of the enderman/silverfish hooks), gated on isZoglin -> zero
+	// cost / zero RNG for every non-zoglin (the pig oracle stream is untouched). Reaching this tail means
+	// the hit landed (the i-frame `amount <= lastHurt` rejection returned early above), matching vanilla's
+	// `if (flag)` gate. Cite Zoglin.hurtServer (bytecode 41-68).
+	if e.isZoglin {
+		t.zoglinHurtServerRetaliate(e, src)
+	}
+
 	// SKILLS-01 (mob_skills.go): the declared-skill "damaged" trigger — the MythicMobs ~onDamaged
 	// analogue. Fires AFTER the shared hit fully landed (the per-type post-hurt hooks above are its
 	// siblings), SURVIVOR only (a lethal hit routes the "death" trigger through dieEntity instead).
