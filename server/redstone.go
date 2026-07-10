@@ -976,6 +976,22 @@ func (t *TickLoop) drainRedstoneUpdates(q *redstoneUpdateQueue) {
 			// NoteBlock.neighborChanged: on a rising redstone edge play the note + set POWERED; on a falling
 			// edge clear POWERED (redstone_blocks.go). CITE: NoteBlock.neighborChanged.
 			t.noteBlockNeighborChanged(pos, state)
+		case block.IsPoweredRailBlock(state) || block.IsActivatorRailBlock(state):
+			// PoweredRailBlock.updateState (shared by powered_rail + activator_rail, the latter IS a
+			// PoweredRailBlock): recompute POWERED from a direct neighbor signal or a same-orientation
+			// powered-rail run (up to 8 cells). Also drives the on-place update since the worklist enqueues
+			// the rail's own cell (redstone_blocks.go). CITE: PoweredRailBlock.updateState / BaseRailBlock
+			// .neighborChanged + onPlace.
+			t.poweredRailUpdateState(pos, state, q)
+		case block.IsCopperBulb(state):
+			// CopperBulbBlock.checkAndFlip: a RISING redstone edge toggles LIT (T-flip-flop) and latches
+			// POWERED; a falling edge only clears POWERED. Also covers on-place (the worklist enqueues pos)
+			// (redstone_blocks.go). CITE: CopperBulbBlock.neighborChanged/onPlace -> checkAndFlip.
+			t.copperBulbCheckAndFlip(pos, state)
+		case isBellBlock(state):
+			// BellBlock.neighborChanged: a RISING redstone edge rings the bell (attemptToRing) and writes
+			// POWERED; a falling edge only writes POWERED (bell_be.go). CITE: BellBlock.neighborChanged.
+			t.bellRedstoneNeighborChanged(pos, state)
 		case isTntBlock(state):
 			// TntBlock.neighborChanged (shared logic with onPlace): if the block now has a neighbor signal,
 			// prime the TNT (spawn a PrimedTnt) and removeBlock. This fires on a redstone rising edge that

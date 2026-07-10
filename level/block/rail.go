@@ -60,6 +60,23 @@ func IsPoweredRailBlock(s StateID) bool {
 	return ok
 }
 
+// IsPoweredRailFamily reports whether the state is one of the two PoweredRailBlock instances
+// (powered_rail or activator_rail) — the rails whose POWERED bit PoweredRailBlock.updateState drives
+// and whose runs findPoweredRailSignal walks. DetectorRail carries POWERED too but is a distinct block
+// (DetectorRailBlock, not a PoweredRailBlock), so it is NOT part of a powered-rail run. This is the
+// `state.is(this)`-family gate: both powered_rail and activator_rail ARE PoweredRailBlock in vanilla.
+// CITE: ActivatorRailBlock == new PoweredRailBlock(...); PoweredRailBlock.isSameRailWithPower.
+func IsPoweredRailFamily(s StateID) bool {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return false
+	}
+	switch StateList[s].(type) {
+	case PoweredRail, ActivatorRail:
+		return true
+	}
+	return false
+}
+
 // IsDetectorRailBlock reports whether the state is a DetectorRail (minecraft:detector_rail).
 func IsDetectorRailBlock(s StateID) bool {
 	if int(s) < 0 || int(s) >= len(StateList) {

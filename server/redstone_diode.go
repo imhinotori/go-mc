@@ -275,6 +275,11 @@ func (t *TickLoop) comparatorGetInputSignal(state block.StateID, pos pk.Position
 		// WorldlyContainerHolder but its analog output is the fill LEVEL, not the container fill-ratio.
 		// CITE: ComposterBlock.getAnalogOutputSignal.
 		resultSignal = sig
+	} else if sig, has := t.copperBulbAnalogOutputSignal(targetPos); has {
+		// targetState.hasAnalogOutputSignal(): true for a COPPER_BULB; getAnalogOutputSignal ==
+		// (LIT ? 15 : 0). Checked BEFORE the generic container path (a bulb is not a container). CITE:
+		// CopperBulbBlock.hasAnalogOutputSignal (true) / getAnalogOutputSignal (LIT?15:0).
+		resultSignal = sig
 	} else if sig, has := t.containerAnalogOutputSignal(targetPos); has {
 		// targetState.hasAnalogOutputSignal(): true for a container block-entity (chest/furnace/dispenser/
 		// brewing/hopper — AnalogOutputBlock). getAnalogOutputSignal == getRedstoneSignalFromContainer(container).

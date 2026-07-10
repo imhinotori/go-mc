@@ -156,6 +156,158 @@ func copperWithPropertiesOf(target, src StateID) (StateID, bool) {
 	return id, ok
 }
 
+// ---------------------------------------------------------------------------------------------
+// Copper bulb (CopperBulbBlock) redstone accessors. The block carries TWO boolean properties in the
+// generated state table (see level/block/blocks.go): LIT (the light output, also the comparator
+// analog output) and POWERED (the redstone latch input for the T-flip-flop). All eight weather/wax
+// variants share the same {Lit, Powered} shape. The server-side checkAndFlip reaction lives in
+// server/redstone_blocks.go. CITE: CopperBulbBlock.LIT / POWERED / createBlockStateDefinition.
+// ---------------------------------------------------------------------------------------------
+
+// IsCopperBulb reports whether s is any copper_bulb variant (weathered/waxed families included). This
+// is the `state.is(...CopperBulbBlock)` gate for the redstone checkAndFlip + comparator paths. CITE:
+// CopperBulbBlock (the 8 registered copper_bulb blocks).
+func IsCopperBulb(s StateID) bool {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return false
+	}
+	switch StateList[s].(type) {
+	case CopperBulb, ExposedCopperBulb, WeatheredCopperBulb, OxidizedCopperBulb,
+		WaxedCopperBulb, WaxedExposedCopperBulb, WaxedWeatheredCopperBulb, WaxedOxidizedCopperBulb:
+		return true
+	}
+	return false
+}
+
+// BulbLit returns the LIT property of a copper_bulb, or false if s is not a copper_bulb. This is the
+// `state.getValue(LIT)` read the comparator analog output uses (LIT?15:0). CITE: CopperBulbBlock.LIT.
+func BulbLit(s StateID) bool {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return false
+	}
+	switch b := StateList[s].(type) {
+	case CopperBulb:
+		return bool(b.Lit)
+	case ExposedCopperBulb:
+		return bool(b.Lit)
+	case WeatheredCopperBulb:
+		return bool(b.Lit)
+	case OxidizedCopperBulb:
+		return bool(b.Lit)
+	case WaxedCopperBulb:
+		return bool(b.Lit)
+	case WaxedExposedCopperBulb:
+		return bool(b.Lit)
+	case WaxedWeatheredCopperBulb:
+		return bool(b.Lit)
+	case WaxedOxidizedCopperBulb:
+		return bool(b.Lit)
+	}
+	return false
+}
+
+// BulbPowered returns the POWERED property of a copper_bulb, or false if s is not a copper_bulb. This
+// is the `state.getValue(POWERED)` read checkAndFlip compares against the neighbor signal. CITE:
+// CopperBulbBlock.POWERED.
+func BulbPowered(s StateID) bool {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return false
+	}
+	switch b := StateList[s].(type) {
+	case CopperBulb:
+		return bool(b.Powered)
+	case ExposedCopperBulb:
+		return bool(b.Powered)
+	case WeatheredCopperBulb:
+		return bool(b.Powered)
+	case OxidizedCopperBulb:
+		return bool(b.Powered)
+	case WaxedCopperBulb:
+		return bool(b.Powered)
+	case WaxedExposedCopperBulb:
+		return bool(b.Powered)
+	case WaxedWeatheredCopperBulb:
+		return bool(b.Powered)
+	case WaxedOxidizedCopperBulb:
+		return bool(b.Powered)
+	}
+	return false
+}
+
+// BulbWithLit re-encodes a copper_bulb state with LIT set to `lit`, preserving POWERED. Returns
+// (s, false) for a non-bulb. This is `state.cycle(LIT)`'s result carrier. CITE: CopperBulbBlock
+// .checkAndFlip (state.cycle(LIT)).
+func BulbWithLit(s StateID, lit bool) (StateID, bool) {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return s, false
+	}
+	v := Boolean(lit)
+	switch b := StateList[s].(type) {
+	case CopperBulb:
+		b.Lit = v
+		return lookup(b)
+	case ExposedCopperBulb:
+		b.Lit = v
+		return lookup(b)
+	case WeatheredCopperBulb:
+		b.Lit = v
+		return lookup(b)
+	case OxidizedCopperBulb:
+		b.Lit = v
+		return lookup(b)
+	case WaxedCopperBulb:
+		b.Lit = v
+		return lookup(b)
+	case WaxedExposedCopperBulb:
+		b.Lit = v
+		return lookup(b)
+	case WaxedWeatheredCopperBulb:
+		b.Lit = v
+		return lookup(b)
+	case WaxedOxidizedCopperBulb:
+		b.Lit = v
+		return lookup(b)
+	}
+	return s, false
+}
+
+// BulbWithPowered re-encodes a copper_bulb state with POWERED set to `powered`, preserving LIT.
+// Returns (s, false) for a non-bulb. This is `state.setValue(POWERED, flag)` in checkAndFlip. CITE:
+// CopperBulbBlock.checkAndFlip.
+func BulbWithPowered(s StateID, powered bool) (StateID, bool) {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return s, false
+	}
+	v := Boolean(powered)
+	switch b := StateList[s].(type) {
+	case CopperBulb:
+		b.Powered = v
+		return lookup(b)
+	case ExposedCopperBulb:
+		b.Powered = v
+		return lookup(b)
+	case WeatheredCopperBulb:
+		b.Powered = v
+		return lookup(b)
+	case OxidizedCopperBulb:
+		b.Powered = v
+		return lookup(b)
+	case WaxedCopperBulb:
+		b.Powered = v
+		return lookup(b)
+	case WaxedExposedCopperBulb:
+		b.Powered = v
+		return lookup(b)
+	case WaxedWeatheredCopperBulb:
+		b.Powered = v
+		return lookup(b)
+	case WaxedOxidizedCopperBulb:
+		b.Powered = v
+		return lookup(b)
+	}
+	return s, false
+}
+
 // CopperCanOxidize reports WeatheringCopperFullBlock.isRandomlyTicking(state) ==
 // WeatheringCopper.getNext(block).isPresent(): true iff the block has a more-oxidized next tier (so
 // an OXIDIZED copper block is NOT randomly ticked). This is the exact per-state random-tick flag for

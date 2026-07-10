@@ -436,6 +436,256 @@ func (t *TickLoop) tripwireEntitiesPresent(_ pk.Position) bool {
 	return false
 }
 
+// ---------------------------------------------------------------------------------------------
+// Powered rail + activator rail (PoweredRailBlock). ActivatorRailBlock IS `new PoweredRailBlock(...)`
+// in vanilla, so both share this identical logic keyed off the POWERED property. The rail's POWERED
+// bit is driven by redstone: a direct neighbor signal, OR a same-orientation powered rail up to 8
+// cells away along the track line (a powered-rail "run"). Ported 1:1 from the 26.2 jar
+// (temp/cache/26.2-inner.jar, javap this session):
+//   PoweredRailBlock.updateState / findPoweredRailSignal / isSameRailWithPower.
+// BaseRailBlock.neighborChanged and BaseRailBlock.onPlace both funnel into updateState; because the
+// redstone neighbor-update worklist (server/redstone.go onRedstoneEdit -> drainRedstoneUpdates)
+// enqueues the rail's own cell on any adjacent place/break, dispatching updateState from the
+// IsPoweredRailBlock||IsActivatorRailBlock case there covers BOTH the neighborChanged and the onPlace
+// entry points. The minecart physics (server/minecart.go) READS RailPowered; this is the write side.
+
+// poweredRailUpdateState is PoweredRailBlock.updateState(state, level, pos, block):
+//
+//	boolean wasPowered = state.getValue(POWERED);
+//	boolean flag = level.hasNeighborSignal(pos)
+//	    || findPoweredRailSignal(level, pos, state, true, 0)
+//	    || findPoweredRailSignal(level, pos, state, false, 0);
+//	if (flag != wasPowered) {
+//	    level.setBlock(pos, state.setValue(POWERED, flag), 3);
+//	    level.updateNeighborsAt(pos.below(), this);
+//	    if (state.getValue(SHAPE).isSlope()) level.updateNeighborsAt(pos.above(), this);
+//	}
+//
+// The `level.getBlockState(pos) == state`-style guard is implicit: the caller passes the state read at
+// pos this drain step, and SetBlock/broadcast only fire on a real change. CITE: PoweredRailBlock.updateState.
+func (t *TickLoop) poweredRailUpdateState(pos pk.Position, state block.StateID, q *redstoneUpdateQueue) {
+	wasPowered, ok := block.RailPowered(state)
+	if !ok {
+		return // not a POWERED-carrying rail (a plain Rail has none) -> nothing to update.
+	}
+	// `this` in the vanilla method is the concrete rail block updateState was invoked on (a powered_rail
+	// or an activator_rail). isSameRailWithPower's `state.is(this)` requires the same kind, so a run does
+	// not chain across the two families. We capture the origin kind and thread it through the walk.
+	origin := block.IsActivatorRailBlock(state)
+	flag := t.hasNeighborSignal(pos) ||
+		t.findPoweredRailSignal(pos, state, origin, true, 0) ||
+		t.findPoweredRailSignal(pos, state, origin, false, 0)
+	if flag == wasPowered {
+		return
+	}
+	newState, ok := block.SetRailPowered(state, flag)
+	if !ok {
+		return
+	}
+	if t.world().SetBlock(pos, newState, dimMinY) {
+		t.broadcastBlockUpdate(pos, newState)
+	}
+	// updateNeighborsAt(pos.below(), this): the rail powers the block below (a powered rail is a weak
+	// source out its underside via the redstone graph); enqueue it so a consumer there reacts.
+	q.push(relative(pos, block.Down))
+	// A slope rail (ASCENDING_*) also notifies the cell ABOVE. CITE: PoweredRailBlock.updateState
+	// (SHAPE.isSlope() -> updateNeighborsAt(pos.above())).
+	if shape, ok := block.RailShapeOf(state); ok && railShapeIsSlope(shape) {
+		q.push(relative(pos, block.Up))
+	}
+}
+
+// findPoweredRailSignal is PoweredRailBlock.findPoweredRailSignal(level, pos, state, dir, distance):
+// walk the rail LINE one step in the direction implied by (SHAPE, dir), up to distance 8, testing
+// isSameRailWithPower at the stepped cell (and, when the current cell is level ground i.e. NOT stepping
+// down a slope, also one cell below it — the `flag` local). The per-shape step is the exact vanilla
+// tableswitch (RailShape ordinal 0..5 -> switch cases 1..6):
+//
+//	NORTH_SOUTH:     dir ? z++ : z--
+//	EAST_WEST:       dir ? x-- : x++
+//	ASCENDING_EAST:  dir ? x--            : (x++, y++, flag=false); shape=EAST_WEST
+//	ASCENDING_WEST:  dir ? (x--, y++, flag=false) : x++;           shape=EAST_WEST
+//	ASCENDING_NORTH: dir ? z++            : (z--, y++, flag=false); shape=NORTH_SOUTH
+//	ASCENDING_SOUTH: dir ? (z++, y++, flag=false) : z--;           shape=NORTH_SOUTH
+//
+// `flag` (istore 9, seeded true) means "also probe one cell below the stepped position" — true on the
+// flat step and on ascending in the non-rising direction, false when the step itself rises. CITE:
+// PoweredRailBlock.findPoweredRailSignal + PoweredRailBlock$1 SwitchMap.
+func (t *TickLoop) findPoweredRailSignal(pos pk.Position, state block.StateID, originActivator, dir bool, distance int) bool {
+	if distance >= 8 {
+		return false
+	}
+	x, y, z := pos.X, pos.Y, pos.Z
+	flag := true
+	shape, ok := block.RailShapeOf(state)
+	if !ok {
+		return false
+	}
+	switch shape {
+	case block.RailShapeNorthSouth: // case 1
+		if dir {
+			z++
+		} else {
+			z--
+		}
+	case block.RailShapeEastWest: // case 2
+		if dir {
+			x--
+		} else {
+			x++
+		}
+	case block.RailShapeAscendingEast: // case 3
+		if dir {
+			x--
+		} else {
+			x++
+			y++
+			flag = false
+		}
+		shape = block.RailShapeEastWest
+	case block.RailShapeAscendingWest: // case 4
+		if dir {
+			x--
+			y++
+			flag = false
+		} else {
+			x++
+		}
+		shape = block.RailShapeEastWest
+	case block.RailShapeAscendingNorth: // case 5
+		if dir {
+			z++
+		} else {
+			z--
+			y++
+			flag = false
+		}
+		shape = block.RailShapeNorthSouth
+	case block.RailShapeAscendingSouth: // case 6
+		if dir {
+			z++
+			y++
+			flag = false
+		} else {
+			z--
+		}
+		shape = block.RailShapeNorthSouth
+	}
+	stepped := pk.Position{X: x, Y: y, Z: z}
+	if t.isSameRailWithPower(stepped, originActivator, dir, distance, shape) {
+		return true
+	}
+	if flag && t.isSameRailWithPower(pk.Position{X: x, Y: y - 1, Z: z}, originActivator, dir, distance, shape) {
+		return true
+	}
+	return false
+}
+
+// isSameRailWithPower is PoweredRailBlock.isSameRailWithPower(level, pos, dir, distance, shape):
+//
+//	BlockState state = level.getBlockState(pos);
+//	if (!state.is(this)) return false;                 // must be the SAME rail block type
+//	RailShape rs = state.getValue(SHAPE);
+//	if (shape == EAST_WEST && (rs == NORTH_SOUTH || rs == ASCENDING_NORTH || rs == ASCENDING_SOUTH)) return false;
+//	if (shape == NORTH_SOUTH && (rs == EAST_WEST || rs == ASCENDING_EAST || rs == ASCENDING_WEST)) return false;
+//	if (!state.getValue(POWERED)) return false;
+//	return level.hasNeighborSignal(pos) || findPoweredRailSignal(level, pos, state, dir, distance + 1);
+//
+// The `state.is(this)` check must be the SAME concrete block type as the rail the run started from:
+// `this` stays the origin PoweredRailBlock instance across the whole recursion, so a powered_rail run
+// never chains through an activator_rail and vice-versa. `originActivator` carries that origin kind.
+// CITE: PoweredRailBlock.isSameRailWithPower.
+func (t *TickLoop) isSameRailWithPower(pos pk.Position, originActivator, dir bool, distance int, shape block.RailShape) bool {
+	state := t.redstoneBlockAt(pos)
+	// state.is(this): the neighbour must be the SAME concrete rail block as the origin.
+	if block.IsActivatorRailBlock(state) != originActivator || !block.IsPoweredRailFamily(state) {
+		return false
+	}
+	rs, ok := block.RailShapeOf(state)
+	if !ok {
+		return false
+	}
+	// shape guard: a run following an EAST_WEST orientation must not chain to a NORTH_SOUTH-family rail
+	// (and vice-versa). CITE: PoweredRailBlock.isSameRailWithPower shape checks.
+	if shape == block.RailShapeEastWest &&
+		(rs == block.RailShapeNorthSouth || rs == block.RailShapeAscendingNorth || rs == block.RailShapeAscendingSouth) {
+		return false
+	}
+	if shape == block.RailShapeNorthSouth &&
+		(rs == block.RailShapeEastWest || rs == block.RailShapeAscendingEast || rs == block.RailShapeAscendingWest) {
+		return false
+	}
+	p, ok := block.RailPowered(state)
+	if !ok || !p {
+		return false
+	}
+	return t.hasNeighborSignal(pos) || t.findPoweredRailSignal(pos, state, originActivator, dir, distance+1)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Copper bulb (CopperBulbBlock) — a redstone T-flip-flop. A RISING edge on POWERED toggles LIT; a held
+// signal does not re-toggle (POWERED stays true). Ported 1:1 from the 26.2 jar:
+//   CopperBulbBlock.checkAndFlip / neighborChanged / onPlace.
+// LIT is also the comparator analog output (LIT?15:0) — wired in redstone_diode.go. Both LIT and
+// POWERED are real state properties in the generated table (level/block/blocks.go), so this is
+// wire-correct with no runtime flag.
+
+// copperBulbCheckAndFlip is CopperBulbBlock.checkAndFlip(state, level, pos):
+//
+//	boolean flag = level.hasNeighborSignal(pos);
+//	if (flag == state.getValue(POWERED)) return;               // no edge -> nothing changes
+//	BlockState s = state;
+//	if (!state.getValue(POWERED)) s = state.cycle(LIT);        // RISING edge (false->true): toggle LIT
+//	level.setBlock(pos, s.setValue(POWERED, flag), 3);
+//
+// So: on a rising edge, LIT flips and POWERED becomes true; on a falling edge, LIT is untouched and
+// POWERED becomes false. This is the T-flip-flop: two rising edges to return LIT to its start. The
+// COPPER_BULB_TURN_ON/OFF sound is a client cosmetic (cite-deferred). Dispatched from the IsCopperBulb
+// case in drainRedstoneUpdates (server/redstone.go), which covers BOTH neighborChanged and onPlace
+// (the redstone worklist enqueues the bulb's own cell on any adjacent edit). CITE:
+// CopperBulbBlock.checkAndFlip.
+func (t *TickLoop) copperBulbCheckAndFlip(pos pk.Position, state block.StateID) {
+	if t.world() == nil {
+		return
+	}
+	flag := t.hasNeighborSignal(pos)
+	if flag == block.BulbPowered(state) {
+		return
+	}
+	s := state
+	if !block.BulbPowered(state) {
+		// RISING edge: state.cycle(LIT) — flip LIT.
+		if cycled, ok := block.BulbWithLit(state, !block.BulbLit(state)); ok {
+			s = cycled
+		}
+	}
+	newState, ok := block.BulbWithPowered(s, flag)
+	if !ok {
+		return
+	}
+	if t.world().SetBlock(pos, newState, dimMinY) {
+		t.broadcastBlockUpdate(pos, newState)
+	}
+}
+
+// copperBulbAnalogOutputSignal ports CopperBulbBlock.getAnalogOutputSignal (hasAnalogOutputSignal ==
+// true): LIT ? 15 : 0. Returns (signal, true) when pos is a copper_bulb, (0, false) otherwise (so the
+// comparator keeps its super/container value). CITE: CopperBulbBlock.hasAnalogOutputSignal /
+// getAnalogOutputSignal.
+func (t *TickLoop) copperBulbAnalogOutputSignal(pos pk.Position) (int, bool) {
+	if t.world() == nil {
+		return 0, false
+	}
+	state, ok := t.world().GetBlock(pos, dimMinY)
+	if !ok || !block.IsCopperBulb(state) {
+		return 0, false
+	}
+	if block.BulbLit(state) {
+		return 15, true
+	}
+	return 0, true
+}
+
 // blockAxis identifies the Direction.getAxis() result for the getRedstoneStrength branch.
 type blockAxis int
 

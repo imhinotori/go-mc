@@ -189,6 +189,75 @@ func bellFacing(s block.StateID) (block.Direction, bool) {
 	return block.Down, false
 }
 
+// bellPowered returns the POWERED property of a bell, or false for a non-bell. This is the
+// `state.getValue(POWERED)` read BellBlock.neighborChanged compares the neighbor signal against. The
+// bell's POWERED bit is present in the generated state table (level/block/blocks.go Bell{Attachment,
+// Facing, Powered}), so it is a wire-correct state property, not a runtime flag. CITE: BellBlock.POWERED.
+func bellPowered(s block.StateID) bool {
+	if int(s) < 0 || int(s) >= len(block.StateList) {
+		return false
+	}
+	if b, ok := block.StateList[s].(block.Bell); ok {
+		return bool(b.Powered)
+	}
+	return false
+}
+
+// bellWithPowered re-encodes a bell state with POWERED set to `powered`, preserving Attachment+Facing.
+// Returns (s, false) for a non-bell. This is `state.setValue(POWERED, flag)` in neighborChanged. CITE:
+// BellBlock.neighborChanged.
+func bellWithPowered(s block.StateID, powered bool) (block.StateID, bool) {
+	if int(s) < 0 || int(s) >= len(block.StateList) {
+		return s, false
+	}
+	if b, ok := block.StateList[s].(block.Bell); ok {
+		b.Powered = block.Boolean(powered)
+		if sid, ok := block.ToStateID[b]; ok {
+			return sid, true
+		}
+	}
+	return s, false
+}
+
+// bellRedstoneNeighborChanged is BellBlock.neighborChanged:
+//
+//	boolean flag = level.hasNeighborSignal(pos);
+//	if (flag != state.getValue(POWERED)) {
+//	    if (flag) attemptToRing(level, pos, null);            // null -> rings on the FACING face
+//	    level.setBlock(pos, state.setValue(POWERED, flag), 3);
+//	}
+//
+// A redstone RISING edge (POWERED false -> true) rings the bell; the falling edge only writes POWERED.
+// attemptToRing(level, pos, null) resolves the rung face from state.getValue(FACING) and drives
+// BellBlockEntity.onHit — reused here via bellOnHit (the same effect useBell applies). Dispatched from
+// the IsBell case in drainRedstoneUpdates (server/redstone.go). CITE: BellBlock.neighborChanged /
+// attemptToRing(level, pos, null).
+func (t *TickLoop) bellRedstoneNeighborChanged(pos pk.Position, state block.StateID) {
+	if t.world() == nil {
+		return
+	}
+	flag := t.hasNeighborSignal(pos)
+	if flag == bellPowered(state) {
+		return
+	}
+	if flag {
+		// attemptToRing(level, pos, null): ring on the FACING face (the null-direction default). This is
+		// the exact effect useBell applies (bellOnHit with the FACING-derived 3D data value).
+		if b := t.resolveBell(pos); b != nil {
+			dir := block.Down
+			if f, ok := bellFacing(state); ok {
+				dir = f
+			}
+			t.bellOnHit(b, bellDirection3D(dir))
+		}
+	}
+	if newState, ok := bellWithPowered(state, flag); ok {
+		if t.world().SetBlock(pos, newState, dimMinY) {
+			t.broadcastBlockUpdate(pos, newState)
+		}
+	}
+}
+
 // bellDirection3D ports Direction.get3DDataValue: DOWN=0, UP=1, NORTH=2, SOUTH=3, WEST=4, EAST=5. Used to
 // stamp the rung face into clickDirection (the deferred bell-swing animation reads it). CITE
 // Direction.get3DDataValue.
