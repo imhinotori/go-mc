@@ -64,3 +64,36 @@ func TestGoatScreamingRollDeterministic(t *testing.T) {
 		t.Fatal("goatAiStep mutated the screaming flag (must be a bounded no-op)")
 	}
 }
+
+// TestGoatHornsDefaultBoth: a freshly spawned goat has BOTH horns unless the 10% removal roll fires.
+// Goat static defaults DATA_HAS_LEFT_HORN / DATA_HAS_RIGHT_HORN = true; the removal strips at most ONE.
+func TestGoatHornsNeverBothRemoved(t *testing.T) {
+	loop, floorY := goatLoop(t)
+	// Across many goat ids, the unihorn roll (nextFloat()<0.1) should fire on some adults, but NEVER
+	// remove both horns (finalizeSpawn removes exactly one -- offsets 63-94, a single nextBoolean pick).
+	sawMissing := false
+	for i := 0; i < 400; i++ {
+		g := loop.spawnGoat(8.5, float64(floorY+1), 8.5, false)
+		if !g.goatHasLeftHorn && !g.goatHasRightHorn {
+			t.Fatalf("goat id=%d lost BOTH horns -- finalizeSpawn removes at most one", g.id)
+		}
+		if !g.goatHasLeftHorn || !g.goatHasRightHorn {
+			sawMissing = true
+		}
+	}
+	if !sawMissing {
+		t.Fatal("across 400 adult goats NONE lost a horn -- the 10% unihorn removal roll never fired")
+	}
+}
+
+// TestGoatBabyKeepsBothHorns: a BABY goat draws NEITHER the nextFloat gate nor the nextBoolean pick
+// (finalizeSpawn offset 45 ifne skips the whole block on isBaby()), so a baby always keeps both horns.
+func TestGoatBabyKeepsBothHorns(t *testing.T) {
+	loop, floorY := goatLoop(t)
+	for i := 0; i < 400; i++ {
+		g := loop.spawnGoat(8.5, float64(floorY+1), 8.5, true)
+		if !g.goatHasLeftHorn || !g.goatHasRightHorn {
+			t.Fatalf("baby goat id=%d is missing a horn -- the removal roll must be skipped for babies", g.id)
+		}
+	}
+}

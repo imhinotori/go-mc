@@ -22,9 +22,9 @@
 // v1 STUBS (cited): the BRAIN (GoatAi sensors + activities: LongJumpToRandomPos, PrepareRamNearestTarget,
 // RamTarget, FollowTemptation, BabyFollowAdult) is the DEFERRED behavior layer -- this port supplies the
 // bounded passive goal walk (Float/Tempt(GOAT_FOOD)/Breed/Follow/Stroll/Look) + the faithful SCREAMING
-// spawn roll (nextDouble() < 0.02). The RAM (lower-head charge + knockback + goat-horn drop), the high
-// goat-jump, and the one-horn removal roll are DEFERRED. The observable attributes, the passive goal walk,
-// and the screaming-variant flag are EXACT.
+// spawn roll (nextDouble() < 0.02) + the one-horn removal roll (nextFloat()<0.1 then nextBoolean).
+// The RAM (lower-head charge + knockback + goat-horn drop) and the high goat-jump are DEFERRED. The
+// observable attributes, the passive goal walk, the screaming-variant flag, and the horn state are EXACT.
 
 package server
 
@@ -43,6 +43,7 @@ const (
 	goatLookDistance    = 8.0                 // LookAtTargetSink distance (the common animal look range)
 	goatScreamingChance = 0.02                // GOAT_SCREAMING_CHANCE (ldc2_w 0.02d): nextDouble() < 0.02 -> screaming
 	goatFoodTag         = "goat_food"         // GOAT_FOOD (WHEAT): the tempt predicate
+	goatUnihornChance   = 0.10000000149011612 // finalizeSpawn: !isBaby() && nextFloat() < 0.1 -> remove one horn (ldc2_w 0.10000000149011612d)
 )
 
 // newGoatAI builds the Goat bounded passive AI. Goat is a BRAIN mob in vanilla (the RAM/long-jump/tempt
@@ -84,9 +85,26 @@ func (t *TickLoop) spawnGoat(x, y, z float64, baby bool) *Entity {
 	initSpawnHealth(g) // setHealth(getMaxHealth()) -> 10.0
 	g.ai = newGoatAI()
 	reseedMobAI(g.ai, g.id)
-	// finalizeSpawn: setScreamingGoat(random.nextDouble() < GOAT_SCREAMING_CHANCE 0.02). Rolled on the
-	// goat's own (now id-reseeded) stream -- a deterministic per-goat variant, drawn once at spawn.
+	// Goat static defaults: DATA_HAS_LEFT_HORN / DATA_HAS_RIGHT_HORN default TRUE (a goat spawns with
+	// both horns; finalizeSpawn may remove one below).
+	g.goatHasLeftHorn = true
+	g.goatHasRightHorn = true
+	// finalizeSpawn draw order (bytecode 14-94), on the goat's own (id-reseeded) stream, matching the
+	// codebase per-entity-rng convention (screaming distribution is identical to level.getRandom):
+	//   (1) setScreamingGoat(random.nextDouble() < GOAT_SCREAMING_CHANCE 0.02).
 	g.goatScreaming = mobRandom(g).nextDouble() < goatScreamingChance
+	//   (2) ageBoundaryReached() (RNG-free -- age/attribute refresh).
+	//   (3) if (!isBaby() && random.nextFloat() < 0.1) removeOneHorn: nextBoolean() picks LEFT (true) or
+	//       RIGHT (false) to strip. The nextFloat() gate + the nextBoolean() draw are CONDITIONAL on
+	//       !isBaby(); a baby draws NEITHER (the ifne at offset 45 skips the whole block) -- so the draw
+	//       count matches vanilla exactly (baby: 1 draw; adult: 2 draws or 3 when the horn is removed).
+	if !baby && mobRandom(g).nextFloat() < goatUnihornChance {
+		if mobRandom(g).nextBoolean() {
+			g.goatHasLeftHorn = false // DATA_HAS_LEFT_HORN = false
+		} else {
+			g.goatHasRightHorn = false // DATA_HAS_RIGHT_HORN = false
+		}
+	}
 	owner := t.regionForEntity(g)
 	if owner == nil {
 		owner = t.cur()

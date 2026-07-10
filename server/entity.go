@@ -618,7 +618,13 @@ type Entity struct {
 	beeHasStung       bool
 	beeTimeSinceSting int
 	goatScreaming     bool
-	frogVariant       int
+	// goatHasLeftHorn / goatHasRightHorn port Goat DATA_HAS_LEFT_HORN / DATA_HAS_RIGHT_HORN (default
+	// true -- a goat spawns with both horns). Goat.finalizeSpawn removes ONE horn on a non-baby with a
+	// 10% roll (nextBoolean picks which). Seeded true at spawn (spawnGoat). Cite Goat static defaults +
+	// Goat.finalizeSpawn.
+	goatHasLeftHorn  bool
+	goatHasRightHorn bool
+	frogVariant      int
 	// --- CAMEL / SNIFFER / ALLAY / AXOLOTL (passive animals, Task) ----------------------------------
 	//
 	// Tick-owned plain values, set/read ONLY for their own type (each *AiStep gates on typ). isCamel/
