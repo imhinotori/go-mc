@@ -639,9 +639,10 @@ func (t *TickLoop) snowLayerRandomTick(state block.StateID, pos pk.Position) {
 	if t.getBrightnessBlock(pos) <= 11 {
 		return
 	}
-	// dropResources(state, level, pos) — DEFERRED (loot subsystem). Mirrored as a no-op here; the
-	// snowball drop is a cited follow-up.
-	_ = state
+	// dropResources(state, level, pos): the snowball drop (blocks/snow loot table). No breaker/tool
+	// (the world-driven melt) -> spawnBlockDrop(nil, ...), the faithful no-tool default. Runs BEFORE the
+	// removeBlock, matching SnowLayerBlock.randomTick order.
+	t.spawnBlockDrop(nil, pos, state)
 	// removeBlock(pos, false): setBlock(pos, air) (flag 16 == UPDATE_NEIGHBORS only; no drop).
 	air := t.airState()
 	if t.world().SetBlock(pos, air, dimMinY) {

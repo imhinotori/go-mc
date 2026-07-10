@@ -169,8 +169,26 @@ func parseCondition(rc rawCondition) (LootCondition, error) {
 		// the correct v1 slime_ball drop. Structured so a real frog-source read slots in. Cite
 		// DamageSourceCondition.test + DamageSourcePredicate (source_entity entity_type).
 		return &damageSourceCondition{kind: damageSourceUnknown}, nil
+	case "table_bonus":
+		// BonusLevelTableCondition.test: read the TOOL's level for `enchantment` (0 when no tool / not
+		// enchanted -> getOptionalParameter(TOOL) may be null, EnchantmentHelper.getItemEnchantmentLevel
+		// returns 0), pick chances[min(level, chances.size-1)], and return random.nextFloat() < that. The
+		// `chances` array is the values list (index 0 = no bonus, the decay/no-tool case). Used by the
+		// leaves tables (sapling/stick chance scaled by fortune). javap BonusLevelTableCondition.test.
+		var tb struct {
+			Enchantment string    `json:"enchantment"`
+			Chances     []float64 `json:"chances"`
+		}
+		full, _ := json.Marshal(rc)
+		if err := json.Unmarshal(full, &tb); err != nil {
+			return nil, fmt.Errorf("table_bonus: %w", err)
+		}
+		if len(tb.Chances) == 0 {
+			return nil, fmt.Errorf("table_bonus: empty chances list")
+		}
+		return &tableBonusCondition{enchantment: tb.Enchantment, values: tb.Chances}, nil
 	default:
-		return nil, fmt.Errorf("loot condition %q not ported (location_check/match_tool/survives_explosion/any_of/all_of/killed_by_player/entity_properties/inverted/damage_source_properties in scope)", typeStr)
+		return nil, fmt.Errorf("loot condition %q not ported (location_check/match_tool/survives_explosion/any_of/all_of/killed_by_player/entity_properties/inverted/damage_source_properties/table_bonus in scope)", typeStr)
 	}
 }
 
@@ -200,6 +218,36 @@ func (c *damageSourceCondition) Test(ctx *LootContext) bool {
 	default:
 		return false // unmodeled source form (e.g. killed-by-frog) -> conservative false.
 	}
+}
+
+// tableBonusCondition ports net.minecraft.world.level.storage.loot.predicates.BonusLevelTableCondition:
+// read the TOOL's level for `enchantment` (0 when no tool / not enchanted), index the `values` list at
+// min(level, len-1), and return random.nextFloat() < that chance. The world-driven decay path (no tool)
+// takes index 0 -- the base drop chance (e.g. a leaf's 5% sapling). Cite BonusLevelTableCondition.test.
+type tableBonusCondition struct {
+	enchantment string
+	values      []float64
+}
+
+func (c *tableBonusCondition) Test(ctx *LootContext) bool {
+	// EnchantmentHelper.getItemEnchantmentLevel(this.enchantment, tool): 0 when the tool is absent or
+	// unenchanted. Mirrors applyBonusCount's read (map first, then the fortune fast-path field).
+	level := 0
+	if lvl, ok := ctx.ToolEnchantments[c.enchantment]; ok {
+		level = lvl
+	} else if lvl, ok := ctx.ToolEnchantments[normalizeType(c.enchantment)]; ok {
+		level = lvl
+	} else if c.enchantment == "minecraft:fortune" {
+		level = ctx.ToolFortuneLevel
+	}
+	idx := level
+	if idx > len(c.values)-1 {
+		idx = len(c.values) - 1 // Math.min(level, values.size() - 1)
+	}
+	if idx < 0 {
+		idx = 0
+	}
+	return float64(ctx.Random().NextFloat()) < c.values[idx]
 }
 
 // anyOfCondition is the port of net.minecraft.world.level.storage.loot.predicates.AnyOfCondition

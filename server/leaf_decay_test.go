@@ -55,8 +55,8 @@ func TestLeafAdjacentToLogLowDistanceNoDecay(t *testing.T) {
 }
 
 // TestLeafDistanceSevenDecaysOnRandomTick: a non-persistent leaf at DISTANCE 7 (no log in range) decays
-// to air on a random tick; block -> air (the drop is the deferred loot half). Proves the decay gate
-// decaying == !PERSISTENT && DISTANCE==7.
+// to air on a random tick (block -> air; the loot drop is covered by TestLeafDecayDropsResources).
+// Proves the decay gate decaying == !PERSISTENT && DISTANCE==7.
 func TestLeafDistanceSevenDecaysOnRandomTick(t *testing.T) {
 	loop, mgr := newLeafDecayLoop()
 	pos := pk.Position{X: 6, Y: 72, Z: 6}
@@ -67,6 +67,27 @@ func TestLeafDistanceSevenDecaysOnRandomTick(t *testing.T) {
 
 	if !block.IsAir(mustGet(t, mgr, pos)) {
 		t.Fatal("a non-persistent DISTANCE-7 leaf must decay to air on a random tick")
+	}
+}
+
+// TestLeafDecayDropsResources: a decaying leaf spawns its loot (sapling/stick/apple over enough ticks)
+// as Item entities BEFORE the block->air removal (LeavesBlock.randomTick dropResources). This is a
+// probabilistic drop, so drive many independent decays and assert at least one produced an item.
+func TestLeafDecayDropsResources(t *testing.T) {
+	loop, mgr := newLeafDecayLoop()
+	drops := 0
+	for i := 0; i < 400; i++ {
+		pos := pk.Position{X: (i % 15), Y: 72, Z: (i / 15)}
+		leaf := oakLeaves(7, false)
+		mgr.SetBlock(pos, leaf, dimMinY)
+		before := len(loop.only().entities.byID)
+		loop.leavesRandomTick(loop.only(), leaf, pos)
+		if len(loop.only().entities.byID) > before {
+			drops++
+		}
+	}
+	if drops == 0 {
+		t.Fatal("400 leaf decays produced ZERO item drops -- dropResources not wired into leavesRandomTick")
 	}
 }
 

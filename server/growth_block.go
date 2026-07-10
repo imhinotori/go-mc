@@ -204,10 +204,10 @@ func oakTreeConfig() *feature.TreeConfiguration {
 // the state's DISTANCE/PERSISTENT), so it leaves the levelRandom stream untouched. r is unused (no
 // RNG). CITE: LeavesBlock.randomTick / decaying.
 //
-// DEFERRAL (cited): dropResources(state, level, pos) rolls the leaves loot table (sapling/stick/apple
-// with the fortune/shears context) and spawns the item entities. Sulfur's loot-on-decay path is a
-// follow-up; the load-bearing behavior is the block -> air removal (the leaf disappears), which IS
-// performed here. CITE: LeavesBlock.randomTick (Block.dropResources); Block.getDrops (leaves loot).
+// dropResources(state, level, pos) rolls the leaves loot table (sapling / stick / apple, with the
+// no-tool decay context: shears/silk-touch fail, fortune no-ops -> the base decay-drop rolls) and spawns
+// the item entities BEFORE the block->air removal, matching LeavesBlock.randomTick order. CITE:
+// LeavesBlock.randomTick (Block.dropResources); Block.getDrops (leaves loot).
 func (t *TickLoop) leavesRandomTick(r *region, state block.StateID, pos pk.Position) {
 	_ = r
 	if t.world() == nil {
@@ -218,7 +218,10 @@ func (t *TickLoop) leavesRandomTick(r *region, state block.StateID, pos pk.Posit
 	if !block.LeavesDecaying(state) {
 		return
 	}
-	// dropResources(...) — DEFERRED (see the deferral note). removeBlock(pos, false) -> set air.
+	// dropResources(state, level, pos): no breaker/tool (world-driven decay) -> spawnBlockDrop(nil, ...),
+	// the faithful no-tool decay drop. Runs BEFORE removeBlock, matching LeavesBlock.randomTick order.
+	t.spawnBlockDrop(nil, pos, state)
+	// removeBlock(pos, false) -> set air.
 	air := t.airState()
 	if t.world().SetBlock(pos, air, dimMinY) {
 		t.broadcastBlockUpdate(pos, air)
