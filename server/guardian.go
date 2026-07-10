@@ -188,6 +188,16 @@ func (t *TickLoop) guardianAttackGoalTick(e *Entity) {
 		guardianAttackGoalStop(e)
 		return
 	}
+	// GuardianAttackGoal.canContinueToUse (bytecode 7-49): super.canContinueToUse() && (elder ||
+	// getTarget()==null || distanceToSqr(target) > 9.0). A NON-elder guardian STOPS its beam charge
+	// once the target closes to within 3 blocks (dist^2 <= 9.0) -- the goal ends (GuardianAttackGoal.stop
+	// resets attackTime = -10) but the TARGET IS RETAINED (canContinueToUse does not setTarget(null)), so
+	// the beam re-charges from scratch when the target backs away past 3 blocks again. An elder ignores
+	// range (keeps beaming at any distance). Cite Guardian$GuardianAttackGoal.canContinueToUse.
+	if !g.elder && distanceToSqrPlayer(target, e) <= guardianContinueRangeSqr {
+		guardianAttackGoalStop(e) // stop(): attackTime = -10 (target kept for a future re-charge)
+		return
+	}
 	g.attackTime++
 	switch {
 	case g.attackTime == 0:

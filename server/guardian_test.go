@@ -222,3 +222,50 @@ func TestElderGuardianAoEMiningFatigue(t *testing.T) {
 		t.Fatal("elder AoE fired on a non-1200-tick")
 	}
 }
+
+// TestGuardianBeamCancelsWhenTargetTooClose: a NON-elder guardian STOPS its beam charge once the
+// target closes to within 3 blocks (distanceToSqr <= 9.0) -- GuardianAttackGoal.canContinueToUse
+// (bytecode 7-49: super && (elder || target==null || dist>9.0)). The beam never completes (no damage),
+// attackTime resets to the start (-10), and the target is RETAINED (canContinueToUse does not null it).
+func TestGuardianBeamCancelsWhenTargetTooClose(t *testing.T) {
+	loop, floorY := guardianLoop(t)
+	gy := float64(floorY + 30)
+	g := loop.spawnGuardian(8.5, gy, 8.5)
+	// Player 2 blocks away (dist^2 = 4 <= 9): inside the beam-cancel range.
+	p := combatTestPlayer(loop, 10.5, gy, 8.5, 7011)
+	p.health = 20.0
+	g.ai.attackTargetID = p.entityID
+	g.guardian.attackTime = guardianAttackStart
+
+	for i := 0; i < 200; i++ {
+		loop.guardianAttackGoalTick(g)
+	}
+	if math.Abs(float64(p.health)-20.0) > 1e-6 {
+		t.Fatalf("close-range player took beam damage %v -- non-elder beam must cancel within 3 blocks", 20.0-p.health)
+	}
+	if g.guardian.attackTime != guardianAttackStart {
+		t.Fatalf("attackTime = %d after cancel, want the start reset %d (GuardianAttackGoal.stop)", g.guardian.attackTime, guardianAttackStart)
+	}
+	if g.ai.attackTargetID != p.entityID {
+		t.Fatalf("target dropped (%d) on beam cancel -- canContinueToUse retains the target", g.ai.attackTargetID)
+	}
+}
+
+// TestElderGuardianBeamIgnoresRange: an ELDER guardian keeps beaming at ANY distance -- the range-9
+// cancel is gated on !elder, so a target 2 blocks away is still charged + damaged.
+func TestElderGuardianBeamIgnoresRange(t *testing.T) {
+	loop, floorY := guardianLoop(t)
+	gy := float64(floorY + 30)
+	g := loop.spawnElderGuardian(8.5, gy, 8.5)
+	p := combatTestPlayer(loop, 10.5, gy, 8.5, 7012) // 2 blocks (dist^2=4 <= 9)
+	p.health = 20.0
+	g.ai.attackTargetID = p.entityID
+	g.guardian.attackTime = elderGuardianAttackDuration - 1
+	p.invulnerableTime = 0
+	p.lastHurt = 0
+
+	loop.guardianAttackGoalTick(g)
+	if math.Abs(float64(p.health)-20.0) < 1e-6 {
+		t.Fatal("elder guardian dealt NO damage at 2 blocks -- elder ignores the range-9 cancel and must fire")
+	}
+}
