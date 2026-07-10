@@ -471,3 +471,25 @@ func TestRespawnFlow(t *testing.T) {
 		}
 	})
 }
+
+
+// TestFreezeExtraGuardNoOpForPlayer proves the LivingEntity.hurtServer FREEZE-extra multiply
+// (`if (source.is(IS_FREEZING) && this.is(FREEZE_HURTS_EXTRA_TYPES)) amount *= 5.0f;`) is a no-op
+// for a PLAYER victim: the player is NOT a member of freeze_hurts_extra_types (that entity-type tag
+// holds only strider/blaze/magma_cube), so an is_freezing source deals its UNMULTIPLIED amount.
+// This pins the constant-false guard added when the hurtServer damage steps were reordered to the
+// exact jar sequence (blocking -> freeze-extra -> helmet -> NaN/Inf clamp -> i-frame gate).
+func TestFreezeExtraGuardNoOpForPlayer(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	p := combatPlayer(loop, 1)
+	// minecraft:freeze is an is_freezing member (data/tag id 17). A player takes the raw 2.0 -- NOT
+	// 2.0*5 == 10.0 -- because the FREEZE_HURTS_EXTRA_TYPES guard is false for a player.
+	src := damageSourceByTypeName("minecraft:freeze", 0)
+	if !src.is("is_freezing") {
+		t.Fatalf("precondition: minecraft:freeze must be an is_freezing member")
+	}
+	loop.applyDamage(p, src, 2.0)
+	if p.health != maxHealth-2.0 {
+		t.Fatalf("freeze hit on player: health = %v, want %v (unmultiplied 2.0, NOT 5x)", p.health, maxHealth-2.0)
+	}
+}

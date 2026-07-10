@@ -261,27 +261,46 @@ func (t *TickLoop) applyDamage(p *tickPlayer, src damageSource, amount float32) 
 		return
 	}
 
-	// `if (amount < 0.0F) amount = 0.0F;` (bytecode: fload_3 fconst_0 fcmpg ifge -> fconst_0 fstore_3).
+	// `if (amount < 0.0F) amount = 0.0F;` (bytecode 58-65: fload_3 fconst_0 fcmpg ifge -> fconst_0 fstore_3).
 	if amount < 0.0 {
 		amount = 0.0
 	}
 
-	// NaN/Infinity clamp to Float.MAX_VALUE (bytecode: Float.isNaN / Float.isInfinite -> ldc
-	// 3.4028235E38f fstore_3). Preserved verbatim so a degenerate damage value becomes the finite
-	// max rather than poisoning the health subtraction.
-	if isNaN32(amount) || isInf32(amount) {
-		amount = maxFloat32
-	}
-
-	// SHIELD / minecraft:blocks_attacks blocking (LivingEntity.hurtServer offsets 69-101, BEFORE the
-	// i-frame gate at offset 184): ItemStack useItem = getUseItem(); float f6 = applyItemBlocking(level,
-	// source, amount); amount -= f6;. applyItemBlocking reduces the incoming damage per the shield
-	// damage_reductions curve when the player is actively blocking (using a blocks_attacks item past its
-	// block delay) and the hit is from the front and not #bypasses_shield. It also damages the shield and
-	// starts the axe-disable cooldown. Placed here so the surviving amount is what the i-frame gate then
-	// rate-limits, exactly as vanilla. Cite LivingEntity.hurtServer (applyItemBlocking placement).
+	// SHIELD / minecraft:blocks_attacks blocking (LivingEntity.hurtServer bytecode 66-88, BEFORE the
+	// freeze/helmet/NaN steps and the i-frame gate at offset 184): ItemStack useItem = getUseItem();
+	// float f6 = applyItemBlocking(level, source, amount); amount -= f6;. applyItemBlocking reduces the
+	// incoming damage per the shield damage_reductions curve when the player is actively blocking (using a
+	// blocks_attacks item past its block delay) and the hit is from the front and not #bypasses_shield. It
+	// also damages the shield and starts the axe-disable cooldown. This is the FIRST amount-mutating step
+	// after the amount<0 clamp, BEFORE the freeze-extra multiply and the NaN/Inf clamp -- exactly the jar
+	// order (E: the NaN/Inf clamp was previously hoisted above blocking, out of jar sequence). Cite
+	// LivingEntity.hurtServer (applyItemBlocking at 66-88).
 	if blocked := t.applyItemBlocking(p, src, amount); blocked > 0.0 {
 		amount -= blocked
+	}
+
+	// FREEZE-extra multiply (bytecode 103-128): `if (source.is(IS_FREEZING) && this.is(
+	// FREEZE_HURTS_EXTRA_TYPES)) amount *= 5.0f;`. FREEZE_HURTS_EXTRA_TYPES is an ENTITY-type tag whose
+	// members are {strider, blaze, magma_cube} (freeze_hurts_extra_types.json) -- the PLAYER is NOT a
+	// member, so the `this.is(FREEZE_HURTS_EXTRA_TYPES)` guard is a cited constant-false for a player
+	// victim and the multiply never applies here. Kept verbatim (as the constant-false guard) so the jar
+	// step order is exact between blocking and the NaN/Inf clamp; a mob-victim freeze path (combat_mob.go)
+	// is where the tag can be true. Cite LivingEntity.hurtServer (IS_FREEZING * 5.0f).
+	const playerInFreezeHurtsExtraTypes = false // player NOT in freeze_hurts_extra_types.json
+	if src.is("is_freezing") && playerInFreezeHurtsExtraTypes {
+		amount *= 5.0
+	}
+
+	// DAMAGES_HELMET (bytecode 129-163): a helmet-damaging source (falling_block/etc.) wears the HEAD
+	// slot then `amount *= 0.75f`. v1 has no HEAD-worn item on the player hurt path that carries this,
+	// so it is a cited stub (no helmet-durability on this source set); documented here to keep the jar
+	// step order exact before the NaN/Inf clamp. Cite LivingEntity.hurtServer (DAMAGES_HELMET, 0.75f).
+
+	// NaN/Infinity clamp to Float.MAX_VALUE (bytecode 164-180: Float.isNaN / Float.isInfinite -> ldc
+	// 3.4028235E38f fstore_3). Runs AFTER blocking/freeze/helmet, immediately BEFORE the i-frame gate,
+	// so a degenerate damage value becomes the finite max rather than poisoning the health subtraction.
+	if isNaN32(amount) || isInf32(amount) {
+		amount = maxFloat32
 	}
 
 	// The invulnerableTime i-frame gate (bytecode 184–272): the anti-spam rate limit. While the
