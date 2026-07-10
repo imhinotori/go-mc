@@ -613,6 +613,11 @@ type TickLoop struct {
 	// sculk shrieker tryToWarn machine advances. Lazily constructed; tick-owned.
 	wardenTrackers map[int32]*wardenSpawnTracker
 
+	// vibrationListeners is the flat live set of VibrationSystem.Listeners (the per-chunk
+	// GameEventListenerRegistry reduced to one server-level list). A Warden registers its
+	// VibrationUser here on spawn; gameEvent(...) walks it. Cite GameEventListenerRegistry.
+	vibrationListeners []*vibrationListener
+
 	// chunkSaver is the off-tick chunk-persistence consumer (SUB-PERSIST). It is nil until
 	// SetChunkSaver wires it (tests/ephemeral runs leave it nil → no chunk saves). The tick's save
 	// phase (tickChunkSave) drains the manager's dirty set, SERIALIZES each dirty/unloaded chunk ON

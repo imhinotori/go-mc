@@ -109,6 +109,12 @@ type wardenState struct {
 	// the FIGHT activity its ATTACK_TARGET. Cite WardenAi.updateActivity + SetRoarTarget + Roar.
 	roarTargetID int32
 	roarTicks    int
+	// vibration is the VibrationSystem.Data (the in-flight game-event vibration); vibrationCooldown
+	// is the VIBRATION_COOLDOWN memory (40t after a received vibration); recentProjectileTicks is the
+	// RECENT_PROJECTILE memory (100t after a projectile vibration). Cite Warden.VibrationUser.
+	vibration             *vibrationData
+	vibrationCooldown     int
+	recentProjectileTicks int
 }
 
 // spawnWarden creates a Warden at (x,y,z) (NewEntity seeds the 500-HP wardenSupplier by the type name
@@ -131,6 +137,10 @@ func (t *TickLoop) spawnWarden(x, y, z float64, emerging bool) *Entity {
 		owner = t.cur()
 	}
 	owner.entities.add(w)
+	// Register the Warden VibrationSystem.Listener on the game-event bus so nearby STEP/BLOCK_*/
+	// PROJECTILE_LAND events reach its VibrationUser (radius 16) and drive anger. Cite
+	// Warden.VibrationUser (getPositionSource) + GameEventListenerRegistry.register.
+	t.registerVibrationListener(w)
 	return w
 }
 
@@ -384,9 +394,13 @@ func (t *TickLoop) wardenAiStep(e *Entity) {
 	// line above), NOT a private accumulator -- angerManagement.tick runs on the every-20 phase boundary.
 	// tickCount is the t.gametime proxy (this warden lives while the fight is active). Cite Warden
 	// .customServerAiStep (ANGERMANAGEMENT_TICK_DELAY=20 gate) + AngerManagement.tick.
+	// REAL vibration feed: VibrationSystem.Ticker.tick runs EVERY tick (candidate select, travel-
+	// time decrement, delivery -> onReceiveVibration anger). This REPLACES the synthetic proximity
+	// feed (wardenSenseNearbyPlayers). Cite VibrationSystem.Ticker.tick.
+	t.tickWardenVibration(e)
+	// AngerManagement.tick runs on the every-20 phase boundary (decay + drop).
 	if t.gametime%wardenAngerTickDelay == 0 {
-		t.wardenSenseNearbyPlayers(e) // v1 anger feed (deferred vibration/smell stand-in)
-		t.wardenTickAnger(e)          // AngerManagement.tick: decay + drop
+		t.wardenTickAnger(e) // AngerManagement.tick: decay + drop
 	}
 	// SonicBoom cooldown countdown (SONIC_BOOM_COOLDOWN memory expiry).
 	if ws.sonicCooldown > 0 {
@@ -626,6 +640,7 @@ func (t *TickLoop) wardenTickDig(e *Entity) {
 	ws.digTicks--
 	if ws.digTicks <= 0 {
 		e.dead = true                              // discard()
+		t.unregisterVibrationListener(e)           // drop its VibrationSystem.Listener
 		t.regionForEntity(e).entities.remove(e.id) // remove from its owner region
 	}
 }

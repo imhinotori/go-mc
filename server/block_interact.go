@@ -487,6 +487,10 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 				PlayerID: int(p.entityID),
 			})
 		}
+		// GAME-EVENT: BlockItem.place -> level.gameEvent(GameEvent.Entity(player), pos, BLOCK_PLACE).
+		// Emitted at the CENTER of the placed cell with the placer as source so a nearby Warden
+		// vibration listener gains anger. Draws no RNG. Cite BlockItem.place (gameEvent BLOCK_PLACE).
+		t.gameEventAt(geBlockPlace, placePos, gameEventContext{sourceEntityID: p.entityID, affectedState: int(placeState)})
 		placed = true
 	})
 	if !placed {

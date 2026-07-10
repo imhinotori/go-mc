@@ -414,6 +414,18 @@ func (t *TickLoop) destroyBlock(p *tickPlayer, pos pk.Position, air block.StateI
 		})
 	}
 
+	// GAME-EVENT: Level.destroyBlock -> gameEvent(GameEvent.Entity(player), pos, BLOCK_DESTROY).
+	// Emitted at the CENTER of the broken cell with the breaker as source so a nearby Warden
+	// vibration listener gains anger. Draws no RNG. p may be nil (world-driven removal): source id 0.
+	// Cite Level.destroyBlock (gameEvent GameEvent.BLOCK_DESTROY).
+	{
+		var src int32
+		if p != nil {
+			src = p.entityID
+		}
+		t.gameEventAt(geBlockDestroy, pos, gameEventContext{sourceEntityID: src, affectedState: int(brokenState)})
+	}
+
 	// Phase-27 N=2: the break's per-region effects must land in the region that OWNS this column.
 	// destroyBlock is the single funnel for EVERY break path — the instant/STOP break (destroyAndAck,
 	// on the dispatch goroutine) and the delayed-destroy (tickBlockBreak, on the coordinator) — and
