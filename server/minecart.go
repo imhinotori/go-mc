@@ -437,10 +437,23 @@ func (t *TickLoop) minecartComeOffTrack(e *Entity) {
 // minecartGetMaxSpeed ports AbstractMinecart.getMaxSpeed → OldMinecartBehavior.getMaxSpeed: 0.4 on land,
 // 0.2 in water. v1 has no minecart-water-immersion check wired, so the land value is used (the water
 // branch is exposed via minecartMaxSpeedWater for the later fluid wire).
-//	[VERIFIED CFR OldMinecartBehavior.getMaxSpeed: return isInWater() ? 0.2 : 0.4.]
+//
+// A FURNACE minecart overrides getMaxSpeed to super.getMaxSpeed() * (isInWater ? 0.75 : 0.5) -- a fueled
+// furnace cart is capped at HALF the normal land speed (0.2) so it rolls slower than a plain cart. With
+// water deferred, the land base * 0.5 is applied.
+//	[VERIFIED CFR OldMinecartBehavior.getMaxSpeed: return isInWater() ? 0.2 : 0.4;
+//	 MinecartFurnace.getMaxSpeed: return super.getMaxSpeed(level) * (isInWater() ? 0.75 : 0.5).]
 func (t *TickLoop) minecartGetMaxSpeed(e *Entity) float64 {
-	return minecartMaxSpeedLand
+	base := minecartMaxSpeedLand
+	if e.typ == entity.FurnaceMinecart.ID {
+		return base * minecartFurnaceMaxSpeedFactor // isInWater()==false path (water deferred): * 0.5
+	}
+	return base
 }
+
+// minecartFurnaceMaxSpeedFactor is MinecartFurnace.getMaxSpeed's land multiplier (ldc2_w 0.5d); in water
+// it is 0.75d (deferred with the rest of the minecart water wire). See minecartGetMaxSpeed.
+const minecartFurnaceMaxSpeedFactor = 0.5
 
 // minecartSlowdownFactor ports OldMinecartBehavior.getSlowdownFactor: 0.997 while carrying a passenger,
 // 0.96 empty. The single most-felt minecart tunable (a ridden cart coasts far; an empty one stops fast).

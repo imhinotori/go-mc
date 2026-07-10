@@ -81,6 +81,12 @@ func TestMinecartMaxSpeedAndSlowdown(t *testing.T) {
 	if got := cart.minecartSlowdownFactor(); got != 0.997 {
 		t.Fatalf("ridden slowdown = %v, want 0.997", got)
 	}
+
+	// A FURNACE minecart is capped at HALF the land speed (MinecartFurnace.getMaxSpeed super * 0.5).
+	furnace := loop.spawnMinecart(entity.FurnaceMinecart.ID, 8.5, 64.0625, 8.5)
+	if got := loop.minecartGetMaxSpeed(furnace); got != 0.2 {
+		t.Fatalf("furnace getMaxSpeed(land) = %v, want 0.2 (0.4 * 0.5)", got)
+	}
 }
 
 // TestMinecartExitsTable locks AbstractMinecart.EXITS against the jar unit vectors for every RailShape.
