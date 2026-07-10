@@ -1,6 +1,10 @@
 package server
 
-import "math"
+import (
+	"math"
+
+	"github.com/imhinotori/sulfur/level/block"
+)
 
 // fall_damage.go — GAMEPLAY-04 (the environmental half). OVERWRITES the 17-01 stub. The call
 // site (tick_phases.go tickEntities -> t.tickFallDamage()) and the tickPlayer fall-damage
@@ -240,10 +244,43 @@ func (t *TickLoop) checkFallDamage(p *tickPlayer, deltaY float64, onGround bool,
 	}
 	if onGround {
 		if p.fallDistance > 0.0 {
-			t.causeFallDamage(p, p.fallDistance, 1.0)
+			// Entity.checkFallDamage -> the landing Block.fallOn dispatch picks the damageMultiplier:
+			// most blocks default 1.0 (Entity.fallOn), HayBlock 0.2, BedBlock 0.5, SlimeBlock 0.0 (a
+			// non-sneaking bounce cancels all fall damage). causeFallDamage is then called with it.
+			t.causeFallDamage(p, p.fallDistance, t.fallOnMultiplierAt(p))
 		}
 		p.resetFallDistance()
 	}
+}
+
+// fallOnMultiplierAt returns the Block.fallOn damageMultiplier for the block the player just landed on
+// (getBlockStateOn: the block at floor(y - 0.2), the surface the feet rest on). HayBlock.fallOn scales by
+// 0.2f, BedBlock.fallOn by 0.5, SlimeBlock.fallOn cancels damage (0.0) unless the entity isSuppressingBounce
+// (a sneaking player -- v1 has no sneak decode, so a slime landing is the non-suppressing 0.0 common case,
+// the sneak-restores-damage guard being the cited deferral). Every other block is the Entity.fallOn default
+// 1.0. Cite HayBlock.fallOn (0.2f) + BedBlock.fallOn (*0.5) + SlimeBlock.fallOn (0.0f, !isSuppressingBounce).
+func (t *TickLoop) fallOnMultiplierAt(p *tickPlayer) float64 {
+	if t.world() == nil {
+		return 1.0
+	}
+	// getBlockStateOn: the block just below the feet (y - 0.2 floored -> the supporting surface).
+	bx := floorI(p.x)
+	by := floorI(p.y - 0.2)
+	bz := floorI(p.z)
+	sid := t.blockStateAt(bx, by, bz)
+	if int(sid) < 0 || int(sid) >= len(block.StateList) {
+		return 1.0
+	}
+	switch block.StateList[sid].ID() {
+	case "minecraft:hay_block":
+		return 0.2 // HayBlock.fallOn: causeFallDamage(d, 0.2f, fall)
+	case "minecraft:slime_block":
+		return 0.0 // SlimeBlock.fallOn: !isSuppressingBounce -> causeFallDamage(d, 0.0f, fall)
+	}
+	if blockInTag(sid, blockTagBeds) {
+		return 0.5 // BedBlock.fallOn: super.fallOn(..., d * 0.5) -- any colored bed (#minecraft:beds)
+	}
+	return 1.0
 }
 
 // causeFallDamage mirrors the ELSE (non-impulse) path of
