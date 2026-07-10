@@ -33,7 +33,7 @@ var hostileEmbedSpecs = []struct {
 	targetCount int
 }{
 	{"zombie", vanillaZombieMobName, entity.Zombie.ID, 4, 2},
-	{"skeleton", vanillaSkeletonMobName, entity.Skeleton.ID, 6, 2},
+	{"skeleton", vanillaSkeletonMobName, entity.Skeleton.ID, 7, 4},
 	{"spider", vanillaSpiderMobName, entity.Spider.ID, 6, 2},
 }
 

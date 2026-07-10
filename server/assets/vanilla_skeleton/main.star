@@ -17,7 +17,7 @@
 #   goalSelector:
 #     @2 RestrictSunGoal(this)                              <-- kind="restrict_sun" (avoid-sun path bias; malus deferred)
 #     @3 FleeSunGoal(this, 1.0)                             <-- kind="flee_sun" (burning day-time run-for-shade)
-#     @3 AvoidEntityGoal<Wolf>(this, Wolf, 6.0, 1.0, 1.2)   <-- DEFERRED (no Wolf / no AvoidEntityGoal in v1)
+#     @3 AvoidEntityGoal<Wolf>(this, Wolf, 6.0, 1.0, 1.2)   <-- kind="avoid_entity" avoid_type="wolf" (flees wolves)
 #     @5 WaterAvoidingRandomStrollGoal(this, 1.0)           <-- .star (the shared passive stroll)
 #     @6 LookAtPlayerGoal(Player, 8.0)                      <-- .star (the shared passive look)
 #     @6 RandomLookAroundGoal                               <-- .star (the shared passive around)
@@ -26,8 +26,8 @@
 #   targetSelector:
 #     @1 HurtByTargetGoal(this)                             <-- kind="hurt_by_target" (35-01 hurtByTargetGoal)
 #     @2 NearestAttackableTargetGoal<Player>(this, Player, mustSee=true)  <-- kind="nearest_attackable_target"
-#     @3 NearestAttackableTargetGoal<IronGolem>(this, true) <-- DEFERRED (no IronGolem entity)
-#     @3 NearestAttackableTargetGoal<Turtle>(this, …)       <-- DEFERRED (no Turtle entity)
+#     @3 NearestAttackableTargetGoal<IronGolem>(this, true) <-- kind="nearest_attackable_target" target_class="iron_golem"
+#     @3 NearestAttackableTargetGoal<Turtle>(this, ...)     <-- kind="nearest_attackable_target" target_class="turtle" filter="baby_on_land"
 #
 # DEFERRED (cite-recorded, NEVER silently dropped — see the SUMMARY):
 #   - THE BOW (RangedBowAttackGoal + performRangedAttack + the Arrow projectile entity): the v1 skeleton
@@ -35,7 +35,7 @@
 #     else meleeGoal@4 — v1 has no bow item / no Arrow projectile entity, so the skeleton ALWAYS uses the
 #     melee goal (the reassessWeaponGoal `else` branch). The ranged path lands with the projectile
 #     subsystem. (35-JARNOTES.md:52-55.) This is the documented v1 deviation: melee, not ranged.
-#   - AvoidEntityGoal<Wolf>@3: no Wolf entity / no AvoidEntityGoal port in v1.
+#   - (LANDED) AvoidEntityGoal<Wolf>@3: kind="avoid_entity" avoid_type="wolf" (the skeleton flees wolves).
 #
 # LANDED (this batch — daytime burn-avoidance, ai_goals_skeleton_sun.go):
 #   - RestrictSunGoal@2 (kind="restrict_sun", {} no flags): while bright out, flips the navigation
@@ -48,8 +48,10 @@
 #     nextInt(20)-10 / nextInt(6)-3 / nextInt(20)-10). isBrightOutside == !isDarkEnoughToSpawn (the day/
 #     night proxy); canSeeSky == the superflat sky stub; head-empty + getWalkTargetValue>=0 are cited
 #     constant-true. Cite AbstractSkeleton.registerGoals @3 FleeSunGoal(this, 1.0).
-#   - The IronGolem/Turtle NearestAttackableTargetGoal variants: those entities do not exist in v1 — the
-#     Player acquire (the phase goal "hunt the player") is the must-have.
+#   - The IronGolem/Turtle NearestAttackableTargetGoal variants @3: WIRED via
+#     kind="nearest_attackable_target" target_class="iron_golem" and target_class="turtle"
+#     filter="baby_on_land" (the shared Turtle.BABY_ON_LAND_SELECTOR). The skeleton now hunts a
+#     nearby iron golem AND a baby turtle on land in addition to the player.
 #   - NearestAttackableTargetGoal's mustSee (line-of-sight): no LoS/sensing subsystem — the cited
 #     "visible" stub (every player in FOLLOW_RANGE acquirable), 35-01 ai_goals_target.go findTarget.
 #
@@ -179,6 +181,11 @@ declare_mob(
         # navigation away from sun (setAvoidSun; the pathfinding malus is node-evaluator deferred). Holds
         # no MOVE flag so it never contends with flee/stroll. Cite AbstractSkeleton.registerGoals @2 RestrictSunGoal.
         goal(priority = 2, flags = [], kind = "restrict_sun"),
+        # @3 AvoidEntityGoal<Wolf>(mob, Wolf, 6.0, 1.0, 1.2) [MOVE] - kind="avoid_entity", avoid_type="wolf":
+        # the skeleton flees a nearby wolf. maxDist 6.0 / walk 1.0 / sprint 1.2 are the avoidEntityGoal
+        # defaults (the SAME literals as the skeleton's ctor). Cite AbstractSkeleton.registerGoals @3
+        # AvoidEntityGoal<Wolf>(this, Wolf.class, 6.0f, 1.0, 1.2).
+        goal(priority = 3, flags = ["MOVE"], kind = "avoid_entity", avoid_type = "wolf"),
         # @3 FleeSunGoal(mob, 1.0) [MOVE] — kind="flee_sun": a burning, sky-exposed, day-time skeleton
         # runs to a getHidePos shade tile (the UNMODIFIED base goal — keeps the isOnFire() guard). Cite
         # AbstractSkeleton.registerGoals @3 FleeSunGoal(this, 1.0).
@@ -221,5 +228,17 @@ declare_mob(
         # .registerGoals targetSelector @2 NearestAttackableTargetGoal<Player>. (The IronGolem/Turtle target
         # variants @3 are DEFERRED — those entities do not exist in v1; see header.)
         goal(priority = 2, flags = ["TARGET"], kind = "nearest_attackable_target"),
+        # targetSelector @3 NearestAttackableTargetGoal<IronGolem>(mob, true) [TARGET] -
+        # kind="nearest_attackable_target", target_class="iron_golem": the skeleton hunts a nearby iron
+        # golem. Scans entity.IronGolem.ID within FOLLOW_RANGE (nextInt(5) acquire gate + findTarget). The
+        # mustSee LoS is the cited "visible" stub. Cite AbstractSkeleton.registerGoals targetSelector @3
+        # NearestAttackableTargetGoal<IronGolem>(this, true).
+        goal(priority = 3, flags = ["TARGET"], kind = "nearest_attackable_target", target_class = "iron_golem"),
+        # targetSelector @3 NearestAttackableTargetGoal<Turtle>(mob, 10, true, false, BABY_ON_LAND_SELECTOR)
+        # [TARGET] - kind="nearest_attackable_target", target_class="turtle", filter="baby_on_land": the
+        # skeleton hunts a baby turtle on land (isBaby && !isInWater). Scans entity.Turtle.ID within
+        # FOLLOW_RANGE. The shared Turtle.BABY_ON_LAND_SELECTOR the Fox @4 / Ocelot @1 also pass. Cite
+        # AbstractSkeleton.registerGoals targetSelector @3 NearestAttackableTargetGoal<Turtle, BABY_ON_LAND_SELECTOR>.
+        goal(priority = 3, flags = ["TARGET"], kind = "nearest_attackable_target", target_class = "turtle", filter = "baby_on_land"),
     ],
 )

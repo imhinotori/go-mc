@@ -310,13 +310,21 @@ func buildNativeGoal(kind string, gd goalDecl, decl *mobDecl) Goal {
 				panic("buildNativeGoal: nearest_attackable_target target_class=\"hostile\" must NOT set filter=")
 			}
 			return newIronGolemHostileTargetGoal()
+		case "iron_golem":
+			// AbstractSkeleton targetSelector @3 NearestAttackableTargetGoal<IronGolem>(this, true) â€” the
+			// SKELETON hunting a specific IronGolem (distinct from target_class="hostile", which is the
+			// golem's OWN Enemy-mob hunt). Cite AbstractSkeleton.registerGoals targetSelector @3.
+			if gd.filter != "" {
+				panic("buildNativeGoal: nearest_attackable_target target_class=\"iron_golem\" must NOT set filter=")
+			}
+			return newIronGolemTargetGoal()
 		case "turtle":
 			if gd.filter != "" && gd.filter != "baby_on_land" {
 				panic("buildNativeGoal: nearest_attackable_target target_class=\"turtle\" only supports filter=\"baby_on_land\" (got " + gd.filter + ")")
 			}
 			return newOcelotBabyTurtleTargetGoal()
 		default:
-			panic("buildNativeGoal: unknown nearest_attackable_target target_class " + gd.targetClassName + " (valid: \"\", chicken, skeleton, hostile, turtle)")
+			panic("buildNativeGoal: unknown nearest_attackable_target target_class " + gd.targetClassName + " (valid: \"\", chicken, skeleton, hostile, iron_golem, turtle)")
 		}
 	case "hurt_by_target":
 		return newHurtByTargetGoal()

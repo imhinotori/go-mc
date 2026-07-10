@@ -104,6 +104,14 @@ const (
 	// can say which registry owner they target). Cite Ocelot.registerGoals targetSelector @1 +
 	// Turtle.BABY_ON_LAND_SELECTOR.
 	targetClassOcelotBabyTurtle
+	// targetClassIronGolem is the AbstractSkeleton targetSelector @3 NearestAttackableTargetGoal<IronGolem>
+	// (this, IronGolem.class, true) branch: findTarget scans the entity store for the nearest live
+	// entity.IronGolem.ID within FOLLOW_RANGE (nearestEntityOfTypeAt). The ctor's mustSee=true is the cited
+	// LoS stub (no sensing on mob-vs-mob targets; the range gate is the live filter, the same delta the wolf
+	// skeleton-target goal carries). Distinct from targetClassHostileMob (that is the golem's OWN Enemy-mob
+	// hunt); this is a SKELETON hunting a specific IronGolem. Cite AbstractSkeleton.registerGoals
+	// targetSelector @3 NearestAttackableTargetGoal<IronGolem>(this, true).
+	targetClassIronGolem
 )
 
 // nearestAttackableTargetGoal ports NearestAttackableTargetGoal<T> (flags {TARGET}). It acquires the
@@ -198,6 +206,20 @@ func newIronGolemHostileTargetGoal() *nearestAttackableTargetGoal {
 		baseGoal:       newBaseGoal(flagTarget),
 		randomInterval: nearestTargetRandomInterval,
 		targetClass:    targetClassHostileMob,
+	}
+}
+
+// newIronGolemTargetGoal builds the AbstractSkeleton targetSelector @3 NearestAttackableTargetGoal
+// <IronGolem>(this, IronGolem.class, true) â€” the SKELETON hunting a specific IronGolem, NO anger gate.
+// findTarget scans entity.IronGolem.ID within FOLLOW_RANGE. The randomInterval stays the shared
+// nearestTargetRandomInterval (reducedTickDelay(10)==5, the ctor's halved DEFAULT_RANDOM_INTERVAL). The
+// ctor's mustSee=true is the cited LoS stub for mob-vs-mob targets. Cite AbstractSkeleton.registerGoals
+// targetSelector @3.
+func newIronGolemTargetGoal() *nearestAttackableTargetGoal {
+	return &nearestAttackableTargetGoal{
+		baseGoal:       newBaseGoal(flagTarget),
+		randomInterval: nearestTargetRandomInterval,
+		targetClass:    targetClassIronGolem,
 	}
 }
 
@@ -313,6 +335,15 @@ func (g *nearestAttackableTargetGoal) findTarget(t *TickLoop, e *Entity) {
 		// analog of the Player branch, scanning the entity store instead of t.players. Cite
 		// NearestAttackableTargetGoal.findTarget's non-Player getNearestEntity branch.
 		if id, ok := nearestEntityOfTypeAt(t, e, entity.Skeleton.ID, follow); ok {
+			g.target = id
+			return
+		}
+	case targetClassIronGolem:
+		// The AbstractSkeleton @3 NearestAttackableTargetGoal<IronGolem> branch: getNearestEntity(
+		// getEntitiesOfClass(IronGolem, searchArea), conditions, mob, x, eyeY, z) â€” the nearest
+		// entity.IronGolem.ID within FOLLOW_RANGE. Same mob-vs-mob scan the skeleton branch uses. Cite
+		// AbstractSkeleton.registerGoals targetSelector @3 NearestAttackableTargetGoal<IronGolem>.
+		if id, ok := nearestEntityOfTypeAt(t, e, entity.IronGolem.ID, follow); ok {
 			g.target = id
 			return
 		}
@@ -445,7 +476,7 @@ func (g *nearestAttackableTargetGoal) canContinueToUse(t *TickLoop, e *Entity) b
 	follow := e.getAttributeValue(attribute.FollowRange)
 	if g.targetClass == targetClassSkeleton || g.targetClass == targetClassFoxPrey || g.targetClass == targetClassHostileMob ||
 		g.targetClass == targetClassOcelotChicken || g.targetClass == targetClassFoxBabyTurtle ||
-		g.targetClass == targetClassOcelotBabyTurtle {
+		g.targetClass == targetClassOcelotBabyTurtle || g.targetClass == targetClassIronGolem {
 		// SKELETON class: resolve the target through the OWNING-region entity store (a skeleton is an
 		// *Entity, not a player) + the live FOLLOW_RANGE distance bound. t.cur() is the region whose
 		// fan-out is running this goal — the SAME store nearestEntityOfTypeAt scanned (the v5 same-region

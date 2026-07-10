@@ -152,11 +152,12 @@ func TestSkeletonSunGoalsBootLoad(t *testing.T) {
 	for _, wg := range skel.ai.goals.goals {
 		seen[wg.priority]++
 	}
-	// restrict_sun@2 + flee_sun@3 are the only @2/@3 goalSelector goals on the skeleton.
+	// restrict_sun@2 is the sole @2 goalSelector goal; @3 holds BOTH flee_sun AND avoid_entity<wolf>
+	// (AbstractSkeleton.registerGoals adds FleeSunGoal@3 and AvoidEntityGoal<Wolf>@3 at the same priority).
 	if seen[2] != 1 {
 		t.Fatalf("skeleton missing restrict_sun@2 (goalSelector priority 2 count = %d)", seen[2])
 	}
-	if seen[3] != 1 {
-		t.Fatalf("skeleton missing flee_sun@3 (goalSelector priority 3 count = %d)", seen[3])
+	if seen[3] != 2 {
+		t.Fatalf("skeleton @3 goalSelector count = %d, want 2 (flee_sun@3 + avoid_entity<wolf>@3)", seen[3])
 	}
 }
