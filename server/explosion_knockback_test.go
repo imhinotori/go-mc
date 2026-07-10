@@ -137,6 +137,39 @@ func TestExplosionSendsClientboundExplode(t *testing.T) {
 	}
 }
 
+// TestExplosionCreativeFlyingNoKnockback: a creative (flying) player caught in a blast takes NO knockback
+// (its store-entity velocity stays zero) and is NOT recorded in the hurt set (no ClientboundExplode
+// knockback Optional / no push), mirroring ServerExplosion.hurtEntities' isCreative&&flying skip. A
+// survival player at the same distance IS pushed (the control). Cite ServerExplosion.hurtEntities.
+func TestExplosionCreativeFlyingNoKnockback(t *testing.T) {
+	loop, mgr := newPhysicsLoop()
+	const floorY = 63
+	ch := putChunk(mgr, level.ChunkPos{0, 0})
+	fillFloor(ch, floorY)
+	loop.start(loop.clock.(*fakeClock).Now())
+
+	const cx, cy, cz = 8.5, float64(floorY + 1), 8.5
+	creative := combatTestPlayer(loop, cx+2.0, cy, cz, 301)
+	creative.playerEntity = &Entity{id: creative.entityID}
+	creative.gameMode = gameModeCreative
+
+	loop.withRegion(loop.only(), func() {
+		loop.explode(-1, cx, cy, cz, 3.0)
+	})
+
+	if creative.playerEntity.vx != 0 || creative.playerEntity.vy != 0 || creative.playerEntity.vz != 0 {
+		t.Fatalf("creative-flying player was knocked back (%v,%v,%v), want zero (isCreative&&flying skip)",
+			creative.playerEntity.vx, creative.playerEntity.vy, creative.playerEntity.vz)
+	}
+	pk := drainPackets(creative.client)
+	if p := findPacket(pk, packetid.ClientboundExplode); p.ID != 0 {
+		_, _, _, present := decodeExplodeKnockback(t, p)
+		if present {
+			t.Fatal("creative-flying player's ClientboundExplode carried a knockback Optional, want ABSENT (not in hurt set)")
+		}
+	}
+}
+
 // findPacket returns the first packet with the given id, or a zero Packet.
 func findPacket(ps []pk.Packet, id packetid.ClientboundPacketID) pk.Packet {
 	for _, p := range ps {

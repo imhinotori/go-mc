@@ -173,16 +173,22 @@ func (t *TickLoop) hurtEntitiesFromExplosion(srcID int32, x, y, z, radius float6
 		if dmg > 0 {
 			t.applyDamage(p, src, float32(dmg))
 		}
+		// ServerExplosion.hurtEntities: the knockback vector is computed for every entity, but a creative
+		// player who is FLYING is excluded from both the push AND the hitPlayers map (`if (!(player
+		// .isCreative() && player.getAbilities().flying))`). v1 has no decoded flying-ability flag, so a
+		// creative player is treated as flying (the common creative case: creative players fly); the
+		// creative-but-walking distinction is the cited flying-flag deferral. A spectator is likewise never
+		// pushed/recorded. Cite ServerExplosion.hurtEntities (isCreative && flying skip).
+		if p.gameMode == gameModeSpectator || p.gameMode == gameModeCreative {
+			continue
+		}
 		// Knockback: dir(eye - center).normalize() * (1-dist)*exposure*kbMult*(1-kbResist). No kbResist
 		// attribute on players in v1 (0). Apply to the player's store entity + send one SetEntityMotion.
 		kbx, kby, kbz := t.applyExplosionKnockback(p, x, y, z, exOx, exOy, exOz, dist, float64(exposure))
-		// hitPlayers: a non-spectator, non-(creative && flying) player -> its knockback Vec3 (the SAME
-		// vector we pushed by), which the ClientboundExplode Optional carries. v1 has no flying-ability
-		// state (survival, the common case, always records); the creative&&flying exclusion is
-		// cite-deferred. Cite ServerExplosion.hurtEntities (hitPlayers.put(player, wrappedVec22)).
-		if p.gameMode != gameModeSpectator {
-			hitPlayers[p.entityID] = explosionKnockback{x: kbx, y: kby, z: kbz}
-		}
+		// hitPlayers: the surviving (non-spectator, non-creative-flying) player -> its knockback Vec3 (the
+		// SAME vector we pushed by), which the ClientboundExplode Optional carries. Cite
+		// ServerExplosion.hurtEntities (hitPlayers.put(player, wrappedVec22)).
+		hitPlayers[p.entityID] = explosionKnockback{x: kbx, y: kby, z: kbz}
 	}
 
 	// Every OTHER entity (mobs, primed TNT, items, boats, minecarts, arrows, ...). Vanilla's
