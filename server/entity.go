@@ -691,8 +691,9 @@ type Entity struct {
 	isBee             bool
 	isGoat            bool
 	isFrog            bool
-	beeHasStung       bool
-	beeTimeSinceSting int
+	beeHasStung        bool
+	beeTimeSinceSting  int
+	beeUnderWaterTicks int // Bee.underWaterTicks: ++ while isInWater, reset out; >20 -> drown 1.0F (unconditional)
 	goatScreaming     bool
 	// goatHasLeftHorn / goatHasRightHorn port Goat DATA_HAS_LEFT_HORN / DATA_HAS_RIGHT_HORN (default
 	// true -- a goat spawns with both horns). Goat.finalizeSpawn removes ONE horn on a non-baby with a

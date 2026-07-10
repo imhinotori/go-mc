@@ -21,14 +21,23 @@
 //     (float)(int)getAttributeValue(ATTACK_DAMAGE)); if(flag){ doPostAttackEffects; if(target instanceof
 //     LivingEntity le){ le.setStingerCount(+1); int p=(NORMAL)?10:(HARD)?18:0; if(p>0) le.addEffect(new
 //     MobEffectInstance(POISON, p*20, 0), this); } setHasStung(true); stopBeingAngry(); playSound(BEE_STING); }.
-//   customServerAiStep: if(hasStung){ ++timeSinceSting; if(timeSinceSting % 5 == 0 && random.nextInt(
-//     Mth.clamp(1200 - timeSinceSting, 1, 1200)) == 0) hurtServer(generic(), getHealth()); } ...
+//   customServerAiStep: boolean s=hasStung(); if(isInWater()) ++underWaterTicks; else underWaterTicks=0;
+//     if(underWaterTicks>20) hurtServer(drown(),1.0F);  // UNCONDITIONAL -- an un-stung bee drowns too
+//     if(s){ ++timeSinceSting; if(timeSinceSting % 5 == 0 && random.nextInt(Mth.clamp(1200-timeSinceSting,
+//     1,1200)) == 0) hurtServer(generic(), getHealth()); } then nectar/updatePersistentAnger bookkeeping.
 //
-// v1 STUBS (cited): the hive/flower/pollination goal cluster + the neutral-anger target-selector are the
-// DEFERRED behavior layer (no hive block-entity / flower-POI / universal-anger subsystem yet). The stinger
-// count client cue + BEE_STING sound are deferred; the POISON victim effect is wired where the machinery
-// exists (beeApplyPoison). The observable attributes, the passive goal walk, and the SIGNATURE sting-then-
-// die-over-1200-ticks are EXACT.
+// PORTED 1:1 in this file: the createAttributes, the passive goal walk, the underwater-drown (underWaterTicks
+// > 20 -> drown 1.0F, UNCONDITIONAL of sting state -- the un-stung-bee-never-drowns bug is fixed), and the
+// SIGNATURE sting-then-die-over-1200-ticks countdown are EXACT.
+//
+// v1 STUBS (cited, DEFERRED behavior layer -- no hive block-entity / flower-POI / neutral-anger machinery
+// yet): the hive/flower/pollination goal cluster (BeeGoToHiveGoal, BeeGoToKnownFlowerGoal, BeePollinateGoal,
+// BeeEnterHiveGoal, BeeLocateHiveGoal, hasNectar/ticksWithoutNectarSinceExitingHive) + BeehiveBlockEntity
+// (MAX_OCCUPANTS 3, MIN_OCCUPATION_TICKS 2400/600, honey_level 0-5); the neutral-anger target-selector
+// (PERSISTENT_ANGER_TIME UniformInt 400-780, BeeAttackGoal, BeeHurtByOtherGoal, BeeBecomeAngryTargetGoal,
+// updatePersistentAnger) so beeDoSting is not yet auto-fired; the stinger-count client cue + BEE_STING sound.
+// The POISON victim effect is wired where the machinery exists (beeDoSting, NORMAL 10s; HARD 18s is DEFERRED
+// with the anger goal that fires it).
 
 package server
 
@@ -49,6 +58,8 @@ const (
 	beeStingDeathMod  = 5                   // timeSinceSting % 5 == 0 death-roll cadence
 	beeFoodTag        = "bee_food"          // ItemTags.BEE_FOOD (the tempt predicate)
 	beePoisonSeconds  = 10                  // NORMAL difficulty POISON duration (seconds); *20 = ticks
+	beeDrownThreshold = 20                  // customServerAiStep: underWaterTicks > 20 -> drown (bipush 20, if_icmple)
+	beeDrownDamage    = 1.0                 // hurtServer(drown(), 1.0F) (fconst_1)
 )
 
 // newBeeAI builds the Bee passive AI: the "visibly alive" subset of Bee.registerGoals (the hive/flower
@@ -118,18 +129,36 @@ func (t *TickLoop) beeDoSting(e *Entity, target *tickPlayer) {
 	e.beeHasStung = true // setHasStung(true) -> the bee now dies over ~1200 ticks (beeAiStep)
 }
 
-// beeAiStep is the Bee per-tick extra (Bee.customServerAiStep sting-death branch), driven per-type from
-// tickAI (gated on typ == entity.Bee.ID, AFTER serverAiStep). If the bee HAS STUNG, ++timeSinceSting and,
-// on the (% 5 == 0) cadence with the rising-probability nextInt gate, take generic getHealth() self-damage
-// (which kills it). The underwater-drown + pollination bookkeeping are DEFERRED. All RNG is on the bee OWN
-// per-entity rng, drawn ONLY after a sting (dormant on a never-stung bee -- zero draws). Cite
-// Bee.customServerAiStep.
+// beeAiStep is the Bee per-tick extra (Bee.customServerAiStep), driven per-type from tickAI (gated on
+// typ == entity.Bee.ID, AFTER serverAiStep). It ports the method 1:1 up to the sting-death branch:
+//
+//	boolean hasStung = hasStung();
+//	if (isInWater()) ++underWaterTicks; else underWaterTicks = 0;   // UNCONDITIONAL (runs stung or not)
+//	if (underWaterTicks > 20) hurtServer(drown(), 1.0F);           // an un-stung bee STILL drowns
+//	if (hasStung) { ++timeSinceSting; if (timeSinceSting % 5 == 0 &&
+//	    random.nextInt(Mth.clamp(1200 - timeSinceSting, 1, 1200)) == 0) hurtServer(generic(), getHealth()); }
+//
+// The trailing nectar / updatePersistentAnger bookkeeping (ticksWithoutNectarSinceExitingHive++,
+// updatePersistentAnger) is the DEFERRED hive/anger layer (no hive block-entity / neutral-anger machinery
+// yet). The sting-death RNG is on the bee OWN per-entity rng, drawn ONLY after a sting (a never-stung bee
+// draws zero). Cite Bee.customServerAiStep.
 func (t *TickLoop) beeAiStep(e *Entity) {
 	if e.dead || e.health <= 0 {
 		return
 	}
-	if !e.beeHasStung {
-		return // never stung: pure no-op, no RNG draw (the passive bee)
+	hasStung := e.beeHasStung // boolean hasStung = hasStung();
+	// isInWater() ? ++underWaterTicks : underWaterTicks = 0 -- UNCONDITIONAL, independent of sting state.
+	if t.entityInWater(e) {
+		e.beeUnderWaterTicks++
+	} else {
+		e.beeUnderWaterTicks = 0
+	}
+	if e.beeUnderWaterTicks > beeDrownThreshold {
+		// hurtServer(damageSources().drown(), 1.0F) -- the un-stung bee bug fix: this ALWAYS runs.
+		t.applyDamageEntity(e, damageSourceOf(damageTypeDrown), beeDrownDamage)
+	}
+	if !hasStung {
+		return // sting-death countdown only runs once the bee has stung (no RNG draw otherwise)
 	}
 	e.beeTimeSinceSting++ // ++timeSinceSting
 	if e.beeTimeSinceSting%beeStingDeathMod != 0 {
