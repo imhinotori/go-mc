@@ -104,3 +104,46 @@ func TestSlimeLootCubeMobSize(t *testing.T) {
 	}
 	_ = seed
 }
+
+// TestLootingIncreasesMobDrops verifies enchanted_count_increase (the looting bonus) on the pig
+// table: with AttackerLootingLevel > 0 the porkchop count grows by round(level * uniform[0,1]) over
+// the base set_count[1,3], so a Looting-III kill can exceed the base max of 3. With level 0 the
+// function takes its `if (level == 0) return stack` early return — no bonus, no extra RNG draw — so
+// the drop is identical to the un-threaded roll (the pig-oracle invariant).
+func TestLootingIncreasesMobDrops(t *testing.T) {
+	tbl, err := LoadTable("minecraft:entities/pig")
+	if err != nil {
+		t.Fatalf("LoadTable(minecraft:entities/pig): %v", err)
+	}
+
+	// Level 0: every roll is 1..3 (base set_count only; looting adds nothing).
+	for s := int64(0); s < 200; s++ {
+		stacks := Roll(tbl, s, NewEntityLootContext(s, 0, EntityLootParams{AttackerLootingLevel: 0}))
+		if len(stacks) != 1 {
+			t.Fatalf("seed %d level-0 pig roll: %d stacks, want 1", s, len(stacks))
+		}
+		if c := int(stacks[0].Count); c < 1 || c > 3 {
+			t.Fatalf("seed %d level-0 porkchop count=%d, want 1..3", s, c)
+		}
+	}
+
+	// Level 3 (Looting III): bonus = round(3 * uniform[0,1]) in {0,1,2,3}, so the count can reach up to
+	// 6. Across seeds we must see at least one roll exceed the base max of 3 (proof the bonus applied).
+	sawBonus := false
+	for s := int64(0); s < 400; s++ {
+		stacks := Roll(tbl, s, NewEntityLootContext(s, 0, EntityLootParams{AttackerLootingLevel: 3}))
+		if len(stacks) != 1 {
+			t.Fatalf("seed %d looting-3 pig roll: %d stacks, want 1", s, len(stacks))
+		}
+		c := int(stacks[0].Count)
+		if c < 1 || c > 6 {
+			t.Fatalf("seed %d looting-3 porkchop count=%d, want 1..6 (base 1-3 + round(3*[0,1]))", s, c)
+		}
+		if c > 3 {
+			sawBonus = true
+		}
+	}
+	if !sawBonus {
+		t.Fatal("looting-3 never exceeded the base max of 3 across 400 seeds (enchanted_count_increase bonus not applied)")
+	}
+}

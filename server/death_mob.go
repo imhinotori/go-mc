@@ -304,10 +304,15 @@ func (t *TickLoop) dropMobLoot(e *Entity, src damageSource) {
 	ctx := loot.NewEntityLootContext(seed, 0, loot.EntityLootParams{
 		KilledByPlayer: killedByPlayer(src),
 		CubeMobSize:    cubeSize,
-		// VictimOnFire / AttackerLootingLevel / AttackerSmeltsLoot default to the v1 vanilla state
-		// (false / 0 / false): no fire/effect/enchant subsystem is wired, so the gated furnace_smelt
-		// and enchanted_count_increase are faithful no-ops. Structured to become real reads when those
-		// subsystems land — never baked away.
+		// AttackerLootingLevel is the killer weapon's minecraft:looting level — the
+		// EnchantmentHelper.getEnchantmentLevel(LOOTING, ATTACKING_ENTITY) read
+		// EnchantedCountIncreaseFunction consumes. Resolved from the death source's attacker entity
+		// (a player's held item or a mob's mainhand) SERVER-side; 0 when no looting weapon (the level-0
+		// path that draws IDENTICALLY to the un-threaded roll — the pig oracle invariant).
+		AttackerLootingLevel: t.attackerLootingLevel(src),
+		// VictimOnFire / AttackerSmeltsLoot default to the v1 vanilla state (false): no fire/effect
+		// subsystem is wired, so the gated furnace_smelt is a faithful no-op. Structured to become a
+		// real read when those subsystems land — never baked away.
 	})
 
 	for _, stack := range loot.Roll(tbl, seed, ctx) {
@@ -390,6 +395,44 @@ func (t *TickLoop) dropMobExperience(e *Entity, src damageSource) {
 //	[CITED: LivingEntity.dropAllDeathLoot `flag = lastHurtByPlayerMemoryTime > 0`; dropExperience gate.]
 func killedByPlayer(src damageSource) bool {
 	return src.attacker != 0 && src.is("is_player_attack")
+}
+
+// attackerLootingLevel resolves the minecraft:looting enchant level of the KILLER's weapon — the
+// EnchantmentHelper.getEnchantmentLevel(LOOTING, ATTACKING_ENTITY) read the loot function
+// EnchantedCountIncreaseFunction (looting bonus) consumes. It is the port of
+// LivingEntity.dropFromLootTable's LootParams.Builder.withOptionalParameter(ATTACKING_ENTITY, source
+// .getEntity()) + the function's getEnchantmentLevel(LOOTING, attacker) read (which reads the
+// attacker's getWeaponItem() == mainhand item).
+//
+// The weapon is read SERVER-side from the attacker entity resolved off the death source's causing
+// entity id: a PLAYER killer -> their held main-hand item; a MOB killer -> its mainhand equipment.
+// A source with no causing entity (environmental death) or an attacker holding no looting weapon
+// yields 0 — the level-0 path, where EnchantedCountIncreaseFunction takes its `if (level == 0) return
+// stack` early return and draws NOTHING (so the roll is byte-identical to the un-threaded roll — the
+// pig oracle invariant: a pig killed by a bare-handed player or the environment rolls exactly as before).
+//
+//	[CITED: LivingEntity.dropFromLootTable withParameter(ATTACKING_ENTITY, getEntity());
+//	 EnchantedCountIncreaseFunction.run getEnchantmentLevel(this.enchantment, attacker); the LOOTING
+//	 level reads the attacker's getWeaponItem() (mainhand). EnchantmentHelper.getItemEnchantmentLevel.]
+func (t *TickLoop) attackerLootingLevel(src damageSource) int {
+	if src.attacker == 0 {
+		return 0 // no causing entity (environmental death) -> ATTACKING_ENTITY absent -> level 0.
+	}
+	// PLAYER killer: read the held main-hand weapon (the getWeaponItem() == getMainHandItem() path).
+	if killer := t.playerByEntityID(src.attacker); killer != nil {
+		return stackEnchantments(playerItemBySlot(killer, eqSlotMainHand))["minecraft:looting"]
+	}
+	// MOB killer (a mob wielding a looting weapon — a skeleton with a looting sword): read its mainhand
+	// equipment. Resolve the attacker entity across regions (the death path is barrier-owned).
+	for _, r := range t.regions {
+		if r.entities == nil {
+			continue
+		}
+		if e, ok := r.entities.get(src.attacker); ok {
+			return stackEnchantments(e.getMainHandItem())["minecraft:looting"]
+		}
+	}
+	return 0 // attacker no longer resolvable (already removed) -> level 0.
 }
 
 // entityBaseExperienceReward is the port of Mob.getBaseExperienceReward(ServerLevel) for the per-type

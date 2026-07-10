@@ -62,7 +62,7 @@ func blockTableName(broken block.StateID) (string, bool) {
 // their faithful no-tool defaults (cobblestone over the silk-touch alternative, base count).
 //
 // Source: STRUCT-POLISH-01 evaluator (level/loot.Roll over minecraft:blocks/<name>).
-func blockDropsFor(broken block.StateID, seed int64) []component.SlotData {
+func blockDropsFor(broken block.StateID, seed int64, ctx *loot.LootContext) []component.SlotData {
 	name, ok := blockTableName(broken)
 	if !ok {
 		return nil
@@ -74,7 +74,46 @@ func blockDropsFor(broken block.StateID, seed int64) []component.SlotData {
 		// a block with no drop or an as-yet-unported one. No-op (never panic).
 		return nil
 	}
-	return loot.Roll(tbl, seed, loot.NewLootContext(seed, 0))
+	return loot.Roll(tbl, seed, ctx)
+}
+
+// blockBreakLootContext builds the LootContext for a block-break roll, threading the breaking
+// player's held TOOL into the LootContextParams.TOOL the block tables read — the port of the
+// LootParams.Builder(...).withParameter(TOOL, tool) the block-drop path supplies
+// (ServerPlayerGameMode.destroyBlock -> Block.getDrops(state, level, pos, be, player, tool)).
+//
+// A nil player (a support-cascade / piston / fluid break — the vanilla destroyBlock null-entity arg)
+// supplies NO tool: HasTool stays false, so match_tool (silk_touch) fails and apply_bonus (fortune)
+// no-ops — the faithful "broken by no one with no tool" default (e.g. a piston pushing an ore drops
+// the base 1). A player break reads the held item's enchantments SERVER-side (never from a packet —
+// the tryMilkCow/heldWindowSlot precedent, T-32/36-04) via stackEnchantments, so a forged client held
+// item cannot fake silk-touch/fortune.
+//
+// Source: javap ServerPlayerGameMode.destroyBlock (getMainHandItem tool) + Block.getDrops ->
+// LootParams.Builder.withParameter(LootContextParams.TOOL); EnchantmentHelper.getItemEnchantmentLevel.
+func blockBreakLootContext(p *tickPlayer, seed int64) *loot.LootContext {
+	ctx := loot.NewLootContext(seed, 0)
+	if p == nil {
+		return ctx // no breaker -> no TOOL param (HasTool false: match_tool fails, apply_bonus no-ops).
+	}
+	// getMainHandItem(): the held tool, read SERVER-side (inv.get(heldWindowSlot(heldSlot))).
+	tool := playerItemBySlot(p, eqSlotMainHand)
+	// LootContextParams.TOOL is set even for a bare/empty hand in vanilla (the fist is a "tool" whose
+	// enchant levels are all 0), so match_tool's `TOOL == null` guard passes (HasTool true) and its
+	// silk_touch level>=1 predicate then fails on the 0-level fist — the faithful bare-hand result.
+	ctx.HasTool = true
+	if stackEmpty(tool) {
+		return ctx // empty hand: HasTool true, no enchantments (silk/fortune level 0).
+	}
+	// EnchantmentHelper.getItemEnchantmentLevel(SILK_TOUCH/FORTUNE, tool): read the tool's enchant map
+	// SERVER-side. stackEnchantments returns the resource-id -> level map off the ENCHANTMENTS component.
+	ench := stackEnchantments(tool)
+	if len(ench) > 0 {
+		ctx.ToolEnchantments = ench
+		ctx.ToolSilkTouch = ench["minecraft:silk_touch"] >= 1
+		ctx.ToolFortuneLevel = ench["minecraft:fortune"]
+	}
+	return ctx
 }
 
 // itemEntityHalfHeight is Block.popResource's local `d`: EntityType.ITEM.getHeight() / 2.0.
@@ -135,7 +174,9 @@ func (t *TickLoop) spawnBlockDrop(p *tickPlayer, pos pk.Position, brokenState bl
 	// LegacyRandomSource so set_count etc. draw deterministically for this break. A block with
 	// no drop (air/unknown/no-table) yields an empty list -> no-op.
 	lootSeed := rand.Int64()
-	drops := blockDropsFor(brokenState, lootSeed)
+	// Thread the breaking player's held TOOL into the loot context (silk_touch / fortune reads). A nil
+	// player (support-cascade/piston/fluid break) supplies no tool -> the faithful no-tool default.
+	drops := blockDropsFor(brokenState, lootSeed, blockBreakLootContext(p, lootSeed))
 	if len(drops) == 0 {
 		return // no drop for this block (air/unknown/no-table)
 	}

@@ -263,18 +263,87 @@ func parseApplyBonus(rf rawFunction) (LootFunction, error) {
 	if err != nil {
 		return nil, err
 	}
-	var formula applyBonusFormula
+	fn := &applyBonusCount{enchantment: ench, bonusMultiplier: 1}
 	switch normalizeType(formulaStr) {
 	case "ore_drops", "": // bare/absent defaults to ore_drops (the only block-table form)
-		formula = formulaOreDrops
+		fn.formula = formulaOreDrops
 	case "uniform_bonus_count":
-		formula = formulaUniformBonus
+		// UniformBonusCount codec: the nested `parameters.bonusMultiplier` int.
+		fn.formula = formulaUniformBonus
+		if bm, ok, perr := applyBonusIntParam(rf, "bonusMultiplier"); perr != nil {
+			return nil, perr
+		} else if ok {
+			fn.bonusMultiplier = bm
+		}
 	case "binomial_with_bonus_count":
-		formula = formulaBinomialBonus
+		// BinomialWithBonusCount codec: the nested `parameters.extraRounds` int + `parameters.probability` float.
+		fn.formula = formulaBinomialBonus
+		if er, ok, perr := applyBonusIntParam(rf, "extraRounds"); perr != nil {
+			return nil, perr
+		} else if ok {
+			fn.extraRounds = er
+		}
+		if p, ok, perr := applyBonusFloatParam(rf, "probability"); perr != nil {
+			return nil, perr
+		} else if ok {
+			fn.probability = p
+		}
 	default:
 		return nil, fmt.Errorf("apply_bonus unknown formula %q", formulaStr)
 	}
-	return &applyBonusCount{formula: formula, enchantment: ench}, nil
+	return fn, nil
+}
+
+// applyBonusIntParam reads an int formula parameter, checking both the nested `parameters.<name>`
+// object (the vanilla ApplyBonusCount codec dispatches the formula's fields under "parameters") and
+// the flat top-level `<name>` form. Returns (value, present, error).
+func applyBonusIntParam(rf rawFunction, name string) (int, bool, error) {
+	if raw, ok := rf["parameters"]; ok {
+		var params map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return 0, false, fmt.Errorf("apply_bonus parameters: %w", err)
+		}
+		if v, ok := params[name]; ok {
+			var n int
+			if err := json.Unmarshal(v, &n); err != nil {
+				return 0, false, fmt.Errorf("apply_bonus %s: %w", name, err)
+			}
+			return n, true, nil
+		}
+	}
+	if raw, ok := rf[name]; ok {
+		var n int
+		if err := json.Unmarshal(raw, &n); err != nil {
+			return 0, false, fmt.Errorf("apply_bonus %s: %w", name, err)
+		}
+		return n, true, nil
+	}
+	return 0, false, nil
+}
+
+// applyBonusFloatParam reads a float formula parameter (nested `parameters.<name>` or flat top-level).
+func applyBonusFloatParam(rf rawFunction, name string) (float32, bool, error) {
+	if raw, ok := rf["parameters"]; ok {
+		var params map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return 0, false, fmt.Errorf("apply_bonus parameters: %w", err)
+		}
+		if v, ok := params[name]; ok {
+			var fl float32
+			if err := json.Unmarshal(v, &fl); err != nil {
+				return 0, false, fmt.Errorf("apply_bonus %s: %w", name, err)
+			}
+			return fl, true, nil
+		}
+	}
+	if raw, ok := rf[name]; ok {
+		var fl float32
+		if err := json.Unmarshal(raw, &fl); err != nil {
+			return 0, false, fmt.Errorf("apply_bonus %s: %w", name, err)
+		}
+		return fl, true, nil
+	}
+	return 0, false, nil
 }
 
 // smeltItemFunction is the port of net.minecraft.world.level.storage.loot.functions.SmeltItemFunction

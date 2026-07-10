@@ -29,7 +29,9 @@ import (
 	"testing"
 
 	"github.com/imhinotori/sulfur/data/entity"
+	"github.com/imhinotori/sulfur/data/item"
 	"github.com/imhinotori/sulfur/data/packetid"
+	"github.com/imhinotori/sulfur/level/component"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
@@ -220,5 +222,34 @@ func TestMobDeath_XP_NoPlayerNoOrb(t *testing.T) {
 	if orbsAfter != orbsBefore {
 		t.Fatalf("death XP: a non-player kill awarded XP (before=%d after=%d) — the player-kill gate must hold",
 			orbsBefore, orbsAfter)
+	}
+}
+
+// TestAttackerLootingLevel verifies the killer-weapon looting resolution the entity loot context
+// threads: a player killer holding a Looting-II sword yields level 2 (read SERVER-side off the held
+// main-hand item), while an environmental source (attacker 0) or a bare-handed player yields 0 (the
+// level-0 path where enchanted_count_increase draws NOTHING — the pig-oracle invariant).
+func TestAttackerLootingLevel(t *testing.T) {
+	loop, _ := newN2Loop(t)
+
+	// Environmental source (no causing entity) -> level 0.
+	if lvl := loop.attackerLootingLevel(damageSourceOf(damageTypeStarve)); lvl != 0 {
+		t.Fatalf("environmental source looting level = %d, want 0", lvl)
+	}
+
+	// A player killer holding a Looting-II sword -> level 2.
+	killer := blockPlayer(loop, 1.5, 65.0, 1.5)
+	killer.entityID = 55
+	sword := enchantedTool(int32(item.DiamondSword.ID), map[string]int{"minecraft:looting": 2})
+	inv := ensureInventory(killer)
+	inv.set(heldWindowSlot(inv.heldSlot), sword)
+	if lvl := loop.attackerLootingLevel(damageSourcePlayerAttack(55)); lvl != 2 {
+		t.Fatalf("player looting-II killer level = %d, want 2", lvl)
+	}
+
+	// Same killer bare-handed (empty held slot) -> level 0.
+	inv.set(heldWindowSlot(inv.heldSlot), component.SlotData{})
+	if lvl := loop.attackerLootingLevel(damageSourcePlayerAttack(55)); lvl != 0 {
+		t.Fatalf("bare-handed player killer looting level = %d, want 0", lvl)
 	}
 }

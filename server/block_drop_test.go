@@ -73,7 +73,7 @@ func TestBlockDropViaLoot(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			drops := blockDropsFor(c.state, 12345)
+			drops := blockDropsFor(c.state, 12345, blockBreakLootContext(nil, 12345))
 			if c.wantOK && len(drops) == 0 {
 				t.Fatalf("blockDropsFor(%s) returned no drops, want a %d drop", c.name, c.wantItem)
 			}
@@ -271,5 +271,121 @@ func TestBreakAirNoDrop(t *testing.T) {
 
 	if got := loop.only().entities.len(); got != before {
 		t.Fatalf("entity count = %d, want %d (no drop for air)", got, before)
+	}
+}
+
+// --- LOOT-CONTEXT TOOL THREADING (silk_touch / fortune) -------------------------------------
+//
+// These exercise the block-break TOOL thread (blockBreakLootContext): a held tool's silk_touch /
+// fortune enchantments reach the loot context so match_tool (has_silk_touch) + apply_bonus
+// (ore_drops fortune) resolve to real reads. 1:1 with ServerPlayerGameMode.destroyBlock ->
+// Block.getDrops(... , tool) + EnchantmentHelper.getItemEnchantmentLevel.
+
+// enchantedTool builds a SlotData for `itemID` carrying the given enchantment-id -> level map, via
+// the same stackComponentEdit path the grindstone/anvil use, so stackEnchantments reads it back.
+func enchantedTool(itemID int32, ench map[string]int) component.SlotData {
+	base := component.SlotData{Count: 1, ItemID: pk.VarInt(itemID)}
+	e := editStack(base)
+	e.setEnchantments(ench)
+	return e.materialize()
+}
+
+// toolPlayer builds a block-break player holding `tool` in the selected hotbar slot (server-side).
+func toolPlayer(loop *TickLoop, tool component.SlotData) *tickPlayer {
+	p := blockPlayer(loop, 1.5, 65.0, 1.5)
+	inv := ensureInventory(p)
+	inv.set(heldWindowSlot(inv.heldSlot), tool)
+	return p
+}
+
+// TestSilkTouchPicksGlassWhole: glass has ONE pool gated on match_tool(silk_touch>=1). A hand break
+// (no tool) drops NOTHING (the pool condition fails); a silk-touch tool drops the glass block whole.
+func TestSilkTouchPicksGlassWhole(t *testing.T) {
+	glassState := block.ToStateID[block.Glass{}]
+	const seed int64 = 424242
+
+	// Hand break (no tool): the silk_touch pool condition fails -> no drop.
+	handDrops := blockDropsFor(glassState, seed, blockBreakLootContext(nil, seed))
+	if len(handDrops) != 0 {
+		t.Fatalf("bare-hand glass break dropped %d stacks, want 0 (no silk_touch)", len(handDrops))
+	}
+
+	// Silk-touch tool: the pool fires -> one glass block.
+	loop, _ := newDropLoop()
+	tool := enchantedTool(int32(item.DiamondPickaxe.ID), map[string]int{"minecraft:silk_touch": 1})
+	p := toolPlayer(loop, tool)
+	silkDrops := blockDropsFor(glassState, seed, blockBreakLootContext(p, seed))
+	if len(silkDrops) != 1 {
+		t.Fatalf("silk-touch glass break dropped %d stacks, want 1 (glass whole)", len(silkDrops))
+	}
+	if item.ID(silkDrops[0].ItemID) != item.Glass.ID {
+		t.Fatalf("silk-touch glass drop item = %d, want glass %d", silkDrops[0].ItemID, item.Glass.ID)
+	}
+	if silkDrops[0].Count != 1 {
+		t.Fatalf("silk-touch glass count = %d, want 1", silkDrops[0].Count)
+	}
+}
+
+// TestFortuneMultipliesOreDrops: diamond_ore's fortune branch (apply_bonus ore_drops) multiplies the
+// single diamond by (bonus+1) where bonus = max(0, nextInt(fortuneLevel+2)-1). A Fortune-III tool must
+// (across seeds) sometimes yield >1 diamond, and a silk-touch tool instead picks the ore block whole.
+func TestFortuneMultipliesOreDrops(t *testing.T) {
+	oreState := block.ToStateID[block.DiamondOre{}]
+
+	loop, _ := newDropLoop()
+	fortuneTool := enchantedTool(int32(item.DiamondPickaxe.ID), map[string]int{"minecraft:fortune": 3})
+	fp := toolPlayer(loop, fortuneTool)
+
+	sawDiamond := false
+	sawMultiple := false
+	for s := int64(0); s < 200; s++ {
+		drops := blockDropsFor(oreState, s, blockBreakLootContext(fp, s))
+		for _, d := range drops {
+			if item.ID(d.ItemID) != item.Diamond.ID {
+				t.Fatalf("fortune diamond_ore drop item = %d, want diamond %d", d.ItemID, item.Diamond.ID)
+			}
+			if d.Count >= 1 {
+				sawDiamond = true
+			}
+			if d.Count > 1 {
+				sawMultiple = true
+			}
+		}
+	}
+	if !sawDiamond {
+		t.Fatal("fortune diamond_ore never dropped a diamond across 200 seeds")
+	}
+	if !sawMultiple {
+		t.Fatal("fortune-III diamond_ore never multiplied past 1 across 200 seeds (apply_bonus ore_drops not applied)")
+	}
+
+	// Silk-touch on the ore: the FIRST alternatives child (match_tool silk_touch) wins -> diamond_ore block.
+	loop2, _ := newDropLoop()
+	silkTool := enchantedTool(int32(item.DiamondPickaxe.ID), map[string]int{"minecraft:silk_touch": 1})
+	sp := toolPlayer(loop2, silkTool)
+	const seed int64 = 9
+	silkDrops := blockDropsFor(oreState, seed, blockBreakLootContext(sp, seed))
+	if len(silkDrops) != 1 || item.ID(silkDrops[0].ItemID) != item.DiamondOre.ID {
+		t.Fatalf("silk-touch diamond_ore dropped %v, want one diamond_ore block", silkDrops)
+	}
+}
+
+// TestBlockDropLevelZeroUnchanged: a hand break (no tool) and an enchant-less tool BOTH take the base
+// no-tool/level-0 path — diamond_ore -> exactly one diamond. This pins that threading a tool with no
+// relevant enchant does not change the base drop (the level-0 invariant).
+func TestBlockDropLevelZeroUnchanged(t *testing.T) {
+	oreState := block.ToStateID[block.DiamondOre{}]
+	for s := int64(0); s < 50; s++ {
+		hand := blockDropsFor(oreState, s, blockBreakLootContext(nil, s))
+		if len(hand) != 1 || item.ID(hand[0].ItemID) != item.Diamond.ID || hand[0].Count != 1 {
+			t.Fatalf("seed %d: hand diamond_ore = %v, want exactly one diamond", s, hand)
+		}
+		loop, _ := newDropLoop()
+		plain := enchantedTool(int32(item.DiamondPickaxe.ID), map[string]int{}) // no relevant enchant
+		p := toolPlayer(loop, plain)
+		tooled := blockDropsFor(oreState, s, blockBreakLootContext(p, s))
+		if len(tooled) != 1 || item.ID(tooled[0].ItemID) != item.Diamond.ID || tooled[0].Count != 1 {
+			t.Fatalf("seed %d: enchant-less-tool diamond_ore = %v, want exactly one diamond", s, tooled)
+		}
 	}
 }

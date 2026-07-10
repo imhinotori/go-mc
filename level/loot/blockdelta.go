@@ -137,29 +137,76 @@ const (
 type applyBonusCount struct {
 	formula    applyBonusFormula
 	enchantment string // the enchantment id (e.g. "minecraft:fortune") — for the cited read
+	// bonusMultiplier is the UniformBonusCount codec field: newCount = count +
+	// rng.nextInt(bonusMultiplier*enchLevel + 1). javap ApplyBonusCount$UniformBonusCount.
+	bonusMultiplier int
+	// extraRounds is the BinomialWithBonusCount codec field: the trial loop runs
+	// (enchLevel + extraRounds) Bernoulli trials. javap ApplyBonusCount$BinomialWithBonusCount.
+	extraRounds int
+	// probability is the BinomialWithBonusCount codec field: the per-trial success chance
+	// (nextFloat() < probability). javap ApplyBonusCount$BinomialWithBonusCount.
+	probability float32
 }
 
-// Run mirrors ApplyBonusCount.run.
+// Run mirrors ApplyBonusCount.run:
+//
+//	ItemStack tool = ctx.getOptionalParameter(TOOL);
+//	if (tool == null) return stack;
+//	int ench = EnchantmentHelper.getItemEnchantmentLevel(this.enchantment, tool);
+//	stack.setCount(this.formula.calculateNewCount(ctx.getRandom(), stack.getCount(), ench));
+//	return stack;
+//
+// The enchantment level is the getItemEnchantmentLevel(this.enchantment, tool) read: from the tool's
+// full enchantment map (ctx.ToolEnchantments) keyed by the function's enchantment id. The pre-existing
+// ToolFortuneLevel fast-path field is honored as a fallback when the map is absent but the enchant is
+// fortune, so the block-break caller can populate either. Without a TOOL (HasTool false) this is the
+// decompiled `TOOL == null -> stack unchanged` no-op (the v1 hand break).
 func (a *applyBonusCount) Run(stack *ItemStack, ctx *LootContext) *ItemStack {
 	if !ctx.HasTool {
 		return stack // decompiled: TOOL == null -> stack unchanged
 	}
+	// EnchantmentHelper.getItemEnchantmentLevel(this.enchantment, tool): the tool's level for the
+	// named enchantment (0 when absent). Both the namespaced and bare id are honored.
 	ench := 0
-	if a.enchantment == "minecraft:fortune" {
-		ench = ctx.ToolFortuneLevel
+	if lvl, ok := ctx.ToolEnchantments[a.enchantment]; ok {
+		ench = lvl
+	} else if lvl, ok := ctx.ToolEnchantments[normalizeType(a.enchantment)]; ok {
+		ench = lvl
+	} else if a.enchantment == "minecraft:fortune" {
+		ench = ctx.ToolFortuneLevel // fallback fast-path field (block_drop populates one or the other)
 	}
 	stack.Count = a.calculateNewCount(ctx, stack.Count, ench)
 	return stack
 }
 
-// calculateNewCount mirrors the ApplyBonusCount.Formula.calculateNewCount dispatch.
-// OreDrops.calculateNewCount (the only block-table form):
+// calculateNewCount mirrors the ApplyBonusCount.Formula.calculateNewCount dispatch — a 1:1 port of
+// all three formula bodies (verified this session via `javap -c -p` over the three inner classes).
+//
+// OreDrops.calculateNewCount (the block-table ore form):
 //
 //	if (enchantmentLevel <= 0) return count;
 //	int bonus = Math.max(0, rng.nextInt(enchantmentLevel + 2) - 1);
 //	return count * (bonus + 1);
+//	[VERIFIED javap ApplyBonusCount$OreDrops.calculateNewCount.]
 //
-// Source: javap ApplyBonusCount$OreDrops.calculateNewCount.
+// UniformBonusCount.calculateNewCount:
+//
+//	return count + rng.nextInt(this.bonusMultiplier * enchantmentLevel + 1);
+//	[VERIFIED javap ApplyBonusCount$UniformBonusCount.calculateNewCount:
+//	 iload_2 (count); bonusMultiplier; iload_3 (ench); imul; iconst_1; iadd; nextInt; iadd; ireturn.]
+//
+// BinomialWithBonusCount.calculateNewCount:
+//
+//	int i = count;
+//	for (int j = 0; j < enchantmentLevel + this.extraRounds; j++)
+//	    if (rng.nextFloat() < this.probability) i++;
+//	return i;
+//	[VERIFIED javap ApplyBonusCount$BinomialWithBonusCount.calculateNewCount: j=0; loop j <
+//	 (ench + extraRounds): nextFloat(); probability; fcmpg; ifge skip; iinc count; iinc j; return count.]
+//
+// The RNG draw (nextInt / nextFloat per trial) is load-bearing for per-seed reproduction and is
+// mirrored EXACTLY: the OreDrops single nextInt, the uniform single nextInt, and the binomial's
+// (ench+extraRounds) nextFloat draws in order.
 func (a *applyBonusCount) calculateNewCount(ctx *LootContext, count, ench int) int {
 	switch a.formula {
 	case formulaOreDrops:
@@ -171,8 +218,25 @@ func (a *applyBonusCount) calculateNewCount(ctx *LootContext, count, ench int) i
 			bonus = 0
 		}
 		return count * (bonus + 1)
+	case formulaUniformBonus:
+		// count + rng.nextInt(bonusMultiplier*ench + 1). nextInt(n) requires n>=1; the codec bound
+		// (bonusMultiplier*ench + 1) is always >= 1 (ench>=0, bonusMultiplier>=1).
+		bound := a.bonusMultiplier*ench + 1
+		if bound < 1 {
+			bound = 1
+		}
+		return count + int(ctx.Random().NextIntN(int32(bound)))
+	case formulaBinomialBonus:
+		// count += binomial(ench + extraRounds, probability): one nextFloat draw per trial, in order.
+		i := count
+		trials := ench + a.extraRounds
+		for j := 0; j < trials; j++ {
+			if ctx.Random().NextFloat() < a.probability {
+				i++
+			}
+		}
+		return i
 	default:
-		// uniform/binomial not used by the v1 ore set; with no tool they never run.
 		return count
 	}
 }

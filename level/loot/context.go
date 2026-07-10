@@ -37,6 +37,13 @@ type LootContext struct {
 	// false until the dig path supplies a real held tool (HasTool gates their use).
 	ToolSilkTouch    bool
 	ToolFortuneLevel int
+	// ToolEnchantments is the full enchantment-id -> level map of the block-break TOOL (the
+	// EnchantmentHelper.getItemEnchantmentLevel source ApplyBonusCount reads). Populated by the
+	// block-break drop path (server/block_drop.go) from the breaking player's held item; nil when no
+	// tool (the v1 hand break / a non-player break) so apply_bonus reads level 0. ToolSilkTouch /
+	// ToolFortuneLevel are the pre-existing fast-path fields the silk-touch predicate + the fortune
+	// stub read; this map is the general read the ApplyBonusCount port uses for any named enchantment.
+	ToolEnchantments map[string]int
 	// ExplosionRadius is the LootContextParams.EXPLOSION_RADIUS the explosion drop path
 	// supplies (>0 when a block is destroyed by a blast). A block BREAK supplies none
 	// (HasExplosion false), so survives_explosion passes and explosion_decay is a no-op
