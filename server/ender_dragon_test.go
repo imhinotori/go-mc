@@ -174,7 +174,9 @@ func TestEndCrystalDestroyHitsDragon(t *testing.T) {
 	loop, floorY := dragonLoop(t)
 	d := loop.spawnEnderDragon(0, 128, 0)
 	p := combatTestPlayer(loop, 0, float64(floorY+1), 0, 7003)
-	crystal := loop.spawnEndCrystal(4, 128, 0)
+	// Place the crystal FAR from the dragon (>12 blocks) so its own destroy-explosion (now wired,
+	// power 6.0) does not reach the dragon body -- this isolates the onCrystalDestroyed 10.0 head hit.
+	crystal := loop.spawnEndCrystal(200, 128, 0)
 	d.dragon.nearestCrystalID = crystal.id
 	startHealth := d.health
 
@@ -197,7 +199,7 @@ func TestEndCrystalDestroyHitsDragon(t *testing.T) {
 	}
 
 	// A crystal that is NOT the nearest: destroyed, but the dragon takes no hit.
-	other := loop.spawnEndCrystal(-4, 128, 0)
+	other := loop.spawnEndCrystal(-200, 128, 0)
 	// nearestCrystalID was cleared to 0 (the old crystal is gone); adopt the new one is NOT set, so this
 	// crystal is not nearest.
 	d.dragon.nearestCrystalID = 0
@@ -314,5 +316,38 @@ func TestDragonDeathFinalXpOneShot(t *testing.T) {
 	}
 	if _, ok := owner.entities.get(d.id); ok {
 		t.Fatal("dragon still present after the death frame (should be removed)")
+	}
+}
+
+// TestEndCrystalExplodesOnDestroy: destroying an end crystal with a NON-explosion source detonates a
+// power-6.0 explosion at the crystal (EndCrystal.hurtServer: !src.is(IS_EXPLOSION) -> level.explode 6.0
+// BLOCK). A fragile block placed next to the crystal is broken by the blast. A crystal destroyed by an
+// explosion source does NOT re-explode (the IS_EXPLOSION guard), so the same block survives.
+func TestEndCrystalExplodesOnDestroy(t *testing.T) {
+	loop, _ := dragonLoop(t)
+	p := combatTestPlayer(loop, 0, 129, 0, 7010)
+
+	// A fragile glass block one cell beside where the crystal sits (crystal at 4,128,0).
+	glassPos := pk.Position{X: 5, Y: 128, Z: 0}
+	glass := block.DefaultStateID["minecraft:glass"]
+	loop.only().world.SetBlock(glassPos, glass, dimMinY)
+
+	crystal := loop.spawnEndCrystal(4, 128, 0)
+	// Non-explosion source (a player attack) -> the crystal explodes (power 6.0).
+	loop.endCrystalHurt(crystal, damageSourcePlayerAttack(p.entityID))
+
+	after, _ := loop.only().world.GetBlock(glassPos, dimMinY)
+	if after == glass {
+		t.Fatal("glass beside the crystal survived the crystal destroy explosion (explosion did not fire)")
+	}
+
+	// A crystal destroyed BY an explosion does not re-explode: re-place the glass, destroy with an
+	// explosion source, and assert the glass survives.
+	loop.only().world.SetBlock(glassPos, glass, dimMinY)
+	crystal2 := loop.spawnEndCrystal(4, 128, 0)
+	loop.endCrystalHurt(crystal2, damageSourceOf(damageTypeExplosion))
+	after2, _ := loop.only().world.GetBlock(glassPos, dimMinY)
+	if after2 != glass {
+		t.Fatal("glass broken when the crystal was destroyed by an explosion (IS_EXPLOSION guard failed)")
 	}
 }

@@ -2,6 +2,11 @@ package server
 
 import "github.com/imhinotori/sulfur/data/entity"
 
+// endCrystalExplosionPower is the radius EndCrystal.hurtServer passes to level.explode (ldc 6.0f).
+//
+//	[VERIFIED javap EndCrystal.hurtServer: level.explode(this, x, y, z, 6.0f, ExplosionInteraction.BLOCK).]
+const endCrystalExplosionPower = 6.0
+
 // end_crystal.go -- the End Crystal (net.minecraft.world.entity.boss.enderdragon.EndCrystal), a 1:1 port
 // from the unobfuscated 26.2 jar (temp/cache/26.2-inner.jar, javap -c -p this task). The EndCrystal is the
 // healing beacon of the Ender Dragon fight: it sits atop an obsidian pillar, and while the dragon's
@@ -65,8 +70,8 @@ func (t *TickLoop) tickEndCrystal(e *Entity) {
 //
 // The `src.getEntity() instanceof EnderDragon` guard (a crystal is immune to the dragon's own damage) is
 // modeled by checking whether the source attacker is a live EnderDragon. The explosion (power 6.0, BLOCK)
-// is the AoE/block-break side effect -- deferred to the shared explosion path (cited); the crystal removal
-// + onCrystalDestroyed dispatch is the boss-loop half the test exercises.
+// is the AoE/block-break side effect, now wired to the shared explosion path (t.explode power 6.0); the
+// crystal removal + onCrystalDestroyed dispatch is the boss-loop half the test exercises.
 func (t *TickLoop) endCrystalHurt(e *Entity, src damageSource) bool {
 	if !e.isEndCrystal || e.dead {
 		return false // !isRemoved() guard: an already-removed crystal takes no hit.
@@ -79,11 +84,20 @@ func (t *TickLoop) endCrystalHurt(e *Entity, src damageSource) bool {
 		}
 	}
 	// remove(KILLED): the crystal is destroyed. Mark dead + remove from the store (the tracker batches the
-	// RemoveEntities next tick). Vanilla explodes power 6.0 BLOCK unless the source is an explosion -- the
-	// AoE is the shared-explosion deferral (cited); the removal + dispatch below is the boss-loop half.
+	// RemoveEntities next tick). Capture the position BEFORE removal for the explosion center.
 	crystalID := e.id
+	cx, cy, cz := e.x, e.y, e.z
 	e.dead = true
 	t.regionForEntity(e).entities.remove(crystalID)
+
+	// if (!src.is(IS_EXPLOSION)) level.explode(this, x, y, z, 6.0f, BLOCK): a crystal destroyed by anything
+	// OTHER than an explosion detonates at power 6.0 (the classic crystal blast that chains a pillar of
+	// crystals and cracks the surrounding obsidian). A crystal killed by another explosion does NOT re-explode
+	// (the IS_EXPLOSION guard prevents an infinite blast chain). The already-removed crystal (crystalID) is
+	// excluded from the blast's own hurt set. CITE EndCrystal.hurtServer (level.explode power 6.0, BLOCK).
+	if !src.is("is_explosion") {
+		t.explode(crystalID, cx, cy, cz, endCrystalExplosionPower)
+	}
 
 	// onDestroyedBy -> EnderDragonFight.onCrystalDestroyed(this, src): dispatch to every live dragon in the
 	// region. Each dragon's dragonOnCrystalDestroyed gates on crystal == nearestCrystal, so only the dragon
