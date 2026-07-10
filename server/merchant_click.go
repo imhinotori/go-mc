@@ -459,8 +459,12 @@ func (t *TickLoop) rewardTradeXp(villager *Entity, offer *merchantOffer) {
 		villager.lastTradedPlayerUUID = tp.uuid
 	}
 	if villagerShouldIncreaseLevel(villager) {
-		// updateMerchantTimer=40 + increaseProfessionLevelOnUpdate=true: the level-up scheduling is DEFERRED
-		// (no merchant-update tick). The +5 popXp bonus is preserved for when the gate is wired.
+		// updateMerchantTimer=40 + increaseProfessionLevelOnUpdate=true: schedule the level-up so
+		// customServerAiStep (villagerBrainTick) applies increaseMerchantCareer once the timer expires while
+		// the villager is not trading. popXp gains +5 (the level-up trade-XP orb bonus). CITE
+		// Villager.rewardTradeXp (updateMerchantTimer=40; increaseProfessionLevelOnUpdate=true; popXp += 5).
+		villager.updateMerchantTimer = 40
+		villager.increaseProfessionLevelOnUpdate = true
 		popXp += 5
 	}
 	if offer.rewardExp { // shouldRewardExp()
@@ -468,12 +472,46 @@ func (t *TickLoop) rewardTradeXp(villager *Entity, offer *merchantOffer) {
 	}
 }
 
-// villagerShouldIncreaseLevel is the DEFERRED stub for Villager.shouldIncreaseLevel(): vanilla checks
-// `VillagerData.canLevelUp(level) && villagerXp >= getMaxXpPerLevel(level)`. The level-up TICK
-// (updateMerchantTimer -> increaseMerchantCareer) is not wired in v1, so this returns false (no level-up) —
-// a cited stub equal to the "cannot yet level" default, structured so a real canLevelUp + xp-threshold read
-// replaces it with no caller change (CLAUDE.md: never bake the value away). CITE Villager.shouldIncreaseLevel.
-func villagerShouldIncreaseLevel(_ *Entity) bool { return false }
+// villagerShouldIncreaseLevel ports Villager.shouldIncreaseLevel(): a villager is eligible to level up when
+// its current level canLevelUp AND its accumulated villagerXp has reached that level's threshold.
+//
+//	int level = getVillagerData().level();
+//	return VillagerData.canLevelUp(level) && this.villagerXp >= VillagerData.getMaxXpPerLevel(level);
+//
+//	[VERIFIED CFR Villager.shouldIncreaseLevel: canLevelUp(level) && villagerXp >= getMaxXpPerLevel(level).]
+func villagerShouldIncreaseLevel(e *Entity) bool {
+	if e == nil {
+		return false
+	}
+	level := e.villagerLevel
+	return villagerCanLevelUp(level) && e.villagerXp >= villagerGetMaxXpPerLevel(level)
+}
+
+// villagerIncreaseMerchantCareer ports Villager.increaseMerchantCareer(ServerLevel):
+//
+//	setVillagerData(getVillagerData().withLevel(getVillagerData().level() + 1));
+//	updateTrades(level);
+//
+// withLevel bumps the level (clamped 1..5); updateTrades then ADDS the new level's trade set to the existing
+// offers (AbstractVillager.addOffersFromTradeSet appends — offers accumulate across levels, they are not
+// rebuilt). Here updateTrades is realized by appending villagerOffersFor(profession, newLevel) to the cached
+// offers list (a deterministic reduction of the randomized addOffersFromTradeSet pick, matching the existing
+// villagerGetOffers build path). CITE Villager.increaseMerchantCareer + Villager.updateTrades +
+// AbstractVillager.addOffersFromTradeSet.
+//
+//	[VERIFIED CFR Villager.increaseMerchantCareer: setVillagerData(data.withLevel(level+1)); updateTrades();
+//	 Villager.updateTrades: addOffersFromTradeSet(level, getOffers(), profession.getTrades(level)).]
+func villagerIncreaseMerchantCareer(e *Entity) {
+	if e == nil {
+		return
+	}
+	e.villagerLevel = clampVillagerLevel(e.villagerLevel + 1)
+	// updateTrades(level): ensure the offers list exists (getOffers lazy-build), then append the NEW level's
+	// trade set. villagerGetOffers builds/returns the cached list; append rebinds e.offers so the growth
+	// persists on the entity.
+	villagerGetOffers(e)
+	e.offers = append(e.offers, villagerOffersFor(e.villagerProfession, e.villagerLevel)...)
+}
 
 // merchantMenuViewClick adapts the OPEN MERCHANT window (payment 0/1 / result 2 / player 3..38) to the
 // generic menuView. The RESULT slot (2) is take-only (mayPlace false) and fires onTakeMerchant on take

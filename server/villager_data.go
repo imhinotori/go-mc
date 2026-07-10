@@ -28,6 +28,38 @@ const (
 // getMinXpPerLevel/getMaxXpPerLevel index into it. VERIFIED VillagerData static init bytecode.
 var nextLevelXpThresholds = [...]int{0, 10, 70, 150, 250}
 
+// villagerCanLevelUp ports VillagerData.canLevelUp(level): level >= MIN_VILLAGER_LEVEL(1) &&
+// level < MAX_VILLAGER_LEVEL(5). A level-5 villager cannot level further.
+//
+//	[VERIFIED CFR VillagerData.canLevelUp: iload_0; iconst_1; if_icmplt false; iload_0; iconst_5;
+//	 if_icmpge false; true.]
+func villagerCanLevelUp(level int) bool {
+	return level >= minVillagerLevel && level < maxVillagerLevel
+}
+
+// villagerGetMinXpPerLevel ports VillagerData.getMinXpPerLevel(level): canLevelUp(level) ?
+// NEXT_LEVEL_XP_THRESHOLDS[level - 1] : 0.
+//
+//	[VERIFIED CFR VillagerData.getMinXpPerLevel: canLevelUp ? NEXT_LEVEL_XP_THRESHOLDS[level-1] : 0.]
+func villagerGetMinXpPerLevel(level int) int {
+	if villagerCanLevelUp(level) {
+		return nextLevelXpThresholds[level-1]
+	}
+	return 0
+}
+
+// villagerGetMaxXpPerLevel ports VillagerData.getMaxXpPerLevel(level): canLevelUp(level) ?
+// NEXT_LEVEL_XP_THRESHOLDS[level] : 0. This is the XP a villager must accumulate at its current level to
+// be eligible to level up (shouldIncreaseLevel compares villagerXp against it).
+//
+//	[VERIFIED CFR VillagerData.getMaxXpPerLevel: canLevelUp ? NEXT_LEVEL_XP_THRESHOLDS[level] : 0.]
+func villagerGetMaxXpPerLevel(level int) int {
+	if villagerCanLevelUp(level) {
+		return nextLevelXpThresholds[level]
+	}
+	return 0
+}
+
 // clampVillagerLevel ports VillagerData's level clamp (Math.max(MIN, level), then the max-5 cap the
 // codec/withLevel enforce).
 func clampVillagerLevel(level int) int {

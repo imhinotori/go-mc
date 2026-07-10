@@ -68,6 +68,32 @@ func (t *TickLoop) villagerBrainTick(e *Entity) {
 	}
 	e.brain.tick(t, e, t.GameTime())
 
+	// Villager.customServerAiStep level-up-timer block (VERIFIED CFR this session), between brain.tick and
+	// the TRADE-event block:
+	//   if (!isTrading() && this.updateMerchantTimer > 0) {
+	//       if (--this.updateMerchantTimer <= 0) {
+	//           if (this.increaseProfessionLevelOnUpdate) {
+	//               this.increaseMerchantCareer(level);
+	//               this.increaseProfessionLevelOnUpdate = false;
+	//           }
+	//           this.addEffect(new MobEffectInstance(MobEffects.REGENERATION, 200, 0));
+	//       }
+	//   }
+	// rewardTradeXp armed updateMerchantTimer=40 + increaseProfessionLevelOnUpdate=true when a trade pushed
+	// villagerXp past the level threshold; the villager finishes trading (isTrading()==false once the menu
+	// closes), the timer counts down, and on expiry the profession level bumps (increaseMerchantCareer adds
+	// the next tier's trades) and a REGENERATION 200t/amp-0 buff plays. CITE Villager.customServerAiStep.
+	if !villagerIsTrading(e) && e.updateMerchantTimer > 0 {
+		e.updateMerchantTimer--
+		if e.updateMerchantTimer <= 0 {
+			if e.increaseProfessionLevelOnUpdate {
+				villagerIncreaseMerchantCareer(e)
+				e.increaseProfessionLevelOnUpdate = false
+			}
+			t.addEntityEffect(e, effectRegeneration, 200, 0) // MobEffectInstance(REGENERATION, 200, 0)
+		}
+	}
+
 	// Villager.customServerAiStep TRADE-event block (VERIFIED CFR this session):
 	//   if (this.lastTradedPlayer != null) {
 	//       level.onReputationEvent(ReputationEventType.TRADE, this.lastTradedPlayer, this);

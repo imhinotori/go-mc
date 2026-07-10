@@ -244,3 +244,73 @@ func TestProfessionCoverage(t *testing.T) {
 		t.Fatal("weaponsmith/2 must be empty (no base data)")
 	}
 }
+
+
+// TestVillagerXpThresholds pins VillagerData.canLevelUp + get{Min,Max}XpPerLevel against the jar
+// NEXT_LEVEL_XP_THRESHOLDS = {0,10,70,150,250}. VERIFIED VillagerData static init + canLevelUp/getMaxXpPerLevel.
+func TestVillagerXpThresholds(t *testing.T) {
+	// canLevelUp: true for levels 1..4, false for <1 and >=5.
+	for lvl, want := range map[int]bool{0: false, 1: true, 2: true, 3: true, 4: true, 5: false, 6: false} {
+		if villagerCanLevelUp(lvl) != want {
+			t.Fatalf("canLevelUp(%d) = %v, want %v", lvl, villagerCanLevelUp(lvl), want)
+		}
+	}
+	// getMaxXpPerLevel(level) = canLevelUp ? NEXT_LEVEL_XP_THRESHOLDS[level] : 0.
+	maxWant := map[int]int{1: 10, 2: 70, 3: 150, 4: 250, 5: 0}
+	for lvl, want := range maxWant {
+		if got := villagerGetMaxXpPerLevel(lvl); got != want {
+			t.Fatalf("getMaxXpPerLevel(%d) = %d, want %d", lvl, got, want)
+		}
+	}
+	// getMinXpPerLevel(level) = canLevelUp ? NEXT_LEVEL_XP_THRESHOLDS[level-1] : 0.
+	minWant := map[int]int{1: 0, 2: 10, 3: 70, 4: 150, 5: 0}
+	for lvl, want := range minWant {
+		if got := villagerGetMinXpPerLevel(lvl); got != want {
+			t.Fatalf("getMinXpPerLevel(%d) = %d, want %d", lvl, got, want)
+		}
+	}
+}
+
+// TestVillagerShouldIncreaseLevel pins Villager.shouldIncreaseLevel: canLevelUp(level) && villagerXp >=
+// getMaxXpPerLevel(level). A level-1 villager needs 10 XP; a level-5 villager never levels.
+func TestVillagerShouldIncreaseLevel(t *testing.T) {
+	e := &Entity{villagerProfession: "farmer", villagerLevel: 1, villagerXp: 9}
+	if villagerShouldIncreaseLevel(e) {
+		t.Fatal("level 1 with 9 XP (<10) must NOT level up")
+	}
+	e.villagerXp = 10
+	if !villagerShouldIncreaseLevel(e) {
+		t.Fatal("level 1 with 10 XP (>=10) must be eligible to level up")
+	}
+	// level 5 (max) never levels even with huge XP.
+	e5 := &Entity{villagerProfession: "farmer", villagerLevel: 5, villagerXp: 9999}
+	if villagerShouldIncreaseLevel(e5) {
+		t.Fatal("level 5 (max) must never level up")
+	}
+}
+
+// TestVillagerIncreaseMerchantCareer pins increaseMerchantCareer: level+1 (clamped) and the next level's
+// trade set APPENDED to the existing offers (offers accumulate, matching addOffersFromTradeSet).
+func TestVillagerIncreaseMerchantCareer(t *testing.T) {
+	e := &Entity{villagerProfession: "farmer", villagerLevel: 1}
+	l1 := villagerGetOffers(e) // build the initial farmer/1 set
+	l1n := len(l1)
+	if l1n == 0 {
+		t.Fatal("farmer/1 must build a non-empty offer set")
+	}
+	villagerIncreaseMerchantCareer(e)
+	if e.villagerLevel != 2 {
+		t.Fatalf("level after career-up = %d, want 2", e.villagerLevel)
+	}
+	// offers must have GROWN by the farmer/2 count (appended, not rebuilt).
+	l2Count := len(farmerLevel2Offers())
+	if len(e.offers) != l1n+l2Count {
+		t.Fatalf("offers after level-up = %d, want %d (l1 %d + l2 %d)", len(e.offers), l1n+l2Count, l1n, l2Count)
+	}
+	// level 5 cap: repeated career-ups never exceed 5.
+	e.villagerLevel = 5
+	villagerIncreaseMerchantCareer(e)
+	if e.villagerLevel != 5 {
+		t.Fatalf("career-up past max = %d, want clamp 5", e.villagerLevel)
+	}
+}

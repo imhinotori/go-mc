@@ -599,9 +599,9 @@ type Entity struct {
 	// decrement like RangedBowAttackGoal). Gates the chase-vs-stop move (seeTime<5 -> keep closing). Cite
 	// net.minecraft.world.entity.ai.goal.RangedAttackGoal.seeTime.
 	drownedTridentSeeTime int
-	isStray            bool
-	isBogged           bool
-	boggedSheared      bool
+	isStray               bool
+	isBogged              bool
+	boggedSheared         bool
 	// ZombieVillager conversion state (net.minecraft.world.entity.monster.zombie.ZombieVillager):
 	// isZombieVillager marks the entity; zvConverting mirrors DATA_CONVERTING_ID (isConverting());
 	// zvConversionTime mirrors villagerConversionTime (the per-tick countdown started by the cure);
@@ -730,8 +730,8 @@ type Entity struct {
 	// finalizeSpawn); salmonScale mirrors the Salmon$Variant.boundingBoxScale (SMALL 0.5 / MEDIUM 1.0 /
 	// LARGE 1.5) folded into the hitbox via getSalmonScale. Zero for every non-salmon. Cite
 	// Salmon.finalizeSpawn + Salmon$Variant + Salmon.getSalmonScale.
-	salmonVariant         int
-	salmonScale           float32
+	salmonVariant int
+	salmonScale   float32
 	// --- NAUTILUS FAMILY (Task, NEW 26.2) ----------------------------------------------------------
 	// AbstractNautilus is a brain-driven TamableAnimal aquatic mount (Nautilus + the zombified
 	// ZombieNautilus). isNautilus gates the (bounded) swim tick; isZombieNautilus marks the undead
@@ -844,6 +844,14 @@ type Entity struct {
 	offersBuilt           bool
 	villagerTradingPlayer int32
 	villagerXp            int
+	// updateMerchantTimer + increaseProfessionLevelOnUpdate mirror Villager.updateMerchantTimer /
+	// increaseProfessionLevelOnUpdate: rewardTradeXp arms them (timer=40, flag=true) when a trade pushes
+	// villagerXp past the level threshold; customServerAiStep counts the timer down while !isTrading() and,
+	// on reaching 0, runs increaseMerchantCareer (level+1, add next-level trades) + a REGENERATION 200t buff.
+	//	[VERIFIED CFR Villager fields updateMerchantTimer:I / increaseProfessionLevelOnUpdate:Z +
+	//	 customServerAiStep countdown block + rewardTradeXp arm block.]
+	updateMerchantTimer             int
+	increaseProfessionLevelOnUpdate bool
 	// villagerGossips mirrors Villager.gossips (net.minecraft.world.entity.ai.gossip.GossipContainer): the
 	// per-UUID reputation store that drives the trade-price economy (getPlayerReputation ->
 	// updateSpecialPrices) and receives reputation events (onReputationEventFrom: TRADE/VILLAGER_HURT/
