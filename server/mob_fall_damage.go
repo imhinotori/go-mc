@@ -1,6 +1,30 @@
 package server
 
-import "github.com/imhinotori/sulfur/level/attribute"
+import (
+	"github.com/imhinotori/sulfur/data/entity"
+	"github.com/imhinotori/sulfur/level/attribute"
+)
+
+// isFallDamageImmuneType ports EntityTypeTags.FALL_DAMAGE_IMMUNE membership -- the entity types that take
+// ZERO fall damage. LivingEntity.calculateFallDamage's FIRST branch is
+// `if (getType().is(EntityTypeTags.FALL_DAMAGE_IMMUNE)) return 0;` (javap: EntityTypeTags.FALL_DAMAGE_IMMUNE
+// is(...) ifeq 12 | iconst_0 ireturn), so a member ALWAYS computes fall damage 0 -- it never hurts itself
+// on its own jumps (the reported breeze self-jump symptom) or on a landing. Exact contents of
+// data/minecraft/tags/entity_type/fall_damage_immune.json in the 26.2 jar (VERIFIED this task):
+// copper_golem, iron_golem, snow_golem, shulker, allay, bat, bee, blaze, cat, chicken, ghast, happy_ghast,
+// phantom, magma_cube, ocelot, parrot, wither, breeze. No player is a member (the player path is
+// unaffected); the pig is NOT a member (its fall path is byte-identical). Cite EntityTypeTags.FALL_DAMAGE_IMMUNE.
+func isFallDamageImmuneType(typ entity.ID) bool {
+	switch typ {
+	case entity.CopperGolem.ID, entity.IronGolem.ID, entity.SnowGolem.ID, entity.Shulker.ID,
+		entity.Allay.ID, entity.Bat.ID, entity.Bee.ID, entity.Blaze.ID, entity.Cat.ID,
+		entity.Chicken.ID, entity.Ghast.ID, entity.HappyGhast.ID, entity.Phantom.ID,
+		entity.MagmaCube.ID, entity.Ocelot.ID, entity.Parrot.ID, entity.Wither.ID, entity.Breeze.ID:
+		return true
+	default:
+		return false
+	}
+}
 
 // mob_fall_damage.go — LIVE-DEBUG B (the "mobs take no fall damage" fix): the *Entity sibling of the
 // player fall-damage path (fall_damage.go). The player path (tickFallDamage) accumulated fallDistance
@@ -119,6 +143,17 @@ func (t *TickLoop) landMobFallDamage(e *Entity, inWater bool) {
 // hurt(FALL, (float) i) is t.applyDamageEntity(e, damageSourceOf(damageTypeFall), float32(i)) — the
 // Phase-29 keystone. Returns whether damage was dealt (mirrors the method's boolean result).
 func (t *TickLoop) causeFallDamageEntity(e *Entity, d float64, damageMultiplier float64) bool {
+	// LivingEntity.calculateFallDamage's FIRST branch (javap: EntityTypeTags.FALL_DAMAGE_IMMUNE is(...)
+	// ifeq 12 | iconst_0 ireturn): `if (getType().is(FALL_DAMAGE_IMMUNE)) return 0;`. A fall-damage-immune
+	// mob (breeze, ghast, iron_golem, ...) computes 0 fall damage and takes NO hit -- so a breeze does not
+	// hurt itself on its own jumps. Modeled at the calculateFallDamage call site (the free function is
+	// shared with the player path, which is never immune) so calculateFallDamage stays type-agnostic and
+	// the immune guard reads the mob's genuine EntityTypeTags.FALL_DAMAGE_IMMUNE membership. i == 0 => the
+	// (i > 0) test below is false => causeFallDamage returns false, exactly the vanilla `return 0` path.
+	// Cite LivingEntity.calculateFallDamage (the FALL_DAMAGE_IMMUNE early return).
+	if isFallDamageImmuneType(e.typ) {
+		return false
+	}
 	// getAttributeValue(SAFE_FALL_DISTANCE): the live per-mob attribute read — 3.0 for a plain living
 	// entity (createLivingAttributes default), 5.0 for a Fox (Fox.createAttributes override). Read at
 	// the vanilla LivingEntity.calculateFallPower call site so each mob's own safe-fall threshold
