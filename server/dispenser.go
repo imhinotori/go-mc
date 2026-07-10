@@ -30,9 +30,12 @@ package server
 //   RandomSource.triangle(a, b) = a + b*(nextDouble() - nextDouble()).
 //
 // SCOPE / DEFERRALS (each jar-cited):
-//   - The special DispenseItemBehavior registry (spawn eggs / buckets / TNT / armor / shears / bonemeal /
-//     etc.) is DEFERRED — getDispenseMethod always returns the DEFAULT behavior here (dispenser_be.go).
-//     CITE: DispenserBlock.DISPENSER_REGISTRY (an IdentityHashMap populated by DispenseItemBehavior.bootStrap).
+//   - The special DispenseItemBehavior registry is PARTIALLY ported in dispense_behaviors.go: the
+//     ARROW/SNOWBALL/EGG ProjectileDispenseBehavior and the FlintAndSteelDispenseItemBehavior (fire +
+//     TNT-prime branches) now fire via getDispenseMethod; the remaining registry entries (fire_charge/
+//     potion/firework projectiles, armor/shears/dye entity behaviors, spawn-egg/boat/minecart/bucket/
+//     bonemeal placement) remain cited deferrals in dispense_behaviors.go. CITE: DispenserBlock
+//     .DISPENSER_REGISTRY (an IdentityHashMap populated by DispenseItemBehavior.bootStrap).
 //   - The dropper's "eject into a container in front" (HopperBlockEntity.getContainerAt + addItem): Hopper
 //     is NOT ported, so getContainerAt returns null (no container) and the dropper falls to the loose-item
 //     DEFAULT shoot (dispenseFrom's `into == null` branch) — the dropper still WORKS, just always shoots
@@ -186,9 +189,16 @@ func (t *TickLoop) dispenseFrom(pos pk.Position, state block.StateID) {
 		return
 	}
 
-	// DispenserBlock: behavior = getDispenseMethod(level, stack); the special registry is DEFERRED, so
-	// getDispenseMethod always resolves to the DEFAULT behavior. DEFAULT is never NOOP, so it always fires.
-	// if (behavior != NOOP) be.setItem(slot, behavior.dispense(source, stack));
+	// DispenserBlock: behavior = getDispenseMethod(level, stack); if (behavior != NOOP) be.setItem(slot,
+	// behavior.dispense(source, stack)). getDispenseMethod looks the item up in DISPENSER_REGISTRY: a HIT
+	// runs the registered special behavior (dispense_behaviors.go), a MISS falls to the DEFAULT eject.
+	// DEFAULT is never NOOP, so it always fires. CITE: DispenserBlock.getDispenseMethod / DISPENSER_REGISTRY.
+	if remaining, handled := t.dispenseSpecialBehavior(pos, state, facing, stack); handled {
+		d.items[slot] = remaining
+		t.markDispenserDirty(pos)
+		t.broadcastDispenserChange(pos, d)
+		return
+	}
 	remaining := t.dispenseDefaultBehavior(pos, state, facing, stack)
 	d.items[slot] = remaining
 	t.markDispenserDirty(pos)
