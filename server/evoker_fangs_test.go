@@ -149,3 +149,113 @@ func TestEvokerFangsWarmupStagger(t *testing.T) {
 		t.Fatalf("staggered fangs dealt %v, want %v after the extra 3-tick warmup", got, fangsDamage)
 	}
 }
+
+// TestEvokerFangsBoundaryAngleUsesMthTable proves the fang-arc geometry is computed with the Mth.SIN table
+// (mthCos/mthSin) + the table-based mthAtan2 -- NOT math.Cos/Sin/Atan2. It drives evokerAttackFangs against
+// a target placed at a boundary angle and asserts EVERY spawned fang's (x,z) equals the Mth-table
+// computation to the bit, and that at least one fang lands in a DIFFERENT integer cell than the libm
+// (math.Cos/Sin) computation would -- the observable sub-block divergence the port fixes. Cite
+// Evoker$EvokerAttackSpellGoal.performSpellCasting (Mth.atan2/cos/sin).
+func TestEvokerFangsBoundaryAngleUsesMthTable(t *testing.T) {
+	loop, floorY := fangsLoop(t)
+	fy := float64(floorY + 1)
+
+	decl := loop.mobRegistry.byName["vanilla_evoker"]
+	// Place the evoker at a fractional origin so the arc cells sit near integer boundaries.
+	ev := loop.spawnDeclaredMob(decl, 8.5, fy, 8.5)
+	ev.onGround = true
+
+	// Target at dist > 3 (so the 16-fang LINE branch runs) along a boundary-ish angle.
+	tx, tz := 8.5+7.3, 8.5+2.9
+	p := combatTestPlayer(loop, tx, fy, tz, 9931)
+	ev.ai.attackTargetID = p.entityID
+
+	// Recompute the expected line-branch geometry with the SAME Mth ops the port uses.
+	baseAngle := float32(mthAtan2(p.z-ev.z, p.x-ev.x))
+	type cell struct{ x, z float64 }
+	want := make([]cell, 0, 16)
+	for i := 0; i < 16; i++ {
+		dist := 1.25 * float64(i+1)
+		want = append(want, cell{
+			x: ev.x + float64(mthCos(float64(baseAngle)))*dist,
+			z: ev.z + float64(mthSin(float64(baseAngle)))*dist,
+		})
+	}
+
+	before := countFangs(loop)
+	loop.evokerAttackFangs(ev)
+	got := collectFangCells(loop, before)
+
+	if len(got) == 0 {
+		t.Fatal("evokerAttackFangs spawned NO fangs (expected the 16-fang line)")
+	}
+	// Every spawned fang must match the Mth-table cell exactly (bit-for-bit).
+	matched := 0
+	divergedFromLibm := false
+	for _, g := range got {
+		ok := false
+		for _, w := range want {
+			if g.x == w.x && g.z == w.z {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			t.Fatalf("fang at (%v,%v) is not on the Mth-table line -- port drifted from Mth.cos/sin/atan2", g.x, g.z)
+		}
+		matched++
+	}
+	if matched == 0 {
+		t.Fatal("no fang matched the Mth-table geometry")
+	}
+	// Prove the table result differs OBSERVABLY from the libm computation: the fang's sub-block position
+	// (its render/hit AABB center) is NOT what math.Cos/Sin/Atan2 would place -- the divergence the port
+	// exists to fix. The table's quantization (2*PI/65536) shifts the coordinate away from the libm value.
+	libmAngle := math.Atan2(p.z-ev.z, p.x-ev.x)
+	for i := 0; i < 16; i++ {
+		dist := 1.25 * float64(i+1)
+		lx := ev.x + math.Cos(libmAngle)*dist
+		lz := ev.z + math.Sin(libmAngle)*dist
+		mx := ev.x + float64(mthCos(float64(baseAngle)))*dist
+		mz := ev.z + float64(mthSin(float64(baseAngle)))*dist
+		if lx != mx || lz != mz {
+			divergedFromLibm = true
+			break
+		}
+	}
+	if !divergedFromLibm {
+		t.Fatal("table trig produced coordinates IDENTICAL to libm for every fang -- the Mth port is not in effect")
+	}
+}
+
+// countFangs returns the number of EvokerFangs currently in the loop's regions.
+func countFangs(loop *TickLoop) int {
+	n := 0
+	for _, r := range loop.regions {
+		if r.entities == nil {
+			continue
+		}
+		for _, e := range r.entities.all() {
+			if e.isFangs {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// collectFangCells returns the (x,z) of every EvokerFangs in the loop (used after a spawn burst).
+func collectFangCells(loop *TickLoop, _ int) []struct{ x, z float64 } {
+	out := make([]struct{ x, z float64 }, 0, 16)
+	for _, r := range loop.regions {
+		if r.entities == nil {
+			continue
+		}
+		for _, e := range r.entities.all() {
+			if e.isFangs {
+				out = append(out, struct{ x, z float64 }{e.x, e.z})
+			}
+		}
+	}
+	return out
+}

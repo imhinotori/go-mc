@@ -740,14 +740,6 @@ func clampF(v, lo, hi float64) float64 {
 	return v
 }
 
-// mthAtan2 ports Mth.atan2(double, double). Mth.atan2 is a fast table approximation in vanilla; v1 uses
-// math.Atan2 (the SAME libm-vs-table convention passenger.go's transformPoint documents — the yaw is a
-// client-authoritative RENDER angle, so the tiny table-vs-libm delta is not observable gameplay).
-//	[CITE: Mth.atan2 (SinusTable approximation); the render-angle deviation is documented in passenger.go.]
-func mthAtan2(y, x float64) float64 {
-	return math.Atan2(y, x)
-}
-
 // --- DETECTOR RAIL (net.minecraft.world.level.block.DetectorRailBlock) -----------------------------
 
 // detectorRailSearchInset is DetectorRailBlock.getSearchBB's 0.2-block inset: the box (pos+0.2, pos.y,

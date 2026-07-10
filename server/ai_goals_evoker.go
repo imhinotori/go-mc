@@ -274,24 +274,30 @@ func (t *TickLoop) evokerAttackFangs(e *Entity) {
 	}
 	minY := math.Min(target.y, e.y)
 	maxY := math.Max(target.y, e.y) + 1.0
-	baseAngle := math.Atan2(target.z-e.z, target.x-e.x)
+	// baseAngle = (float)Mth.atan2(target.getZ()-getZ(), target.getX()-getX()) (offsets 65-69: d2f). The
+	// angle is a float32 (the d2f cast is load-bearing: every downstream Mth.cos/sin widens THIS float, not
+	// a double atan2). Uses the table-based mthAtan2 + the Mth.SIN table for sub-block-exact fang cells.
+	baseAngle := float32(mthAtan2(target.z-e.z, target.x-e.x))
 	distSqr := distanceToSqrPlayer(target, e)
 	if distSqr < 9.0 {
-		// Inner arc: 5 fangs, radius 1.5, step PI*0.4, warmup 0.
+		// Inner arc: 5 fangs, radius 1.5, step PI*0.4, warmup 0. f = baseAngle + (float)i*3.1415927f*0.4f
+		// (ALL float32 arithmetic, offsets 95-107). x/z = getX/Z + (double)Mth.cos/sin((double)f)*1.5d.
 		for i := 0; i < 5; i++ {
-			ang := baseAngle + float64(i)*math.Pi*0.4
-			t.evokerCreateFang(e, e.x+math.Cos(ang)*1.5, e.z+math.Sin(ang)*1.5, minY, maxY, ang, 0)
+			f := baseAngle + float32(i)*float32(3.1415927)*float32(0.4)
+			t.evokerCreateFang(e, e.x+float64(mthCos(float64(f)))*1.5, e.z+float64(mthSin(float64(f)))*1.5, minY, maxY, float64(f), 0)
 		}
-		// Outer arc: 8 fangs, radius 2.5, step 2PI/8, offset 2PI/5, warmup 3.
+		// Outer arc: 8 fangs, radius 2.5, warmup 3. f = baseAngle + (float)i*3.1415927f*2f/8f + 1.2566371f
+		// (ALL float32, offsets 173-189). x/z = getX/Z + (double)Mth.cos/sin((double)f)*2.5d.
 		for i := 0; i < 8; i++ {
-			ang := baseAngle + float64(i)*(2.0*math.Pi/8.0) + 1.2566371
-			t.evokerCreateFang(e, e.x+math.Cos(ang)*2.5, e.z+math.Sin(ang)*2.5, minY, maxY, ang, 3)
+			f := baseAngle + float32(i)*float32(3.1415927)*2.0/float32(8.0) + float32(1.2566371)
+			t.evokerCreateFang(e, e.x+float64(mthCos(float64(f)))*2.5, e.z+float64(mthSin(float64(f)))*2.5, minY, maxY, float64(f), 3)
 		}
 	} else {
-		// Line: 16 fangs, dist 1.25*(i+1), warmup i.
+		// Line: 16 fangs, dist 1.25d*(i+1), warmup 1*i. x/z = getX/Z + (double)Mth.cos/sin((double)baseAngle)
+		// *dist (offsets 259-320). The angle stays baseAngle (float32) for all 16 fangs.
 		for i := 0; i < 16; i++ {
 			dist := 1.25 * float64(i+1)
-			t.evokerCreateFang(e, e.x+math.Cos(baseAngle)*dist, e.z+math.Sin(baseAngle)*dist, minY, maxY, baseAngle, i)
+			t.evokerCreateFang(e, e.x+float64(mthCos(float64(baseAngle)))*dist, e.z+float64(mthSin(float64(baseAngle)))*dist, minY, maxY, float64(baseAngle), 1*i)
 		}
 	}
 }

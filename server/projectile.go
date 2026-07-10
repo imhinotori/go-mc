@@ -53,10 +53,12 @@ func (t *TickLoop) spawnArrow(shooterID int32, x, y, z, vx, vy, vz, baseDamage f
 	a.vx, a.vy, a.vz = vx, vy, vz
 	a.spawnData = shooterID + 1 // ClientboundAddEntity data: ownerId+1 (0 == none)
 
-	// Projectile.shoot seeds the render angles from the launch vector.
+	// Projectile.shoot seeds the render angles from the launch vector: yRot = (float)(Mth.atan2(x, z) *
+	// RAD_TO_DEG), xRot = (float)(Mth.atan2(y, horizontalDistance) * RAD_TO_DEG). Uses the table-based
+	// mthAtan2 + the exact RAD_TO_DEG float (Projectile.shoot: ldc2_w 57.2957763671875). Cite Projectile.shoot.
 	horiz := math.Sqrt(vx*vx + vz*vz)
-	a.yaw = float32(math.Atan2(vx, vz) * 180.0 / math.Pi)
-	a.pitch = float32(math.Atan2(vy, horiz) * 180.0 / math.Pi)
+	a.yaw = float32(mthAtan2(vx, vz) * float64(mthRadToDeg))
+	a.pitch = float32(mthAtan2(vy, horiz) * float64(mthRadToDeg))
 	a.headYaw = a.yaw
 
 	owner := t.regionForEntity(a)
@@ -164,10 +166,10 @@ func (t *TickLoop) tickArrow(e *Entity) {
 	// Update the render angles from the (pre-drag) movement — AbstractArrow lerps them; v1 sets directly.
 	horiz := math.Sqrt(e.vx*e.vx + e.vz*e.vz)
 	if e.vx != 0 || e.vz != 0 {
-		e.yaw = float32(math.Atan2(e.vx, e.vz) * 180.0 / math.Pi)
+		e.yaw = float32(mthAtan2(e.vx, e.vz) * float64(mthRadToDeg))
 		e.headYaw = e.yaw
 	}
-	e.pitch = float32(math.Atan2(e.vy, horiz) * 180.0 / math.Pi)
+	e.pitch = float32(mthAtan2(e.vy, horiz) * float64(mthRadToDeg))
 
 	// getAirDrag()==0.99 applied to all three axes (applyInertia == deltaMovement.scale(0.99)).
 	e.vx *= arrowAirDrag
@@ -266,8 +268,8 @@ func (t *TickLoop) spawnSplashPotion(ownerID int32, x, y, z, vx, vy, vz float64,
 	p.vx, p.vy, p.vz = vx, vy, vz
 
 	horiz := math.Sqrt(vx*vx + vz*vz)
-	p.yaw = float32(math.Atan2(vx, vz) * 180.0 / math.Pi)
-	p.pitch = float32(math.Atan2(vy, horiz) * 180.0 / math.Pi)
+	p.yaw = float32(mthAtan2(vx, vz) * float64(mthRadToDeg))
+	p.pitch = float32(mthAtan2(vy, horiz) * float64(mthRadToDeg))
 	p.headYaw = p.yaw
 
 	owner := t.regionForEntity(p)
@@ -330,10 +332,10 @@ func (t *TickLoop) tickPotion(e *Entity) {
 	t.cur().entities.move(e, nx, ny, nz)
 	horiz := math.Sqrt(e.vx*e.vx + e.vz*e.vz)
 	if e.vx != 0 || e.vz != 0 {
-		e.yaw = float32(math.Atan2(e.vx, e.vz) * 180.0 / math.Pi)
+		e.yaw = float32(mthAtan2(e.vx, e.vz) * float64(mthRadToDeg))
 		e.headYaw = e.yaw
 	}
-	e.pitch = float32(math.Atan2(e.vy, horiz) * 180.0 / math.Pi)
+	e.pitch = float32(mthAtan2(e.vy, horiz) * float64(mthRadToDeg))
 	e.vx *= potionSplashDrag
 	e.vy *= potionSplashDrag
 	e.vz *= potionSplashDrag
