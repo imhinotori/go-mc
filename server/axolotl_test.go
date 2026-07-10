@@ -11,6 +11,7 @@ import (
 	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/attribute"
+	"github.com/imhinotori/sulfur/world/levelgen"
 )
 
 func axolotlLoop(t *testing.T) (*TickLoop, int) {
@@ -79,5 +80,36 @@ func TestAxolotlSpawnVariantCommonDistribution(t *testing.T) {
 		if seen[v] == 0 {
 			t.Fatalf("common variant %d never drawn over 400 spawns", v)
 		}
+	}
+}
+
+// TestAxolotlSoloSpawnDrawOrderAndCount: a solo (non-BUCKET, spawnGroupData==null) Axolotl.finalizeSpawn
+// consumes EXACTLY THREE level.getRandom() draws in order (bytecode 47-87): types[0]=getCommonSpawnVariant
+// (nextInt(4)), types[1]=getCommonSpawnVariant (nextInt(4)), then getVariant == types[nextInt(2)]. The port
+// previously drew only ONE nextInt(4), desyncing all downstream level-random consumers. This pins the seed,
+// replays the full 3-draw path, and asserts (1) the mob's variant equals the replay result and (2) the
+// stream advanced by exactly 3 draws (the region's next draw equals the replay's 4th draw).
+func TestAxolotlSoloSpawnDrawOrderAndCount(t *testing.T) {
+	loop, floorY := axolotlLoop(t)
+	const seed = int64(0x5A0517)
+	loop.cur().levelRandom.SetSeed(seed)
+
+	a := loop.spawnAxolotl(8.5, float64(floorY+1), 8.5, false)
+	// The region stream is now 3 draws in; capture the 4th draw for the count assertion.
+	afterSpawnDraw := loop.cur().levelRandom.NextIntN(1000)
+
+	// Replay the exact 3-draw solo path from the same seed.
+	replay := levelgen.NewLegacyRandomSource(seed)
+	commons := []int{axolotlVariantLucy, axolotlVariantWild, axolotlVariantGold, axolotlVariantCyan}
+	t0 := commons[replay.NextIntN(4)] // types[0] = getCommonSpawnVariant (draw 1)
+	t1 := commons[replay.NextIntN(4)] // types[1] = getCommonSpawnVariant (draw 2)
+	pick := []int{t0, t1}[replay.NextIntN(2)] // getVariant == types[nextInt(2)] (draw 3)
+	replayAfter := replay.NextIntN(1000)      // the 4th draw -- must match the region's post-spawn draw
+
+	if a.axolotlVariant != pick {
+		t.Fatalf("axolotl variant = %d, want %d (the 3-draw AxolotlGroupData solo path)", a.axolotlVariant, pick)
+	}
+	if afterSpawnDraw != int32(replayAfter) {
+		t.Fatalf("post-spawn level-random draw = %d, want %d -- finalizeSpawn must consume EXACTLY 3 draws (draw count desync)", afterSpawnDraw, replayAfter)
 	}
 }

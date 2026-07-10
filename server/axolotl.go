@@ -86,14 +86,13 @@ func newAxolotlAI() *mobAI {
 func (t *TickLoop) spawnAxolotl(x, y, z float64, baby bool) *Entity {
 	a := NewEntity(t.idAlloc.AllocID(), entity.Axolotl, x, y, z)
 	a.isAxolotl = true
-	// Axolotl.finalizeSpawn: a non-BUCKET spawn draws its variant via the AxolotlGroupData path, whose
-	// net observable for a solo mob is a common-variant pick == getCommonSpawnVariant(random). That is
-	// getSpawnVariant(random, true) == Util.getRandom(filter(values(), common), random) ==
-	// commons[nextInt(commons.length)] over {LUCY,WILD,GOLD,CYAN} (BLUE is the rare/non-common breeding
-	// mutation, excluded). The draw is on level.getRandom() (ServerLevelAccessor.getRandom ==
-	// t.cur().levelRandom). Cite Axolotl.finalizeSpawn + Axolotl$Variant.getCommonSpawnVariant/
-	// getSpawnVariant + Util.getRandom.
-	a.axolotlVariant = t.axolotlCommonSpawnVariant()
+	// Axolotl.finalizeSpawn: a non-BUCKET SOLO spawn (spawnGroupData==null) builds a fresh AxolotlGroupData
+	// (bytecode 47-74) that pre-rolls TWO common variants -- types[0]=getCommonSpawnVariant(r) (draw 1:
+	// nextInt(4)), types[1]=getCommonSpawnVariant(r) (draw 2: nextInt(4)) -- then sets THIS mob's variant to
+	// getVariant(r) == types[nextInt(2)] (draw 3: nextInt(2), bytecode 84). Three level.getRandom() draws in
+	// that order; the final variant is one of the two pre-rolled commons. Cite Axolotl.finalizeSpawn +
+	// Axolotl$Variant.getCommonSpawnVariant + Axolotl$AxolotlGroupData.getVariant.
+	a.axolotlVariant = t.axolotlSoloSpawnVariant()
 	if baby {
 		a.breedAge = babyStartAge
 		a.refreshDimensions() // AgeableMob baby half-scale box (getDefaultDimensions baby-scale)
@@ -116,12 +115,28 @@ func (t *TickLoop) spawnAxolotl(x, y, z float64, baby bool) *Entity {
 var axolotlCommonVariants = [...]int{axolotlVariantLucy, axolotlVariantWild, axolotlVariantGold, axolotlVariantCyan}
 
 // axolotlCommonSpawnVariant is Axolotl$Variant.getCommonSpawnVariant(RandomSource): the filtered common
-// array indexed by Util.getRandom(array, random) == array[random.nextInt(array.length)]. Drawn on
-// level.getRandom() (t.cur().levelRandom) exactly as ServerLevelAccessor.getRandom feeds it in
-// finalizeSpawn. Cite Axolotl$Variant.getSpawnVariant + Util.getRandom.
+// array indexed by Util.getRandom(array, random) == array[random.nextInt(array.length)] over
+// {LUCY,WILD,GOLD,CYAN} (BLUE is common==false, excluded). ONE nextInt(4) draw on the passed random.
+// Cite Axolotl$Variant.getSpawnVariant + Util.getRandom.
 func (t *TickLoop) axolotlCommonSpawnVariant() int {
 	r := t.cur().levelRandom
 	return axolotlCommonVariants[r.NextIntN(int32(len(axolotlCommonVariants)))]
+}
+
+// axolotlSoloSpawnVariant ports the Axolotl.finalizeSpawn SOLO (spawnGroupData==null) AxolotlGroupData
+// path in full draw order (bytecode 47-87): pre-roll types[0] and types[1] via getCommonSpawnVariant
+// (two nextInt(4) draws), then pick this mob's variant with AxolotlGroupData.getVariant ==
+// types[nextInt(2)] (a third draw, nextInt(2)). All three draws are on level.getRandom() in that exact
+// order -- the final variant is one of the two pre-rolled commons, and the draw COUNT (3) matches vanilla
+// so downstream level-random consumers stay in lockstep. Cite Axolotl.finalizeSpawn +
+// Axolotl$AxolotlGroupData.getVariant.
+func (t *TickLoop) axolotlSoloSpawnVariant() int {
+	r := t.cur().levelRandom
+	types := [2]int{
+		t.axolotlCommonSpawnVariant(), // types[0] = getCommonSpawnVariant(r) (draw 1: nextInt(4))
+		t.axolotlCommonSpawnVariant(), // types[1] = getCommonSpawnVariant(r) (draw 2: nextInt(4))
+	}
+	return types[r.NextIntN(int32(len(types)))] // getVariant(r) == types[nextInt(2)] (draw 3)
 }
 
 // axolotlAiStep is the Axolotl per-tick extra (Axolotl.customServerAiStep). Vanilla runs the AxolotlAi
