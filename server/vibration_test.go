@@ -11,6 +11,9 @@ import (
 	"testing"
 
 	"github.com/imhinotori/sulfur/level"
+	"github.com/imhinotori/sulfur/level/block"
+	pk "github.com/imhinotori/sulfur/net/packet"
+	"github.com/imhinotori/sulfur/world"
 )
 
 // vibLoop builds a physics loop + floor ready to spawn a NON-emerging warden (so its VibrationUser can
@@ -23,6 +26,47 @@ func vibLoop(t *testing.T) (*TickLoop, int) {
 	fillFloor(ch, floorY)
 	loop.start(loop.clock.(*fakeClock).Now())
 	return loop, floorY
+}
+
+// vibLoopMgr is vibLoop but also returns the chunk manager so a test can place occluding blocks (wool).
+func vibLoopMgr(t *testing.T) (*TickLoop, *world.ChunkManager, int) {
+	t.Helper()
+	loop, mgr := newPhysicsLoop()
+	const floorY = 63
+	ch := putChunk(mgr, level.ChunkPos{0, 0})
+	fillFloor(ch, floorY)
+	loop.start(loop.clock.(*fakeClock).Now())
+	return loop, mgr, floorY
+}
+
+// TestVibrationWoolOccludesSignal: a solid wool wall spanning every one of the six 1E-5 nudge rays between
+// an emitter and the warden occludes the vibration -- gameEvent registers NO candidate. Removing the wall
+// lets the same event through. Cite VibrationSystem.Listener.isOccluded (OCCLUDES_VIBRATION_SIGNALS wool).
+func TestVibrationWoolOccludesSignal(t *testing.T) {
+	loop, mgr, floorY := vibLoopMgr(t)
+	w := loop.spawnWarden(8.5, float64(floorY+1), 8.5, false)
+	const stepper int32 = 7210
+	// Emitter one block east of the warden feet; the listener is at feet + eye height (2.465). Wrap the
+	// EMITTER block cell and all six of its face-neighbours in wool so every nudge ray is blocked.
+	wool := block.DefaultStateID["minecraft:white_wool"]
+	ex, ey, ez := 9, floorY+1, 8
+	for _, d := range [][3]int{{0, 0, 0}, {0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}} {
+		mgr.SetBlock(pk.Position{X: ex + d[0], Y: ey + d[1], Z: ez + d[2]}, wool, dimMinY)
+	}
+	loop.gameEvent(geStep, 9.5, float64(floorY+1), 8.5, gameEventContext{sourceEntityID: stepper})
+	if w.warden.vibration != nil && w.warden.vibration.hasCandidate {
+		t.Fatal("wool-occluded STEP still registered a vibration candidate (isOccluded returned false)")
+	}
+
+	// Clear the wool: the same event now reaches the listener.
+	air := block.DefaultStateID["minecraft:air"]
+	for _, d := range [][3]int{{0, 0, 0}, {0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}} {
+		mgr.SetBlock(pk.Position{X: ex + d[0], Y: ey + d[1], Z: ez + d[2]}, air, dimMinY)
+	}
+	loop.gameEvent(geStep, 9.5, float64(floorY+1), 8.5, gameEventContext{sourceEntityID: stepper})
+	if w.warden.vibration == nil || !w.warden.vibration.hasCandidate {
+		t.Fatal("un-occluded STEP did not register a candidate (isOccluded false-positive)")
+	}
 }
 
 // drainTravel runs the warden vibration ticker n times (each == one Ticker.tick: select/decrement/deliver).
