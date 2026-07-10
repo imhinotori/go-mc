@@ -97,6 +97,9 @@ func (t *TickLoop) explodeWith(srcID int32, x, y, z, radius float64, interaction
 	// (distanceToSqr(center) < 4096.0), each carrying its own knockback Optional (hitPlayers[p], the
 	// SAME vector applied to it; absent for a player not in the hurt set). blockCount == len(toBlow).
 	t.sendExplodePackets(x, y, z, float32(radius), int32(len(toBlow)), hitPlayers)
+	// ServerExplosion.finalizeExplosion tail: level.gameEvent(source, GameEvent.EXPLODE, center) -- the
+	// explosion vibration (frequency 15). Source is the exploding entity (0 for a world/block explosion).
+	t.gameEvent(geExplode, x, y, z, gameEventContext{sourceEntityID: srcID})
 }
 
 // explode is the MOB-interaction convenience overload (fire=false): the creeper / wither-skull path.

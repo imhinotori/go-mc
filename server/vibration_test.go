@@ -168,6 +168,22 @@ func TestProjectileAngerFirstThenSubsequent(t *testing.T) {
 	}
 }
 
+// TestDoorEmitsBlockOpenVibration: opening a door near a warden posts a BLOCK_OPEN game event that
+// registers a vibration candidate on the warden's listener (the emitter wiring, not a direct feed).
+func TestDoorEmitsBlockOpenVibration(t *testing.T) {
+	loop, floorY := vibLoop(t)
+	w := loop.spawnWarden(8.5, float64(floorY+1), 8.5, false)
+	p := &tickPlayer{x: 8.5, y: float64(floorY + 1), z: 8.5, entityID: 7220}
+	pos := pk.Position{X: 8, Y: floorY + 1, Z: 8}
+	loop.emitDoorGameEvent(pos, true, p) // the DoorBlock.setOpen gameEvent(player, BLOCK_OPEN, pos) tail
+	if w.warden.vibration == nil || !w.warden.vibration.hasCandidate {
+		t.Fatal("a BLOCK_OPEN near the warden did not register a vibration candidate (emitter not wired)")
+	}
+	if w.warden.vibration.candSourceID != p.entityID {
+		t.Fatalf("BLOCK_OPEN candidate source = %d, want the opening player %d", w.warden.vibration.candSourceID, p.entityID)
+	}
+}
+
 // TestGameEventNoListenerIsNoOp: with NO listener registered, gameEvent(...) touches nothing (the pig-
 // oracle invariant -- a pig emits STEP with no listener and stays byte-identical).
 func TestGameEventNoListenerIsNoOp(t *testing.T) {

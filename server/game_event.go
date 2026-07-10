@@ -48,12 +48,22 @@ const (
 	geProjectileLand gameEventID = "projectile_land" // Projectile.onHit (PROJECTILE_LAND)
 	geEntityInteract gameEventID = "entity_interact" // Entity interaction (ENTITY_INTERACT)
 	geEntityDie      gameEventID = "entity_die"      // LivingEntity.die (ENTITY_DIE)
-	// FOLLOW-UP (cited, not yet wired at an emitter): swim, flap, splash, bounce, hit_ground,
+	// The remaining GameEvent registry ids in the WARDEN_CAN_LISTEN / vibration-frequency set. Each has a
+	// frequency in vibrationFrequencyTable; the const exists so an emitter posts the correct id. Cite
+	// GameEvent constants + VibrationSystem.VIBRATION_FREQUENCY_FOR_EVENT.
+	geBlockActivate gameEventID = "block_activate" // BLOCK_ACTIVATE (dispenser empty-fire click)
+	geBlockOpen     gameEventID = "block_open"     // BLOCK_OPEN (door/trapdoor/fence-gate open)
+	geBlockClose    gameEventID = "block_close"    // BLOCK_CLOSE (door/trapdoor/fence-gate close)
+	gePrimeFuse     gameEventID = "prime_fuse"     // PRIME_FUSE (creeper/tnt fuse start)
+	geExplode       gameEventID = "explode"        // EXPLODE (explosion)
+	geEat           gameEventID = "eat"            // EAT (LivingEntity finish consuming; DRINK shares freq 8)
+	geFluidPickup   gameEventID = "fluid_pickup"   // FLUID_PICKUP (bucket fill)
+	geFluidPlace    gameEventID = "fluid_place"    // FLUID_PLACE (bucket empty)
+	// FOLLOW-UP (cited, not yet wired at an emitter): block_change, block_deactivate, container_open/close,
+	// note_block_play, drink, splash, swim, entity_place, lightning_strike, shear, flap, bounce, hit_ground,
 	// projectile_shoot, instrument_play, entity_action, elytra_glide, unequip, entity_dismount, equip,
-	// shear, entity_mount, entity_damage, drink, eat, container_close/open, block_close/open,
-	// block_activate/deactivate, block_attach/detach, prime_fuse, note_block_play, block_change,
-	// fluid_pickup, fluid_place, entity_place, lightning_strike, teleport, explode. Every one already has
-	// a frequency in vibrationFrequencyTable; wiring its emitter is a follow-up per subsystem.
+	// entity_mount, entity_damage, block_attach/detach, teleport, item_interact_finish. Every one already
+	// has a frequency in vibrationFrequencyTable; wiring its emitter is a follow-up per subsystem.
 )
 
 // gameEventDefaultNotificationRadius is GameEvent.DEFAULT_NOTIFICATION_RADIUS (16). Every core event uses

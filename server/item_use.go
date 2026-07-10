@@ -444,6 +444,11 @@ func (t *TickLoop) finishUsingItem(p *tickPlayer, stack component.SlotData) comp
 	// See consume_effects.go. The burp/eat sound + EAT/DRINK gameEvent remain cited v1 no-ops.
 	if c, ok := itemConsumable(int32(stack.ItemID)); ok {
 		t.applyConsumeEffects(p, c)
+		// Consumable.onConsume tail: entity.gameEvent(getUseAnimation()==DRINK ? DRINK : EAT). EAT and
+		// DRINK carry the IDENTICAL vibration frequency (8), so the observable warden/sculk reaction is the
+		// same either way; the animation-driven EAT-vs-DRINK id pick is a cite-deferred cosmetic distinction.
+		// Source is the consuming player. Cite Consumable.onConsume.
+		t.gameEvent(geEat, p.x, p.y, p.z, gameEventContext{sourceEntityID: p.entityID})
 	}
 
 	// ItemStack.consume(1, player): shrink by 1 UNLESS the player has infinite materials (creative).
@@ -593,7 +598,9 @@ func (t *TickLoop) tryUseBucket(p *tickPlayer, inv *Inventory, held component.Sl
 		// A picked-up source opens a hole its fluid neighbors must re-flow into: kick the neighbors so
 		// adjacent flowing water/lava re-evaluates (LiquidBlock neighborChanged -> scheduleTick).
 		t.scheduleFluidNeighborsOnEdit(blockPos)
-		// awardStat / getPickupSound / gameEvent(FLUID_PICKUP): v1 no-ops (no stats/sound/game-event).
+		// BucketItem: level.gameEvent(player, GameEvent.FLUID_PICKUP, pos) -- the bucket-fill vibration
+		// (frequency 12). awardStat / getPickupSound stay v1 no-ops. Source is the filling player.
+		t.gameEventAt(geFluidPickup, blockPos, gameEventContext{sourceEntityID: p.entityID})
 		filled := component.SlotData{Count: 1, ItemID: pk.VarInt(filledID)}
 		t.bucketCreateFilledResult(p, inv, hand, held, filled)
 		return true
@@ -617,6 +624,9 @@ func (t *TickLoop) tryUseBucket(p *tickPlayer, inv *Inventory, held component.Sl
 	// shared write+broadcast primitive.
 	t.setFluidBlock(relPos, srcState)
 	t.scheduleFluidNeighborsOnEdit(relPos)
+	// BucketItem.emptyContents: level.gameEvent(player, GameEvent.FLUID_PLACE, pos) -- the bucket-empty
+	// vibration (frequency 13). Source is the emptying player.
+	t.gameEventAt(geFluidPlace, relPos, gameEventContext{sourceEntityID: p.entityID})
 	// checkExtraContent (no-op) / awardStat (no-op). getEmptySuccessItem: creative keeps the filled
 	// bucket, survival yields a new empty Bucket. createFilledResult then swaps/consumes the hand.
 	empty := component.SlotData{Count: 1, ItemID: pk.VarInt(item.Bucket.ID)}

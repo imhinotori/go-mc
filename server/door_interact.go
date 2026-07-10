@@ -61,9 +61,9 @@ import (
 func (t *TickLoop) tryDoorInteraction(pos pk.Position, state block.StateID, p *tickPlayer) bool {
 	switch {
 	case block.IsDoor(state):
-		return t.useDoor(pos, state)
+		return t.useDoor(pos, state, p)
 	case block.IsTrapdoor(state):
-		return t.useTrapdoor(pos, state)
+		return t.useTrapdoor(pos, state, p)
 	case block.IsFenceGate(state):
 		return t.useFenceGate(pos, state, p)
 	default:
@@ -81,7 +81,7 @@ func doorSoundPitch() float32 {
 // PASS): return false so the normal useItemOn continuation runs (nothing is placed on a non-
 // replaceable door either way). Otherwise cycle OPEN on the clicked half, write it, sync the OTHER
 // half's OPEN (the setBlock-flags-10 -> neighbour updateShape effect), play the sound, and consume.
-func (t *TickLoop) useDoor(pos pk.Position, state block.StateID) bool {
+func (t *TickLoop) useDoor(pos pk.Position, state block.StateID, p *tickPlayer) bool {
 	if !block.DoorOpenableByHand(state) {
 		return false // BlockSetType.canOpenByHand()==false (iron): InteractionResult.PASS
 	}
@@ -119,15 +119,32 @@ func (t *TickLoop) useDoor(pos pk.Position, state block.StateID) bool {
 	t.playSound(sound, soundSourceBlocks,
 		float64(pos.X)+0.5, float64(pos.Y)+0.5, float64(pos.Z)+0.5,
 		1.0, doorSoundPitch(), mrand.Int64())
-	// level.gameEvent(player, open?BLOCK_OPEN:BLOCK_CLOSE, pos): cite-deferred (no game-event subsystem).
+	// level.gameEvent(player, open ? BLOCK_OPEN : BLOCK_CLOSE, pos): the door toggle vibration.
+	t.emitDoorGameEvent(pos, open, p)
 	return true
+}
+
+// emitDoorGameEvent ports the DoorBlock/TrapDoorBlock/FenceGateBlock setOpen tail
+// level.gameEvent(player, open ? BLOCK_OPEN : BLOCK_CLOSE, pos): a door/trapdoor/gate toggle posts the
+// open or close vibration at the block center with the interacting player as the source. Cite
+// DoorBlock.setOpen + TrapDoorBlock.setOpen + FenceGateBlock.
+func (t *TickLoop) emitDoorGameEvent(pos pk.Position, open bool, p *tickPlayer) {
+	ev := geBlockClose
+	if open {
+		ev = geBlockOpen
+	}
+	var src int32
+	if p != nil {
+		src = p.entityID
+	}
+	t.gameEventAt(ev, pos, gameEventContext{sourceEntityID: src})
 }
 
 // useTrapdoor ports TrapDoorBlock.useWithoutItem -> toggle. Iron trapdoors reject a hand click
 // (canOpenByHand=false -> PASS): return false. Otherwise cycle OPEN, write it (flags 2 = UPDATE_CLIENTS),
 // play the trapdoor sound, and consume. The waterlog scheduleTick on a waterlogged trapdoor toggle is a
 // cite-deferred follow-up (the fluid schedule half); the OPEN toggle + sound are the observable use().
-func (t *TickLoop) useTrapdoor(pos pk.Position, state block.StateID) bool {
+func (t *TickLoop) useTrapdoor(pos pk.Position, state block.StateID, p *tickPlayer) bool {
 	if !block.DoorOpenableByHand(state) {
 		return false // iron trapdoor: InteractionResult.PASS
 	}
@@ -144,7 +161,9 @@ func (t *TickLoop) useTrapdoor(pos pk.Position, state block.StateID) bool {
 	t.playSound(sound, soundSourceBlocks,
 		float64(pos.X)+0.5, float64(pos.Y)+0.5, float64(pos.Z)+0.5,
 		1.0, doorSoundPitch(), mrand.Int64())
-	// gameEvent(BLOCK_OPEN/CLOSE) + waterlog scheduleTick: cite-deferred.
+	// level.gameEvent(player, open ? BLOCK_OPEN : BLOCK_CLOSE, pos): the trapdoor toggle vibration.
+	t.emitDoorGameEvent(pos, open, p)
+	// waterlog scheduleTick on a waterlogged trapdoor toggle: cite-deferred (the fluid schedule half).
 	return true
 }
 
@@ -210,6 +229,7 @@ func (t *TickLoop) useFenceGate(pos pk.Position, state block.StateID, p *tickPla
 	t.playSound(sound, soundSourceBlocks,
 		float64(pos.X)+0.5, float64(pos.Y)+0.5, float64(pos.Z)+0.5,
 		1.0, doorSoundPitch(), mrand.Int64())
-	// gameEvent(BLOCK_OPEN/CLOSE): cite-deferred.
+	// level.gameEvent(player, open ? BLOCK_OPEN : BLOCK_CLOSE, pos): the fence-gate toggle vibration.
+	t.emitDoorGameEvent(pos, open, p)
 	return true
 }

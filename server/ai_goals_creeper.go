@@ -106,7 +106,12 @@ func (t *TickLoop) creeperAiStep(e *Entity) {
 		e.swellDir = 1
 	}
 	swellDir := e.swellDir
-	// (swellDir>0 && swell==0): the primed-fuse sound/gameEvent — a cite-deferred client cue.
+	// Creeper.tick: if (swellDir > 0 && swell == 0) { playSound(PRIMED_FUSE); gameEvent(PRIME_FUSE); }
+	// -- the fuse-start vibration (frequency 10). The PRIMED_FUSE sound is a cite-deferred client cue; the
+	// gameEvent is the load-bearing vibration a warden/sculk hears. Source is the creeper itself.
+	if swellDir > 0 && e.swell == 0 {
+		t.gameEvent(gePrimeFuse, e.x, e.y, e.z, gameEventContext{sourceEntityID: e.id})
+	}
 	e.swell += swellDir
 	if e.swell < 0 {
 		e.swell = 0

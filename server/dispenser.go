@@ -159,8 +159,10 @@ func (t *TickLoop) dispenseFrom(pos pk.Position, state block.StateID) {
 	// int slot = be.getRandomSlot(level.getRandom());
 	slot := d.getRandomSlot(rng)
 	if slot < 0 {
-		// level.levelEvent(1001, pos, 0); level.gameEvent(BLOCK_ACTIVATE, ...); return;
+		// DispenserBlock.dispenseFrom empty branch: level.levelEvent(1001, pos, 0); level.gameEvent(
+		// GameEvent.BLOCK_ACTIVATE, pos) -- the empty-fire click vibration (frequency 10). World source.
 		t.dispenserLevelEvent(pos, 1001) // fail sound — cited client no-op seam
+		t.gameEventAt(geBlockActivate, pos, gameEventContext{})
 		return
 	}
 
