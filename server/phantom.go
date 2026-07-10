@@ -83,6 +83,8 @@ const (
 	phantomSwoopJitter       = 4  // ... nextInt(4) (iconst_4)
 	phantomTicksPerSecond    = 20 // ... * 20 (bipush 20)
 
+	phantomFinalizeAnchorAbove = 5 // finalizeSpawn: anchorPoint = blockPosition().above(5) (iconst_5)
+
 	// setAnchorAboveTarget + stop() re-anchor.
 	phantomAnchorAboveBase   = 20 // anchor = target.blockPosition().above(20 + nextInt(20)) (bipush 20)
 	phantomAnchorAboveJitter = 20 // ... nextInt(20) (bipush 20)
@@ -92,6 +94,8 @@ const (
 	// PhantomSweepAttackGoal.
 	phantomSweepMidYFrac   = 0.5                 // moveTargetPoint y = target.getY(0.5) (ldc2_w 0.5d)
 	phantomSweepBoxInflate = 0.20000000298023224 // bb.inflate(0.2) intersects target.bb (ldc2_w)
+	phantomCatSearchDelay  = 20                  // canContinueToUse: catSearchTick = tickCount + 20 (bipush 20)
+	phantomCatSearchRange  = 16.0                // canContinueToUse: getBoundingBox().inflate(16) Cat scan (ldc2_w 16.0d)
 
 	// PhantomCircleAroundAnchorGoal.
 	phantomCircleDistBase     = 5.0  // start: distance = 5 + nextFloat()*10 (ldc 5.0f)
@@ -136,6 +140,11 @@ type phantomState struct {
 	clockwise                             float32
 	circleRunning                         bool
 	nextScanTick                          int32
+	// PhantomSweepAttackGoal cat-scare state (canContinueToUse). catSearchCooldown models the vanilla
+	// `if (tickCount > catSearchTick)` 20-tick cadence (catSearchTick = tickCount + 20) as a countdown that
+	// fires on the first swoop check then every 20 ticks. isScaredOfCat mirrors the field of the same name.
+	catSearchCooldown int32
+	isScaredOfCat     bool
 }
 
 // spawnPhantom creates a Phantom at (x,y,z) at phantom size 0, seeds ATTACK_DAMAGE to 6 (updatePhantomSize
@@ -153,6 +162,14 @@ func (t *TickLoop) spawnPhantom(x, y, z float64) *Entity {
 	}
 	_ = phantomXpReward    // ctor xpReward = 5 (no per-Entity xpReward field yet -- cited, like ghast/blaze)
 	_ = phantomTravelSpeed // travel: travelFlying(input, 0.2f) -- the physics flyer branch applies 0.91 drag
+	// finalizeSpawn: anchorPoint = blockPosition().above(5); setPhantomSize(0). The natural PhantomSpawner
+	// (and every spawn egg) routes through finalizeSpawn, so the anchor is seeded here -- the phantom starts
+	// with a real orbit anchor 5 blocks above its spawn column instead of lazily anchoring on the first
+	// circle selectNext. Cite Phantom.finalizeSpawn.
+	p.phantom.anchorX = int(math.Floor(x))
+	p.phantom.anchorY = int(math.Floor(y)) + phantomFinalizeAnchorAbove
+	p.phantom.anchorZ = int(math.Floor(z))
+	p.phantom.hasAnchor = true
 	t.setPhantomSize(p, 0) // setPhantomSize(0) -> updatePhantomSizeInfo (ATTACK_DAMAGE 6 + refreshDimensions)
 	initSpawnHealth(p)     // LivingEntity ctor setHealth(getMaxHealth()) -> 20.0 (read AFTER the size info)
 	p.ai = &mobAI{}
@@ -229,40 +246,68 @@ func (t *TickLoop) phantomAiStep(e *Entity) {
 	switch ps.attackPhase {
 	case phantomPhaseSwoop:
 		ps.circleRunning = false // the circle goal cannot run while SWOOP (canUse: phase == CIRCLE)
-		t.phantomSweepAttackGoal(e)
+		// goalSelector lifecycle: the running SweepAttackGoal is checked with canContinueToUse each tick; if
+		// it returns false the goal stops (setTarget(null); phase = CIRCLE) and does not tick this frame.
+		if !t.phantomSweepCanContinue(e) {
+			t.phantomSweepStop(e)
+		} else {
+			t.phantomSweepAttackGoal(e)
+		}
 	default: // CIRCLE
 		t.phantomCircleAroundAnchorGoal(e)
 	}
 	t.phantomMoveControlTick(e) // PhantomMoveControl.tick: steer deltaMovement toward moveTargetPoint
 }
 
-// phantomAcquireTarget ports Phantom$PhantomAttackPlayerTargetGoal: every reducedTickDelay(60) ticks, scan
-// for the nearest live player within the AABB inflate(16, 64, 16) and (if canAttack) set it as the target.
-// canContinueToUse keeps the current target while it is alive; else the scan re-runs. v1 canAttack reduces
-// to "a live player" (the TargetingConditions.DEFAULT visibility test is the shared simplification).
-// RNG-free. Cite Phantom$PhantomAttackPlayerTargetGoal.canUse/canContinueToUse.
+// phantomCanTargetPlayer ports the TargetingConditions.forCombat() test (== DEFAULT) as it applies to a
+// PLAYER candidate in the phantom target scan. forCombat sets isCombat = true; test() then gates the
+// player on canBeSeenByAnyone() (LivingEntity: !isSpectator() && isAlive()) AND, on the isCombat branch,
+// canBeSeenAsEnemy() (!isInvulnerable() && canBeSeenByAnyone()) && difficulty != PEACEFUL. A creative
+// player IS invulnerable (abilities.invulnerable), so canBeSeenAsEnemy is false; a spectator fails
+// canBeSeenByAnyone. So a creative OR spectator player is EXCLUDED (the observable gate this v1 wires).
+// The line-of-sight / invisibility-range-scaling limbs of test() are cite-deferred (no Sensing /
+// getVisibilityPercent subsystem yet); the range-64 limb is subsumed by the inflate(16,64,16) box. Cite
+// TargetingConditions.forCombat/test + LivingEntity.canBeSeenByAnyone/canBeSeenAsEnemy + Player
+// (isSpectator via GameType.SPECTATOR; creative -> invulnerable).
+func phantomCanTargetPlayer(p *tickPlayer) bool {
+	if p == nil || p.dead {
+		return false // canBeSeenByAnyone: isAlive()
+	}
+	// !isSpectator() (canBeSeenByAnyone) && !isInvulnerable()==!creative (canBeSeenAsEnemy).
+	return p.gameMode != gameModeSpectator && p.gameMode != gameModeCreative
+}
+
+// phantomAcquireTarget ports Phantom$PhantomAttackPlayerTargetGoal (canUse/canContinueToUse folded).
+// canContinueToUse: keep the current target only while canAttack(target, TargetingConditions.DEFAULT) holds
+// (NOT merely "alive") -- a target that goes creative/spectator/dead is dropped. canUse: every
+// reducedTickDelay(60) ticks, getNearbyPlayers(forCombat().range(64), this, bb.inflate(16,64,16)), sort the
+// list by Comparator.comparing(Entity::getY).reversed() (HIGHEST Y first), then take the FIRST that passes
+// canAttack(candidate, DEFAULT) and setTarget it. NOT nearest -- highest. RNG-free. Cite
+// Phantom$PhantomAttackPlayerTargetGoal.canUse/canContinueToUse.
 func (t *TickLoop) phantomAcquireTarget(e *Entity) {
 	if e.ai == nil {
 		return
 	}
 	ps := e.phantom
-	if e.ai.attackTargetID != 0 { // canContinueToUse: keep a live target
+	if e.ai.attackTargetID != 0 { // canContinueToUse: keep only while canAttack(DEFAULT) holds
 		p := t.playerByEntityID(e.ai.attackTargetID)
-		if p != nil && !p.dead {
+		if p != nil && phantomCanTargetPlayer(p) {
 			return
 		}
-		e.ai.attackTargetID = 0 // target gone
+		e.ai.attackTargetID = 0 // target gone / no longer attackable (creative/spectator/dead)
 	}
 	if ps.nextScanTick > 0 { // canUse cadence gate (a scan only fires at <= 0)
 		ps.nextScanTick--
 		return
 	}
 	ps.nextScanTick = int32(reducedTickDelay(phantomScanCadence)) // nextScanTick = reducedTickDelay(60)
-	// getNearbyPlayers(conditions, this, bb.inflate(16,64,16)): the nearest live player within the box.
+	// getNearbyPlayers(forCombat().range(64), this, bb.inflate(16,64,16)), then sort by getY DESC and take the
+	// FIRST canAttack(DEFAULT). The forCombat().range(64) prefilter and the per-candidate canAttack(DEFAULT)
+	// are the SAME forCombat test (DEFAULT == forCombat()), realized once as phantomCanTargetPlayer; the
+	// range-64 limb is subsumed by the inflate box. Picking the max-Y attackable player == sort-DESC-take-first.
 	var best *tickPlayer
-	bestSq := math.MaxFloat64
 	for _, p := range t.players {
-		if p == nil || p.dead {
+		if !phantomCanTargetPlayer(p) {
 			continue
 		}
 		if math.Abs(p.x-e.x) > phantomScanRangeXZ || math.Abs(p.z-e.z) > phantomScanRangeXZ {
@@ -271,14 +316,12 @@ func (t *TickLoop) phantomAcquireTarget(e *Entity) {
 		if math.Abs(p.y-e.y) > phantomScanRangeY {
 			continue
 		}
-		dsq := distanceToSqrPlayer(p, e)
-		if dsq < bestSq {
-			bestSq = dsq
+		if best == nil || p.y > best.y { // Comparator.comparing(Entity::getY).reversed() -> highest Y
 			best = p
 		}
 	}
 	if best != nil {
-		e.ai.attackTargetID = best.entityID // setTarget(nearest)
+		e.ai.attackTargetID = best.entityID // setTarget(highest-Y attackable player)
 	}
 }
 
@@ -350,17 +393,89 @@ func (t *TickLoop) phantomStrategyStop(e *Entity) {
 	ps.anchorY = base + phantomStopAnchorBase + int(mobRandom(e).nextInt(phantomStopAnchorJitter))
 }
 
-// phantomSweepAttackGoal ports Phantom$PhantomSweepAttackGoal.tick (canUse/canContinueToUse/stop folded).
-// The phase is SWOOP: set moveTargetPoint to (target.x, target.getY(0.5), target.z) so the move-control
-// dives at the target; if the phantom's box (inflated 0.2) intersects the target's box -> doHurtTarget (the
-// dive-bomb melee, ATTACK_DAMAGE 6) + flip back to CIRCLE (levelEvent 1039 deferred); else if the phantom
-// hit a wall (horizontalCollision) or was itself hurt (hurtTime > 0) -> flip back to CIRCLE. Cite
+// phantomSweepCanContinue ports Phantom$PhantomSweepAttackGoal.canContinueToUse (the goalSelector gate that
+// keeps the swoop running). In vanilla order:
+//   1. target == null                                          -> false
+//   2. !target.isAlive()                                       -> false
+//   3. target instanceof Player && (isSpectator || isCreative) -> false (a mid-swoop creative/spectator abort)
+//   4. !canUse()   (canUse == target != null && phase == SWOOP)-> false
+//   5. every 20 ticks (tickCount > catSearchTick): getEntitiesOfClass(Cat, bb.inflate(16), ENTITY_STILL_ALIVE),
+//      hiss() each (cite-deferred visual), isScaredOfCat = !list.isEmpty()
+//   6. return !isScaredOfCat
+// The 20-tick cadence is modelled by a countdown (catSearchCooldown) that fires on the first swoop check then
+// every 20 ticks -- observably identical to the "if (tickCount > catSearchTick) catSearchTick = tickCount + 20"
+// cadence. Cite Phantom$PhantomSweepAttackGoal.canContinueToUse.
+func (t *TickLoop) phantomSweepCanContinue(e *Entity) bool {
+	ps := e.phantom
+	target := t.phantomTarget(e) // getTarget(); the phantomTarget helper already drops null/dead players
+	if target == nil {
+		return false // target == null || !isAlive()
+	}
+	// target instanceof Player && (isSpectator() || isCreative()) -> false.
+	if target.gameMode == gameModeSpectator || target.gameMode == gameModeCreative {
+		return false
+	}
+	if ps.attackPhase != phantomPhaseSwoop { // !canUse() (canUse requires phase == SWOOP)
+		return false
+	}
+	// if (tickCount > catSearchTick) { catSearchTick = tickCount + 20; isScaredOfCat = !cats.isEmpty(); }
+	if ps.catSearchCooldown <= 0 {
+		ps.catSearchCooldown = phantomCatSearchDelay
+		ps.isScaredOfCat = t.phantomCatNearby(e)
+	} else {
+		ps.catSearchCooldown--
+	}
+	return !ps.isScaredOfCat // return !isScaredOfCat
+}
+
+// phantomCatNearby ports the canContinueToUse Cat scan: getEntitiesOfClass(Cat.class, getBoundingBox()
+// .inflate(16), EntitySelector.ENTITY_STILL_ALIVE) -- is there at least one live Cat within the inflate(16)
+// box. The hiss() side effect on each cat is a cite-deferred client visual (no per-cat sound event wired).
+// The broad-phase uses the OWNING-region store (t.cur().entities.near -- the same seam the cat/breed goals
+// use) at a 2-chunk radius (covers the +/-16-block inflate across a chunk boundary), then an exact inflated-
+// AABB + type re-check per candidate. Cite Phantom$PhantomSweepAttackGoal.canContinueToUse (Cat scan).
+func (t *TickLoop) phantomCatNearby(e *Entity) bool {
+	hw := e.width/2 + phantomCatSearchRange // getBoundingBox().inflate(16): half-width + 16 on X/Z
+	loX, hiX := e.x-hw, e.x+hw
+	loY, hiY := e.y-phantomCatSearchRange, e.y+e.height+phantomCatSearchRange
+	loZ, hiZ := e.z-hw, e.z+hw
+	for _, other := range t.cur().entities.near(e.x, e.z, 2) {
+		if other == e || other.typ != entity.Cat.ID || other.dead { // Cat.class + ENTITY_STILL_ALIVE (isAlive)
+			continue
+		}
+		if other.x < loX || other.x > hiX || other.y < loY || other.y > hiY || other.z < loZ || other.z > hiZ {
+			continue // outside the inflated AABB
+		}
+		return true // hiss() (cite-deferred); list is non-empty -> scared
+	}
+	return false
+}
+
+// phantomSweepStop ports Phantom$PhantomSweepAttackGoal.stop: setTarget(null); attackPhase = CIRCLE. After a
+// swoop ends (target lost/dead/creative/spectator, or a cat scare) the phantom DROPS its target and re-anchors
+// -- the re-anchor is the STRATEGY goal stop firing next tick once it, too, sees a null target
+// (phantomAttackStrategyGoal -> phantomStrategyStop re-anchors to a fresh heightmap+10+nextInt(20)). Cite
+// Phantom$PhantomSweepAttackGoal.stop.
+func (t *TickLoop) phantomSweepStop(e *Entity) {
+	ps := e.phantom
+	if e.ai != nil {
+		e.ai.attackTargetID = 0 // setTarget(null)
+	}
+	ps.attackPhase = phantomPhaseCircle
+}
+
+// phantomSweepAttackGoal ports Phantom$PhantomSweepAttackGoal.tick. The phase is SWOOP: set moveTargetPoint to
+// (target.x, target.getY(0.5), target.z) so the move-control dives at the target; if the phantom box
+// (inflated 0.2) intersects the target box -> doHurtTarget (the dive-bomb melee, ATTACK_DAMAGE 6) + flip back
+// to CIRCLE (levelEvent 1039 deferred); else if the phantom hit a wall (horizontalCollision) or was itself
+// hurt (hurtTime > 0) -> flip back to CIRCLE. Flipping to CIRCLE ends the goal: NEXT tick canContinueToUse
+// returns false (phase != SWOOP) and stop() clears the target + re-anchors. Cite
 // Phantom$PhantomSweepAttackGoal.tick.
 func (t *TickLoop) phantomSweepAttackGoal(e *Entity) {
 	ps := e.phantom
 	target := t.phantomTarget(e)
 	if target == nil {
-		ps.attackPhase = phantomPhaseCircle // stop(): setTarget(null) already cleared; phase = CIRCLE
+		ps.attackPhase = phantomPhaseCircle
 		return
 	}
 	ps.moveTargetX = target.x
@@ -375,6 +490,7 @@ func (t *TickLoop) phantomSweepAttackGoal(e *Entity) {
 		ps.attackPhase = phantomPhaseCircle
 	}
 }
+
 
 // phantomCircleAroundAnchorGoal ports Phantom$PhantomCircleAroundAnchorGoal (canUse/start/tick folded). The
 // phase is CIRCLE: on entry it runs start (distance = 5 + nextFloat()*10; height = -4 + nextFloat()*9;

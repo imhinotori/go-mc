@@ -181,3 +181,142 @@ func TestPhantomSwoopDealsSix(t *testing.T) {
 		t.Fatalf("after a landed swoop, phase = %d, want CIRCLE (the climb-back)", ph.phantom.attackPhase)
 	}
 }
+
+// TestPhantomTargetsHighestYPlayer: PhantomAttackPlayerTargetGoal.canUse sorts the nearby players by
+// Comparator.comparing(Entity::getY).reversed() and takes the FIRST canAttack -- the HIGHEST-Y player, NOT
+// the nearest. With two survival players in range (one high, one low-and-closer), the phantom must acquire
+// the higher one. Cite Phantom$PhantomAttackPlayerTargetGoal.canUse.
+func TestPhantomTargetsHighestYPlayer(t *testing.T) {
+	loop, _, floorY := phantomLoop(t)
+	ph := loop.spawnPhantom(8.5, float64(floorY+30), 8.5)
+	ph.phantom.nextScanTick = 0 // arm an immediate scan
+
+	// A LOW player right under the phantom (nearest by distance), and a HIGH player farther away in XZ but
+	// well within the inflate(16,64,16) box. The nearest-by-distance is the low one; highest-Y is the high one.
+	low := combatTestPlayer(loop, 8.5, float64(floorY+1), 8.5, 7101)
+	high := combatTestPlayer(loop, 14.5, float64(floorY+40), 14.5, 7102)
+
+	loop.phantomAcquireTarget(ph)
+	if ph.ai.attackTargetID != high.entityID {
+		t.Fatalf("phantom targeted %d, want the HIGHEST-Y player %d (not the nearest %d)", ph.ai.attackTargetID, high.entityID, low.entityID)
+	}
+}
+
+// TestPhantomSkipsCreativeAndSpectator: TargetingConditions.forCombat excludes creative (invulnerable ->
+// !canBeSeenAsEnemy) and spectator (!canBeSeenByAnyone) players. With the only in-range player in creative,
+// the scan sets no target; likewise spectator. A survival player is acquired. Cite TargetingConditions
+// .forCombat/test + LivingEntity.canBeSeenByAnyone/canBeSeenAsEnemy.
+func TestPhantomSkipsCreativeAndSpectator(t *testing.T) {
+	loop, _, floorY := phantomLoop(t)
+	ph := loop.spawnPhantom(8.5, float64(floorY+30), 8.5)
+
+	creative := combatTestPlayer(loop, 8.5, float64(floorY+35), 8.5, 7111)
+	creative.gameMode = gameModeCreative
+	ph.phantom.nextScanTick = 0
+	loop.phantomAcquireTarget(ph)
+	if ph.ai.attackTargetID != 0 {
+		t.Fatalf("phantom targeted a CREATIVE player (%d), want none (canBeSeenAsEnemy false)", ph.ai.attackTargetID)
+	}
+
+	creative.gameMode = gameModeSpectator
+	ph.phantom.nextScanTick = 0
+	loop.phantomAcquireTarget(ph)
+	if ph.ai.attackTargetID != 0 {
+		t.Fatalf("phantom targeted a SPECTATOR player (%d), want none (canBeSeenByAnyone false)", ph.ai.attackTargetID)
+	}
+
+	// Flip to survival -> now attackable.
+	creative.gameMode = gameModeSurvival
+	ph.phantom.nextScanTick = 0
+	loop.phantomAcquireTarget(ph)
+	if ph.ai.attackTargetID != creative.entityID {
+		t.Fatalf("phantom did not target the now-survival player (got %d, want %d)", ph.ai.attackTargetID, creative.entityID)
+	}
+}
+
+// TestPhantomTargetDroppedWhenTargetGoesCreative: canContinueToUse keeps the target only while canAttack
+// (DEFAULT) holds. A locked target that switches to creative mid-flight is DROPPED (not kept as "still
+// alive"). Cite Phantom$PhantomAttackPlayerTargetGoal.canContinueToUse.
+func TestPhantomTargetDroppedWhenTargetGoesCreative(t *testing.T) {
+	loop, _, floorY := phantomLoop(t)
+	ph := loop.spawnPhantom(8.5, float64(floorY+30), 8.5)
+	p := combatTestPlayer(loop, 8.5, float64(floorY+35), 8.5, 7121)
+	ph.ai.attackTargetID = p.entityID
+
+	p.gameMode = gameModeCreative
+	loop.phantomAcquireTarget(ph)
+	if ph.ai.attackTargetID != 0 {
+		t.Fatalf("phantom kept a now-CREATIVE target (%d), want it dropped", ph.ai.attackTargetID)
+	}
+}
+
+// TestPhantomSweepStopClearsTarget: after a swoop ends the goal stops -- setTarget(null); phase = CIRCLE.
+// Driving the folded SWOOP path with the canContinueToUse gate failing (here: target lost) must both clear
+// the target id AND re-set the phase to CIRCLE. Cite Phantom$PhantomSweepAttackGoal.stop.
+func TestPhantomSweepStopClearsTarget(t *testing.T) {
+	loop, _, floorY := phantomLoop(t)
+	py := float64(floorY + 5)
+	p := combatTestPlayer(loop, 8.5, py, 8.5, 7131)
+	ph := loop.spawnPhantom(8.5, py, 8.5)
+	ph.ai.attackTargetID = p.entityID
+	ph.phantom.attackPhase = phantomPhaseSwoop
+	ph.phantom.strategyRunning = true // an ACTIVE swoop mid-flight (strategy start() already ran)
+
+	// The target goes creative -> canContinueToUse returns false -> phantomAiStep runs the sweep stop().
+	p.gameMode = gameModeCreative
+	loop.phantomAiStep(ph)
+	if ph.ai.attackTargetID != 0 {
+		t.Fatalf("after sweep stop(), target = %d, want 0 (setTarget(null))", ph.ai.attackTargetID)
+	}
+	if ph.phantom.attackPhase != phantomPhaseCircle {
+		t.Fatalf("after sweep stop(), phase = %d, want CIRCLE", ph.phantom.attackPhase)
+	}
+}
+
+// TestPhantomCatAbortsSwoop: PhantomSweepAttackGoal.canContinueToUse scans for a live Cat within
+// getBoundingBox().inflate(16) and, if one is present, sets isScaredOfCat and aborts the swoop (return
+// false -> stop(): setTarget(null); phase = CIRCLE). A Cat 3 blocks away must abort. Cite
+// Phantom$PhantomSweepAttackGoal.canContinueToUse.
+func TestPhantomCatAbortsSwoop(t *testing.T) {
+	loop, _, floorY := phantomLoop(t)
+	py := float64(floorY + 5)
+	p := combatTestPlayer(loop, 40.5, py, 40.5, 7141) // player far away so the swoop cannot land a hit this tick
+	ph := loop.spawnPhantom(8.5, py, 8.5)
+	ph.ai.attackTargetID = p.entityID
+	ph.phantom.attackPhase = phantomPhaseSwoop
+	ph.phantom.strategyRunning = true // an ACTIVE swoop mid-flight (strategy start() already ran)
+
+	// A live Cat 3 blocks from the phantom, inside inflate(16). Add it to the region store so the scan finds it.
+	cat := NewEntity(7142, entity.Cat, 11.5, py, 8.5)
+	cat.health = 10.0
+	loop.only().entities.add(cat)
+
+	if !loop.phantomCatNearby(ph) {
+		t.Fatal("phantomCatNearby did not see a Cat 3 blocks away (inflate(16) scan)")
+	}
+	loop.phantomAiStep(ph)
+	if !ph.phantom.isScaredOfCat {
+		t.Fatal("phantom not marked isScaredOfCat with a Cat in range")
+	}
+	if ph.ai.attackTargetID != 0 {
+		t.Fatalf("cat-scared phantom kept target %d, want 0 (swoop aborted -> stop())", ph.ai.attackTargetID)
+	}
+	if ph.phantom.attackPhase != phantomPhaseCircle {
+		t.Fatalf("cat-scared phantom phase = %d, want CIRCLE (swoop aborted)", ph.phantom.attackPhase)
+	}
+}
+
+// TestPhantomFinalizeSpawnAnchor: spawnPhantom seeds the finalizeSpawn anchor (anchorPoint =
+// blockPosition().above(5)) so the phantom starts with a real orbit anchor instead of lazily anchoring on
+// the first circle selectNext. Cite Phantom.finalizeSpawn.
+func TestPhantomFinalizeSpawnAnchor(t *testing.T) {
+	loop, _, floorY := phantomLoop(t)
+	ph := loop.spawnPhantom(8.5, float64(floorY+12), 8.5)
+	if !ph.phantom.hasAnchor {
+		t.Fatal("spawnPhantom did not seed the finalizeSpawn anchor (hasAnchor false)")
+	}
+	wantY := floorY + 12 + 5
+	if ph.phantom.anchorX != 8 || ph.phantom.anchorZ != 8 || ph.phantom.anchorY != wantY {
+		t.Fatalf("anchor = (%d,%d,%d), want (8,%d,8) (blockPosition().above(5))", ph.phantom.anchorX, ph.phantom.anchorY, ph.phantom.anchorZ, wantY)
+	}
+}
