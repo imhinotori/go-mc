@@ -219,6 +219,10 @@ func (t *TickLoop) dispatchRandomTick(r *region, state block.StateID, pos pk.Pos
 	case block.IsSnowLayer(state):
 		// SnowLayerBlock.randomTick: melt to air when block-light > 11. NO RNG draw. See growth_extra.go.
 		t.snowLayerRandomTick(state, pos)
+	case block.IsCocoa(state):
+		// CocoaBlock.randomTick: 1-in-5 AGE advance (no light gate). DRAWS levelRandom (one
+		// unconditional nextInt(5)). IsRandomlyTicking gates on AGE < MAX_AGE. See growth_extra.go.
+		t.cocoaRandomTick(r, state, pos)
 	default:
 		// A state whose IsRandomlyTicking is true but whose randomTick handler is not yet ported: no-op
 		// (the family's IsRandomlyTicking should not be true until its handler is wired — kept as a

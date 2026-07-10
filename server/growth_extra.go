@@ -271,6 +271,47 @@ func (t *TickLoop) cactusCanSurvive(_ block.StateID, pos pk.Position) bool {
 	return false
 }
 
+// ---- COCOA (CocoaBlock.randomTick) ----
+
+// cocoaRandomTick is CocoaBlock.randomTick: a maturing cocoa pod advances AGE with a 1-in-5 chance.
+// r is the owning region; r.levelRandom is `this.random`.
+//
+// RNG DRAW ORDER (must match the jar exactly): ONE unconditional nextInt(5) at the method head
+// (offsets 0-10) -- drawn BEFORE any state read, so it always advances the stream when a cocoa cell
+// is sampled. Only on a 0 roll is AGE read and (if AGE < MAX_AGE 2) advanced. There is NO light gate
+// (CocoaBlock.randomTick has none). CITE: CocoaBlock.randomTick.
+//
+//	if (random.nextInt(5) == 0) {
+//	    int age = state.getValue(AGE);
+//	    if (age < 2) level.setBlock(pos, state.setValue(AGE, age + 1), 2);
+//	}
+//
+// setBlock flag 2 == UPDATE_CLIENTS (no neighbor notify) -- mirrored as SetBlock + broadcast, the
+// same flag-2 shape crop_block.go uses.
+func (t *TickLoop) cocoaRandomTick(r *region, state block.StateID, pos pk.Position) {
+	if t.world() == nil || r == nil || r.levelRandom == nil {
+		return
+	}
+	// `if (random.nextInt(5) == 0)` -- the unconditional draw is FIRST, before any state read.
+	if r.levelRandom.NextIntN(5) != 0 {
+		return
+	}
+	age := block.CocoaAge(state)
+	if age < 0 {
+		return // not a cocoa (defensive; dispatch already gates this)
+	}
+	// `if (age < MAX_AGE) setBlock(state.setValue(AGE, age+1), 2)`. IsRandomlyTicking already excludes a
+	// max-age pod, but mirror the guard for fidelity.
+	if age >= block.CocoaMaxAge {
+		return
+	}
+	if grown, ok := block.CocoaWithAge(state, age+1); ok {
+		if t.world().SetBlock(pos, grown, dimMinY) {
+			t.broadcastBlockUpdate(pos, grown)
+		}
+	}
+}
+
 // ---- BAMBOO SAPLING (BambooSaplingBlock.randomTick) ----
 
 // bambooSaplingRandomTick is BambooSaplingBlock.randomTick: grow a sapling to a stalk. r is the

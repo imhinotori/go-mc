@@ -45,6 +45,14 @@ func bambooStalkState(age int, leaves block.BambooLeaves, stage int) block.State
 	return s
 }
 
+func cocoaState(age int) block.StateID {
+	s, ok := block.ToStateID[block.Cocoa{Age: block.Integer(age), Facing: block.North}]
+	if !ok {
+		panic("no cocoa state")
+	}
+	return s
+}
+
 func iceState() block.StateID {
 	s, ok := block.ToStateID[block.Ice{}]
 	if !ok {
@@ -165,6 +173,71 @@ func TestCactusCanSurviveSupportsCactusTag(t *testing.T) {
 		if loop.cactusCanSurvive(block.CactusDefaultState(), pos) {
 			t.Fatal("cactus on dirt must NOT survive (dirt is not in #minecraft:supports_cactus)")
 		}
+	}
+}
+
+// TestCocoaUnconditionalNextInt5AndGrow: cocoaRandomTick draws EXACTLY one unconditional nextInt(5)
+// at the method head; on a 0 roll an AGE<2 pod advances AGE by 1 (preserving FACING). CITE:
+// CocoaBlock.randomTick (nextInt(5)==0 then if AGE<2 setValue(AGE, age+1)).
+func TestCocoaUnconditionalNextInt5AndGrow(t *testing.T) {
+	// Seed whose first nextInt(5) is 0 -> the pod grows. Search for such a seed deterministically.
+	var seed int64 = -1
+	for cand := int64(1); cand < 500; cand++ {
+		rr := levelgen.NewLegacyRandomSource(cand)
+		if rr.NextIntN(5) == 0 {
+			seed = cand
+			break
+		}
+	}
+	if seed < 0 {
+		t.Fatal("no seed with first nextInt(5)==0 found in range")
+	}
+	loop, mgr, _ := newRandomTickLoop()
+	r := loop.only()
+	r.levelRandom = levelgen.NewLegacyRandomSource(seed)
+
+	pos := pk.Position{X: 4, Y: 65, Z: 4}
+	mgr.SetBlock(pos, cocoaState(0), dimMinY)
+
+	loop.cocoaRandomTick(r, cocoaState(0), pos)
+
+	got := mustGet(t, mgr, pos)
+	if block.CocoaAge(got) != 1 {
+		t.Fatalf("cocoa AGE after grow = %d, want 1", block.CocoaAge(got))
+	}
+	// FACING must be preserved (North).
+	if _, ok := block.ToStateID[block.Cocoa{Age: 1, Facing: block.North}]; !ok {
+		t.Fatal("north-facing AGE-1 cocoa state must exist")
+	}
+	if got != block.ToStateID[block.Cocoa{Age: 1, Facing: block.North}] {
+		t.Fatalf("cocoa grew but FACING was not preserved; got state %d", got)
+	}
+}
+
+// TestCocoaNoGrowOnNonZeroRoll: a seed whose first nextInt(5) != 0 leaves the pod untouched (the
+// draw is still consumed). CITE: CocoaBlock.randomTick (if (random.nextInt(5) != 0) no-op).
+func TestCocoaNoGrowOnNonZeroRoll(t *testing.T) {
+	var seed int64 = -1
+	for cand := int64(1); cand < 500; cand++ {
+		rr := levelgen.NewLegacyRandomSource(cand)
+		if rr.NextIntN(5) != 0 {
+			seed = cand
+			break
+		}
+	}
+	if seed < 0 {
+		t.Fatal("no seed with first nextInt(5)!=0 found")
+	}
+	loop, mgr, _ := newRandomTickLoop()
+	r := loop.only()
+	r.levelRandom = levelgen.NewLegacyRandomSource(seed)
+
+	pos := pk.Position{X: 4, Y: 65, Z: 4}
+	mgr.SetBlock(pos, cocoaState(0), dimMinY)
+	loop.cocoaRandomTick(r, cocoaState(0), pos)
+
+	if block.CocoaAge(mustGet(t, mgr, pos)) != 0 {
+		t.Fatalf("cocoa must not grow on a non-zero nextInt(5) roll; AGE = %d", block.CocoaAge(mustGet(t, mgr, pos)))
 	}
 }
 

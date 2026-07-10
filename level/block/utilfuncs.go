@@ -93,6 +93,11 @@ func IsRandomlyTicking(s StateID) bool {
 		// SnowLayerBlock: Properties.randomTicks() -> isRandomlyTicking()==true (the block-light melt
 		// check runs each random tick). CITE: SnowLayerBlock properties (.randomTicks()).
 		return true
+	case Cocoa:
+		// CocoaBlock overrides isRandomlyTicking() to return AGE < MAX_AGE (2) -- a cocoa pod is
+		// random-ticked ONLY while still maturing; a fully-grown (AGE 2) pod draws no roll. CITE:
+		// CocoaBlock.isRandomlyTicking (state.getValue(AGE) < 2).
+		return CocoaAge(s) < CocoaMaxAge
 	default:
 		return false
 	}

@@ -48,6 +48,38 @@ func CactusFlowerState() StateID {
 	return ToStateID[CactusFlower{}]
 }
 
+// ---- COCOA (CocoaBlock) ----
+
+// CocoaMaxAge is CocoaBlock.MAX_AGE (2). CITE: CocoaBlock.MAX_AGE.
+const CocoaMaxAge = 2
+
+// CocoaAge is state.getValue(CocoaBlock.AGE) (0..2) for a cocoa state, or -1 for a non-cocoa. CITE:
+// CocoaBlock.AGE (IntegerProperty 0..2).
+func CocoaAge(s StateID) int {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return -1
+	}
+	if c, ok := StateList[s].(Cocoa); ok {
+		return int(c.Age)
+	}
+	return -1
+}
+
+// CocoaWithAge returns the cocoa state with AGE set to age (0..2), PRESERVING the FACING (a cocoa pod
+// is attached to a jungle log on one horizontal face; setValue(AGE) keeps FACING). ok=false for a
+// non-cocoa s or an out-of-range age. CITE: CocoaBlock.randomTick (state.setValue(AGE, age+1)).
+func CocoaWithAge(s StateID, age int) (StateID, bool) {
+	if int(s) < 0 || int(s) >= len(StateList) || age < 0 || age > CocoaMaxAge {
+		return s, false
+	}
+	c, ok := StateList[s].(Cocoa)
+	if !ok {
+		return s, false
+	}
+	id, ok := ToStateID[Cocoa{Age: Integer(age), Facing: c.Facing}]
+	return id, ok
+}
+
 // ---- BAMBOO (BambooStalkBlock / BambooSaplingBlock) ----
 
 // IsBamboo reports Blocks.BAMBOO (a bamboo STALK, any age/leaves/stage). CITE: BambooStalkBlock.
