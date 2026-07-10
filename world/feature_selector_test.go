@@ -20,20 +20,21 @@ import (
 // type).
 //
 // The test leaf body reads the block-state resolved into its config (cf.Config.States[0]
-// — walkBlockStates resolved the {Name,Properties} leaf at parse time) and places it at
+// - walkBlockStates resolved the {Name,Properties} leaf at parse time) and places it at
 // pos, so distinct sub-features place distinct, asserted blocks.
 //
-// It is registered under the recognized "no_op" feature type, which is a deliberate,
-// SAFE choice: (a) "no_op" passes ParseConfiguredFeature's recognized-type gate (so an
-// inline test leaf parses), (b) it is referenced by ZERO embedded configured_features (a
-// no_op placed_feature with a body is never produced by the embed), and (c) for a REAL
-// no_op config — which carries an EMPTY config and thus no resolved States — this body
-// returns false (places nothing), exactly the semantics of the vanilla no_op feature. So
-// the global registration is behaviorally a true no-op for production while giving the
-// selector tests a deterministic, asserting leaf.
-const testLeafType = "no_op"
+// It is registered under the recognized "end_gateway" feature type, a deliberate SAFE
+// choice for a TEST leaf now that "no_op" carries its real production body
+// (feature_misc_extra.go): (a) "end_gateway" passes ParseConfiguredFeature's recognized-type
+// gate (so an inline test leaf parses), (b) it is an END-dimension feature that NO overworld
+// or nether decoration test in this package ever invokes (the selector tests drive this leaf
+// only through their own inline selector JSON, never via biome decoration of the End), and
+// (c) it has no real registered production body, so this test registration is the sole owner.
+// The fake body places the block resolved into its config for the selector assertions.
+const testLeafType = "test_selector_leaf"
 
 func init() {
+	feature.RegisterTestFeatureType(testLeafType)
 	registerFeatureBody(testLeafType, func(bctx *bodyContext, cf *feature.ConfiguredFeature, _ placement.PlacementContext, _ levelgen.RandomSource, pos placement.BlockPos) bool {
 		if cf.Config == nil || len(cf.Config.States) == 0 {
 			return false // a real no_op (empty config) -> places nothing, matching vanilla
@@ -388,7 +389,7 @@ func TestRandomBooleanSelector(t *testing.T) {
 
 // TestSubFeatureModifiersReapply: a sub-feature with a count modifier proves the
 // sub-feature's OWN draws happen (the recursion threads the selector rng through the
-// sub-feature's modifier chain — Pitfall #9, T-12-09). A count(3) consumes the
+// sub-feature's modifier chain - Pitfall #9, T-12-09). A count(3) consumes the
 // IntProvider draw; a parallel oracle that runs the same fold confirms the draw count.
 func TestSubFeatureModifiersReapply(t *testing.T) {
 	reg := feature.NewEmbeddedRegistry()
