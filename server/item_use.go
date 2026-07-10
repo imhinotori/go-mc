@@ -277,6 +277,17 @@ func (t *TickLoop) useItemInHand(p *tickPlayer, hand int32) {
 		return
 	}
 
+	// FIREWORK ROCKET (FireworkRocketItem.use): a right-click with a firework_rocket while the player is
+	// fall-flying (elytra) spawns a FireworkRocketEntity attached to the player (the elytra boost) and
+	// consumes 1. Runs before the food gate (a firework is not food); a grounded/non-firework use falls
+	// through. Firework-gated (a cheap id compare, no RNG draw -- the pig oracle is unperturbed). CITE
+	// FireworkRocketItem.use. Body in firework_rocket.go.
+	if t.tryUseFirework(p, inv, held, hand) {
+		return
+	}
+
+	// FOOD gate (v1): resolve the held item's FOOD/CONSUMABLE data. Non-food => not eatable => no-op
+	// (cite: other ItemStack.use behaviors out of v1 scope).
 	// CONSUMABLE gate: resolve the held item CONSUMABLE data (data/item/consume.go). A non-consumable
 	// item is a no-op (cite: other ItemStack.use behaviors out of v1 scope). SCOPE: only items that
 	// carry a FOOD component OR a consume-effect payload (bad_omen / on_consume_effects) are handled --

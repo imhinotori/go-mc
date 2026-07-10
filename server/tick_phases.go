@@ -462,6 +462,12 @@ func (t *TickLoop) tickEntities() {
 	// area_effect_cloud.go. CITE AreaEffectCloud.serverTick.
 	t.tickAreaEffectClouds()
 
+	// FIREWORK ROCKET: the FireworkRocketEntity.tick lifecycle -- free flight (upward self-accel) or the
+	// elytra boost (accelerate an attached fall-flying rider along its look direction), then detonation at
+	// life>=lifetime (broadcastEntityEvent(17) + dealExplosionDamage: 5 + 2*starCount, falloff by distance).
+	// Sibling of tickThrowables; ADDITIVE + firework-gated (zero cost when none is in flight). Body in
+	// firework_rocket.go. CITE FireworkRocketEntity.tick.
+	t.tickFireworkRockets()
 
 	// HURTING PROJECTILES: the AbstractHurtingProjectile.tick port for small/large fireball + wither skull —
 	// STRAIGHT accelerated flight (no gravity; deltaMovement re-accelerates along its heading and scales by

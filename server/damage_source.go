@@ -96,6 +96,11 @@ var (
 	// the throwing player). The 1.0 direct hit; the gust knockback is a separate wind-burst explosion. Cite
 	// AbstractWindCharge.onHitEntity (hurtServer(windCharge, 1.0)).
 	damageTypeWindCharge = damageTypeID(tag.DamageTypeIDs["minecraft:wind_charge"])
+	// damageTypeFireworks is minecraft:fireworks -- the source FireworkRocketEntity.dealExplosionDamage
+	// deals to every LivingEntity within 5 blocks on detonation via DamageSources.fireworks(FireworkRocketEntity,
+	// Entity): causingEntity = the firework owner. An is_projectile + is_explosion member. Cite
+	// FireworkRocketEntity.dealExplosionDamage (hurtServer(fireworks(this, owner), 5 + 2*starCount * falloff)).
+	damageTypeFireworks = damageTypeID(tag.DamageTypeIDs["minecraft:fireworks"])
 	// damageTypeOutOfWorld is minecraft:out_of_world — the source DamageSources.fellOutOfWorld() deals
 	// when an entity falls below minY-64 (Entity.checkBelowWorld -> LivingEntity.onBelowWorld:
 	// hurt(fellOutOfWorld(), 4.0F)). A bypasses_invulnerability member, so it kills even a creative
@@ -274,6 +279,13 @@ func damageSourceWitherSkull(ownerID int32) damageSource {
 // — the 1.0 hit dealt in AbstractWindCharge.onHitEntity (the gust knockback is separate). ownerID 0 = anonymous.
 func damageSourceWindCharge(ownerID int32) damageSource {
 	return damageSource{typeTag: damageTypeWindCharge, attacker: ownerID}
+}
+
+// damageSourceFireworks builds the DamageSource for a firework detonation hit: type fireworks with the
+// firework OWNER's entity id (the shooter / the elytra rider). The port of DamageSources.fireworks(
+// FireworkRocketEntity, Entity). ownerID 0 = anonymous. Cite FireworkRocketEntity.dealExplosionDamage.
+func damageSourceFireworks(ownerID int32) damageSource {
+	return damageSource{typeTag: damageTypeFireworks, attacker: ownerID}
 }
 
 // damageSourceMagic builds the DamageSource for a direct magic effect (instant_damage / poison self-tick):
