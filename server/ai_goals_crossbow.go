@@ -196,7 +196,10 @@ func (t *TickLoop) performCrossbowAttack(e *Entity, target *tickPlayer) {
 	yd := (target.y + float64(playerHeight)*0.3333333333333333) - launchY // target.getY(1/3)
 	zd := target.z - e.z
 	dist := math.Sqrt(xd*xd + zd*zd)
-	ydLob := yd + dist*0.2 // dist * 0.2f lob (float-widened)
+	// dist * 0.20000000298023224 (the float 0.2f WIDENED to double, exactly as CrossbowItem.shootProjectile:
+	// ldc2_w 0.20000000298023224; dmul; dadd). Was 0.2 (a plain double) -- the widened literal is the 1:1
+	// value and shifts the crossbow lob trajectory. Cite CrossbowItem.shootProjectile.
+	ydLob := yd + dist*0.20000000298023224
 
 	// inaccuracy = 14 - difficulty.getId()*4 (NORMAL == 2 -> 6).
 	diff := float64(serverDifficulty)

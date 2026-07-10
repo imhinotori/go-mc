@@ -144,9 +144,13 @@ func (t *TickLoop) performWitchRangedAttack(e *Entity, target *tickPlayer, power
 	}
 	r := mobRandom(e)
 
-	// Aim: target.getEyeY() - 1.1 - getY() (targetMovement lead omitted — v1 has no player delta cache).
+	// Aim: target.getEyeY() - 1.100000023841858 - getY() (targetMovement lead omitted -- v1 has no player
+	// delta cache). target.getEyeY() is the PLAYER's real standing eye height (1.62 == getEyeY), NOT
+	// height*0.85 (a player carries a custom 1.62 eye offset, not the 0.85 default). The 1.100000023841858
+	// is the double-widened 1.1f literal the jar subtracts. VERIFIED javap Witch.performRangedAttack offsets
+	// 30-38: target.getEyeY(); ldc2_w 1.100000023841858; dsub; getY(); dsub. Cite Witch.performRangedAttack.
 	xd := target.x - e.x
-	yd := (target.y + float64(playerHeight)*0.85 - 1.1) - e.y
+	yd := (target.y + playerStandingEyeHeight - 1.100000023841858) - e.y
 	zd := target.z - e.z
 	dist := math.Sqrt(xd*xd + zd*zd)
 
@@ -175,7 +179,11 @@ func (t *TickLoop) performWitchRangedAttack(e *Entity, target *tickPlayer, power
 	vy *= pow
 	vz *= pow
 
-	launchY := e.y + e.height*0.85
+	// The ThrownSplashPotion spawns at shooter.getX(), shooter.getEyeY() - 0.10000000149011612, shooter.getZ()
+	// (ThrowableItemProjectile(EntityType, LivingEntity, Level, ItemStack) ctor: getEyeY() minus the widened
+	// 0.1f). getEyeY() == y + defaultEyeHeight(height) == y + (float)(height*0.85f). VERIFIED javap
+	// ThrowableItemProjectile ctor: getX(); getEyeY(); ldc2_w 0.10000000149011612; dsub; getZ(); setPos.
+	launchY := e.y + float64(float32(e.height)*0.85) - 0.10000000149011612
 	t.spawnSplashPotion(e.id, e.x, launchY, e.z, vx, vy, vz, effects)
 
 	// playSound(WITCH_THROW, x, y, z, HOSTILE, 1.0, 0.8 + nextFloat()*0.4) -- the throw's client feedback

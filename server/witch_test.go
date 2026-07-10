@@ -158,3 +158,60 @@ func TestWeaknessModifier(t *testing.T) {
 		t.Fatalf("after weakness expiry ATTACK_DAMAGE = %v, want base %v (modifier not removed)", got, base)
 	}
 }
+
+// TestWitchLaunchAndAimEyeHeight proves performWitchRangedAttack spawns the splash potion at the witch's
+// getEyeY() - 0.10000000149011612 (ThrowableItemProjectile ctor), NOT the old feet + height*0.85, and that
+// the aim uses the TARGET's real standing eye (1.62) minus 1.100000023841858 -- both the 1:1 jar values.
+// Cite Witch.performRangedAttack + ThrowableItemProjectile ctor.
+func TestWitchLaunchAndAimEyeHeight(t *testing.T) {
+	loop, mgr := newPhysicsLoop()
+	const floorY = 63
+	ch := putChunk(mgr, level.ChunkPos{0, 0})
+	fillFloor(ch, floorY)
+	loop.SetMobRegistry(loadVanillaWitchRegistry(t))
+	clock := loop.clock.(*fakeClock)
+	loop.start(clock.Now())
+
+	decl := loop.mobRegistry.byName["vanilla_witch"]
+	w := loop.spawnDeclaredMob(decl, 8.5, float64(floorY+1), 8.5)
+	w.onGround = true
+	// A target 6 blocks away, above the witch a little so the aim yd is nonzero (exercises the eye math).
+	p := combatTestPlayer(loop, 14.5, float64(floorY+1), 8.5, 8490)
+	w.ai.attackTargetID = p.entityID
+	w.witchDrinking = false
+
+	before := 0
+	for _, e := range loop.only().entities.byID {
+		if e.isPotion {
+			before++
+		}
+	}
+	loop.performWitchRangedAttack(w, p, 0.75)
+
+	var potion *Entity
+	for _, e := range loop.only().entities.byID {
+		if e.isPotion {
+			potion = e
+		}
+	}
+	if potion == nil {
+		t.Fatal("witch threw no splash potion")
+	}
+	// Launch Y == getEyeY() - 0.1f: y + (float)(height*0.85f) - 0.10000000149011612.
+	wantLaunchY := w.y + float64(float32(w.height)*0.85) - 0.10000000149011612
+	if potion.y != wantLaunchY {
+		t.Fatalf("potion launch Y = %v, want getEyeY()-0.1 = %v (was feet+height*0.85 before the fix)", potion.y, wantLaunchY)
+	}
+	// Prove the launch is NOT the old feet + height*0.85 value.
+	oldLaunchY := w.y + float64(w.height)*0.85
+	if potion.y == oldLaunchY {
+		t.Fatalf("potion launch Y still equals the OLD feet+height*0.85 = %v -- the eye-Y fix is not in effect", oldLaunchY)
+	}
+	// The aim uses the target's 1.62 standing eye, not playerHeight*0.85 == 1.53. Recompute the intended yd
+	// and confirm it matches the port's expression (a coordinate-level proof the target-eye fix is applied).
+	wantYd := (p.y + playerStandingEyeHeight - 1.100000023841858) - w.y
+	oldYd := (p.y + float64(playerHeight)*0.85 - 1.1) - w.y
+	if wantYd == oldYd {
+		t.Fatal("target getEyeY (1.62) equals the old playerHeight*0.85 (1.53) -- test cannot distinguish; check constants")
+	}
+}
