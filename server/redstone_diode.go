@@ -269,6 +269,12 @@ func (t *TickLoop) comparatorGetInputSignal(state block.StateID, pos pk.Position
 		// the LAST-INTERACTED SLOT (1..6), NOT the getRedstoneSignalFromContainer fill-ratio. CITE
 		// ChiseledBookShelfBlock.getAnalogOutputSignal -> ChiseledBookShelfBlockEntity.getLastInteractedSlot.
 		resultSignal = sig
+	} else if sig, has := t.composterAnalogOutputSignal(targetPos); has {
+		// targetState.hasAnalogOutputSignal(): true for a COMPOSTER; getAnalogOutputSignal ==
+		// getValue(LEVEL) (0..8). Checked BEFORE the generic container path: a composter is a
+		// WorldlyContainerHolder but its analog output is the fill LEVEL, not the container fill-ratio.
+		// CITE: ComposterBlock.getAnalogOutputSignal.
+		resultSignal = sig
 	} else if sig, has := t.containerAnalogOutputSignal(targetPos); has {
 		// targetState.hasAnalogOutputSignal(): true for a container block-entity (chest/furnace/dispenser/
 		// brewing/hopper — AnalogOutputBlock). getAnalogOutputSignal == getRedstoneSignalFromContainer(container).
@@ -295,6 +301,11 @@ func (t *TickLoop) comparatorGetInputSignal(state block.StateID, pos pk.Position
 			// A CHISELED BOOKSHELF two-away (read through a conductor): its analog output is
 			// getLastInteractedSlot()+1, checked before the generic container path (same as the direct
 			// branch). CITE ChiseledBookShelfBlock.getAnalogOutputSignal.
+			blockAnalog = sig
+		} else if sig, has := t.composterAnalogOutputSignal(twoAway); has {
+			// A COMPOSTER two-away (read through a conductor): its analog output is getValue(LEVEL),
+			// checked before the generic container path (same as the direct branch). CITE:
+			// ComposterBlock.getAnalogOutputSignal.
 			blockAnalog = sig
 		} else if sig, has := t.containerAnalogOutputSignal(twoAway); has {
 			blockAnalog = sig

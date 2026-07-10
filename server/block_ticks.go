@@ -472,6 +472,13 @@ func (t *TickLoop) tickBlock(pos pk.Position, typ blockTickType) {
 			return
 		}
 		t.sculkShriekerTick(state, pos)
+	case composterTickType:
+		// ComposterBlock.tick stale guard: only tick if still a composter. The scheduled 20-tick tick
+		// cycles a LEVEL-7 composter to 8 (READY). CITE: ServerLevel.tickBlock / ComposterBlock.tick.
+		if !isComposterBlock(state) {
+			return
+		}
+		t.composterTick(state, pos)
 	default:
 		// Buttons schedule under their own block id (13 variants). Route any button tick to the unpress
 		// handler; the IsButton guard is the tickBlock `state.is(block)` stale check.

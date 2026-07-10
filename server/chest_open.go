@@ -350,10 +350,14 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 	// from the cursor hit-vector + clicked face (SelectableSlotContainer.getHitSlot). CITE
 	// ChiseledBookShelfBlock.useItemOn / useWithoutItem.
 	isBookshelf := block.IsChiseledBookshelf(state)
+	// A composter right-click feeds a COMPOSTABLE item (LEVEL bump on an RNG roll) or, on a READY
+	// (LEVEL 8) composter, extracts bone meal + empties it. Returns false (PASS) for a non-compostable
+	// hand on a non-READY composter (placement continues). CITE ComposterBlock.useItemOn/useWithoutItem.
+	isComposter := isComposterBlock(state)
 	if !isChest && !isCraft && !isCut && !isBed && !isFurnace && !isBrew && !isLever && !isButton &&
 		!isRepeater && !isComparator && !isDispenser && !isHopper && !isBeacon && !isAnvil && !isEnchant &&
 		!isGrindstone && !isSmithing && !isLoom && !isDoorFamily && !isSign &&
-		!isCampfire && !isBell && !isLectern && !isJukebox && !isBookshelf {
+		!isCampfire && !isBell && !isLectern && !isJukebox && !isBookshelf && !isComposter {
 		return false // not an interactive block: PASS → placement runs
 	}
 	// Reach-gate the interaction (the same server-authoritative reach the place/break paths use):
@@ -489,6 +493,12 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 		// Returns false (PASS) when the click misses the facing face's 2x3 grid (placement continues).
 		// CITE ChiseledBookShelfBlock.useItemOn / useWithoutItem.
 		return t.useChiseledBookshelf(p, hitPos, state, direction, cursorX, cursorY, cursorZ)
+	}
+	if isComposter {
+		// ComposterBlock.useItemOn (feed a compostable) merged with useWithoutItem (extract from a READY
+		// composter). Returns false (PASS) when neither branch applies so placement continues. CITE
+		// ComposterBlock.useItemOn / useWithoutItem.
+		return t.useComposter(p, hitPos, state)
 	}
 	return t.openChest(p, hitPos)
 }
