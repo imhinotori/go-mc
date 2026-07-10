@@ -160,6 +160,12 @@ func (t *TickLoop) causeFallDamageEntity(e *Entity, d float64, damageMultiplier 
 	// applies (a fox survives a taller fall than a pig).
 	safeFallDistance := e.getAttributeValue(attribute.SafeFallDistance)
 	i := calculateFallDamage(d, damageMultiplier, safeFallDistance)
+	// Goat.calculateFallDamage(d, mul) = Animal.calculateFallDamage(d, mul) - GOAT_FALL_DAMAGE_REDUCTION (10):
+	// a goat subtracts 10 from the computed fall damage (its mountain-dweller trait). Gated on e.isGoat so
+	// every other mob is unaffected. Cite Goat.calculateFallDamage (bipush 10; isub).
+	if e.isGoat {
+		i -= goatFallDamageReduction
+	}
 	if i > 0 {
 		// hurt(DamageSource.FALL, (float) i): route the fall damage through the keystone mob hurt
 		// pipeline. damageSourceOf(damageTypeFall) is the environmental FALL source (no attacker), the

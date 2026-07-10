@@ -707,13 +707,15 @@ type Entity struct {
 	beeTimeSinceSting  int
 	beeUnderWaterTicks int // Bee.underWaterTicks: ++ while isInWater, reset out; >20 -> drown 1.0F (unconditional)
 	goatScreaming     bool
-	// goatHasLeftHorn / goatHasRightHorn port Goat DATA_HAS_LEFT_HORN / DATA_HAS_RIGHT_HORN (default
-	// true -- a goat spawns with both horns). Goat.finalizeSpawn removes ONE horn on a non-baby with a
-	// 10% roll (nextBoolean picks which). Seeded true at spawn (spawnGoat). Cite Goat static defaults +
-	// Goat.finalizeSpawn.
-	goatHasLeftHorn  bool
-	goatHasRightHorn bool
-	frogVariant      int
+	// goatHasLeftHorn / goatHasRightHorn mirror Goat's DATA_HAS_LEFT_HORN / DATA_HAS_RIGHT_HORN (both
+	// default true; finalizeSpawn's UNIHORN roll can clear one; RamTarget.dropHorn clears one on a ram into
+	// a #snaps_goat_horn block). goatRamCooldownTicks mirrors the RAM_COOLDOWN_TICKS memory (sampled from
+	// GoatAi.TIME_BETWEEN_RAMS(_SCREAMER) at spawn + on finishRam; counted down by goatAiStep). Zero for
+	// every non-goat entity. Cite Goat.hasLeftHorn/hasRightHorn/dropHorn + RamTarget.finishRam.
+	goatHasLeftHorn      bool
+	goatHasRightHorn     bool
+	goatRamCooldownTicks int32
+	frogVariant          int
 	// --- CAMEL / SNIFFER / ALLAY / AXOLOTL (passive animals, Task) ----------------------------------
 	//
 	// Tick-owned plain values, set/read ONLY for their own type (each *AiStep gates on typ). isCamel/

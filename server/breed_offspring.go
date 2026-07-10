@@ -2,7 +2,6 @@ package server
 
 import "github.com/imhinotori/sulfur/data/entity"
 
-
 // breed_offspring.go -- getBreedOffspring SPECIES DISPATCH (C1/C2 fix). breed() used to always spawn a
 // pig, so EVERY animal bred a PIG. spawnBreedOffspring dispatches on the initiator type (e.typ) to spawn
 // the species-correct baby and consume the EXACT getBreedOffspring RNG in vanilla order + source
@@ -82,12 +81,21 @@ func (t *TickLoop) spawnBreedOffspring(e, partner *Entity) *Entity {
 		// Screaming variant cite-deferred (no field); the level-stream DRAW ORDER is the contract.
 		child := t.spawnGoat(e.x, e.y, e.z, true)
 		if lr := t.breedLevelRandom(); lr != nil {
+			// Goat.getBreedOffspring: nextBoolean() picks the interacting parent; if that parent is a
+			// screaming goat the child is screaming; else nextDouble() < 0.02 rolls it. setScreamingGoat(child,
+			// screaming). The draw ORDER (nextBoolean, then the nextDouble ONLY when the picked parent is not
+			// screaming) is the exact level-stream contract. Cite Goat.getBreedOffspring.
 			interacting := e
 			if !lr.NextBoolean() {
 				interacting = partner
 			}
-			_ = interacting
-			_ = lr.NextDouble() < 0.02 // screaming = 2% (GoatScreaming deferred)
+			screaming := false
+			if interacting != nil && interacting.goatScreaming {
+				screaming = true // the picked parent is a screamer -> the child inherits it (no nextDouble draw)
+			} else if lr.NextDouble() < 0.02 {
+				screaming = true // else a 2% roll (GOAT_SCREAMING_CHANCE) sets the child screaming
+			}
+			child.goatScreaming = screaming
 		}
 		return child
 	case entity.Horse.ID, entity.Donkey.ID, entity.Mule.ID, entity.Llama.ID, entity.TraderLlama.ID:

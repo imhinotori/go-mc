@@ -1110,6 +1110,14 @@ func (t *TickLoop) handleInteract(p *tickPlayer, pkt pk.Packet) {
 	if mob.typ == entity.Cow.ID && t.tryMilkCow(p, mob) {
 		return // the milk handled the interact
 	}
+	// GOAT MILK (Goat.mobInteract): an empty BUCKET on an ADULT goat swaps the hand to a milk_bucket
+	// (the goat sibling of tryMilkCow, ahead of super.mobInteract == Animal.mobInteract feed). tryMilkGoat
+	// returns true ONLY when the held item is an empty BUCKET on a non-baby goat; a non-bucket or a kid
+	// returns false and falls through to tryFeedAnimal. Goat-gated (typ == entity.Goat.ID), a zero-cost
+	// no-op for the pig oracle (no RNG). Cite Goat.mobInteract bucket branch.
+	if mob.typ == entity.Goat.ID && t.tryMilkGoat(p, mob) {
+		return // the milk handled the interact
+	}
 	// MOB-VARIANT (Mooshroom): net.minecraft.world.entity.animal.cow.MushroomCow.mobInteract runs its own
 	// bowl/shears/brown-flower branches BEFORE super (AbstractCow.mobInteract == the bucket-milk + feed).
 	// tryMooshroomInteract returns true when it consumes the interact (BOWL->stew, SHEARS->shear-to-cow),
