@@ -36,7 +36,12 @@ import (
 // RangedBowAttackGoal constants (verified CFR — the skeleton's ctor args + the jar literals).
 const (
 	bowSpeedModifier      = 1.0   // RangedBowAttackGoal.speedModifier (skeleton: 1.0)
-	bowAttackIntervalMin  = 40    // AbstractSkeleton.getAttackInterval() (NORMAL); HARD would be 20
+	bowAttackIntervalMin  = 40    // AbstractSkeleton.getAttackInterval() (NORMAL)
+	bowHardAttackInterval = 20    // AbstractSkeleton.getHardAttackInterval() (HARD)
+	// Bogged overrides BOTH intervals (javap Bogged.getAttackInterval bipush 70 /
+	// getHardAttackInterval bipush 50): a bogged fires SLOWER than a plain skeleton/stray.
+	boggedAttackIntervalMin  = 70 // Bogged.getAttackInterval() (NORMAL)
+	boggedHardAttackInterval = 50 // Bogged.getHardAttackInterval() (HARD)
 	bowAttackRadius       = 15.0  // skeleton attackRadius → attackRadiusSqr 225
 	bowAttackRadiusSqr    = bowAttackRadius * bowAttackRadius
 	bowFullDrawTicks      = 20    // getTicksUsingItem() release point (power = getPowerForTime(20) = 1.0)
@@ -91,19 +96,39 @@ func newRangedBowAttackGoal() *rangedBowAttackGoal {
 // 15.0). Because buildNativeGoal (which I do not own) constructs this goal identically for every hostile
 // that declares kind="ranged_bow_attack", the per-type divergence is resolved here on the first tick when
 // the concrete entity is in hand. Idempotent (guarded by speedModifier < 0). RNG-free.
+//
+// The attackIntervalMin is the reassessWeaponGoal difficulty pick (javap AbstractSkeleton.reassessWeaponGoal
+// @62: interval = getHardAttackInterval(); if getDifficulty() != HARD -> interval = getAttackInterval()).
+// A plain skeleton/stray uses getAttackInterval()=40 (HARD 20); a BOGGED overrides both to
+// getAttackInterval()=70 (HARD 50) (javap Bogged.getAttackInterval bipush 70 / getHardAttackInterval bipush
+// 50). serverDifficulty is the cited NORMAL const, so the != HARD branch takes the NORMAL interval today,
+// but the HARD pick is written 1:1 so it lands the moment difficulty becomes a live read.
 //	[VERIFIED javap Illusioner.registerGoals @6 RangedBowAttackGoal(this, 0.5d, 20, 15.0f);
-//	 AbstractSkeleton.reassessWeaponGoal @4 RangedBowAttackGoal(this, 1.0d, 20|40, 15.0f).]
+//	 AbstractSkeleton.reassessWeaponGoal @4 RangedBowAttackGoal(this, 1.0d, 20|40, 15.0f);
+//	 Bogged.getAttackInterval()=70 / getHardAttackInterval()=50; AbstractSkeleton 40 / 20.]
 func (g *rangedBowAttackGoal) resolveBowParams(e *Entity) {
 	if g.speedModifier >= 0 {
 		return // already latched
 	}
+	hard := serverDifficulty == difficultyHard
 	switch e.typ {
 	case entity.Illusioner.ID:
 		g.speedModifier = illusionerBowSpeedModifier      // 0.5
-		g.attackIntervalMin = illusionerBowAttackIntervalMin // 20
+		g.attackIntervalMin = illusionerBowAttackIntervalMin // 20 (fixed ctor arg; Illusioner is not an AbstractSkeleton)
+	case entity.Bogged.ID:
+		g.speedModifier = bowSpeedModifier // 1.0 (skeleton family)
+		if hard {
+			g.attackIntervalMin = boggedHardAttackInterval // 50 (Bogged.getHardAttackInterval)
+		} else {
+			g.attackIntervalMin = boggedAttackIntervalMin // 70 (Bogged.getAttackInterval)
+		}
 	default:
-		g.speedModifier = bowSpeedModifier     // 1.0 (skeleton family)
-		g.attackIntervalMin = bowAttackIntervalMin // 40 (NORMAL)
+		g.speedModifier = bowSpeedModifier // 1.0 (skeleton family; Skeleton/Stray/WitherSkeleton)
+		if hard {
+			g.attackIntervalMin = bowHardAttackInterval // 20 (AbstractSkeleton.getHardAttackInterval)
+		} else {
+			g.attackIntervalMin = bowAttackIntervalMin // 40 (AbstractSkeleton.getAttackInterval)
+		}
 	}
 }
 

@@ -48,6 +48,35 @@ func TestRangedBowParamsIllusioner(t *testing.T) {
 	}
 }
 
+// TestRangedBowParamsBogged: a Bogged fires SLOWER than a plain skeleton -- getAttackInterval()=70 on
+// NORMAL (getHardAttackInterval()=50 on HARD). serverDifficulty is the cited NORMAL const, so the
+// resolved interval is 70. Cite javap Bogged.getAttackInterval (bipush 70) / getHardAttackInterval
+// (bipush 50).
+func TestRangedBowParamsBogged(t *testing.T) {
+	g := newRangedBowAttackGoal()
+	g.resolveBowParams(bowParamEntity(entity.Bogged.ID))
+	if math.Abs(g.speedModifier-1.0) > 1e-12 {
+		t.Fatalf("bogged bow speedModifier = %v, want 1.0 (skeleton family)", g.speedModifier)
+	}
+	if g.attackIntervalMin != 70 {
+		t.Fatalf("bogged bow attackIntervalMin = %d, want 70 (Bogged.getAttackInterval NORMAL)", g.attackIntervalMin)
+	}
+}
+
+// TestRangedBowParamsStrayInheritsSkeleton: a Stray has NO getAttackInterval override, so it inherits the
+// AbstractSkeleton default -- getAttackInterval()=40 (NORMAL), NOT the Bogged's 70. Cite Stray (no
+// interval override) + AbstractSkeleton.getAttackInterval (bipush 40).
+func TestRangedBowParamsStrayInheritsSkeleton(t *testing.T) {
+	g := newRangedBowAttackGoal()
+	g.resolveBowParams(bowParamEntity(entity.Stray.ID))
+	if math.Abs(g.speedModifier-1.0) > 1e-12 {
+		t.Fatalf("stray bow speedModifier = %v, want 1.0 (skeleton family)", g.speedModifier)
+	}
+	if g.attackIntervalMin != 40 {
+		t.Fatalf("stray bow attackIntervalMin = %d, want 40 (inherits AbstractSkeleton NORMAL)", g.attackIntervalMin)
+	}
+}
+
 // TestRangedBowParamsLatchOnce: resolveBowParams is idempotent -- a second call with a DIFFERENT type does
 // not clobber the latched values (the goal is bound to its first ticking entity).
 func TestRangedBowParamsLatchOnce(t *testing.T) {
