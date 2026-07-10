@@ -294,3 +294,38 @@ func TestBoatItemMapping(t *testing.T) {
 		t.Fatal("boatItemToEntityType(non-boat) reported ok=true")
 	}
 }
+
+// TestBoatBlockFrictionPerBlock: boatBlockFriction reads the vanilla per-block friction table
+// (blockFrictionAt) — a boat resting ON LAND on ice/blue_ice/slime carries the slippery friction, every
+// other block the 0.6 default. CITE Block.getFriction / Blocks.<clinit> (ICE/PACKED_ICE/FROSTED_ICE
+// 0.98f, BLUE_ICE 0.989f, SLIME_BLOCK 0.8f, default 0.6f).
+func TestBoatBlockFrictionPerBlock(t *testing.T) {
+	loop, mgr := newBoatLoop()
+	set := func(x, y, z int, name string) {
+		mgr.SetBlock(pk.Position{X: x, Y: y, Z: z}, block.DefaultStateID[name], dimMinY)
+	}
+	set(1, 64, 1, "minecraft:stone")
+	set(2, 64, 2, "minecraft:ice")
+	set(3, 64, 3, "minecraft:packed_ice")
+	set(4, 64, 4, "minecraft:frosted_ice")
+	set(5, 64, 5, "minecraft:blue_ice")
+	set(6, 64, 6, "minecraft:slime_block")
+
+	cases := []struct {
+		x, y, z int
+		want    float32
+	}{
+		{1, 64, 1, 0.6},
+		{2, 64, 2, 0.98},
+		{3, 64, 3, 0.98},
+		{4, 64, 4, 0.98},
+		{5, 64, 5, 0.989},
+		{6, 64, 6, 0.8},
+		{9, 64, 9, 0.6}, // air -> default
+	}
+	for _, c := range cases {
+		if got := loop.boatBlockFriction(c.x, c.y, c.z); got != c.want {
+			t.Fatalf("boatBlockFriction(%d,%d,%d) = %v, want %v", c.x, c.y, c.z, got, c.want)
+		}
+	}
+}

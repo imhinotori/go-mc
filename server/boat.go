@@ -560,15 +560,16 @@ func (t *TickLoop) boatGroundFriction(e *Entity) float32 {
 }
 
 // boatBlockFriction returns Block.getFriction() for the block at (x,y,z) — the per-block slipperiness
-// (BlockBehaviour.friction, DEFAULT 0.6; ice 0.98, slime 0.8, blue_ice 0.989). v1 has no per-block
-// friction table wired for arbitrary blocks, so it reads the DEFAULT 0.6 (the value stone/dirt/grass —
-// every block a placed boat rests on — actually carry). Structured to become a per-block read later
-// (CLAUDE.md: cite the default, never bake it away).
+// (BlockBehaviour.friction, DEFAULT 0.6; ice 0.98, slime 0.8, blue_ice 0.989). It reads the shared
+// per-block friction table (blockFrictionAt, physics.go): a boat resting ON LAND on ice/blue_ice/slime
+// now decelerates at the vanilla per-block rate instead of the flat default — every other block returns
+// the 0.6 default (the value stone/dirt/grass carry).
 //
 //	[VERIFIED CFR Block.getFriction: `return this.friction;` — BlockBehaviour.Properties default friction
-//	 == 0.6f (Properties(): `this.friction = 0.6f;`).]
+//	 == 0.6f (Properties(): `this.friction = 0.6f;`); ICE/PACKED_ICE/FROSTED_ICE 0.98f, BLUE_ICE 0.989f,
+//	 SLIME_BLOCK 0.8f (Blocks.<clinit>).]
 func (t *TickLoop) boatBlockFriction(x, y, z int) float32 {
-	return boatDefaultBlockFriction
+	return t.blockFrictionAt(x, y, z)
 }
 
 // boatDefaultBlockFriction is BlockBehaviour.Properties' default friction (0.6f). See boatBlockFriction.

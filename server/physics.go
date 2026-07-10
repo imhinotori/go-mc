@@ -265,6 +265,34 @@ const (
 //	[VERIFIED CFR Block.getFriction: return this.friction; -- Properties default friction 0.6f.]
 const travelBlockFrictionDefault = float32(0.6)
 
+// blockFrictionAt reads Block.getFriction() for the block at (x,y,z) 1:1 with the vanilla
+// per-block friction table. Every block carries BlockBehaviour.Properties.friction (default 0.6f);
+// only a handful override it. This is the shared per-block friction read the boat/item/orb/mob
+// physics all need for ice/slime slide behaviour. Returns the default 0.6 for air/unloaded/normal
+// blocks.
+//
+//	[VERIFIED javap Blocks.<clinit>: ICE/PACKED_ICE/FROSTED_ICE Properties.friction(0.98f);
+//	 BLUE_ICE Properties.friction(0.989f); SLIME_BLOCK Properties.friction(0.8f); every other block
+//	 keeps the Properties() ctor default 0.6f. CFR Block.getFriction: return this.friction.]
+func (t *TickLoop) blockFrictionAt(x, y, z int) float32 {
+	if t.world() == nil {
+		return travelBlockFrictionDefault
+	}
+	s, ok := t.world().GetBlock(pk.Position{X: x, Y: y, Z: z}, dimMinY)
+	if !ok || int(s) < 0 || int(s) >= len(block.StateList) {
+		return travelBlockFrictionDefault
+	}
+	switch block.StateList[s].ID() {
+	case "minecraft:ice", "minecraft:packed_ice", "minecraft:frosted_ice":
+		return float32(0.98)
+	case "minecraft:blue_ice":
+		return float32(0.989)
+	case "minecraft:slime_block":
+		return float32(0.8)
+	}
+	return travelBlockFrictionDefault
+}
+
 // computeModifiedFriction ports LivingEntity.computeModifiedFriction(float, float) 1:1:
 // Mth.clamp(1.0f - (1.0f - f) * mod, 0.0f, 1.0f). With mod == 1.0 (the attribute default) this is
 // just clamp(f, 0, 1) == f.
