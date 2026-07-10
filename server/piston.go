@@ -148,12 +148,14 @@ func (t *TickLoop) tickMovingPistons() {
 	}
 }
 
-// movingPistonComplete is the progressO>=1.0 branch of PistonMovingBlockEntity.tick (== finalTick's
-// completion): remove the BE and, if the block at pos is still MOVING_PISTON, replace it with the moved
-// state. For a source-piston arm the moved state is the piston_head (isSourcePiston, movedState holds the
-// head); for a pushed block it is the block's own moved state. Then re-notify neighbors so redstone /
-// observers react to the settled block. CITE: PistonMovingBlockEntity.tick (removeBlockEntity + setBlock)
-// / finalTick.
+// movingPistonComplete is the progressO>=1.0 branch of the STATIC PistonMovingBlockEntity.tick: remove
+// the BE and, if the block at pos is still MOVING_PISTON, replace it with updateFromNeighbourShapes(movedState).
+// The tick() completion NEVER consults isSourcePiston -- the source head arm carries movedState=piston_head
+// and settles to it, a pushed block settles to its own moved state. (finalTick is the DIFFERENT path -- see
+// finalTickMovingPistonAt, which DOES clear a source piston to AIR.) Then re-notify neighbors so redstone /
+// observers react to the settled block. The updateFromNeighbourShapes()/updateOrDestroy waterlog-fix step
+// is DEFERRED (no arbitrary-block shape query in v1); the settled block-state is faithful for full-cube and
+// piston_head arms, which is what pistons carry. CITE: PistonMovingBlockEntity.tick (static, offsets 51-195).
 func (t *TickLoop) movingPistonComplete(pos pk.Position, be *movingPistonBE) {
 	delete(t.cur().movingPistons, pos)
 	cur := t.redstoneBlockAt(pos)
@@ -162,14 +164,14 @@ func (t *TickLoop) movingPistonComplete(pos pk.Position, be *movingPistonBE) {
 	}
 	final := be.movedState
 	if block.IsAir(final) {
-		// An air moved-state (a retract that pulled nothing / a source arm that vacated) settles to air.
+		// An air moved-state (a retract that pulled nothing) settles to air.
 		if t.world().SetBlock(pos, t.airState(), dimMinY) {
 			t.broadcastBlockUpdate(pos, t.airState())
 		}
 	} else if t.world().SetBlock(pos, final, dimMinY) {
 		t.broadcastBlockUpdate(pos, final)
 	}
-	// level.neighborChanged(pos, newState, ...) — wake the redstone graph + observers around the settled
+	// level.neighborChanged(pos, newState, ...) -- wake the redstone graph + observers around the settled
 	// block so a wire/torch/piston/observer next to the moved block recomputes.
 	t.onRedstoneEdit(pos)
 	t.onObserverEdit(pos)
@@ -177,8 +179,22 @@ func (t *TickLoop) movingPistonComplete(pos pk.Position, be *movingPistonBE) {
 
 // finalTickMovingPistonAt is PistonMovingBlockEntity.finalTick invoked out-of-band (triggerEvent's
 // retract path calls finalTick on the arm/front BE to force-complete an in-flight animation before
-// starting a new move). It completes the BE immediately at its current position. CITE:
-// PistonBaseBlock.triggerEvent (pistonMovingBlockEntity.finalTick()).
+// starting a new move). It completes the BE immediately at its current position. UNLIKE the static
+// tick() completion, finalTick branches on isSourcePiston:
+//
+//	removeBlockEntity(pos); setRemoved();
+//	if (getBlockState(pos).is(MOVING_PISTON)) {
+//	    BlockState result = isSourcePiston ? AIR.defaultBlockState()
+//	                                       : updateFromNeighbourShapes(movedState, level, pos);
+//	    level.setBlock(pos, result, 3);
+//	    level.neighborChanged(pos, result.getBlock(), ...);
+//	}
+//
+// So a force-completed SOURCE arm (the piston_head being yanked back by a fast retract within the 2-tick
+// window) clears to AIR -- NOT to its movedState (piston_head). Reusing movingPistonComplete here would
+// leave a stray piston_head block. CITE: PistonMovingBlockEntity.finalTick (offsets 74-120, the
+// isSourcePiston ? AIR : movedState branch). The updateFromNeighbourShapes shape-fix on the non-source
+// branch is DEFERRED (same seam as movingPistonComplete).
 func (t *TickLoop) finalTickMovingPistonAt(pos pk.Position) {
 	if t.cur().movingPistons == nil {
 		return
@@ -187,9 +203,25 @@ func (t *TickLoop) finalTickMovingPistonAt(pos pk.Position) {
 	if be == nil {
 		return
 	}
-	be.progressO = 1.0
-	be.progress = 1.0
-	t.movingPistonComplete(pos, be)
+	delete(t.cur().movingPistons, pos)
+	cur := t.redstoneBlockAt(pos)
+	if !block.IsMovingPiston(cur) {
+		return // already replaced
+	}
+	// isSourcePiston ? AIR : movedState.
+	final := be.movedState
+	if be.isSourcePiston {
+		final = t.airState()
+	}
+	if block.IsAir(final) {
+		if t.world().SetBlock(pos, t.airState(), dimMinY) {
+			t.broadcastBlockUpdate(pos, t.airState())
+		}
+	} else if t.world().SetBlock(pos, final, dimMinY) {
+		t.broadcastBlockUpdate(pos, final)
+	}
+	t.onRedstoneEdit(pos)
+	t.onObserverEdit(pos)
 }
 
 // ---------------------------------------------------------------------------------------------

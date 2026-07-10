@@ -247,3 +247,45 @@ func TestObserverPulsesTwoTicks(t *testing.T) {
 		t.Fatal("observer should be UN-powered after the 2-tick pulse ends")
 	}
 }
+
+
+// TestPistonFinalTickSourceArmClearsToAir locks PistonMovingBlockEntity.finalTick's isSourcePiston branch:
+// when an in-flight SOURCE arm (a piston_head being animated, movedState == piston_head) is force-completed
+// out-of-band via finalTick (the fast retract/extend cancel), the cell must settle to AIR -- NOT to its
+// movedState (piston_head). The normal static tick() completion would keep movedState; finalTick differs.
+// A non-source arm force-completed via finalTick keeps its movedState. CITE: PistonMovingBlockEntity.finalTick
+// (isSourcePiston ? AIR.defaultBlockState() : updateFromNeighbourShapes(movedState)).
+func TestPistonFinalTickSourceArmClearsToAir(t *testing.T) {
+	loop, mgr := newPistonLoop()
+
+	// A source head arm: a moving_piston block carrying movedState = piston_head (East), isSourcePiston=true.
+	armPos := pk.Position{X: 4, Y: 64, Z: 4}
+	headState := block.ToStateID[block.PistonHead{Facing: block.East, Type: block.PistonTypeNormal, Short: false}]
+	movingState, ok := block.MovingPistonState(block.East, block.PistonTypeNormal)
+	if !ok {
+		t.Fatal("MovingPistonState(East, Normal) should exist")
+	}
+	mgr.SetBlock(armPos, movingState, dimMinY)
+	loop.newMovingBlockEntity(armPos, headState, block.East, true /*extending*/, true /*isSourcePiston*/)
+
+	// Force-complete out-of-band (the triggerEvent fast-cancel path).
+	loop.finalTickMovingPistonAt(armPos)
+
+	if s := loop.redstoneBlockAt(armPos); !block.IsAir(s) {
+		t.Fatalf("finalTick of a SOURCE arm must clear the cell to AIR, got %d (piston_head=%v)", s, block.IsPistonHead(s))
+	}
+	if loop.cur().movingPistons != nil {
+		if _, live := loop.cur().movingPistons[armPos]; live {
+			t.Fatal("finalTick must remove the moving-piston block-entity")
+		}
+	}
+
+	// A NON-source arm force-completed via finalTick keeps its movedState (the pushed block settles).
+	pushedPos := pk.Position{X: 8, Y: 64, Z: 4}
+	mgr.SetBlock(pushedPos, movingState, dimMinY)
+	loop.newMovingBlockEntity(pushedPos, stoneState(), block.East, true /*extending*/, false /*isSourcePiston*/)
+	loop.finalTickMovingPistonAt(pushedPos)
+	if s := loop.redstoneBlockAt(pushedPos); s != stoneState() {
+		t.Fatalf("finalTick of a NON-source arm must settle to its movedState (stone), got %d", s)
+	}
+}
