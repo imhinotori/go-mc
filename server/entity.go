@@ -5,6 +5,7 @@ import (
 	"github.com/imhinotori/sulfur/level/attribute"
 	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/level/component"
+	pk "github.com/imhinotori/sulfur/net/packet"
 	"github.com/imhinotori/sulfur/server/internal/bvh"
 
 	"github.com/google/uuid"
@@ -746,6 +747,19 @@ type Entity struct {
 	beeHasStung        bool
 	beeTimeSinceSting  int
 	beeUnderWaterTicks int // Bee.underWaterTicks: ++ while isInWater, reset out; >20 -> drown 1.0F (unconditional)
+	// --- BEE HIVE / POLLINATION (BEEHIVE-01) ---------------------------------------------------------
+	//
+	// DISTINCT-named from the anger commit's beeHasStung/beeTimeSinceSting (owned there -- do NOT reuse).
+	// These mirror the Bee hive/pollination state read by BeehiveBlockEntity + the hive/pollination goals
+	// (bee_hive.go): beeHasNectar mirrors Bee.hasNectar (DATA_FLAGS FLAG_HAS_NECTAR bit; dropOffNectar
+	// clears it, a completed pollinate sets it); beeSavedFlowerPos mirrors Bee.savedFlowerPos (the last
+	// flower it pollinated, restored on hive release); beeHivePos mirrors Bee.hivePos (the hive it belongs
+	// to, set by BeehiveBlockEntity.Occupant.createEntity via setHivePos). nil pos == "none". Zero for
+	// every non-bee entity. CITE: Bee.hasNectar/setHasNectar/dropOffNectar, Bee.savedFlowerPos,
+	// Bee.hivePos/setHivePos, BeehiveBlockEntity.Occupant.createEntity.
+	beeHasNectar      bool
+	beeSavedFlowerPos *pk.Position
+	beeHivePos        *pk.Position
 	goatScreaming     bool
 	// goatHasLeftHorn / goatHasRightHorn mirror Goat's DATA_HAS_LEFT_HORN / DATA_HAS_RIGHT_HORN (both
 	// default true; finalizeSpawn's UNIHORN roll can clear one; RamTarget.dropHorn clears one on a ram into

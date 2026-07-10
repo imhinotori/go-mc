@@ -183,6 +183,12 @@ func (t *TickLoop) tickWorld() {
 	// tick ONCE globally here (the tickCampfires twin). An idle bell ticks to a cheap no-op. Nil map =
 	// no-op. CITE BellBlock.getTicker -> BellBlockEntity.serverTick.
 	t.tickBells()
+	// SUB-BLOCKENTITY: tick every BEEHIVE/BEE_NEST block-entity (BeehiveBlockEntity.serverTick -- age each
+	// stored bee and release it once its minTicksInHive passes; a released nectar bee bumps HONEY_LEVEL).
+	// Keyed by world position (t.beehives, global), so they tick ONCE globally here (the tickBells twin). An
+	// empty hive ticks to a cheap no-op (no work + no RNG draw). Nil map = no-op. CITE BeehiveBlock.getTicker
+	// -> BeehiveBlockEntity.serverTick.
+	t.tickBeehives()
 	// SUB-BLOCKENTITY: tick every MOB-SPAWNER block-entity (SpawnerBlockEntity.serverTick ->
 	// BaseSpawner.serverTick - the isNearPlayer gate, the spawnDelay countdown, and the spawnCount burst
 	// under the maxNearbyEntities cap). Keyed by world position (t.spawners, global - not per-region), so

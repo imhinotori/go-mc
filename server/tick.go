@@ -555,6 +555,13 @@ type TickLoop struct {
 	// placement (createBlockEntityOnPlace) and ticks passively. Tick-owned.
 	bells map[pk.Position]*bellBE
 
+	// beehives: BEEHIVE + BEE_NEST block-entities keyed by world position (the bells twin, BEEHIVE-01).
+	// A hive per-tick drive (beehive_be.go beehiveServerTick == BeehiveBlockEntity.serverTick) ages each
+	// stored bee (BeeData.tick) and releases it once its minTicksInHive passes -- a nectar-carrying bee
+	// bumps the block HONEY_LEVEL on release (HONEY_DELIVERED). Adding a bee (addOccupant, from the enter-
+	// hive goal) stores an Occupant. Registers on placement / first access; ticks passively. Tick-owned.
+	beehives map[pk.Position]*beehiveBE
+
 	// lecterns: LECTERN block-entities keyed by world position (the bells twin, LECTERN-01). A lectern holds
 	// a book + page (LecternBlockEntity.book/page/pageCount); placing a book (useLectern == LecternBlock
 	// .useItemOn -> tryPlaceBook) sets HAS_BOOK; taking it (takeLecternBook) resets it. The comparator reads
