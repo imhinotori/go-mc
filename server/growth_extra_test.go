@@ -135,6 +135,39 @@ func TestCactusAge8FlowerNextDouble(t *testing.T) {
 	}
 }
 
+// TestCactusCanSurviveSupportsCactusTag: canSurvive's below-support is BlockTags.SUPPORTS_CACTUS
+// (== #minecraft:sand), NOT the dirt/grass family. A cactus on SAND survives (grows); a cactus on
+// DIRT does NOT survive (the age-8 flower branch's canSurvive gate fails, so no flower is placed and
+// no draw is spent). Regression for the earlier IsVegetationGround approximation, which wrongly
+// admitted dirt and wrongly rejected sand. CITE: CactusBlock.canSurvive (below.is(SUPPORTS_CACTUS));
+// BlockTags.SUPPORTS_CACTUS -> #minecraft:sand.
+func TestCactusCanSurviveSupportsCactusTag(t *testing.T) {
+	// SAND support -> canSurvive true.
+	{
+		loop, mgr, _ := newRandomTickLoop()
+		loop.only().levelRandom = levelgen.NewLegacyRandomSource(0xCA08)
+		pos := pk.Position{X: 4, Y: 65, Z: 4}
+		mgr.SetBlock(pk.Position{X: 4, Y: 64, Z: 4}, block.ToStateID[block.Sand{}], dimMinY)
+		mgr.SetBlock(pos, cactusState(8), dimMinY)
+		// canSurvive reads below(pos): the support block. On sand it must survive.
+		if !loop.cactusCanSurvive(block.CactusDefaultState(), pos) {
+			t.Fatal("cactus on sand must survive (SUPPORTS_CACTUS == #minecraft:sand)")
+		}
+	}
+	// DIRT support -> canSurvive false (dirt is NOT in #minecraft:sand).
+	{
+		loop, mgr, _ := newRandomTickLoop()
+		loop.only().levelRandom = levelgen.NewLegacyRandomSource(0xCA08)
+		pos := pk.Position{X: 4, Y: 65, Z: 4}
+		mgr.SetBlock(pk.Position{X: 4, Y: 64, Z: 4}, block.ToStateID[block.Dirt{}], dimMinY)
+		mgr.SetBlock(pos, cactusState(8), dimMinY)
+		// canSurvive reads below(pos): on dirt it must NOT survive.
+		if loop.cactusCanSurvive(block.CactusDefaultState(), pos) {
+			t.Fatal("cactus on dirt must NOT survive (dirt is not in #minecraft:supports_cactus)")
+		}
+	}
+}
+
 // ---- BAMBOO SAPLING ----
 
 // TestBambooSaplingUnconditionalNextInt3: bambooSaplingRandomTick draws EXACTLY one unconditional

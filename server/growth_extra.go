@@ -222,12 +222,10 @@ func (t *TickLoop) cactusRandomTick(r *region, state block.StateID, pos pk.Posit
 // but the signature carries it for parity with the jar (the grow/can-survive paths pass the
 // defaultBlockState). CITE: CactusBlock.canSurvive.
 //
-// SUPPORTS_CACTUS (BlockTags) is a cited deferral: the tag is not yet enumerated in
-// level/block/growth_extra.go; for v1 the below-support is approximated as `IsVegetationGround` —
-// sand is NOT in IsVegetationGround (a grass-block/dirt family) but IS in BlockTags.SUPPORTS_CACTUS.
-// For tests the cactus sits on a dirt block (a member of both tag closure approximations), so the
-// deferral does not regress any covered test. A real SUPPORTS_CACTUS tag enumerator is a cited
-// follow-up. CITE: BlockTags.SUPPORTS_CACTUS (datagen tag closure).
+// SUPPORTS_CACTUS (BlockTags) is `#minecraft:sand` == {sand, red_sand, suspicious_sand} — the exact
+// closure block.IsSand implements. A cactus survives on sand or on another cactus, and nowhere else
+// (dirt/grass do NOT support cactus in vanilla). CITE: BlockTags.SUPPORTS_CACTUS
+// (tags/block/supports_cactus.json -> #minecraft:sand); block.IsSand (tags/block/sand.json).
 func (t *TickLoop) cactusCanSurvive(_ block.StateID, pos pk.Position) bool {
 	if t.world() == nil {
 		return false
@@ -257,10 +255,11 @@ func (t *TickLoop) cactusCanSurvive(_ block.StateID, pos pk.Position) bool {
 		return false
 	}
 	// `if (below.is(this) || below.is(SUPPORTS_CACTUS))` — bare this (cactus on cactus) OR
-	// below-in-supports-cactus. The cited-default approximation for SUPPORTS_CACTUS here is
-	// IsVegetationGround (the dirt/grass/mud substrate family — the sand-only ground case is the
-	// SUPPORTS_CACTUS extension noted above).
-	if block.IsCactus(belowState) || block.IsVegetationGround(belowState) {
+	// below-in-#minecraft:supports_cactus. That tag is `#minecraft:sand` (sand / red_sand /
+	// suspicious_sand): a cactus survives ONLY on sand or another cactus, NEVER on dirt/grass.
+	// CITE: BlockTags.SUPPORTS_CACTUS (tags/block/supports_cactus.json -> #minecraft:sand);
+	// block.IsSand is that exact tag closure.
+	if block.IsCactus(belowState) || block.IsSand(belowState) {
 		// `return !getBlockState(pos.above()).liquid()` — above must not be a fluid (water/lava).
 		// CITE: CactusBlock.canSurvive (state.liquid()).
 		aboveState, ok := t.world().GetBlock(above(pos), dimMinY)
