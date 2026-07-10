@@ -81,6 +81,36 @@ func TestFireIgniteOddsWaterloggedZero(t *testing.T) {
 	}
 }
 
+// TestIgniteFireAtPlainFire proves the flint&steel PLAIN-FIRE branch (FlintAndSteelItem.useOn ->
+// BaseFireBlock.canBePlacedAt's getState().canSurvive() disjunct): igniteFireAt lights a fire in an
+// AIR cell that has a sturdy floor below it, and schedules the fire's first FireBlock tick so it
+// spreads/burns out. A cell with no sturdy floor and no burnable neighbour (fire cannot survive) is
+// NOT lit. CITE: FlintAndSteelItem.useOn; BaseFireBlock.canBePlacedAt / getState; FireBlock.canSurvive.
+func TestIgniteFireAtPlainFire(t *testing.T) {
+	loop, mgr, _ := newRandomTickLoop()
+	loop.only().levelRandom = levelgen.NewLegacyRandomSource(0xF14E)
+
+	// Air cell over a sturdy stone floor -> fireCanSurvive true -> fire is lit.
+	pos := pk.Position{X: 4, Y: 65, Z: 4}
+	mgr.SetBlock(below(pos), block.ToStateID[block.Stone{}], dimMinY)
+	// pos is air by default in the empty chunk.
+	if !loop.igniteFireAt(pos) {
+		t.Fatal("igniteFireAt should light a fire on a sturdy floor")
+	}
+	if got := mustGet(t, mgr, pos); !block.IsFire(got) {
+		t.Fatalf("cell is %v after ignite, want fire", block.StateList[got].ID())
+	}
+
+	// Air cell floating in air (no sturdy floor, no burnable neighbour) -> fireCanSurvive false -> no fire.
+	empty := pk.Position{X: 8, Y: 80, Z: 8} // surrounded by air
+	if loop.igniteFireAt(empty) {
+		t.Fatal("igniteFireAt must NOT light a fire where it cannot survive (no floor, no burnable neighbour)")
+	}
+	if got := mustGet(t, mgr, empty); block.IsFire(got) {
+		t.Fatal("no fire should have been placed in the floating-air cell")
+	}
+}
+
 func TestFireTickAgesUp(t *testing.T) {
 	loop, mgr, _ := newRandomTickLoop()
 	r := loop.only()

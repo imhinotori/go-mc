@@ -409,9 +409,14 @@ func (t *TickLoop) tryIgnitePortalWithFlintAndSteel(p *tickPlayer, clicked pk.Po
 	// frame must resolve around relativePos. (inPortalDimension == true for the v1 overworld.)
 	forward := horizontalDirFromYaw(p.yaw)
 	if !t.portalIsPortalAt(relativePos, forward) {
-		// Not completing a portal. v1: the plain-fire path (getState().canSurvive()) is a cited follow-up
-		// (no FireBlock subsystem), so nothing is placed here.
-		return false
+		// Not completing a portal. BaseFireBlock.canBePlacedAt's OTHER disjunct is
+		// `getState(relPos).canSurvive(relPos)` -- the PLAIN-FIRE ignite (lighting a fire on the ground).
+		// FireBlock.getStateForPlacement + FireBlock.canSurvive are ported (fire_block.go), so place the
+		// plain fire when the target can hold it, exactly as FlintAndSteelItem.useOn's fire branch:
+		//   playSound(FLINTANDSTEEL_USE, ...); setBlock(relPos, BaseFireBlock.getState(relPos), 11).
+		// CITE: FlintAndSteelItem.useOn (offsets 135-265); BaseFireBlock.canBePlacedAt / getState;
+		// FireBlock.getStateForPlacement / canSurvive.
+		return t.igniteFireAt(relativePos)
 	}
 
 	// playSound(player, relativePos, FLINTANDSTEEL_USE, BLOCKS, 1.0, random.nextFloat()*0.4 + 0.8).
@@ -429,6 +434,51 @@ func (t *TickLoop) tryIgnitePortalWithFlintAndSteel(p *tickPlayer, clicked pk.Po
 	if sh, ok := t.findEmptyPortalShape(relativePos, block.X); ok {
 		t.createPortalBlocks(sh)
 	}
+	return true
+}
+
+// igniteFireAt is the PLAIN-FIRE branch of FlintAndSteelItem.useOn (offsets 135-265): it mirrors
+// BaseFireBlock.canBePlacedAt's `getState(pos).canSurvive(pos)` disjunct (the portal disjunct has
+// already been tried by the caller). getState(pos) == BaseFireBlock.getState -> FIRE overworld
+// (SoulFireBlock cells are absent overworld, per fire_block.go's fireStateWithAge note), so the
+// survive check is FireBlock.canSurvive == fireCanSurvive. On success it plays FLINTANDSTEEL_USE and
+// writes the fire via getStateForPlacement with setBlock flag 11 (== UPDATE_NEIGHBORS|UPDATE_CLIENTS
+// |UPDATE_KNOWN_SHAPE), mirrored as SetBlock + broadcast. Returns true iff a fire was lit (the caller
+// wears the flint&steel by 1 only then). CITE: FlintAndSteelItem.useOn (fire branch); BaseFireBlock
+// .canBePlacedAt / getState; FireBlock.getStateForPlacement / canSurvive.
+func (t *TickLoop) igniteFireAt(pos pk.Position) bool {
+	if t.world() == nil {
+		return false
+	}
+	// canBePlacedAt already required air at pos (portalAirAt above). The remaining disjunct is
+	// getState(pos).canSurvive(pos): the fire's canSurvive at this cell.
+	if !t.fireCanSurvive(pos) {
+		return false
+	}
+	fireState, ok := t.fireStateForPlacement(pos)
+	if !ok {
+		return false
+	}
+	// playSound(player, pos, FLINTANDSTEEL_USE, BLOCKS, 1.0, random.nextFloat()*0.4 + 0.8). The
+	// pitch/seed are dedicated non-gameplay draws (the sound-seed discipline used across the block
+	// layer), so they never perturb a gameplay RNG stream. CITE: FlintAndSteelItem.useOn playSound.
+	pitch := mrand.Float32()*0.4 + 0.8
+	t.playSound(flintAndSteelUseSoundID, soundSourceBlocks,
+		float64(pos.X)+0.5, float64(pos.Y)+0.5, float64(pos.Z)+0.5,
+		1.0, pitch, mrand.Int64())
+	// setBlock(pos, getState(pos), 11): write + broadcast; kick the neighbor reconcile (the flag-11
+	// UPDATE_NEIGHBORS half) so the freshly-lit fire schedules its own first FireBlock tick.
+	if !t.world().SetBlock(pos, fireState, dimMinY) {
+		return false
+	}
+	t.broadcastBlockUpdate(pos, fireState)
+	// FireBlock.onPlace -> scheduleTick(pos, this, getFireTickDelay(getRandom())): the freshly-lit fire
+	// must schedule its first FireBlock tick so it spreads / burns out. Use the world-global region
+	// (t.only()) for the delay's level-random draw, matching the scheduled-block drain's region. CITE:
+	// FireBlock.onPlace.
+	t.scheduleBlockTick(pos, fireTickType, t.getFireTickDelay(t.only()))
+	// The flag-11 UPDATE_NEIGHBORS half: kick the edit-time neighbor reconcile (redstone/support seams).
+	t.onBlockTickEdit(pos)
 	return true
 }
 

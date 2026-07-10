@@ -113,12 +113,14 @@ func TestNetherPortalIncompleteFrameNoPortal(t *testing.T) {
 	ui := useItemOnPacket(0, floor, 1 /*UP*/, 0.5, 1.0, 0.5, false, false, 2)
 	loop.applyInput(p, SubtickInput{At: loop.clock.Now(), Packet: ui})
 
-	// No portal anywhere in the (would-be) interior — every cell stays air (not nether_portal).
+	// No NETHER_PORTAL anywhere in the (would-be) interior. NOTE: clicking flint&steel on the floor of
+	// an incomplete frame DOES light a plain fire at the relative cell (floor.above()) -- that is faithful
+	// FlintAndSteelItem.useOn behavior (BaseFireBlock.canBePlacedAt's getState().canSurvive() disjunct).
+	// The invariant under test is that NO PORTAL forms, so assert on nether_portal specifically.
 	for x := x0; x <= x0+1; x++ {
 		for y := y0; y <= y0+2; y++ {
-			got, ok := mgr.GetBlock(pk.Position{X: x, Y: y, Z: z}, dimMinY)
-			if !ok || !block.IsAir(got) {
-				t.Fatalf("incomplete frame created a portal at (%d,%d,%d) = %d, want air", x, y, z, got)
+			if loop.portalIsNetherPortalAt(pk.Position{X: x, Y: y, Z: z}) {
+				t.Fatalf("incomplete frame created a nether_portal at (%d,%d,%d), want none", x, y, z)
 			}
 		}
 	}
@@ -154,10 +156,11 @@ func TestNetherPortalTooWideInvalid(t *testing.T) {
 	ui := useItemOnPacket(0, floor, 1 /*UP*/, 0.5, 1.0, 0.5, false, false, 3)
 	loop.applyInput(p, SubtickInput{At: loop.clock.Now(), Packet: ui})
 
-	// The 22-wide interior exceeds MAX_WIDTH, so no portal forms — interior stays air.
+	// The 22-wide interior exceeds MAX_WIDTH, so no NETHER_PORTAL forms. (A plain fire may be lit at the
+	// clicked floor's relative cell -- faithful flint&steel behavior -- so assert on nether_portal only.)
 	for x := 1; x <= 22; x++ {
-		if got, ok := mgr.GetBlock(pk.Position{X: x, Y: y0, Z: z}, dimMinY); !ok || !block.IsAir(got) {
-			t.Fatalf("too-wide frame created a portal at (%d,%d,%d) = %d, want air (width 22 > MAX_WIDTH 21)", x, y0, z, got)
+		if loop.portalIsNetherPortalAt(pk.Position{X: x, Y: y0, Z: z}) {
+			t.Fatalf("too-wide frame created a nether_portal at (%d,%d,%d), want none (width 22 > MAX_WIDTH 21)", x, y0, z)
 		}
 	}
 }
