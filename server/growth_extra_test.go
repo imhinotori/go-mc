@@ -45,6 +45,14 @@ func bambooStalkState(age int, leaves block.BambooLeaves, stage int) block.State
 	return s
 }
 
+func sweetBerryState(age int) block.StateID {
+	s, ok := block.ToStateID[block.SweetBerryBush{Age: block.Integer(age)}]
+	if !ok {
+		panic("no sweet berry state")
+	}
+	return s
+}
+
 func cocoaState(age int) block.StateID {
 	s, ok := block.ToStateID[block.Cocoa{Age: block.Integer(age), Facing: block.North}]
 	if !ok {
@@ -238,6 +246,67 @@ func TestCocoaNoGrowOnNonZeroRoll(t *testing.T) {
 
 	if block.CocoaAge(mustGet(t, mgr, pos)) != 0 {
 		t.Fatalf("cocoa must not grow on a non-zero nextInt(5) roll; AGE = %d", block.CocoaAge(mustGet(t, mgr, pos)))
+	}
+}
+
+// TestSweetBerryGrowLitAgeGate: a lit (open-sky) sweet berry bush below AGE 3 advances AGE by one on a
+// nextInt(5)==0 roll; a max-age (3) bush never grows. RNG order: the age<3 gate is checked BEFORE the
+// nextInt(5) draw. CITE: SweetBerryBushBlock.randomTick.
+func TestSweetBerryGrowLitAgeGate(t *testing.T) {
+	// Seed whose first nextInt(5)==0 -> the grow proceeds (open-sky test column reads light 15 >= 9).
+	var seed int64 = -1
+	for cand := int64(1); cand < 500; cand++ {
+		if levelgen.NewLegacyRandomSource(cand).NextIntN(5) == 0 {
+			seed = cand
+			break
+		}
+	}
+	if seed < 0 {
+		t.Fatal("no seed with first nextInt(5)==0")
+	}
+	loop, mgr, _ := newRandomTickLoop()
+	r := loop.only()
+	r.levelRandom = levelgen.NewLegacyRandomSource(seed)
+
+	pos := pk.Position{X: 4, Y: 65, Z: 4}
+	mgr.SetBlock(pos, sweetBerryState(1), dimMinY)
+	loop.sweetBerryRandomTick(r, sweetBerryState(1), pos)
+	if got := block.SweetBerryAge(mustGet(t, mgr, pos)); got != 2 {
+		t.Fatalf("lit berry bush AGE after grow = %d, want 2", got)
+	}
+
+	// A max-age (3) bush must never grow, even with a 0 roll.
+	r.levelRandom = levelgen.NewLegacyRandomSource(seed)
+	maxPos := pk.Position{X: 6, Y: 65, Z: 6}
+	mgr.SetBlock(maxPos, sweetBerryState(3), dimMinY)
+	loop.sweetBerryRandomTick(r, sweetBerryState(3), maxPos)
+	if got := block.SweetBerryAge(mustGet(t, mgr, maxPos)); got != 3 {
+		t.Fatalf("max-age berry bush must not grow; AGE = %d, want 3", got)
+	}
+}
+
+// TestSweetBerryDarkNoGrow: the light gate `getRawBrightness(pos.above(), 0) >= 9` rejects growth in a
+// dark column even on a 0 roll. CITE: SweetBerryBushBlock.randomTick (light>=9 gate).
+func TestSweetBerryDarkNoGrow(t *testing.T) {
+	var seed int64 = -1
+	for cand := int64(1); cand < 500; cand++ {
+		if levelgen.NewLegacyRandomSource(cand).NextIntN(5) == 0 {
+			seed = cand
+			break
+		}
+	}
+	loop, mgr, ch := newRandomTickLoop()
+	r := loop.only()
+	r.levelRandom = levelgen.NewLegacyRandomSource(seed)
+	// Dark column: zero the sky-light so getRawBrightness < 9.
+	for i := range ch.Sections {
+		ch.Sections[i].SkyLight = make([]byte, 2048)
+	}
+	pos := pk.Position{X: 4, Y: 65, Z: 4}
+	mgr.SetBlock(pos, sweetBerryState(1), dimMinY)
+	loop.sweetBerryRandomTick(r, sweetBerryState(1), pos)
+	if got := block.SweetBerryAge(mustGet(t, mgr, pos)); got != 1 {
+		t.Fatalf("dark berry bush must not grow; AGE = %d, want 1", got)
 	}
 }
 

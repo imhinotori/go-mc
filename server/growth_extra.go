@@ -312,6 +312,54 @@ func (t *TickLoop) cocoaRandomTick(r *region, state block.StateID, pos pk.Positi
 	}
 }
 
+// ---- SWEET BERRY BUSH (SweetBerryBushBlock.randomTick) ----
+
+// sweetBerryRandomTick is SweetBerryBushBlock.randomTick: a bush below AGE 3 matures with a 1-in-5
+// chance when lit. r is the owning region; r.levelRandom is `this.random`.
+//
+// RNG DRAW ORDER (must match the jar exactly): the `age < 3` gate is checked FIRST and draws NOTHING
+// (a max-age bush is not even sampled -- IsRandomlyTicking excludes it -- but the guard is mirrored).
+// Only for age < 3 is the nextInt(5) drawn, and only on a 0 roll is the light gate read (short-circuit
+// `age < 3 && random.nextInt(5) == 0 && getRawBrightness(pos.above(), 0) >= 9`). CITE:
+// SweetBerryBushBlock.randomTick.
+//
+//	int age = state.getValue(AGE);
+//	if (age < 3 && random.nextInt(5) == 0 && level.getRawBrightness(pos.above(), 0) >= 9) {
+//	    level.setBlock(pos, state.setValue(AGE, age + 1), 2);
+//	    level.gameEvent(GameEvent.BLOCK_CHANGE, pos, ...);   // gameEvent DEFERRED (no game-event system)
+//	}
+//
+// setBlock flag 2 == UPDATE_CLIENTS -- mirrored as SetBlock + broadcast.
+func (t *TickLoop) sweetBerryRandomTick(r *region, state block.StateID, pos pk.Position) {
+	if t.world() == nil || r == nil || r.levelRandom == nil {
+		return
+	}
+	age := block.SweetBerryAge(state)
+	if age < 0 {
+		return // not a sweet berry bush (defensive)
+	}
+	// `age < 3` gate FIRST (no draw).
+	if age >= block.SweetBerryMaxAge {
+		return
+	}
+	// `random.nextInt(5) == 0` -- drawn only after the age gate; short-circuits the light read.
+	if r.levelRandom.NextIntN(5) != 0 {
+		return
+	}
+	// `getRawBrightness(pos.above(), 0) >= 9` -- REAL light read (the same probe crop_block.go uses),
+	// with the ambient-darkness term 0 the vanilla call passes. CITE: SweetBerryBushBlock.randomTick.
+	if t.rawBrightness(above(pos), 0) < 9 {
+		return
+	}
+	if grown, ok := block.SweetBerryWithAge(state, age+1); ok {
+		if t.world().SetBlock(pos, grown, dimMinY) {
+			t.broadcastBlockUpdate(pos, grown)
+		}
+	}
+	// gameEvent(BLOCK_CHANGE) -- DEFERRED (no game-event/sculk system yet); the load-bearing AGE
+	// advance IS performed. CITE: SweetBerryBushBlock.randomTick (gameEvent).
+}
+
 // ---- BAMBOO SAPLING (BambooSaplingBlock.randomTick) ----
 
 // bambooSaplingRandomTick is BambooSaplingBlock.randomTick: grow a sapling to a stalk. r is the

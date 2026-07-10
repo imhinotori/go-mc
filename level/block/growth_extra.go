@@ -80,6 +80,36 @@ func CocoaWithAge(s StateID, age int) (StateID, bool) {
 	return id, ok
 }
 
+// ---- SWEET BERRY BUSH (SweetBerryBushBlock) ----
+
+// SweetBerryMaxAge is SweetBerryBushBlock.MAX_AGE (3). CITE: SweetBerryBushBlock.MAX_AGE.
+const SweetBerryMaxAge = 3
+
+// SweetBerryAge is state.getValue(SweetBerryBushBlock.AGE) (0..3) for a bush, or -1 otherwise. CITE:
+// SweetBerryBushBlock.AGE (IntegerProperty 0..3).
+func SweetBerryAge(s StateID) int {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return -1
+	}
+	if b, ok := StateList[s].(SweetBerryBush); ok {
+		return int(b.Age)
+	}
+	return -1
+}
+
+// SweetBerryWithAge returns the bush state with AGE set to age (0..3). ok=false for a non-bush s or an
+// out-of-range age. CITE: SweetBerryBushBlock.randomTick (state.setValue(AGE, age+1)).
+func SweetBerryWithAge(s StateID, age int) (StateID, bool) {
+	if int(s) < 0 || int(s) >= len(StateList) || age < 0 || age > SweetBerryMaxAge {
+		return s, false
+	}
+	if _, ok := StateList[s].(SweetBerryBush); !ok {
+		return s, false
+	}
+	id, ok := ToStateID[SweetBerryBush{Age: Integer(age)}]
+	return id, ok
+}
+
 // ---- BAMBOO (BambooStalkBlock / BambooSaplingBlock) ----
 
 // IsBamboo reports Blocks.BAMBOO (a bamboo STALK, any age/leaves/stage). CITE: BambooStalkBlock.

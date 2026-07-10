@@ -98,6 +98,11 @@ func IsRandomlyTicking(s StateID) bool {
 		// random-ticked ONLY while still maturing; a fully-grown (AGE 2) pod draws no roll. CITE:
 		// CocoaBlock.isRandomlyTicking (state.getValue(AGE) < 2).
 		return CocoaAge(s) < CocoaMaxAge
+	case SweetBerryBush:
+		// SweetBerryBushBlock overrides isRandomlyTicking() to return AGE < 3 -- a bush is random-ticked
+		// ONLY while maturing; a full (AGE 3) bush draws no roll. CITE: SweetBerryBushBlock
+		// .isRandomlyTicking (state.getValue(AGE) < 3).
+		return SweetBerryAge(s) < SweetBerryMaxAge
 	default:
 		return false
 	}

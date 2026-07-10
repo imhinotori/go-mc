@@ -223,6 +223,10 @@ func (t *TickLoop) dispatchRandomTick(r *region, state block.StateID, pos pk.Pos
 		// CocoaBlock.randomTick: 1-in-5 AGE advance (no light gate). DRAWS levelRandom (one
 		// unconditional nextInt(5)). IsRandomlyTicking gates on AGE < MAX_AGE. See growth_extra.go.
 		t.cocoaRandomTick(r, state, pos)
+	case block.IsSweetBerryBush(state):
+		// SweetBerryBushBlock.randomTick: 1-in-5 AGE advance gated on light>=9. DRAWS levelRandom (one
+		// nextInt(5), only for age<3). IsRandomlyTicking gates on AGE < 3. See growth_extra.go.
+		t.sweetBerryRandomTick(r, state, pos)
 	default:
 		// A state whose IsRandomlyTicking is true but whose randomTick handler is not yet ported: no-op
 		// (the family's IsRandomlyTicking should not be true until its handler is wired — kept as a
