@@ -368,3 +368,55 @@ func TestRepeaterUseCyclesDelay(t *testing.T) {
 		}
 	}
 }
+
+
+// TestDiodeSetPlacedByDelayOne locks DiodeBlock.setPlacedBy: a repeater placed already receiving input
+// turns on after a DELAY-1 tick (scheduleTick(pos, this, 1)), NOT after its full getDelay. A DELAY=4
+// repeater (getDelay==8) placed into a live 15 signal must flip POWERED after exactly ONE tick. Without
+// setPlacedBy it would take 8. CITE: DiodeBlock.setPlacedBy (shouldTurnOn -> scheduleTick(pos, this, 1)).
+func TestDiodeSetPlacedByDelayOne(t *testing.T) {
+	loop, mgr := newRedstoneLoop()
+
+	p := pk.Position{X: 4, Y: 64, Z: 4}
+	mgr.SetBlock(pk.Position{X: 4, Y: 63, Z: 4}, stoneState(), dimMinY) // sturdy floor (RIGID)
+	rep := block.ToStateID[block.Repeater{Delay: 4, Facing: block.South, Locked: false, Powered: false}]
+	mgr.SetBlock(p, rep, dimMinY)
+
+	// getDelay is DELAY*2 == 8 for DELAY=4: without the setPlacedBy fast path the flip would be 8 ticks out.
+	if got := diodeGetDelay(rep); got != 8 {
+		t.Fatalf("repeater(DELAY=4) getDelay = %d, want 8", got)
+	}
+
+	// A constant-15 source on the FACING input face (pos+South) so shouldTurnOn is true at placement.
+	inputPos := pk.Position{X: 4, Y: 64, Z: 5}
+	mgr.SetBlock(inputPos, block.ToStateID[block.RedstoneBlock{}], dimMinY)
+	if !loop.diodeShouldTurnOn(rep, p) {
+		t.Fatal("repeater with a 15 input should shouldTurnOn at placement")
+	}
+
+	// The place path: setPlacedBy schedules the delay-1 tick, then onRedstoneEdit wakes the graph (its
+	// full-delay tick is dropped by the per-position scheduler dedup — delay-1 already pending).
+	loop.diodeSetPlacedBy(p, rep)
+	loop.onRedstoneEdit(p)
+	if !loop.hasScheduledBlockTick(p, repeaterTickType) {
+		t.Fatal("a repeater placed into a live signal should schedule its output-flip tick")
+	}
+
+	// Exactly ONE tick flips it POWERED (the delay-1 fast path), NOT 8.
+	loop.gametime++
+	loop.tickScheduledBlocks()
+	on, _ := mgr.GetBlock(p, dimMinY)
+	if !block.RepeaterPowered(on) {
+		t.Fatal("repeater placed into a live signal must be POWERED after 1 tick (setPlacedBy delay-1), not its full getDelay")
+	}
+
+	// A repeater placed into NO signal must NOT schedule a setPlacedBy tick (shouldTurnOn false).
+	q := pk.Position{X: 8, Y: 64, Z: 8}
+	mgr.SetBlock(pk.Position{X: 8, Y: 63, Z: 8}, stoneState(), dimMinY)
+	rep2 := block.ToStateID[block.Repeater{Delay: 1, Facing: block.South, Locked: false, Powered: false}]
+	mgr.SetBlock(q, rep2, dimMinY)
+	loop.diodeSetPlacedBy(q, rep2)
+	if loop.hasScheduledBlockTick(q, repeaterTickType) {
+		t.Fatal("a repeater placed into no signal must not schedule a setPlacedBy tick")
+	}
+}

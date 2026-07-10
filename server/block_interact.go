@@ -596,6 +596,12 @@ func (t *TickLoop) reconcileEdit(editor *tickPlayer, pos pk.Position, state bloc
 	// (max-neighbor-minus-1 spread), a torch reschedules its lit/unlit toggle, and the change propagates
 	// across the wire network to its fixpoint. This is what makes placing a lever next to a wire power
 	// it, or breaking a source drop the wire back to 0.
+	// REDSTONE TIER-3 (DIODE): DiodeBlock.setPlacedBy — a freshly-placed repeater/comparator that is
+	// already receiving input schedules a delay-1 tick so it turns on the NEXT tick (not after its full
+	// getDelay). Run BEFORE onRedstoneEdit so the delay-1 tick wins the per-position scheduler dedup over
+	// the full-delay tick checkTickOnNeighbor would otherwise post. Faithful for a repeater/comparator
+	// placed into a live signal; a no-op for a diode placed into no signal. CITE: DiodeBlock.setPlacedBy.
+	t.diodeSetPlacedBy(pos, state)
 	t.onRedstoneEdit(pos)
 	// REDSTONE TIER-3 (OBSERVER): Level.updateNeighborsAt/updateShape -> ObserverBlock.updateShape — a
 	// break/place at `pos` also wakes any observer WATCHING `pos` (its FACING neighbor changed), which

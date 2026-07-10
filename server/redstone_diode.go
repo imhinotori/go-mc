@@ -797,15 +797,26 @@ func (t *TickLoop) clearComparatorOutput(pos pk.Position) {
 // place / use hooks (DiodeBlock.onPlace / setPlacedBy; Repeater/Comparator.useWithoutItem)
 // ---------------------------------------------------------------------------------------------
 
-// NOTE — DiodeBlock.onPlace (updateNeighborsInFront) and setPlacedBy (if shouldTurnOn scheduleTick
-// delay 1) on placement are covered by the generic redstone edit hook: the place path
-// (block_interact.go reconcileEdit) calls onRedstoneEdit(pos), which enqueues pos itself, and
-// drainRedstoneUpdates dispatches the freshly-placed diode through diodeNeighborChanged ->
-// checkTickOnNeighbor, scheduling the delayed output flip when its input state changed. The
-// diode therefore turns on after its full delay (getDelay) rather than the setPlacedBy delay-1
-// fast path; the observable end state (POWERED after the delay, output emitted out FACING) is
-// identical, and no diode is left un-scheduled. CITE: DiodeBlock.onPlace / setPlacedBy /
-// checkTickOnNeighbor.
+// diodeSetPlacedBy is DiodeBlock.setPlacedBy(level, pos, state, placer, stack):
+//
+//	if (shouldTurnOn(level, pos, state)) level.scheduleTick(pos, this, 1);
+//
+// A repeater/comparator placed already receiving input schedules a delay-1 tick so it turns on the
+// NEXT tick, NOT after its full getDelay. This is called by the place path (reconcileEdit) BEFORE the
+// generic onRedstoneEdit neighbor dispatch, so the delay-1 tick wins the per-(pos,type) scheduler
+// dedup (LevelChunkTicks.ticksPerPosition, UNIQUE_TICK_HASH) over the full-delay tick a subsequent
+// checkTickOnNeighbor would post -- exactly as vanilla's setBlock-onPlace-then-setPlacedBy ordering
+// resolves, since scheduleTick never double-schedules a position. CITE: DiodeBlock.setPlacedBy
+// (shouldTurnOn -> scheduleTick(pos, this, 1)).
+func (t *TickLoop) diodeSetPlacedBy(pos pk.Position, state block.StateID) {
+	if !isDiode(state) {
+		return
+	}
+	if t.diodeShouldTurnOn(state, pos) {
+		typ := blockTickType(block.StateList[state].ID())
+		t.scheduleBlockTick(pos, typ, 1)
+	}
+}
 
 // useRepeater is RepeaterBlock.useWithoutItem: cycle DELAY (setBlock flag 3), returns true (the click
 // is consumed so no block is placed). Flag 3 == UPDATE_NEIGHBORS|UPDATE_CLIENTS -> broadcast + a
