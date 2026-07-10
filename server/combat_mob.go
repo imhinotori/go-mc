@@ -59,6 +59,17 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 		return
 	}
 
+	// ARMADILLO (Armadillo.hurtServer, VERIFIED javap this task): a ROLLED-UP (scared) armadillo halves
+	// incoming damage BEFORE the shared pipeline -- `if (isScared()) amount = (amount - 1.0F) / 2.0F;`
+	// then super.hurtServer. The bytecode is float32: fload_3 fconst_1 fsub fconst_2 fdiv fstore_3, so the
+	// (amount-1)/2 is computed in float32 EXACTLY (ported verbatim, no float64 widening). Gated on
+	// e.isArmadillo so every other mob is a zero-cost skip (the pig oracle is untouched); placed after the
+	// isDeadOrDying (health<=0) guard so a dead armadillo still short-circuits, exactly as super would.
+	// Cite Armadillo.hurtServer.
+	if e.isArmadillo && armadilloIsScared(e) {
+		amount = (amount - 1.0) / 2.0
+	}
+
 	// WITHER BOSS (Task): WitherBoss.hurtServer overrides the LivingEntity path with the boss-specific
 	// immunity gates BEFORE the shared pipeline. Gated on e.wither != nil so every other mob is a zero-cost
 	// skip (the pig oracle is untouched). Returns early (no damage) on: a source in WITHER_IMMUNE_TO or from
@@ -263,6 +274,58 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 		// condition("hit_bone", value="head") can gate a headshot skill. src.hitBone is "" for every
 		// non-model hit (the pig oracle path) -> the condition fails closed, no behavior change.
 		t.fireMobSkillTrigger(e, triggerDamaged, skillTriggerCtx{attackerID: src.attacker, boneName: src.hitBone})
+	}
+
+	// ARMADILLO (Armadillo.actuallyHurt, VERIFIED javap this task): the threat-arm tail runs AFTER
+	// super.actuallyHurt (this function IS super), a per-type post-hurt hook gated on e.isArmadillo so
+	// every other mob is a zero-cost skip (the pig oracle stream is untouched). RNG-free. Cite
+	// Armadillo.actuallyHurt.
+	if e.isArmadillo {
+		t.armadilloActuallyHurt(e, src)
+	}
+}
+
+// armadilloActuallyHurt ports the tail of Armadillo.actuallyHurt(ServerLevel, DamageSource, float) that
+// runs AFTER super.actuallyHurt (VERIFIED javap this task):
+//
+//	super.actuallyHurt(level, source, amount);
+//	if (isNoAi() || !isDeadOrDying()) {                 // bytecode: isNoAi ifne 21 | isDeadOrDying ifeq 22
+//	    if (source.getEntity() instanceof LivingEntity) {
+//	        getBrain().setMemoryWithExpiry(DANGER_DETECTED_RECENTLY, TRUE, 80L);
+//	        if (canStayRolledUp()) rollUp();
+//	    } else if (source.is(DamageTypeTags.PANIC_ENVIRONMENTAL_CAUSES)) {
+//	        rollOut();
+//	    }
+//	}
+//
+// The guard reads as: run the reaction only if (isNoAi() || isAlive) -- a live armadillo (or a no-AI one)
+// reacts; a dying one does not. isNoAi() is a cited const-false (no NoAI subsystem in v1, the
+// piglin.go:160 convention), so the guard reduces to `!isDeadOrDying()` == e.health > 0.
+//
+// getEntity() instanceof LivingEntity: modeled as src.attacker != 0 -- every v1 causing entity (a player
+// or a mob) is a LivingEntity, and an environmental/anonymous source leaves attacker 0 (the SAME v1 proxy
+// combat_mob.go:173 uses for resolveMobResponsibleForDamage). On a living-attacker hit the armadillo arms
+// the 80-tick DANGER_DETECTED_RECENTLY memory (armadilloDangerExpiry, the getTimeUntilExpiry stand-in the
+// ArmadilloBallUp state machine reads) and, if it can stay rolled up, rolls up NOW. On a non-living hit
+// from a PANIC_ENVIRONMENTAL_CAUSES source (fire/lava/etc.), the armadillo unrolls (rollOut). RNG-free.
+// Cite Armadillo.actuallyHurt + Armadillo.setMemoryWithExpiry(DANGER_DETECTED_RECENTLY, 80L) +
+// Armadillo.canStayRolledUp + DamageTypeTags.PANIC_ENVIRONMENTAL_CAUSES.
+func (t *TickLoop) armadilloActuallyHurt(e *Entity, src damageSource) {
+	// (isNoAi() || !isDeadOrDying()) with isNoAi() a cited const-false -> !isDeadOrDying() == alive.
+	if e.health <= 0 {
+		return
+	}
+	if src.attacker != 0 {
+		// getEntity() instanceof LivingEntity: setMemoryWithExpiry(DANGER_DETECTED_RECENTLY, TRUE, 80L) --
+		// arm the 80-tick danger memory the ArmadilloBallUp state machine reads (armadilloDangerExpiry).
+		e.armadilloDangerExpiry = armadilloDangerMemoryTicks
+		// if (canStayRolledUp()) rollUp(): a hit while it can stay balled rolls it up immediately.
+		if t.armadilloCanStayRolledUp(e) {
+			t.armadilloRollUp(e)
+		}
+	} else if src.is("panic_environmental_causes") {
+		// else if source.is(PANIC_ENVIRONMENTAL_CAUSES): a non-living environmental panic source unrolls it.
+		t.armadilloRollOut(e)
 	}
 }
 
@@ -667,6 +730,13 @@ func (t *TickLoop) actuallyHurtEntity(e *Entity, src damageSource, amount float3
 
 	// `if (amount == 0.0F) return;` — fully absorbed/blocked: no health change, no Emit.
 	if amount == 0.0 {
+		// ARMADILLO (Armadillo.actuallyHurt): super.actuallyHurt returns HERE on amount==0, but
+		// Armadillo.actuallyHurt CONTINUES past super to arm the DANGER_DETECTED_RECENTLY threat memory
+		// (the override runs regardless of super's early return). Run the armadillo tail before this return
+		// so a scared-but-fully-absorbed hit still arms the roll-up. Cite Armadillo.actuallyHurt.
+		if e.isArmadillo {
+			t.armadilloActuallyHurt(e, src)
+		}
 		return
 	}
 
