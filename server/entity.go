@@ -869,6 +869,37 @@ type Entity struct {
 	piglinImmuneToZombification bool
 	piglinInNether              bool // the nether-dimension guard for isConverting (default false == off-nether == converting)
 	piglinAttackTime            int
+	// piglinAdmiringDisabled mirrors the ADMIRING_DISABLED memory (a boolean-with-expiry): while > 0 the piglin
+	// cannot start admiring / bartering. wasHurtBy sets it to 400 on a player hit; the barter's mobInteract is
+	// gated on it (canAdmire: !isAdmiringDisabled). Ticks down each brain tick. Cite PiglinAi.wasHurtBy (400l) +
+	// canAdmire. piglinAvoidTicks mirrors the AVOID_TARGET memory (a baby AVOID for 100t on hit): while > 0 the
+	// piglin flees the avoid target instead of hunting. piglinAvoidTargetID is that avoid target's entity id.
+	// piglinOffhandItem mirrors the offhand-held admire item (holdInOffhand); dropped on hit (stopHoldingOffHandItem).
+	// piglinAdmireTicks mirrors the ADMIRE_DURATION (119) admire-hold on a picked-up gold item. piglinIsCrossbow
+	// marks a crossbow-armed piglin (createSpawnWeapon nextFloat<0.5); piglinCrossbowCharge mirrors the charge.
+	// Zero for every non-piglin. Cite PiglinAi + Piglin.createSpawnWeapon + CrossbowAttack.
+	piglinAdmiringDisabled int
+	piglinAvoidTicks       int
+	piglinAvoidTargetID    int32
+	piglinAdmireTicks      int
+	piglinIsCrossbow       bool
+	piglinCrossbowCharge   int // the CrossbowAttack CHARGING getTicksUsingItem() analogue (0..chargeDuration 25)
+	// piglinCrossbowState mirrors CrossbowAttack.CrossbowState (0 UNCHARGED / 1 CHARGING / 2 CHARGED / 3
+	// READY_TO_ATTACK); piglinCrossbowAttackDelay is the CHARGED countdown (20 + nextInt(20)) before firing.
+	// Cite CrossbowAttack.crossbowAttack state machine.
+	piglinCrossbowState       int
+	piglinCrossbowAttackDelay int
+	// piglinAngeredAt mirrors the ANGRY_AT memory (an entity-id, 600t via setAngerTarget): the retaliation
+	// target set by wasHurtBy. Unlike the sensor's NEAREST_TARGETABLE_PLAYER_NOT_WEARING_GOLD memory, ANGRY_AT
+	// ignores gold armor -- an angered piglin fights a gold-armored player. The FIGHT StartHunting behavior
+	// reads ANGRY_AT, so a live ANGRY_AT overrides the gold-neutrality drop. Cite PiglinAi.setAngerTarget +
+	// StartHuntingBehavior (ANGRY_AT). piglinAngerEnd is the game-tick the ANGRY_AT expires (600t).
+	piglinAngeredAt    int32
+	piglinAngerEnd     int64
+	// piglinOffhandItem mirrors the offhand ItemStack a piglin holds while admiring a picked-up gold item
+	// (holdInOffhand). Dropped on hit (stopHoldingOffHandItem, false) or bartered (stopHoldingOffHandItem, true).
+	// Empty for every non-holding piglin. Cite PiglinAi.holdInOffhand / stopHoldingOffHandItem.
+	piglinOffhandItem component.SlotData
 	// --- ZOMBIFIED PIGLIN (net.minecraft.world.entity.monster.zombie.ZombifiedPiglin) ----------------
 	//
 	// Tick-owned plain values, set/read ONLY for a ZombifiedPiglin (zombifiedPiglinAiStep gates on typ ==

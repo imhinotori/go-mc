@@ -286,6 +286,16 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 		t.hoglinWasHurtBy(e, src.attacker)
 	}
 
+	// PIGLIN (Piglin.hurtServer -> PiglinAi.wasHurtBy): AFTER super.hurtServer (this shared pipeline) lands
+	// (istore flag2, ifeq 42 -> only when the hit landed), if getEntity() instanceof LivingEntity, wasHurtBy(
+	// level, piglin, attacker). A per-type post-hurt hook gated on e.isPiglin, the sibling of the warden hook.
+	// It runs ONLY on a landed hit (the vanilla `if flag2` gate) and ONLY for a LivingEntity attacker
+	// (src.attacker != 0). ADDITIVE + piglin-gated (zero cost for every non-piglin -- the pig oracle stream
+	// is untouched). Cite Piglin.hurtServer (bytecode 9-42) + PiglinAi.wasHurtBy.
+	if e.isPiglin && src.attacker != 0 {
+		t.piglinWasHurtBy(e, src)
+	}
+
 	// SKILLS-01 (mob_skills.go): the declared-skill "damaged" trigger — the MythicMobs ~onDamaged
 	// analogue. Fires AFTER the shared hit fully landed (the per-type post-hurt hooks above are its
 	// siblings), SURVIVOR only (a lethal hit routes the "death" trigger through dieEntity instead).

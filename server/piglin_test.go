@@ -15,6 +15,7 @@ import (
 	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/data/item"
 	"github.com/imhinotori/sulfur/level"
+	"github.com/imhinotori/sulfur/world/levelgen"
 	"github.com/imhinotori/sulfur/level/attribute"
 	"github.com/imhinotori/sulfur/level/component"
 	"github.com/imhinotori/sulfur/world"
@@ -274,5 +275,358 @@ func TestPiglinMeleeUsesHitboxReach(t *testing.T) {
 	loop.piglinMeleeGoalTick(pgNear)
 	if math.Abs((20.0-float64(near.health))-5.0) > 1e-6 {
 		t.Fatalf("piglin did NOT hit a target 0.9 blocks away (dealt %v, want 5.0) -- inside hitbox reach", 20.0-near.health)
+	}
+}
+
+// TestPiglinAngersOnHitAndRetaliates: hitting an adult piglin (Piglin.hurtServer -> PiglinAi.wasHurtBy ->
+// maybeRetaliate -> setAngerTarget) sets ANGRY_AT to the attacker (600t) and the FIGHT attackTargetID, even
+// when the attacker WEARS GOLD ARMOR (ANGRY_AT bypasses the gold-safe sensor). Cite PiglinAi.wasHurtBy.
+func TestPiglinAngersOnHitAndRetaliates(t *testing.T) {
+	loop, _, floorY := piglinLoop(t)
+	py := float64(floorY + 1)
+	// A GOLD-ARMORED attacker: normally NEUTRAL (never sensor-targeted), but a hit angers the piglin anyway.
+	attacker := combatTestPlayer(loop, 9.0, py, 8.5, 7030)
+	inv := ensureInventory(attacker)
+	inv.set(5, component.SlotData{Count: 1, ItemID: pk.VarInt(item.GoldenHelmet.ID)})
+	if !piglinPlayerWearsGold(attacker) {
+		t.Fatal("test setup: attacker should wear gold")
+	}
+	pg := loop.spawnPiglin(8.5, py, 8.5, false)
+	// Sanity: an un-hit piglin does NOT target a gold-armored player (neutrality).
+	loop.piglinAcquireNearestPlayer(pg)
+	if pg.ai.attackTargetID != 0 {
+		t.Fatalf("un-hit piglin targeted a gold-armored player (%d), want 0", pg.ai.attackTargetID)
+	}
+	// Hit it with a player attack.
+	loop.withRegion(loop.regions[globalRegion], func() {
+		loop.applyDamageEntity(pg, damageSourcePlayerAttack(attacker.entityID), 1.0)
+	})
+	if pg.piglinAngeredAt != attacker.entityID {
+		t.Fatalf("after hit, ANGRY_AT = %d, want the attacker %d", pg.piglinAngeredAt, attacker.entityID)
+	}
+	if pg.ai.attackTargetID != attacker.entityID {
+		t.Fatalf("after hit, FIGHT target = %d, want the attacker %d (retaliation)", pg.ai.attackTargetID, attacker.entityID)
+	}
+	if pg.piglinAdmiringDisabled != piglinAdmiringDisabledTime {
+		t.Fatalf("after hit, ADMIRING_DISABLED = %d, want %d", pg.piglinAdmiringDisabled, piglinAdmiringDisabledTime)
+	}
+	// The anger target is preserved through re-acquisition even though the attacker wears gold.
+	loop.piglinAcquireNearestPlayer(pg)
+	if pg.ai.attackTargetID != attacker.entityID {
+		t.Fatalf("re-acquire dropped the gold-armored anger target (%d), want %d", pg.ai.attackTargetID, attacker.entityID)
+	}
+}
+
+// TestPiglinAngerBroadcastsToPack: hitting one adult piglin angers nearby adult piglins at the attacker too
+// (PiglinAi.broadcastAngerTarget over NEARBY_ADULT_PIGLINS). A far-away piglin (> 16) is NOT angered.
+func TestPiglinAngerBroadcastsToPack(t *testing.T) {
+	loop, _, floorY := piglinLoop(t)
+	py := float64(floorY + 1)
+	attacker := combatTestPlayer(loop, 9.0, py, 8.5, 7040)
+	hit := loop.spawnPiglin(8.5, py, 8.5, false)
+	near := loop.spawnPiglin(11.5, py, 8.5, false) // ~3 blocks away -> in the 16-block pack scan
+	loop.withRegion(loop.regions[globalRegion], func() {
+		loop.applyDamageEntity(hit, damageSourcePlayerAttack(attacker.entityID), 1.0)
+	})
+	if near.piglinAngeredAt != attacker.entityID {
+		t.Fatalf("nearby pack piglin ANGRY_AT = %d, want the attacker %d (broadcastAngerTarget)", near.piglinAngeredAt, attacker.entityID)
+	}
+}
+
+// TestPiglinBabyFleesOnHit: a hit baby piglin does NOT retaliate -- it sets AVOID_TARGET (100t) and flees.
+func TestPiglinBabyFleesOnHit(t *testing.T) {
+	loop, _, floorY := piglinLoop(t)
+	py := float64(floorY + 1)
+	attacker := combatTestPlayer(loop, 9.0, py, 8.5, 7050)
+	baby := loop.spawnPiglin(8.5, py, 8.5, true)
+	loop.withRegion(loop.regions[globalRegion], func() {
+		loop.applyDamageEntity(baby, damageSourcePlayerAttack(attacker.entityID), 1.0)
+	})
+	if baby.piglinAvoidTicks != piglinBabyAvoidTime {
+		t.Fatalf("hit baby AVOID timer = %d, want %d", baby.piglinAvoidTicks, piglinBabyAvoidTime)
+	}
+	if baby.piglinAvoidTargetID != attacker.entityID {
+		t.Fatalf("hit baby AVOID target = %d, want the attacker %d", baby.piglinAvoidTargetID, attacker.entityID)
+	}
+	if baby.piglinAngeredAt != 0 {
+		t.Fatalf("hit baby has ANGRY_AT %d, want 0 (babies flee, not fight)", baby.piglinAngeredAt)
+	}
+}
+
+// TestPiglinFinalizeSpawnRolls: piglinFinalizeSpawn performs the natural-spawn RNG rolls in the exact draw
+// order (baby nextFloat<0.2, weapon on the entity RNG, armor 4x nextFloat<0.1 on the level RNG). It is
+// deterministic for a fixed level seed, a baby never gets a spawn weapon, and across seeds babies (~20%) +
+// crossbows (~50%) appear. Cite Piglin.finalizeSpawn.
+func TestPiglinFinalizeSpawnRolls(t *testing.T) {
+	loop, _, floorY := piglinLoop(t)
+	py := float64(floorY + 1)
+
+	// Determinism: the same level seed -> the same baby/weapon/armor outcome.
+	loop.regions[globalRegion].levelRandom = levelgen.NewLegacyRandomSource(4242)
+	a := loop.spawnPiglin(8.5, py, 8.5, false)
+	loop.withRegion(loop.regions[globalRegion], func() { loop.piglinFinalizeSpawn(a, false) })
+
+	loop.regions[globalRegion].levelRandom = levelgen.NewLegacyRandomSource(4242)
+	b := loop.spawnPiglin(9.5, py, 8.5, false)
+	// Reseed b's entity RNG to a's id-derived seed is not identical, so weapon may differ; but baby+armor use
+	// the level RNG and must match. Compare the level-RNG-driven outcomes (baby + armor slots).
+	loop.withRegion(loop.regions[globalRegion], func() { loop.piglinFinalizeSpawn(b, false) })
+	if a.isBaby() != b.isBaby() {
+		t.Fatalf("finalizeSpawn baby roll not deterministic for a fixed level seed (a=%v b=%v)", a.isBaby(), b.isBaby())
+	}
+	for _, slot := range []int{eqSlotHead, eqSlotChest, eqSlotLegs, eqSlotFeet} {
+		ea := a.getItemBySlot(slot).ItemID != 0
+		eb := b.getItemBySlot(slot).ItemID != 0
+		if ea != eb {
+			t.Fatalf("finalizeSpawn armor slot %d roll not deterministic (a=%v b=%v)", slot, ea, eb)
+		}
+	}
+
+	// A baby never receives a spawn weapon (the createSpawnWeapon branch is else-if isAdult()).
+	babies, crossbows, weapons := 0, 0, 0
+	for i := 0; i < 400; i++ {
+		loop.regions[globalRegion].levelRandom = levelgen.NewLegacyRandomSource(int64(i) * 2654435761)
+		pg := loop.spawnPiglin(8.5, py, 8.5, false)
+		loop.withRegion(loop.regions[globalRegion], func() { loop.piglinFinalizeSpawn(pg, false) })
+		hasWeapon := pg.getItemBySlot(eqSlotMainHand).ItemID != 0
+		if pg.isBaby() {
+			babies++
+			if hasWeapon {
+				t.Fatal("a baby piglin got a spawn weapon (createSpawnWeapon is adult-only)")
+			}
+		} else if hasWeapon {
+			weapons++
+			if int32(pg.getItemBySlot(eqSlotMainHand).ItemID) == piglinCrossbowItem {
+				crossbows++
+			}
+		}
+	}
+	// ~20% babies (loose bounds to avoid flakiness).
+	if babies < 40 || babies > 130 {
+		t.Fatalf("baby rate off: %d/400 (want ~80 @ 0.2)", babies)
+	}
+	// Every non-baby got a weapon (setItemSlot(MAINHAND, createSpawnWeapon) always runs for an adult).
+	if weapons != 400-babies {
+		t.Fatalf("adults with a weapon = %d, want %d (all adults)", weapons, 400-babies)
+	}
+	// ~50% of weapons are crossbows.
+	if crossbows < weapons/4 || crossbows > 3*weapons/4 {
+		t.Fatalf("crossbow rate off: %d/%d weapons (want ~50%%)", crossbows, weapons)
+	}
+}
+
+// TestPiglinFinalizeSpawnStructureSkipsBabyWeapon: a STRUCTURE-reason spawn skips the baby/weapon block
+// (reason == STRUCTURE guard) but still rolls armor for an adult. Cite Piglin.finalizeSpawn (reason gate).
+func TestPiglinFinalizeSpawnStructureSkipsBabyWeapon(t *testing.T) {
+	loop, _, floorY := piglinLoop(t)
+	py := float64(floorY + 1)
+	for i := 0; i < 50; i++ {
+		loop.regions[globalRegion].levelRandom = levelgen.NewLegacyRandomSource(int64(5000+i) * 2654435761)
+		pg := loop.spawnPiglin(8.5, py, 8.5, false)
+		loop.withRegion(loop.regions[globalRegion], func() { loop.piglinFinalizeSpawn(pg, true) })
+		if pg.isBaby() {
+			t.Fatal("a STRUCTURE-reason piglin became a baby (the reason gate must skip the baby roll)")
+		}
+		if pg.getItemBySlot(eqSlotMainHand).ItemID != 0 {
+			t.Fatal("a STRUCTURE-reason piglin got a spawn weapon (the reason gate must skip createSpawnWeapon)")
+		}
+	}
+}
+
+// piglinArrowCount counts live arrow entities in the global region (the crossbow-fire check).
+func piglinArrowCount(loop *TickLoop) int {
+	n := 0
+	for _, e := range loop.regions[globalRegion].entities.byID {
+		if e.isArrow {
+			n++
+		}
+	}
+	return n
+}
+
+// TestPiglinCrossbowFires: a crossbow-armed adult piglin (piglinIsCrossbow) with a target in crossbow range
+// charges for chargeDuration(25), counts down the 20+nextInt(20) attackDelay, then fires an arrow and returns
+// to UNCHARGED. Cite CrossbowAttack.crossbowAttack + Piglin.performRangedAttack.
+func TestPiglinCrossbowFires(t *testing.T) {
+	loop, _, floorY := piglinLoop(t)
+	py := float64(floorY + 1)
+	target := combatTestPlayer(loop, 12.5, py, 8.5, 7070) // ~4 blocks -> in crossbow range (8), outside backup? (>5 no)
+	target.health = 20.0
+	pg := loop.spawnPiglin(8.5, py, 8.5, false)
+	pg.piglinIsCrossbow = true
+	pg.ai.attackTargetID = target.entityID
+
+	before := piglinArrowCount(loop)
+	fired := false
+	loop.withRegion(loop.regions[globalRegion], func() {
+		// chargeDuration 25 + attackDelay up to 39 + a few = plenty within 80 ticks.
+		for i := 0; i < 80 && !fired; i++ {
+			loop.piglinCrossbowAttackTick(pg, target)
+			if piglinArrowCount(loop) > before {
+				fired = true
+			}
+		}
+	})
+	if !fired {
+		t.Fatalf("crossbow piglin never fired an arrow in 80 ticks (state=%d charge=%d)", pg.piglinCrossbowState, pg.piglinCrossbowCharge)
+	}
+	if pg.piglinCrossbowState != 0 {
+		t.Fatalf("after firing, crossbow state = %d, want 0 (UNCHARGED)", pg.piglinCrossbowState)
+	}
+}
+
+// TestPiglinCrossbowChargesFirst: the crossbow piglin does NOT fire before the charge completes -- no arrow in
+// the first chargeDuration(25) ticks. Cite CrossbowAttack (CHARGING -> release at chargeDuration).
+func TestPiglinCrossbowChargesFirst(t *testing.T) {
+	loop, _, floorY := piglinLoop(t)
+	py := float64(floorY + 1)
+	target := combatTestPlayer(loop, 12.5, py, 8.5, 7071)
+	pg := loop.spawnPiglin(8.5, py, 8.5, false)
+	pg.piglinIsCrossbow = true
+	pg.ai.attackTargetID = target.entityID
+	before := piglinArrowCount(loop)
+	loop.withRegion(loop.regions[globalRegion], func() {
+		for i := 0; i < piglinCrossbowChargeDur; i++ {
+			loop.piglinCrossbowAttackTick(pg, target)
+		}
+	})
+	if piglinArrowCount(loop) != before {
+		t.Fatal("crossbow piglin fired during the charge window (must charge chargeDuration first)")
+	}
+}
+
+// TestPiglinPicksUpGoldAndAdmires: a dropped GOLD_INGOT near an adult piglin is picked into its offhand and
+// admired (ADMIRING_ITEM 119t). After the admire timer expires, the piglin auto-barters (drops a bartering
+// roll and clears the offhand). Cite PiglinAi.pickUpItem + admireGoldItem + StopHoldingItemIfNoLongerAdmiring.
+func TestPiglinPicksUpGoldAndAdmires(t *testing.T) {
+	loop, _, floorY := piglinLoop(t)
+	py := float64(floorY + 1)
+	pg := loop.spawnPiglin(8.5, py, 8.5, false)
+	// Drop a gold ingot at the piglin's feet (within the 1.0/0.5 pickup box), pickupDelay 0.
+	ie := NewItemEntity(loop.idAlloc.AllocID(), 8.5, py, 8.5, component.SlotData{Count: 2, ItemID: pk.VarInt(item.GoldIngot.ID)})
+	ie.pickupDelay = 0
+	loop.regions[globalRegion].entities.add(ie)
+
+	loop.withRegion(loop.regions[globalRegion], func() { loop.piglinItemPickupTick(pg) })
+	if slotIsEmpty(pg.piglinOffhandItem) {
+		t.Fatal("piglin did not pick up the dropped gold ingot into its offhand")
+	}
+	if int32(pg.piglinOffhandItem.ItemID) != piglinBarterItemID {
+		t.Fatalf("offhand item = %d, want GOLD_INGOT %d", pg.piglinOffhandItem.ItemID, piglinBarterItemID)
+	}
+	if pg.piglinAdmireTicks != piglinAdmireDuration {
+		t.Fatalf("admire timer = %d, want %d (ADMIRE_DURATION)", pg.piglinAdmireTicks, piglinAdmireDuration)
+	}
+	// The item entity shrank by 1 (removeOneItemFromItemEntity).
+	if ie.itemStack.Count != 1 {
+		t.Fatalf("dropped stack = %d after pickup, want 1", ie.itemStack.Count)
+	}
+
+	// Run out the admire timer -> auto-barter.
+	before := piglinItemEntityCount(loop)
+	loop.withRegion(loop.regions[globalRegion], func() {
+		for i := 0; i < piglinAdmireDuration; i++ {
+			if pg.piglinAdmireTicks > 0 {
+				pg.piglinAdmireTicks--
+			}
+		}
+		loop.piglinItemPickupTick(pg) // admire expired -> stopHoldingOffHandItem(true) barter
+	})
+	if !slotIsEmpty(pg.piglinOffhandItem) {
+		t.Fatal("piglin still holds the admired item after the admire timer expired (should barter)")
+	}
+	if piglinItemEntityCount(loop) <= before {
+		t.Fatal("no barter drop after the admire timer expired")
+	}
+}
+
+// TestPiglinIgnoresRepellent: a PIGLIN_REPELLENTS item (soul torch) is never picked up. Cite PiglinAi.wantsToPickup.
+func TestPiglinIgnoresRepellent(t *testing.T) {
+	loop, _, floorY := piglinLoop(t)
+	py := float64(floorY + 1)
+	pg := loop.spawnPiglin(8.5, py, 8.5, false)
+	// A PIGLIN_REPELLENTS member (data/tag piglin_repellents == {393, 1395, 1407} -- soul torch/lantern/campfire).
+	ie := NewItemEntity(loop.idAlloc.AllocID(), 8.5, py, 8.5, component.SlotData{Count: 1, ItemID: pk.VarInt(393)})
+	ie.pickupDelay = 0
+	loop.regions[globalRegion].entities.add(ie)
+	loop.withRegion(loop.regions[globalRegion], func() { loop.piglinItemPickupTick(pg) })
+	if !slotIsEmpty(pg.piglinOffhandItem) {
+		t.Fatal("piglin picked up a PIGLIN_REPELLENTS item (must ignore repellents)")
+	}
+}
+
+// TestPiglinConversionAppliesNausea: the ZombifiedPiglin produced by piglinFinishConversion carries NAUSEA
+// 200t (AbstractPiglin.finishConversion AfterConversion callback). Cite AbstractPiglin.finishConversion.
+func TestPiglinConversionAppliesNausea(t *testing.T) {
+	loop, _, floorY := piglinLoop(t)
+	py := float64(floorY + 1)
+	pg := loop.spawnPiglin(8.5, py, 8.5, false)
+	var zp *Entity
+	loop.withRegion(loop.regions[globalRegion], func() { zp = loop.piglinFinishConversion(pg) })
+	if zp == nil {
+		t.Fatal("piglinFinishConversion returned nil")
+	}
+	if !entityHasEffect(zp, "minecraft:nausea") {
+		t.Fatal("converted zombified piglin has no NAUSEA effect (finishConversion applies NAUSEA 200)")
+	}
+}
+
+// TestPiglinBarterThrowsTowardPlayer: the barter drop is thrown TOWARD the nearest visible player (a nonzero
+// velocity aimed at the player), not plopped at the piglin's feet. Cite PiglinAi.throwItems + BehaviorUtils.throwItem.
+func TestPiglinBarterThrowsTowardPlayer(t *testing.T) {
+	loop, _, floorY := piglinLoop(t)
+	py := float64(floorY + 1)
+	pg := loop.spawnPiglin(8.5, py, 8.5, false)
+	// A player to the +X side -> the thrown item should carry a +X velocity component.
+	p := combatTestPlayer(loop, 13.5, py, 8.5, 7080)
+	inv := ensureInventory(p)
+	inv.set(heldWindowSlot(inv.heldSlot), component.SlotData{Count: 1, ItemID: pk.VarInt(item.GoldIngot.ID)})
+
+	var thrown *Entity
+	loop.withRegion(loop.regions[globalRegion], func() {
+		loop.piglinMobInteract(p, pg)
+		for _, e := range loop.regions[globalRegion].entities.byID {
+			if e.isItem && (e.vx != 0 || e.vz != 0) {
+				thrown = e
+				break
+			}
+		}
+	})
+	if thrown == nil {
+		t.Fatal("barter item was not thrown with a velocity (aim missing)")
+	}
+	if thrown.vx <= 0 {
+		t.Fatalf("thrown item vx = %v, want > 0 (toward the +X player)", thrown.vx)
+	}
+}
+
+// TestPiglinAvoidsZombified: an idle adult piglin within 6 blocks of a zombified piglin arms the AVOID flee
+// (AVOID_TARGET = the zombified, AVOID_ZOMBIFIED_DURATION 5-7s) and retreats away from it. A zombified piglin
+// beyond 6 blocks does not trigger the avoid. Cite PiglinAi.avoidZombified + isNearZombified.
+func TestPiglinAvoidsZombified(t *testing.T) {
+	loop, _, floorY := piglinLoop(t)
+	py := float64(floorY + 1)
+	pg := loop.spawnPiglin(8.5, py, 8.5, false)
+	// A zombified piglin 3 blocks away (within 6) -> arm the avoid.
+	zp := loop.spawnZombifiedPiglin(11.5, py, 8.5)
+	loop.withRegion(loop.regions[globalRegion], func() { loop.piglinAvoidZombifiedTick(pg) })
+	if pg.piglinAvoidTicks < piglinAvoidZombifiedDurMin || pg.piglinAvoidTicks > piglinAvoidZombifiedDurMin+piglinAvoidZombifiedDurSpan {
+		t.Fatalf("avoid timer = %d, want %d..%d (AVOID_ZOMBIFIED_DURATION)", pg.piglinAvoidTicks, piglinAvoidZombifiedDurMin, piglinAvoidZombifiedDurMin+piglinAvoidZombifiedDurSpan)
+	}
+	if pg.piglinAvoidTargetID != zp.id {
+		t.Fatalf("avoid target = %d, want the zombified piglin %d", pg.piglinAvoidTargetID, zp.id)
+	}
+	// The flee walks AWAY from the zombified piglin (want-target on the -X side, opposite the +X zombified).
+	loop.withRegion(loop.regions[globalRegion], func() { loop.piglinAvoidTick(pg) })
+	if pg.ai.wantX >= pg.x {
+		t.Fatalf("flee want-target x = %v, want < piglin x %v (away from the +X zombified)", pg.ai.wantX, pg.x)
+	}
+
+	// A zombified piglin far away (>6) does not arm a fresh piglin.
+	pg2 := loop.spawnPiglin(40.5, py, 40.5, false)
+	_ = loop.spawnZombifiedPiglin(60.5, py, 60.5)
+	loop.withRegion(loop.regions[globalRegion], func() { loop.piglinAvoidZombifiedTick(pg2) })
+	if pg2.piglinAvoidTicks != 0 {
+		t.Fatalf("far-away zombified armed the avoid (timer=%d, want 0)", pg2.piglinAvoidTicks)
 	}
 }

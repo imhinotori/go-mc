@@ -22,12 +22,16 @@ package server
 
 import (
 	"bytes"
+	"math"
 	"math/rand/v2"
+
+	pk "github.com/imhinotori/sulfur/net/packet"
 
 	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/level/attribute"
 	"github.com/imhinotori/sulfur/level/component"
 	"github.com/imhinotori/sulfur/level/loot"
+	"github.com/imhinotori/sulfur/world/levelgen"
 )
 
 // Piglin constants (VERIFIED javap Piglin + AbstractPiglin + PiglinAi this session).
@@ -36,6 +40,11 @@ const (
 	piglinConversionTime  = 300 // AbstractPiglin.CONVERSION_TIME == 300 (the GT 300 finishConversion gate)
 	piglinMeleeAttackTime = 20  // MeleeAttackGoal.resetAttackCooldown: adjustedTickDelay(20) between swings
 	piglinBarterItemID    = 936 // PiglinAi.BARTERING_ITEM == Items.GOLD_INGOT (data/item id 936)
+
+	piglinAdmiringDisabledTime = 400 // PiglinAi.wasHurtBy: ADMIRING_DISABLED setMemoryWithExpiry 400l (a player hit)
+	piglinBabyAvoidTime        = 100 // PiglinAi.wasHurtBy: baby AVOID_TARGET setMemoryWithExpiry 100l
+	piglinMaybeRetaliateRange  = 4.0 // PiglinAi.maybeRetaliate: isOtherTargetMuchFurtherAwayThanCurrentAttackTarget(4.0)
+	piglinAngerBroadcastRange  = 16.0 // getAdultPiglins == NEARBY_ADULT_PIGLINS (NearestLivingEntities FOLLOW_RANGE 16 scan)
 )
 
 
@@ -129,12 +138,42 @@ func (t *TickLoop) piglinBrainTick(e *Entity) {
 	if e.brain != nil {
 		e.brain.tick(t, e, t.GameTime())
 	}
+	// Tick down the boolean-with-expiry memories (setMemoryWithExpiry decrements each brain tick; on 0 the
+	// memory is erased). ADMIRING_DISABLED gates the barter; AVOID_TARGET gates the baby flee. Cite Brain.tick
+	// expiring memories + PiglinAi.wasHurtBy (400l / 100l).
+	if e.piglinAdmiringDisabled > 0 {
+		e.piglinAdmiringDisabled--
+	}
+	if e.piglinAvoidTicks > 0 {
+		e.piglinAvoidTicks--
+		if e.piglinAvoidTicks == 0 {
+			e.piglinAvoidTargetID = 0 // memory expired -> AVOID_TARGET erased
+		}
+	}
+	if e.piglinAdmireTicks > 0 {
+		e.piglinAdmireTicks--
+	}
+	// AVOID activity (reduced): while a baby is fleeing an avoid target (hit while a baby), it retreats and
+	// does NOT hunt (RetreatFromNearestHostile / avoidZombified shape). Cite PiglinAi.initRetreatActivity.
+	if e.piglinAvoidTicks > 0 {
+		t.piglinAvoidTick(e)
+		return
+	}
 	// The FIGHT-activity melee (reduced): an ADULT piglin acquires the nearest non-gold-armored player and
-	// melees when adjacent. A baby does NOT hunt (canHunt / the adult gate), so this is adult-only.
+	// melees when adjacent. A baby does NOT hunt (canHunt / the adult gate), so this is adult-only. An
+	// already-angry piglin (ANGRY_AT set by wasHurtBy) keeps its retaliation target even if that player wears
+	// gold -- the anger overrides the sensor neutrality (piglinAcquireNearestPlayer preserves a live target).
 	if e.piglinIsAdult() {
 		t.piglinAcquireNearestPlayer(e)
 		t.piglinMeleeGoalTick(e)
 	}
+	// IDLE-activity avoidZombified: arm the AVOID flee if a zombified piglin/zoglin is within 6 blocks (runs
+	// before the pickup/idle work; if it arms, the next tick's AVOID branch takes over). Cite PiglinAi.avoidZombified.
+	t.piglinAvoidZombifiedTick(e)
+	// Mob.aiStep item-collection (canPickUpLoot): the piglin picks up dropped PIGLIN_LOVED gold, admires it,
+	// then auto-barters when the admire timer expires. Runs for adults + babies (wantsToPickup gates babies).
+	// Cite Mob.aiStep + PiglinAi.pickUpItem/wantsToPickup + StopHoldingItemIfNoLongerAdmiring.
+	t.piglinItemPickupTick(e)
 	// super.customServerAiStep (AbstractPiglin): the off-nether zombification timer.
 	t.piglinZombificationTick(e)
 }
@@ -205,6 +244,10 @@ func (t *TickLoop) piglinFinishConversion(e *Entity) *Entity {
 		zp.ai = &mobAI{}
 		reseedMobAI(zp.ai, zp.id)
 	}
+	// AbstractPiglin.finishConversion AfterConversion callback: the new ZombifiedPiglin gets NAUSEA 200t
+	// (lambda$finishConversion$0: addEffect(new MobEffectInstance(NAUSEA, 200))). Applied for real via the
+	// entity-effect seam. Cite AbstractPiglin.finishConversion + MobEffects.NAUSEA.
+	t.addEntityEffect(zp, "minecraft:nausea", 200, 0)
 	return zp
 }
 
@@ -233,6 +276,23 @@ func (t *TickLoop) piglinAcquireNearestPlayer(e *Entity) {
 	}
 	followRange := e.getAttributeValue(attribute.FollowRange) // createMobAttributes default 16.0
 	rangeSqr := followRange * followRange
+	// ANGRY_AT (wasHurtBy retaliation) overrides the sensor neutrality: an angered piglin fights its attacker
+	// even if that player wears gold. While the ANGRY_AT memory is live (piglinAngerEnd not yet reached) and the
+	// angered player is alive, keep hunting it (StartHuntingBehavior reads ANGRY_AT, not the gold-safe memory).
+	// Cite PiglinAi.setAngerTarget (ANGRY_AT 600l) + StartHuntingBehavior.
+	if e.piglinAngeredAt != 0 {
+		ap := t.playerByEntityID(e.piglinAngeredAt)
+		if ap == nil || ap.dead || t.gametime >= e.piglinAngerEnd {
+			e.piglinAngeredAt = 0 // ANGRY_AT expired / gone
+			e.piglinAngerEnd = 0
+			if e.ai.attackTargetID != 0 && (ap == nil || ap.dead || e.ai.attackTargetID == e.piglinAngeredAt) {
+				e.ai.attackTargetID = 0
+			}
+		} else {
+			e.ai.attackTargetID = ap.entityID // hunt the angered player regardless of gold armor
+			return
+		}
+	}
 	// Drop a current target that died, went out of range, OR started wearing gold (the neutrality applies
 	// mid-fight too -- the sensor stops filling the not-wearing-gold memory).
 	if e.ai.attackTargetID != 0 {
@@ -293,6 +353,15 @@ func (t *TickLoop) piglinMeleeGoalTick(e *Entity) {
 	}
 	target := t.piglinTarget(e)
 	if target == nil {
+		// StopAttackingIfTargetInvalid also resets a mid-charge crossbow (stop(): stopUsingItem).
+		e.piglinCrossbowState = 0
+		e.piglinCrossbowCharge = 0
+		return
+	}
+	// FIGHT-activity weapon routing: a crossbow piglin uses the CrossbowAttack behavior (charge + ranged fire
+	// + BackUpIfTooClose), NOT the melee swing. Cite PiglinAi.initFightActivity (CrossbowAttack + MeleeAttack).
+	if e.piglinIsCrossbow {
+		t.piglinCrossbowAttackTick(e, target)
 		return
 	}
 	// MeleeAttack.canAttack / Mob.isWithinMeleeAttackRange: the inflated-attack-box vs target-hitbox
@@ -373,8 +442,10 @@ func (t *TickLoop) piglinBarter(e *Entity) []component.SlotData {
 		if stack.Count <= 0 {
 			continue
 		}
-		// BehaviorUtils.throwItem: spawn the item entity at the piglin. OWNER-region routing (dropMobLoot seam).
-		ie := NewItemEntity(t.idAlloc.AllocID(), e.x, e.y+e.height/2.0, e.z, stack)
+		// throwItems -> throwItemsTowardPlayer/RandomPos -> throwItemsTowardPos -> BehaviorUtils.throwItem:
+		// spawn at (piglin.x, eyeY - 0.3, piglin.z) with a throw velocity toward the target position + (0,1,0),
+		// = normalize(targetPos - piglin.position()) * (0.3, 0.3, 0.3). OWNER-region routing (dropMobLoot seam).
+		ie := t.piglinThrowItem(e, stack)
 		owner := t.regionForEntity(e)
 		if owner == nil {
 			owner = t.cur()
@@ -385,4 +456,527 @@ func (t *TickLoop) piglinBarter(e *Entity) []component.SlotData {
 		dropped = append(dropped, stack)
 	}
 	return dropped
+}
+
+// piglinThrowItem ports throwItems -> throwItemsTowardPos -> BehaviorUtils.throwItem for one stack. The throw
+// target is the NEAREST_VISIBLE_PLAYER position + (0,1,0) if a player is nearby (throwItemsTowardPlayer), else
+// a random nearby pos (throwItemsTowardRandomPos, v1-reduced to the piglin's own position so the item plops with
+// no aim). throwItem: spawn at (x, eyeY - 0.3, z), delta = normalize(targetPos - piglin.position) * 0.3 per
+// axis, setDefaultPickUpDelay. Cite PiglinAi.throwItems/throwItemsTowardPos + BehaviorUtils.throwItem.
+func (t *TickLoop) piglinThrowItem(e *Entity, stack component.SlotData) *Entity {
+	spawnY := e.y + e.eyeHeightForArrow() - 0.30000001192092896 // getEyeY() - 0.3f
+	ie := NewItemEntity(t.idAlloc.AllocID(), e.x, spawnY, e.z, stack)
+	// throwItems: target the nearest visible player (position + (0,1,0)); else no aim (feet).
+	target := t.piglinNearestVisiblePlayer(e)
+	if target != nil {
+		tx := target.x - e.x
+		ty := (target.y + 1.0) - e.y // pos.add(0, 1, 0) relative to piglin.position() (feet y)
+		tz := target.z - e.z
+		nx, ny, nz := normalizeVec3(tx, ty, tz)
+		ie.vx = nx * 0.30000001192092896 // multiply(0.3, 0.3, 0.3)
+		ie.vy = ny * 0.30000001192092896
+		ie.vz = nz * 0.30000001192092896
+	}
+	ie.pickupDelay = itemDefaultPickupDelay // setDefaultPickUpDelay
+	return ie
+}
+
+// piglinNearestVisiblePlayer reduces the NEAREST_VISIBLE_PLAYER memory read to a nearest-live-player scan
+// within FOLLOW_RANGE. Cite PiglinAi.throwItems (NEAREST_VISIBLE_PLAYER).
+func (t *TickLoop) piglinNearestVisiblePlayer(e *Entity) *tickPlayer {
+	followRange := e.getAttributeValue(attribute.FollowRange)
+	rangeSqr := followRange * followRange
+	var best *tickPlayer
+	bestSq := rangeSqr
+	for _, p := range t.players {
+		if p == nil || p.dead {
+			continue
+		}
+		dsq := distanceToSqrPlayer(p, e)
+		if dsq <= bestSq {
+			bestSq = dsq
+			best = p
+		}
+	}
+	return best
+}
+
+// piglinWasHurtBy ports Piglin.hurtServer -> PiglinAi.wasHurtBy(level, piglin, attacker). It runs from the
+// applyDamageEntity piglin hook AFTER a landed hit (flag2) with a LivingEntity attacker (src.attacker != 0).
+// Vanilla flow (javap PiglinAi.wasHurtBy): if attacker is a Piglin return; if holding offhand item ->
+// stopHoldingOffHandItem(false); erase CELEBRATE_LOCATION/DANCING/ADMIRING_ITEM; if attacker is a Player ->
+// ADMIRING_DISABLED true 400L; if avoid-target == attacker erase it; if isBaby() -> AVOID_TARGET attacker 100L
+// + (attackable ? broadcastAngerTarget); else if HOGLIN outnumber -> retreat; else maybeRetaliate. The attacker
+// is always a Player here (src.attacker maps to a tickPlayer). Cite PiglinAi.wasHurtBy.
+func (t *TickLoop) piglinWasHurtBy(e *Entity, src damageSource) {
+	attacker := t.playerByEntityID(src.attacker)
+	if attacker == nil {
+		return
+	}
+	if !slotIsEmpty(e.piglinOffhandItem) {
+		t.piglinStopHoldingOffHandItem(e, false) // stopHoldingOffHandItem(level, piglin, false)
+	}
+	e.piglinAdmireTicks = 0                                  // erase ADMIRING_ITEM (celebrate/dance are cues)
+	e.piglinAdmiringDisabled = piglinAdmiringDisabledTime    // Player attacker -> ADMIRING_DISABLED 400L
+	if e.piglinAvoidTargetID == src.attacker {              // getAvoidTarget == attacker -> erase AVOID_TARGET
+		e.piglinAvoidTicks = 0
+		e.piglinAvoidTargetID = 0
+	}
+	if e.isBaby() {
+		e.piglinAvoidTicks = piglinBabyAvoidTime // AVOID_TARGET attacker 100L
+		e.piglinAvoidTargetID = src.attacker
+		if t.piglinIsEntityAttackable(attacker) {
+			t.piglinBroadcastAngerTarget(e, attacker) // rally the adult pack
+		}
+		return
+	}
+	t.piglinMaybeRetaliate(e, attacker)
+}
+
+// piglinMaybeRetaliate ports PiglinAi.maybeRetaliate: if AVOID active return; if !attackable return; if the new
+// target is much further than the current attack target (> +4.0) return; UNIVERSAL_ANGER (default false) ->
+// else branch: setAngerTarget + broadcastAngerTarget. Cite PiglinAi.maybeRetaliate.
+func (t *TickLoop) piglinMaybeRetaliate(e *Entity, attacker *tickPlayer) {
+	if e.piglinAvoidTicks > 0 {
+		return
+	}
+	if !t.piglinIsEntityAttackable(attacker) {
+		return
+	}
+	if cur := t.piglinTarget(e); cur != nil {
+		curD := math.Sqrt(distanceToSqrPlayer(cur, e))
+		newD := math.Sqrt(distanceToSqrPlayer(attacker, e))
+		if newD > curD+piglinMaybeRetaliateRange {
+			return
+		}
+	}
+	t.piglinSetAngerTarget(e, attacker)
+	t.piglinBroadcastAngerTarget(e, attacker)
+}
+
+// piglinSetAngerTarget ports PiglinAi.setAngerTarget: if !attackable return; setMemoryWithExpiry(ANGRY_AT,
+// attacker, 600L). ANGRY_AT ignores the gold-safe armor -> a gold-armored attacker is still fought. Reduced to
+// piglinAngeredAt + 600t expiry, seeding the FIGHT attackTargetID. Cite PiglinAi.setAngerTarget (ANGRY_AT 600l).
+func (t *TickLoop) piglinSetAngerTarget(e *Entity, attacker *tickPlayer) {
+	if !t.piglinIsEntityAttackable(attacker) {
+		return
+	}
+	e.piglinAngeredAt = attacker.entityID
+	e.piglinAngerEnd = t.gametime + 600
+	if e.ai != nil {
+		e.ai.attackTargetID = attacker.entityID
+	}
+}
+
+// piglinBroadcastAngerTarget ports PiglinAi.broadcastAngerTarget: getAdultPiglins(piglin).forEach(other ->
+// setAngerTargetIfCloserThanCurrent(other, attacker)). getAdultPiglins == NEARBY_ADULT_PIGLINS (the sensor's
+// FOLLOW_RANGE 16 adult scan). Reduced to a 16-block region scan -- the anger PACK spread. Cite PiglinAi.broadcastAngerTarget.
+func (t *TickLoop) piglinBroadcastAngerTarget(e *Entity, attacker *tickPlayer) {
+	owner := t.regionForEntity(e)
+	if owner == nil {
+		owner = t.cur()
+	}
+	if owner == nil || owner.entities == nil {
+		return
+	}
+	for _, other := range owner.entities.all() {
+		if other == nil || other == e || other.dead || !other.isPiglin || !other.piglinIsAdult() {
+			continue
+		}
+		if math.Abs(other.x-e.x) > piglinAngerBroadcastRange ||
+			math.Abs(other.y-e.y) > piglinAngerBroadcastRange ||
+			math.Abs(other.z-e.z) > piglinAngerBroadcastRange {
+			continue
+		}
+		t.piglinSetAngerTargetIfCloserThanCurrent(other, attacker)
+	}
+}
+
+// piglinSetAngerTargetIfCloserThanCurrent ports PiglinAi.setAngerTargetIfCloserThanCurrent: keep the current
+// ANGRY_AT unless the candidate is strictly nearer, then setAngerTarget. Cite PiglinAi.setAngerTargetIfCloserThanCurrent.
+func (t *TickLoop) piglinSetAngerTargetIfCloserThanCurrent(other *Entity, attacker *tickPlayer) {
+	if other.piglinAngeredAt != 0 && t.gametime < other.piglinAngerEnd {
+		cur := t.playerByEntityID(other.piglinAngeredAt)
+		if cur != nil && !cur.dead {
+			if distanceToSqrPlayer(cur, other) <= distanceToSqrPlayer(attacker, other) {
+				return
+			}
+		}
+	}
+	t.piglinSetAngerTarget(other, attacker)
+}
+
+// piglinIsEntityAttackable ports Sensor.isEntityAttackableIgnoringLineOfSight for a player target: alive + a
+// valid candidate. The gold-safe armor check is NOT part of this predicate (separate sensor memory) -- which is
+// why a gold-armored player is still angered. v1 reduces to alive. Cite Sensor.isEntityAttackableIgnoringLineOfSight.
+func (t *TickLoop) piglinIsEntityAttackable(p *tickPlayer) bool {
+	return p != nil && !p.dead
+}
+
+// piglinAvoidTick ports the AVOID activity (RetreatFromNearestHostile / baby-flee): walk AWAY from the avoid
+// target at retreat speed 1.0. Reduced to a want-target proxy pointing directly away. Cite PiglinAi.initRetreatActivity.
+func (t *TickLoop) piglinAvoidTick(e *Entity) {
+	if e.ai == nil || e.piglinAvoidTargetID == 0 {
+		return
+	}
+	e.ai.attackTargetID = 0 // a fleeing piglin has no FIGHT target
+	// The AVOID_TARGET is a player (baby-flee / retaliation) OR a mob (avoidZombified). Resolve either.
+	var tx, tz float64
+	var alive bool
+	if p := t.playerByEntityID(e.piglinAvoidTargetID); p != nil && !p.dead {
+		tx, tz, alive = p.x, p.z, true
+	} else if owner := t.regionForEntity(e); owner != nil && owner.entities != nil {
+		if m, ok := owner.entities.get(e.piglinAvoidTargetID); ok && m != nil && !m.dead {
+			tx, tz, alive = m.x, m.z, true
+		}
+	}
+	if !alive {
+		e.piglinAvoidTicks = 0
+		e.piglinAvoidTargetID = 0
+		return
+	}
+	dx := e.x - tx
+	dz := e.z - tz
+	e.ai.setWantTargetMod(e.x+dx, e.y, e.z+dz, 1.0)
+}
+
+// piglinStopHoldingOffHandItem ports PiglinAi.stopHoldingOffHandItem(level, piglin, shouldBarter): drop or
+// barter the held offhand item. shouldBarter=false throws it at the feet with no roll; true routes the barter.
+// Cite PiglinAi.stopHoldingOffHandItem.
+func (t *TickLoop) piglinStopHoldingOffHandItem(e *Entity, shouldBarter bool) {
+	held := e.piglinOffhandItem
+	e.piglinOffhandItem = component.SlotData{}
+	if shouldBarter {
+		t.piglinBarter(e)
+		return
+	}
+	if slotIsEmpty(held) || held.Count <= 0 {
+		return
+	}
+	ie := NewItemEntity(t.idAlloc.AllocID(), e.x, e.y+e.height/2.0, e.z, held)
+	owner := t.regionForEntity(e)
+	if owner == nil {
+		owner = t.cur()
+	}
+	if owner != nil && owner.entities != nil {
+		owner.entities.add(ie)
+	}
+}
+
+// Piglin finalizeSpawn item IDs (VERIFIED data/item/item.go).
+const (
+	piglinGoldenHelmet     = 1002 // Items.GOLDEN_HELMET
+	piglinGoldenChestplate = 1003 // Items.GOLDEN_CHESTPLATE
+	piglinGoldenLeggings   = 1004 // Items.GOLDEN_LEGGINGS
+	piglinGoldenBoots      = 1005 // Items.GOLDEN_BOOTS
+	piglinCrossbowItem     = 1370 // Items.CROSSBOW
+	piglinGoldenSword      = 954  // Items.GOLDEN_SWORD
+	piglinGoldenSpear      = 1330 // Items.GOLDEN_SPEAR
+	piglinTimeBetweenHuntsMin  = 600  // TIME_BETWEEN_HUNTS rangeOfSeconds(30,120) -> UniformInt(600,2400)
+	piglinTimeBetweenHuntsSpan = 1801 // 2400 - 600 + 1
+)
+
+// piglinFinalizeSpawn ports Piglin.finalizeSpawn 1:1 with the EXACT RNG draw order. It performs the natural-
+// spawn baby/weapon/armor rolls that spawnPiglin(baby) skips (spawnPiglin takes an explicit baby with no
+// rolls). Wire it at a natural/structure spawn seam AFTER spawnPiglin. The draw order (javap):
+//   RandomSource random = level.getRandom();                                      // the LEVEL random
+//   if (reason != STRUCTURE) {
+//       if (random.nextFloat() < 0.2f) setBaby(true);                             // LEVEL nextFloat
+//       else if (isAdult()) setItemSlot(MAINHAND, createSpawnWeapon());           // createSpawnWeapon -> ENTITY random
+//   }
+//   PiglinAi.initMemories(this, random);                                          // LEVEL nextInt(1801)
+//   populateDefaultEquipmentSlots(random, difficulty);                            // if adult: 4x LEVEL nextFloat
+//   populateDefaultEquipmentEnchantments(...);                                    // (cited no-op v1)
+// createSpawnWeapon (Piglin.createSpawnWeapon) draws on THIS.random (the entity RNG), NOT the level random:
+//   if (this.random.nextFloat() < 0.5) CROSSBOW; else (this.random.nextInt(10)==0 ? GOLDEN_SPEAR : GOLDEN_SWORD)
+// maybeWearArmor: each slot rolls the LEVEL random.nextFloat() < 0.1f. Cite Piglin.finalizeSpawn +
+// createSpawnWeapon + populateDefaultEquipmentSlots + maybeWearArmor + PiglinAi.initMemories.
+func (t *TickLoop) piglinFinalizeSpawn(e *Entity, reasonStructure bool) {
+	lr := t.regionForEntity(e)
+	if lr == nil {
+		lr = t.cur()
+	}
+	if lr == nil || lr.levelRandom == nil || e.ai == nil || e.ai.rng == nil {
+		return
+	}
+	rand := lr.levelRandom
+	if !reasonStructure {
+		if rand.NextFloat() < 0.2 { // random.nextFloat() < 0.2f -> setBaby(true)
+			e.breedAge = -1 // setBaby(true)
+		} else if e.piglinIsAdult() {
+			// setItemSlot(MAINHAND, createSpawnWeapon()) -- createSpawnWeapon draws the ENTITY random.
+			e.setItemSlot(eqSlotMainHand, piglinCreateSpawnWeapon(e))
+		}
+	}
+	// PiglinAi.initMemories: TIME_BETWEEN_HUNTS.sample(random) == 600 + nextInt(1801) (HUNTED_RECENTLY expiry).
+	_ = piglinTimeBetweenHuntsMin + rand.NextIntN(piglinTimeBetweenHuntsSpan)
+	// populateDefaultEquipmentSlots: if adult, roll each of HEAD/CHEST/LEGS/FEET at nextFloat() < 0.1f.
+	if e.piglinIsAdult() {
+		piglinMaybeWearArmor(e, rand, eqSlotHead, piglinGoldenHelmet)
+		piglinMaybeWearArmor(e, rand, eqSlotChest, piglinGoldenChestplate)
+		piglinMaybeWearArmor(e, rand, eqSlotLegs, piglinGoldenLeggings)
+		piglinMaybeWearArmor(e, rand, eqSlotFeet, piglinGoldenBoots)
+	}
+	// If the mainhand is a crossbow, mark the piglin crossbow-armed (the FIGHT CrossbowAttack path).
+	if int32(e.getItemBySlot(eqSlotMainHand).ItemID) == piglinCrossbowItem {
+		e.piglinIsCrossbow = true
+	}
+	// A baby DATA_BABY_ID render entry (the same seam spawnPiglin uses) -- refresh if the baby roll flipped it.
+	if e.isBaby() && len(e.metadata) == 0 {
+		var buf bytes.Buffer
+		_, _ = babyDataEntry(true).WriteTo(&buf)
+		e.metadata = append(e.metadata, buf.Bytes()...)
+	}
+}
+
+// piglinCreateSpawnWeapon ports Piglin.createSpawnWeapon (draws the ENTITY random): nextFloat() < 0.5 ->
+// CROSSBOW; else nextInt(10) == 0 -> GOLDEN_SPEAR else GOLDEN_SWORD. Cite Piglin.createSpawnWeapon.
+func piglinCreateSpawnWeapon(e *Entity) component.SlotData {
+	if e.ai.rng.nextFloat() < 0.5 {
+		return component.SlotData{Count: 1, ItemID: piglinCrossbowItem}
+	}
+	if e.ai.rng.nextInt(10) == 0 {
+		return component.SlotData{Count: 1, ItemID: piglinGoldenSpear}
+	}
+	return component.SlotData{Count: 1, ItemID: piglinGoldenSword}
+}
+
+// piglinMaybeWearArmor ports Piglin.maybeWearArmor(slot, stack, random): if random.nextFloat() < 0.1f
+// setItemSlot(slot, stack). Cite Piglin.maybeWearArmor.
+func piglinMaybeWearArmor(e *Entity, rand *levelgen.LegacyRandomSource, slot int, itemID int32) {
+	if rand.NextFloat() < 0.1 {
+		e.setItemSlot(slot, component.SlotData{Count: 1, ItemID: pk.VarInt(itemID)})
+	}
+}
+
+// Piglin crossbow constants (VERIFIED javap CrossbowAttack + CrossbowItem + Piglin.performRangedAttack).
+const (
+	piglinCrossbowChargeDur     = 25  // CrossbowItem.getChargeDuration default (1.25f*20; no Quick Charge)
+	piglinCrossbowRange         = 8.0 // isWithinAttackRange: crossbow getDefaultProjectileRange 8 - padding 0
+	piglinBackUpIfTooCloseRange = 5   // BackUpIfTooClose.create(5, 0.75f) -- closerThan(5) triggers the back-up
+	piglinBackUpSpeed           = 0.75
+)
+
+// piglinCrossbowAttackTick ports the CrossbowAttack behavior state machine (javap CrossbowAttack.crossbowAttack)
+// plus the FIGHT BackUpIfTooClose(5, 0.75) that runs alongside it. Start condition (checkExtraStartConditions):
+// isHolding(CROSSBOW) && canSee(target) && isWithinAttackRange(mob, target, 0). The state machine (drawn on the
+// ENTITY random, the Mob.getRandom() the performCrossbowAttack shares):
+//   UNCHARGED       -> startUsingItem; CHARGING.
+//   CHARGING        -> ++ticksUsingItem; if >= chargeDuration(25) release; CHARGED; attackDelay = 20+nextInt(20).
+//   CHARGED         -> --attackDelay; if 0 READY_TO_ATTACK.
+//   READY_TO_ATTACK -> performRangedAttack(target, 1.0) [Piglin ignores power -> performCrossbowAttack(this,1.6)]; UNCHARGED.
+// The lookAtTarget(mob, target) (LOOK_TARGET) each tick is reduced to the want-look proxy. Cite CrossbowAttack.
+func (t *TickLoop) piglinCrossbowAttackTick(e *Entity, target *tickPlayer) {
+	// BackUpIfTooClose(5, 0.75): if the attack target is within 5 blocks, walk directly away at 0.75 speed
+	// (SetWalkTargetAwayFrom shape). Runs regardless of the charge state (a separate FIGHT behavior). Cite
+	// BackUpIfTooClose.create(5, 0.75f).
+	distSq := distanceToSqrPlayer(target, e)
+	if distSq < float64(piglinBackUpIfTooCloseRange*piglinBackUpIfTooCloseRange) {
+		dx := e.x - target.x
+		dz := e.z - target.z
+		if e.ai != nil {
+			e.ai.setWantTargetMod(e.x+dx, e.y, e.z+dz, piglinBackUpSpeed)
+		}
+	}
+	// checkExtraStartConditions: within crossbow range (closerThan(8)). Out of range -> keep the FIGHT
+	// SetWalkTargetFromAttackTargetIfTargetOutOfReach(1.0) approach and hold the charge state.
+	if distSq > piglinCrossbowRange*piglinCrossbowRange {
+		if e.ai != nil {
+			e.ai.setWantTargetMod(target.x, target.y, target.z, 1.0)
+		}
+		return
+	}
+	r := mobRandom(e)
+	switch e.piglinCrossbowState {
+	case 0: // UNCHARGED -> startUsingItem; CHARGING
+		e.piglinCrossbowCharge = 0
+		e.piglinCrossbowState = 1
+	case 1: // CHARGING
+		e.piglinCrossbowCharge++ // getTicksUsingItem()
+		if e.piglinCrossbowCharge >= piglinCrossbowChargeDur {
+			e.piglinCrossbowState = 2                        // release -> CHARGED
+			e.piglinCrossbowAttackDelay = 20 + r.nextInt(20) // attackDelay = 20 + nextInt(20)
+		}
+	case 2: // CHARGED -> --attackDelay; ==0 -> READY_TO_ATTACK
+		e.piglinCrossbowAttackDelay--
+		if e.piglinCrossbowAttackDelay <= 0 {
+			e.piglinCrossbowState = 3
+		}
+	case 3: // READY_TO_ATTACK -> fire; UNCHARGED
+		t.performCrossbowAttack(e, target) // Piglin.performRangedAttack -> performCrossbowAttack(this, 1.6)
+		e.piglinCrossbowState = 0
+	}
+}
+
+// Piglin item-pickup / admire constants (VERIFIED javap PiglinAi + admireGoldItem + item ids).
+const (
+	piglinAdmireDuration = 119 // admireGoldItem: ADMIRING_ITEM setMemoryWithExpiry 119l (ADMIRE_DURATION)
+	piglinGoldNugget     = 935 // Items.GOLD_NUGGET (isBarterCurrency is GOLD_INGOT; GOLD_NUGGET goes to inventory)
+)
+
+// piglinItemPickupTick ports Mob.aiStep's item-collection scan gated by PiglinAi.wantsToPickup + the pickUpItem
+// handler for the GOLD path. An adult (or non-baby-ignored) piglin near a dropped PIGLIN_LOVED item that it
+// wants to pick up takes it into its offhand and starts admiring (admireGoldItem: ADMIRING_ITEM 119t). When the
+// admire timer expires, StopHoldingItemIfNoLongerAdmiring fires stopHoldingOffHandItem(true) -> the barter. This
+// is the observable "drop gold near a piglin -> it picks it up, admires, then auto-barters" flow. The full
+// wantsToPickup food/equip branches are cite-deferred; the LOVED (gold) path is ported. Cite Mob.aiStep item
+// scan + PiglinAi.wantsToPickup + PiglinAi.pickUpItem + holdInOffhand + admireGoldItem + StopHoldingItemIfNoLongerAdmiring.
+func (t *TickLoop) piglinItemPickupTick(e *Entity) {
+	// StopHoldingItemIfNoLongerAdmiring (CORE): holding an offhand item AND no longer admiring -> barter it.
+	if !slotIsEmpty(e.piglinOffhandItem) && e.piglinAdmireTicks <= 0 {
+		t.piglinStopHoldingOffHandItem(e, true) // stopHoldingOffHandItem(level, piglin, true) -> throwItems barter
+		return
+	}
+	// Already holding + admiring -> do not pick up another (isNotHoldingLovedItemInOffHand gate).
+	if !slotIsEmpty(e.piglinOffhandItem) {
+		return
+	}
+	owner := t.regionForEntity(e)
+	if owner == nil {
+		owner = t.cur()
+	}
+	if owner == nil || owner.entities == nil {
+		return
+	}
+	// The Mob item-collection AABB: the piglin box inflated (1.0, 0.5, 1.0). Cite Mob.aiStep.
+	hw := e.width/2.0 + itemPickupInflateXZ
+	loY, hiY := e.y-itemPickupInflateY, e.y+e.height+itemPickupInflateY
+	for _, ie := range owner.entities.all() {
+		if ie == nil || !ie.isItem || ie.dead || ie.pickupDelay > 0 {
+			continue
+		}
+		if ie.itemStack.Count <= 0 {
+			continue
+		}
+		if math.Abs(ie.x-e.x) > hw || math.Abs(ie.z-e.z) > hw || ie.y < loY || ie.y > hiY {
+			continue
+		}
+		if !t.piglinWantsToPickup(e, ie.itemStack) {
+			continue
+		}
+		t.piglinPickUpItem(e, ie)
+		return // pick up one per tick (the vanilla scan handles the first collectible)
+	}
+}
+
+// piglinWantsToPickup ports PiglinAi.wantsToPickup for the GOLD path: a baby ignores IGNORED_BY_PIGLIN_BABIES;
+// PIGLIN_REPELLENTS are never wanted; if ADMIRING_DISABLED and has an ATTACK_TARGET, no; GOLD_INGOT
+// (isBarterCurrency) is wanted iff not already holding a loved offhand item; a GOLD_NUGGET is wanted iff it fits
+// the inventory (v1 always fits); an isLovedItem is wanted iff not holding a loved offhand item. The food/equip
+// branches are cite-deferred. Cite PiglinAi.wantsToPickup.
+func (t *TickLoop) piglinWantsToPickup(e *Entity, stack component.SlotData) bool {
+	if slotIsEmpty(stack) {
+		return false
+	}
+	id := int32(stack.ItemID)
+	// PIGLIN_REPELLENTS (soul torch/soul lantern/soul campfire) are never picked up.
+	if itemInTag(id, "piglin_repellents") {
+		return false
+	}
+	// isAdmiringDisabled && has ATTACK_TARGET -> false (a hit, fighting piglin ignores gold).
+	if e.piglinAdmiringDisabled > 0 && e.ai != nil && e.ai.attackTargetID != 0 {
+		return false
+	}
+	// isBarterCurrency (GOLD_INGOT) -> isNotHoldingLovedItemInOffHand.
+	if id == piglinBarterItemID {
+		return slotIsEmpty(e.piglinOffhandItem)
+	}
+	// GOLD_NUGGET -> canAddToInventory (v1 always true; goes to the inventory, not admired).
+	if id == piglinGoldNugget {
+		return true
+	}
+	// isLovedItem (PIGLIN_LOVED) -> isNotHoldingLovedItemInOffHand.
+	if itemInTag(id, "piglin_loved") {
+		return slotIsEmpty(e.piglinOffhandItem)
+	}
+	return false
+}
+
+// piglinPickUpItem ports PiglinAi.pickUpItem for the GOLD path: a GOLD_NUGGET is taken whole into the inventory
+// (putInInventory, v1 -> discard, no admire); any other picked item that isLovedItem is split 1 off, held in the
+// offhand, and admired (admireGoldItem: ADMIRING_ITEM 119t). The take + item-entity shrink mirror the vanilla
+// take(entity,count) + removeOneItemFromItemEntity. Cite PiglinAi.pickUpItem + holdInOffhand + admireGoldItem.
+func (t *TickLoop) piglinPickUpItem(e *Entity, ie *Entity) {
+	id := int32(ie.itemStack.ItemID)
+	if id == piglinGoldNugget {
+		// take(itemEntity, count) whole; putInInventory (v1: consume the whole stack, no admire).
+		ie.itemStack.Count = 0
+		ie.dead = true
+		if owner := t.regionForEntity(ie); owner != nil && owner.entities != nil {
+			owner.entities.remove(ie.id)
+		}
+		return
+	}
+	// removeOneItemFromItemEntity: split 1 off; discard the item entity if it empties.
+	one := ie.itemStack
+	one.Count = 1
+	ie.itemStack.Count--
+	if ie.itemStack.Count <= 0 {
+		ie.dead = true
+		if owner := t.regionForEntity(ie); owner != nil && owner.entities != nil {
+			owner.entities.remove(ie.id)
+		}
+	}
+	// isLovedItem -> holdInOffhand + admireGoldItem.
+	if itemInTag(id, "piglin_loved") {
+		e.piglinOffhandItem = one   // holdInOffhand (the offhand was empty -- guarded by wantsToPickup)
+		e.piglinAdmireTicks = piglinAdmireDuration // admireGoldItem: ADMIRING_ITEM 119t
+	}
+}
+
+// Piglin avoid-zombified constants (VERIFIED javap PiglinAi: isNearZombified closerThan 6.0;
+// AVOID_ZOMBIFIED_DURATION rangeOfSeconds(5,7) -> UniformInt(100,140)).
+const (
+	piglinNearZombifiedDist       = 6.0 // isNearZombified: closerThan(nearestZombified, 6.0)
+	piglinAvoidZombifiedDurMin    = 100 // AVOID_ZOMBIFIED_DURATION UniformInt(100,140): 100 + nextInt(41)
+	piglinAvoidZombifiedDurSpan   = 41
+)
+
+// piglinAvoidZombifiedTick ports the IDLE-activity avoidZombified behavior + isNearZombified gate. avoidZombified
+// (CopyMemoryWithExpiry): copy NEAREST_VISIBLE_ZOMBIFIED -> AVOID_TARGET for AVOID_ZOMBIFIED_DURATION (5-7s), so
+// the AVOID activity's SetWalkTargetAwayFrom flees it at speed 1.0. The zombified-visible memory is a nearby
+// ZombifiedPiglin or Zoglin; isNearZombified requires closerThan(6.0). Reduced to a region scan for the nearest
+// zombified within 6 blocks -> arm the AVOID timer at it. NOT applied while already fleeing or fighting. Cite
+// PiglinAi.avoidZombified + isNearZombified + AVOID_ZOMBIFIED_DURATION + SetWalkTargetAwayFrom(AVOID_TARGET,1.0).
+func (t *TickLoop) piglinAvoidZombifiedTick(e *Entity) {
+	if e.piglinAvoidTicks > 0 {
+		return // already fleeing (AVOID active)
+	}
+	if e.ai != nil && e.ai.attackTargetID != 0 {
+		return // FIGHT overrides IDLE/AVOID
+	}
+	owner := t.regionForEntity(e)
+	if owner == nil {
+		owner = t.cur()
+	}
+	if owner == nil || owner.entities == nil {
+		return
+	}
+	var nearest *Entity
+	bestSq := piglinNearZombifiedDist * piglinNearZombifiedDist
+	for _, other := range owner.entities.all() {
+		if other == nil || other == e || other.dead {
+			continue
+		}
+		if !other.isZombifiedPiglin && !other.isZoglin {
+			continue // NEAREST_VISIBLE_ZOMBIFIED == a zombified piglin or a zoglin
+		}
+		dx := other.x - e.x
+		dy := other.y - e.y
+		dz := other.z - e.z
+		dsq := dx*dx + dy*dy + dz*dz
+		if dsq < bestSq { // closerThan(6.0) is a strict 3D distSq < 36
+			bestSq = dsq
+			nearest = other
+		}
+	}
+	if nearest == nil {
+		return
+	}
+	// CopyMemoryWithExpiry(NEAREST_VISIBLE_ZOMBIFIED -> AVOID_TARGET, AVOID_ZOMBIFIED_DURATION 100+nextInt(41)).
+	e.piglinAvoidTicks = piglinAvoidZombifiedDurMin
+	if e.ai != nil && e.ai.rng != nil {
+		e.piglinAvoidTicks += e.ai.rng.nextInt(piglinAvoidZombifiedDurSpan)
+	}
+	e.piglinAvoidTargetID = nearest.id
 }
