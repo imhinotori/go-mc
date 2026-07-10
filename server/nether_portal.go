@@ -4,9 +4,12 @@ package server
 // 1:1 from the unobfuscated 26.2 jar (temp/cache/26.2-inner.jar, read via CFR this session). The
 // observable target: build an obsidian frame, right-click the inside floor with flint&steel, and the
 // interior fills with minecraft:nether_portal blocks of the correct AXIS (the frame validates), exactly
-// as vanilla. DIMENSION TRAVEL is DEFERRED (v1 has a single overworld ChunkManager — no 2nd dimension):
-// NetherPortalBlock.entityInside / the portal timer / Entity.changeDimension / PortalForcer are cited
-// and left out; the portal blocks themselves are the milestone here.
+// as vanilla. The portal BLOCKS are this file's milestone. DIMENSION TRAVEL now lives in
+// dimension_travel.go: NetherPortalBlock.entityInside / the portal dwell timer / Entity.changeDimension
+// are ported there (tickNetherPortal + changeDimension). STILL DEFERRED here (cited, left out): the
+// PortalForcer destination search+create (findClosestPortalPosition/createPortal -- the 128-block POI
+// search + frame build on arrival), so a traveler currently lands at the coordinate-scaled column with
+// a fixed safe Y rather than at a searched-or-freshly-built destination portal.
 //
 // CITED JAR CLASSES (all CFR-decompiled this session):
 //   - net.minecraft.world.level.portal.PortalShape: MIN_WIDTH=2, MAX_WIDTH=21, MIN_HEIGHT=3,
