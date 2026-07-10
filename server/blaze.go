@@ -24,7 +24,14 @@
 //     triangle(dx,2.297*d11)/dy/triangle(dz,2.297*d11), normalized, spawned at Y(0.5)+0.5. setLookAt.
 //     else lastSeen LT 5 -> pursue. start: attackStep=0. stop: setCharged(false), lastSeen=0.
 //
-// v1 STUBS (cited): levelEvent 1018 is the client pre-shoot glow/sound (deferred like the ghast events);
+// v1 STUBS (cited): @5 MoveTowardsRestrictionGoal(1.0) (a blaze with a home/restriction point strolls
+// back toward it when it wanders off) is NOT wired: the blaze uses NO goalSelector (its behavior is the
+// code-driven blazeAiStep, like spawnGhast), and no restriction/home-point subsystem exists yet, so there
+// is no goal seam to attach it to. It is a cite-defer -- structured to slot in as one goal the moment a
+// goalSelector + a restriction-point seam land; the observable pursuit/attack behavior is unaffected today
+// (a code-spawned blaze has no restriction point, so the goal would be a no-op even in vanilla). Cite
+// Blaze.registerGoals @5 MoveTowardsRestrictionGoal.
+// levelEvent 1018 is the client pre-shoot glow/sound (deferred like the ghast events);
 // the observable gameplay (cadence, CHARGED flip, the 3-fireball burst with the triangle x/z spread, the
 // SmallFireball spawn+velocity, the melee doHurtTarget) is EXACT. The SmallFireball reuses the hurting-
 // projectile infra (hurtSmallFireball: 5.0 fire damage + igniteForSeconds on hit).
@@ -49,6 +56,12 @@ const (
 	blazeMaxSeenGap       = 5     // else-if lastSeen LT 5 -> pursue the recently-seen target
 	blazeSpreadFactor     = 2.297 // the triangle deviation multiplier on the aim x/z (ldc2_w 2.297d)
 	blazeWaterDamage      = 1.0   // isSensitiveToWater aiStep tail: hurtServer(drown(), 1.0F) (fconst_1)
+	// customServerAiStep vertical-hover constants (VERIFIED javap Blaze.customServerAiStep this session).
+	blazeHeightChangeInterval = 100                    // nextHeightOffsetChangeTick reset to 100 (bipush 100)
+	blazeHeightTriangleCenter = 0.5                    // random.triangle(0.5, 6.891) center (ldc2_w 0.5d)
+	blazeHeightTriangleSpread = 6.891                  // random.triangle(0.5, 6.891) spread (ldc2_w 6.891d)
+	blazeHoverDrift           = 0.30000001192092896    // (0.3 - dm.y) * 0.3 up-drift constant (ldc2_w, twice)
+	blazeEyeHeightFactor      = 0.85                   // EntityDimensions.defaultEyeHeight == height * 0.85f
 )
 
 // spawnBlaze creates a hostile Blaze at (x,y,z) and adds it to the owner region store (the tracker
@@ -62,6 +75,9 @@ func (t *TickLoop) spawnBlaze(x, y, z float64) *Entity {
 	// computes 1+nextInt(3); a future per-type xpReward slots in there). Cited constant below.
 	_ = blazeXpReward
 	initSpawnHealth(b) // setHealth(getMaxHealth()) -> 20.0
+	// Blaze ctor: allowedHeightOffset = 0.5f. nextHeightOffsetChangeTick defaults to 0 (int field), so the
+	// first customServerAiStep decrements it to -1 <= 0 and immediately refreshes the triangle band.
+	b.blazeAllowedHeightOffset = blazeHeightTriangleCenter // 0.5f
 	b.ai = &mobAI{}
 	reseedMobAI(b.ai, b.id)
 	owner := t.regionForEntity(b)
@@ -80,9 +96,61 @@ func (t *TickLoop) blazeAiStep(e *Entity) {
 	if e.dead || e.health <= 0 {
 		return
 	}
+	// Blaze.customServerAiStep runs the vertical-hover logic FIRST, THEN super.customServerAiStep (the
+	// Monster goal tick). We mirror that order: the hover refresh + up-drift, then the target acquire +
+	// attack goal + the LivingEntity.aiStep water tail.
+	t.blazeCustomServerAiStepHover(e)
 	t.blazeAcquireNearestPlayer(e)
 	t.blazeAttackGoalTick(e)
 	t.blazeWaterSensitivity(e)
+}
+
+// blazeCustomServerAiStepHover ports the vertical-hover head of Blaze.customServerAiStep (VERIFIED javap
+// this session):
+//
+//	if (--nextHeightOffsetChangeTick <= 0) {
+//	    nextHeightOffsetChangeTick = 100;
+//	    allowedHeightOffset = (float) random.triangle(0.5, 6.891);
+//	}
+//	LivingEntity target = getTarget();
+//	if (target != null && target.getEyeY() > getEyeY() + allowedHeightOffset && canAttack(target)) {
+//	    Vec3 dm = getDeltaMovement();
+//	    setDeltaMovement(dm.add(0.0, (0.30000001192092896 - dm.y) * 0.30000001192092896, 0.0));
+//	    hasImpulse = true;   // "needsSync" in 26.2
+//	}
+//
+// RNG: the 100-tick refresh draws random.triangle(center, spread) == center + spread*(nextDouble() -
+// nextDouble()) -- TWO nextDouble on the blaze OWN stream, in that exact draw ORDER. The up-drift itself
+// draws NO rng. The impulse is set on the blaze velocity seam (e.vy) BEFORE the physics travel phase
+// integrates it (mirroring vanilla: customServerAiStep sets deltaMovement, then travel applies gravity +
+// drag on top). Cite Blaze.customServerAiStep + RandomSource.triangle.
+func (t *TickLoop) blazeCustomServerAiStepHover(e *Entity) {
+	e.blazeNextHeightOffsetChangeTick-- // --nextHeightOffsetChangeTick
+	if e.blazeNextHeightOffsetChangeTick <= 0 {
+		e.blazeNextHeightOffsetChangeTick = blazeHeightChangeInterval // = 100
+		// allowedHeightOffset = (float) random.triangle(0.5, 6.891) -- the d2f narrow mirrors the vanilla
+		// (float) cast at the putfield. Draw order: first nextDouble minus second nextDouble.
+		e.blazeAllowedHeightOffset = float64(float32(arrowTriangle(e.ai.rng, blazeHeightTriangleCenter, blazeHeightTriangleSpread)))
+	}
+	target := t.blazeTarget(e) // getTarget()
+	if target == nil {
+		return
+	}
+	// target.getEyeY() > getEyeY() + allowedHeightOffset (the target is above the blaze's hover band).
+	targetEyeY := target.y + float64(playerStandingEyeHeight) // player.getEyeY() == y + standingEyeHeight
+	selfEyeY := e.y + e.height*blazeEyeHeightFactor           // Blaze.getEyeY() == y + height*0.85 (default eye height)
+	if targetEyeY <= selfEyeY+e.blazeAllowedHeightOffset {
+		return
+	}
+	// canAttack(target): a live target (the target selector already gated it; the recheck is faithful).
+	if target.dead {
+		return
+	}
+	// deltaMovement.add(0, (0.30000001192092896 - dm.y) * 0.30000001192092896, 0). The up-drift eases the
+	// blaze toward a +0.3 rise (toward a target above it). hasImpulse=true (26.2 "needsSync") only forces a
+	// client velocity-sync packet -- a client-visual with NO gameplay effect; deferred like the other blaze
+	// levelEvent visuals. The velocity change itself is applied on e.vy (the deltaMovement seam).
+	e.vy += (blazeHoverDrift - e.vy) * blazeHoverDrift
 }
 
 // blazeTarget reads the blaze current attack-target player (Mob.getTarget() via e.ai.attackTargetID), or

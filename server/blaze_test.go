@@ -238,3 +238,68 @@ func TestBlazeWaterSensitivity(t *testing.T) {
 		t.Fatalf("wet blaze took %v water damage, want %v (hurtServer(drown(), 1.0F))", dealt, blazeWaterDamage)
 	}
 }
+
+// TestBlazeHoverRisesTowardHigherTarget: Blaze.customServerAiStep vertical-hover (1:1 javap this session).
+// A blaze with a target whose eye-Y is well above (blaze.getEyeY() + allowedHeightOffset) drifts UP:
+// deltaMovement.y += (0.30000001192092896 - dm.y) * 0.30000001192092896. Starting from rest (vy 0) the
+// first drift is exactly 0.3*0.3 == 0.09. Cite Blaze.customServerAiStep.
+func TestBlazeHoverRisesTowardHigherTarget(t *testing.T) {
+	loop, _, floorY := blazeLoop(t)
+	by := float64(floorY + 5)
+	b := loop.spawnBlaze(8.5, by, 8.5)
+	// Target 20 blocks above -> target.getEyeY() >> blaze.getEyeY() + allowedHeightOffset (<= 0.5+6.891).
+	p := combatTestPlayer(loop, 8.5, by+20.0, 8.5, 7001)
+	b.ai.attackTargetID = p.entityID
+	// Pin the hover band so it does not refresh on this tick (nextHeightOffsetChangeTick stays > 0 after --).
+	b.blazeNextHeightOffsetChangeTick = 50
+	b.blazeAllowedHeightOffset = 0.5
+	b.vy = 0
+
+	loop.blazeCustomServerAiStepHover(b)
+
+	want := (blazeHoverDrift - 0.0) * blazeHoverDrift // (0.3 - 0)*0.3 == 0.09
+	if math.Abs(b.vy-want) > 1e-12 {
+		t.Fatalf("blaze hover drift vy = %v, want %v (the (0.3-dm.y)*0.3 up-drift)", b.vy, want)
+	}
+	// The countdown decremented by exactly one (no refresh this tick).
+	if b.blazeNextHeightOffsetChangeTick != 49 {
+		t.Fatalf("nextHeightOffsetChangeTick = %d, want 49 (decremented, no refresh)", b.blazeNextHeightOffsetChangeTick)
+	}
+}
+
+// TestBlazeHoverTriangleRefreshAt100Boundary: when nextHeightOffsetChangeTick reaches 0 (--<=0) the blaze
+// refreshes allowedHeightOffset to (float) random.triangle(0.5, 6.891) and resets the counter to 100. The
+// triangle draws TWO nextDouble on the blaze OWN stream in order; the result lies within [0.5-6.891,
+// 0.5+6.891]. Cite Blaze.customServerAiStep + RandomSource.triangle.
+func TestBlazeHoverTriangleRefreshAt100Boundary(t *testing.T) {
+	loop, _, floorY := blazeLoop(t)
+	by := float64(floorY + 5)
+	b := loop.spawnBlaze(8.5, by, 8.5)
+	// No target -> only the refresh head runs (the up-drift is gated on a target above the band).
+	b.blazeNextHeightOffsetChangeTick = 1 // --1 == 0 <= 0 -> refresh
+	before := b.blazeAllowedHeightOffset
+
+	loop.blazeCustomServerAiStepHover(b)
+
+	if b.blazeNextHeightOffsetChangeTick != blazeHeightChangeInterval {
+		t.Fatalf("after refresh, counter = %d, want %d (reset to 100)", b.blazeNextHeightOffsetChangeTick, blazeHeightChangeInterval)
+	}
+	lo := blazeHeightTriangleCenter - blazeHeightTriangleSpread
+	hi := blazeHeightTriangleCenter + blazeHeightTriangleSpread
+	if b.blazeAllowedHeightOffset < lo || b.blazeAllowedHeightOffset > hi {
+		t.Fatalf("refreshed allowedHeightOffset = %v, want within [%v, %v]", b.blazeAllowedHeightOffset, lo, hi)
+	}
+	_ = before
+	// Determinism: the same seeded stream reproduces the SAME refresh value.
+	b2 := loop.spawnBlaze(8.5, by, 8.5)
+	// Give b2 the SAME id-derived stream as b by re-seeding identically, then refresh.
+	b2.ai.rng.reseed(uint64(b.id))
+	b.ai.rng.reseed(uint64(b.id))
+	b.blazeNextHeightOffsetChangeTick = 1
+	b2.blazeNextHeightOffsetChangeTick = 1
+	loop.blazeCustomServerAiStepHover(b)
+	loop.blazeCustomServerAiStepHover(b2)
+	if math.Abs(b.blazeAllowedHeightOffset-b2.blazeAllowedHeightOffset) > 1e-12 {
+		t.Fatalf("triangle refresh not deterministic: %v vs %v", b.blazeAllowedHeightOffset, b2.blazeAllowedHeightOffset)
+	}
+}

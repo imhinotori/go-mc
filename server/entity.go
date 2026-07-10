@@ -528,6 +528,12 @@ type Entity struct {
 	blazeAttackTime int32
 	blazeLastSeen   int32
 	blazeCharged    bool
+	// blazeAllowedHeightOffset mirrors Blaze.allowedHeightOffset (the vertical band the blaze hovers
+	// above its target; the ctor seeds 0.5f, then customServerAiStep refreshes it every 100 ticks to
+	// random.triangle(0.5, 6.891)). blazeNextHeightOffsetChangeTick mirrors Blaze.nextHeightOffsetChangeTick
+	// (the countdown gating that refresh). Zero for non-blazes. Cite Blaze.customServerAiStep.
+	blazeAllowedHeightOffset        float64
+	blazeNextHeightOffsetChangeTick int32
 	// --- ENDER DRAGON (net.minecraft.world.entity.boss.enderdragon.EnderDragon) --------------------
 	//
 	// Tick-owned plain values, set/read ONLY for an EnderDragon (enderDragonAiStep + dragonHurtPart gate
