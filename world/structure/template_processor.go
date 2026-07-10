@@ -250,6 +250,48 @@ func stateBlockName(st block.StateID) string {
 	return block.StateList[st].ID()
 }
 
+// protectedBlocksProcessor ports ProtectedBlockProcessor: it DROPS a template block whenever the
+// EXISTING world block at that position is in the cannotReplace HolderSet (a block tag). It draws
+// NO rng -- CFR ProtectedBlockProcessor.processBlock: getBlockState(pos).is(cannotReplace) ? null
+// (skip) : info (keep). In empty worldgen terrain the world block is usually air/stone (not in
+// the tag), so this rarely skips; it is placement-time only and never affects piece selection or
+// the rng stream. The tag members are resolved once via data.BlockTag (the same authoritative
+// nested-tag expansion the feature layer uses).
+//
+// Source: net.minecraft.world.level.levelgen.structure.templatesystem.ProtectedBlockProcessor.
+type protectedBlocksProcessor struct {
+	cannotReplace map[string]bool
+}
+
+func (p *protectedBlocksProcessor) Process(view WorldGenView, wx, wy, wz int, _, _ Pos, state block.StateID, _ levelgen.RandomSource) (block.StateID, bool) {
+	existing := view.GetBlock(wx, wy, wz)
+	if p.cannotReplace[stateBlockName(existing)] {
+		return state, false // world block is protected -> skip placing the template block
+	}
+	return state, true
+}
+
+// parseProtectedBlocksProcessor decodes {"processor_type":"minecraft:protected_blocks","value":
+// "#minecraft:features_cannot_replace"}: the `value` is a block tag ref (leading '#'). We resolve
+// it to its flat member set via data.BlockTag (which strips the '#').
+func parseProtectedBlocksProcessor(raw []byte) (TemplateProcessor, error) {
+	var body struct {
+		Value string `json:"value"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return nil, fmt.Errorf("protected_blocks decode: %w", err)
+	}
+	tag := body.Value
+	if len(tag) > 0 && tag[0] == '#' {
+		tag = tag[1:]
+	}
+	members, err := data.BlockTag(tag)
+	if err != nil {
+		return nil, fmt.Errorf("protected_blocks tag %q: %w", body.Value, err)
+	}
+	return &protectedBlocksProcessor{cannotReplace: members}, nil
+}
+
 // LoadProcessorList parses an embedded processor_list JSON (ProcessorListJSON) into a
 // processor chain. Only minecraft:rule is supported (the only type villages use); an
 // unknown processor_type FAILS LOUD so a new processor reference is caught.
@@ -286,8 +328,14 @@ func ParseProcessorList(raw []byte) ([]TemplateProcessor, error) {
 				return nil, fmt.Errorf("structure: processor[%d] rule: %w", i, err)
 			}
 			out = append(out, rp)
+		case "minecraft:protected_blocks":
+			pb, err := parseProtectedBlocksProcessor(pr)
+			if err != nil {
+				return nil, fmt.Errorf("structure: processor[%d] protected_blocks: %w", i, err)
+			}
+			out = append(out, pb)
 		default:
-			return nil, fmt.Errorf("structure: unsupported processor_type %q (only minecraft:rule is ported for villages)", head.ProcessorType)
+			return nil, fmt.Errorf("structure: unsupported processor_type %q (only minecraft:rule + minecraft:protected_blocks are ported)", head.ProcessorType)
 		}
 	}
 	return out, nil

@@ -1,6 +1,6 @@
 package main
 
-// extract_worldgen.go â€” PARITY-01 (DATA half): the offline step that copies the
+// extract_worldgen.go — PARITY-01 (DATA half): the offline step that copies the
 // FULL vanilla worldgen graph DATA out of the pinned 26.2 jar into the runtime
 // tree at world/levelgen/data/, so the later waves PARSE the graph instead of
 // hand-transcribing it.
@@ -12,7 +12,7 @@ package main
 //     params, the configured-carver configs, and the carver-replaceables block tag
 //     are PLAIN JSON resources inside temp/cache/<version>-inner.jar. We open the
 //     jar as a stdlib archive/zip and ITERATE EVERY entry (a glob over
-//     density_function/* does NOT recurse into overworld/caves/ â€” iterate, never
+//     density_function/* does NOT recurse into overworld/caves/ — iterate, never
 //     glob), copying each resource under the worldgen prefixes verbatim into
 //     world/levelgen/data/, preserving sub-paths. This mirrors how Phase 2 embedded
 //     the registry NBT: the JSON is build-time-trusted DATA, embedded + parsed in
@@ -28,7 +28,7 @@ package main
 // EXTRACT-TIME VALIDATION (T-9-01): after the unzip we assert overworld.json
 // parses with the expected keys (aquifers_enabled==true, ore_veins_enabled==true,
 // sea_level, default_block, default_fluid, noise_router, surface_rule) AND that a
-// cave density function (overworld/caves/entrances.json) was copied â€” so a partial
+// cave density function (overworld/caves/entrances.json) was copied — so a partial
 // extraction that misses the cave subtree fails LOUDLY rather than silently
 // shipping an incomplete graph.
 
@@ -52,7 +52,7 @@ func worldgenDataDir(goMCRoot string) string {
 // under world/levelgen/data/. Every zip entry whose name starts with the prefix is
 // copied, preserving the path tail after the jar's "data/minecraft/worldgen/"
 // (or "data/minecraft/") root. We intentionally take the WHOLE density_function
-// tree (not just overworld/) so every node the noise_router references resolves â€”
+// tree (not just overworld/) so every node the noise_router references resolves —
 // the Wave-3 router parser walks all 15 functions, and a missing referenced file
 // would fail that parse.
 var worldgenZipPrefixes = []struct {
@@ -66,16 +66,16 @@ var worldgenZipPrefixes = []struct {
 	// FEAT-02 (Phase 11): the feature/decoration data half. configured_feature
 	// (the Feature type + full config), placed_feature (a configured ref + ordered
 	// placement modifier list), and biome (the 11-element features array per
-	// GenerationStep) are PURE-UNZIPPED here â€” same mechanism, embedded + parsed by
+	// GenerationStep) are PURE-UNZIPPED here — same mechanism, embedded + parsed by
 	// the world/levelgen/feature package, never hand-transcribed. All three trees
 	// are FLAT (no nesting) in the jar.
 	{"data/minecraft/worldgen/configured_feature/", "configured_feature"}, // 226
 	{"data/minecraft/worldgen/placed_feature/", "placed_feature"},         // 262
 	{"data/minecraft/worldgen/biome/", "biome"},                           // 66
 	// STRUCT-01 (Phase 14): the structure PIPELINE data half. structure (the
-	// per-structure type+config â€” 34 entries) and structure_set (the placement
-	// machinery: spacing/separation/salt/spread_type per set â€” 20 entries) are
-	// PURE-UNZIPPED JSON (the temples ship 0 .nbt â€” they are code-assembled, so
+	// per-structure type+config — 34 entries) and structure_set (the placement
+	// machinery: spacing/separation/salt/spread_type per set — 20 entries) are
+	// PURE-UNZIPPED JSON (the temples ship 0 .nbt — they are code-assembled, so
 	// NO binary extraction this phase). Embedded + parsed by world/structure,
 	// never hand-transcribed. Both trees are FLAT in the jar.
 	{"data/minecraft/worldgen/structure/", "structure"},         // 34
@@ -91,22 +91,22 @@ var worldgenZipPrefixes = []struct {
 	// ~38-biome preferred set); the is_* category tags back the mineshaft/mesa
 	// has_structure nested #-refs. This parent prefix re-lands the has_structure/
 	// sub-tree at the same dest (idempotent) and additionally pulls every flat
-	// biome tag at this level â€” stronghold_biased_to.json included.
+	// biome tag at this level — stronghold_biased_to.json included.
 	{"data/minecraft/tags/worldgen/biome/", "tags/worldgen/biome"},
-	// STRUCT-05 (Phase 16): the .nbt StructureTemplate system DATA half â€” the
+	// STRUCT-05 (Phase 16): the .nbt StructureTemplate system DATA half — the
 	// data-driven geometry layer villages need. THREE new trees, all pure-unzip:
 	//
 	//  1. The BINARY village .nbt StructureTemplates (483 files, gzip-wrapped). The
 	//     existing copyZipEntry streams bytes VERBATIM (no JSON transform), so the
 	//     binary path needs only this prefix entry, NOT new logic (D-RESEARCH "Don't
 	//     Hand-Roll": binary .nbt = copyZipEntry verbatim). Scoped to village/ to keep
-	//     the embed small per STRUCT-05 â€” bastion/mansion/etc .nbt are v3 deferrals.
+	//     the embed small per STRUCT-05 — bastion/mansion/etc .nbt are v3 deferrals.
 	//     The .nbt files nest under structure/village/...; they do NOT collide with the
 	//     flat structure/*.json (different extension + nested path).
 	{"data/minecraft/structure/village/", "structure/village"}, // 483 binary .nbt
 	// 2. The 62 village template_pool JSONs (common 6 + desert 12 + plains 11 +
 	//    savanna 12 + snowy 11 + taiga 10). The 16-02 jigsaw Placer parses these
-	//    (the weighted element list + the fallback chain). Scoped to village/ â€” other
+	//    (the weighted element list + the fallback chain). Scoped to village/ — other
 	//    structures' pools are v3.
 	{"data/minecraft/worldgen/template_pool/village/", "template_pool/village"}, // 62
 	// 3. The 40 processor_list JSONs (small, take all). The block-replace processors
@@ -121,6 +121,17 @@ var worldgenZipPrefixes = []struct {
 	// bastion rule processor_lists ride the whole-tree processor_list prefix above.
 	{"data/minecraft/worldgen/template_pool/bastion/", "template_pool/bastion"}, // 60
 	{"data/minecraft/structure/bastion/", "structure/bastion"},                  // 167 binary .nbt
+	// TRIAL CHAMBERS + ANCIENT CITY (jigsaw structures, gap-reaudit): both are JigsawStructures
+	// on their own single-entry structure_sets. trial_chambers reads its 47 template_pool/
+	// trial_chambers/** JSONs + 191 structure/trial_chambers/** .nbt piece templates; ancient_city
+	// reads its 7 template_pool/ancient_city/** JSONs + 58 structure/ancient_city/** .nbt. Same
+	// pure-unzip path the village + bastion trees use; the .nbt are binary gzip-wrapped
+	// StructureTemplates the world/structure loader gunzips at runtime. Their degradation
+	// processor_lists ride the whole-tree processor_list prefix above.
+	{"data/minecraft/worldgen/template_pool/trial_chambers/", "template_pool/trial_chambers"}, // 47
+	{"data/minecraft/structure/trial_chambers/", "structure/trial_chambers"},                  // 191 binary .nbt
+	{"data/minecraft/worldgen/template_pool/ancient_city/", "template_pool/ancient_city"},     // 7
+	{"data/minecraft/structure/ancient_city/", "structure/ancient_city"},                      // 58 binary .nbt
 }
 
 // worldgenSingleFiles names individual jar resources (not whole trees) to copy,
@@ -130,7 +141,7 @@ var worldgenSingleFiles = []struct {
 	dest    string // destination path under world/levelgen/data/ (slash-separated)
 }{
 	{"data/minecraft/tags/block/overworld_carver_replaceables.json", "tags/block/overworld_carver_replaceables.json"},
-	// FEAT-17-16: the #minecraft:supports_vegetation tag chain â€” the sustaining-block
+	// FEAT-17-16: the #minecraft:supports_vegetation tag chain — the sustaining-block
 	// set VegetationBlock.mayPlaceOn(state, level, pos) tests (state.is(SUPPORTS_VEGETATION))
 	// inside VegetationBlock.canSurvive, which SimpleBlockFeature.place gates on before
 	// placing a plant. Resolving it via data.BlockTag("supports_vegetation") needs the
@@ -143,8 +154,12 @@ var worldgenSingleFiles = []struct {
 	{"data/minecraft/tags/block/mud.json", "tags/block/mud.json"},
 	{"data/minecraft/tags/block/moss_blocks.json", "tags/block/moss_blocks.json"},
 	{"data/minecraft/tags/block/grass_blocks.json", "tags/block/grass_blocks.json"},
+	// PROTECTED BLOCKS (trial_chambers + ancient_city degradation processor_lists): the
+	// ProtectedBlockProcessor cannotReplace HolderSet is #minecraft:features_cannot_replace.
+	// Flat tag (no nested refs). Needed so LoadProcessorList resolves the protected_blocks value.
+	{"data/minecraft/tags/block/features_cannot_replace.json", "tags/block/features_cannot_replace.json"},
 	// STRUCT-05 (Phase 16): the minecraft:empty terminator pool. It lives at the
-	// TOP level (data/minecraft/worldgen/template_pool/empty.json â€” OUTSIDE village/),
+	// TOP level (data/minecraft/worldgen/template_pool/empty.json — OUTSIDE village/),
 	// so the village-only prefix above never copies it. 42 of the 62 village pools
 	// reference it as the fallback-chain terminator (Pitfall #6 depth-0 -> empty);
 	// without it the 16-02 Placer's data.TemplatePoolJSON("empty") returns not-found
@@ -325,11 +340,11 @@ func validateWorldgenExtraction(dataDir string) error {
 		return fmt.Errorf("worldgen: overworld.json ore_veins_enabled is not true (got %v)", ns.OreVeinsEnabled)
 	}
 
-	// 2. A cave density function must be present â€” caves are IN the graph.
+	// 2. A cave density function must be present — caves are IN the graph.
 	cavePath := filepath.Join(dataDir, "density_function", "overworld", "caves", "entrances.json")
 	if fi, err := os.Stat(cavePath); err != nil || fi.Size() == 0 {
 		return fmt.Errorf("worldgen: density_function/overworld/caves/entrances.json missing or empty "+
-			"(the cave functions must be extracted â€” caves are in the graph): %v", err)
+			"(the cave functions must be extracted — caves are in the graph): %v", err)
 	}
 
 	// 3. A configured carver (the legacy ravine/cave pass) must be present.

@@ -208,7 +208,20 @@ func NewNoiseGenerator(seed int64, secs, minY int) *NoiseGenerator {
 	if err != nil {
 		panic("world: NoiseGenerator: build ocean_monument start generator: " + err.Error())
 	}
-	structGen := structure.NewCompositeStartGenerator(desertGen, jungleGen, iglooGen, swampGen, mineshaftGen, strongholdGen, villageGen, ruinedPortalGen, oceanMonumentGen)
+	// TRIAL CHAMBERS + ANCIENT CITY (gap-reaudit): two deep-underground JigsawStructures on the
+	// SAME bounded-BFS addPieces engine the village + bastion use. Each is a single-entry
+	// random_spread structure_set (trial_chambers salt 94251327 / spacing 34 / separation 12;
+	// ancient_cities salt 20083232 / spacing 24 / separation 8), biome-gated + assembled per
+	// chunk exactly like the bastion. Registered at the SAME composite site.
+	trialChambersGen, err := structure.NewTrialChambersStartGen()
+	if err != nil {
+		panic("world: NoiseGenerator: build trial chambers start generator: " + err.Error())
+	}
+	ancientCityGen, err := structure.NewAncientCityStartGen()
+	if err != nil {
+		panic("world: NoiseGenerator: build ancient city start generator: " + err.Error())
+	}
+	structGen := structure.NewCompositeStartGenerator(desertGen, jungleGen, iglooGen, swampGen, mineshaftGen, strongholdGen, villageGen, ruinedPortalGen, oceanMonumentGen, trialChambersGen, ancientCityGen)
 
 	return &NoiseGenerator{
 		seed:        seed,
