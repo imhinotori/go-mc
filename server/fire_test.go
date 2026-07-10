@@ -76,16 +76,23 @@ func TestFireResistanceNegatesFireDamage(t *testing.T) {
 	}
 }
 
-// TestSunSensitiveGate: only zombie/skeleton are sun-sensitive; a pig/cow is not (so sunBurnTick
-// never draws RNG on them — the pig-oracle guard).
+// TestSunSensitiveGate: the burn_in_daylight entity_type tag members are sun-sensitive (skeleton, stray,
+// wither_skeleton, bogged, zombie, zombie_horse, zombie_villager, drowned, zombie_nautilus, phantom); a
+// pig and a HUSK are NOT (Husk is deliberately excluded from the tag). Cite the vanilla
+// data/minecraft/tags/entity_type/burn_in_daylight.json.
 func TestSunSensitiveGate(t *testing.T) {
-	z := NewEntity(1, entity.Zombie, 0, 0, 0)
-	s := NewEntity(2, entity.Skeleton, 0, 0, 0)
-	if !z.isSunSensitive() || !s.isSunSensitive() {
-		t.Error("zombie + skeleton must be sun-sensitive")
+	for _, typ := range []entity.Entity{
+		entity.Skeleton, entity.Stray, entity.WitherSkeleton, entity.Bogged, entity.Zombie,
+		entity.ZombieHorse, entity.ZombieVillager, entity.Drowned, entity.ZombieNautilus, entity.Phantom,
+	} {
+		e := NewEntity(1, typ, 0, 0, 0)
+		if !e.isSunSensitive() {
+			t.Fatalf("%s is in burn_in_daylight and must be sun-sensitive", typ.Name)
+		}
 	}
-	for _, typ := range []entity.Entity{entity.Pig, entity.Husk, entity.Stray, entity.Bogged, entity.ZombieVillager, entity.Drowned} {
-		e := NewEntity(3, typ, 0, 0, 0)
+	// Pig (passive, pig-oracle guard) and Husk (excluded from the tag) must NOT be sun-sensitive.
+	for _, typ := range []entity.Entity{entity.Pig, entity.Husk} {
+		e := NewEntity(2, typ, 0, 0, 0)
 		if e.isSunSensitive() {
 			t.Fatalf("%s must NOT be sun-sensitive", typ.Name)
 		}

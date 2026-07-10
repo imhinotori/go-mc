@@ -147,10 +147,20 @@ func (e *Entity) isSunSensitive() bool {
 	if e == nil {
 		return false
 	}
-	// v1 wired set: bare Skeleton + Zombie (the Skeleton/Zombie burn-in-sun path) AND Phantom (the
-	// shared sunBurnTick limb documented in phantom.go / phantom_test.go). Husk/Stray/Bogged/Drowned
-	// are NOT sun-sensitive in vanilla. Cite Mob.aiStep BURN_IN_DAYLIGHT gate + burn_in_daylight tag.
-	return e.typ == entity.Skeleton.ID || e.typ == entity.Zombie.ID || e.typ == entity.Phantom.ID
+	// Mob.aiStep gates the daylight burn on getType().is(EntityTypeTags.BURN_IN_DAYLIGHT). The vanilla
+	// tag data/minecraft/tags/entity_type/burn_in_daylight.json is EXACTLY: skeleton, stray,
+	// wither_skeleton, bogged, zombie, zombie_horse, zombie_villager, drowned, zombie_nautilus, phantom.
+	// HUSK is deliberately NOT in the tag (it survives daylight). WitherSkeleton IS in the tag but is
+	// fire-immune, so tickMobSunBurn's isFireImmune() gate no-ops it. Drowned burns only out of water
+	// (the entityInWater gate). Cite Mob.aiStep BURN_IN_DAYLIGHT + the burn_in_daylight entity_type tag.
+	switch e.typ {
+	case entity.Skeleton.ID, entity.Stray.ID, entity.WitherSkeleton.ID, entity.Bogged.ID,
+		entity.Zombie.ID, entity.ZombieHorse.ID, entity.ZombieVillager.ID, entity.Drowned.ID,
+		entity.ZombieNautilus.ID, entity.Phantom.ID:
+		return true
+	default:
+		return false
+	}
 }
 
 func isSunSensitive(e *Entity) bool { return e.isSunSensitive() }
