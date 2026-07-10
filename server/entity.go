@@ -779,6 +779,12 @@ type Entity struct {
 	// Cite ZombifiedPiglin (ticksUntilNextAlert / ALERT_INTERVAL) + NeutralMob (PERSISTENT_ANGER_TIME).
 	isZombifiedPiglin            bool
 	zombifiedPiglinAlertCooldown int
+	// zombifiedPiglinFirstAngerSound mirrors ZombifiedPiglin.playFirstAngerSoundIn: on a FRESH target,
+	// setTarget seeds it from FIRST_ANGER_SOUND_DELAY.sample = 0 + nextInt(21) (rangeOfSeconds(0,1) ->
+	// UniformInt(0,20)). It drives the delayed first-anger sound (client cue, deferred) but the RNG DRAW
+	// is observable via draw order -- it precedes the ALERT_INTERVAL draw in setTarget. Cite
+	// ZombifiedPiglin.setTarget offsets 11-24 + FIRST_ANGER_SOUND_DELAY.
+	zombifiedPiglinFirstAngerSound int
 	// --- ILLUSIONER (net.minecraft.world.entity.monster.illager.Illusioner) --------------------------
 	//
 	// Tick-owned plain values, set/read ONLY for an Illusioner (illusionerAiStep gates on typ ==

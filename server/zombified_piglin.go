@@ -42,6 +42,8 @@ const (
 	zombifiedPiglinAlertIntervalSpan   = 41
 	zombifiedPiglinPersistentAngerBase = 400 // PERSISTENT_ANGER_TIME (400,780): 400 + nextInt(381)
 	zombifiedPiglinPersistentAngerSpan = 381
+	zombifiedPiglinFirstAngerSoundMin  = 0  // FIRST_ANGER_SOUND_DELAY rangeOfSeconds(0,1) -> UniformInt(0,20): 0 + nextInt(21)
+	zombifiedPiglinFirstAngerSoundSpan = 21
 )
 
 // spawnZombifiedPiglin creates a ZombifiedPiglin at (x,y,z) with the jar attributes; it starts NEUTRAL
@@ -116,6 +118,10 @@ func (t *TickLoop) zombifiedPiglinSetTarget(e *Entity, p *tickPlayer) {
 	}
 	fresh := e.ai.attackTargetID == 0
 	if fresh {
+		// setTarget draw order (bytecode 11-36), only when fresh (getTarget()==null && le!=null):
+		//   (1) playFirstAngerSoundIn = FIRST_ANGER_SOUND_DELAY.sample = 0 + nextInt(21).
+		e.zombifiedPiglinFirstAngerSound = zombifiedPiglinFirstAngerSoundMin + mobRandom(e).nextInt(zombifiedPiglinFirstAngerSoundSpan)
+		//   (2) ticksUntilNextAlert = ALERT_INTERVAL.sample = 80 + nextInt(41).
 		e.zombifiedPiglinAlertCooldown = zombifiedPiglinAlertIntervalMin + mobRandom(e).nextInt(zombifiedPiglinAlertIntervalSpan)
 	}
 	e.ai.attackTargetID = p.entityID

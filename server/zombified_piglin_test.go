@@ -154,3 +154,30 @@ func TestZombifiedPiglinFireImmune(t *testing.T) {
 		t.Fatal("zombified piglin is NOT fire-immune -- it must take no fire/lava damage and not sun-burn")
 	}
 }
+
+// TestZombifiedPiglinSetTargetDrawOrder: ZombifiedPiglin.setTarget (bytecode 11-36) draws TWO samples
+// on a fresh acquisition, IN ORDER: (1) FIRST_ANGER_SOUND_DELAY = 0 + nextInt(21) -> playFirstAngerSoundIn,
+// then (2) ALERT_INTERVAL = 80 + nextInt(41) -> ticksUntilNextAlert. The port previously drew only the
+// ALERT_INTERVAL sample, dropping draw (1) and desyncing every downstream RNG consumer. This replays the
+// mob's exact seeded stream and asserts both fields land the expected draws in the expected order.
+func TestZombifiedPiglinSetTargetDrawOrder(t *testing.T) {
+	loop, _, floorY := zpiglinLoop(t)
+	by := float64(floorY + 1)
+	zp := loop.spawnZombifiedPiglin(8.5, by, 8.5)
+	p := addTestPlayer(loop, 62000, zp.x, by, zp.z+1)
+
+	// Replay the mob's exact (id-reseeded) stream to predict the two draws, in the vanilla order.
+	replay := newEntityRandom(0)
+	replay.reseed(uint64(uint32(zp.id)) ^ defaultEntityRandomSeed)
+	wantFirstAnger := zombifiedPiglinFirstAngerSoundMin + replay.nextInt(zombifiedPiglinFirstAngerSoundSpan)
+	wantAlert := zombifiedPiglinAlertIntervalMin + replay.nextInt(zombifiedPiglinAlertIntervalSpan)
+
+	loop.zombifiedPiglinSetTarget(zp, p)
+
+	if zp.zombifiedPiglinFirstAngerSound != wantFirstAnger {
+		t.Fatalf("playFirstAngerSoundIn = %d, want %d (FIRST_ANGER_SOUND_DELAY = 0+nextInt(21), drawn FIRST)", zp.zombifiedPiglinFirstAngerSound, wantFirstAnger)
+	}
+	if zp.zombifiedPiglinAlertCooldown != wantAlert {
+		t.Fatalf("ticksUntilNextAlert = %d, want %d (ALERT_INTERVAL = 80+nextInt(41), drawn AFTER the anger-sound) -- draw order/count desync", zp.zombifiedPiglinAlertCooldown, wantAlert)
+	}
+}
