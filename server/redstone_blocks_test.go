@@ -3,6 +3,7 @@ package server
 import (
 	"testing"
 
+	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/level/ticks"
@@ -252,5 +253,77 @@ func TestTripwireHookTripsWhenWireCrossed(t *testing.T) {
 	}
 	if ds := loop.stateGetDirectSignal(sa2, hookA, block.West); ds != 0 {
 		t.Fatalf("powered hook getDirectSignal(non-FACING) = %d, want 0", ds)
+	}
+}
+
+// TestTripwireEntityScanPowersAndReleasesHooks: an entity stepping onto a connected tripwire span makes
+// tripwireEntitiesPresent true, so checkPressed powers the wire and both hooks; when the entity leaves the
+// box the scheduled recheck (tripwireTick) sees an empty box and unpowers the wire + hooks. A MARKER armor
+// stand overlapping the wire does NOT press it (Entity.isIgnoringBlockTriggers -> ArmorStand.isMarker()).
+// CITE: TripWireBlock.checkPressed(Level,BlockPos) getEntities scan + TripWireBlock.tick;
+// Entity/ArmorStand.isIgnoringBlockTriggers.
+func TestTripwireEntityScanPowersAndReleasesHooks(t *testing.T) {
+	loop, mgr, _ := newRedstoneBlockLoop()
+	y := 64
+	hookA := pk.Position{X: 2, Y: y, Z: 3}
+	hookB := pk.Position{X: 5, Y: y, Z: 3}
+	wire1 := pk.Position{X: 3, Y: y, Z: 3}
+	wire2 := pk.Position{X: 4, Y: y, Z: 3}
+
+	mgr.SetBlock(hookA, block.ToStateID[block.TripwireHook{Facing: block.East}], dimMinY)
+	mgr.SetBlock(hookB, block.ToStateID[block.TripwireHook{Facing: block.West}], dimMinY)
+	mgr.SetBlock(wire1, block.ToStateID[block.Tripwire{}], dimMinY)
+	mgr.SetBlock(wire2, block.ToStateID[block.Tripwire{}], dimMinY)
+
+	// Form the ATTACHED span (both hooks ATTACHED, wires ATTACHED).
+	loop.tripwireHookCalculateState(hookA, loop.redstoneBlockAt(hookA), false, -1, 0, false)
+
+	// No entity yet: the scan reports empty.
+	if loop.tripwireEntitiesPresent(wire1) {
+		t.Fatal("empty wire cell should report no entities present")
+	}
+
+	// An entity standing on wire1 (feet at the block, centered) overlaps the wire shape box.
+	e := NewEntity(1, entity.Pig, 3.5, float64(y), 3.5)
+	loop.only().entities.add(e)
+
+	if !loop.tripwireEntitiesPresent(wire1) {
+		t.Fatal("a pig standing on the wire should be detected by the getEntities scan")
+	}
+
+	// Drive checkPressed with the scanned presence -> wire + both hooks go POWERED.
+	loop.tripwireCheckPressed(wire1, loop.tripwireEntitiesPresent(wire1))
+
+	w1, _ := mgr.GetBlock(wire1, dimMinY)
+	if !block.TripwirePowered(w1) {
+		t.Fatal("wire should be POWERED with an entity on it")
+	}
+	sa, _ := mgr.GetBlock(hookA, dimMinY)
+	sb, _ := mgr.GetBlock(hookB, dimMinY)
+	if !block.TripwireHookPowered(sa) || !block.TripwireHookPowered(sb) {
+		t.Fatalf("both hooks should be POWERED (A=%v B=%v)", block.TripwireHookPowered(sa), block.TripwireHookPowered(sb))
+	}
+
+	// The entity leaves. tripwireTick re-runs checkPressed via the scan (now empty) -> unpower.
+	e.dead = true
+	w1p, _ := mgr.GetBlock(wire1, dimMinY)
+	loop.tripwireTick(w1p, wire1)
+
+	w1after, _ := mgr.GetBlock(wire1, dimMinY)
+	if block.TripwirePowered(w1after) {
+		t.Fatal("wire should UNPOWER once the entity leaves the box")
+	}
+	saAfter, _ := mgr.GetBlock(hookA, dimMinY)
+	sbAfter, _ := mgr.GetBlock(hookB, dimMinY)
+	if block.TripwireHookPowered(saAfter) || block.TripwireHookPowered(sbAfter) {
+		t.Fatalf("both hooks should UNPOWER (A=%v B=%v)", block.TripwireHookPowered(saAfter), block.TripwireHookPowered(sbAfter))
+	}
+
+	// A MARKER armor stand overlapping the wire does NOT press it (isIgnoringBlockTriggers).
+	stand := NewEntity(2, entity.ArmorStand, 3.5, float64(y), 3.5)
+	stand.armorStandFlags = armorStandFlagMarker
+	loop.only().entities.add(stand)
+	if loop.tripwireEntitiesPresent(wire1) {
+		t.Fatal("a MARKER armor stand ignores block triggers and must not press the tripwire")
 	}
 }

@@ -230,8 +230,9 @@ func (t *TickLoop) witherRoseEntityInside(e *Entity) {
 // wire is NOT already POWERED and has no scheduled tick, run checkPressed with THIS entity present. The
 // existing tripwireCheckPressed(pos, entitiesPresent) is the checkPressed(List.of(entity)) port; an entity
 // standing on the wire makes entitiesPresent==true (the entity is not ignoring block triggers -- v1 has no
-// isIgnoringBlockTriggers entity, so any overlapping entity presses). RNG-free. This is the wiring Fable
-// noted was hard-false at redstone_blocks.go tripwireEntitiesPresent.
+// isIgnoringBlockTriggers entity except a marker armor stand, so any overlapping entity presses).
+// RNG-free. The scheduled-recheck path uses redstone_blocks.go tripwireEntitiesPresent (the getEntities
+// scan) for the release; this per-entity push is the entityInside(List.of(entity)) entry point.
 //
 //	[VERIFIED javap TripWireBlock.entityInside: isClientSide -> return; if (!POWERED && !hasScheduledTick)
 //	 checkPressed(level, pos, List.of(entity)). checkPressed: powered = any entity !isIgnoringBlockTriggers.]

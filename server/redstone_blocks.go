@@ -16,6 +16,7 @@ package server
 import (
 	"math"
 
+	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/level/block"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
@@ -415,10 +416,10 @@ func (t *TickLoop) tripwireCheckPressed(pos pk.Position, entitiesPresent bool) {
 	}
 }
 
-// tripwireTick is TripWireBlock.tick: if POWERED, re-check the pressed state. The entity broad-phase for
-// tripwire pressure is not wired in v1 (no entityInside dispatch), so the re-check probes the current
-// entity presence (empty in v1), matching vanilla when the box is empty (a POWERED wire with nothing on
-// it unpresses). CITE: TripWireBlock.tick.
+// tripwireTick is TripWireBlock.tick: if POWERED, re-check the pressed state. The re-check probes the
+// current entity presence via tripwireEntitiesPresent (the checkPressed(Level,BlockPos) getEntities scan);
+// with an occupant still on the wire it stays POWERED and reschedules, with the box now empty it unpresses.
+// CITE: TripWireBlock.tick (-> checkPressed(Level, BlockPos)).
 func (t *TickLoop) tripwireTick(state block.StateID, pos pk.Position) {
 	if t.world() == nil {
 		return
@@ -429,12 +430,100 @@ func (t *TickLoop) tripwireTick(state block.StateID, pos pk.Position) {
 	t.tripwireCheckPressed(pos, t.tripwireEntitiesPresent(pos))
 }
 
-// tripwireEntitiesPresent probes whether any non-block-trigger-ignoring entity overlaps the wire cell.
-// Not wired in v1 -> returns false (empty box). A future entityInside wiring replaces this with the real
-// getEntities(box) scan. CITE: TripWireBlock.checkPressed (empty list -> false).
-func (t *TickLoop) tripwireEntitiesPresent(_ pk.Position) bool {
+// tripwireShape*MinY/MaxY are the Y bounds (in blocks) of the tripwire collision shape bounds, keyed on
+// ATTACHED. Both SHAPE_ATTACHED and SHAPE_NOT_ATTACHED span the full XZ footprint (Block.column(16,..)
+// -> box 0..16 in sixteenths -> 0..1 block) and start at their respective minY; checkPressed uses
+// state.getShape(...).bounds().move(pos) as the scan box, so only the Y extent varies:
+//
+//	SHAPE_ATTACHED     = Block.column(16, 1, 2.5) -> bounds (0, 1/16, 0)..(1, 2.5/16, 1)
+//	SHAPE_NOT_ATTACHED = Block.column(16, 0, 8)   -> bounds (0, 0,    0)..(1, 8/16,  1)
+//
+// CITE: TripWireBlock static {} (SHAPE_ATTACHED = column(16d,1d,2.5d); SHAPE_NOT_ATTACHED = column(16d,
+// 0d,8d)); Block.column(w,minY,maxY) -> box(8-w/2, minY, 8-w/2, 8+w/2, maxY, 8+w/2) in sixteenths.
+const (
+	tripwireShapeAttachedMinY    = 1.0 / 16.0
+	tripwireShapeAttachedMaxY    = 2.5 / 16.0
+	tripwireShapeNotAttachedMinY = 0.0
+	tripwireShapeNotAttachedMaxY = 8.0 / 16.0
+)
+
+// tripwireEntitiesPresent is the entity-scan half of TripWireBlock.checkPressed(Level, BlockPos): build the
+// wire shape AABB moved to pos (state.getShape(level, pos).bounds().move(pos)), collect every entity whose
+// bounding box intersects it (level.getEntities(null, box)), and report whether ANY of them is not
+// isIgnoringBlockTriggers() -- i.e. the three-arg checkPressed's `bl2 = any e where !e.isIgnoringBlock
+// Triggers()`. Reuses the pressure-plate entity-in-box scan convention (server/pressure_plate.go
+// plateEntityCount): the same t.players + t.entitiesNearAcrossRegions(cx,cz,1) half-open AABB test that
+// PressurePlateBlock.getEntityCount is ported against. RNG-free.
+//
+//	[VERIFIED javap TripWireBlock.checkPressed(Level,BlockPos): AABB = state.getShape(level,pos).bounds()
+//	 .move(pos); list = level.getEntities(null, AABB); -> checkPressed(level,pos,list).
+//	 checkPressed(Level,BlockPos,List): bl2=false; for (Entity e : list) if (!e.isIgnoringBlockTriggers())
+//	 { bl2=true; break; }.]
+func (t *TickLoop) tripwireEntitiesPresent(pos pk.Position) bool {
+	w := t.world()
+	if w == nil {
+		return false
+	}
+	state, ok := w.GetBlock(pos, dimMinY)
+	if !ok || !block.IsTripwire(state) {
+		return false
+	}
+	// state.getShape(level,pos).bounds().move(pos): the full-XZ footprint (0..1) with the ATTACHED-keyed
+	// Y extent, translated to the block position.
+	minY, maxY := tripwireShapeNotAttachedMinY, tripwireShapeNotAttachedMaxY
+	if block.TripwireAttached(state) {
+		minY, maxY = tripwireShapeAttachedMinY, tripwireShapeAttachedMaxY
+	}
+	loX := float64(pos.X)
+	loZ := float64(pos.Z)
+	hiX := float64(pos.X) + 1.0
+	hiZ := float64(pos.Z) + 1.0
+	loY := float64(pos.Y) + minY
+	hiY := float64(pos.Y) + maxY
+
+	// level.getEntities(null, AABB): every entity whose box intersects, no exclusion (null self). The
+	// !isIgnoringBlockTriggers() filter is the three-arg checkPressed loop; first qualifying hit -> true.
+	for _, p := range t.players {
+		if p == nil || p.dead {
+			continue
+		}
+		if boxIntersectsPlayer(p, loX, loY, loZ, hiX, hiY, hiZ) && !playerIsIgnoringBlockTriggers(p) {
+			return true
+		}
+	}
+	cx := float64(pos.X) + 0.5
+	cz := float64(pos.Z) + 0.5
+	for _, e := range t.entitiesNearAcrossRegions(cx, cz, 1) {
+		if e == nil || e.dead {
+			continue
+		}
+		ehw := e.width / 2
+		if hiX <= e.x-ehw || e.x+ehw <= loX ||
+			hiY <= e.y || e.y+e.height <= loY ||
+			hiZ <= e.z-ehw || e.z+ehw <= loZ {
+			continue
+		}
+		if !entityIsIgnoringBlockTriggers(e) {
+			return true
+		}
+	}
 	return false
 }
+
+// entityIsIgnoringBlockTriggers ports Entity.isIgnoringBlockTriggers(): false for a base Entity, overridden
+// by ArmorStand to return isMarker(). A marker armor stand does NOT press tripwires (nor pressure plates in
+// vanilla). Every other v1 entity returns the base false. CITE: Entity.isIgnoringBlockTriggers (iconst_0);
+// ArmorStand.isIgnoringBlockTriggers (return isMarker()).
+func entityIsIgnoringBlockTriggers(e *Entity) bool {
+	if e.typ == entity.ArmorStand.ID {
+		return e.isArmorStandMarker()
+	}
+	return false
+}
+
+// playerIsIgnoringBlockTriggers: a Player is a base Entity (no isIgnoringBlockTriggers override), so it is
+// always false. CITE: Entity.isIgnoringBlockTriggers (Player does not override).
+func playerIsIgnoringBlockTriggers(_ *tickPlayer) bool { return false }
 
 // ---------------------------------------------------------------------------------------------
 // Powered rail + activator rail (PoweredRailBlock). ActivatorRailBlock IS `new PoweredRailBlock(...)`
