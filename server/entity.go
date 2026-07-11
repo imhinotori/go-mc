@@ -1877,6 +1877,30 @@ type Entity struct {
 	// for the %60, #257 teleportDelay for the 400 cap).
 	sendTickCount int
 
+	// needsSync is net.minecraft.world.entity.Entity.needsSync -- the force-a-move-send-THIS-tick
+	// (regardless of updateInterval) flag. Entity.absMoveTo / the deltaMovement push/knockback paths
+	// set it true; ServerEntity.sendChanges clears it at the END of every call (needsSync = false).
+	// It is the escape hatch that makes a DELIBERATE teleport/knockback immediate even for a coarse-
+	// updateInterval type (item/arrow) -- ordinary per-tick AI motion does NOT set it, so AI motion
+	// is gated by tickCount %% updateInterval. v1 has no absMoveTo/knockback wired to set it yet
+	// (structured so those paths flip it to true later); it defaults false, exactly the vanilla value
+	// for an entity that has not been teleported this tick.
+	//	[VERIFIED javap Entity: public boolean needsSync; set true in absMoveTo / the push+
+	//	 setDeltaMovement path; ServerEntity.sendChanges clears it (needsSync = false) at the tail
+	//	 just before tickCount++.]
+	needsSync bool
+
+	// leashHolderID is the entity id of this entity's leash HOLDER (a fence leash-knot or another
+	// entity), the v1 stand-in for Leashable.getLeashHolder().getId(). 0 == NOT leashed
+	// (Leashable.isLeashed() == false). The tracker's sendPairingData branch emits a
+	// ClientboundSetEntityLink(this, holder) when this is non-zero at tracking-start so a leashed
+	// mob shows its lead client-side; attachLeash/dropLeash (below) set it and broadcast the
+	// attach/detach packet. A plain mob (the pig) keeps it 0 -- no leash packet, byte-identical.
+	// Tick-owned plain value (snapshot-friendly); a THIN id, never a live *Entity (the Folia rule).
+	//	[VERIFIED javap Leashable.isLeashed()/getLeashHolder(); ServerEntity.sendPairingData leash
+	//	 branch; ClientboundSetEntityLinkPacket(entity, holder).]
+	leashHolderID int32
+
 	// --- MOB EQUIPMENT (net.minecraft.world.entity.EntityEquipment / LivingEntity.equipment) ------
 	//
 	// equipment is the mob's held-item/armor slots — the Go analogue of LivingEntity's

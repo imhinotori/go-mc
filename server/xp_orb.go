@@ -278,7 +278,7 @@ func (t *TickLoop) scanForMergesOrb(e *Entity) {
 	loY, hiY := e.y-orbMergeInflate, e.y+float64(e.height)+orbMergeInflate
 	loZ, hiZ := e.z-hw, e.z+hw
 
-	for _, o := range t.entitiesNearAcrossRegions(e.x, e.z, trackRange) {
+	for _, o := range t.entitiesNearAcrossRegions(e.x, e.z, pickupMergeScanChunks) {
 		if o == e || !o.isOrb {
 			continue // getEntities(ExperienceOrb, ...): orbs only, never self
 		}
@@ -404,7 +404,7 @@ func (t *TickLoop) scanOrbPickup(p *tickPlayer) {
 	pLoY, pHiY := p.y-orbPickupInflateY, p.y+playerHeight+orbPickupInflateY
 	pLoZ, pHiZ := p.z-hw, p.z+hw
 
-	for _, e := range t.entitiesNearAcrossRegions(p.x, p.z, trackRange) {
+	for _, e := range t.entitiesNearAcrossRegions(p.x, p.z, pickupMergeScanChunks) {
 		if !e.isOrb {
 			continue // only XP orbs are collectible here
 		}

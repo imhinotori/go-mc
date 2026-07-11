@@ -22,7 +22,7 @@ import (
 // countItemsNear returns the Item entities within range of (x,z) - the dropped-resource assertion.
 func countItemsNear(loop *TickLoop, x, z float64) []*Entity {
 	var items []*Entity
-	for _, e := range loop.only().entities.near(x, z, trackRange) {
+	for _, e := range loop.only().entities.near(x, z, pickupMergeScanChunks) {
 		if e.typ == entity.Item.ID {
 			items = append(items, e)
 		}

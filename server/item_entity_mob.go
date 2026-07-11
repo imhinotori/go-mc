@@ -74,8 +74,8 @@ func (t *TickLoop) mobPickupItems(e *Entity) {
 	mLoZ, mHiZ := e.z-hw, e.z+hw
 
 	// Broad phase: near() returns the items in the columns around the mob (the SAME store the fox goals
-	// scan). trackRange columns comfortably covers the 1-block-inflated reach.
-	for _, ie := range t.cur().entities.near(e.x, e.z, trackRange) {
+	// scan). pickupMergeScanChunks columns comfortably covers the 1-block-inflated reach.
+	for _, ie := range t.cur().entities.near(e.x, e.z, pickupMergeScanChunks) {
 		if !ie.isItem {
 			continue // getEntitiesOfClass(ItemEntity.class): only dropped items
 		}

@@ -133,7 +133,7 @@ func TestPluginHookRunsOnOwningRegion(t *testing.T) {
 }
 
 // TestTrackerSeesAcrossRegions proves the cross-region tracker (Pitfall 2): a player standing near
-// the region seam, with an entity in the ADJACENT region within trackRange, SEES that entity (the
+// the region seam, with an entity in the ADJACENT region within pickupMergeScanChunks, SEES that entity (the
 // tracker's near() spans both regions at the barrier). It asserts the cross-region broad-phase
 // (entitiesNearAcrossRegions) returns the seam-adjacent entity.
 func TestTrackerSeesAcrossRegions(t *testing.T) {
@@ -159,7 +159,7 @@ func TestTrackerSeesAcrossRegions(t *testing.T) {
 	regB := loop.regions[regionOf(colB)]
 
 	// A player sits at the EAST edge of colA (close to the colB seam); an entity sits at the WEST edge
-	// of colB — within trackRange (6 columns) horizontally. They are in DIFFERENT regions.
+	// of colB — within pickupMergeScanChunks (6 columns) horizontally. They are in DIFFERENT regions.
 	playerX := float64(colA[0])*16 + 15.5
 	playerZ := float64(colA[1])*16 + 8.5
 	mobX := float64(colB[0])*16 + 0.5
@@ -169,7 +169,7 @@ func TestTrackerSeesAcrossRegions(t *testing.T) {
 	regB.entities.add(mob)
 
 	// The cross-region broad-phase from the player's position must INCLUDE the adjacent-region mob.
-	near := loop.entitiesNearAcrossRegions(playerX, playerZ, trackRange)
+	near := loop.entitiesNearAcrossRegions(playerX, playerZ, pickupMergeScanChunks)
 	saw := false
 	for _, e := range near {
 		if e.id == mob.id {

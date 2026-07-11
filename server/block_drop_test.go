@@ -135,7 +135,7 @@ func TestBlockDropSpawnsItem(t *testing.T) {
 
 	// Find the spawned Item: the one entity that is an Item type.
 	var drop *Entity
-	for _, e := range loop.only().entities.near(1.5, 1.5, trackRange) {
+	for _, e := range loop.only().entities.near(1.5, 1.5, pickupMergeScanChunks) {
 		if e.typ == entity.Item.ID {
 			drop = e
 			break

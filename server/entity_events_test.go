@@ -285,8 +285,21 @@ func newMoveEntity(t *testing.T) (*TickLoop, *Entity, *tickPlayer) {
 	e := NewEntity(loop.idAlloc.AllocID(), entity.Pig, 9.5, 64, 9.5)
 	loop.only().entities.add(e)
 	observer.tracked = map[int32]bool{e.id: true}
-	loop.tickEntityMovement() // seed moveInit; no packet
-	_ = drainPackets(observer.client)
+	loop.tickEntityMovement() // seed moveInit (sendTickCount stays 0); no packet
+	// Advance to a STEADY-STATE tick before the caller drives its move. Vanilla ServerEntity
+	// .sendChanges runs its move body only when tickCount % updateInterval == 0, and ALSO sends a
+	// forced position component when tickCount % 60 == 0 (var10) -- which is TRUE at tickCount 0,
+	// the pig-interval-3 entity's first real send. To isolate the delta-TYPE selection (Pos vs Rot
+	// vs PosRot vs nothing) from that first-tick forced-pos artifact, tick idle until sendTickCount
+	// lands on a value that is a multiple of the pig interval (3) but NOT of 60 (sendTickCount 3):
+	// tick 0 sends the forced pos, ticks 1/2 are gated out, tick 3 is a clean gate-passing tick with
+	// no %60 forced pos. Each idle tick's packets are discarded.
+	for e.sendTickCount%60 == 0 || e.sendTickCount%entityUpdateInterval(entity.Pig.ID) != 0 {
+		loop.tickEntityMovement()
+		_ = drainPackets(observer.client)
+		observer.client = captureClient(64)
+		loop.clientIndex[observer.client] = observer
+	}
 	observer.client = captureClient(64)
 	loop.clientIndex[observer.client] = observer
 	return loop, e, observer

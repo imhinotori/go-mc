@@ -137,7 +137,7 @@ func TestCrafterCraftsOnRedstonePulse(t *testing.T) {
 
 	// The ejected item is a loose STICK shot out the +X (EAST) face.
 	var shot *Entity
-	for _, e := range loop.only().entities.near(float64(pos.X)+1, float64(pos.Z), trackRange) {
+	for _, e := range loop.only().entities.near(float64(pos.X)+1, float64(pos.Z), pickupMergeScanChunks) {
 		if e.isItem {
 			shot = e
 			break

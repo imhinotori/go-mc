@@ -198,7 +198,28 @@ func (t *TickLoop) tickEntityMovement() {
 // .sendChanges movement decision). Separated so a test can drive a single entity. Mutates the
 // entity's send state and broadcasts the chosen move packet to trackers.
 func (t *TickLoop) sendEntityMovementChanges(e *Entity) {
-	e.sendTickCount++ // ServerEntity.tickCount: free-running, drives the %60 idle re-anchor
+	// ServerEntity.sendChanges GATE (jar label 249): the whole move/rot body runs ONLY when
+	//   tickCount % updateInterval == 0 || needsSync || entityData.isDirty()
+	// where tickCount is the value BEFORE this call increments it (the ++ is at the END, label
+	// 1192). updateInterval is the entity TYPE's value (EntityType.updateInterval): most mobs 3,
+	// items/xp/falling_block/tnt 20, arrows 20, projectiles 10, the static decorations
+	// Integer.MAX_VALUE. needsSync forces an immediate send on a deliberate teleport/knockback
+	// (v1: default false). entityData dirty is the metadata-changed escape; v1 syncs metadata via
+	// the explicit SetEntityData broadcasts (not this move path), so it is not consulted here.
+	// When the gate FAILS the body is skipped but tickCount STILL increments + needsSync clears
+	// below -- exactly ServerEntity.sendChanges. This replaces the previous every-tick move send
+	// (all types treated as updateInterval 1), which over-broadcast a pig delta 3x too often.
+	//	[VERIFIED javap ServerEntity.sendChanges @249-284: if tickCount % updateInterval != 0 &&
+	//	 !needsSync && !entityData.isDirty() -> goto 1192 (skip); @1188-1199 needsSync=false;
+	//	 tickCount++.]
+	interval := entityUpdateInterval(e.typ)
+	gatePass := (interval > 0 && e.sendTickCount%interval == 0) || e.needsSync
+	if !gatePass {
+		// Body skipped this tick: still clear needsSync + advance tickCount (the sendChanges tail).
+		e.needsSync = false
+		e.sendTickCount++
+		return
+	}
 	yRot := packDegrees(e.yaw)
 	xRot := packDegrees(e.pitch)
 	rotChanged := absI8(yRot-e.lastSentYRot) >= 1 || absI8(xRot-e.lastSentXRot) >= 1
@@ -257,6 +278,11 @@ func (t *TickLoop) sendEntityMovementChanges(e *Entity) {
 		t.broadcastToTrackers(e.id, encodeRotateHead(e.id, e.headYaw))
 		e.lastSentYHeadRot = yHeadRot
 	}
+
+	// ServerEntity.sendChanges tail (jar @1188-1199): clear needsSync, then tickCount++ (the
+	// free-running counter driving the %60 idle re-anchor + the %updateInterval gate above).
+	e.needsSync = false
+	e.sendTickCount++
 }
 
 // absI8 is Math.abs over the int8 angle difference, computed in int to avoid int8 overflow on the

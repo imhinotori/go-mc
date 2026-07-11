@@ -15,12 +15,23 @@ import pk "github.com/imhinotori/sulfur/net/packet"
 // CLAUDE.md "Stack Patterns by Variant". All state it touches is owned by the tick goroutine,
 // so it is -race clean by construction (proven by the Docker -race gate).
 
-// trackRange is the entity track distance in CHUNK COLUMNS for the near() broad-phase
-// (06-RESEARCH A5). Vanilla uses per-type ranges (players ~48 blocks, mobs ~80); v1 uses a
-// single conservative range. 6 columns ≈ 96 blocks Chebyshev, comfortably covering both. It
-// is the DoS bound on the visible/tracked set (threat T-6-10): near() walks only
-// (2*trackRange+1)^2 candidate columns, never the whole world.
-const trackRange = 6
+// trackerBroadPhaseChunks is the near() broad-phase window (in CHUNK COLUMNS) for ONE player: it
+// must cover the FARTHEST any entity can be visible to that player so the per-entity range filter
+// (entityInTrackRange) never misses an in-range entity. Vanilla ChunkMap.TrackedEntity.updatePlayer
+// gates each entity at min(type.clientTrackingRange*16, viewDistance*16) blocks; the LARGEST that
+// min can be for ANY type is min(maxClientTrackingRangeChunks=32, viewDist) chunks, so the window is
+// exactly that. This REPLACES the old flat trackRange = 6 const (which under-covered a viewDist-10
+// player and ignored per-type range entirely). It stays the DoS bound (threat T-6-10): near() walks
+// only (2*window+1)^2 columns, never the whole world, and the window is bounded by the player view
+// distance (clampViewDistance caps it at serverViewDistance).
+//
+//	[VERIFIED javap ChunkMap$TrackedEntity.updatePlayer: d = min(getEffectiveRange(), viewDist*16).]
+func trackerBroadPhaseChunks(viewDistChunks int) int {
+	if viewDistChunks < maxClientTrackingRangeChunks {
+		return viewDistChunks
+	}
+	return maxClientTrackingRangeChunks
+}
 
 // maxSpawnsPerTick is the per-player, per-tick budget on NEWLY-tracked entity SPAWNS (the
 // ClientboundAddEntity + SetEntityData + equipment + motion burst). It is the entity-tracker
@@ -81,7 +92,10 @@ func (et *entityTracker) Tick() {
 		// see entities in the ADJACENT region too, so near() spans every region the trackRange touches.
 		// The tracker runs at the BARRIER (every region quiescent), so reading multiple region stores
 		// is -race clean by construction. near() returns a fresh slice the tracker may retain.
-		visible := t.entitiesNearAcrossRegions(p.x, p.z, trackRange)
+		// Per-player broad-phase window sized to cover every type's effective range (the widest
+		// min(clientTrackingRange, viewDist) any entity can have). The per-entity range filter below
+		// (entityInTrackRange) narrows it to each type's actual clientTrackingRange.
+		visible := t.entitiesNearAcrossRegions(p.x, p.z, trackerBroadPhaseChunks(p.viewDist))
 
 		// seen marks which currently-tracked ids are still in range this tick; any tracked id
 		// NOT seen has left range and is batched into the single RemoveEntities below.
@@ -97,6 +111,14 @@ func (et *entityTracker) Tick() {
 		for _, e := range visible {
 			if e == nil || e.id == p.entityID {
 				continue // a player never tracks itself
+			}
+			// Per-type range gate (ChunkMap.TrackedEntity.updatePlayer): only entities within this
+			// entity's own min(clientTrackingRange*16, viewDist*16) blocks are visible. An entity in
+			// the broad-phase window but beyond its type range is treated as NOT-in-range (it will be
+			// removed if currently tracked, exactly as leaving the flat range did). A range-0 type
+			// (marker) is never tracked.
+			if !entityInTrackRange(e.x, e.z, p.x, p.z, e.typ, p.viewDist) {
+				continue // out of this entity's type range: not seen -> a tracked one is removed below
 			}
 			seen[e.id] = true
 
@@ -125,6 +147,12 @@ func (et *entityTracker) Tick() {
 					if pkt, ok := encodeUpdateAttributes(e.id, attrs); ok {
 						p.client.Send(pkt)
 					}
+				}
+				// Leash pairing (ServerEntity.sendPairingData leash branch): a leashed entity emits a
+				// ClientboundSetEntityLink(this, holder) at tracking-start so the newly-tracking client
+				// draws its lead. leashHolderID 0 (the pig, any un-leashed mob) -> no packet.
+				if e.leashHolderID != 0 {
+					p.client.Send(encodeSetEntityLink(e.id, e.leashHolderID))
 				}
 				p.tracked[e.id] = true
 				spawned++
@@ -199,11 +227,20 @@ func (at *asyncTracker) Tick() {
 		// immediately copy out ONLY the value fields the diff + encoders need into worker-owned Entity
 		// values, so the closure holds NO pointer into the live store (Pitfall 3). The player's own id
 		// is skipped here so the snapshot never contains the player's own entity.
-		visible := t.entitiesNearAcrossRegions(p.x, p.z, trackRange)
+		// Per-player broad-phase window (mirrors the sync tracker): sized to cover every type's
+		// effective range, then the per-entity range filter runs during the snapshot copy below.
+		visible := t.entitiesNearAcrossRegions(p.x, p.z, trackerBroadPhaseChunks(p.viewDist))
 		snap := make([]Entity, 0, len(visible))
 		for _, e := range visible {
 			if e == nil || e.id == p.entityID {
 				continue // a player never tracks itself
+			}
+			// Per-type range gate on the OWNER (identical to the sync tracker): only entities within
+			// their own type range enter the snapshot the worker diffs, so the async diff sees exactly
+			// the same visible set. An out-of-range (or range-0 marker) entity is left OUT of the
+			// snapshot -> the worker's diff treats it as gone (removes it if tracked), matching sync.
+			if !entityInTrackRange(e.x, e.z, p.x, p.z, e.typ, p.viewDist) {
+				continue
 			}
 			snap = append(snap, snapshotEntity(e))
 		}
@@ -252,8 +289,11 @@ func snapshotEntity(e *Entity) Entity {
 		pitch:    e.pitch,
 		headYaw:  e.headYaw,
 		onGround: e.onGround,
-		width:    e.width,
-		height:   e.height,
+		// leashHolderID travels by value so the off-tick worker emits the spawn SetEntityLink
+		// without aliasing the live store (0 for an un-leashed mob -> no packet). Cite sendPairingData.
+		leashHolderID: e.leashHolderID,
+		width:         e.width,
+		height:        e.height,
 		// Equipment is a VALUE array — a plain struct copy carries it, so the off-tick worker's
 		// equipmentSpawnPackets reads the mob's slots without aliasing the live store (Pitfall 3).
 		equipment: e.equipment,
@@ -318,6 +358,11 @@ func computeTrackerDiff(snap []Entity, tracked map[int32]bool) (packets []pk.Pac
 				if pkt, ok := encodeUpdateAttributes(e.id, e.trackSpawnAttrs); ok {
 					packets = append(packets, pkt)
 				}
+			}
+			// Leash pairing (sendPairingData leash branch): emit the spawn SetEntityLink for a leashed
+			// entity from the value snapshot (worker-safe). 0 holder -> no packet (the pig).
+			if e.leashHolderID != 0 {
+				packets = append(packets, encodeSetEntityLink(e.id, e.leashHolderID))
 			}
 			added = append(added, e.id)
 			spawned++

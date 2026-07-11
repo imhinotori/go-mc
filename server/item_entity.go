@@ -1,8 +1,8 @@
 package server
 
 import (
-	"github.com/imhinotori/sulfur/data/registryid"
 	"github.com/imhinotori/sulfur/data/item"
+	"github.com/imhinotori/sulfur/data/registryid"
 	"github.com/imhinotori/sulfur/level/component"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
@@ -139,6 +139,14 @@ const (
 // Ordering: items are TICKED first (so pickupDelay decrements and the toss settles), THEN the
 // pickup scan runs — mirroring vanilla, where ItemEntity.tick() (which decrements pickupDelay)
 // runs in the entity tick BEFORE Player.aiStep collects items in the same server tick.
+// pickupMergeScanChunks is the fixed broad-phase window (in CHUNK COLUMNS) the item/xp merge +
+// player-pickup scans use before their PRECISE (1-block-inflated AABB) distance test. It preserves
+// the exact value the old tracker `trackRange` const carried (6 columns) for these unrelated scans,
+// which are NOT the entity tracker: they each re-check the true reach afterwards, so the window only
+// has to comfortably cover the ~1-block pickup/merge radius. Kept separate from the per-type tracker
+// range so a tracker-fidelity change never perturbs the pickup/merge broad phase.
+const pickupMergeScanChunks = 6
+
 func (t *TickLoop) tickItems() {
 	// Phase-27 STEP-3 (N=2): item entities live across BOTH regions (an item dropped near the seam),
 	// and tickItems runs on the COORDINATOR (quiescent — every region joined). Process each region's
@@ -352,10 +360,10 @@ func (t *TickLoop) mergeItemWithNeighbours(e *Entity) {
 	loY, hiY := e.y-itemMergeInflateY, e.y+e.height+itemMergeInflateY
 	loZ, hiZ := e.z-hw, e.z+hw
 
-	// Broad phase: items within a chunk column of this one (trackRange comfortably covers the
+	// Broad phase: items within a chunk column of this one (pickupMergeScanChunks comfortably covers the
 	// half-block reach). Snapshot the candidate slice before mutating (tryToMerge may discard an
 	// entry) so the iteration is stable across an in-loop remove.
-	candidates := t.entitiesNearAcrossRegions(e.x, e.z, trackRange)
+	candidates := t.entitiesNearAcrossRegions(e.x, e.z, pickupMergeScanChunks)
 	for _, other := range candidates {
 		if other == e || !other.isItem {
 			continue // vanilla predicate: e != this (getEntitiesOfClass excludes self via the lambda)
@@ -498,8 +506,9 @@ func (t *TickLoop) itemFireImmune(e *Entity) bool {
 // minecraft:damage_resistant { types: #minecraft:is_fire } component netherite gear and the nether
 // star carry). The item registry does not yet extract that component, so this returns false (no
 // item is fire-resistant yet); structured to become a real RawComponents/registry read later.
-//   [ItemEntity.fireImmune reads getItem().canBeHurtBy(inFire); a fire-resistant stack returns false
-//    there. Cite net.minecraft.world.item.ItemStack.canBeHurtBy / DataComponents.DAMAGE_RESISTANT.]
+//
+//	[ItemEntity.fireImmune reads getItem().canBeHurtBy(inFire); a fire-resistant stack returns false
+//	 there. Cite net.minecraft.world.item.ItemStack.canBeHurtBy / DataComponents.DAMAGE_RESISTANT.]
 func itemStackFireResistant(_ component.SlotData) bool { return false }
 
 // scanItemPickup ports Player.aiStep's item-collection loop (the touch path) + ItemEntity
@@ -510,7 +519,7 @@ func itemStackFireResistant(_ component.SlotData) bool { return false }
 //
 // Broad phase: the store's near() returns the items in the columns around the player, so the
 // scan never walks all entities; the AABB intersection is the narrow phase on that candidate
-// set. trackRange columns comfortably covers the (1-block-inflated) pickup reach.
+// set. pickupMergeScanChunks columns comfortably covers the (1-block-inflated) pickup reach.
 func (t *TickLoop) scanItemPickup(p *tickPlayer) {
 	// Player pickup AABB: the player collision box (playerWidth × playerHeight, feet at p.y)
 	// inflated by (1.0, 0.5, 1.0) — Player.aiStep's getBoundingBox().inflate(1.0, 0.5, 1.0).
@@ -519,7 +528,7 @@ func (t *TickLoop) scanItemPickup(p *tickPlayer) {
 	pLoY, pHiY := p.y-itemPickupInflateY, p.y+playerHeight+itemPickupInflateY
 	pLoZ, pHiZ := p.z-hw, p.z+hw
 
-	for _, e := range t.entitiesNearAcrossRegions(p.x, p.z, trackRange) {
+	for _, e := range t.entitiesNearAcrossRegions(p.x, p.z, pickupMergeScanChunks) {
 		if !e.isItem {
 			continue // only dropped items are collectible here
 		}

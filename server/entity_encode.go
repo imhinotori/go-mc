@@ -719,6 +719,7 @@ func carriedBlockDataEntry(sid block.StateID, present bool) entityDataEntry {
 // setAggressive (bit 0x04) + the higher Mob-specific bits (v1:0). Mob.setAggressive's bytecode
 // (javap'd this session) does the read-modify-write: existingByte = get(DATA_MOB_FLAGS_ID); then
 // either OR with iconst_4 (set) or AND-NOT with bipush -5 (clear); then set(DATA_MOB_FLAGS_ID).
+//
 //	[VERIFIED javap Mob.setAggressive: iload_1; ifeq 35; iload_2; iconst_4; ior; i2b; ... ; iload_2;
 //	 bipush -5; iand; i2b; ... SynchedEntityData.set(DATA_MOB_FLAGS_ID, Byte).]
 const dataMobFlagsIndex uint8 = 15
@@ -761,9 +762,9 @@ func mobFlagsDataEntry(flagsByte int8) entityDataEntry {
 //   - DATA_SWELL_DIR    (INT,    default -1)  -> index 16 — the +1/−1/0 fuse-direction
 //   - DATA_IS_POWERED   (BOOLEAN, default false) -> index 17 — the charged/lightning flag
 //   - DATA_IS_IGNITED   (BOOLEAN, default false) -> index 18 — the currently-ignited fuse flag
-//	[VERIFIED javap Creeper.defineSynchedData this session: Monster.defineSynchedData (no new accessors)
-//	 then DATA_SWELL_DIR (define INT, -1) + DATA_IS_POWERED (define BOOLEAN, false) + DATA_IS_IGNITED
-//	 (define BOOLEAN, false). Hierarchy count Entity(8) + LivingEntity(7) + Mob(15) -> 16/17/18.]
+//     [VERIFIED javap Creeper.defineSynchedData this session: Monster.defineSynchedData (no new accessors)
+//     then DATA_SWELL_DIR (define INT, -1) + DATA_IS_POWERED (define BOOLEAN, false) + DATA_IS_IGNITED
+//     (define BOOLEAN, false). Hierarchy count Entity(8) + LivingEntity(7) + Mob(15) -> 16/17/18.]
 const (
 	dataSwellDirIndex     uint8 = 16
 	dataCreeperPoweredIdx uint8 = 17
@@ -813,6 +814,7 @@ func creeperIgnitedDataEntry(ignited bool) entityDataEntry {
 // with an empty defineSynchedData), so Projectile's accessor count is 0 and AbstractArrow's first
 // defineId (ID_FLAGS) sits on top of Entity's 8, making DATA_ID_FLAGS index 8 — and PIERCE_LEVEL
 // (9) + IN_GROUND (10) follow.
+//
 //	[VERIFIED javap AbstractArrow.defineSynchedData: DATA_ID_FLAGS(define BYTE) +
 //	 PIERCE_LEVEL(define BYTE) + IN_GROUND(define BOOLEAN). javap Projectile: empty defineSynchedData.]
 const (
@@ -1025,6 +1027,25 @@ func encodeRotateHead(id int32, headYaw float32) pk.Packet {
 		int32(packetid.ClientboundRotateHead),
 		pk.VarInt(id),
 		degToByteAngle(headYaw),
+	)
+}
+
+// encodeSetEntityLink builds ClientboundSetEntityLink (jar: ClientboundSetEntityLinkPacket.write),
+// the LEASH packet: it tells the client that entity sourceID is leashed to holder destID (a fence
+// leash-knot or another entity). destID == 0 means DETACH (the leash is dropped). The wire is TWO
+// big-endian 32-bit Ints (FriendlyByteBuf.writeInt), NOT VarInts -- distinct from most entity
+// packets. The ctor sets sourceId = attachedEntity.getId(), destId = holder != null ? holder.getId()
+// : 0, so a nil holder (drop) writes destId 0.
+//
+//	[VERIFIED javap ClientboundSetEntityLinkPacket: ctor sourceId = entity1.getId(); destId =
+//	 entity2 != null ? entity2.getId() : 0. write(buf): buf.writeInt(sourceId); buf.writeInt(destId).
+//	 Emitted by ServerEntity.sendPairingData (Leashable && isLeashed -> new ...(entity, getLeashHolder))
+//	 and by Leashable.setLeashedTo (attach, holder) / dropLeash (detach, null).]
+func encodeSetEntityLink(sourceID, destID int32) pk.Packet {
+	return pk.Marshal(
+		int32(packetid.ClientboundSetEntityLink),
+		pk.Int(sourceID), // FriendlyByteBuf.writeInt -- big-endian Int32, NOT VarInt
+		pk.Int(destID),   // 0 == detach (holder == null)
 	)
 }
 

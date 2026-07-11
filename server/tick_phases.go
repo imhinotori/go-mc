@@ -777,6 +777,18 @@ func (t *TickLoop) tickAI() {
 		// are intentionally NOT dispatched here (tickEntityFreeze + tickEntityLava already own them) to avoid
 		// double-applying. Cite Entity.checkInsideBlocks / BlockState.entityInside.
 		t.checkInsideBlocks(e)
+		// LivingEntity.detectEquipmentUpdates (called from LivingEntity.tick): diff each of the mob's
+		// 6 real equipment slots (MAINHAND, OFFHAND, FEET, LEGS, CHEST, HEAD -- plus BODY/SADDLE, all
+		// 8 EquipmentSlot ordinals) against the last-broadcast snapshot and re-send a single-slot
+		// ClientboundSetEquipment for every CHANGED slot to the players tracking the mob. Without this
+		// wiring a mob's LIVE gear swap (a picked-up better weapon, a goal-driven mainhand change) was
+		// never broadcast -- only the spawn-time equipment (equipmentSpawnPackets) reached the client.
+		// Runs for EVERY live mob, AFTER serverAiStep so a goal that swapped a slot this tick is
+		// broadcast this tick (mirroring vanilla's baseTick->tick->detectEquipmentUpdates timing). RNG-
+		// free (pure value compare + broadcast). The pig (all-empty slots) seeds silently on the first
+		// call and then diffs to zero broadcasts every tick -- zero packets, byte-identical (and the pig
+		// oracle drives serverAiStep directly, never this loop). Cite LivingEntity.detectEquipmentUpdates.
+		t.detectMobEquipmentUpdates(e)
 		// MOB-PASS-03 (Phase 34): the Chicken.aiStep server extras (slow-fall + egg-lay). Vanilla runs
 		// aiStep INDEPENDENTLY of the running goals (Mob.aiStep -> customServerAiStep), so it fires every
 		// tick for a live chicken regardless of which goal is active. It is gated on typ == entity.Chicken.ID

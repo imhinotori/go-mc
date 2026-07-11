@@ -112,7 +112,7 @@ func TestDispenserTriggerAndFire(t *testing.T) {
 
 	// The spawned item is a loose ITEM entity shot out the +X (EAST) face: vx must be positive.
 	var shot *Entity
-	for _, e := range loop.only().entities.near(float64(pos.X)+1, float64(pos.Z), trackRange) {
+	for _, e := range loop.only().entities.near(float64(pos.X)+1, float64(pos.Z), pickupMergeScanChunks) {
 		if e.isItem {
 			shot = e
 			break
@@ -203,7 +203,7 @@ func TestDropperDropsLoose(t *testing.T) {
 	}
 	// Shot out the WEST face: vx must be negative.
 	var shot *Entity
-	for _, e := range loop.only().entities.near(float64(pos.X)-1, float64(pos.Z), trackRange) {
+	for _, e := range loop.only().entities.near(float64(pos.X)-1, float64(pos.Z), pickupMergeScanChunks) {
 		if e.isItem {
 			shot = e
 			break
