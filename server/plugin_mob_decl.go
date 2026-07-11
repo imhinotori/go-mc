@@ -692,6 +692,16 @@ func (t *TickLoop) spawnDeclaredMob(decl *mobDecl, x, y, z float64) *Entity {
 	// vanilla pig, which both route through here) gets its own deterministic stream and wanders
 	// independently. Done before the store add (the mob is not yet ticking).
 	reseedMobAI(e.ai, e.id)
+	// ZOMBIE finalizeSpawn (baby odds + CHICKEN_JOCKEY): the ZombieGroupData slice of Zombie.finalizeSpawn --
+	// getSpawnAsBabyOdds(random) (nextFloat<0.05) -> setBaby(true), then, for a baby, the two 0.05 chicken-
+	// jockey gates (ride existing / spawn new). Drawn HERE (after reseed gives the zombie its per-entity stream)
+	// and BEFORE the baby-metadata splice + populateMonsterEquipment below, matching the vanilla order (setBaby
+	// precedes populateDefaultEquipmentSlots). Zombie-family-gated (typ == Zombie/Husk/Drowned/ZombieVillager) so
+	// every other mob (the pig oracle) draws NOTHING here. Cite Zombie.finalizeSpawn + Zombie.getSpawnAsBabyOdds.
+	if e.typ == entity.Zombie.ID || e.typ == entity.Husk.ID ||
+		e.typ == entity.Drowned.ID || e.typ == entity.ZombieVillager.ID {
+		t.zombieFinalizeSpawnBabyAndJockey(e, mobRandom(e))
+	}
 	// MOB-CUBE (SulfurCube): apply SulfurCube.setSpawnSize (finalizeSpawn -> setSpawnSize): an adult cube
 	// spawns at size 2 with the size-scaled MAX_HEALTH (4*size=8), MOVEMENT_SPEED (0.2+0.1*size=0.4) and
 	// dims (0.49*size=0.98). setSize(...,true) resets health to the size-scaled MaxHealth, so it MUST run
@@ -924,6 +934,12 @@ func (t *TickLoop) spawnDeclaredMob(decl *mobDecl, x, y, z float64) *Entity {
 	case entity.Drowned.ID:
 		e.isDrowned = true
 		initDrownedTridentEquip(e, mobRandom(e))
+		// Drowned.finalizeSpawn NAUTILUS_SHELL roll: AFTER super (Zombie.finalizeSpawn -- baby/jockey +
+		// equipment, all above), if OFFHAND is empty roll nextFloat()<0.03 -> OFFHAND = NAUTILUS_SHELL. This
+		// keeps the drowned finalizeSpawn RNG stream in vanilla order: the trident/fishing-rod equip roll
+		// (initDrownedTridentEquip == Drowned.populateDefaultEquipmentSlots, called inside super) then this
+		// nautilus offhand roll. Drowned-gated. Cite Drowned.finalizeSpawn (NAUTILUS_SHELL_CHANCE 0.03).
+		drownedNautilusOffhandRoll(e, mobRandom(e))
 	case entity.Stray.ID:
 		e.isStray = true
 	case entity.Bogged.ID:

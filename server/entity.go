@@ -75,7 +75,7 @@ type Entity struct {
 	//	 movement = movement.multiply(stuckSpeedMultiplier); stuckSpeedMultiplier = Vec3.ZERO;
 	//	 setDeltaMovement(Vec3.ZERO). Entity.makeStuckInBlock: resetFallDistance(); stuckSpeedMultiplier=v.]
 	stuckSpeedMultiplierX, stuckSpeedMultiplierY, stuckSpeedMultiplierZ float64
-	stuck                                                              bool
+	stuck                                                               bool
 
 	// yaw, pitch are the body look angles in degrees; headYaw is the separate head rotation
 	// living entities carry (Float on the wire). Tick-owned plain values.
@@ -730,6 +730,17 @@ type Entity struct {
 	zvConverting        bool
 	zvConversionTime    int
 	zvConversionStarter int32
+	// ZOMBIE water-conversion state (net.minecraft.world.entity.monster.zombie.Zombie.tick):
+	// zombieInWaterTime mirrors Zombie.inWaterTime (++ each tick the zombie's eye is in WATER while
+	// convertsInWater(); RESET to -1 the moment the eye leaves water; at >= 600 -> startUnderWaterConversion(300)).
+	// zombieConversionTime mirrors Zombie.conversionTime (the drowning countdown once started; -- each tick,
+	// and at < 0 -> doUnderWaterConversion). zombieUnderWaterConverting mirrors DATA_DROWNED_CONVERSION_ID
+	// (isUnderWaterConverting()), set true by startUnderWaterConversion. A base Zombie converts to a Drowned;
+	// a Husk (convertsInWater() true, doUnderWaterConversion overridden) converts to a Zombie. Zero for every
+	// non-zombie-family entity. Cite Zombie.tick + startUnderWaterConversion + doUnderWaterConversion + Husk.
+	zombieInWaterTime          int
+	zombieConversionTime       int
+	zombieUnderWaterConverting bool
 	// --- BEE / GOAT / FROG (passive animals, Task) --------------------------------------------------
 	//
 	// Tick-owned plain values, set/read ONLY for their own type (each *AiStep gates on typ). isBee/isGoat/
@@ -741,9 +752,9 @@ type Entity struct {
 	// the louder, ram-prone variant). frogVariant mirrors Frog's DATA_VARIANT_ID (0 temperate / 1 warm /
 	// 2 cold, biome-derived at spawn). Zero for every other entity. Cite Bee.hasStung/timeSinceSting +
 	// Bee.customServerAiStep sting-death, Goat.isScreamingGoat + finalizeSpawn, Frog FrogVariant.
-	isBee             bool
-	isGoat            bool
-	isFrog            bool
+	isBee              bool
+	isGoat             bool
+	isFrog             bool
 	beeHasStung        bool
 	beeTimeSinceSting  int
 	beeUnderWaterTicks int // Bee.underWaterTicks: ++ while isInWater, reset out; >20 -> drown 1.0F (unconditional)
@@ -767,17 +778,17 @@ type Entity struct {
 	// ++ each customServerAiStep, reset on setHasNectar(true)), remainingCooldownBeforeLocatingNewFlower /
 	// NewHive (the two locate cooldowns, decremented each customServerAiStep). beePollinating mirrors
 	// BeePollinateGoal.pollinating (wantsToEnterHive reads it via isPollinating). CITE Bee.customServerAiStep.
-	beeStayOutOfHiveCountdown            int
-	beeTicksWithoutNectarSinceExiting    int
-	beeRemainingCooldownLocatingFlower   int
-	beeRemainingCooldownLocatingHive     int
-	beePollinating                       bool
+	beeStayOutOfHiveCountdown          int
+	beeTicksWithoutNectarSinceExiting  int
+	beeRemainingCooldownLocatingFlower int
+	beeRemainingCooldownLocatingHive   int
+	beePollinating                     bool
 	// beeHiveBlacklist mirrors BeeGoToHiveGoal.blacklistedTargets (max 3, FIFO): hive positions the bee
 	// failed to path to, shared between the locate + go-to-hive goals (in vanilla it lives on the goToHiveGoal
 	// instance the locate goal reaches via bee.goToHiveGoal; here it is bee-owned so both goals see it). CITE
 	// BeeGoToHiveGoal.{blacklistedTargets,blacklistTarget,isTargetBlacklisted,clearBlacklist}.
 	beeHiveBlacklist []pk.Position
-	goatScreaming     bool
+	goatScreaming    bool
 	// goatHasLeftHorn / goatHasRightHorn mirror Goat's DATA_HAS_LEFT_HORN / DATA_HAS_RIGHT_HORN (both
 	// default true; finalizeSpawn's UNIHORN roll can clear one; RamTarget.dropHorn clears one on a ram into
 	// a #snaps_goat_horn block). goatRamCooldownTicks mirrors the RAM_COOLDOWN_TICKS memory (sampled from
@@ -791,7 +802,7 @@ type Entity struct {
 	// and touches NONE of these fields (additive-minimal, byte-identical for the pig oracle). Nil for every
 	// non-goat. RAM_COOLDOWN_TICKS stays the flat goatRamCooldownTicks above. Cite GoatAi (LongJumpToRandomPos
 	// / PrepareRamNearestTarget / RamTarget).
-	goatBrain *goatBrainState
+	goatBrain   *goatBrainState
 	frogVariant int
 	// --- CAMEL / SNIFFER / ALLAY / AXOLOTL (passive animals, Task) ----------------------------------
 	//
@@ -989,8 +1000,8 @@ type Entity struct {
 	// ignores gold armor -- an angered piglin fights a gold-armored player. The FIGHT StartHunting behavior
 	// reads ANGRY_AT, so a live ANGRY_AT overrides the gold-neutrality drop. Cite PiglinAi.setAngerTarget +
 	// StartHuntingBehavior (ANGRY_AT). piglinAngerEnd is the game-tick the ANGRY_AT expires (600t).
-	piglinAngeredAt    int32
-	piglinAngerEnd     int64
+	piglinAngeredAt int32
+	piglinAngerEnd  int64
 	// piglinOffhandItem mirrors the offhand ItemStack a piglin holds while admiring a picked-up gold item
 	// (holdInOffhand). Dropped on hit (stopHoldingOffHandItem, false) or bartered (stopHoldingOffHandItem, true).
 	// Empty for every non-holding piglin. Cite PiglinAi.holdInOffhand / stopHoldingOffHandItem.

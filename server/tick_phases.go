@@ -924,6 +924,14 @@ func (t *TickLoop) tickAI() {
 		if e.isZombieVillager {
 			t.zombieVillagerAiStep(e)
 		}
+		// ZOMBIE / HUSK underwater (drowning) conversion (Zombie.tick ServerLevel branch): a submerged zombie
+		// starts a 300-tick drowning countdown at inWaterTime>=600, then converts -- base Zombie -> DROWNED,
+		// Husk -> ZOMBIE (Husk.doUnderWaterConversion). Zombie/Husk-gated inside zombieWaterConversionTick,
+		// AFTER serverAiStep, the sibling of drownedAiStep. RNG-FREE. ADDITIVE + gated (zero cost for every
+		// other mob -- the pig oracle stream is untouched). Cite Zombie.tick + Husk.doUnderWaterConversion.
+		if e.typ == entity.Zombie.ID || e.typ == entity.Husk.ID {
+			t.zombieWaterConversionTick(e)
+		}
 		// HOGLIN (GAP): the nether beast -- acquire nearest player + the melee that FLINGS the target
 		// (HoglinBase.hurtAndThrowTarget knock-up toss) + the zoglin-conversion timer (converts to a Zoglin
 		// after > 300 ticks in a non-nether dimension). Per-type-gated like the blaze, AFTER serverAiStep.

@@ -144,15 +144,17 @@ func wanderingTraderSupplier() *Supplier {
 }
 
 // zombieSupplier is the port of Zombie.createAttributes() : Monster.createMonsterAttributes() +
-// FOLLOW_RANGE 35.0 + MOVEMENT_SPEED 0.23000000417232513 + ATTACK_DAMAGE 3.0 + ARMOR 2.0 (+
-// SPAWN_REINFORCEMENTS_CHANCE, omitted — no reinforcement spawning consumer yet; CITED). The
-// MOVEMENT_SPEED literal is the vanilla float-widened double, preserved bit-for-bit.
+// FOLLOW_RANGE 35.0 + MOVEMENT_SPEED 0.23000000417232513 + ATTACK_DAMAGE 3.0 + ARMOR 2.0 +
+// SPAWN_REINFORCEMENTS_CHANCE (registration default 0.0 — now WIRED, consumed by Zombie.hurtServer's
+// HARD-difficulty reinforcement spawn). The MOVEMENT_SPEED literal is the vanilla float-widened double,
+// preserved bit-for-bit.
 func zombieSupplier() *Supplier {
 	return createMonsterAttributes().
 		AddValue(FollowRange, 35.0).
 		AddValue(MovementSpeed, 0.23000000417232513).
 		AddValue(AttackDamage, 3.0).
 		AddValue(Armor, 2.0).
+		Add(SpawnReinforcementsChance). // .add(SPAWN_REINFORCEMENTS_CHANCE) — registration default 0.0
 		Build()
 }
 
@@ -759,6 +761,7 @@ func huskSupplier() *Supplier {
 		AddValue(MovementSpeed, 0.23000000417232513).
 		AddValue(AttackDamage, 3.0).
 		AddValue(Armor, 2.0).
+		Add(SpawnReinforcementsChance). // Zombie base .add(SPAWN_REINFORCEMENTS_CHANCE) — default 0.0
 		Build()
 }
 
@@ -770,6 +773,7 @@ func drownedSupplier() *Supplier {
 		AddValue(MovementSpeed, 0.23000000417232513).
 		AddValue(AttackDamage, 3.0).
 		AddValue(Armor, 2.0).
+		Add(SpawnReinforcementsChance). // Zombie base .add(SPAWN_REINFORCEMENTS_CHANCE) — default 0.0
 		AddValue(StepHeight, 1.0).
 		Build()
 }
@@ -782,6 +786,7 @@ func zombieVillagerSupplier() *Supplier {
 		AddValue(MovementSpeed, 0.23000000417232513).
 		AddValue(AttackDamage, 3.0).
 		AddValue(Armor, 2.0).
+		Add(SpawnReinforcementsChance). // Zombie base .add(SPAWN_REINFORCEMENTS_CHANCE) — default 0.0
 		Build()
 }
 

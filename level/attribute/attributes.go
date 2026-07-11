@@ -124,4 +124,14 @@ var (
 	// LivingEntity by createLivingAttributes (Goat does NOT override it); consumed by
 	// LongJumpToRandomPos.calculateOptimalJumpVector (velocity = JUMP_STRENGTH * maxJumpVelocityMultiplier).
 	JumpStrength = NewRangedAttribute("jump_strength", 0.41999998688697815, 0.0, 32.0)
+
+	// SpawnReinforcementsChance is Attributes.SPAWN_REINFORCEMENTS_CHANCE (RangedAttribute
+	// "spawn_reinforcements", 0.0, 0.0, 1.0). Registered in Attributes.<clinit> via `new RangedAttribute(
+	// "attribute.name.spawn_reinforcements", 0.0d, 0.0d, 1.0d)` (javap Attributes: ldc_w spawn_reinforcements,
+	// dconst_0, dconst_0, dconst_1 - this session). Added (no base override) by Zombie.createAttributes, so a
+	// Zombie carries it at the registration default 0.0 unless randomizeReinforcementsChance sets a spawn base.
+	// Consumed by Zombie.hurtServer (the HARD-difficulty reinforcement-spawn gate: `nextFloat() <
+	// getAttributeValue(SPAWN_REINFORCEMENTS_CHANCE)`) and by the reinforcement caller/callee -0.05
+	// addPermanentModifier charges. Cite net.minecraft.world.entity.ai.attributes.Attributes.SPAWN_REINFORCEMENTS_CHANCE.
+	SpawnReinforcementsChance = NewRangedAttribute("spawn_reinforcements", 0.0, 0.0, 1.0)
 )

@@ -213,7 +213,7 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 		// single nextInt(381) draw is wolf/golem/piglin/bee-gated AND player-attacker-gated -- the pig (never a
 		// neutral mob) draws ZERO. Cite Wolf/IronGolem/ZombifiedPiglin.startPersistentAngerTimer +
 		// NeutralMob.isAngry (angerEndTime = gameTime + UniformInt(400,780).sample = 400 + nextInt(381)); Bee
-			// PERSISTENT_ANGER_TIME is the SAME UniformInt(400,780), so the bee reuses this exact draw.
+		// PERSISTENT_ANGER_TIME is the SAME UniformInt(400,780), so the bee reuses this exact draw.
 		if (e.typ == entity.Wolf.ID || e.typ == entity.IronGolem.ID || e.typ == entity.ZombifiedPiglin.ID || e.typ == entity.Bee.ID) && t.playerByEntityID(src.attacker) != nil {
 			e.angerEndTime = t.gametime + int64(400+mobRandom(e).nextInt(381))
 			e.angerTarget = src.attacker // setPersistentAngerTarget(the attacking player)
@@ -306,6 +306,19 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 	// `if (flag)` gate. Cite Zoglin.hurtServer (bytecode 41-68).
 	if e.isZoglin {
 		t.zoglinHurtServerRetaliate(e, src)
+	}
+
+	// ZOMBIE reinforcements (Zombie.hurtServer tail): AFTER super.hurtServer landed a hit, a HARD-difficulty
+	// zombie with a target rolls SPAWN_REINFORCEMENTS_CHANCE and, on a hit, spawns a reinforcement zombie near
+	// itself -- both the parent's and the child's chance drop 0.05. A per-type post-hurt hook (the sibling of
+	// the zoglin/piglin hooks), zombie-family-gated (typ == Zombie/Husk/Drowned/ZombieVillager). Reaching this
+	// tail means the hit landed (the i-frame `amount <= lastHurt` rejection returned early above), matching
+	// vanilla's `super.hurtServer` gate. NORMAL is the cited serverDifficulty, so the HARD gate inside makes
+	// this a dead path in production EXACTLY as vanilla (reinforcements are HARD-only) -- zero draws on NORMAL,
+	// and the pig oracle (never a zombie) is untouched. Cite Zombie.hurtServer + SPAWN_REINFORCEMENTS_CHANCE.
+	if e.typ == entity.Zombie.ID || e.typ == entity.Husk.ID ||
+		e.typ == entity.Drowned.ID || e.typ == entity.ZombieVillager.ID {
+		t.zombieHurtReinforcements(e, src)
 	}
 
 	// SKILLS-01 (mob_skills.go): the declared-skill "damaged" trigger — the MythicMobs ~onDamaged
