@@ -928,6 +928,15 @@ type Entity struct {
 	// Salmon.finalizeSpawn + Salmon$Variant + Salmon.getSalmonScale.
 	salmonVariant int
 	salmonScale   float32
+	// schoolLeaderID / schoolSize mirror AbstractSchoolingFish.leader / AbstractSchoolingFish.schoolSize
+	// (Cod/Salmon/TropicalFish -- Pufferfish is NOT a schooling fish and never sets these). schoolLeaderID
+	// is 0 == "no leader" (a leaderless/leader fish); a non-zero id is this follower's leader entity id
+	// (isFollower gates on the leader still being alive). schoolSize starts at 1 (the AbstractSchoolingFish
+	// ctor seeds schoolSize=1) and counts self+followers on a leader (hasFollowers == schoolSize>1,
+	// canBeFollowed == hasFollowers && schoolSize<getMaxSchoolSize). Zero/1 for every non-schooling entity.
+	// Cite AbstractSchoolingFish (leader/schoolSize fields + ctor schoolSize=1) + FollowFlockLeaderGoal.
+	schoolLeaderID int32
+	schoolSize     int
 	// --- NAUTILUS FAMILY (Task, NEW 26.2) ----------------------------------------------------------
 	// AbstractNautilus is a brain-driven TamableAnimal aquatic mount (Nautilus + the zombified
 	// ZombieNautilus). isNautilus gates the (bounded) swim tick; isZombieNautilus marks the undead

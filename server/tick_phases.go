@@ -1049,6 +1049,14 @@ func (t *TickLoop) tickAI() {
 		if e.isTadpole {
 			t.tadpoleAiStep(e)
 		}
+		// SCHOOLING FISH (Cod/Salmon/TropicalFish): AbstractSchoolingFish.tick leader-scatter -- a leader
+		// with followers whose 8-block school has scattered resets schoolSize to 1 (1-in-200/tick). ADDITIVE
+		// + per-type-gated via isSchoolingFish (zero cost / zero RNG for every non-schooling entity -- a
+		// Pufferfish is a plain AbstractFish and NEVER matches, so the pig oracle stream is untouched). Cite
+		// AbstractSchoolingFish.tick.
+		if isSchoolingFish(e.typ) {
+			t.schoolingFishTick(e)
+		}
 		// MOB-PREY (Task #9): the Endermite.aiStep despawn timer (life++ while non-persistent, discard at
 		// life>=2400). Per-type-gated like the creeper/enderman, AFTER serverAiStep. ADDITIVE + endermite-gated
 		// (zero cost / zero RNG for every non-endermite - the pig oracle stream is untouched).
