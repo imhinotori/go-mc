@@ -87,6 +87,58 @@ func (t *TickLoop) mobHasLineOfSight(e *Entity, target *tickPlayer) bool {
 	return !t.clipBlocksCollider(fromX, fromY, fromZ, toX, toY, toZ)
 }
 
+// sensingHasLineOfSightEntity is the mob-victim sibling of sensingHasLineOfSight (R1): the same
+// Sensing.hasLineOfSight(Entity) per-tick memo, but keyed on the VICTIM ENTITY id and running the
+// mob->mob eye raycast (mobHasLineOfSightEntity). It shares the per-mob memo (seen/unseen) with the
+// player variant — the id keyspace is the shared entity-id namespace (a player id and a mob id never
+// collide), so one memo per attacker covers both target kinds exactly as vanilla's single Sensing
+// keyed by getId(). Cite Sensing.hasLineOfSight(Entity).
+func (t *TickLoop) sensingHasLineOfSightEntity(e *Entity, victim *Entity) bool {
+	if e == nil || e.ai == nil || victim == nil {
+		return false
+	}
+	s := &e.ai.sense
+	if s.seen == nil || s.epoch != t.gametime {
+		s.epoch = t.gametime
+		s.seen = map[int32]bool{}
+		s.unseen = map[int32]bool{}
+	}
+	id := victim.id
+	if s.seen[id] {
+		return true
+	}
+	if s.unseen[id] {
+		return false
+	}
+	r := t.mobHasLineOfSightEntity(e, victim)
+	if r {
+		s.seen[id] = true
+	} else {
+		s.unseen[id] = true
+	}
+	return r
+}
+
+// mobHasLineOfSightEntity ports LivingEntity.hasLineOfSight(Entity) for a mob VICTIM: from the
+// attacker eye (getX, getEyeY, getZ) to the victim's eye (victim.getX, victim.getEyeY, victim.getZ).
+// The victim's eye height is the same height*0.85f mob rule (mobEyeHeightFactor). >128 blocks -> false,
+// else clip against COLLIDER shapes and return true iff MISS.
+//	[VERIFIED javap LivingEntity.hasLineOfSight(Entity): to at e.getEyeY(); dist>128 -> false;
+//	 level.clip(ClipContext(from,to,COLLIDER,NONE,this)).getType() == MISS. Entity.getEyeY: y+eyeHeight;
+//	 EntityDimensions.defaultEyeHeight: height*0.85f.]
+func (t *TickLoop) mobHasLineOfSightEntity(e *Entity, victim *Entity) bool {
+	if t.world() == nil {
+		return false
+	}
+	fromX, fromY, fromZ := e.x, e.y+e.height*mobEyeHeightFactor, e.z
+	toX, toY, toZ := victim.x, victim.y+victim.height*mobEyeHeightFactor, victim.z
+	ddx, ddy, ddz := toX-fromX, toY-fromY, toZ-fromZ
+	if ddx*ddx+ddy*ddy+ddz*ddz > losMaxDistance*losMaxDistance {
+		return false
+	}
+	return !t.clipBlocksCollider(fromX, fromY, fromZ, toX, toY, toZ)
+}
+
 // clipBlocksCollider is BlockGetter.clip(ClipContext) for Block.COLLIDER / Fluid.NONE: DDA-traverse
 // the cells the segment (from->to) crosses (BlockGetter.traverseBlocks) and per cell test the
 // COLLIDER shape (VoxelShape.clip). Returns true on the FIRST collider the ray enters (hit != MISS),

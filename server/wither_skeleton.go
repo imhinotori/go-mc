@@ -101,6 +101,13 @@ func (t *TickLoop) witherSkeletonApplyWither(e *Entity, target *tickPlayer) {
 	t.addPlayerEffect(target, e.id, effectWither, witherSkeletonWitherDuration, witherSkeletonWitherAmplifier, 1.0)
 }
 
+// witherSkeletonApplyWitherEntity is the mob-victim sibling of witherSkeletonApplyWither (R1): WITHER 200
+// (amplifier 0) on a landed hit against a MOB victim via addEntityEffectWithSource. Cite
+// WitherSkeleton.doHurtTarget (target instanceof LivingEntity).
+func (t *TickLoop) witherSkeletonApplyWitherEntity(e *Entity, victim *Entity) {
+	t.addEntityEffectWithSource(victim, e.id, effectWither, witherSkeletonWitherDuration, witherSkeletonWitherAmplifier, 1.0)
+}
+
 // populateWitherSkeletonEquipment ports WitherSkeleton.populateDefaultEquipmentSlots: MAINHAND =
 // STONE_SWORD. It does NOT call super (no armor roll). RNG-FREE. Cite WitherSkeleton.populateDefaultEquipmentSlots.
 func populateWitherSkeletonEquipment(e *Entity) {

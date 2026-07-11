@@ -50,6 +50,23 @@ func (t *TickLoop) caveSpiderApplyPoison(e *Entity, target *tickPlayer) {
 	t.addPlayerEffect(target, e.id, effectPoison, i*20, caveSpiderPoisonAmplifier, 1.0)
 }
 
+// caveSpiderApplyPoisonEntity is the mob-victim sibling of caveSpiderApplyPoison (R1): the same
+// difficulty-scaled POISON (i*20 ticks, i=7 NORMAL / 15 HARD / 0 else) applied to a MOB victim via
+// addEntityEffectWithSource. Cite CaveSpider.doHurtTarget (target instanceof LivingEntity).
+func (t *TickLoop) caveSpiderApplyPoisonEntity(e *Entity, victim *Entity) {
+	i := 0
+	switch serverDifficulty {
+	case difficultyNormal:
+		i = caveSpiderPoisonSecondsNormal // NORMAL -> 7
+	case difficultyHard:
+		i = caveSpiderPoisonSecondsHard // HARD -> 15
+	}
+	if i <= 0 {
+		return // EASY / PEACEFUL -> no poison (i == 0)
+	}
+	t.addEntityEffectWithSource(victim, e.id, effectPoison, i*20, caveSpiderPoisonAmplifier, 1.0)
+}
+
 // spawnPiglinBrute creates an always-hostile PiglinBrute at (x,y,z) and adds it to the owner region store
 // (the tracker broadcasts AddEntity next tick). Mirrors spawnPiglin/spawnBlaze but renders as
 // entity.PiglinBrute and runs PLAIN hostile combat (piglinBruteAiStep): acquire the nearest player + melee

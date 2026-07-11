@@ -105,6 +105,64 @@ func (t *TickLoop) ironGolemDoHurtTarget(e *Entity, target *tickPlayer) {
 	// this.playSound(IRON_GOLEM_ATTACK, 1.0f, 1.0f): a client-side sound, server no-op (cited).
 }
 
+// ironGolemDoHurtTargetEntity is the R1 mob-victim form of IronGolem.doHurtTarget (the headline consumer):
+// a golem striking the Enemy mob it acquired via iron_golem_hostile_target. It is byte-for-byte the same
+// override shape as the player form — set attackAnimationTick + broadcast event 4, roll the range damage
+// (ad/2 + nextInt((int)ad)) on the golem's OWN rng stream, apply it through the MOB hurt path
+// (applyDamageEntity, which runs the standard horizontal dealDefaultKnockbackEntity), and — if the hit
+// LANDED — add the +0.4 vertical fling scaled by (1 - victim KNOCKBACK_RESISTANCE) to the victim's velocity
+// (setDeltaMovement stacks it on the horizontal recoil). The victim IS a LivingEntity (a mob), so the kbr
+// read is live (not the dconst_0 non-living branch). RNG: EXACTLY ONE nextInt((int)ad) per landed swing.
+//
+//	[VERIFIED CFR IronGolem.doHurtTarget(ServerLevel, Entity): attackAnimationTick=10; broadcastEntityEvent
+//	 (this, 4); ad=getAttackDamage(); damage=(int)ad>0 ? ad/2f+nextInt((int)ad) : ad; hurt=victim.hurtServer
+//	 (mobAttack(this), damage); if(hurt){ kbr = victim instanceof LivingEntity le ? le.getAttributeValue
+//	 (KNOCKBACK_RESISTANCE):0; scale=max(0,1-kbr); victim.setDeltaMovement(getDeltaMovement().add(0,0.4f*scale,
+//	 0)); doPostAttackEffects; } playSound(IRON_GOLEM_ATTACK).]
+func (t *TickLoop) ironGolemDoHurtTargetEntity(e *Entity, victim *Entity) {
+	// this.attackAnimationTick = 10; level.broadcastEntityEvent(this, (byte)4).
+	e.ironGolemAttackAnimationTick = ironGolemAttackAnimationTicks
+	t.broadcastToTrackers(e.id, encodeEntityEvent(e.id, entityEventIronGolemAttack))
+
+	// float ad = getAttackDamage(); damage = (int)ad>0 ? ad/2f + nextInt((int)ad) : ad.
+	ad := float32(e.getAttributeValue(attribute.AttackDamage))
+	var damage float32
+	if int(ad) > 0 {
+		damage = ad/2.0 + float32(mobRandom(e).nextInt(int(ad))) // ONE nextInt((int)ad) draw
+	} else {
+		damage = ad
+	}
+
+	// boolean hurt = victim.hurtServer(mobAttack(this), damage). Snapshot the landed flag BEFORE the state
+	// mutates (the same i-frame excess gate applyGolemAttackDamage uses for the player), then apply through
+	// the MOB hurt path (which also runs dealDefaultKnockbackEntity's horizontal recoil).
+	src := damageSourceMobAttack(e.id)
+	hurt := !victim.dead
+	if hurt && float32(victim.invulnerableTime) > hurtCooldownConst {
+		amt := damage
+		if amt < 0 {
+			amt = 0
+		}
+		hurt = amt > victim.lastHurt
+	}
+	t.applyDamageEntity(victim, src, damage)
+
+	if hurt {
+		// scale = max(0, 1 - victim.getAttributeValue(KNOCKBACK_RESISTANCE)). The victim is a LivingEntity
+		// (a mob), so the kbr read is live (the instanceof-LivingEntity branch, NOT dconst_0).
+		kbr := victim.getAttributeValue(attribute.KnockbackResistance)
+		scale := math.Max(0.0, 1.0-kbr)
+		// victim.setDeltaMovement(getDeltaMovement().add(0, 0.4f*scale, 0)): the pure-vertical fling stacked
+		// on the horizontal recoil applyDamageEntity already applied. The velocity is the mob's e.vx/vy/vz
+		// (the tracker syncs it via sendEntityMotion next tick — no per-victim client send, a mob has no client).
+		victim.vy += float64(float32(ironGolemFlingVertical)) * scale
+		// EnchantmentHelper.doPostAttackEffects(level, victim, src): Thorns on the mob victim reflects onto
+		// the golem. v1 no enchants on the golem -> a cited pass-through, kept for parity.
+		t.doPostAttackEffects(enchEntityRef{mob: victim}, src)
+	}
+	// this.playSound(IRON_GOLEM_ATTACK, 1.0f, 1.0f): a client-side sound, server no-op (cited).
+}
+
 // applyGolemAttackDamage is the hurtOrSimulate(source, amount) -> LivingEntity.hurtServer bridge for the
 // golem's PLAYER victim — a thin sibling of applyAttackDamage (attack_dispatch.go) that carries the golem's
 // mob_attack DamageSource (with the golem's attacker id) instead of a player_attack source. It returns

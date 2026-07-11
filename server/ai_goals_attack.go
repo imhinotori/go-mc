@@ -260,6 +260,15 @@ func (g *meleeAttackGoal) tick(t *TickLoop, e *Entity) {
 	}
 	target := t.playerByEntityID(id)
 	if target == nil {
+		// R1 (mob-vs-mob melee seam): the target id did NOT resolve to a player -> resolve it as a MOB
+		// victim in the owning-region entity store and run the PARALLEL entity-victim tick path. The
+		// player-victim path below stays byte-identical (a mob attacking a player never reaches here). A
+		// zombie's target is a player, so its resolve hits the player branch above and this is never taken;
+		// an iron_golem's Enemy target is a mob, so it resolves here. Cite Mob.tick (target is a LivingEntity;
+		// v1 splits Player/Mob into two victim shapes).
+		if victim, ok := t.cur().entities.get(id); ok && !victim.dead {
+			g.tickEntityVictim(t, e, victim)
+		}
 		return
 	}
 	// setLookAt(target, 30, 30): turn the HEAD toward the target at most 30°/tick — the LookControl seam.
@@ -330,6 +339,160 @@ func (g *meleeAttackGoal) tick(t *TickLoop, e *Entity) {
 		g.ticksUntilNextAttack--
 	}
 	g.checkAndPerformAttack(t, e, target)
+}
+
+// tickEntityVictim is the R1 mob-victim mirror of tick() for a MOB target (an iron_golem's Enemy, an
+// ocelot's chicken, a wolf's skeleton). It is byte-for-byte the SAME MeleeAttackGoal.tick shape as the
+// player path — the ONLY difference is the victim is an *Entity, so the position reads / distance / reach /
+// LoS / doHurtTarget route through the entity-victim variants. The path-recalc RNG (nextFloat()<0.05,
+// 4+nextInt(7)) draws on the attacker's OWN rng stream exactly as the player path does. The pig oracle is
+// passive (no melee goal), so this never ticks on it. Cite MeleeAttackGoal.tick (target: LivingEntity).
+func (g *meleeAttackGoal) tickEntityVictim(t *TickLoop, e *Entity, victim *Entity) {
+	// setLookAt(victim, 30, 30): HEAD-only turn toward the mob victim (same LookControl seam; body yaw is
+	// owned by the nav, as in the player path).
+	yRotD := yawTowardDeg(victim.x-e.x, victim.z-e.z)
+	e.headYaw = rotlerpDeg(e.headYaw, yRotD, meleeLookMaxYawStep)
+
+	// ticksUntilNextPathRecalculation = max(.. - 1, 0): decrement the path-recompute throttle each tick.
+	g.ticksUntilNextPathRecalculation = max(g.ticksUntilNextPathRecalculation-1, 0)
+
+	if g.ticksUntilNextPathRecalculation <= 0 {
+		noPathedTarget := g.pathedTargetX == 0 && g.pathedTargetY == 0 && g.pathedTargetZ == 0
+		dpx := victim.x - g.pathedTargetX
+		dpy := victim.y - g.pathedTargetY
+		dpz := victim.z - g.pathedTargetZ
+		movedSqr := dpx*dpx + dpy*dpy + dpz*dpz
+		movedFar := movedSqr >= 1.0
+		// Same re-engage guard the player path uses (the async nav CLEARS the path on arrival): re-issue the
+		// want when there is no active path AND (not yet in reach OR the victim moved at all).
+		stalled := !e.ai.navigation.active() && (!isWithinMeleeAttackRangeEntity(e, victim) || movedSqr > 1e-6)
+		if noPathedTarget || movedFar || stalled || mobRandom(e).nextFloat() < 0.05 {
+			g.pathedTargetX = victim.x
+			g.pathedTargetY = victim.y
+			g.pathedTargetZ = victim.z
+			g.ticksUntilNextPathRecalculation = 4 + mobRandom(e).nextInt(7)
+			ddx := victim.x - e.x
+			ddy := victim.y - e.y
+			ddz := victim.z - e.z
+			distSqr := ddx*ddx + ddy*ddy + ddz*ddz
+			if distSqr > 1024.0 {
+				g.ticksUntilNextPathRecalculation += 10
+			} else if distSqr > 256.0 {
+				g.ticksUntilNextPathRecalculation += 5
+			}
+			getSpeed := e.getAttributeValue(attribute.MovementSpeed) * g.speedModifier
+			e.ai.setWantTargetSpeed(victim.x, victim.y, victim.z, getSpeed)
+		}
+	}
+
+	// ticksUntilNextAttack = max(ticksUntilNextAttack - 1, 0): the RNG-FREE per-attack countdown.
+	if g.ticksUntilNextAttack > 0 {
+		g.ticksUntilNextAttack--
+	}
+	g.checkAndPerformAttackEntity(t, e, victim)
+}
+
+// checkAndPerformAttackEntity is the mob-victim mirror of checkAndPerformAttack: if canPerformAttackEntity,
+// resetAttackCooldown() + swing + the per-type doHurtTarget override (or the shared doHurtTargetEntity).
+// The 5 doHurtTarget overrides (ravager / iron_golem / husk / cavespider / witherskel) apply to a mob
+// victim too, via the entity-victim sibling of each. NO RNG beyond the per-override draw. Cite
+// MeleeAttackGoal.checkAndPerformAttack.
+func (g *meleeAttackGoal) checkAndPerformAttackEntity(t *TickLoop, e *Entity, victim *Entity) {
+	if !g.canPerformAttackEntity(t, e, victim) {
+		return
+	}
+	g.resetAttackCooldown()
+	t.broadcastMobSwing(e) // mob.swing(MAIN_HAND)
+	// Ravager.doHurtTarget override: set attackTick + broadcast event 4 BEFORE the damage.
+	if e.typ == entity.Ravager.ID {
+		t.ravagerDidHurt(e)
+	}
+	// IronGolem.doHurtTarget is a FULL OVERRIDE (headline R1 consumer): the range-roll damage + the +0.4
+	// vertical fling, applied to a mob victim via ironGolemDoHurtTargetEntity. Never both.
+	if e.typ == entity.IronGolem.ID {
+		t.ironGolemDoHurtTargetEntity(e, victim)
+		return
+	}
+	hurt := g.doHurtTargetEntity(t, e, victim)
+	// Husk.doHurtTarget override: HUNGER on a landed hit against a LivingEntity (a mob victim here) with an
+	// empty mainhand. Husk-gated. Cite Husk.doHurtTarget.
+	if e.typ == entity.Husk.ID && hurt {
+		t.huskApplyHungerEntity(e, victim)
+	}
+	// CaveSpider.doHurtTarget override: POISON on a landed hit. CaveSpider-gated. Cite CaveSpider.doHurtTarget.
+	if e.typ == entity.CaveSpider.ID && hurt {
+		t.caveSpiderApplyPoisonEntity(e, victim)
+	}
+	// WitherSkeleton.doHurtTarget override: WITHER on a landed hit against a LivingEntity. WitherSkeleton-
+	// gated. Cite WitherSkeleton.doHurtTarget.
+	if e.typ == entity.WitherSkeleton.ID && hurt {
+		t.witherSkeletonApplyWitherEntity(e, victim)
+	}
+}
+
+// canPerformAttackEntity is the mob-victim mirror of canPerformAttack: isTimeToAttack() &&
+// isWithinMeleeAttackRangeEntity(victim) && getSensing().hasLineOfSight(victim). NO RNG. Cite
+// MeleeAttackGoal.canPerformAttack.
+func (g *meleeAttackGoal) canPerformAttackEntity(t *TickLoop, e *Entity, victim *Entity) bool {
+	if g.ticksUntilNextAttack > 0 { // !isTimeToAttack()
+		return false
+	}
+	if !isWithinMeleeAttackRangeEntity(e, victim) {
+		return false
+	}
+	return t.sensingHasLineOfSightEntity(e, victim) // getSensing().hasLineOfSight(victim)
+}
+
+// doHurtTargetEntity ports the shared Mob.doHurtTarget(ServerLevel, Entity) limb for a MOB victim — the
+// exact sibling of doHurtTarget(*tickPlayer), differing only in the victim shape. It deals ATTACK_DAMAGE
+// through the mob hurt path (applyDamageEntity, which runs the standard dealDefaultKnockback), snapshots
+// the landed flag off the victim's dead/invulnerableTime/lastHurt the SAME way the player path does BEFORE
+// the state mutates, and runs doPostAttackEffects on a landed hit. Returns the landed flag (Mob.doHurtTarget's
+// `boolean flag`) so the per-type override can gate its post-attack effect. NO RNG for the base (the
+// knockback degenerate-direction guard draws inside applyDamageEntity, not here). Cite Mob.doHurtTarget.
+func (g *meleeAttackGoal) doHurtTargetEntity(t *TickLoop, e *Entity, victim *Entity) bool {
+	dmg := float32(e.getAttributeValue(attribute.AttackDamage)) // (float) getAttributeValue(ATTACK_DAMAGE)
+	weapon := e.getMainHandItem()
+	src := damageSourceMobAttack(e.id) // getWeaponItem().getDamageSource(this) -> mobAttack(this)
+	// EnchantmentHelper.modifyDamage(level, weapon, victim, src, dmg): an enchanted mob weapon folds in; an
+	// empty/un-enchanted weapon returns dmg unchanged. Cite Mob.doHurtTarget offsets 23-33.
+	dmg = t.enchModifyDamage(weapon, enchEntityRef{mob: victim}, src, dmg)
+
+	// boolean hurt = victim.hurtServer(level, src, dmg): applyDamageEntity is void, so the landed boolean
+	// is snapshotted the SAME way the player path derives it (the i-frame excess gate) BEFORE the state
+	// mutates — it gates the doPostAttackEffects tail exactly as Mob.doHurtTarget's `if (flag)`.
+	hurt := !victim.dead
+	if hurt && float32(victim.invulnerableTime) > hurtCooldownConst {
+		amt := dmg
+		if amt < 0 {
+			amt = 0
+		}
+		hurt = amt > victim.lastHurt
+	}
+	t.applyDamageEntity(victim, src, dmg) // the MOB hurt path (also runs dealDefaultKnockbackEntity)
+	if hurt {
+		// causeExtraKnockback: base ATTACK_KNOCKBACK 0 + no weapon Knockback enchant in scope -> a cited
+		// no-op (the base 0.4 recoil already ran via dealDefaultKnockbackEntity inside applyDamageEntity).
+		// EnchantmentHelper.doPostAttackEffects(level, victim, src): Thorns on the mob victim reflects onto
+		// this attacker. Cite Mob.doHurtTarget offset 110-114.
+		t.doPostAttackEffects(enchEntityRef{mob: victim}, src)
+	}
+	return hurt // Mob.doHurtTarget returns the landed flag
+}
+
+// huskApplyHungerEntity ports the Husk.doHurtTarget HUNGER tail for a MOB victim: addEffect(new
+// MobEffectInstance(HUNGER, 140 * (int)getEffectiveDifficulty()), husk) via addEntityEffectWithSource.
+// Same empty-mainhand + (int)effectiveDifficulty guards as the player variant. Cite Husk.doHurtTarget.
+func (t *TickLoop) huskApplyHungerEntity(e *Entity, victim *Entity) {
+	if e.getMainHandItem().Count > 0 {
+		return // getMainHandItem().isEmpty() guard
+	}
+	eff := int(effectiveDifficulty(serverDifficulty, t.gametime, 0, 0.0))
+	dur := huskHungerDurationBase * eff
+	if dur <= 0 {
+		return // (int)effectiveDifficulty == 0 -> a 0-tick HUNGER is a no-op add
+	}
+	t.addEntityEffectWithSource(victim, e.id, effectHunger, dur, 0, 1.0)
 }
 
 // checkAndPerformAttack ports MeleeAttackGoal.checkAndPerformAttack: if canPerformAttack (the swing
@@ -550,6 +713,34 @@ func isWithinMeleeAttackRange(e *Entity, target *tickPlayer) bool {
 	tMinX, tMaxX := target.x-phw, target.x+phw
 	tMinZ, tMaxZ := target.z-phw, target.z+phw
 	tMinY, tMaxY := target.y, target.y+playerHeight
+
+	// AABB.intersects: overlap on all three axes.
+	return aMinX <= tMaxX && aMaxX >= tMinX &&
+		aMinY <= tMaxY && aMaxY >= tMinY &&
+		aMinZ <= tMaxZ && aMaxZ >= tMinZ
+}
+
+// isWithinMeleeAttackRangeEntity is the mob-victim sibling of isWithinMeleeAttackRange (R1): the
+// attacker's DEFAULT_ATTACK_REACH-inflated attack box (inflate(reach, 0, reach) — vertical ZERO) must
+// intersect the VICTIM's hitbox (its width x height collision AABB, feet at victim.y). Identical to the
+// player variant except the victim box is the mob's width/height instead of the player's. No held weapon
+// -> DEFAULT_ATTACK_REACH, min-range 0. NO RNG.
+//	[VERIFIED javap Mob.isWithinMeleeAttackRange: reach = DEFAULT_ATTACK_REACH; getAttackBoundingBox(reach)
+//	 = getBoundingBox().inflate(reach, 0.0, reach); intersects(target.getHitbox()); min-range 0 -> single-box.
+//	 LivingEntity.getHitbox default == getBoundingBox() (width x height, feet at y).]
+func isWithinMeleeAttackRangeEntity(e *Entity, victim *Entity) bool {
+	reach := defaultAttackReach
+	// The attacker's inflated attack box: horizontal half-width = mob.width/2 + reach, vertical UNCHANGED.
+	hw := e.width/2 + reach
+	aMinX, aMaxX := e.x-hw, e.x+hw
+	aMinZ, aMaxZ := e.z-hw, e.z+hw
+	aMinY, aMaxY := e.y, e.y+e.height
+
+	// The victim's hitbox (its collision AABB, feet at victim.y): width x height.
+	vhw := victim.width / 2
+	tMinX, tMaxX := victim.x-vhw, victim.x+vhw
+	tMinZ, tMaxZ := victim.z-vhw, victim.z+vhw
+	tMinY, tMaxY := victim.y, victim.y+victim.height
 
 	// AABB.intersects: overlap on all three axes.
 	return aMinX <= tMaxX && aMaxX >= tMinX &&
