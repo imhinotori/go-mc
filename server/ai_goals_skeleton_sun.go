@@ -22,14 +22,15 @@ package server
 //
 // v1 REDUCTIONS (cited, sibling of the fox flee-sun): isBrightOutside == !isDarkEnoughToSpawn (the same
 // day/night proxy the fox SeekShelterGoal + hostile spawn rule use); canSeeSky == the superflat sky stub
-// (fire.go); getItemBySlot(HEAD).isEmpty() == cited constant-true (no equipment slots on a v1 skeleton, so
-// its head is always bare — the vanilla default for a naturally-spawned skeleton); getWalkTargetValue >= 0
-// == cited constant-true (no path-malus subsystem; base PathfinderMob getWalkTargetValue is 0.0, jar-
-// verified in ai_goals_avoid.go). setAvoidSun NOW has its real observable effect: it drives
-// GroundPathNavigation.trimPath's avoid-sun tail (navigation.trimPathAvoidSun, run on path adoption in
-// async.go) so a shaded day-time skeleton's fresh path is TRUNCATED at the first sky-exposed node — it
-// routes only as far as the shade extends (VERIFIED CFR GroundPathNavigation.trimPath). Previously a cited
-// no-op; the NodeEvaluator path-malus work landed the real trim. The RESTRICT goal still holds no MOVE
+// (fire.go); getWalkTargetValue >= 0 == cited constant-true (no path-malus subsystem; base PathfinderMob
+// getWalkTargetValue is 0.0, jar-verified in ai_goals_avoid.go). The head-armor check is a REAL
+// equipment read now (entity_equipment.go getItemBySlot(eqSlotHead)): a v1 skeleton with no spawn-time
+// pop carries no HEAD equipment (Count==0), so the bare-skeleton default behavior is unchanged; a
+// helmet or carved pumpkin in HEAD flips BOTH sun goals off (the same ItemStack.isEmpty() guard as
+// vanilla). setAvoidSun (entity_sun_avoid.go) drives GroundPathNavigation.trimPath's avoid-sun tail
+// (navigation.trimPathAvoidSun, run on path adoption in async.go) so a shaded day-time skeleton's
+// fresh path is TRUNCATED at the first sky-exposed node — it routes only as far as the shade
+// extends (VERIFIED CFR GroundPathNavigation.trimPath). The RESTRICT goal still holds no MOVE
 // flag, so it never fights the flee — faithful.
 
 import "math"
@@ -104,7 +105,13 @@ func (g *fleeSunGoal) canUse(t *TickLoop, e *Entity) bool {
 	if !t.canSeeSky(e) { // !canSeeSky(blockPosition())
 		return false
 	}
-	// getItemBySlot(HEAD).isEmpty() == cited constant-true (v1 skeleton has no head equipment).
+	// getItemBySlot(HEAD).isEmpty(): a real equipment read (entity_equipment.go getItemBySlot). A
+	// bare skeleton (no spawn-time HEAD pop) has Count==0 and still fires; a helmeted skeleton
+	// (e.g. one that picked up a leather cap) reads Count>0 and is rejected — the vanilla head-armor
+	// blocks the day-time burn path entirely.
+	if e.getItemBySlot(eqSlotHead).Count > 0 {
+		return false
+	}
 	return g.setWantedPos(t, e)
 }
 
@@ -143,18 +150,23 @@ func (g *restrictSunGoal) canUse(t *TickLoop, e *Entity) bool {
 	if e.ai == nil { // hasGroundPathNavigation(mob) — a v1 AI mob always has the ground navigation
 		return false
 	}
-	// isBrightOutside() && getItemBySlot(HEAD).isEmpty() (cited constant-true) && hasGroundPathNavigation.
-	return !t.isNightByGametime()
+	if t.isNightByGametime() { // !isBrightOutside()
+		return false
+	}
+	// getItemBySlot(HEAD).isEmpty(): a real equipment read (the jar VERIFIED-CFR guard). A bare
+	// skeleton's head slot is EMPTY (Count==0) and the goal fires; a helmeted skeleton's HEAD
+	// slot is non-empty and the goal is gated off — the vanilla burn-avoidance behavior
+	// applies only to UN-protected mobs.
+	if e.getItemBySlot(eqSlotHead).Count > 0 {
+		return false
+	}
+	return true
 }
 
 func (g *restrictSunGoal) start(_ *TickLoop, e *Entity) {
-	if e.ai != nil {
-		e.ai.navigation.setAvoidSun(true) // GroundPathNavigation.setAvoidSun(true)
-	}
+	e.setAvoidSun(true) // GroundPathNavigation.setAvoidSun(true) — see entity_sun_avoid.go
 }
 
 func (g *restrictSunGoal) stop(_ *TickLoop, e *Entity) {
-	if e.ai != nil {
-		e.ai.navigation.setAvoidSun(false) // GroundPathNavigation.setAvoidSun(false)
-	}
+	e.setAvoidSun(false) // GroundPathNavigation.setAvoidSun(false) — see entity_sun_avoid.go
 }
