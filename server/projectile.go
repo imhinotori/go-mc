@@ -25,6 +25,7 @@ import (
 
 	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/data/registryid"
+	"github.com/imhinotori/sulfur/level/attribute"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
@@ -158,17 +159,34 @@ func (t *TickLoop) tickArrow(e *Entity) {
 	}
 
 	// Entity hit. A trident that has already dealt damage (ThrownTrident.findHitEntity returns null when
-	// dealtDamage) does NOT re-hit — this is the returning/post-hit trident. A trident that hits deals a
+	// dealtDamage) does NOT re-hit -- this is the returning/post-hit trident. A trident that hits deals a
 	// FLAT 8 (+ Impaling) and BOUNCES (not consumed); an arrow deals ceil(velocity*baseDamage) and is
 	// consumed. Cite ThrownTrident.onHitEntity / findHitEntity vs AbstractArrow.onHitEntity.
-	if victim := t.arrowFindHitPlayer(e, ox, oy, oz, endX, endY, endZ); victim != nil {
+	//
+	// ProjectileUtil.getEntityHitResult returns the SINGLE nearest EntityHitResult over ALL candidates
+	// (players + mobs). Scan both candidate sets, then dispatch to whichever is nearer along the segment
+	// (smaller tHit) -- so a mob standing in front of a player takes the hit and vice-versa. The per-family
+	// on-hit (player vs mob) is mirrored 1:1 (same damage math, different victim + hurt entrypoint).
+	half := entity.Arrow.Width / 2.0
+	pv, pt := t.projectileFindHitPlayerT(e.arrowShooterID, ox, oy, oz, endX, endY, endZ)
+	mv, mt := t.projectileFindHitMobT(e.arrowShooterID, half, ox, oy, oz, endX, endY, endZ)
+	if pv != nil && (mv == nil || pt <= mt) {
 		if e.isTrident {
 			if !e.tridentDealtDamage {
-				t.tridentOnHitEntity(e, victim) // bounces; continues into the flight physics below
+				t.tridentOnHitEntity(e, pv) // bounces; continues into the flight physics below
 			}
 		} else {
-			t.arrowOnHitPlayer(e, victim)
-			return // v1: no pierce — the arrow is consumed by the hit
+			t.arrowOnHitPlayer(e, pv)
+			return // v1: no pierce -- the arrow is consumed by the hit
+		}
+	} else if mv != nil {
+		if e.isTrident {
+			if !e.tridentDealtDamage {
+				t.tridentOnHitMob(e, mv) // bounces; continues into the flight physics below
+			}
+		} else {
+			t.arrowOnHitMob(e, mv)
+			return // v1: no pierce -- the arrow is consumed by the hit
 		}
 	}
 
@@ -207,18 +225,29 @@ func (t *TickLoop) tickArrow(e *Entity) {
 }
 
 // arrowFindHitPlayer is the ProjectileUtil.getEntityHitResult port scoped to players: the FIRST player
-// whose collision AABB the arrow's flight segment (origin→next) passes through, excluding the shooter.
+// whose collision AABB the arrow's flight segment (origin->next) passes through, excluding the shooter.
 // It returns the nearest such player (sorted by distance from the segment origin, matching stepMoveAndHit's
-// entitiesHit.sort). v1 tests players only (mobs are not arrow victims yet — a cited scope note).
+// entitiesHit.sort).
 func (t *TickLoop) arrowFindHitPlayer(e *Entity, ox, oy, oz, nx, ny, nz float64) *tickPlayer {
 	return t.projectileFindHitPlayer(e.arrowShooterID, ox, oy, oz, nx, ny, nz)
 }
 
 // projectileFindHitPlayer is the shooter-id-keyed core of arrowFindHitPlayer: the nearest player whose
-// collision AABB the flight segment (origin→next) passes through, excluding the owner (ownerID). Shared by
-// every projectile family (arrow/throwable/potion/hurting) — the only per-family variance is which owner id
-// to exclude, so the geometry lives here once. v1 tests players only (mobs are a cited scope note).
+// collision AABB the flight segment (origin->next) passes through, excluding the owner (ownerID). Shared by
+// every projectile family (arrow/throwable/potion/hurting) -- the only per-family variance is which owner id
+// to exclude, so the geometry lives here once.
 func (t *TickLoop) projectileFindHitPlayer(ownerID int32, ox, oy, oz, nx, ny, nz float64) *tickPlayer {
+	best, _ := t.projectileFindHitPlayerT(ownerID, ox, oy, oz, nx, ny, nz)
+	return best
+}
+
+// projectileFindHitPlayerT is projectileFindHitPlayer exposing the entry parameter tHit in [0,1] of the
+// nearest player hit (math.Inf(1) when none), so a caller can compare it against a mob candidate's tHit and
+// pick the single nearest EntityHitResult across BOTH candidate sets -- exactly as ProjectileUtil
+// .getEntityHitResult returns the one entity with the smallest distanceToSqr from the segment origin over
+// ALL candidates (tHit is monotone in that distance for a fixed origin). The player-only projectileFindHitPlayer
+// delegates here so the geometry is defined once and stays byte-identical.
+func (t *TickLoop) projectileFindHitPlayerT(ownerID int32, ox, oy, oz, nx, ny, nz float64) (*tickPlayer, float64) {
 	var best *tickPlayer
 	bestT := math.Inf(1)
 	for _, p := range t.players {
@@ -228,8 +257,8 @@ func (t *TickLoop) projectileFindHitPlayer(ownerID int32, ox, oy, oz, nx, ny, nz
 		if p.entityID == ownerID {
 			continue // the projectile never hits its own shooter (checkLeftOwner guard)
 		}
-		// Build the player's collision AABB (0.6×1.8, base at feet), inflated by the arrow's half-size
-		// (0.3) — ProjectileUtil inflates the target box by the projectile's bounding box before the clip.
+		// Build the player's collision AABB (0.6x1.8, base at feet), inflated by the arrow's half-size
+		// (0.3) -- ProjectileUtil inflates the target box by the projectile's bounding box before the clip.
 		half := entity.Arrow.Width / 2.0
 		minX := p.x - playerWidth/2 - half
 		maxX := p.x + playerWidth/2 + half
@@ -244,7 +273,51 @@ func (t *TickLoop) projectileFindHitPlayer(ownerID int32, ox, oy, oz, nx, ny, nz
 			}
 		}
 	}
-	return best
+	return best, bestT
+}
+
+// projectileFindHitMobT is the MOB-victim analog of projectileFindHitPlayerT: the ProjectileUtil
+// .getEntityHitResult port scoped to the region entity store (t.cur().entities -- the projectile tick runs
+// withRegion so this is the projectile's OWN store, quiescent at the coordinator). It returns the nearest
+// live LivingEntity mob (isLivingMob) whose collision AABB (inflated by the projectile half-size, matching
+// ProjectileUtil's inflate by the projectile bounding box before the clip) the flight segment crosses,
+// excluding the owner (ownerID -- the canHitEntity !isOwner guard). tHit is the entry parameter in [0,1]
+// (math.Inf(1) when none), for the unified player-vs-mob nearest selection. The geometry is IDENTICAL to
+// snowballFindHitMobVictim (the pre-existing snow-golem scan); this generalizes it over the projectile
+// half-size so every family reuses one scan. Cite ProjectileUtil.getEntityHitResult / Projectile.canHitEntity
+// (canBeHitByProjectile + !isOwner).
+func (t *TickLoop) projectileFindHitMobT(ownerID int32, half, ox, oy, oz, nx, ny, nz float64) (*Entity, float64) {
+	region := t.cur()
+	if region == nil || region.entities == nil {
+		return nil, math.Inf(1)
+	}
+	var best *Entity
+	bestT := math.Inf(1)
+	for _, other := range region.entities.all() {
+		if other == nil || other.dead || !other.isAlive() {
+			continue
+		}
+		if other.id == ownerID {
+			continue // never hits its own shooter (checkLeftOwner guard)
+		}
+		if !isLivingMob(other) {
+			continue // canBeHitByProjectile: only a LivingEntity mob is a projectile victim
+		}
+		vhw := other.width / 2
+		minX := other.x - vhw - half
+		maxX := other.x + vhw + half
+		minY := other.y - half
+		maxY := other.y + other.height + half
+		minZ := other.z - vhw - half
+		maxZ := other.z + vhw + half
+		if hit, tHit := segmentAABB(ox, oy, oz, nx, ny, nz, minX, minY, minZ, maxX, maxY, maxZ); hit {
+			if tHit < bestT {
+				bestT = tHit
+				best = other
+			}
+		}
+	}
+	return best, bestT
 }
 
 // arrowOnHitPlayer is the AbstractArrow.onHitEntity port for a player victim: damage =
@@ -305,6 +378,96 @@ func (t *TickLoop) arrowOnHitPlayer(e *Entity, victim *tickPlayer) {
 	// gear runs. A weaponless arrow passes an empty weapon (no attacker-side post-attack).
 	t.doPostAttackEffectsWithItemSource(victimRef, src, e.arrowWeapon, nil, t.enchResolveEntity(e.arrowShooterID))
 	t.cur().entities.remove(e.id)
+}
+
+// arrowOnHitMob is the AbstractArrow.onHitEntity port for a MOB (LivingEntity) victim -- the *Entity sibling
+// of arrowOnHitPlayer. It is the SAME bytecode trace (baseDamage, the Power add via EnchantmentHelper
+// .modifyDamage folded BEFORE the pow*baseDamage scale, the ceil-clamp, the isCritArrow bonus), differing
+// ONLY in that the victim is a Go-native mob so the hurt routes through applyDamageEntity (the LivingEntity
+// .hurtServer port) and the post-hit effects use the mob effect/enchant seams. The damage math is kept
+// byte-for-byte identical to arrowOnHitPlayer (a divergence would be a bug). Cite AbstractArrow.onHitEntity.
+func (t *TickLoop) arrowOnHitMob(e *Entity, victim *Entity) {
+	pow := math.Sqrt(e.vx*e.vx + e.vy*e.vy + e.vz*e.vz) // getDeltaMovement().length()
+	src := damageSourceArrow(e.arrowShooterID)
+	src.sourceX, src.sourceZ, src.hasSourcePos = e.x, e.z, true // directEntity (arrow) position for knockback dir
+	victimRef := enchEntityRef{mob: victim}
+	// EnchantmentHelper.modifyDamage(level, getWeaponItem(), victim, source, (float)baseDamage): Power adds to
+	// the base BEFORE the pow*baseDamage scale, exactly as the player branch. A weaponless arrow (dispenser
+	// shot) skips this via the getWeaponItem() != null guard. Cite AbstractArrow.onHitEntity offsets 52-96.
+	base := float32(e.arrowBaseDamage)
+	if !stackEmpty(e.arrowWeapon) {
+		base = t.enchModifyDamageDirect(e.arrowWeapon, victimRef, src, arrowDirectType(e), base)
+	}
+	raw := pow * float64(base)
+	if raw < 0 {
+		raw = 0
+	}
+	dmg := int(math.Ceil(raw)) // Mth.ceil(clamp(...)); clamp upper bound MAXINT (unreachable here)
+	// Crit bonus: isCritArrow() -> damage = min(random.nextInt(damage/2 + 2) + damage, MAXINT). Drawn from the
+	// ARROW's OWN per-entity stream (seeded from the arrow id) so no MOB/pig stream is perturbed. Cite
+	// AbstractArrow.onHitEntity offsets 193-230.
+	if e.arrowCrit {
+		if e.arrowRNG == nil {
+			e.arrowRNG = newEntityRandom(uint64(e.id))
+		}
+		bonus := e.arrowRNG.nextInt(dmg/2 + 2)
+		if long := int64(bonus) + int64(dmg); long < math.MaxInt32 {
+			dmg = int(long)
+		} else {
+			dmg = math.MaxInt32
+		}
+	}
+	// offset 268-286: a burning arrow ignites a non-enderman LivingEntity for 5s. igniteForSeconds on the mob
+	// is the shared fire-tick seam (fire.go); a non-burning arrow (the common case) skips it. Applied via the
+	// mob fire path exactly where vanilla ignites BEFORE the hurt call.
+	if e.remainingFireTicks > 0 && victim.typ != entity.Enderman.ID {
+		t.igniteForSeconds(victim, 5.0)
+	}
+	// hurtOrSimulate -> LivingEntity.hurtServer (applyDamageEntity): the i-frame-gated hurt, the base 0.4
+	// dealDefaultKnockback (source carries the arrow position so the mob is pushed away from the arrow), the
+	// death drive. The knockback/effect tail below mirrors vanilla's `if (hurtOrSimulate)` branch.
+	t.applyDamageEntity(victim, src, float32(dmg))
+	// doKnockback(living, source): the Punch enchant push (a plain bow yields 0). Mirrors arrowDoKnockback.
+	t.arrowDoKnockbackMob(e, victim, src)
+	// Arrow.doPostHurtEffects: a tipped arrow applies each carried effect to the LivingEntity hit (attributed
+	// to the shooter, scale 1.0). Nil for a plain arrow. Cite Arrow.doPostHurtEffects.
+	for _, ef := range e.arrowEffects {
+		t.addEntityEffectWithSource(victim, e.arrowShooterID, ef.id, ef.duration, ef.amplifier, 1.0)
+	}
+	// EnchantmentHelper.doPostAttackEffectsWithItemSource(level, victim, source, getWeaponItem()): the bow's
+	// POST_ATTACK effects (Fire Aspect) fire against the mob, and Thorns on the mob's own gear runs. A
+	// weaponless arrow passes an empty weapon.
+	t.doPostAttackEffectsWithItemSource(victimRef, src, e.arrowWeapon, nil, t.enchResolveEntity(e.arrowShooterID))
+	t.cur().entities.remove(e.id)
+}
+
+// arrowDoKnockbackMob ports AbstractArrow.doKnockback for a MOB (LivingEntity) victim -- the *Entity sibling
+// of arrowDoKnockback. knockback = modifyKnockback(getWeaponItem(), victim, source, 0) (Punch adds; a plain
+// bow yields 0). If > 0, push the mob along the arrow's flight direction (deltaMovement horiz, normalized)
+// scaled by knockback*0.6*max(0, 1-KNOCKBACK_RESISTANCE), with a fixed +0.1 vertical -- Entity.push ==
+// addDeltaMovement (NOT the /2 LivingEntity.knockback). A weaponless arrow does no knockback (firedFromWeapon
+// != null guard). RNG-free. Cite AbstractArrow.doKnockback bytecode.
+func (t *TickLoop) arrowDoKnockbackMob(e *Entity, victim *Entity, src damageSource) {
+	if stackEmpty(e.arrowWeapon) {
+		return // firedFromWeapon == null -> knockback 0, no push
+	}
+	kb := t.enchModifyKnockbackDirect(e.arrowWeapon, enchEntityRef{mob: victim}, src, arrowDirectType(e), 0.0)
+	if float64(kb) <= 0.0 {
+		return
+	}
+	resist := math.Max(0.0, 1.0-victim.getAttributeValue(attribute.KnockbackResistance))
+	// getDeltaMovement().multiply(1,0,1).normalize().scale(kb*0.6*resist).
+	nx, nz := normalizeHoriz(e.vx, e.vz)
+	scale := float64(kb) * 0.6 * resist
+	ix, iz := nx*scale, nz*scale
+	if ix*ix+iz*iz <= 0.0 {
+		return
+	}
+	// victim.push(ix, 0.1, iz): Entity.push == addDeltaMovement (adds to velocity). The tracker resyncs the
+	// mob's velocity/position next tick (no per-hit SetEntityMotion send for a mob).
+	victim.vx += ix
+	victim.vy += 0.1
+	victim.vz += iz
 }
 
 // arrowDirectType is the arrow entity's type resource id (registryid.EntityType index) — the

@@ -230,8 +230,20 @@ func (t *TickLoop) tickThrowable(e *Entity) {
 			return
 		}
 	}
-	if victim := t.arrowFindHitPlayer(e, ox, oy, oz, endX, endY, endZ); victim != nil {
-		t.throwableOnHitEntity(e, victim)
+	// Entity hit (ProjectileUtil.getEntityHitResult): the SINGLE nearest EntityHitResult over BOTH players
+	// and mobs. A snowball/egg deals 0 (blaze 3) + the thrown knockback, an ender pearl teleports the owner,
+	// an xp bottle breaks -- Snowball/ThrownEgg/ThrownEnderpearl.onHitEntity apply to ANY LivingEntity, not
+	// just players. Scan both, dispatch to whichever is nearer along the segment (smaller tHit). The
+	// snowballHitsMobs snow-golem fast path above already returned for a golem snowball.
+	half := throwableEntityType(e.throwableKind).Width / 2.0
+	pv, pt := t.projectileFindHitPlayerT(e.throwOwnerID, ox, oy, oz, endX, endY, endZ)
+	mv, mt := t.projectileFindHitMobT(e.throwOwnerID, half, ox, oy, oz, endX, endY, endZ)
+	if pv != nil && (mv == nil || pt <= mt) {
+		t.throwableOnHitEntity(e, pv)
+		t.cur().entities.remove(e.id) // discard on hit
+		return
+	} else if mv != nil {
+		t.throwableOnHitMob(e, mv)
 		t.cur().entities.remove(e.id) // discard on hit
 		return
 	}
@@ -271,6 +283,39 @@ func (t *TickLoop) throwableOnHitEntity(e *Entity, victim *tickPlayer) {
 		_ = victim
 	case throwEnderPearl:
 		// The pearl teleports its owner regardless of what it hit (block or entity).
+		t.enderPearlTeleport(e)
+	case throwExperienceBottle:
+		// The xp bottle breaks on ANY hit (block or entity), splitting into XP orbs at the impact point.
+		t.experienceBottleBreak(e)
+	}
+}
+
+// throwableOnHitMob ports the per-kind onHitEntity for a MOB (LivingEntity) victim -- the *Entity sibling of
+// throwableOnHitEntity. Snowball: 3 to a blaze, 0 otherwise, plus the thrown 0.4 knockback (delegated to
+// snowballOnHitMob, which sets the directEntity source-position so the mob is pushed away from the snowball).
+// Egg: hurt(thrown, 0) -- 0 damage + the thrown knockback (a 0-damage thrown hit still recoils the mob, since
+// dealDefaultKnockback is gated on !NO_KNOCKBACK, not the amount). Ender pearl: teleport the OWNER (0 entity
+// damage). XP bottle: break into orbs. All applied to any LivingEntity, matching Snowball/ThrownEgg/
+// ThrownEnderpearl.onHitEntity. Cite the per-kind onHitEntity.
+func (t *TickLoop) throwableOnHitMob(e *Entity, victim *Entity) {
+	switch e.throwableKind {
+	case throwSnowball:
+		// Snowball.onHitEntity: 3 to a blaze else 0 + the thrown knockback. snowballOnHitMob is the exact port.
+		t.snowballOnHitMob(e, victim)
+	case throwEgg:
+		// ThrownEgg.onHitEntity: hurt(thrown, 0) -- 0 damage, but the thrown source still applies the 0.4
+		// dealDefaultKnockback on a fresh hit (NO_KNOCKBACK does not include `thrown`). The source carries the
+		// egg's position so the mob is pushed radially away from the egg. (The 1/8 chicken spawn is CITE-DEFERRED,
+		// as in throwableOnHitEntity.)
+		src := damageSourceThrown(e.throwOwnerID)
+		src.sourceX, src.sourceZ, src.hasSourcePos = e.x, e.z, true
+		t.applyDamageEntity(victim, src, 0)
+	case throwEnderPearl:
+		// ThrownEnderpearl.onHitEntity: hurt(thrown, 0) then the pearl teleports its OWNER regardless of what it
+		// hit. The 0-damage hurt recoils the mob (thrown knockback); the teleport is the pearl's whole point.
+		src := damageSourceThrown(e.throwOwnerID)
+		src.sourceX, src.sourceZ, src.hasSourcePos = e.x, e.z, true
+		t.applyDamageEntity(victim, src, 0)
 		t.enderPearlTeleport(e)
 	case throwExperienceBottle:
 		// The xp bottle breaks on ANY hit (block or entity), splitting into XP orbs at the impact point.

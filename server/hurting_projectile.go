@@ -32,6 +32,7 @@ import (
 
 	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/data/item"
+	"github.com/imhinotori/sulfur/level/attribute"
 	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/level/component"
 	pk "github.com/imhinotori/sulfur/net/packet"
@@ -181,10 +182,20 @@ func (t *TickLoop) tickHurtingProjectile(e *Entity) {
 		endX, endY, endZ = hx, hy, hz
 	}
 
-	// Entity hit (players only in v1 — the arrow-scope note; a ghast/blaze fireball targets a player).
-	if victim := t.projectileFindHitPlayer(e.hurtOwnerID, ox, oy, oz, endX, endY, endZ); victim != nil {
-		t.hurtingOnHitEntity(e, victim)
-		t.hurtingOnHit(e, victim.x, victim.y, victim.z) // per-kind onHit (explosion) + discard
+	// Entity hit (ProjectileUtil.getEntityHitResult): the SINGLE nearest EntityHitResult over BOTH players
+	// and mobs -- a ghast/blaze fireball or a wither skull hits whatever LivingEntity its straight flight
+	// crosses first. Scan both, dispatch to whichever is nearer along the segment (smaller tHit), then run
+	// the per-kind onHit (explosion) at the victim position and discard.
+	half := hurtingEntityType(e.hurtingKind).Width / 2.0
+	pv, pt := t.projectileFindHitPlayerT(e.hurtOwnerID, ox, oy, oz, endX, endY, endZ)
+	mv, mt := t.projectileFindHitMobT(e.hurtOwnerID, half, ox, oy, oz, endX, endY, endZ)
+	if pv != nil && (mv == nil || pt <= mt) {
+		t.hurtingOnHitEntity(e, pv)
+		t.hurtingOnHit(e, pv.x, pv.y, pv.z) // per-kind onHit (explosion) + discard
+		return
+	} else if mv != nil {
+		t.hurtingOnHitEntityMob(e, mv)
+		t.hurtingOnHit(e, mv.x, mv.y, mv.z) // per-kind onHit (explosion) + discard
 		return
 	}
 	if blockHit {
@@ -248,6 +259,62 @@ func (t *TickLoop) hurtingOnHitEntity(e *Entity, victim *tickPlayer) {
 		// AbstractWindCharge.onHitEntity: hurt(windCharge(this, owner), 1.0). The gust knockback is the
 		// wind-burst explosion dealt in onHit (explode at position), NOT here.
 		t.applyDamage(victim, damageSourceWindCharge(e.hurtOwnerID), windChargeDamage)
+	}
+}
+
+// hurtingOnHitEntityMob ports the per-kind onHitEntity for a MOB (LivingEntity) victim -- the *Entity sibling
+// of hurtingOnHitEntity. Same fireball/wither-skull/wind-charge damage attributed to the owner, routed through
+// applyDamageEntity (the LivingEntity.hurtServer port). The wither skull adds its difficulty-scaled wither
+// effect to a LivingEntity victim and, when the owner is a living mob (a wither boss) and the hit FAILS, heals
+// the owner 5.0 (WitherSkull.onHitEntity). A small fireball ignites the mob for 5s (SmallFireball.onHitEntity
+// igniteForSeconds(5)); the mob fire path is live. Cite SmallFireball/LargeFireball/WitherSkull/
+// AbstractWindCharge.onHitEntity.
+func (t *TickLoop) hurtingOnHitEntityMob(e *Entity, victim *Entity) {
+	switch e.hurtingKind {
+	case hurtSmallFireball:
+		// SmallFireball.onHitEntity: igniteForSeconds(5); hurt(fireball, 5.0).
+		t.igniteForSeconds(victim, smallFireballIgnite)
+		t.applyDamageEntity(victim, damageSourceFireball(e.hurtOwnerID), smallFireballDamage)
+	case hurtLargeFireball:
+		// LargeFireball.onHitEntity: hurt(fireball, 6.0). (The explosion is dealt separately in onHit.)
+		t.applyDamageEntity(victim, damageSourceFireball(e.hurtOwnerID), largeFireballDamage)
+	case hurtWitherSkull:
+		// WitherSkull.onHitEntity: owner LivingEntity -> hurt(witherSkull, 8.0); on a FAILED hit, heal the
+		// owner 5.0. owner null -> hurt(magic, 5.0). The owner-heal branch resolves the owner as a mob in the
+		// region (a wither boss); a player owner has no self-heal here (the vanilla heal targets the
+		// LivingEntity owner, which for the skull is always the wither).
+		if e.hurtOwnerID != 0 {
+			landed := t.applyMobAttackDamage(victim, damageSourceWitherSkull(e.hurtOwnerID), witherSkullDamage)
+			if !landed {
+				if owner, ok := t.cur().entities.get(e.hurtOwnerID); ok && isLivingMob(owner) {
+					hurtingHealMob(owner, witherSkullMagic) // heal(5.0)
+				}
+			}
+		} else {
+			t.applyDamageEntity(victim, damageSourceMagic(), witherSkullMagic)
+		}
+		// wither effect on the LivingEntity victim: NORMAL 20*10 ticks amp1, HARD 20*40 ticks amp1 (no effect
+		// on EASY/PEACEFUL). Applied via the mob effect path.
+		if dur := witherSkullEffectTicks(); dur > 0 {
+			t.addEntityEffectWithSource(victim, e.hurtOwnerID, effectWither, dur, 1, 1.0)
+		}
+	case hurtWindCharge:
+		// AbstractWindCharge.onHitEntity: hurt(windCharge(this, owner), 1.0). The gust knockback is the
+		// wind-burst explosion dealt in onHit (explode at position), NOT here.
+		t.applyDamageEntity(victim, damageSourceWindCharge(e.hurtOwnerID), windChargeDamage)
+	}
+}
+
+// hurtingHealMob is LivingEntity.heal(float) for the wither-skull owner-heal-on-failed-hit branch:
+// setHealth(getHealth()+amount) clamped to getMaxHealth(), no-op on a dead mob. Cite LivingEntity.heal.
+func hurtingHealMob(e *Entity, amount float32) {
+	if e == nil || e.health <= 0 {
+		return
+	}
+	maxHealth := float32(e.getAttributeValue(attribute.MaxHealth))
+	e.health += amount
+	if e.health > maxHealth {
+		e.health = maxHealth
 	}
 }
 

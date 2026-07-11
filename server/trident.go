@@ -21,8 +21,10 @@ import (
 
 	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/data/item"
+	"github.com/imhinotori/sulfur/data/registryid"
 	"github.com/imhinotori/sulfur/level/component"
 	pk "github.com/imhinotori/sulfur/net/packet"
+	"github.com/imhinotori/sulfur/server/registrydata"
 )
 
 // TridentItem / ThrownTrident constants (verified javap + enchant JSON -- exact values).
@@ -370,6 +372,50 @@ func (t *TickLoop) tridentImpalingBonus(e *Entity, _ *tickPlayer) float64 {
 		return 0
 	}
 	return 0 // victim is a player -> not in sensitive_to_impaling -> no bonus
+}
+
+// tridentOnHitMob is the ThrownTrident.onHitEntity port for a MOB (LivingEntity) victim -- the *Entity
+// sibling of tridentOnHitEntity. It is the SAME bytecode trace: damage = 8.0 + Impaling (via the mob-aware
+// impaling bonus), set dealtDamage BEFORE the hurt (so the trident does not re-hit and, with Loyalty,
+// returns), route the hurt through applyDamageEntity (the LivingEntity.hurtServer port), run the Channeling
+// lightning, and BOUNCE (deltaMovement *= (0.02, 0.2, 0.02)) rather than being consumed. The damage/bounce
+// are kept identical to the player branch (a divergence would be a bug). The trident source carries the
+// trident's position so the base 0.4 dealDefaultKnockback (inside applyDamageEntity) pushes the mob away
+// from the trident. Cite ThrownTrident.onHitEntity.
+func (t *TickLoop) tridentOnHitMob(e *Entity, victim *Entity) {
+	dmg := tridentBaseDamage + t.tridentImpalingBonusMob(e, victim)
+	src := damageSourceTrident(e.arrowShooterID)
+	src.sourceX, src.sourceZ, src.hasSourcePos = e.x, e.z, true // directEntity (trident) position for knockback dir
+	e.tridentDealtDamage = true                                 // dealtDamage = true BEFORE hurt (bytecode order)
+	t.applyDamageEntity(victim, src, float32(dmg))
+	t.tridentChannelingStrike(e, victim.x, victim.y, victim.z)
+	e.vx *= 0.02
+	e.vy *= 0.2
+	e.vz *= 0.02
+}
+
+// tridentImpalingBonusMob ports the Impaling damage add (impaling.json) for a MOB victim: level*2.5 vs a
+// victim whose entity type is in #minecraft:sensitive_to_impaling (the aquatic tag), else 0. Unlike the
+// player branch (a player is never in the tag, so it hardcodes 0), a mob CAN be aquatic (guardian, squid,
+// axolotl, ...), so this reads the GENUINE tag membership via registrydata.EntityTypeInTag -- the faithful
+// EnchantmentHelper.modifyDamage requirement (entity_type == #sensitive_to_impaling). Cite
+// EnchantmentHelper.modifyDamage + impaling.json (linear base 2.5, per_level_above_first 2.5 => level*2.5).
+func (t *TickLoop) tridentImpalingBonusMob(e *Entity, victim *Entity) float64 {
+	if e.tridentImpaling <= 0 {
+		return 0
+	}
+	typeName := ""
+	if idx := int(victim.typ); idx >= 0 && idx < len(registryid.EntityType) {
+		typeName = registryid.EntityType[idx]
+	}
+	if typeName == "" {
+		return 0
+	}
+	ok, err := registrydata.EntityTypeInTag(typeName, "#minecraft:sensitive_to_impaling")
+	if err != nil || !ok {
+		return 0 // not aquatic -> no Impaling bonus
+	}
+	return float64(e.tridentImpaling) * 2.5 // linear base 2.5 + per_level_above_first 2.5 == level*2.5
 }
 
 // tridentChannelingStrike ports the Channeling enchant lightning summon (channeling.json post_attack /
