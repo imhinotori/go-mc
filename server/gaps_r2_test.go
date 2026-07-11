@@ -159,6 +159,37 @@ func TestShulkerHurtReactionWired(t *testing.T) {
 	}
 }
 
+// TestShulkerArrowImmuneWiredInPipeline: the CLOSED arrow-immunity gate is now WIRED at the top of
+// applyDamageEntity (not just the standalone helper) -- a closed shulker takes ZERO damage from an arrow
+// source routed through the real hurt pipeline; an open shulker takes the hit. Cite Shulker.hurtServer top gate.
+func TestShulkerArrowImmuneWiredInPipeline(t *testing.T) {
+	loop, mgr := newPhysicsLoop()
+	const floorY = 63
+	ch := putChunk(mgr, level.ChunkPos{0, 0})
+	fillFloor(ch, floorY)
+	loop.start(loop.clock.(*fakeClock).Now())
+
+	closed := loop.spawnShulker(6.5, float64(floorY+1), 6.5) // spawns CLOSED (peek 0)
+	closed.health = 30.0
+	loop.withRegion(loop.regionForEntity(closed), func() {
+		loop.applyDamageEntity(closed, damageSourceArrow(0), 5.0)
+	})
+	if closed.health != 30.0 {
+		t.Fatalf("closed shulker took %v arrow damage through applyDamageEntity, want 0 (wired arrow-immune gate)", 30.0-closed.health)
+	}
+
+	// An OPEN shulker is NOT arrow-immune -> the hit lands.
+	open := loop.spawnShulker(9.5, float64(floorY+1), 9.5)
+	open.health = 30.0
+	loop.shulkerSetRawPeek(open, shulkerPeekOpen)
+	loop.withRegion(loop.regionForEntity(open), func() {
+		loop.applyDamageEntity(open, damageSourceArrow(0), 5.0)
+	})
+	if open.health >= 30.0 {
+		t.Fatal("open shulker took no arrow damage -- only a CLOSED shulker is arrow-immune")
+	}
+}
+
 // --- GAP 4: LLAMA spits at a wolf ----------------------------------------------------------------
 
 // TestLlamaSpitsAtWolf: a llama whose target is an in-range UNTAMED wolf fires a LlamaSpit toward it — the

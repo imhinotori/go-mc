@@ -70,6 +70,15 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 		amount = (amount - 1.0) / 2.0
 	}
 
+	// SHULKER (Shulker.hurtServer top gate): a CLOSED shulker (peek==0) hit by an AbstractArrow directEntity
+	// is IMMUNE (the +20 covered armor is impenetrable to arrows while boxed up) -- reject the hit before the
+	// shared pipeline. Gated on e.shulker != nil so every other mob is a zero-cost skip (the pig oracle is
+	// untouched). The post-hurt teleport-on-low-hp reaction is driven from the shulker's own tick seam
+	// (shulker.go). Cite Shulker.hurtServer offsets 0-22 (shulkerArrowImmune).
+	if e.shulker != nil && shulkerArrowImmune(e, src) {
+		return // closed shulker + arrow -> no damage (Shulker.hurtServer -> false)
+	}
+
 	// WITHER BOSS (Task): WitherBoss.hurtServer overrides the LivingEntity path with the boss-specific
 	// immunity gates BEFORE the shared pipeline. Gated on e.wither != nil so every other mob is a zero-cost
 	// skip (the pig oracle is untouched). Returns early (no damage) on: a source in WITHER_IMMUNE_TO or from

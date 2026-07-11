@@ -157,13 +157,9 @@ func (t *TickLoop) shulkerAiStep(e *Entity) {
 	// reaction's RNG is on the shulker's own stream and is teleport-gated, so a shulker that took no damage
 	// draws ZERO. prevHealth==-1 is the un-seeded first tick (seed only, no reaction). Cite Shulker.hurtServer.
 	//
-	// CITE-DEFERRED (blocked on a non-owned file): the CLOSED arrow-immunity PRE-hurt gate
-	// (shulkerArrowImmune — a closed shulker rejects an AbstractArrow BEFORE damage applies) MUST intercept
-	// the hurt pipeline before the hit lands. That pipeline is applyDamageEntity (combat_mob.go), which is
-	// off-limits to edit here (the sibling wither/guardian PRE-hurt gates live there). shulkerArrowImmune is
-	// ported + unit-tested; wiring it needs a one-line gated call `if e.shulker != nil && shulkerArrowImmune
-	// (e, src) { return }` at the TOP of applyDamageEntity (the sibling of the wither/guardian gates) — a
-	// non-owned edit. Left for the combat-owner. See shulkerArrowImmune's doc.
+	// The CLOSED arrow-immunity PRE-hurt gate (shulkerArrowImmune — a closed shulker rejects an AbstractArrow
+	// BEFORE damage applies) is WIRED at the top of applyDamageEntity (combat_mob.go), the sibling of the
+	// wither/guardian PRE-hurt gates. See shulkerArrowImmune's doc.
 	if s.prevHealth < 0 {
 		s.prevHealth = e.health // seed on the first tick (no reaction)
 	} else if e.health < s.prevHealth {
