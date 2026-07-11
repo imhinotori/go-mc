@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/imhinotori/sulfur/data/item"
+	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/component"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
@@ -232,7 +233,12 @@ func TestTridentRiptideLaunchesPlayer(t *testing.T) {
 	inv.set(hotbarMenuSlotBase, mkTrident(map[string]int{enchRiptide: 3}))
 	inv.heldSlot = 0
 
-	// Force rain so isInWaterOrRain is true (the riptide gate).
+	// Force rain so isInWaterOrRain is true (the riptide gate). isInWaterOrRain -> isRainingAt ->
+	// precipitationAt -> canSeeSky, which now reads real sky-light, so give the player's loaded column
+	// open-sky light 15 (the player at y=65 and its bbTop are then sky-exposed).
+	if ch, ok := loop.only().world.Get(level.ChunkPos{0, 0}); ok {
+		setSkyLight(ch, 15)
+	}
 	loop.weather.raining = true
 	loop.weather.rainLevel = 1.0
 

@@ -291,7 +291,7 @@ func (t *TickLoop) precipitationAt(pos pk.Position) precipitation {
 	if !t.isRaining() {
 		return precipitationNONE
 	}
-	if !t.canSeeSkyAt(pos.Y) {
+	if !t.canSeeSkyAt(pos) {
 		return precipitationNONE
 	}
 	// getHeightmapPos(MOTION_BLOCKING, pos).getY() == getFirstAvailable(x,z) == top solid + 1 (the first

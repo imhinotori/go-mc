@@ -102,6 +102,7 @@ func TestNoteBlockCoveredStaysSilent(t *testing.T) {
 // (SUN_ANGLE 0 -> cos term 1). CITE: DaylightDetectorBlock.updateSignalStrength.
 func TestDaylightDetectorScalesWithSkyLight(t *testing.T) {
 	loop, mgr, ch := newRedstoneBlockLoop()
+	loop.gametime = 6000 // noon: getTimeOfDay 0 -> SUN_ANGLE 0 deg -> cos term 1 -> POWER == skyBrightness
 	setSkyLight(ch, 15)
 	pos := pk.Position{X: 8, Y: 64, Z: 8}
 	mgr.SetBlock(pos, block.ToStateID[block.DaylightDetector{}], dimMinY)
@@ -122,6 +123,39 @@ func TestDaylightDetectorScalesWithSkyLight(t *testing.T) {
 	s8, _ := mgr.GetBlock(pos, dimMinY)
 	if got := block.DaylightPower(s8); got != 8 {
 		t.Fatalf("daylight detector POWER at sky 8 = %d, want 8", got)
+	}
+}
+
+// TestDaylightDetectorTracksTimeOfDay: with sky brightness held at 15, the detector POWER must track
+// the sun angle across the day - full (15) at noon (SUN_ANGLE 0, cos term 1) and REDUCED away from
+// noon (the cos-scaled term). This pins the fix that the SUN_ANGLE input is the live day/night clock
+// (daylightSunAngleDeg reads gametime) rather than the old hardcoded 0. CITE:
+// DaylightDetectorBlock.updateSignalStrength; the getTimeOfDay/getSunAngle curve.
+func TestDaylightDetectorTracksTimeOfDay(t *testing.T) {
+	loop, mgr, ch := newRedstoneBlockLoop()
+	setSkyLight(ch, 15)
+	pos := pk.Position{X: 12, Y: 64, Z: 12}
+	mgr.SetBlock(pos, block.ToStateID[block.DaylightDetector{}], dimMinY)
+
+	// Noon: SUN_ANGLE 0 -> cos term 1 -> POWER == skyBrightness (15).
+	loop.gametime = 6000
+	loop.daylightUpdateSignalStrength(pos, loop.redstoneBlockAt(pos))
+	noon, _ := mgr.GetBlock(pos, dimMinY)
+	if got := block.DaylightPower(noon); got != 15 {
+		t.Fatalf("daylight detector at noon (sky 15) POWER = %d, want 15", got)
+	}
+
+	// Sunset (dayTime ~12000): the sun is low, so the cos-scaled POWER drops below the raw sky 15.
+	loop.gametime = 12000
+	loop.daylightUpdateSignalStrength(pos, loop.redstoneBlockAt(pos))
+	dusk, _ := mgr.GetBlock(pos, dimMinY)
+	if got := block.DaylightPower(dusk); got >= 15 {
+		t.Fatalf("daylight detector at dusk POWER = %d, want < 15 (sun angle scaling)", got)
+	}
+
+	// Sanity: the output actually differs across the day (proves it is not a fixed value).
+	if block.DaylightPower(noon) == block.DaylightPower(dusk) {
+		t.Fatalf("daylight detector POWER must vary with time of day; noon==dusk==%d", block.DaylightPower(noon))
 	}
 }
 
@@ -159,11 +193,11 @@ func TestDaylightDetectorSelfReschedulesEvery20(t *testing.T) {
 	if !loop.hasScheduledBlockTick(pos, daylightDetectorTickType) {
 		t.Fatal("daylight detector should have a scheduled tick after scheduleDaylightTick")
 	}
-	loop.gametime = 20
+	loop.gametime = 6000 // noon (also 6000 % 20 == 0 so the tickEntity gate still fires): SUN_ANGLE 0
 	loop.tickScheduledBlocks()
 	s, _ := mgr.GetBlock(pos, dimMinY)
 	if got := block.DaylightPower(s); got != 15 {
-		t.Fatalf("after the 20-tick daylight tick, POWER = %d, want 15", got)
+		t.Fatalf("after the daylight tick at noon, POWER = %d, want 15", got)
 	}
 	if !loop.hasScheduledBlockTick(pos, daylightDetectorTickType) {
 		t.Fatal("daylight detector should reschedule its next tick after firing")

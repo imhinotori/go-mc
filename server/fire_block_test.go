@@ -66,6 +66,40 @@ func TestFireFlammabilityTableMatchesJar(t *testing.T) {
 	}
 }
 
+// TestCanSeeSkyReadsSkyLight pins the real BlockAndLightGetter.canSeeSky port: canSeeSky(pos) ==
+// getBrightness(LightLayer.SKY, pos) >= 15. An open-sky cell (sky-light 15) sees sky; a cell whose
+// section is roofed (sky-light < 15, e.g. under a solid roof the light engine has darkened) does NOT.
+// CITE: net.minecraft.world.level.BlockAndLightGetter.canSeeSky.
+func TestCanSeeSkyReadsSkyLight(t *testing.T) {
+	loop, _, ch := newRandomTickLoop() // every section starts fully sky-lit (15)
+
+	openPos := pk.Position{X: 8, Y: 200, Z: 8}
+	if !loop.canSeeSkyAt(openPos) {
+		t.Fatalf("open-sky cell %v: canSeeSky = false, want true (sky-light 15)", openPos)
+	}
+
+	// Roof the section containing y=64 by zeroing its stored sky-light (what the LevelLightEngine sets
+	// under a solid opaque roof). That cell must then NOT see the sky.
+	roofedY := 64
+	roofedSection := (roofedY - dimMinY) >> 4
+	ch.Sections[roofedSection].SkyLight = make([]byte, 2048) // all-zero sky-light -> roofed
+	roofed := pk.Position{X: 8, Y: roofedY, Z: 8}
+	if loop.canSeeSkyAt(roofed) {
+		t.Fatalf("roofed cell %v: canSeeSky = true, want false (sky-light 0 under a solid roof)", roofed)
+	}
+
+	// A cell with sky-light 14 (one short of max) also does not see sky (>= 15 is strict).
+	nib14 := byte(14 | 14<<4)
+	sky14 := make([]byte, 2048)
+	for j := range sky14 {
+		sky14[j] = nib14
+	}
+	ch.Sections[roofedSection].SkyLight = sky14
+	if loop.canSeeSkyAt(roofed) {
+		t.Fatalf("cell at sky-light 14 %v: canSeeSky = true, want false (needs >= 15)", roofed)
+	}
+}
+
 func TestFireIgniteOddsWaterloggedZero(t *testing.T) {
 	loop, _, _ := newRandomTickLoop()
 	dry := block.ToStateID[block.OakFence{}]

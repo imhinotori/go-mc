@@ -35,20 +35,30 @@ const (
 	waterSlopeFindDistance = 4 // FlowingFluid.getSlopeFindDistance (WaterFluid -> 4): slope-find radius
 	waterSourceAmount      = 8 // FlowingFluid: a source fluid has amount 8 (full)
 
-	// Lava (OVERWORLD, non-fast) flow constants - VERIFIED from temp/cache/26.2-inner.jar:
+	// Lava flow constants - VERIFIED from temp/cache/26.2-inner.jar:
 	//
-	//	javap net.minecraft.world.level.material.LavaFluid (isFastLava == false branch, i.e. the
-	//	overworld/default dimension; fast lava is the nether's ultrawarm FAST_LAVA env attribute):
-	//	  getDropOff(LevelReader)           -> isFastLava ? iconst_1 : iconst_2  => 2
-	//	  getTickDelay(LevelReader)         -> isFastLava ? bipush 10 : bipush 30 => 30
-	//	  getSlopeFindDistance(LevelReader) -> isFastLava ? iconst_4 : iconst_2  => 2
-	// Source amount 8 is shared (FlowingFluid). getDropOff=2 gives lava its shorter 3-block spread
-	// (8 -> 6 -> 4 -> 2 -> 0) vs water's 7 (dropOff 1). Sulfur v1 targets the overworld only, so the
-	// non-fast constants are baked (isFastLava is an EnvironmentAttribute read; the fast/nether split
-	// is a later per-dimension concern - cite LavaFluid.isFastLava).
-	lavaDropOff           = 2  // LavaFluid.getDropOff (overworld)
-	lavaTickDelay         = 30 // LavaFluid.getTickDelay (overworld)
-	lavaSlopeFindDistance = 2  // LavaFluid.getSlopeFindDistance (overworld)
+	//	javap net.minecraft.world.level.material.LavaFluid: each of the three getters branches on
+	//	LavaFluid.isFastLava(LevelReader) == level.environmentAttributes().getDimensionValue(
+	//	EnvironmentAttributes.FAST_LAVA) (the 26.2 replacement for the old dimensionType().ultrawarm()
+	//	flag - the nether preset sets FAST_LAVA true, the overworld false):
+	//	  getDropOff(LevelReader)           -> isFastLava ? iconst_1 : iconst_2  => fast 1 / slow 2
+	//	  getTickDelay(LevelReader)         -> isFastLava ? bipush 10 : bipush 30 => fast 10 / slow 30
+	//	  getSlopeFindDistance(LevelReader) -> isFastLava ? iconst_4 : iconst_2  => fast 4 / slow 2
+	// Source amount 8 is shared (FlowingFluid). Overworld getDropOff=2 gives lava its shorter 3-block
+	// spread (8 -> 6 -> 4 -> 2 -> 0) vs water's 7 (dropOff 1); the nether's dropOff=1 gives the longer
+	// fast-lava spread. The per-dimension split is now a real read (fluidState.ultrawarm, threaded from
+	// the fluid-sim region's dimension) instead of a baked overworld const. CITE: LavaFluid.getDropOff/
+	// getTickDelay/getSlopeFindDistance + LavaFluid.isFastLava (EnvironmentAttributes.FAST_LAVA).
+	lavaDropOff           = 2  // LavaFluid.getDropOff (overworld / !FAST_LAVA)
+	lavaTickDelay         = 30 // LavaFluid.getTickDelay (overworld / !FAST_LAVA)
+	lavaSlopeFindDistance = 2  // LavaFluid.getSlopeFindDistance (overworld / !FAST_LAVA)
+
+	// Nether (FAST_LAVA / ultrawarm) lava flow constants - the isFastLava==true branch of the three
+	// LavaFluid getters (javap-verified above). CITE: LavaFluid.getDropOff/getTickDelay/
+	// getSlopeFindDistance (isFastLava true).
+	lavaDropOffFast           = 1  // LavaFluid.getDropOff (nether / FAST_LAVA)
+	lavaTickDelayFast         = 10 // LavaFluid.getTickDelay (nether / FAST_LAVA)
+	lavaSlopeFindDistanceFast = 4  // LavaFluid.getSlopeFindDistance (nether / FAST_LAVA)
 
 	// maxFluidTicksPerTick caps how many scheduled fluid cells we drain in ONE logical tick - the
 	// Go analogue of LevelTicks.tick(long gameTime, int maxAllowedTicks) (ServerLevel passes 65536
@@ -175,20 +185,33 @@ func (f fluidState) makeFluid(amount int, falling, source bool) fluidState {
 // dropOff / tickDelay / slopeFindDistance / sourceConversion return the per-KIND flow constants.
 // Water and lava share FlowingFluid's geometry but differ in these four numbers (LavaFluid
 // overrides getDropOff/getTickDelay/getSlopeFindDistance/canConvertToSource - javap-verified).
-func (f fluidState) dropOff() int {
+// The three geometry getters take ultrawarm (LavaFluid.isFastLava == the fluid-sim dimension's
+// EnvironmentAttributes.FAST_LAVA): lava's dropOff/tickDelay/slopeFindDistance differ per-dimension
+// (nether/FAST_LAVA 1/10/4 vs overworld 2/30/2). Water ignores it (WaterFluid does not override
+// these). CITE: LavaFluid.getDropOff/getTickDelay/getSlopeFindDistance / isFastLava.
+func (f fluidState) dropOff(ultrawarm bool) int {
 	if f.isLava {
+		if ultrawarm {
+			return lavaDropOffFast
+		}
 		return lavaDropOff
 	}
 	return waterDropOff
 }
-func (f fluidState) tickDelay() int {
+func (f fluidState) tickDelay(ultrawarm bool) int {
 	if f.isLava {
+		if ultrawarm {
+			return lavaTickDelayFast
+		}
 		return lavaTickDelay
 	}
 	return waterTickDelay
 }
-func (f fluidState) slopeFindDistance() int {
+func (f fluidState) slopeFindDistance(ultrawarm bool) int {
 	if f.isLava {
+		if ultrawarm {
+			return lavaSlopeFindDistanceFast
+		}
 		return lavaSlopeFindDistance
 	}
 	return waterSlopeFindDistance
@@ -198,6 +221,23 @@ func (f fluidState) sourceConversion() bool {
 		return lavaSourceConversion
 	}
 	return waterSourceConversion
+}
+
+// dimensionFastLava is LavaFluid.isFastLava's dimension read: the value of the FAST_LAVA
+// environment attribute for a dimension (the 26.2 replacement for DimensionType.ultrawarm()). The
+// nether preset sets FAST_LAVA true; the overworld/end leave it at the false default. CITE:
+// LavaFluid.isFastLava (EnvironmentAttributes.FAST_LAVA) / the nether dimension preset.
+func dimensionFastLava(dim int) bool {
+	return dim == dimNether
+}
+
+// fluidSimUltrawarm resolves the ultrawarm/FAST_LAVA flag for the dimension the fluid sim is
+// currently running in. The flow sim + lava randomTick run on the overworld ChunkManager (t.world())
+// today (nether fluids are a follow-up phase; see chunkReady.applyTo), so this reads dimOverworld ->
+// false; when the nether gets a live fluid sim on its own region, this becomes the owning region's
+// dimension read (dimNether -> true) with no other change. CITE: LavaFluid.isFastLava.
+func (t *TickLoop) fluidSimUltrawarm() bool {
+	return dimensionFastLava(dimOverworld)
 }
 
 // decodeFluid reads the fluid at a state id. The legacy "level" property is inverted back to
@@ -352,7 +392,7 @@ func (t *TickLoop) scheduleFluidTickKind(pos pk.Position, f fluidState) {
 	}
 	delay := waterTickDelay
 	if f.isFluid() {
-		delay = f.tickDelay()
+		delay = f.tickDelay(t.fluidSimUltrawarm())
 	}
 	t.cur().fluidSchedule.schedule(pos, t.gametime+int64(delay))
 }
@@ -380,7 +420,7 @@ func (t *TickLoop) scheduleFluidTickDelay(pos pk.Position, f fluidState, delay i
 // random.nextInt(4) draw on the region levelRandom. For water this is a pure getTickDelay(5).
 // CITE: net.minecraft.world.level.material.LavaFluid.getSpreadDelay / FlowingFluid.getSpreadDelay.
 func (t *TickLoop) getSpreadDelay(pos pk.Position, oldState, newState fluidState) int {
-	delay := oldState.tickDelay()
+	delay := oldState.tickDelay(t.fluidSimUltrawarm())
 	if !oldState.isLava {
 		return delay // WaterFluid (and empty): no override, plain getTickDelay.
 	}
@@ -608,7 +648,7 @@ func (t *TickLoop) getNewLiquid(pos pk.Position) fluidState {
 		return cur.makeFluid(waterSourceAmount, true, false)
 	}
 
-	newAmount := maxAmount - cur.dropOff()
+	newAmount := maxAmount - cur.dropOff(t.fluidSimUltrawarm())
 	if newAmount <= 0 {
 		return fluidState{} // empty
 	}
@@ -733,9 +773,9 @@ func (t *TickLoop) spreadToSides(pos pk.Position, f fluidState) {
 	// spreadToSides gate (FlowingFluid.spreadToSides): amount - getDropOff, or 7 when falling; if <= 0
 	// nothing spreads. The gate remains, but the per-direction FluidState now comes from getSpread's
 	// PER-NEIGHBOR getNewLiquid (each direction carries its own computed state), not a uniform amount.
-	outAmount := f.amount - f.dropOff()
+	outAmount := f.amount - f.dropOff(t.fluidSimUltrawarm())
 	if f.falling {
-		outAmount = waterSourceAmount - f.dropOff()
+		outAmount = waterSourceAmount - f.dropOff(t.fluidSimUltrawarm())
 	}
 	if outAmount <= 0 {
 		return
@@ -811,7 +851,7 @@ func (t *TickLoop) getSlopeDistance(pos pk.Position, dist int, excludeDir pk.Pos
 		if t.isHole(np, f) {
 			return dist
 		}
-		if dist < f.slopeFindDistance() {
+		if dist < f.slopeFindDistance(t.fluidSimUltrawarm()) {
 			if r := t.getSlopeDistance(np, dist+1, opposite(d), f); r < best {
 				best = r
 			}

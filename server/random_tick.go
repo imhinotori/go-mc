@@ -160,10 +160,33 @@ func (t *TickLoop) tickChunk(pos level.ChunkPos, ch *level.Chunk, tickSpeed int)
 			if block.IsRandomlyTicking(state) {
 				t.dispatchRandomTick(r, state, bpos)
 			}
-			// FLUID random tick (`if (fluidState.isRandomlyTicking()) fluidState.randomTick(...)`) is
-			// DEFERRED — see the deferral note at dispatchRandomTick.
+			// FluidState f = s.getFluidState(); if (f.isRandomlyTicking()) f.randomTick(this, pos,
+			// this.random). FluidState.isRandomlyTicking delegates to Fluid.isRandomlyTicking: only
+			// LavaFluid overrides it to true (FlowingFluid/WaterFluid inherit false), so ONLY a lava
+			// cell (source OR flowing) gets a fluid random tick. dispatchFluidRandomTick reads the
+			// fluid kind off the sampled state and routes lava into lavaRandomTick; a non-lava column
+			// draws ZERO RNG here (no isRandomlyTicking fluid to tick), so the levelRandom draw order is
+			// unchanged for a lava-free column. CITE: ServerLevel.tickChunk (fluid branch);
+			// FluidState.isRandomlyTicking -> Fluid.isRandomlyTicking; LavaFluid.isRandomlyTicking (true).
+			t.dispatchFluidRandomTick(r, state, bpos)
 		}
 	}
+}
+
+// dispatchFluidRandomTick is the fluid half of the ServerLevel.tickChunk sample loop:
+// FluidState f = state.getFluidState(); if (f.isRandomlyTicking()) f.randomTick(this, pos, random).
+// FluidState.isRandomlyTicking == Fluid.isRandomlyTicking, which ONLY LavaFluid overrides to true
+// (WaterFluid inherits FlowingFluid's false), so this dispatches exclusively for lava cells and is a
+// zero-cost, zero-RNG no-op for every non-lava sampled state (crucial for the pig-oracle draw order:
+// a lava-free column never enters lavaRandomTick, so no levelRandom is drawn by the fluid branch).
+// Both source and flowing lava tick (isRandomlyTicking is on the Fluid TYPE, not the source flag).
+// r is the tickChunk-resolved region; lavaRandomTick draws r.levelRandom exactly as vanilla draws
+// this.random. CITE: FluidState.getFluidState/isRandomlyTicking; LavaFluid.isRandomlyTicking/randomTick.
+func (t *TickLoop) dispatchFluidRandomTick(r *region, state block.StateID, pos pk.Position) {
+	if _, isLava := lavaLevelOf(state); !isLava {
+		return // non-lava fluid (water) / non-fluid: Fluid.isRandomlyTicking == false, no tick, no RNG.
+	}
+	t.lavaRandomTick(r, pos)
 }
 
 // dispatchRandomTick is the BlockState.randomTick(level, pos, random) dispatch — the per-block-family

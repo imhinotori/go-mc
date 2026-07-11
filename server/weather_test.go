@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/imhinotori/sulfur/data/packetid"
+	"github.com/imhinotori/sulfur/level"
 	pk "github.com/imhinotori/sulfur/net/packet"
 	"github.com/imhinotori/sulfur/world"
 	"github.com/imhinotori/sulfur/world/levelgen"
@@ -201,7 +202,17 @@ func TestIsRainingAtOpenSkyWhileRaining(t *testing.T) {
 	mgr := world.NewChunkManager()
 	loop.regions[globalRegion].world = mgr
 	loop.regions[globalRegion].levelRandom = levelgen.NewLegacyRandomSource(1)
-	loop.spawnSurfaceY = 64 // open sky at/above y=64 (canSeeSkyAt)
+
+	// canSeeSky now reads real sky-light (getBrightness(SKY,pos) >= 15), so load a chunk and set the
+	// surface cell's section to full sky-light 15 (open sky) while the shaded cell's section reads 0.
+	ch := level.EmptyChunk(blockTestSecs)
+	ch.Status = level.StatusFull
+	mgr.Insert(level.ChunkPos{0, 0}, ch)
+	setSkyLight(ch, 15) // all sections open sky...
+	// ...except the section containing the shaded cell (y=32, dimMinY=-64 -> section (32+64)>>4 == 6),
+	// which is roofed -> sky-light 0.
+	shadedSection := (32 - dimMinY) >> 4
+	ch.Sections[shadedSection].SkyLight = make([]byte, 2048)
 
 	// Make it rain: force rainLevel above the 0.2 threshold so isRaining() is true.
 	loop.weather.raining = true
@@ -213,13 +224,13 @@ func TestIsRainingAtOpenSkyWhileRaining(t *testing.T) {
 
 	// An all-air column (no solid blocks) has ghastMotionBlockingTop == dimMinY, so firstAvailableY ==
 	// dimMinY+1, which is <= any surface y -> the heightmap gate passes. A cell at the open-sky surface
-	// therefore rains.
+	// (sky-light 15 -> canSeeSky true) therefore rains.
 	surface := pk.Position{X: 8, Y: 70, Z: 8}
 	if !loop.isRainingAt(surface) {
 		t.Fatalf("isRainingAt(open-sky surface %v) = false, want true while raining", surface)
 	}
 
-	// A cell BELOW the spawn surface is not sky-exposed (canSeeSkyAt false) -> no rain.
+	// A cell in the roofed section (sky-light 0 -> canSeeSky false) -> no rain.
 	shaded := pk.Position{X: 8, Y: 32, Z: 8}
 	if loop.isRainingAt(shaded) {
 		t.Fatalf("isRainingAt(shaded %v) = true, want false (below open sky)", shaded)

@@ -37,6 +37,15 @@ func newThunderLoop(t *testing.T, seed int64) (*TickLoop, *world.ChunkManager) {
 
 	ch := level.EmptyChunk(blockTestSecs)
 	ch.Status = level.StatusFull
+	// Open-sky column: full sky-light 15 everywhere so canSeeSky (now the real getBrightness(SKY,pos) >= 15
+	// read) is true at the strike surface (y=65) - what the LevelLightEngine computes above an open floor.
+	for i := range ch.Sections {
+		sky := make([]byte, 2048)
+		for j := range sky {
+			sky[j] = 0xFF
+		}
+		ch.Sections[i].SkyLight = sky
+	}
 	mgr.Insert(level.ChunkPos{0, 0}, ch)
 
 	// A solid stone floor across the chunk at y=64 so the MOTION_BLOCKING heightmap top is 64 (strike lands

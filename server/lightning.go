@@ -277,7 +277,7 @@ func (t *TickLoop) findLightningTargetAround(seed pk.Position) pk.Position {
 			if !aabbContainsEntity(m, loX, loY, loZ, hiX, hiY, hiZ) {
 				continue
 			}
-			if !t.canSeeSkyAt(int(math.Floor(m.y))) {
+			if !t.canSeeSkyAt(entityBlockPos(m)) {
 				continue // canSeeSky(input.blockPosition())
 			}
 			candidates = append(candidates, entityBlockPos(m))
@@ -291,7 +291,7 @@ func (t *TickLoop) findLightningTargetAround(seed pk.Position) pk.Position {
 		if p.x < loX || p.x >= hiX || p.z < loZ || p.z >= hiZ || p.y < loY || p.y >= hiY {
 			continue
 		}
-		if !t.canSeeSkyAt(int(math.Floor(p.y))) {
+		if !t.canSeeSkyAt(pk.Position{X: int(math.Floor(p.x)), Y: int(math.Floor(p.y)), Z: int(math.Floor(p.z))}) {
 			continue
 		}
 		candidates = append(candidates, pk.Position{X: int(math.Floor(p.x)), Y: int(math.Floor(p.y)), Z: int(math.Floor(p.z))})

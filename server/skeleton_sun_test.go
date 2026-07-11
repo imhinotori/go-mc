@@ -14,6 +14,7 @@ import (
 
 	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/data/item"
+	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/component"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
@@ -32,10 +33,11 @@ func sunTestMob(id int32, x, y, z float64) *Entity {
 // TestFleeSunGoalGates: FleeSunGoal.canUse requires bright + on-fire + sky-exposed + no-target. It fires
 // for a burning day-time sky-exposed skeleton, and each guard independently blocks it.
 func TestFleeSunGoalGates(t *testing.T) {
-	loop, _ := newPhysicsLoop()
+	loop, mgr := newPhysicsLoop()
 	loop.start(loop.clock.(*fakeClock).Now())
-	loop.spawnSurfaceY = 64 // e.y (64) >= surfaceY -> canSeeSky true; a candidate a few blocks DOWN (cy<64) is shaded
-	loop.gametime = 6000    // midday -> !isDarkEnoughToSpawn (bright)
+	loop.spawnSurfaceY = 64                                    // e.y (64) >= surfaceY -> canSeeSky true; a candidate a few blocks DOWN (cy<64) is shaded
+	skyLitColumnAbove(putChunk(mgr, level.ChunkPos{0, 0}), 64) // real sky-light: y>=64 sees sky, below is shade
+	loop.gametime = 6000                                       // midday -> !isDarkEnoughToSpawn (bright)
 
 	e := sunTestMob(7001, 8.5, 64, 8.5)
 	loop.only().entities.add(e)
@@ -93,9 +95,10 @@ func TestFleeSunGoalGates(t *testing.T) {
 // TestFleeSunGoalStartSetsWant: after a firing canUse, start() commits a navigation want-target (the mob
 // moves toward the getHidePos shade tile).
 func TestFleeSunGoalStartSetsWant(t *testing.T) {
-	loop, _ := newPhysicsLoop()
+	loop, mgr := newPhysicsLoop()
 	loop.start(loop.clock.(*fakeClock).Now())
 	loop.spawnSurfaceY = 64
+	skyLitColumnAbove(putChunk(mgr, level.ChunkPos{0, 0}), 64) // real sky-light: y>=64 sees sky, below is shade
 	loop.gametime = 6000
 
 	e := sunTestMob(7010, 8.5, 64, 8.5)
@@ -276,10 +279,11 @@ func TestSkeletonWithHeadBlockAvoidsSun(t *testing.T) {
 // burning guard is added (it KEEPS the isOnFire() guard FleeSunGoal drops in Fox.SeekShelter —
 // faithful). Cite: Skeleton$RestrictSunGoal.canUse && Skeleton$FleeSunGoal.canUse.
 func TestSkeletonWithoutHeadBlockFleesSun(t *testing.T) {
-	loop, _ := newPhysicsLoop()
+	loop, mgr := newPhysicsLoop()
 	loop.start(loop.clock.(*fakeClock).Now())
 	loop.spawnSurfaceY = 64
-	loop.gametime = 6000 // bright + sky-exposed
+	skyLitColumnAbove(putChunk(mgr, level.ChunkPos{0, 0}), 64) // real sky-light: y>=64 sees sky
+	loop.gametime = 6000                                       // bright + sky-exposed
 
 	// BARE skeleton: no HEAD equipment.
 	eBare := sunTestMob(7050, 8.5, 64, 8.5)
@@ -328,10 +332,11 @@ func TestSkeletonWithoutHeadBlockFleesSun(t *testing.T) {
 //	      (VERIFIED CFR, this session: super.trimPath; if (avoidSun) { if (canSeeSky(mobPos))
 //	      return; for (Node n : path.nodes) if (canSeeSky(n)) { path.truncateNodes(i); return; } }).
 func TestWalkNodeEvaluatorSunExposedMalus(t *testing.T) {
-	loop, _ := newPhysicsLoop()
+	loop, mgr := newPhysicsLoop()
 	loop.start(loop.clock.(*fakeClock).Now())
-	loop.spawnSurfaceY = 64 // cells at y>=64 are sky-exposed; y<64 are shaded (the superflat stub)
-	loop.gametime = 6000    // bright daytime so the canSeeSky stub still reads the y-projection
+	loop.spawnSurfaceY = 64                                    // cells at y>=64 are sky-exposed; y<64 are shaded
+	skyLitColumnAbove(putChunk(mgr, level.ChunkPos{0, 0}), 64) // real sky-light matches the y-boundary
+	loop.gametime = 6000                                       // bright daytime so the canSeeSky stub still reads the y-projection
 
 	// Synthetic path factory (fresh copy each call — truncateNodes mutates the slice in place, so
 	// reusing one Path across the 3 phases would tangle the assertions).

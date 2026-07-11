@@ -7,6 +7,7 @@ import (
 	"github.com/imhinotori/sulfur/level/block"
 	pk "github.com/imhinotori/sulfur/net/packet"
 	"github.com/imhinotori/sulfur/world"
+	"github.com/imhinotori/sulfur/world/levelgen"
 )
 
 // random_tick_test.go — the RANDOM-TICK DRIVER gate (random_tick.go). It proves:
@@ -209,5 +210,77 @@ func TestRandomTickSpeedZeroDisables(t *testing.T) {
 
 	if loop.only().randValue != seed {
 		t.Fatalf("tickChunk with tickSpeed 0 advanced randValue to %d, want %d (must draw nothing)", loop.only().randValue, seed)
+	}
+}
+
+// TestLavaRandomTickIgnitesFlammableNeighbour drives the wired fluid random-tick branch: a lava cell
+// surrounded by a ring of flammable oak_planks (with air directly above each) ignites fire on the
+// LavaFluid.randomTick side-ignite branch (i == random.nextInt(3) == 0 -> for k<3: m =
+// pos.offset(nextInt(3)-1, 0, nextInt(3)-1); if isEmptyBlock(m.above()) && isFlammable(m) ->
+// setBlockAndUpdate(m.above(), fire)). Seed 10 makes the first draw i==0 and the first side offset
+// (-1,-1), so m == the planks at (7,64,7) and fire lands at (7,65,7). CITE: LavaFluid.randomTick
+// (side-ignite branch) / hasFlammableNeighbours / isFlammable; BaseFireBlock.getState.
+func TestLavaRandomTickIgnitesFlammableNeighbour(t *testing.T) {
+	loop, mgr, _ := newRandomTickLoop()
+	loop.only().levelRandom = levelgen.NewLegacyRandomSource(10)
+
+	lavaPos := pk.Position{X: 8, Y: 64, Z: 8}
+	mgr.SetBlock(lavaPos, block.ToStateID[block.Lava{}], dimMinY) // source lava
+
+	// Ring the lava with oak_planks at its own y-level, leaving air directly above each plank so the
+	// side-ignite branch (ignite the cell ABOVE a flammable m) can place fire.
+	planks := block.ToStateID[block.OakPlanks{}]
+	for dx := -1; dx <= 1; dx++ {
+		for dz := -1; dz <= 1; dz++ {
+			if dx == 0 && dz == 0 {
+				continue // the lava cell itself
+			}
+			mgr.SetBlock(pk.Position{X: 8 + dx, Y: 64, Z: 8 + dz}, planks, dimMinY)
+			// (8+dx, 65, 8+dz) stays air (EmptyChunk default) so fire can be placed there.
+		}
+	}
+
+	// Sanity: hasFlammableNeighbours must see the plank ring around the lava (used by the above-air
+	// branch, and confirms the fire ignite table backs isFlammable).
+	if !loop.lavaHasFlammableNeighbours(lavaPos) {
+		t.Fatal("lava should have flammable neighbours (the oak_planks ring)")
+	}
+
+	// Drive the wired dispatch exactly as tickChunk does: state at the sampled pos -> fluid branch.
+	loop.dispatchFluidRandomTick(loop.only(), block.ToStateID[block.Lava{}], lavaPos)
+
+	// Seed 10 -> first side offset (-1,-1): m == (7,64,7) (a plank), ignite (7,65,7).
+	ignited := pk.Position{X: 7, Y: 65, Z: 7}
+	got, _ := mgr.GetBlock(ignited, dimMinY)
+	if !block.IsFire(got) {
+		t.Fatalf("lava randomTick did not ignite the flammable neighbour above (7,64,7): state at %v is not fire", ignited)
+	}
+}
+
+// TestDispatchFluidRandomTickNonLavaDrawsNothing pins the pig-oracle safety property: the wired fluid
+// branch only ticks LAVA (Fluid.isRandomlyTicking is overridden true only by LavaFluid). For a water
+// or non-fluid sampled state it draws ZERO levelRandom and mutates nothing, so a lava-free column's
+// random-tick RNG draw order is identical to before the fluid branch was wired. CITE:
+// FluidState.isRandomlyTicking -> Fluid.isRandomlyTicking; WaterFluid inherits FlowingFluid false.
+func TestDispatchFluidRandomTickNonLavaDrawsNothing(t *testing.T) {
+	loop, mgr, _ := newRandomTickLoop()
+	loop.only().levelRandom = levelgen.NewLegacyRandomSource(12345)
+
+	// Snapshot the levelRandom stream before the dispatch.
+	before := loop.only().levelRandom.NextLong()
+	loop.only().levelRandom = levelgen.NewLegacyRandomSource(12345)
+
+	waterPos := pk.Position{X: 4, Y: 64, Z: 4}
+	mgr.SetBlock(waterPos, block.ToStateID[block.Water{}], dimMinY)
+	stonePos := pk.Position{X: 5, Y: 64, Z: 5}
+	mgr.SetBlock(stonePos, block.ToStateID[block.Stone{}], dimMinY)
+
+	// Water and a non-fluid solid: both must be no-ops that draw no RNG.
+	loop.dispatchFluidRandomTick(loop.only(), block.ToStateID[block.Water{}], waterPos)
+	loop.dispatchFluidRandomTick(loop.only(), block.ToStateID[block.Stone{}], stonePos)
+
+	after := loop.only().levelRandom.NextLong()
+	if before != after {
+		t.Fatalf("non-lava fluid dispatch perturbed levelRandom: first draw before=%d after=%d (want equal)", before, after)
 	}
 }

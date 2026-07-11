@@ -162,11 +162,31 @@ func (t *TickLoop) targetTick(state block.StateID, pos pk.Position) {
 // daylightSunAngleRadians is 0.017453292f (deg->rad). CITE: DaylightDetectorBlock.updateSignalStrength.
 const daylightSunAngleRadians = 0.017453292
 
-// daylightSunAngleDeg is the SUN_ANGLE env attribute in DEGREES. The day/night clock is not built in v1,
-// so this is a CITED CONSTANT equal to the vanilla DAY default (0 deg, cos term == 1 so POWER ==
-// skyBrightness). Structured to become a real EnvironmentAttributes.SUN_ANGLE read later - never baked
-// away. CITE: DaylightDetectorBlock.updateSignalStrength (EnvironmentAttributes.SUN_ANGLE).
-const daylightSunAngleDeg = 0.0
+// daylightSunAngleDeg is the SUN_ANGLE environment attribute in DEGREES for the current game time -
+// the input DaylightDetectorBlock.updateSignalStrength multiplies by 0.017453292 (deg->rad). In 26.2
+// SUN_ANGLE is the data-driven Timelines.OVERWORLD_DAY keyframe track (visual/sun_angle: 360 deg at
+// tick 0 wrapping to 0 at tick 6000 - noon - via the smooth easing). Its observable curve is the
+// historical Level.getTimeOfDay/getSunAngle formula, so this ports that (cited) formula, which
+// reproduces the OVERWORLD_DAY track's output 1:1:
+//
+//	d = frac(dayTime / 24000.0 - 0.25);        // Mth.frac; dayTime = gameTime % 24000
+//	e = 0.5 - cos(d * PI) / 2.0;               // smoothstep toward the solstices
+//	timeOfDay = (d * 2.0 + e) / 3.0;           // getTimeOfDay(1.0F)
+//	sunAngleDeg = timeOfDay * 360.0;           // SUN_ANGLE == getSunAngle in degrees
+//
+// At noon (dayTime 6000) d=0, e=0, timeOfDay=0 -> 0 deg (cos term 1 -> POWER == skyBrightness); at
+// midnight (dayTime 18000) timeOfDay=0.5 -> 180 deg. Feeds off the single gametime counter time.go
+// derives dayTime from; becomes a direct EnvironmentAttributes.SUN_ANGLE read when the keyframe
+// timeline subsystem lands. CITE: DaylightDetectorBlock.updateSignalStrength
+// (EnvironmentAttributes.SUN_ANGLE); Timelines.OVERWORLD_DAY visual/sun_angle track; the legacy
+// Level.getTimeOfDay/getSunAngle formula it reproduces.
+func (t *TickLoop) daylightSunAngleDeg() float64 {
+	dayTime := float64(t.gametime % 24000)
+	d := mthFracD(dayTime/24000.0 - 0.25)
+	e := 0.5 - math.Cos(d*math.Pi)/2.0
+	timeOfDay := (d*2.0 + e) / 3.0
+	return timeOfDay * 360.0
+}
 
 // daylightUpdateSignalStrength is DaylightDetectorBlock.updateSignalStrength: sky =
 // getEffectiveSkyBrightness(pos); if INVERTED sky = 15 - sky; else if sky > 0 apply the sun-angle cos
@@ -178,7 +198,7 @@ func (t *TickLoop) daylightUpdateSignalStrength(pos pk.Position, state block.Sta
 		return
 	}
 	sky := w.SkyBrightness(pos, dimMinY) - skyDarkenDay
-	sunAngle := float32(daylightSunAngleDeg) * float32(daylightSunAngleRadians)
+	sunAngle := float32(t.daylightSunAngleDeg()) * float32(daylightSunAngleRadians)
 	if block.DaylightInverted(state) {
 		sky = 15 - sky
 	} else if sky > 0 {

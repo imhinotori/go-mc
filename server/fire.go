@@ -191,7 +191,6 @@ func (t *TickLoop) isDay() bool {
 //	[DEPRECATED] superseded by tickMobSunBurn (fire.go); kept for the phantom_test harness.
 func (t *TickLoop) sunBurnTick(e *Entity) { t.tickMobSunBurn(e) }
 
-
 // entityInWater reports whether the block at the entity's feet is water — the fire-extinguish +
 // sun-burn water guard. v1 shortcut over the world block state (no full fluid-tag AABB sweep). A nil
 // world (test loop) is treated as not-in-water.
@@ -202,18 +201,28 @@ func (t *TickLoop) entityInWater(e *Entity) bool {
 	return t.fluidAt(pk.Position{X: int(math.Floor(e.x)), Y: int(math.Floor(e.y)), Z: int(math.Floor(e.z))}).isWater
 }
 
-// canSeeSky is the superflat sky-exposure shortcut: an entity at or above the world surface has open
-// sky above it (no light engine / heightmap raycast in v1). CITED STUB — becomes level.canSeeSky when
-// the light engine + real heightmaps land. For the superflat stub the floor top is the spawn surface,
-// so any entity standing on it sees sky.
+// canSeeSky is BlockAndLightGetter.canSeeSky(entity.blockPosition()): whether the sky is directly
+// visible above the cell the entity's feet occupy. blockPosition() == BlockPos.containing(x,y,z)
+// (floor per axis) == entityBlockPos(e). Delegates to canSeeSkyAt for the sky-light read. CITE:
+// net.minecraft.world.level.BlockAndLightGetter.canSeeSky; Entity.blockPosition().
 func (t *TickLoop) canSeeSky(e *Entity) bool {
-	return int(math.Floor(e.y)) >= t.spawnSurfaceY
+	return t.canSeeSkyAt(entityBlockPos(e))
 }
 
-// canSeeSkyAt is canSeeSky for a raw block position (the GroundPathNavigation.trimPath per-node check
-// level.canSeeSky(new BlockPos(node.x, node.y, node.z))). Same superflat sky-exposure shortcut as
-// canSeeSky: a cell at or above the spawn surface has open sky. CITED STUB (becomes the real light-
-// engine canSeeSky later), sibling of canSeeSky above.
-func (t *TickLoop) canSeeSkyAt(y int) bool {
-	return y >= t.spawnSurfaceY
+// canSeeSkyAt ports net.minecraft.world.level.BlockAndLightGetter.canSeeSky(BlockPos):
+//
+//	return getBrightness(LightLayer.SKY, pos) >= 15;   // == getMaxLightLevel()
+//
+// i.e. a cell sees the sky iff its RAW stored sky-light is the maximum (15) — the LevelLightEngine
+// (commit 484234b4) sets sky-light 15 only in columns with nothing opaque above, so a cell under a
+// solid roof reads < 15 and correctly does NOT see sky. This is the sky-LIGHT definition (NOT the
+// MOTION_BLOCKING heightmap compare): vanilla BlockAndLightGetter.canSeeSky is exactly
+// getBrightness(SKY,pos) >= maxLightLevel, and the light engine is the authoritative, reliable
+// source now that it has landed. getBrightnessSky returns the RAW (non-sky-darkened) sky-light, which
+// is what getBrightness(SKY,pos) returns (day/night darkening is applied elsewhere via getSkyDarken).
+// A nil world falls back to getBrightnessSky's 15 default so manager-less unit loops behave as the
+// prior superflat stub did. CITE: net.minecraft.world.level.BlockAndLightGetter.canSeeSky /
+// getBrightness(LightLayer.SKY, pos) >= 15.
+func (t *TickLoop) canSeeSkyAt(pos pk.Position) bool {
+	return t.getBrightnessSky(pos) >= 15
 }

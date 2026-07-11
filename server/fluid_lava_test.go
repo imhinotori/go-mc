@@ -25,24 +25,38 @@ func lavaLevelAt(mgr *world.ChunkManager, pos pk.Position) (int, bool) {
 }
 
 // TestLavaConstants pins the four javap-verified LavaFluid overrides via the fluidState accessors.
+// The three geometry getters are checked in BOTH the overworld (!FAST_LAVA -> 2/30/2) and nether
+// (FAST_LAVA/ultrawarm -> 1/10/4) branches; water ignores the flag. CITE: LavaFluid.getDropOff/
+// getTickDelay/getSlopeFindDistance / isFastLava.
 func TestLavaConstants(t *testing.T) {
+	const overworld, nether = false, true
 	lava := fluidState{isLava: true, amount: waterSourceAmount}
-	if lava.dropOff() != 2 {
-		t.Fatalf("lava getDropOff = %d, want 2 (LavaFluid overworld)", lava.dropOff())
+	if lava.dropOff(overworld) != 2 {
+		t.Fatalf("lava getDropOff = %d, want 2 (LavaFluid overworld)", lava.dropOff(overworld))
 	}
-	if lava.tickDelay() != 30 {
-		t.Fatalf("lava getTickDelay = %d, want 30 (LavaFluid overworld)", lava.tickDelay())
+	if lava.tickDelay(overworld) != 30 {
+		t.Fatalf("lava getTickDelay = %d, want 30 (LavaFluid overworld)", lava.tickDelay(overworld))
 	}
-	if lava.slopeFindDistance() != 2 {
-		t.Fatalf("lava getSlopeFindDistance = %d, want 2 (LavaFluid overworld)", lava.slopeFindDistance())
+	if lava.slopeFindDistance(overworld) != 2 {
+		t.Fatalf("lava getSlopeFindDistance = %d, want 2 (LavaFluid overworld)", lava.slopeFindDistance(overworld))
+	}
+	// Nether / FAST_LAVA overrides: dropOff 1, tickDelay 10, slopeFindDistance 4.
+	if lava.dropOff(nether) != 1 || lava.tickDelay(nether) != 10 || lava.slopeFindDistance(nether) != 4 {
+		t.Fatalf("nether lava constants: dropOff=%d tickDelay=%d slope=%d, want 1/10/4 (LavaFluid FAST_LAVA)",
+			lava.dropOff(nether), lava.tickDelay(nether), lava.slopeFindDistance(nether))
 	}
 	if lava.sourceConversion() {
 		t.Fatalf("lava canConvertToSource = true, want false (LavaFluid gamerule default)")
 	}
 	water := fluidState{isWater: true, amount: waterSourceAmount}
-	if water.dropOff() != 1 || water.tickDelay() != 5 || water.slopeFindDistance() != 4 || !water.sourceConversion() {
+	// Water does not override these; the flag never changes its geometry (checked in both branches).
+	if water.dropOff(overworld) != 1 || water.tickDelay(overworld) != 5 || water.slopeFindDistance(overworld) != 4 || !water.sourceConversion() {
 		t.Fatalf("water constants perturbed: dropOff=%d tickDelay=%d slope=%d conv=%v",
-			water.dropOff(), water.tickDelay(), water.slopeFindDistance(), water.sourceConversion())
+			water.dropOff(overworld), water.tickDelay(overworld), water.slopeFindDistance(overworld), water.sourceConversion())
+	}
+	if water.dropOff(nether) != 1 || water.tickDelay(nether) != 5 || water.slopeFindDistance(nether) != 4 {
+		t.Fatalf("water geometry must ignore FAST_LAVA: dropOff=%d tickDelay=%d slope=%d",
+			water.dropOff(nether), water.tickDelay(nether), water.slopeFindDistance(nether))
 	}
 }
 
@@ -198,7 +212,6 @@ func TestLavaFallsDownColumn(t *testing.T) {
 	}
 }
 
-
 // --- D-F2: horizontal lava+water solidification (LiquidBlock.shouldSpreadLiquid) ---
 
 // TestLavaSourceBesideWaterMakesObsidian: a SOURCE lava cell horizontally adjacent to water
@@ -207,8 +220,8 @@ func TestLavaFallsDownColumn(t *testing.T) {
 func TestLavaSourceBesideWaterMakesObsidian(t *testing.T) {
 	loop, mgr := newFluidLoop()
 	lavaPos := pk.Position{X: 4, Y: 64, Z: 4}
-	setLava(mgr, lavaPos, 0)                                   // SOURCE lava (legacy 0)
-	setWater(mgr, pk.Position{X: 5, Y: 64, Z: 4}, 0)           // water to the EAST (horizontal)
+	setLava(mgr, lavaPos, 0)                         // SOURCE lava (legacy 0)
+	setWater(mgr, pk.Position{X: 5, Y: 64, Z: 4}, 0) // water to the EAST (horizontal)
 	var fizzes []pk.Position
 	var fizzEvent int
 	loop.fizzHook = func(pos pk.Position, event int) { fizzes = append(fizzes, pos); fizzEvent = event }
@@ -237,9 +250,9 @@ func TestLavaSourceBesideWaterMakesObsidian(t *testing.T) {
 func TestFlowingLavaBesideWaterMakesCobblestone(t *testing.T) {
 	loop, mgr := newFluidLoop()
 	lavaPos := pk.Position{X: 4, Y: 64, Z: 4}
-	setLava(mgr, lavaPos, 2)                                   // FLOWING lava (legacy 2 -> amount 6)
-	setLava(mgr, pk.Position{X: 3, Y: 64, Z: 4}, 0)           // a lava SOURCE to the WEST feeds it
-	setWater(mgr, pk.Position{X: 4, Y: 64, Z: 5}, 0)          // water to the SOUTH (horizontal)
+	setLava(mgr, lavaPos, 2)                         // FLOWING lava (legacy 2 -> amount 6)
+	setLava(mgr, pk.Position{X: 3, Y: 64, Z: 4}, 0)  // a lava SOURCE to the WEST feeds it
+	setWater(mgr, pk.Position{X: 4, Y: 64, Z: 5}, 0) // water to the SOUTH (horizontal)
 	var fizzed bool
 	loop.fizzHook = func(pos pk.Position, event int) { fizzed = fizzed || (pos == lavaPos && event == 1501) }
 

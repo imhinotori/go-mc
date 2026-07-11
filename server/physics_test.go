@@ -59,6 +59,28 @@ func putChunk(mgr *world.ChunkManager, col level.ChunkPos) *level.Chunk {
 	return ch
 }
 
+// skyLitColumnAbove sets a chunk's sky-light so cells at world-Y >= surfaceY read the open-sky
+// maximum 15 (canSeeSky true) and cells below read 0 (canSeeSky false) - the sky-light equivalent of
+// the old superflat `y >= spawnSurfaceY` canSeeSky stub, for tests that exercise the real
+// getBrightness(SKY,pos) >= 15 definition. surfaceY MUST be a section boundary (16-aligned in the
+// (y - dimMinY) frame) so the split is exact; the sun tests use surfaceY == 64, and (64 - (-64)) == 128
+// is 16-aligned. A per-section fill (uniform nibble) is enough because the callers only probe whole
+// sections above/below the boundary.
+func skyLitColumnAbove(ch *level.Chunk, surfaceY int) {
+	for i := range ch.Sections {
+		secMinY := dimMinY + i*16
+		var nib byte
+		if secMinY >= surfaceY {
+			nib = 0xFF // sky-light 15 in both nibbles -> open sky
+		}
+		sky := make([]byte, 2048)
+		for j := range sky {
+			sky[j] = nib
+		}
+		ch.Sections[i].SkyLight = sky
+	}
+}
+
 // setBlock places a solid (stone) block at world (x,y,z) in the chunk, mirroring the
 // generator's section/local mapping. minY is the overworld floor.
 func setBlock(ch *level.Chunk, x, y, z int) {

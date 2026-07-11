@@ -38,6 +38,7 @@ import (
 	"math"
 
 	"github.com/imhinotori/sulfur/level/attribute"
+	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
 // --- navigation tuning (ported constants) ----------------------------------------------
@@ -349,7 +350,7 @@ func (n *groundNavigation) trimPathAvoidSun(t *TickLoop, e *Entity) {
 	// Truncate at the first sky-exposed node (the mob stops at the edge of the shade).
 	for i := 0; i < len(n.path.nodes); i++ {
 		nd := n.path.nodes[i]
-		if t.canSeeSkyAt(nd.y) {
+		if t.canSeeSkyAt(pk.Position{X: nd.x, Y: nd.y, Z: nd.z}) {
 			n.path.truncateNodes(i)
 			return
 		}
