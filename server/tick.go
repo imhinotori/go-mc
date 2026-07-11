@@ -196,6 +196,12 @@ type TickLoop struct {
 	// seeded to difficultyNormal in NewTickLoop to match the vanilla default the const also uses.
 	levelDifficulty difficulty
 
+	// difficultyLocked is WorldData.difficultyLocked (MinecraftServer.setDifficultyLocked). The
+	// ServerboundLockDifficultyPacket toggles it (operator-gated); the ClientboundChangeDifficulty
+	// echo carries it alongside the difficulty. Zero value == false == the vanilla default (a fresh
+	// world is unlocked), so no explicit seed is required in NewTickLoop. Tick-owned.
+	difficultyLocked bool
+
 	// perms is the LuckPerms-style permission store (permissions.go) the command gate consults
 	// (t.playerHasPermission). nil = the legacy all-players-operator fallback (tests + a server
 	// booted without SetPermStore), so existing behavior is preserved until a store is wired.
@@ -788,6 +794,15 @@ type tickPlayer struct {
 	// today — but the check is present and correct so a future creative toggle drops nothing
 	// without any further edit. Tick-owned (set at registration, read on the tick goroutine).
 	gameMode int32
+
+	// flying is Abilities.flying — whether the player is currently flying (the creative/spectator
+	// double-jump toggle). It is a client-toggled state the server MUST learn about via
+	// ServerboundPlayerAbilitiesPacket, else the server keeps believing a stopped-flying player is
+	// still airborne (desync). handlePlayerAbilities sets it to
+	// packet.isFlying() && getAbilities().mayfly (1:1 ServerGamePacketListenerImpl
+	// .handlePlayerAbilities). mayfly is derived from gameMode via GameType.updatePlayerAbilities
+	// (CREATIVE/SPECTATOR -> mayfly true). Tick-owned (read/written on the tick goroutine).
+	flying bool
 
 	// name is the player's login-profile name (the username from AcceptPlayer). It is the
 	// SERVER-authoritative chat attribution: handleChat renders "<name> message" from it
@@ -2395,6 +2410,42 @@ func (t *TickLoop) dispatch(c *Client, p pk.Packet) {
 		// no-ops. Routed here EXPLICITLY (rather than the silent default) so the choice is
 		// visible and the 07-06 capture-diff can confirm the SystemChat round-trip does not
 		// depend on acking. The payload is never read; never panics (T-3-02).
+	case packetid.ServerboundPlayerAbilities:
+		// The client toggling flight off/on (the creative/spectator double-jump). 1:1 port of
+		// ServerGamePacketListenerImpl.handlePlayerAbilities: player.getAbilities().flying =
+		// packet.isFlying() && getAbilities().mayfly. Handled DIRECTLY here (no positional/temporal
+		// ordering, like ClientInformation). Without it the server keeps believing a player who
+		// stopped flying is still airborne — a desync. Decoded on the owner; a nil player is a no-op.
+		if player != nil {
+			t.handlePlayerAbilities(player, p)
+		}
+	case packetid.ServerboundChangeGameMode:
+		// The client requesting a game-mode change (creative UI / gamemode switcher). A serverbound
+		// change-gamemode packet DOES exist in 776 (GamePacketTypes.SERVERBOUND_CHANGE_GAME_MODE).
+		// 1:1 port of ServerGamePacketListenerImpl.handleChangeGameMode: gate on the
+		// COMMANDS_GAMEMASTER permission (GameModeCommand.PERMISSION_CHECK); if it passes, apply via
+		// GameModeCommand.setGameMode(player, mode) -> ServerPlayer.setGameMode (which tells the
+		// client). A non-gamemaster request is refused (logged in vanilla) — a no-op here.
+		if player != nil {
+			t.handleChangeGameMode(player, p)
+		}
+	case packetid.ServerboundChangeDifficulty:
+		// The client changing world difficulty (the singleplayer/LAN difficulty slider). 1:1 port of
+		// ServerGamePacketListenerImpl.handleChangeDifficulty: gate on COMMANDS_GAMEMASTER-or-
+		// singleplayer-owner; if it passes, server.setDifficulty(difficulty, false) — set the level
+		// difficulty and broadcast ClientboundChangeDifficulty to ALL players. A non-operator request
+		// is refused (vanilla logs a warning) — a no-op here.
+		if player != nil {
+			t.handleChangeDifficulty(player, p)
+		}
+	case packetid.ServerboundLockDifficulty:
+		// The client toggling the difficulty lock. 1:1 port of
+		// ServerGamePacketListenerImpl.handleLockDifficulty: same operator gate; if it passes,
+		// server.setDifficultyLocked(isLocked) — set the lock and broadcast ClientboundChangeDifficulty
+		// so every client shows the locked/unlocked state. A non-operator request is a silent no-op.
+		if player != nil {
+			t.handleLockDifficulty(player, p)
+		}
 	default:
 		// Unknown / not-yet-handled IDs are cheap no-ops: never block, never panic.
 	}
