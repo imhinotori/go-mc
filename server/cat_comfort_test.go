@@ -62,8 +62,8 @@ func TestCatComfortGoalsLanded(t *testing.T) {
 			haveSit = true
 		}
 	}
-	if goalSel != 11 {
-		t.Fatalf("cat goalSelector goal count = %d, want 11 (the 8 prior + cat_relax_on_owner@3 + cat_lie_on_bed@5 + cat_sit_on_block@7)", goalSel)
+	if goalSel != 12 {
+		t.Fatalf("cat goalSelector goal count = %d, want 12 (the 8 prior + cat_relax_on_owner@3 + cat_avoid_player@4 + cat_lie_on_bed@5 + cat_sit_on_block@7)", goalSel)
 	}
 	if targetSel != 0 {
 		t.Fatalf("cat targetSelector goal count = %d, want 0 (the rabbit/turtle prey goals are cite-deferred)", targetSel)

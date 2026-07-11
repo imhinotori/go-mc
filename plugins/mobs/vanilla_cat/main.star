@@ -495,6 +495,12 @@ declare_mob(
             stop = tempt_food_stop,
             can_continue = tempt_food_continue,
         ),
+        # @4 CatAvoidEntityGoal<Player>(mob, 16.0f, 0.8, 1.33) [MOVE] -- kind="cat_avoid_player" (the Go-native
+        # AvoidEntityGoal that makes a WILD (untamed) cat flee players; gated on !isTame() so a tamed cat
+        # never fires it). Cat.reassessTameGoals adds it at @4 only while !isTame; the goal's own !isTame()
+        # canUse gate reproduces the remove-on-tame observably (a tamed cat's canUse is always false). Cite
+        # Cat.reassessTameGoals + Cat$CatAvoidEntityGoal.
+        goal(priority = 4, flags = ["MOVE"], kind = "cat_avoid_player"),
         # @5 CatLieOnBedGoal(mob, 1.1, 8) [JUMP, MOVE] -- kind="cat_lie_on_bed" (the Go-native MoveToBlockGoal
         # that walks to + lies on any #minecraft:beds block). Unblocked by BlockTags.BEDS. Cite
         # Cat.registerGoals @5 CatLieOnBedGoal + MoveToBlockGoal.

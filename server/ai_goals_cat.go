@@ -738,3 +738,68 @@ func (g *catRelaxOnOwnerGoal) tick(t *TickLoop, e *Entity) {
 }
 
 var _ Goal = (*catRelaxOnOwnerGoal)(nil)
+
+// --- CatAvoidEntityGoal (net.minecraft.world.entity.animal.feline.Cat$CatAvoidEntityGoal) ----------
+//
+// A WILD (untamed) cat flees players. Cat.reassessTameGoals adds this at goalSelector @4 ONLY while the
+// cat is NOT tame (removeGoal on tame, addGoal(4) while !isTame); the goal itself ALSO gates canUse /
+// canContinueToUse on !isTame(), so a cat that is tamed mid-run stops fleeing. v1 wires the goal
+// UNCONDITIONALLY at @4 (the .star has no reassess-on-tame hook) and reproduces reassessTameGoals'
+// observable effect via the goal's own !isTame() gate: a tamed cat's canUse is always false, so the goal
+// never fires — identical observable behavior to the jar's add/remove dance, without the dynamic
+// selector mutation. Extends AvoidEntityGoal<Player>(cat, Player, 16.0f, 0.8d, 1.33d,
+// NO_CREATIVE_OR_SPECTATOR).
+//
+//	[VERIFIED javap Cat.reassessTameGoals: new CatAvoidEntityGoal(this, Player.class, 16.0f, 0.8d, 1.33d);
+//	 removeGoal(avoidPlayersGoal); if (!isTame()) goalSelector.addGoal(4, avoidPlayersGoal).
+//	 javap Cat$CatAvoidEntityGoal.<init>: super(cat, cls, dist, walk, sprint, EntitySelector.
+//	 NO_CREATIVE_OR_SPECTATOR). canUse: !cat.isTame() && super.canUse(). canContinueToUse: !cat.isTame()
+//	 && super.canContinueToUse().]
+type catAvoidPlayerGoal struct {
+	*avoidEntityGoal
+}
+
+// catAvoidPlayerMaxDist / catAvoidWalkSpeed / catAvoidSprintSpeed are the CatAvoidEntityGoal ctor args
+// Cat.reassessTameGoals passes (ldc 16.0f / ldc2_w 0.8d / ldc2_w 1.33d). Cite Cat.reassessTameGoals.
+const (
+	catAvoidPlayerMaxDist = 16.0
+	catAvoidWalkSpeed     = 0.8
+	catAvoidSprintSpeed   = 1.33
+)
+
+// newCatAvoidPlayerGoal builds Cat$CatAvoidEntityGoal<Player>(cat, 16.0f, 0.8d, 1.33d,
+// NO_CREATIVE_OR_SPECTATOR). It reuses the shared player-avoid seam (newAvoidEntityGoalPlayer — players
+// live in t.players, NOT the entity store) and wraps it so canUse/canContinueToUse gate on !isTame()
+// BEFORE the base AvoidEntityGoal check. The NO_CREATIVE_OR_SPECTATOR predicate is a cited no-op in v1
+// (no creative/spectator entity filter; the same treatment the fox player-avoid gives it — the "live
+// player" half is already enforced by nearestPlayerIDAt). Cite Cat.reassessTameGoals + Cat$CatAvoidEntityGoal.
+func newCatAvoidPlayerGoal() *catAvoidPlayerGoal {
+	base := newAvoidEntityGoalPlayer(catAvoidPlayerMaxDist, catAvoidWalkSpeed, catAvoidSprintSpeed,
+		func(_ *TickLoop, _ *Entity, _ int32) bool {
+			// NO_CREATIVE_OR_SPECTATOR is a cited no-op in v1 (no creative/spectator filter; the live-player
+			// half is enforced by nearestPlayerIDAt). Every candidate passes the predicate.
+			return true
+		})
+	return &catAvoidPlayerGoal{avoidEntityGoal: base}
+}
+
+// canUse ports Cat$CatAvoidEntityGoal.canUse: !cat.isTame() && super.canUse(). A tamed cat never flees
+// (the !isTame gate short-circuits BEFORE the base scan, so no player scan / RNG runs for a tamed cat) —
+// this reproduces reassessTameGoals' "goal removed when tame" effect. NO RNG in this gate.
+func (g *catAvoidPlayerGoal) canUse(t *TickLoop, e *Entity) bool {
+	if e.tame {
+		return false
+	}
+	return g.avoidEntityGoal.canUse(t, e)
+}
+
+// canContinueToUse ports Cat$CatAvoidEntityGoal.canContinueToUse: !cat.isTame() && super.
+// canContinueToUse(). A cat tamed mid-flee stops fleeing. NO RNG.
+func (g *catAvoidPlayerGoal) canContinueToUse(t *TickLoop, e *Entity) bool {
+	if e.tame {
+		return false
+	}
+	return g.avoidEntityGoal.canContinueToUse(t, e)
+}
+
+var _ Goal = (*catAvoidPlayerGoal)(nil)

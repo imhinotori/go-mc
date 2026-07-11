@@ -70,10 +70,10 @@ var allFourMobs = []struct {
 	// cite-deferred; teleport Go-native.
 	{vanillaEndermanMobName, entity.Enderman.ID, 8, 2},
 	// MOB-NEUT-03 (Task #9): Cat — float@1 + panic@1 + sit@2 + cat_relax_on_owner@3 + tempt@4 +
-	// cat_lie_on_bed@5 + follow_owner@6 + cat_sit_on_block@7 + breed@10 + stroll@11 + look@12
-	// (11 goalSelector, 0 targetSelector); prey goals (@8 leap / @9 ocelot / targetSelector) cite-deferred;
-	// fish-tamed.
-	{vanillaCatMobName, entity.Cat.ID, 11, 0}, // +3: cat_relax_on_owner@3, cat_lie_on_bed@5, cat_sit_on_block@7
+	// cat_avoid_player@4 + cat_lie_on_bed@5 + follow_owner@6 + cat_sit_on_block@7 + breed@10 + stroll@11 +
+	// look@12 (12 goalSelector, 0 targetSelector); prey goals (@8 leap / @9 ocelot / targetSelector)
+	// cite-deferred; fish-tamed.
+	{vanillaCatMobName, entity.Cat.ID, 12, 0}, // +4: cat_relax_on_owner@3, cat_avoid_player@4, cat_lie_on_bed@5, cat_sit_on_block@7
 	// MOB-PASS-06 (Task #9) + fox CHARACTER LAYER: Fox — float@0 + faceplant@1 + panic@2 + breed@3 +
 	// avoid_player/wolf/polar_bear@4 (3) + stalk@5 + pounce@6 + seek_shelter@6 + melee@7 + sleep@7 +
 	// follow_parent@8 + leap@10 + eat_berries@10 + stroll@11 + search_items@11 + look@12 + climb_on_powder_snow@0 +

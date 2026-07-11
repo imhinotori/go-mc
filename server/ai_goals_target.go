@@ -565,6 +565,17 @@ type hurtByTargetGoal struct {
 	// start(), so canUse fires only ONCE per fresh hit (timestamp == this.timestamp -> already
 	// retaliated -> false).
 	timestamp int32
+
+	// alertSameType mirrors HurtByTargetGoal.alertSameType, flipped true by setAlertOthers (the base
+	// default is false — no alert burst). When true, start() runs alertOthers() to propagate the
+	// attacker as the target to nearby SAME-TYPE mobs. The Panda's targetSelector @1 hurt-by is
+	// registered with .setAlertOthers() (empty varargs) -> alertSameType true. Cite HurtByTargetGoal
+	// .setAlertOthers / alertSameType.
+	alertSameType bool
+	// alertOther is the OPTIONAL per-candidate alert hook (HurtByTargetGoal.alertOther override). nil ==
+	// the base behavior (mob.setTarget(target) on every alerted same-type neighbor). The Panda overrides
+	// it to arm ONLY an AGGRESSIVE-gene neighbor (pandaAlertOther). Cite HurtByTargetGoal.alertOther.
+	alertOther func(t *TickLoop, other *Entity, targetID int32)
 }
 
 // newHurtByTargetGoal builds the goal with the TARGET flag (HurtByTargetGoal ctor:
@@ -632,12 +643,75 @@ func (g *hurtByTargetGoal) canAttack(t *TickLoop, id int32) bool {
 //	[VERIFIED javap HurtByTargetGoal.start: setTarget(getLastHurtByMob()); targetMob = getTarget();
 //	 timestamp = getLastHurtByMobTimestamp(); unseenMemoryTicks = 300; alertSameType? alertOthers();
 //	 super.start().]
-func (g *hurtByTargetGoal) start(_ *TickLoop, e *Entity) {
+func (g *hurtByTargetGoal) start(t *TickLoop, e *Entity) {
+	attacker := e.lastHurtByMob
 	if e.ai != nil {
-		e.ai.setTarget(e.lastHurtByMob)
+		e.ai.setTarget(attacker)
 	}
 	g.timestamp = e.lastHurtByMobTimestamp
-	// (unseenMemoryTicks = 300 + alertOthers — cited deferrals above.)
+	// (unseenMemoryTicks = 300 — a cited no-op above, no LoS grace subsystem.)
+	// alertSameType ? alertOthers(): the Panda's @1 hurt-by (setAlertOthers) propagates the attacker to
+	// nearby same-type pandas. Every base hurt-by leaves alertSameType false, so this is skipped for the
+	// hostiles (their start is byte-identical). Cite HurtByTargetGoal.start: alertSameType? alertOthers().
+	if g.alertSameType {
+		g.alertOthers(t, e, attacker)
+	}
+}
+
+// alertOthers ports HurtByTargetGoal.alertOthers (bytecode-verified this session), NO RNG:
+//
+//	double d = getFollowDistance();
+//	AABB box = AABB.unitCubeFromLowerCorner(mob.position()).inflate(d, 10.0, d);
+//	for (Mob other : level.getEntitiesOfClass(mob.getClass(), box, NO_SPECTATORS)) {
+//	    if (other == mob) continue;
+//	    if (other.getTarget() != null) continue;
+//	    if (mob instanceof TamableAnimal && ((TamableAnimal)mob).getOwner() != ((TamableAnimal)other).getOwner()) continue;
+//	    if (other.isAlliedTo(mob.getLastHurtByMob())) continue;
+//	    for (Class c : toIgnoreAlert) if (other.getClass() == c) continue-outer;
+//	    alertOther(other, mob.getLastHurtByMob());
+//	}
+//
+// v1 reductions (each a CITED no-op, not a silent drop):
+//   - getEntitiesOfClass(mob.getClass()) -> SAME-TYPE scan (other.typ == e.typ) over the OWNING-region
+//     store's near() broad-phase (the same broad-phase the breed/follow/target scans use). The unit-cube-
+//     inflate(d,10,d) box is re-checked per candidate against the mob position.
+//   - NO_SPECTATORS: no spectator entities in v1 -> a cited constant-true filter.
+//   - the TamableAnimal owner-match: the Panda is not a TamableAnimal, so this branch is skipped for it
+//     (a cited no-op here — only tamable subclasses take it).
+//   - isAlliedTo(lastHurtByMob): no team/ally subsystem in v1 -> a cited constant-false (never allied).
+//   - toIgnoreAlert: the Panda's setAlertOthers passes EMPTY varargs (no ignore classes) -> the ignore
+//     loop is a cited empty no-op.
+//
+//	[VERIFIED javap HurtByTargetGoal.alertOthers: getFollowDistance; unitCubeFromLowerCorner(position())
+//	 .inflate(d,10.0,d); getEntitiesOfClass(getClass(), box, NO_SPECTATORS); per-candidate skip self /
+//	 hasTarget / TamableAnimal-owner-mismatch / isAlliedTo / toIgnoreAlert; else alertOther(other, last).]
+func (g *hurtByTargetGoal) alertOthers(t *TickLoop, e *Entity, attacker int32) {
+	follow := e.getAttributeValue(attribute.FollowRange)
+	// unitCubeFromLowerCorner(position()).inflate(d, 10.0, d): a unit box at the mob feet grown by d
+	// horizontally and 10 vertically.
+	minX, minY, minZ := e.x-follow, e.y-10.0, e.z-follow
+	maxX, maxY, maxZ := e.x+1.0+follow, e.y+1.0+10.0, e.z+1.0+follow
+	rangeChunks := int(math.Ceil(follow / 16.0))
+	if rangeChunks < 1 {
+		rangeChunks = 1
+	}
+	for _, other := range t.cur().entities.near(e.x, e.z, rangeChunks) {
+		if other == e || other.typ != e.typ || other.dead { // getEntitiesOfClass(mob.getClass()) + skip self
+			continue
+		}
+		if other.x < minX || other.x > maxX || other.y < minY || other.y > maxY || other.z < minZ || other.z > maxZ {
+			continue // outside the inflated AABB
+		}
+		if other.ai != nil && other.ai.getTarget() != 0 { // other.getTarget() != null -> already engaged
+			continue
+		}
+		// (TamableAnimal owner-match + isAlliedTo + toIgnoreAlert: cited no-ops for the Panda — see above.)
+		if g.alertOther != nil {
+			g.alertOther(t, other, attacker) // the subclass hook (Panda: only arm an aggressive neighbor)
+		} else if other.ai != nil {
+			other.ai.setTarget(attacker) // base alertOther: mob.setTarget(target)
+		}
+	}
 }
 
 // canContinueToUse ports the TargetGoal.canContinueToUse base (shared with the nearest-target goal):

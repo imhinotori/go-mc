@@ -32,10 +32,14 @@
 //     @7 PandaSit; @8 PandaLieOnBack; @8 PandaSneeze; @9 PandaLookAtPlayer(6.0); @10 RandomLookAround;
 //     @12 PandaRoll; @13 FollowParent(1.25); @14 WaterAvoidingRandomStroll(1.0). target @1 PandaHurtBy.
 //
-// v1 STUBS (cited): the temperament goals (Sit/LieOnBack/Sneeze/Roll) + the character-layer (Panic/
-// Attack/Avoid/HurtBy) are DEFERRED; this port supplies the bounded passive walk (Float/Panic/Breed/
-// Tempt(PANDA_FOOD=bamboo)/Follow/Stroll/Look) and the FULL, EXACT gene/variant system. The observable
-// attributes, the gene->variant mapping, and the gene-roll RNG draw ORDER are EXACT.
+// v1 STUBS (cited): the temperament COSMETIC goals (Sit/LieOnBack/Sneeze/Roll) + PandaAvoidGoal are
+// DEFERRED; this port supplies the bounded passive walk (Float/Panic/Breed/Tempt(PANDA_FOOD=bamboo)/
+// Follow/Stroll/Look), the FULL, EXACT gene/variant system, AND the fight-back character layer
+// (PandaAttackGoal @3 + PandaHurtByTargetGoal targetSelector @1 with setAlertOthers): an AGGRESSIVE-gene
+// panda retaliates + melees whoever hurt it and alerts nearby aggressive pandas. The observable
+// attributes, the gene->variant mapping, and the gene-roll RNG draw ORDER are EXACT. The canPerformAction
+// / gotBamboo / didBite state the fight-back goals read is the deferred cosmetic layer (all-false in v1,
+// cited constants that become real reads when the temperament/eat-bamboo state machine lands).
 
 package server
 
@@ -193,11 +197,18 @@ func newPandaAI() *mobAI {
 	m.goals.addGoal(0, newFloatGoal())
 	m.goals.addGoal(2, newPanicGoal(pandaPanicSpeed))
 	m.goals.addGoal(2, newBreedGoal(pandaBreedSpeed))
+	// @3 PandaAttackGoal(this, 1.2, true) [MOVE] -- the "aggressive panda punches back" melee. Gated on
+	// canPerformAction (cited constant-true in v1); pursues + swings the hurt-by target. Cite
+	// Panda.registerGoals @3 PandaAttackGoal.
+	m.goals.addGoal(3, newPandaAttackGoal())
 	m.goals.addGoal(4, newTemptGoal(pandaTemptSpeed, func(id int32) bool { return itemInTag(id, pandaFoodTag) }, false, nil))
 	m.goals.addGoal(9, newLookAtPlayerGoal(pandaLookDistance))
 	m.goals.addGoal(10, newRandomLookAroundGoal())
 	m.goals.addGoal(13, newFollowParentGoal(pandaFollowSpeed))
 	m.goals.addGoal(14, newWaterAvoidingRandomStrollGoal(pandaStrollSpeed))
+	// targetSelector @1 PandaHurtByTargetGoal.setAlertOthers() [TARGET] -- any hurt panda retaliates
+	// against its attacker + alerts nearby AGGRESSIVE pandas. Cite Panda.registerGoals targetSelector @1.
+	m.targetSelector.addGoal(1, newPandaHurtByTargetGoal())
 	return m
 }
 
@@ -261,3 +272,144 @@ func (t *TickLoop) pandaAiStep(e *Entity) {
 	}
 	// DEFERRED: the roll/sneeze/sit/lie temperament state machine + eat-bamboo consume + baby-sneeze slime.
 }
+
+// --- Panda character layer: PandaAttackGoal @3 + PandaHurtByTargetGoal targetSelector @1 -----------
+//
+// The "aggressive panda punches back" behavior. AGGRESSIVE-gene pandas fight instead of flee: the
+// PandaHurtByTargetGoal (targetSelector @1) makes ANY panda retaliate against whoever hit it (the gene
+// does not gate the hurt-by goal; a hit panda always sets its attacker as a target), and PandaAttackGoal
+// (@3) pursues + melees that target while the panda canPerformAction(). The observable divergence for an
+// AGGRESSIVE panda is that its passive-goal PandaAvoidGoal (flee) is superseded by the fight, because
+// PandaAvoidGoal.canUse gates on !isScared() and the aggressive panda does not enter the scared state.
+//
+// The temperament STATE (isOnBack/isScared/isEating/isRolling/isSitting) that canPerformAction reads is
+// the DEFERRED cosmetic layer (pandaAiStep no-op) — in v1 every one of those flags is false, so
+// pandaCanPerformAction returns true and the attack goal is never blocked by an unbuilt state. This is a
+// cited constant (all-false state), structured so canPerformAction becomes a real read when the
+// temperament state machine lands. Cite Panda.canPerformAction + Panda$PandaAttackGoal + Panda$Panda
+// HurtByTargetGoal + HurtByTargetGoal.setAlertOthers.
+
+// pandaIsAggressive ports Panda.isAggressive(): getVariant() == Gene.AGGRESSIVE. Cite Panda.isAggressive.
+func pandaIsAggressive(e *Entity) bool { return pandaGetVariant(e) == pandaGeneAggressive }
+
+// pandaCanPerformAction ports Panda.canPerformAction(): !isOnBack() && !isScared() && !isEating() &&
+// !isRolling() && !isSitting(). The five temperament states are the DEFERRED cosmetic layer (all false in
+// v1 — the state machine is not yet built), so this is a cited constant-true, structured so it becomes a
+// real conjunction when the sit/lie/roll/sneeze/eat state machine lands. NO RNG.
+//
+//	[VERIFIED javap Panda.canPerformAction: isOnBack ifne 0; isScared ifne 0; isEating ifne 0;
+//	 isRolling ifne 0; isSitting ifne 0; iconst_1.]
+func pandaCanPerformAction(e *Entity) bool {
+	// isOnBack / isScared / isEating / isRolling / isSitting are all false in v1 (the temperament state
+	// machine is the deferred cosmetic layer, pandaAiStep). A cited constant-false for each state -> the
+	// conjunction is true. When the state machine lands, replace these with the real flag reads.
+	return true
+}
+
+// pandaAttackGoal ports net.minecraft.world.entity.animal.panda.Panda$PandaAttackGoal (extends
+// MeleeAttackGoal). canUse == panda.canPerformAction() && super.canUse(); every other method is the base
+// MeleeAttackGoal (the panda inherits its melee chase/swing verbatim). Cite Panda.registerGoals @3
+// PandaAttackGoal(this, 1.2000000476837158, true) + Panda$PandaAttackGoal.canUse.
+type pandaAttackGoal struct {
+	meleeAttackGoal
+}
+
+// pandaAttackSpeed is the ldc2_w 1.2000000476837158d speedModifier Panda.registerGoals @3 passes to
+// PandaAttackGoal(this, 1.2000000476837158, true). Cite Panda.registerGoals @3.
+const pandaAttackSpeed = 1.2000000476837158
+
+// newPandaAttackGoal builds Panda$PandaAttackGoal(panda, 1.2, true). The boolean (followingTargetEven
+// IfNotSeen=true) is a cited no-op in v1 (no LoS/sensing), matching the base MeleeAttackGoal handling.
+func newPandaAttackGoal() *pandaAttackGoal {
+	return &pandaAttackGoal{meleeAttackGoal: *newMeleeAttackGoal(pandaAttackSpeed)}
+}
+
+// canUse ports Panda$PandaAttackGoal.canUse: panda.canPerformAction() && super.canUse(). A panda that is
+// on its back / scared / eating / rolling / sitting does not attack; else it defers to MeleeAttackGoal.
+// canUse (the gameTime-cooldown + live-target gate). NO RNG.
+//
+//	[VERIFIED javap Panda$PandaAttackGoal.canUse: panda.canPerformAction ifeq 0; MeleeAttackGoal.canUse
+//	 ifeq 0; iconst_1.]
+func (g *pandaAttackGoal) canUse(t *TickLoop, e *Entity) bool {
+	if !pandaCanPerformAction(e) {
+		return false
+	}
+	return g.meleeAttackGoal.canUse(t, e)
+}
+
+// pandaHurtByTargetGoal ports net.minecraft.world.entity.animal.panda.Panda$PandaHurtByTargetGoal
+// (extends HurtByTargetGoal, with setAlertOthers([]) applied at registration -> alertSameType=true). It
+// retaliates against whoever last hit the panda (the base hurt-by), and additionally:
+//   - canContinueToUse: if panda.gotBamboo || panda.didBite { setTarget(null); return false } else super.
+//     (a panda that just took a bamboo bribe / bit stops retaliating). gotBamboo/didBite are the DEFERRED
+//     eat-bamboo state (pandaAiStep) — both false in v1, so the guard is a cited constant-false (never
+//     drops the target early), structured to become a real read when eat-bamboo lands.
+//   - alertOther: on alerting a nearby same-type panda, only propagate the target if that panda is
+//     isAggressive() (Mob.isAggressive). The base alertOthers scan (getFollowDistance-inflated AABB) sets
+//     the SAME attacker as the target on each alerted panda that passes alertOther. Cite Panda$PandaHurt
+//     ByTargetGoal.canContinueToUse + alertOther + HurtByTargetGoal.setAlertOthers/alertOthers.
+type pandaHurtByTargetGoal struct {
+	hurtByTargetGoal
+}
+
+// newPandaHurtByTargetGoal builds Panda$PandaHurtByTargetGoal(panda) then .setAlertOthers() (empty
+// varargs) -> alertSameType=true. Cite Panda.registerGoals targetSelector @1.
+func newPandaHurtByTargetGoal() *pandaHurtByTargetGoal {
+	g := &pandaHurtByTargetGoal{hurtByTargetGoal: *newHurtByTargetGoal()}
+	// setAlertOthers([]) sets alertSameType = true (HurtByTargetGoal.setAlertOthers). start() then runs
+	// alertOthers() to propagate the target to nearby same-type pandas via alertOther (below).
+	g.alertSameType = true
+	g.alertOther = pandaAlertOther
+	return g
+}
+
+// canContinueToUse ports Panda$PandaHurtByTargetGoal.canContinueToUse: if (gotBamboo || didBite) {
+// panda.setTarget(null); return false; } return super.canContinueToUse(). gotBamboo/didBite are the
+// DEFERRED eat-bamboo state (both false in v1 -> the guard never drops the target early), structured to
+// become a real read when the eat-bamboo state machine lands. NO RNG.
+//
+//	[VERIFIED javap Panda$PandaHurtByTargetGoal.canContinueToUse: gotBamboo ifne 20; didBite ifeq 30;
+//	 setTarget(null); iconst_0 ireturn; HurtByTargetGoal.canContinueToUse.]
+func (g *pandaHurtByTargetGoal) canContinueToUse(t *TickLoop, e *Entity) bool {
+	// gotBamboo || didBite: both cited constant-false in v1 (the eat-bamboo state is deferred). When the
+	// state lands, read the real flags here; today the guard never fires.
+	if pandaGotBamboo(e) || pandaDidBite(e) {
+		if e.ai != nil {
+			e.ai.setTarget(0) // panda.setTarget(null)
+		}
+		return false
+	}
+	return g.hurtByTargetGoal.canContinueToUse(t, e)
+}
+
+// pandaGotBamboo / pandaDidBite are the DEFERRED eat-bamboo state (Panda.gotBamboo / Panda.didBite). Both
+// are false in v1 (the eat-bamboo consume state machine is the deferred cosmetic layer, pandaAiStep) — a
+// cited constant-false apiece, structured to become a real field read when eat-bamboo lands. Cite
+// Panda.gotBamboo / Panda.didBite.
+func pandaGotBamboo(e *Entity) bool { return false }
+func pandaDidBite(e *Entity) bool   { return false }
+
+// pandaAlertOther ports Panda$PandaHurtByTargetGoal.alertOther(Mob, LivingEntity): if (mob instanceof
+// Panda && mob.isAggressive()) mob.setTarget(target). Only an AGGRESSIVE-gene neighbor panda joins the
+// retaliation; a non-aggressive panda is alerted-but-not-armed. The `mob instanceof Panda` check is the
+// same-type gate the base alertOthers already applies (it scans getClass() == panda), so here it is the
+// isAggressive() filter that matters. Cite Panda$PandaHurtByTargetGoal.alertOther.
+//
+//	[VERIFIED javap Panda$PandaHurtByTargetGoal.alertOther: aload_1 instanceof Panda ifeq 19; aload_1
+//	 isAggressive ifeq 19; aload_1 aload_2 setTarget.]
+func pandaAlertOther(t *TickLoop, other *Entity, targetID int32) {
+	if other.typ != entity.Panda.ID {
+		return // mob instanceof Panda
+	}
+	if !pandaIsAggressive(other) {
+		return // mob.isAggressive() (Panda.isAggressive == variant AGGRESSIVE)
+	}
+	if other.ai != nil {
+		other.ai.setTarget(targetID) // mob.setTarget(target)
+	}
+}
+
+var (
+	_ Goal = (*pandaAttackGoal)(nil)
+	_ Goal = (*pandaHurtByTargetGoal)(nil)
+)
