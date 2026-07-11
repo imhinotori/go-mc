@@ -150,11 +150,22 @@ func (t *TickLoop) fireCrossbow(p *tickPlayer, _ *Inventory, stack component.Slo
 // Arrow from the player eye via the shared spawnArrow infra. crit sets the crit flag (setCritArrow). Cite
 // Projectile.shootFromRotation + spawnArrow + AbstractArrow.setCritArrow.
 func (t *TickLoop) shootPlayerArrow(p *tickPlayer, velocity float64, crit bool, weapon component.SlotData) *Entity {
-	vx, vy, vz := playerViewVector(p.yaw, p.pitch)
-	vx *= velocity
-	vy *= velocity
-	vz *= velocity
-	a := t.spawnArrow(p.entityID, p.x, p.y+playerStandingEyeHeight, p.z, vx, vy, vz, bowArrowBaseDamage)
+	// Spawn at rest, then Projectile.shootFromRotation(player, xRot, yRot, 0, velocity, 1.0): the look
+	// vector with the 3 per-axis inaccuracy triangle draws (BowItem/CrossbowItem shoot at inaccuracy 1.0,
+	// verified BowItem.releaseUsing offset 117 fconst_1) on the arrow's OWN arrowRNG, then the owner
+	// known-movement inherit. A pig fires no arrow, so its stream is never perturbed. Cite
+	// Projectile.shootFromRotation + BowItem.releaseUsing (shoot ... f7=1.0f).
+	a := t.spawnArrow(p.entityID, p.x, p.y+playerStandingEyeHeight, p.z, 0, 0, 0, bowArrowBaseDamage)
+	if a.arrowRNG == nil {
+		a.arrowRNG = newEntityRandom(uint64(a.id))
+	}
+	mx, my, mz := t.playerKnownMovement(p)
+	vx, vy, vz := shootVectorFromRotation(a.arrowRNG, p.yaw, p.pitch, 0, velocity, 1.0, mx, my, mz, p.onGround)
+	a.vx, a.vy, a.vz = vx, vy, vz
+	horiz := math.Sqrt(vx*vx + vz*vz)
+	a.yaw = float32(mthAtan2(vx, vz) * float64(mthRadToDeg))
+	a.pitch = float32(mthAtan2(vy, horiz) * float64(mthRadToDeg))
+	a.headYaw = a.yaw
 	if crit {
 		a.arrowCrit = true
 	}

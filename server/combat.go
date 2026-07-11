@@ -400,11 +400,17 @@ func (t *TickLoop) dealDefaultKnockbackPlayer(p *tickPlayer, src damageSource) {
 		return
 	}
 
-	// xd/zd default 0 (the dconst_0 dstore). Resolve the attacker's (x,z) as getSourcePosition():
-	// try a player attacker (PvP) first, then the current region's entity store (a mob attacker —
-	// doHurtTarget ticks inside that region). A 0/departed attacker leaves xd==zd==0 (position null).
+	// xd/zd default 0 (the dconst_0 dstore). Resolve getSourcePosition(): for a PROJECTILE hit the
+	// directEntity is the projectile, whose (x,z) the constructor stamped into sourceX/sourceZ -- push the
+	// victim away from the impact point, not the distant shooter (a snowball/egg hit). Checked FIRST,
+	// matching getSourcePosition's directEntity.position() branch (the sibling of dealDefaultKnockbackEntity).
+	// Otherwise (a melee hit) resolve the attacker's (x,z): a player attacker (PvP) first, then the current
+	// region's entity store (a mob attacker). A 0/departed attacker leaves xd==zd==0 (position null).
 	var xd, zd float64
-	if src.attacker != 0 {
+	if src.hasSourcePos {
+		xd = src.sourceX - p.x
+		zd = src.sourceZ - p.z
+	} else if src.attacker != 0 {
 		if attacker := t.playerByEntityID(src.attacker); attacker != nil {
 			xd = attacker.x - p.x
 			zd = attacker.z - p.z
@@ -920,18 +926,21 @@ func isInf32(f float32) bool { return math.IsInf(float64(f), 0) }
 // hands, finds nothing, returns false with zero side effects (the identical old death path).
 //
 // Faithful bytecode (javap LivingEntity.checkTotemDeathProtection this session):
-//   if (source.is(BYPASSES_INVULNERABILITY)) return false;   // /kill + the void ignore the totem
-//   for (InteractionHand hand : InteractionHand.values()) {  // MAINHAND then OFFHAND
-//     dp = getItemInHand(hand).get(DataComponents.DEATH_PROTECTION);
-//     if (dp != null) { totem = held.copy(); held.shrink(1); break; } }
-//   if (totem != null) { if (ServerPlayer) { awardStat; USED_TOTEM.trigger; causeUseVibration; }
-//     setHealth(1.0F); dp.applyEffects(totem, this); level().broadcastEntityEvent(this,(byte)35); }
-//   return dp != null;
+//
+//	if (source.is(BYPASSES_INVULNERABILITY)) return false;   // /kill + the void ignore the totem
+//	for (InteractionHand hand : InteractionHand.values()) {  // MAINHAND then OFFHAND
+//	  dp = getItemInHand(hand).get(DataComponents.DEATH_PROTECTION);
+//	  if (dp != null) { totem = held.copy(); held.shrink(1); break; } }
+//	if (totem != null) { if (ServerPlayer) { awardStat; USED_TOTEM.trigger; causeUseVibration; }
+//	  setHealth(1.0F); dp.applyEffects(totem, this); level().broadcastEntityEvent(this,(byte)35); }
+//	return dp != null;
+//
 // DEATH_PROTECTION effects (javap DeathProtection clinit): ClearAllStatusEffects then
 // ApplyStatusEffects[REGENERATION(900,1), ABSORPTION(100,1), FIRE_RESISTANCE(800,0)] (ticks;
 // 0-based amplifiers). awardStat/USED_TOTEM/causeUseVibration are v1 no-ops (no stats/advancement/
 // game-event subsystem); the player is always a ServerPlayer here.
-//   [VERIFIED javap LivingEntity.checkTotemDeathProtection + DeathProtection clinit; item id 1333.]
+//
+//	[VERIFIED javap LivingEntity.checkTotemDeathProtection + DeathProtection clinit; item id 1333.]
 func (t *TickLoop) checkTotemDeathProtection(p *tickPlayer, src damageSource) bool {
 	if src.is("bypasses_invulnerability") {
 		return false

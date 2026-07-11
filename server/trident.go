@@ -29,16 +29,16 @@ import (
 
 // TridentItem / ThrownTrident constants (verified javap + enchant JSON -- exact values).
 const (
-	tridentThrowThreshold    int32 = 10    // TridentItem.THROW_THRESHOLD_TIME (bipush 10)
-	tridentUseDuration       int32 = 72000 // TridentItem.getUseDuration
-	tridentShootPower              = 2.5   // PROJECTILE_SHOOT_POWER (ldc 2.5f)
-	tridentBaseDamage              = 8.0   // ThrownTrident.onHitEntity base hit (ldc 8.0f)
-	tridentReturnPosLerp           = 0.015 // ThrownTrident.tick setPosRaw y-lerp (ldc2_w 0.015d)
-	tridentReturnAccel             = 0.05  // ThrownTrident.tick return scale = 0.05*loyalty (ldc2_w 0.05d)
-	tridentReturnKeepInert         = 0.95  // ThrownTrident.tick deltaMovement.scale(0.95) (ldc2_w 0.95d)
-	tridentInGroundLatch           = 4     // dealtDamage once inGroundTime > 4
-	tridentRiptideBase             = 1.5   // riptide.json trident_spin_attack_strength base
-	tridentRiptidePerLevel         = 0.75  // riptide.json per_level_above_first
+	tridentThrowThreshold    int32 = 10                 // TridentItem.THROW_THRESHOLD_TIME (bipush 10)
+	tridentUseDuration       int32 = 72000              // TridentItem.getUseDuration
+	tridentShootPower              = 2.5                // PROJECTILE_SHOOT_POWER (ldc 2.5f)
+	tridentBaseDamage              = 8.0                // ThrownTrident.onHitEntity base hit (ldc 8.0f)
+	tridentReturnPosLerp           = 0.015              // ThrownTrident.tick setPosRaw y-lerp (ldc2_w 0.015d)
+	tridentReturnAccel             = 0.05               // ThrownTrident.tick return scale = 0.05*loyalty (ldc2_w 0.05d)
+	tridentReturnKeepInert         = 0.95               // ThrownTrident.tick deltaMovement.scale(0.95) (ldc2_w 0.95d)
+	tridentInGroundLatch           = 4                  // dealtDamage once inGroundTime > 4
+	tridentRiptideBase             = 1.5                // riptide.json trident_spin_attack_strength base
+	tridentRiptidePerLevel         = 0.75               // riptide.json per_level_above_first
 	tridentRiptideGroundPush       = 1.1999999284744263 // move(SELF, (0, 1.1999999, 0)) (ldc2_w)
 )
 
@@ -135,9 +135,12 @@ func (t *TickLoop) tridentReleaseUsing(p *tickPlayer, stack component.SlotData, 
 		return // THROW_THRESHOLD_TIME: a tap-release does nothing
 	}
 	f := tridentSpinAttackStrength(stack)
-	if f > 0 && t.playerIsInWaterOrRain(p) && p.vehicleID != 0 {
+	// TridentItem.releaseUsing bytecode offsets 46-70: if (f > 0) { if (!isInWaterOrRain()) return 0;
+	// if (isPassenger()) return 0; } -- the riptide launch proceeds ONLY when f>0 AND isInWaterOrRain()
+	// AND NOT a passenger. So the throw ABORTS when f>0 AND (!isInWaterOrRain() OR isPassenger()).
+	if f > 0 && (!t.playerIsInWaterOrRain(p) || p.vehicleID != 0) {
 		t.stopUsingItem(p)
-		return // riptide while a passenger in water/rain no-ops (bytecode short-circuit)
+		return // riptide out of water/rain, or while a passenger, no-ops (bytecode short-circuit)
 	}
 	if stackNextDamageWillBreak(stack) {
 		t.stopUsingItem(p)
@@ -148,11 +151,10 @@ func (t *TickLoop) tridentReleaseUsing(p *tickPlayer, stack component.SlotData, 
 	if f == 0 {
 		creative := p.gameMode == gameModeCreative
 		thrown := stack // the ItemStack the projectile carries (copyWithCount(1))
-		vx, vy, vz := playerViewVector(p.yaw, p.pitch)
-		vx *= tridentShootPower
-		vy *= tridentShootPower
-		vz *= tridentShootPower
-		t.spawnThrownTrident(p.entityID, p.x, p.y+playerStandingEyeHeight, p.z, vx, vy, vz, thrown, creative)
+		// spawnProjectileFromRotation(ThrownTrident::new, level, stack, player, 0f, 2.5f, 1f):
+		// shootFromRotation at velocity 2.5, inaccuracy 1.0, on the trident's OWN rng. Cite
+		// TridentItem.releaseUsing (offsets 157-160: fconst_0 angle, ldc 2.5f, fconst_1 inaccuracy).
+		t.spawnThrownTridentShot(p, thrown, creative)
 		if !creative {
 			t.tridentConsumeHeld(p, hand)
 		}
@@ -219,6 +221,26 @@ func (t *TickLoop) tridentRiptideLaunch(p *tickPlayer, f float64) {
 // at spawn from the stack enchantments -- the SAME real stackEnchantments seam the bow reads. creative marks
 // the pickup CREATIVE_ONLY. arrowBaseDamage stays 0 (a trident onHitEntity deals a FLAT 8, not the arrow
 // velocity*baseDamage formula). Cite ThrownTrident.<init> + TridentItem.releaseUsing (Pickup).
+// spawnThrownTridentShot is the TridentItem.releaseUsing (f==0 throw) launch: create the ThrownTrident at
+// the player eye, then apply Projectile.shootFromRotation(player, xRot, yRot, 0, 2.5, 1.0) -- the velocity
+// 2.5 look vector with the 3 per-axis inaccuracy triangle draws (drawn on the trident's OWN arrowRNG, so a
+// pig never touches this stream) and the owner known-movement inherit. Cite TridentItem.releaseUsing
+// (spawnProjectileFromRotation 0f, 2.5f, 1f) + Projectile.shootFromRotation.
+func (t *TickLoop) spawnThrownTridentShot(p *tickPlayer, stack component.SlotData, creative bool) *Entity {
+	a := t.spawnThrownTrident(p.entityID, p.x, p.y+playerStandingEyeHeight, p.z, 0, 0, 0, stack, creative)
+	if a.arrowRNG == nil {
+		a.arrowRNG = newEntityRandom(uint64(a.id))
+	}
+	mx, my, mz := t.playerKnownMovement(p)
+	vx, vy, vz := shootVectorFromRotation(a.arrowRNG, p.yaw, p.pitch, 0, tridentShootPower, 1.0, mx, my, mz, p.onGround)
+	a.vx, a.vy, a.vz = vx, vy, vz
+	horiz := math.Sqrt(vx*vx + vz*vz)
+	a.yaw = float32(mthAtan2(vx, vz) * float64(mthRadToDeg))
+	a.pitch = float32(mthAtan2(vy, horiz) * float64(mthRadToDeg))
+	a.headYaw = a.yaw
+	return a
+}
+
 func (t *TickLoop) spawnThrownTrident(shooterID int32, x, y, z, vx, vy, vz float64, stack component.SlotData, creative bool) *Entity {
 	a := NewEntity(t.idAlloc.AllocID(), entity.Trident, x, y, z)
 	a.isArrow = true // flies via the shared AbstractArrow physics (projectile.go tickArrow)

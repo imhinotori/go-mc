@@ -429,13 +429,9 @@ func (t *TickLoop) tryUseWindCharge(p *tickPlayer, inv *Inventory, held componen
 	if item.ID(held.ItemID) != item.WindCharge.ID {
 		return false
 	}
-	// shootFromRotation(player, xRot, yRot, 0, 1.5, 1.0): the launch vector from the look angles.
-	yawRad := float64(p.yaw) * (math.Pi / 180.0)
-	pitchRad := float64(p.pitch) * (math.Pi / 180.0)
-	dirX := -math.Sin(yawRad) * math.Cos(pitchRad)
-	dirY := -math.Sin(pitchRad)
-	dirZ := math.Cos(yawRad) * math.Cos(pitchRad)
-	t.spawnHurtingProjectileShot(p.entityID, hurtWindCharge, p.x, p.y+throwEyeHeight, p.z, dirX, dirY, dirZ, windChargeThrowPower)
+	// WindChargeItem.use: spawnProjectileFromRotation(WindCharge::new, level, stack, player, 0f, 1.5f, 1f) ->
+	// shootFromRotation at velocity 1.5, inaccuracy 1.0. Cite WindChargeItem.use.
+	t.spawnWindChargeFromPlayer(p, hurtWindCharge, p.x, p.y+throwEyeHeight, p.z, 0, windChargeThrowPower, 1.0)
 
 	// ItemStack.consume(1): shrink by 1 unless creative.
 	if p.gameMode != gameModeCreative {
@@ -449,12 +445,11 @@ func (t *TickLoop) tryUseWindCharge(p *tickPlayer, inv *Inventory, held componen
 	return true
 }
 
-// spawnHurtingProjectileShot is the player-throw variant (WindChargeItem.use path): instead of
+// spawnHurtingProjectileShot is the mob/direction-vector launch (Breeze wind-charge path): instead of
 // assignDirectionalMovement (speed == accelerationPower), it sets the initial deltaMovement from a
-// shootFromRotation with the given power — Projectile.spawnProjectileFromRotation(factory, level, stack,
-// player, 0, power, inaccuracy) which does shoot(look, power) => deltaMovement = look.normalize()*power. The
-// projectile still re-accelerates by accelerationPower each tick. v1 uses 0 inaccuracy (deterministic). Cite
-// WindChargeItem.use (spawnProjectileFromRotation power 1.5).
+// shoot(dir, power) == dir.normalize()*power. The Breeze already applies its own inaccuracy triangle draws
+// on its OWN stream before calling this (so no inaccuracy arg here). The projectile still re-accelerates by
+// accelerationPower each tick. Cite AbstractHurtingProjectile + shoot.
 func (t *TickLoop) spawnHurtingProjectileShot(ownerID int32, kind int, x, y, z, dirX, dirY, dirZ, power float64) *Entity {
 	e := t.spawnHurtingProjectile(ownerID, kind, x, y, z, dirX, dirY, dirZ)
 	// Override the delta: shoot(look, power) == look.normalize()*power (replaces the accelPow-scaled delta).
@@ -464,6 +459,27 @@ func (t *TickLoop) spawnHurtingProjectileShot(ownerID int32, kind int, x, y, z, 
 		e.vy = dirY / mag * power
 		e.vz = dirZ / mag * power
 	}
+	horiz := math.Sqrt(e.vx*e.vx + e.vz*e.vz)
+	e.yaw = float32(math.Atan2(e.vx, e.vz) * 180.0 / math.Pi)
+	e.pitch = float32(math.Atan2(e.vy, horiz) * 180.0 / math.Pi)
+	e.headYaw = e.yaw
+	return e
+}
+
+func (t *TickLoop) spawnWindChargeFromPlayer(p *tickPlayer, kind int, x, y, z float64, angle float32, velocity, inaccuracy float64) *Entity {
+	// The ctor assigns a directional delta by accelerationPower; shootFromRotation then OVERWRITES the delta
+	// with shoot(view, velocity) (the ctor delta is a placeholder, discarded). Spawn along the raw view (so
+	// the ctor + setRot are seeded sanely) then override with the inaccuracy-perturbed shot vector drawn on
+	// the projectile's OWN rng (throwRNG here). The projectile still re-accelerates by accelerationPower each
+	// tick. Cite WindChargeItem.use -> Projectile.shootFromRotation + shoot.
+	dirX, dirY, dirZ := playerViewVector(p.yaw, p.pitch)
+	e := t.spawnHurtingProjectile(p.entityID, kind, x, y, z, dirX, dirY, dirZ)
+	if e.throwRNG == nil {
+		e.throwRNG = newEntityRandom(uint64(e.id))
+	}
+	mx, my, mz := t.playerKnownMovement(p)
+	vx, vy, vz := shootVectorFromRotation(e.throwRNG, p.yaw, p.pitch, angle, velocity, inaccuracy, mx, my, mz, p.onGround)
+	e.vx, e.vy, e.vz = vx, vy, vz
 	horiz := math.Sqrt(e.vx*e.vx + e.vz*e.vz)
 	e.yaw = float32(math.Atan2(e.vx, e.vz) * 180.0 / math.Pi)
 	e.pitch = float32(math.Atan2(e.vy, horiz) * 180.0 / math.Pi)

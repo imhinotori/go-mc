@@ -121,11 +121,15 @@ func TestReleaseFullDrawBowFiresArrow(t *testing.T) {
 		t.Fatalf("no arrow spawned on full-draw bow release")
 	}
 	mag := math.Sqrt(a.vx*a.vx + a.vy*a.vy + a.vz*a.vz)
-	if math.Abs(mag-3.0) > 1e-6 {
-		t.Fatalf("arrow velocity magnitude = %.6f, want ~3.0", mag)
+	// The arrow is shot at velocity 3.0 with inaccuracy 1.0: Projectile.shoot adds a per-axis triangle
+	// draw of half-spread 0.0172275 BEFORE the *velocity scale, so the magnitude sits near 3.0 with a
+	// small random spread (bounded by ~0.0172275*3*sqrt(3)). The direction is dominantly +Z with the
+	// same small deviation. Assert the faithful spread window, not zero-spread exactness.
+	if math.Abs(mag-3.0) > 0.2 {
+		t.Fatalf("arrow velocity magnitude = %.6f, want ~3.0 +/- spread", mag)
 	}
-	if a.vz <= 0 || math.Abs(a.vx) > 1e-6 || math.Abs(a.vy) > 1e-6 {
-		t.Fatalf("arrow not fired straight along +Z: v=(%.4f,%.4f,%.4f)", a.vx, a.vy, a.vz)
+	if a.vz <= 0 || math.Abs(a.vx) > 0.15 || math.Abs(a.vy) > 0.15 {
+		t.Fatalf("arrow not fired dominantly along +Z: v=(%.4f,%.4f,%.4f)", a.vx, a.vy, a.vz)
 	}
 	if !a.arrowCrit {
 		t.Fatalf("full-draw arrow is not crit")
@@ -227,8 +231,10 @@ func TestCrossbowLoadsAndShoots(t *testing.T) {
 		t.Fatalf("charged crossbow use did not fire a bolt")
 	}
 	mag := math.Sqrt(a.vx*a.vx + a.vy*a.vy + a.vz*a.vz)
-	if math.Abs(mag-crossbowShootPower) > 1e-6 {
-		t.Fatalf("crossbow bolt velocity = %.6f, want %.6f", mag, crossbowShootPower)
+	// Fired at crossbowShootPower with inaccuracy 1.0 -> the triangle spread offsets the magnitude
+	// slightly from the nominal power. Assert the faithful spread window.
+	if math.Abs(mag-crossbowShootPower) > 0.2 {
+		t.Fatalf("crossbow bolt velocity = %.6f, want %.6f +/- spread", mag, crossbowShootPower)
 	}
 	if p.crossbowCharged {
 		t.Fatalf("crossbow still charged after firing")

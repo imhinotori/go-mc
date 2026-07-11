@@ -46,6 +46,10 @@ const (
 	// Player use of a snowball/egg/ender_pearl calls shoot(x,y,z, 1.5f, 1.0f) — velocity magnitude 1.5,
 	// inaccuracy 1.0. v1 uses 0 inaccuracy (no per-throw spread) so the throw is deterministic.
 	throwLaunchPower = 1.5
+	// xp bottle: ExperienceBottleItem.use spawns at angle -20.0 with velocity 0.7 (ldc -20.0f, ldc 0.7f),
+	// unlike the 0/1.5 the other throwables use. Cite ExperienceBottleItem.use spawnProjectileFromRotation.
+	xpBottleThrowAngle float32 = -20.0
+	xpBottleThrowPower         = 0.7
 	// enderPearlFallDamage is ThrownEnderpearl.onHit: hurtServer(enderPearl(), 5.0) after teleport.
 	enderPearlFallDamage = 5.0
 	// xpBottleGravity is ThrownExperienceBottle.getDefaultGravity() == 0.07d -- the xp bottle overrides the
@@ -53,6 +57,17 @@ const (
 	//   [VERIFIED javap ThrownExperienceBottle.getDefaultGravity: ldc2_w 0.07d; dreturn.]
 	xpBottleGravity = 0.07
 )
+
+// throwLaunchParams returns the (angleOffset, velocity) each throwable item's *.use passes to
+// spawnProjectileFromRotation. snowball/egg/ender_pearl: angle 0, velocity 1.5 (SnowballItem/EggItem/
+// EnderpearlItem.use: fconst_0, ldc 1.5f). xp bottle: angle -20, velocity 0.7 (ExperienceBottleItem.use:
+// ldc -20.0f, ldc 0.7f). Cite the per-item .use spawnProjectileFromRotation args.
+func throwLaunchParams(kind int) (angle float32, velocity float64) {
+	if kind == throwExperienceBottle {
+		return xpBottleThrowAngle, xpBottleThrowPower
+	}
+	return 0, throwLaunchPower
+}
 
 // itemToThrowableKind maps a held item id to its throwable kind, ok=false for a non-throwable item.
 // CITE: the Item -> projectile binding (SnowballItem/EggItem/EnderpearlItem.use each spawn their kind).
@@ -114,8 +129,9 @@ func (t *TickLoop) spawnThrowable(ownerID int32, kind int, x, y, z, vx, vy, vz f
 const throwEyeHeight = 1.62
 
 // tryThrowItem is the SnowballItem/EggItem/EnderpearlItem.use port: a right-click-air with a throwable
-// item spawns its ThrowableProjectile from the player's eye toward the look direction (shootFromRotation
-// power 1.5, no spread) and consumes 1 (creative-exempt). Returns true if the item was a throwable (so
+// item spawns its ThrowableProjectile from the player eye toward the look direction (shootFromRotation
+// velocity 1.5, inaccuracy 1.0; the xp bottle uses velocity 0.7/angle -20) and consumes 1 (creative-exempt).
+// Returns true if the item was a throwable (so
 // useItemInHand stops), false to fall through to the food path. Tick-owned; the spawn rides the store-add
 // path (tracker broadcasts AddEntity). CITE: Projectile.shootFromRotation + ItemStack.consume(1).
 func (t *TickLoop) tryThrowItem(p *tickPlayer, inv *Inventory, held component.SlotData, hand int32) bool {
@@ -123,19 +139,26 @@ func (t *TickLoop) tryThrowItem(p *tickPlayer, inv *Inventory, held component.Sl
 	if !ok {
 		return false
 	}
-	// shootFromRotation(player, xRot, yRot, 0, 1.5, 1.0): the launch vector from the look angles.
-	yawRad := float64(p.yaw) * (math.Pi / 180.0)
-	pitchRad := float64(p.pitch) * (math.Pi / 180.0)
-	vx := -math.Sin(yawRad) * math.Cos(pitchRad)
-	vy := -math.Sin(pitchRad)
-	vz := math.Cos(yawRad) * math.Cos(pitchRad)
-	// normalize then scale by power 1.5 (Vec3.normalize().scale(velocity)); +0 inaccuracy in v1.
-	mag := math.Sqrt(vx*vx + vy*vy + vz*vz)
-	if mag > 0 {
-		vx, vy, vz = vx/mag*throwLaunchPower, vy/mag*throwLaunchPower, vz/mag*throwLaunchPower
+	// spawnProjectileFromRotation(factory, level, stack, player, angle, velocity, 1.0f) ->
+	// shootFromRotation: the launch vector from the look angles + the 3 per-axis inaccuracy triangle draws
+	// (inaccuracy 1.0) on the projectile's OWN throwRNG + the owner known-movement inherit. The xp bottle
+	// alone uses angle -20 / velocity 0.7 (ExperienceBottleItem.use); snowball/egg/ender_pearl use angle 0 /
+	// velocity 1.5. Spawn at rest at the eye, seed the stream, then apply the shot vector -- a pig throws
+	// nothing so its stream is never perturbed. Cite SnowballItem/EggItem/EnderpearlItem/ExperienceBottleItem
+	// .use (spawnProjectileFromRotation) + Projectile.shootFromRotation.
+	angle, velocity := throwLaunchParams(kind)
+	e := t.spawnThrowable(p.entityID, kind, p.x, p.y+throwEyeHeight, p.z, 0, 0, 0)
+	if e.throwRNG == nil {
+		e.throwRNG = newEntityRandom(uint64(e.id))
 	}
-	// Spawn from the eye position (the projectile ctor places it at the shooter's eye).
-	t.spawnThrowable(p.entityID, kind, p.x, p.y+throwEyeHeight, p.z, vx, vy, vz)
+	mx, my, mz := t.playerKnownMovement(p)
+	vx, vy, vz := shootVectorFromRotation(e.throwRNG, p.yaw, p.pitch, angle, velocity, 1.0, mx, my, mz, p.onGround)
+	e.vx, e.vy, e.vz = vx, vy, vz
+	e.throwOldX, e.throwOldY, e.throwOldZ = e.x, e.y, e.z
+	horiz := math.Sqrt(vx*vx + vz*vz)
+	e.yaw = float32(math.Atan2(vx, vz) * 180.0 / math.Pi)
+	e.pitch = float32(math.Atan2(vy, horiz) * 180.0 / math.Pi)
+	e.headYaw = e.yaw
 
 	// ItemStack.consume(1): shrink by 1 unless creative.
 	if p.gameMode != gameModeCreative {
@@ -277,12 +300,23 @@ func (t *TickLoop) tickThrowable(e *Entity) {
 func (t *TickLoop) throwableOnHitEntity(e *Entity, victim *tickPlayer) {
 	switch e.throwableKind {
 	case throwSnowball, throwEgg:
-		// entity.hurt(thrown, 0): 0 damage to a player (Blaze would take 3, but none exist). The hit still
-		// consumes the projectile. A 0-damage hurt is a no-op on health; we skip the damage call entirely
-		// since applyAttackDamage(0) would be a cited no-op.
-		_ = victim
+		// Snowball/ThrownEgg.onHitEntity: entity.hurt(damageSources().thrown(this, getOwner()), i) where
+		// i == (victim instanceof Blaze ? 3 : 0). A player is never a Blaze, so i == 0 -- but the hurt call
+		// STILL happens: a 0-damage thrown hit flashes the victim + applies the 0.4 dealDefaultKnockback
+		// (NO_KNOCKBACK does not include `thrown`), so a snowball/egg visibly knocks a player back. The
+		// direct entity is the snowball, so getSourcePosition() is the snowball position -- the player is
+		// pushed away from the impact point. Mirrors the (correct) mob branch. Cite Snowball/ThrownEgg
+		// .onHitEntity + ThrowableItemProjectile.onHitEntity (super) knockback.
+		src := damageSourceThrown(e.throwOwnerID)
+		src.sourceX, src.sourceZ, src.hasSourcePos = e.x, e.z, true
+		t.applyDamage(victim, src, 0)
 	case throwEnderPearl:
-		// The pearl teleports its owner regardless of what it hit (block or entity).
+		// ThrownEnderpearl.onHitEntity: entity.hurt(thrown, 0) -- a 0-damage thrown hit that flashes the
+		// victim + applies the 0.4 knockback (away from the pearl's impact point) -- THEN the pearl teleports
+		// its owner (onHit, regardless of block/entity). Cite ThrownEnderpearl.onHitEntity + onHit.
+		src := damageSourceThrown(e.throwOwnerID)
+		src.sourceX, src.sourceZ, src.hasSourcePos = e.x, e.z, true
+		t.applyDamage(victim, src, 0)
 		t.enderPearlTeleport(e)
 	case throwExperienceBottle:
 		// The xp bottle breaks on ANY hit (block or entity), splitting into XP orbs at the impact point.

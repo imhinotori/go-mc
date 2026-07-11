@@ -32,6 +32,7 @@ import (
 // AbstractArrow physics constants (verified CFR — exact float values).
 const (
 	arrowAirDrag      = 0.99 // AbstractArrow.getAirDrag()
+	arrowWaterInertia = 0.6  // AbstractArrow.getWaterInertia() (ldc_w 0.6f) — applied in place of air drag when in water
 	arrowGravity      = 0.05 // AbstractArrow.getDefaultGravity() (Arrow does not override)
 	arrowDespawnTicks = 1200 // AbstractArrow.tickDespawn: discard at life>=1200
 )
@@ -206,10 +207,18 @@ func (t *TickLoop) tickArrow(e *Entity) {
 	}
 	e.pitch = float32(mthAtan2(e.vy, horiz) * float64(mthRadToDeg))
 
-	// getAirDrag()==0.99 applied to all three axes (applyInertia == deltaMovement.scale(0.99)).
-	e.vx *= arrowAirDrag
-	e.vy *= arrowAirDrag
-	e.vz *= arrowAirDrag
+	// applyInertia == deltaMovement.scale(drag). AbstractArrow.tick applies getWaterInertia()==0.6 when the
+	// arrow isInWater (bytecode offsets 273-284: if isInWater -> applyInertia(getWaterInertia)) and
+	// getAirDrag()==0.99 otherwise (offsets 550-561: if !isInWater -> applyInertia(getAirDrag)). The two are
+	// mutually exclusive, so v1 selects the single drag factor at this one site. Cite AbstractArrow.tick +
+	// getWaterInertia (0.6f) + getAirDrag (0.99f).
+	drag := arrowAirDrag
+	if t.isWaterAt(int(math.Floor(e.x)), int(math.Floor(e.y)), int(math.Floor(e.z))) {
+		drag = arrowWaterInertia
+	}
+	e.vx *= drag
+	e.vy *= drag
+	e.vz *= drag
 
 	// applyGravity: deltaMovement.y -= getDefaultGravity() (0.05). (Airborne only — checked above.)
 	if !e.arrowInGround {

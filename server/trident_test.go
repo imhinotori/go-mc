@@ -87,11 +87,14 @@ func TestTridentThrowSpawnsAt2p5xLook(t *testing.T) {
 		t.Fatalf("thrown trident flags: isArrow=%v isTrident=%v, want both true", a.isArrow, a.isTrident)
 	}
 	mag := math.Sqrt(a.vx*a.vx + a.vy*a.vy + a.vz*a.vz)
-	if math.Abs(mag-2.5) > 1e-6 {
-		t.Fatalf("thrown trident velocity magnitude = %.6f, want ~2.5", mag)
+	// Thrown at velocity 2.5 with inaccuracy 1.0: the per-axis triangle spread (half-spread 0.0172275,
+	// applied before the *velocity scale) puts the magnitude near 2.5 with a small deviation, and the
+	// direction dominantly +Z. Assert the faithful spread window, not zero-spread exactness.
+	if math.Abs(mag-2.5) > 0.2 {
+		t.Fatalf("thrown trident velocity magnitude = %.6f, want ~2.5 +/- spread", mag)
 	}
-	if a.vz <= 0 || math.Abs(a.vx) > 1e-6 || math.Abs(a.vy) > 1e-6 {
-		t.Fatalf("trident not thrown straight along +Z: v=(%.4f,%.4f,%.4f)", a.vx, a.vy, a.vz)
+	if a.vz <= 0 || math.Abs(a.vx) > 0.15 || math.Abs(a.vy) > 0.15 {
+		t.Fatalf("trident not thrown dominantly along +Z: v=(%.4f,%.4f,%.4f)", a.vx, a.vy, a.vz)
 	}
 	if got := inv.get(hotbarMenuSlotBase); !slotIsEmpty(got) {
 		t.Fatalf("survival throw did not consume the trident (held slot count=%d)", got.Count)
