@@ -374,6 +374,15 @@ type Entity struct {
 	// ender pearl -> their behavior is byte-identical. Cite Snowball.onHitEntity.
 	snowballHitsMobs bool
 
+	// isLlamaSpit marks a LlamaSpit projectile (net.minecraft.world.entity.projectile.LlamaSpit): a NON-mob
+	// projectile spawned by Llama.spit that FLIES (getAirDrag 0.99, getDefaultGravity 0.06) and, on the first
+	// LivingEntity it crosses, deals 1.0 spit damage (LlamaSpit.onHitEntity: hurtServer(spit(this, owner),
+	// 1.0F)) then discards; a block hit also discards (LlamaSpit.onHitBlock). Tick-owned; set and read ONLY
+	// for a llama spit (the flight tick gates on isLlamaSpit, so a world with no spit draws zero extra work
+	// and the pig oracle stream is unperturbed). The spit reuses arrowShooterID as getOwner() (a THIN id, the
+	// Folia rule) and vx/vy/vz as its deltaMovement. Cite LlamaSpit.tick / LlamaSpit.onHitEntity.
+	isLlamaSpit bool
+
 	// --- HURTING PROJECTILE (net.minecraft.world.entity.projectile.hurtingprojectile.*) ----------------
 	//
 	// A hurting projectile (small/large fireball, wither skull) is a NON-mob projectile (isHurting) with

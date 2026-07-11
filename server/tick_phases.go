@@ -461,6 +461,12 @@ func (t *TickLoop) tickEntities() {
 	// owner). Sibling of tickArrows/tickPotions; ADDITIVE + throwable-gated (zero cost when none is in flight).
 	t.tickThrowables()
 
+	// LLAMA SPIT: the LlamaSpit.tick port for a spit a llama launched (Llama.spit) -- fly (drag 0.99,
+	// gravity 0.06) + resolve on the first LivingEntity it reaches (onHitEntity: 1.0 spit damage) or a block
+	// (discard). Sibling of tickThrowables/tickArrows; ADDITIVE + isLlamaSpit-gated (zero cost when no spit
+	// is in flight, so the pig oracle stream is unperturbed). Body in ai_goals_llama.go. CITE LlamaSpit.tick.
+	t.tickLlamaSpits()
+
 	// AREA EFFECT CLOUD: the AreaEffectCloud.serverTick lifecycle -- radius shrink (radiusPerTick /
 	// radiusOnUse), the wait phase, the lifetime cap, and the every-5-tick effect application to every
 	// LivingEntity in the radius (the lingering-potion residue). Sibling of tickPotions; ADDITIVE +

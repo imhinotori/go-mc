@@ -316,12 +316,10 @@ func (t *TickLoop) llamaPerformRangedAttack(e *Entity, target *Entity, _ float32
 
 // spawnLlamaSpit ports Llama.spit's projectile launch: build a LlamaSpit at the llama's mouth, aim its
 // velocity at (tx,ty,tz) via Projectile.shoot (normalize the direction * velocity 1.5, with the
-// llama-stream gaussian inaccuracy 10.0), and add it to the owning region's store. The LlamaSpit FLIGHT +
-// onHitEntity (1.0 spit damage) is a CITE-DEFERRED tick: tickLlamaSpits would need a dispatch in
-// tick_phases.go (not owned — the projectile agent owns that seam), so v1 ships the faithful SPAWN + launch
-// vector (the observable "the llama spits at its target"); the projectile's per-tick flight lands when the
-// dispatch is wired. Cite Llama.spit + LlamaSpit ctor + Projectile.spawnProjectileUsingShoot(spit, level,
-// EMPTY, dx, dy+horiz, dz, 1.5f, 10.0f).
+// llama-stream gaussian inaccuracy 10.0), and add it to the owning region's store. The spit is marked
+// isLlamaSpit so tickLlamaSpits (tick_phases.go dispatch) FLIES it each tick (drag 0.99, gravity 0.06) and
+// resolves LlamaSpit.onHitEntity (1.0 spit damage) on the first entity it reaches. Cite Llama.spit + LlamaSpit
+// ctor + Projectile.spawnProjectileUsingShoot(spit, level, EMPTY, dx, dy+horiz, dz, 1.5f, 10.0f).
 func (t *TickLoop) spawnLlamaSpit(e *Entity, tx, ty, tz float64) *Entity {
 	// The LlamaSpit ctor sets its position near the llama's mouth (getX() - width-based offset, getEyeY()
 	// - 0.1, getZ() - offset). v1 collapses the exact mouth offset (which reads yBodyRot) to the eye
@@ -354,6 +352,7 @@ func (t *TickLoop) spawnLlamaSpit(e *Entity, tx, ty, tz float64) *Entity {
 	vz *= llamaSpitLaunchVelocity
 
 	spit := NewEntity(t.idAlloc.AllocID(), entity.LlamaSpit, spawnX, spawnY, spawnZ)
+	spit.isLlamaSpit = true     // opt into the tickLlamaSpits flight + onHitEntity dispatch
 	spit.arrowShooterID = e.id // reuse the projectile owner field (the spit's getOwner() == the llama)
 	spit.vx, spit.vy, spit.vz = vx, vy, vz
 	spit.spawnData = e.id + 1 // ClientboundAddEntity object data == owner link (ownerId+1)
@@ -369,4 +368,169 @@ func (t *TickLoop) spawnLlamaSpit(e *Entity, tx, ty, tz float64) *Entity {
 	}
 	owner.entities.add(spit)
 	return spit
+}
+
+// --- LlamaSpit FLIGHT (net.minecraft.world.entity.projectile.LlamaSpit) --------------------------
+
+// LlamaSpit physics constants (VERIFIED javap this session).
+const (
+	// llamaSpitAirDrag is LlamaSpit.getAirDrag() == 0.99f: the delta is scaled by it AFTER the move, BEFORE
+	// gravity, each tick. Cite LlamaSpit.getAirDrag (ldc 0.99f).
+	llamaSpitAirDrag = 0.99
+	// llamaSpitGravity is LlamaSpit.getDefaultGravity() == 0.06d, applied via applyGravity() AFTER drag.
+	// Cite LlamaSpit.getDefaultGravity (ldc2_w 0.06d).
+	llamaSpitGravity = 0.06
+	// llamaSpitDespawnTicks is a lifetime backstop for a spit that never lands (vanilla relies on the
+	// block/water/no-block discard; v1 adds a hard cap so a spit into open sky is reaped). Mirrors the
+	// throwable throwDespawnTicks backstop.
+	llamaSpitDespawnTicks = 1200
+)
+
+// tickLlamaSpits drives every in-flight LlamaSpit in every region -- the sibling of tickThrowables/tickArrows.
+// Runs with each region registered so the tick's t.cur() (move / discard / victim store) resolves to the
+// spit's OWN store. A per-region snapshot keeps the loop stable across an in-loop discard. ADDITIVE +
+// isLlamaSpit-gated: a world with no llama spit iterates nothing (zero extra work, the pig oracle stream is
+// unperturbed). Cite LlamaSpit.tick.
+func (t *TickLoop) tickLlamaSpits() {
+	for _, r := range t.regions {
+		if r.entities == nil {
+			continue
+		}
+		var snapshot []*Entity
+		for _, e := range r.entities.all() {
+			if e.isLlamaSpit {
+				snapshot = append(snapshot, e)
+			}
+		}
+		if snapshot == nil {
+			continue
+		}
+		t.withRegion(r, func() {
+			for _, e := range snapshot {
+				t.tickLlamaSpit(e)
+			}
+		})
+	}
+}
+
+// tickLlamaSpit ports LlamaSpit.tick (VERIFIED javap this session) for one spit, in the exact jar order:
+//
+//	Vec3 delta = getDeltaMovement();
+//	HitResult hit = ProjectileUtil.getHitResultOnMoveVector(this, this::canHitEntity);
+//	hitTargetOrDeflectSelf(hit);                              // onHitEntity/onHitBlock -> our discard
+//	double d3 = getX()+delta.x, d5 = getY()+delta.y, d7 = getZ()+delta.z;   // newpos from the PRE-drag delta
+//	updateRotation();
+//	if (level.getBlockStates(getBoundingBox()).noneMatch(BlockBehaviour.BlockStateBase::isAir)) { discard; return; }
+//	if (isInWater()) { discard; return; }
+//	setDeltaMovement(delta.scale(getAirDrag()));             // drag 0.99, AFTER the move
+//	applyGravity();                                          // gravity 0.06, AFTER drag
+//	setPos(d3, d5, d7);
+//
+// The hit test runs on the CURRENT (pre-drag) delta and the move uses that same delta; drag+gravity mutate
+// the delta for the NEXT tick. On a hit the projectile is discarded (LlamaSpit.onHitEntity/onHitBlock end in
+// the shared Projectile discard). The block-in-bounding-box discard is v1's arrowClipSegment block hit.
+func (t *TickLoop) tickLlamaSpit(e *Entity) {
+	// getHitResultOnMoveVector on the CURRENT delta: clip the move segment vs blocks FIRST, then test the
+	// FIRST LivingEntity (mob or player, minus the owner) up to that clipped endpoint.
+	ox, oy, oz := e.x, e.y, e.z
+	nx, ny, nz := ox+e.vx, oy+e.vy, oz+e.vz
+	hx, hy, hz, blockHit := t.arrowClipSegment(ox, oy, oz, nx, ny, nz)
+	endX, endY, endZ := nx, ny, nz
+	if blockHit {
+		endX, endY, endZ = hx, hy, hz
+	}
+
+	// EntityHitResult: LlamaSpit.onHitEntity -> hurtServer(spit(this, owner), 1.0f) then discard.
+	if victim := t.llamaSpitFindHitEntity(e, ox, oy, oz, endX, endY, endZ); victim != nil {
+		t.llamaSpitOnHitEntity(e, victim)
+		t.cur().entities.remove(e.id) // hitTargetOrDeflectSelf -> onHit -> discard
+		return
+	}
+	// BlockHitResult: LlamaSpit.onHitBlock -> (particles, cited) then discard. Also covers the jar's
+	// "bounding box is no longer all air" discard.
+	if blockHit {
+		t.cur().entities.move(e, endX, endY, endZ)
+		t.cur().entities.remove(e.id)
+		return
+	}
+	// isInWater() discard: a spit that enters water is discarded.
+	if t.isWaterAt(int(math.Floor(nx)), int(math.Floor(ny)), int(math.Floor(nz))) {
+		t.cur().entities.move(e, nx, ny, nz)
+		t.cur().entities.remove(e.id)
+		return
+	}
+
+	// No hit: setPos to newpos, then drag (0.99) + gravity (0.06) on the delta for the NEXT tick.
+	t.cur().entities.move(e, nx, ny, nz)
+	e.vx *= llamaSpitAirDrag
+	e.vy *= llamaSpitAirDrag
+	e.vz *= llamaSpitAirDrag
+	e.vy -= llamaSpitGravity // applyGravity(): deltaMovement.y -= getDefaultGravity()
+
+	// updateRotation() from the movement.
+	horiz := math.Sqrt(e.vx*e.vx + e.vz*e.vz)
+	if e.vx != 0 || e.vz != 0 {
+		e.yaw = float32(mthAtan2(e.vx, e.vz) * float64(mthRadToDeg))
+		e.headYaw = e.yaw
+	}
+	e.pitch = float32(mthAtan2(e.vy, horiz) * float64(mthRadToDeg))
+
+	e.throwLife++
+	if e.throwLife >= llamaSpitDespawnTicks {
+		t.cur().entities.remove(e.id)
+	}
+}
+
+// llamaSpitFindHitEntity resolves the FIRST LivingEntity (mob or player) the spit's flight segment crosses,
+// excluding its own owner (canHitEntity: never the shooter). The mob-vs-mob analog of arrowFindHitPlayer,
+// widened to any LivingEntity because Llama.spit targets a wolf (a mob). Nearest-along-segment wins. Cite
+// ProjectileUtil.getHitResultOnMoveVector + Projectile.canHitEntity.
+func (t *TickLoop) llamaSpitFindHitEntity(e *Entity, ox, oy, oz, nx, ny, nz float64) *Entity {
+	var best *Entity
+	bestT := math.Inf(1)
+	half := entity.LlamaSpit.Width / 2.0
+	for _, other := range t.cur().entities.all() {
+		if other == nil || other == e || other.dead || !other.isAlive() {
+			continue
+		}
+		if other.id == e.arrowShooterID {
+			continue // never hits its own shooter (canHitEntity / checkLeftOwner guard)
+		}
+		if !isLivingMob(other) {
+			continue // LlamaSpit.onHitEntity applies to a LivingEntity victim only
+		}
+		vhw := other.width / 2
+		minX := other.x - vhw - half
+		maxX := other.x + vhw + half
+		minY := other.y - half
+		maxY := other.y + other.height + half
+		minZ := other.z - vhw - half
+		maxZ := other.z + vhw + half
+		if hit, tHit := segmentAABB(ox, oy, oz, nx, ny, nz, minX, minY, minZ, maxX, maxY, maxZ); hit {
+			if tHit < bestT {
+				bestT = tHit
+				best = other
+			}
+		}
+	}
+	return best
+}
+
+// llamaSpitOnHitEntity ports LlamaSpit.onHitEntity:
+//
+//	if (getOwner() instanceof LivingEntity living) {
+//	    Entity target = result.getEntity();
+//	    DamageSource src = damageSources().spit(this, living);
+//	    if (level instanceof ServerLevel sl && target.hurtServer(sl, src, 1.0f)) EnchantmentHelper.doPostAttackEffects(...);
+//	}
+//
+// The 1.0 spit damage rides the shared applyDamageEntity -> broadcastMobDamageEvent -> dealDefaultKnockbackEntity
+// recoil (0.4 power). DIRECTION: the source carries the SPIT's (x,z) at impact (hasSourcePos, getSourcePosition
+// == the directEntity/spit position), so the victim is knocked radially AWAY from the spit -- exactly like
+// snowballOnHitMob. Cite LlamaSpit.onHitEntity + LivingEntity.dealDefaultKnockback (getSourcePosition ->
+// directEntity.position()).
+func (t *TickLoop) llamaSpitOnHitEntity(e *Entity, victim *Entity) {
+	src := damageSourceSpit(e.arrowShooterID)               // spit(this, owner)
+	src.sourceX, src.sourceZ, src.hasSourcePos = e.x, e.z, true // directEntity (spit) position at impact
+	t.applyDamageEntity(victim, src, float32(llamaSpitBulletDamage))
 }

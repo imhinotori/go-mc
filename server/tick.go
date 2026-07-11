@@ -723,6 +723,22 @@ type tickPlayer struct {
 	lastHurtMob          int32
 	lastHurtMobTimestamp int32
 
+	// lastHurtByMob / lastHurtByMobTimestamp are the INBOUND defense bookkeeping
+	// net.minecraft.world.entity.LivingEntity.lastHurtByMob (the mob that last HURT this player) + its
+	// tickCount stamp. A tamed wolf's OwnerHurtByTargetGoal reads its OWNER's getLastHurtByMob()/
+	// getLastHurtByMobTimestamp() to target whatever attacked its owner (MOB-DEF, the inbound mirror of
+	// lastHurtMob). setLastHurtByMob is recorded when a MOB damages this player (applyDamage, gated on the
+	// attacker being a mob — a PvP / environmental hit never sets it, so the pig oracle path is unperturbed).
+	// 0 == none. LivingEntity forgets the reference once tickCount - lastHurtByMobTimestamp > 100 (the aiStep
+	// tail), so ownerLastHurtByMobID applies the same 100-tick validity at read time. THIN id (the Folia
+	// rule). Tick-owned.
+	//	[VERIFIED javap LivingEntity.setLastHurtByMob(LivingEntity): lastHurtByMob = EntityReference.of(e);
+	//	 lastHurtByMobTimestamp = tickCount. LivingEntity.tick tail: if (isAlive() && tickCount -
+	//	 lastHurtByMobTimestamp > 100) setLastHurtByMob(null). OwnerHurtByTargetGoal.canUse:
+	//	 owner.getLastHurtByMob() / owner.getLastHurtByMobTimestamp().]
+	lastHurtByMob          int32
+	lastHurtByMobTimestamp int32
+
 	// gameMode is the player's GameType byte (play_join.go: gameModeSurvival==0). It gates the
 	// block-drop path (Plan 17-14 / ServerPlayerGameMode.destroyBlock): a CREATIVE player's
 	// break drops NOTHING. v1 hardcodes survival at registration, so the gate always passes

@@ -233,9 +233,11 @@ func (g *ownerHurtByTargetGoal) canUse(t *TickLoop, e *Entity) bool {
 	if owner == nil {
 		return false
 	}
-	// owner.getLastHurtByMob() / getLastHurtByMobTimestamp(): cited constant-NONE (players have no inbound
-	// bookkeeping in v1). ownerLastHurtBy stays 0 → the canAttack guard below fails → no target acquired.
-	g.ownerLastHurtBy = ownerLastHurtByMobID(owner)
+	// owner.getLastHurtByMob() / getLastHurtByMobTimestamp(): the INBOUND-defense bookkeeping recorded on
+	// the player when a MOB hurts it (applyDamage -> resolveMobResponsibleForDamage). ownerLastHurtByMobID
+	// applies the LivingEntity 100-tick validity window (tickCount - lastHurtByMobTimestamp > 100 -> the
+	// reference is forgotten -> 0), so a stale attacker no longer acquires a target.
+	g.ownerLastHurtBy = ownerLastHurtByMobID(t, owner)
 	ts := ownerLastHurtByMobTimestamp(owner)
 	if ts == g.timestamp || g.ownerLastHurtBy == 0 {
 		return false
@@ -365,14 +367,27 @@ var _ Goal = (*ownerHurtTargetGoal)(nil)
 
 // --- shared owner-goal helpers -------------------------------------------------------------------
 
-// ownerLastHurtByMobID / ownerLastHurtByMobTimestamp are the CITED constant-NONE stubs for a player
-// owner's INBOUND lastHurtByMob bookkeeping (OwnerHurtByTargetGoal): players track no inbound
-// lastHurtByMob in v1 (only mobs do, at the combat store-point), so the "who hit the owner" candidate is
-// always absent. Named predicates (not inline 0) so the upgrade — adding lastHurtByMob to tickPlayer —
-// slots in here with no canUse edit. The owner ATTACK side (getLastHurtMob, OwnerHurtTargetGoal) IS live
-// (tickPlayer.lastHurtMob, set in handleMobAttack).
-func ownerLastHurtByMobID(_ *tickPlayer) int32        { return 0 }
-func ownerLastHurtByMobTimestamp(_ *tickPlayer) int32 { return 0 }
+// ownerLastHurtByMobID / ownerLastHurtByMobTimestamp read a player owner's INBOUND lastHurtByMob
+// bookkeeping (OwnerHurtByTargetGoal): the mob that last HURT the owner + its stamp, recorded on the
+// tickPlayer when a MOB damages it (applyDamage -> resolveMobResponsibleForDamage, mob-gated). This is the
+// inbound mirror of the owner ATTACK side (getLastHurtMob, OwnerHurtTargetGoal, set in handleMobAttack).
+//
+// ownerLastHurtByMobID enforces the LivingEntity 100-tick validity window: LivingEntity.tick's tail forgets
+// the reference (setLastHurtByMob(null)) once tickCount - lastHurtByMobTimestamp > 100. Players in v1 do
+// not run LivingEntity.tick, so the same forget is applied here at read time — a candidate older than 100
+// ticks resolves to 0 (no target), observably identical to the jar's aiStep forget.
+//	[VERIFIED javap LivingEntity.tick tail: if (isAlive() && tickCount - lastHurtByMobTimestamp > 100)
+//	 setLastHurtByMob(null). OwnerHurtByTargetGoal.canUse: owner.getLastHurtByMob() / getLastHurtByMobTimestamp().]
+func ownerLastHurtByMobID(t *TickLoop, owner *tickPlayer) int32 {
+	if owner.lastHurtByMob == 0 {
+		return 0
+	}
+	if int32(t.gametime)-owner.lastHurtByMobTimestamp > 100 { // the aiStep 100-tick forget window
+		return 0
+	}
+	return owner.lastHurtByMob
+}
+func ownerLastHurtByMobTimestamp(owner *tickPlayer) int32 { return owner.lastHurtByMobTimestamp }
 
 // mobCandidateAlive resolves a candidate MOB id (a target the owner attacked) through the OWNING-region
 // entity store and reports whether it is present + alive — the canAttack(candidate) existence gate for a

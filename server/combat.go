@@ -336,6 +336,28 @@ func (t *TickLoop) applyDamage(p *tickPlayer, src damageSource, amount float32) 
 		t.dealDefaultKnockbackPlayer(p, src)
 	}
 
+	// resolveMobResponsibleForDamage(source) (LivingEntity.hurtServer offset 274, AFTER both actuallyHurt
+	// branches, on the landed-hit path past the i-frame gate): if source.getEntity() instanceof LivingEntity
+	// living && !source.is(NO_ANGER) && !(source.is(WIND_CHARGE) && this.is(NO_ANGER_FROM_WIND_CHARGE)) then
+	// setLastHurtByMob(living) -> lastHurtByMob = living; lastHurtByMobTimestamp = tickCount. This is the
+	// INBOUND-defense bookkeeping a tamed wolf's OwnerHurtByTargetGoal reads on its owner to target whatever
+	// hurt it. ADDITIVE + gated on the attacker resolving to a MOB (a live entity in the current region's
+	// store that is not this player): a PvP hit, an environmental source (attacker 0), or a no_anger source
+	// never records, so the pig oracle path and PvP path are byte-identical. (Vanilla sets it for any
+	// LivingEntity attacker including a player; restricting to a mob is faithful-equivalent for the wolf
+	// owner-defense observable — OwnerHurtByTargetGoal.canUse validates the candidate as an attackable mob via
+	// mobCandidateAlive, so a player id there would fail validation anyway.) The player NOT hurt by a mob
+	// draws zero extra work. Cite LivingEntity.resolveMobResponsibleForDamage + setLastHurtByMob.
+	if src.attacker != 0 && !src.is("no_anger") && t.playerByEntityID(src.attacker) == nil {
+		if mob, ok := t.cur().entities.get(src.attacker); ok && mob != nil && mob.id != p.entityID {
+			// WIND_CHARGE / NO_ANGER_FROM_WIND_CHARGE guard: the player is not a NO_ANGER_FROM_WIND_CHARGE
+			// member, so the wind-charge sub-guard never suppresses the write here (faithful — a player victim
+			// always records a wind-charge attacker). Recorded as a plain field write, NO RNG.
+			p.lastHurtByMob = mob.id
+			p.lastHurtByMobTimestamp = int32(t.gametime)
+		}
+	}
+
 	// Death drive: actuallyHurt has set the authoritative health (and sent SetHealth); if it
 	// reached 0 raise the death screen. Mirrors hurtServer's isDeadOrDying() tail that plays the
 	// death sound and the eventual death handling — v1's die() sends the PlayerCombatKill.

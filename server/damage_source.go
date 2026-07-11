@@ -263,6 +263,14 @@ func damageSourceTrident(attackerID int32) damageSource {
 	return damageSource{typeTag: damageTypeTrident, attacker: attackerID}
 }
 
+// damageSourceSpit builds the DamageSource for a LlamaSpit hit: type spit with the llama OWNER's entity id
+// as the causing entity. The port of DamageSources.spit(Entity, LivingEntity) -- type SPIT, source =
+// (spit, owner). ownerID 0 means an ownerless spit. Cite LlamaSpit.onHitEntity: damageSources().spit(this,
+// getOwner()) and DamageSources.spit (DamageTypes.SPIT).
+func damageSourceSpit(ownerID int32) damageSource {
+	return damageSource{typeTag: damageTypeID(tag.DamageTypeIDs["minecraft:spit"]), attacker: ownerID}
+}
+
 // damageSourceEnderPearl builds the DamageSource for the ender-pearl teleport self-hit: type ender_pearl,
 // no attacker (the pearl damages its own thrower). CITE: ThrownEnderpearl.onHit hurtServer(enderPearl(), 5).
 func damageSourceEnderPearl() damageSource {
