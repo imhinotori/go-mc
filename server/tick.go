@@ -2361,6 +2361,14 @@ func (t *TickLoop) dispatch(c *Client, p pk.Packet) {
 		if player != nil {
 			t.runChatCommand(player, p)
 		}
+	case packetid.ServerboundCommandSuggestion:
+		// The client's tab-complete request (Part B). ServerboundCommandSuggestionPacket is
+		// jar-verified as readVarInt id + readUtf(32500) command. Resolved INLINE on the tick
+		// goroutine (it reads the tick-owned player list + registries -- TICK-05). Defensive decode
+		// (Scan error -> silent no-op, T-3-02); never panics.
+		if player != nil {
+			t.runCommandSuggestion(player, p)
+		}
 	case packetid.ServerboundChatCommandSigned:
 		// The SIGNED command variant drags a salt + per-argument signatures + a last-seen
 		// acknowledgement. For v1 the server runs in offline mode and the unmodified client

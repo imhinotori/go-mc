@@ -156,13 +156,13 @@ func buildCommandGraph() *command.Graph {
 	// to ALL players via ChatType.SAY_COMMAND (translatable chat.type.announcement = "[%s] %s",
 	// source display name + message). v1 ships the SystemChat path (ClientboundSystemChat) which
 	// renders the resolved "[sender] message" text identically. Console source name = "Server".
-	sayMsg := g.Argument("message", command.StringParser(2)).HandleFunc(permissionGated("command.say",
+	sayMsg := g.Argument("message", command.MessageParser()).HandleFunc(permissionGated("command.say",
 		func(ctx context.Context, args []command.ParsedData) error {
 			t := commandLoop(ctx)
 			if t == nil || len(args) == 0 {
 				return nil
 			}
-			msg, _ := args[len(args)-1].(string)
+			msg := commandRaw(args)
 			t.broadcastSystemChat("[" + commandSenderName(ctx) + "] " + msg)
 			return nil
 		}))
@@ -172,13 +172,13 @@ func buildCommandGraph() *command.Graph {
 	// /me <action> — vanilla emote command: broadcast via ChatType.EMOTE_COMMAND (translatable
 	// chat.type.emote = "* %s %s", source display name + action). v1 ships the SystemChat path
 	// which renders the resolved "* sender action" text identically. Console source name = "Server".
-	meMsg := g.Argument("action", command.StringParser(2)).HandleFunc(permissionGated("command.me",
+	meMsg := g.Argument("action", command.MessageParser()).HandleFunc(permissionGated("command.me",
 		func(ctx context.Context, args []command.ParsedData) error {
 			t := commandLoop(ctx)
 			if t == nil || len(args) == 0 {
 				return nil
 			}
-			action, _ := args[len(args)-1].(string)
+			action := commandRaw(args)
 			t.broadcastSystemChat("* " + commandSenderName(ctx) + " " + action)
 			return nil
 		}))
@@ -195,7 +195,7 @@ func buildCommandGraph() *command.Graph {
 			if !ok || len(args) == 0 {
 				return nil
 			}
-			sub, _ := args[len(args)-1].(string)
+			sub := commandRaw(args)
 			e.t.runDbgCommand(e.p, strings.TrimSpace(sub))
 			return nil
 		}))
@@ -206,13 +206,13 @@ func buildCommandGraph() *command.Graph {
 	// nether portal (nether_portal.go builds the blocks); this command is the direct changeDimension
 	// trigger so the second dimension is reachable + testable while the portal's entityInside travel
 	// timer is wired. Permission-gated on command.tp (a travel-class action).
-	dimArgs := g.Argument("target", command.StringParser(2)).HandleFunc(permissionGated("command.tp",
+	dimArgs := g.Argument("target", command.DimensionParser()).HandleFunc(permissionGated("command.tp",
 		func(ctx context.Context, args []command.ParsedData) error {
 			e, ok := executorFrom(ctx)
 			if !ok || e.p == nil || len(args) == 0 {
 				return nil
 			}
-			target, _ := args[len(args)-1].(string)
+			target := commandRaw(args)
 			switch strings.TrimSpace(strings.ToLower(target)) {
 			case "nether", "the_nether":
 				e.t.changeDimension(e.p, dimNether)

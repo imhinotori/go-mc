@@ -69,6 +69,12 @@ type Node struct {
 	SuggestionsType string
 	Parser          Parser
 	Run             HandlerFunc
+
+	// SuggestKind/SuggestRegistry drive server-side tab-completion (suggest.go). An argument node
+	// with a non-empty SuggestKind resolves dynamic candidates (player names, registry ids, ...)
+	// from the server SuggestResolver; SuggestRegistry is the registry hint for SuggestResource.
+	SuggestKind     SuggestKind
+	SuggestRegistry string
 }
 type (
 	Literal  Node

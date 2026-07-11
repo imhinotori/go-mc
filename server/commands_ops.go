@@ -68,8 +68,12 @@ func registerGive(g *command.Graph) {
 		e.t.sendSystemChat(e.p, fmt.Sprintf("Gave %d %s to %s", count, it.DisplayName, targets[0].name))
 		return nil
 	})
-	arg := g.Argument("args", command.StringParser(2)).HandleFunc(h)
-	g.AppendLiteral(g.Literal("give").AppendArgument(arg).Unhandle())
+	// GiveCommand: <targets:entity> <item:item_stack> [count:integer>=1]. entity id 6, item_stack
+	// id 14 (no props), integer id 3 (min 1). Every node runs h; commandRaw rebuilds the tail.
+	countArg := g.Argument("count", command.IntegerParser{Min: 1, HasMin: true}).HandleFunc(h)
+	itemArg := g.Argument("item", command.ItemStackParser()).Suggests(command.SuggestItem, "").AppendArgument(countArg).HandleFunc(h)
+	tgtArg := g.Argument("targets", command.EntityParser{}).Suggests(command.SuggestPlayers, "").AppendArgument(itemArg).Unhandle()
+	g.AppendLiteral(g.Literal("give").AppendArgument(tgtArg).Unhandle())
 }
 
 func (t *TickLoop) giveItemToPlayer(p *tickPlayer, it *item.Item, maxStack, count int) {
@@ -159,8 +163,17 @@ func registerTeleport(g *command.Graph) {
 			return errTeleportUsage
 		}
 	})
-	arg := g.Argument("args", command.StringParser(2)).HandleFunc(h)
-	g.AppendLiteral(g.Literal("tp").AppendArgument(arg).HandleFunc(h))
+	// TeleportCommand accepts several overloads; we mirror the two most common leading tokens:
+	//   /tp <location:vec3>            -- destination coords (id 10)
+	//   /tp <destination:entity>       -- teleport self to an entity (id 6, single)
+	// with an optional trailing token the handler resolves from the rebuilt tail (target+coords,
+	// target+destination). Each node runs h so any arity dispatches; commandFields parses arity.
+	tail := g.Argument("rest", command.StringParser(2)).HandleFunc(h)
+	locArg := g.Argument("location", command.Vec3Parser()).AppendArgument(tail).HandleFunc(h)
+	destArg := g.Argument("destination", command.EntityParser{Single: true}).Suggests(command.SuggestPlayers, "").AppendArgument(tail).HandleFunc(h)
+	g.AppendLiteral(g.Literal("tp").AppendArgument(destArg).AppendArgument(locArg).HandleFunc(h))
+	teleportArg := g.Argument("destination", command.EntityParser{Single: true}).Suggests(command.SuggestPlayers, "").HandleFunc(h)
+	g.AppendLiteral(g.Literal("teleport").AppendArgument(teleportArg).HandleFunc(h))
 }
 
 const (
@@ -218,8 +231,17 @@ func registerTime(g *command.Graph) {
 			return errTimeUsage
 		}
 	})
-	arg := g.Argument("args", command.StringParser(2)).HandleFunc(h)
-	g.AppendLiteral(g.Literal("time").AppendArgument(arg).Unhandle())
+	// TimeCommand literals: set/add carry a <time:time> (id 43, min 0); query carries a keyword.
+	// The handler already switches on the first token, so we build literal subtrees that end in
+	// the correct typed leaf and all run h.
+	setTime := g.Argument("time", command.TimeParser{Min: 0}).HandleFunc(h)
+	addTime := g.Argument("time", command.TimeParser{Min: 0}).HandleFunc(h)
+	queryKind := g.Argument("kind", command.StringParser(0)).HandleFunc(h)
+	g.AppendLiteral(g.Literal("time").
+		AppendLiteral(g.Literal("set").AppendArgument(setTime).Unhandle()).
+		AppendLiteral(g.Literal("add").AppendArgument(addTime).Unhandle()).
+		AppendLiteral(g.Literal("query").AppendArgument(queryKind).Unhandle()).
+		Unhandle())
 }
 
 func (t *TickLoop) setDayTime(ticks int) {
@@ -378,8 +400,20 @@ func registerEffect(g *command.Graph) {
 			return errEffectUsage
 		}
 	})
-	arg := g.Argument("args", command.StringParser(2)).HandleFunc(h)
-	g.AppendLiteral(g.Literal("effect").AppendArgument(arg).Unhandle())
+	// EffectCommand: give <targets:entity> <effect:resource minecraft:mob_effect> [seconds:int]
+	// [amplifier:int] [hideParticles:bool]; clear <targets:entity> [effect:resource]. resource id 46
+	// carries the registry Identifier "minecraft:mob_effect"; every node runs h.
+	giveHide := g.Argument("hideParticles", command.BoolParser{}).HandleFunc(h)
+	giveAmp := g.Argument("amplifier", command.IntegerParser{Min: 0, Max: 255, HasMin: true, HasMax: true}).AppendArgument(giveHide).HandleFunc(h)
+	giveSecs := g.Argument("seconds", command.IntegerParser{Min: 1, Max: 1000000, HasMin: true, HasMax: true}).AppendArgument(giveAmp).HandleFunc(h)
+	giveEffect := g.Argument("effect", command.ResourceParser{Registry: "minecraft:mob_effect"}).Suggests(command.SuggestResource, "minecraft:mob_effect").AppendArgument(giveSecs).HandleFunc(h)
+	giveTargets := g.Argument("targets", command.EntityParser{}).Suggests(command.SuggestPlayers, "").AppendArgument(giveEffect).Unhandle()
+	clearEffect := g.Argument("effect", command.ResourceParser{Registry: "minecraft:mob_effect"}).Suggests(command.SuggestResource, "minecraft:mob_effect").HandleFunc(h)
+	clearTargets := g.Argument("targets", command.EntityParser{}).Suggests(command.SuggestPlayers, "").AppendArgument(clearEffect).HandleFunc(h)
+	g.AppendLiteral(g.Literal("effect").
+		AppendLiteral(g.Literal("give").AppendArgument(giveTargets).Unhandle()).
+		AppendLiteral(g.Literal("clear").AppendArgument(clearTargets).Unhandle()).
+		Unhandle())
 }
 
 func (t *TickLoop) clearPlayerEffect(p *tickPlayer, id string) {
@@ -462,8 +496,13 @@ func registerSetblock(g *command.Graph) {
 		e.t.sendSystemChat(e.p, fmt.Sprintf("Changed the block at %d, %d, %d", bx, by, bz))
 		return nil
 	})
-	arg := g.Argument("args", command.StringParser(2)).HandleFunc(h)
-	g.AppendLiteral(g.Literal("setblock").AppendArgument(arg).Unhandle())
+	// SetBlockCommand: <pos:block_pos> <block:block_state> [mode]. block_pos id 8, block_state
+	// id 14 -> actually block_state id 12 (no props). mode is a keyword literal in vanilla; we
+	// keep it a brigadier:string word for tab-complete. All nodes run h.
+	modeArg := g.Argument("mode", command.StringParser(0)).HandleFunc(h)
+	blockArg := g.Argument("block", command.BlockStateParser()).Suggests(command.SuggestBlock, "").AppendArgument(modeArg).HandleFunc(h)
+	posArg := g.Argument("pos", command.BlockPosParser()).AppendArgument(blockArg).Unhandle()
+	g.AppendLiteral(g.Literal("setblock").AppendArgument(posArg).Unhandle())
 }
 
 var errSummonUsage = errors.New("usage: /summon <entity> [x] [y] [z]")
@@ -502,8 +541,12 @@ func registerSummon(g *command.Graph) {
 		e.t.sendSystemChat(e.p, fmt.Sprintf("Summoned new %s", fields[0]))
 		return nil
 	})
-	arg := g.Argument("args", command.StringParser(2)).HandleFunc(h)
-	g.AppendLiteral(g.Literal("summon").AppendArgument(arg).Unhandle())
+	// SummonCommand: <entity:resource_key minecraft:entity_type> [pos:vec3]. Vanilla uses
+	// ResourceArgument over the entity_type registry (id 46 + Identifier "minecraft:entity_type");
+	// pos is vec3 (id 10). Both nodes run h; the handler parses "entity [x y z]" from the tail.
+	posArg := g.Argument("pos", command.Vec3Parser()).HandleFunc(h)
+	entArg := g.Argument("entity", command.ResourceParser{Registry: "minecraft:entity_type"}).Suggests(command.SuggestResource, "minecraft:entity_type").AppendArgument(posArg).HandleFunc(h)
+	g.AppendLiteral(g.Literal("summon").AppendArgument(entArg).Unhandle())
 }
 
 func summonRegistryName(t *TickLoop, raw string) (string, bool) {
@@ -519,12 +562,39 @@ func summonRegistryName(t *TickLoop, raw string) (string, bool) {
 	return "", false
 }
 
+// commandRaw reconstructs the original greedy argument tail from the collected ParsedData.
+// Each typed leaf appends its captured word (or the greedy remainder) in tree-descent order, so
+// joining every string-typed arg (skipping the root nil + the LiteralData nodes) reproduces the
+// exact tail the pre-typed single greedy-string node captured -- every handler body stays
+// byte-for-byte identical in behavior whether the command graph is a single greedy node or a
+// full typed multi-node tree.
+func commandRaw(args []command.ParsedData) string {
+	parts := make([]string, 0, len(args))
+	seenCmdLiteral := false
+	for _, a := range args {
+		switch v := a.(type) {
+		case string:
+			// A typed/word argument token.
+			parts = append(parts, v)
+		case command.LiteralData:
+			// The FIRST literal is the command name ("time", "weather", ...), which the pre-typed
+			// single greedy node never captured -- skip it. Every subsequent literal ("set",
+			// "give", "rain", ...) IS part of the tail the handler parses, so include it.
+			if !seenCmdLiteral {
+				seenCmdLiteral = true
+				continue
+			}
+			parts = append(parts, string(v))
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
 func commandFields(args []command.ParsedData) []string {
 	if len(args) == 0 {
 		return nil
 	}
-	raw, _ := args[len(args)-1].(string)
-	return strings.Fields(strings.TrimSpace(raw))
+	return strings.Fields(strings.TrimSpace(commandRaw(args)))
 }
 
 func (t *TickLoop) resolveTargets(self *tickPlayer, token string) ([]*tickPlayer, error) {

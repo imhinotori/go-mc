@@ -63,7 +63,7 @@ func registerGamerule(g *command.Graph) {
 		if len(args) == 0 {
 			return errGameruleUsage
 		}
-		raw, _ := args[len(args)-1].(string)
+		raw := commandRaw(args)
 		fields := strings.Fields(strings.TrimSpace(raw))
 		if len(fields) == 0 {
 			return errGameruleUsage
@@ -110,7 +110,11 @@ func registerGamerule(g *command.Graph) {
 		}
 		return nil
 	})
-	ruleArg := g.Argument("rule", command.StringParser(2)).HandleFunc(h)
+	// GameRuleCommand vanilla is a literal-per-rule + a typed value arg; we keep a single
+	// brigadier:string word rule node (id 5) whose suggestions are the rule names, then an
+	// optional greedy value node. Handler parses rule+value from the rebuilt tail.
+	valueArg := g.Argument("value", command.StringParser(2)).HandleFunc(h)
+	ruleArg := g.Argument("rule", command.StringParser(0)).Suggests(command.SuggestGamerule, "").AppendArgument(valueArg).HandleFunc(h)
 	g.AppendLiteral(g.Literal("gamerule").AppendArgument(ruleArg).Unhandle())
 }
 
@@ -131,7 +135,7 @@ func registerGameMode(g *command.Graph) {
 		if len(args) == 0 {
 			return errors.New("usage: /gamemode <survival|creative|adventure|spectator> [player]")
 		}
-		raw, _ := args[len(args)-1].(string)
+		raw := commandRaw(args)
 		fields := strings.Fields(raw)
 		if len(fields) == 0 {
 			return errors.New("usage: /gamemode <mode> [player]")
@@ -152,8 +156,12 @@ func registerGameMode(g *command.Graph) {
 		e.t.sendSystemChat(e.p, "Set game mode to "+gameModeName(mode)+" for "+target.name)
 		return nil
 	})
-	arg := g.Argument("mode", command.StringParser(2)).HandleFunc(h)
-	g.AppendLiteral(g.Literal("gamemode").AppendArgument(arg).Unhandle())
+	// Typed tree mirroring GameModeCommand: <gamemode> then an optional <target:entity>.
+	// mode -> minecraft:gamemode (id 42, no props); player -> minecraft:entity (id 6,
+	// single+playersOnly). Both nodes run h; commandRaw rebuilds the greedy tail the handler parses.
+	playerArg := g.Argument("target", command.EntityParser{Single: true, PlayersOnly: true}).Suggests(command.SuggestPlayers, "").HandleFunc(h)
+	modeArg := g.Argument("gamemode", command.GameModeParser()).AppendArgument(playerArg).HandleFunc(h)
+	g.AppendLiteral(g.Literal("gamemode").AppendArgument(modeArg).Unhandle())
 }
 
 // /op <player> and /deop <player> — grant/revoke operator (the "*" permission node) on a player by
@@ -196,9 +204,10 @@ func registerOpDeop(g *command.Graph) {
 			return nil
 		})
 	}
-	opArg := g.Argument("player", command.StringParser(0)).HandleFunc(mk("minecraft.command.op", true))
+	// OpCommand/DeopCommand target a <targets:game_profile> (id 7, no props).
+	opArg := g.Argument("targets", command.GameProfileParser()).Suggests(command.SuggestPlayers, "").HandleFunc(mk("minecraft.command.op", true))
 	g.AppendLiteral(g.Literal("op").AppendArgument(opArg).Unhandle())
-	deopArg := g.Argument("player", command.StringParser(0)).HandleFunc(mk("minecraft.command.deop", false))
+	deopArg := g.Argument("targets", command.GameProfileParser()).Suggests(command.SuggestPlayers, "").HandleFunc(mk("minecraft.command.deop", false))
 	g.AppendLiteral(g.Literal("deop").AppendArgument(deopArg).Unhandle())
 }
 
@@ -224,8 +233,8 @@ func registerKill(g *command.Graph) {
 		e.t.die(target)
 		return nil
 	})
-	// /kill (self) + /kill <player>
-	arg := g.Argument("target", command.StringParser(0)).HandleFunc(h)
+	// KillCommand: /kill (self) + /kill <targets:entity> (id 6, no single/playersOnly flags).
+	arg := g.Argument("targets", command.EntityParser{}).Suggests(command.SuggestPlayers, "").HandleFunc(h)
 	g.AppendLiteral(g.Literal("kill").AppendArgument(arg).HandleFunc(h))
 }
 
@@ -287,7 +296,7 @@ func registerMsg(g *command.Graph) {
 		if !ok {
 			return nil
 		}
-		raw, _ := args[len(args)-1].(string)
+		raw := commandRaw(args)
 		parts := strings.SplitN(strings.TrimSpace(raw), " ", 2)
 		if len(parts) < 2 {
 			return errors.New("usage: /msg <player> <message>")
@@ -300,8 +309,11 @@ func registerMsg(g *command.Graph) {
 		e.t.sendSystemChat(e.p, "You whisper to "+target.name+": "+parts[1])
 		return nil
 	})
-	arg := g.Argument("target-and-message", command.StringParser(2)).HandleFunc(h)
-	g.AppendLiteral(g.Literal("msg").AppendArgument(arg).Unhandle())
+	// MsgCommand: <targets:entity> <message:message>. entity id 6 (single false), message id 20
+	// (greedy). Handler parses "target rest..." from the rebuilt tail exactly as before.
+	msgArg := g.Argument("message", command.MessageParser()).HandleFunc(h)
+	tgtArg := g.Argument("targets", command.EntityParser{}).Suggests(command.SuggestPlayers, "").AppendArgument(msgArg).Unhandle()
+	g.AppendLiteral(g.Literal("msg").AppendArgument(tgtArg).Unhandle())
 }
 
 // --- helpers -------------------------------------------------------------------------------
@@ -311,8 +323,7 @@ func pickWord(args []command.ParsedData) string {
 	if len(args) == 0 {
 		return ""
 	}
-	s, _ := args[len(args)-1].(string)
-	return strings.TrimSpace(s)
+	return strings.TrimSpace(commandRaw(args))
 }
 
 // parseGameMode maps a vanilla mode name/short/number to a GameType id.

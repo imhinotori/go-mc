@@ -78,8 +78,11 @@ func registerClear(g *command.Graph) {
 		}
 		return nil
 	})
-	arg := g.Argument("args", command.StringParser(2)).HandleFunc(h)
-	g.AppendLiteral(g.Literal("clear").AppendArgument(arg).HandleFunc(h))
+	// ClearInventoryCommands: /clear [targets:entity] [item:item_predicate] [maxCount:int]. We
+	// model [targets:entity] then [item:item_stack] (id 14); the handler parses arity. All nodes run h.
+	itemArg := g.Argument("item", command.ItemStackParser()).Suggests(command.SuggestItem, "").HandleFunc(h)
+	tgtArg := g.Argument("targets", command.EntityParser{}).Suggests(command.SuggestPlayers, "").AppendArgument(itemArg).HandleFunc(h)
+	g.AppendLiteral(g.Literal("clear").AppendArgument(tgtArg).HandleFunc(h))
 }
 
 // clearOrCountMatchingItems ports Inventory.clearOrCountMatchingItems over the main inventory + carried
@@ -212,10 +215,32 @@ func registerXp(g *command.Graph) {
 			return errXpUsage
 		}
 	})
-	arg := g.Argument("args", command.StringParser(2)).HandleFunc(h)
-	g.AppendLiteral(g.Literal("xp").AppendArgument(arg).Unhandle())
-	arg2 := g.Argument("args", command.StringParser(2)).HandleFunc(h)
-	g.AppendLiteral(g.Literal("experience").AppendArgument(arg2).Unhandle())
+	// ExperienceCommand: add|set <targets:entity> <amount:int> [points|levels]; query
+	// <targets:entity> <points|levels>. entity id 6, integer id 3. The handler switches on the
+	// first token, so we build literal subtrees whose leaves run h. Two literals: xp + experience.
+	build := func(root string) {
+		// add/set carry an optional trailing [points|levels] literal subtree.
+		addType := func() *command.Argument {
+			a := g.Argument("amount", command.IntegerParser{}).
+				AppendLiteral(g.Literal("points").HandleFunc(h)).
+				AppendLiteral(g.Literal("levels").HandleFunc(h)).
+				HandleFunc(h)
+			return a
+		}
+		addAmount := addType()
+		setAmount := addType()
+		addTargets := g.Argument("targets", command.EntityParser{}).Suggests(command.SuggestPlayers, "").AppendArgument(addAmount).Unhandle()
+		setTargets := g.Argument("targets", command.EntityParser{}).Suggests(command.SuggestPlayers, "").AppendArgument(setAmount).Unhandle()
+		queryKind := g.Argument("kind", command.StringParser(0)).HandleFunc(h)
+		queryTargets := g.Argument("targets", command.EntityParser{}).Suggests(command.SuggestPlayers, "").AppendArgument(queryKind).Unhandle()
+		g.AppendLiteral(g.Literal(root).
+			AppendLiteral(g.Literal("add").AppendArgument(addTargets).Unhandle()).
+			AppendLiteral(g.Literal("set").AppendArgument(setTargets).Unhandle()).
+			AppendLiteral(g.Literal("query").AppendArgument(queryTargets).Unhandle()).
+			Unhandle())
+	}
+	build("xp")
+	build("experience")
 }
 
 func xpTypeIsLevels(fields []string, i int) bool {
@@ -269,8 +294,17 @@ func registerWeather(g *command.Graph) {
 		}
 		return nil
 	})
-	arg := g.Argument("args", command.StringParser(2)).HandleFunc(h)
-	g.AppendLiteral(g.Literal("weather").AppendArgument(arg).Unhandle())
+	// WeatherCommand: clear|rain|thunder [duration:time] (id 43, min 0). Literal subtree per state,
+	// each with an optional time leaf; all run h. The handler switches on the first token.
+	mk := func(name string) *command.Literal {
+		dur := g.Argument("duration", command.TimeParser{Min: 0}).HandleFunc(h)
+		return g.Literal(name).AppendArgument(dur).HandleFunc(h)
+	}
+	g.AppendLiteral(g.Literal("weather").
+		AppendLiteral(mk("clear")).
+		AppendLiteral(mk("rain")).
+		AppendLiteral(mk("thunder")).
+		Unhandle())
 }
 
 // weatherGetDuration ports WeatherCommand.getDuration: duration == -1 -> provider.sample(random), else
@@ -311,8 +345,14 @@ func registerDifficulty(g *command.Graph) {
 		e.t.sendSystemChat(e.p, fmt.Sprintf("Set the difficulty to %s", difficultyName(want)))
 		return nil
 	})
-	arg := g.Argument("args", command.StringParser(2)).HandleFunc(h)
-	g.AppendLiteral(g.Literal("difficulty").AppendArgument(arg).HandleFunc(h))
+	// DifficultyCommand: no-arg query + one literal per difficulty. Each literal runs h; the
+	// handler reads the first token (empty -> query).
+	g.AppendLiteral(g.Literal("difficulty").
+		AppendLiteral(g.Literal("peaceful").HandleFunc(h)).
+		AppendLiteral(g.Literal("easy").HandleFunc(h)).
+		AppendLiteral(g.Literal("normal").HandleFunc(h)).
+		AppendLiteral(g.Literal("hard").HandleFunc(h)).
+		HandleFunc(h))
 }
 
 // parseDifficulty maps a serialized name to the difficulty enum. VERIFIED javap Difficulty.<clinit>:
@@ -423,8 +463,12 @@ func registerEnchant(g *command.Graph) {
 		}
 		return nil
 	})
-	arg := g.Argument("args", command.StringParser(2)).HandleFunc(h)
-	g.AppendLiteral(g.Literal("enchant").AppendArgument(arg).Unhandle())
+	// EnchantCommand: <targets:entity> <enchantment:resource minecraft:enchantment> [level:int].
+	// resource id 46 + Identifier "minecraft:enchantment"; integer id 3. All nodes run h.
+	lvlArg := g.Argument("level", command.IntegerParser{Min: 1, HasMin: true}).HandleFunc(h)
+	enchArg := g.Argument("enchantment", command.ResourceParser{Registry: "minecraft:enchantment"}).Suggests(command.SuggestResource, "minecraft:enchantment").AppendArgument(lvlArg).HandleFunc(h)
+	tgtArg := g.Argument("targets", command.EntityParser{}).Suggests(command.SuggestPlayers, "").AppendArgument(enchArg).Unhandle()
+	g.AppendLiteral(g.Literal("enchant").AppendArgument(tgtArg).Unhandle())
 }
 
 // fillMaxBlocks is GameRules.MAX_BLOCK_MODIFICATIONS default (32768): the fill region volume may not
@@ -536,8 +580,13 @@ func registerFill(g *command.Graph) {
 		e.t.sendSystemChat(e.p, fmt.Sprintf("Successfully filled %d block(s)", count))
 		return nil
 	})
-	arg := g.Argument("args", command.StringParser(2)).HandleFunc(h)
-	g.AppendLiteral(g.Literal("fill").AppendArgument(arg).Unhandle())
+	// FillCommand: <from:block_pos> <to:block_pos> <block:block_state> [mode]. block_pos id 8,
+	// block_state id 12. mode kept a brigadier:string word for tab-complete. All nodes run h.
+	modeArg := g.Argument("mode", command.StringParser(0)).HandleFunc(h)
+	blockArg := g.Argument("block", command.BlockStateParser()).Suggests(command.SuggestBlock, "").AppendArgument(modeArg).HandleFunc(h)
+	toArg := g.Argument("to", command.BlockPosParser()).AppendArgument(blockArg).Unhandle()
+	fromArg := g.Argument("from", command.BlockPosParser()).AppendArgument(toArg).Unhandle()
+	g.AppendLiteral(g.Literal("fill").AppendArgument(fromArg).Unhandle())
 }
 
 // minMaxInt returns (min, max) of two ints (BoundingBox.fromCorners corner-normalization).

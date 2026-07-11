@@ -57,6 +57,14 @@ type ArgumentBuilder struct {
 	current *Node
 }
 
+// Suggests marks this argument node's server-side tab-completion domain (suggest.go). registry is
+// the registry hint used when kind == SuggestResource (e.g. "minecraft:mob_effect").
+func (n ArgumentBuilder) Suggests(kind SuggestKind, registry string) ArgumentBuilder {
+	n.current.SuggestKind = kind
+	n.current.SuggestRegistry = registry
+	return n
+}
+
 func (n ArgumentBuilder) AppendLiteral(node *Literal) ArgumentBuilderWithLiteral {
 	n.current.Children = append(n.current.Children, node.index)
 	return ArgumentBuilderWithLiteral{n: n}
@@ -96,6 +104,14 @@ type LiteralBuilderWithArgument struct {
 	n LiteralBuilder
 }
 
+func (n LiteralBuilderWithArgument) AppendArgument(node *Argument) LiteralBuilderWithArgument {
+	return n.n.AppendArgument(node)
+}
+
+func (n LiteralBuilderWithArgument) AppendLiteral(node *Literal) LiteralBuilderWithLiteral {
+	return n.n.AppendLiteral(node)
+}
+
 func (n LiteralBuilderWithArgument) HandleFunc(f HandlerFunc) *Literal {
 	return n.n.HandleFunc(f)
 }
@@ -122,6 +138,14 @@ func (n ArgumentBuilderWithLiteral) Unhandle() *Argument {
 
 type ArgumentBuilderWithArgument struct {
 	n ArgumentBuilder
+}
+
+func (n ArgumentBuilderWithArgument) AppendArgument(node *Argument) ArgumentBuilderWithArgument {
+	return n.n.AppendArgument(node)
+}
+
+func (n ArgumentBuilderWithArgument) AppendLiteral(node *Literal) ArgumentBuilderWithLiteral {
+	return n.n.AppendLiteral(node)
 }
 
 func (n ArgumentBuilderWithArgument) HandleFunc(f HandlerFunc) *Argument {

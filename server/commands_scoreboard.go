@@ -46,7 +46,7 @@ func registerScoreboard(g *command.Graph) {
 		if len(args) == 0 {
 			return errScoreboardUsage
 		}
-		raw, _ := args[len(args)-1].(string)
+		raw := commandRaw(args)
 		f := strings.Fields(strings.TrimSpace(raw))
 		if len(f) == 0 {
 			return errScoreboardUsage
@@ -59,8 +59,46 @@ func registerScoreboard(g *command.Graph) {
 		}
 		return errScoreboardUsage
 	})
-	arg := g.Argument("action", command.StringParser(2)).HandleFunc(h)
-	g.AppendLiteral(g.Literal("scoreboard").AppendArgument(arg).Unhandle())
+	// ScoreboardCommand typed tree. The handler switches on the token stream, so we build the
+	// vanilla literal/typed leaves and route every terminal to h. objective id 24,
+	// objective_criteria id 25, scoreboard_slot id 30, score_holder id 31 (multiple), integer id 3.
+	// objectives add <name:word> <criteria:objective_criteria> [display:component]
+	objAddDisplay := g.Argument("displayName", command.ComponentParser()).HandleFunc(h)
+	objAddCrit := g.Argument("criteria", command.ObjectiveCriteriaParser()).AppendArgument(objAddDisplay).HandleFunc(h)
+	objAddName := g.Argument("objective", command.StringParser(0)).AppendArgument(objAddCrit).Unhandle()
+	// objectives remove <objective>
+	objRemove := g.Argument("objective", command.ObjectiveParser()).Suggests(command.SuggestObjective, "").HandleFunc(h)
+	// objectives setdisplay <slot:scoreboard_slot> [objective]
+	sdObj := g.Argument("objective", command.ObjectiveParser()).Suggests(command.SuggestObjective, "").HandleFunc(h)
+	sdSlot := g.Argument("slot", command.ScoreboardSlotParser()).AppendArgument(sdObj).HandleFunc(h)
+	objectives := g.Literal("objectives").
+		AppendLiteral(g.Literal("list").HandleFunc(h)).
+		AppendLiteral(g.Literal("add").AppendArgument(objAddName).Unhandle()).
+		AppendLiteral(g.Literal("remove").AppendArgument(objRemove).Unhandle()).
+		AppendLiteral(g.Literal("setdisplay").AppendArgument(sdSlot).Unhandle()).
+		Unhandle()
+	// players set|add|remove <targets:score_holder> <objective> <score:int>
+	mkScore := func() *command.Argument {
+		score := g.Argument("score", command.IntegerParser{}).HandleFunc(h)
+		obj := g.Argument("objective", command.ObjectiveParser()).Suggests(command.SuggestObjective, "").AppendArgument(score).Unhandle()
+		return g.Argument("targets", command.ScoreHolderParser{Multiple: true}).Suggests(command.SuggestPlayers, "").AppendArgument(obj).Unhandle()
+	}
+	// players reset <targets:score_holder> [objective]
+	resetObj := g.Argument("objective", command.ObjectiveParser()).Suggests(command.SuggestObjective, "").HandleFunc(h)
+	resetTargets := g.Argument("targets", command.ScoreHolderParser{Multiple: true}).Suggests(command.SuggestPlayers, "").AppendArgument(resetObj).HandleFunc(h)
+	// players list [target:score_holder]
+	listTarget := g.Argument("target", command.ScoreHolderParser{Multiple: true}).Suggests(command.SuggestPlayers, "").HandleFunc(h)
+	players := g.Literal("players").
+		AppendLiteral(g.Literal("set").AppendArgument(mkScore()).Unhandle()).
+		AppendLiteral(g.Literal("add").AppendArgument(mkScore()).Unhandle()).
+		AppendLiteral(g.Literal("remove").AppendArgument(mkScore()).Unhandle()).
+		AppendLiteral(g.Literal("reset").AppendArgument(resetTargets).Unhandle()).
+		AppendLiteral(g.Literal("list").AppendArgument(listTarget).HandleFunc(h)).
+		Unhandle()
+	g.AppendLiteral(g.Literal("scoreboard").
+		AppendLiteral(objectives).
+		AppendLiteral(players).
+		Unhandle())
 }
 
 // scoreboardObjectivesCmd handles /scoreboard objectives <add|remove|list|setdisplay>.
@@ -201,15 +239,36 @@ func registerTeam(g *command.Graph) {
 		if len(args) == 0 {
 			return errTeamUsage
 		}
-		raw, _ := args[len(args)-1].(string)
+		raw := commandRaw(args)
 		f := strings.Fields(strings.TrimSpace(raw))
 		if len(f) == 0 {
 			return errTeamUsage
 		}
 		return e.teamCmd(f)
 	})
-	arg := g.Argument("action", command.StringParser(2)).HandleFunc(h)
-	g.AppendLiteral(g.Literal("team").AppendArgument(arg).Unhandle())
+	// TeamCommand typed tree. team id 33 (no props), score_holder id 31, team_color id 16,
+	// component id 18. The handler reads the token stream, so all terminals run h.
+	addDisplay := g.Argument("displayName", command.ComponentParser()).HandleFunc(h)
+	addName := g.Argument("team", command.StringParser(0)).AppendArgument(addDisplay).HandleFunc(h)
+	removeTeam := g.Argument("team", command.TeamParser()).Suggests(command.SuggestTeam, "").HandleFunc(h)
+	emptyTeam := g.Argument("team", command.TeamParser()).Suggests(command.SuggestTeam, "").HandleFunc(h)
+	joinMembers := g.Argument("members", command.ScoreHolderParser{Multiple: true}).Suggests(command.SuggestPlayers, "").HandleFunc(h)
+	joinTeam := g.Argument("team", command.TeamParser()).Suggests(command.SuggestTeam, "").AppendArgument(joinMembers).HandleFunc(h)
+	leaveMembers := g.Argument("members", command.ScoreHolderParser{Multiple: true}).Suggests(command.SuggestPlayers, "").HandleFunc(h)
+	listTeam := g.Argument("team", command.TeamParser()).Suggests(command.SuggestTeam, "").HandleFunc(h)
+	// modify <team> <option> <value> -- value is option-dependent; word is a safe brigadier:string.
+	modValue := g.Argument("value", command.StringParser(2)).HandleFunc(h)
+	modOption := g.Argument("option", command.StringParser(0)).AppendArgument(modValue).Unhandle()
+	modTeam := g.Argument("team", command.TeamParser()).Suggests(command.SuggestTeam, "").AppendArgument(modOption).Unhandle()
+	g.AppendLiteral(g.Literal("team").
+		AppendLiteral(g.Literal("list").AppendArgument(listTeam).HandleFunc(h)).
+		AppendLiteral(g.Literal("add").AppendArgument(addName).Unhandle()).
+		AppendLiteral(g.Literal("remove").AppendArgument(removeTeam).Unhandle()).
+		AppendLiteral(g.Literal("empty").AppendArgument(emptyTeam).Unhandle()).
+		AppendLiteral(g.Literal("join").AppendArgument(joinTeam).Unhandle()).
+		AppendLiteral(g.Literal("leave").AppendArgument(leaveMembers).Unhandle()).
+		AppendLiteral(g.Literal("modify").AppendArgument(modTeam).Unhandle()).
+		Unhandle())
 }
 
 // teamCmd handles the /team subcommands.
