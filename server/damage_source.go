@@ -178,6 +178,16 @@ type damageSource struct {
 	// the bone into the skill-condition context (the hit_bone condition -> headshot skills). Every
 	// vanilla/non-model damage path leaves it "" (the zero value) -> the pig oracle is byte-identical.
 	hitBone string
+	// sourceX/sourceZ/hasSourcePos port DamageSource.getSourcePosition() for a PROJECTILE hit: vanilla
+	// returns `directEntity != null ? directEntity.position() : null`, and for a thrown projectile the
+	// direct entity is the PROJECTILE (not the shooter), so the knockback pushes the victim away from the
+	// projectile's impact point -- NOT the distant shooter. A melee/environmental source leaves hasSourcePos
+	// false (the zero value): dealDefaultKnockbackEntity then falls back to the attacker's position exactly
+	// as before, so every existing path (and the pig oracle) is byte-identical. Only the projectile
+	// constructors (snowball / llama-spit) set these to the projectile's (x,z) at impact. Cite
+	// DamageSource.getSourcePosition (directEntity.position()).
+	sourceX, sourceZ float64
+	hasSourcePos     bool
 }
 
 // is is the port of DamageSource.is(TagKey<DamageType>) == type.is(tag): the source's damage-type id

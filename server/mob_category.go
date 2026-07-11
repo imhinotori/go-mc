@@ -168,6 +168,12 @@ func categoryOf(t entity.ID) mobCategory {
 		// MOB-HOST-05 (Task #9): Silverfish is MobCategory.MONSTER (vanilla EntityType.SILVERFISH;
 		// data/entity Silverfish.Type == "monster"). Same MONSTER-budget accounting as the zombie.
 		return categoryMonster
+	case entity.Blaze.ID:
+		// Blaze extends Monster (net.minecraft.world.entity.monster.Blaze -> Monster) == MobCategory.MONSTER.
+		// It was defaulting to categoryMisc, so the Enemy-proxy target scans (iron/snow golem) never acquired
+		// a blaze even though Blaze IS an Enemy; classifying it MONSTER fixes the acquisition (the snow-golem
+		// blaze-3 snowball hit path was already wired). Cite EntityType.BLAZE (MobCategory.MONSTER).
+		return categoryMonster
 	case entity.Creeper.ID:
 		// MOB-HOST-06 (Task #9): Creeper is MobCategory.MONSTER (vanilla EntityType.CREEPER; data/entity
 		// Creeper.Type == "monster"). Same MONSTER-budget accounting as the zombie.

@@ -635,14 +635,23 @@ func (t *TickLoop) dealDefaultKnockbackEntity(e *Entity, src damageSource) {
 	// only the getSourcePosition()!=null branch can set them.
 	var xd, zd float64
 
-	// source.getSourcePosition(): for a melee hit the directEntity == the attacker, whose position is
-	// (attacker.x, attacker.z). Resolve the attacker tickPlayer; a nil resolve (no attacker / departed)
-	// leaves the source position "null" (xd==zd==0), exactly as getSourcePosition returns null when
-	// there is no damageSourcePosition and no directEntity.
-	if src.attacker != 0 {
+	// source.getSourcePosition(): for a PROJECTILE hit the directEntity is the projectile, whose (x,z) the
+	// constructor stamped into sourceX/sourceZ -- push the victim away from the impact point, not the distant
+	// shooter (snowball / llama-spit). This is checked FIRST, matching getSourcePosition's directEntity
+	// .position() branch. For a melee hit the directEntity == the attacker, whose position is (attacker.x,
+	// attacker.z); resolve the attacker tickPlayer OR (mob-vs-mob, R1) the attacker entity. A nil resolve
+	// (no attacker / departed) leaves the source position "null" (xd==zd==0), exactly as getSourcePosition
+	// returns null when there is no damageSourcePosition and no directEntity.
+	if src.hasSourcePos {
+		xd = src.sourceX - e.x
+		zd = src.sourceZ - e.z
+	} else if src.attacker != 0 {
 		if attacker := t.playerByEntityID(src.attacker); attacker != nil {
 			xd = attacker.x - e.x
 			zd = attacker.z - e.z
+		} else if am, ok := t.cur().entities.get(src.attacker); ok && am != nil {
+			xd = am.x - e.x // mob-vs-mob (R1): the attacker mob's position
+			zd = am.z - e.z
 		}
 	}
 

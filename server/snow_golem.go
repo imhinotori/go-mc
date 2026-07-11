@@ -448,20 +448,16 @@ func (t *TickLoop) snowballFindHitMobVictim(e *Entity, ox, oy, oz, nx, ny, nz fl
 // runs on a fresh (tookFullDamage) hit -- including a 0-damage snowball, since dealDefaultKnockback is
 // gated on !NO_KNOCKBACK (the `thrown` type is NOT a NO_KNOCKBACK member), NOT on the damage amount.
 //
-// DIRECTION deferral (cited, not silently dropped): vanilla LivingEntity.dealDefaultKnockback resolves
-// getSourcePosition() from the directEntity (the SNOWBALL) and pushes the victim away from the snowball's
-// impact position. The shared dealDefaultKnockbackEntity currently resolves a source position only for a
-// PLAYER attacker (combat_mob.go, which this file does not own); a golem/projectile source leaves
-// xd==zd==0, so the shared path applies knockback in a small RANDOM direction (the xd^2+zd^2<1e-5 nudge
-// guard) rather than radially away from the snowball. The MAGNITUDE (0.4) is exact; only the DIRECTION is
-// the nudge stub until dealDefaultKnockbackEntity gains the projectile/source-position branch (at which
-// point this snowball hit becomes byte-exact with zero change here -- the source already carries the
-// golem/thrown attribution). Cite Snowball.onHitEntity + LivingEntity.dealDefaultKnockback.
+// DIRECTION (Snowball.onHitEntity -> dealDefaultKnockback getSourcePosition == the SNOWBALL's position):
+// the source carries the projectile's (x,z) at impact (hasSourcePos), so dealDefaultKnockbackEntity pushes
+// the victim radially AWAY from the snowball -- not the distant golem. Cite Snowball.onHitEntity +
+// LivingEntity.dealDefaultKnockback (getSourcePosition -> directEntity.position()).
 func (t *TickLoop) snowballOnHitMob(e *Entity, victim *Entity) {
 	damage := snowballDefaultDamage
 	if victim.typ == entity.Blaze.ID {
 		damage = snowballBlazeDamage
 	}
 	src := damageSourceThrown(e.throwOwnerID)
+	src.sourceX, src.sourceZ, src.hasSourcePos = e.x, e.z, true // directEntity (snowball) position at impact
 	t.applyDamageEntity(victim, src, float32(damage))
 }
