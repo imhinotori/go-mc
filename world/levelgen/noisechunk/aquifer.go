@@ -6,6 +6,7 @@ import (
 	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/world/levelgen"
+	"github.com/imhinotori/sulfur/world/levelgen/carver"
 	"github.com/imhinotori/sulfur/world/levelgen/density"
 	"github.com/imhinotori/sulfur/world/levelgen/router"
 )
@@ -94,7 +95,29 @@ type Aquifer struct {
 	// cave/aquifer water flow into a bordering air gap. Restored from the earlier "baked away"
 	// drop (the value is now a real read the fill pass consumes — never a hardcoded constant).
 	shouldScheduleFluidUpdate bool
+
+	// lastKind records the substanceKind of the LAST computeSubstance call so the fill path can
+	// ask LastWasNull() to tell a real AIR substance (place air) apart from a null barrier (keep
+	// the default solid block) -- both of which the (block.StateID, bool) wrapper reports as
+	// (0, false). Mirrors reading getInterpolatedState()==null in NoiseBasedChunkGenerator.doFill.
+	lastKind substanceKind
 }
+
+// substanceKind is the tri-state result of computeSubstanceKind, mirroring what
+// Aquifer$NoiseBasedAquifer.computeSubstance returns: a real BlockState (substState -- water,
+// lava, or a real AIR block) OR Java null (substNull). A null return is NOT air: it means "keep
+// the default" -- the fill's material-rule chain falls through to the default solid block, and the
+// carver skips the write, so the solid barrier survives. Collapsing null into "air" (the earlier
+// bug) let carvers breach aquifer barriers and let fill place air where vanilla keeps stone.
+type substanceKind uint8
+
+const (
+	// substNull == Java null: keep the default (solid barrier). Returned by the density>0
+	// short-circuit and the barrier-pressure branches.
+	substNull substanceKind = iota
+	// substState == a real BlockState (water/lava/air): placed verbatim.
+	substState
+)
 
 // flowingUpdateSimilarity ports NoiseBasedAquifer.FLOWING_UPDATE_SIMULARITY =
 // similarity(Mth.square(10), Mth.square(12)) = similarity(100, 144) = 1 - 44/25 = -0.76.
@@ -285,28 +308,33 @@ func (a *Aquifer) globalComputeFluid(y int) fluidStatus {
 	return a.waterFluid
 }
 
-// computeSubstance ports NoiseBasedAquifer.computeSubstance(ctx, density). For a SOLID
-// block (density>0) it returns (0,false) — the caller places stone/deepslate/ore. For a
-// NON-SOLID block it samples the surrounding aquifer grid, picks/interpolates the winning
-// fluid status, and returns its at(y) substance. A returned air substance is reported as
-// (air,false)-equivalent: we return (state, true) ONLY when the substance is a real fluid
-// (water/lava); air results return (0,false) so the fill keeps default air. This matches
-// vanilla returning AIR vs a fluid BlockState (the fill writes AIR either way).
-func (a *Aquifer) computeSubstance(blockX, blockY, blockZ int, dens float64) (block.StateID, bool) {
+// computeSubstanceKind ports NoiseBasedAquifer.computeSubstance(ctx, density) with its TRUE
+// tri-state return. For a SOLID block (density>0) it returns substNull (vanilla aconst_null: keep
+// the default -> the caller places stone/deepslate/ore). For a NON-SOLID block it samples the
+// surrounding aquifer grid, picks/interpolates the winning fluid status, and returns either a real
+// substance (substState -- water, lava, or a real AIR block, from FluidStatus.at) or substNull when
+// the barrier pressure wins (bytecode 719/778/829 aconst_null). A substNull is NOT air: it means
+// "keep the default" -- fill falls through to the default solid block and the carver skips the write,
+// so the aquifer barrier survives. The fill/carve seams (computeSubstance wrapper + LastWasNull,
+// CarveFluid) map this tri-state to what each caller needs. CITE: Aquifer$NoiseBasedAquifer.computeSubstance.
+func (a *Aquifer) computeSubstanceKind(blockX, blockY, blockZ int, dens float64) (block.StateID, substanceKind) {
 	if dens > 0 {
 		a.shouldScheduleFluidUpdate = false // bytecode 6-8
-		return 0, false
+		return 0, substNull                 // aconst_null (bytecode 11-12): keep the solid barrier
 	}
 
 	// DisabledAquifer.computeSubstance (Aquifer.createDisabled): no grid sampling — a non-solid cell
 	// is the global fluid picker's fluid at y. For the nether the picker is `y < seaLevel ? lava : air`
 	// (default_fluid == lava), so below sea level (32) the cell is lava, above it is air.
 	if a.disabled {
+		// DisabledAquifer (Aquifer$1) returns fluidPicker.computeFluid(x,y,z).at(y): below the sea the
+		// default fluid (lava for the nether), above it Blocks.AIR -- a real BlockState either way, NEVER
+		// null. (Only the density>0 short-circuit above returns null in the disabled aquifer.)
 		a.shouldScheduleFluidUpdate = false
 		if blockY < a.seaLevel {
-			return a.disabledFluid, true
+			return a.disabledFluid, substState
 		}
-		return 0, false // air above the sea
+		return a.air, substState // air above the sea (a real AIR block, not a null barrier)
 	}
 
 	global := a.globalComputeFluid(blockY)
@@ -314,13 +342,13 @@ func (a *Aquifer) computeSubstance(blockX, blockY, blockZ int, dens float64) (bl
 	if blockY > a.skipSamplingAboveY {
 		// Above the surface: just the global status; no aquifer sampling. (bytecode 63-65)
 		a.shouldScheduleFluidUpdate = false
-		return a.fluidResult(a.statusAt(global, blockY))
+		return a.stateResult(a.statusAt(global, blockY))
 	}
 
 	// If the global status itself is lava at this y, it is lava (DEBUG off path). (bytecode 92-94)
 	if a.statusAt(global, blockY) == a.lava {
 		a.shouldScheduleFluidUpdate = false
-		return a.fluidResult(a.lava)
+		return a.stateResult(a.lava)
 	}
 
 	gx := gridX(blockX + aqSampleOffsetX)
@@ -391,7 +419,7 @@ func (a *Aquifer) computeSubstance(blockX, blockY, blockZ int, dens float64) (bl
 			status2 := a.getAquiferStatus(idx2)
 			a.shouldScheduleFluidUpdate = !statusEqual(status1, status2)
 		}
-		return a.fluidResult(sub1)
+		return a.stateResult(sub1)
 	}
 
 	// Water-over-lava boundary: a water aquifer immediately above lava stays water. (bytecode
@@ -400,7 +428,7 @@ func (a *Aquifer) computeSubstance(blockX, blockY, blockZ int, dens float64) (bl
 		below := a.globalComputeFluid(blockY - 1)
 		if a.statusAt(below, blockY-1) == a.lava {
 			a.shouldScheduleFluidUpdate = true
-			return a.fluidResult(sub1)
+			return a.stateResult(sub1)
 		}
 	}
 
@@ -413,7 +441,7 @@ func (a *Aquifer) computeSubstance(blockX, blockY, blockZ int, dens float64) (bl
 	pressure12 := sim12 * a.calculatePressure(blockX, blockY, blockZ, &barrier, status1, status2)
 	if dens+pressure12 > 0 {
 		a.shouldScheduleFluidUpdate = false
-		return a.fluidResult(0) // air wins (no fluid)
+		return 0, substNull // barrier pressure wins -> aconst_null (bytecode 719): keep the solid barrier
 	}
 
 	status3 := a.getAquiferStatus(idx3)
@@ -422,7 +450,7 @@ func (a *Aquifer) computeSubstance(blockX, blockY, blockZ int, dens float64) (bl
 		pressure13 := sim12 * sim13 * a.calculatePressure(blockX, blockY, blockZ, &barrier, status1, status3)
 		if dens+pressure13 > 0 {
 			a.shouldScheduleFluidUpdate = false
-			return a.fluidResult(0)
+			return 0, substNull // barrier pressure wins -> aconst_null (bytecode 778/829): keep the solid barrier
 		}
 	}
 
@@ -431,7 +459,7 @@ func (a *Aquifer) computeSubstance(blockX, blockY, blockZ int, dens float64) (bl
 		pressure23 := sim12 * sim23 * a.calculatePressure(blockX, blockY, blockZ, &barrier, status2, status3)
 		if dens+pressure23 > 0 {
 			a.shouldScheduleFluidUpdate = false
-			return a.fluidResult(0)
+			return 0, substNull // barrier pressure wins -> aconst_null (bytecode 778/829): keep the solid barrier
 		}
 	}
 
@@ -454,7 +482,7 @@ func (a *Aquifer) computeSubstance(blockX, blockY, blockZ int, dens float64) (bl
 		a.shouldScheduleFluidUpdate = sim13 >= flowingUpdateSimilarity &&
 			sim14 >= flowingUpdateSimilarity && !statusEqual(status1, status4)
 	}
-	return a.fluidResult(sub1)
+	return a.stateResult(sub1)
 }
 
 // statusEqual ports Aquifer$FluidStatus.equals (the record equality used by the flag logic):
@@ -463,25 +491,64 @@ func statusEqual(a, b fluidStatus) bool {
 	return a.fluidLevel == b.fluidLevel && a.fluidType == b.fluidType
 }
 
-// CarveFluid is the Wave-8 carver seam: it answers "what fluid (if any) does the aquifer
-// place at this carved position?" by running computeSubstance at density 0 — the same
-// query NoiseBasedChunkGenerator.applyCarvers feeds the WorldCarver's getCarveState
-// (Aquifer.computeSubstance(pos, 0)) so a carve below the local water table floods (water/
-// lava) and a carve above it is air. It satisfies carver.FluidSource so the Generator can
-// wire the real Wave-5 aquifer into the Wave-6 carve pass (vs the test FluidSource doubles).
-// ok=false means air (no fluid); ok=true with water/lava floods the carved block.
-func (a *Aquifer) CarveFluid(blockX, blockY, blockZ int) (block.StateID, bool) {
-	return a.computeSubstance(blockX, blockY, blockZ, 0)
+// CarveFluid is the Wave-8 carver seam. It runs the aquifer's tri-state computeSubstance at
+// density 0 -- the SAME query NoiseBasedChunkGenerator.applyCarvers feeds WorldCarver.getCarveState
+// (Aquifer.computeSubstance(pos, 0)). getCarveState returns the substance VERBATIM, and carveBlock
+// skips the write when it is null. So the carve seam must preserve all THREE outcomes vanilla
+// distinguishes -- a real fluid, a real AIR block, and null (keep the solid barrier) -- because a
+// null substance means "leave the stone" (bytecode Aquifer$NoiseBasedAquifer.computeSubstance
+// returns aconst_null in the barrier-pressure branches) and MUST NOT be carved to air.
+//
+// It satisfies carver.FluidSource so the Generator wires the real Wave-5 aquifer into the Wave-6
+// carve pass (vs the test FluidSource doubles). CITE: WorldCarver.getCarveState/carveBlock,
+// Aquifer$NoiseBasedAquifer.computeSubstance.
+func (a *Aquifer) CarveFluid(blockX, blockY, blockZ int) (block.StateID, carver.CarveKind) {
+	st, kind := a.computeSubstanceKind(blockX, blockY, blockZ, 0)
+	switch kind {
+	case substNull:
+		return 0, carver.CarveKeepSolid
+	case substState:
+		if st == a.water || st == a.lava {
+			return st, carver.CarveFluidState
+		}
+		// A real AIR (or other non-fluid) BlockState -- getCarveState returns it verbatim, so the
+		// carve places that state (vanilla FluidStatus.at returns Blocks.AIR above the fluid level).
+		return st, carver.CarveAir
+	default:
+		return 0, carver.CarveKeepSolid
+	}
 }
 
-// fluidResult maps a substance state id to the (state, isFluid) the fill consumes: a real
-// fluid (water/lava) -> (state, true); air (or the 0 marker) -> (0, false) so the caller
-// keeps default air. computeSubstance internally passes 0 to mean "air wins".
-func (a *Aquifer) fluidResult(state block.StateID) (block.StateID, bool) {
-	if state == a.water || state == a.lava {
-		return state, true
+// computeSubstance is the fill-facing wrapper over the tri-state computeSubstanceKind: it maps a
+// real FLUID substance to (state, true) and everything else -- a real AIR block OR a null barrier
+// -- to (0, false). The fill path (blockState) treats a non-fluid, non-solid result identically to
+// vanilla's doFill: a null substance falls through the material-rule chain to the default block,
+// which for a non-solid cell means the barrier stays stone; the isNull distinction the fill needs
+// is exposed separately via LastWasNull. Kept as (block.StateID, bool) so the existing tests and
+// the fill call sites read unchanged.
+func (a *Aquifer) computeSubstance(blockX, blockY, blockZ int, dens float64) (block.StateID, bool) {
+	st, kind := a.computeSubstanceKind(blockX, blockY, blockZ, dens)
+	a.lastKind = kind
+	if kind == substState && (st == a.water || st == a.lava) {
+		return st, true
 	}
 	return 0, false
+}
+
+// LastWasNull reports whether the LAST computeSubstance call resolved to a null substance -- the
+// barrier-pressure branches (and the density>0 solid short-circuit) where vanilla returns
+// aconst_null. The fill path reads it to keep the default solid block instead of writing air, and
+// so distinguishes a real AIR substance (place air) from a null barrier (keep stone), exactly as
+// NoiseBasedChunkGenerator.doFill maps a null getInterpolatedState to defaultBlock. CITE:
+// NoiseBasedChunkGenerator.doFill (getInterpolatedState null -> defaultBlock).
+func (a *Aquifer) LastWasNull() bool { return a.lastKind == substNull }
+
+// stateResult wraps a real (non-null) substance BlockState from computeSubstanceKind: the state is
+// returned verbatim with substState. It is water, lava, or a real AIR block -- NEVER null. (Vanilla
+// computeSubstance returns aconst_null only from the density>0 and barrier-pressure branches, which
+// return substNull directly.)
+func (a *Aquifer) stateResult(state block.StateID) (block.StateID, substanceKind) {
+	return state, substState
 }
 
 // similarity ports similarity(distA, distB) = 1 - |distB - distA| / 25.0. Note the

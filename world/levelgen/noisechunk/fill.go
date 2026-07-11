@@ -131,8 +131,8 @@ func blockState(
 
 	d := nc.FinalDensity(lx, y, lz)
 
-	// Rule 1: the aquifer base rule. For a non-solid block it returns a real fluid
-	// (water/lava) or "air" (reported as not-a-fluid here). A returned fluid wins.
+	// Rule 1: the aquifer base rule (NoiseChunk.blockStateRule[0]). For a non-solid block it
+	// returns a real fluid (water/lava), a real AIR block, or Java null. A returned fluid wins.
 	if st, isFluid := aq.computeSubstance(wx, y, wz, d); isFluid {
 		// fillFromNoise marks the cell for post-processing when the aquifer flagged it as an
 		// unstable fluid border (shouldScheduleFluidUpdate) AND the placed state is a fluid —
@@ -143,9 +143,23 @@ func blockState(
 		return st
 	}
 
-	if d > 0 {
-		// SOLID: Rule 2 = ore veinifier (a vein block overrides the default rock). The nether passes a
-		// disabled veinifier (ore_veins_enabled:false), so vein() never fires there.
+	// The aquifer rule returned a NON-fluid: either a real AIR block or Java null. When it is null
+	// (LastWasNull) the MaterialRuleList falls through to the next rule (ore veinifier, then the
+	// default block), exactly as MaterialRuleList.calculate returns the first non-null and
+	// NoiseBasedChunkGenerator.doFill maps a null getInterpolatedState to defaultBlock. A null on a
+	// non-solid cell is the aquifer BARRIER -> it must stay the default SOLID block, NOT air.
+	// (bytecode: computeSubstance returns aconst_null in the barrier-pressure branches; doFill line
+	// 354-372: getInterpolatedState()==null -> settings.defaultBlock().)
+	aquiferNull := aq.LastWasNull()
+
+	if d > 0 || aquiferNull {
+		// SOLID (density>0), OR a null aquifer barrier on a non-solid cell: fall to the ore
+		// veinifier then the default solid block.
+		// Rule 2 = ore veinifier (NoiseChunk.blockStateRule[1]). Vanilla's MaterialRuleList runs it
+		// for ANY cell where rule[0] (the aquifer) returned null -- it keys off the vein_toggle/
+		// vein_ridged/vein_gap noises + oreRandom, NOT the terrain density, so it can fire on a null
+		// non-solid barrier cell exactly as it does on a solid cell. If it returns null too, fall
+		// through to Rule 3. (This matches vanilla calling the veinifier only on the aquifer-null path.)
 		if st, ok := ov.vein(wx, y, wz); ok {
 			return st
 		}
@@ -157,7 +171,7 @@ func blockState(
 		return fp.defaultBlock
 	}
 
-	// NON-SOLID with no aquifer fluid -> air (dry cave / above the water table).
+	// NON-SOLID with a real AIR substance (dry cave / above the water table) -> air.
 	return nc.air
 }
 

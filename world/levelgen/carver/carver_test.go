@@ -14,13 +14,13 @@ import (
 // outside the 16x16 column are dropped (mirroring the real generator's footprint
 // bound). It records carved positions for assertions.
 type solidChunk struct {
-	pos    level.ChunkPos
-	minY   int
-	height int
-	blocks map[[3]int]block.StateID
-	stone  block.StateID
+	pos     level.ChunkPos
+	minY    int
+	height  int
+	blocks  map[[3]int]block.StateID
+	stone   block.StateID
 	bedrock block.StateID
-	marks  [][3]int // positions flagged via MarkFluidPostProcess (for assertions)
+	marks   [][3]int // positions flagged via MarkFluidPostProcess (for assertions)
 }
 
 func newSolidChunk(pos level.ChunkPos, minY, height int) *solidChunk {
@@ -37,7 +37,7 @@ func newSolidChunk(pos level.ChunkPos, minY, height int) *solidChunk {
 
 func (c *solidChunk) Pos() level.ChunkPos { return c.pos }
 func (c *solidChunk) MinY() int           { return c.minY }
-func (c *solidChunk) Height() int          { return c.height }
+func (c *solidChunk) Height() int         { return c.height }
 
 func (c *solidChunk) inFootprint(wx, wz int) bool {
 	baseX := int(c.pos[0]) * 16
@@ -81,29 +81,39 @@ func (c *solidChunk) countCarvedTo(states ...block.StateID) int {
 	return n
 }
 
-// dryFluid is a FluidSource that always returns air (above the water table).
+// dryFluid is a FluidSource that always returns a real AIR substance (above the water table):
+// carve it as air, never a keep-solid barrier.
 type dryFluid struct{}
 
-func (dryFluid) CarveFluid(wx, wy, wz int) (block.StateID, bool) { return 0, false }
-func (dryFluid) ShouldScheduleFluidUpdate() bool                 { return false }
+func (dryFluid) CarveFluid(wx, wy, wz int) (block.StateID, CarveKind) { return 0, CarveAir }
+func (dryFluid) ShouldScheduleFluidUpdate() bool                      { return false }
 
 // floodBelow is a FluidSource with a flat water table at level: any carve below
-// `level` floods with water, at/above is air.
+// `level` floods with water, at/above is a real air substance.
 type floodBelow struct {
 	level int
 	water block.StateID
 }
 
-func (f floodBelow) CarveFluid(wx, wy, wz int) (block.StateID, bool) {
+func (f floodBelow) CarveFluid(wx, wy, wz int) (block.StateID, CarveKind) {
 	if wy < f.level {
-		return f.water, true
+		return f.water, CarveFluidState
 	}
-	return 0, false
+	return 0, CarveAir
 }
 
 // ShouldScheduleFluidUpdate: the test flood table treats every flooded carve as a border (so
 // carve tests that flood can assert MarkFluidPostProcess fires). The real aquifer is selective.
 func (f floodBelow) ShouldScheduleFluidUpdate() bool { return true }
+
+// barrierFluid is a FluidSource that always reports CarveKeepSolid -- the aquifer barrier (vanilla
+// computeSubstance returning null in a barrier-pressure branch). getCarveState must return null so
+// WorldCarver.carveBlock SKIPS the write and the solid block survives; the carver must NOT breach
+// it to cave_air. This is the BUG-2 regression guard.
+type barrierFluid struct{}
+
+func (barrierFluid) CarveFluid(wx, wy, wz int) (block.StateID, CarveKind) { return 0, CarveKeepSolid }
+func (barrierFluid) ShouldScheduleFluidUpdate() bool                      { return false }
 
 const testSeed = int64(123456789)
 
@@ -336,6 +346,58 @@ func TestCarverAquiferAware(t *testing.T) {
 	}
 	if foundAirMark {
 		t.Error("dry cave_air carve at y=40 was marked for post-process (only fluid cells mark)")
+	}
+}
+
+// TestCarverBarrierStaysSolid is the BUG-2 regression: when the aquifer reports CarveKeepSolid
+// (vanilla computeSubstance returned null in a barrier-pressure branch), WorldCarver.getCarveState
+// returns null and carveBlock leaves the existing SOLID block -- the carve must NOT breach the
+// aquifer barrier by writing cave_air. Before the fix, a null substance was carved to cave_air,
+// letting caves/ravines punch through the rock separating water/lava pockets.
+//
+// CITE: WorldCarver.getCarveState (computeSubstance(pos,0.0); null -> return null) + WorldCarver.
+// carveBlock (`if (state == null) return false` -- no setBlockState).
+func TestCarverBarrierStaysSolid(t *testing.T) {
+	rep, err := ParseReplaceables()
+	if err != nil {
+		t.Fatalf("parse replaceables: %v", err)
+	}
+	caveAir := block.ToStateID[block.CaveAir{}]
+	stone := block.ToStateID[block.Stone{}]
+
+	ch := newSolidChunk(level.ChunkPos{0, 0}, -64, 384)
+	mask := newCarvingMask(ch.MinY(), ch.Height())
+	// LavaLevel far below so getCarveState does NOT short-circuit to lava; the aquifer barrier
+	// double then drives the null (keep-solid) path.
+	cfg := &CarverConfig{LavaLevel: verticalAnchor{aboveBottom: true, value: -100000}}
+	cc := &carveContext{
+		chunk: ch, mask: mask, rep: rep,
+		fluid:   barrierFluid{},
+		air:     block.ToStateID[block.Air{}],
+		caveAir: caveAir,
+		water:   block.ToStateID[block.Water{Level: 0}],
+		lava:    block.ToStateID[block.Lava{Level: 0}],
+		minGenY: ch.MinY(),
+	}
+
+	// getCarveState at a barrier cell must report "do not carve" (the null return).
+	if st, doCarve := cc.getCarveState(cfg, 5, 20, 5); doCarve {
+		t.Fatalf("getCarveState at a barrier cell returned doCarve=true (state=%v) - a null substance "+
+			"must skip the write and keep the solid barrier", st)
+	}
+
+	// carveBlock must return false and leave the block SOLID (unchanged stone), not cave_air.
+	if cc.carveBlock(cfg, 5, 20, 5) {
+		t.Fatal("carveBlock at a barrier cell returned true - it must skip the write when the aquifer keeps solid")
+	}
+	if got := ch.Get(5, 20, 5); got != stone {
+		t.Fatalf("barrier cell was carved: got %v, want stone %v (the barrier must survive)", got, stone)
+	}
+	if _, wasSet := ch.blocks[[3]int{5, 20, 5}]; wasSet {
+		t.Fatal("barrier cell was written to the chunk - carveBlock must not setBlockState on a null substance")
+	}
+	if n := ch.countCarvedTo(caveAir); n != 0 {
+		t.Fatalf("carved %d cells to cave_air at a barrier - expected 0 (no breach)", n)
 	}
 }
 

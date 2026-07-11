@@ -50,6 +50,47 @@ func NewNormalNoise(rs levelgen.RandomSource, firstOctave int, amplitudes []floa
 	return n
 }
 
+// NewNormalNoiseLegacyNetherBiome mirrors NormalNoise.createLegacyNetherBiome(rs, params)
+// = new NormalNoise(rs, params, /*useLegacyNetherBiome=*/false). It is IDENTICAL to
+// NewNormalNoise except the two PerlinNoise octave stacks are built via the LEGACY
+// sequential seeding path (PerlinNoise.createLegacyForLegacyNetherBiome -> the ctor's
+// boolean-false branch: one shared ImprovedNoise + skipOctave walk) instead of the
+// modern positional fromHashOf("octave_N") path. The valueFactor/maxValue derivation is
+// unchanged (the ctor's amplitude-span logic runs after the branch). Used by the legacy
+// dimensions' nether biome climate noises (Noises.TEMPERATURE_NETHER / VEGETATION_NETHER),
+// which RandomState$1NoiseWiringHelper.visitNoise wires as
+// createLegacyNetherBiome(new LegacyRandomSource(seed+0|+1), params).
+//
+// Source (javap -c, 26.2-inner.jar):
+//   - net.minecraft.world.level.levelgen.synth.NormalNoise.createLegacyNetherBiome
+//     (new NormalNoise(rs, params, false))
+//   - net.minecraft.world.level.levelgen.synth.NormalNoise.<init>(rs, params, false)
+//     (the else branch: PerlinNoise.createLegacyForLegacyNetherBiome for first + second)
+//   - net.minecraft.world.level.levelgen.synth.PerlinNoise.createLegacyForLegacyNetherBiome
+//     (new PerlinNoise(rs, Pair.of(firstOctave, amplitudes), false))
+func NewNormalNoiseLegacyNetherBiome(rs levelgen.RandomSource, firstOctave int, amplitudes []float64) *NormalNoise {
+	n := &NormalNoise{firstOctave: firstOctave, amplitudes: amplitudes}
+	n.first = newPerlinNoise(rs, firstOctave, amplitudes, false)
+	n.second = newPerlinNoise(rs, firstOctave, amplitudes, false)
+
+	// Span of indices with non-zero amplitude (Java: min/max over the list) -- identical to
+	// NewNormalNoise (this block runs regardless of the useLegacyNetherBiome branch).
+	jMin, jMax := math.MaxInt32, math.MinInt32
+	for i, a := range amplitudes {
+		if a != 0 {
+			if i < jMin {
+				jMin = i
+			}
+			if i > jMax {
+				jMax = i
+			}
+		}
+	}
+	n.valueFactor = (1.0 / 6.0) / expectedDeviation(jMax-jMin)
+	n.maxValue = (n.first.MaxValue() + n.second.MaxValue()) * n.valueFactor
+	return n
+}
+
 // GetValue samples the normalized noise (NormalNoise.getValue):
 // (first(x,y,z) + second(x*INPUT_FACTOR, y*INPUT_FACTOR, z*INPUT_FACTOR)) * valueFactor.
 func (n *NormalNoise) GetValue(x, y, z float64) float64 {

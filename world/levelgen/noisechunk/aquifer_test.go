@@ -187,3 +187,67 @@ func TestGlobalComputeFluidLavaBelowMinus54(t *testing.T) {
 		t.Fatalf("globalComputeFluid(0).fluidType = %v, want water (y=0 >= -54)", atSea.fluidType)
 	}
 }
+
+// TestAquiferNullVsAirDistinction is the BUG-2 fill-side regression: the aquifer must distinguish a
+// null substance (LastWasNull -> keep the default SOLID block) from a real AIR substance
+// (LastWasNull false -> place air). A SOLID cell (density>0) is vanilla's aconst_null short-circuit,
+// so computeSubstance reports LastWasNull()==true; a non-solid dry cell resolves to a real AIR block,
+// so LastWasNull()==false. Collapsing the two (the earlier bug) let fill place air where vanilla
+// keeps the default block, and let carvers breach barriers. CITE: NoiseBasedAquifer.computeSubstance
+// (density>0 -> aconst_null) + FluidStatus.at (>= level -> Blocks.AIR, a real state, not null).
+func TestAquiferNullVsAirDistinction(t *testing.T) {
+	_, nc, aq := buildAquifer(t, 0, 0)
+
+	// A SOLID cell: density>0 -> computeSubstance returns null (keep default). LastWasNull must be true.
+	sawSolidNull := false
+	for lx := 0; lx < 16 && !sawSolidNull; lx++ {
+		for lz := 0; lz < 16 && !sawSolidNull; lz++ {
+			for y := nc.MinY() + 1; y < nc.MinY()+nc.Height(); y++ {
+				d := nc.FinalDensity(lx, y, lz)
+				if d <= 0 {
+					continue
+				}
+				st, isFluid := aq.computeSubstance(nc.WorldX(lx), y, nc.WorldZ(lz), d)
+				if isFluid || st != 0 {
+					t.Fatalf("solid cell (d=%v) returned a fluid/state (%v,%v); want (0,false)", d, st, isFluid)
+				}
+				if !aq.LastWasNull() {
+					t.Fatalf("solid cell (d=%v) LastWasNull()=false; a density>0 short-circuit is aconst_null (keep default)", d)
+				}
+				sawSolidNull = true
+				break
+			}
+		}
+	}
+	if !sawSolidNull {
+		t.Fatal("no solid cell found to exercise the null short-circuit")
+	}
+
+	// A non-solid DRY cell above the water table: computeSubstance resolves a real AIR block, so it is
+	// NOT null -- LastWasNull()==false. (A null here would be a barrier-pressure branch, which fill
+	// keeps solid; a real air here is placed as air. The two must not be conflated.)
+	sawAirNotNull := false
+	for lx := 0; lx < 16 && !sawAirNotNull; lx++ {
+		for lz := 0; lz < 16 && !sawAirNotNull; lz++ {
+			for y := nc.SeaLevel() + 1; y < nc.MinY()+nc.Height(); y++ {
+				d := nc.FinalDensity(lx, y, lz)
+				if d > 0 {
+					continue
+				}
+				_, isFluid := aq.computeSubstance(nc.WorldX(lx), y, nc.WorldZ(lz), d)
+				if isFluid {
+					continue // a fluid cell; we want a dry (air) one
+				}
+				if !aq.LastWasNull() {
+					sawAirNotNull = true // a real AIR substance (not a null barrier) -- correct
+					break
+				}
+				// LastWasNull()==true here would be a genuine barrier-pressure null; skip it, we
+				// are looking for a real-air cell to prove air != null.
+			}
+		}
+	}
+	if !sawAirNotNull {
+		t.Fatal("no dry non-solid cell resolved to a real AIR substance (LastWasNull false) above sea level")
+	}
+}

@@ -38,6 +38,7 @@ package router
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/imhinotori/sulfur/world/levelgen"
@@ -154,6 +155,13 @@ type RandomState struct {
 	// the positional factory). See EndIslandsNoise.
 	seed int64
 
+	// useLegacyRandomSource mirrors NoiseGeneratorSettings.useLegacyRandomSource (the parsed
+	// legacy_random_source flag). RandomState$1NoiseWiringHelper is constructed with it as
+	// val$useLegacyInit and consults it in wrapNew: a legacy dimension (nether/end) seeds the
+	// old_blended_noise from new LegacyRandomSource(seed) rather than the positional
+	// random.fromHashOf("minecraft:terrain"). See BlendedNoise.
+	useLegacyRandomSource bool
+
 	mu     sync.Mutex
 	noises map[string]*synth.NormalNoise
 }
@@ -188,9 +196,10 @@ func NewRandomState(seed int64, useLegacyRandomSource bool) *RandomState {
 		base = levelgen.NewXoroshiro(seed)
 	}
 	return &RandomState{
-		factory: base.ForkPositional(),
-		seed:    seed,
-		noises:  make(map[string]*synth.NormalNoise),
+		factory:               base.ForkPositional(),
+		seed:                  seed,
+		useLegacyRandomSource: useLegacyRandomSource,
+		noises:                make(map[string]*synth.NormalNoise),
 	}
 }
 
@@ -244,17 +253,67 @@ func (s *RandomState) NormalNoise(id string) (*synth.NormalNoise, error) {
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return nil, fmt.Errorf("random state: noise params %q: %w", id, err)
 	}
+	// RandomState$1NoiseWiringHelper.visitNoise special-cases the two legacy nether biome
+	// climate noises BEFORE the generic getOrCreateNoise path: it seeds them with a raw
+	// LegacyRandomSource (NOT the positional factory) and builds them via the LEGACY nether
+	// biome Perlin path (createLegacyNetherBiome). The salt is fixed by the visitor:
+	// Noises.TEMPERATURE_NETHER ("nether/temperature") -> newLegacyInstance(0L) = seed+0;
+	// Noises.VEGETATION_NETHER ("nether/vegetation") -> newLegacyInstance(1L) = seed+1.
+	// This is UNCONDITIONAL on useLegacyRandomSource (the visitor always routes these two ids
+	// through createLegacyNetherBiome); they only ever appear in the nether noise_router graph.
+	switch stripNamespace(id) {
+	case "nether/temperature":
+		rng := levelgen.NewLegacyRandomSource(s.seed + 0)
+		n := synth.NewNormalNoiseLegacyNetherBiome(rng, p.FirstOctave, p.Amplitudes)
+		s.noises[id] = n
+		return n, nil
+	case "nether/vegetation":
+		rng := levelgen.NewLegacyRandomSource(s.seed + 1)
+		n := synth.NewNormalNoiseLegacyNetherBiome(rng, p.FirstOctave, p.Amplitudes)
+		s.noises[id] = n
+		return n, nil
+	}
 	rs := s.factory.FromHashOf(id)
 	n := synth.NewNormalNoise(rs, p.FirstOctave, p.Amplitudes)
 	s.noises[id] = n
 	return n, nil
 }
 
-// BlendedNoise seeds the legacy old_blended_noise. RandomState seeds the BlendedNoise
-// from the base factory's "terrain" hash (the createLegacyForBlendedNoise path keys off
-// the same positional factory); the scales come from the node's base_3d_noise fields.
+// stripNamespace drops a "minecraft:" (or any "ns:") prefix so the nether biome noise id
+// match in NormalNoise is robust to the namespaced vs bare form the router graph may carry
+// (mirrors Identifier path comparison against the Noises resource keys "nether/temperature"
+// and "nether/vegetation").
+func stripNamespace(id string) string {
+	if i := strings.IndexByte(id, ':'); i >= 0 {
+		return id[i+1:]
+	}
+	return id
+}
+
+// BlendedNoise seeds the old_blended_noise (BlendedNoise.withNewRandom). The RandomSource it
+// is re-seeded from depends on the dimension, exactly as RandomState$1NoiseWiringHelper.wrapNew
+// branches on val$useLegacyInit:
+//
+//   - LEGACY dimension (nether/end, legacy_random_source:true): new LegacyRandomSource(seed)
+//     (newLegacyInstance(0L) = seed+0). NOT the positional factory -- a legacy dim's terrain
+//     BlendedNoise draws off the raw-seeded LCG stream, so nether/end terrain matches vanilla.
+//   - MODERN dimension (overworld, legacy_random_source:false): random.fromHashOf("minecraft:terrain"),
+//     the base positional (xoroshiro) factory's terrain hash.
+//
+// The scales come from the node's base_3d_noise fields.
+//
+// Source (javap -c, 26.2-inner.jar):
+//   - net.minecraft.world.level.levelgen.RandomState$1NoiseWiringHelper.wrapNew (BlendedNoise
+//     branch: useLegacyInit ? newLegacyInstance(0L) : this$0.random.fromHashOf("minecraft:terrain"))
+//   - net.minecraft.world.level.levelgen.RandomState$1NoiseWiringHelper.newLegacyInstance
+//     (new LegacyRandomSource(val$seed + salt))
 func (s *RandomState) BlendedNoise(xzScale, yScale, xzFactor, yFactor, smearScaleMultiplier float64) (*synth.BlendedNoise, error) {
-	rs := s.factory.FromHashOf("minecraft:terrain")
+	var rs levelgen.RandomSource
+	if s.useLegacyRandomSource {
+		rs = levelgen.NewLegacyRandomSource(s.seed + 0)
+	} else {
+		rs = s.factory.FromHashOf("minecraft:terrain")
+	}
 	return synth.NewBlendedNoise(rs, xzScale, yScale, xzFactor, yFactor, smearScaleMultiplier), nil
 }
 
@@ -276,7 +335,6 @@ func (s *RandomState) EndIslandsNoise() (*synth.SimplexNoise, error) {
 }
 
 var _ density.NoiseBinder = (*RandomState)(nil)
-
 
 // Router is the assembled, evaluable world generator graph: the parsed settings (DATA),
 // the bound NoiseRouter (the 15 functions), and the RandomState that seeded them.

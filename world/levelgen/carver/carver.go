@@ -39,16 +39,37 @@ type CarveChunk interface {
 	MarkFluidPostProcess(wx, wy, wz int)
 }
 
-// FluidSource makes the carve aquifer-aware: at a carved position it returns the
-// fluid block to place (water/lava) or (0,false) meaning air. The Generator (Wave 8)
-// wires this to the Wave-5 Aquifer (computeSubstance at density 0); the lava-level
-// rule in getCarveState short-circuits below the config's lava level. A carve below
-// the local fluid level floods (water), above it is air — vanilla-faithful.
+// CarveKind is the tri-state result of a CarveFluid query, mirroring the three outcomes vanilla's
+// WorldCarver.getCarveState draws from Aquifer.computeSubstance(pos, 0):
+//
+//   - CarveFluidState: a real fluid BlockState (water/lava) -> flood the carved block with it.
+//   - CarveAir:        a real AIR BlockState (the aquifer's FluidStatus.at above the fluid level)
+//     -> carve the returned air state.
+//   - CarveKeepSolid:  Java null -> getCarveState returns null and WorldCarver.carveBlock SKIPS the
+//     write, leaving the existing solid block. This is the aquifer BARRIER: the
+//     barrier-pressure branches of computeSubstance return aconst_null precisely so
+//     the carver does not breach a water/lava pocket. Collapsing this into "air"
+//     (the earlier bug) carved the barrier away.
+type CarveKind uint8
+
+const (
+	// CarveKeepSolid == vanilla null: leave the existing solid block (skip the write).
+	CarveKeepSolid CarveKind = iota
+	// CarveAir == a real AIR BlockState: carve the returned air state.
+	CarveAir
+	// CarveFluidState == a real fluid BlockState (water/lava): flood the carved block.
+	CarveFluidState
+)
+
+// FluidSource makes the carve aquifer-aware: at a carved position it returns the aquifer's
+// tri-state substance. The Generator (Wave 8) wires this to the Wave-5 Aquifer (computeSubstance at
+// density 0); the lava-level rule in getCarveState short-circuits below the config's lava level.
+// CITE: WorldCarver.getCarveState + Aquifer$NoiseBasedAquifer.computeSubstance.
 type FluidSource interface {
-	// CarveFluid returns the aquifer fluid at a carved world position. ok=false means
-	// air (the common case above the water table); ok=true with a water/lava state
-	// floods the carved block.
-	CarveFluid(wx, wy, wz int) (block.StateID, bool)
+	// CarveFluid returns the aquifer substance at a carved world position as a (state, CarveKind).
+	// CarveKeepSolid -> keep the solid barrier (null); CarveAir -> carve the returned air state;
+	// CarveFluidState -> flood with the returned water/lava state.
+	CarveFluid(wx, wy, wz int) (block.StateID, CarveKind)
 	// ShouldScheduleFluidUpdate reports whether the LAST CarveFluid query landed on an
 	// unstable aquifer border (NoiseBasedAquifer.shouldScheduleFluidUpdate). carveBlock reads
 	// it right after CarveFluid to decide whether to markPosForPostProcessing — the vanilla
@@ -120,25 +141,38 @@ func (cc *carveContext) canReplaceBlock(state block.StateID) bool {
 	return cc.rep.Has(state)
 }
 
-// getCarveState ports WorldCarver.getCarveState(ctx, config, pos, aquifer): below the
-// config's lava level -> lava; otherwise the aquifer substance at density 0 (water/
-// lava if flooded, else air/cave_air). A nil (air) substance carves cave_air.
-func (cc *carveContext) getCarveState(cfg *CarverConfig, wx, wy, wz int) block.StateID {
+// getCarveState ports WorldCarver.getCarveState(ctx, config, pos, aquifer): below the config's
+// lava level -> lava; otherwise the aquifer substance at density 0. It returns (state, carve) where
+// carve==false is vanilla's null return -> WorldCarver.carveBlock leaves the existing SOLID block
+// (the aquifer barrier). A real fluid floods; a real AIR substance carves that air.
+//
+// CITE: WorldCarver.getCarveState (bytecode: computeSubstance(pos,0.0); if the result is null and
+// debug is off, return null -> carveBlock's `if (state == null) return false`). The prior port
+// carved cave_air for a null substance, breaching aquifer water/lava barriers.
+func (cc *carveContext) getCarveState(cfg *CarverConfig, wx, wy, wz int) (block.StateID, bool) {
 	// NetherWorldCarver.carveBlock: LAVA at/below minGenY+31, else CAVE_AIR — no lava_level anchor,
 	// no aquifer. (The nether lava sea floor is a fixed 31 blocks above the gen bottom.)
 	if cc.netherCarve {
 		if wy <= cc.minGenY+31 {
-			return cc.lava
+			return cc.lava, true
 		}
-		return cc.caveAir
+		return cc.caveAir, true
 	}
 	if wy <= cfg.LavaLevel.resolveY(cc.minGenY) {
-		return cc.lava
+		return cc.lava, true
 	}
-	if st, ok := cc.fluid.CarveFluid(wx, wy, wz); ok {
-		return st
+	st, kind := cc.fluid.CarveFluid(wx, wy, wz)
+	switch kind {
+	case CarveFluidState:
+		return st, true
+	case CarveAir:
+		// A real AIR BlockState: getCarveState returns the substance verbatim (vanilla places the
+		// aquifer's Blocks.AIR). We keep the port's cave_air here so carved caves read as cave_air
+		// (the observable air block is identical); only the barrier (null) case changed.
+		return cc.caveAir, true
+	default: // CarveKeepSolid == null: leave the solid barrier.
+		return 0, false
 	}
-	return cc.caveAir
 }
 
 // carveBlock ports WorldCarver.carveBlock: gate on canReplaceBlock, resolve the carve
@@ -152,7 +186,13 @@ func (cc *carveContext) carveBlock(cfg *CarverConfig, wx, wy, wz int) bool {
 	if !cc.canReplaceBlock(state) {
 		return false
 	}
-	carved := cc.getCarveState(cfg, wx, wy, wz)
+	carved, doCarve := cc.getCarveState(cfg, wx, wy, wz)
+	if !doCarve {
+		// getCarveState returned null (the aquifer barrier): WorldCarver.carveBlock returns false
+		// without writing, so the existing solid block survives -- the carve does not breach the
+		// water/lava pocket. (bytecode: `if (state == null) return false`.)
+		return false
+	}
 	cc.chunk.Set(wx, wy, wz, carved)
 	// WorldCarver.carveBlock @82-106: after setting the carve state, if the aquifer flagged this
 	// position as an unstable fluid border AND the carved block carries a (non-empty) fluid, mark
