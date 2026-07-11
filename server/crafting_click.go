@@ -320,6 +320,8 @@ func (t *TickLoop) doCraftingClick(p *tickPlayer, oc *openContainer, inv *Invent
 				moved = t.craftQuickMove(p, oc, inv, i)
 			}
 		}
+	case containerInputQuickCraft:
+		t.menuDoQuickCraft(p, t.craftingMenuViewClick(oc, inv), i, j)
 	case containerInputSwap:
 		t.menuDoSwap(p, t.craftingMenuViewClick(oc, inv), i, j)
 	case containerInputClone:

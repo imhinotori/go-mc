@@ -131,6 +131,8 @@ func (t *TickLoop) doEnchantClick(p *tickPlayer, oc *openContainer, inv *Invento
 		t.enchantPickup(p, oc, inv, i, j)
 	case containerInputQuickMove:
 		t.enchantQuickMove(p, oc, inv, i)
+	case containerInputQuickCraft:
+		t.menuDoQuickCraft(p, enchantMenuViewClick(oc, inv), i, j)
 	case containerInputSwap:
 		t.menuDoSwap(p, enchantMenuViewClick(oc, inv), i, j)
 	case containerInputClone:

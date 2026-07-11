@@ -252,6 +252,8 @@ func (t *TickLoop) doShulkerClick(p *tickPlayer, oc *openContainer, s *shulkerBE
 		t.shulkerPickup(p, s, inv, i, j)
 	case containerInputQuickMove:
 		t.shulkerQuickMove(p, s, inv, i)
+	case containerInputQuickCraft:
+		t.menuDoQuickCraft(p, shulkerMenuView(s, inv), i, j)
 	case containerInputSwap:
 		t.menuDoSwap(p, shulkerMenuView(s, inv), i, j)
 	case containerInputClone:

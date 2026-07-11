@@ -136,6 +136,8 @@ func (t *TickLoop) doGrindstoneClick(p *tickPlayer, oc *openContainer, inv *Inve
 		} else {
 			t.grindstoneQuickMove(p, oc, inv, i)
 		}
+	case containerInputQuickCraft:
+		t.menuDoQuickCraft(p, t.grindstoneMenuViewClick(oc, inv), i, j)
 	case containerInputSwap:
 		t.menuDoSwap(p, t.grindstoneMenuViewClick(oc, inv), i, j)
 	case containerInputClone:

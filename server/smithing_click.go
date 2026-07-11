@@ -195,6 +195,8 @@ func (t *TickLoop) doSmithingClick(p *tickPlayer, oc *openContainer, inv *Invent
 		} else {
 			t.smithingQuickMove(p, oc, inv, i)
 		}
+	case containerInputQuickCraft:
+		t.menuDoQuickCraft(p, t.smithingMenuViewClick(oc, inv), i, j)
 	case containerInputSwap:
 		t.menuDoSwap(p, t.smithingMenuViewClick(oc, inv), i, j)
 	case containerInputClone:

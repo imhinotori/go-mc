@@ -271,6 +271,8 @@ func (t *TickLoop) doBrewingStandClick(p *tickPlayer, oc *openContainer, b *brew
 		t.brewPickup(p, oc, b, inv, i, j)
 	case containerInputQuickMove:
 		t.brewQuickMove(p, oc, b, inv, i)
+	case containerInputQuickCraft:
+		t.menuDoQuickCraft(p, brewMenuViewClick(b, inv), i, j)
 	case containerInputSwap:
 		t.menuDoSwap(p, brewMenuViewClick(b, inv), i, j)
 	case containerInputClone:

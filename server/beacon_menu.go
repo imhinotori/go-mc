@@ -306,6 +306,8 @@ func (t *TickLoop) doBeaconClick(p *tickPlayer, b *beaconBE, inv *Inventory, i, 
 		t.beaconPickup(b, inv, i, j)
 	case containerInputQuickMove:
 		t.beaconQuickMove(b, inv, i)
+	case containerInputQuickCraft:
+		t.menuDoQuickCraft(p, beaconMenuViewClick(b, inv), i, j)
 	case containerInputSwap:
 		t.menuDoSwap(p, beaconMenuViewClick(b, inv), i, j)
 	case containerInputClone:

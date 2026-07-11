@@ -336,6 +336,8 @@ func (t *TickLoop) doFurnaceClick(p *tickPlayer, oc *openContainer, f *furnaceBE
 		t.furnacePickup(p, oc, f, inv, i, j)
 	case containerInputQuickMove:
 		t.furnaceQuickMove(p, oc, f, inv, i)
+	case containerInputQuickCraft:
+		t.menuDoQuickCraft(p, t.furnaceMenuView(f, inv), i, j)
 	case containerInputSwap:
 		t.menuDoSwap(p, t.furnaceMenuView(f, inv), i, j)
 	case containerInputClone:

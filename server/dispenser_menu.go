@@ -225,6 +225,8 @@ func (t *TickLoop) doDispenserClick(p *tickPlayer, oc *openContainer, d *dispens
 		t.dispenserPickup(p, d, inv, i, j)
 	case containerInputQuickMove:
 		t.dispenserQuickMove(p, d, inv, i)
+	case containerInputQuickCraft:
+		t.menuDoQuickCraft(p, dispenserMenuView(d, inv), i, j)
 	case containerInputSwap:
 		t.menuDoSwap(p, dispenserMenuView(d, inv), i, j)
 	case containerInputClone:

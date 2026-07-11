@@ -194,6 +194,8 @@ func (t *TickLoop) doHopperClick(p *tickPlayer, oc *openContainer, h *hopperBE, 
 		t.hopperPickup(p, h, inv, i, j)
 	case containerInputQuickMove:
 		t.hopperQuickMove(p, h, inv, i)
+	case containerInputQuickCraft:
+		t.menuDoQuickCraft(p, hopperMenuView(h, inv), i, j)
 	case containerInputSwap:
 		t.menuDoSwap(p, hopperMenuView(h, inv), i, j)
 	case containerInputClone:

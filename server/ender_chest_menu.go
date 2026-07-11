@@ -211,6 +211,8 @@ func (t *TickLoop) doEnderChestClick(p *tickPlayer, oc *openContainer, inv *Inve
 		t.enderChestPickup(p, inv, i, j)
 	case containerInputQuickMove:
 		t.enderChestQuickMove(p, inv, i)
+	case containerInputQuickCraft:
+		t.menuDoQuickCraft(p, enderChestMenuView(p, inv), i, j)
 	case containerInputSwap:
 		t.menuDoSwap(p, enderChestMenuView(p, inv), i, j)
 	case containerInputClone:

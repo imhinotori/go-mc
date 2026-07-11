@@ -232,6 +232,8 @@ func (t *TickLoop) doAnvilClick(p *tickPlayer, oc *openContainer, inv *Inventory
 		t.anvilPickup(p, oc, inv, i, j)
 	case containerInputQuickMove:
 		t.anvilQuickMove(p, oc, inv, i)
+	case containerInputQuickCraft:
+		t.menuDoQuickCraft(p, t.anvilMenuViewClick(oc, inv), i, j)
 	case containerInputSwap:
 		t.menuDoSwap(p, t.anvilMenuViewClick(oc, inv), i, j)
 	case containerInputClone:

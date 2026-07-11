@@ -246,7 +246,22 @@ func (t *TickLoop) doStonecutterClick(p *tickPlayer, oc *openContainer, inv *Inv
 	case containerInputPickup:
 		t.stonecutterPickup(p, oc, inv, i, j)
 	case containerInputQuickMove:
-		t.stonecutterQuickMove(p, oc, inv, i)
+		if i >= 0 {
+			// doClick QUICK_MOVE loop (bytecode offsets 699-741): mayPickup gate, then move once and, while
+			// the source slot still holds the SAME item the move produced (the RESULT re-assembles from the
+			// still-present input, or a stack keeps feeding the input), move again -- so a shift-click on the
+			// result cuts as many as the input allows / drains a whole stack. onTakeStonecut rebuilds the
+			// result each pass. CITE AbstractContainerMenu.doClick QUICK_MOVE.
+			ref := stonecutterResolveSlot(oc, inv, i)
+			if ref.ok {
+				moved := t.stonecutterQuickMove(p, oc, inv, i)
+				for !stackEmpty(moved) && stackSameItem(ref.get(), moved) {
+					moved = t.stonecutterQuickMove(p, oc, inv, i)
+				}
+			}
+		}
+	case containerInputQuickCraft:
+		t.menuDoQuickCraft(p, t.stonecutterMenuViewClick(oc, inv), i, j)
 	case containerInputSwap:
 		t.menuDoSwap(p, t.stonecutterMenuViewClick(oc, inv), i, j)
 	case containerInputClone:
@@ -363,46 +378,47 @@ func stonecutterSafeInsert(ref stonecutterSlotRef, stack *component.SlotData, in
 // from a player cell it moves into the input slot (if stonecuttable). v1 ports the common single-cut shift
 // of the result + the input↔player moves (the "cut as many as fit" multi-loop is a faithful follow-up).
 // CITE StonecutterMenu.quickMoveStack.
-func (t *TickLoop) stonecutterQuickMove(p *tickPlayer, oc *openContainer, inv *Inventory, i int) {
+func (t *TickLoop) stonecutterQuickMove(p *tickPlayer, oc *openContainer, inv *Inventory, i int) component.SlotData {
 	if i < 0 {
-		return
+		return component.SlotData{Count: 0}
 	}
 	ref := stonecutterResolveSlot(oc, inv, i)
 	if !ref.ok {
-		return
+		return component.SlotData{Count: 0}
 	}
 
 	if ref.result {
 		res := oc.cutResult
 		if stackEmpty(res) {
-			return
+			return component.SlotData{Count: 0}
 		}
 		work := res
 		if !t.moveItemStackTo(inv, &work, windowMainFirst, 45, true) {
-			return // no room: nothing cut
+			return component.SlotData{Count: 0} // no room: nothing cut
 		}
 		t.onTakeStonecut(oc)
-		return
+		return res // the moved stack (the loop re-checks the re-assembled result against it)
 	}
 
 	src := ref.get()
 	if stackEmpty(src) {
-		return
+		return component.SlotData{Count: 0}
 	}
 	work := src
 	if ref.input {
 		// Input → player inventory.
 		if !t.moveItemStackTo(inv, &work, windowMainFirst, 45, true) {
-			return
+			return component.SlotData{Count: 0}
 		}
 		ref.set(work)
-		return
+		return src
 	}
 	// Player → the input slot (only if the input is empty / same item with room).
 	if !t.stonecutterMoveIntoInput(oc, &work) {
-		return
+		return component.SlotData{Count: 0}
 	}
 	ref.set(work)
+	return src
 }
 
 // stonecutterMoveIntoInput moves *stack into the single input slot: merge into the same-item input (up to

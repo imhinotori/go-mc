@@ -154,9 +154,22 @@ func (t *TickLoop) doLoomClick(p *tickPlayer, oc *openContainer, inv *Inventory,
 		}
 		if input == containerInputPickup {
 			t.loomPickup(p, oc, inv, i, j)
-		} else {
-			t.loomQuickMove(p, oc, inv, i)
+		} else if i >= 0 {
+			// doClick QUICK_MOVE loop (bytecode offsets 699-741): mayPickup gate, then move once and, while
+			// the source slot still holds the SAME item the move produced (the RESULT re-assembles from the
+			// still-present banner+dye, or a stack keeps feeding an input), move again -- so a shift-click on
+			// the result weaves as many banners as the inputs allow / drains a whole stack. loomInputsChanged
+			// re-assembles the result each pass inside onTakeLoom. CITE AbstractContainerMenu.doClick QUICK_MOVE.
+			ref := loomResolveSlot(oc, inv, i)
+			if ref.ok {
+				moved := t.loomQuickMove(p, oc, inv, i)
+				for !stackEmpty(moved) && stackSameItem(ref.get(), moved) {
+					moved = t.loomQuickMove(p, oc, inv, i)
+				}
+			}
 		}
+	case containerInputQuickCraft:
+		t.menuDoQuickCraft(p, t.loomMenuViewClick(oc, inv), i, j)
 	case containerInputSwap:
 		t.menuDoSwap(p, t.loomMenuViewClick(oc, inv), i, j)
 	case containerInputClone:
@@ -277,47 +290,48 @@ func loomSafeInsert(ref loomSlotRef, stack *component.SlotData, increment int) c
 // into the player inventory + fires onTakeLoom; a shift FROM an input moves it into the player inventory;
 // a shift from a player cell tries banner->0, dye->1, pattern->2 (per mayPlace), else main<->hotbar. The
 // menu ranges map to player WINDOW slots (menu 4..40 == window 9..45). CITE LoomMenu.quickMoveStack.
-func (t *TickLoop) loomQuickMove(p *tickPlayer, oc *openContainer, inv *Inventory, i int) {
+func (t *TickLoop) loomQuickMove(p *tickPlayer, oc *openContainer, inv *Inventory, i int) component.SlotData {
 	if i < 0 {
-		return
+		return component.SlotData{Count: 0}
 	}
 	ref := loomResolveSlot(oc, inv, i)
 	if !ref.ok {
-		return
+		return component.SlotData{Count: 0}
 	}
 
 	if ref.result {
 		res := oc.loomResult
 		if stackEmpty(res) {
-			return
+			return component.SlotData{Count: 0}
 		}
 		work := res
 		if !t.moveItemStackTo(inv, &work, windowMainFirst, offhandWindowSlot, true) {
-			return // no room: nothing crafted
+			return component.SlotData{Count: 0} // no room: nothing crafted
 		}
 		t.onTakeLoom(oc)
-		return
+		return res // the moved stack (the loop re-checks the re-assembled result against it)
 	}
 
 	src := ref.get()
 	if stackEmpty(src) {
-		return
+		return component.SlotData{Count: 0}
 	}
 	work := src
 	if ref.input == 0 || ref.input == 1 || ref.input == 2 {
 		// input -> player inventory.
 		if !t.moveItemStackTo(inv, &work, windowMainFirst, offhandWindowSlot, false) {
-			return
+			return component.SlotData{Count: 0}
 		}
 		ref.set(work)
-		return
+		return src
 	}
 
 	// player cell -> the matching input slot (banner/dye/pattern), gated by mayPlace + emptiness.
 	if !t.loomMoveIntoInputs(oc, &work) {
-		return
+		return component.SlotData{Count: 0}
 	}
 	ref.set(work)
+	return src
 }
 
 // loomMoveIntoInputs moves *stack into the first matching empty input slot: a banner into slot 0, a dye
@@ -328,16 +342,49 @@ func (t *TickLoop) loomMoveIntoInputs(oc *openContainer, stack *component.SlotDa
 		return false
 	}
 	moved := false
+	// tryPlace mirrors moveItemStackTo(stack, slotIdx, slotIdx+1, false) over a SINGLE typed input cell:
+	// merge into a same-item cell up to the slot max, else fill an empty cell up to the slot max. Vanilla
+	// LoomMenu.quickMoveStack routes a player-cell stack to the matching input by item type
+	// (BannerItem->bannerSlot, isDyeItem->dyeSlot, isPatternItem->patternSlot). The whole (merged) stack
+	// moves, NOT a single item -- the earlier 1-item place was the "loom shift-click moves 1 dye" bug.
+	// CITE LoomMenu.quickMoveStack + AbstractContainerMenu.moveItemStackTo (single-slot destination).
 	tryPlace := func(cur *component.SlotData, mayPlace bool) {
-		if moved || !mayPlace || !stackEmpty(*cur) {
+		if moved || !mayPlace || stackEmpty(*stack) {
 			return
 		}
-		*cur = stackCopyWithCount(*stack, 1) // single-item input
-		stack.Count = toVar(int(stack.Count) - 1)
-		if stack.Count <= 0 {
-			stack.Count = 0
+		slotMax := chestSlotMax(*stack)
+		if stackEmpty(*cur) {
+			place := int(stack.Count)
+			if slotMax < place {
+				place = slotMax
+			}
+			if place <= 0 {
+				return
+			}
+			*cur = stackCopyWithCount(*stack, place)
+			stack.Count = toVar(int(stack.Count) - place)
+			if stack.Count <= 0 {
+				stack.Count = 0
+			}
+			moved = true
+			return
 		}
-		moved = true
+		if stackSameItemSameComponents(*stack, *cur) {
+			room := slotMax - int(cur.Count)
+			if room <= 0 {
+				return
+			}
+			add := int(stack.Count)
+			if room < add {
+				add = room
+			}
+			cur.Count = toVar(int(cur.Count) + add)
+			stack.Count = toVar(int(stack.Count) - add)
+			if stack.Count <= 0 {
+				stack.Count = 0
+			}
+			moved = true
+		}
 	}
 	tryPlace(&oc.loomBanner, isBannerItem(*stack))
 	tryPlace(&oc.loomDye, isLoomDyeItem(*stack))

@@ -403,6 +403,15 @@ func (t *TickLoop) tickEntities() {
 	// minimal so the sibling Wave edits (subtick.go fluid, block_drop.go drops) do not conflict.
 	t.tickPlayerCombat()
 
+	// SECURITY: the ServerPlayer.tick container-validity sweep -- for each player with an open non-inventory
+	// window, close it if the menu is no longer stillValid (the backing block was broken/replaced, or the
+	// player teleported/walked out of block-interaction range, or the traded villager/minecart is gone/out of
+	// range). Without it an open menu survived teleport/break and a hacked client kept interacting with a
+	// chest from any distance (remote-container exploit). ADDITIVE + untraced (no new phase; TestTickPhaseOrder
+	// stays green), and RNG-free + gated on p.openContainer != nil, so the pig oracle (a menu-less mob) is
+	// byte-identically unperturbed. Body in menu_stillvalid.go. CITE ServerPlayer.tick stillValid + close.
+	t.sweepContainerStillValid()
+
 	// E-1 ITEM ATTRIBUTE MODIFIERS: the per-tick equipment scan — LivingEntity.tick's
 	// detectEquipmentUpdates (a changed held/worn item swaps its attribute modifiers on the player
 	// holder: sword ATTACK_DAMAGE/ATTACK_SPEED, armor ARMOR/ARMOR_TOUGHNESS/KNOCKBACK_RESISTANCE)

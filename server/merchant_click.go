@@ -145,9 +145,22 @@ func (t *TickLoop) doMerchantClick(p *tickPlayer, oc *openContainer, inv *Invent
 		}
 		if input == containerInputPickup {
 			t.merchantPickup(p, oc, inv, villager, offers, i, j)
-		} else {
-			t.merchantQuickMove(p, oc, inv, villager, offers, i)
+		} else if i >= 0 {
+			// doClick QUICK_MOVE loop (bytecode offsets 699-741): mayPickup gate, then move once and, while
+			// the source slot still holds the SAME item the move produced (the RESULT re-assembles from the
+			// still-satisfied payment, or a stack keeps feeding), move again — so a shift-click trades as many
+			// as the payment allows / drains a whole stack. merchantUpdateSellItem re-assembles the result each
+			// pass inside onTakeMerchant. CITE AbstractContainerMenu.doClick QUICK_MOVE.
+			ref := merchantResolveSlot(oc, inv, i)
+			if ref.ok {
+				moved := t.merchantQuickMove(p, oc, inv, villager, offers, i)
+				for !stackEmpty(moved) && stackSameItem(ref.get(), moved) {
+					moved = t.merchantQuickMove(p, oc, inv, villager, offers, i)
+				}
+			}
 		}
+	case containerInputQuickCraft:
+		t.menuDoQuickCraft(p, t.merchantMenuViewClick(oc, inv, villager, offers), i, j)
 	case containerInputSwap:
 		t.menuDoSwap(p, t.merchantMenuViewClick(oc, inv, villager, offers), i, j)
 	case containerInputClone:
@@ -278,54 +291,55 @@ func merchantSafeInsert(ref merchantSlotRef, stack *component.SlotData, incremen
 // [36,45); menu [3,30) == window [9,36). For the RESULT shift, the take FIRST deposits the whole result into
 // the inventory, THEN fires the trade (MerchantResultSlot.onTake via slot.onTake). CITE
 // MerchantMenu.quickMoveStack.
-func (t *TickLoop) merchantQuickMove(p *tickPlayer, oc *openContainer, inv *Inventory, villager *Entity, offers merchantOffers, i int) {
+func (t *TickLoop) merchantQuickMove(p *tickPlayer, oc *openContainer, inv *Inventory, villager *Entity, offers merchantOffers, i int) component.SlotData {
 	if i < 0 {
-		return
+		return component.SlotData{Count: 0}
 	}
 	ref := merchantResolveSlot(oc, inv, i)
 	if !ref.ok {
-		return
+		return component.SlotData{Count: 0}
 	}
 
 	if ref.result {
 		res := oc.mresult
 		if stackEmpty(res) {
-			return
+			return component.SlotData{Count: 0}
 		}
 		work := res
 		// moveItemStackTo(stack, 3, 39, true) == window [9,45) reverse.
 		if !t.moveItemStackTo(inv, &work, windowMainFirst, offhandWindowSlot, true) {
-			return // no room: nothing traded
+			return component.SlotData{Count: 0} // no room: nothing traded
 		}
 		// The result moved (fully or partly); fire the trade once (one take). MerchantResultSlot.onTake.
 		t.onTakeMerchant(p, oc, inv, villager, offers)
-		return
+		return res // the moved stack (the loop re-checks the re-assembled result against it)
 	}
 
 	src := ref.get()
 	if stackEmpty(src) {
-		return
+		return component.SlotData{Count: 0}
 	}
 	work := src
 	switch {
 	case ref.payment == 0 || ref.payment == 1:
 		// payment -> player inventory: moveItemStackTo(stack, 3, 39, false) == window [9,45).
 		if !t.moveItemStackTo(inv, &work, windowMainFirst, offhandWindowSlot, false) {
-			return
+			return component.SlotData{Count: 0}
 		}
 	case ref.invSlot >= int16(windowMainFirst) && ref.invSlot < int16(windowMainFirst+27):
 		// main (window 9..35) -> hotbar: moveItemStackTo(stack, 30, 39, false) == window [36,45).
 		if !t.moveItemStackTo(inv, &work, windowHotbarFirst, offhandWindowSlot, false) {
-			return
+			return component.SlotData{Count: 0}
 		}
 	default:
 		// hotbar (window 36..44) -> main: moveItemStackTo(stack, 3, 30, false) == window [9,36).
 		if !t.moveItemStackTo(inv, &work, windowMainFirst, windowHotbarFirst, false) {
-			return
+			return component.SlotData{Count: 0}
 		}
 	}
 	ref.set(work)
 	// A payment move changes the sell item; updateSellItem is re-run by clickedMerchant after this returns.
+	return src
 }
 
 // merchantThrow ports the THROW branch over a merchant window: with an empty cursor, Q drops 1 (j==0) or the
