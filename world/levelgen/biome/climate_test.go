@@ -208,7 +208,7 @@ func TestFitnessNearestAndTiebreak(t *testing.T) {
 	}
 
 	// A target outside box A but inside box B: the closer box (B) wins.
-	near := Parameter{Min: 0, Max: 100}    // box A: tight near 0
+	near := Parameter{Min: 0, Max: 100}     // box A: tight near 0
 	far := Parameter{Min: 9000, Max: 10000} // box B: tight near 9500
 	a2 := ParameterPoint{near, full, full, full, full, full, 0, plains}
 	b2 := ParameterPoint{far, full, full, full, full, full, 0, desert}
@@ -217,5 +217,46 @@ func TestFitnessNearestAndTiebreak(t *testing.T) {
 	got2, _ := list2.findValue(tNearB)
 	if got2 != desert {
 		t.Fatalf("target inside box B's span should select desert, got %s", got2)
+	}
+}
+
+// gradientFn is a density.Function whose value increases linearly with X (block coords),
+// used to force the climate spawn search away from origin toward a preferred continentalness.
+type gradientFn struct{ base, scale float64 }
+
+func (g gradientFn) Compute(c density.Context) float64 { return g.base + float64(c.X)*g.scale }
+func (g gradientFn) MinValue() float64                 { return -2 }
+func (g gradientFn) MaxValue() float64                 { return 2 }
+
+// TestFindSpawnPositionDeterministic proves the climate spawn search is pure (same sampler
+// -> same result) and returns a well-formed position. CITE: Climate$Sampler.findSpawnPosition.
+func TestFindSpawnPositionDeterministic(t *testing.T) {
+	src := newSource(t)
+	tgt := OverworldSpawnTarget()
+	a := src.Sampler().FindSpawnPosition(tgt)
+	b := src.Sampler().FindSpawnPosition(tgt)
+	if a != b {
+		t.Fatalf("FindSpawnPosition not deterministic: %+v vs %+v", a, b)
+	}
+}
+
+// TestFindSpawnPositionMovesOffOrigin proves the search actually steers off (0,0) toward a
+// lower-fitness column: with a continentalness gradient that is a poor match at origin but a
+// good match away from it, the spiral must return a non-origin position. This is the bug-5
+// fix (initial spawn is the climate spawn CHUNK, not hardcoded 0,0).
+func TestFindSpawnPositionMovesOffOrigin(t *testing.T) {
+	// Continentalness climbs from -1 at origin toward inland (~0.2..1) as X grows; the
+	// spawnTarget prefers inland continentalness, so the best column is far from origin.
+	s := Sampler{
+		Temperature:     constFn(0.0),
+		Humidity:        constFn(0.0),
+		Continentalness: gradientFn{base: -1.0, scale: 1.0 / 1024.0}, // ocean(-1) at origin -> inland as X grows
+		Erosion:         constFn(0.0),
+		Depth:           constFn(0.0),
+		Weirdness:       constFn(0.5), // inside point-2 weirdness span [0.16,1.0]
+	}
+	sp := s.FindSpawnPosition(OverworldSpawnTarget())
+	if sp.X == 0 && sp.Z == 0 {
+		t.Fatalf("FindSpawnPosition stuck at origin despite an off-origin climate optimum: %+v", sp)
 	}
 }

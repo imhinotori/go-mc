@@ -29,7 +29,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/imhinotori/sulfur/chat"
-	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/plugin/host"
 	"github.com/imhinotori/sulfur/save"
 	"github.com/imhinotori/sulfur/server"
@@ -219,23 +218,28 @@ func main() {
 		// FEAT-06 visual gate evaluates — NO new wire surface, the v1-sealed chunk format
 		// is unchanged (registering the dungeon body went live with no worker/wire rewire).
 		ng := world.NewNoiseGenerator(*seed, overworldSecs, overworldMinY)
+		// MinecraftServer.setInitialSpawn picks the spawn CHUNK via the climate spawn search
+		// (Climate$Sampler.findSpawnPosition over OverworldBiomeBuilder.spawnTarget), NOT a
+		// hardcoded (0,0). InitialSpawnChunk ports that; SpawnPos then runs getSpawnPosInChunk +
+		// the outward spiral around it. CITE: MinecraftServer.setInitialSpawn.
+		spawnChunk := ng.InitialSpawnChunk()
 		// 17-06 spawn-inside-a-block fix: SpawnPos runs the ported vanilla PlayerSpawnFinder over
 		// the FULLY-DECORATED spawn chunk (features + structures), returning the first STANDABLE
 		// column (the air cell ON a non-fluid floor), which may not be the (8,8) center when a tree
 		// or structure occupies it. We thread the full safe (x,y,z) into the bootstrap so the player
 		// lands ON clear ground instead of embedded in decoration. spawnSurfaceY (the scalar fed to
 		// the tick's SetSpawn for the legacy respawn-Y path) stays the standable floor block world-Y.
-		sp := ng.SpawnPos(level.ChunkPos{0, 0})
+		sp := ng.SpawnPos(spawnChunk)
 		if sp.Found {
 			spawnPoint = server.SpawnPoint{X: sp.X, Y: sp.Y, Z: sp.Z}
 			spawnSurfaceY = int(sp.Y) - 1 // standable floor block (feet-1); SetSpawn/+2 lands feet above it
 		} else {
-			// Void/ocean spawn chunk: fall back to the terrain WorldSurface top at the center column.
-			spawnSurfaceY = ng.SpawnSurfaceY(level.ChunkPos{0, 0})
+			// Void/ocean spawn chunk: fall back to the terrain WorldSurface top at the climate chunk center.
+			spawnSurfaceY = ng.SpawnSurfaceY(spawnChunk)
 			spawnPoint = server.SpawnPoint{
-				X: float64(0<<4) + 8.5,
+				X: float64(int(spawnChunk[0])<<4) + 8.5,
 				Y: float64(spawnSurfaceY + 2),
-				Z: float64(0<<4) + 8.5,
+				Z: float64(int(spawnChunk[1])<<4) + 8.5,
 			}
 		}
 		gen = ng

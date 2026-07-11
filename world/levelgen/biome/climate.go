@@ -20,19 +20,19 @@
 //
 // PORTED FROM (javap -c, temp/cache/26.2-inner.jar):
 //   - net.minecraft.world.level.biome.Climate
-//       quantizeCoord:        (long)(f * 10000.0)
-//       target(6 floats):     quantize each → TargetPoint(6 longs)
+//     quantizeCoord:        (long)(f * 10000.0)
+//     target(6 floats):     quantize each → TargetPoint(6 longs)
 //   - net.minecraft.world.level.biome.Climate$Sampler.sample(int,int,int):
-//       QuartPos.toBlock(q) = q<<2; compute each DF at SinglePointContext(bx,by,bz);
-//       d2f (cast double→float32); Climate.target(...)
+//     QuartPos.toBlock(q) = q<<2; compute each DF at SinglePointContext(bx,by,bz);
+//     d2f (cast double→float32); Climate.target(...)
 //   - net.minecraft.world.level.biome.Climate$Parameter.distance(long):
-//       l = x-max; m = min-x; if l>0 return l; if m>0 return m; return 0
+//     l = x-max; m = min-x; if l>0 return l; if m>0 return m; return 0
 //   - net.minecraft.world.level.biome.Climate$ParameterPoint.fitness(TargetPoint):
-//       sum over the 6 climate dims of Mth.square(param.distance(target.coord))
-//       + Mth.square(offset)   (the target's 7th "offset" coord is always 0)
+//     sum over the 6 climate dims of Mth.square(param.distance(target.coord))
+//   - Mth.square(offset)   (the target's 7th "offset" coord is always 0)
 //   - net.minecraft.world.level.biome.Climate$ParameterList.findValueBruteForce:
-//       linear scan; keep the pair with the minimum fitness; on fitness >= best keep
-//       the earlier pair (first-match-wins tiebreak → deterministic, no map order)
+//     linear scan; keep the pair with the minimum fitness; on fitness >= best keep
+//     the earlier pair (first-match-wins tiebreak → deterministic, no map order)
 //
 // It is a faithful algorithmic port, not a copy of Mojang source.
 //
@@ -44,6 +44,7 @@
 package biome
 
 import (
+	"math"
 	"sync"
 
 	levelbiome "github.com/imhinotori/sulfur/level/biome"
@@ -262,4 +263,101 @@ func (s Sampler) sample(quartX, quartY, quartZ int) TargetPoint {
 		float32(s.Depth.Compute(c)),
 		float32(s.Weirdness.Compute(c)),
 	)
+}
+
+// parameterSpan ports Climate$Parameter.span(float,float): quantizes [min,max] into the long
+// span. CITE: Climate$Parameter.span(FF) (new Parameter(quantizeCoord(min), quantizeCoord(max))).
+func parameterSpan(min, max float32) Parameter {
+	return Parameter{Min: quantizeCoord(min), Max: quantizeCoord(max)}
+}
+
+// parameterPoint ports Climate$Parameter.point(float) == span(f,f). CITE: Climate$Parameter.point.
+func parameterPoint(f float32) Parameter { return parameterSpan(f, f) }
+
+// OverworldSpawnTarget ports OverworldBiomeBuilder.spawnTarget(): the two ParameterPoints the
+// initial-spawn climate search steers toward (a temperate inland column near weirdness +/-0.16..1
+// -> a mid-latitude, mid-erosion, inland-continentalness, depth-0 spawn). The exact jar values:
+//
+//	FULL_RANGE            = span(-1.0, 1.0)
+//	inlandContinentalness = span(-0.11, 0.55)
+//	both points: T=FULL, H=FULL, C=span(inland, FULL)=span(-0.11, 1.0), E=FULL, D=point(0.0), offset=0
+//	point 1 weirdness = span(-1.0, -0.16);  point 2 weirdness = span(0.16, 1.0)
+//
+// CITE: OverworldBiomeBuilder.spawnTarget (two Climate$ParameterPoint, List.of(...)).
+func OverworldSpawnTarget() []ParameterPoint {
+	full := parameterSpan(-1.0, 1.0)
+	inland := parameterSpan(-0.11, 0.55)
+	// span(inland, FULL) = Parameter(inland.min, FULL.max).
+	contin := Parameter{Min: inland.Min, Max: full.Max}
+	depth0 := parameterPoint(0.0)
+	return []ParameterPoint{
+		{Temperature: full, Humidity: full, Continentalness: contin, Erosion: full,
+			Depth: depth0, Weirdness: parameterSpan(-1.0, -0.16), Offset: 0},
+		{Temperature: full, Humidity: full, Continentalness: contin, Erosion: full,
+			Depth: depth0, Weirdness: parameterSpan(0.16, 1.0), Offset: 0},
+	}
+}
+
+// SpawnPos is the (x,z) block result of the climate spawn search (Y is resolved later from the
+// world's WORLD_SURFACE height at that chunk). Fitness is the best squared climate distance.
+type SpawnPos struct {
+	X, Z    int
+	Fitness int64
+}
+
+// spawnFitnessTarget ports Climate.SpawnFinder.getSpawnPositionAndFitness's TargetPoint build:
+// sample the climate at (fromBlock(x), 0, fromBlock(z)) then force DEPTH to 0 (a surface column)
+// before the fitness compare. CITE: getSpawnPositionAndFitness (new TargetPoint(temp, humidity,
+// continentalness, erosion, 0L, weirdness)).
+func (s Sampler) spawnFitnessAt(spawnTarget []ParameterPoint, blockX, blockZ int) int64 {
+	// QuartPos.fromBlock(b) == b >> 2 (arithmetic shift). sample takes QUART coords.
+	tp := s.sample(blockX>>2, 0, blockZ>>2)
+	tp.Depth = 0 // getSpawnPositionAndFitness zeroes depth
+	best := int64(9223372036854775807)
+	for i := range spawnTarget {
+		f := spawnTarget[i].fitness(tp)
+		if f < best {
+			best = f
+		}
+	}
+	return best
+}
+
+// radialSearch ports Climate$SpawnFinder.radialSearch: an Archimedean spiral outward from the
+// current best (angle step increment / radius, radius stepping by increment up to maxRadius),
+// keeping the lowest-fitness candidate. CITE: Climate$SpawnFinder.radialSearch.
+func (s Sampler) radialSearch(spawnTarget []ParameterPoint, best *SpawnPos, increment, maxRadius float32) {
+	angle := float32(0.0)
+	radius := increment
+	for radius <= maxRadius {
+		x := best.X + int(math.Sin(float64(angle))*float64(radius))
+		z := best.Z + int(math.Cos(float64(angle))*float64(radius))
+		fit := s.spawnFitnessAt(spawnTarget, x, z)
+		if fit < best.Fitness {
+			best.X = x
+			best.Z = z
+			best.Fitness = fit
+		}
+		angle += increment / radius
+		if float64(angle) > 6.283185307179586 { // 2*pi
+			angle = 0
+			radius += increment
+		}
+	}
+}
+
+// FindSpawnPosition ports Climate$Sampler.findSpawnPosition + Climate.findSpawnPosition +
+// SpawnFinder: seed the result at (0,0), then two radial sweeps (2048 step 512, then 512 step
+// 32) keeping the min-fitness column. Returns (0,0) when spawnTarget is empty (vanilla returns
+// BlockPos.ZERO). CITE: Climate$Sampler.findSpawnPosition; Climate$SpawnFinder.<init> (radial
+// 2048/512 then 512/32).
+func (s Sampler) FindSpawnPosition(spawnTarget []ParameterPoint) SpawnPos {
+	if len(spawnTarget) == 0 {
+		return SpawnPos{X: 0, Z: 0, Fitness: 0}
+	}
+	best := SpawnPos{X: 0, Z: 0, Fitness: s.spawnFitnessAt(spawnTarget, 0, 0)}
+	// Vanilla: radialSearch(f3=2048 maxRadius, f4=512 increment), then (512, 32).
+	s.radialSearch(spawnTarget, &best, 512.0, 2048.0)
+	s.radialSearch(spawnTarget, &best, 32.0, 512.0)
+	return best
 }

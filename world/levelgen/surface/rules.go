@@ -247,17 +247,21 @@ func (v verticalGradientCondition) test(c *Context) bool {
 }
 
 // noiseThresholdCondition ports SurfaceRules$NoiseThresholdConditionSource: the named
-// surface noise (2-D, sampled at (x,0,z)) lies within [min,max]. The noise is one of
-// minecraft:surface / surface_swamp / calcite / gravel / ice / packed_ice /
-// powder_snow / sulfur_cave_gradient (all 2-D surface noises in this graph).
+// surface noise lies within [min,max]. is3d selects the sampler: 2-D samples at (x,0,z)
+// (Context.createNoiseSampler2d), 3-D at (x,y,z) (createNoiseSampler3d). is_3d is an
+// optionalFieldOf("is_3d", false), so it defaults to 2-D; nodes that set is_3d:true (e.g.
+// sulfur_cave_gradient's 3-D usage) MUST sample with blockY. CITE:
+// SurfaceRules$NoiseThresholdConditionSource (is3d record component -> getNoiseSampler(k, is3d));
+// Context$1.getAsDouble (2d: getValue(x,0,z)) / Context$2.getAsDouble (3d: getValue(x,y,z)).
 type noiseThresholdCondition struct {
 	noiseID      string
 	minThreshold float64
 	maxThreshold float64
+	is3d         bool
 }
 
 func (n noiseThresholdCondition) test(c *Context) bool {
-	v := c.surfaceNoiseValue(n.noiseID)
+	v := c.surfaceNoiseValue(n.noiseID, n.is3d)
 	return v >= n.minThreshold && v <= n.maxThreshold
 }
 
@@ -282,14 +286,22 @@ type holeCondition struct{}
 
 func (holeCondition) test(c *Context) bool { return c.surfaceDepth <= 0 }
 
-// steepCondition ports SurfaceRules$Context$SteepMaterialCondition: the WORLD_SURFACE_WG
-// heightmap rises ≥ 4 across ±1 in Z at this column's X — a steep slope (used to bare
-// stone on mountainsides).
+// steepCondition ports SurfaceRules$Context$SteepMaterialCondition.compute(): the
+// WORLD_SURFACE_WG heightmap rises >= 4 across +/-1 in EITHER Z or X at this column — a
+// steep slope (used to bare stone on mountainsides). Vanilla tests BOTH axes and ORs them:
+//
+//	int zm = max(z-1,0), zp = min(z+1,15);
+//	if (getHeight(x,zp) >= getHeight(x,zm)+4) return true;    // Z axis
+//	int xm = max(x-1,0), xp = min(x+1,15);
+//	return getHeight(xm,z) >= getHeight(xp,z)+4;              // X axis (note the -x >= +x order)
+//
+// CITE: SurfaceRules$Context$SteepMaterialCondition.compute (two getHeight pairs, || ).
 type steepCondition struct{}
 
 func (steepCondition) test(c *Context) bool {
 	lx := c.blockX & 15
 	lz := c.blockZ & 15
+	// Z axis.
 	zm := lz - 1
 	if zm < 0 {
 		zm = 0
@@ -298,9 +310,19 @@ func (steepCondition) test(c *Context) bool {
 	if zp > 15 {
 		zp = 15
 	}
-	h0 := c.worldSurfaceHeight(lx, zm)
-	h1 := c.worldSurfaceHeight(lx, zp)
-	return h1 >= h0+4
+	if c.worldSurfaceHeight(lx, zp) >= c.worldSurfaceHeight(lx, zm)+4 {
+		return true
+	}
+	// X axis (vanilla compares getHeight(xm,z) >= getHeight(xp,z)+4).
+	xm := lx - 1
+	if xm < 0 {
+		xm = 0
+	}
+	xp := lx + 1
+	if xp > 15 {
+		xp = 15
+	}
+	return c.worldSurfaceHeight(xm, lz) >= c.worldSurfaceHeight(xp, lz)+4
 }
 
 // temperatureCondition ports SurfaceRules$Context$TemperatureHelperCondition:
@@ -588,6 +610,7 @@ func parseConditionSource(raw json.RawMessage) (Condition, error) {
 			Noise        string  `json:"noise"`
 			MinThreshold float64 `json:"min_threshold"`
 			MaxThreshold float64 `json:"max_threshold"`
+			Is3D         bool    `json:"is_3d"` // optionalFieldOf("is_3d", false)
 		}
 		if err := json.Unmarshal(raw, &n); err != nil {
 			return nil, fmt.Errorf("surface: noise_threshold condition: %w", err)
@@ -596,6 +619,7 @@ func parseConditionSource(raw json.RawMessage) (Condition, error) {
 			noiseID:      n.Noise,
 			minThreshold: n.MinThreshold,
 			maxThreshold: n.MaxThreshold,
+			is3d:         n.Is3D,
 		}, nil
 
 	case "not":

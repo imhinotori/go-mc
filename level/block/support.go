@@ -4124,6 +4124,52 @@ func IsCollisionShapeFullBlock(s StateID) bool {
 	return blockSupport[s]&(1<<bitIsCollisionFullBlock) != 0
 }
 
+// BlocksMotion is the 1:1 port of BlockBehaviour$BlockStateBase.blocksMotion():
+//
+//	Block block = getBlock();
+//	return block != Blocks.COBWEB && block != Blocks.BAMBOO_SAPLING && isSolid();
+//
+// isSolid() is the baked legacySolid flag (IsSolid above). Cobweb and bamboo_sapling
+// are the two solid-collision blocks vanilla explicitly excludes from motion-blocking.
+// This is the predicate behind Heightmap.Types MATERIAL_MOTION_BLOCKING / OCEAN_FLOOR and
+// the block half of MOTION_BLOCKING (blocksMotion() || !fluid). CITE: javap
+// BlockBehaviour$BlockStateBase.blocksMotion (if_acmpeq COBWEB / BAMBOO_SAPLING; isSolid).
+func BlocksMotion(s StateID) bool {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return false
+	}
+	switch StateList[s].(type) {
+	case Cobweb, BambooSapling:
+		return false
+	}
+	return IsSolid(s)
+}
+
+// HasFluidState reports whether a state's vanilla getFluidState() is non-empty -- i.e. the
+// state is a water/lava block (IsFluid) OR a waterlogged block (SimpleWaterloggedBlock
+// getFluidState returns Fluids.WATER). This is the `!state.getFluidState().isEmpty()` half
+// of Heightmap.Types MOTION_BLOCKING / MOTION_BLOCKING_NO_LEAVES. CITE: BlockStateBase.
+// getFluidState; SimpleWaterloggedBlock.getFluidState (WATERLOGGED -> WATER).
+func HasFluidState(s StateID) bool {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return false
+	}
+	b := StateList[s]
+	if IsFluidBlock(b) {
+		return true
+	}
+	return isWaterlogged(b)
+}
+
+// IsLeavesBlockInstance reports whether a state's block is `instanceof LeavesBlock` -- the
+// exact test in Heightmap.Types MOTION_BLOCKING_NO_LEAVES (`!(getBlock() instanceof
+// LeavesBlock)`). It aliases IsLeaves (the DecayingLeaves LeavesBlock family: the eight tree
+// leaves + azalea + flowering azalea + mangrove) since those are precisely the concrete
+// LeavesBlock subclasses. CITE: Heightmap$Types.lambda$static$1 (instanceof LeavesBlock).
+func IsLeavesBlockInstance(s StateID) bool {
+	return IsLeaves(s)
+}
+
 // IsSuffocating reports BlockBehaviour$BlockStateBase.isSuffocating(EmptyBlockGetter, ZERO) for
 // the state: the per-block isSuffocating StatePredicate (default
 // blocksMotion() && isCollisionShapeFullBlock(); some blocks override it) evaluated with no

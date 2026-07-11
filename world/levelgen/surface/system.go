@@ -158,9 +158,10 @@ func (s *SurfaceSystem) getBand(x, y, z int) block.StateID {
 	return s.clayBands[idx]
 }
 
-// surfaceNoiseValue returns the named surface noise sampled 2-D at (x,0,z), seeding +
-// caching the NormalNoise on first use (SurfaceRules$Context.createNoiseSampler2d).
-func (s *SurfaceSystem) surfaceNoiseValue(noiseID string, x, z int) (float64, error) {
+// surfaceNoiseValue returns the named surface noise, seeding + caching the NormalNoise on
+// first use. is3d picks the sampler: 2-D samples at (x,0,z) (createNoiseSampler2d), 3-D at
+// (x,y,z) (createNoiseSampler3d). CITE: SurfaceRules$Context$1/$2.getAsDouble.
+func (s *SurfaceSystem) surfaceNoiseValue(noiseID string, x, y, z int, is3d bool) (float64, error) {
 	s.cacheMu.Lock()
 	n, ok := s.noiseCache[noiseID]
 	if !ok {
@@ -175,7 +176,11 @@ func (s *SurfaceSystem) surfaceNoiseValue(noiseID string, x, z int) (float64, er
 	s.cacheMu.Unlock()
 	// GetValue is a pure read on the seeded noise (no shared mutable state), so it runs OUTSIDE
 	// the lock — only the map access needs protecting.
-	return n.GetValue(float64(x), 0, float64(z)), nil
+	yy := 0.0
+	if is3d {
+		yy = float64(y)
+	}
+	return n.GetValue(float64(x), yy, float64(z)), nil
 }
 
 // roundHalfUp ports Math.round(double) = floor(d + 0.5).
@@ -406,8 +411,8 @@ func (c *Context) getMinSurfaceLevel() int {
 }
 
 // surfaceNoiseValue returns the named 2-D surface noise at the current column.
-func (c *Context) surfaceNoiseValue(noiseID string) float64 {
-	v, err := c.system.surfaceNoiseValue(noiseID, c.blockX, c.blockZ)
+func (c *Context) surfaceNoiseValue(noiseID string, is3d bool) float64 {
+	v, err := c.system.surfaceNoiseValue(noiseID, c.blockX, c.blockY, c.blockZ, is3d)
 	if err != nil {
 		// A missing surface noise is a build-data error; surfacing it via a panic
 		// here (off the build-trusted DATA path) keeps the loud-error discipline
@@ -525,7 +530,7 @@ func BuildSurface(s *SurfaceSystem, rule RuleSource, ch *level.Chunk, nc *noisec
 					waterHeight = minInt32
 					continue
 				}
-				if isFluidState(st, water) {
+				if isFluidState(st) {
 					if waterHeight == minInt32 {
 						waterHeight = y + 1
 					}
@@ -539,7 +544,7 @@ func BuildSurface(s *SurfaceSystem, rule RuleSource, ch *level.Chunk, nc *noisec
 						if yy >= minY {
 							bs = col.getBlock(yy)
 						}
-						if !isStone(bs, air, caveAir, water) {
+						if !isStone(bs, air, caveAir) {
 							minStoneY = yy + 1
 							break
 						}
@@ -572,17 +577,20 @@ const wayBelowMinY = -2032
 // isAirState reports whether a state is air or cave air.
 func isAirState(st, air, caveAir block.StateID) bool { return st == air || st == caveAir }
 
-// isFluidState reports whether a state is a fluid (water — the only surface-relevant
-// fluid the fill/aquifer produces above min). Lava is below the surface band and never
-// reaches the top-down water bookkeeping.
-func isFluidState(st, water block.StateID) bool { return st == water }
+// isFluidState reports whether a state's vanilla getFluidState() is non-empty -- i.e. the
+// surface walk's fluid branch (BlockState.getFluidState().isEmpty() == false). This is ANY
+// water level, LAVA, or a waterlogged block: the nether lava sea must be seen as a fluid so
+// stoneDepth/waterHeight bookkeeping is correct there (a lava column top yields the right
+// stone_depth). CITE: SurfaceSystem.buildSurface (getFluidState().isEmpty()) / isStone.
+func isFluidState(st block.StateID) bool { return block.HasFluidState(st) }
 
-// isStone ports SurfaceSystem.isStone (bytecode 0-22): return true iff the state is
-// NOT air AND its fluid state is empty -- i.e. !isAir(st) && !isFluid(st). It is the
-// stoneDepthBelow scan's run predicate: any non-air, non-fluid block continues the
-// stone run (ore, deepslate, packed_mud, etc. all count), only air/fluid terminate it.
-func isStone(st, air, caveAir, water block.StateID) bool {
-	return !isAirState(st, air, caveAir) && !isFluidState(st, water)
+// isStone ports SurfaceSystem.isStone: return true iff the state is NOT air AND its fluid
+// state is empty -- !isAir(st) && getFluidState().isEmpty(). It is the stoneDepthBelow scan's
+// run predicate: any non-air, non-fluid block continues the stone run (ore, deepslate,
+// packed_mud, etc. all count), only air/fluid (water OR lava) terminate it. CITE:
+// SurfaceSystem.isStone (isAir? no : fluidState.isEmpty()).
+func isStone(st, air, caveAir block.StateID) bool {
+	return !isAirState(st, air, caveAir) && !isFluidState(st)
 }
 
 // stoneState / deepslateState resolve the two rock states the noise fill stratifies the
@@ -652,6 +660,35 @@ func BuildWorldgenHeightmaps(ch *level.Chunk, minY, maxY int) {
 	recomputeWorldSurfaceWG(ch, minY, maxY, air, caveAir)
 	recomputeOceanFloorWG(ch, minY, maxY, air, caveAir, water)
 	recomputeMotionBlockingWG(ch, minY, maxY, air, caveAir, water)
+	// OCEAN_FLOOR (LIVE_WORLD id 3) shares OCEAN_FLOOR_WG's MATERIAL_MOTION_BLOCKING
+	// predicate; compute it here so the persisted (kept-after-worldgen) map is non-zero
+	// for both the noise and superflat paths (spawn.go's ocean-reject reads it). CITE:
+	// Heightmap$Types.OCEAN_FLOOR (Usage.LIVE_WORLD, MATERIAL_MOTION_BLOCKING).
+	recomputeOceanFloorLive(ch, minY, maxY)
+}
+
+// recomputeOceanFloorLive rewrites the LIVE_WORLD OCEAN_FLOOR heightmap (id 3) with the
+// MATERIAL_MOTION_BLOCKING predicate (blocksMotion(), no fluid). Y is stored relative to
+// minY. CITE: Heightmap$Types.OCEAN_FLOOR == MATERIAL_MOTION_BLOCKING == blocksMotion().
+func recomputeOceanFloorLive(ch *level.Chunk, minY, maxY int) {
+	for lx := 0; lx < 16; lx++ {
+		for lz := 0; lz < 16; lz++ {
+			top := minY
+			for y := maxY - 1; y >= minY; y-- {
+				sec := (y - minY) >> 4
+				if sec < 0 || sec >= len(ch.Sections) {
+					continue
+				}
+				local := (y&15)<<8 | (lz&15)<<4 | (lx & 15)
+				st := ch.Sections[sec].GetBlock(local)
+				if block.BlocksMotion(st) {
+					top = y + 1
+					break
+				}
+			}
+			ch.HeightMaps.OceanFloor.Set(lz<<4|lx, clampHM(top-minY))
+		}
+	}
 }
 
 // recomputeOceanFloorWG rewrites OCEAN_FLOOR_WG (first Y above the highest
@@ -668,8 +705,8 @@ func recomputeOceanFloorWG(ch *level.Chunk, minY, maxY int, air, caveAir, water 
 				}
 				local := (y&15)<<8 | (lz&15)<<4 | (lx & 15)
 				st := ch.Sections[sec].GetBlock(local)
-				// motion-blocking AND NOT fluid: non-air and not water.
-				if !isAirState(st, air, caveAir) && !isFluidState(st, water) {
+				// OCEAN_FLOOR_WG = MATERIAL_MOTION_BLOCKING = blocksMotion() (no fluid).
+				if block.BlocksMotion(st) {
 					top = y + 1
 					break
 				}
@@ -700,8 +737,8 @@ func recomputeMotionBlockingWG(ch *level.Chunk, minY, maxY int, air, caveAir, wa
 				}
 				local := (y&15)<<8 | (lz&15)<<4 | (lx & 15)
 				st := ch.Sections[sec].GetBlock(local)
-				// blocks-motion OR fluid: non-air OR water → any non-air (water is non-air).
-				if !isAirState(st, air, caveAir) || isFluidState(st, water) {
+				// MOTION_BLOCKING = blocksMotion() || !getFluidState().isEmpty().
+				if block.BlocksMotion(st) || block.HasFluidState(st) {
 					top = y + 1
 					break
 				}
@@ -715,17 +752,28 @@ func recomputeMotionBlockingWG(ch *level.Chunk, minY, maxY int, air, caveAir, wa
 	}
 }
 
-// writeClientHeightmaps writes the 3 CLIENT heightmaps (WorldSurface, MotionBlocking,
-// MotionBlockingNoLeaves) from the post-surface column top. WorldSurface = first Y above
-// the highest non-air block; MotionBlocking(/NoLeaves) = first Y above the highest
-// motion-blocking block (non-air OR fluid) — for the noise terrain those coincide with
-// the highest non-air (water blocks motion), so all three share the top-of-column scan.
-// Pitfall 6: a wrong heightmap mis-renders/mis-spawns.
+// writeClientHeightmaps writes the 4 live/client heightmaps (WorldSurface, OceanFloor,
+// MotionBlocking, MotionBlockingNoLeaves) from the post-surface terrain, each with its own
+// jar-confirmed Heightmap$Types predicate (this mirrors Heightmap.primeHeightmaps: one
+// top-down walk per column, first Y where a map's predicate holds sets height = y+1):
+//
+//   - WORLD_SURFACE             = NOT_AIR                        (!isAir())
+//   - OCEAN_FLOOR (LIVE_WORLD)  = MATERIAL_MOTION_BLOCKING       (blocksMotion())
+//   - MOTION_BLOCKING           = blocksMotion() || !fluid.isEmpty()
+//   - MOTION_BLOCKING_NO_LEAVES = MOTION_BLOCKING && !(getBlock() instanceof LeavesBlock)
+//
+// OCEAN_FLOOR is Usage.LIVE_WORLD (keepAfterWorldgen, not sendToClient) so it is persisted
+// to disk though not put on the wire — computing it here makes spawn.go's ocean-reject and
+// any live OCEAN_FLOOR read truthful instead of reading an all-zero map. Pitfall 6: a wrong
+// heightmap mis-renders / mis-spawns. CITE: Heightmap.primeHeightmaps; Heightmap$Types
+// (NOT_AIR / MATERIAL_MOTION_BLOCKING / lambda$static$0 / lambda$static$1).
 func writeClientHeightmaps(ch *level.Chunk, minY, maxY int, air, caveAir, water block.StateID) {
 	for lx := 0; lx < 16; lx++ {
 		for lz := 0; lz < 16; lz++ {
 			worldSurface := minY
+			oceanFloor := minY
 			motionBlocking := minY
+			motionBlockingNoLeaves := minY
 			for y := maxY - 1; y >= minY; y-- {
 				sec := (y - minY) >> 4
 				if sec < 0 || sec >= len(ch.Sections) {
@@ -734,30 +782,42 @@ func writeClientHeightmaps(ch *level.Chunk, minY, maxY int, air, caveAir, water 
 				local := (y&15)<<8 | (lz&15)<<4 | (lx & 15)
 				st := ch.Sections[sec].GetBlock(local)
 				if isAirState(st, air, caveAir) {
+					// NOT_AIR is false for air/cave_air; every other predicate here also
+					// requires a non-air block, so an air cell advances no map.
 					continue
 				}
-				// First non-air from the top.
-				if motionBlocking == minY {
+				blocksMotion := block.BlocksMotion(st)
+				motionBlockingHit := blocksMotion || block.HasFluidState(st)
+				if worldSurface == minY {
+					worldSurface = y + 1 // NOT_AIR
+				}
+				if oceanFloor == minY && blocksMotion {
+					oceanFloor = y + 1 // MATERIAL_MOTION_BLOCKING
+				}
+				if motionBlocking == minY && motionBlockingHit {
 					motionBlocking = y + 1
 				}
-				if st != water {
-					worldSurface = y + 1
+				if motionBlockingNoLeaves == minY && motionBlockingHit && !block.IsLeavesBlockInstance(st) {
+					motionBlockingNoLeaves = y + 1
+				}
+				if worldSurface != minY && oceanFloor != minY && motionBlocking != minY && motionBlockingNoLeaves != minY {
 					break
 				}
 			}
-			ws := worldSurface - minY
-			if ws < 0 {
-				ws = 0
-			}
-			mb := motionBlocking - minY
-			if mb < 0 {
-				mb = 0
-			}
-			ch.HeightMaps.WorldSurface.Set(lz<<4|lx, ws)
-			ch.HeightMaps.MotionBlocking.Set(lz<<4|lx, mb)
-			ch.HeightMaps.MotionBlockingNoLeaves.Set(lz<<4|lx, mb)
+			ch.HeightMaps.WorldSurface.Set(lz<<4|lx, clampHM(worldSurface-minY))
+			ch.HeightMaps.OceanFloor.Set(lz<<4|lx, clampHM(oceanFloor-minY))
+			ch.HeightMaps.MotionBlocking.Set(lz<<4|lx, clampHM(motionBlocking-minY))
+			ch.HeightMaps.MotionBlockingNoLeaves.Set(lz<<4|lx, clampHM(motionBlockingNoLeaves-minY))
 		}
 	}
+}
+
+// clampHM floors a relative heightmap value at 0 (an all-air column yields 0).
+func clampHM(v int) int {
+	if v < 0 {
+		return 0
+	}
+	return v
 }
 
 // FillBiomes fills the chunk's per-section 4×4×4 biome paletted containers with the real

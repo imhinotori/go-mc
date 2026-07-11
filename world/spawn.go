@@ -3,6 +3,7 @@ package world
 import (
 	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/block"
+	"github.com/imhinotori/sulfur/world/levelgen/biome"
 )
 
 // SpawnPoint is the safe fresh-spawn world position (the air cell where the player's feet
@@ -44,6 +45,23 @@ type SpawnPoint struct {
 // real ground. The spiral order is deterministic (pure over seed), so the fallback spawn is
 // reproducible. The common case (land at origin) returns on the very first chunk, so the ring
 // scan adds zero cost there.
+// InitialSpawnChunk ports the climate half of MinecraftServer.setInitialSpawn: it runs
+// Climate$Sampler.findSpawnPosition over the overworld spawnTarget (OverworldBiomeBuilder.
+// spawnTarget) to pick a spawn-suitable CHUNK, instead of always using chunk (0,0). Vanilla
+// then does an 11x11 spiral of getSpawnPosInChunk around that chunk (already covered by
+// SpawnPos's outward spiral) and sets the world spawn there. The returned ChunkPos is
+// ChunkPos.containing(findSpawnPosition()). REDUCTION: this ports the climate spawn-TARGET
+// search (the part that moves spawn off (0,0)); the exact 11x11 (Mth.square(11)) manhattan
+// spiral order is approximated by SpawnPos's existing standable-column spiral (same intent:
+// nearest standable column to the climate target), which is the cited simplification. CITE:
+// MinecraftServer.setInitialSpawn (randomState.sampler().findSpawnPosition() -> ChunkPos.
+// containing); Climate$Sampler.findSpawnPosition; Climate$SpawnFinder.
+func (g *NoiseGenerator) InitialSpawnChunk() level.ChunkPos {
+	sp := g.biomes.Sampler().FindSpawnPosition(biome.OverworldSpawnTarget())
+	// ChunkPos.containing(BlockPos) == (x>>4, z>>4).
+	return level.ChunkPos{int32(sp.X >> 4), int32(sp.Z >> 4)}
+}
+
 func (g *NoiseGenerator) SpawnPos(pos level.ChunkPos) SpawnPoint {
 	if sp, ok := g.spawnPosInChunk(pos); ok {
 		return sp

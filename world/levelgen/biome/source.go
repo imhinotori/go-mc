@@ -53,7 +53,6 @@ type MultiNoiseBiomeSource struct {
 	endErosion density.Function
 }
 
-
 // NewMultiNoiseBiomeSource parses the embedded overworld biome parameter list and binds
 // the climate sampler to the router's six climate functions. PURE over the router seed:
 // same seed → same router → same biomes (Pitfall 7). The router field mapping mirrors
@@ -176,11 +175,11 @@ func NewNetherBiomeSource(r *router.Router) (*MultiNoiseBiomeSource, error) {
 // endBiomeConst maps the five End biome ids to their levelbiome.Type once at init, so
 // the End getNoiseBiome path is allocation-free. A bad id here is a build/asset bug.
 var (
-	endBiomeTheEnd          = mustEndBiome("minecraft:the_end")
-	endBiomeHighlands       = mustEndBiome("minecraft:end_highlands")
-	endBiomeMidlands        = mustEndBiome("minecraft:end_midlands")
-	endBiomeSmallIslands    = mustEndBiome("minecraft:small_end_islands")
-	endBiomeBarrens         = mustEndBiome("minecraft:end_barrens")
+	endBiomeTheEnd       = mustEndBiome("minecraft:the_end")
+	endBiomeHighlands    = mustEndBiome("minecraft:end_highlands")
+	endBiomeMidlands     = mustEndBiome("minecraft:end_midlands")
+	endBiomeSmallIslands = mustEndBiome("minecraft:small_end_islands")
+	endBiomeBarrens      = mustEndBiome("minecraft:end_barrens")
 )
 
 func mustEndBiome(id string) levelbiome.Type {
@@ -253,6 +252,10 @@ func (s *MultiNoiseBiomeSource) getEndBiome(quartX, quartY, quartZ int) levelbio
 // Params exposes the parsed parameter list (tests inspect the box count / biomes).
 
 func (s *MultiNoiseBiomeSource) Params() *ParameterList { return s.params }
+
+// Sampler exposes the bound climate Sampler (the initial-spawn climate search reads it via
+// Climate$Sampler.findSpawnPosition). CITE: RandomState.sampler() -> Climate$Sampler.
+func (s *MultiNoiseBiomeSource) Sampler() Sampler { return s.sampler }
 
 // getNoiseBiome ports MultiNoiseBiomeSource.getNoiseBiome(x,y,z,Sampler) (x/y/z in QUART
 // coords): sample the climate target at the quart cell, then findValue the nearest box.

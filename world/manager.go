@@ -302,6 +302,11 @@ func (m *ChunkManager) SetBlock(pos pk.Position, state block.StateID, minY int) 
 		return false // already this state: a no-op, do not re-broadcast an unchanged edit
 	}
 	ch.Sections[sec].SetBlock(local, state)
+	// LevelChunk.setBlockState updates the four live heightmaps (MOTION_BLOCKING,
+	// MOTION_BLOCKING_NO_LEAVES, OCEAN_FLOOR, WORLD_SURFACE) on every block set so they never
+	// go stale after a player build/break. Local column coords are pos&15; Y is absolute.
+	// CITE: LevelChunk.setBlockState -> Heightmap.update x4.
+	ch.UpdateHeightmaps(pos.X&15, pos.Y, pos.Z&15, minY, state)
 	// SUB-PERSIST: a CHANGED block dirties its column so the save loop flushes it. Marked here,
 	// at the SOLE block mutator, so every block edit (place/break/fluid/vegetation) is captured
 	// without each call site remembering to mark. The column is Ready (columnAndSection resolved

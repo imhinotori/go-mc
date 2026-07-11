@@ -20,19 +20,19 @@ import (
 //
 // Phase 10's Decorate is a NO-OP body that never CALLS SetBlock — but the proxy + its
 // heightmap-update wiring is built + correct so the feature phase (Phase 11+) inherits
-// it. The 3 opaque predicates are built here from block.IsAir + a resolved water
-// StateID (the only ready-made predicate is block.IsAir; there is no motion/fluid helper):
+// it. The 3 opaque predicates are the jar-confirmed Heightmap$Types predicates
+// (block.BlocksMotion / block.HasFluidState / block.IsAir):
 //
-//	WORLD_SURFACE_WG opaque = NOT air
-//	OCEAN_FLOOR_WG   opaque = NOT air AND NOT water   (motion-blocking, no fluid)
-//	MOTION_BLOCKING  opaque = NOT air OR water        (blocks motion OR fluid)
+//	WORLD_SURFACE_WG opaque = NOT_AIR                   (!isAir)
+//	OCEAN_FLOOR_WG   opaque = MATERIAL_MOTION_BLOCKING  (blocksMotion())
+//	MOTION_BLOCKING  opaque = blocksMotion() || !getFluidState().isEmpty()
 type Neighborhood struct {
 	center level.ChunkPos
 	minY   int
 	height int
 	chunks map[int64]*level.Chunk // 9 entries: center + 8 neighbors, packed-pos keyed
 	air    block.StateID
-	water  block.StateID
+	water  block.StateID // resolved once; retained for potential predicate/debug reads
 
 	// worldSeed is the raw world seed (WorldGenLevel.getSeed()). It is 0 until the
 	// generator sets it via SetWorldSeed at the start of decoration. The GeodeFeature
@@ -297,14 +297,18 @@ func chestLootNBT(lootTable string, lootSeed int64) nbt.RawMessage {
 // The 3 worldgen-heightmap opaque predicates, built from block.IsAir + the resolved
 // water StateID (mirroring surface/system.go's predicate logic — no ready-made
 // motion/fluid helper exists):
+// with the jar-confirmed Heightmap$Types predicates:
 //
-//	WORLD_SURFACE_WG = NOT air
-//	OCEAN_FLOOR_WG   = NOT air AND NOT water   (motion-blocking, no fluid)
-//	MOTION_BLOCKING  = NOT air OR water        (blocks motion OR fluid)
+//	WORLD_SURFACE_WG = NOT_AIR                    (!isAir())
+//	OCEAN_FLOOR_WG   = MATERIAL_MOTION_BLOCKING   (blocksMotion())
+//	MOTION_BLOCKING  = blocksMotion() || !getFluidState().isEmpty()
+//
+// CITE: Heightmap$Types (NOT_AIR / MATERIAL_MOTION_BLOCKING / lambda$static$0);
+// BlockStateBase.blocksMotion.
 func (n *Neighborhood) worldSurfaceWG(st block.StateID) bool { return !block.IsAir(st) }
 func (n *Neighborhood) oceanFloorWG(st block.StateID) bool {
-	return !block.IsAir(st) && st != n.water
+	return block.BlocksMotion(st)
 }
 func (n *Neighborhood) motionBlocking(st block.StateID) bool {
-	return !block.IsAir(st) || st == n.water
+	return block.BlocksMotion(st) || block.HasFluidState(st)
 }

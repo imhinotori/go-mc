@@ -106,3 +106,102 @@ func TestWorldgenHeightmapsDeterministic(t *testing.T) {
 		t.Fatalf("non-idempotent build: %d then %d", first, second)
 	}
 }
+
+// TestOceanFloorLiveComputed proves the LIVE_WORLD OCEAN_FLOOR map (id 3) is populated
+// non-zero by BuildWorldgenHeightmaps (previously allocated + persisted but left all-zero,
+// making spawn.go's ocean-reject dead). A stone column to y=64 -> OceanFloor top y=65.
+func TestOceanFloorLiveComputed(t *testing.T) {
+	const (
+		secs = 24
+		minY = -64
+		lx   = 4
+		lz   = 4
+		yk   = 64
+	)
+	maxY := minY + secs*16
+	col := lz<<4 | lx
+	stone := block.ToStateID[block.Stone{}]
+	ch := level.EmptyChunk(secs)
+	for y := minY; y <= yk; y++ {
+		setColumnBlock(ch, lx, y, lz, minY, stone)
+	}
+	BuildWorldgenHeightmaps(ch, minY, maxY)
+	if got := ch.HeightMaps.OceanFloor.Get(col); got == 0 {
+		t.Fatalf("LIVE OCEAN_FLOOR is 0 (dead); want non-zero for a stone column")
+	}
+	if got := ch.HeightMaps.OceanFloor.Get(col) + minY; got != yk+1 {
+		t.Fatalf("LIVE OCEAN_FLOOR = %d, want %d (above stone top)", got, yk+1)
+	}
+}
+
+// TestMotionBlockingSkipsVegetation proves the motion-blocking heightmaps use blocksMotion()
+// (NOT !isAir): a non-colliding plant sitting on the stone top does NOT raise OCEAN_FLOOR /
+// MOTION_BLOCKING, though it DOES raise WORLD_SURFACE_WG (NOT_AIR). This is the bug-1 fix.
+func TestMotionBlockingSkipsVegetation(t *testing.T) {
+	const (
+		secs = 24
+		minY = -64
+		lx   = 6
+		lz   = 6
+		yk   = 64
+	)
+	maxY := minY + secs*16
+	col := lz<<4 | lx
+	stone := block.ToStateID[block.Stone{}]
+	grass := block.ToStateID[block.ShortGrass{}]
+	ch := level.EmptyChunk(secs)
+	for y := minY; y <= yk; y++ {
+		setColumnBlock(ch, lx, y, lz, minY, stone)
+	}
+	setColumnBlock(ch, lx, yk+1, lz, minY, grass) // plant on the stone top
+	BuildWorldgenHeightmaps(ch, minY, maxY)
+
+	if got := ch.HeightMaps.WorldSurfaceWG.Get(col) + minY; got != yk+2 {
+		t.Fatalf("WORLD_SURFACE_WG = %d, want %d (above the plant)", got, yk+2)
+	}
+	if got := ch.HeightMaps.OceanFloorWG.Get(col) + minY; got != yk+1 {
+		t.Fatalf("OCEAN_FLOOR_WG = %d, want %d (above stone; the plant does not block motion)", got, yk+1)
+	}
+	if got := ch.HeightMaps.MotionBlocking.Get(col) + minY; got != yk+1 {
+		t.Fatalf("MOTION_BLOCKING = %d, want %d (plant is non-colliding)", got, yk+1)
+	}
+}
+
+// TestSteepConditionBothAxes proves the SteepMaterialCondition tests BOTH X and Z (bug-6b):
+// a WORLD_SURFACE_WG slope along X only (flat in Z) must still trip steep. Vanilla ORs the
+// Z-axis pair with the X-axis pair. CITE: SteepMaterialCondition.compute.
+func TestSteepConditionBothAxes(t *testing.T) {
+	const (
+		secs = 24
+		minY = -64
+	)
+	ch := level.EmptyChunk(secs)
+	// Build a WORLD_SURFACE_WG that is FLAT in Z but has a >=4 step across X at column
+	// (lx=8): height at x=7 is high, x=9 is low. steep must fire on the X-axis test.
+	// worldSurfaceHeight reads WorldSurfaceWG.Get(lz<<4|lx)+minY.
+	for lz := 0; lz < 16; lz++ {
+		for lx := 0; lx < 16; lx++ {
+			h := 0
+			if lx <= 7 {
+				h = 10 // tall on the low-x side
+			}
+			ch.HeightMaps.WorldSurfaceWG.Set(lz<<4|lx, h)
+		}
+	}
+	c := &Context{chunk: ch, minY: minY}
+	c.blockX = 8 // xm=7 (h=10), xp=9 (h=0): h(xm) >= h(xp)+4 -> steep via X axis
+	c.blockZ = 4
+	if !(steepCondition{}).test(c) {
+		t.Fatalf("steep did not fire on an X-only slope (h(xm)=10 vs h(xp)=0); X-axis test missing")
+	}
+	// A flat column (no step on either axis) must NOT be steep.
+	for lz := 0; lz < 16; lz++ {
+		for lx := 0; lx < 16; lx++ {
+			ch.HeightMaps.WorldSurfaceWG.Set(lz<<4|lx, 5)
+		}
+	}
+	c.blockX = 8
+	if (steepCondition{}).test(c) {
+		t.Fatalf("steep fired on a flat column, want false")
+	}
+}

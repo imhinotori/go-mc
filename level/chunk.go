@@ -581,6 +581,64 @@ type HeightMaps struct {
 	MotionBlockingNoLeaves *BitStorage // test = BlocksMotion or isFluid
 }
 
+// heightmapOpaque is the per-type isOpaque predicate the four LIVE_WORLD/CLIENT heightmaps
+// carry (Heightmap$Types.isOpaque). It is the exact 1:1 of the four predicates:
+//
+//   - WORLD_SURFACE             = NOT_AIR                    (!state.isAir())
+//   - OCEAN_FLOOR (LIVE_WORLD)  = MATERIAL_MOTION_BLOCKING   (state.blocksMotion())
+//   - MOTION_BLOCKING           = state.blocksMotion() || !state.getFluidState().isEmpty()
+//   - MOTION_BLOCKING_NO_LEAVES = MOTION_BLOCKING && !(getBlock() instanceof LeavesBlock)
+//
+// CITE: Heightmap$Types (NOT_AIR / MATERIAL_MOTION_BLOCKING / lambda$static$0 / lambda$static$1).
+func heightmapOpaqueWorldSurface(st block.StateID) bool { return !block.IsAir(st) }
+func heightmapOpaqueOceanFloor(st block.StateID) bool   { return block.BlocksMotion(st) }
+func heightmapOpaqueMotionBlocking(st block.StateID) bool {
+	return block.BlocksMotion(st) || block.HasFluidState(st)
+}
+func heightmapOpaqueMotionBlockingNoLeaves(st block.StateID) bool {
+	return heightmapOpaqueMotionBlocking(st) && !block.IsLeavesBlockInstance(st)
+}
+
+// columnBlockAt reads the block state at local column (lx,lz) and ABSOLUTE world Y, or Air
+// when y is outside the chunk's section range. Used by the live heightmap update's downward
+// re-scan closure. minY is the dimension floor.
+func (c *Chunk) columnBlockAt(lx, y, lz, minY int) block.StateID {
+	sec := (y - minY) >> 4
+	if sec < 0 || sec >= len(c.Sections) {
+		return block.ToStateID[block.Air{}]
+	}
+	local := (y&15)<<8 | (lz&15)<<4 | (lx & 15)
+	return c.Sections[sec].GetBlock(local)
+}
+
+// UpdateHeightmaps ports the four Heightmap.update calls LevelChunk.setBlockState makes on
+// every live block set, in the SAME order: MOTION_BLOCKING, MOTION_BLOCKING_NO_LEAVES,
+// OCEAN_FLOOR, WORLD_SURFACE. x,z are LOCAL column coords (0..15), y ABSOLUTE world Y, minY
+// the dimension floor, newState the just-set block. It delegates each map to the canonical
+// HeightmapUpdate (the 1:1 Heightmap.update port), passing that map's Heightmap$Types
+// predicate for both the NEW state and the downward-rescan closure. Wiring this at the sole
+// live block mutator keeps the heightmaps truthful after players build/break. CITE:
+// LevelChunk.setBlockState (heightmaps.get(MOTION_BLOCKING/.../WORLD_SURFACE).update(...)).
+func (c *Chunk) UpdateHeightmaps(x, y, z, minY int, newState block.StateID) {
+	at := func(yy int) block.StateID { return c.columnBlockAt(x, yy, z, minY) }
+	if bs := c.HeightMaps.MotionBlocking; bs != nil {
+		HeightmapUpdate(bs, x, y, z, minY, heightmapOpaqueMotionBlocking(newState),
+			func(yy int) bool { return heightmapOpaqueMotionBlocking(at(yy)) })
+	}
+	if bs := c.HeightMaps.MotionBlockingNoLeaves; bs != nil {
+		HeightmapUpdate(bs, x, y, z, minY, heightmapOpaqueMotionBlockingNoLeaves(newState),
+			func(yy int) bool { return heightmapOpaqueMotionBlockingNoLeaves(at(yy)) })
+	}
+	if bs := c.HeightMaps.OceanFloor; bs != nil {
+		HeightmapUpdate(bs, x, y, z, minY, heightmapOpaqueOceanFloor(newState),
+			func(yy int) bool { return heightmapOpaqueOceanFloor(at(yy)) })
+	}
+	if bs := c.HeightMaps.WorldSurface; bs != nil {
+		HeightmapUpdate(bs, x, y, z, minY, heightmapOpaqueWorldSurface(newState),
+			func(yy int) bool { return heightmapOpaqueWorldSurface(at(yy)) })
+	}
+}
+
 // heightMapEntry is a single heightmap in the protocol 774+ chunk format.
 // Each entry has a type enum and a VarInt-prefixed array of int64 (packed data).
 type heightMapEntry struct {

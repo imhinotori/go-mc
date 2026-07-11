@@ -143,3 +143,48 @@ func TestSupport_OutOfRange(t *testing.T) {
 		t.Fatalf("out-of-range accessors should return false")
 	}
 }
+
+// TestBlocksMotion checks the BlockStateBase.blocksMotion port: false for a non-colliding
+// plant (short_grass) so the motion-blocking heightmaps skip it, false for the two vanilla
+// exclusions (cobweb, bamboo_sapling) even though they have collision, and true for a full
+// solid block (stone). CITE: BlockBehaviour$BlockStateBase.blocksMotion.
+func TestBlocksMotion(t *testing.T) {
+	if BlocksMotion(ToStateID[ShortGrass{}]) {
+		t.Fatalf("BlocksMotion(short_grass) = true, want false (plant is non-colliding, must not raise the motion-blocking heightmap)")
+	}
+	if BlocksMotion(ToStateID[Cobweb{}]) {
+		t.Fatalf("BlocksMotion(cobweb) = true, want false (vanilla excludes COBWEB)")
+	}
+	if BlocksMotion(ToStateID[BambooSapling{}]) {
+		t.Fatalf("BlocksMotion(bamboo_sapling) = true, want false (vanilla excludes BAMBOO_SAPLING)")
+	}
+	if !BlocksMotion(ToStateID[Stone{}]) {
+		t.Fatalf("BlocksMotion(stone) = false, want true (a full solid block blocks motion)")
+	}
+}
+
+// TestHasFluidState checks the getFluidState().isEmpty()==false predicate: true for water
+// and lava (fluid blocks), false for a plain solid. CITE: BlockStateBase.getFluidState.
+func TestHasFluidState(t *testing.T) {
+	if !HasFluidState(ToStateID[Water{Level: 0}]) {
+		t.Fatalf("HasFluidState(water) = false, want true")
+	}
+	if !HasFluidState(ToStateID[Lava{Level: 0}]) {
+		t.Fatalf("HasFluidState(lava) = false, want true (lava fluid is non-empty)")
+	}
+	if HasFluidState(ToStateID[Stone{}]) {
+		t.Fatalf("HasFluidState(stone) = true, want false")
+	}
+}
+
+// TestIsLeavesBlockInstance checks the MOTION_BLOCKING_NO_LEAVES exclusion predicate:
+// true for leaves, false for a non-leaf solid. CITE: Heightmap$Types.lambda$static$1
+// (getBlock() instanceof LeavesBlock).
+func TestIsLeavesBlockInstance(t *testing.T) {
+	if !IsLeavesBlockInstance(ToStateID[OakLeaves{Distance: 1}]) {
+		t.Fatalf("IsLeavesBlockInstance(oak_leaves) = false, want true")
+	}
+	if IsLeavesBlockInstance(ToStateID[Stone{}]) {
+		t.Fatalf("IsLeavesBlockInstance(stone) = true, want false")
+	}
+}
