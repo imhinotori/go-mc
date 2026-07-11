@@ -68,10 +68,14 @@ type PlayerData struct {
 	// + ServerPlayer$RespawnConfig.CODEC + LevelData$RespawnData.MAP_CODEC + GlobalPos.CODEC.
 	Respawn *RespawnConfigDisk `nbt:"respawn,omitempty"`
 
-	Attributes []struct {
-		Base float64
-		Name string
-	}
+	// Attributes is LivingEntity.addAdditionalSaveData's "attributes" list -- the
+	// AttributeInstance$Packed.LIST_CODEC (store("attributes", ..., getAttributes().pack())). Each
+	// element is {id (Holder registry string), base (double), modifiers (list of {id, amount,
+	// operation})}. SUB-PERSIST: replaced the DEAD pre-1.20.5 []struct{Base;Name} shape (never
+	// written) with the real 26.2 codec. omitempty so an all-default entity writes no key. CITE
+	// net.minecraft.world.entity.LivingEntity.addAdditionalSaveData (store "attributes",
+	// AttributeInstance$Packed.LIST_CODEC, AttributeMap.pack()) + AttributeInstance$Packed.CODEC.
+	Attributes []AttributePacked `nbt:"attributes,omitempty"`
 
 	Abilities struct {
 		FlySpeed     float32 `nbt:"flySpeed"`
@@ -101,8 +105,13 @@ type PlayerData struct {
 // ("id" fieldOf the effect Holder) + MobEffectInstance$Details.MAP_CODEC (amplifier/duration/ambient/
 // show_particles/show_icon/hidden_effect).
 type MobEffectInstanceDisk struct {
-	ID            string                 `nbt:"id"`
-	Amplifier     int32                  `nbt:"amplifier"`
+	ID        string `nbt:"id"`
+	Amplifier int32  `nbt:"amplifier"`
+	// Duration is a PLAIN int in 26.2. VERIFIED via javap MobEffectInstance$Details static
+	// initializer: the "duration" field is Codec.INT.optionalFieldOf("duration", 0) -- there is NO
+	// "infinite" codec alternative / Either / xmap in 26.2. The INFINITE_DURATION sentinel (-1) is
+	// therefore written LITERALLY as the int -1 (no special-casing), which is exactly what this int32
+	// does. (A pre-26 schema used a separate infinite-variant; 26.2 does not.)
 	Duration      int32                  `nbt:"duration"`
 	Ambient       bool                   `nbt:"ambient"`
 	ShowParticles bool                   `nbt:"show_particles"`
@@ -124,6 +133,34 @@ type RespawnConfigDisk struct {
 	Yaw       float32  `nbt:"yaw"`
 	Pitch     float32  `nbt:"pitch"`
 	Forced    bool     `nbt:"forced"`
+}
+
+// AttributePacked is the disk form of one net.minecraft.world.entity.ai.attributes.AttributeInstance
+// as AttributeInstance$Packed.CODEC serializes it (the "attributes" list element). VERIFIED via javap
+// AttributeInstance$Packed static initializer:
+//   - id        : Codec fieldOf "id"        -- the Attribute Holder registry name ("minecraft:max_health")
+//   - base      : Codec.DOUBLE optionalAlwaysPresentFieldOf "base" (default 0.0) -- ALWAYS written
+//   - modifiers : AttributeModifier.CODEC.listOf() optionalFieldOf "modifiers" (default empty list)
+//
+// Modifiers is omitempty so a modifier-free attribute writes no "modifiers" key (matches the
+// optionalFieldOf(empty) encode: an empty list is dropped).
+type AttributePacked struct {
+	ID        string                  `nbt:"id"`
+	Base      float64                 `nbt:"base"`
+	Modifiers []AttributeModifierDisk `nbt:"modifiers,omitempty"`
+}
+
+// AttributeModifierDisk is the disk form of net.minecraft.world.entity.ai.attributes.AttributeModifier
+// (the record {Identifier id, double amount, Operation operation}) as AttributeModifier.CODEC
+// serializes it. VERIFIED via javap AttributeModifier / Operation static initializers:
+//   - id        : Codec fieldOf "id"        -- the modifier's stable Identifier string
+//   - amount    : Codec.DOUBLE fieldOf "amount"
+//   - operation : Operation.CODEC fieldOf "operation" -- StringRepresentable serialized name
+//     (add_value / add_multiplied_base / add_multiplied_total)
+type AttributeModifierDisk struct {
+	ID        string  `nbt:"id"`
+	Amount    float64 `nbt:"amount"`
+	Operation string  `nbt:"operation"`
 }
 
 type Item struct {

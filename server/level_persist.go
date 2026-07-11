@@ -1,37 +1,39 @@
 package server
 
-// level_persist.go -- SUB-PERSIST for level.dat (the world-global save that save.Level /
-// WriteLevel/ReadLevel define but that had ZERO callers). It writes world/level.dat on the periodic
-// save flush + shutdown, and reads it back at boot, so the world seed, time, weather, spawn,
-// gamerules and worldborder survive a restart. This is the vanilla LevelStorageSource.saveDataTag
-// path: PrimaryLevelData.setTagData builds the Data compound and NbtIo.writeCompressed gzips it to
-// level.dat; the boot load reads it back.
+// level_persist.go -- SUB-PERSIST for level.dat (the world-global save). It writes world/level.dat on
+// the periodic save flush + shutdown, and reads it back at boot. This is the vanilla
+// LevelStorageSource.saveDataTag path: PrimaryLevelData.setTagData builds the Data compound and
+// NbtIo.writeCompressed gzips it to level.dat; the boot load reads it back.
+//
+// 26.2 SCHEMA (VERIFIED via javap PrimaryLevelData.setTagData -- see save/level.go LevelData262 for
+// the full key list): the level.dat root in 26.2 carries ServerBrands, WasModded, removed_features,
+// Version, DataVersion, GameType, spawn (RespawnData), Time, LastPlayed, LevelName, version(19133),
+// allowCommands, initialized, difficulty_settings, singleplayer_uuid, and the inlined
+// WorldDataConfiguration (DataPacks/enabled_features). It does NOT carry DayTime, SpawnX/Y/Z,
+// GameRules, WorldGenSettings, Border*, or the weather timers/flags -- those moved out of the level.dat
+// root in 26.2 (they live in their own WorldData structures). encodeLevelData therefore writes ONLY the
+// setTagData key set; weather/seed/gamerules/border are NOT round-tripped through level.dat.
 //
 // CITED JAR (26.2-inner.jar):
 //   - LevelStorageSource.LevelStorageAccess.saveDataTag: put("Data", worldData.createTag(...)) then
 //     NbtIo.writeCompressed(root, level.dat).
-//   - PrimaryLevelData.setTagData / createTag: the Data compound fields (Time, DayTime,
-//     clearWeatherTime, rainTime/raining, thunderTime/thundering, SpawnX/Y/Z + SpawnAngle, GameRules,
-//     WorldGenSettings seed, Border center/size/safeZone/damagePerBlock/warning*, Version, DataVersion).
-//   - The world-global timers/flags mirror WeatherData; the border fields mirror WorldBorder.Settings.
+//   - PrimaryLevelData.setTagData / createTag / writeVersionTag: the Data compound key set.
 //
 // CONCURRENCY (TICK-05): encodeLevelData is a PURE owner-side read of the loop world-global state into
-// an IMMUTABLE save.Level; the gzip+write runs synchronously in the save pass (level.dat is one tiny
+// an IMMUTABLE save.Level262; the gzip+write runs synchronously in the save pass (level.dat is one tiny
 // file, like raids.dat, so it needs no off-tick channel -- a cheap owner-side flush gated by cadence).
 //
-// encodeLevelData folds the single gametime counter into BOTH Time and DayTime (Sulfur derives the
-// day-time as gametime % dayLength), so restoring Time on load recovers the sky phase exactly. The
-// rainLevel/thunderLevel ramp fields are ServerLevel-transient (recomputed from the flags each tick)
-// and are NOT persisted -- vanilla level.dat also stores only the timers + flags. The abilities/XP/
-// spawn player state lives in the per-player .dat (player_persist_ext.go), not here.
+// Time restores the gametime counter (Sulfur derives day-time as gametime % dayLength, so the sky phase
+// recovers exactly). The abilities/XP/spawn player state lives in the per-player .dat
+// (player_persist_ext.go), not here.
 
 import (
 	"bytes"
 	"compress/gzip"
 	"os"
 	"path/filepath"
+	"time"
 
-	"github.com/imhinotori/sulfur/nbt"
 	"github.com/imhinotori/sulfur/save"
 )
 
@@ -40,94 +42,96 @@ const levelStorageVersion int32 = 19133
 const levelDatName = "level.dat"
 const persistLevelName = "sulfur"
 
-func (t *TickLoop) encodeLevelData(spawnX, spawnY, spawnZ int32, spawnAngle float32) save.Level {
-	var lvl save.Level
-	d := &lvl.Data
-	d.DataVersion = levelDataVersion
-	d.StorageVersion = levelStorageVersion
-	d.LevelName = persistLevelName
-	d.Initialized = true
-	d.Version.ID = levelDataVersion
-	d.Version.Name = ProtocolName
-	d.Time = t.gametime
-	d.DayTime = t.gametime
-	d.ClearWeatherTime = t.weather.clearWeatherTime
-	d.RainTime = t.weather.rainTime
-	d.Raining = t.weather.raining
-	d.ThunderTime = t.weather.thunderTime
-	d.Thundering = t.weather.thundering
-	d.SpawnX, d.SpawnY, d.SpawnZ = spawnX, spawnY, spawnZ
-	d.SpawnAngle = spawnAngle
-	d.RandomSeed = t.worldSeed
-	d.WorldGenSettings.Seed = t.worldSeed
-	d.GameType = gameModeSurvival
-	if t.gamerules == nil {
-		t.gamerules = newGameRules()
+// levelDataSeries is WorldVersion.dataVersion().series() -- the "main" series string writeVersionTag
+// stamps into Version.Series for a release build.
+const levelDataSeries = "main"
+
+// persistServerBrand is the single known server brand written into ServerBrands (the vanilla server
+// records its brand in knownServerBrands; Ender records its own).
+const persistServerBrand = "Ender"
+
+// difficultyFromName is the inverse of difficultyName (a corrupt/unknown name -> NORMAL, the
+// WorldData default).
+func difficultyFromName(name string) difficulty {
+	switch name {
+	case "peaceful":
+		return difficultyPeaceful
+	case "easy":
+		return difficultyEasy
+	case "hard":
+		return difficultyHard
+	default:
+		return difficultyNormal
 	}
-	d.GameRules = t.gamerules.toStringMap()
-	b := t.worldBorder
-	d.BorderCenterX = b.centerX
-	d.BorderCenterZ = b.centerZ
-	d.BorderSize = b.size
-	d.BorderSafeZone = b.safeZone
-	d.BorderDamagePerBlock = b.damagePerBlock
-	d.BorderWarningBlocks = float64(b.warningBlocks)
-	d.BorderWarningTime = float64(b.warningTime)
-	d.BorderSizeLerpTarget = b.size
-	d.BorderSizeLerpTime = 0
+}
+
+// encodeLevelData builds the 26.2 PrimaryLevelData.setTagData Data compound from the loop's world-
+// global state (TICK-05: a pure owner-side read into an IMMUTABLE save.Level262). It is the literal
+// setTagData key set -- weather/time/gamerules/border/seed are NOT written here (they moved out of
+// the level.dat root in 26.2; see save/level.go for the full moved-key list). Only Time (gameTime),
+// the spawn RespawnData, GameType, difficulty_settings, Version, DataVersion and the metadata keys
+// are level.dat root keys in 26.2.
+func (t *TickLoop) encodeLevelData(spawnX, spawnY, spawnZ int32, spawnAngle float32) save.Level262 {
+	var lvl save.Level262
+	d := &lvl.Data
+	d.ServerBrands = []string{persistServerBrand}
+	d.WasModded = false
+	d.Version = save.Version262{
+		Name:     ProtocolName,
+		ID:       levelDataVersion,
+		Snapshot: false, // 26.2 is a stable release (WorldVersion.stable() == true -> Snapshot false)
+		Series:   levelDataSeries,
+	}
+	d.DataVersion = levelDataVersion
+	d.GameType = gameModeSurvival
+	// spawn: LevelData$RespawnData. The overworld world-spawn (dimension/pos/yaw). pitch defaults 0.
+	d.Spawn = save.RespawnData262{
+		Dimension: overworldDimensionName,
+		Pos:       [3]int32{spawnX, spawnY, spawnZ},
+		Yaw:       spawnAngle,
+		Pitch:     0,
+	}
+	d.Time = t.gametime
+	d.LastPlayed = nowEpochMillis()
+	d.LevelName = persistLevelName
+	d.StorageVersion = levelStorageVersion
+	d.AllowCommands = true
+	d.Initialized = true
+	d.Difficulty = save.DifficultySettings262{
+		Difficulty: difficultyName(t.levelDifficulty),
+		Hardcore:   false,
+		Locked:     t.difficultyLocked,
+	}
+	// singleplayer_uuid: Ender is a dedicated server (no singleplayer owner), so setTagData's arg is
+	// null and NO singleplayer_uuid key is written (SingleplayerUUID stays nil).
+	d.SingleplayerUUID = nil
 	return lvl
 }
 
-func (t *TickLoop) applyLevelData(lvl save.Level) {
-	d := lvl.Data
-	t.gametime = d.Time
-	t.weather.clearWeatherTime = d.ClearWeatherTime
-	t.weather.rainTime = d.RainTime
-	t.weather.raining = d.Raining
-	t.weather.thunderTime = d.ThunderTime
-	t.weather.thundering = d.Thundering
-	if d.Raining {
-		t.weather.rainLevel = 1
-		t.weather.oRainLevel = 1
-	}
-	if d.Thundering {
-		t.weather.thunderLevel = 1
-		t.weather.oThunderLevel = 1
-	}
-	if d.WorldGenSettings.Seed != 0 {
-		t.worldSeed = d.WorldGenSettings.Seed
-	} else if d.RandomSeed != 0 {
-		t.worldSeed = d.RandomSeed
-	}
-	if len(d.GameRules) > 0 {
-		if t.gamerules == nil {
-			t.gamerules = newGameRules()
-		}
-		t.gamerules.applyStringMap(d.GameRules)
-	}
-	if d.BorderSize > 0 {
-		b := &t.worldBorder
-		b.centerX = d.BorderCenterX
-		b.centerZ = d.BorderCenterZ
-		b.size = d.BorderSize
-		if d.BorderSafeZone != 0 {
-			b.safeZone = d.BorderSafeZone
-		}
-		if d.BorderDamagePerBlock != 0 {
-			b.damagePerBlock = d.BorderDamagePerBlock
-		}
-		b.warningBlocks = int(d.BorderWarningBlocks)
-		b.warningTime = int(d.BorderWarningTime)
-	}
+// nowEpochMillis is Util.getEpochMillis() (System wall clock), written into LastPlayed by setTagData.
+func nowEpochMillis() int64 {
+	return time.Now().UnixMilli()
 }
 
-func saveLevelDat(worldDir string, lvl save.Level) error {
+// applyLevelData restores the loop world-global state from a loaded 26.2 level.dat. Only the keys
+// setTagData actually writes are read back (Time -> gametime; difficulty_settings -> levelDifficulty
+// + difficultyLocked). Weather/gamerules/border/seed are NOT in the 26.2 level.dat root, so they are
+// not restored here -- they round-trip through their own structures (a faithful setTagData is the
+// scope of this file).
+func (t *TickLoop) applyLevelData(lvl save.Level262) {
+	d := lvl.Data
+	t.gametime = d.Time
+	t.levelDifficulty = difficultyFromName(d.Difficulty.Difficulty)
+	t.difficultyLocked = d.Difficulty.Locked
+}
+
+func saveLevelDat(worldDir string, lvl save.Level262) error {
 	if err := os.MkdirAll(worldDir, 0o755); err != nil {
 		return err
 	}
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
-	if err := save.WriteLevel(gz, lvl); err != nil {
+	if err := save.WriteLevel262(gz, lvl); err != nil {
 		_ = gz.Close()
 		return err
 	}
@@ -142,21 +146,21 @@ func saveLevelDat(worldDir string, lvl save.Level) error {
 	return os.Rename(tmp, path)
 }
 
-func loadLevelDat(worldDir string) (save.Level, bool) {
+func loadLevelDat(worldDir string) (save.Level262, bool) {
 	path := filepath.Join(worldDir, levelDatName)
 	f, err := os.Open(path)
 	if err != nil {
-		return save.Level{}, false
+		return save.Level262{}, false
 	}
 	defer f.Close()
 	gz, err := gzip.NewReader(f)
 	if err != nil {
-		return save.Level{}, false
+		return save.Level262{}, false
 	}
 	defer gz.Close()
-	var lvl save.Level
-	if _, err := nbt.NewDecoder(gz).Decode(&lvl); err != nil {
-		return save.Level{}, false
+	lvl, err := save.ReadLevel262(gz)
+	if err != nil {
+		return save.Level262{}, false
 	}
 	return lvl, true
 }

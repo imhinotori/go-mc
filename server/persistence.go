@@ -334,11 +334,19 @@ func entityRegionPath(dir string, pos level.ChunkPos) (regionPath string, ix, iz
 	return
 }
 
-// entityRegion is the NBT root the entities region stores per cell: a list of save.Entities. It
-// wraps the slice so the region sector holds a single compound (the modern entities region cell
-// is a compound with an "Entities" list), mirroring the vanilla entity-region layout.
+// entityRegion is the NBT root the entities region stores per cell. It is the vanilla EntityStorage
+// cell compound VERIFIED via javap EntityStorage.storeEntities:
+//   - DataVersion : NbtUtils.addCurrentDataVersion (int) -- stamped first
+//   - Entities    : ListTag of entity compounds
+//   - Position    : ChunkPos.CODEC == int[2] [x,z] -- the owning column, validated on load
+//
+// storeEntities writes all three; loadEntities reads Position back and rejects a cell whose stored
+// position != the requested column ("Chunk file at {} is in the wrong location"). SUB-PERSIST: added
+// Position + DataVersion (previously only Entities was written).
 type entityRegion struct {
-	Entities []save.Entities `nbt:"Entities"`
+	DataVersion int32           `nbt:"DataVersion"`
+	Entities    []save.Entities `nbt:"Entities"`
+	Position    [2]int32        `nbt:"Position"`
 }
 
 // saveEntities writes an entity snapshot for a chunk column into the parallel entities/r.x.z.mca
@@ -366,7 +374,7 @@ func saveEntities(dir string, pos level.ChunkPos, ents []save.Entities) error {
 	}
 	defer r.Close()
 
-	payload, err := encodeEntitySector(ents)
+	payload, err := encodeEntitySector(pos, ents)
 	if err != nil {
 		return err
 	}
@@ -402,21 +410,34 @@ func loadEntities(dir string, pos level.ChunkPos) ([]save.Entities, bool, error)
 		return nil, false, err // corrupt/real error
 	}
 
-	ents, err := decodeEntitySector(data)
+	ents, wantPos, err := decodeEntitySector(data)
 	if err != nil {
 		return nil, false, err
+	}
+	// EntityStorage validates the stored Position matches the requested column ("Chunk file at {} is
+	// in the wrong location"). A mismatch is a misplaced/corrupt cell -> treat as a miss (drop it)
+	// rather than respawning entities into the wrong column.
+	if wantPos != [2]int32{int32(pos[0]), int32(pos[1])} {
+		return nil, false, nil
 	}
 	return ents, true, nil
 }
 
 // encodeEntitySector encodes the entities list as a region sector payload: a compression byte
-// (gzip) followed by gzip(NBT) of the entityRegion compound. The gzip writer is closed (trailer
-// flushed) before the bytes are returned so the sector is a complete, re-readable stream.
-func encodeEntitySector(ents []save.Entities) ([]byte, error) {
+// (gzip) followed by gzip(NBT) of the entityRegion compound. It stamps the DataVersion and the
+// column Position (ChunkPos [x,z]) EntityStorage.storeEntities writes alongside the Entities list.
+// The gzip writer is closed (trailer flushed) before the bytes are returned so the sector is a
+// complete, re-readable stream.
+func encodeEntitySector(pos level.ChunkPos, ents []save.Entities) ([]byte, error) {
 	var buf bytes.Buffer
 	buf.WriteByte(entityCompressionGzip)
 	gz := gzip.NewWriter(&buf)
-	if err := nbt.NewEncoder(gz).Encode(entityRegion{Entities: ents}, ""); err != nil {
+	cell := entityRegion{
+		DataVersion: playerDataVersion, // NbtUtils.addCurrentDataVersion (4903 for 26.2)
+		Entities:    ents,
+		Position:    [2]int32{int32(pos[0]), int32(pos[1])}, // ChunkPos.CODEC == int[2] [x,z]
+	}
+	if err := nbt.NewEncoder(gz).Encode(cell, ""); err != nil {
 		_ = gz.Close()
 		return nil, err
 	}
@@ -429,22 +450,22 @@ func encodeEntitySector(ents []save.Entities) ([]byte, error) {
 // decodeEntitySector inverts encodeEntitySector: it reads the compression byte, decompresses
 // (gzip), and decodes the entityRegion NBT compound back into the []save.Entities. An unknown
 // compression byte or a short payload is a real error (surfaced to the caller).
-func decodeEntitySector(data []byte) ([]save.Entities, error) {
+func decodeEntitySector(data []byte) ([]save.Entities, [2]int32, error) {
 	if len(data) < 1 {
-		return nil, errors.New("entity sector: empty payload")
+		return nil, [2]int32{}, errors.New("entity sector: empty payload")
 	}
 	if data[0] != entityCompressionGzip {
-		return nil, errors.New("entity sector: unknown compression")
+		return nil, [2]int32{}, errors.New("entity sector: unknown compression")
 	}
 	gz, err := gzip.NewReader(bytes.NewReader(data[1:]))
 	if err != nil {
-		return nil, err
+		return nil, [2]int32{}, err
 	}
 	defer gz.Close()
 
 	var root entityRegion
 	if _, err := nbt.NewDecoder(gz).Decode(&root); err != nil {
-		return nil, err
+		return nil, [2]int32{}, err
 	}
-	return root.Entities, nil
+	return root.Entities, root.Position, nil
 }

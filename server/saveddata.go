@@ -59,13 +59,15 @@ func (t *TickLoop) LoadPersistedData() {
 		log.Printf("loaded %d POI record(s) across %d section(s) from poi/", total, len(pm.sections))
 	}
 
-	// level.dat (SUB-PERSIST, Part B): restore the world-global seed/time/weather/gamerules/border from
-	// world/level.dat if present. A missing/corrupt file is a clean first-boot no-op (the flag-provided
+	// level.dat (SUB-PERSIST, Part B): restore the 26.2 world-global keys (time + difficulty_settings)
+	// from world/level.dat if present. In 26.2 the level.dat root is PrimaryLevelData.setTagData, which
+	// does NOT carry weather/seed/gamerules/border (they moved to their own structures), so only Time +
+	// difficulty round-trip here. A missing/corrupt file is a clean first-boot no-op (the flag-provided
 	// defaults stand). Applied on the boot goroutine before Run, so it touches the loop world-global
 	// state without tick contention. CITE LevelStorageSource.saveDataTag (the inverse read).
 	if lvl, ok := loadLevelDat(t.persistDir); ok {
 		t.applyLevelData(lvl)
-		log.Printf("loaded level.dat (time=%d raining=%v thundering=%v seed=%d)", lvl.Data.Time, lvl.Data.Raining, lvl.Data.Thundering, t.worldSeed)
+		log.Printf("loaded level.dat (time=%d difficulty=%s locked=%v)", lvl.Data.Time, lvl.Data.Difficulty.Difficulty, lvl.Data.Difficulty.Locked)
 	}
 }
 

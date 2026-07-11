@@ -65,3 +65,62 @@ func TestLevelRoundTrip(t *testing.T) {
 		t.Error("Initialized = false, want true")
 	}
 }
+
+// TestLevel262RoundTrip proves WriteLevel262->(gzip)->ReadLevel262 round-trips the 26.2
+// PrimaryLevelData.setTagData key set (Version, spawn RespawnData, GameType, Time, difficulty_settings,
+// singleplayer_uuid absence). This is the schema Ender's world/level.dat actually uses.
+func TestLevel262RoundTrip(t *testing.T) {
+	var want Level262
+	d := &want.Data
+	d.ServerBrands = []string{"Ender"}
+	d.WasModded = false
+	d.Version = Version262{Name: "26.2", ID: 4903, Snapshot: false, Series: "main"}
+	d.DataVersion = 4903
+	d.GameType = 0
+	d.Spawn = RespawnData262{Dimension: "minecraft:overworld", Pos: [3]int32{8, 72, 8}, Yaw: 45, Pitch: 0}
+	d.Time = 987654
+	d.LastPlayed = 1700000000000
+	d.LevelName = "sulfur"
+	d.StorageVersion = 19133
+	d.AllowCommands = true
+	d.Initialized = true
+	d.Difficulty = DifficultySettings262{Difficulty: "hard", Hardcore: false, Locked: true}
+	d.SingleplayerUUID = nil // dedicated server -> no key
+
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	if err := WriteLevel262(gz, want); err != nil {
+		t.Fatalf("WriteLevel262: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("gzip close: %v", err)
+	}
+	gr, err := gzip.NewReader(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatalf("gzip reader: %v", err)
+	}
+	defer gr.Close()
+	got, err := ReadLevel262(gr)
+	if err != nil {
+		t.Fatalf("ReadLevel262: %v", err)
+	}
+
+	if got.Data.Version != want.Data.Version {
+		t.Errorf("Version = %+v, want %+v", got.Data.Version, want.Data.Version)
+	}
+	if got.Data.Spawn != want.Data.Spawn {
+		t.Errorf("spawn = %+v, want %+v", got.Data.Spawn, want.Data.Spawn)
+	}
+	if got.Data.Difficulty != want.Data.Difficulty {
+		t.Errorf("difficulty_settings = %+v, want %+v", got.Data.Difficulty, want.Data.Difficulty)
+	}
+	if got.Data.Time != 987654 || got.Data.GameType != 0 || got.Data.StorageVersion != 19133 {
+		t.Errorf("Time/GameType/version = (%d,%d,%d)", got.Data.Time, got.Data.GameType, got.Data.StorageVersion)
+	}
+	if got.Data.SingleplayerUUID != nil {
+		t.Errorf("singleplayer_uuid = %v, want absent", got.Data.SingleplayerUUID)
+	}
+	if !got.Data.Initialized || !got.Data.AllowCommands {
+		t.Errorf("initialized/allowCommands not restored")
+	}
+}

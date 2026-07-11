@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/imhinotori/sulfur/level/attribute"
 	pk "github.com/imhinotori/sulfur/net/packet"
 	"github.com/imhinotori/sulfur/save"
 )
@@ -83,6 +84,114 @@ func snapshotPlayerExtras(data *save.PlayerData, p *tickPlayer) {
 			Forced:    p.respawnForced,
 		}
 	}
+
+	// attributes: LivingEntity.addAdditionalSaveData store("attributes", ..., getAttributes().pack()).
+	// pack() emits one AttributeInstance$Packed per attribute instance (its base value + modifier list);
+	// Ender packs the per-player attribute holder the same way. Nil when the holder is unallocated (a
+	// player that never touched the combat path keeps all-default attributes -> pack() would just be the
+	// supplier defaults; we only persist when the holder exists so an untouched save stays minimal).
+	if p.attributes != nil {
+		data.Attributes = packPlayerAttributes(p.attributes)
+	}
+}
+
+// packPlayerAttributes is the AttributeMap.pack() port: it emits an AttributeInstance$Packed for each
+// attribute the holder carries (its base value + its modifier list). The id is the vanilla ATTRIBUTE
+// registry name; a key with no registry name (never modifier-touched, e.g. mining_efficiency) is
+// skipped so we never write an unresolvable holder id. Modifiers carry the StringRepresentable
+// operation name (add_value / add_multiplied_base / add_multiplied_total).
+func packPlayerAttributes(h *attributeHolder) []save.AttributePacked {
+	if h == nil || len(h.base) == 0 {
+		return nil
+	}
+	out := make([]save.AttributePacked, 0, len(h.base))
+	for attr, base := range h.base {
+		name := attributeKeyName[attr]
+		if name == "" {
+			continue
+		}
+		packed := save.AttributePacked{ID: name, Base: base}
+		if bucket := h.modifiers[attr]; len(bucket) > 0 {
+			mods := make([]save.AttributeModifierDisk, 0, len(bucket))
+			for _, m := range bucket {
+				mods = append(mods, save.AttributeModifierDisk{
+					ID:        m.ID,
+					Amount:    m.Amount,
+					Operation: operationName(m.Operation),
+				})
+			}
+			packed.Modifiers = mods
+		}
+		out = append(out, packed)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// operationName maps the ported Operation enum to the vanilla StringRepresentable serialized name
+// (AttributeModifier$Operation: ADD_VALUE="add_value", ADD_MULTIPLIED_BASE="add_multiplied_base",
+// ADD_MULTIPLIED_TOTAL="add_multiplied_total"). VERIFIED via javap Operation.<clinit>.
+func operationName(op attribute.Operation) string {
+	switch op {
+	case attribute.AddMultipliedBase:
+		return "add_multiplied_base"
+	case attribute.AddMultipliedTotal:
+		return "add_multiplied_total"
+	default:
+		return "add_value"
+	}
+}
+
+// operationFromName is the inverse of operationName (a corrupt/unknown name -> ADD_VALUE, the id-0
+// default).
+func operationFromName(name string) attribute.Operation {
+	switch name {
+	case "add_multiplied_base":
+		return attribute.AddMultipliedBase
+	case "add_multiplied_total":
+		return attribute.AddMultipliedTotal
+	default:
+		return attribute.AddValue
+	}
+}
+
+// attributeKeyByName is the reverse of attributeKeyName, built once, for resolving a loaded
+// "attributes" element id back to the holder key.
+var attributeKeyByName = func() map[string]attributeKey {
+	m := make(map[string]attributeKey, len(attributeKeyName))
+	for k, name := range attributeKeyName {
+		if name != "" {
+			m[name] = k
+		}
+	}
+	return m
+}()
+
+// applyLoadedPlayerAttributes is the AttributeMap.apply(List<Packed>) port: it restores each saved
+// attribute's base value and modifier set onto the player's holder. Unknown attribute ids (not in the
+// Ender holder) are skipped (a corrupt/forward save never injects an unmodeled attribute). Called from
+// applyLoadedPlayerExtras.
+func applyLoadedPlayerAttributes(p *tickPlayer, packed []save.AttributePacked) {
+	if len(packed) == 0 {
+		return
+	}
+	h := p.playerAttributes()
+	for _, a := range packed {
+		attr, ok := attributeKeyByName[a.ID]
+		if !ok {
+			continue
+		}
+		h.base[attr] = a.Base
+		for _, md := range a.Modifiers {
+			h.addModifier(attr, attribute.AttributeModifier{
+				ID:        md.ID,
+				Amount:    md.Amount,
+				Operation: operationFromName(md.Operation),
+			})
+		}
+	}
 }
 
 // activeEffectToDisk converts one live activeEffect into its MobEffectInstance.CODEC disk form,
@@ -163,6 +272,8 @@ func applyLoadedPlayerExtras(p *tickPlayer, loaded save.PlayerData) {
 			p.activeEffects[d.ID] = diskToActiveEffect(d)
 		}
 	}
+
+	applyLoadedPlayerAttributes(p, loaded.Attributes)
 }
 
 // dimensionName maps the internal dimension index to its level ResourceKey (the ServerPlayer
