@@ -2005,6 +2005,11 @@ func (t *TickLoop) drainRegistrations() {
 					p.advancements = newPlayerAdvancements()
 				}
 				t.sendAdvancementsLogin(p)
+				// TIME (time.go): send the day/night clock full-sync so the joiner does not free-run its own
+				// clock off a desynced start. Vanilla PlayerList.sendLevelInfo sends ServerClockManager
+				// .createFullSyncPacket() here (the FULL clock map). Owner-goroutine send over the joiner
+				// connection only. CITE: PlayerList.sendLevelInfo (createFullSyncPacket).
+				t.sendFullTimeSync(p)
 				// WEATHER (weather.go): tell the joiner the CURRENT weather so it doesn't join to a clear
 				// sky during a storm. Vanilla's PlayerList.sendLevelInfo sends, when isRaining():
 				// START_RAINING(0) -> RAIN_LEVEL_CHANGE(getRainLevel(1)) -> THUNDER_LEVEL_CHANGE(getThunderLevel(1)).

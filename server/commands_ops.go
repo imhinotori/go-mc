@@ -190,6 +190,7 @@ func registerTime(g *command.Graph) {
 				return err
 			}
 			e.t.setDayTime(ticks)
+			e.t.broadcastClockModify() // ServerClockManager.modifyClock broadcast (setTotalTicks)
 			e.t.sendSystemChat(e.p, fmt.Sprintf("Set the time to %d", ticks))
 			return nil
 		case "add":
@@ -198,6 +199,7 @@ func registerTime(g *command.Graph) {
 				return err
 			}
 			e.t.gametime += int64(ticks)
+			e.t.broadcastClockModify() // ServerClockManager.modifyClock broadcast (addTicks)
 			e.t.sendSystemChat(e.p, fmt.Sprintf("Set the time to %d", int(e.t.gametime%dayLengthTicksTime)))
 			return nil
 		case "query":

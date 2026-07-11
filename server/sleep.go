@@ -398,6 +398,7 @@ func (t *TickLoop) tickSleep() {
 	}
 	if t.gameRule(ruleAdvanceTime) { // ADVANCE_TIME: skip the day-time to the next dawn.
 		t.gametime = dawnTimeAfterSleep(t.gametime)
+		t.broadcastClockModify() // moveToTimeMarker(WAKE_UP_FROM_SLEEP) -> modifyClock broadcast
 	}
 	t.wakeUpAllPlayers()
 	if t.gameRule(ruleAdvanceWeather) && t.isRaining() { // clear the storm on waking.

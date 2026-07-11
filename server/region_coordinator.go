@@ -245,6 +245,16 @@ func (t *TickLoop) tickOnce() {
 		t.plugins.Emit(host.EventTick, host.TickEvent{Tick: int(t.gametime)})
 	}
 
+	// TIME SYNC (time.go): every 20 ticks broadcast the gameTime-only SetTime packet to all players
+	// so the vanilla client clock stays aligned (it otherwise free-runs from login). Mirrors
+	// MinecraftServer.tickChildren: if (tickCount % 20 == 0) forceGameTimeSynchronization(). Runs on
+	// the coordinator after gametime++ (all regions quiescent), so ranging t.players is race-clean --
+	// the SAME single-threaded post-barrier window flushOutbound uses. CITE:
+	// MinecraftServer.tickChildren (timeSync) + forceGameTimeSynchronization.
+	if t.gametime%20 == 0 {
+		t.broadcastTimeSync()
+	}
+
 	t.recordMSPT(t.clock.Now().Sub(start)) // publish the read-only telemetry snapshot (TICK-06)
 }
 
