@@ -119,6 +119,13 @@ func (et *entityTracker) Tick() {
 				if e.vx != 0 || e.vy != 0 || e.vz != 0 {
 					p.client.Send(encodeSetEntityMotion(e))
 				}
+				// Spawn attribute sync (ServerEntity.sendPairingData): the mob's modified attributes for a
+				// newly-tracking client. nil for a default mob (the pig) -> no packet. Read on the tick owner.
+				if attrs := entityModifiedAttrs(e); len(attrs) > 0 {
+					if pkt, ok := encodeUpdateAttributes(e.id, attrs); ok {
+						p.client.Send(pkt)
+					}
+				}
 				p.tracked[e.id] = true
 				spawned++
 				continue
@@ -256,6 +263,10 @@ func snapshotEntity(e *Entity) Entity {
 		cp.metadata = make([]byte, len(e.metadata))
 		copy(cp.metadata, e.metadata)
 	}
+	// Capture the mob's modified attributes (value snapshots) on the OWNER so the off-tick worker can
+	// emit a spawn ClientboundUpdateAttributesPacket without reading the live *attribute.Map (Pitfall 3).
+	// nil for a mob with no modified attribute (the pig oracle) -> no spawn attribute packet.
+	cp.trackSpawnAttrs = entityModifiedAttrs(e)
 	return cp
 }
 
@@ -299,6 +310,14 @@ func computeTrackerDiff(snap []Entity, tracked map[int32]bool) (packets []pk.Pac
 			packets = append(packets, equipmentSpawnPackets(e)...)
 			if e.vx != 0 || e.vy != 0 || e.vz != 0 {
 				packets = append(packets, encodeSetEntityMotion(e))
+			}
+			// Spawn attribute sync (ServerEntity.sendPairingData): emit the mob's modified attributes so
+			// a newly-tracking client renders the mob's speed/health-bar modifiers. nil for a default mob
+			// (the pig) -> no packet. Reads only the value snapshot (worker-safe).
+			if len(e.trackSpawnAttrs) > 0 {
+				if pkt, ok := encodeUpdateAttributes(e.id, e.trackSpawnAttrs); ok {
+					packets = append(packets, pkt)
+				}
 			}
 			added = append(added, e.id)
 			spawned++

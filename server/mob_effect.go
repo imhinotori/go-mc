@@ -44,10 +44,10 @@ const (
 	// regeneration (level 4 secondary). effectSpeed/effectRegeneration already exist (witch consts); the
 	// remaining four are declared here. VERIFIED CFR MobEffects registrations (attribute modifiers cited on
 	// applyEffectModifiers below).
-	effectHaste      = "minecraft:haste"      // MobEffects.HASTE      (ATTACK_SPEED       +0.1 ADD_MULTIPLIED_TOTAL)
+	effectHaste         = "minecraft:haste"          // MobEffects.HASTE      (ATTACK_SPEED       +0.1 ADD_MULTIPLIED_TOTAL)
 	effectMiningFatigue = "minecraft:mining_fatigue" // MobEffects.MINING_FATIGUE (ATTACK_SPEED -0.1 ADD_MULTIPLIED_TOTAL)
-	effectResistance = "minecraft:resistance" // MobEffects.RESISTANCE (no attribute modifier; damage-reduction)
-	effectJumpBoost  = "minecraft:jump_boost" // MobEffects.JUMP_BOOST (SAFE_FALL_DISTANCE +1.0 ADD_VALUE)
+	effectResistance    = "minecraft:resistance"     // MobEffects.RESISTANCE (no attribute modifier; damage-reduction)
+	effectJumpBoost     = "minecraft:jump_boost"     // MobEffects.JUMP_BOOST (SAFE_FALL_DISTANCE +1.0 ADD_VALUE)
 	// MOVEMENT effect ids read by the mob physics path (server/physics.go tickPhysics + jump.go). These
 	// have no attribute modifier — they are read directly by LivingEntity.getEffectiveGravity / travelInAir
 	// / getJumpBoostPower. VERIFIED CFR MobEffects.SLOW_FALLING / LEVITATION registrations (plain effects).
@@ -97,11 +97,11 @@ const (
 	// spawn lands once those subsystems exist. VERIFIED CFR net.minecraft.world.effect.MobEffects registrations
 	// + net.minecraft.world.item.alchemy.Potions static block.
 	effectNightVision = "minecraft:night_vision" // Potions.NIGHT_VISION (plain MobEffect)
-	effectLuck        = "minecraft:luck"          // Potions.LUCK        (LUCK -> attribute; v1 presence-only)
-	effectWindCharged = "minecraft:wind_charged"  // Potions.WIND_CHARGED (WindChargedMobEffect)
-	effectWeaving     = "minecraft:weaving"       // Potions.WEAVING      (WeavingMobEffect)
-	effectOozing      = "minecraft:oozing"        // Potions.OOZING       (OozingMobEffect)
-	effectInfested    = "minecraft:infested"      // Potions.INFESTED     (InfestedMobEffect)
+	effectLuck        = "minecraft:luck"         // Potions.LUCK        (LUCK -> attribute; v1 presence-only)
+	effectWindCharged = "minecraft:wind_charged" // Potions.WIND_CHARGED (WindChargedMobEffect)
+	effectWeaving     = "minecraft:weaving"      // Potions.WEAVING      (WeavingMobEffect)
+	effectOozing      = "minecraft:oozing"       // Potions.OOZING       (OozingMobEffect)
+	effectInfested    = "minecraft:infested"     // Potions.INFESTED     (InfestedMobEffect)
 )
 
 // invisibleSharedFlagBit is Entity.FLAG_INVISIBLE — DATA_SHARED_FLAGS (index 0) bit 5 (1<<5 == 0x20):
@@ -115,11 +115,11 @@ const (
 	slownessModifierID = "effect.slowness"
 	weaknessModifierID = "effect.weakness"
 	// BEACON effect modifier ids (VERIFIED CFR MobEffects.*: Identifier.withDefaultNamespace("effect.<name>")).
-	speedModifierID     = "effect.speed"      // SPEED     -> MOVEMENT_SPEED
-	hasteModifierID     = "effect.haste"      // HASTE     -> ATTACK_SPEED
+	speedModifierID         = "effect.speed"          // SPEED     -> MOVEMENT_SPEED
+	hasteModifierID         = "effect.haste"          // HASTE     -> ATTACK_SPEED
 	miningFatigueModifierID = "effect.mining_fatigue" // MINING_FATIGUE -> ATTACK_SPEED
-	strengthModifierID  = "effect.strength"   // STRENGTH  -> ATTACK_DAMAGE
-	jumpBoostModifierID = "effect.jump_boost" // JUMP_BOOST-> SAFE_FALL_DISTANCE
+	strengthModifierID      = "effect.strength"       // STRENGTH  -> ATTACK_DAMAGE
+	jumpBoostModifierID     = "effect.jump_boost"     // JUMP_BOOST-> SAFE_FALL_DISTANCE
 	// ABSORPTION modifier id (VERIFIED CFR MobEffects.ABSORPTION addAttributeModifier: MAX_ABSORPTION,
 	// Identifier.withDefaultNamespace("effect.absorption"), 4.0, ADD_VALUE).
 	absorptionModifierID = "effect.absorption" // ABSORPTION -> MAX_ABSORPTION
@@ -128,14 +128,14 @@ const (
 // Modifier amounts from MobEffects static init in the 26.2 jar. The non-round decimals are the exact
 // double constants emitted by javap for the vanilla registrations.
 const (
-	effectSpeedAmount      = 0.20000000298023224
-	effectSlownessAmount   = -0.15000000596046448
-	effectHasteAmount      = 0.10000000149011612
+	effectSpeedAmount         = 0.20000000298023224
+	effectSlownessAmount      = -0.15000000596046448
+	effectHasteAmount         = 0.10000000149011612
 	effectMiningFatigueAmount = -0.10000000149011612 // MobEffects.MINING_FATIGUE ATTACK_SPEED modifier per level (verified javap)
-	effectStrengthAmount   = 3.0
-	effectWeaknessAmount   = -4.0
-	effectJumpBoostAmount  = 1.0
-	effectAbsorptionAmount = 4.0
+	effectStrengthAmount      = 3.0
+	effectWeaknessAmount      = -4.0
+	effectJumpBoostAmount     = 1.0
+	effectAbsorptionAmount    = 4.0
 )
 
 // activeEffect is the Go stand-in for MobEffectInstance: effect id, remaining duration (ticks, counting
@@ -296,6 +296,8 @@ func (t *TickLoop) addPlayerEffect(p *tickPlayer, ownerID int32, id string, dura
 				t.removeEffectModifiers(p, id)
 				t.applyEffectModifiers(p, id, existing.amplifier)
 			}
+			// ServerPlayer.onEffectUpdated -> connection.send(UpdateMobEffect(id, inst, false)).
+			t.sendPlayerEffectUpdated(p, existing)
 			t.onPlayerEffectStarted(p, id, existing.amplifier)
 			return
 		}
@@ -303,7 +305,9 @@ func (t *TickLoop) addPlayerEffect(p *tickPlayer, ownerID int32, id string, dura
 		return
 	}
 	p.activeEffects[id] = incoming
-	t.applyEffectModifiers(p, id, incoming.amplifier)  // LivingEntity.onEffectAdded -> MobEffect.addAttributeModifiers
+	t.applyEffectModifiers(p, id, incoming.amplifier) // LivingEntity.onEffectAdded -> MobEffect.addAttributeModifiers
+	// ServerPlayer.onEffectAdded -> connection.send(UpdateMobEffect(id, inst, true)) — blend=true on add.
+	t.sendPlayerEffectAdded(p, incoming)
 	t.onPlayerEffectStarted(p, id, incoming.amplifier) // MobEffectInstance.onEffectStarted -> MobEffect.onEffectStarted
 }
 
@@ -520,6 +524,8 @@ func (t *TickLoop) tickPlayerEffects(p *tickPlayer) {
 // hasEffect(INVISIBILITY) is false). Every other effect falls through. Cite
 // LivingEntity.updateInvisibilityStatus (re-run after an effect is removed).
 func (t *TickLoop) onPlayerEffectRemoved(p *tickPlayer, id string) {
+	// ServerPlayer.onEffectsRemoved -> per removed effect connection.send(RemoveMobEffect(id, effect)).
+	t.sendPlayerEffectRemoved(p, id)
 	switch id {
 	case effectInvisibility:
 		t.broadcastPlayerInvisibleFlag(p)
@@ -812,6 +818,8 @@ func (t *TickLoop) addEntityEffectWithSource(e *Entity, ownerID int32, id string
 				t.removeEntityEffectModifiers(e, id)
 				t.applyEntityEffectModifiers(e, id, existing.amplifier)
 			}
+			// LivingEntity.onEffectUpdated -> sendEffectToPassengers(inst) (blend=false).
+			t.sendEntityEffect(e, existing)
 			t.onEntityEffectStarted(e, id, existing.amplifier)
 			return
 		}
@@ -820,6 +828,8 @@ func (t *TickLoop) addEntityEffectWithSource(e *Entity, ownerID int32, id string
 	}
 	e.mobEffects[id] = incoming
 	t.applyEntityEffectModifiers(e, id, incoming.amplifier)
+	// LivingEntity.onEffectAdded -> sendEffectToPassengers(inst) (blend=false).
+	t.sendEntityEffect(e, incoming)
 	t.onEntityEffectStarted(e, id, incoming.amplifier)
 }
 
@@ -862,6 +872,9 @@ func (t *TickLoop) onEntityEffectStarted(e *Entity, id string, amplifier int) {
 }
 
 func (t *TickLoop) onEntityEffectRemoved(e *Entity, id string) {
+	// LivingEntity.onEffectsRemoved for a mob: the base does NOT push a RemoveMobEffect to passengers
+	// (intentional no-op seam, mirroring the player path).
+	t.sendEntityEffectRemoved(e, id)
 	switch id {
 	case effectInvisibility:
 		t.broadcastToTrackers(e.id, encodeSetEntityDataByID(e.id, sharedFlagsDataEntry(entitySharedFlags(e))))
@@ -894,6 +907,7 @@ func (t *TickLoop) applyEntityEffectModifiers(e *Entity, id string, amplifier in
 			Amount:    amount * float64(amplifier+1),
 			Operation: op,
 		})
+		markEntityAttrDirty(e, attr.Name())
 	}
 	switch id {
 	case effectSlowness:
@@ -919,7 +933,10 @@ func (t *TickLoop) removeEntityEffectModifiers(e *Entity, id string) {
 	}
 	remove := func(attr *attribute.Attribute, modID string) {
 		if inst := e.attributes.GetInstance(attr.Name()); inst != nil {
-			inst.RemoveModifier(modID)
+			if _, ok := inst.GetModifier(modID); ok {
+				inst.RemoveModifier(modID)
+				markEntityAttrDirty(e, attr.Name())
+			}
 		}
 	}
 	switch id {
@@ -1053,4 +1070,67 @@ func entityHeal(e *Entity, heal float32) {
 		h = 0
 	}
 	e.health = h
+}
+
+// markEntityAttrDirty flags a mob attribute (by ATTRIBUTE registry name) for the next sync flush
+// (AttributeMap.attributesToSync.add). Lazily allocates the set so a never-modified mob keeps a nil
+// attrDirty and emits ZERO attribute packets.
+func markEntityAttrDirty(e *Entity, name string) {
+	if e == nil {
+		return
+	}
+	if e.attrDirty == nil {
+		e.attrDirty = make(map[string]bool)
+	}
+	e.attrDirty[name] = true
+}
+
+// drainEntityAttrDirty returns one attrSnapshot per dirty mob attribute (its current BASE value + the
+// active modifier list) and CLEARS the dirty set — the port of ServerEntity.sendChanges draining
+// AttributeMap.getAttributesToSync(). Reads the live AttributeInstance so the base + modifier set are
+// exactly what the fold sees. Returns nil when nothing is dirty or the mob has no AttributeMap.
+func drainEntityAttrDirty(e *Entity) []attrSnapshot {
+	if e == nil || len(e.attrDirty) == 0 {
+		return nil
+	}
+	snaps := make([]attrSnapshot, 0, len(e.attrDirty))
+	for name := range e.attrDirty {
+		if e.attributes == nil {
+			continue
+		}
+		inst := e.attributes.GetInstance(name)
+		if inst == nil {
+			continue
+		}
+		snaps = append(snaps, attrSnapshot{
+			name:      name,
+			baseValue: inst.BaseValue(),
+			modifiers: inst.Modifiers(),
+		})
+	}
+	e.attrDirty = nil
+	return snaps
+}
+
+// entityModifiedAttrs returns one attrSnapshot per mob attribute that currently carries at least one
+// modifier — the subset ServerEntity.sendPairingData would sync to a newly-tracking client that a
+// modifier-free client would not already know from the entity-type default. A mob with NO modified
+// attribute (the pig oracle) returns nil, so its spawn emits ZERO UpdateAttributes packets (preserving
+// the byte-identical default spawn). Read on the tick OWNER (snapshotEntity) — never off-tick.
+func entityModifiedAttrs(e *Entity) []attrSnapshot {
+	if e == nil || e.attributes == nil {
+		return nil
+	}
+	var snaps []attrSnapshot
+	for name, inst := range e.attributes.LocalInstances() {
+		if inst == nil {
+			continue
+		}
+		mods := inst.Modifiers()
+		if len(mods) == 0 {
+			continue // only attributes carrying a modifier need a spawn sync (base defaults are client-known)
+		}
+		snaps = append(snaps, attrSnapshot{name: name, baseValue: inst.BaseValue(), modifiers: mods})
+	}
+	return snaps
 }

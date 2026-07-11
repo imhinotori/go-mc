@@ -108,6 +108,14 @@ type attributeHolder struct {
 	// vanilla AttributeInstance.calculateValue order: ADD_VALUE, then ADD_MULTIPLIED_BASE, then
 	// ADD_MULTIPLIED_TOTAL). Nil until the first modifier attaches (a modifier-free player stays base-only).
 	modifiers map[attributeKey]map[string]attribute.AttributeModifier
+
+	// dirty is the set of attributes whose value changed since the last sync flush — the Go analogue
+	// of AttributeMap.attributesToSync. addModifier/removeModifier mark the touched attribute; the
+	// per-tick flush (effect_sync.go flushPlayerAttributes) drains it into ONE ClientboundUpdate
+	// AttributesPacket and clears it, exactly as ServerEntity.sendChanges drains getAttributesToSync
+	// once per tick. Nil until the first modifier change (a modifier-free player never marks anything
+	// dirty and emits ZERO attribute packets).
+	dirty map[attributeKey]bool
 }
 
 // addModifier attaches (or replaces by id) an effect attribute modifier to the given attribute.
@@ -121,6 +129,7 @@ func (h *attributeHolder) addModifier(attr attributeKey, m attribute.AttributeMo
 		h.modifiers[attr] = bucket
 	}
 	bucket[m.ID] = m
+	h.markDirty(attr)
 }
 
 // removeModifier detaches the modifier with this id from the attribute (a no-op if absent).
@@ -129,7 +138,10 @@ func (h *attributeHolder) removeModifier(attr attributeKey, id string) {
 		return
 	}
 	if bucket := h.modifiers[attr]; bucket != nil {
-		delete(bucket, id)
+		if _, ok := bucket[id]; ok {
+			delete(bucket, id)
+			h.markDirty(attr)
+		}
 	}
 }
 
@@ -212,4 +224,68 @@ func (p *tickPlayer) playerAttributes() *attributeHolder {
 // bytecode does.
 func (p *tickPlayer) getAttributeValue(attr attributeKey) float64 {
 	return p.playerAttributes().getAttributeValue(attr)
+}
+
+// attributeKeyName maps a player-holder attributeKey to its vanilla ATTRIBUTE registry name — the id
+// ClientboundUpdateAttributesPacket$AttributeSnapshot carries (Holder<Attribute>). Every key the effect
+// subsystem can attach a modifier to (movement_speed, attack_damage, attack_speed, safe_fall_distance,
+// max_absorption) has an entry; a key with no wire name (v1 attributes never modifier-touched, e.g.
+// mining_efficiency) maps to "" so the flush skips it (never emits a bad holder id). VERIFIED against
+// data/registryid/attribute.go (the BuiltInRegistries.ATTRIBUTE order).
+var attributeKeyName = map[attributeKey]string{
+	attrAttackDamage:           "minecraft:attack_damage",
+	attrAttackSpeed:            "minecraft:attack_speed",
+	attrAttackKnockback:        "minecraft:attack_knockback",
+	attrArmor:                  "minecraft:armor",
+	attrArmorToughness:         "minecraft:armor_toughness",
+	attrKnockbackResistance:    "minecraft:knockback_resistance",
+	attrSweepingDamageRatio:    "minecraft:sweeping_damage_ratio",
+	attrMaxHealth:              "minecraft:max_health",
+	attrMovementSpeed:          "minecraft:movement_speed",
+	attrMaxAbsorption:          "minecraft:max_absorption",
+	attrEntityInteractionRange: "minecraft:entity_interaction_range",
+	attrStepHeight:             "minecraft:step_height",
+	attrSafeFallDistance:       "minecraft:safe_fall_distance",
+	attrMiningEfficiency:       "minecraft:mining_efficiency",
+}
+
+// markDirty flags an attribute for the next sync flush (AttributeMap.attributesToSync.add).
+func (h *attributeHolder) markDirty(attr attributeKey) {
+	if h.dirty == nil {
+		h.dirty = make(map[attributeKey]bool)
+	}
+	h.dirty[attr] = true
+}
+
+// drainDirtySnapshots returns one attrSnapshot per dirty attribute (its BASE value + the active
+// modifier list) and CLEARS the dirty set — the port of ServerEntity.sendChanges draining
+// AttributeMap.getAttributesToSync() once per tick. The base value is the player-default base (v1 never
+// setBaseValue-mutates a player attribute; the base is the createAttributes supplier default), and the
+// modifiers are the effect-attached transient modifiers. A key with no ATTRIBUTE registry name is
+// skipped. Returns nil when nothing is dirty.
+func (h *attributeHolder) drainDirtySnapshots() []attrSnapshot {
+	if len(h.dirty) == 0 {
+		return nil
+	}
+	snaps := make([]attrSnapshot, 0, len(h.dirty))
+	for attr := range h.dirty {
+		name := attributeKeyName[attr]
+		if name == "" {
+			continue
+		}
+		base := h.base[attr]
+		if h.base == nil {
+			base = playerAttributeBase[attr]
+		}
+		var mods []attribute.AttributeModifier
+		if bucket := h.modifiers[attr]; len(bucket) > 0 {
+			mods = make([]attribute.AttributeModifier, 0, len(bucket))
+			for _, m := range bucket {
+				mods = append(mods, m)
+			}
+		}
+		snaps = append(snaps, attrSnapshot{name: name, baseValue: base, modifiers: mods})
+	}
+	h.dirty = nil
+	return snaps
 }

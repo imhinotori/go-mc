@@ -375,6 +375,12 @@ func (t *TickLoop) tickEntities() {
 		t.withRegion(t.regionForColumn(columnOf(p.x, p.z)), func() {
 			t.tickPlayerEffects(p)
 		})
+		// ATTRIBUTE SYNC (effect_sync.go): the ServerPlayer/ServerEntity getAttributesToSync flush — send
+		// ONE ClientboundUpdateAttributesPacket to the player (+ riders) for any attribute whose value
+		// changed this tick (an effect modifier attached/detached during tickPlayerEffects or an earlier
+		// phase). Gated on p.attributes.dirty (nil until the first modifier change), so a player with no
+		// active modifier emits ZERO attribute packets.
+		t.flushPlayerAttributes(p)
 	}
 
 	// Plan 17-19 food/hunger: the FoodData.tick port (exhaustion drains saturation then food, health
@@ -1201,6 +1207,13 @@ func (t *TickLoop) tickAI() {
 		if e.skills != nil {
 			t.tickMobSkills(e)
 		}
+		// ATTRIBUTE SYNC (effect_sync.go): the ServerEntity.sendChanges getAttributesToSync flush —
+		// broadcast ONE ClientboundUpdateAttributesPacket to the mob's trackers for any attribute whose
+		// value changed this tick (an effect modifier attached/detached). Gated on e.attrDirty (nil for
+		// every mob that never got a modifier — the pig oracle pays exactly this nil-len check, zero
+		// packets / zero RNG). Placed at the END of the per-entity pass so a modifier change from
+		// tickMobEffects above is captured this tick.
+		t.flushEntityAttributes(e)
 	}
 
 	// Throttled natural spawner: vanilla attempts every tick (most no-op under cap); v1 runs the

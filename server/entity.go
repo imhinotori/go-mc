@@ -1427,6 +1427,23 @@ type Entity struct {
 	// contract.
 	attributes *attribute.Map
 
+	// attrDirty is the set of ATTRIBUTE registry names whose value changed since the last sync flush —
+	// the Go analogue of AttributeMap.attributesToSync for a mob. applyEntityEffectModifiers /
+	// removeEntityEffectModifiers mark the touched attribute; the per-tick flush (effect_sync.go
+	// flushEntityAttributes) drains it into ONE ClientboundUpdateAttributesPacket broadcast to the mob's
+	// trackers and clears it, exactly as ServerEntity.sendChanges drains getAttributesToSync once per
+	// tick. Nil until the first modifier change (a modifier-free mob, incl. the pig oracle, marks nothing
+	// dirty and emits ZERO attribute packets). Tick-owned (TICK-05).
+	attrDirty map[string]bool
+
+	// trackSpawnAttrs is a SNAPSHOT-ONLY field: snapshotEntity fills it (on the tick owner, reading the
+	// live AttributeMap) with the mob's currently-modified attributes so the off-tick tracker worker can
+	// emit a ClientboundUpdateAttributesPacket on spawn (ServerEntity.sendPairingData's syncable-attribute
+	// send) WITHOUT touching the live *attribute.Map off-tick (Pitfall 3). It is nil on a live Entity and
+	// nil in the snapshot for a mob with no modified attributes (the pig oracle spawns with none -> zero
+	// extra packets).
+	trackSpawnAttrs []attrSnapshot
+
 	// leftHanded is Mob.isLeftHanded() — the 5% left-handed roll Mob.finalizeSpawn performs
 	// (nextFloat() < 0.05F). It is set at spawn by drainStructureSpawns via attribute.FinalizeSpawn.
 	// CITED: there is no left-handed SynchedEntityData (entity metadata) wire-out yet, so this flag is

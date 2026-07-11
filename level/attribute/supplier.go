@@ -172,3 +172,11 @@ func (m *Map) GetBaseValue(name string) float64 {
 	}
 	return 0.0
 }
+
+// LocalInstances returns the entity's LOCAL (already-materialized) AttributeInstances — the vanilla
+// `attributes` map, i.e. only attributes that have DIVERGED from the supplier default via a setBaseValue
+// or an added modifier. It does NOT materialize supplier defaults (unlike GetInstance), so it is a pure
+// read with no side effect on game state. The returned map must not be mutated by the caller.
+func (m *Map) LocalInstances() map[string]*AttributeInstance {
+	return m.attributes
+}

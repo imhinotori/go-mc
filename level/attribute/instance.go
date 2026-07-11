@@ -210,3 +210,18 @@ func (i *AttributeInstance) calculateValue() float64 {
 	// return attribute.sanitizeValue(d3);
 	return i.attribute.sanitizeValue(d3)
 }
+
+// Modifiers returns the active modifiers attached to this instance (id/amount/operation), for the
+// ClientboundUpdateAttributesPacket$AttributeSnapshot modifier collection. Order is unspecified (a Go
+// map range) — faithful, since the packet is a Set<Modifier> and the client keys modifiers by id.
+// Returns nil for a modifier-free instance.
+func (i *AttributeInstance) Modifiers() []AttributeModifier {
+	if len(i.modifierByID) == 0 {
+		return nil
+	}
+	out := make([]AttributeModifier, 0, len(i.modifierByID))
+	for _, m := range i.modifierByID {
+		out = append(out, m)
+	}
+	return out
+}
