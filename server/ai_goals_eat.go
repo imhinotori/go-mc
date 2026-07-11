@@ -26,31 +26,48 @@ package server
 //	           if (eatAnimationTick != adjustedTickDelay(4)) return;         // acts ONLY at tick == 4
 //	           ...eat the block (eatGrassBlock, sheep_eat.go)...
 //
-// adjustedTickDelay IDENTITY (34-JARNOTES.md:198-221, RE-VERIFIED — do NOT use ceilDiv): vanilla decimates
-// the goalSelector (canUse runs every OTHER tick via the (tickCount+id)%2 gate), and reducedTickDelay =
-// ceilDiv(n,2) HALVES the bound to COMPENSATE for that half-rate invocation — the two halvings cancel. Our
-// Go driver (tick_phases.go) calls serverAiStep/canUse EVERY tick UNCONDITIONALLY (no decimation), so the
-// bound must stay FULL (nextInt(1000)/nextInt(50)) to fire at the vanilla real-world rate; halving it here
-// would DOUBLE the fire rate (the actual 1:1 break). So adjustedTickDelay(n) == n (the existing helper in
-// ai_goals_breed.go) is the CORRECT faithful value. ⇒ the .star's canUse gate is
-// entity.rand_int(eatGateBoundAdult)/entity.rand_int(eatGateBoundBaby); start sets the timer to
-// eatAnimationTicks; tick acts at eatActTick. Reuse the existing adjustedTickDelay helper — NEVER ceilDiv.
+// adjustedTickDelay is NOT identity (the prior comment here was WRONG and self-contradicting: it claimed
+// "our Go driver calls canUse EVERY tick UNCONDITIONALLY (no decimation)"). That premise is FALSE — the
+// (tickCount+id)%2 selector decimation was ported at ai_mob.go:437-449 / GoalSelector.tickRunningGoals
+// (false) at ai_goal.go:282, and EatBlockGoal does NOT override requiresUpdateEveryTick (jar default
+// FALSE), so the sheep's eat goal canUse runs every OTHER server tick, exactly like vanilla. Therefore
+// vanilla's own adjustedTickDelay(n) for this goal = reducedTickDelay(n) = ceil(n/2), NOT n:
+//   canUse gate:  nextInt(adjustedTickDelay(isBaby? 50 : 1000)) = nextInt(isBaby? 25 : 500)
+//   start timer:  eatAnimationTick = adjustedTickDelay(40) = 20
+//   tick acts at: eatAnimationTick == adjustedTickDelay(4) = 2
+// (In vanilla these halved delays run at half-rate for the same ~1000/50/40/4 WALL-clock cadence; our
+// port decimates identically, so the halved values are the faithful ones. The RAW EatBlockGoal literals
+// stay 1000/50/40/4 — the client eat-animation scale uses EAT_ANIMATION_TICKS=40 raw, only the goal's
+// armed/gate values pass through adjustedTickDelay.)
+//
+// SCOPE NOTE (surfaced, NOT silently applied): this goal is PLUGIN-EXPRESSED — the actual RNG draw + timer
+// live in plugins/mobs/vanilla_sheep/main.star (EAT_GATE_ADULT/BABY, EAT_ANIM_TICKS, EAT_ACT_TICK), and
+// the stream-pinned TestEatBlockGoalRNGGate mirrors nextInt(eatGateBoundAdult). Halving these to the
+// faithful 500/25/20/2 SHIFTS that pinned sheep-eat RNG stream, so it is a coordinated .star + test
+// rebaseline that must be signed off (the same protocol the pig oracle follows), NOT changed piecemeal
+// here. The constants below therefore still carry the RAW literals with the correction documented on each.
+// Never use `n` as the "identity" — the driver decimates; use adjustedTickDelay(n, false) == ceil(n/2).
 
 const (
-	// eatAnimationTicks is EatBlockGoal.EAT_ANIMATION_TICKS — the eat-animation timer start() arms
-	// (adjustedTickDelay(40) == 40 at identity). The .star sets its eat timer to this on start.
+	// eatAnimationTicks is EatBlockGoal.EAT_ANIMATION_TICKS (raw 40 — the client head-eat animation scale).
+	// The goal's armed timer is adjustedTickDelay(40, false) == reducedTickDelay(40) == 20 (EatBlockGoal is
+	// non-every-tick on the decimated selector); the .star's start() should arm 20, not the raw 40 (pending
+	// the coordinated .star + TestEatBlockGoalRNGGate rebaseline noted in the header).
 	eatAnimationTicks = 40
 
-	// eatActTick is the tick value at which EatBlockGoal.tick performs the eat: the act fires ONLY when
-	// the decremented eatAnimationTick == adjustedTickDelay(4) == 4 (so the eat lands 36 ticks into the
-	// 40-tick animation). The .star calls entity.eat_grass_block when its timer reaches this.
+	// eatActTick is the eatAnimationTick value at which EatBlockGoal.tick performs the eat: the act fires
+	// ONLY when the decremented timer == adjustedTickDelay(4, false) == reducedTickDelay(4) == 2 (the
+	// decimated-selector value; raw literal 4). The .star calls entity.eat_grass_block when its timer reaches
+	// this (2 after the coordinated rebaseline noted in the header).
 	eatActTick = 4
 
-	// eatGateBoundAdult / eatGateBoundBaby are the canUse RNG-gate bounds: an ADULT sheep tests
-	// nextInt(adjustedTickDelay(1000)) == 0 (a ~1/1000-per-tick eat trigger), a BABY nextInt(
-	// adjustedTickDelay(50)) == 0 (a ~1/50 trigger — babies eat far more often). adjustedTickDelay is
-	// IDENTITY (see above), so the bounds are 1000 / 50. The .star draws entity.rand_int(bound) and acts
-	// on a 0 result.
+	// eatGateBoundAdult / eatGateBoundBaby are the canUse RNG-gate bounds. Vanilla draws
+	// nextInt(adjustedTickDelay(isBaby? 50 : 1000)); EatBlockGoal is non-every-tick on the decimated
+	// selector, so adjustedTickDelay HALVES the bound: the faithful bounds are ceil(1000/2)=500 (adult) and
+	// ceil(50/2)=25 (baby), run at the every-other-tick cadence for the same ~1/1000 / ~1/50 WALL-clock
+	// trigger. These constants still hold the RAW 1000/50 pending the coordinated .star + TestEatBlockGoalRNG
+	// Gate rebaseline (header SCOPE NOTE); the halved values are the ones that make the observable eat rate
+	// match vanilla. The .star draws entity.rand_int(bound) and acts on a 0 result.
 	eatGateBoundAdult = 1000
 	eatGateBoundBaby  = 50
 )

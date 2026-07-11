@@ -19,18 +19,28 @@ import (
 	"testing"
 )
 
-// TestAdjustedTickDelay: the identity helper — adjustedTickDelay(n) == n at 20 TPS (NOT
-// reducedTickDelay's ceil(n/2)). The breed/follow thresholds depend on this being 60/10, not 30/5.
+// TestAdjustedTickDelay: the faithful Goal.adjustedTickDelay(n, requiresEveryTick) contract —
+// requiresEveryTick ? n : reducedTickDelay(n) (ceil(n/2)). A non-every-tick goal on the decimated
+// selector HALVES its delay literal (the prior port wrongly returned n for all, doubling the wall-clock
+// threshold). Verified javap Goal.adjustedTickDelay: requiresUpdateEveryTick ? i : reducedTickDelay(i).
 func TestAdjustedTickDelay(t *testing.T) {
-	if got := adjustedTickDelay(60); got != 60 {
-		t.Fatalf("adjustedTickDelay(60) = %d, want 60 (identity @20TPS; reducedTickDelay would give 30)", got)
+	// requiresEveryTick=false (BreedGoal/FollowParentGoal/etc, decimated): halved to ceil(n/2).
+	if got := adjustedTickDelay(60, false); got != 30 {
+		t.Fatalf("adjustedTickDelay(60, false) = %d, want 30 (ceil(60/2); the decimated-selector value)", got)
 	}
-	if got := adjustedTickDelay(10); got != 10 {
-		t.Fatalf("adjustedTickDelay(10) = %d, want 10 (identity @20TPS; reducedTickDelay would give 5)", got)
+	if got := adjustedTickDelay(10, false); got != 5 {
+		t.Fatalf("adjustedTickDelay(10, false) = %d, want 5 (ceil(10/2))", got)
 	}
-	// It must NOT be reducedTickDelay (the WRONG helper): reducedTickDelay(60)=30 != adjustedTickDelay(60)=60.
-	if adjustedTickDelay(60) == reducedTickDelay(60) {
-		t.Fatalf("adjustedTickDelay(60) must differ from reducedTickDelay(60)=%d (it must be 60, not the halved 30)", reducedTickDelay(60))
+	// requiresEveryTick=true (MeleeAttackGoal/MoveToBlockGoal or a full-rate Go hook): the raw literal n.
+	if got := adjustedTickDelay(60, true); got != 60 {
+		t.Fatalf("adjustedTickDelay(60, true) = %d, want 60 (every-tick goal keeps the full literal)", got)
+	}
+	if got := adjustedTickDelay(20, true); got != 20 {
+		t.Fatalf("adjustedTickDelay(20, true) = %d, want 20 (MeleeAttackGoal resetAttackCooldown)", got)
+	}
+	// The false branch MUST equal reducedTickDelay (the correct compensating helper).
+	if adjustedTickDelay(60, false) != reducedTickDelay(60) {
+		t.Fatalf("adjustedTickDelay(60, false)=%d must equal reducedTickDelay(60)=%d", adjustedTickDelay(60, false), reducedTickDelay(60))
 	}
 }
 
@@ -286,15 +296,15 @@ func TestFollowParent(t *testing.T) {
 	}
 
 	// tick: the re-path cadence. start() sets timeToRecalcPath=0; the first tick re-paths (sets a want)
-	// and resets the timer to adjustedTickDelay(10)=10; intermediate ticks do NOT re-path.
+	// and resets the timer to adjustedTickDelay(10, false)=5; intermediate ticks do NOT re-path.
 	g.start(loop, baby)
 	baby.ai.hasTarget = false
 	g.tick(loop, baby) // first tick: --0 = -1, not >0 → re-path
 	if !baby.ai.hasTarget {
 		t.Fatal("followParentGoal.tick did not set a want target on the first (re-path) tick")
 	}
-	if g.timeToRecalcPath != adjustedTickDelay(followRecalcInterval) {
-		t.Fatalf("timeToRecalcPath = %d after re-path, want %d (adjustedTickDelay(10))", g.timeToRecalcPath, followRecalcInterval)
+	if g.timeToRecalcPath != adjustedTickDelay(followRecalcInterval, false) {
+		t.Fatalf("timeToRecalcPath = %d after re-path, want %d (adjustedTickDelay(10, false)=5)", g.timeToRecalcPath, adjustedTickDelay(followRecalcInterval, false))
 	}
 }
 
@@ -408,14 +418,14 @@ func TestFollowParentPathsToAdult(t *testing.T) {
 		t.Fatalf("baby want target (%v,%v,%v) does not point at the adult (%v,%v,%v)",
 			baby.ai.wantX, baby.ai.wantY, baby.ai.wantZ, adult.x, adult.y, adult.z)
 	}
-	if g.timeToRecalcPath != adjustedTickDelay(followRecalcInterval) {
-		t.Fatalf("timeToRecalcPath = %d after re-path, want %d (adjustedTickDelay(10) — NO RNG)",
-			g.timeToRecalcPath, followRecalcInterval)
+	if g.timeToRecalcPath != adjustedTickDelay(followRecalcInterval, false) {
+		t.Fatalf("timeToRecalcPath = %d after re-path, want %d (adjustedTickDelay(10, false)=5 — NO RNG)",
+			g.timeToRecalcPath, adjustedTickDelay(followRecalcInterval, false))
 	}
 
 	// Intermediate ticks (1..9) do NOT re-path; the 10th re-paths again toward the (possibly moved) adult.
 	adult.x = 14.5 // the adult drifts a block east
-	for i := 0; i < adjustedTickDelay(followRecalcInterval); i++ {
+	for i := 0; i < adjustedTickDelay(followRecalcInterval, false); i++ {
 		g.tick(loop, baby)
 	}
 	if baby.ai.wantX != adult.x {

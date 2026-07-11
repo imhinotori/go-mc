@@ -663,7 +663,7 @@ func (t *TickLoop) horseRunAroundLikeCrazyTick(e *Entity) {
 		return // no passenger -> the goal never activates (RunAroundLikeCrazyGoal.canUse requires isVehicle)
 	}
 	rng := mobRandom(e)
-	if rng.nextInt(adjustedTickDelay(50)) != 0 {
+	if rng.nextInt(adjustedTickDelay(50, true)) != 0 { // RunAroundLikeCrazyGoal is a FULL-RATE Go hook (horseFamilyAiStep, not the decimated selector) -> identity 50
 		return // the 1-in-50 throttle -- most ticks are a single draw then return
 	}
 	first := e.passengers[0] // getFirstPassenger()
@@ -702,6 +702,7 @@ func (t *TickLoop) horseRunAroundLikeCrazyTick(e *Entity) {
 //	return <AbstractHorse.mobInteract>;                         // the base tail
 //
 // AbstractHorse.mobInteract base tail (offsets verified):
+//
 //	if (isVehicle() || isBaby()) return super(Animal).mobInteract;   // (guarded above; re-checked faithfully)
 //	if (isTamed() && player.isSecondaryUseActive()) { openCustomInventoryScreen(player); return SUCCESS; }
 //	stack = getItemInHand(hand);
@@ -836,8 +837,8 @@ func (t *TickLoop) horseOpenInventory(p *tickPlayer, mob *Entity) {
 // (DEFERRED sound), consume 1 chest, createInventory (recompute the storage columns). Cite
 // AbstractChestedHorse.equipChest.
 func (t *TickLoop) horseEquipChest(mob *Entity, inv *Inventory, held component.SlotData) {
-	mob.horseHasChest = true            // setChest(true)
-	held.Count--                        // stack.consume(1, player)
+	mob.horseHasChest = true // setChest(true)
+	held.Count--             // stack.consume(1, player)
 	inv.set(heldWindowSlot(inv.heldSlot), held)
 	mob.horseInvColumns = mob.horseGetInventoryColumns() // createInventory: 5 (donkey/mule) or strength (llama)
 	// playChestEquipsSound(): DEFERRED (no sound subsystem).
@@ -999,7 +1000,6 @@ func createOffspringAttribute(d0, d1, minV, maxV float64, rng *entityRandom) flo
 	return result
 }
 
-
 // setOffspringAttributes ports AbstractHorse.setOffspringAttributes(other, child): MAX_HEALTH, then
 // JUMP_STRENGTH, then MOVEMENT_SPEED -- each createOffspringAttribute (3 nextDouble) on the INITIATOR
 // stream (this.random). MAX_HEALTH/MOVEMENT_SPEED write the child attribute base; JUMP_STRENGTH writes the
@@ -1035,6 +1035,7 @@ func horseAttrBase(e *Entity, attr *attribute.Attribute, fallback float64) float
 //   - Llama x Llama: setOffspringAttributes (9 nextDouble) THEN nextInt(max(strA,strB))+1 strength +
 //     nextFloat()<0.03 bonus + nextBoolean variant (variant cite-deferred).
 //   - Donkey x Donkey / chested: setOffspringAttributes only.
+//
 // All draws on the INITIATOR stream (this.random == mobRandom(e)). Cite Horse/Llama/Donkey.getBreedOffspring
 // + AbstractHorse.setOffspringAttributes.
 func (t *TickLoop) spawnHorseFamilyOffspring(e, partner *Entity) *Entity {

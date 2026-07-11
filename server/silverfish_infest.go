@@ -207,6 +207,6 @@ func (t *TickLoop) silverfishNotifyHurt(e *Entity, src damageSource) {
 	}
 	// notifyHurt(): arm lookForFriends to adjustedTickDelay(20) ONLY when it is currently 0.
 	if e.ai.silverfishLookForFriends == 0 {
-		e.ai.silverfishLookForFriends = adjustedTickDelay(silverfishWakeLookForFriends)
+		e.ai.silverfishLookForFriends = adjustedTickDelay(silverfishWakeLookForFriends, false) // SilverfishWakeUpFriendsGoal: requiresUpdateEveryTick=false, decimated selector decrement -> ceil(20/2)=10
 	}
 }

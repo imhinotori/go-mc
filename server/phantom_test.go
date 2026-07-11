@@ -125,7 +125,7 @@ func TestPhantomDaylightBurn(t *testing.T) {
 	}
 }
 
-// TestPhantomCircleToSwoop: PhantomAttackStrategyGoal starts in CIRCLE (nextSweepTick = adjustedTickDelay(10))
+// TestPhantomCircleToSwoop: PhantomAttackStrategyGoal starts in CIRCLE (nextSweepTick = adjustedTickDelay(10, true))
 // and, after the sweep timer expires, flips to SWOOP + re-arms the timer. Cite Phantom$PhantomAttackStrategyGoal.
 func TestPhantomCircleToSwoop(t *testing.T) {
 	loop, _, floorY := phantomLoop(t)
@@ -134,14 +134,14 @@ func TestPhantomCircleToSwoop(t *testing.T) {
 	p := combatTestPlayer(loop, 8.5, float64(floorY+1), 8.5, 7001)
 	ph.ai.attackTargetID = p.entityID
 
-	// The first call runs start() (nextSweepTick = adjustedTickDelay(10)) then the CIRCLE tick decrement
-	// in the same folded frame, so the timer reads adjustedTickDelay(10)-1 == 9 and is still armed positive.
+	// The first call runs start() (nextSweepTick = adjustedTickDelay(10, true)) then the CIRCLE tick decrement
+	// in the same folded frame, so the timer reads adjustedTickDelay(10, true)-1 == 9 and is still armed positive.
 	loop.phantomAttackStrategyGoal(ph)
 	if ph.phantom.attackPhase != phantomPhaseCircle {
 		t.Fatalf("after start, phase = %d, want CIRCLE", ph.phantom.attackPhase)
 	}
-	if ph.phantom.nextSweepTick <= 0 || ph.phantom.nextSweepTick > int32(adjustedTickDelay(10)) {
-		t.Fatalf("after start, nextSweepTick = %d, want in (0, %d] (armed CIRCLE timer)", ph.phantom.nextSweepTick, adjustedTickDelay(10))
+	if ph.phantom.nextSweepTick <= 0 || ph.phantom.nextSweepTick > int32(adjustedTickDelay(10, true)) {
+		t.Fatalf("after start, nextSweepTick = %d, want in (0, %d] (armed CIRCLE timer)", ph.phantom.nextSweepTick, adjustedTickDelay(10, true))
 	}
 	flipped := false
 	for i := 0; i < 100; i++ {

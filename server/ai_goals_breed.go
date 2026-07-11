@@ -10,7 +10,7 @@ import (
 )
 
 // ai_goals_breed.go — MOB-SUB-09 (Phase 33, Plan 03, C1): the GO-NATIVE BreedGoal@3 plus the
-// shared identity helper adjustedTickDelay, the faithful Mob.isPanicking read, the Animal.canMate
+// shared decimation-aware helper adjustedTickDelay, the faithful Mob.isPanicking read, the Animal.canMate
 // partner gate (entity.go), getFreePartner's same-class scan, and breed() (the
 // Animal.spawnChildFromBreeding child spawn + parent cooldown + inLove reset + the two breed-path
 // RNG draws).
@@ -31,23 +31,49 @@ import (
 //   - net.minecraft.world.entity.animal.Animal.spawnChildFromBreeding -> getBreedOffspring (the
 //       variant nextBoolean() draw) -> setBaby(true) -> finalizeSpawnChildFromBreeding (setAge(6000)
 //       both parents + resetLove both + broadcastEntityEvent(18) + XP orb 1+nextInt(7)).
-//   - net.minecraft.world.entity.ai.goal.Goal.adjustedTickDelay(int): returns n at 20 TPS (identity).
+//   - net.minecraft.world.entity.ai.goal.Goal.adjustedTickDelay(int): requiresUpdateEveryTick() ? n :
+//       reducedTickDelay(n) == ceil(n/2) (NOT an identity — it halves a non-every-tick goal to compensate
+//       for the every-other-tick selector decimation; BreedGoal is non-every-tick, so 60 -> 30).
 //   - net.minecraft.world.entity.Mob.isPanicking(): the PanicGoal currently RUNNING.
 //
 // SINGLE-OWNER (TICK-05): the goal + breed() run on the tick goroutine over tick-owned state. The
 // same-class scan + child spawn use the OWNING-region store (the documented v5 same-region cut); a
 // goal tick reads/writes the world only through *TickLoop + *Entity (no goroutine, no xsync).
 
-// adjustedTickDelay ports net.minecraft.world.entity.ai.goal.Goal.adjustedTickDelay(int n): it scales
-// a goal's tick interval by the server TPS, but at the canonical 20 TPS it returns n UNCHANGED — an
-// identity. BreedGoal's loveTime threshold is adjustedTickDelay(60) == 60; FollowParentGoal's re-path
-// interval is adjustedTickDelay(10) == 10. This is a DIFFERENT helper from the reduced-tick-delay
-// helper (ai_goals_passive.go: ceil(n/2), which HALVES the interval to 30/5) — the breed/follow goals
-// use adjustedTickDelay only, never the reduced/halved helper, so the thresholds are the full 60/10.
+// adjustedTickDelay ports net.minecraft.world.entity.ai.goal.Goal.adjustedTickDelay(int n) 1:1:
 //
-//	[VERIFIED javap Goal.adjustedTickDelay: at 20 TPS the time-scale factor is 1.0, so the method
-//	 returns its argument unchanged (the only divergence is when serverTps != 20, never the case here).]
-func adjustedTickDelay(n int) int { return n }
+//	protected int adjustedTickDelay(int n) {
+//	    return this.requiresUpdateEveryTick() ? n : reducedTickDelay(n);   // reducedTickDelay = ceil(n/2)
+//	}
+//
+// This is NOT a TPS-scale identity (the prior port's comment was WRONG). It compensates for the goal
+// selector's every-OTHER-tick decimation: a goal whose requiresUpdateEveryTick() is FALSE has its
+// tick() invoked only every other server tick (Mob.serverAiStep's (tickCount+id)%2 gate, ported at
+// ai_mob.go:437 and GoalSelector.tickRunningGoals(false) at ai_goal.go:282), so vanilla HALVES the
+// goal's delay literal (reducedTickDelay = ceil(n/2)) to keep the wall-clock cadence at ~n ticks. A
+// goal whose requiresUpdateEveryTick() is TRUE ticks every server tick, so its delay is left UNCHANGED.
+//
+// The Go driver faithfully decimates the selector (ai_mob.go:437-449), so a DECIMATED-selector caller
+// MUST pass requiresEveryTick = its goal's real requiresUpdateEveryTick() (FALSE => ceil(n/2), TRUE =>
+// n). The prior identity returned n for every caller, which DOUBLED the wall-clock threshold of every
+// non-every-tick goal (breed loveTime 60 running-ticks x 2 = 120 wall-ticks vs vanilla's ceil(60/2)=30
+// running-ticks x 2 = 60 wall-ticks) — the observable half-rate breeding/eating/follow bug this fixes.
+//
+// FULL-RATE ENTITY-HOOK callers (phantom, horse: goals the Go port runs as a per-tick t.<mob>AiStep
+// hook AFTER serverAiStep, bypassing the decimated selector — their goalSelector is empty) pass
+// requiresEveryTick = TRUE: the Go hook already ticks EVERY tick, so the raw literal n reproduces
+// vanilla's wall-clock rate (vanilla's ceil(n/2) at half-rate == our n at full-rate). Passing FALSE
+// there would halve the literal AND run it full-rate == a doubled fire rate, the mirror-image bug.
+//
+//	[VERIFIED javap Goal.adjustedTickDelay: invokevirtual requiresUpdateEveryTick; ifeq 11; iload_1;
+//	 goto 15; (11:) iload_1; invokestatic reducedTickDelay; (15:) ireturn. reducedTickDelay(n) =
+//	 Mth.positiveCeilDiv(n, 2) = -Math.floorDiv(-n, 2) = ceil(n/2) (ai_goals_passive.go:123).]
+func adjustedTickDelay(n int, requiresEveryTick bool) int {
+	if requiresEveryTick {
+		return n
+	}
+	return reducedTickDelay(n)
+}
 
 // isPanicking ports net.minecraft.world.entity.Mob.isPanicking(): true iff the mob's PanicGoal is
 // currently RUNNING. Our goal selector stores []*wrappedGoal each with a `running` bit (ai_goal.go);
@@ -79,8 +105,11 @@ func (t *TickLoop) isPanicking(e *Entity) bool {
 //	[VERIFIED javap BreedGoal.getFreePartner: getBoundingBox().inflate(8.0d); getNearbyEntities.]
 const breedRange = 8.0
 
-// breedLoveThreshold is BreedGoal's adjustedTickDelay(60) — the loveTime the goal must reach (with
-// the partner within distSqr<9.0) before breed() fires. 60 ticks == 3 seconds of mutual courting.
+// breedLoveThreshold is BreedGoal's loveTime-delay LITERAL (60): tick() breeds once loveTime >=
+// adjustedTickDelay(60, false) == reducedTickDelay(60) == 30 (BreedGoal does NOT override
+// requiresUpdateEveryTick — jar-confirmed default FALSE — and runs on the decimated selector, so the
+// 60 literal halves to a 30 running-tick threshold; at the every-other-tick cadence that is ~60
+// wall-ticks == 3 seconds of mutual courting, matching vanilla).
 const breedLoveThreshold = 60
 
 // breedDistanceSqr is BreedGoal's tick() breed gate: distanceToSqr(partner) < 9.0 (within 3 blocks).
@@ -194,7 +223,7 @@ func (g *breedGoal) tick(t *TickLoop, e *Entity) {
 	// navigation.moveTo(partner, speed): want the partner's position (nav applies speedModifier).
 	e.ai.setWantTargetMod(g.partner.x, g.partner.y, g.partner.z, g.speedModifier) // navigation.moveTo(partner, speedModifier) (seam x MOVEMENT_SPEED)
 	g.loveTime++
-	if g.loveTime >= adjustedTickDelay(breedLoveThreshold) && entityDistSqr(e, g.partner) < breedDistanceSqr {
+	if g.loveTime >= adjustedTickDelay(breedLoveThreshold, false) && entityDistSqr(e, g.partner) < breedDistanceSqr {
 		t.breed(e, g.partner)
 	}
 }

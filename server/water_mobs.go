@@ -676,7 +676,9 @@ func (t *TickLoop) fishIsFollower(e *Entity) bool { return t.fishLeaderAlive(e) 
 func fishHasFollowers(e *Entity) bool { return e.schoolSize > 1 }
 
 // fishCanBeFollowed ports AbstractSchoolingFish.canBeFollowed: hasFollowers() && schoolSize < getMaxSchoolSize().
-func fishCanBeFollowed(e *Entity) bool { return fishHasFollowers(e) && e.schoolSize < fishMaxSchoolSize }
+func fishCanBeFollowed(e *Entity) bool {
+	return fishHasFollowers(e) && e.schoolSize < fishMaxSchoolSize
+}
 
 // fishStartFollowing ports AbstractSchoolingFish.startFollowing(leader): this.leader = leader;
 // leader.addFollower() (leader.schoolSize++). Cite AbstractSchoolingFish.startFollowing + addFollower.
@@ -851,7 +853,7 @@ func (g *followFlockLeaderGoal) tick(t *TickLoop, e *Entity) {
 	if g.timeToRecalcPath > 0 { // pre-decrement then test (dup_x1 in the bytecode)
 		return
 	}
-	g.timeToRecalcPath = adjustedTickDelay(10)
+	g.timeToRecalcPath = adjustedTickDelay(10, false) // FollowFlockLeaderGoal: requiresUpdateEveryTick=false, decimated selector -> ceil(10/2)=5
 	// pathToLeader(): if isFollower() navigation.moveTo(leader, 1.0). The move seam is setWantTarget (the
 	// navigation.moveTo(leader, speed) analogue), speedModifier 1.0 (dconst_1).
 	leader := t.fishLeaderAlive(e)

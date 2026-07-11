@@ -194,7 +194,7 @@ func (g *evokerUseSpellGoal) canContinueToUse(t *TickLoop, e *Entity) bool {
 // start ports SpellcasterUseSpellGoal.start: seed the warmup, the spellCastingTickCount, the next-cast
 // gametime, and set the casting spell id.
 func (g *evokerUseSpellGoal) start(t *TickLoop, e *Entity) {
-	g.attackWarmupDelay = adjustedTickDelay(g.timing.warmup)
+	g.attackWarmupDelay = adjustedTickDelay(g.timing.warmup, false) // SpellcasterUseSpellGoal: requiresUpdateEveryTick=false, decimated selector -> ceil(warmup/2)
 	e.spellCastingTickCount = int32(g.timing.casting)
 	g.nextAttackTickCount = t.gametime + int64(g.timing.interval)
 	e.currentSpell = g.timing.spellID // setIsCastingSpell(getSpell())

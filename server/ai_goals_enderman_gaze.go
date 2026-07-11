@@ -424,7 +424,7 @@ func (g *endermanLookForPlayerGoal) canContinueToUse(t *TickLoop, e *Entity) boo
 //	[VERIFIED CFR EndermanLookForPlayerGoal.start: aggroTime = adjustedTickDelay(5); teleportTime = 0;
 //	 enderman.setBeingStaredAt().]
 func (g *endermanLookForPlayerGoal) start(_ *TickLoop, _ *Entity) {
-	g.aggroTime = adjustedTickDelay(endermanLookAggroDelay)
+	g.aggroTime = adjustedTickDelay(endermanLookAggroDelay, false) // EndermanLookForPlayerGoal: requiresUpdateEveryTick=false, decimated targetSelector -> ceil(5/2)=3
 	// teleportTime = 0 (cite-deferred to Go-native teleport); setBeingStaredAt() (cite-deferred synched flag).
 }
 

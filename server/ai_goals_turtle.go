@@ -477,7 +477,7 @@ func (g *turtleGoHomeGoal) stop(_ *TickLoop, e *Entity) {
 //	[VERIFIED CFR TurtleGoHomeGoal.canContinueToUse: !homePos.closerToCenterThan(position(), 7.0)
 //	 && !stuck && closeToHomeTryTicks <= adjustedTickDelay(600).]
 func (g *turtleGoHomeGoal) canContinueToUse(_ *TickLoop, e *Entity) bool {
-	return !turtleHomeCloserThan(e, 7.0) && !g.stuck && g.closeToHomeTryTicks <= adjustedTickDelay(turtleGoHomeGiveUp)
+	return !turtleHomeCloserThan(e, 7.0) && !g.stuck && g.closeToHomeTryTicks <= adjustedTickDelay(turtleGoHomeGiveUp, false)
 }
 
 // tick ports TurtleGoHomeGoal.tick: count close-to-home ticks; when the nav is done, pick a biased
@@ -696,7 +696,7 @@ func (g *turtleLayEggGoal) tick(t *TickLoop, e *Entity) {
 	if !t.mobInWater(e) && g.reachedTarget {
 		if e.layEggCounter < 1 {
 			e.layingEgg = true
-		} else if e.layEggCounter > adjustedTickDelay(turtleLayEggPlaceDelay) {
+		} else if e.layEggCounter > adjustedTickDelay(turtleLayEggPlaceDelay, true) { // TurtleLayEggGoal extends MoveToBlockGoal (requiresUpdateEveryTick=true) -> identity
 			// Place the egg block one above the sand target. EGGS = nextInt(4)+1 (a 1..4 egg cluster).
 			eggX, eggY, eggZ := g.blockPosX, g.blockPosY+1, g.blockPosZ
 			eggCount := mobRandom(e).nextInt(4) + 1

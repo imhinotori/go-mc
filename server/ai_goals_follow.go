@@ -46,9 +46,11 @@ const followDontFollowDistSqr = 9.0
 // parent strays beyond 16 blocks.
 const followLoseParentDistSqr = 256.0
 
-// followRecalcInterval is FollowParentGoal's adjustedTickDelay(10): the baby re-paths to the parent
-// every 10 ticks while following. adjustedTickDelay (NOT the reduced/halved helper — that would be 5)
-// keeps it the full 10.
+// followRecalcInterval is FollowParentGoal's re-path delay LITERAL (10): tick() resets the countdown to
+// adjustedTickDelay(10, false) == reducedTickDelay(10) == 5 (FollowParentGoal does NOT override
+// requiresUpdateEveryTick — jar default FALSE — and runs on the decimated selector, so the 10 literal
+// halves to a 5 running-tick interval; at the every-other-tick cadence that is ~10 wall-ticks, matching
+// vanilla). The prior port left it the full 10, which doubled the wall-clock re-path interval to ~20.
 const followRecalcInterval = 10
 
 // followParentGoal ports net.minecraft.world.entity.ai.goal.FollowParentGoal (flags {} EMPTY,
@@ -155,7 +157,7 @@ func (g *followParentGoal) start(t *TickLoop, e *Entity) {
 }
 
 // tick ports FollowParentGoal.tick EXACTLY: decrement timeToRecalcPath; if it is still > 0, return
-// (don't re-path this tick); else reset it to adjustedTickDelay(10) and want the parent's position at
+// (don't re-path this tick); else reset it to adjustedTickDelay(10, false) == 5 and want the parent's position at
 // speed 1.1. PURE INT — NO RNG. The move seam is setWantTarget (the navigation.moveTo(parent, speed)
 // analog — the want carries the parent pos, the nav tick applies the speedModifier).
 func (g *followParentGoal) tick(_ *TickLoop, e *Entity) {
@@ -163,7 +165,7 @@ func (g *followParentGoal) tick(_ *TickLoop, e *Entity) {
 	if g.timeToRecalcPath > 0 {
 		return
 	}
-	g.timeToRecalcPath = adjustedTickDelay(followRecalcInterval)
+	g.timeToRecalcPath = adjustedTickDelay(followRecalcInterval, false) // FollowParentGoal: requiresUpdateEveryTick=false, decimated selector -> ceil(10/2)=5
 	if g.parent == nil || e.ai == nil {
 		return
 	}

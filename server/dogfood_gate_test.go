@@ -232,7 +232,7 @@ func TestDogfoodGateEndToEnd(t *testing.T) {
 	// (DONT_FOLLOW_IF_CLOSER_THAN), so a partner left 1 block away would veto the follow. Put the
 	// initiator at 5 blocks (distSqr 25, in-band) and the partner farther out (8 blocks) so the
 	// nearest qualifying adult is the initiator.
-	e.x, e.y, e.z = 13.5, 64, 8.5      // the initiator parent: 5 blocks east (distSqr 25, in the 9..256 band)
+	e.x, e.y, e.z = 13.5, 64, 8.5                   // the initiator parent: 5 blocks east (distSqr 25, in the 9..256 band)
 	partner.x, partner.y, partner.z = 16.5, 64, 8.5 // the partner: 8 blocks east (distSqr 64, still in-band but farther)
 
 	follow := newFollowParentGoal(1.1)
@@ -255,8 +255,8 @@ func TestDogfoodGateEndToEnd(t *testing.T) {
 	if baby.ai.wantX != parentX {
 		t.Fatalf("(c) the baby want X = %v does not point at its parent X = %v (FollowParentGoal navigation)", baby.ai.wantX, parentX)
 	}
-	if follow.timeToRecalcPath != adjustedTickDelay(followRecalcInterval) {
-		t.Fatalf("(c) timeToRecalcPath = %d after re-path, want %d (adjustedTickDelay(10), NO RNG)", follow.timeToRecalcPath, followRecalcInterval)
+	if follow.timeToRecalcPath != adjustedTickDelay(followRecalcInterval, false) {
+		t.Fatalf("(c) timeToRecalcPath = %d after re-path, want %d (adjustedTickDelay(10, false)=5, NO RNG)", follow.timeToRecalcPath, adjustedTickDelay(followRecalcInterval, false))
 	}
 
 	// --- (d) the baby ages fully to breedAge==0 → grows to full size ----------------------------

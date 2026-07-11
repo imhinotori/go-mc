@@ -343,7 +343,7 @@ func (t *TickLoop) phantomAttackStrategyGoal(e *Entity) {
 	}
 	// start() (once on acquisition): nextSweepTick = adjustedTickDelay(10); phase = CIRCLE; setAnchorAboveTarget.
 	if !ps.strategyRunning {
-		ps.nextSweepTick = int32(adjustedTickDelay(phantomStrategyStartTick))
+		ps.nextSweepTick = int32(adjustedTickDelay(phantomStrategyStartTick, true)) // phantom is a FULL-RATE Go hook (phantomAiStep, empty goalSelector) -> identity
 		ps.attackPhase = phantomPhaseCircle
 		t.phantomSetAnchorAboveTarget(e, target)
 		ps.strategyRunning = true
@@ -355,8 +355,8 @@ func (t *TickLoop) phantomAttackStrategyGoal(e *Entity) {
 		if ps.nextSweepTick <= 0 {
 			ps.attackPhase = phantomPhaseSwoop
 			t.phantomSetAnchorAboveTarget(e, target)
-			secs := phantomSwoopBaseSecs + int(mobRandom(e).nextInt(phantomSwoopJitter)) // 8 + nextInt(4)
-			ps.nextSweepTick = int32(adjustedTickDelay(secs * phantomTicksPerSecond))    // * 20
+			secs := phantomSwoopBaseSecs + int(mobRandom(e).nextInt(phantomSwoopJitter))  // 8 + nextInt(4)
+			ps.nextSweepTick = int32(adjustedTickDelay(secs*phantomTicksPerSecond, true)) // * 20 (FULL-RATE hook -> identity)
 			// playSound(PHANTOM_SWOOP, 10.0, 0.95 + nextFloat()*0.1): the swoop sound is a client-visual
 			// (cite-deferred like the ghast/blaze level events), but the nextFloat() draw is PRESERVED so the
 			// phantom's RNG stream stays in vanilla lockstep. Cite Phantom$PhantomAttackStrategyGoal.tick.
@@ -395,13 +395,14 @@ func (t *TickLoop) phantomStrategyStop(e *Entity) {
 
 // phantomSweepCanContinue ports Phantom$PhantomSweepAttackGoal.canContinueToUse (the goalSelector gate that
 // keeps the swoop running). In vanilla order:
-//   1. target == null                                          -> false
-//   2. !target.isAlive()                                       -> false
-//   3. target instanceof Player && (isSpectator || isCreative) -> false (a mid-swoop creative/spectator abort)
-//   4. !canUse()   (canUse == target != null && phase == SWOOP)-> false
-//   5. every 20 ticks (tickCount > catSearchTick): getEntitiesOfClass(Cat, bb.inflate(16), ENTITY_STILL_ALIVE),
-//      hiss() each (cite-deferred visual), isScaredOfCat = !list.isEmpty()
-//   6. return !isScaredOfCat
+//  1. target == null                                          -> false
+//  2. !target.isAlive()                                       -> false
+//  3. target instanceof Player && (isSpectator || isCreative) -> false (a mid-swoop creative/spectator abort)
+//  4. !canUse()   (canUse == target != null && phase == SWOOP)-> false
+//  5. every 20 ticks (tickCount > catSearchTick): getEntitiesOfClass(Cat, bb.inflate(16), ENTITY_STILL_ALIVE),
+//     hiss() each (cite-deferred visual), isScaredOfCat = !list.isEmpty()
+//  6. return !isScaredOfCat
+//
 // The 20-tick cadence is modelled by a countdown (catSearchCooldown) that fires on the first swoop check then
 // every 20 ticks -- observably identical to the "if (tickCount > catSearchTick) catSearchTick = tickCount + 20"
 // cadence. Cite Phantom$PhantomSweepAttackGoal.canContinueToUse.
@@ -491,7 +492,6 @@ func (t *TickLoop) phantomSweepAttackGoal(e *Entity) {
 	}
 }
 
-
 // phantomCircleAroundAnchorGoal ports Phantom$PhantomCircleAroundAnchorGoal (canUse/start/tick folded). The
 // phase is CIRCLE: on entry it runs start (distance = 5 + nextFloat()*10; height = -4 + nextFloat()*9;
 // clockwise = nextBoolean()?1:-1; selectNext). Each tick it rolls the three occasional re-parameterizations
@@ -514,12 +514,12 @@ func (t *TickLoop) phantomCircleAroundAnchorGoal(e *Entity) {
 		return // start does not also run tick this frame (start THIS tick, tick NEXT)
 	}
 	// if (random.nextInt(adjustedTickDelay(350)) == 0) height = -4 + nextFloat()*9.
-	if r.nextInt(adjustedTickDelay(phantomCircleHeightTick)) == 0 {
+	if r.nextInt(adjustedTickDelay(phantomCircleHeightTick, true)) == 0 { // FULL-RATE hook -> identity
 		ps.height = float32(phantomCircleHeightBase) + r.nextFloat()*phantomCircleHeightSpan
 	}
 	// if (random.nextInt(adjustedTickDelay(250)) == 0) { ++distance; if (distance > 15) { distance = 5;
 	//   clockwise = -clockwise; } }.
-	if r.nextInt(adjustedTickDelay(phantomCircleDistTick)) == 0 {
+	if r.nextInt(adjustedTickDelay(phantomCircleDistTick, true)) == 0 { // FULL-RATE hook -> identity
 		ps.distance += 1.0
 		if ps.distance > float32(phantomCircleDistMax) {
 			ps.distance = float32(phantomCircleDistBase)
@@ -527,7 +527,7 @@ func (t *TickLoop) phantomCircleAroundAnchorGoal(e *Entity) {
 		}
 	}
 	// if (random.nextInt(adjustedTickDelay(450)) == 0) { angle = nextFloat()*2*PI; selectNext(); }.
-	if r.nextInt(adjustedTickDelay(phantomCircleAngleTick)) == 0 {
+	if r.nextInt(adjustedTickDelay(phantomCircleAngleTick, true)) == 0 { // FULL-RATE hook -> identity
 		ps.angle = r.nextFloat() * 2.0 * float32(math.Pi)
 		t.phantomSelectNext(e)
 	}
