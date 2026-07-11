@@ -4,6 +4,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/block"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
@@ -60,6 +61,14 @@ func TestRiptideOnlyLaunchesInWaterOrRain(t *testing.T) {
 	inv2 := ensureInventory(p2)
 	inv2.set(hotbarMenuSlotBase, mkTrident(map[string]int{enchRiptide: 3}))
 	inv2.heldSlot = 0
+	// isInWaterOrRain -> isRainingAt -> canSeeSky now reads real sky-light (getBrightness(SKY,pos) >= 15),
+	// so load p2's chunk with open-sky sky-light 15 or the rain gate reads false and riptide won't launch.
+	if mgr2 := loop2.regions[globalRegion].world; mgr2 != nil {
+		ch2 := level.EmptyChunk(blockTestSecs)
+		ch2.Status = level.StatusFull
+		mgr2.Insert(level.ChunkPos{0, 0}, ch2)
+		setSkyLight(ch2, 15)
+	}
 	loop2.weather.raining = true
 	loop2.weather.rainLevel = 1.0
 	if !tridentStart(loop2, p2) {
