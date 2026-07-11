@@ -66,6 +66,18 @@ type dragonState struct {
 	bossBarID                 uuid.UUID
 	bossProgress              float32
 	originX, originY, originZ float64
+
+	// FLIGHT AI (the phase state machine + pillar-node pathfinder, ender_dragon_flight.go /
+	// ender_dragon_phases.go). path is the lazily-built 24-node flight graph; flight is the 64-sample
+	// DragonFlightHistory the part animation reads back; phaseState folds every phase instance's mutable
+	// fields; yRotA mirrors EnderDragon.yRotA (the aiStep yaw accumulator); inWall mirrors EnderDragon.inWall;
+	// takeoffFirstTick mirrors DragonTakeoffPhase.firstTick. Cite EnderDragon + the phases.*.
+	path             *dragonPathState
+	flight           *dragonFlightHistory
+	phaseState       dragonPhaseState
+	yRotA            float32
+	inWall           bool
+	takeoffFirstTick bool
 }
 
 // dragonPartSpec is the ctor's per-part (name, width, height) table, in the EXACT subEntities[] order.
@@ -86,21 +98,21 @@ var dragonPartSpec = []struct {
 
 // Ender Dragon constants (VERIFIED javap EnderDragon ctor + tickDeath this task).
 const (
-	dragonMaxHealth         = 200.0 // createAttributes MAX_HEALTH 200.0
-	dragonGrowlTime         = 100   // ctor growlTime = 100
-	dragonCrystalHealAmount = 1.0   // checkCrystals setHealth(health + 1.0f)
-	dragonCrystalHealPeriod = 10    // checkCrystals tickCount % 10 == 0
-	dragonCrystalScanRadius = 32.0  // checkCrystals getBoundingBox().inflate(32.0)
-	dragonCrystalHurtDamage = 10.0  // onCrystalDestroyed hurt(head, explosion, 10.0f)
-	dragonDeathMaxTicks     = 200   // tickDeath removes at dragonDeathTime == 200
-	dragonDeathXpStartTick  = 150   // tickDeath awards XP at dragonDeathTime > 150
-	dragonDeathXpPeriod     = 5     // ... && dragonDeathTime % 5 == 0
-	dragonDeathXpTotal      = 500   // xp = 500 (12000 first-ever kill -- cited default 500 in v1)
-	dragonDeathXpFraction   = 0.08  // ExperienceOrb.award(Mth.floor(xp * 0.08f)) per award
-	dragonDeathFinalXpFraction = 0.2 // one-shot ExperienceOrb.award(Mth.floor(xp * 0.2f)) at dragonDeathTime == 200
-	dragonHurtMinDamage     = 0.01  // hurt: if (dmg < 0.01f) return false
-	dragonHoldingRadius     = 30.0  // HOLDING circling radius around fightOrigin (v1 flight)
-	dragonHoldingSpeed      = 0.02  // HOLDING angular step per tick (radians)
+	dragonMaxHealth            = 200.0 // createAttributes MAX_HEALTH 200.0
+	dragonGrowlTime            = 100   // ctor growlTime = 100
+	dragonCrystalHealAmount    = 1.0   // checkCrystals setHealth(health + 1.0f)
+	dragonCrystalHealPeriod    = 10    // checkCrystals tickCount % 10 == 0
+	dragonCrystalScanRadius    = 32.0  // checkCrystals getBoundingBox().inflate(32.0)
+	dragonCrystalHurtDamage    = 10.0  // onCrystalDestroyed hurt(head, explosion, 10.0f)
+	dragonDeathMaxTicks        = 200   // tickDeath removes at dragonDeathTime == 200
+	dragonDeathXpStartTick     = 150   // tickDeath awards XP at dragonDeathTime > 150
+	dragonDeathXpPeriod        = 5     // ... && dragonDeathTime % 5 == 0
+	dragonDeathXpTotal         = 500   // xp = 500 (12000 first-ever kill -- cited default 500 in v1)
+	dragonDeathXpFraction      = 0.08  // ExperienceOrb.award(Mth.floor(xp * 0.08f)) per award
+	dragonDeathFinalXpFraction = 0.2   // one-shot ExperienceOrb.award(Mth.floor(xp * 0.2f)) at dragonDeathTime == 200
+	dragonHurtMinDamage        = 0.01  // hurt: if (dmg < 0.01f) return false
+	dragonHoldingRadius        = 30.0  // HOLDING circling radius around fightOrigin (v1 flight)
+	dragonHoldingSpeed         = 0.02  // HOLDING angular step per tick (radians)
 )
 
 // spawnEnderDragon creates the EnderDragon boss at (x,y,z) with 200 HP (attribute map + initSpawnHealth)
@@ -115,15 +127,17 @@ func (t *TickLoop) spawnEnderDragon(x, y, z float64) *Entity {
 	}
 	d.dragon = &dragonState{
 		parts:            parts,
-		phase:            dragonPhaseHolding, // ctor: phaseManager starts HOLDING
-		dragonDeathTime:  0,                  // ctor: dragonDeathTime = 0
-		growlTime:        dragonGrowlTime,    // ctor: growlTime = 100
+		phase:            dragonPhaseHovering, // ctor: phaseManager starts HOVERING (setPhase(HOLDING) below)
+		dragonDeathTime:  0,                   // ctor: dragonDeathTime = 0
+		growlTime:        dragonGrowlTime,     // ctor: growlTime = 100
 		nearestCrystalID: 0,
 		bossBarID:        uuid.New(),
 		bossProgress:     1.0,
 		originX:          x,
 		originY:          y,
 		originZ:          z,
+		path:             &dragonPathState{},
+		flight:           newDragonFlightHistory(),
 	}
 	initSpawnHealth(d) // setHealth(getMaxHealth()) -> 200.0
 	// Seed the dragon per-entity RNG (mobRandom reads e.ai.rng) so the checkCrystals nextInt(10) rescan
@@ -135,6 +149,8 @@ func (t *TickLoop) spawnEnderDragon(x, y, z float64) *Entity {
 	// (no removeWhenFarAway cull) + Mob.isPersistenceRequired.
 	d.ai.persistenceRequired = true
 	t.dragonRecomputeParts(d)
+	// createNewDragon: getPhaseManager().setPhase(HOLDING_PATTERN) (begin() clears the HOLDING path/target).
+	t.dragonSetPhase(d, dragonPhaseHolding)
 	owner := t.regionForEntity(d)
 	if owner == nil {
 		owner = t.cur()
@@ -198,37 +214,12 @@ func (t *TickLoop) enderDragonAiStep(e *Entity) {
 	}
 	t.dragonRecomputeParts(e)
 
-	// growlTime cadence (ctor 100): aiStep does `if (--growlTime < 0) { playLocalSound(GROWL, 2.5,
-	// 0.8 + random.nextFloat()*0.3, false); growlTime = 200 + random.nextInt(200); }`. The pre-decrement
-	// ALWAYS happens, then the `< 0` (NOT <= 0) test fires -> play the growl (drawing nextFloat()) and
-	// RESET growlTime = 200 + nextInt(200). TWO draws on the dragon's OWN stream, in that order, BEFORE
-	// checkCrystals' nextInt(10) -- omitting them desyncs the shared stream. The sound is a client visual
-	// (deferred), but the two RNG DRAWS are faithful. Cite EnderDragon.aiStep (bytecode 44-120).
-	//	[VERIFIED javap EnderDragon.aiStep: 46 getfield growlTime; 49 iconst_1; 50 isub; 51 dup_x1; 52
-	//	 putfield growlTime; 55 ifge 123 (runs when < 0); 87-98 nextFloat()*0.3 sound arg; 104 sipush 200;
-	//	 110-119 nextInt(200); iadd; 120 putfield growlTime.]
-	d.growlTime--
-	if d.growlTime < 0 {
-		mobRandom(e).nextFloat()                          // 0.8 + nextFloat()*0.3 growl-sound pitch (sound deferred)
-		d.growlTime = int32(200 + mobRandom(e).nextInt(200)) // growlTime = 200 + nextInt(200)
-	}
-
-	// HOLDING flight: circle around the fight origin at a fixed radius (the v1 flight stub -- the full
-	// DragonHoldingPhase path-node steer is a cited deferral). Keeps the dragon (+ its parts) traveling.
-	angle := float64(t.gametime) * dragonHoldingSpeed
-	nx := d.originX + dragonHoldingRadius*math.Cos(angle)
-	nz := d.originZ + dragonHoldingRadius*math.Sin(angle)
-	ny := d.originY
-	dx := nx - e.x
-	dz := nz - e.z
-	if dx != 0 || dz != 0 {
-		e.yaw = float32(-math.Atan2(dx, dz) * (180.0 / math.Pi))
-		e.headYaw = e.yaw
-	}
-	t.regionForEntity(e).entities.move(e, nx, ny, nz)
-
-	// checkCrystals: the +1 heal while a live crystal is near + the periodic rescan.
+	// SERVER aiStep (EnderDragon.aiStep ServerLevel branch): the growl draw is CLIENT-only (inside
+	// if(level.isClientSide())), so the server does NOT decrement growlTime or draw the growl-pitch
+	// nextFloat -- the only server RNG here is checkCrystals' nextInt(10) + the phase draws. checkCrystals
+	// runs FIRST (aiStep line: this.checkCrystals()), then the flight/phase integrator. Cite EnderDragon.aiStep.
 	t.dragonCheckCrystals(e)
+	t.dragonFlightStep(e)
 
 	// Boss bar progress = health / maxHealth (ServerBossEvent.setProgress); sends only on a change.
 	t.dragonBossBarUpdateProgress(e)
@@ -269,8 +260,8 @@ func (t *TickLoop) dragonCheckCrystals(e *Entity) {
 		// EnderDragon.checkCrystals (bytecode 82-85 inflate(32.0); 94 Double.MAX_VALUE; 138-140 dcmpg
 		// ifge -> keep only on strict <).
 		var best *Entity
-		bestSq := math.Inf(1)                             // d3 = Double.MAX_VALUE
-		inflate := dragonCrystalScanRadius                // 32.0: the getBoundingBox().inflate(32.0) half-extent
+		bestSq := math.Inf(1)              // d3 = Double.MAX_VALUE
+		inflate := dragonCrystalScanRadius // 32.0: the getBoundingBox().inflate(32.0) half-extent
 		owner := t.regionForEntity(e)
 		for _, other := range owner.entities.all() {
 			if other == nil || !other.isEndCrystal || other.dead {
@@ -352,7 +343,11 @@ func (t *TickLoop) dragonHurtPart(e *Entity, partName string, src damageSource, 
 	if d.phase == dragonPhaseDying { // if (getPhase() == DYING) return false;
 		return false
 	}
-	// dmg = currentPhase.onHurt(src, dmg): identity in HOLDING (cited). No-op.
+	// dmg = currentPhase.onHurt(src, dmg): AbstractDragonPhaseInstance.onHurt is identity; the SITTING
+	// phases (AbstractDragonSittingPhase.onHurt) ZERO arrow/wind_charge damage (and ignite the projectile
+	// -- ignite is a cited seam since the projectile entity ref is not threaded here). Applied BEFORE the
+	// part /4 reduction, exactly as vanilla orders. Cite EnderDragon.hurt + AbstractDragonSittingPhase.onHurt.
+	dmg = dragonPhaseOnHurt(d, src, dmg)
 
 	if partName != "head" { // if (part != this.head) dmg = dmg/4.0f + Math.min(dmg, 1.0f);
 		dmg = dmg/4.0 + minF32(dmg, 1.0)
@@ -368,14 +363,16 @@ func (t *TickLoop) dragonHurtPart(e *Entity, partName string, src damageSource, 
 		// reallyHurt(level, src, dmg): the shared LivingEntity hurt tail (applyDamageEntity mutates
 		// e.health, clamps 0, and drives dieEntity on a lethal hit).
 		t.applyDamageEntity(e, src, dmg)
-		// Sitting-phase TAKEOFF accumulator: isSitting() FALSE in HOLDING -> cited no-op. The vanilla branch
-		// (sittingDamageReceived += (h - getHealth()); if > 0.25*maxHealth reset + setPhase(TAKEOFF)) is
-		// preserved in structure so a real SITTING phase reads it unchanged.
-		if d.phase != dragonPhaseHolding {
+		// Sitting-phase TAKEOFF accumulator (EnderDragon.hurt: if (currentPhase.isSitting()) {
+		// sittingDamageReceived += h - getHealth(); if (sittingDamageReceived > 0.25f*getMaxHealth())
+		// { sittingDamageReceived = 0; setPhase(TAKEOFF); } }). Now that the phase machine + sitting
+		// phases exist, this is FAITHFUL (not a stub): a sitting dragon that takes >25% max HP bursts
+		// back into flight. Cite EnderDragon.hurt.
+		if dragonPhaseIsSitting(d) {
 			d.sittingDamageReceived += hBefore - e.health
 			if d.sittingDamageReceived > 0.25*float32(dragonMaxHealth) {
 				d.sittingDamageReceived = 0
-				// setPhase(TAKEOFF) -- deferred (no phase manager). Cited.
+				t.dragonSetPhase(e, dragonPhaseTakeoff)
 			}
 		} else {
 			_ = hBefore
