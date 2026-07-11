@@ -42,13 +42,29 @@ func (t *TickLoop) spawnBreedOffspring(e, partner *Entity) *Entity {
 		}
 		return child
 	case entity.Rabbit.ID:
-		// Rabbit.getBreedOffspring: RABBIT child. nextInt(20) FIRST; if !=0 and other is a Rabbit,
-		// nextBoolean inherits a parent variant. The DRAW ORDER (nextInt(20) then conditional nextBoolean)
-		// is the parity contract. RabbitVariant deferred.
+		// Rabbit.getBreedOffspring (javap-verified):
+		//   Rabbit$Variant v = getRandomRabbitVariant(level, this.blockPosition());   // LEVEL rng nextInt(100)
+		//   if (this.random.nextInt(20) != 0) {                                       // INITIATOR rng, ALWAYS
+		//       if (other instanceof Rabbit r && this.random.nextBoolean()) v = r.getVariant();
+		//       else                                                        v = this.getVariant();
+		//   }
+		//   child.setVariant(v);
+		// DRAW ORDER (the parity contract): (1) getRandomRabbitVariant draws ONE level.getRandom().nextInt(100)
+		// ALWAYS (biome-branch pick, see getRandomRabbitVariant); (2) this.random.nextInt(20) ALWAYS; (3) ONLY
+		// on the common 19/20 branch (nextInt(20) != 0) AND other is a Rabbit, this.random.nextBoolean() picks
+		// the OTHER parent (true) vs THIS (false); the 1/20 branch keeps the biome pick from step 1. The
+		// rolled variant is now APPLIED to the REAL rabbitVariant field (was previously discarded). Cite
+		// Rabbit.getBreedOffspring + Rabbit.getRandomRabbitVariant + Rabbit.getVariant/setVariant.
 		child := t.spawnVanillaMob(vanillaRabbitMobName, e.x, e.y, e.z)
-		if mobRandom(e).nextInt(20) != 0 && partner.typ == entity.Rabbit.ID {
-			_ = mobRandom(e).nextBoolean()
+		variant := t.getRandomRabbitVariant(e.x, e.y, e.z) // step (1): LEVEL rng nextInt(100)
+		if mobRandom(e).nextInt(20) != 0 {                 // step (2): INITIATOR rng, always
+			if partner.typ == entity.Rabbit.ID && mobRandom(e).nextBoolean() {
+				variant = partner.rabbitVariant // other.getVariant()
+			} else {
+				variant = e.rabbitVariant // this.getVariant()
+			}
 		}
+		child.rabbitVariant = variant
 		return child
 	case entity.Sheep.ID:
 		// Sheep.getBreedOffspring: SHEEP child; setColor(DyeColor.getMixedColor(level, c1, c2)). Recipe
@@ -124,11 +140,91 @@ func (t *TickLoop) spawnBreedOffspring(e, partner *Entity) *Entity {
 		// defensive guard: if ever reached, drop the egg rather than a live baby. Cite Sniffer.spawnChildFromBreeding.
 		return nil
 	case entity.Axolotl.ID:
-		// Axolotl.getBreedOffspring: nextInt(500)==0 -> rare variant else a parent variant, on the
-		// initiator stream. axolotlVariant is REAL; keep the initiator on the common 499/500 branch.
+		// Axolotl.getBreedOffspring (javap-verified): on the INITIATOR (this.random) stream --
+		//   Axolotl$Variant v;
+		//   if (useRareVariant(this.random))            v = Axolotl$Variant.getRareSpawnVariant(this.random);
+		//   else                                        v = this.random.nextBoolean() ? this.getVariant()
+		//                                                                              : other.getVariant();
+		//   child.setVariant(v); child.setPersistenceRequired();
+		// where useRareVariant(r) == r.nextInt(1200) == 0 (Axolotl.useRareVariant), and getRareSpawnVariant(r)
+		// == Util.getRandom(rareVariants, r) == rareVariants[r.nextInt(rareVariants.length)]. The rare set is
+		// the single-entry {BLUE} (Axolotl$Variant.getSpawnVariant(r,false) filters common==false; only BLUE
+		// has common=false: ids LUCY0/WILD1/GOLD2/CYAN3 common=true, BLUE4 common=false), so the rare draw is
+		// r.nextInt(1) (always 0) -> BLUE(4). The DRAW ORDER is the contract: (1) nextInt(1200) gate ALWAYS;
+		// (2a) rare -> nextInt(1); (2b) common -> nextBoolean. axolotlVariant is a REAL field. Cite
+		// Axolotl.getBreedOffspring + Axolotl.useRareVariant + Axolotl$Variant.getRareSpawnVariant/
+		// getSpawnVariant + Util.getRandom(T[],RandomSource).
 		child := t.spawnAxolotl(e.x, e.y, e.z, true)
-		if mobRandom(e).nextInt(500) != 0 {
+		r := mobRandom(e)
+		if r.nextInt(1200) == 0 {
+			_ = r.nextInt(1)                          // getRareSpawnVariant: Util.getRandom({BLUE}, r) == r.nextInt(1)
+			child.axolotlVariant = axolotlVariantBlue // the single rare-set entry
+		} else if r.nextBoolean() {
 			child.axolotlVariant = e.axolotlVariant
+		} else {
+			child.axolotlVariant = partner.axolotlVariant
+		}
+		return child
+	case entity.Wolf.ID:
+		// Wolf.getBreedOffspring (javap-verified): the ENTIRE body below is gated on `other instanceof Wolf`
+		// (bytecode `aload_2; instanceof Wolf; ifeq return`) -- if the mate is not a Wolf the child is
+		// returned with NO rng draw. canMate already gates a wolf mate to a tamed Wolf, so the common path
+		// takes the block:
+		//   if (other instanceof Wolf otherWolf) {
+		//       child.setVariant(this.random.nextBoolean() ? this.getVariant() : otherWolf.getVariant());
+		//       if (this.isTame()) {
+		//           child.setOwnerReference(this.getOwnerReference());
+		//           child.setTame(true, true);
+		//           child.setCollarColor(DyeColor.getMixedColor(level, this.getCollarColor(), otherWolf.getCollarColor()));
+		//       }
+		//       child.setSoundVariant(WolfSoundVariants.pickRandomSoundVariant(registryAccess, this.random));
+		//   }
+		// DRAW ORDER (the contract), all gated on other-is-Wolf: (1) this.random.nextBoolean() for the
+		// WolfVariant Holder pick (Holder registry NOT modeled in v1 -> the SELECTION is a cited deferral but
+		// the INITIATOR nextBoolean DRAW is consumed exactly); (2) if this.isTame(): owner ref + setTame +
+		// the collar getMixedColor (recipe DEFERRED -> level.getRandom().nextBoolean() fallback, the same
+		// dyeMixedColorFallback the Cat/Sheep cases use); (3) ALWAYS (still inside the other-is-Wolf block)
+		// this.random.nextInt(soundVariantRegistrySize) for pickRandomSoundVariant == Registry.getRandom(r)
+		// (WOLF_SOUND_VARIANT registry NOT modeled -> DEFERRED, structured to become a real nextInt(size)
+		// draw). ownerUUID/tame/catCollarColor (the wolf reuses catCollarColor as its DyeColor collar slot)
+		// are REAL and transferred. Cite Wolf.getBreedOffspring + WolfSoundVariants.pickRandomSoundVariant
+		// (Registry.getRandom) + DyeColor.getMixedColor.
+		child := t.spawnVanillaMob(vanillaWolfMobName, e.x, e.y, e.z)
+		if partner.typ == entity.Wolf.ID {
+			// (1) WolfVariant pick: setVariant(nextBoolean() ? this : other). WolfVariant Holder not modeled;
+			// consume the INITIATOR nextBoolean exactly (the variant SELECTION is the cited deferral).
+			_ = mobRandom(e).nextBoolean()
+			// (2) if tamed: transfer owner + tame + collar getMixedColor.
+			if e.tame {
+				child.ownerUUID = e.ownerUUID // setOwnerReference(getOwnerReference())
+				child.tame = true             // setTame(true, true)
+				child.catCollarColor = int(t.dyeMixedColorFallback(byte(e.catCollarColor), byte(partner.catCollarColor)))
+			}
+			// (3) pickRandomSoundVariant(registryAccess, this.random) == Registry.getRandom(this.random) ==
+			// this.random.nextInt(WOLF_SOUND_VARIANT size). The registry is not a v1 subsystem, so this draw
+			// is DEFERRED (structured to become nextInt(registrySize) when WolfSoundVariants is wired); the
+			// SoundVariant SELECTION and its INITIATOR draw are deferred together, never baked away. Cite
+			// WolfSoundVariants.pickRandomSoundVariant.
+		}
+		return child
+	case entity.Frog.ID:
+		// Frog.getBreedOffspring (javap-verified):
+		//   Frog child = EntityTypes.FROG.create(level, BREEDING);   // raw create; NO finalizeSpawn, NO variant pick
+		//   if (child != null) FrogAi.initMemories(child, level.getRandom());
+		//   return child;
+		// The variant is NOT set here (it stays the create-time DEFAULT_VARIANT temperate -- getBreedOffspring
+		// does NOT run the biome variant pick that finalizeSpawn does; that is a separate code path). The only
+		// rng is FrogAi.initMemories, which draws ONE TIME_BETWEEN_LONG_JUMPS.sample == UniformInt.of(100,140)
+		// .sample(rng) == 100 + rng.nextInt(41) on the LEVEL random (ServerLevel.getRandom() == this region's
+		// levelRandom). spawnFrogRaw is the non-finalizing create (matches EntityType.create(BREEDING)); the
+		// caller (breed) applies setBaby(true). Cite Frog.getBreedOffspring + FrogAi.initMemories +
+		// UniformInt.sample.
+		child := t.spawnFrogRaw(e.x, e.y, e.z, false)
+		if child != nil {
+			if lr := t.cur(); lr != nil && lr.levelRandom != nil {
+				// FrogAi.initMemories: TIME_BETWEEN_LONG_JUMPS.sample == 100 + level.nextInt(41).
+				_ = frogTimeBetweenLongJumpsMin + int(lr.levelRandom.NextIntN(frogTimeBetweenLongJumpsSpan))
+			}
 		}
 		return child
 	default:
@@ -163,6 +259,39 @@ func mooshroomOffspringVariant(e, partner *Entity) int32 {
 		return v1
 	}
 	return v2
+}
+
+// getRandomRabbitVariant ports Rabbit.getRandomRabbitVariant(level, pos) 1:1:
+//
+//	Holder<Biome> biome = level.getBiome(pos);
+//	int n = level.getRandom().nextInt(100);                 // ONE level-rng draw, ALWAYS
+//	if (biome.is(BiomeTags.SPAWNS_WHITE_RABBITS)) return n < 80 ? WHITE(1) : WHITE_SPLOTCHED(3);
+//	if (biome.is(BiomeTags.SPAWNS_GOLD_RABBITS))  return GOLD(4);   // NOTE: gold path takes NO extra draw
+//	return n < 50 ? BROWN(0) : (n < 90 ? SALT(5) : BLACK(2));
+//
+// The two biome tags (BiomeTags.SPAWNS_WHITE_RABBITS / SPAWNS_GOLD_RABBITS) are a cited const-false
+// reduction in v1 (no biome-tag facility, and the default/superflat biome is in NEITHER tag), so the pick
+// always falls to the BROWN/SALT/BLACK nextInt(100) branch -- IDENTICAL to the Rabbit.finalizeSpawn
+// reduction already in plugin_mob_decl.go. CRUCIALLY the nextInt(100) draw is STILL taken on the LEVEL rng
+// (level.getRandom() == this region's levelRandom) exactly as the jar, so a co-spawned mob's level-rng
+// stream stays byte-in-lockstep. A nil region levelRandom (a bare test loop) skips the draw and returns the
+// DEFAULT BROWN(0) -- the graceful degrade the sheep-color / cat-gift paths use. Cite
+// Rabbit.getRandomRabbitVariant + Rabbit.Variant static init (BROWN 0, WHITE 1, BLACK 2, WHITE_SPLOTCHED 3,
+// GOLD 4, SALT 5).
+func (t *TickLoop) getRandomRabbitVariant(x, y, z float64) int32 {
+	if r := t.cur(); r != nil && r.levelRandom != nil {
+		n := int(r.levelRandom.NextIntN(100)) // ALWAYS: the single level-rng draw
+		// biome-tag gates (SPAWNS_WHITE_RABBITS / SPAWNS_GOLD_RABBITS) cited const-false -> the else branch:
+		switch {
+		case n < 50:
+			return 0 // BROWN
+		case n < 90:
+			return 5 // SALT
+		default:
+			return 2 // BLACK
+		}
+	}
+	return 0 // BROWN (DEFAULT; bare test loop with no region levelRandom skips the draw)
 }
 
 // breedRegistryNameFor maps a declared-vanilla-mob entity type to its registry name for the default
