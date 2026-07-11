@@ -509,6 +509,16 @@ type TickLoop struct {
 	// dispenser_persist.go (the furnace-BE twin).
 	dispensers map[pk.Position]*dispenserBE
 
+	// shulkers is the runtime store of SHULKER BOX block-entities keyed by world position (the dispensers
+	// twin). Each 27-slot shulkerBE holds the container + the lid animation the tick drives; the menu/hopper/
+	// comparator read/write it. Lazily constructed; tick-owned. Persistence (Items) via shulker_box_persist.go.
+	shulkers map[pk.Position]*shulkerBE
+
+	// enderChests is the runtime store of ENDER CHEST block-entities keyed by world position -- the opener
+	// count + lid animation ONLY (the ender inventory is per-PLAYER, tickPlayer.enderItems, NOT here). Lazily
+	// constructed; tick-owned. No NBT (the BE persists no container). CITE EnderChestBlockEntity.
+	enderChests map[pk.Position]*enderChestBE
+
 	// crafters is the runtime store of CRAFTER block-entities keyed by world position (the dispensers
 	// twin). A crafter auto-crafts from its 9-slot crafterBE here when its scheduled TRIGGERED tick runs
 	// (crafter.go crafterDispenseFrom); the per-tick serverTick clears CRAFTING when the 6-tick countdown
@@ -971,6 +981,12 @@ type tickPlayer struct {
 	// SetSlot from here. Lazily initialized by the inventory handlers; mutated ONLY on the tick
 	// goroutine (TICK-05 / T-6-08), so it is -race clean by the single-owner discipline.
 	inventory *Inventory
+
+	// enderItems is the player's PER-PLAYER ENDER CHEST inventory -- the 27-slot PlayerEnderChestContainer
+	// shared across every ender chest the player opens (the inventory follows the PLAYER, not the block).
+	// Lazily padded to 27 by ensureEnderItems; persisted to/from the player .dat EnderItems list. Tick-owned.
+	// CITE Player.getEnderChestInventory / PlayerEnderChestContainer(27).
+	enderItems []component.SlotData
 
 	// openContainer is the player's currently-open non-inventory container window, or nil when
 	// only the player inventory (window 0) is open (STRUCT-POLISH-01 chest-open UI). It carries the

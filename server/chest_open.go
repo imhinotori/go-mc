@@ -205,6 +205,19 @@ type openContainer struct {
 	loomPatterns []string
 	loomSelected int
 	loomPos      pk.Position
+
+	// shulkerPos is the world position of the open shulker_box (kind == containerKindShulker). The window's
+	// 27 slots back onto the tick-owned shulkerBE at t.shulkers[shulkerPos] -- NO transient copy (like the
+	// chest/dispenser): the shulker container IS the block-entity, so a click mutates the same items the
+	// hopper/comparator read, and close just frees the window (the items persist in the BE) after stopOpen.
+	shulkerPos pk.Position
+
+	// enderChestPos is the world position of the open ender_chest (kind == containerKindEnderChest). The
+	// ENDER CHEST inventory is PER-PLAYER (the 27-slot PlayerEnderChestContainer on the player NBT, shared
+	// across every ender chest block), NOT block-scoped -- so the window backs onto p.enderItems, not a
+	// block-entity. enderChestPos records the opened block only for the openersCounter sound/animation +
+	// the EnderChestBlockEntity.setActiveChest binding released on close. CITE EnderChestBlock.useWithoutItem.
+	enderChestPos pk.Position
 }
 
 // containerKind discriminates an open non-inventory window.
@@ -226,6 +239,8 @@ const (
 	containerKindGrindstone                         // a transient grindstone 2-input combiner (grind0/grind1)
 	containerKindSmithing                           // a transient smithing 3-input combiner (smithTemplate/Base/Addition)
 	containerKindLoom                               // a transient loom (banner/dye/pattern -> layered banner)
+	containerKindShulker                            // a shulker_box BE (shulkerPos)
+	containerKindEnderChest                         // a player-scoped ender chest (the ender inventory)
 )
 
 // chestMenuSize is the chest-window slot count: 27 chest container slots + 27 player main + 9
@@ -354,10 +369,17 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 	// (LEVEL 8) composter, extracts bone meal + empties it. Returns false (PASS) for a non-compostable
 	// hand on a non-READY composter (placement continues). CITE ComposterBlock.useItemOn/useWithoutItem.
 	isComposter := isComposterBlock(state)
+	// A shulker box right-click OPENS its 27-slot container menu (ShulkerBoxBlock.useWithoutItem ->
+	// player.openMenu(sbe), gated by canOpen). An ender chest right-click OPENS the PER-PLAYER ender
+	// inventory (EnderChestBlock.useWithoutItem -> player.openMenu over getEnderChestInventory). Both
+	// consume the interaction so no block is placed. CITE ShulkerBoxBlock / EnderChestBlock.useWithoutItem.
+	isShulker := block.IsShulkerBox(state)
+	isEnderChest := block.IsEnderChest(state)
 	if !isChest && !isCraft && !isCut && !isBed && !isFurnace && !isBrew && !isLever && !isButton &&
 		!isRepeater && !isComparator && !isDispenser && !isHopper && !isBeacon && !isAnvil && !isEnchant &&
 		!isGrindstone && !isSmithing && !isLoom && !isDoorFamily && !isSign &&
-		!isCampfire && !isBell && !isLectern && !isJukebox && !isBookshelf && !isComposter {
+		!isCampfire && !isBell && !isLectern && !isJukebox && !isBookshelf && !isComposter &&
+		!isShulker && !isEnderChest {
 		return false // not an interactive block: PASS → placement runs
 	}
 	// Reach-gate the interaction (the same server-authoritative reach the place/break paths use):
@@ -499,6 +521,16 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 		// composter). Returns false (PASS) when neither branch applies so placement continues. CITE
 		// ComposterBlock.useItemOn / useWithoutItem.
 		return t.useComposter(p, hitPos, state)
+	}
+	if isShulker {
+		// ShulkerBoxBlock.useWithoutItem -> player.openMenu(sbe) (gated by canOpen). ALWAYS returns SUCCESS
+		// (consumes), so placement is skipped for a shulker box even when it is blocked from opening.
+		return t.openShulker(p, hitPos)
+	}
+	if isEnderChest {
+		// EnderChestBlock.useWithoutItem -> player.openMenu over the per-player ender inventory. Blocked
+		// when the block ABOVE is a redstone conductor (the lid cannot open); still consumes either way.
+		return t.openEnderChest(p, hitPos)
 	}
 	return t.openChest(p, hitPos)
 }
@@ -705,6 +737,27 @@ func (t *TickLoop) createBlockEntityOnPlace(pos pk.Position, state block.StateID
 		// (empty single slot). Register the empty decoratedPotBE so the insert + comparator paths resolve it.
 		// CITE DecoratedPotBlock (EntityBlock).
 		t.resolveDecoratedPot(pos)
+		return
+	}
+	if block.IsShulkerBox(state) {
+		// ShulkerBoxBlock is a BaseEntityBlock; newBlockEntity = new ShulkerBoxBlockEntity(color, pos,
+		// state) (empty: 27 clear slots, CLOSED lid, openCount 0). Write an empty BE compound so the open +
+		// hopper + comparator paths resolve it, and register the empty shulkerBE in t.shulkers so the lid
+		// animation ticks. CITE ShulkerBoxBlock (EntityBlock).
+		empty := nbt.RawMessage{Type: nbt.TagCompound, Data: []byte{0x00}}
+		t.world().SetBlockEntityAt(pos, block.EntityTypes["minecraft:shulker_box"], empty, dimMinY)
+		t.resolveShulker(pos)
+		return
+	}
+	if block.IsEnderChest(state) {
+		// EnderChestBlock is an AbstractChestBlock (BaseEntityBlock); newBlockEntity = new
+		// EnderChestBlockEntity(pos, state) (empty: a ContainerOpenersCounter + ChestLidController, NO
+		// container -- the ender inventory is per-PLAYER, not on the BE). Write an empty BE compound so the
+		// open path resolves the block-entity for the openersCounter sound/animation, and register the
+		// empty enderChestBE in t.enderChests so recheckOpeners ticks. CITE EnderChestBlock (EntityBlock).
+		empty := nbt.RawMessage{Type: nbt.TagCompound, Data: []byte{0x00}}
+		t.world().SetBlockEntityAt(pos, block.EntityTypes["minecraft:ender_chest"], empty, dimMinY)
+		t.resolveEnderChest(pos)
 		return
 	}
 }

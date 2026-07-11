@@ -187,6 +187,12 @@ func (t *TickLoop) getContainerAt(pos pk.Position) containerView {
 		if h := t.resolveHopper(pos, state); h != nil {
 			return &hopperContainer{t: t, pos: pos, h: h}
 		}
+	case block.IsShulkerBox(state):
+		// ShulkerBoxBlockEntity is a WorldlyContainer (27 slots, all faces expose all slots). resolveShulker
+		// synthesizes an empty container for a placed shulker box. CITE ShulkerBoxBlockEntity (WorldlyContainer).
+		if s := t.resolveShulker(pos); s != nil {
+			return &shulkerContainerView{t: t, pos: pos, s: s}
+		}
 	}
 	// getEntityContainer FALLBACK (HopperBlockEntity.getContainerAt: `result == null -> getEntityContainer`).
 	// No block container at pos → look for a CONTAINER-MINECART (chest/hopper minecart) whose box occupies the

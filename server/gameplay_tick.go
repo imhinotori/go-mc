@@ -419,6 +419,12 @@ func (g *gameTick) AcceptPlayer(
 				inv.heldSlot = int16(loaded.SelectedItemSlot)
 			}
 		}
+		// ENDER CHEST: restore the persisted per-player ender inventory into p.enderItems (the round-trip
+		// inverse of enderItemsToDisk). itemsToInventory places the slot-keyed disk items into a fresh
+		// 27-slot backing. CITE Player.readAdditionalSaveData (getEnderChestInventory().fromSlots).
+		if len(loaded.EnderItems) > 0 {
+			player.enderItems = itemsToInventory(loaded.EnderItems, enderChestContainerSize)
+		}
 	}
 
 	// GATE-ONLY starter kit (test_kit.go): a no-op unless SULFUR_TEST_KIT=1. Seeds food + blocks

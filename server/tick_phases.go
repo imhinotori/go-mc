@@ -189,6 +189,16 @@ func (t *TickLoop) tickWorld() {
 	// empty hive ticks to a cheap no-op (no work + no RNG draw). Nil map = no-op. CITE BeehiveBlock.getTicker
 	// -> BeehiveBlockEntity.serverTick.
 	t.tickBeehives()
+	// SUB-BLOCKENTITY: tick every SHULKER BOX block-entity (ShulkerBoxBlockEntity.tick -> updateAnimation:
+	// step the lid 0.1/tick along CLOSED/OPENING/OPENED/CLOSING + shove collided entities out while opening).
+	// Keyed by world position (t.shulkers, global), so they tick ONCE globally here (the tickBells twin). A
+	// CLOSED unopened box ticks to a cheap no-op. Nil map = no-op. CITE ShulkerBoxBlock.getTicker.
+	t.tickShulkers()
+	// SUB-BLOCKENTITY: tick every ENDER CHEST block-entity (EnderChestBlockEntity.lidAnimateTick ->
+	// ChestLidController.tickLid: step the lid openness 0.1/tick toward shouldBeOpen). Keyed by world
+	// position (t.enderChests, global), so they tick ONCE globally here. A closed idle chest ticks to a
+	// cheap no-op. Nil map = no-op. CITE EnderChestBlock.getTicker -> EnderChestBlockEntity.lidAnimateTick.
+	t.tickEnderChests()
 	// SUB-BLOCKENTITY: tick every MOB-SPAWNER block-entity (SpawnerBlockEntity.serverTick ->
 	// BaseSpawner.serverTick - the isNearPlayer gate, the spawnDelay countdown, and the spawnCount burst
 	// under the maxNearbyEntities cap). Keyed by world position (t.spawners, global - not per-region), so

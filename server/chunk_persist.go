@@ -116,6 +116,10 @@ func (t *TickLoop) flushColumn(pos level.ChunkPos) bool {
 	// The dispenser-flush twin.
 	t.flushChiseledBookshelfItems(pos, ch)
 
+	// SHULKER-BOX FLUSH: fold any live shulkerBE in this column into the chunk BlockEntity list
+	// (ShulkerBoxBlockEntity.saveAdditional -- the 27-slot Items list). The dispenser-flush twin.
+	t.flushShulkerItems(pos, ch)
+
 	data, err := world.SerializeChunkData(t.worker().StructureCache(), pos, ch, t.worker().MinY())
 	if err != nil {
 		// A serialize error is an encode bug, not runtime input; skip this column (do not crash the

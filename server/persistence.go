@@ -81,6 +81,13 @@ func snapshotPlayer(p *tickPlayer) save.PlayerData {
 		data.SelectedItemSlot = int32(p.inventory.heldSlot)
 		data.Inventory = inventoryToItems(p.inventory)
 	}
+	// ENDER CHEST: persist the per-player 27-slot ender inventory to the .dat EnderItems list (the same
+	// ItemStackWithSlot codec the main Inventory uses). A never-opened player has a nil/short slice ->
+	// enderItemsToDisk skips empties, writing no EnderItems when the ender inventory is empty. CITE
+	// Player.addAdditionalSaveData (getEnderChestInventory().storeAsSlots -> "EnderItems").
+	if len(p.enderItems) > 0 {
+		data.EnderItems = enderItemsToDisk(p.enderItems)
+	}
 	return data
 }
 
@@ -114,6 +121,28 @@ func inventoryToItems(inv *Inventory) []save.ItemStackWithSlotDisk {
 		log.Printf("player inventory: %d component-bearing stacks had UNSUPPORTED components dropped (SUB-ITEMNBT Phase B: enchantments/long-tail; supported set transcoded)", dropped)
 	}
 	return items
+}
+
+// enderItemsToDisk translates the per-player 27-slot ender inventory into the disk-NBT ItemStackWithSlot
+// list (the inventoryToItems twin, over p.enderItems). Skip-empty, Slot=index. CITE
+// PlayerEnderChestContainer.storeAsSlots (for each non-empty slot, add ItemStackWithSlot(i, stack)).
+func enderItemsToDisk(items []component.SlotData) []save.ItemStackWithSlotDisk {
+	disk := make([]save.DiskItem, len(items))
+	for i, slot := range items {
+		if slot.Count <= 0 {
+			continue
+		}
+		disk[i] = save.DiskItem{
+			ID:               itemName(int32(slot.ItemID)),
+			Count:            int32(slot.Count),
+			HasComponents:    len(slot.RawComponents) > 0,
+			WireComponents:   slot.RawComponents,
+			WireAddedCount:   int(slot.AddedCount),
+			WireRemovedCount: int(slot.RemovedCount),
+		}
+	}
+	items2, _ := save.SaveAllItems(disk, false)
+	return items2
 }
 
 // itemName resolves a numeric wire item id to its namespaced disk id ("minecraft:<name>"),

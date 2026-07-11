@@ -291,6 +291,12 @@ func (t *TickLoop) clicked(p *tickPlayer, containerID int32, slotNum int16, butt
 			case containerKindLoom:
 				t.clickedLoom(p, p.openContainer, slotNum, button, input)
 				return
+			case containerKindShulker:
+				t.clickedShulker(p, p.openContainer, slotNum, button, input)
+				return
+			case containerKindEnderChest:
+				t.clickedEnderChest(p, p.openContainer, slotNum, button, input)
+				return
 			}
 		}
 		t.sendContent(p) // unknown/stale window: resend authoritative player content
@@ -479,6 +485,20 @@ func (t *TickLoop) handleContainerClose(p *tickPlayer, pkt pk.Packet) {
 	// The inputs are real and must not be lost.
 	if p.openContainer != nil && p.openContainer.kind == containerKindLoom {
 		t.closeLoomWindow(p, p.openContainer)
+	}
+	// A SHULKER BOX window is the block-entity container: its 27 slots persist in the tick-owned shulkerBE
+	// (like a chest/dispenser), so close just frees the window (closeShulkerWindow runs stopOpen -> the
+	// CLOSE sound + CLOSING lid animation) -- the items are NOT returned to the player (they belong to the
+	// box). The carried (cursor) item return below still runs.
+	if p.openContainer != nil && p.openContainer.kind == containerKindShulker {
+		t.closeShulkerWindow(p, p.openContainer)
+	}
+	// An ENDER CHEST window is the PER-PLAYER ender inventory: its 27 slots persist on p.enderItems (like a
+	// chest's own container), so close just frees the window (closeEnderChestWindow runs stopOpen -> the
+	// CLOSE sound + lid closing + unbind the active chest) -- the items are the player's ender inventory,
+	// not returned. The carried (cursor) item return below still runs.
+	if p.openContainer != nil && p.openContainer.kind == containerKindEnderChest {
+		t.closeEnderChestWindow(p, p.openContainer)
 	}
 	// The CARRIED (cursor) item: vanilla AbstractContainerMenu.removed() places a left-on-cursor item
 	// back into the inventory (or drops it) and clears the cursor. v1 previously LEFT it on the cursor —
