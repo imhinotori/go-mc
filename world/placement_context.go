@@ -62,6 +62,8 @@ func (c *placementContext) GetHeight(t placement.HeightmapType, x, z int) int {
 		bs = ch.HeightMaps.OceanFloorWG
 	case placement.MotionBlocking:
 		bs = ch.HeightMaps.MotionBlocking
+	case placement.MotionBlockingNoLeaves:
+		bs = ch.HeightMaps.MotionBlockingNoLeaves
 	default:
 		bs = ch.HeightMaps.WorldSurfaceWG
 	}

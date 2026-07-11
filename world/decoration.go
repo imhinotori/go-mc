@@ -151,7 +151,12 @@ func applyBiomeDecoration(
 			}
 			bound, err := placement.Bind(pf, makePlacer(pf), deps)
 			if err != nil {
-				continue
+				// buildDecorationData bind-validated the WHOLE roster at construction
+				// (validateDecorationBinds), so a failure here is a genuine regression.
+				// Panic LOUDLY rather than silently dropping the feature -- the old
+				// `continue` swallow made 32 placed_features no-op an entire feature.
+				panic(fmt.Sprintf("world: decoration: binding placed_feature %q failed at "+
+					"decoration time (construction validation should have caught this): %v", pf.ID, err))
 			}
 			bound.Place(ctx, wg, origin)
 		}
@@ -216,12 +221,55 @@ func buildDecorationData() (*decorationData, error) {
 		return nil, err
 	}
 
+	// LOUD-at-construction bind validation (T-11-05 discipline): bind EVERY placed_feature
+	// once now so an unported/unbindable placement modifier or block predicate fails
+	// NewNoiseGenerator construction, never silently no-ops a whole feature mid-decoration.
+	if err := validateDecorationBinds(biomeFeatures, allowed); err != nil {
+		return nil, err
+	}
+
 	return &decorationData{
 		registry:      reg,
 		sorter:        sorter,
 		biomeFeatures: biomeFeatures,
 		allowedBiomes: allowed,
 	}, nil
+}
+
+// validateDecorationBinds binds every distinct placed_feature in the roster ONCE (with a nil
+// configured placer + the feature's real biome allowance) so any unbindable modifier/predicate
+// surfaces as a construction-time error. This is the loud guard that replaced the old silent
+// mid-decoration continue: after this passes, applyBiomeDecoration's per-feature Bind can
+// never fail, and if it somehow did it panics rather than dropping the feature.
+func validateDecorationBinds(
+	biomeFeatures map[levelbiome.Type][][]*feature.PlacedFeature,
+	allowed map[*feature.PlacedFeature]map[levelbiome.Type]bool,
+) error {
+	seen := make(map[*feature.PlacedFeature]bool)
+	for _, steps := range biomeFeatures {
+		for _, stepList := range steps {
+			for _, pf := range stepList {
+				if pf == nil || seen[pf] {
+					continue
+				}
+				seen[pf] = true
+				a := allowed[pf]
+				deps := placement.ModifierDeps{
+					BiomeAllowed: func(b levelbiome.Type) bool {
+						if a == nil {
+							return true
+						}
+						return a[b]
+					},
+				}
+				if _, err := placement.Bind(pf, nil, deps); err != nil {
+					return fmt.Errorf("world: decoration: placed_feature %q is unbindable "+
+						"(unported placement modifier or block predicate): %w", pf.ID, err)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // retainedBiomes returns the DISTINCT biomes across the center + its 8 neighbors — the

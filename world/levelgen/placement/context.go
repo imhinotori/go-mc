@@ -50,6 +50,9 @@ const (
 	// MotionBlocking is MOTION_BLOCKING: first Y above the highest motion-blocking
 	// OR fluid block (water counts).
 	MotionBlocking
+	// MotionBlockingNoLeaves is MOTION_BLOCKING_NO_LEAVES: like MOTION_BLOCKING but the
+	// leaves layer is excluded from the top test (Heightmap$Types.MOTION_BLOCKING_NO_LEAVES).
+	MotionBlockingNoLeaves
 	// WorldSurface is WORLD_SURFACE (client variant); SurfaceWaterDepthFilter reads
 	// it paired with OCEAN_FLOOR to compute the water-column depth.
 	WorldSurface
@@ -67,6 +70,8 @@ func (h HeightmapType) String() string {
 		return "OCEAN_FLOOR_WG"
 	case MotionBlocking:
 		return "MOTION_BLOCKING"
+	case MotionBlockingNoLeaves:
+		return "MOTION_BLOCKING_NO_LEAVES"
 	case WorldSurface:
 		return "WORLD_SURFACE"
 	case OceanFloor:

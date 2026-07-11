@@ -235,8 +235,9 @@ func TestBindModifier(t *testing.T) {
 		}
 	}
 
-	// Unported type errors loudly (T-11-05), never silently nil.
-	if _, err := BindModifier("minecraft:noise_based_count", []byte(`{}`), deps); err == nil {
+	// Unported type errors loudly (T-11-05), never silently nil. (noise_based_count -- the
+	// prior example here -- is now a ported type, so this uses a genuinely nonexistent id.)
+	if _, err := BindModifier("minecraft:definitely_not_a_real_modifier", []byte(`{}`), deps); err == nil {
 		t.Fatalf("BindModifier(unported) returned nil error, want loud failure")
 	}
 }

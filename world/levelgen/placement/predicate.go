@@ -183,6 +183,77 @@ func (p notPredicate) Test(ctx PlacementContext, x, y, z int) bool {
 	return !p.inner.Test(ctx, x, y, z)
 }
 
+// ---- has_sturdy_face ----
+
+// hasSturdyFace is HasSturdyFacePredicate: the block at offset(p) presents a sturdy face on
+// the configured direction. JAR (javap -c): test = level.getBlockState(pos.offset(offset))
+// .isFaceSturdy(level, pos.offset(offset), direction). Fields: offset (Vec3i, default ZERO),
+// direction (any of the 6 Direction values).
+//
+// CONSERVATIVE PORT: the worldgen Neighborhood exposes only the StateID, not the full
+// BlockState.isFaceSturdy voxel-shape query (which consults the block's collision shape per
+// face). It is reduced to "the block at offset(p) is non-air" -- faithful for the cave_vines
+// gate (a vine hangs off any solid ceiling block's down-face) and never a false keep on air.
+// Documented as conservative, consistent with solidPredicate.
+type hasSturdyFace struct {
+	off       offset
+	direction faceDirection
+}
+
+func (p hasSturdyFace) Test(ctx PlacementContext, x, y, z int) bool {
+	s := ctx.GetBlock(x+p.off.dx, y+p.off.dy, z+p.off.dz)
+	return !block.IsAir(s)
+}
+
+// faceDirection is net.minecraft.core.Direction (the full 6-value set the has_sturdy_face
+// direction field accepts). It is retained for parity with the jar signature; the
+// conservative sturdy-face proxy does not read it, but it is validated at parse time.
+type faceDirection int
+
+const (
+	faceDown faceDirection = iota
+	faceUp
+	faceNorth
+	faceSouth
+	faceWest
+	faceEast
+)
+
+// parseFaceDirection maps a Direction string to a faceDirection, erroring loudly otherwise.
+func parseFaceDirection(s string) (faceDirection, error) {
+	switch s {
+	case "down":
+		return faceDown, nil
+	case "up":
+		return faceUp, nil
+	case "north":
+		return faceNorth, nil
+	case "south":
+		return faceSouth, nil
+	case "west":
+		return faceWest, nil
+	case "east":
+		return faceEast, nil
+	default:
+		return 0, fmt.Errorf("placement: has_sturdy_face unknown direction %q", s)
+	}
+}
+
+// ---- inside_world_bounds ----
+
+// insideWorldBounds is InsideWorldBoundsPredicate: the position offset(p) is inside the
+// world build height. JAR (javap -c): test = level.isInsideBuildHeight(pos.offset(offset)).
+// Field: offset (Vec3i, default ZERO). WorldGenLevel.isInsideBuildHeight(pos) is
+// !isOutsideBuildHeight(pos.getY()) == (minY <= y && y < minY + genDepth). 0 rng draws.
+type insideWorldBounds struct {
+	off offset
+}
+
+func (p insideWorldBounds) Test(ctx PlacementContext, x, y, z int) bool {
+	oy := y + p.off.dy
+	return oy >= ctx.MinY() && oy < ctx.MinY()+ctx.Height()
+}
+
 // ---- always true/false (Truepredicate, used as a no-op leaf) ----
 
 type truePredicate struct{}
@@ -200,6 +271,8 @@ var (
 	_ BlockPredicate = allOf{}
 	_ BlockPredicate = anyOf{}
 	_ BlockPredicate = notPredicate{}
+	_ BlockPredicate = hasSturdyFace{}
+	_ BlockPredicate = insideWorldBounds{}
 	_ BlockPredicate = truePredicate{}
 )
 
@@ -215,6 +288,7 @@ type jsonPredicate struct {
 	State      json.RawMessage   `json:"state"`      // would_survive (the to-place state)
 	Predicate  json.RawMessage   `json:"predicate"`  // not
 	Predicates []json.RawMessage `json:"predicates"` // all_of / any_of
+	Direction  string            `json:"direction"`  // has_sturdy_face
 }
 
 // parseOffset reads the optional [dx,dy,dz] offset (default 0,0,0).
@@ -287,6 +361,14 @@ func ParsePredicate(raw json.RawMessage) (BlockPredicate, error) {
 			return nil, fmt.Errorf("placement: not: %w", err)
 		}
 		return notPredicate{inner: inner}, nil
+	case "has_sturdy_face":
+		dir, err := parseFaceDirection(j.Direction)
+		if err != nil {
+			return nil, err
+		}
+		return hasSturdyFace{off: off, direction: dir}, nil
+	case "inside_world_bounds":
+		return insideWorldBounds{off: off}, nil
 	case "true":
 		return truePredicate{}, nil
 	default:
