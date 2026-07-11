@@ -141,6 +141,22 @@ func (t *TickLoop) tickArrow(e *Entity) {
 		}
 	}
 
+	// BREEZE DEFLECTION (Projectile.hitTargetOrDeflectSelf -> Entity.deflection): before the victim hit, a
+	// projectile whose flight segment reaches a BREEZE is REVERSE-deflected instead of hitting it (a Breeze
+	// is in EntityTypeTags.DEFLECTS_PROJECTILES). Only a NON-wind-charge projectile deflects (an arrow bounces
+	// back); the breeze's own wind-charge family passes through. On a deflect the arrow's velocity is reversed
+	// + halved with a ~180 deg yaw spin (ProjectileDeflection.REVERSE), the arrow is NOT consumed, and this
+	// tick's move/latch is skipped (the arrow re-flies deflected next tick). Breeze-gated: a world with no
+	// breeze does one cheap scan miss (no allocation) and never perturbs any stream. A trident (which the v1
+	// path bounces separately) is out of scope here -- only the consumed-arrow path deflects. Cite
+	// Breeze.deflection + ProjectileDeflection.REVERSE.
+	if !e.isTrident {
+		if bz := t.arrowFindHitBreeze(e, ox, oy, oz, endX, endY, endZ); bz != nil {
+			breezeDeflectArrow(e)
+			return // the arrow is deflected, not consumed; it flies off next tick
+		}
+	}
+
 	// Entity hit. A trident that has already dealt damage (ThrownTrident.findHitEntity returns null when
 	// dealtDamage) does NOT re-hit — this is the returning/post-hit trident. A trident that hits deals a
 	// FLAT 8 (+ Impaling) and BOUNCES (not consumed); an arrow deals ceil(velocity*baseDamage) and is

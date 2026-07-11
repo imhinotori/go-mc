@@ -66,6 +66,54 @@ func TestShulkerPeekArmorToggle(t *testing.T) {
 	}
 }
 
+// TestShulkerTeleportsWhenHurtLow: Shulker.hurtServer's post-hurt tail teleports a shulker that has dropped
+// BELOW 50% HP on a nextInt(4)==0 roll (shulkerHurtServerReaction wiring the previously-orphaned
+// shulkerTeleportSomewhere). A shulker at FULL HP never teleports; a low-HP one eventually bolts. Also pins
+// the CLOSED arrow-immunity gate (a closed shulker rejects an arrow). Cite Shulker.hurtServer.
+func TestShulkerTeleportsWhenHurtLow(t *testing.T) {
+	loop, floorY := shulkerLoop(t)
+
+	// A FULL-HP shulker never teleports (the health < maxHealth*0.5 gate is false).
+	full := loop.spawnShulker(8.5, float64(floorY+1), 8.5)
+	fx, fz := full.x, full.z
+	loop.withRegion(loop.only(), func() {
+		for i := 0; i < 40; i++ {
+			loop.shulkerHurtServerReaction(full, damageSourceOf(damageTypeGeneric))
+		}
+	})
+	if full.x != fx || full.z != fz {
+		t.Fatal("a full-HP shulker teleported -- the health<50% gate must block the teleport roll")
+	}
+
+	// A LOW-HP shulker (health < maxHealth*0.5) eventually teleports on a nextInt(4)==0 roll.
+	low := loop.spawnShulker(5.5, float64(floorY+1), 5.5)
+	low.health = 5.0 // 5 < 30*0.5 == 15
+	ox, oz := low.x, low.z
+	moved := false
+	loop.withRegion(loop.only(), func() {
+		for i := 0; i < 200; i++ { // enough rolls that at least one nextInt(4)==0 + a valid landing hits
+			loop.shulkerHurtServerReaction(low, damageSourceOf(damageTypeGeneric))
+			if low.x != ox || low.z != oz {
+				moved = true
+				break
+			}
+		}
+	})
+	if !moved {
+		t.Fatal("a low-HP shulker never teleported over 200 hits -- shulkerHurtServerReaction did not wire shulkerTeleportSomewhere")
+	}
+
+	// CLOSED arrow-immunity: a closed shulker rejects an AbstractArrow source (returns immune).
+	closed := loop.spawnShulker(3.5, float64(floorY+1), 3.5) // spawns CLOSED
+	if !shulkerArrowImmune(closed, damageSourceArrow(0)) {
+		t.Fatal("closed shulker not immune to an arrow (shulkerArrowImmune false) -- Shulker.hurtServer top gate")
+	}
+	loop.shulkerSetRawPeek(closed, shulkerPeekOpen) // open it
+	if shulkerArrowImmune(closed, damageSourceArrow(0)) {
+		t.Fatal("OPEN shulker reported arrow-immune -- only a CLOSED shulker deflects arrows")
+	}
+}
+
 // TestShulkerBulletLevitation: a ShulkerBullet that reaches its target deals 4.0 damage + applies
 // LEVITATION (200 ticks) to the player. Cite ShulkerBullet.onHitEntity.
 func TestShulkerBulletLevitation(t *testing.T) {

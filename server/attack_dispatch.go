@@ -1082,6 +1082,22 @@ func (t *TickLoop) handleInteract(p *tickPlayer, pkt pk.Packet) {
 		return
 	}
 
+	// CREEPER IGNITE (net.minecraft.world.entity.monster.Creeper.mobInteract): a right-click with a
+	// CREEPER_IGNITERS-tag item (flint_and_steel / fire_charge) primes the creeper -- play the use sound
+	// (draws nextFloat()*0.4+0.8 pitch on the creeper's OWN stream), ignite() (sets DATA_IS_IGNITED so the
+	// fuse forces swellDir=1 in creeperAiStep), and damage/shrink the tool -- then SUCCESS (interact
+	// consumed). A non-igniter item falls through to super.mobInteract (Monster.mobInteract == no-op).
+	// Creeper-gated (typ == entity.Creeper.ID) so it is a zero-cost, zero-RNG no-op for every other mob --
+	// the pig oracle stream is untouched (the pitch draw is on the CREEPER's per-entity stream only). Runs
+	// inside the owner region so the entity-attached sound broadcast resolves. Cite Creeper.mobInteract +
+	// Creeper.ignite.
+	if mob.typ == entity.Creeper.ID {
+		if t.tryCreeperIgnite(p, mob) {
+			return // the igniter consumed the interact (SUCCESS)
+		}
+		return // a creeper is not fed/bred; a non-igniter item is super.mobInteract (no-op)
+	}
+
 	// MOB-PASS-02 (Phase 34): the Sheep SHEAR path runs BEFORE the feed path (Sheep.mobInteract tries
 	//	the shears branch ahead of super.mobInteract == Animal.mobInteract feed). trySheepShear returns true
 	//	when the held item is shears (consuming the interact — whether it sheared or the sheep was not ready),

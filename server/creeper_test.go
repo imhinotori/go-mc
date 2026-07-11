@@ -12,7 +12,10 @@ import (
 	"testing"
 
 	"github.com/imhinotori/sulfur/data/entity"
+	"github.com/imhinotori/sulfur/data/item"
 	"github.com/imhinotori/sulfur/level"
+	"github.com/imhinotori/sulfur/level/component"
+	pk "github.com/imhinotori/sulfur/net/packet"
 	"github.com/imhinotori/sulfur/plugin/host"
 	"go.starlark.net/starlark"
 )
@@ -169,5 +172,68 @@ func TestCreeperSwellDisarmsWhenLineOfSightBlocked(t *testing.T) {
 		if _, ok := loop.only().entities.byID[cr.id]; !ok {
 			t.Fatal("the creeper EXPLODED despite no line of sight -- the LoS disarm should keep the fuse at swellDir<=0")
 		}
+	}
+}
+
+// TestCreeperFlintIgnites: right-clicking a creeper with FLINT_AND_STEEL (a CREEPER_IGNITERS item) primes it
+// -- ignite() sets e.ignited, so the next creeperAiStep forces swellDir=1 and the fuse advances to explosion
+// regardless of target/line-of-sight. The flint_and_steel (a damageable tool) loses 1 durability. A
+// bare-handed interact does NOT ignite. Cite Creeper.mobInteract + Creeper.ignite.
+func TestCreeperFlintIgnites(t *testing.T) {
+	loop, mgr := newPhysicsLoop()
+	const floorY = 64
+	ch := putChunk(mgr, level.ChunkPos{0, 0})
+	fillFloor(ch, floorY)
+	loop.SetMobRegistry(loadVanillaCreeperRegistry(t))
+	clock := loop.clock.(*fakeClock)
+	loop.start(clock.Now())
+
+	decl := loop.mobRegistry.byName["vanilla_creeper"]
+	cr := loop.spawnDeclaredMob(decl, 8.5, float64(floorY+1), 8.5)
+	cr.onGround = true
+	initSpawnHealth(cr)
+
+	// A bare-handed interact must NOT ignite (super.mobInteract no-op).
+	bare := &tickPlayer{x: 9.5, y: float64(floorY + 1), z: 8.5}
+	ensureInventory(bare)
+	if loop.tryCreeperIgnite(bare, cr) {
+		t.Fatal("bare-handed interact reported SUCCESS -- only a CREEPER_IGNITERS item should ignite")
+	}
+	if cr.ignited {
+		t.Fatal("creeper ignited from a bare-handed interact")
+	}
+
+	// A flint_and_steel interact ignites the creeper (SUCCESS) and damages the tool.
+	p := &tickPlayer{x: 9.5, y: float64(floorY + 1), z: 8.5}
+	inv := ensureInventory(p)
+	// A fresh flint_and_steel needs its max-damage + damage components present to be a damageable item
+	// (enchant_helper.go stackIsDamageableItem); a bare test SlotData has none. Seed the pristine tool.
+	fas := component.SlotData{Count: 1, ItemID: pk.VarInt(item.FlintAndSteel.ID)}
+	fas = setStackMaxDamage(fas, 64)
+	fas = setStackDamageValue(fas, 0)
+	inv.set(heldWindowSlot(inv.heldSlot), fas)
+	if !loop.tryCreeperIgnite(p, cr) {
+		t.Fatal("flint_and_steel interact did NOT return SUCCESS")
+	}
+	if !cr.ignited {
+		t.Fatal("flint_and_steel interact did NOT ignite the creeper (e.ignited false) -- Creeper.ignite unwired")
+	}
+	after := inv.get(heldWindowSlot(inv.heldSlot))
+	if stackDamageValue(after) != 1 {
+		t.Fatalf("flint_and_steel durability after ignite = %d, want 1 (hurtAndBreak(1))", stackDamageValue(after))
+	}
+
+	// The ignited creeper now fuses to explosion regardless of target/LoS: creeperAiStep forces swellDir=1.
+	exploded := false
+	for i := 0; i < 60; i++ { // > maxSwell(30)
+		clock.add(tickStep)
+		loop.advance(clock.Now())
+		if _, ok := loop.only().entities.byID[cr.id]; !ok {
+			exploded = true
+			break
+		}
+	}
+	if !exploded {
+		t.Fatalf("ignited creeper never EXPLODED (still in store; swell=%d/%d) -- e.ignited must force swellDir=1", cr.swell, cr.maxSwell)
 	}
 }

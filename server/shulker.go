@@ -349,6 +349,43 @@ func (t *TickLoop) shulkerTeleportSomewhere(e *Entity) bool {
 	return false
 }
 
+// shulkerArrowImmune ports the CLOSED arrow-immunity gate at the TOP of Shulker.hurtServer: a closed shulker
+// (isClosed() == getRawPeekAmount()==0) hit by an AbstractArrow (source.getDirectEntity() instanceof
+// AbstractArrow) returns false -- the +20 covered armor is impenetrable to arrows while boxed up. Returns
+// true when the hit must be REJECTED (closed + arrow directEntity). A wired combat path calls this before the
+// shared pipeline (the sibling of the wither/guardian pre-hurt gates). Cite Shulker.hurtServer offsets 0-22.
+func shulkerArrowImmune(e *Entity, src damageSource) bool {
+	if !shulkerIsClosed(e) {
+		return false
+	}
+	return src.typeTag == damageTypeArrow // getDirectEntity() instanceof AbstractArrow
+}
+
+// shulkerHurtServerReaction ports the POST-hurt tail of Shulker.hurtServer (run AFTER super.hurtServer
+// succeeded): a shulker whose health has dropped BELOW 50% of its max (getHealth() < getMaxHealth()*0.5)
+// rolls nextInt(4)==0 and, on a hit, teleportSomewhere() (it bolts to a new attachable spot). Otherwise, if
+// the source is_projectile AND its directEntity is a SHULKER_BULLET, hitByShulkerBullet() (a self-heal-cancel
+// cited-deferred visual). The RNG draw is on the shulker's OWN stream. This wires the previously-orphaned
+// shulkerTeleportSomewhere. A wired combat path calls this after the hit lands (the sibling of
+// endermanHurtTeleport). Cite Shulker.hurtServer offsets 30-108.
+func (t *TickLoop) shulkerHurtServerReaction(e *Entity, src damageSource) {
+	if e.shulker == nil || e.dead || e.health <= 0 {
+		return
+	}
+	// getHealth() < getMaxHealth()*0.5 (dcmpg; iflt): the float-widened half-max compare (f2d on both sides).
+	maxH := e.getAttributeValue(attribute.MaxHealth)
+	if float64(e.health) < maxH*0.5 {
+		if mobRandom(e).nextInt(4) == 0 { // nextInt(4)==0 (ifne skips): a 1-in-4 bolt
+			t.shulkerTeleportSomewhere(e)
+		}
+		return // the low-HP branch is exclusive of the shulker-bullet branch (goto 108)
+	}
+	// else if (source.is(IS_PROJECTILE) && directEntity.is(SHULKER_BULLET)) hitByShulkerBullet(): the bullet
+	// self-hit reaction. hitByShulkerBullet is a cited-deferred client visual (the peek/color flash); no
+	// gameplay state changes, so this is a documented no-op seam. Cite Shulker.hurtServer offsets 72-104.
+	_ = src
+}
+
 // shulkerFindAttachableSurface ports Shulker.findAttachableSurface: FIRST solid neighbor in
 // Direction.values() order (DOWN,UP,NORTH,SOUTH,WEST,EAST). Cite Shulker.findAttachableSurface.
 func (t *TickLoop) shulkerFindAttachableSurface(x, y, z int) (block.Direction, bool) {

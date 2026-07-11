@@ -183,3 +183,85 @@ func (t *TickLoop) breezeFireWindCharge(e *Entity, target *tickPlayer) {
 	}
 	t.spawnHurtingProjectileShot(e.id, hurtWindCharge, e.x, firingY, e.z, vx, vy, vz, mag)
 }
+
+// breezeDeflectsProjectile ports the decision in Breeze.deflection(Projectile): a Breeze is in the
+// EntityTypeTags.DEFLECTS_PROJECTILES tag (deflects_projectiles.json == {minecraft:breeze}), so it DEFLECTS
+// every incoming projectile EXCEPT its own wind-charge family (BREEZE_WIND_CHARGE / WIND_CHARGE) -- those
+// pass through (NONE). Returns true when the projectile should be REVERSE-deflected (an arrow bounces back),
+// false for a wind charge (NONE) or a non-breeze entity. Mirrors the bytecode branch:
+//
+//	if (projectile.is(BREEZE_WIND_CHARGE) || projectile.is(WIND_CHARGE)) return NONE;
+//	return this.is(DEFLECTS_PROJECTILES) ? PROJECTILE_DEFLECTION : NONE;
+//
+// PROJECTILE_DEFLECTION plays BREEZE_DEFLECT then applies REVERSE.deflect. Cite Breeze.deflection +
+// EntityTypeTags.DEFLECTS_PROJECTILES.
+func breezeDeflectsProjectile(breeze *Entity, projectileType entity.ID) bool {
+	if !breeze.isBreeze {
+		return false
+	}
+	if projectileType == entity.BreezeWindCharge.ID || projectileType == entity.WindCharge.ID {
+		return false // the Breeze's own wind-charge family is NOT deflected (ProjectileDeflection.NONE)
+	}
+	return true // this.is(DEFLECTS_PROJECTILES) == true for a breeze -> PROJECTILE_DEFLECTION (REVERSE)
+}
+
+// breezeDeflectArrow applies ProjectileDeflection.REVERSE.deflect to an arrow that struck a breeze (the
+// observable "arrows bounce back off a breeze"). REVERSE.deflect (ProjectileDeflection lambda$static$1):
+//
+//	f = 170.0f + random.nextFloat()*20.0f;
+//	setDeltaMovement(getDeltaMovement().scale(-0.5));   // reverse + halve the velocity
+//	setYRot(getYRot() + f); yRotO += f;                 // spin the yaw ~180 deg
+//
+// The nextFloat() draw is on the ARROW's OWN per-entity stream (Projectile.deflect passes this.random), so no
+// mob stream is perturbed. The arrow is NOT consumed (it flies off deflected). Cite ProjectileDeflection.REVERSE
+// + Projectile.deflect (passes the projectile's own RandomSource).
+func breezeDeflectArrow(a *Entity) {
+	if a.arrowRNG == nil {
+		a.arrowRNG = newEntityRandom(uint64(a.id))
+	}
+	f := 170.0 + float64(a.arrowRNG.nextFloat())*20.0
+	a.vx *= -0.5
+	a.vy *= -0.5
+	a.vz *= -0.5
+	a.yaw += float32(f)
+	a.headYaw = a.yaw
+}
+
+// arrowFindHitBreeze is the breeze-scoped sibling of arrowFindHitPlayer: the FIRST breeze (nearest by entry
+// param along the segment) whose collision AABB the arrow's flight segment (origin->end) passes through,
+// excluding the arrow's shooter. Used to REVERSE-deflect a projectile that reaches a breeze (a breeze is in
+// EntityTypeTags.DEFLECTS_PROJECTILES). Scans the arrow's OWN region store (t.cur(), registered by tickArrows'
+// withRegion). Zero cost in a breeze-free world (the loop finds none). Cite ProjectileUtil.getEntityHitResult
+// scoped to the deflecting mob.
+func (t *TickLoop) arrowFindHitBreeze(a *Entity, ox, oy, oz, nx, ny, nz float64) *Entity {
+	region := t.cur()
+	if region == nil || region.entities == nil {
+		return nil
+	}
+	half := entity.Arrow.Width / 2.0
+	var best *Entity
+	bestT := 2.0
+	for _, m := range region.entities.all() {
+		if m == nil || !m.isBreeze || m.dead || !m.isAlive() {
+			continue
+		}
+		if m.id == a.arrowShooterID {
+			continue // a breeze never deflects a projectile it (somehow) shot
+		}
+		// The breeze collision AABB (Breeze bbox width/height, base at feet), inflated by the arrow half-size.
+		w := entity.Breeze.Width / 2.0
+		minX := m.x - w - half
+		maxX := m.x + w + half
+		minY := m.y - half
+		maxY := m.y + entity.Breeze.Height + half
+		minZ := m.z - w - half
+		maxZ := m.z + w + half
+		if hit, tHit := segmentAABB(ox, oy, oz, nx, ny, nz, minX, minY, minZ, maxX, maxY, maxZ); hit {
+			if tHit < bestT {
+				bestT = tHit
+				best = m
+			}
+		}
+	}
+	return best
+}

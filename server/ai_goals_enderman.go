@@ -26,12 +26,31 @@ import (
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
+// endermanWaterDamage is the LivingEntity.aiStep water-damage tail amount for a sensitive-to-water mob:
+// hurtServer(drown(), 1.0F) (fconst_1). Cite LivingEntity.aiStep (offset 872) + EnderMan.isSensitiveToWater.
+const endermanWaterDamage = 1.0
+
 // endermanAiStep is the port of EnderMan.customServerAiStep's daylight-flee (the per-type hook, sibling of
 // creeperAiStep/chickenAiStep). A brightly-lit, sky-exposed enderman randomly teleports away (dropping its
 // target). Called from tickAI for a live enderman (typ == entity.Enderman.ID), AFTER serverAiStep.
 func (t *TickLoop) endermanAiStep(e *Entity) {
 	if !e.isAlive() || e.dead {
 		return
+	}
+	// WATER/RAIN SENSITIVITY (LivingEntity.aiStep tail): EnderMan.isSensitiveToWater() == true (iconst_1),
+	// so the shared LivingEntity.aiStep tail hurts a water- or rain-exposed enderman for 1.0 drown damage
+	// EVERY tick: `if (isSensitiveToWater() && isInWaterOrRain()) hurtServer(drown(), 1.0F)`. That hurt
+	// routes through EnderMan.hurtServer (drown is not a projectile and its directEntity is not a potion),
+	// which falls to the Monster.hurtServer branch: the source has no LivingEntity attacker, so it rolls
+	// nextInt(10)!=0 -> teleport(). Our applyDamageEntity already fires the enderman post-hurt hook
+	// (endermanHurtTeleport, combat_mob.go), so the teleport reaction is driven for free. Run it BEFORE the
+	// daylight-flee (LivingEntity.aiStep tail runs after Mob.aiStep -> customServerAiStep in vanilla, but
+	// they are independent damage-vs-flee limbs; the enderman-own RNG stream stays in lockstep because the
+	// hurt-tail teleport draws only on the enderman's stream). Cite EnderMan.isSensitiveToWater +
+	// LivingEntity.aiStep water-damage tail (offsets 848-876) + EnderMan.hurtServer non-living branch.
+	t.endermanWaterSensitivity(e)
+	if e.dead || e.health <= 0 {
+		return // the water hit (and its teleport) may have killed/removed the enderman this tick
 	}
 	if !t.isDay() || t.entityInWater(e) || !t.canSeeSky(e) {
 		return
@@ -118,4 +137,19 @@ func (t *TickLoop) endermanHurtTeleport(e *Entity, src damageSource) {
 	if !attackerIsLiving && mobRandom(e).nextInt(10) != 0 {
 		t.endermanTeleport(e)
 	}
+}
+
+// endermanWaterSensitivity ports the LivingEntity.aiStep water-damage tail for the enderman (a
+// sensitive-to-water mob, the sibling of blazeWaterSensitivity): if (isSensitiveToWater() &&
+// isInWaterOrRain()) hurtServer(drown(), 1.0F). EnderMan.isSensitiveToWater() returns true, so water OR rain
+// deals 1.0 drown damage every tick. The hit goes through applyDamageEntity, which fires the enderman
+// post-hurt hook (endermanHurtTeleport) -- and because the drown source has no LivingEntity attacker, that
+// hook rolls nextInt(10)!=0 -> teleport, exactly the EnderMan.hurtServer non-living branch. Reuses the
+// shared entityIsInWaterOrRain (conduit_be.go) + the drown source (blaze precedent). Cite
+// EnderMan.isSensitiveToWater + LivingEntity.aiStep tail (offsets 848-876).
+func (t *TickLoop) endermanWaterSensitivity(e *Entity) {
+	if !t.entityIsInWaterOrRain(e) { // isInWaterOrRain()
+		return
+	}
+	t.applyDamageEntity(e, damageSourceOf(damageTypeDrown), endermanWaterDamage) // hurtServer(drown(), 1.0F)
 }

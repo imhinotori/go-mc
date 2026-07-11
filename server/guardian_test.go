@@ -109,6 +109,46 @@ func TestGuardianBeamChargesThenDamages(t *testing.T) {
 	}
 }
 
+// TestGuardianClearsTargetOnLoSLoss: GuardianAttackGoal.tick, on losing line of sight to its target,
+// runs `setTarget(null); return` (bytecode offsets 38-57) -- the guardian DROPS the target when it can no
+// longer see it. VERIFIED against the 26.2 jar: the tick does NOT retain the target across an LoS gap (the
+// audit note "the target is retained while briefly out of sight" is contradicted by the bytecode). This
+// pins the jar-faithful clear-on-LoS-loss so a later refactor cannot silently drift to a retain. Cite
+// Guardian$GuardianAttackGoal.tick (hasLineOfSight false -> setTarget(null)).
+func TestGuardianClearsTargetOnLoSLoss(t *testing.T) {
+	loop, mgr := newPhysicsLoop()
+	const floorY = 63
+	ch := putChunk(mgr, level.ChunkPos{0, 0})
+	fillFloor(ch, floorY)
+	loop.start(loop.clock.(*fakeClock).Now())
+
+	gy := float64(floorY + 5)
+	g := loop.spawnGuardian(8.5, gy, 8.5)
+	p := combatTestPlayer(loop, 12.5, gy, 8.5, 7050)
+	p.health = 20.0
+	g.ai.attackTargetID = p.entityID
+	g.guardian.attackTime = 10 // mid-charge
+
+	// With clear LoS the beam charges (attackTime advances) and the target is retained.
+	loop.guardianAttackGoalTick(g)
+	if g.ai.attackTargetID != p.entityID {
+		t.Fatalf("guardian dropped its target with clear LoS: got %d", g.ai.attackTargetID)
+	}
+	if g.guardian.attackTime <= 10 {
+		t.Fatalf("beam did not charge with clear LoS: attackTime = %d, want > 10", g.guardian.attackTime)
+	}
+
+	// Drop a solid wall between the guardian and the target: LoS is lost -> setTarget(null) + the charge stops.
+	fillWall(ch, 10, 8, floorY+1, floorY+8)
+	loop.guardianAttackGoalTick(g)
+	if g.ai.attackTargetID != 0 {
+		t.Fatalf("guardian retained its target after LoS loss: got %d, want 0 (setTarget(null))", g.ai.attackTargetID)
+	}
+	if g.guardian.attackTime != guardianAttackStart {
+		t.Fatalf("beam charge not reset after LoS loss: attackTime = %d, want %d (stop resets)", g.guardian.attackTime, guardianAttackStart)
+	}
+}
+
 func TestGuardianBeamHardBonus(t *testing.T) {
 	loop, floorY := guardianLoop(t)
 	loop.levelDifficulty = difficultyHard

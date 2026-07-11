@@ -141,3 +141,43 @@ func TestBreezeShootRangeGate(t *testing.T) {
 		t.Fatal("breeze did NOT fire at a target 15 blocks away (dist^2=225 < 256) -- the shoot gate is too tight")
 	}
 }
+
+// TestBreezeDeflectsArrow: a non-wind-charge projectile (an arrow) whose flight segment reaches a Breeze is
+// REVERSE-deflected (Breeze.deflection returns PROJECTILE_DEFLECTION because a breeze is in
+// EntityTypeTags.DEFLECTS_PROJECTILES) -- its velocity is reversed + halved and it is NOT consumed. Cite
+// Breeze.deflection + ProjectileDeflection.REVERSE.
+func TestBreezeDeflectsArrow(t *testing.T) {
+	loop, floorY := breezeLoop(t)
+
+	// A breeze sitting in the arrow's flight path.
+	b := loop.spawnBreeze(11.5, float64(floorY+1), 8.5)
+
+	// An arrow fired toward +X (toward the breeze) fast enough to reach it this tick.
+	a := loop.spawnArrow(0, 8.5, float64(floorY+1)+0.5, 8.5, 4.0, 0.0, 0.0, 3.0)
+	vx0 := a.vx
+	loop.tickArrow(a)
+
+	// The arrow must NOT be consumed (it bounces off).
+	if _, ok := loop.only().entities.byID[a.id]; !ok {
+		t.Fatal("arrow was consumed by the breeze -- it must be DEFLECTED (REVERSE), not absorbed")
+	}
+	// REVERSE.deflect scales the velocity by -0.5: the x-velocity now points back (negative) at half.
+	if a.vx >= 0 {
+		t.Fatalf("arrow vx after deflection = %v, want < 0 (velocity reversed by REVERSE.deflect)", a.vx)
+	}
+	if math.Abs(a.vx-(vx0*-0.5)) > 1e-9 {
+		t.Fatalf("arrow vx after deflection = %v, want %v (getDeltaMovement().scale(-0.5))", a.vx, vx0*-0.5)
+	}
+	_ = b
+
+	// A pure decision check: the breeze deflects an arrow but NOT its own wind-charge family.
+	if !breezeDeflectsProjectile(b, entity.Arrow.ID) {
+		t.Fatal("breezeDeflectsProjectile(arrow) = false, want true (arrows are deflected)")
+	}
+	if breezeDeflectsProjectile(b, entity.WindCharge.ID) {
+		t.Fatal("breezeDeflectsProjectile(wind_charge) = true, want false (the breeze's own wind charge passes)")
+	}
+	if breezeDeflectsProjectile(b, entity.BreezeWindCharge.ID) {
+		t.Fatal("breezeDeflectsProjectile(breeze_wind_charge) = true, want false (NONE for the breeze family)")
+	}
+}

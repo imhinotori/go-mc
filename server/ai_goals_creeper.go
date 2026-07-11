@@ -1,5 +1,7 @@
 package server
 
+import "github.com/imhinotori/sulfur/data/item"
+
 // ai_goals_creeper.go — MOB-HOST-06 (Task #9): the Creeper's SwellGoal + the fuse tick, PORTED 1:1 from
 // the unobfuscated 26.2 jar (temp/cache/26.2-inner.jar, CFR/javap this session):
 //
@@ -135,4 +137,54 @@ func (t *TickLoop) explodeCreeper(e *Entity) {
 	e.dead = true
 	t.explode(e.id, e.x, e.y, e.z, float64(creeperExplosionRadius)*multiplier)
 	t.cur().entities.remove(e.id)
+}
+
+// Creeper.mobInteract igniter sound ids (registryid/soundevent.go): FLINTANDSTEEL_USE + FIRECHARGE_USE.
+const (
+	creeperFlintAndSteelUseSoundID int32 = 642 // "minecraft:item.flintandsteel.use"
+	creeperFireChargeUseSoundID    int32 = 626 // "minecraft:item.firecharge.use"
+)
+
+// creeperIgnite ports Creeper.ignite(): set DATA_IS_IGNITED = true (e.ignited). The next creeperAiStep reads
+// it and forces swellDir = 1, so the creeper fuses to detonation regardless of its target/LoS. Cite
+// Creeper.ignite.
+func (e *Entity) creeperIgnite() { e.ignited = true }
+
+// tryCreeperIgnite ports Creeper.mobInteract's CREEPER_IGNITERS branch: if the held item is in the
+// CREEPER_IGNITERS tag (flint_and_steel / fire_charge), play the use sound (FIRECHARGE_USE for a fire_charge,
+// else FLINTANDSTEEL_USE) at pitch nextFloat()*0.4f+0.8f drawn on the creeper's OWN random stream, ignite()
+// the creeper, and consume the tool (shrink 1 for a non-damageable item like fire_charge; hurtAndBreak 1 for
+// a damageable one like flint_and_steel), then return true (SUCCESS). A non-igniter held item returns false
+// (super.mobInteract -> no-op). The held item is read SERVER-side (the TemptGoal precedent). The pitch draw
+// is on the creeper's per-entity stream ONLY, so every non-creeper mob (the pig oracle) is unperturbed. Cite
+// Creeper.mobInteract + Creeper.ignite + ItemStack.isDamageableItem/shrink/hurtAndBreak.
+func (t *TickLoop) tryCreeperIgnite(p *tickPlayer, mob *Entity) bool {
+	inv := ensureInventory(p)
+	held := inv.get(heldWindowSlot(inv.heldSlot))
+	if slotIsEmpty(held) || !itemInTag(int32(held.ItemID), "creeper_igniters") {
+		return false // not an igniter -> super.mobInteract (no-op)
+	}
+	// SoundEvent soundEvent = itemStack.is(Items.FIRE_CHARGE) ? FIRECHARGE_USE : FLINTANDSTEEL_USE.
+	soundID := creeperFlintAndSteelUseSoundID
+	if int32(held.ItemID) == int32(item.FireCharge.ID) {
+		soundID = creeperFireChargeUseSoundID
+	}
+	// playSound(soundEvent, 1.0F, random.nextFloat()*0.4F + 0.8F): the pitch draw is on the CREEPER's own
+	// stream (mobRandom(mob)) so the draw ORDER is faithful and no other mob's stream is touched. The sound
+	// packet is a client cue emitted via the entity-attached seam (broadcastToTrackers), so a client hears
+	// the ignite; the GAMEPLAY is the ignite() + tool consume below.
+	pitch := mobRandom(mob).nextFloat()*0.4 + 0.8
+	t.broadcastToTrackers(mob.id, encodeSoundEntity(soundID, soundSourceHostile, mob.id, 1.0, pitch, 0))
+	// !level.isClientSide branch: ignite() then damage the tool.
+	mob.creeperIgnite()
+	// if (!itemStack.isDamageableItem()) itemStack.shrink(1); else itemStack.hurtAndBreak(1, player, hand).
+	// hurtHeldItem no-ops on an undamageable item (fire_charge), so route it explicitly: shrink for a
+	// non-damageable igniter, hurtAndBreak for a damageable one (flint_and_steel). Cite Creeper.mobInteract
+	// offsets 95-119.
+	if !stackIsDamageableItem(held) {
+		t.shrinkHeldItem(p, inv) // stack.shrink(1)
+	} else {
+		t.hurtHeldItem(p, inv, 1) // stack.hurtAndBreak(1, player, hand)
+	}
+	return true // InteractionResult.SUCCESS
 }

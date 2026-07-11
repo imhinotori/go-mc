@@ -6,12 +6,15 @@ package server
 // somewhere else after an arrow-source hit). Pig oracle untouched.
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/level"
+	"github.com/imhinotori/sulfur/level/block"
+	pk "github.com/imhinotori/sulfur/net/packet"
 	"github.com/imhinotori/sulfur/plugin/host"
 	"go.starlark.net/starlark"
 )
@@ -107,5 +110,63 @@ func TestEndermanDodgesProjectile(t *testing.T) {
 	})
 	if e.x == ox && e.z == oz {
 		t.Fatal("the enderman did not dodge a projectile hit — endermanHurtTeleport did not fire")
+	}
+}
+
+// TestEndermanTakesWaterDamage: EnderMan.isSensitiveToWater() == true, so the LivingEntity.aiStep water tail
+// deals 1.0 drown damage every tick the enderman is in water or rain (endermanWaterSensitivity). A DRY
+// enderman takes none. Because the drown hurt has no LivingEntity attacker, EnderMan.hurtServer's non-living
+// branch also rolls a teleport — so the wet enderman relocates (endermanHurtTeleport fires). Cite
+// EnderMan.isSensitiveToWater + LivingEntity.aiStep tail + EnderMan.hurtServer.
+func TestEndermanTakesWaterDamage(t *testing.T) {
+	loop, floorY := endermanLoop(t)
+	mgr := loop.world()
+	decl := loop.mobRegistry.byName["vanilla_enderman"]
+
+	// A DRY enderman on the floor takes no water damage.
+	dry := loop.spawnDeclaredMob(decl, 8.5, float64(floorY+1), 8.5)
+	initSpawnHealth(dry)
+	dryHealth := dry.health
+	loop.withRegion(loop.only(), func() { loop.endermanWaterSensitivity(dry) })
+	if math.Abs(float64(dry.health-dryHealth)) > 1e-6 {
+		t.Fatalf("dry enderman took water damage: health = %v, want %v", dry.health, dryHealth)
+	}
+
+	// A WET enderman (feet cell flooded) takes exactly 1.0 drown damage and teleports (hurt-dodge).
+	wet := loop.spawnDeclaredMob(decl, 5.5, float64(floorY+1), 5.5)
+	initSpawnHealth(wet)
+	wetHealth := wet.health
+	ox, oz := wet.x, wet.z
+	water := block.DefaultStateID["minecraft:water"]
+	mgr.SetBlock(pk.Position{X: 5, Y: floorY + 1, Z: 5}, water, dimMinY)
+	if !loop.entityIsInWaterOrRain(wet) {
+		t.Fatal("wet enderman not detected in water (entityIsInWaterOrRain false)")
+	}
+	loop.withRegion(loop.only(), func() { loop.endermanWaterSensitivity(wet) })
+	dealt := float64(wetHealth - wet.health)
+	if math.Abs(dealt-endermanWaterDamage) > 1e-6 {
+		t.Fatalf("wet enderman took %v water damage, want %v (hurtServer(drown(), 1.0F))", dealt, endermanWaterDamage)
+	}
+
+	// The drown hit has no LivingEntity attacker, so EnderMan.hurtServer rolls nextInt(10)!=0 -> teleport()
+	// ONCE per hit (a single attempt, ~90% chance, may fail to find a landing). Over several water ticks the
+	// enderman is essentially certain to relocate. Move it back to a fixed spot each iteration so a failed
+	// attempt does not accumulate, then confirm at least one water tick teleported it away from origin.
+	moved := false
+	loop.withRegion(loop.only(), func() {
+		for i := 0; i < 40 && !wet.dead; i++ {
+			wet.x, wet.y, wet.z = ox, float64(floorY+1), oz
+			wet.health = 30.0        // keep it alive so the teleport branch stays reachable
+			wet.invulnerableTime = 0 // clear the i-frame window so each water tick is a fresh landing hit
+			wet.lastHurt = 0
+			loop.endermanWaterSensitivity(wet)
+			if wet.x != ox || wet.z != oz {
+				moved = true
+				break
+			}
+		}
+	})
+	if !moved {
+		t.Fatal("wet enderman never teleported over 40 water ticks (the non-living hurt-dodge branch did not fire)")
 	}
 }
