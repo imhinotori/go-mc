@@ -55,8 +55,17 @@ type NoiseChunk struct {
 	cellCountXZ   int // cells per horizontal axis in a chunk (16/cellWidth = 4)
 	cellCountY    int // cells over the height (height/cellHeight = 48)
 	cellNoiseMinY int // floorDiv(minY, cellHeight) — the cy=0 corner row in cell units
-	firstNoiseX   int // QuartPos.fromBlock(chunkX*16) = chunk origin in cell units
-	firstNoiseZ   int
+	// firstCellX/firstCellZ = Math.floorDiv(blockX/Z, cellWidth): the cell-grid origin the
+	// cell-corner FILL loop uses (NoiseChunk.initializeForFirstCellX/advanceCellX/fillSlice
+	// all read firstCellX/Z, then blockX = cellX * cellWidth). For the overworld cellWidth=4
+	// so this equals blockX>>2, but for the End cellWidth=8 it does NOT -- the fill loop must
+	// use floorDiv, not the quart shift. CITE: NoiseChunk ctor (Math.floorDiv) + fillSlice.
+	firstCellX int
+	firstCellZ int
+	// firstNoiseX/firstNoiseZ = QuartPos.fromBlock(blockX/Z) = blockX>>2: the QUART origin,
+	// used ONLY by the flat_cache (2D quart-resolution cache), NOT the cell fill loop.
+	firstNoiseX int // QuartPos.fromBlock(chunkX*16)
+	firstNoiseZ int
 
 	// density is the per-block final_density, flat-indexed by densityIndex (localX,
 	// worldY, localZ). Computed once at construction by evaluating the rewritten
@@ -128,6 +137,8 @@ func NewNoiseChunkWithBeard(r *router.Router, pos level.ChunkPos, beard func(wx,
 		cellCountXZ:   16 / cellWidth,                  // = noiseSizeXZ for a chunk
 		cellCountY:    floorDiv(ns.Height, cellHeight), // NoiseChunk ctor
 		cellNoiseMinY: floorDiv(ns.MinY, cellHeight),   // NoiseChunk ctor
+		firstCellX:    floorDiv(blockX, cellWidth),     // Math.floorDiv(blockX, cellWidth)
+		firstCellZ:    floorDiv(blockZ, cellWidth),     // Math.floorDiv(blockZ, cellWidth)
 		firstNoiseX:   blockX >> 2,                     // QuartPos.fromBlock(blockX)
 		firstNoiseZ:   blockZ >> 2,                     // QuartPos.fromBlock(blockZ)
 		beard:         beard,
@@ -211,15 +222,16 @@ func (nc *NoiseChunk) densityIndex(lx, y, lz int) int {
 func (nc *NoiseChunk) fill() {
 	nc.density = make([]float64, 16*nc.height*16)
 
-	// initializeForFirstCellX: fill slice0 of every interpolator at cellX = firstNoiseX.
+	// initializeForFirstCellX: fill slice0 of every interpolator at cellX = firstCellX
+	// (NoiseChunk.initializeForFirstCellX calls fillSlice(true, firstCellX)).
 	// state.filling stays false here so the inner fillers sample directly at corners.
 	nc.fillState.filling = false
-	nc.fillSlices(true, nc.firstNoiseX)
+	nc.fillSlices(true, nc.firstCellX)
 
 	for cellX := 0; cellX < nc.cellCountXZ; cellX++ {
-		// advanceCellX: fill slice1 of every interpolator at the next X face.
+		// advanceCellX: fill slice1 of every interpolator at firstCellX+cellX+1.
 		nc.fillState.filling = false
-		nc.fillSlices(false, nc.firstNoiseX+cellX+1)
+		nc.fillSlices(false, nc.firstCellX+cellX+1)
 
 		for cellZ := 0; cellZ < nc.cellCountXZ; cellZ++ {
 			for cellY := nc.cellCountY - 1; cellY >= 0; cellY-- {
@@ -278,7 +290,7 @@ func (nc *NoiseChunk) fill() {
 // (in noise-cell units).
 func (nc *NoiseChunk) fillSlices(onSlice0 bool, cellX int) {
 	for _, ip := range nc.interps {
-		ip.fillSlice(onSlice0, cellX, nc.firstNoiseZ)
+		ip.fillSlice(onSlice0, cellX, nc.firstCellZ)
 		nc.cornerSamples += (nc.cellCountXZ + 1) * (nc.cellCountY + 1)
 	}
 }

@@ -132,21 +132,23 @@ func allocateSlice(cellY, cellXZ int) [][]float64 {
 
 // fillSlice fills one X face of the corner buffers from noiseFiller, sampling the whole
 // (cellCountXZ+1) x (cellCountY+1) Y/Z corner grid at the cell-aligned world block
-// coordinates. blockX is the world X of this face (= cellX * cellWidth); firstNoiseZ is
-// the world Z origin in noise-cell units. The filler is sampled DIRECTLY here (state.
-// filling is false during the chunk's fillSlice pass), so nested interpolators inside
-// this filler also sample direct — matching vanilla's NoiseInterpolator.fillArray, which
-// runs with fillingCell=false.
+// coordinates. cellX/firstCellZ are the cell-grid indices (Math.floorDiv(blockX/Z,
+// cellWidth) origin, then +offset); blockX = cellX * cellWidth and blockZ =
+// (firstCellZ + cz) * cellWidth -- matching NoiseChunk.fillSlice (cellStartBlockX =
+// cellX*cellWidth, cellStartBlockZ = (firstCellZ+cz)*cellWidth). The filler is sampled
+// DIRECTLY here (state.filling is false during the chunk's fillSlice pass), so nested
+// interpolators inside this filler also sample direct -- matching vanilla's
+// NoiseInterpolator.fillArray, which runs with fillingCell=false.
 //
 // onSlice0 selects the X=0 face (slice0) vs the X=1 face (slice1).
-func (f *interpolatedFn) fillSlice(onSlice0 bool, cellX, firstNoiseZ int) {
+func (f *interpolatedFn) fillSlice(onSlice0 bool, cellX, firstCellZ int) {
 	slice := f.slice1
 	if onSlice0 {
 		slice = f.slice0
 	}
 	blockX := cellX * f.cellWidth
 	for cz := 0; cz <= f.cellCountXZ; cz++ {
-		blockZ := (firstNoiseZ + cz) * f.cellWidth
+		blockZ := (firstCellZ + cz) * f.cellWidth
 		col := slice[cz]
 		for cy := 0; cy <= f.cellCountY; cy++ {
 			// Corner world Y for cell row cy (NoiseBasedChunkGenerator.iterateNoiseColumn:

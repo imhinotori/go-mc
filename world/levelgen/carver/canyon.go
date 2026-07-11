@@ -1,8 +1,6 @@
 package carver
 
 import (
-	"math"
-
 	"github.com/imhinotori/sulfur/level"
 )
 
@@ -31,7 +29,7 @@ func (canyonWorldCarver) carve(cfg *CarverConfig, cc *carveContext, rng *legacyR
 	y := float64(cfg.Y.sample(rng, cc.minGenY))
 	z := float64(blockZIn(src, int(rng.nextIntN(16))))
 
-	yaw := rng.nextFloat() * (math.Pi * 2)                       // float 6.2831855
+	yaw := rng.nextFloat() * 6.2831855                            // nextFloat() * 6.2831855F (float product)
 	verticalRotation := float32(cfg.VerticalRotation.sample(rng)) // FloatProvider
 	yScale := float64(cfg.YScaleFloat.sample(rng))
 	thickness := float32(cfg.Shape.thickness.sample(rng))
@@ -54,8 +52,9 @@ func doCarve(
 	carvedAny := false
 
 	for seg := segment; seg < segmentCount; seg++ {
-		// radius = 1.5 + Mth.sin(π*seg/count)*thickness.
-		radius := 1.5 + float64(float32(math.Sin(math.Pi*float64(seg)/float64(segmentCount)))*thickness)
+		// radius = 1.5 + Mth.sin((double)(3.1415927F*seg/count))*thickness. Vanilla FLOAT pi
+		// 3.1415927F and Mth.sin (the table). CITE: CanyonWorldCarver.doCarve.
+		radius := 1.5 + float64(mthSin(float64(float32(3.1415927)*float32(seg)/float32(segmentCount)))*thickness)
 		// vr (vertical) is derived from radius*yScale BEFORE the horizontal factor.
 		vr := radius * yScale
 		// hr (horizontal) scales radius by the shape's horizontalRadiusFactor.
@@ -64,11 +63,13 @@ func doCarve(
 
 		// Step the walk: cosP from verticalRotation; advance x/z by cos/sin(yaw)*cosP,
 		// y by sin(verticalRotation).
-		cosVR := float32(math.Cos(float64(verticalRotation)))
-		sinVR := float32(math.Sin(float64(verticalRotation)))
-		x += math.Cos(float64(yaw)) * float64(cosVR)
+		// Walk step through the Mth SIN table: cosVR/sinVR from verticalRotation, then
+		// d0 += Mth.cos(yaw)*cosVR; d1 += sinVR; d2 += Mth.sin(yaw)*cosVR. CITE: CanyonWorldCarver.doCarve.
+		cosVR := mthCos(float64(verticalRotation))
+		sinVR := mthSin(float64(verticalRotation))
+		x += float64(mthCos(float64(yaw))) * float64(cosVR)
 		y += float64(sinVR)
-		z += math.Sin(float64(yaw)) * float64(cosVR)
+		z += float64(mthSin(float64(yaw))) * float64(cosVR)
 
 		verticalRotation *= 0.7
 		verticalRotation += pitchDelta * 0.05

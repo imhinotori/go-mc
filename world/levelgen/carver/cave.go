@@ -1,8 +1,6 @@
 package carver
 
 import (
-	"math"
-
 	"github.com/imhinotori/sulfur/level"
 )
 
@@ -91,8 +89,10 @@ func (w caveWorldCarver) carve(cfg *CarverConfig, cc *carveContext, rng *legacyR
 		}
 
 		for branch := 0; branch < branchCount; branch++ {
-			yaw := float64(rng.nextFloat()) * (math.Pi * 2)
-			pitch := float64((rng.nextFloat() - 0.5) / 4.0)
+			// nextFloat() * 6.2831855F and (nextFloat() - 0.5F) / 4.0F -- float products
+			// (bytecode ldc float 6.2831855f, 0.5f, 4.0f). CITE: CaveWorldCarver.carve.
+			yaw := rng.nextFloat() * 6.2831855
+			pitch := (rng.nextFloat() - 0.5) / 4.0
 			thickness := w.thicknessFn(rng)
 			branchStart := j - int(rng.nextIntN(int32(j/4)))
 			seed := rng.nextLong()
@@ -108,10 +108,14 @@ func (w caveWorldCarver) carve(cfg *CarverConfig, cc *carveContext, rng *legacyR
 // createRoom ports CaveWorldCarver.createRoom: a single large ellipsoid (a cave room)
 // with a fixed shape. Returns true if anything was carved.
 func createRoom(cfg *CarverConfig, cc *carveContext, x, y, z, caveRadius, yScale float64, skip skipChecker) bool {
-	// hr = 1.5 + Mth.sin(π/2)*caveRadius = 1.5 + caveRadius; vr = hr * yScale.
-	hr := 1.5 + math.Sin(1.5707963705062866)*caveRadius
+	// hr = 1.5 + Mth.sin(1.5707963705062866)*caveRadius; vr = hr * yScale.
+	// CaveWorldCarver.createRoom carves at (x + 1.0, y, z): the room center is offset on
+	// the X axis, NOT y+1.0 (bytecode: dload 6 [=x], dconst_1, dadd; then dload 8 [=y];
+	// then dload 10 [=z]). Mth.sin (the 65536-entry table) not math.Sin. CITE:
+	// CaveWorldCarver.createRoom.
+	hr := 1.5 + float64(mthSin(1.5707963705062866))*caveRadius
 	vr := hr * yScale
-	return cc.carveEllipsoid(cfg, x, y+1.0, z, hr, vr, skip)
+	return cc.carveEllipsoid(cfg, x+1.0, y, z, hr, vr, skip)
 }
 
 // getThickness ports CaveWorldCarver.getThickness: f = nextFloat()*2 + nextFloat();
@@ -153,14 +157,18 @@ func createTunnel(
 	carvedAny := false
 
 	for seg := segment; seg < segmentCount; seg++ {
-		// radius = 1.5 + Mth.sin(π*seg/segmentCount)*thickness.
-		radius := 1.5 + float64(float32(math.Sin(math.Pi*float64(seg)/float64(segmentCount)))*thickness)
+		// radius = 1.5 + Mth.sin((double)(3.1415927F*seg/segmentCount))*thickness. Vanilla
+		// uses the FLOAT pi 3.1415927F and Mth.sin (the table). CITE: CaveWorldCarver.createTunnel.
+		radius := 1.5 + float64(mthSin(float64(float32(3.1415927)*float32(seg)/float32(segmentCount)))*thickness)
 		vrad := radius * verticalScale
 
-		cosP := float32(math.Cos(float64(pitch)))
-		x += math.Cos(float64(yaw)) * float64(cosP)
-		y += math.Sin(float64(pitch))
-		z += math.Sin(float64(yaw)) * float64(cosP)
+		// Walk step: cosP = Mth.cos(pitch); d0 += Mth.cos(yaw)*cosP; d1 += Mth.sin(pitch);
+		// d2 += Mth.sin(yaw)*cosP. All through the Mth SIN table (not math.Cos/math.Sin).
+		// CITE: CaveWorldCarver.createTunnel.
+		cosP := mthCos(float64(pitch))
+		x += float64(mthCos(float64(yaw))) * float64(cosP)
+		y += float64(mthSin(float64(pitch)))
+		z += float64(mthSin(float64(yaw))) * float64(cosP)
 
 		if steepBranch {
 			pitch *= 0.92

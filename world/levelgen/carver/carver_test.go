@@ -299,7 +299,7 @@ func TestCarverAquiferAware(t *testing.T) {
 		t.Fatalf("parse replaceables: %v", err)
 	}
 	water := block.ToStateID[block.Water{Level: 0}]
-	caveAir := block.ToStateID[block.CaveAir{}]
+	air := block.ToStateID[block.Air{}]
 
 	ch := newSolidChunk(level.ChunkPos{0, 0}, -64, 384)
 	mask := newCarvingMask(ch.MinY(), ch.Height())
@@ -307,14 +307,15 @@ func TestCarverAquiferAware(t *testing.T) {
 	cc := &carveContext{
 		chunk: ch, mask: mask, rep: rep,
 		fluid:   floodBelow{level: 30, water: water},
-		air:     block.ToStateID[block.Air{}],
-		caveAir: caveAir,
+		air:     air,
+		caveAir: block.ToStateID[block.CaveAir{}],
 		water:   water,
 		lava:    block.ToStateID[block.Lava{Level: 0}],
 		minGenY: ch.MinY(),
 	}
 
-	// Carve y=20 (below table -> water) and y=40 (above -> cave_air).
+	// Carve y=20 (below table -> water) and y=40 (above -> AIR). Overworld carve air is
+	// minecraft:air (the aquifer's Blocks.AIR substance), NOT cave_air. CITE: WorldCarver.getCarveState.
 	if !cc.carveBlock(cfg, 5, 20, 5) {
 		t.Fatal("expected carve at y=20")
 	}
@@ -324,8 +325,8 @@ func TestCarverAquiferAware(t *testing.T) {
 	if got := ch.Get(5, 20, 5); got != water {
 		t.Errorf("y=20 below water table: got %v, want water %v", got, water)
 	}
-	if got := ch.Get(5, 40, 5); got != caveAir {
-		t.Errorf("y=40 above water table: got %v, want cave_air %v", got, caveAir)
+	if got := ch.Get(5, 40, 5); got != air {
+		t.Errorf("y=40 above water table: got %v, want air %v", got, air)
 	}
 
 	// BUG-3 water: a flooded carve whose aquifer flagged shouldScheduleFluidUpdate must be marked
@@ -345,7 +346,7 @@ func TestCarverAquiferAware(t *testing.T) {
 		t.Error("flooded carve at y=20 was NOT marked for post-process (water won't flow on load)")
 	}
 	if foundAirMark {
-		t.Error("dry cave_air carve at y=40 was marked for post-process (only fluid cells mark)")
+		t.Error("dry air carve at y=40 was marked for post-process (only fluid cells mark)")
 	}
 }
 
@@ -429,9 +430,11 @@ func TestCaveCarves(t *testing.T) {
 	// non-trivial connected tunnel of air.
 	_, ch := findCarvingSeed(t, conf, target, target, dryFluid{}, 50, 5000)
 
-	caveAir := block.ToStateID[block.CaveAir{}]
-	if n := ch.countCarvedTo(caveAir); n < 50 {
-		t.Fatalf("cave carved %d cave_air blocks, want >= 50", n)
+	// Overworld cave carve air = minecraft:air (WorldCarver.getCarveState returns the
+	// aquifer's Blocks.AIR), NOT cave_air.
+	air := block.ToStateID[block.Air{}]
+	if n := ch.countCarvedTo(air); n < 50 {
+		t.Fatalf("cave carved %d air blocks, want >= 50", n)
 	}
 	// Bedrock floor (y=minY) must never be carved.
 	for k := range ch.blocks {

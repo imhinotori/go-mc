@@ -146,9 +146,14 @@ func (cc *carveContext) canReplaceBlock(state block.StateID) bool {
 // carve==false is vanilla's null return -> WorldCarver.carveBlock leaves the existing SOLID block
 // (the aquifer barrier). A real fluid floods; a real AIR substance carves that air.
 //
-// CITE: WorldCarver.getCarveState (bytecode: computeSubstance(pos,0.0); if the result is null and
-// debug is off, return null -> carveBlock's `if (state == null) return false`). The prior port
-// carved cave_air for a null substance, breaching aquifer water/lava barriers.
+// The OVERWORLD carve air is minecraft:AIR, not CAVE_AIR -- NoiseBasedAquifer.computeSubstance
+// returns Blocks.AIR (not CAVE_AIR) for a non-flooded non-solid cell; CAVE_AIR is only returned by
+// NetherWorldCarver.carveBlock. A null substance (barrier) returns carve==false so carveBlock leaves
+// the solid block (the prior port carved cave_air for null, breaching aquifer water/lava barriers).
+//
+// CITE: WorldCarver.getCarveState (bytecode: computeSubstance(pos,0.0); null-and-not-debug -> null ->
+// carveBlock's `if (state == null) return false`) + NoiseBasedAquifer.computeSubstance +
+// NetherWorldCarver.carveBlock.
 func (cc *carveContext) getCarveState(cfg *CarverConfig, wx, wy, wz int) (block.StateID, bool) {
 	// NetherWorldCarver.carveBlock: LAVA at/below minGenY+31, else CAVE_AIR — no lava_level anchor,
 	// no aquifer. (The nether lava sea floor is a fixed 31 blocks above the gen bottom.)
@@ -166,10 +171,9 @@ func (cc *carveContext) getCarveState(cfg *CarverConfig, wx, wy, wz int) (block.
 	case CarveFluidState:
 		return st, true
 	case CarveAir:
-		// A real AIR BlockState: getCarveState returns the substance verbatim (vanilla places the
-		// aquifer's Blocks.AIR). We keep the port's cave_air here so carved caves read as cave_air
-		// (the observable air block is identical); only the barrier (null) case changed.
-		return cc.caveAir, true
+		// A real AIR BlockState: the aquifer's Blocks.AIR (NOT cave_air) for an overworld non-flooded
+		// non-solid cell -- computeSubstance returns Blocks.AIR and getCarveState passes it verbatim.
+		return cc.air, true
 	default: // CarveKeepSolid == null: leave the solid barrier.
 		return 0, false
 	}
