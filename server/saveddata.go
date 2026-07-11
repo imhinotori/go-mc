@@ -58,6 +58,15 @@ func (t *TickLoop) LoadPersistedData() {
 		}
 		log.Printf("loaded %d POI record(s) across %d section(s) from poi/", total, len(pm.sections))
 	}
+
+	// level.dat (SUB-PERSIST, Part B): restore the world-global seed/time/weather/gamerules/border from
+	// world/level.dat if present. A missing/corrupt file is a clean first-boot no-op (the flag-provided
+	// defaults stand). Applied on the boot goroutine before Run, so it touches the loop world-global
+	// state without tick contention. CITE LevelStorageSource.saveDataTag (the inverse read).
+	if lvl, ok := loadLevelDat(t.persistDir); ok {
+		t.applyLevelData(lvl)
+		log.Printf("loaded level.dat (time=%d raining=%v thundering=%v seed=%d)", lvl.Data.Time, lvl.Data.Raining, lvl.Data.Thundering, t.worldSeed)
+	}
 }
 
 // tickSavedData is the periodic raid/POI save pass (SUB-PERSIST), called from the world phase inside
@@ -104,9 +113,68 @@ func (t *TickLoop) flushSavedData() {
 			}
 		}
 	}
+
+	// level.dat (SUB-PERSIST, Part B): encode the world-global state on the owner and write it. The
+	// world-global time/weather advance every tick, so unlike the dirty-gated raid/POI managers this
+	// always writes on the flush -- level.dat is a single tiny file and the cadence (100 ticks) bounds
+	// the write rate. CITE LevelStorageSource.saveDataTag.
+	sx, sy, sz, sa := t.worldSpawnForLevelDat()
+	if err := saveLevelDat(t.persistDir, t.encodeLevelData(sx, sy, sz, sa)); err != nil {
+		log.Printf("save level.dat: %v (will retry)", err)
+	}
+}
+
+// worldSpawnForLevelDat returns the world spawn (SpawnX/Y/Z + SpawnAngle) for level.dat, taken from the
+// loop spawn point when set (the ported PlayerSpawnFinder result), else the origin column. Owner-side.
+func (t *TickLoop) worldSpawnForLevelDat() (x, y, z int32, angle float32) {
+	if t.hasSpawnPoint {
+		return int32(t.spawnPoint.X), int32(t.spawnPoint.Y), int32(t.spawnPoint.Z), 0
+	}
+	return 0, 0, 0, 0
 }
 
 // FlushSavedDataNow forces an immediate raid/POI flush (the shutdown path), bypassing the cadence so a
 // clean exit right after a raid/POI mutation is never lost. main() calls it on shutdown after the tick
 // loop stops (the managers are quiescent then). A "" persistDir is a no-op.
 func (t *TickLoop) FlushSavedDataNow() { t.flushSavedData() }
+
+// playerAutosaveIntervalTicks is the periodic PLAYER autosave cadence (SUB-PERSIST / autosave, Part D):
+// 6000 ticks (5 minutes at 20 TPS), matching MinecraftServer ticksUntilAutosave (initialized to 6000 in
+// the ctor; decremented each tickServer, and on reaching 0 autoSave -> saveEverything saves every online
+// player, all chunks, and level data). Sulfur splits that single vanilla save into three already-existing
+// seams: chunks flush on chunkSaveIntervalTicks, level.dat on savedDataSaveIntervalTicks, and now player
+// .dat on THIS cadence -- so the observable "a crash loses at most one autosave interval" holds.
+//
+//	[VERIFIED javap MinecraftServer: ctor `ticksUntilAutosave = 6000`; tickServer decrements it and, on
+//	 <= 0, calls autoSave() -> saveEverything(false,false,false) -> PlayerList.saveAll (every online
+//	 player .dat) + saveAllChunks + per-level save.]
+const playerAutosaveIntervalTicks = 6000
+
+// tickPlayerAutosave is the periodic player-data autosave pass (SUB-PERSIST / autosave, Part D), called
+// from the world phase inside the fixed tick order alongside tickChunkSave/tickSavedData (no new phase).
+// Every playerAutosaveIntervalTicks it takes an IMMUTABLE snapshot of every ONLINE player on the owner
+// goroutine (snapshotPlayer / snapshotStats -- the SAME value-copy the leave path uses, TICK-05 /
+// T-6-15) and hands it to the off-tick save consumer (RunSaveLoop drains leaveSnapshots). A nil save
+// sink (tests / no save wired) makes it a cheap no-op. The off-tick IO never reads live tick-owned
+// state -- only the snapshot value crosses the boundary. CITE MinecraftServer.autoSave ->
+// PlayerList.saveAll.
+func (t *TickLoop) tickPlayerAutosave() {
+	if t.leaveSnapshots == nil {
+		return // no save sink wired: nothing to autosave to
+	}
+	t.playerAutosaveTickCounter++
+	if t.playerAutosaveTickCounter < playerAutosaveIntervalTicks {
+		return
+	}
+	t.playerAutosaveTickCounter = 0
+	for _, p := range t.players {
+		if p == nil {
+			continue
+		}
+		snap := playerLeaveSnapshot{uuid: p.uuid, data: snapshotPlayer(p), stats: snapshotStats(p.stats)}
+		select {
+		case t.leaveSnapshots <- snap:
+		default: // buffer full: skip this player this pass (a dropped autosave retries next interval)
+		}
+	}
+}

@@ -125,21 +125,21 @@ const overworldSeaLevel = 63
 // monotonic EntityIDAllocator (ENT-01) — the replacement for the old hard-coded
 // joinEntityID=1 const, so a second player or a spawned entity can never collide the
 // playerId (06-RESEARCH Pitfall 7 / threat T-6-07).
-func writeLoginPacket(entityID int32, viewDist int) pk.Packet {
+func writeLoginPacket(entityID int32, viewDist int, gameType int32) pk.Packet {
 	return pk.Marshal(
 		int32(packetid.ClientboundLogin),
 		pk.Int(entityID),  // playerId (allocated, not the old const 1)
 		pk.Boolean(false), // hardcore
 		levelsEncoder{overworldDimensionName, netherDimensionName, endDimensionName}, // levels: Set<ResourceKey<Level>> (overworld + nether + end)
-		pk.VarInt(maxPlayersJoin),                                  // maxPlayers
-		pk.VarInt(int32(viewDist)),                                 // chunkRadius (server-clamped view distance)
-		pk.VarInt(int32(viewDist)),                                 // simulationDistance
-		pk.Boolean(false),                                          // reducedDebugInfo
-		pk.Boolean(true),                                           // showDeathScreen (enableRespawnScreen)
-		pk.Boolean(false),                                          // doLimitedCrafting
-		commonPlayerSpawnInfoEncoder{},                             // commonPlayerSpawnInfo (nested record)
-		pk.Boolean(false),                                          // onlineMode (offline server — NET-03)
-		pk.Boolean(false),                                          // enforcesSecureChat
+		pk.VarInt(maxPlayersJoin),                        // maxPlayers
+		pk.VarInt(int32(viewDist)),                       // chunkRadius (server-clamped view distance)
+		pk.VarInt(int32(viewDist)),                       // simulationDistance
+		pk.Boolean(false),                                // reducedDebugInfo
+		pk.Boolean(true),                                 // showDeathScreen (enableRespawnScreen)
+		pk.Boolean(false),                                // doLimitedCrafting
+		commonPlayerSpawnInfoEncoder{gameType: gameType}, // commonPlayerSpawnInfo (nested record)
+		pk.Boolean(false),                                // onlineMode (offline server — NET-03)
+		pk.Boolean(false),                                // enforcesSecureChat
 	)
 }
 
@@ -191,6 +191,10 @@ func (l levelsEncoder) WriteTo(w io.Writer) (int64, error) {
 // Login/Respawn caller is byte-unchanged. changeDimension fills the fields to encode the nether
 // (dimTypeID for the_nether, name minecraft:the_nether, isFlat false, seaLevel 32).
 type commonPlayerSpawnInfoEncoder struct {
+	// gameType is the CommonPlayerSpawnInfo gameType byte (GameType.getId). Zero value == survival, so
+	// every existing caller stays byte-identical; a reconnecting creative/spectator player threads its
+	// persisted mode so the Login gameType agrees with the PlayerInfoUpdate gameMode + PlayerAbilities.
+	gameType int32
 	// dimTypeID is the dimension_type registry index (overworld 0). Written as VarInt(id+1) per the
 	// holder-registry codec. Zero value == overworld.
 	dimTypeID int
@@ -242,7 +246,7 @@ func (e commonPlayerSpawnInfoEncoder) WriteTo(w io.Writer) (int64, error) {
 	if err := write(pk.Long(0)); err != nil { // seed (hashed seed; 0 for the stub world)
 		return n, err
 	}
-	if err := write(pk.Byte(gameModeSurvival)); err != nil { // gameType
+	if err := write(pk.Byte(int8(e.gameType))); err != nil { // gameType (zero == survival)
 		return n, err
 	}
 	if err := write(pk.Byte(noPreviousGameMode)); err != nil { // previousGameType (-1 == 0xFF)
@@ -639,7 +643,7 @@ func sendPlayBootstrap(c *Client, viewDist int, center level.ChunkPos, surfaceY 
 
 	// The original three (Login -> GameEvent -> PlayerPosition). The Login playerId is the
 	// per-join allocated entity id (ENT-01), not the old const.
-	c.Send(writeLoginPacket(params.entityID, viewDist))
+	c.Send(writeLoginPacket(params.entityID, viewDist, params.gameMode))
 	c.Send(writeGameEventPacket(gameEventLevelChunksLoadStart, 0))
 	c.Send(writePlayerPositionPacket(params.teleportID, spawnX, spawnY, spawnZ, 0, 0))
 
@@ -651,7 +655,11 @@ func sendPlayBootstrap(c *Client, viewDist int, center level.ChunkPos, surfaceY 
 	if params.hasSpawn {
 		spawnPos = pk.Position{X: int(math.Floor(spawnX)), Y: int(math.Floor(spawnY)), Z: int(math.Floor(spawnZ))}
 	}
-	c.Send(writePlayerAbilities(false, false, false, false, defaultFlyingSpeed, defaultWalkingSpeed))
+	// PlayerAbilities: derive the fly/instabuild/invulnerable/mayfly bits from the effective game type
+	// (GameType.updatePlayerAbilities) so a reconnecting creative/spectator player joins with the right
+	// abilities. Survival/adventure -> all-false (unchanged from the prior hardcoded survival default).
+	invuln, flying, mayfly, instabuild, _ := abilitiesForGameType(params.gameMode)
+	c.Send(writePlayerAbilities(invuln, flying, mayfly, instabuild, defaultFlyingSpeed, defaultWalkingSpeed))
 	c.Send(writeSetHeldSlot(defaultHeldSlot))
 	// ONLINE-01: pass params.properties (NOT an empty slice) so the SELF tab-list entry carries
 	// the joiner's own authenticated skin — an empty slice would ship count 0 and the player

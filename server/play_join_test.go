@@ -29,7 +29,7 @@ import (
 func TestLoginPacketWireLayout(t *testing.T) {
 	const viewDist = 2
 	const testEntityID = 1 // ENT-01: playerId is now an allocated id (not a const); use 1 here
-	p := writeLoginPacket(testEntityID, viewDist)
+	p := writeLoginPacket(testEntityID, viewDist, gameModeSurvival)
 	if packetid.ClientboundPacketID(p.ID) != packetid.ClientboundLogin {
 		t.Fatalf("Login packet id = %d, want ClientboundLogin (%d)", p.ID, packetid.ClientboundLogin)
 	}
@@ -721,7 +721,7 @@ func TestBootstrapEntityID(t *testing.T) {
 	// The id allocated for a join must be the value the bootstrap Login carries as playerId:
 	// decode it back out of the produced packet for a representative allocated id.
 	allocated := loop.idAlloc.AllocID()
-	p := writeLoginPacket(allocated, 2)
+	p := writeLoginPacket(allocated, 2, gameModeSurvival)
 	var playerID pk.Int
 	if err := p.Scan(&playerID); err != nil {
 		t.Fatalf("Login scan failed: %v", err)

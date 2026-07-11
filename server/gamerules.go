@@ -1,5 +1,7 @@
 package server
 
+import "strconv"
+
 // gamerules.go — GAME RULES: a 1:1 port of net.minecraft.world.level.gamerules.GameRules — the per-level
 // keyed store of boolean/integer rules with their vanilla default values (temp/cache/26.2-inner.jar, javap
 // this session — the static registration block). It replaces the scattered hardcoded gamerule stubs
@@ -135,4 +137,41 @@ func (t *TickLoop) gameRuleInt(id string) int {
 		t.gamerules = newGameRules()
 	}
 	return t.gamerules.getInt(id)
+}
+
+// toStringMap serializes the GameRules store into the CompoundTag string-map form level.dat uses
+// (GameRules.createTag: each rule value is written as its string form -- bools as "true"/"false", ints
+// as their decimal string). Every registered rule is emitted so a reload restores the full set. CITE
+// net.minecraft.world.level.GameRules.createTag / GameRules.Value.serialize.
+func (g *gameRules) toStringMap() map[string]string {
+	out := make(map[string]string, len(g.bools)+len(g.ints))
+	for k, v := range g.bools {
+		if v {
+			out[k] = "true"
+		} else {
+			out[k] = "false"
+		}
+	}
+	for k, v := range g.ints {
+		out[k] = strconv.Itoa(v)
+	}
+	return out
+}
+
+// applyStringMap restores rule values from the level.dat string map (GameRules.loadFromTag): for each
+// key that is a REGISTERED rule (bool or int) it parses the string and sets it; an unknown/renamed key
+// is ignored (setBool/setInt no-op on an unregistered id), so an older save never invents a rule. A
+// malformed value leaves the default in place. CITE GameRules.loadFromTag / GameRules.Value.deserialize.
+func (g *gameRules) applyStringMap(m map[string]string) {
+	for k, v := range m {
+		if _, ok := g.bools[k]; ok {
+			g.setBool(k, v == "true")
+			continue
+		}
+		if _, ok := g.ints[k]; ok {
+			if n, err := strconv.Atoi(v); err == nil {
+				g.setInt(k, n)
+			}
+		}
+	}
 }

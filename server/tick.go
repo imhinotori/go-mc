@@ -137,6 +137,11 @@ func (r chunkReady) applyTo(t *TickLoop) {
 		// off-tick onto the entity store — on the owner (TICK-05 / Pitfall 5). The witch/cat/villager
 		// then ride GAMEPLAY-01's tracker (AddEntity broadcast) next tick. No-op when Spawns is empty.
 		t.drainStructureSpawns(r.res)
+		// SUB-PERSIST (Part C) load side: respawn any PERSISTED entities for this column from the
+		// entities region (drainSavedEntities), once per column (double-spawn guarded). Runs on the
+		// owner inside the owning region, so a reloaded chunk's saved mobs + dropped items come back and
+		// the tracker broadcasts them next tick. RNG-free reconstruction (pig oracle safe).
+		t.drainSavedEntities(r.res.Pos)
 	})
 }
 
@@ -679,6 +684,21 @@ type TickLoop struct {
 	// chunkSaveTickCounter (independent so a raid/POI flush never blocks on the chunk pass).
 	savedDataTickCounter int
 
+	// playerAutosaveTickCounter counts ticks toward the next periodic PLAYER autosave (SUB-PERSIST /
+	// autosave, Part D). Before this, a player .dat was written ONLY on leave, so a crash lost all
+	// in-session progress. This counter drives tickPlayerAutosave to snapshot every ONLINE player on a
+	// vanilla-like cadence (MinecraftServer.tickServer decrements ticksUntilAutosave from 6000 and calls
+	// autoSave -> saveEverything -> PlayerList.saveAll). Tick-owned (advanced only on the owner).
+	playerAutosaveTickCounter int
+
+	// entitiesLoaded guards the per-column entity respawn against double-spawn (SUB-PERSIST, Part C):
+	// a column whose saved entities have already been drained (chunkReady.applyTo -> drainSavedEntities)
+	// is recorded here so a re-Insert of the same column (a reload / re-generation) does NOT re-spawn
+	// the same saved entities a second time. Tick-owned (touched only on the coordinator inside the
+	// applyTo withRegion block). Vanilla EntityStorage tracks loaded chunks the same way (emptyChunks +
+	// the ChunkEntities load-once contract).
+	entitiesLoaded map[level.ChunkPos]bool
+
 	// plugins is the loaded plugin host + typed event bus (PLUGIN-02 / Plan 22). It is nil until
 	// SetPlugins wires it (a server with no plugins dir leaves it nil — every seam emit is a cheap
 	// skipped no-op behind an `if t.plugins != nil` guard). The discrete gameplay seams
@@ -929,6 +949,14 @@ type tickPlayer struct {
 	// via t.dimWorld(p). Set at join (overworld) and flipped by changeDimension on nether travel. The
 	// tick-owned single-owner discipline covers it (touched only on the tick goroutine, TICK-05).
 	dimension int
+
+	// joinDimension is the PERSISTED dimension a reconnecting player should be placed in (ENT-06 /
+	// SUB-PERSIST). The join bootstrap always builds an overworld Login, so applyLoadedPlayerExtras
+	// records the loaded dimension here (NOT directly in `dimension`) and drainRegistrations issues a
+	// changeDimension after register when it differs from overworld -- the vanilla PlayerList.
+	// placeNewPlayer "place the loaded player into its saved level" flow. dimOverworld (0) for a fresh
+	// player or an overworld save (no post-join dimension change). Tick-owned.
+	joinDimension int
 
 	// viewDist is the SERVER-CLAMPED view distance in chunks (the DoS control, T-4-01).
 	// The needed-ring is (2*viewDist+1)^2 — bounded by the server, never by an untrusted
@@ -2019,6 +2047,16 @@ func (t *TickLoop) drainRegistrations() {
 					p.client.Send(writeGameEventPacket(gameEventStartRaining, 0))
 					p.client.Send(writeGameEventPacket(gameEventRainLevelChange, t.getRainLevel(1.0)))
 					p.client.Send(writeGameEventPacket(gameEventThunderLevelChange, t.getThunderLevel(1.0)))
+				}
+				// ENT-06 dimension placement: a reconnecting player whose persisted dimension is NOT the
+				// overworld is placed there now via the SAME changeDimension the /dimension command and
+				// portal travel use (ClientboundRespawn rebuild + streamer reset). The join bootstrap built
+				// an overworld Login, so this issues the Respawn to the saved dimension. joinDimension ==
+				// dimOverworld (a fresh player or an overworld save) is a no-op (changeDimension self-skips
+				// on an equal target). Done here on the owner at the discrete join point (TICK-05). CITE:
+				// PlayerList.placeNewPlayer places the loaded player into its persisted ServerLevel.
+				if p.joinDimension != dimOverworld {
+					t.changeDimension(p, p.joinDimension)
 				}
 			}
 		case c := <-t.unregister:

@@ -250,6 +250,16 @@ func (g *gameTick) AcceptPlayer(
 		}
 	}
 
+	// Effective game type for the join bootstrap: a reconnecting player restores its persisted
+	// playerGameType (the abilities source of truth), else a fresh player joins in survival. The Login/
+	// PlayerInfo/PlayerAbilities packets are built from this so the client renders the right mode (and
+	// the correct fly/instabuild ability bits) on join. abilitiesForGameType derives the same flag set
+	// snapshotPlayerExtras persisted (GameType.updatePlayerAbilities).
+	effectiveGameMode := int32(gameModeSurvival)
+	if haveLoaded {
+		effectiveGameMode = loaded.PlayerGameType
+	}
+
 	// Full early-Play bootstrap (PLAY-01/02/05). Enqueue Login(JoinGame) ->
 	// GameEvent(LEVEL_CHUNKS_LOAD_START) -> PlayerPosition -> PlayerAbilities ->
 	// SetHeldSlot -> PlayerInfoUpdate(self tab list) -> SetDefaultSpawnPosition on the
@@ -265,7 +275,7 @@ func (g *gameTick) AcceptPlayer(
 		name:       name,
 		id:         id,
 		teleportID: teleportID,
-		gameMode:   gameModeSurvival,
+		gameMode:   effectiveGameMode,
 		entityID:   entityID,
 		// ONLINE-01: carry the authenticated skin properties into the bootstrap so the SELF
 		// ADD_PLAYER (writePlayerInfoUpdateAdd at play_join.go) ships the joiner's OWN skin —
@@ -425,6 +435,10 @@ func (g *gameTick) AcceptPlayer(
 		if len(loaded.EnderItems) > 0 {
 			player.enderItems = itemsToInventory(loaded.EnderItems, enderChestContainerSize)
 		}
+		// Extended fields (SUB-PERSIST): XP, game type (the abilities source), active mob effects, the
+		// spawn point, and the dimension. Restored onto the freshly-built tickPlayer here on the accept
+		// goroutine (before register, so it crosses no tick-owned state). See player_persist_ext.go.
+		applyLoadedPlayerExtras(player, loaded)
 	}
 
 	// GATE-ONLY starter kit (test_kit.go): a no-op unless SULFUR_TEST_KIT=1. Seeds food + blocks

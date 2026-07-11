@@ -228,6 +228,11 @@ func (t *TickLoop) tickWorld() {
 	// chunk-save pass. It flushes only DIRTY per-region managers to world/data/raids.dat + world/poi/.
 	// A "" persistDir makes it a cheap no-op (tests/ephemeral runs). See saveddata.go.
 	t.tickSavedData()
+	// SUB-PERSIST (autosave, Part D): the periodic PLAYER-data autosave (every playerAutosaveIntervalTicks
+	// == 6000 ticks). Snapshots every online player on the owner and hands it to the off-tick save loop,
+	// so a crash loses at most one autosave interval instead of the whole session. Cheap no-op when no
+	// save sink is wired. See saveddata.go / MinecraftServer.autoSave.
+	t.tickPlayerAutosave()
 }
 
 // tickChunks issues the per-player chunk requests for this tick (WORLD-05). For each

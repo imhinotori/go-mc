@@ -120,6 +120,22 @@ func (t *TickLoop) flushColumn(pos level.ChunkPos) bool {
 	// (ShulkerBoxBlockEntity.saveAdditional -- the 27-slot Items list). The dispenser-flush twin.
 	t.flushShulkerItems(pos, ch)
 
+	// ENTITY FLUSH (SUB-PERSIST, Part C): snapshot the tick-owned entities in this column on the OWNER
+	// and write them to the parallel entities/r.x.z.mca region (the modern EntityStorage path). The
+	// snapshot is an IMMUTABLE []save.Entities value; only that crosses into the disk IO (no live
+	// *Entity), so it is race-free by the same discipline as the chunk bytes. A column with no
+	// persistable entities writes an empty cell (a later reload finds no entities -> a clean miss). The
+	// write is synchronous owner-side (the per-column entity set is small, like the raid/POI/level.dat
+	// flushes). CITE EntityStorage.storeEntities.
+	if t.persistDir != "" {
+		ents := t.snapshotColumnEntities(pos)
+		if len(ents) > 0 {
+			if err := saveEntities(t.persistDir, pos, ents); err != nil {
+				udebug("chunksave", "entity save %v: %v", pos, err)
+			}
+		}
+	}
+
 	data, err := world.SerializeChunkData(t.worker().StructureCache(), pos, ch, t.worker().MinY())
 	if err != nil {
 		// A serialize error is an encode bug, not runtime input; skip this column (do not crash the

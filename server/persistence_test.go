@@ -136,7 +136,7 @@ func TestEntityRegionRoundTrip(t *testing.T) {
 		{
 			Pos:      [3]float64{8.5, 64.0, 8.5},
 			Motion:   [3]float64{0, 0, 0},
-			Rotation: [3]float32{90, 0, 90},
+			Rotation: [2]float32{90, 0},
 			UUID:     [4]int32{1, 2, 3, 4},
 		},
 		{

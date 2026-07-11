@@ -88,8 +88,19 @@ func snapshotPlayer(p *tickPlayer) save.PlayerData {
 	if len(p.enderItems) > 0 {
 		data.EnderItems = enderItemsToDisk(p.enderItems)
 	}
+	// Extended fields (SUB-PERSIST): XP, abilities (derived from gameMode), active mob effects, the
+	// spawn point, the game type + previous game type, and the dimension. See player_persist_ext.go.
+	snapshotPlayerExtras(&data, p)
+	// DataVersion stamps the save with the current world version (NbtUtils.addCurrentDataVersion), so a
+	// future datafixer knows the schema. 26.2 == 4903 (DetectedVersion). Matches the raids/POI/stats path.
+	data.DataVersion = playerDataVersion
 	return data
 }
+
+// playerDataVersion is SharedConstants.getCurrentVersion().dataVersion().version() for 26.2 (4903), the
+// same DetectedVersion the raids/POI/stats saves stamp. Written into the .dat DataVersion so the schema
+// is self-describing (NbtUtils.addCurrentDataVersion).
+const playerDataVersion int32 = 4903
 
 // inventoryToItems translates the tick-owned component-slot inventory into the modern disk-NBT
 // ItemStackWithSlot list (SUB-PERSIST: the 26.2 codec, NOT the legacy save.Item; NOT the wire
@@ -303,6 +314,7 @@ func (t *TickLoop) RunSaveLoop(ctx context.Context, worldDir string) {
 // indistinguishable.
 func defaultPlayerData() save.PlayerData {
 	return save.PlayerData{
+		DataVersion:         playerDataVersion,
 		Dimension:           overworldDimensionName,
 		Health:              maxHealth,
 		FoodLevel:           maxFood,

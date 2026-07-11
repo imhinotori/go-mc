@@ -96,9 +96,14 @@ func (c *Chunk) Data(compressingType byte) ([]byte, error) {
 }
 
 type Entities struct {
+	// ID is the entity-type registry key ("minecraft:pig", "minecraft:item", ...) -- Entity.save writes
+	// it under "id" (EntityType.CODEC). Empty on a type-less/legacy record. SUB-PERSIST (Part C): added
+	// so a saved entity can be reconstructed by type on chunk reload. CITE Entity.save (put "id").
+	ID string `nbt:"id"`
+
 	Pos, Motion  [3]float64
-	Rotation     [3]float32
-	FallDistance float32
+	Rotation     [2]float32
+	FallDistance float32 `nbt:"fall_distance"`
 	Fire, Air    int16
 
 	OnGround       bool
@@ -114,4 +119,18 @@ type Entities struct {
 	TicksFrozen       int32
 	HasVisualFire     bool
 	Tags              []string
+
+	// Health is LivingEntity.addAdditionalSaveData "Health" (a float). Zero for a non-living entity
+	// (a dropped item overrides it below with its own Health key -- the ItemEntity also stores Health).
+	// omitempty so a 0 health record (a non-living entity that never set it) emits no key. CITE
+	// LivingEntity.addAdditionalSaveData (putFloat "Health").
+	Health float32 `nbt:"Health,omitempty"`
+
+	// Item / Age / PickupDelay are net.minecraft.world.entity.item.ItemEntity.addAdditionalSaveData:
+	// the carried ItemStack ("Item"), the ticks-since-spawn ("Age"), and the pickup cooldown
+	// ("PickupDelay"). A non-item entity leaves Item nil (omitempty drops the key) and Age/PickupDelay 0.
+	// CITE ItemEntity.addAdditionalSaveData (store "Item", putShort "Age", putShort "PickupDelay").
+	Item        *ItemStackDisk `nbt:"Item,omitempty"`
+	Age         int16          `nbt:"Age,omitempty"`
+	PickupDelay int16          `nbt:"PickupDelay,omitempty"`
 }

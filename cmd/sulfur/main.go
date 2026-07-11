@@ -290,6 +290,11 @@ func main() {
 	// tick.Run so a reconnecting player joins a world whose raids + POI are already loaded. A missing
 	// file/dir is a clean first-boot no-op. See server/saveddata.go.
 	tick.SetPersistDir(worldDir)
+	// SUB-PERSIST (Part B): seed the loop with the flag/default world seed BEFORE LoadPersistedData, so a
+	// FRESH world uses the flag seed while a PERSISTED world's level.dat seed (applied inside
+	// LoadPersistedData -> applyLevelData) overrides it. Ordering matters: a later SetWorldSeed would
+	// clobber the loaded seed, so the flag seed is set first as the fresh-world default only.
+	tick.SetWorldSeed(*seed)
 	tick.LoadPersistedData()
 	// PROGRESS (server/advancements.go): load the embedded advancement DEFINITION tree ONCE at boot
 	// (off the tick, before Run). The join seam then sends each player the whole tree + their
@@ -399,7 +404,6 @@ func main() {
 		log.Fatalf("permissions: load %s failed: %v", permPath, err)
 	}
 	tick.SetPermStore(permStore)
-	tick.SetWorldSeed(*seed)
 	if err := permStore.Save(); err != nil { // write the baseline on first boot
 		log.Printf("permissions: initial save failed: %v", err)
 	}
