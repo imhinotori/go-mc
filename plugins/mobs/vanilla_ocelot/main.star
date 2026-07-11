@@ -8,8 +8,8 @@
 #     @0  OcelotTemptGoal(this, 0.6, is(OCELOT_FOOD), true)  <-- .star (the tempt, stored in temptGoal field)
 #     @1  FloatGoal(this)                                    <-- .star (shared passive float)
 #     @3  <the SAME temptGoal instance re-added>             <-- .star (a SECOND tempt goal at priority 3)
-#     @7  LeapAtTargetGoal(this, 0.3)                        <-- DEFERRED (defers WITH its prey target)
-#     @8  OcelotAttackGoal(this)                             <-- DEFERRED (defers WITH its prey target)
+#     @7  LeapAtTargetGoal(this, 0.3)                        <-- kind="leap_at_target" vy=0.3 (leap at prey)
+#     @8  OcelotAttackGoal(this)                             <-- kind="ocelot_attack" (hunt+kill prey; entity-victim)
 #     @9  BreedGoal(this, 0.8)                               <-- .star (shared BreedGoal)
 #     @10 WaterAvoidingRandomStrollGoal(this, 0.8, 1e-5)     <-- .star (shared stroll)
 #     @11 LookAtPlayerGoal(this, Player, 10.0)               <-- .star (shared look, dist 10.0)
@@ -37,10 +37,11 @@
 #     live (the override hook is wired end-to-end: Ocelot.isTrusting -> Entity.isTrusting -> host attr
 #     entity.is_trusting -> .star can_continue) and observably no-op for now. When the spook-flee block
 #     ports into the .star continue, the is_trusting read becomes the canScare gate.
-#   - LeapAtTargetGoal@7(0.3) + OcelotAttackGoal@8: the ocelot's leap+attack goals defer; the prey targets
-#     NOW acquire (chicken/baby-turtle-on-land), so an ocelot WITH a prey target CAN leap/attack once those
-#     deferrals land. Until then, the prey targets run (acquire + commit attackTargetID), but the leap/attack
-#     goals stay cite-deferred (so the goalSelector never reads the acquired target via canUse).
+#   - LeapAtTargetGoal@7(0.3) + OcelotAttackGoal@8: NOW WIRED (MOB-PREY hunt). The prey targets acquire
+#     (chicken/baby-turtle-on-land) and the ocelot leaps (kind="leap_at_target" vy=0.3) + attacks (kind=
+#     "ocelot_attack") its prey through the entity-victim hurt path (ai_goals_ocelot_attack.go resolves a MOB
+#     victim via the owning-region store, dealing ATTACK_DAMAGE 3.0). An ocelot with a chicken in range hunts,
+#     leaps, and kills it. Cite Ocelot.registerGoals @7 LeapAtTargetGoal(0.3) + @8 OcelotAttackGoal.
 #   - The ocelot TRUST (setTrusting + the data field) is cite-deferred (no trust subsystem).
 #   - The SpawnEggItem baby→black-cat morph IS now wired (ocelot-prey #2): a baby ocelot arriving
 #     via the SpawnEggItem path (setBaby(true) + isBaby() check) becomes a Cat (entity.Cat.ID) with
@@ -279,6 +280,15 @@ declare_mob(
             stop = tempt_food_stop,
             can_continue = tempt_food_continue,
         ),
+        # @7 LeapAtTargetGoal(mob, 0.3) [JUMP, MOVE] - kind="leap_at_target" with vy=0.3 (the Ocelot's 0.3F
+        # ctor arg, distinct from the Spider's 0.4). The prey targets (chicken/baby-turtle) NOW acquire, so an
+        # ocelot with a prey target leaps toward it. Cite Ocelot.registerGoals @7 LeapAtTargetGoal(0.3).
+        goal(priority = 7, flags = ["JUMP", "MOVE"], kind = "leap_at_target", vy = 0.3),
+        # @8 OcelotAttackGoal(mob) [MOVE, LOOK] - kind="ocelot_attack" (the STANDALONE 26.2 OcelotAttackGoal,
+        # ai_goals_ocelot_attack.go): reach = (2*width)^2 + the 3-band speed branch + attackTime cadence ->
+        # doHurtTarget the prey (chicken/baby-turtle) via the entity-victim hurt path. Deals ATTACK_DAMAGE 3.0.
+        # Cite Ocelot.registerGoals @8 OcelotAttackGoal.
+        goal(priority = 8, flags = ["MOVE", "LOOK"], kind = "ocelot_attack"),
         # @9 BreedGoal(mob, 0.8) [MOVE, LOOK]. Cite Ocelot.registerGoals @9 BreedGoal(0.8).
         goal(
             priority = 9,

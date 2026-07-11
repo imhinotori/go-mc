@@ -29,6 +29,8 @@
 package server
 
 import (
+	"math"
+
 	"github.com/imhinotori/sulfur/data/entity"
 )
 
@@ -179,6 +181,68 @@ func (t *TickLoop) armadilloIsScaredBy(e *Entity, p *tickPlayer) bool {
 	return p.sprinting || p.vehicleID != 0
 }
 
+// isUndeadType ports membership in EntityTypeTags.UNDEAD (data/minecraft/tags/entity_type/undead.json):
+// #minecraft:skeletons + #minecraft:zombies + {wither, phantom}. v1 has no runtime entity-type tag
+// subsystem, so this is the SAME explicit jar-cited type-set idiom mobCanBreatheUnderwater (breath_mob.go)
+// uses for the same #undead expansion (minus that method's extra water mobs). A LivingEntity.is(UNDEAD)
+// read. Cite EntityTypeTags.UNDEAD (undead.json = skeletons | zombies | wither | phantom).
+func isUndeadType(typ entity.ID) bool {
+	switch typ {
+	// #minecraft:undead -> #minecraft:skeletons
+	case entity.Skeleton.ID, entity.Stray.ID, entity.WitherSkeleton.ID,
+		entity.SkeletonHorse.ID, entity.Bogged.ID, entity.Parched.ID:
+		return true
+	// #minecraft:undead -> #minecraft:zombies
+	case entity.ZombieHorse.ID, entity.CamelHusk.ID, entity.Zombie.ID,
+		entity.ZombieVillager.ID, entity.ZombifiedPiglin.ID, entity.Zoglin.ID,
+		entity.Drowned.ID, entity.Husk.ID, entity.ZombieNautilus.ID:
+		return true
+	// #minecraft:undead -> direct members
+	case entity.Wither.ID, entity.Phantom.ID:
+		return true
+	default:
+		return false
+	}
+}
+
+// armadilloIsScaredByMob ports the MOB limbs of Armadillo.isScaredBy(LivingEntity) — the branches that fire
+// for a non-player LivingEntity (an UNDEAD mob, or the mob that last hurt the armadillo), after the shared
+// inflated-box intersect gate. The jar order is: intersect gate FIRST, then `if (target.is(UNDEAD)) return
+// true`, then `if (getLastHurtByMob() == target) return true`, then the Player branch (handled by the sibling
+// armadilloIsScaredBy). NO RNG. Cite Armadillo.isScaredBy offsets 0-49.
+//
+//	[VERIFIED javap Armadillo.isScaredBy: getBoundingBox().inflate(7,2,7).intersects(target.getBoundingBox())
+//	 ifne 28 else return 0; target.is(UNDEAD) ifeq 40 else return 1; getLastHurtByMob() == target -> return 1;
+//	 instanceof Player -> the player sub-branch; else return 0.]
+func (t *TickLoop) armadilloIsScaredByMob(e *Entity, other *Entity) bool {
+	if other == nil || other == e || other.dead {
+		return false
+	}
+	// getBoundingBox().inflate(7,2,7).intersects(target.getBoundingBox()): the SAME inflated-box gate the
+	// player variant uses, tested against the mob victim's collision AABB (width x height, feet at other.y).
+	box := e.AABB()
+	minX := box.Lower[0] - armadilloScareInflateXZ
+	minY := box.Lower[1] - armadilloScareInflateY
+	minZ := box.Lower[2] - armadilloScareInflateXZ
+	maxX := box.Upper[0] + armadilloScareInflateXZ
+	maxY := box.Upper[1] + armadilloScareInflateY
+	maxZ := box.Upper[2] + armadilloScareInflateXZ
+	ohw := other.width / 2
+	oMinX, oMaxX := other.x-ohw, other.x+ohw
+	oMinY, oMaxY := other.y, other.y+other.height
+	oMinZ, oMaxZ := other.z-ohw, other.z+ohw
+	if !(minX < oMaxX && maxX > oMinX && minY < oMaxY && maxY > oMinY && minZ < oMaxZ && maxZ > oMinZ) {
+		return false
+	}
+	// `if (target.is(UNDEAD)) return true;` — an armadillo fears any undead mob within the inflated box.
+	if isUndeadType(other.typ) {
+		return true
+	}
+	// `if (getLastHurtByMob() == target) return true;` — it also fears whatever last hurt it (the mob that
+	// dealt the last living-attacker hit, recorded at the combat store-point, entity.go lastHurtByMob).
+	return e.lastHurtByMob != 0 && e.lastHurtByMob == other.id
+}
+
 // armadilloDangerMemoryTicks is the DANGER_DETECTED_RECENTLY expiry Armadillo.onSyncedDataUpdated sets
 // (setMemoryWithExpiry(DANGER_DETECTED_RECENTLY, true, 80L)) whenever a threat is scared-by. The
 // ArmadilloBallUp state machine reads the remaining time (getTimeUntilExpiry) which counts down from 80.
@@ -228,6 +292,24 @@ func (t *TickLoop) armadilloAiStep(e *Entity) {
 		if t.armadilloIsScaredBy(e, pl) {
 			threat = true
 			break
+		}
+	}
+	// MOB threats (the ArmadilloAi danger sensor's NEAREST_LIVING_ENTITIES feed + isScaredBy's UNDEAD /
+	// last-hurt-by branches): an UNDEAD mob (zombie/skeleton/...) or the mob that last hurt the armadillo,
+	// within the inflated 7x2x7 box, also scares it. The sensor scans nearby living entities; v1 reuses the
+	// SAME owning-region near() broad-phase the target scans use, bounded by the inflate radius (7 blocks ->
+	// ceil(7/16)=1 chunk column), re-checking the precise inflated box inside armadilloIsScaredByMob. Cite
+	// Armadillo.isScaredBy (UNDEAD + lastHurtBy branches) + ArmadilloAi danger sensor.
+	if !threat {
+		rangeChunks := int(math.Ceil(armadilloScareInflateXZ / 16.0))
+		if rangeChunks < 1 {
+			rangeChunks = 1
+		}
+		for _, other := range t.cur().entities.near(e.x, e.z, rangeChunks) {
+			if t.armadilloIsScaredByMob(e, other) {
+				threat = true
+				break
+			}
 		}
 	}
 	if threat {

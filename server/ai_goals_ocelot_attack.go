@@ -160,16 +160,18 @@ func (g *ocelotAttackGoal) canContinueToUse(t *TickLoop, e *Entity) bool {
 	if id == 0 {
 		return false
 	}
-	target := t.playerByEntityID(id) // target.isAlive() — the v1 player presence check
-	if target == nil {
+	// target.isAlive(): the OcelotAttackGoal target is a LivingEntity — a PLAYER (via playerByEntityID) OR a
+	// MOB (the ocelot's chicken/baby-turtle prey, via the owning-region store). Either present+alive counts.
+	tx, ty, tz, alive := g.resolveOcelotTarget(t, id)
+	if !alive {
 		return false
 	}
 	// mob.distanceToSqr(target) <= 225.0: the squared feet-to-feet distance (the OcelotAttackGoal uses
 	// Entity.distanceToSqr(Entity) which is the (x,y,z) triple diff squared, NOT a horizontal-only
 	// projection — faithful 1:1).
-	dx := e.x - target.x
-	dy := e.y - target.y
-	dz := e.z - target.z
+	dx := e.x - tx
+	dy := e.y - ty
+	dz := e.z - tz
 	distSqr := dx*dx + dy*dy + dz*dz
 	if distSqr > ocelotAttackAggroMaxSqr {
 		return false // past 15 blocks → drop the target
@@ -180,6 +182,21 @@ func (g *ocelotAttackGoal) canContinueToUse(t *TickLoop, e *Entity) bool {
 		return g.canUse(t, e)
 	}
 	return true // path in flight → keep attacking
+}
+
+// resolveOcelotTarget resolves the OcelotAttackGoal.target LivingEntity (the field cached in canUse) to its
+// (x,y,z) + an alive flag, handling BOTH victim shapes: a PLAYER (via playerByEntityID) and a MOB — the
+// ocelot's chicken/baby-turtle prey the targetSelector @1 goals acquire (via the owning-region entity store,
+// t.cur() — the SAME store the target scan used). The jar target is a plain LivingEntity; v1 splits
+// Player/Mob into two resolves. NO RNG.
+func (g *ocelotAttackGoal) resolveOcelotTarget(t *TickLoop, id int32) (x, y, z float64, alive bool) {
+	if p := t.playerByEntityID(id); p != nil && !p.dead {
+		return p.x, p.y, p.z, true
+	}
+	if other, ok := t.cur().entities.get(id); ok && !other.dead {
+		return other.x, other.y, other.z, true
+	}
+	return 0, 0, 0, false
 }
 
 // stop ports OcelotAttackGoal.stop (bytecode-verified this session), NO RNG:
@@ -230,14 +247,16 @@ func (g *ocelotAttackGoal) tick(t *TickLoop, e *Entity) {
 	if id == 0 {
 		return
 	}
-	target := t.playerByEntityID(id)
-	if target == nil {
+	// The OcelotAttackGoal.target is a LivingEntity — a PLAYER or the ocelot's chicken/baby-turtle prey (a
+	// MOB). Resolve either shape to its position + alive flag; a vanished target aborts the tick.
+	tx, ty, tz, alive := g.resolveOcelotTarget(t, id)
+	if !alive {
 		return
 	}
 
 	// setLookAt(target, 30, 30): turn the HEAD toward the target at most 30°/tick. HEAD only (headYaw);
 	// the body yaw is owned by the navigation tick (the same seam MeleeAttackGoal.tick uses).
-	yRotD := yawTowardDeg(target.x-e.x, target.z-e.z)
+	yRotD := yawTowardDeg(tx-e.x, tz-e.z)
 	e.headYaw = rotlerpDeg(e.headYaw, yRotD, ocelotAttackLookYawMax)
 
 	// reach² = (mob.getBbWidth() * 2)² — the jar's reach computation, a function of the mob's WIDTH.
@@ -245,9 +264,9 @@ func (g *ocelotAttackGoal) tick(t *TickLoop, e *Entity) {
 	// constant getAttackReachSqr=4.0 — that constant is ABSENT from the 26.2 jar.)
 	d1 := float64(float32(e.width) * 2.0)
 	d1 = d1 * d1
-	dx := e.x - target.x
-	dy := e.y - target.y
-	dz := e.z - target.z
+	dx := e.x - tx
+	dy := e.y - ty
+	dz := e.z - tz
 	d2 := dx*dx + dy*dy + dz*dz // mob.distanceToSqr(target)
 
 	// speed branching: default 0.8; pounce band (d2 > d1 && d2 < 16.0) → 1.33; approach band
@@ -263,7 +282,7 @@ func (g *ocelotAttackGoal) tick(t *TickLoop, e *Entity) {
 	// navigation.moveTo(target, speed): path toward the target AT the chosen speed (the blocks/tick
 	// value, like MeleeAttackGoal's chase seam). setWantTargetSpeed routes through the async nav
 	// (the same seam MeleeAttackGoal.tick uses).
-	e.ai.setWantTargetSpeed(target.x, target.y, target.z, speed)
+	e.ai.setWantTargetSpeed(tx, ty, tz, speed)
 
 	// attackTime = max(attackTime - 1, 0): the RNG-FREE per-attack countdown.
 	if g.attackTime > 0 {
@@ -281,13 +300,18 @@ func (g *ocelotAttackGoal) tick(t *TickLoop, e *Entity) {
 	// Reset the cooldown and deal the hit.
 	g.attackTime = ocelotAttackCooldownTicks
 
-	// mob.doHurtTarget(getServerLevel(mob), target): the standard Mob.doHurtTarget for a player victim.
-	// Deals ATTACK_DAMAGE (Ocelot.createAttributes 3.0, applied by seedAttributes) through the player
-	// hurt path. The v1 damage keystone is the same one MeleeAttackGoal.checkAndPerformAttack calls.
-	// We re-use the meleeAttackGoal's doHurtTarget seam (its TPlayer signature) by constructing a thin
-	// inline call — NO swing broadcast here (the ocelot has no arm-swing animation; the jar does NOT
-	// call mob.swing before doHurtTarget, only MeleeAttackGoal does).
-	t.ocelotDoHurtTarget(e, target)
+	// mob.doHurtTarget(getServerLevel(mob), target): the standard Mob.doHurtTarget. Deals ATTACK_DAMAGE
+	// (Ocelot.createAttributes 3.0, applied by seedAttributes). The victim is a PLAYER (the player hurt
+	// path) OR a MOB — the ocelot's chicken/baby-turtle prey, routed through the entity-victim hurt path
+	// (applyDamageEntity, the SAME seam meleeAttackGoal.doHurtTargetEntity uses). NO swing broadcast (the
+	// jar's OcelotAttackGoal.tick calls doHurtTarget WITHOUT a preceding mob.swing, unlike MeleeAttackGoal).
+	if p := t.playerByEntityID(id); p != nil {
+		t.ocelotDoHurtTarget(e, p)
+		return
+	}
+	if victim, ok := t.cur().entities.get(id); ok && !victim.dead {
+		t.ocelotDoHurtTargetEntity(e, victim)
+	}
 }
 
 // ocelotDoHurtTarget is the OcelotAttackGoal.tick's hit landing (no swing broadcast — the jar's
@@ -308,6 +332,23 @@ func (t *TickLoop) ocelotDoHurtTarget(e *Entity, target *tickPlayer) {
 	// NO swing broadcast — the ocelot has no arm-swing animation; the jar's OcelotAttackGoal.tick
 	// calls doHurtTarget without a preceding mob.swing(MAIN_HAND) (unlike MeleeAttackGoal
 	// .checkAndPerformAttack which does swing-then-dohurt).
+}
+
+// ocelotDoHurtTargetEntity is the MOB-victim form of the OcelotAttackGoal.tick hit landing (the headline
+// consumer — the ocelot hunting a CHICKEN or baby TURTLE). It is the exact sibling of ocelotDoHurtTarget,
+// differing only in the victim shape: it deals the ocelot's ATTACK_DAMAGE (Ocelot 3.0) through the MOB hurt
+// path (applyDamageEntity, which runs the standard dealDefaultKnockbackEntity), the SAME seam
+// meleeAttackGoal.doHurtTargetEntity reaches for a mob victim. NO swing broadcast (the jar's OcelotAttackGoal
+// .tick calls doHurtTarget WITHOUT a preceding mob.swing). Cite Mob.doHurtTarget(ServerLevel, Entity) +
+// OcelotAttackGoal.tick offset 160-178 (doHurtTarget(getServerLevel, target)).
+func (t *TickLoop) ocelotDoHurtTargetEntity(e *Entity, victim *Entity) {
+	dmg := float32(e.getAttributeValue(attribute.AttackDamage))
+	src := damageSourceMobAttack(e.id)
+	t.applyDamageEntity(victim, src, dmg) // the MOB hurt path (also runs dealDefaultKnockbackEntity)
+	// doPostAttackEffects: a cited pass-through for an ocelot (no weapon enchantments), kept for symmetry
+	// with the melee entity-victim path's Thorns-reflection tail.
+	t.doPostAttackEffects(enchEntityRef{mob: victim}, src)
+	// NO swing broadcast (see ocelotDoHurtTarget).
 }
 
 // Compile-time assertion: ocelotAttackGoal IS a server.Goal.

@@ -63,6 +63,14 @@ type shulkerState struct {
 	color        byte
 	attackTime   int32
 	nextScanTick int32
+	// prevHealth is the health the shulker held at the END of the previous shulkerAiStep, so the tick seam
+	// can detect a health DROP (a hit landed since last tick) and run the post-hurt reaction
+	// (shulkerHurtServerReaction) at the shulker's OWN tick entrypoint. This is the WIRING seam for the
+	// otherwise-orphaned Shulker.hurtServer POST-hurt tail: the real hurt path (applyDamageEntity,
+	// combat_mob.go) is not owned here and carries no shulker dispatch, so the teleport-on-low-hp reaction is
+	// driven from the shulker-owned tick by observing the applied health change. Sentinel -1 == "not yet
+	// initialized" (first tick seeds it, no reaction). Cite Shulker.hurtServer (the post-hurt teleport tail).
+	prevHealth float32
 }
 
 type shulkerBulletState struct {
@@ -79,6 +87,7 @@ func (t *TickLoop) spawnShulker(x, y, z float64) *Entity {
 		peek:       shulkerPeekClosed,
 		attachFace: block.Down,
 		color:      shulkerNoColor,
+		prevHealth: -1, // seeded on the first shulkerAiStep (no reaction on the seeding tick)
 	}
 	_ = shulkerMaxHealth
 	initSpawnHealth(s)
@@ -140,6 +149,30 @@ func (t *TickLoop) shulkerAiStep(e *Entity) {
 	if s == nil {
 		return
 	}
+	// POST-HURT REACTION WIRING (Shulker.hurtServer tail): the real mob hurt path (applyDamageEntity,
+	// combat_mob.go) is NOT owned here and carries no shulker dispatch, so the previously-orphaned
+	// shulkerHurtServerReaction (teleport-on-low-hp) is driven from the shulker's OWN tick by observing a
+	// health DROP since the last tick. When the shulker took damage this tick window (health fell below the
+	// seeded prevHealth), run the post-hurt reaction (nextInt(4)==0 teleport if health < maxHealth*0.5). The
+	// reaction's RNG is on the shulker's own stream and is teleport-gated, so a shulker that took no damage
+	// draws ZERO. prevHealth==-1 is the un-seeded first tick (seed only, no reaction). Cite Shulker.hurtServer.
+	//
+	// CITE-DEFERRED (blocked on a non-owned file): the CLOSED arrow-immunity PRE-hurt gate
+	// (shulkerArrowImmune — a closed shulker rejects an AbstractArrow BEFORE damage applies) MUST intercept
+	// the hurt pipeline before the hit lands. That pipeline is applyDamageEntity (combat_mob.go), which is
+	// off-limits to edit here (the sibling wither/guardian PRE-hurt gates live there). shulkerArrowImmune is
+	// ported + unit-tested; wiring it needs a one-line gated call `if e.shulker != nil && shulkerArrowImmune
+	// (e, src) { return }` at the TOP of applyDamageEntity (the sibling of the wither/guardian gates) — a
+	// non-owned edit. Left for the combat-owner. See shulkerArrowImmune's doc.
+	if s.prevHealth < 0 {
+		s.prevHealth = e.health // seed on the first tick (no reaction)
+	} else if e.health < s.prevHealth {
+		// A hit landed since last tick (health dropped): run the Shulker.hurtServer post-hurt tail. src is the
+		// generic post-hit reaction source (the teleport branch does not read the source type; the
+		// shulker-bullet self-hit branch is a cited no-op in shulkerHurtServerReaction). Cite Shulker.hurtServer.
+		t.shulkerHurtServerReaction(e, damageSourceOf(damageTypeGeneric))
+	}
+	s.prevHealth = e.health // track for the next tick's drop detection (nothing below changes the shulker's health)
 	// ShulkerAttackGoal.canUse: getTarget() != null && getTarget().isAlive() && difficulty != PEACEFUL.
 	// There is NO range gate on canUse -- the goal RUNS (and opens the shell) whenever a live target exists;
 	// it only FIRES a bullet when distanceToSqr(target) < 400.0 (ShulkerAttackGoal.tick). PEACEFUL disarms.

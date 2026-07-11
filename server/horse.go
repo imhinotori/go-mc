@@ -429,12 +429,25 @@ func newLlamaAI() *mobAI {
 	applyAnimalPathfindingMalus(m)
 	m.goals.addGoal(0, newFloatGoal())
 	m.goals.addGoal(1, newPanicGoal(horsePanicSpeed))
+	// @3 RangedAttackGoal(this, 1.25, 40, 20.0f) [MOVE, LOOK] — the SPIT (GAP 4): the llama chases the
+	// target (a wolf, or a mob attacker) into range and fires a LlamaSpit every 40 ticks. Cite
+	// Llama.registerGoals @3 RangedAttackGoal + Llama.performRangedAttack -> Llama.spit.
+	m.goals.addGoal(3, newLlamaRangedAttackGoal())
 	m.goals.addGoal(4, newBreedGoal(horseBreedSpeed))
 	m.goals.addGoal(5, newTemptGoal(horseTemptSpeed, func(id int32) bool { return itemInTag(id, llamaTemptItemsTag) }, false, nil))
 	m.goals.addGoal(6, newFollowParentGoal(horseFollowSpeed))
 	m.goals.addGoal(7, newWaterAvoidingRandomStrollGoal(horseStrollSpeed))
 	m.goals.addGoal(8, newLookAtPlayerGoal(horseLookDist))
 	m.goals.addGoal(9, newRandomLookAroundGoal())
+	// targetSelector — Llama.registerGoals targetSelector EXACTLY:
+	// @1 Llama$LlamaHurtByTargetGoal(this) [TARGET] — the base HurtByTargetGoal retaliate-at-attacker (v1
+	// reuses newHurtByTargetGoal; the didSpit-drop refinement is cite-deferred, ai_goals_llama.go). So a
+	// llama that is hit targets its attacker, then the RangedAttackGoal spits at it. Cite Llama.registerGoals
+	// targetSelector @1 (Llama$LlamaHurtByTargetGoal extends HurtByTargetGoal).
+	m.targetSelector.addGoal(1, newHurtByTargetGoal())
+	// @2 Llama$LlamaAttackWolfGoal(this) [TARGET] — the nearest UNTAMED wolf within FOLLOW_RANGE*0.25. A
+	// llama spits at nearby wild wolves. Cite Llama.registerGoals targetSelector @2 (Llama$LlamaAttackWolfGoal).
+	m.targetSelector.addGoal(2, newLlamaAttackWolfTargetGoal())
 	return m
 }
 
