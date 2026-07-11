@@ -92,3 +92,129 @@ func TestSnowGolemSnowTrail(t *testing.T) {
 		t.Fatal("snowGolemAiStep placed no snow trail on a solid floor")
 	}
 }
+
+// snowGolemEnemyMob builds a live AI hostile mob at (x,y,z) and adds it to the golem's region store so the
+// golem can target + hit it. reseedMobAI keeps its per-entity rng deterministic.
+func snowGolemEnemyMob(loop *TickLoop, e *Entity) *Entity {
+	e.ai = &mobAI{}
+	reseedMobAI(e.ai, e.id)
+	initSpawnHealth(e)
+	loop.only().entities.add(e)
+	return e
+}
+
+// snowballCountInStore counts the live snowball throwables in the golem's region store.
+func snowballCountInStore(loop *TickLoop) int {
+	n := 0
+	for _, e := range loop.only().entities.all() {
+		if e.isThrowable && e.throwableKind == throwSnowball {
+			n++
+		}
+	}
+	return n
+}
+
+// TestSnowGolemThrowsSnowballAtHostile: a snow golem with a hostile (zombie) in range fires a snowball on
+// the RangedAttackGoal's 20-tick cadence; the snowball flies to the target, deals 0 damage to the zombie
+// (Snowball.onHitEntity: non-Blaze -> 0), and knocks it back (the shared dealDefaultKnockback recoil).
+func TestSnowGolemThrowsSnowballAtHostile(t *testing.T) {
+	loop, floorY := snowGolemLoop(t)
+	g := loop.spawnSnowGolem(8.5, float64(floorY+1), 8.5)
+
+	// A zombie two blocks away, well within the 10-block attack radius + FOLLOW_RANGE.
+	z := snowGolemEnemyMob(loop, NewEntity(loop.idAlloc.AllocID(), entity.Zombie, 10.5, float64(floorY+1), 8.5))
+	zHealth0 := z.health
+	zVx0, zVy0, zVz0 := z.vx, z.vy, z.vz
+
+	// The golem's RangedAttackGoal ticks via its goalSelector; drive the goal directly with the target set
+	// (mirrors how vanilla's targetSelector would have committed the Enemy target). Fire cadence is 20.
+	g.ai.setTarget(z.id)
+	goal := newSnowGolemRangedAttackGoal()
+	fired := false
+	for i := 0; i < 30 && !fired; i++ {
+		goal.tick(loop, g)
+		if snowballCountInStore(loop) > 0 {
+			fired = true
+		}
+	}
+	if !fired {
+		t.Fatal("snow golem never fired a snowball at a hostile within 30 ticks (expected fire at ~tick 20)")
+	}
+
+	// Fly the snowball until it lands (hits the zombie or a block) -- it should reach the 2-block-away target.
+	for i := 0; i < 40 && snowballCountInStore(loop) > 0; i++ {
+		loop.tickThrowables()
+	}
+	if snowballCountInStore(loop) > 0 {
+		t.Fatal("the snowball never resolved (never reached the target or a block)")
+	}
+
+	// The zombie takes 0 damage (Snowball.onHitEntity non-Blaze) but is knocked back (velocity changed).
+	if math.Abs(float64(z.health)-float64(zHealth0)) > 1e-6 {
+		t.Fatalf("zombie health changed = %v -> %v; a snowball deals 0 to a non-blaze", zHealth0, z.health)
+	}
+	if z.vx == zVx0 && z.vy == zVy0 && z.vz == zVz0 {
+		t.Fatal("zombie was not knocked back by the snowball hit (velocity unchanged)")
+	}
+}
+
+// TestSnowballHitsBlazeForThree: Snowball.onHitEntity deals 3 to a Blaze (else 0). Drive the snowball
+// hit directly against a blaze victim to pin the 3-damage branch.
+func TestSnowballHitsBlazeForThree(t *testing.T) {
+	loop, floorY := snowGolemLoop(t)
+	g := loop.spawnSnowGolem(8.5, float64(floorY+1), 8.5)
+	b := loop.spawnBlaze(10.5, float64(floorY+1), 8.5)
+	bHealth0 := b.health
+
+	// Spawn a snow-golem snowball right at the blaze and resolve the hit.
+	sb := loop.spawnThrowable(g.id, throwSnowball, b.x, b.y+1.0, b.z, 0, 0, 0)
+	sb.snowballHitsMobs = true
+	loop.snowballOnHitMob(sb, b)
+
+	if diff := float64(bHealth0) - float64(b.health); math.Abs(diff-3.0) > 1e-6 {
+		t.Fatalf("blaze took %v damage from a snowball, want 3.0 (Snowball.onHitEntity blaze branch)", diff)
+	}
+}
+
+// TestSnowballZeroDamageToZombie: Snowball.onHitEntity deals 0 to a non-Blaze mob (the zombie). Pin the
+// else branch directly.
+func TestSnowballZeroDamageToZombie(t *testing.T) {
+	loop, floorY := snowGolemLoop(t)
+	g := loop.spawnSnowGolem(8.5, float64(floorY+1), 8.5)
+	z := snowGolemEnemyMob(loop, NewEntity(loop.idAlloc.AllocID(), entity.Zombie, 10.5, float64(floorY+1), 8.5))
+	zHealth0 := z.health
+
+	sb := loop.spawnThrowable(g.id, throwSnowball, z.x, z.y+1.0, z.z, 0, 0, 0)
+	sb.snowballHitsMobs = true
+	loop.snowballOnHitMob(sb, z)
+
+	if math.Abs(float64(z.health)-float64(zHealth0)) > 1e-6 {
+		t.Fatalf("zombie took %v -> %v; a snowball deals 0 to a non-blaze", zHealth0, z.health)
+	}
+}
+
+// TestSnowGolemInertWithoutHostile: a snow golem with NO hostile in range acquires no target and never
+// fires a snowball (canUse false, tick a no-op) -- and no throwable is spawned.
+func TestSnowGolemInertWithoutHostile(t *testing.T) {
+	loop, floorY := snowGolemLoop(t)
+	g := loop.spawnSnowGolem(8.5, float64(floorY+1), 8.5)
+
+	// The target selector finds no Enemy mob -> canUse false.
+	tgtGoal := newSnowGolemEnemyTargetGoal()
+	tgtGoal.forceTrigger = true // bypass the RNG gate so the scan runs deterministically
+	if tgtGoal.canUse(loop, g) {
+		t.Fatal("snow golem must not acquire a target with no hostile in range")
+	}
+
+	// The ranged goal cannot use (no target) and ticks a no-op; no snowball spawns.
+	goal := newSnowGolemRangedAttackGoal()
+	if goal.canUse(loop, g) {
+		t.Fatal("ranged goal canUse must be false with no target")
+	}
+	for i := 0; i < 30; i++ {
+		goal.tick(loop, g)
+	}
+	if n := snowballCountInStore(loop); n != 0 {
+		t.Fatalf("an inert snow golem fired %d snowball(s), want 0", n)
+	}
+}

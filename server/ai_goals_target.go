@@ -115,6 +115,14 @@ const (
 	// (nearestEntityOfTypeAt). mustSee=true is the cited LoS stub for mob-vs-mob targets. A SKELETON
 	// hunting a specific IronGolem. Cite AbstractSkeleton.registerGoals targetSelector @3.
 	targetClassIronGolem
+	// targetClassSnowGolemEnemy is the SnowGolem targetSelector @1 NearestAttackableTargetGoal<Mob>(this,
+	// Mob.class, 10, true, false, (target, level) -> target instanceof Enemy) branch: findTarget scans the
+	// entity store for the nearest Enemy (Monster-category) mob within FOLLOW_RANGE. UNLIKE the IronGolem
+	// hostile-mob branch (targetClassHostileMob: Enemy && !Creeper), the SnowGolem predicate is a BARE
+	// `instanceof Enemy` -- a snow golem WILL hurl snowballs at a creeper (the jar lambda$registerGoals$0
+	// has no Creeper exclusion, verified javap: aload_0; instanceof Enemy; ireturn). Cite
+	// SnowGolem.registerGoals targetSelector @1.
+	targetClassSnowGolemEnemy
 )
 
 // nearestAttackableTargetGoal ports NearestAttackableTargetGoal<T> (flags {TARGET}). It acquires the
@@ -209,6 +217,19 @@ func newIronGolemHostileTargetGoal() *nearestAttackableTargetGoal {
 		baseGoal:       newBaseGoal(flagTarget),
 		randomInterval: nearestTargetRandomInterval,
 		targetClass:    targetClassHostileMob,
+	}
+}
+
+// newSnowGolemEnemyTargetGoal builds the SnowGolem @1 NearestAttackableTargetGoal<Mob>(this, Mob.class,
+// 10, true, false, (target, level) -> target instanceof Enemy) -- the ENEMY class (Monster-category),
+// NO Creeper exclusion, NO anger gate (targetClassSnowGolemEnemy). The randomInterval stays the shared
+// nearestTargetRandomInterval (the ctor's reducedTickDelay(10)==5). Cite SnowGolem.registerGoals
+// targetSelector @1 (Mob, Enemy).
+func newSnowGolemEnemyTargetGoal() *nearestAttackableTargetGoal {
+	return &nearestAttackableTargetGoal{
+		baseGoal:       newBaseGoal(flagTarget),
+		randomInterval: nearestTargetRandomInterval,
+		targetClass:    targetClassSnowGolemEnemy,
 	}
 }
 
@@ -367,6 +388,40 @@ func (g *nearestAttackableTargetGoal) findTarget(t *TickLoop, e *Entity) {
 				continue
 			}
 			if other.typ == entity.Creeper.ID { // !(target instanceof Creeper)
+				continue
+			}
+			if categoryOf(other.typ) != categoryMonster { // target instanceof Enemy (Monster-category proxy)
+				continue
+			}
+			d := entityDistSqr(e, other)
+			if d <= best {
+				best = d
+				bestID, bestOK = other.id, true
+			}
+		}
+		if bestOK {
+			g.target = bestID
+			return
+		}
+	case targetClassSnowGolemEnemy:
+		// The SnowGolem @1 Enemy branch: the nearest Enemy (Monster-category) mob within FOLLOW_RANGE, with
+		// NO Creeper exclusion (unlike targetClassHostileMob). The jar predicate is a bare
+		// `livingentity instanceof Enemy` (verified javap SnowGolem.lambda$registerGoals$0). v1 uses
+		// categoryOf(typ) == categoryMonster as the faithful Enemy proxy (the same MobCategory the natural
+		// spawner + cap accounting read). Cite SnowGolem.registerGoals targetSelector @1 (Mob, Enemy).
+		//
+		// PROXY NOTE (cited): the Enemy interface in vanilla is implemented by the Monster subclasses AND a
+		// handful of non-Monster hostiles (e.g. Blaze extends Monster -> Enemy, so it IS an Enemy). v1 uses
+		// categoryOf(typ) == categoryMonster as the Enemy proxy; a type not yet in the categoryOf Monster arm
+		// (Blaze currently defaults to categoryMisc) is not acquired here even though it is an Enemy in the
+		// jar. This is a proxy limitation of the shared categoryOf table, NOT of this branch -- the branch
+		// becomes byte-exact for such a type the moment categoryOf returns categoryMonster for it (the
+		// snowball-vs-blaze 3-damage path in snow_golem.go is already wired and fires whenever the golem's
+		// target IS a blaze). Cite SnowGolem.lambda$registerGoals$0 (instanceof Enemy).
+		bestID, bestOK := int32(0), false
+		best := follow * follow
+		for _, other := range t.cur().entities.near(e.x, e.z, int(math.Ceil(follow/16.0))) {
+			if other == e || other.dead {
 				continue
 			}
 			if categoryOf(other.typ) != categoryMonster { // target instanceof Enemy (Monster-category proxy)

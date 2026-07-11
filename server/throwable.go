@@ -217,6 +217,19 @@ func (t *TickLoop) tickThrowable(e *Entity) {
 	// Record oldPosition() BEFORE moving — the ender_pearl teleports the owner to the pre-move position.
 	e.throwOldX, e.throwOldY, e.throwOldZ = ox, oy, oz
 
+	// SNOW-GOLEM snowball MOB-victim scan (additive, snowballHitsMobs-gated): a snow golem's snowball
+	// resolves against the FIRST Enemy mob its flight segment crosses (Snowball.onHitEntity applies to any
+	// LivingEntity, not just players). Gated on snowballHitsMobs so a player-thrown snowball/egg/ender-pearl
+	// keeps the byte-identical player-only path below. Checked BEFORE the player scan; the closer of the two
+	// still wins because a mob hit returns immediately and the player scan is a separate broad-phase (a snow
+	// golem never targets a player, so in practice only one branch ever fires). Cite Snowball.onHitEntity.
+	if e.snowballHitsMobs {
+		if victim := t.snowballFindHitMobVictim(e, ox, oy, oz, endX, endY, endZ); victim != nil {
+			t.snowballOnHitMob(e, victim)
+			t.cur().entities.remove(e.id) // discard on hit
+			return
+		}
+	}
 	if victim := t.arrowFindHitPlayer(e, ox, oy, oz, endX, endY, endZ); victim != nil {
 		t.throwableOnHitEntity(e, victim)
 		t.cur().entities.remove(e.id) // discard on hit

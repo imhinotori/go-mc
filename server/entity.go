@@ -365,6 +365,14 @@ type Entity struct {
 	throwOldZ     float64       // oldPosition() — the ender_pearl teleports the owner to the PRE-move position
 	throwLife     int32         // ticks alive; a throwable that never lands discards at a hard cap
 	throwRNG      *entityRandom // ThrowableProjectile.random — the per-throwable stream (xp bottle orb split draws)
+	// snowballHitsMobs marks a snowball whose flight also resolves against MOB victims (the snow_golem
+	// ranged attack). Vanilla Snowball.onHitEntity ALWAYS applies to any LivingEntity (Blaze 3 / else 0 +
+	// the thrown knockback); v1's shared throwable tick tested PLAYERS only. Rather than widen the shared
+	// entity-hit scan for every throwable (which would perturb the egg/ender-pearl tests), this per-entity
+	// flag opts a SNOW-GOLEM-fired snowball into the additive mob-victim scan (snowballFindHitMobVictim) so
+	// the golem's snowball actually reaches its Enemy target. Zero for a player-thrown snowball / egg /
+	// ender pearl -> their behavior is byte-identical. Cite Snowball.onHitEntity.
+	snowballHitsMobs bool
 
 	// --- HURTING PROJECTILE (net.minecraft.world.entity.projectile.hurtingprojectile.*) ----------------
 	//
