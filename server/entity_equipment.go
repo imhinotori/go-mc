@@ -424,6 +424,18 @@ func equipmentSpawnPackets(e *Entity) []pk.Packet {
 		}
 		out = append(out, encodeSetEquipment(e.id, slot, stack))
 	}
+	// ENDERMAN block-carry VISIBLE-STATE (MOB-HOST-08, audit-flagged 1:1 expansion): append a
+	// single synthetic MAINHAND SetEquipment for the carried block's item form. The carried state
+	// never writes e.equipment[MAINHAND] — the slot array stays vanilla-clean (the pig-oracle
+	// stream sees no mutation) and the wire sees exactly ONE extra SetEquipment when (and only
+	// when) an enderman is carrying a block. Gated on e.typ == entity.Enderman.ID +
+	// carriedBlockItem().Count > 0; non-enderman + not-carrying enderman fall through. Cite
+	// EnderMan.getCarriedBlock (jar-verified above).
+	if e != nil && e.typ == entity.Enderman.ID {
+		if carry := e.carriedBlockItem(); carry.Count > 0 {
+			out = append(out, encodeSetEquipment(e.id, eqSlotMainHand, carry))
+		}
+	}
 	return out
 }
 
@@ -625,4 +637,60 @@ func (t *TickLoop) detectMobEquipmentUpdates(e *Entity) {
 		}
 		t.broadcastToTrackers(e.id, encodeSetEquipment(e.id, slot, cur))
 	}
+}
+
+// detectEndermanCarryUpdates is the per-tick LIVE-SWAP broadcast for the Enderman carried-block
+// MAINHAND surface (entity.go:1605 endermanCarryLastBroadcast + Set + Init). It is the carrying
+// twin of detectMobEquipmentUpdates: each tick, diff the live carriedBlockSet/carriedBlockState
+// pair against the snapshot; on a CHANGE, broadcast ONE single-slot ClientboundSetEquipment for
+// MAINHAND carrying the carried block's item form (the audit-flagged visible-state seam).
+//
+// The first call (endermanCarryBroadcastInit == false) records the LIVE carry state WITHOUT
+// broadcasting — the spawn-time equipmentSpawnPackets path is the authoritative initial wire
+// (a freshly-spawned enderman with carriedBlockSet already true would otherwise receive its
+// MAINHAND packet TWICE: once at spawn, once on this init seed). A not-carrying enderman (and
+// every non-enderman — the call site in tick_phases.go's endermanAiStep branch enforces the
+// typ check) leaves the snapshot EMPTY and the live EMPTY, no diff, no broadcast — the
+// byte-identical default the pig oracle relies on (the pig never enters this function).
+//
+// Per-tick RNG: ZERO (the compare + set + broadcast are pure value ops, no draws). The
+// broadcast only happens when the carried state changes (a take OR a leave), exactly
+// mirroring detectMobEquipmentUpdates' per-tick shape. A take (carriedBlockSet false->true)
+// fires one MAINHAND SetEquipment with the carried item; a leave (true->false) fires one with
+// the EMPTY stack (so the client clears the held item). Cite EnderMan.getCarriedBlock /
+// setCarriedBlock (jar-verified: vanilla does NOT broadcast MAINHAND — this is the
+// audit-flagged Sulfur-side visible-state addition).
+//
+//	[VERIFIED javap EnderMan.setCarriedBlock: stores carriedBlockState via entityData.set(
+//	 DATA_CARRY_STATE, Optional.ofNullable(state)); the SetEntityData broadcast carries the
+//	 BlockState. The MAINHAND SetEquipment this function emits is ADDITIVE — it does NOT
+//	 replace the SetEntityData, it complements it. The pig oracle stays byte-identical:
+//	 detectEndermanCarryUpdates is enderman-gated at the call site.]
+func (t *TickLoop) detectEndermanCarryUpdates(e *Entity) {
+	if e == nil || e.typ != entity.Enderman.ID {
+		return // defensive: not an enderman -> no broadcast. Pre-call gating enforces it too.
+	}
+	// Diff the live carry state against the last broadcast. A delta in either the present bit
+	// or the state id marks the slot as changed.
+	curSet, curSid := e.carriedBlockSet, e.carriedBlockState
+	changed := curSet != e.endermanCarryLastBroadcastSet ||
+		(curSet && curSid != e.endermanCarryLastBroadcast)
+	if !changed {
+		return // no diff -> no SetEquipment to send (a not-carrying enderman in steady state)
+	}
+	// Seed the snapshot on the first observation (no broadcast): the spawn-time path is the
+	// authoritative initial wire — a seed-then-broadcast would double the packet. Mirrors
+	// detectMobEquipmentUpdates' equipmentBroadcastInit behavior (entity_equipment.go:567).
+	if !e.endermanCarryBroadcastInit {
+		e.endermanCarryBroadcastInit = true
+		e.endermanCarryLastBroadcastSet = curSet
+		e.endermanCarryLastBroadcast = curSid
+		return
+	}
+	e.endermanCarryLastBroadcastSet = curSet
+	e.endermanCarryLastBroadcast = curSid
+	// Build the MAINHAND SlotData: a take -> the carried block's item form; a leave -> the
+	// EMPTY stack so the client clears the held item. carriedBlockItem returns EMPTY when
+	// not carrying (Count 0 -> wire is the EMPTY ItemStack, the client's "clear" form).
+	t.broadcastToTrackers(e.id, encodeSetEquipment(e.id, eqSlotMainHand, e.carriedBlockItem()))
 }

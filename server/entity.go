@@ -1434,6 +1434,18 @@ type Entity struct {
 	// — a visual the metadata subsystem surfaces). Tick-owned (TICK-05).
 	leftHanded bool
 
+	// --- MOB-AGGRESSIVE (Mob.setAggressive — the raise-arm/follow-through client visual) ----------
+	//
+	// aggressive mirrors Mob.isAggressive()/setAggressive(boolean): toggles DATA_MOB_FLAGS_ID bit
+	// 0x04 (the raise-arm bit the ZombieAttackGoal + MeleeAttackGoal.start drive). Tick-owned.
+	//	[VERIFIED javap Mob.setAggressive: read-modify-write bit 0x04 of DATA_MOB_FLAGS_ID.]
+	//
+	// NOTE for the audit-flagged MOB-HOST-08 carry task: this `aggressive bool` lives on the
+	// SHARED Mob DATA_MOB_FLAGS_ID byte alongside the carry MAINHAND SYNTHETIC surface; the two
+	// are independent metadata channels (carry uses a separate Optional<BlockState> accessor).
+	// A non-enderman (the pig oracle) carries neither.
+	aggressive bool
+
 	// --- MOB-SUB-01/02: the *Entity hurt-pipeline state (Plan 29-02) ----------------------
 	//
 	// These are the *Entity siblings of the tickPlayer combat fields (health/lastHurt/
@@ -1919,6 +1931,28 @@ type Entity struct {
 	//	 DATA_CARRY_STATE; setCarriedBlock(BlockState)/getCarriedBlock():BlockState over SynchedEntityData.]
 	carriedBlockState block.StateID
 	carriedBlockSet   bool
+
+	// --- MOB-HOST-08 visible-state (Task, audit-flagged 1/1 expansion): the MAINHAND-SYNTHETIC ----
+	// broadcast snapshot for the Enderman block-carry. endermanCarryLastBroadcast mirrors the
+	// carried state AT THE LAST detectEndermanCarryUpdates broadcast (entity_equipment.go).
+	// Parallel to equipmentLastBroadcast[eqSlotMainHand] but kept SEPARATE because the carried
+	// MAINHAND packet is a SYNTHETIC add — it does NOT write e.equipment[MAINHAND], so a fresh
+	// carry is observable on the wire without disturbing the equipment layer's own snapshot.
+	// The first call (endermanCarryBroadcastInit == false) records the live state WITHOUT
+	// broadcasting (the spawn-time equipmentSpawnPackets tracker path is the authoritative
+	// initial wire — a seed-then-broadcast would double the MAINHAND packet for an enderman
+	// spawned mid-carry).
+	// Enderman-gated at every reader/writer (typ == entity.Enderman.ID + the carry helpers in
+	// enderman_carry_visible.go). A non-enderman (the oracle pig) NEVER reaches the
+	// detectEndermanCarryUpdates call site (tick_phases.go's endermanAiStep branch), so the
+	// pig's RNG stream gains ZERO new draws and TestPluginPigEqualsGoNativePig stays
+	// byte-identical.
+	//	[VERIFIED javap EnderMan.setCarriedBlock / getCarriedBlock: vanilla does NOT broadcast a
+	//	 MAINHAND equipment packet when the carried state changes — the MAINHAND surface here
+	//	 is a Sulfur-side visible-state addition.]
+	endermanCarryLastBroadcast    block.StateID
+	endermanCarryLastBroadcastSet bool
+	endermanCarryBroadcastInit    bool
 
 	// --- MINECART (net.minecraft.world.entity.vehicle.minecart.AbstractMinecart + OldMinecartBehavior) ---
 	//

@@ -779,6 +779,17 @@ func (t *TickLoop) tickAI() {
 		// ADDITIVE + enderman-gated (zero cost / zero RNG for every non-enderman — pig oracle untouched).
 		if e.typ == entity.Enderman.ID {
 			t.endermanAiStep(e)
+			// MOB-HOST-08 visible-state (audit-flagged 1/1 expansion): the per-tick MAINHAND-SYNTHETIC
+			// broadcast diff. On a TAKE (carry false->true with a non-zero BlockState) or LEAVE
+			// (true->false) it emits ONE single-slot ClientboundSetEquipment for MAINHAND carrying the
+			// carried block's item form — making the held block render as a held item in the client's
+			// MAINHAND slot. The companion carried-state DATA_CARRY_STATE (entity_encode.go:708
+			// carriedBlockDataEntry) handles the jar-faithful block-state wire; this function ADDS the
+			// held-item wire so a client that doesn't honor DATA_CARRY_STATE still renders the carried
+			// block. ENDERMAN-gated here as well, so the pig oracle stream is byte-identical. Per-tick:
+			// zero RNG. Cite EnderMan.getCarriedBlock / setCarriedBlock (entity_equipment.go's
+			// detectEndermanCarryUpdates docstring).
+			t.detectEndermanCarryUpdates(e)
 		}
 		// MOB-PASS-05 (rabbit hop): the Rabbit's RabbitJumpControl/RabbitMoveControl hop-vs-walk movement
 		// (Rabbit.customServerAiStep + aiStep counter). Per-type-gated like the creeper/enderman, AFTER
