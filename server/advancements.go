@@ -390,6 +390,216 @@ func (t *TickLoop) triggerInventoryChanged(p *tickPlayer, itemID string) {
 	}
 }
 
+// advItemMatches reports whether the criterion Items predicate accepts itemID. An
+// EMPTY Items slice is the any-item wildcard (a TriggerInstance whose ItemPredicate
+// Optional is absent matches every stack) -- e.g. husbandry/root consume_item has no
+// conditions. Only the literal item-id form is matched; a "#tag" entry is not expanded
+// (the tag feed is not wired -- cited), so a tag-only predicate matches nothing.
+//	[VERIFIED javap ItemPredicate: an absent/empty predicate .test == true; the id form
+//	 tests HolderSet membership -- here the resolved id list.]
+func advItemMatches(items []string, itemID string) bool {
+	if len(items) == 0 {
+		return true // absent ItemPredicate -> matches any item
+	}
+	for _, want := range items {
+		if want == itemID {
+			return true
+		}
+	}
+	return false
+}
+
+// advStringMatches reports whether a single-id predicate slice accepts id. An EMPTY
+// slice is the any wildcard (an absent Optional predicate matches everything). Shared
+// by the entity-type (player_killed_entity) and block (placed_block) predicate checks.
+func advStringMatches(want []string, id string) bool {
+	if len(want) == 0 {
+		return true
+	}
+	for _, w := range want {
+		if w == id {
+			return true
+		}
+	}
+	return false
+}
+
+// triggerPlayerKilledEntity is the minecraft:player_killed_entity trigger feed
+// (net.minecraft.advancements.triggers.KilledTrigger, CriteriaTriggers.PLAYER_KILLED_ENTITY).
+// Fired from LivingEntity.die player-kill credit path (death_mob.go) with the KILLER
+// ServerPlayer + the DYING entity type id. For every advancement whose
+// player_killed_entity criterion entity_type predicate accepts victimType, grant it.
+// A criterion with no entity_type (empty EntityTypes) is the any-mob wildcard.
+//	[VERIFIED javap KilledTrigger.trigger(ServerPlayer, Entity, DamageSource): trigger(player,
+//	 inst -> inst.matches(player, entity LootContext, source)); KilledTrigger.TriggerInstance
+//	 .matches tests the entityPredicate (entity_properties -> minecraft:entity_type) against the
+//	 killed entity. Data: adventure/kill_a_mob criterion minecraft:<mob> entity_type == that mob.]
+func (t *TickLoop) triggerPlayerKilledEntity(killer *tickPlayer, victimType string) {
+	if t.advancements == nil || killer == nil || killer.advancements == nil {
+		return
+	}
+	for _, a := range t.advancements.order {
+		for name, c := range a.Criteria {
+			if c.Trigger != "minecraft:player_killed_entity" {
+				continue
+			}
+			if advStringMatches(c.EntityTypes, victimType) {
+				t.grantAdvancementCriterion(killer, a.ID, name)
+			}
+		}
+	}
+}
+
+// triggerPlacedBlock is the minecraft:placed_block trigger feed
+// (net.minecraft.advancements.triggers.ItemUsedOnLocationTrigger, CriteriaTriggers.PLACED_BLOCK).
+// Fired from the block-place call site (block_interact.go) after the authoritative SetBlock,
+// with the placing ServerPlayer + the placed block id. For every advancement whose
+// placed_block criterion location.block predicate accepts blockID, grant it. A criterion
+// with no block (empty Blocks) is the any-block wildcard.
+//	[VERIFIED javap CriteriaTriggers.PLACED_BLOCK = ItemUsedOnLocationTrigger("placed_block");
+//	 BlockItem.place tail -> setPlacedBlock(level, pos, player, stack, state) fires
+//	 PLACED_BLOCK.trigger(player, pos, stack), matched against the location predicate
+//	 block_state_property.block. Data: husbandry/plant_seed criterion block == the crop block.]
+func (t *TickLoop) triggerPlacedBlock(p *tickPlayer, blockID string) {
+	if t.advancements == nil || p == nil || p.advancements == nil {
+		return
+	}
+	for _, a := range t.advancements.order {
+		for name, c := range a.Criteria {
+			if c.Trigger != "minecraft:placed_block" {
+				continue
+			}
+			if advStringMatches(c.Blocks, blockID) {
+				t.grantAdvancementCriterion(p, a.ID, name)
+			}
+		}
+	}
+}
+
+// triggerChangedDimension is the minecraft:changed_dimension trigger feed
+// (net.minecraft.advancements.triggers.ChangeDimensionTrigger, CriteriaTriggers.CHANGED_DIMENSION).
+// Fired from ServerPlayer.changeDimension (dimension_travel.go) with the ServerPlayer + the
+// from/to dimension keys. For every advancement whose changed_dimension criterion matches
+// (from absent or == fromDim; to absent or == toDim), grant it.
+//	[VERIFIED javap ChangeDimensionTrigger.trigger(ServerPlayer, ResourceKey from, ResourceKey to);
+//	 ChangeDimensionTrigger.TriggerInstance.matches(from, to): if from present and from != actualFrom
+//	 return false; if to present and to != actualTo return false; else true. Data: story/enter_the_nether
+//	 to == minecraft:the_nether; story/enter_the_end to == minecraft:the_end.]
+func (t *TickLoop) triggerChangedDimension(p *tickPlayer, fromDim, toDim string) {
+	if t.advancements == nil || p == nil || p.advancements == nil {
+		return
+	}
+	for _, a := range t.advancements.order {
+		for name, c := range a.Criteria {
+			if c.Trigger != "minecraft:changed_dimension" {
+				continue
+			}
+			// TriggerInstance.matches: from absent OR from == actualFrom; to absent OR to == actualTo.
+			if c.DimFrom != "" && c.DimFrom != fromDim {
+				continue
+			}
+			if c.DimTo != "" && c.DimTo != toDim {
+				continue
+			}
+			t.grantAdvancementCriterion(p, a.ID, name)
+		}
+	}
+}
+
+// triggerSleptInBed is the minecraft:slept_in_bed trigger feed
+// (net.minecraft.advancements.triggers.PlayerTrigger, CriteriaTriggers.SLEPT_IN_BED). Fired from
+// ServerPlayer.startSleeping (player_sleep.go) with the ServerPlayer. slept_in_bed is a bare
+// PlayerTrigger (a player LootContext predicate that the vanilla tree leaves empty), so every
+// slept_in_bed criterion is an unconditional grant on sleep.
+//	[VERIFIED javap CriteriaTriggers.SLEPT_IN_BED = PlayerTrigger("slept_in_bed"); ServerPlayer
+//	 .startSleeping -> CriteriaTriggers.SLEPT_IN_BED.trigger(this). Data: adventure/sleep_in_bed
+//	 criterion slept_in_bed has no conditions (empty player predicate -> matches).]
+func (t *TickLoop) triggerSleptInBed(p *tickPlayer) {
+	if t.advancements == nil || p == nil || p.advancements == nil {
+		return
+	}
+	for _, a := range t.advancements.order {
+		for name, c := range a.Criteria {
+			if c.Trigger != "minecraft:slept_in_bed" {
+				continue
+			}
+			t.grantAdvancementCriterion(p, a.ID, name)
+		}
+	}
+}
+
+// triggerTameAnimal is the minecraft:tame_animal trigger feed
+// (net.minecraft.advancements.triggers.TameAnimalTrigger, CriteriaTriggers.TAME_ANIMAL). Fired
+// from TamableAnimal.tame (attack_dispatch.go wolf/cat, parrot.go) with the taming ServerPlayer.
+// tame_animal optional entity predicate is absent in the vanilla tree (husbandry/tame_an_animal),
+// so every tame_animal criterion is an unconditional grant on a successful tame.
+//	[VERIFIED javap TameAnimalTrigger.trigger(ServerPlayer, Animal); TamableAnimal.tame ->
+//	 CriteriaTriggers.TAME_ANIMAL.trigger((ServerPlayer)owner, this). Data: husbandry/tame_an_animal
+//	 criterion tamed_animal has no conditions (empty entity predicate -> matches).]
+func (t *TickLoop) triggerTameAnimal(p *tickPlayer) {
+	if t.advancements == nil || p == nil || p.advancements == nil {
+		return
+	}
+	for _, a := range t.advancements.order {
+		for name, c := range a.Criteria {
+			if c.Trigger != "minecraft:tame_animal" {
+				continue
+			}
+			t.grantAdvancementCriterion(p, a.ID, name)
+		}
+	}
+}
+
+// triggerConsumeItem is the minecraft:consume_item trigger feed
+// (net.minecraft.advancements.triggers.ConsumeItemTrigger, CriteriaTriggers.CONSUME_ITEM). Fired
+// when a player finishes eating/drinking an item (LivingEntity.completeUsingItem -> finishUsingItem)
+// with the ServerPlayer + the consumed item id. For every advancement whose consume_item criterion
+// item predicate accepts itemID, grant it. An empty item predicate (husbandry/root) is the any-
+// consumable wildcard. NOTE: the eat/drink completeUsingItem call site is not yet wired in v1, so
+// this feed has no live caller yet -- it is the ready entry point the consume path calls when built
+// (never baked away; documented gap).
+//	[VERIFIED javap ConsumeItemTrigger.trigger(ServerPlayer, ItemStack); Player.eat/completeUsingItem
+//	 -> CriteriaTriggers.CONSUME_ITEM.trigger(serverPlayer, stack). Data: husbandry/balanced_diet
+//	 criteria item.items == the food id; husbandry/root consumed_item has no conditions.]
+func (t *TickLoop) triggerConsumeItem(p *tickPlayer, itemID string) {
+	if t.advancements == nil || p == nil || p.advancements == nil {
+		return
+	}
+	for _, a := range t.advancements.order {
+		for name, c := range a.Criteria {
+			if c.Trigger != "minecraft:consume_item" {
+				continue
+			}
+			if advItemMatches(c.Items, itemID) {
+				t.grantAdvancementCriterion(p, a.ID, name)
+			}
+		}
+	}
+}
+
+// triggerFishingRodHooked is the minecraft:fishing_rod_hooked trigger feed
+// (net.minecraft.advancements.triggers.FishingRodHookedTrigger, CriteriaTriggers.FISHING_ROD_HOOKED).
+// Fired from FishingHook.retrieve (fishing.go) with the ServerPlayer + each caught item id. For every
+// advancement whose fishing_rod_hooked criterion item predicate accepts itemID, grant it.
+//	[VERIFIED javap FishingRodHookedTrigger.trigger(ServerPlayer, ItemStack rod, FishingHook, Collection);
+//	 FishingHook.retrieve -> CriteriaTriggers.FISHING_ROD_HOOKED.trigger((ServerPlayer)owner, rod, this,
+//	 items). Data: husbandry/fishy_business criteria item.items == the fish id.]
+func (t *TickLoop) triggerFishingRodHooked(p *tickPlayer, itemID string) {
+	if t.advancements == nil || p == nil || p.advancements == nil {
+		return
+	}
+	for _, a := range t.advancements.order {
+		for name, c := range a.Criteria {
+			if c.Trigger != "minecraft:fishing_rod_hooked" {
+				continue
+			}
+			if advItemMatches(c.Items, itemID) {
+				t.grantAdvancementCriterion(p, a.ID, name)
+			}
+		}
+	}
+}
+
 // SetAdvancements loads the embedded advancement DEFINITION tree ONCE at boot and
 // stores it on the loop (read-only thereafter). main() calls it before Run. A test
 // that never calls it leaves t.advancements nil, so the login sync + triggers are

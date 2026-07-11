@@ -274,6 +274,13 @@ func (t *TickLoop) startSleepInBed(p *tickPlayer, pos pk.Position, facing block.
 	p.sleepCounter = 0
 	t.broadcastSleepingPose(p)
 	t.updateSleepingPlayerList()
+	// ADVANCEMENTS (advancements.go): minecraft:slept_in_bed — the ServerPlayer.startSleepInBed success
+	// path awards Stats.SLEEP_IN_BED then fires CriteriaTriggers.SLEPT_IN_BED.trigger(this). slept_in_bed
+	// is a bare PlayerTrigger (empty predicate), so this unconditionally grants adventure/sleep_in_bed.
+	// Reached only on the success return (all gates passed), matching the vanilla ordering.
+	//	[VERIFIED javap ServerPlayer.startSleepInBed success: awardStat(Stats.SLEEP_IN_BED);
+	//	 CriteriaTriggers.SLEPT_IN_BED.trigger(this).]
+	t.triggerSleptInBed(p)
 	return bedProblemNone
 }
 

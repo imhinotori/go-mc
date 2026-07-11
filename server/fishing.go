@@ -42,6 +42,7 @@ import (
 	"math"
 
 	"github.com/imhinotori/sulfur/data/entity"
+	"github.com/imhinotori/sulfur/data/registryid"
 	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/level/component"
 	"github.com/imhinotori/sulfur/level/loot"
@@ -512,6 +513,15 @@ func (t *TickLoop) fishingRetrieve(e *Entity, owner *tickPlayer) int {
 			xp := e.fishingRNG.nextInt(6) + 1
 			t.fishingAwardXP(owner, xp)
 			// itemStack.is(FISHES) -> awardStat(FISH_CAUGHT): stat tracking is a cited deferral.
+			// ADVANCEMENTS (advancements.go): minecraft:fishing_rod_hooked — FishingHook.retrieve fires
+			// CriteriaTriggers.FISHING_ROD_HOOKED.trigger((ServerPlayer)owner, rod, this, items) with the
+			// caught stacks. The trigger tests each criterion item predicate against the caught item id;
+			// vanilla fires once with the full collection, but the per-item feed into the idempotent grant
+			// is equivalent (a criterion matched by ANY caught item is granted once). Drives
+			// husbandry/fishy_business (cod/salmon/pufferfish/tropical_fish). CITE: FishingHook.retrieve.
+			if int(stack.ItemID) >= 0 && int(stack.ItemID) < len(registryid.Item) {
+				t.triggerFishingRodHooked(owner, registryid.Item[stack.ItemID])
+			}
 		}
 		dmg = 1
 	}

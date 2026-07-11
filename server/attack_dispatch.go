@@ -1922,7 +1922,10 @@ func (t *TickLoop) tryToTameWolf(p *tickPlayer, mob *Entity) {
 		// setOwner(player): store the owner ref (the THIN entity id for v1; the wire owner-UUID broadcast is
 		// deferred -- the server-side ref drives FollowOwner/OwnerHurt + the sit-toggle owner gate).
 		mob.ownerUUID = p.entityID
-		// (TAME_ANIMAL advancement trigger on a ServerPlayer: deferred -- no advancement system in v1.)
+		// ADVANCEMENTS (advancements.go): TamableAnimal.tame fires CriteriaTriggers.TAME_ANIMAL
+		// .trigger((ServerPlayer)player, this) after setOwner. tame_animal has an empty predicate, so
+		// this unconditionally grants husbandry/tame_an_animal. CITE: TamableAnimal.tame.
+		t.triggerTameAnimal(p)
 
 		// navigation.stop(); setTarget(null): clear any wander/combat want so the freshly-tamed wolf settles.
 		if mob.ai != nil {
@@ -2030,6 +2033,8 @@ func (t *TickLoop) tryToTameCat(p *tickPlayer, mob *Entity) {
 		// MAX_HEALTH stays 10 (no wolf-style 8->40 bump). Flip the tame flag + record the owner.
 		mob.tame = true
 		mob.ownerUUID = p.entityID
+		// ADVANCEMENTS: TamableAnimal.tame -> CriteriaTriggers.TAME_ANIMAL.trigger(serverPlayer, this).
+		t.triggerTameAnimal(p)
 		mob.orderedToSit = true // setOrderedToSit(true): the freshly-tamed cat sits
 		// broadcastEntityEvent(this, (byte)7): the taming-SUCCESS HEART burst.
 		t.broadcastToTrackers(mob.id, encodeEntityEvent(mob.id, entityEventWolfTameHearts))

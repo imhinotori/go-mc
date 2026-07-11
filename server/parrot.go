@@ -178,6 +178,10 @@ func (t *TickLoop) tryToTameParrot(p *tickPlayer, mob *Entity) {
 		// so MAX_HEALTH stays 6 (no health bump). Flip the tame flag + record the owner.
 		mob.tame = true
 		mob.ownerUUID = p.entityID
+		// ADVANCEMENTS (advancements.go): TamableAnimal.tame -> CriteriaTriggers.TAME_ANIMAL
+		// .trigger((ServerPlayer)player, this). tame_animal has an empty predicate -> grants
+		// husbandry/tame_an_animal. CITE: TamableAnimal.tame.
+		t.triggerTameAnimal(p)
 		// broadcastEntityEvent(this, (byte)7): the taming-SUCCESS HEART burst.
 		t.broadcastToTrackers(mob.id, encodeEntityEvent(mob.id, entityEventWolfTameHearts))
 		return

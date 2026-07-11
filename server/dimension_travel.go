@@ -152,7 +152,29 @@ func (t *TickLoop) changeDimension(p *tickPlayer, targetDim int) {
 		t.spawnEndDragonFight()
 	}
 
+	// ADVANCEMENTS (advancements.go): minecraft:changed_dimension — ServerPlayer.changeDimension fires
+	// CriteriaTriggers.CHANGED_DIMENSION.trigger(this, fromLevel.dimension(), toLevel.dimension()) after
+	// the teleport. The from/to dimension ResourceKeys drive the to/from predicate match (story/
+	// enter_the_nether to==the_nether, story/enter_the_end to==the_end, nether/root to==the_nether).
+	//	[VERIFIED javap ServerPlayer.changeDimension: CriteriaTriggers.CHANGED_DIMENSION.trigger(this,
+	//	 serverLevel.dimension(), serverLevel2.dimension()).]
+	t.triggerChangedDimension(p, dimensionResourceKey(fromDim), dimensionResourceKey(targetDim))
+
 	udebugPlayer(p, "dimension", "changed %d -> %d at (%.1f,%.1f,%.1f)", fromDim, targetDim, tx, ty, tz)
+}
+
+// dimensionResourceKey maps a dimension index (dimOverworld/dimNether/dimEnd) to its Level ResourceKey
+// string (the ChangeDimensionTrigger to/from key form) — the same values ClientboundRespawn writes.
+// CITE: Level.OVERWORLD/NETHER/END ResourceKey names.
+func dimensionResourceKey(dim int) string {
+	switch dim {
+	case dimNether:
+		return netherDimensionName
+	case dimEnd:
+		return endDimensionName
+	default:
+		return overworldDimensionName
+	}
 }
 
 // portalTransitionTicks / portalCooldownTicks are NetherPortalBlock.getPortalTransitionTime + the

@@ -91,11 +91,31 @@ type Advancement struct {
 // IsRoot mirrors Advancement.isRoot() == parent.isEmpty().
 func (a *Advancement) IsRoot() bool { return a.Parent == "" }
 
-// Criterion carries the trigger id + (for minecraft:inventory_changed) the set of
-// item ids that satisfy it. Only the fields the WIRED triggers read are parsed;
-// other trigger conditions are ignored (the criterion still exists so the
-// requirements grouping stays intact, but only wired triggers can grant it).
+// Criterion carries the trigger id + the parsed CONDITION fields the WIRED triggers
+// read. Only the fields the wired triggers consult are parsed; other trigger
+// conditions are ignored (the criterion still exists so the requirements grouping
+// stays intact, but only wired triggers can grant it). The parsed fields mirror the
+// vanilla TriggerInstance predicate fields 1:1 for the wired triggers:
+//
+//   - inventory_changed / consume_item / fishing_rod_hooked : Items -- the item ids
+//     an ItemPredicate accepts (an EMPTY Items means "any item", matching a
+//     TriggerInstance with an empty/absent ItemPredicate that matches every stack).
+//   - player_killed_entity : EntityTypes -- the entity-type ids the entity_properties
+//     predicate's minecraft:entity_type accepts (EMPTY means "any entity").
+//   - placed_block : Blocks -- the block ids the ItemUsedOnLocationTrigger location
+//     predicate's block_state_property accepts (EMPTY means "any block").
+//   - changed_dimension : DimTo / DimFrom -- the ChangeDimensionTrigger to/from
+//     dimension keys ("" means the Optional is absent -> that side matches any).
+//
+// A criterion with NO parsed condition fields (all slices empty, DimTo/DimFrom "")
+// is a WILDCARD: the wired trigger for its id grants it unconditionally, matching a
+// TriggerInstance whose predicate Optionals are all empty (slept_in_bed, tame_animal,
+// and the husbandry/root consume_item all have empty conditions).
 type Criterion struct {
-	Trigger string   // e.g. "minecraft:inventory_changed"
-	Items   []string // resolved item ids for inventory_changed ("#tag" left as-is; caller expands)
+	Trigger     string   // e.g. "minecraft:inventory_changed"
+	Items       []string // item ids for inventory_changed/consume_item/fishing_rod_hooked ("#tag" left as-is)
+	EntityTypes []string // entity-type ids for player_killed_entity (entity_properties -> entity_type)
+	Blocks      []string // block ids for placed_block (location -> block_state_property.block)
+	DimTo       string   // changed_dimension "to" ("" == Optional absent -> matches any)
+	DimFrom     string   // changed_dimension "from" ("" == Optional absent -> matches any)
 }

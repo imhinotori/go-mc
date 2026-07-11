@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 
+	"github.com/imhinotori/sulfur/data/registryid"
 	"github.com/imhinotori/sulfur/level/component"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
@@ -155,6 +156,17 @@ func (t *TickLoop) broadcastInventoryChanges(p *tickPlayer, inv *Inventory, befo
 			continue // remoteSlots[i] == item: synchronizeSlotToRemote sends nothing
 		}
 		p.client.Send(containerSetSlot(playerContainerID, inv.stateID, int16(i), now[i]))
+		// ADVANCEMENTS (advancements.go): minecraft:inventory_changed — vanilla drives
+		// InventoryChangeTrigger from Inventory.setChanged -> ServerPlayer.inventoryChanged(container),
+		// which scans the whole inventory. Fired here for each CHANGED slot's new item id (the diff seam
+		// AbstractContainerMenu.broadcastChanges runs on the player inventory): a crafted/moved item
+		// landing in a slot grants inventory_changed criteria that list it (story/root crafting_table).
+		// The grant is idempotent, so overlapping with the item-pickup feed (item_entity.go) is harmless.
+		// Only fired when this is the player inventory window (containerId 0). CITE: Inventory.setChanged
+		// -> ServerPlayer.inventoryChanged -> CriteriaTriggers.INVENTORY_CHANGED.trigger.
+		if int(now[i].ItemID) >= 0 && int(now[i].ItemID) < len(registryid.Item) && now[i].Count > 0 {
+			t.triggerInventoryChanged(p, registryid.Item[now[i].ItemID])
+		}
 	}
 }
 

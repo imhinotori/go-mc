@@ -89,15 +89,27 @@ func (t *TickLoop) dieEntity(e *Entity, src damageSource) {
 	// index). Nil-guarded so a mob killed by the environment or a stats-less player is a no-op.
 	//	[VERIFIED javap Player.awardKillScore / LivingEntity.dropAllDeathLoot flow: on a player kill
 	//	 the killer awards Stats.ENTITY_KILLED.get(type) + Stats.MOB_KILLS. The minecraft:player_killed_entity
-	//	 ADVANCEMENT trigger (entity_type predicate) is DEFERRED here — the predicate-condition feed is
-	//	 not parsed (only inventory_changed item ids are), so kill_a_mob et al. are not granted; the
-	//	 kill STAT (the load-bearing stats-screen observable) is wired.]
+	//	 ADVANCEMENT trigger (entity_type predicate) is now WIRED below via triggerPlayerKilledEntity (the
+	//	 victim type id drives the entity_type match: adventure/kill_a_mob et al.); the kill STAT (the
+	//	 stats-screen observable) is credited alongside it.]
 	if src.attacker != 0 {
-		if killer := t.playerByEntityID(src.attacker); killer != nil && killer.stats != nil {
-			if int(e.typ) >= 0 && int(e.typ) < len(registryid.EntityType) {
-				killer.stats.increment(statKey{typeID: StatTypeKilled, valueID: int32(e.typ)}, 1)
+		if killer := t.playerByEntityID(src.attacker); killer != nil {
+			if killer.stats != nil {
+				if int(e.typ) >= 0 && int(e.typ) < len(registryid.EntityType) {
+					killer.stats.increment(statKey{typeID: StatTypeKilled, valueID: int32(e.typ)}, 1)
+				}
+				killer.stats.incrementCustom("minecraft:mob_kills", 1)
 			}
-			killer.stats.incrementCustom("minecraft:mob_kills", 1)
+			// ADVANCEMENTS (advancements.go): minecraft:player_killed_entity — CriteriaTriggers
+			// .PLAYER_KILLED_ENTITY.trigger((ServerPlayer)attacker, this, source) fired from LivingEntity.die
+			// on a player kill. The victim type id (registryid.EntityType[e.typ]) drives the entity_type
+			// predicate match (adventure/kill_a_mob et al.). Nil-guarded on the tree/player-advancements
+			// inside the trigger; a killer without advancements (test loop) is a no-op.
+			//	[VERIFIED javap Player.killedEntity/LivingEntity.die -> CriteriaTriggers.PLAYER_KILLED_ENTITY
+			//	 .trigger(serverPlayer, this, damageSource).]
+			if int(e.typ) >= 0 && int(e.typ) < len(registryid.EntityType) {
+				t.triggerPlayerKilledEntity(killer, registryid.EntityType[e.typ])
+			}
 		}
 	}
 

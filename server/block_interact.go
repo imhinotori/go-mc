@@ -497,6 +497,17 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 		return // !canPlace() / SetBlock failed: no consume (matches placeBlock returning false -> FAIL)
 	}
 
+	// ADVANCEMENTS (advancements.go): minecraft:placed_block — BlockItem.place tail fires
+	// CriteriaTriggers.PLACED_BLOCK.trigger((ServerPlayer)player, pos, stack) after a successful place.
+	// The placed block id (block.StateList[placeState].ID()) drives the location.block predicate match
+	// (husbandry/plant_seed crops et al.). Reached only when the authoritative SetBlock succeeded
+	// (placed==true); nil-guarded on the tree/player-advancements inside the trigger.
+	//	[VERIFIED javap BlockItem.place -> BlockItem.setPlacedBlock -> CriteriaTriggers.PLACED_BLOCK
+	//	 .trigger(serverPlayer, pos, stack).]
+	if int(placeState) >= 0 && int(placeState) < len(block.StateList) {
+		t.triggerPlacedBlock(p, block.StateList[placeState].ID())
+	}
+
 	// BlockItem.place tail -> stack.consume(1, player). ItemStack.consume shrinks the stack by 1
 	// UNLESS player.hasInfiniteMaterials() (CREATIVE). ServerPlayerGameMode.useItemOn's creative
 	// count save/restore wraps the same guard; both collapse to "shrink in survival, keep in
