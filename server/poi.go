@@ -63,6 +63,15 @@ var (
 	poiTypeMeeting = &poiType{key: "minecraft:meeting", maxTickets: 32, validRange: 6}
 )
 
+// poiTypeNetherPortal is PoiTypes.NETHER_PORTAL -- register(NETHER_PORTAL, getBlockStates(NETHER_PORTAL),
+// 0, 1): maxTickets=0, validRange=1 (VERIFIED CFR PoiTypes.bootstrap: iconst_0 iconst_1 for the two int
+// args). It is NOT a #village member, so it never affects the raid/village machinery; it exists purely so
+// PortalForcer.findClosestPortalPosition can query getInSquare(is(NETHER_PORTAL), pos, radius, ANY) to
+// find an existing destination portal. maxTickets=0 means a fresh record has freeTickets==0 -> hasSpace()
+// is false, but findClosestPortalPosition queries with Occupancy.ANY (no space/occupied filter), so the
+// zero-ticket record is still returned. CITE: PoiTypes.bootstrap (NETHER_PORTAL register(...,0,1)).
+var poiTypeNetherPortal = &poiType{key: "minecraft:nether_portal", maxTickets: 0, validRange: 1}
+
 // The 13 JOB-SITE POI types — the #minecraft:acquirable_job_site tag members. Every job-site type is
 // register(KEY, <block(s)>, maxTickets=1, validRange=1) (VERIFIED PoiTypes.bootstrap: each register call
 // passes 1, 1 for the two int args). A villager claims one via AcquirePoi (poiManager.take ->
@@ -157,7 +166,21 @@ func poiTypeForState(s block.StateID) *poiType {
 	if jt := jobSitePoiForState(s); jt != nil { // #acquirable_job_site block -> its job-site POI
 		return jt
 	}
+	if isNetherPortalBlock(s) { // Blocks.NETHER_PORTAL -> NETHER_PORTAL
+		return poiTypeNetherPortal
+	}
 	return nil
+}
+
+// isNetherPortalBlock reports whether the state is a nether_portal (every nether_portal AXIS state maps
+// to the NETHER_PORTAL poi type, exactly as PoiTypes.getBlockStates(Blocks.NETHER_PORTAL) enumerates
+// them). Matched on the concrete block type. CITE: PoiTypes.bootstrap NETHER_PORTAL block set.
+func isNetherPortalBlock(s block.StateID) bool {
+	if int(s) < 0 || int(s) >= len(block.StateList) {
+		return false
+	}
+	_, isPortal := block.StateList[s].(block.NetherPortal)
+	return isPortal
 }
 
 // jobSitePoiForState maps a block state to its job-site PoiType via the block id (PoiTypes.
@@ -561,16 +584,45 @@ func (r *region) ensurePoiManager() *poiManager {
 // seams (the LevelChunk.setBlockState POI-update analogue). VERIFIED ServerLevel.updatePOIOnBlockStateChange.
 // Runs in the owning region's context (t.cur()).
 func (t *TickLoop) updatePoiOnBlockStateChange(pos pk.Position, oldState, newState block.StateID) {
+	t.updatePoiOnBlockStateChangeIn(dimOverworld, pos, oldState, newState)
+}
+
+// updatePoiOnBlockStateChangeIn is the dimension-aware form: it routes the POI add/remove to the POI
+// manager owning the given dimension (overworld -> region; nether/End -> the coordinator-owned managers),
+// so a nether_portal built in the nether is indexed in the nether POI store (and vice-versa). The
+// original updatePoiOnBlockStateChange forwards to dimOverworld for every existing (overworld) caller.
+// CITE: ServerLevel.updatePOIOnBlockStateChange (each ServerLevel has its own PoiManager).
+func (t *TickLoop) updatePoiOnBlockStateChangeIn(dim int, pos pk.Position, oldState, newState block.StateID) {
 	oldType := poiTypeForState(oldState)
 	newType := poiTypeForState(newState)
 	if oldType == newType {
 		return // Objects.equals(oldType, newType) -> no POI change
 	}
 	if oldType != nil {
-		t.cur().ensurePoiManager().remove(pos)
+		t.dimPoiManager(dim).remove(pos)
 	}
 	if newType != nil {
-		t.cur().ensurePoiManager().add(pos, newType)
+		t.dimPoiManager(dim).add(pos, newType)
+	}
+}
+
+// dimPoiManager returns the POI manager for a dimension, lazily constructing it. The overworld uses the
+// region-owned manager (ensurePoiManager); the nether and End use the dedicated coordinator-owned managers
+// (netherPoiManager / endPoiManager). CITE: ServerLevel.getPoiManager (one PoiManager per level).
+func (t *TickLoop) dimPoiManager(dim int) *poiManager {
+	switch dim {
+	case dimNether:
+		if t.netherPoiManager == nil {
+			t.netherPoiManager = newPoiManager()
+		}
+		return t.netherPoiManager
+	case dimEnd:
+		if t.endPoiManager == nil {
+			t.endPoiManager = newPoiManager()
+		}
+		return t.endPoiManager
+	default:
+		return t.cur().ensurePoiManager()
 	}
 }
 

@@ -96,6 +96,7 @@ func (r chunkReady) applyTo(t *TickLoop) {
 			return
 		}
 		t.endWorld.Insert(r.res.Pos, r.res.Chunk)
+		t.indexChunkPortals(dimEnd, r.res.Pos, r.res.Chunk)
 		return
 	}
 	if r.dimension == dimNether {
@@ -107,6 +108,7 @@ func (r chunkReady) applyTo(t *TickLoop) {
 			return
 		}
 		t.netherWorld.Insert(r.res.Pos, r.res.Chunk)
+		t.indexChunkPortals(dimNether, r.res.Pos, r.res.Chunk)
 		return
 	}
 	if t.world() == nil {
@@ -117,6 +119,7 @@ func (r chunkReady) applyTo(t *TickLoop) {
 		return
 	}
 	t.world().Insert(r.res.Pos, r.res.Chunk)
+	t.indexChunkPortals(dimOverworld, r.res.Pos, r.res.Chunk)
 	// Phase-27 N=2 ROUTING: a chunk's per-region containers + fluid kicks + structure spawns must land
 	// in the region that OWNS this column, NOT blindly globalRegion. chunkReady.applyTo runs on the
 	// COORDINATOR (quiescent post-barrier), where cur() would otherwise fall back to region 0 and strand
@@ -221,6 +224,16 @@ type TickLoop struct {
 	// coordinator chunkReady drain (tagged dimension:dimNether so applyTo inserts into netherWorld).
 	netherWorld  *world.ChunkManager
 	netherWorker *world.Worker
+
+	// netherPoiManager / endPoiManager are the per-DIMENSION Point-of-Interest managers for the nether
+	// and End worlds (the overworld's poiManager hangs off the region, region.go). The overworld is
+	// region-partitioned so its POI lives on the region; the nether/End are single non-region worlds, so
+	// their POI managers live here on the coordinator (tick-owned, TICK-05). They index NETHER_PORTAL
+	// records (poiTypeForState) so PortalForcer.findClosestPortalPosition can locate an existing
+	// destination portal in the target dimension. nil until the first POI is registered (dimPoiManager
+	// lazily builds them). CITE: ServerLevel.getPoiManager (one PoiManager per level).
+	netherPoiManager *poiManager
+	endPoiManager    *poiManager
 
 	// endWorld / endWorker are the THIRD dimension (the_end): a dedicated ChunkManager +
 	// off-tick generate/load worker, separate from the region-partitioned overworld and the

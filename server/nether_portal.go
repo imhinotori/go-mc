@@ -79,6 +79,25 @@ func (d portalDir) opposite() portalDir {
 	}
 }
 
+// clockWise is Direction.getClockWise() for the horizontal directions (the no-arg form delegates to
+// getClockWiseY -- clockwise viewed from above): NORTH->EAST->SOUTH->WEST->NORTH. createPortal uses it to
+// pick the frame sideways axis (direction.getClockWise()). CITE: net.minecraft.core.Direction.getClockWise.
+func (d portalDir) clockWise() portalDir {
+	switch d {
+	case portalNorth:
+		return portalEast
+	case portalEast:
+		return portalSouth
+	case portalSouth:
+		return portalWest
+	case portalWest:
+		return portalNorth
+	default:
+		return d
+	}
+}
+
+
 // portalMove offsets pos by n steps of dir (BlockPos.relative(direction, n) / MutableBlockPos.move).
 func portalMove(pos pk.Position, dir portalDir, n int) pk.Position {
 	return pk.Position{X: pos.X + dir.dx*n, Y: pos.Y + dir.dy*n, Z: pos.Z + dir.dz*n}
@@ -340,7 +359,12 @@ func (t *TickLoop) createPortalBlocks(sh portalShape) {
 	for h := 0; h < sh.height; h++ {
 		for w := 0; w < sh.width; w++ {
 			cell := portalMove(portalMove(sh.bottomLeft, portalUp, h), sh.rightDir, w)
+			prev, _ := t.world().GetBlock(cell, dimMinY)
 			if t.world().SetBlock(cell, portalState, dimMinY) {
+				// updatePOIOnBlockStateChange: index the freshly-lit portal cell as a NETHER_PORTAL POI so a
+				// return trip resolves back to THIS portal (PortalForcer.findClosestPortalPosition). This is
+				// the overworld ignite path (inPortalDimension v1 overworld), so index into dimOverworld.
+				t.updatePoiOnBlockStateChangeIn(dimOverworld, cell, prev, portalState)
 				t.broadcastBlockUpdate(cell, portalState)
 			}
 		}

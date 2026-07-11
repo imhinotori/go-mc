@@ -67,9 +67,17 @@ func TestChangeDimensionToNether(t *testing.T) {
 	if p.secs != dimNetherSecs {
 		t.Fatalf("secs = %d, want %d (nether)", p.secs, dimNetherSecs)
 	}
-	// Position coordinate-scaled 8:1: (800,80) -> (100,10).
-	if p.x != 100.0 || p.z != 10.0 {
-		t.Fatalf("position = (%.1f,_,%.1f), want (100,_,10) [8:1 scale]", p.x, p.z)
+	// Position: the destination is now resolved by the PortalForcer (findClosestPortalPosition ->
+	// createPortal). The nether world is empty here (no portal, no loaded chunks), so createPortal takes the
+	// NOTHING_FOUND forced-platform fallback at the clamped 8:1-scaled column (800,80)->(100,10): the frame
+	// bottomLeft is (exitPos.x - direction.stepX(EAST=1), clamp(y,70,worldTop-9), exitPos.z) == (99,70,10),
+	// and the player is centered on that base cell -> (99.5, 70, 10.5). CITE: PortalForcer.createPortal
+	// forced-platform fallback; the 8:1 scale is still applied upstream (scaledDimensionPos).
+	if p.x != 99.5 || p.z != 10.5 {
+		t.Fatalf("position = (%.1f,_,%.1f), want (99.5,_,10.5) [8:1 scale -> forced portal base center]", p.x, p.z)
+	}
+	if p.y != 70.0 {
+		t.Fatalf("position Y = %.1f, want 70 (forced-platform clamp floor)", p.y)
 	}
 	// Streamer reset so the nether ring re-streams.
 	if p.centerSent {

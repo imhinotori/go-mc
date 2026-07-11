@@ -93,6 +93,23 @@ func (t *TickLoop) changeDimension(p *tickPlayer, targetDim int) {
 		tx, tz = t.spawnPoint.X, t.spawnPoint.Z
 	}
 
+	// NETHER PORTAL DESTINATION (overworld<->nether): NetherPortalBlock.getPortalDestination ->
+	// getExitPortal -> PortalForcer.findClosestPortalPosition (else createPortal). This RESOLVES the real
+	// destination portal (an existing one within 16 blocks in the nether / 128 in the overworld, else a
+	// freshly built 4x5 frame), REPLACING the naive coordinate-scaled-column-with-fixed-Y landing. The
+	// clamp-to-bounds of the scaled entry point is DimensionType.getTeleportationScale + WorldBorder
+	// .clampToBounds (getPortalDestination offsets 78-101); here scaledDimensionPos already applied the 8:1
+	// scale, so we clamp X/Z and search from that column. resolvedY carries the portal Y (the standable cell
+	// at the portal base) so step (3) uses it instead of changeDimensionTargetY. CITE: NetherPortalBlock
+	// .getPortalDestination / getExitPortal + PortalForcer.findClosestPortalPosition / createPortal.
+	resolvedY, haveResolvedY := 0.0, false
+	if (fromDim == dimOverworld && targetDim == dimNether) || (fromDim == dimNether && targetDim == dimOverworld) {
+		if rx, ry, rz, ok := t.resolveNetherPortalDestination(targetDim, tx, tz); ok {
+			tx, tz = rx, rz
+			resolvedY, haveResolvedY = ry, true
+		}
+	}
+
 	// (1) Respawn into the target dimension's spawn-info. KEEP_ALL_DATA(3): a dimension change keeps
 	// the player's attributes/inventory, only rebuilding the level.
 	p.client.Send(changeDimensionRespawnPacket(targetDim))
@@ -107,6 +124,9 @@ func (t *TickLoop) changeDimension(p *tickPlayer, targetDim int) {
 	// mid-nether Y above the lava sea so the player does not spawn embedded). For the overworld return,
 	// reuse the world spawn Y. This is the placement seam the PortalForcer's destination search refines.
 	ty := changeDimensionTargetY(t, targetDim)
+	if haveResolvedY {
+		ty = resolvedY // the PortalForcer-resolved portal Y (found or freshly built)
+	}
 	p.x, p.y, p.z = tx, ty, tz
 	p.center = chunkCenterOf(int32(math.Floor(tx)), int32(math.Floor(tz)))
 	teleportID := t.nextTeleportID()
