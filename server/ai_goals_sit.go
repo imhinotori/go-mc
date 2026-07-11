@@ -138,3 +138,24 @@ func (t *TickLoop) setWolfInSittingPose(e *Entity, sitting bool) {
 
 // Compile-time assertion: sitWhenOrderedToGoal IS a server.Goal.
 var _ Goal = (*sitWhenOrderedToGoal)(nil)
+
+// --- MOB-AGGRESSIVE (Mob.setAggressive — the raise-arm client-visual metadata bit) -----------------
+//
+// setMobAggressive ports Mob.setAggressive(boolean): the read-modify-write of DATA_MOB_FLAGS_ID bit
+// 0x04 — the raise-arm/follow-through bit the ZombieAttackGoal (jar:
+// ZombieAttackGoal.tick raiseArmTicks gate) + MeleeAttackGoal.start drive. The mirror field on the
+// entity (Entity.aggressive, entity.go) tracks the per-bit state; the broadcast re-composes the
+// whole DATA_MOB_FLAGS_ID byte via mobFlagsByteFor (entity_encode.go) and pushes it via
+// encodeSetEntityDataByID, the same seam wolfFlagsDataEntry uses. Idempotent on no change (skip
+// when e.aggressive == value, the vanilla SynchedEntityData's dirty-only push).
+//
+//	[VERIFIED javap Mob.setAggressive: get(DATA_MOB_FLAGS_ID) -> byte; (set? OR 0x04 : AND-NOT 0x04)
+//	 -> Byte.valueOf; set(DATA_MOB_FLAGS_ID).] Cite ZombieAttackGoal.stop + MeleeAttackGoal.start.
+func (t *TickLoop) setMobAggressive(e *Entity, aggressive bool) {
+	if e.aggressive == aggressive {
+		return // no change — no broadcast (matches SynchedEntityData's dirty-only push)
+	}
+	e.aggressive = aggressive
+	flags := mobFlagsByteFor(false /* noAi */, e.leftHanded, e.aggressive)
+	t.broadcastToTrackers(e.id, encodeSetEntityDataByID(e.id, mobFlagsDataEntry(flags)))
+}

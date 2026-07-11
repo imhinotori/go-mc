@@ -134,14 +134,26 @@ func (g *meleeAttackGoal) requiresUpdateEveryTick() bool { return true }
 // zeroing ticksUntilNextAttack lets the first in-reach swing land without waiting out a stale cooldown
 // carried over from a PRIOR engagement of the SAME goal instance (the goal struct is reused across
 // start/stop cycles, so ticksUntilNextAttack must be reset here, not left at its last value). The
-// setAggressive(true) raise-arm client visual is a cited metadata deferral (DATA_ZOMBIE bit), matching
-// newMeleeAttackGoal's note. NO RNG.
+// setAggressive(true) raise-arm client visual is now wired: setMobAggressive(e, true) reads-modifies-
+// writes DATA_MOB_FLAGS_ID byte bit 0x04 (the same DATA_ZOMBIE bit) and broadcasts it to every
+// tracker. NO RNG.
 //
 //	[VERIFIED javap MeleeAttackGoal.start: navigation.moveTo(path, speedModifier); setAggressive(true);
 //	 ticksUntilNextPathRecalculation = 0; ticksUntilNextAttack = 0.]
-func (g *meleeAttackGoal) start(_ *TickLoop, _ *Entity) {
+func (g *meleeAttackGoal) start(t *TickLoop, e *Entity) {
 	g.ticksUntilNextPathRecalculation = 0
 	g.ticksUntilNextAttack = 0
+	t.setMobAggressive(e, true) // setAggressive(true) — DATA_MOB_FLAGS_ID 0x04 PUSH to trackers
+}
+
+// stop ports MeleeAttackGoal.stop + ZombieAttackGoal.stop: setAggressive(false); resetAttackCooldown
+// is NOT called (vanilla only resets on the engage side). The aggressive=false push restores the
+// idle Mob DATA_MOB_FLAGS byte (re-composed from the per-bit mirrors via mobFlagsByteFor). NO RNG.
+//
+//	[VERIFIED javap MeleeAttackGoal.stop: nav.stop() + resetPath(); ZombieAttackGoal.stop: super.stop()
+//	 + zombie.setAggressive(false).]
+func (g *meleeAttackGoal) stop(t *TickLoop, e *Entity) {
+	t.setMobAggressive(e, false) // setAggressive(false) — DATA_MOB_FLAGS_ID 0x04 CLEAR
 }
 
 // newSpiderAttackGoal builds the Spider$SpiderAttackGoal delta: a MeleeAttackGoal whose

@@ -713,6 +713,138 @@ func carriedBlockDataEntry(sid block.StateID, present bool) entityDataEntry {
 	}
 }
 
+// --- MOB-CLIENT-VISUAL (Phase B1): the MOB_FLAGS_ID byte (Mob.setAggressive bit 0x04) -------------------
+//
+// Mob.DATA_MOB_FLAGS_ID is a BYTE accessor shared by setLeftHanded (bit 0x02) + setNoAi (bit 0x01) +
+// setAggressive (bit 0x04) + the higher Mob-specific bits (v1:0). Mob.setAggressive's bytecode
+// (javap'd this session) does the read-modify-write: existingByte = get(DATA_MOB_FLAGS_ID); then
+// either OR with iconst_4 (set) or AND-NOT with bipush -5 (clear); then set(DATA_MOB_FLAGS_ID).
+//	[VERIFIED javap Mob.setAggressive: iload_1; ifeq 35; iload_2; iconst_4; ior; i2b; ... ; iload_2;
+//	 bipush -5; iand; i2b; ... SynchedEntityData.set(DATA_MOB_FLAGS_ID, Byte).]
+const dataMobFlagsIndex uint8 = 15
+
+// mobFlagsByteFor composes the DATA_MOB_FLAGS_ID byte from the per-bit mirrors — the aggressive bit
+// (set by melee-goal engagement), the leftHanded bit (set at finalizeSpawn's 5% roll, drainStructure
+// spawns only), and the noAi bit (a /summon admin gate, v1: always false — no admin subsystem).
+// Higher bits (v1:0) leave the rest of the byte zero. Identical bit layout to Mob.setAggressive +
+// Mob.setLeftHanded + Mob.setNoAi. Cite Mob.defineSynchedData (DATA_MOB_FLAGS_ID = EntityDataAccessor<Byte>).
+func mobFlagsByteFor(noAi, leftHanded, aggressive bool) int8 {
+	var b int8
+	if noAi {
+		b |= 0x01
+	}
+	if leftHanded {
+		b |= 0x02
+	}
+	if aggressive {
+		b |= 0x04
+	}
+	return b
+}
+
+// mobFlagsDataEntry builds the single SynchedEntityData$DataValue entry that carries the Mob
+// DATA_MOB_FLAGS_ID byte. It frames on the wire as Byte(dataMobFlagsIndex=15) + VarInt(byteSerializerID=0)
+// + Byte(flagsByte) (entityDataEntry.WriteTo), the same shape as woolDataEntry (Mob's BYTE codec ==
+// ByteBufCodecs.BYTE == one byte, pk.Byte). Used by setMobAggressive's broadcast.
+func mobFlagsDataEntry(flagsByte int8) entityDataEntry {
+	return entityDataEntry{
+		index:        dataMobFlagsIndex,
+		serializerID: byteSerializerID,
+		value:        pk.Byte(flagsByte), // EntityDataSerializers.BYTE codec == ByteBufCodecs.BYTE
+	}
+}
+
+// --- CREEPER SWELL (Creeper.DATA_SWELL_DIR / DATA_IS_POWERED / DATA_IS_IGNITED) ----------------------
+//
+// Creeper.defineSynchedData defines three accessors in this exact order (Entity8 + LivingEntity7 +
+// Mob15 = 15, then Cave/Spider's base extends Monster adds 0, so Creeper declares on top):
+//   - DATA_SWELL_DIR    (INT,    default -1)  -> index 16 — the +1/−1/0 fuse-direction
+//   - DATA_IS_POWERED   (BOOLEAN, default false) -> index 17 — the charged/lightning flag
+//   - DATA_IS_IGNITED   (BOOLEAN, default false) -> index 18 — the currently-ignited fuse flag
+//	[VERIFIED javap Creeper.defineSynchedData this session: Monster.defineSynchedData (no new accessors)
+//	 then DATA_SWELL_DIR (define INT, -1) + DATA_IS_POWERED (define BOOLEAN, false) + DATA_IS_IGNITED
+//	 (define BOOLEAN, false). Hierarchy count Entity(8) + LivingEntity(7) + Mob(15) -> 16/17/18.]
+const (
+	dataSwellDirIndex     uint8 = 16
+	dataCreeperPoweredIdx uint8 = 17
+	dataCreeperIgnitedIdx uint8 = 18
+)
+
+// creeperSwellDataEntry builds the single SynchedEntityData$DataValue entry that carries a Creeper's
+// DATA_SWELL_DIR — the signed INT (VarInt, -1 deflating / 0 idle / 1 swelling) that drives the
+// fuse-direction client visual. It frames on the wire as Byte(dataSwellDirIndex=16) +
+// VarInt(intSerializerID=1) + VarInt(swellDir) (entityDataEntry.WriteTo), mirroring airDataEntry's
+// INT pattern. Cite Creeper.getSwellDir/setSwellDir + DATA_SWELL_DIR = EntityDataAccessor<Integer>.
+func creeperSwellDataEntry(swellDir int8) entityDataEntry {
+	return entityDataEntry{
+		index:        dataSwellDirIndex,
+		serializerID: intSerializerID,
+		value:        pk.VarInt(int32(swellDir)), // EntityDataSerializers.INT codec == ByteBufCodecs.VAR_INT
+	}
+}
+
+// creeperPoweredDataEntry builds the DATA_IS_POWERED entry (charged creeper from a lightning
+// strike — the client renders a blue aura + doubles the explosion radius). It frames on the wire
+// as Byte(dataCreeperPoweredIdx=17) + VarInt(boolSerializerID=8) + Boolean(powered). Cite
+// Creeper.thunderHit: entityData.set(DATA_IS_POWERED, true).
+func creeperPoweredDataEntry(powered bool) entityDataEntry {
+	return entityDataEntry{
+		index:        dataCreeperPoweredIdx,
+		serializerID: boolSerializerID,
+		value:        pk.Boolean(powered),
+	}
+}
+
+// creeperIgnitedDataEntry builds the DATA_IS_IGNITED entry (the currently-ignited fuse flag — a
+// flint-and-steel ignites the creeper, letting it run its fuse to explosion in the open). Cite
+// Creeper.ignite: entityData.set(DATA_IS_IGNITED, true).
+func creeperIgnitedDataEntry(ignited bool) entityDataEntry {
+	return entityDataEntry{
+		index:        dataCreeperIgnitedIdx,
+		serializerID: boolSerializerID,
+		value:        pk.Boolean(ignited),
+	}
+}
+
+// --- ARROW CRIT (AbstractArrow.DATA_ID_FLAGS) -----------------------------------------------------
+//
+// AbstractArrow.DATA_ID_FLAGS is a BYTE accessor holding the bitfield FLAG_CRIT (0x01) +
+// FLAG_NOPHYSICS (0x02). Projectile defines no own accessors (Projectile extends Entity DIRECTLY
+// with an empty defineSynchedData), so Projectile's accessor count is 0 and AbstractArrow's first
+// defineId (ID_FLAGS) sits on top of Entity's 8, making DATA_ID_FLAGS index 8 — and PIERCE_LEVEL
+// (9) + IN_GROUND (10) follow.
+//	[VERIFIED javap AbstractArrow.defineSynchedData: DATA_ID_FLAGS(define BYTE) +
+//	 PIERCE_LEVEL(define BYTE) + IN_GROUND(define BOOLEAN). javap Projectile: empty defineSynchedData.]
+const (
+	dataArrowFlagsIndex       uint8 = 8
+	dataArrowPierceLevelIndex uint8 = 9
+	dataArrowInGroundIndex    uint8 = 10
+)
+
+// arrowFlagsByte composes the DATA_ID_FLAGS byte from the per-bit mirrors. FLAG_CRIT = 0x01
+// (isCritArrow — drives the sparkle crit particle), FLAG_NOPHYSICS = 0x02 (used only by a Loyalty
+// trident's return path). v1 emits only CRIT; NOPHYSICS is a trident-side follow-up. Cite
+// AbstractArrow.setCritArrow/FLAG_CRIT + setFlag(int,boolean).
+func arrowFlagsByte(crit bool) int8 {
+	var b int8
+	if crit {
+		b |= 0x01 // FLAG_CRIT — crit arrow (the sparkle)
+	}
+	return b
+}
+
+// arrowFlagsDataEntry builds the DATA_ID_FLAGS entry. It frames on the wire as
+// Byte(dataArrowFlagsIndex=8) + VarInt(byteSerializerID=0) + Byte(flagsByte) (entityDataEntry.WriteTo).
+// Spawned-crit arrows carry this metadata so the tracker AddEntity emits the sparkle visual at
+// spawn-time. Cite AbstractArrow.setCritArrow.
+func arrowFlagsDataEntry(flagsByte int8) entityDataEntry {
+	return entityDataEntry{
+		index:        dataArrowFlagsIndex,
+		serializerID: byteSerializerID,
+		value:        pk.Byte(flagsByte), // EntityDataSerializers.BYTE codec == ByteBufCodecs.BYTE
+	}
+}
+
 // encodeSetEntityData builds ClientboundSetEntityData (06-CAPTURE-DIFF §4): VarInt id, then
 // the packed-items body, then the mandatory 0xFF terminator. The body is, in order: any
 // PRE-BUILT entry bytes carried on the entity's metadata slot (Entity.metadata — a snapshot-

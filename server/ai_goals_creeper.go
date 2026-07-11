@@ -25,6 +25,24 @@ const (
 	creeperExplosionRadius    = 3    // Creeper.explosionRadius default
 )
 
+// setCreeperSwellDir ports Creeper.setSwellDir(int): assign the swell mirror AND push the
+// DATA_SWELL_DIR DataValue to every tracking player (the same SynchedEntityData broadcast the
+// vanilla set(SWELL_DIR) performs). Idempotent on no change (skip when e.swellDir == value, the
+// vanilla SynchedEntityData's dirty-only push); mirrors setWolfInSittingPose's idempotency. Each
+// call site (SwellGoal.tick + creeperAiStep's ignited branch + explosion-driven disarm) routes
+// through this helper so the swell-dir transition 0 -> 1 (arming) and 1 -> -1 (deflating) reaches
+// the client.
+//
+//	[VERIFIED javap Creeper.setSwellDir: get(SynchedEntityData); set(DATA_SWELL_DIR, Integer.valueOf
+//	 (int)).]
+func (t *TickLoop) setCreeperSwellDir(e *Entity, value int32) {
+	if e.swellDir == value {
+		return // no change → no broadcast (matches SynchedEntityData's dirty-only push)
+	}
+	e.swellDir = value
+	t.broadcastToTrackers(e.id, encodeSetEntityDataByID(e.id, creeperSwellDataEntry(int8(value))))
+}
+
 // swellGoal is the ported SwellGoal (net.minecraft.world.entity.ai.goal.SwellGoal). It holds the target
 // snapshot the tick disarm checks (SwellGoal.target).
 type swellGoal struct {
@@ -54,7 +72,9 @@ func (g *swellGoal) canUse(t *TickLoop, e *Entity) bool {
 	return distanceToSqrPlayer(target, e) < creeperSwellArmDistSqr
 }
 
-// start: navigation.stop(); target = getTarget(). Park the creeper (it swells in place).
+// start: navigation.stop(); target = getTarget(). Park the creeper (it swells in place). Vanilla
+// does NOT call setSwellDir in start — the first tick() after engage does the +1 / -1 flip, so the
+// broadcast also lands on the FIRST tick (not on start). SwellGoal.start ports this as-is.
 func (g *swellGoal) start(t *TickLoop, e *Entity) {
 	if e.ai != nil {
 		e.ai.clearWantTarget()
@@ -62,30 +82,37 @@ func (g *swellGoal) start(t *TickLoop, e *Entity) {
 	g.targetID = mobTarget(e)
 }
 
-// stop: target = null.
+// stop: target = null. Vanilla has SwellGoal.stop clear the captured target field. The swellDir
+// stays at its last value through stop (vanilla: the next setSwellDir call resets it).
 func (g *swellGoal) stop(t *TickLoop, e *Entity) {
 	g.targetID = 0
 }
 
 // tick: disarm (setSwellDir(-1)) with no/dead target, dist²>49, or no LoS; else arm (setSwellDir(1)).
+// Each setSwellDir flips the swell mirror AND broadcasts the DATA_SWELL_DIR data-value to every
+// tracker (the SynchedEntityData dirty push) — so the 0→1 (arming) + 1→-1 (deflating) transitions
+// reach the client in lockstep with the server-side decision. NO RNG.
+//	[VERIFIED CFR SwellGoal.tick: target==null || isDeadOrDying → creeper.setSwellDir(-1);
+//	 distanceToSqr>49 → setSwellDir(-1); !hasLineOfSight → setSwellDir(-1); else setSwellDir(1).]
 func (g *swellGoal) tick(t *TickLoop, e *Entity) {
 	target := t.playerByEntityID(g.targetID)
 	if target == nil || target.dead {
-		e.swellDir = -1
+		t.setCreeperSwellDir(e, -1)
 		return
 	}
 	if distanceToSqrPlayer(target, e) > creeperSwellDisarmDistSqr {
-		e.swellDir = -1
+		t.setCreeperSwellDir(e, -1)
 		return
 	}
 	// !getSensing().hasLineOfSight(target): the creeper disarms if it cannot see the target (a wall
 	// between eye and target aborts the swell). Now a REAL per-tick-cached raycast (sensing.go), 1:1 with
-	// the jar SwellGoal.tick offsets 53-78.
+	// the jar SwellGoal.tick offsets 53-78. Route through setCreeperSwellDir so the DATA_SWELL_DIR
+	// metadata broadcasts to the client (idempotent — no re-broadcast when the value is unchanged).
 	if !t.sensingHasLineOfSight(e, target) {
-		e.swellDir = -1
+		t.setCreeperSwellDir(e, -1)
 		return
 	}
-	e.swellDir = 1
+	t.setCreeperSwellDir(e, 1)
 }
 
 // creeperAiStep is the port of Creeper.tick's fuse advance (the per-type hook, the sibling of
@@ -105,7 +132,10 @@ func (t *TickLoop) creeperAiStep(e *Entity) {
 	}
 	e.oldSwell = e.swell
 	if e.ignited {
-		e.swellDir = 1
+		// isIgnited() branch: vanilla's creeper.setSwellDir(1) — re-arm the fuse on a fresh flint-and-
+		// steel or external ignition. setCreeperSwellDir's idempotency skips the broadcast when the
+		// dir was already +1 (the ignited creeper that's been swelling since the SwellGoal armed it).
+		t.setCreeperSwellDir(e, 1)
 	}
 	swellDir := e.swellDir
 	// Creeper.tick: if (swellDir > 0 && swell == 0) { playSound(PRIMED_FUSE); gameEvent(PRIME_FUSE); }
@@ -135,6 +165,10 @@ func (t *TickLoop) explodeCreeper(e *Entity) {
 		multiplier = 2.0
 	}
 	e.dead = true
+	// Vanilla: post-death SwellGoal.tick's "target dead" disarm branch fires next tick, but the
+	// armed-fuse visual is moot the moment dead=true. setCreeperSwellDir's idempotency skips the
+	// broadcast when swellDir is already -1 (SwellGoal.tick already disarmed) — no extra wire.
+	t.setCreeperSwellDir(e, -1)
 	t.explode(e.id, e.x, e.y, e.z, float64(creeperExplosionRadius)*multiplier)
 	t.cur().entities.remove(e.id)
 }
