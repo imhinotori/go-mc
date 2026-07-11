@@ -445,14 +445,12 @@ func (t *TickLoop) getControllingPassenger(vehicle *Entity) int32 {
 		}
 		return 0
 	}
-	if vehicle.typ != entity.HappyGhast.ID {
-		return 0
-	}
 	// A SADDLED STRIDER's getControllingPassenger is the first passenger when it is a Player holding
 	// WARPED_FUNGUS_ON_A_STICK: `if (isSaddled()) { first = getFirstPassenger(); if (first instanceof Player p
 	// && p.isHolding(WARPED_FUNGUS_ON_A_STICK)) return p; } return super.getControllingPassenger();`. This makes
 	// a steered strider client-authoritative (the client drives it via ServerboundMoveVehicle, like the boat/
-	// ghast). Cite Strider.getControllingPassenger.
+	// ghast). Cite Strider.getControllingPassenger. NOTE: the strider/pig/horse-family type checks below MUST
+	// precede the ghast-default `!= HappyGhast -> return 0` guard so these equine steer branches are reachable.
 	if vehicle.typ == entity.Strider.ID {
 		if !striderIsSaddled(vehicle) || len(vehicle.passengers) == 0 {
 			return 0
@@ -462,6 +460,44 @@ func (t *TickLoop) getControllingPassenger(vehicle *Entity) int32 {
 			return first // Player p holding WARPED_FUNGUS_ON_A_STICK -> the controlling passenger
 		}
 		return 0 // super.getControllingPassenger() (Animal) -> null
+	}
+	// A SADDLED PIG's getControllingPassenger is the first passenger when it is a Player holding
+	// CARROT_ON_A_STICK: `if (isSaddled()) { first = getFirstPassenger(); if (first instanceof Player p &&
+	// p.isHolding(CARROT_ON_A_STICK)) return p; } return super.getControllingPassenger();`. This makes a
+	// steered pig client-authoritative (the client drives it via ServerboundMoveVehicle, like the strider/
+	// boat/ghast). MIRRORS the strider branch above exactly. An un-saddled pig (the pig oracle) has
+	// pigIsSaddled == false, so this returns 0 (super) and draws ZERO extra RNG. Cite Pig.getControllingPassenger.
+	if vehicle.typ == entity.Pig.ID {
+		if !pigIsSaddled(vehicle) || len(vehicle.passengers) == 0 {
+			return 0
+		}
+		first := vehicle.passengers[0]
+		if rp := t.playerByEntityID(first); rp != nil && t.pigRiderHoldingControlItem(rp) {
+			return first // Player p holding CARROT_ON_A_STICK -> the controlling passenger
+		}
+		return 0 // super.getControllingPassenger() (Animal) -> null
+	}
+	// An AbstractHorse's getControllingPassenger is the first passenger when it is a Player AND the horse is
+	// SADDLED: `if (isSaddled()) { first = getFirstPassenger(); if (first instanceof Player p) return p; }
+	// return super.getControllingPassenger();`. No held-item gate (unlike the pig/strider). A saddled horse
+	// with a player first-passenger is client-authoritative (the client drives it via ServerboundMoveVehicle).
+	// v1 horseIsSaddled is const-false (no saddle-slot item yet -- the cited deferral), so this returns 0
+	// until the SADDLE-slot API lands; the branch is wired 1:1 so it activates the moment isSaddled reads a
+	// real slot. Cite AbstractHorse.getControllingPassenger.
+	if vehicle.isHorseFamily {
+		if !vehicle.horseIsSaddled() || len(vehicle.passengers) == 0 {
+			return 0
+		}
+		first := vehicle.passengers[0]
+		if t.playerByEntityID(first) != nil {
+			return first // Player p -> the controlling passenger
+		}
+		return 0 // super.getControllingPassenger() (Animal) -> null
+	}
+	// Any other non-ghast vehicle has no controlling passenger (Entity.getControllingPassenger default null).
+	// This guard runs AFTER the boat/camel/strider/pig/horse branches so those equine steers stay reachable.
+	if vehicle.typ != entity.HappyGhast.ID {
+		return 0
 	}
 	if len(vehicle.passengers) == 0 {
 		return 0

@@ -46,6 +46,7 @@ import (
 
 	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/level/attribute"
+	"github.com/imhinotori/sulfur/level/component"
 )
 
 // Horse-family constants (VERIFIED javap this session).
@@ -613,9 +614,337 @@ func (t *TickLoop) horseFamilyAiStep(e *Entity) {
 	if e.dead || e.health <= 0 {
 		return
 	}
+	// The RunAroundLikeCrazyGoal per-tick roll: while an UNTAMED horse carries a player rider, each tick it
+	// rolls the tame-or-buck. This is the load-bearing taming contract (a mounted untamed horse either tames
+	// on the temper threshold or bucks the rider off, raising temper). Gated on isHorseFamily && !tamed &&
+	// isVehicle so an un-ridden or tamed horse (and every non-horse) does ZERO extra work / draws ZERO RNG.
+	t.horseRunAroundLikeCrazyTick(e)
 	// DEFERRED: the aiStep tail/mouth/eating counters + the playerJumpPendingScale -> executeRidersJump
-	// launch (needs the rider mount packet path). No bounded per-tick work today beyond the passive goals.
+	// launch (needs the rider mount packet path). No bounded per-tick work today beyond the above.
 }
+
+// horseRunAroundLikeCrazyTick ports RunAroundLikeCrazyGoal.tick() 1:1 (verified javap this task): while the
+// horse is UNTAMED and carries a first-passenger Player, with a 1-in-adjustedTickDelay(50) chance each tick
+// it resolves the mount:
+//
+//	if (isTamed()) return;
+//	if (random.nextInt(adjustedTickDelay(50)) != 0) return;   // the throttle draw
+//	firstPassenger = getFirstPassenger(); if (firstPassenger == null) return;
+//	if (firstPassenger instanceof Player p) {
+//	    temper = getTemper(); maxTemper = getMaxTemper();
+//	    if (maxTemper > 0 && random.nextInt(maxTemper) < temper) { tameWithName(p); return; }   // TAME
+//	    modifyTemper(5);                                                                          // else raise temper
+//	}
+//	ejectPassengers(); makeMad(); broadcastEntityEvent(this, 6);                                // BUCK off + rear
+//
+// The DRAW ORDER (throttle nextInt(50), then -- only if it hits 0 and a player rides -- nextInt(maxTemper))
+// is the parity contract, on the horse's OWN per-entity stream (getRandom()). makeMad (the rear + angry
+// sound) is a cited-deferred no-op (no stand-pose/sound subsystem); ejectPassengers is the real dismount.
+// Runs ONLY for an untamed, player-ridden horse -- a tamed / un-ridden horse early-returns before any draw.
+// Cite RunAroundLikeCrazyGoal.tick.
+func (t *TickLoop) horseRunAroundLikeCrazyTick(e *Entity) {
+	if e.horseTamed {
+		return // isTamed() -> the goal does nothing
+	}
+	if len(e.passengers) == 0 {
+		return // no passenger -> the goal never activates (RunAroundLikeCrazyGoal.canUse requires isVehicle)
+	}
+	rng := mobRandom(e)
+	if rng.nextInt(adjustedTickDelay(50)) != 0 {
+		return // the 1-in-50 throttle -- most ticks are a single draw then return
+	}
+	first := e.passengers[0] // getFirstPassenger()
+	rp := t.playerByEntityID(first)
+	if rp == nil {
+		// a non-player first passenger: RunAroundLikeCrazyGoal still bucks (skips the tame branch).
+		t.ejectPassengers(e)
+		return
+	}
+	temper := e.horseTemper
+	maxTemper := e.horseMaxTemper()
+	if maxTemper > 0 && rng.nextInt(maxTemper) < temper { // nextInt(maxTemper) < getTemper() -> TAME
+		e.horseTameWithName() // setTamed(true) (+ setOwner/advancement/broadcast: the cited presentation layer)
+		return
+	}
+	e.horseModifyTemper(5) // else raise the temper toward the tame threshold
+	// ejectPassengers() + makeMad() + broadcastEntityEvent(this, 6): buck the rider off (the rear + angry
+	// sound is the cited-deferred presentation layer; the eject is the real observable dismount).
+	t.ejectPassengers(e)
+}
+
+// tryHorseFamilyInteract ports the horse-family mobInteract 1:1 (Horse.mobInteract / AbstractChestedHorse
+// .mobInteract wrapping AbstractHorse.mobInteract; SkeletonHorse/ZombieHorse use the AbstractHorse base
+// directly). Verified javap this task. The unified flow (Horse & chested share the identical wrapper; the
+// base tail differs only in the chest-equip branch):
+//
+//	flag = !isBaby() && isTamed() && player.isSecondaryUseActive();
+//	if (isVehicle() || flag || (isBaby() && !isHolding(GOLDEN_DANDELION)))
+//	    return <AbstractHorse.mobInteract>;                     // the base tail (openInv / equip / ride)
+//	stack = getItemInHand(hand);
+//	if (!stack.isEmpty()) {
+//	    if (isFood(stack)) return fedFood(player, stack);       // FEED (handleEating: temper/heal/age/love)
+//	    if (!isTamed()) { makeMad(); return SUCCESS; }          // untamed + non-food -> buck/rear
+//	    if (chested && !hasChest() && stack.is(CHEST)) { equipChest(); return SUCCESS; }   // chested only
+//	}
+//	return <AbstractHorse.mobInteract>;                         // the base tail
+//
+// AbstractHorse.mobInteract base tail (offsets verified):
+//	if (isVehicle() || isBaby()) return super(Animal).mobInteract;   // (guarded above; re-checked faithfully)
+//	if (isTamed() && player.isSecondaryUseActive()) { openCustomInventoryScreen(player); return SUCCESS; }
+//	stack = getItemInHand(hand);
+//	if (!stack.isEmpty()) {
+//	    r = stack.interactLivingEntity(...); if (r.consumesAction()) return r;   // (v1 item-use DEFERRED)
+//	    if (isEquippableInSlot(stack, BODY) && !isWearingBodyArmor()) { equipBodyArmor(player, stack); SUCCESS; }
+//	}
+//	doPlayerRide(player); return SUCCESS;                        // MOUNT (startRiding)
+//
+// Returns true when the interact belongs to the horse (a mount, a chest/armor equip, a buck, an inventory
+// open, or a fed-food consume) so handleInteract does NOT fall through to tryFeedAnimal; returns false ONLY
+// for the isFood-but-untamed-and-baby-holding-golden-dandelion path that vanilla routes to the base (which
+// still mounts, not feeds -- so this in practice always consumes). horse-family-gated by the caller (mob
+// .isHorseFamily); the ONLY RNG this can draw (fedFood -> handleEating setInLove path) is on the horse's own
+// per-entity stream, so the pig oracle is unperturbed. Cite Horse/AbstractChestedHorse/AbstractHorse.mobInteract.
+func (t *TickLoop) tryHorseFamilyInteract(p *tickPlayer, mob *Entity, usingSecondaryAction bool) bool {
+	inv := ensureInventory(p)
+	held := inv.get(heldWindowSlot(inv.heldSlot)) // player.getItemInHand(hand)
+	empty := slotIsEmpty(held)
+	itemID := int32(0)
+	if !empty {
+		itemID = int32(held.ItemID)
+	}
+	chested := mob.isDonkey || mob.isMule || mob.isLlama // AbstractChestedHorse (Donkey/Mule) + Llama
+
+	// SkeletonHorse.mobInteract OVERRIDE: `if (!isTamed()) return PASS; return AbstractHorse.mobInteract(...)`.
+	// An UNTAMED skeleton horse does nothing (PASS -> return false, no feed/mount/tame); a TAMED one goes
+	// straight to the base tail (openInv / equip / ride). NO feed, NO golden-dandelion, NO makeMad -- the
+	// undead horse tames only via the SkeletonTrapGoal / commands (setTamed), not by feeding. Cite
+	// SkeletonHorse.mobInteract.
+	if mob.typ == entity.SkeletonHorse.ID {
+		if !mob.horseTamed {
+			return false // PASS -> fall through (an untamed skeleton horse is inert to right-click)
+		}
+		return t.horseBaseMobInteract(p, mob, usingSecondaryAction)
+	}
+
+	// ZombieHorse.mobInteract OVERRIDE: the Horse-shaped wrapper MINUS the golden-dandelion baby exception and
+	// the chest branch, with isFood == stack.is(ZOMBIE_HORSE_FOOD): `flag = !isBaby && isTamed && secondary;
+	// if (isVehicle() || flag) return base; stack = getItemInHand(hand); if (!stack.isEmpty()) { if (isFood)
+	// return fedFood; if (!isTamed) { makeMad; return SUCCESS; } } return base`. Cite ZombieHorse.mobInteract.
+	if mob.typ == entity.ZombieHorse.ID {
+		flag := !mob.isBaby() && mob.horseTamed && usingSecondaryAction
+		if mob.isVehicle() || flag {
+			return t.horseBaseMobInteract(p, mob, usingSecondaryAction)
+		}
+		if !empty {
+			if itemInTag(itemID, "zombie_horse_food") { // ZombieHorse.isFood == ZOMBIE_HORSE_FOOD tag
+				t.horseFedFood(p, mob, inv, held)
+				return true
+			}
+			if !mob.horseTamed {
+				return true // makeMad(): untamed + non-food -> rear (deferred presentation), SUCCESS
+			}
+		}
+		return t.horseBaseMobInteract(p, mob, usingSecondaryAction)
+	}
+
+	// flag = !isBaby() && isTamed() && isSecondaryUseActive(). The Horse/Chested wrapper routes to the base
+	// tail when isVehicle() || flag || (isBaby() && !isHolding(GOLDEN_DANDELION)). GOLDEN_DANDELION is the
+	// baby-feed item (a baby is fed a golden dandelion via fedFood in the wrapper's non-base branch); v1 has
+	// no golden-dandelion baby-feed food value wired, so a baby always routes to the base tail here (which
+	// mounts nothing for a baby -- doPlayerRide on a baby still startRides, but a baby's getControlling
+	// Passenger is null; the observable is a consumed no-op). The isHolding(GOLDEN_DANDELION) exception is
+	// preserved faithfully (a baby holding a golden dandelion falls INTO the item branch to be fed).
+	holdingGoldenDandelion := itemID == itemGoldenDandelion
+	flag := !mob.isBaby() && mob.horseTamed && usingSecondaryAction
+	if mob.isVehicle() || flag || (mob.isBaby() && !holdingGoldenDandelion) {
+		return t.horseBaseMobInteract(p, mob, usingSecondaryAction)
+	}
+
+	// The wrapper item branch (an adult, non-secondary, non-vehicle horse -- or a baby holding golden dandelion).
+	if !empty {
+		if t.horseIsFood(mob, itemID) {
+			// fedFood(player, stack): handleEating (temper/heal/age/love), then consume 1 on success. Returns
+			// SUCCESS -> the interact belongs to the horse.
+			t.horseFedFood(p, mob, inv, held)
+			return true
+		}
+		if !mob.horseTamed {
+			// makeMad(): an untamed horse right-clicked with a non-food item rears + angry-sounds (the cited-
+			// deferred presentation); SUCCESS -- the interact belongs to the horse. No mount.
+			return true
+		}
+		if chested && !mob.horseHasChest && itemID == itemChest {
+			// AbstractChestedHorse.mobInteract: if (!hasChest() && stack.is(CHEST)) equipChest -> setChest(true),
+			// consume 1, createInventory. Donkey/Mule get 5 columns; a Llama chests via the SAME branch with its
+			// strength as the column count (horseGetInventoryColumns). Cite AbstractChestedHorse.mobInteract.
+			t.horseEquipChest(mob, inv, held)
+			return true
+		}
+	}
+	// No item branch consumed -> the base tail (openInv / equip-armor / doPlayerRide mount).
+	return t.horseBaseMobInteract(p, mob, usingSecondaryAction)
+}
+
+// horseBaseMobInteract ports AbstractHorse.mobInteract's body (the "super" tail the Horse/Chested wrapper
+// falls into): the tamed-secondary inventory open, the BODY-armor equip, and the doPlayerRide MOUNT. The
+// item-use interactLivingEntity branch (offsets 57-78) is the DEFERRED item-use layer (no server item-use
+// dispatch on a mob in v1); the BODY-armor equip folds to a cited-deferred no-op (no BODY equipment slot),
+// and the mount is the load-bearing v1 ride. Always returns true (the base tail always consumes: SUCCESS).
+// Cite AbstractHorse.mobInteract.
+func (t *TickLoop) horseBaseMobInteract(p *tickPlayer, mob *Entity, usingSecondaryAction bool) bool {
+	// if (isTamed() && isSecondaryUseActive()) { openCustomInventoryScreen(player); return SUCCESS; }
+	if mob.horseTamed && usingSecondaryAction {
+		t.horseOpenInventory(p, mob) // openCustomInventoryScreen: the horse-inventory GUI (DEFERRED screen)
+		return true
+	}
+	// stack.interactLivingEntity + isEquippableInSlot(BODY) armor equip: DEFERRED (no item-use dispatch / no
+	// BODY equipment slot). A cited no-op that becomes a real equip once the equipment-slot API lands.
+	// doPlayerRide(player): setEating(false); clearStanding(); if(!clientSide) player.startRiding(this). The
+	// MOUNT is the load-bearing ride -- a tamed adult horse seats the player; an untamed horse also seats the
+	// player (RunAroundLikeCrazyGoal then rolls tame-or-buck each tick), matching vanilla doPlayerRide.
+	if t.playerStartRiding(p, mob, false) {
+		t.broadcastSetPassengers(mob)
+	}
+	return true // doPlayerRide always returns SUCCESS
+}
+
+// horseOpenInventory ports AbstractHorse.openCustomInventoryScreen(player): open the horse-inventory
+// container menu (a 2-slot saddle/armor row + getInventoryColumns() storage columns). The container GUI +
+// its ClientboundHorseScreenOpen packet are the DEFERRED screen layer (no horse-inventory menu built in this
+// worktree base); the load-bearing state (the horse IS a valid inventory-open target, its column count
+// computed by horseGetInventoryColumns) is present. Structured to wire the real menu open once the horse-
+// inventory menu lands, never baked away. Cite AbstractHorse.openCustomInventoryScreen.
+func (t *TickLoop) horseOpenInventory(p *tickPlayer, mob *Entity) {
+	mob.horseInvColumns = mob.horseGetInventoryColumns()
+	// DEFERRED: openMenu(HorseInventoryMenu) + ClientboundHorseScreenOpen. No screen packet in v1.
+}
+
+// horseEquipChest ports AbstractChestedHorse.equipChest(player, stack): setChest(true), playChestEquipsSound
+// (DEFERRED sound), consume 1 chest, createInventory (recompute the storage columns). Cite
+// AbstractChestedHorse.equipChest.
+func (t *TickLoop) horseEquipChest(mob *Entity, inv *Inventory, held component.SlotData) {
+	mob.horseHasChest = true            // setChest(true)
+	held.Count--                        // stack.consume(1, player)
+	inv.set(heldWindowSlot(inv.heldSlot), held)
+	mob.horseInvColumns = mob.horseGetInventoryColumns() // createInventory: 5 (donkey/mule) or strength (llama)
+	// playChestEquipsSound(): DEFERRED (no sound subsystem).
+}
+
+// horseIsFood ports the family isFood(stack): AbstractHorse.isFood == stack.is(HORSE_FOOD); Llama.isFood ==
+// stack.is(LLAMA_FOOD). Donkey/Mule inherit the AbstractHorse HORSE_FOOD tag. Cite AbstractHorse.isFood +
+// Llama.isFood.
+func (t *TickLoop) horseIsFood(mob *Entity, itemID int32) bool {
+	if mob.isLlama {
+		return itemInTag(itemID, "llama_food")
+	}
+	return itemInTag(itemID, "horse_food")
+}
+
+// horseFedFood ports AbstractHorse.fedFood(player, stack): boolean b = handleEating(player, stack); if (b)
+// stack.consume(1, player); return b || clientSide ? SUCCESS_SERVER : PASS. v1 consumes 1 on a true
+// handleEating (the observable feed). Cite AbstractHorse.fedFood.
+func (t *TickLoop) horseFedFood(p *tickPlayer, mob *Entity, inv *Inventory, held component.SlotData) {
+	if t.horseHandleEating(p, mob, int32(held.ItemID)) {
+		held.Count-- // stack.consume(1, player)
+		inv.set(heldWindowSlot(inv.heldSlot), held)
+	}
+}
+
+// horseHandleEating ports AbstractHorse.handleEating(player, stack) 1:1 (verified javap this task): match the
+// food item to its (healAmount, ageUpSeconds, temperBonus) triple, apply the golden-carrot / golden-apple
+// tamed-adult-not-in-love setInLove, the heal-if-below-max, the baby ageUp (+ HAPPY_VILLAGER particle), and
+// the temper modify (untamed, temper < maxTemper). Returns whether any effect applied (the fedFood consume
+// gate). The per-item table:
+//
+//	WHEAT:   heal 2,  ageUp 20,  temper 3
+//	SUGAR:   heal 1,  ageUp 30,  temper 3
+//	HAY_BLOCK: heal 20, ageUp 180, temper 0
+//	APPLE:   heal 3,  ageUp 60,  temper 3
+//	RED_MUSHROOM: heal 3, ageUp 0, temper 3
+//	CARROT:  heal 3,  ageUp 60,  temper 3
+//	GOLDEN_CARROT: heal 4, ageUp 60, temper 5 (+ tamed-adult-not-in-love -> setInLove)
+//	GOLDEN_APPLE / ENCHANTED_GOLDEN_APPLE: heal 10, ageUp 240, temper 10 (+ tamed-adult-not-in-love -> setInLove)
+//
+// The temper modify (temperBonus > 0 && (applied || !isTamed()) && getTemper() < getMaxTemper()) is the
+// taming contribution -- each non-golden feed of an untamed horse raises its temper toward the tame
+// threshold. NO RNG (the particle/sound are DEFERRED). Cite AbstractHorse.handleEating.
+func (t *TickLoop) horseHandleEating(p *tickPlayer, mob *Entity, itemID int32) bool {
+	applied := false
+	var heal float32
+	ageUpSeconds := 0
+	temperBonus := 0
+	switch itemID {
+	case itemWheat:
+		heal, ageUpSeconds, temperBonus = 2.0, 20, 3
+	case itemSugar:
+		heal, ageUpSeconds, temperBonus = 1.0, 30, 3
+	case itemHayBlock:
+		heal, ageUpSeconds, temperBonus = 20.0, 180, 0
+	case itemApple:
+		heal, ageUpSeconds, temperBonus = 3.0, 60, 3
+	case itemRedMushroom:
+		heal, ageUpSeconds, temperBonus = 3.0, 0, 3
+	case itemCarrot:
+		heal, ageUpSeconds, temperBonus = 3.0, 60, 3
+	case itemGoldenCarrot:
+		heal, ageUpSeconds, temperBonus = 4.0, 60, 5
+		if mob.horseTamed && mob.breedAge == 0 && !mob.isInLove() { // isTamed && getAge()==0 && !isInLove
+			applied = true
+			mob.setInLove()
+			t.broadcastHearts(mob)
+		}
+	case itemGoldenApple, itemEnchantedGoldenApple:
+		heal, ageUpSeconds, temperBonus = 10.0, 240, 10
+		if mob.horseTamed && mob.breedAge == 0 && !mob.isInLove() {
+			applied = true
+			mob.setInLove()
+			t.broadcastHearts(mob)
+		}
+	}
+	// heal-if-below-max: if (getHealth() < getMaxHealth() && healAmount > 0) { heal(healAmount); applied = true }.
+	maxHealth := float32(mob.getAttributeValue(attribute.MaxHealth))
+	if mob.health < maxHealth && heal > 0 {
+		mob.health += heal
+		if mob.health > maxHealth {
+			mob.health = maxHealth
+		}
+		applied = true
+	}
+	// baby ageUp: if (isBaby() && ageUpSeconds > 0 && !isAgeLocked()) { HAPPY_VILLAGER particle (DEFERRED);
+	// if (!clientSide) { ageUp(ageUpSeconds); applied = true } }. isAgeLocked is a v1 const-false stub.
+	if mob.isBaby() && ageUpSeconds > 0 {
+		wasBaby := mob.isBaby()
+		mob.ageUp(ageUpSeconds)
+		if wasBaby && !mob.isBaby() {
+			t.onGrewUp(mob)
+		}
+		applied = true
+	}
+	// temper modify: if (temperBonus > 0 && (applied || !isTamed()) && getTemper() < getMaxTemper()) {
+	// modifyTemper(temperBonus); applied = true }.
+	if temperBonus > 0 && (applied || !mob.horseTamed) && mob.horseTemper < mob.horseMaxTemper() {
+		mob.horseModifyTemper(temperBonus)
+		applied = true
+	}
+	// if (applied) { eating(); gameEvent(EAT); } -- the eating animation + game event are DEFERRED no-ops.
+	return applied
+}
+
+// Horse-family interact item ids (VERIFIED data/item/item.go this task) -- the handleEating food table +
+// the equip/dispatch items.
+const (
+	itemGoldenDandelion      = 257  // Items.GOLDEN_DANDELION (the baby-feed exception in the wrapper)
+	itemRedMushroom          = 276  // Items.RED_MUSHROOM
+	itemChest                = 359  // Items.CHEST (AbstractChestedHorse equipChest)
+	itemHayBlock             = 532  // Items.HAY_BLOCK
+	itemApple                = 921  // Items.APPLE
+	itemWheat                = 980  // Items.WHEAT
+	itemGoldenApple          = 1014 // Items.GOLDEN_APPLE
+	itemEnchantedGoldenApple = 1015 // Items.ENCHANTED_GOLDEN_APPLE
+	itemSugar                = 1113 // Items.SUGAR
+	itemCarrot               = 1257 // Items.CARROT
+	itemGoldenCarrot         = 1262 // Items.GOLDEN_CARROT
+)
 
 // --- BREEDING OFFSPRING (C2): AbstractHorse/Horse/Llama getBreedOffspring inheritance ----------------
 //

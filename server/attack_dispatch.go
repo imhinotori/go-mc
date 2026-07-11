@@ -1212,6 +1212,20 @@ func (t *TickLoop) handleInteract(p *tickPlayer, pkt pk.Packet) {
 	if mob.typ == entity.Camel.ID && t.tryCamelRide(p, mob) {
 		return // the ride handled the interact
 	}
+	// HORSE FAMILY RIDE/TAME/CHEST/FEED (net.minecraft.world.entity.animal.equine.{Horse,Donkey,Mule,Llama,
+	// SkeletonHorse,ZombieHorse}.mobInteract wrapping AbstractHorse.mobInteract): a right-click on a horse-
+	// family mob runs the full vanilla interact -- FEED (HORSE_FOOD/LLAMA_FOOD -> handleEating temper/heal/age/
+	// tame-contribution), CHEST equip (donkey/mule/llama), inventory open (tamed + secondary), BODY-armor equip
+	// (deferred slot), or MOUNT (doPlayerRide -> startRiding; an untamed mount then rolls tame-or-buck each tick
+	// via horseRunAroundLikeCrazyTick). tryHorseFamilyInteract consumes the interact for any horse-family mob
+	// (it owns the HORSE_FOOD/LLAMA_FOOD feed itself -- NOT the pig_food tryFeedAnimal path), so handleInteract
+	// does NOT fall through. horse-family-gated (mob.isHorseFamily) so it is a zero-cost no-op for a pig/cow/
+	// sheep; the ONLY RNG (fedFood -> handleEating setInLove) is on the horse's OWN per-entity stream, so the
+	// pig oracle stream is unperturbed. This slots beside tryCamelRide/tryStriderInteract. Cite Horse/
+	// AbstractChestedHorse/AbstractHorse.mobInteract.
+	if mob.isHorseFamily && t.tryHorseFamilyInteract(p, mob, bool(usingSecondaryAction)) {
+		return // the horse-family ride/tame/chest/feed handled the interact
+	}
 	// STRIDER RIDE (net.minecraft.world.entity.monster.Strider.mobInteract): a saddled, non-ridden strider
 	// right-clicked WITHOUT a secondary action and WITHOUT strider_food in hand mounts the player (startRiding);
 	// a SADDLE item saddles it. tryStriderInteract returns true when the interact belongs to the strider (a
@@ -1220,6 +1234,19 @@ func (t *TickLoop) handleInteract(p *tickPlayer, pkt pk.Packet) {
 	// entity.Strider.ID) so it is a zero-cost no-op for the pig oracle. Cite Strider.mobInteract.
 	if mob.typ == entity.Strider.ID && t.tryStriderInteract(p, mob, bool(usingSecondaryAction)) {
 		return // the strider ride/saddle handled the interact
+	}
+	// PIG RIDE (net.minecraft.world.entity.animal.pig.Pig.mobInteract): a saddled, non-ridden pig right-clicked
+	// WITHOUT a secondary action and WITHOUT pig_food in hand mounts the player (startRiding); a SADDLE item
+	// saddles it. The first rider holding a carrot_on_a_stick steers it client-authoritatively (passenger.go
+	// getControllingPassenger pig branch + handleMoveVehicle). tryPigInteract returns true when the interact
+	// belongs to the pig (a mount or saddle-equip) so handleInteract does NOT fall through to the feed path; it
+	// returns false for the isFood case AND for an un-saddled pig with a non-saddle item (fall through to
+	// tryFeedAnimal == super.mobInteract pig_food feed/breed). MIRRORS the strider gate exactly. Pig-gated (typ
+	// == entity.Pig.ID) so it is a zero-cost no-op for every other mob; the ONLY RNG the pig path can draw (the
+	// boost nextInt) is on a carrot USE, never here, so the pig ORACLE (an un-saddled, un-ridden pig) is
+	// byte-identical -- tryPigInteract returns false for it, drawing ZERO extra RNG. Cite Pig.mobInteract.
+	if mob.typ == entity.Pig.ID && t.tryPigInteract(p, mob, bool(usingSecondaryAction)) {
+		return // the pig ride/saddle handled the interact
 	}
 	// VILLAGER MERCHANT MENU (net.minecraft.world.entity.npc.villager.Villager.mobInteract): a right-click on
 	// a live, non-baby, non-trading, non-sleeping villager opens the trading screen (startTrading ->
