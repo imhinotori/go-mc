@@ -40,8 +40,8 @@ import (
 // getMaxLocalRawBrightness is now a REAL light read: SaplingBlock.randomTick and
 // SpreadingSnowyBlock.randomTick gate on t.maxLocalRawBrightness(pos.above()) >= 9, backed by the
 // LevelLightEngine-computed per-section light (world/light.go, server/light.go). The ambient-darkness
-// term (getSkyDarken) stays the cited DAY default 0 until the day/night env-attribute clock lands
-// (see server/light.go skyDarkenDay). CITE: SaplingBlock.randomTick / SpreadingSnowyBlock.randomTick.
+// term (getSkyDarken) is now the real day/night value from the SKY_LIGHT_LEVEL timeline (env_timeline.go),
+// so growth respects night darkening. CITE: SaplingBlock.randomTick / SpreadingSnowyBlock.randomTick.
 
 // ---- SAPLING (SaplingBlock.randomTick / advanceTree) ----
 
@@ -285,12 +285,13 @@ var sixDirections = []sixDirection{
 //   - The die-to-dirt branch (!canStayAlive) draws NO levelRandom.
 //   - The spread branch runs a 4-iteration loop; EACH iteration draws THREE nextInts, in this order,
 //     as the args to pos.offset(int, int, int) (Java evaluates arguments left-to-right):
-//         dx = random.nextInt(3) - 1
-//         dy = random.nextInt(5) - 3
-//         dz = random.nextInt(3) - 1
+//     dx = random.nextInt(3) - 1
+//     dy = random.nextInt(5) - 3
+//     dz = random.nextInt(3) - 1
 //     ALL 4 iterations draw their 3 ints UNCONDITIONALLY (the loop body always samples the position
 //     first, then tests it) — so the spread branch draws exactly 12 levelRandom ints, regardless of
 //     how many cells actually convert.
+//
 // CITE: SpreadingSnowyBlock.randomTick.
 func (t *TickLoop) grassRandomTick(r *region, state block.StateID, pos pk.Position) {
 	if t.world() == nil || r == nil || r.levelRandom == nil {

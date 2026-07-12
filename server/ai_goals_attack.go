@@ -24,6 +24,7 @@ import (
 	"math"
 
 	"github.com/imhinotori/sulfur/data/entity"
+	pk "github.com/imhinotori/sulfur/net/packet"
 
 	"github.com/imhinotori/sulfur/level/attribute"
 )
@@ -234,7 +235,7 @@ func (g *meleeAttackGoal) canUse(t *TickLoop, e *Entity) bool {
 //	 Spider$SpiderAttackGoal.canContinueToUse: getLightLevelDependentMagicValue; >=0.5f &&
 //	 nextInt(100)==0 -> setTarget(null); iconst_0 ireturn; else super.canContinueToUse.]
 func (g *meleeAttackGoal) canContinueToUse(t *TickLoop, e *Entity) bool {
-	if g.daylightGated && g.isBright(t) {
+	if g.daylightGated && g.isBright(t, e) {
 		// DRAW (daylight-flee, ONLY when bright): getRandom().nextInt(100). On 0 -> drop the target.
 		if mobRandom(e).nextInt(spiderDaylightFleeChance) == 0 {
 			if e.ai != nil {
@@ -600,6 +601,7 @@ func (g *meleeAttackGoal) resetAttackCooldown() {
 //
 //	[VERIFIED javap Mob.doHurtTarget: f = getAttributeValue(ATTACK_DAMAGE) d2f; getWeaponItem
 //	 .getDamageSource(this); target.hurtServer(level, src, f); on success getKnockback/causeExtraKnockback.]
+//
 // doHurtTarget now RETURNS the landed boolean (Mob.doHurtTarget's `boolean flag`) so a subclass override
 // (Husk.doHurtTarget) can gate its post-attack effect on it, exactly as vanilla wraps `flag = super
 // .doHurtTarget(...)`.
@@ -666,28 +668,54 @@ func (t *TickLoop) huskApplyHunger(e *Entity, target *tickPlayer) {
 	t.addPlayerEffect(target, e.id, effectHunger, dur, 0, 1.0) // MobEffectInstance(HUNGER, 140*(int)effDiff, 0)
 }
 
-// isBright is the SpiderAttackGoal daylight gate's day/night proxy: a spider in BRIGHT light (vanilla
-// getLightLevelDependentMagicValue() >= 0.5f) runs the 1/100 daylight-flee draw. The real Spider gate
-// reads getLightLevelDependentMagicValue (a sky/block-light read) — no light engine exists in v1, so
-// this is the SAME gametime-darkness proxy the hostile spawn rule uses (35-02's isDarkEnoughToSpawn).
-// "Bright" == NOT dark-enough-to-spawn == daytime (gametime % 24000 outside the [13000,23000) night
-// window). At night the daylight branch never runs (no flee draw, the target is retained); in daylight
-// the 1/100 drop fires. The gate is structured to read the real getLightLevelDependentMagicValue >= 0.5
-// when the lighting engine lands. Cite Spider$SpiderAttackGoal.canContinueToUse +
-// Monster.isDarkEnoughToSpawn (the proxy).
+// spiderEyeHeight is EntityType.SPIDER eyeHeight(0.65f) (dimensions scalable(1.4f,0.9f).eyeHeight(0.65f)).
+// getLightLevelDependentMagicValue samples the block at BlockPos.containing(x, getEyeY(), z), and
+// getEyeY() == y + eyeHeight, so the spider eye height selects the sampled cell. Pinned as a cited
+// constant (the entity data table carries only Width/Height, not per-type eye height). CITE:
+// net.minecraft.world.entity.EntityType SPIDER dimensions; Entity.getEyeY() = y + eyeHeight.
+const spiderEyeHeight = 0.65
+
+// overworldAmbientLight is DimensionType.ambientLight() for the overworld (dimension_type/overworld.json
+// "ambient_light": 0.0). It is the Mth.lerp delta in getLightLevelDependentMagicValue; at 0.0 the lerp
+// collapses to f1 (the pure light-derived term). CITE: data/minecraft/dimension_type/overworld.json.
+const overworldAmbientLight = float32(0.0)
+
+// getLightLevelDependentMagicValue ports Entity.getLightLevelDependentMagicValue() ->
+// Level.getLightLevelDependentMagicValue(BlockPos). Entity path (VERIFIED javap Entity): if
+// level.hasChunkAt(blockX, blockZ) then level.getLightLevelDependentMagicValue(BlockPos.containing(x,
+// eyeY, z)) else 0.0f. Level path (VERIFIED javap LevelReader.getLightLevelDependentMagicValue):
 //
-// DEFERRED (recorded + in the SUMMARY): the real getLightLevelDependentMagicValue (a continuous
-// light-derived float, the interpolated sky+block brightness) collapses here to a binary day/night
-// proxy — the same FORCED decision the spawn gate made (35-02). It becomes a real light read with the
-// lighting engine, off no mob's lockstep stream (the flee draw stays on the spider's per-entity rng).
-func (g *meleeAttackGoal) isBright(t *TickLoop) bool {
-	// "Bright" (daytime) is the inverse of the night-window day/night proxy. isNightByGametime() is true
-	// during the [13000,23000) night window; bright == its negation (daytime). This is the SPIDER's own
-	// daylight-flee day/night proxy (getLightLevelDependentMagicValue()>=0.5), distinct from the natural-
-	// spawn darkness gate (which now reads the real per-position light engine, spawner.go
-	// isDarkEnoughToSpawn); the spider gate still uses the gametime proxy until the day/night SKY_LIGHT
-	// clock lands (the cited deferral above).
-	return !t.isNightByGametime()
+//	f  = getMaxLocalRawBrightness(pos) / 15.0f;
+//	f1 = f / (4.0f - 3.0f * f);
+//	return Mth.lerp(dimensionType.ambientLight(), f1, 1.0f);
+//
+// getMaxLocalRawBrightness now reads the REAL day/night skyDarken (light.go maxLocalRawBrightness ->
+// getSkyDarken -> the SKY_LIGHT_LEVEL timeline, env_timeline.go), so this is the faithful continuous
+// light value, no longer a binary day/night proxy. Overworld ambientLight is 0.0 so the lerp yields f1;
+// the Mth.lerp(delta,start,end)=start+delta*(end-start) form is kept for faithfulness (and multi-
+// dimension readiness). Draws NO RNG. CITE: net.minecraft.world.entity.Entity.getLightLevelDependentMagicValue;
+// net.minecraft.world.level.LevelReader.getLightLevelDependentMagicValue(BlockPos).
+func (t *TickLoop) getLightLevelDependentMagicValue(e *Entity) float32 {
+	// Entity path: BlockPos.containing(getX(), getEyeY(), getZ()) == floor of each coordinate.
+	pos := pk.Position{
+		X: int(math.Floor(e.x)),
+		Y: int(math.Floor(e.y + spiderEyeHeight)),
+		Z: int(math.Floor(e.z)),
+	}
+	f := float32(t.maxLocalRawBrightness(pos)) / 15.0
+	f1 := f / (4.0 - 3.0*f)
+	// Mth.lerp(ambientLight, f1, 1.0f) = f1 + ambientLight*(1.0f - f1).
+	return f1 + overworldAmbientLight*(1.0-f1)
+}
+
+// isBright is the SpiderAttackGoal daylight gate: a spider whose getLightLevelDependentMagicValue() is
+// >= 0.5f is in BRIGHT light and runs the 1/100 daylight-flee draw. This now reads the REAL light value
+// (getLightLevelDependentMagicValue over the light engine + the day/night skyDarken timeline), replacing
+// the former binary day/night gametime proxy. CITE: Spider$SpiderAttackGoal.canContinueToUse
+// (getLightLevelDependentMagicValue() >= 0.5f). No RNG here (the flee draw stays on the spider per-entity
+// rng in canContinueToUse).
+func (g *meleeAttackGoal) isBright(t *TickLoop, e *Entity) bool {
+	return t.getLightLevelDependentMagicValue(e) >= 0.5
 }
 
 // mobTarget reads the mob's current attack-target id (the Mob.getTarget() analogue), nil-guarding the
@@ -737,6 +765,7 @@ func isWithinMeleeAttackRange(e *Entity, target *tickPlayer) bool {
 // intersect the VICTIM's hitbox (its width x height collision AABB, feet at victim.y). Identical to the
 // player variant except the victim box is the mob's width/height instead of the player's. No held weapon
 // -> DEFAULT_ATTACK_REACH, min-range 0. NO RNG.
+//
 //	[VERIFIED javap Mob.isWithinMeleeAttackRange: reach = DEFAULT_ATTACK_REACH; getAttackBoundingBox(reach)
 //	 = getBoundingBox().inflate(reach, 0.0, reach); intersects(target.getHitbox()); min-range 0 -> single-box.
 //	 LivingEntity.getHitbox default == getBoundingBox() (width x height, feet at y).]

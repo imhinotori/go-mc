@@ -121,9 +121,11 @@ func categorySpawnCap(cat mobCategory, spawnableChunkCount int) int {
 
 // Day/night gametime windows for the daylight day/night proxy (35-CONTEXT SC#4). The vanilla day is
 // 24000 ticks; hostiles are active from dusk (~13000) to dawn (~23000) -- the night portion of the
-// day-time cycle. These bound the proxy the SPIDER daylight-flee gate (ai_goals_attack.go isBright)
-// still uses for its getLightLevelDependentMagicValue()>=0.5 day/night read; the natural-spawn
-// darkness gate no longer uses this proxy -- it reads the REAL light engine (isDarkEnoughToSpawn).
+// day-time cycle. These bound the day/night proxy still used by the fox/skeleton flee-sun +
+// player-sleep + isNight plugin reads (their faithful isBrightOutside/canSeeSky paths remain deferred).
+// The natural-spawn darkness gate (isDarkEnoughToSpawn) and the SPIDER daylight-flee gate
+// (ai_goals_attack.go isBright) NO LONGER use this proxy -- both read the REAL light engine (the latter
+// via getLightLevelDependentMagicValue over the day/night skyDarken timeline, env_timeline.go).
 const (
 	dayLengthTicks  = 24000 // vanilla day length (one full day/night cycle in ticks)
 	nightStartTicks = 13000 // dusk: night begins
@@ -132,11 +134,11 @@ const (
 
 // isNightByGametime is the day/night GAMETIME proxy: true during the [13000,23000) night portion of
 // `t.gametime % dayLengthTicks`. It is NOT the spawn darkness gate (that is the real light-based
-// isDarkEnoughToSpawn below). It stands in for the not-yet-built day/night SKY_LIGHT_LEVEL
-// environment-attribute clock for the ONE remaining consumer that has no per-position light read:
-// the Spider daylight-flee proxy (Spider$SpiderAttackGoal getLightLevelDependentMagicValue()>=0.5,
-// ai_goals_attack.go isBright). gametime (tick.go) is a monotonic non-negative tick counter (++ once
-// per consumed step, never decremented), so dayTime is always in [0,24000).
+// isDarkEnoughToSpawn below) nor the spider daylight gate (that reads the real
+// getLightLevelDependentMagicValue over the skyDarken timeline). It stands in for the not-yet-built
+// isBrightOutside/canSeeSky reads the fox + skeleton flee-sun goals, player-sleep, and the isNight
+// plugin builtin still use. gametime (tick.go) is a monotonic non-negative tick counter (++ once per
+// consumed step, never decremented), so dayTime is always in [0,24000).
 func (t *TickLoop) isNightByGametime() bool {
 	dayTime := t.gametime % dayLengthTicks
 	return dayTime >= nightStartTicks && dayTime < nightEndTicks
@@ -175,13 +177,12 @@ const (
 // inside spawnPackAt (natural_spawner.go), AFTER the biome pick/packSize-reset and BEFORE the yaw draw.
 //
 // getMaxLocalRawBrightness(pos) = getRawBrightness(pos, getSkyDarken()); getSkyDarken() is the level's
-// ambient-darkness term (15 - SKY_LIGHT_LEVEL). The day/night SKY_LIGHT_LEVEL clock is a not-yet-built
-// subsystem, so skyDarken stays at the vanilla DAY default (skyDarkenDay = 0, light.go), which makes a
-// SURFACE cell (raw SKY light 15) read getMaxLocalRawBrightness == 15 > any nextInt(8) sample -> the
-// gate returns false -> NO daytime surface hostile spawn (the reported bug's fix). A dark cave cell
-// (SKY 0, BLOCK 0) reads 0 <= nextInt(8) frequently -> hostiles spawn underground, exactly as vanilla.
-// [DEFERRED: getSkyDarken() day/night clock -> NIGHT surface spawns land when the environment-attribute
-// time clock lands (the SAME skyDarkenDay deferral in light.go); the light read + RNG draws are 1:1 now.]
+// ambient-darkness term (15 - SKY_LIGHT_LEVEL), now driven by the REAL day/night SKY_LIGHT_LEVEL
+// timeline (env_timeline.go, light.go maxLocalRawBrightness). At DAY skyDarken == 0, so a SURFACE cell
+// (raw SKY light 15) reads getMaxLocalRawBrightness == 15 > any nextInt(8) sample -> the gate returns
+// false -> NO daytime surface hostile spawn. At NIGHT skyDarken rises to 11, so a surface cell reads
+// getMaxLocalRawBrightness == 4 and can pass the nextInt(8) light test -> NIGHT surface hostile spawns,
+// exactly as vanilla. A dark cave cell (SKY 0, BLOCK 0) reads 0 <= nextInt(8) frequently at all times.
 // CITE: net.minecraft.world.entity.monster.Monster.isDarkEnoughToSpawn;
 // net.minecraft.world.level.dimension.DimensionType.monsterSpawnLightTest (UniformInt 0..7);
 // net.minecraft.util.valueproviders.UniformInt.sample -> Mth.randomBetweenInclusive.

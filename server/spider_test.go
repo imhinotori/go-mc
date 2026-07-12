@@ -194,51 +194,61 @@ func TestLeapSetsImpulse(t *testing.T) {
 //	 if (br >= 0.5f && getRandom().nextInt(100) == 0) { setTarget(null); return false; }
 //	 return super.canContinueToUse().]
 func TestSpiderAttackDaylightGate(t *testing.T) {
-	// (1) NIGHT (isDarkEnoughToSpawn true): no daylight draw, target retained, canContinueToUse honors
-	// the base melee continuation (a present target -> true).
-	loop := NewTickLoop(newFakeClock())
-	loop.gametime = 18000 // mid-night (13000 <= 18000 < 23000) -> isDarkEnoughToSpawn true -> dark
-	e := spiderTestMob(8030, 8.5, 64, 8.5)
+	// The gate now reads the REAL light: getLightLevelDependentMagicValue() >= 0.5, backed by
+	// maxLocalRawBrightness -> getSkyDarken() (the SKY_LIGHT_LEVEL timeline, env_timeline.go). Over a
+	// fully sky-lit (SKY 15) surface column: at NIGHT skyDarken is 11 so raw brightness is 4 -> magic
+	// ~0.083 < 0.5 -> NOT bright (no flee draw); at DAY skyDarken is 0 so raw is 15 -> magic 1.0 >= 0.5
+	// -> bright (the 1/100 flee draw runs). A lit world is required: the nil-world light fallback returns
+	// 15 unconditionally (no skyDarken subtraction), which would read bright at every gametime.
+
+	// (1) NIGHT (midnight, skyDarken 11): NOT bright -> no daylight draw, target retained.
+	loop, _, floorY := newSpawnLoop(t)
+	lightAllSpawnColumns(loop, 15) // sky-lit surface; skyDarken (not raw sky) drives day/night
+	loop.gametime = 18000          // midnight -> skyDarken 11 -> raw 4 -> magic < 0.5 -> not bright
+	e := spiderTestMob(8030, 8.5, float64(floorY+1), 8.5)
 	ref := referenceRng(e.id)
-	p := addTestPlayer(loop, 9430, 8.5+1.0, 64, 8.5)
+	p := addTestPlayer(loop, 9430, 8.5, float64(floorY+1)+1.0, 8.5)
 	e.ai.setTarget(p.entityID)
 
 	g := newSpiderAttackGoal(1.0)
-	if !g.canContinueToUse(loop, e) {
-		t.Fatal("at night the spider must keep its target (no daylight drop) -> canContinueToUse true")
-	}
+	loop.withRegion(loop.only(), func() {
+		if !g.canContinueToUse(loop, e) {
+			t.Fatal("at night (skyDarken 11 -> not bright) the spider must keep its target -> canContinueToUse true")
+		}
+	})
 	if e.ai.getTarget() != p.entityID {
 		t.Fatal("at night the target must be RETAINED (no setTarget(null))")
 	}
 	// ZERO RNG at night (the daylight branch never runs).
 	if a, b := e.ai.rng.nextInt(1_000_000), ref.nextInt(1_000_000); a != b {
-		t.Fatalf("the spider drew RNG at night: mob next=%d, ref next=%d — the daylight-flee draw must be gated on BRIGHT", a, b)
+		t.Fatalf("the spider drew RNG at night: mob next=%d, ref next=%d - the daylight-flee draw must be gated on BRIGHT", a, b)
 	}
 
-	// (2) DAY (isDarkEnoughToSpawn false): the daylight branch draws nextInt(100). Drive gametime to a
-	// daytime tick where the FIRST nextInt(100) is 0 so the drop fires; assert the target is dropped and
-	// canContinueToUse returns false.
-	loop2 := NewTickLoop(newFakeClock())
-	loop2.gametime = 1000 // daytime (< 13000) -> isDarkEnoughToSpawn false -> BRIGHT
-	// Find an id whose first nextInt(100) == 0 so the 1/100 drop fires deterministically.
+	// (2) DAY (noon, skyDarken 0): BRIGHT -> the daylight branch draws nextInt(100). Pick a seed whose
+	// first nextInt(100) == 0 so the 1/100 drop fires deterministically; assert the target is dropped.
+	loop2, _, floorY2 := newSpawnLoop(t)
+	lightAllSpawnColumns(loop2, 15)
+	loop2.gametime = 6000 // noon -> skyDarken 0 -> raw 15 -> magic 1.0 -> bright
 	var dayMob *Entity
 	for id := int32(8040); id < 8040+5000; id++ {
 		probe := referenceRng(id)
 		if probe.nextInt(100) == 0 {
-			dayMob = spiderTestMob(id, 8.5, 64, 8.5)
+			dayMob = spiderTestMob(id, 8.5, float64(floorY2+1), 8.5)
 			break
 		}
 	}
 	if dayMob == nil {
 		t.Fatal("could not find a seed whose first nextInt(100)==0 (the daylight-drop probe)")
 	}
-	p2 := addTestPlayer(loop2, 9440, 8.5+1.0, 64, 8.5)
+	p2 := addTestPlayer(loop2, 9440, 8.5, float64(floorY2+1)+1.0, 8.5)
 	dayMob.ai.setTarget(p2.entityID)
 
 	gDay := newSpiderAttackGoal(1.0)
-	if gDay.canContinueToUse(loop2, dayMob) {
-		t.Fatal("in daylight with a nextInt(100)==0 roll, the spider must DROP its target -> canContinueToUse false")
-	}
+	loop2.withRegion(loop2.only(), func() {
+		if gDay.canContinueToUse(loop2, dayMob) {
+			t.Fatal("in daylight with a nextInt(100)==0 roll, the spider must DROP its target -> canContinueToUse false")
+		}
+	})
 	if dayMob.ai.getTarget() != 0 {
 		t.Fatal("the daylight 1/100 flee must clear the target (setTarget(null))")
 	}
