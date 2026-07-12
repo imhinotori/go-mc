@@ -226,12 +226,26 @@ func (t *TickLoop) pickBiomeSpawnMob(x, y, z int, cat mobCategory) (data biomeSp
 	}
 	list := table[id][cat] // getMobs(category); a missing biome/category -> nil == EMPTY_MOB_LIST
 
-	// Restrict to the explicit natural pool for the category (the SAME intentional list the uniform stub
-	// used). Build a small membership set for the O(1) test.
-	pool := naturalPoolFor(cat)
+	// P0-05 (external audit): DRIVE THE PICK FROM THE BIOME'S REAL MobSpawnSettings.spawners LIST, filtered
+	// ONLY to registry-resolvability. Previously this also intersected a hardcoded per-category allowlist
+	// (naturalPoolFor -> naturalCreatureMobNames/naturalMonsterMobNames, 5 names each, empty for every other
+	// category) which DROPPED the full biome list down to a 5-mob subset and returned nothing for AMBIENT/
+	// WATER_*/AXOLOTLS. The allowlist is REMOVED here: the ONLY filter is now mobNameForType resolvability,
+	// which is EXACTLY vanilla's contract -- SpawnerData.type() is an EntityType the level can create, and a
+	// type with no loaded declaration cannot be spawned (getMobForSpawn would return null). So every biome
+	// CREATURE + MONSTER entry the registry can build is now a real candidate (fox/mooshroom/polar_bear/
+	// turtle/wolf per their biomes; drowned/husk/witch/stray/bogged/cave_spider/zombie_villager/... per
+	// theirs), and every OTHER category (AMBIENT bat, WATER_* fish, AXOLOTLS axolotl, ...) is structurally
+	// wired -- it resolves to a non-empty list AS SOON AS those mobs are declared, and until then filters to
+	// empty (ok=false, no draw) exactly as WeightedList.getRandom on a null selector. This keeps the pig
+	// oracle byte-identical: the test worlds carry biome Type 0 (badlands), whose CREATURE list intersect-
+	// resolvable is {sheep,pig,chicken,cow} (armadillo has no declaration) under BOTH the old allowlist and
+	// the new resolvable-only filter -- same walk order, same total weight (40), same draw.
+	// Cite NaturalSpawner.getRandomSpawnMobAt / MobSpawnSettings.getMobs / WeightedList.getRandom;
+	// SpawnerData.type() is a spawnable EntityType.
 
-	// Filter to (in pool) AND (registry-resolvable), preserving JSON order (the walk order). Sum the
-	// filtered weights - WeightedList.totalWeight over the ported subset (WeightedRandom.getTotalWeight).
+	// Filter to (registry-resolvable), preserving JSON order (the walk order). Sum the filtered weights -
+	// WeightedList.totalWeight over the ported-resolvable subset (WeightedRandom.getTotalWeight).
 	type filtered struct {
 		data biomeSpawnerData
 		name string
@@ -243,8 +257,8 @@ func (t *TickLoop) pickBiomeSpawnMob(x, y, z int, cat mobCategory) (data biomeSp
 			continue // a non-positive weight contributes nothing (defensive; vanilla weights are >=1)
 		}
 		name, resolvable := t.mobNameForType(sd.typeName)
-		if !resolvable || !pool[name] {
-			continue
+		if !resolvable {
+			continue // no loaded declaration -> getMobForSpawn would be null: filtered, exactly as vanilla
 		}
 		kept = append(kept, filtered{data: sd, name: name})
 		total += sd.weight

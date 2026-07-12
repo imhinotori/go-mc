@@ -64,6 +64,15 @@ const (
 	// placement attempt, so the per-tick cost stays negligible. 20 ticks ≈ once per second.
 	spawnInterval = 20
 
+	// friendlySpawnInterval ports the ServerChunkCache.tickChunks spawnFriendly cadence:
+	// spawnFriendly = (getGameTime() % 400L == 0) (javap: ldc2_w 400l; lrem; ifne). The FRIENDLY
+	// categories (CREATURE, AMBIENT, AXOLOTLS, WATER_CREATURE, WATER_AMBIENT, UNDERGROUND_WATER_CREATURE
+	// -- every isFriendly() category) are only offered to getFilteredSpawningCategories on this 400-tick
+	// cycle; MONSTER (isFriendly()==false) is offered every tick. 400 is a multiple of spawnInterval(20),
+	// so the (gametime%400==0) test still fires correctly given naturalSpawn is itself called only at
+	// gametime%20==0. CITE: net.minecraft.server.level.ServerChunkCache.tickChunks.
+	friendlySpawnInterval = 400
+
 	// spawnScanYRange bounds how many world-Y a column scan probes for a standable block around
 	// a reference surface, so an attempt is O(constant) — never a full -64..319 column walk.
 	// v1 references the players' feet Y; ±spawnScanYRange covers a few blocks up/down.
@@ -464,28 +473,69 @@ func (t *TickLoop) naturalSpawn() {
 	// MobSpawnSettings spawn weights and the full LocalMobCapCalculator per-player distance weighting.
 	// CITE: net.minecraft.world.entity.Mob.checkDespawn; NaturalSpawner.getFilteredSpawningCategories.
 
-	// Two faithful passes per cycle (vanilla NaturalSpawner iterates the filtered spawning categories):
-	// the CREATURE pass, then the MONSTER pass (Phase 35-02). The single-in-flight gate (spawnScanPending)
-	// admits ONE scan per cycle, so try CREATURE first; only if it did NOT submit (at cap / pool overload)
-	// does the MONSTER pass get a turn this cycle -- the next cycle alternates naturally. The MONSTER
-	// darkness gate is NO LONGER a once-per-cycle pre-submit check: it is the REAL per-candidate-position
-	// Monster.isDarkEnoughToSpawn light read applied inside spawnPackAt (natural_spawner.go), exactly at
-	// the vanilla isValidSpawnPostitionForType -> checkSpawnRules point (the jar runs the light check per
-	// candidate, not per cycle). So the MONSTER scan ALWAYS submits; the light gate rejects the individual
-	// daylit/lit positions on the owner (a daytime SURFACE candidate reads brightness 15 and is dropped;
-	// a dark cave candidate passes). This matches vanilla's per-position darkness discipline and draws the
-	// nextInt(32)+nextInt(8) samples on the spawn stream in the exact vanilla order.
-	if t.submitSpawnScanFor(categoryCreature, cols, spawnableChunkCount, refY) {
-		return // a CREATURE scan is in flight this cycle (the gate is set)
+	// getFilteredSpawningCategories(state, spawnFriendly, spawnEnemy) over SPAWNING_CATEGORIES (P0-05, the
+	// external-audit fix that WIRES ALL MobCategory pools, not just CREATURE + MONSTER). Vanilla
+	// ServerChunkCache.tickChunks computes spawnFriendly = (getGameTime() % 400 == 0) and passes
+	// spawnEnemy = this.spawnEnemies (isSpawningMonsters), then getFilteredSpawningCategories iterates
+	// SPAWNING_CATEGORIES (MobCategory.values() minus MISC, in ordinal order MONSTER, CREATURE, AMBIENT,
+	// AXOLOTLS, UNDERGROUND_WATER_CREATURE, WATER_CREATURE, WATER_AMBIENT) keeping a category iff:
+	//     (spawnFriendly || !category.isFriendly()) && (spawnEnemy || !category.isPersistent())
+	//     && state.canSpawnForCategoryGlobal(category)   [the per-category cap, re-checked in submitSpawnScanFor]
+	// So MONSTER (friendly=false, persistent=false) is eligible EVERY tick; CREATURE (friendly=true,
+	// persistent=true) needs spawnFriendly (every 400 ticks) AND spawnEnemy; and AMBIENT/AXOLOTLS/WATER_*
+	// (friendly=true, persistent=false) need only spawnFriendly (every 400 ticks). This ports the vanilla
+	// spawn CADENCE (task 4): passives + water + ambient fire on the 400-tick friendly cycle, hostiles
+	// every tick. CITE: ServerChunkCache.tickChunks (spawnFriendly = gameTime%400==0; spawnEnemy =
+	// spawnEnemies); NaturalSpawner.getFilteredSpawningCategories; MobCategory.isFriendly/isPersistent.
+	//
+	// The OPT-03 single-in-flight gate (spawnScanPending) admits ONE scan per cycle, so we iterate the
+	// filtered categories and submit the first that actually submits a scan; a category at cap /
+	// pool-overloaded falls through to the next. The per-position spawn-rules gates
+	// (Monster.isDarkEnoughToSpawn for MONSTER, Animal/Rabbit.checkSpawnRules for CREATURE, and the
+	// WATER/AMBIENT placement predicates once those mobs are declared) still run per-candidate inside
+	// spawnPackAt at the exact vanilla isValidSpawnPostitionForType point -- this cadence loop only
+	// chooses WHICH category's scan to submit.
+	spawnFriendly := t.gametime%friendlySpawnInterval == 0
+	spawnEnemy := t.isSpawningMonsters()
+	for _, cat := range spawnCategoryOrder(spawnFriendly) {
+		if !spawnFriendly && cat.isFriendly() {
+			continue // getFilteredSpawningCategories: skip a FRIENDLY category off the 400-tick friendly cycle
+		}
+		if !spawnEnemy && cat.isPersistent() {
+			continue // skip a PERSISTENT category when SPAWN_MONSTERS is off (spawnEnemy false)
+		}
+		if t.submitSpawnScanFor(cat, cols, spawnableChunkCount, refY) {
+			return // one scan in flight this cycle (the single-in-flight gate is set)
+		}
 	}
-	// getFilteredSpawningCategories(state, spawnFriendly, spawnEnemy): the MONSTER (enemy) category is only
-	// spawnable when spawnEnemy == ServerLevel.isSpawningMonsters() (SPAWN_MOBS && SPAWN_MONSTERS). With
-	// SPAWN_MONSTERS off, MONSTER is filtered out and no hostile scan is submitted. CITE:
-	// ServerChunkCache.tickChunks (spawnEnemy = isSpawningMonsters); NaturalSpawner.getFilteredSpawningCategories.
-	if !t.isSpawningMonsters() {
-		return
+}
+
+// spawnCategoryOrder returns the category iteration order for one naturalSpawn cycle. Vanilla
+// getFilteredSpawningCategories iterates SPAWNING_CATEGORIES in a single tickChunks that runs EVERY
+// eligible category to completion, so ORDER is observationally irrelevant there. Sulfur's OPT-03 async
+// spawner instead admits ONE scan per cycle (the per-region single-in-flight gate spawnScanPending), so
+// a naive MONSTER-first iteration would let MONSTER -- eligible EVERY tick -- always win the single slot
+// and starve the FRIENDLY categories out of their once-per-400-tick window entirely. To preserve the
+// vanilla OBSERVABLE outcome (passives/water/ambient DO spawn on their friendly cycle; hostiles spawn
+// ~every tick) under the single-slot model, on a FRIENDLY cycle (gametime%400==0) the friendly categories
+// take the slot first (MONSTER yields its 1-in-20 friendly-cycle opportunity -- it still submits on the
+// other ~19 spawnInterval cycles per friendly window), and on a NON-friendly cycle only MONSTER is
+// eligible so order is moot. The friendly sub-order follows the vanilla ordinal (CREATURE, AMBIENT,
+// AXOLOTLS, UNDERGROUND_WATER_CREATURE, WATER_CREATURE, WATER_AMBIENT). This is the minimal, documented
+// deviation the async single-slot substrate forces; the per-category caps + spawn-rules gates are all 1:1.
+func spawnCategoryOrder(spawnFriendly bool) []mobCategory {
+	if !spawnFriendly {
+		return spawningCategories // MONSTER-first ordinal; only MONSTER passes the friendly gate anyway
 	}
-	t.submitSpawnScanFor(categoryMonster, cols, spawnableChunkCount, refY)
+	return []mobCategory{
+		categoryCreature,
+		categoryAmbient,
+		categoryAxolotls,
+		categoryUndergroundWaterCreature,
+		categoryWaterCreature,
+		categoryWaterAmbient,
+		categoryMonster,
+	}
 }
 
 // spawnLiveCount returns the GLOBAL live count for a category for naturalSpawn's pre-submit cap gate

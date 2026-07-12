@@ -89,6 +89,38 @@ func (c mobCategory) despawnDistance() int {
 // for ALL categories (javap: `bipush 32; ireturn`). Cite MobCategory.getNoDespawnDistance.
 func (c mobCategory) noDespawnDistance() int { return 32 }
 
+// isFriendly ports net.minecraft.world.entity.MobCategory.isFriendly() -- the 5th constructor arg, read
+// from the static-initializer bytecode (cited above). getFilteredSpawningCategories skips a FRIENDLY
+// category unless spawnFriendly is set (`if (!spawnFriendly && category.isFriendly()) continue;`). The
+// per-enum values: MONSTER=false; CREATURE/AMBIENT/AXOLOTLS/UNDERGROUND_WATER_CREATURE/WATER_CREATURE/
+// WATER_AMBIENT=true; MISC=true. Cite net.minecraft.world.entity.MobCategory.isFriendly.
+func (c mobCategory) isFriendly() bool {
+	return c != categoryMonster
+}
+
+// isPersistent ports net.minecraft.world.entity.MobCategory.isPersistent() -- the 6th constructor arg
+// (cited above). getFilteredSpawningCategories skips a PERSISTENT category unless spawnEnemy is set
+// (`if (!spawnEnemy && category.isPersistent()) continue;`). The per-enum values from the static init:
+// CREATURE=true and MISC=true; MONSTER/AMBIENT/AXOLOTLS/UNDERGROUND_WATER_CREATURE/WATER_CREATURE/
+// WATER_AMBIENT=false. Cite net.minecraft.world.entity.MobCategory.isPersistent.
+func (c mobCategory) isPersistent() bool {
+	return c == categoryCreature || c == categoryMisc
+}
+
+// spawningCategories ports NaturalSpawner.SPAWNING_CATEGORIES: MobCategory.values() filtered to the
+// non-MISC categories (the static-init lambda drops MISC). getFilteredSpawningCategories iterates exactly
+// this array in ordinal order (MONSTER, CREATURE, AMBIENT, AXOLOTLS, UNDERGROUND_WATER_CREATURE,
+// WATER_CREATURE, WATER_AMBIENT). Cite net.minecraft.world.level.NaturalSpawner.SPAWNING_CATEGORIES.
+var spawningCategories = []mobCategory{
+	categoryMonster,
+	categoryCreature,
+	categoryAmbient,
+	categoryAxolotls,
+	categoryUndergroundWaterCreature,
+	categoryWaterCreature,
+	categoryWaterAmbient,
+}
+
 // maxSpawnClusterSize ports Mob.getMaxSpawnClusterSize() — the cap on how many mobs the natural
 // spawner's OUTER pack-group loop places at ONE candidate position before it returns
 // (spawnCategoryForPosition: `if (spawnedInGroup >= mob.getMaxSpawnClusterSize()) return;`). The base
