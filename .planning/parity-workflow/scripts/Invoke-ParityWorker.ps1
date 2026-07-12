@@ -195,14 +195,14 @@ if ($Mode -in @('Run', 'All')) {
     if ((Get-Item -LiteralPath $expectedOutputInWorktree).Length -eq 0) {
         throw "OpenCode produced an empty required artifact: $expectedOutputInWorktree"
     }
-    $expectedGitPath = ($ExpectedOutput -replace '\', '/')
+    $expectedGitPath = ($ExpectedOutput -replace '\\', '/')
     $statusLines = @(& git -C $worktree status --porcelain --untracked-files=all)
-    $changedPaths = @($statusLines | ForEach-Object { $_.Substring(3).Trim('"') -replace '\', '/' })
+    $changedPaths = @($statusLines | ForEach-Object { $_.Substring(3).Trim('"') -replace '\\', '/' })
     if ($expectedGitPath -notin $changedPaths) {
         throw "OpenCode returned success without modifying ExpectedOutput: $ExpectedOutput"
     }
     $unexpected = @($statusLines | Where-Object {
-        $changedPath = $_.Substring(3).Trim('"') -replace '\', '/'
+        $changedPath = $_.Substring(3).Trim('"') -replace '\\', '/'
         $changedPath -ne $expectedGitPath
     })
     if ($unexpected.Count -gt 0) {
