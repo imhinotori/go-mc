@@ -3,12 +3,14 @@
 **Proyecto:** Ender / Sulfur
 **Fecha:** 2026-07-11
 **Commit auditado originalmente:** `d41ee98398c462cd5b6b1ab986487c7a4ea2b89e`
-**Último snapshot de progreso:** `88894a33eda6c412120b7813bd8b230b1826f67a`
+**Último snapshot de progreso:** `ba25c36f`
 **Referencia vanilla:** `temp/cache/26.2-inner.jar`
 **Estado:** `gaps_found` — la paridad integral 1:1 todavía no está completa
 
-**Progress actualizado:** [████████████░░░░░░░░] **62% ±6**
+**Progress actualizado:** [████████████░░░░░░░░] **60% ±5**
 Metodología y desglose: [`PARITY-PROGRESS.md`](PARITY-PROGRESS.md).
+
+> Recalibración 2026-07-12: los censos multiworker verificaron registro 59/59 de gamerules pero sólo 14 consumidores live-store; serverbound 4 exactos / 33 parciales / 33 no-op (incluido el sentinel generado); components de disco 8/111; y 10 block entities live-drive sin seam de persistencia. Los informes fuente están en `.planning/parity-workflow/outputs/`.
 
 ## 1. Objetivo y alcance
 

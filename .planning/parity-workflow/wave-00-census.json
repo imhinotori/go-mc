@@ -6,15 +6,18 @@
   "tasks": [
     {
       "id": "census-gamerules",
-      "prompt": ".planning/parity-workflow/tasks/census-gamerules.md"
+      "prompt": ".planning/parity-workflow/tasks/census-gamerules.md",
+      "expected_output": ".planning/parity-workflow/outputs/census-gamerules.md"
     },
     {
       "id": "census-serverbound",
-      "prompt": ".planning/parity-workflow/tasks/census-serverbound.md"
+      "prompt": ".planning/parity-workflow/tasks/census-serverbound.md",
+      "expected_output": ".planning/parity-workflow/outputs/census-serverbound.md"
     },
     {
       "id": "census-persistence",
-      "prompt": ".planning/parity-workflow/tasks/census-persistence.md"
+      "prompt": ".planning/parity-workflow/tasks/census-persistence.md",
+      "expected_output": ".planning/parity-workflow/outputs/census-persistence.md"
     }
   ]
 }

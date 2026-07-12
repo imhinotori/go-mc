@@ -46,6 +46,11 @@ $ids = @($tasks | ForEach-Object { [string]$_.id })
 if (($ids | Sort-Object -Unique).Count -ne $ids.Count) {
     throw 'Task ids must be unique inside a wave.'
 }
+foreach ($task in $tasks) {
+    if ([string]::IsNullOrWhiteSpace([string]$task.expected_output)) {
+        throw "Task $($task.id) is missing expected_output."
+    }
+}
 
 Write-Output "Wave: $($spec.wave)"
 Write-Output "Base: $($spec.base_ref)"
@@ -53,14 +58,14 @@ Write-Output "Model: $($spec.model)"
 
 if (-not $Execute) {
     foreach ($task in $tasks) {
-        & $worker -TaskId $task.id -PromptFile $task.prompt -Mode Plan -Model $spec.model -BaseRef $spec.base_ref -RepoRoot $RepoRoot
+        & $worker -TaskId $task.id -PromptFile $task.prompt -Mode Plan -Model $spec.model -BaseRef $spec.base_ref -ExpectedOutput $task.expected_output -RepoRoot $RepoRoot
     }
     exit 0
 }
 
 # Git worktree creation is deliberately serial to avoid repository lock contention.
 foreach ($task in $tasks) {
-    & $worker -TaskId $task.id -PromptFile $task.prompt -Mode Prepare -Model $spec.model -BaseRef $spec.base_ref -RepoRoot $RepoRoot
+    & $worker -TaskId $task.id -PromptFile $task.prompt -Mode Prepare -Model $spec.model -BaseRef $spec.base_ref -ExpectedOutput $task.expected_output -RepoRoot $RepoRoot
 }
 
 # OpenCode runs in parallel only after every worktree exists.
@@ -75,6 +80,7 @@ foreach ($task in $tasks) {
         '-Mode', 'Run',
         '-Model', [string]$spec.model,
         '-BaseRef', [string]$spec.base_ref,
+        '-ExpectedOutput', [string]$task.expected_output,
         '-RepoRoot', $RepoRoot
     )
     $processes += [pscustomobject]@{

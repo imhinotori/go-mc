@@ -12,6 +12,7 @@ param(
 
     [string]$Model = 'minimax/MiniMax-M3',
     [string]$BaseRef = 'HEAD',
+    [string]$ExpectedOutput = '',
     [string]$RepoRoot = '',
     [string]$WorktreeRoot = ''
 )
@@ -61,6 +62,13 @@ $branch = "codex/parity-$TaskId"
 $configDir = Join-Path $worktree '.planning\parity-workflow\opencode'
 $promptInWorktree = Join-Path $worktree ($PromptFile -replace '/', '\')
 $runRoot = Join-Path $RepoRoot ".planning\parity-workflow\runs\$TaskId"
+$expectedOutputInWorktree = ''
+if (-not [string]::IsNullOrWhiteSpace($ExpectedOutput)) {
+    if ([IO.Path]::IsPathRooted($ExpectedOutput)) {
+        throw 'ExpectedOutput must be repository-relative.'
+    }
+    $expectedOutputInWorktree = Join-Path $worktree ($ExpectedOutput -replace '/', '\')
+}
 
 $plan = [ordered]@{
     task_id = $TaskId
@@ -72,6 +80,7 @@ $plan = [ordered]@{
     prompt = $promptInWorktree
     config_dir = $configDir
     logs = $runRoot
+    expected_output = $expectedOutputInWorktree
 }
 $plan | ConvertTo-Json | Write-Output
 
@@ -89,7 +98,7 @@ if ($Mode -in @('Prepare', 'All')) {
     if ($dirty.Count -gt 0) {
         throw "Main repository has tracked changes; commit or resolve them before preparing workers.`n$($dirty -join "`n")"
     }
-    $untracked = @(& git -C $RepoRoot status --porcelain --untracked-files=all)
+    $untracked = @(& git -C $RepoRoot status --porcelain --untracked-files=normal)
     if ($LASTEXITCODE -ne 0) {
         throw 'Unable to inspect untracked repository paths.'
     }
@@ -179,5 +188,19 @@ if ($Mode -in @('Run', 'All')) {
 
     if ($exitCode -ne 0) {
         throw "OpenCode worker failed with exit code $exitCode. Inspect $stderr"
+    }
+    if ([string]::IsNullOrWhiteSpace($expectedOutputInWorktree) -or -not (Test-Path -LiteralPath $expectedOutputInWorktree -PathType Leaf)) {
+        throw "OpenCode returned success without the required artifact: $expectedOutputInWorktree"
+    }
+    if ((Get-Item -LiteralPath $expectedOutputInWorktree).Length -eq 0) {
+        throw "OpenCode produced an empty required artifact: $expectedOutputInWorktree"
+    }
+    $expectedGitPath = ($ExpectedOutput -replace '\', '/')
+    $unexpected = @(& git -C $worktree status --porcelain --untracked-files=all | Where-Object {
+        $changedPath = $_.Substring(3).Trim('"') -replace '\', '/'
+        $changedPath -ne $expectedGitPath
+    })
+    if ($unexpected.Count -gt 0) {
+        throw "Worker changed files outside ExpectedOutput '$ExpectedOutput':`n$($unexpected -join "`n")"
     }
 }

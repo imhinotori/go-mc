@@ -6,15 +6,18 @@
   "tasks": [
     {
       "id": "census-persist-player-chunk",
-      "prompt": ".planning/parity-workflow/tasks/census-persist-player-chunk.md"
+      "prompt": ".planning/parity-workflow/tasks/census-persist-player-chunk.md",
+      "expected_output": ".planning/parity-workflow/outputs/census-persist-player-chunk.md"
     },
     {
       "id": "census-persist-entities-mobs",
-      "prompt": ".planning/parity-workflow/tasks/census-persist-entities-mobs.md"
+      "prompt": ".planning/parity-workflow/tasks/census-persist-entities-mobs.md",
+      "expected_output": ".planning/parity-workflow/outputs/census-persist-entities-mobs.md"
     },
     {
       "id": "census-persist-components-blockentities",
-      "prompt": ".planning/parity-workflow/tasks/census-persist-components-blockentities.md"
+      "prompt": ".planning/parity-workflow/tasks/census-persist-components-blockentities.md",
+      "expected_output": ".planning/parity-workflow/outputs/census-persist-components-blockentities.md"
     }
   ]
 }

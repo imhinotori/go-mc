@@ -122,6 +122,7 @@ El launcher:
 4. aplica la configuración restrictiva de `opencode/opencode.json`;
 5. guarda stdout/stderr/metadatos en `runs/`;
 6. deja los cambios sin stage y sin commit.
+7. exige el `expected_output` declarado: debe existir, no estar vacío y ser el único path modificado; `exit 0` sin artefacto se rechaza.
 
 ### 4. Revisión central
 

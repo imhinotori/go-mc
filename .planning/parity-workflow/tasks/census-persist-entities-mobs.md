@@ -13,6 +13,7 @@ Only create/update:
 `.planning/parity-workflow/outputs/census-persist-entities-mobs.md`
 
 Do not edit Go code, tests, the ledger, scripts or any other file.
+Do not open or summarize any other file under `.planning/parity-workflow/outputs/`.
 
 ## Required method
 
@@ -25,4 +26,4 @@ Do not edit Go code, tests, the ledger, scripts or any other file.
 ## Output
 
 Include totals per status, a complete audited-field table, representative type coverage and proposed ledger rows. No implementation and no commit.
-
+Before finishing, verify that the exact allowed output path exists and is non-empty.
