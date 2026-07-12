@@ -214,6 +214,27 @@ func (t *TickLoop) ensureChunkBlockTicks(pos level.ChunkPos) {
 	mgr.AddContainer(pos[0], pos[1], ticks.NewLevelChunkTicks[blockTickType]())
 }
 
+// loadChunkScheduledTicks is the chunk-ready seam that resumes a reloaded chunk persisted scheduled
+// ticks (LevelChunk.registerTickContainerInLevel + the ProtoChunk-pending-ticks promote). If the
+// chunk carried on-disk block_ticks (ChunkFromSave populated ch.SavedBlockTicks), it builds the
+// container FROM those saved ticks (loadChunkBlockTicks: NewLevelChunkTicksFromSaved + register +
+// unpack against the current game-time); otherwise it registers an EMPTY container
+// (ensureChunkBlockTicks) so live scheduleTick calls in the chunk are not dropped. Fluid ticks
+// re-enter the flat fluid schedule the same way (loadChunkFluidTicks). A generated chunk has both
+// lists empty, so the observable result is IDENTICAL to the prior ensureChunkBlockTicks-only wiring
+// (pig oracle safe -- the pig generated chunk carries no saved ticks). Tick-owned; runs on the owner
+// inside the owning region. CITE: LevelChunk.registerTickContainerInLevel + LevelChunkTicks.unpack.
+func (t *TickLoop) loadChunkScheduledTicks(pos level.ChunkPos, ch *level.Chunk) {
+	if ch != nil && len(ch.SavedBlockTicks) > 0 {
+		t.loadChunkBlockTicks(pos, ch.SavedBlockTicks)
+	} else {
+		t.ensureChunkBlockTicks(pos)
+	}
+	if ch != nil && len(ch.SavedFluidTicks) > 0 {
+		t.loadChunkFluidTicks(ch.SavedFluidTicks, t.gametime)
+	}
+}
+
 // scheduleBlockTick is net.minecraft.world.level.ScheduledTickAccess.scheduleTick(pos, block,
 // delay) (the 3-arg form, NORMAL priority): build a ScheduledTick at triggerTick = gameTime +
 // delay with a fresh subTickOrder and enqueue it. A tick for an unloaded chunk is dropped by

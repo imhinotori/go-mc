@@ -83,7 +83,7 @@ func TestStructureStartsSurviveReloadWithoutRecompute(t *testing.T) {
 
 	// (2) WRITE path: serialize the chunk WITH its `structures` compound.
 	minY, _ := src.Dims()
-	blob, err := SerializeChunkData(src.StructureCache(), owner, ch, minY)
+	blob, err := SerializeChunkData(src.StructureCache(), owner, ch, minY, nil, nil)
 	if err != nil {
 		t.Fatalf("SerializeChunkData: %v", err)
 	}
@@ -148,9 +148,9 @@ func TestStructureReloadMissingTagRecomputes(t *testing.T) {
 	minY, _ := src.Dims()
 
 	// Serialize WITHOUT a structures compound (nil cache -> no `structures` tag).
-	blob, err := SerializeChunkData(nil, owner, ch, minY)
+	blob, err := SerializeChunkData(nil, owner, ch, minY, nil, nil)
 	if err != nil {
-		t.Fatalf("SerializeChunkData(nil cache): %v", err)
+		t.Fatalf("SerializeChunkData(nil cache, nil, nil): %v", err)
 	}
 
 	dir := t.TempDir()
@@ -205,7 +205,7 @@ func TestBlockEntitySurvivesReload(t *testing.T) {
 	be.Data = chestLootNBT(table, seed)
 	ch.BlockEntity = append(ch.BlockEntity, be)
 
-	blob, err := SerializeChunkData(src.StructureCache(), owner, ch, minY)
+	blob, err := SerializeChunkData(src.StructureCache(), owner, ch, minY, nil, nil)
 	if err != nil {
 		t.Fatalf("SerializeChunkData: %v", err)
 	}

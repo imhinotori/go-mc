@@ -54,6 +54,30 @@ type Chunk struct {
 	// water flow into a bordering air gap, NOT a recurring sim. This is the marked-positions
 	// equivalent of vanilla's per-section ShortList[] postProcessing array.
 	PostProcessFluids []uint32
+
+	// InhabitedTime is the cumulative game-ticks players have spent near this chunk
+	// (net.minecraft.world.level.chunk.ChunkAccess.inhabitedTime), the "Level" that feeds
+	// DifficultyInstance's local-difficulty scaling. It is persisted verbatim so it survives a
+	// chunk unload/reload; the per-tick accumulation (ServerLevel.tickChunk += tickSpeed) is a
+	// later wire-up, so a freshly generated chunk starts at 0 (the vanilla ProtoChunk default).
+	// CITE: SerializableChunkData InhabitedTime (getLong "InhabitedTime").
+	InhabitedTime int64
+
+	// IsLightOn is LevelChunk.isLightCorrect() (the on-disk "isLightOn" byte): true once the light
+	// engine has computed this chunk's sky+block light, so a reload does not re-light from scratch.
+	// A fully generated+lit chunk (StatusFull) writes it true. CITE: SerializableChunkData isLightOn
+	// (putBoolean "isLightOn", lightCorrect).
+	IsLightOn bool
+
+	// SavedBlockTicks / SavedFluidTicks are the pending scheduled ticks decoded from the chunk's
+	// on-disk block_ticks / fluid_ticks (ChunkFromSave). They are TRANSIENT load-time state: the
+	// server drains them at chunk-ready (loadChunkBlockTicks / loadChunkFluidTicks) into the live
+	// LevelTicks + fluid schedulers, then never reads them again. A GENERATED chunk leaves both nil.
+	// Kept on the chunk (rather than the ChunkResult tuple) so the worker's decode chain need not
+	// thread them through. CITE: SerializableChunkData.read (block_ticks/fluid_ticks -> ProtoChunk
+	// pending ticks, promoted into LevelChunkTicks on the LevelChunk).
+	SavedBlockTicks []save.SavedTickNBT
+	SavedFluidTicks []save.SavedTickNBT
 }
 
 func EmptyChunk(secs int) *Chunk {
@@ -150,6 +174,19 @@ func ChunkFromSave(c *save.Chunk) (*Chunk, error) {
 		}
 	}
 
+	// block_ticks / fluid_ticks: decode the chunk's pending scheduled ticks (SavedTick.codec lists)
+	// into the transient SavedBlockTicks/SavedFluidTicks the server drains at chunk-ready. A tick-free
+	// chunk yields nil lists (DecodeChunkTicks on a TagEnd RawMessage). A repeater mid-delay or water
+	// mid-spread thus survives a reload. CITE: SerializableChunkData.read (block_ticks/fluid_ticks).
+	savedBlockTicks, err := save.DecodeChunkTicks(c.BlockTicks)
+	if err != nil {
+		return nil, fmt.Errorf("decode block_ticks: %w", err)
+	}
+	savedFluidTicks, err := save.DecodeChunkTicks(c.FluidTicks)
+	if err != nil {
+		return nil, fmt.Errorf("decode fluid_ticks: %w", err)
+	}
+
 	bitsForHeight := bits.Len( /* chunk height in blocks */ uint(secs)*16 + 1)
 	return &Chunk{
 		Sections:          sections,
@@ -163,7 +200,17 @@ func ChunkFromSave(c *save.Chunk) (*Chunk, error) {
 			MotionBlockingNoLeaves: NewBitStorage(bitsForHeight, 16*16, c.Heightmaps["MOTION_BLOCKING_NO_LEAVES"]),
 		},
 		BlockEntity: blockEntities,
-		Status:      ChunkStatus(c.Status),
+		// Status parses the on-disk namespaced form ("minecraft:full") back to the bare enum
+		// used by worldgen; an absent/unknown status resolves to StatusEmpty. CITE:
+		// SerializableChunkData.getChunkStatusFromTag (ChunkStatus.CODEC orElse EMPTY).
+		Status: ChunkStatusFromDisk(c.Status),
+		// InhabitedTime + IsLightOn round-trip verbatim so a reloaded chunk keeps its accumulated
+		// local-difficulty level and its computed-light flag. CITE: SerializableChunkData read
+		// (InhabitedTime long, isLightOn boolean).
+		InhabitedTime:   c.InhabitedTime,
+		IsLightOn:       c.IsLightOn != 0,
+		SavedBlockTicks: savedBlockTicks,
+		SavedFluidTicks: savedFluidTicks,
 	}, nil
 }
 
@@ -256,7 +303,20 @@ func ChunkToSave(c *Chunk, dst *save.Chunk) (err error) {
 	dst.Heightmaps["OCEAN_FLOOR"] = c.HeightMaps.OceanFloor.Raw()
 	dst.Heightmaps["MOTION_BLOCKING"] = c.HeightMaps.MotionBlocking.Raw()
 	dst.Heightmaps["MOTION_BLOCKING_NO_LEAVES"] = c.HeightMaps.MotionBlockingNoLeaves.Raw()
-	dst.Status = string(c.Status)
+	// Status is written as the NAMESPACED resource location ("minecraft:<name>"), matching
+	// SerializableChunkData.write (CHUNK_STATUS.getKey(status).toString()); ChunkFromSave strips
+	// the namespace on read. CITE: SerializableChunkData.write (putString "Status").
+	dst.Status = c.Status.DiskName()
+
+	// InhabitedTime + isLightOn: the cumulative local-difficulty level and the computed-light flag,
+	// persisted so a reload preserves both (SerializableChunkData.write putLong "InhabitedTime" /
+	// putBoolean "isLightOn"). isLightOn maps the bool to the on-disk byte (1 = light computed).
+	dst.InhabitedTime = c.InhabitedTime
+	if c.IsLightOn {
+		dst.IsLightOn = 1
+	} else {
+		dst.IsLightOn = 0
+	}
 
 	// PostProcessing: serialize the chunk's PostProcessFluids list to the vanilla on-disk
 	// "PostProcessing" tag (SerializableChunkData.packOffsets) — a ListTag with one ShortList per

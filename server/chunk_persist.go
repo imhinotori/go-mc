@@ -136,7 +136,14 @@ func (t *TickLoop) flushColumn(pos level.ChunkPos) bool {
 		}
 	}
 
-	data, err := world.SerializeChunkData(t.worker().StructureCache(), pos, ch, t.worker().MinY())
+	// SCHEDULED-TICK FLUSH: pack this column pending block + fluid ticks so a repeater mid-delay
+	// or water mid-spread survives the unload/reload (SerializableChunkData block_ticks/fluid_ticks).
+	// packChunkBlockTicks pulls the LevelChunkTicks container; packChunkFluidTicks filters the flat
+	// fluid schedule to this chunk. Both pack the delay relative to the current game-time.
+	blockTicks := t.packChunkBlockTicks(pos)
+	fluidTicks := t.packChunkFluidTicks(pos, t.gametime)
+
+	data, err := world.SerializeChunkData(t.worker().StructureCache(), pos, ch, t.worker().MinY(), blockTicks, fluidTicks)
 	if err != nil {
 		// A serialize error is an encode bug, not runtime input; skip this column (do not crash the
 		// tick). It stays out of the dirty set (DrainDirty already cleared it); a later edit re-dirties.
@@ -247,4 +254,44 @@ func (t *TickLoop) markChestDirty(chestPos pk.Position) {
 		return
 	}
 	t.world().MarkDirty(level.ChunkPos{int32(chestPos.X >> 4), int32(chestPos.Z >> 4)})
+}
+
+// hydrateTickingBlockEntities is the load-side ticker registration for a chunk becoming ready --
+// the Go analogue of net.minecraft.world.level.chunk.LevelChunk.promotePendingBlockEntities /
+// addAndRegisterBlockEntity, which register a TickingBlockEntity for every loaded block entity so a
+// mid-cook furnace / running hopper / brewing stand / active crafter RESUMES ticking on reload
+// WITHOUT a player interaction. Sulfur previously only populated the live BE maps lazily (on first
+// menu open via resolveFurnace etc.), so a reloaded furnace mid-cook sat frozen until touched. This
+// walks the chunk's persisted BlockEntity list and, for each block entity whose block still carries
+// a server ticker (furnace-family, hopper, brewing stand, crafter -- the block-entity types with an
+// AbstractFurnaceBlockEntity-style serverTick), calls the matching resolve* to decode its saved
+// state and insert it into the live tick map. resolve* reads the persisted mid-cook progress
+// (loadFurnaceBE etc.), so the resumed ticker continues exactly where it stopped. RNG-free
+// reconstruction -- the pig oracle path (a generated chunk with no ticking BEs) hits nothing. Tick-
+// owned; runs on the owner inside the owning region at chunk-ready. CITE: LevelChunk
+// .promotePendingBlockEntities -> addAndRegisterBlockEntity -> updateBlockEntityTicker.
+func (t *TickLoop) hydrateTickingBlockEntities(pos level.ChunkPos, ch *level.Chunk) {
+	if ch == nil || t.world() == nil {
+		return
+	}
+	baseX, baseZ := int(pos[0])<<4, int(pos[1])<<4
+	for i := range ch.BlockEntity {
+		be := ch.BlockEntity[i]
+		lx, lz := be.UnpackXZ()
+		wp := pk.Position{X: baseX + lx, Y: int(be.Y), Z: baseZ + lz}
+		state, ok := t.world().GetBlock(wp, dimMinY)
+		if !ok {
+			continue // the block-entity's cell is out of range / unloaded: skip (matches getBlockState air)
+		}
+		switch {
+		case isAnyFurnaceBlock(state):
+			t.resolveFurnace(wp, state) // AbstractFurnaceBlockEntity.serverTick
+		case block.IsHopper(state):
+			t.resolveHopper(wp, state) // HopperBlockEntity.pushItemsTick
+		case isBrewingStandBlock(state):
+			t.resolveBrewingStand(wp, state) // BrewingStandBlockEntity.serverTick
+		case block.IsCrafter(state):
+			t.resolveCrafter(wp, state) // CrafterBlockEntity.serverTick (crafting animation countdown)
+		}
+	}
 }

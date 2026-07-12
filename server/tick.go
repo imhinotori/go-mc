@@ -127,11 +127,17 @@ func (r chunkReady) applyTo(t *TickLoop) {
 	// in the owning region so ensureChunkBlockTicks (cur().blockTicks), postProcessChunkFluids
 	// (cur().fluidSchedule), and drainStructureSpawns (cur().entities) resolve to r.res.Pos's region.
 	t.withRegion(t.regionForColumn(r.res.Pos), func() {
-		// Register an (empty) block-tick container for the chunk so live scheduleTick calls inside
-		// it are not dropped (LevelTicks.Schedule routes by chunk; a chunk with no container drops
-		// the tick). Vanilla addContainer's every loaded chunk; without this the sugar-cane cascade
-		// (and every other scheduled block tick) never fired on generated/streamed chunks.
-		t.ensureChunkBlockTicks(r.res.Pos)
+		// Register the chunk block-tick container (LevelChunk.registerTickContainerInLevel) AND
+		// re-schedule its persisted block + fluid ticks (SerializableChunkData.read -> the ProtoChunk
+		// pending ticks unpacked onto the LevelChunkTicks). A reloaded chunk that carried a repeater
+		// mid-delay / water mid-spread thus resumes its scheduled ticks; a generated chunk (no saved
+		// ticks) registers an empty container so live scheduleTick calls are not dropped. CITE:
+		// LevelChunk.registerTickContainerInLevel + LevelChunkTicks.unpack.
+		t.loadChunkScheduledTicks(r.res.Pos, r.res.Chunk)
+		// LAZY-BE HYDRATION: eagerly register the chunk furnace/hopper/brewing/crafter block
+		// entities so a mid-cook furnace / running hopper resumes ticking on reload without a touch
+		// (LevelChunk.promotePendingBlockEntities). A generated chunk with no ticking BEs is a no-op.
+		t.hydrateTickingBlockEntities(r.res.Pos, r.res.Chunk)
 		t.postProcessChunkFluids(r.res.Pos, r.res.Chunk)
 		// STRUCT-POLISH-02: drain the structure-inhabitant SpawnRequests the worker recorded
 		// off-tick onto the entity store — on the owner (TICK-05 / Pitfall 5). The witch/cat/villager

@@ -3,7 +3,9 @@ package server
 import (
 	"sort"
 
+	"github.com/imhinotori/sulfur/level"
 	pk "github.com/imhinotori/sulfur/net/packet"
+	"github.com/imhinotori/sulfur/save"
 )
 
 // fluid_schedule.go (GAMEPLAY-05) is the net-new scheduled-block-tick queue. The world's
@@ -91,4 +93,97 @@ func packPos(p pk.Position) int64 {
 	return ((int64(p.X) & xzMask) << (yBits + xzBits)) |
 		((int64(p.Z) & xzMask) << yBits) |
 		(int64(p.Y) & yMask)
+}
+
+// packChunkFluidTicks serializes the pending fluid ticks that fall inside the chunk at cp into the
+// on-disk SavedTickNBT list (the chunk fluid_ticks field), the fluid twin of packChunkBlockTicks.
+// Each pending (pos, dueGametime) in the flat schedule queue whose chunk matches cp becomes one
+// SavedTick: its type id i is the fluid at the cell right now (minecraft:water / minecraft:lava, or
+// the flowing form when not a source), its delay is dueGametime - gametime (relative, exactly
+// SavedTick.toSavedTick), and its priority is NORMAL(0) -- fluids always schedule via the 3-arg
+// scheduleTick(pos, fluid, delay). A cell that is no longer a fluid is skipped (a stale schedule for
+// a drained cell writes nothing, matching how the reloaded tick would no-op). A nil queue / no
+// matching ticks yields nil so the save shape omits the field. CITE: SerializableChunkData
+// fluid_ticks (FLUID_TICKS_CODEC over List<SavedTick<Fluid>>); FlowingFluid.tick ->
+// ServerLevel.scheduleTick(pos, fluid, delay).
+func (t *TickLoop) packChunkFluidTicks(cp level.ChunkPos, gametime int64) []save.SavedTickNBT {
+	if t.cur().fluidSchedule == nil {
+		return nil
+	}
+	var out []save.SavedTickNBT
+	for due, bucket := range t.cur().fluidSchedule.buckets {
+		for _, st := range bucket {
+			if int32(st.pos.X>>4) != cp[0] || int32(st.pos.Z>>4) != cp[1] {
+				continue // a tick in another chunk: not this column business
+			}
+			id := t.fluidSavedTickID(st.pos)
+			if id == "" {
+				continue // no fluid at the cell now -> nothing to persist (drained/replaced)
+			}
+			out = append(out, save.SavedTickNBT{
+				ID:       id,
+				X:        int32(st.pos.X),
+				Y:        int32(st.pos.Y),
+				Z:        int32(st.pos.Z),
+				Delay:    int32(due - gametime),
+				Priority: 0, // fluid scheduleTick is the 3-arg NORMAL form (TickPriority.NORMAL == 0)
+			})
+		}
+	}
+	// Deterministic order (packed pos, then delay): map iteration is nondeterministic, so sort to a
+	// stable on-disk shape run-to-run (the same Pitfall-2 discipline drainDue uses).
+	sort.Slice(out, func(i, j int) bool {
+		pi := packPos(pk.Position{X: int(out[i].X), Y: int(out[i].Y), Z: int(out[i].Z)})
+		pj := packPos(pk.Position{X: int(out[j].X), Y: int(out[j].Y), Z: int(out[j].Z)})
+		if pi != pj {
+			return pi < pj
+		}
+		return out[i].Delay < out[j].Delay
+	})
+	return out
+}
+
+// fluidSavedTickID resolves the fluid registry id i a scheduled fluid tick at pos serializes under:
+// minecraft:water for a water source, minecraft:lava for a lava source, and the flowing_* form when
+// the cell is a non-source (flowing) fluid -- mirroring FluidState.getType() registry key. Empty
+// when the cell holds no fluid. CITE: WaterFluid.Source/Flowing + LavaFluid registry ids.
+func (t *TickLoop) fluidSavedTickID(pos pk.Position) string {
+	f := t.fluidAt(pos)
+	switch {
+	case f.isWater:
+		if f.source {
+			return "minecraft:water"
+		}
+		return "minecraft:flowing_water"
+	case f.isLava:
+		if f.source {
+			return "minecraft:lava"
+		}
+		return "minecraft:flowing_lava"
+	default:
+		return ""
+	}
+}
+
+// loadChunkFluidTicks re-schedules the on-disk fluid ticks for a freshly loaded chunk (the fluid
+// twin of loadChunkBlockTicks). Each SavedTick becomes a live schedule at gametime + delay; the
+// fluid identity i is IGNORED because fluidTick recomputes the cell fluid from the world when it
+// fires, so only (pos, delay) matter to resume the mid-spread flow. An empty list is a no-op. A
+// negative delay (a tick that was due while the chunk was unloaded) clamps to 0 so it fires next
+// tick, matching how LevelChunkTicks.unpack floors the trigger at the current game-time. Tick-owned.
+// CITE: LevelChunkTicks.unpack (triggerTick = max(delay + gameTime, gameTime)); FlowingFluid.tick.
+func (t *TickLoop) loadChunkFluidTicks(savedTicks []save.SavedTickNBT, gametime int64) {
+	if len(savedTicks) == 0 {
+		return
+	}
+	if t.cur().fluidSchedule == nil {
+		t.cur().fluidSchedule = newFluidScheduleQueue()
+	}
+	for _, st := range savedTicks {
+		due := gametime + int64(st.Delay)
+		if due < gametime {
+			due = gametime // clamp a past-due tick to fire next tick (unpack max(_, gameTime))
+		}
+		t.cur().fluidSchedule.schedule(pk.Position{X: int(st.X), Y: int(st.Y), Z: int(st.Z)}, due)
+	}
 }

@@ -28,7 +28,7 @@ func TestWaterChunkPersistRoundTrip(t *testing.T) {
 		t.Fatal("test chunk has no fluid at gen time — pick a watery chunk")
 	}
 
-	data, err := SerializeChunkData(g.StructureCache(), cp, ch, -64)
+	data, err := SerializeChunkData(g.StructureCache(), cp, ch, -64, nil, nil)
 	if err != nil {
 		t.Fatalf("SerializeChunkData: %v", err)
 	}

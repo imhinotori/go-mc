@@ -91,7 +91,7 @@ func TestChunkRoundTrip_EditSurvivesReload(t *testing.T) {
 	ch.Sections[sec].SetBlock(local, stone)
 
 	// Serialize ON the (test stand-in for the) owner, write to region, reload via the worker.
-	data, err := SerializeChunkData(nil, pos, ch, blockTestMinY)
+	data, err := SerializeChunkData(nil, pos, ch, blockTestMinY, nil, nil)
 	if err != nil {
 		t.Fatalf("SerializeChunkData: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestChunkSaver_EnqueueWritesRegion(t *testing.T) {
 	sec, local := sectionLocal(editPos.X, editPos.Y, editPos.Z, blockTestMinY)
 	ch.Sections[sec].SetBlock(local, stone)
 
-	data, err := SerializeChunkData(nil, pos, ch, blockTestMinY)
+	data, err := SerializeChunkData(nil, pos, ch, blockTestMinY, nil, nil)
 	if err != nil {
 		t.Fatalf("SerializeChunkData: %v", err)
 	}
