@@ -190,16 +190,13 @@ func ComputeChunkLight(centerPos level.ChunkPos, neighbors map[[2]int]*level.Chu
 		secY := minSectionY + si
 		sky := eng.GetDataLayerData(lighting.LightLayerSky, cx, secY, cz)
 		blk := eng.GetDataLayerData(lighting.LightLayerBlock, cx, secY, cz)
-		if sky == nil && eng.SkySectionIsAboveData(cx, secY, cz) {
-			// Above the column's sky top: no stored layer, but the section is fully lit (sky 15).
-			// This repo's light wire (level/chunk.go) has no padding sections and marks any
-			// unset section EMPTY, so an above-terrain sky section MUST carry an explicit 0xFF
-			// array to render lit — exactly what the old fullSkyLight() seal produced. CITE:
-			// SkyLightSectionStorage.getLightValue (above-top => 15).
-			center.Sections[si].SkyLight = fullSkyLight()
-		} else {
-			center.Sections[si].SkyLight = materializeLayer(sky)
-		}
+		// An absent sky DataLayer (nil) is left nil: the wire encoder sets NEITHER the data
+		// bit NOR the empty bit for that section, so a vanilla 26.2 client keeps/derives its
+		// own light there — an above-terrain sky section renders fully lit (15) natively
+		// (SkyLightSectionStorage.getLightValue: above-top => 15). No 0xFF compensation fill:
+		// the corrected per-layer empty-mask semantics (ClientboundLightUpdatePacketData
+		// .prepareSectionData) make the old seal unnecessary and non-vanilla.
+		center.Sections[si].SkyLight = materializeLayer(sky)
 		center.Sections[si].BlockLight = materializeLayer(blk)
 	}
 }

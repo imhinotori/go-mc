@@ -48,34 +48,17 @@ func WriteLevelChunkWithLight(cx, cz int32, ch *level.Chunk) (pk.Packet, error) 
 // net.minecraft.network.protocol.game.ClientboundLightUpdatePacket.write +
 // ClientboundLightUpdatePacketData.write.
 func WriteLightUpdate(cl ColumnLight) pk.Packet {
-	const maskLongs = (16*16*16-1)>>6 + 1 // identical sizing to level.Chunk.WriteTo's lightData masks
-	skyMask := make(pk.BitSet, maskLongs)
-	blockMask := make(pk.BitSet, maskLongs)
-	var skyArrays, blockArrays []pk.ByteArray
-	for i, a := range cl.Sky {
-		if a != nil {
-			skyMask.Set(i, true)
-			skyArrays = append(skyArrays, a)
-		}
-	}
-	for i, a := range cl.Block {
-		if a != nil {
-			blockMask.Set(i, true)
-			blockArrays = append(blockArrays, a)
-		}
-	}
-	emptySky := make(pk.BitSet, maskLongs)
-	emptyBlock := make(pk.BitSet, maskLongs)
-	for i := range skyMask {
-		emptySky[i] = ^skyMask[i]
-	}
-	for i := range blockMask {
-		emptyBlock[i] = ^blockMask[i]
-	}
+	// Identical encoder to the in-chunk light (level.EncodeLightData): the same
+	// minSectionY-1 base, secs+2 light sections (block section si -> bit si+1,
+	// padding sections at bit 0 and bit secs+1 unset), per-layer isEmpty empty
+	// masks (nil array => neither bit), and vanilla-trimmed BitSets. CITE:
+	// ClientboundLightUpdatePacketData.write == ClientboundLevelChunkWithLight's
+	// embedded light — they MUST be byte-identical.
+	ld := level.EncodeLightData(cl.Sky, cl.Block)
 	return pk.Marshal(int32(packetid.ClientboundLightUpdate),
 		pk.VarInt(cl.Pos[0]), pk.VarInt(cl.Pos[1]),
-		skyMask, blockMask, emptySky, emptyBlock,
-		pk.Array(skyArrays), pk.Array(blockArrays),
+		ld.SkyLightMask, ld.BlockLightMask, ld.EmptySkyLightMask, ld.EmptyBlockLightMask,
+		pk.Array(ld.SkyLight), pk.Array(ld.BlockLight),
 	)
 }
 

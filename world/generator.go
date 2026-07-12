@@ -78,16 +78,6 @@ func decorateSingle(g Generator, pos level.ChunkPos) *level.Chunk {
 	return center
 }
 
-// fullSkyLight is a full-brightness (level 15) sky-light array for one section:
-// 4096 nibbles packed into 2048 bytes, every nibble = 0xF.
-func fullSkyLight() []byte {
-	b := make([]byte, 2048)
-	for i := range b {
-		b[i] = 0xFF
-	}
-	return b
-}
-
 // Superflat is a deterministic WORLD-04 stub generator. Every column is:
 //
 //	y == MinY                 -> bedrock (1 layer floor)

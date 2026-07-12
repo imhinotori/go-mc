@@ -454,22 +454,13 @@ func (c *Chunk) WriteTo(w io.Writer) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	light := lightData{
-		SkyLightMask:   make(pk.BitSet, (16*16*16-1)>>6+1),
-		BlockLightMask: make(pk.BitSet, (16*16*16-1)>>6+1),
-		SkyLight:       []pk.ByteArray{},
-		BlockLight:     []pk.ByteArray{},
+	sky := make([][]byte, len(c.Sections))
+	blk := make([][]byte, len(c.Sections))
+	for i := range c.Sections {
+		sky[i] = c.Sections[i].SkyLight
+		blk[i] = c.Sections[i].BlockLight
 	}
-	for i, v := range c.Sections {
-		if v.SkyLight != nil {
-			light.SkyLightMask.Set(i, true)
-			light.SkyLight = append(light.SkyLight, v.SkyLight)
-		}
-		if v.BlockLight != nil {
-			light.BlockLightMask.Set(i, true)
-			light.BlockLight = append(light.BlockLight, v.BlockLight)
-		}
-	}
+	light := EncodeLightData(sky, blk)
 
 	// Protocol 774+: heightmaps are serialized as VarInt-typed array entries.
 	// Vanilla sends ONLY the 3 Usage.CLIENT (sendToClient) heightmaps —
@@ -505,12 +496,7 @@ func (c *Chunk) ReadFrom(r io.Reader) (int64, error) {
 		pk.Array(&hmEntries),
 		&data,
 		pk.Array(&c.BlockEntity),
-		&lightData{
-			SkyLightMask:   make(pk.BitSet, (16*16*16-1)>>6+1),
-			BlockLightMask: make(pk.BitSet, (16*16*16-1)>>6+1),
-			SkyLight:       []pk.ByteArray{},
-			BlockLight:     []pk.ByteArray{},
-		},
+		&lightData{},
 	}.ReadFrom(r)
 	if err != nil {
 		return n, err
@@ -776,39 +762,128 @@ func (s *Section) ReadFrom(r io.Reader) (int64, error) {
 	}.ReadFrom(r)
 }
 
+// lightData is the four-BitSet + two-array light payload shared by
+// ClientboundLevelChunkWithLight (in-chunk) and the standalone
+// ClientboundLightUpdate. The four masks are pre-encoded (light-section indexed,
+// vanilla-trimmed) by EncodeLightData; WriteTo emits them in vanilla wire order.
+// CITE: net.minecraft.network.protocol.game.ClientboundLightUpdatePacketData.write
+// (writeBitSet skyYMask, blockYMask, emptySkyYMask, emptyBlockYMask; then
+// writeCollection skyUpdates, blockUpdates).
 type lightData struct {
-	SkyLightMask   pk.BitSet
-	BlockLightMask pk.BitSet
-	SkyLight       []pk.ByteArray
-	BlockLight     []pk.ByteArray
+	SkyLightMask        pk.BitSet
+	BlockLightMask      pk.BitSet
+	EmptySkyLightMask   pk.BitSet
+	EmptyBlockLightMask pk.BitSet
+	SkyLight            []pk.ByteArray
+	BlockLight          []pk.ByteArray
 }
 
-func bitSetRev(set pk.BitSet) pk.BitSet {
-	rev := make(pk.BitSet, len(set))
-	for i := range rev {
-		rev[i] = ^set[i]
+// EncodeLightData builds the light payload from per-block-section sky/block light
+// arrays (index 0 == the bottom block section at minSectionY; a nil entry == no
+// stored DataLayer for that section). It ports
+// ClientboundLightUpdatePacketData's ctor + prepareSectionData 1:1:
+//
+//   - The section-index loop runs i = 0 .. getLightSectionCount(), where
+//     getLightSectionCount() = getSectionsCount()+2 (LevelLightEngine). The light
+//     section for index i is getMinLightSection()+i, and
+//     getMinLightSection() = getMinSectionY()-1 — ONE padding light section BELOW
+//     the world and one ABOVE. So mask BIT 0 is the padding section below
+//     minSectionY, block section si lands at BIT si+1, and the top padding is
+//     BIT secs+1. The two padding sections carry no stored DataLayer in this
+//     engine, so they set neither bit.
+//   - prepareSectionData: if the DataLayer is present and !isEmpty(), set the
+//     DATA bit at i and append the copied 2048-byte array; if present and
+//     isEmpty(), set the EMPTY bit at i (no array); if the DataLayer is absent
+//     (null), set NEITHER bit — the client keeps/derives its existing light for
+//     that section (this is why an above-terrain sky section renders 15 natively
+//     without any explicit fill). This engine materializes a present layer as a
+//     2048-byte array and an absent layer as nil, so nil => neither bit.
+//   - writeBitSet writes BitSet.toLongArray() (trailing all-zero longs trimmed)
+//     with a VarInt long-count prefix; trimBitSet reproduces that trimming.
+func EncodeLightData(sky, block [][]byte) lightData {
+	secs := len(sky)
+	if len(block) > secs {
+		secs = len(block)
 	}
-	return rev
+	// lightSectionCount = getSectionsCount()+2; bit i <-> light section
+	// getMinLightSection()+i = (minSectionY-1)+i, so block section si -> bit si+1.
+	lightSections := secs + 2
+	var (
+		skyBits   = make([]bool, lightSections)
+		blockBits = make([]bool, lightSections)
+		emptySky  = make([]bool, lightSections)
+		emptyBlk  = make([]bool, lightSections)
+		skyArr    []pk.ByteArray
+		blockArr  []pk.ByteArray
+	)
+	for si := 0; si < secs; si++ {
+		bit := si + 1 // padding-below occupies bit 0
+		if si < len(sky) {
+			if a := sky[si]; a != nil {
+				if len(a) == 0 {
+					emptySky[bit] = true
+				} else {
+					skyBits[bit] = true
+					skyArr = append(skyArr, a)
+				}
+			}
+		}
+		if si < len(block) {
+			if a := block[si]; a != nil {
+				if len(a) == 0 {
+					emptyBlk[bit] = true
+				} else {
+					blockBits[bit] = true
+					blockArr = append(blockArr, a)
+				}
+			}
+		}
+	}
+	return lightData{
+		SkyLightMask:        trimBitSet(skyBits),
+		BlockLightMask:      trimBitSet(blockBits),
+		EmptySkyLightMask:   trimBitSet(emptySky),
+		EmptyBlockLightMask: trimBitSet(emptyBlk),
+		SkyLight:            skyArr,
+		BlockLight:          blockArr,
+	}
+}
+
+// trimBitSet packs bits into little-endian int64 words (bit i -> word i/64, shift
+// i%64) and drops trailing all-zero words, matching java.util.BitSet.toLongArray()
+// so writeBitSet (VarInt long-count + longs) is byte-identical to vanilla. An
+// all-clear mask yields a zero-length array => VarInt(0) on the wire.
+func trimBitSet(bits []bool) pk.BitSet {
+	words := (len(bits) + 63) / 64
+	out := make(pk.BitSet, words)
+	for i, set := range bits {
+		if set {
+			out[i/64] |= 1 << uint(i%64)
+		}
+	}
+	for len(out) > 0 && out[len(out)-1] == 0 {
+		out = out[:len(out)-1]
+	}
+	return out
 }
 
 func (l *lightData) WriteTo(w io.Writer) (int64, error) {
 	return pk.Tuple{
 		l.SkyLightMask,
 		l.BlockLightMask,
-		bitSetRev(l.SkyLightMask),
-		bitSetRev(l.BlockLightMask),
+		l.EmptySkyLightMask,
+		l.EmptyBlockLightMask,
 		pk.Array(l.SkyLight),
 		pk.Array(l.BlockLight),
 	}.WriteTo(w)
 }
 
 func (l *lightData) ReadFrom(r io.Reader) (int64, error) {
-	var RevSkyLightMask, RevBlockLightMask pk.BitSet
 	return pk.Tuple{
 		&l.SkyLightMask,
 		&l.BlockLightMask,
-		&RevSkyLightMask,
-		&RevBlockLightMask,
+		&l.EmptySkyLightMask,
+		&l.EmptyBlockLightMask,
 		pk.Array(&l.SkyLight),
 		pk.Array(&l.BlockLight),
 	}.ReadFrom(r)
