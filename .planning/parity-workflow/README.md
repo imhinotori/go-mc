@@ -10,7 +10,7 @@ Este directorio prepara un flujo híbrido para trabajar contra el JAR vanilla 26
 
 ## Estado
 
-**PREPARADO, NO INICIADO.** No ejecutar hasta que Claude haya terminado, integrado sus ramas y dejado el repositorio estable.
+**ACTIVO.** Baseline `go test ./...` verde; ola 00 ejecutada e integrada. MiniMax queda reservado a censos mecánicos con `expected_output`; persistencia profunda escaló a agentes nativos y ya produjo los informes de player/chunk y entities/mobs.
 
 ## Precondiciones de arranque
 
