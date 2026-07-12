@@ -102,7 +102,7 @@ func (g *silverfishMergeStoneGoal) canUse(t *TickLoop, e *Entity) bool {
 	}
 	r := mobRandom(e)
 	// mobGriefing && nextInt(reducedTickDelay(10)) == 0 — the merge attempt gate.
-	if silverfishMobGriefing && r.nextInt(reducedTickDelay(silverfishMergeGateInterval)) == 0 {
+	if t.gameRule(ruleMobGriefing) && r.nextInt(reducedTickDelay(silverfishMergeGateInterval)) == 0 {
 		// selectedDirection = Direction.getRandom(r) == VALUES[nextInt(6)] (DOWN,UP,NORTH,SOUTH,WEST,EAST).
 		dir := r.nextInt(silverfishDirectionCount)
 		dx, dy, dz := directionNormal(dir)
@@ -310,7 +310,7 @@ func (g *silverfishWakeFriendsGoal) tick(t *TickLoop, e *Entity) {
 				if !isInfestedBlock(state) { // b instanceof InfestedBlock
 					continue
 				}
-				if silverfishMobGriefing {
+				if t.gameRule(ruleMobGriefing) {
 					// level.destroyBlock(p, true, silverfish) → break + spawnInfestation (summon a friend).
 					t.silverfishDestroyInfestedBlock(p)
 				} else {
