@@ -43,6 +43,12 @@ const (
 	// never increments (an unlimited-lifetime item never despawns). Ported for completeness.
 	//   [VERIFIED javap: private static final int INFINITE_LIFETIME = -32768.]
 	itemInfiniteLifetime = -32768
+
+	// itemEntityDefaultHealth is ItemEntity.DEFAULT_HEALTH (5): the ItemEntity constructor sets
+	// health = 5. It is saved (putShort "Health") and read (getShortOr "Health", default 5), so a
+	// freshly dropped item MUST carry it to be byte-identical on disk.
+	//   [VERIFIED javap ItemEntity.<init>: iconst_5; putfield health; DEFAULT_HEALTH = 5.]
+	itemEntityDefaultHealth = 5
 )
 
 const (

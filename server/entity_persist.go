@@ -84,10 +84,12 @@ func entityToDisk(e *Entity) (save.Entities, bool) {
 		UUID:           uuidToInts(e.uuid),
 		OnGround:       e.onGround,
 		PortalCooldown: 0,
-		Health:         e.health,
 	}
 	if e.isItem {
-		rec.Age = int32(e.age)
+		// ItemEntity.addAdditionalSaveData writes Age/Health/PickupDelay ALL via putShort (TAG_Short).
+		// CITE ItemEntity.addAdditionalSaveData (putShort "Health", putShort "Age", putShort "PickupDelay").
+		rec.Age = save.ShortNum(int16(e.age))
+		rec.Health = save.ShortNum(int16(e.health))
 		rec.PickupDelay = int16(e.pickupDelay)
 		item := save.ItemStackDisk{
 			ID:    itemName(int32(e.itemStack.ItemID)),
@@ -102,6 +104,13 @@ func entityToDisk(e *Entity) (save.Entities, bool) {
 	// a falling block) simply carries zero-valued mob fields, so every mob tag stays omitempty-dropped
 	// and its on-disk shape is byte-identical to the pre-P0-01 record. CITE Entity.saveWithoutId ->
 	// LivingEntity/Mob/AgeableMob/TamableAnimal/NeutralMob.addAdditionalSaveData.
+	// LivingEntity.addAdditionalSaveData writes Health via putFloat (TAG_Float). A non-living entity
+	// (a projectile) never set health (0) -- leave Health nil so the record is byte-identical to the
+	// pre-existing non-living record (the old float32 field was omitempty-dropped at 0). CITE
+	// LivingEntity.addAdditionalSaveData (putFloat "Health").
+	if e.health != 0 {
+		rec.Health = save.FloatNum(e.health)
+	}
 	writeMobDisk(&rec, e)
 	return rec, true
 }
@@ -170,8 +179,9 @@ func writeMobDisk(rec *save.Entities, e *Entity) {
 	rec.CanPickUpLoot = e.canPickUpLoot
 	rec.LeftHanded = e.leftHanded
 	// AgeableMob: Age (the breeding age machine, shared "Age" tag) + ForcedAge/AgeLocked (v1 const-0
-	// stubs). CITE AgeableMob.addAdditionalSaveData.
-	rec.Age = int32(e.breedAge)
+	// stubs). AgeableMob.addAdditionalSaveData writes Age via putInt (TAG_Int). CITE
+	// AgeableMob.addAdditionalSaveData (putInt "Age").
+	rec.Age = save.IntNum(int32(e.breedAge))
 	// Animal.InLove.
 	rec.InLove = int32(e.inLove)
 	// TamableAnimal.Owner/Sitting — Owner is the owner UUID; the runtime carries a THIN 32-bit owner
@@ -266,7 +276,14 @@ func diskToEntity(t *TickLoop, rec save.Entities) (*Entity, bool) {
 		ie.vx, ie.vy, ie.vz = rec.Motion[0], rec.Motion[1], rec.Motion[2]
 		ie.yaw, ie.pitch = rec.Rotation[0], rec.Rotation[1]
 		ie.onGround = rec.OnGround
-		ie.age = int(rec.Age)
+		// getShortOr("Age",0)/getShortOr("Health",5)/getShortOr("PickupDelay",0). Health default 5 is
+		// DEFAULT_HEALTH; a record always carries it (NewItemEntity sets 5), so IntValue() suffices.
+		ie.age = rec.Age.IntValue()
+		if rec.Health != nil {
+			ie.health = float32(rec.Health.IntValue())
+		} else {
+			ie.health = itemEntityDefaultHealth
+		}
 		ie.pickupDelay = int(rec.PickupDelay)
 		ie.metadata = encodeItemMetadata(stack)
 		return ie, true
@@ -280,8 +297,8 @@ func diskToEntity(t *TickLoop, rec save.Entities) (*Entity, bool) {
 	e.yaw, e.pitch = rec.Rotation[0], rec.Rotation[1]
 	e.headYaw = rec.Rotation[0]
 	e.onGround = rec.OnGround
-	if rec.Health > 0 {
-		e.health = rec.Health
+	if rec.Health != nil && rec.Health.FloatValue() > 0 {
+		e.health = rec.Health.FloatValue()
 	} else {
 		initSpawnHealth(e)
 	}
@@ -416,8 +433,9 @@ func reconstructMobRuntime(t *TickLoop, e *Entity, rec save.Entities) {
 	e.canPickUpLoot = rec.CanPickUpLoot
 	e.leftHanded = rec.LeftHanded
 	// AgeableMob age machine: restore the breeding age (a negative value re-establishes a baby, which
-	// refreshDimensions shrinks to the half-scale box). InLove restores the love countdown.
-	e.breedAge = int(rec.Age)
+	// refreshDimensions shrinks to the half-scale box). getIntOr("Age",0). InLove restores the love
+	// countdown.
+	e.breedAge = rec.Age.IntValue()
 	e.inLove = int(rec.InLove)
 	if e.isBaby() {
 		e.refreshDimensions()

@@ -210,6 +210,8 @@ func NewItemEntity(id int32, x, y, z float64, stack component.SlotData) *Entity 
 	ie := NewEntity(id, entity.Item, x, y, z)
 	ie.isItem = true
 	ie.itemStack = stack
+	// ItemEntity.<init> sets health = DEFAULT_HEALTH (5); it is persisted as putShort "Health".
+	ie.health = itemEntityDefaultHealth
 
 	// FIX B — ItemEntity.<init> setDeltaMovement: a random toss in [-0.1, 0.1) per axis
 	// (rng.nextDouble()*0.2 - 0.1). Three independent draws.

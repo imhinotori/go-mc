@@ -120,22 +120,30 @@ type Entities struct {
 	HasVisualFire     bool
 	Tags              []string
 
-	// Health is LivingEntity.addAdditionalSaveData "Health" (a float). Zero for a non-living entity
-	// (a dropped item overrides it below with its own Health key -- the ItemEntity also stores Health).
-	// omitempty so a 0 health record (a non-living entity that never set it) emits no key. CITE
-	// LivingEntity.addAdditionalSaveData (putFloat "Health").
-	Health float32 `nbt:"Health,omitempty"`
+	// Health is the "Health" tag, whose vanilla TAG TYPE depends on the entity kind writing it:
+	// LivingEntity.addAdditionalSaveData writes it via putFloat (TAG_Float) -- a mob's health; ItemEntity
+	// .addAdditionalSaveData writes it via putShort (TAG_Short) -- a dropped item's health. An entity is
+	// EITHER living OR an item, so a record populates at most one form; *OptNum carries the value plus its
+	// tag type so BOTH serialize with the vanilla-exact tag (float vs short). nil (omitempty) => no key,
+	// byte-identical to a non-living/non-item record that never set health. CITE LivingEntity
+	// .addAdditionalSaveData (putFloat "Health") / ItemEntity.addAdditionalSaveData (putShort "Health").
+	Health *OptNum `nbt:"Health,omitempty"`
 
 	// Item / Age / PickupDelay are net.minecraft.world.entity.item.ItemEntity.addAdditionalSaveData:
 	// the carried ItemStack ("Item"), the ticks-since-spawn ("Age"), and the pickup cooldown
 	// ("PickupDelay"). A non-item entity leaves Item nil (omitempty drops the key) and Age/PickupDelay 0.
 	// CITE ItemEntity.addAdditionalSaveData (store "Item", putShort "Age", putShort "PickupDelay").
 	Item *ItemStackDisk `nbt:"Item,omitempty"`
-	// Age is the "Age" tag. It carries the ItemEntity ticks-since-spawn (ItemEntity.Age, a short) for a
-	// dropped item AND the AgeableMob breeding age (AgeableMob.Age, an int) for a mob -- an entity is
-	// EITHER an item OR an ageable mob, so the one key never carries both. Stored int32 so the mob's
-	// full int range round-trips. CITE ItemEntity/AgeableMob.addAdditionalSaveData (putInt/putShort "Age").
-	Age         int32 `nbt:"Age,omitempty"`
+	// Age is the "Age" tag, whose vanilla TAG TYPE depends on the entity kind writing it: ItemEntity
+	// .addAdditionalSaveData writes it via putShort (TAG_Short) -- the ticks-since-spawn (ItemEntity.age,
+	// a short); AgeableMob.addAdditionalSaveData writes it via putInt (TAG_Int) -- the breeding age
+	// (AgeableMob.getAge(), an int). An entity is EITHER an item OR an ageable mob, so the one key never
+	// carries both; *OptNum carries the value plus its tag type so an item emits TAG_Short and a mob emits
+	// TAG_Int -- matching each vanilla reader (item getShortOr / mob getIntOr). CITE
+	// ItemEntity/AgeableMob.addAdditionalSaveData (putShort/putInt "Age").
+	Age *OptNum `nbt:"Age,omitempty"`
+	// PickupDelay is ItemEntity.addAdditionalSaveData "PickupDelay" via putShort (TAG_Short); int16 maps
+	// to TAG_Short. Item-only, so no cross-kind tag conflict. CITE ItemEntity.addAdditionalSaveData.
 	PickupDelay int16 `nbt:"PickupDelay,omitempty"`
 
 	// --- MOB save contract (P0-01): the LivingEntity/Mob/AgeableMob/TamableAnimal/NeutralMob extra
