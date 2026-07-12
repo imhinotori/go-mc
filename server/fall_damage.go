@@ -159,6 +159,17 @@ func (t *TickLoop) doCheckFallDamage(p *tickPlayer, dy float64, onGround bool) {
 		return
 	}
 	inWater := t.playerInWater(p)
+	// LivingEntity.checkFallDamage override (bytecode 0-11): `if (!isInWater()) updateFluidInteraction();`
+	// runs PER PACKET, before the super checkFallDamage. updateFluidInteraction zeroes fallDistance the
+	// moment it detects the entity is touching water. The wrong placement (once-per-tick tickFallDamage)
+	// let a fall INTO water that batched several movement packets into one server tick accumulate
+	// fallDistance and fire damage on the submerged-grounded packet, because the tick-scoped reset had
+	// not run yet (resolveSubtickInputs drains ALL packets before tickFallDamage). Resetting HERE, per
+	// packet, before checkFallDamage, matches vanilla: a submerged packet clears the distance so no
+	// same-tick landing can hurt. CITE: LivingEntity.checkFallDamage / Entity.updateFluidInteraction.
+	if inWater {
+		p.resetFallDistance()
+	}
 	t.checkFallDamage(p, dy, onGround, inWater)
 }
 

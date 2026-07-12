@@ -564,12 +564,13 @@ func matchToolItemIDs(rc rawCondition) []string {
 	if len(ids) == 0 {
 		return nil
 	}
-	// Normalize each concrete id to the "minecraft:"-prefixed form the context carries; keep a
-	// "#tag" reference verbatim (it will never equal a concrete ToolItemID -> no match).
+	// Normalize each concrete id to the "minecraft:"-prefixed form the context carries; EXPAND a
+	// "#tag" reference to its member ids (an unexpanded tag would never equal a concrete ToolItemID,
+	// silently failing the gate -- the amethyst_cluster regression the verify pass caught).
 	out := make([]string, 0, len(ids))
 	for _, id := range ids {
 		if len(id) > 0 && id[0] == '#' {
-			out = append(out, id)
+			out = append(out, blockTableItemTagMembers(id[1:])...) // strip '#', expand
 			continue
 		}
 		if !strings.Contains(id, ":") {
@@ -578,6 +579,32 @@ func matchToolItemIDs(rc rawCondition) []string {
 		out = append(out, id)
 	}
 	return out
+}
+
+// blockTableItemTagMembers expands an item #tag referenced by a block loot table's match_tool
+// items predicate to its member item ids. Across the ENTIRE 26.2 blocks/*.json tree exactly ONE
+// item tag is used: #minecraft:cluster_max_harvestables (amethyst_cluster's 4-shard gate — the
+// pickaxes that harvest the full drop). It is ported constant-for-constant from the jar tag def
+// (data/minecraft/tags/item/cluster_max_harvestables.json, verified via javap/unzip), the same
+// cited-tag-member precedent the carver/predicate tags use. An unlisted tag returns nil (the gate
+// then fails closed -> the fallback child drops, never a wrong over-drop) so a jar bump that adds a
+// new block-table item tag fails safe + visibly rather than drifting.
+func blockTableItemTagMembers(tag string) []string {
+	if !strings.Contains(tag, ":") {
+		tag = "minecraft:" + tag
+	}
+	switch tag {
+	case "minecraft:cluster_max_harvestables":
+		// The 7 pickaxes (any pickaxe harvests the full 4 amethyst shards). CITE:
+		// data/minecraft/tags/item/cluster_max_harvestables.json (26.2).
+		return []string{
+			"minecraft:wooden_pickaxe", "minecraft:stone_pickaxe", "minecraft:copper_pickaxe",
+			"minecraft:iron_pickaxe", "minecraft:golden_pickaxe", "minecraft:diamond_pickaxe",
+			"minecraft:netherite_pickaxe",
+		}
+	default:
+		return nil
+	}
 }
 
 // matchToolWantsSilkTouch reports whether a match_tool condition's predicate gates on a

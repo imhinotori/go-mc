@@ -236,6 +236,37 @@ func TestOakLeavesSilkTouchDropsLeafBlock(t *testing.T) {
 	}
 }
 
+// TestAmethystClusterPickaxeDropsFourShards is the regression the verify pass caught: the leaf-drop
+// fix must EXPAND the item #tag in a match_tool{items:"#minecraft:cluster_max_harvestables"} predicate,
+// not keep it verbatim. amethyst_cluster's 4-shard drop is gated on that tag (the 7 pickaxes); an
+// unexpanded tag made ANY pickaxe fail the gate and drop only 2 shards. With the tag expanded, mining
+// with a pickaxe drops the full 4 amethyst_shard. Bare hand still drops the base 2.
+func TestAmethystClusterPickaxeDropsFourShards(t *testing.T) {
+	pick := func(seed int64) *LootContext {
+		c := NewLootContext(seed, 0)
+		c.HasTool = true
+		c.ToolItemID = "minecraft:diamond_pickaxe"
+		return c
+	}
+	want := itemID(t, "minecraft:amethyst_shard")
+	for seed := int64(0); seed < 50; seed++ {
+		// Sum the amethyst_shard COUNT across stacks (set_count:4 yields one stack of 4, not 4 stacks).
+		tbl, err := LoadTable("minecraft:blocks/amethyst_cluster")
+		if err != nil {
+			t.Fatalf("LoadTable: %v", err)
+		}
+		n := 0
+		for _, s := range Roll(tbl, seed, pick(seed)) {
+			if int32(s.ItemID) == want {
+				n += int(s.Count)
+			}
+		}
+		if n != 4 {
+			t.Fatalf("seed %d: pickaxe amethyst_cluster dropped %d shards, want 4 (the #cluster_max_harvestables gate; unexpanded tag would give 2)", seed, n)
+		}
+	}
+}
+
 // TestMatchToolItemsMembership: the ItemPredicate items sub-predicate — a match_tool{items:shears}
 // passes ONLY when ToolItemID is exactly minecraft:shears, and fails for a bare hand or a wrong tool.
 func TestMatchToolItemsMembership(t *testing.T) {

@@ -350,3 +350,35 @@ func TestDescentInWaterNoAccumulation(t *testing.T) {
 		t.Fatalf("sinking-in-water player took damage: health = %v, want %v", p.health, float32(maxHealth))
 	}
 }
+
+// TestBatchedFallIntoWaterNoDamage is the regression the adversarial verify caught: when several
+// movement packets are BATCHED into a single server tick (resolveSubtickInputs drains them ALL, THEN
+// tickFallDamage runs ONCE), a fall into water must still deal 0 damage. The old code reset fall
+// distance only in the once-per-tick tickFallDamage, so the submerged-landing packet in the same
+// batch fired floor(13-3)=10 damage before the reset ran. The fix runs the water reset PER PACKET
+// inside doCheckFallDamage (vanilla LivingEntity.checkFallDamage's `if(!isInWater())
+// updateFluidInteraction()`), so a submerged packet clears the distance before any same-tick landing.
+// This test drives doCheckFallDamage directly for each packet WITHOUT an interleaved tickFallDamage,
+// exactly as the batched tick does — the harness gap the verify flagged in the step() helper.
+func TestBatchedFallIntoWaterNoDamage(t *testing.T) {
+	loop, _, p := waterFallLoop(t)
+
+	// One tick's batch: air descent 80->67 (13 dry), then 67->64 into the water, then the submerged
+	// landing edge — all as consecutive per-packet doCheckFallDamage calls, NO tickFallDamage between.
+	packet := func(y float64, onGround bool) {
+		dy := y - p.y
+		p.y = y
+		p.onGround = onGround
+		loop.doCheckFallDamage(p, dy, onGround)
+	}
+	packet(67, false) // dry air: accumulate ~13
+	packet(64, false) // enters water: per-packet reset -> 0
+	packet(64, true)  // submerged landing in the SAME batch: must deal 0 (reset already ran this packet)
+
+	if p.health != maxHealth {
+		t.Fatalf("batched fall into water dealt damage: health = %v, want %v (per-packet water reset must fire before the same-tick landing)", p.health, float32(maxHealth))
+	}
+	if p.fallDistance != 0 {
+		t.Fatalf("fallDistance = %v after batched water landing, want 0", p.fallDistance)
+	}
+}
