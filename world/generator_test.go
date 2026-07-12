@@ -61,26 +61,33 @@ func TestSuperflatSectionCount(t *testing.T) {
 		t.Fatalf("WorldSurface heightmap[0] = %d, want %d", got, wantH)
 	}
 
-	// Real light (LevelLightEngine) now computes sky light instead of the old fullSkyLight seal.
-	// The superflat has solid stone up to SurfaceY (y=-1) and open air above; every AIR section
-	// above the surface is fully sky-lit (carries a 2048-byte 0xFF array), and the open-air cell
-	// directly above the surface reads sky level 15. Sections that are entirely inside the solid
-	// stone are dark (no sky reaches them). CITE: SkyLightEngine.propagateLightSources.
-	surfaceSec, _ := sectionIndex(testMinY, 0, testSurfaceY, 0)
-	for i := surfaceSec + 1; i < len(ch.Sections); i++ {
-		if len(ch.Sections[i].SkyLight) != 2048 {
-			t.Fatalf("above-surface section %d SkyLight len = %d, want 2048 (fully lit)", i, len(ch.Sections[i].SkyLight))
-		}
-	}
-	// the air cell at y = SurfaceY+1 must be full sky light (15).
+	// Real light (LevelLightEngine) computes sky light 1:1 with vanilla SkyLightSectionStorage,
+	// which stores DataLayers only where they differ from the derived default. The superflat has
+	// solid stone up to SurfaceY (y=-1) and open air above. Vanilla behavior (verified vs
+	// SkyLightSectionStorage.getLightValue / .prepareSectionData):
+	//   - the boundary section straddling the surface (containing the y=SurfaceY+1 open-air cell)
+	//     carries a real 2048-byte DataLayer with the attenuated 15-at-open-air values;
+	//   - sections ENTIRELY above the top sky-source are left nil (a vanilla client derives 15
+	//     for an above-top section natively -- no stored array, no 0xFF seal);
+	//   - sections entirely inside the solid stone are nil (dark, no sky reaches them).
+	// This replaces the old fullSkyLight() seal that hard-set every section to a 2048 0xFF array.
+	// CITE: SkyLightSectionStorage.getLightValue (above-top => 15), ComputeChunkLight.
 	aboveSec, aboveIdx := sectionIndex(testMinY, 0, testSurfaceY+1, 0)
+	// the boundary section (open air directly above the surface) has a real DataLayer...
 	sl := ch.Sections[aboveSec].SkyLight
 	if len(sl) != 2048 {
-		t.Fatalf("section above surface has no sky light array")
+		t.Fatalf("boundary section %d above surface has no sky light array (len=%d)", aboveSec, len(sl))
 	}
+	// ...and the open-air cell at y = SurfaceY+1 reads full sky light (15).
 	nib := int(sl[aboveIdx>>1] >> (4 * (aboveIdx & 1)) & 0xF)
 	if nib != 15 {
 		t.Fatalf("sky light at open-air cell above surface = %d, want 15", nib)
+	}
+	// sections ENTIRELY above the boundary are nil (client derives 15) -- NOT a stored 2048 array.
+	for i := aboveSec + 1; i < len(ch.Sections); i++ {
+		if ch.Sections[i].SkyLight != nil {
+			t.Fatalf("above-top section %d has a stored SkyLight array (len=%d); vanilla leaves it nil (client derives 15)", i, len(ch.Sections[i].SkyLight))
+		}
 	}
 }
 
