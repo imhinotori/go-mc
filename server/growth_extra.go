@@ -111,10 +111,12 @@ import (
 // RNG DRAW ORDER (must match the jar exactly): ONE nextDouble draw ONLY in the age==8 canSurvive
 // branch (the flower-roll). The age-15 grow-up + AGE++ branches draw NO levelRandom. The vanilla
 // call site is:
+//
 //	if (j == 8 && canSurvive(...)) {
 //	    double d = i >= 3 ? 0.25 : 0.10;
 //	    if (random.nextDouble() <= d) level.setBlockAndUpdate(above, CACTUS_FLOWER);
 //	}
+//
 // CITE: CactusBlock.randomTick.
 //
 // neighborChanged on the age-15 grow path is DEFERRED (no neighbor-changed dispatcher seam in v1
@@ -355,9 +357,12 @@ func (t *TickLoop) sweetBerryRandomTick(r *region, state block.StateID, pos pk.P
 		if t.world().SetBlock(pos, grown, dimMinY) {
 			t.broadcastBlockUpdate(pos, grown)
 		}
+		// level.gameEvent(GameEvent.BLOCK_CHANGE, pos, GameEvent.Context.of(grownState)): a world-driven
+		// state change (no source entity, sourceEntityID 0) with the grown state as affectedState. Runs on
+		// the coordinator (tickRandomBlocks is not in the region fan-out), so posting onto the tick-owned
+		// listener bus is safe. CITE: SweetBerryBushBlock.randomTick (gameEvent(BLOCK_CHANGE)).
+		t.gameEventAt(geBlockChange, pos, gameEventContext{affectedState: int(grown)})
 	}
-	// gameEvent(BLOCK_CHANGE) -- DEFERRED (no game-event/sculk system yet); the load-bearing AGE
-	// advance IS performed. CITE: SweetBerryBushBlock.randomTick (gameEvent).
 }
 
 // ---- BAMBOO SAPLING (BambooSaplingBlock.randomTick) ----
@@ -486,26 +491,28 @@ func (t *TickLoop) bambooHeightBelow(pos pk.Position) int {
 // LEAVES-COMPUTATION (offset 25-155 of growBamboo):
 //   - leaves starts as NONE.
 //   - if heightBelow >= 1:
-//       * if below1.is(BAMBOO) and below1.LEAVES == NONE: leaves = SMALL.
-//       * else if below1.is(BAMBOO) and below1.LEAVES != NONE:
-//           leaves = LARGE;
-//           if below2.is(BAMBOO):
-//             level.setBlock(pos.below(), below1.setValue(LEAVES, SMALL), 3);
-//             level.setBlock(below2, below2.setValue(LEAVES, NONE), 3).
-//       * else: leaves stays NONE.
+//   - if below1.is(BAMBOO) and below1.LEAVES == NONE: leaves = SMALL.
+//   - else if below1.is(BAMBOO) and below1.LEAVES != NONE:
+//     leaves = LARGE;
+//     if below2.is(BAMBOO):
+//     level.setBlock(pos.below(), below1.setValue(LEAVES, SMALL), 3);
+//     level.setBlock(below2, below2.setValue(LEAVES, NONE), 3).
+//   - else: leaves stays NONE.
 //
 // thickBamboo = (state.AGE == 1) || (below2State.is(BAMBOO)).
 //
 // newStage: if heightBelow >= 11:
-//     if random.nextFloat() < 0.25f -> newStage = 1
-//     else if heightBelow != 15      -> newStage = 0
-//     else                           -> newStage = 1
-//   else: newStage = 0.
+//
+//	  if random.nextFloat() < 0.25f -> newStage = 1
+//	  else if heightBelow != 15      -> newStage = 0
+//	  else                           -> newStage = 1
+//	else: newStage = 0.
 //
 // setBlock(pos.above(),
-//   defaultBlockState().setValue(AGE, thickBamboo ? 1 : 0)
-//                      .setValue(LEAVES, leaves)
-//                      .setValue(STAGE, newStage), 3).
+//
+//	defaultBlockState().setValue(AGE, thickBamboo ? 1 : 0)
+//	                   .setValue(LEAVES, leaves)
+//	                   .setValue(STAGE, newStage), 3).
 //
 // CITE: BambooStalkBlock.growBamboo.
 func (t *TickLoop) bambooGrowBamboo(state block.StateID, pos pk.Position, r *levelgen.LegacyRandomSource, heightBelow int) {

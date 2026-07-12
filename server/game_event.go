@@ -51,18 +51,19 @@ const (
 	// The remaining GameEvent registry ids in the WARDEN_CAN_LISTEN / vibration-frequency set. Each has a
 	// frequency in vibrationFrequencyTable; the const exists so an emitter posts the correct id. Cite
 	// GameEvent constants + VibrationSystem.VIBRATION_FREQUENCY_FOR_EVENT.
-	geBlockActivate gameEventID = "block_activate" // BLOCK_ACTIVATE (dispenser empty-fire click)
-	geBlockOpen     gameEventID = "block_open"     // BLOCK_OPEN (door/trapdoor/fence-gate open)
-	geBlockClose    gameEventID = "block_close"    // BLOCK_CLOSE (door/trapdoor/fence-gate close)
-	gePrimeFuse     gameEventID = "prime_fuse"     // PRIME_FUSE (creeper/tnt fuse start)
-	geExplode       gameEventID = "explode"        // EXPLODE (explosion)
-	geEat           gameEventID = "eat"            // EAT (LivingEntity finish consuming; DRINK shares freq 8)
-	geFluidPickup   gameEventID = "fluid_pickup"    // FLUID_PICKUP (bucket fill)
-	geFluidPlace    gameEventID = "fluid_place"     // FLUID_PLACE (bucket empty)
+	geBlockActivate  gameEventID = "block_activate"  // BLOCK_ACTIVATE (dispenser empty-fire click)
+	geBlockOpen      gameEventID = "block_open"      // BLOCK_OPEN (door/trapdoor/fence-gate open)
+	geBlockClose     gameEventID = "block_close"     // BLOCK_CLOSE (door/trapdoor/fence-gate close)
+	gePrimeFuse      gameEventID = "prime_fuse"      // PRIME_FUSE (creeper/tnt fuse start)
+	geExplode        gameEventID = "explode"         // EXPLODE (explosion)
+	geEat            gameEventID = "eat"             // EAT (LivingEntity finish consuming; DRINK shares freq 8)
+	geFluidPickup    gameEventID = "fluid_pickup"    // FLUID_PICKUP (bucket fill)
+	geFluidPlace     gameEventID = "fluid_place"     // FLUID_PLACE (bucket empty)
 	geNoteBlockPlay  gameEventID = "note_block_play" // NOTE_BLOCK_PLAY (note block struck)
 	geShear          gameEventID = "shear"           // SHEAR (shears on a sheep/mob)
 	geContainerOpen  gameEventID = "container_open"  // CONTAINER_OPEN (chest/barrel/shulker open, 0->1 edge)
 	geContainerClose gameEventID = "container_close" // CONTAINER_CLOSE (container close, 1->0 edge)
+	geBlockChange    gameEventID = "block_change"    // BLOCK_CHANGE (a block state changes in place, e.g. crop/bush growth)
 	// FOLLOW-UP (cited, not yet wired at an emitter): block_change (needs the interacting player threaded
 	// through the block-entity updateState chain), block_deactivate, drink, splash, swim, entity_place,
 	// lightning_strike, flap, bounce, hit_ground, projectile_shoot, instrument_play, entity_action,
@@ -95,19 +96,23 @@ type vibrationListener struct {
 // event at pos to every registered VibrationListener within its listen range. Walks t.vibrationListeners
 // (the flat live set), delivering to each in range via handleGameEvent. Draws NO RNG (pure iteration).
 //
-// IMPORTANT (pig oracle): when NO listener is registered (the pig-oracle loops register none), this is a
-// pure no-op that touches no entity state and draws no RNG -- byte-identical. Cite ServerLevel.gameEvent
-// + GameEventDispatcher.post.
+// IMPORTANT (pig oracle): when NO listener is registered -- neither an entity listener nor any sculk
+// sensor / shrieker (the pig-oracle loops register none and place no sculk block) -- both walks below
+// iterate empty sets, so this is a pure no-op that touches no state and draws no RNG (byte-identical).
+// Cite ServerLevel.gameEvent + GameEventDispatcher.post.
 func (t *TickLoop) gameEvent(event gameEventID, x, y, z float64, ctx gameEventContext) {
-	if len(t.vibrationListeners) == 0 {
-		return // no listeners -> pure no-op (the common case; the pig oracle path)
-	}
+	// ENTITY listeners (the Warden VibrationSystem.Listener).
 	for _, ln := range t.vibrationListeners {
 		if ln == nil || ln.owner == nil || ln.owner.dead {
 			continue
 		}
 		t.vibrationHandleGameEvent(ln, event, x, y, z, ctx)
 	}
+	// BLOCK-POSITION listeners (sculk sensor / shrieker), the per-block GameEventListenerRegistry walk
+	// (vibration_block.go). When no block listener is registered either, the range loops inside are
+	// empty and this stays a pure no-op (the pig-oracle invariant: a pig posts STEP, no listener, no
+	// state touched, no RNG). CITE GameEventDispatcher.post (both the entity + block registries).
+	t.walkBlockVibrationListeners(event, x, y, z, ctx)
 }
 
 // gameEventAt is the BlockPos convenience overload: emit at the CENTER of a block cell (pos.getCenter(),

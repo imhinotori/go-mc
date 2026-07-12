@@ -47,3 +47,15 @@ func blockInTag(s block.StateID, tagName string) bool {
 	}
 	return in
 }
+
+// gameEventInTag reports whether the game-event id `ev` (bare name, e.g. "step") belongs to the
+// game_event tag `tagName` (bare name, e.g. "vibrations"). It is the Holder<GameEvent>.is(TagKey<
+// GameEvent>) analogue VibrationSystem.User.isValidVibration calls (getListenableEvents membership). A
+// malformed embed is swallowed to false (the safe "does not listen" default). CITE Holder.is(TagKey).
+func gameEventInTag(ev gameEventID, tagName string) bool {
+	in, err := registrydata.GameEventInTag(string(ev), tagName)
+	if err != nil {
+		return false
+	}
+	return in
+}

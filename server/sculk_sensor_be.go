@@ -58,6 +58,13 @@ const calibratedSculkSensorTickType blockTickType = "minecraft:calibrated_sculk_
 // persists. CITE: SculkSensorBlockEntity.lastVibrationFrequency.
 type sculkSensorBE struct {
 	lastVibrationFrequency int
+	// vibration is the in-flight VibrationSystem.Data (the receiving -> delay -> signal state machine)
+	// for the sensor's VibrationSystem.Listener. nil until the first candidate is scheduled. The delayed
+	// path (a game event elsewhere in range travels floor(distance) ticks then activates the sensor) is
+	// LIVE via the block-position listener bus (vibration_block.go); the direct same-block STEP path
+	// (tickSculkSensors) remains for a distance-0 STEP. CITE: SculkSensorBlockEntity.getVibrationData /
+	// VibrationSystem$Data.
+	vibration *vibrationData
 }
 
 // isSculkSensorBlock is the block-identity gate (either sensor variant) used by the tick loop +

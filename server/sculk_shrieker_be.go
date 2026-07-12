@@ -66,6 +66,12 @@ const sculkShriekerTickType blockTickType = "minecraft:sculk_shrieker"
 // stepOn/tryShriek path, matching a player stepping on it). CITE: SculkShriekerBlockEntity.warningLevel.
 type sculkShriekerBE struct {
 	warningLevel int
+	// vibration is the in-flight VibrationSystem.Data for the shrieker's VibrationSystem.Listener.
+	// nil until the first candidate is scheduled. The delayed listen path (a game event elsewhere in
+	// range travels floor(distance) ticks then triggers tryShriek) is LIVE via the block-position
+	// listener bus (vibration_block.go); the direct same-block stepOn path (tickSculkShriekers) remains.
+	// CITE: SculkShriekerBlockEntity.getVibrationData / VibrationSystem$Data.
+	vibration *vibrationData
 }
 
 // wardenSpawnTracker is the per-player net.minecraft.world.entity.monster.warden.WardenSpawnTracker:

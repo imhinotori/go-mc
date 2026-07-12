@@ -148,7 +148,10 @@ func (g *endermanTakeBlockGoal) tick(t *TickLoop, e *Entity) {
 		// Light re-propagation fires CENTRALLY from ChunkManager.SetBlock (SetBlockChangeHook) -- the
 		// SetBlock above already relit + broadcast. No per-site relight call.
 	}
-	// gameEvent(GameEvent.BLOCK_DESTROY, ...): CITE-DEFERRED no-op (no game-event subsystem).
+	// level.gameEvent(this.enderman, GameEvent.BLOCK_DESTROY, pos): posted with Context.of(enderman,
+	// takenState) so a nearby sculk sensor / warden hears the enderman removing a block. CITE
+	// EnderMan.EndermanTakeBlockGoal.tick (GameEvent.Context.of(enderman, state)).
+	t.gameEventAt(geBlockDestroy, pos, gameEventContext{sourceEntityID: e.id, affectedState: int(sid)})
 	// setCarriedBlock(state.getBlock().defaultBlockState()): carry the DEFAULT state of the taken block.
 	setEndermanCarriedBlock(t, e, endermanDefaultStateOf(sid), true)
 }
@@ -212,7 +215,10 @@ func (g *endermanLeaveBlockGoal) tick(t *TickLoop, e *Entity) {
 			// Light re-propagation fires CENTRALLY from ChunkManager.SetBlock (SetBlockChangeHook) -- the
 			// SetBlock above already relit + broadcast. No per-site relight call.
 		}
-		// gameEvent(GameEvent.BLOCK_PLACE, ...): CITE-DEFERRED no-op.
+		// level.gameEvent(this.enderman, GameEvent.BLOCK_PLACE, pos): posted with Context.of(enderman,
+		// placedState) so a nearby sculk sensor / warden hears the enderman placing its carried block.
+		// CITE EnderMan.EndermanLeaveBlockGoal.tick (GameEvent.Context.of(enderman, state)).
+		t.gameEventAt(geBlockPlace, pos, gameEventContext{sourceEntityID: e.id, affectedState: int(carried)})
 		setEndermanCarriedBlock(t, e, 0, false) // setCarriedBlock(null)
 	}
 }

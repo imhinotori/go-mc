@@ -210,6 +210,11 @@ func (t *TickLoop) tickBlockEntities() {
 	t.tickSculkSensors()
 	// SUB-BLOCKENTITY: SCULK SHRIEKER step scan + warden-tracker cooldown (SculkShriekerBlock.stepOn).
 	t.tickSculkShriekers()
+	// SUB-BLOCKENTITY: block-position VIBRATION listeners (VibrationSystem.Ticker.tick) for every sculk
+	// sensor / shrieker with an in-flight vibration -- the delayed listen path a nearby game event fed
+	// via gameEvent(...) -> walkBlockVibrationListeners. Runs after the step scans + entity pass so a
+	// candidate scheduled this tick advances next tick (matching the vanilla block-entity ticker order).
+	t.tickBlockVibrationListeners()
 }
 
 // tickChunks issues the per-player chunk requests for this tick (WORLD-05). For each
