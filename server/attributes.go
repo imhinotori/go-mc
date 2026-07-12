@@ -67,6 +67,17 @@ const (
 	attrStepHeight
 	attrSafeFallDistance
 	attrMiningEfficiency
+	// Newly-modeled attribute holders (external audit P1-01): each is the target of a location-based
+	// enchant AttributeModifier whose resolution was previously dropped because the attribute had no
+	// holder instance (the vanilla getInstance(holder)==null skip). Adding the key lets the enchant
+	// modifier attach and the cited consumer read the composed value. CITE Attributes.<clinit>.
+	attrBlockBreakSpeed         // Player.getDestroySpeed unconditional multiplier (default 1.0)
+	attrSubmergedMiningSpeed    // Player.getDestroySpeed eye-in-water multiplier; Aqua Affinity raises 0.2->1.0
+	attrBlockInteractionRange   // block reach gate (default 4.5)
+	attrOxygenBonus             // LivingEntity.decreaseAirSupply skip; Respiration grants it
+	attrWaterMovementEfficiency // in-water travel drag lerp; Depth Strider grants it
+	attrMovementEfficiency      // ground movement lerp; Soul Speed grants it
+	attrSneakingSpeed           // sneak speed cap; Swift Sneak grants it
 )
 
 // playerAttributeBase is the per-player BASE value for each attribute — the value
@@ -76,20 +87,27 @@ const (
 // createLivingAttributes), as documented in the file header. All are doubles to mirror vanilla's
 // double-precision attribute math (getAttributeValue returns a double; callers d2f as vanilla does).
 var playerAttributeBase = map[attributeKey]float64{
-	attrAttackDamage:           1.0,                 // Player.createAttributes .add(ATTACK_DAMAGE, 1.0) overrides the 2.0 default
-	attrAttackSpeed:            4.0,                 // registration default (Player .add(ATTACK_SPEED) no override)
-	attrAttackKnockback:        0.0,                 // registration default
-	attrArmor:                  0.0,                 // registration default (no armor items yet)
-	attrArmorToughness:         0.0,                 // registration default (no armor items yet)
-	attrKnockbackResistance:    0.0,                 // registration default
-	attrSweepingDamageRatio:    0.0,                 // registration default (Player .add(SWEEPING_DAMAGE_RATIO) no override)
-	attrMaxHealth:              20.0,                // createLivingAttributes registration default
-	attrMovementSpeed:          0.10000000149011612, // Player .add(MOVEMENT_SPEED, 0.1) — the vanilla float-widened double literal
-	attrMaxAbsorption:          0.0,                 // registration default
-	attrEntityInteractionRange: 3.0,                 // registration default
-	attrStepHeight:             0.6,                 // createLivingAttributes STEP_HEIGHT registration default (Player no override)
-	attrSafeFallDistance:       3.0,                 // createLivingAttributes SAFE_FALL_DISTANCE registration default (Player no override)
-	attrMiningEfficiency:       0.0,                 // Player createAttributes .add(MINING_EFFICIENCY) registration default 0.0 (Efficiency enchant adds level^2+1)
+	attrAttackDamage:            1.0,                 // Player.createAttributes .add(ATTACK_DAMAGE, 1.0) overrides the 2.0 default
+	attrAttackSpeed:             4.0,                 // registration default (Player .add(ATTACK_SPEED) no override)
+	attrAttackKnockback:         0.0,                 // registration default
+	attrArmor:                   0.0,                 // registration default (no armor items yet)
+	attrArmorToughness:          0.0,                 // registration default (no armor items yet)
+	attrKnockbackResistance:     0.0,                 // registration default
+	attrSweepingDamageRatio:     0.0,                 // registration default (Player .add(SWEEPING_DAMAGE_RATIO) no override)
+	attrMaxHealth:               20.0,                // createLivingAttributes registration default
+	attrMovementSpeed:           0.10000000149011612, // Player .add(MOVEMENT_SPEED, 0.1) — the vanilla float-widened double literal
+	attrMaxAbsorption:           0.0,                 // registration default
+	attrEntityInteractionRange:  3.0,                 // registration default
+	attrStepHeight:              0.6,                 // createLivingAttributes STEP_HEIGHT registration default (Player no override)
+	attrSafeFallDistance:        3.0,                 // createLivingAttributes SAFE_FALL_DISTANCE registration default (Player no override)
+	attrMiningEfficiency:        0.0,                 // Player createAttributes .add(MINING_EFFICIENCY) registration default 0.0 (Efficiency enchant adds level^2+1)
+	attrBlockBreakSpeed:         1.0,                 // BLOCK_BREAK_SPEED registration default (Player .add, no override)
+	attrSubmergedMiningSpeed:    0.2,                 // SUBMERGED_MINING_SPEED registration default (5x underwater dig penalty; Aqua Affinity -> 1.0)
+	attrBlockInteractionRange:   4.5,                 // BLOCK_INTERACTION_RANGE registration default (Player .add, no override)
+	attrOxygenBonus:             0.0,                 // OXYGEN_BONUS registration default (Respiration adds level*bonus)
+	attrWaterMovementEfficiency: 0.0,                 // WATER_MOVEMENT_EFFICIENCY registration default (Depth Strider adds)
+	attrMovementEfficiency:      0.0,                 // MOVEMENT_EFFICIENCY registration default (Soul Speed adds)
+	attrSneakingSpeed:           0.3,                 // SNEAKING_SPEED registration default (Swift Sneak raises the cap)
 }
 
 // attributeHolder is a per-player map of attribute -> base value. It is the Go stand-in for
@@ -233,20 +251,27 @@ func (p *tickPlayer) getAttributeValue(attr attributeKey) float64 {
 // mining_efficiency) maps to "" so the flush skips it (never emits a bad holder id). VERIFIED against
 // data/registryid/attribute.go (the BuiltInRegistries.ATTRIBUTE order).
 var attributeKeyName = map[attributeKey]string{
-	attrAttackDamage:           "minecraft:attack_damage",
-	attrAttackSpeed:            "minecraft:attack_speed",
-	attrAttackKnockback:        "minecraft:attack_knockback",
-	attrArmor:                  "minecraft:armor",
-	attrArmorToughness:         "minecraft:armor_toughness",
-	attrKnockbackResistance:    "minecraft:knockback_resistance",
-	attrSweepingDamageRatio:    "minecraft:sweeping_damage_ratio",
-	attrMaxHealth:              "minecraft:max_health",
-	attrMovementSpeed:          "minecraft:movement_speed",
-	attrMaxAbsorption:          "minecraft:max_absorption",
-	attrEntityInteractionRange: "minecraft:entity_interaction_range",
-	attrStepHeight:             "minecraft:step_height",
-	attrSafeFallDistance:       "minecraft:safe_fall_distance",
-	attrMiningEfficiency:       "minecraft:mining_efficiency",
+	attrAttackDamage:            "minecraft:attack_damage",
+	attrAttackSpeed:             "minecraft:attack_speed",
+	attrAttackKnockback:         "minecraft:attack_knockback",
+	attrArmor:                   "minecraft:armor",
+	attrArmorToughness:          "minecraft:armor_toughness",
+	attrKnockbackResistance:     "minecraft:knockback_resistance",
+	attrSweepingDamageRatio:     "minecraft:sweeping_damage_ratio",
+	attrMaxHealth:               "minecraft:max_health",
+	attrMovementSpeed:           "minecraft:movement_speed",
+	attrMaxAbsorption:           "minecraft:max_absorption",
+	attrEntityInteractionRange:  "minecraft:entity_interaction_range",
+	attrStepHeight:              "minecraft:step_height",
+	attrSafeFallDistance:        "minecraft:safe_fall_distance",
+	attrMiningEfficiency:        "minecraft:mining_efficiency",
+	attrBlockBreakSpeed:         "minecraft:block_break_speed",
+	attrSubmergedMiningSpeed:    "minecraft:submerged_mining_speed",
+	attrBlockInteractionRange:   "minecraft:block_interaction_range",
+	attrOxygenBonus:             "minecraft:oxygen_bonus",
+	attrWaterMovementEfficiency: "minecraft:water_movement_efficiency",
+	attrMovementEfficiency:      "minecraft:movement_efficiency",
+	attrSneakingSpeed:           "minecraft:sneaking_speed",
 }
 
 // markDirty flags an attribute for the next sync flush (AttributeMap.attributesToSync.add).

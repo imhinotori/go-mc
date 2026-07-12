@@ -159,7 +159,20 @@ var attributeKeyByResource = map[string]attributeKey{
 	"minecraft:entity_interaction_range": attrEntityInteractionRange,
 	"minecraft:step_height":              attrStepHeight,
 	"minecraft:safe_fall_distance":       attrSafeFallDistance,
-	"minecraft:mining_efficiency":       attrMiningEfficiency,
+	"minecraft:mining_efficiency":        attrMiningEfficiency,
+	// external audit P1-01: the enchant-target attributes now carry a holder instance so the
+	// location-based EnchantmentAttributeEffect modifier attaches instead of being dropped by the
+	// vanilla getInstance(holder)==null skip (Efficiency->mining_efficiency, Aqua Affinity->
+	// submerged_mining_speed, Respiration->oxygen_bonus, Depth Strider->water_movement_efficiency,
+	// Soul Speed->movement_efficiency, Swift Sneak->sneaking_speed). block_break_speed/
+	// block_interaction_range round out the destroy-speed/reach reads.
+	"minecraft:block_break_speed":         attrBlockBreakSpeed,
+	"minecraft:submerged_mining_speed":    attrSubmergedMiningSpeed,
+	"minecraft:block_interaction_range":   attrBlockInteractionRange,
+	"minecraft:oxygen_bonus":              attrOxygenBonus,
+	"minecraft:water_movement_efficiency": attrWaterMovementEfficiency,
+	"minecraft:movement_efficiency":       attrMovementEfficiency,
+	"minecraft:sneaking_speed":            attrSneakingSpeed,
 }
 
 // equipmentSlotGroupTest ports EquipmentSlotGroup.test(EquipmentSlot) — the per-entry slot filter

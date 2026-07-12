@@ -102,17 +102,45 @@ func blockHardness(stateID block.StateID) (speed float32, requiresTool bool) {
 	return h.DestroySpeed, h.RequiresCorrectTool
 }
 
-// playerDestroySpeed is net.minecraft.world.entity.player.Player.getDestroySpeed(BlockState): the
-// player's tool dig-speed multiplier. Its base is inventory.getSelectedItem().getDestroySpeed(state)
-// — 1.0f for an empty hand and for most non-tool items — then scaled by mining-efficiency enchant,
-// dig-speed/haste/fatigue effects, in-water and not-on-ground penalties. v1 has NONE of those
-// subsystems (no tools, enchants, effects), so this is a faithful CITED 1.0f. Structured as its own
-// helper so a future tool/enchant/effect wiring slots in here with no getDestroyProgress change.
-// Cite Player.getDestroySpeed.
-func playerDestroySpeed(p *tickPlayer, stateID block.StateID) float32 {
-	_ = p
+// playerDestroySpeed is net.minecraft.world.entity.player.Player.getDestroySpeed(BlockState), ported
+// 1:1 from the jar bytecode (javap this session):
+//
+//	float f = inventory.getSelectedItem().getDestroySpeed(state);          // 1.0f for an empty hand / non-tool
+//	if (f > 1.0f) f += (float) getAttributeValue(MINING_EFFICIENCY);       // Efficiency enchant (level^2+1)
+//	if (MobEffectUtil.hasDigSpeed(this)) f *= 1 + (getDigSpeedAmplification+1)*0.2f;   // Haste  [effect seam]
+//	if (hasEffect(MINING_FATIGUE)) f *= {0.3, 0.09, 0.0027, 8.1E-4}[amp];  // Mining Fatigue [effect seam]
+//	f *= (float) getAttributeValue(BLOCK_BREAK_SPEED);                     // unconditional multiplier (default 1.0)
+//	if (isEyeInFluid(WATER)) f *= (float) getAttribute(SUBMERGED_MINING_SPEED).getValue();  // 0.2 default = 5x penalty
+//	if (!onGround()) f /= 5.0f;                                            // not-on-ground penalty [movement seam]
+//	return f;
+//
+// v1 has no tools, so the base f is the empty-hand 1.0f; the MINING_EFFICIENCY branch is gated on
+// f > 1.0f, so with the base 1.0 it never fires (no over-1 tool speed yet) — the read is wired at the
+// exact bytecode point so an Efficiency-enchanted tool composes correctly once tools land. BLOCK_BREAK_SPEED
+// (default 1.0) and SUBMERGED_MINING_SPEED (default 0.2, the vanilla 5x underwater dig penalty; Aqua
+// Affinity raises it to 1.0) read through the holder so their enchant modifiers compose. The Haste/
+// Mining-Fatigue effect scales and the not-on-ground /5.0 penalty are CITED SEAMS (no effect source /
+// no destroy-progress ground read wired here yet) — they slot in at the marked points with no caller
+// change. Cite Player.getDestroySpeed.
+func (t *TickLoop) playerDestroySpeed(p *tickPlayer, stateID block.StateID) float32 {
 	_ = stateID
-	return 1.0 // bare-hand base speed; tools/enchants/effects absent in v1 (cited default)
+	f := float32(1.0) // ItemStack.getDestroySpeed for an empty hand / non-tool (no tools in v1)
+	if f > 1.0 {
+		// `f += (float) getAttributeValue(MINING_EFFICIENCY)` — Efficiency enchant grants level^2+1.
+		f += float32(p.getAttributeValue(attrMiningEfficiency))
+	}
+	// Haste / Mining Fatigue effect scales (MobEffectUtil.hasDigSpeed / MINING_FATIGUE) are the effect
+	// SEAM — no dig-speed/fatigue effect source is wired to the player holder yet, so f is unscaled here.
+	// `f *= (float) getAttributeValue(BLOCK_BREAK_SPEED)` — unconditional multiplier (base 1.0 → no change).
+	f *= float32(p.getAttributeValue(attrBlockBreakSpeed))
+	// `if (isEyeInFluid(WATER)) f *= (float) getAttribute(SUBMERGED_MINING_SPEED).getValue()` — the
+	// 0.2 base is the vanilla 5x underwater dig penalty; the Aqua Affinity enchant raises it toward 1.0.
+	if t.eyeInWater(p) {
+		f *= float32(p.getAttributeValue(attrSubmergedMiningSpeed))
+	}
+	// `if (!onGround()) f /= 5.0f` is the not-on-ground penalty SEAM (no ground read wired into the
+	// destroy-progress path yet) — slots in here with no caller change.
+	return f
 }
 
 // hasCorrectToolForDrops is net.minecraft.world.entity.player.Player.hasCorrectToolForDrops(BlockState):
@@ -150,7 +178,7 @@ func (t *TickLoop) getDestroyProgress(p *tickPlayer, stateID block.StateID) floa
 	} else {
 		divisor = digDivisorNoTool // 100
 	}
-	return playerDestroySpeed(p, stateID) / hardness / divisor
+	return t.playerDestroySpeed(p, stateID) / hardness / divisor
 }
 
 // digBlockState reads the world state at pos, returning air for an unloaded/unreadable column. The
