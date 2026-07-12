@@ -5,8 +5,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 
+	"github.com/panjf2000/ants/v2"
 	"golang.org/x/sync/singleflight"
 
 	"github.com/imhinotori/sulfur/level"
@@ -62,6 +64,35 @@ type Worker struct {
 	staging   map[int64]*stagedChunk // carved-but-(maybe)-not-decorated chunks, packPos keyed
 	requested map[int64]bool         // neighbor auto-request dedup (scheduler-owned)
 	wanted    map[int64]bool         // externally-requested centers (scheduler-owned)
+
+	// pool BOUNDS terrain concurrency to terrainWorkers() (NumCPU-2) recycling goroutines
+	// instead of spawning one per request. A single chunk costs ~1.25s of pure noise/biome
+	// CPU (BenchmarkGenerateOneChunk) and ~41MB of transient allocs; a full view-distance
+	// join fires ~441 requests, and the OLD `go w.handleTerrain(...)` launched all 441 at
+	// once, oversubscribing the 16 cores and driving GC into a churn spiral that stalled the
+	// client at "Loading terrain". The pool caps in-flight terrain gen at core count so each
+	// worker runs to completion before the next starts. It changes NOTHING observable: each
+	// chunk's bytes are deterministic per-pos (singleflight still dedups concurrent same-key
+	// loads) and the scheduler is the sole serializer of decoration/emit -- only the number
+	// of goroutines racing the CPU changes. Nonblocking=false: when every worker is busy the
+	// reader goroutine parks inside Submit, which stops draining `requests`, fills the bounded
+	// channel, and makes Request() drop -- the exact upstream backpressure the channel already
+	// provides, now extended to the compute stage.
+	pool *ants.Pool
+}
+
+// terrainWorkers is the bounded terrain-gen concurrency: NumCPU-2 (leave a core for the tick
+// loop and a core for the scheduler/net goroutines), floored at 1. Matches the CLAUDE.md
+// "bounded, reusable goroutine pool ... min(16, cpu cores - 2)" guidance for async subsystems.
+func terrainWorkers() int {
+	n := runtime.NumCPU() - 2
+	if n < 1 {
+		n = 1
+	}
+	if n > 16 {
+		n = 16
+	}
+	return n
 }
 
 // carvedChunk is the handleTerrain -> scheduler handoff: a freshly carved chunk
@@ -112,6 +143,11 @@ func NewWorker(gen Generator, regionDir string, buf int) *Worker {
 	if buf < 1 {
 		buf = 1
 	}
+	// The pool blocks Submit when full (Nonblocking defaults to false) -> the reader goroutine
+	// parks, requests stops draining, and Request() drops on the full bounded channel (upstream
+	// backpressure). ants.Options zero value = blocking; ignore the never-nil error from a static
+	// positive size.
+	pool, _ := ants.NewPool(terrainWorkers())
 	return &Worker{
 		gen:       gen,
 		regionDir: regionDir,
@@ -122,6 +158,7 @@ func NewWorker(gen Generator, regionDir string, buf int) *Worker {
 		staging:   make(map[int64]*stagedChunk),
 		requested: make(map[int64]bool),
 		wanted:    make(map[int64]bool),
+		pool:      pool,
 	}
 }
 
@@ -184,12 +221,22 @@ func (w *Worker) requestInternal(pos level.ChunkPos) {
 func (w *Worker) Run(ctx context.Context) {
 	// The scheduler is the SINGLE owner of staging/requested + all decoration.
 	go w.runScheduler(ctx)
+	defer w.pool.Release() // reclaim the bounded terrain-gen goroutines on shutdown
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case pos := <-w.requests:
-			go w.handleTerrain(ctx, pos)
+			// Submit onto the BOUNDED pool instead of spawning an unbounded goroutine. When all
+			// terrainWorkers() are busy, Submit blocks here -> the reader stops draining requests
+			// -> the bounded channel fills -> Request() drops (upstream backpressure). singleflight
+			// inside handleTerrain still collapses concurrent same-key loads, so a duplicate pos
+			// queued while its gen is in flight costs one near-instant Do wait, not a re-gen.
+			if err := w.pool.Submit(func() { w.handleTerrain(ctx, pos) }); err != nil {
+				// Pool released (shutdown in progress): run inline so no request is silently lost
+				// mid-drain. handleTerrain is ctx-guarded and returns promptly on ctx.Done.
+				w.handleTerrain(ctx, pos)
+			}
 		}
 	}
 }
