@@ -181,3 +181,92 @@ func TestBreezeDeflectsArrow(t *testing.T) {
 		t.Fatal("breezeDeflectsProjectile(breeze_wind_charge) = true, want false (NONE for the breeze family)")
 	}
 }
+
+// TestBreezeRepositionsTowardTarget: the BreezeAi Slide port makes the Breeze MOVE. With a target present,
+// on the ground, and no active path, breezeSlide commits a navigation want (hasTarget) -- the Breeze is no
+// longer a turret. The committed want must differ from the Breeze's own block (it repositions). Cite
+// BreezeAi Slide + Slide.start.
+func TestBreezeRepositionsTowardTarget(t *testing.T) {
+	loop, floorY := breezeLoop(t)
+	b := loop.spawnBreeze(8.5, float64(floorY+1), 8.5)
+	b.onGround = true // Slide.checkExtraStartConditions requires onGround
+
+	// A target 12 blocks north (outside the inner circle, so the Slide takes the behind/middle path).
+	p := &tickPlayer{x: 8.5, y: float64(floorY + 1), z: 20.5, entityID: 7501}
+	loop.players = append(loop.players, p)
+
+	loop.breezeAcquireNearestPlayer(b)
+	if b.ai == nil || b.ai.attackTargetID != p.entityID {
+		t.Fatalf("breeze did not acquire target: %d", b.ai.attackTargetID)
+	}
+	if b.ai.hasTarget {
+		t.Fatal("fresh breeze already has a nav want before sliding")
+	}
+	loop.breezeSlide(b, p)
+	if !b.ai.hasTarget {
+		t.Fatal("breezeSlide did NOT commit a navigation want -- the Breeze must reposition (it plays as a turret otherwise)")
+	}
+	// The want must not be the Breeze's own cell (it moved somewhere).
+	if mthFloor(b.ai.wantX) == mthFloor(b.x) && mthFloor(b.ai.wantZ) == mthFloor(b.z) {
+		t.Fatalf("breezeSlide want (%v,%v) == the Breeze cell -- it did not reposition", b.ai.wantX, b.ai.wantZ)
+	}
+}
+
+// TestBreezeSlideGatedOffGround: Slide.checkExtraStartConditions requires onGround. A mid-air Breeze does
+// NOT commit a slide want. Cite Slide.checkExtraStartConditions.
+func TestBreezeSlideGatedOffGround(t *testing.T) {
+	loop, floorY := breezeLoop(t)
+	b := loop.spawnBreeze(8.5, float64(floorY+1), 8.5)
+	b.onGround = false // not on the ground
+	p := &tickPlayer{x: 8.5, y: float64(floorY + 1), z: 20.5, entityID: 7601}
+	loop.players = append(loop.players, p)
+	loop.breezeAcquireNearestPlayer(b)
+	loop.breezeSlide(b, p)
+	if b.ai.hasTarget {
+		t.Fatal("a mid-air breeze committed a slide want -- Slide.checkExtraStartConditions requires onGround")
+	}
+}
+
+// TestBreezeMiddleCircleStepsTowardTarget: breezeRandomPointInMiddleCircle (the non-flee, non-behind Slide
+// branch) steps the Breeze TOWARD the target by (length - lerp(nextDouble, 8, 4)) along the toTarget unit
+// vector -- so the returned point lies between the Breeze and the target (closer to the target than the
+// Breeze starts, for a target > 8 blocks away). Cite Slide.randomPointInMiddleCircle.
+func TestBreezeMiddleCircleStepsTowardTarget(t *testing.T) {
+	loop, floorY := breezeLoop(t)
+	b := loop.spawnBreeze(8.5, float64(floorY+1), 8.5)
+	// Target 20 blocks north; a middle-circle step ends up between the Breeze and the target.
+	p := &tickPlayer{x: 8.5, y: float64(floorY + 1), z: 28.5, entityID: 7701}
+	x, _, z := breezeRandomPointInMiddleCircle(b, p)
+	// The point must be north of the Breeze (toward the +Z target) and not past it.
+	if z <= b.z {
+		t.Fatalf("middle-circle point z=%v is not toward the +Z target (breeze z=%v)", z, b.z)
+	}
+	if z >= p.z {
+		t.Fatalf("middle-circle point z=%v overshoots the target z=%v", z, p.z)
+	}
+	// X stays aligned (the target is directly +Z, so no X drift).
+	if math.Abs(x-b.x) > 1e-9 {
+		t.Fatalf("middle-circle point x=%v drifted from the aligned breeze x=%v", x, b.x)
+	}
+}
+
+// TestBreezeInnerCircleFlees: when the target is inside the inner circle (within 4 blocks XZ), the Slide
+// prefers a flee-away pos (getPosAway) that is FARTHER from the target than the Breeze -- and regardless of
+// the branch taken it commits a nav want. Verifies breezeWithinInnerCircle detects the close target and the
+// Breeze still repositions. Cite Slide.start (withinInnerCircleRange -> getPosAway retreat).
+func TestBreezeInnerCircleFlees(t *testing.T) {
+	loop, floorY := breezeLoop(t)
+	b := loop.spawnBreeze(8.5, float64(floorY+1), 8.5)
+	b.onGround = true
+	// Target 2 blocks away (inside the 4-block inner-circle radius).
+	p := &tickPlayer{x: 10.5, y: float64(floorY + 1), z: 8.5, entityID: 7801}
+	if !breezeWithinInnerCircle(b, p.x, p.y, p.z) {
+		t.Fatal("breezeWithinInnerCircle should be true for a target 2 blocks away")
+	}
+	loop.players = append(loop.players, p)
+	loop.breezeAcquireNearestPlayer(b)
+	loop.breezeSlide(b, p)
+	if !b.ai.hasTarget {
+		t.Fatal("breeze inside the inner circle did NOT commit a reposition want")
+	}
+}
