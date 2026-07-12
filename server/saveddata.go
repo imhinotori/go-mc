@@ -1,6 +1,9 @@
 package server
 
-import "log"
+import (
+	"log"
+	"math"
+)
 
 // saveddata.go — the TickLoop wiring for the raid + POI SavedData persistence (raid_persist.go /
 // poi_persist.go): the SetPersistDir setter, load-on-boot (LoadPersistedData), the periodic
@@ -128,9 +131,18 @@ func (t *TickLoop) flushSavedData() {
 
 // worldSpawnForLevelDat returns the world spawn (SpawnX/Y/Z + SpawnAngle) for level.dat, taken from the
 // loop spawn point when set (the ported PlayerSpawnFinder result), else the origin column. Owner-side.
+//
+// The runtime stores the fresh-spawn position at the block CENTER (X.5 / Z.5); level.dat stores the
+// integer BlockPos that cell belongs to, so each axis is FLOORED before the int32 cast -- mirroring
+// vanilla's BlockPos.containing(double, double, double), which constructs the BlockPos with
+// Mth.floor on every axis (Mth.floor(D) == (int)Math.floor(D), rounding toward NEGATIVE INFINITY).
+// A naive int32(x) cast TRUNCATES toward zero and silently shifts negative centers by one block:
+// e.g. -3.5 (the center of block -4) -> -3 -> reload adds .5 -> -2.5 (center of block -2), a block
+// off. Positive centers are unaffected (floor and truncate agree for x>=0), which is why the bug
+// only surfaced on negative-coord worlds. CITE BlockPos.containing(DDD) + net.minecraft.util.Mth.floor(D).
 func (t *TickLoop) worldSpawnForLevelDat() (x, y, z int32, angle float32) {
 	if t.hasSpawnPoint {
-		return int32(t.spawnPoint.X), int32(t.spawnPoint.Y), int32(t.spawnPoint.Z), 0
+		return int32(math.Floor(t.spawnPoint.X)), int32(math.Floor(t.spawnPoint.Y)), int32(math.Floor(t.spawnPoint.Z)), 0
 	}
 	return 0, 0, 0, 0
 }
