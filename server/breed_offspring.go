@@ -1,6 +1,9 @@
 package server
 
-import "github.com/imhinotori/sulfur/data/entity"
+import (
+	"github.com/imhinotori/sulfur/data/entity"
+	"github.com/imhinotori/sulfur/server/registrydata"
+)
 
 // breed_offspring.go -- getBreedOffspring SPECIES DISPATCH (C1/C2 fix). breed() used to always spawn a
 // pig, so EVERY animal bred a PIG. spawnBreedOffspring dispatches on the initiator type (e.typ) to spawn
@@ -200,11 +203,17 @@ func (t *TickLoop) spawnBreedOffspring(e, partner *Entity) *Entity {
 				child.tame = true             // setTame(true, true)
 				child.catCollarColor = int(t.dyeMixedColorFallback(byte(e.catCollarColor), byte(partner.catCollarColor)))
 			}
-			// (3) pickRandomSoundVariant(registryAccess, this.random) == Registry.getRandom(this.random) ==
-			// this.random.nextInt(WOLF_SOUND_VARIANT size). The registry is not a v1 subsystem, so this draw
-			// is DEFERRED (structured to become nextInt(registrySize) when WolfSoundVariants is wired); the
-			// SoundVariant SELECTION and its INITIATOR draw are deferred together, never baked away. Cite
-			// WolfSoundVariants.pickRandomSoundVariant.
+			// (3) pickRandomSoundVariant(registryAccess, this.random) == Registry.getRandom(this.random).
+			// Registry.getRandom == Util.getRandomSafe(entries, rng), which for a non-empty registry is
+			// entries.get(rng.nextInt(size)) — exactly ONE nextInt(size) on the INITIATOR stream, run
+			// UNCONDITIONALLY (bytecode pc111-118, outside the isTame branch). #34: the WolfSoundVariant
+			// Holder is not yet modeled for playback, but the DRAW is now CONSUMED (size = the 7 embedded
+			// wolf_sound_variant registry entries) so the initiator's RNG stream stays in vanilla lockstep —
+			// omitting it desynced every later per-entity draw. The variant SELECTION (which sound) remains
+			// deferred (cosmetic, sound-only). CITE: WolfSoundVariants.pickRandomSoundVariant / Registry.getRandom.
+			if n := registrydata.WolfSoundVariantCount(); n > 0 {
+				_ = mobRandom(e).nextInt(n)
+			}
 		}
 		return child
 	case entity.Frog.ID:

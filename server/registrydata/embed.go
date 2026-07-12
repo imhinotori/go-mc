@@ -173,6 +173,21 @@ func ReadBiome(name string) ([]byte, error) {
 	return registryFS.ReadFile(path.Join("registries", "worldgen/biome", name))
 }
 
+// WolfSoundVariantCount returns the number of entries in the embedded wolf_sound_variant
+// registry (26.2 ships 7). It is the `size` for Wolf.getBreedOffspring's
+// pickRandomSoundVariant == Registry.getRandom(rng) == rng.nextInt(size) draw: the offspring's
+// sound variant is picked by ONE nextInt(size) on the initiator's stream. The Holder itself is
+// not modeled for playback yet, but the DRAW must be consumed to keep the initiator RNG stream in
+// vanilla lockstep (a missing draw desyncs every later per-entity draw). CITE:
+// WolfSoundVariants.pickRandomSoundVariant / Registry.getRandom.
+func WolfSoundVariantCount() int {
+	files, err := entryFiles(path.Join("registries", "wolf_sound_variant"))
+	if err != nil {
+		return 0
+	}
+	return len(files)
+}
+
 // entryFiles returns the *.json file names directly under base, sorted.
 func entryFiles(base string) ([]string, error) {
 	ents, err := fs.ReadDir(registryFS, base)

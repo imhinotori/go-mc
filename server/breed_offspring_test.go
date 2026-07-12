@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/imhinotori/sulfur/data/entity"
+	"github.com/imhinotori/sulfur/server/registrydata"
 	"github.com/imhinotori/sulfur/world/levelgen"
 )
 
@@ -280,7 +281,15 @@ func TestBreedWolfInheritsParentVariantAndTameOwner(t *testing.T) {
 	const wseed = uint64(0xF00D42)
 	mobRandom(e).reseed(wseed)
 	replay := newEntityRandom(wseed)
-	_ = replay.nextBoolean() // variant pick (deferred SELECTION; the DRAW is consumed)
+	// The INITIATOR stream draws, in vanilla Wolf.getBreedOffspring order:
+	//   (1) nextBoolean() — the WolfVariant pick (SELECTION deferred; DRAW consumed).
+	//   (2) nextInt(soundVariantCount) — pickRandomSoundVariant == Registry.getRandom(this.random),
+	//       run UNCONDITIONALLY (outside the isTame branch). The collar getMixedColor draws on the
+	//       LEVEL random, NOT this initiator stream, so it does not appear in this replay.
+	_ = replay.nextBoolean()
+	if n := registrydata.WolfSoundVariantCount(); n > 0 {
+		_ = replay.nextInt(n)
+	}
 	afterVariant := replay.nextInt(1 << 30)
 
 	child := loop.spawnBreedOffspring(e, partner)
