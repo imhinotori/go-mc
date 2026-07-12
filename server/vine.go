@@ -27,11 +27,6 @@ import (
 // VineBlock.randomTick; Direction.getRandom (Util.getRandom == nextInt(VALUES.length==6));
 // VineBlock.copyRandomFaces.
 //
-// GAMERULE: GameRules.SPREAD_VINES is not yet wired (no gamerule engine in v1); vineSpreadVines is
-// the vanilla DEFAULT (registerBoolean("spread_vines", ..., true) -> TRUE), structured to become a
-// real getGameRules().get(SPREAD_VINES) read later -- the same cited-default discipline as
-// randomTickSpeed. CITE: GameRules.SPREAD_VINES (default true).
-//
 // isAcceptableNeighbour(level, pos, dir) == MultifaceBlock.canAttachTo(level, dir, pos,
 // getBlockState(pos)): the block AT pos presents a FULL support face toward dir (isFaceFull of its
 // support/collision shape toward dir.getOpposite()). Mirrored by block.IsFaceSturdy(state, dir,
@@ -40,9 +35,8 @@ import (
 // All setBlock calls use flag 2 == UPDATE_CLIENTS (no neighbor notify), mirrored as SetBlock +
 // broadcastBlockUpdate. CITE: VineBlock.randomTick.
 
-// vineSpreadVines is GameRules.SPREAD_VINES's vanilla default (true). CITE: GameRules.SPREAD_VINES.
-
-const vineSpreadVines = true
+// ruleSpreadVines is the live GameRules.SPREAD_VINES read (gamerules.go: ruleSpreadVines="spread_vines",
+// default true). CITE: GameRules.SPREAD_VINES.
 
 var vineHorizontals = [4]block.Direction{block.North, block.East, block.South, block.West}
 
@@ -53,7 +47,7 @@ func (t *TickLoop) vineRandomTick(r *region, state block.StateID, pos pk.Positio
 	if !block.IsVine(state) {
 		return
 	}
-	if !vineSpreadVines {
+	if !t.gameRule(ruleSpreadVines) {
 		return
 	}
 	if r.levelRandom.NextIntN(4) != 0 {
