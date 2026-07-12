@@ -249,6 +249,19 @@ func (t *TickLoop) moveEntity(e *Entity, dx, dy, dz float64) {
 	if c.z != dz {
 		e.vz = 0
 	}
+
+	// Entity.move TAIL (bytecode offsets 651-672, the last op before profiler.pop): f = getBlockSpeedFactor();
+	// setDeltaMovement(deltaMovement.multiply(f, 1.0, f)). The horizontal deltaMovement is scaled by the
+	// block-speed factor (soul_sand / honey_block == 0.4), the vertical is untouched. Runs for EVERY entity a
+	// move() moves (mobs/items/orbs/...); on a normal block getBlockSpeedFactor() == 1.0 so this is a
+	// byte-identical no-op (the pig oracle walks on stone -> factor 1.0, vx/vz unchanged, RNG-free).
+	//	[VERIFIED javap Entity.move offsets 651-672: getBlockSpeedFactor(); getDeltaMovement().multiply(f,1.0,f);
+	//	 setDeltaMovement.]
+	sf := t.entityBlockSpeedFactor(e)
+	if sf != 1.0 {
+		e.vx *= float64(sf)
+		e.vz *= float64(sf)
+	}
 }
 
 // --- LivingEntity.travelInAir 1:1 (B-A1 / B-A2) ------------------------------------------------
@@ -312,6 +325,82 @@ func (t *TickLoop) blockFrictionAt(x, y, z int) float32 {
 		return float32(0.8)
 	}
 	return travelBlockFrictionDefault
+}
+
+// entityBlockFrictionBelow reads Block.getFriction() at getBlockPosBelowThatAffectsMyMovement() for a
+// store entity -- the block the entity is standing ON, which travelInAir uses for f3. Sulfur does not
+// track mainSupportingBlockPos (the collision-recorded supporting block), so this is the getOnPos(f)
+// FALLBACK the vanilla method returns when that Optional is empty: BlockPos(floor(x), floor(y-0.500001),
+// floor(z)). For a mob on a normal block this yields the block directly under its feet, and blockFrictionAt
+// returns 0.6 for grass/stone/dirt (byte-identical to the old hardcoded default -- the pig oracle path).
+//
+//	[VERIFIED javap Entity.getBlockPosBelowThatAffectsMyMovement: getOnPos(0.500001f); Entity.getOnPos(float):
+//	 mainSupportingBlockPos empty -> new BlockPos(floor(position.x), floor(position.y - f), floor(position.z)).]
+func (t *TickLoop) entityBlockFrictionBelow(e *Entity) float32 {
+	bx := mthFloor(e.x)
+	by := mthFloor(e.y - 0.500001)
+	bz := mthFloor(e.z)
+	return t.blockFrictionAt(bx, by, bz)
+}
+
+// entityBlockSpeedFactor ports net.minecraft.world.entity.Entity.getBlockSpeedFactor() 1:1 for a store
+// entity:
+//
+//	BlockState atFeet = getBlockState(blockPosition());               // the block the entity is IN (feet cell)
+//	float f = atFeet.getBlock().getSpeedFactor();
+//	if (atFeet.is(WATER) || atFeet.is(BUBBLE_COLUMN)) return f;        // water/bubble: keep the AT-feet factor
+//	if ((double) f == 1.0)                                             // AT-feet normal -> use the block BELOW
+//		return getBlockState(getBlockPosBelowThatAffectsMyMovement()).getBlock().getSpeedFactor();
+//	return f;                                                         // AT-feet is soul_sand/honey -> use it
+//
+// blockPosition() == BlockPos(floor(x), floor(y), floor(z)) (the feet cell); getBlockPosBelowThatAffectsMyMovement()
+// is the getOnPos(0.500001) fallback == BlockPos(floor(x), floor(y-0.500001), floor(z)) (see entityBlockFrictionBelow).
+// Only SOUL_SAND / HONEY_BLOCK carry speedFactor 0.4f; every other block (incl. SOUL_SOIL) is the default 1.0f,
+// so a mob on a normal floor returns 1.0 and the move-tail multiply is a byte-identical no-op (pig on stone).
+//
+//	[VERIFIED javap Entity.getBlockSpeedFactor (offsets 0-70): at-feet getSpeedFactor; WATER/BUBBLE_COLUMN
+//	 short-circuit; (double)f==1.0 -> below-pos getSpeedFactor; else at-feet. Blocks.<clinit>: SOUL_SAND/
+//	 HONEY_BLOCK speedFactor(0.4f); SOUL_SOIL none. Block.getSpeedFactor: return this.speedFactor (default 1.0f).]
+func (t *TickLoop) entityBlockSpeedFactor(e *Entity) float32 {
+	if t.world() == nil {
+		return 1.0
+	}
+	fx, fy, fz := mthFloor(e.x), mthFloor(e.y), mthFloor(e.z) // blockPosition() (feet cell)
+	f := t.speedFactorOfBlock(fx, fy, fz)
+	// WATER / BUBBLE_COLUMN at the feet cell -> return the at-feet factor directly (no below-block deferral).
+	if s, ok := t.world().GetBlock(pk.Position{X: fx, Y: fy, Z: fz}, dimMinY); ok && int(s) >= 0 && int(s) < len(block.StateList) {
+		switch block.StateList[s].ID() {
+		case "minecraft:water", "minecraft:bubble_column":
+			return f
+		}
+	}
+	// (double) f == 1.0 -> defer to the block below (getBlockPosBelowThatAffectsMyMovement).
+	if float64(f) == 1.0 {
+		bx := mthFloor(e.x)
+		by := mthFloor(e.y - 0.500001)
+		bz := mthFloor(e.z)
+		return t.speedFactorOfBlock(bx, by, bz)
+	}
+	return f
+}
+
+// speedFactorOfBlock returns Block.getSpeedFactor() for the block at (x,y,z): 0.4 for soul_sand/honey_block,
+// 1.0 for every other block (the Properties default; soul_soil is NOT slowed).
+//
+//	[VERIFIED javap Blocks.<clinit>: SOUL_SAND.speedFactor(0.4f), HONEY_BLOCK.speedFactor(0.4f); all else default 1.0f.]
+func (t *TickLoop) speedFactorOfBlock(x, y, z int) float32 {
+	if t.world() == nil {
+		return 1.0
+	}
+	s, ok := t.world().GetBlock(pk.Position{X: x, Y: y, Z: z}, dimMinY)
+	if !ok || int(s) < 0 || int(s) >= len(block.StateList) {
+		return 1.0
+	}
+	switch block.StateList[s].ID() {
+	case "minecraft:soul_sand", "minecraft:honey_block":
+		return float32(0.4)
+	}
+	return 1.0
 }
 
 // computeModifiedFriction ports LivingEntity.computeModifiedFriction(float, float) 1:1:
@@ -381,10 +470,17 @@ func frictionInfluencedSpeed(onGround bool, f, speed, flyingSpeed float32) float
 //	 getFrictionInfluencedSpeed, computeModifiedFriction, getEffectiveGravity; Entity.moveRelative/
 //	 getInputVector (input.normalize() if lengthSqr>1; scale(speed); rotate by yaw: x*cos-z*sin, z*cos+x*sin).]
 func (t *TickLoop) travelInAir(e *Entity, inX, inY, inZ, speed, flyingSpeed float32) {
-	// f3 = block friction below (onGround) or 1.0 (airborne). computeModifiedFriction(0.6, 1.0)==0.6.
+	// f3 = block friction below (onGround) or 1.0 (airborne). Vanilla reads
+	// getBlockState(getBlockPosBelowThatAffectsMyMovement()).getBlock().getFriction() -- the block the
+	// mob is standing ON -- so a mob on ice/blue_ice/slime slides (0.98/0.989/0.8) instead of the flat
+	// 0.6 default. computeModifiedFriction(0.6, 1.0)==0.6 for grass/stone/dirt (unchanged), so a mob on
+	// a normal floor is byte-identical to the old hardcoded read (the pig oracle walks on stone=0.6).
+	//	[VERIFIED javap LivingEntity.travelInAir: onGround ?
+	//	 level.getBlockState(getBlockPosBelowThatAffectsMyMovement()).getBlock().getFriction() : 1.0;
+	//	 then computeModifiedFriction(that, FRICTION_INFLUENCE (attribute default 1.0)).]
 	f3 := float32(1.0)
 	if e.onGround {
-		f3 = computeModifiedFriction(travelBlockFrictionDefault, frictionModifierDefault)
+		f3 = computeModifiedFriction(t.entityBlockFrictionBelow(e), frictionModifierDefault)
 	}
 
 	// handleRelativeFrictionAndCalculateMovement: moveRelative then the single move.

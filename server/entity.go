@@ -137,6 +137,17 @@ type Entity struct {
 	// mob/player is never mistaken for a pickup. Set at spawn by spawnBlockDrop / NewItemEntity.
 	isItem bool
 
+	// itemDamageTaken is the CONTACT-DAMAGE accumulator for a dropped Item -- the v1 encoding of
+	// net.minecraft.world.entity.item.ItemEntity.health (a private int initialized to 5). Vanilla
+	// decrements health by the damage amount on each hurtServer and discards the item at health<=0;
+	// we count UP from 0 instead so a freshly-spawned OR persisted item (zero value) is at FULL health
+	// (5 - 0), never instantly destroyed. cactus contact (Entity.checkInsideBlocks -> CactusBlock
+	// .entityInside -> hurt(cactus, 1.0F)) adds 1 per tick the item overlaps a cactus cell; at
+	// itemDamageTaken >= itemStartHealth (5) the item is discarded. Zero/unused for non-item entities.
+	//	[VERIFIED javap ItemEntity.<init>: iconst_5 putfield health; ItemEntity.hurtServer: health -= amount;
+	//	 if (health <= 0) { getItem().onDestroyed(this); discard(); }.]
+	itemDamageTaken int
+
 	// pickupDelay is ItemEntity.pickupDelay: the ticks a fresh drop is NOT pickable
 	// (setDefaultPickUpDelay() == 10). The item tick decrements it toward 0 each tick; playerTouch
 	// refuses pickup while it is > 0. Vanilla's INFINITE sentinel (32767) is honored (never

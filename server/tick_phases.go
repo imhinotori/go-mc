@@ -341,6 +341,19 @@ func (t *TickLoop) tickEntities() {
 	// near it) takes a pure block-id lookup and nothing else. CITE: BasePressurePlateBlock.entityInside.
 	t.tickPressurePlates()
 
+	// checkInsideBlocks (players): the Entity.checkInsideBlocks / BlockState.entityInside dispatch for the
+	// blocks a PLAYER stands in (cactus contact damage, sweet-berry slow + damage-on-move, wither-rose
+	// effect, tripwire trigger; the cobweb slow is client-side). Vanilla runs this inside Entity.move for
+	// EVERY entity -- players included (baseTick is Entity's, not Mob's) -- but the pre-fix Sulfur only wired
+	// it inside the AI-mob loop, so a player standing in cactus took no damage. Routed through the PLAYER
+	// pipeline (applyDamage / addPlayerEffect / resetFallDistance), NOT the mob store-entity path (whose
+	// health field is 0). Sibling of tickPressurePlates (both are entity-inside-block scans); ADDITIVE, no
+	// new trace entry. Its body lives in check_inside_blocks.go. A player on non-effect ground is a pure
+	// block-id scan that fires nothing. Cite Entity.checkInsideBlocks / BlockState.entityInside.
+	for _, p := range t.players {
+		t.checkInsideBlocksPlayer(p)
+	}
+
 	// Suffocation: the IN_WALL branch of LivingEntity.baseTick (`if isInWall() hurtServer(inWall(),
 	// 1.0F)`). In vanilla baseTick this check runs BEFORE the air/drowning branch, so it is placed
 	// here ahead of tickBreath. Its body lives in suffocation.go; a single ADDITIVE call inside this

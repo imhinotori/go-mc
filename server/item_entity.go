@@ -253,6 +253,20 @@ func (t *TickLoop) tickItem(e *Entity) {
 		// onGround, and zeroes any blocked velocity component so the item lands on the floor.
 		t.moveEntity(e, e.vx, e.vy, e.vz)
 
+		// applyEffectsFromBlocks() -> checkInsideBlocks: the entityInside dispatch for the blocks the item
+		// STANDS IN, run right after move(SELF) exactly as ItemEntity.tick does. Vanilla runs this for
+		// EVERY entity a move() moves (Entity.move -> applyEffectsFromBlocks); the pre-fix Sulfur wired it
+		// only inside the AI-mob loop, so an item resting on cactus was never destroyed. checkInsideBlocks
+		// routes cactus through the ItemEntity.hurtServer health path (hurtItem: -1/tick, discard at 0) and
+		// cobweb/sweet-berry through makeStuckInBlock (consumed by the item's NEXT moveEntity); the
+		// LivingEntity-only berry-damage / wither-rose branches self-gate off (isLivingMob(item)==false).
+		// A discarded item is gone from the store -- guard the rest of the tick against a removed entity.
+		//	[VERIFIED javap ItemEntity.tick: move(SELF, getDeltaMovement()); applyEffectsFromBlocks().]
+		t.checkInsideBlocks(e)
+		if _, ok := t.cur().entities.get(e.id); !ok {
+			return // cactus destroyed the item this tick
+		}
+
 		// Air drag + ground friction: f = getAirDrag() (0.98) on the vertical; the horizontal
 		// scale f1 = f, but when onGround f1 = blockFrictionBelow * 0.98. delta.multiply(f1, f, f1).
 		f := itemAirDrag

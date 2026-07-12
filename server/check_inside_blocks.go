@@ -136,7 +136,38 @@ func (t *TickLoop) entityInsideBlock(state block.StateID, pos pk.Position, e *En
 //	[VERIFIED javap CactusBlock.entityInside: aload entity; damageSources().cactus(); fconst_1;
 //	 invokevirtual Entity.hurt(DamageSource, F).]
 func (t *TickLoop) cactusEntityInside(e *Entity) {
+	// entity.hurt(cactus, 1.0F) dispatches to the entity's own hurtServer override. A dropped Item routes
+	// through ItemEntity.hurtServer (decrement the item's health, discard at <=0) -- NOT the LivingEntity
+	// damage pipeline -- so cactus DESTROYS an item over 5 ticks rather than "damaging" a nonexistent
+	// living health. Every living mob takes the shared LivingEntity.hurtServer path (applyDamageEntity).
+	if e.isItem {
+		t.hurtItem(e, 1.0)
+		return
+	}
 	t.applyDamageEntity(e, damageSourceOf(damageTypeCactus), 1.0)
+}
+
+// hurtItem ports net.minecraft.world.entity.item.ItemEntity.hurtServer's health path 1:1: subtract the
+// damage from the item's health (v1: ADD to itemDamageTaken, since we count up from 0 == full 5) and, once
+// health <= 0 (itemDamageTaken >= itemStartHealth), discard the item. The isInvulnerableToBase, MOB_GRIEFING
+// (attacker-is-Mob) and ItemStack.canBeHurtBy gates are v1 cited constants: no source here is a mob attacker
+// (cactus is an environment source) and canBeHurtBy is constant-true until DAMAGE_RESISTANT components are
+// wired -- so a normal stack takes the health hit exactly as vanilla. RNG-free.
+//
+//	[VERIFIED javap ItemEntity.hurtServer: health = (int)((float)health - amount); if (health <= 0) {
+//	 getItem().onDestroyed(this); discard(); }. ItemEntity.<init> health = 5.]
+func (t *TickLoop) hurtItem(e *Entity, amount float32) {
+	if e == nil || !e.isItem {
+		return
+	}
+	// health = (int)((float)health - amount): decrement the remaining health; with integer amounts (cactus
+	// 1.0F) this is a plain -1 per hit. Encoded as itemDamageTaken += amount (count up from 0).
+	e.itemDamageTaken += int(amount)
+	if e.itemStartHealth()-e.itemDamageTaken <= 0 {
+		// getItem().onDestroyed(this) (particle/sound side-effect, no drop) then discard(): remove the item
+		// from the store so the tracker emits RemoveEntities next tick.
+		t.cur().entities.remove(e.id)
+	}
 }
 
 // cobwebEntityInside ports WebBlock.entityInside 1:1: makeStuckInBlock(state, Vec3(0.25, 0.05, 0.25)).
@@ -261,4 +292,119 @@ func makeStuckInBlock(e *Entity, vx, vy, vz float64) {
 	e.stuckSpeedMultiplierY = vy
 	e.stuckSpeedMultiplierZ = vz
 	e.stuck = true
+}
+
+// itemStartHealth is net.minecraft.world.entity.item.ItemEntity's initial health (the <init> `health = 5`).
+// An item survives 5 points of contact damage before it is discarded (cactus 1.0F/tick -> destroyed on the
+// 5th overlapping tick).
+//
+//	[VERIFIED javap ItemEntity.<init>: iconst_5 putfield health.]
+func (e *Entity) itemStartHealth() int { return 5 }
+
+// checkInsideBlocksPlayer is the PLAYER-facing port of Entity.checkInsideBlocks. A ServerPlayer runs
+// Entity.baseTick -> ... -> Entity.move -> applyEffectsFromBlocks -> checkInsideBlocks EVERY tick, exactly
+// like a mob (baseTick is Entity's, not Mob's), so a player standing in cactus/sweet-berry/wither-rose/
+// tripwire must fire the SAME entityInside behaviors. But a player's health/effects/fall-distance live on
+// the tickPlayer (client-authoritative movement), NOT on p.playerEntity (whose health field is 0), so the
+// mob checkInsideBlocks(*Entity) path would misroute every effect into a dead store entity. This routes
+// each entityInside through the PLAYER pipeline instead:
+//   - CactusBlock.entityInside         -> applyDamage(p, cactus, 1.0)   [player hurtServer -> health + hurt packet]
+//   - WebBlock.entityInside            -> resetFallDistance() only      [the stuck-speed slow is applied CLIENT-side
+//                                                                       for client-authoritative movement; the server
+//                                                                       owns only the fall-distance reset. Cited.]
+//   - SweetBerryBushBlock.entityInside -> resetFallDistance(); on a grown bush (AGE!=0) while MOVING,
+//                                         applyDamage(p, sweet_berry_bush, 1.0)
+//   - WitherRoseBlock.entityInside     -> addPlayerEffect(WITHER, 40) on non-PEACEFUL
+//   - TripWireBlock.entityInside       -> tripwireEntityInside (position-based; a player presses the wire)
+//
+// isAffectedByBlocks (!isRemoved && !noPhysics): a live player is always affected. The scan geometry is the
+// player's deflated 0.6x1.8 box, identical to the mob scan. Air cells skip. RNG-free on every path.
+//
+//	[VERIFIED javap Entity.baseTick/move -> applyEffectsFromBlocks -> checkInsideBlocks; the per-block
+//	 entityInside overrides cited on each mob helper; the player wrappers only re-route the sink.]
+func (t *TickLoop) checkInsideBlocksPlayer(p *tickPlayer) {
+	if p == nil || p.dead || t.world() == nil {
+		return
+	}
+	hw := playerWidth / 2
+	minX := p.x - hw + checkInsideBlocksDeflate
+	minY := p.y + checkInsideBlocksDeflate
+	minZ := p.z - hw + checkInsideBlocksDeflate
+	maxX := p.x + hw - checkInsideBlocksDeflate
+	maxY := p.y + playerHeight - checkInsideBlocksDeflate
+	maxZ := p.z + hw - checkInsideBlocksDeflate
+
+	loX, hiX := int(math.Floor(minX)), int(math.Floor(maxX))
+	loY, hiY := int(math.Floor(minY)), int(math.Floor(maxY))
+	loZ, hiZ := int(math.Floor(minZ)), int(math.Floor(maxZ))
+
+	for bx := loX; bx <= hiX; bx++ {
+		for by := loY; by <= hiY; by++ {
+			for bz := loZ; bz <= hiZ; bz++ {
+				pos := pk.Position{X: bx, Y: by, Z: bz}
+				state, ok := t.world().GetBlock(pos, dimMinY)
+				if !ok {
+					continue
+				}
+				id := block.StateList[state].ID()
+				if id == "minecraft:air" || id == "minecraft:cave_air" || id == "minecraft:void_air" {
+					continue
+				}
+				t.playerInsideBlock(state, pos, p)
+			}
+		}
+	}
+}
+
+// playerInsideBlock is the player-facing BlockState.entityInside dispatch (the sink-rerouted twin of
+// entityInsideBlock). Blocks with no entityInside override fall through -- a no-op.
+func (t *TickLoop) playerInsideBlock(state block.StateID, pos pk.Position, p *tickPlayer) {
+	switch b := block.StateList[state].(type) {
+	case block.Cactus:
+		// CactusBlock.entityInside: hurt(cactus, 1.0F) -> the player hurtServer pipeline.
+		t.applyDamage(p, damageSourceOf(damageTypeCactus), 1.0)
+	case block.Cobweb:
+		// WebBlock.entityInside -> makeStuckInBlock: the stuck-speed slow is applied CLIENT-side for a
+		// client-authoritative player; the server owns only resetFallDistance() (a cobweb breaks a fall).
+		p.resetFallDistance()
+	case block.SweetBerryBush:
+		t.sweetBerryBushEntityInsidePlayer(b, p)
+	case block.WitherRose:
+		// WitherRoseBlock.entityInside: ServerLevel && difficulty!=PEACEFUL && LivingEntity &&
+		// !isInvulnerableTo(wither) -> addEffect(WITHER, 40). A player is a LivingEntity; the
+		// isInvulnerableTo gate is the v1 constant-false (matches witherRoseEntityInside).
+		if t.levelDifficulty != difficultyPeaceful {
+			t.addPlayerEffect(p, 0, effectWither, 40, 0, 1.0)
+		}
+	case block.Tripwire:
+		// TripWireBlock.entityInside: an overlapping non-ignoring entity presses the wire (position-based,
+		// identical to the mob path).
+		t.tripwireEntityInside(state, pos)
+	}
+}
+
+// sweetBerryBushEntityInsidePlayer is the player-facing SweetBerryBushBlock.entityInside: makeStuckInBlock
+// (resetFallDistance server-side; the slow is client-side) then, on a grown bush (AGE!=0) while the player
+// is MOVING (oldPosition - position: |dx|>=0.003 || |dz|>=0.003, horizontalDistanceSqr>0), hurtServer(
+// sweetBerryBush, 1.0F) via applyDamage. A player is always a LivingEntity (the FOX/BEE exemptions never
+// apply). The movement delta uses prevX/prevZ (the xo/zo stand-in) == oldPosition - position, matching the
+// mob helper's velocity-proxy rationale but with the player's real per-tick position delta.
+//
+//	[VERIFIED javap SweetBerryBushBlock.entityInside: LivingEntity && !FOX && !BEE; makeStuckInBlock(
+//	 0.8,0.75,0.8); ServerLevel && AGE!=0; mv=oldPosition-position; horizontalDistanceSqr>0 && (|x|>=0.003
+//	 || |z|>=0.003) -> hurtServer(sweetBerryBush, 1.0F).]
+func (t *TickLoop) sweetBerryBushEntityInsidePlayer(b block.SweetBerryBush, p *tickPlayer) {
+	p.resetFallDistance() // makeStuckInBlock(0.8,0.75,0.8): server owns the fall reset; the slow is client-side.
+	if int(b.Age) == 0 {
+		return // ServerLevel && AGE != 0: a freshly-planted bush does not hurt.
+	}
+	// mv = oldPosition().subtract(position()) == (prevX - x, prevZ - z), the player's per-tick delta.
+	mvX := p.prevX - p.x
+	mvZ := p.prevZ - p.z
+	if mvX*mvX+mvZ*mvZ <= 0.0 { // horizontalDistanceSqr() > 0.0
+		return
+	}
+	if math.Abs(mvX) >= 0.003000000026077032 || math.Abs(mvZ) >= 0.003000000026077032 {
+		t.applyDamage(p, damageSourceOf(damageTypeSweetBerryBush), 1.0)
+	}
 }
