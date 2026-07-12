@@ -1,7 +1,7 @@
 # Progress de paridad 1:1 — Minecraft Server 26.2
 
 **Actualizado:** 2026-07-12
-**Commit:** `0771ecf7`
+**Commit:** `42b58a21`
 **Referencia:** `temp/cache/26.2-inner.jar`
 **Tipo de medición:** estimación ponderada por dominios observables
 **Margen de incertidumbre:** ±4 puntos porcentuales; gamerules, serverbound y las cuatro capas principales de persistencia ya tienen censos de campo/ruta
@@ -20,15 +20,15 @@ Este porcentaje NO significa que el 57% de las clases del JAR esté portado. Mid
 | Dominio | Peso | Score actual | Contribución | Motivo principal |
 |---|---:|---:|---:|---|
 | Protocolo, login, sesión y streaming | 10% | 58% | 5,8 | 69 paquetes reales + sentinel: 4 exactos, 33 parciales, 3 no-op explícitos y 30 default-noop |
-| Chunks, lighting y ciclo de mundo | 12% | 72% | 8,64 | Relight funnel, status chain y scheduled ticks reales; quedan lifecycle/distances long-tail |
-| Worldgen y estructuras | 15% | 60% | 9,0 | Noise/surface/features amplios; varias estructuras/providers conservan reducciones |
+| Chunks, lighting y ciclo de mundo | 12% | 72% | 8,64 | Relight/status/scheduled ticks reales; ticket subsystem aún observe-only y contiene constantes 8/41 incorrectas |
+| Worldgen y estructuras | 15% | 60% | 9,0 | Providers/lake ampliados; pool terrain puede perder neighbor requests y no tiene oracle de bytes/order |
 | Bloques, fluidos, física y redstone | 12% | 50% | 6,0 | Friction/speed-factor mejorados; neighbor updates, shapes, piston/redstone siguen parciales |
-| Entidades, AI, Brain y spawning | 16% | 60% | 9,6 | Todas las categorías tienen cadence/pool; brains y roster efectivo siguen parciales |
-| Combate, efectos, proyectiles y enchants | 10% | 72% | 7,2 | Keystone sólido y fixes recientes; todavía quedan effects/enchants/guards incompletos |
-| Inventario, ítems, crafting y loot | 10% | 55% | 5,5 | Menús/recetas funcionales; componentes, loot functions y acciones mantienen gaps |
+| Entidades, AI, Brain y spawning | 16% | 60% | 9,6 | Cadence/pools presentes; fan-out usa conteo CREATURE para seis categorías y vibration/sculk sigue parcial |
+| Combate, efectos, proyectiles y enchants | 10% | 72% | 7,2 | Fall-per-packet corregido; aún falta HIT_GROUND y quedan effects/enchants/guards incompletos |
+| Inventario, ítems, crafting y loot | 10% | 55% | 5,5 | Explosion decay exact aislado; match_tool/berry/components y acciones siguen parciales |
 | Persistencia integral | 7% | 45% | 3,15 | Autosave de entidades, empty-cell y shutdown durable cerrados; el field-level sigue en player 22/68, chunk 18/26, entities 19/99 y components 8/111 |
-| Commands, advancements y gamerules | 5% | 56% | 2,8 | Registry 59/59; 15 reglas tienen consumidor live-store, 6 siguen constantes y 38 sin consumidor |
-| Región/concurrencia con semántica vanilla | 3% | 65% | 1,95 | Arquitectura/race discipline fuerte; feeding/breeding/knockback cross-region difieren |
+| Commands, advancements y gamerules | 5% | 56% | 2,8 | `/execute` amplía superficie pero pierde source/result/store/selectores; 15 gamerules live-store |
+| Región/concurrencia con semántica vanilla | 3% | 65% | 1,95 | Pool acotado pero sin equivalencia de order/backpressure; cross-region gameplay sigue divergente |
 | **Total ponderado** | **100%** | — | **59,65% ≈ 60%** | Mejora por durabilidad P0 y dos consumidores gamerule vivos; field parity aún limita el avance |
 
 ## Contadores objetivos del snapshot
@@ -75,6 +75,20 @@ Estos avances mejoran dominios concretos, pero los censos mostraron que registro
 - Revisión multiagente encontró y cerró dos bloqueantes antes de integrar: entities con chunk saver deshabilitado y headless usando `log.Fatal`.
 - Gates verdes: seis tests P0, `-race` focalizado, dos tests de `ChunkSaver`, compilación de `cmd/sulfur` y `git diff --check`.
 - `go test ./...` llegó verde fuera de `server`; dos intentos de `server` tropezaron con flakes async preexistentes distintos (`TestAllAsyncSubsystemsRaceClean`, `TestBehaviorRegressionPathArrives`, `TestServerAiStepWalksToGoalTarget`). Repeticiones múltiples confirman intermitencia; no se relajaron tests.
+
+## Auditoría multiagente de la ola Claude `eef1ee6b..42b58a21`
+
+Informe completo: [`PARITY-AUDIT-2026-07-12-CLAUDE-WAVE.md`](PARITY-AUDIT-2026-07-12-CLAUDE-WAVE.md).
+
+- P0: el pool terrain puede descartar neighbor requests después de marcarlos deduplicados, dejando centros wanted sin completar.
+- P1: `/execute` pierde source stack/result por fork y no replica selectores/store.
+- P1 latente: ChunkLevel usa 8/41 y tabla de estados incorrecta; hoy sólo observe-only.
+- P1: vibration selector last-event-wins y todas las vibraciones llegan un tick tarde.
+- P1: spawn negativo se desplaza al persistir; `[0,0,0]` se recalcula aunque sea válido.
+- P1: sweet berry rompe el stream RNG vanilla; fall damage no emite `HIT_GROUND`.
+- P1: fan-out del spawner reutiliza el conteo CREATURE para seis categorías.
+- La barra permanece en 60% ±4: hay mejoras aisladas reales, compensadas por superficies nuevas parciales y una regresión operativa.
+- Baseline: el timeout estándar de 10 minutos agotó `server/world`; el rerun limpio `go test ./server ./world -timeout 20m` terminó verde.
 
 ## Resultados multiworker incorporados
 
