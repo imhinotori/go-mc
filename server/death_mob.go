@@ -82,6 +82,28 @@ func (t *TickLoop) dieEntity(e *Entity, src damageSource) {
 	}
 	e.lastDamageSource = src
 
+	// RAIDER.die (VERIFIED javap Raider.die @0-82): a raider that dies while it has a currentRaid runs the
+	// raid-death bookkeeping BEFORE super.die (the loot roll below). `Entity attacker = source.getEntity();
+	// Raid raid = getCurrentRaid(); if (raid != null) { if (isPatrolLeader()) raid.removeLeader(getWave());
+	// if (attacker != null && attacker.is(PLAYER)) raid.addHeroOfTheVillage(attacker); raid.removeFromRaid(
+	// level, this, false); }`. Gated on e.ai != nil && currentRaid != nil (a non-raider draws nothing here —
+	// the pig oracle is never a raider). removeFromRaid runs with removeFromTotalHealth=false (the corpse's
+	// health already counts toward the bar until updateRaiders prunes it), exactly the `false` arg vanilla passes.
+	if e.ai != nil && e.ai.currentRaid != nil {
+		raid := e.ai.currentRaid
+		wave := e.ai.raidWave
+		if raiderIsPatrolLeader(e) {
+			raid.removeLeader(wave) // the captain died -> its wave no longer has a leader
+		}
+		// attacker.is(EntityType.PLAYER): the DIRECT causing entity is a player -> that player is a hero.
+		if src.attacker != 0 {
+			if killer := t.playerByEntityID(src.attacker); killer != nil {
+				raid.addHeroOfTheVillage(killer.uuid)
+			}
+		}
+		t.raidRemoveRaider(raid, e, false)
+	}
+
 	// STATISTICS (stats.go): if a PLAYER dealt the lethal blow, credit their statistics — the
 	// ENTITY_KILLED[mobType] tally + the CUSTOM minecraft:mob_kills counter (the stats screen
 	// "Mobs Killed" + per-mob rows). src.attacker is the causing entity id (0 == no entity source,
@@ -316,6 +338,11 @@ func (t *TickLoop) dropMobLoot(e *Entity, src damageSource) {
 	ctx := loot.NewEntityLootContext(seed, 0, loot.EntityLootParams{
 		KilledByPlayer: killedByPlayer(src),
 		CubeMobSize:    cubeSize,
+		// RAIDER (illager captain): the dying raider's Raider.isCaptain() at roll time (the banner in HEAD
+		// + patrol leader — both intact through the loot roll, since Raider.die's removeFromRaid clears
+		// neither). Gates the ominous_bottle pool (type_specific/raider.is_captain). false for a non-captain
+		// mob (the pig oracle is never a captain -> draws nothing new). Cite Raider.die -> dropFromLootTable.
+		RaiderIsCaptain: raiderIsCaptain(e),
 		// AttackerLootingLevel is the killer weapon's minecraft:looting level — the
 		// EnchantmentHelper.getEnchantmentLevel(LOOTING, ATTACKING_ENTITY) read
 		// EnchantedCountIncreaseFunction consumes. Resolved from the death source's attacker entity

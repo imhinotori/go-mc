@@ -115,13 +115,16 @@ func (t *TickLoop) tickRaid(rm *raidsManager, r *Raid) {
 			}
 		}
 		// Final-wave-cleared -> VICTORY (VERIFIED CFR): after the final wave with no raiders alive, count
-		// postRaidTicks to 40 then flip to VICTORY. The hero-of-the-village effect grant is cite-deferred
-		// (no player-hero tracking / HERO_OF_THE_VILLAGE effect).
+		// postRaidTicks to 40 then flip to VICTORY, then grant HERO_OF_THE_VILLAGE to every player who slew
+		// a raider (heroesOfTheVillage). VERIFIED javap Raid.tick @685-841: `if (isStarted() && !hasMoreWaves()
+		// && getTotalRaidersAlive() == 0) { if (postRaidTicks < 40) postRaidTicks++; else { status = VICTORY;
+		// for (UUID u : heroesOfTheVillage) { ... addEffect(HERO_OF_THE_VILLAGE, 48000, raidOmenLevel-1) } } }`.
 		if r.isStarted() && !r.hasMoreWaves() && r.getTotalRaidersAlive() == 0 {
 			if r.postRaidTicks < raidPostRaidLimit {
 				r.postRaidTicks++
 			} else {
 				r.status = raidStatusVictory
+				t.grantHeroesOfTheVillage(r) // the VICTORY reward: HERO_OF_THE_VILLAGE for each hero
 			}
 		}
 		return
@@ -148,37 +151,102 @@ func (t *TickLoop) tickRaid(rm *raidsManager, r *Raid) {
 // raidSpawnGroup ports Raid.spawnGroup(level, pos) — VERIFIED CFR. It iterates RaiderType.VALUES in
 // ordinal order, computes numSpawns = getDefaultNumSpawns + getPotentialBonusSpawns (the bonus DRAWS on
 // the raid stream, draw-order-faithful), and for each spawn creates the raider (raidCreateRaider) and
-// joins it to the raid (raidJoinRaid). A RaiderType whose mob is absent among the 22 (VINDICATOR/EVOKER/
-// PILLAGER/RAVAGER) resolves to raidCreateRaider==nil and the `!= null` loop guard breaks it — the jar's
-// exact behavior when EntityType.create returns null. The ravager-rider spawns + the leader ominous
-// banner are cite-deferred with those absent mobs. Returns true (a wave slot was processed) — the
-// spawnPos is the center (never null), so the attempt path in tickRaid never trips. leaderSet is tracked
-// (the canBeLeader/setLeader wiring) but the banner grant is deferred (the witch is not a leader).
+// joins it to the raid (raidJoinRaid). A RaiderType whose mob is not boot-loaded resolves to
+// raidCreateRaider==nil and the `!= null` loop guard breaks it — the jar's exact behavior when
+// EntityType.create returns null. The wave CAPTAIN (first canBeLeader() raider -> setPatrolLeader +
+// setLeader's ominous banner) and the RAVAGER RIDER (raidCreateRavagerRider + startRiding) are now LIVE
+// (raid_captain.go). Returns true (a wave slot was processed) — the spawnPos is the center (never null),
+// so the attempt path in tickRaid never trips.
 func (t *TickLoop) raidSpawnGroup(r *Raid) bool {
 	groupNumber := r.groupsSpawned + 1
 	r.totalHealth = 0.0
 	isBonusGroup := r.shouldSpawnBonusGroup()
-	leaderSet := false
+	leaderSet := false // Raid.spawnGroup local `bl` — set once the wave captain is chosen.
 	for _, rt := range raiderTypesValues {
 		numSpawns := r.getDefaultNumSpawns(rt, groupNumber, isBonusGroup) +
 			r.getPotentialBonusSpawns(rt, groupNumber, r.difficulty, isBonusGroup)
+		// riderCount is Raid.spawnGroup local `n` (var 12): the per-RaiderType index of ravagers spawned
+		// this wave, deciding which rider a ravager carries in the HARD-final wave (0 -> EVOKER, else
+		// VINDICATOR). Reset per RaiderType (vanilla declares it inside the RaiderType loop). VERIFIED
+		// javap Raid.spawnGroup @84 (iconst_0 istore 12) + @217/@255 (iload 12 / iinc 12,1).
+		riderCount := 0
 		for i := 0; i < numSpawns; i++ {
 			raider := t.raidCreateRaider(r, rt)
 			if raider == nil {
 				break // EntityType.create(...) == null -> the jar's loop guard breaks this RaiderType
 			}
-			if !leaderSet {
-				// canBeLeader() is true for a PatrollingMonster; the WITCH is NOT a PatrollingMonster, so
-				// (as in vanilla) it is never the leader. setPatrolLeader/setLeader (the ominous banner) is
-				// therefore cite-deferred for the witch-only v1 wave. leaderSet stays false.
-				_ = leaderSet
+			// The wave CAPTAIN (VERIFIED javap Raid.spawnGroup @122-149): the FIRST canBeLeader() raider of
+			// the wave becomes the patrol leader + carries the ominous banner. canBeLeader() is true for the
+			// 4 PatrollingMonsters (Vindicator/Evoker/Pillager/Ravager) and false for the Witch, so a
+			// witch-only wave assigns no captain (leaderSet stays false) — exactly as vanilla.
+			if !leaderSet && raiderCanBeLeader(raider) {
+				if raider.ai != nil {
+					raider.ai.patrolLeader = true // setPatrolLeader(true)
+				}
+				t.raidSetLeader(r, groupNumber, raider) // setLeader: ominous banner into HEAD + record captain
+				leaderSet = true
 			}
 			t.raidJoinRaid(r, groupNumber, raider)
+			// RAVAGER RIDER (VERIFIED javap Raid.spawnGroup @161-291): a RAVAGER carries a rider per the wave
+			// table — a PILLAGER on the NORMAL-final wave (groupNumber == getNumGroups(NORMAL) == 5), else on
+			// the HARD-final-or-later wave (groupNumber >= getNumGroups(HARD) == 7) an EVOKER for the first
+			// ravager (riderCount == 0) and a VINDICATOR after. The rider joins the raid, snaps to the center,
+			// and startRiding(ravager). Gated on rt being the RAVAGER type (ordinal 4).
+			if rt.ordinal == 4 { // Raid$RaiderType.RAVAGER
+				rider := t.raidCreateRavagerRider(r, groupNumber, riderCount)
+				riderCount++ // iinc 12,1 — vanilla increments `n` even when no rider is created
+				if rider != nil {
+					t.raidJoinRaid(r, groupNumber, rider)
+					// snapTo(pos, 0, 0) then startRiding(ravager, true, true): the rider mounts the ravager.
+					rider.x, rider.y, rider.z = raider.x, raider.y, raider.z
+					t.raidMountRider(raider, rider)
+				}
+			}
 		}
 	}
 	r.groupsSpawned++
 	t.updateBossbar(r)
 	return true
+}
+
+// raidCreateRavagerRider ports the ravager-rider spawn inside Raid.spawnGroup (@161-291): the wave table
+// decides the rider mob — a PILLAGER when groupNumber == getNumGroups(NORMAL) (==5); else when groupNumber
+// >= getNumGroups(HARD) (==7) an EVOKER for the first ravager of the wave (riderCount == 0) and a VINDICATOR
+// after; otherwise no rider (null). VERIFIED javap Raid.spawnGroup: `if (groupNumber == getNumGroups(NORMAL))
+// raider2 = PILLAGER.create(...); else if (groupNumber >= getNumGroups(HARD)) { if (n == 0) raider2 =
+// EVOKER.create(...); else raider2 = VINDICATOR.create(...); }`. A rider whose declaration is not boot-loaded
+// resolves to nil (EntityType.create == null), mirroring the jar's null-guarded join.
+func (t *TickLoop) raidCreateRavagerRider(r *Raid, groupNumber, riderCount int) *Entity {
+	var mobName string
+	switch {
+	case groupNumber == getNumGroups(difficultyNormal): // == 5
+		mobName = vanillaPillagerMobName
+	case groupNumber >= getNumGroups(difficultyHard): // >= 7
+		if riderCount == 0 {
+			mobName = vanillaEvokerMobName
+		} else {
+			mobName = vanillaVindicatorMobName
+		}
+	default:
+		return nil // no rider on this wave
+	}
+	if t.mobRegistry == nil {
+		return nil
+	}
+	if _, ok := t.mobRegistry.byName[mobName]; !ok {
+		return nil // declaration not boot-loaded -> EntityType.create == null
+	}
+	return t.spawnVanillaMob(mobName, float64(r.centerX)+0.5, float64(r.centerY)+1.0, float64(r.centerZ)+0.5)
+}
+
+// raidMountRider ports Raider.startRiding(ravager, true, true) for the ravager-rider spawn: the rider
+// becomes the ravager's sole passenger (a non-Player passenger, so vehicleAddPassenger appends) and the
+// rider records the ravager as its vehicle. VERIFIED javap Raid.spawnGroup @288 (startRiding(raider, false,
+// false)) -> Entity.startRiding -> vehicle.addPassenger(this). No RNG draw. The full ride physics (the
+// rider's seat offset each tick) rides the existing passenger tick (passenger.go).
+func (t *TickLoop) raidMountRider(ravager, rider *Entity) {
+	t.vehicleAddPassenger(ravager, rider.id, false)
+	rider.vehicle = ravager.id
 }
 
 // raidCreateRaider ports raiderType.entityType.create(level, EVENT): spawn the RaiderType's mob at the

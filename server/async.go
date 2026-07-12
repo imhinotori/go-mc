@@ -29,6 +29,7 @@ package server
 // map swap is NOT done here.
 
 import (
+	"github.com/google/uuid"
 	"github.com/panjf2000/ants/v2"
 	"github.com/puzpuzpuz/xsync/v4"
 
@@ -104,6 +105,19 @@ func submitOrDrop(pool *ants.Pool, work func()) bool {
 func (t *TickLoop) playerByEntityID(id int32) *tickPlayer {
 	for _, p := range t.players {
 		if p.entityID == id {
+			return p
+		}
+	}
+	return nil
+}
+
+// playerByUUID is the ServerLevel.getEntity(UUID) analogue restricted to players: the connected player
+// whose profile UUID matches, or nil (a departed hero, an offline UUID). A linear scan over the small
+// t.players set on the tick goroutine (tick-owned) — the same discipline playerByEntityID uses. The raid
+// VICTORY hero grant reads it to resolve heroesOfTheVillage UUIDs back to live players.
+func (t *TickLoop) playerByUUID(id uuid.UUID) *tickPlayer {
+	for _, p := range t.players {
+		if p.uuid == id {
 			return p
 		}
 	}

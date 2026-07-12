@@ -109,6 +109,16 @@ type LootContext struct {
 	// non-cube context (its tables never read it). Populated from EntityLootParams.CubeMobSize.
 	// Source: javap CubeMobPredicate (size MinMaxBounds.Ints matches) + entities/slime.json.
 	CubeMobSize int
+
+	// --- RAIDER (illager captain) loot context ---------------------------------------------------
+	//
+	// The entities/pillager (+ vindicator/evoker/…) tables gate their ominous_bottle pool on an
+	// entity_properties condition over THIS_ENTITY: predicate minecraft:type_specific/raider.is_captain
+	// == true (RaiderPredicate.isCaptain). RaiderIsCaptain carries the dying raider's Raider.isCaptain()
+	// at roll time so that pool fires ONLY for a slain raid captain (a leader carrying the ominous banner).
+	// false for every non-raider / non-captain context (its tables never read it). Populated from
+	// EntityLootParams.RaiderIsCaptain. Source: javap RaiderPredicate (isCaptain match) + pillager.json.
+	RaiderIsCaptain bool
 }
 
 // EntityLootParams carries the entity (death) loot-context inputs NewEntityLootContext threads into
@@ -123,6 +133,10 @@ type EntityLootParams struct {
 	// The type_specific/cube_mob size condition reads it (slimeball pool: size == 1). Cite Slime.remove
 	// -> dropFromLootTable roll while getSize() is still the dying cube's size.
 	CubeMobSize int
+	// RaiderIsCaptain is THIS_ENTITY's Raider.isCaptain() for a slain raider; false otherwise. The
+	// type_specific/raider is_captain condition reads it (the pillager ominous_bottle pool). Cite
+	// Raider.die -> dropFromLootTable roll while isCaptain() is still true (the banner slot is intact).
+	RaiderIsCaptain bool
 }
 
 // NewEntityLootContext builds a LootContext for an ENTITY (death) loot roll: the LegacyRandomSource
@@ -140,6 +154,7 @@ func NewEntityLootContext(seed int64, luck float32, p EntityLootParams) *LootCon
 	c.AttackerLootingLevel = p.AttackerLootingLevel
 	c.AttackerSmeltsLoot = p.AttackerSmeltsLoot
 	c.CubeMobSize = p.CubeMobSize
+	c.RaiderIsCaptain = p.RaiderIsCaptain
 	return c
 }
 

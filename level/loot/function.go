@@ -95,6 +95,26 @@ type setPotionFunction struct{}
 
 func (s *setPotionFunction) Run(stack *ItemStack, _ *LootContext) *ItemStack { return stack }
 
+// setOminousBottleAmplifierFunction mirrors SetOminousBottleAmplifierFunction.run: draw the amplifier
+// (uniform 0..4), clamp to [0,4], and set the OMINOUS_BOTTLE_AMPLIFIER component. The int draw is
+// order-faithful; the component write is a cited stub (the roll ItemStack has no amplifier component
+// yet). Source: javap SetOminousBottleAmplifierFunction.run (amplifier.getInt(ctx); Mth.clamp(,0,4)).
+type setOminousBottleAmplifierFunction struct {
+	amplifier NumberProvider
+}
+
+func (s *setOminousBottleAmplifierFunction) Run(stack *ItemStack, ctx *LootContext) *ItemStack {
+	amp := s.amplifier.GetInt(ctx) // the load-bearing draw (order-faithful)
+	if amp < 0 {
+		amp = 0
+	}
+	if amp > 4 {
+		amp = 4
+	}
+	_ = amp // the OminousBottleAmplifier component write is stubbed (no amplifier component on the roll stack yet)
+	return stack
+}
+
 // applyFunctions runs a function list over the stack IN ORDER (the compositeFunction
 // LootItemFunction.decorate folds them left-to-right). Order is load-bearing for
 // per-seed reproduction: each function draws its own RNG in sequence.
@@ -237,6 +257,23 @@ func parseFunction(rf rawFunction) (LootFunction, error) {
 		// Structured to write a PotionContents component when that component subsystem lands.
 		// Source: javap SetPotionFunction.run (itemStack.update(POTION_CONTENTS, ...) — no rng).
 		inner = &setPotionFunction{}
+	case "set_ominous_bottle_amplifier":
+		// SetOminousBottleAmplifierFunction (the illager-captain ominous_bottle drop): draw the amplifier
+		// from the NumberProvider (uniform 0..4 in pillager.json), clamp to [0,4], and set the
+		// OMINOUS_BOTTLE_AMPLIFIER component. VERIFIED javap SetOminousBottleAmplifierFunction.run:
+		// `int amp = Mth.clamp(amplifier.getInt(ctx), 0, 4); stack.set(OMINOUS_BOTTLE_AMPLIFIER,
+		// new OminousBottleAmplifier(amp));`. The draw is load-bearing (order-faithful); the component
+		// WRITE is a cited stub (the roll ItemStack carries no OminousBottleAmplifier component yet —
+		// same discipline as set_potion/set_damage), structured to write the component when it lands.
+		amRaw, ok := rf["amplifier"]
+		if !ok {
+			return nil, fmt.Errorf("set_ominous_bottle_amplifier missing amplifier")
+		}
+		np, perr := parseNumberProvider(amRaw)
+		if perr != nil {
+			return nil, fmt.Errorf("set_ominous_bottle_amplifier amplifier: %w", perr)
+		}
+		inner = &setOminousBottleAmplifierFunction{amplifier: np}
 	default:
 		// A function type neither the chest groups nor the block tables use
 		// (set_components, ...). Error loudly rather than silently drop the transform.

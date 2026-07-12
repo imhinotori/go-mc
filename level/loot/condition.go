@@ -306,6 +306,11 @@ const (
 	// slime/magma_cube tables (slimeball pool: size 1). The wanted size is carried in the condition.
 	// Source: javap CubeMobPredicate + entities/slime.json type_specific/cube_mob.size.
 	entityPropCubeMobSize
+	// entityPropRaiderIsCaptain: entity="this" predicate.type_specific/raider.is_captain==true —
+	// THIS_ENTITY (a raider) is a raid CAPTAIN (Raider.isCaptain — ominous banner in HEAD + patrol
+	// leader). Reads RaiderIsCaptain. Gates the pillager/vindicator/… ominous_bottle pool. Source:
+	// javap RaiderPredicate (isCaptain match) + entities/pillager.json type_specific/raider.is_captain.
+	entityPropRaiderIsCaptain
 	// entityPropUnknown: a form this v1 port does not model (a future entity table) — TEST FALSE
 	// (the conservative default: a drop gated on an unmodeled predicate does not fire, never a
 	// wrong/extra drop). Cited so the real EntityPredicate match slots in later.
@@ -332,6 +337,8 @@ func (e *entityPropertyCondition) Test(ctx *LootContext) bool {
 		return ctx.InOpenWater
 	case entityPropCubeMobSize:
 		return ctx.CubeMobSize == e.wantSize
+	case entityPropRaiderIsCaptain:
+		return ctx.RaiderIsCaptain
 	default:
 		return false // unmodeled predicate form -> conservative false (no wrong drop).
 	}
@@ -360,6 +367,10 @@ func parseEntityProperties(rc rawCondition) (LootCondition, error) {
 		// predicate.minecraft:type_specific/cube_mob.size == N -> the cube-mob (slime/magma_cube) form.
 		if sz, ok := entityPredicateCubeMobSize(predRaw); ok {
 			return &entityPropertyCondition{kind: entityPropCubeMobSize, wantSize: sz}, nil
+		}
+		// predicate.minecraft:type_specific/raider.is_captain == true -> the raid-captain form.
+		if entityPredicateWantsRaiderCaptain(predRaw) {
+			return &entityPropertyCondition{kind: entityPropRaiderIsCaptain}, nil
 		}
 		return &entityPropertyCondition{kind: entityPropUnknown}, nil
 	case "direct_attacker", "attacker":
@@ -433,6 +444,26 @@ func entityPredicateCubeMobSize(predRaw json.RawMessage) (int, bool) {
 		return 0, false
 	}
 	return *pred.CubeMob.Size, true
+}
+
+// entityPredicateWantsRaiderCaptain reports whether an entity_properties predicate gates on THIS_ENTITY
+// being a raid captain (predicate.minecraft:type_specific/raider.is_captain == true) — the illager
+// tables' ominous_bottle pool. The predicate key is the single string "minecraft:type_specific/raider"
+// (a slash in the key) mapping to { "is_captain": <bool> }. A predicate without the raider is_captain
+// term returns false. Source: entities/pillager.json type_specific/raider.is_captain + javap RaiderPredicate.
+func entityPredicateWantsRaiderCaptain(predRaw json.RawMessage) bool {
+	if len(predRaw) == 0 {
+		return false
+	}
+	var pred struct {
+		Raider struct {
+			IsCaptain *bool `json:"is_captain"`
+		} `json:"minecraft:type_specific/raider"`
+	}
+	if err := json.Unmarshal(predRaw, &pred); err != nil {
+		return false
+	}
+	return pred.Raider.IsCaptain != nil && *pred.Raider.IsCaptain
 }
 
 // matchToolWantsSilkTouch reports whether a match_tool condition's predicate gates on a

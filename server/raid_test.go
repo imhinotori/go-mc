@@ -9,6 +9,10 @@ package server
 import (
 	"testing"
 
+	"github.com/google/uuid"
+
+	"github.com/imhinotori/sulfur/data/entity"
+	"github.com/imhinotori/sulfur/data/item"
 	"github.com/imhinotori/sulfur/level"
 )
 
@@ -250,5 +254,205 @@ func TestLongDistancePatrolGoalInert(t *testing.T) {
 	g.tick(loop, w)
 	if w.ai.patrolling {
 		t.Fatal("lone patroller (no companions) did not drop patrolling — the faithful no-companion branch")
+	}
+}
+
+// raidFullRaiderLoop builds a physics loop with a stone floor + the FULL vanilla mob registry (all 5
+// raiders), so a wave can spawn a real pillager/vindicator/evoker/ravager captain + a ravager rider.
+func raidFullRaiderLoop(t *testing.T) (*TickLoop, int) {
+	t.Helper()
+	loop, mgr := newPhysicsLoop()
+	const floorY = 63
+	ch := putChunk(mgr, level.ChunkPos{0, 0})
+	fillFloor(ch, floorY)
+	reg, err := loadVanillaMobRegistry()
+	if err != nil {
+		t.Fatalf("loadVanillaMobRegistry: %v", err)
+	}
+	loop.SetMobRegistry(reg)
+	loop.start(loop.clock.(*fakeClock).Now())
+	return loop, floorY
+}
+
+// TestRaidWaveAssignsCaptainWithOminousBanner: the FIRST canBeLeader() raider of a wave becomes the
+// patrol leader and carries the ominous banner in its HEAD slot (Raid.spawnGroup -> setLeader). isCaptain()
+// reads true for the banner-carrying leader; the raid records it in groupToLeaderMap.
+func TestRaidWaveAssignsCaptainWithOminousBanner(t *testing.T) {
+	loop, floorY := raidFullRaiderLoop(t)
+	rm := loop.only().ensureRaidsManager()
+	// A HARD raid: wave 1 spawns 4 pillagers (the first is the captain). Drive to the first wave spawn.
+	raid := rm.createRaidAt(8, floorY, 8, difficultyHard, 1)
+	for i := 0; i < 400 && raid.getTotalRaidersAlive() == 0; i++ {
+		loop.raidsTick(rm)
+		if raid.isStopped() || raid.isOver() {
+			break
+		}
+	}
+	if raid.getTotalRaidersAlive() == 0 {
+		t.Fatalf("no wave ever spawned (groupsSpawned=%d status=%v)", raid.groupsSpawned, raid.status)
+	}
+	// Exactly one captain in the wave, carrying the ominous banner + reading isCaptain()==true.
+	var captain *Entity
+	captains := 0
+	for _, set := range raid.groupRaiderMap {
+		for _, r := range set {
+			if raiderIsCaptain(r) {
+				captain = r
+				captains++
+			}
+		}
+	}
+	if captains != 1 {
+		t.Fatalf("expected exactly 1 captain in the wave, got %d", captains)
+	}
+	head := captain.getItemBySlot(eqSlotHead)
+	if uint32(head.ItemID) != uint32(item.WhiteBanner.ID) || head.Count != 1 {
+		t.Fatalf("captain HEAD slot = {id=%d count=%d}, want the ominous banner (white_banner x1)", head.ItemID, head.Count)
+	}
+	if !raiderIsPatrolLeader(captain) {
+		t.Fatal("captain is not the patrol leader")
+	}
+	if raid.getLeader(captain.ai.raidWave) != captain.id {
+		t.Fatalf("raid leader for wave %d = %d, want captain %d", captain.ai.raidWave, raid.getLeader(captain.ai.raidWave), captain.id)
+	}
+}
+
+// TestKillingCaptainDropsOminousBottle: the is_captain loot predicate fires for a slain captain, dropping
+// the ominous bottle (which, drunk, grants BAD_OMEN via consume_effects.go). A non-captain raider drops
+// no bottle. This is the "killing a captain grants bad omen" loop.
+func TestKillingCaptainDropsOminousBottle(t *testing.T) {
+	loop, floorY := raidFullRaiderLoop(t)
+	rm := loop.only().ensureRaidsManager()
+	raid := rm.createRaidAt(8, floorY, 8, difficultyHard, 1)
+
+	cap := loop.spawnVanillaMob(vanillaPillagerMobName, 8.5, float64(floorY+1), 8.5)
+	if cap == nil {
+		t.Fatal("failed to spawn pillager")
+	}
+	cap.ai.patrolLeader = true
+	loop.raidSetLeader(raid, 1, cap)
+	loop.raidJoinRaid(raid, 1, cap)
+	if !raiderIsCaptain(cap) {
+		t.Fatal("the leader pillager with the ominous banner must read isCaptain()==true")
+	}
+
+	killer := &tickPlayer{entityID: 9001, x: 8.5, y: float64(floorY + 1), z: 8.5, health: 20}
+	loop.players = append(loop.players, killer)
+	loop.withRegion(loop.only(), func() {
+		loop.dieEntity(cap, damageSourcePlayerAttack(killer.entityID))
+	})
+
+	sawBottle := false
+	for _, e := range loop.only().entities.all() {
+		if e.itemStack.Count > 0 && uint32(e.itemStack.ItemID) == uint32(item.OminousBottle.ID) {
+			sawBottle = true
+		}
+	}
+	if !sawBottle {
+		t.Fatal("killing a captain did not drop an ominous bottle (the is_captain loot pool did not fire)")
+	}
+
+	plain := loop.spawnVanillaMob(vanillaPillagerMobName, 4.5, float64(floorY+1), 4.5)
+	if raiderIsCaptain(plain) {
+		t.Fatal("a plain pillager (no banner, not leader) must not be a captain")
+	}
+}
+
+// TestRaidVictoryGrantsHeroOfTheVillage: a player who slew a raider (addHeroOfTheVillage) gets
+// HERO_OF_THE_VILLAGE at amplifier (raidOmenLevel-1) on the raid VICTORY transition.
+func TestRaidVictoryGrantsHeroOfTheVillage(t *testing.T) {
+	loop, floorY := raidFullRaiderLoop(t)
+	rm := loop.only().ensureRaidsManager()
+	// raidOmenLevel 3 -> hero amplifier 2. EASY (3 waves, no witches -> instant clears).
+	raid := rm.createRaidAt(8, floorY, 8, difficultyEasy, 3)
+
+	hero := &tickPlayer{entityID: 9100, uuid: uuid.New(), x: 8.5, y: float64(floorY + 1), z: 8.5, health: 20}
+	loop.players = append(loop.players, hero)
+	raid.addHeroOfTheVillage(hero.uuid)
+	raid.addHeroOfTheVillage(hero.uuid) // a second add is a no-op (Set semantics)
+	if len(raid.heroesOfTheVillage) != 1 {
+		t.Fatalf("heroesOfTheVillage size = %d, want 1 (dedup)", len(raid.heroesOfTheVillage))
+	}
+
+	// Drive the raid: each spawned raider is killed by the hero so waves clear and advance to VICTORY.
+	reachedVictory := false
+	loop.withRegion(loop.only(), func() {
+		for i := 0; i < 300*8+700; i++ {
+			loop.raidsTick(rm)
+			for _, set := range raid.groupRaiderMap {
+				for _, r := range set {
+					if !r.dead {
+						loop.dieEntity(r, damageSourcePlayerAttack(hero.entityID))
+					}
+				}
+			}
+			if raid.isVictory() {
+				reachedVictory = true
+			}
+			if rm.get(raid.id) == nil {
+				break
+			}
+		}
+	})
+	if !reachedVictory {
+		t.Fatalf("EASY raid never reached VICTORY (status=%v)", raid.status)
+	}
+	eff := hero.activeEffects[heroOfTheVillageEffectID]
+	if eff == nil {
+		t.Fatal("the hero did not receive HERO_OF_THE_VILLAGE on raid victory")
+	}
+	if eff.amplifier != 2 { // raidOmenLevel(3) - 1
+		t.Fatalf("HERO_OF_THE_VILLAGE amplifier = %d, want 2 (raidOmenLevel-1)", eff.amplifier)
+	}
+	if eff.duration != raidHeroDuration {
+		t.Fatalf("HERO_OF_THE_VILLAGE duration = %d, want %d", eff.duration, raidHeroDuration)
+	}
+}
+
+// TestRaidRavagerWaveSpawnsRider: a ravager wave on wave >= getNumGroups(HARD) carries a rider
+// (EVOKER for the first ravager, VINDICATOR after). We assert a ravager spawns with a mob passenger
+// whose vehicle back-pointer is that ravager.
+func TestRaidRavagerWaveSpawnsRider(t *testing.T) {
+	loop, floorY := raidFullRaiderLoop(t)
+	rm := loop.only().ensureRaidsManager()
+	raid := rm.createRaidAt(8, floorY, 8, difficultyHard, 1)
+
+	// Drive the raid, killing every raider each tick so the waves advance to the ravager-bearing final
+	// wave. A player killer lets dieEntity/removeFromRaid clear the wave set so shouldSpawnGroup advances.
+	killer := &tickPlayer{entityID: 9200, x: 8.5, y: float64(floorY + 1), z: 8.5, health: 20}
+	loop.players = append(loop.players, killer)
+	sawRiddenRavager := false
+	loop.withRegion(loop.only(), func() {
+		for i := 0; i < 300*12 && !sawRiddenRavager; i++ {
+			loop.raidsTick(rm)
+			for _, set := range raid.groupRaiderMap {
+				for _, r := range set {
+					if r.typ == entity.Ravager.ID && len(r.passengers) > 0 {
+						rider, ok := loop.only().entities.get(r.passengers[0])
+						if ok && rider.vehicle == r.id {
+							sawRiddenRavager = true
+						}
+					}
+				}
+			}
+			if sawRiddenRavager {
+				break
+			}
+			// Clear the wave so the raid advances toward the ravager-final wave (a ravager itself is killed
+			// only AFTER we have observed its rider — the check above runs before this kill each tick).
+			for _, set := range raid.groupRaiderMap {
+				for _, r := range set {
+					if !r.dead {
+						loop.dieEntity(r, damageSourcePlayerAttack(killer.entityID))
+					}
+				}
+			}
+			if raid.isStopped() || raid.isOver() {
+				break
+			}
+		}
+	})
+	if !sawRiddenRavager {
+		t.Fatalf("no ravager with a rider ever spawned (groupsSpawned=%d status=%v)", raid.groupsSpawned, raid.status)
 	}
 }

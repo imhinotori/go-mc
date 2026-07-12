@@ -34,17 +34,29 @@ import (
 //     UPDATE to the tracked players, and updatePlayers (by VALID_RAID_RADIUS_SQR distance) sends
 //     ADD/REMOVE as players enter/leave range.
 //
+// LIVE LOOP (as of the CAPTAIN/HERO/RIDER task — raid_captain.go):
+//   - the bad-omen->raid AUTO-trigger IS wired: BadOmenMobEffect.applyEffectTick converts BAD_OMEN ->
+//     RAID_OMEN when a player stands in a village (poi.go isVillage/sectionsToVillage POI scan), and
+//     RaidOmenMobEffect fires Raids.createOrExtendRaid on omen expiry (poi.go createOrExtendRaid averages
+//     the occupied #village POIs to pick the center). The test/dbg SEAM (raids.go createRaidAt) is kept
+//     alongside it for deterministic loop tests.
+//   - the wave CAPTAIN + ominous banner IS wired (raid_captain.go): spawnGroup sets the first canBeLeader()
+//     raider as the patrol leader carrying the ominous banner in HEAD (setLeader) -> isCaptain() drives the
+//     is_captain loot pool (the ominous_bottle drop, level/loot). Killing a captain -> that player becomes
+//     a hero (Raider.die -> addHeroOfTheVillage, death_mob.go).
+//   - the RAVAGER RIDER IS wired (raid_tick.go raidCreateRavagerRider): a ravager carries a PILLAGER on the
+//     NORMAL-final wave, else an EVOKER/VINDICATOR on the HARD-final wave, mounted via startRiding.
+//   - HERO OF THE VILLAGE IS wired: on VICTORY every heroesOfTheVillage player gets HERO_OF_THE_VILLAGE
+//     (dur 48000, amp raidOmenLevel-1 — the villager-discount math this feeds is already built).
+//
 // v1 REDUCTIONS (cited, NOT silently dropped):
-//   - VILLAGE/POI dependence: Raid.tick's isVillage/moveRaidCenterToNearbyVillageSection center checks
-//     are CITE-DEFERRED — there is NO village/POI subsystem (grep PoiManager/village: no PoiManager).
-//     The raid runs on its fixed center without the "raid drifted out of a village -> LOSS" guard. The
-//     bad-omen->raid AUTO-trigger (Raids.createOrExtendRaid, which reads
-//     level.getPoiManager().getInRange(VILLAGE)) is likewise deferred; a raid is instead started via the
-//     test/dbg SEAM (raids.go createRaidAt), so the loop is fully EXERCISED and hasActiveRaid becomes real.
-//   - the ravager-rider spawns (Pillager/Evoker/Vindicator riding a Ravager) and the leader ominous
-//     banner are CITE-DEFERRED with the absent RaiderType mobs (only WITCH exists among the 22).
+//   - Raid.tick's moveRaidCenterToNearbyVillageSection drift check + the "raid drifted out of a village
+//     -> LOSS" guard remain CITE-DEFERRED; the raid runs on its fixed center.
 //   - findRandomSpawnPos's heightmap/village probing is reduced to the raid center (spawnGroup places
-//     each raider AT the center) — the observable (a wave of witches spawns near center) is faithful.
+//     each raider AT the center) — the observable (a wave spawns near center) is faithful.
+//   - the ominous-banner BannerPatternLayers component + setDropChance(HEAD, 2.0f) are cite-deferred to
+//     the base white_banner item / default drop chance (raid_captain.go), the load-bearing observable
+//     (a captain visibly carries a banner + drops the ominous_bottle) being preserved.
 
 // Raid constants (VERIFIED CFR Raid field initializers).
 const (
@@ -54,6 +66,9 @@ const (
 	raidMaxCelebration  = 600   // MAX_CELEBRATION_TICKS — VICTORY/LOSS boss-bar celebration window
 	raidDefaultMaxOmen  = 5     // DEFAULT_MAX_RAID_OMEN_LEVEL
 	raidLowMobThreshold = 2     // LOW_MOB_THRESHOLD — "Raiders remaining" bar name switch
+	// raidHeroDuration is Raid.HERO_OF_THE_VILLAGE_DURATION == 48000 (the MobEffectInstance duration the
+	// VICTORY branch grants each winning player). VERIFIED javap Raid.tick @791 (ldc_w #443 // int 48000).
+	raidHeroDuration = 48000
 )
 
 // raidStatus is Raid$RaidStatus (VERIFIED CFR: ONGOING/VICTORY/LOSS/STOPPED).
@@ -149,6 +164,13 @@ type Raid struct {
 	// the set sizes. Keyed by the 1-based wave (groupNumber).
 	groupRaiderMap map[int]map[int32]*Entity
 
+	// groupToLeaderMap is Raid.groupToLeaderMap: wave (1-based groupNumber) -> the raid CAPTAIN raider
+	// id for that wave. setLeader(wave, raider) records it + puts the ominous banner in the raider HEAD
+	// slot; removeLeader(wave) drops it (called from the captain die path). The ObtainRaidLeaderBannerGoal
+	// (an unequipped raider walking to a dropped banner) is cite-deferred (no item-pickup broad-phase);
+	// the wave-spawn captain assignment is faithful. Cite Raid.groupToLeaderMap / setLeader / removeLeader.
+	groupToLeaderMap map[int]int32
+
 	// bossEvent is the ServerBossEvent MODEL (progress/name/visible/players). Its client packet
 	// emission is cite-deferred (no BossEvent wire); the model is computed faithfully.
 	bossEvent serverBossEvent
@@ -209,6 +231,7 @@ func newRaid(id int, cx, cy, cz int, d difficulty, seed uint64) *Raid {
 		active:            true,
 		raidCooldownTicks: raidDefaultPreTicks,
 		groupRaiderMap:    map[int]map[int32]*Entity{},
+		groupToLeaderMap:  map[int]int32{},
 		bossEvent: serverBossEvent{
 			// id is Mth.createInsecureUUID(this.random) — a per-raid insecure UUID. Sourced from a
 			// google/uuid random UUID here (the id need only be STABLE per bar, not vanilla-seed-pinned;
