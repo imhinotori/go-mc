@@ -74,6 +74,7 @@ $processes = @()
 foreach ($task in $tasks) {
     $args = @(
         '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
         '-File', $worker,
         '-TaskId', [string]$task.id,
         '-PromptFile', [string]$task.prompt,
