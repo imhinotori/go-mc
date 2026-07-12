@@ -119,11 +119,17 @@ func (e *lightEngine) runLightUpdates() int {
 	}
 	e.blockNodesToCheck = make(map[int64]struct{})
 	count := 0
+	// Vanilla order (LayerLightEngine.runLightUpdates bytecode): drain BOTH the decrease and the
+	// increase FIFO queues FIRST, then clearChunkCache -> markNewInconsistencies -> swapSectionMap.
+	// The earlier Go order interleaved clearCache/markNewInconsistencies/swap BETWEEN the decrease and
+	// increase drains; value-benign for a single batched recompute but incorrect under a load/unload
+	// interleave, where the increase drain must observe the SAME storage/section state the decrease
+	// drain did (before the swap). CITE: LayerLightEngine.runLightUpdates.
 	count += e.propagateDecreases()
+	count += e.propagateIncreases()
 	e.clearChunkCache()
 	e.storage.markNewInconsistencies()
 	e.storage.swapSectionMap()
-	count += e.propagateIncreases()
 	return count
 }
 

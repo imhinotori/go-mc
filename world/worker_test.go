@@ -53,6 +53,7 @@ func (c *countingGen) GenerateTerrain(pos level.ChunkPos) *level.Chunk {
 // StatusFull (the no-op decoration) and the worker can size the Neighborhood.
 func (c *countingGen) Decorate(view *Neighborhood) { c.inner.Decorate(view) }
 func (c *countingGen) Dims() (int, int)            { return c.inner.Dims() }
+func (c *countingGen) HasSkyLight() bool           { return c.inner.HasSkyLight() }
 
 // posCalls returns the GenerateTerrain call count for a single pos.
 func (c *countingGen) posCalls(pos level.ChunkPos) int {

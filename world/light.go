@@ -138,7 +138,7 @@ func (n *lightNeighborhood) SectionsCount() int { return n.sectionsCount }
 // The wire format is unchanged: the per-section []byte light arrays are handed to the section exactly
 // as before; only their contents (now computed) differ. A fully-lit above-terrain sky section reads
 // back as 0xFF; below-surface / occluded cells attenuate; block light radiates from emitters.
-func ComputeChunkLight(centerPos level.ChunkPos, neighbors map[[2]int]*level.Chunk, minSectionY, secs int, air block.StateID) {
+func ComputeChunkLight(centerPos level.ChunkPos, neighbors map[[2]int]*level.Chunk, minSectionY, secs int, air block.StateID, hasSkyLight bool) {
 	center := neighbors[[2]int{int(centerPos[0]), int(centerPos[1])}]
 	if center == nil {
 		return
@@ -160,7 +160,7 @@ func ComputeChunkLight(centerPos level.ChunkPos, neighbors map[[2]int]*level.Chu
 		}
 	}
 
-	eng := lighting.NewLevelLightEngine(nb, true, true) // overworld: block + sky
+	eng := lighting.NewLevelLightEngine(nb, true, hasSkyLight) // block engine always; sky engine only where the dimension has sky light (overworld yes; nether/end no). CITE: DimensionType.hasSkyLight().
 
 	// Drive the initial-light sequence over every loaded chunk in the 3x3.
 	var coords [][2]int
@@ -249,7 +249,7 @@ type ColumnLight struct {
 // return a ColumnLight only for the columns whose arrays actually CHANGED. An unloaded column in the 3x3 is
 // skipped (its light is not tracked). minSectionY/secs are the world geometry (minY>>4, height>>4); air is
 // the resolved air StateID. Tick-owned (runs on the tick goroutine over the tick-owned manager).
-func (m *ChunkManager) RelightEdit(pos pk.Position, minSectionY, secs int, air block.StateID) []ColumnLight {
+func (m *ChunkManager) RelightEdit(pos pk.Position, minSectionY, secs int, air block.StateID, hasSkyLight bool) []ColumnLight {
 	col := colOf(pos)
 	// The columns whose light this edit can affect: the edited column and its 8 neighbors.
 	affected := make([]level.ChunkPos, 0, 9)
@@ -296,7 +296,7 @@ func (m *ChunkManager) RelightEdit(pos pk.Position, minSectionY, secs int, air b
 				}
 			}
 		}
-		ComputeChunkLight(c, neighbors, minSectionY, secs, air)
+		ComputeChunkLight(c, neighbors, minSectionY, secs, air, hasSkyLight)
 	}
 
 	// Emit a ColumnLight only for columns whose light actually changed (mark them dirty so the recomputed
@@ -350,7 +350,7 @@ func nibbleEqual(a, b []byte) bool {
 
 // computeChunkLightFromNeighborhood is the single-chunk-path adapter: it lifts a *Neighborhood's 3x3
 // into the [cx,cz]->*Chunk map ComputeChunkLight wants.
-func computeChunkLightFromNeighborhood(view *Neighborhood, minSectionY, secs int, air block.StateID) {
+func computeChunkLightFromNeighborhood(view *Neighborhood, minSectionY, secs int, air block.StateID, hasSkyLight bool) {
 	neighbors := make(map[[2]int]*level.Chunk, 9)
 	for dx := -1; dx <= 1; dx++ {
 		for dz := -1; dz <= 1; dz++ {
@@ -361,7 +361,7 @@ func computeChunkLightFromNeighborhood(view *Neighborhood, minSectionY, secs int
 			}
 		}
 	}
-	ComputeChunkLight(view.center, neighbors, minSectionY, secs, air)
+	ComputeChunkLight(view.center, neighbors, minSectionY, secs, air, hasSkyLight)
 }
 
 // materializeLayer returns the 2048-byte light array for a DataLayer, or nil if the layer is absent

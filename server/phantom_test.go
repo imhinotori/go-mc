@@ -27,7 +27,7 @@ func phantomLoop(t *testing.T) (*TickLoop, *world.ChunkManager, int) {
 	// (the deterministic tickMobSunBurn path gates on maxLocalRawBrightness >= 14). Pass the
 	// center column's chunk as its own neighbor so the engine has the heightmap/sources it needs.
 	neighbors := map[[2]int]*level.Chunk{{0, 0}: ch}
-	world.ComputeChunkLight(level.ChunkPos{0, 0}, neighbors, dimMinY>>4, 384>>4, block.ToStateID[block.Air{}])
+	world.ComputeChunkLight(level.ChunkPos{0, 0}, neighbors, dimMinY>>4, 384>>4, block.ToStateID[block.Air{}], true)
 	loop.start(loop.clock.(*fakeClock).Now())
 	return loop, mgr, floorY
 }

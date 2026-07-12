@@ -238,9 +238,8 @@ func (t *TickLoop) ravagerDestroyLeaf(pos pk.Position, oldState block.StateID) b
 		return false // destroyBlock returns false when the state did not change (e.g. already air)
 	}
 	t.broadcastBlockUpdate(pos, air)
-	// LevelChunk.setBlockState light hook: opaque leaves removed raises the cell light; relight + push.
-	// CITE: LevelChunk.setBlockState -> getLightEngine().checkBlock.
-	t.relightOnEdit(nil, pos, oldState, air)
+	// Light re-propagation fires CENTRALLY from ChunkManager.SetBlock (SetBlockChangeHook) -- the
+	// SetBlock above already relit + broadcast. No per-site relight call.
 	return true
 }
 

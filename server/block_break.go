@@ -478,11 +478,9 @@ func (t *TickLoop) destroyBlock(p *tickPlayer, pos pk.Position, air block.StateI
 			t.onObserverEdit(pos)
 		}
 
-		// LevelChunk.setBlockState light hook: a break to air raises the cell's light (removes a shadow-
-		// caster) or removes an emitter (a broken torch darkens the room). Recompute the affected columns'
-		// light and push a ClientboundLightUpdate to their trackers. Covers BOTH the ack (insta/STOP) and
-		// the delayed-destroy paths — destroyBlock is the single break funnel. Gated inside relightOnEdit.
-		t.relightOnEdit(p, pos, brokenState, air)
+		// LevelChunk.setBlockState light hook now fires CENTRALLY from ChunkManager.SetBlock (see
+		// SetBlockChangeHook / relightChanged): destroyBlock's SetBlock-to-air already re-propagated light
+		// and broadcast the ClientboundLightUpdate. No per-site relight call here.
 
 		// D-B1: the general Level.setBlock flag-1+2 neighbour-update dispatch for the CrossCollisionBlock
 		// + attachment slices - a break to air makes an adjacent fence/pane/bar drop its connection toward

@@ -23,35 +23,58 @@ const (
 // chunks (world.RelightEdit), and pushes a ClientboundLightUpdate for every column whose light actually
 // changed to every player tracking that column. Tick-owned (runs on the tick goroutine). CITE:
 // LevelChunk.setBlockState (hasDifferentLightProperties -> checkBlock) + ChunkMap's light-update broadcast.
-func (t *TickLoop) relightOnEdit(p *tickPlayer, pos pk.Position, oldState, newState block.StateID) {
+// installRelightHook registers relightChanged as the CENTRAL block-change callback on a dimension's
+// ChunkManager (world.SetBlockChangeHook). After this, EVERY changed SetBlock in that dimension --
+// player build/break, fluid flow (lava emits 15), fire, explosions, pistons, growth, dispensers,
+// silverfish, enderman/ravager/snow-golem, command setblock -- re-propagates light and broadcasts the
+// update, exactly as vanilla funnels every LevelChunk.setBlockState through checkBlock. Called once
+// per dimension at world wiring on the tick goroutine. CITE: LevelChunk.setBlockState -> checkBlock.
+func (t *TickLoop) installRelightHook(w *world.ChunkManager, dim int) {
+	if w == nil {
+		return
+	}
+	w.SetBlockChangeHook(func(pos pk.Position, oldState, newState block.StateID) {
+		t.relightChanged(dim, w, pos, oldState, newState)
+	})
+}
+
+func (t *TickLoop) relightChanged(dim int, w *world.ChunkManager, pos pk.Position, oldState, newState block.StateID) {
 	if !world.LightPropertiesDiffer(oldState, newState) {
 		return // light properties unchanged: no checkBlock, no relight (the hasDifferentLightProperties gate)
 	}
 	// NETHER: relight the editor's-dimension world at that dimension's geometry so a nether edit
 	// re-propagates the nether world's light (not the overworld's). dimWorld(p) picks the manager;
 	// dimMinYFor/dimSecsFor give the section geometry.
-	w := t.dimWorld(p)
 	if w == nil {
 		return
 	}
+	// Per-dimension section geometry + sky engine. hasSkyLight selects the SKY light engine in the
+	// recompute: overworld true; nether/end false (DimensionType.hasSkyLight is false there, so their
+	// sky-light layer stays absent/0). CITE: DimensionType.hasSkyLight().
 	minSec := lightMinSectionY
 	secs := lightSectionCount
-	if p != nil && p.dimension == dimNether {
+	hasSkyLight := true
+	if dim == dimNether {
 		minSec = dimNetherMinY >> 4
 		secs = dimNetherSecs
+		hasSkyLight = false
 	}
-	if p != nil && p.dimension == dimEnd {
+	if dim == dimEnd {
 		minSec = dimEndMinY >> 4
 		secs = dimEndSecs
+		hasSkyLight = false
 	}
 	air := block.ToStateID[block.Air{}]
-	changed := w.RelightEdit(pos, minSec, secs, air)
+	changed := w.RelightEdit(pos, minSec, secs, air, hasSkyLight)
 	for _, cl := range changed {
 		packet := world.WriteLightUpdate(cl)
 		col := chunkCenterOf(cl.Pos[0]*16, cl.Pos[1]*16)
 		for _, pl := range t.players {
 			if pl.client == nil {
 				continue
+			}
+			if pl.dimension != dim {
+				continue // light update is for THIS dimension's column; a same-coord player in another dimension must not receive it
 			}
 			if pl.center == col || (pl.sentChunks != nil && pl.sentChunks[col]) {
 				pl.client.Send(packet)

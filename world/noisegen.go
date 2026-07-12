@@ -670,6 +670,12 @@ func (g *NoiseGenerator) beardifierFor(pos level.ChunkPos) *structure.Beardifier
 // proxy without re-deriving the chunk geometry.
 func (g *NoiseGenerator) Dims() (minY, height int) { return g.minY, g.secs * 16 }
 
+// HasSkyLight: the overworld runs the sky engine; the nether and the end do not
+// (DimensionType.hasSkyLight is false there, so their sky-light layer is absent/0). Derived from
+// the same nether/end flags that select their fill paths. CITE: DimensionType.hasSkyLight();
+// nether.json / end.json (has_skylight false).
+func (g *NoiseGenerator) HasSkyLight() bool { return !g.nether && !g.end }
+
 // StructureCache exposes the per-world StructureStart cache so the worker can seed it from a
 // region-loaded chunk's persisted `structures` NBT (STRUCT-POLISH-04 read path) and serialize a
 // chunk's OWN starts back into the `structures` compound on save (the write path). It is the SAME

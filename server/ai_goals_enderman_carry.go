@@ -145,10 +145,8 @@ func (g *endermanTakeBlockGoal) tick(t *TickLoop, e *Entity) {
 	// level.removeBlock(pos, false) -> set to air + broadcast; the client sees the block vanish.
 	if t.world() != nil && t.world().SetBlock(pos, 0, dimMinY) {
 		t.broadcastBlockUpdate(pos, 0)
-		// LevelChunk.setBlockState light hook: a stolen holdable (grass/dirt/sand) was opaque, so its
-		// removal raises the cell's light. Relight + push ClientboundLightUpdate. Gated on the property
-		// diff (sid -> air). CITE: LevelChunk.setBlockState -> getLightEngine().checkBlock.
-		t.relightOnEdit(nil, pos, sid, 0)
+		// Light re-propagation fires CENTRALLY from ChunkManager.SetBlock (SetBlockChangeHook) -- the
+		// SetBlock above already relit + broadcast. No per-site relight call.
 	}
 	// gameEvent(GameEvent.BLOCK_DESTROY, ...): CITE-DEFERRED no-op (no game-event subsystem).
 	// setCarriedBlock(state.getBlock().defaultBlockState()): carry the DEFAULT state of the taken block.
@@ -209,13 +207,10 @@ func (g *endermanLeaveBlockGoal) tick(t *TickLoop, e *Entity) {
 	// carried = Block.updateFromNeighbourShapes(carried, level, pos): CITE-DEFERRED identity in v1.
 	if g.canPlaceBlock(t, e, xt, yt, zt) {
 		pos := pk.Position{X: xt, Y: yt, Z: zt}
-		prePlace, _ := t.world().GetBlock(pos, dimMinY)
 		if t.world() != nil && t.world().SetBlock(pos, carried, dimMinY) {
 			t.broadcastBlockUpdate(pos, carried)
-			// LevelChunk.setBlockState light hook: the placed carried block (an opaque holdable) casts a
-			// shadow. Relight + push ClientboundLightUpdate. Gated on the property diff. CITE:
-			// LevelChunk.setBlockState -> getLightEngine().checkBlock.
-			t.relightOnEdit(nil, pos, prePlace, carried)
+			// Light re-propagation fires CENTRALLY from ChunkManager.SetBlock (SetBlockChangeHook) -- the
+			// SetBlock above already relit + broadcast. No per-site relight call.
 		}
 		// gameEvent(GameEvent.BLOCK_PLACE, ...): CITE-DEFERRED no-op.
 		setEndermanCarriedBlock(t, e, 0, false) // setCarriedBlock(null)

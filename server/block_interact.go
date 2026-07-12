@@ -469,11 +469,9 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 		// Level.setBlock -> updateNeighbourShapes / updateNeighborsAt.
 		t.updateShapeOnEdit(placePos, placeState)
 
-		// LevelChunk.setBlockState light hook: if the placed block changes the cell's light properties
-		// (dampening/emission/occlusion vs the pre-place state), recompute the affected columns' light and
-		// push a ClientboundLightUpdate to their trackers. A placed torch/glowstone lights the room; a
-		// placed solid block casts a shadow. Gated inside relightOnEdit (no-op when properties match).
-		t.relightOnEdit(p, placePos, prePlaceState, placeState)
+		// LevelChunk.setBlockState light hook now fires CENTRALLY from ChunkManager.SetBlock (see
+		// SetBlockChangeHook / relightChanged): the place's SetBlock already re-propagated light and
+		// broadcast the ClientboundLightUpdate. No per-site relight call here.
 
 		// PLUGIN-02 (Plan 22) on_block_place seam: fire ONCE here at the place call site, AFTER the
 		// authoritative SetBlock+reconcileEdit — NOT from the shared broadcastBlockUpdate (Pitfall 2:

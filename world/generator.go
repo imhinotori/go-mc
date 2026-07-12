@@ -47,6 +47,13 @@ type Generator interface {
 	// Dims returns the generator's (minY, height) so the scheduler can size the
 	// Neighborhood proxy without re-deriving the chunk geometry.
 	Dims() (minY, height int)
+	// HasSkyLight reports whether this generator's dimension runs a SKY light engine
+	// (DimensionType.hasSkyLight): true for the overworld, false for the nether and the end
+	// where the sky-light layer must be absent (LevelLightEngine ctor hasSkyLight arg). It
+	// selects the sky engine in ComputeChunkLight so nether/end columns carry NO sky light.
+	// CITE: DimensionType.hasSkyLight(); ThreadedLevelLightEngine(chunkSource, hasBlockLight,
+	// hasSkyLight).
+	HasSkyLight() bool
 }
 
 // decorateSingle runs the concrete single-chunk Generate path shared by every
@@ -74,7 +81,7 @@ func decorateSingle(g Generator, pos level.ChunkPos) *level.Chunk {
 	g.Decorate(view)
 	// Compute real sky+block light over the freshly-built 3x3 and write the center's per-section
 	// DataLayers (replaces the old fullSkyLight seal). CITE: world.ComputeChunkLight.
-	computeChunkLightFromNeighborhood(view, minY>>4, height>>4, block.ToStateID[block.Air{}])
+	computeChunkLightFromNeighborhood(view, minY>>4, height>>4, block.ToStateID[block.Air{}], g.HasSkyLight())
 	return center
 }
 
@@ -218,6 +225,10 @@ func (g *Superflat) Decorate(view *Neighborhood) {
 
 // Dims returns the superflat (minY, height) so the worker can size the Neighborhood.
 func (g *Superflat) Dims() (minY, height int) { return g.MinY, g.Secs * 16 }
+
+// HasSkyLight: Superflat is an overworld-geometry stub, so it runs the sky engine (hasSkyLight
+// == true). CITE: DimensionType.hasSkyLight() (overworld true).
+func (g *Superflat) HasSkyLight() bool { return true }
 
 // Generate builds the deterministic superflat chunk for pos at StatusFull. Pure: no
 // RNG. It is the concrete single-chunk path (= GenerateTerrain then Decorate over a

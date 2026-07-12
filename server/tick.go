@@ -1677,6 +1677,7 @@ const (
 func (t *TickLoop) SetNetherWorld(mgr *world.ChunkManager, worker *world.Worker) {
 	t.netherWorld = mgr
 	t.netherWorker = worker
+	t.installRelightHook(mgr, dimNether) // central relight funnel for the nether world
 	// Bridge the nether worker's immutable results onto the coordinator's general async-result channel
 	// (asyncIn2, drained every tick by applyAsyncResults). Each result is tagged dimNether so applyTo
 	// inserts into netherWorld. asyncIn2 is always constructed in NewTickLoop, so it is non-nil here.
@@ -1696,6 +1697,7 @@ func (t *TickLoop) SetEndWorld(mgr *world.ChunkManager, worker *world.Worker, ge
 	t.endWorld = mgr
 	t.endWorker = worker
 	t.endGen = gen
+	t.installRelightHook(mgr, dimEnd) // central relight funnel for the End world
 	go func() {
 		for res := range worker.Results() {
 			t.asyncIn2 <- chunkReady{res: res, dimension: dimEnd}
@@ -1776,6 +1778,9 @@ func (t *TickLoop) SetWorld(mgr *world.ChunkManager, worker *world.Worker) {
 		r.world = mgr
 		r.worker = worker
 	}
+	// Route EVERY overworld block edit through the central relight funnel (vanilla's single
+	// LevelChunk.setBlockState -> checkBlock). Registered here at world wiring so no mutator misses it.
+	t.installRelightHook(mgr, dimOverworld)
 	t.regions[globalRegion].asyncBridge = bridge
 	t.regions[globalRegion].asyncIn = bridge
 	go func() {

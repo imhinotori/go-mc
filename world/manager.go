@@ -57,6 +57,16 @@ type ChunkManager struct {
 	// nowTick is a monotonic counter the streamer advances once per tick (Tick) so RetryStale can
 	// measure how long a column has been Loading.
 	nowTick int64
+	// onBlockChanged is the CENTRAL relight hook: SetBlock invokes it (when non-nil) after EVERY
+	// changed block write, mirroring vanilla's single LevelChunk.setBlockState funnel that always
+	// calls getLightEngine().checkBlock(pos). Registering it at the sole block mutator guarantees
+	// every mutator path (player build/break, fluid flow, fire, explosions, pistons, growth,
+	// dispensers, silverfish, enderman/ravager/snow-golem, command setblock) re-propagates light
+	// without each call site remembering to -- a future mutator cannot miss it. The server sets it
+	// (SetBlockChangeHook) to a closure that gates on hasDifferentLightProperties, recomputes the
+	// affected columns, and broadcasts ClientboundLightUpdate. Tick-owned (SetBlock runs only on the
+	// owner). CITE: LevelChunk.setBlockState -> LightEngine.checkBlock.
+	onBlockChanged func(pos pk.Position, oldState, newState block.StateID)
 }
 
 func NewChunkManager() *ChunkManager {
@@ -313,7 +323,22 @@ func (m *ChunkManager) SetBlock(pos pk.Position, state block.StateID, minY int) 
 	// it), so MarkDirty is never a no-op here. Tick-owned (SetBlock runs only on the owner).
 	col := level.ChunkPos{int32(floorDiv16(pos.X)), int32(floorDiv16(pos.Z))}
 	m.dirty[col] = struct{}{}
+	// CENTRAL relight funnel: notify the light hook of the changed write. Vanilla runs
+	// LevelLightEngine.checkBlock on EVERY LevelChunk.setBlockState; routing it here (the sole block
+	// mutator) means no mutator path can leave stale light. The hook itself gates on
+	// hasDifferentLightProperties. CITE: LevelChunk.setBlockState -> getLightEngine().checkBlock(pos).
+	if m.onBlockChanged != nil {
+		m.onBlockChanged(pos, old, state)
+	}
 	return true
+}
+
+// SetBlockChangeHook registers the CENTRAL block-change (relight) callback invoked by SetBlock after
+// every changed write. The server installs the light-recompute + broadcast closure here so the whole
+// server routes through vanilla's single setBlockState light funnel. Called once at world wiring on
+// the tick goroutine; nil clears it. Tick-owned.
+func (m *ChunkManager) SetBlockChangeHook(fn func(pos pk.Position, oldState, newState block.StateID)) {
+	m.onBlockChanged = fn
 }
 
 // SetBlockEntityAt creates or replaces a block entity at the world pos in its owning chunk's

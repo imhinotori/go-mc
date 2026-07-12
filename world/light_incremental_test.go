@@ -85,7 +85,7 @@ func TestRelightEditGlowstonePlaceBreak(t *testing.T) {
 					}
 				}
 			}
-			ComputeChunkLight(c, neighbors, lightTestMinSectionY, lightTestSecs, air)
+			ComputeChunkLight(c, neighbors, lightTestMinSectionY, lightTestSecs, air, true)
 		}
 	}
 
@@ -99,7 +99,7 @@ func TestRelightEditGlowstonePlaceBreak(t *testing.T) {
 	if !m.SetBlock(pos, glow, blockTestMinY) {
 		t.Fatalf("SetBlock(glowstone) = false, want true")
 	}
-	changed := m.RelightEdit(pos, lightTestMinSectionY, lightTestSecs, air)
+	changed := m.RelightEdit(pos, lightTestMinSectionY, lightTestSecs, air, true)
 	if len(changed) == 0 {
 		t.Fatalf("RelightEdit after glowstone place reported 0 changed columns, want >=1 (center)")
 	}
@@ -125,7 +125,7 @@ func TestRelightEditGlowstonePlaceBreak(t *testing.T) {
 	if !m.SetBlock(pos, air, blockTestMinY) {
 		t.Fatalf("SetBlock(air) = false, want true")
 	}
-	changed = m.RelightEdit(pos, lightTestMinSectionY, lightTestSecs, air)
+	changed = m.RelightEdit(pos, lightTestMinSectionY, lightTestSecs, air, true)
 	if len(changed) == 0 {
 		t.Fatalf("RelightEdit after glowstone break reported 0 changed columns, want >=1")
 	}

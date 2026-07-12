@@ -71,13 +71,13 @@ const (
 	snowGolemAimEyeDrop = 1.100000023841858
 	// snowballBlazeDamage is Snowball.onHitEntity: (entity instanceof Blaze ? 3 : 0). VERIFIED javap
 	// Snowball.onHitEntity offsets 10-22: instanceof Blaze ? iconst_3 : iconst_0.
-	snowballBlazeDamage = 3.0
+	snowballBlazeDamage   = 3.0
 	snowballDefaultDamage = 0.0
 	// snowGolemShootSoundID is SoundEvents.SNOW_GOLEM_SHOOT ("entity.snow_golem.shoot", soundid 1573). The
 	// shoot sound pitch = 1.0f / (getRandom().nextFloat()*0.4f + 0.8f). VERIFIED javap SnowGolem
 	// .performRangedAttack tail offsets 114-139.
-	snowGolemShootSoundID   = 1573
-	snowGolemShootVolume    = 1.0
+	snowGolemShootSoundID    = 1573
+	snowGolemShootVolume     = 1.0
 	snowGolemShootPitchScale = 0.4
 	snowGolemShootPitchBase  = 0.8
 )
@@ -200,10 +200,9 @@ func (t *TickLoop) snowGolemAiStep(e *Entity) {
 			continue
 		}
 		pos := pk.Position{X: bx, Y: by, Z: bz}
-		prePlace, _ := t.world().GetBlock(pos, dimMinY)
 		if t.world().SetBlock(pos, snow, dimMinY) {
 			t.broadcastBlockUpdate(pos, snow)
-			t.relightOnEdit(nil, pos, prePlace, snow) // LevelChunk.setBlockState light hook
+			// Light re-propagation fires CENTRALLY from ChunkManager.SetBlock (SetBlockChangeHook).
 			// gameEvent(GameEvent.BLOCK_PLACE, ...): CITE-DEFERRED no-op.
 		}
 	}

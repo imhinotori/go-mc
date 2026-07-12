@@ -475,7 +475,7 @@ func (w *Worker) tryEmit(ctx context.Context, center level.ChunkPos) {
 			}
 		}
 	}
-	ComputeChunkLight(center, neighbors, minY>>4, height>>4, block.ToStateID[block.Air{}])
+	ComputeChunkLight(center, neighbors, minY>>4, height>>4, block.ToStateID[block.Air{}], w.gen.HasSkyLight())
 
 	cs.emitted = true
 	w.emit(ctx, ChunkResult{Pos: center, Chunk: cs.chunk, Spawns: cs.spawns})
