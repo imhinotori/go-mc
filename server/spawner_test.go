@@ -687,3 +687,37 @@ func TestAsyncSpawnScanReadsSnapshot(t *testing.T) {
 			floorY+1, y, ok)
 	}
 }
+
+// TestDoMobSpawningGamerule proves SPAWN_MOBS (ex-doMobSpawning) false stops all natural spawns. In the
+// same below-cap environment where a spawn normally happens, flipping spawn_mobs off makes naturalSpawn a
+// no-op (no scan submitted, no mob added). CITE: ServerChunkCache.tickChunks (SPAWN_MOBS whole-spawner gate).
+func TestDoMobSpawningGamerule(t *testing.T) {
+	loop, _, _ := newSpawnLoop(t)
+	loop.gamerules = newGameRules()
+
+	// Sanity: with SPAWN_MOBS on (default), the below-cap environment submits a scan (a spawn attempt).
+	before := totalEntities(loop)
+	loop.naturalSpawn()
+	if !loop.only().spawnScanPending {
+		t.Fatal("baseline: with spawn_mobs on and below cap, naturalSpawn must submit a scan")
+	}
+	// Drain the in-flight scan so the gate is clear for the next assertion (mirror runSpawnCycle apply).
+	select {
+	case r := <-loop.asyncIn2:
+		r.applyTo(loop)
+	case <-time.After(2 * time.Second):
+		t.Fatal("baseline spawn scan never rejoined")
+	}
+	_ = before
+
+	// Now turn SPAWN_MOBS off: naturalSpawn must return before submitting any scan and add nothing.
+	loop.gamerules.setBool(ruleSpawnMobs, false)
+	countBefore := totalEntities(loop)
+	loop.naturalSpawn()
+	if loop.only().spawnScanPending {
+		t.Fatal("spawn_mobs=false: naturalSpawn must NOT submit a scan (the whole spawner is gated off)")
+	}
+	if totalEntities(loop) != countBefore {
+		t.Fatalf("spawn_mobs=false: no mob may spawn, count %d -> %d", countBefore, totalEntities(loop))
+	}
+}

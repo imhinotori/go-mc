@@ -54,14 +54,9 @@ import (
 // entity stores). It is an ADDITIVE call inside the existing tickWorld phase, so no new tick phase is
 // added and the fixed tick order is unchanged (TestTickPhaseOrder stays green).
 
-// randomTickSpeed is the GameRules.RANDOM_TICK_SPEED gamerule value. v1 has no gamerule engine yet;
-// it is the vanilla default (3), structured to become a real ServerLevel.getGameRules().get(
-// GameRules.RANDOM_TICK_SPEED) read later — the same cited-default discipline as mobGriefing in
-// explosion_blocks.go (never bake it away).
-//
-//	[VERIFIED CFR net.minecraft.world.level.gamerules.GameRules: RANDOM_TICK_SPEED =
-//	 registerInteger("random_tick_speed", GameRuleCategory.UPDATES, 3, 0) — default 3.]
-const randomTickSpeed = 3
+// (RANDOM_TICK_SPEED is now read live off the GameRules store in tickRandomBlocks -- see below. It is the
+// GameRules.RANDOM_TICK_SPEED int rule, registerInteger("random_tick_speed", UPDATES, 3, 0), default 3.
+// The pig oracle never runs this driver, so reading it here does not perturb the pinned levelRandom.)
 
 // blockRandomPosMul / blockRandomPosAdd are the getBlockRandomPos int-LCG constants
 // (randValue = randValue*3 + 1013904223). Named for the faithful port; the multiply/add wrap in
@@ -95,7 +90,7 @@ func (t *TickLoop) tickRandomBlocks() {
 	if t.world() == nil {
 		return // no world wired: cheap no-op (pre-SetWorld / bare test loops)
 	}
-	tickSpeed := randomTickSpeed
+	tickSpeed := t.gameRuleInt(ruleRandomTickSpeed) // ServerChunkCache.tickChunks: getGameRules().get(RANDOM_TICK_SPEED)
 	if tickSpeed <= 0 {
 		return // GameRules.RANDOM_TICK_SPEED == 0 disables random ticking (tickChunk `if tickSpeed > 0`)
 	}

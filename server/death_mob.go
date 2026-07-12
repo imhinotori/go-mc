@@ -405,7 +405,9 @@ func (t *TickLoop) dropMobExperience(e *Entity, src damageSource) {
 	// The player-kill gate: lastHurtByPlayerMemoryTime>0 (the player-attack proxy) && shouldDropExperience
 	// (!isBaby, cited true) && MOB_DROPS (gamerule, cited true).
 	const shouldDropExperience = true
-	const mobDropsGamerule = true
+	// LivingEntity.shouldDropExperience: getGameRules().getBoolean(MOB_DROPS) (ex-doMobLoot). Live store
+	// read (default true). CITE: LivingEntity.shouldDropExperience (MOB_DROPS gate).
+	mobDropsGamerule := t.gameRule(ruleMobDrops)
 	if !isAlwaysExperienceDropper && !(killedByPlayer(src) && shouldDropExperience && mobDropsGamerule) {
 		return // not killed by a player (or baby/gamerule off) — no XP, exactly as vanilla.
 	}

@@ -18,6 +18,10 @@ import (
 //   - a chunk with NO randomly-ticking block samples nothing (no state change, no RNG drawn);
 //   - tickChunk draws EXACTLY randomTickSpeed positions per randomly-ticking section.
 
+// randomTickSpeed is the RANDOM_TICK_SPEED vanilla default (3), kept as a test-local const so the driver
+// tests can pass an explicit tickSpeed to tickChunk. The live driver reads t.gameRuleInt(ruleRandomTickSpeed).
+const randomTickSpeed = 3
+
 // newRandomTickLoop wires a TickLoop with one ready all-air chunk at (0,0) and a block-tick container,
 // mirroring newSugarCaneLoop. The random-tick driver reads the SHARED world via the coordinator.
 func newRandomTickLoop() (*TickLoop, *world.ChunkManager, *level.Chunk) {
@@ -282,5 +286,46 @@ func TestDispatchFluidRandomTickNonLavaDrawsNothing(t *testing.T) {
 	after := loop.only().levelRandom.NextLong()
 	if before != after {
 		t.Fatalf("non-lava fluid dispatch perturbed levelRandom: first draw before=%d after=%d (want equal)", before, after)
+	}
+}
+
+// TestTickRandomBlocksReadsGamerule proves the DRIVER (tickRandomBlocks) reads RANDOM_TICK_SPEED off the
+// GameRules store, not a baked constant: with the rule at 0 the driver draws nothing (disabled), and with
+// it at 6 the driver draws exactly twice the default-3 count (6 getBlockRandomPos LCG advances) for the
+// single ticking section. CITE: ServerChunkCache.tickChunks (getGameRules().get(RANDOM_TICK_SPEED)).
+func TestTickRandomBlocksReadsGamerule(t *testing.T) {
+	// speed 0 -> the ServerLevel.tickChunk `if (tickSpeed > 0)` guard: zero draws, even with a ticking block.
+	{
+		loop, mgr, _ := newRandomTickLoop()
+		loop.gamerules = newGameRules()
+		loop.gamerules.setInt(ruleRandomTickSpeed, 0)
+		mgr.SetBlock(pk.Position{X: 3, Y: 64, Z: 3}, sugarCane(0), dimMinY)
+		const seed = int32(555)
+		loop.only().randValue = seed
+		loop.tickRandomBlocks()
+		if loop.only().randValue != seed {
+			t.Fatalf("random_tick_speed=0: driver advanced randValue to %d, want %d (must draw nothing)",
+				loop.only().randValue, seed)
+		}
+	}
+
+	// speed 6 -> exactly 6 getBlockRandomPos LCG advances for the one ticking section (double the default 3).
+	{
+		loop, mgr, _ := newRandomTickLoop()
+		loop.gamerules = newGameRules()
+		loop.gamerules.setInt(ruleRandomTickSpeed, 6)
+		canePos := pk.Position{X: 7, Y: 64, Z: 9}
+		mgr.SetBlock(canePos, sugarCane(0), dimMinY)
+		const seed = int32(31337)
+		loop.only().randValue = seed
+		wantRV := seed
+		for i := 0; i < 6; i++ {
+			wantRV, _ = refGetBlockRandomPos(wantRV, 0, 64, 0, 15)
+		}
+		loop.tickRandomBlocks()
+		if loop.only().randValue != wantRV {
+			t.Fatalf("random_tick_speed=6: driver advanced randValue to %d, want %d (exactly 6 draws)",
+				loop.only().randValue, wantRV)
+		}
 	}
 }

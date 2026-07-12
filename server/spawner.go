@@ -431,6 +431,12 @@ func (t *TickLoop) naturalSpawn() {
 	if t.cur().spawnScanPending {
 		return // a scan is already in flight: single-in-flight gate (Pitfall 4 / OPT-01 !pending)
 	}
+	// ServerChunkCache.tickChunks: the ENTIRE natural spawner runs only when getGameRules().get(SPAWN_MOBS)
+	// (ex-doMobSpawning) is true. SPAWN_MOBS false -> no createState, no spawnForChunk, zero spawns. CITE:
+	// ServerChunkCache.tickChunks (SPAWN_MOBS gate).
+	if !t.gameRule(ruleSpawnMobs) {
+		return
+	}
 	cols := t.spawnableColumns()
 	if len(cols) == 0 {
 		return // no loaded columns near a player: nothing to populate
@@ -471,6 +477,13 @@ func (t *TickLoop) naturalSpawn() {
 	// nextInt(32)+nextInt(8) samples on the spawn stream in the exact vanilla order.
 	if t.submitSpawnScanFor(categoryCreature, cols, spawnableChunkCount, refY) {
 		return // a CREATURE scan is in flight this cycle (the gate is set)
+	}
+	// getFilteredSpawningCategories(state, spawnFriendly, spawnEnemy): the MONSTER (enemy) category is only
+	// spawnable when spawnEnemy == ServerLevel.isSpawningMonsters() (SPAWN_MOBS && SPAWN_MONSTERS). With
+	// SPAWN_MONSTERS off, MONSTER is filtered out and no hostile scan is submitted. CITE:
+	// ServerChunkCache.tickChunks (spawnEnemy = isSpawningMonsters); NaturalSpawner.getFilteredSpawningCategories.
+	if !t.isSpawningMonsters() {
+		return
 	}
 	t.submitSpawnScanFor(categoryMonster, cols, spawnableChunkCount, refY)
 }

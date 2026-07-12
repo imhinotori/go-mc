@@ -444,7 +444,8 @@ func (t *TickLoop) tickDragonDeath(e *Entity) {
 	xp := dragonDeathXpTotal // int xp = 500 (v1 default; 12000 first-kill bonus cite-deferred).
 
 	// if (dragonDeathTime > 150 && % 5 == 0 && MOB_DROPS) ExperienceOrb.award(pos, Mth.floor(xp*0.08f)).
-	const mobDrops = true // MOB_DROPS gamerule default (cited const).
+	// MOB_DROPS is now a live GameRules read (default true). CITE: EnderDragon.tickDeath (MOB_DROPS gate).
+	mobDrops := t.gameRule(ruleMobDrops)
 	if d.dragonDeathTime > dragonDeathXpStartTick && d.dragonDeathTime%dragonDeathXpPeriod == 0 && mobDrops {
 		reward := int(math.Floor(float64(xp) * dragonDeathXpFraction)) // floor(500 * 0.08) == 40
 		t.awardExperienceOrbs(e, reward)

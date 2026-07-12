@@ -88,9 +88,9 @@ type difficulty int
 
 const (
 	difficultyPeaceful difficulty = iota // net.minecraft.world.Difficulty.PEACEFUL
-	difficultyEasy                        // net.minecraft.world.Difficulty.EASY
-	difficultyNormal                      // net.minecraft.world.Difficulty.NORMAL
-	difficultyHard                        // net.minecraft.world.Difficulty.HARD
+	difficultyEasy                       // net.minecraft.world.Difficulty.EASY
+	difficultyNormal                     // net.minecraft.world.Difficulty.NORMAL
+	difficultyHard                       // net.minecraft.world.Difficulty.HARD
 )
 
 // serverDifficulty is the CITED stub for ServerLevel.getDifficulty(): Sulfur has no difficulty
@@ -98,12 +98,6 @@ const (
 // constant later. NORMAL means: starvation stops at 1.0 HP (the getHealth() > 1.0f && NORMAL gate),
 // and the exhaustion-drain food-loss branch fires (PEACEFUL would skip it).
 const serverDifficulty = difficultyNormal
-
-// naturalHealthRegeneration is the CITED stub for
-// GameRules.get(NATURAL_HEALTH_REGENERATION) in FoodData.tick: the gamerule's vanilla default is
-// true. Sulfur has no gamerule system yet; this constant equals the default so the regen branches
-// fire faithfully, and a real GameRules read slots in later with no branch change.
-const naturalHealthRegeneration = true
 
 // mthClampI mirrors net.minecraft.util.Mth.clamp(int value, int min, int max):
 // `value < min ? min : (value > max ? max : value)`. Ported for FoodData.add's foodLevel clamp
@@ -222,8 +216,8 @@ func (t *TickLoop) tickFood() {
 // foodDataTick is the body of net.minecraft.world.food.FoodData.tick(ServerPlayer). EXACT branch
 // order (verified against the bytecode this session): the exhaustion-drain block FIRST, then the
 // fast-regen / slow-regen / starvation / else if/else-if-else chain. The diff and the
-// naturalRegeneration gamerule are CITED stubs (serverDifficulty == NORMAL, naturalHealthRegeneration
-// == true — the vanilla defaults), structured to become real reads later.
+// naturalRegeneration gamerule: the difficulty half stays a CITED stub (serverDifficulty == NORMAL); the
+// natural-regen half is now a live GameRules.get(NATURAL_HEALTH_REGENERATION) read (see below).
 func (t *TickLoop) foodDataTick(p *tickPlayer) {
 	const diff = serverDifficulty // ServerLevel.getDifficulty(): CITED stub == NORMAL (vanilla default)
 
@@ -241,8 +235,9 @@ func (t *TickLoop) foodDataTick(p *tickPlayer) {
 	}
 
 	// --- REGEN / STARVATION (gated by the naturalRegeneration gamerule) ---
-	// naturalRegen = level.getGameRules().get(NATURAL_HEALTH_REGENERATION): CITED stub == true.
-	const naturalRegen = naturalHealthRegeneration
+	// naturalRegen = level.getGameRules().get(NATURAL_HEALTH_REGENERATION): live store read (default true).
+	// CITE: FoodData.tick (getGameRules().getBoolean(NATURAL_HEALTH_REGENERATION)).
+	naturalRegen := t.gameRule(ruleNaturalRegen)
 
 	if naturalRegen && p.saturation > 0.0 && p.isHurt() && p.food >= satRegenFoodFull {
 		// FAST saturated regen: every 10 ticks heal saturation/6 (capped at 6), exhaust by that heal.

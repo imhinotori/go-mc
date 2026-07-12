@@ -122,22 +122,17 @@ const (
 	boltFireScatterSpan = 3
 )
 
-// doFireTickGameRule is the GameRules.FIRE_DAMAGE / doFireTick read that gates whether a lightning strike
-// (and fire spread generally) sets blocks alight. No gamerule store exists in v1 (weather.go's
-// advanceWeatherCycleGameRule + random_tick.go's randomTickSpeed are the same cited-constant pattern), so
-// this is the vanilla default true. The difficulty gate (NORMAL/HARD) is applied separately in tickBolt.
-// Becomes a real gamerule read once the store lands.
-//
-//	[VERIFIED javap GameRules: RULE_DOFIRETICK ("doFireTick") default true. DEFERRED: real gamerule store;
-//	 default true is the vanilla registerBoolean("doFireTick", true).]
-func (t *TickLoop) doFireTickGameRule() bool { return true }
+// doFireTickGameRule gates whether a lightning strike (and fire spread generally) sets blocks alight. In
+// 26.2 the historical boolean doFireTick rule was replaced by the integer FIRE_SPREAD_RADIUS_AROUND_PLAYER:
+// ServerLevel.canSpreadFireAround returns getGameRules().get(FIRE_SPREAD_RADIUS_AROUND_PLAYER) != -1 &&
+// anyPlayerCloseEnoughTo(pos, radius) (verified bytecode this session). The per-player proximity half stays
+// a documented deferral (no ChunkMap.anyPlayerCloseEnoughTo yet); the radius != -1 half is the real read
+// (default 128 != -1, so fire still spreads; set to -1 to disable). CITE: ServerLevel.canSpreadFireAround.
+func (t *TickLoop) doFireTickGameRule() bool { return t.gameRuleInt(ruleFireSpreadRadius) != -1 }
 
-// spawnMobsGameRule is the GameRules.SPAWN_MOBS ("doMobSpawning") read the skeleton-trap gate reads
-// (getGameRules().get(SPAWN_MOBS)). Cited-constant true (vanilla default) — same pattern as the other
-// gamerule stubs. Becomes a real read once the store lands.
-//
-//	[VERIFIED javap GameRules: SPAWN_MOBS ("doMobSpawning") default true.]
-func (t *TickLoop) spawnMobsGameRule() bool { return true }
+// spawnMobsGameRule is the GameRules.SPAWN_MOBS (ex-doMobSpawning) read the skeleton-trap gate reads
+// (getGameRules().get(SPAWN_MOBS)); it is now a real store read (default true). CITE: SPAWN_MOBS.
+func (t *TickLoop) spawnMobsGameRule() bool { return t.gameRule(ruleSpawnMobs) }
 
 // tickThunder is the WORLD-GLOBAL thunder-strike driver — the 1:1 port of the
 // ServerChunkCache.tickSpawningChunk -> ServerLevel.tickThunder(chunk) pass. For every loaded (Ready)

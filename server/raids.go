@@ -123,7 +123,11 @@ const raidCreateSeedSalt uint64 = 0xA24BAED4963EE407
 // are faithful.
 func (t *TickLoop) raidsTick(rm *raidsManager) {
 	rm.tick++
+	raidsAllowed := t.gameRule(ruleRaids) // Raids.tick: RAIDS gamerule (ex-disableRaids) off stops every raid
 	for id, raid := range rm.raidMap {
+		if !raidsAllowed {
+			t.raidStop(raid) // CITE: Raids.tick guard -- !getGameRules().get(RAIDS) then raid.stop()
+		}
 		if raid.isStopped() {
 			delete(rm.raidMap, id)
 			rm.setDirty() // Raids.tick: on removing a stopped raid -> this.setDirty()

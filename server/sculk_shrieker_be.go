@@ -304,8 +304,9 @@ func (t *TickLoop) sculkShriekerCanRespond(state block.StateID) bool {
 	if serverDifficulty == difficultyPeaceful {
 		return false
 	}
-	const spawnWardensGamerule = true // GameRules.SPAWN_WARDENS default true (cited).
-	return spawnWardensGamerule
+	// SculkShriekerBlockEntity.tryToWarn/canRespond: getGameRules().getBoolean(SPAWN_WARDENS) (ex-doWardenSpawning).
+	// Live store read (default true). CITE: GameRules.SPAWN_WARDENS.
+	return t.gameRule(ruleSpawnWardens)
 }
 
 // sculkShriekerShriek ports SculkShriekerBlockEntity.shriek: setBlock(SHRIEKING=true, flag 2);
