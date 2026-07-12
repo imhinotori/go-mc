@@ -1,0 +1,20 @@
+{
+  "wave": "00-census",
+  "base_ref": "HEAD",
+  "model": "minimax/MiniMax-M3",
+  "max_parallel": 3,
+  "tasks": [
+    {
+      "id": "census-gamerules",
+      "prompt": ".planning/parity-workflow/tasks/census-gamerules.md"
+    },
+    {
+      "id": "census-serverbound",
+      "prompt": ".planning/parity-workflow/tasks/census-serverbound.md"
+    },
+    {
+      "id": "census-persistence",
+      "prompt": ".planning/parity-workflow/tasks/census-persistence.md"
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+id,domain,jar_class,jar_method,status,go_path,jar_evidence,test,rng_verified,owner,last_verified_commit,notes
+CORE-GAMERULES,game-rules,net.minecraft.world.level.gamerules.GameRules,<registry>,exact,server/gamerules.go,javap -p GameRules,,n/a,native,bbef6d37,59/59 registered; wave-00 rechecks every consumer
+CORE-ATTRIBUTES,attributes,net.minecraft.world.entity.ai.attributes.Attributes,<registry>,exact,level/attribute/attributes.go,javap -p Attributes,,n/a,native,8541c201,40/40 modeled; consumer long-tail remains separately auditable
+PERSIST-ENTITY,persistence,net.minecraft.world.entity.Entity,save/load,partial,server/entity_persist.go,javap/CFR EntityStorage + Entity save,,n/a,native,d541b10f,AI-bearing runtime reconstructs; wave-00 audits type-specific state
+SPAWN-NATURAL,spawning,net.minecraft.world.level.NaturalSpawner,spawnCategoryForPosition,partial,server/biome_spawners.go,javap/CFR NaturalSpawner,,no,native,f25b7789,all categories wired; roster and special-spawn fidelity require census
+NET-SERVERBOUND,protocol,net.minecraft.server.network.ServerGamePacketListenerImpl,<handlers>,partial,server/tick.go,packet registry + handler methods,,n/a,minimax-census,,41/70 explicit dispatch cases
+ITEM-COMPONENT-DISK,persistence,net.minecraft.core.component.DataComponentPatch,CODEC/STREAM_CODEC,partial,save/item_components.go,javap/CFR DataComponentPatch,,n/a,minimax-census,,8/111 disk transcoders
