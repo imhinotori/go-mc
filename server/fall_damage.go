@@ -133,22 +133,46 @@ func calculateFallDamage(d float64, damageMultiplier float64, safeFallDistance f
 	return mthFloor(power * damageMultiplier * fallDamageMultiplierAttr)
 }
 
-// tickFallDamage is the GAMEPLAY-04 environmental-damage pass, called from tickEntities each tick
-// (the 17-01-wired call site; this file overwrites the 17-01 no-op stub, signature unchanged). It
-// drives, per connected player, the vanilla chain
+// doCheckFallDamage mirrors Entity.doCheckFallDamage(double dx, double dy, double dz, boolean onGround)
+// - the EXACT vanilla call site is ServerGamePacketListenerImpl.handleMovePlayer, which runs it ONCE
+// PER MOVEMENT PACKET with dy = (this packet's y) - (the previous packet's y) and onGround = THAT
+// packet's onGround flag (bytecode 1146-1186: setOnGroundWithMovement then doCheckFallDamage(dx,dy,dz,
+// packet.isOnGround)). Sulfur mirrors that per-packet placement: applyInput calls this from the two
+// position-changing ServerboundMovePlayer* variants, passing dy = ny - oldY computed against the
+// pre-move y (the identical per-packet delta detectJumpExhaustion already uses).
 //
-//	Entity.checkFallDamage(deltaY, onGround) -> [landing] causeFallDamage(fallDistance, 1.0F)
-//	                                         -> calculateFallDamage(d, 1.0F) -> hurt(src, (float)i)
+// PER-PACKET is load-bearing, not cosmetic. Vanilla's fallDistance accumulation AND its landing reset
+// happen on every packet, so a player stepping down over uneven terrain gets fallDistance RESET on
+// each grounded packet and never accumulates a spurious multi-step fall. The previous per-TICK
+// collapse (deltaY = p.y - p.lastY, one checkFallDamage per tick over the LAST surviving onGround)
+// dropped the intermediate grounded resets when several packets batched into one tick - so a series
+// of harmless small hops accumulated into one lethal-looking fall (the "too sensitive") and only
+// discharged when a tick finally ended grounded (the "arrives late"). Running the check per packet
+// removes both divergences and is the literal vanilla placement.
 //
-// deltaY: vanilla's deltaY is deltaMovement.y (vertical velocity). Sulfur is position-authoritative
-// (no velocity integrator), so deltaY = p.y - p.lastY (this tick's vertical position change) is the
-// faithful stand-in: a fall makes deltaY < 0, and `fallDistance -= (float)deltaY` adds the positive
-// drop, exactly as vanilla's velocity-based deltaY would.
+// Entity.doCheckFallDamage's touchingUnloadedChunk early-out is not modeled (the player's own column
+// is loaded by definition here). isInWater is sampled per packet at the just-updated position, so the
+// !isInWater() accumulation guard is faithful. Runs on the tick goroutine (applyInput is drained on
+// the owner in resolveSubtickInputs) - no locking.
+func (t *TickLoop) doCheckFallDamage(p *tickPlayer, dy float64, onGround bool) {
+	if p == nil || p.dead {
+		return
+	}
+	inWater := t.playerInWater(p)
+	t.checkFallDamage(p, dy, onGround, inWater)
+}
+
+// tickFallDamage is the per-tick Entity.updateFluidInteraction water reset (GAMEPLAY-04 / 17-08).
+// The fall-distance ACCUMULATION + landing damage moved to the per-packet doCheckFallDamage (the
+// vanilla handleMovePlayer placement); what remains here is the tick-scoped guard that mirrors
+// Entity.updateFluidInteraction: vanilla calls resetFallDistance() every tick the entity is in water,
+// zeroing any distance accumulated before entering the water so a fall INTO water deals no damage.
+// This runs in tickEntities (the 17-01-wired call site; signature unchanged), BEFORE the next tick's
+// input resolution, exactly as vanilla runs updateFluidInteraction in the entity tick - so by the
+// time a submerged landing packet is processed next tick, fallDistance is already 0.
 //
-// Runs on the tick goroutine over tick-owned state (TICK-05) — no locking. A dead/nil player is
-// skipped, but its bookkeeping (wasOnGround/lastY) is kept current so a respawn does not inherit a
-// stale landing edge. NOTE: per-block fallOn multipliers (hay bales etc.), slow-falling, and
-// lava/void are deferred — normal blocks use damageMultiplier = 1.0 (Block.fallOn default).
+// The wasOnGround/lastY bookkeeping is retained for other readers (fall-flag combat gates, ultradebug
+// vY) and kept current for dead/nil players so a respawn does not inherit a stale baseline.
 func (t *TickLoop) tickFallDamage() {
 	for _, p := range t.players {
 		if p == nil || p.dead {
@@ -159,25 +183,14 @@ func (t *TickLoop) tickFallDamage() {
 			continue
 		}
 
-		// One in-water sample reused by both vanilla guards (checkFallDamage's !isInWater()
-		// accumulation guard, and updateFluidInteraction's per-tick resetFallDistance()). Reuses
-		// the 17-02 AABB water-intersection check (fluid_physics.go) — NOT reimplemented.
-		inWater := t.playerInWater(p)
-
-		// Entity.updateFluidInteraction water reset: vanilla calls resetFallDistance() every tick
-		// the entity is in water, zeroing any distance accumulated before entering the water, with
-		// NO damage. Running it before the landing branch makes a fall INTO water deal 0 damage.
-		if inWater {
+		// Entity.updateFluidInteraction water reset (17-08): zero any fall distance while in water, no
+		// damage. Reuses the 17-02 AABB water-intersection check (fluid_physics.go) - NOT reimplemented.
+		if t.playerInWater(p) {
 			p.resetFallDistance()
 		}
 
-		// Entity.checkFallDamage(deltaY, onGround): deltaY = p.y - p.lastY (position-authoritative
-		// stand-in for deltaMovement.y).
-		deltaY := p.y - p.lastY
-		t.checkFallDamage(p, deltaY, p.onGround, inWater)
-
-		// End-of-tick bookkeeping for the next tick's deltaY and landing-edge detection. (Vanilla
-		// reads deltaMovement.y directly; we derive deltaY from lastY, so we must advance lastY.)
+		// Bookkeeping for the fall-flag combat gates / ultradebug vY (they read lastY/wasOnGround). The
+		// per-packet doCheckFallDamage owns the accumulation; these fields are no longer its baseline.
 		p.wasOnGround = p.onGround
 		p.lastY = p.y
 	}
@@ -236,8 +249,6 @@ func (t *TickLoop) tickLavaPlayers() {
 // HIT_GROUND game event are cosmetic/world-side and omitted; Block.fallOn's default forwards
 // damageMultiplier = 1.0 to causeFallDamage, which is passed literally here.
 func (t *TickLoop) checkFallDamage(p *tickPlayer, deltaY float64, onGround bool, inWater bool) {
-	if deltaY != 0 || onGround {
-	}
 	if !inWater && deltaY < 0.0 {
 		// d2f then f2d: the (float) narrowing cast widened back to double, ported verbatim.
 		p.fallDistance -= float64(float32(deltaY))

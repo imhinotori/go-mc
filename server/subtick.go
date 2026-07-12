@@ -201,6 +201,7 @@ func (t *TickLoop) applyInput(p *tickPlayer, in SubtickInput) {
 		// after the validity gate): a finite-but-absurd coordinate is clamped to the world-coordinate
 		// limit rather than trusted, so an Inf/huge value can never blow the chunk math.
 		cx, cy, cz := clampHorizontal(float64(x)), clampVertical(float64(y)), clampHorizontal(float64(z))
+		oldY := p.y // pre-move y: the doCheckFallDamage delta (ny - oldY) is this packet's descent
 		// Authoritative anti-clip-through (ENT-02 / T-6-06): collide the client-CLAIMED
 		// position per-axis against solid world blocks BEFORE accepting it. The server
 		// corrects a clip-through claim rather than trusting the raw position. In an empty
@@ -221,8 +222,14 @@ func (t *TickLoop) applyInput(p *tickPlayer, in SubtickInput) {
 		// is reassigned (it reads the PREVIOUS onGround). The jump velocity itself is client-authoritative
 		// (already applied); only the exhaustion is server-side. Cite ServerPlayer.jumpFromGround.
 		t.detectJumpExhaustion(p, ny-p.y, flags&movementFlagOnGround != 0)
+		// Fall damage is checked PER MOVEMENT PACKET (handleMovePlayer -> doCheckFallDamage(dx,dy,dz,
+		// onGround)): dy = ny - oldY is this packet's vertical delta (against the pre-move y), and
+		// onGround is THIS packet's flag. See doCheckFallDamage (fall_damage.go) for why per-packet is
+		// the faithful placement.
+		packetOnGround := flags&movementFlagOnGround != 0
 		p.x, p.y, p.z = nx, ny, nz
-		p.onGround = flags&movementFlagOnGround != 0
+		p.onGround = packetOnGround
+		t.doCheckFallDamage(p, ny-oldY, packetOnGround)
 		t.maybeRecenter(p)
 
 	case packetid.ServerboundMovePlayerPosRot:
@@ -241,6 +248,7 @@ func (t *TickLoop) applyInput(p *tickPlayer, in SubtickInput) {
 		}
 		// clampHorizontal(x,z)/clampVertical(y) — same as the Pos variant.
 		cx, cy, cz := clampHorizontal(float64(x)), clampVertical(float64(y)), clampHorizontal(float64(z))
+		oldY := p.y // pre-move y: the doCheckFallDamage delta (ny - oldY) is this packet's descent
 		// Authoritative anti-clip-through (ENT-02 / T-6-06): collide the claimed position
 		// per-axis before accepting it (same as the Pos variant). Look angles are accepted
 		// as sent — only the POSITION is collided.
@@ -258,8 +266,10 @@ func (t *TickLoop) applyInput(p *tickPlayer, in SubtickInput) {
 		// Mirror the inbound yaw onto headYaw so syncPlayerEntities propagates it and
 		// ServerEntity.sendChanges broadcasts ClientboundRotateHead to trackers (else headYaw
 		// stays 0 and the head never tracks the camera for other players).
+		packetOnGround := flags&movementFlagOnGround != 0
 		p.headYaw = p.yaw
-		p.onGround = flags&movementFlagOnGround != 0
+		p.onGround = packetOnGround
+		t.doCheckFallDamage(p, ny-oldY, packetOnGround)
 		t.maybeRecenter(p)
 
 	case packetid.ServerboundMovePlayerRot:

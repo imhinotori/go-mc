@@ -30,12 +30,17 @@ func fallPlayer(loop *TickLoop, entityID int32, startY float64) *tickPlayer {
 	return p
 }
 
-// step simulates one movement tick: sets the player's new y + onGround, then runs the
-// fall-damage pass (the tickEntities call site).
+// step simulates one movement tick the way the live server does it: a movement packet is resolved
+// FIRST (applyInput -> doCheckFallDamage with this packet's dy = newY - oldY and its onGround flag,
+// the fall-distance accumulation + landing damage), THEN the per-tick Entity.updateFluidInteraction
+// water reset runs in tickEntities (tickFallDamage). This mirrors the real ordering: packet handling
+// then the entity tick. dy is computed against the pre-move y exactly as subtick.go does.
 func step(loop *TickLoop, p *tickPlayer, y float64, onGround bool) {
+	dy := y - p.y
 	p.y = y
 	p.onGround = onGround
-	loop.tickFallDamage()
+	loop.doCheckFallDamage(p, dy, onGround) // per-packet: accumulate + land
+	loop.tickFallDamage()                   // per-tick: updateFluidInteraction water reset
 }
 
 // TestFallDamageAccumulates: a player descending while airborne accumulates fallDistance equal
@@ -137,6 +142,91 @@ func TestStayGroundedNoDamage(t *testing.T) {
 	}
 }
 
+// TestThreeBlockFallNoDamage: a fall of exactly the safe distance (3 blocks) deals 0 damage.
+// calculateFallPower(3.0) = 3 + 1e-6 - 3 = 1e-6 -> floor(1e-6) = 0.
+func TestThreeBlockFallNoDamage(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	p := fallPlayer(loop, 1, 100)
+	step(loop, p, 97, false) // descend 3 while airborne
+	step(loop, p, 97, true)  // land at fallDistance 3
+	if p.health != maxHealth {
+		t.Fatalf("a 3-block fall dealt damage (health %v, want %v); floor(3-3)=0", p.health, float32(maxHealth))
+	}
+}
+
+// TestFourBlockFallOneDamage: a 4-block fall deals floor(4-3)=1 damage on landing.
+func TestFourBlockFallOneDamage(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	p := fallPlayer(loop, 1, 100)
+	step(loop, p, 96, false) // descend 4 while airborne
+	step(loop, p, 96, true)  // land at fallDistance 4
+	if want := maxHealth - 1; p.health != want {
+		t.Fatalf("a 4-block fall health = %v, want %v (floor(4-3)=1)", p.health, want)
+	}
+}
+
+// TestSteppingDownLedgesNoAccumulation is the headline regression for the per-packet fix. A player
+// walks down a staircase: several movement packets arrive IN ONE TICK, each a small (1-block) drop
+// that ends GROUNDED. Vanilla runs checkFallDamage per packet, so every grounded packet resets
+// fallDistance and the descent never accumulates into a damaging fall. The old per-TICK collapse
+// saw only the LAST packet's onGround over the net multi-block drop and applied spurious damage
+// ("too sensitive") a tick late ("arrives late"). Driving doCheckFallDamage per packet (as applyInput
+// now does) must deal ZERO damage.
+func TestSteppingDownLedgesNoAccumulation(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	p := fallPlayer(loop, 1, 100)
+
+	// FIVE packets in a single tick, each: drop 1 block and land grounded (a stair step). Each grounded
+	// packet resets fallDistance, so it can never build toward the 3-block safe threshold.
+	y := 100.0
+	for i := 0; i < 5; i++ {
+		ny := y - 1.0
+		p.y = ny
+		p.onGround = true
+		loop.doCheckFallDamage(p, ny-y, true) // per-packet: drop 1, grounded -> reset
+		y = ny
+		if p.fallDistance != 0 {
+			t.Fatalf("step %d left fallDistance = %v, want 0 (grounded packet must reset)", i, p.fallDistance)
+		}
+	}
+	// The per-tick water-reset pass then runs; still no damage.
+	loop.tickFallDamage()
+	if p.health != maxHealth {
+		t.Fatalf("walking down 5 one-block steps in one tick dealt %v damage (health %v); per-packet resets were lost",
+			float32(maxHealth)-p.health, p.health)
+	}
+}
+
+// TestHopThenFallNoCarryover proves the intermediate grounded reset is honored across packets in a
+// tick: the player makes a harmless 2-block hop that ENDS grounded, then in the SAME tick begins a
+// real fall. The grounded hop packet must reset the 2 blocks so the later fall is measured from the
+// hop's landing, not summed with it. A 2-block hop + a 4-block fall must deal floor(4-3)=1, NOT
+// floor(6-3)=3.
+func TestHopThenFallNoCarryover(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	p := fallPlayer(loop, 1, 100)
+
+	// Packet A: a 2-block downward hop that lands grounded -> accumulates 2, then resets on the same
+	// packet's onGround branch (net fallDistance 0).
+	p.y = 98
+	p.onGround = true
+	loop.doCheckFallDamage(p, -2, true)
+	if p.fallDistance != 0 {
+		t.Fatalf("grounded hop left fallDistance = %v, want 0", p.fallDistance)
+	}
+	// Packet B: airborne, drop 4 blocks.
+	p.y = 94
+	p.onGround = false
+	loop.doCheckFallDamage(p, -4, false)
+	// Packet C: land.
+	p.y = 94
+	p.onGround = true
+	loop.doCheckFallDamage(p, 0, true)
+	if want := maxHealth - 1; p.health != want {
+		t.Fatalf("hop(2)+fall(4) health = %v, want %v (floor(4-3)=1, the hop must NOT carry over)", p.health, want)
+	}
+}
+
 // TestCalculateFallDamageMatchesVanillaFormula pins the literal vanilla product against the
 // jar-verified expression Mth.floor((d + 1e-6 - 3.0) * mul * 1.0). This guards against anyone
 // re-collapsing or re-paraphrasing the formula: calculateFallDamage MUST equal the explicit
@@ -173,9 +263,8 @@ func TestCheckFallDamageFloatCast(t *testing.T) {
 	// Airborne, dry, descending by exactly 0.1: deltaY = -0.1. With the (float) cast, fallDistance
 	// accumulates float64(float32(0.1)), NOT 0.1.
 	p.onGround, p.wasOnGround = false, false
-	p.lastY = 100
 	p.y = 100 - 0.1
-	loop.tickFallDamage()
+	loop.doCheckFallDamage(p, -0.1, false) // one airborne packet descending 0.1 (dy = ny - oldY)
 
 	wantCast := float64(float32(0.1)) // exactly what `fallDistance -= (float)deltaY` adds
 	if p.fallDistance != wantCast {
