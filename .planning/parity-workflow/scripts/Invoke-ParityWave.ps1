@@ -61,9 +61,6 @@ if (-not $Execute) {
 # Git worktree creation is deliberately serial to avoid repository lock contention.
 foreach ($task in $tasks) {
     & $worker -TaskId $task.id -PromptFile $task.prompt -Mode Prepare -Model $spec.model -BaseRef $spec.base_ref -RepoRoot $RepoRoot
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to prepare task $($task.id)"
-    }
 }
 
 # OpenCode runs in parallel only after every worktree exists.

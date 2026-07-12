@@ -85,14 +85,21 @@ if ($Mode -in @('Prepare', 'All')) {
         Write-Warning "Untracked paths will be preserved and excluded from worker worktrees:`n$($untracked -join "`n")"
     }
     if (Test-Path -LiteralPath $worktree) {
-        throw "Worktree path already exists: $worktree"
+        $existingRoot = (& git -C $worktree rev-parse --show-toplevel).Trim()
+        $existingBranch = (& git -C $worktree branch --show-current).Trim()
+        if ($LASTEXITCODE -ne 0 -or [IO.Path]::GetFullPath($existingRoot) -ne [IO.Path]::GetFullPath($worktree) -or $existingBranch -ne $branch) {
+            throw "Existing worktree does not match the requested task: $worktree"
+        }
+        Write-Output "Reusing prepared worktree: $worktree"
     }
-    & git -C $RepoRoot show-ref --verify --quiet "refs/heads/$branch"
-    if ($LASTEXITCODE -eq 0) {
-        throw "Branch already exists: $branch"
+    else {
+        & git -C $RepoRoot show-ref --verify --quiet "refs/heads/$branch"
+        if ($LASTEXITCODE -eq 0) {
+            throw "Branch exists without its expected worktree: $branch"
+        }
+        New-Item -ItemType Directory -Force -Path $WorktreeRoot | Out-Null
+        Invoke-Git worktree add -b $branch $worktree $BaseRef
     }
-    New-Item -ItemType Directory -Force -Path $WorktreeRoot | Out-Null
-    Invoke-Git worktree add -b $branch $worktree $BaseRef
     if (-not (Test-Path -LiteralPath $promptInWorktree -PathType Leaf)) {
         throw "Prompt is not present in the prepared worktree. Commit the workflow first: $promptInWorktree"
     }
