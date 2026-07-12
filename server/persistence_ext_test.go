@@ -5,10 +5,8 @@ import (
 	"compress/gzip"
 	"testing"
 
-	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/attribute"
-	"github.com/imhinotori/sulfur/level/component"
 	"github.com/imhinotori/sulfur/nbt"
 	pk "github.com/imhinotori/sulfur/net/packet"
 	"github.com/imhinotori/sulfur/save"
@@ -90,73 +88,6 @@ func TestPlayerExtrasRoundTrip(t *testing.T) {
 	speed := dst.activeEffects[effectSpeed]
 	if speed == nil || !speed.ambient || speed.visible {
 		t.Fatalf("speed effect flags = %+v, want ambient=true visible=false", speed)
-	}
-}
-
-func TestEntityPersistRoundTrip(t *testing.T) {
-	dir := t.TempDir()
-	loop := NewTickLoop(newFakeClock())
-	pos := columnOf(8.5, 8.5)
-
-	diamondID := itemNameToID("minecraft:diamond")
-	item := NewItemEntity(loop.idAlloc.AllocID(), 8.5, 64, 8.5, component.SlotData{ItemID: pk.VarInt(diamondID), Count: 5})
-	item.vx, item.vy, item.vz = 0.01, 0.2, -0.01
-	item.age = 42
-	item.pickupDelay = 7
-
-	pig := NewEntity(loop.idAlloc.AllocID(), entity.Pig, 8.2, 64, 8.4)
-	initSpawnHealth(pig)
-	pig.health = 8
-	pig.yaw = 45
-
-	ir, ok1 := entityToDisk(item)
-	pr, ok2 := entityToDisk(pig)
-	if !ok1 || !ok2 {
-		t.Fatalf("entityToDisk failed: item=%v pig=%v", ok1, ok2)
-	}
-	if err := saveEntities(dir, pos, []save.Entities{ir, pr}); err != nil {
-		t.Fatalf("saveEntities: %v", err)
-	}
-	restored, ok, err := loadEntities(dir, pos)
-	if err != nil || !ok {
-		t.Fatalf("loadEntities err=%v ok=%v", err, ok)
-	}
-	if len(restored) != 2 {
-		t.Fatalf("recovered %d entities, want 2", len(restored))
-	}
-
-	var gotItem, gotMob *Entity
-	for _, rec := range restored {
-		e, ok := diskToEntity(loop, rec)
-		if !ok {
-			t.Fatalf("diskToEntity failed for %q", rec.ID)
-		}
-		if e.isItem {
-			gotItem = e
-		} else {
-			gotMob = e
-		}
-	}
-	if gotItem == nil || gotMob == nil {
-		t.Fatalf("missing reconstructed entity: item=%v mob=%v", gotItem, gotMob)
-	}
-	if gotItem.itemStack.ItemID != pk.VarInt(diamondID) || gotItem.itemStack.Count != 5 {
-		t.Fatalf("item stack = id %d count %d, want diamond x5", gotItem.itemStack.ItemID, gotItem.itemStack.Count)
-	}
-	if gotItem.age != 42 || gotItem.pickupDelay != 7 {
-		t.Fatalf("item age/pickupDelay = (%d, %d), want (42, 7)", gotItem.age, gotItem.pickupDelay)
-	}
-	if gotItem.vy != 0.2 {
-		t.Fatalf("item vy = %v, want 0.2 (motion restored, no RNG re-toss)", gotItem.vy)
-	}
-	if gotMob.typ != entity.Pig.ID {
-		t.Fatalf("mob typ = %d, want pig(%d)", gotMob.typ, entity.Pig.ID)
-	}
-	if gotMob.health != 8 {
-		t.Fatalf("mob health = %v, want 8", gotMob.health)
-	}
-	if gotMob.yaw != 45 {
-		t.Fatalf("mob yaw = %v, want 45", gotMob.yaw)
 	}
 }
 

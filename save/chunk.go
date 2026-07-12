@@ -130,7 +130,101 @@ type Entities struct {
 	// the carried ItemStack ("Item"), the ticks-since-spawn ("Age"), and the pickup cooldown
 	// ("PickupDelay"). A non-item entity leaves Item nil (omitempty drops the key) and Age/PickupDelay 0.
 	// CITE ItemEntity.addAdditionalSaveData (store "Item", putShort "Age", putShort "PickupDelay").
-	Item        *ItemStackDisk `nbt:"Item,omitempty"`
-	Age         int16          `nbt:"Age,omitempty"`
-	PickupDelay int16          `nbt:"PickupDelay,omitempty"`
+	Item *ItemStackDisk `nbt:"Item,omitempty"`
+	// Age is the "Age" tag. It carries the ItemEntity ticks-since-spawn (ItemEntity.Age, a short) for a
+	// dropped item AND the AgeableMob breeding age (AgeableMob.Age, an int) for a mob -- an entity is
+	// EITHER an item OR an ageable mob, so the one key never carries both. Stored int32 so the mob's
+	// full int range round-trips. CITE ItemEntity/AgeableMob.addAdditionalSaveData (putInt/putShort "Age").
+	Age         int32 `nbt:"Age,omitempty"`
+	PickupDelay int16 `nbt:"PickupDelay,omitempty"`
+
+	// --- MOB save contract (P0-01): the LivingEntity/Mob/AgeableMob/TamableAnimal/NeutralMob extra
+	// tags a mob writes, so a reloaded mob reconstructs its full runtime (equipment, attributes,
+	// effects, age/love/owner/anger, per-type variant), NOT just type+health. Each tag mirrors a
+	// vanilla NBT key + type EXACTLY; every field is omitempty so a plain non-living entity (a dropped
+	// item) emits none of them and the on-disk shape is byte-identical to the pre-P0-01 record. ---
+
+	// AbsorptionAmount is LivingEntity.addAdditionalSaveData "AbsorptionAmount" (a float). CITE
+	// LivingEntity.addAdditionalSaveData (putFloat "AbsorptionAmount").
+	AbsorptionAmount float32 `nbt:"AbsorptionAmount,omitempty"`
+
+	// Equipment is LivingEntity.addAdditionalSaveData "equipment" -- the EntityEquipment.CODEC
+	// unbounded map keyed by the LOWERCASE EquipmentSlot name ("mainhand"/"offhand"/"feet"/"legs"/
+	// "chest"/"head") -> ItemStack. Only non-empty slots are written (EntityEquipment.CODEC skips
+	// EMPTY). CITE LivingEntity.addAdditionalSaveData (store "equipment", EntityEquipment.CODEC).
+	Equipment map[string]ItemStackDisk `nbt:"equipment,omitempty"`
+
+	// DropChances is Mob.addAdditionalSaveData "drop_chances" -- the per-slot drop probability map,
+	// keyed by the same LOWERCASE slot name, written only for a slot whose chance differs from the
+	// default. CITE Mob.addAdditionalSaveData (store "drop_chances").
+	DropChances map[string]float32 `nbt:"drop_chances,omitempty"`
+
+	// Attributes is LivingEntity.addAdditionalSaveData "attributes" -- the AttributeInstance list;
+	// each entry carries the attribute id ("id") + its base ("base"). Only instances whose base
+	// differs from the supplier default are written (AttributeMap.save). CITE LivingEntity
+	// .addAdditionalSaveData (store "attributes", AttributeMap.save).
+	Attributes []AttributeDisk `nbt:"attributes,omitempty"`
+
+	// ActiveEffects is LivingEntity.addAdditionalSaveData "active_effects" -- the MobEffectInstance
+	// list. CITE LivingEntity.addAdditionalSaveData (store "active_effects").
+	ActiveEffects []MobEffectDisk `nbt:"active_effects,omitempty"`
+
+	// PersistenceRequired / CanPickUpLoot / LeftHanded are Mob.addAdditionalSaveData booleans. CITE
+	// Mob.addAdditionalSaveData (putBoolean "PersistenceRequired"/"CanPickUpLoot"/"LeftHanded").
+	PersistenceRequired bool `nbt:"PersistenceRequired,omitempty"`
+	CanPickUpLoot       bool `nbt:"CanPickUpLoot,omitempty"`
+	LeftHanded          bool `nbt:"LeftHanded,omitempty"`
+
+	// ForcedAge / AgeLocked are AgeableMob.addAdditionalSaveData "ForcedAge"/"AgeLocked" (the breeding
+	// age machine; the AgeableMob "Age" itself shares the Age field above). CITE
+	// AgeableMob.addAdditionalSaveData (putInt "ForcedAge", putBoolean "AgeLocked").
+	ForcedAge int32 `nbt:"ForcedAge,omitempty"`
+	AgeLocked bool  `nbt:"AgeLocked,omitempty"`
+
+	// InLove is Animal.addAdditionalSaveData "InLove" (the love-mode countdown). CITE
+	// Animal.addAdditionalSaveData (putInt "InLove").
+	InLove int32 `nbt:"InLove,omitempty"`
+
+	// Owner / Sitting are TamableAnimal.addAdditionalSaveData "Owner" (the owner UUID) + "Sitting".
+	// CITE TamableAnimal.addAdditionalSaveData (store "Owner", putBoolean "Sitting").
+	Owner   [4]int32 `nbt:"Owner,omitempty"`
+	Sitting bool     `nbt:"Sitting,omitempty"`
+
+	// AngerEndTime is NeutralMob.addPersistentAngerSaveData "anger_end_time" -- the persistent-anger
+	// GAMETIME ENDPOINT (a Long: getPersistentAngerEndTime()), read back verbatim via
+	// setPersistentAngerEndTime. The runtime carries the identical gametime endpoint (angerEndTime), so
+	// it round-trips 1:1. The "angry_at" target UUID is a cited reduction (the runtime anger target is a
+	// THIN entity id that does not survive a reload; the endpoint alone preserves the "is angry" window).
+	// CITE NeutralMob.addPersistentAngerSaveData (putLong "anger_end_time").
+	AngerEndTime int64 `nbt:"anger_end_time,omitempty"`
+
+	// The per-type variant/state tags. Each is written only for the owning type (omitempty), so a mob
+	// of a different type emits none. These mirror the finalizeSpawn results the load path must NOT
+	// re-roll (load is RNG-free): SheepColor/Sheared (Sheep), Variant (the int-variant mobs: Cat/Fox/
+	// Rabbit), CollarColor (Cat). CITE the per-type addAdditionalSaveData ("Color"/"Sheared"/"variant"/
+	// "CollarColor").
+	SheepColor  byte  `nbt:"Color,omitempty"`
+	Sheared     bool  `nbt:"Sheared,omitempty"`
+	Variant     int32 `nbt:"variant,omitempty"`
+	CollarColor int32 `nbt:"CollarColor,omitempty"`
+}
+
+// AttributeDisk is one AttributeMap.save list entry: the attribute id + its base value. CITE
+// AttributeInstance.save (putString "id", putDouble "base"); the modifier list is a cited deferral
+// (the runtime AttributeInstance only round-trips the base override today).
+type AttributeDisk struct {
+	ID   string  `nbt:"id"`
+	Base float64 `nbt:"base"`
+}
+
+// MobEffectDisk is one MobEffectInstance.save list entry (the subset the runtime activeEffect
+// carries). CITE MobEffectInstance.save (putString "id", putByte "amplifier", putInt "duration",
+// putBoolean "ambient"/"show_particles"/"show_icon").
+type MobEffectDisk struct {
+	ID            string `nbt:"id"`
+	Amplifier     byte   `nbt:"amplifier,omitempty"`
+	Duration      int32  `nbt:"duration,omitempty"`
+	Ambient       bool   `nbt:"ambient,omitempty"`
+	ShowParticles bool   `nbt:"show_particles,omitempty"`
+	ShowIcon      bool   `nbt:"show_icon,omitempty"`
 }
