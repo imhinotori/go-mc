@@ -275,8 +275,8 @@ func (t *TickLoop) drownedPerformRangedAttack(e *Entity, target *tickPlayer) {
 	dist := math.Sqrt(xd*xd + zd*zd)
 	ydLob := yd + dist*0.2 // + dist*0.20000000298023224
 
-	diff := float64(serverDifficulty) // NORMAL == 2 (cited stub)
-	inaccuracy := 14.0 - diff*4.0     // 14 - difficulty.getId()*4 (NORMAL == 6)
+	diff := float64(t.levelDifficulty) // level.getDifficulty().getId() — the LIVE difficulty read
+	inaccuracy := 14.0 - diff*4.0      // 14 - difficulty.getId()*4 (NORMAL == 6)
 
 	// getMovementToShoot (shared with the bow path): normalize(dir) + triangle noise*(0.0172275*inacc), *1.6.
 	vx, vy, vz := normalizeVec3(xd, ydLob, zd)
@@ -358,8 +358,8 @@ func (t *TickLoop) zombieVillagerStartConverting(e *Entity, starterID int32, tim
 			delete(e.mobEffects, effectWeakness)
 		}
 	}
-	// addEffect(new MobEffectInstance(STRENGTH, time, min(difficulty.getId()-1, 0))). NORMAL id 2 -> min(1,0)==0.
-	amp := int(serverDifficulty) - 1
+	// addEffect(new MobEffectInstance(STRENGTH, time, min(difficulty.getId()-1, 0))). LIVE getDifficulty().getId().
+	amp := int(t.levelDifficulty) - 1
 	if amp > 0 {
 		amp = 0 // Math.min(id-1, 0)
 	}
@@ -446,11 +446,11 @@ func (t *TickLoop) convertVillagerToZombieVillager(v *Entity) bool {
 // itself a cited v1 deferral (no zombie->villager target in v1), so this is the ready helper that path calls
 // when villager-targeting lands. Cite Zombie.killedEntity + convertVillagerToZombieVillager.
 func (t *TickLoop) zombieKilledVillagerInfection(zombie, villager *Entity) bool {
-	if serverDifficulty == difficultyEasy {
+	if t.levelDifficulty == difficultyEasy {
 		return false // EASY (and PEACEFUL) never convert
 	}
 	// NORMAL: if (difficulty != HARD && !random.nextBoolean()) return -> a 50% skip on NORMAL; HARD always.
-	if serverDifficulty != difficultyHard && !mobRandom(zombie).nextBoolean() {
+	if t.levelDifficulty != difficultyHard && !mobRandom(zombie).nextBoolean() {
 		return false
 	}
 	return t.convertVillagerToZombieVillager(villager)
@@ -602,9 +602,9 @@ func drownedNautilusOffhandRoll(e *Entity, rng *entityRandom) {
 // child's finalizeSpawn reduces to the server difficulty (the DifficultyInstance stub food.go uses).
 // The child spawns through spawnDeclaredMob (real attrs + goals), the same store path every summon uses.
 //
-// Zombie-family-gated by the caller (typ == Zombie/Husk/Drowned/ZombieVillager). NORMAL is the cited
-// serverDifficulty, so the HARD gate makes this a dead path in production EXACTLY as vanilla (reinforcements
-// are HARD-only) -- a NORMAL zombie draws NOTHING. A pig never reaches this; its oracle stream is untouched.
+// Zombie-family-gated by the caller (typ == Zombie/Husk/Drowned/ZombieVillager). The HARD gate reads the
+// LIVE ServerLevel.getDifficulty() (t.levelDifficulty), so a non-HARD zombie draws NOTHING while a /difficulty
+// hard now arms reinforcements. A pig never reaches this; its oracle stream is untouched.
 //
 // Cite Zombie.hurtServer + the SPAWN_REINFORCEMENTS_CHANCE handling (REINFORCEMENT_CALLER_CHARGE_ID /
 // ZOMBIE_REINFORCEMENT_CALLEE_CHARGE, both -0.05).
@@ -619,8 +619,8 @@ func (t *TickLoop) zombieHurtReinforcements(e *Entity, src damageSource) {
 	if targetID == 0 {
 		return // target == null -> no reinforcement
 	}
-	// level.getDifficulty() == HARD. serverDifficulty is the cited NORMAL stub, so this is HARD-only.
-	if serverDifficulty != difficultyHard {
+	// level.getDifficulty() == HARD — the LIVE ServerLevel.getDifficulty() (t.levelDifficulty). HARD-only.
+	if t.levelDifficulty != difficultyHard {
 		return
 	}
 	// (double) random.nextFloat() < getAttributeValue(SPAWN_REINFORCEMENTS_CHANCE): the gate DRAW.
@@ -635,9 +635,9 @@ func (t *TickLoop) zombieHurtReinforcements(e *Entity, src damageSource) {
 // zombieSpawnReinforcement is the placement + charge CORE of Zombie.hurtServer's reinforcement block
 // (VERIFIED javap @85-457) -- the part that runs once the target/HARD/chance/isSpawningMonsters gates in
 // zombieHurtReinforcements have all passed. It is a separate method so the exact 6-draw-per-try offset
-// order + the -0.05 caller/callee charge math are directly test-drivable without the HARD-difficulty stub
-// (serverDifficulty is a compile-time NORMAL const, so the gated wrapper's HARD branch is a dead path in
-// v1 EXACTLY as vanilla reinforcements are HARD-only; the mechanism is proven here). `rng` is the zombie's
+// order + the -0.05 caller/callee charge math are directly test-drivable independent of the difficulty
+// gate (the wrapper zombieHurtReinforcements applies the LIVE HARD-only check via t.levelDifficulty; this
+// core runs once that gate passes; the mechanism is proven here). `rng` is the zombie's
 // own stream (the SAME source the gate nextFloat was drawn from). Cite Zombie.hurtServer.
 func (t *TickLoop) zombieSpawnReinforcement(e *Entity, targetID int32, rng *entityRandom) {
 	x0 := floorI(e.x)

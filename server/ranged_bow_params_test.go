@@ -26,7 +26,7 @@ func TestRangedBowParamsSkeletonDefault(t *testing.T) {
 	if g.speedModifier >= 0 {
 		t.Fatalf("fresh goal speedModifier = %v, want < 0 (unresolved sentinel)", g.speedModifier)
 	}
-	g.resolveBowParams(bowParamEntity(entity.Skeleton.ID))
+	g.resolveBowParams(&TickLoop{levelDifficulty: difficultyNormal}, bowParamEntity(entity.Skeleton.ID))
 	if math.Abs(g.speedModifier-1.0) > 1e-12 {
 		t.Fatalf("skeleton bow speedModifier = %v, want 1.0", g.speedModifier)
 	}
@@ -39,7 +39,7 @@ func TestRangedBowParamsSkeletonDefault(t *testing.T) {
 // 20 ticks -- NOT the skeleton's 1.0/40. Cite Illusioner.registerGoals @6 RangedBowAttackGoal(0.5d,20,15).
 func TestRangedBowParamsIllusioner(t *testing.T) {
 	g := newRangedBowAttackGoal()
-	g.resolveBowParams(bowParamEntity(entity.Illusioner.ID))
+	g.resolveBowParams(&TickLoop{levelDifficulty: difficultyNormal}, bowParamEntity(entity.Illusioner.ID))
 	if math.Abs(g.speedModifier-0.5) > 1e-12 {
 		t.Fatalf("illusioner bow speedModifier = %v, want 0.5", g.speedModifier)
 	}
@@ -49,12 +49,12 @@ func TestRangedBowParamsIllusioner(t *testing.T) {
 }
 
 // TestRangedBowParamsBogged: a Bogged fires SLOWER than a plain skeleton -- getAttackInterval()=70 on
-// NORMAL (getHardAttackInterval()=50 on HARD). serverDifficulty is the cited NORMAL const, so the
+// NORMAL (getHardAttackInterval()=50 on HARD). The loop is at the LIVE default difficulty NORMAL, so the
 // resolved interval is 70. Cite javap Bogged.getAttackInterval (bipush 70) / getHardAttackInterval
 // (bipush 50).
 func TestRangedBowParamsBogged(t *testing.T) {
 	g := newRangedBowAttackGoal()
-	g.resolveBowParams(bowParamEntity(entity.Bogged.ID))
+	g.resolveBowParams(&TickLoop{levelDifficulty: difficultyNormal}, bowParamEntity(entity.Bogged.ID))
 	if math.Abs(g.speedModifier-1.0) > 1e-12 {
 		t.Fatalf("bogged bow speedModifier = %v, want 1.0 (skeleton family)", g.speedModifier)
 	}
@@ -68,7 +68,7 @@ func TestRangedBowParamsBogged(t *testing.T) {
 // interval override) + AbstractSkeleton.getAttackInterval (bipush 40).
 func TestRangedBowParamsStrayInheritsSkeleton(t *testing.T) {
 	g := newRangedBowAttackGoal()
-	g.resolveBowParams(bowParamEntity(entity.Stray.ID))
+	g.resolveBowParams(&TickLoop{levelDifficulty: difficultyNormal}, bowParamEntity(entity.Stray.ID))
 	if math.Abs(g.speedModifier-1.0) > 1e-12 {
 		t.Fatalf("stray bow speedModifier = %v, want 1.0 (skeleton family)", g.speedModifier)
 	}
@@ -81,8 +81,8 @@ func TestRangedBowParamsStrayInheritsSkeleton(t *testing.T) {
 // not clobber the latched values (the goal is bound to its first ticking entity).
 func TestRangedBowParamsLatchOnce(t *testing.T) {
 	g := newRangedBowAttackGoal()
-	g.resolveBowParams(bowParamEntity(entity.Illusioner.ID))
-	g.resolveBowParams(bowParamEntity(entity.Skeleton.ID)) // must NOT overwrite
+	g.resolveBowParams(&TickLoop{levelDifficulty: difficultyNormal}, bowParamEntity(entity.Illusioner.ID))
+	g.resolveBowParams(&TickLoop{levelDifficulty: difficultyNormal}, bowParamEntity(entity.Skeleton.ID)) // must NOT overwrite
 	if math.Abs(g.speedModifier-0.5) > 1e-12 || g.attackIntervalMin != 20 {
 		t.Fatalf("after re-resolve: speed=%v interval=%d, want latched 0.5/20", g.speedModifier, g.attackIntervalMin)
 	}

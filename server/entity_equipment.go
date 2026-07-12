@@ -163,8 +163,8 @@ func itemStackOf(it item.Item) component.SlotData {
 // We feed the FAITHFUL available reads: totalGameTime = t.gametime (the tick clock),
 // localGameTime = 0 and moonBrightness = 0.0 — the EXACT values vanilla itself uses when the spawn
 // chunk has no inhabited-time / the moon system is absent (getCurrentDifficultyAt's `chunk == null`
-// branch leaves localTime=0L, moonBrightness=0.0f). base = serverDifficulty (the cited NORMAL stub,
-// food.go). Structured so a real inhabited-time / moon read replaces the two 0 stubs later without
+// branch leaves localTime=0L, moonBrightness=0.0f). base is the LIVE ServerLevel.getDifficulty()
+// (t.levelDifficulty), passed in by the caller. Structured so a real inhabited-time / moon read replaces the two 0 stubs later without
 // touching the arithmetic. NOTE: with localGameTime=0 and moonBrightness=0, effectiveDifficulty for
 // NORMAL grows from 2*0.75=1.5 (fresh world -> multiplier 0.0, no armor) toward 2*1.0=2.0 as
 // totalGameTime passes 1,512,000 ticks (globalScale saturates) — byte-for-byte vanilla.
@@ -266,7 +266,7 @@ var eqPopulationOrder = [4]int{eqSlotHead, eqSlotChest, eqSlotLegs, eqSlotFeet}
 // caller so Animals (the pig) never reach this.
 //
 //	[VERIFIED javap Mob.populateDefaultEquipmentSlots — full bytecode traced.]
-func populateDefaultEquipmentSlots(e *Entity, rng *entityRandom, mult float32) {
+func populateDefaultEquipmentSlots(e *Entity, rng *entityRandom, mult float32, diff difficulty) {
 	if !(rng.nextFloat() < 0.15*mult) {
 		return
 	}
@@ -276,8 +276,9 @@ func populateDefaultEquipmentSlots(e *Entity, rng *entityRandom, mult float32) {
 			armorType++
 		}
 	}
+	// partialChance = level().getDifficulty() == HARD ? 0.1f : 0.25f — the LIVE difficulty (diff).
 	partialChance := float32(0.25)
-	if serverDifficulty == difficultyHard {
+	if diff == difficultyHard {
 		partialChance = 0.1
 	}
 	first := true
@@ -361,16 +362,17 @@ func enchantSpawnedEquipment(e *Entity, slot int, rng *entityRandom, chance, mul
 //	[VERIFIED javap AbstractSkeleton / Zombie.populateDefaultEquipmentSlots + their finalizeSpawn
 //	 ordering (super.finalizeSpawn -> ... -> populateDefaultEquipmentSlots ->
 //	 populateDefaultEquipmentEnchantments).]
-func populateMonsterEquipment(e *Entity, rng *entityRandom, mult float32) {
-	populateDefaultEquipmentSlots(e, rng, mult)
+func populateMonsterEquipment(e *Entity, rng *entityRandom, mult float32, diff difficulty) {
+	populateDefaultEquipmentSlots(e, rng, mult, diff)
 	switch e.typ {
 	case entity.Skeleton.ID, entity.Stray.ID, entity.Bogged.ID:
 		// AbstractSkeleton (+ Stray/Bogged, no populate override): after the super armor roll, hold a bow.
 		e.setItemSlot(eqSlotMainHand, itemStackOf(item.Bow))
 	case entity.Zombie.ID, entity.Drowned.ID, entity.ZombieVillager.ID:
 		// Zombie: chance to hold an iron tool/weapon.
+		// level.getDifficulty() == HARD ? 0.05f : 0.01f — the LIVE difficulty (diff).
 		f2 := float32(0.01)
-		if serverDifficulty == difficultyHard {
+		if diff == difficultyHard {
 			f2 = 0.05
 		}
 		if rng.nextFloat() < f2 {

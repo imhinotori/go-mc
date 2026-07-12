@@ -320,8 +320,8 @@ var errDifficultyUsage = errors.New("usage: /difficulty [peaceful|easy|normal|ha
 
 // registerDifficulty ports DifficultyCommand. No arg == query (getDifficulty; commands.difficulty.query).
 // A name literal sets via setDifficulty: already-that-difficulty -> ERROR_ALREADY_SAME_DIFFICULTY; else set
-// + commands.difficulty.success. State lives in t.levelDifficulty (the gameplay hot paths keep reading the
-// serverDifficulty const, scope-locked). VERIFIED javap DifficultyCommand.setDifficulty: worldData
+// + commands.difficulty.success. State lives in t.levelDifficulty, which every gameplay hot path now reads
+// LIVE as ServerLevel.getDifficulty(), so a /difficulty set is observed immediately. VERIFIED javap DifficultyCommand.setDifficulty: worldData
 // .getDifficulty()==arg -> throw ERROR_ALREADY_SAME_DIFFICULTY; else setDifficulty(arg,true) + sendSuccess.
 func registerDifficulty(g *command.Graph) {
 	h := permissionGated("minecraft.command.difficulty", func(ctx context.Context, args []command.ParsedData) error {

@@ -93,10 +93,13 @@ const (
 	difficultyHard                       // net.minecraft.world.Difficulty.HARD
 )
 
-// serverDifficulty is the CITED stub for ServerLevel.getDifficulty(): Sulfur has no difficulty
-// system, so it is fixed to the vanilla default NORMAL. Structured so a real read replaces this
-// constant later. NORMAL means: starvation stops at 1.0 HP (the getHealth() > 1.0f && NORMAL gate),
-// and the exhaustion-drain food-loss branch fires (PEACEFUL would skip it).
+// serverDifficulty is the vanilla WorldData default difficulty (NORMAL) — the value t.levelDifficulty
+// is seeded to in NewTickLoop. It is NO LONGER the runtime difficulty source: every gameplay hot path
+// now reads the LIVE ServerLevel.getDifficulty() through t.levelDifficulty (settable via /difficulty),
+// so a mid-game difficulty change is observed. This const remains as the named vanilla default seed and
+// as the test baseline (tests that leave the loop at its default assert NORMAL behavior against it).
+// NORMAL means: starvation stops at 1.0 HP (the getHealth() > 1.0f && NORMAL gate), and the
+// exhaustion-drain food-loss branch fires (PEACEFUL would skip it).
 const serverDifficulty = difficultyNormal
 
 // mthClampI mirrors net.minecraft.util.Mth.clamp(int value, int min, int max):
@@ -215,11 +218,12 @@ func (t *TickLoop) tickFood() {
 
 // foodDataTick is the body of net.minecraft.world.food.FoodData.tick(ServerPlayer). EXACT branch
 // order (verified against the bytecode this session): the exhaustion-drain block FIRST, then the
-// fast-regen / slow-regen / starvation / else if/else-if-else chain. The diff and the
-// naturalRegeneration gamerule: the difficulty half stays a CITED stub (serverDifficulty == NORMAL); the
-// natural-regen half is now a live GameRules.get(NATURAL_HEALTH_REGENERATION) read (see below).
+// fast-regen / slow-regen / starvation / else if/else-if-else chain. diff is the LIVE
+// ServerLevel.getDifficulty() (t.levelDifficulty, settable via /difficulty), and the
+// naturalRegeneration half is a live GameRules.get(NATURAL_HEALTH_REGENERATION) read (see below) --
+// both formerly CITED stubs, now the real runtime reads.
 func (t *TickLoop) foodDataTick(p *tickPlayer) {
-	const diff = serverDifficulty // ServerLevel.getDifficulty(): CITED stub == NORMAL (vanilla default)
+	diff := t.levelDifficulty // ServerLevel.getDifficulty(): the LIVE difficulty read
 
 	// --- EXHAUSTION DRAIN (`if (exhaustionLevel > 4.0f)`) ---
 	if p.exhaustion > exhaustionDrainThreshold {

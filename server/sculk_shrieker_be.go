@@ -294,14 +294,14 @@ func (t *TickLoop) wardenNearbyPlayers(pos pk.Position) []*tickPlayer {
 }
 
 // sculkShriekerCanRespond ports SculkShriekerBlockEntity.canRespond: CAN_SUMMON && difficulty !=
-// PEACEFUL && gameRules.SPAWN_WARDENS. serverDifficulty is the cited NORMAL stub (never PEACEFUL) and
-// SPAWN_WARDENS defaults true (cited), so this reduces to CAN_SUMMON on the server. Structured so a
-// real difficulty/gamerule read slots in later. CITE: SculkShriekerBlockEntity.canRespond.
+// PEACEFUL && gameRules.SPAWN_WARDENS. The difficulty is the LIVE ServerLevel.getDifficulty()
+// (t.levelDifficulty, settable via /difficulty); SPAWN_WARDENS defaults true (cited), so this reduces
+// to CAN_SUMMON && !PEACEFUL on the server. CITE: SculkShriekerBlockEntity.canRespond.
 func (t *TickLoop) sculkShriekerCanRespond(state block.StateID) bool {
 	if !block.SculkShriekerCanSummon(state) {
 		return false
 	}
-	if serverDifficulty == difficultyPeaceful {
+	if t.levelDifficulty == difficultyPeaceful {
 		return false
 	}
 	// SculkShriekerBlockEntity.tryToWarn/canRespond: getGameRules().getBoolean(SPAWN_WARDENS) (ex-doWardenSpawning).

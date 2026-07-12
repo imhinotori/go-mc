@@ -667,8 +667,10 @@ func (t *TickLoop) createOrExtendRaid(p *tickPlayer, raidPosition pk.Position) *
 	if raid == nil {
 		// new Raid(center, level.getDifficulty()) — registered under a fresh unique id, seeded from that id
 		// (deterministic; the createRaidAt seam uses the same salt so both entry points share the RNG stream).
+		// The ctor difficulty is the LIVE ServerLevel.getDifficulty() (t.levelDifficulty) — it seeds numGroups
+		// only; spawnGroup re-reads the live difficulty per wave (raid_tick.go).
 		id := rm.getUniqueId()
-		raid = newRaid(id, raidCenter.X, raidCenter.Y, raidCenter.Z, serverDifficulty, uint64(id)^raidCreateSeedSalt)
+		raid = newRaid(id, raidCenter.X, raidCenter.Y, raidCenter.Z, t.levelDifficulty, uint64(id)^raidCreateSeedSalt)
 		rm.raidMap[id] = raid
 	}
 

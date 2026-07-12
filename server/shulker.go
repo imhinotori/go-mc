@@ -174,7 +174,7 @@ func (t *TickLoop) shulkerAiStep(e *Entity) {
 	// it only FIRES a bullet when distanceToSqr(target) < 400.0 (ShulkerAttackGoal.tick). PEACEFUL disarms.
 	//	[VERIFIED javap Shulker$ShulkerAttackGoal.canUse: getTarget() alive && level.getDifficulty() != PEACEFUL
 	//	 (no distance check); tick: distanceToSqr(target) < 400.0d (dcmpg; iflt) gates the bullet.]
-	if serverDifficulty == difficultyPeaceful {
+	if t.levelDifficulty == difficultyPeaceful {
 		if !shulkerIsClosed(e) {
 			t.shulkerSetRawPeek(e, shulkerPeekClosed) // stop(): setRawPeekAmount(0)
 		}

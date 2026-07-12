@@ -91,6 +91,7 @@ func TestRaidCooldownCountdownThenWaveSpawns(t *testing.T) {
 	// cooldown must expire and each empty wave (1-3) also spends a full 300-tick cooldown. Drive enough
 	// ticks to pass through to wave 4 (the first witch-bearing wave). Center at the floor.
 	raid := rm.createRaidAt(8, floorY, 8, difficultyHard, 1)
+	loop.levelDifficulty = difficultyHard // the raid's live difficulty is the level's (spawnGroup/tick read it live)
 	if raid.status != raidStatusOngoing {
 		t.Fatalf("new raid status = %v, want ONGOING", raid.status)
 	}
@@ -149,6 +150,7 @@ func TestRaidHealGoalActivatesUnderActiveRaid(t *testing.T) {
 	loop, floorY := raidLoop(t)
 	rm := loop.only().ensureRaidsManager()
 	raid := rm.createRaidAt(8, floorY, 8, difficultyHard, 1)
+	loop.levelDifficulty = difficultyHard // the raid's live difficulty is the level's (spawnGroup/tick read it live)
 
 	// Spawn a witch and join it to the raid (as a wave spawn would).
 	w := loop.spawnVanillaMob(vanillaWitchMobName, 8.5, float64(floorY+1), 8.5)
@@ -188,6 +190,7 @@ func TestRaidVictoryAfterFinalWaveCleared(t *testing.T) {
 	rm := loop.only().ensureRaidsManager()
 	// raidOmenLevel 1 -> hasBonusWave() false (needs >1), so the raid ends at the final normal wave.
 	raid := rm.createRaidAt(8, floorY, 8, difficultyEasy, 1)
+	loop.levelDifficulty = difficultyEasy // the raid's live difficulty is the level's (spawnGroup/tick read it live)
 
 	reachedVictory := false
 	for i := 0; i < 300*5+700; i++ {
@@ -213,6 +216,7 @@ func TestRaidTimeoutStops(t *testing.T) {
 	loop, floorY := raidLoop(t)
 	rm := loop.only().ensureRaidsManager()
 	raid := rm.createRaidAt(8, floorY, 8, difficultyNormal, 1)
+	loop.levelDifficulty = difficultyNormal // the raid's live difficulty is the level's (spawnGroup/tick read it live)
 	raid.ticksActive = raidTimeoutTicks - 1
 	loop.raidsTick(rm)
 	if !raid.isStopped() {
@@ -282,6 +286,7 @@ func TestRaidWaveAssignsCaptainWithOminousBanner(t *testing.T) {
 	rm := loop.only().ensureRaidsManager()
 	// A HARD raid: wave 1 spawns 4 pillagers (the first is the captain). Drive to the first wave spawn.
 	raid := rm.createRaidAt(8, floorY, 8, difficultyHard, 1)
+	loop.levelDifficulty = difficultyHard // the raid's live difficulty is the level's (spawnGroup/tick read it live)
 	for i := 0; i < 400 && raid.getTotalRaidersAlive() == 0; i++ {
 		loop.raidsTick(rm)
 		if raid.isStopped() || raid.isOver() {
@@ -324,6 +329,7 @@ func TestKillingCaptainDropsOminousBottle(t *testing.T) {
 	loop, floorY := raidFullRaiderLoop(t)
 	rm := loop.only().ensureRaidsManager()
 	raid := rm.createRaidAt(8, floorY, 8, difficultyHard, 1)
+	loop.levelDifficulty = difficultyHard // the raid's live difficulty is the level's (spawnGroup/tick read it live)
 
 	cap := loop.spawnVanillaMob(vanillaPillagerMobName, 8.5, float64(floorY+1), 8.5)
 	if cap == nil {
@@ -365,6 +371,7 @@ func TestRaidVictoryGrantsHeroOfTheVillage(t *testing.T) {
 	rm := loop.only().ensureRaidsManager()
 	// raidOmenLevel 3 -> hero amplifier 2. EASY (3 waves, no witches -> instant clears).
 	raid := rm.createRaidAt(8, floorY, 8, difficultyEasy, 3)
+	loop.levelDifficulty = difficultyEasy // the raid's live difficulty is the level's (spawnGroup/tick read it live)
 
 	hero := &tickPlayer{entityID: 9100, uuid: uuid.New(), x: 8.5, y: float64(floorY + 1), z: 8.5, health: 20}
 	loop.players = append(loop.players, hero)
@@ -416,6 +423,7 @@ func TestRaidRavagerWaveSpawnsRider(t *testing.T) {
 	loop, floorY := raidFullRaiderLoop(t)
 	rm := loop.only().ensureRaidsManager()
 	raid := rm.createRaidAt(8, floorY, 8, difficultyHard, 1)
+	loop.levelDifficulty = difficultyHard // the raid's live difficulty is the level's (spawnGroup/tick read it live)
 
 	// Drive the raid, killing every raider each tick so the waves advance to the ravager-bearing final
 	// wave. A player killer lets dieEntity/removeFromRaid clear the wave set so shouldSpawnGroup advances.

@@ -189,11 +189,11 @@ type TickLoop struct {
 	worldSeed int64
 
 	// levelDifficulty is the WorldData.difficulty the /difficulty command reads + writes
-	// (net.minecraft.world.level.storage.WorldData.getDifficulty / MinecraftServer.setDifficulty). The
-	// gameplay hot paths still resolve their difficulty through the serverDifficulty CITED const stub
-	// (food.go == NORMAL); this field carries the settable command state so /difficulty set/query is a
-	// faithful port with no rewire of the const consumers. Zero value == difficultyPeaceful, so it is
-	// seeded to difficultyNormal in NewTickLoop to match the vanilla default the const also uses.
+	// (net.minecraft.world.level.storage.WorldData.getDifficulty / MinecraftServer.setDifficulty) AND the
+	// LIVE runtime difficulty source: every gameplay hot path reads it as ServerLevel.getDifficulty(), so a
+	// /difficulty change is observed by hunger, mob equipment, zombie reinforcements, raid bonus spawns, etc.
+	// Zero value == difficultyPeaceful, so it is seeded to difficultyNormal (serverDifficulty) in NewTickLoop
+	// to match the vanilla WorldData default.
 	levelDifficulty difficulty
 
 	// difficultyLocked is WorldData.difficultyLocked (MinecraftServer.setDifficultyLocked). The
@@ -1489,8 +1489,8 @@ func NewTickLoop(clock Clock) *TickLoop {
 		// Every player near origin (and the pig) is deep inside, so the tickWorldBorder damage check
 		// and the collision clamp are both no-ops. A future /worldborder command mutates this field.
 		worldBorder: defaultWorldBorder(),
-		// levelDifficulty seeds to the vanilla WorldData default (NORMAL) -- the same value the
-		// serverDifficulty CITED const carries -- so /difficulty query reports NORMAL until it is set.
+		// levelDifficulty seeds to the vanilla WorldData default (NORMAL == serverDifficulty) -- the LIVE
+		// runtime difficulty every hot path reads -- so gameplay runs NORMAL until /difficulty sets it.
 		levelDifficulty: difficultyNormal,
 		// scoreboard seeds an empty Scoreboard/ServerScoreboard store (scoreboard.go). It is the
 		// per-level objective/score/team/display-slot state; the on* callbacks broadcast to t.players.

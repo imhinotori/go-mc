@@ -202,7 +202,7 @@ func (t *TickLoop) performCrossbowAttack(e *Entity, target *tickPlayer) {
 	ydLob := yd + dist*0.20000000298023224
 
 	// inaccuracy = 14 - difficulty.getId()*4 (NORMAL == 2 -> 6).
-	diff := float64(serverDifficulty)
+	diff := float64(t.levelDifficulty) // level.getDifficulty().getId() — the LIVE difficulty read
 	inaccuracy := 14.0 - diff*4.0
 
 	// getMovementToShoot: normalize(dir) + triangle(0, 0.0172275*inaccuracy) per axis (x,y,z), scaled 1.6.

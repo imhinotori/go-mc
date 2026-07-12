@@ -32,10 +32,10 @@ func (t *TickLoop) checkDespawn(e *Entity) {
 	}
 
 	// `if (getDifficulty() == PEACEFUL && !getType().isAllowedInPeaceful()) { discard(); return; }`.
-	// serverDifficulty is the cited NORMAL stub (food.go) — never PEACEFUL — so this branch is dead in
-	// v1, but it is kept structurally so a future difficulty read culls PEACEFUL-disallowed mobs with no
-	// call-site change. isAllowedInPeaceful defaults false for hostiles; unreachable here regardless.
-	if serverDifficulty == difficultyPeaceful {
+	// The difficulty is the LIVE ServerLevel.getDifficulty() (t.levelDifficulty, settable via /difficulty).
+	// isAllowedInPeaceful defaults false for hostiles, so a /difficulty peaceful now culls a PEACEFUL-
+	// disallowed mob here exactly as vanilla.
+	if t.levelDifficulty == difficultyPeaceful {
 		e.dead = true
 		t.regionForEntity(e).entities.remove(e.id) // discard()
 		return

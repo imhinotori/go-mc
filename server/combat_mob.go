@@ -322,9 +322,9 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 	// itself -- both the parent's and the child's chance drop 0.05. A per-type post-hurt hook (the sibling of
 	// the zoglin/piglin hooks), zombie-family-gated (typ == Zombie/Husk/Drowned/ZombieVillager). Reaching this
 	// tail means the hit landed (the i-frame `amount <= lastHurt` rejection returned early above), matching
-	// vanilla's `super.hurtServer` gate. NORMAL is the cited serverDifficulty, so the HARD gate inside makes
-	// this a dead path in production EXACTLY as vanilla (reinforcements are HARD-only) -- zero draws on NORMAL,
-	// and the pig oracle (never a zombie) is untouched. Cite Zombie.hurtServer + SPAWN_REINFORCEMENTS_CHANCE.
+	// vanilla's `super.hurtServer` gate. The HARD gate inside reads the LIVE ServerLevel.getDifficulty()
+	// (t.levelDifficulty), so reinforcements fire only when the level is HARD (zero draws otherwise), and the
+	// pig oracle (never a zombie) is untouched. Cite Zombie.hurtServer + SPAWN_REINFORCEMENTS_CHANCE.
 	if e.typ == entity.Zombie.ID || e.typ == entity.Husk.ID ||
 		e.typ == entity.Drowned.ID || e.typ == entity.ZombieVillager.ID {
 		t.zombieHurtReinforcements(e, src)

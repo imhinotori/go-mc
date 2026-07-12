@@ -29,8 +29,8 @@ func (t *TickLoop) chunkPresentAt(cx, cz int) bool {
 // tickRaid ports Raid.tick(ServerLevel) — the ONGOING branch (the wave loop) + the isOver celebration
 // branch. VERIFIED CFR Raid.tick. The village/POI center guards (isVillage /
 // moveRaidCenterToNearbyVillageSection) are CITE-DEFERRED (no POI subsystem, see raid.go v1 REDUCTIONS);
-// everything else is faithful. PEACEFUL difficulty -> stop (there is no live difficulty setting, so a
-// raid is created NORMAL and never PEACEFUL — the guard is kept structurally). The Raids manager
+// everything else is faithful. PEACEFUL difficulty -> stop: Raid.tick reads ServerLevel.getDifficulty()
+// LIVE (t.levelDifficulty), so a /difficulty peaceful mid-raid stops it next tick. The Raids manager
 // (raids.go) prunes a STOPPED raid.
 func (t *TickLoop) tickRaid(rm *raidsManager, r *Raid) {
 	if r.isStopped() {
@@ -39,8 +39,9 @@ func (t *TickLoop) tickRaid(rm *raidsManager, r *Raid) {
 	if r.status == raidStatusOngoing {
 		oldActive := r.active
 		r.active = t.chunkPresentAt(r.centerX, r.centerZ)
-		// PEACEFUL -> stop(): the difficulty is fixed at creation (NORMAL); kept structurally faithful.
-		if r.difficulty == difficultyPeaceful {
+		// PEACEFUL -> stop(): Raid.tick @35 reads ServerLevel.getDifficulty() LIVE (t.levelDifficulty), so a
+		// /difficulty peaceful stops an in-flight raid on the next tick.
+		if t.levelDifficulty == difficultyPeaceful {
 			t.raidStop(r)
 			return
 		}
@@ -148,9 +149,10 @@ func (t *TickLoop) tickRaid(rm *raidsManager, r *Raid) {
 	}
 }
 
-// raidSpawnGroup ports Raid.spawnGroup(level, pos) — VERIFIED CFR. It iterates RaiderType.VALUES in
-// ordinal order, computes numSpawns = getDefaultNumSpawns + getPotentialBonusSpawns (the bonus DRAWS on
-// the raid stream, draw-order-faithful), and for each spawn creates the raider (raidCreateRaider) and
+// raidSpawnGroup ports Raid.spawnGroup(level, pos) — VERIFIED CFR. It reads the LIVE difficulty at spawn
+// time (ServerLevel.getCurrentDifficultyAt(pos), reduced to t.levelDifficulty — see the numSpawns block),
+// iterates RaiderType.VALUES in ordinal order, computes numSpawns = getDefaultNumSpawns +
+// getPotentialBonusSpawns (the bonus DRAWS on the raid stream, draw-order-faithful), and for each spawn creates the raider (raidCreateRaider) and
 // joins it to the raid (raidJoinRaid). A RaiderType whose mob is not boot-loaded resolves to
 // raidCreateRaider==nil and the `!= null` loop guard breaks it — the jar's exact behavior when
 // EntityType.create returns null. The wave CAPTAIN (first canBeLeader() raider -> setPatrolLeader +
@@ -163,8 +165,13 @@ func (t *TickLoop) raidSpawnGroup(r *Raid) bool {
 	isBonusGroup := r.shouldSpawnBonusGroup()
 	leaderSet := false // Raid.spawnGroup local `bl` — set once the wave captain is chosen.
 	for _, rt := range raiderTypesValues {
+		// getPotentialBonusSpawns takes DifficultyInstance.getDifficulty(). Vanilla Raid.spawnGroup @17 calls
+		// ServerLevel.getCurrentDifficultyAt(pos) LIVE at spawn time; inhabited-time/moon are not tracked, so
+		// getCurrentDifficultyAt(pos).getDifficulty() reduces to ServerLevel.getDifficulty() (t.levelDifficulty).
+		// Read LIVE per wave, NOT the create-time r.difficulty snapshot, so a /difficulty change mid-raid
+		// changes the NEXT wave's bonus count. VERIFIED javap Raid.spawnGroup @17 + getPotentialBonusSpawns @0-2.
 		numSpawns := r.getDefaultNumSpawns(rt, groupNumber, isBonusGroup) +
-			r.getPotentialBonusSpawns(rt, groupNumber, r.difficulty, isBonusGroup)
+			r.getPotentialBonusSpawns(rt, groupNumber, t.levelDifficulty, isBonusGroup)
 		// riderCount is Raid.spawnGroup local `n` (var 12): the per-RaiderType index of ravagers spawned
 		// this wave, deciding which rider a ravager carries in the HARD-final wave (0 -> EVOKER, else
 		// VINDICATOR). Reset per RaiderType (vanilla declares it inside the RaiderType loop). VERIFIED

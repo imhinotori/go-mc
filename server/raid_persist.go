@@ -153,9 +153,10 @@ func decodeRaidsData(d raidsDataDisk) *raidsManager {
 
 // decodeRaid ports Raid(RecordCodecBuilder apply): reconstruct a *Raid from the flat disk record. The
 // difficulty/numGroups relation: vanilla stores group_count (== numGroups) directly and re-derives the
-// bonus-spawn difficulty from the live level at spawn time, so numGroups is restored from group_count
-// and difficulty is the live ServerLevel.getDifficulty() stub (serverDifficulty) — the SAME value the
-// createRaidAt/createOrExtendRaid seams use. The boss-bar MODEL + RNG are non-persisted runtime state
+// bonus-spawn difficulty from the LIVE level at spawn time (raid_tick.go reads t.levelDifficulty per wave),
+// so numGroups is restored verbatim from group_count and the difficulty passed to newRaid here is only a
+// throwaway numGroups seed (immediately overwritten below) — decode is not on the tick loop, so the
+// vanilla default is used. The boss-bar MODEL + RNG are non-persisted runtime state
 // (vanilla's ServerBossEvent + Raid.random are rebuilt fresh on load — neither is in Raid.MAP_CODEC),
 // so they are re-initialized exactly as newRaid does (deterministic per-id seed, RED/NOTCHED_10 bar).
 func decodeRaid(rw raidWithIdDisk) *Raid {
@@ -163,6 +164,9 @@ func decodeRaid(rw raidWithIdDisk) *Raid {
 	// Rebuild the runtime scaffolding (bar model + rng + group map) via newRaid, then overwrite the
 	// persisted fields. newRaid seeds the rng from the id (the same salt the create seams use), so a
 	// reloaded raid resumes on the identical RNG stream a freshly-created one of that id would.
+	// difficulty here only seeds a numGroups that line below overwrites from group_count; decodeRaid has no
+	// TickLoop, so the vanilla default (serverDifficulty == NORMAL) is used. The live spawn difficulty is
+	// read per wave in raid_tick.go (t.levelDifficulty), never from this value.
 	r := newRaid(id, int(rw.Center[0]), int(rw.Center[1]), int(rw.Center[2]), serverDifficulty, uint64(id)^raidCreateSeedSalt)
 	r.numGroups = int(rw.GroupCount) // group_count IS numGroups (Raid.numGroups); restore it verbatim
 	r.started = rw.Started

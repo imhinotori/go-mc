@@ -108,16 +108,16 @@ func newRangedBowAttackGoal() *rangedBowAttackGoal {
 // @62: interval = getHardAttackInterval(); if getDifficulty() != HARD -> interval = getAttackInterval()).
 // A plain skeleton/stray uses getAttackInterval()=40 (HARD 20); a BOGGED overrides both to
 // getAttackInterval()=70 (HARD 50) (javap Bogged.getAttackInterval bipush 70 / getHardAttackInterval bipush
-// 50). serverDifficulty is the cited NORMAL const, so the != HARD branch takes the NORMAL interval today,
-// but the HARD pick is written 1:1 so it lands the moment difficulty becomes a live read.
+// 50). The difficulty is the LIVE ServerLevel.getDifficulty() (t.levelDifficulty), read once at the goal's
+// first-tick latch (the reassessWeaponGoal seam), so the HARD pick lands whenever the level is HARD then.
 //	[VERIFIED javap Illusioner.registerGoals @6 RangedBowAttackGoal(this, 0.5d, 20, 15.0f);
 //	 AbstractSkeleton.reassessWeaponGoal @4 RangedBowAttackGoal(this, 1.0d, 20|40, 15.0f);
 //	 Bogged.getAttackInterval()=70 / getHardAttackInterval()=50; AbstractSkeleton 40 / 20.]
-func (g *rangedBowAttackGoal) resolveBowParams(e *Entity) {
+func (g *rangedBowAttackGoal) resolveBowParams(t *TickLoop, e *Entity) {
 	if g.speedModifier >= 0 {
 		return // already latched
 	}
-	hard := serverDifficulty == difficultyHard
+	hard := t.levelDifficulty == difficultyHard // level.getDifficulty() == HARD (reassessWeaponGoal)
 	switch e.typ {
 	case entity.Illusioner.ID:
 		g.speedModifier = illusionerBowSpeedModifier      // 0.5
@@ -201,7 +201,7 @@ func (g *rangedBowAttackGoal) tick(t *TickLoop, e *Entity) {
 	if target == nil {
 		return
 	}
-	g.resolveBowParams(e) // latch the per-type ctor args (skeleton 1.0/40, illusioner 0.5/20) once
+	g.resolveBowParams(t, e) // latch the per-type ctor args (skeleton 1.0/40, illusioner 0.5/20) once
 
 	targetDistSqr := distanceToSqrPlayer(target, e)
 	// hasLineOfSight: the real per-tick-cached raycast (sensing.go, divergence C-4). seeTime now
@@ -285,7 +285,7 @@ func (t *TickLoop) performRangedAttack(e *Entity, target *tickPlayer, power floa
 	r := mobRandom(e)
 
 	// setBaseDamageFromMob(power): baseDamage = power*2.0 + triangle(difficulty*0.11, 0.57425).
-	diff := float64(serverDifficulty) // NORMAL == 2 (cited stub)
+	diff := float64(t.levelDifficulty) // level.getDifficulty().getId() — the LIVE difficulty read
 	baseDamage := power*2.0 + arrowTriangle(r, diff*0.11, 0.57425)
 
 	// The arrow spawns at the shooter's shoulder-ish height. Vanilla's AbstractArrow ctor places it just

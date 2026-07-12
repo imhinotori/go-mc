@@ -499,7 +499,7 @@ func (t *TickLoop) huskApplyHungerEntity(e *Entity, victim *Entity) {
 	if e.getMainHandItem().Count > 0 {
 		return // getMainHandItem().isEmpty() guard
 	}
-	eff := int(effectiveDifficulty(serverDifficulty, t.gametime, 0, 0.0))
+	eff := int(effectiveDifficulty(t.levelDifficulty, t.gametime, 0, 0.0))
 	dur := huskHungerDurationBase * eff
 	if dur <= 0 {
 		return // (int)effectiveDifficulty == 0 -> a 0-tick HUNGER is a no-op add
@@ -658,7 +658,7 @@ func (t *TickLoop) huskApplyHunger(e *Entity, target *tickPlayer) {
 		return
 	}
 	// (int)getEffectiveDifficulty(): the truncated effective-difficulty scalar (PEACEFUL -> 0 -> no effect).
-	eff := int(effectiveDifficulty(serverDifficulty, t.gametime, 0, 0.0))
+	eff := int(effectiveDifficulty(t.levelDifficulty, t.gametime, 0, 0.0))
 	dur := huskHungerDurationBase * eff
 	if dur <= 0 {
 		return // (int)effectiveDifficulty == 0 (e.g. PEACEFUL or a fresh EASY world) -> a 0-tick HUNGER is a no-op add

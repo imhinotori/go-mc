@@ -38,7 +38,7 @@ const (
 //	 NORMAL -> i=7; HARD -> i=15; if i>0 target.addEffect(new MobEffectInstance(POISON, i*20), this).]
 func (t *TickLoop) caveSpiderApplyPoison(e *Entity, target *tickPlayer) {
 	i := 0
-	switch serverDifficulty {
+	switch t.levelDifficulty {
 	case difficultyNormal:
 		i = caveSpiderPoisonSecondsNormal // NORMAL -> 7
 	case difficultyHard:
@@ -55,7 +55,7 @@ func (t *TickLoop) caveSpiderApplyPoison(e *Entity, target *tickPlayer) {
 // addEntityEffectWithSource. Cite CaveSpider.doHurtTarget (target instanceof LivingEntity).
 func (t *TickLoop) caveSpiderApplyPoisonEntity(e *Entity, victim *Entity) {
 	i := 0
-	switch serverDifficulty {
+	switch t.levelDifficulty {
 	case difficultyNormal:
 		i = caveSpiderPoisonSecondsNormal // NORMAL -> 7
 	case difficultyHard:

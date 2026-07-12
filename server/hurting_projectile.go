@@ -274,7 +274,7 @@ func (t *TickLoop) hurtingOnHitEntity(e *Entity, victim *tickPlayer) {
 		}
 		// wither effect on a LivingEntity victim: NORMAL 20*10 ticks amp1, HARD 20*40 ticks amp1. A player
 		// victim carries player effects (addPlayerEffect); no wither on EASY/PEACEFUL (dur factor 0).
-		if dur := witherSkullEffectTicks(); dur > 0 {
+		if dur := witherSkullEffectTicks(t.levelDifficulty); dur > 0 {
 			t.addPlayerEffect(victim, e.hurtOwnerID, effectWither, dur, 1, 1.0)
 		}
 	case hurtWindCharge:
@@ -317,7 +317,7 @@ func (t *TickLoop) hurtingOnHitEntityMob(e *Entity, victim *Entity) {
 		}
 		// wither effect on the LivingEntity victim: NORMAL 20*10 ticks amp1, HARD 20*40 ticks amp1 (no effect
 		// on EASY/PEACEFUL). Applied via the mob effect path.
-		if dur := witherSkullEffectTicks(); dur > 0 {
+		if dur := witherSkullEffectTicks(t.levelDifficulty); dur > 0 {
 			t.addEntityEffectWithSource(victim, e.hurtOwnerID, effectWither, dur, 1, 1.0)
 		}
 	case hurtWindCharge:
@@ -342,8 +342,9 @@ func hurtingHealMob(e *Entity, amount float32) {
 
 // witherSkullEffectTicks ports WitherSkull.onHitEntity's difficulty-scaled wither duration: NORMAL -> 10,
 // HARD -> 40, else 0 (EASY/PEACEFUL: no effect). The applied duration is 20*factor ticks, amplifier 1.
-func witherSkullEffectTicks() int {
-	switch serverDifficulty {
+// d is the LIVE ServerLevel.getDifficulty() (t.levelDifficulty) read by the caller.
+func witherSkullEffectTicks(d difficulty) int {
+	switch d {
 	case difficultyNormal:
 		return 20 * 10
 	case difficultyHard:

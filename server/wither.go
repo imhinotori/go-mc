@@ -186,7 +186,7 @@ func (t *TickLoop) witherAiStep(e *Entity) {
 			// nextHeadUpdate[si] = tickCount + 10 + random.nextInt(10)  (tickCount == gametime proxy, like the dragon)
 			w.nextHeadUpdate[si] = t.gametime + int64(witherHeadUpdateBase) + int64(mobRandom(e).nextInt(witherHeadUpdateJitter))
 			// NORMAL/HARD only: idleHeadUpdates[si]++ ; if > 15 -> a random scattered dangerous skull volley, reset.
-			if serverDifficulty == difficultyNormal || serverDifficulty == difficultyHard {
+			if t.levelDifficulty == difficultyNormal || t.levelDifficulty == difficultyHard {
 				// aiStep tests `if (idleHeadUpdates[i]++ > 15)` -- a POST-increment: the value COMPARED is
 				// the PRE-increment one (bytecode dup_x2 pushes the old value before storing the +1). Capture
 				// the pre-value, increment unconditionally, then test the PRE-value against 15 (a counter at

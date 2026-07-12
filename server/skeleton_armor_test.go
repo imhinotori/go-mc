@@ -56,7 +56,7 @@ func TestSkeletonArmorRollHARDDifficulty(t *testing.T) {
 	sawArmor := false
 	for seed := uint64(0); seed < seedCount; seed++ {
 		e := NewEntity(1, entity.Skeleton, 0, 0, 0)
-		populateMonsterEquipment(e, newEntityRandom(seed), 0.5)
+		populateMonsterEquipment(e, newEntityRandom(seed), 0.5, difficultyNormal)
 		if armorEquipped(e) {
 			sawArmor = true
 			// All populated slots must share the same tier (vanilla rolls ONE armorType per mob).
@@ -91,7 +91,7 @@ func TestZombieArmorHARDDifficulty(t *testing.T) {
 	sawArmor := false
 	for seed := uint64(0); seed < seedCount; seed++ {
 		e := NewEntity(1, entity.Zombie, 0, 0, 0)
-		populateMonsterEquipment(e, newEntityRandom(seed), 0.5)
+		populateMonsterEquipment(e, newEntityRandom(seed), 0.5, difficultyNormal)
 		if armorEquipped(e) {
 			sawArmor = true
 			tier := int32(-1)
@@ -125,7 +125,7 @@ func TestZombieArmorSaturatedHARD(t *testing.T) {
 	const mult = float32(0.5) // HARD saturated global: (3 - 2) / 2 = 0.5
 	for seed := uint64(0); seed < 256; seed++ {
 		e := NewEntity(1, entity.Zombie, 0, 0, 0)
-		populateMonsterEquipment(e, newEntityRandom(seed), mult)
+		populateMonsterEquipment(e, newEntityRandom(seed), mult, difficultyNormal)
 		// MAINHAND is always either EMPTY or an iron tool — never armor.
 		main := e.getMainHandItem()
 		if main.Count > 0 && isArmorItemID(int32(main.ItemID)) {
@@ -143,7 +143,7 @@ func TestSkeletonArmorAllTiersReachable(t *testing.T) {
 	saw := [5]bool{} // tiers 0..4 (LEATHER through IRON) — covered by the 16K seed window
 	for seed := uint64(0); seed < 16384; seed++ {
 		e := NewEntity(1, entity.Skeleton, 0, 0, 0)
-		populateMonsterEquipment(e, newEntityRandom(seed), 1.0)
+		populateMonsterEquipment(e, newEntityRandom(seed), 1.0, difficultyNormal)
 		head := e.getItemBySlot(eqSlotHead)
 		if head.Count == 0 {
 			continue
@@ -170,7 +170,7 @@ func TestSkeletonArmorDiamondLadder(t *testing.T) {
 	found := false
 	for seed := uint64(0); seed < 200000; seed++ {
 		e := NewEntity(1, entity.Skeleton, 0, 0, 0)
-		populateMonsterEquipment(e, newEntityRandom(seed), 1.0)
+		populateMonsterEquipment(e, newEntityRandom(seed), 1.0, difficultyNormal)
 		head := e.getItemBySlot(eqSlotHead)
 		if head.Count == 0 {
 			continue
@@ -192,7 +192,7 @@ func TestSkeletonArmorDiamondLadder(t *testing.T) {
 func TestZombieArmorOrderMatchesVanilla(t *testing.T) {
 	for seed := uint64(0); seed < 256; seed++ {
 		e := NewEntity(1, entity.Zombie, 0, 0, 0)
-		populateMonsterEquipment(e, newEntityRandom(seed), 1.0)
+		populateMonsterEquipment(e, newEntityRandom(seed), 1.0, difficultyNormal)
 		head := e.getItemBySlot(eqSlotHead).Count > 0
 		chest := e.getItemBySlot(eqSlotChest).Count > 0
 		legs := e.getItemBySlot(eqSlotLegs).Count > 0

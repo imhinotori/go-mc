@@ -6,10 +6,10 @@ package server
 // the child's chance drop by 0.05 (the REINFORCEMENT_CALLER_CHARGE_ID / ZOMBIE_REINFORCEMENT_CALLEE_CHARGE
 // -0.05 addPermanentModifier charges).
 //
-// The HARD-difficulty gate (serverDifficulty is a compile-time NORMAL const, so reinforcements are a dead
-// path in production EXACTLY as vanilla reinforcements are HARD-only) is tested via the extracted core
-// zombieSpawnReinforcement, which runs everything after the target/HARD/chance gates. The gated wrapper
-// zombieHurtReinforcements is exercised for its NORMAL short-circuit (no draw, no spawn) below.
+// The HARD-difficulty gate reads the LIVE ServerLevel.getDifficulty() (t.levelDifficulty); it is tested via
+// the extracted core zombieSpawnReinforcement (runs everything after the target/HARD/chance gates) AND via
+// the gated wrapper zombieHurtReinforcements, exercised BOTH for its NORMAL short-circuit (no draw, no
+// spawn) and — since difficulty is now live — for a /difficulty hard arming the reinforcement (below).
 //
 // The pig oracle (TestPluginPigEqualsGoNativePig) is UNTOUCHED (a zombie is a separate mob; the hook is
 // zombie-family-gated).

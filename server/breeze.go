@@ -183,7 +183,7 @@ func (t *TickLoop) breezeFireWindCharge(e *Entity, target *tickPlayer) {
 	// getMovementToShoot(dx, dy, dz, velocity=0.7f, inaccuracy): normalize + triangle(0, 0.0172275*inacc)
 	// per axis, then scale by velocity. inaccuracy = 5 - difficulty.getId()*4 (NORMAL id 2 -> -3; the
 	// triangle is symmetric so the sign only mirrors the draw). RNG on the Breeze OWN stream.
-	inaccuracy := breezeShootBaseInacc - float64(serverDifficulty)*4.0
+	inaccuracy := breezeShootBaseInacc - float64(t.levelDifficulty)*4.0
 	r := mobRandom(e)
 	vx, vy, vz := normalizeVec3(dx, dy, dz)
 	spread := 0.0172275 * inaccuracy

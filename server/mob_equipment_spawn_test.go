@@ -66,8 +66,8 @@ func TestSpawnEquipDeterministic(t *testing.T) {
 			const mult = float32(1.0)
 			a := NewEntity(1, typ.ent, 0, 0, 0)
 			b := NewEntity(2, typ.ent, 0, 0, 0)
-			populateMonsterEquipment(a, newEntityRandom(seed), mult)
-			populateMonsterEquipment(b, newEntityRandom(seed), mult)
+			populateMonsterEquipment(a, newEntityRandom(seed), mult, difficultyNormal)
+			populateMonsterEquipment(b, newEntityRandom(seed), mult, difficultyNormal)
 			for slot := 0; slot < equipmentSlotCount; slot++ {
 				sa, sb := a.getItemBySlot(slot), b.getItemBySlot(slot)
 				if sa.Count != sb.Count || sa.ItemID != sb.ItemID {
@@ -84,7 +84,7 @@ func TestSkeletonAlwaysHoldsBow(t *testing.T) {
 	for _, mult := range []float32{0.0, 0.5, 1.0} {
 		for seed := uint64(0); seed < 64; seed++ {
 			e := NewEntity(1, entity.Skeleton, 0, 0, 0)
-			populateMonsterEquipment(e, newEntityRandom(seed), mult)
+			populateMonsterEquipment(e, newEntityRandom(seed), mult, difficultyNormal)
 			main := e.getMainHandItem()
 			if main.Count != 1 || int32(main.ItemID) != int32(item.Bow.ID) {
 				t.Fatalf("skeleton MAINHAND not a bow (seed %d, mult %v): %+v", seed, mult, main)
@@ -99,7 +99,7 @@ func TestSkeletonArmorIsValidAndUniform(t *testing.T) {
 	sawArmor := false
 	for seed := uint64(0); seed < 512; seed++ {
 		e := NewEntity(1, entity.Skeleton, 0, 0, 0)
-		populateMonsterEquipment(e, newEntityRandom(seed), 1.0)
+		populateMonsterEquipment(e, newEntityRandom(seed), 1.0, difficultyNormal)
 		if !armorEquipped(e) {
 			continue
 		}
@@ -132,7 +132,7 @@ func TestZombieMainHandIsIronOrEmpty(t *testing.T) {
 	sawTool := false
 	for seed := uint64(0); seed < 4096; seed++ {
 		e := NewEntity(1, entity.Zombie, 0, 0, 0)
-		populateMonsterEquipment(e, newEntityRandom(seed), 1.0)
+		populateMonsterEquipment(e, newEntityRandom(seed), 1.0, difficultyNormal)
 		main := e.getMainHandItem()
 		if main.Count == 0 {
 			continue
@@ -156,7 +156,7 @@ func TestZombieMainHandIsIronOrEmpty(t *testing.T) {
 func TestZeroMultiplierNoArmor(t *testing.T) {
 	for seed := uint64(0); seed < 256; seed++ {
 		sk := NewEntity(1, entity.Skeleton, 0, 0, 0)
-		populateMonsterEquipment(sk, newEntityRandom(seed), 0.0)
+		populateMonsterEquipment(sk, newEntityRandom(seed), 0.0, difficultyNormal)
 		if armorEquipped(sk) {
 			t.Fatalf("seed %d: skeleton wears armor at mult 0.0 (gate should always fail)", seed)
 		}
@@ -165,7 +165,7 @@ func TestZeroMultiplierNoArmor(t *testing.T) {
 			t.Fatalf("seed %d: skeleton lost its bow at mult 0.0", seed)
 		}
 		zm := NewEntity(2, entity.Zombie, 0, 0, 0)
-		populateMonsterEquipment(zm, newEntityRandom(seed), 0.0)
+		populateMonsterEquipment(zm, newEntityRandom(seed), 0.0, difficultyNormal)
 		if armorEquipped(zm) {
 			t.Fatalf("seed %d: zombie wears armor at mult 0.0", seed)
 		}
@@ -187,13 +187,13 @@ func TestSkeletonCanPickUpLootDraw(t *testing.T) {
 	for seed := uint64(0); seed < 256; seed++ {
 		sk := NewEntity(1, entity.Skeleton, 0, 0, 0)
 		got := newEntityRandom(seed)
-		populateMonsterEquipment(sk, got, mult)
+		populateMonsterEquipment(sk, got, mult, difficultyNormal)
 
 		// Reference: replay the SAME calls populateMonsterEquipment makes for a skeleton, then the
 		// one setCanPickUpLoot nextFloat -- on a parallel entity + RNG from the same seed.
 		ref := newEntityRandom(seed)
 		refSk := NewEntity(2, entity.Skeleton, 0, 0, 0)
-		populateDefaultEquipmentSlots(refSk, ref, mult)
+		populateDefaultEquipmentSlots(refSk, ref, mult, difficultyNormal)
 		refSk.setItemSlot(eqSlotMainHand, itemStackOf(item.Bow))
 		populateDefaultEquipmentEnchantments(refSk, ref, mult)
 		refFloat := ref.nextFloat() // the setCanPickUpLoot draw
@@ -221,15 +221,16 @@ func TestZombieNoSkeletonPickupDrawHere(t *testing.T) {
 	for seed := uint64(0); seed < 128; seed++ {
 		zm := NewEntity(1, entity.Zombie, 0, 0, 0)
 		got := newEntityRandom(seed)
-		populateMonsterEquipment(zm, got, mult)
+		populateMonsterEquipment(zm, got, mult, difficultyNormal)
 
 		// Reference: the zombie equipment calls WITHOUT any trailing canPickUpLoot draw.
 		ref := newEntityRandom(seed)
 		refZm := NewEntity(2, entity.Zombie, 0, 0, 0)
-		populateDefaultEquipmentSlots(refZm, ref, mult)
+		populateDefaultEquipmentSlots(refZm, ref, mult, difficultyNormal)
 		// mirror the zombie weapon override exactly (same draw sequence as populateMonsterEquipment)
+		diff := difficultyNormal // the diff passed to populateMonsterEquipment above
 		f2 := float32(0.01)
-		if serverDifficulty == difficultyHard {
+		if diff == difficultyHard {
 			f2 = 0.05
 		}
 		if ref.nextFloat() < f2 {
@@ -260,7 +261,7 @@ func TestSpawnDrawGate(t *testing.T) {
 	const seed = uint64(0x1234)
 	e := NewEntity(1, entity.Zombie, 0, 0, 0)
 	rngA := newEntityRandom(seed)
-	populateDefaultEquipmentSlots(e, rngA, 0.0) // only the gate nextFloat is drawn
+	populateDefaultEquipmentSlots(e, rngA, 0.0, difficultyNormal) // only the gate nextFloat is drawn
 
 	rngB := newEntityRandom(seed)
 	_ = rngB.nextFloat() // one draw = the gate

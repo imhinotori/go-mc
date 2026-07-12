@@ -53,7 +53,7 @@ func TestAddExhaustionCapsAt40(t *testing.T) {
 // subtracts 4.0 and converts to 1.0 saturation loss while saturation > 0, then 1 food loss once
 // saturation is empty (NORMAL difficulty, not PEACEFUL).
 func TestExhaustionDrainsSaturationThenFood(t *testing.T) {
-	loop := &TickLoop{}
+	loop := &TickLoop{levelDifficulty: difficultyNormal} // FoodData.tick reads the LIVE difficulty
 	p := foodPlayer()
 	p.food = maxFood
 	p.saturation = 2.0
@@ -92,7 +92,7 @@ func TestExhaustionDrainsSaturationThenFood(t *testing.T) {
 // TestSaturatedRegenEvery10Ticks asserts the FAST saturated-regen branch: saturation > 0, player
 // hurt, food >= 20 -> heal saturation/6 every 10 ticks (capped at 6), exhaust by the heal amount.
 func TestSaturatedRegenEvery10Ticks(t *testing.T) {
-	loop := &TickLoop{}
+	loop := &TickLoop{levelDifficulty: difficultyNormal} // FoodData.tick reads the LIVE difficulty
 	p := foodPlayer()
 	p.food = maxFood        // 20, satisfies food >= 20
 	p.saturation = 5.0      // > 0
@@ -125,7 +125,7 @@ func TestSaturatedRegenEvery10Ticks(t *testing.T) {
 // starve damage when (NORMAL && health > 1.0). Damage routes through applyDamage (the hurtServer
 // port), so the i-frame window is respected — a fresh player takes the hit.
 func TestStarvationEvery80Ticks(t *testing.T) {
-	loop := &TickLoop{}
+	loop := &TickLoop{levelDifficulty: difficultyNormal} // FoodData.tick reads the LIVE difficulty
 	p := foodPlayer()
 	p.food = 0          // food <= 0 -> starvation branch
 	p.saturation = 0.0  // no regen
@@ -157,7 +157,7 @@ func TestStarvationEvery80Ticks(t *testing.T) {
 // (NOT > 1.0) and food 0, the 80-tick fire does NOT damage (the gate getHealth() > 1.0f && NORMAL is
 // false, and health is not > 10.0, and NORMAL != HARD).
 func TestStarvationStopsAt1HPonNormal(t *testing.T) {
-	loop := &TickLoop{}
+	loop := &TickLoop{levelDifficulty: difficultyNormal} // FoodData.tick reads the LIVE difficulty
 	p := foodPlayer()
 	p.food = 0
 	p.saturation = 0.0

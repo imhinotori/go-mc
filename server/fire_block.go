@@ -28,11 +28,6 @@ func (t *TickLoop) getFireTickDelay(r *region) int {
 	return fireTickDelayBase + int(r.levelRandom.NextIntN(fireTickDelayJitter))
 }
 
-// fireDifficultyID is Difficulty.getId() for the server difficulty (NORMAL == 2). serverDifficulty
-// is the cited NORMAL stub (food.go); NORMAL id is 2 (PEACEFUL=0, EASY=1, NORMAL=2, HARD=3). CITE:
-// FireBlock.tick (getDifficulty().getId()); Difficulty.NORMAL.getId() == 2.
-const fireDifficultyID = int(serverDifficulty)
-
 // fireNeighborOffsets is Direction.values() as (dx,dy,dz): DOWN, UP, NORTH, SOUTH, WEST, EAST — the
 // scan order FireBlock.getIgniteOdds/isValidFireLocation use. CITE: net.minecraft.core.Direction.values().
 var fireNeighborOffsets = []struct{ dx, dy, dz int }{
@@ -182,7 +177,8 @@ func (t *TickLoop) fireTick(r *region, state block.StateID, pos pk.Position) {
 				if igniteOdds <= 0 {
 					continue
 				}
-				chance := (igniteOdds + 40 + fireDifficultyID*7) / (age + 30)
+				// difficulty.getId()*7 reads the LIVE ServerLevel.getDifficulty() (t.levelDifficulty).
+				chance := (igniteOdds + 40 + int(t.levelDifficulty)*7) / (age + 30)
 				if increasedFireBurnout {
 					chance /= 2
 				}

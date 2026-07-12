@@ -105,16 +105,16 @@ const (
 func (t *TickLoop) boltThunderHitConvert(bolt *Entity, m *Entity) bool {
 	switch m.typ {
 	case entity.Pig.ID:
-		// Pig.thunderHit: difficulty != PEACEFUL -> convertTo(ZOMBIFIED_PIGLIN). serverDifficulty is the
-		// cited NORMAL stub (!= PEACEFUL), so the convert always fires. On a successful type-swap the base
-		// fire/damage is skipped (super.thunderHit only on a null convert).
-		if serverDifficulty == difficultyPeaceful {
+		// Pig.thunderHit: difficulty != PEACEFUL -> convertTo(ZOMBIFIED_PIGLIN). The difficulty is the LIVE
+		// ServerLevel.getDifficulty() (t.levelDifficulty), so PEACEFUL now suppresses the convert. On a
+		// successful type-swap the base fire/damage is skipped (super.thunderHit only on a null convert).
+		if t.levelDifficulty == difficultyPeaceful {
 			return false // convert suppressed -> caller applies base Entity.thunderHit
 		}
 		return t.thunderHitConvertPig(m)
 	case entity.Villager.ID:
-		// Villager.thunderHit: difficulty != PEACEFUL -> convertTo(WITCH).
-		if serverDifficulty == difficultyPeaceful {
+		// Villager.thunderHit: difficulty != PEACEFUL -> convertTo(WITCH). LIVE t.levelDifficulty.
+		if t.levelDifficulty == difficultyPeaceful {
 			return false
 		}
 		return t.thunderHitConvertVillager(m)

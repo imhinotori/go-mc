@@ -78,7 +78,7 @@ package server
 //   - gameEvent(LIGHTNING_STRIKE) + the LIGHTNING_STRIKE/CHANNELED_LIGHTNING advancement triggers:
 //     deferred — no GameEvent (sculk) / advancement subsystem. CITE LightningBolt.tick.
 //   - doFireTick gamerule: CITED-CONSTANT true (the same pattern as randomTickSpeed/doWeatherCycle) —
-//     no gamerule store. The difficulty gate (NORMAL/HARD) is REAL (serverDifficulty == NORMAL).
+//     no gamerule store. The difficulty gate (NORMAL/HARD) reads the LIVE t.levelDifficulty.
 //   - Player fire on a bolt hit: v1 players carry no remainingFireTicks field, so thunderHit's fire is
 //     applied to MOBS (which have the field) and DEFERRED for players; the 5.0 damage is REAL for both.
 
@@ -207,7 +207,7 @@ func (t *TickLoop) tickThunderChunk(pos level.ChunkPos) {
 	// nextDouble() already passed (Java && short-circuit), so the draw order is preserved regardless.
 	isTrap := false
 	if t.spawnMobsGameRule() {
-		eff := effectiveDifficulty(serverDifficulty, t.gametime, 0, 0.0)
+		eff := effectiveDifficulty(t.levelDifficulty, t.gametime, 0, 0.0)
 		if r.levelRandom.NextDouble() < float64(eff)*0.01 {
 			// !getBlockState(pos.below()).is(BlockTags.LIGHTNING_RODS): a rod below suppresses the trap.
 			below := t.redstoneBlockAt(pk.Position{X: target.X, Y: target.Y - 1, Z: target.Z})
@@ -383,10 +383,11 @@ func (t *TickLoop) tickBolt(e *Entity) {
 
 	// if (life == 2) { server branch }: the primary strike frame.
 	if e.boltLife == 2 {
-		// Difficulty difficulty = getDifficulty(); if (NORMAL || HARD) spawnFire(4). serverDifficulty is
-		// the cited NORMAL stub, so the gate passes (NORMAL). spawnFire itself gates on !visualOnly +
-		// doFireTick (canSpreadFireAround). CITE LightningBolt.tick life==2 fire branch.
-		if serverDifficulty == difficultyNormal || serverDifficulty == difficultyHard {
+		// Difficulty difficulty = getDifficulty(); if (NORMAL || HARD) spawnFire(4). The difficulty is the
+		// LIVE ServerLevel.getDifficulty() (t.levelDifficulty), so a /difficulty change gates the fire.
+		// spawnFire itself gates on !visualOnly + doFireTick (canSpreadFireAround). CITE LightningBolt.tick
+		// life==2 fire branch.
+		if t.levelDifficulty == difficultyNormal || t.levelDifficulty == difficultyHard {
 			t.boltSpawnFire(e, boltFireSourcesAtStrike)
 		}
 		// powerLightningRod(): if the block at the strike position is a lightning rod, POWER it (setBlock

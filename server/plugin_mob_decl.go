@@ -824,13 +824,14 @@ func (t *TickLoop) spawnDeclaredMob(decl *mobDecl, x, y, z float64) *Entity {
 	// populated slots in a ClientboundSetEquipment. Gated to the MONSTERS that override populate in
 	// scope (Zombie, Skeleton) — Animals (the oracle pig) never reach this, so the pig's mob RNG
 	// stream is BYTE-IDENTICALLY unperturbed (zero new draws). `mult` is difficulty.getSpecialMultiplier()
-	// read ONCE from the tick clock (t.gametime), mirroring finalizeSpawn's single read of the
-	// per-mob DifficultyInstance. Cite Mob / AbstractSkeleton / Zombie.populateDefaultEquipmentSlots +
+	// over the LIVE ServerLevel.getDifficulty() (t.levelDifficulty) + the tick clock (t.gametime), mirroring
+	// finalizeSpawn's single read of the per-mob DifficultyInstance; t.levelDifficulty is also passed for the
+	// populate slots' HARD partial-chance / zombie-weapon gate. Cite Mob / AbstractSkeleton / Zombie.populateDefaultEquipmentSlots +
 	// finalizeSpawn ordering (populate slots -> populate enchantments).
 	if e.typ == entity.Zombie.ID || e.typ == entity.Skeleton.ID ||
 		e.typ == entity.Drowned.ID || e.typ == entity.Stray.ID ||
 		e.typ == entity.Bogged.ID || e.typ == entity.ZombieVillager.ID {
-		populateMonsterEquipment(e, mobRandom(e), specialMultiplierFor(serverDifficulty, t.gametime))
+		populateMonsterEquipment(e, mobRandom(e), specialMultiplierFor(t.levelDifficulty, t.gametime), t.levelDifficulty)
 	}
 	// MOB-PREY (Task #9): Turtle.finalizeSpawn -> setHomePos(this.blockPosition()) — a spawned turtle's
 	// scented home is its spawn column. Set HERE (the spawn path, after the store position is fixed) so the

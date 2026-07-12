@@ -614,7 +614,7 @@ func (t *TickLoop) applyBadOmenTick(p *tickPlayer, amplifier int) bool {
 	if p == nil || p.dead {
 		return true // !isSpectator() analogue (v1 has no spectator toggle) -> proceed only for a live player
 	}
-	if serverDifficulty == difficultyPeaceful {
+	if t.levelDifficulty == difficultyPeaceful {
 		return true
 	}
 	pos := playerBlockPos(p)
