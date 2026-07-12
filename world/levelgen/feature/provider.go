@@ -342,6 +342,91 @@ func (p DualNoiseProvider) GetState(_ levelgen.RandomSource, x, y, z int) block.
 	return getRandomState(window, v)
 }
 
+// ---- NoiseThresholdProvider (noise_threshold_provider) ----
+//
+// NoiseThresholdProvider (extends NoiseBasedStateProvider) is the overworld flower picker
+// (flower_plain / flower_default): it samples the NormalNoise at the SCALED position and, on
+// a threshold split, chooses between a lowStates list (below threshold), a highStates list
+// (above threshold, gated by a highChance float roll), and a defaultState. It is used by the
+// plains/forest simple_block flower features -- so an unported crash here kills terrain
+// decoration outright (the "Loading terrain" panic).
+//
+// getState (javap NoiseThresholdProvider.getState):
+//
+//	d = getNoiseValue(pos, scale)                    // noise.getValue(x*scale, y*scale, z*scale); 0 draws
+//	if d < threshold:  return Util.getRandom(lowStates, rng)   // 1 draw: lowStates[nextInt(size)]
+//	if rng.nextFloat() < highChance:                           // 1 draw
+//	                   return Util.getRandom(highStates, rng)  // + 1 draw: highStates[nextInt(size)]
+//	return defaultState                                        // (only the nextFloat draw consumed)
+//
+// The draw order (noise positional -> optional lowStates pick -> optional nextFloat +
+// highStates pick) is the determinism contract. Util.getRandom(List,rng) =
+// list.get(rng.nextInt(list.size())) (javap net.minecraft.util.Util.getRandom) -- exactly ONE
+// nextInt draw.
+type NoiseThresholdProvider struct {
+	noise        *synth.NormalNoise
+	scale        float64
+	threshold    float32
+	highChance   float32
+	defaultState block.StateID
+	lowStates    []block.StateID
+	highStates   []block.StateID
+}
+
+// GetState ports NoiseThresholdProvider.getState 1:1 (draw order above). float32 is kept for
+// the threshold/highChance compares so the widening matches the jar's f2d / fcmpg exactly.
+func (p NoiseThresholdProvider) GetState(rng levelgen.RandomSource, x, y, z int) block.StateID {
+	d := p.noise.GetValue(float64(x)*p.scale, float64(y)*p.scale, float64(z)*p.scale)
+	if d < float64(p.threshold) { // dcmpg: d < (double)threshold
+		return p.lowStates[int(rng.NextIntN(int32(len(p.lowStates))))]
+	}
+	if rng.NextFloat() < p.highChance { // fcmpg: nextFloat() < highChance
+		return p.highStates[int(rng.NextIntN(int32(len(p.highStates))))]
+	}
+	return p.defaultState
+}
+
+// ---- RotatedBlockProvider (rotated_block_provider) ----
+//
+// RotatedBlockProvider (extends BlockStateProvider) picks a RANDOM pillar axis for a
+// RotatedPillarBlock (hay_block, bone_block, etc.) -- used by block_pile features (pile_hay in
+// villages, pile_snow, etc.). getState (javap RotatedBlockProvider.getState):
+//
+//	axis = Direction.Axis.getRandom(rng)             // VALUES[rng.nextInt(3)] over {X,Y,Z}; 1 draw
+//	return block.defaultBlockState().trySetValue(AXIS, axis)
+//
+// Direction.Axis.getRandom = Util.getRandom(VALUES, rng) = VALUES[rng.nextInt(3)] with VALUES
+// in declaration order {X, Y, Z} (javap Direction$Axis). trySetValue keeps the state unchanged
+// if the block has no AXIS property (a non-pillar block) -- but the data only ever wires this
+// provider to RotatedPillarBlocks. ONE draw.
+type RotatedBlockProvider struct {
+	// blockName is the block id (from the config `state.Name`); GetState re-resolves it with the
+	// rolled axis via resolveBlockState (the shared property-encoding path), so a non-pillar
+	// block (no `axis` prop) degrades to the property-less default exactly like trySetValue.
+	blockName string
+}
+
+// rotatedAxisValues is Direction.Axis.VALUES in declaration order {X, Y, Z} -- the array
+// Util.getRandom indexes. The order IS the determinism contract (nextInt(3) selects by index).
+var rotatedAxisValues = [3]string{"x", "y", "z"}
+
+// GetState ports RotatedBlockProvider.getState: one nextInt(3) selects the pillar axis, then
+// the block's default state is re-resolved with axis=<rolled>.
+func (p RotatedBlockProvider) GetState(rng levelgen.RandomSource, _, _, _ int) block.StateID {
+	axis := rotatedAxisValues[int(rng.NextIntN(3))]
+	sid, err := resolveBlockState(blockStateJSON{Name: p.blockName, Properties: map[string]string{"axis": axis}})
+	if err != nil {
+		// A block with no `axis` property (non-pillar): trySetValue is a no-op in the jar, so
+		// fall back to the property-less default state (never panics mid-decoration).
+		sid, err2 := resolveBlockState(blockStateJSON{Name: p.blockName})
+		if err2 != nil {
+			return 0
+		}
+		return sid
+	}
+	return sid
+}
+
 // ---- JSON parsing ----
 
 // jsonBlockStateRef is the {Name,Properties} leaf shape (alias of the resolver's).
@@ -375,6 +460,12 @@ type jsonProvider struct {
 	SlowNoise *jsonNoise      `json:"slow_noise"` // dual_noise
 	SlowScale float64         `json:"slow_scale"` // dual_noise
 	Variety json.RawMessage `json:"variety"` // dual_noise (optional); InclusiveRange either-codec
+
+	Threshold    float32         `json:"threshold"`     // noise_threshold
+	HighChance   float32         `json:"high_chance"`   // noise_threshold
+	DefaultState json.RawMessage `json:"default_state"` // noise_threshold
+	LowStates    json.RawMessage `json:"low_states"`    // noise_threshold
+	HighStates   json.RawMessage `json:"high_states"`   // noise_threshold
 }
 
 // parseInclusiveRange ports the vanilla InclusiveRange<Integer> codec, which is an
@@ -514,10 +605,69 @@ func ParseProvider(raw json.RawMessage) (BlockStateProvider, error) {
 	case "randomized_int_state_provider":
 		return parseRandomizedIntStateProvider(raw)
 
+	case "noise_threshold_provider":
+		return parseNoiseThresholdProvider(j)
+
+	case "rotated_block_provider":
+		return parseRotatedBlockProvider(j)
+
 	default:
-		return nil, fmt.Errorf("feature: unported block state provider type %q "+
-			"(noise_threshold_provider/rotated_block_provider deferred)", j.Type)
+		return nil, fmt.Errorf("feature: unported block state provider type %q", j.Type)
 	}
+}
+
+// parseNoiseThresholdProvider builds a NoiseThresholdProvider from the envelope: the shared
+// noise core (noise + scale + seed) plus threshold, high_chance, default_state, and the
+// non-empty low_states / high_states lists (ExtraCodecs.nonEmptyList in the jar -> reject
+// empty, else GetState's nextInt(0) would panic).
+func parseNoiseThresholdProvider(j jsonProvider) (BlockStateProvider, error) {
+	if j.Noise == nil {
+		return nil, fmt.Errorf("feature: noise_threshold_provider missing noise params")
+	}
+	def, err := parseProviderState(j.DefaultState)
+	if err != nil {
+		return nil, fmt.Errorf("feature: noise_threshold_provider default_state: %w", err)
+	}
+	low, err := parseProviderStateList(j.LowStates)
+	if err != nil {
+		return nil, fmt.Errorf("feature: noise_threshold_provider low_states: %w", err)
+	}
+	high, err := parseProviderStateList(j.HighStates)
+	if err != nil {
+		return nil, fmt.Errorf("feature: noise_threshold_provider high_states: %w", err)
+	}
+	if len(low) == 0 || len(high) == 0 {
+		return nil, fmt.Errorf("feature: noise_threshold_provider low_states/high_states must be non-empty (jar nonEmptyList)")
+	}
+	rng := levelgen.NewWorldgenRandom(j.Seed)
+	noise := synth.NewNormalNoise(rng, j.Noise.FirstOctave, j.Noise.Amplitudes)
+	return NoiseThresholdProvider{
+		noise:        noise,
+		scale:        j.Scale,
+		threshold:    j.Threshold,
+		highChance:   j.HighChance,
+		defaultState: def,
+		lowStates:    low,
+		highStates:   high,
+	}, nil
+}
+
+// parseRotatedBlockProvider builds a RotatedBlockProvider. The jar codec is BlockState.CODEC
+// xmap'd to Block, so the config carries a `state` {Name,Properties}; we keep only the Name
+// (GetState re-rolls the axis, discarding any serialized axis in the state). An absent Name is
+// build-data corruption.
+func parseRotatedBlockProvider(j jsonProvider) (BlockStateProvider, error) {
+	if len(j.State) == 0 {
+		return nil, fmt.Errorf("feature: rotated_block_provider missing state")
+	}
+	var ref jsonBlockStateRef
+	if err := json.Unmarshal(j.State, &ref); err != nil {
+		return nil, fmt.Errorf("feature: rotated_block_provider state: %w", err)
+	}
+	if ref.Name == "" {
+		return nil, fmt.Errorf("feature: rotated_block_provider state missing Name")
+	}
+	return RotatedBlockProvider{blockName: ref.Name}, nil
 }
 
 // parseRandomizedIntStateProvider decodes a randomized_int_state_provider envelope: the
@@ -816,5 +966,7 @@ var (
 	_ BlockStateProvider = RuleBasedStateProvider{}
 	_ BlockStateProvider = NoiseProvider{}
 	_ BlockStateProvider = DualNoiseProvider{}
+	_ BlockStateProvider = NoiseThresholdProvider{}
+	_ BlockStateProvider = RotatedBlockProvider{}
 	_ BlockStateProvider = identityStateProvider{}
 )
