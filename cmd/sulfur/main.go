@@ -17,6 +17,7 @@
 package main
 
 import (
+	"compress/gzip"
 	"context"
 	"flag"
 	"log"
@@ -220,32 +221,49 @@ func main() {
 		// FEAT-06 visual gate evaluates — NO new wire surface, the v1-sealed chunk format
 		// is unchanged (registering the dungeon body went live with no worker/wire rewire).
 		ng := world.NewNoiseGenerator(*seed, overworldSecs, overworldMinY)
-		// MinecraftServer.setInitialSpawn picks the spawn CHUNK via the climate spawn search
-		// (Climate$Sampler.findSpawnPosition over OverworldBiomeBuilder.spawnTarget), NOT a
-		// hardcoded (0,0). InitialSpawnChunk ports that; SpawnPos then runs getSpawnPosInChunk +
-		// the outward spiral around it. CITE: MinecraftServer.setInitialSpawn.
-		spawnChunk := ng.InitialSpawnChunk()
-		// 17-06 spawn-inside-a-block fix: SpawnPos runs the ported vanilla PlayerSpawnFinder over
-		// the FULLY-DECORATED spawn chunk (features + structures), returning the first STANDABLE
-		// column (the air cell ON a non-fluid floor), which may not be the (8,8) center when a tree
-		// or structure occupies it. We thread the full safe (x,y,z) into the bootstrap so the player
-		// lands ON clear ground instead of embedded in decoration. spawnSurfaceY (the scalar fed to
-		// the tick's SetSpawn for the legacy respawn-Y path) stays the standable floor block world-Y.
-		sp := ng.SpawnPos(spawnChunk)
-		if sp.Found {
-			spawnPoint = server.SpawnPoint{X: sp.X, Y: sp.Y, Z: sp.Z}
-			spawnSurfaceY = int(sp.Y) - 1 // standable floor block (feet-1); SetSpawn/+2 lands feet above it
-		} else {
-			// Void/ocean spawn chunk: fall back to the terrain WorldSurface top at the climate chunk center.
-			spawnSurfaceY = ng.SpawnSurfaceY(spawnChunk)
-			spawnPoint = server.SpawnPoint{
-				X: float64(int(spawnChunk[0])<<4) + 8.5,
-				Y: float64(spawnSurfaceY + 2),
-				Z: float64(int(spawnChunk[1])<<4) + 8.5,
-			}
-		}
 		gen = ng
-		log.Printf("full-parity NoiseGenerator armed (seed=%d): SAFE spawn (%.1f, %.1f, %.1f) found=%v; full feature pipeline live (per-biome trees + ground cover + decoration ores + dungeons)", *seed, spawnPoint.X, spawnPoint.Y, spawnPoint.Z, sp.Found)
+		// setInitialSpawn is a ONE-TIME operation: vanilla MinecraftServer.prepareLevels only runs
+		// the climate spawn search when !levelData.isInitialized(), then marks the world initialized
+		// and persists the spawn to level.dat. On every later boot it uses the stored spawn (a world's
+		// spawn point is fixed for its lifetime, NOT recomputed each launch). Mirror that gate: if a
+		// persisted level.dat exists with initialized=true and a real spawn, reuse it; otherwise run
+		// the fresh climate search (which the level.dat flush below then persists + marks initialized).
+		// CITE: MinecraftServer.setInitialSpawn (iload_2 == ServerLevelData.isInitialized() early-out).
+		if persisted, ok := loadPersistedSpawn(worldDir); ok {
+			spawnPoint = server.SpawnPoint{
+				X: float64(persisted.Pos[0]) + 0.5,
+				Y: float64(persisted.Pos[1]),
+				Z: float64(persisted.Pos[2]) + 0.5,
+			}
+			spawnSurfaceY = int(persisted.Pos[1]) - 1
+			log.Printf("full-parity NoiseGenerator armed (seed=%d): REUSED persisted world spawn (%.1f, %.1f, %.1f) from level.dat (initialized world)", *seed, spawnPoint.X, spawnPoint.Y, spawnPoint.Z)
+		} else {
+			// First boot (uninitialized world): pick the spawn CHUNK via the climate spawn search
+			// (Climate$Sampler.findSpawnPosition over OverworldBiomeBuilder.spawnTarget), NOT a
+			// hardcoded (0,0). InitialSpawnChunk ports that; SpawnPos then runs getSpawnPosInChunk +
+			// the outward spiral around it. CITE: MinecraftServer.setInitialSpawn.
+			spawnChunk := ng.InitialSpawnChunk()
+			// 17-06 spawn-inside-a-block fix: SpawnPos runs the ported vanilla PlayerSpawnFinder over
+			// the FULLY-DECORATED spawn chunk (features + structures), returning the first STANDABLE
+			// column (the air cell ON a non-fluid floor), which may not be the (8,8) center when a tree
+			// or structure occupies it. We thread the full safe (x,y,z) into the bootstrap so the player
+			// lands ON clear ground instead of embedded in decoration. spawnSurfaceY (the scalar fed to
+			// the tick's SetSpawn for the legacy respawn-Y path) stays the standable floor block world-Y.
+			sp := ng.SpawnPos(spawnChunk)
+			if sp.Found {
+				spawnPoint = server.SpawnPoint{X: sp.X, Y: sp.Y, Z: sp.Z}
+				spawnSurfaceY = int(sp.Y) - 1 // standable floor block (feet-1); SetSpawn/+2 lands feet above it
+			} else {
+				// Void/ocean spawn chunk: fall back to the terrain WorldSurface top at the climate chunk center.
+				spawnSurfaceY = ng.SpawnSurfaceY(spawnChunk)
+				spawnPoint = server.SpawnPoint{
+					X: float64(int(spawnChunk[0])<<4) + 8.5,
+					Y: float64(spawnSurfaceY + 2),
+					Z: float64(int(spawnChunk[1])<<4) + 8.5,
+				}
+			}
+			log.Printf("full-parity NoiseGenerator armed (seed=%d): FRESH climate spawn (%.1f, %.1f, %.1f) found=%v; full feature pipeline live (first-boot world init)", *seed, spawnPoint.X, spawnPoint.Y, spawnPoint.Z, sp.Found)
+		}
 	}
 	// SUB-PERSIST: chunk persistence is OPT-IN via SULFUR_PERSIST_CHUNKS=1 so the default run keeps
 	// the v1 always-generate behaviour (regionDir "" => the worker never region-loads, every chunk
@@ -542,4 +560,31 @@ func main() {
 	if serveErr != nil {
 		log.Printf("server listener stopped: %v", serveErr)
 	}
+}
+
+// loadPersistedSpawn reads worldDir/level.dat and returns its stored world spawn iff the world was
+// already initialized (initialized=true) with a real spawn position. This is the boot-time gate that
+// mirrors vanilla MinecraftServer.setInitialSpawn's isInitialized() early-out: a world's spawn point
+// is computed ONCE at first-boot and fixed for the world's lifetime, never recomputed on later launches.
+// Returns ok=false for a fresh/uninitialized/missing world so the caller runs the one-time climate search.
+func loadPersistedSpawn(worldDir string) (save.RespawnData262, bool) {
+	f, err := os.Open(filepath.Join(worldDir, "level.dat"))
+	if err != nil {
+		return save.RespawnData262{}, false
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return save.RespawnData262{}, false
+	}
+	defer gz.Close()
+	lvl, err := save.ReadLevel262(gz)
+	if err != nil || !lvl.Data.Initialized {
+		return save.RespawnData262{}, false
+	}
+	// A zero Pos on an initialized world is not a real spawn (guard against a truncated/empty record).
+	if lvl.Data.Spawn.Pos == [3]int32{} {
+		return save.RespawnData262{}, false
+	}
+	return lvl.Data.Spawn, true
 }
