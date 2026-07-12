@@ -1,0 +1,23 @@
+{
+  "wave": "03-minimax-fixes",
+  "base_ref": "HEAD",
+  "model": "minimax/MiniMax-M3",
+  "max_parallel": 3,
+  "tasks": [
+    {
+      "id": "fix-worker-neighbor-backpressure",
+      "prompt": ".planning/parity-workflow/tasks/fix-worker-neighbor-backpressure.md",
+      "expected_output": "world/worker.go"
+    },
+    {
+      "id": "fix-vibration-selector-timing",
+      "prompt": ".planning/parity-workflow/tasks/fix-vibration-selector-timing.md",
+      "expected_output": "server/vibration_block.go"
+    },
+    {
+      "id": "fix-spawn-negative-persistence",
+      "prompt": ".planning/parity-workflow/tasks/fix-spawn-negative-persistence.md",
+      "expected_output": "server/saveddata.go"
+    }
+  ]
+}
