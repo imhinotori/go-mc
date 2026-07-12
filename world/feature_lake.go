@@ -155,9 +155,11 @@ func parseLakePredicate(raw json.RawMessage) (lakePredicate, error) {
 		return nil, fmt.Errorf("missing predicate")
 	}
 	var j struct {
-		Type      string          `json:"type"`
-		Tag       string          `json:"tag"`
-		Predicate json.RawMessage `json:"predicate"`
+		Type       string            `json:"type"`
+		Tag        string            `json:"tag"`
+		Predicate  json.RawMessage   `json:"predicate"`
+		Blocks     json.RawMessage   `json:"blocks"`     // matching_blocks (single id or array)
+		Predicates []json.RawMessage `json:"predicates"` // all_of / any_of
 	}
 	if err := json.Unmarshal(raw, &j); err != nil {
 		return nil, fmt.Errorf("decoding predicate: %w", err)
@@ -179,9 +181,88 @@ func parseLakePredicate(raw json.RawMessage) (lakePredicate, error) {
 		return func(bctx *bodyContext, x, y, z int) bool {
 			return member(bctx.getState(placement.BlockPos{X: x, Y: y, Z: z}))
 		}, nil
+	case "matching_blocks":
+		// MatchingBlocksPredicate.test = state.is(blocks) (javap): membership over the block
+		// set. `blocks` is RegistryCodecs.homogeneousList -> a single id or an array of ids.
+		// Evaluated at (x,y,z) with no offset (the lake configs never set one).
+		set, err := lakeBlocksMembership(j.Blocks)
+		if err != nil {
+			return nil, err
+		}
+		return func(bctx *bodyContext, x, y, z int) bool {
+			return set[bctx.getState(placement.BlockPos{X: x, Y: y, Z: z})]
+		}, nil
+	case "all_of":
+		subs, err := parseLakePredicateList(j.Predicates)
+		if err != nil {
+			return nil, fmt.Errorf("all_of: %w", err)
+		}
+		return func(bctx *bodyContext, x, y, z int) bool {
+			for _, p := range subs {
+				if !p(bctx, x, y, z) {
+					return false
+				}
+			}
+			return true
+		}, nil
+	case "any_of":
+		subs, err := parseLakePredicateList(j.Predicates)
+		if err != nil {
+			return nil, fmt.Errorf("any_of: %w", err)
+		}
+		return func(bctx *bodyContext, x, y, z int) bool {
+			for _, p := range subs {
+				if p(bctx, x, y, z) {
+					return true
+				}
+			}
+			return false
+		}, nil
 	default:
 		return nil, fmt.Errorf("world: unported lake predicate type %q", j.Type)
 	}
+}
+
+// parseLakePredicateList parses a JSON array of lake predicates (all_of/any_of members).
+func parseLakePredicateList(raws []json.RawMessage) ([]lakePredicate, error) {
+	out := make([]lakePredicate, 0, len(raws))
+	for i, r := range raws {
+		p, err := parseLakePredicate(r)
+		if err != nil {
+			return nil, fmt.Errorf("predicate %d: %w", i, err)
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// lakeBlocksMembership resolves a matching_blocks `blocks` field (single id or array) to the
+// set of ALL member state ids, matching BlockState.is(HolderSet) which is true for any state
+// of a listed block.
+func lakeBlocksMembership(raw json.RawMessage) (map[block.StateID]bool, error) {
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("matching_blocks missing blocks")
+	}
+	ids := map[string]bool{}
+	var one string
+	if err := json.Unmarshal(raw, &one); err == nil {
+		ids[one] = true
+	} else {
+		var many []string
+		if err := json.Unmarshal(raw, &many); err != nil {
+			return nil, fmt.Errorf("matching_blocks decoding blocks: %w", err)
+		}
+		for _, m := range many {
+			ids[m] = true
+		}
+	}
+	set := map[block.StateID]bool{}
+	for sid, b := range block.StateList {
+		if ids[b.ID()] {
+			set[block.StateID(sid)] = true
+		}
+	}
+	return set, nil
 }
 
 // lakeTagMembership returns a state-membership func for the two lake #block tags, resolved
