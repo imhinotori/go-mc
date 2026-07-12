@@ -139,8 +139,17 @@ func (t *TickLoop) tickOnce() {
 	// unperturbed. CITE: net.minecraft.server.level.ServerLevel.tick (sleep block).
 	t.tickSleep()
 
-	t.tickWorld()  // scheduled blocks/fluids + chunk-save over the shared world
-	t.tickChunks() // per-player ring → world requests
+	t.tickWorld()  // scheduled blocks/fluids + raid + random/thunder over the shared world
+	t.tickChunks() // per-player ring → world requests (≈ ServerChunkCache.tick / chunkSource)
+
+	// RUN BLOCK EVENTS (ServerLevel.runBlockEvents): vanilla drains the block-event queue AFTER
+	// getChunkSource().tick() and BEFORE the entity pass (bytecode: "chunkSource" getChunkSource().tick
+	// at pc 337, then "blockEvents" runBlockEvents() at pc 360, then "entities" at pc 418). The piston
+	// block-event drain (triggerEvent → PistonBaseBlock.triggerEvent starts a moving-piston BE) is our
+	// runBlockEvents; it must sit HERE, after chunkSource (tickChunks) and before tickEntities — NOT
+	// inside tickWorld where it ran before #42 (which put it before chunkSource, wrong). Per-region
+	// queue, wrapped so cur() resolves the owning region's piston event queue. Cheap no-op when empty.
+	t.forEachRegion(func(r *region) { t.drainPistonBlockEvents() })
 
 	// tickEntities (the player/item seams) runs on the COORDINATOR too: it iterates the GLOBAL player
 	// list + the per-region entity stores (syncPlayerEntities moves each player within its OWNING
@@ -206,11 +215,15 @@ func (t *TickLoop) tickOnce() {
 	// owner re-resolve, so a victim that just transferred is hit in its NEW region).
 	t.applyCrossRegionDamage()
 
-	// RAID tick (raid.go/raids.go): every region's Raids manager ticks its active raids ONCE here, at the
-	// quiescent post-fan-out barrier (all regions joined -> the raid wave-spawn's cross-region entity
-	// spawns + membership reads are legal, exactly like the damage/transfer drains above). A region with
-	// no raidsManager is a no-op. This is the ServerLevel.getRaids().tick(level) call site.
-	t.raidsTickAllRegions()
+	// BLOCK ENTITIES (ServerLevel.tickBlockEntities): vanilla ticks block entities AFTER the entity
+	// pass (bytecode: "entities" at pc 418, then "blockEntities" tickBlockEntities() at pc 484). The
+	// whole global BE cluster (furnace/crafter/hopper/beacon/spawner/piston/... — see tickBlockEntities)
+	// belongs at this post-fan-out quiescent slot (all regions joined → the BE world mutations are
+	// race-clean, same window as the transfer/damage drains). Before #42 the cluster ran inside tickWorld
+	// BEFORE entities (wrong order — a hopper/spawner/piston saw last tick's entity positions, and a
+	// piston BE advanced a tick early relative to the entities riding it). CITE: ServerLevel.tick
+	// blockEntities section.
+	t.tickBlockEntities()
 
 	// The async rejoin runs on the coordinator now (quiescent): the chunkReady drain (world mutation,
 	// globalRegion's asyncIn) + the asyncIn2 entity results (pathReady/spawnCandidatesReady), which

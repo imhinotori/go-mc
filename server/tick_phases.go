@@ -107,14 +107,16 @@ func (t *TickLoop) tickWorld() {
 		// the same game-time. A nil manager (no chunk container ever registered) is a cheap no-op.
 		t.tickScheduledBlocks()
 		t.tickFluids()
-		// REDSTONE TIER-3 (PISTON): tick THIS region's live moving_piston block-entities
-		// (PistonMovingBlockEntity.tick — progress 0->1 over 2 ticks, then finalTick completes the move),
-		// then drain the piston block-event queue (ServerLevel.runBlockEvents -> triggerEvent). The BE
-		// tick runs first (a BE created LAST tick advances before this tick's fresh events fire, matching
-		// vanilla's tickBlockEntities-then-runBlockEvents ordering). Both are cheap no-ops when empty.
-		t.tickMovingPistons()
-		t.drainPistonBlockEvents()
 	})
+	// RAID (Raids.tick): vanilla ServerLevel.tick runs the raid pass IMMEDIATELY after the
+	// blockTicks/fluidTicks drains and BEFORE getChunkSource().tick() (bytecode: raids field #271
+	// .tick at pc 324, then "chunkSource" section + getChunkSource().tick at pc 337). It ran on the
+	// COORDINATOR pre-fan-out here, where every region is quiescent (the fan-out has not started, same
+	// window tickEntities/tickWeather use), so the raid wave-spawn's cross-region entity adds + POI
+	// reads are legal without a barrier. A region with no raidsManager is a no-op. This was previously
+	// (incorrectly) run at the post-barrier slot AFTER entities; #42 moves it to the vanilla slot
+	// (before chunkSource / tickChunks). CITE: ServerLevel.tick raid section.
+	t.raidsTickAllRegions()
 	// SUB-RANDOMTICK: the UNSCHEDULED random-tick driver (ServerLevel.tickChunk block-sampling pass —
 	// sugar-cane growth + future crops/saplings/grass/leaves). It is a WORLD-GLOBAL pass over the
 	// SHARED ChunkManager (the world is not yet per-region-sharded), so it runs ONCE here on the
@@ -135,90 +137,13 @@ func (t *TickLoop) tickWorld() {
 	// runs this) is unperturbed. A clear/non-thundering world is a cheap early-out (no per-column draw). Its
 	// body lives in lightning.go. CITE: ServerChunkCache.tickSpawningChunk -> ServerLevel.tickThunder.
 	t.tickThunder()
-	// SUB-BLOCKENTITY: tick every furnace/blast_furnace/smoker block-entity (GAMEPLAY-05
-	// AbstractFurnaceBlockEntity.serverTick). Furnaces are keyed by world position (t.furnaces, global —
-	// not per-region), so they tick ONCE globally here (the tickChunkSave twin), after the per-region
-	// block/fluid drains. A furnace with no items ticks to a cheap no-op. Nil map = no-op (no furnace open).
-	t.tickFurnaces()
-	// SUB-BLOCKENTITY: tick every CRAFTER block-entity (CrafterBlockEntity.serverTick -- the 6-tick
-	// CRAFTING-animation countdown that clears the CRAFTING block-state when it ends). Keyed by world
-	// position (t.crafters, the tickFurnaces twin). A crafter not mid-craft ticks to a cheap early-out.
-	// CITE: CrafterBlock.getTicker -> CrafterBlockEntity.serverTick.
-	t.tickCrafters()
-	// SUB-BLOCKENTITY: tick every brewing-stand block-entity (BrewingStandBlockEntity.serverTick). Keyed by
-	// world position (t.brewingStands, global — not per-region), so they tick ONCE globally here (the
-	// tickFurnaces twin). A brewing stand with no items/fuel ticks to a cheap no-op. Nil map = no-op.
-	t.tickBrewingStands()
-	// SUB-BLOCKENTITY: tick every HOPPER block-entity (HopperBlockEntity.pushItemsTick — the 8-tick
-	// single-item transfer drive: pull from the container/loose-item above, push into the container in
-	// FACING, gated by the redstone ENABLED property). Keyed by world position (t.hoppers, global — not
-	// per-region), so they tick ONCE globally here (the tickFurnaces twin). A hopper with no items + no
-	// source above ticks to a cheap no-op. Nil map = no-op (no hopper placed). Runs AFTER the item pass so
-	// a hopper sucks an item that already settled this tick. CITE: HopperBlock.getTicker -> pushItemsTick.
-	t.tickHoppers()
-	// SUB-BLOCKENTITY: tick every BEACON block-entity (BeaconBlockEntity.tick — the incremental beam-column
-	// scan + the every-80-tick pyramid-level recompute + the in-range player effect application). Keyed by
-	// world position (t.beacons, global — not per-region), so they tick ONCE globally here (the tickFurnaces
-	// twin). A beacon with no primary effect / obstructed beam ticks to a cheap no-op (no effect applied). Nil
-	// map = no-op (no beacon placed). CITE: BeaconBlock.getTicker -> BeaconBlockEntity.tick.
-	t.tickBeacons()
-	// END GATEWAY (Task): tick every live END_GATEWAY block-entity (age + cooldown + teleport-in-gateway
-	// -> exit). The tickBeacons twin. Cheap no-op when no gateway exists. Cite TheEndGatewayBlockEntity.portalTick.
-	t.tickGateways()
-	// SUB-BLOCKENTITY: tick every CONDUIT block-entity (ConduitBlockEntity.serverTick — the every-40-tick
-	// activation-frame re-scan + the in-range player CONDUIT_POWER application + the full-frame hostile
-	// attack). Keyed by world position (t.conduits, global — not per-region), so they tick ONCE globally here
-	// (the tickBeacons twin). A conduit whose frame is broken / not submerged ticks to a cheap no-op (no
-	// effect applied). Nil map = no-op (no conduit placed). CITE: ConduitBlock.getTicker ->
-	// ConduitBlockEntity.serverTick.
-	t.tickConduits()
-	// SUB-BLOCKENTITY: tick every CAMPFIRE block-entity (CampfireBlockEntity.cookTick -- advance each
-	// occupied cooking slot and drop the CampfireCookingRecipe result when it finishes). Keyed by world
-	// position (t.campfires, global), so they tick ONCE globally here (the tickConduits twin). Only a LIT
-	// campfire cooks; an empty/unlit campfire ticks to a cheap no-op. Nil map = no-op. CITE
-	// CampfireBlock.getTicker -> CampfireBlockEntity.cookTick.
-	t.tickCampfires()
-	// SUB-BLOCKENTITY: tick every BELL block-entity (BellBlockEntity.serverTick -- the shaking/ticks
-	// countdown + the resonate machine after a ring). Keyed by world position (t.bells, global), so they
-	// tick ONCE globally here (the tickCampfires twin). An idle bell ticks to a cheap no-op. Nil map =
-	// no-op. CITE BellBlock.getTicker -> BellBlockEntity.serverTick.
-	t.tickBells()
-	// SUB-BLOCKENTITY: tick every BEEHIVE/BEE_NEST block-entity (BeehiveBlockEntity.serverTick -- age each
-	// stored bee and release it once its minTicksInHive passes; a released nectar bee bumps HONEY_LEVEL).
-	// Keyed by world position (t.beehives, global), so they tick ONCE globally here (the tickBells twin). An
-	// empty hive ticks to a cheap no-op (no work + no RNG draw). Nil map = no-op. CITE BeehiveBlock.getTicker
-	// -> BeehiveBlockEntity.serverTick.
-	t.tickBeehives()
-	// SUB-BLOCKENTITY: tick every SHULKER BOX block-entity (ShulkerBoxBlockEntity.tick -> updateAnimation:
-	// step the lid 0.1/tick along CLOSED/OPENING/OPENED/CLOSING + shove collided entities out while opening).
-	// Keyed by world position (t.shulkers, global), so they tick ONCE globally here (the tickBells twin). A
-	// CLOSED unopened box ticks to a cheap no-op. Nil map = no-op. CITE ShulkerBoxBlock.getTicker.
-	t.tickShulkers()
-	// SUB-BLOCKENTITY: tick every ENDER CHEST block-entity (EnderChestBlockEntity.lidAnimateTick ->
-	// ChestLidController.tickLid: step the lid openness 0.1/tick toward shouldBeOpen). Keyed by world
-	// position (t.enderChests, global), so they tick ONCE globally here. A closed idle chest ticks to a
-	// cheap no-op. Nil map = no-op. CITE EnderChestBlock.getTicker -> EnderChestBlockEntity.lidAnimateTick.
-	t.tickEnderChests()
-	// SUB-BLOCKENTITY: tick every MOB-SPAWNER block-entity (SpawnerBlockEntity.serverTick ->
-	// BaseSpawner.serverTick - the isNearPlayer gate, the spawnDelay countdown, and the spawnCount burst
-	// under the maxNearbyEntities cap). Keyed by world position (t.spawners, global - not per-region), so
-	// they tick ONCE globally here (the tickConduits twin). A spawner with no nearby player / at cap ticks
-	// to a cheap no-op. Nil map = no-op (no spawner placed). CITE SpawnerBlock.getTicker ->
-	// SpawnerBlockEntity.serverTick.
-	t.tickSpawners()
-	// SUB-BLOCKENTITY: tick every SCULK CATALYST block-entity (SculkCatalystBlockEntity.serverTick --
-	// run its SculkSpreader charge cursors once). Keyed by world position (t.sculkCatalysts), so they
-	// tick ONCE globally here (the tickSpawners twin). A catalyst with no charge ticks to a cheap no-op.
-	// Nil map = no-op. CITE SculkCatalystBlock.getTicker -> SculkCatalystBlockEntity.serverTick.
-	t.tickSculkCatalysts()
-	// SUB-BLOCKENTITY: the SCULK SENSOR STEP-vibration scan (SculkSensorBlock.stepOn): a mob/player
-	// standing on an INACTIVE sensor activates it (phase machine + redstone output). Global per-tick scan
-	// (the pressure-plate twin). Nil sensor map = a cheap early-out. CITE SculkSensorBlock.stepOn.
-	t.tickSculkSensors()
-	// SUB-BLOCKENTITY: the SCULK SHRIEKER STEP scan + the per-player warden-tracker cooldown decay: a
-	// player standing on a shrieker runs tryShriek (the 0..4 warning-level machine). Nil shrieker map = a
-	// cheap early-out. CITE SculkShriekerBlock.stepOn + WardenSpawnTracker.tick.
-	t.tickSculkShriekers()
+	// BLOCK ENTITIES: the global block-entity tick cluster (furnace/crafter/hopper/beacon/spawner/...)
+	// used to run HERE, inside tickWorld, BEFORE the entity pass. Vanilla ServerLevel.tick runs
+	// tickBlockEntities AFTER entities (bytecode: "entities" pc 418, "blockEntities" tickBlockEntities()
+	// pc 484). #42 moved the whole cluster to tickBlockEntities() (called at the post-fan-out barrier in
+	// region_coordinator, after tickEntities/AI/physics) so a hopper/spawner/furnace sees this tick's
+	// settled entity+item positions, exactly like vanilla. Only the persist passes (chunk-save/saveddata/
+	// autosave) remain below — they are NOT block entities and legitimately run late+global.
 	// SUB-PERSIST: the periodic chunk-save pass (every chunkSaveIntervalTicks) stays GLOBAL — it
 	// serializes the SHARED world's dirty chunks once, not per region. It lives INSIDE this existing
 	// phase so no new phase is added to the fixed tick order (TestTickPhaseOrder stays green). A
@@ -233,6 +158,58 @@ func (t *TickLoop) tickWorld() {
 	// so a crash loses at most one autosave interval instead of the whole session. Cheap no-op when no
 	// save sink is wired. See saveddata.go / MinecraftServer.autoSave.
 	t.tickPlayerAutosave()
+}
+
+// tickBlockEntities is the vanilla ServerLevel.tickBlockEntities pass: the global block-entity
+// tick cluster. #42 moved it OUT of tickWorld (where it ran before entities) to the post-fan-out
+// barrier slot AFTER tickEntities/AI/physics (region_coordinator), matching vanilla's order
+// (bytecode: entities pc 418 then tickBlockEntities pc 484). Every ticker here keys block entities
+// by world position (global maps, not per-region), so it runs ONCE on the coordinator at the
+// quiescent barrier -- a hopper/furnace/spawner now sees this tick's settled entity+item positions.
+// The moving-piston BE (tickMovingPistons) is part of this pass; the piston BLOCK-EVENT drain
+// (runBlockEvents) is separate and runs earlier, after chunkSource/before entities.
+func (t *TickLoop) tickBlockEntities() {
+	// PISTON progress BE (PistonMovingBlockEntity.tick). Per-region queue; wrapped so cur() resolves
+	// the owning region. Runs first in the BE pass so a piston created by this tick's earlier
+	// runBlockEvents drain advances/finalizes here, mirroring vanilla's BE tick.
+	t.forEachRegion(func(r *region) { t.tickMovingPistons() })
+	// SUB-BLOCKENTITY: tick every furnace/blast_furnace/smoker block-entity (GAMEPLAY-05
+	// AbstractFurnaceBlockEntity.serverTick). Keyed by world position (t.furnaces, global). A furnace
+	// with no items ticks to a cheap no-op. Nil map = no-op (no furnace open).
+	t.tickFurnaces()
+	// SUB-BLOCKENTITY: CRAFTER (CrafterBlockEntity.serverTick -- the 6-tick CRAFTING-animation countdown).
+	t.tickCrafters()
+	// SUB-BLOCKENTITY: brewing-stand (BrewingStandBlockEntity.serverTick).
+	t.tickBrewingStands()
+	// SUB-BLOCKENTITY: HOPPER (HopperBlockEntity.pushItemsTick -- the 8-tick single-item transfer drive).
+	// Now runs AFTER the entity+item pass (vanilla order), so a hopper sucks an item that already
+	// settled this tick -- the ordering the old in-tickWorld comment CLAIMED but did not actually get.
+	t.tickHoppers()
+	// SUB-BLOCKENTITY: BEACON (BeaconBlockEntity.tick).
+	t.tickBeacons()
+	// SUB-BLOCKENTITY: END GATEWAY (TheEndGatewayBlockEntity.portalTick).
+	t.tickGateways()
+	// SUB-BLOCKENTITY: CONDUIT (ConduitBlockEntity.serverTick).
+	t.tickConduits()
+	// SUB-BLOCKENTITY: CAMPFIRE (CampfireBlockEntity.cookTick).
+	t.tickCampfires()
+	// SUB-BLOCKENTITY: BELL (BellBlockEntity.serverTick).
+	t.tickBells()
+	// SUB-BLOCKENTITY: BEEHIVE/BEE_NEST (BeehiveBlockEntity.serverTick).
+	t.tickBeehives()
+	// SUB-BLOCKENTITY: SHULKER BOX (ShulkerBoxBlockEntity.tick -> updateAnimation).
+	t.tickShulkers()
+	// SUB-BLOCKENTITY: ENDER CHEST (EnderChestBlockEntity.lidAnimateTick).
+	t.tickEnderChests()
+	// SUB-BLOCKENTITY: MOB-SPAWNER (SpawnerBlockEntity.serverTick -> BaseSpawner.serverTick). Now after
+	// the entity pass, so its isNearPlayer gate + maxNearbyEntities cap read this tick's settled entities.
+	t.tickSpawners()
+	// SUB-BLOCKENTITY: SCULK CATALYST (SculkCatalystBlockEntity.serverTick).
+	t.tickSculkCatalysts()
+	// SUB-BLOCKENTITY: SCULK SENSOR step-vibration scan (SculkSensorBlock.stepOn).
+	t.tickSculkSensors()
+	// SUB-BLOCKENTITY: SCULK SHRIEKER step scan + warden-tracker cooldown (SculkShriekerBlock.stepOn).
+	t.tickSculkShriekers()
 }
 
 // tickChunks issues the per-player chunk requests for this tick (WORLD-05). For each
