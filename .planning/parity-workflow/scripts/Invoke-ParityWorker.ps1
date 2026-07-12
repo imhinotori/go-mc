@@ -196,7 +196,12 @@ if ($Mode -in @('Run', 'All')) {
         throw "OpenCode produced an empty required artifact: $expectedOutputInWorktree"
     }
     $expectedGitPath = ($ExpectedOutput -replace '\', '/')
-    $unexpected = @(& git -C $worktree status --porcelain --untracked-files=all | Where-Object {
+    $statusLines = @(& git -C $worktree status --porcelain --untracked-files=all)
+    $changedPaths = @($statusLines | ForEach-Object { $_.Substring(3).Trim('"') -replace '\', '/' })
+    if ($expectedGitPath -notin $changedPaths) {
+        throw "OpenCode returned success without modifying ExpectedOutput: $ExpectedOutput"
+    }
+    $unexpected = @($statusLines | Where-Object {
         $changedPath = $_.Substring(3).Trim('"') -replace '\', '/'
         $changedPath -ne $expectedGitPath
     })
