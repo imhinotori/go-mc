@@ -194,8 +194,37 @@ func parseCondition(rc rawCondition) (LootCondition, error) {
 			return nil, fmt.Errorf("table_bonus: empty chances list")
 		}
 		return &tableBonusCondition{enchantment: tb.Enchantment, values: tb.Chances}, nil
+	case "block_state_property":
+		// LootItemBlockStatePropertyCondition.test: BLOCK_STATE == null -> false; else
+		// state.is(block) && (properties.isEmpty() || StatePropertiesPredicate.matches(state)). The
+		// harvest tables use the exact-value form ({"age":"3"}), which StatePropertiesPredicate
+		// compares against the state's serialized property string. Parse the block id + the exact
+		// property map here; the Test reads ctx.BlockID / ctx.BlockProperties (the BLOCK_STATE param).
+		// javap LootItemBlockStatePropertyCondition.test + StatePropertiesPredicate.matches.
+		var bsp struct {
+			Block      string                     `json:"block"`
+			Properties map[string]json.RawMessage `json:"properties"`
+		}
+		full, _ := json.Marshal(rc)
+		if err := json.Unmarshal(full, &bsp); err != nil {
+			return nil, fmt.Errorf("block_state_property: %w", err)
+		}
+		if bsp.Block == "" {
+			return nil, fmt.Errorf("block_state_property: missing block")
+		}
+		// StatePropertiesPredicate only supports the EXACT string-value form in the harvest tables
+		// (min/max range matchers are unused there); decode each requested property as a bare string.
+		props := make(map[string]string, len(bsp.Properties))
+		for k, raw := range bsp.Properties {
+			var v string
+			if err := json.Unmarshal(raw, &v); err != nil {
+				return nil, fmt.Errorf("block_state_property %q: only exact string values ported: %w", k, err)
+			}
+			props[k] = v
+		}
+		return &blockStatePropertyCondition{block: bsp.Block, properties: props}, nil
 	default:
-		return nil, fmt.Errorf("loot condition %q not ported (location_check/match_tool/survives_explosion/any_of/all_of/killed_by_player/entity_properties/inverted/damage_source_properties/table_bonus in scope)", typeStr)
+		return nil, fmt.Errorf("loot condition %q not ported (location_check/match_tool/survives_explosion/any_of/all_of/killed_by_player/entity_properties/inverted/damage_source_properties/table_bonus/block_state_property in scope)", typeStr)
 	}
 }
 
@@ -204,6 +233,39 @@ func parseCondition(rc rawCondition) (LootCondition, error) {
 type invertedCondition struct{ term LootCondition }
 
 func (c *invertedCondition) Test(ctx *LootContext) bool { return !c.term.Test(ctx) }
+
+// blockStatePropertyCondition is the port of net.minecraft.world.level.storage.loot.predicates
+// .LootItemBlockStatePropertyCondition: test = BLOCK_STATE != null && state.is(block) &&
+// (properties empty || StatePropertiesPredicate.matches(state)). Used by the block-interact harvest
+// tables (sweet_berry_bush pool-1 {age:"3"}). The BLOCK_STATE param is ctx.BlockID (the clicked
+// block's resource id, state.is(block) -> equality) + ctx.BlockProperties (the state's serialized
+// property map, StatePropertiesPredicate.matches -> every requested property must string-equal).
+// A context with no BLOCK_STATE (empty BlockID) yields false, mirroring the getOptionalParameter
+// null branch. Draws no RNG. Source: javap LootItemBlockStatePropertyCondition.test.
+type blockStatePropertyCondition struct {
+	block      string
+	properties map[string]string
+}
+
+func (c *blockStatePropertyCondition) Test(ctx *LootContext) bool {
+	// getOptionalParameter(BLOCK_STATE) == null -> false (no clicked block threaded in).
+	if ctx.BlockID == "" {
+		return false
+	}
+	// BlockState.is(block): the state's block matches the condition's block holder.
+	if ctx.BlockID != c.block {
+		return false
+	}
+	// StatePropertiesPredicate.matches: every requested property must equal the state's value
+	// (an absent property fails the match, exactly as the predicate's getValue lookup would).
+	for name, want := range c.properties {
+		got, ok := ctx.BlockProperties[name]
+		if !ok || got != want {
+			return false
+		}
+	}
+	return true
+}
 
 // damageSourceKind is which death-source fact a damage_source_properties condition asserts. The only
 // entity-table use (slime) is source_entity==frog, which v1 never satisfies -> damageSourceUnknown.

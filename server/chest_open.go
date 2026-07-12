@@ -375,11 +375,15 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 	// consume the interaction so no block is placed. CITE ShulkerBoxBlock / EnderChestBlock.useWithoutItem.
 	isShulker := block.IsShulkerBox(state)
 	isEnderChest := block.IsEnderChest(state)
+	// A sweet berry bush right-click HARVESTS the berries (SweetBerryBushBlock.useWithoutItem): at
+	// AGE 2/3 it drops the harvest loot, resets AGE to 1, and consumes the interaction; at AGE 0/1 it
+	// PASSes (returns false) so placement continues. CITE SweetBerryBushBlock.useWithoutItem.
+	isSweetBerry := block.IsSweetBerryBush(state)
 	if !isChest && !isCraft && !isCut && !isBed && !isFurnace && !isBrew && !isLever && !isButton &&
 		!isRepeater && !isComparator && !isDispenser && !isHopper && !isBeacon && !isAnvil && !isEnchant &&
 		!isGrindstone && !isSmithing && !isLoom && !isDoorFamily && !isSign &&
 		!isCampfire && !isBell && !isLectern && !isJukebox && !isBookshelf && !isComposter &&
-		!isShulker && !isEnderChest {
+		!isShulker && !isEnderChest && !isSweetBerry {
 		return false // not an interactive block: PASS → placement runs
 	}
 	// Reach-gate the interaction (the same server-authoritative reach the place/break paths use):
@@ -531,6 +535,11 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 		// EnderChestBlock.useWithoutItem -> player.openMenu over the per-player ender inventory. Blocked
 		// when the block ABOVE is a redstone conductor (the lid cannot open); still consumes either way.
 		return t.openEnderChest(p, hitPos)
+	}
+	if isSweetBerry {
+		// SweetBerryBushBlock.useWithoutItem: harvest at AGE 2/3 (consumes -> true), PASS at AGE 0/1
+		// (returns false so the held block is placed instead). CITE sweet_berry_bush.go.
+		return t.harvestSweetBerryBush(p, hitPos, state)
 	}
 	return t.openChest(p, hitPos)
 }

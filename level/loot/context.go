@@ -98,6 +98,21 @@ type LootContext struct {
 	// enchant (the pig table's furnace_smelt any_of's second term reads it). v1 default false.
 	AttackerSmeltsLoot bool
 
+	// --- BLOCK-INTERACT loot context (the harvest tables: sweet_berry_bush, cave_vine) ------------
+	//
+	// The block-interact harvest tables (BuiltInLootTables.HARVEST_*) gate their per-age pools on a
+	// block_state_property condition over LootContextParams.BLOCK_STATE (e.g. sweet_berry_bush pool-1's
+	// {age:"3"} bonus-berry entry). BlockID carries the clicked block's resource id (BlockState.is(block)
+	// -> BlockID == condition.block) and BlockProperties carries its property name->string-value map
+	// (StatePropertiesPredicate.matches, which compares each requested property against the state's
+	// serialized string value). Both empty/nil for every non-block-interact context (its tables never
+	// read them, so their golden seed-reproduction is untouched) -- mirroring the vanilla
+	// getOptionalParameter(BLOCK_STATE)==null branch (block_state_property.test returns false). Populated
+	// by NewBlockInteractLootContext. Source: javap LootItemBlockStatePropertyCondition.test +
+	// StatePropertiesPredicate.matches + Block.dropFromBlockInteractLootTable (withParameter(BLOCK_STATE)).
+	BlockID         string
+	BlockProperties map[string]string
+
 	// --- FISHING loot context (the fishing rod retrieve roll) --------------------------------------
 	//
 	// The gameplay/fishing table gates its TREASURE sub-table on an entity_properties condition over
@@ -178,6 +193,22 @@ func NewEntityLootContext(seed int64, luck float32, p EntityLootParams) *LootCon
 func NewFishingLootContext(seed int64, luck float32, inOpenWater bool) *LootContext {
 	c := NewLootContext(seed, luck)
 	c.InOpenWater = inOpenWater
+	return c
+}
+
+// NewBlockInteractLootContext builds a LootContext for a BLOCK-INTERACT harvest roll (the
+// Block.dropFromBlockInteractLootTable path: sweet_berry_bush / cave_vine right-click harvest): the
+// LegacyRandomSource seeded by seed (the level.getRandom-derived per-roll seed, luck 0), plus the
+// clicked block's resource id + property map the block_state_property condition reads (the
+// LootContextParams.BLOCK_STATE the vanilla lambda supplies). Every non-block-interact context leaves
+// BlockID/BlockProperties empty (its tables never read them).
+//
+// Source: javap Block.dropFromBlockInteractLootTable (withParameter(BLOCK_STATE)) +
+// LootTable.getRandomItems(LootParams) (randomSequence-seeded LootContext).
+func NewBlockInteractLootContext(seed int64, blockID string, props map[string]string) *LootContext {
+	c := NewLootContext(seed, 0)
+	c.BlockID = blockID
+	c.BlockProperties = props
 	return c
 }
 
