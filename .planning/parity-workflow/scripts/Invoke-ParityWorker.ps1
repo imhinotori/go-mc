@@ -21,8 +21,18 @@ $ErrorActionPreference = 'Stop'
 
 function Invoke-Git {
     param([Parameter(ValueFromRemainingArguments)][string[]]$Arguments)
-    $output = @(& git -C $RepoRoot @Arguments 2>&1)
-    $exitCode = $LASTEXITCODE
+    $previousErrorAction = $ErrorActionPreference
+    try {
+        # Windows PowerShell wraps progress written by native programs to stderr as a
+        # NativeCommandError. Git uses stderr for normal progress, so only its exit code
+        # is authoritative here.
+        $ErrorActionPreference = 'Continue'
+        $output = @(& git -C $RepoRoot @Arguments 2>&1)
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
     $output | Write-Output
     if ($exitCode -ne 0) {
         throw "git failed: git -C $RepoRoot $($Arguments -join ' ')"
