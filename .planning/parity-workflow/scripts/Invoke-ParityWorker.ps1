@@ -21,8 +21,10 @@ $ErrorActionPreference = 'Stop'
 
 function Invoke-Git {
     param([Parameter(ValueFromRemainingArguments)][string[]]$Arguments)
-    & git -C $RepoRoot @Arguments
-    if ($LASTEXITCODE -ne 0) {
+    $output = @(& git -C $RepoRoot @Arguments 2>&1)
+    $exitCode = $LASTEXITCODE
+    $output | Write-Output
+    if ($exitCode -ne 0) {
         throw "git failed: git -C $RepoRoot $($Arguments -join ' ')"
     }
 }
