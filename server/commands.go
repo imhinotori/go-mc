@@ -235,6 +235,7 @@ func buildCommandGraph() *command.Graph {
 	registerBatchCommands(g)
 	registerScoreboardCommands(g)
 	registerTitleCommand(g)
+	registerExecuteCommand(g)
 
 	return g
 }
