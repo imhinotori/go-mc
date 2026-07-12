@@ -1,0 +1,18 @@
+{
+  "wave": "02-simple-fixes",
+  "base_ref": "HEAD",
+  "model": "minimax/MiniMax-M3",
+  "max_parallel": 2,
+  "tasks": [
+    {
+      "id": "fix-gamerule-spread-vines",
+      "prompt": ".planning/parity-workflow/tasks/fix-gamerule-spread-vines.md",
+      "expected_output": "server/vine.go"
+    },
+    {
+      "id": "fix-gamerule-silverfish",
+      "prompt": ".planning/parity-workflow/tasks/fix-gamerule-silverfish.md",
+      "expected_output": "server/ai_goals_silverfish.go"
+    }
+  ]
+}
