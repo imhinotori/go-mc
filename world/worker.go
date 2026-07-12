@@ -202,16 +202,22 @@ func (w *Worker) Request(pos level.ChunkPos) {
 	case w.wantedCh <- pos:
 	default:
 	}
-	w.requestInternal(pos)
+	w.requestInternal(pos) // result ignored: the tick re-requests, so a full-channel drop is retried
 }
 
 // requestInternal enqueues pos for terrain generation WITHOUT marking it wanted. Used by
 // the scheduler to pull in the neighbor ring of a wanted center. Non-blocking (bounded
-// backpressure, same as Request).
-func (w *Worker) requestInternal(pos level.ChunkPos) {
+// backpressure, same as Request). Returns true iff the bounded request channel accepted
+// the enqueue; false when the channel was full and the default branch dropped the send.
+// The external Request caller may ignore the result because the tick re-requests next tick;
+// requestNeighbors MUST observe it, otherwise a dropped auto-pulled neighbor latches
+// requested[nk]=true forever and the wanted center's 3x3 wedges in "Loading terrain".
+func (w *Worker) requestInternal(pos level.ChunkPos) bool {
 	select {
 	case w.requests <- pos:
+		return true
 	default:
+		return false
 	}
 }
 
@@ -307,8 +313,22 @@ func (w *Worker) runScheduler(ctx context.Context) {
 			key := packPos(pos)
 			if !w.wanted[key] {
 				w.wanted[key] = true
-				w.requestNeighbors(pos)
 			}
+			// requestNeighbors runs on EVERY wantedCh notification, not only on the first
+			// time the center becomes wanted. A previous call may have DROPPED a neighbor
+			// enqueue when the bounded request channel was full (requestInternal returns
+			// false and skips latching requested[nk]); the tick re-issues Request every tick,
+			// so a single retry drains the dropped neighbors as the channel frees. The
+			// requested/staging dedupe inside requestNeighbors keeps this O(new neighbors):
+			// already-accepted neighbors stay skipped (requested[nk]==true), and neighbors
+			// that have already carved stay skipped (staging[nk]!=nil). Without this retry
+			// the caller's retry never recovers a dropped neighbor — this goroutine is the
+			// ONLY writer to requested, and the carved branch's own requestNeighbors call only
+			// fires for wanted carved centers — so a drop latches the wedge and the wanted
+			// center's 3x3 never completes ("Loading terrain" stall). One-ring behavior is
+			// preserved: requestInternal does not mark neighbors wanted, so they cannot
+			// recursively expand the frontier.
+			w.requestNeighbors(pos)
 			// pos becoming wanted can both let it decorate AND change the emit-gate of its
 			// neighbors (it is now a wanted neighbor they must wait on), so process the ring.
 			w.processRing(ctx, pos)
@@ -405,6 +425,14 @@ func (w *Worker) processRing(ctx context.Context, pos level.ChunkPos) {
 // each once (the requested set dedups; the bounded requests channel + singleflight dedup
 // the terrain gen). Uses requestInternal so the neighbors are NOT marked wanted — this is
 // what bounds the auto-request frontier to a single ring. Scheduler-goroutine-only.
+//
+// The requested[nk] dedup bit is latched ONLY after requestInternal accepts the bounded
+// send: with Nonblocking=false the pool can park Submit, the reader stops draining
+// requests, and the bounded channel fills — at which point requestInternal's default
+// branch drops the send. Latching requested[nk]=true before the accepted enqueue would
+// drop the neighbor permanently (this goroutine is the ONLY writer; wanted centers arrive
+// via wantedCh, and requestNeighbors is the only call site), so the wanted center's 3x3
+// could never complete and the chunk would stay in "Loading terrain" forever.
 func (w *Worker) requestNeighbors(pos level.ChunkPos) {
 	for dx := -1; dx <= 1; dx++ {
 		for dz := -1; dz <= 1; dz++ {
@@ -414,8 +442,9 @@ func (w *Worker) requestNeighbors(pos level.ChunkPos) {
 			np := level.ChunkPos{pos[0] + int32(dx), pos[1] + int32(dz)}
 			nk := packPos(np)
 			if !w.requested[nk] && w.staging[nk] == nil {
-				w.requested[nk] = true
-				w.requestInternal(np)
+				if w.requestInternal(np) {
+					w.requested[nk] = true
+				}
 			}
 		}
 	}
