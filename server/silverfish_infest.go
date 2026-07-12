@@ -29,20 +29,13 @@ package server
 //     gameplay-observable summon). The BLOCK-DROP loot is DEFERRED (the break yields no item), cited
 //     here — spawnAfterBreak's BLOCK_DROPS/PREVENTS_INFESTED_SPAWNS guards collapse to "always summon"
 //     (mobGriefing default true, no enchantment subsystem). Cite InfestedBlock.spawnAfterBreak/spawnInfestation.
-//   - GameRules.MOB_GRIEFING is not a v1 subsystem: it is a CITED CONSTANT == the vanilla default (true),
-//     silverfishMobGriefing below, structured as a real read for a future gamerule subsystem.
+//   - GameRules.MOB_GRIEFING is read from the live store by both silverfish goals.
 
 import (
 	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/level/block"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
-
-// silverfishMobGriefing is the CITED-CONSTANT stand-in for GameRules.MOB_GRIEFING (no gamerule
-// subsystem in v1) == the vanilla default TRUE. Both SilverfishMergeWithStoneGoal.canUse and
-// SilverfishWakeUpFriendsGoal.tick read it; structured as a real bool so a future gamerule subsystem
-// swaps the source without touching the call sites. Cite GameRules.MOB_GRIEFING (default true).
-const silverfishMobGriefing = true
 
 // silverfishInfestPair is one host<->infested block registration (a BLOCK_BY_HOST_BLOCK entry). The
 // StateIDs are the block's defaultBlockState() ids (level/block DefaultStateID, codegen-authoritative),
