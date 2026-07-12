@@ -133,3 +133,132 @@ func TestAlternativesFirstPassing(t *testing.T) {
 		t.Fatalf("alternatives emitted itemID %d, want 2 (cobblestone, the second child)", emitted[0].itemID)
 	}
 }
+
+// --- Leaf/shears items-predicate tests (the by-hand leaf-block-drop bug fix) --------------------
+//
+// The leaf tables gate their leaf-BLOCK drop on an alternatives child whose condition is
+// any_of(match_tool{items:"minecraft:shears"}, match_tool{silk_touch}). Vanilla: a bare hand drops
+// only saplings/sticks/apple (probabilistic) — the leaf block drops ONLY with shears OR silk_touch.
+// The bug was that match_tool{items:shears} was not modeled, so a bare hand (HasTool true) fell
+// through to `return true` and dropped the leaf block. These tests lock the fixed behavior.
+//
+// Source: javap MatchTool.test -> ItemPredicate.test (items HolderSet membership: tool.is(items)).
+
+// rollBlockWithCtx rolls a blocks/<name> table at a fixed seed with a caller-supplied context (a
+// tool/silk-touch context) and returns the flat list of rolled item ids.
+func rollBlockWithCtx(t *testing.T, name string, seed int64, ctx *LootContext) []int32 {
+	t.Helper()
+	tbl, err := LoadTable("minecraft:blocks/" + name)
+	if err != nil {
+		t.Fatalf("LoadTable(blocks/%s): %v", name, err)
+	}
+	stacks := Roll(tbl, seed, ctx)
+	out := make([]int32, 0, len(stacks))
+	for _, s := range stacks {
+		out = append(out, int32(s.ItemID))
+	}
+	return out
+}
+
+// containsItem reports whether the rolled id list includes item `name`.
+func containsItem(t *testing.T, got []int32, name string) bool {
+	t.Helper()
+	want := itemID(t, name)
+	for _, id := range got {
+		if id == want {
+			return true
+		}
+	}
+	return false
+}
+
+// shearsToolContext builds a block-break LootContext for a held shears (HasTool true, ToolItemID
+// "minecraft:shears", no enchantments) — the state blockBreakLootContext produces for a shears break.
+func shearsToolContext(seed int64) *LootContext {
+	c := NewLootContext(seed, 0)
+	c.HasTool = true
+	c.ToolItemID = "minecraft:shears"
+	return c
+}
+
+// silkTouchToolContext builds a block-break context for a silk_touch tool (e.g. a diamond_pickaxe
+// with silk_touch): HasTool true, a non-shears ToolItemID, ToolSilkTouch true.
+func silkTouchToolContext(seed int64) *LootContext {
+	c := NewLootContext(seed, 0)
+	c.HasTool = true
+	c.ToolItemID = "minecraft:diamond_pickaxe"
+	c.ToolSilkTouch = true
+	return c
+}
+
+// bareHandContext builds the block-break context for a bare hand: HasTool true (vanilla always sets
+// TOOL even for the fist), ToolItemID "" (no items match), no enchantments — the exact state
+// blockBreakLootContext produces for an empty main hand.
+func bareHandContext(seed int64) *LootContext {
+	c := NewLootContext(seed, 0)
+	c.HasTool = true
+	return c
+}
+
+// TestOakLeavesBareHandDropsNoLeafBlock: breaking oak_leaves BY HAND must NOT drop the oak_leaves
+// block — the shears/silk_touch alternative fails (ToolItemID "" is not a member of {shears} and
+// ToolSilkTouch is false), so only the sapling/stick/apple pools are eligible. This is the bug: it
+// previously dropped the leaf block. We scan a spread of seeds so a probabilistic sapling/stick roll
+// never masks a leaf-block leak.
+func TestOakLeavesBareHandDropsNoLeafBlock(t *testing.T) {
+	for seed := int64(0); seed < 200; seed++ {
+		got := rollBlockWithCtx(t, "oak_leaves", seed, bareHandContext(seed))
+		if containsItem(t, got, "minecraft:oak_leaves") {
+			t.Fatalf("seed %d: bare-hand oak_leaves break dropped the LEAF BLOCK (%v); vanilla drops only sapling/stick/apple", seed, got)
+		}
+	}
+}
+
+// TestOakLeavesShearsDropsLeafBlock: breaking oak_leaves with SHEARS drops the oak_leaves block (the
+// items:"minecraft:shears" alternative wins). Across seeds the leaf block must ALWAYS be present.
+func TestOakLeavesShearsDropsLeafBlock(t *testing.T) {
+	for seed := int64(0); seed < 50; seed++ {
+		got := rollBlockWithCtx(t, "oak_leaves", seed, shearsToolContext(seed))
+		if !containsItem(t, got, "minecraft:oak_leaves") {
+			t.Fatalf("seed %d: shears oak_leaves break did NOT drop the leaf block (%v)", seed, got)
+		}
+	}
+}
+
+// TestOakLeavesSilkTouchDropsLeafBlock: breaking oak_leaves with a silk_touch tool drops the
+// oak_leaves block (the silk_touch alternative wins even though the tool is not shears).
+func TestOakLeavesSilkTouchDropsLeafBlock(t *testing.T) {
+	for seed := int64(0); seed < 50; seed++ {
+		got := rollBlockWithCtx(t, "oak_leaves", seed, silkTouchToolContext(seed))
+		if !containsItem(t, got, "minecraft:oak_leaves") {
+			t.Fatalf("seed %d: silk_touch oak_leaves break did NOT drop the leaf block (%v)", seed, got)
+		}
+	}
+}
+
+// TestMatchToolItemsMembership: the ItemPredicate items sub-predicate — a match_tool{items:shears}
+// passes ONLY when ToolItemID is exactly minecraft:shears, and fails for a bare hand or a wrong tool.
+func TestMatchToolItemsMembership(t *testing.T) {
+	m := &matchTool{requireItems: []string{"minecraft:shears"}}
+
+	// bare hand: HasTool true, ToolItemID "" -> not a member -> false.
+	if m.Test(bareHandContext(1)) {
+		t.Fatal("match_tool{items:shears} must be FALSE for a bare hand (ToolItemID empty)")
+	}
+	// wrong tool: a diamond_pickaxe -> not a member -> false.
+	wrong := NewLootContext(1, 0)
+	wrong.HasTool = true
+	wrong.ToolItemID = "minecraft:diamond_pickaxe"
+	if m.Test(wrong) {
+		t.Fatal("match_tool{items:shears} must be FALSE for a non-shears tool")
+	}
+	// shears -> member -> true.
+	if !m.Test(shearsToolContext(1)) {
+		t.Fatal("match_tool{items:shears} must be TRUE for a shears tool")
+	}
+	// no TOOL at all (HasTool false) -> MatchTool.test TOOL==null -> false.
+	noTool := NewLootContext(1, 0)
+	if m.Test(noTool) {
+		t.Fatal("match_tool{items:shears} must be FALSE when no TOOL param is present")
+	}
+}

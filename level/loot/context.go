@@ -37,6 +37,15 @@ type LootContext struct {
 	// false until the dig path supplies a real held tool (HasTool gates their use).
 	ToolSilkTouch    bool
 	ToolFortuneLevel int
+	// ToolItemID is the held TOOL's item resource id ("minecraft:shears",
+	// "minecraft:diamond_pickaxe", ...), normalized to the "minecraft:"-prefixed form. It is
+	// the ItemPredicate.items source: MatchTool.test -> ItemPredicate.test(tool) tests
+	// tool.is(items) (a HolderSet<Item> membership check). The leaf tables gate their leaf-block
+	// drop on any_of(match_tool{items:"minecraft:shears"}, match_tool{silk_touch}), so a bare
+	// hand (ToolItemID == "") must NOT satisfy the shears predicate. Empty for a bare hand / a
+	// non-player break. Cite ItemPredicate.test (items Optional<HolderSet<Item>> present ->
+	// tool.is(items)).
+	ToolItemID string
 	// ToolEnchantments is the full enchantment-id -> level map of the block-break TOOL (the
 	// EnchantmentHelper.getItemEnchantmentLevel source ApplyBonusCount reads). Populated by the
 	// block-break drop path (server/block_drop.go) from the breaking player's held item; nil when no

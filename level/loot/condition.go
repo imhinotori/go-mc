@@ -13,6 +13,7 @@ package loot
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/imhinotori/sulfur/data/registryid"
 )
@@ -94,11 +95,17 @@ func parseCondition(rc rawCondition) (LootCondition, error) {
 		}
 		return &locationCheck{biomes: parseBiomeList(pred.Predicate.Biomes)}, nil
 	case "match_tool":
-		// The block tables' only match_tool form is a silk_touch enchantment gate:
-		// predicate.predicates["minecraft:enchantments"] = [{enchantments:"minecraft:silk_touch", levels:{min:1}}].
-		// Detect that gate so matchTool.Test reads ctx.ToolSilkTouch (the cited stub).
-		// 20-02 Task 1 (javap MatchTool.test).
-		return &matchTool{requiresSilkTouch: matchToolWantsSilkTouch(rc)}, nil
+		// MatchTool.test -> (TOOL != null) && (predicate.isEmpty() || predicate.get().test(TOOL)).
+		// The block tables use two ItemPredicate forms: (a) an `items` HolderSet gate
+		// (predicate.items = "minecraft:shears" — the leaf/vine shear form) and (b) a silk_touch
+		// enchantment gate (predicate.predicates["minecraft:enchantments"] = [{silk_touch, min 1}]).
+		// Parse BOTH so matchTool.Test ports ItemPredicate.test faithfully (items membership AND
+		// the silk_touch sub-predicate); a form with neither is an empty predicate -> true under a
+		// real tool. 20-02 Task 1 + this fix (javap MatchTool.test + ItemPredicate.test).
+		return &matchTool{
+			requireItems:      matchToolItemIDs(rc),
+			requiresSilkTouch: matchToolWantsSilkTouch(rc),
+		}, nil
 	case "survives_explosion":
 		// ExplosionCondition: no fields. EXPLOSION_RADIUS absent -> true (the v1
 		// break default). 20-02 Task 1 (javap ExplosionCondition.test).
@@ -464,6 +471,51 @@ func entityPredicateWantsRaiderCaptain(predRaw json.RawMessage) bool {
 		return false
 	}
 	return pred.Raider.IsCaptain != nil && *pred.Raider.IsCaptain
+}
+
+// matchToolItemIDs decodes an ItemPredicate's `items` field (predicate.items) into the set of
+// item resource ids the tool must be one of. ItemPredicate.items is an Optional<HolderSet<Item>>;
+// MatchTool -> ItemPredicate.test tests tool.is(items) when it is present. The leaf/vine tables
+// use the literal single-id form ("items": "minecraft:shears"); the codec also accepts a list of
+// ids and a "#tag" reference. A predicate WITHOUT an items field returns nil (items Optional empty
+// -> that sub-predicate is skipped, per ItemPredicate.test's isPresent guard). Tag references
+// (a leading '#') are kept verbatim; the leaf tables never use one, so an unexpanded tag simply
+// never matches a concrete tool id (conservative — never a wrong leaf-block drop).
+//
+// Source: javap ItemPredicate.test (items.isPresent() && !tool.is(items.get()) -> false).
+func matchToolItemIDs(rc rawCondition) []string {
+	predRaw, ok := rc["predicate"]
+	if !ok {
+		return nil
+	}
+	var pred struct {
+		// `items` is either a single id/tag string or a JSON array of ids.
+		Items json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(predRaw, &pred); err != nil {
+		return nil
+	}
+	if len(pred.Items) == 0 {
+		return nil
+	}
+	ids := parseBiomeList(pred.Items) // reuse the single-or-list string decoder
+	if len(ids) == 0 {
+		return nil
+	}
+	// Normalize each concrete id to the "minecraft:"-prefixed form the context carries; keep a
+	// "#tag" reference verbatim (it will never equal a concrete ToolItemID -> no match).
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if len(id) > 0 && id[0] == '#' {
+			out = append(out, id)
+			continue
+		}
+		if !strings.Contains(id, ":") {
+			id = "minecraft:" + id
+		}
+		out = append(out, id)
+	}
+	return out
 }
 
 // matchToolWantsSilkTouch reports whether a match_tool condition's predicate gates on a

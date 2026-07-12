@@ -33,22 +33,56 @@ package loot
 // silk_touch read off ctx.ToolSilkTouch. Structured to become a real read, never baked
 // away. The block tables' only match_tool predicate is the silk_touch level>=1 gate.
 type matchTool struct {
-	// requiresSilkTouch is true when the predicate gates on a silk_touch enchantment
-	// (the only match_tool form the block tables use). Parsed from the predicate JSON.
+	// requireItems is the ItemPredicate.items HolderSet the tool must be a member of (the leaf/
+	// vine "items":"minecraft:shears" gate). nil when the predicate carries no `items` field (the
+	// items Optional is empty -> that sub-predicate is skipped, per ItemPredicate.test).
+	requireItems []string
+	// requiresSilkTouch is true when the predicate gates on a silk_touch enchantment (level>=1) —
+	// the other match_tool form the block tables use. Parsed from the predicate JSON.
 	requiresSilkTouch bool
 }
 
-// Test mirrors MatchTool.test. No TOOL in the context -> false (decompiled). With a
-// tool, the silk_touch gate reads ctx.ToolSilkTouch (the cited stub).
+// Test mirrors MatchTool.test:
+//
+//	ItemInstance tool = ctx.getOptionalParameter(TOOL);
+//	if (tool == null) return false;                    // no TOOL param -> false
+//	if (predicate.isEmpty()) return true;              // empty predicate -> true
+//	return predicate.get().test(tool);                 // ItemPredicate.test
+//
+// and ItemPredicate.test faithfully (the two sub-predicates the block tables use):
+//
+//	if (items.isPresent() && !tool.is(items.get())) return false;   // items HolderSet membership
+//	// (count is ANY, components empty for these tables) ...
+//	// the silk_touch form is an ENCHANTMENTS component matcher -> ToolSilkTouch
+//	return true;
+//
+// ALL present sub-predicates must pass (each failing one returns false). An empty predicate (no
+// items AND no silk_touch gate) -> true. Crucially, a bare hand carries TOOL (HasTool true) with
+// ToolItemID == "" and ToolSilkTouch == false, so the shears items-gate FAILS (empty is not a
+// member of {minecraft:shears}) — the leaf block does NOT drop by hand.
 func (m *matchTool) Test(ctx *LootContext) bool {
 	if !ctx.HasTool {
-		return false // decompiled: TOOL == null -> false
+		return false // MatchTool: TOOL == null -> false
 	}
-	if m.requiresSilkTouch {
-		return ctx.ToolSilkTouch
+	// ItemPredicate.test: `items` sub-predicate (Optional<HolderSet<Item>> isPresent() -> tool.is).
+	if len(m.requireItems) > 0 {
+		match := false
+		for _, id := range m.requireItems {
+			if id == ctx.ToolItemID && ctx.ToolItemID != "" {
+				match = true
+				break
+			}
+		}
+		if !match {
+			return false // items present but tool not a member -> ItemPredicate.test false
+		}
 	}
-	// A match_tool with no parsed predicate (predicate.isEmpty()) -> true. The block
-	// tables always carry the silk_touch predicate, so this is the structural default.
+	// ItemPredicate.test: the silk_touch enchantment sub-predicate (a components/ENCHANTMENTS
+	// matcher) -> the tool must carry silk_touch level>=1 (the cited-stub ToolSilkTouch read).
+	if m.requiresSilkTouch && !ctx.ToolSilkTouch {
+		return false
+	}
+	// All present sub-predicates passed (or the predicate was empty) -> true.
 	return true
 }
 

@@ -103,8 +103,13 @@ func blockBreakLootContext(p *tickPlayer, seed int64) *loot.LootContext {
 	// silk_touch level>=1 predicate then fails on the 0-level fist — the faithful bare-hand result.
 	ctx.HasTool = true
 	if stackEmpty(tool) {
-		return ctx // empty hand: HasTool true, no enchantments (silk/fortune level 0).
+		return ctx // empty hand: HasTool true, ToolItemID "" (no items match), no enchantments.
 	}
+	// ItemPredicate.items reads tool.is(HolderSet): populate ToolItemID from the held item's
+	// resource id so match_tool{items:"minecraft:shears"} matches ONLY a real shears. itemName
+	// returns the "minecraft:"-prefixed id (the form the predicate compares); the parse side
+	// normalizes bare ids to the same prefixed form. Cite ItemPredicate.test (items membership).
+	ctx.ToolItemID = itemName(int32(tool.ItemID))
 	// EnchantmentHelper.getItemEnchantmentLevel(SILK_TOUCH/FORTUNE, tool): read the tool's enchant map
 	// SERVER-side. stackEnchantments returns the resource-id -> level map off the ENCHANTMENTS component.
 	ench := stackEnchantments(tool)
