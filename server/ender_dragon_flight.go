@@ -6,8 +6,8 @@ package server
 // .enderdragon.EnderDragon.aiStep + the phases.* doServerTick methods (26.2 jar, CFR this task).
 //
 // All RNG draws are on the dragon OWN mobRandom stream. DragonFireball (STRAFE) + AreaEffectCloud
-// (SITTING_FLAMING dragon_breath) spawns are routed through cited seam calls that no-op until those entity
-// types land.
+// (SITTING_FLAMING dragon_breath) spawns are routed through the hurting-projectile + AEC subsystems
+// (spawnDragonFireball / spawnAreaEffectCloud) -- the offense that deals the fight's damage.
 
 import "math"
 
@@ -427,7 +427,8 @@ func (t *TickLoop) dragonStrafeTick(e *Entity) {
 				startX := hx - vx*1.0
 				startY := hy + 0.5
 				startZ := hz - vz*1.0
-				dirToTgt := [3]float64{target.x - startX, target.y - startY, target.z - startZ}
+				// direction = (attackTarget.getX()-startX, attackTarget.getY(0.5)-startY, attackTarget.getZ()-startZ).
+				dirToTgt := [3]float64{target.x - startX, (target.y + playerHeight*0.5) - startY, target.z - startZ}
 				t.dragonSpawnFireball(e, startX, startY, startZ, dirToTgt)
 				ph.fireballCharge = 0
 				if ph.path != nil {
@@ -755,27 +756,63 @@ func (t *TickLoop) dragonScanChargePlayer(e *Entity, rng float64) (id int32, ok 
 	return nearestPlayerIDAt(t, e.x, e.y, e.z, rng)
 }
 
-// --- cited seams (DragonFireball / AreaEffectCloud not yet ported) --------------------------------------
+// --- offense spawns (DragonFireball STRAFE fireball + SITTING_FLAMING dragon_breath AreaEffectCloud) -----
 
-// dragonSpawnFireball is the STRAFE fireball spawn seam (DragonStrafePlayerPhase: new DragonFireball(level,
-// dragon, dir.normalize()); snapTo(start); addFreshEntity). No-op until DragonFireball lands (another agent
-// may be porting it). dir is the un-normalized (dx,dy,dz) toward the target. Cite DragonStrafePlayerPhase.
+// dragonSpawnFireball is the STRAFE fireball spawn (DragonStrafePlayerPhase.doServerTick offsets 547-585):
+// new DragonFireball(level, dragon, dir.normalize()) then snapTo(startX,startY,startZ) + addFreshEntity. The
+// ctor assigns deltaMovement = dir.normalize()*accelerationPower(0.1); the projectile flies straight (no
+// gravity), on impact spawning a dragon_breath AreaEffectCloud (dragonFireballOnHit). dir is the un-normalized
+// (dx,dy,dz) toward the target (the caller already applied getY(0.5)). Owner is the dragon. Cite
+// DragonStrafePlayerPhase.doServerTick + DragonFireball ctor.
 func (t *TickLoop) dragonSpawnFireball(e *Entity, startX, startY, startZ float64, dir [3]float64) {
-	// DragonFireball entity not yet present; the phase transition (STRAFE -> HOLDING) has already run.
-	_ = e
-	_, _, _ = startX, startY, startZ
-	_ = dir
+	t.spawnDragonFireball(e.id, startX, startY, startZ, dir[0], dir[1], dir[2])
 }
 
-// dragonSpawnBreathCloud is the SITTING_FLAMING dragon_breath AreaEffectCloud seam (radius 5, duration 200,
-// INSTANT_DAMAGE, potionDurationScale 0.25). No-op until AreaEffectCloud lands. Cite DragonSittingFlamingPhase.
+// dragonSpawnBreathCloud is the SITTING_FLAMING dragon_breath AreaEffectCloud spawn (DragonSittingFlamingPhase
+// .doServerTick offsets 258-354, at flameTick==10): new AreaEffectCloud(level, x, y, z) at the head-forward
+// ground point, setOwner(dragon), setRadius(5.0f), setDuration(200), setCustomParticle(DRAGON_BREATH),
+// setPotionDurationScale(0.25f), addEffect(new MobEffectInstance(INSTANT_DAMAGE)) (amp0/dur0), addFreshEntity.
+// The cloud id is held in flameCloudID so end() can discard() it. The INSTANT_DAMAGE harm is dealt by the
+// AEC every-5-tick apply pass (applyInstantaneousEffect scale 0.5 -> 6*2^0*0.5 = 3.0 at amp0). waitTime /
+// reapplicationDelay / radiusOnUse / durationOnUse keep the AEC ctor defaults (20 / 20 / 0 / 0);
+// radiusPerTick keeps the ctor default 0 (this cloud does NOT shrink). Cite DragonSittingFlamingPhase.
 func (t *TickLoop) dragonSpawnBreathCloud(e *Entity, x, y, z float64) {
-	_ = e
-	_, _, _ = x, y, z
+	effects := []splashEffect{{id: effectInstantDamage, duration: 0, amplifier: 0}} // MobEffectInstance(INSTANT_DAMAGE)
+	cloud := t.spawnAreaEffectCloud(
+		e.id,    // setOwner(dragon)
+		x, y, z, // head-forward ground point (caller computed)
+		effects,
+		5.0, // setRadius(5.0f)
+		200, // setDuration(200)
+		20,  // AEC ctor default waitTime
+		20,  // AEC ctor default reapplicationDelay
+		0,   // AEC ctor default durationOnUse
+		0.0, // AEC ctor default radiusOnUse
+		0.0, // AEC ctor default radiusPerTick (no shrink -- setRadiusPerTick not called)
+	)
+	if cloud != nil {
+		e.dragon.flameCloudID = cloud.id
+	}
 }
 
-// dragonDiscardBreathCloud is the SITTING_FLAMING end() cleanup (flame.discard()). No-op until AEC lands.
-func (t *TickLoop) dragonDiscardBreathCloud(e *Entity) { _ = e }
+// dragonDiscardBreathCloud is the SITTING_FLAMING end() cleanup: if flame != null flame.discard(); flame = null.
+// Cite DragonSittingFlamingPhase.end().
+func (t *TickLoop) dragonDiscardBreathCloud(e *Entity) {
+	if e.dragon == nil || e.dragon.flameCloudID == 0 {
+		return
+	}
+	id := e.dragon.flameCloudID
+	e.dragon.flameCloudID = 0
+	for _, r := range t.regions {
+		if r.entities == nil {
+			continue
+		}
+		if _, ok := r.entities.get(id); ok {
+			t.withRegion(r, func() { r.entities.remove(id) })
+			return
+		}
+	}
+}
 
 // dragonFlightStep is the flight-integration half of EnderDragon.aiStep (the SERVER branch): run the
 // current phase doServerTick (re-running it once if the phase changed), then steer toward the phase's

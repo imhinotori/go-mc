@@ -78,6 +78,11 @@ type dragonState struct {
 	yRotA            float32
 	inWall           bool
 	takeoffFirstTick bool
+
+	// flameCloudID is DragonSittingFlamingPhase.flame -- the id of the breath AreaEffectCloud spawned at
+	// flameTick 10, held so DragonSittingFlamingPhase.end() can discard() it (setPhase out of SITTING_FLAMING).
+	// 0 == no live flame cloud. Cite DragonSittingFlamingPhase.flame.
+	flameCloudID int32
 }
 
 // dragonPartSpec is the ctor's per-part (name, width, height) table, in the EXACT subEntities[] order.

@@ -29,6 +29,7 @@ package server
 
 import (
 	"math"
+	"sort"
 
 	"github.com/imhinotori/sulfur/data/entity"
 	"github.com/imhinotori/sulfur/data/item"
@@ -48,6 +49,7 @@ const (
 	hurtLargeFireball
 	hurtWitherSkull
 	hurtWindCharge
+	hurtDragonFireball
 )
 
 // AbstractHurtingProjectile physics constants (verified javap — exact float values).
@@ -79,6 +81,8 @@ func hurtingEntityType(kind int) entity.Entity {
 		return entity.WitherSkull
 	case hurtWindCharge:
 		return entity.WindCharge
+	case hurtDragonFireball:
+		return entity.DragonFireball
 	default:
 		return entity.SmallFireball
 	}
@@ -190,10 +194,23 @@ func (t *TickLoop) tickHurtingProjectile(e *Entity) {
 	pv, pt := t.projectileFindHitPlayerT(e.hurtOwnerID, ox, oy, oz, endX, endY, endZ)
 	mv, mt := t.projectileFindHitMobT(e.hurtOwnerID, half, ox, oy, oz, endX, endY, endZ)
 	if pv != nil && (mv == nil || pt <= mt) {
+		if e.hurtingKind == hurtDragonFireball {
+			// DragonFireball has no onHitEntity -> onHit(HitResult) spawns the dragon_breath AEC + discard.
+			t.hurtingUpdateRotation(e)
+			t.cur().entities.move(e, pv.x, pv.y, pv.z)
+			t.dragonFireballOnHit(e, pv.x, pv.y, pv.z)
+			return
+		}
 		t.hurtingOnHitEntity(e, pv)
 		t.hurtingOnHit(e, pv.x, pv.y, pv.z) // per-kind onHit (explosion) + discard
 		return
 	} else if mv != nil {
+		if e.hurtingKind == hurtDragonFireball {
+			t.hurtingUpdateRotation(e)
+			t.cur().entities.move(e, mv.x, mv.y, mv.z)
+			t.dragonFireballOnHit(e, mv.x, mv.y, mv.z)
+			return
+		}
 		t.hurtingOnHitEntityMob(e, mv)
 		t.hurtingOnHit(e, mv.x, mv.y, mv.z) // per-kind onHit (explosion) + discard
 		return
@@ -202,6 +219,11 @@ func (t *TickLoop) tickHurtingProjectile(e *Entity) {
 		// Update render angles toward movement (rotateTowardsMovement 0.2 — v1 sets directly), move to impact.
 		t.hurtingUpdateRotation(e)
 		t.cur().entities.move(e, endX, endY, endZ)
+		if e.hurtingKind == hurtDragonFireball {
+			// DragonFireball.onHit on a block: no onHitBlock override -> straight to the AEC spawn + discard.
+			t.dragonFireballOnHit(e, endX, endY, endZ)
+			return
+		}
 		t.hurtingOnHitBlock(e, endX, endY, endZ, hx, hy, hz)
 		t.hurtingOnHit(e, endX, endY, endZ)
 		return
@@ -464,6 +486,101 @@ func (t *TickLoop) spawnHurtingProjectileShot(ownerID int32, kind int, x, y, z, 
 	e.pitch = float32(math.Atan2(e.vy, horiz) * 180.0 / math.Pi)
 	e.headYaw = e.yaw
 	return e
+}
+
+// DragonFireball AEC shape (DragonFireball.onHit, verified javap -- the exact setters + effect).
+const (
+	dragonFireballRadius     = 3.0  // setRadius(3.0f)
+	dragonFireballDuration   = 600  // setDuration(600)
+	dragonFireballTargetR    = 7.0  // setRadiusPerTick((7.0f - getRadius()) / getDuration())
+	dragonFireballPotScale   = 0.25 // setPotionDurationScale(0.25f)
+	dragonFireballWaitTime   = 20   // AEC ctor default waitTime (not overridden by DragonFireball)
+	dragonFireballReapply    = 20   // AEC ctor default reapplicationDelay
+	dragonFireballDurOnUse   = 0    // AEC ctor default durationOnUse
+	dragonFireballRadiusUse  = 0.0  // AEC ctor default radiusOnUse
+	dragonFireballAmp        = 1    // MobEffectInstance(INSTANT_DAMAGE, 1, 1) amplifier
+	dragonFireballEffDur     = 1    // MobEffectInstance(INSTANT_DAMAGE, 1, 1) duration
+	dragonFireballRetargetSq = 16.0 // onHit: setPos to a nearby LivingEntity within distSqr < 16.0
+)
+
+// spawnDragonFireball is the DragonStrafePlayerPhase fireball launch: new DragonFireball(level, dragon,
+// dir.normalize()) then snapTo(startX,startY,startZ) + addFreshEntity. The ctor (AbstractHurtingProjectile
+// LivingEntity/Vec3 ctor -> assignDirectionalMovement(dir, accelerationPower=0.1)) sets deltaMovement =
+// dir.normalize()*0.1; the phase then snapTo()s the projectile to the head-relative start (already applied
+// by the caller passing start as x,y,z). The projectile re-accelerates along its heading each tick (no
+// gravity) exactly like the other hurting projectiles. Cite DragonStrafePlayerPhase.doServerTick (offsets
+// 547-585) + AbstractHurtingProjectile ctor + assignDirectionalMovement.
+func (t *TickLoop) spawnDragonFireball(ownerID int32, x, y, z, dirX, dirY, dirZ float64) *Entity {
+	return t.spawnHurtingProjectile(ownerID, hurtDragonFireball, x, y, z, dirX, dirY, dirZ)
+}
+
+// dragonFireballOnHit ports DragonFireball.onHit: on the server, spawn a dragon_breath AreaEffectCloud at
+// the fireball position (radius 3, duration 600, radiusPerTick=(7-3)/600 -- the cloud GROWS, potionDurationScale
+// 0.25, INSTANT_DAMAGE amp1 dur1), retarget the cloud onto the first LivingEntity within distSqr<16 of the
+// fireball, then discard the fireball. The INSTANT_DAMAGE harm is dealt by the AEC's every-5-tick apply pass
+// (applyInstantaneousEffect scale 0.5 -> 6*2^amp*0.5 = 6.0 at amp1). No direct-hit damage and no explosion.
+// Cite DragonFireball.onHit (offsets 40-296).
+func (t *TickLoop) dragonFireballOnHit(e *Entity, x, y, z float64) {
+	// radiusPerTick = (7.0f - getRadius()) / getDuration() -- getRadius() at this point is 3.0 (just-set), so
+	// (7.0-3.0)/600 = +0.006666... (a GROWING cloud), matching the jar's float division exactly.
+	radiusPerTick := (float32(dragonFireballTargetR) - float32(dragonFireballRadius)) / float32(dragonFireballDuration)
+	effects := []splashEffect{{id: effectInstantDamage, duration: dragonFireballEffDur, amplifier: dragonFireballAmp}}
+	cloud := t.spawnAreaEffectCloud(
+		e.hurtOwnerID,
+		x, y, z,
+		effects,
+		dragonFireballRadius,
+		dragonFireballDuration,
+		dragonFireballWaitTime,
+		dragonFireballReapply,
+		dragonFireballDurOnUse,
+		dragonFireballRadiusUse,
+		radiusPerTick,
+	)
+	// onHit retarget: getEntitiesOfClass(LivingEntity, bb.inflate(4,2,4)); for the FIRST within distSqr<16.0
+	// setPos(cloud) to that entity. v1 scans players then mobs in a deterministic id order (matching the AEC
+	// victim scan order) and snaps the cloud to the first qualifying victim.
+	if cloud != nil {
+		if px, py, pz, ok := t.dragonFireballRetarget(e, x, y, z); ok {
+			t.cur().entities.move(cloud, px, py, pz)
+		}
+	}
+	t.cur().entities.remove(e.id) // discard()
+}
+
+// dragonFireballRetarget finds the first LivingEntity within distSqr<16.0 of the fireball (players first,
+// then mobs, by ascending id -- the deterministic stand-in for the getEntitiesOfClass list order), excluding
+// the owner. Returns its position for the AEC setPos. Cite DragonFireball.onHit (the retarget loop).
+func (t *TickLoop) dragonFireballRetarget(e *Entity, x, y, z float64) (float64, float64, float64, bool) {
+	players := make([]*tickPlayer, 0, len(t.players))
+	for _, p := range t.players {
+		if p == nil || p.dead || p.entityID == e.hurtOwnerID {
+			continue
+		}
+		players = append(players, p)
+	}
+	sort.Slice(players, func(i, j int) bool { return players[i].entityID < players[j].entityID })
+	for _, p := range players {
+		dx, dy, dz := p.x-x, p.y-y, p.z-z
+		if dx*dx+dy*dy+dz*dz < dragonFireballRetargetSq {
+			return p.x, p.y, p.z, true
+		}
+	}
+	mobs := make([]*Entity, 0)
+	for _, m := range t.cur().entities.near(x, z, 1) {
+		if m == nil || m.id == e.id || m.id == e.hurtOwnerID || m.dead || !m.isAlive() || !isLivingMob(m) {
+			continue
+		}
+		mobs = append(mobs, m)
+	}
+	sort.Slice(mobs, func(i, j int) bool { return mobs[i].id < mobs[j].id })
+	for _, m := range mobs {
+		dx, dy, dz := m.x-x, m.y-y, m.z-z
+		if dx*dx+dy*dy+dz*dz < dragonFireballRetargetSq {
+			return m.x, m.y, m.z, true
+		}
+	}
+	return 0, 0, 0, false
 }
 
 func (t *TickLoop) spawnWindChargeFromPlayer(p *tickPlayer, kind int, x, y, z float64, angle float32, velocity, inaccuracy float64) *Entity {
