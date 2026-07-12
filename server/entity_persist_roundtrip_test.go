@@ -1,14 +1,91 @@
 package server
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/imhinotori/sulfur/data/entity"
+	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/attribute"
 	"github.com/imhinotori/sulfur/level/component"
 	pk "github.com/imhinotori/sulfur/net/packet"
 	"github.com/imhinotori/sulfur/save"
+	"github.com/imhinotori/sulfur/world"
 )
+
+// TestEntityMutateOnlyAutosave is the PERSIST-ENT-TRIGGER-01 gate. A live entity field can mutate
+// without any block/BE edit (and therefore without ChunkManager dirty); the periodic entity pass
+// must still replace the prior snapshot with the current state.
+func TestEntityMutateOnlyAutosave(t *testing.T) {
+	dir := t.TempDir()
+	loop, mgr := newBlockLoop()
+	loop.SetPersistDir(dir)
+	loop.SetChunkSaver(world.NewChunkSaver(filepath.Join(dir, "region")))
+	pos := level.ChunkPos{0, 0}
+
+	pig := NewEntity(loop.idAlloc.AllocID(), entity.Pig, 8.5, 64, 8.5)
+	initSpawnHealth(pig)
+	loop.regionForColumn(pos).entities.add(pig)
+
+	// Seed an older snapshot, then mutate ONLY entity state. No world dirty bit is involved.
+	old, ok := entityToDisk(pig)
+	if !ok {
+		t.Fatal("entityToDisk rejected pig")
+	}
+	if err := saveEntities(dir, pos, []save.Entities{old}); err != nil {
+		t.Fatalf("seed saveEntities: %v", err)
+	}
+	pig.health = 7
+	if mgr.IsDirty(pos) {
+		t.Fatal("entity-only mutation unexpectedly dirtied chunk data; test would not cover the trigger gap")
+	}
+
+	loop.chunkSaveTickCounter = chunkSaveIntervalTicks - 1
+	loop.tickChunkSave()
+	recs, hit, err := loadEntities(dir, pos)
+	if err != nil || !hit {
+		t.Fatalf("load after mutate-only autosave: hit=%v err=%v", hit, err)
+	}
+	if len(recs) != 1 || recs[0].Health.FloatValue() != 7 {
+		t.Fatalf("autosaved entities = %+v, want one pig with health 7", recs)
+	}
+}
+
+// TestEntitySaveRemoveSaveEmptyReload is the PERSIST-ENT-STALE-02 gate. Once the last entity leaves
+// a loaded column, autosave must overwrite the old sector with an empty snapshot so a fresh loop
+// cannot respawn the removed mob.
+func TestEntitySaveRemoveSaveEmptyReload(t *testing.T) {
+	dir := t.TempDir()
+	loop, _ := newBlockLoop()
+	loop.SetPersistDir(dir)
+	loop.SetChunkSaver(world.NewChunkSaver(filepath.Join(dir, "region")))
+	pos := level.ChunkPos{0, 0}
+	store := loop.regionForColumn(pos).entities
+
+	pig := NewEntity(loop.idAlloc.AllocID(), entity.Pig, 8.5, 64, 8.5)
+	initSpawnHealth(pig)
+	store.add(pig)
+	loop.chunkSaveTickCounter = chunkSaveIntervalTicks - 1
+	loop.tickChunkSave()
+	if recs, hit, err := loadEntities(dir, pos); err != nil || !hit || len(recs) != 1 {
+		t.Fatalf("initial entity snapshot: len=%d hit=%v err=%v", len(recs), hit, err)
+	}
+
+	store.remove(pig.id)
+	loop.chunkSaveTickCounter = chunkSaveIntervalTicks - 1
+	loop.tickChunkSave()
+	if recs, hit, err := loadEntities(dir, pos); err != nil || !hit || len(recs) != 0 {
+		t.Fatalf("empty replacement snapshot: len=%d hit=%v err=%v", len(recs), hit, err)
+	}
+
+	// Simulate a process/chunk reload through the productive load seam.
+	reloaded := NewTickLoop(newFakeClock())
+	reloaded.SetPersistDir(dir)
+	reloaded.drainSavedEntities(pos)
+	if got := reloaded.regionForColumn(pos).entities.len(); got != 0 {
+		t.Fatalf("reloaded entity count = %d, want 0 (removed pig resurrected)", got)
+	}
+}
 
 // TestEntityPersistRoundTrip covers the baseline round-trip (item + a bare pig) INCLUDING the P0-01
 // UUID preservation (do NOT mint a new UUID on load).

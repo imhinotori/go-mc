@@ -414,6 +414,14 @@ type TickLoop struct {
 	// SetSaveSink wires it (tests that never leave a player leave it nil); a nil channel makes
 	// the leave-snapshot send a cheap skipped no-op. Buffered so a leave never parks the tick.
 	leaveSnapshots chan playerLeaveSnapshot
+	// pendingPlayerSnapshots is the owner-side overflow for the bounded save channel. A full
+	// channel may delay a save, but must never discard it; the tick retries these immutable values
+	// on later wakes and drains them with a blocking handoff during shutdown.
+	pendingPlayerSnapshots []playerLeaveSnapshot
+	// saveProducerStarted/saveProducerDone coordinate graceful cancellation with RunSaveLoop. The
+	// consumer keeps draining after ctx cancellation until the owner has published final snapshots.
+	saveProducerStarted chan struct{}
+	saveProducerDone    chan struct{}
 
 	// debug holds the OPTIONAL, off-by-default debug triggers for the Plan 06-07 interactive
 	// human-verify gate (a visible moving pig + periodic damage so the operator can SEE entity
@@ -1460,11 +1468,13 @@ const registerBuffer = 64
 
 func NewTickLoop(clock Clock) *TickLoop {
 	t := &TickLoop{
-		clock:      clock,
-		register:   make(chan *tickPlayer, registerBuffer),
-		unregister: make(chan *Client, registerBuffer),
-		consoleCmd: make(chan string, registerBuffer), // TUI-01: operator-console line seam (Plan 19-02)
-		idAlloc:    &EntityIDAllocator{},              // ENT-01: monotonic id allocator (first AllocID()==1)
+		clock:               clock,
+		register:            make(chan *tickPlayer, registerBuffer),
+		unregister:          make(chan *Client, registerBuffer),
+		consoleCmd:          make(chan string, registerBuffer), // TUI-01: operator-console line seam (Plan 19-02)
+		saveProducerStarted: make(chan struct{}),
+		saveProducerDone:    make(chan struct{}),
+		idAlloc:             &EntityIDAllocator{}, // ENT-01: monotonic id allocator (first AllocID()==1)
 		// The per-region entityStore + levelRandom now live on the single region (Phase-27 STEP-1),
 		// constructed below after t exists so newRegion can back-ref the coordinator.
 		// asyncIn stays nil (no-op Phase-4 seam until SetWorld); ring is zero-valued; gametime 0.
@@ -1865,6 +1875,10 @@ func (t *TickLoop) SetSaveSink() <-chan playerLeaveSnapshot {
 	return t.leaveSnapshots
 }
 
+// Started closes when Run has assumed ownership and armed the persistence producers. Setup code
+// may wait on it before exposing a shutdown path, eliminating cancellation during startup wiring.
+func (t *TickLoop) Started() <-chan struct{} { return t.saveProducerStarted }
+
 // SetPlugins wires the loaded plugin host + event bus (PLUGIN-02 / Plan 22). Call it ONCE before
 // Run, on the setup goroutine, with the Manager main() built from LoadDir(plugins/). A nil Manager
 // (no plugins dir, or plugins disabled) leaves every discrete-seam emit a cheap skipped no-op behind
@@ -1954,6 +1968,10 @@ func (t *TickLoop) advanceDraining(now time.Time, inbound <-chan Intent) int {
 // tick (self-correcting, no Sleep drift); each wake samples the injectable clock,
 // feeds the accumulator, and runs whole logical steps. Returns when ctx is cancelled.
 func (t *TickLoop) Run(ctx context.Context, inbound <-chan Intent) {
+	close(t.saveProducerStarted)
+	if t.chunkSaver != nil {
+		t.chunkSaver.MarkProducerStarted()
+	}
 	ticker := time.NewTicker(wakeInterval)
 	defer ticker.Stop()
 
@@ -1962,16 +1980,31 @@ func (t *TickLoop) Run(ctx context.Context, inbound <-chan Intent) {
 	for {
 		select {
 		case <-ctx.Done():
+			// Vanilla 26.2 MinecraftServer.stopServer saves every online player, then forces all
+			// loaded chunks before closing level storage. Publish those immutable owner-side
+			// snapshots while the off-tick consumers remain alive, then release their shutdown drain.
+			t.flushPendingPlayerSnapshots(true)
+			for _, p := range t.players {
+				if p != nil {
+					t.enqueuePlayerSnapshot(playerLeaveSnapshot{uuid: p.uuid, data: snapshotPlayer(p), stats: snapshotStats(p.stats)}, true)
+				}
+			}
+			t.flushAllLoadedChunksForShutdown()
 			// SUB-PERSIST (raids/POI): a final dirty-flush on the OWNER goroutine before the tick
 			// exits, so a clean shutdown right after a raid/POI mutation is never lost (the managers
 			// are tick-owned; flushing here keeps the IO race-free). A "" persistDir is a no-op.
 			t.flushSavedData()
+			close(t.saveProducerDone)
+			if t.chunkSaver != nil {
+				t.chunkSaver.MarkProducerDone()
+			}
 			return
 		case <-ticker.C:
 			// Drain joins/leaves every wake (not only on a full step) so a player that
 			// joins between steps is registered promptly and its inbound packets route
 			// to a live clientIndex entry. drainRegistrations is non-blocking.
 			t.drainRegistrations()
+			t.flushPendingPlayerSnapshots(false)
 			t.advanceDraining(t.clock.Now(), inbound)
 		}
 	}
@@ -2133,10 +2166,7 @@ func (t *TickLoop) removePlayer(c *Client) {
 	// never parks the tick on persistence.
 	if t.leaveSnapshots != nil {
 		snap := playerLeaveSnapshot{uuid: p.uuid, data: snapshotPlayer(p), stats: snapshotStats(p.stats)}
-		select {
-		case t.leaveSnapshots <- snap:
-		default: // buffer full: drop this save rather than stall the tick (rare; leaves are sparse)
-		}
+		t.enqueuePlayerSnapshot(snap, false)
 	}
 
 	delete(t.clientIndex, c)

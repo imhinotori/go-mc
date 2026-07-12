@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 
 	"golang.org/x/sync/semaphore"
 
@@ -63,9 +64,13 @@ const maxConcurrentRegionWrites = 4
 // live under — the SAME directory the worker reads from (tryRegion), so a saved chunk is reloaded
 // by the existing load path with no extra wiring.
 type ChunkSaver struct {
-	regionDir string
-	queue     chan ChunkSaveSnapshot
-	sem       *semaphore.Weighted
+	regionDir       string
+	queue           chan ChunkSaveSnapshot
+	sem             *semaphore.Weighted
+	producerStarted chan struct{}
+	producerDone    chan struct{}
+	startOnce       sync.Once
+	doneOnce        sync.Once
 }
 
 // NewChunkSaver builds a saver writing region files under regionDir. An empty regionDir disables
@@ -73,9 +78,25 @@ type ChunkSaver struct {
 // tests and ephemeral runs need no disk. The queue is bounded; the semaphore caps concurrent IO.
 func NewChunkSaver(regionDir string) *ChunkSaver {
 	return &ChunkSaver{
-		regionDir: regionDir,
-		queue:     make(chan ChunkSaveSnapshot, ChunkSaveQueueBuffer),
-		sem:       semaphore.NewWeighted(maxConcurrentRegionWrites),
+		regionDir:       regionDir,
+		queue:           make(chan ChunkSaveSnapshot, ChunkSaveQueueBuffer),
+		sem:             semaphore.NewWeighted(maxConcurrentRegionWrites),
+		producerStarted: make(chan struct{}),
+		producerDone:    make(chan struct{}),
+	}
+}
+
+// MarkProducerStarted/MarkProducerDone bracket the tick owner's final snapshot pass. They let the
+// IO loop distinguish a standalone cancellation from a real server shutdown and keep draining
+// until all final loaded-chunk snapshots have been handed off.
+func (s *ChunkSaver) MarkProducerStarted() {
+	if s != nil {
+		s.startOnce.Do(func() { close(s.producerStarted) })
+	}
+}
+func (s *ChunkSaver) MarkProducerDone() {
+	if s != nil {
+		s.doneOnce.Do(func() { close(s.producerDone) })
 	}
 }
 
@@ -99,6 +120,14 @@ func (s *ChunkSaver) Enqueue(snap ChunkSaveSnapshot) bool {
 	}
 }
 
+// EnqueueDurable is the shutdown-only blocking handoff. The consumer remains alive until
+// MarkProducerDone, so a full bounded queue backpressures shutdown without losing the snapshot.
+func (s *ChunkSaver) EnqueueDurable(snap ChunkSaveSnapshot) {
+	if s.Enabled() {
+		s.queue <- snap
+	}
+}
+
 // RunChunkSaveLoop drains the snapshot queue and writes each chunk to its region file OFF the tick
 // (SUB-PERSIST). It runs in its OWN goroutine (started by main, like RunSaveLoop) and returns when
 // ctx is cancelled. Each write opens+closes its own region handle (region.Region is Not-MT-Safe and
@@ -116,11 +145,28 @@ func (s *ChunkSaver) RunChunkSaveLoop(ctx context.Context, logf func(string, ...
 	for {
 		select {
 		case <-ctx.Done():
-			s.drainRemaining(logf) // best-effort flush of already-queued snapshots on shutdown
+			s.drainUntilProducerDone(logf)
 			return
 		case snap := <-s.queue:
 			s.writeSnapshot(snap, logf)
 		}
+	}
+}
+
+func (s *ChunkSaver) drainUntilProducerDone(logf func(string, ...any)) {
+	select {
+	case <-s.producerStarted:
+		for {
+			select {
+			case snap := <-s.queue:
+				s.writeSnapshot(snap, logf)
+			case <-s.producerDone:
+				s.drainRemaining(logf)
+				return
+			}
+		}
+	default:
+		s.drainRemaining(logf)
 	}
 }
 

@@ -281,6 +281,7 @@ func (t *TickLoop) RunSaveLoop(ctx context.Context, worldDir string) {
 	for {
 		select {
 		case <-ctx.Done():
+			t.drainPlayerSnapshotsOnShutdown(worldDir)
 			if t.perms != nil {
 				if err := t.perms.Save(); err != nil {
 					log.Printf("save permissions (shutdown): %v", err)
@@ -294,17 +295,94 @@ func (t *TickLoop) RunSaveLoop(ctx context.Context, worldDir string) {
 				}
 			}
 		case snap := <-t.leaveSnapshots:
-			if err := savePlayer(worldDir, snap.uuid, snap.data); err != nil {
-				log.Printf("save player %s: %v", snap.uuid, err)
-			}
-			// STATISTICS (stats.go): persist the player's StatsCounter to world/stats/<uuid>.json off
-			// the tick alongside the .dat, over the immutable snapshot taken on the owner at leave.
-			if snap.stats != nil {
-				if err := saveStats(worldDir, snap.uuid, snap.stats); err != nil {
-					log.Printf("save stats %s: %v", snap.uuid, err)
+			t.writePlayerSnapshot(worldDir, snap)
+		}
+	}
+}
+
+func (t *TickLoop) writePlayerSnapshot(worldDir string, snap playerLeaveSnapshot) {
+	if err := savePlayer(worldDir, snap.uuid, snap.data); err != nil {
+		log.Printf("save player %s: %v", snap.uuid, err)
+	}
+	if snap.stats != nil {
+		if err := saveStats(worldDir, snap.uuid, snap.stats); err != nil {
+			log.Printf("save stats %s: %v", snap.uuid, err)
+		}
+	}
+}
+
+// drainPlayerSnapshotsOnShutdown keeps consuming while the tick publishes its final saveAll
+// batch. If no tick producer was ever started (standalone consumer tests), it only drains what is
+// already buffered and returns promptly.
+func (t *TickLoop) drainPlayerSnapshotsOnShutdown(worldDir string) {
+	select {
+	case <-t.saveProducerStarted:
+		for {
+			select {
+			case snap := <-t.leaveSnapshots:
+				t.writePlayerSnapshot(worldDir, snap)
+			case <-t.saveProducerDone:
+				for {
+					select {
+					case snap := <-t.leaveSnapshots:
+						t.writePlayerSnapshot(worldDir, snap)
+					default:
+						return
+					}
 				}
 			}
 		}
+	default:
+		for {
+			select {
+			case snap := <-t.leaveSnapshots:
+				t.writePlayerSnapshot(worldDir, snap)
+			default:
+				return
+			}
+		}
+	}
+}
+
+// enqueuePlayerSnapshot never discards an immutable snapshot. Normal tick work uses an owner-side
+// overflow rather than blocking; shutdown uses a blocking handoff while RunSaveLoop drains.
+func (t *TickLoop) enqueuePlayerSnapshot(snap playerLeaveSnapshot, durable bool) {
+	if t.leaveSnapshots == nil {
+		return
+	}
+	if durable {
+		t.leaveSnapshots <- snap
+		return
+	}
+	select {
+	case t.leaveSnapshots <- snap:
+	default:
+		// Coalesce delayed autosaves/leaves per UUID. The newest owner-side snapshot supersedes an
+		// older pending value and bounds overflow by distinct players rather than save intervals.
+		for i := range t.pendingPlayerSnapshots {
+			if t.pendingPlayerSnapshots[i].uuid == snap.uuid {
+				t.pendingPlayerSnapshots[i] = snap
+				return
+			}
+		}
+		t.pendingPlayerSnapshots = append(t.pendingPlayerSnapshots, snap)
+	}
+}
+
+func (t *TickLoop) flushPendingPlayerSnapshots(durable bool) {
+	for len(t.pendingPlayerSnapshots) > 0 {
+		snap := t.pendingPlayerSnapshots[0]
+		if durable {
+			t.leaveSnapshots <- snap
+		} else {
+			select {
+			case t.leaveSnapshots <- snap:
+			default:
+				return
+			}
+		}
+		t.pendingPlayerSnapshots[0] = playerLeaveSnapshot{}
+		t.pendingPlayerSnapshots = t.pendingPlayerSnapshots[1:]
 	}
 }
 

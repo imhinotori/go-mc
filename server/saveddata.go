@@ -174,9 +174,6 @@ func (t *TickLoop) tickPlayerAutosave() {
 			continue
 		}
 		snap := playerLeaveSnapshot{uuid: p.uuid, data: snapshotPlayer(p), stats: snapshotStats(p.stats)}
-		select {
-		case t.leaveSnapshots <- snap:
-		default: // buffer full: skip this player this pass (a dropped autosave retries next interval)
-		}
+		t.enqueuePlayerSnapshot(snap, false)
 	}
 }

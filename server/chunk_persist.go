@@ -35,15 +35,20 @@ const chunkSaveIntervalTicks = 100
 // SetChunkSaver wires the off-tick chunk-save consumer (SUB-PERSIST). main() calls it before Run
 // with a ChunkSaver targeting worldDir/region. A nil/disabled saver makes the save phase a cheap
 // no-op (tests/ephemeral runs need no disk). Set-once at setup; read only on the tick goroutine.
-func (t *TickLoop) SetChunkSaver(s *world.ChunkSaver) { t.chunkSaver = s }
+func (t *TickLoop) SetChunkSaver(s *world.ChunkSaver) {
+	t.chunkSaver = s
+}
 
 // tickChunkSave is the periodic chunk-save phase (SUB-PERSIST), called from the world phase inside
 // the fixed tick order (no new phase added — it lives inside an existing phase like the other
 // gameplay seams). Every chunkSaveIntervalTicks it drains the manager's dirty set and flushes each
-// dirty column. A nil/disabled saver or nil world makes it a cheap no-op. Runs on the owner.
+// dirty chunk column, then independently autosaves entities for every remaining Ready column. The
+// latter mirrors PersistentEntitySectionManager.autoSave/getAllChunksToSave: entity state is saved
+// for every loaded column, not only when block/chunk data happened to become dirty. Runs on owner.
 func (t *TickLoop) tickChunkSave() {
-	if t.world() == nil || !t.chunkSaver.Enabled() {
-		return // no world wired or persistence off: nothing to save
+	chunkSaverEnabled := t.chunkSaver != nil && t.chunkSaver.Enabled()
+	if t.world() == nil || (!chunkSaverEnabled && t.persistDir == "") {
+		return // no world wired or both persistence paths are off: nothing to save
 	}
 	t.chunkSaveTickCounter++
 	if t.chunkSaveTickCounter < chunkSaveIntervalTicks {
@@ -51,13 +56,32 @@ func (t *TickLoop) tickChunkSave() {
 	}
 	t.chunkSaveTickCounter = 0
 
-	dirty := t.world().DrainDirty()
-	for _, pos := range dirty {
-		if !t.flushColumn(pos) {
-			// Queue full: re-mark dirty so the next pass retries (a dropped save is deferred,
-			// never lost). MarkDirty is a no-op for a no-longer-Ready column (already unloaded).
-			t.world().MarkDirty(pos)
+	// Chunk data retains its dirty-only coalescing path. Entity persistence is deliberately not
+	// coupled to this set: arbitrary live entity fields mutate without touching ChunkManager.
+	flushedEntities := make(map[level.ChunkPos]struct{})
+	if chunkSaverEnabled {
+		dirty := t.world().DrainDirty()
+		for _, pos := range dirty {
+			if !t.flushColumn(pos) {
+				// Queue full: re-mark dirty so the next pass retries (a dropped save is deferred,
+				// never lost). MarkDirty is a no-op for a no-longer-Ready column (already unloaded).
+				t.world().MarkDirty(pos)
+			}
+			// flushColumn snapshots entities before attempting the chunk queue, including on a
+			// full queue, so the independent pass below need not write this column twice.
+			flushedEntities[pos] = struct{}{}
 		}
+	}
+
+	if t.persistDir != "" {
+		// CITE 26.2 PersistentEntitySectionManager.autoSave -> getAllChunksToSave ->
+		// storeChunkSections. Loaded columns are visited even when their entity list is empty;
+		// the empty store is what clears a previously non-empty EntityStorage cell.
+		t.world().ForEachReady(func(pos level.ChunkPos, _ *level.Chunk) {
+			if _, already := flushedEntities[pos]; !already {
+				t.flushColumnEntities(pos)
+			}
+		})
 	}
 }
 
@@ -66,10 +90,16 @@ func (t *TickLoop) tickChunkSave() {
 // snapshot was enqueued (or there was nothing to save). It also clears the column's dirty flag (the
 // flush supersedes any pending periodic save). Runs on the owner before Remove.
 func (t *TickLoop) flushColumnNow(pos level.ChunkPos) bool {
-	if t.world() == nil || !t.chunkSaver.Enabled() {
+	if t.world() == nil {
 		return true
 	}
-	return t.flushColumn(pos)
+	if t.chunkSaver != nil && t.chunkSaver.Enabled() {
+		return t.flushColumn(pos)
+	}
+	if t.persistDir != "" {
+		t.flushColumnEntities(pos)
+	}
+	return true
 }
 
 // flushColumn serializes the column at pos (folding in any rolled openChests) and enqueues the
@@ -78,6 +108,10 @@ func (t *TickLoop) flushColumnNow(pos level.ChunkPos) bool {
 // no-op-true (nothing more this tick can do). The serialization is a pure READ over tick-owned
 // chunk state on the owner goroutine.
 func (t *TickLoop) flushColumn(pos level.ChunkPos) bool {
+	return t.flushColumnWithMode(pos, false)
+}
+
+func (t *TickLoop) flushColumnWithMode(pos level.ChunkPos, durable bool) bool {
 	ch, ok := t.world().Get(pos)
 	if !ok {
 		return true // not Ready (unloaded / not yet generated): nothing to serialize
@@ -124,16 +158,11 @@ func (t *TickLoop) flushColumn(pos level.ChunkPos) bool {
 	// and write them to the parallel entities/r.x.z.mca region (the modern EntityStorage path). The
 	// snapshot is an IMMUTABLE []save.Entities value; only that crosses into the disk IO (no live
 	// *Entity), so it is race-free by the same discipline as the chunk bytes. A column with no
-	// persistable entities writes an empty cell (a later reload finds no entities -> a clean miss). The
+	// persistable entities writes an empty cell (a later reload reads zero entities and respawns none). The
 	// write is synchronous owner-side (the per-column entity set is small, like the raid/POI/level.dat
 	// flushes). CITE EntityStorage.storeEntities.
 	if t.persistDir != "" {
-		ents := t.snapshotColumnEntities(pos)
-		if len(ents) > 0 {
-			if err := saveEntities(t.persistDir, pos, ents); err != nil {
-				udebug("chunksave", "entity save %v: %v", pos, err)
-			}
-		}
+		t.flushColumnEntities(pos)
 	}
 
 	// SCHEDULED-TICK FLUSH: pack this column pending block + fluid ticks so a repeater mid-delay
@@ -151,7 +180,46 @@ func (t *TickLoop) flushColumn(pos level.ChunkPos) bool {
 		return true
 	}
 
-	return t.chunkSaver.Enqueue(world.ChunkSaveSnapshot{Pos: pos, Data: data})
+	snap := world.ChunkSaveSnapshot{Pos: pos, Data: data}
+	if durable {
+		t.chunkSaver.EnqueueDurable(snap)
+		return true
+	}
+	return t.chunkSaver.Enqueue(snap)
+}
+
+// flushAllLoadedChunksForShutdown mirrors MinecraftServer.stopServer -> saveAllChunks(flush=true):
+// snapshot every ready loaded chunk on the owner before allowing the off-tick IO loop to close.
+func (t *TickLoop) flushAllLoadedChunksForShutdown() {
+	if t.world() == nil {
+		return
+	}
+	if t.chunkSaver != nil && t.chunkSaver.Enabled() {
+		t.world().DrainDirty()
+		t.world().ForEachReady(func(pos level.ChunkPos, _ *level.Chunk) {
+			t.flushColumnWithMode(pos, true)
+		})
+		return
+	}
+	// EntityStorage is independent of chunk-region persistence. The default server may have the
+	// .mca saver disabled while persistDir/entities is active; still snapshot every loaded column,
+	// including empty cells that erase an older non-empty entity sector.
+	if t.persistDir != "" {
+		t.world().ForEachReady(func(pos level.ChunkPos, _ *level.Chunk) {
+			t.flushColumnEntities(pos)
+		})
+	}
+}
+
+// flushColumnEntities snapshots and stores the persistable entities in pos, including an EMPTY
+// list. The empty write is required: 26.2 PersistentEntitySectionManager.storeChunkSections calls
+// EntityStorage.storeEntities with ChunkEntities(pos, []) for a loaded column that has become empty;
+// EntityStorage then stores STORE_EMPTY, preventing an older non-empty sector from resurrecting.
+// Our region backend represents the same observable state with an explicit empty Entities list.
+func (t *TickLoop) flushColumnEntities(pos level.ChunkPos) {
+	if err := saveEntities(t.persistDir, pos, t.snapshotColumnEntities(pos)); err != nil {
+		udebug("chunksave", "entity save %v: %v", pos, err)
+	}
 }
 
 // flushChestItems ports ChestBlockEntity.saveAdditional for every rolled openChest in the column at

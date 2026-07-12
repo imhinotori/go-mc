@@ -24,7 +24,9 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -165,7 +167,7 @@ func main() {
 	// Construct the single-owner runtime: the network->tick seam (one bounded chan
 	// Intent), the authoritative tick loop over the real system clock, and the
 	// independent keep-alive component.
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	inbound := make(chan server.Intent, inboundCap)
@@ -348,7 +350,11 @@ func main() {
 	// RunSaveLoop drains those snapshots and does the disk IO OFF the tick, so a leave never
 	// blocks the tick on persistence and no live tick-owned state is read off-thread.
 	tick.SetSaveSink()
-	go tick.RunSaveLoop(ctx, worldDir)
+	playerSaveDone := make(chan struct{})
+	go func() {
+		tick.RunSaveLoop(ctx, worldDir)
+		close(playerSaveDone)
+	}()
 
 	// PLUGIN-02 (Plan 22): load the plugin host from plugins/ (TOML-manifest dirs, register-once
 	// hooks) and wire it into the tick BEFORE Run, so the discrete gameplay seams (break/place/
@@ -453,9 +459,21 @@ func main() {
 	// SUB-PERSIST: the off-tick chunk-save consumer (its own goroutine, like the player save loop).
 	// Disabled (SULFUR_PERSIST_CHUNKS != 1) it just waits on ctx — no disk IO. Enabled it drains the
 	// tick's immutable chunk snapshots and writes them to region files OFF the tick.
-	go chunkSaver.RunChunkSaveLoop(ctx, log.Printf)
+	chunkSaveDone := make(chan struct{})
+	go func() {
+		chunkSaver.RunChunkSaveLoop(ctx, log.Printf)
+		close(chunkSaveDone)
+	}()
 
-	go tick.Run(ctx, inbound)
+	tickDone := make(chan struct{})
+	go func() {
+		tick.Run(ctx, inbound)
+		close(tickDone)
+	}()
+	// Do not expose listener shutdown until the owner has armed its final-snapshot handshake.
+	// A bind failure or signal immediately after startup can otherwise cancel IO consumers before
+	// the tick announces that it will publish the final player/chunk batch.
+	<-tick.Started()
 	go keep.Run(ctx)
 	go worker.Run(ctx)
 	if netherWorker != nil {
@@ -498,12 +516,30 @@ func main() {
 			slog.Error("tui exited", "err", err)
 		}
 		cancel() // tea.Quit / Ctrl-C → stop every server goroutine
+		// MinecraftServer.stopServer saves players, then flushes all loaded chunks, then closes
+		// storage. Wait for the tick-owned final snapshot pass and both IO drains before main exits.
+		<-tickDone
+		<-playerSaveDone
+		<-chunkSaveDone
 		return
 	}
 
-	// Headless (Docker/CI/piped stdout): NO bubbletea program. Install the plain-stderr slog
-	// handler (tui.NewHandler(nil)) and keep the EXACT blocking log.Fatal(srv.Listen(*addr))
-	// behavior this binary has today (Pitfall 4 — byte-for-behavior unchanged).
+	// Headless (Docker/CI/piped stdout): NO bubbletea program. Listen off-main so SIGINT/SIGTERM can
+	// drive the same ordered shutdown as TUI. Never use log.Fatal here: it calls os.Exit and skips
+	// the player/chunk drains. A real listener error is retained and reported after persistence.
 	slog.SetDefault(slog.New(tui.NewHandler(nil)))
-	log.Fatal(srv.Listen(*addr))
+	listenErr := make(chan error, 1)
+	go func() { listenErr <- srv.Listen(*addr) }()
+	var serveErr error
+	select {
+	case serveErr = <-listenErr:
+		cancel()
+	case <-ctx.Done():
+	}
+	<-tickDone
+	<-playerSaveDone
+	<-chunkSaveDone
+	if serveErr != nil {
+		log.Printf("server listener stopped: %v", serveErr)
+	}
 }
