@@ -246,6 +246,20 @@ type Entity struct {
 	// AbstractArrow.firedFromWeapon / getWeaponItem / setSoundEvent path in ProjectileWeaponItem.createProjectile.
 	arrowWeapon component.SlotData
 
+	// arrowPierceLevel is AbstractArrow.getPierceLevel() (setPierceLevel): the Piercing enchant level read
+	// once at spawn from getPiercingCount(level, firedFromWeapon, pickupItemStack) in the AbstractArrow ctor
+	// (0 = no pierce). An arrow with pierce > 0 passes THROUGH up to pierceLevel+1 distinct entities before
+	// it is discarded, tracking the ids it already hit in arrowPiercingIgnoreEntityIds. Cite AbstractArrow
+	// .setPierceLevel / getPierceLevel + EnchantmentHelper.getPiercingCount.
+	arrowPierceLevel byte
+
+	// arrowPiercingIgnoreEntityIds is AbstractArrow.piercingIgnoreEntityIds (an IntOpenHashSet): the ids of
+	// entities this arrow has ALREADY pierced. canHitEntity skips an id in this set (no re-hit), and
+	// onHitEntity discards the arrow once the set reaches pierceLevel+1 entries. Lazily created on the first
+	// pierce hit (nil until then, matching the vanilla `ifnonnull` lazy-init). Cite AbstractArrow.canHitEntity
+	// (the piercingIgnoreEntityIds.contains gate) + onHitEntity (the size >= pierceLevel+1 discard).
+	arrowPiercingIgnoreEntityIds map[int32]bool
+
 	// spawnData is the ClientboundAddEntity "data" field (object-specific). For an arrow vanilla sets it to
 	// ownerId+1 (the client owner link for crit visuals); 0 for a plain mob. Set at spawn.
 	spawnData int32

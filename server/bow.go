@@ -136,13 +136,60 @@ func (t *TickLoop) crossbowReleaseUsing(p *tickPlayer, stack component.SlotData,
 	t.stopUsingItem(p)
 }
 
-// fireCrossbow ports CrossbowItem.use charged branch -> performShooting: fire the loaded bolt at power 3.15
-// (getShootingPower, non-firework) in the look direction, clear CHARGED, damage the crossbow by 1. Not crit.
-// Multishot is a cited enchant hook. Cite CrossbowItem.use + performShooting + shootProjectile.
+// fireCrossbow ports CrossbowItem.use charged branch -> performShooting -> ProjectileWeaponItem.shoot: fire
+// the loaded bolt(s) at power 3.15 (getShootingPower, non-firework) in the look direction, clear CHARGED,
+// damage the crossbow by 1. Not crit. MULTISHOT fires 3 arrows fanned across a total spread (center + the
+// two side arrows at -/+ half the spread) instead of 1. The count comes from
+// EnchantmentHelper.processProjectileCount (base 1 -> Multishot I = 3) and the total spread from
+// processProjectileSpread (base 0 -> Multishot I = 10 degrees). Cite CrossbowItem.use + performShooting +
+// ProjectileWeaponItem.shoot + shootProjectile.
 func (t *TickLoop) fireCrossbow(p *tickPlayer, _ *Inventory, stack component.SlotData, hand int32) {
-	t.shootPlayerArrow(p, crossbowShootPower, false, stack)
+	t.fireCrossbowVolley(p, stack)
 	p.crossbowCharged = false
 	t.hurtHandItem(p, hand, bowDurabilityUse)
+}
+
+// fireCrossbowVolley is the port of the ProjectileWeaponItem.shoot angle fan-out for the charged crossbow.
+// count = processProjectileCount(weapon, 1); spread = processProjectileSpread(weapon, 0). Then, mirroring
+// the shoot bytecode (offsets 10-200):
+//
+//	f2 = count == 1 ? 0 : 2*spread / (count-1);
+//	f3 = ((count-1) % 2) * f2 / 2;   // starting angle
+//	f4 = 1.0;                        // sign
+//	for i in [0,count):
+//	    angle_i = f3 + f4 * ((i+1)/2) * f2;    // integer div (i+1)/2
+//	    f4 = -f4;
+//	    <spawn arrow at yaw offset angle_i>
+//
+// For count=1 (no Multishot) this yields a single arrow at angle 0 -- byte-identical to the pre-Multishot
+// single shot. For count=3, spread=10: f2=10, f3=0 -> angles 0, -10, +10 (center, left, right). Each arrow
+// is launched via shootPlayerArrow (Projectile.shootFromRotation with the per-arrow yaw offset -- the v1
+// launch seam the single shot already used). The side arrows are intangible (no-pickup) in vanilla; v1
+// arrows are not pickupable ground items yet, so the flag has no observable effect here (cited). Cite
+// ProjectileWeaponItem.shoot offsets 10-200 + CrossbowItem.shootProjectile.
+func (t *TickLoop) fireCrossbowVolley(p *tickPlayer, stack component.SlotData) {
+	count := 1
+	spread := float32(0.0)
+	if !stackEmpty(stack) {
+		count = t.enchProcessProjectileCount(stack, 1)
+		spread = t.enchProcessProjectileSpread(stack, 0.0)
+	}
+	if count < 1 {
+		count = 1 // draw always produces at least the primary ammo copy (list never empty for a valid shot)
+	}
+	var f2 float32
+	if count == 1 {
+		f2 = 0
+	} else {
+		f2 = 2.0 * spread / float32(count-1)
+	}
+	f3 := float32((count-1)%2) * f2 / 2.0
+	f4 := float32(1.0)
+	for i := 0; i < count; i++ {
+		angle := f3 + f4*float32((i+1)/2)*f2 // (i+1)/2 is integer division, matching idiv
+		f4 = -f4
+		t.shootPlayerArrowAngle(p, crossbowShootPower, false, stack, angle)
+	}
 }
 
 // shootPlayerArrow builds the arrow launch vector from the player look (Projectile.shootFromRotation: the
@@ -150,7 +197,15 @@ func (t *TickLoop) fireCrossbow(p *tickPlayer, _ *Inventory, stack component.Slo
 // Arrow from the player eye via the shared spawnArrow infra. crit sets the crit flag (setCritArrow). Cite
 // Projectile.shootFromRotation + spawnArrow + AbstractArrow.setCritArrow.
 func (t *TickLoop) shootPlayerArrow(p *tickPlayer, velocity float64, crit bool, weapon component.SlotData) *Entity {
-	// Spawn at rest, then Projectile.shootFromRotation(player, xRot, yRot, 0, velocity, 1.0): the look
+	return t.shootPlayerArrowAngle(p, velocity, crit, weapon, 0)
+}
+
+// shootPlayerArrowAngle is shootPlayerArrow with an explicit yaw angle offset (degrees) added to the look
+// direction before the launch -- the Multishot fan-out passes -10/0/+10 for the three arrows. angleOffset 0
+// is the plain single shot (bow / center crossbow bolt). Cite Projectile.shootFromRotation (the angle arg)
+// + ProjectileWeaponItem.shoot (the per-arrow angle).
+func (t *TickLoop) shootPlayerArrowAngle(p *tickPlayer, velocity float64, crit bool, weapon component.SlotData, angleOffset float32) *Entity {
+	// Spawn at rest, then Projectile.shootFromRotation(player, xRot, yRot+angle, 0, velocity, 1.0): the look
 	// vector with the 3 per-axis inaccuracy triangle draws (BowItem/CrossbowItem shoot at inaccuracy 1.0,
 	// verified BowItem.releaseUsing offset 117 fconst_1) on the arrow's OWN arrowRNG, then the owner
 	// known-movement inherit. A pig fires no arrow, so its stream is never perturbed. Cite
@@ -160,7 +215,7 @@ func (t *TickLoop) shootPlayerArrow(p *tickPlayer, velocity float64, crit bool, 
 		a.arrowRNG = newEntityRandom(uint64(a.id))
 	}
 	mx, my, mz := t.playerKnownMovement(p)
-	vx, vy, vz := shootVectorFromRotation(a.arrowRNG, p.yaw, p.pitch, 0, velocity, 1.0, mx, my, mz, p.onGround)
+	vx, vy, vz := shootVectorFromRotation(a.arrowRNG, p.yaw, p.pitch, angleOffset, velocity, 1.0, mx, my, mz, p.onGround)
 	a.vx, a.vy, a.vz = vx, vy, vz
 	horiz := math.Sqrt(vx*vx + vz*vz)
 	a.yaw = float32(mthAtan2(vx, vz) * float64(mthRadToDeg))
@@ -173,6 +228,16 @@ func (t *TickLoop) shootPlayerArrow(p *tickPlayer, velocity float64, crit bool, 
 	// + firedFromWeapon = weapon.copy()) so AbstractArrow.getWeaponItem() reads the bow's Power/Punch/
 	// Fire Aspect at hit time. A dispenser/mob arrow with no weapon leaves this empty.
 	a.arrowWeapon = weapon
+	// AbstractArrow.<init> reads EnchantmentHelper.getPiercingCount(level, firedFromWeapon, pickupItemStack)
+	// once at spawn and setPierceLevel((byte) count) when > 0. A crossbow with Piercing N makes the bolt pass
+	// through up to N+1 distinct entities. A weaponless / non-Piercing shot leaves pierceLevel 0 (the arrow
+	// is consumed on its first entity hit, byte-identical to the pre-pierce path). Cite AbstractArrow.<init>
+	// offsets 103-125 + EnchantmentHelper.getPiercingCount.
+	if !stackEmpty(weapon) {
+		if pc := t.enchGetPiercingCount(weapon); pc > 0 {
+			a.arrowPierceLevel = byte(pc)
+		}
+	}
 	// ProjectileWeaponItem.shoot -> EnchantmentHelper.onProjectileSpawned(weapon, projectile): Flame's
 	// PROJECTILE_SPAWNED Ignite lights the arrow (igniteForSeconds 100), so a burning arrow ignites what
 	// it hits (AbstractArrow.onHitEntity isOnFire -> igniteForSeconds(5)). A plain bow does nothing.

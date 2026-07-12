@@ -50,12 +50,14 @@ func (t *TickLoop) dropAllDeathLootPlayer(p *tickPlayer) {
 
 // dropPlayerEquipment is the port of net.minecraft.world.entity.player.Player.dropEquipment(ServerLevel):
 // super.dropEquipment (Avatar.dropEquipment, a v1 no-op) then, when !KEEP_INVENTORY,
-// destroyVanishingCursedItems (a cited v1 no-op: no PREVENT_EQUIPMENT_DROP enchant subsystem, so the
-// vanilla loop removes nothing) then inventory.dropAll. The KEEP_INVENTORY gate reads the loop's real
-// gamerules store (gameRule(ruleKeepInventory), default FALSE = drop).
+// destroyVanishingCursedItems (delete every stack bearing the minecraft:prevent_equipment_drop marker --
+// Vanishing Curse) then inventory.dropAll. The KEEP_INVENTORY gate reads the loop's real gamerules store
+// (gameRule(ruleKeepInventory), default FALSE = drop).
 //
 //	[VERIFIED javap Player.dropEquipment: super.dropEquipment; getGameRules().get(KEEP_INVENTORY); ifne
 //	 return; destroyVanishingCursedItems(); inventory.dropAll().]
+//	[VERIFIED javap Player.destroyVanishingCursedItems: per inventory slot, if !isEmpty &&
+//	 EnchantmentHelper.has(stack, PREVENT_EQUIPMENT_DROP) -> inventory.removeItemNoUpdate(i) (delete).]
 //	[VERIFIED javap Inventory.dropAll: for each compartment, for each stack, if !isEmpty
 //	 player.drop(stack, true, false); compartment.set(i, EMPTY).]
 //
@@ -69,6 +71,21 @@ func (t *TickLoop) dropPlayerEquipment(p *tickPlayer) {
 	}
 
 	inv := ensureInventory(p)
+
+	// destroyVanishingCursedItems(): BEFORE dropAll, delete every inventory stack carrying a
+	// PREVENT_EQUIPMENT_DROP enchant (Vanishing Curse) so it vanishes instead of dropping. Gated on the
+	// enchant being present -- an un-enchanted stack draws no work and is untouched. The vanilla loop spans
+	// the whole Inventory (getContainerSize), which in Sulfur is the item-bearing 5-45 window range.
+	for slot := int16(deathDropFirstSlot); slot <= int16(deathDropLastSlot); slot++ {
+		stack := inv.get(slot)
+		if stackEmpty(stack) {
+			continue
+		}
+		if enchHasPreventEquipmentDrop(stack) {
+			inv.set(slot, component.SlotData{Count: 0}) // removeItemNoUpdate(i): delete (no drop)
+		}
+	}
+
 	for slot := int16(deathDropFirstSlot); slot <= int16(deathDropLastSlot); slot++ {
 		stack := inv.get(slot)
 		if stackEmpty(stack) {

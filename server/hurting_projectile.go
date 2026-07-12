@@ -191,8 +191,8 @@ func (t *TickLoop) tickHurtingProjectile(e *Entity) {
 	// crosses first. Scan both, dispatch to whichever is nearer along the segment (smaller tHit), then run
 	// the per-kind onHit (explosion) at the victim position and discard.
 	half := hurtingEntityType(e.hurtingKind).Width / 2.0
-	pv, pt := t.projectileFindHitPlayerT(e.hurtOwnerID, ox, oy, oz, endX, endY, endZ)
-	mv, mt := t.projectileFindHitMobT(e.hurtOwnerID, half, ox, oy, oz, endX, endY, endZ)
+	pv, pt := t.projectileFindHitPlayerT(e.hurtOwnerID, nil, ox, oy, oz, endX, endY, endZ)
+	mv, mt := t.projectileFindHitMobT(e.hurtOwnerID, nil, half, ox, oy, oz, endX, endY, endZ)
 	if pv != nil && (mv == nil || pt <= mt) {
 		if e.hurtingKind == hurtDragonFireball {
 			// DragonFireball has no onHitEntity -> onHit(HitResult) spawns the dragon_breath AEC + discard.

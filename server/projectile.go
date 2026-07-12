@@ -169,26 +169,40 @@ func (t *TickLoop) tickArrow(e *Entity) {
 	// (smaller tHit) -- so a mob standing in front of a player takes the hit and vice-versa. The per-family
 	// on-hit (player vs mob) is mirrored 1:1 (same damage math, different victim + hurt entrypoint).
 	half := entity.Arrow.Width / 2.0
-	pv, pt := t.projectileFindHitPlayerT(e.arrowShooterID, ox, oy, oz, endX, endY, endZ)
-	mv, mt := t.projectileFindHitMobT(e.arrowShooterID, half, ox, oy, oz, endX, endY, endZ)
-	if pv != nil && (mv == nil || pt <= mt) {
-		if e.isTrident {
-			if !e.tridentDealtDamage {
-				t.tridentOnHitEntity(e, pv) // bounces; continues into the flight physics below
+	// PIERCE-aware entity-hit loop. Vanilla ProjectileUtil.getEntityHitResult over the swept segment can
+	// cross SEVERAL entities in one tick; AbstractArrow.onHitEntity adds each to piercingIgnoreEntityIds and
+	// keeps flying until the set reaches pierceLevel+1 (then discard). A pierce-0 arrow hits the single
+	// nearest and is consumed. The loop re-scans (skipping already-pierced ids via the ignore set) so a row
+	// of mobs is pierced in nearest-first order, matching the vanilla sweep. A trident (no pierce) hits at
+	// most once and bounces. Cite AbstractArrow.onHitEntity (pierce branch) + ProjectileUtil.getEntityHitResult.
+	for {
+		pv, pt := t.projectileFindHitPlayerT(e.arrowShooterID, e.arrowPiercingIgnoreEntityIds, ox, oy, oz, endX, endY, endZ)
+		mv, mt := t.projectileFindHitMobT(e.arrowShooterID, e.arrowPiercingIgnoreEntityIds, half, ox, oy, oz, endX, endY, endZ)
+		if pv != nil && (mv == nil || pt <= mt) {
+			if e.isTrident {
+				if !e.tridentDealtDamage {
+					t.tridentOnHitEntity(e, pv) // bounces; continues into the flight physics below
+				}
+				break
 			}
-		} else {
-			t.arrowOnHitPlayer(e, pv)
-			return // v1: no pierce -- the arrow is consumed by the hit
-		}
-	} else if mv != nil {
-		if e.isTrident {
-			if !e.tridentDealtDamage {
-				t.tridentOnHitMob(e, mv) // bounces; continues into the flight physics below
+			if t.arrowOnHitPlayer(e, pv) {
+				return // consumed (discarded) by the hit -- no further flight this tick
 			}
-		} else {
-			t.arrowOnHitMob(e, mv)
-			return // v1: no pierce -- the arrow is consumed by the hit
+			// Pierced (not consumed): the victim id is now in the ignore set; re-scan for the next entity.
+			continue
+		} else if mv != nil {
+			if e.isTrident {
+				if !e.tridentDealtDamage {
+					t.tridentOnHitMob(e, mv) // bounces; continues into the flight physics below
+				}
+				break
+			}
+			if t.arrowOnHitMob(e, mv) {
+				return // consumed (discarded) by the hit
+			}
+			continue
 		}
+		break // no (more) entity on the segment this tick
 	}
 
 	if blockHit {
@@ -246,7 +260,7 @@ func (t *TickLoop) arrowFindHitPlayer(e *Entity, ox, oy, oz, nx, ny, nz float64)
 // every projectile family (arrow/throwable/potion/hurting) -- the only per-family variance is which owner id
 // to exclude, so the geometry lives here once.
 func (t *TickLoop) projectileFindHitPlayer(ownerID int32, ox, oy, oz, nx, ny, nz float64) *tickPlayer {
-	best, _ := t.projectileFindHitPlayerT(ownerID, ox, oy, oz, nx, ny, nz)
+	best, _ := t.projectileFindHitPlayerT(ownerID, nil, ox, oy, oz, nx, ny, nz)
 	return best
 }
 
@@ -256,7 +270,7 @@ func (t *TickLoop) projectileFindHitPlayer(ownerID int32, ox, oy, oz, nx, ny, nz
 // .getEntityHitResult returns the one entity with the smallest distanceToSqr from the segment origin over
 // ALL candidates (tHit is monotone in that distance for a fixed origin). The player-only projectileFindHitPlayer
 // delegates here so the geometry is defined once and stays byte-identical.
-func (t *TickLoop) projectileFindHitPlayerT(ownerID int32, ox, oy, oz, nx, ny, nz float64) (*tickPlayer, float64) {
+func (t *TickLoop) projectileFindHitPlayerT(ownerID int32, ignore map[int32]bool, ox, oy, oz, nx, ny, nz float64) (*tickPlayer, float64) {
 	var best *tickPlayer
 	bestT := math.Inf(1)
 	for _, p := range t.players {
@@ -265,6 +279,9 @@ func (t *TickLoop) projectileFindHitPlayerT(ownerID int32, ox, oy, oz, nx, ny, n
 		}
 		if p.entityID == ownerID {
 			continue // the projectile never hits its own shooter (checkLeftOwner guard)
+		}
+		if ignore != nil && ignore[p.entityID] {
+			continue // AbstractArrow.canHitEntity: an id in piercingIgnoreEntityIds is not re-hit
 		}
 		// Build the player's collision AABB (0.6x1.8, base at feet), inflated by the arrow's half-size
 		// (0.3) -- ProjectileUtil inflates the target box by the projectile's bounding box before the clip.
@@ -295,7 +312,7 @@ func (t *TickLoop) projectileFindHitPlayerT(ownerID int32, ox, oy, oz, nx, ny, n
 // snowballFindHitMobVictim (the pre-existing snow-golem scan); this generalizes it over the projectile
 // half-size so every family reuses one scan. Cite ProjectileUtil.getEntityHitResult / Projectile.canHitEntity
 // (canBeHitByProjectile + !isOwner).
-func (t *TickLoop) projectileFindHitMobT(ownerID int32, half, ox, oy, oz, nx, ny, nz float64) (*Entity, float64) {
+func (t *TickLoop) projectileFindHitMobT(ownerID int32, ignore map[int32]bool, half, ox, oy, oz, nx, ny, nz float64) (*Entity, float64) {
 	region := t.cur()
 	if region == nil || region.entities == nil {
 		return nil, math.Inf(1)
@@ -308,6 +325,9 @@ func (t *TickLoop) projectileFindHitMobT(ownerID int32, half, ox, oy, oz, nx, ny
 		}
 		if other.id == ownerID {
 			continue // never hits its own shooter (checkLeftOwner guard)
+		}
+		if ignore != nil && ignore[other.id] {
+			continue // AbstractArrow.canHitEntity: an id in piercingIgnoreEntityIds is not re-hit
 		}
 		if !isLivingMob(other) {
 			continue // canBeHitByProjectile: only a LivingEntity mob is a projectile victim
@@ -332,7 +352,7 @@ func (t *TickLoop) projectileFindHitMobT(ownerID int32, half, ox, oy, oz, nx, ny
 // arrowOnHitPlayer is the AbstractArrow.onHitEntity port for a player victim: damage =
 // ceil(clamp(deltaMovement.length() * baseDamage, 0, MAXINT)), hurt with the arrow damage source
 // (attributed to the shooter), then discard the arrow (v1: no pierce). Cite AbstractArrow.onHitEntity.
-func (t *TickLoop) arrowOnHitPlayer(e *Entity, victim *tickPlayer) {
+func (t *TickLoop) arrowOnHitPlayer(e *Entity, victim *tickPlayer) bool {
 	pow := math.Sqrt(e.vx*e.vx + e.vy*e.vy + e.vz*e.vz) // getDeltaMovement().length()
 	src := damageSourceArrow(e.arrowShooterID)
 	victimRef := enchEntityRef{player: victim}
@@ -350,6 +370,14 @@ func (t *TickLoop) arrowOnHitPlayer(e *Entity, victim *tickPlayer) {
 		raw = 0
 	}
 	dmg := int(math.Ceil(raw)) // Mth.ceil(clamp(...)); clamp upper bound is MAXINT (unreachable here)
+	// PIERCE branch (AbstractArrow.onHitEntity offsets 115-191), BEFORE the crit bonus / hurt. If pierceLevel
+	// > 0: lazily create the ignore set; when it already holds pierceLevel+1 ids the arrow is spent -> discard
+	// and stop (this victim is NOT hurt). Otherwise record this victim's id and continue to hurt it, then fly
+	// on. A pierce-0 arrow skips this and is discarded at the end. Returns true when the arrow was consumed.
+	if e.arrowPierceLevel > 0 && t.arrowPierceGate(e, victim.entityID) {
+		t.cur().entities.remove(e.id)
+		return true
+	}
 	// Crit bonus: if (isCritArrow()) damage = Math.min(random.nextInt(damage/2 + 2) + (long)damage, MAXINT).
 	// A full-draw bow shot (setCritArrow(true)) adds a random 0..(damage/2 + 1) bonus. The draw is from the
 	// arrow's OWN per-entity stream (lazy-seeded from the arrow id) so no mob stream is perturbed. Cite
@@ -386,7 +414,14 @@ func (t *TickLoop) arrowOnHitPlayer(e *Entity, victim *tickPlayer) {
 	// the bow's POST_ATTACK effects (Fire Aspect) fire against the victim, and Thorns on the victim's own
 	// gear runs. A weaponless arrow passes an empty weapon (no attacker-side post-attack).
 	t.doPostAttackEffectsWithItemSource(victimRef, src, e.arrowWeapon, nil, t.enchResolveEntity(e.arrowShooterID))
-	t.cur().entities.remove(e.id)
+	// AbstractArrow.onHitEntity offsets 581-592: discard the arrow ONLY when pierceLevel <= 0. A piercing
+	// arrow keeps flying (it re-scans for the next victim this tick, then continues its move). Cite
+	// AbstractArrow.onHitEntity (getPierceLevel() ifgt -> skip discard).
+	if e.arrowPierceLevel <= 0 {
+		t.cur().entities.remove(e.id)
+		return true
+	}
+	return false
 }
 
 // arrowOnHitMob is the AbstractArrow.onHitEntity port for a MOB (LivingEntity) victim -- the *Entity sibling
@@ -395,7 +430,7 @@ func (t *TickLoop) arrowOnHitPlayer(e *Entity, victim *tickPlayer) {
 // ONLY in that the victim is a Go-native mob so the hurt routes through applyDamageEntity (the LivingEntity
 // .hurtServer port) and the post-hit effects use the mob effect/enchant seams. The damage math is kept
 // byte-for-byte identical to arrowOnHitPlayer (a divergence would be a bug). Cite AbstractArrow.onHitEntity.
-func (t *TickLoop) arrowOnHitMob(e *Entity, victim *Entity) {
+func (t *TickLoop) arrowOnHitMob(e *Entity, victim *Entity) bool {
 	pow := math.Sqrt(e.vx*e.vx + e.vy*e.vy + e.vz*e.vz) // getDeltaMovement().length()
 	src := damageSourceArrow(e.arrowShooterID)
 	src.sourceX, src.sourceZ, src.hasSourcePos = e.x, e.z, true // directEntity (arrow) position for knockback dir
@@ -412,6 +447,13 @@ func (t *TickLoop) arrowOnHitMob(e *Entity, victim *Entity) {
 		raw = 0
 	}
 	dmg := int(math.Ceil(raw)) // Mth.ceil(clamp(...)); clamp upper bound MAXINT (unreachable here)
+	// PIERCE branch (AbstractArrow.onHitEntity offsets 115-191), BEFORE the crit bonus / hurt. See
+	// arrowOnHitPlayer: a spent pierce set (>= pierceLevel+1) discards without hurting; otherwise record the
+	// victim id and hurt+fly on. Returns true when the arrow was consumed. Cite AbstractArrow.onHitEntity.
+	if e.arrowPierceLevel > 0 && t.arrowPierceGate(e, victim.id) {
+		t.cur().entities.remove(e.id)
+		return true
+	}
 	// Crit bonus: isCritArrow() -> damage = min(random.nextInt(damage/2 + 2) + damage, MAXINT). Drawn from the
 	// ARROW's OWN per-entity stream (seeded from the arrow id) so no MOB/pig stream is perturbed. Cite
 	// AbstractArrow.onHitEntity offsets 193-230.
@@ -447,7 +489,29 @@ func (t *TickLoop) arrowOnHitMob(e *Entity, victim *Entity) {
 	// POST_ATTACK effects (Fire Aspect) fire against the mob, and Thorns on the mob's own gear runs. A
 	// weaponless arrow passes an empty weapon.
 	t.doPostAttackEffectsWithItemSource(victimRef, src, e.arrowWeapon, nil, t.enchResolveEntity(e.arrowShooterID))
-	t.cur().entities.remove(e.id)
+	// AbstractArrow.onHitEntity offsets 581-592: discard ONLY when pierceLevel <= 0; a piercing arrow flies on.
+	if e.arrowPierceLevel <= 0 {
+		t.cur().entities.remove(e.id)
+		return true
+	}
+	return false
+}
+
+// arrowPierceGate is the port of AbstractArrow.onHitEntity's pierce branch (offsets 115-191): lazily create
+// piercingIgnoreEntityIds, and return TRUE (arrow should be discarded now, WITHOUT hurting this victim) when
+// the set has already reached pierceLevel+1 distinct entities; otherwise record victimID in the set and
+// return FALSE (proceed to hurt + keep flying). It never hurts; the caller does. Called only when
+// pierceLevel > 0. Cite AbstractArrow.onHitEntity offsets 122-184 (the IntOpenHashSet size >= pierceLevel+1
+// discard, else add(entity.getId())).
+func (t *TickLoop) arrowPierceGate(e *Entity, victimID int32) bool {
+	if e.arrowPiercingIgnoreEntityIds == nil {
+		e.arrowPiercingIgnoreEntityIds = make(map[int32]bool, 5) // new IntOpenHashSet(5)
+	}
+	if len(e.arrowPiercingIgnoreEntityIds) >= int(e.arrowPierceLevel)+1 {
+		return true // size >= pierceLevel+1 -> discard(); return
+	}
+	e.arrowPiercingIgnoreEntityIds[victimID] = true // piercingIgnoreEntityIds.add(entity.getId())
+	return false
 }
 
 // arrowDoKnockbackMob ports AbstractArrow.doKnockback for a MOB (LivingEntity) victim -- the *Entity sibling

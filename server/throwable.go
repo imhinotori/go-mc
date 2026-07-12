@@ -259,8 +259,8 @@ func (t *TickLoop) tickThrowable(e *Entity) {
 	// just players. Scan both, dispatch to whichever is nearer along the segment (smaller tHit). The
 	// snowballHitsMobs snow-golem fast path above already returned for a golem snowball.
 	half := throwableEntityType(e.throwableKind).Width / 2.0
-	pv, pt := t.projectileFindHitPlayerT(e.throwOwnerID, ox, oy, oz, endX, endY, endZ)
-	mv, mt := t.projectileFindHitMobT(e.throwOwnerID, half, ox, oy, oz, endX, endY, endZ)
+	pv, pt := t.projectileFindHitPlayerT(e.throwOwnerID, nil, ox, oy, oz, endX, endY, endZ)
+	mv, mt := t.projectileFindHitMobT(e.throwOwnerID, nil, half, ox, oy, oz, endX, endY, endZ)
 	if pv != nil && (mv == nil || pt <= mt) {
 		t.throwableOnHitEntity(e, pv)
 		t.cur().entities.remove(e.id) // discard on hit

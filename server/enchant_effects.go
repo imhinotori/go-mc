@@ -1069,6 +1069,37 @@ type enchEffectSet struct {
 	fishingLuck        []enchCondValue  // minecraft:fishing_luck_bonus (Luck of the Sea)
 	fishingTime        []enchCondValue  // minecraft:fishing_time_reduction (Lure)
 	crossbowCharge     enchValueEffect  // minecraft:crossbow_charge_time (Quick Charge) — a bare value effect
+
+	// projectileCount is minecraft:projectile_count (Multishot: add linear 2.0 + 2.0/level). Folded over
+	// the MutableFloat(1) ammo count in EnchantmentHelper.processProjectileCount -> ProjectileWeaponItem.draw
+	// (a bow/crossbow drawing 1 stack becomes N copies), then Math.max(0, (int) value).
+	projectileCount []enchCondValue
+	// projectileSpread is minecraft:projectile_spread (Multishot: add linear 10.0 + 10.0/level degrees).
+	// Folded over 0.0 in EnchantmentHelper.processProjectileSpread -> the ProjectileWeaponItem.shoot angle
+	// fan-out (center + the -/+ half-spread arrows), then Math.max(0.0F, value).
+	projectileSpread []enchCondValue
+	// projectilePiercing is minecraft:projectile_piercing (Piercing: add linear 1.0 + 1.0/level). Folded
+	// over 0.0 in EnchantmentHelper.getPiercingCount (the crossbow weapon read at arrow spawn), then
+	// Math.max(0, (int) value) -> AbstractArrow.setPierceLevel.
+	projectilePiercing []enchCondValue
+
+	// preventEquipmentDrop is TRUE when the enchantment carries the minecraft:prevent_equipment_drop marker
+	// component (Vanishing Curse). EnchantmentHelper.has(stack, PREVENT_EQUIPMENT_DROP) is TRUE for a stack
+	// bearing any such enchantment; Player.destroyVanishingCursedItems deletes those stacks on death instead
+	// of dropping them. The component is a bare marker ("minecraft:prevent_equipment_drop": {}), so presence
+	// is all that matters. Cite EnchantmentEffectComponents.PREVENT_EQUIPMENT_DROP.
+	preventEquipmentDrop bool
+	// preventArmorChange is TRUE when the enchantment carries the minecraft:prevent_armor_change marker
+	// component (Binding Curse). ArmorSlot.mayPickup returns false when EnchantmentHelper.has(stack,
+	// PREVENT_ARMOR_CHANGE) and the player is not creative -> the armor cannot be removed once equipped.
+	// A bare marker ("minecraft:prevent_armor_change": {}). Cite EnchantmentEffectComponents.PREVENT_ARMOR_CHANGE.
+	preventArmorChange bool
+
+	// smashDamagePerFallenBlock is minecraft:smash_damage_per_fallen_block (Density: add linear 0.5 +
+	// 0.5/level). CITED BLOCKED: it is folded in MaceItem.getAttackDamageBonus over the mace smash-attack
+	// fall distance, but the mace smash-attack subsystem (MaceItem.getAttackDamageBonus / postAttack) is not
+	// yet ported (v1 getAttackDamageBonus == 0), so this parses but never fires. Cite MaceItem.getAttackDamageBonus.
+	smashDamagePerFallenBlock []enchCondValue
 }
 
 // enchCondEntity is ConditionalEffect<EnchantmentEntityEffect>: an entity effect + optional requirements.
@@ -1106,6 +1137,14 @@ func enchantEffectTable() []*enchEffectSet {
 			set.fishingLuck = parseCondValueList(def.Effects["minecraft:fishing_luck_bonus"])
 			set.fishingTime = parseCondValueList(def.Effects["minecraft:fishing_time_reduction"])
 			set.crossbowCharge = parseValueEffect(def.Effects["minecraft:crossbow_charge_time"])
+			set.projectileCount = parseCondValueList(def.Effects["minecraft:projectile_count"])
+			set.projectileSpread = parseCondValueList(def.Effects["minecraft:projectile_spread"])
+			set.projectilePiercing = parseCondValueList(def.Effects["minecraft:projectile_piercing"])
+			set.smashDamagePerFallenBlock = parseCondValueList(def.Effects["minecraft:smash_damage_per_fallen_block"])
+			// The prevent_* markers are bare presence flags (a "{}" component, not a ConditionalEffect
+			// list): EnchantmentHelper.has checks only that the component is present in the enchant's effects.
+			_, set.preventEquipmentDrop = def.Effects["minecraft:prevent_equipment_drop"]
+			_, set.preventArmorChange = def.Effects["minecraft:prevent_armor_change"]
 			table[i] = set
 		}
 		enchEffectTableVal = table
@@ -1398,6 +1437,120 @@ func (t *TickLoop) enchModifyCrossbowChargingTime(crossbow component.SlotData, b
 // modifyCrossbowChargingTime(stack, entity, 1.25F) * 20.0F). No Quick Charge -> floor(1.25*20) = 25.
 func (t *TickLoop) enchCrossbowChargeDuration(crossbow component.SlotData) int32 {
 	return int32(math.Floor(float64(t.enchModifyCrossbowChargingTime(crossbow, 1.25) * 20.0)))
+}
+
+// enchProcessProjectileCount is EnchantmentHelper.processProjectileCount(ServerLevel, ItemStack weapon,
+// Entity owner, int base): fold the weapon's PROJECTILE_COUNT effects (Multishot: add linear 2.0 +
+// 2.0/level) over float(base) via runIterationOnItem (no slot/requirement gate that Multishot uses), then
+// Math.max(0, (int) value). ProjectileWeaponItem.draw calls it with base 1 to decide how many ammo copies
+// to draw (unenchanted -> 1; Multishot I -> 3). The FloatAction RandomSource is owner.getRandom() —
+// Multishot's add draws nothing (nil is observably identical, kept RNG-lazy).
+//
+//	[VERIFIED javap EnchantmentHelper.processProjectileCount: MutableFloat(base); runIterationOnItem ->
+//	 Enchantment.modifyProjectileCount -> applyEffects(getEffects(PROJECTILE_COUNT), ...); Math.max(0,
+//	 mutable.intValue()).]
+func (t *TickLoop) enchProcessProjectileCount(weapon component.SlotData, base int) int {
+	f := float32(base)
+	ctx := &enchDamageCtx{t: t}
+	forEachItemEnchant(weapon, func(wireID, level int) {
+		set := enchEffectsFor(wireID)
+		if set == nil || len(set.projectileCount) == 0 {
+			return
+		}
+		ctx.level = level
+		f = applyEnchCondValues(set.projectileCount, ctx, nil, f)
+	})
+	v := int(f) // MutableFloat.intValue() f2i truncation
+	if v < 0 {
+		return 0
+	}
+	return v
+}
+
+// enchProcessProjectileSpread is EnchantmentHelper.processProjectileSpread(ServerLevel, ItemStack weapon,
+// Entity owner, float base): fold the weapon's PROJECTILE_SPREAD effects (Multishot: add linear 10.0 +
+// 10.0/level degrees) over base via runIterationOnItem, then Math.max(0.0F, value). ProjectileWeaponItem
+// .shoot calls it with base 0.0 to get the total fan-out spread (Multishot I -> 10 degrees). The FloatAction
+// RandomSource is owner.getRandom() — Multishot's add draws nothing (nil kept RNG-lazy).
+//
+//	[VERIFIED javap EnchantmentHelper.processProjectileSpread: MutableFloat(base); runIterationOnItem ->
+//	 Enchantment.modifyProjectileSpread -> applyEffects(getEffects(PROJECTILE_SPREAD), ...); Math.max(0.0F,
+//	 mutable.floatValue()).]
+func (t *TickLoop) enchProcessProjectileSpread(weapon component.SlotData, base float32) float32 {
+	f := base
+	ctx := &enchDamageCtx{t: t}
+	forEachItemEnchant(weapon, func(wireID, level int) {
+		set := enchEffectsFor(wireID)
+		if set == nil || len(set.projectileSpread) == 0 {
+			return
+		}
+		ctx.level = level
+		f = applyEnchCondValues(set.projectileSpread, ctx, nil, f)
+	})
+	if f < 0.0 {
+		return 0.0
+	}
+	return f
+}
+
+// enchGetPiercingCount is EnchantmentHelper.getPiercingCount(ServerLevel, ItemStack weapon, ItemStack
+// pickupStack): fold the WEAPON's PROJECTILE_PIERCING effects (Piercing: add linear 1.0 + 1.0/level) over
+// 0.0 via runIterationOnItem (over the weapon — the crossbow — NOT the ammo), then Math.max(0, (int) value).
+// The AbstractArrow ctor reads this once at spawn and calls setPierceLevel((byte) count) when > 0. The
+// FloatAction RandomSource is unused by Piercing's add (nil kept RNG-lazy).
+//
+//	[VERIFIED javap EnchantmentHelper.getPiercingCount: MutableFloat(0.0F); runIterationOnItem(weapon, ...);
+//	 Math.max(0, mutable.intValue()). AbstractArrow.<init>: getPiercingCount(level, firedFromWeapon,
+//	 pickupItemStack); if > 0 setPierceLevel((byte) count).]
+func (t *TickLoop) enchGetPiercingCount(weapon component.SlotData) int {
+	f := float32(0.0)
+	ctx := &enchDamageCtx{t: t}
+	forEachItemEnchant(weapon, func(wireID, level int) {
+		set := enchEffectsFor(wireID)
+		if set == nil || len(set.projectilePiercing) == 0 {
+			return
+		}
+		ctx.level = level
+		f = applyEnchCondValues(set.projectilePiercing, ctx, nil, f)
+	})
+	v := int(f) // MutableFloat.intValue() f2i truncation
+	if v < 0 {
+		return 0
+	}
+	return v
+}
+
+// enchHasPreventEquipmentDrop is EnchantmentHelper.has(stack, PREVENT_EQUIPMENT_DROP): TRUE when any
+// enchantment on the stack carries the minecraft:prevent_equipment_drop marker (Vanishing Curse). Drives
+// Player.destroyVanishingCursedItems (the item is deleted on death instead of dropping). No RNG.
+//
+//	[VERIFIED javap EnchantmentHelper.has: runIterationOnItem sets a MutableBoolean true iff an enchant's
+//	 effects() has(component). Player.destroyVanishingCursedItems: per inventory slot, if has(stack,
+//	 PREVENT_EQUIPMENT_DROP) -> removeItemNoUpdate(i).]
+func enchHasPreventEquipmentDrop(s component.SlotData) bool {
+	has := false
+	forEachItemEnchant(s, func(wireID, _ int) {
+		if set := enchEffectsFor(wireID); set != nil && set.preventEquipmentDrop {
+			has = true
+		}
+	})
+	return has
+}
+
+// enchHasPreventArmorChange is EnchantmentHelper.has(stack, PREVENT_ARMOR_CHANGE): TRUE when any
+// enchantment on the stack carries the minecraft:prevent_armor_change marker (Binding Curse). Drives
+// ArmorSlot.mayPickup (a non-creative player cannot remove the equipped armor). No RNG.
+//
+//	[VERIFIED javap ArmorSlot.mayPickup: !isEmpty && !player.isCreative && EnchantmentHelper.has(stack,
+//	 PREVENT_ARMOR_CHANGE) -> return false.]
+func enchHasPreventArmorChange(s component.SlotData) bool {
+	has := false
+	forEachItemEnchant(s, func(wireID, _ int) {
+		if set := enchEffectsFor(wireID); set != nil && set.preventArmorChange {
+			has = true
+		}
+	})
+	return has
 }
 
 // enchDirectAttackerType resolves DamageSource.getDirectEntity()'s entity-type id for the MELEE path,

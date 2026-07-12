@@ -130,10 +130,21 @@ func (m menuSlot) setItem(s component.SlotData) {
 // oldStack overload's container hook is a no-op here). Tick-owned.
 func (m menuSlot) setByPlayer(s component.SlotData) { m.setItem(s) }
 
-// mayPickup ports Slot.mayPickup(player). The base Slot returns true; InventoryMenu's main/hotbar/armor/
-// offhand all use the base. The craft RESULT slot 0 (ResultSlot) also returns true (its special behavior
-// is in onTake, not mayPickup). So every InventoryMenu slot is pickable. CITE Slot.mayPickup (base).
-func (m menuSlot) mayPickup(_ *tickPlayer) bool { return true }
+// mayPickup ports Slot.mayPickup(player). The base Slot returns true; InventoryMenu's main/hotbar/offhand
+// and the craft RESULT slot 0 (ResultSlot) all use the base (pickable). The ARMOR slots (5-8) use
+// ArmorSlot.mayPickup: an equipped, non-empty armor stack carrying a minecraft:prevent_armor_change enchant
+// (Binding Curse) CANNOT be removed by a non-creative player -> return false. Gated on the enchant being
+// present; an un-cursed armor piece (or a creative player) takes the base true, so the common path is
+// unchanged. CITE Slot.mayPickup (base) + ArmorSlot.mayPickup (the PREVENT_ARMOR_CHANGE gate).
+func (m menuSlot) mayPickup(p *tickPlayer) bool {
+	if m.index >= 5 && m.index <= 8 {
+		s := m.getItem()
+		if !stackEmpty(s) && p != nil && p.gameMode != gameModeCreative && enchHasPreventArmorChange(s) {
+			return false // ArmorSlot.mayPickup: !isEmpty && !isCreative && has(PREVENT_ARMOR_CHANGE)
+		}
+	}
+	return true
+}
 
 // mayPlace ports Slot.mayPlace(stack). The base Slot returns true (CITE Slot.mayPlace). The craft RESULT
 // slot 0 (ResultSlot.mayPlace) returns false — you cannot place INTO the result. Armor slots 5-8
