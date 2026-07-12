@@ -1,7 +1,7 @@
 # Progress de paridad 1:1 — Minecraft Server 26.2
 
 **Actualizado:** 2026-07-12
-**Commit:** `4993c008`
+**Commit:** `0771ecf7`
 **Referencia:** `temp/cache/26.2-inner.jar`
 **Tipo de medición:** estimación ponderada por dominios observables
 **Margen de incertidumbre:** ±4 puntos porcentuales; gamerules, serverbound y las cuatro capas principales de persistencia ya tienen censos de campo/ruta
@@ -10,7 +10,7 @@
 
 ```text
 Paridad observable estimada
-[████████████░░░░░░░░] 59%  (rango razonable: 55–63%)
+[████████████░░░░░░░░] 60%  (rango razonable: 56–64%)
 ```
 
 Este porcentaje NO significa que el 57% de las clases del JAR esté portado. Mide cuánto de la experiencia observable está implementado con suficiente profundidad para acercarse a vanilla. Penaliza subsistemas amplios que existen pero todavía usan stubs, subsets, constantes o aproximaciones.
@@ -26,10 +26,10 @@ Este porcentaje NO significa que el 57% de las clases del JAR esté portado. Mid
 | Entidades, AI, Brain y spawning | 16% | 60% | 9,6 | Todas las categorías tienen cadence/pool; brains y roster efectivo siguen parciales |
 | Combate, efectos, proyectiles y enchants | 10% | 72% | 7,2 | Keystone sólido y fixes recientes; todavía quedan effects/enchants/guards incompletos |
 | Inventario, ítems, crafting y loot | 10% | 55% | 5,5 | Menús/recetas funcionales; componentes, loot functions y acciones mantienen gaps |
-| Persistencia integral | 7% | 35% | 2,45 | Player 22/68, chunk 18/26 y entities/mobs 19/99 grupos/unidades round-trip; 8/111 components; gaps de flush/durabilidad |
-| Commands, advancements y gamerules | 5% | 55% | 2,75 | Registry 59/59; sólo 14 reglas tienen consumidor live-store, 7 siguen constantes y 38 sin consumidor |
+| Persistencia integral | 7% | 45% | 3,15 | Autosave de entidades, empty-cell y shutdown durable cerrados; el field-level sigue en player 22/68, chunk 18/26, entities 19/99 y components 8/111 |
+| Commands, advancements y gamerules | 5% | 56% | 2,8 | Registry 59/59; 15 reglas tienen consumidor live-store, 6 siguen constantes y 38 sin consumidor |
 | Región/concurrencia con semántica vanilla | 3% | 65% | 1,95 | Arquitectura/race discipline fuerte; feeding/breeding/knockback cross-region difieren |
-| **Total ponderado** | **100%** | — | **58,9% ≈ 59%** | Recalibrado con censos de rutas observables; el código no retrocedió |
+| **Total ponderado** | **100%** | — | **59,65% ≈ 60%** | Mejora por durabilidad P0 y dos consumidores gamerule vivos; field parity aún limita el avance |
 
 ## Contadores objetivos del snapshot
 
@@ -39,7 +39,7 @@ Atributos modelados:              40 / 40   = 100%
 Serverbound cases explícitos:     40 / 70   = 57% (incluye sentinel en el denominador generado)
 Serverbound verificados exactos:   4 / 69   =  6% de paquetes reales
 Componentes con codec de disco:    8 / 111  =  7%
-Gamerules con consumidor live:     14 / 59   = 24%
+Gamerules con consumidor live:     15 / 59   = 25%
 Block entities auditadas con codec: 9; live-drive sin seam: 10; ausentes: 4
 Player persistence field groups: 22 / 68 = 32% round-trip
 Chunk persistence field groups:  18 / 26 = 69% round-trip
@@ -65,7 +65,16 @@ Los marcadores incluyen duplicados entre plugins/assets y comentarios histórico
 - Todas las categorías MobCategory cableadas al natural-spawn cadence.
 - Scheduled ticks/header fields de chunks y BE tickers eager.
 
-Estos avances mejoran dominios concretos, pero los censos mostraron que registro, dispatch o structs presentes no equivalen a paridad observable. Por eso la estimación baja de 62% preliminar a 59% con menor incertidumbre.
+Estos avances mejoran dominios concretos, pero los censos mostraron que registro, dispatch o structs presentes no equivalen a paridad observable. Después de cerrar los P0 de durabilidad y dos consumidores gamerule, la estimación vuelve a 60% con menor incertidumbre que el 62% preliminar.
+
+## Ola de fixes integrada
+
+- MiniMax M3 conectó `SPREAD_VINES` al store vivo y, en reintento serial, las dos rutas silverfish de `MOB_GRIEFING`; revisión central y tests focalizados verdes.
+- Agente nativo: autosave de entidades desacoplado del dirty de chunks y escritura explícita de columnas vacías para impedir resurrecciones.
+- Agente nativo: snapshots de player no descartables/coalescidos, snapshot final de players/chunks/entities, drains ordenados y shutdown graceful TUI/headless con SIGINT/SIGTERM.
+- Revisión multiagente encontró y cerró dos bloqueantes antes de integrar: entities con chunk saver deshabilitado y headless usando `log.Fatal`.
+- Gates verdes: seis tests P0, `-race` focalizado, dos tests de `ChunkSaver`, compilación de `cmd/sulfur` y `git diff --check`.
+- `go test ./...` llegó verde fuera de `server`; dos intentos de `server` tropezaron con flakes async preexistentes distintos (`TestAllAsyncSubsystemsRaceClean`, `TestBehaviorRegressionPathArrives`, `TestServerAiStepWalksToGoalTarget`). Repeticiones múltiples confirman intermitencia; no se relajaron tests.
 
 ## Resultados multiworker incorporados
 
@@ -115,5 +124,5 @@ Sin este ledger, los checkboxes de milestone pueden marcar scope reducido como c
 ## Barra resumida para README/reportes
 
 ```text
-Vanilla 26.2 parity: [████████████░░░░░░░░] 59% ±4
+Vanilla 26.2 parity: [████████████░░░░░░░░] 60% ±4
 ```
