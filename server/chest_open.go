@@ -295,10 +295,16 @@ func isChestBlock(s block.StateID) bool {
 // isCrouching), so bl9 is always false → the block interaction always runs. A chest therefore opens
 // on any right-click. Structured so a real sneak read flips the guard later without touching this.
 func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direction int, cursorX, cursorY, cursorZ float32) bool {
-	if t.world() == nil {
+	// Read the block from the player's OWN dimension world (dimWorld(p)/dimMinYFor), not always the
+	// overworld -- a Nether/End interactive block (e.g. a respawn_anchor, chest, or furnace placed in the
+	// Nether) must be classified against the world it actually lives in. Mirrors the place path's
+	// dimWorld(p)/dimMinYFor(p.dimension) reads (block_interact.go).
+	imgr := t.dimWorld(p)
+	if imgr == nil {
 		return false
 	}
-	state, ok := t.world().GetBlock(hitPos, dimMinY)
+	iMinY := dimMinYFor(p.dimension)
+	state, ok := imgr.GetBlock(hitPos, iMinY)
 	if !ok {
 		return false // unloaded: PASS → placement runs
 	}
@@ -369,6 +375,11 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 	// (LEVEL 8) composter, extracts bone meal + empties it. Returns false (PASS) for a non-compostable
 	// hand on a non-READY composter (placement continues). CITE ComposterBlock.useItemOn/useWithoutItem.
 	isComposter := isComposterBlock(state)
+	// A respawn_anchor right-click either CHARGES (glowstone on a CHARGE<4 anchor) or, on a CHARGED
+	// anchor, SETS the player's respawn point (in a dimension where it works -- the Nether) or EXPLODES
+	// (elsewhere). Returns false (PASS) only for an empty (CHARGE 0) anchor with a non-fuel hand, so
+	// placement continues. CITE RespawnAnchorBlock.useItemOn / useWithoutItem.
+	isRespawnAnchor := isRespawnAnchorBlock(state)
 	// A shulker box right-click OPENS its 27-slot container menu (ShulkerBoxBlock.useWithoutItem ->
 	// player.openMenu(sbe), gated by canOpen). An ender chest right-click OPENS the PER-PLAYER ender
 	// inventory (EnderChestBlock.useWithoutItem -> player.openMenu over getEnderChestInventory). Both
@@ -383,7 +394,7 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 		!isRepeater && !isComparator && !isDispenser && !isHopper && !isBeacon && !isAnvil && !isEnchant &&
 		!isGrindstone && !isSmithing && !isLoom && !isDoorFamily && !isSign &&
 		!isCampfire && !isBell && !isLectern && !isJukebox && !isBookshelf && !isComposter &&
-		!isShulker && !isEnderChest && !isSweetBerry {
+		!isShulker && !isEnderChest && !isSweetBerry && !isRespawnAnchor {
 		return false // not an interactive block: PASS → placement runs
 	}
 	// Reach-gate the interaction (the same server-authoritative reach the place/break paths use):
@@ -525,6 +536,13 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 		// composter). Returns false (PASS) when neither branch applies so placement continues. CITE
 		// ComposterBlock.useItemOn / useWithoutItem.
 		return t.useComposter(p, hitPos, state)
+	}
+	if isRespawnAnchor {
+		// RespawnAnchorBlock.useItemOn (charge with glowstone) merged with useWithoutItem (set the
+		// respawn point in the Nether, or explode elsewhere). Returns false (PASS) only for an empty
+		// anchor clicked with a non-fuel hand so placement continues. CITE RespawnAnchorBlock.useItemOn /
+		// useWithoutItem.
+		return t.useRespawnAnchor(p, hitPos, state)
 	}
 	if isShulker {
 		// ShulkerBoxBlock.useWithoutItem -> player.openMenu(sbe) (gated by canOpen). ALWAYS returns SUCCESS
