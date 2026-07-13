@@ -1,11 +1,67 @@
 package world
 
 import (
+	"crypto/sha256"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/block"
 )
+
+func TestSpawnSpiralOffsetsVanilla26_2(t *testing.T) {
+	if got, want := len(spawnSpiralOffsets), 120; got != want {
+		t.Fatalf("offset count = %d, want %d (origin + offsets must equal Mth.square(11))", got, want)
+	}
+
+	// This digest is pinned from the independently decoded MinecraftServer.setInitialSpawn
+	// offset sequence, encoded as "x,z;". It validates all 120 positions and their order without
+	// reimplementing the production cursor algorithm in the test.
+	var encoded strings.Builder
+	seen := make(map[[2]int32]bool, 121)
+	seen[[2]int32{0, 0}] = true
+	for i, off := range spawnSpiralOffsets {
+		if off[0] < -5 || off[0] > 5 || off[1] < -5 || off[1] > 5 {
+			t.Fatalf("offset[%d] = %v outside vanilla [-5,5] square", i, off)
+		}
+		if seen[off] {
+			t.Fatalf("offset[%d] duplicates %v", i, off)
+		}
+		seen[off] = true
+		fmt.Fprintf(&encoded, "%d,%d;", off[0], off[1])
+	}
+	if got, want := fmt.Sprintf("%x", sha256.Sum256([]byte(encoded.String()))), "18b58946132756a8a757d80ae0ab0ad6413e560243f95c31901650145f817df5"; got != want {
+		t.Fatalf("ordered offset digest = %s, want %s", got, want)
+	}
+	if got := spawnSpiralOffsets[:8]; fmt.Sprint(got) != "[[1 0] [1 1] [0 1] [-1 1] [-1 0] [-1 -1] [0 -1] [1 -1]]" {
+		t.Fatalf("first ring = %v", got)
+	}
+	if got, want := spawnSpiralOffsets[len(spawnSpiralOffsets)-1], [2]int32{5, -5}; got != want {
+		t.Fatalf("last offset = %v, want %v", got, want)
+	}
+}
+
+func TestFindSpawnInChunksStopsAtFirstVanillaCandidate(t *testing.T) {
+	origin := level.ChunkPos{17, -23}
+	wantIndex := 37
+	visited := make([]level.ChunkPos, 0, wantIndex+1)
+	want := SpawnPoint{X: 12.5, Y: 80, Z: -4.5, Found: true}
+	got := findSpawnInChunks(origin, func(pos level.ChunkPos) (SpawnPoint, bool) {
+		visited = append(visited, pos)
+		return want, len(visited)-1 == wantIndex
+	})
+	if got != want {
+		t.Fatalf("result = %+v, want %+v", got, want)
+	}
+	if got, want := len(visited), wantIndex+1; got != want {
+		t.Fatalf("lookup count = %d, want %d; search did not stop at first hit", got, want)
+	}
+	wantPos := level.ChunkPos{origin[0] + spawnSpiralOffsets[wantIndex-1][0], origin[1] + spawnSpiralOffsets[wantIndex-1][1]}
+	if got := visited[wantIndex]; got != wantPos {
+		t.Fatalf("hit position = %v, want %v", got, wantPos)
+	}
+}
 
 // newSpawnTestGen builds a NoiseGenerator shell with ONLY the geometry fields levelRespawnY
 // reads (minY/secs/air), avoiding the expensive full router build. levelRespawnY touches no

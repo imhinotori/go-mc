@@ -38,9 +38,8 @@ type SpawnPoint struct {
 // scan is why a tree at (8,8) does not break spawn — a clear neighbor column is found.
 //
 // VANILLA RADIUS FALLBACK: when the origin chunk is entirely void/ocean (every column null),
-// vanilla's PlayerSpawnFinder.findSpawn scans an expanding candidate ring of nearby chunks for
-// a standable column. We port that intent with a bounded outward spiral over neighbor chunks
-// (spawnSearchChunkRadius), returning the first standable column found. This keeps an
+// MinecraftServer.setInitialSpawn scans the remaining positions of its 11x11 square spiral,
+// returning the first chunk with a standable column. This keeps an
 // ocean-origin world from floating the player on the sea surface — they land on the nearest
 // real ground. The spiral order is deterministic (pure over seed), so the fallback spawn is
 // reproducible. The common case (land at origin) returns on the very first chunk, so the ring
@@ -48,12 +47,9 @@ type SpawnPoint struct {
 // InitialSpawnChunk ports the climate half of MinecraftServer.setInitialSpawn: it runs
 // Climate$Sampler.findSpawnPosition over the overworld spawnTarget (OverworldBiomeBuilder.
 // spawnTarget) to pick a spawn-suitable CHUNK, instead of always using chunk (0,0). Vanilla
-// then does an 11x11 spiral of getSpawnPosInChunk around that chunk (already covered by
-// SpawnPos's outward spiral) and sets the world spawn there. The returned ChunkPos is
-// ChunkPos.containing(findSpawnPosition()). REDUCTION: this ports the climate spawn-TARGET
-// search (the part that moves spawn off (0,0)); the exact 11x11 (Mth.square(11)) manhattan
-// spiral order is approximated by SpawnPos's existing standable-column spiral (same intent:
-// nearest standable column to the climate target), which is the cited simplification. CITE:
+// then does an 11x11 square spiral of getSpawnPosInChunk around that chunk and sets the world
+// spawn at the first successful result. The returned ChunkPos is
+// ChunkPos.containing(findSpawnPosition()). CITE:
 // MinecraftServer.setInitialSpawn (randomState.sampler().findSpawnPosition() -> ChunkPos.
 // containing); Climate$Sampler.findSpawnPosition; Climate$SpawnFinder.
 func (g *NoiseGenerator) InitialSpawnChunk() level.ChunkPos {
@@ -63,14 +59,19 @@ func (g *NoiseGenerator) InitialSpawnChunk() level.ChunkPos {
 }
 
 func (g *NoiseGenerator) SpawnPos(pos level.ChunkPos) SpawnPoint {
-	if sp, ok := g.spawnPosInChunk(pos); ok {
+	return findSpawnInChunks(pos, g.spawnPosInChunk)
+}
+
+// findSpawnInChunks is the search-order seam for MinecraftServer.setInitialSpawn. The origin
+// is tested first, followed by the exact remaining 120 offsets, and lookup stops immediately
+// after the first successful getSpawnPosInChunk result.
+func findSpawnInChunks(origin level.ChunkPos, lookup func(level.ChunkPos) (SpawnPoint, bool)) SpawnPoint {
+	if sp, ok := lookup(origin); ok {
 		return sp
 	}
-	// Origin chunk had no standable column (void/ocean). Spiral outward over nearby chunks for
-	// the nearest standable column (vanilla's expanding candidate search, bounded).
 	for _, off := range spawnSpiralOffsets {
-		npos := level.ChunkPos{pos[0] + off[0], pos[1] + off[1]}
-		if sp, ok := g.spawnPosInChunk(npos); ok {
+		pos := level.ChunkPos{origin[0] + off[0], origin[1] + off[1]}
+		if sp, ok := lookup(pos); ok {
 			return sp
 		}
 	}
@@ -101,35 +102,28 @@ func (g *NoiseGenerator) spawnPosInChunk(pos level.ChunkPos) (SpawnPoint, bool) 
 	return SpawnPoint{}, false
 }
 
-// spawnSearchChunkRadius bounds the outward chunk spiral used when the origin chunk is all
-// void/ocean. 3 chunks (48 blocks) clears a coastal strip while keeping the worst-case (a rare
-// all-ocean origin) generation cost bounded — each ring chunk is a pure Generate (decorating a
-// 3x3, so the ring is not free). A deep-ocean origin with no land in range legitimately falls
-// back to the sea-surface spawn (SpawnSurfaceY's terrain fallback in main.go), exactly as
-// vanilla floats the player on water as a last resort. The common case (land at origin) returns
-// on the very first chunk and never enters the spiral.
-const spawnSearchChunkRadius = 3
+// MinecraftServer.setInitialSpawn uses Mth.square(11) iterations and accepts offsets in
+// [-5,5], yielding the origin plus 120 fallback chunks.
+const spawnSearchChunkRadius = 5
 
-// spawnSpiralOffsets is the deterministic outward chunk-offset spiral (excluding (0,0), which
-// SpawnPos checks first), ordered by ascending Chebyshev ring then a fixed per-ring walk so the
-// fallback spawn is reproducible over the seed. Built once at init.
+// spawnSpiralOffsets is the 26.2 MinecraftServer.setInitialSpawn square spiral, excluding the
+// origin which SpawnPos checks first. Built once at init.
 var spawnSpiralOffsets = buildSpawnSpiral(spawnSearchChunkRadius)
 
-// buildSpawnSpiral enumerates chunk offsets in rings of increasing Chebyshev distance 1..r,
-// each ring walked in a fixed (dz outer, dx inner) order restricted to the ring boundary, so
-// the sequence is deterministic and visits nearer chunks first.
+// buildSpawnSpiral ports the bytecode's (x,z) cursor and (dx,dz) quarter-turn conditions.
+// For r=5 it emits the remaining 120 entries of the 121-position 11x11 traversal.
 func buildSpawnSpiral(r int) [][2]int32 {
-	var out [][2]int32
-	for ring := 1; ring <= r; ring++ {
-		for dz := -ring; dz <= ring; dz++ {
-			for dx := -ring; dx <= ring; dx++ {
-				// Only the boundary of this ring (interior rings already emitted).
-				if dx > -ring && dx < ring && dz > -ring && dz < ring {
-					continue
-				}
-				out = append(out, [2]int32{int32(dx), int32(dz)})
-			}
+	diameter := 2*r + 1
+	out := make([][2]int32, 0, diameter*diameter-1)
+	x, z, dx, dz := 0, 0, 0, -1
+	for i := 0; i < diameter*diameter; i++ {
+		if x >= -r && x <= r && z >= -r && z <= r && (x != 0 || z != 0) {
+			out = append(out, [2]int32{int32(x), int32(z)})
 		}
+		if x == z || (x < 0 && x == -z) || (x > 0 && x == 1-z) {
+			dx, dz = -dz, dx
+		}
+		x, z = x+dx, z+dz
 	}
 	return out
 }
