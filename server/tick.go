@@ -327,6 +327,24 @@ type TickLoop struct {
 	// apply-time countByCategoryAcrossRegions()[category] re-check (spawnCandidatesReady.applyTo).
 	spawnLiveCategorySnapshot map[mobCategory]int
 
+	// dirtyRelight is the per-tick BATCHED-RELIGHT dirty set (the fluid-spread stall fix). relightChanged
+	// no longer recomputes light + broadcasts INLINE on every light-affecting SetBlock (fluid simulation
+	// writes thousands of blocks/tick, and each inline RelightEdit recomputed 9 full chunk columns via
+	// the light engine -- a 100-140ms stall per fluid cell). Instead it records the EDITED column here,
+	// keyed by dimension then by that column (deduped: many edits in one column collapse to one entry;
+	// the value is any representative block pos in the column, which is all RelightEdit/RelightColumns
+	// needs). flushRelight (region_coordinator.go tickOnce, post-BE / pre-movement) drains this ONCE per
+	// tick: it builds the UNION of each dirty edited column + its 8 neighbors, recomputes each affected
+	// column exactly once over the FINAL block states, and broadcasts one ClientboundLightUpdate per
+	// changed column. Light is a pure function of the final states, so end-of-tick recompute is
+	// byte-identical to per-edit recompute (the last recompute wins) -- and matches vanilla, which
+	// coalesces checkBlock nodes and runs runLightUpdates ONCE per tick, then broadcasts each column's
+	// ClientboundLightUpdate once. Written on the tick goroutine (relightChanged, invoked from SetBlock);
+	// drained on the coordinator (flushRelight). Nil until installRelightHook / NewTickLoop initializes
+	// the outer map; relightChanged is nil-safe. CITE: LevelChunk.setBlockState checkBlock ->
+	// ThreadedLevelLightEngine.runLightUpdates -> ChunkMap ClientboundLightUpdate (once per tick).
+	dirtyRelight map[int]map[level.ChunkPos]pk.Position
+
 	// strictRegion arms the per-region access guard in cur(): when true, a cur() call from a
 	// goroutine with NO region registered PANICS instead of silently falling back to globalRegion.
 	// It is the catch for the systemic regionization bug class (Phase-27 N=2): coordinator-phase and
@@ -1545,6 +1563,10 @@ func NewTickLoop(clock Clock) *TickLoop {
 	// region.tick runs; a non-fan-out goroutine (coordinator / direct test calls) finds no entry and
 	// only() falls back to regions[globalRegion].
 	t.currentRegion = xsync.NewMap[int64, *region]()
+	// dirtyRelight is the per-tick batched-relight dirty set (outer key = dimension). Constructed here
+	// so it is non-nil before the first tick even if installRelightHook has not yet run (a nil-safe
+	// relightChanged also lazy-inits it). Drained by flushRelight in tickOnce.
+	t.dirtyRelight = make(map[int]map[level.ChunkPos]pk.Position)
 	// OPT-02 (08-04) SWAP-POINT — the single line that swaps the tracker EXECUTOR off-tick behind
 	// the UNCHANGED tracker.Tick() seam. ENT-01 filled this with the synchronous &entityTracker{};
 	// Phase 8 replaces it with &asyncTracker{}, whose Tick() builds a per-player snapshot ON the

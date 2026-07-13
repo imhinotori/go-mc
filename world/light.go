@@ -258,7 +258,26 @@ func (m *ChunkManager) RelightEdit(pos pk.Position, minSectionY, secs int, air b
 			affected = append(affected, level.ChunkPos{col[0] + int32(dx), col[1] + int32(dz)})
 		}
 	}
+	return m.RelightColumns(affected, minSectionY, secs, air, hasSkyLight)
+}
 
+// RelightColumns is the BATCHED core of RelightEdit: it recomputes an EXPLICIT, pre-deduped set of
+// columns (each exactly once) from the live loaded neighborhood, snapshots each column's per-section
+// light BEFORE, recomputes it via ComputeChunkLight over its own 3x3, diffs, and returns a ColumnLight
+// only for columns whose stored light actually CHANGED. RelightEdit is `RelightColumns(<the 9 cols
+// for pos>, ...)`; the per-tick batcher (server flushRelight) builds the UNION of every dirty edited
+// column + its 8 neighbors, dedups it, and calls this ONCE per dimension so a column shared by many
+// edits is recomputed a single time instead of once per edit (the fluid-spread stall fix). Because
+// light is a pure function of the final block states, recomputing once over the FINAL states yields
+// byte-identical light to recomputing after every intermediate edit -- the last recompute wins either
+// way. Tick-owned (runs on the coordinator, post-barrier, over the tick-owned manager). CITE: the
+// ThreadedLevelLightEngine coalescing checkBlock nodes and running runLightUpdates ONCE per tick.
+//
+// Callers MUST pass an already-deduped set (flushRelight dedups via a map; RelightEdit's 9 cols are
+// distinct by construction). A duplicate column would be snapshot-then-recomputed twice -- the second
+// snapshot captures the first recompute's output, so the diff would spuriously report "unchanged" and
+// drop a real ClientboundLightUpdate. Dedup upstream, not here.
+func (m *ChunkManager) RelightColumns(affected []level.ChunkPos, minSectionY, secs int, air block.StateID, hasSkyLight bool) []ColumnLight {
 	// Snapshot BEFORE arrays for each affected LOADED column so we can detect real changes.
 	type snap struct {
 		ch     *level.Chunk

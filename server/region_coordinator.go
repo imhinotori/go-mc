@@ -234,6 +234,20 @@ func (t *TickLoop) tickOnce() {
 	// re-resolve the OWNING region by id and apply there (drop if no region owns it — Pitfall 1).
 	t.profPhase("applyAsyncResults", t.applyAsyncResults)
 
+	// BATCHED RELIGHT (fluid-spread stall fix): drain the per-tick relight dirty set built by
+	// relightChanged (recorded on every light-affecting SetBlock during tickWorld's fluid/block edits,
+	// tickBlockEntities, and applyAsyncResults' chunk-drain), recompute each affected column ONCE over
+	// this tick's FINAL block states, and broadcast one ClientboundLightUpdate per changed column.
+	// Placed AFTER tickBlockEntities + applyAsyncResults (so every block/fluid/BE/async edit this tick is
+	// reflected in the light) and BEFORE tickEntityMovement/tracker.Tick (so the light packet goes out in
+	// the SAME tick as the movement/tracker broadcast). Coordinator-only (single-threaded, post-barrier)
+	// -- the same quiescent window as the other global post-phases. This replaces the former per-SetBlock
+	// inline RelightEdit (9 full-column light recomputes per edit -> 100-140ms stalls during fluid
+	// spread) with vanilla's once-per-tick coalesced runLightUpdates + one ClientboundLightUpdate per
+	// column. CITE: LevelChunk.setBlockState checkBlock -> ThreadedLevelLightEngine.runLightUpdates ->
+	// ChunkMap ClientboundLightUpdate (once per tick).
+	t.profPhase("flushRelight", t.flushRelight)
+
 	// RIDE (passenger.go): re-position every vehicle's passengers AFTER physics moved the vehicles and
 	// AFTER the cross-region transfer/async rejoin (so the vehicle is in its post-transfer region and at
 	// its settled position), and BEFORE tickEntityMovement/tracker.Tick so this tick's ridden positions

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/block"
 	pk "github.com/imhinotori/sulfur/net/packet"
 	"github.com/imhinotori/sulfur/world"
@@ -42,45 +43,146 @@ func (t *TickLoop) relightChanged(dim int, w *world.ChunkManager, pos pk.Positio
 	if !world.LightPropertiesDiffer(oldState, newState) {
 		return // light properties unchanged: no checkBlock, no relight (the hasDifferentLightProperties gate)
 	}
-	// NETHER: relight the editor's-dimension world at that dimension's geometry so a nether edit
-	// re-propagates the nether world's light (not the overworld's). dimWorld(p) picks the manager;
-	// dimMinYFor/dimSecsFor give the section geometry.
 	if w == nil {
 		return
 	}
-	// Per-dimension section geometry + sky engine. hasSkyLight selects the SKY light engine in the
-	// recompute: overworld true; nether/end false (DimensionType.hasSkyLight is false there, so their
-	// sky-light layer stays absent/0). CITE: DimensionType.hasSkyLight().
-	minSec := lightMinSectionY
-	secs := lightSectionCount
-	hasSkyLight := true
-	if dim == dimNether {
-		minSec = dimNetherMinY >> 4
-		secs = dimNetherSecs
-		hasSkyLight = false
+	// BATCH (do NOT recompute + broadcast inline): record the EDITED column into the per-dimension
+	// dirty set. flushRelight (coordinator, once per tick) recomputes the union of affected columns and
+	// broadcasts. Fluid simulation writes thousands of light-affecting blocks per tick; the former
+	// inline RelightEdit recomputed 9 full chunk columns via the light engine per SetBlock, a 100-140ms
+	// stall per fluid cell. Deduping by column collapses those thousands of writes to at most one entry
+	// per column, and flushRelight recomputes each affected column exactly ONCE over the FINAL block
+	// states -- byte-identical light (last recompute wins), one ClientboundLightUpdate per column per
+	// tick, exactly as vanilla batches checkBlock -> runLightUpdates -> ClientboundLightUpdate.
+	// CITE: LevelChunk.setBlockState (checkBlock) + ThreadedLevelLightEngine.runLightUpdates.
+	col := chunkCenterOf(int32(pos.X), int32(pos.Z))
+	if t.dirtyRelight == nil {
+		t.dirtyRelight = make(map[int]map[level.ChunkPos]pk.Position)
 	}
-	if dim == dimEnd {
-		minSec = dimEndMinY >> 4
-		secs = dimEndSecs
-		hasSkyLight = false
+	byCol := t.dirtyRelight[dim]
+	if byCol == nil {
+		byCol = make(map[level.ChunkPos]pk.Position)
+		t.dirtyRelight[dim] = byCol
+	}
+	// One representative block pos per edited column is enough (RelightColumns works per column, not per
+	// exact block); keep the first-seen so re-edits in the same column stay a single entry.
+	if _, ok := byCol[col]; !ok {
+		byCol[col] = pos
+	}
+}
+
+// flushRelight drains the per-tick batched-relight dirty set: for each dimension with dirty edited
+// columns it builds the UNION of (each dirty edited column + its 8 neighbors) -- the full set of
+// columns whose stored light an edit in a dirty column can change (light propagates up to 15 blocks,
+// so a border edit changes a neighbor column too) -- dedups that union, recomputes EACH affected
+// column exactly once over the live (post-edit, FINAL) block states via ChunkManager.RelightColumns
+// (snapshot-before / recompute-each-once / diff), and broadcasts one world.WriteLightUpdate
+// ClientboundLightUpdate for every column whose light actually CHANGED to every player tracking that
+// column in that dimension. It then clears the dirty set.
+//
+// This is the coordinator-side, once-per-tick realization of vanilla's ThreadedLevelLightEngine:
+// LevelChunk.setBlockState enqueues checkBlock(pos) nodes, the engine coalesces them and runs
+// runLightUpdates ONCE per tick, and ChunkMap emits each affected column's ClientboundLightUpdate once
+// per tick. Recomputing a column once at end-of-tick over the final states yields the SAME light as
+// recomputing after every intermediate edit (the redundant intermediate recomputes are elided), so
+// this is a pure OPTIMIZATION: identical observable light, one packet per column per tick instead of
+// thousands. Runs on the coordinator (single-threaded, post-barrier) -- the same quiescent window as
+// the other global post-phases. Nether/End dirty columns relight in THEIR ChunkManager
+// (dimWorldByID), at their own geometry. CITE: LevelChunk.setBlockState checkBlock ->
+// ThreadedLevelLightEngine.runLightUpdates -> ChunkMap ClientboundLightUpdate (once per tick).
+// maxRelightColumnsPerTick caps how many columns flushRelight actually RECOMPUTES per tick (the size of
+// the deduped affected union, each a full ComputeChunkLight over 24 sections ~= 4ms). A large fluid-
+// settling / chunk-load burst can dirty many columns; recomputing the whole union in one tick was a
+// ~230ms stall. 8 recomputes ~= 32ms worst case keeps flushRelight inside the tick budget; overflow
+// edited columns defer to the next tick. Light is a pure function of the FINAL block states, so a
+// deferred column converges to the identical value — the same simulation-preserving bound the fluid
+// pass uses (a settling burst spreads its light updates over a few ticks, invisible to the client).
+const maxRelightColumnsPerTick = 8
+
+func (t *TickLoop) flushRelight() {
+	if len(t.dirtyRelight) == 0 {
+		return
 	}
 	air := block.ToStateID[block.Air{}]
-	changed := w.RelightEdit(pos, minSec, secs, air, hasSkyLight)
-	for _, cl := range changed {
-		packet := world.WriteLightUpdate(cl)
-		col := chunkCenterOf(cl.Pos[0]*16, cl.Pos[1]*16)
-		for _, pl := range t.players {
-			if pl.client == nil {
+	carry := make(map[int]map[level.ChunkPos]pk.Position)
+	for dim, byCol := range t.dirtyRelight {
+		if len(byCol) == 0 {
+			continue
+		}
+		w := t.dimWorldByID(dim)
+		if w == nil {
+			continue
+		}
+		// Per-dimension section geometry + sky engine (matches the old inline relightChanged exactly):
+		// overworld minSec=lightMinSectionY secs=lightSectionCount hasSkyLight=true; nether/end their own.
+		minSec := lightMinSectionY
+		secs := lightSectionCount
+		hasSkyLight := true
+		if dim == dimNether {
+			minSec = dimNetherMinY >> 4
+			secs = dimNetherSecs
+			hasSkyLight = false
+		}
+		if dim == dimEnd {
+			minSec = dimEndMinY >> 4
+			secs = dimEndSecs
+			hasSkyLight = false
+		}
+		// PER-TICK RECOMPUTE BUDGET (perf, simulation-preserving): a large fluid-settling / chunk-load
+		// burst can dirty many EDITED columns in one tick, and each edited column drags in a 3x3 recompute
+		// (self + 8 neighbors, each a full ComputeChunkLight over 24 sections ~= 4ms). Recomputing the whole
+		// union in one tick was a ~230ms flushRelight stall. Bound the actual RECOMPUTES per tick at
+		// maxRelightColumnsPerTick by taking edited columns until the deduped union reaches the cap, and
+		// DEFER every remaining edited column to the next tick (re-inserted into the fresh dirty set below).
+		// Light is a pure function of the FINAL block states, so a column relit one-or-more ticks later
+		// converges to the identical value — only spread across ticks, never wrong (the fluid pass's bound).
+		var deferredCols map[level.ChunkPos]pk.Position
+		union := make(map[level.ChunkPos]struct{}, maxRelightColumnsPerTick+9)
+		affected := make([]level.ChunkPos, 0, maxRelightColumnsPerTick+9)
+		for c, rep := range byCol {
+			if len(affected) >= maxRelightColumnsPerTick {
+				// Budget spent: defer this edited column (and, by the loop, all remaining) to next tick.
+				if deferredCols == nil {
+					deferredCols = make(map[level.ChunkPos]pk.Position)
+				}
+				deferredCols[c] = rep
 				continue
 			}
-			if pl.dimension != dim {
-				continue // light update is for THIS dimension's column; a same-coord player in another dimension must not receive it
-			}
-			if pl.center == col || (pl.sentChunks != nil && pl.sentChunks[col]) {
-				pl.client.Send(packet)
+			for dx := int32(-1); dx <= 1; dx++ {
+				for dz := int32(-1); dz <= 1; dz++ {
+					nc := level.ChunkPos{c[0] + dx, c[1] + dz}
+					if _, seen := union[nc]; seen {
+						continue
+					}
+					union[nc] = struct{}{}
+					affected = append(affected, nc)
+				}
 			}
 		}
+		changed := w.RelightColumns(affected, minSec, secs, air, hasSkyLight)
+		for _, cl := range changed {
+			packet := world.WriteLightUpdate(cl)
+			col := chunkCenterOf(cl.Pos[0]*16, cl.Pos[1]*16)
+			for _, pl := range t.players {
+				if pl.client == nil {
+					continue
+				}
+				if pl.dimension != dim {
+					continue // light update is for THIS dimension's column; a same-coord player in another dimension must not receive it
+				}
+				if pl.center == col || (pl.sentChunks != nil && pl.sentChunks[col]) {
+					pl.client.Send(packet)
+				}
+			}
+		}
+		// Carry any budget-deferred edited columns into the next tick's dirty set.
+		if len(deferredCols) > 0 {
+			carry[dim] = deferredCols
+		}
 	}
+	// Replace the dirty set with only the budget-deferred columns (empty when nothing was deferred),
+	// so processed columns are cleared and overflow relights next tick.
+	t.dirtyRelight = carry
 }
 
 // server light READ seams — the tick-side getRawBrightness / getMaxLocalRawBrightness now backed by
