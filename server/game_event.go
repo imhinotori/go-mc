@@ -64,12 +64,23 @@ const (
 	geContainerOpen  gameEventID = "container_open"  // CONTAINER_OPEN (chest/barrel/shulker open, 0->1 edge)
 	geContainerClose gameEventID = "container_close" // CONTAINER_CLOSE (container close, 1->0 edge)
 	geBlockChange    gameEventID = "block_change"    // BLOCK_CHANGE (a block state changes in place, e.g. crop/bush growth)
-	// FOLLOW-UP (cited, not yet wired at an emitter): block_change (needs the interacting player threaded
-	// through the block-entity updateState chain), block_deactivate, drink, splash, swim, entity_place,
-	// lightning_strike, flap, bounce, hit_ground, projectile_shoot, instrument_play, entity_action,
-	// elytra_glide, unequip, entity_dismount, equip, entity_mount, entity_damage, block_attach/detach,
-	// teleport, item_interact_finish. Every one already has a frequency in vibrationFrequencyTable; wiring
-	// its emitter is a follow-up per subsystem.
+	// HIT_GROUND is the Entity.checkFallDamage emit on every positive fallDistance landing:
+	// Level.gameEvent(GameEvent.HIT_GROUND, entity.position(), Context.of(entity,
+	// mainSupportingBlockState)). The Context carries the landing surface's block state id
+	// (`affectedState`) so a vibration listener (sculk sensor / shrieker / Warden) sees the source
+	// entity AND the landing block. Frequency is 2 (vibrationFrequencyTable hit_ground=2). Emitted
+	// for EVERY fallDistance>0 landing -- including those where Block.fallOn zeroes the damage
+	// multiplier (SlimeBlock.fallOn non-suppressing 0.0, or a HayBlock landing where damage rounds
+	// to 0). The block.fallOn dispatch zeroes damage but DOES NOT suppress the game event -- the
+	// Entity.checkFallDamage branch is gated on fallDistance>0, not on damage>0.
+	// CITE Entity.checkFallDamage / Level.gameEvent(GameEvent.HIT_GROUND, ...) /
+	// VibrationSystem.VIBRATION_FREQUENCY_FOR_EVENT[hit_ground]==2.
+	geHitGround gameEventID = "hit_ground" // HIT_GROUND (Entity.checkFallDamage per positive landing)
+	// FOLLOW-UP (cited, not yet wired at an emitter): block_deactivate, drink, splash, swim,
+	// entity_place, lightning_strike, flap, bounce, projectile_shoot, instrument_play,
+	// entity_action, elytra_glide, unequip, entity_dismount, equip, entity_mount, entity_damage,
+	// block_attach/detach, teleport, item_interact_finish. Every one already has a frequency in
+	// vibrationFrequencyTable; wiring its emitter is a follow-up per subsystem.
 )
 
 // gameEventDefaultNotificationRadius is GameEvent.DEFAULT_NOTIFICATION_RADIUS (16). Every core event uses

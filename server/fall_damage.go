@@ -252,13 +252,30 @@ func (t *TickLoop) tickLavaPlayers() {
 //
 //	if (!isInWater() && deltaY < 0.0) this.fallDistance -= (double)(float) deltaY;
 //	if (onGround) {
-//	    if (this.fallDistance > 0.0) causeFallDamage(this.fallDistance, 1.0F, DamageSource.FALL);
+//	    if (this.fallDistance > 0.0) {
+//	        BlockState landingState = getBlockStateOn(); // the supporting surface
+//	        landingState.fallOn(this.level, this, d, this.getOnPos());
+//	        this.level.gameEvent(HIT_GROUND, this.position(),
+//	                              GameEvent.Context.of(this, getMainSupportingBlockEntity().map(
+//	                                  BlockEntity::getBlockState).orElse(landingState)));
+//	    }
 //	    this.resetFallDistance();
 //	}
 //
-// inWater is t.playerInWater(p) (== !isInWater() guard). The BlockState/BlockPos args and the
-// HIT_GROUND game event are cosmetic/world-side and omitted; Block.fallOn's default forwards
-// damageMultiplier = 1.0 to causeFallDamage, which is passed literally here.
+// inWater is t.playerInWater(p) (== !isInWater() guard). The BlockState/BlockPos args feed the
+// landing Block.fallOn dispatch (-> causeFallDamage) AND the Level.gameEvent(HIT_GROUND, ...,
+// Context.of(this, landingState)). The context's `affectedState` is the landing surface's state
+// id (the Optional.mainSupportingBlockState.orElse(landingState) result; the supporting BE branch
+// is a cited deferral -- the floor-read is the v1 faithful fallback). The Block.fallOn multiplier
+// table (HayBlock 0.2, BedBlock 0.5, SlimeBlock 0.0, default 1.0) picks the damageMultiplier
+// passed to causeFallDamage; the game-event emit fires for EVERY positive fallDistance regardless
+// of the resolved damage (a slime or sub-threshold landing zeroes damage but still schedules
+// the vibration; sculk sensors in range still light up off the frequency-2 HIT_GROUND).
+// The state id is read ONCE (landingStateOf) and reused by both the multiplier dispatch and the
+// game-event context so the two never disagree and the world is not read twice. NO RNG is drawn
+// -- the world read is pure and the game-event walk draws nothing (game_event.go: pig oracle).
+// CITE Entity.checkFallDamage + Level.gameEvent(GameEvent.HIT_GROUND, ...,
+// GameEvent.Context.of(entity, blockState)).
 func (t *TickLoop) checkFallDamage(p *tickPlayer, deltaY float64, onGround bool, inWater bool) {
 	if !inWater && deltaY < 0.0 {
 		// d2f then f2d: the (float) narrowing cast widened back to double, ported verbatim.
@@ -266,30 +283,56 @@ func (t *TickLoop) checkFallDamage(p *tickPlayer, deltaY float64, onGround bool,
 	}
 	if onGround {
 		if p.fallDistance > 0.0 {
-			// Entity.checkFallDamage -> the landing Block.fallOn dispatch picks the damageMultiplier:
-			// most blocks default 1.0 (Entity.fallOn), HayBlock 0.2, BedBlock 0.5, SlimeBlock 0.0 (a
-			// non-sneaking bounce cancels all fall damage). causeFallDamage is then called with it.
-			t.causeFallDamage(p, p.fallDistance, t.fallOnMultiplierAt(p))
+			// Entity.checkFallDamage -> the landing state read ONCE here, then fed to BOTH
+			// Block.fallOn (via fallOnMultiplierFromState -> causeFallDamage) and Level.gameEvent(
+			// HIT_GROUND, ..., Context.of(this, landingState)). No extra world read, no extra RNG.
+			landingState := t.landingStateOf(p)
+			// Block.fallOn -> causeFallDamage dispatch picks the damageMultiplier.
+			t.causeFallDamage(p, p.fallDistance, fallOnMultiplierFromState(landingState))
+			// Level.gameEvent(HIT_GROUND, entity.position(), Context.of(entity, landingState)). Fires
+			// for every positive fallDistance even when the resolved damage is 0 (SlimeBlock,
+			// sub-threshold). The vibrationFrequencyTable[hit_ground]=2 row means sculk sensors in
+			// range see the candidate at frequency 2 / source = the landing player.
+			t.gameEvent(geHitGround, p.x, p.y, p.z, gameEventContext{
+				sourceEntityID: p.entityID,
+				affectedState:  int(landingState),
+			})
 		}
 		p.resetFallDistance()
 	}
 }
 
-// fallOnMultiplierAt returns the Block.fallOn damageMultiplier for the block the player just landed on
-// (getBlockStateOn: the block at floor(y - 0.2), the surface the feet rest on). HayBlock.fallOn scales by
-// 0.2f, BedBlock.fallOn by 0.5, SlimeBlock.fallOn cancels damage (0.0) unless the entity isSuppressingBounce
-// (a sneaking player -- v1 has no sneak decode, so a slime landing is the non-suppressing 0.0 common case,
-// the sneak-restores-damage guard being the cited deferral). Every other block is the Entity.fallOn default
-// 1.0. Cite HayBlock.fallOn (0.2f) + BedBlock.fallOn (*0.5) + SlimeBlock.fallOn (0.0f, !isSuppressingBounce).
-func (t *TickLoop) fallOnMultiplierAt(p *tickPlayer) float64 {
+// landingStateOf reads the block state id of the surface the player just landed on -- the
+// Entity.getBlockStateOn target: the block at floor(y - 0.2), the cell the feet rest on. It is
+// exposed so callers that need both the Block.fallOn multiplier AND the Context.affectedState
+// (the Entity.checkFallDamage -> Level.gameEvent(HIT_GROUND, ...) pair) read the world once
+// rather than duplicating the read. Returns block.StateID 0 when the world is nil or the cell is
+// unloaded; that 0 is the same value fallOnMultiplierAt's world==nil and out-of-range branches
+// short-circuit to multiplier 1.0, so callers can treat 0 as "no surface info / default 1.0x"
+// without a separate nil-cell branch. NO RNG is drawn -- it is the BlockGetter.getBlockState
+// entry point. CITE Entity.getBlockStateOn.
+func (t *TickLoop) landingStateOf(p *tickPlayer) block.StateID {
 	if t.world() == nil {
-		return 1.0
+		return 0
 	}
 	// getBlockStateOn: the block just below the feet (y - 0.2 floored -> the supporting surface).
 	bx := floorI(p.x)
 	by := floorI(p.y - 0.2)
 	bz := floorI(p.z)
-	sid := t.blockStateAt(bx, by, bz)
+	return t.blockStateAt(bx, by, bz)
+}
+
+// fallOnMultiplierFromState applies the Block.fallOn dispatch table to a pre-resolved state id --
+// the SAME state the Level.gameEvent(HIT_GROUND, ...) emit carries as `affectedState`, so the
+// multiplier resolution and the game-event context agree byte-for-byte off a single world read:
+// HayBlock.fallOn 0.2, SlimeBlock.fallOn 0.0 (SlimeBlock.fallOn's non-suppressing default -- a
+// sneaking player's isSuppressingBounce restores damage is a v1-cited deferral), BedBlock.fallOn
+// 0.5 (any #minecraft:beds), everything else (and out-of-range state ids) the Entity.fallOn
+// default 1.0. NO RNG is drawn -- the multiplier table is pure-data (HayBlock.fallOn /
+// BedBlock.fallOn / SlimeBlock.fallOn / Entity.fallOn are all vanilla `return causeFallDamage(
+// d, k, fall)` calls with a hard-coded float).
+// CITE HayBlock.fallOn (0.2f) + BedBlock.fallOn (*0.5) + SlimeBlock.fallOn (0.0f, !isSuppressingBounce).
+func fallOnMultiplierFromState(sid block.StateID) float64 {
 	if int(sid) < 0 || int(sid) >= len(block.StateList) {
 		return 1.0
 	}
@@ -303,6 +346,16 @@ func (t *TickLoop) fallOnMultiplierAt(p *tickPlayer) float64 {
 		return 0.5 // BedBlock.fallOn: super.fallOn(..., d * 0.5) -- any colored bed (#minecraft:beds)
 	}
 	return 1.0
+}
+
+// fallOnMultiplierAt composes landingStateOf + fallOnMultiplierFromState so the existing API
+// survives untouched for the callers (gameEvent-side walk, fall_damage_block_test pins). The new
+// checkFallDamage landing branch calls the two helpers directly so it reads the state exactly once
+// and feeds the same id to the causeFallDamage dispatch AND the Level.gameEvent(HIT_GROUND, ...,
+// Context) emit -- matching the Entity.checkFallDamage vanilla call order.
+// CITE HayBlock.fallOn (0.2f) + BedBlock.fallOn (*0.5) + SlimeBlock.fallOn (0.0f, !isSuppressingBounce).
+func (t *TickLoop) fallOnMultiplierAt(p *tickPlayer) float64 {
+	return fallOnMultiplierFromState(t.landingStateOf(p))
 }
 
 // causeFallDamage mirrors the ELSE (non-impulse) path of

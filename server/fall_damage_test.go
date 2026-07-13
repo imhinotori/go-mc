@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/imhinotori/sulfur/data/packetid"
+	"github.com/imhinotori/sulfur/level/block"
 	pk "github.com/imhinotori/sulfur/net/packet"
 	"github.com/imhinotori/sulfur/world"
 )
@@ -381,4 +382,59 @@ func TestBatchedFallIntoWaterNoDamage(t *testing.T) {
 	if p.fallDistance != 0 {
 		t.Fatalf("fallDistance = %v after batched water landing, want 0", p.fallDistance)
 	}
+}
+
+// TestFallLandingEmitsHitGroundForSculkSensor pins the Entity.checkFallDamage -> Level.gameEvent(
+// HIT_GROUND, ..., Context.of(entity, landingState)) seam: every positive-fall landing schedules a
+// geHitGround vibration candidate on a sculk sensor in range, with the landing player as the source
+// and the hit_ground frequency (2) the comparator reads. The setup mirrors an entity landing on
+// stone near (2 blocks east of) an INACTIVE sculk sensor: stone at (8, 64, 8) is the landing surface
+// (NOT a DAMPENS_VIBRATIONS cell, so the sensor's isValidVibration accepts it), the sensor at
+// (10, 64, 8) is in INACTIVE phase (the canActivate gate), and the empty-air path between keeps
+// vibrationOccluded's six-ray scan clear. CITE Entity.checkFallDamage / Level.gameEvent(
+// GameEvent.HIT_GROUND, ...) / vibration_block.go walkBlockVibrationListeners.
+func TestFallLandingEmitsHitGroundForSculkSensor(t *testing.T) {
+	loop, mgr := newSculkLoop()
+
+	// Landing surface: stone at (8, 64, 8). Stone is NOT in #minecraft:dampens_vibrations, so the
+	// sensor's isValidVibration (tag + affectedState DAMPENS reject) accepts the Context.state.
+	mgr.SetBlock(pk.Position{X: 8, Y: 64, Z: 8}, block.ToStateID[block.Stone{}], dimMinY)
+	// Resolved sculk sensor 2 blocks east, in INACTIVE phase (canActivate = getPhase == INACTIVE).
+	sensorPos := pk.Position{X: 10, Y: 64, Z: 8}
+	mgr.SetBlock(sensorPos, sculkSensorState(), dimMinY)
+	loop.resolveSculkSensor(sensorPos)
+
+	// A player mid-fall at (8.5, 65, 8.5): feet just above the landing surface, 2 blocks west of
+	// the sensor (sensor center 10.5,64.5,8.5; player 8.5,65,8.5 -- distSqr 4.25 <= 8^2, in range).
+	const playerID int32 = 4096
+	p := fallPlayer(loop, playerID, 100)
+	p.x, p.z = 8.5, 8.5
+	p.y = 65
+	p.fallDistance = 5 // five blocks of airborne descent before the landing edge
+	p.onGround = true
+
+	loop.checkFallDamage(p, -5, true, false) // landing edge (no water)
+
+	// The sensor must have a HIT_GROUND candidate scheduled, with the player as source.
+	be := loop.sculkSensors[sensorPos]
+	if be == nil {
+		t.Fatal("sensor BE missing after a landing edge")
+	}
+	if be.vibration == nil || !be.vibration.hasCandidate {
+		t.Fatal("HIT_GROUND landing did not schedule a vibration candidate on the nearby sculk sensor")
+	}
+	if be.vibration.candEvent != geHitGround {
+		t.Fatalf("scheduled event = %q, want %q", be.vibration.candEvent, geHitGround)
+	}
+	if be.vibration.candSourceID != playerID {
+		t.Fatalf("source id = %d, want %d (the landing player)", be.vibration.candSourceID, playerID)
+	}
+	// GameEvent.HIT_GROUND's vibration frequency (VibrationSystem.VIBRATION_FREQUENCY_FOR_EVENT
+	// [hit_ground]) is 2 -- the value a comparator reads off the activated sensor.
+	if f := vibrationFrequencyOf(sculkGameEvent(be.vibration.candEvent)); f != 2 {
+		t.Fatalf("HIT_GROUND frequency = %d, want 2 (vibrationFrequencyTable[hit_ground])", f)
+	}
+	// And the landing-side state read happened exactly once: the candidate's affected-context
+	// cannot be inspected here (vibration_data carries no state), but the multiplier dispatch
+	// received the same stone id -- a real Entity.fallOn default of 1.0x (stone is not hay/slime/bed).
 }
