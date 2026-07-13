@@ -66,8 +66,16 @@ func gradDot(hash int, x, y, z float64) float64 {
 // ImprovedNoise is a single-octave improved-Perlin noise.
 // Source: net.minecraft.world.level.levelgen.synth.ImprovedNoise.
 type ImprovedNoise struct {
-	p          [256]int // the permutation table
-	xo, yo, zo float64  // the per-instance offsets
+	// OPTIMIZATION (byte-identical): the permutation table stores only values in
+	// [0,255] (it is a shuffle of 0..255), so it is held as [256]uint8 (256 bytes)
+	// instead of [256]int (2 KiB). sampleAndLerp issues 14 pp() lookups per sample
+	// and the generator interleaves dozens of ImprovedNoise instances, so the denser
+	// table shrinks the working set of the hottest data structure in noise generation
+	// 8x. pp() widens the stored byte back to int and re-applies the same `& 255`
+	// mask, so every returned permutation index — hence every gradient hash and every
+	// output float — is identical to the [256]int form.
+	p          [256]uint8 // the permutation table (values 0..255)
+	xo, yo, zo float64    // the per-instance offsets
 }
 
 // NewImprovedNoise seeds the permutation table + offsets from a RandomSource.
@@ -79,7 +87,7 @@ func NewImprovedNoise(r levelgen.RandomSource) *ImprovedNoise {
 	im.yo = r.NextDouble() * 256
 	im.zo = r.NextDouble() * 256
 	for i := 0; i < 256; i++ {
-		im.p[i] = i
+		im.p[i] = uint8(i) // i is 0..255, exact in uint8
 	}
 	for i := 0; i < 256; i++ {
 		j := int(r.NextIntN(int32(256 - i)))
@@ -93,8 +101,10 @@ func (im *ImprovedNoise) OffsetX() float64 { return im.xo }
 func (im *ImprovedNoise) OffsetY() float64 { return im.yo }
 func (im *ImprovedNoise) OffsetZ() float64 { return im.zo }
 
-// p mirrors ImprovedNoise.p(int): p[i & 255] & 255.
-func (im *ImprovedNoise) pp(i int) int { return im.p[i&255] & 255 }
+// p mirrors ImprovedNoise.p(int): p[i & 255] & 255. The stored value is a uint8
+// (already 0..255); widening to int and re-applying & 255 yields the identical
+// result the [256]int table returned.
+func (im *ImprovedNoise) pp(i int) int { return int(im.p[i&255]) & 255 }
 
 // Noise samples the noise at (x,y,z) with no y-fade (the 3-arg overload).
 func (im *ImprovedNoise) Noise(x, y, z float64) float64 {
