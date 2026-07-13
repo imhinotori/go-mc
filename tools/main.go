@@ -47,6 +47,7 @@ var generators = []generator{
 	{"itemfood", genItemFood},
 	{"itemconsume", genItemConsume},
 	{"itemattributemodifiers", genItemAttributeModifiers},
+	{"itemmaxdamage", genItemMaxDamage},
 	{"tags", genTags},
 	{"registryid", genRegistryID},
 	{"biome", genBiome},

@@ -21,7 +21,8 @@ package server
 // ItemStack.has(component) does: a stack that actually carries those components (an enchanted book,
 // a damaged tool with its damage/max_damage components) behaves fully; a bare item with no such
 // components is (faithfully) not enchantable / not damageable — matching ItemStack.isEnchantable()
-// == has(ENCHANTABLE) and isDamageableItem() == has(MAX_DAMAGE)&&has(DAMAGE)&&!has(UNBREAKABLE).
+// == has(ENCHANTABLE) and isDamageableItem() resolves the effective MAX_DAMAGE component and
+// rejects UNBREAKABLE. DAMAGE itself defaults to zero and need not exist in the stack patch.
 // When a future plan adds per-item default components, these readers pick them up with no change.
 
 import (
@@ -30,6 +31,8 @@ import (
 	"sync"
 
 	"github.com/imhinotori/sulfur/chat"
+	"github.com/imhinotori/sulfur/data/item"
+	"github.com/imhinotori/sulfur/data/registryid"
 	"github.com/imhinotori/sulfur/level/component"
 	pk "github.com/imhinotori/sulfur/net/packet"
 	"github.com/imhinotori/sulfur/server/registrydata"
@@ -357,31 +360,78 @@ const (
 
 // ---- item / stack predicates (ItemStack.* the enchant chain calls) ------------------------------
 
-// isDamageableItem ports ItemStack.isDamageableItem: has(MAX_DAMAGE) && !has(UNBREAKABLE) &&
-// has(DAMAGE). (Unbreakable wire type is 4.)
+// isDamageableItem is the enchant/anvil-facing alias for the shared effective-component predicate.
+// Keep this path aligned with durability, grindstone and equipment: a vanilla-created damageable
+// stack may carry neither MAX_DAMAGE nor DAMAGE in its patch because MAX_DAMAGE comes from the
+// item's prototype and DAMAGE defaults to zero.
 func isDamageableItem(s component.SlotData) bool {
-	return stackHasComponent(s, enchTypeMaxDamage) &&
-		!stackHasComponent(s, 4 /* unbreakable */) &&
-		stackHasComponent(s, enchTypeDamage)
+	return stackIsDamageableItem(s)
 }
 
-// stackMaxDamage ports ItemStack.getMaxDamage (getOrDefault(MAX_DAMAGE, 0)).
+// stackMaxDamage ports ItemStack.getMaxDamage (getOrDefault(MAX_DAMAGE, 0)) with patch semantics:
+//
+//	added MAX_DAMAGE patch   -> the patch's value (an explicit override)
+//	removed MAX_DAMAGE entry -> absent (0) — the patch explicitly drops the default durability
+//	neither                 -> the item's registration default (item.DefaultMaxDamage), or 0 when
+//	                          the item itself has no minecraft:max_damage component
+//
+// Cite ItemStack.getMaxDamage + PatchedDataComponentMap.get.
 func stackMaxDamage(s component.SlotData) int {
-	v, _ := stackInt(s, enchTypeMaxDamage)
-	return v
+	if v, ok := stackInt(s, enchTypeMaxDamage); ok {
+		return v
+	}
+	if patchHasRemoved(s, enchTypeMaxDamage) {
+		return 0
+	}
+	if v, ok := defaultItemMaxDamage(s); ok {
+		return v
+	}
+	return 0
 }
 
-// stackDamageValue ports ItemStack.getDamageValue (Mth.clamp(getOrDefault(DAMAGE,0),0,getMaxDamage)).
+// stackDamageValue ports ItemStack.getDamageValue (Mth.clamp(getOrDefault(DAMAGE, 0), 0,
+// getMaxDamage)). The DAMAGE component has no per-item default (vanilla items do not carry a
+// baseline damage value), so absent or removed DAMAGE both resolve to 0. Cite
+// ItemStack.getDamageValue.
 func stackDamageValue(s component.SlotData) int {
-	v, _ := stackInt(s, enchTypeDamage)
-	max := stackMaxDamage(s)
-	if v < 0 {
-		v = 0
+	if v, ok := stackInt(s, enchTypeDamage); ok {
+		max := stackMaxDamage(s)
+		if v < 0 {
+			v = 0
+		}
+		if v > max {
+			v = max
+		}
+		return v
 	}
-	if v > max {
-		v = max
+	return 0
+}
+
+// patchHasRemoved reports whether the stack's patch carries a removed marker for the given wire
+// type id (matches the Removed half of a DataComponentPatch). Returns false for an empty patch.
+func patchHasRemoved(s component.SlotData, typeID int32) bool {
+	if len(s.RawComponents) == 0 {
+		return false
 	}
-	return v
+	p := component.DecodePatch(s)
+	for _, id := range p.Removed {
+		if id == typeID {
+			return true
+		}
+	}
+	return false
+}
+
+// defaultItemMaxDamage resolves an item's registration-default minecraft:max_damage value via the
+// generated item.DefaultMaxDamage table, keyed by "minecraft:" + Item.Name. Returns (_, false)
+// for an out-of-range item id or an item that carries no max_damage component at all.
+func defaultItemMaxDamage(s component.SlotData) (int, bool) {
+	id := int32(s.ItemID)
+	if id < 0 || id >= int32(len(registryid.Item)) {
+		return 0, false
+	}
+	v, ok := item.DefaultMaxDamage[registryid.Item[id]]
+	return v, ok
 }
 
 // stackRepairCost ports getOrDefault(REPAIR_COST, 0).

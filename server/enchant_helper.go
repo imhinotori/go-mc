@@ -21,8 +21,8 @@ import (
 
 	"github.com/imhinotori/sulfur/data/registryid"
 	"github.com/imhinotori/sulfur/level/component"
-	"github.com/imhinotori/sulfur/server/registrydata"
 	pk "github.com/imhinotori/sulfur/net/packet"
+	"github.com/imhinotori/sulfur/server/registrydata"
 )
 
 // Component wire type ids (level/component.NewComponent registry) the enchant/durability reads address.
@@ -146,18 +146,23 @@ func stackComponentInt(s component.SlotData, typeID int32) (int, bool) {
 	return 0, false
 }
 
-// stackIsDamageableItem ports ItemStack.isDamageableItem(): has(MAX_DAMAGE) && !has(UNBREAKABLE) &&
-// has(DAMAGE). In this server's SlotData model, a damageable item carries the explicit MAX_DAMAGE +
-// DAMAGE components (as vanilla-created gear does); a bare stack lacking them is treated as
-// non-damageable — the faithful reading given the stack literally lacks those components.
+// stackIsDamageableItem ports ItemStack.isDamageableItem() (has(MAX_DAMAGE) && !has(UNBREAKABLE)).
+// In this server's SlotData model the effective MAX_DAMAGE is resolved by stackMaxDamage (added
+// patch > removed -> 0 > item default), so a stack is damageable when its resolved max_damage is
+// non-zero AND the patch carries no UNBREAKABLE component. A bare stack on a damageable item
+// (e.g. a vanilla-created pickaxe carrying no client patch) reads its per-item default and is
+// damageable; a removed MAX_DAMAGE makes the max 0 -> not damageable.
 //
 // 1:1 net.minecraft.world.item.ItemStack.isDamageableItem
 func stackIsDamageableItem(s component.SlotData) bool {
 	if stackEmpty(s) {
 		return false
 	}
+	if stackMaxDamage(s) <= 0 {
+		return false
+	}
 	p := component.DecodePatch(s)
-	return p.Has(compMaxDamage) && !p.Has(compUnbreakable) && p.Has(compDamage)
+	return !p.Has(compUnbreakable)
 }
 
 // stackMaxDamage / stackDamageValue are defined in enchantment_logic.go (anvil path) — shared here.
