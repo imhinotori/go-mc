@@ -64,6 +64,10 @@ type Worker struct {
 	staging   map[int64]*stagedChunk // carved-but-(maybe)-not-decorated chunks, packPos keyed
 	requested map[int64]bool         // neighbor auto-request dedup (scheduler-owned)
 	wanted    map[int64]bool         // externally-requested centers (scheduler-owned)
+	// pendingRequests is the scheduler-owned FIFO of accepted neighbor requests waiting
+	// for capacity in requests. wantedCh is paused while it is non-empty, bounding it to
+	// one eight-neighbor ring without blocking the scheduler.
+	pendingRequests []level.ChunkPos
 
 	// pool BOUNDS terrain concurrency to terrainWorkers() (NumCPU-2) recycling goroutines
 	// instead of spawning one per request. A single chunk costs ~1.25s of pure noise/biome
@@ -154,16 +158,17 @@ func NewWorker(gen Generator, regionDir string, buf int) *Worker {
 	// positive size.
 	pool, _ := ants.NewPool(terrainWorkers())
 	return &Worker{
-		gen:       gen,
-		regionDir: regionDir,
-		requests:  make(chan level.ChunkPos, buf),
-		results:   make(chan ChunkResult, buf),
-		carved:    make(chan *carvedChunk, buf),
-		wantedCh:  make(chan level.ChunkPos, buf),
-		staging:   make(map[int64]*stagedChunk),
-		requested: make(map[int64]bool),
-		wanted:    make(map[int64]bool),
-		pool:      pool,
+		gen:             gen,
+		regionDir:       regionDir,
+		requests:        make(chan level.ChunkPos, buf),
+		results:         make(chan ChunkResult, buf),
+		carved:          make(chan *carvedChunk, buf),
+		wantedCh:        make(chan level.ChunkPos, buf),
+		staging:         make(map[int64]*stagedChunk),
+		requested:       make(map[int64]bool),
+		wanted:          make(map[int64]bool),
+		pendingRequests: make([]level.ChunkPos, 0, 8),
+		pool:            pool,
 	}
 }
 
@@ -197,8 +202,8 @@ func (w *Worker) StructureCache() *structure.Cache { return w.structureCache() }
 //
 // Request is the EXTERNAL (streamer/tick) entry point: it records pos as a "wanted"
 // center, so the scheduler auto-requests pos's 8 neighbors to decorate it. The
-// scheduler's own neighbor auto-requests use the internal requestInternal path, which
-// does NOT mark the neighbor wanted — this BOUNDS the auto-request frontier to one ring
+// scheduler-owned neighbor auto-requests use pendingRequests and do NOT mark the neighbor
+// wanted — this BOUNDS the auto-request frontier to one ring
 // around the externally-requested set (a neighbor-ring chunk does not recursively pull
 // in ITS neighbors), matching vanilla's "generate the 8 neighbors to decorate a wanted
 // chunk" gating instead of expanding outward forever.
@@ -210,13 +215,9 @@ func (w *Worker) Request(pos level.ChunkPos) {
 	w.requestInternal(pos) // result ignored: the tick re-requests, so a full-channel drop is retried
 }
 
-// requestInternal enqueues pos for terrain generation WITHOUT marking it wanted. Used by
-// the scheduler to pull in the neighbor ring of a wanted center. Non-blocking (bounded
-// backpressure, same as Request). Returns true iff the bounded request channel accepted
-// the enqueue; false when the channel was full and the default branch dropped the send.
-// The external Request caller may ignore the result because the tick re-requests next tick;
-// requestNeighbors MUST observe it, otherwise a dropped auto-pulled neighbor latches
-// requested[nk]=true forever and the wanted center's 3x3 wedges in "Loading terrain".
+// requestInternal enqueues an external center for terrain generation without marking it
+// wanted. It is non-blocking; Request callers retry on later ticks. Scheduler-owned
+// neighbors use pendingRequests instead so an accepted ring request cannot be dropped.
 func (w *Worker) requestInternal(pos level.ChunkPos) bool {
 	select {
 	case w.requests <- pos:
@@ -306,33 +307,33 @@ type loadResult struct {
 // could newly complete and emitting each only once all its wanted neighbors are decorated.
 func (w *Worker) runScheduler(ctx context.Context) {
 	for {
+		var requestOut chan<- level.ChunkPos
+		var nextRequest level.ChunkPos
+		var wantedIn <-chan level.ChunkPos
+		if len(w.pendingRequests) == 0 {
+			wantedIn = w.wantedCh
+		} else {
+			requestOut = w.requests
+			nextRequest = w.pendingRequests[0]
+		}
 		select {
 		case <-ctx.Done():
 			return
 
-		case pos := <-w.wantedCh:
+		case requestOut <- nextRequest:
+			w.pendingRequests = w.pendingRequests[1:]
+
+		case pos := <-wantedIn:
 			// An externally-requested center: record interest + auto-request its 8 neighbors
 			// so the 3x3 it needs to decorate gets generated. Bounded to one ring (neighbors
-			// are requested via requestInternal, which does NOT mark them wanted, so they do
+			// are queued in pendingRequests without becoming wanted, so they do
 			// not recursively expand). If the center is already carved+staged, re-scan it.
 			key := packPos(pos)
 			if !w.wanted[key] {
 				w.wanted[key] = true
 			}
-			// requestNeighbors runs on EVERY wantedCh notification, not only on the first
-			// time the center becomes wanted. A previous call may have DROPPED a neighbor
-			// enqueue when the bounded request channel was full (requestInternal returns
-			// false and skips latching requested[nk]); the tick re-issues Request every tick,
-			// so a single retry drains the dropped neighbors as the channel frees. The
-			// requested/staging dedupe inside requestNeighbors keeps this O(new neighbors):
-			// already-accepted neighbors stay skipped (requested[nk]==true), and neighbors
-			// that have already carved stay skipped (staging[nk]!=nil). Without this retry
-			// the caller's retry never recovers a dropped neighbor — this goroutine is the
-			// ONLY writer to requested, and the carved branch's own requestNeighbors call only
-			// fires for wanted carved centers — so a drop latches the wedge and the wanted
-			// center's 3x3 never completes ("Loading terrain" stall). One-ring behavior is
-			// preserved: requestInternal does not mark neighbors wanted, so they cannot
-			// recursively expand the frontier.
+			// requestNeighbors durably queues any missing ring columns. requested/staging
+			// dedupe makes repeated wanted notifications cheap and prevents frontier growth.
 			w.requestNeighbors(pos)
 			// pos becoming wanted can both let it decorate AND change the emit-gate of its
 			// neighbors (it is now a wanted neighbor they must wait on), so process the ring.
@@ -427,17 +428,9 @@ func (w *Worker) processRing(ctx context.Context, pos level.ChunkPos) {
 }
 
 // requestNeighbors auto-requests the 8 neighbors of pos (the ring needed to decorate it),
-// each once (the requested set dedups; the bounded requests channel + singleflight dedup
-// the terrain gen). Uses requestInternal so the neighbors are NOT marked wanted — this is
-// what bounds the auto-request frontier to a single ring. Scheduler-goroutine-only.
-//
-// The requested[nk] dedup bit is latched ONLY after requestInternal accepts the bounded
-// send: with Nonblocking=false the pool can park Submit, the reader stops draining
-// requests, and the bounded channel fills — at which point requestInternal's default
-// branch drops the send. Latching requested[nk]=true before the accepted enqueue would
-// drop the neighbor permanently (this goroutine is the ONLY writer; wanted centers arrive
-// via wantedCh, and requestNeighbors is the only call site), so the wanted center's 3x3
-// could never complete and the chunk would stay in "Loading terrain" forever.
+// each once. The scheduler takes durable ownership in pendingRequests before marking the
+// column requested; it later sends the FIFO into the bounded requests channel from its
+// select loop. Neighbors are not marked wanted, bounding expansion to one ring.
 func (w *Worker) requestNeighbors(pos level.ChunkPos) {
 	for dx := -1; dx <= 1; dx++ {
 		for dz := -1; dz <= 1; dz++ {
@@ -447,9 +440,8 @@ func (w *Worker) requestNeighbors(pos level.ChunkPos) {
 			np := level.ChunkPos{pos[0] + int32(dx), pos[1] + int32(dz)}
 			nk := packPos(np)
 			if !w.requested[nk] && w.staging[nk] == nil {
-				if w.requestInternal(np) {
-					w.requested[nk] = true
-				}
+				w.requested[nk] = true
+				w.pendingRequests = append(w.pendingRequests, np)
 			}
 		}
 	}

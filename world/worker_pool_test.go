@@ -16,7 +16,7 @@ import (
 // time -- without the park the calls finish too fast to observe overlap. The park does not
 // change any chunk bytes (it is pure timing), so determinism is untouched.
 type boundedGen struct {
-	inner   Generator
+	inner    Generator
 	inFlight atomic.Int32
 	peak     atomic.Int32
 }
@@ -34,9 +34,9 @@ func (g *boundedGen) GenerateTerrain(pos level.ChunkPos) *level.Chunk {
 	return g.inner.GenerateTerrain(pos)
 }
 
-func (g *boundedGen) Decorate(view *Neighborhood)   { g.inner.Decorate(view) }
-func (g *boundedGen) Dims() (minY, height int)       { return g.inner.Dims() }
-func (g *boundedGen) HasSkyLight() bool              { return g.inner.HasSkyLight() }
+func (g *boundedGen) Decorate(view *Neighborhood) { g.inner.Decorate(view) }
+func (g *boundedGen) Dims() (minY, height int)    { return g.inner.Dims() }
+func (g *boundedGen) HasSkyLight() bool           { return g.inner.HasSkyLight() }
 
 // TestWorkerPoolBoundsConcurrency proves the fix for the "Loading terrain" stall: the worker
 // must cap concurrent terrain generation at terrainWorkers() (NumCPU-2) instead of spawning
@@ -126,5 +126,46 @@ func TestWorkerPoolReleaseOnCancel(t *testing.T) {
 	}
 	if !drained {
 		t.Fatalf("pool still has %d running workers 2s after Release", w.pool.Running())
+	}
+}
+
+func TestWorkerNeighborRequestsSurviveSaturatedQueue(t *testing.T) {
+	center := level.ChunkPos{0, 0}
+	w := NewWorker(NewSuperflat(24, -64, -1), "", 1)
+
+	// Before Run starts there is no scheduler goroutine, so this setup is race-free.
+	// Filling requests makes every old nonblocking neighbor send fail deterministically.
+	w.wanted[packPos(center)] = true
+	w.requests <- center
+	w.requestNeighbors(center)
+	if got := len(w.pendingRequests); got != 8 {
+		t.Fatalf("pending neighbor requests = %d, want 8", got)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		w.Run(ctx)
+	}()
+	defer func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("Worker.Run did not stop after cancellation")
+		}
+	}()
+
+	select {
+	case res := <-w.Results():
+		if res.Err != nil {
+			t.Fatalf("ChunkResult.Err = %v", res.Err)
+		}
+		if res.Pos != center || res.Chunk == nil {
+			t.Fatalf("result = (%v, %v), want completed center %v", res.Pos, res.Chunk, center)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("wanted center never emitted after initially saturated request queue")
 	}
 }
