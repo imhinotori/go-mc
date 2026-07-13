@@ -105,6 +105,7 @@ func (r *region) tick(gt int64) {
 // the end — structured so EITHER path advances exactly once, never both (T-27-02-GT).
 func (t *TickLoop) tickOnce() {
 	start := t.clock.Now() // capture via the injectable clock for MSPT (TICK-06)
+	t.profReset()          // DIAGNOSTIC: reset the opt-in per-phase timer (no-op when off)
 
 	// Hoisted backstop: a panic in ANY phase — or one surfaced by wg.Wait() from a region —
 	// must not kill the tick goroutine (that would freeze the world + disconnect every player).
@@ -128,7 +129,7 @@ func (t *TickLoop) tickOnce() {
 	// globalRegion.levelRandom, and the pig oracle never calls tickOnce, so the pinned per-entity streams
 	// are unperturbed. Placed first among the world-global phases, mirroring ServerLevel.tick where
 	// advanceWeatherCycle runs early. CITE: ServerLevel.advanceWeatherCycle.
-	t.tickWeather()
+	t.profPhase("tickWeather", t.tickWeather)
 
 	// WORLD-GLOBAL sleep handling (sleep.go -- the ServerLevel.tick all-players-asleep block): the
 	// players_sleeping_percentage gate -> skip the night to dawn + wake everyone + clear the storm. Like
@@ -137,10 +138,10 @@ func (t *TickLoop) tickOnce() {
 	// mirroring ServerLevel.tick where the sleep block runs early (right after advanceWeatherCycle). It
 	// draws NO RNG and the pig oracle never calls tickOnce, so the pinned per-entity streams are
 	// unperturbed. CITE: net.minecraft.server.level.ServerLevel.tick (sleep block).
-	t.tickSleep()
+	t.profPhase("tickSleep", t.tickSleep)
 
-	t.tickWorld()  // scheduled blocks/fluids + raid + random/thunder over the shared world
-	t.tickChunks() // per-player ring → world requests (≈ ServerChunkCache.tick / chunkSource)
+	t.profPhase("tickWorld", t.tickWorld)   // scheduled blocks/fluids + raid + random/thunder over the shared world
+	t.profPhase("tickChunks", t.tickChunks) // per-player ring → world requests (≈ ServerChunkCache.tick / chunkSource)
 
 	// RUN BLOCK EVENTS (ServerLevel.runBlockEvents): vanilla drains the block-event queue AFTER
 	// getChunkSource().tick() and BEFORE the entity pass (bytecode: "chunkSource" getChunkSource().tick
@@ -156,7 +157,7 @@ func (t *TickLoop) tickOnce() {
 	// region; tickItems spans regions), so it must be single-threaded (a per-region fan-out would
 	// double-process the global player list). It keeps its fixed slot BEFORE tickAI (the trace order
 	// contract — TestTickPhaseOrder).
-	t.tickEntities()
+	t.profPhase("tickEntities", t.tickEntities)
 
 	gt := t.gametime // the ONE shared tick number every region reads this tick (Pitfall 3 /
 	// T-27-02-GT): a single value the coordinator passes into each region.tick, read-only.
@@ -193,12 +194,14 @@ func (t *TickLoop) tickOnce() {
 	// flushOutbound (coordinator, post-barrier) and only READ during the fan-out, so there is no
 	// concurrent read+write. TestGlobalBroadcastSafeFromRegion proves the read path; the Docker -race
 	// gate (Task 4) proves the read-during-fan-out crossing.
+	stopFanout := t.profStart("regionFanout(AI+physics)")
 	var wg conc.WaitGroup
 	for _, r := range t.regions {
 		r := r
 		wg.Go(func() { r.tick(gt) })
 	}
 	wg.Wait() // BARRIER: no region mutates its store past this point this tick.
+	stopFanout()
 
 	// --- CROSS-REGION / GLOBAL POST-PHASE (coordinator, all regions quiescent → safe to read AND
 	// write across regions). ---
@@ -224,12 +227,12 @@ func (t *TickLoop) tickOnce() {
 	// BEFORE entities (wrong order — a hopper/spawner/piston saw last tick's entity positions, and a
 	// piston BE advanced a tick early relative to the entities riding it). CITE: ServerLevel.tick
 	// blockEntities section.
-	t.tickBlockEntities()
+	t.profPhase("tickBlockEntities", t.tickBlockEntities)
 
 	// The async rejoin runs on the coordinator now (quiescent): the chunkReady drain (world mutation,
 	// globalRegion's asyncIn) + the asyncIn2 entity results (pathReady/spawnCandidatesReady), which
 	// re-resolve the OWNING region by id and apply there (drop if no region owns it — Pitfall 1).
-	t.applyAsyncResults()
+	t.profPhase("applyAsyncResults", t.applyAsyncResults)
 
 	// RIDE (passenger.go): re-position every vehicle's passengers AFTER physics moved the vehicles and
 	// AFTER the cross-region transfer/async rejoin (so the vehicle is in its post-transfer region and at
@@ -240,11 +243,11 @@ func (t *TickLoop) tickOnce() {
 	// oracle's world has none, so its RNG stream is unperturbed).
 	t.rideTickVehicles()
 
-	t.tickEntityMovement() // GAMEPLAY-07: ServerEntity.sendChanges → delta move packets to trackers
-	t.tickEquipment()      // GAMEPLAY-07: detectEquipmentUpdates → SetEquipment to trackers
+	t.profPhase("tickEntityMovement", t.tickEntityMovement) // GAMEPLAY-07: ServerEntity.sendChanges → delta move packets to trackers
+	t.profPhase("tickEquipment", t.tickEquipment)           // GAMEPLAY-07: detectEquipmentUpdates → SetEquipment to trackers
 	t.trace("tracker.Tick")
-	t.tracker.Tick()  // cross-region at the barrier (near() spans region seams — Plan 03)
-	t.flushOutbound() // GLOBAL: per-player chunk stream over the global player list
+	t.profPhase("tracker.Tick", t.tracker.Tick) // cross-region at the barrier (near() spans region seams — Plan 03)
+	t.profPhase("flushOutbound", t.flushOutbound)
 
 	// Advance the shared gametime EXACTLY ONCE per logical tick — the coordinator is the SINGLE
 	// advancer of the shared 50ms anchor (TICK-02 / Pitfall 3). The `advanced` flag makes the
@@ -269,7 +272,9 @@ func (t *TickLoop) tickOnce() {
 		t.broadcastTimeSync()
 	}
 
-	t.recordMSPT(t.clock.Now().Sub(start)) // publish the read-only telemetry snapshot (TICK-06)
+	total := t.clock.Now().Sub(start)
+	t.profDump(total)      // DIAGNOSTIC: on a slow tick, log the worst phases (no-op when off / fast)
+	t.recordMSPT(total)    // publish the read-only telemetry snapshot (TICK-06)
 }
 
 // recoverTick is the hoisted per-tick panic backstop (Phase-27 STEP-2, lifted from the inline

@@ -221,6 +221,11 @@ type TickLoop struct {
 	ringN  int // total ticks recorded (so we know how much of the ring is valid)
 	ringIx int // next write index
 
+	// profSamples is the opt-in (SULFUR_TICK_PROFILE=1) per-phase timing accumulator for the
+	// current tick, reset at the top of tickOnce and dumped worst-first when a tick exceeds
+	// profSlowThreshold. Tick-goroutine-only; empty + untouched when profiling is off. Diagnostic.
+	profSamples []profSample
+
 	// lastOverloadWarn rate-limits the vanilla "Can't keep up" overload warning
 	// (maybeWarnOverloaded). Tick-goroutine-only. Zero => never warned.
 	lastOverloadWarn time.Time

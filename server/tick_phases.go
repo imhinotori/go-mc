@@ -105,8 +105,8 @@ func (t *TickLoop) tickWorld() {
 		// SUB-BLOCKTICK: drain THIS region's scheduled-BLOCK-tick queue (ServerLevel.blockTicks.tick)
 		// BEFORE the fluid pass, matching ServerLevel.tick which drains blockTicks then fluidTicks at
 		// the same game-time. A nil manager (no chunk container ever registered) is a cheap no-op.
-		t.tickScheduledBlocks()
-		t.tickFluids()
+		t.profPhase("  tw.scheduledBlocks", t.tickScheduledBlocks)
+		t.profPhase("  tw.fluids", t.tickFluids)
 	})
 	// RAID (Raids.tick): vanilla ServerLevel.tick runs the raid pass IMMEDIATELY after the
 	// blockTicks/fluidTicks drains and BEFORE getChunkSource().tick() (bytecode: raids field #271
@@ -116,7 +116,7 @@ func (t *TickLoop) tickWorld() {
 	// reads are legal without a barrier. A region with no raidsManager is a no-op. This was previously
 	// (incorrectly) run at the post-barrier slot AFTER entities; #42 moves it to the vanilla slot
 	// (before chunkSource / tickChunks). CITE: ServerLevel.tick raid section.
-	t.raidsTickAllRegions()
+	t.profPhase("  tw.raids", t.raidsTickAllRegions)
 	// SUB-RANDOMTICK: the UNSCHEDULED random-tick driver (ServerLevel.tickChunk block-sampling pass —
 	// sugar-cane growth + future crops/saplings/grass/leaves). It is a WORLD-GLOBAL pass over the
 	// SHARED ChunkManager (the world is not yet per-region-sharded), so it runs ONCE here on the
@@ -127,7 +127,7 @@ func (t *TickLoop) tickWorld() {
 	// Its body lives in random_tick.go. Placed AFTER the scheduled block/fluid drains, mirroring
 	// vanilla's ServerLevel.tick ordering (tickChunk runs in ServerChunkCache.tickChunks, after the
 	// pending block/fluid ticks). CITE: ServerChunkCache.tickChunks -> ServerLevel.tickChunk.
-	t.tickRandomBlocks()
+	t.profPhase("  tw.randomBlocks", t.tickRandomBlocks)
 	// SUB-THUNDER: the WORLD-GLOBAL lightning-strike gate (ServerLevel.tickThunder — the per-chunk
 	// isRaining && isThundering && nextInt(100000)==0 probability that spawns a LightningBolt). In vanilla
 	// tickThunder runs in ServerChunkCache.tickSpawningChunk, a SIBLING of tickChunk (the random-tick pass)
@@ -136,7 +136,7 @@ func (t *TickLoop) tickWorld() {
 	// GLOBAL levelRandom (like the weather cycle), never a per-entity stream, so the pig oracle (which never
 	// runs this) is unperturbed. A clear/non-thundering world is a cheap early-out (no per-column draw). Its
 	// body lives in lightning.go. CITE: ServerChunkCache.tickSpawningChunk -> ServerLevel.tickThunder.
-	t.tickThunder()
+	t.profPhase("  tw.thunder", t.tickThunder)
 	// BLOCK ENTITIES: the global block-entity tick cluster (furnace/crafter/hopper/beacon/spawner/...)
 	// used to run HERE, inside tickWorld, BEFORE the entity pass. Vanilla ServerLevel.tick runs
 	// tickBlockEntities AFTER entities (bytecode: "entities" pc 418, "blockEntities" tickBlockEntities()
@@ -148,7 +148,7 @@ func (t *TickLoop) tickWorld() {
 	// serializes the SHARED world's dirty chunks once, not per region. It lives INSIDE this existing
 	// phase so no new phase is added to the fixed tick order (TestTickPhaseOrder stays green). A
 	// nil/disabled chunkSaver makes it a cheap no-op (tests/ephemeral runs).
-	t.tickChunkSave()
+	t.profPhase("  tw.chunkSave", t.tickChunkSave)
 	// SUB-PERSIST (raids/POI): the periodic raid + POI SavedData flush, on the SAME cadence as the
 	// chunk-save pass. It flushes only DIRTY per-region managers to world/data/raids.dat + world/poi/.
 	// A "" persistDir makes it a cheap no-op (tests/ephemeral runs). See saveddata.go.

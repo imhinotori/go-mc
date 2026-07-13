@@ -1,6 +1,8 @@
 package server
 
 import (
+	"time"
+
 	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/block"
 	pk "github.com/imhinotori/sulfur/net/packet"
@@ -68,8 +70,38 @@ const (
 	// thousands of cells in a single tick - observed 17498 cells = a ~13s tick stall. Capping +
 	// re-enqueuing the overflow to the next gametime spreads the work across ticks WITHOUT changing
 	// the simulation (every cell still ticks, in the same deterministic packed-pos order - drainDue
-	// sorts the bucket) - a pure perf bound, the only permitted deviation. 65536 matches vanilla.
-	maxFluidTicksPerTick = 65536
+	// sorts the bucket) - a pure perf bound, the only permitted deviation.
+	//
+	// THROUGHPUT (not container) bound: vanilla's 65536 is LevelTicks' maxAllowedTicks, a ceiling
+	// vanilla never approaches because vanilla settles a chunk's fluids at generation (full-status)
+	// and does NOT re-tick a whole aquifer on load. THIS port re-flows aquifer border cells on load
+	// (postProcessChunkFluids), so a chunk-stream burst really CAN queue thousands of cells at one
+	// gametime -- and draining 65536 of them in a single tick was the profiled 0.1-1.6s stall (the
+	// "mobs move in jerks / feels like low TPS" report: the tick loop's accumulator ran whole ticks
+	// behind, so entity-movement broadcasts arrived in bursts). Measured per-cell cost is ~40-60us
+	// for water (each fluidTick does ~20-40 GetBlock lookups across getNewLiquid + spread) and ~10x
+	// that for lava (getSlopeFindDistance BFS), so a count cap alone can't bound the pass -- the
+	// wall-clock fluidBudget below is the real limiter and this stays the hard upper ceiling.
+	// A 2814-cell settling burst now drains over several ticks instead of one 160ms stall -
+	// invisible (fluid getTickDelay is already 5 ticks) and the per-cell order + count are unchanged.
+	// This is the HARD CEILING; the primary limiter is the wall-clock fluidBudget below (a count cap
+	// alone can't bound cost because lava cells cost ~10x water). 4096 is high enough that a normal
+	// water burst never hits it (the time budget stops first) yet caps a pathological bucket.
+	maxFluidTicksPerTick = 4096
+
+	// fluidBudget is the WALL-CLOCK ceiling on the fluid pass per logical tick. Once the drain has
+	// spent this long, every remaining due cell is deferred (in order) to the next gametime. 8ms
+	// leaves the bulk of the 50ms tick budget for entities/AI/physics/tracking while still draining
+	// a large settling burst over a handful of ticks (imperceptible — fluid getTickDelay is 5). This
+	// is what actually kills the "feels like low TPS / mobs jerk" stall: a lava-lake or ocean chunk
+	// load can no longer monopolize a tick regardless of how expensive each cell's spread is.
+	fluidBudget = 8 * time.Millisecond
+
+	// fluidBudgetCheckEvery is how often (in cells) the drain re-reads the clock to test fluidBudget.
+	// Reading the clock every cell would add measurable per-cell overhead; 64 keeps the overshoot
+	// past the budget small (at ~0.6ms/expensive-cell, up to ~64 cells ≈ within a few ms) while the
+	// clock read is amortized to ~1/64 of a cell's cost.
+	fluidBudgetCheckEvery = 64
 )
 
 // waterSourceConversion is the gamerule default (GameRules.WATER_SOURCE_CONVERSION). With no
@@ -310,11 +342,22 @@ func (t *TickLoop) tickFluids() {
 		return
 	}
 	due := t.cur().fluidSchedule.drainDue(t.gametime)
-	// Per-tick budget (LevelTicks.tick maxAllowedTicks=65536): process at most the cap this tick and
+	// Per-tick budget (LevelTicks.tick maxAllowedTicks): process at most the cap this tick and
 	// re-enqueue the overflow to the NEXT gametime so a chunk-load batch can't dump thousands of
 	// aquifer cells into one tick (the ~13s stall). drainDue already returned the bucket in
 	// deterministic packed-pos order, so the kept prefix + the deferred suffix preserve ordering -
 	// the simulation is unchanged, only spread across ticks (a pure perf bound).
+	//
+	// TWO independent bounds, both simulation-preserving (every cell still ticks, in the same
+	// packed-pos order, just possibly one-or-more ticks later — invisible, fluid getTickDelay is
+	// already 5): a COUNT cap (maxFluidTicksPerTick) AND a WALL-CLOCK budget. The count cap alone is
+	// not enough because per-cell cost is not uniform: a cheap water cell is ~40us but a LAVA cell
+	// runs getSlopeFindDistance (a BFS up to distance 4) and costs ~10x more, so a bucket of 512 lava
+	// cells still stalled ~300ms. The time budget makes the pass cost bounded REGARDLESS of per-cell
+	// expense: we stop as soon as fluidBudget wall-clock is spent and defer every remaining cell to
+	// the next gametime. The count cap stays as a hard upper ceiling (and keeps small buckets from
+	// even reading the clock). This is the "spread the settling burst across ticks" perf bound — the
+	// only permitted deviation from a literal single-pass drain.
 	if len(due) > maxFluidTicksPerTick {
 		overflow := due[maxFluidTicksPerTick:]
 		due = due[:maxFluidTicksPerTick]
@@ -323,15 +366,29 @@ func (t *TickLoop) tickFluids() {
 			t.cur().fluidSchedule.schedule(st.pos, next)
 		}
 	}
-	for _, st := range due {
+	processed := 0
+	budgetStart := t.clock.Now()
+	next := t.gametime + 1
+	for i, st := range due {
+		// Wall-clock budget check: once the fluid pass has spent fluidBudget this tick, defer EVERY
+		// remaining due cell (in order) to the next gametime and stop. Checked every fluidBudgetCheckEvery
+		// cells so the clock read itself is not a per-cell cost. The deferred suffix keeps its packed-pos
+		// order (due is already sorted), so the simulation is unchanged — only spread across ticks.
+		if i > 0 && i%fluidBudgetCheckEvery == 0 && t.clock.Now().Sub(budgetStart) >= fluidBudget {
+			for _, rem := range due[i:] {
+				t.cur().fluidSchedule.schedule(rem.pos, next)
+			}
+			break
+		}
 		t.fluidTick(st.pos)
+		processed++
 	}
 	// Cost instrumentation for the "should the fluid sim move off-tick?" question: emit the
 	// per-gametick fluid work (cells processed this tick + the queue depth still pending) ONLY
 	// when there was work, so a busy session's fluid load is greppable (`grep 'ULTRA\[fluid\] cost'`)
 	// without deciding the async optimization blind. Zero cost when the firehose is off.
-	if len(due) > 0 {
-		udebug("fluid", "cost gametime=%d processed=%d pendingAfter=%d", t.gametime, len(due), t.cur().fluidSchedule.pending())
+	if processed > 0 {
+		udebug("fluid", "cost gametime=%d processed=%d pendingAfter=%d", t.gametime, processed, t.cur().fluidSchedule.pending())
 	}
 }
 
