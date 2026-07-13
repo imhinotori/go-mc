@@ -1,9 +1,9 @@
 # Cierre de gaps de paridad — Codex/MiniMax — 2026-07-13
 
 **Baseline:** `d54cf8f2`  
-**HEAD verificado:** `c7145798`  
+**HEAD verificado:** `d2308921`
 **Oracle:** `temp/cache/26.2-inner.jar`  
-**Aislamiento:** tres worktrees `D:\ender-parity-worktrees\fix-*`; los worktrees de Claude no se modificaron.
+**Aislamiento:** cuatro worktrees MiniMax separados bajo `D:\ender-parity-worktrees\mm-*`; los worktrees de Claude no se modificaron.
 
 ## Resultado
 
@@ -11,7 +11,7 @@
 Vanilla 26.2 parity: [████████████▍░░░░░░░] 62% ±4
 ```
 
-La barra no sube de entero: se cerraron fallos severos de infraestructura y dos caminos Tool, pero `Tool` sigue parcial por defaults de durabilidad, y la revisión de NoteBlock/Bat encontró gaps observables nuevos dentro de los frentes activos de Claude.
+El ponderado pasa de 61,60% a 62,19%, pero la barra no sube de entero. Esta ola cerró cuatro caminos observables adicionales (ticket cap, edad de candidato de vibración, durabilidad plain y resistencia acuática del anchor); subsistemas amplios aún parciales impiden justificar 63%.
 
 ## Integrado
 
@@ -38,6 +38,31 @@ La barra no sube de entero: se cerraron fallos severos de infraestructura y dos 
 - `stackToolDamagePerBlock` usa el componente efectivo.
 - Una espada creative ya no destruye stone; una pickaxe creative sí.
 
+### `4d8c98c5` — edad del candidato de vibración
+
+- Un candidato registrado en el mismo `gameTime` no se promueve prematuramente.
+- Warden, sensor y shrieker comparten la condición `candidate.gameTime < now`.
+- La promoción al tick siguiente conserva el decremento 3→2 en ese mismo tick.
+
+### `4d86ace0` — límite de player ticket
+
+- Replica el cap vanilla de 32 chunks para player tickets.
+- Distancia 32 queda retenida/ticketeada; distancia 33 cae al nivel default 34.
+- El grafo y el valor almacenado usan constantes coherentes en sus bordes.
+
+### `fca43d8f` — durabilidad efectiva de stacks plain
+
+- Genera 84 defaults `minecraft:max_damage` desde los reports datagen 26.2.
+- Resuelve patch agregado → removal → default registrado; `damage` ausente/removido vale cero.
+- Un pickaxe/sword sin componentes explícitos ya materializa `DAMAGE` al usarse.
+- El predicado compartido de yunque, equipamiento, grindstone y desgaste reconoce esos stacks vanilla.
+
+### `d2308921` — respawn anchor bajo agua
+
+- Threading opt-in del calculador de resistencia mantiene las explosiones genéricas sin cambios.
+- Agua horizontal o sobre el anchor activa resistencia 100 sólo en el BlockPos central ya removido.
+- Tests deterministas comparan el conjunto de bloques afectado y prueban el callback por posición.
+
 ## Gates
 
 ```text
@@ -46,15 +71,23 @@ go test ./world -run 'TestRelight' -count=1                           PASS
 go test ./world -run 'TestWorkerPool|TestWorkerNeighbor' -count=1     PASS
 go test ./level/component -count=1                                    PASS
 go test ./server -run 'Test(Dig|StackHurt|StackTool|Tool|Creative)'   PASS
+go test ./... -count=1  # worktree Tool                                PASS
+(cwd tools) go test ./... -count=1                                    PASS
+go vet ./server ./level/component ./data/item                          PASS
+go test ./chunkticket -count=1                                        PASS
+go test ./server -run 'Test(...durability/vibration/anchor...)'        PASS
 git diff --check                                                       PASS
 ```
 
 `go test -race` no está disponible porque el entorno tiene `CGO_ENABLED=0`.
+El gate global del worktree anchor tuvo un único flake no relacionado en `TestAllAsyncSubsystemsRaceClean` (el spawner no agregó mobs); su rerun aislado y toda la suite enfocada pasaron.
 
 ## Abierto / no sobrevendido
 
-- `Tool`: falta restaurar el generador declarado por los artifacts y resolver defaults efectivos de `max_damage`/`damage`; un stack completamente plain todavía no puede demostrar desgaste físico real.
-- Respawn anchor: calculador acuático y guard off-hand continúan abiertos.
+- `Tool`: la durabilidad observable y el generador de `max_damage` están cerrados; sigue abierto reemplazar la tabla runtime de defaults `Tool` por provenance/codegen directo del artifact.
+- Respawn anchor: calculador acuático cerrado; el guard de glowstone en off-hand continúa abierto.
+- Chunk tickets: el cap de player ticket está cerrado, pero el sistema completo continúa parcialmente observe-only.
+- Vibration/sculk: cerrada la edad del candidato; Brain/decay y superficie sculk amplia siguen parciales.
 - Fluid: el budget wall-clock continúa haciendo el timeline dependiente de carga/CPU.
 - NoteBlock (frente Claude): falta block-event queue real, sonido seeded/RNG, instrumento por head, hand y stats.
 - Bat (frente Claude): wake interno no emite metadata index 16 a trackers.
@@ -62,4 +95,4 @@ git diff --check                                                       PASS
 
 ## Ejecutor MiniMax
 
-MiniMax-M3 produjo el parche base de relight. Las rondas correctivas y las ejecuciones posteriores de worker/Tool quedaron sin primera escritura durante 3–5 minutos, incluso con `opencode run --pure`; se detuvieron para evitar consumo improductivo. La revisión central corrigió fairness/pruebas de relight e implementó los dos parches restantes desde especificaciones multiagente verificadas contra el JAR.
+MiniMax-M3 produjo el parche base de relight y, en esta segunda ola, cuatro instancias de OpenCode trabajaron simultáneamente en worktrees independientes. Para evitar el lock transitorio de la base de datos, los arranques se escalonaron aproximadamente tres segundos. Ticket y vibration se integraron tras revisión directa; Tool y anchor requirieron una segunda ejecución MiniMax y revisión central. La revisión central detectó y corrigió además el predicado duplicado de durabilidad del yunque/equipamiento antes de integrar.

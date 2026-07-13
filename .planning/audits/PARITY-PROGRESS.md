@@ -1,7 +1,7 @@
 # Progress de paridad 1:1 — Minecraft Server 26.2
 
 **Actualizado:** 2026-07-13
-**Commit auditado:** `c7145798`
+**Commit auditado:** `d2308921`
 **Referencia:** `temp/cache/26.2-inner.jar`
 **Tipo de medición:** estimación ponderada por dominios observables
 **Margen de incertidumbre:** ±4 puntos porcentuales; gamerules, serverbound y las cuatro capas principales de persistencia ya tienen censos de campo/ruta
@@ -20,16 +20,16 @@ Este porcentaje NO significa que el 57% de las clases del JAR esté portado. Mid
 | Dominio | Peso | Score actual | Contribución | Motivo principal |
 |---|---:|---:|---:|---|
 | Protocolo, login, sesión y streaming | 10% | 58% | 5,8 | 69 paquetes reales + sentinel: 4 exactos, 33 parciales, 3 no-op explícitos y 30 default-noop |
-| Chunks, lighting y ciclo de mundo | 12% | 75% | 9,0 | Relight/status/scheduled ticks reales; ChunkLevel ya replica radio 11, máximo 44 y tabla 26.2, aunque tickets siguen observe-only |
+| Chunks, lighting y ciclo de mundo | 12% | 76% | 9,12 | Relight/status/scheduled ticks reales y player-ticket cap 32; el sistema de tickets amplio sigue parcial/observe-only |
 | Worldgen y estructuras | 15% | 64% | 9,6 | Neighbor backpressure y precisión float de providers cerrados; aún falta oracle integral de bytes/order |
-| Bloques, fluidos, física y redstone | 12% | 50% | 6,0 | Friction/speed-factor mejorados; neighbor updates, shapes, piston/redstone siguen parciales |
-| Entidades, AI, Brain y spawning | 16% | 63% | 10,08 | Vibration y snapshot por categoría corregidos; AI/Brain, roster y superficie sculk siguen parciales |
+| Bloques, fluidos, física y redstone | 12% | 51% | 6,12 | Anchor acuático y física básica mejorados; neighbor updates, shapes, piston/redstone siguen parciales |
+| Entidades, AI, Brain y spawning | 16% | 64% | 10,24 | Edad/selector de vibration y snapshot por categoría corregidos; AI/Brain, roster y superficie sculk siguen parciales |
 | Combate, efectos, proyectiles y enchants | 10% | 73% | 7,3 | Fall-per-packet y evento `HIT_GROUND` corregidos; effects/enchants/guards siguen incompletos |
-| Inventario, ítems, crafting y loot | 10% | 56% | 5,6 | Sweet berry conserva el stream RNG compartido; match_tool/components y acciones siguen parciales |
+| Inventario, ítems, crafting y loot | 10% | 58% | 5,8 | Durabilidad plain y defaults max_damage reproducibles; match_tool/components y acciones siguen parciales |
 | Persistencia integral | 7% | 48% | 3,36 | Spawn negativo/cero y espiral inicial 11×11 corregidos; field-level y otros formatos siguen incompletos |
 | Commands, advancements y gamerules | 5% | 58% | 2,9 | `/execute run` preserva source por fork; result/store/selectores/if blocks siguen parciales |
 | Región/concurrencia con semántica vanilla | 3% | 65% | 1,95 | Pool acotado pero sin equivalencia de order/backpressure; cross-region gameplay sigue divergente |
-| **Total ponderado** | **100%** | — | **61,60% ≈ 62%** | Ocho gaps observables cerrados con regresiones; field parity y subsistemas amplios parciales aún limitan el avance |
+| **Total ponderado** | **100%** | — | **62,19% ≈ 62%** | Cuatro caminos observables más cerrados; field parity y subsistemas amplios parciales aún limitan el avance |
 
 ## Contadores objetivos del snapshot
 
@@ -125,8 +125,11 @@ Informe completo: [`PARITY-CLOSURE-2026-07-13-CODEX-WAVE.md`](PARITY-CLOSURE-202
 - `1c5d1879`: fan-in de relight race-safe; presupuesto por unión 3×3, orden estable y carry FIFO sin starvation. CR-01 y WR-01 cerrados.
 - `65e5e773`: los ocho vecinos aceptados quedan en una FIFO durable del scheduler aunque `requests` esté saturado; el test reproduce la cola llena antes de `Run`.
 - `c7145798`: defaults efectivos de `Tool`, removal/replacement de patch, `damage_per_block` efectivo y política creative espada/pickaxe corregidos.
-- WR-02/WR-03 permanecen **parciales**, no cerrados por completo: falta generación reproducible de defaults y `max_damage`/`damage` efectivos para que un stack totalmente plain se desgaste.
-- La barra sigue en **62% ±4**: los tres cierres eliminan fallos severos, pero no completan un dominio amplio y los gaps nuevos de NoteBlock/Bat compensan el avance local.
+- `4d8c98c5`: edad mínima del candidato de vibration aplicada a warden/sensor/shrieker, sin promoción en el mismo `gameTime`.
+- `4d86ace0`: player-ticket cap 32 y bordes 32/33 corregidos.
+- `fca43d8f`: 84 defaults `max_damage` generados, resolución efectiva de patch y desgaste real de stacks plain; WR-02/WR-03 quedan cerrados en comportamiento observable.
+- `d2308921`: calculador acuático del respawn anchor aplica resistencia 100 en el centro; WR-04 cerrado. Off-hand sigue abierto.
+- La barra sigue en **62% ±4**, ahora **62,19% ponderado**: hay avance fraccional verificable, pero no alcanza 63% ni completa un dominio amplio.
 
 ## Resultados multiworker incorporados
 
