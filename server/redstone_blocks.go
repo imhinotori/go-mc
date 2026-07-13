@@ -48,11 +48,21 @@ func (t *TickLoop) noteBlockNeighborChanged(pos pk.Position, state block.StateID
 	}
 }
 
-// noteBlockPlayNote is NoteBlock.playNote: play only if the instrument worksAboveNoteBlock OR the cell
-// above is air. The blockEvent(0,0) is a cited client no-op; the NOTE_BLOCK_PLAY gameEvent is the
-// load-bearing vibration (frequency 10). The gate is ported so a covered note block stays silent. CITE:
-// NoteBlock.playNote (level.blockEvent + level.gameEvent(entity, NOTE_BLOCK_PLAY, pos)).
+// noteBlockPlayNote is NoteBlock.playNote for the REDSTONE-driven strike (no entity source): delegate to
+// noteBlockPlayNoteBy with sourceEntityID 0. The hand-strike interaction paths (tune / attack) call
+// noteBlockPlayNoteBy directly with the player as the vibration source. CITE: NoteBlock.playNote.
 func (t *TickLoop) noteBlockPlayNote(pos pk.Position, state block.StateID) {
+	t.noteBlockPlayNoteBy(pos, state, 0)
+}
+
+// noteBlockPlayNoteBy is NoteBlock.playNote(entity, state, level, pos): play only if the instrument
+// worksAboveNoteBlock OR the cell above is air (a covered BASE_BLOCK note block stays silent). On a play
+// it (1) posts the audible ClientboundBlockEvent(pos, note_block, 0, 0) to every viewer so the client
+// synthesizes the pitch from the block's INSTRUMENT+NOTE state, and (2) posts the load-bearing
+// NOTE_BLOCK_PLAY gameEvent (frequency 10) sourced from the striking entity (0 == none, the redstone
+// edge). sourceEntityID is the vibration source (the player for a hand strike; 0 for redstone). CITE:
+// NoteBlock.playNote (level.blockEvent(pos, this, 0, 0) + level.gameEvent(entity, NOTE_BLOCK_PLAY, pos)).
+func (t *TickLoop) noteBlockPlayNoteBy(pos pk.Position, state block.StateID, sourceEntityID int32) {
 	inst, ok := block.NoteBlockInstrumentOf(state)
 	if !ok {
 		return
@@ -64,9 +74,15 @@ func (t *TickLoop) noteBlockPlayNote(pos pk.Position, state block.StateID) {
 		}
 	}
 	t.recordNotePlayed(pos)
-	// level.gameEvent(entity, GameEvent.NOTE_BLOCK_PLAY, pos): the redstone-driven play has no entity
-	// source (a hand-strike would pass the player; redstone edge is source 0).
-	t.gameEventAt(geNoteBlockPlay, pos, gameEventContext{})
+	// level.blockEvent(pos, this, 0, 0): the client's NoteBlock.triggerEvent reads the block's INSTRUMENT
+	// + NOTE at pos to synthesize the note pitch/particle, so the b0/b1 payload is 0/0 and the block id
+	// carries the identity. Sent to every viewer of the column so the note is audible (the piston/shulker
+	// block-events are applied server-side because they drive gameplay state; NoteBlock's is a pure client
+	// cue, so we forward the actual packet). CITE: NoteBlock.playNote (level.blockEvent(pos, this, 0, 0)).
+	t.broadcastNoteBlockEvent(pos)
+	// level.gameEvent(entity, GameEvent.NOTE_BLOCK_PLAY, pos): a hand strike passes the player as the
+	// vibration source; the redstone edge passes 0 (none).
+	t.gameEventAt(geNoteBlockPlay, pos, gameEventContext{sourceEntityID: sourceEntityID})
 }
 
 // recordNotePlayed records that a note block at pos played this tick (the audible blockEvent is a

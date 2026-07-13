@@ -52,6 +52,34 @@ func NoteBlockWithPowered(s StateID, powered bool) (StateID, bool) {
 	return s, false
 }
 
+// NoteBlockCycleNote resolves the note_block state with NOTE cycled to (note+1)%25. The NOTE property
+// is the 0..24 IntegerProperty; BlockState.cycle(NOTE) advances to the next value in that range, wrapping
+// past the max (24) back to the min (0). Returns (s, false) for a non-note-block. CITE:
+// NoteBlock.useWithoutItem (state.cycle(NOTE)).
+func NoteBlockCycleNote(s StateID) (StateID, bool) {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return s, false
+	}
+	if b, ok := StateList[s].(NoteBlock); ok {
+		b.Note = Integer((int(b.Note) + 1) % 25)
+		return lookup(b)
+	}
+	return s, false
+}
+
+// NoteBlockWithInstrument resolves the note_block state with INSTRUMENT=inst, preserving NOTE/POWERED.
+// Returns (s, false) for a non-note-block. CITE: NoteBlock.setInstrument (state.setValue(INSTRUMENT, ...)).
+func NoteBlockWithInstrument(s StateID, inst NoteBlockInstrument) (StateID, bool) {
+	if int(s) < 0 || int(s) >= len(StateList) {
+		return s, false
+	}
+	if b, ok := StateList[s].(NoteBlock); ok {
+		b.Instrument = inst
+		return lookup(b)
+	}
+	return s, false
+}
+
 func IsTargetBlock(s StateID) bool {
 	if int(s) < 0 || int(s) >= len(StateList) {
 		return false

@@ -365,6 +365,10 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 	// A jukebox right-click INSERTS a music disc (empty) or EJECTS the loaded disc (JukeboxBlock.useItemOn/
 	// useWithoutItem). CITE JukeboxBlock.useItemOn / useWithoutItem.
 	isJukebox := block.IsJukebox(state)
+	// A note block right-click TUNES it (useWithoutItem -> cycle NOTE + play), unless a mob-head
+	// (NOTE_BLOCK_TOP_INSTRUMENTS) item is used on the TOP face (then it PASSes so the head places on top).
+	// CITE NoteBlock.useItemOn / useWithoutItem.
+	isNoteBlock := block.IsNoteBlock(state)
 	isDecoratedPot := block.IsDecoratedPot(state)
 	// A chiseled bookshelf right-click ADDS a #bookshelf_books item to the clicked slot, or REMOVES the
 	// book already in that slot (ChiseledBookShelfBlock.useItemOn/useWithoutItem). The slot is resolved
@@ -394,7 +398,7 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 		!isRepeater && !isComparator && !isDispenser && !isHopper && !isBeacon && !isAnvil && !isEnchant &&
 		!isGrindstone && !isSmithing && !isLoom && !isDoorFamily && !isSign &&
 		!isCampfire && !isBell && !isLectern && !isJukebox && !isBookshelf && !isComposter &&
-		!isShulker && !isEnderChest && !isSweetBerry && !isRespawnAnchor {
+		!isShulker && !isEnderChest && !isSweetBerry && !isRespawnAnchor && !isNoteBlock {
 		return false // not an interactive block: PASS → placement runs
 	}
 	// Reach-gate the interaction (the same server-authoritative reach the place/break paths use):
@@ -519,6 +523,11 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 		// JukeboxBlock.useItemOn/useWithoutItem: insert a disc, or eject the loaded one. Returns false when the
 		// empty jukebox is clicked with a non-disc hand (placement continues). CITE JukeboxBlock.
 		return t.useJukebox(p, hitPos, state)
+	}
+	if isNoteBlock {
+		// NoteBlock.useItemOn/useWithoutItem: tune (cycle NOTE + play), unless a mob-head is used on the TOP
+		// face (then PASS so the head places on top -> placement continues). CITE NoteBlock.
+		return t.noteBlockUse(p, hitPos, state, direction)
 	}
 	if isDecoratedPot {
 		// DecoratedPotBlock.useItemOn: insert (or grow) the single held item into the pot. Returns false

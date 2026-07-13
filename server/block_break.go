@@ -423,6 +423,13 @@ func (t *TickLoop) startDestroyBlock(p *tickPlayer, pos pk.Position, sequence in
 	state := t.digBlockState(p, pos)
 	air := block.ToStateID[block.Air{}]
 	if state != air && !block.IsAir(state) {
+		// BlockState.attack(level, pos, player): the per-block left-click hook vanilla fires here (between
+		// EnchantmentHelper.onHitBlock and getDestroyProgress, guarded by !state.isAir()). For a note block
+		// this PLAYS the note (NoteBlock.attack -> playNote) — punching a note block plays its current note
+		// without tuning it. A no-op for every other block (the base BlockState.attack is empty), so this
+		// stays a faithful hook. Reached only in SURVIVAL (creative already returned via destroyAndAck).
+		// CITE ServerPlayerGameMode.handleBlockBreakAction (blockState.attack) + NoteBlock.attack.
+		t.noteBlockAttack(p, pos, state)
 		progress = t.getDestroyProgress(p, state)
 	}
 
