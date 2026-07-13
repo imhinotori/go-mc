@@ -302,12 +302,7 @@ func (t *TickLoop) composterExtractProduce(_ *tickPlayer, pos pk.Position) {
 
 	t.composterSpawnBoneMeal(x, y, z)
 
-	if ns, ok := composterStateAt(composterMinLevel); ok {
-		if t.world() != nil && t.world().SetBlock(pos, ns, dimMinY) {
-			t.broadcastBlockUpdate(pos, ns)
-			t.updateNeighborsAt(pos, updateShapeRecursionLimit)
-		}
-	}
+	t.composterEmpty(pos) // empty(...): setValue(LEVEL,0) + setBlock flag 3 + gameEvent.
 	// playSound(COMPOSTER_EMPTY): client SFX, cited no-op (no ClientboundLevelEvent wire).
 }
 
@@ -371,6 +366,216 @@ func composterItemName(s component.SlotData) (string, bool) {
 		return "", false
 	}
 	return "minecraft:" + it.Name, true
+}
+
+// -------------------------------------------------------------------------------------------------
+// Hopper interaction -- ComposterBlock is a WorldlyContainerHolder. getContainer(state, level, pos)
+// returns, by LEVEL: 8 -> OutputContainer (1-slot SimpleContainer pre-filled with a bone_meal stack,
+// DOWN face takes it; setChanged -> empty), < 7 -> InputContainer (1-slot empty SimpleContainer, UP face
+// places a COMPOSTABLE; setChanged -> addItem), 7 -> EmptyContainer (0 slots). A hopper ABOVE inserts
+// compostables (UP face, InputContainer); a hopper BELOW pulls the bone_meal (DOWN face, OutputContainer).
+// CITE: ComposterBlock.getContainer / InputContainer / OutputContainer / EmptyContainer.
+// -------------------------------------------------------------------------------------------------
+
+// composterInputSlot is the InputContainer/OutputContainer single slot index 0 (both are 1-slot
+// SimpleContainers). CITE: ComposterBlock InputContainer.<init> (super(1)), OutputContainer.<init>.
+const composterInputSlot = 0
+
+// composterGetContainer ports ComposterBlock.getContainer(state, level, pos): resolve the composter's
+// WorldlyContainer for the hopper. LEVEL comes from the state getContainerAt already read at pos. Returns
+// nil for a non-composter. CITE: ComposterBlock.getContainer.
+func (t *TickLoop) composterGetContainer(pos pk.Position, state block.StateID) containerView {
+	lvl, ok := composterLevel(state)
+	if !ok {
+		return nil
+	}
+	switch {
+	case lvl == composterMaxLevel: // 8 -> OutputContainer(new ItemStack(BONE_MEAL)).
+		return &composterOutputContainer{
+			t:     t,
+			pos:   pos,
+			state: state,
+			item:  component.SlotData{ItemID: toItemID(boneMealItemID), Count: 1},
+		}
+	case lvl < composterReady-1: // < 7 -> InputContainer (empty 1-slot).
+		return &composterInputContainer{t: t, pos: pos, state: state}
+	default: // == 7 -> EmptyContainer (0 slots).
+		return &composterEmptyContainer{}
+	}
+}
+
+// composterInputContainer ports ComposterBlock InputContainer: a 1-slot WorldlyContainer a hopper ABOVE
+// fills. getMaxStackSize()==1; UP face exposes slot 0; canPlaceItemThroughFace requires !changed && UP &&
+// COMPOSTABLES.containsKey(item); canTakeItemThroughFace is always false. setChanged (fired by the hopper
+// after setItem(0, stack)): if slot 0 non-empty -> changed=true, addItem(state, pos, stack),
+// levelEvent(1500, added?1:0), removeItemNoUpdate(0). CITE: ComposterBlock InputContainer.
+type composterInputContainer struct {
+	t       *TickLoop
+	pos     pk.Position
+	state   block.StateID
+	item    component.SlotData // the single SimpleContainer slot (starts empty).
+	changed bool
+}
+
+func (c *composterInputContainer) getContainerSize() int { return 1 }
+func (c *composterInputContainer) getItem(slot int) component.SlotData {
+	if slot != composterInputSlot {
+		return component.SlotData{Count: 0}
+	}
+	return c.item
+}
+func (c *composterInputContainer) setItem(slot int, stack component.SlotData) {
+	if slot != composterInputSlot {
+		return
+	}
+	if stackEmpty(stack) {
+		stack = component.SlotData{Count: 0}
+	}
+	c.item = stack
+}
+func (c *composterInputContainer) isEmpty() bool { return stackEmpty(c.item) }
+
+// setChanged ports ComposterBlock InputContainer.setChanged: on a non-empty slot 0, mark changed, run
+// ComposterBlock.addItem (RNG roll + LEVEL bump + scheduleTick at 7), fire levelEvent 1500, then empty
+// slot 0. addItem uses the CAPTURED state (LEVEL at getContainer time). CITE: InputContainer.setChanged.
+func (c *composterInputContainer) setChanged() {
+	stack := c.item
+	if stackEmpty(stack) {
+		return
+	}
+	c.changed = true
+	itName, ok := composterItemName(stack)
+	if ok {
+		lvl, _ := composterLevel(c.state)
+		_ = c.t.composterAddItem(nil, c.state, c.pos, itName, lvl) // addItem(null, state, level, pos, stack).
+		_ = composterLevelEventFill                                // levelEvent(1500, pos, added?1:0): cited client no-op.
+	}
+	c.item = component.SlotData{Count: 0} // removeItemNoUpdate(0).
+}
+func (c *composterInputContainer) getSlotsForFace(direction block.Direction) []int {
+	if direction == block.Up { // UP -> {0}; else {}.
+		return []int{composterInputSlot}
+	}
+	return []int{}
+}
+func (c *composterInputContainer) canPlaceItem(int, component.SlotData) bool { return true }
+
+// canPlaceItemThroughFace ports InputContainer.canPlaceItemThroughFace: !changed && dir==UP &&
+// COMPOSTABLES.containsKey(item). CITE: InputContainer.canPlaceItemThroughFace.
+func (c *composterInputContainer) canPlaceItemThroughFace(_ int, stack component.SlotData, direction block.Direction) bool {
+	if c.changed || direction != block.Up {
+		return false
+	}
+	itName, ok := composterItemName(stack)
+	if !ok {
+		return false
+	}
+	_, isKey := composterChance(itName)
+	return isKey
+}
+func (c *composterInputContainer) canTakeItem(int, component.SlotData) bool { return true }
+func (c *composterInputContainer) canTakeItemThroughFace(int, component.SlotData, block.Direction) bool {
+	return false // InputContainer.canTakeItemThroughFace -> false.
+}
+func (c *composterInputContainer) isWorldly() bool     { return true }
+func (c *composterInputContainer) asHopper() *hopperBE { return nil }
+
+// composterOutputContainer ports ComposterBlock OutputContainer: a 1-slot WorldlyContainer pre-filled with
+// a bone_meal stack a hopper BELOW pulls. getMaxStackSize()==1; DOWN face exposes slot 0;
+// canPlaceItemThroughFace is always false; canTakeItemThroughFace requires !changed && DOWN &&
+// stack.is(BONE_MEAL). setChanged (fired by the hopper after it removes the bone_meal): empty(state, pos)
+// -> LEVEL 0, then changed=true. CITE: ComposterBlock OutputContainer.
+type composterOutputContainer struct {
+	t       *TickLoop
+	pos     pk.Position
+	state   block.StateID
+	item    component.SlotData // slot 0, pre-filled with bone_meal.
+	changed bool
+}
+
+func (c *composterOutputContainer) getContainerSize() int { return 1 }
+func (c *composterOutputContainer) getItem(slot int) component.SlotData {
+	if slot != composterInputSlot {
+		return component.SlotData{Count: 0}
+	}
+	return c.item
+}
+func (c *composterOutputContainer) setItem(slot int, stack component.SlotData) {
+	if slot != composterInputSlot {
+		return
+	}
+	if stackEmpty(stack) {
+		stack = component.SlotData{Count: 0}
+	}
+	c.item = stack
+}
+func (c *composterOutputContainer) isEmpty() bool { return stackEmpty(c.item) }
+
+// setChanged ports ComposterBlock OutputContainer.setChanged: empty(null, state, level, pos) -> LEVEL 0
+// (setBlock flag 3 + gameEvent), then changed=true. Vanilla runs empty() UNCONDITIONALLY (no isEmpty
+// guard, unlike InputContainer). CITE: OutputContainer.setChanged.
+func (c *composterOutputContainer) setChanged() {
+	c.t.composterEmpty(c.pos)
+	c.changed = true
+}
+func (c *composterOutputContainer) getSlotsForFace(direction block.Direction) []int {
+	if direction == block.Down { // DOWN -> {0}; else {}.
+		return []int{composterInputSlot}
+	}
+	return []int{}
+}
+func (c *composterOutputContainer) canPlaceItem(int, component.SlotData) bool { return true }
+func (c *composterOutputContainer) canPlaceItemThroughFace(int, component.SlotData, block.Direction) bool {
+	return false // OutputContainer.canPlaceItemThroughFace -> false.
+}
+func (c *composterOutputContainer) canTakeItem(int, component.SlotData) bool { return true }
+
+// canTakeItemThroughFace ports OutputContainer.canTakeItemThroughFace: !changed && dir==DOWN &&
+// stack.is(BONE_MEAL). CITE: OutputContainer.canTakeItemThroughFace.
+func (c *composterOutputContainer) canTakeItemThroughFace(_ int, stack component.SlotData, direction block.Direction) bool {
+	if c.changed || direction != block.Down {
+		return false
+	}
+	return int32(stack.ItemID) == int32(toItemID(boneMealItemID))
+}
+func (c *composterOutputContainer) isWorldly() bool     { return true }
+func (c *composterOutputContainer) asHopper() *hopperBE { return nil }
+
+// composterEmptyContainer ports ComposterBlock EmptyContainer: a 0-slot WorldlyContainer (LEVEL 7 -- full
+// but not yet READY). No face exposes a slot; nothing may be placed or taken. CITE: ComposterBlock EmptyContainer.
+type composterEmptyContainer struct{}
+
+func (c *composterEmptyContainer) getContainerSize() int { return 0 }
+func (c *composterEmptyContainer) getItem(int) component.SlotData {
+	return component.SlotData{Count: 0}
+}
+func (c *composterEmptyContainer) setItem(int, component.SlotData)           {}
+func (c *composterEmptyContainer) isEmpty() bool                             { return true }
+func (c *composterEmptyContainer) setChanged()                               {}
+func (c *composterEmptyContainer) getSlotsForFace(block.Direction) []int     { return []int{} }
+func (c *composterEmptyContainer) canPlaceItem(int, component.SlotData) bool { return true }
+func (c *composterEmptyContainer) canPlaceItemThroughFace(int, component.SlotData, block.Direction) bool {
+	return false
+}
+func (c *composterEmptyContainer) canTakeItem(int, component.SlotData) bool { return true }
+func (c *composterEmptyContainer) canTakeItemThroughFace(int, component.SlotData, block.Direction) bool {
+	return false
+}
+func (c *composterEmptyContainer) isWorldly() bool     { return true }
+func (c *composterEmptyContainer) asHopper() *hopperBE { return nil }
+
+// composterEmpty ports ComposterBlock.empty(entity, state, level, pos): setValue(LEVEL, 0), setBlock
+// (flag 3) + gameEvent(BLOCK_CHANGE). Shared by extractProduce (hand) and OutputContainer.setChanged
+// (hopper). CITE: ComposterBlock.empty.
+func (t *TickLoop) composterEmpty(pos pk.Position) {
+	ns, ok := composterStateAt(composterMinLevel)
+	if !ok {
+		return
+	}
+	if t.world() != nil && t.world().SetBlock(pos, ns, dimMinY) {
+		t.broadcastBlockUpdate(pos, ns)
+		t.updateNeighborsAt(pos, updateShapeRecursionLimit)
+	}
 }
 
 // composterSpawnBoneMeal spawns a bone_meal ItemEntity at (x,y,z) with the default pickup delay, the

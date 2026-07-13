@@ -187,6 +187,13 @@ func (t *TickLoop) getContainerAt(pos pk.Position) containerView {
 		if h := t.resolveHopper(pos, state); h != nil {
 			return &hopperContainer{t: t, pos: pos, h: h}
 		}
+	case isComposterBlock(state):
+		// ComposterBlock is a WorldlyContainerHolder (not a block-entity). getContainer synthesizes its
+		// WorldlyContainer from the LEVEL: 8 -> OutputContainer (bone_meal, DOWN pull), < 7 -> InputContainer
+		// (UP insert compostables), 7 -> EmptyContainer (0 slots). CITE ComposterBlock.getContainer.
+		if cv := t.composterGetContainer(pos, state); cv != nil {
+			return cv
+		}
 	case block.IsShulkerBox(state):
 		// ShulkerBoxBlockEntity is a WorldlyContainer (27 slots, all faces expose all slots). resolveShulker
 		// synthesizes an empty container for a placed shulker box. CITE ShulkerBoxBlockEntity (WorldlyContainer).
@@ -249,7 +256,9 @@ func (c *chestContainer) setChanged() {
 	c.t.markChestDirty(c.pos)
 	c.t.broadcastChestChange(c.pos, c.cl)
 }
-func (c *chestContainer) getSlotsForFace(block.Direction) []int { return createFlatSlots(chestContainerSize) }
+func (c *chestContainer) getSlotsForFace(block.Direction) []int {
+	return createFlatSlots(chestContainerSize)
+}
 func (c *chestContainer) canPlaceItem(int, component.SlotData) bool { return true }
 func (c *chestContainer) canPlaceItemThroughFace(int, component.SlotData, block.Direction) bool {
 	return true

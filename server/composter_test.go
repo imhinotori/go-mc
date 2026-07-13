@@ -220,3 +220,145 @@ func TestComposterAnalogOutput(t *testing.T) {
 		t.Fatal("stone should not produce composter analog output")
 	}
 }
+
+
+// TestComposterHopperInsert drives the InputContainer path exactly as HopperBlockEntity.tryMoveInItem
+// does: getContainer -> canPlaceItemThroughFace(UP) -> setItem(0) -> setChanged (addItem + clear). A
+// compostable inserted from the UP face at LEVEL 0 (free-fill, chance>0) bumps LEVEL to 1 with no RNG.
+func TestComposterHopperInsert(t *testing.T) {
+	loop, mgr, _ := newRandomTickLoop()
+	r := loop.only()
+	const seed = int64(0x1234)
+	r.levelRandom = levelgen.NewLegacyRandomSource(seed)
+
+	pos := pk.Position{X: 5, Y: 65, Z: 5}
+	mgr.SetBlock(pos, composterAt(0), dimMinY)
+
+	cv := loop.getContainerAt(pos)
+	if cv == nil {
+		t.Fatal("getContainerAt returned nil for a LEVEL-0 composter")
+	}
+	if !cv.isWorldly() {
+		t.Fatal("composter container must be a WorldlyContainer")
+	}
+	leaves := component.SlotData{ItemID: pk.VarInt(209), Count: 1}
+	// UP face exposes slot 0; a non-UP face exposes none.
+	if slots := cv.getSlotsForFace(block.Up); len(slots) != 1 || slots[0] != 0 {
+		t.Fatalf("UP getSlotsForFace = %v, want [0]", slots)
+	}
+	if slots := cv.getSlotsForFace(block.Down); len(slots) != 0 {
+		t.Fatalf("DOWN getSlotsForFace = %v, want []", slots)
+	}
+	if !cv.canPlaceItemThroughFace(0, leaves, block.Up) {
+		t.Fatal("compostable should be placeable through the UP face")
+	}
+	if cv.canPlaceItemThroughFace(0, leaves, block.Down) {
+		t.Fatal("compostable must NOT be placeable through the DOWN face")
+	}
+	if cv.canTakeItemThroughFace(0, leaves, block.Up) {
+		t.Fatal("InputContainer must never allow taking")
+	}
+	// tryMoveInItem: setItem(0, one-item stack) then setChanged.
+	cv.setItem(0, leaves)
+	cv.setChanged()
+	if got := mustGet(t, mgr, pos); got != composterAt(1) {
+		t.Fatalf("hopper insert: LEVEL not bumped to 1 (got %d)", got)
+	}
+	// free-fill drew no RNG.
+	fresh := levelgen.NewLegacyRandomSource(seed)
+	if r.levelRandom.NextDouble() != fresh.NextDouble() {
+		t.Fatal("hopper free-fill drew RNG (should short-circuit before nextDouble)")
+	}
+	// The changed guard now blocks a second insert on the SAME container view.
+	if cv.canPlaceItemThroughFace(0, leaves, block.Up) {
+		t.Fatal("changed InputContainer must reject a second insert")
+	}
+}
+
+// TestComposterHopperExtract drives the OutputContainer path exactly as HopperBlockEntity does when a
+// hopper below pulls: getContainer (LEVEL 8) -> canTakeItemThroughFace(DOWN, bone_meal) -> removeItem ->
+// setChanged (empty -> LEVEL 0).
+func TestComposterHopperExtract(t *testing.T) {
+	loop, mgr, _ := newRandomTickLoop()
+	pos := pk.Position{X: 5, Y: 65, Z: 5}
+	mgr.SetBlock(pos, composterAt(8), dimMinY)
+
+	cv := loop.getContainerAt(pos)
+	if cv == nil {
+		t.Fatal("getContainerAt returned nil for a READY composter")
+	}
+	if cv.getContainerSize() != 1 {
+		t.Fatalf("OutputContainer size = %d, want 1", cv.getContainerSize())
+	}
+	boneMeal := cv.getItem(0)
+	if boneMeal.Count != 1 || int32(boneMeal.ItemID) != int32(toItemID(boneMealItemID)) {
+		t.Fatalf("OutputContainer slot 0 = %+v, want one bone_meal", boneMeal)
+	}
+	// DOWN face exposes slot 0; taking bone_meal through DOWN is allowed; placing is not.
+	if slots := cv.getSlotsForFace(block.Down); len(slots) != 1 || slots[0] != 0 {
+		t.Fatalf("DOWN getSlotsForFace = %v, want [0]", slots)
+	}
+	if !cv.canTakeItemThroughFace(0, boneMeal, block.Down) {
+		t.Fatal("bone_meal should be takeable through the DOWN face")
+	}
+	if cv.canTakeItemThroughFace(0, boneMeal, block.Up) {
+		t.Fatal("bone_meal must NOT be takeable through the UP face")
+	}
+	if cv.canPlaceItemThroughFace(0, boneMeal, block.Down) {
+		t.Fatal("OutputContainer must never allow placing")
+	}
+	// tryMoveOutItem: removeItem then setChanged.
+	cv.setItem(0, component.SlotData{Count: 0})
+	cv.setChanged()
+	if got := mustGet(t, mgr, pos); got != composterAt(0) {
+		t.Fatalf("hopper extract: LEVEL not reset to 0 (got %d)", got)
+	}
+	// changed guard blocks a second take on the SAME view.
+	if cv.canTakeItemThroughFace(0, boneMeal, block.Down) {
+		t.Fatal("changed OutputContainer must reject a second take")
+	}
+}
+
+// TestComposterEmptyContainerAtLevel7 verifies LEVEL 7 (full-but-not-READY) returns the 0-slot
+// EmptyContainer: no face exposes a slot, nothing may be placed or taken. CITE ComposterBlock EmptyContainer.
+func TestComposterEmptyContainerAtLevel7(t *testing.T) {
+	loop, mgr, _ := newRandomTickLoop()
+	pos := pk.Position{X: 5, Y: 65, Z: 5}
+	mgr.SetBlock(pos, composterAt(7), dimMinY)
+
+	cv := loop.getContainerAt(pos)
+	if cv == nil {
+		t.Fatal("getContainerAt returned nil for a LEVEL-7 composter")
+	}
+	if cv.getContainerSize() != 0 {
+		t.Fatalf("EmptyContainer size = %d, want 0", cv.getContainerSize())
+	}
+	leaves := component.SlotData{ItemID: pk.VarInt(209), Count: 1}
+	if len(cv.getSlotsForFace(block.Up)) != 0 || len(cv.getSlotsForFace(block.Down)) != 0 {
+		t.Fatal("EmptyContainer must expose no slots on any face")
+	}
+	if cv.canPlaceItemThroughFace(0, leaves, block.Up) || cv.canTakeItemThroughFace(0, leaves, block.Down) {
+		t.Fatal("EmptyContainer must reject place and take")
+	}
+}
+
+// TestComposterHopperInsertRejectsNonUpAndNonCompostable verifies the InputContainer face + compostable
+// gate: a non-compostable from UP, or a compostable from a non-UP face, is rejected.
+func TestComposterHopperInsertRejectsNonUpAndNonCompostable(t *testing.T) {
+	loop, mgr, _ := newRandomTickLoop()
+	pos := pk.Position{X: 5, Y: 65, Z: 5}
+	mgr.SetBlock(pos, composterAt(2), dimMinY)
+
+	cv := loop.getContainerAt(pos)
+	if cv == nil {
+		t.Fatal("getContainerAt returned nil for a LEVEL-2 composter")
+	}
+	nonCompost := component.SlotData{ItemID: pk.VarInt(1), Count: 1}
+	if cv.canPlaceItemThroughFace(0, nonCompost, block.Up) {
+		t.Fatal("a non-compostable must not be placeable")
+	}
+	leaves := component.SlotData{ItemID: pk.VarInt(209), Count: 1}
+	if cv.canPlaceItemThroughFace(0, leaves, block.North) {
+		t.Fatal("a compostable from a non-UP face must be rejected")
+	}
+}
