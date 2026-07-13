@@ -3,6 +3,7 @@ package structure
 import (
 	"encoding/json"
 	"math"
+	"sync"
 
 	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/world/levelgen/data"
@@ -44,11 +45,19 @@ const (
 //
 // Source: javap Structure (optionalFieldOf "terrain_adaptation" default NONE) +
 // the 26.2 datagen worldgen/structure/*.json terrain_adaptation values.
-var terrainAdaptationCache = map[string]terrainAdjustment{}
+//
+// CONCURRENCY: the beardifier runs inside the chunk-generation worker pool (ants) — many worker
+// goroutines call ForStructuresInChunk -> hasTerrainAdaptation -> terrainAdaptationFor CONCURRENTLY
+// for different chunks. A plain map read+write here is a `fatal error: concurrent map read and map
+// write` (Go kills the process, no recover) — the observed crash that took the whole server down
+// (every worker died, TPS collapsed). The value is a PURE function of id (memoization only), so a
+// lock-free sync.Map is the right fit: obstruction-free reads, and a duplicate compute on a cache
+// miss race is harmless (same value stored twice). CITE: same jar data, only the store is made safe.
+var terrainAdaptationCache sync.Map // map[string]terrainAdjustment
 
 func terrainAdaptationFor(id string) terrainAdjustment {
-	if v, ok := terrainAdaptationCache[id]; ok {
-		return v
+	if v, ok := terrainAdaptationCache.Load(id); ok {
+		return v.(terrainAdjustment)
 	}
 	adj := adjNone
 	if raw, err := data.StructureJSON(id); err == nil {
@@ -70,7 +79,7 @@ func terrainAdaptationFor(id string) terrainAdjustment {
 			}
 		}
 	}
-	terrainAdaptationCache[id] = adj
+	terrainAdaptationCache.Store(id, adj)
 	return adj
 }
 
