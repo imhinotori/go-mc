@@ -1,7 +1,7 @@
 # Progress de paridad 1:1 — Minecraft Server 26.2
 
-**Actualizado:** 2026-07-12
-**Commit auditado:** `6d342091`
+**Actualizado:** 2026-07-13
+**Commit auditado:** `c7145798`
 **Referencia:** `temp/cache/26.2-inner.jar`
 **Tipo de medición:** estimación ponderada por dominios observables
 **Margen de incertidumbre:** ±4 puntos porcentuales; gamerules, serverbound y las cuatro capas principales de persistencia ya tienen censos de campo/ruta
@@ -117,6 +117,16 @@ Informe completo: [`PARITY-AUDIT-2026-07-13-CLAUDE-WAVE.md`](PARITY-AUDIT-2026-0
 - P1: respawn anchor ignora el calculador acuático y el guard de glowstone en off-hand.
 - El cache `SpreadContext` parece fiel, pero el budget wall-clock de fluidos sigue haciendo el timeline dependiente de la máquina.
 - La barra se conserva en **62% ±4 (61,60% ponderado)** hasta cerrar el P0 y los caminos observables faltantes.
+
+## Ola de cierre Codex/MiniMax — 2026-07-13
+
+Informe completo: [`PARITY-CLOSURE-2026-07-13-CODEX-WAVE.md`](PARITY-CLOSURE-2026-07-13-CODEX-WAVE.md).
+
+- `1c5d1879`: fan-in de relight race-safe; presupuesto por unión 3×3, orden estable y carry FIFO sin starvation. CR-01 y WR-01 cerrados.
+- `65e5e773`: los ocho vecinos aceptados quedan en una FIFO durable del scheduler aunque `requests` esté saturado; el test reproduce la cola llena antes de `Run`.
+- `c7145798`: defaults efectivos de `Tool`, removal/replacement de patch, `damage_per_block` efectivo y política creative espada/pickaxe corregidos.
+- WR-02/WR-03 permanecen **parciales**, no cerrados por completo: falta generación reproducible de defaults y `max_damage`/`damage` efectivos para que un stack totalmente plain se desgaste.
+- La barra sigue en **62% ±4**: los tres cierres eliminan fallos severos, pero no completan un dominio amplio y los gaps nuevos de NoteBlock/Bat compensan el avance local.
 
 ## Resultados multiworker incorporados
 
