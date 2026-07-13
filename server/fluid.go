@@ -95,13 +95,13 @@ const (
 	// a large settling burst over a handful of ticks (imperceptible — fluid getTickDelay is 5). This
 	// is what actually kills the "feels like low TPS / mobs jerk" stall: a lava-lake or ocean chunk
 	// load can no longer monopolize a tick regardless of how expensive each cell's spread is.
-	fluidBudget = 8 * time.Millisecond
+	fluidBudget = 6 * time.Millisecond
 
 	// fluidBudgetCheckEvery is how often (in cells) the drain re-reads the clock to test fluidBudget.
 	// Reading the clock every cell would add measurable per-cell overhead; 64 keeps the overshoot
 	// past the budget small (at ~0.6ms/expensive-cell, up to ~64 cells ≈ within a few ms) while the
 	// clock read is amortized to ~1/64 of a cell's cost.
-	fluidBudgetCheckEvery = 64
+	fluidBudgetCheckEvery = 8
 )
 
 // waterSourceConversion is the gamerule default (GameRules.WATER_SOURCE_CONVERSION). With no
@@ -513,11 +513,112 @@ func plus(p, d pk.Position) pk.Position {
 
 // fluidAt decodes the fluid at a world position (empty for unloaded/non-water).
 func (t *TickLoop) fluidAt(pos pk.Position) fluidState {
-	id, ok := t.world().GetBlock(pos, dimMinY)
+	return t.fluidAtSC(nil, pos)
+}
+
+// fluidAtSC is fluidAt routed through an (optional) SpreadContext state cache. sc==nil is the raw
+// direct read (byte-identical to the old fluidAt); sc!=nil memoizes the underlying GetBlock by the
+// (dx,dz) cacheKey. Only same-Y-plane (origin-level) reads may pass a non-nil sc - a below() read
+// must pass nil (see spreadContext doc: the (dx,dz) key ignores Y).
+func (t *TickLoop) fluidAtSC(sc *spreadContext, pos pk.Position) fluidState {
+	id, ok := t.blockStateSC(sc, pos)
 	if !ok {
 		return fluidState{}
 	}
 	return decodeFluid(id)
+}
+
+// spreadContext is the 1:1 port of net.minecraft.world.level.material.FlowingFluid$SpreadContext -
+// a per-slope-find memoization of block-state reads and hole tests. Without it, getSlopeDistance's
+// 8-direction depth-4 recursion re-reads the same cells exponentially (~25ms/fluidTick in open
+// water). WITH it, each cell's state is read once. Behaviour is byte-identical to the uncached path:
+// memoization removes ONLY duplicate reads of the same cell within one slope-find; distinct cells are
+// still first-read in the same order (no RNG in the slope-find, so zero oracle risk).
+//
+// SCOPE (verified from bytecode - do NOT widen it): the SpreadContext is created INSIDE getSpread
+// (FlowingFluid.getSpread bci 119-134, lazily on the first passable neighbor) and is threaded ONLY
+// into getSpread's isHole(np) and getSlopeDistance(...). spread()'s DOWN-branch canMaybePassThrough,
+// spread()'s isWaterHole, and getSpread's OWN per-direction canMaybePassThrough all use the RAW level
+// (no context). Creating it earlier (e.g. in spread()) and reusing it across the DOWN spreadTo WRITE
+// would cache pre-write states and diverge - that is exactly the staleness this scoping avoids.
+//
+// Bytecode facts (javap FlowingFluid$SpreadContext, verified):
+//   - fields: level, origin, stateCache: Short2ObjectMap<BlockState>, holeCache: Short2BooleanMap.
+//   - getCacheKey(pos) = ((pos.x-origin.x+128)&255)<<8 | ((pos.z-origin.z+128)&255), i2s (bci 26-49).
+//     X/Z ONLY - no Y. Two cells with the same (dx,dz) but different Y COLLIDE. This is intentional:
+//     the slope walk queries only origin-Y-plane cells + their .below(); the .below() reads go through
+//     the RAW level.getBlockState (lambda$isHole$0 bci 13-24), NEVER the cache. Do NOT add Y.
+//   - getBlockState(pos) = stateCache.computeIfAbsent(key, k -> level.getBlockState(pos)).
+//   - isHole(pos) = holeCache.computeIfAbsent(key, k -> isWaterHole(level, pos, getBlockState(pos),
+//     pos.below(), level.getBlockState(pos.below()))) - pos state CACHED, pos.below() state RAW.
+type spreadContext struct {
+	t          *TickLoop
+	origin     pk.Position
+	stateCache map[int16]block.StateID
+	holeCache  map[int16]bool
+	f          fluidState // the fluid whose spread is running (for isHole's canMaybePassThrough)
+}
+
+// newSpreadContext constructs `new SpreadContext(level, origin)` for the cell whose getSpread is running.
+func (t *TickLoop) newSpreadContext(origin pk.Position, f fluidState) *spreadContext {
+	return &spreadContext{
+		t:          t,
+		origin:     origin,
+		stateCache: map[int16]block.StateID{},
+		holeCache:  map[int16]bool{},
+		f:          f,
+	}
+}
+
+// cacheKey is FlowingFluid$SpreadContext.getCacheKey: ((dx+128)&255)<<8 | ((dz+128)&255), cast to
+// short (i2s). X/Z only - Y is intentionally ignored (see struct doc). dx/dz range is +/-127.
+func (sc *spreadContext) cacheKey(pos pk.Position) int16 {
+	dx := (int(pos.X) - int(sc.origin.X) + 128) & 255
+	dz := (int(pos.Z) - int(sc.origin.Z) + 128) & 255
+	return int16(dx<<8 | dz) // matches Java i2s of (dx<<8 | dz)
+}
+
+// blockStateSC is the sc-aware world read. It is FlowingFluid$SpreadContext.getBlockState when
+// sc != nil (memoized by the (dx,dz) cacheKey) and a raw level.getBlockState when sc == nil. It
+// returns (id, loaded), preserving GetBlock's unloaded flag exactly.
+//
+// Unloaded nuance: vanilla BlockGetter.getBlockState always returns a state (unloaded -> air/void) so
+// it never has a miss flag. Our GetBlock returns (id, loaded). To stay faithful AND safe, an unloaded
+// read is NOT stored in the cache and returns ok=false - callers already treat that as "not passable
+// / not replaceable" (canHoldAnyFluidAt returns false, canPassThroughWall returns false on unloaded).
+// The cached path preserves the exact unloaded behaviour of the direct path.
+//
+// ONLY same-Y-plane (origin-level) reads may pass a non-nil sc. below() reads inside the slope walk
+// MUST pass sc == nil (raw) to avoid the (dx,dz) Y-collision - exactly as vanilla's lambda$isHole$0
+// reads pos.below() via RAW level.getBlockState.
+func (t *TickLoop) blockStateSC(sc *spreadContext, pos pk.Position) (block.StateID, bool) {
+	if sc == nil {
+		return t.world().GetBlock(pos, dimMinY)
+	}
+	k := sc.cacheKey(pos)
+	if v, ok := sc.stateCache[k]; ok {
+		return v, true
+	}
+	id, ok := t.world().GetBlock(pos, dimMinY)
+	if !ok {
+		return 0, false // unloaded: do NOT store; mirror the direct-path (0,false) result exactly
+	}
+	sc.stateCache[k] = id
+	return id, true
+}
+
+// isHoleSC is FlowingFluid$SpreadContext.isHole - memoized in holeCache by pos's (dx,dz). It computes
+// the same predicate as the uncached isHole(pos, sc.f): canMaybePassThrough(pos, below(pos), DOWN, f).
+// pos is read through the cache; below(pos) is read RAW (canMaybePassThrough with dirDown passes
+// sc==nil for its `to`=below reads), mirroring lambda$isHole$0's RAW level.getBlockState(pos.below()).
+func (sc *spreadContext) isHoleSC(pos pk.Position) bool {
+	k := sc.cacheKey(pos)
+	if v, ok := sc.holeCache[k]; ok {
+		return v
+	}
+	v := sc.t.canMaybePassThrough(sc, pos, below(pos), dirDown, sc.f)
+	sc.holeCache[k] = v
+	return v
 }
 
 // isSolidAt reports whether the block at pos is a solid (non-air, non-water) barrier. Fluid
@@ -674,7 +775,7 @@ func (t *TickLoop) getNewLiquid(pos pk.Position) fluidState {
 		}
 		// canPassThroughWall(dir, pos, np): a solid slab/stair face between the two cells stops the
 		// contribution (VoxelShape face-occlusion). CITE: getNewLiquid bci 85-97.
-		if !t.canPassThroughWall(dirHoriz, pos, np) {
+		if !t.canPassThroughWall(nil, nil, dirHoriz, pos, np) {
 			continue
 		}
 		if nf.source {
@@ -701,7 +802,7 @@ func (t *TickLoop) getNewLiquid(pos pk.Position) fluidState {
 	af := t.fluidAt(abovePos)
 	// getNewLiquid UP branch (bci 185-254): same fluid directly above that canPassThroughWall(UP)
 	// -> falling, full. CITE: FlowingFluid.getNewLiquid.
-	if af.sameKind(cur) && af.isFluid() && t.canPassThroughWall(dirUp, pos, abovePos) {
+	if af.sameKind(cur) && af.isFluid() && t.canPassThroughWall(nil, nil, dirUp, pos, abovePos) {
 		return cur.makeFluid(waterSourceAmount, true, false)
 	}
 
@@ -729,7 +830,10 @@ func (t *TickLoop) spread(pos pk.Position, f fluidState) {
 	// source of this type, canHoldAnyFluid, AND canPassThroughWall through the DOWN face), (b) its
 	// current fluid must canBeReplacedWith(getNewLiquid(below).getType(), DOWN), and (c) it must be
 	// able to hold that specific fluid. Then spreadTo DOWN with the below cell's OWN getNewLiquid.
-	if t.canMaybePassThrough(pos, belowPos, dirDown, f) {
+	// RAW (nil sc): FlowingFluid.spread's DOWN branch reads via the level, not a context (the
+	// SpreadContext is created later, inside getSpread). Caching here and reusing across the DOWN
+	// spreadTo WRITE would cache pre-write state and diverge.
+	if t.canMaybePassThrough(nil, pos, belowPos, dirDown, f) {
 		downLiquid := t.getNewLiquid(belowPos)
 		if canBeReplacedWith(t.fluidAt(belowPos), downLiquid, dirDown) && t.canHoldSpecificFluidAt(belowPos, downLiquid) {
 			t.spreadToDir(belowPos, dirDown, downLiquid)
@@ -751,15 +855,24 @@ func (t *TickLoop) spread(pos pk.Position, f fluidState) {
 // canHoldAnyFluid(toState) is true, AND canPassThroughWall(dir, from, to) (the VoxelShape
 // face-occlusion). This is the shared pass-through gate used by spread(DOWN), getSpread, and isHole.
 // CITE: net.minecraft.world.level.material.FlowingFluid.canMaybePassThrough.
-func (t *TickLoop) canMaybePassThrough(from, to pk.Position, dir fluidDir, f fluidState) bool {
-	toFluid := t.fluidAt(to)
+func (t *TickLoop) canMaybePassThrough(sc *spreadContext, from, to pk.Position, dir fluidDir, f fluidState) bool {
+	// `to` is cached ONLY when it is on the origin Y-plane. For dirDown, `to` == from.below(): its
+	// (dx,dz) collides with `from` in the cache, so it MUST be read RAW (toSC == nil) - exactly as
+	// vanilla's lambda$isHole$0 reads pos.below() via RAW level.getBlockState. `from` is always on the
+	// origin plane (the horizontal slope walk never changes Y), so it stays cached. When sc == nil
+	// (uncached callers: spread's DOWN branch, spread's isHole, getSpread's per-dir gate) both are RAW.
+	toSC := sc
+	if dir == dirDown {
+		toSC = nil
+	}
+	toFluid := t.fluidAtSC(toSC, to)
 	if toFluid.sameKind(f) && toFluid.isFluid() && toFluid.source {
 		return false // isSourceBlockOfThisType(toFluid) -> a source of this type is never passed through
 	}
-	if !t.canHoldAnyFluidAt(to) {
+	if !t.canHoldAnyFluidAt(toSC, to) {
 		return false // canHoldAnyFluid(toState)
 	}
-	return t.canPassThroughWall(dir, from, to)
+	return t.canPassThroughWall(sc, toSC, dir, from, to)
 }
 
 // canPassThroughWall ports FlowingFluid.canPassThroughWall(dir, level, fromPos, fromState, toPos,
@@ -770,12 +883,14 @@ func (t *TickLoop) canMaybePassThrough(from, to pk.Position, dir fluidDir, f flu
 // occlusion shapes), so the merged-face test is ShapeOccludes(from, to, dir) and the full-cube early
 // returns are IsCollisionShapeFullBlock. (DEBUG_DISABLE_LIQUID_SPREADING / half-world debug flags are
 // false in a normal server.) CITE: net.minecraft.world.level.material.FlowingFluid.canPassThroughWall.
-func (t *TickLoop) canPassThroughWall(dir fluidDir, from, to pk.Position) bool {
-	fromID, ok := t.world().GetBlock(from, dimMinY)
+func (t *TickLoop) canPassThroughWall(fromSC, toSC *spreadContext, dir fluidDir, from, to pk.Position) bool {
+	// fromSC caches the origin-plane `from` cell; toSC is nil for dirDown (below read stays RAW). Both
+	// nil for the uncached callers (getNewLiquid, spread's DOWN/isHole gate).
+	fromID, ok := t.blockStateSC(fromSC, from)
 	if !ok {
 		return false
 	}
-	toID, ok := t.world().GetBlock(to, dimMinY)
+	toID, ok := t.blockStateSC(toSC, to)
 	if !ok {
 		return false
 	}
@@ -793,7 +908,7 @@ func (t *TickLoop) canPassThroughWall(dir fluidDir, from, to pk.Position) bool {
 // LiquidBlockContainer.canPlaceLiquid path is absent until waterlogging exists). CITE:
 // FlowingFluid.canHoldSpecificFluid.
 func (t *TickLoop) canHoldSpecificFluidAt(pos pk.Position, f fluidState) bool {
-	return f.isFluid() && t.canHoldAnyFluidAt(pos)
+	return f.isFluid() && t.canHoldAnyFluidAt(nil, pos)
 }
 
 // fluidDirToBlockDir maps the fluid flow direction to the block.Direction used by ShapeOccludes.
@@ -814,8 +929,8 @@ func fluidDirToBlockDir(d fluidDir) block.Direction {
 // anyway. Air, water, and lava are all replaceable (IsAir -> not solid, no exception; liquids carry
 // no Waterlogged field and do not blocksMotion), so this is a strict superset of the old air/fluid
 // test PLUS replaceable non-solids.
-func (t *TickLoop) canHoldAnyFluidAt(pos pk.Position) bool {
-	id, ok := t.world().GetBlock(pos, dimMinY)
+func (t *TickLoop) canHoldAnyFluidAt(sc *spreadContext, pos pk.Position) bool {
+	id, ok := t.blockStateSC(sc, pos)
 	if !ok {
 		return false // unloaded: do not spread into an absent column
 	}
@@ -850,23 +965,31 @@ func (t *TickLoop) spreadToSides(pos pk.Position, f fluidState) {
 func (t *TickLoop) getSpread(pos pk.Position, f fluidState) []spreadEntry {
 	minSlope := 1000
 	var out []spreadEntry
+	// SpreadContext(level, pos) - created HERE (FlowingFluid.getSpread bci 124-134), scoped to this
+	// getSpread's slope-find only. It memoizes the getSlopeDistance/isHole horizontal walk; the
+	// per-direction gate below and getNewLiquid stay on the RAW level, exactly as vanilla. getSpread
+	// performs no world WRITES, so every cached cell equals its raw value at read time.
+	sc := t.newSpreadContext(pos, f)
 	for _, d := range horizontalDirs {
 		np := plus(pos, d)
-		// canMaybePassThrough(pos, np, HORIZONTAL, f): source-of-type / canHoldAnyFluid / wall.
-		if !t.canMaybePassThrough(pos, np, dirHoriz, f) {
+		// canMaybePassThrough(pos, np, HORIZONTAL, f): source-of-type / canHoldAnyFluid / wall. RAW
+		// (nil sc) - vanilla's getSpread reads npState raw for this gate (bci 53-80), only the isHole /
+		// getSlopeDistance below use the context.
+		if !t.canMaybePassThrough(nil, pos, np, dirHoriz, f) {
 			continue
 		}
 		// getNewLiquid(np) - the neighbor computes ITS OWN new fluid state (this is the per-direction
-		// state the jar carries; the old code wrote one uniform amount to every direction).
+		// state the jar carries). Kept RAW/uncached: vanilla's getNewLiquid does NOT use the
+		// SpreadContext (it reads the vertical above/below cells, whose (dx,dz) collide with np).
 		newLiquid := t.getNewLiquid(np)
 		if !t.canHoldSpecificFluidAt(np, newLiquid) {
 			continue
 		}
 		var slope int
-		if t.isHole(np, f) {
+		if sc.isHoleSC(np) {
 			slope = 0
 		} else {
-			slope = t.getSlopeDistance(np, 1, opposite(d), f)
+			slope = t.getSlopeDistance(sc, np, 1, opposite(d), f)
 		}
 		if slope < minSlope {
 			minSlope = slope
@@ -875,7 +998,8 @@ func (t *TickLoop) getSpread(pos pk.Position, f fluidState) []spreadEntry {
 		if slope <= minSlope {
 			// put(dir, newLiquid) gated on the neighbor's current fluid canBeReplacedWith the new
 			// liquid in this HORIZONTAL direction (FluidState.canBeReplacedWith at bci 192-216).
-			if canBeReplacedWith(t.fluidAt(np), newLiquid, dirHoriz) {
+			// np is same-Y and getSpread has done no writes -> cached read equals raw.
+			if canBeReplacedWith(t.fluidAtSC(sc, np), newLiquid, dirHoriz) {
 				out = append(out, spreadEntry{dir: d, state: newLiquid})
 			}
 			minSlope = slope
@@ -895,21 +1019,23 @@ type spreadEntry struct {
 // (except the one we came from); if it can be passed through and is a hole (can flow down),
 // return i; otherwise, if i < slopeFindDistance, recurse with i+1. Returns the minimum distance
 // to a drop-off, or 1000 if none within range.
-func (t *TickLoop) getSlopeDistance(pos pk.Position, dist int, excludeDir pk.Position, f fluidState) int {
+func (t *TickLoop) getSlopeDistance(sc *spreadContext, pos pk.Position, dist int, excludeDir pk.Position, f fluidState) int {
 	best := 1000
 	for _, d := range horizontalDirs {
 		if d == excludeDir {
 			continue
 		}
 		np := plus(pos, d)
-		if !t.canMaybePassThrough(pos, np, dirHoriz, f) {
+		// pos and np are both on the origin Y-plane throughout the horizontal walk -> cached via sc
+		// (FlowingFluid.getSlopeDistance reads context.getBlockState(np) at bci 53-57).
+		if !t.canMaybePassThrough(sc, pos, np, dirHoriz, f) {
 			continue
 		}
-		if t.isHole(np, f) {
+		if sc.isHoleSC(np) {
 			return dist
 		}
 		if dist < f.slopeFindDistance(t.fluidSimUltrawarm()) {
-			if r := t.getSlopeDistance(np, dist+1, opposite(d), f); r < best {
+			if r := t.getSlopeDistance(sc, np, dist+1, opposite(d), f); r < best {
 				best = r
 			}
 		}
@@ -926,7 +1052,9 @@ func (t *TickLoop) isHole(pos pk.Position, f fluidState) bool {
 	// be reachable (a solid pos is never a hole - guarded by getSpread/getSlopeDistance's
 	// canMaybePassThrough before this is called). CITE: FlowingFluid$SpreadContext.isHole ->
 	// canPassThroughWall/canMaybePassThrough(pos.below(), DOWN).
-	return t.canMaybePassThrough(pos, below(pos), dirDown, f)
+	// UNCACHED variant (nil sc) - byte-identical to before; used by spread's isWaterHole gate and any
+	// direct/test callers. The hot slope-find path uses spreadContext.isHoleSC (memoized) instead.
+	return t.canMaybePassThrough(nil, pos, below(pos), dirDown, f)
 }
 
 // sourceNeighborCount counts the horizontal neighbors that are source blocks of this fluid.
