@@ -427,15 +427,39 @@ type entityRegion struct {
 	Position    [2]int32        `nbt:"Position"`
 }
 
+// entityDirsCreated memoizes the entities-dir MkdirAll so it runs ONCE per directory, not once per
+// column per save interval. The autosave pass visits every Ready column each interval and each call
+// used to os.MkdirAll(filepath.Dir(regionPath)); as a player explores, the Ready set grows without
+// bound, so that turned into hundreds of redundant MkdirAll syscalls per pass (the dir already exists
+// after the first). A concurrent map guards it because saveEntities is now also called from the
+// off-tick entity-save goroutine; the first writer for a dir creates it, the rest hit the fast-path
+// load. A creation error is NOT cached (so a transient failure retries next call).
+var entityDirsCreated sync.Map // map[string]struct{} — key is the entities-region directory
+
+// ensureEntityDir creates the entities-region directory once. On the first call for a given dir it
+// runs os.MkdirAll and records success; subsequent calls for the same dir are a single map load with
+// no syscall. Returns any MkdirAll error from the first (uncached) attempt.
+func ensureEntityDir(regionDir string) error {
+	if _, ok := entityDirsCreated.Load(regionDir); ok {
+		return nil // already created this run: skip the syscall
+	}
+	if err := os.MkdirAll(regionDir, 0o755); err != nil {
+		return err // not cached: a transient failure retries on the next call
+	}
+	entityDirsCreated.Store(regionDir, struct{}{})
+	return nil
+}
+
 // saveEntities writes an entity snapshot for a chunk column into the parallel entities/r.x.z.mca
 // region via save/region (ReadSector/WriteSector) — REUSING the Anvil region IO, NOT a new
 // format (the chunk's legacy in-chunk Entities slot is not the modern path). The sector payload
 // is a compression byte (gzip) + gzip(NBT) so it matches the chunk region's sector framing. The
-// entities directory and region file are created on demand; an existing region is opened and the
-// cell overwritten. Runs OFF the tick over the immutable []save.Entities snapshot.
+// entities directory is created ONCE per dir (ensureEntityDir) and the region file on demand; an
+// existing region is opened and the cell overwritten. Runs OFF the tick over the immutable
+// []save.Entities snapshot (durable synchronous write — the caller decides on-tick vs off-tick).
 func saveEntities(dir string, pos level.ChunkPos, ents []save.Entities) error {
 	regionPath, ix, iz := entityRegionPath(dir, pos)
-	if err := os.MkdirAll(filepath.Dir(regionPath), 0o755); err != nil {
+	if err := ensureEntityDir(filepath.Dir(regionPath)); err != nil {
 		return err
 	}
 

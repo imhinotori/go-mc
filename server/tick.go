@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"log"
+	"os"
 	"runtime"
 	"sort"
 	"sync/atomic"
@@ -218,6 +220,10 @@ type TickLoop struct {
 	ring   [msptRingSize]time.Duration
 	ringN  int // total ticks recorded (so we know how much of the ring is valid)
 	ringIx int // next write index
+
+	// lastOverloadWarn rate-limits the vanilla "Can't keep up" overload warning
+	// (maybeWarnOverloaded). Tick-goroutine-only. Zero => never warned.
+	lastOverloadWarn time.Time
 
 	// stats is the published read-only telemetry snapshot. Sole writer = tick
 	// goroutine; observers read via Stats(). atomic.Pointer keeps it off the
@@ -681,6 +687,15 @@ type TickLoop struct {
 	// does the region IO. Only finished bytes cross the seam — no live tick-owned pointer — so the
 	// save IO is race-free by construction (the leaveSnapshots discipline applied to chunks).
 	chunkSaver *world.ChunkSaver
+
+	// entitySaver is the off-tick entity-persistence consumer (the entity twin of chunkSaver). It is
+	// nil until SetEntitySaver wires it (production). When nil, the periodic entity autosave writes
+	// DURABLY INLINE on the owner (the historical behavior — preserved for the synchronous persistence
+	// tests). When set, flushColumnEntities SNAPSHOTS on the owner (a cheap tick-owned read) and
+	// ENQUEUES the immutable []save.Entities off-tick; entitySaver.RunEntitySaveLoop (its own
+	// goroutine) does the MkdirAll + encode + region write. This moves the per-interval, all-Ready-
+	// columns autosave syscall storm OFF the tick without changing what gets persisted.
+	entitySaver *EntitySaver
 
 	// chunkSaveTickCounter counts ticks toward the next periodic chunk-save pass (SUB-PERSIST). The
 	// save phase flushes dirty chunks every chunkSaveIntervalTicks rather than every tick, so a
@@ -1956,11 +1971,67 @@ func (t *TickLoop) advanceDraining(now time.Time, inbound <-chan Intent) int {
 		if inbound != nil {
 			t.drainInbound(inbound) // non-blocking drain on the OWNER goroutine
 		}
+		stepStart := t.clock.Now()
 		t.tickOnce() // one logical tick: ordered phases + gametime++ + recordMSPT
+		t.maybeWarnOverloaded(t.clock.Now().Sub(stepStart))
+		t.maybeLogTickStats()
 		t.acc -= tickStep
 		steps++
 	}
 	return steps
+}
+
+// tickStatsLogging is set once at first use from the SULFUR_TICK_STATS env var: opt-in periodic
+// MSPT/TPS telemetry to the log (a diagnostic, off by default so prod is quiet). -1 unknown, 0 off, 1 on.
+var tickStatsLogging int32 = -1
+
+// maybeLogTickStats logs the rolling MSPT avg/p99 + effective TPS every ~200 ticks (10s) when
+// SULFUR_TICK_STATS=1. Diagnostic only (the vanilla parity signal is maybeWarnOverloaded); this
+// surfaces the sub-overload MSPT so a "drops arrive late / laggy break" report can be quantified.
+func (t *TickLoop) maybeLogTickStats() {
+	if atomic.LoadInt32(&tickStatsLogging) == -1 {
+		on := int32(0)
+		if os.Getenv("SULFUR_TICK_STATS") == "1" {
+			on = 1
+		}
+		atomic.StoreInt32(&tickStatsLogging, on)
+	}
+	if atomic.LoadInt32(&tickStatsLogging) != 1 {
+		return
+	}
+	if t.gametime%200 != 0 {
+		return
+	}
+	if s := t.stats.Load(); s != nil {
+		log.Printf("tick stats: MSPTavg=%.2fms MSPTp99=%.2fms TPS=%.1f gametime=%d players=%d",
+			s.MSPTavg, s.MSPTp99, s.TPS, s.GameTime, len(t.players))
+	}
+}
+
+// overloadedThreshold is MinecraftServer.OVERLOADED_THRESHOLD_NANOS: a single tick that runs
+// longer than this triggers the "Can't keep up" warning. Vanilla 26.2 value.
+const overloadedThreshold = 2 * time.Second
+
+// overloadedWarnInterval is MinecraftServer.OVERLOADED_WARNING_INTERVAL_NANOS: the warning is
+// rate-limited to once per this window so a sustained overload does not spam the log. Vanilla 26.2.
+const overloadedWarnInterval = 15 * time.Second
+
+// maybeWarnOverloaded ports MinecraftServer.tickServer's overload check: when a single logical tick
+// exceeds OVERLOADED_THRESHOLD (2s), log "Can't keep up! Is the server overloaded? Running Xms or Y
+// ticks behind", rate-limited to OVERLOADED_WARNING_INTERVAL. Faithful to vanilla (same message +
+// thresholds) AND the operator's signal that MSPT has blown past the 50ms tick budget. Owner-only.
+func (t *TickLoop) maybeWarnOverloaded(tickCost time.Duration) {
+	if tickCost <= overloadedThreshold {
+		return
+	}
+	now := t.clock.Now()
+	if !t.lastOverloadWarn.IsZero() && now.Sub(t.lastOverloadWarn) < overloadedWarnInterval {
+		return // rate-limited
+	}
+	t.lastOverloadWarn = now
+	behindTicks := int64(tickCost / tickStep)
+	log.Printf("Can't keep up! Is the server overloaded? Running %dms or %d ticks behind",
+		tickCost.Milliseconds(), behindTicks)
 }
 
 // Run is the production tick driver (TICK-01/TICK-02/TICK-05). It owns all game

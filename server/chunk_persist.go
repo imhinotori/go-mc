@@ -39,6 +39,14 @@ func (t *TickLoop) SetChunkSaver(s *world.ChunkSaver) {
 	t.chunkSaver = s
 }
 
+// SetEntitySaver wires the OFF-TICK entity-save consumer. main() calls it before Run with a fresh
+// EntitySaver whose RunEntitySaveLoop runs in its own goroutine. A nil saver (tests/ephemeral runs)
+// keeps the periodic entity autosave writing DURABLY INLINE on the owner (the historical path).
+// Set-once at setup; read only on the tick goroutine.
+func (t *TickLoop) SetEntitySaver(s *EntitySaver) {
+	t.entitySaver = s
+}
+
 // tickChunkSave is the periodic chunk-save phase (SUB-PERSIST), called from the world phase inside
 // the fixed tick order (no new phase added — it lives inside an existing phase like the other
 // gameplay seams). Every chunkSaveIntervalTicks it drains the manager's dirty set and flushes each
@@ -79,7 +87,7 @@ func (t *TickLoop) tickChunkSave() {
 		// the empty store is what clears a previously non-empty EntityStorage cell.
 		t.world().ForEachReady(func(pos level.ChunkPos, _ *level.Chunk) {
 			if _, already := flushedEntities[pos]; !already {
-				t.flushColumnEntities(pos)
+				t.autosaveColumnEntities(pos)
 			}
 		})
 	}
@@ -93,8 +101,12 @@ func (t *TickLoop) flushColumnNow(pos level.ChunkPos) bool {
 	if t.world() == nil {
 		return true
 	}
+	// On-unload entities are written DURABLY INLINE (not routed off-tick): the column is about to be
+	// Removed and may reload before an off-tick write would land, so the durable write matches vanilla's
+	// unload semantics (the entity set is a single small column, not the all-Ready-columns storm). Done
+	// via flushColumnWithMode(durable=true) below when chunks are on, or directly here otherwise.
 	if t.chunkSaver != nil && t.chunkSaver.Enabled() {
-		return t.flushColumn(pos)
+		return t.flushColumnWithMode(pos, true)
 	}
 	if t.persistDir != "" {
 		t.flushColumnEntities(pos)
@@ -159,10 +171,15 @@ func (t *TickLoop) flushColumnWithMode(pos level.ChunkPos, durable bool) bool {
 	// snapshot is an IMMUTABLE []save.Entities value; only that crosses into the disk IO (no live
 	// *Entity), so it is race-free by the same discipline as the chunk bytes. A column with no
 	// persistable entities writes an empty cell (a later reload reads zero entities and respawns none). The
-	// write is synchronous owner-side (the per-column entity set is small, like the raid/POI/level.dat
-	// flushes). CITE EntityStorage.storeEntities.
+	// write goes off-tick for the periodic autosave (durable==false) via the EntitySaver, and DURABLY
+	// INLINE for the shutdown flush (durable==true) so a graceful stop persists before Run returns.
+	// CITE EntityStorage.storeEntities.
 	if t.persistDir != "" {
-		t.flushColumnEntities(pos)
+		if durable {
+			t.flushColumnEntities(pos)
+		} else {
+			t.autosaveColumnEntities(pos)
+		}
 	}
 
 	// SCHEDULED-TICK FLUSH: pack this column pending block + fluid ticks so a repeater mid-delay
@@ -219,6 +236,32 @@ func (t *TickLoop) flushAllLoadedChunksForShutdown() {
 func (t *TickLoop) flushColumnEntities(pos level.ChunkPos) {
 	if err := saveEntities(t.persistDir, pos, t.snapshotColumnEntities(pos)); err != nil {
 		udebug("chunksave", "entity save %v: %v", pos, err)
+	}
+}
+
+// autosaveColumnEntities is the OFF-TICK entity autosave: it SNAPSHOTS the column's entities on the
+// OWNER (snapshotColumnEntities — a cheap tick-owned read producing an IMMUTABLE []save.Entities,
+// including the empty list that clears a stale cell) and ENQUEUES that snapshot to the off-tick
+// EntitySaver, so the MkdirAll + encode + disk write happen off the tick goroutine. This is the hot
+// per-interval path (visited for every Ready column), so keeping the tick's share to just
+// snapshot+enqueue is what removes the on-tick syscall storm.
+//
+// FALLBACKS that preserve "no save is ever lost / observable state unchanged":
+//   - No saver wired (tests/ephemeral): write DURABLY INLINE (the historical synchronous path).
+//   - Saver wired but queue FULL: write DURABLY INLINE (deferring to disk this once rather than
+//     dropping the snapshot). Under sustained backpressure this occasionally pays a write on-tick,
+//     which is strictly better than losing a save; the large queue makes it rare.
+func (t *TickLoop) autosaveColumnEntities(pos level.ChunkPos) {
+	if t.entitySaver == nil {
+		t.flushColumnEntities(pos) // inline durable: no off-tick consumer wired
+		return
+	}
+	snap := entitySaveSnapshot{Dir: t.persistDir, Pos: pos, Ents: t.snapshotColumnEntities(pos)}
+	if !t.entitySaver.Enqueue(snap) {
+		// Queue full: do not drop the snapshot. Write it durably inline this pass.
+		if err := saveEntities(snap.Dir, snap.Pos, snap.Ents); err != nil {
+			udebug("chunksave", "entity save (inline fallback) %v: %v", pos, err)
+		}
 	}
 }
 

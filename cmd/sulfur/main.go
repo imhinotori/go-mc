@@ -307,6 +307,12 @@ func main() {
 	// closes through the existing load path. Started in its own goroutine below (RunChunkSaveLoop).
 	chunkSaver := world.NewChunkSaver(chunkRegionDir)
 	tick.SetChunkSaver(chunkSaver)
+	// PERF: the off-tick entity-save consumer (its own goroutine, like the chunk save loop). The
+	// periodic entity autosave used to serialize+write every Ready column SYNCHRONOUSLY on the tick;
+	// wiring this saver routes the snapshot's MkdirAll+encode+write off-tick (the tick only snapshots
+	// and enqueues), which removes the exploration-time MSPT climb. Started below (RunEntitySaveLoop).
+	entitySaver := server.NewEntitySaver()
+	tick.SetEntitySaver(entitySaver)
 	// SUB-PERSIST (raids/POI): raid + POI SavedData persist under worldDir (data/raids.dat,
 	// poi/*.mca), independent of the SULFUR_PERSIST_CHUNKS chunk gate -- vanilla always persists a
 	// dimension's raids + POI. SetPersistDir arms the periodic dirty-flush (tickSavedData) + the
@@ -483,6 +489,16 @@ func main() {
 		close(chunkSaveDone)
 	}()
 
+	// PERF: the off-tick entity-save consumer. It drains the tick's immutable entity snapshots and
+	// writes them to the entities/ region files OFF the tick. On ctx cancel it final-drains whatever is
+	// queued; the shutdown FLUSH of every loaded column is done durably+inline on the owner
+	// (flushAllLoadedChunksForShutdown), so a full stop still persists every column regardless.
+	entitySaveDone := make(chan struct{})
+	go func() {
+		entitySaver.RunEntitySaveLoop(ctx, log.Printf)
+		close(entitySaveDone)
+	}()
+
 	tickDone := make(chan struct{})
 	go func() {
 		tick.Run(ctx, inbound)
@@ -539,6 +555,7 @@ func main() {
 		<-tickDone
 		<-playerSaveDone
 		<-chunkSaveDone
+		<-entitySaveDone
 		return
 	}
 
@@ -557,6 +574,7 @@ func main() {
 	<-tickDone
 	<-playerSaveDone
 	<-chunkSaveDone
+	<-entitySaveDone
 	if serveErr != nil {
 		log.Printf("server listener stopped: %v", serveErr)
 	}
