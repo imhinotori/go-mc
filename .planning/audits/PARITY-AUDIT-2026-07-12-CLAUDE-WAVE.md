@@ -31,6 +31,8 @@ La estimación no sube de forma material. Hay mejoras aisladas exactas (loot, ra
 
 ### P1 — `/execute` pierde el `CommandSourceStack` transformado
 
+**Parcialmente remediado en `9227ff64`.** Cada fork instala en el tail el source transformado completo y aísla siblings; las entidades genéricas ya no heredan accidentalmente al player executor. El resultado entero, `store`, selectores y `if blocks` continúan abiertos.
+
 **Evidencia:** `server/commands_execute.go:502-525`.
 
 Al entrar a `run`, la posición, rotación, dimensión y anchor del `execSource` no se transmiten al comando final. Para una entidad no-player se conserva directamente el contexto original. En vanilla, los redirects ejecutan el root dispatcher con cada source modificado.
@@ -47,6 +49,8 @@ También:
 **Clasificación:** `a6ef3511` es `partial severo`, no 1:1.
 
 ### P1 — ChunkLevel usa constantes y tabla incorrectas
+
+**Remediado en `60f59900`.** Radio 11, `MAX_LEVEL=44` y estados por distancia 0..11 quedaron portados y cubiertos en todos sus límites. El subsystem sigue observe-only, por lo que su integración live continúa separada.
 
 **Evidencia:** `chunkticket/chunklevel.go:42-56`, `:118-127`.
 
@@ -82,11 +86,15 @@ Al promover candidato Go retorna. Vanilla continúa en el mismo tick y decrement
 
 ### P1 — Sweet berry harvest usa otro RNG y rompe continuidad
 
+**Remediado en `646aac05`.** Loot, jitter XYZ y pitch consumen el mismo RNG de nivel en orden continuo; una regresión determinista fija además el siguiente draw. Sólo el seed independiente del paquete de sonido usa `rand.Int64()`.
+
 **Evidencia:** `server/sweet_berry_bush.go:76-103`.
 
 Vanilla ejecuta loot, jitter de `popResource` y pitch sobre el mismo `ServerLevel.getRandom()` y en ese orden. Go crea `LegacyRandomSource` desde `math/rand.Int64` y después usa el RNG global para jitter/pitch. Cambian fuente, algoritmo y stream. Los tests verifican cantidad/estado, no secuencia.
 
 ### P1 — Fall damage no emite `HIT_GROUND`
+
+**Remediado en `0604e08e`.** El evento se emite después de `fallOn`/damage y antes del reset, con source player y landing state; un sensor sculk verifica frecuencia y contexto.
 
 **Evidencia:** `server/fall_damage.go:260-274`, `server/game_event.go`.
 
@@ -94,13 +102,15 @@ Vanilla ejecuta loot, jitter de `popResource` y pitch sobre el mismo `ServerLeve
 
 ### P1 — Natural spawner usa el conteo CREATURE para seis categorías
 
+**Remediado en `ae9ec1b1`.** Un solo snapshot quiescente captura cada categoría natural y el fan-out consume el conteo exacto de su categoría; la revalidación apply-time se mantiene.
+
 **Evidencia:** `server/spawner.go:547-553`, `server/region_coordinator.go:173-174`, `server/async.go:351-354`.
 
 El fan-out sólo snapshottea CREATURE y MONSTER; `spawnLiveCount` devuelve CREATURE para AMBIENT, AXOLOTLS y todas las categorías acuáticas. Puede emitir scans estando la categoría real al cap o no emitirlos según un conteo ajeno. La revalidación posterior evita sobre-cap pero no recupera el único slot consumido, pudiendo hambrear categorías.
 
 ### P1 — Persistencia del spawn desplaza coordenadas negativas
 
-**Parcialmente remediado en `e0fe1bfb`.** X/Y/Z ahora se persisten con `floor`, cerrando el desplazamiento negativo. El sentinel legal `[0,0,0]` y el radio/orden reducido de búsqueda continúan abiertos.
+**Parcialmente remediado en `e0fe1bfb` y `8b0ff692`.** X/Y/Z ahora se persisten con `floor` y `Initialized` acepta `[0,0,0]` como posición válida. El radio/orden reducido de búsqueda continúa abierto.
 
 **Evidencia:** `server/saveddata.go:131-134`, `cmd/sulfur/main.go:233-238`.
 
@@ -109,6 +119,8 @@ El spawn usa centros `.5`, pero se persiste con `int32(x/z)`. Go trunca negativo
 El cálculo inicial también sigue reducido: radio 3/orden propio frente a la espiral vanilla de radio 5 (121 chunks).
 
 ### P1 — NoiseThresholdProvider no replica el cast float
+
+**Remediado en `2995407c`.** Los scales relevantes se almacenan como `float32` y sólo se ensanchan en los puntos equivalentes a Java, incluido el producto por componente de `DualNoiseProvider`; una posición witness discrimina la rama resultante.
 
 **Evidencia:** `world/levelgen/feature/provider.go:366-380`, `:456-458`.
 
