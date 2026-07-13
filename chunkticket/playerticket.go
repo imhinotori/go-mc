@@ -3,16 +3,16 @@ package chunkticket
 // playerTicketTracker is a 1:1 port of DistanceManager$PlayerTicketTracker (which
 // extends DistanceManager$FixedPlayerDistanceChunkTracker). The base tracker computes,
 // for every chunk, the Chebyshev distance to the nearest player (source level 0 at a
-// player chunk, +1 per ring) capped at maxDistance = playerViewCap+2. The subclass adds
+// player chunk, +1 per ring) capped at maxDistance = playerViewCap. The subclass adds
 // a PLAYER_LOADING ticket to every chunk whose distance <= viewDistance and removes it
 // otherwise, whenever the distance or the view distance changes.
 //
 // CITE: DistanceManager$FixedPlayerDistanceChunkTracker + DistanceManager$PlayerTicketTracker.
 //
 // The FixedPlayerDistanceChunkTracker is constructed in DistanceManager with the max
-// possible view distance (33) so a single tracker serves any runtime view distance.
-// CITE: DistanceManager ctor `new PlayerTicketTracker(this, 33)`.
-const playerViewCap = 33
+// possible view distance (32) so a single tracker serves any runtime view distance.
+// CITE: DistanceManager ctor `new PlayerTicketTracker(this, 32)`.
+const playerViewCap = 32
 
 type playerTicketTracker struct {
 	dm *DistanceManager
@@ -30,11 +30,14 @@ func newPlayerTicketTracker(dm *DistanceManager) *playerTicketTracker {
 	p := &playerTicketTracker{
 		dm:          dm,
 		chunks:      make(map[int64]int),
-		maxDistance: playerViewCap + 2,
+		maxDistance: playerViewCap,
 		queueLevels: make(map[int64]int),
 		toUpdate:    make(map[int64]struct{}),
 	}
 	// FixedPlayerDistanceChunkTracker(this, maxDistance) -> ChunkTracker(maxDistance+2,...).
+	// The ChunkTracker levelCount is maxDistance+2 (cap+2 = 34): the default getLevel value
+	// for chunks outside the stored ring, used by getLevel below. CITE: ChunkTracker ctor
+	// super(maxDistance+2, 16, 256) + chunks.defaultReturnValue(maxDistance+2).
 	p.tracker = newChunkTracker(playerViewCap+2, p)
 	return p
 }

@@ -289,3 +289,102 @@ func TestSimulationDistanceAffectsPlayerTicket(t *testing.T) {
 		t.Fatalf("sim level after simDist=31 = %d, want 0", got)
 	}
 }
+
+// TestPlayerTicketTrackerMaxDistance pins the 26.2 PlayerTicketTracker boundary:
+// the FixedPlayerDistanceChunkTracker is constructed with the cap (32), maxDistance is
+// 32, ChunkTracker levelCount = cap+2 = 34 (the default-return value), and setLevel drops
+// entries > 32. CITE: DistanceManager ctor `new PlayerTicketTracker(this, 32)` +
+// FixedPlayerDistanceChunkTracker ctor super(maxDistance+2, ...) and the chunks
+// defaultReturnValue(maxDistance+2).
+func TestPlayerTicketTrackerMaxDistance(t *testing.T) {
+	dm := NewDistanceManager(10)
+	p := dm.playerTicket
+
+	// Stored maxDistance == playerViewCap == 32.
+	if p.maxDistance != playerViewCap {
+		t.Fatalf("maxDistance = %d, want %d (playerViewCap)", p.maxDistance, playerViewCap)
+	}
+	if p.maxDistance != 32 {
+		t.Fatalf("maxDistance = %d, want 32 (26.2 cap)", p.maxDistance)
+	}
+	// ChunkTracker levelCount = cap+2 = 34.
+	if p.tracker.graph.levelCount != playerViewCap+2 {
+		t.Fatalf("tracker levelCount = %d, want %d (cap+2)", p.tracker.graph.levelCount, playerViewCap+2)
+	}
+	if p.tracker.graph.levelCount != 34 {
+		t.Fatalf("tracker levelCount = %d, want 34", p.tracker.graph.levelCount)
+	}
+	// Default getLevel value for an untracked chunk == maxDistance+2 = 34.
+	const sentinel int64 = 0x0a0b0c0d0e0f1011
+	if got := p.getLevel(sentinel); got != p.maxDistance+2 {
+		t.Fatalf("getLevel default = %d, want %d (maxDistance+2)", got, p.maxDistance+2)
+	}
+	if got := p.getLevel(sentinel); got != 34 {
+		t.Fatalf("getLevel default = %d, want 34", got)
+	}
+
+	// setLevel at the cap (32) is retained.
+	ring32 := packChunk(32, 0)
+	p.setLevel(ring32, 32)
+	if v, ok := p.chunks[ring32]; !ok || v != 32 {
+		t.Fatalf("chunks[ring32] = (%d, %v), want (32, true)", v, ok)
+	}
+	// getLevel still returns 32 for the retained entry (not the default).
+	if got := p.getLevel(ring32); got != 32 {
+		t.Errorf("getLevel(ring32) = %d, want 32", got)
+	}
+
+	// setLevel above the cap (33) is dropped from the map; getLevel falls back to 34.
+	ring33 := packChunk(33, 0)
+	p.setLevel(ring33, 33)
+	if _, ok := p.chunks[ring33]; ok {
+		t.Fatalf("chunks[ring33] should be removed when level > maxDistance")
+	}
+	if got := p.getLevel(ring33); got != 34 {
+		t.Errorf("getLevel(ring33) after removal = %d, want 34 (default)", got)
+	}
+}
+
+// TestPlayerTicketTrackerCapTickets pins that a chunk at the cap (Chebyshev distance 32
+// from the player) carries PLAYER_LOADING when viewDistance >= 32, and a chunk just
+// beyond the cap (distance 33) does not. CITE: PlayerTicketTracker.haveTicketFor +
+// PlayerTicketTracker.updateViewDistance.
+func TestPlayerTicketTrackerCapTickets(t *testing.T) {
+	dm := NewDistanceManager(10)
+	dm.UpdateViewDistance(32) // the new max
+	dm.AddPlayer(level.ChunkPos{0, 0})
+	dm.RunAllUpdates()
+
+	// Ring-32 chunk: retained in p.chunks and ticketed.
+	ring32 := packChunk(32, 0)
+	if v, ok := dm.playerTicket.chunks[ring32]; !ok || v != 32 {
+		t.Fatalf("chunks[ring32] = (%d, %v), want (32, true)", v, ok)
+	}
+	if !hasPlayerLoadingTicket(dm, ring32) {
+		t.Error("ring-32 chunk missing PLAYER_LOADING ticket at viewDistance=32")
+	}
+
+	// Ring-33 chunk: not retained (33 > maxDistance 32) and therefore not ticketed.
+	ring33 := packChunk(33, 0)
+	if _, ok := dm.playerTicket.chunks[ring33]; ok {
+		t.Fatal("chunks[ring33] should be absent (33 > maxDistance 32)")
+	}
+	if hasPlayerLoadingTicket(dm, ring33) {
+		t.Error("ring-33 chunk should not have PLAYER_LOADING ticket (beyond cap)")
+	}
+	// The default-return getLevel for an untracked chunk is cap+2 = 34.
+	if got := dm.playerTicket.getLevel(ring33); got != 34 {
+		t.Errorf("getLevel(ring33) default = %d, want 34", got)
+	}
+}
+
+// hasPlayerLoadingTicket reports whether the chunk at key currently holds a PLAYER_LOADING
+// ticket (same-type+level match; the tracker applies at PLAYER_TICKET_LEVEL).
+func hasPlayerLoadingTicket(dm *DistanceManager, key int64) bool {
+	for _, tk := range dm.storage.getTickets(key) {
+		if tk.Type == PlayerLoading && tk.Level == playerTicketLevel {
+			return true
+		}
+	}
+	return false
+}
