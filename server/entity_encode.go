@@ -664,47 +664,51 @@ func (b rawBytes) WriteTo(w io.Writer) (int64, error) {
 const dataCarryStateIndex uint8 = 16
 
 // optionalBlockStateSerializerID is the registry id of EntityDataSerializers.OPTIONAL_BLOCK_STATE — the
-// VarInt serializerId the DataValue carries. The id is the registerSerializer() call order in the
-// EntityDataSerializers static initializer: 0=BYTE, 1=INT, 2=LONG, 3=FLOAT, 4=STRING, 5=COMPONENT,
-// 6=OPTIONAL_COMPONENT, 7=ITEM_STACK, 8=BOOLEAN, 9=ROTATIONS, 10=BLOCK_POS, 11=OPTIONAL_BLOCK_POS,
-// 12=DIRECTION, 13=OPTIONAL_LIVING_ENTITY_REFERENCE, 14=BLOCK_STATE, 15=OPTIONAL_BLOCK_STATE.
+// VarInt serializerId the DataValue carries. The id is the registerSerializer() call ORDER in the
+// EntityDataSerializers static initializer (the CrudeIncrementalIntIdentityHashBiMap increments per
+// call). Re-verified against the FULL 26.2 jar registration list (43 serializers), computed by
+// walking every getstatic-before-registerSerializer in static{} order:
+//   0=BYTE 1=INT 2=LONG 3=FLOAT 4=STRING 5=COMPONENT 6=OPTIONAL_COMPONENT 7=ITEM_STACK 8=BOOLEAN
+//   ... 14=BLOCK_STATE 15=OPTIONAL_BLOCK_STATE ... 39=VECTOR3 40=QUATERNION.
+// (A partial hand-count that stopped at the first dozen registrations wrongly read this as 10 — the
+// FULL walk restores 15; there are intervening serializers between BOOLEAN and BLOCK_STATE.)
 //
-//	[VERIFIED javap net/minecraft/network/syncher/EntityDataSerializers static{} registerSerializer order.]
+//	[VERIFIED javap net/minecraft/network/syncher/EntityDataSerializers static{}: 43 registerSerializer
+//	 calls; OPTIONAL_BLOCK_STATE is the 16th (id 15). Cross-checked VECTOR3=39, QUATERNION=40 match.]
 const optionalBlockStateSerializerID int32 = 15
 
-// optionalBlockStateValue is the pk.FieldEncoder for an Optional<BlockState> synched value — the
-// OPTIONAL_BLOCK_STATE codec == ByteBufCodecs.optional(idMapper(BLOCK_STATE_REGISTRY)): a Boolean present
-// flag, then (only if present) the VarInt block-state id. Empty == a single Boolean(false).
+// optionalBlockStateValue is the pk.FieldEncoder for an Optional<BlockState> synched value. The
+// OPTIONAL_BLOCK_STATE codec is NOT the generic ByteBufCodecs.optional (which would prepend a Boolean
+// present flag) — it is a BESPOKE codec (EntityDataSerializers$2) that writes a SINGLE VarInt: the
+// block-state id when present, or VarInt(0) when empty (0 == the empty sentinel, which is also the id
+// of air's default state, so a "carrying nothing" and a "carrying air" render identically). There is
+// NO leading Boolean — writing one desyncs the client's DataValue stream (the client reads the extra
+// 0x01 as the state-id VarInt, then reads the real state-id VarInt as the next entry's index/serializer
+// and runs off the end of the metadata body: the reported set_entity_data DecoderException).
 //
-//	[VERIFIED javap EntityDataSerializers: OPTIONAL_BLOCK_STATE_CODEC = ByteBufCodecs.optional(...) over
-//	 idMapper(Block.BLOCK_STATE_REGISTRY); optional writes Boolean(present) then the value if present.]
+//	[VERIFIED javap EntityDataSerializers$2 (OPTIONAL_BLOCK_STATE_CODEC): encode -> if present
+//	 VarInt.write(Block.getId(state)) else VarInt.write(0); decode -> id = VarInt.read(); id==0 ?
+//	 Optional.empty() : Optional.of(stateById(id)). NO Boolean. (Contrast OPTIONAL_BLOCK_POS which DOES
+//	 use ByteBufCodecs.optional -> Boolean(present)+value; the two optionals use DIFFERENT wire shapes.)]
 type optionalBlockStateValue struct {
 	sid     block.StateID
 	present bool
 }
 
 func (v optionalBlockStateValue) WriteTo(w io.Writer) (int64, error) {
-	var n int64
-	c, err := pk.Boolean(v.present).WriteTo(w)
-	n += c
-	if err != nil {
-		return n, err
+	// Empty Optional == VarInt(0). Present == VarInt(Block.getId(state)) == the state id. No Boolean.
+	if !v.present {
+		return pk.VarInt(0).WriteTo(w)
 	}
-	if v.present {
-		c, err = pk.VarInt(int32(v.sid)).WriteTo(w)
-		n += c
-		if err != nil {
-			return n, err
-		}
-	}
-	return n, nil
+	return pk.VarInt(int32(v.sid)).WriteTo(w)
 }
 
 // carriedBlockDataEntry builds the single SynchedEntityData$DataValue entry that carries an EnderMan's
 // DATA_CARRY_STATE — the Optional<BlockState> the client reads to render the held block. It frames on the
-// wire as Byte(dataCarryStateIndex=16) + VarInt(optionalBlockStateSerializerID=15) + Boolean(present)
-// [+ VarInt(sid) if present] (entityDataEntry.WriteTo), mirroring airDataEntry's INT pattern with the
-// OPTIONAL_BLOCK_STATE codec. present=false emits the empty Optional (the not-carrying / leave state).
+// wire as Byte(dataCarryStateIndex=16) + VarInt(optionalBlockStateSerializerID=15) + VarInt(stateId or 0)
+// (entityDataEntry.WriteTo) — the bespoke OPTIONAL_BLOCK_STATE codec (a single VarInt, 0 == empty, NO
+// leading Boolean; see optionalBlockStateValue). present=false emits VarInt(0), the empty Optional (the
+// not-carrying / leave state).
 func carriedBlockDataEntry(sid block.StateID, present bool) entityDataEntry {
 	return entityDataEntry{
 		index:        dataCarryStateIndex,
