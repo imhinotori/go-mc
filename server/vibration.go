@@ -33,6 +33,52 @@ type vibrationData struct {
 	candProjOwnerID     int32
 	candX, candY, candZ float64
 	candDistance        float32
+	candGameTime        int64
+}
+
+// vibrationScheduleCandidate ports VibrationSystem.Listener.scheduleVibration: the vanilla selector
+// accepts a candidate when none is pending, OR replaces the pending candidate only when it was
+// offered in the same t.gametime and the new event is strictly BETTER (smaller distance, or equal
+// distance with strictly higher vibrationFrequencyOf(sculkGameEvent(event))). A pending candidate
+// from an earlier tick is sticky -- a later-tick event never overwrites it (vanilla records
+// gameTime at offer via VibrationSystem.Data.updateCandidateToGameTime). All three listener paths
+// (vibrationHandleGameEvent for the warden, sensorHandleGameEvent, shriekerHandleGameEvent) route
+// through this helper instead of unconditional last-event-wins assignment. CITE
+// VibrationSystem.Listener.scheduleVibration + VibrationSystem.Data.updateCandidateToGameTime.
+func (t *TickLoop) vibrationScheduleCandidate(data *vibrationData, event gameEventID, sourceID, projOwnerID int32, x, y, z float64, dist float32) {
+	if !data.hasCandidate {
+		data.hasCandidate = true
+		data.candEvent = event
+		data.candSourceID = sourceID
+		data.candProjOwnerID = projOwnerID
+		data.candX, data.candY, data.candZ = x, y, z
+		data.candDistance = dist
+		data.candGameTime = t.gametime
+		return
+	}
+	if data.candGameTime != t.gametime {
+		return
+	}
+	if !vibrationCandidateBetter(dist, event, data.candDistance, data.candEvent) {
+		return
+	}
+	data.candEvent = event
+	data.candSourceID = sourceID
+	data.candProjOwnerID = projOwnerID
+	data.candX, data.candY, data.candZ = x, y, z
+	data.candDistance = dist
+}
+
+// vibrationCandidateBetter is the VibrationSystem.Listener.scheduleVibration same-tick preference:
+// strictly smaller distance wins, or equal distance with strictly higher vibrationFrequencyOf.
+func vibrationCandidateBetter(newDist float32, newEvent gameEventID, oldDist float32, oldEvent gameEventID) bool {
+	if newDist < oldDist {
+		return true
+	}
+	if newDist > oldDist {
+		return false
+	}
+	return vibrationFrequencyOf(sculkGameEvent(newEvent)) > vibrationFrequencyOf(sculkGameEvent(oldEvent))
 }
 
 // vibrationHandleGameEvent ports VibrationSystem.Listener.handleGameEvent: the busy/valid/receivable/
@@ -67,12 +113,7 @@ func (t *TickLoop) vibrationHandleGameEvent(ln *vibrationListener, event gameEve
 	dy := y - ly
 	dz := z - lz
 	dist := float32(math.Sqrt(dx*dx + dy*dy + dz*dz))
-	data.hasCandidate = true
-	data.candEvent = event
-	data.candSourceID = ctx.sourceEntityID
-	data.candProjOwnerID = ctx.projectileOwnerID
-	data.candX, data.candY, data.candZ = x, y, z
-	data.candDistance = dist
+	t.vibrationScheduleCandidate(data, event, ctx.sourceEntityID, ctx.projectileOwnerID, x, y, z, dist)
 }
 
 // wardenCanListen ports GameEventTags.WARDEN_CAN_LISTEN membership. v1 uses the frequency table
@@ -257,16 +298,10 @@ func (t *TickLoop) tickWardenVibration(e *Entity) {
 	}
 	if !data.hasCurrent {
 		if data.hasCandidate {
-			data.hasCurrent = true
-			data.event = data.candEvent
-			data.sourceID = data.candSourceID
-			data.projOwnerID = data.candProjOwnerID
-			data.srcX, data.srcY, data.srcZ = data.candX, data.candY, data.candZ
-			data.distance = data.candDistance
-			data.travelTicks = mthFloor(float64(data.candDistance))
-			data.hasCandidate = false
+			t.vibrationPromoteCandidate(data)
+		} else {
+			return
 		}
-		return
 	}
 	data.travelTicks--
 	if data.travelTicks > 0 {

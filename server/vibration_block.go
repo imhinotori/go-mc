@@ -149,12 +149,7 @@ func (t *TickLoop) sensorHandleGameEvent(pos pk.Position, be *sculkSensorBE, eve
 	dy := y - ly
 	dz := z - lz
 	dist := float32(math.Sqrt(dx*dx + dy*dy + dz*dz))
-	data.hasCandidate = true
-	data.candEvent = event
-	data.candSourceID = ctx.sourceEntityID
-	data.candProjOwnerID = ctx.projectileOwnerID
-	data.candX, data.candY, data.candZ = x, y, z
-	data.candDistance = dist
+	t.vibrationScheduleCandidate(data, event, ctx.sourceEntityID, ctx.projectileOwnerID, x, y, z, dist)
 }
 
 // sensorCanReceiveVibration ports SculkSensorBlockEntity.VibrationUser.canReceiveVibration: if the source
@@ -206,12 +201,7 @@ func (t *TickLoop) shriekerHandleGameEvent(pos pk.Position, be *sculkShriekerBE,
 	dy := y - ly
 	dz := z - lz
 	dist := float32(math.Sqrt(dx*dx + dy*dy + dz*dz))
-	data.hasCandidate = true
-	data.candEvent = event
-	data.candSourceID = ctx.sourceEntityID
-	data.candProjOwnerID = ctx.projectileOwnerID
-	data.candX, data.candY, data.candZ = x, y, z
-	data.candDistance = dist
+	t.vibrationScheduleCandidate(data, event, ctx.sourceEntityID, ctx.projectileOwnerID, x, y, z, dist)
 }
 
 // shriekerCanReceiveVibration ports SculkShriekerBlockEntity.VibrationUser.canReceiveVibration:
@@ -275,8 +265,9 @@ func (t *TickLoop) tickSensorVibration(pos pk.Position, be *sculkSensorBE) {
 	if !data.hasCurrent {
 		if data.hasCandidate {
 			t.vibrationPromoteCandidate(data)
+		} else {
+			return
 		}
-		return
 	}
 	data.travelTicks--
 	if data.travelTicks > 0 {
@@ -292,8 +283,9 @@ func (t *TickLoop) tickShriekerVibration(pos pk.Position, be *sculkShriekerBE) {
 	if !data.hasCurrent {
 		if data.hasCandidate {
 			t.vibrationPromoteCandidate(data)
+		} else {
+			return
 		}
-		return
 	}
 	data.travelTicks--
 	if data.travelTicks > 0 {
