@@ -1,7 +1,7 @@
 # Progress de paridad 1:1 — Minecraft Server 26.2
 
 **Actualizado:** 2026-07-12
-**Commit:** `42b58a21`
+**Commit:** `408f2f0a`
 **Referencia:** `temp/cache/26.2-inner.jar`
 **Tipo de medición:** estimación ponderada por dominios observables
 **Margen de incertidumbre:** ±4 puntos porcentuales; gamerules, serverbound y las cuatro capas principales de persistencia ya tienen censos de campo/ruta
@@ -21,15 +21,15 @@ Este porcentaje NO significa que el 57% de las clases del JAR esté portado. Mid
 |---|---:|---:|---:|---|
 | Protocolo, login, sesión y streaming | 10% | 58% | 5,8 | 69 paquetes reales + sentinel: 4 exactos, 33 parciales, 3 no-op explícitos y 30 default-noop |
 | Chunks, lighting y ciclo de mundo | 12% | 72% | 8,64 | Relight/status/scheduled ticks reales; ticket subsystem aún observe-only y contiene constantes 8/41 incorrectas |
-| Worldgen y estructuras | 15% | 60% | 9,0 | Providers/lake ampliados; pool terrain puede perder neighbor requests y no tiene oracle de bytes/order |
+| Worldgen y estructuras | 15% | 62% | 9,3 | Providers/lake ampliados; neighbor backpressure ya reintenta sin latch falso, pero falta oracle de bytes/order |
 | Bloques, fluidos, física y redstone | 12% | 50% | 6,0 | Friction/speed-factor mejorados; neighbor updates, shapes, piston/redstone siguen parciales |
-| Entidades, AI, Brain y spawning | 16% | 60% | 9,6 | Cadence/pools presentes; fan-out usa conteo CREATURE para seis categorías y vibration/sculk sigue parcial |
+| Entidades, AI, Brain y spawning | 16% | 61% | 9,76 | Selector/timing de vibration corregido; fan-out aún usa conteo CREATURE para seis categorías y sculk sigue parcial |
 | Combate, efectos, proyectiles y enchants | 10% | 72% | 7,2 | Fall-per-packet corregido; aún falta HIT_GROUND y quedan effects/enchants/guards incompletos |
 | Inventario, ítems, crafting y loot | 10% | 55% | 5,5 | Explosion decay exact aislado; match_tool/berry/components y acciones siguen parciales |
-| Persistencia integral | 7% | 45% | 3,15 | Autosave de entidades, empty-cell y shutdown durable cerrados; el field-level sigue en player 22/68, chunk 18/26, entities 19/99 y components 8/111 |
+| Persistencia integral | 7% | 46% | 3,22 | Spawn negativo ahora usa floor; autosave/empty-cell/shutdown cerrados, pero field-level y sentinel cero siguen incompletos |
 | Commands, advancements y gamerules | 5% | 56% | 2,8 | `/execute` amplía superficie pero pierde source/result/store/selectores; 15 gamerules live-store |
 | Región/concurrencia con semántica vanilla | 3% | 65% | 1,95 | Pool acotado pero sin equivalencia de order/backpressure; cross-region gameplay sigue divergente |
-| **Total ponderado** | **100%** | — | **59,65% ≈ 60%** | Mejora por durabilidad P0 y dos consumidores gamerule vivos; field parity aún limita el avance |
+| **Total ponderado** | **100%** | — | **60,18% ≈ 60%** | P0 terrain y dos divergencias P1 cerrados; field parity y subsistemas amplios parciales aún limitan el avance |
 
 ## Contadores objetivos del snapshot
 
@@ -75,6 +75,14 @@ Estos avances mejoran dominios concretos, pero los censos mostraron que registro
 - Revisión multiagente encontró y cerró dos bloqueantes antes de integrar: entities con chunk saver deshabilitado y headless usando `log.Fatal`.
 - Gates verdes: seis tests P0, `-race` focalizado, dos tests de `ChunkSaver`, compilación de `cmd/sulfur` y `git diff --check`.
 - `go test ./...` llegó verde fuera de `server`; dos intentos de `server` tropezaron con flakes async preexistentes distintos (`TestAllAsyncSubsystemsRaceClean`, `TestBehaviorRegressionPathArrives`, `TestServerAiStepWalksToGoalTarget`). Repeticiones múltiples confirman intermitencia; no se relajaron tests.
+
+## Ola MiniMax M3 de remediación — 2026-07-12
+
+- `acc6e4a9`: el worker terrain sólo marca un vecino como solicitado si el enqueue acotado fue aceptado y reintenta vecinos faltantes en cada notificación `wantedCh`; cierra el P0 de `Loading terrain` permanente bajo backpressure.
+- `e0fe1bfb`: persistencia de spawn usa `math.Floor` en X/Y/Z, preservando centros negativos al round-trip de `level.dat`; el sentinel `[0,0,0]` y la búsqueda reducida siguen abiertos.
+- `408f2f0a`: selector compartido de vibraciones conserva el candidato vanilla por tick (distancia y frecuencia) y promoción/decremento ocurren en el mismo tick para warden, sensor y shrieker.
+- Regresiones nuevas: cuatro reglas del selector y timeline corregido del sensor. Gates centrales verdes en paralelo: `go test ./world -run 'TestWorkerPool|TestWorker'` y suite dirigida `./server` de vibration + persistencia.
+- La barra sigue en **60% ±4**: el movimiento ponderado es real pero menor a un punto; `/execute`, ticket levels, spawner por categoría, `HIT_GROUND`, RNG de berries y persistencia de largo alcance permanecen abiertos.
 
 ## Auditoría multiagente de la ola Claude `eef1ee6b..42b58a21`
 

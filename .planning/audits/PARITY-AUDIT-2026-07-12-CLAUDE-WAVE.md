@@ -19,6 +19,8 @@ La estimación no sube de forma material. Hay mejoras aisladas exactas (loot, ra
 
 ### P0 — El pool de terrain puede perder vecinos para siempre
 
+**Remediado en `acc6e4a9`.** `requestInternal` ahora informa aceptación, el dedupe se fija sólo después del enqueue y cada notificación `wantedCh` reintenta los vecinos que quedaron pendientes. Gate central `TestWorkerPool|TestWorker` verde.
+
 **Evidencia:** `world/worker.go:211-215`, `:229-238`, `:416-418`.
 
 `requestNeighbors` marca un vecino como `requested=true` antes del envío no bloqueante a `requestInternal`. Con el nuevo pool, `Run` puede bloquearse en `pool.Submit`; la cola se llena, el envío del vecino se descarta, pero el bit de deduplicación queda activo. El centro wanted nunca completa su 3×3 y puede permanecer en “Loading terrain” indefinidamente.
@@ -70,6 +72,8 @@ El nuevo macroorden raid → chunk source → block events → entities → bloc
 
 ### P1 — Selector de vibraciones incorrecto y entrega un tick tarde
 
+**Remediado en `408f2f0a`.** Warden, sensor y shrieker comparten selección por game tick/distancia/frecuencia; la promoción continúa al decremento en el mismo tick. Se corrigió el test que fijaba el off-by-one y se agregaron cuatro regresiones del selector.
+
 **Evidencia:** `server/vibration_block.go:152`, `:209`, `:274-297`.
 
 Go reemplaza candidatos incondicionalmente (`last-event-wins`). `VibrationSelector.shouldReplaceVibration` sólo reemplaza, dentro del mismo tick, por menor distancia o por mayor frecuencia si empatan.
@@ -95,6 +99,8 @@ Vanilla ejecuta loot, jitter de `popResource` y pitch sobre el mismo `ServerLeve
 El fan-out sólo snapshottea CREATURE y MONSTER; `spawnLiveCount` devuelve CREATURE para AMBIENT, AXOLOTLS y todas las categorías acuáticas. Puede emitir scans estando la categoría real al cap o no emitirlos según un conteo ajeno. La revalidación posterior evita sobre-cap pero no recupera el único slot consumido, pudiendo hambrear categorías.
 
 ### P1 — Persistencia del spawn desplaza coordenadas negativas
+
+**Parcialmente remediado en `e0fe1bfb`.** X/Y/Z ahora se persisten con `floor`, cerrando el desplazamiento negativo. El sentinel legal `[0,0,0]` y el radio/orden reducido de búsqueda continúan abiertos.
 
 **Evidencia:** `server/saveddata.go:131-134`, `cmd/sulfur/main.go:233-238`.
 
