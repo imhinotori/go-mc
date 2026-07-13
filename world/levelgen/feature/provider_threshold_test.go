@@ -2,6 +2,7 @@ package feature
 
 import (
 	"encoding/json"
+	"math"
 	"testing"
 
 	"github.com/imhinotori/sulfur/level/block"
@@ -47,8 +48,9 @@ func TestNoiseThresholdProviderParses(t *testing.T) {
 // the sampled value is deterministic per position) and an oracle-checked rng consumption.
 //
 // Branches (NoiseThresholdProvider.getState):
-//   d < threshold        -> lowStates[nextInt(len)]           (1 int draw, no float draw)
-//   d >= threshold, roll  -> nextFloat() < highChance ? highStates[nextInt(len)] : defaultState
+//
+//	d < threshold        -> lowStates[nextInt(len)]           (1 int draw, no float draw)
+//	d >= threshold, roll  -> nextFloat() < highChance ? highStates[nextInt(len)] : defaultState
 func TestNoiseThresholdProviderDrawOrder(t *testing.T) {
 	low := []block.StateID{stateOf(t, block.OrangeTulip{}), stateOf(t, block.RedTulip{})}
 	high := []block.StateID{stateOf(t, block.Poppy{}), stateOf(t, block.Cornflower{})}
@@ -66,10 +68,12 @@ func TestNoiseThresholdProviderDrawOrder(t *testing.T) {
 	}
 
 	// Replay against an oracle at a fixed position. We recompute the branch the SAME way the
-	// provider does (noise sample vs threshold), then assert the provider's rng consumption
-	// equals the oracle's for that branch -- the determinism contract.
+	// provider does (noise sample vs threshold using the float32-narrowed scale widened via f2d),
+	// then assert the provider's rng consumption equals the oracle's for that branch -- the
+	// determinism contract.
 	const x, y, z = 100, 64, 200
-	d := nz.GetValue(float64(x)*p.scale, float64(y)*p.scale, float64(z)*p.scale)
+	s := float64(p.scale) // f2d over the float32-narrowed scale (matches the jar's getfield scale:F; f2d)
+	d := nz.GetValue(float64(x)*s, float64(y)*s, float64(z)*s)
 
 	prov := levelgen.NewLegacyRandomSource(9)
 	oracle := levelgen.NewLegacyRandomSource(9)
@@ -86,6 +90,119 @@ func TestNoiseThresholdProviderDrawOrder(t *testing.T) {
 	if prov.NextInt() != oracle.NextInt() {
 		t.Fatalf("NoiseThresholdProvider draw order diverged from oracle (branch d=%.4f threshold=%.4f)", d, p.threshold)
 	}
+}
+
+// TestNoiseThresholdProviderFloat32ScalePrecision closes the audited 26.2 NoiseThresholdProvider
+// precision gap. Vanilla stores `scale` as `float` (javap NoiseBasedStateProvider.scale:F) and
+// widens to double via f2d at the noise call (javap NoiseThresholdProvider.getState: getfield
+// scale:F, f2d, getNoiseValue). A scale value not exactly representable in float32 (e.g. 0.005
+// from the real flower_plain config) must be NARROWED to float32 BEFORE the float64 widening,
+// otherwise the noise sample diverges and the threshold/branch split shifts.
+//
+// This regression pins the narrowing-before-widening contract by:
+//  1. asserting the float32 narrowing of 0.005 actually changes the value (premise),
+//  2. showing the float32-widened noise sample differs from the raw float64 sample,
+//  3. locating a witness position where the two samples straddle the threshold,
+//  4. asserting the provider returns the float32-widened branch's state rather than the
+//     observably different state selected by the raw-float64 branch.
+func TestNoiseThresholdProviderFloat32ScalePrecision(t *testing.T) {
+	// (1) Premise: 0.005 is not exactly representable as float32 -- the narrowing must
+	// produce a different value than the raw float64. The delta is small (~1.1e-10), but
+	// after multiplying by an int coordinate it grows linearly, and the witness search
+	// below amplifies any noise sample divergence to a threshold branch flip.
+	const raw = 0.005
+	f32 := float32(raw)
+	if raw == float64(f32) {
+		t.Fatalf("test premise broken: 0.005 must not round-trip through float32 (raw=%v f32=%v widened=%v)",
+			raw, f32, float64(f32))
+	}
+	if math.Abs(float64(f32)-raw) < 1e-12 {
+		t.Fatalf("test premise: float32 narrowing of 0.005 must be visibly > 1e-12 (got delta=%.3e)",
+			float64(f32)-raw)
+	}
+
+	// Use the flower_plain seed (2345) -- this is the exact seed the in-game provider uses,
+	// so the test exercises the same noise path as the live config. We search positions
+	// where the noise crosses the threshold; with this seed and threshold=0.0 the float32
+	// narrowing (~1.1e-10 per unit position) reliably flips the branch inside ±2^16.
+	noiseRng := levelgen.NewWorldgenRandom(2345)
+	nz := synth.NewNormalNoise(noiseRng, 0, []float64{1.0})
+
+	low := []block.StateID{stateOf(t, block.OrangeTulip{}), stateOf(t, block.RedTulip{})}
+	high := []block.StateID{stateOf(t, block.Poppy{}), stateOf(t, block.Cornflower{})}
+	def := stateOf(t, block.Dandelion{})
+
+	// (2) Build the provider with the float32-narrowed scale. The provider's noise call uses
+	// s = float64(p.scale) -- the float32-narrowed value widened to double (matches the jar).
+	// threshold=0.0 puts the comparison on the noise zero-crossings where the per-position
+	// slope is large enough that the ~1e-10 narrowing delta reliably flips the branch.
+	p := NoiseThresholdProvider{
+		noise: nz, scale: f32, threshold: 0.0, highChance: 0.33333334,
+		defaultState: def, lowStates: low, highStates: high,
+	}
+	sWid := float64(p.scale) // f2d over float32-narrowed scale (matches the jar's getfield scale:F; f2d)
+	sRaw := raw              // the un-narrowed float64 scale a "bug" would use
+
+	// (3) Find a witness position where the float32-widened and raw-float64 noise samples
+	// straddle the threshold. At such a position the provider (using the float32-narrowed
+	// scale) takes one branch and a "raw float64" implementation would take the other --
+	// observable via the RNG consumption pattern.
+	const maxProbe = 1 << 18
+	thresh := float64(p.threshold)
+	witness := 0
+	witnessFound := false
+	for tx := -maxProbe; tx <= maxProbe; tx++ {
+		dWid := nz.GetValue(float64(tx)*sWid, 0, 0)
+		dRaw := nz.GetValue(float64(tx)*sRaw, 0, 0)
+		if (dWid < thresh) != (dRaw < thresh) {
+			witness = tx
+			witnessFound = true
+			break
+		}
+	}
+	if !witnessFound {
+		t.Skipf("could not find a witness position where float32 narrowing crosses threshold %.4f "+
+			"(searched %d..%d) -- precision gap is too small to cross at this threshold/seed",
+			thresh, -maxProbe, maxProbe)
+	}
+
+	// (4) At the witness position, compute both samples and verify the provider's branch
+	// (RNG consumption) matches the float32-widened oracle, NOT a raw-float64 oracle.
+	dWid := nz.GetValue(float64(witness)*sWid, 0, 0)
+	dRaw := nz.GetValue(float64(witness)*sRaw, 0, 0)
+	if (dWid < thresh) == (dRaw < thresh) {
+		t.Fatalf("witness position %d no longer straddles threshold after re-eval: dWid=%.6f dRaw=%.6f thresh=%.6f",
+			witness, dWid, dRaw, thresh)
+	}
+
+	// Compare the returned state, not only the post-call RNG fingerprint: for this seed a
+	// low-branch nextInt and a failed high-branch nextFloat each consume one primitive draw,
+	// so their fingerprints can coincide even though their observable states differ.
+	providerRNG := levelgen.NewLegacyRandomSource(7)
+	widRNG := levelgen.NewLegacyRandomSource(7)
+	rawRNG := levelgen.NewLegacyRandomSource(7)
+	got := p.GetState(providerRNG, witness, 0, 0)
+
+	wantWid := def
+	if dWid < thresh {
+		wantWid = low[int(widRNG.NextIntN(int32(len(low))))]
+	} else if widRNG.NextFloat() < p.highChance {
+		wantWid = high[int(widRNG.NextIntN(int32(len(high))))]
+	}
+	wantRaw := def
+	if dRaw < thresh {
+		wantRaw = low[int(rawRNG.NextIntN(int32(len(low))))]
+	} else if rawRNG.NextFloat() < p.highChance {
+		wantRaw = high[int(rawRNG.NextIntN(int32(len(high))))]
+	}
+	if wantWid == wantRaw {
+		t.Fatalf("witness %d did not produce distinct observable states: widened=%v raw=%v", witness, wantWid, wantRaw)
+	}
+	if got != wantWid {
+		t.Fatalf("provider state at witness %d = %v, want float32-widened state %v (raw float64 would return %v)", witness, got, wantWid, wantRaw)
+	}
+	t.Logf("witness=%d dWid=%.10f dRaw=%.10f delta=%.3e widened=%v raw=%v",
+		witness, dWid, dRaw, math.Abs(dWid-dRaw), wantWid, wantRaw)
 }
 
 // pileHayJSON is the real pile_hay state_provider (village hay bales) verbatim from

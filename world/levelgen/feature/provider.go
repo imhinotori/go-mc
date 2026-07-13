@@ -256,9 +256,16 @@ func OptionalState(p BlockStateProvider, rng levelgen.RandomSource, x, y, z int)
 // NoiseProvider is NoiseProvider (extends NoiseBasedStateProvider): getState samples
 // the noise at (x*scale, 0, z*scale) — getState reads x/z only (NoiseProvider.
 // getState calls getRandomState(states, x, z, scale)) — and maps |value| to a state.
+//
+// scale is float32 to mirror the 26.2 jar (javap NoiseBasedStateProvider: `protected final
+// float scale;`); getState reads scale via getfield scale:F then f2d widens to double for
+// the noise.getValue call. Reproducing the float32 narrowing BEFORE the float64 widening
+// preserves the jar's noise sample for scale values that are not exactly representable in
+// float32 (e.g. the 0.005 used by flower_plain). See NoiseThresholdProvider for the same
+// audit gap closure on the sibling provider.
 type NoiseProvider struct {
 	noise  *synth.NormalNoise
-	scale  float64
+	scale  float32
 	states []block.StateID
 }
 
@@ -287,8 +294,14 @@ func getRandomState(states []block.StateID, value float64) block.StateID {
 // noise.getValue(x*scale, y*scale, z*scale). NoiseProvider samples at y=0 (it ignores
 // the y in its 2D variant — JAR getState uses pos.getX/getY/getZ; the overworld
 // flower providers are effectively 2D since scale folds y). 0 rng draws.
+//
+// Vanilla widens the float scale to double at the noise call (javap NoiseProvider.
+// getState: getfield scale:F, f2d, getRandomState). We reproduce that: s = float64(p.scale)
+// — narrowing (via the float32 field) BEFORE the float64 widening — so a scale value not
+// exactly representable as float32 produces the same noise sample as the jar.
 func (p NoiseProvider) GetState(_ levelgen.RandomSource, x, y, z int) block.StateID {
-	v := p.noise.GetValue(float64(x)*p.scale, float64(y)*p.scale, float64(z)*p.scale)
+	s := float64(p.scale) // f2d over the float32-narrowed scale
+	v := p.noise.GetValue(float64(x)*s, float64(y)*s, float64(z)*s)
 	return getRandomState(p.states, v)
 }
 
@@ -299,10 +312,17 @@ func (p NoiseProvider) GetState(_ levelgen.RandomSource, x, y, z int) block.Stat
 // flower_forest dual provider the variety params are absent in JSON (defaults), so
 // this ports the full-list fallback the data exercises while keeping the slow/fast
 // structure for completeness.
+//
+// slowScale is float32 to mirror the 26.2 jar (javap DualNoiseProvider: `private final
+// float slowScale;`). The SLOW scale widens DIFFERENTLY than the inherited fast scale:
+// getSlowNoiseValue does per-component (double)((float)x * slowScale) — i2f, fmul, f2d
+// (javap DualNoiseProvider.getSlowNoiseValue). The FAST scale (from the parent's
+// getNoiseValue) widens once: (double)x * (double)(float)scale. Both paths preserve
+// the float32 narrowing-before-widening precision contract.
 type DualNoiseProvider struct {
 	NoiseProvider
 	slowNoise *synth.NormalNoise
-	slowScale float64
+	slowScale float32
 	// variety bounds (DualNoiseProvider.variety, an InclusiveRange<Integer>); when
 	// absent the full state list is used.
 	varietyMin, varietyMax int
@@ -319,8 +339,18 @@ type DualNoiseProvider struct {
 //
 // With varietyMin==varietyMax==len(states) (the absent-variety default) the window is
 // the full list, reducing to NoiseProvider. 0 rng draws.
+//
+// SLOW scale path (javap DualNoiseProvider.getSlowNoiseValue): per-component
+// (double)((float)coord * slowScale) — i2f, fmul, f2d. The int coordinate is first
+// narrowed to float32 BEFORE the multiplication; the result is then widened to double
+// for noise.getValue. FAST scale (inherited from NoiseProvider.GetState above) widens
+// once via (double)(float)scale. Both honor the float32-narrowing-before-widening
+// precision contract.
 func (p DualNoiseProvider) GetState(_ levelgen.RandomSource, x, y, z int) block.StateID {
-	d := p.slowNoise.GetValue(float64(x)*p.slowScale, float64(y)*p.slowScale, float64(z)*p.slowScale)
+	fx := float64(float32(x) * p.slowScale) // i2f -> fmul (slowScale is float) -> f2d
+	fy := float64(float32(y) * p.slowScale)
+	fz := float64(float32(z) * p.slowScale)
+	d := p.slowNoise.GetValue(fx, fy, fz)
 	// clampedMap(d, -1, 1, min, max): t=(d-(-1))/(1-(-1)) clamped to [0,1];
 	// max = min + round(t*(max-min)). Rounded count, then bounded to >=1, <=len.
 	t := (d + 1.0) / 2.0
@@ -338,7 +368,8 @@ func (p DualNoiseProvider) GetState(_ levelgen.RandomSource, x, y, z int) block.
 		count = len(p.states)
 	}
 	window := p.states[:count]
-	v := p.noise.GetValue(float64(x)*p.scale, float64(y)*p.scale, float64(z)*p.scale)
+	s := float64(p.scale) // f2d over the float32-narrowed fast scale (inherited NoiseProvider.scale)
+	v := p.noise.GetValue(float64(x)*s, float64(y)*s, float64(z)*s)
 	return getRandomState(window, v)
 }
 
@@ -363,9 +394,34 @@ func (p DualNoiseProvider) GetState(_ levelgen.RandomSource, x, y, z int) block.
 // highStates pick) is the determinism contract. Util.getRandom(List,rng) =
 // list.get(rng.nextInt(list.size())) (javap net.minecraft.util.Util.getRandom) -- exactly ONE
 // nextInt draw.
+// NoiseThresholdProvider (extends NoiseBasedStateProvider) is the overworld flower picker
+// (flower_plain / flower_default): it samples the NormalNoise at the SCALED position and, on
+// a threshold split, chooses between a lowStates list (below threshold), a highStates list
+// (above threshold, gated by a highChance float roll), and a defaultState. It is used by the
+// plains/forest simple_block flower features -- so an unported crash here kills terrain
+// decoration outright (the "Loading terrain" panic).
+//
+// getState (javap NoiseThresholdProvider.getState):
+//
+//	d = getNoiseValue(pos, scale)                    // noise.getValue(x*scale, y*scale, z*scale); 0 draws
+//	if d < threshold:  return Util.getRandom(lowStates, rng)   // 1 draw: lowStates[nextInt(size)]
+//	if rng.nextFloat() < highChance:                           // 1 draw
+//	                   return Util.getRandom(highStates, rng)  // + 1 draw: highStates[nextInt(size)]
+//	return defaultState                                        // (only the nextFloat draw consumed)
+//
+// The draw order (noise positional -> optional lowStates pick -> optional nextFloat +
+// highStates pick) is the determinism contract. Util.getRandom(List,rng) =
+// list.get(rng.nextInt(list.size())) (javap net.minecraft.util.Util.getRandom) -- exactly ONE
+// nextInt draw.
+//
+// SCALE PRECISION: `scale` is float32 (matching the jar's `NoiseBasedStateProvider.scale:F`).
+// getState reads it via getfield scale:F then f2d widens to double for noise.getValue. A scale
+// value not exactly representable in float32 (e.g. 0.005 in flower_plain) must be narrowed
+// BEFORE the float64 widening, otherwise the noise sample diverges from vanilla and the
+// threshold/branch split shifts. The threshold/highChance fields are already float32.
 type NoiseThresholdProvider struct {
 	noise        *synth.NormalNoise
-	scale        float64
+	scale        float32 // 26.2 NoiseBasedStateProvider.scale:F; f2d-widened at noise call.
 	threshold    float32
 	highChance   float32
 	defaultState block.StateID
@@ -374,9 +430,11 @@ type NoiseThresholdProvider struct {
 }
 
 // GetState ports NoiseThresholdProvider.getState 1:1 (draw order above). float32 is kept for
-// the threshold/highChance compares so the widening matches the jar's f2d / fcmpg exactly.
+// scale/threshold/highChance so the narrowing-before-widening matches the jar's f2d / fcmpg
+// exactly. Branch order, RNG draws, and threshold comparisons are preserved verbatim.
 func (p NoiseThresholdProvider) GetState(rng levelgen.RandomSource, x, y, z int) block.StateID {
-	d := p.noise.GetValue(float64(x)*p.scale, float64(y)*p.scale, float64(z)*p.scale)
+	s := float64(p.scale) // f2d over the float32-narrowed scale (matches jar's getfield scale:F; f2d)
+	d := p.noise.GetValue(float64(x)*s, float64(y)*s, float64(z)*s)
 	if d < float64(p.threshold) { // dcmpg: d < (double)threshold
 		return p.lowStates[int(rng.NextIntN(int32(len(p.lowStates))))]
 	}
@@ -443,7 +501,7 @@ type jsonNoise struct {
 // selects which subset is meaningful.
 type jsonProvider struct {
 	Type    string          `json:"type"`
-	State   json.RawMessage `json:"state"`    // simple
+	State   json.RawMessage `json:"state"` // simple
 	Entries []struct {      // weighted
 		Data   json.RawMessage `json:"data"`
 		Weight int             `json:"weight"`
@@ -454,12 +512,12 @@ type jsonProvider struct {
 		Then   json.RawMessage `json:"then"`
 	} `json:"rules"`
 	Noise     *jsonNoise      `json:"noise"`      // noise / dual_noise
-	Scale     float64         `json:"scale"`      // noise / dual_noise
+	Scale     float32         `json:"scale"`      // noise / dual_noise (float; narrowed at parse -> widened f2d at noise call)
 	Seed      int64           `json:"seed"`       // noise / dual_noise
 	States    json.RawMessage `json:"states"`     // noise / dual_noise
 	SlowNoise *jsonNoise      `json:"slow_noise"` // dual_noise
-	SlowScale float64         `json:"slow_scale"` // dual_noise
-	Variety json.RawMessage `json:"variety"` // dual_noise (optional); InclusiveRange either-codec
+	SlowScale float32         `json:"slow_scale"` // dual_noise (float; per-component fmul then f2d in getSlowNoiseValue)
+	Variety   json.RawMessage `json:"variety"`    // dual_noise (optional); InclusiveRange either-codec
 
 	Threshold    float32         `json:"threshold"`     // noise_threshold
 	HighChance   float32         `json:"high_chance"`   // noise_threshold
@@ -776,10 +834,10 @@ func parseProviderStateList(raw json.RawMessage) ([]block.StateID, error) {
 // the existing block) and not; that minimal set is ported here. An unported rule
 // predicate type errors loudly.
 type jsonRulePredicate struct {
-	Type      string          `json:"type"`
-	Tag       string          `json:"tag"`       // matching_block_tag
-	Blocks    json.RawMessage `json:"blocks"`     // matching_blocks
-	Predicate json.RawMessage `json:"predicate"`  // not
+	Type       string          `json:"type"`
+	Tag        string          `json:"tag"`        // matching_block_tag
+	Blocks     json.RawMessage `json:"blocks"`     // matching_blocks
+	Predicate  json.RawMessage `json:"predicate"`  // not
 	Predicates json.RawMessage `json:"predicates"` // all_of/any_of
 }
 
