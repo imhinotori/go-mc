@@ -161,17 +161,18 @@ func (t *TickLoop) tickOnce() {
 	gt := t.gametime // the ONE shared tick number every region reads this tick (Pitfall 3 /
 	// T-27-02-GT): a single value the coordinator passes into each region.tick, read-only.
 
-	// Phase-27 N=2 SPAWN-CAP SNAPSHOT: compute the GLOBAL live-CREATURE count NOW, while every region is
-	// quiescent (the fan-out has not started), so naturalSpawn's pre-submit cap gate reads a race-free
-	// cross-region count during the parallel fan-out instead of ranging another region's live store. The
-	// cap spans all players/regions; the apply-time re-check (also cross-region, at the barrier) remains
-	// the authoritative anti-flood. countByCategoryAcrossRegions is safe here (no region is ticking).
-	// One cross-region tally feeds BOTH per-category snapshots (Phase 35-02: the MONSTER pass needs its
-	// own race-free global count, exactly like CREATURE). countByCategoryAcrossRegions buckets every
-	// category in one pass, so read both keys off the single quiescent tally.
-	quiescentCounts := t.countByCategoryAcrossRegions()
-	t.spawnLiveCreatureSnapshot = quiescentCounts[categoryCreature]
-	t.spawnLiveMonsterSnapshot = quiescentCounts[categoryMonster]
+	// Phase-27 N=2 SPAWN-CAP SNAPSHOT: compute the GLOBAL per-MobCategory live count map NOW, while
+	// every region is quiescent (the fan-out has not started), so naturalSpawn's pre-submit cap gate
+	// reads a race-free cross-region count per category during the parallel fan-out instead of
+	// ranging another region's live store. The cap spans all players/regions; the apply-time re-check
+	// (also cross-region, at the barrier) remains the authoritative anti-flood.
+	// countByCategoryAcrossRegions is safe here (no region is ticking) and is called ONCE: it buckets
+	// every MobCategory in a single pass, so the resulting map covers every entry in
+	// spawningCategories (MONSTER, CREATURE, AMBIENT, AXOLOTLS, UNDERGROUND_WATER_CREATURE,
+	// WATER_CREATURE, WATER_AMBIENT). This replaces the prior two-int (CREATURE+MONSTER) layout
+	// that silently fell back to the CREATURE count for AMBIENT/AXOLOTLS/WATER_*, corrupting the
+	// cap gate for those categories (Phase 35-02/P1 audit).
+	t.spawnLiveCategorySnapshot = t.countByCategoryAcrossRegions()
 
 	// --- FAN OUT: each region ticks its OWN entity store in PARALLEL (TICK-05 per region) — the
 	// per-region entity phases (tickAI + tickPhysics + detectTransfers). conc.WaitGroup.Go spawns the

@@ -540,16 +540,16 @@ func spawnCategoryOrder(spawnFriendly bool) []mobCategory {
 }
 
 // spawnLiveCount returns the GLOBAL live count for a category for naturalSpawn's pre-submit cap gate
-// (Phase 35-02 generalization of the Phase-27 N=2 CREATURE gate). Inside the parallel fan-out it reads
-// the coordinator's quiescent pre-fan-out snapshot (race-free); from a direct single-threaded call (a
-// test, no region ticking) it computes the cross-region count live (also race-free). Either way the
-// count is GLOBAL and matches the apply-time countByCategoryAcrossRegions re-check (async.go).
+// (Phase 35-02/P1 audit). Inside the parallel fan-out it reads the coordinator's quiescent
+// pre-fan-out per-category snapshot map (race-free, covers EVERY category in spawningCategories —
+// never a CREATURE fallback); from a direct single-threaded call (a test, no region ticking) it
+// computes the cross-region count live (also race-free). Either way the count is GLOBAL and matches
+// the apply-time countByCategoryAcrossRegions re-check (async.go). A category absent from the
+// snapshot map (a never-spawned category at the quiescent moment) reads as 0 — the apply-time
+// re-check remains the authoritative anti-flood.
 func (t *TickLoop) spawnLiveCount(cat mobCategory) int {
 	if _, inFanOut := t.resolveRegion(); inFanOut {
-		if cat == categoryMonster {
-			return t.spawnLiveMonsterSnapshot // race-free snapshot the coordinator took while quiescent
-		}
-		return t.spawnLiveCreatureSnapshot
+		return t.spawnLiveCategorySnapshot[cat] // race-free per-category snapshot the coordinator took while quiescent
 	}
 	return t.countByCategoryAcrossRegions()[cat] // direct call: quiescent, live is safe
 }

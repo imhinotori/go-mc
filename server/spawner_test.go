@@ -721,3 +721,86 @@ func TestDoMobSpawningGamerule(t *testing.T) {
 		t.Fatalf("spawn_mobs=false: no mob may spawn, count %d -> %d", countBefore, totalEntities(loop))
 	}
 }
+
+// TestSpawnLiveCountCategorySnapshot is the Phase 35-02/P1 audit gate (gap-spawner-category-snapshots):
+// the coordinator's quiescent pre-fan-out snapshot covers EVERY MobCategory in spawningCategories
+// (MONSTER, CREATURE, AMBIENT, AXOLOTLS, UNDERGROUND_WATER_CREATURE, WATER_CREATURE, WATER_AMBIENT),
+// and a fan-out read returns its OWN per-category value — never a CREATURE fallback. Prior to the
+// audit the two-int (CREATURE+MONSTER) layout silently returned the CREATURE count for
+// AMBIENT/AXOLOTLS/WATER_*, corrupting those categories' pre-submit cap gate (the FAN-OUT snapshot
+// had no entry for them).
+//
+// The test seeds distinct values per category on the snapshot, simulates a fan-out call site by
+// registering the test goroutine as a region via withRegion (the same harness region.tick uses), and
+// asserts spawnLiveCount(cat) returns its OWN seeded value for each of the 7 spawningCategories.
+// Outside fan-out (a direct test call) the live count is computed via countByCategoryAcrossRegions
+// — that branch is also exercised (no-snapshot path) so both halves of spawnLiveCount's contract
+// are covered.
+func TestSpawnLiveCountCategorySnapshot(t *testing.T) {
+	loop, _, _ := newSpawnLoop(t)
+
+	// Distinct seed values per category. The numbers are arbitrary; the load-bearing assertion is that
+	// spawnLiveCount returns THIS category's seed, not any other category's seed (and not a CREATURE
+	// fallback for the non-MONSTER/CREATURE entries). Choosing distinct values that are obviously NOT
+	// any of the per-category maxima isolates the per-category storage from the live-count math.
+	seeds := map[mobCategory]int{
+		categoryMonster:                  11,
+		categoryCreature:                 22,
+		categoryAmbient:                  33,
+		categoryAxolotls:                 44,
+		categoryUndergroundWaterCreature: 55,
+		categoryWaterCreature:            66,
+		categoryWaterAmbient:             77,
+	}
+	loop.spawnLiveCategorySnapshot = make(map[mobCategory]int, len(spawningCategories))
+	for cat, v := range seeds {
+		loop.spawnLiveCategorySnapshot[cat] = v
+	}
+
+	// Register the test goroutine as a region so resolveRegion() reports inFanOut=true — the same
+	// harness region.tick uses (region_coordinator.go: registers via currentRegion.Store on entry,
+	// clears on exit). withRegion captures/restores the prior mapping so the harness has no lingering
+	// effect. Without this registration spawnLiveCount takes the direct-call branch (live
+	// countByCategoryAcrossRegions) instead of the snapshot branch — the gate would never fire.
+	loop.withRegion(loop.regions[0], func() {
+		for _, cat := range spawningCategories {
+			want, seeded := seeds[cat]
+			if !seeded {
+				t.Fatalf("test setup missing seed for category %d (the audit must cover every spawningCategories entry)", cat)
+			}
+			got := loop.spawnLiveCount(cat)
+			if got != want {
+				t.Fatalf("spawnLiveCount(%d) = %d, want %d (the per-category snapshot must return its OWN value, never a CREATURE fallback)", cat, got, want)
+			}
+			// Cross-check: the returned value is NOT any OTHER category's seed — proves the per-category
+			// storage isn't a single shared field mis-keyed.
+			for other, otherWant := range seeds {
+				if other == cat {
+					continue
+				}
+				if got == otherWant {
+					t.Fatalf("spawnLiveCount(%d) = %d collides with seed[%d]=%d — the snapshot is returning another category's value", cat, got, other, otherWant)
+				}
+			}
+		}
+	})
+
+	// Outside the withRegion scope: spawnLiveCount takes the LIVE cross-region branch (no snapshot
+	// involvement). The loop's empty entity stores yield zero for every category — distinct from the
+	// seeded snapshot values, so this proves the direct-call path is NOT reading the snapshot.
+	outsideGot := map[mobCategory]int{}
+	for _, cat := range spawningCategories {
+		outsideGot[cat] = loop.spawnLiveCount(cat)
+	}
+	for cat, liveCount := range outsideGot {
+		if liveCount != 0 {
+			t.Fatalf("outside fan-out, spawnLiveCount(%d) = %d, want 0 (live cross-region count over empty stores)", cat, liveCount)
+		}
+		// The live count must differ from the seeded snapshot for the categories that were seeded
+		// non-zero (an empty world yields live=0, snapshot=22/33/etc — proves the two branches
+		// don't share storage).
+		if seeds[cat] != 0 && liveCount == seeds[cat] {
+			t.Fatalf("outside fan-out, spawnLiveCount(%d) returned the seeded snapshot value (%d); the live branch must NOT read the snapshot", cat, seeds[cat])
+		}
+	}
+}

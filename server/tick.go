@@ -302,28 +302,25 @@ type TickLoop struct {
 	// same goroutines — a genuine concurrent map access (a plain map would race the parallel fan-out).
 	currentRegion *xsync.Map[int64, *region]
 
-	// spawnLiveCreatureSnapshot is the GLOBAL live-CREATURE count snapshotted on the coordinator at the
-	// QUIESCENT point right before the region fan-out, for naturalSpawn's pre-submit cap gate (Phase-27
-	// N=2). naturalSpawn runs INSIDE the parallel fan-out, where ranging another region's store
-	// (countByCategoryAcrossRegions) would RACE that region's concurrent tickAI/physics mutations. The
-	// cap, however, spans ALL players/regions — a per-region countByCategory() under-counts and lets
-	// each region submit a scan even when the GLOBAL cap is met. So the coordinator computes the
-	// cross-region count once while every region is quiescent (no race) and stashes it here; naturalSpawn
-	// reads this immutable snapshot during the fan-out. It is exactly a "snapshot" gate (the comment at
-	// the gate already says the count is a snapshot the apply-time re-check re-validates), now a GLOBAL
-	// snapshot instead of a per-region one. The authoritative anti-flood remains the quiescent
-	// apply-time countByCategoryAcrossRegions re-check (spawnCandidatesReady.applyTo). Written only on
-	// the coordinator before the fan-out; read-only during the fan-out (TICK-05, race-clean).
-	spawnLiveCreatureSnapshot int
-
-	// spawnLiveMonsterSnapshot is the GLOBAL live-MONSTER count snapshotted on the coordinator at the
-	// SAME quiescent pre-fan-out point as spawnLiveCreatureSnapshot (Phase 35-02). The naturalSpawn
-	// MONSTER pass runs inside the parallel fan-out too, so it reads THIS race-free cross-region count
-	// for its pre-submit cap gate instead of ranging another region's live store. Same discipline as the
-	// CREATURE snapshot: written only on the coordinator before the fan-out, read-only during it
-	// (TICK-05), and the authoritative anti-flood remains the quiescent apply-time
-	// countByCategoryAcrossRegions()[categoryMonster] re-check.
-	spawnLiveMonsterSnapshot int
+	// spawnLiveCategorySnapshot is the GLOBAL per-MobCategory live count map snapshotted on the
+	// coordinator at the QUIESCENT point right before the region fan-out, for naturalSpawn's
+	// pre-submit cap gate (Phase 35-02/P1 audit, gap-spawner-category-snapshots). naturalSpawn
+	// runs INSIDE the parallel fan-out, where ranging another region's store
+	// (countByCategoryAcrossRegions) would RACE that region's concurrent tickAI/physics mutations.
+	// The cap, however, spans ALL players/regions — a per-region countByCategory() under-counts
+	// and lets each region submit a scan even when the GLOBAL cap is met. So the coordinator
+	// computes the cross-region count once while every region is quiescent (no race) and stashes
+	// the WHOLE per-category map here; naturalSpawn reads snapshot[cat] for its category during
+	// the fan-out. Every category in spawningCategories (MONSTER, CREATURE, AMBIENT, AXOLOTLS,
+	// UNDERGROUND_WATER_CREATURE, WATER_CREATURE, WATER_AMBIENT) has its OWN entry — there is no
+	// CREATURE fallback: the prior two-int (CREATURE+MONSTER) layout silently returned the
+	// CREATURE count for AMBIENT/AXOLOTLS/WATER_*, corrupting the cap gate for those categories.
+	// Reads return 0 for a category absent from the map (a never-spawned category has no live
+	// mobs at the snapshot moment — the apply-time re-check remains the authoritative anti-flood).
+	// Written only on the coordinator before the fan-out (countByCategoryAcrossRegions); read-only
+	// during the fan-out (TICK-05, race-clean). The authoritative anti-flood remains the quiescent
+	// apply-time countByCategoryAcrossRegions()[category] re-check (spawnCandidatesReady.applyTo).
+	spawnLiveCategorySnapshot map[mobCategory]int
 
 	// strictRegion arms the per-region access guard in cur(): when true, a cur() call from a
 	// goroutine with NO region registered PANICS instead of silently falling back to globalRegion.
