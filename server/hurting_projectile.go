@@ -425,10 +425,10 @@ func (t *TickLoop) hurtingOnHit(e *Entity, x, y, z float64) {
 		// so a ghast blast only scorches/creates fire when mobGriefing is on. Radius = explosionPower.
 		// Cite LargeFireball.onHit (offsets 22-65: boolean b = mobGriefing; explode(..., power, b, MOB)).
 		griefing := t.gameRule(ruleMobGriefing)
-		t.explodeWith(e.id, x, y, z, float64(e.hurtExplosion), explosionInteractionMob, griefing)
+		t.explodeWith(e.id, x, y, z, float64(e.hurtExplosion), explosionInteractionMob, griefing, nil)
 	case hurtWitherSkull:
 		// WitherSkull.onHit: level.explode(this, x, y, z, 1.0, false, MOB). Radius 1, no fire; MOB-gated terrain.
-		t.explodeWith(e.id, x, y, z, float64(witherSkullExplosionPower), explosionInteractionMob, false)
+		t.explodeWith(e.id, x, y, z, float64(witherSkullExplosionPower), explosionInteractionMob, false, nil)
 	case hurtWindCharge:
 		// WindCharge.explode: the WIND_BURST — radius 1.2, damagesEntities=false (no explosion damage),
 		// TRIGGER interaction (no terrain destroy). Its whole effect is the knockback gust. Cite WindCharge.explode.

@@ -242,5 +242,5 @@ func (t *TickLoop) primedTntExplode(e *Entity) {
 	cy := e.y + e.height*tntCenterOffset // getY(0.0625) == y + bbHeight*0.0625
 	// ExplosionInteraction.TNT, fire=false: TNT always destroys terrain (independent of mobGriefing) and
 	// never creates fire. Cite PrimedTnt.explode (level.explode(..., explosionPower, false, TNT)).
-	t.explodeWith(e.id, e.x, cy, e.z, float64(e.tntExplosionPower), explosionInteractionTNT, false)
+	t.explodeWith(e.id, e.x, cy, e.z, float64(e.tntExplosionPower), explosionInteractionTNT, false, nil)
 }

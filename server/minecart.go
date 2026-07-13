@@ -100,6 +100,7 @@ const (
 // minecartWaterSlowdown is AbstractMinecart.applyNaturalSlowdown's extra in-water scale (WATER_SLOWDOWN_
 // FACTOR == 0.95F): newMovement.scale(0.95) when isInWater(). v1 minecarts are not in water in the test/
 // common path, but the branch is ported for fidelity.
+//
 //	[VERIFIED CFR AbstractMinecart.applyNaturalSlowdown: if (isInWater()) newMovement = newMovement.scale(0.95F).]
 const minecartWaterSlowdown = 0.95
 
@@ -111,6 +112,7 @@ type railExit struct{ x, y, z int }
 // VERBATIM from the EXITS static init (Direction unit vectors: WEST=(-1,0,0), EAST=(1,0,0), NORTH=
 // (0,0,-1), SOUTH=(0,0,1); .below() subtracts 1 from Y). Indexed by the RailShape enum value (which
 // matches the Java ordinal 1:1 — see level/block/properties_enum.go).
+//
 //	[VERIFIED CFR AbstractMinecart.EXITS: NORTH_SOUTH(zNeg,zPos), EAST_WEST(xNeg,xPos),
 //	 ASCENDING_EAST(xNegBelow,xPos), ASCENDING_WEST(xNeg,xPosBelow), ASCENDING_NORTH(zNeg,zPosBelow),
 //	 ASCENDING_SOUTH(zNegBelow,zPos), SOUTH_EAST(zPos,xPos), SOUTH_WEST(zPos,xNeg), NORTH_WEST(zNeg,xNeg),
@@ -134,6 +136,7 @@ func minecartExitsOf(shape block.RailShape) [2]railExit {
 }
 
 // railShapeIsSlope ports RailShape.isSlope(): the four ASCENDING shapes.
+//
 //	[VERIFIED CFR RailShape.isSlope: this == ASCENDING_NORTH/EAST/SOUTH/WEST.]
 func railShapeIsSlope(shape block.RailShape) bool {
 	switch shape {
@@ -146,6 +149,7 @@ func railShapeIsSlope(shape block.RailShape) bool {
 
 // minecartContainerSize returns the container slot count for a container-minecart type, or 0 for a plain
 // (non-container) minecart. MinecartChest.getContainerSize()==27; MinecartHopper.getContainerSize()==5.
+//
 //	[VERIFIED CFR MinecartChest.getContainerSize: return 27; MinecartHopper.getContainerSize: return 5.]
 func minecartContainerSize(typ entity.ID) int {
 	switch typ {
@@ -381,7 +385,7 @@ func (t *TickLoop) tntMinecartExplode(e *Entity, horizDistSqr float64) {
 		}
 		power := tntDefaultExplosionPower + 1.0*roll*1.5*capped // explosionPowerBase 4.0, factor 1.0
 		// ExplosionInteraction.TNT, fire=false (MinecartTNT.explode). Always destroys terrain.
-		t.explodeWith(e.id, e.x, e.y, e.z, float32Of(power), explosionInteractionTNT, false)
+		t.explodeWith(e.id, e.x, e.y, e.z, float32Of(power), explosionInteractionTNT, false, nil)
 	}
 	// if (isPrimed()) discard(): a primed minecart is removed after the blast.
 	if e.mcTntPrimed {
@@ -397,6 +401,7 @@ func float32Of(v float64) float64 { return float64(float32(v)) }
 // minecartCurrentBlockPosOrRailBelow ports AbstractMinecart.getCurrentBlockPosOrRailBelow (the OLD-movement
 // branch): the cart's floored block cell, but decremented by one in Y if the cell directly below is a rail
 // (the cart floats 1/16 above the rail, so its own cell is the air above the track).
+//
 //	[VERIFIED CFR AbstractMinecart.getCurrentBlockPosOrRailBelow: xt/yt/zt = floor(x/y/z); (OLD branch)
 //	 if (getBlockState(xt, yt-1, zt).is(BlockTags.RAILS)) --yt; return new BlockPos(xt, yt, zt).]
 func (t *TickLoop) minecartCurrentBlockPosOrRailBelow(e *Entity) pk.Position {
@@ -413,6 +418,7 @@ func (t *TickLoop) minecartCurrentBlockPosOrRailBelow(e *Entity) pk.Position {
 // minecartComeOffTrack ports AbstractMinecart.comeOffTrack: clamp velocity to maxSpeed, halve it when on
 // the ground, move via the swept resolver, then air-drag while airborne. This is the normal free-fall /
 // slide physics a minecart runs when it is NOT on a rail.
+//
 //	[VERIFIED CFR AbstractMinecart.comeOffTrack: maxSpeed = getMaxSpeed(level); movement = getDeltaMovement();
 //	 setDeltaMovement(clamp(x,-max,max), y, clamp(z,-max,max)); if (onGround) scale(0.5); move(SELF, delta);
 //	 if (!onGround) scale(getAirDrag()==0.95).]
@@ -442,6 +448,7 @@ func (t *TickLoop) minecartComeOffTrack(e *Entity) {
 // A FURNACE minecart overrides getMaxSpeed to super.getMaxSpeed() * (isInWater ? 0.75 : 0.5) -- a fueled
 // furnace cart is capped at HALF the normal land speed (0.2) so it rolls slower than a plain cart. With
 // water deferred, the land base * 0.5 is applied.
+//
 //	[VERIFIED CFR OldMinecartBehavior.getMaxSpeed: return isInWater() ? 0.2 : 0.4;
 //	 MinecartFurnace.getMaxSpeed: return super.getMaxSpeed(level) * (isInWater() ? 0.75 : 0.5).]
 func (t *TickLoop) minecartGetMaxSpeed(e *Entity) float64 {
@@ -458,6 +465,7 @@ const minecartFurnaceMaxSpeedFactor = 0.5
 
 // minecartSlowdownFactor ports OldMinecartBehavior.getSlowdownFactor: 0.997 while carrying a passenger,
 // 0.96 empty. The single most-felt minecart tunable (a ridden cart coasts far; an empty one stops fast).
+//
 //	[VERIFIED CFR OldMinecartBehavior.getSlowdownFactor: return isVehicle() ? 0.997 : 0.96.]
 func (e *Entity) minecartSlowdownFactor() float64 {
 	if e.isVehicle() {
@@ -468,6 +476,7 @@ func (e *Entity) minecartSlowdownFactor() float64 {
 
 // minecartApplyNaturalSlowdown ports AbstractMinecart.applyNaturalSlowdown: multiply the horizontal
 // velocity by the behavior's slowdown factor (Y untouched), then an extra 0.95 in water.
+//
 //	[VERIFIED CFR AbstractMinecart.applyNaturalSlowdown: newMovement = movement.multiply(slowdownFactor,
 //	 0.0, slowdownFactor); if (isInWater()) newMovement = newMovement.scale(0.95F); return newMovement.]
 func (t *TickLoop) minecartApplyNaturalSlowdown(e *Entity) {
@@ -674,6 +683,7 @@ func (t *TickLoop) minecartMoveAlongTrack(e *Entity, pos pk.Position, state bloc
 // minecartRailPos ports OldMinecartBehavior.getPos(x,y,z): the exact point on the rail at (x,y,z) — the
 // rail-end midpoints, the progress projection, and the +0.5/+1.0 Y bump for a slope. Returns (point, true)
 // on a rail, (zero, false) off a rail. Used for the Y-descent momentum (the before/after rail-Y diff).
+//
 //	[VERIFIED CFR OldMinecartBehavior.getPos: xt/yt/zt = floor; if (getBlockState(xt,yt-1,zt).is(RAILS)) --yt;
 //	 if isRail: shape, exits; x0=xt+0.5+e0.x*0.5, y0=yt+0.0625+e0.y*0.5, z0=zt+0.5+e0.z*0.5 (and e1); yD=
 //	 (y1-y0)*2; project x/y/z by progress; if yD<0 y+=1 else if yD>0 y+=0.5; return Vec3(x,y,z).]
@@ -732,6 +742,7 @@ func (t *TickLoop) minecartSetPos(e *Entity, x, y, z float64) {
 
 // minecartIsRedstoneConductor ports AbstractMinecart.isRedstoneConductor(pos): the block at pos is a
 // redstone conductor (a full opaque cube). Used by the powered-rail launch to find a wall to push off.
+//
 //	[VERIFIED CFR AbstractMinecart.isRedstoneConductor: return getBlockState(pos).isRedstoneConductor(level,pos).]
 func (t *TickLoop) minecartIsRedstoneConductor(pos pk.Position) bool {
 	s, ok := t.world().GetBlock(pos, dimMinY)
@@ -758,6 +769,7 @@ func clampF(v, lo, hi float64) float64 {
 
 // detectorRailSearchInset is DetectorRailBlock.getSearchBB's 0.2-block inset: the box (pos+0.2, pos.y,
 // pos+0.2)..(pos+0.8, pos+0.8, pos+0.8) it tests for a minecart.
+//
 //	[VERIFIED CFR DetectorRailBlock.getSearchBB: double b = 0.2; new AABB(x+0.2, y, z+0.2, x+1-0.2,
 //	 y+1-0.2, z+1-0.2).]
 const detectorRailSearchInset = 0.2
@@ -794,6 +806,7 @@ func (t *TickLoop) detectorRailHasMinecart(pos pk.Position) bool {
 // re-check tick 20 later that clears POWERED once the cart leaves. The comparator analog output (a
 // container-minecart's fill fraction) is surfaced via getAnalogOutputSignal (getRedstoneSignalFromContainer),
 // which the neighbor comparator reads on its own neighborChanged.
+//
 //	[VERIFIED CFR DetectorRailBlock.checkPressed: shouldBePressed = !getInteractingMinecart().isEmpty();
 //	 on transition setValue(POWERED, x) + setBlock + updatePowerToConnected + updateNeighborsAt(pos) +
 //	 updateNeighborsAt(pos.below); if (shouldBePressed) scheduleTick(pos, this, 20);
@@ -830,6 +843,7 @@ func (t *TickLoop) detectorRailCheckPressed(pos pk.Position, state block.StateID
 // spawns (the MinecartItem.type). Returns (0, false) for a non-minecart item. FurnaceMinecart / TntMinecart
 // map to their entity types too (they are spawnable placeables); their runtime behavior (fuel-drive / TNT
 // explosion) is a cited deferral, but the entity still spawns + rides the rail via the shared physics.
+//
 //	[VERIFIED data/item: minecart=882, chest_minecart=883, furnace_minecart=884, tnt_minecart=885,
 //	 hopper_minecart=886; the entity ids are Minecart=85, ChestMinecart=25, HopperMinecart=65, etc.]
 func minecartItemToEntityType(itemID int32) (entity.ID, bool) {
@@ -853,6 +867,7 @@ func minecartItemToEntityType(itemID int32) (entity.ID, bool) {
 // tracker), and shrink the held item by 1 (survival). Returns true when the rail was clicked (cart spawned),
 // false when the clicked block is NOT a rail (FAIL — placement continues). Runs on the dispatch goroutine;
 // the store add is wrapped in the owning region so the cart lands in the right store (like reconcileEdit).
+//
 //	[VERIFIED CFR MinecartItem.useOn: if (!blockState.is(BlockTags.RAILS)) return FAIL; shape read;
 //	 offset = isSlope()?0.5:0; spawnPos = (x+0.5, y+0.0625+offset, z+0.5); addFreshEntity; itemStack.shrink(1).]
 func (t *TickLoop) tryPlaceMinecartOnRail(p *tickPlayer, inv *Inventory, pos pk.Position, mcType entity.ID) bool {

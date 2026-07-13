@@ -251,7 +251,7 @@ func (t *TickLoop) useBed(p *tickPlayer, pos pk.Position) bool {
 		cx := float64(bedPos.X) + 0.5
 		cy := float64(bedPos.Y) + 0.5
 		cz := float64(bedPos.Z) + 0.5
-		t.explodeWith(0, cx, cy, cz, float64(badRespawnPointExplosionRadius), explosionInteractionBlock, true)
+		t.explodeWith(0, cx, cy, cz, float64(badRespawnPointExplosionRadius), explosionInteractionBlock, true, nil)
 		return true // SUCCESS_SERVER
 	}
 

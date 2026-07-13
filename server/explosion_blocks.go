@@ -44,6 +44,25 @@ const (
 	explosionWorldBoundHorz = 30000000            // isInWorldBoundsHorizontal: |x|,|z| < 30_000_000
 )
 
+// explosionResistanceOverride is the narrow seam for ExplosionDamageCalculator
+// .getBlockExplosionResistance: a per-position callback that returns an OVERRIDE resistance and a
+// boolean indicating whether the override is ACTIVE for that position. When active is true the
+// returned resistance REPLACES the standard StateExplosionResistance for that cell (the ray
+// attenuates by (override + 0.3f) * 0.3f exactly as if the state's block/fluid max were the
+// override value). When active is false the standard path runs unchanged. A nil callback is
+// the generic-explosion path — every position falls through to StateExplosionResistance, so the
+// ray collection is byte-identical to a no-override call. Cite
+// ExplosionDamageCalculator.getBlockExplosionResistance; RespawnAnchorBlock$1
+// .getBlockExplosionResistance (the only verified caller: water resistance at the blast center
+// when inWater == true).
+type explosionResistanceOverride func(pos pk.Position) (resistance float32, active bool)
+
+// explosionWaterResistance is Blocks.WATER.getExplosionResistance() — the FluidState resistance of
+// a water cell. Sourced from the codegen'd ExplosionResistance table (Block.getExplosionResistance
+// for the water block id), so the value matches the jar. Cite RespawnAnchorBlock$1
+// .getBlockExplosionResistance (Optional.of(Blocks.WATER.getExplosionResistance())).
+var explosionWaterResistance = block.ExplosionResistance["minecraft:water"]
+
 // calculateExplodedPositions is the 1:1 port of ServerExplosion.calculateExplodedPositions: it
 // walks the 16^3 shell of unit rays out of the blast center, attenuating each ray strength by
 // every block explosion resistance it passes through, and collects the BlockPos set whose
@@ -52,9 +71,14 @@ const (
 // so the RNG stream stays in lockstep. This REPLACES the old calculateExplodedRayRolls stub
 // (which only advanced the RNG) — the draw order is identical, and now the blocks are collected.
 //
+// The optional resistanceOverride callback lets a specific ExplosionDamageCalculator substitute a
+// different resistance at one or more positions (e.g. RespawnAnchorBlock$1 raises the resistance at
+// the blast center to water's resistance when inWater). Nil = generic explosion (the standard
+// StateExplosionResistance is used at every cell, byte-identical to the no-callback path).
+//
 //	[VERIFIED javap ServerExplosion.calculateExplodedPositions — the exact float casts, the 0.3f
 //	 step, the (r+0.3f)*0.3f attenuation, the 0.22500001f drain, and the 0.7f+0.6f ray band.]
-func (t *TickLoop) calculateExplodedPositions(cx, cy, cz, radius float64) []pk.Position {
+func (t *TickLoop) calculateExplodedPositions(cx, cy, cz, radius float64, resistanceOverride explosionResistanceOverride) []pk.Position {
 	r := t.cur().levelRandom
 	w := t.world()
 	// A HashSet in vanilla; a map here (dedup — a ray can revisit a cell). Order does not matter:
@@ -93,11 +117,25 @@ func (t *TickLoop) calculateExplodedPositions(cx, cy, cz, radius float64) []pk.P
 					}
 					// getBlockExplosionResistance: present iff (block not air) OR (fluid not empty).
 					// air with no fluid -> Optional.empty -> no attenuation. Everything else attenuates.
-					if st, ok := w.GetBlock(pos, dimMinY); ok {
-						if !block.IsAir(st) {
-							res := block.StateExplosionResistance(st)
-							f14 -= (res + float32(explosionResistanceAdd)) * float32(explosionResistanceMul)
+					// resistanceOverride (when non-nil AND active for pos) substitutes the resistance
+					// at this cell — the seam for ExplosionDamageCalculator.getBlockExplosionResistance.
+					var res float32
+					hasRes := false
+					if resistanceOverride != nil {
+						if r0, ok := resistanceOverride(pos); ok {
+							res, hasRes = r0, true
 						}
+					}
+					if !hasRes {
+						if st, ok := w.GetBlock(pos, dimMinY); ok {
+							if !block.IsAir(st) {
+								res = block.StateExplosionResistance(st)
+								hasRes = true
+							}
+						}
+					}
+					if hasRes {
+						f14 -= (res + float32(explosionResistanceAdd)) * float32(explosionResistanceMul)
 					}
 					// shouldBlockExplode is unconditionally true (ExplosionDamageCalculator).
 					if f14 > 0.0 {

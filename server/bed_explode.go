@@ -124,7 +124,7 @@ func (t *TickLoop) bedExplode(headPos pk.Position, facing block.Direction) {
 // (always destroys) + the bad_respawn_point damage source + the fire tail. CITE: ServerLevel.explode
 // (BLOCK case) + ServerExplosion.explode.
 func (t *TickLoop) bedExplodeAt(x, y, z, radius float64) {
-	toBlow := t.calculateExplodedPositions(x, y, z, radius)
+	toBlow := t.calculateExplodedPositions(x, y, z, radius, nil)
 	hitPlayers := t.hurtEntitiesFromExplosion(0, x, y, z, radius, damageSourceOf(damageTypeBadRespawnPoint))
 	// interactsWithBlocks(): a BLOCK explosion blockInteraction (DESTROY_WITH_DECAY) is != KEEP, so it
 	// ALWAYS interacts -- unlike the creeper MOB case there is NO mobGriefing gate. Cite

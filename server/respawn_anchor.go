@@ -64,6 +64,7 @@ import (
 	"github.com/imhinotori/sulfur/data/item"
 	"github.com/imhinotori/sulfur/level/block"
 	pk "github.com/imhinotori/sulfur/net/packet"
+	"github.com/imhinotori/sulfur/world"
 )
 
 const (
@@ -212,13 +213,18 @@ func (t *TickLoop) respawnAnchorSamePosition(p *tickPlayer, pos pk.Position) boo
 		p.respawnPos.X == pos.X && p.respawnPos.Y == pos.Y && p.respawnPos.Z == pos.Z
 }
 
-// respawnAnchorExplode ports RespawnAnchorBlock.explode: removeBlock(pos, false) then a radius-5.0
-// fire-carrying BLOCK-interaction explosion centered on the anchor block center (Vec3.atCenterOf). The
-// inWater flag (any HORIZONTAL water neighbor or water above) feeds the custom ExplosionDamageCalculator
-// that only raises resistance AT the -- already removed -- anchor position, so it is observably inert for
-// destroying the surrounding terrain; v1 uses the shared explodeWith (default calc) exactly as the
-// nether/end bed explosion does. Tick-owned (called from useRespawnAnchor on the owner goroutine). CITE
-// RespawnAnchorBlock.explode.
+// respawnAnchorExplode ports RespawnAnchorBlock.explode: removeBlock(pos, false), compute the inWater
+// flag (any HORIZONTAL water neighbor or water above -> getFluidState(...).is(FluidTags.WATER)), then
+// a radius-5.0 fire-carrying BLOCK-interaction explosion centered on the anchor block center
+// (Vec3.atCenterOf). The custom ExplosionDamageCalculator RespawnAnchorBlock$1 overrides
+// getBlockExplosionResistance: when inWater it returns Optional.of(Blocks.WATER.getExplosionResistance())
+// AT the blast center (pos), and falls through to the super-class (the standard StateExplosionResistance)
+// everywhere else. So a wet anchor blast applies the water resistance (100.0f) at the center cell —
+// the (now air) cell that was the anchor — which makes the rays hitting that cell attenuate harder
+// and shortens the affected set BEHIND the center. A dry anchor blast passes nil (generic calculator),
+// which is byte-identical to the vanilla super path. Tick-owned (called from useRespawnAnchor on the
+// owner goroutine). CITE RespawnAnchorBlock.explode + RespawnAnchorBlock$1
+// .getBlockExplosionResistance + ExplosionDamageCalculator.getBlockExplosionResistance.
 func (t *TickLoop) respawnAnchorExplode(p *tickPlayer, pos pk.Position) {
 	w := t.dimWorld(p)
 	if w == nil {
@@ -234,12 +240,52 @@ func (t *TickLoop) respawnAnchorExplode(p *tickPlayer, pos pk.Position) {
 		t.updateNeighborsAt(pos, updateShapeRecursionLimit)
 	}
 
+	// RespawnAnchorBlock.explode: inWater = (any HORIZONTAL neighbor is water) || (cell above is water).
+	// getFluidState(...).is(FluidTags.WATER) — IsWaterFluid covers water blocks (any level) AND waterlogged
+	// blocks, exactly matching the tag closure. LAVA does NOT count (vanilla explicitly tests WATER).
+	var resistanceOverride explosionResistanceOverride
+	if t.respawnAnchorInWater(w, pos, minY) {
+		// RespawnAnchorBlock$1.getBlockExplosionResistance: pos == explosion.center() && inWater ->
+		// Optional.of(Blocks.WATER.getExplosionResistance()) (= 100.0f); super otherwise. The override
+		// applies ONLY at the blast center; everywhere else the standard path runs unchanged.
+		waterRes := explosionWaterResistance
+		resistanceOverride = func(p pk.Position) (float32, bool) {
+			if p.X == pos.X && p.Y == pos.Y && p.Z == pos.Z {
+				return waterRes, true
+			}
+			return 0, false
+		}
+	}
+
 	// Vec3 center = Vec3.atCenterOf(pos): the anchor block CENTER (x+0.5, y+0.5, z+0.5). explode(null,
 	// badRespawnPointExplosion(center), <calc>, center, 5.0f, true, BLOCK). No source entity (srcID 0).
 	cx := float64(pos.X) + 0.5
 	cy := float64(pos.Y) + 0.5
 	cz := float64(pos.Z) + 0.5
-	t.explodeWith(0, cx, cy, cz, float64(respawnAnchorExplosionRadius), explosionInteractionBlock, true)
+	t.explodeWith(0, cx, cy, cz, float64(respawnAnchorExplosionRadius), explosionInteractionBlock, true, resistanceOverride)
+}
+
+// respawnAnchorInWater computes RespawnAnchorBlock.explode's inWater flag: true iff any HORIZONTAL
+// neighbor (N/S/E/W) carries FluidState WATER (level.water) OR the cell directly above carries
+// FluidState WATER. IsWaterFluid closes the WATER tag: water blocks at any level + waterlogged
+// blocks. Lava does NOT count (the cited bytecode uses FluidTags.WATER). Reads at minY so the
+// correct section is addressed. CITE RespawnAnchorBlock.explode + FluidTags.WATER.
+func (t *TickLoop) respawnAnchorInWater(w *world.ChunkManager, pos pk.Position, minY int) bool {
+	neighbors := []pk.Position{
+		{X: pos.X + 1, Y: pos.Y, Z: pos.Z},
+		{X: pos.X - 1, Y: pos.Y, Z: pos.Z},
+		{X: pos.X, Y: pos.Y, Z: pos.Z + 1},
+		{X: pos.X, Y: pos.Y, Z: pos.Z - 1},
+	}
+	for _, n := range neighbors {
+		if st, ok := w.GetBlock(n, minY); ok && block.IsWaterFluid(st) {
+			return true
+		}
+	}
+	if st, ok := w.GetBlock(pk.Position{X: pos.X, Y: pos.Y + 1, Z: pos.Z}, minY); ok && block.IsWaterFluid(st) {
+		return true
+	}
+	return false
 }
 
 // respawnAnchorAnalogOutputSignal ports RespawnAnchorBlock.getAnalogOutputSignal (hasAnalogOutputSignal

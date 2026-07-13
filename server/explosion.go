@@ -49,7 +49,6 @@ func (t *TickLoop) explosionInteractsWithBlocks(interaction explosionInteraction
 	}
 }
 
-
 // Explosion constants (bytecode-verified).
 const (
 	explosionRayPowerBase   = 0.7    // radius * (0.7 + nextFloat()*0.6)
@@ -74,10 +73,17 @@ const (
 // MOB->mobGriefing, TRIGGER->the trigger blocks); the ray nextFloats are drawn UNCONDITIONALLY (so
 // level.random stays in lockstep regardless of the gamerule). gameEvent(EXPLODE) is cite-deferred.
 //
+// resistanceOverride is the narrow ExplosionDamageCalculator.getBlockExplosionResistance seam
+// threaded into calculateExplodedPositions. nil = generic explosion (vanilla's
+// ExplosionDamageCalculator, byte-identical ray collection). Non-nil = a custom calculator (e.g.
+// RespawnAnchorBlock$1 raises the resistance at the blast center to water's resistance when
+// inWater). Cite ServerExplosion.explode + ExplosionDamageCalculator; the only verified non-nil
+// caller is respawnAnchorExplode.
+//
 //	[VERIFIED javap ServerExplosion.explode: gameEvent(EXPLODE); calculateExplodedPositions(); hurtEntities();
 //	 if (interactsWithBlocks()) interactWithBlocks(list); if (fire) createFire(list); return list.size().]
-func (t *TickLoop) explodeWith(srcID int32, x, y, z, radius float64, interaction explosionInteraction, fire bool) {
-	toBlow := t.calculateExplodedPositions(x, y, z, radius)
+func (t *TickLoop) explodeWith(srcID int32, x, y, z, radius float64, interaction explosionInteraction, fire bool, resistanceOverride explosionResistanceOverride) {
+	toBlow := t.calculateExplodedPositions(x, y, z, radius, resistanceOverride)
 	// hurtEntities applies damage + knockback and returns the per-player knockback map the
 	// ClientboundExplode Optional carries. blockCount == len(toBlow) even when the interaction is KEEP
 	// (vanilla returns list.size() -- calculateExplodedPositions ran regardless).
@@ -106,9 +112,8 @@ func (t *TickLoop) explodeWith(srcID int32, x, y, z, radius float64, interaction
 // The ghast fireball uses explodeWith(MOB, fire=mobGriefing) directly; TNT uses explodeWith(TNT); the
 // end crystal / bed use explodeWith(BLOCK). Cite Creeper.explodeCreeper (ExplosionInteraction.MOB, fire false).
 func (t *TickLoop) explode(srcID int32, x, y, z, radius float64) {
-	t.explodeWith(srcID, x, y, z, radius, explosionInteractionMob, false)
+	t.explodeWith(srcID, x, y, z, radius, explosionInteractionMob, false, nil)
 }
-
 
 // explosionKnockback is one player's stored knockback vector (the Vec3 the server pushed it by),
 // keyed by the player's store-entity id — the ClientboundExplode Optional<Vec3> the client applies.

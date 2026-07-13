@@ -8,6 +8,7 @@ package server
 // the Util.shuffle nextInts replay identically.
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/imhinotori/sulfur/level"
@@ -180,7 +181,7 @@ func TestExplosionInteractionGateBlocksVsMob(t *testing.T) {
 		loop.gamerules.setBool(ruleMobGriefing, false) // mobGriefing OFF for every variant
 
 		loop.withRegion(loop.only(), func() {
-			loop.explodeWith(-1, float64(cx)+0.5, float64(cy)+0.5, float64(cz)+0.5, 3.0, interaction, false)
+			loop.explodeWith(-1, float64(cx)+0.5, float64(cy)+0.5, float64(cz)+0.5, 3.0, interaction, false, nil)
 		})
 
 		removed := 0
@@ -238,7 +239,7 @@ func TestExplosionCreateFire(t *testing.T) {
 		loop.withRegion(loop.only(), func() {
 			// A radius-1 BLOCK blast (small footprint) with the fire flag; the toBlow air cells over the
 			// stone floor are the fire candidates.
-			loop.explodeWith(-1, float64(cx)+0.5, float64(cy)+0.5, float64(cz)+0.5, 3.0, explosionInteractionBlock, fire)
+			loop.explodeWith(-1, float64(cx)+0.5, float64(cy)+0.5, float64(cz)+0.5, 3.0, explosionInteractionBlock, fire, nil)
 		})
 
 		fires := 0
@@ -261,5 +262,146 @@ func TestExplosionCreateFire(t *testing.T) {
 	}
 	if got := run(false); got != 0 {
 		t.Fatalf("fire=false blast placed %d fire blocks (createFire must not run)", got)
+	}
+}
+
+// TestExplosionResistanceOverrideCallback pins the resistance-selection seam threaded into
+// calculateExplodedPositions by ExplosionDamageCalculator.getBlockExplosionResistance. With a
+// fixed RNG seed the 16^3 shell rays are deterministic; varying the callback only at a specific
+// (or everywhere) position witnesses the override selection EXACTLY:
+//
+//   - nil callback -> byte-identical to the standard StateExplosionResistance path (the generic
+//     vanilla ExplosionDamageCalculator: every cell reads max(block.getExplosionResistance,
+//     fluid.getExplosionResistance) from the world).
+//   - callback returning (_, false) at every pos -> byte-identical to nil (passthrough).
+//   - callback returning (X, true) at a pos -> the ray attenuates by (X+0.3f)*0.3f AT that pos
+//     instead of the world-derived resistance. The override is per-position: only the chosen pos
+//     sees X.
+//
+// Test setup: a 7x7x7 stone cube centered on the blast with the CENTER cell AIR. Baseline rays
+// pass through the air cell with NO attenuation (air -> Optional.empty -> no resistance read), so
+// they reach the stone neighbors with full strength and produce a baseline affected set. Raising
+// the override at the center to 1200 (obsidian-equivalent) drops 360 attenuation there and the
+// ray dies -- FAR fewer cells removed. Lowering the override to 0.001 (essentially free) drops
+// 0.0903 attenuation -- the ray still eats 0.09 vs the baseline's 0, slightly fewer cells removed
+// than baseline. Cite ExplosionDamageCalculator.getBlockExplosionResistance (Optional<Float>; the
+// override seam) and ServerExplosion.calculateExplodedPositions ((r+0.3f)*0.3f attenuation).
+func TestExplosionResistanceOverrideCallback(t *testing.T) {
+	const cx, cy, cz = 8, 70, 8
+
+	run := func(override explosionResistanceOverride) map[pk.Position]bool {
+		loop, mgr := newPhysicsLoop()
+		putChunk(mgr, level.ChunkPos{0, 0})
+		fillStoneCube(mgr, cx-3, cx+3, cy-3, cy+3, cz-3, cz+3)
+		center := pk.Position{X: cx, Y: cy, Z: cz}
+		// Air at the center so baseline rays pass through with full strength (air -> Optional.empty
+		// in getBlockExplosionResistance -> NO attenuation). The override then has a clean reference
+		// point: nil passes through freely, any positive override value attenuates the ray at the
+		// center.
+		mgr.SetBlock(center, block.DefaultStateID["minecraft:air"], dimMinY)
+
+		clock := loop.clock.(*fakeClock)
+		loop.start(clock.Now())
+		loop.regions[globalRegion].levelRandom = levelgen.NewLegacyRandomSource(12345)
+		loop.gamerules = newGameRules()
+		loop.gamerules.setBool(ruleMobGriefing, true)
+
+		loop.withRegion(loop.only(), func() {
+			loop.explodeWith(-1, float64(cx)+0.5, float64(cy)+0.5, float64(cz)+0.5, 3.0, explosionInteractionBlock, false, override)
+		})
+
+		removed := map[pk.Position]bool{}
+		for x := cx - 3; x <= cx+3; x++ {
+			for y := cy - 3; y <= cy+3; y++ {
+				for z := cz - 3; z <= cz+3; z++ {
+					p := pk.Position{X: x, Y: y, Z: z}
+					if p == center {
+						continue
+					}
+					if st, ok := mgr.GetBlock(p, dimMinY); ok && block.IsAir(st) {
+						removed[p] = true
+					}
+				}
+			}
+		}
+		return removed
+	}
+
+	// 1) Generic explosion (nil override) -- the baseline.
+	baseline := run(nil)
+	if len(baseline) == 0 {
+		t.Fatal("baseline (nil override) removed no blocks (expected the resistance-weighted shell)")
+	}
+
+	// 2) Always-false callback -- must be byte-identical to nil (proves the override seam is
+	//    a strict superset: inactive == standard path).
+	passthrough := run(func(pos pk.Position) (float32, bool) { return 0, false })
+	if !reflect.DeepEqual(passthrough, baseline) {
+		t.Fatalf("always-false override != nil override (override seam is not passthrough when inactive)")
+	}
+
+	// 3) Override at the CENTER with resistance 1200 (obsidian-equivalent) -- rays die on the
+	//    center cell (the f14 budget loses (1200+0.3f)*0.3f ~= 360 at that single cell), so
+	//    FAR FEWER cells behind it end up in the affected set.
+	highAtCenter := run(func(pos pk.Position) (float32, bool) {
+		if pos == (pk.Position{X: cx, Y: cy, Z: cz}) {
+			return 1200.0, true
+		}
+		return 0, false
+	})
+	if len(highAtCenter) >= len(baseline) {
+		t.Errorf("override at center (1200) did not reduce the affected set: baseline=%d override=%d",
+			len(baseline), len(highAtCenter))
+	}
+
+	// 4) Override at the CENTER with resistance 0.001 -- rays still lose 0.0903 attenuation at
+	//    the center (vs baseline's 0 for an air cell), so the affected set is SMALLER than the
+	//    baseline but larger than the 1200 override. The override replaces the (zero) air
+	//    attenuation with a positive one -- the witness that the override REPLACES, not augments.
+	lowAtCenter := run(func(pos pk.Position) (float32, bool) {
+		if pos == (pk.Position{X: cx, Y: cy, Z: cz}) {
+			return 0.001, true
+		}
+		return 0, false
+	})
+	if len(lowAtCenter) > len(baseline) {
+		t.Errorf("override at center (0.001) on an AIR cell should not expand the baseline set (it ADDS attenuation, not removes it): baseline=%d override=%d",
+			len(baseline), len(lowAtCenter))
+	}
+	if len(lowAtCenter) <= len(highAtCenter) {
+		t.Errorf("override at center ordering inverted: high=%d should be < low=%d", len(highAtCenter), len(lowAtCenter))
+	}
+
+	// 5) Override at a NON-center position -- proves the seam selects per-position, not just at
+	//    the blast center. We use a position that's certainly going to be in the baseline set
+	//    (an immediate neighbor of the center, well within radius*2). Raising its resistance to
+	//    1200 must shrink the affected set.
+	const probeX, probeY, probeZ = cx + 1, cy, cz
+	probe := pk.Position{X: probeX, Y: probeY, Z: probeZ}
+	if !baseline[probe] {
+		t.Fatalf("baseline did not include probe cell %v; the per-position probe is inconclusive", probe)
+	}
+	highAtProbe := run(func(pos pk.Position) (float32, bool) {
+		if pos == probe {
+			return 1200.0, true
+		}
+		return 0, false
+	})
+	if len(highAtProbe) >= len(baseline) {
+		t.Errorf("override at %v (1200) did not reduce the affected set: baseline=%d override=%d",
+			probe, len(baseline), len(highAtProbe))
+	}
+
+	// 6) The override REPLACES the world resistance: water resistance (100) at the center cell
+	//    MUST differ from the nil path. The center is AIR (resistance 0); the override substitutes
+	//    100, which is far from 0 -- the affected set changes.
+	waterAtCenter := run(func(pos pk.Position) (float32, bool) {
+		if pos == (pk.Position{X: cx, Y: cy, Z: cz}) {
+			return block.ExplosionResistance["minecraft:water"], true
+		}
+		return 0, false
+	})
+	if reflect.DeepEqual(waterAtCenter, baseline) {
+		t.Fatalf("override at center (water resistance 100) on an AIR cell produced the same set as the nil baseline; the override is not being applied at the center")
 	}
 }
