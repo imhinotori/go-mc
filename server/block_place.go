@@ -76,6 +76,27 @@ func blockStateForItem(stack component.SlotData) (block.StateID, bool) {
 	return sid, true
 }
 
+// isConsumableBlockItem reports whether the item is a BlockItem that ALSO carries a CONSUMABLE
+// component -- the two vanilla `createBlockItemWithCustomItemName(block).food(...)` items whose
+// item name differs from their block name (so blockStateForItem cannot resolve the block from the
+// shared-name binding), and which therefore fall to BlockItem.useOn's CONSUMABLE-eat fallback when
+// their place() fails:
+//
+//	sweet_berries -> Blocks.SWEET_BERRY_BUSH, .food(Foods.SWEET_BERRIES)
+//	glow_berries  -> Blocks.CAVE_VINES,       .food(Foods.GLOW_BERRIES)
+//
+// (Verified in net.minecraft.world.item.Items via javap: both registered with
+// createBlockItemWithCustomItemName + Item.Properties.food.) Every other consumable is a plain
+// (non-block) Item whose default Item.useOn returns PASS -- it does NOT eat on the UseItemOn path,
+// so it must NOT be included here. CITE BlockItem.useOn CONSUMABLE fallback + Items registration.
+func isConsumableBlockItem(itemID int32) bool {
+	switch item.ID(itemID) {
+	case item.SweetBerries.ID, item.GlowBerries.ID:
+		return true
+	}
+	return false
+}
+
 // isReplaceableState ports BlockState.canBeReplaced() — the per-state `replaceable` material
 // flag that BlockBehaviour.canBeReplaced(state, ctx) consults (decompiled this session):
 //

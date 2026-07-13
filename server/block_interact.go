@@ -364,6 +364,21 @@ func (t *TickLoop) handleUseItemOn(p *tickPlayer, pkt pk.Packet) {
 
 	placeState, ok := blockStateForItem(held)
 	if !ok {
+		// BlockItem.useOn CONSUMABLE fallback (jar-verified): after place() returns a
+		// non-consumesAction result, `if (stack.has(CONSUMABLE)) return Item.use(level, player, hand)`.
+		// A consumable BLOCK item (sweet_berries -> sweet_berry_bush, glow_berries -> cave_vines,
+		// both `createBlockItemWithCustomItemName(block).food(...)`) whose place FAILS here (Sulfur has
+		// no item->block binding for the custom-name variants, so blockStateForItem misses) EATS
+		// instead. This is exactly the "right-click berries at a block: eat animation but no bush and
+		// no shrink" case -- the client predicts the eat, the server must actually run the use so it
+		// completes + shrinks. Only fires for a BlockItem carrying CONSUMABLE: a plain food item
+		// (cooked_beef) is a non-BlockItem whose Item.useOn returns PASS (no eat on the UseItemOn path;
+		// air-eating uses ServerboundUseItem). CITE BlockItem.useOn (temp/cache/26.2-inner.jar):
+		//   result = place(ctx); if (!result.consumesAction() && stack.has(DataComponents.CONSUMABLE))
+		//       return Item.use(level, player, hand); return result;
+		if isConsumableBlockItem(int32(held.ItemID)) {
+			t.useItemInHand(p, int32(hand))
+		}
 		return // empty hand / non-block item: PASS, no placement
 	}
 
