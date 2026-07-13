@@ -488,9 +488,12 @@ func (n *groundNavigation) tick(t *TickLoop, e *Entity) {
 	// move -> gravity -> drag ONCE in the exact vanilla order, and sets e.traveledThisTick so tickPhysics
 	// skips its redundant second pass for this mob. The move + gravity + drag are all inside travelInAir.
 	//
-	// Input is the walking-forward vector (0, 0, 1); travelInAir applies getFrictionInfluencedSpeed(f3)
+	// Input is the walking-forward vector (0, 0, n.speed); travelInAir applies getFrictionInfluencedSpeed(f3)
 	// internally (getSpeed = n.speed carried from MoveControl.setSpeed = speedModifier x MOVEMENT_SPEED),
-	// so the frictionSpeed scaling and yaw rotation now live in the 1:1 physics port, not here.
+	// so the frictionSpeed scaling and yaw rotation now live in the 1:1 physics port, not here. The z
+	// component is the Mob zza value — the input speed the MoveControl commits via Mob.setZza(f); it
+	// folds with frictionInfluencedSpeed's `getSpeed() * (0.216/f^3)` (cancelling to getSpeed() at the
+	// default f=0.6) into the faithful vanilla f*f double scaling per-tick.
 	//	[VERIFIED javap LivingEntity.travelInAir / handleRelativeFrictionAndCalculateMovement /
 	//	 getFrictionInfluencedSpeed; Entity.moveRelative/getInputVector -- see physics.go travelInAir.]
 
@@ -511,10 +514,19 @@ func (n *groundNavigation) tick(t *TickLoop, e *Entity) {
 		}
 	}
 
-	// travelInAir(input=(0,0,1), speed=n.speed, flyingSpeed=0.02): the ONE ordered travel. It reads e.yaw
-	// (turned toward the node above), does moveRelative + the swept-collision move + gravity + drag, and
-	// marks traveledThisTick so tickPhysics does not travel this mob a second time.
-	t.travelInAir(e, 0, 0, 1, float32(n.speed), navAirFlyingSpeed)
+	// travelInAir(input=(0,0,n.speed), speed=n.speed, flyingSpeed=0.02): the ONE ordered travel.
+	// It reads e.yaw (turned toward the node above), does moveRelative + the swept-collision move +
+	// gravity + drag, and marks traveledThisTick so tickPhysics does not travel this mob a second time.
+	//
+	// Input z is the Mob zza value (net.minecraft.world.entity.Mob.setZza(f) — javap, this session):
+	// MoveControl.tick MOVE_TO computes f = speedModifier x getAttributeValue(MOVEMENT_SPEED) and calls
+	// mob.setSpeed(f), which on the jar delegates to LivingEntity.setSpeed(f) AND Mob.setZza(f).
+	// LivingEntity.travelInAir(travelVector) then moveRelative(fricSpeed, travelVector) where
+	// travelVector = (xxa, yya, zza). Both zza and fricSpeed (= getFrictionInfluencedSpeed(f3), which
+	// carries getSpeed() = f at the default 0.6 block friction) are f, so the velocity applied per
+	// tick is f x f — the faithful vanilla double scaling the regression pins. (Pre-fix this branch
+	// passed zza = 1 as a constant, dropping the second f and accelerating a pig 4x too fast.)
+	t.travelInAir(e, 0, 0, float32(n.speed), float32(n.speed), navAirFlyingSpeed)
 	e.traveledThisTick = true
 }
 
