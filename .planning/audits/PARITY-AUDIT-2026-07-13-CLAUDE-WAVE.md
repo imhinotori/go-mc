@@ -12,8 +12,8 @@ findings:
 
 # Auditoría de paridad — ola Claude del 13-07-2026
 
-**Oracle:** `temp/cache/26.2-inner.jar` mediante `javap -p -c` y los reportes datagen 26.2.  
-**Método:** diff completo de siete commits, revisión de call chains, contraste de bytecode/codecs y gates dirigidos.  
+**Oracle:** `temp/cache/26.2-inner.jar` mediante `javap -p -c` y los reportes datagen 26.2.
+**Método:** diff completo de siete commits, revisión de call chains, contraste de bytecode/codecs y gates dirigidos.
 **Veredicto:** hay progreso real en mining speed, respawn anchor y caches transparentes, pero la ola no justifica mover la barra. El batching de relight introduce un P0 de concurrencia y las dos features de gameplay continúan parciales en caminos observables.
 
 ## Barra
@@ -115,4 +115,3 @@ Los gates verdes no contradicen los hallazgos: la suite no contiene un test del 
 3. Implementar el calculador acuático del respawn anchor.
 4. Cablear off-hand en la interacción del anchor.
 5. Reemplazar/justificar los budgets wall-clock con scheduling determinista.
-
