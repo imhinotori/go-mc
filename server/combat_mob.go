@@ -59,6 +59,17 @@ func (t *TickLoop) applyDamageEntity(e *Entity, src damageSource, amount float32
 		return
 	}
 
+	// BAT (Bat.hurtServer, VERIFIED javap this task): a hit WAKES a resting bat BEFORE the shared pipeline.
+	// The vanilla override is `if (isInvulnerableTo(...)) return false; if (isResting()) setResting(false);
+	// super.hurtServer(...)` (bytecode: isInvulnerableTo ifeq 11 -> iconst_0 ireturn; isResting ifeq 23 ->
+	// setResting(false); super.hurtServer). isInvulnerableTo maps to the isDeadOrDying (health<=0) guard
+	// above (the v1 reduction), so the wake sits AFTER it and BEFORE super, matching order. Gated on
+	// e.isBat so every other mob is a zero-cost skip (the pig oracle is untouched); the wake itself draws
+	// no RNG. Cite Bat.hurtServer.
+	if e.isBat && batIsResting(e) {
+		batSetResting(e, false)
+	}
+
 	// ARMADILLO (Armadillo.hurtServer, VERIFIED javap this task): a ROLLED-UP (scared) armadillo halves
 	// incoming damage BEFORE the shared pipeline -- `if (isScared()) amount = (amount - 1.0F) / 2.0F;`
 	// then super.hurtServer. The bytecode is float32: fload_3 fconst_1 fsub fconst_2 fdiv fstore_3, so the

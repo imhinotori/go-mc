@@ -74,6 +74,32 @@ func TestBatWakesOnNearbyPlayer(t *testing.T) {
 	}
 }
 
+// TestBatWakesOnHurt: a RESTING bat WAKES (setResting(false)) when damaged, BEFORE the shared damage
+// pipeline (Bat.hurtServer: if (isResting()) setResting(false)). The bat still takes the damage. A hit
+// on an already-flying bat leaves it flying. The wake draws no RNG.
+func TestBatWakesOnHurt(t *testing.T) {
+	loop, floorY := batLoop(t)
+	b := loop.spawnBat(8.5, float64(floorY+3), 8.5)
+	if !b.batResting {
+		t.Fatal("precondition: bat should spawn resting")
+	}
+	hp0 := b.health
+	loop.applyDamageEntity(b, damageSourcePlayerAttack(9001), 2.0)
+	if b.batResting {
+		t.Fatal("a resting bat did not wake when hurt (Bat.hurtServer setResting(false))")
+	}
+	if b.health >= hp0 {
+		t.Fatalf("bat took no damage: health %v -> %v (the wake must not swallow the hit)", hp0, b.health)
+	}
+	// An already-flying bat that is hurt stays flying (no toggle back).
+	b2 := loop.spawnBat(4.5, float64(floorY+3), 4.5)
+	b2.batResting = false
+	loop.applyDamageEntity(b2, damageSourcePlayerAttack(9002), 1.0)
+	if b2.batResting {
+		t.Fatal("hurting a flying bat must not set it resting")
+	}
+}
+
 // TestBatRestingSnapAndFlyDrift: the physics + aiStep resting/flying toggle. A resting bat is snapped to
 // hang (y = floor(y)+1 - height) with zero velocity; once flying it picks a drift target and steers its
 // deltaMovement (a non-zero kick), and never takes fall damage.
