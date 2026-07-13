@@ -35,10 +35,12 @@ import (
 //	}
 //
 // RNG (task-confirmed, pig oracle UNAFFECTED): the harvest draws are level.getRandom() draws (the
-// loot roll's set_count uniform + the sound pitch nextFloat), NOT a per-entity/pig stream. Sulfur
-// uses the same non-gameplay source the existing block-break drop path uses (math/rand/v2 for the
-// loot seed + popResource jitter; the ClientboundSound seed is the dedicated sound-seed generator) --
-// so no pig per-entity RNG stream is touched. The AGE gate is `age <= 1` (harvest at age 2 and 3).
+// loot roll's set_count uniform + the sound pitch nextFloat + the popResource jitter nextDoubles), NOT
+// a per-entity/pig stream. Sulfur reuses the per-region levelRandom (Level.getRandom analogue, the
+// same non-gameplay source the bone-meal/composter/anvil/... paths already draw from) for the roll +
+// jitter + pitch; the ClientboundSound wire seed is the dedicated sound-seed generator (rand.Int64 --
+// NEVER reseeded onto the levelRandom, so it cannot perturb the stream the pig oracle pins). The AGE
+// gate is `age <= 1` (harvest at age 2 and 3).
 
 // sweetBerryHarvestTable is BuiltInLootTables.HARVEST_SWEET_BERRY_BUSH.
 const sweetBerryHarvestTable = "minecraft:harvest/sweet_berry_bush"
@@ -71,22 +73,26 @@ func (t *TickLoop) harvestSweetBerryBush(p *tickPlayer, pos pk.Position, state b
 	// dropFromBlockInteractLootTable(HARVEST_SWEET_BERRY_BUSH, state, be=null-ish, tool=null,
 	// interactingEntity=player, popResource per drop). The BLOCK_STATE param carries the clicked
 	// bush's AGE so the loot table's pool-1 {age:"3"} condition resolves (age 3 -> +1 guaranteed berry;
-	// age 2 -> only the uniform(1,2) pool). The per-roll seed is a fresh level-random draw (the same
-	// non-gameplay source spawnBlockDrop uses), so the pig per-entity RNG stream is untouched.
-	seed := rand.Int64()
-	ctx := loot.NewBlockInteractLootContext(seed, "minecraft:sweet_berry_bush", map[string]string{"age": strconv.Itoa(age)})
+	// age 2 -> only the uniform(1,2) pool). The roll draws from the region's levelRandom
+	// (Level.getRandom analogue) -- the SAME non-gameplay stream the rest of the region's draws come
+	// from, so the pig per-entity RNG stream is untouched (the harvest handler NEVER seeds its own RNG;
+	// the loot engine reads the rng through the context's Random() getter, and the Roll `seed`
+	// argument is IGNORED when ctx is non-nil).
+	rng := t.cur().levelRandom
+	ctx := loot.NewBlockInteractLootContextWithSource(rng, "minecraft:sweet_berry_bush", map[string]string{"age": strconv.Itoa(age)})
 	tbl, err := loot.LoadTable(sweetBerryHarvestTable)
 	if err == nil {
-		drops := loot.Roll(tbl, seed, ctx)
+		drops := loot.Roll(tbl, 0, ctx)
 		for _, drop := range drops {
 			if drop.Count <= 0 {
 				continue
 			}
 			// Block.popResource: block center + per-axis Mth.nextDouble(-0.25,0.25) jitter, Y offset down
-			// by ITEM.getHeight()/2 (0.125). Reuses the block-break popResource geometry (block_drop.go).
-			x := float64(pos.X) + 0.5 + mthNextDouble(-itemSpawnJitter, itemSpawnJitter)
-			y := float64(pos.Y) + 0.5 + mthNextDouble(-itemSpawnJitter, itemSpawnJitter) - itemEntityHalfHeight
-			z := float64(pos.Z) + 0.5 + mthNextDouble(-itemSpawnJitter, itemSpawnJitter)
+			// by ITEM.getHeight()/2 (0.125). Reuses the block-break popResource geometry (block_drop.go);
+			// the jitter draws come from the same levelRandom (Level.getRandom analogue) as the roll.
+			x := float64(pos.X) + 0.5 + rng.NextDouble()*(2*itemSpawnJitter) - itemSpawnJitter
+			y := float64(pos.Y) + 0.5 + rng.NextDouble()*(2*itemSpawnJitter) - itemSpawnJitter - itemEntityHalfHeight
+			z := float64(pos.Z) + 0.5 + rng.NextDouble()*(2*itemSpawnJitter) - itemSpawnJitter
 			if t.cur() != nil && t.idAlloc != nil {
 				ie := NewItemEntity(t.idAlloc.AllocID(), x, y, z, drop)
 				t.cur().entities.add(ie)
@@ -95,10 +101,12 @@ func (t *TickLoop) harvestSweetBerryBush(p *tickPlayer, pos pk.Position, state b
 	}
 
 	// sl.playSound(null, pos, SWEET_BERRY_BUSH_PICK_BERRIES, BLOCKS, 1.0F, 0.8F + random.nextFloat()*0.4F).
-	// The pitch draws level.getRandom().nextFloat(); mirror it with the same non-gameplay source the
-	// rest of this handler uses (does not perturb a pig stream). The ClientboundSound wire seed is the
-	// dedicated sound-seed generator (rand.Int64() here), matching Level.soundSeedGenerator.
-	pitch := 0.8 + rand.Float32()*0.4
+	// The pitch draws level.getRandom().nextFloat(); mirror it with the same levelRandom the rest of
+	// this handler uses. The ClientboundSound wire seed is the dedicated sound-seed generator
+	// (rand.Int64() -- NOT the levelRandom), matching Level.soundSeedGenerator; a single draw off
+	// math/rand/v2 cannot perturb any gameplay stream (the per-tick sound seed is intentionally NOT
+	// reseeded onto the levelRandom, so it never perturbs the pig oracle).
+	pitch := 0.8 + rng.NextFloat()*0.4
 	t.playSound(sweetBerryPickSoundID, soundSourceBlocks,
 		float64(pos.X)+0.5, float64(pos.Y)+0.5, float64(pos.Z)+0.5, 1.0, pitch, rand.Int64())
 

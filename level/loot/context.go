@@ -212,6 +212,24 @@ func NewBlockInteractLootContext(seed int64, blockID string, props map[string]st
 	return c
 }
 
+// NewBlockInteractLootContextWithSource builds a BLOCK-INTERACT LootContext over a caller-supplied
+// RandomSource (the vanilla withOptionalRandomSource path) so the harvest handler can share the
+// level's levelRandom (ServerLevel.getRandom) instead of seeding a fresh per-roll LCG -- the draw
+// sequence stays byte-in-lockstep with the rest of the region's level-random draws (so a future
+// parity oracle pinning that stream is preserved). Luck stays 0 (block-interact harvest is a
+// vanilla luck-free path). The loot engine reads the rng through ctx.Random(); the Roll helper's
+// `seed` argument is IGNORED when ctx is non-nil (see roll.go), so callers can pass any value (the
+// zero in tests is the convention).
+//
+// Source: javap Block.dropFromBlockInteractLootTable (withParameter(BLOCK_STATE)) + the
+// LootContext$Builder.withOptionalRandomSource overload that accepts an existing RandomSource.
+func NewBlockInteractLootContextWithSource(rng levelgen.RandomSource, blockID string, props map[string]string) *LootContext {
+	c := NewLootContextWithSource(rng, 0)
+	c.BlockID = blockID
+	c.BlockProperties = props
+	return c
+}
+
 // NewLootContext mirrors LootContext$Builder.withOptionalRandomSeed(seed).create():
 // `if (seed != 0L) random = RandomSource.create(seed)`, and RandomSource.create(long)
 // is `new LegacyRandomSource(seed)` (the java.util.Random LCG). A zero seed in
