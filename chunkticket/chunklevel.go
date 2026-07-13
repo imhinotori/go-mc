@@ -39,12 +39,12 @@ func (s FullChunkStatus) IsOrAfter(o FullChunkStatus) bool { return s >= o }
 //	FULL_CHUNK_LEVEL     = byStatus(FullChunkStatus.FULL)          = 33
 //	BLOCK_TICKING_LEVEL  = byStatus(FullChunkStatus.BLOCK_TICKING) = 32
 //	ENTITY_TICKING_LEVEL = byStatus(FullChunkStatus.ENTITY_TICKING)= 31
-//	RADIUS_AROUND_FULL_CHUNK = FULL_CHUNK_STEP.accumulatedDependencies().getRadius() = 8
-//	MAX_LEVEL = FULL_CHUNK_LEVEL(33) + RADIUS_AROUND_FULL_CHUNK(8) = 41
+//	RADIUS_AROUND_FULL_CHUNK = FULL_CHUNK_STEP.accumulatedDependencies().getRadius() = 11
+//	MAX_LEVEL = FULL_CHUNK_LEVEL(33) + RADIUS_AROUND_FULL_CHUNK(11) = 44
 //
 // RADIUS_AROUND_FULL_CHUNK is derived at runtime in Java from the ChunkPyramid
 // GENERATION_PYRAMID step to FULL. The full ChunkPyramid/ChunkStep/ChunkDependencies
-// dependency graph is not yet ported, so the accumulated radius (8) is pinned here as
+// dependency graph is not yet ported, so the accumulated radius (11) is pinned here as
 // the bytecode-verified vanilla constant. STUB (cited): ChunkLevel.<clinit>
 // RADIUS_AROUND_FULL_CHUNK = FULL_CHUNK_STEP.accumulatedDependencies().getRadius().
 const (
@@ -52,8 +52,8 @@ const (
 	BlockTickingLevel  = 32
 	EntityTickingLevel = 31
 
-	RadiusAroundFullChunk = 8
-	MaxLevel              = FullChunkLevel + RadiusAroundFullChunk // 41
+	RadiusAroundFullChunk = 11
+	MaxLevel              = FullChunkLevel + RadiusAroundFullChunk // 44
 )
 
 // FullStatus maps a ticket level to a FullChunkStatus.
@@ -82,7 +82,7 @@ func FullStatus(lvl int) FullChunkStatus {
 //	ENTITY_TICKING -> 31
 //	BLOCK_TICKING  -> 32
 //	FULL           -> 33
-//	INACCESSIBLE   -> MAX_LEVEL (41)
+//	INACCESSIBLE   -> MAX_LEVEL (44)
 func ByStatus(s FullChunkStatus) int {
 	switch s {
 	case EntityTicking:
@@ -104,7 +104,7 @@ func IsEntityTicking(lvl int) bool { return lvl <= EntityTickingLevel }
 // IsBlockTicking mirrors ChunkLevel.isBlockTicking: level <= BLOCK_TICKING_LEVEL(32).
 func IsBlockTicking(lvl int) bool { return lvl <= BlockTickingLevel }
 
-// IsLoaded mirrors ChunkLevel.isLoaded: level <= MAX_LEVEL(41).
+// IsLoaded mirrors ChunkLevel.isLoaded: level <= MAX_LEVEL(44).
 func IsLoaded(lvl int) bool { return lvl <= MaxLevel }
 
 // generationStatusByDistance is the ChunkStatus for a chunk at a given Chebyshev
@@ -114,17 +114,20 @@ func IsLoaded(lvl int) bool { return lvl <= MaxLevel }
 // (distance 0 is FULL itself). CITE: ChunkLevel.getStatusAroundFullChunk +
 // ChunkPyramid.GENERATION_PYRAMID. STUB (cited): the exact ChunkDependencies radius
 // list is reproduced from the stable GENERATION_PYRAMID rather than recomputed from a
-// full ChunkStep port. Index 0 => FULL, 1..8 => the surrounding generation rings.
+// full ChunkStep port. Index 0 => FULL, 1..11 => the surrounding generation rings.
 var generationStatusByDistance = []level.ChunkStatus{
 	level.StatusFull,            // 0
-	level.StatusFeatures,        // 1
-	level.StatusFeatures,        // 2
-	level.StatusLight,           // 3
-	level.StatusSurface,         // 4
-	level.StatusSurface,         // 5
-	level.StatusNoise,           // 6
-	level.StatusNoise,           // 7
+	level.StatusInitializeLight, // 1
+	level.StatusCarvers,         // 2
+	level.StatusBiomes,          // 3
+	level.StatusStructureStarts, // 4
+	level.StatusStructureStarts, // 5
+	level.StatusStructureStarts, // 6
+	level.StatusStructureStarts, // 7
 	level.StatusStructureStarts, // 8
+	level.StatusStructureStarts, // 9
+	level.StatusStructureStarts, // 10
+	level.StatusStructureStarts, // 11
 }
 
 // GenerationStatus maps a ticket level to the ChunkStatus a chunk at that level should

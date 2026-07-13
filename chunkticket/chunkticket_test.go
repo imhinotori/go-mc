@@ -12,8 +12,11 @@ func TestChunkLevelConstants(t *testing.T) {
 	if FullChunkLevel != 33 || BlockTickingLevel != 32 || EntityTickingLevel != 31 {
 		t.Fatalf("level constants wrong: %d %d %d", FullChunkLevel, BlockTickingLevel, EntityTickingLevel)
 	}
-	if MaxLevel != 41 {
-		t.Fatalf("MaxLevel = %d, want 41", MaxLevel)
+	if RadiusAroundFullChunk != 11 {
+		t.Fatalf("RadiusAroundFullChunk = %d, want 11", RadiusAroundFullChunk)
+	}
+	if MaxLevel != 44 {
+		t.Fatalf("MaxLevel = %d, want 44", MaxLevel)
 	}
 	cases := []struct {
 		lvl  int
@@ -22,7 +25,7 @@ func TestChunkLevelConstants(t *testing.T) {
 		{0, EntityTicking}, {31, EntityTicking},
 		{32, BlockTicking},
 		{33, Full},
-		{34, Inaccessible}, {41, Inaccessible},
+		{34, Inaccessible}, {44, Inaccessible},
 	}
 	for _, c := range cases {
 		if got := FullStatus(c.lvl); got != c.want {
@@ -30,7 +33,7 @@ func TestChunkLevelConstants(t *testing.T) {
 		}
 	}
 	// byStatus round trip. CITE: ChunkLevel.byStatus(FullChunkStatus).
-	if ByStatus(EntityTicking) != 31 || ByStatus(BlockTicking) != 32 || ByStatus(Full) != 33 || ByStatus(Inaccessible) != 41 {
+	if ByStatus(EntityTicking) != 31 || ByStatus(BlockTicking) != 32 || ByStatus(Full) != 33 || ByStatus(Inaccessible) != 44 {
 		t.Fatal("byStatus mapping wrong")
 	}
 	if !IsEntityTicking(31) || IsEntityTicking(32) {
@@ -39,7 +42,7 @@ func TestChunkLevelConstants(t *testing.T) {
 	if !IsBlockTicking(32) || IsBlockTicking(33) {
 		t.Error("isBlockTicking threshold wrong")
 	}
-	if !IsLoaded(41) || IsLoaded(42) {
+	if !IsLoaded(44) || IsLoaded(45) {
 		t.Error("isLoaded threshold wrong")
 	}
 }
@@ -220,20 +223,49 @@ func TestSimulationVsLoading(t *testing.T) {
 	}
 }
 
-// TestGenerationStatusMapping pins the level -> ChunkStatus mapping.
-// CITE: ChunkLevel.generationStatus / getStatusAroundFullChunk.
+// TestGenerationStatusMapping pins the level -> ChunkStatus mapping for every distance
+// from 0..RADIUS_AROUND_FULL_CHUNK(11) and the not-generated boundary beyond it.
+// CITE: ChunkLevel.generationStatus / getStatusAroundFullChunk +
+// ChunkPyramid.GENERATION_PYRAMID accumulated-dependency table.
 func TestGenerationStatusMapping(t *testing.T) {
+	// distance 0 (level <= 33) => FULL.
 	if s, ok := GenerationStatus(33); !ok || s != level.StatusFull {
 		t.Errorf("gen status @33 = %v ok=%v, want full", s, ok)
 	}
 	if s, ok := GenerationStatus(30); !ok || s != level.StatusFull {
 		t.Errorf("gen status @30 (<=full) = %v ok=%v, want full", s, ok)
 	}
-	if s, ok := GenerationStatus(34); !ok || s != level.StatusFeatures {
-		t.Errorf("gen status @34 (dist1) = %v ok=%v, want features", s, ok)
+	// distance 1..11 => the accumulated-dependency table.
+	distCases := []struct {
+		dist int
+		want level.ChunkStatus
+	}{
+		{1, level.StatusInitializeLight},
+		{2, level.StatusCarvers},
+		{3, level.StatusBiomes},
+		{4, level.StatusStructureStarts},
+		{5, level.StatusStructureStarts},
+		{6, level.StatusStructureStarts},
+		{7, level.StatusStructureStarts},
+		{8, level.StatusStructureStarts},
+		{9, level.StatusStructureStarts},
+		{10, level.StatusStructureStarts},
+		{11, level.StatusStructureStarts},
 	}
-	if _, ok := GenerationStatus(42); ok { // dist 9 > RADIUS 8
-		t.Error("gen status @42 should be not-generated")
+	for _, c := range distCases {
+		lvl := FullChunkLevel + c.dist
+		s, ok := GenerationStatus(lvl)
+		if !ok || s != c.want {
+			t.Errorf("gen status @%d (dist=%d) = %v ok=%v, want %v", lvl, c.dist, s, ok, c.want)
+		}
+	}
+	// distance > RADIUS_AROUND_FULL_CHUNK (11) => not generated. The boundary is
+	// level 45 (dist 12); level 44 (dist 11) is the last generated ring.
+	if s, ok := GenerationStatus(MaxLevel); !ok || s != level.StatusStructureStarts {
+		t.Errorf("gen status @%d (dist=%d, boundary) = %v ok=%v, want structure_starts", MaxLevel, RadiusAroundFullChunk, s, ok)
+	}
+	if _, ok := GenerationStatus(MaxLevel + 1); ok { // dist 12 > RADIUS 11
+		t.Errorf("gen status @%d (dist=%d) should be not-generated", MaxLevel+1, RadiusAroundFullChunk+1)
 	}
 }
 
