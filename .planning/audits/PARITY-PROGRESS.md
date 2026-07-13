@@ -1,7 +1,7 @@
 # Progress de paridad 1:1 — Minecraft Server 26.2
 
 **Actualizado:** 2026-07-12
-**Commit:** `c50f519c`
+**Commit auditado:** `6d342091`
 **Referencia:** `temp/cache/26.2-inner.jar`
 **Tipo de medición:** estimación ponderada por dominios observables
 **Margen de incertidumbre:** ±4 puntos porcentuales; gamerules, serverbound y las cuatro capas principales de persistencia ya tienen censos de campo/ruta
@@ -106,6 +106,17 @@ Informe completo: [`PARITY-AUDIT-2026-07-12-CLAUDE-WAVE.md`](PARITY-AUDIT-2026-0
 - Aún abiertos: orden/gating interno de block entities, resto de `/execute` y equivalencia integral del pool/worldgen.
 - La barra actual es 62% ±4; este bloque conserva la auditoría histórica y enlaza sus remediaciones posteriores.
 - Baseline: el timeout estándar de 10 minutos agotó `server/world`; el rerun limpio `go test ./server ./world -timeout 20m` terminó verde.
+
+## Auditoría Claude `ce8c9cd2..6d342091` — 2026-07-13
+
+Informe completo: [`PARITY-AUDIT-2026-07-13-CLAUDE-WAVE.md`](PARITY-AUDIT-2026-07-13-CLAUDE-WAVE.md).
+
+- Progreso real parcial: mining speed/correct-for-drops, carga/spawn/comparator básico del respawn anchor y dos caches transparentes.
+- P0 nuevo: `dirtyRelight` es un mapa global sin sincronización alcanzable desde el fan-out N=2.
+- P1: relight budget procesa un dirty column por tick en orden de mapa; defaults/durability/creative del componente Tool divergen.
+- P1: respawn anchor ignora el calculador acuático y el guard de glowstone en off-hand.
+- El cache `SpreadContext` parece fiel, pero el budget wall-clock de fluidos sigue haciendo el timeline dependiente de la máquina.
+- La barra se conserva en **62% ±4 (61,60% ponderado)** hasta cerrar el P0 y los caminos observables faltantes.
 
 ## Resultados multiworker incorporados
 
