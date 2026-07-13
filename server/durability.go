@@ -127,12 +127,8 @@ func (t *TickLoop) stackHurtAndBreak(s component.SlotData, amount int, creative 
 // a tool loses per block mined). Returns (value, present) — present=false when the stack carries no TOOL
 // component (a non-tool item, which never wears on a mine). Cite Item.mineBlock (tool.damagePerBlock()).
 func stackToolDamagePerBlock(s component.SlotData) (int, bool) {
-	if stackEmpty(s) {
-		return 0, false
-	}
-	p := component.DecodePatch(s)
-	if c, ok := p.Get(compTool).(*component.Tool); ok {
-		return int(c.DamagePerBlock), true
+	if tool, ok := effectiveToolForStack(s); ok {
+		return tool.DamagePerBlock, true
 	}
 	return 0, false
 }

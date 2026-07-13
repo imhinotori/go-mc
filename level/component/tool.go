@@ -56,3 +56,18 @@ type ToolData struct {
 	DamagePerBlock             int
 	CanDestroyBlocksInCreative bool
 }
+
+// The 26.2 item reports omit Tool.CODEC scalar fields when they equal their codec
+// defaults. The generated table predates that distinction and emitted Go zero values;
+// restore the actual codec defaults for those omitted ordinary-tool entries. Explicit
+// sword/mace/trident values are damage 2 / creative false and therefore remain unchanged.
+func init() {
+	for id, tool := range DefaultTool {
+		if tool.DamagePerBlock != 0 {
+			continue
+		}
+		tool.DamagePerBlock = 1
+		tool.CanDestroyBlocksInCreative = true
+		DefaultTool[id] = tool
+	}
+}

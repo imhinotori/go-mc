@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/imhinotori/sulfur/data/item"
+	"github.com/imhinotori/sulfur/data/packetid"
 	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/level/component"
 	pk "github.com/imhinotori/sulfur/net/packet"
@@ -13,6 +14,56 @@ import (
 // its DEFAULT minecraft:tool component from component.DefaultTool.
 func plainTool(itemID int32) component.SlotData {
 	return component.SlotData{Count: 1, ItemID: pk.VarInt(itemID)}
+}
+
+func TestEffectiveToolHonorsDefaultPatchAndRemoval(t *testing.T) {
+	pick := plainTool(int32(item.DiamondPickaxe.ID))
+	tool, ok := effectiveToolForStack(pick)
+	if !ok || tool.DamagePerBlock != 1 || !tool.CanDestroyBlocksInCreative {
+		t.Fatalf("default pickaxe tool = (%v,%v), want damage=1 creative=true", tool, ok)
+	}
+
+	removed := component.Patch{Removed: []int32{compTool}}.ApplyTo(pick)
+	if _, ok := effectiveToolForStack(removed); ok {
+		t.Fatal("removed minecraft:tool fell back to item default")
+	}
+
+	replacement := component.Patch{}
+	replacement.Set(compTool, &component.Tool{DamagePerBlock: 7, CanDestroyBlocksInCreative: false})
+	tool, ok = effectiveToolForStack(replacement.ApplyTo(pick))
+	if !ok || tool.DamagePerBlock != 7 || tool.CanDestroyBlocksInCreative {
+		t.Fatalf("replacement tool = (%v,%v), want damage=7 creative=false", tool, ok)
+	}
+}
+
+func TestCreativeToolDestroyPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		itemID     int32
+		wantBroken bool
+	}{
+		{name: "sword restricted", itemID: int32(item.DiamondSword.ID), wantBroken: false},
+		{name: "pickaxe allowed", itemID: int32(item.DiamondPickaxe.ID), wantBroken: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loop, mgr := newBlockLoop()
+			p := toolPlayer(loop, plainTool(tc.itemID))
+			p.gameMode = gameModeCreative
+			target := pk.Position{X: 1, Y: 64, Z: 1}
+			mgr.SetBlock(target, block.ToStateID[block.Stone{}], dimMinY)
+			startDig(loop, p, target, 1)
+			state, ok := mgr.GetBlock(target, dimMinY)
+			broken := ok && block.IsAir(state)
+			if broken != tc.wantBroken {
+				t.Fatalf("broken = %v, want %v (state=%v ok=%v)", broken, tc.wantBroken, state, ok)
+			}
+			if !tc.wantBroken {
+				if got := countID(drainPackets(p.client), packetid.ClientboundBlockUpdate); got != 1 {
+					t.Fatalf("restricted creative break sent %d BlockUpdates, want 1", got)
+				}
+			}
+		})
+	}
 }
 
 // TestToolMiningSpeedShovelDirt verifies the base ItemStack.getDestroySpeed(state) is now the held
@@ -42,7 +93,8 @@ func TestToolMiningSpeedShovelDirt(t *testing.T) {
 
 // TestToolDestroyProgressFasterWithTool verifies the composed getDestroyProgress: a diamond_shovel
 // digs dirt 8x faster than a bare hand (both correct-for-drops -> 30 divisor). dirt hardness 0.5.
-//   bare hand: 1.0/0.5/30 = 0.06666667 ; shovel: 8.0/0.5/30 = 0.53333336.
+//
+//	bare hand: 1.0/0.5/30 = 0.06666667 ; shovel: 8.0/0.5/30 = 0.53333336.
 func TestToolDestroyProgressFasterWithTool(t *testing.T) {
 	loop, _ := newBlockLoop()
 	dirt := block.ToStateID[block.Dirt{}]

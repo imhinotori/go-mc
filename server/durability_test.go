@@ -3,6 +3,7 @@ package server
 import (
 	"testing"
 
+	"github.com/imhinotori/sulfur/data/item"
 	"github.com/imhinotori/sulfur/level/component"
 )
 
@@ -85,5 +86,16 @@ func TestStackToolDamagePerBlock(t *testing.T) {
 	}
 	if _, ok := stackToolDamagePerBlock(component.SlotData{ItemID: 1, Count: 1}); ok {
 		t.Fatalf("a non-tool item must have no tool damage_per_block")
+	}
+}
+
+func TestStackToolDamagePerBlockUsesItemDefault(t *testing.T) {
+	pick := plainTool(int32(item.DiamondPickaxe.ID))
+	if dpb, ok := stackToolDamagePerBlock(pick); !ok || dpb != 1 {
+		t.Fatalf("default pickaxe damage_per_block = (%d,%v), want (1,true)", dpb, ok)
+	}
+	sword := plainTool(int32(item.DiamondSword.ID))
+	if dpb, ok := stackToolDamagePerBlock(sword); !ok || dpb != 2 {
+		t.Fatalf("default sword damage_per_block = (%d,%v), want (2,true)", dpb, ok)
 	}
 }

@@ -192,12 +192,22 @@ func (t *TickLoop) heldEffectiveTool(p *tickPlayer) (component.ToolData, bool) {
 	}
 	inv := ensureInventory(p)
 	s := inv.get(heldWindowSlot(inv.heldSlot))
+	return effectiveToolForStack(s)
+}
+
+func effectiveToolForStack(s component.SlotData) (component.ToolData, bool) {
 	if stackEmpty(s) {
 		return component.ToolData{}, false
 	}
 	// A client-sent Tool component PATCH replaces the default entirely (component-granular override).
-	if wt, ok := component.DecodePatch(s).Get(compTool).(*component.Tool); ok {
+	patch := component.DecodePatch(s)
+	if wt, ok := patch.Get(compTool).(*component.Tool); ok {
 		return wireToolToData(wt), true
+	}
+	for _, removed := range patch.Removed {
+		if removed == compTool {
+			return component.ToolData{}, false
+		}
 	}
 	// Otherwise the item's registration default (the common case: a plain, unedited tool).
 	if int(s.ItemID) >= 0 && int(s.ItemID) < len(registryid.Item) {
@@ -206,6 +216,14 @@ func (t *TickLoop) heldEffectiveTool(p *tickPlayer) (component.ToolData, bool) {
 		}
 	}
 	return component.ToolData{}, false
+}
+
+func (t *TickLoop) heldCanDestroyBlock(p *tickPlayer) bool {
+	if p == nil || p.gameMode != gameModeCreative {
+		return true
+	}
+	tool, ok := t.heldEffectiveTool(p)
+	return !ok || tool.CanDestroyBlocksInCreative
 }
 
 // heldToolMiningSpeed is ItemStack.getDestroySpeed(state): the held item's Tool.getMiningSpeed(state),
@@ -407,6 +425,10 @@ func (t *TickLoop) startDestroyBlock(p *tickPlayer, pos pk.Position, sequence in
 	// CREATIVE (abilities.instabuild): break on START immediately. hasInfiniteMaterials()/instabuild
 	// is gameMode==creative in v1. destroyAndAck "creative destroy".
 	if p.gameMode == gameModeCreative {
+		if !t.heldCanDestroyBlock(p) {
+			t.broadcastBlockUpdate(pos, t.digBlockState(p, pos))
+			return
+		}
 		t.destroyAndAck(p, pos, sequence)
 		return
 	}
