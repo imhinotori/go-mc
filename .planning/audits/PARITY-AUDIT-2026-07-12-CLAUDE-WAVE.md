@@ -110,7 +110,7 @@ El fan-out sólo snapshottea CREATURE y MONSTER; `spawnLiveCount` devuelve CREAT
 
 ### P1 — Persistencia del spawn desplaza coordenadas negativas
 
-**Parcialmente remediado en `e0fe1bfb` y `8b0ff692`.** X/Y/Z ahora se persisten con `floor` y `Initialized` acepta `[0,0,0]` como posición válida. El radio/orden reducido de búsqueda continúa abierto.
+**Remediado en `e0fe1bfb`, `8b0ff692` y `c50f519c`.** X/Y/Z se persisten con `floor`, `Initialized` acepta `[0,0,0]` y la búsqueda recorre las 121 posiciones de la espiral cuadrada vanilla de radio 5 en orden bytecode.
 
 **Evidencia:** `server/saveddata.go:131-134`, `cmd/sulfur/main.go:233-238`.
 

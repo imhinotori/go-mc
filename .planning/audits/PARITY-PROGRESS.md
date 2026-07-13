@@ -1,7 +1,7 @@
 # Progress de paridad 1:1 — Minecraft Server 26.2
 
 **Actualizado:** 2026-07-12
-**Commit:** `646aac05`
+**Commit:** `c50f519c`
 **Referencia:** `temp/cache/26.2-inner.jar`
 **Tipo de medición:** estimación ponderada por dominios observables
 **Margen de incertidumbre:** ±4 puntos porcentuales; gamerules, serverbound y las cuatro capas principales de persistencia ya tienen censos de campo/ruta
@@ -26,10 +26,10 @@ Este porcentaje NO significa que el 57% de las clases del JAR esté portado. Mid
 | Entidades, AI, Brain y spawning | 16% | 63% | 10,08 | Vibration y snapshot por categoría corregidos; AI/Brain, roster y superficie sculk siguen parciales |
 | Combate, efectos, proyectiles y enchants | 10% | 73% | 7,3 | Fall-per-packet y evento `HIT_GROUND` corregidos; effects/enchants/guards siguen incompletos |
 | Inventario, ítems, crafting y loot | 10% | 56% | 5,6 | Sweet berry conserva el stream RNG compartido; match_tool/components y acciones siguen parciales |
-| Persistencia integral | 7% | 47% | 3,29 | Spawn negativo y cero inicializado corregidos; búsqueda inicial y field-level siguen incompletos |
+| Persistencia integral | 7% | 48% | 3,36 | Spawn negativo/cero y espiral inicial 11×11 corregidos; field-level y otros formatos siguen incompletos |
 | Commands, advancements y gamerules | 5% | 58% | 2,9 | `/execute run` preserva source por fork; result/store/selectores/if blocks siguen parciales |
 | Región/concurrencia con semántica vanilla | 3% | 65% | 1,95 | Pool acotado pero sin equivalencia de order/backpressure; cross-region gameplay sigue divergente |
-| **Total ponderado** | **100%** | — | **61,53% ≈ 62%** | Siete gaps observables cerrados con regresiones; field parity y subsistemas amplios parciales aún limitan el avance |
+| **Total ponderado** | **100%** | — | **61,60% ≈ 62%** | Ocho gaps observables cerrados con regresiones; field parity y subsistemas amplios parciales aún limitan el avance |
 
 ## Contadores objetivos del snapshot
 
@@ -93,8 +93,9 @@ Estos avances mejoran dominios concretos, pero los censos mostraron que registro
 - `8b0ff692`: `Initialized` pasa a ser autoritativo y `[0,0,0]` es un spawn persistido válido.
 - `9227ff64`: cada fork de `/execute run` instala el source transformado completo y aísla siblings; para entidades genéricas enmascara el player executor heredado. Resultados enteros, `store`, selectores y `if blocks` siguen abiertos.
 - `646aac05`: sweet berry usa un único RNG de nivel para loot, jitter y pitch en el orden vanilla; el seed del paquete de sonido permanece independiente.
+- `c50f519c`: la búsqueda inicial de spawn recorre la espiral cuadrada 11×11 exacta (121 posiciones, radio 5, orden bytecode) y corta en el primer candidato válido.
 - Gates focalizados verdes en `chunkticket`, providers, loot, `cmd/sulfur` y `server`. El gate `-race` de spawning no estuvo disponible porque el entorno no tiene `CGO_ENABLED=1`.
-- La nueva barra es **62% ±4**: 61,53% ponderado, redondeado al entero más cercano.
+- La nueva barra es **62% ±4**: 61,60% ponderado, redondeado al entero más cercano.
 
 ## Auditoría multiagente de la ola Claude `eef1ee6b..42b58a21`
 
@@ -102,7 +103,7 @@ Informe completo: [`PARITY-AUDIT-2026-07-12-CLAUDE-WAVE.md`](PARITY-AUDIT-2026-0
 
 - Remediados: pérdida de neighbor requests, selector/timing de vibration, tabla ChunkLevel, spawn negativo/cero, RNG de berries, `HIT_GROUND`, snapshot por categoría y precisión float de providers.
 - Parcialmente remediado: `/execute` ya conserva el source stack por fork; integer result, `store`, selectores y `if blocks` permanecen abiertos.
-- Aún abiertos: búsqueda inicial de spawn radio/orden vanilla, orden/gating interno de block entities y equivalencia integral del pool/worldgen.
+- Aún abiertos: orden/gating interno de block entities, resto de `/execute` y equivalencia integral del pool/worldgen.
 - La barra actual es 62% ±4; este bloque conserva la auditoría histórica y enlaza sus remediaciones posteriores.
 - Baseline: el timeout estándar de 10 minutos agotó `server/world`; el rerun limpio `go test ./server ./world -timeout 20m` terminó verde.
 
