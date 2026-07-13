@@ -581,9 +581,9 @@ func main() {
 }
 
 // loadPersistedSpawn reads worldDir/level.dat and returns its stored world spawn iff the world was
-// already initialized (initialized=true) with a real spawn position. This is the boot-time gate that
-// mirrors vanilla MinecraftServer.setInitialSpawn's isInitialized() early-out: a world's spawn point
-// is computed ONCE at first-boot and fixed for the world's lifetime, never recomputed on later launches.
+// already initialized (initialized=true). This is the boot-time gate that mirrors vanilla
+// MinecraftServer.setInitialSpawn's isInitialized() early-out: a world's spawn point is computed
+// ONCE at first-boot and fixed for the world's lifetime, never recomputed on later launches.
 // Returns ok=false for a fresh/uninitialized/missing world so the caller runs the one-time climate search.
 func loadPersistedSpawn(worldDir string) (save.RespawnData262, bool) {
 	f, err := os.Open(filepath.Join(worldDir, "level.dat"))
@@ -598,10 +598,6 @@ func loadPersistedSpawn(worldDir string) (save.RespawnData262, bool) {
 	defer gz.Close()
 	lvl, err := save.ReadLevel262(gz)
 	if err != nil || !lvl.Data.Initialized {
-		return save.RespawnData262{}, false
-	}
-	// A zero Pos on an initialized world is not a real spawn (guard against a truncated/empty record).
-	if lvl.Data.Spawn.Pos == [3]int32{} {
 		return save.RespawnData262{}, false
 	}
 	return lvl.Data.Spawn, true
