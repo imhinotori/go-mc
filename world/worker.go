@@ -85,6 +85,11 @@ type Worker struct {
 // loop and a core for the scheduler/net goroutines), floored at 1. Matches the CLAUDE.md
 // "bounded, reusable goroutine pool ... min(16, cpu cores - 2)" guidance for async subsystems.
 func terrainWorkers() int {
+	if v := os.Getenv("SULFUR_GEN_WORKERS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 {
+			return n
+		}
+	}
 	n := runtime.NumCPU() - 2
 	if n < 1 {
 		n = 1
