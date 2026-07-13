@@ -34,9 +34,9 @@ func TestGameEventTagMembership(t *testing.T) {
 }
 
 // TestSensorBusVibrationActivatesAfterDelay: a STEP emitted 3 blocks from a sculk sensor (within its
-// radius 8) schedules a candidate on the sensor listener; the Ticker.tick ordering promotes the
-// candidate AND decrements travelTicks on the same tick (1:1 VibrationSystem.Ticker.tick), so
-// floor(distance)==3 decrements across 3 ticker calls deliver it, and the sensor activates with
+// radius 8) schedules a candidate on the sensor listener. The candidate cannot be selected until
+// gameTime advances; on the next tick promotion and the first travel decrement happen together.
+// floor(distance)==3 then delivers after three travel ticks, and the sensor activates with
 // POWER = getRedstoneStrengthForDistance(3, 8) == 10.
 func TestSensorBusVibrationActivatesAfterDelay(t *testing.T) {
 	loop, mgr := newSculkLoop()
@@ -55,8 +55,14 @@ func TestSensorBusVibrationActivatesAfterDelay(t *testing.T) {
 		t.Fatal("STEP in range did not schedule a candidate on the sensor listener")
 	}
 
-	// First Ticker tick promotes the candidate (travelTicks set to floor(3.0) = 3) and decrements
-	// it to 2 on the same tick; the sensor is not yet active.
+	// Same-gameTime ticker call cannot select the candidate.
+	loop.tickBlockVibrationListeners()
+	if !be.vibration.hasCandidate || be.vibration.hasCurrent || be.vibration.travelTicks != 0 {
+		t.Fatalf("same-tick candidate state = candidate:%v current:%v travel:%d, want pending/0", be.vibration.hasCandidate, be.vibration.hasCurrent, be.vibration.travelTicks)
+	}
+
+	// On the next game tick, promotion sets floor(3.0)=3 and immediately decrements to 2.
+	loop.gametime++
 	loop.tickBlockVibrationListeners()
 	if tt := be.vibration.travelTicks; tt != 2 {
 		t.Fatalf("travelTicks = %d, want 2 (promote sets travelTicks to 3, then immediate decrement to 2)", tt)
@@ -67,7 +73,9 @@ func TestSensorBusVibrationActivatesAfterDelay(t *testing.T) {
 	}
 
 	// Drain the remaining travel: 2 -> 1 -> deliver on the tick that brings it to 0.
+	loop.gametime++
 	loop.tickBlockVibrationListeners() // 2 -> 1
+	loop.gametime++
 	loop.tickBlockVibrationListeners() // 1 -> 0 -> deliver + activate
 
 	after, _ = mgr.GetBlock(sensorPos, dimMinY)

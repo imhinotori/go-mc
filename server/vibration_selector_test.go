@@ -34,3 +34,16 @@ func TestVibrationCandidateSelection(t *testing.T) {
 		})
 	}
 }
+
+func TestVibrationChosenCandidateRequiresEarlierTick(t *testing.T) {
+	data := &vibrationData{hasCandidate: true, candGameTime: 100}
+	if data.chosenCandidate(100) {
+		t.Fatal("candidate scheduled at current gameTime must remain pending")
+	}
+	if data.chosenCandidate(99) {
+		t.Fatal("future candidate must not be selected")
+	}
+	if !data.chosenCandidate(101) {
+		t.Fatal("candidate from an earlier gameTime must be selectable")
+	}
+}

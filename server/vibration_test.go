@@ -70,8 +70,13 @@ func TestVibrationWoolOccludesSignal(t *testing.T) {
 }
 
 // drainTravel runs the warden vibration ticker n times (each == one Ticker.tick: select/decrement/deliver).
+// Each iteration advances gametime by one tick so the chosenCandidate age gate (candGameTime < now) is
+// satisfied; a same-tick schedule must NOT promote on the same tick it was offered -- the promotion lands
+// on the NEXT tick. The advance matches the real tick goroutine, where the game-event emit and the
+// Ticker.tick() run on consecutive 50ms step boundaries.
 func drainTravel(t *TickLoop, w *Entity, n int) {
 	for i := 0; i < n; i++ {
+		t.gametime++
 		t.tickWardenVibration(w)
 	}
 }
@@ -103,7 +108,9 @@ func TestVibrationTravelDelayEqualsDistance(t *testing.T) {
 	const stepper int32 = 7202
 	// Emit 5 blocks north (dz = 5) at the same y as the feet; the listener is at feet + eye height.
 	loop.gameEvent(geStep, 8.5, float64(floorY+1), 8.5+5.0, gameEventContext{sourceEntityID: stepper})
-	// First ticker tick promotes the candidate + sets travelTicks. Read it.
+	// Advance one tick before the first Ticker run: a same-tick schedule is rejected by chosenCandidate
+	// (candGameTime < now), so promotion lands on the tick AFTER the emit.
+	loop.gametime++
 	loop.tickWardenVibration(w)
 	tt := w.warden.vibration.travelTicks
 	if tt < 4 {

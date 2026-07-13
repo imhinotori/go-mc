@@ -263,7 +263,7 @@ func (t *TickLoop) tickBlockVibrationListeners() {
 func (t *TickLoop) tickSensorVibration(pos pk.Position, be *sculkSensorBE) {
 	data := be.vibration
 	if !data.hasCurrent {
-		if data.hasCandidate {
+		if data.chosenCandidate(t.gametime) {
 			t.vibrationPromoteCandidate(data)
 		} else {
 			return
@@ -281,7 +281,7 @@ func (t *TickLoop) tickSensorVibration(pos pk.Position, be *sculkSensorBE) {
 func (t *TickLoop) tickShriekerVibration(pos pk.Position, be *sculkShriekerBE) {
 	data := be.vibration
 	if !data.hasCurrent {
-		if data.hasCandidate {
+		if data.chosenCandidate(t.gametime) {
 			t.vibrationPromoteCandidate(data)
 		} else {
 			return

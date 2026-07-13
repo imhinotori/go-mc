@@ -81,6 +81,19 @@ func vibrationCandidateBetter(newDist float32, newEvent gameEventID, oldDist flo
 	return vibrationFrequencyOf(sculkGameEvent(newEvent)) > vibrationFrequencyOf(sculkGameEvent(oldEvent))
 }
 
+// chosenCandidate ports VibrationSystem.Data.chooseCandidateVibrationInfo: the pending candidate is
+// eligible for promotion only when it was scheduled on an EARLIER tick (candGameTime < now). A
+// same-tick candidate is rejected -- the Ticker.tick run that triggered scheduleVibration must NOT
+// promote it on the same tick; promotion lands on the tick AFTER the schedule, so the in-flight
+// vibration always travels at least one tick. Vanilla gates on startTick < currentTime (strict
+// less-than): the same-tick sticky gate from scheduleVibration (candGameTime != gametime) and the
+// chosenCandidate age gate (candGameTime < now) keep the candidate visible to scheduleVibration
+// across the offer tick, then promote it on the NEXT tick. CITE VibrationSystem.Data.
+// chooseCandidateVibrationInfo + VibrationSystem.Ticker.trySelectAndScheduleVibration.
+func (d *vibrationData) chosenCandidate(now int64) bool {
+	return d.hasCandidate && d.candGameTime < now
+}
+
 // vibrationHandleGameEvent ports VibrationSystem.Listener.handleGameEvent: the busy/valid/receivable/
 // occlusion gate then scheduleVibration. Only the WARDEN listener path is live. CITE
 // VibrationSystem.Listener.handleGameEvent.
@@ -297,7 +310,7 @@ func (t *TickLoop) tickWardenVibration(e *Entity) {
 		return
 	}
 	if !data.hasCurrent {
-		if data.hasCandidate {
+		if data.chosenCandidate(t.gametime) {
 			t.vibrationPromoteCandidate(data)
 		} else {
 			return
