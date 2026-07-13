@@ -293,3 +293,185 @@ func TestExecuteUnsupportedStubs(t *testing.T) {
 		}
 	}
 }
+
+// TestExecuteContextInstallsSource: execRun installs the COMPLETE CommandSourceStack on the
+// per-fork ctx via withExecSource BEFORE the player executor, so a /execute tail can recover the
+// full source stack (dimension, x/y/z, yaw/pitch, anchor, acting player) by value through
+// execSourceFrom(ctx). Pins the seam at the END of a long modifier chain -- positioned/rotated/
+// anchored/in mutate the source, and the captured ctx source must reflect ALL of them, proving
+// the per-fork context carries the latest mutated source (not the initial stack).
+func TestExecuteContextInstallsSource(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	p := commandPlayer(loop)
+	p.name = "Anchor"
+	p.x, p.y, p.z = 0, 0, 0
+	p.yaw, p.pitch = 0, 0
+	p.dimension = dimOverworld
+
+	var seen execSource
+	var seenOK bool
+	withExecTailDispatch(t, func(ctx context.Context, cmd string) error {
+		seen, seenOK = execSourceFrom(ctx)
+		return nil
+	})
+
+	toks := []string{
+		"positioned", "10", "20", "30",
+		"rotated", "40", "50",
+		"anchored", "eyes",
+		"in", "minecraft:the_nether",
+		"run", "say", "x",
+	}
+	if err := loop.runExecute(grantAllExecCtx(loop, p), p, toks); err != nil {
+		t.Fatalf("execute ... run: %v", err)
+	}
+	if !seenOK {
+		t.Fatal("execSourceFrom(ctx) returned ok=false after execRun (source must be installed on the per-fork ctx)")
+	}
+	if seen.dim != dimNether {
+		t.Fatalf("ctx source dim = %d, want dimNether(%d)", seen.dim, dimNether)
+	}
+	if seen.x != 10 || seen.y != 20 || seen.z != 30 {
+		t.Fatalf("ctx source pos = (%v,%v,%v), want (10,20,30) from `positioned`", seen.x, seen.y, seen.z)
+	}
+	if !approxF(seen.yaw, 40) || !approxF(seen.pitch, 50) {
+		t.Fatalf("ctx source rotation = (yaw=%v,pitch=%v), want (40,50) from `rotated`", seen.yaw, seen.pitch)
+	}
+	if seen.anchor != anchorEyes {
+		t.Fatalf("ctx source anchor = %v, want anchorEyes(%d) from `anchored eyes`", seen.anchor, anchorEyes)
+	}
+	if seen.player != p {
+		t.Fatalf("ctx source player = %p, want %p (the issuer)", seen.player, p)
+	}
+	if seen.entity != nil {
+		t.Fatalf("ctx source entity = %p, want nil (player source)", seen.entity)
+	}
+}
+
+// TestExecuteAsFanoutContextSourceIsolation: `as @a positioned as @s run <tail>` fans out across
+// every player (3 forks). Each fork installs a DISTINCT source on its per-fork ctx whose acting
+// entity + pose match the forking player, proving the per-fork context capture is correct. AND
+// sibling isolation holds -- every fork's installed source is an independent value (mirrors the
+// vanilla CommandSourceStack.withX semantics: each withX returns a NEW stack), so a write to
+// captured[0]'s source fields must not bleed into captured[1] or captured[2].
+func TestExecuteAsFanoutContextSourceIsolation(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	a := commandPlayer(loop)
+	a.name = "Alpha"
+	a.x, a.y, a.z = 1, 2, 3
+	a.yaw, a.pitch = 10, 20
+	b := commandPlayer(loop)
+	b.name = "Bravo"
+	b.x, b.y, b.z = 4, 5, 6
+	b.yaw, b.pitch = 30, 40
+	c := commandPlayer(loop)
+	c.name = "Charlie"
+	c.x, c.y, c.z = 7, 8, 9
+	c.yaw, c.pitch = 50, 60
+
+	var captured []execSource
+	withExecTailDispatch(t, func(ctx context.Context, cmd string) error {
+		s, ok := execSourceFrom(ctx)
+		if !ok {
+			t.Fatal("execSourceFrom returned ok=false during fan-out (source must be installed on every per-fork ctx)")
+		}
+		captured = append(captured, s)
+		return nil
+	})
+
+	if err := loop.runExecute(grantAllExecCtx(loop, a), a,
+		[]string{"as", "@a", "positioned", "as", "@s", "run", "say", "x"}); err != nil {
+		t.Fatalf("execute as @a positioned as @s run: %v", err)
+	}
+	if len(captured) != 3 {
+		t.Fatalf("fan-out captured %d sources, want 3 (one per fork)", len(captured))
+	}
+
+	// Distinct entity/poses: each captured source's acting player + position must match the
+	// forking player, in fan-out order (Alpha, Bravo, Charlie). Rotation is shared across all
+	// forks (all inherit Alpha's rotation, since `as @a` only mutates the acting entity and
+	// `positioned as @s` only mutates position -- no `rotated` modifier is applied) -- this
+	// is the vanilla withX semantics, and the per-fork ctx must reflect it bit-for-bit.
+	want := []*tickPlayer{a, b, c}
+	seenPlayers := map[*tickPlayer]bool{}
+	for i, s := range captured {
+		if s.player != want[i] {
+			t.Fatalf("captured[%d].player = %p (%s), want %p (%s)", i, s.player, nameOf(s.player), want[i], want[i].name)
+		}
+		if s.entity != nil {
+			t.Fatalf("captured[%d].entity = %p, want nil (player source)", i, s.entity)
+		}
+		if s.x != want[i].x || s.y != want[i].y || s.z != want[i].z {
+			t.Fatalf("captured[%d] pos = (%v,%v,%v), want (%v,%v,%v) (positioned as @s -> %s's pose)",
+				i, s.x, s.y, s.z, want[i].x, want[i].y, want[i].z, want[i].name)
+		}
+		if !approxF(s.yaw, a.yaw) || !approxF(s.pitch, a.pitch) {
+			t.Fatalf("captured[%d] rotation = (yaw=%v,pitch=%v), want (%v,%v) (Alpha's -- unmodified by `as @a` or `positioned as @s`)",
+				i, s.yaw, s.pitch, a.yaw, a.pitch)
+		}
+		seenPlayers[s.player] = true
+	}
+	if len(seenPlayers) != 3 {
+		t.Fatalf("fan-out sources resolved to %d distinct players, want 3", len(seenPlayers))
+	}
+
+	// Sibling isolation: every fork's installed source is an independent value (vanilla
+	// CommandSourceStack.withX returns a NEW stack), so writing captured[0]'s local fields
+	// must NOT be visible from captured[1] or captured[2]. The mutation goes through a
+	// pointer-to-slice-element, which writes the field on captured[0]'s execSource only.
+	if len(captured) > 0 {
+		captured[0].x = -1
+		captured[0].y = -2
+		captured[0].z = -3
+		captured[0].yaw = -4
+		captured[0].pitch = -5
+		captured[0].anchor = anchorEyes
+		captured[0].player = nil
+	}
+	for i := 1; i < len(captured); i++ {
+		if captured[i].x == -1 || captured[i].y == -2 || captured[i].z == -3 {
+			t.Fatalf("captured[%d] pos mutated via captured[0]: (%v,%v,%v) (sibling isolation violated -- per-fork ctx source must be independent values, not shared state)",
+				i, captured[i].x, captured[i].y, captured[i].z)
+		}
+		if captured[i].anchor == anchorEyes {
+			t.Fatalf("captured[%d].anchor leaked anchorEyes from captured[0] (sibling isolation violated)", i)
+		}
+		if captured[i].player == nil {
+			t.Fatalf("captured[%d].player = nil after captured[0].player = nil (sibling isolation violated)", i)
+		}
+	}
+}
+
+func TestExecuteEntitySourceMasksIssuingPlayerExecutor(t *testing.T) {
+	loop := NewTickLoop(newFakeClock())
+	issuer := commandPlayer(loop)
+	generic := &Entity{x: 4, y: 5, z: 6}
+	source := execSource{t: loop, entity: generic, dim: dimOverworld, x: 4, y: 5, z: 6}
+
+	var got execSource
+	var gotSource, gotExecutor bool
+	withExecTailDispatch(t, func(ctx context.Context, _ string) error {
+		got, gotSource = execSourceFrom(ctx)
+		_, gotExecutor = executorFrom(ctx)
+		return nil
+	})
+
+	if _, err := loop.execRun(grantAllExecCtx(loop, issuer), []execSource{source}, []string{"say", "x"}); err != nil {
+		t.Fatalf("execRun generic entity source: %v", err)
+	}
+	if !gotSource || got.entity != generic || got.player != nil {
+		t.Fatalf("captured source = %+v ok=%v, want generic entity source", got, gotSource)
+	}
+	if gotExecutor {
+		t.Fatal("generic entity fork retained the issuing player's legacy executor")
+	}
+}
+
+// nameOf is a tiny nil-safe accessor for a test message -- the captured source's player pointer
+// is checked above, but if a future change ever surfaced nil here this avoids panicking on %s.
+func nameOf(p *tickPlayer) string {
+	if p == nil {
+		return "<nil>"
+	}
+	return p.name
+}

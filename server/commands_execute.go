@@ -493,9 +493,40 @@ func (t *TickLoop) execIn(ctx context.Context, sources []execSource, toks []stri
 	return t.execChain(ctx, next, toks[1:])
 }
 
+// execSourceContextKey is the (unexported, collision-free) context key the per-fork
+// CommandSourceStack is carried under. execRun installs the COMPLETE source on the
+// per-fork ctx (before the player executor) so any /execute consumer can recover the exact
+// CommandSourceStack that drove this fork -- dimension, x/y/z, yaw/pitch, anchor, and acting
+// player/entity -- via execSourceFrom(ctx). Unexported struct key = collision-free, same
+// pattern as permResolverKey / cmdExecutorKey (commands.go).
+type execSourceContextKey struct{}
+
+// withExecSource returns ctx carrying the per-fork source by value. The execSource struct is
+// itself a value type (commands_execute.go:execSource), so the receiver captures the fields as
+// they stood at install time -- dimension, position, rotation, anchor, and acting player/entity
+// are all preserved by value (the acting player/entity fields are pointers and remain so;
+// only the pointer identity is captured, never a deep copy). This is the seam
+// CommandSourceStack.withX returns a new stack -- every withX is a fresh value, so every fork's
+// installed source is independent (sibling isolation: mutating one fork's source on ctx does
+// not bleed into any other fork).
+func withExecSource(ctx context.Context, s execSource) context.Context {
+	return context.WithValue(ctx, execSourceContextKey{}, s)
+}
+
+// execSourceFrom extracts the source installed by withExecSource. Returns ok=false when absent
+// -- a handler that needs the source must no-op safely when called without one (e.g. an
+// /execute-less tail that reaches the same dispatcher path).
+func execSourceFrom(ctx context.Context) (execSource, bool) {
+	s, ok := ctx.Value(execSourceContextKey{}).(execSource)
+	return s, ok
+}
+
 // execRun ports `run <command>` (the run subtree redirects into the dispatcher root). The tail runs
 // once per surviving source with that source's acting player installed; the aggregate result is the
-// sum of per-source successes.
+// sum of per-source successes. Per fork we install the COMPLETE source on the per-fork ctx (the
+// CommandSourceStack model: dimension, position, rotation, anchor, acting player/entity -- all by
+// value) BEFORE the player executor, so any /execute consumer can recover the source stack the fork
+// dispatched with via execSourceFrom(ctx).
 //
 //	[VERIFIED javap ExecuteCommand.register: run redirects to dispatcher.getRoot();
 //	 ExecutionContextChain runs the tail for every forked source and folds results.]
@@ -507,9 +538,14 @@ func (t *TickLoop) execRun(ctx context.Context, sources []execSource, toks []str
 	total := 0
 	var firstErr error
 	for _, s := range sources {
-		sctx := ctx
+		sctx := withExecSource(ctx, s)
 		if s.player != nil {
-			sctx = withExecutor(ctx, t, s.player)
+			sctx = withExecutor(sctx, t, s.player)
+		} else {
+			// Mask any issuing-player executor inherited from the parent context. A generic
+			// entity source must not make legacy player-only tail handlers act on the original
+			// issuer; source-aware handlers recover the entity through execSourceFrom.
+			sctx = context.WithValue(sctx, cmdExecutorKey{}, cmdExecutor{t: t})
 		}
 		if err := execTailDispatch(sctx, tail); err != nil {
 			if firstErr == nil {
