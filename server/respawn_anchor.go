@@ -265,11 +265,15 @@ func (t *TickLoop) respawnAnchorExplode(p *tickPlayer, pos pk.Position) {
 	t.explodeWith(0, cx, cy, cz, float64(respawnAnchorExplosionRadius), explosionInteractionBlock, true, resistanceOverride)
 }
 
-// respawnAnchorInWater computes RespawnAnchorBlock.explode's inWater flag: true iff any HORIZONTAL
-// neighbor (N/S/E/W) carries FluidState WATER (level.water) OR the cell directly above carries
-// FluidState WATER. IsWaterFluid closes the WATER tag: water blocks at any level + waterlogged
-// blocks. Lava does NOT count (the cited bytecode uses FluidTags.WATER). Reads at minY so the
-// correct section is addressed. CITE RespawnAnchorBlock.explode + FluidTags.WATER.
+// respawnAnchorInWater computes RespawnAnchorBlock.explode's inWater flag 1:1:
+//
+//	inWater = HORIZONTAL.stream().map(pos::relative).anyMatch(p -> isWaterThatWouldFlow(p, level))
+//	          || level.getFluidState(pos.above()).is(FluidTags.WATER);
+//
+// The HORIZONTAL neighbors use isWaterThatWouldFlow (NOT the plain WATER tag) — a neighbor counts only
+// if its water WOULD FLOW into the anchor cell, so a weak flowing edge does not spuriously mark
+// "in water"; the cell ABOVE uses the plain FluidTags.WATER test. Reads at minY. CITE
+// RespawnAnchorBlock.explode + RespawnAnchorBlock.isWaterThatWouldFlow + FluidTags.WATER.
 func (t *TickLoop) respawnAnchorInWater(w *world.ChunkManager, pos pk.Position, minY int) bool {
 	neighbors := []pk.Position{
 		{X: pos.X + 1, Y: pos.Y, Z: pos.Z},
@@ -278,14 +282,44 @@ func (t *TickLoop) respawnAnchorInWater(w *world.ChunkManager, pos pk.Position, 
 		{X: pos.X, Y: pos.Y, Z: pos.Z - 1},
 	}
 	for _, n := range neighbors {
-		if st, ok := w.GetBlock(n, minY); ok && block.IsWaterFluid(st) {
+		if t.isWaterThatWouldFlow(w, n, minY) {
 			return true
 		}
 	}
+	// pos.above(): the plain FluidTags.WATER test (any water level / waterlogged).
 	if st, ok := w.GetBlock(pk.Position{X: pos.X, Y: pos.Y + 1, Z: pos.Z}, minY); ok && block.IsWaterFluid(st) {
 		return true
 	}
 	return false
+}
+
+// isWaterThatWouldFlow ports RespawnAnchorBlock.isWaterThatWouldFlow(pos, level) — the HORIZONTAL-
+// neighbor water gate for the explode inWater flag. Verified bytecode:
+//
+//	FluidState f = level.getFluidState(pos);
+//	if (!f.is(FluidTags.WATER)) return false;   // not water -> no
+//	if (f.isSource()) return true;              // a source always would flow
+//	if ((float) f.getAmount() < 2.0f) return false;  // amount 1 is too weak to flow
+//	return !level.getFluidState(pos.below()).is(FluidTags.WATER); // flows down UNLESS water below
+//
+// i.e. flowing water counts only when it is amount>=2 AND the cell below is not itself water (so it
+// would spill downward into/around the anchor). fluidAt decodes the (isWater, source, amount) trio.
+// CITE net.minecraft.world.level.block.RespawnAnchorBlock.isWaterThatWouldFlow; FluidTags.WATER.
+func (t *TickLoop) isWaterThatWouldFlow(w *world.ChunkManager, pos pk.Position, minY int) bool {
+	st, ok := w.GetBlock(pos, minY)
+	if !ok || !block.IsWaterFluid(st) {
+		return false // !f.is(WATER)
+	}
+	f := decodeFluid(st)
+	if f.source {
+		return true // f.isSource()
+	}
+	if float32(f.amount) < 2.0 {
+		return false // getAmount() < 2.0f
+	}
+	// return !getFluidState(below).is(WATER)
+	below, okB := w.GetBlock(pk.Position{X: pos.X, Y: pos.Y - 1, Z: pos.Z}, minY)
+	return !(okB && block.IsWaterFluid(below))
 }
 
 // respawnAnchorAnalogOutputSignal ports RespawnAnchorBlock.getAnalogOutputSignal (hasAnalogOutputSignal
