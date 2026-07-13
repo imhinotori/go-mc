@@ -22,9 +22,10 @@ package server
 //  ClientboundBlockEntityData wire: BlockPos pos, VarInt beType, NBT tag (saveCustomOnly).
 
 import (
+	"math/rand/v2"
+
 	"github.com/google/uuid"
 
-	"github.com/imhinotori/sulfur/chat"
 	"github.com/imhinotori/sulfur/data/packetid"
 	"github.com/imhinotori/sulfur/level"
 	"github.com/imhinotori/sulfur/level/block"
@@ -88,13 +89,16 @@ func isSignBlock(s block.StateID) bool {
 }
 
 // signStateShape is the on-disk / on-wire SignText compound: {messages, color, has_glowing_text}.
-// filtered_messages is omitted (v1 has no text filtering, so filteredOrEmpty == raw). Each message
-// is a literal-text chat.Message (a plain line serializes as a bare TAG_String). color is omitted
+// filtered_messages is omitted (v1 has no text filtering, so filteredOrEmpty == raw). Each message is a
+// literal-text Component serialized via ComponentSerialization.CODEC, which for a text-only component is a
+// bare NBT TAG_String (an EMPTY line is the empty string ""). Storing []string keeps the messages list
+// HOMOGENEOUS TAG_String -- a []chat.Message would emit a mixed String/Compound list (an empty line
+// marshals as a {} compound, a non-empty line as a bare string) that fails to round-trip. color is omitted
 // when BLACK so the optionalAlwaysPresentFieldOf default reads back BLACK. CITE SignText.DIRECT_CODEC.
 type signStateShape struct {
-	Messages       []chat.Message `nbt:"messages"`
-	Color          string         `nbt:"color,omitempty"`
-	HasGlowingText bool           `nbt:"has_glowing_text,omitempty"`
+	Messages       []string `nbt:"messages"`
+	Color          string   `nbt:"color,omitempty"`
+	HasGlowingText bool     `nbt:"has_glowing_text,omitempty"`
 }
 
 // signBEShape is the SignBlockEntity save compound: {front_text, back_text, is_waxed}. Marshals as
@@ -109,9 +113,9 @@ type signBEShape struct {
 // becomes a literal-text component; an empty line is an empty-string component (all lines the same
 // TAG_String element type so the NBT list is homogeneous). CITE SignText.DIRECT_CODEC.
 func (s signText) toShape() signStateShape {
-	msgs := make([]chat.Message, signLines)
+	msgs := make([]string, signLines)
 	for i := 0; i < signLines; i++ {
-		msgs[i] = chat.Message{Text: s.messages[i]}
+		msgs[i] = s.messages[i]
 	}
 	sh := signStateShape{Messages: msgs, HasGlowingText: s.glowing}
 	if s.color != signDefaultColor {
@@ -141,7 +145,7 @@ func encodeSignBE(s *signBE) (nbt.RawMessage, error) {
 func signTextFromShape(sh signStateShape) signText {
 	st := newSignText()
 	for i := 0; i < signLines && i < len(sh.Messages); i++ {
-		st.messages[i] = sh.Messages[i].Text
+		st.messages[i] = sh.Messages[i]
 	}
 	st.glowing = sh.HasGlowingText
 	st.color = dyeColorIDFromName(sh.Color)
@@ -243,10 +247,13 @@ func (t *TickLoop) openSignForPlace(p *tickPlayer, pos pk.Position, state block.
 	p.client.Send(openSignEditor(pos, true))
 }
 
-// reopenSignEdit ports SignBlock.useWithoutItem's re-open branch: a right-click on an UNWAXED sign
-// re-opens its edit screen, marking the clicker the allowed editor. A WAXED sign rejects (no editor;
-// vanilla plays the ding sound, v1 is a silent no-op that still consumes the interaction). Returns
-// true (consumed - no block placed) whenever the target is a sign. isFront is a cited stub -> FRONT.
+// reopenSignEdit ports SignBlock.useWithoutItem 1:1 (the useWithoutItem step that runs AFTER useItemOn
+// returns TRY_WITH_EMPTY_HAND): resolve the facing side (isFacingFrontText); executeClickCommandsIfPresent
+// (a no-op for literal-text signs); if the sign is WAXED, play the WAXED_SIGN_INTERACT_FAIL sound and
+// consume (SUCCESS_SERVER); else, if no other player is editing and the clicker may build and the side
+// has editable (all-empty, i.e. not filtered-out) text, mark the clicker the allowed editor and open the
+// edit screen (SUCCESS_SERVER). Otherwise PASS (returns false) -- but for our dispatch a sign always
+// consumes the interaction, so we return true in the non-open cases too (no block is placed on a sign).
 // CITE SignBlock.useWithoutItem.
 func (t *TickLoop) reopenSignEdit(p *tickPlayer, pos pk.Position) bool {
 	if p == nil || p.client == nil {
@@ -256,14 +263,40 @@ func (t *TickLoop) reopenSignEdit(p *tickPlayer, pos pk.Position) bool {
 	if s == nil {
 		return true
 	}
+	state := t.stateAt(pos)
+	isFront := isFacingFrontText(p.x, p.z, pos, state)
+	// executeClickCommandsIfPresent(level, player, pos, isFront): literal-text signs carry no click
+	// events, so this is always false. CITE SignBlockEntity.executeClickCommandsIfPresent.
 	if s.waxed {
+		// isWaxed -> playSound(getSignInteractionFailedSoundEvent() == WAXED_SIGN_INTERACT_FAIL, BLOCKS)
+		// then SUCCESS_SERVER. Level.playSound(entity, pos, sound, source) seeds with a fresh server draw
+		// (soundSeedGenerator.nextLong analogue) at volume/pitch 1/1. CITE SignBlock.useWithoutItem.
+		t.playSound(signWaxedInteractFailID, soundSourceBlocks,
+			float64(pos.X)+0.5, float64(pos.Y)+0.5, float64(pos.Z)+0.5, 1.0, 1.0, rand.Int64())
 		return true
 	}
-	isFront := true
-	s.playerWhoMayEdit = p.uuid
-	t.markSignDirty(pos)
-	p.client.Send(blockUpdate(pos, t.stateAt(pos)))
-	p.client.Send(openSignEditor(pos, isFront))
+	// !otherPlayerIsEditingSign && player.mayBuild() && hasEditableText -> openTextEdit; else PASS.
+	// hasEditableText == all of the side's messages are empty (getString().isEmpty()) -- an already-typed
+	// side blocks re-open. v1 mayBuild() is always true (see applySignItem). CITE SignBlock.useWithoutItem.
+	if !t.otherPlayerIsEditingSign(p, s) && signSideHasEditableText(s.text(isFront)) {
+		s.playerWhoMayEdit = p.uuid
+		t.markSignDirty(pos)
+		p.client.Send(blockUpdate(pos, state)) // openTextEdit: ClientboundBlockUpdate(level, pos).
+		p.client.Send(openSignEditor(pos, isFront))
+	}
+	return true
+}
+
+// signSideHasEditableText ports SignBlock.hasEditableText 1:1. The jar predicate is
+// Arrays.stream(getMessages(filtered)).allMatch(c -> c.equals(CommonComponents.EMPTY) ||
+// c.getContents() instanceof PlainTextContents) — a line is editable when it is EMPTY *or* its
+// contents are PLAIN TEXT. This port models sign lines as plain Go strings (literal text only, never
+// a command/click-event component), so every line's contents IS PlainTextContents and the predicate is
+// UNCONDITIONALLY TRUE — an already-typed, unwaxed sign re-opens on a bare right-click, exactly as
+// vanilla. (An earlier version wrongly gated on all-lines-empty, which refused to re-edit a written
+// sign — a real regression.) CITE SignBlock.hasEditableText (lambda$hasEditableText$0).
+func signSideHasEditableText(side *signText) bool {
+	_ = side // every line is plain text -> allMatch(empty || PlainTextContents) is always true
 	return true
 }
 

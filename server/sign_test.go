@@ -14,8 +14,10 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/imhinotori/sulfur/data/item"
 	"github.com/imhinotori/sulfur/data/packetid"
 	"github.com/imhinotori/sulfur/level/block"
+	"github.com/imhinotori/sulfur/level/component"
 	pk "github.com/imhinotori/sulfur/net/packet"
 )
 
@@ -240,5 +242,184 @@ func TestSignPigOracle(t *testing.T) {
 	air := block.DefaultStateID["minecraft:air"]
 	if isSignBlock(air) {
 		t.Fatal("isSignBlock(air) = true, want false (the sign predicate must not match non-signs)")
+	}
+}
+
+// signHeldItem sets the player's held hotbar slot to one of the given item id (count 1) so the
+// applicator dispatch has something to read. Mirrors composter_test's held-item setup.
+func signHeldItem(p *tickPlayer, itemID int32) {
+	inv := ensureInventory(p)
+	inv.set(heldWindowSlot(inv.heldSlot), component.SlotData{Count: 1, ItemID: pk.VarInt(itemID)})
+}
+
+// TestSignDyeColorsText: a dye right-click on a sign whose front side already has text recolors the
+// front SignText, broadcasts the block-entity, and (survival) consumes one dye. CITE SignBlock.useItemOn
+// -> DyeItem.tryApplyToSign (setColor).
+func TestSignDyeColorsText(t *testing.T) {
+	loop, _ := newBlockLoop()
+	p := blockPlayer(loop, 1.5, 65.0, 1.5)
+	p.uuid = uuid.New()
+	p.gameMode = gameModeSurvival
+
+	pos := pk.Position{X: 1, Y: 64, Z: 1}
+	placeSignBlock(loop, pos)
+	// The applicator gate requires the side to already have a message.
+	s := loop.resolveSignBE(pos)
+	s.front.messages = [signLines]string{"hi", "", "", ""}
+	signHeldItem(p, int32(item.RedDye.ID))
+	p.client = captureClient(64)
+
+	consumed := loop.useBlockInteraction(p, pos, 1, 0, 0, 0)
+	if !consumed {
+		t.Fatal("dye on a sign returned false, want consumed")
+	}
+	// RED is DyeColor id 14.
+	if loop.signs[pos].front.color != 14 {
+		t.Fatalf("front color = %d after red dye, want 14 (RED)", loop.signs[pos].front.color)
+	}
+	// One dye consumed in survival.
+	if c := ensureInventory(p).get(heldWindowSlot(ensureInventory(p).heldSlot)).Count; c != 0 {
+		t.Fatalf("held dye count = %d after apply, want 0 (consumed)", c)
+	}
+	got := drainPackets(p.client)
+	if n := countID(got, packetid.ClientboundBlockEntityData); n != 1 {
+		t.Fatalf("dye apply broadcast BlockEntityData %d times, want 1", n)
+	}
+}
+
+// TestSignDyeRejectedOnEmptySide: a dye right-click on a side with NO text does NOT apply (the default
+// SignApplicator.canApplyToSign == hasMessage gate) and falls through to the edit reopen (no color change,
+// no item consumed). CITE SignApplicator.canApplyToSign.
+func TestSignDyeRejectedOnEmptySide(t *testing.T) {
+	loop, _ := newBlockLoop()
+	p := blockPlayer(loop, 1.5, 65.0, 1.5)
+	p.uuid = uuid.New()
+	p.gameMode = gameModeSurvival
+
+	pos := pk.Position{X: 1, Y: 64, Z: 1}
+	placeSignBlock(loop, pos)
+	signHeldItem(p, int32(item.RedDye.ID)) // no front text set -> canApplyToSign false
+	p.client = captureClient(64)
+
+	loop.useBlockInteraction(p, pos, 1, 0, 0, 0)
+
+	if loop.signs[pos].front.color != signDefaultColor {
+		t.Fatalf("empty-side dye changed color to %d, want default %d (rejected)", loop.signs[pos].front.color, signDefaultColor)
+	}
+	if c := ensureInventory(p).get(heldWindowSlot(ensureInventory(p).heldSlot)).Count; c != 1 {
+		t.Fatalf("dye consumed %d on empty side, want 1 (not consumed)", 1-c)
+	}
+	// Falls through to reopen: the clicker becomes the allowed editor + gets an OpenSignEditor.
+	if loop.signs[pos].playerWhoMayEdit != p.uuid {
+		t.Fatal("rejected dye did not fall through to the edit reopen")
+	}
+	got := drainPackets(p.client)
+	if n := countID(got, packetid.ClientboundOpenSignEditor); n != 1 {
+		t.Fatalf("rejected dye sent OpenSignEditor %d times, want 1 (useWithoutItem reopen)", n)
+	}
+}
+
+// TestSignHoneycombWaxes: a honeycomb right-click waxes the sign (canApplyToSign override == true) even
+// with no text, locking future edits. CITE HoneycombItem.tryApplyToSign (setWaxed) + canApplyToSign.
+func TestSignHoneycombWaxes(t *testing.T) {
+	loop, _ := newBlockLoop()
+	p := blockPlayer(loop, 1.5, 65.0, 1.5)
+	p.uuid = uuid.New()
+	p.gameMode = gameModeSurvival
+
+	pos := pk.Position{X: 1, Y: 64, Z: 1}
+	placeSignBlock(loop, pos)
+	signHeldItem(p, int32(item.Honeycomb.ID))
+	p.client = captureClient(64)
+
+	consumed := loop.useBlockInteraction(p, pos, 1, 0, 0, 0)
+	if !consumed {
+		t.Fatal("honeycomb on a sign returned false, want consumed")
+	}
+	if !loop.signs[pos].waxed {
+		t.Fatal("honeycomb did not wax the sign")
+	}
+	// A subsequent edit is now rejected by the waxed guard.
+	loop.signs[pos].playerWhoMayEdit = p.uuid
+	loop.handleSignUpdate(p, signUpdatePacket(pos, true, "x", "", "", ""))
+	if loop.signs[pos].front.messages[0] != "" {
+		t.Fatal("waxed sign accepted an edit, want rejected")
+	}
+}
+
+// TestSignGlowInkToggles: a glow_ink_sac makes the (texted) side glow; a following ink_sac clears it.
+// CITE GlowInkSacItem/InkSacItem.tryApplyToSign (setHasGlowingText true/false).
+func TestSignGlowInkToggles(t *testing.T) {
+	loop, _ := newBlockLoop()
+	p := blockPlayer(loop, 1.5, 65.0, 1.5)
+	p.uuid = uuid.New()
+	p.gameMode = gameModeCreative // creative: item not consumed, so both clicks reuse the slot
+
+	pos := pk.Position{X: 1, Y: 64, Z: 1}
+	placeSignBlock(loop, pos)
+	loop.resolveSignBE(pos).front.messages = [signLines]string{"lit", "", "", ""}
+
+	signHeldItem(p, int32(item.GlowInkSac.ID))
+	loop.useBlockInteraction(p, pos, 1, 0, 0, 0)
+	if !loop.signs[pos].front.glowing {
+		t.Fatal("glow_ink_sac did not set glowing")
+	}
+
+	signHeldItem(p, int32(item.InkSac.ID))
+	loop.useBlockInteraction(p, pos, 1, 0, 0, 0)
+	if loop.signs[pos].front.glowing {
+		t.Fatal("ink_sac did not clear glowing")
+	}
+}
+
+// TestSignFullEditRoundTrip: the task's end-to-end persistence assertion. Edit both sides' text (+color
+// +glowing), encode to the block-entity NBT, decode it back, and assert every field survives -- the
+// save/load contract other players and a server restart rely on. CITE SignBlockEntity.saveAdditional/
+// loadAdditional + SignText.DIRECT_CODEC (messages/color/has_glowing_text).
+func TestSignFullEditRoundTrip(t *testing.T) {
+	loop, _ := newBlockLoop()
+	p := blockPlayer(loop, 1.5, 65.0, 1.5)
+	p.uuid = uuid.New()
+
+	pos := pk.Position{X: 1, Y: 64, Z: 1}
+	placeSignBlock(loop, pos)
+	state := block.ToStateID[block.OakSign{}]
+	loop.openSignForPlace(p, pos, state) // p is the allowed editor (front)
+
+	// Edit the FRONT text via the real ServerboundSignUpdate path.
+	loop.handleSignUpdate(p, signUpdatePacket(pos, true, "alpha", "beta", "", "gamma"))
+	// Directly stamp a color + glowing + back text (as dye/glow_ink would) to exercise every field.
+	s := loop.signs[pos]
+	s.front.color = 14   // RED
+	s.front.glowing = true
+	s.back.messages = [signLines]string{"rear", "", "", ""}
+	s.back.color = 4 // YELLOW
+	s.waxed = true
+
+	data, err := encodeSignBE(s)
+	if err != nil {
+		t.Fatalf("encodeSignBE: %v", err)
+	}
+	got := decodeSignBE(data, s.beType)
+
+	wantFront := [signLines]string{"alpha", "beta", "", "gamma"}
+	if got.front.messages != wantFront {
+		t.Fatalf("front lines round-trip = %v, want %v", got.front.messages, wantFront)
+	}
+	if got.front.color != 14 {
+		t.Fatalf("front color round-trip = %d, want 14 (RED)", got.front.color)
+	}
+	if !got.front.glowing {
+		t.Fatal("front glowing did not round-trip")
+	}
+	wantBack := [signLines]string{"rear", "", "", ""}
+	if got.back.messages != wantBack {
+		t.Fatalf("back lines round-trip = %v, want %v", got.back.messages, wantBack)
+	}
+	if got.back.color != 4 {
+		t.Fatalf("back color round-trip = %d, want 4 (YELLOW)", got.back.color)
+	}
+	if !got.waxed {
+		t.Fatal("waxed did not round-trip")
 	}
 }

@@ -495,10 +495,21 @@ func (t *TickLoop) useBlockInteraction(p *tickPlayer, hitPos pk.Position, direct
 		return t.openSmithing(p, hitPos)
 	}
 	if isSign {
-		// SignBlock.useWithoutItem: re-open the edit screen for an unwaxed sign (or a silent no-op for
-		// a waxed one). Consumes the interaction either way so no block is placed. CITE
-		// SignBlock.useWithoutItem.
-		return t.reopenSignEdit(p, hitPos)
+		// SignBlock.useItemOn runs FIRST: a held SignApplicator (dye/ink_sac/glow_ink_sac/honeycomb)
+		// colors/glows/waxes the sign and CONSUMES the interaction (SUCCESS). Only when no applicator
+		// applies (TRY_WITH_EMPTY_HAND) does SignBlock.useWithoutItem run: re-open the edit screen for an
+		// unwaxed sign, or play the WAXED_SIGN_INTERACT_FAIL ding for a waxed one. Either way a sign
+		// consumes the interaction so no block is placed. CITE SignBlock.useItemOn / useWithoutItem.
+		s := t.resolveSignBE(hitPos)
+		if s == nil {
+			return true
+		}
+		if kind, dyeColor := classifySignApplicator(ensureInventory(p).get(heldWindowSlot(ensureInventory(p).heldSlot))); kind != signApplNone {
+			if t.applySignItem(p, hitPos, state, s, kind, dyeColor) {
+				return true // SUCCESS: applicator consumed the interaction.
+			}
+		}
+		return t.reopenSignEdit(p, hitPos) // TRY_WITH_EMPTY_HAND -> useWithoutItem.
 	}
 	if isLoom {
 		// LoomBlock.useWithoutItem -> player.openMenu(loom). The banner/dye/pattern apply menu opens on any
