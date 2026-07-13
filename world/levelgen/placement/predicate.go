@@ -23,6 +23,9 @@ package placement
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
+	"sync"
 
 	"github.com/imhinotori/sulfur/level/block"
 	"github.com/imhinotori/sulfur/world/levelgen/data"
@@ -418,7 +421,45 @@ func blockStateSet(raw json.RawMessage) (map[block.StateID]bool, error) {
 }
 
 // idSetToStateSet expands a slice of block ids to the set of ALL their state ids.
+//
+// PERF (byte-identical memoization): the result is a PURE function of `ids` and the
+// static, init-time-immutable block.StateList -- so the same id-set always yields the
+// same StateID membership. Previously this rebuilt the set by scanning the ENTIRE
+// ~30k-entry block.StateList on EVERY call, and ParsePredicate (hence this) runs once
+// per feature per chunk-decoration (decoration.go binds every placed_feature per chunk),
+// so a walking player re-scanned StateList thousands of times per chunk (CPU profile:
+// ~5.6% of Generate). idSetToStateSetMemo caches the built set keyed by the canonical
+// id-set, collapsing every repeat to a single map read. The cached map is only ever READ
+// downstream (predicate structs consume it via `p.set[s]`, never mutate it -- verified),
+// so sharing one instance across callers is safe and returns the identical membership the
+// fresh-scan form did. The cache is sync.Map (concurrent-safe) because Bind runs off-tick
+// across the chunk-generation worker pool.
 func idSetToStateSet(ids []string) map[block.StateID]bool {
+	key := idSetKey(ids)
+	if v, ok := idSetToStateSetMemo.Load(key); ok {
+		return v.(map[block.StateID]bool)
+	}
+	set := buildIDSetToStateSet(ids)
+	// LoadOrStore de-dups a concurrent build race: the build is pure, so whichever set
+	// wins is value-identical; drop ours and return the canonical one.
+	actual, _ := idSetToStateSetMemo.LoadOrStore(key, set)
+	return actual.(map[block.StateID]bool)
+}
+
+// idSetToStateSetMemo caches idSetToStateSet results keyed by the canonical id-set string.
+var idSetToStateSetMemo sync.Map // map[string]map[block.StateID]bool
+
+// idSetKey builds an order-independent canonical key for an id-set (idSetToStateSet's
+// output is invariant to input order and duplicates, so the key must be too).
+func idSetKey(ids []string) string {
+	sorted := make([]string, len(ids))
+	copy(sorted, ids)
+	sort.Strings(sorted)
+	return strings.Join(sorted, "\x00")
+}
+
+// buildIDSetToStateSet is the original StateList scan (kept as the cache-miss builder).
+func buildIDSetToStateSet(ids []string) map[block.StateID]bool {
 	want := make(map[string]bool, len(ids))
 	for _, id := range ids {
 		want[id] = true
