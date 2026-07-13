@@ -1,8 +1,13 @@
 package server
 
 import (
+	"strings"
+
 	"github.com/imhinotori/sulfur/data/packetid"
+	"github.com/imhinotori/sulfur/data/registryid"
+	"github.com/imhinotori/sulfur/data/tag"
 	"github.com/imhinotori/sulfur/level/block"
+	"github.com/imhinotori/sulfur/level/component"
 	pk "github.com/imhinotori/sulfur/net/packet"
 	"github.com/imhinotori/sulfur/plugin/host"
 )
@@ -114,17 +119,18 @@ func blockHardness(stateID block.StateID) (speed float32, requiresTool bool) {
 //	if (!onGround()) f /= 5.0f;                                            // not-on-ground penalty [movement seam]
 //	return f;
 //
-// v1 has no tools, so the base f is the empty-hand 1.0f; the MINING_EFFICIENCY branch is gated on
-// f > 1.0f, so with the base 1.0 it never fires (no over-1 tool speed yet) — the read is wired at the
-// exact bytecode point so an Efficiency-enchanted tool composes correctly once tools land. BLOCK_BREAK_SPEED
-// (default 1.0) and SUBMERGED_MINING_SPEED (default 0.2, the vanilla 5x underwater dig penalty; Aqua
-// Affinity raises it to 1.0) read through the holder so their enchant modifiers compose. The Haste/
-// Mining-Fatigue effect scales and the not-on-ground /5.0 penalty are CITED SEAMS (no effect source /
-// no destroy-progress ground read wired here yet) — they slot in at the marked points with no caller
-// change. Cite Player.getDestroySpeed.
+// The base f is now the REAL ItemStack.getDestroySpeed(state): the held item's minecraft:tool
+// component's getMiningSpeed(state) (heldToolMiningSpeed) — 8.0 for a diamond_shovel on dirt, 1.0
+// for an empty hand or a non-matching block. The MINING_EFFICIENCY branch is gated on f > 1.0f
+// (only a real tool exceeds 1.0), wired at the exact bytecode point so an Efficiency-enchanted tool
+// composes once the enchant-effect layer lands. BLOCK_BREAK_SPEED (default 1.0) and
+// SUBMERGED_MINING_SPEED (default 0.2, the vanilla 5x underwater dig penalty; Aqua Affinity raises it
+// to 1.0) read through the holder so their enchant modifiers compose. The Haste/Mining-Fatigue effect
+// scales and the not-on-ground /5.0 penalty are CITED SEAMS (no effect source / no destroy-progress
+// ground read wired here yet) — they slot in at the marked points with no caller change. Cite
+// Player.getDestroySpeed / ItemStack.getDestroySpeed / Tool.getMiningSpeed.
 func (t *TickLoop) playerDestroySpeed(p *tickPlayer, stateID block.StateID) float32 {
-	_ = stateID
-	f := float32(1.0) // ItemStack.getDestroySpeed for an empty hand / non-tool (no tools in v1)
+	f := t.heldToolMiningSpeed(p, stateID) // ItemStack.getDestroySpeed(state): held tool's Tool.getMiningSpeed
 	if f > 1.0 {
 		// `f += (float) getAttributeValue(MINING_EFFICIENCY)` — Efficiency enchant grants level^2+1.
 		f += float32(p.getAttributeValue(attrMiningEfficiency))
@@ -144,18 +150,158 @@ func (t *TickLoop) playerDestroySpeed(p *tickPlayer, stateID block.StateID) floa
 }
 
 // hasCorrectToolForDrops is net.minecraft.world.entity.player.Player.hasCorrectToolForDrops(BlockState):
-// `!state.requiresCorrectToolForDrops() || selectedItem.isCorrectToolForDrops(state)`. v1 has no tools,
-// so selectedItem (an empty hand) is NEVER a correct tool. Therefore a non-tool-requiring block is
-// always "correct" (the `!requiresCorrectToolForDrops()` short-circuit) and a tool-requiring block is
-// always INCORRECT (bare hand) — which selects getDestroyProgress's 100 divisor, making e.g. stone
-// slow-but-mineable bare-handed exactly like vanilla (1.0/1.5/100 per tick). Cite
-// Player.hasCorrectToolForDrops. Structured so a future tool wiring evaluates isCorrectToolForDrops here.
-func hasCorrectToolForDrops(p *tickPlayer, requiresTool bool) bool {
-	_ = p
+// `!state.requiresCorrectToolForDrops() || selectedItem.isCorrectToolForDrops(state)`. A block that does
+// not require a correct tool is always "correct" (the `!requiresCorrectToolForDrops()` short-circuit).
+// Otherwise the held stack's ItemStack.isCorrectToolForDrops(state) — the minecraft:tool component's
+// Tool.isCorrectForDrops(state) — decides: a diamond_pickaxe is correct for iron_ore (mineable/pickaxe
+// rule, correct_for_drops true, and NOT in incorrect_for_diamond_tool) so drops flow and the 30 divisor
+// applies; a wooden_pickaxe on iron_ore matches incorrect_for_wooden_tool FIRST (correct_for_drops false)
+// so it is INCORRECT (100 divisor, no drop). A bare hand has no tool component -> isCorrectForDrops false.
+// Cite Player.hasCorrectToolForDrops / ItemStack.isCorrectToolForDrops / Tool.isCorrectForDrops.
+func (t *TickLoop) hasCorrectToolForDrops(p *tickPlayer, stateID block.StateID, requiresTool bool) bool {
 	if !requiresTool {
-		return true // block does not require a correct tool: bare hand is always "correct"
+		return true // !state.requiresCorrectToolForDrops(): bare hand is always "correct"
 	}
-	return false // requires a tool, but v1 has none -> bare hand is incorrect (divisor 100)
+	td, ok := t.heldEffectiveTool(p)
+	if !ok {
+		return false // empty hand / non-tool item: never a correct tool
+	}
+	return toolIsCorrectForDrops(td, toolBlockResourceID(stateID))
+}
+
+// toolBlockResourceID resolves a block state to its block's resource id ("minecraft:stone") — the
+// key form Tool rules match against (BlockState.is(HolderSet)). An out-of-range state resolves to ""
+// (matches no rule), the same unbreakable-safe fallback blockHardness uses. Cite BlockState.is.
+func toolBlockResourceID(stateID block.StateID) string {
+	if int(stateID) < 0 || int(stateID) >= len(block.StateList) {
+		return ""
+	}
+	return block.StateList[stateID].ID()
+}
+
+// heldEffectiveTool returns the player's held-item EFFECTIVE minecraft:tool component and whether one
+// is present — the ItemStack.get(DataComponents.TOOL) resolution: the item's DEFAULT Tool component
+// (component.DefaultTool[itemName], vanilla Item.components()) OVERLAID by a client-sent Tool component
+// PATCH (which replaces the default at component granularity, exactly like PatchedDataComponentMap.get
+// returns the patch value over the prototype). Returns (_, false) for an empty hand or a non-tool item
+// (no default and no patch). Tick-owned (reads the tick-owned inventory). Cite
+// ItemStack.get(DataComponents.TOOL) / PatchedDataComponentMap.get.
+func (t *TickLoop) heldEffectiveTool(p *tickPlayer) (component.ToolData, bool) {
+	if p == nil {
+		return component.ToolData{}, false
+	}
+	inv := ensureInventory(p)
+	s := inv.get(heldWindowSlot(inv.heldSlot))
+	if stackEmpty(s) {
+		return component.ToolData{}, false
+	}
+	// A client-sent Tool component PATCH replaces the default entirely (component-granular override).
+	if wt, ok := component.DecodePatch(s).Get(compTool).(*component.Tool); ok {
+		return wireToolToData(wt), true
+	}
+	// Otherwise the item's registration default (the common case: a plain, unedited tool).
+	if int(s.ItemID) >= 0 && int(s.ItemID) < len(registryid.Item) {
+		if td, ok := component.DefaultTool[registryid.Item[s.ItemID]]; ok {
+			return td, true
+		}
+	}
+	return component.ToolData{}, false
+}
+
+// heldToolMiningSpeed is ItemStack.getDestroySpeed(state): the held item's Tool.getMiningSpeed(state),
+// or 1.0f for an empty hand / non-tool item (the `tool != null ? tool.getMiningSpeed(state) : 1.0f`
+// branch). Cite ItemStack.getDestroySpeed.
+func (t *TickLoop) heldToolMiningSpeed(p *tickPlayer, stateID block.StateID) float32 {
+	td, ok := t.heldEffectiveTool(p)
+	if !ok {
+		return 1.0 // empty hand / non-tool: the fconst_1 default
+	}
+	return toolGetMiningSpeed(td, toolBlockResourceID(stateID))
+}
+
+// wireToolToData converts a client-sent wire component.Tool (HolderSet-as-IDSet blocks + pk.Option
+// speed/correctForDrops) into the resolved component.ToolData form. An IDSet tag (Type==0) becomes a
+// "#tag" ref; inline block ids (Type>0) resolve through registryid.Block to "minecraft:x" refs. This is
+// only hit for an NBT-edited stack that carries an explicit Tool patch; a plain tool uses DefaultTool.
+// Cite Tool.STREAM_CODEC (rules/defaultMiningSpeed/damagePerBlock/canDestroyBlocksInCreative).
+func wireToolToData(wt *component.Tool) component.ToolData {
+	td := component.ToolData{
+		DefaultMiningSpeed:         float32(wt.DefaultMiningSpeed),
+		DamagePerBlock:             int(wt.DamagePerBlock),
+		CanDestroyBlocksInCreative: bool(wt.CanDestroyBlocksInCreative),
+	}
+	for i := range wt.Rules {
+		r := &wt.Rules[i]
+		var blocks []string
+		if r.Blocks.Type == 0 {
+			blocks = []string{"#" + string(r.Blocks.Tag)}
+		} else {
+			for _, id := range r.Blocks.IDs {
+				if int(id) >= 0 && int(id) < len(registryid.Block) {
+					blocks = append(blocks, registryid.Block[id])
+				}
+			}
+		}
+		rd := component.ToolRuleData{Blocks: blocks}
+		if r.Speed.Has {
+			rd.HasSpeed = true
+			rd.Speed = float32(r.Speed.Val)
+		}
+		if r.CorrectDropForBlocks.Has {
+			rd.HasCorrectForDrops = true
+			rd.CorrectForDrops = bool(r.CorrectDropForBlocks.Val)
+		}
+		td.Rules = append(td.Rules, rd)
+	}
+	return td
+}
+
+// toolRuleMatches is BlockState.is(HolderSet) for a Tool rule's block references: true when the block
+// resource id is a member of ANY of the rule's refs — a "#tag" ref (membership via data/tag.BlockTags,
+// stripping the "#minecraft:" prefix to the short tag key) or a bare "minecraft:x" concrete-block ref.
+// Cite BlockState.is / Tool.Rule.blocks (HolderSet).
+func toolRuleMatches(refs []string, resID string) bool {
+	if resID == "" {
+		return false
+	}
+	for _, ref := range refs {
+		if strings.HasPrefix(ref, "#") {
+			key := strings.TrimPrefix(strings.TrimPrefix(ref, "#"), "minecraft:")
+			if tag.BlockTags[key][resID] {
+				return true
+			}
+		} else if ref == resID {
+			return true
+		}
+	}
+	return false
+}
+
+// toolGetMiningSpeed is net.minecraft.world.item.component.Tool.getMiningSpeed(BlockState): the FIRST
+// rule that both specifies a speed (Optional present) AND whose block set contains the state returns
+// that speed; otherwise defaultMiningSpeed (1.0 for every vanilla tool). Cite Tool.getMiningSpeed.
+func toolGetMiningSpeed(td component.ToolData, resID string) float32 {
+	for i := range td.Rules {
+		r := &td.Rules[i]
+		if r.HasSpeed && toolRuleMatches(r.Blocks, resID) {
+			return r.Speed
+		}
+	}
+	return td.DefaultMiningSpeed
+}
+
+// toolIsCorrectForDrops is net.minecraft.world.item.component.Tool.isCorrectForDrops(BlockState): the
+// FIRST rule that both specifies correctForDrops (Optional present) AND whose block set contains the
+// state returns that flag; otherwise false. The incorrect_for_X_tool rule is ordered BEFORE the
+// mineable/* rule, so a too-low-tier tool matches it first and returns false. Cite Tool.isCorrectForDrops.
+func toolIsCorrectForDrops(td component.ToolData, resID string) bool {
+	for i := range td.Rules {
+		r := &td.Rules[i]
+		if r.HasCorrectForDrops && toolRuleMatches(r.Blocks, resID) {
+			return r.CorrectForDrops
+		}
+	}
+	return false
 }
 
 // getDestroyProgress is BlockBehaviour.getDestroyProgress (via BlockState.getDestroyProgress) — the
@@ -173,7 +319,7 @@ func (t *TickLoop) getDestroyProgress(p *tickPlayer, stateID block.StateID) floa
 		return 0.0 // unbreakable (bedrock, barrier, …): no progress ever
 	}
 	var divisor float32
-	if hasCorrectToolForDrops(p, requiresTool) {
+	if t.hasCorrectToolForDrops(p, stateID, requiresTool) {
 		divisor = digDivisorWithTool // 30
 	} else {
 		divisor = digDivisorNoTool // 100
@@ -506,7 +652,7 @@ func (t *TickLoop) destroyBlock(p *tickPlayer, pos pk.Position, air block.StateI
 		dropAllowed := true
 		if p != nil {
 			_, requiresTool := blockHardness(brokenState)
-			dropAllowed = hasCorrectToolForDrops(p, requiresTool)
+			dropAllowed = t.hasCorrectToolForDrops(p, brokenState, requiresTool)
 		}
 		if dropAllowed {
 			t.spawnBlockDrop(p, pos, brokenState)
