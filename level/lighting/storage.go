@@ -1,11 +1,24 @@
 package lighting
 
 // dataLayerStorageMap ports net.minecraft.world.level.lighting.DataLayerStorageMap: the section ->
-// DataLayer table. Vanilla adds a 2-entry read cache (pure perf) and a copy()/disableCache used for
-// the visible/updating double buffer; per the package-level optimization note we run single-buffered,
-// so the cache and copy() are unnecessary and omitted (value-identical). CITE: DataLayerStorageMap.
+// DataLayer table PLUS vanilla's 2-entry LRU read cache. The cache is NOT double-buffer machinery
+// (that is copy()/disableCache, which single-buffering legitimately omits) — it is a PURE PERF
+// optimization on the read hot path: getLayer is called on every getStoredLevel/setStoredLevel/
+// storingLightForSection during light propagation, which walks a handful of adjacent sections
+// repeatedly. Without the cache every one of those was a Go map hash lookup; a live CPU profile
+// showed getLayer -> mapaccess1_fast64 at ~15% of total server CPU (13s of 87s) while a player
+// loaded chunks, the dominant cost of skyLightEngine.propagateIncrease. The 2-entry cache turns the
+// overwhelmingly-repeated same-section reads into an array compare, cutting the hash traffic. Ported
+// 1:1 from DataLayerStorageMap.getLayer (CACHE_SIZE == 2, MRU-at-index-0 shift on miss). CITE:
+// net.minecraft.world.level.lighting.DataLayerStorageMap (lastSectionKeys/lastSections/cacheEnabled).
 type dataLayerStorageMap struct {
 	m map[int64]*DataLayer
+	// 2-entry LRU read cache (DataLayerStorageMap.CACHE_SIZE == 2). lastSectionKeys[i]==cacheMiss is
+	// the empty sentinel (vanilla uses Long.MAX_VALUE); a real section node never equals it. cacheEnabled
+	// mirrors the field (vanilla disables the cache on the visible copy; single-buffered we keep it on).
+	lastSectionKeys [2]int64
+	lastSections    [2]*DataLayer
+	cacheEnabled    bool
 	// sky-only fields (see SkyLightSectionStorage.SkyDataLayerStorageMap); block storage leaves them
 	// unused. currentLowestY == the lowest section-Y that has ever held a layer; topSections[zeroNode]
 	// == 1 + the highest section-Y with a layer for that column. CITE: SkyDataLayerStorageMap.
@@ -14,30 +27,76 @@ type dataLayerStorageMap struct {
 	topSections    map[int64]int
 }
 
+// cacheMiss is the empty-slot sentinel for the 2-entry read cache (vanilla's Long.MAX_VALUE, which no
+// real packed section node equals). CITE: DataLayerStorageMap.<init> Arrays.fill(lastSectionKeys, MAX).
+const cacheMiss = int64(^uint64(0) >> 1)
+
 func newBlockStorageMap() *dataLayerStorageMap {
-	return &dataLayerStorageMap{m: make(map[int64]*DataLayer)}
+	d := &dataLayerStorageMap{m: make(map[int64]*DataLayer)}
+	d.clearCache()
+	d.cacheEnabled = true
+	return d
 }
 
 func newSkyStorageMap() *dataLayerStorageMap {
-	return &dataLayerStorageMap{
+	d := &dataLayerStorageMap{
 		m:              make(map[int64]*DataLayer),
 		sky:            true,
 		currentLowestY: maxInt, // Integer.MAX_VALUE
 		topSections:    make(map[int64]int),
 	}
+	d.clearCache()
+	d.cacheEnabled = true
+	return d
 }
 
 const maxInt = int(^uint(0) >> 1)
 
+// clearCache resets both cache slots to the empty sentinel (DataLayerStorageMap.clearCache). Called
+// at construction and whenever a layer is inserted/removed so a stale *DataLayer is never returned.
+func (d *dataLayerStorageMap) clearCache() {
+	d.lastSectionKeys[0] = cacheMiss
+	d.lastSectionKeys[1] = cacheMiss
+	d.lastSections[0] = nil
+	d.lastSections[1] = nil
+}
+
 func (d *dataLayerStorageMap) hasLayer(sectionNode int64) bool { _, ok := d.m[sectionNode]; return ok }
 
-func (d *dataLayerStorageMap) getLayer(sectionNode int64) *DataLayer { return d.m[sectionNode] }
+// getLayer ports DataLayerStorageMap.getLayer with the 2-entry MRU read cache. On a cache hit the
+// map hash is skipped entirely; on a miss the map is consulted and (when non-nil) the result is
+// pushed to slot 0, shifting the previous slot 0 to slot 1 (LRU-2). CITE: DataLayerStorageMap.getLayer.
+func (d *dataLayerStorageMap) getLayer(sectionNode int64) *DataLayer {
+	if d.cacheEnabled {
+		for i := 0; i < 2; i++ {
+			if d.lastSectionKeys[i] == sectionNode {
+				return d.lastSections[i]
+			}
+		}
+	}
+	layer := d.m[sectionNode]
+	if layer != nil && d.cacheEnabled {
+		// Shift slot 0 -> slot 1, install the freshly-read layer at slot 0 (MRU). Mirrors the bytecode's
+		// System.arraycopy-of-one then store at index 0.
+		d.lastSectionKeys[1] = d.lastSectionKeys[0]
+		d.lastSections[1] = d.lastSections[0]
+		d.lastSectionKeys[0] = sectionNode
+		d.lastSections[0] = layer
+	}
+	return layer
+}
 
-func (d *dataLayerStorageMap) setLayer(sectionNode int64, layer *DataLayer) { d.m[sectionNode] = layer }
+func (d *dataLayerStorageMap) setLayer(sectionNode int64, layer *DataLayer) {
+	d.m[sectionNode] = layer
+	// A mutation must invalidate the read cache so a subsequent getLayer never returns a stale slot
+	// (vanilla clears the cache on any structural change via clearCache in the setter path).
+	d.clearCache()
+}
 
 func (d *dataLayerStorageMap) removeLayer(sectionNode int64) *DataLayer {
 	l := d.m[sectionNode]
 	delete(d.m, sectionNode)
+	d.clearCache()
 	return l
 }
 
